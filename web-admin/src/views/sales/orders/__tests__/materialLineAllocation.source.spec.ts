@@ -61,8 +61,10 @@ describe('物料行不参与成品批次分配', () => {
     expect(source).toMatch(/if \(!materialIdSet\.value\.size\) \{\s*\n\s*await loadProductsForEdit\(\);/);
   });
 
-  it('materialIdSet 由物料字典接口填充(与下拉同源, 不另起一份判定)', () => {
-    expect(source).toContain('materialIdSet.value = new Set(mats.map((m: any) => String(m.id)));');
+  it('销售商品白名单不再混入原料，历史订单仍保留 fail-closed 物料判定容器', () => {
+    expect(source).toContain('/product-types/sellable');
+    expect(source).toContain('materialIdSet.value = new Set();');
+    expect(source).not.toContain('/raw-material-types/active');
   });
 });
 
@@ -94,7 +96,9 @@ describe('物料行不查成品箱规', () => {
     expect(guardAt, '守卫必须在请求之前').toBeLessThan(requestAt);
   });
 
-  it('物料 id 集合与下拉同源, 不另起第二份判定', () => {
-    expect(listSource).toContain('new Set(materialOptions.value.map((m) => String(m.id)))');
+  it('销售商品下拉严格使用可售白名单，原料只能进入客供原料区', () => {
+    expect(listSource).toContain('const materialIdSet = computed(() => new Set<string>());');
+    expect(listSource).toContain('const sellableOptions = computed<TableRow[]>(() => products.value);');
+    expect(listSource).toContain('const suppliedMaterialOptions = ref<TableRow[]>([]);');
   });
 });

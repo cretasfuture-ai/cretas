@@ -27,12 +27,8 @@ function functionBody(src: string, signature: string): string {
 /**
  * 🔴 AI 录入解析对了, 点「填入表单」却什么也没发生。
  *
- * <p>`handleAiFill` 拿商品名去 `products`(**只有成品**)里找, 物料一律 NOT_FOUND →
- * throw → return, `dialogVisible` 永远到不了。而抽屉是**先** emit 关闭自己、
- * **再** emit fill-form 的, 所以现场看到的是「面板关了, 弹窗没开」,
- * 那句 warning 被关闭动画盖掉了 —— 没有任何线索指向真正的原因。
- *
- * <p>判据: **下拉能选到的东西, AI 填表必须认得**。两套口径只要不同源就一定漂。
+ * <p>销售商品现在严格来自 `/product-types/sellable`，原料只允许进入客供原料区。
+ * AI 填表必须与商品下拉同源，不能绕过业务白名单把原料塞进销售商品行。
  */
 describe('AI 录入 · 填入表单认得物料', () => {
   const body = functionBody(stripComments(listSource), 'function handleAiFill(');
@@ -44,8 +40,10 @@ describe('AI 录入 · 填入表单认得物料', () => {
       .not.toContain('resolveReferenceByName(prodName, products.value)');
   });
 
-  it('② 与下拉同源 —— sellableOptions 本身就是 products + materialOptions', () => {
-    expect(listSource).toContain('[...products.value, ...materialOptions.value]');
+  it('② 与下拉同源 —— sellableOptions 只取可售产品，客供原料使用独立集合', () => {
+    expect(listSource).toContain('const sellableOptions = computed<TableRow[]>(() => products.value)');
+    expect(listSource).toContain('const suppliedMaterialOptions = ref<TableRow[]>([])');
+    expect(listSource).not.toContain('[...products.value, ...materialOptions.value]');
   });
 
   it('③ 填进表单的单位保住计件单位(只/个)', () => {
