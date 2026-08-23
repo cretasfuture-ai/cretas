@@ -17,6 +17,7 @@ import {
   filterReceivingOrders,
   sortReceivingOrders,
   statusesToFetchForReceivingPage,
+  toReceivingStatus,
   type InboundCounts,
   type ReceivingStatus,
 } from '../warehouseList.logic';
@@ -97,7 +98,9 @@ export default function WHInboundListScreen() {
           result.status === 'fulfilled',
       );
       const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      const statusLoadFailed = fulfilled.length !== INBOUND_ORDER_STATUSES.length;
+      // On append, exhausted sources are intentionally absent from requests;
+      // compare with the actual request set rather than all four statuses.
+      const statusLoadFailed = fulfilled.length !== requests.length;
       const arrivalLoadFailed = !append && (!arrivalResult || arrivalResult.status === 'rejected');
       const hasLoadFailure = statusLoadFailed || arrivalLoadFailed;
       const arrivalTasks = arrivalResult?.status === 'fulfilled' ? (arrivalResult.value?.data || []) : [];
@@ -253,7 +256,7 @@ export default function WHInboundListScreen() {
               <Text style={styles.errorTitle}>入库任务加载失败</Text><Text style={styles.emptyHint}>{loadError}</Text>
               <Button mode="contained" icon="refresh" onPress={onRefresh}>重试</Button>
             </Surface>
-          ) : visibleOrders.length === 0 && !(filter !== 'completed' && !query.trim() && stats.pending > 0) ? (
+          ) : visibleOrders.length === 0 && !hasMore && !(filter !== 'completed' && !query.trim() && stats.pending > 0) ? (
             <Surface style={styles.empty} elevation={1}>
               <MaterialCommunityIcons name="package-variant-closed" size={42} color="#BDBDBD" />
               <Text style={styles.emptyTitle}>当前筛选下没有入库任务</Text>

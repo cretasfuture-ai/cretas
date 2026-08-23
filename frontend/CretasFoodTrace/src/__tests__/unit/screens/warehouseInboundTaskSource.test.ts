@@ -28,9 +28,14 @@ describe('入库首页任务真值', () => {
     expect(inbound).toContain("completed: { label: '已收货'");
   });
 
-  it('四类状态任一路失败就显式报错，不用残缺结果冒充完整计数', () => {
-    expect(inbound).toContain('fulfilled.length !== INBOUND_ORDER_STATUSES.length');
+  it('实际请求来源任一路失败就显式报错，不用残缺结果冒充完整计数', () => {
+    expect(inbound).toContain('fulfilled.length !== requests.length');
     expect(inbound).toContain('入库任务加载失败');
+  });
+
+  it('搜索无匹配但仍有后续页时保留加载入口', () => {
+    expect(inbound).toContain('visibleOrders.length === 0 && !hasMore');
+    expect(inbound).toContain('testID="wh-inbound-load-more"');
   });
 
   it('采购来源部分失败持续提示，并保留旧列表供仓管继续核对', () => {
