@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `FIX-WEB-DIST-HEAP-20260823` — `in-progress` — Owner: `/root` — Base SHA: `d6411f475b378b9c4e412c607092f8e7f49f14ec` — Scope lock: `.github/workflows/web-dist.yml`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`。PR #10 合并后的 exact-main 制品 run `32632119734` 在 Vite build 达到约 2 GiB V8 heap 后 OOM（exit 134）；仅为 Build 步骤显式提供 4 GiB heap，保持 build/package/provenance/upload 全链不变。验收：YAML/preflight、精确 HEAD Secret/Web Gate、合并后 exact-main `workflow_dispatch` 必须生成带 provenance 的制品；不重复部署已通过四方哈希的生产 Web，不修改产品代码、依赖、Java/Python/RN/Mall 或生产数据。
+- `FIX-WEB-DIST-HEAP-20260823` — `blocked` — Owner: `/root` — Base SHA: `d6411f475b378b9c4e412c607092f8e7f49f14ec` — Scope lock: `.github/workflows/web-dist.yml`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`。PR #10 合并后的 exact-main 制品 run `32632119734` 在 Vite build 达到约 2 GiB V8 heap 后 OOM（exit 134）；PR #12 仅为 Build 步骤显式提供 4 GiB heap，分支 run `32632384183` 已证明 build/package 通过，但 GitHub 在 attestation 步骤明确拒绝当前私有组织套餐（`Feature not available`）。现有验证器强制要求 GitHub Sigstore bundle，故不得降级为无签名可信制品；`web-dist.yml` 已恢复手动禁用。解除阻塞需要将私有组织升级至 GitHub Enterprise Cloud，或另立经过安全评审的签名/验证体系 scope；不重复部署已通过四方哈希的生产 Web，不修改产品代码、依赖、Java/Python/RN/Mall 或生产数据。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
