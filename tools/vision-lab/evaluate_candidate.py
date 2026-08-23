@@ -69,6 +69,28 @@ def load_records(paths: list[Path]) -> list[dict[str, Any]]:
     return records
 
 
+def apply_configured_truth_adjudication(
+    records: list[dict[str, Any]], manifest_paths: list[Path],
+    adjudication_path: Path | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if adjudication_path is None:
+        return records, None
+    resolved_adjudication = adjudication_path.resolve()
+    if not resolved_adjudication.is_file():
+        raise FileNotFoundError(resolved_adjudication)
+    # The tray evaluator owns the shared, fail-closed sidecar verifier. Import
+    # lazily to avoid its existing import of the helpers in this module.
+    from evaluate_tray_candidate import apply_truth_adjudication
+
+    adjusted, audit = apply_truth_adjudication(
+        records, resolved_adjudication,
+        [path.resolve() for path in manifest_paths],
+    )
+    sidecar = json.loads(resolved_adjudication.read_text(encoding="utf-8"))
+    audit["promotion_ready"] = sidecar.get("promotion_ready") is True
+    return adjusted, audit
+
+
 def evaluate(model_dir: Path, records: list[dict[str, Any]], screening_module, yolo_module, threshold: float) -> dict[str, Any]:
     params = screening_module.ScreeningParams(tray_conf=0.60, label_conf=threshold)
     models = yolo_module.LabelQcYoloModels(model_dir=model_dir)
@@ -125,6 +147,7 @@ def main() -> None:
     parser.add_argument("--manifest", required=True, action="append", type=Path)
     parser.add_argument("--threshold", type=float, default=0.20)
     parser.add_argument("--onnx-parity-mismatches", type=int, required=True)
+    parser.add_argument("--truth-adjudication", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
@@ -136,6 +159,10 @@ def main() -> None:
     from label_qc.services import yolo_detector as yolo_module
 
     records = load_records(args.manifest)
+    original_record_count = len(records)
+    records, truth_adjudication = apply_configured_truth_adjudication(
+        records, args.manifest, args.truth_adjudication,
+    )
     with tempfile.TemporaryDirectory(prefix="visionlab-eval-") as temporary:
         temp = Path(temporary)
         baseline_dir = temp / "baseline"
@@ -155,6 +182,8 @@ def main() -> None:
         "production_pipeline_replay": True,
         "onnx_parity_mismatches": args.onnx_parity_mismatches,
         "threshold": args.threshold, "records": len(records),
+        "records_before_truth_adjudication": original_record_count,
+        "truth_adjudication": truth_adjudication,
         "baseline": baseline, "candidate": candidate,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
