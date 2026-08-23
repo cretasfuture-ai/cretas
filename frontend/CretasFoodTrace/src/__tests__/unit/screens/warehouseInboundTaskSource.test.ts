@@ -10,9 +10,11 @@ const receiving = read('screens/warehouse/inbound/WHPurchaseReceiveListScreen.ts
 describe('入库首页任务真值', () => {
   it('直接查询采购收货状态，不再读取物料批次', () => {
     expect(inbound).toContain('purchaseApiClient.getOrdersByStatus');
-    for (const status of ['APPROVED', 'FINANCE_APPROVED', 'PARTIAL_RECEIVED', 'COMPLETED']) {
+    for (const status of ['FINANCE_APPROVED', 'PARTIAL_RECEIVED', 'COMPLETED', 'CLOSED']) {
       expect(inbound).toContain(`'${status}'`);
     }
+    expect(inbound).not.toMatch(/INBOUND_ORDER_STATUSES[\s\S]{0,220}'APPROVED'/);
+    expect(receiving).not.toMatch(/RECEIVABLE_STATUSES[\s\S]{0,180}'APPROVED'/);
     expect(inbound).not.toContain('materialBatchApiClient');
     expect(inbound).not.toContain('getMaterialBatches');
   });
@@ -20,12 +22,22 @@ describe('入库首页任务真值', () => {
   it('全部列表按待收货、部分入库、已收货排序', () => {
     expect(inbound).toContain("pending: 0, partial: 1, completed: 2");
     expect(inbound).toContain('sortReceivingOrders');
-    expect(inbound).toContain("已收货");
+    const sortLogic = read('screens/warehouse/warehouseList.logic.ts');
+    expect(sortLogic).toContain('receivingBusinessTime(b).localeCompare(receivingBusinessTime(a))');
+    expect(inbound).toContain("['completed', '已收货'");
+    expect(inbound).toContain("completed: { label: '已收货'");
   });
 
   it('四类状态任一路失败就显式报错，不用残缺结果冒充完整计数', () => {
     expect(inbound).toContain('fulfilled.length !== INBOUND_ORDER_STATUSES.length');
     expect(inbound).toContain('入库任务加载失败');
+  });
+
+  it('采购来源部分失败持续提示，并保留旧列表供仓管继续核对', () => {
+    expect(receiving).toContain('setLoadError(info)');
+    expect(receiving).toContain('setOrders((prev) => (prev.length > 0 ? prev : sortedPage))');
+    expect(receiving).not.toContain('setOrders([])');
+    expect(receiving).toContain('请点击重试');
   });
 
   it('采购卡片不再显示财审通过或明细行', () => {
@@ -40,6 +52,11 @@ describe('入库首页任务真值', () => {
     expect(receiving).toContain('应收 {line.quantity || 0} {unit}');
     expect(receiving).toContain('已收 {line.receivedQuantity || 0} {unit}');
     expect(receiving).toContain('待收 {pending} {unit}');
+  });
+
+  it('状态筛选 Chip 触控区至少 44dp，横向间距至少 8dp', () => {
+    expect(inbound).toContain('filters: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 }');
+    expect(inbound).toContain("filter: { minHeight: 44, marginRight: 0");
   });
 });
 
