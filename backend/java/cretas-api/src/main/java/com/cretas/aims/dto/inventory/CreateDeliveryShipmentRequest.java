@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -21,6 +22,10 @@ public class CreateDeliveryShipmentRequest {
     private LocalDate actualShipmentDate;
     @Size(max = 30)
     private String deliveryMethod;
+    /** FULL requires every mother line's entire remaining quantity in this child. */
+    @Size(max = 10)
+    @Pattern(regexp = "FULL|PARTIAL", flags = Pattern.Flag.CASE_INSENSITIVE)
+    private String deliveryMode;
     @Size(max = 100)
     private String logisticsCompany;
     @Size(max = 100)

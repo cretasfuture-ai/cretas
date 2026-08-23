@@ -5,15 +5,8 @@ import { describe, expect, it } from 'vitest';
 /**
  * 销售订单的商品下拉必须走 /product-types/sellable, 不能走 /product-types/active。
  *
- * 2026-08-12 六膳门张权真机反馈:「老问题 销售订单 选择不了原料」。
- * 追下去发现销售侧和生产侧共用了 /active, 而那条口径对销售来说**两个方向都是反的**:
- *
- *   /active(生产侧, 11 个前端调用点在用): 排除原料 ✗  保留半成品 ✗
- *   销售侧要的(Steve 拍板「出了半成品全开」): 要原料      不要半成品
- *
- * 生产侧的口径本身没错 —— 生产计划就是要生产半成品、不会去「生产」一包真空袋。
- * 所以正解是给销售一条自己的端点, **不动** /active(动它会波及生产计划/批次/工时/
- * 毛利红线/成本差异/餐饮)。
+ * /active 继续服务生产侧；销售订单专用 /sellable 只返回成品和半成品。
+ * 原料/辅料/包材必须登记在 suppliedMaterials，不能混入商品下拉。
  *
  * 这条闸守两件事:
  *   ① 别有人图省事把销售改回 /active(那会让半成品重新出现在销售单里)
@@ -36,19 +29,23 @@ describe('sales order product dropdown endpoint', () => {
         .not.toContain('/product-types/active');
     });
   }
+  it('list.vue 的商品选项不再合并物料字典', () => {
+    const source = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
+    expect(source).toContain('const sellableOptions = computed<TableRow[]>(() => products.value)');
+    expect(source).toContain('const materialIdSet = computed(() => new Set<string>())');
+  });
 
+  it('detail.vue 的商品选项只使用 sellable 响应', () => {
+    const source = readFileSync(resolve(__dirname, '..', 'detail.vue'), 'utf8');
+    expect(source).toContain('const list = unwrap(res?.data)');
+    expect(source).not.toContain('...mats');
+  });
 
-  // 2026-08-12 第二半: 物料(原料/辅料/包材)也要出现在销售下拉里。
-  // 张权要卖的东西在物料字典, 不在商品目录 —— 只切 /sellable 解决不了他的问题。
-  // 发货时物料行从 material_batches 扣(SalesMaterialLineShipmentTest 守那一段)。
-  for (const file of FILES) {
-    const source = readFileSync(resolve(__dirname, '..', file), 'utf8');
-
-    it(`${file} 把物料字典也并进商品下拉`, () => {
-      expect(source, `${file} 应当同时拉 /raw-material-types/active`)
-        .toContain('/raw-material-types/active');
-    });
-  }
+  it('new.vue 将商品和 suppliedMaterials 分别赋值', () => {
+    const source = readFileSync(resolve(__dirname, '..', 'new.vue'), 'utf8');
+    expect(source).toContain('products.value = unwrap<Product>(productResponse?.data).filter(isSalesOrderProduct)');
+    expect(source).toContain('suppliedMaterialOptions.value = unwrap<TableRow>(materialResponse?.data)');
+  });
 
   it('两个页面用的是同一个端点(不允许一个 sellable 一个 active)', () => {
     const endpoints = FILES.map((file) => {

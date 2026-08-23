@@ -46,7 +46,7 @@ public final class ProductCategory {
     }
 
     /**
-     * 判断是否可以出现在<b>销售订单</b>的商品选择里。
+     * 旧商品目录的宽口径兼容判断；不再用于销售订单商品行。
      *
      * <h2>2026-08-12 Steve 拍板(六膳门张权真机反馈)</h2>
      * 「有啥不能卖的 给钱 我都能卖」——原料、辅料、包材都卖;
@@ -57,12 +57,12 @@ public final class ProductCategory {
      * 商品, 它们现在能正常下单, 换成白名单会<b>静默消失</b>。「除了 X 全开」这句话的
      * 忠实编码就是黑名单。
      *
-     * <h2>⛔ 这里是唯一权威</h2>
-     * 不要在 JPQL 里再写一份类别条件 —— 两处口径打架是本仓最高频的缺陷形态。
-     * 销售侧的查询走 {@code findByFactoryIdAndIsActiveTrue} 之后用本方法过滤。
+     * <h2>销售订单边界</h2>
+     * 销售订单必须使用 {@link #isSalesOrderSellable(String)} 的严格白名单；本方法只为
+     * 仍依赖旧宽口径的其他目录调用保留，避免无关业务在同批改造中改变。
      *
      * <p>⚠️ 与 {@link #isSku} 无关: 半成品<b>是</b> SKU(生产计划/批次要生产它),
-     * 只是不出现在销售下拉里。共享的
+     * 销售订单当前允许成品和半成品。共享的
      * {@code findVisibleByFactoryIdAndIsActiveTrue} 服务于生产侧, <b>不要</b>动它 ——
      * 它有 11 个前端调用点(生产计划/批次/工时/毛利红线/成本差异/餐饮)。
      */
@@ -72,6 +72,18 @@ public final class ProductCategory {
             return true;
         }
         return !SEMI_FINISHED.equalsIgnoreCase(category.trim());
+    }
+
+    /**
+     * 销售订单成品行的严格口径。物料字典中的原料/包材应通过 suppliedMaterials，
+     * 不得伪装成销售订单商品；未知或空分类也必须失败关闭。
+     */
+    public static boolean isSalesOrderSellable(String category) {
+        if (category == null || category.isBlank()) {
+            return false;
+        }
+        String normalized = category.trim().toUpperCase(java.util.Locale.ROOT);
+        return FINISHED_PRODUCT.equals(normalized) || SEMI_FINISHED.equals(normalized);
     }
 
     /** SKU 管理目录范围；原料、包材、调味料仍由物料字典管理。 */

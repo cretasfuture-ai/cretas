@@ -488,6 +488,17 @@ function productSummaryFor(row: TableRow): string {
   return items.length === 1 ? name : `${name} 等 ${items.length} 项`;
 }
 
+const openProductPopoverKey = ref('');
+function productPopoverKey(row: TableRow): string {
+  return String(row.id || row.orderNumber || '');
+}
+function showProductPopover(row: TableRow): void {
+  openProductPopoverKey.value = productPopoverKey(row);
+}
+function hideProductPopover(row: TableRow): void {
+  if (openProductPopoverKey.value === productPopoverKey(row)) openProductPopoverKey.value = '';
+}
+
 function primaryActionLabel(row: TableRow): string {
   if (!canWrite.value) return '查看详情';
   switch (salesOrderPrimaryActionOf(row)) {
@@ -607,12 +618,9 @@ function clearContract() {
 }
 const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
-const materialOptions = ref<TableRow[]>([]);
-// 物料 id 集合 —— 判「这一行卖的是物料还是成品」只用这一处, 不另起第二份判定。
-const materialIdSet = computed(() => new Set(materialOptions.value.map((m) => String(m.id))));
-// 下拉数据源 = 可售商品 + 物料字典。两者都用 product_type_id 这一列存,
-// 该列没有外键, 且实测「既是启用商品又是物料」的 id 数量为 0。
-const sellableOptions = computed<TableRow[]>(() => [...products.value, ...materialOptions.value]);
+// 销售订单商品下拉只接受后端 /sellable 返回的成品/半成品；原料只能进入 suppliedMaterials。
+const materialIdSet = computed(() => new Set<string>());
+const sellableOptions = computed<TableRow[]>(() => products.value);
 const salesEmployees = ref<TableRow[]>([]);
 const suppliedMaterialOptions = ref<TableRow[]>([]);
 
@@ -959,11 +967,7 @@ async function loadCustomers() {
   } catch { /* dropdown optional — fail silently for roles without customer read permission */ }
 }
 
-// ⚠️ 用 /sellable 不是 /active。
-// /active 是【生产侧】口径(生产计划/批次/工时/毛利红线/成本差异/餐饮共 11 处在用):
-// 排除原料、保留半成品。销售侧恰好相反 —— 2026-08-12 Steve 拍板「出了半成品全开」:
-// 原料/辅料/包材都卖(六膳门张权:「有啥不能卖的 给钱 我都能卖」), 只有半成品不卖。
-// 两个方向都反, 所以是两个端点; 改 /active 会波及那 11 处。
+// ⚠️ 用 /sellable 不是 /active。/sellable 是销售订单专用的成品/半成品白名单。
 function unwrapList(data: unknown): TableRow[] {
   if (Array.isArray(data)) return data as TableRow[];
   const content = (data as { content?: TableRow[] } | undefined)?.content;
@@ -972,16 +976,6 @@ function unwrapList(data: unknown): TableRow[] {
 
 async function loadProducts() {
   if (!factoryId.value) return;
-  // 物料(原料/辅料/包材)与商品一起进下拉 —— 六膳门张权:「有啥不能卖的 给钱 我都能卖」。
-  // 发货时物料行从 material_batches 扣(SalesServiceImpl.deductMaterialInventory),
-  // 后端靠 id 判定行类型(启用商品优先, 否则物料), 所以这里不需要额外传标记。
-  // 这个接口本页已经在拉了(客供料用), 复用同一条。
-  try {
-    const matRes = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
-    materialOptions.value = unwrapList(matRes?.data).map((m) => ({ ...m, __isMaterial: true }));
-  } catch {
-    materialOptions.value = [];
-  }
   try {
     const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     if (res.success && res.data) products.value = Array.isArray(res.data) ? res.data : res.data.content || [];
@@ -2416,8 +2410,8 @@ function handleMergePurchase() {
         </el-table-column>
         <el-table-column v-if="salesColumnVisible('productSummary')" label="产品" min-width="190">
           <template #default="{ row }">
-            <el-popover placement="top-start" trigger="hover" width="320">
-              <template #reference><button type="button" class="product-summary-trigger" :aria-label="`查看${row.orderNumber || ''}的完整产品明细`">{{ productSummaryFor(row) }}</button></template>
+            <el-popover placement="top-start" :visible="openProductPopoverKey === productPopoverKey(row)" width="320">
+              <template #reference><button type="button" class="product-summary-trigger" :aria-label="`查看${row.orderNumber || ''}的完整产品明细`" :aria-expanded="openProductPopoverKey === productPopoverKey(row)" @mouseenter="showProductPopover(row)" @mouseleave="hideProductPopover(row)" @focus="showProductPopover(row)" @blur="hideProductPopover(row)">{{ productSummaryFor(row) }}</button></template>
               <div class="product-summary-popover" role="list" aria-label="完整产品明细">
                 <div v-for="item in orderItemsFor(row)" :key="String(item.id || item.productTypeId)" role="listitem">
                   {{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }} · {{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}

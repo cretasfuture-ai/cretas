@@ -115,7 +115,9 @@ class SalesServiceImplSourceWarehouseContractTest {
         product.setFactoryId(FACTORY_ID);
         product.setName("黄油鸡-成品800g");
         product.setUnit("box");
+        product.setProductCategory("FINISHED_PRODUCT");
         when(productTypeRepository.findById(PRODUCT_ID)).thenReturn(Optional.of(product));
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID)).thenReturn(Optional.of(product));
 
         when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, "WH-LOG"))
                 .thenReturn(Optional.of(warehouse("WH-LOG", "物流仓")));

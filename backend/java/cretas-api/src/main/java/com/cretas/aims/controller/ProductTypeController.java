@@ -288,12 +288,11 @@ public class ProductTypeController {
     /**
      * 销售订单的商品选择专用 —— 不要拿 /active 顶替。
      *
-     * <p>/active 服务于生产侧(生产计划/批次/工时/毛利红线/成本差异/餐饮, 11 个前端调用点):
-     * 排除原料、<b>保留</b>半成品。销售侧恰好相反(2026-08-12 Steve 拍板「出了半成品全开」):
-     * 原料/辅料/包材都卖, 只有半成品不卖。两个方向都反, 所以是两个端点。
+     * <p>/active 服务于生产侧；销售侧只允许成品和半成品。原料、包材和未知分类
+     * 必须通过 suppliedMaterials，不能混入销售订单商品行。
      */
     @GetMapping("/sellable")
-    @Operation(summary = "获取可销售的产品类型", description = "销售订单商品选择用: 激活且非半成品")
+    @Operation(summary = "获取销售订单可售产品类型", description = "销售订单商品选择用: 激活且分类为成品或半成品")
     public ApiResponse<List<ProductTypeDTO>> getSellableProductTypes(
             @PathVariable @Parameter(description = "工厂ID") String factoryId) {
         log.info("获取可销售的产品类型: factoryId={}", factoryId);

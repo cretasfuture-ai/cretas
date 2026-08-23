@@ -10,8 +10,7 @@ describe('sales delivery mode contract', () => {
     expect(detail).toContain('deliveryMode: \'FULL\'');
     expect(detail).toContain('value="FULL"');
     expect(detail).toContain('value="PARTIAL"');
-    expect(createPage).toContain('value="FULL"');
-    expect(createPage).toContain('value="PARTIAL"');
+    expect(createPage).not.toContain('deliveryMode');
   });
 
   it('creates one child shipment for full mode through the mother endpoint', () => {

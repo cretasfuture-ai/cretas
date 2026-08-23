@@ -39,7 +39,7 @@ const pendingPagination = ref({ page: 1, size: 10, total: 0 });
 const confirmDialogVisible = ref(false);
 const confirmDialogLoading = ref(false);
 const confirmingDelivery = ref<TableRow | null>(null);
-const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string }>>([]);
+const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string; batches: string[] }>>([]);
 
 const customers = ref<TableRow[]>([]);
 const customerMap = computed(() => {
@@ -101,12 +101,27 @@ async function openConfirmDialog(row: TableRow) {
       return;
     }
     const items = Array.isArray(res.data.items) ? res.data.items : [];
-    confirmItems.value = items.map((it: TableRow) => ({
-      id: String(it.id || ''),
-      productName: String(it.productName || `产品-${it.productTypeId || ''}`),
-      plannedQty: Number(it.deliveredQuantity || 0),
-      actualQty: Number(it.deliveredQuantity || 0),  // 默认实发 = 计划
-      unit: String(it.unit || 'kg'),
+    confirmItems.value = await Promise.all(items.map(async (it: TableRow) => {
+      const id = String(it.id || '');
+      let batches: string[] = [];
+      if (id) {
+        try {
+          const allocationRes = await get<TableRow[]>(`/${factoryId.value}/sales-deliveries/items/${id}/batch-allocations`);
+          if (allocationRes.success && Array.isArray(allocationRes.data)) {
+            batches = allocationRes.data.map((row) =>
+              `${String(row.batchNumber || row.finishedGoodsBatchId || '批次未标注')} · ${Number(row.allocatedQty || 0)} ${String(row.unit || it.unit || '')}`,
+            );
+          }
+        } catch { /* automatic FIFO may allocate only during confirmation */ }
+      }
+      return {
+        id,
+        productName: String(it.productName || `产品-${it.productTypeId || ''}`),
+        plannedQty: Number(it.deliveredQuantity || 0),
+        actualQty: Number(it.deliveredQuantity || 0),
+        unit: String(it.unit || 'kg'),
+        batches,
+      };
     }));
     confirmDialogVisible.value = true;
   } catch (e) {
@@ -325,7 +340,11 @@ function getStatusText(status: string) {
               <template #default="{ row }">{{ row.customer?.name || row.customerName || row.customerId || '-' }}</template>
             </el-table-column>
             <el-table-column prop="deliveryDate" label="计划发货日期" width="130" :formatter="emptyCell" />
+            <el-table-column label="下一步" width="130"><template #default>仓管核量并出库</template></el-table-column>
+            <el-table-column label="销售创建人" width="120"><template #default="{ row }">用户 #{{ row.shippedBy || '-' }}</template></el-table-column>
+            <el-table-column label="配送方式" width="110"><template #default="{ row }">{{ ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '客户自提' } as Record<string, string>)[row.deliveryMethod] || '历史未记录' }}</template></el-table-column>
             <el-table-column prop="logisticsCompany" label="物流公司" width="130" :formatter="emptyCell" />
+            <el-table-column prop="trackingNumber" label="运单号" width="150" :formatter="emptyCell" />
             <el-table-column label="销售订单" width="170" show-overflow-tooltip>
               <template #default="{ row }">{{ row.orderNumber || row.salesOrder?.orderNumber || row.salesOrderId || '-' }}</template>
             </el-table-column>
@@ -457,7 +476,10 @@ function getStatusText(status: string) {
           <el-descriptions-item label="客户">{{ confirmingDelivery.customer?.name || confirmingDelivery.customerName || confirmingDelivery.customerId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="销售订单">{{ confirmingDelivery.orderNumber || confirmingDelivery.salesOrder?.orderNumber || confirmingDelivery.salesOrderId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="计划日期">{{ confirmingDelivery.deliveryDate || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="销售创建人">用户 #{{ confirmingDelivery.shippedBy || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="配送方式">{{ ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '客户自提' } as Record<string, string>)[confirmingDelivery.deliveryMethod] || '历史未记录' }}</el-descriptions-item>
           <el-descriptions-item label="物流公司">{{ confirmingDelivery.logisticsCompany || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="运单号">{{ confirmingDelivery.trackingNumber || '-' }}</el-descriptions-item>
         </el-descriptions>
 
         <el-alert
@@ -490,6 +512,12 @@ function getStatusText(status: string) {
                 style="width: 130px;"
               />
               <span style="margin-left: 4px;">{{ row.unit }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="分配批次" min-width="220">
+            <template #default="{ row }">
+              <div v-if="row.batches.length"><div v-for="batch in row.batches" :key="batch">{{ batch }}</div></div>
+              <span v-else>确认时按 FIFO 自动记录</span>
             </template>
           </el-table-column>
         </el-table>

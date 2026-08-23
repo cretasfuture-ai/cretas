@@ -17,9 +17,7 @@ export interface SalesProductOption {
 /** Sales order products are finished goods or semi-finished goods only. */
 export function isSalesOrderProduct(product: SalesProductOption): boolean {
   const category = String(product.productCategory || product.category || product.productType || '').toUpperCase();
-  const categoryAllowed = !category || [
-    'FINISHED_PRODUCT', 'FINISHED', 'SEMI_FINISHED', 'SEMI_FINISHED_PRODUCT', 'WIP',
-  ].includes(category);
+  const categoryAllowed = ['FINISHED_PRODUCT', 'SEMI_FINISHED'].includes(category);
   return product.isSellable !== false && product.active !== false && categoryAllowed;
 }
 

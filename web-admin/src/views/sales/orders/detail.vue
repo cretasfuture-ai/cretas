@@ -151,8 +151,8 @@ const deliveryDialogVisible = ref(false);
  */
 const highlightedDeliveryNumber = ref('');
 const deliveryIdempotencyKey = ref('');
-const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; deliveryMode: 'FULL' | 'PARTIAL'; items: TableRow[] }>({
-  deliveryAddress: '', logisticsCompany: '', deliveryMode: 'FULL', items: [],
+const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; trackingNumber: string; deliveryMethod: 'LOGISTICS' | 'SELF_DELIVERY' | 'SELF_PICKUP'; deliveryMode: 'FULL' | 'PARTIAL'; items: TableRow[] }>({
+  deliveryAddress: '', logisticsCompany: '', trackingNumber: '', deliveryMethod: 'LOGISTICS', deliveryMode: 'FULL', items: [],
 });
 const shipmentDialogVisible = ref(false);
 const shipmentParent = ref<TableRow | null>(null);
@@ -175,6 +175,8 @@ type AllocationSummary = {
   materialLines: number;
   /** 成品行单位一致时的显示单位; 混单位时为空串(不标, 避免拿一个单位去标另一种的数)。 */
   unit: string;
+  /** 真实批次号与该批次分配数量，供销售/仓储追溯。 */
+  batches: string[];
 };
 const allocationSummary = ref<Record<string, AllocationSummary>>({});
 const masterDeliveries = computed(() => deliveries.value.filter((row) => !row.parentDeliveryId && row.recordRole !== 'SHIPMENT'));
@@ -407,17 +409,11 @@ async function loadProductsForEdit() {
   if (!factoryId.value) return;
   try {
     // Mirror list.vue loadProducts — same endpoints / response shape.
-    // ⚠️ /sellable 不是 /active: /active 是生产侧口径(保留半成品、排除原料), 销售侧相反。
-    // ⚠️ 并且要和列表页一样把【物料】也并进来 —— 列表页能选到而详情页编辑时选不到,
-    //    是最难查的那种不一致(salesProductEndpoint.source.spec.ts 守这条)。
-    const [res, matRes] = await Promise.all([
-      get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never),
-      get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never),
-    ]);
+    // /sellable 是销售订单专用白名单；原料只能在客供原料区维护。
+    const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     const unwrap = (d: any) => (Array.isArray(d) ? d : (d?.content ?? [])) as any[];
-    const mats = unwrap(matRes?.data);
-    materialIdSet.value = new Set(mats.map((m: any) => String(m.id)));
-    const list = [...unwrap(res?.data), ...mats];
+    materialIdSet.value = new Set();
+    const list = unwrap(res?.data);
     products.value = list.map((p: any) => ({
       id: String(p.id),
       name: String(p.name ?? p.productName ?? ''),
@@ -649,6 +645,7 @@ async function loadAllocationSummaries() {
     let allocated = 0;
     let goodsLines = 0;
     let materialLines = 0;
+    const batches: string[] = [];
     const units = new Set<string>();
     for (const item of items) {
       const productTypeId = String(item.productTypeId ?? item.productType?.id ?? '');
@@ -667,6 +664,9 @@ async function loadAllocationSummaries() {
         const res = await get<TableRow[]>(`/${factoryId.value}/sales-deliveries/items/${item.id}/batch-allocations`);
         if (res.success && Array.isArray(res.data)) {
           allocated += res.data.reduce((sum, row) => sum + Number(row.allocatedQty || 0), 0);
+          res.data.forEach((row) => batches.push(
+            `${String(item.productName || item.productTypeId || '产品')} · ${String(row.batchNumber || row.finishedGoodsBatchId || '批次未标注')} ${Number(row.allocatedQty || 0)}${displayUnit(String(row.unit || item.unit || ''))}`,
+          ));
         }
       } catch { /* fail closed: leave incomplete */ }
     }
@@ -682,6 +682,7 @@ async function loadAllocationSummaries() {
       // 🔴 单位只在【成品行单位一致】时才敢标。原来固定取 items[0].unit,
       // 于是「2只 + 1个」被汇总成一句「3 只」——把两种单位的数加起来再随便挑一个标上。
       unit: units.size === 1 ? [...units][0] : '',
+      batches,
     };
   }
   allocationSummary.value = next;
@@ -841,6 +842,8 @@ function openDeliveryDialog() {
   deliveryForm.value = {
     deliveryAddress: address,
     logisticsCompany: '',
+    trackingNumber: '',
+    deliveryMethod: 'LOGISTICS',
     deliveryMode: 'FULL',
     items: (order.value.items as TableRow[]).map((it) => ({
       salesOrderItemId: it.id,
@@ -950,6 +953,20 @@ async function handleCreateDelivery() {
   if (filteredItems.length === 0) return ElMessage.warning('请至少填写一个发货数量');
   const overLimit = filteredItems.find((item) => Number(item.deliveredQuantity) > Number(item.maxDeliverableQuantity) + 0.000001);
   if (overLimit) return ElMessage.warning(`${overLimit.productName || '产品'} 发货数量超过剩余可安排数量`);
+  if (deliveryForm.value.deliveryMode === 'FULL'
+    && filteredItems.length !== deliveryForm.value.items.length) {
+    return ElMessage.warning('一次性全量发运必须覆盖每一行的全部剩余数量');
+  }
+  if (deliveryForm.value.deliveryMode === 'FULL'
+    && filteredItems.some((item) => Math.abs(Number(item.deliveredQuantity) - Number(item.maxDeliverableQuantity)) > 0.000001)) {
+    return ElMessage.warning('一次性全量发运的每一行数量必须等于全部剩余量');
+  }
+  if (deliveryForm.value.deliveryMethod === 'LOGISTICS' && !deliveryForm.value.logisticsCompany.trim()) {
+    return ElMessage.warning('物流配送必须填写物流公司');
+  }
+  if (deliveryForm.value.deliveryMethod === 'LOGISTICS' && !deliveryForm.value.trackingNumber.trim()) {
+    return ElMessage.warning('物流配送必须填写运单号');
+  }
   submitting.value = true;
   try {
     const res = await post(`/${factoryId.value}/sales/deliveries`, {
@@ -980,8 +997,10 @@ async function handleCreateDelivery() {
           await post(`/${factoryId.value}/sales/deliveries/${master.id}/shipments`, {
             idempotencyKey: `web-full-shipment-${master.id}`,
             plannedShipmentDate: new Date().toISOString().slice(0, 10),
-            deliveryMethod: 'LOGISTICS',
+            deliveryMethod: deliveryForm.value.deliveryMethod,
             logisticsCompany: deliveryForm.value.logisticsCompany,
+            trackingNumber: deliveryForm.value.trackingNumber,
+            deliveryMode: 'FULL',
             deliveryAddress: deliveryForm.value.deliveryAddress,
             items: childItems,
           });
@@ -1012,9 +1031,10 @@ function deliveryQuantitySummary(row: TableRow): string {
 }
 
 function deliveryAuditSummary(row: TableRow): string {
-  const operator = row.shippedByName || row.shippedBy || row.createdByName || row.createdBy || '待仓库处理';
-  const time = row.updatedAt || row.shippedAt || row.createdAt || '时间待记录';
-  return `${operator} · ${time}`;
+  const shipped = ['SHIPPED', 'DELIVERED', 'SIGNED'].includes(String(row.status || ''));
+  const operator = row.shippedByName || (row.shippedBy ? `用户 #${row.shippedBy}` : '待仓库处理');
+  const time = shipped ? (row.updatedAt || row.shippedAt || '时间待记录') : (row.createdAt || '时间待记录');
+  return `${shipped ? '仓库确认' : '销售创建'}：${operator} · ${time}`;
 }
 
 function openShipmentDialog(parent: TableRow) {
@@ -2175,6 +2195,7 @@ async function handleQuickPayFull() {
                   <span v-else-if="allocationSummary[String(row.id)]">
                     已分配 {{ allocationSummary[String(row.id)].allocated }}/{{ allocationSummary[String(row.id)].planned }}
                     {{ allocationSummary[String(row.id)].unit }}
+                    <div v-for="batch in allocationSummary[String(row.id)].batches" :key="batch" class="muted-audit">{{ batch }}</div>
                     <span v-if="allocationSummary[String(row.id)].materialLines" style="color: var(--el-text-color-secondary)">
                       (另 {{ allocationSummary[String(row.id)].materialLines }} 行物料自动扣减)
                     </span>
@@ -2325,7 +2346,15 @@ async function handleQuickPayFull() {
         <el-form-item label="发货地址" required>
           <el-input v-model="deliveryForm.deliveryAddress" placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址" />
         </el-form-item>
-        <el-form-item label="物流公司"><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
+        <el-form-item label="配送方式" required>
+          <el-radio-group v-model="deliveryForm.deliveryMethod">
+            <el-radio value="LOGISTICS">物流配送</el-radio>
+            <el-radio value="SELF_DELIVERY">自送</el-radio>
+            <el-radio value="SELF_PICKUP">客户自提</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司" required><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
+        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号" required><el-input v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号" /></el-form-item>
         <el-form-item label="发货模式" required>
           <el-radio-group v-model="deliveryForm.deliveryMode">
             <el-radio value="FULL">一次性全量发货（自动建一张全量子单）</el-radio>

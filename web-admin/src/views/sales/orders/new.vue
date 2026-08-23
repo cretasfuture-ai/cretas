@@ -41,7 +41,6 @@ const form = ref({
   deliveryAddress: '',
   salesperson: '',
   remark: '',
-  deliveryMode: 'FULL' as 'FULL' | 'PARTIAL',
   items: [] as SalesLine[],
   suppliedMaterials: [] as SuppliedMaterial[],
 });
@@ -50,6 +49,14 @@ const allowedWarehouseTypes = new Set(['RAW', 'WORKSHOP', 'WIP', 'LINESIDE', 'LO
 const sourceWarehouses = computed(() => warehouses.value.filter((warehouse) =>
   warehouse.isActive !== false && allowedWarehouseTypes.has(String(warehouse.type || '').toUpperCase()),
 ));
+const warehouseGroups = computed(() => [
+  { label: '生产相关仓（RAW / WORKSHOP / WIP / LINESIDE）', types: ['RAW', 'WORKSHOP', 'WIP', 'LINESIDE'] },
+  { label: '物流仓（LOGISTICS）', types: ['LOGISTICS'] },
+  { label: '成品仓（FINISHED）', types: ['FINISHED'] },
+].map((group) => ({
+  ...group,
+  warehouses: sourceWarehouses.value.filter((warehouse) => group.types.includes(String(warehouse.type || '').toUpperCase())),
+})).filter((group) => group.warehouses.length > 0));
 const filteredProducts = computed(() => filterSalesProducts(products.value, productQuery.value));
 const selectedCustomer = computed(() => customers.value.find((customer) => String(customer.id) === form.value.customerId));
 const requiresSuppliedMaterials = computed(() => form.value.processingMode === 'TOLL_PROCESSING' && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED');
@@ -173,7 +180,7 @@ async function submit(): Promise<void> {
     });
     const orderId = String(response?.data?.id || '');
     dirty.value = false;
-    ElMessage.success(`已创建${label('salesOrder')}，${form.value.deliveryMode === 'FULL' ? '审核通过后可一次性全量发货' : '审核通过后可按批次发货'}`);
+    ElMessage.success(`已创建${label('salesOrder')}，请在订单详情中选择一次性全量或分批发运方式`);
     await router.push(orderId ? `/sales/orders/${orderId}` : '/sales/orders');
   } catch {
     // request interceptor surfaces the server reason; values remain in the form for retry.
@@ -249,17 +256,12 @@ onMounted(loadOptions);
           <el-table-column label="数量" width="150"><template #default="{ row }"><el-input-number v-model="row.quantity" :min="0.001" :precision="3" @change="dirty = true" /></template></el-table-column>
           <el-table-column label="单位" width="130"><template #default="{ row }"><el-input v-model="row.unit" @input="dirty = true" /></template></el-table-column>
           <el-table-column label="未税单价" width="160"><template #default="{ row }"><el-input-number v-model="row.unitPrice" :min="0.01" :precision="2" @change="dirty = true" /></template></el-table-column>
-          <el-table-column label="来源仓库" min-width="220"><template #default="{ row }"><el-select v-model="row.sourceWarehouseCode" filterable placeholder="请选择合法来源仓库" @change="dirty = true"><el-option v-for="warehouse in sourceWarehouses" :key="warehouse.code" :label="warehouseLabel(warehouse)" :value="warehouse.code" /></el-select></template></el-table-column>
+          <el-table-column label="来源仓库" min-width="220"><template #default="{ row }"><el-select v-model="row.sourceWarehouseCode" filterable placeholder="请选择合法来源仓库" @change="dirty = true"><el-option-group v-for="group in warehouseGroups" :key="group.label" :label="group.label"><el-option v-for="warehouse in group.warehouses" :key="warehouse.code" :label="warehouseLabel(warehouse)" :value="warehouse.code" /></el-option-group></el-select></template></el-table-column>
           <el-table-column label="操作" width="80"><template #default="{ $index }"><el-button type="danger" link @click="removeProduct($index)">移除</el-button></template></el-table-column>
         </el-table>
         <el-empty v-else description="尚未添加销售产品" />
       </el-card>
 
-      <el-card shadow="never" class="content-card">
-        <template #header><span class="section-title">交付计划</span></template>
-        <el-radio-group v-model="form.deliveryMode" @change="dirty = true"><el-radio-button value="FULL">一次性全量发货</el-radio-button><el-radio-button value="PARTIAL">分批发货</el-radio-button></el-radio-group>
-        <p class="muted">{{ form.deliveryMode === 'FULL' ? '审核通过后自动建立覆盖剩余量的唯一子发运单，仓库确认后才扣库存。' : '审核通过后由销售按每批数量显式创建子发运单，母单不能直接发货。' }}</p>
-      </el-card>
     </el-form>
 
     <el-dialog v-model="showProductPicker" title="选择销售产品" width="760px" destroy-on-close>
