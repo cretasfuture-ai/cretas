@@ -41,8 +41,9 @@ describe('入库列表: 真实收货状态与大号现场操作', () => {
     expect(code).not.toContain('SupplierDeliveryList');
   });
 
-  it('筛选只保留全部、待收货、部分入库、已完成', () => {
-    for (const label of ['全部', '待收货', '部分入库', '已完成']) expect(code).toContain(label);
+  it('筛选只保留全部、待收货、部分入库、已收货', () => {
+    for (const label of ['全部', '待收货', '部分入库', '已收货']) expect(code).toContain(label);
+    expect(code).not.toContain("label: '已完成'");
     expect(code).not.toContain('质检中');
   });
 

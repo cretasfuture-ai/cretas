@@ -186,7 +186,7 @@ export default function PurchaseOrderListScreen() {
             { value: 'all', label: '全部' },
             { value: 'DRAFT', label: '草稿' },
             { value: 'APPROVED', label: '已审批' },
-            { value: 'COMPLETED', label: '已完成' },
+            { value: 'COMPLETED', label: '已收货' },
           ]}
           style={styles.segmented}
         />
