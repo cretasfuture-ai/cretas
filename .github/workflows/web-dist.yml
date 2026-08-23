@@ -51,6 +51,8 @@ jobs:
 
       - name: Build
         working-directory: web-admin
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run build
 
       # 与 web_release_write 完全一致的打包与字段。刻意不复用那个 shell 函数: 它同时要做
