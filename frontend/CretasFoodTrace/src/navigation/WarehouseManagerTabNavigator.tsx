@@ -90,7 +90,7 @@ export function WarehouseManagerTabNavigator() {
         }}
       />
 
-      {/* 入库Tab */}
+      {/* 已开通仓储功能的工厂固定显示入库/发货；未开通时不暴露不可用入口。 */}
       {isScreenEnabled('InboundManagement') && (
       <Tab.Screen
         name="WHInboundTab"
