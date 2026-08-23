@@ -225,4 +225,18 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     int markInvoiceTodoFailure(@Param("id") String id, @Param("factoryId") String factoryId,
                                @Param("nextAttemptAt") LocalDateTime nextAttemptAt,
                                @Param("error") String error, @Param("maxAttempts") int maxAttempts);
+
+    /** Read the post-claim attempt number for an observable bounded-retry decision. */
+    @Query("SELECT COALESCE(so.invoiceTodoAttempts, 0) FROM SalesOrder so " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId")
+    Optional<Integer> findInvoiceTodoAttempts(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    /** Explicit finance-admin recovery after a durable todo reaches FAILED. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = 'PENDING', " +
+            "so.invoiceTodoAttempts = 0, so.invoiceTodoNextAttemptAt = NULL, " +
+            "so.invoiceTodoLastError = NULL " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId AND so.invoiceTodoStatus = 'FAILED'")
+    int retryFailedInvoiceTodo(@Param("id") String id, @Param("factoryId") String factoryId);
 }

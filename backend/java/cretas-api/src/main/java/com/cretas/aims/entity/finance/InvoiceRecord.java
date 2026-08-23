@@ -27,9 +27,6 @@ import org.hibernate.annotations.Where;
 @NoArgsConstructor
 @Entity
 @Table(name = "invoice_records",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_invoice_factory_number", columnNames = {"factory_id", "invoice_number"})
-        },
         indexes = {
                 @Index(name = "idx_inv_factory", columnList = "factory_id"),
                 @Index(name = "idx_inv_sales_order", columnList = "sales_order_id"),

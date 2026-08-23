@@ -71,15 +71,16 @@ public class SalesOrderInvoiceTodoProcessor {
 
         try {
             invoiceService.requestInvoiceFromOrder(factoryId, salesOrderId, null, null,
-                    "销售订单全部发货完成，系统自动生成待审核开票记录");
+                    InvoiceServiceImpl.AUTOMATIC_INVOICE_REMARK);
             salesOrderRepository.markInvoiceTodoDone(salesOrderId, factoryId);
             return true;
         } catch (com.cretas.aims.exception.BusinessException e) {
-            // Existing active invoice or already-issued amount is an idempotent terminal
-            // outcome.  Other business failures remain durable and bounded for retry.
-            if (Integer.valueOf(409).equals(e.getCode())) {
+            // Only an exact active automatic record or a fully invoiced order is an
+            // idempotent terminal outcome.  Partial invoicing and unrelated active
+            // records remain durable failures and must stay visible for finance review.
+            if ("AUTO_INVOICE_ALREADY_FULL".equals(e.getErrorCode())) {
                 salesOrderRepository.markInvoiceTodoDone(salesOrderId, factoryId);
-                log.debug("销售订单开票待办已存在/已开票，标记完成: {}", salesOrderId);
+                log.debug("销售订单已全额开票，自动开票待办标记完成: {}", salesOrderId);
                 return true;
             }
             markFailure(factoryId, salesOrderId, e);
@@ -103,11 +104,29 @@ public class SalesOrderInvoiceTodoProcessor {
         if (message.length() > 1000) {
             message = message.substring(0, 1000);
         }
-        int attempt = effectiveMaxAttempts();
+        int attempt = salesOrderRepository.findInvoiceTodoAttempts(salesOrderId, factoryId).orElse(0);
         LocalDateTime next = LocalDateTime.now().plusMinutes(1);
-        salesOrderRepository.markInvoiceTodoFailure(salesOrderId, factoryId, next, message, attempt);
-        log.warn("销售订单自动开票待办处理失败，保留并等待有界重试: salesOrderId={}, error={}",
-                salesOrderId, message);
+        int max = effectiveMaxAttempts();
+        salesOrderRepository.markInvoiceTodoFailure(salesOrderId, factoryId, next, message, max);
+        if (attempt >= max) {
+            log.error("销售订单自动开票待办已耗尽重试次数，需 finance_manager 显式重试: " +
+                    "salesOrderId={}, attempts={}, maxAttempts={}, error={}",
+                    salesOrderId, attempt, max, message);
+        } else {
+            log.warn("销售订单自动开票待办处理失败，保留并等待有界重试: salesOrderId={}, attempts={}, error={}",
+                    salesOrderId, attempt, message);
+        }
+    }
+
+    /**
+     * Explicit recovery hook for the finance-admin endpoint.  It only resets an
+     * exhausted FAILED todo; it never creates an invoice outside the normal lease.
+     */
+    public boolean retryFailedTodo(String factoryId, String salesOrderId) {
+        if (factoryId == null || salesOrderId == null) {
+            return false;
+        }
+        return salesOrderRepository.retryFailedInvoiceTodo(salesOrderId, factoryId) == 1;
     }
 
     private int effectiveMaxAttempts() {

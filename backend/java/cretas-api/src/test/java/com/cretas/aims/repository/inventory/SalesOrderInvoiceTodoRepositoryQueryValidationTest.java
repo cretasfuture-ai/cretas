@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.persistence.Table;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -26,7 +28,7 @@ class SalesOrderInvoiceTodoRepositoryQueryValidationTest {
     @Autowired EntityManager entityManager;
 
     @Test
-    void todoQueryAndClaimUpdatesBootWithoutScanningHistoricalNulls() {
+    void todoQueryAndClaimUpdatesBootWithoutScanningHistoricalNulls() throws NoSuchFieldException {
         assertThat(salesOrderRepository.findInvoiceTodoCandidates(
                 LocalDateTime.now(), 5, org.springframework.data.domain.PageRequest.of(0, 10)))
                 .isEmpty();
@@ -36,8 +38,14 @@ class SalesOrderInvoiceTodoRepositoryQueryValidationTest {
         assertThat(salesOrderRepository.markInvoiceTodoDone("missing", "F006")).isZero();
         assertThat(salesOrderRepository.markInvoiceTodoFailure(
                 "missing", "F006", LocalDateTime.now().plusMinutes(1), "test", 5)).isZero();
+        assertThat(salesOrderRepository.findInvoiceTodoAttempts("missing", "F006")).isEmpty();
+        assertThat(salesOrderRepository.retryFailedInvoiceTodo("missing", "F006")).isZero();
         assertThat(entityManager.getMetamodel().entity(
                 com.cretas.aims.entity.inventory.SalesOrder.class)
                 .getAttribute("invoiceTodoStatus")).isNotNull();
+        assertThat(com.cretas.aims.entity.inventory.SalesOrder.class
+                .getDeclaredField("loadedStatus").getAnnotation(JsonIgnore.class)).isNotNull();
+        assertThat(com.cretas.aims.entity.finance.InvoiceRecord.class
+                .getAnnotation(Table.class).uniqueConstraints()).isEmpty();
     }
 }

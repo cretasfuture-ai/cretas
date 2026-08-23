@@ -139,6 +139,7 @@ public class SalesOrder extends BaseEntity {
     public static final String INVOICE_TODO_FAILED = "FAILED";
 
     @Transient
+    @JsonIgnore
     private SalesOrderStatus loadedStatus;
 
     @PostLoad
