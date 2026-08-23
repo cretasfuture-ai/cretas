@@ -121,9 +121,21 @@ const RECEIVABLE_STATUSES: PurchaseOrder['status'][] = [
 
 const STATUS_LABEL: Record<string, { text: string; color: string; bg: string }> = {
   APPROVED:          { text: '待收货', color: '#1565c0', bg: '#e3f2fd' },
-  FINANCE_APPROVED:  { text: '财审通过', color: '#2e7d32', bg: '#e8f5e9' },
-  PARTIAL_RECEIVED:  { text: '部分收货', color: '#e65100', bg: '#fff3e0' },
+  FINANCE_APPROVED:  { text: '待收货', color: '#1565c0', bg: '#e3f2fd' },
+  PARTIAL_RECEIVED:  { text: '部分入库', color: '#e65100', bg: '#fff3e0' },
 };
+
+export function getOrderQuantityPresentation(order: PurchaseOrder) {
+  const items = order.items || [];
+  const normalizedUnits = items.map((item) => item.unit?.trim()).filter(Boolean) as string[];
+  const units = new Set(normalizedUnits);
+  const uniformUnit = items.length > 0 && normalizedUnits.length === items.length && units.size === 1
+    ? normalizedUnits[0]
+    : null;
+  const planned = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  const received = items.reduce((sum, item) => sum + (item.receivedQuantity || 0), 0);
+  return { items, uniformUnit, planned, received, pending: Math.max(0, planned - received) };
+}
 
 export default function WHPurchaseReceiveListScreen() {
   const navigation = useNavigation<Nav>();
@@ -311,21 +323,6 @@ export default function WHPurchaseReceiveListScreen() {
   );
 
   // ============================================================
-  // 计算订单待收量摘要 (防呆 Rule 1)
-  // ============================================================
-  const pendingQtySummary = useCallback((order: PurchaseOrder): string => {
-    if (!order.items || order.items.length === 0) return '暂无明细';
-    const lines = order.items.map((it) => {
-      const planned = it.quantity || 0;
-      const received = it.receivedQuantity || 0;
-      const pending = Math.max(0, planned - received);
-      const name = it.materialName || it.materialTypeId;
-      return `${name}: 待收 ${pending}${it.unit ? ' ' + it.unit : ''}`;
-    });
-    return lines.slice(0, 3).join(' · ') + (lines.length > 3 ? ` 等 ${lines.length} 项` : '');
-  }, []);
-
-  // ============================================================
   // 渲染单张卡片
   // ============================================================
   const renderItem = useCallback(
@@ -393,10 +390,7 @@ export default function WHPurchaseReceiveListScreen() {
         bg: '#f5f5f5',
       };
 
-      // 防呆 Rule 1: 汇总每行待收数量
-      const totalPlanned = order.items?.reduce((s, i) => s + (i.quantity || 0), 0) ?? 0;
-      const totalReceived = order.items?.reduce((s, i) => s + (i.receivedQuantity || 0), 0) ?? 0;
-      const totalPending = Math.max(0, totalPlanned - totalReceived);
+      const quantity = getOrderQuantityPresentation(order);
 
       return (
         <TouchableRipple
@@ -422,7 +416,7 @@ export default function WHPurchaseReceiveListScreen() {
               <View style={styles.metaRow}>
                 <MaterialCommunityIcons name="factory" size={14} color="#718096" />
                 <Text style={styles.metaText}>
-                  {order.supplierName || '未知供应商'}
+                  {order.supplierName || '未知供应商'} · 共 {quantity.items.length} 项
                 </Text>
               </View>
               {order.expectedDeliveryDate && (
@@ -435,16 +429,16 @@ export default function WHPurchaseReceiveListScreen() {
               )}
 
               {/* 防呆 Rule 1: 待收数量汇总 */}
-              {order.items && order.items.length > 0 && (
+              {quantity.items.length > 0 && quantity.uniformUnit && (
                 <View style={styles.qtyRow}>
                   <View style={styles.qtyStat}>
                     <Text style={styles.qtyStatLabel}>订单合计</Text>
-                    <Text style={styles.qtyStatValue}>{totalPlanned}</Text>
+                    <Text style={styles.qtyStatValue}>{quantity.planned} {quantity.uniformUnit}</Text>
                   </View>
                   <View style={styles.qtyStat}>
                     <Text style={styles.qtyStatLabel}>已收</Text>
                     <Text style={[styles.qtyStatValue, { color: '#2e7d32' }]}>
-                      {totalReceived}
+                      {quantity.received} {quantity.uniformUnit}
                     </Text>
                   </View>
                   <View style={styles.qtyStat}>
@@ -452,23 +446,34 @@ export default function WHPurchaseReceiveListScreen() {
                     <Text
                       style={[
                         styles.qtyStatValue,
-                        { color: totalPending > 0 ? '#e65100' : '#757575' },
+                        { color: quantity.pending > 0 ? '#e65100' : '#757575' },
                       ]}
                     >
-                      {totalPending}
+                      {quantity.pending} {quantity.uniformUnit}
                     </Text>
-                  </View>
-                  <View style={styles.qtyStat}>
-                    <Text style={styles.qtyStatLabel}>明细行</Text>
-                    <Text style={styles.qtyStatValue}>{order.items.length}</Text>
                   </View>
                 </View>
               )}
 
-              {/* 物料简要列表 */}
-              <Text style={styles.itemsHint} numberOfLines={2}>
-                {pendingQtySummary(order)}
-              </Text>
+              {!quantity.uniformUnit && quantity.items.length > 0 && (
+                <Text style={styles.mixedUnitHint}>多单位订单，请按下面明细逐项核对</Text>
+              )}
+              <View style={styles.itemLines}>
+                {quantity.items.slice(0, 3).map((line) => {
+                  const pending = Math.max(0, (line.quantity || 0) - (line.receivedQuantity || 0));
+                  const unit = line.unit || '单位未标注';
+                  return (
+                    <View key={line.id} style={styles.itemLine}>
+                      <Text style={styles.itemName}>{line.materialName || line.materialTypeId}</Text>
+                      <Text style={styles.itemQuantity}>
+                        应收 {line.quantity || 0} {unit} · 已收 {line.receivedQuantity || 0} {unit} · 待收 {pending} {unit}
+                      </Text>
+                    </View>
+                  );
+                })}
+                {quantity.items.length > 3 && <Text style={styles.moreItems}>还有 {quantity.items.length - 3} 项，点进后查看</Text>}
+                {quantity.items.length === 0 && <Text style={styles.itemsHint}>暂无物料明细</Text>}
+              </View>
 
               <View style={styles.actionRow}>
                 <Button
@@ -487,7 +492,7 @@ export default function WHPurchaseReceiveListScreen() {
         </TouchableRipple>
       );
     },
-    [handleSelect, handleSelectArrival, pendingQtySummary],
+    [handleSelect, handleSelectArrival],
   );
 
   // ============================================================
@@ -662,6 +667,12 @@ const styles = StyleSheet.create({
   qtyStatValue: { fontSize: 16, fontWeight: '700', color: '#2d3748', marginTop: 2 },
 
   itemsHint: { fontSize: 12, color: '#a0aec0', lineHeight: 18, marginBottom: 8 },
+  mixedUnitHint: { color: '#B45309', fontSize: 12, marginTop: 8, marginBottom: 4 },
+  itemLines: { gap: 6, marginBottom: 8 },
+  itemLine: { backgroundColor: '#F7FAFC', borderRadius: 6, padding: 8 },
+  itemName: { color: '#334155', fontSize: 13, fontWeight: '600' },
+  itemQuantity: { color: '#475569', fontSize: 12, lineHeight: 18, marginTop: 3 },
+  moreItems: { color: '#64748B', fontSize: 12 },
 
   actionRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   receiveButton: { borderRadius: 20 },

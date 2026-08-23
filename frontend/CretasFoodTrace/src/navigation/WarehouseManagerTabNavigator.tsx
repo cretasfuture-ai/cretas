@@ -6,16 +6,15 @@
  * owner 裁定: 仓管在 App 上唯一要做的是「确认入库(含拍照)」和「发货」,
  * 不再让他查库存 —— 那些是办公室在 web 上做的事。
  *
- * 5 个 Tab → 3 个:  入库 / 发货 / 我的
+ * 5 个 Tab → 4 个:  首页 / 入库 / 发货 / 我的
  *
- *   隐藏 首页: 它的任务列表与「入库」「发货」两个 tab **内容重复** ——
- *              同一件事两个入口, 仓管不知道该点哪个。
+ *   首页改为两个大入口: 不再复制任务与统计，只负责把仓管带到入库/发货首页。
  *   隐藏 库存: owner 明确不让他查; 且这个栈底下挂着 18 个屏。
  *   保留 我的: ⛔ 不能砍 —— 它是登出/切账号的**唯一出口**,
  *              砍掉等于把用户锁死在一个账号里 (防呆 Rule 5)。
  *
- * ⛔ 隐藏不是删除: 两个 Stack 与其下 25 个屏全部保留在代码里, 只是不再从
- *    底部导航进入。owner 原话「我们先把它隐藏起来, 我们看看效果」——
+ * ⛔ 隐藏不是删除: 库存 Stack 与其下屏幕全部保留在代码里, 只是不再从
+ *    底部导航进入。此前 owner 原话「我们先把它隐藏起来, 我们看看效果」——
  *    把 SIMPLIFIED_WAREHOUSE_NAV 改成 false 即整体恢复, 一行。
  *
  * ⚠️ 与本次同一个 commit 的必要配套: TransferList/TransferDetail 已从
@@ -59,9 +58,7 @@ export function WarehouseManagerTabNavigator() {
 
   return (
     <Tab.Navigator
-      // 收敛后落地页是「入库」——仓管一天的第一件事就是收货,
-      // ⛔ 不该先看一屏他不需要决策的统计再点进去。
-      initialRouteName={SIMPLIFIED_WAREHOUSE_NAV ? "WHInboundTab" : "WHHomeTab"}
+      initialRouteName="WHHomeTab"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: TAB_COLORS.active,
@@ -80,8 +77,7 @@ export function WarehouseManagerTabNavigator() {
         },
       }}
     >
-      {/* 首页Tab —— 收敛时隐藏 (任务列表与入库/发货重复) */}
-      {!SIMPLIFIED_WAREHOUSE_NAV && (
+      {/* 首页只做入库/发货分流，不重复任务列表。 */}
       <Tab.Screen
         name="WHHomeTab"
         component={WHHomeStackNavigator}
@@ -93,7 +89,6 @@ export function WarehouseManagerTabNavigator() {
           ),
         }}
       />
-      )}
 
       {/* 入库Tab */}
       {isScreenEnabled('InboundManagement') && (

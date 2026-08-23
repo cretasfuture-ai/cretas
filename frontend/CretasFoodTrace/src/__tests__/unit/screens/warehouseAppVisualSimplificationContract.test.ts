@@ -21,7 +21,7 @@ const strip = (src: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
-describe('入库列表: 底部聚合统计块已收敛, 三个快捷按钮改成 1 主 + 2 副', () => {
+describe('入库列表: 真实收货状态与大号现场操作', () => {
   const code = strip(read('screens/warehouse/inbound/WHInboundListScreen.tsx'));
 
   it('阳性对照: 文件读得到, 且是这一屏', () => {
@@ -34,12 +34,16 @@ describe('入库列表: 底部聚合统计块已收敛, 三个快捷按钮改成
     expect(code).not.toContain('statsGrid');
   });
 
-  it('快捷操作改成 1 主(独占一行) + 2 副(降级样式), 不是 3 个同权重按钮', () => {
-    expect(code).toContain('primaryActionButton');
-    expect(code).toContain('secondaryActionBar');
-    expect(code).toContain('secondaryActionButton');
-    // 阴性对照: 旧的「三个按钮同一个 flexDirection:row 容器」样式名不再使用
-    expect(code).not.toMatch(/style=\{styles\.actionButton\}/);
+  it('扫码入库是至少 56dp 的大按钮，餐饮待验收已移除', () => {
+    expect(code).toContain('testID="wh-scan-inbound"');
+    expect(code).toMatch(/largeActionContent:\s*\{\s*minHeight:\s*56/);
+    expect(code).not.toContain('餐饮待验收');
+    expect(code).not.toContain('SupplierDeliveryList');
+  });
+
+  it('筛选只保留全部、待收货、部分入库、已完成', () => {
+    for (const label of ['全部', '待收货', '部分入库', '已完成']) expect(code).toContain(label);
+    expect(code).not.toContain('质检中');
   });
 
   it('列表卡片用 TouchableRipple (触感反馈), 不是 TouchableOpacity', () => {
@@ -86,10 +90,13 @@ describe('发货列表: 卡片补货品+数量摘要, 旧流程入口降级为�
     expect(code).toContain('发货确认');
   });
 
-  it('卡片补上货品名+数量摘要 (防呆 Rule 2 — 之前只显示"X 个产品", 看不出发什么货)', () => {
-    expect(code).toContain('function itemsText');
-    expect(code).toMatch(/itemsText\(row\)/);
+  it('卡片逐项显示货品名、数量和单位，并标出共几项', () => {
+    expect(code).toContain('function deliveryItemLines');
+    expect(code).toMatch(/deliveryItemLines\(row\)/);
     expect(code).toContain('productName');
+    expect(code).toContain('计划发');
+    expect(code).toContain('单位未标注');
+    expect(code).toContain('共 {itemLines.length} 项');
   });
 
   it('「手工发货登记」不再是与卡片同权重的整行按钮', () => {

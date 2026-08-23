@@ -58,13 +58,12 @@ function orderText(row: WarehouseDeliveryRecord): string {
  * 只能点进详情才知道 —— 与「待收货任务」列表页(WHPurchaseReceiveListScreen)的
  * pendingQtySummary 是同一类信息, 那边有这边没有。补上, 不新增按钮或跳转。
  */
-function itemsText(row: WarehouseDeliveryRecord): string {
-  if (!row.items || row.items.length === 0) return '点击查看明细';
-  const lines = row.items.map((it) => {
-    const name = it.productName || `产品-${it.productTypeId || ''}`;
-    return `${name} ${it.deliveredQuantity ?? 0}${it.unit || ''}`;
-  });
-  return lines.slice(0, 2).join(' · ') + (lines.length > 2 ? ` 等 ${lines.length} 项` : '');
+export function deliveryItemLines(row: WarehouseDeliveryRecord) {
+  return (row.items || []).map((item) => ({
+    id: item.id,
+    name: item.productName || `产品-${item.productTypeId || ''}`,
+    quantityText: `计划发 ${item.deliveredQuantity ?? 0} ${item.unit || '单位未标注'}`,
+  }));
 }
 
 export function WHDeliveryConfirmListScreen() {
@@ -172,6 +171,7 @@ export function WHDeliveryConfirmListScreen() {
           ) : (
             deliveries.map((row) => {
               const config = statusConfig[String(row.status).toUpperCase()] ?? DEFAULT_STATUS;
+              const itemLines = deliveryItemLines(row);
               return (
                 <TouchableRipple
                   key={row.id}
@@ -196,6 +196,10 @@ export function WHDeliveryConfirmListScreen() {
                         <Text style={styles.infoValue}>{orderText(row)}</Text>
                       </View>
                       <View style={styles.infoRow}>
+                        <Text style={styles.infoLabel}>货品</Text>
+                        <Text style={styles.infoValue}>共 {itemLines.length} 项</Text>
+                      </View>
+                      <View style={styles.infoRow}>
                         <Text style={styles.infoLabel}>计划日期</Text>
                         <Text style={styles.infoValue}>{row.deliveryDate || '-'}</Text>
                       </View>
@@ -207,10 +211,20 @@ export function WHDeliveryConfirmListScreen() {
                       )}
                     </View>
 
+                    <View style={styles.itemLines}>
+                      {itemLines.length === 0 ? (
+                        <Text style={styles.itemCountText}>暂无货品明细，点进后核对</Text>
+                      ) : itemLines.slice(0, 3).map((item) => (
+                        <View key={item.id} style={styles.itemLine}>
+                          <Text style={styles.itemName}>{item.name}</Text>
+                          <Text style={styles.itemQuantity}>{item.quantityText}</Text>
+                        </View>
+                      ))}
+                      {itemLines.length > 3 && <Text style={styles.moreItems}>还有 {itemLines.length - 3} 项，点进后查看</Text>}
+                    </View>
+
                     <View style={styles.cardFooter}>
-                      <Text style={styles.itemCountText} numberOfLines={1}>
-                        {itemsText(row)}
-                      </Text>
+                      <Text style={styles.itemCountText}>共 {itemLines.length} 项</Text>
                       <View style={styles.actionLink}>
                         <Text style={styles.actionText}>确认并发货</Text>
                         <MaterialCommunityIcons name="chevron-right" size={16} color="#4CAF50" />
@@ -285,6 +299,11 @@ const styles = StyleSheet.create({
     borderTopColor: '#f0f0f0',
   },
   itemCountText: { fontSize: 12, color: '#999' },
+  itemLines: { borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 10, gap: 6 },
+  itemLine: { backgroundColor: '#F7FAF8', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 8 },
+  itemName: { color: '#334155', fontSize: 13, fontWeight: '600' },
+  itemQuantity: { color: '#2E7D32', fontSize: 14, fontWeight: '700', marginTop: 3 },
+  moreItems: { color: '#64748B', fontSize: 12 },
   actionLink: { flexDirection: 'row', alignItems: 'center' },
   actionText: { fontSize: 13, color: '#4CAF50', fontWeight: '600' },
 });
