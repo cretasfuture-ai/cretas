@@ -2,12 +2,16 @@ package com.cretas.aims.repository.inventory;
 
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
+
+import jakarta.persistence.LockModeType;
 
 /**
  * 采购发票 Repository（SP6）
@@ -24,6 +28,24 @@ public interface PurchaseInvoiceRepository extends JpaRepository<PurchaseInvoice
     java.util.Optional<PurchaseInvoice> findByFactoryIdAndInvoiceNumber(String factoryId, String invoiceNumber);
 
     List<PurchaseInvoice> findByFactoryIdAndPurchaseOrderId(String factoryId, String purchaseOrderId);
+
+    /**
+     * Tenant-scoped mutation lock.  Reconcile must lock the row through both
+     * identifiers so a caller cannot race a second tab or address another
+     * factory's invoice by guessing its id.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT pi FROM PurchaseInvoice pi WHERE pi.id = :id AND pi.factoryId = :factoryId")
+    Optional<PurchaseInvoice> findByIdAndFactoryIdForUpdate(
+            @Param("id") String id,
+            @Param("factoryId") String factoryId);
+
+    /** Lock an existing invoice-number row before the idempotency decision. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT pi FROM PurchaseInvoice pi WHERE pi.factoryId = :factoryId AND pi.invoiceNumber = :invoiceNumber")
+    Optional<PurchaseInvoice> findByFactoryIdAndInvoiceNumberForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("invoiceNumber") String invoiceNumber);
 
     /**
      * 查询已超过开票提醒期限但尚未收到发票的采购订单（列表包含 PO 基础信息）。

@@ -1,6 +1,9 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceTodoDTO;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceViewDTO;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.exception.BusinessException;
@@ -17,6 +20,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 采购发票 Service 实现（SP6）
@@ -40,9 +46,16 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
                                   String invoiceNumber, BigDecimal amount,
                                   String ocrRawResult, Long uploadedBy) {
 
+        if (invoiceNumber == null || invoiceNumber.isBlank()) {
+            throw new BusinessException(400, "发票号码不能为空");
+        }
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(400, "发票金额必须大于 0");
+        }
+
         // 幂等性检查：同一工厂内发票号唯一
         if (invoiceNumber != null && !invoiceNumber.isBlank()) {
-            invoiceRepository.findByFactoryIdAndInvoiceNumber(factoryId, invoiceNumber)
+            invoiceRepository.findByFactoryIdAndInvoiceNumberForUpdate(factoryId, invoiceNumber)
                     .ifPresent(existing -> {
                         throw new BusinessException(409,
                                 "发票号 " + invoiceNumber + " 在工厂 " + factoryId +
@@ -50,14 +63,21 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
                     });
         }
 
-        PurchaseOrder po = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId)
+        // Serialize receipt/invoice transitions on the tenant-scoped PO row.
+        // The database unique index remains the final cross-PO invoice-number
+        // guard, while this lock prevents two tabs from mutating one PO loop.
+        PurchaseOrder po = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(poId, factoryId)
                 .orElseThrow(() -> new BusinessException(404,
-                        "采购订单不存在或不属于工厂: " + poId));
+                    "采购订单不存在或不属于工厂: " + poId));
+        if (supplierId != null && !supplierId.isBlank()
+                && !java.util.Objects.equals(supplierId, po.getSupplierId())) {
+            throw new BusinessException(400, "发票供应商与采购订单供应商不一致");
+        }
 
         PurchaseInvoice invoice = new PurchaseInvoice();
         invoice.setFactoryId(factoryId);
         invoice.setPurchaseOrderId(poId);
-        invoice.setSupplierId(supplierId);
+        invoice.setSupplierId(po.getSupplierId());
         invoice.setInvoiceNumber(invoiceNumber);
         invoice.setAmount(amount);
         invoice.setOcrRawResult(ocrRawResult);
@@ -88,14 +108,8 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     public void reconcile(String invoiceId, String factoryId, String reconcileStatus,
                           String note, Long reconciledBy) {
 
-        PurchaseInvoice invoice = invoiceRepository.findById(invoiceId)
+        PurchaseInvoice invoice = invoiceRepository.findByIdAndFactoryIdForUpdate(invoiceId, factoryId)
                 .orElseThrow(() -> new BusinessException("采购发票不存在: " + invoiceId));
-
-        // 工厂隔离检查
-        if (!factoryId.equals(invoice.getFactoryId())) {
-            throw new BusinessException(403,
-                    "无权操作工厂 " + invoice.getFactoryId() + " 的发票");
-        }
 
         // 幂等性保护：已对账不允许重复操作
         if (!"PENDING".equals(invoice.getReconcileStatus())) {
@@ -109,7 +123,7 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         invoice.setReconciledAt(LocalDateTime.now());
         invoiceRepository.save(invoice);
 
-        purchaseOrderRepository.findByIdAndFactoryId(invoice.getPurchaseOrderId(), factoryId)
+        purchaseOrderRepository.findByIdAndFactoryIdForUpdate(invoice.getPurchaseOrderId(), factoryId)
                 .ifPresent(po -> {
                     if ("MATCHED".equals(reconcileStatus)) {
                         po.setInvoiceStatus(PurchaseInvoiceStatus.RECONCILED);
@@ -137,6 +151,23 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         return invoiceRepository.findOverdueInvoicePoIds(factoryId, LocalDate.now());
     }
 
+    @Override
+    public List<PurchaseInvoiceTodoDTO> listPendingReceiptTodos(String factoryId) {
+        return purchaseOrderRepository.findInvoiceChaseCandidates(factoryId).stream()
+                .filter(po -> po.getStatus() == PurchaseOrderStatus.COMPLETED
+                        || po.getStatus() == PurchaseOrderStatus.CLOSED)
+                .map(po -> PurchaseInvoiceTodoDTO.builder()
+                        .purchaseOrderId(po.getId())
+                        .purchaseOrderNumber(po.getOrderNumber())
+                        .supplierId(po.getSupplierId())
+                        .supplierName(po.getSupplierName())
+                        .orderAmount(po.getTotalAmount())
+                        .orderDate(po.getOrderDate())
+                        .invoiceStatus(po.getInvoiceStatus())
+                        .build())
+                .toList();
+    }
+
     // ─── listByPurchaseOrder ──────────────────────────────────────────────────
 
     @Override
@@ -148,5 +179,26 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     @Override
     public List<PurchaseInvoice> listByFactory(String factoryId) {
         return invoiceRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId);
+    }
+
+    @Override
+    public List<PurchaseInvoiceViewDTO> listViews(String factoryId, String poId) {
+        List<PurchaseInvoice> invoices = (poId == null || poId.isBlank())
+                ? listByFactory(factoryId)
+                : listByPurchaseOrder(factoryId, poId);
+        Map<String, com.cretas.aims.entity.inventory.PurchaseOrder> orders = purchaseOrderRepository
+                .findAllById(invoices.stream().map(PurchaseInvoice::getPurchaseOrderId).distinct().toList())
+                .stream()
+                .filter(order -> factoryId.equals(order.getFactoryId()))
+                .collect(Collectors.toMap(
+                        com.cretas.aims.entity.inventory.PurchaseOrder::getId,
+                        Function.identity()));
+        return invoices.stream().map(invoice -> {
+            var order = orders.get(invoice.getPurchaseOrderId());
+            return PurchaseInvoiceViewDTO.from(
+                    invoice,
+                    order != null ? order.getOrderNumber() : null,
+                    order != null ? order.getSupplierName() : null);
+        }).toList();
     }
 }
