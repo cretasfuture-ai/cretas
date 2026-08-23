@@ -7,15 +7,14 @@ const nav = read('navigation/WarehouseManagerTabNavigator.tsx');
 const home = read('screens/warehouse/home/WHHomeScreen.tsx');
 
 describe('仓管四导航与首页分流', () => {
-  it('已开通仓储功能时显示首页、入库、发货、我的，库存仍由收敛开关隐藏', () => {
+  it('固定显示首页、入库、发货、我的，库存仍由收敛开关隐藏', () => {
     for (const tab of ['WHHomeTab', 'WHInboundTab', 'WHOutboundTab', 'WHProfileTab']) {
       expect(nav).toContain(`name="${tab}"`);
     }
     expect(nav).toMatch(/initialRouteName="WHHomeTab"/);
     expect(nav).toMatch(/!SIMPLIFIED_WAREHOUSE_NAV[\s\S]{0,200}name="WHInventoryTab"/);
     expect(nav).not.toMatch(/!SIMPLIFIED_WAREHOUSE_NAV[\s\S]{0,200}name="WHHomeTab"/);
-    expect(nav).toContain("isScreenEnabled('InboundManagement')");
-    expect(nav).toContain("isScreenEnabled('OutboundManagement')");
+    expect(nav).not.toContain('isScreenEnabled');
   });
 
   it('首页只有两个大业务入口并切到对应底部导航', () => {

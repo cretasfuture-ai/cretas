@@ -27,7 +27,6 @@ import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Icon } from "react-native-paper";
 import { WarehouseManagerTabParamList } from "../types/navigation";
-import { useFactoryFeatureStore } from "../store/factoryFeatureStore";
 
 // 导入5个Stack导航器
 import WHHomeStackNavigator from "./warehouse/WHHomeStackNavigator";
@@ -54,8 +53,6 @@ const TAB_COLORS = {
 export const SIMPLIFIED_WAREHOUSE_NAV = true;
 
 export function WarehouseManagerTabNavigator() {
-  const { isScreenEnabled } = useFactoryFeatureStore();
-
   return (
     <Tab.Navigator
       initialRouteName="WHHomeTab"
@@ -90,8 +87,7 @@ export function WarehouseManagerTabNavigator() {
         }}
       />
 
-      {/* 已开通仓储功能的工厂固定显示入库/发货；未开通时不暴露不可用入口。 */}
-      {isScreenEnabled('InboundManagement') && (
+      {/* 入库Tab */}
       <Tab.Screen
         name="WHInboundTab"
         component={WHInboundStackNavigator}
@@ -103,10 +99,8 @@ export function WarehouseManagerTabNavigator() {
           ),
         }}
       />
-      )}
 
       {/* 发货Tab */}
-      {isScreenEnabled('OutboundManagement') && (
       <Tab.Screen
         name="WHOutboundTab"
         component={WHOutboundStackNavigator}
@@ -118,7 +112,6 @@ export function WarehouseManagerTabNavigator() {
           ),
         }}
       />
-      )}
 
       {/* 库存Tab —— 收敛时隐藏 (owner: 不让仓管在 App 上查库存) */}
       {!SIMPLIFIED_WAREHOUSE_NAV && (
