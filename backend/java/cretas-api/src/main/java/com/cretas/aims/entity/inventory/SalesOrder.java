@@ -70,6 +70,10 @@ public class SalesOrder extends BaseEntity {
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
+        if (status == SalesOrderStatus.COMPLETED && invoiceTodoStatus == null) {
+            invoiceTodoStatus = INVOICE_TODO_PENDING;
+            invoiceTodoAttempts = 0;
+        }
     }
 
     @NotBlank
@@ -115,6 +119,44 @@ public class SalesOrder extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
     private SalesOrderStatus status = SalesOrderStatus.DRAFT;
+
+    /** Durable automatic-invoice todo state; null is reserved for historical orders. */
+    @Column(name = "invoice_todo_status", length = 20)
+    private String invoiceTodoStatus;
+
+    @Column(name = "invoice_todo_attempts")
+    private Integer invoiceTodoAttempts;
+
+    @Column(name = "invoice_todo_next_attempt_at")
+    private LocalDateTime invoiceTodoNextAttemptAt;
+
+    @Column(name = "invoice_todo_last_error", columnDefinition = "TEXT")
+    private String invoiceTodoLastError;
+
+    public static final String INVOICE_TODO_PENDING = "PENDING";
+    public static final String INVOICE_TODO_PROCESSING = "PROCESSING";
+    public static final String INVOICE_TODO_DONE = "DONE";
+    public static final String INVOICE_TODO_FAILED = "FAILED";
+
+    @Transient
+    private SalesOrderStatus loadedStatus;
+
+    @PostLoad
+    private void rememberLoadedStatus() {
+        loadedStatus = status;
+    }
+
+    @PreUpdate
+    private void markFirstCompletionForInvoiceTodo() {
+        if (loadedStatus != SalesOrderStatus.COMPLETED
+                && status == SalesOrderStatus.COMPLETED
+                && invoiceTodoStatus == null) {
+            invoiceTodoStatus = INVOICE_TODO_PENDING;
+            invoiceTodoAttempts = 0;
+            invoiceTodoNextAttemptAt = null;
+            invoiceTodoLastError = null;
+        }
+    }
 
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
