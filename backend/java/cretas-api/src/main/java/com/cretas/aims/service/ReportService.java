@@ -1,0 +1,277 @@
+package com.cretas.aims.service;
+
+import com.cretas.aims.dto.report.CostVarianceReportDTO;
+import com.cretas.aims.dto.report.DashboardStatisticsDTO;
+import com.cretas.aims.dto.report.KpiMetricsDTO;
+import com.cretas.aims.dto.report.OeeReportDTO;
+import com.cretas.aims.dto.report.ProductionByProductDTO;
+import com.cretas.aims.dto.report.SalesProductProfitRowDTO;
+import jakarta.servlet.http.HttpServletResponse;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+/**
+ * 报表统计服务接口
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2025-01-09
+ */
+public interface ReportService {
+    /**
+     * 获取仪表盘统计数据
+     */
+    DashboardStatisticsDTO getDashboardStatistics(String factoryId);
+     /**
+     * 获取生产报表
+      */
+    Map<String, Object> getProductionReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取库存报表
+      */
+    Map<String, Object> getInventoryReport(String factoryId, LocalDate date);
+     /**
+     * 获取财务报表
+      */
+    Map<String, Object> getFinanceReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取质量报表
+      */
+    Map<String, Object> getQualityReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取设备效率报表
+      */
+    Map<String, Object> getEquipmentEfficiencyReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取人员绩效报表
+      */
+    Map<String, Object> getPersonnelPerformanceReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取供应链报表
+      */
+    Map<String, Object> getSupplyChainReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取销售报表
+      */
+    Map<String, Object> getSalesReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取成本分析报表
+      */
+    Map<String, Object> getCostAnalysisReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取月度报表汇总
+      */
+    Map<String, Object> getMonthlyReport(String factoryId, Integer year, Integer month);
+     /**
+     * 获取年度报表汇总
+      */
+    Map<String, Object> getYearlyReport(String factoryId, Integer year);
+     /**
+     * 获取自定义报表
+      */
+    Map<String, Object> getCustomReport(String factoryId, Map<String, Object> parameters);
+     /**
+     * 导出报表为Excel
+      */
+    byte[] exportReportToExcel(String factoryId, String reportType, Map<String, Object> parameters);
+     /**
+     * 导出报表为PDF
+      */
+    byte[] exportReportToPDF(String factoryId, String reportType, Map<String, Object> parameters);
+     /**
+     * 获取实时生产监控数据
+      */
+    Map<String, Object> getRealTimeProductionData(String factoryId);
+     /**
+     * 获取KPI指标
+      */
+    Map<String, Object> getKPIMetrics(String factoryId, LocalDate date);
+     /**
+     * 获取对比分析报表
+      */
+    Map<String, Object> getComparativeAnalysis(String factoryId, LocalDate period1Start, LocalDate period1End,
+                                              LocalDate period2Start, LocalDate period2End);
+     /**
+     * 获取预测分析报表
+      */
+    Map<String, Object> getForecastReport(String factoryId, Integer forecastDays);
+     /**
+     * 获取异常分析报表
+      */
+    Map<String, Object> getAnomalyReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取设备报表
+      */
+    Map<String, Object> getEquipmentReport(String factoryId, LocalDate date);
+     /**
+     * 获取人员报表
+      */
+    Map<String, Object> getPersonnelReport(String factoryId, LocalDate date);
+     /**
+     * 获取效率分析报表
+      */
+    Map<String, Object> getEfficiencyAnalysisReport(String factoryId, LocalDate startDate, LocalDate endDate);
+     /**
+     * 获取趋势分析报表
+      */
+    Map<String, Object> getTrendAnalysisReport(String factoryId, String type, Integer period);
+     /**
+     * 获取周期对比报表
+      */
+    Map<String, Object> getPeriodComparisonReport(String factoryId, LocalDate period1Start, LocalDate period1End,
+                                                  LocalDate period2Start, LocalDate period2End);
+     /**
+     * 获取预测报表（带类型）
+      */
+    Map<String, Object> getForecastReport(String factoryId, String type, Integer days);
+    /**
+     * 导出报表为 Excel.
+     *
+     * <p>RBAC defense-in-depth (PR P0-C sweep, 2026-05-12): {@code maskPrice}=true 时
+     * 财务/成本/销售 类报表的金额列以 "—" 占位. 调用方 (ReportController) 通过
+     * {@link com.cretas.aims.security.PriceMaskResolver} 决定该参数.
+     */
+    void exportReportAsExcel(String factoryId, String reportType, LocalDate startDate, LocalDate endDate,
+                            boolean maskPrice, HttpServletResponse response);
+
+    /** @deprecated callers must pass {@code maskPrice} explicitly (RBAC). Defaults to admin (no mask). */
+    @Deprecated
+    default void exportReportAsExcel(String factoryId, String reportType, LocalDate startDate,
+                                     LocalDate endDate, HttpServletResponse response) {
+        exportReportAsExcel(factoryId, reportType, startDate, endDate, false, response);
+    }
+
+    /**
+     * 导出报表为 PDF. RBAC: 见 {@link #exportReportAsExcel}.
+     */
+    void exportReportAsPdf(String factoryId, String reportType, LocalDate startDate, LocalDate endDate,
+                          boolean maskPrice, HttpServletResponse response);
+
+    /** @deprecated callers must pass {@code maskPrice} explicitly (RBAC). Defaults to admin (no mask). */
+    @Deprecated
+    default void exportReportAsPdf(String factoryId, String reportType, LocalDate startDate,
+                                   LocalDate endDate, HttpServletResponse response) {
+        exportReportAsPdf(factoryId, reportType, startDate, endDate, false, response);
+    }
+     /**
+     * 获取实时数据
+      */
+    Map<String, Object> getRealtimeData(String factoryId);
+
+    // ========== Dashboard 委托方法 (集成 ProcessingService) ==========
+
+    /**
+     * 获取生产概览 Dashboard
+     * 委托 ProcessingService.getDashboardOverview
+     */
+    Map<String, Object> getDashboardOverview(String factoryId, String period);
+
+    /**
+     * 获取生产统计 Dashboard
+     * 委托 ProcessingService.getProductionStatistics
+     */
+    Map<String, Object> getProductionDashboard(String factoryId, String period);
+
+    /**
+     * 获取质量 Dashboard
+     * 委托 ProcessingService.getQualityDashboard
+     */
+    Map<String, Object> getQualityDashboard(String factoryId);
+
+    /**
+     * 获取设备 Dashboard
+     * 委托 ProcessingService.getEquipmentDashboard
+     */
+    Map<String, Object> getEquipmentDashboard(String factoryId);
+
+    /**
+     * 获取告警 Dashboard
+     * 委托 ProcessingService.getAlertsDashboard
+     */
+    Map<String, Object> getAlertsDashboard(String factoryId, String period);
+
+    /**
+     * 获取趋势分析 Dashboard
+     * 委托 ProcessingService.getTrendAnalysis
+     */
+    Map<String, Object> getTrendsDashboard(String factoryId, String period, String metric, Integer days);
+
+    // ========== 生产统计报表 ==========
+
+    /**
+     * 按产品统计生产数量
+     * @param factoryId 工厂ID
+     * @param startDate 开始日期（可选，默认本周开始）
+     * @param endDate 结束日期（可选，默认今天）
+     * @return 按产品分组的生产统计列表
+     */
+    List<ProductionByProductDTO> getProductionByProduct(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    // ========== 新增报表 (2026-01-14) ==========
+
+    /**
+     * 获取 OEE (设备综合效率) 报表
+     *
+     * @param factoryId 工厂ID
+     * @param startDate 开始日期
+     * @param endDate 结束日期
+     * @return OEE 报表数据
+     */
+    OeeReportDTO getOeeReport(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
+     * 获取成本差异报表
+     *
+     * @param factoryId 工厂ID
+     * @param startDate 开始日期
+     * @param endDate 结束日期
+     * @return 成本差异报表数据
+     */
+    CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
+     * 获取完整 KPI 指标集
+     *
+     * @param factoryId 工厂ID
+     * @param date 指标日期
+     * @return 完整 KPI 指标
+     */
+    KpiMetricsDTO getKpiMetricsDTO(String factoryId, LocalDate date);
+
+    /**
+     * 获取产能利用率报表
+     *
+     * @param factoryId 工厂ID
+     * @param startDate 开始日期
+     * @param endDate 结束日期
+     * @return 产能利用率数据
+     */
+    Map<String, Object> getCapacityUtilizationReport(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
+     * 获取准时交付报表
+     *
+     * @param factoryId 工厂ID
+     * @param startDate 开始日期
+     * @param endDate 结束日期
+     * @return 准时交付数据
+     */
+    Map<String, Object> getOnTimeDeliveryReport(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
+     * 获取销售订单产品级利润详情 (Sprint 4 Wave 2 S-PROFIT-DETAIL-1).
+     *
+     * <p>11-col view per line item: product/qty/unitPrice/cost/grossProfit/grossMarginPct/
+     * discount/tax/netProfit/historicalAvgPrice/trend. Price-sensitive fields stripped
+     * via {@code @PriceSensitive} for non-price roles.
+     *
+     * @param factoryId factory scope
+     * @param salesOrderId the order to drill into
+     * @param lookbackDays historical avg window (defaults to 90 at controller layer)
+     * @return per-line profit detail rows
+     * @throws com.cretas.aims.exception.BusinessException when order not found or cross-tenant
+     */
+    List<SalesProductProfitRowDTO> getSalesOrderProductProfitDetail(String factoryId,
+                                                                    String salesOrderId,
+                                                                    Integer lookbackDays);
+}

@@ -1,0 +1,521 @@
+package com.cretas.aims.service.inventory;
+
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.Supplier;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.service.inventory.impl.PurchaseOrderPdfServiceImpl;
+import com.itextpdf.text.pdf.PdfReader;
+import com.itextpdf.text.pdf.parser.PdfTextExtractor;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+/**
+ * Unit tests for {@link PurchaseOrderPdfServiceImpl}.
+ *
+ * <p>P0 (六扇门 May 7 transcript) — PDF 生成功能首发,本测试验证:
+ * <ul>
+ *   <li>正常路径: 完整订单生成有效 PDF (PDF magic header %PDF-)</li>
+ *   <li>条码: 输出包含 Code128 + QR 不抛异常 (graceful fallback)</li>
+ *   <li>边界: 空 items 列表 / 无 supplier / 无 factory 时不崩</li>
+ * </ul>
+ *
+ * <p>Test 策略: 复用 PurchaseServiceImplOverReceiveTest 的 Mockito @Mock 模式,
+ * 不需要 Spring Context 也不需要 PostgreSQL — 纯 unit test, CI 友好。
+ */
+@ExtendWith(MockitoExtension.class)
+@DisplayName("PurchaseOrderPdfServiceImpl 单元测试 (P0 六扇门 May 7 transcript)")
+class PurchaseOrderPdfServiceImplTest {
+
+    @Mock private PurchaseService purchaseService;
+    @Mock private SupplierRepository supplierRepository;
+    @Mock private FactoryRepository factoryRepository;
+
+    private PurchaseOrderPdfServiceImpl service;
+
+    private static final String FACTORY_ID = "F006";
+    private static final String SUPPLIER_ID = "SUP-LTM-001";
+    private static final String ORDER_ID = "po-uuid-001";
+
+    @BeforeEach
+    void setup() {
+        service = new PurchaseOrderPdfServiceImpl(purchaseService, supplierRepository, factoryRepository);
+    }
+
+    @Test
+    @DisplayName("正常路径: 完整订单 → 生成有效 PDF (含 PDF magic header)")
+    void generatePdf_happyPath_emitsValidPdf() {
+        // arrange
+        PurchaseOrder order = makeOrder("PO-20260511-001", buildItems());
+        Supplier supplier = makeSupplier("六扇门牛肉供应商 (Liutengmen Beef)");
+        Factory factory = makeFactory("六扇门卤制品厂");
+
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(SUPPLIER_ID, FACTORY_ID)).thenReturn(Optional.of(supplier));
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.of(factory));
+
+        // act — admin sees prices (maskPrice = false)
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+
+        // assert
+        assertNotNull(pdfBytes);
+        assertTrue(pdfBytes.length > 1000, "PDF should be non-trivial (got " + pdfBytes.length + " bytes)");
+        // PDF magic header
+        assertEquals(0x25, pdfBytes[0] & 0xff, "first byte = %");
+        assertEquals(0x50, pdfBytes[1] & 0xff, "second byte = P");
+        assertEquals(0x44, pdfBytes[2] & 0xff, "third byte = D");
+        assertEquals(0x46, pdfBytes[3] & 0xff, "fourth byte = F");
+    }
+
+    @Test
+    @DisplayName("边界: 空 items 列表 → 仍生成有效 PDF, 不抛异常")
+    void generatePdf_emptyItems_stillValid() {
+        PurchaseOrder order = makeOrder("PO-EMPTY-001", new ArrayList<>());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+
+        assertNotNull(pdfBytes);
+        assertTrue(pdfBytes.length > 500);
+        assertEquals(0x25, pdfBytes[0] & 0xff);
+    }
+
+    @Test
+    @DisplayName("边界: 无 supplier + 无 factory → fallback 到 supplierName + factoryId, 不抛异常")
+    void generatePdf_noSupplierOrFactory_usesFallbacks() {
+        PurchaseOrder order = makeOrder("PO-NOFB-001", buildItems());
+        order.setSupplierName("冗余的供应商名称"); // 冗余字段, fallback
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+
+        assertNotNull(pdfBytes);
+        assertTrue(pdfBytes.length > 500);
+    }
+
+    @Test
+    @DisplayName("边界: 订单号含 ASCII (常见) — Code128 一维码生成不抛异常")
+    void generatePdf_asciiOrderNumber_barcodeOk() {
+        PurchaseOrder order = makeOrder("PO-20260511-001", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+
+        assertNotNull(pdfBytes);
+        // Code128 + QR + 中文 = PDF 至少几 KB
+        assertTrue(pdfBytes.length > 2000, "PDF with barcode+QR should be >2KB, got " + pdfBytes.length);
+    }
+
+    // ==================== P0-C RBAC: byte[] price-strip regression ====================
+    // Root cause: PR #423 PriceFieldResponseAdvice only walks ResponseEntity<JSON> bodies.
+    // PDF byte[] bypassed the strip → warehouse_manager curl /pdf saw 单价/小计/合计.
+    // Defense-in-depth: PDF service masks price columns when caller lacks
+    // procurement:price:view permission (parity with @PriceSensitive JSON strip).
+
+    @Test
+    @DisplayName("RBAC P0-C: maskPrice=true → 单价 column 显示 '—', 真实单价 5 不出现")
+    void generatePdf_maskPriceTrue_unitPriceMasked() throws Exception {
+        PurchaseOrder order = makeOrder("PO-RBAC-MASK", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, true);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("—"), "Masked PDF must contain em-dash placeholder, got: " + summarize(text));
+        // Unit prices 5 (牛腩) and 8.5 (酱油) MUST NOT appear in any cell.
+        // Use a regex that allows them as a substring of larger numbers? No — formatDecimal strips trailing zeros so we see "5" and "8.5" verbatim.
+        assertFalse(containsAsToken(text, "5"), "Masked PDF must not leak unitPrice 5; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "8.5"), "Masked PDF must not leak unitPrice 8.5; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("RBAC P0-C: maskPrice=true → 小计 column 显示 '—', 真实 lineAmount 500/170 不出现")
+    void generatePdf_maskPriceTrue_lineAmountMasked() throws Exception {
+        PurchaseOrder order = makeOrder("PO-RBAC-LINE", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, true);
+
+        String text = extractPdfText(pdfBytes);
+        // lineAmount = qty * unitPrice = 100*5=500 (牛腩), 20*8.5=170 (酱油)
+        assertFalse(containsAsToken(text, "500"), "Masked PDF must not leak lineAmount 500; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "170"), "Masked PDF must not leak lineAmount 170; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("RBAC P0-C: maskPrice=true → 合计 row 显示 '—', grandTotal 670 不出现")
+    void generatePdf_maskPriceTrue_grandTotalMasked() throws Exception {
+        PurchaseOrder order = makeOrder("PO-RBAC-TOTAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, true);
+
+        String text = extractPdfText(pdfBytes);
+        // grandTotal = 500 + 170 = 670
+        assertFalse(containsAsToken(text, "670"), "Masked PDF must not leak grandTotal 670; text=" + summarize(text));
+        // The 合计 label MUST still be present — we mask values, not structure (parity with v-if defense)
+        assertTrue(text.contains("合计"), "Masked PDF must keep '合计' label for layout parity; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("RBAC P0-C: maskPrice=false → admin sees real unitPrice 5 + 8.5 + lineAmount 500/170 + grandTotal 670")
+    void generatePdf_maskPriceFalse_pricesVisibleForAdmin() throws Exception {
+        PurchaseOrder order = makeOrder("PO-RBAC-ADMIN", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(containsAsToken(text, "5"), "Admin PDF must show unitPrice 5; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "8.5"), "Admin PDF must show unitPrice 8.5; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "500"), "Admin PDF must show lineAmount 500; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "170"), "Admin PDF must show lineAmount 170; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "670"), "Admin PDF must show grandTotal 670; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N3: externalVersion=true → 价格权限用户下载对外版也不出现价格列和价格值")
+    void generatePdf_externalVersion_removesPriceColumnsAndValuesForAnyCaller() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N3-EXTERNAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, true);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("采购订单号（PO）"), "External PDF must label the purchase order number as PO; text=" + summarize(text));
+        assertTrue(text.contains("PO-N3-EXTERNAL"), "External PDF must include purchase order number; text=" + summarize(text));
+        assertTrue(text.contains("来源销售订单号（SO）"), "External PDF must distinguish the source sales order as SO; text=" + summarize(text));
+        assertTrue(text.contains("SO-20260612-001"), "External PDF must include source sales order number; text=" + summarize(text));
+        assertTrue(text.contains("件数"), "External PDF must include piece count column; text=" + summarize(text));
+        assertFalse(text.contains("单价"), "External PDF must remove unit price column label; text=" + summarize(text));
+        assertFalse(text.contains("小计"), "External PDF must remove line amount column label; text=" + summarize(text));
+        assertFalse(text.contains("合计"), "External PDF must remove grand total row; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "5"), "External PDF must not leak unitPrice 5; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "8.5"), "External PDF must not leak unitPrice 8.5; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "500"), "External PDF must not leak lineAmount 500; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "170"), "External PDF must not leak lineAmount 170; text=" + summarize(text));
+        assertFalse(containsAsToken(text, "670"), "External PDF must not leak grandTotal 670; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N3: internalVersion → 头部区分采购订单号(PO)与来源销售订单号(SO), 内部审批版保留价格列")
+    void generatePdf_internalVersion_includesSalesOrderNumberAndPrices() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N3-INTERNAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("采购订单号（PO）"), "Internal PDF must label the purchase order number as PO; text=" + summarize(text));
+        assertTrue(text.contains("PO-N3-INTERNAL"), "Internal PDF must include purchase order number; text=" + summarize(text));
+        assertTrue(text.contains("来源销售订单号（SO）"), "Internal PDF must distinguish the source sales order as SO; text=" + summarize(text));
+        assertTrue(text.contains("SO-20260612-001"), "Internal PDF must include source sales order number; text=" + summarize(text));
+        assertTrue(text.contains("件数"), "Internal PDF must rename box count as piece count; text=" + summarize(text));
+        assertTrue(text.contains("单价"), "Internal PDF must keep unit price column label; text=" + summarize(text));
+        assertTrue(text.contains("小计"), "Internal PDF must keep line amount column label; text=" + summarize(text));
+        assertTrue(text.contains("合计"), "Internal PDF must keep grand total row; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "5"), "Internal PDF must show unitPrice 5; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "8.5"), "Internal PDF must show unitPrice 8.5; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "500"), "Internal PDF must show lineAmount 500; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "170"), "Internal PDF must show lineAmount 170; text=" + summarize(text));
+        assertTrue(containsAsToken(text, "670"), "Internal PDF must show grandTotal 670; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N4: internalVersion → admin PDF shows per-line tax rates")
+    void generatePdf_internalVersion_taxRatesVisibleForAdmin() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N4-TAX", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("税率"), "Internal PDF must show tax rate header; text=" + summarize(text));
+        assertTrue(text.contains("13%"), "Internal PDF must show 13% tax rate; text=" + summarize(text));
+        assertTrue(text.contains("9%"), "Internal PDF must show 9% tax rate; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N4 RBAC: maskPrice=true → tax rates are masked with other price-sensitive fields")
+    void generatePdf_maskPriceTrue_taxRatesMasked() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N4-TAX-MASK", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, true, false);
+
+        String text = extractPdfText(pdfBytes);
+        assertTrue(text.contains("税率"), "Masked internal PDF keeps tax rate column for layout parity; text=" + summarize(text));
+        assertFalse(text.contains("13%"), "Masked internal PDF must not leak 13% tax rate; text=" + summarize(text));
+        assertFalse(text.contains("9%"), "Masked internal PDF must not leak 9% tax rate; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("N4/N3: externalVersion=true → external PDF removes tax rate with price columns")
+    void generatePdf_externalVersion_removesTaxRateColumn() throws Exception {
+        PurchaseOrder order = makeOrder("PO-N4-EXTERNAL", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false, true);
+
+        String text = extractPdfText(pdfBytes);
+        assertFalse(text.contains("税率"), "External PDF must remove tax rate column; text=" + summarize(text));
+        assertFalse(text.contains("13%"), "External PDF must not leak 13% tax rate; text=" + summarize(text));
+        assertFalse(text.contains("9%"), "External PDF must not leak 9% tax rate; text=" + summarize(text));
+    }
+
+    @Test
+    @DisplayName("RBAC P0-C: 结构完整 — 即使 maskPrice=true, 货品名称 / 数量 / 单位 / 条码 / 签收区仍可见 (warehouse 仍能做收货 audit)")
+    void generatePdf_maskPriceTrue_nonPriceFieldsStillVisible() throws Exception {
+        PurchaseOrder order = makeOrder("PO-RBAC-STRUCT", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, true);
+
+        String text = extractPdfText(pdfBytes);
+        // Non-price content warehouse needs for receipt audit:
+        assertTrue(text.contains("牛腩"), "material name 牛腩 must remain visible");
+        assertTrue(text.contains("酱油"), "material name 酱油 must remain visible");
+        assertTrue(containsAsToken(text, "100"), "quantity 100 must remain visible");
+        assertTrue(containsAsToken(text, "20"), "quantity 20 must remain visible");
+        assertTrue(text.contains("kg"), "unit kg must remain visible");
+        assertTrue(text.contains("瓶"), "unit 瓶 must remain visible");
+        assertTrue(text.contains("PO-RBAC-STRUCT"), "order number must remain visible (barcode legend)");
+        assertTrue(text.contains("签收"), "signature block must remain visible");
+    }
+
+    // ==================== 未定价的行 (2026-08-21) ====================
+    //
+    // 缘起: owner 手动测试「供应原料不配默认采购价」时, 界面正确显示了「未配置采购价」。
+    // 但那张单去下载 PDF 会 **NullPointerException → 500**:
+    //   getLineAmount() 在 unitPrice == null 时返回 null (PurchaseOrderItem.java:161),
+    //   而合计那行原来是无条件 `grandTotal.add(lineAmount)`。
+    //
+    // 可达性已实测, ⛔ 不是从代码推的:
+    //   · GET /orders/{orderId}/pdf **没有状态守卫**(只有 @RequirePermission)
+    //   · 草稿单允许空单价 (submitOrder 才拦 PURCHASE_PRICE_REQUIRED)
+    //   · prod cretas_prod_db 有 4 行 unit_price IS NULL (虽然当前都是孤儿行, 够不到 PDF)
+    //
+    // ⚠️ 三条断言守的是**三件不同的事**, 不要合并:
+    //   ① 不崩       ② 不把「未知」印成 0.00      ③ 合计不静默少算
+
+    @Test
+    @DisplayName("未定价的行: PDF 不再 NPE (原来 grandTotal.add(null) 直接 500)")
+    void generatePdf_unpricedLine_doesNotThrow() throws Exception {
+        PurchaseOrder order = makeOrder("PO-UNPRICED", buildItemsWithOneUnpriced());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+
+        assertTrue(pdfBytes != null && pdfBytes.length > 0, "未定价的行不应让整个 PDF 生成失败");
+    }
+
+    @Test
+    @DisplayName("未定价的行: 单价/小计印「未定价」, ⛔ 不印 0.00 (那是在说这行白送)")
+    void generatePdf_unpricedLine_showsUnpricedNotZero() throws Exception {
+        PurchaseOrder order = makeOrder("PO-UNPRICED-CELL", buildItemsWithOneUnpriced());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+        String text = extractPdfText(pdfBytes);
+
+        assertTrue(text.contains("未定价"),
+                "未定价的行必须明说, got: " + summarize(text));
+        // ⛔ 「价格未知」不能长成「零元」。0.00 印在发给供应商的单子上是一句假话。
+        assertFalse(containsAsToken(text, "0.00"),
+                "未定价的格子不许印 0.00; text=" + summarize(text));
+        // 阳性对照: 有价格的那一行照常显示 —— ⛔ 否则「不印 0.00」可能只是因为整张表空了
+        assertTrue(text.contains("牛腩"), "有价格的行必须仍然正常渲染");
+        assertTrue(containsAsToken(text, "500"), "有价格的行小计 500 必须仍然可见");
+    }
+
+    @Test
+    @DisplayName("未定价的行: 合计必须说明「非最终金额」, ⛔ 不能静默少算")
+    void generatePdf_unpricedLine_totalDeclaresItselfIncomplete() throws Exception {
+        PurchaseOrder order = makeOrder("PO-UNPRICED-TOTAL", buildItemsWithOneUnpriced());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+        String text = extractPdfText(pdfBytes);
+
+        // 在一份要发出去的单据上, 一个看起来权威的错数比崩溃更糟。
+        //
+        // ⚠️ 匹配前先去掉换行/竖线: PDF 文本提取会在换行处插入分隔符。
+        // 第一版没做这一步而断言红了 —— 而**产品是对的**, 提取出来是
+        // 「合计 500（另有未|定价行，非最|终金额）」, 只是那格太窄折了三行。
+        // 那次红反而抓出一个真的排版问题(供应商读不出那句话), 说明文字因此挪到了表格下方。
+        String flat = text.replaceAll("[\s|]+", "");
+        assertTrue(flat.contains("非最终金额"),
+                "有未定价行时合计必须自曝不完整, got: " + summarize(text));
+    }
+
+    @Test
+    @DisplayName("阴性对照: 全部行都有价格时, ⛔ 不许出现「未定价」或「非最终金额」")
+    void generatePdf_allPriced_hasNoUnpricedMarkers() throws Exception {
+        // ⛔ 没有这一条, 上面三条可能只是因为那两个词被无条件打印。
+        PurchaseOrder order = makeOrder("PO-ALL-PRICED", buildItems());
+        when(purchaseService.getPurchaseOrderById(FACTORY_ID, ORDER_ID)).thenReturn(order);
+        when(supplierRepository.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+        when(factoryRepository.findById(FACTORY_ID)).thenReturn(Optional.empty());
+
+        byte[] pdfBytes = service.generatePurchaseOrderPdf(FACTORY_ID, ORDER_ID, false);
+        String text = extractPdfText(pdfBytes);
+
+        assertFalse(text.contains("未定价"), "全部定价的单子不该出现「未定价」; text=" + summarize(text));
+        assertFalse(text.contains("非最终金额"), "全部定价的单子合计应是最终金额; text=" + summarize(text));
+    }
+
+    /** 一行有价 (牛腩 100×5=500) + 一行没价 (青花椒, unitPrice=null)。 */
+    private List<PurchaseOrderItem> buildItemsWithOneUnpriced() {
+        List<PurchaseOrderItem> items = new ArrayList<>();
+        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "0.13"));
+        PurchaseOrderItem unpriced = new PurchaseOrderItem();
+        unpriced.setMaterialTypeId("MT-青花椒");
+        unpriced.setMaterialName("青花椒");
+        unpriced.setQuantity(new BigDecimal("0.75"));
+        unpriced.setUnit("kg");
+        // ⚠️ 刻意**不** setUnitPrice —— 这正是「供应原料没配默认采购价」在库里的长相。
+        //    prod 上实测存在这种行 (cretas_prod_db, 4 行 unit_price IS NULL)。
+        unpriced.setSpecification("规格-青花椒");
+        items.add(unpriced);
+        return items;
+    }
+
+    // ==================== PDF text helpers ====================
+
+    /** Extract concatenated text from all pages of a PDF byte stream. */
+    private static String extractPdfText(byte[] pdfBytes) throws Exception {
+        PdfReader reader = new PdfReader(pdfBytes);
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (int p = 1; p <= reader.getNumberOfPages(); p++) {
+                sb.append(PdfTextExtractor.getTextFromPage(reader, p)).append('\n');
+            }
+            return sb.toString();
+        } finally {
+            reader.close();
+        }
+    }
+
+    /**
+     * Returns true iff {@code needle} appears as a numeric token (not as substring of a larger number).
+     * "5" matches "5" or "5\n" but not "500" or "8.50".
+     */
+    private static boolean containsAsToken(String text, String needle) {
+        // Pad text so start-of-string / end-of-string match the same regex
+        String padded = " " + text + " ";
+        // Token boundary: any char that isn't [0-9.] — digits/dot run together in number formatting
+        String escaped = needle.replace(".", "\\.");
+        return padded.matches("(?s).*[^0-9.]" + escaped + "[^0-9.].*");
+    }
+
+    /** Truncate extracted text for assertion failure messages. */
+    private static String summarize(String text) {
+        String oneLine = text.replace('\n', '|').replaceAll("\\s+", " ");
+        return oneLine.length() > 400 ? oneLine.substring(0, 400) + "..." : oneLine;
+    }
+
+    // ==================== helpers ====================
+
+    private PurchaseOrder makeOrder(String orderNumber, List<PurchaseOrderItem> items) {
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId(ORDER_ID);
+        order.setFactoryId(FACTORY_ID);
+        order.setOrderNumber(orderNumber);
+        order.setSupplierId(SUPPLIER_ID);
+        order.setOrderDate(LocalDate.of(2026, 5, 11));
+        order.setExpectedDeliveryDate(LocalDate.of(2026, 5, 22));
+        order.setSalesOrderId("so-uuid-001");
+        order.setSalesOrderNumber("SO-20260612-001");
+        order.setStatus(PurchaseOrderStatus.APPROVED);
+        order.setTotalAmount(new BigDecimal("500.00"));
+        order.setRemark("六扇门牛肉测试供货单");
+        order.setItems(items);
+        return order;
+    }
+
+    private List<PurchaseOrderItem> buildItems() {
+        List<PurchaseOrderItem> items = new ArrayList<>();
+        items.add(makeItem("牛腩", "100", "kg", "5.00", "10", "0.13"));
+        items.add(makeItem("酱油", "20", "瓶", "8.50", "1", "0.09"));
+        return items;
+    }
+
+    private PurchaseOrderItem makeItem(String name, String qty, String unit, String price, String box, String taxRate) {
+        PurchaseOrderItem item = new PurchaseOrderItem();
+        item.setMaterialTypeId("MT-" + name);
+        item.setMaterialName(name);
+        item.setQuantity(new BigDecimal(qty));
+        item.setUnit(unit);
+        item.setUnitPrice(new BigDecimal(price));
+        item.setBoxQuantity(new BigDecimal(box));
+        item.setTaxRate(new BigDecimal(taxRate));
+        item.setSpecification("规格-" + name);
+        return item;
+    }
+
+    private Supplier makeSupplier(String name) {
+        Supplier supplier = new Supplier();
+        supplier.setId(SUPPLIER_ID);
+        supplier.setFactoryId(FACTORY_ID);
+        supplier.setName(name);
+        supplier.setContactName("张三");
+        supplier.setContactPhone("13800000000");
+        supplier.setAddress("上海市浦东新区某某路 123 号");
+        return supplier;
+    }
+
+    private Factory makeFactory(String name) {
+        Factory factory = new Factory();
+        factory.setId(FACTORY_ID);
+        factory.setName(name);
+        return factory;
+    }
+}

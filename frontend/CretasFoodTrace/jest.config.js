@@ -1,0 +1,161 @@
+module.exports = {
+  preset: 'react-native',
+  testEnvironment: 'node',
+
+  // worker 上限 (2026-08-17) —— 不设它, jest 默认起 `cpus - 1` 个 worker。
+  //
+  // 实测(开发机 32 逻辑核): 一次 `jest` 拉起 30 个 worker, 两分钟内把 commit
+  // 从 129GB 推到 151GB —— 单次 +23GB(约 770MB/worker), commit 用到 95.8%
+  // (limit 157.93GB, 只剩 6.6GB), 此时任何并行任务直接 OOM。
+  // ⚠️ 那台机器物理内存还空着 38GB —— 瓶颈是 commit 不是 RAM, 所以"内存够用"
+  //    这个直觉在这里是错的, 加内存也不解决。
+  //
+  // 本仓常态是多 worktree / 多 agent 并行, 一次测试不该占满整机。
+  // 44 个 suite 用 8 个 worker 绰绰有余(~6GB); CI runner 核少, 用 '50%' 自适应。
+  // 单独跑想快: JEST_MAX_WORKERS=16 npm test
+  maxWorkers: process.env.JEST_MAX_WORKERS
+    ? Number(process.env.JEST_MAX_WORKERS)
+    : (process.env.CI ? '50%' : 8),
+
+  // 全局变量定义 - 修复 __DEV__ 未定义错误
+  globals: {
+    __DEV__: true,
+  },
+
+  setupFilesAfterEnv: [
+    '<rootDir>/src/__tests__/setup.ts'
+  ],
+  testMatch: [
+    '**/__tests__/**/*.test.{js,jsx,ts,tsx}',
+    '**/?(*.)+(spec|test).{js,jsx,ts,tsx}'
+  ],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/src/test/' // 忽略现有的测试目录
+    // 2026-08-16: 摘掉 '/__tests__/integration/screens/'。
+    //
+    // 它是 PR-2 (May 9 2026) 留下的债: 那时 transformIgnorePatterns 不够宽,
+    // @react-navigation/native 的 ESM 进不了转译, 于是把整个目录排除掉先把
+    // 44 个 suite 的 continue-on-error 摘了。注释写的是「3 个」, 实际是 4 个文件。
+    //
+    // ⚠️ 排除的后果不是「少跑几个测试」, 而是【断言红了看不见】—— 这 4 个文件
+    // 三个月来只被 tsc 编译, 从没执行过。与 Java 侧 GateSelectorCoverageContractTest
+    // 守的是同一个形状: 编译得到 ≠ 会被执行。
+    //
+    // 解法是把 transformIgnorePatterns 配对(见下), 不是继续排除。
+    // ⛔ 不要为了让 CI 变绿再把这一行加回来 —— 那等于把闸关掉。
+  ],
+  collectCoverageFrom: [
+    'src/**/*.{js,jsx,ts,tsx}',
+    '!src/**/*.d.ts',
+    '!src/test/**', // 排除现有测试目录
+    '!src/__tests__/**', // 排除测试目录本身
+    '!src/**/*.test.{js,jsx,ts,tsx}',
+    '!src/**/index.{js,ts}',
+    '!src/mocks/**'
+  ],
+  // PR #224 (May 9 2026) removed `continue-on-error: true` from rn-test job and
+  // added the missing jest binary, but left the historical 70% coverage threshold
+  // in place. Actual coverage today is ~4% (44 suites / 880 tests vs hundreds of
+  // untested screens/components), so the threshold immediately blocked CI with
+  // exit code 1 even though every test passes. The 70% gate has been masked by
+  // continue-on-error since the file was created and was never enforceable.
+  // PR #276 dropped the 70% gate to unblock CI on green tests.
+  //
+  // PR #276 follow-up (May 10 2026): restore a REALISTIC baseline so further
+  // regressions are blocked AND the gate can be ratcheted up over time as new
+  // tests land. Current actual: stmts 4.04 / branches 1.86 / lines 4.01 /
+  // funcs 5.02. Baseline below sits ~0.5-1pp under each axis as a defensive
+  // margin (single test deletion shouldn't tip CI red). Coverage data is
+  // still collected and uploaded as the rn-coverage artifact (retention 14d).
+  //
+  // Ratchet plan (see docs/qa-audits/2026-05-10-rn-coverage-ratchet-plan.md):
+  //   Quarter 1 (~3mo)  target: stmts 10  / branches 5   / lines 10  / funcs 12
+  //   Quarter 2 (~6mo)  target: stmts 20  / branches 10  / lines 20  / funcs 25
+  //   Long-term (12mo+) target: stmts 60  / branches 50  / lines 60  / funcs 65
+  // Each new test PR can ratchet the baseline up by 1-2 percentage points
+  // when it covers new ground. Do NOT raise targets aggressively (test churn);
+  // do NOT set baseline ABOVE current actual (PR #224's mistake repeated).
+  coverageThreshold: {
+    global: {
+      statements: 4,
+      branches: 1.5,
+      lines: 4,
+      functions: 4.9 // PR #536 procure screens added; attachmentApi tests added, full screen coverage follow-up
+    }
+  },
+  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+    '^@env$': '<rootDir>/src/__tests__/mocks/env.ts',
+    '\\.(jpg|jpeg|png|gif|eot|otf|webp|svg|ttf|woff|woff2)$': 'jest-transform-stub',
+    // 'react-native' 是正则，会匹配所有含该子串的包名 (如 @react-native-xxx)
+    // 下面两行让这些包跳过宽泛匹配、正常解析到 jest.mock 工厂
+    '@react-native-async-storage/async-storage': '@react-native-async-storage/async-storage',
+    '@testing-library/react-native': '@testing-library/react-native',
+    // ✅ 2026-08-17 已解决(上一轮登记为「已知缺口」的那条)。
+    //
+    // 上一轮的【怀疑】是「宽泛正则把 paper 映射到 react-native 的 mock 上」。
+    // 探针实测证明那个怀疑【方向对、结论错】, 而错的那一半正是修不好的原因:
+    //
+    //     paperKeys      = SafeAreaProvider|SafeAreaView|useSafeAreaInsets|...
+    //     paperAppbar    = undefined
+    //     paperIsSafeArea= true    <-- paper 和 safe-area-context 是【同一个对象】
+    //     paperIsRN      = false   <-- 而且【不是】react-native 的 mock
+    //
+    // 真因: 宽泛正则把所有 `react-native-*` 映射到【同一个解析结果】, 而 setup.ts
+    // 对其中好几个包各写了一条 `jest.mock(...)` —— 它们注册到同一个 key 上,
+    // 【最后注册的那条赢】。setup.ts 里 safe-area-context(243 行) 排在
+    // paper(150 行) 后面, 所以 paper 拿到的是 safe-area-context 的替身。
+    //
+    // ⇒ 修法不是「让 paper 别走宽泛正则」, 而是【给它一个自己的解析身份】。
+    //   上一轮尝试 ② 之所以更糟, 是因为它锚定到【真的】react-native-paper;
+    //   真身在这套 RN mock 下加载不起来。锚定到【手写替身】就不会。
+    '^react-native-paper$': '<rootDir>/src/__tests__/mocks/reactNativePaper.tsx',
+    // 宽泛匹配：react-native 本体 + 子路径 + react-native-xxx 三方包 → __mocks__/react-native.js
+    'react-native': 'react-native'
+  },
+  // 默认值是 ['/node_modules/'] —— 即 node_modules 里一律不转译。RN 生态里大量包
+  // 只发 ESM 源码(@react-navigation/*, expo-*, react-native 本体…), 不转译就会在
+  // `import` 那一行 SyntaxError。下面这条是标准的「除了这些包之外都不转译」写法:
+  // (?!…) 里列出的包会被 babel-jest 处理。
+  //
+  // ⚠️ 这一条和 testPathIgnorePatterns 里被摘掉的那一行是配对的 —— 少了它,
+  //    integration/screens 下的用例会在 import @react-navigation 时当场炸。
+  // ⚠️ 括号要自己数一遍: 外层 (?! 一个、白名单 ( 一个, 结尾 '/)' 里的 ')' 关的是 (?!。
+  //    写成 '(?!(?:' + 'jest-)?…' 会让 '(?:' 被 '(jest-)' 的右括号提前关掉,
+  //    多出来的那个 ')' 直接 SyntaxError —— 实测踩过一次(好在它是当场炸, 不是静默失效)。
+  // ⚠️ Windows 上 jest 会把这里的 '/' 换成 '\\' 再编译成正则, 所以只能写 '/'。
+  transformIgnorePatterns: [
+    'node_modules/(?!('
+      + '(jest-)?react-native'
+      + '|@react-native(-community)?/.*'
+      + '|@react-navigation/.*'
+      + '|expo(nent)?'
+      + '|@expo(nent)?/.*'
+      + '|expo-.*'
+      + '|react-native-.*'
+      + '|@sentry/react-native'
+      + '|native-base'
+      + ')/)'
+  ],
+  // ⚠️ 顺序有意义: jest 取【第一条匹配上的】规则, 所以 node_modules 那条必须排最前。
+  //
+  // 放开 transformIgnorePatterns 之后, node_modules 里的三方 .ts 源码也会进 transform
+  // 链(expo-modules-core 直接发 .ts)。落到 ts-jest 就会去【类型检查三方源码】——
+  // expo-modules-core 自带 5 个 TS2532, 于是 3 个 suite 在【加载期】就崩,
+  // 一条断言都没跑到。⚠️ 那 3 条红看起来像「存量欠账」, 其实是这条配置造出来的。
+  //
+  // 三方代码要的是【转译】不是【类型检查】⇒ 交给 babel-jest。
+  // ⛔ 不要改成 diagnostics:false 去消这些错 —— 那会把我们自己代码的类型检查一起关掉,
+  //    而那是真信号。
+  transform: {
+    'node_modules[\\\\/].+\\.(js|jsx|ts|tsx)$': 'babel-jest',
+    '^.+\\.(js|jsx)$': 'babel-jest',
+    '^.+\\.(ts|tsx)$': ['ts-jest', {
+      tsconfig: {
+        jsx: 'react-jsx',
+      },
+    }],
+  }
+};

@@ -1,0 +1,28 @@
+name: Daily integration PR (manual fallback)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: daily-integration-pr
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build or update today's integration PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/maintenance/daily-integration.sh
+      - name: Publish branch audit
+        if: always()
+        run: cat "$RUNNER_TEMP/daily-integration-report.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true

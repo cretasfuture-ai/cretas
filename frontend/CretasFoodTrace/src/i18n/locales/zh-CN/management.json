@@ -1,0 +1,1521 @@
+{
+  "title": "管理中心",
+  "subtitle": "工厂配置与系统管理",
+  "deviceCenter": {
+    "title": "设备中心",
+    "tabs": {
+      "scale": "电子秤",
+      "camera": "摄像头",
+      "equipment": "通用设备"
+    }
+  },
+  "sections": {
+    "productionConfig": {
+      "title": "生产配置",
+      "productTypes": {
+        "title": "产品类型",
+        "desc": "配置鱼片、鱼头等类型"
+      },
+      "materialTypes": {
+        "title": "原材料类型",
+        "desc": "配置鲈鱼、带鱼等原料"
+      },
+      "conversionRates": {
+        "title": "转换率",
+        "desc": "配置原料到产品转换率"
+      },
+      "workTypes": {
+        "title": "工作类型",
+        "desc": "配置工种和时薪"
+      },
+      "disposalRecords": {
+        "title": "报废记录",
+        "desc": "管理废弃和报废记录"
+      }
+    },
+    "systemManagement": {
+      "title": "系统管理",
+      "departments": {
+        "title": "部门管理",
+        "desc": "组织架构和部门信息"
+      },
+      "users": {
+        "title": "用户管理",
+        "desc": "用户、角色和权限"
+      },
+      "whitelist": {
+        "title": "白名单",
+        "desc": "管理注册手机号"
+      },
+      "workSessions": {
+        "title": "工作会话",
+        "desc": "员工工时和人工成本"
+      }
+    },
+    "businessPartners": {
+      "title": "业务伙伴",
+      "suppliers": {
+        "title": "供应商管理",
+        "desc": "管理供应商信息"
+      },
+      "customers": {
+        "title": "客户管理",
+        "desc": "管理客户信息"
+      },
+      "shipments": {
+        "title": "出货管理",
+        "desc": "物流发货和配送记录"
+      }
+    },
+    "factoryConfig": {
+      "title": "工厂配置",
+      "factorySettings": {
+        "title": "工厂设置",
+        "desc": "工厂基本信息配置"
+      }
+    }
+  },
+  "export": {
+    "title": "导出数据",
+    "preparing": "正在准备导出",
+    "notAvailable": "此功能将在后端API实现后可用。",
+    "allConfig": "导出全部配置",
+    "productTypes": "导出产品类型",
+    "materialTypes": "导出原材料类型",
+    "users": "导出用户列表",
+    "departments": "导出部门信息",
+    "failed": "导出失败",
+    "failedMessage": "无法导出数据，请稍后重试"
+  },
+  "tips": {
+    "title": "提示",
+    "configFirst": "产品类型和原料类型需先配置，才能设置转换率",
+    "adminOnly": "部分功能需要管理员权限"
+  },
+  "common": {
+    "adminOnly": "仅限管理员访问",
+    "loading": "加载中...",
+    "noPermission": "您没有权限访问此页面",
+    "permissionHint": "仅限工厂超管、权限管理员和部门管理员",
+    "permissionHintSuperAdmin": "仅限工厂超管和平台管理员",
+    "confirm": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "create": "创建",
+    "update": "更新",
+    "edit": "编辑",
+    "delete": "删除",
+    "success": "成功",
+    "error": "错误",
+    "searchPlaceholder": "搜索",
+    "total": "总数",
+    "active": "启用中",
+    "inactive": "已停用",
+    "enabled": "启用",
+    "disabled": "停用",
+    "all": "全部",
+    "enable": "启用",
+    "disable": "停用",
+    "activate": "激活",
+    "deactivate": "停用"
+  },
+  "userManagement": {
+    "title": "用户管理",
+    "searchPlaceholder": "搜索用户名、姓名、手机号",
+    "filter": {
+      "all": "全部",
+      "operator": "操作员",
+      "departmentAdmin": "部门管理",
+      "superAdmin": "超管"
+    },
+    "stats": {
+      "totalUsers": "总用户数",
+      "active": "激活",
+      "inactive": "停用"
+    },
+    "empty": {
+      "noUsers": "暂无用户",
+      "hint": "点击右下角\"+\"按钮创建用户"
+    },
+    "createUser": "创建用户",
+    "editUser": "编辑用户",
+    "form": {
+      "username": "用户名",
+      "usernamePlaceholder": "登录用户名",
+      "password": "密码",
+      "passwordPlaceholder": "至少8位，包含字母和数字",
+      "realName": "真实姓名",
+      "realNamePlaceholder": "例如：张三",
+      "phone": "手机号",
+      "phonePlaceholder": "例如：+8613800138000",
+      "email": "邮箱",
+      "emailPlaceholder": "例如：user@example.com",
+      "role": "角色",
+      "department": "部门",
+      "position": "职位",
+      "positionPlaceholder": "例如：生产主管",
+      "selectPlaceholder": "请选择"
+    },
+    "roles": {
+      "operator": "操作员",
+      "departmentAdmin": "部门管理员",
+      "permissionAdmin": "权限管理员",
+      "factorySuperAdmin": "工厂超管",
+      "viewer": "查看者",
+      "unactivated": "未激活",
+      "unknown": "未知角色"
+    },
+    "departments": {
+      "processing": "加工部",
+      "logistics": "物流部",
+      "quality": "质检部",
+      "management": "管理层",
+      "unassigned": "未分配"
+    },
+    "actions": {
+      "edit": "编辑",
+      "activate": "激活",
+      "deactivate": "停用",
+      "delete": "删除"
+    },
+    "confirmDelete": {
+      "title": "确认删除",
+      "message": "确定要删除用户 \"{{name}}\" 吗？此操作不可撤销。"
+    },
+    "messages": {
+      "loadFailed": "加载用户列表失败",
+      "searchFailed": "搜索失败",
+      "requiredFields": "用户名、姓名和角色不能为空",
+      "passwordRequired": "创建用户时密码不能为空",
+      "updateSuccess": "用户信息已更新",
+      "createSuccess": "用户创建成功",
+      "saveFailed": "操作失败",
+      "deleteSuccess": "用户已删除",
+      "deleteFailed": "删除失败",
+      "activateSuccess": "用户已激活",
+      "deactivateSuccess": "用户已停用",
+      "toggleStatusFailed": "操作失败"
+    },
+    "noPermission": {
+      "title": "您没有权限访问此页面",
+      "hint": "仅限工厂超管和平台管理员"
+    }
+  },
+  "departmentManagement": {
+    "title": "部门管理",
+    "searchPlaceholder": "搜索部门编码、名称",
+    "initializeDefaults": "初始化默认部门",
+    "initializeConfirm": "将创建4个默认部门（加工、物流、质量、管理）。已有部门的工厂将跳过此操作。",
+    "initializeSuccess": "默认部门初始化成功",
+    "initializeFailed": "初始化失败",
+    "stats": {
+      "total": "总部门数",
+      "enabled": "启用中",
+      "totalEmployees": "总员工数"
+    },
+    "empty": {
+      "noDepartments": "暂无部门",
+      "hint": "点击右下角\"+\"按钮添加部门"
+    },
+    "add": "添加部门",
+    "edit": "编辑部门",
+    "form": {
+      "name": "部门名称",
+      "namePlaceholder": "例如: 生产部/质检部/物流部",
+      "code": "部门编码",
+      "codePlaceholder": "例如: DEPT001",
+      "description": "描述",
+      "descriptionPlaceholder": "部门详细描述",
+      "displayOrder": "显示顺序",
+      "displayOrderPlaceholder": "数字越小越靠前",
+      "departmentColor": "部门颜色",
+      "isActive": "是否启用",
+      "manager": "负责人",
+      "employees": "员工",
+      "employeeCount": "{{count}}人",
+      "parentDepartment": "上级部门"
+    },
+    "colors": {
+      "blue": "蓝色",
+      "green": "绿色",
+      "orange": "橙色",
+      "red": "红色",
+      "purple": "紫色",
+      "cyan": "青色",
+      "pink": "粉色",
+      "brown": "棕色"
+    },
+    "messages": {
+      "nameRequired": "部门名称不能为空",
+      "updateSuccess": "部门更新成功",
+      "createSuccess": "部门创建成功",
+      "deleteSuccess": "部门删除成功",
+      "deleteConfirm": "确定要删除部门\"{{name}}\"吗？此操作不可撤销。\n\n注意：有子部门或员工的部门无法删除。",
+      "statusUpdated": "已停用",
+      "statusActivated": "已启用"
+    }
+  },
+  "productTypeManagement": {
+    "title": "产品类型管理",
+    "stats": {
+      "total": "总数",
+      "active": "启用中",
+      "configured": "已配置SKU"
+    },
+    "empty": {
+      "noProducts": "暂无产品类型",
+      "hint": "点击右下角\"+\"按钮添加产品类型"
+    },
+    "add": "添加产品类型",
+    "edit": "编辑产品类型",
+    "configureSku": "配置SKU",
+    "form": {
+      "name": "产品名称",
+      "namePlaceholder": "例如: 带鱼",
+      "code": "产品代码 (自动生成)",
+      "unit": "单位",
+      "category": "分类",
+      "codeAutoGenerate": "产品代码将自动生成"
+    },
+    "categories": {
+      "seafood": "海鲜",
+      "frozenSeafood": "冷冻水产",
+      "processed": "加工成品",
+      "semiFinished": "半成品"
+    },
+    "sku": {
+      "steps": "{{count}}个工序",
+      "complexity": "复杂度 {{score}}",
+      "workHours": "{{hours}}h",
+      "configTitle": "配置 SKU: {{name}}",
+      "workHoursConfig": "工时配置",
+      "standardWorkHours": "标准工时 (小时)",
+      "workHoursPlaceholder": "例如: 2.5",
+      "complexityScore": "复杂度评分 (LinUCB 特征)",
+      "complexityOptions": {
+        "simple": "1 - 简单",
+        "fairlySimple": "2 - 较简单",
+        "medium": "3 - 中等",
+        "fairlyComplex": "4 - 较复杂",
+        "complex": "5 - 复杂"
+      },
+      "processingSteps": "加工步骤",
+      "skillRequirements": "技能要求",
+      "minLevel": "最低等级",
+      "preferredLevel": "建议等级",
+      "levelRange": "等级范围 1-5",
+      "relatedEquipment": "关联设备",
+      "relatedQualityCheck": "关联质检项",
+      "noEquipment": "暂无可用设备",
+      "noQualityCheck": "暂无可用质检项",
+      "saveConfig": "保存配置",
+      "saveSuccess": "SKU配置已保存",
+      "saveFailed": "保存失败"
+    },
+    "messages": {
+      "nameRequired": "产品名称不能为空",
+      "updateSuccess": "产品类型更新成功",
+      "createSuccess": "产品类型创建成功",
+      "deleteConfirm": "确定要删除产品类型\"{{name}}\"吗?",
+      "deleteSuccess": "产品类型删除成功",
+      "statusUpdated": "已停用",
+      "statusActivated": "已启用"
+    }
+  },
+  "materialTypeManagement": {
+    "title": "原材料类型管理",
+    "searchPlaceholder": "搜索原料编码、名称、类别",
+    "stats": {
+      "total": "总数",
+      "active": "启用中",
+      "categories": "分类数"
+    },
+    "empty": {
+      "noMaterials": "暂无原材料类型",
+      "hint": "点击右下角\"+\"按钮添加原材料类型"
+    },
+    "add": "添加原材料类型",
+    "edit": "编辑原材料类型",
+    "form": {
+      "code": "原料编码",
+      "name": "原料名称",
+      "namePlaceholder": "例如: 三文鱼",
+      "category": "类别",
+      "unit": "单位",
+      "shelfLife": "保质期（天）",
+      "shelfLifePlaceholder": "例如: 7",
+      "storageType": "储存类型",
+      "notes": "备注",
+      "notesPlaceholder": "原料详细描述（可选）"
+    },
+    "categories": {
+      "seafood": "海鲜",
+      "meat": "肉类",
+      "vegetables": "蔬菜",
+      "fruits": "水果",
+      "flour": "粉类",
+      "rice": "米面",
+      "oil": "油类",
+      "seasoning": "调料",
+      "other": "其他"
+    },
+    "storageTypes": {
+      "fresh": "新鲜",
+      "frozen": "冻货",
+      "dried": "干货",
+      "ambient": "常温"
+    },
+    "messages": {
+      "requiredFields": "原料名称、类别、单位和储存类型不能为空",
+      "updateSuccess": "原材料类型更新成功",
+      "createSuccess": "原材料类型创建成功",
+      "deleteConfirm": "确定要删除原材料类型\"{{name}}\"吗？此操作不可撤销。",
+      "deleteSuccess": "原材料类型删除成功",
+      "statusUpdated": "已停用",
+      "statusActivated": "已启用"
+    },
+    "chips": {
+      "unit": "单位: {{unit}}",
+      "shelfLife": "{{days}}天"
+    }
+  },
+  "supplierManagement": {
+    "title": "供应商管理",
+    "searchPlaceholder": "搜索供应商名称、编码、联系人",
+    "filter": {
+      "all": "全部",
+      "active": "已启用",
+      "inactive": "已停用"
+    },
+    "stats": {
+      "total": "总数",
+      "enabled": "启用",
+      "disabled": "停用"
+    },
+    "empty": {
+      "noSuppliers": "暂无供应商",
+      "hint": "点击右下角\"+\"按钮创建供应商"
+    },
+    "create": "创建供应商",
+    "edit": "编辑供应商",
+    "form": {
+      "code": "供应商编码",
+      "codePlaceholder": "例如：SUP001",
+      "name": "供应商名称",
+      "namePlaceholder": "例如：XX食品供应商",
+      "contactPerson": "联系人",
+      "contactPersonPlaceholder": "例如：张三",
+      "phone": "联系电话",
+      "phonePlaceholder": "例如：13800138000",
+      "email": "邮箱",
+      "emailPlaceholder": "例如：supplier@example.com",
+      "address": "地址",
+      "addressPlaceholder": "详细地址",
+      "businessType": "业务类型",
+      "businessTypePlaceholder": "例如：水产品供应"
+    },
+    "messages": {
+      "requiredFields": "供应商名称和联系电话不能为空",
+      "updateSuccess": "供应商信息已更新",
+      "createSuccess": "供应商创建成功",
+      "deleteConfirm": "确定要删除供应商 \"{{name}}\" 吗？此操作不可撤销。",
+      "deleteSuccess": "供应商已删除",
+      "statusDeactivated": "供应商已停用",
+      "statusActivated": "供应商已启用"
+    },
+    "labels": {
+      "code": "编码: {{code}}"
+    }
+  },
+  "customerManagement": {
+    "title": "客户管理",
+    "searchPlaceholder": "搜索客户名称、编码、联系人",
+    "filter": {
+      "all": "全部",
+      "active": "已启用",
+      "inactive": "已停用"
+    },
+    "stats": {
+      "total": "总数",
+      "enabled": "启用",
+      "disabled": "停用"
+    },
+    "empty": {
+      "noCustomers": "暂无客户",
+      "hint": "点击右下角\"+\"按钮创建客户"
+    },
+    "create": "创建客户",
+    "createCustomer": "创建客户",
+    "edit": "编辑客户",
+    "form": {
+      "code": "客户编码",
+      "codePlaceholder": "例如：CUS001",
+      "name": "客户名称",
+      "namePlaceholder": "例如：XX超市",
+      "contactPerson": "联系人",
+      "contactPersonPlaceholder": "例如：李四",
+      "phone": "联系电话",
+      "phonePlaceholder": "例如：13800138000",
+      "email": "邮箱",
+      "emailPlaceholder": "例如：customer@example.com",
+      "address": "地址",
+      "addressPlaceholder": "详细地址",
+      "businessType": "业务类型",
+      "businessTypePlaceholder": "例如：水产品零售",
+      "customerType": "客户类型",
+      "industry": "行业"
+    },
+    "customerTypes": {
+      "distributor": "分销商",
+      "retailer": "零售商",
+      "direct": "直客",
+      "other": "其他",
+      "uncategorized": "未分类"
+    },
+    "industries": {
+      "restaurant": "餐饮",
+      "supermarket": "超市",
+      "ecommerce": "电商",
+      "foodProcessing": "食品加工",
+      "other": "其他",
+      "uncategorized": "未分类"
+    },
+    "messages": {
+      "requiredFields": "客户名称和联系电话不能为空",
+      "updateSuccess": "客户信息已更新",
+      "createSuccess": "客户创建成功",
+      "deleteConfirm": "确定要删除客户 \"{{name}}\" 吗？此操作不可撤销。",
+      "deleteSuccess": "客户已删除",
+      "statusDeactivated": "客户已停用",
+      "statusActivated": "客户已启用"
+    },
+    "labels": {
+      "code": "编码: {{code}}"
+    }
+  },
+  "conversionRate": {
+    "title": "转换率管理",
+    "searchPlaceholder": "搜索原料或产品名称",
+    "products": "产品转换",
+    "avgConversionRate": "平均转换率",
+    "avgWastageRate": "平均损耗率",
+    "notConfigured": "暂未配置",
+    "infoText": "点击原料卡片查看详情并配置转换率",
+    "materialList": "原料列表",
+    "empty": "暂无数据",
+    "errors": {
+      "noFactory": "无法获取工厂信息，请重新登录"
+    },
+    "stats": {
+      "total": "配置总数",
+      "materials": "原料类型",
+      "products": "产品类型",
+      "materialTypes": "原料类型",
+      "productTypes": "产品类型",
+      "configured": "已配置"
+    },
+    "empty": {
+      "noRates": "暂无转换率配置",
+      "hint": "点击右下角\"+\"按钮添加转换率配置"
+    },
+    "add": "添加转换率",
+    "edit": "编辑转换率",
+    "viewDetail": "查看详情",
+    "form": {
+      "material": "原料",
+      "materialPlaceholder": "选择原料类型",
+      "product": "产品",
+      "productPlaceholder": "选择产品类型",
+      "rate": "转换率 (%)",
+      "ratePlaceholder": "例如: 60",
+      "wastage": "损耗率 (%)",
+      "wastagePlaceholder": "例如: 5",
+      "notes": "备注",
+      "notesPlaceholder": "可选说明"
+    },
+    "labels": {
+      "configured": "已配置 {{count}} 个产品",
+      "rate": "转换率: {{rate}}%",
+      "wastage": "损耗: {{wastage}}%"
+    },
+    "messages": {
+      "requiredFields": "原料、产品和转换率不能为空",
+      "invalidRate": "转换率必须在 0-100 之间",
+      "updateSuccess": "转换率已更新",
+      "createSuccess": "转换率已创建",
+      "deleteConfirm": "确定要删除此转换率配置吗？",
+      "deleteSuccess": "转换率已删除"
+    }
+  },
+  "conversionDetail": {
+    "title": "{{material}} 转换率",
+    "searchPlaceholder": "搜索产品名称或SKU...",
+    "statsBar": "已配置 {{count}} 个产品转换率",
+    "empty": {
+      "noConversions": "未找到匹配的转换率配置",
+      "noConfigured": "尚未配置任何转换率，点击右下角按钮添加"
+    },
+    "add": "添加转换率",
+    "edit": "编辑转换率",
+    "form": {
+      "material": "原料:",
+      "selectProduct": "选择产品 *",
+      "product": "产品 *",
+      "conversionRate": "转换率 (%) *",
+      "conversionRatePlaceholder": "例如: 60",
+      "wastageRate": "损耗率 (%)",
+      "wastageRatePlaceholder": "例如: 5",
+      "notes": "备注",
+      "searchProduct": "搜索产品...",
+      "changeProduct": "更换"
+    },
+    "messages": {
+      "noFactory": "无法获取工厂信息，请重新登录",
+      "loadError": "加载数据失败",
+      "selectProductFirst": "请选择产品",
+      "enterRate": "请输入转换率",
+      "invalidRate": "转换率必须在 0-100 之间",
+      "updateSuccess": "转换率已更新",
+      "createSuccess": "转换率已创建",
+      "deleteConfirm": "确定要删除 \"{{name}}\" 的转换率配置吗？",
+      "deleteSuccess": "已删除",
+      "saveFailed": "保存失败",
+      "deleteFailed": "删除失败"
+    },
+    "suggestion": {
+      "calculating": "正在计算建议值...",
+      "basedOnData": "基于 {{count}} 批次历史数据",
+      "suggestedRate": "建议转换率:",
+      "suggestedWastage": "建议损耗率:",
+      "confidence": "置信度:",
+      "high": "高",
+      "medium": "中",
+      "low": "低",
+      "useValue": "使用建议值",
+      "noData": "暂无历史数据，无法提供建议",
+      "autoCalculated": "基于 {{count}} 批次历史数据自动计算"
+    },
+    "product": {
+      "noAvailable": "暂无可选产品",
+      "allConfigured": "所有产品都已配置转换率",
+      "noMatch": "未找到匹配产品",
+      "moreProducts": "还有 {{count}} 个产品，请搜索缩小范围",
+      "sku": "SKU: {{code}}"
+    },
+    "card": {
+      "rate": "转换率",
+      "wastage": "损耗率",
+      "sku": "SKU: {{code}}"
+    }
+  },
+  "factorySettings": {
+    "title": "工厂设置",
+    "basicInfo": {
+      "title": "基本信息",
+      "factoryName": "工厂名称",
+      "factoryCode": "工厂编码",
+      "contactPerson": "联系人",
+      "contactPhone": "联系电话",
+      "address": "地址",
+      "description": "简介"
+    },
+    "operationConfig": {
+      "title": "运营配置",
+      "workingHours": "工作时间",
+      "from": "从",
+      "to": "至",
+      "timezone": "时区",
+      "currency": "货币单位"
+    },
+    "advancedSettings": {
+      "title": "高级设置",
+      "batchPrefix": "批次编号前缀",
+      "batchPrefixPlaceholder": "例如: BATCH",
+      "autoApproval": "自动审批",
+      "autoApprovalDesc": "启用后，某些操作将自动批准",
+      "enableNotifications": "启用通知",
+      "notificationsDesc": "系统事件和告警通知"
+    },
+    "messages": {
+      "loadFailed": "加载设置失败",
+      "saveSuccess": "设置已保存",
+      "saveFailed": "保存失败"
+    }
+  },
+  "shipment": {
+    "title": "出货管理",
+    "searchPlaceholder": "搜索出货单号、客户名称",
+    "filter": {
+      "all": "全部",
+      "pending": "待发货",
+      "shipped": "已发货",
+      "delivered": "已送达",
+      "returned": "已退货"
+    },
+    "stats": {
+      "total": "总单数",
+      "pending": "待发货",
+      "shipped": "已发货"
+    },
+    "empty": {
+      "noShipments": "暂无出货记录",
+      "hint": "点击右下角\"+\"按钮创建出货单"
+    },
+    "create": "创建出货单",
+    "edit": "编辑出货单",
+    "detail": "出货详情",
+    "form": {
+      "shipmentNumber": "出货单号",
+      "customer": "客户",
+      "customerPlaceholder": "选择客户",
+      "productBatch": "产品批次",
+      "batchPlaceholder": "选择批次",
+      "quantity": "数量",
+      "quantityPlaceholder": "例如: 100",
+      "unit": "单位",
+      "shipmentDate": "出货日期",
+      "expectedDelivery": "预计送达",
+      "actualDelivery": "实际送达",
+      "driver": "司机",
+      "driverPlaceholder": "例如: 张三",
+      "vehicle": "车辆",
+      "vehiclePlaceholder": "例如: 京A12345",
+      "notes": "备注",
+      "notesPlaceholder": "可选说明"
+    },
+    "status": {
+      "pending": "待发货",
+      "shipped": "已发货",
+      "delivered": "已送达",
+      "returned": "已退货",
+      "cancelled": "已取消"
+    },
+    "actions": {
+      "markShipped": "标记已发货",
+      "markDelivered": "标记已送达",
+      "markReturned": "标记退货"
+    },
+    "labels": {
+      "customer": "客户:",
+      "batch": "批次:",
+      "quantity": "数量:",
+      "shipmentDate": "出货:",
+      "expectedDelivery": "预计:",
+      "actualDelivery": "实际:",
+      "driver": "司机:",
+      "vehicle": "车辆:"
+    },
+    "messages": {
+      "requiredFields": "客户、产品批次和数量不能为空",
+      "updateSuccess": "出货单已更新",
+      "createSuccess": "出货单已创建",
+      "deleteConfirm": "确定要删除出货单 \"{{number}}\" 吗？",
+      "deleteSuccess": "出货单已删除",
+      "statusUpdated": "状态已更新"
+    }
+  },
+  "workSession": {
+    "title": "工作会话管理",
+    "searchPlaceholder": "搜索员工姓名、工种",
+    "filter": {
+      "all": "全部",
+      "inProgress": "进行中",
+      "completed": "已完成",
+      "cancelled": "已取消"
+    },
+    "stats": {
+      "total": "总会话数",
+      "inProgress": "进行中",
+      "totalHours": "总工时"
+    },
+    "empty": {
+      "noSessions": "暂无工作会话",
+      "hint": "员工打卡后会自动创建工作会话"
+    },
+    "detail": "会话详情",
+    "form": {
+      "employee": "员工",
+      "workType": "工种",
+      "startTime": "开始时间",
+      "endTime": "结束时间",
+      "duration": "时长",
+      "hourlyRate": "时薪",
+      "totalCost": "总成本",
+      "notes": "备注"
+    },
+    "status": {
+      "inProgress": "进行中",
+      "completed": "已完成",
+      "cancelled": "已取消"
+    },
+    "labels": {
+      "employee": "员工:",
+      "workType": "工种:",
+      "duration": "时长: {{hours}}小时{{minutes}}分钟",
+      "hours": "小时",
+      "minutes": "分钟",
+      "hourlyRate": "时薪: ¥{{rate}}/时",
+      "totalCost": "成本: ¥{{cost}}",
+      "startTime": "开始:",
+      "endTime": "结束:",
+      "ongoing": "进行中..."
+    },
+    "messages": {
+      "updateSuccess": "会话已更新",
+      "deleteConfirm": "确定要删除此工作会话吗？",
+      "deleteSuccess": "会话已删除",
+      "endConfirm": "确定要结束此工作会话吗？",
+      "endSuccess": "会话已结束"
+    }
+  },
+  "rule": {
+    "title": "规则配置",
+    "searchPlaceholder": "搜索规则组、实体类型",
+    "tabs": {
+      "groups": "规则组",
+      "ai": "AI 助手"
+    },
+    "groups": {
+      "dataValidation": "数据验证",
+      "businessLogic": "业务逻辑",
+      "notifications": "通知规则",
+      "workflow": "工作流",
+      "custom": "自定义规则"
+    },
+    "entities": {
+      "materialBatch": "原料批次",
+      "productBatch": "产品批次",
+      "qualityCheck": "质检记录",
+      "shipment": "出货单",
+      "workSession": "工作会话",
+      "equipment": "设备",
+      "user": "用户",
+      "all": "全部实体"
+    },
+    "empty": {
+      "noRules": "该分组下暂无规则",
+      "hint": "点击右下角\"+\"按钮添加规则"
+    },
+    "add": "添加规则",
+    "edit": "编辑规则",
+    "form": {
+      "name": "规则名称",
+      "namePlaceholder": "例如: 批次重量验证",
+      "entityType": "实体类型",
+      "ruleGroup": "规则组",
+      "condition": "触发条件",
+      "conditionPlaceholder": "例如: weight < 0",
+      "action": "执行动作",
+      "actionPlaceholder": "例如: 显示错误",
+      "priority": "优先级",
+      "enabled": "启用规则"
+    },
+    "priority": {
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "ai": {
+      "title": "AI 规则助手",
+      "description": "使用自然语言描述业务规则，AI 将自动生成规则配置",
+      "inputPlaceholder": "例如：当原料批次重量小于50kg时，发送警告通知给仓库主管",
+      "generate": "生成规则",
+      "generating": "AI 正在生成规则...",
+      "preview": "预览生成的规则",
+      "apply": "应用此规则",
+      "regenerate": "重新生成",
+      "example1": "示例1: 当质检不合格时，自动创建处置申请",
+      "example2": "示例2: 出货数量超过1000kg时，需要主管审批",
+      "example3": "示例3: 设备运行超过8小时，发送保养提醒",
+      "noResult": "AI 未能生成有效规则，请尝试更详细的描述"
+    },
+    "messages": {
+      "nameRequired": "规则名称不能为空",
+      "updateSuccess": "规则已更新",
+      "createSuccess": "规则已创建",
+      "deleteConfirm": "确定要删除规则 \"{{name}}\" 吗？",
+      "deleteSuccess": "规则已删除",
+      "statusEnabled": "规则已启用",
+      "statusDisabled": "规则已停用",
+      "aiGenerateSuccess": "AI 已生成规则配置",
+      "aiGenerateFailed": "AI 生成失败，请重试"
+    }
+  },
+  "workType": {
+    "title": "工种管理",
+    "searchPlaceholder": "搜索工种名称、编码",
+    "filter": {
+      "all": "全部部门",
+      "processing": "加工部",
+      "logistics": "物流部",
+      "quality": "质检部",
+      "management": "管理层"
+    },
+    "stats": {
+      "total": "总工种数",
+      "active": "启用中",
+      "departments": "部门数"
+    },
+    "empty": {
+      "noWorkTypes": "暂无工种",
+      "hint": "点击右下角\"+\"按钮添加工种"
+    },
+    "add": "添加工种",
+    "edit": "编辑工种",
+    "form": {
+      "name": "工种名称",
+      "namePlaceholder": "例如: 切割工",
+      "code": "工种编码",
+      "codePlaceholder": "例如: WT001",
+      "department": "所属部门",
+      "hourlyRate": "时薪 (元/小时)",
+      "hourlyRatePlaceholder": "例如: 25",
+      "overtimeRate": "加班时薪 (元/小时)",
+      "overtimeRatePlaceholder": "例如: 37.5",
+      "description": "描述",
+      "descriptionPlaceholder": "工种详细说明",
+      "skillLevel": "技能等级要求",
+      "isActive": "启用"
+    },
+    "departments": {
+      "processing": "加工部",
+      "logistics": "物流部",
+      "quality": "质检部",
+      "management": "管理层",
+      "other": "其他"
+    },
+    "skillLevels": {
+      "entry": "初级",
+      "intermediate": "中级",
+      "advanced": "高级",
+      "expert": "专家"
+    },
+    "labels": {
+      "department": "部门: {{dept}}",
+      "hourlyRate": "时薪: ¥{{rate}}",
+      "overtimeRate": "加班: ¥{{rate}}",
+      "skillLevel": "等级: {{level}}"
+    },
+    "messages": {
+      "requiredFields": "工种名称、部门和时薪不能为空",
+      "updateSuccess": "工种已更新",
+      "createSuccess": "工种已创建",
+      "deleteConfirm": "确定要删除工种 \"{{name}}\" 吗？",
+      "deleteSuccess": "工种已删除",
+      "statusEnabled": "工种已启用",
+      "statusDisabled": "工种已停用"
+    }
+  },
+  "materialSpec": {
+    "title": "原料规格管理",
+    "searchPlaceholder": "搜索规格名称、编码",
+    "stats": {
+      "total": "总规格数",
+      "active": "启用中",
+      "categories": "分类数"
+    },
+    "empty": {
+      "noSpecs": "暂无原料规格",
+      "hint": "点击右下角\"+\"按钮添加规格"
+    },
+    "add": "添加规格",
+    "edit": "编辑规格",
+    "form": {
+      "materialType": "原料类型",
+      "materialTypePlaceholder": "选择原料类型",
+      "specName": "规格名称",
+      "specNamePlaceholder": "例如: 特大号",
+      "specCode": "规格编码",
+      "minWeight": "最小重量 (kg)",
+      "minWeightPlaceholder": "例如: 1.5",
+      "maxWeight": "最大重量 (kg)",
+      "maxWeightPlaceholder": "例如: 2.5",
+      "unitPrice": "单价 (元/kg)",
+      "unitPricePlaceholder": "例如: 45",
+      "notes": "备注"
+    },
+    "labels": {
+      "weight": "{{min}}-{{max}}kg",
+      "price": "¥{{price}}/kg",
+      "material": "原料: {{name}}"
+    },
+    "messages": {
+      "requiredFields": "原料类型和规格名称不能为空",
+      "updateSuccess": "规格已更新",
+      "createSuccess": "规格已创建",
+      "deleteConfirm": "确定要删除规格 \"{{name}}\" 吗？",
+      "deleteSuccess": "规格已删除"
+    }
+  },
+  "disposal": {
+    "title": "报废记录管理",
+    "searchPlaceholder": "搜索批次号、处理人",
+    "filter": {
+      "all": "全部",
+      "quality": "质量问题",
+      "expired": "过期",
+      "damaged": "损坏",
+      "other": "其他"
+    },
+    "stats": {
+      "total": "总记录数",
+      "thisMonth": "本月",
+      "totalQuantity": "总报废量"
+    },
+    "empty": {
+      "noRecords": "暂无报废记录",
+      "hint": "通过质检不合格流程创建报废记录"
+    },
+    "detail": "报废详情",
+    "form": {
+      "batchNumber": "批次号",
+      "disposalType": "报废类型",
+      "reason": "报废原因",
+      "quantity": "报废数量",
+      "unit": "单位",
+      "handler": "处理人",
+      "disposalDate": "报废日期",
+      "notes": "备注",
+      "photos": "照片"
+    },
+    "types": {
+      "quality": "质量问题",
+      "expired": "过期",
+      "damaged": "损坏",
+      "contaminated": "污染",
+      "other": "其他"
+    },
+    "labels": {
+      "batch": "批次: {{number}}",
+      "type": "类型: {{type}}",
+      "quantity": "数量: {{qty}} {{unit}}",
+      "handler": "处理人: {{name}}",
+      "date": "日期: {{date}}"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "deleteConfirm": "确定要删除此报废记录吗？",
+      "deleteSuccess": "记录已删除"
+    }
+  },
+  "sop": {
+    "title": "SOP 配置",
+    "searchPlaceholder": "搜索 SOP 名称、编码",
+    "filter": {
+      "all": "全部",
+      "production": "生产",
+      "quality": "质检",
+      "safety": "安全",
+      "maintenance": "维护"
+    },
+    "stats": {
+      "total": "总 SOP 数",
+      "active": "启用中",
+      "categories": "分类数"
+    },
+    "empty": {
+      "noSops": "暂无 SOP",
+      "hint": "点击右下角\"+\"按钮创建 SOP"
+    },
+    "create": "创建 SOP",
+    "edit": "编辑 SOP",
+    "view": "查看 SOP",
+    "form": {
+      "name": "SOP 名称",
+      "namePlaceholder": "例如: 产品包装流程",
+      "code": "SOP 编码",
+      "codePlaceholder": "例如: SOP-001",
+      "category": "分类",
+      "version": "版本号",
+      "effectiveDate": "生效日期",
+      "steps": "操作步骤",
+      "addStep": "添加步骤",
+      "stepTitle": "步骤 {{number}}",
+      "stepDescription": "步骤描述",
+      "stepPhoto": "步骤图片",
+      "notes": "备注"
+    },
+    "categories": {
+      "production": "生产",
+      "quality": "质检",
+      "safety": "安全",
+      "maintenance": "维护",
+      "cleaning": "清洁",
+      "emergency": "应急",
+      "other": "其他"
+    },
+    "labels": {
+      "code": "编码: {{code}}",
+      "version": "版本: {{version}}",
+      "steps": "{{count}} 个步骤",
+      "effectiveDate": "生效: {{date}}"
+    },
+    "messages": {
+      "requiredFields": "SOP 名称和分类不能为空",
+      "updateSuccess": "SOP 已更新",
+      "createSuccess": "SOP 已创建",
+      "deleteConfirm": "确定要删除 SOP \"{{name}}\" 吗？",
+      "deleteSuccess": "SOP 已删除",
+      "statusEnabled": "SOP 已启用",
+      "statusDisabled": "SOP 已停用"
+    }
+  },
+  "whitelist": {
+    "title": "白名单管理",
+    "searchPlaceholder": "搜索手机号、姓名",
+    "stats": {
+      "total": "总数",
+      "unused": "未使用",
+      "used": "已使用"
+    },
+    "empty": {
+      "noWhitelist": "暂无白名单",
+      "hint": "点击右下角\"+\"按钮添加白名单"
+    },
+    "add": "添加白名单",
+    "edit": "编辑白名单",
+    "batchAdd": "批量添加",
+    "form": {
+      "phone": "手机号",
+      "phonePlaceholder": "例如: 13800138000",
+      "name": "姓名",
+      "namePlaceholder": "例如: 张三",
+      "role": "预分配角色",
+      "department": "预分配部门",
+      "notes": "备注",
+      "notesPlaceholder": "可选说明"
+    },
+    "batchForm": {
+      "title": "批量添加白名单",
+      "description": "每行一个手机号，格式: 手机号,姓名,角色",
+      "example": "示例:\n13800138000,张三,操作员\n13800138001,李四,部门管理员",
+      "textareaPlaceholder": "在此输入...",
+      "parse": "解析",
+      "preview": "预览 ({{count}} 条)",
+      "import": "导入"
+    },
+    "labels": {
+      "unused": "未使用",
+      "used": "已使用 ({{username}})",
+      "role": "角色: {{role}}",
+      "department": "部门: {{dept}}"
+    },
+    "messages": {
+      "phoneRequired": "手机号不能为空",
+      "invalidPhone": "手机号格式不正确",
+      "updateSuccess": "白名单已更新",
+      "createSuccess": "白名单已添加",
+      "batchSuccess": "批量添加成功，共 {{count}} 条",
+      "deleteConfirm": "确定要删除手机号 \"{{phone}}\" 吗？",
+      "deleteSuccess": "白名单已删除",
+      "parseSuccess": "解析成功，共 {{count}} 条有效数据",
+      "parseFailed": "解析失败，请检查格式"
+    }
+  },
+  "entityExport": {
+    "title": "数据导出导入",
+    "selectDataType": "选择数据类型",
+    "selectOperation": "选择操作",
+    "operationPreview": "操作预览",
+    "dataType": "数据类型：",
+    "operationType": "操作类型：",
+    "entities": {
+      "customer": "客户",
+      "supplier": "供应商",
+      "equipment": "设备",
+      "user": "用户",
+      "materialType": "原材料类型"
+    },
+    "entityDescriptions": {
+      "customer": "客户信息：编码、名称、联系方式、付款条款等",
+      "supplier": "供应商信息：编码、名称、供应材料、交货天数等",
+      "equipment": "设备信息：编码、型号、制造商、维护状态等",
+      "user": "用户信息：用户名、角色、部门、工资等",
+      "materialType": "原材料类型：编码、名称、类别、计量单位等"
+    },
+    "operations": {
+      "export": "导出数据",
+      "template": "下载模板",
+      "import": "批量导入"
+    },
+    "operationHints": {
+      "export": "• 导出当前所有数据到Excel文件",
+      "template": "• 下载空白导入模板，填写数据后可批量导入",
+      "import": "• 上传填好的Excel文件，批量导入数据"
+    },
+    "buttons": {
+      "execute": "执行操作",
+      "processing": "处理中...",
+      "viewLater": "稍后查看",
+      "share": "分享文件",
+      "shareTemplate": "分享模板",
+      "close": "关闭"
+    },
+    "messages": {
+      "noFactory": "无法获取工厂信息，请重新登录",
+      "exportSuccess": "导出成功",
+      "exportSuccessDetail": "{{entity}}数据已导出\n\n文件大小：{{size}} KB",
+      "exportSaved": "{{entity}}数据已导出\n\n文件已保存到：{{path}}",
+      "downloadSuccess": "下载成功",
+      "downloadSuccessDetail": "{{entity}}导入模板已下载",
+      "templateSaved": "模板已保存到：{{path}}",
+      "importSuccess": "导入成功",
+      "importSuccessDetail": "成功导入{{count}}条{{entity}}记录",
+      "exportFailed": "导出失败",
+      "exportError": "导出数据时出现错误，请重试",
+      "downloadFailed": "下载失败",
+      "downloadError": "下载模板时出现错误，请重试",
+      "importFailed": "导入失败",
+      "importError": "导入数据时出现错误，请重试",
+      "shareFailed": "分享失败",
+      "shareError": "无法分享文件，请稍后重试",
+      "noFile": "未选择文件",
+      "fileTooLarge": "文件过大",
+      "fileSizeLimit": "文件大小不能超过10MB，请分批导入",
+      "downloadFailed2": "下载失败，HTTP状态码: {{status}}",
+      "processingWait": "处理中，请稍候..."
+    },
+    "importResult": {
+      "title": "导入结果",
+      "total": "总计：{{count}} 条",
+      "success": "成功：{{count}} 条",
+      "failed": "失败：{{count}} 条",
+      "failureDetails": "失败详情：",
+      "row": "第 {{number}} 行"
+    }
+  },
+  "qualityAnalysis": {
+    "title": "质量分析",
+    "loadFailed": "加载质量数据失败",
+    "noTrendData": "暂无趋势数据",
+    "dayUnit": "日",
+    "last7DaysTrend": "过去7天的趋势",
+    "days": "{{count}}天",
+    "averagePassRate": "平均合格率",
+    "totalInspections": "总检验数",
+    "passedBatches": "合格批次",
+    "failedBatches": "不合格批次",
+    "passRateTrend": "合格率趋势",
+    "detailedStats": "详细统计",
+    "totalSampleSize": "样品总数",
+    "passCount": "合格数",
+    "failCount": "不合格数",
+    "conditionalPass": "条件合格"
+  },
+  "aiCostAnalysis": {
+    "title": "成本分析",
+    "timeRange": "时间范围",
+    "startDate": "开始日期",
+    "endDate": "结束日期",
+    "last7Days": "最近7天",
+    "last30Days": "最近30天",
+    "last90Days": "最近90天",
+    "analysisDimension": "分析维度",
+    "overallAnalysis": "总体分析",
+    "dailyAnalysis": "按日分析",
+    "weeklyAnalysis": "按周分析",
+    "realtimeStreaming": "实时流式响应",
+    "streamingOnHint": "开启后可实时查看AI分析过程",
+    "streamingOffHint": "关闭后将等待完整结果返回",
+    "startAnalysis": "开始分析",
+    "analyzing": "分析中...",
+    "startingAnalysis": "正在启动分析...",
+    "aiThinkingProcess": "AI思考过程",
+    "aiAnswering": "AI正在回答...",
+    "analysisResult": "分析结果",
+    "quota": "剩余配额: {{remaining}}/{{total}}",
+    "responseTime": "响应时间: {{time}}ms{{cached}}",
+    "cached": "已缓存",
+    "noResult": "暂无分析结果",
+    "analysisFailed": "分析失败，请稍后重试",
+    "networkError": "网络错误，请检查网络连接",
+    "quickMode": "快速模式",
+    "deepMode": "深度分析",
+    "estimated": "预计"
+  },
+  "aiSettings": {
+    "title": "AI分析设置",
+    "loading": "加载设置中...",
+    "quota": {
+      "title": "📊 使用配额",
+      "weeklyLimit": "每周可用次数: {{count}}次",
+      "quotaHint": "* 配额由平台管理员统一管理，工厂管理员不可修改",
+      "weeklyUsed": "本周已用:",
+      "remaining": "剩余:",
+      "times": "{{count}}次",
+      "resetHint": "* 每周一0:00自动重置"
+    },
+    "basic": {
+      "title": "🔧 基础设置",
+      "enableAI": "启用AI分析",
+      "enableHint": "关闭后所有员工将无法使用AI分析功能",
+      "tone": "语气风格",
+      "goal": "分析目标",
+      "detailLevel": "详细程度"
+    },
+    "tones": {
+      "professional": "专业",
+      "professionalDesc": "使用行业术语，严谨客观",
+      "friendly": "友好",
+      "friendlyDesc": "通俗易懂，亲切温和",
+      "concise": "简洁",
+      "conciseDesc": "直入主题，言简意赅"
+    },
+    "goals": {
+      "costOptimization": "成本优化",
+      "costOptimizationDesc": "重点分析成本控制和降本增效",
+      "qualityImprovement": "质量提升",
+      "qualityImprovementDesc": "重点分析质量管控和改进建议",
+      "efficiencyBoost": "效率提升",
+      "efficiencyBoostDesc": "重点分析流程优化和效率改善",
+      "comprehensive": "综合分析",
+      "comprehensiveDesc": "全面分析各项指标"
+    },
+    "detailLevels": {
+      "simple": "简要",
+      "simpleDesc": "仅核心结论，适合快速浏览",
+      "standard": "标准",
+      "standardDesc": "结论+关键数据，推荐使用",
+      "detailed": "详细",
+      "detailedDesc": "深入分析+完整数据支撑"
+    },
+    "industry": {
+      "title": "📊 行业标准参数",
+      "description": "AI将根据这些标准评估成本结构是否合理",
+      "laborCost": "人工成本占比标准",
+      "equipmentUtilization": "设备利用率目标",
+      "profitMargin": "利润率目标",
+      "percentage": "%"
+    },
+    "custom": {
+      "title": "✏️ 自定义提示词（可选）",
+      "description": "添加额外的分析要求，将附加到每次AI分析中",
+      "label": "自定义分析要求",
+      "placeholder": "例如：请特别关注节能减排和环保因素"
+    },
+    "usage": {
+      "title": "📈 本周使用统计",
+      "totalCalls": "总调用",
+      "analysisRequests": "分析请求",
+      "questions": "追问次数",
+      "byUser": "按用户统计:",
+      "userTimes": "{{count}}次"
+    },
+    "buttons": {
+      "save": "保存设置"
+    },
+    "messages": {
+      "loadFailed": "加载设置失败",
+      "saveSuccess": "设置已保存",
+      "saveFailed": "保存失败"
+    }
+  },
+  "createPlan": {
+    "title": "创建生产计划",
+    "planType": "计划类型",
+    "inventoryProduction": "库存生产",
+    "useExistingMaterials": "使用现有原料",
+    "futurePlan": "未来计划",
+    "pendingMaterials": "待配原料",
+    "productTypeRequired": "产品类型*",
+    "selectProductType": "请选择产品类型",
+    "selectProductTypePlaceholder": "请选择产品类型",
+    "noProductTypes": "暂无产品类型",
+    "plannedQuantityRequired": "计划数量*",
+    "enterValidQuantity": "请输入有效的数量",
+    "enterQuantity": "请输入数量",
+    "plannedDateRequired": "计划日期*",
+    "selectPlanDate": "请选择计划日期",
+    "today": "今天",
+    "tomorrow": "明天",
+    "daysLater": "{{days}}天后",
+    "customerOrderOptional": "客户订单号（可选）",
+    "enterCustomerOrder": "请输入客户订单号",
+    "notesOptional": "备注（可选）",
+    "enterNotes": "请输入备注",
+    "createPlanBtn": "创建生产计划",
+    "creating": "创建中...",
+    "createSuccess": "生产计划创建成功",
+    "createFailed": "创建生产计划失败",
+    "networkError": "网络错误，请稍后重试"
+  },
+  "equipmentManagement": {
+    "title": "设备管理",
+    "searchPlaceholder": "搜索设备名称或编码...",
+    "filters": {
+      "all": "全部"
+    },
+    "empty": {
+      "title": "暂无设备"
+    },
+    "info": {
+      "type": "类型",
+      "location": "位置",
+      "model": "型号",
+      "operator": "操作员"
+    },
+    "actions": {
+      "create": "添加设备",
+      "status": "状态",
+      "detail": "详情"
+    },
+    "statusMenu": {
+      "running": "运行中",
+      "maintenance": "维护中",
+      "inactive": "已停用"
+    },
+    "dialogs": {
+      "createTitle": "添加设备",
+      "editTitle": "编辑设备",
+      "deleteTitle": "删除设备",
+      "deleteMessage": "确定要删除此设备吗？此操作不可撤销。",
+      "fields": {
+        "name": "设备名称",
+        "code": "设备编码",
+        "model": "型号",
+        "location": "位置",
+        "operator": "操作员",
+        "selectOperator": "选择操作员",
+        "loadingOperators": "加载中...",
+        "noOperator": "无操作员",
+        "notes": "备注"
+      },
+      "buttons": {
+        "cancel": "取消",
+        "create": "创建",
+        "save": "保存",
+        "delete": "删除"
+      }
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "factoryIdError": "无法获取工厂信息"
+    }
+  },
+  "schemaConfig": {
+    "title": "表单配置中心",
+    "subtitle": "配置和管理各类表单模板",
+    "stats": {
+      "total": "表单类型",
+      "configured": "已配置",
+      "fieldCount": "总字段数"
+    },
+    "entityTypes": {
+      "QUALITY_CHECK": "质检表单",
+      "MATERIAL_BATCH": "原料批次",
+      "PROCESSING_BATCH": "生产批次",
+      "SHIPMENT": "出货单",
+      "EQUIPMENT": "设备信息",
+      "DISPOSAL_RECORD": "报废记录",
+      "PRODUCT_TYPE": "产品类型",
+      "PRODUCTION_PLAN": "生产计划"
+    },
+    "actions": {
+      "preview": "预览",
+      "configure": "配置",
+      "aiAdd": "AI添加",
+      "aiModify": "AI修改"
+    },
+    "tabs": {
+      "fields": "字段列表",
+      "form": "表单预览",
+      "analyze": "AI分析"
+    },
+    "preview": {
+      "title": "配置: {{name}}",
+      "fieldCount": "共 {{count}} 个字段",
+      "formPreviewHint": "此为表单预览效果，实际样式可能略有不同"
+    },
+    "fieldList": {
+      "required": "必填",
+      "type": "类型",
+      "component": "组件"
+    },
+    "analyze": {
+      "title": "AI表单分析",
+      "noSchema": "请先选择要分析的表单类型",
+      "failed": "分析失败",
+      "failedMessage": "AI分析时出错，请稍后重试",
+      "overallScore": "综合评分",
+      "usability": "易用性",
+      "validation": "验证完整性",
+      "completeness": "字段完整性",
+      "structure": "结构合理性",
+      "summary": "评价总结",
+      "suggestions": "优化建议 ({{count}}条)",
+      "expectedBenefit": "预期收益",
+      "applySelected": "应用选中 ({{count}})",
+      "reanalyze": "重新分析",
+      "empty": "点击下方按钮，让AI分析表单结构并给出优化建议",
+      "start": "开始AI分析",
+      "priority": {
+        "high": "高优先",
+        "medium": "中优先",
+        "low": "低优先"
+      },
+      "type": {
+        "add_field": "添加字段",
+        "modify_field": "修改字段",
+        "remove_field": "删除字段",
+        "reorder": "调整顺序",
+        "validation": "优化验证"
+      },
+      "applySuccess": "优化已应用",
+      "applySuccessMessage": "已应用 {{count}} 条优化建议",
+      "applyFailed": "应用失败",
+      "applyFailedMessage": "应用优化建议时出错"
+    },
+    "editField": {
+      "title": "编辑字段",
+      "fieldTitle": "字段标题",
+      "fieldTitlePlaceholder": "请输入字段显示名称",
+      "required": "必填",
+      "delete": "删除",
+      "save": "保存",
+      "deleteConfirm": "确定要删除此字段吗？",
+      "deleteSuccess": "字段已删除",
+      "saveSuccess": "字段已更新",
+      "saveFailed": "保存失败"
+    },
+    "aiModify": {
+      "title": "AI修改字段",
+      "description": "请描述您想要修改的内容",
+      "placeholder": "例如：把温度字段的范围改为-20到40度",
+      "execute": "执行修改",
+      "enterDescription": "请输入修改描述",
+      "examples": "修改示例：",
+      "example1": "把数量字段改为必填",
+      "example2": "把温度范围改为0-100",
+      "example3": "给重量字段添加单位提示",
+      "success": "修改成功",
+      "successMessage": "表单已按要求更新",
+      "failed": "修改失败",
+      "failedMessage": "AI修改时出错，请重试"
+    },
+    "aiAdd": {
+      "title": "AI添加字段",
+      "description": "请描述您想添加的字段",
+      "placeholder": "例如：添加一个运输温度字段，数值类型，范围-30到30度",
+      "generate": "生成字段",
+      "previewTitle": "预览生成的字段 ({{count}})",
+      "save": "保存到表单",
+      "reject": "AI 无法处理此请求",
+      "rejectReason": "AI 拒绝原因",
+      "suggestion": "建议尝试",
+      "justificationLabel": "如仍需添加，请说明理由",
+      "retry": "重新尝试",
+      "success": "添加成功",
+      "successMessage": "已添加 {{count}} 个新字段"
+    },
+    "version": {
+      "title": "版本历史",
+      "current": "当前版本",
+      "rollback": "回滚"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "saveFailed": "保存失败",
+      "saveSuccess": "保存成功"
+    }
+  }
+}

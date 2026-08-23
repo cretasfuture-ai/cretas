@@ -1,0 +1,327 @@
+package com.cretas.aims.client;
+
+import com.cretas.aims.entity.enums.LabelQcLabel;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.*;
+import org.springframework.stereotype.Component;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestTemplate;
+
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+
+@Slf4j
+@Component
+public class LabelQcAnalysisClient {
+
+    private static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+    private static final int ANALYSIS_RETRY_DELAY_MILLIS = 250;
+    private static final String OSS_PUBLIC_SUFFIX = ".oss-cn-shanghai.aliyuncs.com";
+    private static final String OSS_INTERNAL_SUFFIX = ".oss-cn-shanghai-internal.aliyuncs.com";
+
+    private final RestTemplate restTemplate;
+    private final HttpClient imageHttpClient;
+    private final String baseUrl;
+    private final String internalSecret;
+    private final ObjectMapper objectMapper;
+    private final boolean internalOssDownloadEnabled;
+
+    public LabelQcAnalysisClient(
+            @Qualifier("labelQcRestTemplate") RestTemplate restTemplate,
+            @Qualifier("pythonAiBaseUrl") String baseUrl,
+            @Qualifier("pythonAiInternalSecret") String internalSecret,
+            ObjectMapper objectMapper,
+            @Value("${aliyun.oss.internal-download-enabled:false}") boolean internalOssDownloadEnabled) {
+        this.restTemplate = restTemplate;
+        this.imageHttpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+        this.baseUrl = baseUrl;
+        this.internalSecret = internalSecret;
+        this.objectMapper = objectMapper;
+        this.internalOssDownloadEnabled = internalOssDownloadEnabled;
+    }
+
+    public AnalysisResult analyze(String signedDownloadUrl, String factoryId, String photoId) {
+        if (signedDownloadUrl == null || signedDownloadUrl.isBlank()) {
+            throw new LabelQcClientException("图片下载地址为空");
+        }
+        try {
+            byte[] imageBytes = downloadImage(signedDownloadUrl);
+
+            HttpHeaders imageHeaders = new HttpHeaders();
+            imageHeaders.setContentType(MediaType.IMAGE_JPEG);
+            ByteArrayResource image = new ByteArrayResource(imageBytes) {
+                @Override
+                public String getFilename() {
+                    return "label-qc-" + photoId + ".jpg";
+                }
+            };
+
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("image", new HttpEntity<>(image, imageHeaders));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+            if (internalSecret != null && !internalSecret.isBlank()) {
+                headers.add("X-Internal-Secret", internalSecret);
+            }
+            headers.add("X-Factory-Id", factoryId);
+
+            ResponseEntity<String> response = exchangeAnalysis(body, headers, photoId);
+            if (!response.getStatusCode().is2xxSuccessful()
+                    || response.getBody() == null
+                    || response.getBody().isBlank()) {
+                throw new LabelQcClientException("视觉服务返回空结果");
+            }
+            return parse(response.getBody());
+        } catch (LabelQcClientException ex) {
+            throw ex;
+        } catch (RestClientException ex) {
+            throw new LabelQcClientException("视觉服务暂时不可用", ex);
+        } catch (Exception ex) {
+            throw new LabelQcClientException("视觉结果解析失败", ex);
+        }
+    }
+
+    /**
+     * The analysis endpoint is read-only, so one bounded retry is safe for a
+     * stale pooled connection or a transient server-side failure. Client
+     * errors are deliberately not retried because they require a data or
+     * configuration correction rather than another identical request.
+     */
+    private ResponseEntity<String> exchangeAnalysis(
+            MultiValueMap<String, Object> body,
+            HttpHeaders headers,
+            String photoId) {
+        HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                return restTemplate.exchange(
+                        baseUrl + "/api/label-qc/analyze",
+                        HttpMethod.POST,
+                        request,
+                        String.class);
+            } catch (RestClientException ex) {
+                if (attempt == 2 || !isRetryableAnalysisFailure(ex)) {
+                    throw ex;
+                }
+                log.warn("Label QC analysis transient failure; retrying once: photoId={}, failureType={}",
+                        photoId,
+                        ex.getClass().getSimpleName());
+                waitBeforeAnalysisRetry();
+            }
+        }
+        throw new IllegalStateException("Unreachable label QC retry state");
+    }
+
+    private boolean isRetryableAnalysisFailure(RestClientException ex) {
+        if (ex instanceof ResourceAccessException) {
+            return true;
+        }
+        return ex instanceof HttpStatusCodeException statusException
+                && statusException.getStatusCode().is5xxServerError();
+    }
+
+    private void waitBeforeAnalysisRetry() {
+        try {
+            Thread.sleep(ANALYSIS_RETRY_DELAY_MILLIS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new LabelQcClientException("视觉服务重试被中断", ex);
+        }
+    }
+
+    private byte[] downloadImage(String signedDownloadUrl) {
+        final URI uri;
+        try {
+            uri = URI.create(signedDownloadUrl);
+        } catch (IllegalArgumentException ex) {
+            throw new LabelQcClientException("图片下载地址无效", ex);
+        }
+
+        URI downloadUri = internalOssDownloadEnabled ? toInternalOssUri(uri) : uri;
+        HttpRequest request = HttpRequest.newBuilder(downloadUri)
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+        try {
+            HttpResponse<InputStream> response = imageHttpClient.send(
+                    request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                response.body().close();
+                throw new LabelQcClientException("图片下载失败 HTTP " + response.statusCode());
+            }
+            long contentLength = response.headers()
+                    .firstValueAsLong(HttpHeaders.CONTENT_LENGTH)
+                    .orElse(-1);
+            if (contentLength > MAX_IMAGE_BYTES) {
+                response.body().close();
+                throw new LabelQcClientException("图片超过 10 MB 上限");
+            }
+            try (InputStream body = response.body()) {
+                byte[] imageBytes = body.readNBytes(MAX_IMAGE_BYTES + 1);
+                if (imageBytes.length == 0) {
+                    throw new LabelQcClientException("图片下载结果为空");
+                }
+                if (imageBytes.length > MAX_IMAGE_BYTES) {
+                    throw new LabelQcClientException("图片超过 10 MB 上限");
+                }
+                return imageBytes;
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new LabelQcClientException("图片下载被中断", ex);
+        } catch (LabelQcClientException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new LabelQcClientException("图片下载暂时不可用", ex);
+        }
+    }
+
+    /**
+     * Server-side downloads run on the Shanghai ECS. Keep the signed URL and
+     * query string intact, but route known Shanghai OSS hosts over the free
+     * same-region internal endpoint. Browser-facing URLs are never changed.
+     */
+    static URI toInternalOssUri(URI uri) {
+        String host = uri.getHost();
+        if (host == null || !host.endsWith(OSS_PUBLIC_SUFFIX)) {
+            return uri;
+        }
+        String internalHost = host.substring(0, host.length() - OSS_PUBLIC_SUFFIX.length())
+                + OSS_INTERNAL_SUFFIX;
+        String raw = uri.toString();
+        int authorityStart = raw.indexOf("://") + 3;
+        int hostStart = raw.indexOf(host, authorityStart);
+        if (authorityStart < 3 || hostStart < authorityStart) {
+            return uri;
+        }
+        return URI.create(raw.substring(0, hostStart)
+                + internalHost
+                + raw.substring(hostStart + host.length()));
+    }
+
+    private AnalysisResult parse(String responseBody) throws Exception {
+        JsonNode root = objectMapper.readTree(responseBody);
+        JsonNode data = root.path("data");
+        if (!root.path("success").asBoolean(false) || data.isMissingNode()) {
+            throw new LabelQcClientException("视觉服务返回失败");
+        }
+        List<Candidate> candidates = parseCandidates(data.path("candidates"));
+        List<Candidate> platformCandidates = parseCandidates(data.path("platformCandidates"));
+        // 初筛明细整段存档，不解析成字段：它是模型输出的诊断快照，只在复核台
+        // 整体读出来渲染，随模型迭代自由演进，不应成为 Java 侧的契约。
+        JsonNode screening = data.path("screening");
+        String screeningDetail = screening.isMissingNode() || screening.isNull()
+                ? null
+                : screening.toString();
+        return new AnalysisResult(
+                data.path("verdict").asText(),
+                data.path("model").asText("unknown"),
+                data.path("promptVersion").asText("unknown"),
+                candidates,
+                platformCandidates,
+                data.path("customerReviewRequired").asBoolean(true),
+                screeningDetail);
+    }
+
+    private List<Candidate> parseCandidates(JsonNode values) {
+        List<Candidate> candidates = new ArrayList<>();
+        for (JsonNode item : values) {
+            JsonNode bbox = item.path("bbox");
+            if (!bbox.isArray() || bbox.size() != 4) {
+                throw new LabelQcClientException("视觉候选框格式无效");
+            }
+            List<Integer> sourceTiles = new ArrayList<>();
+            for (JsonNode value : item.path("sourceTiles")) {
+                if (value.canConvertToInt()) {
+                    sourceTiles.add(value.asInt());
+                }
+            }
+            candidates.add(new Candidate(
+                    item.path("candidateId").asText(),
+                    LabelQcLabel.valueOf(item.path("label").asText()),
+                    item.path("confidence").asDouble(0),
+                    new BoundingBox(
+                            bbox.get(0).asDouble(),
+                            bbox.get(1).asDouble(),
+                            bbox.get(2).asDouble(),
+                            bbox.get(3).asDouble()),
+                    item.path("evidence").asText(""),
+                    List.copyOf(sourceTiles)));
+        }
+        return List.copyOf(candidates);
+    }
+
+    public record AnalysisResult(
+            String verdict,
+            String model,
+            String promptVersion,
+            List<Candidate> candidates,
+            /** 模型/盒框诊断候选；只进入平台队列，不能进入工厂审核计数。 */
+            List<Candidate> platformCandidates,
+            /** 仅受信任的完整检测流水线可显式返回 false；缺字段时按 true 失败关闭。 */
+            boolean customerReviewRequired,
+            /** 初筛明细原文；模型未返回时为 null。仅存档与渲染，不解析成字段。 */
+            String screeningDetail
+    ) {
+        public AnalysisResult(
+                String verdict,
+                String model,
+                String promptVersion,
+                List<Candidate> candidates,
+                boolean customerReviewRequired,
+                String screeningDetail) {
+            this(verdict, model, promptVersion, candidates, List.of(),
+                    customerReviewRequired, screeningDetail);
+        }
+    }
+
+    public record Candidate(
+            String candidateId,
+            LabelQcLabel label,
+            Double confidence,
+            BoundingBox bbox,
+            String evidence,
+            List<Integer> sourceTiles
+    ) {
+        public Candidate(
+                String candidateId,
+                LabelQcLabel label,
+                Double confidence,
+                BoundingBox bbox,
+                String evidence) {
+            this(candidateId, label, confidence, bbox, evidence, List.of());
+        }
+    }
+
+    public record BoundingBox(Double xMin, Double yMin, Double xMax, Double yMax) {}
+
+    public static class LabelQcClientException extends RuntimeException {
+        public LabelQcClientException(String message) {
+            super(message);
+        }
+
+        public LabelQcClientException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+}

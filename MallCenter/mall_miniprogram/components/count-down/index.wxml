@@ -1,0 +1,10 @@
+<!--
+  - Copyright (C) 2018-2019
+  - 食品商城小程序
+  - 注意：
+  - 基于 JooLun 框架二次开发
+-->
+<text wx:if="{{day}}">{{day}}天</text>
+<text wx:if="{{hour}}">{{hour}}小时</text>
+<text wx:if="{{minute}}">{{minute}}分</text>
+<text wx:if="{{second}}">{{second}}秒</text>

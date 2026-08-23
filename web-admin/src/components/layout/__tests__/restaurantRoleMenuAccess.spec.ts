@@ -1,0 +1,176 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { menuConfig, type MenuItem } from '../menuConfig';
+import { usePermissionStore } from '@/store/modules/permission';
+
+const permissionApiMocks = vi.hoisted(() => ({
+  getPlatformPermissions: vi.fn().mockResolvedValue([]),
+  getFactoryOverride: vi.fn().mockResolvedValue({}),
+  getUserModuleAccess: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('@/api/permissionApi', () => permissionApiMocks);
+
+/**
+ * 三个餐饮角色能不能在侧栏看见「餐饮运营」。
+ *
+ * 2026-07-31：#2082 / #2083 把 `restaurant_owner` / `restaurant_purchaser` /
+ * `restaurant_chef` 补进了权限矩阵 —— **但那只是一半**。
+ *
+ * `AppSidebar.canSeeMenuItem` 的判据是：
+ *
+ *     if (!item.roles?.length) return canAccess;
+ *     return item.roles.includes(currentRole) && canAccess;
+ *
+ * 即 `roles` 是**允许式白名单**，写了就一票否决。而 menuConfig.ts 里 18 处
+ * `roles` 白名单，这三个角色出现 **0 次** —— 模块权限给对了，菜单照样不显示，
+ * 账号仍然是空的。
+ *
+ * 这就是「加一列漏掉承载它的那一半」：权限有两个承载点（模块矩阵 + 菜单白名单），
+ * 只改一个，测试还全绿。
+ */
+
+const RESTAURANT_ROLES = [
+  'restaurant_manager',
+  'restaurant_owner',
+  'restaurant_purchaser',
+  'restaurant_chef',
+] as const;
+
+function findByPath(items: MenuItem[], path: string): MenuItem | undefined {
+  for (const item of items) {
+    if (item.path === path) return item;
+    const hit = item.children && findByPath(item.children, path);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/**
+ * 复刻 AppSidebar.canSeeMenuItem 的**完整**判据 —— roles 白名单 **且** 模块权限。
+ *
+ * ⚠️ 第一版只复刻了 roles 那一半，于是当一个页面改成「靠 module 拦而不写 roles」时，
+ * 测试会误报「厨师长能看到价格页」——**而实际拦得好好的**。
+ * 权限有两个承载点，测试也必须两个都算，否则它测的是自己的想象。
+ */
+function roleAllowed(item: MenuItem | undefined, role: string): boolean {
+  if (!item) return false;
+  setActivePinia(createPinia());
+  const store = usePermissionStore();
+  store.setRole(role, 'R001', 'RESTAURANT', '1309');
+  const canAccess = store.canAccess(item.module);
+  if (item.restaurantRoles?.length && !item.restaurantRoles.includes(role)) return false;
+  if (!item.roles || item.roles.length === 0) return canAccess;
+  return item.roles.includes(role) && canAccess;
+}
+
+describe('餐饮角色的菜单可见性', () => {
+  it('四个餐饮角色都能看到「餐饮运营」菜单组', () => {
+    const group = findByPath(menuConfig, '/restaurant');
+    expect(group, '找不到 /restaurant 菜单组').toBeTruthy();
+    for (const role of RESTAURANT_ROLES) {
+      expect(roleAllowed(group, role), `${role} 看不到餐饮运营组`).toBe(true);
+    }
+  });
+
+  it('老板、店长与人事可见预测排班，人事也能进入餐饮组', () => {
+    const group = findByPath(menuConfig, '/restaurant');
+    const staffing = findByPath(menuConfig, '/restaurant/staffing');
+    for (const role of ['restaurant_owner', 'restaurant_manager', 'hr_admin']) {
+      expect(roleAllowed(group, role), `${role}: restaurant group`).toBe(true);
+      expect(roleAllowed(staffing, role), `${role}: staffing`).toBe(true);
+    }
+    expect(roleAllowed(staffing, 'restaurant_chef')).toBe(false);
+  });
+
+  // 🔴 2026-08-06 Steve 拍板: 餐饮四部门 = 运营(店长)/市场/财务/人事。
+  // 厨师长(restaurant_chef) 退役; 餐饮采购(restaurant_purchaser) 职责并入市场(sales_manager)。
+  // 两个角色在 prod 各只剩 2 个账号且全部 is_active=f, 权限矩阵零行。
+  // 这两条断言原本写的是「厨师长能看到报货」「餐饮采购能看到采购链路」——
+  // 正是那种把已退役角色焊死在代码里的测试, 让后来者(含 AI)读了就以为它们还活着。
+  // ⚠️ 只断言**带 roles 名单**的菜单项。`/restaurant/price-anomaly` 与
+  // `/restaurant/supplier-reconciliation` 没有 roles(只有 module=restaurantFinance),
+  // 而 roleAllowed 只看 roles 名单 —— 没名单就一律 true。那两项靠 module 闸把
+  // 退役角色挡住(它们在 platform_role_permissions 里零行), 不该在这里断言。
+  it('🔴 厨师长已退役 —— 不该再出现在菜单的 roles 名单里', () => {
+    for (const path of ['/procurement/requisitions/my', '/restaurant/supplier-delivery']) {
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_chef'), path).toBe(false);
+    }
+  });
+
+  // ⛔ 这条原本断言的是「餐饮采购已退役, 职责并入市场」—— **那个口径是败的一侧**,
+  //    而它是那一侧的第三个承载点(注释 / roles 名单 / 本测试)。只清前两处的话,
+  //    这条测试会把错的口径拉回来 —— 「退役只做在数据层, 代码层从未清」的翻版,
+  //    只不过这次代码层的载体是一条会红的断言。
+  //
+  //    权威: 同日更晚的 V20261029_58/_63 把采购立为**第五个部门**, 载体角色就是
+  //    restaurant_purchaser; departmentConfig.ts 把供应商进货录入列为该部门的
+  //    第一个动作。2026-08-07 按五部门口径反转本条。
+  it('🔴 餐饮采购是第五个部门的载体 —— 必须能看到本部门的两个录入页', () => {
+    for (const path of ['/procurement/requisitions/my', '/restaurant/supplier-delivery']) {
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_purchaser'), path).toBe(true);
+    }
+  });
+
+  it('市场(sales_manager) 接手采购: 能看到供应商进货录入', () => {
+    expect(
+      roleAllowed(findByPath(menuConfig, '/restaurant/supplier-delivery'), 'sales_manager'),
+    ).toBe(true);
+  });
+
+  it('餐饮老板能看到店长能看的一切, 外加财务口径页', () => {
+    for (const path of [
+      '/restaurant/analytics/role-kpi',
+      '/restaurant/price-anomaly',
+      '/restaurant/supplier-delivery',
+      '/procurement/requisitions/my',
+      '/restaurant/supplier-reconciliation',
+      '/restaurant/cost-attribution',
+    ]) {
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_owner'), path).toBe(true);
+    }
+  });
+
+  it('厨师长看不到价格相关页 —— 它不在 PRICE_VIEW_ROLES 里', () => {
+    // 不是"忘了加", 是刻意的: 报货领料不需要看采购价与对账金额。
+    for (const path of ['/restaurant/price-anomaly', '/restaurant/supplier-reconciliation']) {
+      expect(roleAllowed(findByPath(menuConfig, path), 'restaurant_chef'), path).toBe(false);
+    }
+  });
+
+  it('四个餐饮角色都保留经营驾驶舱与大模型问答入口', () => {
+    for (const role of RESTAURANT_ROLES) {
+      for (const path of ['/smart-bi/dashboard', '/smart-bi/analysis']) {
+        expect(roleAllowed(findByPath(menuConfig, path), role), `${role}: ${path}`).toBe(true);
+      }
+    }
+  });
+
+  it('采购和厨师长不显示经营决策与数据治理入口', () => {
+    for (const role of ['restaurant_purchaser', 'restaurant_chef']) {
+      for (const path of [
+        '/smart-bi/analysis-hub',
+        '/smart-bi/revenue-report',
+        '/smart-bi/health-report',
+        '/smart-bi/upload',
+        '/smart-bi/query-templates',
+        '/smart-bi/mapping-review',
+        '/analytics/overview',
+      ]) {
+        expect(roleAllowed(findByPath(menuConfig, path), role), `${role}: ${path}`).toBe(false);
+      }
+    }
+  });
+
+  it('老板和店长可以进入经营决策页，老板也能看到收入管理报表', () => {
+    for (const role of ['restaurant_owner', 'restaurant_manager']) {
+      for (const path of ['/smart-bi/analysis-hub', '/smart-bi/health-report']) {
+        expect(roleAllowed(findByPath(menuConfig, path), role), `${role}: ${path}`).toBe(true);
+      }
+    }
+    expect(roleAllowed(findByPath(menuConfig, '/smart-bi/revenue-report'), 'restaurant_owner')).toBe(true);
+  });
+
+  it('餐饮租户不展示工厂生产异常预警', () => {
+    expect(findByPath(menuConfig, '/analytics/alert-dashboard').hideForFactoryTypes).toContain('RESTAURANT');
+  });
+});

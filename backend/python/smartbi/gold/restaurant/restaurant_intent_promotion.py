@@ -1,0 +1,1043 @@
+"""Restaurant intent flywheel promotion: capture -> two-level objective gate ->
+human review (--apply) -> repo-committed ledger -> re-embedded vector index.
+
+Design docs:
+  docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md (section 5, flywheel)
+  docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
+
+Philosophy mirror: smartbi/services/learning_promotion.py -- capture (already
+in restaurant_intent.log_intent_capture / list_promotion_candidates) -> an
+OBJECTIVE gate (never LLM-judged, never silent) -> a human runs
+`scripts/restaurant-intent-promote.py --apply <reviewed.json>` -> the ledger
+file below is written -> a human commits + deploys -> `populate_restaurant_ops`
+re-embeds the merged sample set on next boot.
+
+Why a repo-file ledger and not just a DB UPSERT (the key constraint driving
+this module's shape):
+  1. Python deployment is `rsync` of the code tree (server-operations.md /
+     python-services-architecture.md) -- anything a live server process
+     writes to disk is clobbered by the next deploy. A promotion decision
+     that only lives in a DB row would survive deploys but the *code* that
+     reads SAMPLE_QUERIES would still not know about it unless the vector
+     index itself is DB-only source of truth, which conflicts with #2:
+  2. When the embedding model changes, `populate_restaurant_ops` re-embeds
+     from its Python-side sample dict. If a promoted query is not in that
+     dict, a model upgrade silently drops it from the re-embedded set while
+     leaving a stale-model row behind in `smart_bi_template_embeddings` --
+     `count_embeddings` gates on `embedding_model = _MODEL`, so that stale
+     row would be invisible to the current model's coverage count too,
+     making the gap silent.
+  So: apply_promotions() writes a JSON ledger *in the repo* (like
+  learning_promotion's TRUNK_FILE), and `merge_samples()` is the single
+  source of truth `populate_restaurant_ops` embeds from -- ledger entries are
+  first-class members of the sample set, not a parallel DB-only index.
+
+TWO DIFFERENT LEDGERS, DO NOT CONFLATE (2026-07-28):
+  * the JSON file above = the sample corpus the VECTOR INDEX embeds. It is a
+    retrieval hint. Repo file, for the two reasons just given.
+  * `ai_promoted_routes` (Postgres, migration V20261030_01, written by
+    `apply_route_promotions` below) = an EXECUTION GRANT: reviewed whole
+    sentences that production may answer WITHOUT calling the planner. Neither
+    of the two reasons above applies to it -- it must be visible to both
+    uvicorn workers the moment a human approves it (no deploy), it carries a
+    whole plan rather than a bare code, and nothing re-embeds it. That is why
+    it is a table and the sample corpus is not.
+
+Never silently graduates: `apply_promotions` / `apply_route_promotions` are
+only ever invoked by a human running the CLI's `--apply-ledger` / `--apply`
+flag with a file the human already reviewed. Nothing in this module,
+`aggregate_candidates` included, writes on its own.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import logging
+from collections import Counter
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_DATA = Path(__file__).parent.parent / "data"
+LEDGER_FILE = _DATA / "promoted_restaurant_intent_samples.json"
+# 否决账本 (2026-07-23): 人审否决过的问法 (写操作错接/上下文省略句等),
+# 不再作为候选重复出现 — 否则每日 cron 日报会对同一批已否决条目反复告警。
+# 格式: {"query": "...", "reason": "..."} 的 JSON list, 仅 CLI --apply 之外
+# 人工编辑 (否决和通过一样是人的判断, 不自动写)。
+REJECTED_FILE = _DATA / "rejected_restaurant_intent_samples.json"
+
+# Miss 复盘处理状态 (卡5b 补充, 2026-07-28): `aggregate_misses` 每条是
+# RESTAURANT_OPS_MISS 聚合行 (只读, 来自 capture 表), 复盘时人工标注"这条
+# 打算怎么处理"没地方存 -- 同 REJECTED_FILE 一样是纯人工判断的小体量数据,
+# 走 repo-committed JSON 文件而不是新建 DB 表/migration (本卡任务卡明确
+# 禁止自建 migration; 这个数据量级和访问模式也不需要一张表)。
+# 格式: {normalized_query: {"status": ..., "note": ..., "reviewed_by": ...,
+# "updated_at": ISO8601}}。
+MISS_STATUS_FILE = _DATA / "restaurant_intent_miss_status.json"
+# 允许的处理状态 -- 显式枚举, 不接受任意字符串 (禁止降级/明确原则: 前端传
+# 错值要 400, 不能悄悄存一个前端和后端理解不一致的自由文本)。
+MISS_STATUS_VALUES = frozenset({
+    "unreviewed",   # 默认/未处理 (未显式设置时的隐含状态, 不需要写一条记录)
+    "planned",      # 已排入 resolver/意图目录扩展计划
+    "wontfix",      # 评估后判定不做 (如误触发/低频/超出产品范围)
+    "duplicate",    # 与已有 miss 或已支持意图重复
+    "resolved",     # 已有后续版本覆盖 (resolver 已扩展/晋升表已收录)
+})
+
+# Two-level objective gate thresholds (spec section 5). Row-level filter (a)
+# is always applied (tier=llm, contract_pass=true, served=true -- see the SQL
+# in aggregate_candidates). Group-level recommendation (b) additionally
+# requires repeat occurrence (confidence is NOT a gate -- see 2026-08-07), and never
+# recommends a group where different rows resolved to different codes
+# (`conflict`) -- those still surface for human review, just unmarked.
+_RECOMMEND_MIN_COUNT = 2
+# ⚠️ 2026-08-07 起**不再用于推荐判定**(Steve: 置信度不可证伪, 不作门槛)。
+#    保留常量仅为 SQL 侧的宽松预过滤(它只加宽读取范围, 不排除任何东西)。
+_RECOMMEND_MIN_CONFIDENCE = 0.85
+
+
+# ─── RLS GUC helper (shared by aggregate_candidates / aggregate_misses) ────
+#
+# `factory_id=None` means "platform admin channel" (卡5b 运营台聚合看板 —
+# 跨租户读所有 domain 命中行, 不按发起管理员自己的工厂过滤). This is
+# DIFFERENT from "not calling set_config at all":
+#
+# `smartbi/tenant_ctx.py`'s asyncpg pool `setup` callback
+# (`set_pg_connection_tenant`) already runs `SELECT set_config('app.factory_id',
+# fid, false)` on EVERY connection checkout, using the ambient per-request
+# ContextVar. When no tenant is in scope (e.g. a platform_admin JWT with no
+# `factoryId` claim) that callback's `fid` falls back to the sentinel
+# `"__internal__"` (`tenant_ctx.INTERNAL_SENTINEL`), NOT an empty string.
+# `smart_bi_llm_fallback_log`'s FORCE RLS `tenant_select` policy is:
+#     factory_id = current_setting('app.factory_id', true)
+#     OR current_setting('app.factory_id', true) = ''
+#     OR current_setting('app.factory_id', true) IS NULL
+# `'__internal__'` matches none of those three branches (it isn't empty/NULL
+# and no real row has factory_id='__internal__') -- so relying on "the pool
+# already set something" for a platform-wide read would silently return ZERO
+# rows, not "all rows". This is the same 假0 failure class as
+# `feedback_smartbi_rls_set_guc_before_query` / the CLI's original bug, just
+# one layer further from view (the pool sets *something*, it's just the
+# wrong something for this call).
+#
+# So the admin channel here explicitly RESETS the GUC to `''` on the borrowed
+# connection, after `pool.acquire()`, before the query -- deterministically
+# overwriting whatever the pool `setup` callback (or a prior borrower, since
+# asyncpg physically reuses connections) left behind. `is_local` stays
+# `false` (session-scoped, not `SET LOCAL`/transaction-scoped) because
+# asyncpg's `is_local=true` set_config has been verified in this project to
+# NOT reliably apply across the acquire()/execute() step boundary on a pooled
+# connection (`feedback_asyncpg_local_setconfig_rls_never_applies`) -- `false`
+# mirrors both `tenant_ctx.set_pg_connection_tenant` and this module's
+# pre-existing per-tenant `set_config` calls below.
+async def _set_rls_guc(conn, factory_id: Optional[str]) -> None:
+    """Explicitly set (or reset) `app.factory_id` on `conn` before a query.
+
+    `factory_id=None` -> admin channel: reset to `''` so the FORCE RLS
+    permissive branch matches and ALL tenants' rows are visible (platform-wide
+    aggregation, e.g. 卡5b 运营台). `factory_id=<str>` -> tenant-scoped read
+    (CLI usage, one factory at a time).
+    """
+    await conn.execute(
+        "SELECT set_config('app.factory_id', $1, false)", factory_id or ""
+    )
+
+
+# ─── Ledger I/O ────────────────────────────────────────────────────────────
+
+def load_promoted_samples() -> Dict[str, List[str]]:
+    """Read the repo-committed ledger. Tolerates a missing/empty/corrupt file
+    (fail-open, mirrors learning_promotion._load): callers treat {} as "no
+    promotions yet", never as an error."""
+    try:
+        if LEDGER_FILE.exists():
+            with open(LEDGER_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    str(code): [str(q) for q in queries if isinstance(q, str) and q.strip()]
+                    for code, queries in data.items()
+                    if isinstance(queries, list)
+                }
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load ledger failed (ignored): {exc}")
+    return {}
+
+
+def merge_samples(base: Optional[Dict[str, List[str]]] = None) -> Dict[str, List[str]]:
+    """`base` (default `restaurant_ops_router.SAMPLE_QUERIES`) + the promoted
+    ledger, deduped per code. This is the single source of truth
+    `populate_restaurant_ops` embeds from and the source `aggregate_candidates`
+    checks "already known" against -- so a promoted query is never re-offered
+    as a candidate and never silently missing from the re-embedded index after
+    an embedding-model upgrade (see module docstring point 2).
+
+    Base entries keep their original order; ledger-only entries are appended
+    sorted (stable diffs, no dependency on ledger file's on-disk order)."""
+    if base is None:
+        from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES
+        base = SAMPLE_QUERIES
+    ledger = load_promoted_samples()
+    merged: Dict[str, List[str]] = {}
+    for code in sorted(set(base) | set(ledger)):
+        base_list = list(base.get(code, []))
+        extra = sorted(q for q in ledger.get(code, []) if q not in base_list)
+        merged[code] = base_list + extra
+    return merged
+
+
+def load_rejected_queries() -> frozenset:
+    """人审否决过的问法集合。fail-open: 文件缺失/损坏 → 空集。"""
+    try:
+        if REJECTED_FILE.exists():
+            with open(REJECTED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return frozenset(
+                    str(e.get("query")).strip()
+                    for e in data
+                    if isinstance(e, dict) and str(e.get("query") or "").strip()
+                )
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load rejected failed (ignored): {exc}")
+    return frozenset()
+
+
+def _known_query_set(merged: Dict[str, List[str]]) -> frozenset:
+    return frozenset(q for queries in merged.values() for q in queries) | load_rejected_queries()
+
+
+# ─── Question-family classification (evidence-based backlog) ──────────────
+# Tags each LLM-tail question by intent FAMILY so the dimension backlog is
+# demand-driven, not supply-driven (2026-07-08 strategy amendment, Fable review):
+# we build a NEW attribution/write dimension only when the flywheel shows owners
+# actually asking that family. Pure keyword heuristic, no LLM.
+_ATTRIBUTION_CUES = (
+    "为什么", "为啥", "怎么回事", "拖后腿", "垫底", "拉低", "拖累", "差在哪",
+    "是客流还是", "是量还是", "是率还是", "归因", "原因", "哪个环节",
+    # Colloquial owner phrasings (2026-07-08 role-play) — keep aligned with
+    # synthesis_engine.plan_dimensions so the demand report labels these
+    # attribution too. All are underperformance/comparison cues, so they do NOT
+    # match neutral query examples ("哪家店订单最多" / "本周销量排行").
+    "最不行", "做不起来", "做不起", "是没人来还是", "是人少还是", "是客人少还是",
+    "谁最差", "哪家最差", "生意差在哪",  # "哪家差" dropped — ⊂ 哪家差不多 (audit B#3)
+)
+_WRITE_CUES = (
+    "建个", "建一个", "新建", "创建", "帮我建", "录入", "开单", "下单", "开一张",
+    "申请", "提交", "新增", "登记", "报个", "补录",
+)
+
+
+def classify_question_family(text: Optional[str]) -> str:
+    """Return the intent family of a question: attribution | write | query.
+
+    - attribution: "为什么亏 / 哪家店拖后腿 / 是客流还是客单价" — needs a
+      deterministic decomposition producer (numeric attribution can NOT be
+      LLM-generalized; see synthesis_engine docstring).
+    - write: "帮我建个领料单 / 录入盘点" — needs a write Tool + preview/confirm.
+    - query: everything else (lookup / ranking / trend) — deterministic resolver.
+    """
+    t = (text or "").lower()
+    if any(c in t for c in _ATTRIBUTION_CUES):
+        return "attribution"
+    if any(c in t for c in _WRITE_CUES):
+        return "write"
+    return "query"
+
+
+def family_breakdown(candidates: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Count promotion candidates per family — the evidence for whether the next
+    backlog slot should be an attribution dimension, a write op, or neither."""
+    out: Dict[str, int] = {"attribution": 0, "write": 0, "query": 0}
+    for c in candidates:
+        out[c.get("family") or classify_question_family(c.get("query"))] += 1
+    return out
+
+
+# ─── Candidate aggregation (objective gate, read-only) ────────────────────
+
+async def aggregate_candidates(
+    pool,
+    *,
+    min_confidence: float = 0.75,
+    min_count: int = 1,
+    limit: int = 200,
+    factory_id: Optional[str] = "DEMO_REST",
+) -> List[Dict[str, Any]]:
+    """Aggregate `smart_bi_llm_fallback_log` rows into promotion candidates.
+
+    `factory_id=None` -> platform admin channel (see `_set_rls_guc` docstring):
+    reads across ALL tenants, for 卡5b's cross-tenant 运营台候选队列. The CLI
+    keeps passing an explicit tenant string (default "DEMO_REST"), unaffected.
+
+    Row-level gate (a) -- only rows that are ALL of: tier='llm' (T3 parsed
+    it, meaning T1/T2 could not), contract_pass=true (Answer Contract did not
+    flag missing elements), served=true (the answer actually reached the
+    user) -- ever enter the aggregate. This is the same objective bar
+    `list_promotion_candidates` in restaurant_intent.py checks per-row; this
+    function groups those rows by normalized query text across repeats.
+
+    Group-level recommendation (b) -- a group is `recommended` only when
+    it is NOT `conflict` (all rows agree on the same RESTAURANT_OPS_* code)
+    AND occurred >= 2 times. Conflicting or
+    below-threshold groups are still returned (a human may still want to look
+    at them) but `recommended=False` -- the CLI prints them distinctly and
+    `apply_promotions` does not gate on this flag (a human decides what goes
+    into the JSON they pass to --apply); this flag is a review aid, not an
+    enforcement mechanism.
+
+    `min_confidence`/`min_count` are a loose pre-filter (HAVING, OR'd) so a
+    caller with a large log table can narrow the read before the Python-side
+    recommendation computation; defaults are permissive (virtually every
+    row-level-qualifying group is returned) since exclusion of low-value
+    groups is `recommended=False`, not omission.
+
+    Fail-open: returns [] on any DB error (mirrors
+    list_promotion_candidates / the rest of this module's philosophy)."""
+    sql = """
+        SELECT trim(query)                                              AS norm_query,
+               array_agg(template_code)                                  AS codes,
+               COUNT(*)                                                  AS occurrence_count,
+               MAX(COALESCE((agg_meta->>'confidence')::float, 0))        AS max_confidence,
+               -- 🔴 2026-08-07 Steve 拍板: 人审必须看到**当时的真实回答**才敢按晋升。
+               --    只给意图码和置信度, 人无从判断这条晋升进去之后会答成什么样。
+               (array_agg(answer ORDER BY created_at DESC))[1]           AS latest_answer,
+               COUNT(DISTINCT factory_id)                                AS tenant_count,
+               MAX(created_at)                                           AS last_seen
+          FROM smart_bi_llm_fallback_log
+         WHERE source = 'template'
+           AND template_code LIKE 'RESTAURANT_OPS_%%'
+           AND (agg_meta->>'tier') = 'llm'
+           AND (agg_meta->>'served') = 'true'
+           AND (agg_meta->>'contract_pass') = 'true'
+           -- 🔴 2026-08-09 新增: 判定模型说「答到了」才有资格被学。
+           --    在此之前, 一个答非所问的计划(客单价问句 -> 空维度营收概览,
+           --    served=true / contract_pass=true / confidence=0.95)完全满足
+           --    上面三条, 有资格晋升成零 token 路由 —— 把一次理解错误
+           --    固化成永久的、稳定的、自信的错答案。
+           -- ⛔ 用 = 'true' 而不是 <> 'false': 判不了(null)也不学。
+           AND (agg_meta->>'answered_judgment') = 'true'
+         GROUP BY trim(query)
+        HAVING MAX(COALESCE((agg_meta->>'confidence')::float, 0)) >= $1
+            OR COUNT(*) >= $2
+         ORDER BY MAX(created_at) DESC
+         LIMIT $3
+    """
+    try:
+        async with pool.acquire() as conn:
+            # smart_bi_llm_fallback_log 带 FORCE RLS (tenant_select 策略):
+            # 不设 app.factory_id GUC 会假性 0 行 → CLI 误报"无候选"
+            # (2026-07-23 首次真跑晋升 CLI 踩中, 同 feedback_smartbi_rls
+            # 记忆里的裸 psql 坑)。显式 set_config 后再查 -- factory_id=None
+            # 时用管理员通道 (见 _set_rls_guc), 否则单租户扫描 (CLI 用法)。
+            await _set_rls_guc(conn, factory_id)
+            rows = await conn.fetch(sql, min_confidence, min_count, limit)
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] aggregate_candidates query failed (fail-open): {exc}")
+        return []
+
+    known = _known_query_set(merge_samples())
+
+    candidates: List[Dict[str, Any]] = []
+    for r in rows:
+        norm_query = (r["norm_query"] or "").strip()
+        if not norm_query or norm_query in known:
+            continue  # already promoted / already a shipped sample -- not a new candidate
+        raw_codes = [c for c in (r["codes"] or []) if c]
+        # restaurant_intent._VALID_CODES imported lazily to avoid import-time
+        # coupling for callers that only need merge_samples/load_promoted_samples.
+        from smartbi.gold.restaurant.restaurant_intent import _VALID_CODES
+        valid_codes = [c for c in raw_codes if c in _VALID_CODES]
+        if not valid_codes:
+            continue
+        counts = Counter(valid_codes)
+        top_code, _top_n = counts.most_common(1)[0]
+        conflict = len(counts) > 1
+        occurrence_count = int(r["occurrence_count"] or 0)
+        max_confidence = round(float(r["max_confidence"] or 0.0), 3)
+        # 🔴 2026-08-07 Steve 拍板: **置信度不作晋升门槛**。
+        #    一段长话里只差「高/低」一个字, 置信度照样很高 —— 它与向量相似度是
+        #    同一种失效: 连续的数、不可证伪。用它当门槛, 等于让一个不可反驳的数
+        #    去决定「这条可以零 token 永久回放」。
+        # ⇒ 只留「次数>=2」当**筛子**(值得看一眼), 真正的闸是人审 + latest_answer。
+        recommended = not conflict and occurrence_count >= _RECOMMEND_MIN_COUNT
+        candidates.append({
+            "query": norm_query,
+            "code": top_code,
+            "codes": sorted(counts.keys()),
+            "occurrence_count": occurrence_count,
+            # ⚠️ 仅供参考, **不参与 recommended 判定**(见上)。保留是因为它偶尔能
+            #    提示「模型自己都不确定」, 但绝不能反过来当放行依据。
+            "max_confidence": max_confidence,
+            "latest_answer": (r["latest_answer"] or "").strip(),
+            "tenant_count": int(r["tenant_count"] or 0),
+            "conflict": conflict,
+            "recommended": recommended,
+            "family": classify_question_family(norm_query),
+            "last_seen": r["last_seen"],
+        })
+    return candidates
+
+
+async def _foreign_entity_names(conn, factory_id: Optional[str]) -> List[str]:
+    """别的租户有、本租户**没有**的门店名/菜名 —— 用来把上一个租户遗留的问法
+    剔出待办清单。
+
+    🔴 2026-08-09: 清单里有 8 次是「青花椒徐汇日月光店」「有滋有味北外滩店」
+       「抖音松叶蟹368套餐」这类, 全是 DEMO_REST 时代的实体, 在 MOCK_REST
+       上本就不存在。它们不是能力缺口, 留着会把优先级排歪。
+
+    ⛔ 不写硬编名单: 名单会随租户变, 而「会随环境变的东西只能有一处定义」——
+       这里的唯一定义就是 dim_store / dim_product 本身。查真表, 不查我写的表。
+
+    ⚠️ 必须是「别的租户有 且 本租户没有」, 不能只判「本租户没有」——
+       后者会把用户随口编的词也剔掉, 而那种恰恰**该留在清单里**
+       (说明用户想问一个我们没有的东西)。
+    """
+    if not factory_id:
+        return []
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT x.name FROM (
+                SELECT name, factory_id FROM dim_store
+                UNION ALL SELECT name, factory_id FROM dim_product
+            ) x
+             WHERE x.factory_id <> $1
+               AND x.name IS NOT NULL AND length(x.name) >= 3
+               AND x.name NOT IN (
+                   SELECT name FROM dim_store   WHERE factory_id = $1 AND name IS NOT NULL
+                   UNION
+                   SELECT name FROM dim_product WHERE factory_id = $1 AND name IS NOT NULL
+               )
+            """,
+            factory_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — 只读辅助, 失败就不过滤(fail-open)
+        logger.warning(
+            f"[restaurant-intent-promotion] 外租户实体名查询失败(不过滤): {exc}")
+        return []
+    return [r["name"] for r in rows if r["name"]]
+
+
+async def aggregate_misses(
+    pool,
+    *,
+    limit: int = 200,
+    factory_id: Optional[str] = "DEMO_REST",
+) -> List[Dict[str, Any]]:
+    """Aggregate delegate:false misses (哨兵 template_code='RESTAURANT_OPS_MISS',
+    log_intent_miss 写入) -- 飞轮的另一半原料: tiered 没接住的问法。
+
+    分组按 query 文本, 带 miss_reason 分布 (prefilter / should_delegate) 和
+    spec_intent (should_delegate miss 时 T1-T3 实际解析出的意图, 有值说明
+    "解析对了但路由拒了" -- 通常是 resolver 缺口或 A-3 类例外)。
+
+    只读, fail-open []。RLS 同 aggregate_candidates: 查询前设 GUC
+    (`factory_id=None` -> 管理员通道, 见 `_set_rls_guc`)。"""
+    sql = """
+        SELECT trim(query)                                          AS norm_query,
+               COUNT(*)                                             AS occurrence_count,
+               array_agg(DISTINCT agg_meta->>'miss_reason')         AS reasons,
+               array_agg(DISTINCT agg_meta->>'spec_intent')
+                   FILTER (WHERE agg_meta->>'spec_intent' IS NOT NULL) AS spec_intents,
+               MAX(created_at)                                      AS last_seen,
+               array_agg(DISTINCT agg_meta->>'answered_missing')
+                   FILTER (WHERE agg_meta->>'answered_missing' IS NOT NULL) AS answered_missing,
+               array_agg(DISTINCT template_code)                    AS codes
+          FROM smart_bi_llm_fallback_log
+         -- 🔴 2026-08-09 补两个来源。此前只收「门口没接住」这一种,
+         --    而「没做到」实际有三种, 另两种各自掉在别处:
+         --
+         --    ① resolver 收下了但算不出(served=false, template_code 是该
+         --       resolver 的码而不是 MISS 哨兵) —— 晋升侧因 served='true'
+         --       排除它, miss 侧因 template_code<>'MISS' 也排除它,
+         --       于是掉进两个谓词之间的空洞。实测「哪个菜最赚钱」问了两次,
+         --       两条日志都在, --misses 报告里 0 条。
+         --
+         --    ② 算出来了但答非所问(served=true, 判定模型说没答到) ——
+         --       系统认为自己成功了, 连「我没做到」都不知道。
+         --
+         -- ⛔ 判定为 null(判不了)**不收**: 供应商池一干, 每条回答都会涌进
+         --    清单, 而清单是决定「接下来补哪个能力」的唯一依据。
+         WHERE template_code = 'RESTAURANT_OPS_MISS'
+            OR (agg_meta->>'served') = 'false'
+            OR (agg_meta->>'answered_judgment') = 'false'
+         GROUP BY trim(query)
+         -- 🔴 2026-08-09 过滤器: 只留**从未成功过**的。
+         --
+         --    没有这一条时清单是 66 组, 而其中 **46 组曾经成功过** ——
+         --    那些失败是瞬时抖动/上下文缺失/供应商池干了, **不是能力缺口**。
+         --    把它们留在清单里, 会让「按被问次数排优先级」指向已经能答的东西。
+         --
+         -- 🔑 这一条同时替代了原本要单独写的「剔除多轮片段」规则:
+         --    「那成本呢」(42 成功/2 失败)、「是否合理」(35/1)、「本月」(92/2)
+         --    在链里都成功过, 自动被这条剔除 —— **不需要按词判断哪些是片段**,
+         --    那会退化成关键词表。实测这三条以及「青花椒徐汇日月光店」全被正确剔除。
+         --
+         -- ⚠️ 「成功」的定义必须包含判定层: 只看 served='true' 会把
+         --    「答了但答非所问」当成成功(客单价那条 44 次 served=true、0 次
+         --    served=false, 单看这个指标它根本不像有问题)。
+        HAVING COUNT(*) FILTER (
+                   WHERE (agg_meta->>'served') = 'true'
+                     AND COALESCE(agg_meta->>'answered_judgment', '') <> 'false'
+               ) = 0
+         ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+         LIMIT $1
+    """
+    try:
+        async with pool.acquire() as conn:
+            await _set_rls_guc(conn, factory_id)
+            rows = await conn.fetch(sql, limit)
+            foreign_names = await _foreign_entity_names(conn, factory_id)
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] aggregate_misses query failed (fail-open): {exc}")
+        return []
+    foreign = set(foreign_names)
+    return [
+        {
+            "query": (r["norm_query"] or "").strip(),
+            "occurrence_count": int(r["occurrence_count"] or 0),
+            "reasons": sorted(x for x in (r["reasons"] or []) if x),
+            "spec_intents": sorted(x for x in (r["spec_intents"] or []) if x),
+            "last_seen": r["last_seen"],
+            "family": classify_question_family((r["norm_query"] or "").strip()),
+            # 判定模型说清了「缺什么」—— 待办清单按它分组, 才知道要补哪个能力。
+            "answered_missing": sorted(
+                x for x in (r["answered_missing"] or []) if x),
+            "codes": sorted(x for x in (r["codes"] or []) if x),
+        }
+        for r in rows
+        if (r["norm_query"] or "").strip()
+        # 剔掉引用了**别的租户实体**的问法(上一个租户遗留的探针/演示问句)。
+        and not any(name in (r["norm_query"] or "") for name in foreign)
+    ]
+
+
+# ─── Human-reviewed apply (the ONLY write path) ───────────────────────────
+
+def apply_promotions(entries: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Write human-reviewed `[{"query": ..., "code": ...}, ...]` entries into
+    the ledger file. This is the ONLY function in this module that writes,
+    and it is only ever called by a human via the CLI's `--apply <file>` --
+    never automatically, never from `aggregate_candidates` or any request
+    path (spec section 5: "绝不静默自动毕业").
+
+    Invalid entries (empty query, code not one of the 8 known
+    RESTAURANT_OPS_* codes) and entries already present in the ledger are
+    skipped with a reason, not silently dropped -- the caller (CLI) reports
+    both `added` and `skipped` so a human can see exactly what happened.
+
+    Returns a dict with `added`, `skipped`, `ledger_path`, `ledger_size` for
+    the CLI to print as a diff summary. Does not write the file at all when
+    nothing was added (no gratuitous touch of a file a human will `git diff`
+    afterwards)."""
+    from smartbi.gold.restaurant.restaurant_intent import _VALID_CODES
+
+    ledger = load_promoted_samples()
+    added: List[Dict[str, str]] = []
+    skipped: List[Dict[str, str]] = []
+    for e in entries or []:
+        query = str((e or {}).get("query") or "").strip()
+        code = str((e or {}).get("code") or "").strip()
+        if not query or code not in _VALID_CODES:
+            skipped.append({"query": query, "code": code, "reason": "invalid_code_or_empty_query"})
+            continue
+        bucket = ledger.setdefault(code, [])
+        if query in bucket:
+            skipped.append({"query": query, "code": code, "reason": "already_in_ledger"})
+            continue
+        bucket.append(query)
+        added.append({"query": query, "code": code})
+
+    if added:
+        ordered = {code: sorted(set(qs)) for code, qs in ledger.items() if qs}
+        LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LEDGER_FILE.write_text(
+            json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    return {
+        "added": added,
+        "skipped": skipped,
+        "ledger_path": str(LEDGER_FILE),
+        "ledger_size": sum(len(v) for v in ledger.values()),
+    }
+
+
+# ─── Reviewed route promotion -> `ai_promoted_routes` (2026-07-28) ────────
+#
+# The ledger above answers "which sample sentences does the VECTOR INDEX
+# embed"; it is a retrieval-hint corpus and stays a repo file for the two
+# reasons in the module docstring (rsync deploys, embedding-model upgrades).
+#
+# This section answers a different question: "which reviewed sentences may be
+# ANSWERED WITHOUT CALLING THE PLANNER". That is an execution grant, it must
+# be readable by both uvicorn workers the moment it is approved, and it
+# carries a whole plan rather than a bare code -- so it lives in Postgres
+# (`ai_promoted_routes`, migration V20261030_01), which is exactly the storage
+# the semantic-first branch of `parse_restaurant_query` reads.
+#
+# Still never automatic: `apply_route_promotions` is only reachable from a
+# human running the CLI's `--apply` with a file that human reviewed.
+
+_PROMOTION_SOURCES = ("flywheel", "manual_seed")
+# RLS on `ai_promoted_routes` refuses a global-scope write from a tenant
+# session; the reviewed-promotion path is explicitly an internal operation.
+_INTERNAL_SENTINEL = "__internal__"
+
+
+def default_seed_plan(code: str) -> Dict[str, Any]:
+    """A minimal, contract-complete planner plan for a bare reviewed phrase.
+
+    Used when a reviewed entry names only a resolver code. Time is left NULL
+    on purpose: the phrase itself carries no window, so the deterministic time
+    gate still asks for one -- identical to how the in-code exact registry
+    behaved. A concrete date must NEVER appear in a stored plan (it would be
+    replayed verbatim tomorrow); relative time belongs in `time_range`.
+    """
+    return {
+        "intent": code,
+        "time_range": None,
+        "wants_margin": False,
+        "asks_profitability": False,
+        "requested_metrics": [],
+        "analysis_action": "lookup",
+        "dimensions": [],
+        "dish": None,
+        "store": None,
+        "stores": [],
+        "store_scope": None,
+        "confidence": 1.0,
+        "clarification_needed": False,
+        "missing_fields": [],
+        "clarification_question": None,
+        "clarification_options": [],
+    }
+
+
+def _plan_rejection_reason(plan: Any, phrase: str) -> Optional[str]:
+    """Reject a plan the runtime could not replay, BEFORE it reaches the
+    table. Compiling it here is the same check the read path performs, so a
+    row that would silently never fire is never written."""
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _semantic_spec_from_t3,
+        plan_is_replayable,
+    )
+
+    if not isinstance(plan, dict):
+        return "plan_not_an_object"
+    if json.dumps(plan, ensure_ascii=False).find('"date_range"') != -1:
+        return "plan_contains_resolved_dates"
+    try:
+        spec = _semantic_spec_from_t3(plan, phrase)
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"plan_compile_error:{exc}"
+    if not plan_is_replayable(spec):
+        return f"plan_not_replayable:{spec.planner_authority}"
+    return None
+
+
+def _current_routing_fingerprint() -> str:
+    """当前路由规则的指纹。懒 import：`restaurant_intent` 反过来也用本模块。
+
+    ⛔ 与计划缓存用的是**同一个函数**——两处各算一份就会出现「缓存失效了、晋升
+    没失效」这种半吊子状态，而那正是本次要消除的不对称。
+    """
+    # 🔴 2026-08-13 指纹分层: 写入端存**两段** `<语义段>.<prompt段>`。
+    #    校验只比第一段 —— prompt 侧改动(扩词汇表等)让计划过时而不是错,
+    #    不该让人审过的晋升作废。第二段不参与校验, 存着是为了让
+    #    「这条是在哪套 prompt 下审的」可回溯。
+    # ⛔ 仍然与计划缓存**共用同一份原料定义**(compose_ 内部调的就是那两个
+    #    materials 函数) —— 两处各算一份就会出现「缓存失效了、晋升没失效」
+    #    这种半吊子状态, 那正是当初要消除的不对称。
+    from smartbi.gold.restaurant.restaurant_intent import compose_routing_fingerprint
+
+    return compose_routing_fingerprint()
+
+
+async def apply_route_promotions(
+    pool,
+    entries: List[Dict[str, Any]],
+    *,
+    domain: str = "restaurant",
+    scope: str = "global",
+    source: str = "manual_seed",
+    reviewed_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """UPSERT human-reviewed whole-sentence promotions into
+    `ai_promoted_routes`.
+
+    `entries` are `{"query": ..., "code": ...}` (a default plan is built) or
+    `{"query": ..., "plan": {...}}` (an explicit reviewed plan). Every entry
+    is normalized with the SAME whole-sentence normalizer the runtime matcher
+    uses, so what is stored is exactly what can match.
+
+    Invalid entries are reported with a reason rather than dropped. Raises on
+    a DB failure: unlike the read path, an apply that did not persist must not
+    look like it succeeded.
+    """
+    from smartbi.gold.restaurant.restaurant_intent import (
+        _VALID_CODES,
+        _normalize_exact_phrase,
+        clear_promoted_routes_cache,
+    )
+
+    if source not in _PROMOTION_SOURCES:
+        raise ValueError(f"source must be one of {_PROMOTION_SOURCES}, got {source!r}")
+    if not scope:
+        raise ValueError("scope must be 'global' or a factory_id")
+
+    accepted: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    seen: set = set()
+    for entry in entries or []:
+        entry = entry or {}
+        raw_query = str(entry.get("query") or "")
+        phrase = _normalize_exact_phrase(raw_query)
+        code = str(entry.get("code") or "").strip()
+        plan = entry.get("plan")
+        if plan is None and code:
+            plan = default_seed_plan(code)
+        if not phrase:
+            skipped.append({"query": raw_query, "reason": "empty_query"})
+            continue
+        if not isinstance(plan, dict):
+            skipped.append({"query": raw_query, "reason": "missing_plan_and_code"})
+            continue
+        if plan.get("intent") not in _VALID_CODES:
+            skipped.append({
+                "query": raw_query,
+                "reason": f"unknown_intent:{plan.get('intent')}",
+            })
+            continue
+        reason = _plan_rejection_reason(plan, phrase)
+        if reason:
+            skipped.append({"query": raw_query, "reason": reason})
+            continue
+        if phrase in seen:
+            skipped.append({"query": raw_query, "reason": "duplicate_in_batch"})
+            continue
+        seen.add(phrase)
+        accepted.append({"query": raw_query, "phrase": phrase, "plan": plan})
+
+    written: List[Dict[str, Any]] = []
+    if accepted:
+        # The GUC decides what RLS lets us write: a global promotion is an
+        # internal operation, a tenant promotion must run as that tenant.
+        guc = _INTERNAL_SENTINEL if scope == "global" else scope
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.factory_id', $1, true)", guc,
+                )
+                for item in accepted:
+                    await conn.execute(
+                        """
+                        INSERT INTO ai_promoted_routes
+                            (domain, normalized_phrase, plan_json, plan_version,
+                             source, scope, reviewed_by, routing_fingerprint)
+                        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+                        ON CONFLICT (domain, normalized_phrase) DO UPDATE
+                           SET plan_json           = EXCLUDED.plan_json,
+                               plan_version        = EXCLUDED.plan_version,
+                               source              = EXCLUDED.source,
+                               scope               = EXCLUDED.scope,
+                               reviewed_by         = EXCLUDED.reviewed_by,
+                               routing_fingerprint = EXCLUDED.routing_fingerprint
+                        """,
+                        domain,
+                        item["phrase"],
+                        json.dumps(item["plan"], ensure_ascii=False, sort_keys=True),
+                        "restaurant-query-plan-v2",
+                        source,
+                        scope,
+                        reviewed_by,
+                        # 🔴 记下**批准时**的路由规则指纹。规则一改, 这行就与当前
+                        #    指纹不符 -> 读取时跳过 -> 回落 planner。
+                        #    人是在旧规则下审的, 人审保护不了「规则变了计划就错了」。
+                        _current_routing_fingerprint(),
+                    )
+                    written.append({
+                        "query": item["query"],
+                        "normalized_phrase": item["phrase"],
+                        "intent": item["plan"].get("intent"),
+                    })
+
+    # This process is the CLI, not a server worker; the servers pick the new
+    # rows up on their own short catalogue TTL. Clearing here keeps a
+    # same-process caller (tests, a future admin endpoint) honest.
+    clear_promoted_routes_cache()
+
+    return {
+        "domain": domain,
+        "scope": scope,
+        "source": source,
+        "written": written,
+        "skipped": skipped,
+    }
+
+
+async def list_route_promotions(
+    pool,
+    *,
+    domain: str = "restaurant",
+    factory_id: str = _INTERNAL_SENTINEL,
+) -> List[Dict[str, Any]]:
+    """Read back what is currently promoted, for CLI review. Read-only.
+
+    ⚠️ 2026-08-20: 每行多带一个 `routing_fingerprint`(存下来的原值, 未解析)。
+    在这之前调用方拿不到它, 于是**「表里有 40 条」和「回放时生效 0 条」永远无法
+    在同一个读数里同时出现** —— `/overview` 只报得出前者, 看板显示「40 条晋升」,
+    而那 40 条一条都没生效。⛔ 这不是把判定搬到这里: 判定仍然只有
+    `restaurant_intent.plan_semantics_segment` 一份, 见 `summarize_route_promotions`。
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT normalized_phrase, plan_json, plan_version, source,
+                       scope, reviewed_by, created_at, hit_count,
+                       routing_fingerprint
+                  FROM ai_promoted_routes
+                 WHERE domain = $1
+                 ORDER BY normalized_phrase
+                """,
+                domain,
+            )
+    out: List[Dict[str, Any]] = []
+    for row in rows or ():
+        plan = row["plan_json"]
+        if isinstance(plan, (bytes, bytearray)):
+            plan = plan.decode("utf-8", "ignore")
+        if isinstance(plan, str):
+            try:
+                plan = json.loads(plan)
+            except (TypeError, ValueError):
+                plan = {}
+        out.append({
+            "normalized_phrase": row["normalized_phrase"],
+            "intent": (plan or {}).get("intent"),
+            "plan_version": row["plan_version"],
+            "source": row["source"],
+            "scope": row["scope"],
+            "reviewed_by": row["reviewed_by"],
+            "created_at": row["created_at"],
+            "hit_count": row["hit_count"],
+            "routing_fingerprint": row["routing_fingerprint"],
+        })
+    return out
+
+
+#: 「指纹判定」这个共享结构在仓里的**全部**读点(硬约束 8, 2026-08-20 数过)。
+#: 改判定规则时这几处必须一起看:
+#:   1. `restaurant_intent._load_promoted_routes`  ← 权威(回放路径真正在用的那一处)
+#:   2..5. `smartbi/scripts/replay_equivalence_probe.py` 的 4 处(阳性对照/入选集/
+#:         诊断/row_eligible) —— ⛔ **故意不改**: 它是独立仪器, 与本函数互为对照,
+#:         合并成一份就失去了「两条独立读数对得上」这个信号。
+#: 本模块只新增**一处** —— `promotion_row_is_effective` 下面这一个谓词。
+#: `summarize_route_promotions` 和 CLI `--list-routes` 都调它, ⛔ 不各写一遍
+#: `plan_semantics_segment(...) == live_sem`(那样一次改动就要改两处, 形态 D)。
+#: 判定本身仍然只有 `restaurant_intent.plan_semantics_segment` 一份定义。
+def promotion_row_is_effective(routing_fingerprint, live_semantics_segment: str) -> bool:
+    """这一行晋升, 回放时指纹这一关过不过得了。
+
+    ⛔ 只回答**指纹**这一关。回放还会按 `plan_version` / `scope` / intent 是否
+       仍在 `_VALID_CODES` 里再筛 —— 那三条是按租户的, 这个谓词答不了,
+       所以基于它算出来的 `effective_count` 是**上界**。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import plan_semantics_segment
+
+    return plan_semantics_segment(routing_fingerprint) == live_semantics_segment
+
+
+def current_semantics_segment() -> str:
+    """当前语义段。⛔ 调用方不要自己 import `_plan_semantics_fingerprint`
+    (下划线开头 = 私有), 也不要各自拼一份。"""
+    from smartbi.gold.restaurant.restaurant_intent import _plan_semantics_fingerprint
+
+    return _plan_semantics_fingerprint()
+
+
+async def summarize_route_promotions(
+    pool,
+    *,
+    domain: str = "restaurant",
+) -> Dict[str, Any]:
+    """晋升表的**三个数**: 表里有几条 / 指纹还有效的有几条 / 已失效待人审的有几条。
+
+    🔴 为什么必须是三个数而不是一个: 2026-08-20 实测 prod ——
+       `route_count=40`, 而 `_load_promoted_routes(MOCK_REST)` 真跑一次 **0 条生效**。
+       看板只拿得到 40, 于是「人审过的 40 条晋升已经停摆 10 天」在界面上
+       **长得和「一切正常」一模一样**。
+       ⚠️ 那 40 条失效本身是**有台账依据的设计**(裸 8-hex 旧格式判失效, 见
+       `plan_semantics_segment` 的 docstring), ⛔ 不是缺陷 —— 它是**积压**。
+       积压需要的是「被人看见」, 不是「被代码悄悄复活」。
+
+    ⚠️ `effective_count` 是**上界**, 不是「一定会被回放命中的条数」:
+       `_load_promoted_routes` 在指纹之外还按 `plan_version` / `scope`
+       (global 或本租户) / intent 是否仍在 `_VALID_CODES` 里再筛一遍, 而那三条
+       都是**按租户**的, 一个平台级汇总答不了。所以响应里同时带
+       `effective_count_is_upper_bound=True` 和口径串, ⛔ 不让调用方
+       把一个上界读成实测值。
+    """
+    from smartbi.gold.restaurant.restaurant_intent import compose_routing_fingerprint
+
+    live_sem = current_semantics_segment()
+
+    # 🔴 阳性对照: 现在写进去的指纹必须判有效。它不成立 ⇒ 判定本身坏了,
+    #    此时 `stale_count == route_count` 是**仪器坏**而不是「全都失效了」——
+    #    而这两件事在数字上长得一模一样。⛔ 不打桩 plan_semantics_segment。
+    positive_control = promotion_row_is_effective(compose_routing_fingerprint(), live_sem)
+    # 阴性对照: 裸 8-hex(哪怕逐字等于 live_sem)必须判失效 —— 这正是 prod 上
+    # 39 行的形状, 它要是判有效, 那 39 条会静默复活。
+    negative_control = not promotion_row_is_effective(live_sem, live_sem)
+
+    rows = await list_route_promotions(pool, domain=domain)
+    stale = sum(
+        1 for r in rows
+        if not promotion_row_is_effective(r.get("routing_fingerprint"), live_sem)
+    )
+    return {
+        "route_count": len(rows),
+        "stale_count": stale,
+        "effective_count": len(rows) - stale,
+        "effective_count_is_upper_bound": True,
+        "current_semantics_fingerprint": live_sem,
+        "instrument_ok": bool(positive_control and negative_control),
+        "counts_methodology": (
+            "route_count = ai_promoted_routes 里 domain 匹配的行数; "
+            "stale_count = 其中 plan_semantics_segment(routing_fingerprint) "
+            "!= 当前语义段的行数(回放时必被跳过, 回落 planner); "
+            "effective_count = 两者之差, 是**上界** —— 回放还会再按 "
+            "plan_version/scope/intent 有效性按租户筛一遍, 平台级汇总答不了那三条"
+        ),
+    }
+
+
+# ─── Human-reviewed reject (卡5b: web 否决通道, alongside the CLI/manual one) ─
+
+def reject_candidate(
+    query: str, reason: str, *, rejected_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Append one human-reviewed rejection to `REJECTED_FILE`.
+
+    Mirrors `apply_promotions`'s shape (explicit human decision, explicit
+    write, never called from the read-only aggregation path) but for the
+    否决账本 instead of the promotion ledger -- module docstring previously
+    described this file as "仅 CLI --apply 之外人工编辑"; this is that same
+    human decision now reachable from 卡5's web 一键否决 button instead of a
+    manual JSON edit, not a new automated write path.
+
+    Idempotent: re-rejecting an already-rejected query is a no-op (returns
+    `already_rejected=True`, does not duplicate the entry or touch the file).
+
+    ⚠️ Known limitation (same as `LEDGER_FILE`, see module docstring point 1):
+    this file is deployed via `rsync` of the code tree, not owned by the DB --
+    a rejection written here by the web UI survives until the next Python
+    deploy overwrites the working tree from git, unless a human commits
+    `REJECTED_FILE` afterwards (same operational discipline the promotion
+    ledger already requires). The API response's `durable=False` flags this
+    so a caller (web UI) can surface "记得 commit 否决账本" rather than
+    silently assuming the rejection is permanent.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"ok": False, "reason": "empty_query"}
+
+    entries: List[Dict[str, str]] = []
+    if REJECTED_FILE.exists():
+        try:
+            with open(REJECTED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                entries = [e for e in data if isinstance(e, dict)]
+        except Exception as exc:
+            logger.warning(f"[restaurant-intent-promotion] reject: load existing rejected.json failed (treating as empty): {exc}")
+            entries = []
+
+    if any((e.get("query") or "").strip() == query for e in entries):
+        return {"ok": True, "already_rejected": True, "ledger_path": str(REJECTED_FILE)}
+
+    entry: Dict[str, Any] = {"query": query, "reason": (reason or "").strip() or "未说明原因"}
+    if rejected_by:
+        entry["rejected_by"] = rejected_by
+    entries.append(entry)
+
+    REJECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REJECTED_FILE.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "ok": True,
+        "already_rejected": False,
+        "ledger_path": str(REJECTED_FILE),
+        "ledger_size": len(entries),
+        "durable": False,
+    }
+
+
+# ─── Miss 复盘处理状态 (卡5b 补充契约: POST /misses/status) ─────────────────
+
+def load_miss_status() -> Dict[str, Dict[str, Any]]:
+    """Read `MISS_STATUS_FILE`. Fail-open: missing/corrupt file -> {} (same
+    fail-open convention as `load_promoted_samples`/`load_rejected_queries`)."""
+    try:
+        if MISS_STATUS_FILE.exists():
+            with open(MISS_STATUS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {
+                    str(q): v for q, v in data.items()
+                    if isinstance(v, dict) and isinstance(q, str) and q.strip()
+                }
+    except Exception as exc:
+        logger.warning(f"[restaurant-intent-promotion] load miss status failed (ignored): {exc}")
+    return {}
+
+
+def set_miss_status(
+    query: str, status: str, *, note: Optional[str] = None,
+    reviewed_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Human-reviewed write for `/misses/status` (卡5 前端补充契约). Same
+    write-discipline as `reject_candidate`: explicit human action, explicit
+    write, never called from a read-only aggregation path.
+
+    `status` must be one of `MISS_STATUS_VALUES` -- rejects (does not
+    silently accept) an unrecognized value so the FE and this ledger never
+    drift into "free text the backend can't group/filter on".
+
+    ⚠️ Same rsync-deploy durability caveat as `REJECTED_FILE`/`LEDGER_FILE`
+    (see module docstring point 1 and `reject_candidate`'s docstring):
+    response includes `durable=False`.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"ok": False, "reason": "empty_query"}
+    if status not in MISS_STATUS_VALUES:
+        return {"ok": False, "reason": f"invalid_status:{status!r} (允许值: {sorted(MISS_STATUS_VALUES)})"}
+
+    all_status = load_miss_status()
+    entry: Dict[str, Any] = {
+        "status": status,
+        "updated_at": _dt.datetime.utcnow().isoformat() + "Z",
+    }
+    if note:
+        entry["note"] = note
+    if reviewed_by:
+        entry["reviewed_by"] = reviewed_by
+    all_status[query] = entry
+
+    MISS_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MISS_STATUS_FILE.write_text(
+        json.dumps(all_status, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return {"ok": True, "query": query, "status": status, "ledger_path": str(MISS_STATUS_FILE), "durable": False}

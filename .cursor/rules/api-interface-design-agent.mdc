@@ -1,0 +1,247 @@
+---
+description: 食品溯源系统API接口设计规范 - 设计新的API接口时 - 编写或更新API文档时 - 进行API架构规划时 - 前后端接口联调时 - API版本升级或重构时 - 确保RESTful设计和业务模型规范
+globs:
+alwaysApply: false
+---
+
+# 食品溯源系统API接口设计规范
+
+## 使用场景
+- 设计新的API接口时
+- 编写或更新API文档时
+- 进行API架构规划时
+- 前后端接口联调时
+- API版本升级或重构时
+
+## 关键规则
+
+### 🏗️ RESTful设计原则
+- 严格遵循RESTful架构风格，资源导向设计
+- URL使用名词复数形式，避免动词 (如 `/traces` 不是 `/getTraces`)
+- HTTP方法语义化：GET(查询)、POST(创建)、PUT(完整更新)、PATCH(部分更新)、DELETE(删除)
+- 使用标准HTTP状态码：200、201、400、401、403、404、422、500等
+- 支持分页、排序、筛选：`?page=1&limit=20&sort=createdAt&filter=status:active`
+
+### 📁 URL结构规范
+- 基础路径：`/api/v1/{resource}`
+- 嵌套资源：`/api/v1/traces/{id}/events` (溯源批次下的事件)
+- 查询操作：`/api/v1/traces/{id}/verify` (特殊查询)
+- 批量操作：`/api/v1/traces/batch` (批量处理)
+- 使用kebab-case：`/api/v1/farming-records` 不是 `/api/v1/farmingRecords`
+
+### 🎯 业务域模型
+- **认证域** (`/auth`): 登录、注销、令牌、权限验证
+- **溯源域** (`/traces`): 溯源批次、查询、验证、二维码
+- **农业域** (`/farming`): 种植/养殖记录、环境数据、农事活动
+- **加工域** (`/processing`): 生产工艺、质量检测、设备监控
+- **物流域** (`/logistics`): 运输记录、车辆跟踪、仓储管理
+- **用户域** (`/users`): 用户信息、偏好设置、消息通知
+- **管理域** (`/admin`): 系统管理、权限配置、数据统计
+
+### 📊 响应数据结构
+- 统一响应格式：`{ status, data, meta, errors }`
+- 成功响应：`{ status: "success", data: {...}, meta: {...} }`
+- 错误响应：`{ status: "error", errors: [{code, message, field}] }`
+- 列表响应包含meta：`{ total, page, limit, totalPages }`
+- 时间格式使用ISO 8601：`2023-05-21T10:30:00Z`
+- 金额使用字符串避免精度问题：`"amount": "123.45"`
+
+### 🔐 认证与授权
+- 使用JWT Bearer Token：`Authorization: Bearer <token>`
+- 令牌包含用户ID、角色、权限列表
+- 支持令牌刷新机制：`/auth/refresh`
+- 权限检查：`read:traces`、`write:farms`、`admin:users`
+- 公开接口无需认证：`/traces/public/{batchCode}`
+
+### 📝 字段命名规范
+- 使用camelCase：`createdAt`、`batchCode`、`farmingType`
+- 布尔值使用is/has前缀：`isActive`、`hasPermission`
+- 主键统一使用id：`{ "id": "trace-123" }`
+- 外键使用完整名称：`{ "userId": "user-456", "traceId": "trace-123" }`
+- 枚举值使用UPPER_SNAKE_CASE：`"status": "IN_PROGRESS"`
+
+### 🎛️ 查询参数规范
+- 分页：`?page=1&limit=20` (默认limit=20，最大100)
+- 排序：`?sort=createdAt&order=desc` (默认asc)
+- 筛选：`?filter=status:active,type:organic`
+- 搜索：`?search=keyword` (模糊搜索)
+- 字段选择：`?fields=id,name,createdAt` (减少数据传输)
+- 关联查询：`?include=user,location` (包含关联数据)
+
+### ⚠️ 错误处理规范
+- 422验证错误包含具体字段信息
+- 错误码使用业务语义：`BATCH_NOT_FOUND`、`INVALID_QR_CODE`
+- 多语言错误消息支持：`Accept-Language: zh-CN`
+- 敏感错误信息脱敏：不暴露系统内部信息
+- 提供错误解决建议：`"suggestion": "请检查批次编码格式"`
+
+## 示例
+
+<example>
+**优秀的API设计**：
+
+```yaml
+# 获取溯源批次列表
+GET /api/v1/traces?page=1&limit=20&sort=createdAt&filter=status:active
+
+# 响应
+{
+  "status": "success",
+  "data": [
+    {
+      "id": "trace-123",
+      "batchCode": "2023051501",
+      "productName": "有机西红柿",
+      "status": "COMPLETED",
+      "farmingType": "ORGANIC",
+      "createdAt": "2023-05-15T08:00:00Z",
+      "location": {
+        "province": "山东省",
+        "city": "寿光市"
+      }
+    }
+  ],
+  "meta": {
+    "total": 156,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 8
+  }
+}
+
+# 创建新的溯源批次
+POST /api/v1/traces
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "batchCode": "2023051502",
+  "productName": "有机黄瓜",
+  "farmingType": "ORGANIC",
+  "plantingDate": "2023-03-01T00:00:00Z",
+  "location": {
+    "province": "山东省",
+    "city": "寿光市",
+    "address": "寿光市农业园区A区"
+  }
+}
+```
+</example>
+
+<example type="invalid">
+**错误的API设计**：
+
+```yaml
+# 错误：使用动词，非标准路径
+GET /api/getTraces?pageNum=1&pageSize=20
+
+# 错误：不一致的响应格式
+{
+  "code": 200,
+  "msg": "success",
+  "result": [...],
+  "total": 156
+}
+
+# 错误：字段命名不规范
+{
+  "trace_id": "123",
+  "batch_code": "2023051501",
+  "create_time": "2023-05-15 08:00:00",
+  "is_completed": 1
+}
+
+# 错误：模糊的错误信息
+{
+  "code": 400,
+  "message": "参数错误"
+}
+```
+</example>
+
+## 数据模型设计规范
+
+### 🌾 农业模块数据模型
+```typescript
+// 农场信息
+interface Farm {
+  id: string;
+  name: string;
+  location: LocationInfo;
+  farmType: 'CROP' | 'LIVESTOCK' | 'MIXED';
+  certifications: string[];
+  ownerId: string;
+  createdAt: string;
+}
+
+// 种植记录
+interface FarmingRecord {
+  id: string;
+  farmId: string;
+  traceId: string;
+  cropType: string;
+  variety: string;
+  plantingDate: string;
+  harvestDate?: string;
+  area: number; // 平方米
+  environmentData: EnvironmentData[];
+  activities: FarmingActivity[];
+  status: 'PLANTED' | 'GROWING' | 'HARVESTED';
+}
+```
+
+### 🏭 加工模块数据模型
+```typescript
+// 加工记录
+interface ProcessingRecord {
+  id: string;
+  traceId: string;
+  facilityId: string;
+  processType: string;
+  rawMaterials: RawMaterial[];
+  processes: ProcessStep[];
+  qualityTests: QualityTest[];
+  outputProducts: Product[];
+  startTime: string;
+  endTime?: string;
+  status: 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+}
+```
+
+### 🚛 物流模块数据模型
+```typescript
+// 运输记录
+interface LogisticsRecord {
+  id: string;
+  traceId: string;
+  carrierId: string;
+  vehicleId: string;
+  route: RoutePoint[];
+  temperature?: TemperatureLog[];
+  humidity?: HumidityLog[];
+  startTime: string;
+  endTime?: string;
+  status: 'PENDING' | 'IN_TRANSIT' | 'DELIVERED' | 'DELAYED';
+}
+```
+
+## 接口文档模板
+
+每个API接口文档必须包含：
+1. **接口概述**：功能描述、适用场景
+2. **请求信息**：HTTP方法、URL、Headers
+3. **路径参数**：参数名、类型、是否必需、描述
+4. **查询参数**：参数名、类型、默认值、取值范围
+5. **请求体**：数据结构、字段说明、验证规则
+6. **响应格式**：成功响应、错误响应、状态码说明
+7. **业务规则**：特殊逻辑、权限要求、限制条件
+8. **使用示例**：完整的请求/响应示例
+9. **错误码表**：业务错误码、错误描述、解决方案
+
+## 版本控制策略
+
+- **URL版本控制**：`/api/v1/`, `/api/v2/`
+- **向后兼容原则**：新版本不破坏现有功能
+- **字段扩展**：新增字段标记为可选
+- **废弃标记**：`@deprecated` 注释过时字段
+- **迁移指南**：提供版本升级文档

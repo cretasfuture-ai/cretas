@@ -1,0 +1,496 @@
+"""餐饮意图飞轮晋升 CLI: 列候选(连库) / 人审后 --apply(写晋升表, 连库)。
+
+用法:
+  python scripts/restaurant-intent-promote.py --list
+      连 smartbi 库聚合 T3(LLM 层)候选, 打印评审表(不写任何东西)。
+
+  python scripts/restaurant-intent-promote.py --counts
+      机器可读一行 (candidates=N recommended=N misses=N), 供
+      scripts/cron/restaurant-flywheel-promotion-backlog-daily.sh 这类跑批
+      脚本 grep -oP 解析。同样不写任何东西, 只是 --list 的精简版。
+
+  python scripts/restaurant-intent-promote.py --apply reviewed.json
+      reviewed.json = 人工从 --list 输出里挑出的条目, 形如:
+        [
+          {"query": "这两个月生意咋样，挣着钱没", "code": "RESTAURANT_OPS_SALES_SUMMARY"},
+          {"query": "这周比上周差在哪", "plan": { ...完整 planner 计划 JSON... }}
+        ]
+      写入 smartbi 库的 ai_promoted_routes 表 (2026-07-28 飞轮出口回接):
+      生产餐饮问答 (parse_restaurant_query semantic_first) 在调 LLM 之前整句
+      相等查这张表, 命中即零 token 回放计划。写表而不是写代码文件, 是因为这
+      是「执行授权」, 必须两个 uvicorn worker 都立刻可见, 且带完整计划而不只
+      是一个 code。
+
+      【硬性】plan 里的时间必须是相对描述 (time_range: null 或相对短语), 绝不能是
+      具体日期 —— 存了具体日期就会在第二天被原样回放。CLI 会在写入前编译一遍
+      计划, 编不出可执行契约的条目直接拒收。
+
+  python scripts/restaurant-intent-promote.py --list-routes
+      连库列出当前 ai_promoted_routes 里已晋升的短语 (只读)。
+
+  python scripts/restaurant-intent-promote.py --apply-ledger reviewed.json
+      旧行为: 只写 backend/python/smartbi/data/promoted_restaurant_intent_samples.json
+      (向量索引的样例语料, 不是执行授权), 不连库。两者用途不同, 见
+      smartbi/gold/restaurant/restaurant_intent_promotion.py 模块 docstring。
+
+绝不静默自动毕业: 没有 --apply 就永远不写任何东西；--apply 只接受人已经审过的
+JSON 文件，脚本本身不会替你"自动通过"任何候选。
+
+连 prod DB (--list 需要):
+  prod smartbi 库不对公网开放 (server-operations.md 安全组规则)。用 SSH 隧道:
+    ssh -L 5432:localhost:5432 root@47.100.235.168
+  然后在另一个终端设置环境变量指向本地隧道端口 (密码见本地 .env /
+  .claude/rules/db-credentials.md，本脚本不读取也不打印任何密码):
+    (PowerShell)
+      $env:POSTGRES_HOST = "localhost"
+      $env:POSTGRES_PORT = "5432"
+      $env:POSTGRES_DB = "smartbi_prod_db"
+      $env:POSTGRES_USER = "smartbi_user"
+      $env:POSTGRES_PASSWORD = "<从 db-credentials.md 或 .env 取, 不要硬编码/不要提交>"
+      python scripts/restaurant-intent-promote.py --list
+  本地/测试库不需要隧道，直接指向 smartbi_db 即可 (Settings 默认值)。
+"""
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+_BACKEND_PY = Path(__file__).resolve().parents[1] / "backend" / "python"
+sys.path.insert(0, str(_BACKEND_PY))
+# smartbi/services/__init__.py eagerly imports excel_parser -> bare `from services...`,
+# only resolvable with backend/python/smartbi on sys.path (mirrors promote_learnings.py).
+sys.path.insert(0, str(_BACKEND_PY / "smartbi"))
+
+from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
+    aggregate_candidates,
+    aggregate_misses,
+    apply_promotions,
+    apply_route_promotions,
+    current_semantics_segment,
+    list_route_promotions,
+    promotion_row_is_effective,
+    summarize_route_promotions,
+)
+
+
+async def _open_pool():
+    """Shared DB entry for every connected subcommand. Returns None (after
+    printing the tunnel hint) instead of raising, mirroring _list_candidates."""
+    from smartbi.config import get_pg_pool
+
+    try:
+        pool = await get_pg_pool()
+    except Exception as exc:
+        print(
+            f"ERROR: 连不上 smartbi DB ({exc})。"
+            " 需要 SSH 隧道 + POSTGRES_* 环境变量, 见本脚本 docstring。"
+        )
+        return None
+    if pool is None:
+        print(
+            "ERROR: smartbi DB 未配置 (postgres_url 为空)。"
+            " 需要 SSH 隧道 + POSTGRES_* 环境变量, 见本脚本 docstring。"
+        )
+        return None
+    return pool
+
+
+async def _list_candidates(min_confidence: float, min_count: int, limit: int,
+                           factory_id: str) -> None:
+    from smartbi.config import get_pg_pool
+
+    try:
+        pool = await get_pg_pool()
+    except Exception as exc:
+        print(
+            f"ERROR: 连不上 smartbi DB ({exc})。"
+            "prod 库需先开 SSH 隧道 -- 见本文件顶部说明。"
+        )
+        return
+    if pool is None:
+        print(
+            "ERROR: 连不上 smartbi DB (postgres 未配置/密码错/网络不通)。"
+            "prod 库需先开 SSH 隧道 -- 见本文件顶部说明。"
+        )
+        return
+
+    candidates = await aggregate_candidates(
+        pool, min_confidence=min_confidence, min_count=min_count, limit=limit,
+        factory_id=factory_id,
+    )
+    if not candidates:
+        print("无候选 (要么 log 里没有满足 tier=llm+contract_pass+served 的查询, 要么全部已在 SAMPLE_QUERIES/账本中)")
+        return
+
+    # ── 概览表: 先让人扫一眼全局 ──────────────────────────────────
+    print(f"{'query':<42}{'code':<28}{'次数':<6}{'租户':<6}{'冲突':<6}判定")
+    print("-" * 100)
+    recommended = []
+    for c in candidates:
+        if c["recommended"]:
+            mark = "达标待审"
+            recommended.append(c)
+        elif c["conflict"]:
+            mark = f"冲突(候选code: {','.join(c['codes'])})"
+        else:
+            mark = "未达标(次数<2)"
+        q_display = c["query"] if len(c["query"]) <= 40 else c["query"][:39] + "…"
+        print(
+            f"{q_display:<42}{c['code']:<28}{c['occurrence_count']:<6}"
+            f"{c.get('tenant_count', 0):<6}{str(c['conflict']):<6}{mark}"
+        )
+    print("-" * 100)
+    print(f"共 {len(candidates)} 候选, {len(recommended)} 条达标 (次数>=2 且无 code 冲突)。")
+    print("⚠ 置信度**不再参与判定** (2026-08-07): 长句里只差「高/低」一个字，"
+          "置信度照样很高 —— 它和向量相似度是同一种失效，不可证伪。")
+
+    # ── 人审台: 达标条目逐条给出「当时的真实回答」──────────────────
+    #
+    # 🔴 Steve 2026-08-07:「我得看到根据我们的模型他的回复是什么，我得人审
+    #    确定他回答没有错，我才补进去」。只给意图码和一个分数，人无从判断这条
+    #    晋升进去之后会答成什么样 —— 而晋升是**零 token 永久回放**，
+    #    错了比答错一次严重得多。
+    if recommended:
+        print("")
+        print("=" * 100)
+        print("人审台 — 逐条核对「当时的真实回答」，确认无误再写进 reviewed.json")
+        print("=" * 100)
+        for i, c in enumerate(recommended, 1):
+            ans = " ".join((c.get("latest_answer") or "").split())
+            if len(ans) > 300:
+                ans = ans[:299] + "…"
+            print("")
+            print(f"[{i}] {c['query']}")
+            print(f"    意图: {c['code']}   次数: {c['occurrence_count']}   "
+                  f"租户数: {c.get('tenant_count', 0)}   最近: {c.get('last_seen')}")
+            if ans:
+                print(f"    当时回答: {ans}")
+            else:
+                print("    当时回答: ⚠ 日志里没有 answer —— **不要晋升**，"
+                      "没有证据就没有人审的依据")
+
+    print("")
+    print(
+        "人审后把要晋升的条目整理成 JSON list ([{\"query\":..., \"code\":...}, ...])，"
+        "再跑: python scripts/restaurant-intent-promote.py --apply reviewed.json"
+    )
+
+
+async def _llm_review_desk(min_count: int, limit: int, factory_id: str) -> None:
+    """人审台第一道 —— 模型先审一遍, 结果分三堆交给人。
+
+    ⛔ 这里**不写任何库**。产出只有一张给人看的表: 哪些可以快速点头,
+       哪些必须停下来看。晋升仍然要人跑 --apply。
+    """
+    from smartbi.config import get_pg_pool
+    from smartbi.gold.restaurant.promotion_llm_review import (
+        review_candidate,
+        summarize,
+    )
+    from smartbi.gold.restaurant.restaurant_intent import _INTENT_DESCRIPTIONS
+
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, true)", factory_id)
+            rows = await conn.fetch(
+                "SELECT query, agg_meta->'planned_intents'->>0 AS code, count(*) AS n"
+                "  FROM smart_bi_llm_fallback_log"
+                " WHERE factory_id = $1"
+                "   AND agg_meta->'planned_intents'->>0 IS NOT NULL"
+                " GROUP BY 1, 2 HAVING count(*) >= $2"
+                " ORDER BY 3 DESC LIMIT $3",
+                factory_id, int(min_count), int(limit),
+            )
+            promoted = {
+                r["normalized_phrase"] for r in await conn.fetch(
+                    "SELECT normalized_phrase FROM ai_promoted_routes "
+                    "WHERE domain = 'restaurant'")
+            }
+
+    todo = [r for r in rows if r["query"] not in promoted]
+    print(f"候选 {len(rows)} 条, 其中未晋升 {len(todo)} 条 -> 交模型复判")
+    print("")
+
+    pairs = []
+    for r in todo:
+        verdict = await review_candidate(
+            r["query"], r["code"], dict(_INTENT_DESCRIPTIONS))
+        pairs.append((verdict, int(r["n"])))
+
+    grouped = summarize([v for v, _ in pairs])
+    counts = {v.query: n for v, n in pairs}
+
+    print(f"=== 需要你停下来看的: {grouped['needs_attention']} 条 ===")
+    for bucket, label in (("disagree", "❗分歧"), ("unsure", "❓模型也不确定")):
+        for v in grouped[bucket]:
+            print(f"  {label} [{counts.get(v.query, 0):>3}次] {v.query}")
+            print(f"        飞轮记录={v.recorded_intent}")
+            print(f"        模型复判={v.llm_intent}  ({v.reason})")
+    print("")
+    print(f"=== 模型与飞轮一致, 可快速复核后晋升: {len(grouped['agree'])} 条 ===")
+    for v in grouped["agree"]:
+        print(f"  ✅ [{counts.get(v.query, 0):>3}次] {v.query}  -> {v.llm_intent}")
+    print("")
+    print("⛔ 本命令不写库。确认后把要晋升的写进 JSON, 再跑 --apply。")
+
+
+async def _counts(min_confidence: float, min_count: int, limit: int, factory_id: str) -> None:
+    """机器可读一行输出 (`candidates=N recommended=N misses=N`)，给
+    `scripts/cron/restaurant-flywheel-promotion-backlog-daily.sh` 这类跑批
+    脚本解析 —— `--list` 是给人看的表格，不适合 shell `grep -oP`。
+
+    只读，与 `_list_candidates`/`_list_misses` 复用同一批聚合函数，不新造
+    第二套查询 (形态 D: 同一件事两份一定会漂)。
+
+    连不上库时打印 `counts_unavailable=true` 而不是让异常冒出去 —— 跑批脚本
+    据此判三态里的 rc=2 (这次没量到), 与 `time-phrase-backlog-daily.sh` 的
+    `INSTRUMENT DEAD` 分支同一个判据: 用**这一行有没有解析出数字**区分
+    「没问题」和「没量到」, 而不是「进程退出码」(退出码在 CLI 这一层永远是 0,
+    真正三态在 cron 脚本里裁)。
+    """
+    pool = await _open_pool()
+    if pool is None:
+        print("counts_unavailable=true")
+        return
+    try:
+        candidates = await aggregate_candidates(
+            pool, min_confidence=min_confidence, min_count=min_count, limit=limit,
+            factory_id=factory_id,
+        )
+        misses = await aggregate_misses(pool, limit=limit, factory_id=factory_id)
+    except Exception as exc:
+        print(f"counts_unavailable=true error={exc}")
+        return
+    recommended = sum(1 for c in candidates if c["recommended"])
+    print(f"candidates={len(candidates)} recommended={recommended} misses={len(misses)}")
+
+
+async def _list_misses(limit: int, factory_id: str) -> None:
+    from smartbi.config import get_pg_pool
+
+    try:
+        pool = await get_pg_pool()
+    except Exception as exc:
+        print(f"ERROR: 连不上 smartbi DB ({exc})。prod 库需先开 SSH 隧道 -- 见本文件顶部说明。")
+        return
+    if pool is None:
+        print("ERROR: 连不上 smartbi DB (postgres 未配置/密码错/网络不通)。")
+        return
+
+    misses = await aggregate_misses(pool, limit=limit, factory_id=factory_id)
+    if not misses:
+        print("无 miss 记录 (delegate:false 捕获自 2026-07-23 起才有数据)")
+        return
+
+    print(f"{'query':<42}{'次数':<6}{'原因':<24}{'spec解析到':<28}family")
+    print("-" * 110)
+    for m in misses:
+        q_display = m["query"] if len(m["query"]) <= 40 else m["query"][:39] + "…"
+        print(
+            f"{q_display:<42}{m['occurrence_count']:<6}"
+            f"{','.join(m['reasons']):<24}{','.join(m['spec_intents']) or '-':<28}{m['family']}"
+        )
+    print("-" * 110)
+    print(
+        f"共 {len(misses)} 组 miss。复盘指南: spec解析到有值 = 解析对但路由拒"
+        " (resolver 缺口/例外规则); prefilter+query 族 = 前置滤过严或缺 T1 规则;"
+        " write 族 = 本该 Java 工具接, 属正常。"
+    )
+
+
+def _read_review_file(json_path: str, flag: str):
+    path = Path(json_path)
+    if not path.exists():
+        print(f"ERROR: 文件不存在: {json_path}")
+        return None
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"ERROR: 无法解析 JSON: {exc}")
+        return None
+    if not isinstance(entries, list):
+        print(f'ERROR: {flag} 的 JSON 必须是 list, 形如 [{{"query": ..., "code": ...}}, ...]')
+        return None
+    return entries
+
+
+async def _apply_routes(json_path: str, scope: str, source: str,
+                        reviewed_by: str) -> None:
+    """人审后写 ai_promoted_routes —— 生产零 token 回放的执行授权表。"""
+    entries = _read_review_file(json_path, "--apply")
+    if entries is None:
+        return
+    pool = await _open_pool()
+    if pool is None:
+        return
+    try:
+        result = await apply_route_promotions(
+            pool, entries, scope=scope, source=source, reviewed_by=reviewed_by,
+        )
+    except Exception as exc:
+        print(f"ERROR: 写 ai_promoted_routes 失败, 未晋升任何条目: {exc}")
+        return
+
+    print(f"晋升表: ai_promoted_routes (domain={result['domain']}, scope={result['scope']}, source={result['source']})")
+    if result["written"]:
+        print(f"写入 {len(result['written'])} 条:")
+        for e in result["written"]:
+            print(f"  + [{e['intent']}] {e['normalized_phrase']}  (原句: {e['query']})")
+    else:
+        print("写入 0 条")
+    if result["skipped"]:
+        print(f"跳过 {len(result['skipped'])} 条:")
+        for e in result["skipped"]:
+            print(f"  - {e.get('query')!r} ({e.get('reason')})")
+    if result["written"]:
+        print(
+            "下一步: 无需重启 —— 两个 uvicorn worker 会在各自的晋升表缓存 TTL"
+            " (60s) 内自动读到新行。核对: 日志 grep"
+            " 'zero-token promoted-route hit'。"
+        )
+
+
+async def _list_routes(factory_id: str) -> None:
+    pool = await _open_pool()
+    if pool is None:
+        return
+    try:
+        rows = await list_route_promotions(pool)
+    except Exception as exc:
+        print(f"ERROR: 读 ai_promoted_routes 失败: {exc}")
+        return
+    if not rows:
+        print("ai_promoted_routes 为空 (domain=restaurant)。")
+        return
+    # 🔴 2026-08-20: 逐条标出「这条现在还生效吗」。在这之前本命令只打
+    #    「共 N 条已晋升短语」—— 而实测 prod 那 40 条**一条都没在生效**
+    #    (指纹判失效, 回放全部回落 planner)。人是照这个屏幕决定要不要复审的,
+    #    ▎一个把「40 条停摆」印成「40 条已晋升」的屏幕, 比没有屏幕更糟。
+    try:
+        counts = await summarize_route_promotions(pool)
+    except Exception as exc:  # noqa: BLE001 — ⛔ 拿不到就说拿不到, 不猜
+        counts = {"_error": repr(exc)}
+
+    # ⛔ 不在这里再写一遍 `plan_semantics_segment(...) == live_sem` ——
+    #    判定只有一个谓词, 见 promotion 模块 `promotion_row_is_effective`。
+    live_sem = current_semantics_segment()
+
+    print(f"{'短语':<24} {'intent':<36} {'scope':<12} {'source':<12} {'hits':>6}  生效?  reviewed_by")
+    for r in rows:
+        alive = promotion_row_is_effective(r.get("routing_fingerprint"), live_sem)
+        print(
+            f"{str(r['normalized_phrase']):<24} {str(r['intent']):<36} "
+            f"{str(r['scope']):<12} {str(r['source']):<12} "
+            f"{r['hit_count']:>6}  {'生效' if alive else '已失效'}  {r['reviewed_by'] or '-'}"
+        )
+    if "_error" in counts:
+        print(f"⚠️ 数不出生效/失效各几条（读数作废，⛔ 不要当成「都生效」）: {counts['_error']}")
+    else:
+        print(f"共 {counts['route_count']} 条已晋升短语 —— "
+              f"其中**当前生效 {counts['effective_count']} 条**、"
+              f"已失效待重新人审 {counts['stale_count']} 条 (当前语义段 {live_sem})。")
+        if counts["stale_count"]:
+            print("⚠️ 失效的那些回放时会被跳过、回落 planner（答案仍对，只是慢且费 token）。")
+            print("   ⛔ 不要靠改判定复活它们 —— 复活必须人按逐条台账重新盖章。")
+
+
+def _apply(json_path: str) -> None:
+    """旧路径: 只写向量样例账本 (--apply-ledger)。不是执行授权。"""
+    entries = _read_review_file(json_path, "--apply-ledger")
+    if entries is None:
+        return
+
+    result = apply_promotions(entries)
+
+    print(f"账本: {result['ledger_path']}")
+    if result["added"]:
+        print(f"新增 {len(result['added'])} 条:")
+        for e in result["added"]:
+            print(f"  + [{e['code']}] {e['query']}")
+    else:
+        print("新增 0 条 (未写文件)")
+    if result["skipped"]:
+        print(f"跳过 {len(result['skipped'])} 条 (已存在于账本 / code 不合法或 query 为空):")
+        for e in result["skipped"]:
+            print(f"  - [{e.get('code')}] {e.get('query')!r} ({e.get('reason')})")
+    print(f"账本当前共 {result['ledger_size']} 条样例。")
+    if result["added"]:
+        print("下一步: git diff 确认改动 -> commit -> 部署 Python (populate_restaurant_ops 会重嵌新样例)。")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("--list", action="store_true", help="连库列出晋升候选 (dry-run, 不写任何东西)")
+    ap.add_argument("--counts", action="store_true",
+                    help="机器可读一行输出 (candidates=N recommended=N misses=N)，"
+                         "给跑批脚本解析；不写任何东西")
+    ap.add_argument("--misses", action="store_true",
+                    help="连库列出 delegate:false miss 复盘 (tiered 没接住的问法)")
+    ap.add_argument("--list-routes", action="store_true", dest="list_routes",
+                    help="连库列出 ai_promoted_routes 已晋升短语 (只读)")
+    ap.add_argument(
+        "--apply", metavar="JSON_FILE", default=None,
+        help="人审后的 [{query, code|plan}] JSON -> 写入 ai_promoted_routes 晋升表 (连库)",
+    )
+    ap.add_argument(
+        "--apply-ledger", metavar="JSON_FILE", default=None, dest="apply_ledger",
+        help="人审后的 [{query, code}] JSON -> 写向量样例账本文件 (不连库, 非执行授权)",
+    )
+    ap.add_argument(
+        "--scope", default="global",
+        help="晋升可见范围: global (默认, 全租户) 或某个 factory_id",
+    )
+    ap.add_argument(
+        "--source", default="manual_seed", choices=("manual_seed", "flywheel"),
+        help="晋升来源标记 (写入 ai_promoted_routes.source)",
+    )
+    ap.add_argument(
+        "--reviewed-by", default=None, dest="reviewed_by",
+        help="人审签名, 写入 ai_promoted_routes.reviewed_by",
+    )
+    ap.add_argument(
+        "--llm-review", action="store_true", dest="llm_review",
+        help="人审台第一道: 让模型独立复判每条候选的意图, 与飞轮记录比对后分堆。"
+             "⛔ 只分堆, 不写库、不晋升 —— 每一条仍要人点头 (连库, 会调 LLM)",
+    )
+    ap.add_argument("--min-confidence", type=float, default=0.75, dest="min_confidence")
+    ap.add_argument("--min-count", type=int, default=1, dest="min_count")
+    ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument(
+        # 🔴 2026-08-09: 默认值原为 DEMO_REST —— 那个租户 08-05 已随租户收敛停用
+        #    (9 个账号 is_active=f)。默认值没跟着搬, 于是这份报告一直**站在一个
+        #    已停用租户的视角**看飞轮: 待办清单里混进 8 次「青花椒/有滋有味/
+        #    抖音松叶蟹」这类上一个租户的实体, 而按租户实体过滤又因为
+        #    factory_id 指向 DEMO_REST 而认不出它们是「外租户实体」。
+        #    ⛔ 与那道电池、与 cretas.demo.rest.* 是同一类遗留: **租户搬了,
+        #       指着它的默认值没搬**。
+        "--factory", default="MOCK_REST", dest="factory_id",
+        help="租户 (RLS GUC app.factory_id): fallback log 带 FORCE RLS, 不设则假性 0 行。"
+             "默认 MOCK_REST —— 当前唯一活跃的餐饮租户",
+    )
+    args = ap.parse_args()
+
+    if args.apply:
+        asyncio.run(_apply_routes(
+            args.apply, args.scope, args.source, args.reviewed_by))
+    elif args.apply_ledger:
+        _apply(args.apply_ledger)
+    elif args.list_routes:
+        asyncio.run(_list_routes(args.factory_id))
+    elif args.llm_review:
+        asyncio.run(_llm_review_desk(args.min_count, args.limit, args.factory_id))
+    elif args.list:
+        asyncio.run(_list_candidates(
+            args.min_confidence, args.min_count, args.limit, args.factory_id))
+    elif args.counts:
+        asyncio.run(_counts(
+            args.min_confidence, args.min_count, args.limit, args.factory_id))
+    elif args.misses:
+        asyncio.run(_list_misses(args.limit, args.factory_id))
+    else:
+        ap.print_help()

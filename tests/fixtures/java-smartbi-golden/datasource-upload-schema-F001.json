@@ -1,0 +1,29 @@
+{
+  "code": 200,
+  "message": "Schema detection complete",
+  "data": {
+    "changes": {
+      "datasourceName": "IL TEATRO（西餐厅）2月_商品销量报表.xlsx",
+      "currentVersion": 1,
+      "newVersion": 1,
+      "addedFields": [],
+      "removedFields": [],
+      "modifiedFields": [],
+      "hasChanges": false,
+      "detectedAt": "2026-05-09T10:00:51.311563236",
+      "totalChanges": 0
+    },
+    "suggestedMappings": [],
+    "warningMessage": null,
+    "requiresApproval": false,
+    "affectedReportsCount": 0,
+    "affectedReportNames": null,
+    "estimatedMigrationTime": null,
+    "confirmationRequiredCount": 0
+  },
+  "timestamp": "2026-05-09T10:00:51.311854135",
+  "success": true,
+  "actionHint": null,
+  "severity": null,
+  "hintTarget": null
+}

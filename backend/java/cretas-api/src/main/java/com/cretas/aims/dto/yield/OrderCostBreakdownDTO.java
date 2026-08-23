@@ -1,0 +1,264 @@
+package com.cretas.aims.dto.yield;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * 订单级单盒成本拆分 — 单一权威服务输出 (T1 批次谱系遍历 + T2 上游成本回溯).
+ *
+ * <p>原料成本 = 沿 {@link com.cretas.aims.entity.MaterialConsumption} 边递归回溯到上游各批次的
+ * 实测成本之和 (混批按实测投料量×各自单价精确归集, 非按重量糊平均); 人工/调料/包装来自该批
+ * {@code ProductionReport} 逐道报工。单盒成本 = 总成本 ÷ 盒数。
+ *
+ * <p>价格脱敏: 无 {@code procurement:price:view} 权限时所有金额字段返回 null (masked=true),
+ * 仅保留投料量/占比结构 (与 MaterialConsumptionController 一致的红线策略)。
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class OrderCostBreakdownDTO {
+
+    private String orderId;
+    /** Business order number (for example SO-20260720-0001), distinct from source order UUID. */
+    private String orderNumber;
+    private String productionPlanId;
+    private String productionPlanNumber;
+    private String finishedBatchNumber;
+    private String productSku;
+    private String productName;
+    private String pinnedBomRecipeId;
+    private Integer pinnedBomVersion;
+    private Long pinnedWorkflowId;
+    private Integer pinnedWorkflowVersion;
+    private LocalDateTime calculatedAt;
+    /** COMPLETE / PARTIAL / NO_DATA. */
+    private String calculationStatus;
+    private BigDecimal outputQuantity;
+    private String outputUnit;
+    private BigDecimal netWeightGramsPerUnit;
+    private BigDecimal convertedOutputKg;
+    private BigDecimal costDenominatorQuantity;
+    private String costDenominatorUnit;
+    /** 产出盒数 (Σ 成品批次 quantity)。 */
+    private Integer boxCount;
+
+    // ---- 金额 (masked 时为 null) ----
+    /** 原料成本 = 上游各批 traced 成本之和 (混批闭环)。 */
+    private BigDecimal rawMaterialCost;
+    private BigDecimal laborCost;
+    private BigDecimal seasoningCost;
+    private BigDecimal packagingCost;
+    private BigDecimal equipmentCost;
+    private String equipmentCostStatus;
+    private BigDecimal otherCost;
+    private String otherCostStatus;
+    /**
+     * 外部库存投料成本 (半成品 SFI + 成品 FG 作投料; R4 2026-07-04)。
+     *
+     * <p>SFI/FG 投料边 <b>不写</b> {@link com.cretas.aims.entity.MaterialConsumption} (投料的是常驻外部
+     * 库存, 非本计划在制 WIP), 故原料谱系遍历 {@code traceCost} 看不到它们 → 此前 totalCost 对 SFI/FG
+     * 投料成本失明, 与小结算的 {@code FinishedGoodsBatch.unitCost} (含 SFI/FG 投料) 差一个投料桶。此字段
+     * 补齐: Σ(feedInSourceUnit × 输入 SFI/FG.unitCost), 与小结 {@code computeOutputUnitCost} 同口径同源服务。
+     *
+     * <p>null = 该批无 SFI/FG 投料 (常规生产, 零回归) 或 脱敏 或 {@link #costComplete}=false (成本不完整)。
+     */
+    private BigDecimal semiFeedCost;
+    private BigDecimal totalCost;
+    private BigDecimal perBoxCost;
+    /**
+     * 已知成本合计 = 当前已采集到的各成本桶之和, {@link #costComplete}=false 时<b>也照常给值</b>
+     * (2026-07-30 Steve 拍板: 设备/其他成本不强制填写, 填了就算进去)。
+     *
+     * <p>⚠️ 与 {@link #totalCost} 的分工必须守住:
+     * <ul>
+     *   <li>{@link #totalCost} = <b>完整</b>成本, 缺任一项即 null。成品入库 unitCost / COGS / 毛利
+     *       只认它 —— 用不完整的数写这些账会系统性低估成本、虚增毛利。</li>
+     *   <li>本字段 = <b>展示用</b>的已知合计, 永远伴随 {@link #calculationStatus} 与
+     *       {@link #missingCostItems} 一起呈现, 让读数的人知道它不含什么。</li>
+     * </ul>
+     * 脱敏时置 null。
+     */
+    private BigDecimal knownCostSubtotal;
+    /** 已知成本合计 ÷ 产出盒数; 口径同 {@link #knownCostSubtotal} (不完整也给值)。 */
+    private BigDecimal knownPerBoxCost;
+
+    // ---- 副产回收 (肥油/料头等可变现副产物; masked 时为 null) ----
+    /** 副产回收价值 = Σ 各道报工副产物(quantity×单价); 无单价的副产物按 0 (诚实, 不臆造). */
+    private BigDecimal byproductCredit;
+    /** 净成本 = 总成本 − 副产回收 (副产物变现冲减主产品成本)。 */
+    private BigDecimal netTotalCost;
+    /** 单盒净成本 = 净成本 ÷ 盒数。 */
+    private BigDecimal netPerBoxCost;
+    /** 副产物明细 (跨批次跨道按 名称+单位 归集)。 */
+    private List<ByproductLine> byproducts;
+
+    // ---- 留样/料头 (AUDIT-006) ----
+    /** 留样数 (产出但不可售; Σ各道, 通常仅末道)。物理量, 不脱敏。 */
+    private Integer sampleRetainCount;
+    /** 损耗/料头量 (仅展示; 已体现在出成率, 不二次扣成本; 无则 null)。物理量, 不脱敏。 */
+    private BigDecimal wasteQuantity;
+    /** 可售盒数 = 产出盒数 − 留样数。物理量, 不脱敏。 */
+    private Integer sellableBoxCount;
+    /** 单盒可售成本 = 净成本 ÷ 可售盒数 (留样成本由售出盒承担; masked 时 null)。 */
+    private BigDecimal sellablePerBoxCost;
+
+    /** 包装明细 (AUDIT-002: 膜/气体/标签/其他, 按名称归集; 各项 cost 之和=packagingCost; masked 时 cost null)。 */
+    private List<PackagingItem> packagingDetail;
+
+    /** 辅料按锅分摊 (AUDIT-004: 一锅辅料被多批共用时按产出量分摊到本批; masked 时金额 null)。 */
+    private List<AuxiliaryAllocation> auxiliaryAllocations;
+
+    /** 价格是否被脱敏 (无价格查看权限)。 */
+    private boolean priceMasked;
+    /** 遍历是否完整 (无该订单批次/无消耗边时 false, 诚实空)。 */
+    private boolean hasData;
+    /**
+     * 成本是否完整 (R4 2026-07-04, 诚实 null)。false = 存在<b>未计价</b>的 SFI/FG 投料
+     * (输入半成品/成品 unitCost 未知, 或计数单位来源缺每盒克重无法折算) → 整批产出成本未知,
+     * {@code totalCost/perBoxCost/netTotalCost/netPerBoxCost/sellablePerBoxCost/semiFeedCost} 全置 null
+     * (与小结 {@code computeOutputUnitCost} 诚实 null 同口径, 绝不伪造 ¥0 稀释)。已知的
+     * {@code rawMaterialCost/laborCost/seasoningCost/packagingCost} 仍保留展示。默认 true。
+     */
+    @Builder.Default
+    private boolean costComplete = true;
+
+    /** Number and identities of unknown cost inputs; never represented as zero. */
+    private Integer missingCostItemCount;
+    private List<String> missingCostItems;
+
+    /** Auditable quantity x price/rate ledgers. */
+    private List<RawMaterialDetail> rawMaterialDetails;
+    private List<PackagingDetail> packagingDetails;
+    private List<LaborDetail> laborDetails;
+
+    /** 上游来源明细 (混批各批次)。 */
+    private List<SourceCost> sources;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SourceCost {
+        private String batchId;
+        private String batchName;
+        private BigDecimal quantity;
+        private String unit;
+        /** masked 时 null。 */
+        private BigDecimal unitPrice;
+        /** masked 时 null (= 该上游链 traced 累计成本)。 */
+        private BigDecimal cost;
+        /** 按投料量占比 % (scale 1)。 */
+        private BigDecimal weightSharePct;
+        /** 按成本占比 % (scale 1); masked 时 null。异质单价下 ≠ weightSharePct。 */
+        private BigDecimal costSharePct;
+        /** 谱系深度 (1=直接上游; >1=多级回溯)。 */
+        private Integer depth;
+    }
+
+    /** 副产物归集行 (名称+单位 维度跨批次汇总)。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ByproductLine {
+        private String name;
+        private BigDecimal quantity;
+        private String unit;
+        /** 单价 (元/单位); 报工未录则 null; masked 时 null。 */
+        private BigDecimal unitPrice;
+        /** 变现价值 = quantity × unitPrice (报工未录单价则 null/0); masked 时 null。 */
+        private BigDecimal value;
+    }
+
+    /** 包装明细项 (AUDIT-002: 膜/气体/标签/其他, 按名称跨批次归集)。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PackagingItem {
+        private String name;
+        /** 该包材项成本 (元); masked 时 null。 */
+        private BigDecimal cost;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RawMaterialDetail {
+        private String batchNumber;
+        private String materialCode;
+        private String materialName;
+        private BigDecimal quantity;
+        private String unit;
+        private BigDecimal unitPrice;
+        private String priceSource;
+        private BigDecimal amount;
+        private String collectionStatus;
+        private String missingReason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PackagingDetail {
+        private String materialCode;
+        private String materialName;
+        private BigDecimal quantity;
+        private String unit;
+        private BigDecimal unitPrice;
+        private String priceSource;
+        private BigDecimal amount;
+        private String collectionStatus;
+        private String missingReason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LaborDetail {
+        private Integer processOrder;
+        private String processName;
+        private Integer workerCount;
+        private String startTime;
+        private String endTime;
+        private Integer durationMinutes;
+        private Integer laborMinutes;
+        private BigDecimal laborHours;
+        private BigDecimal hourlyRate;
+        private String rateSource;
+        private BigDecimal amount;
+        private String collectionStatus;
+        private String missingReason;
+    }
+
+    /** 辅料按锅分摊 (AUDIT-004)。本批 share = potTotalCost × batchOutput ÷ potTotalOutput。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AuxiliaryAllocation {
+        private String potNo;
+        /** 分摊方式 BY_OUTPUT/FIXED_RATIO。 */
+        private String method;
+        /** 该锅辅料总成本 (元); masked 时 null。 */
+        private BigDecimal potTotalCost;
+        /** 该锅总产出量 (用于分摊基数); 物理量, 不脱敏。 */
+        private BigDecimal potTotalOutput;
+        /** 本批本道产出量; 物理量, 不脱敏。 */
+        private BigDecimal batchOutput;
+        /** 本批分摊到的辅料成本 (元); masked 时 null。 */
+        private BigDecimal batchShare;
+        /** 本批分摊占比 % (scale 1); 物理量, 不脱敏。 */
+        private BigDecimal batchSharePct;
+    }
+}

@@ -1,0 +1,380 @@
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useDraftReportStore, DraftReport } from '../../store/draftReportStore';
+import { processingApiClient } from '../../services/api/processingApiClient';
+import { handleError } from '../../utils/errorHandler';
+import type { WSHomeStackParamList } from '../../types/navigation';
+
+type NavProp = NativeStackNavigationProp<WSHomeStackParamList>;
+
+const DraftReportsScreen: React.FC = () => {
+  const navigation = useNavigation<NavProp>();
+  const insets = useSafeAreaInsets();
+  const { drafts, removeDraft, clearDrafts } = useDraftReportStore();
+
+  const handleRestore = (draft: DraftReport) => {
+    const draftType = draft.draftType || 'PROGRESS';
+    if (draftType === 'TEAM_BATCH') {
+      // Navigate to team batch report — data will need to be re-entered
+      // since TeamBatchReport doesn't accept params
+      Alert.alert(
+        '恢复草稿',
+        '将打开班组报工页面，部分数据需手动填写',
+        [
+          { text: '取消', style: 'cancel' },
+          { text: '前往', onPress: () => navigation.navigate('TeamBatchReport') },
+        ],
+      );
+    } else {
+      // Navigate to DynamicReport with the appropriate type
+      const reportType = draftType === 'HOURS' ? 'HOURS' : 'PROGRESS';
+      navigation.navigate('DynamicReport', { reportType });
+    }
+  };
+
+  const handleDelete = (draft: DraftReport) => {
+    Alert.alert(
+      '删除草稿',
+      `确定删除批次 ${draft.batchNumber || draft.batchId} 的草稿？`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: () => removeDraft(draft.id),
+        },
+      ],
+    );
+  };
+
+  const handleClearAll = () => {
+    if (drafts.length === 0) return;
+    Alert.alert('清空所有草稿', `确定删除全部 ${drafts.length} 条草稿？`, [
+      { text: '取消', style: 'cancel' },
+      { text: '清空', style: 'destructive', onPress: clearDrafts },
+    ]);
+  };
+
+  const formatTime = (isoString: string) => {
+    const d = new Date(isoString);
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hour = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${month}-${day} ${hour}:${min}`;
+  };
+
+  const getDraftTypeLabel = (type?: string) => {
+    switch (type) {
+      case 'HOURS': return '工时上报';
+      case 'TEAM_BATCH': return '班组报工';
+      default: return '进度上报';
+    }
+  };
+
+  const renderItem = ({ item }: { item: DraftReport }) => {
+    return (
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={styles.cardHeaderLeft}>
+            <MaterialCommunityIcons name="file-clock-outline" size={20} color="#F59E0B" />
+            <Text style={styles.batchNumber}>{item.batchNumber || item.productName || '未关联批次'}</Text>
+            <View style={styles.draftTypeBadge}>
+              <Text style={styles.draftTypeText}>{getDraftTypeLabel(item.draftType)}</Text>
+            </View>
+          </View>
+          <Text style={styles.timestamp}>{formatTime(item.createdAt)}</Text>
+        </View>
+
+        {item.productName && (
+          <Text style={styles.productName}>{item.productName}</Text>
+        )}
+
+        {item.outputQuantity > 0 && (
+          <View style={styles.dataRow}>
+            <View style={styles.dataItem}>
+              <Text style={styles.dataLabel}>产出</Text>
+              <Text style={styles.dataValue}>{item.outputQuantity}</Text>
+            </View>
+            <View style={styles.dataItem}>
+              <Text style={styles.dataLabel}>合格</Text>
+              <Text style={[styles.dataValue, { color: '#10B981' }]}>{item.goodQuantity}</Text>
+            </View>
+            <View style={styles.dataItem}>
+              <Text style={styles.dataLabel}>缺陷</Text>
+              <Text style={[styles.dataValue, item.defectQuantity > 0 ? { color: '#EF4444' } : {}]}>
+                {item.defectQuantity}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {item.notes ? (
+          <Text style={styles.notes} numberOfLines={2}>{item.notes}</Text>
+        ) : null}
+
+        <View style={styles.cardActions}>
+          <TouchableOpacity
+            style={styles.restoreButton}
+            onPress={() => handleRestore(item)}
+          >
+            <MaterialCommunityIcons name="pencil-outline" size={16} color="#4F46E5" />
+            <Text style={styles.restoreText}>恢复编辑</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={() => handleDelete(item)}
+          >
+            <MaterialCommunityIcons name="delete-outline" size={16} color="#EF4444" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity testID="header-back-btn" onPress={() => navigation.goBack()} style={styles.backButton}>
+          <MaterialCommunityIcons name="arrow-left" size={24} color="#1a1a1a" />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>待同步草稿</Text>
+          {drafts.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{drafts.length}</Text>
+            </View>
+          )}
+        </View>
+        {drafts.length > 0 && (
+          <TouchableOpacity onPress={handleClearAll}>
+            <Text style={styles.clearAllText}>清空</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {drafts.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <MaterialCommunityIcons name="file-edit-outline" size={64} color="#D1D5DB" />
+          <Text style={styles.emptyTitle}>暂无保存的草稿</Text>
+          <Text style={styles.emptySubtitle}>在报工页面可点击「保存草稿」暂存未完成的报工</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={drafts}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f7fa',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  backButton: {
+    padding: 4,
+    marginRight: 8,
+  },
+  headerCenter: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  countBadge: {
+    backgroundColor: '#F59E0B',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  countBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  clearAllText: {
+    color: '#EF4444',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  listContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#F59E0B',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  batchNumber: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  timestamp: {
+    fontSize: 12,
+    color: '#999',
+  },
+  productName: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 10,
+  },
+  dataRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 10,
+  },
+  dataItem: {
+    flex: 1,
+    backgroundColor: '#f9fafb',
+    borderRadius: 8,
+    padding: 10,
+    alignItems: 'center',
+  },
+  dataLabel: {
+    fontSize: 11,
+    color: '#999',
+    marginBottom: 4,
+  },
+  dataValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  notes: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 10,
+    fontStyle: 'italic',
+  },
+  cardActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  draftTypeBadge: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  draftTypeText: {
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  restoreButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF',
+    gap: 6,
+  },
+  restoreText: {
+    color: '#4F46E5',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  resubmitButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4F46E5',
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  resubmitText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+    backgroundColor: '#FEF2F2',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 80,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    marginTop: 16,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#D1D5DB',
+    marginTop: 4,
+  },
+});
+
+export default DraftReportsScreen;

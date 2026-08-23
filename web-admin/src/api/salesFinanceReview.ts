@@ -1,0 +1,379 @@
+/**
+ * Sprint4-H F-AR-1 — 销售订单成本与审批进度只读 API client.
+ *
+ * <p>对接 SalesController 端点 (Sprint 2-J + Sprint4-H):
+ *   - GET  /orders/by-status?status=PENDING_FINANCE_REVIEW
+ *   - GET  /orders/{id}
+ *   - GET  /orders/{id}/cost-breakdown  (新增, Sprint4-H F-AR-1)
+ *
+ * cost-breakdown 后端 @RequirePermission({"finance:read_write", "finance:read", "sales:read_write"}).
+ * 审批写操作统一由个人 OA 工作台发起，本客户端不再暴露业务页直批函数。
+ */
+import { get } from './request';
+import type { ApiResponse } from '@/types/api';
+
+// ============================================================================
+// 类型
+// ============================================================================
+
+export type SalesOrderStatus =
+  | 'DRAFT'
+  | 'CONFIRMED'
+  | 'PENDING_FINANCE_REVIEW'
+  | 'FINANCE_APPROVED'
+  | 'FINANCE_REJECTED'
+  | 'IN_PRODUCTION'
+  | 'PARTIAL_SHIPPED'
+  | 'SHIPPED'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export interface SalesOrderSummary {
+  id: string;
+  factoryId: string;
+  orderNumber: string;
+  customerId: string;
+  customerName?: string | null;
+  status: SalesOrderStatus;
+  totalAmount: number | null;
+  orderDate: string;
+  requiredDeliveryDate?: string | null;
+  salesperson?: string | null;
+  remark?: string | null;
+  financeReviewedBy?: number | null;
+  financeReviewedAt?: string | null;
+  financeReviewNotes?: string | null;
+  estimatedCost?: number | null;
+  estimatedProfit?: number | null;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
+/**
+ * 销售订单统一 OA 进度。该读模型来自持久化 WorkflowEngine 实例，
+ * 不能由前端按金额或订单状态推测。
+ */
+export interface SalesOrderApprovalProgress {
+  hasInstance: boolean;
+  instanceId: string | null;
+  workflowId: string | null;
+  status: string | null;
+  currentNodeIds: string[];
+  currentNodeNames: string[];
+  approverRoles: string[];
+  assignees: string[];
+  initiatedBy: string | null;
+  initiatedAt: string | null;
+  completedAt: string | null;
+  stayMinutes: number | null;
+  deepLink: string | null;
+  message: string | null;
+}
+
+export interface LineCostBreakdown {
+  productId: string | null;
+  productName: string | null;
+  quantity: number;
+  unitPrice: number | null;
+  lineAmount: number | null;
+  bomStandardUnitCost: number | null;
+  bomStandardLineCost: number | null;
+  actualLineCost: number | null;
+  /** SP3: 单位标准成本 (BOM 标准，@PriceSensitive — 非财务角色为 null) */
+  standardCostPerUnit: number | null;
+  /** SP3: 单位实际成本 (@PriceSensitive) */
+  actualCostPerUnit: number | null;
+  /** SP3: 行级成本偏差率 (实际 vs BOM 标准，正值=超支，@PriceSensitive) */
+  variancePct: number | null;
+  /** SP3: 是否在阈值内 (true=未超支，false=超支，null=数据不足) */
+  belowThreshold: boolean | null;
+}
+
+export interface FinanceCostBreakdown {
+  totalAmount: number | null;
+  bomStandardCost: number | null;
+  currentEstimatedCost: number | null;
+  currentEstimatedProfit: number | null;
+  actualCost: number | null;
+  actualProfit: number | null;
+  profitMarginEstimated: number | null;
+  profitMarginActual: number | null;
+  dataSourceHint: string | null;
+  lines: LineCostBreakdown[];
+  /** SP3: 整单成本偏差率 (实际 vs BOM 标准，@PriceSensitive) */
+  variancePct: number | null;
+  /** SP3: 整单成本偏差绝对值 (@PriceSensitive) */
+  varianceAbsolute: number | null;
+  /** SP3: 是否在工厂方差阈值内 (true=未超支，false=超支，null=数据不足) */
+  belowThreshold: boolean | null;
+  /** SP3: 超支时的告警信息 (null=未超支或数据不足) */
+  alarmMessage: string | null;
+  /**
+   * P1 #32: 委外加工费独立科目 (@PriceSensitive).
+   * 六扇门有委外工序时此字段单列委外加工成本.
+   * 当前 WorkProcess/WorkProcessTask 无 is_outsourced 列 → 恒为 null (诚实占位).
+   * 待后端 WorkProcess 接入委外费用数据后自动填充.
+   */
+  processingFee: number | null;
+  /**
+   * SP12: 实际成本三分拆分 (材料逐料 + 人工 + 制费).
+   * 来自生产真实领料 (MaterialConsumption) + 报工 (批次 laborCost/equipmentCost).
+   * 诚实 null: 订单未投产 / 未领料 / 未报工时该对象为 null 或各组分 null.
+   */
+  actualCostSplit: ActualCostSplit | null;
+}
+
+/** SP12: 逐原料/辅料/包材实际领料明细 (来自 MaterialConsumption 按物料聚合). */
+export interface MaterialCostLine {
+  materialTypeId: string | null;
+  materialName: string | null;
+  category: string | null;
+  /** 实际领料用量合计 (Σ quantity). */
+  actualQuantity: number | null;
+  unit: string | null;
+  /** 移动均价单价 (= amount / actualQuantity, @PriceSensitive). */
+  unitPrice: number | null;
+  /** 该物料实际金额合计 (Σ totalCost, @PriceSensitive). */
+  amount: number | null;
+}
+
+/**
+ * SP12: 实际成本三分拆分 (材料 / 人工 / 制费).
+ * 金额字段 @PriceSensitive — 非财务/管理角色脱敏为 null.
+ */
+export interface ActualCostSplit {
+  /** 材料成本合计 (= Σ materials[].amount). 无领料时 null. */
+  materialCost: number | null;
+  /** 人工成本合计 (= Σ 关联批次 laborCost). 无报工时 null. */
+  laborCost: number | null;
+  /** 制费合计 (= Σ 关联批次 equipmentCost + otherCost). 无数据时 null. */
+  overheadCost: number | null;
+  /** 实际成本合计 (= 非 null 组分之和). 全 null 时 null. */
+  totalActualCost: number | null;
+  /** 关联到的生产批次数 (0=未投产). */
+  batchCount: number | null;
+  /** 逐料实际领料明细. */
+  materials: MaterialCostLine[];
+  /** 数据缺失提示 (null=数据完整). */
+  dataSourceHint: string | null;
+}
+
+// ============================================================================
+// 六扇门多段生产成本逐段分配 (两点报工成本拆分核心)
+// ============================================================================
+
+/**
+ * 单段成本 (一次两点报工转化 = 一行 SemiFinishedInventory)。
+ * 金额字段 @PriceSensitive — 非财务/管理角色脱敏为 null。
+ */
+export interface MultiStageCost {
+  /** 段序 (processOrder; 升序展示)。 */
+  stageOrder: number | null;
+  /** 半成品编码 (intermediateBatchNo / semiCode)。 */
+  semiCode: string | null;
+  /** 段名 (工序名 / 半成品编码回退)。 */
+  stageName: string | null;
+  /** 本段产出半成品名。 */
+  productName: string | null;
+  /** 本段产出量。 */
+  producedQuantity: number | null;
+  /** 本段产出单位。 */
+  producedUnit: string | null;
+  /** 本段领用的上游半成品量 (首段无上游 → null)。 */
+  upstreamConsumedQuantity: number | null;
+  /** 本段领用的上游半成品累积成本 (@PriceSensitive)。 */
+  upstreamCarriedCost: number | null;
+  /** 本段材料消耗合计 (@PriceSensitive, 无领料 → null)。 */
+  materialCost: number | null;
+  /** 本段人工成本 (@PriceSensitive, 两点报工登下一期未结 → null)。 */
+  laborCost: number | null;
+  /** 人工为 null 时的说明 (登下一期)。null = 已结。 */
+  laborHint: string | null;
+  /** 本段制费 (@PriceSensitive, 无数据 → null)。 */
+  overheadCost: number | null;
+  /** 本段段小计 = 本段新增 (料+人工+制费), 不含上游累积 (@PriceSensitive)。 */
+  stageSubtotal: number | null;
+  /** 产出半成品移动均价 (#713 逐段滚动累积, @PriceSensitive)。 */
+  outputUnitCost: number | null;
+  /** 本段累积成本 (上游 + 本段全部投入, @PriceSensitive)。 */
+  accumulatedCost: number | null;
+  /** 本段折每盒成品贡献 (@PriceSensitive)。 */
+  contributionPerBox: number | null;
+  /** 逐料明细 (本段材料消耗)。 */
+  materials: MaterialCostLine[];
+  /** 本段数据缺失说明。null = 完整。 */
+  stageHint: string | null;
+}
+
+/**
+ * 六扇门多段生产成本逐段分配 — 回溯成品←半成品←原料链。
+ * 契合两点报工 (无逐道工序数据); 人工登下一期时该段诚实 null。
+ */
+export interface MultiStageCostBreakdown {
+  orderId: string | null;
+  /** 产品名称 (成品)。 */
+  productName: string | null;
+  /** 最终成品盒数 (每盒口径分母)。 */
+  finalOutputBoxes: number | null;
+  /** 最终成品产出单位。 */
+  finalOutputUnit: string | null;
+  /** 逐段成本明细 (按 processOrder 升序: 首段=最上游, 末段=成品)。 */
+  stages: MultiStageCost[];
+  /** 全链段消耗合计 (@PriceSensitive)。 */
+  totalChainCost: number | null;
+  /** 全链折每盒成本合计 (@PriceSensitive)。 */
+  totalCostPerBox: number | null;
+  /** 半成品段数 (0=无两点报工 WIP 记录)。 */
+  stageCount: number | null;
+  /** 数据缺失提示 (null=完整)。 */
+  dataSourceHint: string | null;
+}
+
+export interface PageResponse<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+}
+
+/**
+ * 运营报价单摘要 — 三层价格链路: 研发预估价 (OperationalQuote.unitPrice).
+ *
+ * 数据来源: GET /quotes/active?customerId=&productTypeId=
+ * 状态 APPROVED + 未过期 + 同客户同产品的最新有效报价.
+ * unitPrice = @PriceSensitive, 仅财务/管理角色可见 (后端脱敏 null).
+ *
+ * 安全约束 (镜像 EstimatePriceCheckResult doc):
+ *   此接口只在财审页使用 (RBAC = finance:read_write / finance:read).
+ *   销售/仓管角色不应看到 unitPrice 绝对值, 因此该端点需要 finance 权限.
+ */
+export interface OperationalQuoteSummary {
+  id: string;
+  quoteNo: string;
+  productTypeId: string | null;
+  /** 运营报价建议售价 (@PriceSensitive — 非财务角色为 null). */
+  unitPrice: number | null;
+  unit: string | null;
+  status: string;
+  validUntil: string | null;
+  approvedAt: string | null;
+  approverName: string | null;
+}
+
+// ============================================================================
+// API 方法 — baseURL = /api/mobile (request.ts:109)
+// ============================================================================
+
+/** 待财审销售单列表 (PENDING_FINANCE_REVIEW). 分页. */
+export function listPendingFinanceReview(
+  factoryId: string,
+  params: { page?: number; size?: number } = {},
+): Promise<ApiResponse<PageResponse<SalesOrderSummary>>> {
+  return get<PageResponse<SalesOrderSummary>>(
+    `/${factoryId}/sales/orders/by-status`,
+    {
+      params: {
+        status: 'PENDING_FINANCE_REVIEW',
+        page: params.page ?? 1,
+        size: params.size ?? 20,
+      },
+    },
+  );
+}
+
+/** 销售订单详情. */
+export function getOrderDetail(
+  factoryId: string,
+  orderId: string,
+): Promise<ApiResponse<SalesOrderSummary>> {
+  return get<SalesOrderSummary>(`/${factoryId}/sales/orders/${orderId}`);
+}
+
+/** 读取销售订单实际绑定的 OA 实例、当前节点和审批角色。 */
+export function getSalesOrderApprovalProgress(
+  factoryId: string,
+  orderId: string,
+): Promise<ApiResponse<SalesOrderApprovalProgress>> {
+  return get<SalesOrderApprovalProgress>(
+    `/${factoryId}/sales/orders/${orderId}/approval-progress`,
+    { _silent: true } as never,
+  );
+}
+
+/** 财务成本核算 (Sprint4-H F-AR-1) — BOM 标准 + 预估 + 实际 + 利润对比. */
+export function getOrderCostBreakdown(
+  factoryId: string,
+  orderId: string,
+): Promise<ApiResponse<FinanceCostBreakdown>> {
+  return get<FinanceCostBreakdown>(
+    `/${factoryId}/sales/orders/${orderId}/cost-breakdown`,
+  );
+}
+
+/**
+ * 六扇门多段生产成本逐段分配 — 回溯成品←半成品←原料链, 逐段拆 料/人工/制费
+ * + 半成品 unitCost 逐段累积 + 每盒贡献 (两点报工成本拆分核心)。
+ */
+export function getOrderMultiStageCost(
+  factoryId: string,
+  orderId: string,
+): Promise<ApiResponse<MultiStageCostBreakdown>> {
+  return get<MultiStageCostBreakdown>(
+    `/${factoryId}/sales/orders/${orderId}/multi-stage-cost`,
+  );
+}
+
+// ============================================================================
+// B3 售价趋势
+// ============================================================================
+
+/** 单条售价趋势记录. */
+export interface SalesPriceTrendDTO {
+  orderNumber: string;
+  orderDate: string; // ISO date string, e.g. "2026-05-20"
+  unitPrice: number | null;
+  quantity: number | null;
+  unit: string | null;
+}
+
+/**
+ * B3 获取产品最近 N 笔成交售价 (财审辅助).
+ *
+ * @param factoryId     工厂 ID
+ * @param productTypeId 产品类型 ID
+ * @param limit         最多条数，默认 10
+ */
+export function getProductPriceTrend(
+  factoryId: string,
+  productTypeId: string,
+  limit = 10,
+): Promise<ApiResponse<SalesPriceTrendDTO[]>> {
+  return get<SalesPriceTrendDTO[]>(`/${factoryId}/sales/orders/price-trend`, {
+    params: { productTypeId, limit },
+  });
+}
+
+// ============================================================================
+// 三层价格: 运营报价 (研发预估价)
+// ============================================================================
+
+/**
+ * 获取指定产品 + 客户的有效运营报价 (APPROVED + 未过期).
+ * 用于财审页三层价格同屏对比:
+ *   ① 研发预估价 (OperationalQuote.unitPrice) ← 本端点
+ *   ② 下单价     (SalesOrderItem.unitPrice)
+ *   ③ 实际成本价  (LineCostBreakdown.actualCostPerUnit)
+ *
+ * 端点: GET /quotes/active?customerId=&productTypeId=
+ * 权限: 财审页已有 finance:read_write / finance:read — 不额外要求.
+ */
+export function getActiveQuotes(
+  factoryId: string,
+  customerId: string,
+  productTypeId: string,
+): Promise<ApiResponse<OperationalQuoteSummary[]>> {
+  return get<OperationalQuoteSummary[]>(`/${factoryId}/quotes/active`, {
+    params: { customerId, productTypeId },
+  });
+}

@@ -1,0 +1,174 @@
+package com.cretas.aims.service;
+
+import com.cretas.aims.dto.common.ImportResult;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.MaterialSuggestDTO;
+import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
+import com.cretas.aims.dto.material.RawMaterialTypeDTO;
+import com.cretas.aims.entity.RawMaterialType;
+import java.io.InputStream;
+import java.util.List;
+/**
+ * 原材料类型服务接口
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2025-01-09
+ */
+public interface RawMaterialTypeService {
+    /**
+     * 创建原材料类型
+     */
+    RawMaterialTypeDTO createMaterialType(String factoryId, RawMaterialTypeDTO dto);
+     /**
+     * 更新原材料类型
+      */
+    RawMaterialTypeDTO updateMaterialType(String factoryId, String id, RawMaterialTypeDTO dto);
+
+    /**
+     * 只翻转「是不是副产」这一个标记, 不碰任何其它字段。
+     *
+     * <p>为什么不复用 {@link #updateMaterialType} 的部分更新: 那条路的 DTO
+     * ({@code RawMaterialTypeDTO}) 带 {@code @NotBlank name}, 而控制器上的 {@code @Valid}
+     * **在进 service 之前**就跑完了。于是「只发 isByproduct 一个字段」的请求恒定被
+     * 400「原材料名称不能为空」挡在门外 —— service 里那套 null-tolerant 分支根本到不了。
+     * 画布上「标记并选入」按钮点不动就是这个原因。
+     */
+    RawMaterialTypeDTO markByproduct(String factoryId, String id, boolean isByproduct);
+     /**
+     * 删除原材料类型
+      */
+    void deleteMaterialType(String factoryId, String id);
+     /**
+     * 获取原材料类型详情
+      */
+    RawMaterialTypeDTO getMaterialTypeById(String factoryId, String id);
+     /**
+     * 获取原材料类型列表（分页）
+      */
+    PageResponse<RawMaterialTypeDTO> getMaterialTypes(String factoryId, PageRequest pageRequest);
+
+    PageResponse<RawMaterialTypeDTO> filterMaterialTypes(String factoryId, Long classificationId,
+                                                         String keyword, PageRequest pageRequest);
+
+    /**
+     * P11: 按物料大类(原料/辅料/包材)分页查询. materialKind 对应 category 字段.
+     */
+    PageResponse<RawMaterialTypeDTO> getMaterialTypesByKind(String factoryId, String materialKind, PageRequest pageRequest);
+
+     /**
+     * 获取所有激活的原材料类型
+      */
+    List<RawMaterialTypeDTO> getActiveMaterialTypes(String factoryId);
+
+    List<RawMaterialTypeDTO> getMaterialTypesByPrimaryCode(String factoryId, String primaryCode);
+     /**
+     * 根据类别获取原材料类型
+      */
+    List<RawMaterialTypeDTO> getMaterialTypesByCategory(String factoryId, String category);
+     /**
+     * 根据存储类型获取原材料类型
+      */
+    List<RawMaterialTypeDTO> getMaterialTypesByStorageType(String factoryId, String storageType);
+     /**
+     * 搜索原材料类型
+      */
+    PageResponse<RawMaterialTypeDTO> searchMaterialTypes(String factoryId, String keyword, PageRequest pageRequest);
+     /**
+     * 获取原材料类别列表
+      */
+    List<String> getMaterialCategories(String factoryId);
+     /**
+     * 获取库存预警的原材料
+      */
+    List<RawMaterialTypeDTO> getLowStockMaterials(String factoryId);
+     /**
+     * 批量更新状态
+      */
+    void updateMaterialTypesStatus(String factoryId, List<String> ids, Boolean isActive);
+     /**
+     * 检查原材料编码是否存在
+      */
+    boolean checkCodeExists(String factoryId, String code, String excludeId);
+
+    /**
+     * 导出原材料类型列表
+     */
+    byte[] exportMaterialTypes(String factoryId);
+
+    /**
+     * 生成原材料类型导入模板
+     */
+    byte[] generateImportTemplate();
+
+    /**
+     * 从Excel文件批量导入原材料类型
+     */
+    ImportResult<RawMaterialType> importMaterialTypesFromExcel(String factoryId, InputStream inputStream);
+
+    /**
+     * 初始化默认原材料类型
+     */
+    int initializeDefaults(String factoryId);
+
+    /**
+     * 统计原材料类型数量
+     */
+    long countMaterialTypes(String factoryId, Boolean isActive);
+
+    /**
+     * 按名称+类别建议单位.
+     * 取相似历史原料(同 category, name 含 keyword)中最近创建的一条返回其 unit;
+     * 无匹配时返回 null, 由前端保留默认值.
+     */
+    String suggestUnit(String factoryId, String name, String category);
+
+    /**
+     * T159-B-codegen: 预览将为该 category 生成的原料编码 (不写库).
+     * 前缀规则: 原料→YL, 肉类→RL, 包材→BC, 其他→WL.
+     * 序号: 扫 raw_material_types.code 取同前缀最大数字后缀+1, 零填充3位.
+     *
+     * @return 例如 "YL006"
+     */
+    String previewMaterialCode(String factoryId, String category);
+
+    /** Preview the next short code and optionally validate an independent taxonomy selection. */
+    MaterialCodePreviewDTO previewMaterialCodeContract(
+            String factoryId, String category, Long classificationId);
+
+    /**
+     * T159-B-codegen: 多字段智能建议 (扩展自 suggestUnit).
+     * 按 name+category 找最相似历史原料, 返回 unit/category/storageType/shelfLifeDays/
+     * level1PerLevel2/level2Unit 全量. 任何字段无匹配时返回 null.
+     *
+     * @return null-safe DTO (所有字段可为 null); 无任何匹配时各字段均为 null.
+     */
+    MaterialSuggestDTO suggestFields(String factoryId, String name, String category);
+
+    /**
+     * 按简短料号前缀搜索物料.
+     * 最多返回 50 条; 工厂隔离.
+     *
+     * @param factoryId  工厂ID
+     * @param codePrefix 编码前缀 (如 "001001")
+     * @return 最多50条匹配物料 DTO
+     */
+    List<RawMaterialTypeDTO> searchByCodePrefix(String factoryId, String codePrefix);
+
+    /**
+     * R14: 按单价范围筛选原材料 (研发试样选料辅助).
+     *
+     * <p>返回 unitPrice 在 [minPrice, maxPrice] 区间内的物料, 按单价升序.
+     * minPrice / maxPrice 均可 null (null = 无下/上限). 最多返回 100 条.
+     * unitPrice 为 null 的物料 (无报价) 不进候选列表.
+     *
+     * @param factoryId 工厂ID
+     * @param minPrice  单价下限 (含, nullable)
+     * @param maxPrice  单价上限 (含, nullable)
+     * @return 候选物料列表 (按 unitPrice ASC, 最多100条)
+     */
+    List<RawMaterialTypeDTO> suggestMaterialsByPriceRange(String factoryId,
+                                                          java.math.BigDecimal minPrice,
+                                                          java.math.BigDecimal maxPrice);
+}

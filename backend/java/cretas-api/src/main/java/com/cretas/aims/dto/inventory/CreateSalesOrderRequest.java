@@ -1,0 +1,222 @@
+package com.cretas.aims.dto.inventory;
+
+import com.cretas.aims.dto.sales.ExtraFeeItem;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class CreateSalesOrderRequest {
+
+    @NotBlank(message = "客户ID不能为空")
+    @Size(max = 191, message = "客户ID长度不能超过191个字符")
+    private String customerId;
+
+    private LocalDate orderDate;
+
+    private LocalDate requiredDeliveryDate;
+
+    @Size(max = 500, message = "发货地址长度不能超过500个字符")
+    private String deliveryAddress;
+
+    private BigDecimal discountAmount;
+
+    @Size(max = 5000, message = "备注长度不能超过5000个字符")
+    private String remark;
+
+    @Size(max = 100, message = "业务员长度不能超过100个字符")
+    private String salesperson;
+
+    /** 关联报价单 ID (OperationalQuote.id), 实现报价→订单数据联动 */
+    @Size(max = 191, message = "报价单ID长度不能超过191个字符")
+    private String quoteId;
+
+    private Boolean shippingIncluded;
+
+    private BigDecimal shippingFee;
+
+    /** 其他费用 (装卸/包装/加急等) */
+    private List<ExtraFeeItem> extraFees;
+
+    // ==================== Sprint 4 W2 S-INVOICE-CLIENT-1 Option 3 三层 default 链 (第 2 层 SO override) ====================
+
+    /** 单据级默认税率 (%) — 未传 → SO 创建时 prefill 自 customer.defaultTaxRate.
+     *  传值表示用户单据级临时覆盖客户级 default (e.g. 客户 13%, 此单 9%). */
+    private BigDecimal defaultTaxRate;
+
+    /** 单据级默认开票类型 — 同 defaultTaxRate, 未传 → fallback 自 customer.defaultInvoiceType */
+    private com.cretas.aims.entity.enums.InvoiceType defaultInvoiceType;
+
+    /**
+     * P3 多仓: 外部渠道采购单标题 (如 "0601-熟食T+2").
+     * 对应 SalesOrder.externalOrderTitle. Nullable — 普通订单不传.
+     */
+    @Size(max = 100, message = "采购单标题长度不能超过100个字符")
+    private String externalOrderTitle;
+
+    @NotNull(message = "加工方式不能为空")
+    private SalesProcessingMode processingMode;
+
+    @NotNull(message = "物料供应方式不能为空")
+    private MaterialSupplyMode materialSupplyMode;
+
+    /**
+     * ORDER_DRIVEN: this order defines later customer-material receipts.
+     * PRESTOCKED: allocate already-produced, unassigned finished goods owned by this customer.
+     */
+    private CustomerStockFulfillmentMode customerStockFulfillmentMode =
+            CustomerStockFulfillmentMode.ORDER_DRIVEN;
+
+    /**
+     * Structured customer-supplied raw-material requirements. Required only for
+     * Required only for order-driven {@code TOLL_PROCESSING + CUSTOMER_SUPPLIED};
+     * forbidden for PRESTOCKED and every other mode.
+     */
+    @Valid
+    private List<SuppliedMaterialRequirementDTO> suppliedMaterials;
+
+    @Valid
+    @NotEmpty(message = "订单行项目不能为空")
+    private List<SalesOrderItemDTO> items;
+
+    /**
+     * Canvas V3: 动态字段 (dual-track)
+     * 用户在 Canvas 里配的自定义字段, 前端通过这个 Map 传过来, 后端通过 DynamicFieldService
+     * 写入 cf_{fieldCode} 物理列. 不配的字段前端不传, 这个 Map 为 null.
+     */
+    private Map<String, Object> customFields;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SuppliedMaterialRequirementDTO {
+
+        @NotBlank(message = "客供物料ID不能为空")
+        @Size(max = 191, message = "客供物料ID长度不能超过191个字符")
+        private String materialTypeId;
+
+        /** Display value from the client; persistence always snapshots the factory material master. */
+        @Size(max = 200, message = "客供物料名称长度不能超过200个字符")
+        private String materialName;
+
+        @NotNull(message = "客供物料预计数量不能为空")
+        @DecimalMin(value = "0.01", message = "客供物料预计数量必须不小于0.01")
+        @Digits(integer = 8, fraction = 2, message = "客供物料预计数量最多8位整数和2位小数")
+        private BigDecimal expectedQuantity;
+
+        @NotBlank(message = "客供物料单位不能为空")
+        @Size(max = 20, message = "客供物料单位长度不能超过20个字符")
+        private String unit;
+
+        @NotNull(message = "客供物料预计到货时间不能为空")
+        private LocalDateTime expectedArrivalAt;
+
+        @NotBlank(message = "客供物料目标仓库不能为空")
+        @Size(max = 64, message = "目标仓库ID长度不能超过64个字符")
+        private String targetWarehouseId;
+
+        /** Optional lineage to a persisted sales-order finished-product line. */
+        @Positive(message = "销售订单行ID必须大于0")
+        private Long salesOrderItemId;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SalesOrderItemDTO {
+
+        @NotBlank(message = "产品ID不能为空")
+        @Size(max = 191, message = "产品ID长度不能超过191个字符")
+        private String productTypeId;
+
+        @Size(max = 200, message = "产品名称长度不能超过200个字符")
+        private String productName;
+
+        @NotNull(message = "数量不能为空")
+        @DecimalMin(value = "0.01", message = "销售数量必须大于0")
+        private BigDecimal quantity;
+
+        @NotBlank(message = "单位不能为空")
+        @Size(max = 20, message = "单位长度不能超过20个字符")
+        private String unit;
+
+        private BigDecimal unitPrice;
+
+        private BigDecimal discountRate;
+
+        private BigDecimal taxRate;
+
+        @Size(max = 5000, message = "备注长度不能超过5000个字符")
+        private String remark;
+
+        @Size(max = 500, message = "规格长度不能超过500个字符")
+        private String specification;
+
+        private BigDecimal boxQuantity;
+
+        /** Required when this SKU has multiple active specs for the selected packaging unit. */
+        @Size(max = 36, message = "包装规格ID长度不能超过36个字符")
+        private String packagingSpecId;
+
+        /**
+         * Source warehouse code used by downstream allocation and shipment.
+         * The API persists the canonical warehouse code while Web renders its configured name.
+         */
+        @Size(max = 20, message = "来源仓库编码长度不能超过20个字符")
+        private String sourceWarehouseCode;
+
+        // ==================== P3 多仓字段 ====================
+
+        /**
+         * 目的仓全名 (如 外部渠道-北仑总仓). Nullable — 普通订单不传.
+         * 对应 SalesOrderItem.destWarehouseName.
+         */
+        @Size(max = 100, message = "目的仓名称长度不能超过100个字符")
+        private String destWarehouseName;
+
+        /** 目的仓 code, 备货看板按此分组. Nullable. */
+        @Size(max = 32, message = "目的仓code长度不能超过32个字符")
+        private String destWarehouseCode;
+
+        /** 外部渠道采购单ID. Nullable. */
+        @Size(max = 64, message = "外部采购单ID长度不能超过64个字符")
+        private String externalPoId;
+
+        /** 商品条码 (外部渠道配送签收). Nullable. */
+        @Size(max = 64, message = "条码长度不能超过64个字符")
+        private String barcode;
+
+        /** 预约入场时段字符串 (如 "8:00-12:00"). Nullable. */
+        @Size(max = 50, message = "预约时段长度不能超过50个字符")
+        private String appointmentTime;
+
+        /** 行级要求到达日期. Nullable. */
+        private LocalDate requiredArrivalDate;
+
+        /** Optional explicit snapshot; when present it must equal the order-header mode. */
+        private SalesProcessingMode processingMode;
+
+        /** Optional explicit snapshot; mixed material supply within one order is not supported yet. */
+        private MaterialSupplyMode materialSupplyMode;
+    }
+}

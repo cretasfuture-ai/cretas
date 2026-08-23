@@ -1,0 +1,33 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Type-check/build artifacts must never be emitted beside Vue/TS sources.
+# origin/main tracks no handwritten JS under web-admin/src; force-add if that changes.
+src/**/*.js
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Sprint 11 D7 — MCP Playwright snapshot files (auto-saved by browser_evaluate)
+indicator-center-snapshot.yml
+*.snapshot.yml
+.playwright-mcp/

@@ -1,0 +1,2198 @@
+/**
+ * Vue Router 配置
+ */
+import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
+import { setupRouterGuards } from './guards';
+import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
+import productionAnalyticsRoutes from './modules/production-analytics';
+import crmRoutes from './modules/crm';
+import opsRoutes from './modules/ops';
+import { buildHubRedirect } from './analysisHubRedirect';
+import { RESTAURANT_DECISION_ROLES } from '@/views/restaurant/restaurantRoleExperience';
+
+const platformAdminOnlyRoles = ['platform_admin'];
+const restaurantDecisionRoles = [
+  'factory_super_admin',
+  'platform_admin',
+  'permission_admin',
+  ...RESTAURANT_DECISION_ROLES,
+];
+
+const financeReviewRoles = [
+  'factory_super_admin',
+  'platform_admin',
+  'procurement_manager',
+  'finance_manager',
+  'dispatcher',
+  'permission_admin',
+  'department_admin',
+];
+
+// 基础路由 - 不需要权限
+const baseRoutes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/login/index.vue'),
+    meta: { requiresAuth: false, title: '登录' }
+  },
+  {
+    path: '/403',
+    name: 'Forbidden',
+    component: () => import('@/views/error/403.vue'),
+    meta: { requiresAuth: false, title: '无权限' }
+  },
+  {
+    path: '/404',
+    name: 'NotFound',
+    component: () => import('@/views/error/404.vue'),
+    meta: { requiresAuth: false, title: '页面不存在' }
+  },
+  {
+    path: '/mobile-only',
+    name: 'MobileOnly',
+    component: () => import('@/views/error/mobile-only.vue'),
+    meta: { requiresAuth: false, title: '请使用移动端' }
+  },
+  // PR #872 (#860 follow-up): 公开分享只读视图. requiresAuth=false → guards.ts
+  // 跳过 auth/permission/role 检查. token 本身 (32 char base62) 是唯一凭证.
+  {
+    path: '/share/:token',
+    name: 'PublicShare',
+    component: () => import('@/views/share/SharePage.vue'),
+    meta: { requiresAuth: false, title: '分享内容' }
+  },
+  // 免登录演示入口: 打开即以演示账号 (qhj_prod) 自动登录并跳转 /dashboard.
+  // requiresAuth=false → guards.ts 跳过认证检查 (见 whiteList)。
+  {
+    path: '/demo',
+    name: 'Demo',
+    component: () => import('@/views/demo/index.vue'),
+    meta: { requiresAuth: false, title: '演示' }
+  }
+];
+
+// 业务路由 - 需要权限
+const businessRoutes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    name: 'Layout',
+    component: () => import('@/components/layout/AppLayout.vue'),
+    redirect: '/dashboard',
+    children: [
+      // Dashboard
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('@/views/dashboard/index.vue'),
+        meta: { requiresAuth: true, title: '首页', icon: 'House', module: 'dashboard' }
+      },
+      {
+        path: 'dashboard/ai-value',
+        name: 'AiValueSummary',
+        component: () => import('@/views/dashboard/AiValueSummary.vue'),
+        meta: { requiresAuth: true, title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' }
+      },
+      {
+        path: 'operations/customer-material-arrivals',
+        name: 'CustomerMaterialArrivals',
+        redirect: '/warehouse/unordered-inbound-applications',
+        meta: {
+          requiresAuth: true,
+          title: '无订单入库申请',
+          icon: 'Connection',
+          module: 'operations',
+          hidden: true,
+        },
+      },
+      {
+        path: 'dashboard/production-progress',
+        name: 'ProductionProgressDashboard',
+        component: () => import('@/views/dashboard/production-progress.vue'),
+        // 🔴 2026-08-22: dashboard -> production。它调 /dashboard/production-progress,
+        //   后端 @RequireModule 要 production, 而 dashboard 模块**人人都有**
+        //   ⇒ equipment_admin / hr_admin / sales_manager / warehouse_worker 全都
+        //     看得见这个看板、点进去必 403。与 /rd、/transfer 同形。
+        meta: { requiresAuth: true, title: '生产进度看板', icon: 'Monitor', module: 'production' }
+      },
+      {
+        path: 'dashboard/widgets',
+        name: 'WidgetDemoDashboard',
+        component: () => import('@/views/dashboard/widget-demo.vue'),
+        meta: { requiresAuth: true, title: '自定义看板', icon: 'Grid', module: 'dashboard' }
+      },
+
+      // 🏪 我的工作台 (Sprint 8 — AI Workdesk demos)
+      {
+        path: 'workdesk/sales-owner',
+        name: 'SalesOwnerWorkdesk',
+        component: () => import('@/views/workdesk/SalesOwnerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '销售老板工作台',
+          icon: 'Sell',
+          module: 'sales'
+        }
+      },
+      // Sprint 8 P2 — 财务主管工作台 (FinanceManagerWorkdesk)
+      // monthly-financial-close Skill 串 8 Tool 输出经营摘要 + 三表跳转 + 应收账龄警告
+      {
+        path: 'workdesk/finance-manager',
+        name: 'FinanceManagerWorkdesk',
+        component: () => import('@/views/workdesk/FinanceManagerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '财务主管工作台',
+          icon: 'Money',
+          module: 'finance'
+        }
+      },
+      // Sprint 8 P3 — 质量主管工作台 (QualityManagerWorkdesk) 食品安全召回闭环
+      // food-safety-recall Skill 串 8 Tool: batch 追溯 + HACCP audit + GB 2760 + 召回行动
+      // Boss 演示弹药 #3 — HJ vs Cretas 杀手锏 (HJ 30 min vs Cretas < 2 min)
+      {
+        path: 'workdesk/quality-manager',
+        name: 'QualityManagerWorkdesk',
+        component: () => import('@/views/workdesk/QualityManagerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '质量主管工作台',
+          icon: 'Warning',
+          module: 'quality'
+        }
+      },
+      // Sprint 8 P4a — 仓管员工作台 (WarehouseKeeperWorkdesk)
+      // material_today_receiving_query Tool + R1 max preview + 一键扫码
+      // 客户原话 (F006 张权): "告诉他要收多少就行" — 防呆护城河
+      {
+        path: 'workdesk/warehouse-keeper',
+        name: 'WarehouseKeeperWorkdesk',
+        component: () => import('@/views/workdesk/WarehouseKeeperWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '仓管员工作台',
+          icon: 'Box',
+          module: 'warehouse'
+        }
+      },
+      // Sprint 8 P4b — 采购员工作台 (PurchaserWorkdesk)
+      // 5 Tool: stock_alert + sales_forecast_7day + supplier_delivery_eta + price_history_query +
+      // requisition_create (WRITE + Preview 灵魂 Tool, R1+R2+R4)
+      // 采购员小赵场景 (F006): "下周采购什么? 系统直接告诉我" — 1 屏 30 秒 vs HJ 4 菜单
+      {
+        path: 'workdesk/purchaser',
+        name: 'PurchaserWorkdesk',
+        component: () => import('@/views/workdesk/PurchaserWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '采购员工作台',
+          icon: 'ShoppingCart',
+          module: 'procurement'
+        }
+      },
+      // Sprint 8 P4c — 质量主管工作台 (QualityChiefWorkdesk)
+      // 5 Tool: quality_check_summary + haccp_status_query + additive_compliance_check_quality
+      // + customer_quality_standard + release_decision (WRITE + Preview 灵魂 Tool)
+      // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?" — 1 页面综合判断 vs HJ 4 菜单
+      {
+        path: 'workdesk/quality-chief',
+        name: 'QualityChiefWorkdesk',
+        component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '质量主管工作台',
+          icon: 'Aim',
+          module: 'quality'
+        }
+      },
+      // Sprint 10 Loop 5 — 生产经理工作台 (ProductionManagerWorkdesk)
+      // 3 Tool: production_demand_query (READ) + production_batch_create (WRITE+Preview 灵魂 Tool)
+      // + (PRODUCTION_DEMAND_ANALYSIS WORKDESK intent → Skill 编排)
+      // 生产经理张工程师场景 (F006): "今天要起产什么?" — AI 5s 出排产清单 + 一键起产
+      // 防呆 R1 max + R2 context + R3 productionLine dropdown + R4 5min dedup
+      {
+        path: 'workdesk/production-manager',
+        name: 'ProductionManagerWorkdesk',
+        component: () => import('@/views/workdesk/ProductionManagerWorkdesk.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '生产经理工作台',
+          icon: 'Operation',
+          module: 'production'
+        }
+      },
+
+      // 生产管理
+      {
+        path: 'production',
+        name: 'Production',
+        redirect: '/production/batches',
+        meta: { requiresAuth: true, title: '生产管理', icon: 'Operation', module: 'production' },
+        children: [
+          {
+            path: 'batches',
+            name: 'ProductionBatches',
+            component: () => import('@/views/production/batches/list.vue'),
+            meta: { requiresAuth: true, title: '生产批次', module: 'production' }
+          },
+          {
+            path: 'batches/:id',
+            name: 'ProductionBatchDetail',
+            component: () => import('@/views/production/batches/detail.vue'),
+            meta: { requiresAuth: true, title: '批次详情', module: 'production', hidden: true }
+          },
+          {
+            path: 'plans',
+            name: 'ProductionPlans',
+            component: () => import('@/views/production/plans/list.vue'),
+            meta: { requiresAuth: true, title: '生产计划', module: 'production' }
+          },
+          {
+            // N1 开工无条件化：文员视角"未完成计划队列"——按交期升序展示 PENDING+IN_PROGRESS 计划
+            path: 'pending-queue',
+            name: 'ProductionPendingQueue',
+            component: () => import('@/views/production/plans/PendingQueue.vue'),
+            meta: { requiresAuth: true, title: '未完成计划队列', module: 'production' }
+          },
+          {
+            path: 'restock-board',
+            name: 'RestockBoard',
+            component: () => import('@/views/production/restock-board/index.vue'),
+            meta: { requiresAuth: true, title: '备货看板', module: 'production' }
+          },
+          {
+            path: 'delivery-warnings',
+            name: 'ProductionDeliveryWarnings',
+            component: () => import('@/views/production/delivery-warnings/list.vue'),
+            meta: { requiresAuth: true, title: '交货预警', module: 'production' }
+          },
+          // 2026-08-07 阶段 5(画布即 BOM): BOM 配方页 / 多级展开 / 版本列表三条路由连同页面一起删除。
+          // BOM 就在产品-工序配置画布的辅料 / 包材 cell 上配, 不再有第二个入口。
+          // ECN(工程变更通知)是另一件事, 路由与菜单都保留。
+          //
+          // ⚠️ 删路由 ≠ 可以不管旧地址。菜单入口 08-05 就摘了, 但**用户的书签与历史记录还在**,
+          // 直接删会让它们撞 404 —— 那正是原来「只下入口不删机器」想避免的事。所以这里
+          // 留三条 redirect 把老地址接到画布上, 页面删了而路径不落空。
+          // (`ProductionConversions` 原本 redirect 到 `/production/bom?tab=conversion`,
+          //  页面一删它就指向空地; 转换率 08-05 已拍板不往画布搬、维护走 API/DB,
+          //  该 stub 菜单隐藏且全仓零引用, 一并删除而不是接到画布上 —— 画布没有那个 tab,
+          //  接过去等于把用户送到一个找不到「转换率」的页面。)
+          {
+            path: 'bom',
+            name: 'BomManagementRetired',
+            redirect: '/system/product-processes',
+            meta: { requiresAuth: true, title: 'BOM/配方维护', module: 'production', hidden: true }
+          },
+          {
+            path: 'bom/versions',
+            name: 'BomVersionListRetired',
+            redirect: '/system/product-processes',
+            meta: { requiresAuth: true, title: 'BOM版本管理', module: 'production', hidden: true }
+          },
+          {
+            path: 'bom/tree',
+            name: 'BomTreeExpansionRetired',
+            redirect: '/system/product-processes',
+            meta: { requiresAuth: true, title: 'BOM多级展开', module: 'production', hidden: true }
+          },
+          {
+            // Sprint 5 H-2 MVP stub: ECN 工程变更通知
+            path: 'bom/ecns',
+            name: 'EcnList',
+            component: () => import('@/views/production/bom/EcnList.vue'),
+            meta: { requiresAuth: true, title: '工程变更通知', module: 'production' }
+          },
+          {
+            path: 'approval',
+            name: 'ProductionApproval',
+            component: () => import('@/views/production/approval/list.vue'),
+            meta: { requiresAuth: true, title: '报工审批', module: 'production' }
+          },
+          {
+            path: 'bom-achievement',
+            name: 'BomAchievement',
+            component: () => import('@/views/production/BomAchievementView.vue'),
+            meta: { requiresAuth: true, title: 'BOM达成率分析', module: 'production' }
+          },
+          {
+            path: 'process-io',
+            name: 'ProcessIOComparison',
+            component: () => import('@/views/production/ProcessIOComparison.vue'),
+            meta: { requiresAuth: true, title: '工序投入产出对比', module: 'production' }
+          },
+          {
+            path: 'material-requisitions',
+            name: 'FactoryMaterialRequisitions',
+            component: () => import('@/views/factory/material-requisitions/list.vue'),
+            meta: { requiresAuth: true, title: '物料需求单', module: 'production' }
+          },
+          {
+            path: 'material-returns',
+            name: 'ProductionMaterialReturns',
+            component: () => import('@/views/factory/material-returns/list.vue'),
+            meta: { requiresAuth: true, title: '退料记录', module: 'production' }
+          },
+          {
+            path: 'labor-efficiency',
+            name: 'LaborEfficiency',
+            component: () => import('@/views/production/labor-efficiency/index.vue'),
+            meta: { requiresAuth: true, title: '人效对比', module: 'production' }
+          },
+          {
+            // SP9-M5: 人效看板 — 达成率趋势 + 工序对比图表
+            path: 'labor-efficiency/dashboard',
+            name: 'LaborEfficiencyDashboard',
+            component: () => import('@/views/production/labor-efficiency/dashboard.vue'),
+            meta: { requiresAuth: true, title: '人效看板', module: 'production' }
+          },
+          {
+            // SP2: 报工整单撤回申请列表 + 审批
+            path: 'reversals',
+            name: 'ProductionReversals',
+            component: () => import('@/views/production/reversals/list.vue'),
+            meta: { requiresAuth: true, title: '撤回审批', module: 'production' }
+          }
+        ]
+      },
+
+      // 仓储管理
+      {
+        path: 'warehouse',
+        name: 'Warehouse',
+        redirect: '/warehouse/materials',
+        meta: { requiresAuth: true, title: '仓储管理', icon: 'Box', module: 'warehouse' },
+        children: [
+          {
+            path: 'material-types',
+            name: 'WarehouseMaterialTypes',
+            component: () => import('@/views/warehouse/material-types/list.vue'),
+            meta: { requiresAuth: true, title: '原料类型字典', module: 'warehouse' }
+          },
+          {
+            path: 'material-segments',
+            name: 'WarehouseMaterialSegments',
+            component: () => import('@/views/warehouse/material-segments/index.vue'),
+            meta: { requiresAuth: true, title: '物料分类字典', module: 'warehouse' }
+          },
+          {
+            path: 'unordered-inbound-applications',
+            name: 'WarehouseUnorderedInboundApplications',
+            component: () => import('@/views/warehouse/unordered-inbound-applications/index.vue'),
+            meta: { requiresAuth: true, title: '无订单入库申请', module: 'warehouse' }
+          },
+          {
+            path: 'materials',
+            name: 'WarehouseMaterials',
+            component: () => import('@/views/warehouse/materials/list.vue'),
+            meta: { requiresAuth: true, title: '入库任务与批次', module: 'warehouse' }
+          },
+          // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
+          {
+            path: 'inventory-total',
+            name: 'WarehouseInventoryTotal',
+            component: () => import('@/views/warehouse/inventory-total/index.vue'),
+            meta: { requiresAuth: true, title: '总库存查询', module: 'warehouse' }
+          },
+          {
+            path: 'manufacturers',
+            name: 'WarehouseManufacturers',
+            component: () => import('@/views/warehouse/manufacturers/index.vue'),
+            meta: { requiresAuth: true, title: '厂商登记表', module: 'warehouse' }
+          },
+          {
+            path: 'wip-batches',
+            name: 'WarehouseWipBatches',
+            component: () => import('@/views/warehouse/materials/wip-list.vue'),
+            meta: { requiresAuth: true, title: '在制品 (WIP)', module: 'warehouse' }
+          },
+          {
+            path: 'shipments',
+            name: 'WarehouseShipments',
+            component: () => import('@/views/warehouse/shipments/list.vue'),
+            meta: { requiresAuth: true, title: '出货管理', module: 'warehouse' }
+          },
+          {
+            path: 'inventory',
+            name: 'WarehouseInventory',
+            component: () => import('@/views/warehouse/inventory/index.vue'),
+            meta: { requiresAuth: true, title: '库存批次查询', module: 'warehouse' }
+          },
+          // SP7 六扇门 ERP-lite — 盘点任务管理 (发起→录入→审批→应用)
+          {
+            path: 'stocktakes',
+            name: 'WarehouseStocktakes',
+            component: () => import('@/views/warehouse/stocktakes/index.vue'),
+            meta: { requiresAuth: true, title: '盘点与期初库存', module: 'warehouse' }
+          },
+          // SP7 六扇门 ERP-lite — 报损管理 (仓库→财务 / 生产→厂长 双轨)
+          {
+            path: 'wastage-reports',
+            name: 'WarehouseWastageReports',
+            component: () => import('@/views/warehouse/wastage-reports/index.vue'),
+            meta: { requiresAuth: true, title: '报损管理', module: 'warehouse' }
+          },
+          {
+            path: 'reusable-containers',
+            name: 'WarehouseReusableContainers',
+            component: () => import('@/views/warehouse/reusable-containers/list.vue'),
+            meta: { requiresAuth: true, title: '周转耗材管理', module: 'warehouse' }
+          },
+          {
+            path: 'material-price-trend',
+            name: 'MaterialPriceTrend',
+            component: () => import('@/views/warehouse/MaterialPriceTrendView.vue'),
+            meta: { requiresAuth: true, title: '物料均价趋势', module: 'warehouse' }
+          },
+          // C3: 半成品重量库存视图 (只读快照, 仅重量字段)
+          {
+            path: 'semi-finished',
+            name: 'WarehouseSemiFinished',
+            component: () => import('@/views/warehouse/semi-finished/list.vue'),
+            meta: { requiresAuth: true, title: '半成品重量库存', module: 'warehouse' }
+          },
+          // 半成品盘点 (SP7 式 + 审批) — 半成品 WIP 周期盘点校准, 复用 INVENTORY_ADJUSTMENT 审批
+          {
+            path: 'semi-finished-stocktakes',
+            name: 'WarehouseSemiFinishedStocktakes',
+            component: () => import('@/views/warehouse/semi-finished-stocktakes/index.vue'),
+            meta: { requiresAuth: true, title: '半成品盘点', module: 'warehouse' }
+          },
+          // SP7 F11 #738 盐化仓独立扣量记录 + 独立报表 (对客户代加工)
+          {
+            path: 'salted-deductions',
+            name: 'WarehouseSaltedDeductions',
+            component: () => import('@/views/warehouse/salted-deductions/index.vue'),
+            meta: { requiresAuth: true, title: '盐化仓管理', module: 'warehouse' }
+          },
+          // 六扇门 N10 — 中转挂账对账 (web-admin 仓库主管/财务用)
+          {
+            path: 'transit-ledger',
+            name: 'WarehouseTransitLedger',
+            component: () => import('@/views/warehouse/transit-ledger/list.vue'),
+            meta: { requiresAuth: true, title: '中转挂账对账', module: 'warehouse' }
+          }
+        ]
+      },
+
+      // PR #309 B2 — 分仓库存查询 (Dropdown 跨 factoryId × warehouseId)
+      {
+        path: 'inventory',
+        name: 'Inventory',
+        redirect: '/inventory/by-warehouse',
+        meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse' },
+        children: [
+          {
+            path: 'by-warehouse',
+            name: 'InventoryByWarehouse',
+            component: () => import('@/views/inventory/by-warehouse/index.vue'),
+            meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse' }
+          }
+        ]
+      },
+
+      // 调拨管理
+      {
+        path: 'transfer',
+        name: 'Transfer',
+        redirect: '/transfer/list',
+        meta: { requiresAuth: true, title: '调拨管理', icon: 'Sell', module: 'inventory' },
+        children: [
+          {
+            path: 'list',
+            name: 'TransferList',
+            component: () => import('@/views/transfer/list.vue'),
+            meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory' }
+          },
+          {
+            path: 'new',
+            name: 'TransferCreate',
+            component: () => import('@/views/transfer/list.vue'),
+            meta: { requiresAuth: true, title: '新建调拨单', module: 'inventory', hidden: true }
+          },
+          {
+            path: ':id',
+            name: 'TransferDetail',
+            component: () => import('@/views/transfer/detail.vue'),
+            meta: { requiresAuth: true, title: '调拨详情', module: 'inventory', hidden: true }
+          }
+        ]
+      },
+
+      // 质量管理
+      {
+        path: 'quality',
+        name: 'Quality',
+        redirect: '/quality/inspections',
+        meta: { requiresAuth: true, title: '质量管理', icon: 'Checked', module: 'quality' },
+        children: [
+          {
+            path: 'inspections',
+            name: 'QualityInspections',
+            component: () => import('@/views/quality/inspections/list.vue'),
+            meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
+          },
+          {
+            path: 'disposals',
+            name: 'QualityDisposals',
+            component: () => import('@/views/quality/disposals/list.vue'),
+            meta: { requiresAuth: true, title: '废弃处理', module: 'quality' }
+          },
+          {
+            path: 'standards',
+            name: 'QualityStandards',
+            component: () => import('@/views/quality/standards/list.vue'),
+            meta: { requiresAuth: true, title: '质检标准', module: 'quality' }
+          },
+          // Sprint4-H Q-PROCESS-1: 工序质检不良记录闭环
+          {
+            path: 'defects',
+            name: 'QualityDefects',
+            component: () => import('@/views/quality/defects/list.vue'),
+            meta: { requiresAuth: true, title: '工序质检不良', module: 'quality' }
+          },
+          // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 区分客户销售退货)
+          {
+            path: 'returns',
+            name: 'QualityReturns',
+            component: () => import('@/views/quality/returns/list.vue'),
+            meta: { requiresAuth: true, title: '质检退回单', module: 'quality' }
+          },
+          {
+            path: 'label-qc',
+            name: 'QualityLabelQc',
+            component: () => import('@/views/quality/label-qc/index.vue'),
+            meta: { requiresAuth: true, title: '包装标签拍检', module: 'quality' }
+          }
+        ]
+      },
+
+      // 采购管理
+      {
+        path: 'procurement',
+        name: 'Procurement',
+        redirect: '/procurement/orders',
+        meta: { requiresAuth: true, title: '采购管理', icon: 'ShoppingCart', module: 'procurement' },
+        children: [
+          {
+            path: 'orders',
+            name: 'ProcurementOrders',
+            component: () => import('@/views/procurement/orders/list.vue'),
+            meta: { requiresAuth: true, title: '采购订单', module: 'procurement' }
+          },
+          {
+            path: 'orders/:id',
+            name: 'ProcurementOrderDetail',
+            component: () => import('@/views/procurement/orders/detail.vue'),
+            meta: { requiresAuth: true, title: '采购订单详情', module: 'procurement', hidden: true }
+          },
+          {
+            path: 'suppliers',
+            name: 'ProcurementSuppliers',
+            component: () => import('@/views/procurement/suppliers/list.vue'),
+            meta: { requiresAuth: true, title: '供应商管理', module: 'procurement' }
+          },
+          {
+            path: 'price-lists',
+            name: 'ProcurementPriceLists',
+            component: () => import('@/views/procurement/price-lists/list.vue'),
+            meta: { requiresAuth: true, title: '价格表管理', module: 'procurement' }
+          },
+          // 六扇门 V1 #9 — 采购入库管理 (audit fix 2026-04-26)
+            {
+              path: 'receives',
+              name: 'ProcurementReceives',
+              redirect: (to) => ({ path: '/warehouse/materials', query: { ...to.query, view: 'receiving' } }),
+              meta: { requiresAuth: true, title: '仓储待收货与批次', module: 'warehouse', hidden: true }
+            },
+          // 2026-08-16 移除: 采购财审 PC 入口 (/procurement/finance-review)。
+          // 它查 PENDING_FINANCE_REVIEW, 而 OA 投影从不经过这个状态 —— prod 全库 0 行,
+          // 页面恒空; 页内「通过/驳回」打的两个端点自 #1557 起无条件抛 410。
+          // 采购的财务节点现在走同一条 OA 流程, 入口是菜单里的「待我审批」(/workflow/pending)。
+          // ⛔ 销售侧 /sales/finance-review 是另一条【仍然活着】的路, 不受影响。
+          // P-NUCLEAR-1 (28-Backlog #30): 核价单 询价 → 核价 → 采购 pipeline
+          {
+            path: 'inquiry-quotes',
+            name: 'InquiryQuoteList',
+            component: () => import('@/views/procurement/inquiry-quotes/list.vue'),
+            meta: { requiresAuth: true, title: '核价单', module: 'procurement' }
+          },
+          {
+            path: 'inquiry-quotes/:id',
+            name: 'InquiryQuoteDetail',
+            component: () => import('@/views/procurement/inquiry-quotes/detail.vue'),
+            meta: { requiresAuth: true, title: '核价单详情', module: 'procurement', hidden: true }
+          },
+          // 采购审批规则 自由配置 (F006 客户要求, 替代硬编码 10% 阈值)
+          {
+            path: 'approval-rules',
+            name: 'PurchaseApprovalRules',
+            component: () => import('@/views/procurement/approval-rules/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '采购审批规则',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'permission_admin', 'procurement_manager', 'finance_manager']
+            }
+          },
+          // Sprint 6 W2-A — 请购单 (Material Requisition).
+          // 后端: Sprint 5 Track D PR #56 (entity + state machine + 7 endpoints).
+          // 3 个 list view + 1 个 detail view, 共用 CreateRequisitionDialog.
+          {
+            path: 'requisitions/my',
+            name: 'MyPurchaseRequisitions',
+            component: () => import('@/views/procurement/requisitions/my-list.vue'),
+            meta: { requiresAuth: true, title: '我的请购', module: 'procurement' }
+          },
+          {
+            path: 'requisitions/pending-approval',
+            name: 'PendingApprovalRequisitions',
+            component: () => import('@/views/procurement/requisitions/pending-approval.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '待审批请购',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin']
+            }
+          },
+          {
+            path: 'requisitions',
+            name: 'PurchaseRequisitions',
+            component: () => import('@/views/procurement/requisitions/list.vue'),
+            meta: { requiresAuth: true, title: '全部请购单', module: 'procurement' }
+          },
+          {
+            path: 'requisitions/:id',
+            name: 'PurchaseRequisitionDetail',
+            component: () => import('@/views/procurement/requisitions/detail.vue'),
+            meta: { requiresAuth: true, title: '请购单详情', module: 'procurement', hidden: true }
+          },
+          // 六扇门 U-SP6 — 入库异常处理
+          {
+            path: 'exceptions',
+            name: 'PurchaseExceptions',
+            component: () => import('@/views/procurement/exceptions/list.vue'),
+            meta: { requiresAuth: true, title: '入库异常', module: 'procurement' }
+          },
+          // D-BUG3 — 采购退货 (来自入库异常 RETURN_OVER 决策; 退货必须先财务审批)
+          {
+            path: 'returns',
+            name: 'PurchaseReturns',
+            component: () => import('@/views/procurement/returns/list.vue'),
+            meta: { requiresAuth: true, title: '采购退货', module: 'procurement' }
+          },
+          // 六扇门 U-SP6 — 付款申请 (PENDING→FINANCE_REVIEW→APPROVED→PAID 状态机)
+          {
+            path: 'payment-requests',
+            name: 'PaymentRequests',
+            component: () => import('@/views/procurement/payment-requests/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '付款申请',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier']
+            }
+          },
+          // 六扇门 U-SP6 — 采购发票 (上传/核对/逾期提醒)
+          {
+            path: 'invoices',
+            name: 'PurchaseInvoices',
+            component: () => import('@/views/procurement/invoices/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '采购发票',
+              module: 'procurement',
+              roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'finance_manager', 'cashier']
+            }
+          }
+        ]
+      },
+
+      // 销售管理
+      {
+        path: 'sales',
+        name: 'Sales',
+        redirect: '/sales/orders',
+        meta: { requiresAuth: true, title: '销售管理', icon: 'Goods', module: 'sales' },
+        children: [
+          {
+            path: 'orders',
+            name: 'SalesOrders',
+            component: () => import('@/views/sales/orders/list.vue'),
+            meta: { requiresAuth: true, title: '销售订单', module: 'sales' }
+          },
+          {
+            path: 'orders/:id',
+            name: 'SalesOrderDetail',
+            component: () => import('@/views/sales/orders/detail.vue'),
+            meta: { requiresAuth: true, title: '销售订单详情', module: 'sales', hidden: true }
+          },
+          // Sprint 4 Wave 2 S-PROFIT-DETAIL-1: per-product profit drill-down (11 cols).
+          // Hidden from sidebar; reached via button on detail.vue.
+          {
+            path: 'orders/:id/profit',
+            name: 'SalesOrderProfitDetail',
+            component: () => import('@/views/sales/orders/profit-detail.vue'),
+            // 🔴 2026-08-22: sales -> finance。这一页调 /reports/sales/profit-detail/,
+            //   后端要 finance|procurement ⇒ sales_manager 从详情页点进来必 403。
+            // ⛔ 不放宽后端: 产品级**利润**明细(含成本)是财务口径, 不该对销售铺开 ——
+            //   owner 已定「销售主管只要 工作台+个人OA+销售管理」。
+            // ⚠️ 入口按钮也要跟着挡, 见 detail.vue —— 只改路由的话按钮还在, 点了跳到白屏。
+            meta: { requiresAuth: true, title: '产品级利润详情', module: 'finance', hidden: true }
+          },
+          {
+            path: 'quotes',
+            name: 'SalesQuotes',
+            component: () => import('@/views/sales/quotes/list.vue'),
+            meta: { requiresAuth: true, title: '运营报价', module: 'sales' }
+          },
+          // T-RTA (issue #531): 退货流程 — F006 customer feedback 第四次会议 956-1037.
+          // Backend ReturnOrderController existed (covers both 采购退货 + 销售退货 since 2026-Q1)
+          // but no frontend view shipped. These 2 routes close the F006 gap for SALES_RETURN side.
+          {
+            path: 'returns',
+            name: 'SalesReturns',
+            component: () => import('@/views/sales/returns/list.vue'),
+            meta: { requiresAuth: true, title: '销售退货', module: 'sales' }
+          },
+          {
+            path: 'returns/:id',
+            name: 'SalesReturnDetail',
+            component: () => import('@/views/sales/returns/detail.vue'),
+            meta: { requiresAuth: true, title: '退货单详情', module: 'sales', hidden: true }
+          },
+          {
+            path: 'finished-goods',
+            name: 'SalesFinishedGoods',
+            component: () => import('@/views/sales/finished-goods/list.vue'),
+            meta: { requiresAuth: true, title: '成品库存', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
+          },
+          // Issue #761: 独立 detail route — PR #756 之前只用 ElMessageBox.alert 占位
+          {
+            path: 'finished-goods/:id',
+            name: 'SalesFinishedGoodsDetail',
+            component: () => import('@/views/sales/finished-goods/detail.vue'),
+            meta: { requiresAuth: true, title: '成品批次详情', module: 'sales', hidden: true, hideForFactoryTypes: ['RESTAURANT'] }
+          },
+          {
+            path: 'customers',
+            name: 'SalesCustomers',
+            component: () => import('@/views/sales/customers/list.vue'),
+            meta: { requiresAuth: true, title: '客户管理', module: 'sales' }
+          },
+          // Sprint 4 W1 S-CUSTOMER-TAB-1: customer 360° 21-tab detail view
+          {
+            path: 'customers/:id',
+            name: 'SalesCustomerDetail',
+            component: () => import('@/views/sales/customers/detail.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '客户详情',
+              module: 'sales',
+              hidden: true,
+              activeMenu: '/sales/customers'
+            }
+          },
+          // P1 #21 S-CRM-1: customer tracking record Vue UI (backend Sprint 4 W2 #727)
+          {
+            path: 'customer-tracking',
+            name: 'SalesCustomerTracking',
+            component: () => import('@/views/sales/customer-tracking/list.vue'),
+            meta: { requiresAuth: true, title: '客户跟踪记录', module: 'sales' }
+          },
+          {
+            path: 'shipments',
+            name: 'SalesShipments',
+            component: () => import('@/views/sales/shipments/list.vue'),
+            meta: { requiresAuth: true, title: '出货记录', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
+          },
+          {
+            path: 'vehicles',
+            name: 'SalesVehicles',
+            component: () => import('@/views/sales/vehicles/list.vue'),
+            meta: { requiresAuth: true, title: '车辆字典', module: 'sales', hideForFactoryTypes: ['RESTAURANT'] }
+          },
+          // Sprint4-H F-AR-1 (Chat H): 销售订单财务审核 PC 入口.
+          // 销售员 submitForFinanceReview 后状态进 PENDING_FINANCE_REVIEW,
+          // 历史入口保留成本核算与审批状态只读展示；审批动作统一前往个人 OA。
+          {
+            path: 'finance-review',
+            name: 'SalesOrderFinanceReviewList',
+            component: () => import('@/views/sales/finance-review/list.vue'),
+            meta: { requiresAuth: true, title: '销售订单审批进度', module: 'finance', roles: financeReviewRoles }
+          },
+          {
+            path: 'finance-review/:id',
+            name: 'SalesOrderFinanceReviewDetail',
+            component: () => import('@/views/sales/finance-review/detail.vue'),
+            meta: { requiresAuth: true, title: '销售订单成本与审批进度', module: 'finance', hidden: true, roles: financeReviewRoles }
+          },
+          // Sprint 4 W2 S-REMIND-1: 我的提醒
+          {
+            path: 'reminders',
+            name: 'SalesReminders',
+            component: () => import('@/views/sales/reminders/MyReminders.vue'),
+            meta: { requiresAuth: true, title: '我的提醒', module: 'sales' }
+          },
+          // Sprint 4 W2 S-NEED-1: 客户需求
+          {
+            path: 'needs',
+            name: 'SalesNeeds',
+            component: () => import('@/views/sales/needs/list.vue'),
+            meta: { requiresAuth: true, title: '客户需求', module: 'sales' }
+          },
+          // Sprint 4 W2 S-REPORTS-PRESETS: 销售报表 (5 active + 9 Sprint 5 stub)
+          {
+            path: 'reports',
+            name: 'SalesReports',
+            component: () => import('@/views/sales/reports/dashboard.vue'),
+            meta: { requiresAuth: true, title: '销售报表', module: 'sales' }
+          },
+          {
+            path: 'reports/daily',
+            name: 'SalesReportDaily',
+            component: () => import('@/views/sales/reports/daily.vue'),
+            meta: { requiresAuth: true, title: '销售额日报', module: 'sales', hidden: true }
+          },
+          {
+            path: 'reports/monthly',
+            name: 'SalesReportMonthly',
+            component: () => import('@/views/sales/reports/monthly.vue'),
+            meta: { requiresAuth: true, title: '销售额月报', module: 'sales', hidden: true }
+          },
+          {
+            path: 'reports/yearly',
+            name: 'SalesReportYearly',
+            component: () => import('@/views/sales/reports/yearly.vue'),
+            meta: { requiresAuth: true, title: '销售额年报', module: 'sales', hidden: true }
+          },
+          {
+            path: 'reports/customer-rank',
+            name: 'SalesReportCustomerRank',
+            component: () => import('@/views/sales/reports/customer-rank.vue'),
+            meta: { requiresAuth: true, title: '客户销售排行', module: 'sales', hidden: true }
+          },
+          {
+            path: 'reports/product-rank',
+            name: 'SalesReportProductRank',
+            component: () => import('@/views/sales/reports/product-rank.vue'),
+            meta: { requiresAuth: true, title: '产品销售排行', module: 'sales', hidden: true }
+          },
+          // #739 销售方向付款申请 (对客户 outbound 退款/返利/销售费用)
+          {
+            path: 'payment-requests',
+            name: 'SalesPaymentRequests',
+            component: () => import('@/views/sales/payment-requests/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '销售付款申请',
+              module: 'sales',
+              roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier']
+            }
+          }
+        ]
+      },
+
+      // Sprint 7 wave 2 T4: CRM 商机 8 阶段 funnel
+      {
+        path: 'crm',
+        name: 'CRM',
+        redirect: '/crm/opportunity',
+        meta: { requiresAuth: true, title: 'CRM 商机', icon: 'Aim', module: 'sales' },
+        children: [
+          {
+            path: 'opportunity',
+            name: 'CrmOpportunityList',
+            component: () => import('@/views/crm/opportunity/SalesOpportunityList.vue'),
+            meta: { requiresAuth: true, title: '商机列表', module: 'sales' }
+          },
+          {
+            path: 'opportunity/kanban',
+            name: 'CrmOpportunityKanban',
+            component: () => import('@/views/crm/opportunity/SalesOpportunityKanban.vue'),
+            meta: { requiresAuth: true, title: '商机看板', module: 'sales' }
+          },
+          {
+            path: 'opportunity/funnel',
+            name: 'CrmOpportunityFunnel',
+            component: () => import('@/views/crm/opportunity/SalesOpportunityFunnel.vue'),
+            meta: { requiresAuth: true, title: '商机漏斗', module: 'sales' }
+          }
+        ]
+      },
+
+      // 人事管理
+      {
+        path: 'hr',
+        name: 'HR',
+        redirect: '/hr/employees',
+        meta: { requiresAuth: true, title: '人事管理', icon: 'User', module: 'hr' },
+        children: [
+          {
+            path: 'employees',
+            name: 'HREmployees',
+            component: () => import('@/views/hr/employees/list.vue'),
+            meta: { requiresAuth: true, title: '员工档案', module: 'hr' }
+          },
+          {
+            path: 'attendance',
+            name: 'HRAttendance',
+            component: () => import('@/views/hr/attendance/list.vue'),
+            meta: { requiresAuth: true, title: '考勤管理', module: 'hr' }
+          },
+          {
+            path: 'attendance-exceptions',
+            name: 'HRAttendanceExceptions',
+            component: () => import('@/views/hr/attendance/exceptions.vue'),
+            meta: { requiresAuth: true, title: '考勤异常处理', module: 'hr' }
+          },
+          {
+            path: 'whitelist',
+            name: 'HRWhitelist',
+            component: () => import('@/views/hr/whitelist/index.vue'),
+            meta: { requiresAuth: true, title: '账号邀请', module: 'hr' }
+          },
+          {
+            path: 'departments',
+            name: 'HRDepartments',
+            component: () => import('@/views/hr/departments/index.vue'),
+            meta: { requiresAuth: true, title: '部门管理', module: 'hr' }
+          },
+          {
+            path: 'work-types',
+            name: 'HRWorkTypes',
+            component: () => import('@/views/hr/work-types/list.vue'),
+            meta: { requiresAuth: true, title: '工种字典', module: 'hr' }
+          },
+          {
+            path: 'leave-requests',
+            name: 'HRLeaveRequests',
+            component: () => import('@/views/hr/leave-requests/list.vue'),
+            meta: { requiresAuth: true, title: '请假申请', module: 'hr' }
+          },
+          {
+            path: 'overtime-requests',
+            name: 'HROvertimeRequests',
+            component: () => import('@/views/hr/overtime-requests/list.vue'),
+            meta: { requiresAuth: true, title: '加班/调休申请', module: 'hr' }
+          },
+          {
+            path: 'expense-requests',
+            name: 'HRExpenseRequests',
+            component: () => import('@/views/hr/expense-requests/list.vue'),
+            meta: { requiresAuth: true, title: '报销申请', module: 'hr' }
+          },
+          {
+            path: 'leave-balances',
+            name: 'HRLeaveBalances',
+            component: () => import('@/views/hr/leave-balances/list.vue'),
+            meta: { requiresAuth: true, title: '假期余额', module: 'hr' }
+          },
+          {
+            // #835 follow-up — 调休账单 (CompTime Balance + Ledger)
+            path: 'comptime-balance',
+            name: 'HRCompTimeBalance',
+            component: () => import('@/views/hr/attendance/comptime-balance.vue'),
+            meta: { requiresAuth: true, title: '调休账单', module: 'hr' }
+          },
+          {
+            // #835 follow-up — 高级排班可视化日历 (月视图: 员工 × 日期 × 班次)
+            path: 'shift-calendar',
+            name: 'HRShiftCalendar',
+            component: () => import('@/views/hr/attendance/shift-calendar.vue'),
+            meta: { requiresAuth: true, title: '排班日历', module: 'hr' }
+          },
+          {
+            // P1-40 H-WAGE-FULL MVP — 月度工资单 (基本工资 + 社保 + 个税 + 实发)
+            path: 'salaries',
+            name: 'HRSalaries',
+            component: () => import('@/views/hr/salaries/list.vue'),
+            meta: { requiresAuth: true, title: '工资管理', module: 'hr' }
+          },
+          {
+            // P1-40 H-WAGE 专项扣除 follow-up — 个税 6 大专项附加扣除 (月度计税自动减项)
+            path: 'special-deductions',
+            name: 'HRSpecialDeductions',
+            component: () => import('@/views/hr/special-deductions/list.vue'),
+            meta: { requiresAuth: true, title: '专项扣除', module: 'hr' }
+          },
+          {
+            // #833 H-WAGE follow-up — 工厂级 社保 / 公积金 费率配置 (替代硬编码)
+            path: 'config/insurance-rates',
+            name: 'HRInsuranceConfig',
+            component: () => import('@/views/hr/config/insurance-rates.vue'),
+            meta: { requiresAuth: true, title: '社保公积金配置', module: 'hr' }
+          },
+          {
+            // #863 follow-up — 城市差异化 社保 / 公积金 覆盖 (基数 + 部分费率)
+            path: 'config/city-overrides',
+            name: 'HRCityInsuranceOverrides',
+            component: () => import('@/views/hr/config/city-overrides.vue'),
+            meta: { requiresAuth: true, title: '城市差异化社保', module: 'hr' }
+          },
+          {
+            // #833 H-WAGE follow-up — 年度汇算 (综合所得 annual settlement)
+            path: 'annual-settlement',
+            name: 'HRAnnualSettlement',
+            component: () => import('@/views/hr/salaries/annual-settlement.vue'),
+            meta: { requiresAuth: true, title: '年度汇算', module: 'hr' }
+          },
+          {
+            // Sprint 6 W4-B — WagePolicy 按时/混合 mode + 月底自动 trigger 工资凭证
+            path: 'wage-policy',
+            name: 'HRWagePolicy',
+            component: () => import('@/views/hr/wage-policy/index.vue'),
+            meta: { requiresAuth: true, title: '工资策略', module: 'hr' }
+          }
+        ]
+      },
+
+      // 设备管理
+      {
+        path: 'equipment',
+        name: 'Equipment',
+        redirect: '/equipment/list',
+        meta: { requiresAuth: true, title: '设备管理', icon: 'Monitor', module: 'equipment' },
+        children: [
+          {
+            path: 'list',
+            name: 'EquipmentList',
+            component: () => import('@/views/equipment/list/index.vue'),
+            meta: { requiresAuth: true, title: '设备列表', module: 'equipment' }
+          },
+          {
+            path: 'maintenance',
+            name: 'EquipmentMaintenance',
+            component: () => import('@/views/equipment/maintenance/list.vue'),
+            meta: { requiresAuth: true, title: '维护记录', module: 'equipment' }
+          },
+          {
+            path: 'alerts',
+            name: 'EquipmentAlerts',
+            component: () => import('@/views/equipment/alerts/index.vue'),
+            meta: { requiresAuth: true, title: '告警管理', module: 'equipment' }
+          }
+        ]
+      },
+
+      // 财务管理 (Web专属)
+      {
+        path: 'finance',
+        name: 'Finance',
+        redirect: '/finance/costs',
+        meta: { requiresAuth: true, title: '财务管理', icon: 'Money', module: 'finance' },
+        children: [
+          {
+            path: 'costs',
+            name: 'FinanceCosts',
+            component: () => import('@/views/finance/costs/index.vue'),
+            meta: { requiresAuth: true, title: '财务概览', module: 'finance' }
+          },
+          {
+            path: 'reports',
+            name: 'FinanceReports',
+            component: () => import('@/views/finance/reports/index.vue'),
+            meta: { requiresAuth: true, title: '财务分析(Excel)', module: 'finance' }
+          },
+          {
+            path: 'ar-ap',
+            name: 'FinanceArAp',
+            component: () => import('@/views/finance/ar-ap/index.vue'),
+            meta: { requiresAuth: true, title: '应收应付', module: 'finance' }
+          },
+          {
+            path: 'sku-margin',
+            name: 'FinanceSkuMargin',
+            component: () => import('@/views/finance/sku-margin/index.vue'),
+            // 🔴 2026-08-22: 加 modulesAll —— 这一页**跨两个模块**:
+            //   归属 finance, 但它读 /processing/batches(后端 @RequireModule 要 production)。
+            //   只有 finance 的 cashier 看得见入口、点进去必 403。
+            // ⛔ 不改 module 为 production —— 那会把它暴露给没有 finance 的生产角色。
+            meta: { requiresAuth: true, title: 'SKU毛利率分析', module: 'finance',
+                    modulesAll: ['finance', 'production'] }
+          },
+          // SP5 W6: 毛利红线配置 (目标毛利率管理, 财务/超管可配, #693 报价红线读它)
+          {
+            path: 'gross-margin-redline',
+            name: 'FinanceGrossMarginRedline',
+            component: () => import('@/views/finance/gross-margin-redline/index.vue'),
+            meta: { requiresAuth: true, title: '毛利红线配置', module: 'finance' }
+          },
+          {
+            path: 'invoices',
+            name: 'FinanceInvoices',
+            component: () => import('@/views/finance/invoices/list.vue'),
+            meta: { requiresAuth: true, title: '开票管理', module: 'finance' }
+          },
+          {
+            path: 'payments',
+            name: 'FinancePayments',
+            component: () => import('@/views/finance/payments/list.vue'),
+            meta: { requiresAuth: true, title: '收款管理', module: 'finance' }
+          },
+          // R28 P2 (R23 P5 deferred): PENDING adjustment approval queue
+          {
+            path: 'adjustments',
+            name: 'FinanceAdjustments',
+            component: () => import('@/views/finance/adjustments/list.vue'),
+            meta: { requiresAuth: true, title: '调整审批', module: 'finance' }
+          },
+          // P2 凭证列表 — 浏览/搜索/过账/作废
+          {
+            path: 'voucher-list',
+            name: 'FinanceVoucherList',
+            component: () => import('@/views/finance/voucher/list.vue'),
+            meta: { requiresAuth: true, title: '凭证列表', module: 'finance' }
+          },
+          // P2 凭证模板编辑器 — 科目↔付款类型映射 CRUD
+          {
+            path: 'voucher-template',
+            name: 'FinanceVoucherTemplate',
+            component: () => import('@/views/finance/voucher-template/index.vue'),
+            meta: { requiresAuth: true, title: '凭证模板', module: 'finance' }
+          },
+          // Sprint 7 T1 F-VOUCHER-2 Phase D — 凭证详情 借/贷 双栏 + 平衡 ✓ check
+          {
+            path: 'voucher/:id',
+            name: 'FinanceVoucherDetail',
+            component: () => import('@/views/finance/voucher/VoucherDetail.vue'),
+            meta: { requiresAuth: true, title: '凭证详情', module: 'finance', hidden: true }
+          },
+          // Sprint 7 T2 F-PERIOD — 期间结账管理 (大企业财务月底锁账)
+          {
+            path: 'accounting-period',
+            name: 'FinanceAccountingPeriod',
+            component: () => import('@/views/finance/accounting-period/index.vue'),
+            meta: { requiresAuth: true, title: '期间结账', module: 'finance' }
+          },
+          // Sprint 7 T3 F-3REPORT — 报表三表 (资产负债 + 利润 + 现金流, 上市公司必看)
+          {
+            path: 'three-statements',
+            name: 'FinanceThreeStatements',
+            component: () => import('@/views/finance/report/index.vue'),
+            meta: { requiresAuth: true, title: '财务报表', module: 'finance' }
+          },
+          // SP11 U-SP11: 进销存台账报表 (期初/期中/期末 + 数量/金额, @PriceSensitive 脱敏)
+          {
+            path: 'inventory-ledger',
+            name: 'FinanceInventoryLedger',
+            component: () => import('@/views/finance/inventory-ledger/index.vue'),
+            meta: { requiresAuth: true, title: '进销存台账', module: 'finance' }
+          },
+          // SP11 U-SP11: 凭证导出配置 + 科目映射 + 序时账/余额表导出
+          {
+            path: 'voucher-export',
+            name: 'FinanceVoucherExport',
+            component: () => import('@/views/finance/voucher-export/index.vue'),
+            meta: { requiresAuth: true, title: '凭证导出', module: 'finance' }
+          }
+        ]
+      },
+
+      // 研发管理 (v1 §2.1 — 2 页结构: 研发样品管理 + 已转样品库)
+      {
+        path: 'rd',
+        name: 'RD',
+        redirect: '/rd/samples',
+        // 🔴 2026-08-22: 父级也要改 —— 否则路由守卫在父级按 production 放行,
+        // 子路由的 module 就白改了。菜单侧同步(menuConfig 的 /rd/samples)。
+        meta: { requiresAuth: true, title: '研发管理', module: 'rd' },
+        children: [
+          {
+            path: 'samples',
+            name: 'RdSamples',
+            component: () => import('@/views/rd/samples/list.vue'),
+            meta: { requiresAuth: true, title: '研发样品管理', module: 'rd' }
+          },
+          {
+            path: 'converted',
+            name: 'RdConverted',
+            component: () => import('@/views/rd/converted/list.vue'),
+            meta: { requiresAuth: true, title: '已转样品库', module: 'rd' }
+          },
+          // SP10: 报价详情 + 三价对比
+          {
+            // 防呆: 无 ID 直接访问 /rd/quotations/three-price 会被 :taskId 吃掉
+            // (taskId='three-price' → 详情页"报价任务未找到"空态)。静态路由优先级
+            // 高于动态参数, 显式 redirect 到报价列表让用户选任务。
+            path: 'quotations/three-price',
+            redirect: '/rd/samples'
+          },
+          {
+            path: 'quotations/:taskId',
+            name: 'RdQuotationDetail',
+            component: () => import('@/views/rd/quotations/detail.vue'),
+            meta: { requiresAuth: true, title: '报价详情', module: 'rd' }
+          },
+          {
+            path: 'quotations/:taskId/three-price',
+            name: 'RdThreePrice',
+            component: () => import('@/views/rd/quotations/three-price.vue'),
+            meta: { requiresAuth: true, title: '三价对比', module: 'rd' }
+          },
+          // SP10: 中报价汇算
+          {
+            path: 'mid-quotes/:taskId',
+            name: 'RdMidQuote',
+            component: () => import('@/views/rd/mid-quotes/detail.vue'),
+            // 🔴 2026-08-22: 同 SKU毛利率 —— 归属 rd, 但读 /processing/batches(要 production)。
+            meta: { requiresAuth: true, title: '中报价汇算', module: 'rd',
+                    modulesAll: ['rd', 'production'] }
+          }
+        ]
+      },
+
+      // 系统管理 (Web专属)
+      {
+        path: 'system',
+        name: 'System',
+        redirect: '/system/users',
+        meta: { requiresAuth: true, title: '系统管理', icon: 'Setting', module: 'system' },
+        children: [
+          {
+            path: 'users',
+            name: 'SystemUsers',
+            component: () => import('@/views/system/users/list.vue'),
+            meta: { requiresAuth: true, title: '账号管理', module: 'system' }
+          },
+          {
+            path: 'roles',
+            name: 'SystemRoles',
+            component: () => import('@/views/system/roles/list.vue'),
+            meta: { requiresAuth: true, title: '角色权限', module: 'system' }
+          },
+          {
+            path: 'logs',
+            name: 'SystemLogs',
+            component: () => import('@/views/system/logs/index.vue'),
+            meta: { requiresAuth: true, title: '操作日志', module: 'system' }
+          },
+          {
+            path: 'encoding-rules',
+            name: 'SystemEncodingRules',
+            component: () => import('@/views/system/encoding-rules/list.vue'),
+            meta: { requiresAuth: true, title: '编码规则字典', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'approval-chains',
+            name: 'SystemApprovalChains',
+            component: () => import('@/views/system/approval-chains/list.vue'),
+            meta: { requiresAuth: true, title: '审批链配置', module: 'system' }
+          },
+          {
+            path: 'ai-quota',
+            name: 'SystemAIQuota',
+            component: () => import('@/views/system/ai-quota/list.vue'),
+            meta: { requiresAuth: true, title: 'AI 配额规则', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          // Sprint 8 P0.2 HIDE — index.vue 是 el-empty 占位, 内容未实现.
+          // 后端 API (permissionApi.ts) 已 ship, 仅缺前端实现.
+          // 推 Sprint 9 P1 真做完整 L1/L2 权限矩阵 UI.
+          // {
+          //   path: 'role-permissions',
+          //   name: 'SystemRolePermissions',
+          //   component: () => import('@/views/system/role-permissions/index.vue'),
+          //   meta: { requiresAuth: true, title: '全局权限矩阵 (L1)', module: 'system' }
+          // },
+          {
+            path: 'settings',
+            name: 'SystemSettings',
+            component: () => import('@/views/system/settings/index.vue'),
+            meta: { requiresAuth: true, title: '系统设置', module: 'system' }
+          },
+          {
+            path: 'ai-intents',
+            name: 'SystemAIIntents',
+            component: () => import('@/views/system/ai-intents/index.vue'),
+            meta: { requiresAuth: true, title: 'AI意图配置', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'skill-tools',
+            name: 'SystemSkillTools',
+            component: () => import('@/views/system/skill-tools/index.vue'),
+            meta: { requiresAuth: true, title: 'Skill/Tool 治理', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'llm-usage',
+            name: 'SystemLLMUsage',
+            component: () => import('@/views/system/llm-usage/index.vue'),
+            meta: { requiresAuth: true, title: 'LLM 用量监控', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 — 蒸馏训练的驾驶舱.
+          // 5 个子页面, 平台管理员权限. real-only — 真实接口失败就是失败, 不回落假数据
+          // (阻断项修复); mock 仅限 FLYWHEEL_MOCK_ACTIVE 显式开关 + 本地 dev 构建双重条件下生效,
+          // 见 @/api/smartbi/ai-flywheel.ts 文件头。
+          {
+            path: 'ai-flywheel',
+            redirect: '/system/ai-flywheel/overview',
+            meta: { requiresAuth: true, title: 'AI 飞轮运营台', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/overview',
+            name: 'SystemFlywheelOverview',
+            component: () => import('@/views/system/ai-flywheel/Overview.vue'),
+            meta: { requiresAuth: true, title: '飞轮总览看板', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/candidates',
+            name: 'SystemFlywheelCandidates',
+            component: () => import('@/views/system/ai-flywheel/Candidates.vue'),
+            meta: { requiresAuth: true, title: '晋升审核工作台', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/misses',
+            name: 'SystemFlywheelMisses',
+            component: () => import('@/views/system/ai-flywheel/Misses.vue'),
+            meta: { requiresAuth: true, title: 'Miss 复盘', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/quality',
+            name: 'SystemFlywheelQuality',
+            component: () => import('@/views/system/ai-flywheel/Quality.vue'),
+            meta: { requiresAuth: true, title: '质量与回归', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'ai-flywheel/dataset',
+            name: 'SystemFlywheelDataset',
+            component: () => import('@/views/system/ai-flywheel/Dataset.vue'),
+            meta: { requiresAuth: true, title: '蒸馏数据集', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'label-qc-platform-diagnostics',
+            name: 'SystemLabelQcPlatformDiagnostics',
+            component: () => import('@/views/platform/label-qc-diagnostics/index.vue'),
+            meta: { requiresAuth: true, title: '标签识别诊断', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'label-qc-tray-crops',
+            name: 'SystemLabelQcTrayCrops',
+            component: () => import('@/views/platform/label-qc-crops/index.vue'),
+            meta: { requiresAuth: true, title: '单盒标签精修', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            // Sprint 4 Chat K C-LOG-AUDIT-1 (2026-05-16): 系统操作日志独立 menu.
+            // Tracks entity-level CRUD via @Loggable AOP. backend: OperationLogController.
+            path: 'operation-log',
+            name: 'SystemOperationLog',
+            component: () => import('@/views/system/operation-log/index.vue'),
+            meta: { requiresAuth: true, title: '操作日志', module: 'system' }
+          },
+          {
+            // Sprint 4 Chat K C-EXPORT-CENTER-1 (2026-05-16): 用户可配置的跨模块导出规则.
+            // backend: ExportRuleController + ExportExecutor (EntityManager + SpEL + EasyExcel).
+            path: 'export-center',
+            name: 'SystemExportCenter',
+            component: () => import('@/views/system/export-center/index.vue'),
+            meta: { requiresAuth: true, title: '导出中心', module: 'system' }
+          },
+          {
+            // Sprint 4 Chat K C-IMPORT-CENTER-1 (2026-05-16): 用户可配置的 Excel 导入规则 +
+            // dryrun + commit. backend: ImportRuleController + ImportExecutor + ImportCommitter.
+            path: 'import-center',
+            name: 'SystemImportCenter',
+            component: () => import('@/views/system/import-center/index.vue'),
+            meta: { requiresAuth: true, title: '导入中心', module: 'system' }
+          },
+          {
+            // 数据织网 A spec admin audit page (Phase 3 Day 10 + Phase 4.5 wire-up)
+            path: 'data-fabric/capability-audit',
+            name: 'CapabilityAudit',
+            component: () => import('@/views/system/data-fabric/capability-audit.vue'),
+            meta: { requiresAuth: true, title: '能力驱动渲染审计', module: 'system' }
+          },
+          {
+            // 数据织网 C spec §6.3 — cell-level lineage detail (Day 26).
+            // Reached via TrustIndicator's "查看来源" button which pushes
+            // /audit/cell?type=&id=&field= (see the top-level CellAudit
+            // route below). Hidden from sidebar; admin-only via meta.roles.
+            //
+            // This sidebar entry is intentionally hidden — the canonical
+            // path is the top-level /audit/cell to match the spec NS-7 URL.
+            path: 'data-fabric/cell-audit',
+            name: 'CellAuditSystem',
+            component: () => import('@/views/system/data-fabric/cell-audit.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '字段血统审计',
+              module: 'system',
+              hidden: true,
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+            },
+          },
+          {
+            // 数据织网 C spec §6.4 — factory provenance config admin page (Day 27).
+            // Sidebar-discoverable (NOT hidden) — admins need to find this.
+            // GET + PUT live at /api/smartbi/factory-config/provenance.
+            path: 'data-fabric/provenance-config',
+            name: 'ProvenanceConfig',
+            component: () => import('@/views/system/data-fabric/provenance-config.vue'),
+            meta: {
+              requiresAuth: true,
+              title: 'Provenance 配置',
+              module: 'system',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+            },
+          },
+          {
+            // 餐饮 Phase A A-3 Task 3.5: data quality queue admin page
+            path: 'data-quality-queue',
+            name: 'AdminDataQualityQueue',
+            component: () => import('@/views/admin/data-quality-queue.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '数据质量队列',
+              module: 'system',
+              hidden: false,
+              roles: platformAdminOnlyRoles,
+            },
+          },
+          {
+            // 餐饮 Phase A A-3 Task 3.6: data quality queue detail page (history)
+            path: 'data-quality-queue/:id',
+            name: 'AdminDataQualityQueueDetail',
+            component: () => import('@/views/admin/data-quality-queue-detail.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '数据质量队列详情',
+              module: 'system',
+              hidden: true,
+              roles: platformAdminOnlyRoles,
+            },
+          },
+          {
+            path: 'products',
+            name: 'ProductManagement',
+            component: () => import('@/views/system/products/index.vue'),
+            // 🔴 2026-08-22: system -> production。**菜单里这三项写的就是 production**
+            //   (menuConfig「生产配置」组), 而路由写 system ⇒ 生产经理看得见入口、
+            //   点进去被**路由守卫**直接送到 /403。
+            // ▎菜单 module ≠ 路由 module 是一整类漂移, 而漂移扫描器**只读路由不读菜单**
+            //   (它自己文件头写明的盲区) ⇒ 这一类它一条都报不出来。
+            // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
+            //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
+            //   GET /product-process-workflows 要 production。是路由声明错了。
+            meta: { requiresAuth: true, title: '产品信息管理', module: 'production' }
+          },
+          {
+            path: 'features',
+            name: 'SystemFeatures',
+            component: () => import('@/views/system/features/index.vue'),
+            meta: { requiresAuth: true, title: '功能模块配置', module: 'system' }
+          },
+          {
+            path: 'pos',
+            name: 'SystemPos',
+            component: () => import('@/views/system/pos/list.vue'),
+            meta: { requiresAuth: true, title: 'POS集成', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'work-processes',
+            name: 'WorkProcesses',
+            component: () => import('@/views/system/work-processes/index.vue'),
+            // 🔴 2026-08-22: system -> production。**菜单里这三项写的就是 production**
+            //   (menuConfig「生产配置」组), 而路由写 system ⇒ 生产经理看得见入口、
+            //   点进去被**路由守卫**直接送到 /403。
+            // ▎菜单 module ≠ 路由 module 是一整类漂移, 而漂移扫描器**只读路由不读菜单**
+            //   (它自己文件头写明的盲区) ⇒ 这一类它一条都报不出来。
+            // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
+            //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
+            //   GET /product-process-workflows 要 production。是路由声明错了。
+            meta: { requiresAuth: true, title: '工序管理', module: 'production' }
+          },
+          {
+            path: 'product-processes',
+            name: 'ProductProcesses',
+            component: () => import('@/views/system/product-processes/index.vue'),
+            // 🔴 2026-08-22: system -> production。**菜单里这三项写的就是 production**
+            //   (menuConfig「生产配置」组), 而路由写 system ⇒ 生产经理看得见入口、
+            //   点进去被**路由守卫**直接送到 /403。
+            // ▎菜单 module ≠ 路由 module 是一整类漂移, 而漂移扫描器**只读路由不读菜单**
+            //   (它自己文件头写明的盲区) ⇒ 这一类它一条都报不出来。
+            // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
+            //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
+            //   GET /product-process-workflows 要 production。是路由声明错了。
+            meta: { requiresAuth: true, title: '产品-工序配置', module: 'production' }
+          },
+          {
+            path: 'workflow-designer',
+            name: 'WorkflowDesigner',
+            component: () => import('@/views/system/workflow-designer/index.vue'),
+            meta: { requiresAuth: true, title: '工作流设计器', module: 'system' }
+          },
+          {
+            path: 'smartbi-config',
+            name: 'SmartBIConfig',
+            component: () => import('@/views/smartbi-config/SmartBIConfigView.vue'),
+            meta: { requiresAuth: true, title: 'SmartBI配置', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'smartbi-config/data-sources',
+            name: 'SmartBIDataSources',
+            component: () => import('@/views/smartbi-config/DataSourceConfigView.vue'),
+            meta: { requiresAuth: true, title: '数据源配置', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'smartbi-config/chart-templates',
+            name: 'SmartBIChartTemplates',
+            component: () => import('@/views/smartbi-config/ChartTemplateView.vue'),
+            meta: { requiresAuth: true, title: '图表模板', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: 'badge-generator',
+            name: 'BadgeGenerator',
+            component: () => import('@/views/system/employees/BadgeGenerator.vue'),
+            meta: { requiresAuth: true, title: '员工工牌生成', module: 'system' }
+          },
+          {
+            path: 'cost-variance',
+            name: 'CostVarianceConfig',
+            component: () => import('@/views/system/cost-variance/index.vue'),
+            meta: { requiresAuth: true, title: '方差阈值配置', module: 'system' }
+          }
+        ]
+      },
+
+      // Sprint 5 Track A + Sprint 6 W1-B (C-MENU-PERSONAL-VIEW) — workflow views.
+      // Round 12 §D X4: HJ 工作流 6 sub-menu (待处理 / 工作流处理 / 工作流设置 /
+      // 流转规则设置 / 我创建的工作流 / 我参与的工作流). Cretas Sprint 3 Track-I +
+      // Canvas Phase 1 (PR #862) ships 工作流设置 + 待处理 (PendingApprovalsWidget).
+      // Sprint 5 Track A ships my-created. Sprint 6 W1-B ships remaining 3:
+      // my-participated / admin-running / rules.
+      {
+        path: 'workflow',
+        name: 'Workflow',
+        redirect: '/workflow/pending',
+        meta: { requiresAuth: true, title: '个人 OA', icon: 'Connection', module: 'dashboard' },
+        children: [
+          {
+            path: 'pending',
+            name: 'WorkflowPending',
+            component: () => import('@/views/workflow/pending.vue'),
+            meta: { requiresAuth: true, title: '待我审批', module: 'dashboard' }
+          },
+          {
+            path: 'my-created',
+            name: 'WorkflowMyCreated',
+            component: () => import('@/views/workflow/my-created.vue'),
+            meta: { requiresAuth: true, title: '我发起的', module: 'dashboard' }
+          },
+          {
+            path: 'acted',
+            name: 'WorkflowActed',
+            component: () => import('@/views/workflow/acted.vue'),
+            meta: { requiresAuth: true, title: '已处理', module: 'dashboard' }
+          },
+          {
+            path: 'copied',
+            name: 'WorkflowCopied',
+            component: () => import('@/views/workflow/copied.vue'),
+            meta: { requiresAuth: true, title: '抄送我的', module: 'dashboard' }
+          },
+          {
+            path: 'my-participated',
+            name: 'WorkflowMyParticipated',
+            redirect: '/workflow/acted',
+            meta: { requiresAuth: true, title: '已处理', module: 'dashboard' }
+          },
+          {
+            path: 'admin-running',
+            name: 'WorkflowAdminRunning',
+            component: () => import('@/views/workflow/admin-running.vue'),
+            meta: { requiresAuth: true, title: '工作流处理', module: 'system' }
+          },
+          {
+            path: 'rules',
+            name: 'WorkflowRules',
+            component: () => import('@/views/workflow/rules.vue'),
+            meta: { requiresAuth: true, title: '流转规则设置', module: 'system' }
+          }
+        ]
+      },
+
+      // 数据分析中心 (调度专属)
+      {
+        path: 'analytics',
+        name: 'Analytics',
+        redirect: '/smart-bi/dashboard',   // IA 合并: 旧经营报表顶级入口落到经营驾驶舱 (P2)
+        meta: { requiresAuth: true, title: '数据与分析', icon: 'DataAnalysis', module: 'analytics' },
+        children: [
+          {
+            path: 'overview',
+            name: 'AnalyticsOverview',
+            component: () => import('@/views/analytics/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '分析概览',
+              module: 'analytics',
+              restaurantRoles: restaurantDecisionRoles,
+            }
+          },
+          // WS4: 趋势分析合并入经营分析 hub (redirect 保书签 → ?tab=trend)。组件经 hub 加载。
+          {
+            path: 'trends',
+            name: 'AnalyticsTrends',
+            redirect: (to) => buildHubRedirect(to, 'trend')
+          },
+          // WS4 #9: AI分析报告删除 — redirect 到经营分析 hub (component 保留以防深链, 但 menu 隐藏)。
+          {
+            path: 'ai-reports',
+            name: 'AnalyticsAIReports',
+            redirect: (to) => buildHubRedirect(to)
+          },
+          // WS4: KPI看板合并入经营分析 hub (redirect 保书签 → ?tab=kpi)。组件经 hub 加载。
+          {
+            path: 'kpi',
+            name: 'AnalyticsKPI',
+            redirect: (to) => buildHubRedirect(to, 'kpi')
+          },
+          {
+            path: 'production-report',
+            name: 'ProductionReport',
+            component: () => import('@/views/analytics/production-report/index.vue'),
+            meta: { requiresAuth: true, title: '车间实时生产报表', module: 'analytics' }
+          },
+          {
+            path: 'alert-dashboard',
+            name: 'AlertDashboard',
+            component: () => import('@/views/analytics/AlertDashboard.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '生产异常预警',
+              module: 'analytics',
+              hideForFactoryTypes: ['RESTAURANT'],
+            }
+          },
+          {
+            path: 'supply-chain',
+            name: 'SupplyChainOverview',
+            component: () => import('@/views/analytics/SupplyChainOverview.vue'),
+            meta: { requiresAuth: true, title: '进销存闭环总览', module: 'analytics' }
+          }
+        ]
+      },
+
+      // Phase 1 Track B.3 (2026-05-22): 指标中心 — Phase 1 backend (PR #155) UI.
+      // WS4: 合并入经营分析 hub 的 KPI·指标 tab 内层 (redirect 保书签 → ?tab=kpi&sub=indicator)。
+      // IndicatorCenterDashboard 组件经 hub 加载。
+      {
+        path: 'indicator-center',
+        name: 'IndicatorCenter',
+        redirect: (to) => buildHubRedirect(to, 'kpi', 'indicator')
+      },
+
+      // 行为校准管理
+      {
+        path: 'calibration',
+        name: 'Calibration',
+        redirect: '/calibration/list',
+        meta: { requiresAuth: true, title: '行为校准', icon: 'Aim', module: 'system', roles: platformAdminOnlyRoles },
+        children: [
+          {
+            path: 'list',
+            name: 'CalibrationList',
+            component: () => import('@/views/calibration/CalibrationListView.vue'),
+            meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
+            path: ':id',
+            name: 'CalibrationDetail',
+            component: () => import('@/views/calibration/CalibrationDetailView.vue'),
+            meta: { requiresAuth: true, title: '校准详情', module: 'system', hidden: true, roles: platformAdminOnlyRoles }
+          }
+        ]
+      },
+
+      // 智能调度
+      {
+        path: 'scheduling',
+        name: 'Scheduling',
+        redirect: '/scheduling/overview',
+        meta: { requiresAuth: true, title: '智能调度', icon: 'Calendar', module: 'scheduling' },
+        children: [
+          {
+            path: 'overview',
+            name: 'SchedulingOverview',
+            component: () => import('@/views/scheduling/index.vue'),
+            meta: { requiresAuth: true, title: '调度中心', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'plans',
+            name: 'SchedulingPlans',
+            component: () => import('@/views/scheduling/plans/list.vue'),
+            meta: { requiresAuth: true, title: '调度计划', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'plans/create',
+            name: 'SchedulingPlanCreate',
+            component: () => import('@/views/scheduling/plans/create.vue'),
+            meta: { requiresAuth: true, title: '创建计划', module: 'scheduling', hidden: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'plans/:id',
+            name: 'SchedulingPlanDetail',
+            component: () => import('@/views/scheduling/plans/detail.vue'),
+            meta: { requiresAuth: true, title: '计划详情', module: 'scheduling', hidden: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'realtime',
+            name: 'SchedulingRealtime',
+            component: () => import('@/views/scheduling/realtime/index.vue'),
+            meta: { requiresAuth: true, title: '实时监控', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'logistics/workbench',
+            name: 'LogisticsSchedulingWorkbench',
+            component: () => import('@/views/scheduling/logistics/workbench/index.vue'),
+            meta: { requiresAuth: true, title: '排线工作台', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/records',
+            name: 'LogisticsSchedulingRecords',
+            component: () => import('@/views/scheduling/logistics/records/index.vue'),
+            meta: { requiresAuth: true, title: '调度记录', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/orders',
+            name: 'LogisticsSchedulingOrders',
+            component: () => import('@/views/scheduling/logistics/orders/index.vue'),
+            meta: { requiresAuth: true, title: '门店与订单', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/resources',
+            name: 'LogisticsSchedulingResources',
+            component: () => import('@/views/scheduling/logistics/resources/index.vue'),
+            meta: { requiresAuth: true, title: '车辆与司机', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics/stores',
+            name: 'LogisticsSchedulingStores',
+            component: () => import('@/views/scheduling/logistics/stores/index.vue'),
+            meta: { requiresAuth: true, title: '门店库', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+          },
+          {
+            path: 'logistics-demo',
+            redirect: '/scheduling/logistics/workbench',
+            meta: { hidden: true, mockDemo: true },
+          },
+          {
+            path: 'workers',
+            name: 'SchedulingWorkers',
+            component: () => import('@/views/scheduling/workers/assignment.vue'),
+            meta: { requiresAuth: true, title: '人员分配', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'alerts',
+            name: 'SchedulingAlerts',
+            component: () => import('@/views/scheduling/alerts/index.vue'),
+            meta: { requiresAuth: true, title: '告警管理', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            path: 'settings',
+            name: 'SchedulingSettings',
+            component: () => import('@/views/scheduling/settings/index.vue'),
+            meta: { requiresAuth: true, title: '排产设置', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
+          }
+        ]
+      },
+
+      // 餐饮运营
+      {
+        path: 'restaurant',
+        name: 'Restaurant',
+        redirect: '/restaurant/requisitions',
+        meta: { requiresAuth: true, title: '餐饮运营', icon: 'Bowl', module: 'restaurant' },
+        children: [
+          // 四部门驾驶舱 (2026-07-31)。四条共用一个组件, 差异在
+          // views/restaurant/departments/departmentConfig.ts。
+          // meta.module 用四个部门权限键 —— guards 的模块闸据此放行, 没权限的
+          // 部门直接 403 且菜单里也不出现。
+          {
+            path: 'ops',
+            name: 'RestaurantDeptOps',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'ops' },
+            meta: { requiresAuth: true, title: '运营', module: 'restaurantOps' }
+          },
+          {
+            path: 'marketing',
+            name: 'RestaurantDeptMarketing',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'marketing' },
+            meta: { requiresAuth: true, title: '市场', module: 'restaurantMarketing' }
+          },
+          {
+            // 采购 2026-08-06 独立成第五个部门 (Steve 拍板)。
+            path: 'procurement',
+            name: 'RestaurantDeptProcurement',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'procurement' },
+            meta: { requiresAuth: true, title: '采购', module: 'restaurantProcurement' }
+          },
+          {
+            path: 'hr',
+            name: 'RestaurantDeptHr',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'hr' },
+            meta: { requiresAuth: true, title: '人事', module: 'restaurantHr' }
+          },
+          {
+            path: 'staffing',
+            name: 'RestaurantStaffingForecast',
+            component: () => import('@/views/restaurant/staffing/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '预测排班',
+              module: 'restaurantHr',
+              roles: [
+                'factory_super_admin', 'platform_admin', 'permission_admin',
+                'restaurant_owner', 'restaurant_manager', 'hr_admin',
+              ],
+            }
+          },
+          {
+            path: 'finance',
+            name: 'RestaurantDeptFinance',
+            component: () => import('@/views/restaurant/departments/DepartmentDashboard.vue'),
+            props: { dept: 'finance' },
+            meta: { requiresAuth: true, title: '财务', module: 'restaurantFinance' }
+          },
+          {
+            path: 'requisitions',
+            name: 'RestaurantRequisitions',
+            component: () => import('@/views/restaurant/requisitions/list.vue'),
+            meta: { requiresAuth: true, title: '领料管理', module: 'restaurantOps' }
+          },
+          {
+            path: 'wastage',
+            name: 'RestaurantWastage',
+            component: () => import('@/views/restaurant/wastage/list.vue'),
+            meta: { requiresAuth: true, title: '损耗管理', module: 'restaurantOps' }
+          },
+          {
+            path: 'recipes',
+            name: 'RestaurantRecipes',
+            component: () => import('@/views/restaurant/recipes/list.vue'),
+            meta: { requiresAuth: true, title: '配方管理', module: 'restaurantOps' }
+          },
+          {
+            path: 'stocktaking',
+            name: 'RestaurantStocktaking',
+            component: () => import('@/views/restaurant/stocktaking/list.vue'),
+            meta: { requiresAuth: true, title: '盘点管理', module: 'restaurantOps' }
+          },
+          {
+            // #59 Phase 2: 营销员月度阶梯提成汇总 (复购业绩跨档)
+            path: 'commission',
+            name: 'RestaurantCommission',
+            component: () => import('@/views/restaurant/commission/rep-summary.vue'),
+            // 🔴 2026-08-07: module 原为 'restaurant'(**板块准入**, 不是部门)。
+            // 这正是它一直没进菜单的原因 —— 两条既有契约在它身上打架:
+            //   · restaurantMenuRouteAlignment: 每个餐饮功能页必须挂五部门之一
+            //   · 同一 spec: 菜单项 module 必须 == 路由 meta.module
+            // 用 'restaurant' 时两条不可能同时满足, 于是它既进不了菜单, 也没人
+            // 链接过去 —— 有路由、有组件、用户到不了。
+            // 营销员提成属**市场**部门, 两侧一起归位, 两条契约同时成立。
+            meta: { requiresAuth: true, title: '营销员提成', module: 'restaurantMarketing' }
+          },
+          {
+            // IA v2 (2026-06-02): 旧运营总览 (Excel 浏览器) 不再渲染; 餐饮经营总览复用
+            // 「数据与分析」组的业态自适应经营驾驶舱。保留 query (函数式 redirect)。
+            path: 'analytics',
+            name: 'RestaurantAnalyticsOverview',
+            redirect: (to) => ({ path: '/smart-bi/dashboard', query: { ...to.query } }),
+          },
+          {
+            // 店长经营 KPI 看板 (single-store 直营 MVP, 2026-06-04):
+            // 一屏 6 KPI (日营收/客单价/订单数/毛利率/食材成本率/目标完成率) + 健康灯。
+            path: 'analytics/role-kpi',
+            name: 'RestaurantRoleKpiDashboard',
+            component: () => import('@/views/restaurant/analytics/role-kpi-dashboard.vue'),
+            meta: { requiresAuth: true, title: '经营看板', module: 'restaurantMarketing' }
+          },
+          {
+            // IA v2: 菜品分析双tab (整合 菜品四象限 + 菜品毛利)
+            path: 'analytics/dishes',
+            name: 'RestaurantDishes',
+            component: () => import('@/views/restaurant/analytics/dishes.vue'),
+            meta: { requiresAuth: true, title: '菜品分析', module: 'restaurantMarketing' }
+          },
+          {
+            // G2 (2026-06-03): 目标拆分 + 达成率预警 — 年/月/周/日四级目标录入
+            path: 'analytics/targets',
+            name: 'RestaurantTargets',
+            component: () => import('@/views/restaurant/analytics/target-hierarchy.vue'),
+            meta: { requiresAuth: true, title: '目标管理', module: 'restaurant' }
+          },
+          {
+            // IA v2: 大众点评口碑 (原 经营与平台分析, 明标需接平台数据)
+            path: 'analytics/platform',
+            name: 'RestaurantPlatform',
+            component: () => import('@/views/restaurant/analytics/platform.vue'),
+            meta: { requiresAuth: true, title: '平台分析', module: 'restaurantMarketing' }
+          },
+          {
+            // IA v2: 旧四象限 → 菜品分析 quadrant tab (保留 query)
+            path: 'analytics/menu',
+            name: 'RestaurantMenuBoard',
+            redirect: (to) => ({ path: '/restaurant/analytics/dishes', query: { ...to.query, tab: 'quadrant' } }),
+          },
+          {
+            path: 'analytics/stores',
+            name: 'RestaurantStoreComparison',
+            component: () => import('@/views/restaurant/analytics/store-comparison.vue'),
+            meta: { requiresAuth: true, title: '门店对比', module: 'restaurantMarketing' }
+          },
+          {
+            // IA v2: 旧点评页 → 平台口碑 (保留 query)
+            path: 'analytics/dianping',
+            name: 'RestaurantDianpingGap',
+            redirect: (to) => ({ path: '/restaurant/analytics/platform', query: { ...to.query } }),
+          },
+          {
+            // IA v2: 旧菜品毛利 → 菜品分析 margin tab (保留 query)
+            path: 'analytics/gross-margin',
+            name: 'RestaurantGrossMargin',
+            redirect: (to) => ({ path: '/restaurant/analytics/dishes', query: { ...to.query, tab: 'margin' } }),
+          },
+          {
+            // 餐饮 Phase A-1 Task 1.5: ETL admin status page
+            path: 'admin/etl-status',
+            name: 'RestaurantETLStatus',
+            component: () => import('@/views/restaurant/admin/etl-status.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '餐饮 ETL 状态',
+              module: 'restaurant',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+              hidden: false,
+            },
+          },
+          {
+            // #61 Phase 1 (2026-06-04): POS 菜品名称解析回填 — 未解析队列 admin 裁决
+            path: 'admin/name-resolution',
+            name: 'RestaurantNameResolution',
+            component: () => import('@/views/restaurant/admin/name-resolution.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '菜品名称匹配',
+              module: 'restaurant',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+              hidden: false,
+            },
+          },
+          {
+            // 餐饮 Phase A-2 Task 2.2: data completeness page
+            path: 'data-completeness',
+            name: 'RestaurantDataCompleteness',
+            component: () => import('@/views/restaurant/data-completeness.vue'),
+            meta: { requiresAuth: true, title: '数据完整度', module: 'restaurant' },
+          },
+          {
+            // G7 取数自动化 Tier A: 供应商进货录入 (OCR + 手工)
+            path: 'supplier-delivery',
+            name: 'SupplierDeliveryNoteList',
+            component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteList.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '供应商进货录入',
+              module: 'dashboard',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager']
+            },
+          },
+          {
+            path: 'supplier-reconciliation',
+            name: 'RestaurantSupplierReconciliation',
+            component: () => import('@/views/restaurant/supplier-reconciliation/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '供应商月对账',
+              module: 'restaurantFinance',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
+            },
+          },
+          {
+            path: 'cost-attribution',
+            name: 'RestaurantCostAttribution',
+            component: () => import('@/views/restaurant/cost-attribution/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '成本归因',
+              module: 'restaurantFinance',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'finance_manager']
+            },
+          },
+          {
+            path: 'supplier-delivery/price-anomaly/pending',
+            name: 'PriceAnomalyApprovalList',
+            component: () => import('@/views/restaurant/supplier-delivery/PriceAnomalyApprovalList.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '价格异常待审批',
+              module: 'dashboard',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager']
+            },
+          },
+          {
+            path: 'supplier-delivery/:id',
+            name: 'SupplierDeliveryNoteDetail',
+            component: () => import('@/views/restaurant/supplier-delivery/SupplierDeliveryNoteDetail.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '送货单详情',
+              module: 'dashboard',
+              hidden: true,
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'warehouse_manager', 'procurement_manager']
+            },
+          },
+          {
+            // Wave2 价格异常威慑引擎 (邓总差异化护城河): 同类物料相邻进价异常检测 + 解释录入
+            path: 'price-anomaly',
+            name: 'RestaurantPriceAnomaly',
+            component: () => import('@/views/restaurant/price-anomaly/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '价格异常预警',
+              module: 'restaurantFinance',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager'],
+            },
+          }
+        ]
+      },
+
+      // Canvas 配置编辑器
+      // Round 7a P0 fix: `roles` meta was missing — any authenticated user could load
+      // the editor regardless of role. Restricted to canvas config admins only.
+      // (Backend @RequireRole already gates the mutation endpoints, but the UI should
+      //  not even render for unprivileged users to avoid "button visible then 403" UX.)
+      //
+      // R18 fix (2026-04-15): roles list must match backend @RequireRole on
+      // ConfigController / CanvasAIController, which is
+      // {"factory_super_admin", "permission_admin"}. The prior list
+      // ['platform_admin', 'permission_admin'] desynced router from backend and
+      // locked factory_super_admin (the highest FACTORY role) out of the UI even
+      // though the backend would have accepted their requests. `platform_admin`
+      // is kept for platform-level operators; `factory_super_admin` restored.
+      {
+        path: 'canvas-editor',
+        name: 'CanvasEditor',
+        component: () => import('@/views/platform/canvas-editor/index.vue'),
+        meta: {
+          title: 'Canvas 配置编辑器',
+          icon: 'Setting',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+      // Sprint 3 Track-I (C-APPROVAL-EDITOR-1) — graph-native 审批工作流编辑器.
+      // Backend: ApprovalWorkflowController + ApprovalWorkflowExecutor (4 modes).
+      //
+      // Phase 1 Canvas-Workflow (2026-05-18): UI 入口迁移到 Canvas Editor 的
+      // "审批工作流" Tab. 此独立路由仍保留 (供旧书签访问 / 全屏调试), 但
+      // showInMenu:false 不再出现在侧边菜单 — 用户通过 /platform/canvas-editor 进入.
+      // Sprint 4+ 完全移除独立路由前请确认: 无对此 path 的硬编码引用.
+      {
+        path: 'approval-workflow-editor',
+        name: 'ApprovalWorkflowEditor',
+        component: () => import('@/views/platform/approval-workflow-editor/index.vue'),
+        meta: {
+          title: '审批工作流编辑器 (已迁移到 Canvas)',
+          icon: 'Connection',
+          requiresAuth: true,
+          showInMenu: false,
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+      // Sprint 3 Track-J C-PRT-EDITOR-1 — print template visual designer.
+      // Schema-driven PDF print, FormTemplate entity reused with PRINT_* prefix.
+      // RBAC gates editor by role; backend FormTemplateController PUT requires system:read_write.
+      {
+        path: 'print-template-editor',
+        name: 'PrintTemplateEditor',
+        component: () => import('@/views/platform/print-template-editor/index.vue'),
+        meta: {
+          title: '打印模板设计器',
+          icon: 'Printer',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+      // T123: 计量单位字典管理 — 客户要求"留个给我自己修改"的单位配置模块
+      // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
+      // 功能: 工厂级 UnitOfMeasurement CRUD (一级/二级单位: 筐/箱/件/袋/桶/盒)
+      {
+        path: 'unit-dictionary',
+        name: 'UnitDictionary',
+        component: () => import('@/views/platform/unit-dictionary-editor/index.vue'),
+        meta: {
+          title: '计量单位字典',
+          icon: 'Tickets',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+
+      // 动态模块页 (Canvas配置系统)
+      {
+        path: 'modules/:moduleCode',
+        name: 'DynamicModule',
+        component: () => import('@/views/modules/DynamicModulePage.vue'),
+        meta: {
+          title: '动态模块',
+          requiresAuth: true,
+        },
+      },
+
+      // 数据织网 C spec §6.3 — cell-level lineage detail page (Day 26).
+      // Canonical URL per spec NS-7 — /audit/cell?type=&id=&field=
+      // (encodeURIComponent-safe). Reached from any TrustIndicator's
+      // "查看来源" button. Admin-only, hidden from sidebar.
+      {
+        path: 'audit/cell',
+        name: 'CellAudit',
+        component: () => import('@/views/system/data-fabric/cell-audit.vue'),
+        meta: {
+          title: '字段血统审计',
+          requiresAuth: true,
+          hidden: true,
+          roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
+        },
+      },
+
+      // 生产分析 & 人效分析 (独立模块)
+      ...productionAnalyticsRoutes,
+
+      // SmartBI 智能BI (导入自模块)
+      ...smartBIRoutes,
+
+      // CRM 会员与营销 (P0 — 会员分析; 导入自模块)
+      ...crmRoutes,
+
+      // 运营分析 (撤单稽核 + 区域坪效; 导入自模块)
+      ...opsRoutes
+    ]
+  },
+
+  // SmartBI 快捷入口重定向
+  ...smartBIRedirects,
+
+  // 404 兜底
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/404'
+  }
+];
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [...baseRoutes, ...businessRoutes]
+});
+
+// 注意：路由守卫需要在 pinia 初始化后设置，因此移到 main.ts 中调用
+// setupRouterGuards(router);  // 已移至 main.ts
+
+export default router;
+
+// 导出 setupRouterGuards 供 main.ts 使用
+export { setupRouterGuards };

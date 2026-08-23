@@ -1,0 +1,98 @@
+package com.cretas.aims.service.sales;
+
+import com.cretas.aims.dto.sales.BatchAllocationDTO;
+import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * PC 端销售发货批次分配服务（P0-13 昆山六扇门客户需求）。
+ *
+ * <p>发货确认时必须保证每一行 SalesDeliveryItem 已完成批次分配，
+ * 否则阻断状态流转，实现真正的批次追溯。
+ */
+public interface SalesDeliveryBatchAllocationService {
+
+    /**
+     * 为指定发货行设置批次分配。先清空旧分配，再按给定列表写入。
+     *
+     * <p>校验：
+     * <ul>
+     *   <li>发货行必须存在且属于同工厂</li>
+     *   <li>每个 FinishedGoodsBatch 必须存在且属于同工厂</li>
+     *   <li>每个 batch 的可用库存（produced - shipped - reserved）>= allocatedQty</li>
+     *   <li>总分配量必须等于 SalesDeliveryItem.deliveredQuantity</li>
+     * </ul>
+     */
+    void allocateBatches(String factoryId, String deliveryItemId, List<BatchAllocationDTO> allocations);
+
+    List<SalesDeliveryItemBatchAllocation> listByDeliveryItem(String factoryId, String deliveryItemId);
+
+    void clearAllocations(String factoryId, String deliveryItemId);
+
+    /**
+     * @return true 当该发货行的总分配量 == deliveredQuantity。
+     */
+    boolean isFullyAllocated(String factoryId, String deliveryItemId);
+
+    /**
+     * 按先进先出**自动**分配（仓管在手机上不需要理解「批次」这个概念）。
+     *
+     * <p>🔴 2026-08-20 owner 拍板: 批次分配从「强制人工挑」改为「默认自动」。
+     * 原因是现场用不起来 —— 「批次他们自己都管不过来, 我还得帮他录入」;
+     * 追溯改为按**订单号/销售单**做, 不依赖批次粒度。
+     *
+     * <p>⚠️ 自动分配**不丢数据**: HACCP 放行闸(assertHaccpReleaseAllowed)和成本核算
+     * 读的都是「已分配的批次」, 不关心这个分配是人点的还是系统算的。
+     * 放弃的只是「实际搬走的那箱 ≠ FIFO 推荐时能人工纠正」这一项。
+     *
+     * <p>⛔ 库存不够时**不做部分分配**, 返回 false 让调用方给出「还差多少」的明确提示 ——
+     * 分配一半再放行, 会让发货单带着一个对不上的数进下游。
+     *
+     * @return true = 已分配至满足数量; false = 可用库存不足, 未写入任何分配
+     */
+    boolean autoAllocateFifo(String factoryId, String deliveryItemId, String productTypeId,
+                             java.math.BigDecimal requiredQty, String unit, String sourceWarehouseCode);
+
+    /**
+     * FIFO 推荐：按生产日期升序返回可用成品批次，附建议分配数量（累计至 requiredQty）。
+     * 镜像原材料 FIFO 模式（MaterialFifoRecommendTool）用于成品出库。
+     *
+     * <p>客户需求 5016s: "客户也要做先进先出，销售出库单要有PC日期"
+     *
+     * <p>T4-D5 (#572): {@code sourceWarehouseCode} honors per-line source warehouse
+     * declared on SalesOrderItem → SalesDeliveryItem (PR #564 data contract).
+     * When null/blank, falls back to WH-LOG (legacy D5 default).
+     *
+     * <p>🔴 C1 (2026-07-05): {@code unit} is the requesting delivery line's unit (e.g.
+     * {@code SalesDeliveryItem.unit}). FG batches for the same product may be recorded in
+     * DIFFERENT native units (one 小结'd with productWeight → kg, another without → 盒/件).
+     * {@code availableQuantity}/{@code recommendedQuantity} in the result are converted into
+     * {@code unit} (via {@code ProductType.gramsPerUnit}) so cross-unit batches are never
+     * summed/compared as raw numbers. When {@code unit} is blank/null, falls back to the
+     * product's default unit; a batch whose native unit can't be converted to the target unit
+     * is skipped from the recommendation (honest-null, never silently mixed in).
+     */
+    List<Map<String, Object>> recommendFifo(
+            String factoryId, String deliveryItemId, String productTypeId,
+            BigDecimal requiredQty, String unit, String sourceWarehouseCode);
+
+    /** Backward-compatible overload for isolated callers without delivery-line context. */
+    default List<Map<String, Object>> recommendFifo(
+            String factoryId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode) {
+        return recommendFifo(factoryId, null, productTypeId, requiredQty, unit, sourceWarehouseCode);
+    }
+
+    /**
+     * 🔴 G1 (2026-07-03): 该产品当前有可用成品库存的仓库 code 清单 (去重, 排除研发/中试库)。
+     *
+     * <p>诚实空态用: 当发货行<b>显式</b>声明的来源仓无货、但成品在其他仓库时, 前端据此提示
+     * 「成品在 X 仓, 当前来源仓 Y — 请改选来源仓或调拨」而非误导的「请先生产入库」(fool-proof Rule 5)。
+     *
+     * @return 有可用库存的仓库 code 列表 (可能为空 = 该产品全厂无可发货成品)。
+     */
+    List<String> warehousesWithAvailableStock(String factoryId, String productTypeId);
+}

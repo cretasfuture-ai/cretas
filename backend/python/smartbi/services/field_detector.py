@@ -1,0 +1,558 @@
+from __future__ import annotations
+"""
+Field Detector Service
+
+Detects field types from sample data including:
+- Data type (numeric, string, date, boolean)
+- Semantic type (amount, quantity, percentage, date, category, etc.)
+- Statistical properties
+"""
+import logging
+import re
+from typing import Any, Optional, List
+from enum import Enum
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+class DataType(str, Enum):
+    """Basic data types"""
+    STRING = "string"
+    INTEGER = "integer"
+    FLOAT = "float"
+    DATE = "date"
+    DATETIME = "datetime"
+    BOOLEAN = "boolean"
+    UNKNOWN = "unknown"
+
+
+class SemanticType(str, Enum):
+    """Semantic field types for business intelligence"""
+    # Numeric measures
+    AMOUNT = "amount"  # Currency amounts (sales, revenue, cost)
+    QUANTITY = "quantity"  # Count/quantity values
+    PERCENTAGE = "percentage"  # Percentage values
+    RATE = "rate"  # Rate values (growth rate, etc.)
+
+    # Dimensions
+    DATE = "date"  # Date dimension
+    TIME = "time"  # Time dimension
+    CATEGORY = "category"  # Categorical dimension
+    GEOGRAPHY = "geography"  # Geographic dimension
+    PRODUCT = "product"  # Product dimension
+    CUSTOMER = "customer"  # Customer dimension
+
+    # Identifiers
+    ID = "id"  # Identifier fields
+    CODE = "code"  # Code fields
+
+    # Text
+    NAME = "name"  # Name fields
+    DESCRIPTION = "description"  # Description/text fields
+
+    # Other
+    UNKNOWN = "unknown"
+
+
+class ChartRole(str, Enum):
+    """Recommended chart roles for fields"""
+    DIMENSION = "dimension"  # X-axis, grouping
+    MEASURE = "measure"  # Y-axis, values
+    TIME = "time"  # Time axis
+    SERIES = "series"  # Series grouping
+    TOOLTIP = "tooltip"  # Additional info
+
+
+class FieldDetector:
+    """Detects field types and properties from data"""
+
+    # Patterns for semantic type detection
+    AMOUNT_PATTERNS = [
+        r'(sales|revenue|income|cost|expense|price|amount|payment|fee|total|budget|actual|profit)',
+        r'(金额|销售额|收入|成本|费用|价格|总计|营收|预算|实际|净利|本月实际|本年实际|本季实际)'
+    ]
+
+    QUANTITY_PATTERNS = [
+        r'(count|quantity|number|qty|num|volume|units)',
+        r'(数量|数目|件数|个数|总数)'
+    ]
+
+    PERCENTAGE_PATTERNS = [
+        r'(rate|ratio|percent|pct|margin|growth)',
+        r'(率|比|百分比|增长率|占比)'
+    ]
+
+    DATE_PATTERNS = [
+        r'(date|time|day|month|year|period|quarter)',
+        r'(日期|时间|月份|年份|季度|周期)'
+    ]
+
+    # Enhanced date value patterns for date detection in cell values
+    ENHANCED_DATE_VALUE_PATTERNS = [
+        # Chinese formats
+        r'\d{4}年\d{1,2}月\d{1,2}日?',
+        r'\d{4}年第[一二三四]季度',
+        r'\d{4}年[上下]半年',
+        r'\d{4}年\d{1,2}月',
+        r'\d{1,2}月\d{1,2}日',
+
+        # Fiscal year formats
+        r'FY\d{4}',                    # FY2025
+        r'FY\s*\d{2,4}',               # FY 25, FY 2025
+        r'Q[1-4]\s*\d{4}',             # Q1 2025
+        r'Q[1-4][-/]\d{4}',            # Q1-2025, Q1/2025
+        r'\d{4}\s*Q[1-4]',             # 2025 Q1
+        r'H[12]\s*\d{4}',              # H1 2025 (Half year)
+        r'\d{4}\s*H[12]',              # 2025 H1
+
+        # Standard formats
+        r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}',
+        r'\d{4}[-/]\d{1,2}',
+        r'\d{1,2}[-/]\d{1,2}[-/]\d{4}',
+
+        # Month names (Chinese)
+        r'(一|二|三|四|五|六|七|八|九|十|十一|十二)月',
+
+        # Relative dates
+        r'本月|上月|去年|今年|本年|上年',
+        r'YTD|MTD|QTD',                # Year/Month/Quarter to date
+        r'本季度|上季度',
+
+        # Week patterns
+        r'第\d{1,2}周',
+        r'W\d{1,2}',
+        r'\d{4}-W\d{1,2}'
+    ]
+
+    CATEGORY_PATTERNS = [
+        r'(category|type|class|group|segment|channel)',
+        r'(类别|类型|分类|分组|渠道|部门)'
+    ]
+
+    GEOGRAPHY_PATTERNS = [
+        r'(region|country|city|province|area|location|address)',
+        r'(地区|国家|城市|省份|区域|地址)'
+    ]
+
+    PRODUCT_PATTERNS = [
+        r'(product|item|sku|goods|material)',
+        r'(产品|商品|物料|货品)'
+    ]
+
+    ID_PATTERNS = [
+        r'(id|code|no|number)$',
+        r'(编号|编码|号码)$'
+    ]
+
+    def __init__(self):
+        self.sample_size = 100  # Number of rows to sample for detection
+
+    def detect_fields(self, headers: List[str], rows: List[List[Any]]) -> List[dict]:
+        """
+        Detect field types for all columns
+
+        Args:
+            headers: Column headers
+            rows: Data rows
+
+        Returns:
+            List of field detection results
+
+        Apr 27 2026 (F2-v2): pre-filter section-header-like rows before type
+        inference. qhj 4148 收入管理报表 contains 4 vertical sections per
+        sheet — each section starts with a 1-2 row sub-header (all strings)
+        followed by data. Section sub-headers leak into the SAME column
+        position as numeric data of OTHER sections, polluting type
+        detection. A row that has high string ratio + sparse content (≤ 50%
+        cells filled) and short cell values is a section header — drop it.
+        """
+        # Convert to DataFrame for easier analysis
+        df = pd.DataFrame(rows, columns=headers)
+
+        # F2-v2: filter section-header rows before type detection
+        if len(df) > 3 and len(headers) >= 4:
+            mask_keep = []
+            for i in range(len(df)):
+                row = df.iloc[i]
+                n_filled = sum(1 for v in row if not pd.isna(v) and str(v).strip())
+                if n_filled == 0:
+                    mask_keep.append(False)  # empty row
+                    continue
+                fill_ratio = n_filled / len(headers)
+                # Count non-numeric strings (real text, not "1234")
+                n_str = sum(1 for v in row
+                            if isinstance(v, str) and v.strip()
+                            and not _looks_numeric_str(v))
+                # Count numeric values (real numbers OR numeric-looking strings)
+                n_num = sum(1 for v in row
+                            if (isinstance(v, (int, float)) and not pd.isna(v))
+                            or (isinstance(v, str) and _looks_numeric_str(v)))
+                str_ratio = n_str / max(n_filled, 1)
+                avg_str_len = (
+                    sum(len(str(v)) for v in row
+                        if isinstance(v, str) and v.strip()
+                        and not _looks_numeric_str(v)) / max(n_str, 1)
+                )
+                # Two section-header signals (any one fires):
+                # A) sparse + mostly-text + short strings (e.g. row with just
+                #    "环比 | 可选择时间段 | 午市晚市" 3/14 filled)
+                sparse_text = (
+                    fill_ratio <= 0.5
+                    and str_ratio >= 0.7
+                    and avg_str_len <= 12
+                )
+                # B) DENSE all-text row with NO numbers and short strings
+                #    (e.g. "门店名称 | 汇总实际收入 | 本期 | 环比 | ..."
+                #     all 13 cells filled but ZERO numbers).
+                all_text = (
+                    n_num == 0
+                    and n_str >= 3
+                    and avg_str_len <= 8
+                )
+                is_section_header = sparse_text or all_text
+                mask_keep.append(not is_section_header)
+            df = df[mask_keep].reset_index(drop=True)
+            import logging as _log
+            _log.getLogger(__name__).info(
+                f"[F2-v2] kept {sum(mask_keep)}/{len(mask_keep)} rows after "
+                f"section-header filter for type detection"
+            )
+
+        results = []
+        for col in headers:
+            field_info = self.detect_single_field(col, df[col])
+            results.append(field_info)
+
+        return results
+
+
+def _looks_numeric_str(v) -> bool:
+    """Cheap check — string parses as float?"""
+    if not isinstance(v, str):
+        return False
+    s = v.strip().replace(',', '')
+    if not s:
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+    def detect_single_field(self, field_name: str, values: pd.Series) -> dict:
+        """
+        Detect type for a single field
+
+        Args:
+            field_name: Column name
+            values: Column values
+
+        Returns:
+            Field detection result
+        """
+        # Sample values for analysis
+        sample = values.dropna().head(self.sample_size)
+
+        # Detect basic data type
+        data_type = self._detect_data_type(sample)
+
+        # Detect semantic type based on name and values
+        semantic_type = self._detect_semantic_type(field_name, sample, data_type)
+
+        # Determine chart role
+        chart_role = self._determine_chart_role(data_type, semantic_type)
+
+        # Calculate statistics for numeric fields
+        statistics = self._calculate_statistics(values, data_type)
+
+        # Get unique values for categorical fields
+        unique_values = None
+        if semantic_type in [SemanticType.CATEGORY, SemanticType.PRODUCT, SemanticType.GEOGRAPHY]:
+            unique_count = values.nunique()
+            if unique_count <= 50:
+                unique_values = values.dropna().unique().tolist()[:50]
+
+        return {
+            "fieldName": field_name,
+            "dataType": data_type.value,
+            "semanticType": semantic_type.value,
+            "chartRole": chart_role.value,
+            "nullable": values.isna().any(),
+            "nullCount": int(values.isna().sum()),
+            "uniqueCount": int(values.nunique()),
+            "sampleValues": sample.head(5).tolist(),
+            "statistics": statistics,
+            "uniqueValues": unique_values
+        }
+
+    def _detect_data_type(self, sample: pd.Series) -> DataType:
+        """Detect basic data type from sample values"""
+        if sample.empty:
+            return DataType.UNKNOWN
+
+        # Try to infer type
+        # Check for boolean
+        unique_lower = set(str(v).lower() for v in sample.dropna())
+        if unique_lower.issubset({'true', 'false', '1', '0', 'yes', 'no', '是', '否'}):
+            return DataType.BOOLEAN
+
+        # Check for numeric FIRST (before date, because pd.to_datetime can parse numbers as timestamps)
+        # Apr 28 2026 (audit fix): pre-clean common money formats before
+        # pd.to_numeric so we don't miss-classify formatted-string numerics
+        # as STRING. Real-world Excel exports often have:
+        #   "1,234.50"     ← thousands separator
+        #   "￥1,234.50" / "$1,234.50"  ← currency prefix
+        #   "1,234.50 元"  ← currency suffix
+        #   "(1,234.50)"   ← accounting negative
+        # Without this pre-clean, all such fields fall through to STRING and
+        # get is_dimension=True instead of is_measure=True (silent
+        # misclassification — user-facing symptom: "AI says no measures"
+        # or "无可聚合数值字段").
+        def _coerce_money_str(s):
+            if not isinstance(s, str):
+                return s
+            t = s.strip()
+            if not t:
+                return t
+            # Accounting negative: (1,234) → -1234
+            negative = False
+            if t.startswith('(') and t.endswith(')'):
+                negative = True
+                t = t[1:-1].strip()
+            # Strip currency prefixes/suffixes (CJK + Latin)
+            for sym in ('¥', '￥', '$', '€', '￡', '元', '人民币', 'CNY', 'USD', 'EUR'):
+                if t.startswith(sym):
+                    t = t[len(sym):].strip()
+                if t.endswith(sym):
+                    t = t[:-len(sym)].strip()
+            # Strip thousand separators
+            t = t.replace(',', '').replace('，', '')
+            return ('-' + t) if negative and t else t
+
+        cleaned_sample = sample.apply(_coerce_money_str)
+        numeric_sample = pd.to_numeric(cleaned_sample, errors='coerce')
+        if numeric_sample.notna().sum() > len(sample) * 0.8:
+            # Check if integer or float
+            non_null = numeric_sample.dropna()
+            if len(non_null) > 0 and (non_null == non_null.astype(int)).all():
+                return DataType.INTEGER
+            return DataType.FLOAT
+
+        # Check for enhanced date patterns first (handles Chinese/fiscal formats)
+        if self._check_enhanced_date_patterns(sample):
+            return DataType.DATE
+
+        # Check for date/datetime (only for non-numeric values)
+        try:
+            parsed_dates = pd.to_datetime(sample, errors='coerce')
+            if parsed_dates.notna().sum() > len(sample) * 0.8:
+                # Additional validation: check if dates are in reasonable range (1900-2100)
+                valid_dates = parsed_dates.dropna()
+                if len(valid_dates) > 0:
+                    min_year = valid_dates.min().year
+                    max_year = valid_dates.max().year
+                    if 1900 <= min_year <= 2100 and 1900 <= max_year <= 2100:
+                        # Check if it has time component
+                        if any(d.hour != 0 or d.minute != 0 for d in valid_dates):
+                            return DataType.DATETIME
+                        return DataType.DATE
+        except Exception:
+            pass
+
+        return DataType.STRING
+
+    def _check_enhanced_date_patterns(self, sample: pd.Series) -> bool:
+        """
+        Check if sample values match enhanced date patterns.
+
+        Handles formats not recognized by pd.to_datetime:
+        - Chinese dates (2025年1月)
+        - Fiscal years (FY2025, Q1 2025)
+        - Relative dates (本月, YTD)
+        """
+        if sample.empty:
+            return False
+
+        match_count = 0
+        total_non_null = 0
+
+        for value in sample.dropna():
+            str_val = str(value).strip()
+            if not str_val:
+                continue
+
+            total_non_null += 1
+
+            # Check against enhanced patterns
+            for pattern in self.ENHANCED_DATE_VALUE_PATTERNS:
+                if re.search(pattern, str_val, re.IGNORECASE):
+                    match_count += 1
+                    break
+
+            # Also check for Excel serial date numbers (5-digit integers)
+            if re.match(r'^\d{5}$', str_val):
+                try:
+                    num = int(str_val)
+                    # Excel serial dates are typically 1-50000 range (1900-2037)
+                    if 1 <= num <= 50000:
+                        match_count += 1
+                except ValueError:
+                    pass
+
+        # If >50% of values match date patterns, treat as date
+        if total_non_null > 0 and match_count / total_non_null > 0.5:
+            return True
+
+        return False
+
+    def _infer_date_column(self, df: pd.DataFrame) -> Optional[str]:
+        """
+        Infer which column is the date/time column based on content.
+
+        Useful for datasets where date column name is non-standard.
+
+        Returns:
+            Name of the inferred date column, or None
+        """
+        for col in df.columns:
+            col_lower = str(col).lower()
+
+            # Check column name first
+            for pattern in self.DATE_PATTERNS:
+                if re.search(pattern, col_lower, re.IGNORECASE):
+                    return col
+
+            # Check if values have sequential pattern (dates often increment)
+            values = df[col].dropna()
+            if len(values) >= 3:
+                # Check for enhanced date patterns in values
+                if self._check_enhanced_date_patterns(values):
+                    return col
+
+                # Check for sequential numeric pattern (could be year/month)
+                try:
+                    numeric = pd.to_numeric(values, errors='coerce')
+                    if numeric.notna().sum() == len(values):
+                        # Check if monotonically increasing
+                        if numeric.is_monotonic_increasing:
+                            # Check if in year range
+                            if numeric.min() >= 1990 and numeric.max() <= 2100:
+                                return col
+                except Exception:
+                    pass
+
+        return None
+
+    def _detect_semantic_type(
+        self,
+        field_name: str,
+        sample: pd.Series,
+        data_type: DataType
+    ) -> SemanticType:
+        """Detect semantic type based on field name and values"""
+        name_lower = field_name.lower()
+
+        # Check patterns against field name
+        for pattern in self.DATE_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.DATE
+
+        if data_type in [DataType.DATE, DataType.DATETIME]:
+            return SemanticType.DATE
+
+        for pattern in self.AMOUNT_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.AMOUNT
+
+        for pattern in self.QUANTITY_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.QUANTITY
+
+        for pattern in self.PERCENTAGE_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.PERCENTAGE
+
+        for pattern in self.CATEGORY_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.CATEGORY
+
+        for pattern in self.GEOGRAPHY_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.GEOGRAPHY
+
+        for pattern in self.PRODUCT_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.PRODUCT
+
+        for pattern in self.ID_PATTERNS:
+            if re.search(pattern, name_lower, re.IGNORECASE):
+                return SemanticType.ID
+
+        # Infer from data type if name patterns don't match
+        if data_type in [DataType.INTEGER, DataType.FLOAT]:
+            # Check if values look like percentages (0-1 or 0-100 range)
+            numeric = pd.to_numeric(sample, errors='coerce').dropna()
+            if not numeric.empty:
+                if numeric.max() <= 1 and numeric.min() >= 0:
+                    return SemanticType.PERCENTAGE
+                if numeric.max() <= 100 and numeric.min() >= 0 and '%' in field_name:
+                    return SemanticType.PERCENTAGE
+            return SemanticType.AMOUNT
+
+        if data_type == DataType.STRING:
+            # Check cardinality for category detection
+            sample_len = len(sample.dropna())
+            unique_ratio = sample.nunique() / sample_len if sample_len > 0 else 0
+            if unique_ratio < 0.3:  # Low cardinality suggests category
+                return SemanticType.CATEGORY
+            return SemanticType.NAME
+
+        return SemanticType.UNKNOWN
+
+    def _determine_chart_role(self, data_type: DataType, semantic_type: SemanticType) -> ChartRole:
+        """Determine recommended chart role for the field"""
+        # Time fields are time axis
+        if semantic_type == SemanticType.DATE:
+            return ChartRole.TIME
+
+        # Numeric measure types
+        if semantic_type in [SemanticType.AMOUNT, SemanticType.QUANTITY, SemanticType.PERCENTAGE, SemanticType.RATE]:
+            return ChartRole.MEASURE
+
+        # Categorical types are dimensions
+        if semantic_type in [SemanticType.CATEGORY, SemanticType.GEOGRAPHY, SemanticType.PRODUCT, SemanticType.CUSTOMER]:  # noqa: E501
+            return ChartRole.DIMENSION
+
+        # IDs and codes are series grouping
+        if semantic_type in [SemanticType.ID, SemanticType.CODE]:
+            return ChartRole.SERIES
+
+        # Text fields for tooltips
+        if semantic_type in [SemanticType.NAME, SemanticType.DESCRIPTION]:
+            return ChartRole.TOOLTIP
+
+        # Default based on data type
+        if data_type in [DataType.INTEGER, DataType.FLOAT]:
+            return ChartRole.MEASURE
+
+        return ChartRole.DIMENSION
+
+    def _calculate_statistics(self, values: pd.Series, data_type: DataType) -> Optional[dict]:
+        """Calculate statistics for numeric fields"""
+        if data_type not in [DataType.INTEGER, DataType.FLOAT]:
+            return None
+
+        numeric = pd.to_numeric(values, errors='coerce')
+        if numeric.isna().all():
+            return None
+
+        return {
+            "min": float(numeric.min()) if pd.notna(numeric.min()) else None,
+            "max": float(numeric.max()) if pd.notna(numeric.max()) else None,
+            "mean": float(numeric.mean()) if pd.notna(numeric.mean()) else None,
+            "median": float(numeric.median()) if pd.notna(numeric.median()) else None,
+            "std": float(numeric.std()) if pd.notna(numeric.std()) else None,
+            "sum": float(numeric.sum()) if pd.notna(numeric.sum()) else None
+        }

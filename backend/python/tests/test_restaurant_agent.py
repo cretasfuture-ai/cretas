@@ -1,0 +1,63 @@
+"""Guard rails for the compound-question agent (R28)."""
+from __future__ import annotations
+
+import asyncio
+
+from smartbi.gold.restaurant import restaurant_agent as agent
+
+
+def test_compound_heuristic():
+    assert agent.is_compound_question("这个月生意怎么样，另外米饭卖得好不好")
+    assert agent.is_compound_question("先告诉我昨天的营收，再告诉我哪家店业绩最好")
+    assert not agent.is_compound_question("米饭的销量是多少")
+    assert not agent.is_compound_question("米饭的销量是多少；继续追问：成本如何")
+    assert not agent.is_compound_question(
+        "用二次函数拟合最近30天全部门店每日营业额曲线；"
+        "如果无法绘图，请提供可导出的日期和营业额字段"
+    )
+
+
+def test_parse_parts_validation():
+    ok = agent._parse_parts('{"parts": ["这个月生意怎么样", "米饭卖得好不好"]}')
+    assert ok == ["这个月生意怎么样", "米饭卖得好不好"]
+    assert agent._parse_parts('{"parts": ["只有一个问题在这里"]}') is None
+    assert agent._parse_parts('{"parts": ["合法的问题在这", 123]}') is None
+    assert agent._parse_parts('{"parts": ["太短"]}') is None
+    assert agent._parse_parts("垃圾输出") is None
+    fenced = '```json\n{"parts": ["这个月生意怎么样", "米饭卖得好不好"]}\n```'
+    assert agent._parse_parts(fenced) == ["这个月生意怎么样", "米饭卖得好不好"]
+
+
+def test_clear_compound_split_is_deterministic_and_inherits_shared_scope():
+    query = "这个月全部门店生意怎么样，另外米饭卖得好不好"
+
+    parts = asyncio.run(agent.decompose_compound_question(query))
+
+    assert parts == [
+        "这个月全部门店生意怎么样",
+        "这个月全部门店米饭卖得好不好",
+    ]
+
+
+def test_scope_inheritance_does_not_override_an_explicit_named_store():
+    parts = agent._inherit_explicit_scope(
+        "本月全部门店生意怎么样，另外青花椒徐汇日月光店营收如何",
+        ["本月全部门店生意怎么样", "青花椒徐汇日月光店营收如何"],
+    )
+
+    assert parts[1] == "本月青花椒徐汇日月光店营收如何"
+
+
+def test_assemble_compound_answer():
+    parts = ["这个月生意怎么样", "米饭卖得好不好"]
+    results = [
+        {"kind": "answer", "answer_text": "本月营收 ¥100。", "charts": [1],
+         "kpis": [2], "code": "RESTAURANT_OPS_SALES_SUMMARY", "contract_pass": True},
+        None,
+    ]
+    combined = agent.assemble_compound_answer(parts, results)
+    assert combined and "1. 这个月生意怎么样" in combined["answer_text"]
+    assert "本月营收 ¥100。" in combined["answer_text"]
+    assert "请单独提问" in combined["answer_text"]
+    assert combined["contract_pass"] is False
+    assert agent.assemble_compound_answer(parts, [None, None]) is None

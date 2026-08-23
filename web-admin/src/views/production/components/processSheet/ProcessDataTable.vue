@@ -1,0 +1,5221 @@
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue';
+import { sameUnit } from '@/utils/unitPricing';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Plus, Delete, Check, Warning, ArrowDown, ArrowRight, Clock, Loading, QuestionFilled } from '@element-plus/icons-vue';
+import {
+  saveDraftRow, submitRow, deleteRow, getAvailableRawBatches, getRowHistory, getSemiFinishedInventory,
+  getFinishedGoodsInventory,
+  type ProcessSheetInventoryItem,
+  type LaborSegment,
+  type UpstreamRef,
+  type ProcessSheetRowView,
+  type ProcessSheetRowRequest,
+  type ProcessSheetRowHistoryView,
+  type RawMaterialBatchOption,
+  type SemiFinishedStockItem,
+  type SemiFinishedInventoryFilter,
+  type FinishedGoodsStockItem,
+  type WorkflowProcessDescriptor,
+  type WorkflowPortDescriptor,
+  type MaterialInputTotal,
+  type ProcessSheetByproduct,
+  type ProductionInputAllocation,
+  getInputAvailability,
+  type PortAvailability,
+} from '@/api/processSheet';
+import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
+import { put } from '@/api/request';
+import type { ProcessSheetCustomFieldDef } from '@/api/processProduction';
+import { PROCESS_SHEET_CONFIG, GENERIC_FALLBACK_COLS, genClientRowId, type ColDef } from './PROCESS_SHEET_CONFIG';
+import WorkHoursTable from './WorkHoursTable.vue';
+import ProcessOutputTable from './ProcessOutputTable.vue';
+import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
+import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
+import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
+import { byproductEntryMode, partitionOutputPorts } from './processSheetOutputs';
+import type { BoundByproductLine, MultiOutputLine, OutputLineView } from './processSheetOutputs';
+import type {
+  InputSourceLineView,
+  SelectableUpstreamRef,
+  UpstreamBatchOption,
+  UpstreamBatchOptionGroup,
+} from './processSheetInputs';
+import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
+import {
+  displayProcessUnit,
+  formatFeedPlaceholder,
+  formatProcessOutput,
+  formatSourceFeedSummary,
+  normalizeMassQuantityForReporting,
+  resolveProcessSheetUnits,
+  resolveWorkflowProcessSheetUnits,
+  workflowPortDisplayUnit,
+  withProcessSheetUnits,
+} from '@/utils/processSheetUnits';
+import { buildEqualPotWeightsKg } from './potAllocation';
+
+type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
+
+// -------------------------------------------------------------------------
+// Props & emits
+// -------------------------------------------------------------------------
+const props = withDefaults(defineProps<{
+  factoryId: string;
+  planId: string;
+  processCode: string;
+  processOrder: number;
+  productTypeId: string;
+  /** 本工序真实显示名 (来自 G0 动态工序链 ProductWorkProcess.processName, 如"去舌胎膜"); 与
+   * archetype processCode 不同 —— processCode 只是列定义 key, 可能多个真实工序共享同一 archetype。 */
+  processLabel?: string;
+  /** 张权 R4: 本工序是否被配置为「半成品注入工序」(ProductWorkProcess.allowSemiFinishedInjection)。
+   * true → 逐道录入显示半成品(SFI)/成品(FG) 投料选择器 (config-driven gating, 见 showSfi)。 */
+  allowSemiFinishedInjection?: boolean;
+  /** 是否允许本道工序从多个上游批次混批投料。false 时仍可单选一个上游批次。 */
+  allowMultipleUpstreamSources?: boolean;
+  /**
+   * G1 混批去硬编码: 本工序是否为链内第一道 (无上游, 如原料领料入口)。
+   * false/undefined → 走 `!isFirstProcess` 主判据 (config-driven, 由父组件按 processOrder ===
+   * 链内最小 processOrder 算出); undefined (父组件未传) 时只靠下方 archetype 兜底判断
+   * (与既有 5-archetype 硬编码等价, 保证零回归)。true → 明确首道, 不显上游来源选择器
+   * (除非命中 archetype 兜底, 如 xiuyou 从不在 archetype 集合内所以不受影响)。
+   */
+  isFirstProcess?: boolean;
+  /**
+   * G2 自定义字段: 本工序 WorkProcess.customFieldSchema (只含 enabled=true 项由父组件预筛选,
+   * 也可整份原样传入 — 本组件自行按 enabled 过滤)。渲染为额外的通用录入列 (追加到 cols 之后),
+   * 值收集进保存请求的 customFields map。
+   */
+  customFieldSchema?: ProcessSheetCustomFieldDef[] | null;
+  /** 本工序配置的投入单位（优先产品-工序单位覆盖）。 */
+  inputUnit?: string;
+  /** 本工序配置的产出单位；未配置时沿用投入单位。 */
+  outputUnit?: string | null;
+  /** 是否允许本道工序选择成品库存批次作为投料来源。 */
+  allowFinishedGoodsSource?: boolean;
+  /** Bug 1 修复: 上游(前置)工序真实显示名 (G0 动态链前一道的真实名称, 由父组件按链序传入)。
+   * 链起步道(无上游, 如从半成品起步)时为 undefined。禁止在本组件内部按 processCode 猜测上游名。 */
+  upstreamProcessLabel?: string;
+  /** WIP inventory items from the upstream process (for dropdown + remaining calc) */
+  upstreamItems?: ProcessSheetInventoryItem[];
+  /** WIP inventory items for THIS process (for grid 剩余 column on saved rows) */
+  ownInventoryItems?: ProcessSheetInventoryItem[];
+  /** Existing saved rows loaded from backend on mount */
+  initialRows?: ProcessSheetRowView[];
+  /** Layout mode toggled in the drawer header. Default: 'grid'. */
+  viewMode?: 'grid' | 'card';
+  /**
+   * 2B Task F2 (additive, fool-proof): 本工序对应的 workflow 端口上下文 (计划产出 SKU/单位 +
+   * 所需原料类型), 仅 workflow-activated 计划的 ProcessSheet.vue 会透传非 null 值; legacy
+   * 计划恒为 null/undefined。只读展示用 —— 不改变 saveRow 请求形状, 不影响任何现有 picker。
+   */
+  workflowContext?: WorkflowProcessDescriptor | null;
+  /** 真实工序类别，仅作其他工序语义展示；锅数由 seasoningPotEnabled 唯一驱动。 */
+  processCategory?: string | null;
+  /** BOM 调料配方是否对本工序显式开启锅序计算。 */
+  seasoningPotEnabled?: boolean;
+  /** BOM 调料配方是否对本工序配置了调料明细。 */
+  seasoningConfigured?: boolean;
+  /** 后端已存行证明前一道工序至少有一条正式报工；只限制正式提交，草稿仍可保存。 */
+  upstreamSubmissionReady?: boolean;
+  /** 前一道真实工序名，用于给出可执行的阻断提示。 */
+  upstreamSubmissionMessage?: string;
+}>(), {
+  allowSemiFinishedInjection: false,
+  allowMultipleUpstreamSources: false,
+  customFieldSchema: () => [],
+  allowFinishedGoodsSource: false,
+  upstreamItems: () => [],
+  ownInventoryItems: () => [],
+  initialRows: () => [],
+  viewMode: 'grid',
+  workflowContext: null,
+  upstreamSubmissionReady: true,
+});
+const emit = defineEmits<{
+  (e: 'row-saved', submissionStatus: 'DRAFT' | 'SUBMITTED' | 'LEGACY' | null): void;
+}>();
+
+// 2B.2 多产出 (fan-out) 的行类型已移到 ./processSheetOutputs —— 卡片模式和表格模式共用
+// ProcessOutputTable 子组件, 而 `<script setup>` 里的 interface 不可导出。
+
+interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
+  materialName: string;
+  quantity: number | null;
+  selected: boolean;
+}
+
+// SelectableUpstreamRef 已随 ./processSheetInputs 迁走 —— 卡片模式和表格模式共用
+// ProcessInputSourceTable 子组件, 而 `<script setup>` 里的 interface 不可导出。
+
+// -------------------------------------------------------------------------
+// Internal row type
+// -------------------------------------------------------------------------
+interface SheetRow {
+  clientRowId: string;
+  batchNumber: string | null;
+  rowStatus: 'SAVED' | 'DRAFT' | 'UNSAVED';
+  submissionStatus: 'DRAFT' | 'SUBMITTED' | 'LEGACY' | null;
+  materialized: boolean;
+  /** 历史行保存时的真实产出单位；仅用于只读显示换算，不改写 payload。 */
+  persistedOutputUnit: string;
+  blockingMessage: string | null;
+  /**
+   * 上一次成功保存时这一行的内容快照 (buildRequest 的 JSON)。null = 从未存过。
+   *
+   * 关窗口该不该拦, 判据是**内容有没有变**, 不是 rowStatus —— 见 rowIsDirty。
+   */
+  savedSnapshot: string | null;
+  stockShortage: StockShortagePresentation | null;
+  /** 正式报工后由后端返回的实际批次扣料结果，供操作员即时核对包材/调料数量与成本。 */
+  inputAllocations: ProductionInputAllocation[];
+  /** 已小结时间 (ISO-8601); null = 未小结，可编辑 */
+  interimSettledAt: string | null;
+  saving: boolean;
+  deleting: boolean;
+  /** Generic per-process scalar fields: date / number / daterange ([start,end]) values keyed by ColDef.key */
+  fields: Record<string, string | number | [string, string] | null>;
+  /** 一次报工记录组的生产日期；Workflow 端口模式始终显示并发送为 processDate。 */
+  productionDate: string;
+  /** 修油: selected raw material batch id → rawMaterialInputs[0].materialBatchId */
+  rawBatchId: string;
+  /** 修油: out-weight (kg) → rawMaterialInputs[0].quantity */
+  rawBatchQty: number | null;
+  /** 新报工路径：只录各原料总投料量，由后端正式提交时自动分摊生产库批次。 */
+  materialInputTotals: MaterialInputTotalLine[];
+  /** 已存在显式原料批次的旧行保持原选择器，不能在回显时改写为新契约。 */
+  legacyExplicitRawInput: boolean;
+  /** 焯水: single upstream WIP batch number (WIP batchNumber 或 SFI intermediateBatchNo) */
+  upstreamBatch: string;
+  /**
+   * 成品工序操作员手填的实际投入量 (kg)。null = 未填, 沿用所选上游批次可用量。
+   *
+   * <p>2026-07-30 Steve 拍板: 实际投入不一定等于上一道产出 (损耗/只用一部分/补料),
+   * 必须留给操作员填; 以实填为准, 填错由盘点纠正 —— 所以只提示不硬拦。
+   */
+  finishedInputKg: number | null;
+  /**
+   * 焯水/滚揉/去舌苔 单上游: 所选来源是否为常驻半成品库存 (SFI)。
+   * true → upstreamBatch 指向 SemiFinishedInventory.intermediateBatchNo, buildPayload 写
+   * upstreamSources[0].semiFinished=true → 后端走 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
+   * false → in-plan 在制 WIP。链起步道可仅选 SFI (upstreamItems 空)。
+   */
+  upstreamSemiFinished: boolean;
+  /**
+   * ①c 焯水/滚揉/去舌苔 单上游: 所选来源是否为常驻成品库存 (FG)。
+   * true → upstreamBatch 指向 FinishedGoodsBatch.batchNumber, buildRequest 写 upstreamSources[0].finishedGoods=true
+   * → 后端小结经 consumeForFeedStrict 严格扣减成品。与 upstreamSemiFinished 互斥。
+   */
+  upstreamFinishedGoods: boolean;
+  /** 熟制: multi-source upstream WIP refs */
+  upstreamSources: SelectableUpstreamRef[];
+  /** Multi-segment labor entries */
+  laborSegments: LaborSegment[];
+  /** 熟制: number of pots */
+  potCount: number;
+  /** 熟制: per-pot raw kg when potCount > 1 */
+  potRawKgs: (number | null)[];
+  /** Whether the labor expander is open for this row */
+  laborExpanded: boolean;
+  /** Whether the 混锅/pot detail expander is open (shuzhi) */
+  mixExpanded: boolean;
+  /**
+   * 2B.2 多产出 (fan-out): 本工序 workflow 产出端口 > 1 时填充 (N 项, 一项一个产出端口)。
+   * 单产出/legacy 恒为空数组, 不影响任何现有单产出字段/逻辑。
+   */
+  multiOutputs: MultiOutputLine[];
+}
+
+// -------------------------------------------------------------------------
+// Column config
+// -------------------------------------------------------------------------
+/** G2 自定义字段: 只取 enabled=true 项 (防呆: 曾配置后又关闭的字段不再显示, 但历史值仍随
+ *  row_payload/customFields 保留, 不因隐藏而丢失 —— 重新开启后仍能看到)。 */
+const enabledCustomFields = computed(() =>
+  (props.customFieldSchema || []).filter((f) => f.enabled),
+);
+/** G2 自定义字段列描述符 (追加到 archetype/generic 列之后), key 与 label/type 直接来自 schema。 */
+const customFieldCols = computed<ColDef[]>(() =>
+  enabledCustomFields.value.map((f) => ({ key: f.key, label: f.label, type: f.type })),
+);
+/** A: 自定义字段列 key 集合 (O(1) 判定, 供列头 `?` info 提示区分自定义列 vs archetype/generic 列)。 */
+const customFieldKeySet = computed(() => new Set(customFieldCols.value.map((c) => c.key)));
+function isCustomFieldCol(key: string): boolean {
+  return customFieldKeySet.value.has(key);
+}
+/** G2: 已知 archetype 无列定义时的通用兜底 (真正自定义命名、未映射的新工序); 追加已启用的自定义字段列。 */
+const processUnits = computed(() => props.workflowContext
+  ? resolveWorkflowProcessSheetUnits(props.workflowContext)
+  : resolveProcessSheetUnits({
+    defaultUnit: props.inputUnit,
+    defaultOutputUnit: props.outputUnit,
+    // 老气调配置未填 outputUnit 时，保持既有 kg → 盒口径；显式配置优先。
+    fallbackOutputUnit: props.processCode === 'qidiao' ? '盒' : undefined,
+  }));
+const cols = computed(() => [
+  ...withProcessSheetUnits(PROCESS_SHEET_CONFIG[props.processCode] || GENERIC_FALLBACK_COLS, processUnits.value),
+  ...customFieldCols.value,
+]);
+const firstProcessInputLabel = computed(() =>
+  cols.value.find((col) => col.key === 'outWeight')?.label || `出库数量(${processUnits.value.inputUnit})`,
+);
+const isShuZhi = computed(() => props.processCode === 'shuzhi');
+/** 锅数录入只由 BOM 调料配方的显式工序参数驱动，不再猜测工序名或类别。 */
+const needsPotCount = computed(() => props.seasoningPotEnabled === true);
+const needsSeasoningInputKg = computed(() => props.seasoningConfigured === true);
+const isXiuYou = computed(() => props.processCode === 'xiuyou');
+/** 单上游 WIP 工序: 焯水 + 滚揉. 两者结构完全相同 (before/after 字段, 单 upstream). */
+const isSingleUpstream = computed(() =>
+  props.processCode === 'chaoshui' || props.processCode === 'gunrou',
+);
+const isQuSheTou = computed(() => props.processCode === 'qushetou');
+const isQidiao = computed(() => props.processCode === 'qidiao');
+/** 已登记列定义的 archetype processCode 集合 (与 PROCESS_SHEET_CONFIG 的 key 一致)。 */
+const KNOWN_ARCHETYPES = new Set(['xiuyou', 'chaoshui', 'gunrou', 'qushetou', 'shuzhi', 'qidiao']);
+/**
+ * G1 混批去硬编码: 本工序是否显示上游来源选择器 (单选/混选)。
+ *
+ * 主判据 (config-driven): `!props.isFirstProcess` —— 父组件按产品工序链动态算出"是否为链内
+ * 第一道", 任何非首道工序(不论真实工序名/processCode)均可用。
+ * 兜底 (archetype, 向后兼容零回归): 现有 5 个已登记 archetype 即使 isFirstProcess 未传
+ * (父组件旧版本 / 单测直接挂载不传该 prop) 也保持可用, 与本次改动前完全一致。
+ */
+const supportsUpstreamSources = computed(() =>
+  props.isFirstProcess === false
+  || isSingleUpstream.value || isQuSheTou.value || isShuZhi.value || isQidiao.value,
+);
+/** 非首道 Workflow 真正来自上游库存的端口；RAW 原料继续走首道领料/投料总量契约。 */
+const workflowUpstreamInputs = computed(() => {
+  if (!props.workflowContext || props.isFirstProcess === true) return [];
+  return props.workflowContext.inputs.filter((port) => port.materialKind !== 'RAW_MATERIAL');
+});
+const isMultiSource = computed(() => supportsUpstreamSources.value && (
+  props.allowMultipleUpstreamSources === true || workflowUpstreamInputs.value.length > 1
+));
+const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiSource.value);
+
+// -------------------------------------------------------------------------
+// 2B Task F2 (additive, fool-proof Rule 2/3): workflow 端口上下文只读展示。
+// 不改变任何现有 picker / buildRequest / saveRow 逻辑 —— 只在录入区顶部提示
+// "这道工序该产什么(SKU/单位/半成品|成品)" + "需要哪些原料类型", 客户自己填数量/选批次。
+// -------------------------------------------------------------------------
+/** 本工序 workflow 计划产出端口 (null = 无 workflow 上下文, 或该 workflow 任务无产出端口)。 */
+const workflowOutput = computed(() => props.workflowContext?.output ?? null);
+/** 本工序 workflow 声明的原料类型 (仅 RAW_MATERIAL kind, 供领料 picker 旁提示"需要哪些原料")。 */
+const workflowRawInputs = computed(() =>
+  (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
+);
+/** 已被删除/重建、无法再解析的 Workflow 原料。报工页不能临时换料，必须阻断并回配置修复。 */
+const unresolvedWorkflowRawInputs = computed(() =>
+  workflowRawInputs.value.filter((p) => !p.skuId || p.skuResolved === false),
+);
+const workflowConfigHref = computed(() =>
+  props.productTypeId
+    ? `/system/product-processes?productTypeId=${encodeURIComponent(props.productTypeId)}`
+    : '/system/product-processes',
+);
+/** 产出摘要文字: "{品名}（{单位}）" — 品名/单位缺失 (SKU 已失效) 时用 skuId 兜底, 不崩溃。 */
+const workflowOutputLabel = computed(() => {
+  const out = workflowOutput.value;
+  if (!out) return '';
+  const name = out.materialName || `(未命名 SKU: ${out.skuId})`;
+  const unit = workflowPortDisplayUnit(out);
+  return unit ? `${name}（${unit}）` : name;
+});
+/** 需要原料类型摘要文字 (供领料 picker 旁提示)。 */
+const workflowRawInputsLabel = computed(() =>
+  workflowRawInputs.value.map((p) => p.materialName || p.skuId).join('、'),
+);
+/** 2B.2 多产出横幅摘要文字: "{品名1}（{单位1}） + {品名2}（{单位2}）..."。 */
+const workflowOutputsLabel = computed(() =>
+  outputPorts.value
+    .map((p) => {
+      const name = p.materialName || `(未命名 SKU: ${p.skuId})`;
+      const unit = workflowPortDisplayUnit(p);
+      return unit ? `${name}（${unit}）` : name;
+    })
+    .join(' + '),
+);
+
+// -------------------------------------------------------------------------
+// 2B.2 多产出 (fan-out): 一道工序一次报工同时产出多个产品 (如装箱复称同产 350g/400g 成品,
+// 筛选同产 合格半成品+不合格损耗)。是否多产出**由 workflow 图自动决定** (端口数量),
+// 不是开关 —— outputs.length > 1 时渲染 N 个产出端口的录入行, 产品/单位/成品|半成品全部
+// 只读取自端口 (fool-proof Rule 2/3: 不给操作员自由选产品), 只填数量。
+// -------------------------------------------------------------------------
+/** 本工序全部产出端口。优先取 outputs[]; 回落单产出 output (legacy/未升级投影兜底)。 */
+const outputPorts = computed<WorkflowPortDescriptor[]>(() => {
+  const ports = props.workflowContext?.outputs;
+  if (Array.isArray(ports) && ports.length > 0) return ports;
+  const single = props.workflowContext?.output;
+  return single ? [single] : [];
+});
+/**
+ * 副产端口归位: 画布上标了副产的端口**不独立成行**, 填进主产出行的副产区。
+ *
+ * 🔴 缺陷背景 (产品负责人 2026-08-17): 在这之前 outputPorts 里的副产端口和主产出一视同仁,
+ * 于是「肥油」在报工单上独立成一行、还被标成「半成品」—— 画布上的副产角色一路丢到了这里。
+ */
+const outputPartition = computed(() => partitionOutputPorts(outputPorts.value));
+/** 独立成行的产出端口 (副产已归到副产区)。 */
+const rowOutputPorts = computed(() => outputPartition.value.rowPorts);
+/** 多产出判据: **独立成行**的产出端口数 > 1 —— 副产不算一路产出。 */
+const isMultiOutput = computed(() => rowOutputPorts.value.length > 1);
+/** Workflow 单/多产出统一使用端口行录入；legacy 计划继续走原列配置。 */
+const isPortOutputMode = computed(() => props.workflowContext != null && outputPorts.value.length > 0);
+const byproductReportingUnit = computed(() => {
+  const unit = processUnits.value.inputUnit.trim().toLowerCase();
+  return unit === 'g' || unit === '克' ? 'g' : 'kg';
+});
+/**
+ * G1 混批去硬编码: processCode 不属于任何已登记 archetype 且本工序确实显示上游来源选择器
+ * (supportsUpstreamSources) —— 真正自定义命名、未映射的新非首道工序。这类工序沿用 熟制
+ * (shuzhi) 的单 input/output 字段形状 (见 GENERIC_FALLBACK_COLS + 下方
+ * calcYield/buildRequest/hydrateRow/saveDisabledReason 里 `isGenericUpstream` 分支),
+ * 但不含 熟制 专属的锅数(potCount)录入。绑定 supportsUpstreamSources 而非直接判 isFirstProcess,
+ * 避免"支持来源选择器"和"用哪种字段形状"两个判据在边界 case 下不一致。
+ */
+const isGenericUpstream = computed(() =>
+  !KNOWN_ARCHETYPES.has(props.processCode) && supportsUpstreamSources.value,
+);
+
+/**
+ * 2B.2 多产出: 每个 archetype 里"代表产出"的列 key —— 多产出时这些列被专门的「多产出」
+ * 录入块取代 (见模板), 必须从通用 cols 渲染中排除 (否则同时出现两套产出录入, 数据来源打架)。
+ * 输入侧字段 (before/input/usedWeight/scrap 等) 不受影响, 照常渲染 (多产出的输入分配不变)。
+ */
+const MULTI_OUTPUT_HIDDEN_KEYS_BY_ARCHETYPE: Record<string, string[]> = {
+  xiuyou: ['output', 'feedWeight', 'yieldRate'],
+  gunrou: ['after', 'yieldRate'],
+  chaoshui: ['after', 'yieldRate'],
+  qushetou: ['scrap', 'output', 'input', 'yieldRate'],
+  shuzhi: ['output', 'yieldRate'],
+  qidiao: [
+    'actualProd', 'sample', 'storage', 'remainBox', 'productWeight', 'inboundWeight',
+  ],
+};
+/** 通用兜底 (isGenericUpstream, 结构同熟制) 的产出列。 */
+const MULTI_OUTPUT_HIDDEN_KEYS_GENERIC = ['output', 'yieldRate'];
+/** 列排除集合 (基础特殊字段 + 多产出时的产出列)。card/grid 两套模板 (th+td) 共用同一份, 保证列对齐。 */
+const excludedColKeys = computed<string[]>(() => {
+  const base = ['rawBatch', 'outWeight', 'upstreamBatch', 'batch'];
+  if (!isPortOutputMode.value) return base;
+  const archetypeKeys = MULTI_OUTPUT_HIDDEN_KEYS_BY_ARCHETYPE[props.processCode]
+    ?? (isGenericUpstream.value ? MULTI_OUTPUT_HIDDEN_KEYS_GENERIC : []);
+  const outputOwned = [
+    ...archetypeKeys,
+    'byproductQty', 'byproductPrice', 'totalHours', 'yieldRate',
+    // Workflow 报工组统一显示一个生产日期，避免与旧 archetype 日期列重复。
+    ...cols.value.filter((col) => col.type === 'date' || col.type === 'daterange').map((col) => col.key),
+  ];
+  return [...new Set([...base, ...outputOwned])];
+});
+
+// Bug 1 修复: 来源批次选择器的 label 必须反映真实工序链, 不能按 archetype processCode 硬编码
+// (硬编码在 role-mode / 关键词回退下必错 —— 同一 archetype 可能对应不同真实工序名)。
+/** 本工序真实显示名 (缺省兜底用 processCode, 理论上父组件总会传, 兜底只防御性)。 */
+const ownProcessName = computed(() => props.processLabel || props.processCode);
+/** 上游(前置)工序真实显示名; 链起步道(无上游)兜底通用「上游」。 */
+const upstreamProcessName = computed(() => props.upstreamProcessLabel || '上游');
+const sourceTitle = computed(() => `${upstreamProcessName.value}${isMultiSource.value ? '来源(混批)' : '批次'}`);
+const supportsExternalStockFeed = computed(() => processUnits.value.inputUnit.toLowerCase() === 'kg');
+const sourcePickerPlaceholder = computed(() => supportsExternalStockFeed.value
+  ? `选${upstreamProcessName.value}批次/半成品`
+  : `选${upstreamProcessName.value}在制批次（常驻半成品/成品仅支持kg投入）`);
+
+// -------------------------------------------------------------------------
+// Raw material batch options (for 修油 首道)
+// -------------------------------------------------------------------------
+const rawBatchOptions = ref<RawMaterialBatchOption[]>([]);
+const rawBatchLoading = ref(false);
+const consumableWarehouseIds = ref<string[]>([]);
+// 未落仓(warehouseId 为空)因而被隐藏的批次数 — 后端 ensureRawMaterialWarehouse 强制要求
+// RAW/LOGISTICS/WORKSHOP 仓库, 空 warehouseId 的批次保存必 409。展示这个数字而不是静默隐藏,
+// 让用户知道"为什么少了几条", 而不是以为数据丢了 (Rule 1: 预先显示边界)。
+const rawBatchExcludedNoWarehouseCount = ref(0);
+let rawBatchLoadSeq = 0;
+
+function extractRawBatches(
+  data: RawMaterialBatchOption[] | { content: RawMaterialBatchOption[] } | null | undefined,
+): RawMaterialBatchOption[] {
+  if (!data) return [];
+  const all: RawMaterialBatchOption[] = Array.isArray(data)
+    ? data
+    : (typeof data === 'object' && 'content' in data && Array.isArray(data.content))
+      ? data.content
+      : [];
+  // 修油 首道只能领用真实原料批次，不能领 WIP/半成品批次。
+  // 过滤策略（双重防御）:
+  //   1. 优先用 sourceDocType === 'PRODUCTION_BATCH'（后端已返回时最可靠）。
+  //   2. 兜底用 batchNumber 前缀 — SP-F 文员逐道录入产生的 WIP 批均以
+  //      "WIP-" 或 "CLK-" 开头 (CLK-W- / CLK-B- 是后端 ProcessSheetService 的命名方案).
+  return all.filter((b) => {
+    if (b.sourceDocType != null) return b.sourceDocType !== 'PRODUCTION_BATCH';
+    const bn = b.batchNumber ?? '';
+    return !bn.startsWith('WIP-') && !bn.startsWith('CLK-');
+  });
+}
+
+function rawBatchAvailable(batch: RawMaterialBatchOption): number {
+  return Number(batch.currentQuantity ?? batch.quantity ?? 0) || 0;
+}
+
+type InputPortRef = {
+  workflowPortId?: string | null;
+  materialTypeId?: string | null;
+  unit?: string | null;
+};
+
+/** 去掉浮点换算带来的尾随 0 (500g→0.5kg 不要显示 0.500000)。 */
+function fmtStockQty(value: number): string {
+  return String(Number(value.toFixed(6)));
+}
+
+/**
+ * 后端算好的「生产仓可用量」，按 workflowPortId 索引 (2026-07-31)。
+ *
+ * 前端**不再自己算**。上一版自算出「可用 10kg」而提交时后端说「可用 0kg」，根因不是参数调错，
+ * 是 `ProductionStockAllocationServiceImpl.plan()` 的口径含三样前端结构上拿不到的东西：
+ *
+ *   1. `warehouseResolver.resolveWorkshopId()` —— 只认**那一个**生产仓；
+ *      前端 `pickConsumableWarehouseIds` 汇总的是原料仓 + 物流仓 + 生产仓。
+ *   2. `allocationRepository.sumPendingQuantityByMaterialBatchId()` —— 扣掉**其它草稿行已占用**
+ *      的量；前端完全没有这个概念。
+ *   3. `ProductionInventoryOwnershipGuard` —— 客供料 / 归属别的订单的批次在仓里，但本计划不能用。
+ *
+ * 少任何一样，算出来的都是个**偏大且看着权威**的数 —— 比不显示更糟，仓管员会照着它排活。
+ * 服务端对应的只读口径是 `ProductionStockAllocationService.availability()`，与 plan() 同一段核心。
+ */
+const portAvailability = ref<Map<string, PortAvailability>>(new Map());
+const availabilityLoading = ref(false);
+
+async function loadInputAvailability() {
+  const ports = workflowRawInputs.value
+    .map((p) => ({
+      workflowPortId: p.workflowPortId ?? null,
+      materialTypeId: p.skuId ?? '',
+      unit: workflowPortDisplayUnit(p) || processUnits.value.inputUnit,
+    }))
+    .filter((p) => !!p.materialTypeId);
+  // 2026-08-02: 多输入工序(如熟制=上游半成品+3种调料)同样需要可用量, 不能只给 xiuyou。
+  if ((!isXiuYou.value && workflowRawInputs.value.length === 0)
+      || !props.factoryId || !props.planId || ports.length === 0) {
+    portAvailability.value = new Map();
+    return;
+  }
+  availabilityLoading.value = true;
+  try {
+    const resp = await getInputAvailability(props.factoryId, props.planId, ports);
+    // 禁降级: 拿不到就清空 (界面回到"不显示"), 绝不拿上一次的数字顶上去 —— 那会显示过期库存
+    const next = new Map<string, PortAvailability>();
+    if (resp.success && Array.isArray(resp.data)) {
+      for (const item of resp.data) {
+        if (item.workflowPortId) next.set(item.workflowPortId, item);
+      }
+    }
+    portAvailability.value = next;
+  } catch {
+    // 这是渲染辅助信息, 失败不该打断报工 —— 静默回到"不显示", 提交仍由后端 fail-closed 兜底
+    portAvailability.value = new Map();
+  } finally {
+    availabilityLoading.value = false;
+  }
+}
+
+/** 生产仓可用量文案; 拿不到就返回空串 (什么都不显示, 不猜)。 */
+function workshopStockText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  if (!a) return '';
+  return `${fmtStockQty(a.available)}${displayProcessUnit(a.unit)}`;
+}
+
+/**
+ * 同物料在别的仓的存量 —— 把「真没货」和「有货但没调过来」分开。
+ *
+ * 刘山门实测: 生产仓里一条原料都没有 (全是 WIP 半成品), 原料都在主仓。只报「可用 0」
+ * 用户会以为系统坏了; 说清"料在哪"他才知道该找谁。
+ *
+ * 🔴 刻意**不给「去调拨」按钮**: 调拨是仓管的活 (Steve 2026-07-31), 报工的人点了大概率 403,
+ * 给一个点不动的按钮比不给更糟。
+ */
+function elsewhereStockText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  if (!a || !a.elsewhere?.length) return '';
+  const detail = a.elsewhere
+    .map((e) => `${e.warehouseName}另有 ${fmtStockQty(e.quantity)}${displayProcessUnit(e.unit)}`)
+    .join('、');
+  return `${detail}，待调拨入生产仓`;
+}
+
+/**
+ * 生产仓里**过期**的量 —— 「真没货」和「货过期了」必须分得开。
+ *
+ * 后端可投量按 status='AVAILABLE' 取数，过期批次被静默滤掉，界面只剩一句「可用 0」。
+ * 实测 F006 羊排原料仓有 100kg 但全部过期(有效期 07-15~07-18)，仓管既看不出原因，
+ * 也没人提醒去处理 —— 货就一直烂在仓里。
+ *
+ * 🔴 与 elsewhereStockText 同一风格：**只说事实和该找谁，不给按钮**。报损/处置是仓管的活，
+ * 报工的人点了大概率 403，给一个点不动的按钮比不给更糟。
+ */
+function expiredStockText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  const expired = a?.expired ?? 0;
+  if (!(expired > 0)) return '';
+  return `过期 ${fmtStockQty(expired)}${displayProcessUnit(a!.unit)}，不可投料，请联系仓管处理`;
+}
+
+/**
+ * 生产仓以外各仓的过期存量。
+ *
+ * 🔴 与 expiredStockText 分开而不是加进去：仓管要知道**过期的货在哪个仓**才处理得了，
+ * 合成一个总数等于把「去哪儿找」这条信息丢掉。同样**只说事实和该找谁，不给按钮**。
+ */
+function expiredElsewhereText(item: InputPortRef): string {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  if (!a || !a.expiredElsewhere?.length) return '';
+  const detail = a.expiredElsewhere
+    .map((e) => `${e.warehouseName}过期 ${fmtStockQty(e.quantity)}${displayProcessUnit(e.unit)}`)
+    .join('、');
+  return `${detail}，不可投料，请联系仓管处理`;
+}
+
+function workshopStockIsZero(item: InputPortRef): boolean {
+  const a = item.workflowPortId ? portAvailability.value.get(item.workflowPortId) : null;
+  return !!a && !(a.available > 0);
+}
+
+function rawBatchLabel(batch: RawMaterialBatchOption): string {
+  const name = batch.materialName || batch.materialTypeName || '原料';
+  const qty = rawBatchAvailable(batch);
+  const unit = batch.quantityUnit || batch.unit || 'kg';
+  const price = batch.unitPrice != null ? ` ¥${Number(batch.unitPrice).toFixed(2)}/${unit}` : '';
+  return `${name} | ${batch.batchNumber || batch.id} | 余${qty}${unit}${price}`;
+}
+
+// 报工消耗可领用的仓库: 原料仓/物流仓 (WH-LOG/RAW/LOGISTICS) + 生产仓 (WH-WKS/WORKSHOP)。
+// 领料调拨后, 原料已实际搬到生产仓 (batch.warehouseId=WH-WKS, sourceDocType=MATERIAL_REQUISITION),
+// 报工必须能选到生产仓里的这些料 (后端 ensureRawMaterialWarehouse 已接受 WORKSHOP 批次)。WIP/半成品
+// 批 (sourceDocType=PRODUCTION_BATCH) 由 extractRawBatches 过滤掉, 不会被误当原料领用。
+function pickConsumableWarehouseIds(warehouses: FactoryWarehouse[]): string[] {
+  return warehouses
+    .filter((w) => w.isActive !== false)
+    .filter(
+      (w) =>
+        w.type === 'RAW' ||
+        w.type === 'LOGISTICS' ||
+        w.type === 'WORKSHOP' ||
+        w.code === 'WH-LOG' ||
+        w.code === 'WH-RAW' ||
+        w.code === 'WH-WKS',
+    )
+    .map((w) => w.id);
+}
+
+async function ensureConsumableWarehouseIds(): Promise<string[] | null> {
+  if (consumableWarehouseIds.value.length > 0) return consumableWarehouseIds.value;
+  const resp = await listWarehouses(props.factoryId);
+  const warehouses = Array.isArray(resp.data) ? resp.data : [];
+  const ids = pickConsumableWarehouseIds(warehouses);
+  if (ids.length === 0) {
+    ElMessage.error('未配置原料仓/物流仓/生产仓，无法加载原料批次');
+    return null;
+  }
+  consumableWarehouseIds.value = ids;
+  return ids;
+}
+
+async function loadRawBatches() {
+  // 同上: 判据是「这道工序有没有 workflow 原料端口」, 不是 archetype。
+  if ((!isXiuYou.value && workflowRawInputs.value.length === 0) || !props.factoryId) return;
+  const seq = ++rawBatchLoadSeq;
+  rawBatchLoading.value = true;
+  try {
+    const warehouseIds = await ensureConsumableWarehouseIds();
+    if (!warehouseIds) {
+      rawBatchOptions.value = [];
+      return;
+    }
+    // raw-centric 多SKU (2026-07-13): workflow 计划的 productTypeId 是"影子"锚点产品 (如 raw-centric
+    // 的原料猪蹄run), 无 BOM → 按 productTypeId 查 AVAILABLE 返 0 → 下拉空 "暂无可用原料批次"。
+    // workflow 模式改按本道 workflow 声明的原料类型 (workflowContext.inputs RAW_MATERIAL 的 skuId=
+    // raw_material_types.id) 过滤: 不传 productTypeId 拉全仓可用原料, 再客户端筛到本道所需原料类型。
+    // legacy 计划 (无 workflowContext) 保持原按 productTypeId 查 BOM 原料的行为 (不回归)。
+    const wfRawTypeIds = new Set(
+      workflowRawInputs.value.flatMap((port) => (
+        port.allowedSkuIds?.length ? port.allowedSkuIds : [port.skuId]
+      )).filter((id): id is string => !!id),
+    );
+    const useWorkflowRaw = wfRawTypeIds.size > 0;
+    const resp = await getAvailableRawBatches(
+      props.factoryId,
+      useWorkflowRaw ? {} : { productTypeId: props.productTypeId },
+    );
+    if (seq !== rawBatchLoadSeq) return;
+    const allowed = new Set(warehouseIds);
+    const candidates = extractRawBatches(resp.data)
+      .filter((b) => rawBatchAvailable(b) > 0)
+      // workflow 模式: 只保留本道声明的原料类型 (防呆 Rule 3: 收敛选择, 不让操作员选错原料)。
+      .filter((b) => !useWorkflowRaw || (b.materialTypeId != null && wfRawTypeIds.has(b.materialTypeId)));
+    // 后端 ensureRawMaterialWarehouse 强制要求非空 warehouseId 且属于 RAW/LOGISTICS/WORKSHOP,
+    // 否则保存必 409 "只能从原料仓/物流仓/生产仓领用"。不落仓(null warehouseId)的批次一律
+    // 不提供选择 —— 提供了也是选完就被后端拒绝的死路 (fool-proof-design Rule 5: 不做 dead-end)。
+    rawBatchExcludedNoWarehouseCount.value = candidates.filter((b) => !b.warehouseId).length;
+    rawBatchOptions.value = candidates.filter((b) => !!b.warehouseId && allowed.has(b.warehouseId));
+  } catch (err) {
+    if (seq !== rawBatchLoadSeq) return;
+    rawBatchOptions.value = [];
+    ElMessage.error(err instanceof Error ? err.message : '原料批次加载失败');
+  } finally {
+    if (seq === rawBatchLoadSeq) rawBatchLoading.value = false;
+  }
+}
+
+// -------------------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------------------
+
+/** Returns today as YYYY-MM-DD (local time). */
+function todayStr(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function portSelectionMode(port?: WorkflowPortDescriptor): PortSelectionMode {
+  return port?.selectionGroupMode ?? 'ALL_REQUIRED';
+}
+
+/**
+ * 本端口是否根本没有选择余地。
+ *
+ * 选择组里只有它一个时, “选用”是个假选择 —— 不选就交不了, 选了也没别的可选。
+ * 却要求用户先点一下才能填数量, 白多一步。单投入/单产出是绝大多数工序的常态。
+ */
+function portHasNoAlternative(port?: WorkflowPortDescriptor): boolean {
+  if (!port?.selectionGroupId) return true;
+  const siblings = [...(props.workflowContext?.inputs ?? []), ...outputPorts.value]
+    .filter((candidate) => candidate.selectionGroupId === port.selectionGroupId);
+  return siblings.length <= 1;
+}
+
+function portSelectedByDefault(port?: WorkflowPortDescriptor): boolean {
+  return portHasNoAlternative(port) || portSelectionMode(port) === 'ALL_REQUIRED';
+}
+
+function portSelectionDisabled(port?: WorkflowPortDescriptor): boolean {
+  return portHasNoAlternative(port) || portSelectionMode(port) === 'ALL_REQUIRED';
+}
+
+/** 没有选择余地时直接不渲染复选框 —— 一个永远勾上、永远置灰的控件只是噪声。 */
+function showPortSelector(port?: WorkflowPortDescriptor): boolean {
+  return !portSelectionDisabled(port);
+}
+
+function portSelectionSummary(port?: WorkflowPortDescriptor): string {
+  if (!port?.selectionGroupId) return '全部必选';
+  const modeLabel: Record<PortSelectionMode, string> = {
+    ALL_REQUIRED: '全部必选',
+    EXACTLY_ONE: '互相替代（选 1）',
+    AT_LEAST_ONE: '至少选 1',
+    OPTIONAL: '可选',
+  };
+  return `${port.selectionGroupLabel || '端口关系'} · ${modeLabel[portSelectionMode(port)]}`;
+}
+
+function portById(portId?: string): WorkflowPortDescriptor | undefined {
+  if (!portId) return undefined;
+  return [...(props.workflowContext?.inputs ?? []), ...outputPorts.value]
+    .find((port) => port.workflowPortId === portId);
+}
+
+function materialOptionsForPort(portId?: string): Array<{ value: string; label: string }> {
+  const port = portById(portId);
+  if (!port) return [];
+  const allowed = new Set(port.allowedSkuIds?.length ? port.allowedSkuIds : [port.skuId]);
+  const seen = new Set<string>();
+  return rawBatchOptions.value.flatMap((batch) => {
+    const materialTypeId = batch.materialTypeId;
+    if (!materialTypeId || !allowed.has(materialTypeId) || seen.has(materialTypeId)) return [];
+    seen.add(materialTypeId);
+    return [{
+      value: materialTypeId,
+      label: batch.materialName || batch.materialTypeName || materialTypeId,
+    }];
+  });
+}
+
+
+function selectMaterialForInput(item: MaterialInputTotalLine, materialTypeId: string): void {
+  const option = materialOptionsForPort(item.workflowPortId)
+    .find((candidate) => candidate.value === materialTypeId);
+  item.materialTypeId = materialTypeId;
+  item.materialName = option?.label || materialTypeId;
+}
+
+function setPortSelected(
+  row: SheetRow,
+  port: WorkflowPortDescriptor | undefined,
+  selected: boolean,
+): void {
+  if (!port || portSelectionDisabled(port)) return;
+  const groupId = port.selectionGroupId;
+  const update = (line: { workflowPortId?: string; selected: boolean }): void => {
+    const candidate = portById(line.workflowPortId);
+    if (!candidate) return;
+    if (portSelectionMode(port) === 'EXACTLY_ONE'
+      && candidate.selectionGroupId === groupId) {
+      line.selected = false;
+    }
+    if (candidate.workflowPortId === port.workflowPortId) line.selected = selected;
+  };
+  row.materialInputTotals.forEach(update);
+  row.upstreamSources.forEach(update);
+  row.multiOutputs.forEach(update);
+}
+
+function selectedWorkflowPortIds(row: SheetRow): Set<string> {
+  return new Set([
+    ...row.materialInputTotals.filter((line) => line.selected).map((line) => line.workflowPortId || ''),
+    ...row.upstreamSources.filter((line) => line.selected).map((line) => line.workflowPortId || ''),
+    ...row.multiOutputs.filter((line) => line.selected).map((line) => line.workflowPortId || ''),
+  ].filter(Boolean));
+}
+
+function selectionGroupReason(row: SheetRow, direction: 'INPUT' | 'OUTPUT'): string | null {
+  const ports = direction === 'INPUT' ? (props.workflowContext?.inputs ?? []) : outputPorts.value;
+  const explicitGroups = new Map<string, WorkflowPortDescriptor[]>();
+  ports.forEach((port) => {
+    if (!port.selectionGroupId) return;
+    explicitGroups.set(port.selectionGroupId, [...(explicitGroups.get(port.selectionGroupId) ?? []), port]);
+  });
+  const selectedIds = selectedWorkflowPortIds(row);
+  for (const groupPorts of explicitGroups.values()) {
+    const first = groupPorts[0];
+    const mode = portSelectionMode(first);
+    const selectedCount = groupPorts.filter((port) => selectedIds.has(port.workflowPortId)).length;
+    const defaultMin = mode === 'OPTIONAL' ? 0 : mode === 'ALL_REQUIRED' ? groupPorts.length : 1;
+    const defaultMax = mode === 'EXACTLY_ONE' ? 1 : groupPorts.length;
+    const min = first.selectionGroupMinSelections ?? defaultMin;
+    const max = first.selectionGroupMaxSelections ?? defaultMax;
+    if (selectedCount >= min && selectedCount <= max) continue;
+    const label = first.selectionGroupLabel || (direction === 'INPUT' ? '投入关系' : '产出关系');
+    if (mode === 'ALL_REQUIRED') return `“${label}”要求全部选用，请检查每条${direction === 'INPUT' ? '投入' : '产出'}`;
+    if (mode === 'EXACTLY_ONE') return `“${label}”要求且只能选择 1 项，当前已选 ${selectedCount} 项`;
+    if (mode === 'AT_LEAST_ONE') return `“${label}”至少选择 1 项，当前尚未选择`;
+    return `“${label}”最多选择 ${max} 项，当前已选 ${selectedCount} 项`;
+  }
+  return null;
+}
+
+function blankRow(): SheetRow {
+  // Default daterange fields to [today, today] for each daterange col in this process.
+  const today = todayStr();
+  const daterangeDefaults: Record<string, [string, string]> = {};
+  for (const col of cols.value) {
+    if (col.type === 'daterange') {
+      daterangeDefaults[col.key] = [today, today];
+    }
+  }
+  return {
+    clientRowId: genClientRowId(props.processCode),
+    batchNumber: null,
+    rowStatus: 'UNSAVED',
+    savedSnapshot: null,
+    submissionStatus: null,
+    materialized: false,
+    persistedOutputUnit: processUnits.value.outputUnit,
+    blockingMessage: null,
+    stockShortage: null,
+    inputAllocations: [],
+    interimSettledAt: null,
+    saving: false,
+    deleting: false,
+    fields: { ...daterangeDefaults },
+    productionDate: todayStr(),
+    rawBatchId: '',
+    rawBatchQty: null,
+    materialInputTotals: workflowRawInputs.value.map((port): MaterialInputTotalLine => ({
+      materialTypeId: port.skuId,
+      materialName: port.materialName || port.skuId,
+      quantity: null,
+      unit: workflowPortDisplayUnit(port) || processUnits.value.inputUnit,
+      workflowPortId: port.workflowPortId || undefined,
+      materialNodeId: port.materialNodeId || undefined,
+      selected: portSelectedByDefault(port),
+    })),
+    legacyExplicitRawInput: false,
+    upstreamBatch: '',
+    finishedInputKg: null,
+    upstreamSemiFinished: false,
+    upstreamFinishedGoods: false,
+    upstreamSources: initWorkflowUpstreamSources(),
+    laborSegments: [],
+    potCount: 1,
+    potRawKgs: [],
+    laborExpanded: false,
+    mixExpanded: workflowUpstreamInputs.value.length > 1,
+    multiOutputs: initMultiOutputs(),
+  };
+}
+
+/**
+ * Workflow 单/多产出统一按当前工序产出端口初始化 N 条产出条目。产品、单位和成品类型
+ * 只读取端口；操作员只录实际数量、时间和副产事实。legacy 工序仍返回空数组。
+ */
+function initMultiOutputs(): MultiOutputLine[] {
+  if (!isPortOutputMode.value) return [];
+  const { rowPorts, inlineByproductPorts, hostPortId } = outputPartition.value;
+  return rowPorts.map((p): MultiOutputLine => ({
+    workflowPortId: p.workflowPortId,
+    materialNodeId: p.materialNodeId ?? '',
+    productTypeId: p.skuId,
+    materialName: p.materialName || `(未命名 SKU: ${p.skuId})`,
+    unit: workflowPortDisplayUnit(p),
+    gramsPerUnit: p.gramsPerUnit ?? null,
+    finished: p.finished === true,
+    isByproduct: p.byproduct === true,
+    required: p.required === true,
+    selected: portSelectedByDefault(p),
+    quantity: null,
+    startTime: '',
+    endTime: '',
+    workerCount: 1,
+    boundByproducts: p.workflowPortId === hostPortId
+      ? inlineByproductPorts.map((bp) => boundByproductFromPort(bp))
+      : [],
+    byproductQuantity: null,
+    byproductUnit: byproductReportingUnit.value,
+    byproductUnitPrice: null,
+    costAllocationRatio: null,
+    batchNumber: null,
+  }));
+}
+
+/** 由画布副产端口造一条待填的副产条目 —— SKU/单位只读, 数量与回收单价留空等人填。 */
+function boundByproductFromPort(port: WorkflowPortDescriptor): BoundByproductLine {
+  return {
+    workflowPortId: port.workflowPortId,
+    materialNodeId: port.materialNodeId ?? '',
+    productTypeId: port.skuId,
+    materialName: port.materialName || `(未命名 SKU: ${port.skuId})`,
+    unit: workflowPortDisplayUnit(port),
+    quantity: null,
+    unitPrice: null,
+  };
+}
+
+function sourceIdentity(port?: WorkflowPortDescriptor): Pick<UpstreamRef, 'workflowPortId' | 'materialNodeId' | 'skuId'> {
+  return port ? {
+    workflowPortId: port.workflowPortId || undefined,
+    materialNodeId: port.materialNodeId || undefined,
+    skuId: port.skuId || undefined,
+  } : {};
+}
+
+function blankUpstreamSource(port?: WorkflowPortDescriptor, selected = portSelectedByDefault(port)): SelectableUpstreamRef {
+  return { sourceBatchNumber: '', feedQuantityKg: 0, selected, ...sourceIdentity(port) };
+}
+
+function initWorkflowUpstreamSources(): SelectableUpstreamRef[] {
+  return workflowUpstreamInputs.value.map((port) => blankUpstreamSource(port));
+}
+
+function sourcePort(src: UpstreamRef, fallbackIndex?: number): WorkflowPortDescriptor | undefined {
+  return workflowUpstreamInputs.value.find((port) => port.workflowPortId === src.workflowPortId)
+    || workflowUpstreamInputs.value.find((port) => port.skuId === src.skuId)
+    || (fallbackIndex != null ? workflowUpstreamInputs.value[fallbackIndex] : undefined);
+}
+
+function hydrateUpstreamSources(sources: UpstreamRef[] | undefined): SelectableUpstreamRef[] {
+  if (!sources?.length) return initWorkflowUpstreamSources();
+  const hydrated = sources.map((source, index) => {
+    const port = sourcePort(source, index);
+    return { ...sourceIdentity(port), ...source, selected: true };
+  });
+  for (const port of workflowUpstreamInputs.value) {
+    if (!hydrated.some((source) => source.workflowPortId === port.workflowPortId)) {
+      hydrated.push(blankUpstreamSource(port));
+    }
+  }
+  return hydrated;
+}
+
+function submittedUpstreamSources(row: SheetRow): UpstreamRef[] {
+  return row.upstreamSources.filter((source) => source.selected).map((source, index) => {
+    const port = sourcePort(source, index);
+    const { selected: _selected, ...requestSource } = source;
+    return { ...sourceIdentity(port), ...requestSource };
+  });
+}
+
+function singleWorkflowSourceIdentity(): Pick<UpstreamRef, 'workflowPortId' | 'materialNodeId' | 'skuId'> {
+  return sourceIdentity(workflowUpstreamInputs.value[0]);
+}
+
+function hydrateRow(view: ProcessSheetRowView): SheetRow {
+  const p = view.payload;
+  const row = blankRow();
+  row.clientRowId = view.clientRowId;
+  row.batchNumber = view.batchNumber;
+  row.rowStatus = view.rowStatus;
+  row.submissionStatus = view.submissionStatus ?? null;
+  row.materialized = view.materialized === true;
+  row.persistedOutputUnit = p.outputUnit || p.unit || processUnits.value.outputUnit;
+  row.interimSettledAt = view.interimSettledAt ?? null;
+  row.productionDate = p.processDate || todayStr();
+
+  if (isXiuYou.value) {
+    const explicitRaw = p.rawMaterialInputs?.[0];
+    row.legacyExplicitRawInput = explicitRaw != null && !(p.materialInputTotals?.length);
+    row.rawBatchId = explicitRaw?.materialBatchId ?? '';
+    row.rawBatchQty = explicitRaw?.quantity ?? null;
+    if (p.materialInputTotals?.length) {
+      const savedLines = p.materialInputTotals.map((item): MaterialInputTotalLine => {
+        const port = workflowRawInputs.value.find((candidate) =>
+          candidate.workflowPortId === item.workflowPortId || candidate.skuId === item.materialTypeId,
+        );
+        return {
+          ...item,
+          materialName: port?.materialName || item.materialTypeId,
+          unit: port ? (workflowPortDisplayUnit(port) || item.unit) : item.unit,
+          selected: true,
+        };
+      });
+      const savedByPort = new Map(savedLines.map((line) => [line.workflowPortId, line]));
+      row.materialInputTotals = workflowRawInputs.value.map((port) => savedByPort.get(port.workflowPortId) ?? ({
+          materialTypeId: port.skuId,
+          materialName: port.materialName || port.skuId,
+          quantity: null,
+          unit: workflowPortDisplayUnit(port) || processUnits.value.inputUnit,
+          workflowPortId: port.workflowPortId || undefined,
+          materialNodeId: port.materialNodeId || undefined,
+          selected: portSelectedByDefault(port),
+        }));
+      savedLines.forEach((line) => {
+        if (!row.materialInputTotals.some((candidate) => candidate.workflowPortId === line.workflowPortId)) {
+          row.materialInputTotals.push(line);
+        }
+      });
+    }
+    row.fields['output'] = p.outputQuantity ?? null;
+    // SP-G G3c: 副产 hydrate (修油)
+    const bp0 = p.byproducts?.[0];
+    if (bp0) {
+      row.fields['byproductQty']   = bp0.quantity ?? null;
+      row.fields['byproductPrice'] = bp0.unitPrice ?? null;
+    }
+  }
+  if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: 结构相同 (before → inputQuantity, after → outputQuantity)
+    row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+    row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+    row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+    row.fields['before'] = p.inputQuantity ?? null;
+    row.fields['after'] = p.outputQuantity ?? null;
+    // SP-G G3c: 副产 hydrate (焯水 + 滚揉)
+    const bp0 = p.byproducts?.[0];
+    if (bp0) {
+      row.fields['byproductQty']   = bp0.quantity ?? null;
+      row.fields['byproductPrice'] = bp0.unitPrice ?? null;
+    }
+  }
+  if (isQuSheTou.value) {
+    // 去舌苔: output + scrap → input 反推. inputQuantity = scrap + output.
+    row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+    row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+    row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+    row.fields['output'] = p.outputQuantity ?? null;
+    // scrap = inputQuantity - outputQuantity (反推恢复, 若无法恢复则留 null)
+    const inp = p.inputQuantity ?? null;
+    const out = p.outputQuantity ?? null;
+    row.fields['scrap'] = inp != null && out != null ? inp - out : null;
+  }
+  if (isShuZhi.value || isGenericUpstream.value) {
+    if (isMultiSource.value) {
+      row.upstreamSources = hydrateUpstreamSources(p.upstreamSources);
+    } else {
+      row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+      row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+      row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+    }
+    row.fields['input'] = p.inputQuantity ?? null;
+    row.fields['output'] = p.outputQuantity ?? null;
+    // 锅数(potCount)是 熟制 专属 UI (isShuZhi 才渲染 v-if), generic 也镜像 hydrate 无害
+    // (值存在但不渲染, isMultiSource 混锅面板对 generic 同样可用不含锅数录入)。
+    row.potCount = p.potCount ?? 1;
+    row.potRawKgs = (p.potRawKgs ?? []).map((v) => v);
+  }
+  if (isQidiao.value) {
+    if (isMultiSource.value) {
+      row.upstreamSources = hydrateUpstreamSources(p.upstreamSources);
+    } else {
+      row.upstreamBatch = p.upstreamSources?.[0]?.sourceBatchNumber ?? '';
+      row.upstreamSemiFinished = p.upstreamSources?.[0]?.semiFinished ?? false;
+      row.upstreamFinishedGoods = p.upstreamSources?.[0]?.finishedGoods ?? false;
+      // 手填投入量必须回填, 否则重开草稿会退回"按批次可用量"而悄悄改掉已录的投入。
+      row.finishedInputKg = p.upstreamSources?.[0]?.feedQuantityKg ?? null;
+    }
+    // 成品报工只恢复两项事实；入库、剩余和重量始终重新派生，禁止把历史手填字段当真值。
+    row.fields['actualProd'] = p.outputQuantity ?? null;
+    row.fields['sample'] = p.sampleRetainQuantity ?? 0;
+  }
+  row.laborSegments = (p.laborSegments ?? []).map((s) => ({ ...s }));
+
+  // Workflow 单产出也使用与多产出相同的端口行；旧顶层字段回填到唯一产出行。
+  if (isPortOutputMode.value && !isMultiOutput.value && row.multiOutputs[0]) {
+    const line = row.multiOutputs[0];
+    const segment = p.laborSegments?.[0];
+    const byproduct = p.byproducts?.[0];
+    line.quantity = p.outputQuantity ?? null;
+    line.startTime = segment?.startTime ?? '';
+    line.endTime = segment?.endTime ?? '';
+    line.workerCount = segment?.workerCount ?? 1;
+    line.byproductQuantity = byproduct?.quantity ?? null;
+    line.byproductUnit = byproduct?.unit || byproductReportingUnit.value;
+    line.byproductUnitPrice = byproduct?.unitPrice ?? null;
+    line.costAllocationRatio = p.costAllocationRatio ?? null;
+    line.batchNumber = view.batchNumber;
+  }
+
+  // Generic date / daterange fields
+  const today = todayStr();
+  for (const col of cols.value) {
+    if (col.type === 'date' && !(col.key in row.fields)) {
+      row.fields[col.key] = null;
+    }
+    if (col.type === 'daterange') {
+      // Payload stores daterange as [start, end] array under col.key.
+      // Try to recover it; fall back to [today, today] for older rows that
+      // predate the daterange feature (they had a scalar string or null).
+      const stored = p[col.key as keyof typeof p];
+      if (Array.isArray(stored) && stored.length === 2) {
+        row.fields[col.key] = [String(stored[0]), String(stored[1])];
+      } else if (typeof stored === 'string' && stored) {
+        // Legacy single-date value: treat as both start and end.
+        row.fields[col.key] = [stored, stored];
+      } else {
+        row.fields[col.key] = [today, today];
+      }
+    }
+  }
+
+  // G2 自定义字段: 从 payload.customFields 回填 (mirror isQidiao 的 payloadFields 回填模式)。
+  // 只回填当前 enabled 的字段 key —— 若某字段后来被工序设置里关闭 (enabled=false), 值仍在
+  // 后端 row_payload.customFields 里但本组件不再渲染对应列, 也就不回填 (重新启用后再次可见)。
+  const savedCustomFields = p.customFields as Record<string, unknown> | undefined;
+  if (savedCustomFields) {
+    for (const def of enabledCustomFields.value) {
+      if (def.key in savedCustomFields) {
+        row.fields[def.key] = savedCustomFields[def.key] as string | number | null;
+      }
+    }
+  }
+  // 从服务端载入的行按定义就是"已存"的 —— 快照必须在这里落, 否则 rowIsDirty 会拿它去和
+  // 一张空行比, 于是**一打开就被判成有未保存内容**, 正是本次要消灭的那种假拦截。
+  row.savedSnapshot = rowContentKey(row);
+  return row;
+}
+
+/**
+ * 2B.2 多产出: base clientRowId 内的产出序号 (`${base}#${i}` → i)。非多产出行/无 `#` → -1
+ * (兜底排最前, 理论不出现 —— 多产出组员必带 `#`)。
+ */
+function multiOutputMemberIndex(clientRowId: string): number {
+  const idx = clientRowId.lastIndexOf('#');
+  if (idx < 0) return -1;
+  const n = Number(clientRowId.slice(idx + 1));
+  return Number.isFinite(n) ? n : -1;
+}
+
+/**
+ * 2B.2: 由一个已持久化的多产出成员行 view 还原一条 MultiOutputLine。品名/单位/成品|半成品
+ * 优先取「当前」workflow 端口 (workflowPortId 匹配) —— 若该端口后来被重新配置/删除
+ * (skuResolved=false 或端口消失), 退回 payload 里保存的原值, 不崩溃 (fool-proof Rule 5)。
+ */
+function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
+  const p = view.payload;
+  const portId = p.workflowPortId || '';
+  const port = portId ? outputPorts.value.find((op) => op.workflowPortId === portId) : undefined;
+  const segment = p.laborSegments?.[0];
+  const { inlineByproductPorts, hostPortId } = outputPartition.value;
+  // 画布绑了副产就按绑定的那几条回填 (按名字认回已保存的数量/单价), 手填那对字段留空;
+  // 没绑才走原来的「payload 里第一条副产 = 手填值」。二选一, 与录入侧同一个判据。
+  const boundByproducts = portId === hostPortId
+    ? inlineByproductPorts.map((bp) => {
+        const base = boundByproductFromPort(bp);
+        const saved = p.byproducts?.find((b) => b.name === base.materialName);
+        return { ...base, quantity: saved?.quantity ?? null, unitPrice: saved?.unitPrice ?? null };
+      })
+    : [];
+  const manualByproduct = boundByproducts.length > 0 ? undefined : p.byproducts?.[0];
+  return {
+    workflowPortId: portId,
+    materialNodeId: port?.materialNodeId ?? p.materialNodeId ?? '',
+    productTypeId: p.productTypeId,
+    materialName: port?.materialName || p.productTypeId,
+    unit: port ? workflowPortDisplayUnit(port) : (p.unit || p.outputUnit || ''),
+    gramsPerUnit: port?.gramsPerUnit ?? null,
+    finished: port ? port.finished === true : p.finished === true,
+    isByproduct: port ? port.byproduct === true : false,
+    required: port?.required ?? true,
+    selected: true,
+    quantity: p.outputQuantity ?? null,
+    startTime: segment?.startTime ?? '',
+    endTime: segment?.endTime ?? '',
+    workerCount: segment?.workerCount ?? 1,
+    boundByproducts,
+    byproductQuantity: manualByproduct?.quantity ?? null,
+    byproductUnit: manualByproduct?.unit || byproductReportingUnit.value,
+    byproductUnitPrice: manualByproduct?.unitPrice ?? null,
+    costAllocationRatio: p.costAllocationRatio ?? null,
+    batchNumber: view.batchNumber,
+  };
+}
+
+/**
+ * 2B.2: 把后端 GET rows 返回的扁平行列表按多产出组归组显示。一次多产出报工在后端拆成
+ * N 个持久化行 (clientRowId = `${base}#0..N-1`, 首行 #0 承载全部实际投入), 前端把它们
+ * 合并还原成**一条** SheetRow (row.multiOutputs = N 项), 而不是 N 条独立的表格行 ——
+ * 否则操作员会看到"同一次报工"被拆成好几行, 且再保存会因 clientRowId 不是 base 而对不上。
+ * 非多产出行 (payload.multiOutputMember 不为 true) 原样走既有 hydrateRow, 不受影响。
+ */
+function buildDisplayRows(views: ProcessSheetRowView[]): SheetRow[] {
+  if (!isMultiOutput.value) return views.map(hydrateRow);
+
+  const groups = new Map<string, ProcessSheetRowView[]>();
+  const singles: ProcessSheetRowView[] = [];
+  for (const v of views) {
+    const isMember = v.payload?.multiOutputMember === true;
+    const base = isMember ? (v.payload.multiOutputBaseRowId || v.clientRowId.split('#')[0]) : null;
+    if (!base) {
+      singles.push(v);
+      continue;
+    }
+    const arr = groups.get(base) ?? [];
+    arr.push(v);
+    groups.set(base, arr);
+  }
+
+  const result: SheetRow[] = singles.map(hydrateRow);
+  for (const [base, members] of groups) {
+    const sorted = [...members].sort(
+      (a, b) => multiOutputMemberIndex(a.clientRowId) - multiOutputMemberIndex(b.clientRowId),
+    );
+    const first = sorted[0]; // #0 承载全部实际投入 (carryInputs=true, 见后端 synthesizeOutputRequest)
+    // 用 base 覆盖 clientRowId 复用既有 hydrateRow 还原输入侧字段 (上游/原料/工时/自定义字段等,
+    // 与单产出完全一致的逻辑) —— 再保存时 buildRequest 发的 clientRowId 就是这个 base。
+    const row = hydrateRow({ ...first, clientRowId: base });
+    const savedOutputs = sorted.map(multiOutputLineFromView);
+    const savedByPort = new Map(savedOutputs.map((line) => [line.workflowPortId, line]));
+    row.multiOutputs = initMultiOutputs().map((line) => savedByPort.get(line.workflowPortId) ?? line);
+    savedOutputs.forEach((line) => {
+      if (!row.multiOutputs.some((candidate) => candidate.workflowPortId === line.workflowPortId)) {
+        row.multiOutputs.push(line);
+      }
+    });
+    result.push(row);
+  }
+  return result;
+}
+
+// -------------------------------------------------------------------------
+// Rows state
+// -------------------------------------------------------------------------
+// Initialise empty; the watch below populates rows once the async fetch in
+// the parent (ProcessSheet.vue → loadAll → getRows) resolves and the
+// initialRows prop arrives.  Without a watch, rows was set ONCE at setup()
+// time when initialRows was still [] (the fetch hadn't returned yet).
+const rows = ref<SheetRow[]>([]);
+const rowScopeKey = computed(() =>
+  `${props.factoryId}|${props.planId}|${props.productTypeId}|${props.processCode}|${props.processOrder}`,
+);
+let lastRowScopeKey = '';
+
+function normalizeInitialRows(value: ProcessSheetRowView[] | null | undefined): ProcessSheetRowView[] {
+  return Array.isArray(value) ? value : [];
+}
+
+// Re-hydrate saved rows whenever the parent delivers them.
+// Guard: only apply when rows is still in its initial-load state (all
+// UNSAVED rows means no user edits yet), so we don't clobber a row the
+// user has already started filling in after the sheet was opened.
+watch(
+  () => [rowScopeKey.value, props.initialRows] as const,
+  ([scopeKey, incoming]) => {
+    const normalizedIncoming = normalizeInitialRows(incoming);
+    if (scopeKey !== lastRowScopeKey) {
+      lastRowScopeKey = scopeKey;
+      rows.value = buildDisplayRows(normalizedIncoming);
+      return;
+    }
+
+    // Same plan/process: if the user has already added unsaved rows, don't overwrite them.
+    // This keeps in-progress edits safe while still clearing rows when the drawer is reused
+    // for another plan/process.
+    const hasUserEdits = rows.value.some((r) => r.rowStatus === 'UNSAVED');
+    if (hasUserEdits && rows.value.length > 0) return;
+    rows.value = buildDisplayRows(normalizedIncoming);
+  },
+  { immediate: true, deep: false },
+);
+
+function addRow() {
+  if (addRowBlockedReason.value) {
+    ElMessage({ message: addRowBlockedReason.value, type: 'warning', duration: 0, showClose: true });
+    return;
+  }
+  rows.value.push(blankRow());
+}
+
+// -------------------------------------------------------------------------
+// 已小结行折叠 (BY_STOCK 小结后转结到批次，计划保持开放)
+// -------------------------------------------------------------------------
+
+/** 已小结 (interimSettledAt != null): 只读，默认折叠。 */
+const settledRows = computed(() => rows.value.filter((r) => r.interimSettledAt != null));
+function isReadOnlyRow(row: SheetRow): boolean {
+  return row.submissionStatus === 'LEGACY' || row.materialized;
+}
+const historicalRows = computed(() => rows.value.filter((r) =>
+  r.interimSettledAt == null && isReadOnlyRow(r),
+));
+/** 未小结 (interimSettledAt == null): 正常可编辑。 */
+const activeRows  = computed(() => rows.value.filter((r) =>
+  r.interimSettledAt == null && !isReadOnlyRow(r),
+));
+
+/** 已小结区块展开状态 (默认折叠 → 操作员看到干净的录入界面)。 */
+const settledExpanded = ref(false);
+
+/** 格式化小结时间 (ISO-8601 → "YYYY-MM-DD HH:mm")。 */
+function formatSettledAt(iso: string | null): string {
+  if (!iso) return '';
+  return iso.replace('T', ' ').slice(0, 16);
+}
+
+/**
+ * 已小结行的产出摘要 (单行文字)。
+ * 按工序类型提取最关键的一个数字给操作员一眼看清楚。
+ */
+function settledRowSummary(row: SheetRow): string {
+  // 2B.2 多产出: 单产出的 row.fields['output']/['after'] 从未被填 (多产出录入在 row.multiOutputs
+  // 里), 用逐产出摘要取代, 而不是落进下面任何 archetype 分支返回误导性的 "—"。
+  if (isMultiOutput.value) {
+    return row.multiOutputs
+      .map((o) => `${o.materialName} ${o.quantity ?? '—'}${o.unit}`)
+      .join(' + ');
+  }
+  if (isXiuYou.value) {
+    const out = row.fields['output'];
+    return formatHistoricalProcessOutput(out as number | null, row);
+  }
+  if (isSingleUpstream.value) {
+    const after = row.fields['after'];
+    return formatHistoricalProcessOutput(after as number | null, row);
+  }
+  if (isQuSheTou.value) {
+    const out = row.fields['output'];
+    return formatHistoricalProcessOutput(out as number | null, row);
+  }
+  if (isShuZhi.value) {
+    const out = row.fields['output'];
+    return formatHistoricalProcessOutput(out as number | null, row);
+  }
+  if (isQidiao.value) {
+    const n = finishedActualQuantity(row);
+    return `实产 ${n ?? '—'} ${displayProcessUnit(processUnits.value.outputUnit) || '（单位未配置）'}`;
+  }
+  return '—';
+}
+
+function formatHistoricalProcessOutput(quantity: number | null, row: SheetRow): string {
+  if (quantity == null) return '—';
+  const target = processUnits.value.outputUnit.trim().toLowerCase();
+  if (target === 'kg' || target === '千克' || target === '公斤') {
+    const normalized = normalizeMassQuantityForReporting(Number(quantity), row.persistedOutputUnit);
+    return formatProcessOutput(normalized.quantity, normalized.unit || processUnits.value.outputUnit);
+  }
+  return formatProcessOutput(quantity, processUnits.value.outputUnit);
+}
+
+// -------------------------------------------------------------------------
+// Auto-calc helpers
+// -------------------------------------------------------------------------
+/** 反推投入量: scrap + output. 去舌苔专用. */
+function calcReverseInput(row: SheetRow): number | null {
+  const scrap = (row.fields['scrap'] as number) ?? null;
+  const output = (row.fields['output'] as number) ?? null;
+  if (scrap == null || output == null) return null;
+  return scrap + output;
+}
+
+function singleSourceUsage(row: SheetRow): number {
+  if (isSingleUpstream.value) return (row.fields['before'] as number) ?? 0;
+  if (isQuSheTou.value) return calcReverseInput(row) ?? 0;
+  if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? 0;
+  if (isQidiao.value) return effectiveFinishedInputKg(row) ?? 0;
+  return 0;
+}
+
+/**
+ * 成品工序不再要求操作员重复填写「使用重量」。选中的上游来源本身就是本次要结转的
+ * WIP/SFI/FG 库存，因此以该来源当前可用量作为实际投入；计数单位只有在 SKU 已配置
+ * 标准克重时才允许折算。任何无法可靠解析的来源均返回 null，由正式报工入口 fail-closed。
+ */
+function sourceAvailableKg(
+  quantity: number,
+  unit: string | null | undefined,
+  gramsPerUnit?: number | null,
+): number | null {
+  if (!Number.isFinite(quantity) || quantity <= 0) return null;
+  const normalized = (unit || processUnits.value.inputUnit).trim().toLowerCase();
+  if (normalized === 'kg' || normalized === '千克') return quantity;
+  if (normalized === 'g' || normalized === '克') return quantity / 1000;
+  if (isCountUnit(unit)) return boxAvailableKg(quantity, gramsPerUnit);
+  return null;
+}
+
+function resolvedFinishedInputKg(row: SheetRow): number | null {
+  if (!row.upstreamBatch) return null;
+  if (row.upstreamFinishedGoods) {
+    const source = fgOptions.value.find((item) => item.batchNumber === row.upstreamBatch);
+    return source ? sourceAvailableKg(fgAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  if (row.upstreamSemiFinished) {
+    const source = sfiOptions.value.find((item) => item.intermediateBatchNo === row.upstreamBatch);
+    return source ? sourceAvailableKg(sfiAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  const source = props.upstreamItems.find((item) => item.batchNumber === row.upstreamBatch);
+  return source ? sourceAvailableKg(source.remaining, source.unit) : null;
+}
+
+/**
+ * 成品工序本次实际投入量: 操作员填了就以填的为准, 没填则沿用所选上游批次的可用量。
+ * (2026-07-30 Steve 拍板: 投入不一定等于上一道产出, 以实填为准, 填错走盘点纠正。)
+ */
+function effectiveFinishedInputKg(row: SheetRow): number | null {
+  if (row.finishedInputKg != null && row.finishedInputKg > 0) return row.finishedInputKg;
+  return resolvedFinishedInputKg(row);
+}
+
+/** 实填超过所选批次可用量时的提示文案; null = 无需提示。只提示不阻断。 */
+function finishedInputOverAvailableHint(row: SheetRow): string | null {
+  if (!isQidiao.value || isMultiSource.value) return null;
+  const entered = row.finishedInputKg;
+  if (entered == null || entered <= 0) return null;
+  const available = resolvedFinishedInputKg(row);
+  if (available == null || entered <= available) return null;
+  return `填写的投入 ${entered}kg 超过所选批次可用量 ${available}kg；如确实多投请核对批次，账实差异由盘点纠正。`;
+}
+
+function formalSubmitBlockedReason(row: SheetRow): string | null {
+  if (props.upstreamSubmissionReady === false) {
+    return props.upstreamSubmissionMessage
+      || `上游工序尚未正式报工，请先完成「${upstreamProcessName.value}」后再提交本道工序`;
+  }
+  if (requiresManualCostAllocation(row)) {
+    const activeOutputs = row.multiOutputs.filter((output) => output.selected && output.quantity != null && output.quantity > 0);
+    if (activeOutputs.some((output) => output.costAllocationRatio == null || output.costAllocationRatio <= 0)) {
+      return '产出单位无法统一折算，请填写每项大于 0 的成本分摊比例';
+    }
+    const totalRatio = activeOutputs.reduce((sum, output) => sum + (output.costAllocationRatio || 0), 0);
+    if (Math.abs(totalRatio - 100) > 0.01) return `成本分摊比例合计必须为 100%，当前为 ${Number(totalRatio.toFixed(4))}%`;
+  }
+  if (!isQidiao.value || isMultiSource.value) return null;
+  const inputKg = effectiveFinishedInputKg(row);
+  if (inputKg != null && inputKg > 0) return null;
+  return '无法从所选上游库存确定实际投入量，请刷新库存或重新选择上游批次后再正式报工';
+}
+
+/** Mirrors the inputQuantity selected by buildRequest, for pre-save pot validation/preview. */
+function potInputQuantity(row: SheetRow): number {
+  if (isXiuYou.value) return usesAutoMaterialTotals(row) ? materialInputTotalKg(row) : (row.rawBatchQty ?? 0);
+  if (isMultiSource.value) {
+    const totalFeed = row.upstreamSources
+      .filter((source) => source.selected)
+      .reduce((sum, source) => sum + (source.feedQuantityKg || 0), 0);
+    if (isSingleUpstream.value) return (row.fields['before'] as number) ?? totalFeed;
+    if (isQuSheTou.value) return calcReverseInput(row) ?? totalFeed;
+    if (isShuZhi.value || isGenericUpstream.value) return (row.fields['input'] as number) ?? totalFeed;
+    if (isQidiao.value) return totalFeed;
+  }
+  return singleSourceUsage(row);
+}
+
+function calcYield(row: SheetRow): number | null {
+  let input: number | null = null;
+  let output: number | null = null;
+
+  if (isXiuYou.value) {
+    input = usesAutoMaterialTotals(row) ? materialInputTotalKg(row) : row.rawBatchQty;
+    output = (row.fields['output'] as number) ?? null;
+  } else if (isMultiSource.value) {
+    input = row.upstreamSources
+      .filter((source) => source.selected)
+      .reduce((sum, src) => sum + (src.feedQuantityKg || 0), 0);
+    output = (row.fields['output'] as number) ?? null;
+  } else if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: before/after 字段
+    input = (row.fields['before'] as number) ?? null;
+    output = (row.fields['after'] as number) ?? null;
+  } else if (isQuSheTou.value) {
+    // 去舌苔: 分母是反推投入量 (scrap + output), 分子是 output
+    input = calcReverseInput(row);
+    output = (row.fields['output'] as number) ?? null;
+  } else if (isShuZhi.value || isGenericUpstream.value) {
+    input = (row.fields['input'] as number) ?? null;
+    output = (row.fields['output'] as number) ?? null;
+  }
+  if (input == null || input === 0 || output == null) return null;
+  return Math.round((output / input) * 10000) / 100;
+}
+
+function calcTotalHours(row: SheetRow): number {
+  return row.laborSegments.reduce((sum, seg) => {
+    if (!seg.startTime || !seg.endTime) return sum;
+    const [sh, sm] = seg.startTime.split(':').map(Number);
+    const [eh, em] = seg.endTime.split(':').map(Number);
+    const rawMinutes = (eh * 60 + em) - (sh * 60 + sm);
+    const minutes = rawMinutes < 0 ? rawMinutes + 24 * 60 : rawMinutes;
+    return sum + (minutes / 60) * (seg.workerCount || 0);
+  }, 0);
+}
+
+function outputLineTotalHours(line: MultiOutputLine): number {
+  if (!line.startTime || !line.endTime) return 0;
+  const [sh, sm] = line.startTime.split(':').map(Number);
+  const [eh, em] = line.endTime.split(':').map(Number);
+  if (![sh, sm, eh, em].every(Number.isFinite)) return 0;
+  const rawMinutes = (eh * 60 + em) - (sh * 60 + sm);
+  const minutes = rawMinutes < 0 ? rawMinutes + 24 * 60 : rawMinutes;
+  return (minutes / 60) * Math.max(1, line.workerCount || 1);
+}
+
+function outputLineYield(row: SheetRow, line: MultiOutputLine): number | null {
+  const outputWeightKg = outputLineWeightKg(line);
+  const inputWeightKg = reportingInputWeightKg(row);
+  if (outputWeightKg != null && inputWeightKg != null && inputWeightKg > 0) {
+    return Math.round((outputWeightKg / inputWeightKg) * 10000) / 100;
+  }
+  const comparableInput = reportingInputQuantityForUnit(row, line.unit);
+  if (comparableInput == null || comparableInput <= 0 || line.quantity == null) return null;
+  return Math.round((line.quantity / comparableInput) * 10000) / 100;
+}
+
+/**
+ * 出成率算不出来的原因。
+ *
+ * 同单位工序(只→只、kg→kg)是纯比值, 不需要任何规格。只有投入与产出
+ * 单位不同时才需要桥: 两边各自知道"一个单位多少克", 才能比。
+ * 缺这个桥时绝不能拿两个不同量纲的数相除 —— 那会产出一个看起来很正常、
+ * 实际没有物理意义的百分比。
+ */
+function outputLineYieldBlocker(row: SheetRow, line: MultiOutputLine): string | null {
+  if (outputLineYield(row, line) != null) return null;
+  if (line.quantity == null) return null;
+  // 投入还没录时算不出来只是"还没填", 与单位无关 —— 这时弹"去设置每单位重量"是误导
+  const inputFilled = reportingInputFacts(row).some((fact) => fact.quantity > 0);
+  if (!inputFilled) return null;
+  const inputUnit = displayProcessUnit(processUnits.value.inputUnit);
+  const outputUnit = displayProcessUnit(line.unit);
+  if (!inputUnit || !outputUnit || sameUnit(inputUnit, outputUnit)) return null;
+  return `投入按${inputUnit}、产出按${outputUnit}，需要先设置「${line.materialName}」的每${outputUnit}重量才能算出成率`;
+}
+
+// ---- 当场补「每单位重量」----------------------------------------------
+// 跑去产品管理页找到那个 SKU、开完整表单、改一个数、再回来重新填报工 ——
+// 这个往返比要补的那个数本身贵得多。报工时只缺这一个字段, 就就地改掉。
+const specDialog = ref<{
+  visible: boolean;
+  productTypeId: string;
+  materialName: string;
+  unit: string;
+  gramsPerUnit: number | null;
+  saving: boolean;
+}>({ visible: false, productTypeId: '', materialName: '', unit: '', gramsPerUnit: null, saving: false });
+
+function openSpecDialog(line: MultiOutputLine): void {
+  specDialog.value = {
+    visible: true,
+    productTypeId: line.productTypeId,
+    materialName: line.materialName,
+    unit: displayProcessUnit(line.unit),
+    gramsPerUnit: line.gramsPerUnit,
+    saving: false,
+  };
+}
+
+async function saveSpec(): Promise<void> {
+  const draft = specDialog.value;
+  if (!draft.productTypeId) return;
+  if (draft.gramsPerUnit == null || draft.gramsPerUnit <= 0) {
+    ElMessage.warning('请填入大于 0 的每单位重量');
+    return;
+  }
+  draft.saving = true;
+  try {
+    await put(`/${props.factoryId}/product-types/${draft.productTypeId}`, {
+      gramsPerUnit: draft.gramsPerUnit,
+    });
+    // 就地回写所有引用该 SKU 的产出行, 出成率立刻重算, 不用刷页
+    rows.value.forEach((row) => {
+      row.multiOutputs?.forEach((line: MultiOutputLine) => {
+        if (line.productTypeId === draft.productTypeId) line.gramsPerUnit = draft.gramsPerUnit;
+      });
+    });
+    ElMessage.success(`已设置「${draft.materialName}」的每${draft.unit}重量`);
+    draft.visible = false;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存失败');
+  } finally {
+    draft.saving = false;
+  }
+}
+
+function outputLineLaborSegments(line: MultiOutputLine): LaborSegment[] | undefined {
+  if (!line.startTime || !line.endTime) return undefined;
+  return [{ startTime: line.startTime, endTime: line.endTime, workerCount: Math.max(1, line.workerCount || 1) }];
+}
+
+/**
+ * 本条产出行要提交的副产明细。
+ *
+ * 二选一 (`byproductEntryMode`):
+ * - `BOUND`  画布绑定 —— 逐条发, **名字用画布上那个 SKU 的真名**。后端
+ *   `ByproductBatchMaterializer.matchDeclaration` 按名字认 BOM 里的副产声明,
+ *   喂真名比喂占位串 '副产' 能匹配到更多情况, 也让多副产彼此分得开。
+ * - `MANUAL` 没绑 —— 沿用原来那对手填字段, 名字仍是占位串 '副产' (行为逐字不变)。
+ *
+ * ⛔ 两套不并存: 并存就是同一个事实有两份, 一定会漂。
+ */
+function outputLineByproducts(line: MultiOutputLine): ProcessSheetByproduct[] | undefined {
+  if (byproductEntryMode(line) === 'BOUND') {
+    const filled = line.boundByproducts.filter((bp) => bp.quantity != null && bp.quantity > 0);
+    if (filled.length === 0) return undefined;
+    return filled.map((bp) => ({
+      name: bp.materialName,
+      quantity: bp.quantity as number,
+      unit: bp.unit,
+      ...(bp.unitPrice != null ? { unitPrice: bp.unitPrice } : {}),
+    }));
+  }
+  if (line.byproductQuantity == null || line.byproductQuantity <= 0) return undefined;
+  return [{
+    name: '副产',
+    quantity: line.byproductQuantity,
+    unit: line.byproductUnit,
+    ...(line.byproductUnitPrice != null ? { unitPrice: line.byproductUnitPrice } : {}),
+  }];
+}
+
+function calcRemaining(row: SheetRow): number | null {
+  // For SAVED rows with a batchNumber: look up in own-process inventory.
+  // This is the authoritative value and matches what the 半成品库存 table shows.
+  if (row.rowStatus === 'SAVED' && row.batchNumber && props.ownInventoryItems?.length) {
+    const inv = props.ownInventoryItems.find((b) => b.batchNumber === row.batchNumber);
+    if (inv != null) return inv.remaining;
+  }
+  // Fallback for single-source upstream unsaved rows: derive from selected source.
+  if (isSingleSource.value) {
+    if (row.upstreamFinishedGoods) {
+      const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      return fg ? fgAvailable(fg) : null;
+    }
+    if (row.upstreamSemiFinished) {
+      const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      return sfi ? sfiAvailable(sfi) : null;
+    }
+    const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
+    return inv ? inv.remaining : null;
+  }
+  return null;
+}
+
+// -------------------------------------------------------------------------
+// 成品报工派生值：SKU/Workflow 单位与净重是唯一真值。
+// -------------------------------------------------------------------------
+
+const finishedOutputPort = computed(() => {
+  const port = props.workflowContext?.output ?? null;
+  return port?.finished ? port : null;
+});
+
+function finishedActualQuantity(row: SheetRow): number | null {
+  const value = row.fields['actualProd'];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function finishedSampleQuantity(row: SheetRow): number {
+  const value = row.fields['sample'];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function finishedInboundQuantity(row: SheetRow): number | null {
+  const actual = finishedActualQuantity(row);
+  if (actual == null) return null;
+  return Math.max(0, actual - finishedSampleQuantity(row));
+}
+
+function quantityWeightKg(quantity: number | null, unit: string, gramsPerUnit: number | null): number | null {
+  if (quantity == null) return null;
+  const normalized = normalizedReportingUnit(unit);
+  if (normalized === 'kg') return quantity;
+  if (normalized === 'g') return quantity / 1000;
+  if (gramsPerUnit == null || gramsPerUnit <= 0) return null;
+  return quantity * gramsPerUnit / 1000;
+}
+
+function normalizedReportingUnit(unit: string): string {
+  const normalized = unit.trim().toLowerCase();
+  if (normalized === '千克' || normalized === '公斤') return 'kg';
+  if (normalized === '克') return 'g';
+  return normalized;
+}
+
+function canConvertOutputToKg(line: MultiOutputLine): boolean {
+  const unit = normalizedReportingUnit(line.unit);
+  return unit === 'kg' || unit === 'g' || (line.gramsPerUnit != null && line.gramsPerUnit > 0);
+}
+
+function requiresManualCostAllocation(row: SheetRow): boolean {
+  const selectedOutputs = row.multiOutputs.filter((line) => line.selected);
+  if (selectedOutputs.length <= 1) return false;
+  if (selectedOutputs.every(canConvertOutputToKg)) return false;
+  const dimensions = new Set(selectedOutputs.map((line) => {
+    const unit = normalizedReportingUnit(line.unit);
+    return unit === 'kg' || unit === 'g' ? 'mass' : unit;
+  }));
+  return dimensions.size > 1;
+}
+
+function reportingInputFacts(row: SheetRow): Array<{ quantity: number; unit: string; gramsPerUnit: number | null }> {
+  if (usesAutoMaterialTotals(row)) {
+    return row.materialInputTotals
+      .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
+      .map((item) => {
+        const port = workflowRawInputs.value.find((candidate) =>
+          candidate.workflowPortId === item.workflowPortId || candidate.skuId === item.materialTypeId,
+        );
+        return { quantity: item.quantity!, unit: item.unit, gramsPerUnit: port?.gramsPerUnit ?? null };
+      });
+  }
+  if (isMultiSource.value) {
+    return row.upstreamSources
+      .filter((source) => source.selected && source.feedQuantityKg > 0)
+      .map((source) => {
+        const port = sourcePort(source);
+        return {
+          quantity: source.feedQuantityKg,
+          unit: sourcePortUnit(source),
+          gramsPerUnit: port?.gramsPerUnit ?? null,
+        };
+      });
+  }
+  const quantity = potInputQuantity(row);
+  const port = workflowUpstreamInputs.value[0];
+  return quantity > 0 ? [{
+    quantity,
+    unit: port ? workflowPortDisplayUnit(port) : processUnits.value.inputUnit,
+    gramsPerUnit: port?.gramsPerUnit ?? null,
+  }] : [];
+}
+
+function reportingInputWeightKg(row: SheetRow): number | null {
+  const facts = reportingInputFacts(row);
+  if (!facts.length) return null;
+  let total = 0;
+  for (const fact of facts) {
+    const weight = quantityWeightKg(fact.quantity, fact.unit, fact.gramsPerUnit);
+    if (weight == null) return null;
+    total += weight;
+  }
+  return total;
+}
+
+function reportingInputQuantityForUnit(row: SheetRow, unit: string): number | null {
+  const target = normalizedReportingUnit(unit);
+  const facts = reportingInputFacts(row);
+  if (!facts.length || facts.some((fact) => normalizedReportingUnit(fact.unit) !== target)) return null;
+  return facts.reduce((sum, fact) => sum + fact.quantity, 0);
+}
+
+function finishedWeightKg(row: SheetRow, inbound = false): number | null {
+  const quantity = inbound ? finishedInboundQuantity(row) : finishedActualQuantity(row);
+  return quantityWeightKg(
+    quantity,
+    processUnits.value.outputUnit,
+    finishedOutputPort.value?.gramsPerUnit ?? null,
+  );
+}
+
+function formattedWeight(value: number | null): string {
+  if (value == null) return '未配置单位净重，无法计算成品重量';
+  return `${Number(value.toFixed(6))} kg`;
+}
+
+function unitNetWeightText(): string {
+  const unit = processUnits.value.outputUnit;
+  if (unit.trim().toLowerCase() === 'kg' || unit.trim() === '千克') return '单位净重：按 kg 记账';
+  const grams = finishedOutputPort.value?.gramsPerUnit;
+  return grams != null && grams > 0 ? `单位净重：${Number(grams.toFixed(3))}g/${unit}` : '单位净重：未配置';
+}
+
+function outputLineWeightKg(line: MultiOutputLine): number | null {
+  return quantityWeightKg(line.quantity, line.unit, line.gramsPerUnit);
+}
+
+function outputLinePrecision(line: MultiOutputLine): number {
+  return line.finished && line.unit.trim().toLowerCase() !== 'kg' && line.unit.trim() !== '千克' ? 0 : 6;
+}
+
+/**
+ * 把一行的产出端口整理成 ProcessOutputTable 要的视图模型。
+ *
+ * 所有派生值都在这里算完 —— 卡片模式和表格模式传同一份进去, 就不可能再像以前那样
+ * 一边有必填标识和出成率说明、另一边没有。
+ */
+function outputViews(row: SheetRow): OutputLineView[] {
+  return row.multiOutputs.map((line) => {
+    const port = portById(line.workflowPortId);
+    const yieldRate = outputLineYield(row, line);
+    return {
+      line,
+      selectorVisible: showPortSelector(port),
+      selectorDisabled: portSelectionDisabled(port),
+      unitLabel: displayProcessUnit(line.unit),
+      byproductUnitLabel: displayProcessUnit(line.byproductUnit),
+      quantityPrecision: outputLinePrecision(line),
+      yieldText: yieldRate == null ? '—' : `${yieldRate.toFixed(2)}%`,
+      blocker: outputLineYieldBlocker(row, line),
+      byproductMode: byproductEntryMode(line),
+      totalHoursText: outputLineTotalHours(line).toFixed(2),
+      specLabel: line.finished && line.gramsPerUnit != null && line.gramsPerUnit > 0
+        ? `${Number(line.gramsPerUnit.toFixed(3))}g/${displayProcessUnit(line.unit)}`
+        : null,
+      weightHint: line.finished
+        ? (outputLineWeightKg(line) == null
+            ? '未配置单位净重，无法计算成品重量'
+            : `成品重量 ${formattedWeight(outputLineWeightKg(line))}`)
+        : null,
+    };
+  });
+}
+
+/** 本行的投入里有没有真能选的端口 —— 全都没得选时「选用」整列不占位。 */
+function anyInputSelector(row: SheetRow): boolean {
+  return row.materialInputTotals.some((item) => showPortSelector(portById(item.workflowPortId)));
+}
+
+/** 子组件只知道端口 id; 选用状态的联动规则仍然留在这里 (EXACTLY_ONE 互斥等)。 */
+function onOutputPortToggle(row: SheetRow, portId: string, selected: boolean): void {
+  setPortSelected(row, portById(portId), selected);
+}
+
+function fieldPrecision(key: string): number {
+  if (!isQidiao.value || (key !== 'actualProd' && key !== 'sample')) return 2;
+  const unit = processUnits.value.outputUnit.trim().toLowerCase();
+  return unit === 'kg' || unit === '千克' ? 6 : 0;
+}
+
+/**
+ * 这一行要不要用「Workflow 原料端口自动生成投入行」这套。
+ *
+ * <h3>🔴 2026-08-02: 去掉 isXiuYou 前置 —— 它让多输入工序永远提交不了</h3>
+ *
+ * <p>原来是 {@code isXiuYou.value && workflowRawInputs.length > 0 && ...}，
+ * 即<b>原料投入区块只在 xiuyou 这个 archetype 下渲染</b>。而
+ * {@link selectionGroupReason} 的校验<b>不分 archetype</b>，照样去数 workflow 上
+ * 未选中的 RAW_MATERIAL 端口 —— 于是：
+ *
+ * <p>六膳门酱鸭腿第 2 道「熟制」有 4 个输入端口在同一选择组
+ * （1 个 SEMI_FINISHED 缓化鸭腿 + 3 个 RAW_MATERIAL 生抽/老抽/五香粉），archetype 是
+ * {@code shuzhi} → 3 条原料行<b>一条都不渲染</b>，界面上没有任何可勾可填的东西；
+ * 而按钮被「"实际投入"至少选择 1 项，当前尚未选择」<b>永久禁用</b>。
+ * 横幅还明写着「需要原料：生抽、老抽、五香粉」—— 告诉你要填，却不给你地方填。
+ *
+ * <p>第 1 道（单 RAW_MATERIAL）与第 3 道（单 SEMI_FINISHED）没事，是因为它们各只有
+ * 一个端口 → {@code portHasNoAlternative} 为真 → {@code portSelectedByDefault}
+ * 直接置 selected，绕过了这道门。<b>只有混合多输入的工序卡死。</b>
+ *
+ * <p>判据回到 Workflow 本身：<b>只要这道工序在 workflow 上挂了原料端口，就该能录原料</b>，
+ * 与它被归到哪个 archetype 无关。archetype 是「录入表格显示哪几列」的排版概念，
+ * 早于 workflow 端口模型，本就不该拿来决定「能不能录一类必填输入」。
+ *
+ * <p>⛔ 刻意<b>不</b>动 {@code potInputQuantity} / 出成率那两处的 isXiuYou 分支：
+ * 第 2 道的出成率分母是<b>上游投入</b>（140kg），调料是额外投入不进分母。
+ * 那两处按 archetype 分叉是对的。
+ */
+function usesAutoMaterialTotals(row: SheetRow): boolean {
+  return workflowRawInputs.value.length > 0 && !row.legacyExplicitRawInput;
+}
+
+function submittedMaterialInputTotals(row: SheetRow): MaterialInputTotal[] {
+  return row.materialInputTotals
+    .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
+    .map(({ materialName: _materialName, selected: _selected, quantity, ...item }) => ({ ...item, quantity: quantity! }));
+}
+
+function materialInputTotalKg(row: SheetRow): number {
+  // Workflow 原料端口可能同时使用 g / kg；页面汇总必须与后端库存分摊使用同一质量口径。
+  // 非质量维度保留旧兼容值，正式提交仍由后端按端口快照做最终校验与换算。
+  return reportingInputWeightKg(row)
+    ?? submittedMaterialInputTotals(row).reduce((sum, item) => sum + item.quantity, 0);
+}
+
+function upstreamWarning(row: SheetRow): string | null {
+  if (isSingleSource.value) {
+    const usage = singleSourceUsage(row);
+    if (row.upstreamFinishedGoods) {
+      // ①c FG 投料 max 守卫: 计数单位(盒装)成品经每盒克重折算 kg 可投量; kg 源按原 kg 比较。
+      const fg = fgOptions.value.find((f) => f.batchNumber === row.upstreamBatch);
+      if (!fg) return null;
+      if (isCountUnit(fg.unit)) return countUnitFeedWarning(fg.unit, fg.gramsPerUnit, fgAvailable(fg), usage, '该成品来源');
+      if (usage > fgAvailable(fg)) return `用量 ${usage}${processUnits.value.inputUnit} 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`;
+      return null;
+    }
+    if (row.upstreamSemiFinished) {
+      // SFI 投料 max 守卫: 计数单位(盒装)半成品经每盒克重折算; kg 源按原 kg 比较。
+      const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === row.upstreamBatch);
+      if (!sfi) return null;
+      if (isCountUnit(sfi.unit)) return countUnitFeedWarning(sfi.unit, sfi.gramsPerUnit, sfiAvailable(sfi), usage, '该半成品来源');
+      if (usage > sfiAvailable(sfi)) return `用量 ${usage}${processUnits.value.inputUnit} 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+      return null;
+    }
+    const inv = props.upstreamItems.find((b) => b.batchNumber === row.upstreamBatch);
+    if (!inv) return null;
+    if (usage > inv.remaining) return `用量 ${usage}${processUnits.value.inputUnit} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`;
+  }
+  if (isMultiSource.value) {
+    const warnings: string[] = [];
+    for (const src of row.upstreamSources) {
+      if (!src.selected) continue;
+      const usage = src.feedQuantityKg;
+      if (src.finishedGoods) {
+        // ①c FG 投料 max 守卫: 计数单位(盒装)成品经每盒克重折算 kg 可投量; kg 源按原 kg 比较。
+        const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
+        if (!fg) continue;
+        if (isCountUnit(fg.unit)) {
+          const w = countUnitFeedWarning(fg.unit, fg.gramsPerUnit, fgAvailable(fg), usage, src.sourceBatchNumber);
+          if (w) warnings.push(w);
+          continue;
+        }
+        if (usage > fgAvailable(fg)) {
+          warnings.push(`${src.sourceBatchNumber} 超出成品库存余 ${fgAvailable(fg)}${fg.unit || 'kg'}`);
+        }
+        continue;
+      }
+      if (src.semiFinished) {
+        // SFI 投料 max 守卫: 计数单位(盒装)半成品经每盒克重折算; kg 源按原 kg 比较。
+        const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
+        if (!sfi) continue;
+        if (isCountUnit(sfi.unit)) {
+          const w = countUnitFeedWarning(sfi.unit, sfi.gramsPerUnit, sfiAvailable(sfi), usage, src.sourceBatchNumber);
+          if (w) warnings.push(w);
+          continue;
+        }
+        if (usage > sfiAvailable(sfi)) {
+          warnings.push(`${src.sourceBatchNumber} 超出半成品库存余 ${sfiAvailable(sfi)}${sfi.unit || 'kg'}`);
+        }
+        continue;
+      }
+      const inv = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
+      if (inv && usage > inv.remaining) {
+        warnings.push(`${src.sourceBatchNumber} 超出剩余 ${inv.remaining}${inv.unit || processUnits.value.inputUnit}`);
+      }
+    }
+    if (warnings.length) return warnings.join('; ');
+  }
+  // 2026-08-02: workflow 原料端口的校验放在 archetype 分支**之外**。
+  // ⚠️ 第一版放进了 isMultiSource 分支, 而熟制只有 1 个上游端口 → 走的是 isSingleSource,
+  //    那段代码根本没执行(prod 实测: 按钮解禁、报工成功, 但 row_payload 里没有
+  //    materialInputTotals)。archetype 分支覆盖不全, 判据必须挂在「这行用不用自动原料行」上。
+  if (usesAutoMaterialTotals(row)) {
+    const missing = row.materialInputTotals.find(
+      (item) => item.selected && (item.quantity == null || item.quantity <= 0));
+    if (missing) return `请填写「${missing.materialName}」的投料总量`;
+  }
+  return null;
+}
+
+// -------------------------------------------------------------------------
+// Save-disabled reason (fool-proof gate)
+// -------------------------------------------------------------------------
+function draftSaveDisabledReason(row: SheetRow): string | null {
+  if (isReadOnlyRow(row)) return '已入账或历史数据只读，不能直接修改';
+  if (row.submissionStatus === 'SUBMITTED') return '该行已正式报工，不能直接修改';
+  if (unresolvedWorkflowRawInputs.value.length > 0) {
+    return '当前计划的 Workflow 原料已失效，请先重新绑定原料并重新创建生产计划';
+  }
+  return null;
+}
+
+function rowCompletenessReason(row: SheetRow): string | null {
+  const draftReason = draftSaveDisabledReason(row);
+  if (draftReason) return draftReason;
+  if (isPortOutputMode.value && !row.productionDate) return '请选择生产日期';
+  const inputGroupReason = selectionGroupReason(row, 'INPUT');
+  if (inputGroupReason) return inputGroupReason;
+  const outputGroupReason = selectionGroupReason(row, 'OUTPUT');
+  if (outputGroupReason) return outputGroupReason;
+  // 2B.2 多产出: 单产出字段(下方 'output'/'after'/'usedWeight'+sumBoxes 等)已被「多产出」录入块
+  // 取代、不再渲染 —— 下方 `&& !isMultiOutput.value` 跳过那些"填了单产出输出吗"检查(它们永远
+  // 是 null, 会永久卡住保存), 改用本函数末尾的多产出专属检查。输入侧完整性检查(上游批次/原料
+  // 批次/投入重量等)照常执行, 不受影响 —— 多产出的投入分配方式与单产出完全一致。
+  if (isXiuYou.value) {
+    if (usesAutoMaterialTotals(row)) {
+      const missing = row.materialInputTotals.find((item) => item.selected && (item.quantity == null || item.quantity <= 0));
+      if (missing) return `请填写「${missing.materialName}」的投料总量`;
+      // ⚠️ 超领**刻意只提示不阻断** —— 提示在录入行 (inputStockText, 超出时标红), 不进本函数。
+      //
+      // 防呆 Rule 1 的核心是「预先显示边界」, 这一点由录入行的「可用 X 单位」满足: 客户不会再
+      // 像 2026-07-30 那样填完点「正式报工」才被后端告知「需要 1只, 可用 0只」。
+      //
+      // 但不能升级成 disable 保存, 因为 rawBatchOptions 为空**不等于**真的没货:
+      //   · ensureConsumableWarehouseIds() 取不到仓库列表时 loadRawBatches 直接置 [] 并 return;
+      //   · workflow 模式还按 wfRawTypeIds 客户端过滤 (raw-centric「影子锚点」那套), skuId
+      //     对不上就整批过滤空。
+      // 任一情况下硬闸会让报工**彻底提交不了**, 对仓管员来说比「后端告诉你缺料」更糟 —— 而且
+      // 本文件已因缓存过期造成过一次假阳性拦截 (见 refreshSharedInventories 上方注释)。
+      // 与 finishedInputOverAvailableHint (成品工序投入量) 同口径: Steve 拍板「以实填为准,
+      // 账实差异由盘点纠正」。最终仍由后端 fail-closed (ProductionStockShortageException) 兜底。
+    } else {
+      if (!row.rawBatchId) return '请选择原料批次';
+      if (row.rawBatchQty == null) return '请填写出库重量';
+    }
+    if (!isPortOutputMode.value && (row.fields['output'] as number) == null) return '请填写产出数量';
+  } else if (isMultiSource.value) {
+    const selectedSources = row.upstreamSources.filter((source) => source.selected);
+    if (selectedSources.length === 0 && workflowUpstreamInputs.value.length === 0) return '请添加上游来源批';
+    if (selectedSources.some((s) => !s.sourceBatchNumber || !s.feedQuantityKg)) return '请补全所有已选来源批次及投料量';
+    if (workflowUpstreamInputs.value.length > 0 && selectedSources.some((s) => !s.workflowPortId || !s.skuId)) {
+      return 'Workflow 投入来源缺少端口身份，请重新打开报工组后再填写';
+    }
+    if (isSingleUpstream.value) {
+      const processLabel = ownProcessName.value;
+      if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
+      if (!isPortOutputMode.value && (row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
+    } else if (isQuSheTou.value) {
+      if (!isPortOutputMode.value) {
+        if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
+        if ((row.fields['output'] as number) == null) return '请填写产出重量';
+      }
+    } else if (isShuZhi.value || isGenericUpstream.value) {
+      if (!isPortOutputMode.value && (row.fields['output'] as number) == null) return '请填写产出数量';
+    } else if (isQidiao.value) {
+      if (!isPortOutputMode.value && (finishedActualQuantity(row) ?? 0) <= 0) return '请填写实际生产数量';
+      if (!isPortOutputMode.value && finishedSampleQuantity(row) > (finishedActualQuantity(row) ?? 0)) {
+        return '留样数量不能大于实际生产数量';
+      }
+    }
+  } else if (isSingleSource.value) {
+    if (!row.upstreamBatch) return `请选择${upstreamProcessName.value}批次`;
+    if (isSingleUpstream.value) {
+      const processLabel = ownProcessName.value;
+      if ((row.fields['before'] as number) == null) return `请填写${processLabel}前重量`;
+      if (!isPortOutputMode.value && (row.fields['after'] as number) == null) return `请填写${processLabel}后重量`;
+    } else if (isQuSheTou.value) {
+      if (!isPortOutputMode.value) {
+        if ((row.fields['scrap'] as number) == null) return '请填写碎肉重量';
+        if ((row.fields['output'] as number) == null) return '请填写产出重量';
+      }
+    } else if (isShuZhi.value || isGenericUpstream.value) {
+      if ((row.fields['input'] as number) == null) return '请填写投入重量';
+      if (!isPortOutputMode.value && (row.fields['output'] as number) == null) return '请填写产出数量';
+    } else if (isQidiao.value) {
+      if (!isPortOutputMode.value && (finishedActualQuantity(row) ?? 0) <= 0) return '请填写实际生产数量';
+      if (!isPortOutputMode.value && finishedSampleQuantity(row) > (finishedActualQuantity(row) ?? 0)) {
+        return '留样数量不能大于实际生产数量';
+      }
+    }
+  }
+  // 2B.2 多产出: required 端口必须填数量；可选端口允许留空且不会发送。
+  if (isPortOutputMode.value) {
+    if (row.multiOutputs.length === 0) return '本工序 workflow 未配置产出端口, 无法录入';
+    const missing = row.multiOutputs.find((o) => o.selected && (o.quantity == null || o.quantity <= 0));
+    if (missing) return `请填写「${missing.materialName}」的产出数量`;
+    const incompleteTime = row.multiOutputs.find((o) => o.selected && Boolean(o.startTime) !== Boolean(o.endTime));
+    if (incompleteTime) return `请补全「${incompleteTime.materialName}」的开始和结束时间`;
+  }
+  if (needsSeasoningInputKg.value) {
+    try {
+      buildEqualPotWeightsKg(
+        potInputQuantity(row),
+        processUnits.value.inputUnit,
+        needsPotCount.value ? row.potCount : 1,
+      );
+    } catch (error) {
+      return error instanceof Error ? error.message : '锅数配置无效';
+    }
+  }
+  // 🔒 防呆 Rule 1 — 超投/单位不匹配 must-fix 不是 advisory: upstreamWarning() 命中时同样 disable 保存,
+  // 不能只在提示区显示警告文字却仍放行保存(2026-07-02 GATE-HANDBACK 阻断项②)。
+  const w = upstreamWarning(row);
+  if (w) return w;
+  return null;
+}
+
+function submitDisabledReason(row: SheetRow): string | null {
+  return rowCompletenessReason(row) || formalSubmitBlockedReason(row);
+}
+
+// -------------------------------------------------------------------------
+// Build request
+// -------------------------------------------------------------------------
+function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, unknown> {
+  // 2B (BLOCKING fix): when this process carries a workflow output port, `finished`/`unit`
+  // MUST come from the port — not the name-keyword archetype heuristic (processCode === 'qidiao'
+  // / hardcoded 'kg'/'盒' below). Backend ProcessSheetServiceImpl#validateWorkflowRowIfApplicable
+  // 409s (WORKFLOW_ROW_OUTPUT_KIND_MISMATCH / _UNIT_MISMATCH) when the saved row disagrees with
+  // the port, which previously dead-ended the clerk on every save for any workflow whose
+  // finishing process name isn't literally "气调" (or whose output unit isn't 'kg'/'盒').
+  // Legacy rows (workflowContext null/undefined) are completely unaffected — same as before.
+  const wfOutput = props.workflowContext?.output ?? null;
+  const base: ProcessSheetRowRequest & Record<string, unknown> = {
+    clientRowId: row.clientRowId,
+    processCode: props.processCode,
+    processOrder: props.processOrder,
+    // 2026-08-02: 把真实工序名一起报上去。
+    // 此前不带 → row_payload 里 processName 是 null → 「双出成率总览」的「工序」列
+    // 回落到 ProcessSheet.vue 的 `工序${processOrder}`, prod 实测显示「工序1/工序2/工序3」,
+    // 而同一个抽屉的 tab 上明明写着真名(出料/缓化、熟制、装箱)。
+    // ⛔ 不能用 processCode 顶替 —— 那是内部 archetype 码(xiuyou/chaoshui/...), 多对一,
+    //    正是 #2174 修掉的那种「拿标识符当名字」。processLabel 才是真名(见 props 注释)。
+    processName: props.processLabel || undefined,
+    productTypeId: wfOutput?.skuId || props.productTypeId,
+    batchNumber: row.batchNumber ?? undefined,
+    // ⭐ 气调成品批 (legacy archetype heuristic) — overridden below by the workflow port when present.
+    finished: wfOutput ? wfOutput.finished === true : props.processCode === 'qidiao',
+    outputQuantity: 0,
+    inputUnit: processUnits.value.inputUnit,
+    outputUnit: processUnits.value.outputUnit,
+    unit: processUnits.value.outputUnit,
+    seasoningStep: needsSeasoningInputKg.value,
+    laborSegments: !isPortOutputMode.value && row.laborSegments.length ? row.laborSegments : undefined,
+  };
+
+  // Append daterange fields so the backend stores them in row_payload JSON.
+  for (const col of cols.value) {
+    if (col.type === 'daterange') {
+      base[col.key] = row.fields[col.key] ?? null;
+    }
+  }
+
+  // 跨天: 取本工序日期列(daterange)的开始日作 processDate →
+  // 后端把成本报工(SEASONING/LABOR)归到该工序真实操作日 (非录入当天)。
+  if (isPortOutputMode.value) {
+    base.processDate = row.productionDate;
+  } else {
+    const dateCol = cols.value.find((c) => c.type === 'daterange' || c.type === 'date');
+    if (dateCol) {
+      const v = row.fields[dateCol.key];
+      const start = Array.isArray(v) ? v[0] : (typeof v === 'string' ? v : null);
+      if (start) base.processDate = start;
+    }
+  }
+
+  if (isXiuYou.value) {
+    if (usesAutoMaterialTotals(row)) {
+      const totals = submittedMaterialInputTotals(row);
+      base.materialInputTotals = totals.length ? totals : undefined;
+      base.inputQuantity = totals.length ? materialInputTotalKg(row) : undefined;
+    } else {
+      base.rawMaterialInputs = [{ materialBatchId: row.rawBatchId, quantity: row.rawBatchQty! }];
+      base.inputQuantity = row.rawBatchQty ?? undefined;
+    }
+    base.outputQuantity = (row.fields['output'] as number) ?? 0;
+    // SP-G G3c: 副产 (修油 — 肥油等)
+    const bpQty = (row.fields['byproductQty'] as number) ?? 0;
+    if (bpQty > 0) {
+      const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
+      base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
+    }
+  } else if (isMultiSource.value) {
+    const totalFeed = row.upstreamSources
+      .filter((source) => source.selected)
+      .reduce((s, r) => s + (r.feedQuantityKg || 0), 0);
+    base.upstreamSources = submittedUpstreamSources(row);
+
+    if (isSingleUpstream.value) {
+      const before = (row.fields['before'] as number) ?? totalFeed;
+      base.inputQuantity = before;
+      base.outputQuantity = (row.fields['after'] as number) ?? 0;
+      const bpQty = (row.fields['byproductQty'] as number) ?? 0;
+      if (bpQty > 0) {
+        const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
+        base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
+      }
+    } else if (isQuSheTou.value) {
+      const output = (row.fields['output'] as number) ?? 0;
+      const scrap = (row.fields['scrap'] as number) ?? 0;
+      const inputQty = scrap + output;
+      base.inputQuantity = inputQty || totalFeed;
+      base.outputQuantity = output;
+    } else if (isShuZhi.value || isGenericUpstream.value) {
+      base.inputQuantity = (row.fields['input'] as number) ?? totalFeed;
+      base.outputQuantity = (row.fields['output'] as number) ?? 0;
+    } else if (isQidiao.value) {
+      const actualProd = finishedActualQuantity(row) ?? 0;
+      base.inputQuantity = totalFeed || undefined;
+      base.outputQuantity = actualProd;
+      const sample = finishedSampleQuantity(row);
+      if (sample > 0) {
+        base.sampleRetainQuantity = Math.round(sample);
+      }
+      base.actualProd = actualProd;
+      base.sample = sample;
+      base.storage = finishedInboundQuantity(row);
+      base.remainBox = finishedInboundQuantity(row);
+      base.productWeight = finishedWeightKg(row);
+      base.inboundWeight = finishedWeightKg(row, true);
+    }
+  } else if (isSingleUpstream.value) {
+    // 焯水 + 滚揉: 结构相同. feedQuantityKg = before (领用量 = 投入量).
+    // semiFinished: 单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径 (SAVED_SFI, 小结 SFI in/out)。
+    // finishedGoods (①c): 单上游选了成品库存 (FG) → 后端小结 consumeForFeedStrict 严格扣减成品。
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: (row.fields['before'] as number) ?? 0, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods, ...singleWorkflowSourceIdentity() }];
+    base.inputQuantity = (row.fields['before'] as number) ?? undefined;
+    base.outputQuantity = (row.fields['after'] as number) ?? 0;
+    // SP-G G3c: 副产 (焯水/滚揉 — 肥油等)
+    const bpQty = (row.fields['byproductQty'] as number) ?? 0;
+    if (bpQty > 0) {
+      const bpPrice = (row.fields['byproductPrice'] as number) ?? undefined;
+      base.byproducts = [{ name: '副产', quantity: bpQty, unit: 'kg', ...(bpPrice != null ? { unitPrice: bpPrice } : {}) }];
+    }
+  } else if (isQuSheTou.value) {
+    // 去舌苔: inputQuantity = scrap + output (反推); feedQuantityKg = 同 inputQuantity.
+    const output = (row.fields['output'] as number) ?? 0;
+    const scrap = (row.fields['scrap'] as number) ?? 0;
+    const inputQty = scrap + output;
+    // semiFinished: 去舌苔单上游选了半成品库存 (SFI) → 后端 ③=F 纯 SFI 路径。
+    // finishedGoods (①c): 单上游选了成品库存 (FG) → 小结严格扣减成品。
+    base.upstreamSources = [{ sourceBatchNumber: row.upstreamBatch, feedQuantityKg: inputQty, semiFinished: row.upstreamSemiFinished, finishedGoods: row.upstreamFinishedGoods, ...singleWorkflowSourceIdentity() }];
+    base.inputQuantity = inputQty;
+    base.outputQuantity = output;
+  } else if (isShuZhi.value || isGenericUpstream.value) {
+    const inputQty = (row.fields['input'] as number) ?? 0;
+    base.upstreamSources = [{
+      sourceBatchNumber: row.upstreamBatch,
+      feedQuantityKg: inputQty,
+      semiFinished: row.upstreamSemiFinished,
+      finishedGoods: row.upstreamFinishedGoods,
+      ...singleWorkflowSourceIdentity(),
+    }];
+    base.inputQuantity = inputQty;
+    base.outputQuantity = (row.fields['output'] as number) ?? 0;
+  } else if (isQidiao.value) {
+    const actualProd = finishedActualQuantity(row) ?? 0;
+    const inputKg = effectiveFinishedInputKg(row);
+    base.upstreamSources = [{
+      sourceBatchNumber: row.upstreamBatch,
+      // 操作员可直接填本次实际投入量; 未填时沿用所选上游库存的实时可用量。
+      // 正式报工前 formalSubmitBlockedReason 会保证这里绝不以 0/null 提交。
+      feedQuantityKg: inputKg ?? 0,
+      semiFinished: row.upstreamSemiFinished,
+      finishedGoods: row.upstreamFinishedGoods,
+      ...singleWorkflowSourceIdentity(),
+    }];
+    base.inputQuantity = inputKg ?? undefined;
+    base.outputQuantity = actualProd;
+    const sample = finishedSampleQuantity(row);
+    if (sample > 0) {
+      base.sampleRetainQuantity = Math.round(sample);
+    }
+    base.actualProd = actualProd;
+    base.sample = sample;
+    base.storage = finishedInboundQuantity(row);
+    base.remainBox = finishedInboundQuantity(row);
+    base.productWeight = finishedWeightKg(row);
+    base.inboundWeight = finishedWeightKg(row, true);
+  }
+
+  // G2 自定义字段: 收集**启用**字段进 customFields map。后端按 WorkProcess.customFieldSchema
+  // 白名单校验 key (在 schema 即放行, 不校验 value); 前端只对 enabledCustomFields 发 key,
+  // 天然不会给未开启自定义字段的工序发多余 key。
+  //
+  // B (2026-07-09 让"清空"真生效): 启用字段**即使单元格为空也带上该 key (值发 null)**, 不再省略。
+  //   与后端 mergeCustomFieldsFromPrior 的语义配合:
+  //   - 启用字段清空 → 发 {key: null} → putAll 覆盖旧值成 null → 真清掉 ✅
+  //   - 启用但未改的字段 → hydrateRow 已载入旧值, 原样回发 → 保留 ✅
+  //   - 禁用字段 → 不在 enabledCustomFields, 仍缺席 → 后端保留旧值 (F2 不变) ✅
+  //   若之前省略空值, 后端会把"缺席 key"当"保留旧值", 导致启用字段清不掉 (F2(b) 的 wart)。
+  if (enabledCustomFields.value.length > 0) {
+    const customFields: Record<string, unknown> = {};
+    for (const def of enabledCustomFields.value) {
+      const v = row.fields[def.key];
+      // 空单元格显式发 null (可清空); 非空发原值。绝不省略启用字段的 key。
+      customFields[def.key] = (v === undefined || v === '') ? null : v;
+    }
+    base.customFields = customFields;
+  }
+
+  // Workflow 端口在所有 archetype 分支之后再次覆盖，确保请求的 SKU 与三处单位只有一个来源。
+  if (wfOutput?.unit) {
+    base.productTypeId = wfOutput.skuId;
+    base.inputUnit = processUnits.value.inputUnit;
+    base.outputUnit = processUnits.value.outputUnit;
+    base.unit = processUnits.value.outputUnit;
+  }
+
+  // 2B.2 多产出 (fan-out): 产品/端口由 workflow 产出端口固定 (只读), 操作员只填数量 — 覆盖
+  // 掉上面任何 archetype 分支写的单产出 outputQuantity/unit/finished/productTypeId (backend
+  // ProcessSheetServiceImpl 一看到 outputs.length>1 就直接走 saveMultiOutputRow 分支, 不再理会
+  // 顶层这些字段; 顶层 outputQuantity 仅需满足 @NotNull, 这里发 Σquantity 作诚实展示值)。
+  // 输入侧分配 (rawMaterialInputs/upstreamSources/inputQuantity/laborSegments 等, 上面各 archetype
+  // 分支已按原逻辑填好) 原样发送不变 —— 后端首产出行(#0)承载全部实际投入, 一次全量扣减。
+  if (isMultiOutput.value) {
+    const submittedOutputs = row.multiOutputs.filter((o) => o.selected && o.quantity != null && o.quantity > 0);
+    base.outputs = submittedOutputs.map((o) => {
+      const productWeight = o.finished ? outputLineWeightKg(o) : null;
+      return {
+        productTypeId: o.productTypeId,
+        workflowPortId: o.workflowPortId || undefined,
+        materialNodeId: o.materialNodeId || undefined,
+        quantity: o.quantity ?? 0,
+        unit: o.unit || undefined,
+        finished: o.finished,
+        laborSegments: outputLineLaborSegments(o),
+        byproducts: outputLineByproducts(o),
+        ...(requiresManualCostAllocation(row) && o.costAllocationRatio != null
+          ? { costAllocationRatio: o.costAllocationRatio }
+          : {}),
+        ...(productWeight != null ? { productWeight } : {}),
+      };
+    });
+    // 顶层实际产量只代表 Workflow 主产出，不能把不同单位的产出相加。
+    base.outputQuantity = submittedOutputs.find(
+      (o) => o.workflowPortId === props.workflowContext?.output?.workflowPortId,
+    )?.quantity ?? 0;
+  } else if (isPortOutputMode.value && row.multiOutputs[0]) {
+    // 单产出与多产出共用同一行编辑器，但继续发送旧顶层契约，保证历史后端兼容。
+    const output = row.multiOutputs[0];
+    const productWeight = output.finished ? outputLineWeightKg(output) : null;
+    base.productTypeId = output.productTypeId;
+    base.workflowPortId = output.workflowPortId || undefined;
+    base.materialNodeId = output.materialNodeId || undefined;
+    base.outputQuantity = output.quantity ?? 0;
+    base.outputUnit = output.unit;
+    base.unit = output.unit;
+    base.finished = output.finished;
+    base.laborSegments = outputLineLaborSegments(output);
+    base.byproducts = outputLineByproducts(output);
+    if (productWeight != null) base.productWeight = productWeight;
+  }
+
+  if (needsSeasoningInputKg.value) {
+    const inputQuantity = Number(base.inputQuantity);
+    base.potCount = needsPotCount.value ? row.potCount : 1;
+    base.potRawKgs = buildEqualPotWeightsKg(
+      inputQuantity,
+      processUnits.value.inputUnit,
+      needsPotCount.value ? row.potCount : 1,
+    );
+  }
+
+  // 2026-08-02: workflow 原料端口的实际投入 —— 挂在 archetype 分支**之外**。
+  //
+  // ⚠️ 第一版加在 isMultiSource 分支里, 而熟制只有 1 个上游端口(缓化鸭腿) →
+  //    它走的是 isSingleSource, 那段永远不执行。prod 实测的表现极具迷惑性:
+  //    按钮解禁、报工成功、批次和出成率都对, **只有 materialInputTotals 静悄悄没进
+  //    row_payload** —— 界面上完全看不出来。判据因此挂在「这行用不用自动原料行」,
+  //    不挂在 archetype 分支上。
+  //
+  // xiuyou 分支自己已经写过 materialInputTotals + inputQuantity, 这里不覆盖它。
+  // ⛔ 其他工序只补 materialInputTotals, **不动 inputQuantity** ——
+  //    出成率分母是上游投入(如熟制的 140kg), 调料是额外投入, 计入分母会把出成率算错。
+  if (!isXiuYou.value && usesAutoMaterialTotals(row)) {
+    const totals = submittedMaterialInputTotals(row);
+    if (totals.length) base.materialInputTotals = totals;
+  }
+
+  return base;
+}
+
+// -------------------------------------------------------------------------
+// Save / delete handlers
+// -------------------------------------------------------------------------
+function formalSubmitSummary(row: SheetRow): string {
+  const request = buildRequest(row);
+  const requestUpstreamSources = request.upstreamSources ?? [];
+  const inputs = usesAutoMaterialTotals(row)
+    ? row.materialInputTotals
+      .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
+      .map((item) => `${item.materialName} ${item.quantity}${item.unit}`)
+    : requestUpstreamSources.length > 0
+      ? requestUpstreamSources.map((item) => `${item.sourceBatchNumber} ${item.feedQuantityKg}${request.inputUnit || processUnits.value.inputUnit}`)
+      : row.upstreamBatch
+        ? [`${row.upstreamBatch} ${singleSourceUsage(row)}${processUnits.value.inputUnit}`]
+        : row.rawBatchQty != null
+          ? [`原料 ${row.rawBatchQty}${processUnits.value.inputUnit}`]
+          : [];
+  const outputs = row.multiOutputs
+    .filter((item) => item.selected && item.quantity != null && item.quantity > 0)
+    .map((item) => `${item.materialName} ${item.quantity}${item.unit}`);
+  return [
+    `生产日期：${row.productionDate || '未填写'}`,
+    `库存扣减：${inputs.join('；') || '无'}`,
+    `产出入库：${outputs.join('；') || '无'}`,
+    '投入明细按本次报工组只扣减一次，不会按产出数量重复扣减。',
+  ].join('\n');
+}
+
+async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
+  if (row.saving) return;
+  if (action === 'submit') {
+    row.blockingMessage = null;
+    row.stockShortage = null;
+  }
+  const reason = action === 'draft' ? draftSaveDisabledReason(row) : submitDisabledReason(row);
+  if (reason) {
+    if (action === 'submit') row.blockingMessage = reason;
+    // 防呆 4位一体: type:error (非 warning) + sticky (duration:0) + showClose + next-action 明示
+    ElMessage({ message: reason, type: 'error', duration: 0, showClose: true });
+    return;
+  }
+  if (action === 'submit') {
+    if (isPortOutputMode.value) {
+      try {
+        await ElMessageBox.confirm(formalSubmitSummary(row), '确认正式报工', {
+          confirmButtonText: '确认报工',
+          cancelButtonText: '返回核对',
+          type: 'warning',
+          distinguishCancelAndClose: true,
+        });
+      } catch {
+        return;
+      }
+    }
+  }
+  row.saving = true;
+  try {
+    const req = buildRequest(row);
+    const resp = action === 'draft'
+      ? await saveDraftRow(props.factoryId, props.planId, req)
+      : await submitRow(props.factoryId, props.planId, req);
+    const result = resp.data;
+    if (result?.batchNumber) row.batchNumber = result.batchNumber;
+    // 2B.2 多产出: 逐产出批次号回填 (按 workflowPortId 对齐; 缺失时按序号兜底, 理论不出现)。
+    if (isMultiOutput.value && result?.outputs?.length) {
+      const byPort = new Map(result.outputs.map((o) => [o.workflowPortId, o]));
+      row.multiOutputs = row.multiOutputs.map((o, i) => {
+        const matched = byPort.get(o.workflowPortId) ?? result.outputs![i];
+        return matched ? { ...o, batchNumber: matched.batchNumber } : o;
+      });
+    }
+    row.submissionStatus = result?.submissionStatus ?? (action === 'submit' ? 'SUBMITTED' : 'DRAFT');
+    row.rowStatus = action === 'submit' && result?.materialized ? 'SAVED' : 'DRAFT';
+    // 存进去了 —— 记下这一刻的内容, 之后「关窗口该不该拦」按它比对 (见 rowIsDirty)。
+    // 必须在上面那些回填 (batchNumber / multiOutputs / submissionStatus) **之后**取,
+    // 否则快照少了后端刚给回来的字段, 下一帧就会被判成"又改过了"。
+    row.savedSnapshot = rowContentKey(row);
+    row.inputAllocations = action === 'submit' ? (result?.inputAllocations ?? []) : [];
+    if (result?.warnings?.length) {
+      ElMessage({ message: `${action === 'draft' ? '草稿已保存' : '正式报工成功'}(含提示): ` + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
+    } else {
+      ElMessage.success(`${action === 'draft' ? '草稿已保存' : '正式报工成功'}${row.batchNumber ? ' — ' + row.batchNumber : ''}`);
+    }
+    emit('row-saved', row.submissionStatus);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : (action === 'draft' ? '草稿保存失败' : '正式报工失败');
+    const code = typeof e === 'object' && e != null && 'code' in e ? String((e as { code?: unknown }).code ?? '') : '';
+    if (action === 'submit' && code === 'PRODUCTION_STOCK_SHORTAGE') {
+      row.blockingMessage = null;
+      row.stockShortage = presentStockShortage(
+        msg || '当前只能保存草稿，生产库中投料量不足，请联系仓管补料',
+        typeof e === 'object' && e != null && 'data' in e
+          ? (e as { data?: unknown }).data
+          : undefined,
+      );
+      return;
+    }
+    // 并发双提交/慢响应重试: 行已被首个请求保存成功(后端 409 + 回滚 loser), 幂等当成功处理,
+    // 不给用户看错误 (fool-proof Rule 4 幂等防重复)。刷新本行状态即可。
+    if (/该行已存在|并发提交/.test(msg)) {
+      row.rowStatus = 'SAVED';
+      row.submissionStatus = action === 'submit' ? 'SUBMITTED' : 'DRAFT';
+      ElMessage.success(action === 'submit' ? '正式报工成功' : '草稿已保存');
+      emit('row-saved', row.submissionStatus);
+    } else {
+      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+    }
+  } finally {
+    row.saving = false;
+  }
+}
+
+async function handleDelete(row: SheetRow) {
+  if (isReadOnlyRow(row)) {
+    ElMessage({ message: '已入账或历史数据只读，不能删除', type: 'error', duration: 0, showClose: true });
+    return;
+  }
+  if (row.rowStatus === 'UNSAVED') {
+    rows.value = rows.value.filter((r) => r !== row);
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除${row.batchNumber ? ' 批次 ' + row.batchNumber : ''}这行记录？下游如已引用将返回错误。`,
+      '删除确认', { type: 'warning' }
+    );
+  } catch {
+    return;
+  }
+  row.deleting = true;
+  try {
+    // 2B.2 多产出: 后端从不持久化裸 base clientRowId (只有 base#0..N-1 各产出行) —— 删除端点
+    // 按精确 clientRowId 查找, 传裸 base 会 404 "工序行不存在"。传首个成员 base#0 的真实
+    // clientRowId, 后端据其 payload.multiOutputBaseRowId 反查同组、级联删除整组 (含反物化/
+    // SFI冲销), 不会留下幻库存。
+    const targetClientRowId = isMultiOutput.value && row.multiOutputs.length > 0
+      ? `${row.clientRowId}#0`
+      : row.clientRowId;
+    await deleteRow(props.factoryId, props.planId, targetClientRowId);
+    rows.value = rows.value.filter((r) => r !== row);
+    emit('row-saved', null);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '删除失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    row.deleting = false;
+  }
+}
+
+// -------------------------------------------------------------------------
+// SP-G P3: 操作记录 (行级 diff 时间线)
+// -------------------------------------------------------------------------
+const historyVisible = ref(false);
+const historyLoading = ref(false);
+const historyRows = ref<ProcessSheetRowHistoryView[]>([]);
+const historyBatchLabel = ref('');
+
+const OP_LABEL: Record<string, string> = { CREATE: '新建', UPDATE: '修改', DELETE: '删除' };
+const OP_TYPE: Record<string, 'success' | 'warning' | 'danger'> = {
+  CREATE: 'success', UPDATE: 'warning', DELETE: 'danger',
+};
+
+/** 仅已保存过的行 (SAVED/DRAFT) 才有服务端操作记录; UNSAVED 行无历史。 */
+function hasHistory(row: SheetRow): boolean {
+  return row.rowStatus === 'SAVED' || row.rowStatus === 'DRAFT';
+}
+
+async function openHistory(row: SheetRow) {
+  historyVisible.value = true;
+  historyLoading.value = true;
+  historyRows.value = [];
+  historyBatchLabel.value = row.batchNumber || '(未生成批次号)';
+  try {
+    // 2B.2 多产出: 操作记录按持久化行的真实 clientRowId 记 (base#0..N-1), 裸 base 查不到任何
+    // 记录。首个成员 (#0) 承载全部实际投入, 是本次报工的代表行, 取它的历史。
+    const targetClientRowId = isMultiOutput.value && row.multiOutputs.length > 0
+      ? `${row.clientRowId}#0`
+      : row.clientRowId;
+    const resp = await getRowHistory(props.factoryId, props.planId, props.processCode, targetClientRowId);
+    historyRows.value = resp.data || [];
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '加载操作记录失败';
+    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+function formatHistoryTime(iso: string): string {
+  if (!iso) return '';
+  // Trim to "YYYY-MM-DD HH:mm:ss" from ISO datetime (handles trailing micros).
+  return iso.replace('T', ' ').slice(0, 19);
+}
+
+// -------------------------------------------------------------------------
+// 熟制: multi-source helpers
+// -------------------------------------------------------------------------
+function addUpstreamSource(row: SheetRow, template?: SelectableUpstreamRef) {
+  const port = template ? sourcePort(template) : workflowUpstreamInputs.value[0];
+  row.upstreamSources = [...row.upstreamSources, blankUpstreamSource(port, template?.selected)];
+}
+function removeUpstreamSource(row: SheetRow, idx: number) {
+  const current = row.upstreamSources[idx];
+  if (current?.workflowPortId) {
+    const samePortCount = row.upstreamSources.filter((source) => source.workflowPortId === current.workflowPortId).length;
+    if (samePortCount <= 1) {
+      row.upstreamSources[idx] = blankUpstreamSource(sourcePort(current), current.selected);
+      return;
+    }
+  }
+  const next = [...row.upstreamSources];
+  next.splice(idx, 1);
+  row.upstreamSources = next;
+}
+
+function sourcePortName(src: UpstreamRef): string {
+  const port = sourcePort(src);
+  return port?.materialName || port?.skuId || '上游物料';
+}
+
+function sourcePortUnit(src: UpstreamRef): string {
+  const port = sourcePort(src);
+  return port?.unit?.trim() || processUnits.value.inputUnit;
+}
+
+// -------------------------------------------------------------------------
+// 半成品库存 (SFI) 投料来源 — 混锅可选常驻半成品 (半成品直接产成品)
+// 仅 熟制 / 气调 (多来源混锅) 工序提供 SFI 选项; 其余工序不加载。
+// -------------------------------------------------------------------------
+const sfiOptions = ref<SemiFinishedStockItem[]>([]);
+const sfiLoading = ref(false);
+let sfiLoadSeq = 0;
+
+// ①c 成品库存 (FG) 投料来源 — 与 SFI 平行 (07-01 客户: 选批次看到库里所有成品和半成品)。
+const fgOptions = ref<FinishedGoodsStockItem[]>([]);
+const fgLoading = ref(false);
+let fgLoadSeq = 0;
+
+const addRowBlockedReason = computed(() => {
+  if (!props.workflowContext || props.isFirstProcess || !supportsUpstreamSources.value) return null;
+  if (sfiLoading.value || fgLoading.value) return '正在加载可用上游库存，请稍候';
+  const hasSource = props.upstreamItems.some((item) => item.remaining > 0)
+    || sfiOptions.value.length > 0
+    || fgOptions.value.length > 0;
+  return hasSource ? null : '暂无可用上游库存，请先完成上游报工或联系仓管补料';
+});
+
+/**
+ * 是否提供「半成品库存(SFI)」投料选项。
+ *
+ * config-driven (张权 R4): 该工序被配置为「半成品注入工序」(allowSemiFinishedInjection=true) → 显 picker,
+ * 让客户自己决定注入点 (如把「滚揉」标为注入工序, 从中段起步选库里已有半成品/成品接续生产)。
+ *
+ * archetype 兜底 (back-compat): 现有混锅道 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 保持显 picker,
+ * 保证历史产品工序零回归 —— 即使未配置 flag 也不丢失现有能力。
+ */
+const showSfi = computed(() => supportsExternalStockFeed.value
+  && (props.allowSemiFinishedInjection || supportsUpstreamSources.value));
+/** ①c 是否提供「成品库存(FG)」投料选项；必须按产品工序显式开启。 */
+const showFg = computed(() => showSfi.value && props.allowFinishedGoodsSource === true);
+
+// 下拉选项用「类型::批次号」复合值, 让来源类型由选中的 OPTION 显式携带, 而非按字符串值反查
+// (规避 in-plan WIP 批号与 SFI/FG 批号偶然相同时的误判)。
+const SRC_WIP = 'wip';
+const SRC_SFI = 'sfi';
+const SRC_FG = 'fg';   // ①c 成品库存
+function srcKey(kind: string, batchNo: string): string {
+  return `${kind}::${batchNo}`;
+}
+
+function sfiAvailable(item: SemiFinishedStockItem): number {
+  return Number(item.availableQuantity ?? 0) || 0;
+}
+
+function fgAvailable(item: FinishedGoodsStockItem): number {
+  return Number(item.availableQuantity ?? 0) || 0;
+}
+
+/** ② 成本文字: 有值 → "成本{n}"; null → "成本未知" (诚实, 不显 ¥0)。 */
+function costText(cost: number | null | undefined): string {
+  return cost != null ? `成本${Number(cost)}` : '成本未知';
+}
+
+/** ② 日期文字: null → '无生产日期' 占位 (下拉对齐)。 */
+function dateText(d: string | null | undefined): string {
+  return d ? String(d).slice(0, 10) : '无生产日期';
+}
+
+/**
+ * ② 在制 WIP 选项标签: "{品名} | {批号} | {生产日期} | 余{remaining}kg | {成本}"。
+ * 品名/生产日期由后端 getInventory 回填 (缺失时降级只显批号+余量, 不 crash)。
+ */
+function wipLabel(item: ProcessSheetInventoryItem): string {
+  const name = item.productTypeName || '在制';
+  const parts = [name, item.batchNumber, dateText(item.productionDate),
+    `余${item.remaining}${item.unit || processUnits.value.inputUnit}`, costText(item.unitPrice)];
+  return parts.join(' | ');
+}
+
+/**
+ * 上游端口白名单: 后端 resolveAllowedInputSku 只接受这些 SKU, 别的批次选了必被 409 拒绝
+ * (客户 2026-07-30 反馈: 下拉里混进 22 个别的产品的半成品批次, 且都显示为「半成品: 半成品」)。
+ * 空集 = 端口未声明白名单 → 不过滤 (务实: 不因缺契约信息而清空可选项)。
+ */
+const upstreamAllowedSkuIds = computed<string[]>(() => {
+  const ids = new Set<string>();
+  for (const port of workflowUpstreamInputs.value) {
+    for (const id of port.allowedSkuIds || []) if (id) ids.add(id);
+    if (port.skuId) ids.add(port.skuId);
+  }
+  return [...ids];
+});
+
+function sfiMatchesUpstreamPort(item: SemiFinishedStockItem): boolean {
+  const allowed = upstreamAllowedSkuIds.value;
+  if (allowed.length === 0) return true;
+  return item.productTypeId != null && allowed.includes(item.productTypeId);
+}
+
+/** ② 半成品库存选项标签: "半成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
+function sfiLabel(item: SemiFinishedStockItem): string {
+  // productTypeName 缺失时退到 processName 会让一屏全是「半成品」无法分辨 —— 至少给出批号可辨识。
+  const name = item.productTypeName || item.processName || `未命名半成品(${item.intermediateBatchNo})`;
+  const unit = item.unit || 'kg';
+  // 盒装半成品作 kg 道投料来源时展示折算 (余 N 盒 ≈ M kg) 或缺克重警告 (防呆 pre-display)。
+  const conv = countUnitLabelSuffix(item.unit, item.gramsPerUnit, sfiAvailable(item));
+  return `半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
+    + `| 余${sfiAvailable(item)}${unit}${conv} | ${costText(item.unitCost)}`;
+}
+
+/** ②/①c 成品库存选项标签: "成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
+function fgLabel(item: FinishedGoodsStockItem): string {
+  const name = item.productTypeName || '成品';
+  const unit = item.unit || 'kg';
+  // 盒装成品作 kg 道投料来源时展示折算 (余 N 盒 ≈ M kg) 或缺克重警告 (防呆 pre-display)。
+  const conv = countUnitLabelSuffix(item.unit, item.gramsPerUnit, fgAvailable(item));
+  return `成品: ${name} | ${item.batchNumber} | ${dateText(item.productionDate)} `
+    + `| 余${fgAvailable(item)}${unit}${conv} | ${costText(item.unitCost)}`;
+}
+
+/** ①c 加载可投料成品库存 (产品族过滤; 成品是终态无阶段过滤)。 */
+async function loadFgOptions() {
+  if (!showFg.value || !props.factoryId) return;
+  const seq = ++fgLoadSeq;
+  fgLoading.value = true;
+  try {
+    // 防呆过滤 (07-01): 传当前计划 productTypeId → 后端解析成产品族仅返回同族成品 (猪蹄计划不显牛肉)。
+    const resp = await getFinishedGoodsInventory(props.factoryId, props.productTypeId);
+    if (seq !== fgLoadSeq) return;
+    const all = Array.isArray(resp.data) ? resp.data : [];
+    fgOptions.value = all.filter((f) => fgAvailable(f) > 0);
+  } catch (err) {
+    if (seq !== fgLoadSeq) return;
+    fgOptions.value = [];
+    // 非阻断: FG 投料是增量能力, 加载失败仅丢失该选项, 不影响 in-plan WIP / SFI 投料。
+    ElMessage({ message: err instanceof Error ? err.message : '成品库存加载失败', type: 'warning', duration: 3000 });
+  } finally {
+    if (seq === fgLoadSeq) fgLoading.value = false;
+  }
+}
+
+async function loadSfiOptions() {
+  if (!showSfi.value || !props.factoryId) return;
+  const seq = ++sfiLoadSeq;
+  sfiLoading.value = true;
+  try {
+    // 防呆过滤 (07-01 客户会议): 只列同族产品(猪蹄族不显牛肉) + 对应阶段(防回锅) 的半成品。
+    //   同族: 传当前计划 productTypeId → 后端解析成"产品族"(以原料为主自动识别) 仅返回同族半成品。
+    //         不是按 productTypeId 精确匹配 — 熟制前半成品在同族内通用 (兄弟猪蹄成品共用"猪蹄"半成品),
+    //         故猪蹄计划能看到所有猪蹄族半成品, 但不显牛肉。
+    //   阶段: 仅当本道 processOrder 为正整数时传 → 后端仅返回更早阶段 (processOrder < 本道)。
+    //         processOrder 缺失/为0 (链起步/未配) → 省略, 只按同族过滤 (务实: 不因缺阶段信息而清空可选项)。
+    const filter: SemiFinishedInventoryFilter = { productTypeId: props.productTypeId };
+    if (typeof props.processOrder === 'number' && props.processOrder > 0) {
+      filter.maxProcessOrder = props.processOrder;
+    }
+    const resp = await getSemiFinishedInventory(props.factoryId, filter);
+    if (seq !== sfiLoadSeq) return;
+    const all = Array.isArray(resp.data) ? resp.data : [];
+    sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0).filter(sfiMatchesUpstreamPort);
+  } catch (err) {
+    if (seq !== sfiLoadSeq) return;
+    sfiOptions.value = [];
+    // 非阻断: SFI 投料是增量能力, 加载失败仅丢失该选项, 不影响 in-plan 在制 WIP 投料。
+    ElMessage({ message: err instanceof Error ? err.message : '半成品库存加载失败', type: 'warning', duration: 3000 });
+  } finally {
+    if (seq === sfiLoadSeq) sfiLoading.value = false;
+  }
+}
+
+// -------------------------------------------------------------------------
+// Bug 3 (2026-07 现场走查): 来源批次下拉默认列出同族全部批次 (即便已按产品族/阶段
+// 过滤, 大厂仍可能有几百条同族在库批次), 低文化素质操作员被淹没。
+// 方案: 未搜索时只显示按生产日期倒序最近 N 条 (最可能用到的排前面); 打字搜索时
+// 对全量按下拉展示文案(品名/批号/日期)子串过滤。WIP(本计划在制半成品)本就计划域
+// 内很小, 不裁剪数量, 但同样纳入统一查询词过滤 (自定义 filter-method 会关闭 el-select
+// 原生过滤, 三组都要手动过滤, 否则 WIP 组会变成"打字也不过滤"的倒退)。
+// 多个 el-select 实例(每行/每来源一个)共享同一个查询词 ref; 下拉打开时重置, 避免上一个
+// 下拉的过滤态串到下一个实例。
+// -------------------------------------------------------------------------
+const BATCH_OPTION_DEFAULT_LIMIT = 30;
+const batchSearchQuery = ref('');
+
+function sortByRecentDesc<T extends { productionDate?: string | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => (b.productionDate || '').localeCompare(a.productionDate || ''));
+}
+
+const wipOptionsDisplay = computed(() => {
+  const q = batchSearchQuery.value.trim().toLowerCase();
+  if (!q) return props.upstreamItems;
+  return props.upstreamItems.filter((item) => wipLabel(item).toLowerCase().includes(q));
+});
+const sfiOptionsSorted = computed(() => sortByRecentDesc(sfiOptions.value));
+const sfiOptionsDisplay = computed(() => {
+  const q = batchSearchQuery.value.trim().toLowerCase();
+  if (!q) return sfiOptionsSorted.value.slice(0, BATCH_OPTION_DEFAULT_LIMIT);
+  return sfiOptionsSorted.value.filter((s) => sfiLabel(s).toLowerCase().includes(q));
+});
+const fgOptionsSorted = computed(() => sortByRecentDesc(fgOptions.value));
+const fgOptionsDisplay = computed(() => {
+  const q = batchSearchQuery.value.trim().toLowerCase();
+  if (!q) return fgOptionsSorted.value.slice(0, BATCH_OPTION_DEFAULT_LIMIT);
+  return fgOptionsSorted.value.filter((f) => fgLabel(f).toLowerCase().includes(q));
+});
+
+function sourceMatchesSku(actualProductTypeId: string | null | undefined, src: UpstreamRef): boolean {
+  // 旧库存投影没有 productTypeId 时继续显示，由后端在正式保存时做最终端口校验。
+  return !src.skuId || !actualProductTypeId || actualProductTypeId === src.skuId;
+}
+
+function wipOptionsForSource(src: UpstreamRef): ProcessSheetInventoryItem[] {
+  return wipOptionsDisplay.value.filter((item) => sourceMatchesSku(item.productTypeId, src));
+}
+
+function sfiOptionsForSource(src: UpstreamRef): SemiFinishedStockItem[] {
+  return sfiOptionsDisplay.value.filter((item) => sourceMatchesSku(item.productTypeId, src));
+}
+
+function fgOptionsForSource(src: UpstreamRef): FinishedGoodsStockItem[] {
+  return fgOptionsDisplay.value.filter((item) => sourceMatchesSku(item.productTypeId, src));
+}
+/** 组标题显示 "总数/已限N条", 让用户知道还有更多、该打字搜索 (Rule 1: 预先显示边界)。 */
+const sfiGroupLabel = computed(() => sfiOptions.value.length > sfiOptionsDisplay.value.length
+  ? `半成品库存 (可直接产成品, 显示最近${BATCH_OPTION_DEFAULT_LIMIT}/共${sfiOptions.value.length}条, 可搜索品名/批号)`
+  : '半成品库存 (可直接产成品)');
+const fgGroupLabel = computed(() => fgOptions.value.length > fgOptionsDisplay.value.length
+  ? `成品库存 (可直接产成品, 显示最近${BATCH_OPTION_DEFAULT_LIMIT}/共${fgOptions.value.length}条, 可搜索品名/批号)`
+  : '成品库存 (可直接产成品)');
+
+function onBatchSelectFilter(query: string) {
+  batchSearchQuery.value = query;
+}
+function onBatchSelectVisibleChange(visible: boolean) {
+  if (visible) batchSearchQuery.value = '';
+}
+
+/**
+ * 当前来源行的复合下拉值 (从已存的 src 反推, 供 :model-value 显示选中项)。
+ * semiFinished 标记由 src 自身携带 (保存往返保留), 不按字符串值反查 → 无 WIP↔SFI 碰撞。
+ */
+function srcSelectKey(src: UpstreamRef): string {
+  if (!src.sourceBatchNumber) return '';
+  const kind = src.finishedGoods ? SRC_FG : (src.semiFinished ? SRC_SFI : SRC_WIP);
+  return srcKey(kind, src.sourceBatchNumber);
+}
+
+/**
+ * 用户在混锅来源下拉改选后: 由选中 OPTION 的复合值「类型::批次号」显式拆出来源类型 (wip/sfi/fg) 与批次号,
+ * 据此置 sourceBatchNumber + semiFinished + finishedGoods (三者互斥)。后端据这两个标记决定保存时是否写消耗边
+ * + 小结时走严格 SFI/FG 出库 (consumeClerkSemiStrict / consumeForFeedStrict) 还是 in-plan 在制 WIP 边。
+ */
+function selectedSourceAvailableKg(kind: string, batchNumber: string): number | null {
+  if (kind === SRC_SFI) {
+    const source = sfiOptions.value.find((item) => item.intermediateBatchNo === batchNumber);
+    return source ? sourceAvailableKg(sfiAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  if (kind === SRC_FG) {
+    const source = fgOptions.value.find((item) => item.batchNumber === batchNumber);
+    return source ? sourceAvailableKg(fgAvailable(source), source.unit, source.gramsPerUnit) : null;
+  }
+  const source = props.upstreamItems.find((item) => item.batchNumber === batchNumber);
+  return source ? sourceAvailableKg(source.remaining, source.unit) : null;
+}
+
+function onUpstreamSelect(src: SelectableUpstreamRef, key: string | null | undefined) {
+  if (!key) {
+    src.sourceBatchNumber = '';
+    src.semiFinished = false;
+    src.finishedGoods = false;
+    if (isQidiao.value) src.feedQuantityKg = 0;
+    return;
+  }
+  const sep = key.indexOf('::');
+  if (sep < 0) {
+    // 兜底 (理论不出现): 无前缀 → 当 in-plan WIP
+    src.sourceBatchNumber = key;
+    src.semiFinished = false;
+    src.finishedGoods = false;
+    src.selected = true;
+    if (isQidiao.value) src.feedQuantityKg = selectedSourceAvailableKg(SRC_WIP, key) ?? 0;
+    return;
+  }
+  const kind = key.slice(0, sep);
+  src.semiFinished = kind === SRC_SFI;
+  src.finishedGoods = kind === SRC_FG;
+  src.sourceBatchNumber = key.slice(sep + 2);
+  src.selected = true;
+  // 成品道的来源选择即代表把该批次当前可用量全部结转到成品；操作员不再重复抄写重量。
+  // feedQuantityKg 是确认预览、submit payload 与后端批次扣减共用的唯一事实，必须在选择时同步。
+  if (isQidiao.value) {
+    src.feedQuantityKg = selectedSourceAvailableKg(kind, src.sourceBatchNumber) ?? 0;
+  }
+}
+
+// -------------------------------------------------------------------------
+// 单上游道 (焯水/滚揉/去舌苔) — WIP + SFI 复合值选择 (镜像混锅的 wip::/sfi:: 方案)
+// upstreamBatch (单字符串) 无法自身区分 WIP↔SFI, 故 semiFinished 由选中 OPTION 显式携带,
+// 单独存 row.upstreamSemiFinished, 规避 WIP 批号与 SFI 批号偶然相同的误判。
+// -------------------------------------------------------------------------
+
+/** 单上游当前选中的复合下拉值 (从 upstreamBatch + upstreamSemiFinished + upstreamFinishedGoods 反推)。 */
+function singleUpstreamSelectKey(row: SheetRow): string {
+  if (!row.upstreamBatch) return '';
+  const kind = row.upstreamFinishedGoods ? SRC_FG : (row.upstreamSemiFinished ? SRC_SFI : SRC_WIP);
+  return srcKey(kind, row.upstreamBatch);
+}
+
+/** 用户改选单上游: 由复合值「类型::批次号」显式拆出批次号 + semiFinished + finishedGoods 标记 (三者互斥)。 */
+function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
+  if (!key) {
+    row.upstreamBatch = '';
+    row.upstreamSemiFinished = false;
+    row.upstreamFinishedGoods = false;
+    return;
+  }
+  const sep = key.indexOf('::');
+  if (sep < 0) {
+    // 兜底 (理论不出现): 无前缀 → 当 in-plan WIP
+    row.upstreamBatch = key;
+    row.upstreamSemiFinished = false;
+    row.upstreamFinishedGoods = false;
+    return;
+  }
+  const kind = key.slice(0, sep);
+  row.upstreamSemiFinished = kind === SRC_SFI;
+  row.upstreamFinishedGoods = kind === SRC_FG;
+  row.upstreamBatch = key.slice(sep + 2);
+}
+
+// -------------------------------------------------------------------------
+// 投入来源的「唯一候选批次自动选中」+ 行式视图模型 (客户 2026-07-30)
+//
+// 客户口径: 「多批次才给勾选框; 只有单个批次时自动选中, 不要让用户多点一次」。判据与
+// showPortSelector (「端口没有替代关系就不给勾选框」) 完全一致 —— 只有一个候选时,
+// 那个下拉是一次假选择: 不选交不了, 选了也没别的可选。
+//
+// ⚠️ 自动的只有「选哪一批」。**数量一律由操作员实填**, 不自动带出 —— 投入不一定等于上一道
+// 产出 (损耗 / 只用一部分 / 补料), 以实填为准, 账实差异由盘点纠正 (Steve 2026-07-30 拍板)。
+// -------------------------------------------------------------------------
+
+function wipCandidate(item: ProcessSheetInventoryItem): UpstreamBatchOption {
+  return {
+    kind: 'wip', batchNumber: item.batchNumber, value: srcKey(SRC_WIP, item.batchNumber),
+    label: wipLabel(item), disabled: item.remaining <= 0,
+  };
+}
+
+function sfiCandidate(item: SemiFinishedStockItem): UpstreamBatchOption {
+  return {
+    kind: 'sfi', batchNumber: item.intermediateBatchNo, value: srcKey(SRC_SFI, item.intermediateBatchNo),
+    label: sfiLabel(item), disabled: sfiAvailable(item) <= 0,
+  };
+}
+
+function fgCandidate(item: FinishedGoodsStockItem): UpstreamBatchOption {
+  return {
+    kind: 'fg', batchNumber: item.batchNumber, value: srcKey(SRC_FG, item.batchNumber),
+    label: fgLabel(item), disabled: fgAvailable(item) <= 0,
+  };
+}
+
+/**
+ * 本来源行的**全部**候选批次。
+ *
+ * 刻意不走 wipOptionsDisplay / sfiOptionsDisplay / fgOptionsDisplay —— 那三个带搜索词过滤
+ * 且 SFI/FG 只取最近 30 条。拿它们判「是不是只有一条」, 操作员在下拉里打个字就会把候选打成
+ * 一条, 于是自动选中一个他并没有挑的批次。
+ */
+function allUpstreamCandidates(src: UpstreamRef): UpstreamBatchOption[] {
+  return [
+    ...props.upstreamItems.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(wipCandidate),
+    ...sfiOptions.value.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(sfiCandidate),
+    ...fgOptions.value.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(fgCandidate),
+  ];
+}
+
+/** 单上游道的全部候选批次 (单上游下拉不按端口 SKU 二次过滤, 与模板列出的三组一致)。 */
+function allSingleUpstreamCandidates(): UpstreamBatchOption[] {
+  return [
+    ...props.upstreamItems.map(wipCandidate),
+    ...sfiOptions.value.map(sfiCandidate),
+    ...fgOptions.value.map(fgCandidate),
+  ];
+}
+
+/** 真能选的候选只有一条时返回它; 否则 null。余量为 0 的批次本来就选不了, 不算候选。 */
+function soleSelectableCandidate(candidates: UpstreamBatchOption[]): UpstreamBatchOption | null {
+  const selectable = candidates.filter((candidate) => !candidate.disabled);
+  return selectable.length === 1 ? selectable[0] : null;
+}
+
+/**
+ * 这一行的「选哪一批」是不是已经没有取舍余地。
+ *
+ * 端口本身还在替代关系里、且操作员还没勾「选用」时不算 —— 那时该做的决定是「用哪个端口」,
+ * 替他把批次定下来等于替他做了那个决定。他勾上之后, 这一行就只剩「哪一批」这一个问题了。
+ */
+function upstreamBatchIsForegoneChoice(src: SelectableUpstreamRef, index: number): boolean {
+  return !showPortSelector(sourcePort(src, index)) || src.selected;
+}
+
+/**
+ * 把「唯一候选批次」写进还没选批次的投入行。
+ *
+ * ⚠️ 走的是**操作员手点时的同一条路径** (onUpstreamSelect / onSingleUpstreamSelect), 不另写一遍
+ * 赋值。自动选中要做的事就是「替他点那一下」, 多一分少一分都是新的语义分叉 —— 少一分尤其危险:
+ * 成品混锅道的来源选择本来就带着「把该批次可用量结转为投入量」的既有契约, 绕开它会静默提交
+ * inputQuantity=0。
+ *
+ * 三条不动手的情况:
+ *  - 库存还在拉取: 加载中途 WIP 恰好只有一条会被误判成唯一候选, 而 SFI/FG 到位后其实有好几条
+ *    (与 inputStockText 的 rawBatchLoading 守卫同一个道理)。
+ *  - 端口有替代关系 (showPortSelector): 那是「用哪个端口」的取舍, 得操作员自己勾, 不是「哪一批」。
+ *  - 行已只读/已提交/已小结。
+ */
+function autoSelectSoleUpstreamBatches(): void {
+  if (sfiLoading.value || fgLoading.value) return;
+  for (const row of rows.value) {
+    if (row.interimSettledAt != null || isReadOnlyRow(row) || row.submissionStatus === 'SUBMITTED') continue;
+    if (isMultiSource.value) {
+      row.upstreamSources.forEach((src, index) => {
+        if (src.sourceBatchNumber || !upstreamBatchIsForegoneChoice(src, index)) return;
+        const sole = soleSelectableCandidate(allUpstreamCandidates(src));
+        if (sole) onUpstreamSelect(src, sole.value);
+      });
+      continue;
+    }
+    if (!isSingleSource.value || row.upstreamBatch) continue;
+    const sole = soleSelectableCandidate(allSingleUpstreamCandidates());
+    if (sole) onSingleUpstreamSelect(row, sole.value);
+  }
+}
+
+/** 单上游道: 唯一候选批次 (有第二个候选时 null → 照常给下拉)。 */
+function soleSingleUpstreamCandidate(): UpstreamBatchOption | null {
+  if (sfiLoading.value || fgLoading.value) return null;
+  return soleSelectableCandidate(allSingleUpstreamCandidates());
+}
+
+function upstreamOptionGroups(src: UpstreamRef): UpstreamBatchOptionGroup[] {
+  const groups: UpstreamBatchOptionGroup[] = [];
+  const wip = wipOptionsForSource(src).map(wipCandidate);
+  if (wip.length) groups.push({ label: '本计划在制半成品', options: wip });
+  const sfi = sfiOptionsForSource(src).map(sfiCandidate);
+  if (sfi.length) groups.push({ label: sfiGroupLabel.value, options: sfi });
+  const fg = fgOptionsForSource(src).map(fgCandidate);
+  if (fg.length) groups.push({ label: fgGroupLabel.value, options: fg });
+  return groups;
+}
+
+/**
+ * 把一行的投入来源整理成 ProcessInputSourceTable 要的视图模型。
+ *
+ * 所有派生值都在这里算完 —— 卡片模式和表格模式传同一份进去, 就不可能再像以前那样
+ * 三份实现各长各的。
+ */
+function inputSourceViews(row: SheetRow): InputSourceLineView[] {
+  return row.upstreamSources.map((source, index) => {
+    const port = sourcePort(source, index);
+    const unit = sourcePortUnit(source);
+    // 只有在 autoSelectSoleUpstreamBatches 真的会替他选中时才隐藏下拉 —— 否则会出现
+    // 「界面上没有下拉, 模型里也没有批次」这种交不了又不知道为什么的死局。
+    const sole = upstreamBatchIsForegoneChoice(source, index)
+      ? soleSelectableCandidate(allUpstreamCandidates(source))
+      : null;
+    return {
+      source,
+      index,
+      materialName: sourcePortName(source),
+      selectorVisible: showPortSelector(port),
+      selectorDisabled: portSelectionDisabled(port),
+      unitLabel: displayProcessUnit(unit),
+      quantityPlaceholder: formatFeedPlaceholder(unit),
+      selectKey: srcSelectKey(source),
+      soleBatchLabel: sole?.label ?? null,
+      // 唯一候选时不必再算下拉分组 —— 那个下拉根本不渲染。
+      optionGroups: sole ? [] : upstreamOptionGroups(source),
+      remainingText: srcRemainingLabel(source),
+      canAddSameMaterial: Boolean(source.workflowPortId) && !sole,
+      canClear: !sole || !source.workflowPortId,
+    };
+  });
+}
+
+function onInputSourceToggle(row: SheetRow, index: number, selected: boolean): void {
+  const src = row.upstreamSources[index];
+  if (!src) return;
+  setPortSelected(row, sourcePort(src, index), selected);
+  // 勾上之后这一行就只剩「哪一批」这一个问题, 唯一候选可以直接落下去。
+  autoSelectSoleUpstreamBatches();
+}
+
+function onInputSourceBatchSelect(row: SheetRow, index: number, key: string): void {
+  const src = row.upstreamSources[index];
+  if (src) onUpstreamSelect(src, key);
+}
+
+function onInputSourceRemove(row: SheetRow, index: number): void {
+  removeUpstreamSource(row, index);
+  // 清空后本行可能又只剩唯一候选 —— 立刻补回, 免得界面显示批次而模型里是空的。
+  autoSelectSoleUpstreamBatches();
+}
+
+function onInputSourceAdd(row: SheetRow, template?: SelectableUpstreamRef): void {
+  addUpstreamSource(row, template);
+  autoSelectSoleUpstreamBatches();
+}
+
+/** 来源批余量提示文字 (兼顾 in-plan 在制 WIP 与常驻 SFI / 成品FG)。 */
+function srcRemainingLabel(src: UpstreamRef): string {
+  const wip = props.upstreamItems.find((b) => b.batchNumber === src.sourceBatchNumber);
+  if (wip) return `余${wip.remaining}${wip.unit || processUnits.value.inputUnit}`;
+  const fg = fgOptions.value.find((f) => f.batchNumber === src.sourceBatchNumber);
+  if (fg) return `成品余${fgAvailable(fg)}${fg.unit || 'kg'}`;
+  const sfi = sfiOptions.value.find((s) => s.intermediateBatchNo === src.sourceBatchNumber);
+  if (sfi) return `半成品余${sfiAvailable(sfi)}${sfi.unit || 'kg'}`;
+  return '';
+}
+
+// -------------------------------------------------------------------------
+// 熟制: pot helpers
+// -------------------------------------------------------------------------
+function onPotCountChange(row: SheetRow, val: number) {
+  row.potCount = val;
+}
+
+function potSplitHint(row: SheetRow): string {
+  try {
+    const weights = buildEqualPotWeightsKg(potInputQuantity(row), processUnits.value.inputUnit, row.potCount);
+    return `系统将投入量等分为 ${row.potCount} 锅，每锅 ${weights[0].toFixed(2)} kg`;
+  } catch (error) {
+    return error instanceof Error ? error.message : '请先填写投入量';
+  }
+}
+
+watch(
+  () => [props.factoryId, props.processCode, props.productTypeId, props.allowSemiFinishedInjection, props.allowFinishedGoodsSource,
+    // raw-centric: workflow 原料类型到位后必须重跑 loadRawBatches (否则 workflowRawInputs 尚空 → 误按 productTypeId 查空)。
+    workflowRawInputs.value.map((p) => p.skuId).join(',')] as const,
+  () => {
+    rawBatchOptions.value = [];
+    consumableWarehouseIds.value = [];
+    rawBatchLoadSeq++;
+    rawBatchLoading.value = false;
+    if (isXiuYou.value || workflowRawInputs.value.length > 0) { void loadRawBatches(); void loadInputAvailability(); }
+    // 混锅工序 (熟制/气调) + 单上游道 (焯水/滚揉/去舌苔) 加载常驻半成品库存供 SFI 投料下拉
+    sfiOptions.value = [];
+    sfiLoadSeq++;
+    sfiLoading.value = false;
+    if (showSfi.value) void loadSfiOptions();
+    // ①c 同工序集加载常驻成品库存供 FG 投料下拉
+    fgOptions.value = [];
+    fgLoadSeq++;
+    fgLoading.value = false;
+    if (showFg.value) void loadFgOptions();
+  },
+  { immediate: true },
+);
+
+// 库存到位 / 新增行 / 重新 hydrate 之后, 把唯一候选批次补进还没选批次的投入行。
+// getter 返回新数组 → 任一依赖变化都会重跑; 回调只写嵌套字段, 不改 rows 长度/身份, 不会自触发。
+watch(
+  () => [
+    rows.value,
+    rows.value.length,
+    props.upstreamItems,
+    sfiOptions.value,
+    fgOptions.value,
+    sfiLoading.value,
+    fgLoading.value,
+  ] as const,
+  () => autoSelectSoleUpstreamBatches(),
+  { immediate: true },
+);
+
+// -------------------------------------------------------------------------
+// 未保存草稿检测 (防呆 Rule: 关闭「逐工序录入」抽屉前警示未保存内容)
+// -------------------------------------------------------------------------
+// rowStatus === 'UNSAVED' 只在用户主动「+新增」加了一行且还没保存成功时出现
+// (初始加载/hydrate 来的行是 SAVED/DRAFT, 空表不会自动插一行占位)，可直接当
+// "本工序有未保存草稿行" 的信号，供父组件(ProcessSheet → list.vue 抽屉)聚合。
+/**
+ * 这一行有没有「关掉就会丢」的内容。
+ *
+ * 客户 2026-07-31: 点了「保存草稿」, 关窗口还问「有未保存内容, 确认关闭?」。
+ *
+ * 🔴 旧判据 `rowStatus === 'UNSAVED'` 两个方向都错:
+ *   - 点了「新增行」但一个字没填 → 判成脏。**没有任何东西可丢**, 却天天拦人 ——
+ *     拦多了用户就学会闭眼点「确认关闭」, 这条提醒等于作废。
+ *   - 保存之后又改了内容 → **不判脏**。因为 rowStatus 只会 UNSAVED → DRAFT/SAVED,
+ *     没有任何地方把它改回去。真正会丢的编辑反而没被保护。
+ *
+ * 正确判据是**内容有没有变**: 拿这一行现在的内容和上次存进去的比。
+ * 复用 buildRequest —— 它本来就是"这一行要发给后端的东西", 正是"用户填了什么"的定义,
+ * 不必另外维护一份字段清单 (那份清单一定会跟 buildRequest 漂移)。
+ */
+function rowContentKey(row: SheetRow): string | null {
+  try {
+    return JSON.stringify(buildRequest(row));
+  } catch {
+    // buildRequest 依赖若干上下文, 行刚建出来时可能还算不出。
+    // 这时不冒充"干净" —— 返回 null 交给下面按旧口径保守处理。
+    return null;
+  }
+}
+
+function rowIsDirty(row: SheetRow): boolean {
+  if (row.submissionStatus === 'SUBMITTED' || isReadOnlyRow(row)) return false;
+  const now = rowContentKey(row);
+  if (now === null) return row.rowStatus === 'UNSAVED';   // 算不出就退回旧口径, 宁可多问一次
+  if (row.savedSnapshot !== null) return now !== row.savedSnapshot;
+  // 从未保存过: 只有当它和一张全新空行不一样时才算脏 (= 用户确实填了东西)
+  const blank = rowContentKey({ ...blankRow(), clientRowId: row.clientRowId });
+  return blank === null ? true : now !== blank;
+}
+
+const hasUnsavedRows = computed(() => rows.value.some(rowIsDirty));
+
+// -------------------------------------------------------------------------
+// Bug 1 修复 (fix/process-entry-cache-and-blend-cost, F006 现场走查): 半成品(SFI)/成品(FG)/
+// 原料批次余量是全局共享的常驻库存 (可被任意其它 process tab 选作投料来源), 但上面的 watch
+// 只在本组件挂载 / (factoryId, processCode, productTypeId) 变化时加载一次 —— 逐工序对话框内
+// 各 process tab 的 ProcessDataTable 实例长期挂载不销毁 (el-tabs 只是切换可见性), 这三份 key
+// 此后永不再变, 于是 sfiOptions/fgOptions/rawBatchOptions 从首次加载后就再没刷新过。
+//
+// 若另一 tab 保存了一行改变这些余量的产出 (如 焯水 postSfiOutput 把 SFI 锚余量从
+// 1.05kg 推到 2.03kg), 本 tab 的下拉/校验 (upstreamWarning) 仍读旧的 1.05kg → 假阳性拦截
+// "用量 2.03kg 超出半成品库存余 1.05kg"。真实 Postgres 数据从未错，纯前端缓存未失效，
+// 手动整页刷新才能看到新值 —— 违反 fool-proof-design Rule 1 (预先显示正确边界)。
+//
+// ProcessSheet.vue 在任一 tab 保存后, 对全部 process tab 的 ProcessDataTable 实例调用此方法,
+// 重新拉取三类共享余量 (不清空现有值, 避免刷新期间下拉短暂清空/跳动), 消除跨 tab 假阳性拦截。
+// -------------------------------------------------------------------------
+function refreshSharedInventories() {
+  if (isXiuYou.value || workflowRawInputs.value.length > 0) { void loadRawBatches(); void loadInputAvailability(); }
+  if (showSfi.value) void loadSfiOptions();
+  if (showFg.value) void loadFgOptions();
+}
+
+defineExpose({ hasUnsavedRows, refreshSharedInventories });
+</script>
+
+<template>
+  <div class="sp-grid-wrap">
+
+    <!-- ====================================================================
+         2B Task F2 (additive, fool-proof Rule 2/3/5): workflow 计划产出/所需原料只读展示。
+         仅 workflowContext 非 null (workflow-activated 计划) 时渲染; legacy 计划该 prop 恒为
+         null, 这块整体不出现, 不影响任何现有布局/行为。
+         ==================================================================== -->
+    <el-alert
+      v-if="workflowContext"
+      class="sp-workflow-banner"
+      type="info"
+      :closable="false"
+      show-icon
+    >
+      <template #title>
+        <!-- 2B.2 多产出: 产出端口 > 1 时汇总展示全部产出 (品名+单位), 而不是只显首个端口。 -->
+        <span v-if="isMultiOutput">
+          多产出 (本道同时产 {{ outputPorts.length }} 个产品)：{{ workflowOutputsLabel }}
+        </span>
+        <span v-else-if="workflowOutput">
+          计划产出：{{ workflowOutputLabel }}
+          <el-tag size="small" :type="workflowOutput.finished ? 'success' : 'warning'" style="margin-left:6px">
+            {{ workflowOutput.finished ? '成品' : '半成品' }}
+          </el-tag>
+        </span>
+        <span v-else style="color:#909399">本工序 workflow 未配置产出端口</span>
+        <span v-if="workflowRawInputsLabel" style="margin-left:12px;color:#606266">
+          需要原料：{{ workflowRawInputsLabel }}
+        </span>
+      </template>
+    </el-alert>
+    <el-alert
+      v-if="outputPorts.some((p) => p.skuResolved === false)"
+      class="sp-workflow-banner sp-workflow-banner-warning"
+      type="error"
+      :closable="false"
+      show-icon
+      title="产出 SKU 已失效，请回 Workflow 配置"
+    />
+    <el-alert
+      v-if="unresolvedWorkflowRawInputs.length > 0"
+      data-testid="workflow-input-invalid"
+      class="sp-workflow-banner sp-workflow-banner-warning"
+      type="error"
+      :closable="false"
+      show-icon
+    >
+      <template #title>
+        <span>当前计划绑定的原料已失效，暂不能报工</span>
+      </template>
+      <div>
+        失效原料：{{ unresolvedWorkflowRawInputs.map((p) => p.materialName || p.skuId).join('、') }}。
+        报工页只填写各原料实际投入量，不能临时更换原料。
+        <el-link :href="workflowConfigHref" type="primary" underline="always">
+          去产品-工序配置重新绑定
+        </el-link>
+        ，然后重新创建生产计划。
+      </div>
+    </el-alert>
+
+    <!-- ====================================================================
+         CARD LAYOUT
+         One card per row. Same row model + editors as the grid, different
+         visual wrapper. Expandable labor / mix sections rendered inline.
+         ==================================================================== -->
+    <template v-if="viewMode === 'card'">
+
+      <!-- ====== 已小结区块 (默认折叠，点击展开只读历史行) ====== -->
+      <div v-if="settledRows.length > 0" class="sp-settled-section">
+        <div class="sp-settled-header" @click="settledExpanded = !settledExpanded">
+          <el-icon style="margin-right:4px"><component :is="settledExpanded ? ArrowDown : ArrowRight" /></el-icon>
+          <span>已小结 {{ settledRows.length }} 道（已转结到生产批次，计划保持开放）</span>
+          <el-tag type="info" size="small" style="margin-left:8px">只读</el-tag>
+        </div>
+        <template v-if="settledExpanded">
+          <div v-for="row in settledRows" :key="row.clientRowId" class="sp-card sp-card-settled">
+            <div class="sp-card-header">
+              <el-tag type="info" size="small" style="white-space:nowrap">已小结</el-tag>
+              <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
+              <span class="sp-settled-summary">{{ settledRowSummary(row) }}</span>
+              <span v-if="row.interimSettledAt" class="sp-settled-ts">
+                小结于 {{ formatSettledAt(row.interimSettledAt) }}
+              </span>
+              <div style="flex:1" />
+              <el-button
+                v-if="hasHistory(row)"
+                link size="small" :icon="Clock"
+                title="操作记录"
+                @click="openHistory(row)" />
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div v-if="historicalRows.length > 0" class="sp-settled-section" data-testid="legacy-readonly-row">
+        <div class="sp-settled-header">
+          <span>已入账/历史数据（只读） · {{ historicalRows.length }} 行</span>
+          <el-tag type="info" size="small" style="margin-left:8px">不可修改</el-tag>
+        </div>
+        <div v-for="row in historicalRows" :key="row.clientRowId" class="sp-card sp-card-settled">
+          <div class="sp-card-header">
+            <el-tag type="info" size="small">历史记录</el-tag>
+            <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
+            <span class="sp-settled-summary">{{ settledRowSummary(row) }}</span>
+            <div style="flex:1" />
+            <el-button
+              v-if="hasHistory(row)"
+              link size="small" :icon="Clock"
+              title="查看操作记录"
+              aria-label="查看操作记录"
+              @click="openHistory(row)" />
+          </div>
+        </div>
+      </div>
+
+      <div v-for="(row, ri) in activeRows" :key="row.clientRowId" class="sp-card"
+           :class="{ 'sp-card-saved': row.rowStatus === 'SAVED', 'sp-card-draft': row.rowStatus === 'DRAFT' }">
+
+        <!-- Card header: row index + status tag + batch + warning + actions -->
+        <div class="sp-card-header">
+          <span class="sp-card-idx">#{{ ri + 1 }}</span>
+          <el-tag
+            :type="row.submissionStatus === 'SUBMITTED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
+            size="small" style="white-space:nowrap">
+            {{ row.submissionStatus === 'SUBMITTED' ? '已正式报工' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
+          </el-tag>
+          <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
+            <el-icon style="color:#e6a23c;cursor:pointer"><Warning /></el-icon>
+          </el-tooltip>
+          <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
+          <span v-else class="sp-card-batchnum sp-card-batchnum-pending">(保存后生成批次号)</span>
+          <div style="flex:1" />
+          <el-button
+            v-if="hasHistory(row)"
+            link size="small" :icon="Clock"
+            title="查看操作记录"
+            aria-label="查看操作记录"
+            @click="openHistory(row)"
+            style="margin-left:4px" />
+          <el-button
+            v-if="row.submissionStatus !== 'SUBMITTED'"
+            type="danger" link size="small" :icon="Delete"
+            :loading="row.deleting"
+            title="删除本行"
+            aria-label="删除本行"
+            @click="handleDelete(row)"
+            style="margin-left:4px" />
+        </div>
+
+        <ProcessStockShortageAlert
+          v-if="row.stockShortage"
+          data-testid="stock-shortage-alert"
+          :presentation="row.stockShortage"
+          style="margin:8px 12px 0"
+        />
+        <el-alert
+          v-if="row.blockingMessage"
+          :title="row.blockingMessage"
+          type="error"
+          :closable="false"
+          show-icon
+          style="margin:8px 12px 0"
+        />
+
+        <!-- Card body: field grid -->
+        <div class="sp-card-body">
+
+          <div
+            v-if="isPortOutputMode"
+            data-testid="production-date"
+            class="sp-card-field sp-card-field-full sp-reporting-date"
+          >
+            <label class="sp-card-label">生产日期</label>
+            <el-date-picker
+              v-model="row.productionDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width:160px"
+              size="small"
+            />
+          </div>
+          <div class="sp-card-field sp-card-field-full sp-stage-heading sp-stage-heading-primary">
+            <span><b>①</b> 投入</span>
+            <small v-if="isPortOutputMode">按 Workflow 端口逐行录入；不同物料或批次新增投入行。</small>
+            <small v-else>先确认本工序实际投入，再填写产出与作业信息。</small>
+          </div>
+          <div v-if="isPortOutputMode" class="sp-card-field sp-card-field-full sp-port-section-note">
+            <strong>系统自动处理</strong>
+            <span>每条投入在本报工组中只扣减一次；固定 BOM 中的包材与工序调料会在正式报工时按生产库批次自动分配并计入成本。</span>
+          </div>
+
+          <!-- 修油: raw-material batch dropdown + out-weight -->
+          <!-- 2026-08-02: 门从 isXiuYou 放开 —— 只要这行要用 workflow 原料端口就渲染,
+               否则多输入工序(熟制=上游半成品+调料)看不到调料行却被校验拦住提交。 -->
+          <template v-if="isXiuYou || usesAutoMaterialTotals(row)">
+            <!--
+              投入也按紧凑表格排 (与产出表同一套观感)。原来每条投入是一竖列
+              label/下拉/label/数字堆叠, 多条并排时字段名逐条重复, 正是客户说的「散」。
+            -->
+            <template v-if="usesAutoMaterialTotals(row)">
+              <div
+                class="sp-card-field sp-card-field-full sp-in-table"
+                :class="{ 'sp-in-table--sel': anyInputSelector(row) }"
+              >
+                <div class="sp-in-head" aria-hidden="true">
+                  <span v-if="anyInputSelector(row)">选用</span>
+                  <span>本次投入原料</span>
+                  <span><i class="sp-required">*</i>投料总量</span>
+                  <span>生产仓可用</span>
+                  <span>来源批次</span>
+                </div>
+                <div
+                  v-for="item in row.materialInputTotals"
+                  :key="item.workflowPortId || item.materialTypeId"
+                  data-testid="material-input-total"
+                  class="sp-in-row"
+                  :class="{ 'sp-port-unselected': !item.selected }"
+                >
+                  <span v-if="anyInputSelector(row)" class="sp-in-cell">
+                    <el-checkbox
+                      v-if="showPortSelector(portById(item.workflowPortId))"
+                      :model-value="item.selected"
+                      :disabled="portSelectionDisabled(portById(item.workflowPortId))"
+                      data-testid="port-selected"
+                      :aria-label="`选用 ${item.materialName}`"
+                      @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
+                    />
+                  </span>
+                  <span class="sp-in-cell">
+                    <!-- 品名直接显示, 不给下拉: 主料/替代料的取舍由左侧「选用」勾选决定,
+                         每个候选各占一行 —— 再套一层下拉是重复操作
+                         (客户 2026-07-30:「都选用了 本次投入原料就不用下拉了」「替代料就是选用的」)。 -->
+                    <span data-testid="bom-authorized-material-fixed" class="sp-fixed-material">
+                      {{ item.materialName || item.materialTypeId }}
+                    </span>
+                    <!-- 端口有替代关系时才说明选法; 没得选时这行字和 * 是重复的 -->
+                    <span
+                      v-if="showPortSelector(portById(item.workflowPortId))"
+                      class="sp-port-selection-hint"
+                    >{{ portSelectionSummary(portById(item.workflowPortId)) }}</span>
+                  </span>
+                  <span class="sp-in-cell">
+                    <span class="sp-inline-input" role="group" aria-label="投料总量与单位">
+                      <el-input-number
+                        v-model="item.quantity"
+                        :disabled="!item.selected"
+                        :min="0"
+                        :precision="6"
+                        controls-position="right"
+                        size="small"
+                        :aria-label="`${item.materialName} 投料总量`"
+                      />
+                      <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
+                    </span>
+                  </span>
+                  <!-- 生产仓可用量: 后端权威值, 独立成列 (客户 2026-07-31 要求不要和来源批次挤一起)。
+                       表格模板有同一块, 改动需同步 (该文件历史上出现过两套模板漂移)。 -->
+                  <span class="sp-in-cell">
+                    <span
+                      v-if="workshopStockText(item)"
+                      data-testid="input-available-stock"
+                      class="sp-in-stock"
+                      :class="{ 'sp-in-stock-zero': workshopStockIsZero(item) }"
+                    >{{ workshopStockText(item) }}</span>
+                    <span
+                      v-if="elsewhereStockText(item)"
+                      data-testid="input-elsewhere-stock"
+                      class="sp-in-elsewhere"
+                    >{{ elsewhereStockText(item) }}</span>
+                    <span
+                      v-if="expiredStockText(item)"
+                      data-testid="input-expired-stock"
+                      class="sp-in-expired"
+                    >{{ expiredStockText(item) }}</span>
+                    <span
+                      v-if="expiredElsewhereText(item)"
+                      data-testid="input-expired-elsewhere"
+                      class="sp-in-expired"
+                    >{{ expiredElsewhereText(item) }}</span>
+                  </span>
+                  <span class="sp-in-cell sp-in-note">来源批次由系统按生产库入库顺序自动分摊</span>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+            <div data-testid="legacy-raw-batch-picker" class="sp-card-field">
+              <label class="sp-card-label">原料批次</label>
+              <el-select
+                v-model="row.rawBatchId"
+                :loading="rawBatchLoading"
+                placeholder="选原料批次"
+                filterable clearable
+                style="width:100%" size="small">
+                <el-option
+                  v-for="b in rawBatchOptions" :key="b.id"
+                  :label="rawBatchLabel(b)" :value="b.id"
+                  :disabled="rawBatchAvailable(b) <= 0" />
+                <!-- 防呆(load-race 修复): loading 时用独立 #loading slot, 不落回 #empty —— 否则
+                     el-select 内部逻辑 (loading || 无选项 → 渲染 #empty) 会在"还在加载"时也显示
+                     "暂无可用批次", 让操作员误以为真无库存, 首次打开必闪现空态。 -->
+                <template #loading>
+                  <span style="padding:8px;color:#909399;font-size:12px">
+                    <el-icon class="is-loading" style="vertical-align:-2px"><Loading /></el-icon> 加载中，请稍候…
+                  </span>
+                </template>
+                <template #empty>
+                  <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次，请先入库/领料</span>
+                </template>
+              </el-select>
+              <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
+              <span v-if="!row.rawBatchId" style="display:block;margin-top:3px;font-size:11px;color:#f56c6c">
+                请先选择原料批次，再保存此行
+              </span>
+              <!-- 防呆: 未落仓批次已从下拉隐藏, 显式提示原因 (Rule 5: 不做 dead-end) -->
+              <span v-if="rawBatchExcludedNoWarehouseCount > 0" style="display:block;margin-top:3px;font-size:11px;color:#e6a23c">
+                另有 {{ rawBatchExcludedNoWarehouseCount }} 个批次未落仓，无法领用（请先完成入库/领料）
+              </span>
+            </div>
+            <div class="sp-card-field">
+              <label class="sp-card-label">{{ firstProcessInputLabel }}</label>
+              <span class="sp-inline-input" role="group" :aria-label="`${firstProcessInputLabel}与单位`">
+                <el-input-number
+                  v-model="row.rawBatchQty"
+                  :min="0" :precision="2"
+                  controls-position="right"
+                  size="small" />
+                <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(processUnits.inputUnit) }}</span>
+              </span>
+            </div>
+            </template>
+          </template>
+
+          <!--
+            单来源上游 (焯水/滚揉/去舌苔/定量包装): 含半成品库存(SFI)/成品库存(FG)选项。
+            去舌苔原来单独写了一份一模一样的分支, 已合并 —— 两份的差别只有 isQidiao 的投入量块,
+            而那块本来就带 v-if, 留两份纯粹是等着漂移。
+          -->
+          <template v-else-if="isSingleSource">
+            <div class="sp-card-field">
+              <label class="sp-card-label">{{ sourceTitle }}</label>
+              <!--
+                唯一候选批次: 直接显示批次, 不给下拉 (客户 2026-07-30「只有一个批次时自动选中,
+                不要让用户多点一次」)。表格模板有同一块, 改动需同步。
+              -->
+              <span
+                v-if="soleSingleUpstreamCandidate()"
+                data-testid="upstream-batch-fixed"
+                class="sp-fixed-batch"
+                :title="soleSingleUpstreamCandidate()!.label"
+              >{{ soleSingleUpstreamCandidate()!.label }}</span>
+              <el-select
+                v-else
+                :model-value="singleUpstreamSelectKey(row)"
+                @change="(v: string) => onSingleUpstreamSelect(row, v)"
+                :placeholder="sourcePickerPlaceholder"
+                filterable clearable
+                :filter-method="onBatchSelectFilter"
+                @visible-change="onBatchSelectVisibleChange"
+                :loading="sfiLoading"
+                :aria-label="sourceTitle"
+                style="width:100%" size="small">
+                <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
+                  <el-option
+                    v-for="item in wipOptionsDisplay" :key="item.batchNumber"
+                    :label="wipLabel(item)"
+                    :value="srcKey(SRC_WIP, item.batchNumber)"
+                    :disabled="item.remaining <= 0" />
+                </el-option-group>
+                <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
+                  <el-option
+                    v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
+                    :label="sfiLabel(s)"
+                    :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
+                    :disabled="sfiAvailable(s) <= 0" />
+                </el-option-group>
+                <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
+                  <el-option
+                    v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
+                    :label="fgLabel(f)"
+                    :value="srcKey(SRC_FG, f.batchNumber)"
+                    :disabled="fgAvailable(f) <= 0" />
+                </el-option-group>
+              </el-select>
+            </div>
+            <!-- 成品工序: 实际投入量可手填 (2026-07-30 Steve 拍板: 投入不一定等于上一道产出).
+                 未填时沿用所选批次可用量; 超量只提示不阻断, 账实差异由盘点纠正. -->
+            <div v-if="isQidiao" class="sp-card-field">
+              <label class="sp-card-label">本次投入量 (kg)</label>
+              <el-input-number
+                v-model="row.finishedInputKg"
+                :min="0" :precision="3" :controls="false"
+                :placeholder="String(resolvedFinishedInputKg(row) ?? '')"
+                data-testid="finished-input-kg"
+                aria-label="本次投入量 (kg)"
+                style="width:100%" size="small" />
+              <div v-if="finishedInputOverAvailableHint(row)" class="sp-input-warn">
+                {{ finishedInputOverAvailableHint(row) }}
+              </div>
+              <div v-else-if="row.finishedInputKg == null" class="sp-input-hint">
+                留空 = 按所选批次可用量 {{ resolvedFinishedInputKg(row) ?? '—' }}kg 计
+              </div>
+            </div>
+          </template>
+
+          <!-- 多来源混批: configured by ProductWorkProcess.allowMultipleUpstreamSources -->
+          <template v-else-if="isMultiSource">
+            <div data-testid="upstream-sources-toggle" class="sp-card-field sp-card-field-full">
+              <label class="sp-card-label">{{ sourceTitle }}</label>
+              <el-button link size="small" @click="row.mixExpanded = !row.mixExpanded" style="font-size:12px">
+                <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
+                {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
+              </el-button>
+            </div>
+            <!--
+              Mix expanded inline —— 行式投入表, 与产出表同一套观感。
+              表格模式共用同一个子组件 (原来三份 flex 行实现已合一)。
+            -->
+            <ProcessInputSourceTable
+              v-if="row.mixExpanded"
+              class="sp-card-field sp-card-field-full sp-card-expand-section"
+              :views="inputSourceViews(row)"
+              hint="批次由 Workflow 端口收敛；数量按实际投入填写"
+              :loading="sfiLoading"
+              :show-add-source="workflowUpstreamInputs.length === 0"
+              add-source-label="+ 来源批"
+              :batch-placeholder="sourcePickerPlaceholder"
+              @toggle-select="(index: number, selected: boolean) => onInputSourceToggle(row, index, selected)"
+              @select-batch="(index: number, key: string) => onInputSourceBatchSelect(row, index, key)"
+              @remove="(index: number) => onInputSourceRemove(row, index)"
+              @add-same-material="(index: number) => onInputSourceAdd(row, row.upstreamSources[index])"
+              @add-source="() => onInputSourceAdd(row)"
+              @filter-batches="onBatchSelectFilter"
+              @batch-picker-visible="onBatchSelectVisibleChange"
+            />
+          </template>
+
+          <div
+            v-if="needsPotCount"
+            data-testid="seasoning-pot-count"
+            class="sp-card-field sp-card-field-full sp-card-expand-section"
+          >
+            <label class="sp-card-label">锅数</label>
+            <el-input-number
+              :model-value="row.potCount"
+              @update:model-value="(v: number) => onPotCountChange(row, v)"
+              :min="1"
+              :precision="0"
+              size="small"
+              style="width:100px"
+            />
+            <span style="font-size:12px;color:#606266">{{ potSplitHint(row) }}</span>
+          </div>
+
+          <div class="sp-card-field sp-card-field-full sp-stage-heading">
+            <span><b>②</b> 工序执行</span>
+            <!-- 端口模式下开始/结束时间与人数已并进下方产出行, 这里只剩工序参数 -->
+            <small v-if="isPortOutputMode">填写本工序的作业参数；开始、结束时间和人数随每条产出一起录入。</small>
+            <small v-else>先填写作业参数，再按实际作业记录开始、结束时间和人数。</small>
+          </div>
+          <!-- Generic columns from config (skip special-cased keys) -->
+          <template v-for="col in cols" :key="col.key">
+            <div
+              v-if="!excludedColKeys.includes(col.key)"
+              class="sp-card-field"
+              :class="{ 'sp-card-field-auto': col.type === 'auto' || col.type === 'readonly' }">
+              <label class="sp-card-label">
+                {{ col.label }}
+                <!-- A: 自定义字段列头轻提示 (由管理员在工序配置里定义) -->
+                <el-tooltip v-if="isCustomFieldCol(col.key)" content="自定义字段（由管理员在「工序配置」里定义）" placement="top">
+                  <el-icon class="sp-th-custom-hint"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </label>
+
+              <el-input-number
+                v-if="col.type === 'number'"
+                :model-value="(row.fields[col.key] as number) ?? undefined"
+                @update:model-value="(v: number) => row.fields[col.key] = v"
+                :min="0" :precision="fieldPrecision(col.key)"
+                controls-position="right"
+                style="width:160px" size="small" />
+
+              <el-date-picker
+                v-else-if="col.type === 'date'"
+                :model-value="(row.fields[col.key] as string) || undefined"
+                @update:model-value="(v: string) => row.fields[col.key] = v"
+                type="date" value-format="YYYY-MM-DD"
+                style="width:160px" size="small" />
+
+              <!-- daterange picker: card mode full-width -->
+              <el-date-picker
+                v-else-if="col.type === 'daterange'"
+                :model-value="(row.fields[col.key] as [string,string]) || null"
+                @update:model-value="(v: [string,string] | null) => row.fields[col.key] = v ?? null"
+                type="daterange"
+                range-separator="~"
+                start-placeholder="开始日期"
+                end-placeholder="结束日期"
+                value-format="YYYY-MM-DD"
+                style="width:100%" size="small" />
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
+                {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
+              </span>
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
+                {{ calcYield(row) != null ? calcYield(row)!.toFixed(2) + '%' : '—' }}
+              </span>
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'remaining'" class="sp-readonly"
+                :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? '#f56c6c' : undefined }">
+                {{ calcRemaining(row) != null ? calcRemaining(row)!.toFixed(2) : '—' }}
+              </span>
+
+              <!-- totalHours shown in the labor expander below; skip inline -->
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInbound'" class="sp-readonly">
+                {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
+              </span>
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedRemaining'" class="sp-readonly">
+                {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
+              </span>
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
+                {{ formattedWeight(finishedWeightKg(row)) }}
+                <small style="display:block;color:#909399">{{ unitNetWeightText() }}</small>
+              </span>
+
+              <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInboundWeight'" class="sp-readonly">
+                {{ formattedWeight(finishedWeightKg(row, true)) }}
+              </span>
+
+              <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+                {{ row.fields[col.key] ?? '—' }}
+              </span>
+            </div>
+          </template>
+
+          <!-- ============================================================
+               2B.2 多产出 (fan-out): N 个产出端口各自只读品名(+成品/半成品标签) + 填数量。
+               产品/端口由 workflow 图固定 (fool-proof Rule 2/3 — 不给操作员自由选产品), 始终展开
+               (核心必填录入, 不折叠隐藏)。
+
+               作业时间与人数原本是上面独立的一节, 客户实测反馈布局散 —— 同一个产出品名在一张卡里
+               要出现三次。现已并进产出行, 品名只出现一次; 表格模式共用同一个子组件。
+               ============================================================ -->
+          <ProcessOutputTable
+            v-if="isPortOutputMode"
+            data-testid="process-output-table"
+            class="sp-card-field sp-card-field-full"
+            :views="outputViews(row)"
+            :show-cost-allocation="requiresManualCostAllocation(row)"
+            hint="SKU 与单位由 Workflow 固定，不可选择"
+            :orphan-byproduct-notice="outputPartition.orphanNotice"
+            @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
+            @open-spec="openSpecDialog"
+          />
+
+          <!-- Labor expander -->
+          <div v-if="!isPortOutputMode" class="sp-card-field sp-card-field-full">
+            <label class="sp-card-label">工时</label>
+            <el-button link size="small" @click="row.laborExpanded = !row.laborExpanded" style="font-size:12px">
+              <el-icon style="margin-right:3px"><component :is="row.laborExpanded ? ArrowDown : ArrowRight" /></el-icon>
+              {{ calcTotalHours(row).toFixed(1) }}h · {{ row.laborSegments.length }}段
+            </el-button>
+          </div>
+          <div v-if="!isPortOutputMode && row.laborExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
+            <div style="font-size:12px;font-weight:600;color:#303133;margin-bottom:8px">
+              工时录入 — {{ row.batchNumber || '(未保存行)' }}
+            </div>
+            <WorkHoursTable v-model="row.laborSegments" />
+          </div>
+
+        </div><!-- /.sp-card-body -->
+        <section
+          v-if="row.inputAllocations.length"
+          class="sp-allocation-result"
+          data-testid="automatic-input-allocations"
+          aria-label="本次实际扣料"
+        >
+          <div class="sp-allocation-result-title">
+            <strong><el-icon><Check /></el-icon> 本次实际扣料</strong>
+            <span>已按生产库临期优先（FEFO）锁定批次并计入成本</span>
+          </div>
+          <div class="sp-allocation-result-list">
+            <div
+              v-for="allocation in row.inputAllocations"
+              :key="`${allocation.materialBatchId}-${allocation.allocationOrder}`"
+              class="sp-allocation-result-item"
+              data-testid="automatic-input-allocation"
+            >
+              <el-tag size="small" :type="allocation.sourceType === 'PACKAGING' ? 'success' : 'warning'">
+                {{ allocation.sourceType === 'PACKAGING' ? '包材' : allocation.sourceType === 'SEASONING' ? '调料' : '原料' }}
+              </el-tag>
+              <strong>{{ allocation.materialName || allocation.materialTypeId }}</strong>
+              <span>批次 {{ allocation.batchNumber || allocation.materialBatchId }}</span>
+              <span>{{ allocation.quantity }} {{ displayProcessUnit(allocation.unit) }}</span>
+              <span v-if="allocation.unitPrice != null">实际批次移动平均价 ¥{{ Number(allocation.unitPrice).toFixed(4) }}/{{ displayProcessUnit(allocation.unit) }}</span>
+              <strong v-if="allocation.totalCost != null" class="sp-allocation-cost">成本 ¥{{ Number(allocation.totalCost).toFixed(2) }}</strong>
+              <span v-else class="sp-allocation-cost-missing">成本未归集</span>
+            </div>
+          </div>
+        </section>
+        <div class="sp-card-submit">
+          <div class="sp-card-submit-copy">
+            <strong><b>④</b> 确认提交</strong>
+            <span>正式报工后锁定本行，并自动分配生产库批次、扣减库存和计入成本。</span>
+          </div>
+          <el-button
+            plain
+            class="sp-draft-action"
+            :loading="row.saving"
+            :disabled="!!draftSaveDisabledReason(row) || row.saving"
+            :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+            @click="handleSave(row, 'draft')"
+          >保存草稿</el-button>
+          <!--
+            disabled 元素不触发鼠标事件, 原生 title 弹不出来也没法调速度。
+            用 el-tooltip 包一层 span 才能既显示原因又立刻弹出(show-after=0)。
+          -->
+          <el-tooltip
+            :content="submitDisabledReason(row) || '正式报工并由系统自动分摊生产库批次'"
+            placement="top"
+            :show-after="0"
+            :hide-after="0"
+          >
+            <span class="sp-submit-wrap">
+              <el-button
+                type="primary" size="large" :icon="Check"
+                class="sp-submit-primary"
+                :loading="row.saving"
+                :disabled="!!submitDisabledReason(row) || row.saving"
+                @click="handleSave(row, 'submit')"
+              >正式报工</el-button>
+            </span>
+          </el-tooltip>
+        </div>
+        <!--
+          防呆 Rule 1「预先显示边界」: 提交按钮 disabled 时, 原因必须直接印在按钮旁边。
+          原来只有两条路给出原因 —— :title 原生提示, 以及 handleSave 里的 sticky 报错。
+          但 disabled 元素不触发鼠标事件, title 多数浏览器不显示; click 也进不去 handleSave,
+          那条报错永远弹不出来。用户看到的就是一个灰按钮、点了没反应、悬停也没提示。
+        -->
+        <div v-if="submitDisabledReason(row)" class="sp-blocked-hint" role="status">
+          <el-icon><Warning /></el-icon>
+          <span>还不能正式报工：{{ submitDisabledReason(row) }}</span>
+        </div>
+      </div><!-- /v-for cards -->
+
+      <!-- Add row button (card mode) -->
+      <div style="margin-top:8px">
+        <el-alert
+          v-if="addRowBlockedReason && !sfiLoading && !fgLoading"
+          :title="addRowBlockedReason"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom:8px"
+        />
+        <el-button
+          data-testid="add-process-row"
+          :icon="Plus"
+          :disabled="!!addRowBlockedReason"
+          :title="addRowBlockedReason || '新增报工行'"
+          @click="addRow"
+          style="width:100%"
+          plain>+ 新增行</el-button>
+      </div>
+    </template>
+
+    <!-- ====================================================================
+         GRID LAYOUT (original flat spreadsheet table)
+         ==================================================================== -->
+    <template v-else>
+    <!-- Flat spreadsheet table -->
+    <div class="sp-table-scroll">
+      <table class="sp-grid">
+        <!-- ================================================================
+             Header row
+             ================================================================ -->
+        <thead>
+          <tr>
+            <th class="sp-th sp-th-status">状态</th>
+            <th v-if="isPortOutputMode" class="sp-th sp-th-date">生产日期</th>
+
+            <!-- 修油: raw batch + out-weight cols appear before generic cols -->
+            <!-- 2026-08-02: 与下面 tbody 的门**必须逐字一致**, 否则整行错位(见下方注释)。 -->
+            <template v-if="isXiuYou || workflowRawInputs.length > 0">
+              <th class="sp-th">{{ workflowRawInputs.length ? '投料物料' : '原料批次' }}</th>
+              <th class="sp-th sp-th-num">{{ workflowRawInputs.length ? '投料总量' : firstProcessInputLabel }}</th>
+              <!-- 「生产仓可用」独立成列 —— 条件必须与下面 tbody 的第三个 <td> 严格互为镜像:
+                   tbody 用的是 usesAutoMaterialTotals(row) (行级, 含 !row.legacyExplicitRawInput),
+                   thead 是表级只能用 workflowRawInputs.length, 所以 legacy 行补一个空 <td> 占位。
+                   缺了这一格, 从这列往后**整行都会错位一格** (卡片模板已有表头, 表格模板漏过一次)。 -->
+              <th v-if="workflowRawInputs.length" class="sp-th">生产仓可用</th>
+            </template>
+
+            <!-- 单来源上游 (含去舌苔 —— 原来是重复的第二份分支, 表头完全一样) -->
+            <template v-else-if="isSingleSource">
+              <th class="sp-th">{{ sourceTitle }}</th>
+            </template>
+
+            <!-- 多来源混批 (rendered as expander cell) -->
+            <template v-else-if="isMultiSource">
+              <th class="sp-th">{{ sourceTitle }}</th>
+            </template>
+
+            <th v-if="needsPotCount" class="sp-th sp-th-num">锅数（系统等分）</th>
+
+            <!-- Generic cols from config (skip special-cased keys) -->
+            <template v-for="col in cols" :key="col.key">
+              <th v-if="!excludedColKeys.includes(col.key)"
+                  class="sp-th"
+                  :class="{
+                    'sp-th-num': col.type === 'number' || col.type === 'auto',
+                    'sp-th-date': col.type === 'date',
+                    'sp-th-daterange': col.type === 'daterange',
+                  }">
+                {{ col.label }}
+                <!-- A: 自定义字段列头轻提示 (由管理员在工序配置里定义) -->
+                <el-tooltip v-if="isCustomFieldCol(col.key)" content="自定义字段（由管理员在「工序配置」里定义）" placement="top">
+                  <el-icon class="sp-th-custom-hint"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </th>
+            </template>
+
+            <!-- System batch (readonly) -->
+            <th class="sp-th sp-th-batch">批次号</th>
+            <!-- Labor expander trigger -->
+            <th v-if="!isPortOutputMode" class="sp-th sp-th-labor">工时</th>
+            <!-- Actions -->
+            <th class="sp-th sp-th-actions">操作</th>
+          </tr>
+        </thead>
+
+        <!-- ================================================================
+             已小结区块 (BY_STOCK 小结后已转结行，默认折叠，只读显示)
+             ================================================================ -->
+        <tbody v-if="settledRows.length > 0">
+          <!-- Banner row: 折叠/展开控制 -->
+          <tr class="sp-settled-banner">
+            <td :colspan="999">
+              <el-button link size="small" @click="settledExpanded = !settledExpanded"
+                         style="font-size:12px;padding:2px 4px">
+                <el-icon style="margin-right:4px"><component :is="settledExpanded ? ArrowDown : ArrowRight" /></el-icon>
+                已小结 {{ settledRows.length }} 道（已转结到生产批次，计划保持开放）
+              </el-button>
+            </td>
+          </tr>
+          <!-- Settled rows: compact read-only -->
+          <template v-if="settledExpanded">
+            <tr v-for="row in settledRows" :key="row.clientRowId" class="sp-tr sp-tr-settled">
+              <td class="sp-td sp-td-status">
+                <el-tag type="info" size="small" style="white-space:nowrap">已小结</el-tag>
+              </td>
+              <td v-if="isPortOutputMode" data-testid="production-date" class="sp-td sp-td-date">
+                <el-date-picker
+                  v-model="row.productionDate"
+                  type="date"
+                  value-format="YYYY-MM-DD"
+                  style="width:130px"
+                  size="small"
+                />
+              </td>
+              <td class="sp-td" style="color:#606266;font-size:12px">
+                {{ settledRowSummary(row) }}
+              </td>
+              <td class="sp-td sp-td-batch">
+                <span class="sp-readonly sp-batch-num">{{ row.batchNumber || '—' }}</span>
+              </td>
+              <td class="sp-td" style="font-size:11px;color:#c0c4cc;white-space:nowrap">
+                {{ formatSettledAt(row.interimSettledAt) }}
+              </td>
+              <!-- 已小结只读行: colspan=999 铺满剩余列, 不用 .sp-td-actions (sticky right:0
+                   在跨列 colspan 单元格上会产生错位; 该按钮只是查看历史, 非防呆焦点)。 -->
+              <td class="sp-td" style="text-align:center;white-space:nowrap" :colspan="999">
+                <el-button
+                  v-if="hasHistory(row)"
+                  link size="small" :icon="Clock"
+                  title="操作记录"
+                  @click="openHistory(row)" />
+              </td>
+            </tr>
+          </template>
+        </tbody>
+
+        <tbody v-if="historicalRows.length > 0" data-testid="legacy-readonly-row">
+          <tr class="sp-settled-banner">
+            <td :colspan="999">已入账/历史数据（只读） · {{ historicalRows.length }} 行，不可修改</td>
+          </tr>
+          <tr v-for="row in historicalRows" :key="row.clientRowId" class="sp-tr sp-tr-settled">
+            <td class="sp-td"><el-tag type="info" size="small">历史记录</el-tag></td>
+            <td class="sp-td">{{ settledRowSummary(row) }}</td>
+            <td class="sp-td sp-td-batch"><span class="sp-readonly sp-batch-num">{{ row.batchNumber || '—' }}</span></td>
+            <td class="sp-td" :colspan="999">
+              <el-button
+                v-if="hasHistory(row)"
+                link size="small" :icon="Clock"
+                title="查看操作记录"
+                aria-label="查看操作记录"
+                @click="openHistory(row)" />
+            </td>
+          </tr>
+        </tbody>
+
+        <tbody>
+          <template v-for="(row, ri) in activeRows" :key="row.clientRowId">
+            <!-- ============================================================
+                 Main data row
+                 ============================================================ -->
+            <tr :class="['sp-tr', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd', { 'sp-tr-saved': row.rowStatus === 'SAVED', 'sp-tr-draft': row.rowStatus === 'DRAFT' }]">
+
+              <!-- Status tag -->
+              <td class="sp-td sp-td-status">
+                <el-tag
+                  :type="row.submissionStatus === 'SUBMITTED' ? 'success' : row.rowStatus === 'DRAFT' ? 'warning' : 'info'"
+                  size="small" style="white-space:nowrap">
+                  {{ row.submissionStatus === 'SUBMITTED' ? '已正式报工' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
+                </el-tag>
+                <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
+                  <el-icon style="color:#e6a23c;margin-left:3px;cursor:pointer"><Warning /></el-icon>
+                </el-tooltip>
+              </td>
+
+              <!-- 生产日期 ——
+                   🔴 这一格此前**只有 <th> 没有 <td>**(表头 3712 行), 于是从「投料物料」起整行
+                   左移一格: 用户在「生产日期」列看到的是原料名、在「投料物料」列看到的是数量框。
+                   更糟的是它同时把流程堵死 —— canSubmitRow 要求 productionDate
+                   (「请选择生产日期」), 而唯一能填它的控件只存在于**卡片模板**(3210 行)与
+                   **已小结只读行**(3783 行), 表格模式下压根填不了 → 投料数量框永远 disabled,
+                   「正式报工」永远点不亮。2026-08-01 走查时在 prod 撞到。
+                   ⚠️ 卡片/表格两套模板本来就容易漂 (本文件多处注释都在提醒), 这里是又一例。 -->
+              <td v-if="isPortOutputMode" data-testid="production-date" class="sp-td sp-td-date">
+                <el-date-picker
+                  v-model="row.productionDate"
+                  type="date"
+                  value-format="YYYY-MM-DD"
+                  placeholder="选择日期"
+                  style="width:130px"
+                  size="small"
+                  :disabled="row.submissionStatus === 'SUBMITTED'"
+                />
+              </td>
+
+              <!-- ---- 修油: raw-material batch dropdown ---- -->
+              <!-- 门与上面 thead 逐字一致: isXiuYou || workflowRawInputs.length > 0 -->
+              <template v-if="isXiuYou || workflowRawInputs.length > 0">
+                <template v-if="usesAutoMaterialTotals(row)">
+                  <td class="sp-td">
+                    <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">
+                      <!-- 卡片模板有同一块, 改动需同步 (该文件历史上出现过两套模板漂移)。 -->
+                      <span data-testid="bom-authorized-material-fixed" class="sp-fixed-material">
+                        {{ item.materialName || item.materialTypeId }}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="sp-td sp-td-num">
+                    <div
+                      v-for="item in row.materialInputTotals"
+                      :key="item.workflowPortId || item.materialTypeId"
+                      data-testid="material-input-total"
+                      :class="{ 'sp-port-unselected': !item.selected }"
+                      style="display:flex;align-items:center;gap:4px;margin-bottom:4px"
+                    >
+                      <el-checkbox
+                        v-if="showPortSelector(portById(item.workflowPortId))"
+                        :model-value="item.selected"
+                        :disabled="portSelectionDisabled(portById(item.workflowPortId))"
+                        data-testid="port-selected"
+                        @change="(selected: boolean) => setPortSelected(row, portById(item.workflowPortId), selected)"
+                      >选用</el-checkbox>
+                      <el-input-number
+                        v-model="item.quantity"
+                        :disabled="!item.selected"
+                        :min="0"
+                        :precision="6"
+                        controls-position="right"
+                        style="width:110px"
+                        size="small"
+                      />
+                      <span data-testid="input-unit-readonly" class="sp-fixed-unit">{{ displayProcessUnit(item.unit) }}</span>
+                    </div>
+                  </td>
+                  <!-- 生产仓可用量独立成列 —— 卡片模板有同一块, 改动需同步。 -->
+                  <td class="sp-td">
+                    <div v-for="item in row.materialInputTotals" :key="item.workflowPortId || item.materialTypeId">
+                      <span
+                        v-if="workshopStockText(item)"
+                        data-testid="input-available-stock"
+                        class="sp-in-stock"
+                        :class="{ 'sp-in-stock-zero': workshopStockIsZero(item) }"
+                      >{{ workshopStockText(item) }}</span>
+                      <span
+                        v-if="elsewhereStockText(item)"
+                        data-testid="input-elsewhere-stock"
+                        class="sp-in-elsewhere"
+                      >{{ elsewhereStockText(item) }}</span>
+                      <span
+                        v-if="expiredStockText(item)"
+                        data-testid="input-expired-stock"
+                        class="sp-in-expired"
+                      >{{ expiredStockText(item) }}</span>
+                      <span
+                        v-if="expiredElsewhereText(item)"
+                        data-testid="input-expired-elsewhere"
+                        class="sp-in-expired"
+                      >{{ expiredElsewhereText(item) }}</span>
+                    </div>
+                  </td>
+                </template>
+                <template v-else>
+                <td class="sp-td">
+                  <el-select
+                    data-testid="legacy-raw-batch-picker"
+                    v-model="row.rawBatchId"
+                    :loading="rawBatchLoading"
+                    placeholder="选原料批次"
+                    filterable
+                    clearable
+                    style="width:220px"
+                    size="small">
+                    <el-option
+                      v-for="b in rawBatchOptions"
+                      :key="b.id"
+                      :label="rawBatchLabel(b)"
+                      :value="b.id"
+                      :disabled="rawBatchAvailable(b) <= 0" />
+                    <!-- 防呆(load-race 修复): 见卡片视图同款注释 — 独立 #loading slot 防"加载中"误显"暂无" -->
+                    <template #loading>
+                      <span style="padding:8px;color:#909399;font-size:12px">
+                        <el-icon class="is-loading" style="vertical-align:-2px"><Loading /></el-icon> 加载中，请稍候…
+                      </span>
+                    </template>
+                    <template #empty>
+                      <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次，请先入库/领料</span>
+                    </template>
+                  </el-select>
+                  <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
+                  <div v-if="!row.rawBatchId" style="margin-top:2px;font-size:11px;color:#f56c6c;white-space:nowrap">
+                    请先选择原料批次
+                  </div>
+                  <!-- 防呆: 未落仓批次已从下拉隐藏, 显式提示原因 (Rule 5: 不做 dead-end) -->
+                  <el-tooltip
+                    v-if="rawBatchExcludedNoWarehouseCount > 0"
+                    :content="`另有 ${rawBatchExcludedNoWarehouseCount} 个批次未落仓，无法领用（请先完成入库/领料）`"
+                    placement="top">
+                    <el-icon style="color:#e6a23c;margin-top:2px;cursor:pointer"><Warning /></el-icon>
+                  </el-tooltip>
+                </td>
+                <td class="sp-td sp-td-num">
+                  <el-input-number
+                    v-model="row.rawBatchQty"
+                    :min="0" :precision="2"
+                    controls-position="right"
+                    style="width:110px" size="small" />
+                </td>
+                <!-- 「生产仓可用」占位: 同一张表里 legacyExplicitRawInput 行与自动投料行会混排,
+                     表头那一列是表级 (workflowRawInputs.length) 出的, 这里不补就少一格 → 错位。
+                     legacy 行按批次自选来源, 生产仓可用量对它没有意义, 所以留空而不是显示 0。 -->
+                <td v-if="workflowRawInputs.length" class="sp-td"></td>
+                </template>
+              </template>
+
+              <!-- ---- 单来源上游 dropdown — 含半成品库存(SFI)/成品库存(FG) ----
+                   去舌苔原来是一模一样的第二份分支, 已合并 (差别只有带 v-if 的 isQidiao 投入量块)。 -->
+              <template v-else-if="isSingleSource">
+                <td class="sp-td">
+                  <!-- 唯一候选批次直接显示, 不给下拉 (卡片模板有同一块, 改动需同步)。 -->
+                  <span
+                    v-if="soleSingleUpstreamCandidate()"
+                    data-testid="upstream-batch-fixed"
+                    class="sp-fixed-batch"
+                    :title="soleSingleUpstreamCandidate()!.label"
+                  >{{ soleSingleUpstreamCandidate()!.label }}</span>
+                  <el-select
+                    v-else
+                    :model-value="singleUpstreamSelectKey(row)"
+                    @change="(v: string) => onSingleUpstreamSelect(row, v)"
+                    :placeholder="sourcePickerPlaceholder"
+                    filterable clearable
+                    :filter-method="onBatchSelectFilter"
+                    @visible-change="onBatchSelectVisibleChange"
+                    :loading="sfiLoading"
+                    :aria-label="sourceTitle"
+                    style="width:200px" size="small">
+                    <el-option-group v-if="wipOptionsDisplay.length" label="本计划在制半成品">
+                      <el-option
+                        v-for="item in wipOptionsDisplay"
+                        :key="item.batchNumber"
+                        :label="wipLabel(item)"
+                        :value="srcKey(SRC_WIP, item.batchNumber)"
+                        :disabled="item.remaining <= 0" />
+                    </el-option-group>
+                    <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
+                      <el-option
+                        v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
+                        :label="sfiLabel(s)"
+                        :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
+                        :disabled="sfiAvailable(s) <= 0" />
+                    </el-option-group>
+                    <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
+                      <el-option
+                        v-for="f in fgOptionsDisplay" :key="'fg-' + f.batchNumber"
+                        :label="fgLabel(f)"
+                        :value="srcKey(SRC_FG, f.batchNumber)"
+                        :disabled="fgAvailable(f) <= 0" />
+                    </el-option-group>
+                  </el-select>
+                  <!-- 成品工序: 实际投入量可手填, 与下拉同格避免新增列错位 (卡片模板有同一块, 改动需同步). -->
+                  <div v-if="isQidiao" class="sp-inline-input-kg">
+                    <span class="sp-inline-input-label">投入</span>
+                    <el-input-number
+                      v-model="row.finishedInputKg"
+                      :min="0" :precision="3" :controls="false"
+                      :placeholder="String(resolvedFinishedInputKg(row) ?? '')"
+                      data-testid="finished-input-kg"
+                      aria-label="本次投入量 (kg)"
+                      style="width:96px" size="small" />
+                    <span class="sp-inline-input-label">kg</span>
+                  </div>
+                  <div v-if="isQidiao && finishedInputOverAvailableHint(row)" class="sp-input-warn">
+                    {{ finishedInputOverAvailableHint(row) }}
+                  </div>
+                  <div v-else-if="isQidiao && row.finishedInputKg == null" class="sp-input-hint">
+                    留空 = 按所选批次可用量 {{ resolvedFinishedInputKg(row) ?? '—' }}kg 计
+                  </div>
+                </td>
+              </template>
+
+              <!-- ---- 多来源混批 expander cell ---- -->
+              <template v-else-if="isMultiSource">
+                <td class="sp-td">
+                  <el-button
+                    link size="small"
+                    @click="row.mixExpanded = !row.mixExpanded"
+                    style="font-size:12px">
+                    <el-icon style="margin-right:3px"><component :is="row.mixExpanded ? ArrowDown : ArrowRight" /></el-icon>
+                    {{ formatSourceFeedSummary(row.upstreamSources.length, row.upstreamSources.reduce((s, x) => s + (x.feedQuantityKg || 0), 0), processUnits.inputUnit) }}
+                  </el-button>
+                </td>
+              </template>
+
+              <td v-if="needsPotCount" data-testid="seasoning-pot-count" class="sp-td sp-td-num">
+                <el-input-number
+                  :model-value="row.potCount"
+                  @update:model-value="(v: number) => onPotCountChange(row, v)"
+                  :min="1"
+                  :precision="0"
+                  size="small"
+                  style="width:80px"
+                />
+                <div style="margin-top:3px;font-size:11px;color:#606266;white-space:nowrap">
+                  {{ potSplitHint(row) }}
+                </div>
+              </td>
+
+              <!-- ---- Generic columns from config ---- -->
+              <template v-for="col in cols" :key="col.key">
+                <td
+                  v-if="!excludedColKeys.includes(col.key)"
+                  class="sp-td"
+                  :class="{
+                    'sp-td-num': col.type === 'number' || col.type === 'auto',
+                    'sp-td-date': col.type === 'date',
+                    'sp-td-daterange': col.type === 'daterange',
+                  }">
+
+                  <!-- number input -->
+                  <el-input-number
+                    v-if="col.type === 'number'"
+                    :model-value="(row.fields[col.key] as number) ?? undefined"
+                    @update:model-value="(v: number) => row.fields[col.key] = v"
+                    :min="0" :precision="fieldPrecision(col.key)"
+                    controls-position="right"
+                    style="width:110px" size="small" />
+
+                  <!-- date picker (single) -->
+                  <el-date-picker
+                    v-else-if="col.type === 'date'"
+                    :model-value="(row.fields[col.key] as string) || undefined"
+                    @update:model-value="(v: string) => row.fields[col.key] = v"
+                    type="date" value-format="YYYY-MM-DD"
+                    style="width:130px" size="small" />
+
+                  <!-- daterange picker: 开始日期 ~ 结束日期 -->
+                  <el-date-picker
+                    v-else-if="col.type === 'daterange'"
+                    :model-value="(row.fields[col.key] as [string,string]) || null"
+                    @update:model-value="(v: [string,string] | null) => row.fields[col.key] = v ?? null"
+                    type="daterange"
+                    range-separator="~"
+                    start-placeholder="开始"
+                    end-placeholder="结束"
+                    value-format="YYYY-MM-DD"
+                    style="width:230px" size="small" />
+
+                  <!-- auto: reverseInput (去舌苔: input = scrap + output) -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
+                    {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
+                  </span>
+
+                  <!-- auto: yield -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'yield'" class="sp-readonly">
+                    {{ calcYield(row) != null ? calcYield(row)!.toFixed(2) + '%' : '—' }}
+                  </span>
+
+                  <!-- auto: remaining -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'remaining'" class="sp-readonly"
+                    :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? '#f56c6c' : undefined }">
+                    {{ calcRemaining(row) != null ? calcRemaining(row)!.toFixed(2) : '—' }}
+                  </span>
+
+                  <!-- auto: totalHours — shown in dedicated labor column instead -->
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'totalHours'" />
+
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInbound'" class="sp-readonly">
+                    {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
+                  </span>
+
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedRemaining'" class="sp-readonly">
+                    {{ finishedInboundQuantity(row) ?? '—' }} {{ displayProcessUnit(processUnits.outputUnit) }}
+                  </span>
+
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
+                    {{ formattedWeight(finishedWeightKg(row)) }}
+                    <small style="display:block;color:#909399">{{ unitNetWeightText() }}</small>
+                  </span>
+
+                  <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInboundWeight'" class="sp-readonly">
+                    {{ formattedWeight(finishedWeightKg(row, true)) }}
+                  </span>
+
+                  <!-- readonly / text -->
+                  <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+                    {{ row.fields[col.key] ?? '—' }}
+                  </span>
+                </td>
+              </template>
+
+              <!-- Batch number (readonly) -->
+              <td class="sp-td sp-td-batch">
+                <span class="sp-readonly sp-batch-num">{{ row.batchNumber || '(保存后生成)' }}</span>
+              </td>
+
+              <!-- Labor expander trigger -->
+              <td v-if="!isPortOutputMode" class="sp-td sp-td-labor">
+                <el-button link size="small" @click="row.laborExpanded = !row.laborExpanded" style="font-size:12px">
+                  <el-icon style="margin-right:3px"><component :is="row.laborExpanded ? ArrowDown : ArrowRight" /></el-icon>
+                  {{ calcTotalHours(row).toFixed(1) }}h·{{ row.laborSegments.length }}段
+                </el-button>
+              </td>
+
+              <!-- Row actions -->
+              <td class="sp-td sp-td-actions">
+                <el-button
+                  v-if="!isPortOutputMode"
+                  size="small"
+                  :loading="row.saving"
+                          :disabled="!!draftSaveDisabledReason(row) || row.saving"
+                          :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+                  @click="handleSave(row, 'draft')"
+                  style="padding:3px 6px">保存草稿</el-button>
+                <el-button
+                  v-if="!isPortOutputMode"
+                  type="primary" size="small" :icon="Check"
+                  :loading="row.saving"
+                  :disabled="!!submitDisabledReason(row) || row.saving"
+                  :title="submitDisabledReason(row) || '正式报工并自动分摊生产库批次'"
+                  @click="handleSave(row, 'submit')"
+                  style="padding:3px 6px;margin-left:4px">正式报工</el-button>
+                <el-button
+                  v-if="hasHistory(row)"
+                  link size="small" :icon="Clock"
+                  title="查看操作记录"
+                  aria-label="查看操作记录"
+                  @click="openHistory(row)"
+                  style="margin-left:4px" />
+                <el-button
+                  v-if="row.submissionStatus !== 'SUBMITTED'"
+                  type="danger" link size="small" :icon="Delete"
+                  :loading="row.deleting"
+                  title="删除本行"
+                  aria-label="删除本行"
+                  @click="handleDelete(row)"
+                  style="margin-left:4px" />
+              </td>
+            </tr>
+
+            <tr
+              v-if="row.stockShortage || row.blockingMessage"
+              :key="row.clientRowId + '-blocking'"
+              class="sp-tr-expand"
+            >
+              <td :colspan="999" class="sp-td-expand">
+                <ProcessStockShortageAlert
+                  v-if="row.stockShortage"
+                  data-testid="stock-shortage-alert"
+                  :presentation="row.stockShortage"
+                />
+                <el-alert
+                  v-if="row.blockingMessage"
+                  :title="row.blockingMessage"
+                  type="error"
+                  :closable="false"
+                  show-icon
+                />
+              </td>
+            </tr>
+
+            <tr v-if="row.inputAllocations.length" :key="row.clientRowId + '-allocations'" class="sp-tr-expand">
+              <td :colspan="999" class="sp-td-expand">
+                <section class="sp-allocation-result" data-testid="automatic-input-allocations" aria-label="本次实际扣料">
+                  <div class="sp-allocation-result-title">
+                    <strong><el-icon><Check /></el-icon> 本次实际扣料</strong>
+                    <span>已按生产库临期优先（FEFO）锁定批次并计入成本</span>
+                  </div>
+                  <div class="sp-allocation-result-list">
+                    <div
+                      v-for="allocation in row.inputAllocations"
+                      :key="`${allocation.materialBatchId}-${allocation.allocationOrder}`"
+                      class="sp-allocation-result-item"
+                      data-testid="automatic-input-allocation"
+                    >
+                      <el-tag size="small" :type="allocation.sourceType === 'PACKAGING' ? 'success' : 'warning'">
+                        {{ allocation.sourceType === 'PACKAGING' ? '包材' : allocation.sourceType === 'SEASONING' ? '调料' : '原料' }}
+                      </el-tag>
+                      <strong>{{ allocation.materialName || allocation.materialTypeId }}</strong>
+                      <span>批次 {{ allocation.batchNumber || allocation.materialBatchId }}</span>
+                      <span>{{ allocation.quantity }} {{ displayProcessUnit(allocation.unit) }}</span>
+                      <span v-if="allocation.unitPrice != null">实际批次移动平均价 ¥{{ Number(allocation.unitPrice).toFixed(4) }}/{{ displayProcessUnit(allocation.unit) }}</span>
+                      <strong v-if="allocation.totalCost != null" class="sp-allocation-cost">成本 ¥{{ Number(allocation.totalCost).toFixed(2) }}</strong>
+                      <span v-else class="sp-allocation-cost-missing">成本未归集</span>
+                    </div>
+                  </div>
+                </section>
+              </td>
+            </tr>
+
+            <!-- ============================================================
+                 2B.2 多产出 (fan-out) row — 始终展开 (核心必填录入, 不折叠隐藏, 与 labor/mix
+                 expander 的"点击展开"不同: 多产出没有默认值, 操作员必须逐项看到才能填数量)。
+                 产品/端口由 workflow 图固定, 只读; 只填数量。
+                 ============================================================ -->
+            <tr v-if="isPortOutputMode" :key="row.clientRowId + '-multiout'"
+                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
+              <td :colspan="999" class="sp-td-expand">
+                <div class="sp-expand-section">
+                  <ProcessOutputTable
+                    data-testid="process-output-table"
+                    :views="outputViews(row)"
+                    :show-cost-allocation="requiresManualCostAllocation(row)"
+                    hint="投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定"
+                    :orphan-byproduct-notice="outputPartition.orphanNotice"
+                    @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
+                    @open-spec="openSpecDialog"
+                  />
+                  <div class="sp-card-submit sp-grid-submit">
+                    <div class="sp-card-submit-copy">
+                      <strong><b>④</b> 确认提交</strong>
+                      <span>正式报工后自动分配生产库批次，并完成库存与成本记录。</span>
+                    </div>
+                    <el-button
+                      size="small"
+                      plain
+                      class="sp-draft-action"
+                      :loading="row.saving"
+                      :disabled="!!draftSaveDisabledReason(row) || row.saving"
+                      :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
+                      @click="handleSave(row, 'draft')"
+                    >保存草稿</el-button>
+                    <el-button
+                      type="primary" size="large" :icon="Check"
+                      class="sp-submit-primary"
+                      :loading="row.saving"
+                      :disabled="!!submitDisabledReason(row) || row.saving"
+                      :title="submitDisabledReason(row) || '正式报工并自动分摊生产库批次'"
+                      @click="handleSave(row, 'submit')"
+                    >正式报工</el-button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+
+            <!-- ============================================================
+                 Labor expander row
+                 ============================================================ -->
+            <tr v-if="!isPortOutputMode && row.laborExpanded" :key="row.clientRowId + '-labor'"
+                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
+              <td :colspan="999" class="sp-td-expand">
+                <div class="sp-expand-section">
+                  <div class="sp-expand-title">工时录入 — {{ row.batchNumber || '(未保存行)' }}</div>
+                  <WorkHoursTable v-model="row.laborSegments" />
+                </div>
+              </td>
+            </tr>
+
+            <!-- ============================================================
+                 混锅来源 expander row (熟制 / 气调 SP-G G3b)
+
+                 原来熟制与气调各写了一份**一模一样**的实现, 只有 v-if 上的 isQidiao 不同 ——
+                 加上卡片模式那份, 同一块 UI 在这个文件里有三份。现在三份都走
+                 ProcessInputSourceTable 子组件, 只剩一份实现。
+                 ============================================================ -->
+            <tr v-if="isMultiSource && row.mixExpanded" :key="row.clientRowId + '-mix'"
+                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
+              <td :colspan="999" class="sp-td-expand">
+                <div class="sp-expand-section">
+                  <div class="sp-expand-title">{{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}</div>
+                  <ProcessInputSourceTable
+                    :views="inputSourceViews(row)"
+                    hint="批次由 Workflow 端口收敛；数量按实际投入填写"
+                    :loading="sfiLoading"
+                    :show-add-source="workflowUpstreamInputs.length === 0"
+                    add-source-label="+ 来源批"
+                    :batch-placeholder="sourcePickerPlaceholder"
+                    @toggle-select="(index: number, selected: boolean) => onInputSourceToggle(row, index, selected)"
+                    @select-batch="(index: number, key: string) => onInputSourceBatchSelect(row, index, key)"
+                    @remove="(index: number) => onInputSourceRemove(row, index)"
+                    @add-same-material="(index: number) => onInputSourceAdd(row, row.upstreamSources[index])"
+                    @add-source="() => onInputSourceAdd(row)"
+                    @filter-batches="onBatchSelectFilter"
+                    @batch-picker-visible="onBatchSelectVisibleChange"
+                  />
+                </div>
+              </td>
+            </tr>
+
+          </template><!-- end v-for rows -->
+        </tbody>
+      </table>
+    </div><!-- /.sp-table-scroll -->
+
+    <!-- Add row button (grid mode) -->
+    <div style="margin-top:8px">
+      <el-alert
+        v-if="addRowBlockedReason && !sfiLoading && !fgLoading"
+        :title="addRowBlockedReason"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:8px"
+      />
+      <el-button
+        data-testid="add-process-row"
+        :icon="Plus"
+        :disabled="!!addRowBlockedReason"
+        :title="addRowBlockedReason || '新增报工行'"
+        @click="addRow"
+        style="width:100%"
+        plain>
+        + 新增行
+      </el-button>
+    </div>
+    </template><!-- /grid layout -->
+
+    <!-- ====================================================================
+         SP-G P3: 操作记录 (行级 diff 时间线)
+         ==================================================================== -->
+    <el-dialog
+      v-model="historyVisible"
+      title="操作记录"
+      width="560px"
+      append-to-body>
+      <div style="margin-bottom:8px;font-size:12px;color:#909399">
+        批次: <span style="color:#409eff;font-weight:600">{{ historyBatchLabel }}</span>
+      </div>
+      <div v-loading="historyLoading">
+        <el-empty
+          v-if="!historyLoading && historyRows.length === 0"
+          description="暂无操作记录" :image-size="60" />
+        <el-timeline v-else>
+          <el-timeline-item
+            v-for="h in historyRows" :key="h.id"
+            :type="OP_TYPE[h.operation] || 'primary'"
+            :timestamp="formatHistoryTime(h.createdAt)"
+            placement="top">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <el-tag :type="OP_TYPE[h.operation] || 'info'" size="small">
+                {{ OP_LABEL[h.operation] || h.operation }}
+              </el-tag>
+              <span v-if="h.operatorId != null" style="font-size:11px;color:#909399">
+                操作人 #{{ h.operatorId }}
+              </span>
+            </div>
+            <div style="font-size:12px;color:#606266;white-space:pre-wrap;word-break:break-all">
+              {{ h.diffSummary || '(无变更摘要)' }}
+            </div>
+          </el-timeline-item>
+        </el-timeline>
+      </div>
+      <template #footer>
+        <el-button @click="historyVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+  </div>
+
+    <!-- 就地补「每单位重量」: 报工时只缺这一个字段, 不必打开完整产品表单 -->
+    <el-dialog
+      v-model="specDialog.visible"
+      :title="`设置「${specDialog.materialName}」的每${specDialog.unit}重量`"
+      width="420px"
+      append-to-body
+    >
+      <div class="sp-spec-dialog">
+        <p class="sp-spec-hint">
+          投入与产出单位不同时，靠这个重量把两边换算到同一口径才能算出成率。
+          填的是<strong>一{{ specDialog.unit }}的净重（克）</strong>。
+        </p>
+        <el-input-number
+          v-model="specDialog.gramsPerUnit"
+          :min="0"
+          :precision="3"
+          controls-position="right"
+          style="width: 100%"
+        />
+        <span class="sp-spec-suffix">克 / {{ specDialog.unit }}</span>
+      </div>
+      <template #footer>
+        <el-button @click="specDialog.visible = false">取消</el-button>
+        <el-button type="primary" :loading="specDialog.saving" @click="saveSpec">保存并重算</el-button>
+      </template>
+    </el-dialog>
+</template>
+
+<style scoped>
+/* -------------------------------------------------------------------------
+   Spreadsheet grid
+   ------------------------------------------------------------------------- */
+.sp-grid-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 2B Task F2: workflow 计划产出/所需原料只读展示条 */
+.sp-workflow-banner {
+  margin-bottom: 8px;
+}
+.sp-workflow-banner-warning {
+  margin-top: -4px;
+}
+
+.sp-table-scroll {
+  overflow-x: auto;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+}
+
+.sp-grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  min-width: 700px;
+}
+
+/* Header */
+.sp-th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f5f7fa;
+  color: #606266;
+  font-weight: 600;
+  border: 1px solid #dcdfe6;
+  padding: 6px 8px;
+  white-space: nowrap;
+  text-align: left;
+}
+.sp-th-status    { width: 72px; }
+.sp-th-num       { text-align: right; width: 120px; }
+.sp-th-date      { width: 140px; }
+.sp-th-daterange { width: 240px; }
+.sp-th-batch     { width: 160px; min-width: 130px; }
+.sp-th-labor     { width: 100px; }
+/* 🔴 防呆 Rule 1: 操作/保存列必须始终可见, 不能被横向滚动藏起来 —
+   低文化素质操作员发现不了藏在滚动区外的保存按钮, 数据可能"静默不保存"。
+   position:sticky + right:0 把该列钉在可视区右缘, 无论横向滚多远都够得着。 */
+.sp-th-actions   {
+  width: 120px;
+  text-align: center;
+  position: sticky;
+  right: 0;
+  z-index: 4; /* 高于 .sp-th 的 z-index:2 — 表头此列同时 sticky top + right (左上/右上双固定角) */
+  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.08);
+}
+
+/* Body cells */
+.sp-td {
+  border: 1px solid #ebeef5;
+  padding: 5px 6px;
+  vertical-align: middle;
+}
+.sp-td-status    { width: 72px; text-align: center; }
+.sp-td-num       { text-align: right; }
+.sp-td-date      {}
+.sp-td-daterange {}
+.sp-td-batch     { color: #409eff; font-weight: 600; font-size: 11px; }
+.sp-td-labor   { text-align: center; }
+/* 🔴 防呆 Rule 1 (同上): 每行的保存/操作列同样钉在右缘, 与表头 sticky 呼应,
+   保证滚到再远也能一眼看到、点到"保存"按钮。 */
+.sp-td-actions {
+  text-align: center;
+  white-space: nowrap;
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.06);
+  /* 显式背景色 (与下方 .sp-tr-even/odd 一致) — sticky 定位后仍需不透明背景,
+     否则横向滚动时后面的单元格内容会从缝隙透出来。 */
+  background: #ffffff;
+}
+
+/* Row alternating background */
+.sp-tr-even { background: #ffffff; }
+.sp-tr-odd  { background: #fafafa; }
+.sp-tr-even .sp-td-actions { background: #ffffff; }
+.sp-tr-odd  .sp-td-actions { background: #fafafa; }
+.sp-tr-saved .sp-td-status { background: #f0f9eb; }
+.sp-tr-draft .sp-td-status { background: #fdf6ec; }
+
+/* Expand rows */
+.sp-tr-expand td {
+  border: none;
+  border-bottom: 1px solid #ebeef5;
+}
+.sp-td-expand {
+  padding: 0 12px 8px;
+}
+.sp-expand-section {
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin: 4px 0;
+}
+.sp-expand-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+/* Readonly display */
+.sp-readonly {
+  color: #606266;
+  font-size: 12px;
+  display: inline-block;
+}
+.sp-batch-num {
+  color: #409eff;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* -------------------------------------------------------------------------
+   已小结区块
+   ------------------------------------------------------------------------- */
+
+/* Grid: 已小结 banner row */
+.sp-settled-banner td {
+  background: #f0f4ff;
+  border: 1px solid #dcdfe6;
+  border-left: 3px solid #909399;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #606266;
+}
+
+/* Grid: 已小结 compact rows */
+.sp-tr-settled td {
+  background: #fafbfd;
+  color: #909399;
+  font-style: italic;
+}
+.sp-tr-settled .sp-td-batch {
+  color: #a0a8b8;
+}
+
+/* Card: 已小结 collapsible section */
+.sp-settled-section {
+  margin-bottom: 10px;
+  border: 1px solid #dcdfe6;
+  border-left: 3px solid #909399;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.sp-settled-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f0f4ff;
+  font-size: 12px;
+  color: #606266;
+  cursor: pointer;
+  user-select: none;
+}
+.sp-settled-header:hover {
+  background: #e8edf8;
+}
+.sp-card-settled {
+  border-color: #c0c4cc;
+  background: #fafbfd;
+}
+.sp-card-settled .sp-card-header {
+  background: #f5f5f7;
+}
+.sp-settled-summary {
+  font-size: 12px;
+  color: #606266;
+  margin-left: 8px;
+}
+.sp-settled-ts {
+  font-size: 11px;
+  color: #c0c4cc;
+  margin-left: 8px;
+}
+
+/* -------------------------------------------------------------------------
+   Card layout
+   ------------------------------------------------------------------------- */
+.sp-card {
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.sp-card-saved {
+  border-color: #b3e19d;
+}
+.sp-card-draft {
+  border-color: #f5dab1;
+}
+
+.sp-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #ebeef5;
+  flex-wrap: wrap;
+}
+.sp-card-idx {
+  font-size: 12px;
+  color: #909399;
+  min-width: 22px;
+}
+.sp-card-batchnum {
+  font-size: 11px;
+  color: #409eff;
+  font-weight: 600;
+  word-break: break-all;
+}
+.sp-card-batchnum-pending {
+  color: #c0c4cc;
+  font-weight: 400;
+}
+
+.sp-card-body {
+  padding: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
+.sp-card-submit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid #dce4ef;
+  background: #f7faff;
+}
+
+.sp-card-submit-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: #303133;
+  font-size: 12px;
+}
+
+.sp-card-submit-copy span {
+  color: #697586;
+  font-size: 11px;
+}
+
+.sp-draft-action {
+  color: #5f6b7a;
+}
+
+.sp-submit-primary {
+  min-width: 132px;
+  font-weight: 650;
+  box-shadow: 0 4px 10px rgb(22 119 255 / 18%);
+}
+
+.sp-allocation-result {
+  padding: 12px 16px;
+  border-top: 1px solid #cce8d4;
+  background: #f3fbf5;
+}
+
+.sp-allocation-result-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: #23633a;
+  font-size: 12px;
+}
+
+.sp-allocation-result-title strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sp-allocation-result-title span {
+  color: #6f7f74;
+  font-size: 11px;
+}
+
+.sp-allocation-result-list {
+  display: grid;
+  gap: 6px;
+}
+
+.sp-allocation-result-item {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1.4fr) minmax(150px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 7px 9px;
+  border: 1px solid #d7ebdc;
+  border-radius: 4px;
+  background: #fff;
+  color: #4f5e53;
+  font-size: 12px;
+}
+
+.sp-allocation-cost {
+  color: #23633a;
+  text-align: right;
+}
+
+.sp-allocation-cost-missing {
+  color: #b88230;
+}
+
+.sp-grid-submit {
+  margin-top: 14px;
+  padding-right: 0;
+  padding-bottom: 0;
+  padding-left: 0;
+  background: transparent;
+}
+
+.sp-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+/* Full-width fields (upstream source expander / labor / mix) */
+.sp-card-field-full {
+  flex: 1 1 100%;
+  min-width: 100%;
+}
+/* Auto/readonly fields can be narrower */
+.sp-card-field-auto {
+  min-width: 110px;
+}
+
+.sp-card-label {
+  font-size: 11px;
+  color: #909399;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A: 自定义字段列头 `?` info 图标 (轻提示, 不抢占空间) */
+.sp-th-custom-hint {
+  font-size: 12px;
+  color: #c0c4cc;
+  cursor: help;
+  vertical-align: -1px;
+  margin-left: 2px;
+}
+
+/* Inline expand sections within card (labor / mix) */
+.sp-card-expand-section {
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+
+.sp-reporting-date {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+.sp-port-section-note {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: #606266;
+  font-size: 12px;
+}
+.sp-port-section-note strong {
+  color: #303133;
+}
+.sp-fixed-unit {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #f5f7fa;
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sp-stage-heading {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #ebeef5;
+  color: #303133;
+  font-size: 12px;
+  font-weight: 600;
+}
+.sp-stage-heading-primary {
+  margin-top: 2px;
+  padding-top: 0;
+  border-top: 0;
+}
+.sp-stage-heading b,
+.sp-card-submit-copy b {
+  color: #1677ff;
+}
+.sp-stage-heading small {
+  color: #909399;
+  font-size: 11px;
+  font-weight: 400;
+}
+/* 产出块(含作业时间与副产)的样式已随 ProcessOutputTable 子组件迁走 */
+.sp-port-unselected { opacity: 0.58; }
+.sp-port-selection-hint { color: #909399; font-size: 11px; white-space: nowrap; }
+
+/*
+  投入紧凑表 (卡片模式)。表格模式的投入本来就在真表格的 td 里, 不需要这一套。
+  列宽与观感对齐 ProcessOutputTable, 免得同一张卡上下两半长得不像一家。
+*/
+.sp-in-table {
+  border: 1px solid #e4e9f2;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: #fff;
+}
+/* 列数必须与 sp-in-head / sp-in-row 的 sp-in-cell 个数逐一对齐:
+   本次投入原料 / 投料总量 / 生产仓可用 / 来源批次 = 4 列。少一列 grid 会开隐式行,
+   把最后一格甩到下一行 —— 表头和数据看着就对不上了 (2026-07-31 加「生产仓可用」时漏改过一次)。 */
+.sp-in-head,
+.sp-in-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.6fr) 200px minmax(140px, 0.9fr) minmax(200px, 1.2fr);
+  align-items: center;
+  gap: 0 10px;
+  min-width: 760px;
+}
+/* 有可选端口时才多出「选用」列 —— 没得选就不占位, 与 showPortSelector 同一条判据 */
+.sp-in-table--sel .sp-in-head,
+.sp-in-table--sel .sp-in-row {
+  grid-template-columns: 56px minmax(180px, 1.6fr) 200px minmax(140px, 0.9fr) minmax(200px, 1.2fr);
+}
+.sp-in-head {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e4e9f2;
+  background: #f5f7fa;
+  color: #606266;
+  font-size: 11px;
+  font-weight: 600;
+}
+.sp-in-row {
+  padding: 7px 10px;
+  border-top: 1px solid #eef1f6;
+}
+.sp-in-row:first-of-type { border-top: 0; }
+.sp-in-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: #303133;
+}
+.sp-in-cell :deep(.el-select) { min-width: 0; }
+.sp-in-note { color: #909399; font-size: 11px; }
+/* 投入行的可用量提示 (防呆 Rule 1, 2026-07-30) */
+.sp-in-stock { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; }
+.sp-in-stock-zero { color: var(--el-color-danger); font-weight: 600; }
+/* 「主仓另有 200只, 待调拨入生产仓」—— 把「真没货」和「有货但没调过来」分开 (2026-07-31) */
+.sp-in-elsewhere { display: block; margin-top: 2px; font-size: 11px; color: var(--el-color-warning); line-height: 1.4; }
+
+.sp-in-expired {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+.sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
+.sp-inline-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.sp-inline-input :deep(.el-input-number) {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .sp-card-header,
+  .sp-card-submit,
+  .sp-port-section-note,
+  .sp-stage-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .sp-card-submit {
+    align-items: stretch;
+  }
+  .sp-card-field,
+  .sp-card-field-auto {
+    flex: 1 1 100%;
+    min-width: 100%;
+  }
+  .sp-card-submit :deep(.el-button) {
+    width: 100%;
+    min-height: 40px;
+    margin-left: 0;
+  }
+}
+
+/* 提交被挡时的原因条 —— 防呆 Rule 1: 边界预先显示, 不靠 tooltip 或点击后报错 */
+.sp-blocked-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border-left: 3px solid var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sp-blocked-hint .el-icon {
+  margin-top: 2px;
+  flex: none;
+}
+
+/* 必填标识 —— 之前整张表单没有任何"哪些非填不可"的提示 */
+.sp-required {
+  margin-right: 2px;
+  color: var(--el-color-danger);
+  font-weight: 700;
+}
+
+/* tooltip 需要一个非 disabled 的宿主才能接到鼠标事件 */
+.sp-submit-wrap { display: inline-flex; }
+
+/* 出成率算不出时的说明条 —— 只显示「—」会让人以为系统坏了 */
+.sp-yield-blocked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-color-warning-dark-2);
+}
+
+.sp-yield-blocked .el-icon { flex: none; }
+
+.sp-spec-dialog { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sp-spec-hint {
+  flex-basis: 100%;
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+}
+.sp-spec-suffix { font-size: 13px; color: var(--el-text-color-secondary); }
+/* 无替代料时物料名以文本呈现, 视觉重量对齐同列的 el-select (2026-07-30) */
+.sp-fixed-material { display: inline-block; padding: 1px 0; font-weight: 600; line-height: 1.5; }
+/* 唯一候选批次: 显示批次文案代替下拉 (卡片/表格两套模板共用同一个类) */
+.sp-fixed-batch {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 0;
+  font-weight: 600;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 成品工序手填投入量 (2026-07-30) */
+.sp-inline-input-kg { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.sp-inline-input-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }
+.sp-input-hint { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; line-height: 1.4; }
+.sp-input-warn { font-size: 12px; color: var(--el-color-warning); margin-top: 2px; line-height: 1.4; }
+</style>

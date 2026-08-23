@@ -1,0 +1,378 @@
+package com.cretas.aims.service.workflow;
+
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.DecimalNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+@Service
+@RequiredArgsConstructor
+public class WorkflowRevisionSnapshotService {
+
+    private final ProductProcessWorkflowRevisionRepository revisionRepository;
+    private final BomRecipeRepository recipeRepository;
+    private final ProductProcessWorkflowValidator validator;
+    private final ObjectMapper objectMapper;
+
+    public ProductProcessWorkflowRevision capture(ProductProcessWorkflow workflow) {
+        String hash = hash(workflow);
+        Optional<ProductProcessWorkflowRevision> existing = revisionRepository
+                .findByWorkflowIdAndRevisionHash(workflow.getId(), hash);
+        if (existing.isPresent()) {
+            ProductProcessWorkflowRevision candidate = existing.get();
+            if (sameDefinition(workflow, candidate)
+                    && Objects.equals(candidate.getRevisionHash(), hash(candidate))) {
+                return candidate;
+            }
+            throw invalidStoredRevision(hash, candidate.getId());
+        }
+
+        return createRevision(workflow, hash);
+    }
+
+    /**
+     * Saves the one mutable revision behind an editable Workflow draft.
+     *
+     * <p>Once any BOM version pins the current revision, that revision becomes immutable and the
+     * next draft save creates a new revision. Until then, repeated saves update the same revision
+     * instead of turning canvas autosaves into permanent history.
+     */
+    public ProductProcessWorkflowRevision captureDraft(ProductProcessWorkflow workflow) {
+        String hash = hash(workflow);
+        ProductProcessWorkflowRevision current = Optional.ofNullable(workflow.getCurrentRevisionId())
+                .flatMap(id -> revisionRepository.findByIdAndFactoryId(id, workflow.getFactoryId()))
+                .filter(revision -> Objects.equals(workflow.getId(), revision.getWorkflowId()))
+                .filter(revision -> revision.getStatus() == ProductProcessWorkflowRevision.Status.DRAFT)
+                .orElse(null);
+        if (current != null
+                && sameDefinition(workflow, current)
+                && Objects.equals(current.getRevisionHash(), hash(current))) {
+            return current;
+        }
+
+        Optional<ProductProcessWorkflowRevision> matching = revisionRepository
+                .findByWorkflowIdAndRevisionHash(workflow.getId(), hash);
+        if (matching.isPresent()) {
+            ProductProcessWorkflowRevision candidate = matching.get();
+            if (sameDefinition(workflow, candidate)
+                    && Objects.equals(candidate.getRevisionHash(), hash(candidate))) {
+                return candidate;
+            }
+            if (current == null || !Objects.equals(current.getId(), candidate.getId())) {
+                throw invalidStoredRevision(hash, candidate.getId());
+            }
+        }
+
+        if (current == null || isPinnedByAnyBom(workflow.getFactoryId(), current.getId())) {
+            return createRevision(workflow, hash);
+        }
+
+        applySnapshot(current, workflow, hash);
+        return revisionRepository.saveAndFlush(current);
+    }
+
+    private boolean sameDefinition(
+            ProductProcessWorkflow workflow, ProductProcessWorkflowRevision revision) {
+        return Objects.equals(workflow.getFactoryId(), revision.getFactoryId())
+                && Objects.equals(workflow.getProductTypeId(), revision.getProductTypeId())
+                && Objects.equals(workflow.getDefinitionVersion(), revision.getDefinitionVersion())
+                && Objects.equals(workflow.getSchemaVersion(), revision.getSchemaVersion())
+                && Objects.equals(
+                        canonicalJson(workflow.getNodesJson(), "nodes"),
+                        canonicalJson(revision.getNodesJson(), "nodes"))
+                && Objects.equals(
+                        canonicalJson(workflow.getEdgesJson(), "edges"),
+                        canonicalJson(revision.getEdgesJson(), "edges"))
+                && Objects.equals(
+                        canonicalJson(workflow.getViewportJson(), "viewport"),
+                        canonicalJson(revision.getViewportJson(), "viewport"));
+    }
+
+    private ProductProcessWorkflowRevision createRevision(
+            ProductProcessWorkflow workflow, String hash) {
+        ProductProcessWorkflowRevision revision = new ProductProcessWorkflowRevision();
+        revision.setFactoryId(workflow.getFactoryId());
+        revision.setProductTypeId(workflow.getProductTypeId());
+        revision.setWorkflowId(workflow.getId());
+        revision.setRevisionNumber(revisionRepository.findMaxRevisionNumber(workflow.getId()) + 1);
+        revision.setStatus(workflow.getStatus() == ProductProcessWorkflow.Status.PUBLISHED
+                ? ProductProcessWorkflowRevision.Status.PUBLISHED
+                : ProductProcessWorkflowRevision.Status.DRAFT);
+        applySnapshot(revision, workflow, hash);
+        try {
+            return revisionRepository.saveAndFlush(revision);
+        } catch (DataIntegrityViolationException race) {
+            // ⛔ 这里【不能】再发任何 JPA 查询去找"竞态赢家"。
+            //
+            // 原代码正是那么写的(findByWorkflowIdAndRevisionHash), 而 saveAndFlush 失败后
+            // persistence context 里留着一个 id 为 null 的实体; 任何后续查询都会触发 auto-flush,
+            // Hibernate 当场抛
+            //   AssertionFailure: null id ... (don't flush the Session after an exception occurs)
+            // —— 于是这个**恢复分支构造上永远走不通**, 只会把一个可恢复的竞态翻译成给用户看的 500
+            // (真机实测: 两次重试, 两个不同追踪码, 都是 500「系统处理异常」)。
+            //
+            // 真要恢复必须换一个新事务/新 session, 那是另一层机制; 在本方法内能做且诚实的做法是
+            // 抛一个语义明确、可重试的冲突错误。调用方 captureDraft 在插入之前已经按 hash 查过一次,
+            // 所以走到这里只剩两种情况: 真并发, 或取号与约束口径不一致(后者已在
+            // findMaxRevisionNumber 处根治 —— 它现在按物理表取号, 含软删行)。
+            throw new BusinessException(409, "工艺版本正在被另一处保存，请重试")
+                    .withCode("WORKFLOW_REVISION_CONCURRENT_WRITE")
+                    .withSeverity("RETRYABLE");
+        }
+    }
+
+    private void applySnapshot(
+            ProductProcessWorkflowRevision revision,
+            ProductProcessWorkflow workflow,
+            String hash) {
+        revision.setProductTypeId(workflow.getProductTypeId());
+        revision.setDefinitionVersion(workflow.getDefinitionVersion());
+        revision.setRevisionHash(hash);
+        revision.setSchemaVersion(workflow.getSchemaVersion());
+        revision.setNodesJson(canonicalJson(workflow.getNodesJson(), "nodes"));
+        revision.setEdgesJson(canonicalJson(workflow.getEdgesJson(), "edges"));
+        revision.setViewportJson(canonicalJson(workflow.getViewportJson(), "viewport"));
+        ProductProcessWorkflowDTO definition = definition(revision);
+        revision.setProcessCount((int) definition.getNodes().stream()
+                .filter(node -> "PROCESS".equals(node.getKind())).count());
+        try {
+            validator.validateStructureComplete(definition);
+            revision.setStructurallyComplete(true);
+            revision.setValidationMessage(null);
+        } catch (BusinessException error) {
+            revision.setStructurallyComplete(false);
+            revision.setValidationMessage(error.getMessage());
+        }
+    }
+
+    private boolean isPinnedByAnyBom(String factoryId, Long revisionId) {
+        return java.util.Arrays.stream(com.cretas.aims.entity.bom.BomRecipe.Status.values())
+                .anyMatch(status -> !recipeRepository
+                        .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                                factoryId, revisionId, status)
+                        .isEmpty());
+    }
+
+    public ProductProcessWorkflowDTO definition(ProductProcessWorkflowRevision revision) {
+        ProductProcessWorkflowDTO dto = new ProductProcessWorkflowDTO();
+        dto.setId(revision.getWorkflowId());
+        dto.setFactoryId(revision.getFactoryId());
+        dto.setProductTypeId(revision.getProductTypeId());
+        dto.setSchemaVersion(revision.getSchemaVersion());
+        dto.setStatus(revision.getStatus().name());
+        dto.setVersion(revision.getDefinitionVersion());
+        dto.setRevisionId(revision.getId());
+        dto.setRevisionHash(revision.getRevisionHash());
+        dto.setNodes(read(revision.getNodesJson(), new TypeReference<>() {}, "nodes"));
+        dto.setEdges(read(revision.getEdgesJson(), new TypeReference<>() {}, "edges"));
+        dto.setViewport(read(revision.getViewportJson(), new TypeReference<>() {}, "viewport"));
+        return dto;
+    }
+
+    public String hash(ProductProcessWorkflow workflow) {
+        return canonicalHash(
+                workflow.getFactoryId(),
+                workflow.getProductTypeId(),
+                workflow.getDefinitionVersion(),
+                workflow.getSchemaVersion(),
+                workflow.getNodesJson(),
+                workflow.getEdgesJson(),
+                workflow.getViewportJson());
+    }
+
+    public String hash(ProductProcessWorkflowRevision revision) {
+        String storedOrderHash = rawHash(
+                revision.getFactoryId(),
+                revision.getProductTypeId(),
+                revision.getDefinitionVersion(),
+                revision.getSchemaVersion(),
+                revision.getNodesJson(),
+                revision.getEdgesJson(),
+                revision.getViewportJson());
+        if (Objects.equals(revision.getRevisionHash(), storedOrderHash)) {
+            return storedOrderHash;
+        }
+
+        String legacyCanonicalHash = legacyCanonicalHash(
+                revision.getFactoryId(),
+                revision.getProductTypeId(),
+                revision.getDefinitionVersion(),
+                revision.getSchemaVersion(),
+                revision.getNodesJson(),
+                revision.getEdgesJson(),
+                revision.getViewportJson());
+        if (Objects.equals(revision.getRevisionHash(), legacyCanonicalHash)) {
+            return legacyCanonicalHash;
+        }
+
+        String canonicalHash = canonicalHash(
+                revision.getFactoryId(),
+                revision.getProductTypeId(),
+                revision.getDefinitionVersion(),
+                revision.getSchemaVersion(),
+                revision.getNodesJson(),
+                revision.getEdgesJson(),
+                revision.getViewportJson());
+        return canonicalHash;
+    }
+
+    private String canonicalHash(
+            String factoryId,
+            String productTypeId,
+            Integer definitionVersion,
+            Integer schemaVersion,
+            String nodes,
+            String edges,
+            String viewport) {
+        return rawHash(
+                factoryId,
+                productTypeId,
+                definitionVersion,
+                schemaVersion,
+                canonicalJson(nodes, "nodes"),
+                canonicalJson(edges, "edges"),
+                canonicalJson(viewport, "viewport"));
+    }
+
+    private String legacyCanonicalHash(
+            String factoryId,
+            String productTypeId,
+            Integer definitionVersion,
+            Integer schemaVersion,
+            String nodes,
+            String edges,
+            String viewport) {
+        return rawHash(
+                factoryId,
+                productTypeId,
+                definitionVersion,
+                schemaVersion,
+                legacyCanonicalJson(nodes, "nodes"),
+                legacyCanonicalJson(edges, "edges"),
+                legacyCanonicalJson(viewport, "viewport"));
+    }
+
+    private String rawHash(String factoryId, String productTypeId, Integer definitionVersion,
+                           Integer schemaVersion, String nodes, String edges, String viewport) {
+        String source = factoryId + "\n" + productTypeId + "\n" + definitionVersion + "\n"
+                + schemaVersion + "\n" + nodes + "\n" + edges + "\n" + viewport;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(source.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
+    }
+
+    private String canonicalJson(String json, String field) {
+        try {
+            return objectMapper.writeValueAsString(
+                    sortObjectKeysAndNormalizeNumbers(objectMapper.readTree(json)));
+        } catch (JsonProcessingException error) {
+            throw invalidJson(field, error);
+        }
+    }
+
+    private String legacyCanonicalJson(String json, String field) {
+        try {
+            return objectMapper.writeValueAsString(sortObjectKeys(objectMapper.readTree(json)));
+        } catch (JsonProcessingException error) {
+            throw invalidJson(field, error);
+        }
+    }
+
+    /**
+     * PostgreSQL JSONB and different Jackson paths may represent the same numeric value as
+     * {@code 32}, {@code 32.0}, or {@code 3.2E+1}. A content address must not change across
+     * that persistence round trip, so numbers are normalized by value in addition to sorting
+     * object keys. Array order remains significant because it is part of the Workflow graph.
+     */
+    private JsonNode sortObjectKeysAndNormalizeNumbers(JsonNode node) {
+        if (node == null || node.isNull() || node.isBoolean() || node.isTextual()) {
+            return node;
+        }
+        if (node.isNumber()) {
+            BigDecimal normalized = node.decimalValue().stripTrailingZeros();
+            if (normalized.signum() == 0) {
+                normalized = BigDecimal.ZERO;
+            }
+            return DecimalNode.valueOf(normalized);
+        }
+        if (node.isArray()) {
+            ArrayNode sorted = objectMapper.createArrayNode();
+            node.forEach(child -> sorted.add(sortObjectKeysAndNormalizeNumbers(child)));
+            return sorted;
+        }
+        ObjectNode sorted = objectMapper.createObjectNode();
+        List<String> fields = new ArrayList<>();
+        node.fieldNames().forEachRemaining(fields::add);
+        fields.sort(Comparator.naturalOrder());
+        fields.forEach(field ->
+                sorted.set(field, sortObjectKeysAndNormalizeNumbers(node.get(field))));
+        return sorted;
+    }
+
+    private JsonNode sortObjectKeys(JsonNode node) {
+        if (node == null || node.isNull() || node.isValueNode()) {
+            return node;
+        }
+        if (node.isArray()) {
+            ArrayNode sorted = objectMapper.createArrayNode();
+            node.forEach(child -> sorted.add(sortObjectKeys(child)));
+            return sorted;
+        }
+        ObjectNode sorted = objectMapper.createObjectNode();
+        List<String> fields = new ArrayList<>();
+        node.fieldNames().forEachRemaining(fields::add);
+        fields.sort(Comparator.naturalOrder());
+        fields.forEach(field -> sorted.set(field, sortObjectKeys(node.get(field))));
+        return sorted;
+    }
+
+    private <T> T read(String json, TypeReference<T> type, String field) {
+        try {
+            return objectMapper.readValue(json, type);
+        } catch (JsonProcessingException error) {
+            throw new BusinessException(500, "Workflow revision " + field + " 数据损坏", error)
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_DATA_INVALID");
+        }
+    }
+
+    private BusinessException invalidJson(String field, JsonProcessingException error) {
+        return new BusinessException(
+                500, "Workflow revision " + field + " 数据损坏", error)
+                .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_DATA_INVALID");
+    }
+
+    private BusinessException invalidStoredRevision(String hash, Long revisionId) {
+        return new BusinessException(409, "Workflow 修订哈希已存在，但其保存内容无法验证")
+                .withCode("PRODUCT_PROCESS_WORKFLOW_REVISION_HASH_COLLISION")
+                .withHint("revisionId=" + revisionId + ", revisionHash=" + hash)
+                .withHintTarget("revision")
+                .withSeverity("warning");
+    }
+}

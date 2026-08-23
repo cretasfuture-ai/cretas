@@ -1,0 +1,1162 @@
+package com.cretas.aims.service.reversal.impl;
+
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionSettlementConsumption;
+import com.cretas.aims.entity.ReportReversalLog;
+import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
+import com.cretas.aims.repository.ProductionSettlementRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ReportReversalLogRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.entity.enums.NotificationType;
+import com.cretas.aims.service.NotificationService;
+import com.cretas.aims.service.reversal.ReportReversalService;
+import com.cretas.aims.service.wip.WipLedgerEntries;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * SP2 整单撤回实现。
+ *
+ * <p><b>三层守卫</b> (与后续撤回写入同一事务，失败时不得留下半执行状态):
+ * <ol>
+ *   <li>Guard G1: 下游领用检查 — SIT 中存在 OUT/SECONDARY_CONSUME 行 → 409 DOWNSTREAM_CONSUMED</li>
+ *   <li>Guard G2: 成品出货检查 — FinishedGoodsBatch shippedQuantity > 0 → 409 FG_SHIPPED</li>
+ *   <li>Guard G3: 幂等检查 — 已有 DONE 直接返回; PENDING 返回 409 ALREADY_PENDING</li>
+ * </ol>
+ *
+ * <p><b>SP12 快速撤回通道</b> (Fast Path):
+ * <p>满足以下全部条件时，跳过审批直接执行撤回 (仍经过 G1/G2/G3 守卫，不绕过安全检查):
+ * <ul>
+ *   <li>提交人 == 本次操作人 (只有本人能快速撤回自己的报工)</li>
+ *   <li>G1 通过 — 无下游领用消耗 (库存安全绝不妥协)</li>
+ *   <li>报工提交时间 ≤ {@value #FAST_PATH_WINDOW_MINUTES} 分钟内 (短时间窗口, 防止滥用)</li>
+ * </ul>
+ * 不满足任一条件 → 退回完整审批流 (PENDING)，同时附上诚实提示 (为何需要审批)。
+ *
+ * <p><b>executeReversal 原子保证</b>: 单 @Transactional。软删报工 → 写 REVERSE SIT → 回放均价 → 更新 FGB
+ * → 置 ReportReversalLog.DONE。任一失败 → 全部回滚 (Spring REQUIRED 默认)。
+ *
+ * <p><b>fail-soft 禁止</b>: 不使用 try/catch 吞掉内层异常 (历史事故:
+ * REQUIRED 内抛异常后父事务标记 rollback-only, fail-soft catch 救不回)。
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class ReportReversalServiceImpl implements ReportReversalService {
+
+    private final ReportReversalLogRepository reversalLogRepo;
+    private final ProductionBatchRepository batchRepo;
+    private final ProductionReportRepository reportRepo;
+    private final SemiFinishedInventoryRepository wipRepo;
+    private final SemiFinishedInventoryTransactionRepository txnRepo;
+    private final FinishedGoodsBatchRepository fgbRepo;
+    // BUG-4 修复: 批次加载用户姓名 (单次 IN query, 无 N+1)
+    private final UserRepository userRepository;
+    // BUG-1 联动: 整单撤回需复位 WorkProcessTask (COMPLETED → PENDING), 否则任务卡终态无法重报
+    private final WorkProcessTaskRepository workProcessTaskRepository;
+    // W6 #27: 驳回撤回申请时通知申请人 (App 内通知)
+    private final NotificationService notificationService;
+
+    /**
+     * 断点2 修复 (2026-06-11, Fable E2E): 撤回时清 SalesOrderItem.costUnitPrice (置 null),
+     * 让重报新成本事件能重新回填 (OrderCostBackfillListener 是 write-once — 仅 null 时写).
+     * 否则撤回后 SO 挂着被撤回报工的成本, 重报因字段非 null 被跳过 → 永不刷新, 脏数据不可自愈.
+     *
+     * <p>field-inject (required=false): 不改 @RequiredArgsConstructor 生成的构造器,
+     * 不破坏既有 ReportReversalListNamesTest 的显式构造调用. 未注入 (老 context / 单测未提供)
+     * → 跳过清字段 (旧行为, 不抛异常).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionPlanRepository productionPlanRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesOrderItemRepository salesOrderItemRepository;
+
+    /**
+     * R3 修复 (2026-06-14, 六扇门撤回库存恢复): 撤回必须回扣结单消耗的原料量。
+     *
+     * <p><b>为什么必须回扣</b>: 结单 ({@code ProductionPlanServiceImpl.postMaterialBatchConsumption})
+     * 消耗原料时 {@code MaterialBatch.usedQuantity += 领用量}。撤回若不回扣, 原料仍显示已用
+     * → 原料库存永久少账 ({@code currentQuantity = receiptQuantity - usedQuantity - reservedQuantity}
+     * 是 @Transient 计算值, 回扣 usedQuantity 自动恢复 currentQuantity)。
+     *
+     * <p><b>消耗权威源</b>: {@link ProductionSettlementConsumption} —— 结单逐行迭代它写
+     * usedQuantity, 每行记录精确的 {@code (materialBatchId, quantity, sourceType)}, 1:1 对应。
+     * (非 {@code ProductionReport.materialBatchRefs} —— 那是报工时 JSONB 快照, 不是实际结单领用量。)
+     *
+     * <p><b>事务/异常</b>: 在 {@link #executeReversal} 单一 @Transactional 内执行 (禁 fail-soft,
+     * 失败应整体回滚)。repo 未注入 (老 context / 单测未提供) → 跳过 (旧行为, 不抛异常)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MaterialBatchRepository materialBatchRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementRepository productionSettlementRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
+
+    /**
+     * 逐道录入闭环: 正式报工除了写 {@link ProductionReport}，还会保留一条物化后的
+     * {@link ProcessSheetRow}。计划取消门禁把有效的物化行视为生产数据，因此整单撤回必须在同一
+     * 回滚动作里软删对应批次的行；否则界面虽显示 DONE，计划仍永久报“已有报工/WIP”。
+     *
+     * <p>required=false 保持旧单测构造方式兼容。生产 Spring context 会正常注入；未注入时维持旧行为。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProcessSheetRowRepository processSheetRowRepository;
+
+    /**
+     * 生产仓占用的释放 (释放路径 2/3: <b>冲销</b>)。
+     *
+     * <p>整单撤回把报工软删了, 它在 {@code material_batches.reserved_quantity} 上占的原料
+     * 必须同时放回 —— 否则报工没了、占用还挂着, 而且<b>再也找不到是谁占的</b>
+     * (枚举在占报工的查询带 {@code deleted_at IS NULL})。与 ③.6 回扣 usedQuantity 是同一条纪律。
+     *
+     * <p>field-inject (required=false): 与本类既有几个字段同一惯例, 不破坏显式构造调用。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.WorkshopReportReservationService workshopReservationService;
+
+    /**
+     * SP12 快速撤回时间窗口 (分钟)。
+     * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
+     * 超出此窗口 → 退回完整审批流。
+     */
+    static final int FAST_PATH_WINDOW_MINUTES = 5;
+
+    // ==================== 提交撤回申请 ====================
+
+    @Override
+    @Transactional
+    public ReportReversalLog submitReversal(String factoryId, Long batchId, Long submittedBy, String reason) {
+        // ---- 守卫与快速撤回同处外层事务，保证内部 self-invocation 仍有事务 ----
+
+        // G1: 下游领用检查
+        String batchRef = String.valueOf(batchId);
+        if (txnRepo.existsDownstreamConsumed(factoryId, batchRef)) {
+            throw new BusinessException(409, String.format(
+                    "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
+                    .withCode("DOWNSTREAM_CONSUMED")
+                    .withHint("请先处理下游领用记录后再申请撤回");
+        }
+
+        // 加载批次获取 planId (G2 需要)
+        ProductionBatch batch = batchRepo.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产批次不存在: " + batchId));
+
+        // G2: 成品出货检查
+        if (batch.getProductionPlanId() != null) {
+            if (fgbRepo.existsShippedByFactoryIdAndProductionPlanId(factoryId, batch.getProductionPlanId())) {
+                throw new BusinessException(409, String.format(
+                        "批次 %d 对应计划的成品已出货，无法整单撤回", batchId))
+                        .withCode("FG_SHIPPED")
+                        .withHint("请确认出货记录后处理退货再申请撤回");
+            }
+        }
+
+        // G3: 幂等检查
+        Optional<ReportReversalLog> existing = reversalLogRepo.findByBatchIdAndReversalScopeAndDeletedAtIsNull(
+                batchId, ReportReversalLog.ReversalScope.WHOLE_ORDER);
+        if (existing.isPresent()) {
+            ReportReversalLog ex = existing.get();
+            if (ReportReversalLog.ReversalStatus.DONE == ex.getStatus()) {
+                // 🔴 禁止降级 (2026-08-19): 已撤回过 ≠ 这次提交没事干。
+                //
+                // 撤回成功会把当时的报工全部软删, 所以"真正的幂等重发"必然**看不到活报工**。
+                // 反过来: 还看得到活报工, 说明它们是**上次撤回之后新报的** —— 这次提交撤不掉它们
+                // (uq_reversal_batch UNIQUE(batch_id, reversal_scope) 让本批次开不出第二张撤回单),
+                // 而旧实现直接 return ex, 对外就是一句"撤回完成"。
+                //
+                // prod 实测代价 (F006 batch 10761, 2026-08-18; 全库普查该形态命中 1 个批次):
+                //   07:19:24 撤回完成, 软删报工 23830/23831 ✅ (但 reverted_txn_ids=[], 没冲销库存)
+                //   08:07    重报 23832/23833  →  09:03:33 再次提交 → 静默返回旧 DONE
+                //            ⚠️ 这一批随后在 09:04:52 被【人工补账】清掉了(见下), 不是本接口做的
+                //   13:33    重报 23836/23837  →  23:22:21 再次提交 → 静默返回旧 DONE, 一条没冲
+                //   ⇒ 23836/23837 至今 deleted_at IS NULL, 同批次还挂着 75.00 盒半成品。
+                //
+                // 阴性对照(全库): 要求"撤回【之前】建的活报工"→ 0 批次 0 报工
+                //   ⇒ 14 次撤回里该软删的全部正确软删了, 坏的只有"第二次撤回"这一条路。
+                //
+                // ⚠️ 判据必须是"有没有**活**报工", 不能退化成"有没有 DONE 记录" ——
+                //    后者会把正常的幂等重发 (同一请求重复提交) 也一起挡掉。
+                List<ProductionReport> liveReports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+                if (!liveReports.isEmpty()) {
+                    LocalDateTime revertedAt = ex.getUpdatedAt() != null ? ex.getUpdatedAt() : ex.getCreatedAt();
+                    String when = revertedAt != null
+                            ? revertedAt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                            : "更早时间";
+                    throw new BusinessException(409, String.format(
+                            "批次 %d 已于 %s 撤回过。之后这个批次又新报了 %d 条报工, "
+                                    + "它们不在那次撤回的范围里 —— 这次提交不会把它们撤掉",
+                            batchId, when, liveReports.size()))
+                            .withCode("REVERSAL_SUPERSEDED")
+                            // 当前只有 WHOLE_ORDER 一种 scope, 没有"单条撤回"这个功能 ——
+                            // ⛔ 不要给一句用户做不到的指引。
+                            .withHint(String.format(
+                                    "同一个批次目前只支持整单撤回一次。这 %d 条是上次撤回之后新报的, "
+                                            + "需要联系管理员处理", liveReports.size()))
+                            .withSeverity("BLOCKING")
+                            .withHintTarget(String.valueOf(batchId));
+                }
+                // 兼容修复上线前已经完成的撤回：旧版本只软删 production_reports，没有清理
+                // process_sheet_rows。重复点击撤回时只修复这批残留行，不重复冲销库存流水。
+                softDeleteProcessSheetRows(factoryId, batchId, batch.getProductionPlanId(), LocalDateTime.now());
+                log.info("[SP2] submitReversal idempotent DONE: batchId={} logId={} liveReports=0", batchId, ex.getId());
+                return ex;
+            }
+            if (ReportReversalLog.ReversalStatus.PENDING == ex.getStatus()) {
+                throw new BusinessException(409, String.format(
+                        "批次 %d 已有待审批的撤回申请 (id=%d)", batchId, ex.getId()))
+                        .withCode("ALREADY_PENDING")
+                        .withHint("请等待审批结果或联系管理员");
+            }
+        }
+
+        // 检查是否有报工数据
+        List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+        boolean hasReports = !reports.isEmpty();
+
+        // ---- SP12 快速撤回路径判断 ----
+        // 条件: 本人提交 + 无下游消费(G1已通过) + 最新报工在时间窗口内
+        // 注意: G1/G2 守卫已经在上方通过，快速撤回不绕过任何安全守卫，只免审批人环节。
+        String fastPathDeniedReason = null;
+        if (hasReports) {
+            fastPathDeniedReason = resolveFastPathDeniedReason(submittedBy, reports);
+        }
+
+        boolean isFastPath = hasReports && fastPathDeniedReason == null;
+        // 无报工 → 真 no-op 直接 DONE | 快速撤回通过 → APPROVED(自动批准,待 executeReversal 执行后置 DONE) | 否则 → PENDING
+        // ⚠️ BUG-GOLD-RERUN-FASTPATH-REVERSAL: 快速撤回不能预置 DONE —— executeReversal 对 DONE 幂等跳过
+        //   (软删报工/冲销库存/清成本全不执行)。必须存非 DONE 状态让 executeReversal 真正跑完再由它置 DONE。
+        ReportReversalLog.ReversalStatus initialStatus;
+        if (!hasReports) {
+            initialStatus = ReportReversalLog.ReversalStatus.DONE;
+        } else if (isFastPath) {
+            initialStatus = ReportReversalLog.ReversalStatus.APPROVED;
+        } else {
+            initialStatus = ReportReversalLog.ReversalStatus.PENDING;
+        }
+
+        // 若退回审批, 在 reason 中附上诚实提示 (防呆: 告诉操作员为何需要审批)
+        String effectiveReason = reason;
+        if (initialStatus == ReportReversalLog.ReversalStatus.PENDING && fastPathDeniedReason != null) {
+            effectiveReason = (reason == null || reason.isBlank())
+                    ? fastPathDeniedReason
+                    : reason + " | 需审批原因: " + fastPathDeniedReason;
+        }
+
+        ReportReversalLog log_ = ReportReversalLog.builder()
+                .factoryId(factoryId)
+                .batchId(batchId)
+                .planId(batch.getProductionPlanId())
+                .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                .submittedBy(submittedBy)
+                .reason(effectiveReason)
+                .status(initialStatus)
+                .fastPath(isFastPath)
+                .build();
+        ReportReversalLog saved = reversalLogRepo.save(log_);
+
+        // 快速撤回 → 直通执行 (executeReversal 内部走完软删/冲销/清成本后置 DONE)。
+        // 无报工 → 已是 DONE 的 no-op, 无需调 executeReversal (调了也会被 DONE 幂等跳过)。
+        if (isFastPath) {
+            executeReversal(saved.getId(), factoryId);
+        }
+
+        log.info("[SP2] submitReversal batchId={} status={} fastPath={} logId={}",
+                batchId, initialStatus, isFastPath, saved.getId());
+        return reversalLogRepo.findById(saved.getId()).orElse(saved);
+    }
+
+    // ==================== 执行撤回 (单一 @Transactional 原子) ====================
+
+    @Override
+    @Transactional
+    public void executeReversal(Long logId, String factoryId) {
+        ReportReversalLog log_ = reversalLogRepo.findById(logId)
+                .orElseThrow(() -> new BusinessException(404, "撤回申请不存在: " + logId));
+        if (!factoryId.equals(log_.getFactoryId())) {
+            throw new BusinessException(403, "工厂 ID 不匹配");
+        }
+        // 幂等: 已 DONE 直接返回
+        if (ReportReversalLog.ReversalStatus.DONE == log_.getStatus()) {
+            log.warn("[SP2] executeReversal already DONE logId={}, skip", logId);
+            return;
+        }
+
+        Long batchId = log_.getBatchId();
+        List<Long> revertedTxnIds = new ArrayList<>();
+
+        // ① 软删除该批次所有 YIELD 报工
+        List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+        LocalDateTime now = LocalDateTime.now();
+        // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
+        //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
+        //    就再也枚举不到它们了; 那时 reserved 会永久挂着, 而追溯源已经没了。
+        //    ⛔ 释放量不在这里算, 走与驳回/结单同一个出口。
+        if (workshopReservationService != null) {
+            for (ProductionReport r : reports) {
+                workshopReservationService.releaseForReport(factoryId, r);
+            }
+        }
+        for (ProductionReport r : reports) {
+            r.setDeletedAt(now);
+            reportRepo.save(r);
+        }
+
+        // ①.1 软删除逐道录入物化行。取消计划的兜底门禁会读取这些行，必须与 YIELD 报工同进退。
+        softDeleteProcessSheetRows(factoryId, batchId, log_.getPlanId(), now);
+
+        // ①.5 复位该批次工序任务 (BUG-1 联动修复的撤回路径):
+        // OUTPUT 报工提交现在会把 WorkProcessTask 置 COMPLETED(终态) — 整单撤回软删了全部
+        // YIELD 报工后, 若任务留在 COMPLETED, RN 任务列表不再显示该道 → 无法重报, 撤回流程被打断。
+        // 故: COMPLETED → PENDING + 清 completedBy/completedAt; 所有任务 actualQuantity 复位 null
+        // (其派生源 YIELD 报工已全部软删)。SKIPPED/CANCELLED 是独立决策, 不动。
+        List<WorkProcessTask> batchTasks = workProcessTaskRepository
+                .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batchId);
+        for (WorkProcessTask t : batchTasks) {
+            if (WorkProcessTask.Status.COMPLETED == t.getStatus()) {
+                t.setStatus(WorkProcessTask.Status.PENDING);
+                t.setCompletedBy(null);
+                t.setCompletedAt(null);
+            }
+            t.setActualQuantity(null);
+        }
+        if (!batchTasks.isEmpty()) {
+            workProcessTaskRepository.saveAll(batchTasks);
+        }
+
+        // ② 每份报工: 找到对应 IN SIT 行 → 写 REVERSE 行 → 回放移动均价
+        for (ProductionReport r : reports) {
+            List<SemiFinishedInventoryTransaction> inTxns =
+                    txnRepo.findByFactoryIdAndReportId(factoryId, r.getId());
+            for (SemiFinishedInventoryTransaction inTxn : inTxns) {
+                if (!SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())) {
+                    continue; // 只冲销 IN 行
+                }
+                // 写 REVERSE 行 (负数量, 不改 IN 行)
+                SemiFinishedInventoryTransaction reverseTxn = SemiFinishedInventoryTransaction.builder()
+                        .factoryId(factoryId)
+                        .semiFinishedId(inTxn.getSemiFinishedId())
+                        .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                        .sourceRef("reversal-log:" + logId)
+                        .quantity(inTxn.getQuantity().negate())
+                        .unitCostAtTxn(inTxn.getUnitCostAtTxn())
+                        .operatorId(reversalOperatorId(log_))
+                        .build();
+                SemiFinishedInventoryTransaction saved = txnRepo.save(reverseTxn);
+                revertedTxnIds.add(saved.getId());
+
+                // 回放移动均价到 SemiFinishedInventory
+                replayMovingAverage(inTxn.getSemiFinishedId(), factoryId, now);
+            }
+        }
+
+        // ②.5 🔴 禁止降级 (2026-08-18): 一行都没冲销, 就不许对外说撤回完成。
+        //
+        // 上面 ② 是【按报工找 IN 流水】来冲销的 —— 找不到 IN 行就一行不写、悄悄往下走,
+        // 最后照样置 DONE。实测代价: F006 生产库 14 条 reversal_log <b>全部</b> status=DONE 且
+        // reverted_txn_ids 长度为 0 (jsonb_array_length 逐条查过), 也就是说
+        // <b>这个功能上线至今 (2026-06-10 起) 一次都没有真正冲销过库存</b>,
+        // 而每一次都告诉用户"撤回完成"。报工被软删了(追溯源没了), 它产出的半成品还挂在账上,
+        // 且流水账里没有任何一行解释那批货是怎么来的 —— 这就是 phantom WIP。
+        //
+        // 判据只看【这次撤回该负责的那批 WIP】: 按 batchId 取库存行 (报工产出的行都带 batchId;
+        // 小结/逐道录入的 CLK-SEMI 行 batchId 为空, 不归整单撤回管, 不会被误伤)。
+        // ⇒ 修好 IN 侧记账之后, 正常报工必有 IN 行 ⇒ 本闸只在补全之前的存量数据上响, 窄且可信。
+        if (revertedTxnIds.isEmpty() && !reports.isEmpty()) {
+            BigDecimal stranded = BigDecimal.ZERO;
+            for (SemiFinishedInventory w : wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId)) {
+                BigDecimal avail = w.getAvailableQuantity();
+                if (avail != null && avail.compareTo(BigDecimal.ZERO) > 0) {
+                    stranded = stranded.add(avail);
+                }
+            }
+            if (stranded.compareTo(BigDecimal.ZERO) > 0) {
+                throw new BusinessException(409, String.format(
+                        "撤回失败: 批次 %d 还有 %s 半成品挂在账上, 而流水账里找不到对应的入库(IN)行, "
+                                + "撤回没法把它退回去 —— 若就这样标记完成, 报工没了而货还在, 账就对不上了",
+                        batchId, stranded.stripTrailingZeros().toPlainString()))
+                        .withCode("WIP_NOT_LEDGERED")
+                        .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
+                                + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(String.valueOf(batchId));
+            }
+        }
+
+        // ③ 将对应 FinishedGoodsBatch 标记 REVERSED (如有)
+        if (log_.getPlanId() != null) {
+            List<FinishedGoodsBatch> fgbs =
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId());
+            for (FinishedGoodsBatch fgb : fgbs) {
+                fgb.setStatus(FinishedGoodsBatch.Status.REVERSED);
+                fgb.setReversalLogId(logId);
+                fgbRepo.save(fgb);
+            }
+        }
+
+        // ③.5 断点2 修复: 清回填的 SalesOrderItem.costUnitPrice (置 null), 让重报能重新回填.
+        // 范围: 本批次 productTypeId 在对应计划全部关联 SO (sourceOrderIds, 兼容遗留主 SO) 的行项目.
+        // 在同一 @Transactional 内执行 (禁 fail-soft — 撤回是已有事务, 清字段失败应整体回滚).
+        // repo 未注入 (老 context) → 跳过 (旧行为). 详见字段注释.
+        clearBackfilledCostUnitPrice(factoryId, batchId, log_.getPlanId());
+
+        // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
+        // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
+        restoreSettlementConsumption(factoryId, log_.getPlanId(), logId, reversalOperatorId(log_));
+
+        // ④ 更新 ReportReversalLog → DONE
+        log_.setStatus(ReportReversalLog.ReversalStatus.DONE);
+        log_.setRevertedTxnIds(revertedTxnIds);
+        reversalLogRepo.save(log_);
+
+        log.info("[SP2] executeReversal DONE logId={} batchId={} revertedTxns={}",
+                logId, batchId, revertedTxnIds.size());
+    }
+
+    /**
+     * 这次撤回记在谁头上: 审批人优先, 其次提交人。
+     *
+     * <p>抽成一处是因为它现在有<b>两个</b>使用者 ({@link #executeReversal} ② 的 REVERSE 行、
+     * {@link #restoreSemiFinishedConsumption} 的「还回领用」行)。同一个口径写两遍必漂。
+     */
+    private static Long reversalOperatorId(ReportReversalLog log_) {
+        return log_.getApprovedBy() != null ? log_.getApprovedBy() : log_.getSubmittedBy();
+    }
+
+    private void softDeleteProcessSheetRows(String factoryId, Long batchId, String planId,
+                                            LocalDateTime deletedAt) {
+        if (processSheetRowRepository == null || batchId == null) {
+            return;
+        }
+        // WHOLE_ORDER reversal is plan-scoped. A clerk workflow materializes one output batch per
+        // step, so deleting only the selected final batch would leave every upstream row active.
+        List<ProcessSheetRow> rows = planId != null && !planId.isBlank()
+                ? processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId)
+                : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batchId);
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        for (ProcessSheetRow row : rows) {
+            row.setDeletedAt(deletedAt);
+        }
+        processSheetRowRepository.saveAll(rows);
+        log.info("[SP2] 撤回软删逐道录入行: factoryId={} planId={} batchId={} rows={}",
+                factoryId, planId, batchId, rows.size());
+    }
+
+    // ==================== 审批操作 ====================
+
+    @Override
+    @Transactional
+    public void approveReversal(String factoryId, Long logId, Long approvedBy) {
+        ReportReversalLog log_ = reversalLogRepo.findById(logId)
+                .orElseThrow(() -> new BusinessException(404, "撤回申请不存在: " + logId));
+        // 跨租户校验: 撤回日志须属于当前工厂 (防止越权批准其它工厂的撤回执行)
+        if (log_.getFactoryId() == null || !log_.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该撤回申请 / 该撤回申请不属于当前工厂")
+                    .withHint("请确认撤回申请 ID 是否属于本工厂");
+        }
+        // 兼容旧版本在无外层事务时留下的 APPROVED 半执行记录。再次审批只恢复执行，
+        // 不改原审批人/审批时间；executeReversal 本身按 DONE 幂等，并在本事务内原子收尾。
+        if (ReportReversalLog.ReversalStatus.APPROVED == log_.getStatus()) {
+            log.warn("[SP2] approveReversal resume previously approved logId={} approvedBy={}",
+                    logId, log_.getApprovedBy());
+            executeReversal(logId, log_.getFactoryId());
+            return;
+        }
+        if (ReportReversalLog.ReversalStatus.PENDING != log_.getStatus()) {
+            throw new BusinessException(409, String.format(
+                    "只有待审批状态的撤回申请可审批，当前状态: %s (logId=%d)", log_.getStatus(), logId))
+                    .withCode("INVALID_STATUS");
+        }
+        // W6 #27: 4 眼原则 — 审批人不能与提交人相同 (防自批漏洞)。
+        // 撤回是高风险写操作 (软删报工 + 回滚库存均价), 提交人自己批准 = 无监督。
+        // 参考 ArApServiceImpl 4-eyes 范式 (审批人 ≠ 提交人)。
+        if (log_.getSubmittedBy() != null && log_.getSubmittedBy().equals(approvedBy)) {
+            throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
+                    .withCode("SELF_APPROVAL_FORBIDDEN")
+                    .withHint("请使用其他主管账号审批此撤回申请")
+                    .withHintTarget("审批人");
+        }
+        log_.setApprovedBy(approvedBy);
+        log_.setApprovedAt(LocalDateTime.now());
+        log_.setStatus(ReportReversalLog.ReversalStatus.APPROVED);
+        reversalLogRepo.save(log_);
+
+        // 批准后自动执行撤回
+        executeReversal(logId, log_.getFactoryId());
+        log.info("[SP2] approveReversal logId={} approvedBy={}", logId, approvedBy);
+    }
+
+    @Override
+    public void rejectReversal(String factoryId, Long logId, Long approvedBy, String reason) {
+        ReportReversalLog log_ = reversalLogRepo.findById(logId)
+                .orElseThrow(() -> new BusinessException(404, "撤回申请不存在: " + logId));
+        // 跨租户校验: 撤回日志须属于当前工厂 (防止越权驳回其它工厂的撤回申请)
+        if (log_.getFactoryId() == null || !log_.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该撤回申请 / 该撤回申请不属于当前工厂")
+                    .withHint("请确认撤回申请 ID 是否属于本工厂");
+        }
+        if (ReportReversalLog.ReversalStatus.PENDING != log_.getStatus()) {
+            throw new BusinessException(409, String.format(
+                    "撤回申请 %d 当前状态为 %s，无法拒绝", logId, log_.getStatus()))
+                    .withCode("INVALID_STATUS");
+        }
+        Long submitter = log_.getSubmittedBy();
+        log_.setApprovedBy(approvedBy);
+        log_.setApprovedAt(LocalDateTime.now());
+        log_.setStatus(ReportReversalLog.ReversalStatus.REJECTED);
+        if (reason != null && !reason.isBlank()) {
+            log_.setReason(log_.getReason() + " | 拒绝原因: " + reason);
+        }
+        reversalLogRepo.save(log_);
+        log.info("[SP2] rejectReversal logId={} approvedBy={}", logId, approvedBy);
+
+        // W6 #27: 驳回后通知申请人 (App 内通知)。fail-soft — 通知失败不回滚驳回事务
+        // (reversal-log 已置 REJECTED 是核心结果, 通知只是 side-effect)。审批人自己驳回则不通知。
+        if (submitter != null && !submitter.equals(approvedBy)) {
+            try {
+                String reasonText = (reason != null && !reason.isBlank()) ? reason : "未填写";
+                notificationService.sendNotification(
+                        log_.getFactoryId(),
+                        submitter,
+                        "报工撤回申请被驳回",
+                        String.format("您对批次 %d 提交的报工撤回申请已被驳回。驳回原因: %s",
+                                log_.getBatchId(), reasonText),
+                        NotificationType.WARNING,
+                        "REVERSAL",
+                        String.valueOf(logId));
+            } catch (Exception e) {
+                log.warn("[SP2] rejectReversal 通知申请人失败 logId={} submitter={}", logId, submitter, e);
+            }
+        }
+    }
+
+    @Override
+    public List<ReportReversalLog> listReversals(String factoryId, String status) {
+        List<ReportReversalLog> logs;
+        if (status == null || status.isBlank()) {
+            // 返回所有状态 — 使用 no-status 方法, 避免传 null 给 enum 参数
+            logs = reversalLogRepo.findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId);
+        } else {
+            ReportReversalLog.ReversalStatus statusEnum;
+            try {
+                statusEnum = ReportReversalLog.ReversalStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BusinessException(400, "无效的状态值: " + status + "，合法值: PENDING/APPROVED/DONE/REJECTED");
+            }
+            logs = reversalLogRepo
+                    .findByFactoryIdAndStatusAndDeletedAtIsNullOrderByCreatedAtDesc(factoryId, statusEnum);
+        }
+        // BUG-4 修复: 批量加载用户姓名 (一次 IN query, 禁止 N+1)。
+        // 收集所有非 null userId，去重后一次性 findAllById，构建 id→User map 填充 @Transient 姓名字段。
+        if (!logs.isEmpty()) {
+            List<Long> userIds = logs.stream()
+                    .flatMap(l -> Stream.of(l.getSubmittedBy(), l.getApprovedBy()))
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+            if (!userIds.isEmpty()) {
+                Map<Long, User> userMap = userRepository.findAllById(userIds).stream()
+                        .collect(Collectors.toMap(User::getId, Function.identity()));
+                for (ReportReversalLog l : logs) {
+                    if (l.getSubmittedBy() != null) {
+                        User u = userMap.get(l.getSubmittedBy());
+                        l.setSubmittedByName(u != null ? u.getFullName() : null);
+                    }
+                    if (l.getApprovedBy() != null) {
+                        User u = userMap.get(l.getApprovedBy());
+                        l.setApprovedByName(u != null ? u.getFullName() : null);
+                    }
+                }
+            }
+        }
+        return logs;
+    }
+
+    // ==================== 私有辅助 ====================
+
+    /**
+     * 断点2 修复 (2026-06-11): 撤回时清回填的 {@code SalesOrderItem.costUnitPrice}.
+     *
+     * <p><b>为什么必须清</b>: {@link com.cretas.aims.event.listener.OrderCostBackfillListener}
+     * 是 write-once (仅 costUnitPrice == null 时写). 撤回若不清此字段, 重报新成本事件
+     * 因字段非 null 被跳过 → SO 永远挂着被撤回报工的旧成本, 不可自愈. 清 null 后,
+     * 重报触发的 ProductionCostUpdatedEvent 会重新回填新成本 → 自愈链复活.
+     *
+     * <p><b>范围</b>: 仅清本批次 productTypeId 在对应计划全部关联 SO (sourceOrderIds,
+     * 与断点1 回填同源) 的行项目 — 不误伤同 SO 其他产品的成本.
+     *
+     * <p><b>事务/异常</b>: 在 {@link #executeReversal} 的单一 @Transactional 内执行,
+     * 不 try/catch 吞异常 (禁 fail-soft, 失败应整体回滚). repo 未注入 → 跳过 (向后兼容).
+     *
+     * @param factoryId 工厂ID
+     * @param batchId   被撤回的生产批次ID (取其 productTypeId)
+     * @param planId    撤回日志记录的计划ID (取其 sourceOrderIds)
+     */
+    private void clearBackfilledCostUnitPrice(String factoryId, Long batchId, String planId) {
+        if (productionPlanRepository == null || salesOrderItemRepository == null) {
+            log.debug("[SP2] clearBackfilledCostUnitPrice: repo 未注入, 跳过 batchId={}", batchId);
+            return;
+        }
+        if (planId == null) {
+            return;
+        }
+
+        // 批次 → productTypeId
+        ProductionBatch batch = batchRepo.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        if (batch == null || batch.getProductTypeId() == null) {
+            log.debug("[SP2] clearBackfilledCostUnitPrice: 批次或 productTypeId 缺失, 跳过 batchId={}", batchId);
+            return;
+        }
+        String productTypeId = batch.getProductTypeId();
+
+        // 计划 → 关联 SO 列表 (与断点1 回填同源: 优先 sourceOrderIds, 兼容遗留主 SO)
+        ProductionPlan plan = productionPlanRepository.findById(planId).orElse(null);
+        if (plan == null) {
+            return;
+        }
+        List<String> targetOrderIds = new ArrayList<>();
+        List<String> srcIds = plan.getSourceOrderIds();
+        if (srcIds != null && !srcIds.isEmpty()) {
+            for (String id : srcIds) {
+                if (id != null && !targetOrderIds.contains(id)) {
+                    targetOrderIds.add(id);
+                }
+            }
+        }
+        if (targetOrderIds.isEmpty() && plan.getSourceOrderId() != null) {
+            targetOrderIds.add(plan.getSourceOrderId());
+        }
+        if (targetOrderIds.isEmpty()) {
+            return;
+        }
+
+        int cleared = 0;
+        for (String orderId : targetOrderIds) {
+            List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(orderId);
+            for (SalesOrderItem item : items) {
+                if (productTypeId.equals(item.getProductTypeId()) && item.getCostUnitPrice() != null) {
+                    item.setCostUnitPrice(null);
+                    salesOrderItemRepository.save(item);
+                    cleared++;
+                }
+            }
+        }
+        if (cleared > 0) {
+            log.info("[SP2] 撤回清 costUnitPrice → salesOrderIds={}, productTypeId={}, 共{}行 (自愈链待重报回填)",
+                    targetOrderIds, productTypeId, cleared);
+        }
+    }
+
+    /**
+     * R3 修复 (2026-06-14): 撤回回扣结单消耗的原料 {@code usedQuantity} (+ 恢复被领用的半成品余量),
+     * 并软删结单, 让库存归还且允许重新结单。
+     *
+     * <p><b>流程</b>: 撤回日志 planId → {@link ProductionSettlement} (按 factoryId+planId) →
+     * 其 {@link ProductionSettlementConsumption} 行:
+     * <ul>
+     *   <li>非 SEMI_FINISHED 行: 悲观锁 {@link MaterialBatch} → {@code usedQuantity -= 领用量}
+     *       (clamp ≥0 防脏数据为负) → usedQuantity 归 0 时若 status 为 USED_UP/DEPLETED 恢复 AVAILABLE。</li>
+     *   <li>SEMI_FINISHED 行: 悲观锁 {@link SemiFinishedInventory} → {@code consumedQuantity -= 领用量},
+     *       {@code availableQuantity += 领用量} (恢复被领走的量), 恢复 AVAILABLE。
+     *       (否则软删结单后重新结单会二次扣减半成品 = 重复结算。不改 WipInventoryServiceImpl, 仅反冲 settlement 路径。)</li>
+     * </ul>
+     * 最后软删 settlement + 所有 consumption 行 ({@code @Where deleted_at IS NULL} 隐藏 →
+     * 结单幂等检查 {@code findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull} 重新放行)。
+     *
+     * <p><b>事务/异常</b>: 在 {@link #executeReversal} 单一 @Transactional 内 (禁 fail-soft,
+     * 失败整体回滚)。repo 未注入 → 跳过 (向后兼容)。无 settlement (报工未结单) → 无消耗可回扣, 直接返回。
+     *
+     * @param factoryId      工厂ID
+     * @param planId         撤回日志的计划ID
+     * @param reversalLogId  撤回日志ID (半成品「还回领用」流水的 sourceRef)
+     * @param operatorId     记账人 (见 {@link #reversalOperatorId})
+     */
+    private void restoreSettlementConsumption(String factoryId, String planId,
+                                              Long reversalLogId, Long operatorId) {
+        if (materialBatchRepository == null
+                || productionSettlementRepository == null
+                || productionSettlementConsumptionRepository == null) {
+            log.debug("[SP2] restoreSettlementConsumption: repo 未注入, 跳过 planId={}", planId);
+            return;
+        }
+        if (planId == null) {
+            return;
+        }
+
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
+                .orElse(null);
+        if (settlement == null) {
+            // 报工但未结单 → usedQuantity 未被结单路径增加, 无需回扣。
+            log.debug("[SP2] restoreSettlementConsumption: 无结单记录, 跳过 planId={}", planId);
+            return;
+        }
+
+        List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository
+                .findBySettlementIdAndDeletedAtIsNull(settlement.getId());
+
+        LocalDateTime now = LocalDateTime.now();
+        int restoredMaterial = 0;
+        int restoredSemi = 0;
+        // fail-closed (修2): repo 已注入 (走到这里说明顶部未注入跳过分支没触发) → 每一笔应恢复的消耗
+        //   都必须成功, 任一返回 false (批次缺失 / 工厂不匹配 / 数量异常) → 抛 BusinessException 整体回滚,
+        //   绝不软删消耗行 / settlement (否则库存没还却把记录删了, reversal 置 DONE → 不可重跑, 静默丢库存)。
+        //   软删放在全部恢复成功之后 (两阶段), 保证"还库存"与"删记录"原子一致。
+        for (ProductionSettlementConsumption line : lines) {
+            BigDecimal qty = line.getQuantity();
+            if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue; // 无可恢复量 — 正常跳过 (非失败)
+            }
+            if ("SEMI_FINISHED".equals(line.getSourceType())) {
+                if (restoreSemiFinishedConsumption(factoryId, line.getSemiFinishedInventoryId(), qty,
+                        reversalLogId, operatorId)) {
+                    restoredSemi++;
+                } else {
+                    throw new BusinessException(409, String.format(
+                            "撤回失败: 半成品消耗恢复失败 (sfiId=%s, qty=%s) — 库存未还, 已回滚, 请修正数据后重试",
+                            line.getSemiFinishedInventoryId(), qty));
+                }
+            } else {
+                if (restoreMaterialBatchConsumption(factoryId, line.getMaterialBatchId(), qty)) {
+                    restoredMaterial++;
+                } else {
+                    throw new BusinessException(409, String.format(
+                            "撤回失败: 原料批次消耗恢复失败 (materialBatchId=%s, qty=%s) — 库存未还, 已回滚, 请修正数据后重试",
+                            line.getMaterialBatchId(), qty));
+                }
+            }
+        }
+
+        // 全部恢复成功后才软删消耗行 (防重新结单时重复回扣 / 重复统计)
+        for (ProductionSettlementConsumption line : lines) {
+            BigDecimal qty = line.getQuantity();
+            if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            line.setDeletedAt(now);
+            productionSettlementConsumptionRepository.save(line);
+        }
+
+        // 软删结单本身 → 幂等检查放行, 允许重新录入结单
+        settlement.setDeletedAt(now);
+        productionSettlementRepository.save(settlement);
+
+        log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
+                planId, settlement.getId(), restoredMaterial, restoredSemi);
+    }
+
+    /**
+     * R3: 回扣单个原料批次的 {@code usedQuantity} (clamp ≥0), usedQuantity 归 0 时恢复可用状态。
+     *
+     * @return true = 已回扣并保存; false = 批次不存在或入参不合法 (跳过)
+     */
+    private boolean restoreMaterialBatchConsumption(String factoryId, String materialBatchId, BigDecimal qty) {
+        if (materialBatchId == null) {
+            log.warn("[SP2] restoreMaterialBatchConsumption: 消耗行缺 materialBatchId, 跳过 (qty={})", qty);
+            return false;
+        }
+        MaterialBatch batch = materialBatchRepository
+                .findByIdAndFactoryIdForUpdate(materialBatchId, factoryId)
+                .orElse(null);
+        if (batch == null) {
+            log.warn("[SP2] restoreMaterialBatchConsumption: 原料批次不存在 id={} factoryId={}, 跳过",
+                    materialBatchId, factoryId);
+            return false;
+        }
+        BigDecimal used = batch.getUsedQuantity() != null ? batch.getUsedQuantity() : BigDecimal.ZERO;
+        BigDecimal newUsed = used.subtract(qty);
+        if (newUsed.compareTo(BigDecimal.ZERO) < 0) {
+            // 脏数据防御: 回扣量超过已用量 → clamp 到 0 (不让 usedQuantity 为负, entity @PositiveOrZero)
+            log.warn("[SP2] restoreMaterialBatchConsumption: 回扣量 {} 超过已用 {} (batchId={}), clamp 到 0",
+                    qty, used, materialBatchId);
+            newUsed = BigDecimal.ZERO;
+        }
+        batch.setUsedQuantity(newUsed);
+        // usedQuantity 归 0 且原状态是消耗终态 → 恢复 AVAILABLE (撤回后批次重新可用)。
+        // 其他状态 (EXPIRED/SCRAPPED/DEFECTIVE/RESERVED 等独立决策) 不动。
+        if (newUsed.compareTo(BigDecimal.ZERO) == 0
+                && (MaterialBatchStatus.USED_UP == batch.getStatus()
+                    || MaterialBatchStatus.DEPLETED == batch.getStatus())) {
+            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        }
+        materialBatchRepository.save(batch);
+        return true;
+    }
+
+    /**
+     * R3: 反冲被结单领用的半成品 (恢复 {@code availableQuantity}, 减 {@code consumedQuantity}),
+     * 镜像 {@code ProductionPlanServiceImpl.postSemiFinishedConsumption} 的逆操作。
+     * 防止软删结单后重新结单二次扣减半成品 (重复结算)。
+     *
+     * <h2>🔴 补正量必须留下一条 REVERSE 流水 (2026-08-18)</h2>
+     *
+     * <p>此前这里<b>只改库存行、一行流水都不写</b>。全仓 15 个改 SFI 余额的地方，
+     * 只有本方法和它的正向 ({@code ProductionPlanServiceImpl.postSemiFinishedConsumption})
+     * 是哑的 ⇒ 余额动了而流水账解释不了，正是 {@code WipLedgerEntries.productionRow} javadoc
+     * 里那个 phantom WIP 的形状。
+     *
+     * <p><b>方向是正量 REVERSE，不是 OUT 也不是负量 REVERSE</b>：本方法做的事是
+     * {@code consumedQuantity -= qty} —— 那是「<b>还回领用</b>」，即 OUT 的逆。
+     * 按 {@code ReverseSignSemanticsContractTest} 钉住的口径，REVERSE 靠符号分两种语义，
+     * 「还回领用」是<b>正量</b> (抵扣 {@code consumedOut}，⛔ 不进 {@code producedQuantity})。
+     * 写成 OUT 会被读成「又领走一笔」(方向反了)；写成负量 REVERSE 会被
+     * {@code replayMovingAverage} 冲减净产出，把一次<b>归还</b>记成一次<b>减产</b>。
+     *
+     * <p><b>记的是实际反冲量</b>：脏数据下 {@code consumedQuantity} 会被 clamp 到 0，
+     * 那时真正还回去的只有原来的 {@code consumedQuantity}，不是消耗行上写的 {@code qty}。
+     * 记请求量 = 账本自己在说谎 (与 {@code WipLedgerEntries.clerkConsumptionRow} 同一条纪律)。
+     * 实际反冲量为 0 (本来就没领过) ⇒ ⛔ 不凭空造流水。
+     *
+     * <p>⚠️ <b>已登记、本次故意不改</b>：正向的
+     * {@code ProductionPlanServiceImpl.postSemiFinishedConsumption} 同样不写 OUT 流水。
+     * 那是另一个类的另一个方法 (且该文件含裸 NUL 字节)，不是「同一处」。
+     * 在它补上之前，本行写出来的正量 REVERSE 在回放时会因为
+     * {@code Σ|OUT| = 0 < 还回量} 触发 {@code replayMovingAverage} 那句 clamp WARN ——
+     * <b>数值无害</b> ({@code consumedOut} 本来就是 0，clamp 到 0 是恒等)，
+     * 只是那句 WARN 会误称「数据异常」。补上正向 OUT 之后两侧才配平。
+     *
+     * @param factoryId              工厂ID
+     * @param semiFinishedInventoryId 半成品库存行ID
+     * @param qty                    消耗行上记的领用量
+     * @param reversalLogId          撤回日志ID (流水的 sourceRef)
+     * @param operatorId             记账人 (见 {@link #reversalOperatorId})
+     * @return true = 已恢复并保存; false = 库存不存在或入参不合法 (跳过)
+     */
+    private boolean restoreSemiFinishedConsumption(String factoryId, Long semiFinishedInventoryId, BigDecimal qty,
+                                                   Long reversalLogId, Long operatorId) {
+        if (semiFinishedInventoryId == null) {
+            log.warn("[SP2] restoreSemiFinishedConsumption: 消耗行缺 semiFinishedInventoryId, 跳过 (qty={})", qty);
+            return false;
+        }
+        SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(semiFinishedInventoryId).orElse(null);
+        if (sfi == null) {
+            log.warn("[SP2] restoreSemiFinishedConsumption: 半成品库存不存在 id={}, 跳过", semiFinishedInventoryId);
+            return false;
+        }
+        BigDecimal consumed = sfi.getConsumedQuantity() != null ? sfi.getConsumedQuantity() : BigDecimal.ZERO;
+        BigDecimal newConsumed = consumed.subtract(qty);
+        if (newConsumed.compareTo(BigDecimal.ZERO) < 0) {
+            log.warn("[SP2] restoreSemiFinishedConsumption: 回扣量 {} 超过已领 {} (sfiId={}), clamp 到 0",
+                    qty, consumed, semiFinishedInventoryId);
+            newConsumed = BigDecimal.ZERO;
+        }
+        BigDecimal available = sfi.getAvailableQuantity() != null ? sfi.getAvailableQuantity() : BigDecimal.ZERO;
+        // 实际反冲掉的消耗量 = clamp 之后真正从 consumedQuantity 里减掉的那部分。
+        // 正常路径 (qty ≤ consumed) 它就等于 qty; clamp 路径它等于 consumed。流水记这个数, 不记 qty。
+        BigDecimal restoredConsumption = consumed.subtract(newConsumed);
+        sfi.setConsumedQuantity(newConsumed);
+        sfi.setAvailableQuantity(available.add(qty));
+        if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        wipRepo.save(sfi);
+
+        // 🔴 流水在【改完之后】构造 —— settlementRestoreRow 直接读改完的 availableQuantity,
+        //    与 consumptionRow(读扣减前自己推) 口径相反, 混用会算出错的 balanceAfter。
+        //    正量 = 还回领用 (OUT 的逆); 实际反冲量为 0 时返回 null, ⛔ 不凭空造流水。
+        SemiFinishedInventoryTransaction restoreTxn = WipLedgerEntries.settlementRestoreRow(
+                factoryId, sfi, restoredConsumption, reversalLogId, operatorId);
+        if (restoreTxn != null) {
+            txnRepo.save(restoreTxn);
+            log.info("[SP2] 撤回还回结单领用的半成品: sfiId={} 还回{} (消耗行记 {}), available={} → 已记 REVERSE 流水",
+                    semiFinishedInventoryId, restoredConsumption, qty, sfi.getAvailableQuantity());
+        } else {
+            log.warn("[SP2] restoreSemiFinishedConsumption: sfiId={} 实际反冲量为 0 (已领 {} / 请求还 {}), "
+                            + "不写流水 (⛔ 不凭空造账)",
+                    semiFinishedInventoryId, consumed, qty);
+        }
+        return true;
+    }
+
+    /**
+     * SP12 快速撤回资格检查。
+     *
+     * <p>返回 null 表示满足快速撤回全部条件 (提交人本人 + 报工在时间窗口内)。
+     * 返回非 null 字符串表示不满足快速撤回，内容是诚实的拒绝原因 (展示给操作员)。
+     *
+     * <p><b>安全边界</b>: 本方法只判断"是否需要人审"，不影响 G1/G2 守卫。
+     * 调用前 G1/G2 守卫必须已通过。
+     *
+     * @param submittedBy 本次提交人 userId
+     * @param reports     该批次的报工列表 (非空)
+     * @return null = 快速撤回放行; 非 null = 原因说明，退回完整审批
+     */
+    public String resolveFastPathDeniedReason(Long submittedBy, List<ProductionReport> reports) {
+        // 条件1: 本人提交。submittedBy 为 null 时 (理论上不应发生) 退回审批
+        if (submittedBy == null) {
+            return "提交人未知，需要主管审批";
+        }
+
+        // 条件2: 最新报工必须在快速撤回时间窗口内
+        // 取所有报工中 createdAt 最晚的，作为"最后一笔报工时间"判断
+        LocalDateTime latestReportTime = reports.stream()
+                .map(r -> r.getCreatedAt())
+                .filter(Objects::nonNull)
+                .max(LocalDateTime::compareTo)
+                .orElse(null);
+
+        if (latestReportTime == null) {
+            // 无 createdAt 信息 → 无法判断时间窗口，保守退回审批
+            return "报工时间信息缺失，需要主管审批";
+        }
+
+        long minutesSinceReport = Duration.between(latestReportTime, LocalDateTime.now()).toMinutes();
+        if (minutesSinceReport > FAST_PATH_WINDOW_MINUTES) {
+            return String.format("报工提交已超 %d 分钟 (当前已过 %d 分钟)，超出快速撤回时限，需要主管审批",
+                    FAST_PATH_WINDOW_MINUTES, minutesSinceReport);
+        }
+
+        // 条件3: 所有报工的 workerId 须等于 submittedBy (本人只能快速撤回自己的报工)
+        boolean allBySubmitter = reports.stream().allMatch(r ->
+                submittedBy.equals(r.getWorkerId()));
+        if (!allBySubmitter) {
+            return "批次含有其他操作员的报工记录，需要主管审批";
+        }
+
+        return null; // 全部条件满足 → 快速撤回放行
+    }
+
+    /**
+     * 移动均价回放: 查询该 SFI 所有流水 (按 createdAt ASC), 重算 unitCost / producedQuantity /
+     * availableQuantity。
+     *
+     * <p><b>三个量的口径</b>:
+     * <ul>
+     *   <li>{@code producedQuantity} (净产出) = ΣIN + Σ(<b>负量</b>REVERSE)。
+     *       unitCost / accumulatedCost 只由这两类加权 (OUT 不影响单价)。</li>
+     *   <li>{@code availableQuantity} (可领余量) = producedQuantity − ΣconsumedOut (R5 修复)。
+     *       <b>OUT 已被下游领用</b>, 必须从可用量扣减, 否则把已发出的量算回可用 → 幻影库存。
+     *       OUT 流水 quantity 存负量 (见 {@code WipInventoryServiceImpl} {@code qty.negate()}),
+     *       这里取其绝对值累加到 consumedOut。</li>
+     *   <li>{@code consumedOut} = Σ|OUT| − Σ(<b>正量</b>REVERSE) (clamp ≥ 0)。见下方「REVERSE 有两种」。</li>
+     * </ul>
+     * 若净产出 ≤ 0 → producedQuantity = 0, availableQuantity = 0, unitCost = null, status = DEPLETED。
+     *
+     * <h2>🔴 REVERSE 是<b>两种</b>语义共用的一个 txn_type, 靠<b>符号</b>区分 (2026-08-18 取证后修)</h2>
+     *
+     * <p>实体上 {@code TxnType.REVERSE} 的注释写的是「撤回冲销 (REVERSE: <b>负数量</b>)」——
+     * 那句话<b>已经不成立</b>。全仓 5 个写 REVERSE 的地方, 两种符号各占一半:
+     *
+     * <table border="1">
+     *   <caption>REVERSE 行的两种语义</caption>
+     *   <tr><th>符号</th><th>语义</th><th>写它的地方</th><th>对净产出的影响</th></tr>
+     *   <tr><td><b>负量</b></td><td>退回产出 (IN 的逆)</td>
+     *       <td>{@link #executeReversal} ②、{@code WipInventoryServiceImpl.reverseClerkOutput}、
+     *           {@code reverseReportPosting} ①</td>
+     *       <td>减少 producedQty ✅</td></tr>
+     *   <tr><td><b>正量</b></td><td>还回领用 (OUT 的逆)</td>
+     *       <td>{@code WipInventoryServiceImpl.restoreClerkSemi}、{@code reverseReportPosting} ②</td>
+     *       <td><b>抵扣 consumedOut</b>, ⛔ 与产出无关</td></tr>
+     * </table>
+     *
+     * <p><b>修之前这里是 {@code producedQty = producedQty.add(q)} 一律相加、不看符号</b> ⇒
+     * 正量 REVERSE <b>虚增净产出</b>。两个后果, 第二个更阴:
+     * <ol>
+     *   <li>净产出被写回库存行时偏大, 且 {@code weightedCost} 同步被虚增的量稀释 → 单价失真。</li>
+     *   <li>回写后 {@code producedQuantity} 大于 ΣIN ⇒ <b>下一次</b>回放会撞上本方法开头那道
+     *       {@code WIP_LEDGER_INCOMPLETE} 闸 (它比的正是「账面 produced vs ΣIN」) ⇒
+     *       这条库存行被<b>永久锁死</b>, 之后任何撤回都 409, 而根因是我们自己算出来的数。</li>
+     * </ol>
+     *
+     * <p><b>取证 (F006 生产库, 2026-08-18 只读)</b>: {@code semi_finished_inventory_transactions}
+     * 全表 8 行, REVERSE 4 行<b>全部是负量</b> ⇒ 正量 REVERSE 目前 <b>0 行</b>, 这条缺陷<b>尚未在数据上引爆</b>。
+     * ⚠️ 但它<b>已经可达</b>: {@code reverseReportPosting} ② 写的正量 REVERSE 落在<b>上道</b>库存行上,
+     * 而那条行自己是有 report 关联的 IN 流水的 (PR#2870 起 FINISHED/legacy 路径也记 IN 了) ⇒
+     * 只要那批报工之后被整单撤回, 回放就会读到这条正量 REVERSE。
+     * 「0 行」是<b>还没发生</b>, 不是<b>不会发生</b> —— 所以修在它引爆之前。
+     */
+    private void replayMovingAverage(Long sfiId, String factoryId, LocalDateTime asOf) {
+        SemiFinishedInventory sfi = wipRepo.findById(sfiId)
+                .orElse(null);
+        if (sfi == null) {
+            log.warn("[SP2] replayMovingAverage: sfiId={} not found, skip", sfiId);
+            return;
+        }
+
+        List<SemiFinishedInventoryTransaction> allTxns =
+                txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId);
+
+        // producedQty = ΣIN + Σ(负量 REVERSE) (净产出); weightedCost 只由这两类加权。
+        //   ⚠️ 2026-08-18 订正: 原来这里写的是「ΣIN + ΣREVERSE」并且代码也真的一律相加 ——
+        //   正量 REVERSE 是「还回领用」, 算进产出就是把同一批货记两次生产。见方法 javadoc 那张表。
+        // consumedOut = Σ|OUT| (下游已领用, R5: 必须从 availableQuantity 扣减)。
+        // hasUnknownCost: 存在"有数量但 unitCostAtTxn 未知"的 IN/REVERSE 流水 → 成本不可信,
+        //   honest-null: 不把未知量当 ¥0 加权稀释, 最终 unitCost/accumulatedCost 置 null (修1)。
+        BigDecimal producedQty = BigDecimal.ZERO;
+        BigDecimal weightedCost = BigDecimal.ZERO;
+        BigDecimal consumedOut = BigDecimal.ZERO;
+        // 本行历史上一共记过多少入库量 (ΣIN)。用来判「流水账解释得了当前余额吗」, 见下方守卫。
+        BigDecimal ledgerInTotal = BigDecimal.ZERO;
+        // 正量 REVERSE = 还回领用 (OUT 的逆) 的累计量 —— 抵扣 consumedOut, ⛔ 不进 producedQty。
+        BigDecimal restoredConsumption = BigDecimal.ZERO;
+        boolean hasUnknownCost = false;
+
+        for (SemiFinishedInventoryTransaction txn : allTxns) {
+            if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
+                BigDecimal q = txn.getQuantity();
+                if (q != null && q.compareTo(BigDecimal.ZERO) > 0) {
+                    ledgerInTotal = ledgerInTotal.add(q);
+                }
+                if (q != null && q.compareTo(BigDecimal.ZERO) > 0 && txn.getUnitCostAtTxn() != null) {
+                    producedQty = producedQty.add(q);
+                    weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
+                } else if (q != null && q.compareTo(BigDecimal.ZERO) > 0) {
+                    // 有正数量但缺成本 — 数量计入净产出, 但标记成本未知 (不当 ¥0 稀释)
+                    producedQty = producedQty.add(q);
+                    hasUnknownCost = true;
+                }
+            } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())) {
+                // 🔴 REVERSE 必须按【符号】分流 —— 见方法 javadoc「REVERSE 是两种语义共用一个 txn_type」。
+                //    ⛔ 不要退回成「一律 producedQty.add(q)」: 那会把「还回领用」算成「又产出了一批」。
+                BigDecimal q = txn.getQuantity();
+                if (q == null || q.signum() == 0) {
+                    continue; // 0 量冲销不影响任何口径
+                }
+                if (q.signum() < 0) {
+                    // ① 负量 = 退回产出 (IN 的逆) → 冲减净产出, 参与单价加权 (与 IN 同口径, 反向)
+                    producedQty = producedQty.add(q); // 负数相加 = 减
+                    if (txn.getUnitCostAtTxn() != null) {
+                        weightedCost = weightedCost.add(q.multiply(txn.getUnitCostAtTxn()));
+                    } else {
+                        // 有 REVERSE 数量但缺成本 — 标记成本未知 (加权口径不可信)
+                        hasUnknownCost = true;
+                    }
+                } else {
+                    // ② 正量 = 还回领用 (OUT 的逆) → 只抵扣已领用量。
+                    //    ⛔ 既不加进 producedQty (那批货从来没有被再生产一次),
+                    //    ⛔ 也不进 weightedCost (它不是一笔入库, 没有自己的入库成本)。
+                    restoredConsumption = restoredConsumption.add(q);
+                }
+            } else if (SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
+                // R5 修复: OUT 已被下游领用 — 计入 consumedOut, 从 availableQuantity 扣减。
+                // OUT quantity 存负量 (WipInventoryServiceImpl qty.negate()), 取绝对值累加。
+                // OUT 不影响 unitCost (单价只由 IN/REVERSE 加权, 这点现状对, 保留)。
+                BigDecimal q = txn.getQuantity();
+                if (q != null) {
+                    consumedOut = consumedOut.add(q.abs());
+                }
+            }
+        }
+
+        // 正量 REVERSE 抵扣已领用量 (clamp ≥ 0)。
+        // clamp 的理由: 还回量超过历史 OUT 只可能是脏数据 (还比领的多), 让 consumedOut 变负会把
+        // availableQuantity 抬到净产出之上 = 凭空多出可领的货。宁可 clamp 并留 WARN, ⛔ 不产幻影库存。
+        if (restoredConsumption.signum() > 0) {
+            BigDecimal net = consumedOut.subtract(restoredConsumption);
+            if (net.signum() < 0) {
+                log.warn("[SP2] replayMovingAverage: sfiId={} 正量 REVERSE 合计 {} 超过 Σ|OUT| {} — "
+                                + "clamp 到 0 (还回量比领用量还多, 数据异常)",
+                        sfiId, restoredConsumption, consumedOut);
+                net = BigDecimal.ZERO;
+            }
+            consumedOut = net;
+        }
+
+        // 🔴 禁止降级 (2026-08-18): 本方法把「ΣIN + Σ(负量 REVERSE)」当权威净产出【回写】库存行 ——
+        //    这只有在「每一笔入库都记过流水」时才成立。实测 F006 生产库并非如此:
+        //    全表 8 行流水 IN 为 0 行, 而 4 行库存分别挂着 2.00 / 240.00 / 300.00 / 10.00 的
+        //    produced_quantity。在那种行上跑本方法, ΣIN=0 ⇒ producedQty ≤ 0 ⇒ 下面整段把
+        //    produced / available 清零并置 DEPLETED —— 把「我没有流水证据」写成了「余额是 0」,
+        //    真实库存被抹掉, 而且不报错。
+        //
+        //    判据: 账面 produced 超过历史 ΣIN ⇒ 有入库从来没记过流水 ⇒ 流水账解释不了这行余额,
+        //    此时<b>拒绝回写</b>并整体回滚, 绝不用 0 糊过去。
+        //    ⚠️ 反向不成立: 正常冲销过的行 produced 会小于 ΣIN (被 REVERSE 扣过), 不触发。
+        BigDecimal producedOnRecord = sfi.getProducedQuantity() != null
+                ? sfi.getProducedQuantity() : BigDecimal.ZERO;
+        if (producedOnRecord.compareTo(ledgerInTotal) > 0) {
+            throw new BusinessException(409, String.format(
+                    "撤回失败: 半成品 %s 账面产出 %s, 而流水账里只记过 %s 的入库 —— "
+                            + "差额 %s 没有入库流水可冲销, 强行重算会把这批库存抹平",
+                    sfi.getIntermediateBatchNo(),
+                    producedOnRecord.stripTrailingZeros().toPlainString(),
+                    ledgerInTotal.stripTrailingZeros().toPlainString(),
+                    producedOnRecord.subtract(ledgerInTotal).stripTrailingZeros().toPlainString()))
+                    .withCode("WIP_LEDGER_INCOMPLETE")
+                    .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
+                            + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(sfi.getIntermediateBatchNo());
+        }
+
+        if (producedQty.compareTo(BigDecimal.ZERO) <= 0) {
+            // 无剩余有效产出
+            sfi.setProducedQuantity(BigDecimal.ZERO);  // BUG-R1 fix: IN 净额归零
+            sfi.setAvailableQuantity(BigDecimal.ZERO);
+            sfi.setUnitCost(null);
+            sfi.setAccumulatedCost(null);
+            sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        } else {
+            sfi.setProducedQuantity(producedQty);  // BUG-R1 fix: 更新 IN 净额
+            // R5 修复: 可用 = 净产出 − 已领用 OUT (clamp ≥0)。旧 bug 直接用净产出, 忽略 OUT → 幻影库存。
+            // 盘点修正量 (default 0) 纳入 (禁止 reversal 重算覆盖盘点修正; produced/成本不动)。
+            BigDecimal sfiAdj = sfi.getAdjustmentQuantity() != null ? sfi.getAdjustmentQuantity() : BigDecimal.ZERO;
+            BigDecimal available = producedQty.subtract(consumedOut).add(sfiAdj).max(BigDecimal.ZERO);
+            sfi.setAvailableQuantity(available);
+            // 修1 (honest-null 成本传导): 只要存在未知成本的产出量 → 成本不可信, 诚实置 null
+            //   (不把未知量当 ¥0 稀释加权均价)。否则按已知成本算加权均价。
+            //   #844 回归修复: 只用 hasUnknownCost 区分, 不再加 `weightedCost > 0` 守卫。
+            //   旧守卫把"全已知但恰好 0 成本"(weightedCost==0, !hasUnknownCost) 误推进 else
+            //   清成 null, 混淆了"未知成本→null (对)"与"已知 0 成本→应是 0"。
+            //   producedQty>0 在此分支已由上面保证, divide 分母安全; weightedCost=0 → 0.0000 合法。
+            if (!hasUnknownCost) {
+                BigDecimal newUnitCost = weightedCost.divide(producedQty, 4, RoundingMode.HALF_UP);
+                sfi.setUnitCost(newUnitCost);
+                sfi.setAccumulatedCost(weightedCost.setScale(2, RoundingMode.HALF_UP));
+            } else {
+                // 仅未知成本才诚实置 null (成本不可信)。
+                sfi.setUnitCost(null);
+                sfi.setAccumulatedCost(null);
+            }
+            // status 反映可领余量: 还有余量 AVAILABLE, 全部领走 DEPLETED。
+            sfi.setStatus(available.compareTo(BigDecimal.ZERO) > 0
+                    ? SemiFinishedInventory.Status.AVAILABLE
+                    : SemiFinishedInventory.Status.DEPLETED);
+        }
+        wipRepo.save(sfi);
+    }
+}

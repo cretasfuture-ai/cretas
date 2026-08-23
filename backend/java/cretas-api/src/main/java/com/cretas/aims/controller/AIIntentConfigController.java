@@ -1,0 +1,1239 @@
+package com.cretas.aims.controller;
+
+import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import com.cretas.aims.dto.ai.IntentConfirmationRequest;
+import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.dto.ai.ParameterConfirmationRequest;
+import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.intent.CleanupRequest;
+import com.cretas.aims.dto.intent.IntentFeedbackRequest;
+import com.cretas.aims.dto.intent.IntentMatchResult;
+import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.entity.intent.KeywordEffectiveness;
+import com.cretas.aims.utils.JwtUtil;
+import com.cretas.aims.service.AIIntentService;
+import com.cretas.aims.service.IntentExecutorService;
+import com.cretas.aims.service.KeywordEffectivenessService;
+import com.cretas.aims.service.ParameterExtractionLearningService;
+import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
+import com.cretas.aims.service.impl.IntentConfigRollbackService;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.entity.learning.ParameterExtractionRule;
+import com.cretas.aims.entity.config.AIIntentConfigHistory;
+import com.cretas.aims.utils.CookieAuthHelper;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import com.cretas.aims.annotation.RateLimit;
+import com.cretas.aims.annotation.RateLimit.LimitType;
+import com.cretas.aims.exception.BusinessException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * AI意图配置控制器
+ *
+ * 提供AI意图识别配置的管理API:
+ * - 意图配置的CRUD操作
+ * - 意图识别测试
+ * - 分类和权限查询
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2025-12-31
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/mobile/{factoryId}/ai-intents")
+@RequiredArgsConstructor
+@Tag(name = "AI意图配置", description = "AI意图识别配置管理API")
+public class AIIntentConfigController {
+
+    private final AIIntentService aiIntentService;
+    private final IntentExecutorService intentExecutorService;
+    private final KeywordEffectivenessService keywordEffectivenessService;
+    private final IntentConfigRollbackService rollbackService;
+    private final ParameterExtractionLearningService parameterExtractionLearningService;
+    private final JwtUtil jwtUtil;
+    // 餐饮租户判定改问 domain (task-1): MOCK_REST 这类 id 不带 RES_/REST_ 前缀,
+    // 只能靠 factories.type 解析出的业态认出来, isRestaurantFactoryId 需要这个能力。
+    private final IntentConfigManagementService intentConfigManagementService;
+
+    /**
+     * Sprint 11.5 P0 fix (2026-05-23): Extract JWT token from request supporting BOTH
+     * Bearer header (mobile clients) AND HttpOnly cookie (web admin clients).
+     *
+     * <p>Pre-fix: all 9 endpoints used {@code @RequestHeader("Authorization") String authorization}
+     * which is mandatory by Spring default. Web admin sends cookie-only requests (no Authorization
+     * header) → Spring throws {@code MissingRequestHeaderException} → falls to generic
+     * {@link com.cretas.aims.exception.GlobalExceptionHandler#handleRuntimeException} → HTTP 500
+     * "系统处理异常 (追踪码: XXX)". 100% of web-admin UI clients hitting AI intent endpoints
+     * saw cryptic 500. {@link com.cretas.aims.config.JwtAuthInterceptor#extractToken} already
+     * supports both paths for authentication; the controller-level header dependency was the gap.
+     *
+     * <p>Post-fix: this helper mirrors {@link com.cretas.aims.config.JwtAuthInterceptor#extractToken}.
+     * Bearer header takes priority (no behavior change for mobile); cookie fallback unlocks web admin.
+     *
+     * @return token string, or null if neither header nor cookie present (caller should treat as auth failure)
+     */
+    private String extractToken(HttpServletRequest request) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            String token = authorization.substring(7).trim();
+            if (!token.isEmpty()) {
+                return token;
+            }
+        }
+        return CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.ACCESS_TOKEN_COOKIE);
+    }
+
+    // ==================== 意图查询 ====================
+
+    @GetMapping
+    @Operation(summary = "获取所有意图配置", description = "获取所有启用的AI意图配置列表（租户隔离）")
+    public ResponseEntity<ApiResponse<List<AIIntentConfig>>> getAllIntents(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId) {
+
+        List<AIIntentConfig> intents = aiIntentService.getAllIntents(factoryId);
+        return ResponseEntity.ok(ApiResponse.success(intents));
+    }
+
+    @GetMapping("/category/{category}")
+    @Operation(summary = "按分类获取意图", description = "根据分类获取意图配置列表（租户隔离）")
+    public ResponseEntity<ApiResponse<List<AIIntentConfig>>> getIntentsByCategory(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图分类 (ANALYSIS, DATA_OP, FORM, SCHEDULE, SYSTEM)")
+            @PathVariable String category) {
+
+        List<AIIntentConfig> intents = aiIntentService.getIntentsByCategory(factoryId, category);
+        return ResponseEntity.ok(ApiResponse.success(intents));
+    }
+
+    @GetMapping("/categories")
+    @Operation(summary = "获取所有分类", description = "获取所有可用的意图分类列表（租户隔离）")
+    public ResponseEntity<ApiResponse<List<String>>> getAllCategories(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId) {
+
+        List<String> categories = aiIntentService.getAllCategories(factoryId);
+        return ResponseEntity.ok(ApiResponse.success(categories));
+    }
+
+    @GetMapping("/sensitivity/{level}")
+    @Operation(summary = "按敏感度获取意图", description = "根据敏感度级别获取意图配置（租户隔离）")
+    public ResponseEntity<ApiResponse<List<AIIntentConfig>>> getIntentsBySensitivity(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "敏感度级别 (LOW, MEDIUM, HIGH, CRITICAL)")
+            @PathVariable String level) {
+
+        List<AIIntentConfig> intents = aiIntentService.getIntentsBySensitivity(factoryId, level);
+        return ResponseEntity.ok(ApiResponse.success(intents));
+    }
+
+    @GetMapping("/keyword-stats")
+    @Operation(summary = "获取关键词效果统计", description = "获取指定意图的关键词效果统计数据")
+    public ResponseEntity<ApiResponse<List<KeywordEffectiveness>>> getKeywordStats(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @RequestParam(required = false) String intentCode,
+            @Parameter(description = "效果阈值") @RequestParam(required = false, defaultValue = "0") java.math.BigDecimal threshold) {
+
+        List<KeywordEffectiveness> stats = keywordEffectivenessService.getEffectiveKeywords(
+                factoryId, intentCode, threshold);
+        return ResponseEntity.ok(ApiResponse.success(stats));
+    }
+
+    @GetMapping("/keyword-stats/count")
+    @Operation(summary = "获取关键词数量", description = "获取指定意图的关键词数量")
+    public ResponseEntity<ApiResponse<Long>> getKeywordCount(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @RequestParam(required = false) String intentCode) {
+
+        long count = keywordEffectivenessService.countKeywords(factoryId, intentCode);
+        return ResponseEntity.ok(ApiResponse.success(count));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/keywords/cleanup")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "清理低效关键词", description = "清理效果评分低于阈值的关键词（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<Integer>> cleanupLowEffectivenessKeywords(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody CleanupRequest request) {
+
+        int cleaned = keywordEffectivenessService.cleanupLowEffectivenessKeywords(
+                factoryId, request.getThreshold(), request.getMinNegative());
+        log.info("Cleaned {} low-effectiveness keywords for factory {}", cleaned, factoryId);
+        return ResponseEntity.ok(ApiResponse.success("清理完成，共删除 " + cleaned + " 个低效关键词", cleaned));
+    }
+
+    @GetMapping("/{intentCode}")
+    @Operation(summary = "获取单个意图", description = "根据意图代码获取意图配置详情")
+    public ResponseEntity<ApiResponse<AIIntentConfig>> getIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode) {
+
+        return aiIntentService.getIntentByCode(factoryId, intentCode)
+                .map(i -> ResponseEntity.ok(ApiResponse.success(i)))
+                .orElseThrow(() -> new BusinessException(404, "意图配置不存在: " + intentCode).withHint("请检查 ID 是否正确"));
+    }
+
+    // ==================== 意图识别 ====================
+
+    // Sprint 11 Round 2 (2026-05-22): removed @RequirePermission({"system:read_write"}).
+    // Intent recognition is read-only diagnostic — gated by JWT auth alone.
+    // Per-intent sensitivity is enforced by AIIntentService.hasPermission() in
+    // IntentExecutionOrchestrator (line 240) — controller-level system:read_write
+    // was blocking ALL non-super-admin roles (e.g. qhj_warehouse_mgr) from even
+    // PROBING what they can do. See docs/superpowers/handoffs/2026-05-22-mealclaw-e2e-rounds.md
+    @PostMapping("/recognize")
+    @Operation(summary = "测试意图识别", description = "输入文本测试意图识别结果（支持操作类型检测）")
+    public ResponseEntity<ApiResponse<IntentRecognitionResult>> recognizeIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentRecognitionRequest request) {
+
+        log.debug("Recognizing intent for input: {}", request.getUserInput());
+
+        // 使用带操作类型检测的增强版识别方法 (BUG-001/002 修复)
+        IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(
+                request.getUserInput(), factoryId, 1, null, null);
+
+        IntentRecognitionResult result = new IntentRecognitionResult();
+        result.setUserInput(request.getUserInput());
+        result.setMatched(matchResult.hasMatch());
+
+        if (matchResult.hasMatch()) {
+            AIIntentConfig intent = matchResult.getBestMatch();
+            result.setIntentCode(intent.getIntentCode());
+            result.setIntentName(intent.getIntentName());
+            result.setCategory(intent.getIntentCategory());
+            result.setSensitivityLevel(intent.getSensitivityLevel());
+            result.setQuotaCost(intent.getQuotaCost());
+            result.setRequiresApproval(intent.needsApproval());
+            // 额外添加置信度和匹配方法信息
+            result.setConfidence(matchResult.getConfidence());
+            result.setMatchMethod(matchResult.getMatchMethod() != null ?
+                    matchResult.getMatchMethod().name() : null);
+        }
+        result.setTimingMs(matchResult.getTimingMs());
+
+        return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — read-only diagnostic.
+    @PostMapping("/recognize-all")
+    @Operation(summary = "识别所有匹配意图", description = "获取所有可能匹配的意图列表")
+    public ResponseEntity<ApiResponse<List<AIIntentConfig>>> recognizeAllIntents(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentRecognitionRequest request) {
+
+        List<AIIntentConfig> matchedIntents = aiIntentService.recognizeAllIntents(factoryId, request.getUserInput());
+        return ResponseEntity.ok(ApiResponse.success(matchedIntents));
+    }
+
+    // ==================== 意图执行 ====================
+
+    // Sprint 11 Round 2 (2026-05-22): removed @RequirePermission({"system:read_write"}).
+    // Was a P0 — qhj_warehouse_mgr / qhj_finance_mgr / qhj_sales_mgr / qhj_operator (all
+    // RES_3101_009 spec'd accounts) blocked at the controller before ever reaching the
+    // intent-level permission check. Per-intent sensitivity + required_roles is now the
+    // sole permission gate (enforced in IntentExecutionOrchestrator.execute line 240
+    // via aiIntentService.hasPermission(intentCode, userRole) → returns FORBIDDEN
+    // response when role not in intent's required_roles JSON array; intents with
+    // sensitivity_level=LOW + empty required_roles allow all authenticated users).
+
+    /**
+     * 日志用的安全截断。
+     *
+     * <p>🔴 2026-08-10 prod: 原来这里是
+     * {@code request.getUserInput().length() > 30 ? ... : ...} 直接写在 log.info
+     * 的参数里。请求体缺 {@code userInput} 时 NPE → GlobalExceptionHandler 兜成
+     * <b>500「系统处理异常」</b>，而**下游全是 null 安全的**
+     * ({@code isRestaurantDerivedDishSelectionWrite} /
+     * {@code extractExplicitRestaurantDishDeleteTarget} 都以
+     * {@code userInput == null || isBlank()} 开头) —— 也就是说这个 500 完全来自
+     * 一行日志。
+     *
+     * <p>🔑 判据: <b>日志语句永远不该有能力让请求失败。</b> 它在旁路上，
+     * 崩了不但没记成日志，还把一个本来能正常处理的请求变成 500 —— 而 500 会
+     * 污染错误监控、掩盖真正的故障。
+     *
+     * <p>⚠️ 这个缺陷是我自己的探针踩出来的(把字段名写成了 question)，不是用户
+     * 报的。判据: <b>探针报异常时先怀疑探针，但修完探针要回头看被探的东西
+     * 是不是也有问题</b> —— 这次探针确实写错了，而它顺带暴露了一个真的缺陷。
+     */
+    static String truncateForLog(String userInput) {
+        if (userInput == null) {
+            return "<null>";
+        }
+        return userInput.length() > 30 ? userInput.substring(0, 30) + "..." : userInput;
+    }
+
+    @PostMapping("/execute")
+    @Operation(summary = "执行AI意图", description = "识别用户输入的意图并执行对应操作")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
+    public ResponseEntity<ApiResponse<IntentExecuteResponse>> executeIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentExecuteRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): extract token via cookie-aware helper (was @RequestHeader only)
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String userRole = jwtUtil.getRoleFromToken(token);
+
+        removeCallerConfirmationAuthority(request);
+        applyRestaurantReportIntentShortcut(factoryId, request);
+
+        log.info("执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
+                factoryId, truncateForLog(request.getUserInput()), userId, userRole);
+
+        IntentExecuteResponse response = intentExecutorService.execute(factoryId, request, userId, userRole);
+        com.cretas.aims.service.execution.CustomerTextSanitizer.sanitize(response);
+        return envelopeByInnerStatus(response);
+    }
+
+    /**
+     * 按【内层 status】决定 envelope 的 success/message。
+     *
+     * <p>🔴 2026-08-19 (测试同学 7-31「什么指令都操作成功」): 这几个 AI 入口原来一律
+     * {@code ApiResponse.success(response)}, 而那个重载把 message 写死成「操作成功」
+     * ({@code ApiResponse:61})。于是 status=FAILED / NO_PERMISSION / NOT_RECOGNIZED
+     * 的结果, 在 envelope 上依然写着「操作成功」——RN 端读的正是 envelope。
+     *
+     * <p>⛔ 不改 {@code ApiResponse.success} 本身: 全仓所有接口都在用它, 改 envelope
+     * 是 repo-wide blast radius, 而我们没有覆盖那个面的回归。只收窄这一头
+     * (形态 E: 宁可窄而可信, 不要宽而被关掉)。
+     *
+     * <p>web-admin 的 {@code useAiChat.ts} 早就在前端做过同样的解包并写明了原因;
+     * 这里是把那条判断挪到**产出端**, 让所有消费者(RN / web / 第三方)都拿到同一个真相。
+     */
+    private ResponseEntity<ApiResponse<IntentExecuteResponse>> envelopeByInnerStatus(
+            IntentExecuteResponse response) {
+        if (response == null) {
+            // 读不到就说读不到, ⛔ 不要兜成成功 (形态 A¹⁰)。
+            return ResponseEntity.ok(ApiResponse.error("AI 未返回任何结果，请重试或换一种说法。"));
+        }
+        String status = response.getStatus();
+        String innerMessage = response.getMessage();
+        boolean hasInnerMessage = innerMessage != null && !innerMessage.isBlank();
+
+        if (isFailureStatus(status)) {
+            ApiResponse<IntentExecuteResponse> body = ApiResponse.error(
+                    hasInnerMessage ? innerMessage : defaultFailureMessage(status));
+            // 仍然把 data 带上 —— 前端要靠 status/候选项/澄清问题继续走流程。
+            body.setData(response);
+            return ResponseEntity.ok(body);
+        }
+        // 非失败态: envelope 文案用内层的真实描述; 没有内层文案时给中性措辞,
+        // ⛔ 不写「操作成功」—— 那正是被投诉的那句。
+        return ResponseEntity.ok(ApiResponse.success(hasInnerMessage ? innerMessage : "已处理", response));
+    }
+
+    /** 明确表示「这次没成」的状态。NEED_MORE_INFO 不算失败, 但它也绝不该说「操作成功」。 */
+    private boolean isFailureStatus(String status) {
+        return "FAILED".equals(status)
+                || "NO_PERMISSION".equals(status)
+                || "NOT_RECOGNIZED".equals(status);
+    }
+
+    private String defaultFailureMessage(String status) {
+        if ("NO_PERMISSION".equals(status)) {
+            return "当前账号没有执行该操作的权限，请联系管理员开通后重试。";
+        }
+        if ("NOT_RECOGNIZED".equals(status)) {
+            return "没有识别出你要做的操作，请换一种说法，或补充具体的单据号、物料名和时间范围。";
+        }
+        return "执行失败，请稍后重试；如果反复失败请联系管理员并提供本次操作的时间。";
+    }
+
+    private void applyRestaurantReportIntentShortcut(String factoryId, IntentExecuteRequest request) {
+        if (request == null || (request.getIntentCode() != null && !request.getIntentCode().isBlank())) {
+            return;
+        }
+        if (!isRestaurantFactoryId(factoryId)) {
+            return;
+        }
+        String input = request.getUserInput();
+        if (input == null || input.isBlank() || hasExplicitReadVeto(input)) {
+            return;
+        }
+        String q = input.replaceAll("\\s+", "");
+        if (RestaurantComprehensiveQuestionPolicy.matches(q)) {
+            log.info("[RestaurantDemoIntentShortcut] defer comprehensive question to shared policy: "
+                    + "factoryId={}, input={}", factoryId, input);
+            return;
+        }
+        if (isRestaurantOwnerActionQuestion(q)) {
+            log.info("[RestaurantDemoIntentShortcut] skip report shortcut for owner-action phrase: factoryId={}, input={}",
+                    factoryId, input);
+            return;
+        }
+        boolean salesMetric = containsAny(q,
+                "\u8425\u6536",
+                "\u8425\u4e1a\u989d",
+                "\u9500\u552e\u989d",
+                "\u9500\u552e",
+                "\u5ba2\u5355\u4ef7",
+                "\u8ba2\u5355");
+        boolean reviewMetric = containsAny(q,
+                "\u8bc4\u4ef7",
+                "\u8bc4\u8bba",
+                "\u8bc4\u5206",
+                "\u53e3\u7891",
+                "\u5dee\u8bc4",
+                "\u6295\u8bc9",
+                "\u987e\u5ba2\u6ee1\u610f",
+                "\u5927\u4f17\u70b9\u8bc4");
+        boolean reportMetric = salesMetric || reviewMetric;
+        boolean reportAction = containsAny(q,
+                "\u67e5",
+                "\u67e5\u8be2",
+                "\u770b",
+                "\u770b\u770b",
+                "\u4eca\u5929",
+                "\u672c\u5468",
+                "\u8fd9\u5468",
+                "\u672c\u6708",
+                "\u600e\u4e48\u6837",
+                "\u60c5\u51b5",
+                "\u6c47\u603b",
+                "\u7edf\u8ba1",
+                "\u5206\u6790");
+        boolean reviewAction = reportAction || containsAny(q,
+                "\u662f\u4ec0\u4e48",
+                "\u6709\u54ea\u4e9b",
+                "\u54ea\u4e9b",
+                "\u9ad8\u9891",
+                "\u597d\u8bc4",
+                "\u5206\u522b",
+                "\u5e94\u8be5\u600e\u4e48",
+                "\u600e\u4e48\u6539\u5584",
+                "\u5982\u4f55\u6539\u5584",
+                "\u6539\u5584",
+                "\u6539\u8fdb",
+                "\u5904\u7406",
+                "\u89e3\u51b3",
+                "\u5efa\u8bae");
+        boolean trendAction = containsAny(q,
+                "\u540c\u6bd4",
+                "\u73af\u6bd4",
+                "\u8d8b\u52bf",
+                "\u8d70\u52bf",
+                "\u589e\u957f",
+                "\u4e0b\u964d",
+                "\u6708\u5ea6\u53d8\u5316");
+        boolean reviewReplyProgress = containsAny(q,
+                "\u56de\u590d\u7387",
+                "\u672a\u56de\u590d",
+                "\u8865\u56de\u590d",
+                "\u8865\u54ea\u4e9b\u56de\u590d",
+                "\u56de\u590d\u8fdb\u5ea6");
+        if (reviewMetric && !salesMetric && reviewAction) {
+            if (reviewReplyProgress) {
+                request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
+            } else if (isRestaurantReviewBadStoreQuestion(q)) {
+                request.setIntentCode("RESTAURANT_REVIEW_BAD_STORE");
+            } else if (isRestaurantReviewComplaintRemedyQuestion(q)) {
+                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
+            } else if (isRestaurantReviewSummaryQuestion(q)) {
+                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
+            } else if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
+                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
+            } else if (trendAction) {
+                request.setIntentCode("RESTAURANT_REVIEW_TREND");
+            } else {
+                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
+            }
+            log.info("[RestaurantDemoIntentShortcut] route review report phrase before intent recognition: factoryId={}, intentCode={}",
+                    factoryId, request.getIntentCode());
+            return;
+        }
+        if (salesMetric && isRestaurantSalesRankingOrComparison(q)) {
+            // The controller shortcut is intentionally limited to plain reports.
+            // Ranking/comparison questions need the orchestrator's object-aware
+            // classifier (store vs month) or the tiered semantic planner. Setting
+            // SALES_SUMMARY here would bypass both layers.
+            log.info("[RestaurantDemoIntentShortcut] defer ranked/comparative sales question: factoryId={}, input={}",
+                    factoryId, input);
+            return;
+        }
+        if (salesMetric && isRestaurantDiagnosticAnalysisQuestion(q)) {
+            // A metric plus a causal/diagnostic action is not a plain report.
+            // Leave it unpinned so the orchestrator can choose its existing
+            // multi-dimension synthesis route (or the tiered semantic planner
+            // for a single-dimension diagnostic). Otherwise phrases such as
+            // "结合天气、客流和活动分析3月营收高峰原因" are prematurely
+            // reduced to SALES_SUMMARY and the available FactBook dimensions
+            // are never consulted.
+            log.info("[RestaurantDemoIntentShortcut] defer diagnostic sales question: factoryId={}, input={}",
+                    factoryId, input);
+            return;
+        }
+        if (reportMetric && trendAction) {
+            request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
+            log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
+                    factoryId, request.getIntentCode());
+            return;
+        }
+        if (reportMetric && reportAction) {
+            request.setIntentCode("RESTAURANT_OPS_SALES_SUMMARY");
+            log.info("[RestaurantDemoIntentShortcut] route report phrase before intent recognition: factoryId={}, intentCode={}",
+                    factoryId, request.getIntentCode());
+        }
+    }
+
+    private boolean isRestaurantSalesRankingOrComparison(String q) {
+        return containsAny(
+                q,
+                "\u6700\u9ad8",
+                "\u6700\u4f4e",
+                "\u6700\u591a",
+                "\u6700\u5c11",
+                "\u6700\u597d",
+                "\u6700\u5dee",
+                "\u6392\u540d",
+                "\u6392\u884c",
+                "\u5bf9\u6bd4",
+                "\u6bd4\u8f83",
+                "\u76f8\u6bd4",
+                "\u9ad8\u4e8e",
+                "\u4f4e\u4e8e",
+                "\u9ad8\u8fd8\u662f\u4f4e",
+                "\u7b2c\u4e00\u540d",
+                "\u51a0\u519b");
+    }
+
+    private boolean isRestaurantDiagnosticAnalysisQuestion(String q) {
+        return containsAny(
+                q,
+                "\u539f\u56e0",
+                "\u4e3a\u4ec0\u4e48",
+                "\u4e3a\u4f55",
+                "\u8bca\u65ad",
+                "\u5f52\u56e0",
+                "\u5f71\u54cd",
+                "\u62c9\u52a8",
+                "\u9a71\u52a8",
+                "\u5efa\u8bae",
+                "\u51b3\u7b56",
+                "\u65b9\u6848",
+                "\u4f18\u5316");
+    }
+
+    private boolean isRestaurantOwnerActionQuestion(String q) {
+        if (q == null || q.isBlank()) {
+            return false;
+        }
+        if (isPureRestaurantReviewRemedyQuestion(q)) {
+            return false;
+        }
+        boolean hasTopic = containsAny(q,
+                "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406", "\u4ed3\u7ba1", "\u53a8\u5e08\u957f", "\u524d\u53f0",
+                "\u8425\u6536", "\u8425\u4e1a\u989d", "\u6536\u5165", "\u5ba2\u5355", "\u8ba2\u5355",
+                "\u684c\u578b", "\u684c\u5b50", "\u4e8c\u4eba\u684c", "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f",
+                "\u6392\u73ed", "\u5458\u5de5", "\u4eba\u624b", "\u524d\u5385", "\u540e\u53a8", "\u53a8\u623f", "\u51fa\u9910",
+                "\u5907\u8d27", "\u5907\u83dc", "\u5e93\u5b58", "\u635f\u8017", "\u62a5\u635f", "\u6708\u76d8\u70b9",
+                "\u6bdb\u5229", "\u6210\u672c", "BOM", "bom", "\u7406\u8bba\u7528\u91cf", "\u5b9e\u9645\u7528\u91cf",
+                "\u5957\u9910", "\u5c0f\u5957\u9910", "\u83dc\u54c1", "\u5916\u5356", "\u5e73\u53f0", "\u7f8e\u56e2",
+                "\u6296\u97f3", "\u56e2\u8d2d", "\u66dd\u5149", "\u6838\u9500", "\u627f\u63a5",
+                "\u5546\u5708", "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5ba2\u6d41", "\u753b\u50cf",
+                "\u95e8\u53e3", "\u4eb2\u5b50", "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4");
+        boolean hasDecision = containsAny(q,
+                "\u600e\u4e48", "\u5982\u4f55", "\u5e94\u8be5", "\u6700\u5e94\u8be5", "\u9002\u5408",
+                "\u52a8\u4f5c", "\u54ea\u4e09\u4e2a", "\u4e09\u4e2a\u52a8\u4f5c", "\u5148\u505a",
+                "\u5148\u6539", "\u5148\u7ba1", "\u5148\u67e5", "\u5148\u770b", "\u5148\u8bad\u7ec3",
+                "\u505a\u4ec0\u4e48", "\u770b\u4ec0\u4e48", "\u5206\u522b",
+                "\u4e0d\u8981\u591a\u5907", "\u4e0d\u60f3\u6253\u6298", "\u62c9\u8d77\u6765", "\u522b\u4e8f",
+                "\u8be5\u6539", "\u914d\u5408", "\u53ea\u80fd", "\u8fd8\u662f", "\u4e0d\u7528\u7b49",
+                "\u63a8", "\u8c03", "\u6392", "\u6539", "\u63d0\u9ad8", "\u63d0\u5347", "\u4f18\u5316",
+                "\u5efa\u8bae", "\u89e3\u51b3", "\u57f9\u8bad", "\u5e2e\u6211\u7b97", "\u8981\u8003\u8651");
+        boolean reviewOnly = containsAny(q, "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u53e3\u7891", "\u6295\u8bc9")
+                && !containsAny(q,
+                "\u8001\u677f", "\u5e97\u957f", "\u52a8\u4f5c", "\u5148\u6539", "\u54ea\u4e09\u4e2a",
+                "\u684c\u578b", "\u6392\u73ed", "\u5458\u5de5", "\u524d\u5385", "\u540e\u53a8",
+                "\u53a8\u623f", "\u51fa\u9910", "\u5957\u9910", "\u6210\u672c", "\u6bdb\u5229",
+                "\u5916\u5356", "\u5e73\u53f0", "\u7f8e\u56e2", "\u6296\u97f3", "\u56e2\u8d2d",
+                "\u5907\u8d27", "\u5e93\u5b58", "\u5546\u5708", "\u5546\u573a", "\u5ba2\u6d41");
+        if (reviewOnly) {
+            return false;
+        }
+        return hasTopic && hasDecision;
+    }
+
+    private boolean isRestaurantReviewBadStoreQuestion(String q) {
+        boolean hasStoreSignal = containsAny(q,
+                "\u95e8\u5e97", "\u54ea\u5bb6\u5e97", "\u54ea\u4e2a\u95e8\u5e97", "\u5dee\u8bc4\u6700\u591a",
+                "\u8bc4\u4ef7\u6700\u5dee", "\u53e3\u7891\u5dee");
+        boolean hasReviewSignal = containsAny(q,
+                "\u5dee\u8bc4", "\u4f4e\u661f", "\u8bc4\u4ef7", "\u53e3\u7891");
+        return hasStoreSignal && hasReviewSignal;
+    }
+
+    private boolean isRestaurantReviewComplaintRemedyQuestion(String q) {
+        boolean hasComplaintSignal = containsAny(q,
+                "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f");
+        if (!hasComplaintSignal) {
+            return false;
+        }
+        return containsAny(q,
+                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u6539\u5584", "\u5982\u4f55\u6539\u5584",
+                "\u600e\u4e48\u6539", "\u5904\u7406", "\u6539\u5584", "\u6539\u8fdb", "\u89e3\u51b3",
+                "\u5efa\u8bae", "\u5e97\u957f\u4eca\u5929");
+    }
+
+    private boolean isRestaurantReviewSummaryQuestion(String q) {
+        boolean hasReviewSignal = containsAny(q,
+                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u8bc4\u5206", "\u53e3\u7891",
+                "\u5927\u4f17\u70b9\u8bc4", "\u597d\u8bc4", "\u5dee\u8bc4");
+        if (!hasReviewSignal) {
+            return false;
+        }
+        return containsAny(q,
+                "\u600e\u4e48\u6837", "\u60c5\u51b5", "\u6c47\u603b", "\u7edf\u8ba1",
+                "\u9ad8\u9891", "\u597d\u8bc4", "\u662f\u4ec0\u4e48", "\u6709\u54ea\u4e9b",
+                "\u54ea\u4e9b", "\u5206\u522b");
+    }
+
+    private boolean isPureRestaurantReviewRemedyQuestion(String q) {
+        boolean hasReviewSignal = containsAny(q,
+                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u6295\u8bc9",
+                "\u53e3\u7891", "\u4f4e\u661f", "\u5927\u4f17\u70b9\u8bc4");
+        if (!hasReviewSignal) {
+            return false;
+        }
+        boolean hasOpsSignal = containsAny(q,
+                "\u684c\u578b", "\u6392\u73ed", "\u5458\u5de5", "\u4eba\u624b", "\u524d\u5385", "\u540e\u53a8",
+                "\u53a8\u623f", "\u51fa\u9910", "\u5957\u9910", "\u5916\u5356", "\u5e73\u53f0", "\u56e2\u8d2d",
+                "\u5907\u8d27", "\u5e93\u5b58", "\u6210\u672c", "\u6bdb\u5229", "\u7f8e\u56e2", "\u6296\u97f3",
+                "\u5546\u5708", "\u5546\u573a", "\u6d3b\u52a8", "\u5ba2\u6d41", "\u8425\u6536", "\u83dc\u54c1",
+                "\u52a8\u4f5c", "\u98ce\u9669");
+        boolean asksRemedy = containsAny(q,
+                "\u600e\u4e48\u6539\u5584", "\u5982\u4f55\u6539\u5584", "\u5e94\u8be5\u600e\u4e48",
+                "\u600e\u4e48\u5904\u7406", "\u89e3\u51b3", "\u5efa\u8bae", "\u6539\u8fdb");
+        return asksRemedy && !hasOpsSignal;
+    }
+
+    /**
+     * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
+     * public static 因为测试 {@code RestaurantTenantDetectionContractTest} 在
+     * {@code com.cretas.aims.service.execution} 包, 与本类不同包不可见 package-private。
+     */
+    public static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
+        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
+            return true;
+        }
+        if (factoryId == null || factoryId.isBlank()) {
+            return false;
+        }
+        String normalized = factoryId.trim().toUpperCase(java.util.Locale.ROOT);
+        return "DEMO_REST".equals(normalized)
+                || normalized.startsWith("RES_")
+                || normalized.startsWith("REST_");
+    }
+
+    private boolean isRestaurantFactoryId(String factoryId) {
+        return isRestaurantTenantId(factoryId, resolveFactoryDomainSafe(factoryId));
+    }
+
+    /** Fail-soft domain lookup: 服务未注入(如部分单测直接 new 控制器)或解析失败都退回 null。 */
+    private String resolveFactoryDomainSafe(String factoryId) {
+        if (intentConfigManagementService == null) {
+            return null;
+        }
+        try {
+            return intentConfigManagementService.resolveBusinessDomain(factoryId);
+        } catch (Exception e) {
+            log.warn("[RestaurantDemoIntentShortcut] resolveBusinessDomain failed for factoryId={}: {}",
+                    factoryId, e.getMessage());
+            return null;
+        }
+    }
+
+    private boolean hasExplicitReadVeto(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        String q = input.replaceAll("\\s+", "");
+        return containsAny(q,
+                "\u4e0d\u8981\u67e5",
+                "\u4e0d\u8981\u770b",
+                "\u522b\u67e5",
+                "\u522b\u770b",
+                "\u4e0d\u7528\u67e5",
+                "\u4e0d\u7528\u770b",
+                "\u4e0d\u9700\u8981\u67e5",
+                "\u4e0d\u9700\u8981\u770b",
+                "\u4e0d\u60f3\u67e5",
+                "\u4e0d\u60f3\u770b",
+                "\u5148\u522b\u67e5",
+                "\u5148\u522b\u770b",
+                "\u65e0\u9700\u67e5",
+                "\u65e0\u9700\u770b",
+                "\u4e0d\u67e5",
+                "\u4e0d\u770b");
+    }
+
+    private boolean containsAny(String input, String... terms) {
+        if (input == null || terms == null) {
+            return false;
+        }
+        for (String term : terms) {
+            if (term != null && !term.isBlank() && input.contains(term)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — same rationale as /execute.
+    @PostMapping("/execute/multi")
+    @Operation(summary = "执行多意图 (Multi-Label Classification)",
+               description = "使用 Sigmoid-based 多标签分类识别并执行多个意图")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
+    public ResponseEntity<ApiResponse<IntentExecuteResponse>> executeMultiIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentExecuteRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String userRole = jwtUtil.getRoleFromToken(token);
+
+        removeCallerConfirmationAuthority(request);
+        log.info("执行多意图: factoryId={}, userInput={}, userId={}, role={}",
+                factoryId,
+                request.getUserInput().length() > 30 ?
+                        request.getUserInput().substring(0, 30) + "..." : request.getUserInput(),
+                userId, userRole);
+
+        IntentExecuteResponse response = intentExecutorService.executeMultiIntent(factoryId, request, userId, userRole);
+        com.cretas.aims.service.execution.CustomerTextSanitizer.sanitize(response);
+        return envelopeByInnerStatus(response);
+    }
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — same rationale as /execute.
+    @PostMapping(value = "/execute/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "流式执行AI意图 (SSE)", description = "通过 Server-Sent Events 实时返回执行进度")
+    @RateLimit(count = 240, period = 60, limitType = LimitType.USER, message = "AI请求过于频繁，请稍后再试")
+    public SseEmitter executeIntentStream(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentExecuteRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String userRole = jwtUtil.getRoleFromToken(token);
+
+        removeCallerConfirmationAuthority(request);
+        log.info("流式执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
+                factoryId,
+                request.getUserInput().length() > 30 ?
+                        request.getUserInput().substring(0, 30) + "..." : request.getUserInput(),
+                userId, userRole);
+
+        return intentExecutorService.executeStream(factoryId, request, userId, userRole);
+    }
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — preview is read-only.
+    @PostMapping("/preview")
+    @Operation(summary = "预览AI意图执行结果", description = "识别意图并预览执行结果，不实际执行")
+    public ResponseEntity<ApiResponse<IntentExecuteResponse>> previewIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentExecuteRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String userRole = jwtUtil.getRoleFromToken(token);
+
+        removeCallerConfirmationAuthority(request);
+        log.info("预览AI意图: factoryId={}, userInput={}", factoryId, request.getUserInput());
+
+        IntentExecuteResponse response = intentExecutorService.preview(factoryId, request, userId, userRole);
+        return envelopeByInnerStatus(response);
+    }
+
+    // requestId and idempotencyKey reserve the future Gateway HTTP contract. They are validated,
+    // but are deliberately not represented as persisted/executed idempotency in this phase. The
+    // database atomic token claim remains the only single-use execution authority.
+    @PostMapping("/confirm")
+    @Operation(summary = "确认执行预览的意图",
+               description = "从专用请求头接收不透明令牌，原子认领参数绑定的预览命令并复核当前JWT权限")
+    public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestHeader("X-Cretas-Confirmation-Token") String confirmationToken,
+            @Valid @RequestBody IntentConfirmationRequest confirmationRequest,
+            HttpServletRequest httpRequest) {
+
+        if (confirmationToken == null || confirmationToken.isBlank()
+                || confirmationToken.length() > 2048) {
+            return ResponseEntity.badRequest().body(ApiResponse.errorWithCode(
+                    HttpStatus.BAD_REQUEST.value(),
+                    "INVALID_CONFIRMATION_PROOF",
+                    "Confirmation proof token is missing or invalid",
+                    null,
+                    "BLOCKING"));
+        }
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String userRole = jwtUtil.getRoleFromToken(token);
+
+        IntentExecuteResponse response = intentExecutorService.confirm(
+                factoryId,
+                confirmationRequest.toConfirmationProof(confirmationToken),
+                userId,
+                userRole);
+        return envelopeByInnerStatus(response);
+    }
+
+    /**
+     * Terminates legacy path-token confirmation without binding, logging, or executing the token.
+     * Upstream access-log policy is outside this controller boundary; new clients must use the
+     * fixed {@code /confirm} endpoint so proof tokens never enter request URLs.
+     */
+    @PostMapping("/confirm/{confirmToken}")
+    public ResponseEntity<ApiResponse<Void>> rejectLegacyPathConfirmation() {
+        ApiResponse<Void> response = ApiResponse.errorWithCode(
+                HttpStatus.GONE.value(),
+                "CONFIRMATION_ENDPOINT_UPGRADE_REQUIRED",
+                "Confirmation endpoint upgrade required",
+                "Use the fixed /confirm endpoint with X-Cretas-Confirmation-Token",
+                "BLOCKING");
+        return ResponseEntity.status(HttpStatus.GONE)
+                .cacheControl(CacheControl.noStore())
+                .body(response);
+    }
+
+    // ==================== 参数确认和规则学习 ====================
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}). Parameter learning
+    // is per-user-per-intent. If executeAfterConfirm=true, the intent-level perm gate in
+    // IntentExecutionOrchestrator still applies.
+    @PostMapping("/params/confirm")
+    @Operation(summary = "确认参数并学习规则",
+               description = "用户确认 LLM 提取的参数后，系统学习提取规则，下次可直接使用规则提取（无需调用 LLM）")
+    public ResponseEntity<ApiResponse<IntentExecuteResponse>> confirmParameters(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody ParameterConfirmationRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String userRole = jwtUtil.getRoleFromToken(token);
+
+        Map<String, Object> confirmedParams = WriteGuardService.withoutCallerConfirmation(
+                request.getConfirmedParams());
+        log.info("确认参数并学习规则: factoryId={}, intentCode={}, params={}",
+                factoryId, request.getIntentCode(),
+                confirmedParams != null ? confirmedParams.keySet() : java.util.Set.of());
+
+        // 1. 学习提取规则
+        parameterExtractionLearningService.learnAndConfirm(
+                factoryId,
+                request.getIntentCode(),
+                request.getUserInput(),
+                confirmedParams);
+
+        // 2. 如果需要执行，构建执行请求
+        if (Boolean.TRUE.equals(request.getExecuteAfterConfirm())) {
+            // Parameter correction is not execution authority. A write still has to use the
+            // preview -> single-use token -> /confirm flow; read-only intents remain compatible.
+            Map<String, Object> context = confirmedParams != null
+                    ? new java.util.HashMap<>(confirmedParams)
+                    : new java.util.HashMap<>();
+            IntentExecuteRequest executeRequest = IntentExecuteRequest.builder()
+                    .userInput(request.getUserInput())
+                    .intentCode(request.getIntentCode())
+                    .context(context)
+                    .build();
+
+            IntentExecuteResponse response = intentExecutorService.execute(factoryId, executeRequest, userId, userRole);
+            return ResponseEntity.ok(ApiResponse.success("参数已确认并执行", response));
+        }
+
+        // 只学习规则，不执行
+        return ResponseEntity.ok(ApiResponse.success("参数已确认，规则已学习", null));
+    }
+
+    /** HTTP request fields are data, never write-confirmation authority. */
+    private void removeCallerConfirmationAuthority(IntentExecuteRequest request) {
+        if (request == null) return;
+        request.setForceExecute(false);
+        request.setContext(WriteGuardService.withoutCallerConfirmation(request.getContext()));
+    }
+
+    @GetMapping("/params/rules/{intentCode}")
+    @Operation(summary = "获取意图的参数提取规则", description = "获取指定意图的所有活跃参数提取规则")
+    public ResponseEntity<ApiResponse<List<ParameterExtractionRule>>> getExtractionRules(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode) {
+
+        List<ParameterExtractionRule> rules = parameterExtractionLearningService.getActiveRules(factoryId, intentCode);
+        return ResponseEntity.ok(ApiResponse.success(rules));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @DeleteMapping("/params/rules/{ruleId}")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "删除参数提取规则", description = "删除指定的参数提取规则（仅管理员）")
+    public ResponseEntity<ApiResponse<Void>> deleteExtractionRule(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "规则ID") @PathVariable String ruleId) {
+
+        log.info("删除参数提取规则: factoryId={}, ruleId={}", factoryId, ruleId);
+        parameterExtractionLearningService.deleteRule(ruleId);
+        return ResponseEntity.ok(ApiResponse.success("规则已删除", null));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/params/rules/cleanup")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "清理低成功率规则", description = "清理成功率低于阈值的参数提取规则")
+    public ResponseEntity<ApiResponse<Integer>> cleanupLowSuccessRules(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "最小命中次数") @RequestParam(defaultValue = "10") int minHitCount,
+            @Parameter(description = "最大成功率阈值") @RequestParam(defaultValue = "0.3") double maxSuccessRate) {
+
+        log.info("清理低成功率规则: factoryId={}, minHitCount={}, maxSuccessRate={}",
+                factoryId, minHitCount, maxSuccessRate);
+        int count = parameterExtractionLearningService.cleanupLowSuccessRules(minHitCount, maxSuccessRate);
+        return ResponseEntity.ok(ApiResponse.success("已清理 " + count + " 条规则", count));
+    }
+
+    // ==================== 权限查询 ====================
+
+    @GetMapping("/{intentCode}/permission")
+    @Operation(summary = "检查意图权限", description = "检查指定角色是否有权限执行意图")
+    public ResponseEntity<ApiResponse<PermissionCheckResult>> checkPermission(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode,
+            @Parameter(description = "用户角色") @RequestParam String userRole) {
+
+        boolean hasPermission = aiIntentService.hasPermission(intentCode, userRole);
+        boolean requiresApproval = aiIntentService.requiresApproval(intentCode);
+        int quotaCost = aiIntentService.getQuotaCost(intentCode);
+
+        PermissionCheckResult result = new PermissionCheckResult();
+        result.setIntentCode(intentCode);
+        result.setUserRole(userRole);
+        result.setHasPermission(hasPermission);
+        result.setRequiresApproval(requiresApproval);
+        result.setQuotaCost(quotaCost);
+
+        return ResponseEntity.ok(ApiResponse.success(result));
+    }
+
+    // ==================== 意图管理 ====================
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "创建意图配置", description = "创建新的AI意图配置（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<AIIntentConfig>> createIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody AIIntentConfig intentConfig) {
+
+        AIIntentConfig created = aiIntentService.createIntent(intentConfig);
+        log.info("Created AI intent: {} for factory context: {}", intentConfig.getIntentCode(), factoryId);
+        return ResponseEntity.ok(ApiResponse.success("意图配置创建成功", created));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @PutMapping("/{intentCode}")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "更新意图配置", description = "更新现有的AI意图配置（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<AIIntentConfig>> updateIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode,
+            @RequestBody AIIntentConfig intentConfig) {
+
+        intentConfig.setIntentCode(intentCode);
+        AIIntentConfig updated = aiIntentService.updateIntent(intentConfig);
+        log.info("Updated AI intent: {}", intentCode);
+        return ResponseEntity.ok(ApiResponse.success("意图配置更新成功", updated));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @PatchMapping("/{intentCode}/active")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "启用/禁用意图", description = "切换意图的启用状态（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<Void>> setIntentActive(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode,
+            @RequestBody ActiveStatusRequest request) {
+
+        aiIntentService.setIntentActive(intentCode, request.isActive());
+        String action = request.isActive() ? "启用" : "禁用";
+        log.info("{} AI intent: {}", action, intentCode);
+        return ResponseEntity.ok(ApiResponse.successMessage("意图已" + action));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @DeleteMapping("/{intentCode}")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "删除意图配置", description = "软删除意图配置（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<Void>> deleteIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode) {
+
+        aiIntentService.deleteIntent(intentCode);
+        log.info("Deleted AI intent: {}", intentCode);
+        return ResponseEntity.ok(ApiResponse.successMessage("意图配置删除成功"));
+    }
+
+    // ==================== 版本回滚 ====================
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/{intentCode}/rollback")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "回滚意图配置", description = "回滚单个意图配置到上个版本（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<AIIntentConfig>> rollbackIntent(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode,
+            @RequestBody RollbackRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String username = jwtUtil.getUsernameFromToken(token);
+
+        // 先获取配置ID
+        AIIntentConfig config = aiIntentService.getIntentByCode(factoryId, intentCode)
+                .orElseThrow(() -> new IllegalArgumentException("意图配置不存在: " + intentCode));
+
+        AIIntentConfig rolled = rollbackService.rollbackToLastVersion(
+                config.getId(), userId, username, request.getReason());
+
+        log.info("Rolled back AI intent: {} to version {}", intentCode, rolled.getConfigVersion());
+        return ResponseEntity.ok(ApiResponse.success("意图配置回滚成功", rolled));
+    }
+
+    @GetMapping("/{intentCode}/history")
+    @Operation(summary = "获取版本历史", description = "获取意图配置的版本历史记录")
+    public ResponseEntity<ApiResponse<java.util.List<AIIntentConfigHistory>>> getVersionHistory(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @Parameter(description = "意图代码") @PathVariable String intentCode) {
+
+        AIIntentConfig config = aiIntentService.getIntentByCode(factoryId, intentCode)
+                .orElseThrow(() -> new IllegalArgumentException("意图配置不存在: " + intentCode));
+
+        java.util.List<AIIntentConfigHistory> history = rollbackService.getVersionHistory(config.getId());
+        return ResponseEntity.ok(ApiResponse.success(history));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/rollback-all")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "批量回滚工厂意图", description = "回滚工厂的所有意图配置到上个版本（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> rollbackAllIntents(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody RollbackRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        String username = jwtUtil.getUsernameFromToken(token);
+
+        java.util.Map<String, Object> result = rollbackService.rollbackFactoryToLastVersion(
+                factoryId, userId, username, request.getReason());
+
+        log.info("Batch rollback for factory {}: {}", factoryId, result);
+        return ResponseEntity.ok(ApiResponse.success("批量回滚完成", result));
+    }
+
+    // ==================== 反馈记录 ====================
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}). Feedback is
+    // per-user signal data — every authenticated user who can use AI must be able to
+    // submit feedback (positive/negative). JWT auth alone is sufficient.
+    @PostMapping("/feedback/positive")
+    @Operation(summary = "记录正向反馈", description = "当用户确认意图匹配正确时调用，用于关键词效果追踪")
+    public ResponseEntity<ApiResponse<Void>> recordPositiveFeedback(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody PositiveFeedbackRequest request) {
+
+        log.info("记录正向反馈: factoryId={}, intentCode={}, keywords={}",
+                factoryId, request.getIntentCode(), request.getMatchedKeywords());
+
+        aiIntentService.recordPositiveFeedback(
+                factoryId,
+                request.getIntentCode(),
+                request.getMatchedKeywords());
+
+        return ResponseEntity.ok(ApiResponse.successMessage("正向反馈已记录"));
+    }
+
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — feedback path.
+    @PostMapping("/feedback/negative")
+    @Operation(summary = "记录负向反馈", description = "当用户拒绝匹配结果并选择其他意图时调用")
+    public ResponseEntity<ApiResponse<Void>> recordNegativeFeedback(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody NegativeFeedbackRequest request) {
+
+        log.info("记录负向反馈: factoryId={}, rejected={}, selected={}, keywords={}",
+                factoryId, request.getRejectedIntentCode(),
+                request.getSelectedIntentCode(), request.getMatchedKeywords());
+
+        aiIntentService.recordNegativeFeedback(
+                factoryId,
+                request.getRejectedIntentCode(),
+                request.getSelectedIntentCode(),
+                request.getMatchedKeywords());
+
+        return ResponseEntity.ok(ApiResponse.successMessage("负向反馈已记录"));
+    }
+
+    /**
+     * 意图识别反馈接口
+     * 用户可以纠正错误的意图识别结果，系统自动学习
+     */
+    // Sprint 11 Round 2: removed @RequirePermission({"system:read_write"}) — feedback path.
+    @PostMapping("/feedback")
+    @Operation(summary = "提交意图识别反馈", description = "用户可以纠正错误的意图识别结果，系统自动学习")
+    public ResponseEntity<ApiResponse<Void>> submitIntentFeedback(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId,
+            @RequestBody IntentFeedbackRequest request,
+            HttpServletRequest httpRequest) {
+
+        // Sprint 11.5 P0 (2026-05-23): cookie-aware token extraction
+        String token = extractToken(httpRequest);
+        Long userId = jwtUtil.getUserIdFromToken(token);
+
+        log.info("提交意图反馈: factoryId={}, userId={}, input='{}', matched={}, correct={}, isCorrect={}",
+                factoryId, userId, request.getUserInput(), request.getMatchedIntentCode(),
+                request.getCorrectIntentCode(), request.getIsCorrect());
+
+        aiIntentService.processIntentFeedback(factoryId, userId, request);
+
+        return ResponseEntity.ok(ApiResponse.successMessage("反馈已记录，系统将自动学习"));
+    }
+
+    // ==================== 缓存管理 ====================
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/cache/refresh")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "刷新意图缓存", description = "清除并重新加载意图配置缓存（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<Void>> refreshCache(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId) {
+
+        aiIntentService.refreshCache();
+        log.info("Refreshed AI intent cache");
+        return ResponseEntity.ok(ApiResponse.successMessage("意图缓存已刷新"));
+    }
+
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/cache/clear")
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'FACTORY_ADMIN')")
+    @Operation(summary = "清除意图缓存", description = "清除意图配置缓存（仅工厂管理员）")
+    public ResponseEntity<ApiResponse<Void>> clearCache(
+            @Parameter(description = "工厂ID") @PathVariable String factoryId) {
+
+        aiIntentService.clearCache();
+        log.info("Cleared AI intent cache");
+        return ResponseEntity.ok(ApiResponse.successMessage("意图缓存已清除"));
+    }
+
+    // ==================== DTO Classes ====================
+
+    /**
+     * 意图识别请求
+     */
+    @lombok.Data
+    public static class IntentRecognitionRequest {
+        private String userInput;
+    }
+
+    /**
+     * 意图识别结果
+     */
+    @lombok.Data
+    public static class IntentRecognitionResult {
+        private String userInput;
+        private boolean matched;
+        private String intentCode;
+        private String intentName;
+        private String category;
+        private String sensitivityLevel;
+        private Integer quotaCost;
+        private Boolean requiresApproval;
+        private Double confidence;      // 匹配置信度 (BUG-001/002 修复新增)
+        private String matchMethod;     // 匹配方法 (REGEX/KEYWORD/SEMANTIC/LLM)
+        private Map<String, Long> timingMs;  // 各阶段耗时
+    }
+
+    /**
+     * 权限检查结果
+     */
+    @lombok.Data
+    public static class PermissionCheckResult {
+        private String intentCode;
+        private String userRole;
+        private boolean hasPermission;
+        private boolean requiresApproval;
+        private int quotaCost;
+    }
+
+    /**
+     * 启用状态请求
+     */
+    @lombok.Data
+    public static class ActiveStatusRequest {
+        private boolean active;
+    }
+
+    /**
+     * 正向反馈请求
+     */
+    @lombok.Data
+    public static class PositiveFeedbackRequest {
+        /** 意图代码 */
+        private String intentCode;
+        /** 匹配到的关键词列表 */
+        private java.util.List<String> matchedKeywords;
+    }
+
+    /**
+     * 负向反馈请求
+     */
+    @lombok.Data
+    public static class NegativeFeedbackRequest {
+        /** 被拒绝的意图代码 */
+        private String rejectedIntentCode;
+        /** 用户选择的正确意图代码 */
+        private String selectedIntentCode;
+        /** 原匹配到的关键词列表 */
+        private java.util.List<String> matchedKeywords;
+    }
+
+    /**
+     * 回滚请求
+     */
+    @lombok.Data
+    public static class RollbackRequest {
+        /** 回滚原因 */
+        private String reason;
+    }
+}

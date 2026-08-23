@@ -1,0 +1,210 @@
+package com.cretas.aims.controller.inventory;
+
+import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.inventory.CreatePriceListRequest;
+import com.cretas.aims.entity.inventory.PriceList;
+import com.cretas.aims.entity.inventory.PriceListItem;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.inventory.PriceListItemRepository;
+import com.cretas.aims.repository.inventory.PriceListRepository;
+import com.cretas.aims.service.MobileService;
+import com.cretas.aims.utils.TokenUtils;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.web.bind.annotation.*;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Bug #318 fix: method-level @RequirePermission on write methods (定价敏感影响订单金额).
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/mobile/{factoryId}/price-lists")
+@RequiredArgsConstructor
+@RequirePermission({"procurement:price:view"})
+@Tag(name = "价格表管理", description = "总部统一定价管理")
+public class PriceListController {
+
+    private final PriceListRepository priceListRepository;
+    private final PriceListItemRepository priceListItemRepository;
+    private final MobileService mobileService;
+
+    // 🔴 2026-08-22: 加 procurement:read_write。这一页挂在**采购管理**组下、
+    //   管的就是**采购价目表**(F006 现存那条 price_type=PURCHASE_PRICE),
+    //   而写方法只认 sales|finance ⇒ 采购主管**能用纯粹是因为他碰巧有 finance**。
+    //   owner 要求把财务菜单从采购主管身上砍掉, 砍之前必须先把这里声明对,
+    //   否则就是砍出一个新的「看得见点不开」。
+    // ⚠️ **登记一处放宽**(⛔ 非豁免): 本控制器同时管销售价目表, 所以采购主管
+    //   理论上也能建/删**销售**价目表。⚠️ 但这不是新增风险 —— 他此前靠 finance
+    //   就已经能做同样的事; 本改动只是把「靠什么能做」换成了正确的那个。
+    //   要真正收窄得按 price_type 分权, 那是另一件事。
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PostMapping
+    @Operation(summary = "创建价格表")
+    public ApiResponse<PriceList> createPriceList(
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody CreatePriceListRequest request) {
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        PriceList priceList = new PriceList();
+        priceList.setFactoryId(factoryId);
+        priceList.setName(request.getName());
+        priceList.setCustomerId(request.getCustomerId());
+        priceList.setPriceType(request.getPriceType());
+        priceList.setEffectiveFrom(request.getEffectiveFrom());
+        priceList.setEffectiveTo(request.getEffectiveTo());
+        priceList.setCreatedBy(userId);
+        priceList.setRemark(request.getRemark());
+
+        priceList = priceListRepository.save(priceList);
+
+        for (CreatePriceListRequest.PriceItemDTO itemDTO : request.getItems()) {
+            PriceListItem item = new PriceListItem();
+            item.setPriceListId(priceList.getId());
+            item.setMaterialTypeId(itemDTO.getMaterialTypeId());
+            item.setProductTypeId(itemDTO.getProductTypeId());
+            item.setItemName(itemDTO.getItemName());
+            item.setUnit(itemDTO.getUnit());
+            item.setStandardPrice(itemDTO.getStandardPrice());
+            item.setMinPrice(itemDTO.getMinPrice());
+            item.setMaxPrice(itemDTO.getMaxPrice());
+            item.setRemark(itemDTO.getRemark());
+            priceList.getItems().add(item);
+        }
+
+        priceList = priceListRepository.save(priceList);
+        log.info("创建价格表: factoryId={}, name={}, items={}", factoryId, request.getName(), request.getItems().size());
+        return ApiResponse.success("价格表创建成功", priceList);
+    }
+
+    @GetMapping
+    @Operation(summary = "价格表列表")
+    public ApiResponse<PageResponse<PriceList>> listPriceLists(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<PriceList> result = priceListRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageRequest);
+        return ApiResponse.success("查询成功", PageResponse.of(result.getContent(), page, size, result.getTotalElements()));
+    }
+
+    @GetMapping("/effective")
+    @Operation(summary = "查询当前生效的价格表")
+    public ApiResponse<List<PriceList>> getEffective(
+            @PathVariable @NotBlank String factoryId) {
+        List<PriceList> result = priceListRepository.findEffective(factoryId, LocalDate.now());
+        return ApiResponse.success("查询成功", result);
+    }
+
+    @GetMapping("/{priceListId}")
+    @Operation(summary = "价格表详情")
+    public ApiResponse<PriceList> getPriceList(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId) {
+        PriceList priceList = priceListRepository.findById(priceListId)
+                .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
+        return ApiResponse.success("查询成功", priceList);
+    }
+
+    /**
+     * 价格查询：选了客户+产品后自动填价
+     * 优先级: 客户专属价格 → 全局价格 → null
+     */
+    // 🔴 2026-08-22: 加 sales。类级 procurement:price:view 把它锁给了采购, 而这个端点的
+    //   summary 自己写着「查询产品**售价**」—— 它是销售下单选完客户+产品后**自动填价**用的。
+    //   sales_manager 在销售订单页看得见、点下去必 403。
+    // ⛔ 只放这一个只读端点: 同类的写方法仍是 sales:read_write|finance:read_write。
+    @RequirePermission({"procurement:price:view", "sales:read", "sales:read_write"})
+    @GetMapping("/lookup")
+    @Operation(summary = "查询产品售价（客户专属→全局）")
+    public ApiResponse<Map<String, Object>> lookupPrice(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String customerId,
+            @RequestParam String productTypeId) {
+        LocalDate today = LocalDate.now();
+
+        // 1. 先查客户专属价格
+        BigDecimal price = null;
+        String source = null;
+        String priceListName = null;
+
+        if (customerId != null && !customerId.isBlank()) {
+            List<PriceList> customerLists = priceListRepository.findEffectiveForCustomer(
+                    factoryId, customerId, "SELLING_PRICE", today);
+            for (PriceList pl : customerLists) {
+                PriceListItem match = findItemByProduct(pl.getId(), productTypeId);
+                if (match != null) {
+                    price = match.getStandardPrice();
+                    source = "CUSTOMER";
+                    priceListName = pl.getName();
+                    break;
+                }
+            }
+        }
+
+        // 2. 没有客户专属 → 查全局价格
+        if (price == null) {
+            List<PriceList> globalLists = priceListRepository.findEffectiveGlobal(
+                    factoryId, "SELLING_PRICE", today);
+            for (PriceList pl : globalLists) {
+                PriceListItem match = findItemByProduct(pl.getId(), productTypeId);
+                if (match != null) {
+                    price = match.getStandardPrice();
+                    source = "GLOBAL";
+                    priceListName = pl.getName();
+                    break;
+                }
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("found", price != null);
+        result.put("price", price);
+        result.put("source", source);
+        result.put("priceListName", priceListName);
+        return ApiResponse.success("查询成功", result);
+    }
+
+    private PriceListItem findItemByProduct(String priceListId, String productTypeId) {
+        List<PriceListItem> items = priceListItemRepository.findByPriceListIdAndProductTypeId(priceListId, productTypeId);
+        return items.isEmpty() ? null : items.get(0);
+    }
+
+    // 🔴 2026-08-22: 加 procurement:read_write。这一页挂在**采购管理**组下、
+    //   管的就是**采购价目表**(F006 现存那条 price_type=PURCHASE_PRICE),
+    //   而写方法只认 sales|finance ⇒ 采购主管**能用纯粹是因为他碰巧有 finance**。
+    //   owner 要求把财务菜单从采购主管身上砍掉, 砍之前必须先把这里声明对,
+    //   否则就是砍出一个新的「看得见点不开」。
+    // ⚠️ **登记一处放宽**(⛔ 非豁免): 本控制器同时管销售价目表, 所以采购主管
+    //   理论上也能建/删**销售**价目表。⚠️ 但这不是新增风险 —— 他此前靠 finance
+    //   就已经能做同样的事; 本改动只是把「靠什么能做」换成了正确的那个。
+    //   要真正收窄得按 price_type 分权, 那是另一件事。
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @DeleteMapping("/{priceListId}")
+    @Operation(summary = "删除价格表")
+    public ApiResponse<Void> deletePriceList(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId) {
+        PriceList priceList = priceListRepository.findById(priceListId)
+                .orElseThrow(() -> new ResourceNotFoundException("价格表不存在"));
+        priceListRepository.delete(priceList);
+        log.info("删除价格表: priceListId={}", priceListId);
+        return ApiResponse.success("价格表删除成功", null);
+    }
+}

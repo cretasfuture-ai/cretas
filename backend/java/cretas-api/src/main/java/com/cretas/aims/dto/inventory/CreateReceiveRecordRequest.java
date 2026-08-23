@@ -1,0 +1,112 @@
+package com.cretas.aims.dto.inventory;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class CreateReceiveRecordRequest {
+
+    /** 关联的采购订单ID（可选，支持无单入库） */
+    @Size(max = 191, message = "采购订单ID长度不能超过191个字符")
+    private String purchaseOrderId;
+
+    @NotBlank(message = "供应商ID不能为空")
+    @Size(max = 191, message = "供应商ID长度不能超过191个字符")
+    private String supplierId;
+
+    @NotNull(message = "入库日期不能为空")
+    private LocalDate receiveDate;
+
+    @Size(max = 191, message = "仓库ID长度不能超过191个字符")
+    private String warehouseId;
+
+    @Size(max = 5000, message = "备注长度不能超过5000个字符")
+    private String remark;
+
+    @Valid
+    @NotEmpty(message = "入库行项目不能为空")
+    private List<ReceiveItemDTO> items;
+
+    /**
+     * Round 11 — Canvas Integration Template slot for factory-configured dynamic fields.
+     * Fields like 运输温度记录, 质检报告附件, 外包装状态 land here and are persisted
+     * to cf_* columns on purchase_receive_records via DynamicFieldService.
+     */
+    private Map<String, Object> customFields;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReceiveItemDTO {
+
+        /** Required for PO-backed receipts; nullable only for legacy/non-PO callers. */
+        private Long purchaseOrderItemId;
+
+        /** Actual arrival packaging selected from the material master. */
+        @Size(max = 36, message = "原料包装规格ID长度不能超过36个字符")
+        private String materialPackagingSpecId;
+
+        @NotBlank(message = "原料类型ID不能为空")
+        @Size(max = 191, message = "原料类型ID长度不能超过191个字符")
+        private String materialTypeId;
+
+        @Size(max = 200, message = "原料名称长度不能超过200个字符")
+        private String materialName;
+
+        @NotNull(message = "到货数量不能为空")
+        @DecimalMin(value = "0.01", message = "收货数量必须大于0")
+        private BigDecimal receivedQuantity;
+
+        @NotBlank(message = "单位不能为空")
+        @Size(max = 20, message = "单位长度不能超过20个字符")
+        private String unit;
+
+        private BigDecimal unitPrice;
+
+        /** Canonical denominator unit of unitPrice; defaults to the receipt quantity unit. */
+        @Size(max = 20, message = "计价单位长度不能超过20个字符")
+        private String priceUnit;
+
+        @Size(max = 50, message = "质检结果长度不能超过50个字符")
+        private String qcResult;
+
+        @Size(max = 100, message = "厂号长度不能超过100个字符")
+        private String factoryNumber;
+
+        @Size(max = 200, message = "产地长度不能超过200个字符")
+        private String originPlace;
+
+        /**
+         * 合同号 —— <b>行级</b>。客户实测同一张 PO 下不同来料批是不同合同号
+         * (SAN-16572 / SAN-16562), 订单级的 contract_number 装不下。
+         */
+        @Size(max = 100, message = "合同号长度不能超过100个字符")
+        private String contractNumber;
+
+        /** 供应商/客户给的批次号 —— 与系统生成的库存批次号是两件事。 */
+        @Size(max = 100, message = "供应商批次号长度不能超过100个字符")
+        private String supplierBatchNumber;
+
+        /** 件数(件/箱) —— 与重量并存: 抄码来料件数固定而重量不定。 */
+        @Min(value = 0, message = "件数不能为负数")
+        private Integer boxCount;
+
+        @Size(max = 5000, message = "备注长度不能超过5000个字符")
+        private String remark;
+    }
+}

@@ -1,0 +1,193 @@
+import type {
+  ApprovalWorkflowDTO,
+  ApprovalWorkflowEdge,
+  ApprovalCutoverReadinessDTO,
+  DecisionType,
+  DecisionTypeCategory,
+  DecisionTypeMetadataDTO,
+} from '@/api/approvalWorkflow'
+import { parseSalesApprovalAmountThreshold } from '@/views/platform/approval-workflow-editor/lib/salesApprovalCondition'
+
+export type ApprovalCatalogStatus =
+  | 'active'
+  | 'active-with-draft'
+  | 'draft'
+  | 'published-disabled'
+  | 'archived'
+  | 'legacy-migration-required'
+  | 'canvas-conflict'
+  | 'business-not-wired'
+  | 'unconfigured'
+
+export interface ApprovalCatalogItem {
+  decisionType: DecisionType
+  chineseName: string
+  description: string
+  category: DecisionTypeCategory
+  wired: boolean
+  workflowCount: number
+  legacyCount: number
+  preferredWorkflowId?: string
+  preferredWorkflowName?: string
+  preferredWorkflowVersion?: number
+  activeWorkflowVersion?: number
+  /** 当前真正生效（published + enabled，取最高版本）的 workflow 名；无生效版本时为 undefined。 */
+  activeWorkflowName?: string
+  /**
+   * 从生效 workflow 的 edgesJson 条件里现算出来的金额阈值（如「≤ ¥30000 自动通过」的 30000）。
+   * null = 有生效 workflow 但没有可解析的金额分流条件；undefined = 没有生效 workflow。
+   * ⛔ 不从 name 字符串里抠数字——那份是展示文案，会漂，见 M-5。
+   */
+  activeWorkflowAmountThreshold?: number | null
+  draftWorkflowVersion?: number
+  latestUpdatedAt?: string
+  approvalEnabled: boolean
+  hasDraft: boolean
+  status: ApprovalCatalogStatus
+}
+
+const STATUS_RANK: Record<ApprovalCatalogStatus, number> = {
+  active: 0,
+  'active-with-draft': 1,
+  draft: 2,
+  'published-disabled': 3,
+  archived: 4,
+  'legacy-migration-required': 5,
+  'canvas-conflict': 6,
+  'business-not-wired': 7,
+  unconfigured: 8,
+}
+
+function workflowRank(workflow: ApprovalWorkflowDTO): number {
+  if (workflow.publishStatus === 'draft') return 0
+  if (workflow.publishStatus === 'published' && workflow.enabled) return 1
+  if (workflow.publishStatus === 'published') return 2
+  return 3
+}
+
+/**
+ * 从 workflow 的 edgesJson 里现算金额阈值，供列表页直接展示「多少钱以下免审」。
+ * ⛔ 不解析 workflow.name 里的字面数字——那份文案是写死的展示层，会跟画布配置漂开（见 M-5）。
+ * 返回 null 表示这个 workflow 没有可识别的金额分流条件（例如没有分流的业务），是合法的空态。
+ */
+export function parseWorkflowAmountThreshold(
+  workflow: ApprovalWorkflowDTO | undefined,
+): number | null {
+  if (!workflow?.edgesJson) return null
+  let edges: ApprovalWorkflowEdge[]
+  try {
+    const parsed: unknown = JSON.parse(workflow.edgesJson)
+    if (!Array.isArray(parsed)) return null
+    edges = parsed as ApprovalWorkflowEdge[]
+  } catch {
+    return null
+  }
+  for (const edge of edges) {
+    const threshold = parseSalesApprovalAmountThreshold(edge?.condition)
+    if (threshold !== null) return threshold
+  }
+  return null
+}
+
+export function selectPreferredWorkflow(
+  workflows: ApprovalWorkflowDTO[],
+): ApprovalWorkflowDTO | undefined {
+  return [...workflows].sort((left, right) => (
+    workflowRank(left) - workflowRank(right)
+    || right.priority - left.priority
+    || right.version - left.version
+    || left.name.localeCompare(right.name, 'zh-CN')
+  ))[0]
+}
+
+function resolveStatus(workflows: ApprovalWorkflowDTO[]): ApprovalCatalogStatus {
+  const hasActive = workflows.some(
+    (workflow) => workflow.publishStatus === 'published' && workflow.enabled,
+  )
+  const hasDraft = workflows.some((workflow) => workflow.publishStatus === 'draft')
+  if (hasActive && hasDraft) return 'active-with-draft'
+  if (hasActive) return 'active'
+  if (hasDraft) return 'draft'
+  if (workflows.some((workflow) => workflow.publishStatus === 'published')) {
+    return 'published-disabled'
+  }
+  return workflows.length ? 'archived' : 'unconfigured'
+}
+
+export function buildApprovalCatalog(
+  metadata: DecisionTypeMetadataDTO[],
+  workflows: ApprovalWorkflowDTO[],
+  readiness: ApprovalCutoverReadinessDTO[],
+): ApprovalCatalogItem[] {
+  const workflowsByType = new Map<DecisionType, ApprovalWorkflowDTO[]>()
+  for (const workflow of workflows) {
+    const group = workflowsByType.get(workflow.decisionType) ?? []
+    group.push(workflow)
+    workflowsByType.set(workflow.decisionType, group)
+  }
+
+  const readinessByType = new Map(
+    readiness.map((item) => [item.decisionType, item]),
+  )
+
+  return metadata.map((item) => {
+    const typeWorkflows = workflowsByType.get(item.decisionType) ?? []
+    const preferred = selectPreferredWorkflow(typeWorkflows)
+    const active = [...typeWorkflows]
+      .filter((workflow) => workflow.publishStatus === 'published' && workflow.enabled)
+      .sort((left, right) => right.version - left.version)[0]
+    const draft = [...typeWorkflows]
+      .filter((workflow) => workflow.publishStatus === 'draft')
+      .sort((left, right) => right.version - left.version)[0]
+    const latestUpdatedAt = typeWorkflows
+      .map((workflow) => workflow.updatedAt ?? workflow.createdAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0]
+    const cutover = readinessByType.get(item.decisionType)
+    const workflowStatus = resolveStatus(typeWorkflows)
+    let status: ApprovalCatalogStatus = workflowStatus
+    if (cutover?.runtimeStatus === 'CANVAS_CONFLICT') {
+      status = 'canvas-conflict'
+    } else if (cutover?.runtimeStatus === 'BUSINESS_NOT_WIRED') {
+      status = 'business-not-wired'
+    } else if (cutover?.runtimeStatus === 'LEGACY_MIGRATION_REQUIRED') {
+      status = 'legacy-migration-required'
+    }
+    return {
+      decisionType: item.decisionType,
+      chineseName: item.chineseName,
+      description: item.description,
+      category: item.category,
+      wired: item.wired,
+      workflowCount: typeWorkflows.length,
+      legacyCount: cutover?.legacyEnabled ? 1 : 0,
+      preferredWorkflowId: preferred?.id,
+      preferredWorkflowName: preferred?.name,
+      preferredWorkflowVersion: preferred?.version,
+      activeWorkflowVersion: active?.version,
+      activeWorkflowName: active?.name,
+      activeWorkflowAmountThreshold: active ? parseWorkflowAmountThreshold(active) : undefined,
+      draftWorkflowVersion: draft?.version,
+      latestUpdatedAt,
+      approvalEnabled: cutover?.approvalRequired ?? Boolean(active),
+      hasDraft: Boolean(draft),
+      status,
+    }
+  }).sort((left, right) => (
+    STATUS_RANK[left.status] - STATUS_RANK[right.status]
+    || left.category.localeCompare(right.category)
+    || left.chineseName.localeCompare(right.chineseName, 'zh-CN')
+  ))
+}
+
+export function buildOaCanvasQuery(item: ApprovalCatalogItem): Record<string, string> {
+  const query: Record<string, string> = {
+    tab: 'approval',
+    decisionType: item.decisionType,
+    source: 'approval-chains',
+  }
+  if (item.preferredWorkflowId) {
+    query.workflowId = item.preferredWorkflowId
+  }
+  return query
+}

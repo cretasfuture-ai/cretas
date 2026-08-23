@@ -1,0 +1,140 @@
+package com.cretas.aims.ai.tool.impl.restaurant;
+
+import com.cretas.aims.client.GoldFinanceClient;
+import com.cretas.aims.dto.ai.IntentExecuteRequest;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Shared tiered-intent delegate gate for legacy restaurant tools.
+ *
+ * <p>Sheet 7/22 菜品链事故: {@code RestaurantDishSalesRankingTool} 等旧餐饮工具
+ * 直查工厂 ERP 表 (demo 租户为空 → "近 0 天暂无销售记录"), 而 Python 侧的
+ * POS 菜品限域/时间窗/多轮上下文答案链已就绪。该组件把
+ * {@code GoldBackedRestaurantTool} 的 Phase-2 委派门 (2026-07-07 design)
+ * 提炼为可复用 bean, 让非 Gold 基类的旧工具也能先问 Python tiered 路由,
+ * 命中即用其答案, 未命中/异常一律 fall through 原有流程 (never throws)。
+ *
+ * <p>与基类内联实现的差异: 不做 {@code ensureActionableMessage} 包装 (那是
+ * Gold 工具族的 owner-action 框架), 委派答案原样返回。
+ */
+@Slf4j
+@Component
+public class TieredIntentDelegate {
+
+    /**
+     * R16 tiered-first 反转去重: 反转入口尝试过委派后在 request context 打此
+     * 标记, 下游全部 gate (工具头 / no-tool 出口 / slot-filling 前置) 见标记
+     * 即跳过 — 同一请求绝不二次调用 Python (tiered parse 可能含 T3 LLM)。
+     * 未经过反转入口的路径 (显式 intentCode / SSE) 无标记, gate 照常兜底。
+     */
+    public static final String ATTEMPTED_CONTEXT_KEY = "tieredDelegateAttempted";
+
+    @Autowired
+    private GoldFinanceClient gold;
+
+    /**
+     * Try the Python tiered router first. Returns a ready tool-result map when
+     * Python answered ({@code delegate:true}), else {@code null} so the caller
+     * runs its own flow. Never throws.
+     */
+    public Map<String, Object> tryDelegate(
+            String factoryId,
+            Map<String, Object> params,
+            Map<String, Object> context,
+            String toolName) {
+        try {
+            if (context != null && Boolean.TRUE.equals(context.get(ATTEMPTED_CONTEXT_KEY))) {
+                return null;
+            }
+            Object earlyRequestObj = context != null ? context.get("request") : null;
+            if (earlyRequestObj instanceof IntentExecuteRequest earlyReq
+                    && earlyReq.getContext() != null
+                    && Boolean.TRUE.equals(earlyReq.getContext().get(ATTEMPTED_CONTEXT_KEY))) {
+                return null;
+            }
+            String userInput = params != null ? asString(params.get("userInput")) : null;
+            String sessionId = null;
+            Object requestObj = context != null ? context.get("request") : null;
+            if (requestObj instanceof IntentExecuteRequest req) {
+                if (userInput == null || userInput.isBlank()) {
+                    userInput = req.getUserInput();
+                }
+                sessionId = req.getSessionId();
+            }
+            if (userInput == null || userInput.isBlank()) {
+                return null;
+            }
+            Map<String, Object> response = (sessionId != null && !sessionId.isBlank())
+                    ? gold.fetchTieredIntentAnswer(factoryId, userInput, toolName, sessionId)
+                    : gold.fetchTieredIntentAnswer(factoryId, userInput, toolName);
+            if (response == null || !Boolean.TRUE.equals(response.get("delegate"))) {
+                return null;
+            }
+            Object answerObj = response.get("answer_text");
+            String answerText = answerObj != null ? answerObj.toString() : null;
+            if (answerText == null || answerText.isBlank()) {
+                return null;
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("dataAvailable", true);
+            result.put("message", answerText);
+            result.put("tieredDelegate", true);
+            if (Boolean.TRUE.equals(response.get("clarification_continuation"))) {
+                result.put("clarificationContinuation", true);
+            }
+            // 🔴 2026-08-12 补透传 `kind`。此前这张映射表是**手写白名单**, `kind`
+            //    没在里面 —— 于是上游想判「这一条是不是反问/拒答」时只能拿
+            //    `clarificationContinuation` 顶, 而那个字段 Python 只在**延续轮**才发。
+            //    后果: 首轮拒答判不出是拒答, 「顺带 N 件事」照样挂在拒答正文后面
+            //    (prod 实测三句全中)。见 RestaurantFindingHintAppender 的 javadoc ——
+            //    抑制开关一直在, 接的信号错了。
+            if (response.get("kind") != null) {
+                result.put("kind", response.get("kind"));
+            }
+            if (response.get("warning") != null) {
+                result.put("warning", response.get("warning"));
+            }
+            if (response.get("suggested_followups") != null) {
+                result.put("suggestedFollowups", response.get("suggested_followups"));
+            }
+            if (response.get("structured_context") != null) {
+                result.put("conversationContext", response.get("structured_context"));
+            }
+            if (!"clarification".equals(response.get("kind"))) {
+                result.put("charts", response.getOrDefault("charts", Collections.emptyList()));
+                result.put("kpis", response.getOrDefault("kpis", Collections.emptyList()));
+                if (response.get("code") != null) {
+                    result.put("code", response.get("code"));
+                }
+                if (response.get("contract_pass") != null) {
+                    result.put("contractPass", response.get("contract_pass"));
+                }
+                if (response.get("query_plan_hash") != null) {
+                    result.put("queryPlanHash", response.get("query_plan_hash"));
+                }
+                // spec §2.1 输出形态偏好 (文字/表格/图/报告文件)。Python→Java→前端
+                // 每一跳都是字段白名单转发, 漏接一跳渲染层就拿不到。
+                if (response.get("output_preference") != null) {
+                    result.put("outputPreference", response.get("output_preference"));
+                }
+                if (response.get("executed_resolvers") != null) {
+                    result.put("executedResolvers", response.get("executed_resolvers"));
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("[{}] tiered delegate failed factory={}: {}", toolName, factoryId, e.getMessage());
+            return null;
+        }
+    }
+
+    private static String asString(Object value) {
+        return value != null ? value.toString() : null;
+    }
+}

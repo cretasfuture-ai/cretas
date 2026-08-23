@@ -1,0 +1,678 @@
+# 生产录入 Bug 修复记录
+
+记录时间：2026-06-27  
+范围：六扇门/F006 生产计划、逐道报工、出成率、成本分摊、结单预填与生产成本核算链路。
+
+## 背景
+
+这批问题都集中在“一个生产计划内存在多个 SKU、多个原料批次、多个半成品来源、跨天多工序流转”的真实生产场景。
+
+核心业务目标：
+
+- 原料可以在首道工序按不同 SKU/不同原料批次投入。
+- 后续工序可以消耗上游多个半成品批次。
+- 出成率需要同时能看“对上工序出成率”和“对原料累计出成率”。
+- 成本需要随批次流转继承，并把当前工序新增成本叠加进去。
+- 结单预填不能丢逐道报工数据，也不能把混 SKU 的原料误判为不属于 BOM。
+
+## 已修复问题
+
+### 1. 逐道报工成本汇总没有稳定落库
+
+相关提交：`8617c49f8 fix: persist process sheet batch cost summary`
+
+现象：
+
+- 逐道报工保存后，部分批次库存/成本汇总无法稳定回读。
+- 页面上可能出现批次有产出，但成本上下文为空或后续链路无法继承成本。
+
+根因：
+
+- 逐道报工行的批次成本汇总没有作为稳定结果持久化，后续库存、出成率卡片、结单预填只能依赖临时计算或部分字段。
+
+修复：
+
+- 保存逐道报工行时持久化批次级成本摘要。
+- 后续库存和出成率展示可以从已保存的批次结果回读。
+
+验证重点：
+
+- 保存报工行后，返回批次号。
+- 回读工序库存时能看到该批次。
+- 后续工序消耗该批次时能继承上游成本。
+
+### 2. 人工成本预览计算与录入口径不一致
+
+相关提交：`173fc2bc4 fix: align process sheet labor preview cost`
+
+现象：
+
+- 逐道报工页面人工成本预览与实际保存/结算口径不一致。
+- 有时用户录入人数、工时后，页面预览的成本和后续结算成本对不上。
+
+根因：
+
+- 前端预览与后端实际计算没有完全使用同一口径。
+- 人工可由“工时 + 人数 + 小时单价/员工单价”推导，不能只看人数或只看总时长。
+
+修复：
+
+- 对齐逐道报工人工成本预览逻辑。
+- 保持缺少小时单价时不臆造人工成本，避免显示假成本。
+
+当前口径说明：
+
+- 如果有小时单价：按工时、人数和单价计算人工成本。
+- 如果没有小时单价：不应默认为 0 后装作有效成本，需要提示或等待补录。
+
+### 3. 出成率来源追溯和提示不足
+
+相关提交：`94a6c3a56 fix: process sheet yield provenance and warnings`
+
+现象：
+
+- 页面能显示出成率，但用户无法判断这个数字来自哪里。
+- 混来源、跨工序时，看不出“对上工序”和“对原料累计”的差别。
+- 部分缺失上游来源、缺少批次库存的场景没有足够提示。
+
+根因：
+
+- 出成率展示只给了结果，没有把来源拆分和继承关系暴露出来。
+- 对混批次、混工序场景，单一百分比会让用户误解。
+
+修复：
+
+- 增加出成率来源追溯信息。
+- 对上游批次缺失、原料折算缺失、成本继承缺失等情况增加 warning。
+- 出成率卡片区分：
+  - 对上工序出成率：`本工序产出 / 本工序投入`
+  - 对原料累计出成率：`本工序产出 / 继承原料折算量`
+
+验证重点：
+
+- 首道工序：累计出成率约等于 `产出 / 原料投入`。
+- 后续工序：累计出成率基于上游批次继承原料折算量，而不是简单倒推出成率。
+- 混来源工序：能看到每个来源批次的拆分。
+
+### 4. 结单预填没有从逐道电子表格行完整带入
+
+相关提交：`d34e38958 fix: prefill settlement from process sheet rows`
+
+现象：
+
+- 逐道报工已经保存了原料投入、产出和工时，但生产结单页面仍提示无数据或预填不完整。
+- 用户需要手工再录一遍结单数据。
+
+根因：
+
+- 结单预填主要依赖旧报工记录，没有完整读取新的 `process_sheet_rows` 逐道电子表格行。
+
+修复：
+
+- 结单预填从 `process_sheet_rows` 派生：
+  - 实际成品产量
+  - 原料实际领用
+  - 工时段/人数
+  - 审计 warning
+- 没有可用工时段时，用“工时稍后补录”提示，避免阻断结单。
+
+验证重点：
+
+- 逐道保存多行后，打开结单预填能自动带入末道产出。
+- 原料领用合计等于首道原料投入合计。
+- 无 blocker issue 时可以提交结单。
+
+### 5. 逐道报工原料批次可选范围错误
+
+相关提交：`24604873b fix: restrict process sheet raw batches to raw warehouse`
+
+现象：
+
+- 逐道报工首道工序选择原料时，可能出现半成品仓、成品仓或其他仓库的批次。
+- 用户保存后，库存或结单链路可能找不到正确原料库存。
+
+根因：
+
+- 前端加载可用原料批次时没有强制按原料仓/物流仓过滤。
+- 后端保存报工行时也没有兜底校验原料批次仓库。
+
+修复：
+
+- 前端 `ProcessDataTable` 自动解析原料仓/物流仓，只加载该仓可用原料批次。
+- 后端 `ProcessSheetServiceImpl` 保存原料投入时强校验批次必须在原料仓/物流仓。
+- 非原料仓批次会返回业务错误：`PRODUCTION_RAW_WAREHOUSE_REQUIRED`。
+
+验证重点：
+
+- 首道工序原料选择只出现原料仓批次。
+- 用错误仓库批次提交时后端拒绝。
+- 逐道保存后，库存回读显示批次。
+
+### 6. 混 SKU 结单时原料 BOM 校验错误
+
+相关提交：`e7c61f170 fix: preserve mixed sku settlement context`
+
+现象：
+
+- 一个生产计划内混了多个 SKU。
+- 第二个 SKU 的原料在它自己的 BOM 中是合法的，但结单时仍报：
+  `PRODUCTION_CONSUMPTION_NOT_IN_BOM`
+
+根因：
+
+- 生产计划只有一个主 `productTypeId`。
+- 结单预填把逐道报工原料聚合成原料行时，丢失了“这条原料属于哪个 SKU”的上下文。
+- 后端结单校验把所有原料都按计划主 SKU 的 BOM 校验。
+
+修复：
+
+- `ProductionSettlementRequest.ConsumptionLine` 增加可选 `productTypeId`。
+- 从逐道报工行派生结单原料时，按“批次 + SKU”维度聚合。
+- 结单 BOM 校验优先使用原料行自己的 `productTypeId`。
+- 手工结单没有传 `productTypeId` 时，仍保持旧逻辑：按生产计划主 SKU 校验。
+
+验证重点：
+
+- 计划主 SKU = A，混入 SKU = B。
+- B 的原料只在 B 的 BOM 中。
+- 结单可以通过，不再被 A 的 BOM 错误拦截。
+
+### 7. 结单弹窗混 SKU 预填行被前端丢弃
+
+相关提交：`e7c61f170 fix: preserve mixed sku settlement context`
+
+现象：
+
+- 后端结单预填已经返回了混 SKU 原料行。
+- 前端结单弹窗仍可能显示缺失原料，或者提示部分原料行不可加载。
+
+根因：
+
+- 前端结单弹窗加载可用原料批次时，按生产计划主 SKU 过滤。
+- 混 SKU 的其他 SKU 原料批次不在主 SKU 可选列表里，于是前端把这些预填行丢弃。
+
+修复：
+
+- 结单弹窗加载原料仓可用批次全集，不再用计划主 SKU 过滤。
+- 预填行保留并提交 `productTypeId`。
+- 真正的 BOM 合法性由后端按行级 SKU 严格校验。
+
+验证重点：
+
+- 混 SKU 结单弹窗不再丢第二个 SKU 的原料行。
+- 提交时后端仍能挡住非 BOM 原料。
+
+### 8. E2E 完成态列表校验不符合页面语义
+
+相关提交：`967366492 test: verify completed production plan ui`
+
+现象：
+
+- E2E 已经完成结单，计划状态变为 `COMPLETED`。
+- 脚本仍在默认“未完成”列表里找该计划，导致测试失败。
+- 另一次失败是完成态行不再提供“逐道录入”按钮，但脚本还尝试打开逐道录入弹窗。
+
+根因：
+
+- 测试脚本没有跟随页面业务语义：
+  - 结单前在未完成列表。
+  - 结单后在已结单列表。
+  - 完成态应校验入库状态/成本核算入口，而不是继续报工。
+
+修复：
+
+- E2E 结单后切换到“已结单”列表。
+- 校验完成态行显示：
+  - `已完成`
+  - `待仓库确认` / `确认入库`
+  - `看成本核算`
+
+验证重点：
+
+- headed Playwright prod E2E 最终通过。
+
+## 出成率算法口径
+
+### 对上工序出成率
+
+```text
+对上工序出成率 = 本工序产出量 / 本工序投入量
+```
+
+适用：
+
+- 判断当前工序自身损耗。
+- 例如焯水、熟制、包装当前步骤是否异常。
+
+### 对原料累计出成率
+
+```text
+对原料累计出成率 = 本工序产出量 / 继承原料折算量
+```
+
+其中，后续工序的继承原料折算量来自上游批次：
+
+```text
+来源折算原料 = 本次消耗该来源批次数量 / 来源批次剩余或产出基数 * 来源批次继承原料量
+```
+
+混来源时：
+
+```text
+本工序继承原料折算量 = Σ 每个来源批次折算原料
+```
+
+当前选择的方案：
+
+- 使用来源批次比例追溯原料。
+- 不使用“每道出成率倒推连乘”的方式作为主算法。
+
+原因：
+
+- 真实业务里后续工序可能只消耗上游批次的一部分。
+- 混批次时，按来源占比追溯更符合库存流转事实。
+- 可以解释“这 0.13kg 成品到底来自哪些上游批次、继承了多少原料成本”。
+
+## 成本算法口径
+
+逐道报工行总成本：
+
+```text
+本行总成本 = 继承上游成本 + 当前工序新增成本
+```
+
+首道原料投入：
+
+```text
+继承成本 = 原料批次单价 * 原料投入量
+```
+
+后续工序消耗上游半成品：
+
+```text
+来源继承成本 = 消耗来源批次数量 / 来源批次可分摊基数 * 来源批次总成本
+```
+
+混来源：
+
+```text
+继承上游成本 = Σ 每个来源批次继承成本
+```
+
+当前工序新增成本可能包括：
+
+- 人工
+- 辅料
+- 包材
+- 其他工序配置成本
+
+注意：
+
+- 如果缺少小时单价/员工单价，不应静默生成假人工成本。
+- 如果辅料/包材配置缺失，成本应该显示为缺失或 warning，而不是伪装成 0 成本。
+
+## 已验证的 Prod E2E
+
+环境：
+
+- Web Admin：`http://139.196.165.140:8086`
+- 工厂：`F006`
+- 方式：headed Playwright，独立端口 `9254`
+
+通过用例：
+
+- 创建生产计划。
+- 多 SKU 首道原料投入。
+- 多原料批次。
+- 多上游半成品批次。
+- 跨天工序。
+- 混来源工序。
+- 出成率回读。
+- 成本回读。
+- 结单预填。
+- 结单提交。
+- 完成态生产计划列表显示。
+
+通过计划号：
+
+```text
+PLAN-1782555968254-5D1D78AC
+```
+
+关键验证数字：
+
+```text
+实际结单成品量: 0.13 kg
+原料领用合计: 0.56 kg
+
+末道混来源工序:
+对上工序出成率: 92.8571%
+对原料累计出成率: 77.6583%
+继承原料折算量: 0.1674 kg
+来源拆分: 0.096 kg + 0.0714 kg
+
+行成本:
+3.2
+79.2
+1.92
+43.2
+24.52
+
+结单状态: COMPLETED
+入库状态: PENDING_WAREHOUSE_RECEIPT
+```
+
+结果目录：
+
+```text
+C:\Users\Steve\my-prototype-logistics\.playwright-mcp\codex-2026-06-27T10-25-56-162Z-prod-business-flow
+```
+
+## 部署记录
+
+后端：
+
+```text
+版本: v20260627_181426
+提交: e7c61f170
+状态: prod blue-green 部署成功，5/5 health 通过
+```
+
+web-admin：
+
+```text
+状态: prod 部署成功，HTTP 200
+```
+
+测试脚本：
+
+```text
+提交: 967366492
+说明: 只修 E2E 完成态 UI 校验，不影响线上运行代码
+```
+
+## 后续注意事项
+
+### 历史错误数据
+
+本批修复会保证新录入链路正确，但已录入的历史错误数据不会自动重算。
+
+如果 LIUSHANMEN/F006 之前已有错误计算数据，需要单独做数据修复或重算脚本，建议流程：
+
+1. 找出受影响生产计划。
+2. 读取 `process_sheet_rows` 原始逐道行。
+3. 按当前算法重算：
+   - 批次继承原料折算
+   - 批次成本
+   - 出成率
+   - 结单预填
+4. 对比现有库存、结单、成本核算记录。
+5. 只对确认未入库或可安全重算的数据执行修复。
+
+### 0 成本排查
+
+如果页面仍出现 0 成本，需要区分：
+
+- 合法 0：确实没有新增成本，且继承成本也为 0。
+- 配置缺失：人工小时单价、辅料、包材、锅式配置未维护。
+- 来源缺失：上游批次没有成本摘要。
+- 前端显示缺失：后端有值但页面没有展示。
+
+原则：
+
+- 缺配置不应伪装成 0。
+- 缺来源不应继续安静结算。
+- 成本核算页应显示“缺失原因”和“需要补什么配置”。
+
+---
+
+## 2026-06-28 续：成本 scale 修复 + UI 三方对账 + 包材模型核实
+
+### 9. 出成率卡成本 addedCost 出现负数/亚分级舍入噪音
+
+相关提交：`b9ee3955a fix: scale-2 inherited cost in process-sheet yield card`（经 merge commit `ca1746df6` 入 main，已上线 prod `v20260628_105937`）
+
+现象：
+
+- 逐道出成率卡里，某些工序“新增成本(addedCost)”出现负数（如 `-0.0006`）或微小噪音（如 `+0.0046`，而该工序其实没有新增成本）。
+- 这会污染“0 成本排查”——分不清“合法的 0 新增”和“舍入噪音”。
+
+根因：
+
+- 展示侧 `inheritedCost` 按全精度重算（`source.unitPrice × feed`），但 `rowTotalCost` 取自持久化的 `productionBatch.totalCost`（已 `setScale(2)`）。
+- 两者**混标度相减** `addedCost = rowTotalCost - inheritedCost` → 亚分级残差，可正可负。
+- 持久化侧 `ClerkProcessEntryServiceImpl.materializeBatch` 对**每条消耗边**都 `edgeCost = unitPrice.multiply(feedKg).setScale(2, HALF_UP)`，展示侧没对齐。
+
+修复：
+
+- `resolveInheritedSourceCost` 对每个来源 `...multiply(feed).setScale(2, HALF_UP)`，逐边镜像持久化口径。
+- rowTotalCost 回退路径（`wip.unitPrice × produced`）也 `setScale(2)`。
+- 结果：`inheritedCost` 与持久化消耗成本逐边相等，`addedCost = 真实新增成本(人工/调料)`，恒 ≥ 0，`继承成本 ≤ 行总成本` 恒成立。
+- 回归用例：`ProcessSheetYieldCardTest` YIELD-CARD-0D（复刻 `10.67 × 0.18 = 1.9206 → 1.92`）。
+
+口径铁律（新增）：
+
+- **任何“展示侧重算成本”必须逐边镜像持久化的 `setScale` 口径**（scale + RoundingMode + 在哪步 round）。
+- 钱按“分”(scale-2) 记账 + 零漂移不可兼得；亚分级舍入是固有代价，关键是**两侧口径一致**。
+
+### 10. UI 层深度 E2E（三方对账：oracle == API == 渲染 DOM）
+
+测试脚本：`tests/e2e-yield-mixed-sku/ui-render-deep-audit.mjs`（headed prod F006）
+
+- 补上 API-only 测试看不到的前端显示 bug（#1 漏字段 / #7 结单弹窗丢混 SKU 行）。
+- 每个出成率/成本数字做三方对账：第一性 oracle == 出成率卡 API == 渲染 DOM 文本。
+- 结单通过**真实 UI**提交（填工时→点提交），验证混 SKU 行端到端不丢。
+- 含成本干净度断言（addedCost 非负/无亚分噪音，继承≤行总）。
+- 74 断言全过；末道混来源 E：77.656 ≈ 77.6583 ≈ 77.66% 三方一致。
+
+### 11. 包材模型核实（按数量 + 配比÷损耗，纯配置不写代码）
+
+客户张权确认真实规则：**包材按数量(个/卷/米)入库，不按重量；用量 = 固定值(配比) + 损耗**。
+
+- 系统已支持，且全是配置：
+  - 包材库存单位 = 计数单位（吸塑盒 = 件；`pcs/个/件/只` 经 `MaterialUomConverter` 归一，互通不报“无法换算”）。
+  - BOM(`bom_items`) 包材行：`standardQuantity`(配比) + `yieldRate`(出成率/损耗) + `materialCategory=PACKAGING`。
+  - 用量 = `计划数 × 配比 ÷ (出成率/100)`，物料建议/领料自动算。
+- 实测：吸塑盒 `1000 × 1 ÷ 0.995 = 1005.025 件`，单位“件”，无“无法换算”。测试：`tests/e2e-yield-mixed-sku/packaging-bom-flow-audit.mjs`（12 断言全过）。
+- “无法换算”报错的**真因**：脏的 kg WIP 半成品批被错挂在吸塑盒物料 id 下（WIP 按设计继承原料 id，而吸塑盒批次曾被放进原料仓当原料投产）→ 已清理。
+- 注意：**两套 BOM 系统并存** —— `bom_items`(物料建议/领料/成本真源，UI BOM 编辑写这套) vs `bom_recipes`(版本化 R&D 层)。配运行时 BOM 用 `bom_items`。
+- 注意：每盒净含量(`ProductType.gramsPerUnit`)是**产品侧**字段（气调报 kg → 盒数折算），与包材自重无关；张权确认包材自重很多“不知道”，也不需要。
+
+### 部署记录（2026-06-28）
+
+```text
+后端版本: v20260628_105937 (提交 ca1746df6, blue-green green:10020, 5/5 health)
+范围: 仅成本 scale 修复（展示侧只读，不动持久化/结单/写流程）
+```
+
+### 数据订正（事故 + 复原）
+
+- 误判“F006 配方重复冗余”→ 实测 prod DB：唯一索引 `uk_br_product_current` 已生效，全租户 0 重复，不是问题。
+- 误判根因：`GET /bom/recipes?productTypeId=X` 的过滤被后端**静默忽略**（同 material-batches），把工厂全部配方当成一个产品的多版本。
+- 连带：据此误判的清理脚本错误归档 15 个不同产品配方 → 已用 prod DB 事务复原（15 ACTIVE / 1 ARCHIVED，dupcheck 0）。生产无影响（advisory/领料/成本走 bom_items）。
+
+
+### 12. 纯 headed 全工序链 E2E + 防呆审计
+
+测试:`tests/e2e-yield-mixed-sku/headed-fullchain-foolproof.mjs`(headed prod F006,15 断言全过)
+
+全程操作真实前端驱动整条 7 道动态工序链(叮咚好食光轻卤门腔猪舌 120g):
+拆包→修油→滚揉(保水)→焯水→去舌胎膜→**熟制(卤制)**→**气调(分切装盒)**。
+- 首道录 2 个原料批次,中间 4 道各把 2 批流转(保持 2 条血缘),**熟制真混锅消耗 2 个上游批**,气调成品批,核对结单弹窗。
+- 真混锅验证:熟制批 2 个来源拆分,链式累计出成率 61.92%(投入按各批剩余安全折算,90% 单道出成,数字合理)。
+- (注:计划创建为 API 前置;弹窗 el-select 在模态遮罩下与 Playwright 冲突,逐道录入键入全 headed。)
+
+#### 防呆设计审计结论(对照 .claude/rules/fool-proof-design.md)
+
+**已具备的防呆(运行中实证):**
+- Rule 1 预先显示边界:首道未选批次 → 保存按钮禁用 + 内联红字「请先选择原料批次」;气调/结单缺字段 → 保存禁用且 title 明示原因(「请填写使用重量」「请录入实际人数」)。是事前阻止非事后报错。
+- Rule 2 上下文带身份:计划行、逐道录入抽屉、结单弹窗均带 计划号 + 品名 + 计划数量。
+- 缺配置不伪装 0:缺工时单价 → 显式 warning「工时单价未配置,按默认 26 元/工时计入」,非静默 0 成本。
+
+**已核实补充(headed 审计的 ⚠ 经代码核实均为假阴性,无需改):**
+- Rule 3 约束选择 ✓:结单「差异原因」(list.vue:2794-2815)本就是 el-select 标准下拉(现场称重差异/原料状态差异/临时调整产量/客户·销售变更/其他),选「其他」再显必填补充 textarea — 完全符合 Rule 3。本轮 headed 未见仅因"实际≤计划"时该字段不渲染(`completeIsOverPlan` 条件),非缺陷。配套还有 Rule 1 预警 alert「实际产量超过计划,请选择差异原因」+ Rule 4 幂等 key。
+- 抽屉标题审计为测试选择器误取(匹配到另一"AI 创建"抽屉);真实逐道录入抽屉标题含品名,非产品缺陷。
+
+**审计总结:生产录入 + 结单流程对照 fool-proof-design.md 五条(Rule 1 预先边界 / Rule 2 上下文 / Rule 3 约束选择 / Rule 4 幂等 / 缺配置不伪装 0)全部满足,无 actionable 缺口。**
+
+### 13. 复杂边界深度测试:结单超产差异 + 幂等(LIVE 验证)
+
+测试:`tests/e2e-yield-mixed-sku/headed-settlement-edge.mjs`(headed prod F006,11 断言全过)
+
+故意把计划 plannedQuantity 设很小(0.05),逐道录入产出 0.13(> 计划)→ 触发超产路径,headed 验证:
+- **Rule 1 预先边界 ✓(LIVE)**:结单弹窗实际产量 > 计划 → 实时弹超产预警 alert。
+- **Rule 3 约束选择 ✓(LIVE)**:差异原因渲染为 el-select 标准下拉,选「其他」→ 显必填补充 textarea。(此前全链审计的 ⚠ 是假阴性,这里 LIVE 坐实合规。)
+- **Rule 4 幂等 ✓**:同一 idempotencyKey 重复提交结单 → 返回同一 COMPLETED 结果,未重复过账;回读 postingStatus 仍 PENDING_WAREHOUSE_RECEIPT 稳定。
+- **新发现(好的防呆)**:后端**API 层也强制**超产原因 —— 缺 `quantityVarianceReason` 时返 `409 实际产量超过计划产量, 必须选择超产原因`,不止前端拦。字段名:`ProductionSettlementRequest.quantityVarianceReason`(+ `quantityVarianceNote` 补充)。
+
+### 测试自身的坑(回归抓到)
+
+深度测试的原料批次发现用了被忽略的 `productTypeId` 过滤(同 material-batches list bug)→ 误把吸塑盒(件)包材批当原料投产,WIP 继承吸塑盒物料 id → 重新污染包材"无法换算"。已在所有 headed 测试加计数单位排除(`!/件|个|只|pcs/`),只取重量单位原料,避免再污染。
+
+### 14. 成本核算页数字 headed 核对(成本准确性闭环)
+
+测试:`tests/e2e-yield-mixed-sku/headed-cost-accounting.mjs`(headed prod F006,8 断言全过)
+
+把成本准确性核到客户看到的最后一页(成本核算页):
+- **成本 API 内部一致**:`processing/batches/{id}/cost-analysis` 与 `/enhanced` 的 totalCost 相等(production-cost-live-chain 不变量);分桶(料+工+设备+其他)求和 == total;unitCost == total/数量。
+- **HEADED 核对**:打开「看成本核算」页(`/production-analytics/yield-cost`,M67YieldCost),切批次号模式输入批次刷新 → 页面渲染的总成本数字 == API。客户在成本页看到的金额准确。
+
+至此成本准确性三段闭环:逐道出成率卡 per-批分摊成本(三方对账 oracle==API==DOM)→ 批次 cost-analysis API 一致 → 成本核算页 headed 渲染一致。
+
+### 15. 人工成本真值核对 + 缺配置不伪装0(headed)
+
+测试:`tests/e2e-yield-mixed-sku/headed-labor-cost.mjs`(headed prod F006,9 断言全过)
+
+补上成本准确性链上唯一没被真数字验证过的一段 —— **人工成本**(此前所有测试人工都是缺配置/0):
+- headed 在逐道录入填工时段(08:00-10:00=2h × 2人 = 4 工时,WorkHoursTable 实时算"合计工时 4.00 h")。
+- **人工成本真值**:首道批 rowTotalCost = **114 = 原料(单价10×1.0) + 人工(104)**;laborCost = 4 工时 × 26 元 = **104**,精确对上。
+- **防呆 缺配置不伪装0**:F006 未配 `factory_cost_settings.laborHourlyRate` → 后端**显式 warning**「工时单价未配置, 本批人工成本按默认 26 元/工时计入; 如需覆盖请在工厂成本设置中配置」+ 用默认 26 计入,**不静默按 0**。符合「缺配置不应伪装成 0」原则。
+
+注:`?productionPlanId=` query 过滤被后端忽略(同 material-batches 的 productTypeId),会返回跨计划批次 —— 测试改用 plan-scoped path 端点(`/production-plans/{id}/process-sheet/inventory/yield-card`)取本计划批,绕开该坑。
+
+### 16. 成本配置缺口审计(人工单价 UI + 调料配方)—— 两个真实产品缺口
+
+延续 §15 人工成本核对,审计"配置入口是否存在",发现两个**真实缺口**:
+
+#### 16.1 工时单价(人工)无配置 UI/API —— 防呆 Rule 5 dead-end
+- §15 的 warning 说"如需覆盖请在**工厂成本设置**中配置工时单价"。
+- 实查:后端**没有任何**写入 `factory_cost_settings.laborHourlyRate` 的路径(无 save / 无 `@PostMapping` / 无 service),前端**没有**「工厂成本设置」页(只有逐道录入 grid)。
+- 结论:**warning 指向一个不存在的配置入口**(防呆 Rule 5 dead-end —— "缺配置告诉去配,但没地方配")。工时单价只能直接改 DB,F006 admin 无法自助配置 → 人工成本永远按默认 26。
+- 建议:① 加「工厂成本设置」页(laborHourlyRate CRUD),或 ② 改 warning 不再指向不存在的页(诚实)。
+
+#### 16.2 F006 全部产品零 调料配方 —— 调料成本普遍未计入
+- 实查 `/bom/recipes/by-product/{id}/seasoning`:8 个卤味产品(含真客户 叮咚好食光轻卤门腔猪舌 / 卤猪蹄)**全部 seasoning items = 0**,无注射/熟制调料明细。
+- 含义:`computeSeasoningCost` 对所有 F006 产品走 缺配置分支 → 调料成本恒计 ¥0 + warning「未设置调料配方,调料成本暂记0;请在 生产→BOM配方→调料配方 tab 设置」(缺配置不伪装0 ✓ 防呆对)。
+- 但代价:**整个 F006 的卤味成本里调料这块是缺的**(只有原料+人工+设备,没有调料/辅料)。真利润核算会偏高。
+- 要核"调料成本真值"必须**先 headed 配一个 调料配方**(创建配方→调料配方 tab),F006 现在没有可复用的 → 见下方 Codex brief。
+
+**至此成本准确性结论**:原料/人工/分摊/继承/cost-analysis/成本页 全部核过且准确;调料成本因 F006 无配方而普遍缺失(防呆正确报 0+warning,但数据不完整);工时单价无自助配置入口(dead-end)。
+
+---
+
+## 2026-06-29/30 续:UX 显示 bug + 两套 BOM 断链 + 调料成本结构性恒 0 + 完整成本模型闭环
+
+> 背景:大矩阵深测(出成率/成本三方精确 53/53 全绿)后,Steve 一眼在 UI 看出测试漏的真 bug;随后重审本文档 + 从最初配置(AI建产品)到生产全链深测,抓出更深的结构性问题。
+
+### 17. 出成率卡「工序」列显示"工序0/工序1"而非真实工序名
+
+相关提交:`44b51d9df`(yield-card)+ 后续 row-based builder
+
+- 现象:出成率卡工序列显示 `工序0/工序1/工序2`(generic),而非 拆包/修油/熟制。
+- 根因:有 process-sheet 行的计划走 `getInventoryYieldCardFromProcessSheetRows`(row-based),`req.getProcessName()` 前端不传为 null → `fallbackProcessName`="工序"+order。
+- 注意**两个 builder**:WIP-based(`getInventoryYieldCard`)+ row-based。先错改了只在无行时走的 WIP-based → 没生效;改对 row-based 才行(`resolveRowProcessName` 按 productTypeId+order 反查 product-work-process 真实名)。
+- **教训:同功能两条 path,改前先确认走哪个 builder,别假设。**
+
+### 18. 调料警告过度触发(每个中间道乱报)+ 漏改孪生
+
+相关提交:`a44dddde5`(materializeBatch)+ `5b49c3623`(rematerializeInPlace,审计补)
+
+- 现象:`ClerkProcessEntryServiceImpl` 对**每个**有上游的非调味道(修油/滚揉/焯水)都报「未识别为调味步骤…调料成本未计入」→ 满屏噪音误导。
+- 修:加工序名正则守卫(只 熟/卤/煮/腌/注射/入味/调味 道报)。
+- **漏改孪生(独立审计抓到)**:`Edit replace_all` 因两处 warning 块注释不同,只匹配带注释的 `materializeBatch`,**漏了 `rematerializeInPlace`(re-save 路径)**。后果:文员**编辑重存**中间道时仍误报。
+- **教训:`replace_all` 只匹配字面相同串,注释/空白差异会漏 sibling;改"同逻辑两处"必须分别 grep 确认。**
+
+### 19. §9 口径铁律孪生:inventory-list rowTotalCost 未 setScale-2
+
+相关提交:`4f4d80eba`(独立审计 doc vs code 抓到)
+
+- §9 修了出成卡 inheritedCost 的 scale-2 镜像,但 WIP-based builder(`ProcessSheetServiceImpl:521`)的 inventory-list `rowTotalCost = unitCost × produced` **没 setScale(2)** → 展示侧亚分噪音(1.9206 而非 1.92)。补 setScale-2。
+
+### 20. 两套 BOM 系统断链:配 BOM 的新产品首道原料下拉恒为空 → 无法生产
+
+相关提交:`644858c3d`(config→production 深测 + 审计抓到)
+
+- 现象:用 AI建产品/BOM编辑器/批量导入 配好 BOM 的**新产品**,逐道录入首道选原料时下拉**恒为空**,根本无法生产。
+- 根因(**两套 BOM 系统断链**):首道原料下拉数据源 `getMaterialBatchesByStatus` 的 productTypeId BOM-membership 过滤**只查 bom_recipes**(R&D 配方),但 BOM 编辑器/批量导入/对话微调 都写 **bom_items**(运行时 BOM)→ 新品(只有 bom_items 无配方)被过滤掉所有原料批。
+- 修:并集两套 BOM 系统的原料类型(bom_recipes ∪ bom_items)。existing 配方产品行为不变。验证:0→7 选项可生产。
+- **教训:`bom_items`(运行时,编辑器/导入/对话微调写)vs `bom_recipes`(R&D 配方)并存,凡按"产品 BOM"过滤/读取都要认两套。**
+
+### 21. 调料成本结构性恒 0(配了调料配方也不流入)⭐ 最深
+
+相关提交:`6fe0688fd`(isSeasoningStep 按名)+ `5e2581fca`(buildStepEntry 解析名 + processCategory)
+
+- 现象:即便给产品配了调料配方(卤料包/盐),生产时 `seasoningCost` 仍恒 0。
+- 根因**三连**:① F006 熟制(卤制)道 `processCategory='加工'`(非 SEASONING)② 熟制 grid **无 potCount/锅数字段** ③ StepEntry.processName 来自 req(前端不传)恒 null → `isSeasoningStep`(=SEASONING || potCount || 按名)**三条件全 false** → `computeSeasoningCost` 根本不跑。
+- 修:① `isSeasoningStep` 按工序名(熟/卤/煮/腌/注射/入味/调味)识别 ② `buildStepEntry` 按 productTypeId+order 反查真实工序名并据名设 `processCategory=SEASONING`。无配方时仍 0+warning(安全)。
+- 验证:配 卤料包 50g/kg×20元=1元/kg COOKING → 熟制道 `seasoningCost=0.04`(=1元/kg × 投料量,**投料-based**)。**之前恒 0,现按配方流入。**
+
+### 调料成本基准(投料 vs 出成)—— Steve 问的设计决策
+
+- **消耗/成本 = 投料量(injectionRawKg,默认,保持)** —— 物理正确:卤制按下锅肉量加料,下料时不知出成。`RecipeCostCalculator` 即 `dosage_g/1000 × max(单价1,单价2) × 投料量kg`。
+- **系统已支持两套**:`auxBasis`(`CostReconcileService:160`,INPUT 默认 / OUTPUT 可配,成品后处理调料用)。
+- **比较已有**:`aux-cost-reconcile`(标准应投 = 标准出成率反推 × 投料,vs 实际 → 多投/误差)。
+- **单盒分摊按出成**:`cost-breakdown.perBoxCost = 总成本 / 出成盒数`。
+- 结论:**分层非二选一**;消耗按投料(更准),分摊按出成,对账两端比。默认投料是对的。
+
+### 完整成本模型闭环(六桶 + 三方,全 headed 验证)
+
+权威端点:`/{f}/production/batches/{bn}/cost-breakdown`(分桶+副产+净+可售+混批溯源)+ `/aux-cost-reconcile`(标准vs实际多投)。均 @PriceSensitive 脱敏。
+
+| 桶 | 不变量 | 测试 |
+|---|---|---|
+| 原料 | 单价×投入 | headed-config-to-production |
+| 人工 | 工时×人数×配置单价(非默认26,§16.1 UI 接通) | config-to-production / labor-cost |
+| 调料 | dosage×投料量(投料-based,配方驱动) | matrix-fullchain(§21 验证) |
+| 副产 | 回收=数量×单价;净=总−副产 | headed-byproduct-cost |
+| 可售/留样 | 可售盒=盒−留样;可售单盒=净/可售盒;单盒毛=总/盒 | headed-matrix-cost-page |
+| 辅料对账 | 多投=实际−标准;率=多投/标准;非同源 | headed-aux-reconcile |
+
+**新增成本准确性结论(2026-06-30)**:原料/人工/调料/副产/留样/辅料对账**六桶全部能按配置流进生产并三方对账**;§16 两个 dead-end(工时单价 UI / 调料配方)已修;调料成本结构性恒 0 已根治。
+
+### 重要工程教训(本轮)
+
+1. **同功能两条 builder/path**:工序名(yield-card/cost-page)、调料警告(materialize/rematerialize)—— 改一处必搜另一处。
+2. **`replace_all` 漏孪生**:注释/空白差异会让它只匹配一处,必须分别 grep 确认。
+3. **两套 BOM 系统**:bom_items(运行时)vs bom_recipes(R&D),凡按产品 BOM 过滤/读取都要认两套。
+4. **headed 测试断言"用户看到的"**:显示名/警告文案/error toast,不只验数字。数字对≠UX 友好。
+5. **配调料配方铁律**:`saveSeasoning` 仅 DRAFT → 已有 ACTIVE 配方必须 clone→saveSeasoning→activate。
+6. **测试自身坑**:原料批被前序测试耗尽 → 下拉 available>0 过滤后空;取库存最多的批避开(§13 重现)。
+7. **审计结论也要 verify-first**:独立审计夸大过 cost-page 工序N(其实 enrichProcessNames 已兜底);核实才没白改。
+
+## 2026-06-30 续:跨天 + 混批 + 调料 组合深度 E2E(§21 调料 fix 抗组合验证)
+
+### 22. 组合不变量验证 —— 调料成本在"跨天 + 真混锅"下仍精确(无 bug,正向确认)
+
+测试:`tests/e2e-yield-mixed-sku/headed-crossday-mixbatch-seasoning.mjs`(纯-headed,prod F006,23/23 PASS)。
+
+- **动机**:§21 调料 fix 让调料成本能流入,但现有测试有盲区——matrix-fullchain 做了熟制混锅(2 上游)却只断言 `seasoningCost>0`(非精确值),且从不把混锅录在与上游 WIP 不同的日子;seasoning-cost 验了精确 oracle 但熟制只消耗 1 上游(非混锅);crossday-cost 验了跨天但单批单上游(无混锅无调料)。三者交集(multibatch 自己点名的"真混锅在链尾,需单独扩展")无人覆盖。
+- **判别性不变量(verify-first 自 `ClerkProcessEntryServiceImpl.computeSeasoningCost` + `buildPotRawKgs` + `RecipeCostCalculator`)**:逐道录入熟制道无 potCount → `buildPotRawKgs=[st.inputQuantity]`(单锅)→ `cookingTotal = inputQuantity × cookPerKg × 1`。混锅时 inputQuantity = Σ来源批投料。∴ **seasoningCost == cookPerKg ×(feedA+feedB)**,与日期无关、只看混锅总投料(非单源、非产出)。`resolveReportDate(st)=st.processDate` → 跨天各行 processDate 独立回读。
+- **场景**:建 6 道链 SKU + 配 COOKING 调料(50g/kg×20=`cookPerKg=1.0`)→ 首道 2 原料批分录 day-2/day-1(跨天 + 混批起源)→ 中间道流转 2 批 → 熟制 day0 真混锅消耗 2 上游(feedA=0.22,feedB=0.11 故意不等分)。
+- **断言(三方 + 强判别)**:① 调料 `cost-breakdown.seasoningCost == cookPerKg×mixIn`(0.33,精确)② **NOT 单源**(≠0.22)③ **按投料非产出**(mixIn 0.33≠mixOut 0.30,actual=0.33)④ yield-card `addedCost≈调料 oracle`(三方旁证)⑤ 2 源分摊(`sourceBreakdowns` 2 条,继承成本 0.10 vs 1.92 **非对称**证明真异源血缘,占比和≈100%)⑥ 原料桶>0(2 源均流入)⑦ 跨天 processDate 回读 == 录入历史日(首道 day-2/day-1,混锅 day0,**调料不串日**)⑧ 无误报"未设置调料配方"warning⑨ DOM 渲染熟制 tab。
+- **结论**:**无 bug**——§21 调料 fix 在最难组合(跨天领用 + 真混锅 + 调料)下成本仍精确,六桶组合互不干扰。正向确认(depth-first-e2e Rule 8 同根因 sweep 仅 found-bug 时触发,此轮 0 bug)。
+- **测试坑**:`plannedDate` 不能回填过去(400"计划日期不能是过去")→ 跨天必须靠**各行 processDate** 回填,plan 仍今天建(crossday-cost 同 pattern);中间道转发量需大(forward ~85% 余量)否则熟制道投料钳到 0.02 floor → mixIn≈mixOut 致 oracle 判别力弱。
+
+## 2026-06-30 续:多桶同道深测 → 抓到 getYield 产出/投入虚高 2× 真 bug(已修+部署)
+
+### 23. ⭐同道 labor+seasoning 双写 output → getYield totalOutput/totalInput 虚高 2×
+
+相关提交:fix `4ab0568ae`(后端 v20260630_132507)+ test `headed-samestep-labor-seasoning.mjs`
+
+- **发现路径**:独立审计(Explore agent)抓到「同道多桶」未覆盖 + getYield 双写风险 → 写深测坐实。
+- **根因(verify-first 自 `ClerkProcessEntryServiceImpl` + `YieldCalculationServiceImpl`)**:同一道既有调料又有人工时,`writeSeasoningReport`(:616)与 `writeLaborReport`(:645)**都**写 `outputQuantity/inputQuantity`;`calculateSteps` 同组(同 `processEntryStepKey`)Σ 全部 report 的 output/input(L144/L152)→ 该道 `getYield` totalOutput/totalInput = 真实 ×2。`writeYieldAuxReport`(:682-685)早已注释「设 output 会与 seasoning/labor 报工重复累加」并留 null,但**没防 seasoning+labor 这对自身**。
+- **实测(深测)**:熟制道 调料+人工 → getYield totalOutput=0.46(真实 0.23)、totalInput=0.52(真实 0.26),**精确 2×**。**成本桶不受影响**(seasoning 读 materialCost、labor 读 laborCost,非 output;cost-breakdown 仍正确)→ 只 `yield-summary` API 产出/投入翻倍。
+- **修(两 twin)**:产出/投入只能由本道**一条**报工承载。`writeLaborReport` 加 `carryQuantities` 参数;`materializeBatch`+`rematerializeInPlace` 各加 `stepOutputWrittenBySeasoning` 标志(仅在调料报工**实际写入**时置 true,no-recipe seasoningCost==0 不置)→ labor `carryQuantities=!stepOutputWrittenBySeasoning`。纯人工道仍由人工报工承载,单桶配置零回归。**独立 review 判 SOUND**(exactly-once 五场景全覆盖)。
+- **验证(prod 部署后)**:同测试 getYield totalOutput=0.23(==真实,非 2×)全 PASS;回归 crossday(seasoning-only)PASS、matrix-fullchain 11/12(1 fail 为无关气调幂等 flake)、labor-only labor=112 正确(labor-cost.mjs 期望 26 是 §16.1 配 28 后的 stale 测试,非本 fix)。
+- **副产同道覆盖(Steve 提醒补)**:修油道 副产+人工 同道 → byproductCredit=0.2(=0.05×4)、labor=56、净=总−副产、getYield output=0.69(==真实,**aux 报工不带 output 故不双计**)。证 aux+labor 共存不双写;熟制批 cost-breakdown.laborCost=84.2=本道 56+上游修油 56 按比例传播(`aggregateUpstreamLaborSeasoning` 正确),本道 OWN 人工经 addedCost 隔离精确。
+- **已知相邻(pre-existing,本轮不扩 scope,reviewer §6 提)**:① 跨步骤 group-key 碰撞(两步 `(processOrder,processName,processCategory)` 相同 → getYield 仍合并 Σ);② 调料名道 seasoningCost==0 且无人工但有产出 → 0 条带 output 报工 → 该道 getYield output 丢失(非 2×,是 0)。两者本 fix 未引入,留观察。
+- **教训**:① getYield 同组 Σ output,**一道只能一条报工带 output**(aux 已防,seasoning/labor 这对此前漏防)。② 多桶同道是最常见真实配置(熟制既人工又调料、修油既副产又人工),必须显式测「桶各自正确 + getYield 不双计」,别再每个测试都把桶分散到不同道规避。③ 加上游人工后 cost-breakdown.laborCost 含传播,断言本道 OWN 人工要用 yield-card addedCost 隔离,别用整批 laborCost。

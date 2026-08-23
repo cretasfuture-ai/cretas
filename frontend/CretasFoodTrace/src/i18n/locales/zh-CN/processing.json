@@ -1,0 +1,1308 @@
+{
+  "common": {
+    "retry": "重试",
+    "cancel": "取消",
+    "confirm": "确认",
+    "save": "保存",
+    "delete": "删除",
+    "edit": "编辑",
+    "back": "返回",
+    "loading": "加载中...",
+    "search": "搜索",
+    "filter": "筛选",
+    "all": "全部",
+    "submit": "提交",
+    "create": "创建",
+    "update": "更新",
+    "close": "关闭"
+  },
+  "batchStatus": {
+    "planning": "计划中",
+    "inProgress": "进行中",
+    "paused": "已暂停",
+    "qualityCheck": "质检中",
+    "completed": "已完成",
+    "failed": "已失败",
+    "cancelled": "已取消",
+    "unknown": "未知"
+  },
+  "dashboard": {
+    "title": "生产仪表板",
+    "todayOverview": "今日生产概览",
+    "stats": {
+      "inProgressBatches": "进行中批次",
+      "completedBatches": "已完成批次",
+      "pendingInspection": "待质检",
+      "onDutyWorkers": "在岗人员",
+      "allActiveBatches": "全部进行中"
+    },
+    "quickActions": {
+      "title": "快捷操作",
+      "materialInbound": "原材料入库",
+      "createProductionPlan": "创建生产计划",
+      "batchList": "批次列表",
+      "qualityRecords": "质检记录",
+      "materialManagement": "原材料管理",
+      "equipmentMonitoring": "设备监控",
+      "costAnalysis": "成本分析",
+      "qualityStats": "质检统计",
+      "inventoryCheck": "库存盘点",
+      "consumptionHistory": "消耗记录",
+      "exceptionAlert": "异常预警",
+      "traceability": "产品溯源",
+      "materialRequisitions": "物料需求单",
+      "teamReport": "班组报工"
+    },
+    "aiAnalysis": {
+      "title": "AI智能分析",
+      "subtitle": "AI驱动的智能成本分析",
+      "aiReport": "AI分析报告",
+      "costComparison": "成本对比",
+      "timeRangeAnalysis": "时间范围分析"
+    },
+    "recentBatches": {
+      "title": "最近批次",
+      "viewAll": "查看全部",
+      "noData": "暂无批次数据",
+      "unit": "件"
+    },
+    "platformAdminNotice": {
+      "title": "您是平台管理员，只能查看数据",
+      "hint": "原材料入库和生产计划管理仅限工厂用户使用"
+    },
+    "costDialog": {
+      "title": "选择分析方式",
+      "byBatch": "按批次分析",
+      "byTimeRange": "按时间范围分析"
+    },
+    "messages": {
+      "needTwoBatches": "需要至少2个批次才能进行对比分析，请先创建生产批次",
+      "loadFailed": "加载仪表板数据失败，请稍后重试",
+      "dataFormatError": "API返回数据格式错误，请稍后重试"
+    }
+  },
+  "batchList": {
+    "title": "批次列表",
+    "searchPlaceholder": "搜索批次...",
+    "filter": {
+      "all": "全部",
+      "inProgress": "进行中",
+      "completed": "已完成"
+    },
+    "labels": {
+      "product": "产品",
+      "supervisor": "负责人",
+      "targetQuantity": "目标产量",
+      "actualQuantity": "实际产量",
+      "pending": "待定",
+      "notAssigned": "未指定"
+    },
+    "status": {
+      "inProgress": "进行中",
+      "completed": "已完成"
+    },
+    "empty": {
+      "noMatch": "未找到匹配的批次",
+      "loading": "加载中...",
+      "noData": "暂无批次数据",
+      "goToProductionPlan": "前往生产计划"
+    },
+    "messages": {
+      "loadFailed": "加载批次列表失败"
+    }
+  },
+  "batchDetail": {
+    "title": "批次详情",
+    "tabs": {
+      "detail": "详情",
+      "consumption": "消耗记录"
+    },
+    "basicInfo": "基本信息",
+    "materialInfo": "原料信息",
+    "quickActions": "快捷操作",
+    "labels": {
+      "batchNumber": "批次号",
+      "productType": "产品类型",
+      "supervisor": "负责人",
+      "targetQuantity": "目标产量",
+      "actualQuantity": "实际产量",
+      "createdAt": "创建时间",
+      "completedAt": "完成时间",
+      "notSpecified": "未指定"
+    },
+    "actions": {
+      "qualityRecord": "质检记录",
+      "costAnalysis": "成本分析",
+      "rawMaterialInspection": "原材料检验",
+      "processInspection": "过程检验",
+      "finalProductInspection": "成品检验"
+    },
+    "consumption": {
+      "stats": {
+        "count": "消耗次数",
+        "totalQuantity": "总消耗量",
+        "totalCost": "总成本"
+      },
+      "labels": {
+        "quantity": "消耗数量",
+        "unitPrice": "单价",
+        "time": "消耗时间",
+        "notes": "备注"
+      },
+      "empty": "暂无消耗记录",
+      "emptyHint": "生产过程中的原材料消耗会显示在这里"
+    },
+    "messages": {
+      "loadFailed": "加载批次详情失败",
+      "notFound": "未找到批次信息"
+    }
+  },
+  "createBatch": {
+    "title": "原料入库",
+    "editTitle": "编辑批次",
+    "loadingTitle": "加载中",
+    "hint": "记录原料入库信息，后续再决定生产什么产品",
+    "sections": {
+      "materialInfo": "原料信息",
+      "supervisorInfo": "负责人信息"
+    },
+    "fields": {
+      "materialType": "原料类型",
+      "selectMaterialType": "点击选择原料类型",
+      "quantity": "原料数量 (kg)",
+      "quantityPlaceholder": "例如: 1200",
+      "cost": "原料成本 (元)",
+      "costPlaceholder": "例如: 30000",
+      "supplier": "供应商",
+      "selectSupplier": "选择供应商",
+      "supervisor": "生产负责人",
+      "selectSupervisor": "点击选择负责人",
+      "notes": "备注",
+      "notesPlaceholder": "选填"
+    },
+    "buttons": {
+      "create": "创建批次",
+      "update": "更新批次"
+    },
+    "validation": {
+      "selectMaterialType": "请选择原料类型",
+      "invalidQuantity": "请输入有效的原料数量",
+      "invalidCost": "请输入原料成本",
+      "selectSupplier": "请选择供应商",
+      "selectSupervisor": "请选择生产负责人"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "createSuccess": "入库成功",
+      "updateSuccess": "批次信息已更新",
+      "createFailed": "入库失败",
+      "updateFailed": "更新失败",
+      "noPermission": "无权操作",
+      "factoryUserOnly": "仅限工厂用户使用"
+    }
+  },
+  "qualityInspection": {
+    "title": "质检记录"
+  },
+  "materialBatch": {
+    "title": "原材料管理",
+    "searchPlaceholder": "搜索批次号、原料类型、储存位置",
+    "tabs": {
+      "all": "全部",
+      "expiring": "即将过期",
+      "expired": "已过期",
+      "lowStock": "低库存"
+    },
+    "stats": {
+      "totalBatches": "批次总数",
+      "available": "可用",
+      "warning": "预警"
+    },
+    "fifo": {
+      "title": "FIFO推荐",
+      "badge": "优先使用",
+      "description": "根据先进先出(FIFO)原则，建议优先使用以下批次：",
+      "recommendedBadge": "建议优先",
+      "inboundDate": "入库日期",
+      "remaining": "剩余"
+    },
+    "batch": {
+      "quantity": "剩余/总量",
+      "used": "已用",
+      "reserved": "预留",
+      "inbound": "入库",
+      "expiry": "到期",
+      "unitPrice": "单价",
+      "totalCost": "总价"
+    },
+    "actions": {
+      "export": "导出",
+      "convertToFrozen": "转为冻品",
+      "undoFrozen": "撤销转冻品",
+      "handleExpired": "批量处理过期批次",
+      "aiInbound": "AI智能入库"
+    },
+    "dialogs": {
+      "deleteTitle": "确认删除",
+      "deleteMessage": "确定要删除批次",
+      "deleteWarning": "此操作不可撤销。",
+      "undoFrozenTitle": "撤销转冻品",
+      "undoFrozenWarning": "⚠️ 注意：只能撤销10分钟内的转冻品操作",
+      "undoReason": "撤销原因 *",
+      "undoReasonPlaceholder": "例如：误操作、批次选错、需要继续加工等",
+      "confirmUndo": "确认撤销"
+    },
+    "messages": {
+      "exportSuccess": "库存数据已导出",
+      "exportFailed": "导出库存数据失败，请稍后重试",
+      "deleteSuccess": "已删除",
+      "deleteFailed": "删除批次失败，请重试",
+      "convertSuccess": "已成功转为冻品",
+      "convertFailed": "转冻品失败，请重试",
+      "undoSuccess": "已恢复为鲜品状态",
+      "undoFailed": "撤销失败",
+      "handleExpiredSuccess": "已成功处理过期批次",
+      "handleExpiredFailed": "无法处理过期批次，请稍后重试"
+    },
+    "empty": {
+      "noData": "暂无批次数据",
+      "noBatches": "暂无原材料批次",
+      "noExpiring": "✅ 没有即将过期的批次",
+      "noExpired": "✅ 没有已过期的批次",
+      "noLowStock": "✅ 没有低库存批次"
+    }
+  },
+  "equipment": {
+    "title": "设备监控",
+    "sections": {
+      "overview": "设备总览",
+      "statusDistribution": "状态分布",
+      "assetValue": "资产价值",
+      "alerts": "提醒事项"
+    },
+    "stats": {
+      "total": "设备总数",
+      "active": "运行中",
+      "maintenance": "维护中",
+      "inactive": "停用"
+    },
+    "status": {
+      "running": "运行中",
+      "maintenance": "维护中",
+      "inactiveOrScrapped": "停用/报废"
+    },
+    "value": {
+      "original": "原始总值",
+      "depreciated": "折旧后价值",
+      "retentionRate": "资产保值率"
+    },
+    "alerts": {
+      "maintenanceDue": "设备需要维护",
+      "warrantyExpiring": "保修即将到期",
+      "view": "查看"
+    },
+    "actions": {
+      "management": "设备管理",
+      "alerts": "设备告警"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "retryMessage": "无法加载设备统计，请稍后重试",
+      "noData": "未找到统计数据"
+    }
+  },
+  "inventory": {
+    "title": "库存盘点"
+  },
+  "consumption": {
+    "title": "消耗记录"
+  },
+  "exception": {
+    "title": "异常预警"
+  },
+  "equipmentAlerts": {
+    "title": "设备告警",
+    "statsBar": {
+      "critical": "严重",
+      "warning": "警告",
+      "active": "活动中"
+    },
+    "searchPlaceholder": "搜索设备、告警类型...",
+    "filters": {
+      "active": "活动",
+      "acknowledged": "已确认",
+      "resolved": "已解决",
+      "all": "全部"
+    },
+    "level": {
+      "critical": "严重",
+      "warning": "警告",
+      "info": "提示"
+    },
+    "status": {
+      "active": "活动",
+      "acknowledged": "已确认",
+      "resolved": "已解决"
+    },
+    "acknowledgedInfo": "已确认",
+    "empty": {
+      "title": "暂无告警",
+      "description": "设备运行正常"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "loadError": "无法加载设备告警，请稍后重试",
+      "acknowledgeSuccess": "成功",
+      "acknowledgeMessage": "告警已确认",
+      "acknowledgeFailed": "操作失败",
+      "acknowledgeError": "确认告警失败，请稍后重试",
+      "resolveTitle": "解决告警",
+      "resolvePrompt": "请输入解决方案备注（可选）",
+      "resolveSuccess": "成功",
+      "resolveMessage": "告警已解决",
+      "resolveFailed": "操作失败",
+      "resolveError": "解决告警失败，请稍后重试",
+      "factoryIdError": "错误",
+      "factoryIdMessage": "无法获取工厂ID"
+    },
+    "loading": "加载中..."
+  },
+  "equipmentDetail": {
+    "title": "设备详情",
+    "hours": "{{value}}小时",
+    "sections": {
+      "basicInfo": "基本信息",
+      "realtimeParams": "实时参数",
+      "performanceAnalysis": "性能分析",
+      "maintenanceRecords": "维护记录"
+    },
+    "stats": {
+      "uptime": "运行率",
+      "activeAlerts": "活动告警",
+      "maintenanceCount": "维护记录"
+    },
+    "basicInfo": {
+      "equipmentId": "设备编号",
+      "manufacturer": "制造商",
+      "location": "安装位置",
+      "installDate": "安装日期",
+      "operator": "操作员",
+      "lastMaintenance": "上次维护",
+      "nextMaintenance": "下次维护"
+    },
+    "realtimeParams": {
+      "temperature": "温度",
+      "pressure": "压力",
+      "speed": "转速",
+      "power": "功率"
+    },
+    "performance": {
+      "oee": "OEE (设备综合效率)",
+      "availability": "可用率",
+      "performance": "性能率",
+      "quality": "质量率",
+      "depreciatedValue": "当前折旧后价值",
+      "totalRuntime": "总运行时间",
+      "downtime": "停机时间",
+      "utilizationRate": "设备利用率",
+      "mtbf": "平均故障间隔(MTBF)",
+      "mttr": "平均修复时间(MTTR)"
+    },
+    "maintenanceRecords": {
+      "date": "日期",
+      "type": "类型",
+      "technician": "技术员",
+      "cost": "费用",
+      "empty": "暂无维护记录"
+    },
+    "actions": {
+      "viewAlerts": "查看告警",
+      "maintenanceRecord": "维护记录"
+    },
+    "status": {
+      "running": "运行中",
+      "idle": "空闲",
+      "maintenance": "维护中",
+      "offline": "离线"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "loadError": "无法加载设备详情，请稍后重试",
+      "notFound": "未找到设备信息",
+      "unknownDevice": "未知设备"
+    },
+    "loading": "加载中...",
+    "retry": "重试"
+  },
+  "equipmentManagement": {
+    "title": "设备管理",
+    "searchPlaceholder": "搜索设备...",
+    "filters": {
+      "all": "全部",
+      "active": "运行中",
+      "maintenance": "维护中",
+      "inactive": "停用"
+    },
+    "status": {
+      "active": "运行中",
+      "inactive": "停用",
+      "maintenance": "维护中",
+      "scrapped": "已报废"
+    },
+    "type": {
+      "processing": "加工",
+      "refrigeration": "冷藏",
+      "packaging": "包装",
+      "transport": "运输",
+      "other": "其他"
+    },
+    "info": {
+      "type": "类型",
+      "location": "位置",
+      "model": "型号",
+      "operator": "操作员"
+    },
+    "actions": {
+      "create": "创建设备",
+      "status": "状态",
+      "detail": "详情"
+    },
+    "dialogs": {
+      "createTitle": "创建设备",
+      "editTitle": "编辑设备",
+      "deleteTitle": "确认删除",
+      "deleteMessage": "确定要删除此设备吗？",
+      "fields": {
+        "name": "名称",
+        "code": "编号",
+        "model": "型号",
+        "location": "位置",
+        "operator": "操作员",
+        "selectOperator": "请选择操作员",
+        "noOperator": "不指定",
+        "loadingOperators": "加载中...",
+        "notes": "备注"
+      },
+      "buttons": {
+        "cancel": "取消",
+        "create": "创建",
+        "save": "保存",
+        "delete": "删除"
+      }
+    },
+    "statusMenu": {
+      "running": "运行中",
+      "maintenance": "维护中",
+      "inactive": "停用"
+    },
+    "empty": {
+      "title": "暂无设备",
+      "action": "创建设备"
+    },
+    "messages": {
+      "loadFailed": "错误",
+      "factoryIdError": "无法获取工厂信息",
+      "createSuccess": "设备创建成功",
+      "createFailed": "创建设备失败",
+      "updateSuccess": "设备更新成功",
+      "updateFailed": "更新设备失败",
+      "deleteSuccess": "设备删除成功",
+      "deleteFailed": "删除设备失败",
+      "statusUpdateSuccess": "设备状态更新成功",
+      "statusUpdateFailed": "更新设备状态失败"
+    }
+  },
+  "equipmentMonitoring": {
+    "title": "设备监控",
+    "currency": "¥{{value}}万",
+    "sections": {
+      "overview": "设备总览",
+      "statusDistribution": "状态分布",
+      "assetValue": "资产价值",
+      "alerts": "提醒事项"
+    },
+    "stats": {
+      "total": "设备总数",
+      "active": "运行中",
+      "maintenance": "维护中",
+      "inactive": "停用"
+    },
+    "statusDistribution": {
+      "running": "运行中",
+      "maintenance": "维护中",
+      "inactiveOrScrapped": "停用/报废"
+    },
+    "assetValue": {
+      "original": "原始总值",
+      "depreciated": "折旧后价值",
+      "retentionRate": "资产保值率"
+    },
+    "alerts": {
+      "maintenanceDue": "设备需要维护",
+      "warrantyExpiring": "保修即将到期",
+      "view": "查看"
+    },
+    "actions": {
+      "management": "设备管理",
+      "alerts": "设备告警"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "loadError": "无法加载设备统计，请稍后重试",
+      "notFound": "未找到统计数据"
+    },
+    "loading": "加载中...",
+    "retry": "重试"
+  },
+  "productionPlan": {
+    "title": "生产计划管理",
+    "management": "计划管理",
+    "create": "创建生产计划",
+    "edit": "编辑计划",
+    "createPlan": "创建计划",
+    "refresh": "刷新",
+    "filter": {
+      "all": "全部",
+      "pending": "待生产",
+      "inProgress": "生产中",
+      "completed": "已完成"
+    },
+    "stats": {
+      "totalPlans": "总计划数",
+      "inProgress": "生产中",
+      "completed": "已完成"
+    },
+    "status": {
+      "pending": "待生产",
+      "inProgress": "生产中",
+      "completed": "已完成",
+      "shipped": "已出货",
+      "cancelled": "已取消",
+      "unknown": "未知"
+    },
+    "planType": {
+      "title": "计划类型",
+      "future": "未来计划",
+      "fromInventory": "基于库存",
+      "fromInventoryIcon": "基于库存",
+      "futureIcon": "未来计划",
+      "selectHint": "选择计划类型以创建生产计划",
+      "fromInventoryHint": "根据当前可用库存创建计划，需选择原材料批次",
+      "futureHint": "预先规划的生产计划，可暂不指定具体批次"
+    },
+    "fields": {
+      "planNumber": "计划编号",
+      "planName": "计划名称",
+      "productType": "产品类型(SKU)",
+      "selectProductType": "选择产品SKU",
+      "plannedQuantity": "计划产量 (kg)",
+      "plannedQuantityPlaceholder": "例如: 100",
+      "plannedDate": "计划日期",
+      "expectedCompletion": "预计完成",
+      "expectedCompletionDate": "预计完成日期",
+      "targetCustomer": "目标商家(客户)",
+      "selectCustomer": "选择客户",
+      "notes": "备注",
+      "notesPlaceholder": "可选填写生产计划备注",
+      "product": "产品",
+      "customer": "客户",
+      "notSpecified": "未指定",
+      "createdDate": "创建日期",
+      "estimatedMaterial": "预估原料",
+      "actualQuantity": "实际产量"
+    },
+    "actions": {
+      "startProduction": "开始生产",
+      "completeProduction": "完成生产",
+      "recordShipment": "记录出货",
+      "viewDetails": "查看详情"
+    },
+    "empty": {
+      "noPlans": "暂无生产计划",
+      "hint": "点击右下角「+」按钮创建生产计划"
+    },
+    "dialog": {
+      "confirmStart": "确认开始生产",
+      "confirmStartMessage": "确定要开始生产吗?开始后将无法修改计划信息。",
+      "start": "开始",
+      "completeTitle": "完成生产",
+      "productType": "产品类型:",
+      "plannedQuantity": "计划产量:",
+      "actualQuantityLabel": "实际产量 (kg) *",
+      "actualQuantityPlaceholder": "输入实际完成的产量",
+      "completionRate": "完成率",
+      "confirmComplete": "确认完成"
+    },
+    "estimation": {
+      "title": "预估原料用量",
+      "about": "约",
+      "conversionRate": "转换率",
+      "wastageRate": "损耗率",
+      "estimatedUsage": "预估用量"
+    },
+    "stock": {
+      "title": "当前可用库存",
+      "available": "可用",
+      "batches": "批次"
+    },
+    "batch": {
+      "sectionTitle": "原材料批次",
+      "loading": "加载库存中...",
+      "selectProductFirst": "请先选择产品类型",
+      "noConversion": "未配置转换率",
+      "noConversionHint": "请先在转换率管理中配置该产品的转换率",
+      "goToConfig": "去配置",
+      "noStock": "无可用库存",
+      "noStockHint": "请先入库原料",
+      "enterQuantityFirst": "请输入计划产量以计算所需原料",
+      "shortage": "批次不足",
+      "shortageMessage": "选中批次共{{selected}}kg，还需{{shortage}}kg。\n\n是否继续创建？",
+      "continueCreate": "继续创建"
+    },
+    "futurePlan": {
+      "autoMatch": "自动匹配原料",
+      "autoMatchInfo": "未来计划创建后，当新原料入库时系统将自动匹配到此计划。您可以在计划列表中查看匹配进度。",
+      "fullyMatched": "原料已完全匹配",
+      "waitingMaterial": "等待原料入库",
+      "allocated": "已分配",
+      "progress": "进度"
+    },
+    "conversion": {
+      "configured": "已配置",
+      "notConfigured": "未配置"
+    },
+    "readOnly": {
+      "notice": "👁️ 平台管理员只读模式 - 无法修改数据",
+      "mode": "👁️ 只读模式"
+    },
+    "validation": {
+      "requiredFields": "产品类型、客户和计划产量不能为空",
+      "invalidActualQuantity": "请输入有效的实际产量"
+    },
+    "messages": {
+      "loadFailed": "加载生产计划失败",
+      "createSuccess": "生产计划创建成功",
+      "createSuccessWithBatches": "生产计划创建成功\n已预留{{count}}个批次的库存",
+      "createFailed": "创建失败",
+      "startSuccess": "生产已开始",
+      "startFailed": "操作失败",
+      "completeSuccess": "生产已完成，实际产量: {{quantity}} kg",
+      "completeFailed": "操作失败",
+      "shipmentPlaceholder": "记录出货功能",
+      "dateHint": "💡 预计完成日期默认为计划日期+1天，可手动修改"
+    }
+  },
+  "packaging": {
+    "title": "产品包装",
+    "create": "创建包装",
+    "step": "步骤",
+    "stepOf": "步骤 {{current}}/{{total}}",
+    "steps": {
+      "selectProduct": "第一步: 选择产品",
+      "specAndQuantity": "第二步: 规格与数量",
+      "confirmAndPrint": "第三步: 确认并打印"
+    },
+    "products": {
+      "frozenBass": "冷冻鲈鱼片",
+      "shrimp": "鲜虾仁",
+      "ribbonFish": "带鱼段",
+      "squidRings": "鱿鱼圈"
+    },
+    "fields": {
+      "product": "产品",
+      "weightPerBox": "单箱重量 (kg)",
+      "boxCount": "箱数",
+      "specification": "规格",
+      "quantity": "数量",
+      "totalWeight": "总重量"
+    },
+    "actions": {
+      "previous": "上一步",
+      "next": "下一步",
+      "printAndComplete": "打印标签并完成"
+    },
+    "print": {
+      "preview": "将自动打印 {{count}} 张标签"
+    },
+    "dialog": {
+      "completeTitle": "打包完成",
+      "completeMessage": "标签已打印，请贴标",
+      "ok": "确定"
+    },
+    "validation": {
+      "selectProduct": "请选择产品",
+      "enterWeight": "请输入重量"
+    },
+    "messages": {
+      "failed": "失败",
+      "retry": "请重试"
+    }
+  },
+  "batchComparison": {
+    "title": "批次对比分析",
+    "hint": "已选择 {{count}} 个批次 (最多5个，最少2个)",
+    "quotaRemaining": "剩余 {{remaining}} 次",
+    "thinkingMode": {
+      "title": "深度思考模式",
+      "enabledHint": "AI深度推理，结果更准确",
+      "disabledHint": "普通模式，响应更快"
+    },
+    "dimensions": {
+      "title": "选择对比维度",
+      "cost": "成本对比",
+      "efficiency": "效率对比",
+      "quality": "质量对比",
+      "comprehensive": "综合对比"
+    },
+    "selectBatches": "选择批次",
+    "product": "产品",
+    "output": "产量",
+    "time": "时间",
+    "analyzing": "AI正在分析中...",
+    "sessionId": "会话ID",
+    "quickQuestions": {
+      "title": "快速追问",
+      "q1": "哪个批次的成本效益最高?",
+      "q2": "如何优化效率较低的批次?",
+      "q3": "质量差异的主要原因是什么?"
+    },
+    "customQuestion": {
+      "button": "自定义问题",
+      "label": "输入您的问题",
+      "cancel": "取消",
+      "submit": "提交"
+    },
+    "analyzeButton": "开始AI对比分析",
+    "aiAnalysisTitle": "AI对比分析",
+    "messages": {
+      "selectAtLeast2": "请至少选择2个批次进行对比",
+      "maxSelection": "最多只能选择5个批次进行对比",
+      "userInfoIncomplete": "用户信息不完整",
+      "quotaExhausted": "本周AI分析次数已用完，请等待下周重置",
+      "analysisFailed": "AI分析失败",
+      "loadFailed": "加载失败",
+      "retryMessage": "请稍后重试",
+      "noBatches": "暂无已完成的批次"
+    }
+  },
+  "materialReceiptAI": {
+    "title": "AI 智能入库",
+    "subtitle": "原材料批次录入",
+    "loadingSchema": "加载表单配置...",
+    "loadingSuppliers": "加载供应商列表...",
+    "cancelConfirm": {
+      "title": "确认取消",
+      "message": "确定要取消入库操作吗？已填写的数据将丢失。",
+      "continue": "继续填写",
+      "cancel": "取消入库"
+    },
+    "aiBanner": "AI 表单助手已启用！点击右下角按钮，说「帮我入库100公斤三文鱼，单价45元」即可自动填表。",
+    "aiStatus": {
+      "filled": "AI 已填充 {{count}} 个字段",
+      "confidence": "置信度: {{value}}%"
+    },
+    "customSchema": {
+      "badge": "+{{count}} 自定义字段",
+      "version": "v{{version}}"
+    },
+    "messages": {
+      "error": "错误",
+      "success": "入库成功",
+      "batchNumber": "批次号: {{number}}",
+      "aiFilled": "(AI 辅助填写 {{count}} 个字段)",
+      "continueInbound": "继续入库",
+      "backToList": "返回列表",
+      "aiFillSuccess": "AI 填充成功",
+      "aiFillDetail": "已自动填写 {{count}} 个字段\n置信度: {{confidence}}%\n\n请检查并确认填写内容",
+      "ok": "好的",
+      "aiFillFailed": "AI 填充失败",
+      "inboundFailed": "入库失败",
+      "retryLater": "请稍后重试"
+    }
+  },
+  "materialReceipt": {
+    "title": "原材料入库",
+    "basicInfo": "基本信息",
+    "storageInfo": "储存信息",
+    "qualityInfo": "质检信息",
+    "otherInfo": "其他信息",
+    "fields": {
+      "supplier": "供应商",
+      "selectSupplier": "请选择供应商",
+      "materialType": "原料类型",
+      "materialTypePlaceholder": "例如：三文鱼、虾仁",
+      "quantity": "入库重量 (kg)",
+      "quantityPlaceholder": "例如：100.5",
+      "unitPrice": "单价 (元/kg)",
+      "unitPricePlaceholder": "例如：45.00",
+      "totalAmount": "总金额（自动计算）",
+      "storageType": "储存类型",
+      "fresh": "新鲜",
+      "frozen": "冻货",
+      "storageLocation": "储存位置",
+      "storageLocationPlaceholder": "例如：冷库A区-货架3",
+      "shelfLife": "保质期 (天)",
+      "shelfLifePlaceholder": "例如：30",
+      "expiryDate": "到期日期（自动计算）",
+      "inspector": "质检员",
+      "inspectorPlaceholder": "例如：张三",
+      "qualityStatus": "质检状态",
+      "qualified": "合格",
+      "unqualified": "不合格",
+      "qualityScore": "新鲜度评分 (0-100)",
+      "qualityScorePlaceholder": "例如：95",
+      "qualityNotes": "质检备注",
+      "qualityNotesPlaceholder": "质检备注信息",
+      "qualityPhotos": "质检照片上传（待实现）",
+      "notes": "备注",
+      "notesPlaceholder": "其他备注信息"
+    },
+    "buttons": {
+      "cancel": "取消",
+      "confirm": "确认入库"
+    },
+    "validation": {
+      "selectSupplier": "请选择供应商",
+      "enterMaterialType": "请输入原料类型",
+      "enterQuantity": "请输入有效的入库重量",
+      "enterUnitPrice": "请输入有效的单价",
+      "enterStorageLocation": "请输入储存位置",
+      "enterShelfLife": "请输入有效的保质期",
+      "enterInspector": "请输入质检员",
+      "validationFailed": "验证失败",
+      "fillAllRequired": "请填写所有必填项"
+    },
+    "messages": {
+      "success": "原材料入库成功",
+      "failed": "入库操作失败",
+      "loadSuppliersFailed": "加载供应商列表失败",
+      "cancelConfirm": "确认取消",
+      "cancelMessage": "确定要取消入库操作吗？已填写的数据将丢失。",
+      "continueEdit": "继续填写",
+      "cancelInbound": "取消入库"
+    }
+  },
+  "consumptionHistory": {
+    "title": "消耗记录",
+    "searchPlaceholder": "搜索批次号、原材料",
+    "filters": {
+      "all": "全部",
+      "today": "今天",
+      "week": "近7天",
+      "month": "近30天"
+    },
+    "stats": {
+      "count": "消耗次数",
+      "totalQuantity": "总消耗量",
+      "totalCost": "总成本"
+    },
+    "labels": {
+      "quantity": "消耗数量",
+      "unitPrice": "单价",
+      "productionBatch": "生产批次",
+      "time": "消耗时间",
+      "operator": "操作人",
+      "notes": "备注"
+    },
+    "empty": {
+      "title": "暂无消耗记录",
+      "hint": "生产过程中的原材料消耗会显示在这里"
+    },
+    "messages": {
+      "loadFailed": "加载消耗记录列表失败",
+      "retryMessage": "无法加载消耗记录，请稍后重试"
+    }
+  },
+  "aiReports": {
+    "title": "AI分析报告",
+    "filters": {
+      "all": "全部",
+      "batch": "批次",
+      "weekly": "周报",
+      "monthly": "月报"
+    },
+    "types": {
+      "batch": "批次分析",
+      "weekly": "周报",
+      "monthly": "月报",
+      "custom": "自定义"
+    },
+    "metadata": {
+      "batchLabel": "批次:",
+      "timeLabel": "时间:",
+      "costLabel": "成本:"
+    },
+    "stats": {
+      "findings": "{{count}}个发现",
+      "suggestions": "{{count}}条建议"
+    },
+    "timeAgo": {
+      "justNow": "刚刚",
+      "minutesAgo": "{{count}}分钟前",
+      "hoursAgo": "{{count}}小时前",
+      "daysAgo": "{{count}}天前"
+    },
+    "empty": {
+      "icon": "📊",
+      "title": "暂无AI分析报告",
+      "hint": "点击右下角按钮，开始生成新的AI分析报告"
+    },
+    "fabLabel": "生成新报告",
+    "messages": {
+      "loadFailed": "加载失败",
+      "retryMessage": "请稍后重试",
+      "userInfoIncomplete": "用户信息不完整"
+    }
+  },
+  "aiConversation": {
+    "title": "对话历史",
+    "roles": {
+      "user": "用户",
+      "assistant": "AI助手"
+    },
+    "sessionInfo": {
+      "sessionId": "会话ID",
+      "status": "状态",
+      "active": "活跃",
+      "closed": "已关闭",
+      "relatedBatch": "关联批次",
+      "createdAt": "创建时间",
+      "messageCount": "消息数量",
+      "messages": "{{count}} 条"
+    },
+    "tokenInfo": "消耗 {{count}} tokens",
+    "closeSession": {
+      "title": "确认关闭",
+      "message": "确定要关闭此会话吗？关闭后将无法继续对话。",
+      "cancel": "取消",
+      "confirm": "确认",
+      "success": "会话已关闭"
+    },
+    "timeAgo": {
+      "justNow": "刚刚",
+      "minutesAgo": "{{count}}分钟前",
+      "hoursAgo": "{{count}}小时前"
+    },
+    "empty": {
+      "title": "暂无对话记录"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "retryMessage": "请稍后重试",
+      "userInfoIncomplete": "用户信息不完整",
+      "missingSessionId": "缺少会话ID",
+      "closeFailed": "关闭失败"
+    }
+  },
+  "aiAnalysisDetail": {
+    "title": "AI分析详情",
+    "metadata": {
+      "generatedAt": "生成时间",
+      "expiresAt": "过期时间",
+      "sessionId": "会话ID",
+      "messageCount": "消息数量",
+      "messages": "{{count}} 条"
+    },
+    "performance": {
+      "cacheHit": "缓存命中",
+      "realtime": "实时生成",
+      "responseTime": "{{ms}}ms"
+    },
+    "sections": {
+      "analysisContent": "分析内容",
+      "errorInfo": "错误信息",
+      "quotaInfo": "AI配额"
+    },
+    "quota": {
+      "label": "AI配额",
+      "used": "已使用 {{used}}/{{total}} 次",
+      "resetDate": "重置时间: {{date}}"
+    },
+    "actions": {
+      "share": "分享报告",
+      "copy": "复制"
+    },
+    "shareTemplate": {
+      "header": "【白垩纪AI Agent - AI分析报告】",
+      "reportTitle": "报告标题: {{title}}",
+      "reportType": "报告类型: {{type}}",
+      "generatedAt": "生成时间: {{time}}",
+      "analysisContent": "分析内容:",
+      "sessionId": "会话ID: {{id}}",
+      "expiresAt": "过期时间: {{time}}"
+    },
+    "empty": {
+      "title": "报告不存在或已过期"
+    },
+    "messages": {
+      "loadFailed": "加载失败",
+      "retryMessage": "请稍后重试",
+      "userInfoIncomplete": "用户信息不完整",
+      "copySuccess": "已复制到剪贴板",
+      "copyFailed": "复制失败，请重试"
+    }
+  },
+  "aiAnalysisDetail": {
+    "title": "AI成本分析",
+    "thinkingMode": {
+      "title": "深度思考模式",
+      "enabledHint": "AI深度推理，结果更准确",
+      "disabledHint": "普通模式，响应更快"
+    },
+    "overallRating": {
+      "title": "综合评价",
+      "excellent": "优秀",
+      "good": "良好",
+      "needsImprovement": "需改进",
+      "critical": "严重"
+    },
+    "dimensions": {
+      "title": "5维深度分析",
+      "conversion": "转换率分析",
+      "labor": "人工成本分析",
+      "equipment": "设备成本分析",
+      "material": "原料成本分析",
+      "efficiency": "效率分析"
+    },
+    "priority": {
+      "high": "高优先级",
+      "medium": "中优先级",
+      "low": "低优先级"
+    },
+    "actions": {
+      "askAI": "追问AI",
+      "export": "导出报告",
+      "adopt": "采纳",
+      "share": "分享"
+    },
+    "messages": {
+      "analyzing": "AI正在深度分析中...",
+      "analysisFailed": "AI分析失败",
+      "retryMessage": "请稍后重试",
+      "quotaExhausted": "本周AI分析次数已用完，请等待下周重置",
+      "userInfoIncomplete": "用户信息不完整"
+    }
+  },
+  "costAnalysisDashboard": {
+    "title": "成本分析",
+    "loading": "加载成本数据中...",
+    "noData": "未找到成本数据",
+    "batchNumber": "批次号",
+    "costOverview": {
+      "title": "成本概览",
+      "rawMaterialCost": "原材料成本",
+      "laborCost": "人工成本",
+      "equipmentCost": "设备成本",
+      "totalCost": "总成本"
+    },
+    "laborStats": {
+      "title": "人工详情",
+      "subtitle": "{{personnel}}人 • 总工时{{hours}}h",
+      "totalPersonnel": "总人数",
+      "personnelUnit": "{{count}}人",
+      "totalHours": "总工时",
+      "hoursMinutes": "{{hours}}小时 {{minutes}}分钟",
+      "laborCost": "人工成本",
+      "workerDetails": "工人明细",
+      "hours": "小时",
+      "minutes": "分钟",
+      "persons": "人",
+      "uses": "次使用",
+      "running": "运行"
+    },
+    "equipmentStats": {
+      "title": "设备详情",
+      "subtitle": "{{usages}}次使用 • 运行{{hours}}h",
+      "usageCount": "设备使用次数",
+      "usageUnit": "{{count}}次",
+      "runTime": "运行时长",
+      "hoursMinutes": "{{hours}}小时 {{minutes}}分钟",
+      "equipmentCost": "设备成本",
+      "equipmentDetails": "设备明细"
+    },
+    "profitAnalysis": {
+      "title": "利润分析",
+      "expectedRevenue": "预期收入",
+      "totalCost": "总成本",
+      "profit": "利润",
+      "profitRate": "利润率",
+      "breakEvenPrice": "保本价"
+    },
+    "aiAnalysis": {
+      "title": "AI智能分析",
+      "subtitle": "AI驱动，为您提供成本优化建议",
+      "description": "点击下方按钮，AI将分析此批次的成本数据，为您提供专业的优化建议",
+      "getAISuggestions": "获取AI优化建议",
+      "quotaExhausted": "本周次数已用完",
+      "quotaExhaustedHint": "本周AI分析次数已用完，请等待下周重置",
+      "quotaRemaining": "{{remaining}}/{{limit}}次",
+      "quotaHint": "提示: 本周还剩 {{remaining}} 次分析机会",
+      "analyzing": "AI正在分析您的成本数据...",
+      "analysisResult": "分析结果",
+      "sessionId": "会话ID",
+      "continueAsking": "继续提问",
+      "customQuestion": "自定义问题",
+      "enterQuestion": "输入您的问题",
+      "questionPlaceholder": "例如：如何降低原材料损耗？",
+      "ask": "提问",
+      "resetTomorrow": "明日重置",
+      "resetIn1Day": "1天后重置",
+      "resetInDays": "{{days}}天后重置",
+      "times": "次"
+    }
+  },
+  "costComparison": {
+    "title": "成本对比",
+    "loading": "加载中...",
+    "noData": "未找到批次成本数据",
+    "loadFailed": "加载成本对比数据失败",
+    "summary": {
+      "comparedBatches": "对比批次",
+      "avgTotalCost": "平均总成本",
+      "avgUnitCost": "平均单位成本"
+    },
+    "performance": {
+      "title": "成本表现",
+      "best": "最优",
+      "needsOptimization": "待优化",
+      "costDifference": "成本差异"
+    },
+    "detailComparison": "成本明细对比",
+    "totalCostComparison": "总成本对比",
+    "unitCostTrend": "单位成本趋势",
+    "costStructure": "成本结构对比",
+    "labels": {
+      "date": "日期",
+      "quantity": "数量",
+      "totalCost": "总成本",
+      "laborCost": "人工成本",
+      "labor": "人工",
+      "materialCost": "原料成本",
+      "material": "原料",
+      "equipmentCost": "设备成本",
+      "equipment": "设备",
+      "otherCost": "其他成本",
+      "other": "其他",
+      "unitCost": "单位成本"
+    },
+    "actions": {
+      "exportReport": "导出报告",
+      "aiAnalysis": "AI分析"
+    }
+  },
+  "aiAnalysisDetail": {
+    "defaultTitles": {
+      "batch": "批次成本分析报告",
+      "weekly": "周度成本分析报告",
+      "monthly": "月度成本分析报告",
+      "custom": "自定义分析报告",
+      "default": "AI分析报告"
+    },
+    "reportType": {
+      "batch": "批次分析",
+      "weekly": "周报",
+      "monthly": "月报",
+      "custom": "自定义"
+    },
+    "loading": "加载中...",
+    "shareReport": "分享报告",
+    "shareTitle": "白垩纪AI Agent - AI分析报告",
+    "reportTitle": "报告标题",
+    "reportTypeLabel": "报告类型",
+    "generatedAt": "生成时间",
+    "expiresAt": "过期时间",
+    "sessionId": "会话ID",
+    "messageCount": "消息数量",
+    "cacheHit": "缓存命中",
+    "realTimeGenerated": "实时生成",
+    "analysisContent": "分析内容",
+    "copySuccess": "已复制到剪贴板",
+    "copyFailed": "复制失败，请重试",
+    "errorInfo": "错误信息",
+    "aiQuota": "AI配额",
+    "quotaUsed": "已使用 {{used}}/{{limit}} 次",
+    "resetTime": "重置时间",
+    "reportNotFound": "报告不存在或已过期",
+    "userInfoIncomplete": "用户信息不完整",
+    "loadFailed": "加载失败",
+    "unknown": "未知",
+    "messages": "条"
+  },
+  "aiConversationHistory": {
+    "title": "对话历史",
+    "loading": "加载中...",
+    "missingSessionId": "缺少会话ID",
+    "userInfoIncomplete": "用户信息不完整",
+    "loadFailed": "加载失败",
+    "closeConfirmTitle": "确认关闭",
+    "closeConfirmMessage": "确定要关闭此会话吗？关闭后将无法继续对话。",
+    "closeSuccess": "会话已关闭",
+    "closeFailed": "关闭失败",
+    "sessionId": "会话ID",
+    "relatedBatch": "关联批次",
+    "createdAt": "创建时间",
+    "messageCount": "消息数量",
+    "noRecords": "暂无对话记录",
+    "status": {
+      "active": "活跃",
+      "closed": "已关闭"
+    },
+    "role": {
+      "user": "用户",
+      "assistant": "AI助手"
+    },
+    "time": {
+      "justNow": "刚刚",
+      "minutesAgo": "{{minutes}}分钟前",
+      "hoursAgo": "{{hours}}小时前"
+    },
+    "tokensConsumed": "消耗 {{tokens}} tokens"
+  },
+  "batchComparison": {
+    "title": "批次对比分析",
+    "selectedBatchesHint": "已选择 {{count}} 个批次 (最多5个，最少2个)",
+    "quotaRemaining": "剩余 {{remaining}} 次",
+    "thinkingMode": {
+      "title": "深度思考模式",
+      "enabled": "AI深度推理，结果更准确",
+      "disabled": "普通模式，响应更快"
+    },
+    "dimension": {
+      "title": "选择对比维度",
+      "cost": "成本对比",
+      "efficiency": "效率对比",
+      "quality": "质量对比",
+      "comprehensive": "综合对比"
+    },
+    "batchList": {
+      "title": "选择批次",
+      "loading": "加载中...",
+      "empty": "暂无已完成的批次",
+      "product": "产品:",
+      "quantity": "产量:",
+      "time": "时间:",
+      "pending": "待定"
+    },
+    "loadFailed": "加载失败",
+    "selectMinBatches": "请至少选择2个批次进行对比",
+    "maxBatchesHint": "最多只能选择5个批次进行对比",
+    "userInfoIncomplete": "用户信息不完整",
+    "quotaInsufficient": "本周AI分析次数已用完，请等待下周重置",
+    "aiComparison": {
+      "title": "AI对比分析",
+      "loading": "AI正在分析中...",
+      "startAnalysis": "开始AI对比分析",
+      "quickQuestions": "快速追问",
+      "customQuestion": "自定义问题",
+      "enterQuestion": "输入您的问题",
+      "cancel": "取消",
+      "submit": "提交"
+    },
+    "quickQuestionsList": {
+      "costEfficiency": "哪个批次的成本效益最高?",
+      "optimizeEfficiency": "如何优化效率较低的批次?",
+      "qualityDifference": "质量差异的主要原因是什么?"
+    },
+    "aiFailed": "AI分析失败"
+  }
+}

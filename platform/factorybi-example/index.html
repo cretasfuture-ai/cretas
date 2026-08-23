@@ -1,0 +1,2331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="白垩纪 Cretas 食品工厂管理平台功能展示：生产报工、批次溯源、原料库存、质检 HACCP、设备冷链与经营分析的真实界面。">
+<title>工厂管理平台功能展示 — 白垩纪食品溯源系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;700;900&family=Azeret+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ===== RESET & VARIABLES ===== */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #050810;
+  --surface: #0b1120;
+  --surface-alt: #111a2e;
+  --border: rgba(59, 130, 246, 0.08);
+  --border-hover: rgba(59, 130, 246, 0.25);
+  --accent: #3b82f6;
+  --accent2: #22d3ee;
+  --accent3: #a78bfa;
+  --text: #e8edf5;
+  --text-secondary: #94a3b8;
+  --muted: #8a93a6;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Outfit', 'Noto Sans SC', "Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+  color: #fff;
+}
+
+/* ===== NOISE TEXTURE OVERLAY ===== */
+.noise {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+}
+
+/* ===== NAVIGATION ===== */
+.nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  padding: 0 clamp(1rem, 4vw, 3rem);
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  background: rgba(5, 8, 16, 0.7);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: all 0.6s var(--ease-out-expo);
+}
+.nav.scrolled {
+  background: rgba(5, 8, 16, 0.92);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04);
+}
+.nav-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-decoration: none;
+  transition: color 0.5s;
+}
+.nav-logo-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: white;
+  font-weight: 900;
+  letter-spacing: -0.05em;
+}
+.nav-links {
+  display: flex;
+  gap: 1px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 10px;
+  padding: 3px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.nav-links::-webkit-scrollbar { display: none; }
+.nav-link {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  transition: all 0.25s;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.nav-link:hover, .nav-link.active {
+  color: var(--text);
+  background: rgba(255,255,255,0.06);
+}
+
+/* ===== HERO ===== */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px clamp(1rem, 4vw, 2rem) 80px;
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+}
+.hero-mesh {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.hero-mesh .orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  will-change: transform;
+}
+.hero-mesh .orb-1 {
+  width: 600px;
+  height: 500px;
+  background: rgba(59, 130, 246, 0.12);
+  top: -10%;
+  left: 20%;
+  animation: orbFloat1 25s ease-in-out infinite;
+}
+.hero-mesh .orb-2 {
+  width: 500px;
+  height: 500px;
+  background: rgba(34, 211, 238, 0.08);
+  top: 40%;
+  right: 10%;
+  animation: orbFloat2 30s ease-in-out infinite;
+}
+.hero-mesh .orb-3 {
+  width: 400px;
+  height: 350px;
+  background: rgba(139, 92, 246, 0.06);
+  bottom: 10%;
+  left: 10%;
+  animation: orbFloat3 20s ease-in-out infinite;
+}
+.hero-dots {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(59, 130, 246, 0.12) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse 70% 55% at 50% 45%, black 20%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 45%, black 20%, transparent 70%);
+}
+.hero-line {
+  position: absolute;
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.15), transparent);
+  height: 1px;
+  width: 80%;
+  left: 10%;
+}
+.hero-line-top { top: 30%; }
+.hero-line-bot { bottom: 25%; }
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px 5px 7px;
+  border-radius: 100px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.12);
+  font-family: 'Azeret Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  margin-bottom: 36px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  animation: fadeInUp 0.8s var(--ease-out-expo) both;
+}
+.hero-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse 2.5s ease-in-out infinite;
+}
+
+.hero h1 {
+  font-size: clamp(2.4rem, 6vw, 4.5rem);
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+  margin-bottom: 24px;
+  animation: fadeInUp 0.8s var(--ease-out-expo) 0.1s both;
+}
+.hero h1 .gradient-text {
+  background: linear-gradient(135deg, #3b82f6 0%, #22d3ee 50%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-sub {
+  font-size: clamp(0.95rem, 1.8vw, 1.15rem);
+  color: var(--text-secondary);
+  max-width: 540px;
+  line-height: 1.75;
+  font-weight: 400;
+  margin-bottom: 44px;
+  animation: fadeInUp 0.8s var(--ease-out-expo) 0.2s both;
+}
+
+/* ===== FEATURE CIRCLES (Hero) ===== */
+.hero-features {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 56px;
+  animation: fadeInUp 0.8s var(--ease-out-expo) 0.3s both;
+}
+.hero-feature-circle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  transition: transform 0.3s var(--ease-out-expo);
+}
+.hero-feature-circle:hover { transform: translateY(-4px); }
+.hero-feature-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  transition: all 0.3s;
+}
+.hero-feature-circle:hover .hero-feature-icon {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 24px rgba(59, 130, 246, 0.15);
+}
+.hero-feature-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+/* ===== STATS ===== */
+.stats {
+  position: relative;
+  padding: 80px clamp(1rem, 4vw, 2rem);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.stats-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.stat-card {
+  background: var(--surface);
+  padding: 36px 24px;
+  text-align: center;
+  transition: background 0.3s;
+}
+.stat-card:hover { background: var(--surface-alt); }
+.stat-number {
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.2;
+}
+.stat-label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 6px;
+  font-weight: 400;
+}
+
+/* ===== SECTION SHARED ===== */
+.section {
+  padding: 100px 0 80px;
+  position: relative;
+}
+.section-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 clamp(1rem, 4vw, 2rem);
+}
+.section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Azeret Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+.section-label::before {
+  content: '';
+  width: 28px;
+  height: 1px;
+  background: var(--accent);
+}
+.section-title {
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+  margin-bottom: 18px;
+}
+.section-desc {
+  font-size: clamp(0.9rem, 1.4vw, 1.05rem);
+  line-height: 1.75;
+  font-weight: 400;
+  max-width: 580px;
+  color: var(--text-secondary);
+}
+
+/* ===== PHONE FRAME ===== */
+.phone-frame {
+  width: 260px;
+  margin: 0 auto;
+  padding: 12px;
+  background: linear-gradient(145deg, #2a2a3e, #1a1a2e);
+  border-radius: 32px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06),
+    0 20px 60px rgba(0,0,0,0.3),
+    0 4px 16px rgba(0,0,0,0.2);
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.5s var(--ease-out-expo);
+}
+.phone-frame:hover { transform: translateY(-6px); }
+.phone-frame::before {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 72px;
+  height: 22px;
+  background: #0f0f1e;
+  border-radius: 0 0 14px 14px;
+  z-index: 10;
+}
+.phone-screen {
+  width: 100%;
+  aspect-ratio: 9/19;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #1a1a2e;
+}
+.phone-screen img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+/* ===== STEP CARD ===== */
+.step-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: center;
+}
+.step-grid.reverse { direction: rtl; }
+.step-grid.reverse > * { direction: ltr; }
+.step-text { padding: 0 8px; }
+.step-text h3 {
+  font-size: clamp(1.4rem, 2.8vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-bottom: 16px;
+}
+.step-text h3 .accent { color: var(--accent); }
+.step-text h3 .accent2 { color: var(--accent2); }
+.step-text > p {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+
+/* ===== FEATURE LIST ===== */
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.feature-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.3);
+}
+.feature-dot.cyan { background: var(--accent2); box-shadow: 0 0 6px rgba(34, 211, 238, 0.3); }
+.feature-dot.purple { background: var(--accent3); box-shadow: 0 0 6px rgba(167, 139, 250, 0.3); }
+
+/* ===== FEATURE GRID ===== */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 24px;
+}
+.feature-chip {
+  padding: 10px 16px;
+  background: rgba(59, 130, 246, 0.05);
+  border: 1px solid rgba(59, 130, 246, 0.08);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+  transition: all 0.3s;
+}
+.feature-chip:hover {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.2);
+  color: var(--text);
+}
+
+/* ===== INFO BOX ===== */
+.info-box {
+  margin-top: 20px;
+  padding: 16px 20px;
+  background: rgba(59, 130, 246, 0.04);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.info-box strong { color: var(--accent); font-weight: 600; }
+
+/* ===== FLOW CHART ===== */
+.flow-chart {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 40px 0;
+}
+.flow-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.flow-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  transition: all 0.3s;
+}
+.flow-node:hover .flow-icon {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
+  transform: scale(1.08);
+}
+.flow-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.flow-arrow {
+  font-size: 18px;
+  color: var(--muted);
+  margin: 0 4px;
+  margin-bottom: 20px;
+}
+
+/* ===== DUAL PHONES ===== */
+.dual-phones {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  align-items: flex-start;
+}
+.dual-phones .phone-frame:nth-child(2) { margin-top: 48px; }
+
+/* ===== SECTION DIVIDER ===== */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-hover), transparent);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* ===== FOOTER ===== */
+.footer {
+  padding: 64px clamp(1rem, 4vw, 2rem) 48px;
+  background: #030508;
+  text-align: center;
+  border-top: 1px solid rgba(255,255,255,0.03);
+}
+.footer-inner { max-width: 600px; margin: 0 auto; }
+.footer-logo {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+  letter-spacing: -0.02em;
+}
+.footer p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+.footer-divider {
+  width: 40px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--muted), transparent);
+  margin: 20px auto;
+}
+
+/* ===== LIGHTBOX ===== */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(3, 5, 8, 0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s;
+  cursor: zoom-out;
+}
+.lightbox.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.lightbox img {
+  max-width: 92vw;
+  max-height: 88vh;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.4);
+  transform: scale(0.92);
+  transition: transform 0.4s var(--ease-out-expo);
+}
+.lightbox.active img { transform: scale(1); }
+.lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.6);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s;
+  font-family: inherit;
+}
+.lightbox-close:hover {
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+.lightbox-caption {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  color: rgba(255,255,255,0.5);
+  font-weight: 400;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ===== SCROLL REVEAL ===== */
+.reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition: opacity 0.7s var(--ease-out-expo), transform 0.7s var(--ease-out-expo);
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-d1 { transition-delay: 0.06s; }
+.reveal-d2 { transition-delay: 0.12s; }
+.reveal-d3 { transition-delay: 0.18s; }
+.reveal-d4 { transition-delay: 0.24s; }
+
+/* ===== KEYFRAMES ===== */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+@keyframes orbFloat1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(80px, 40px) scale(1.05); }
+  50% { transform: translate(-30px, 80px) scale(0.95); }
+  75% { transform: translate(50px, -20px) scale(1.02); }
+}
+@keyframes orbFloat2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(-60px, -50px) scale(1.08); }
+  50% { transform: translate(40px, -30px) scale(0.92); }
+  75% { transform: translate(-40px, 40px) scale(1.05); }
+}
+@keyframes orbFloat3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(50px, -40px) scale(1.1); }
+  66% { transform: translate(-30px, 30px) scale(0.95); }
+}
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+/* ===== CLOSED-LOOP SECTIONS ===== */
+.loop-section {
+  padding: 100px 0 80px;
+  position: relative;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.loop-section .section-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 clamp(1rem, 4vw, 2rem);
+}
+.loop-header {
+  text-align: center;
+  margin-bottom: 64px;
+}
+
+/* Timeline */
+.timeline {
+  position: relative;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 28px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(180deg, var(--accent), var(--accent2), var(--accent3));
+  opacity: 0.3;
+}
+.timeline-step {
+  position: relative;
+  padding-left: 72px;
+  padding-bottom: 48px;
+}
+.timeline-step:last-child { padding-bottom: 0; }
+.timeline-number {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.1);
+  border: 2px solid rgba(59, 130, 246, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Azeret Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  z-index: 2;
+}
+.timeline-step:hover .timeline-number {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+}
+.timeline-content {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px 28px;
+  transition: all 0.3s var(--ease-out-expo);
+}
+.timeline-step:hover .timeline-content {
+  border-color: var(--border-hover);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+.timeline-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+.timeline-role.supervisor {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  color: #5b9bff;
+}
+.timeline-role.admin {
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid rgba(167, 139, 250, 0.2);
+  color: var(--accent3);
+}
+.timeline-role.warehouse {
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  color: var(--accent2);
+}
+.timeline-role.sales {
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+}
+.timeline-role.system {
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  color: #34d399;
+}
+.timeline-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+.timeline-desc {
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+.timeline-desc:last-child { margin-bottom: 0; }
+
+/* Credential card */
+.credential-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: rgba(59, 130, 246, 0.04);
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  border-radius: 12px;
+  margin-top: 8px;
+}
+.credential-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.credential-value {
+  font-family: 'Azeret Mono', monospace;
+  font-size: 13px;
+  color: var(--accent2);
+  font-weight: 500;
+}
+
+/* Data preview box */
+.data-preview {
+  margin-top: 14px;
+  padding: 16px 20px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  font-family: 'Azeret Mono', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  overflow-x: auto;
+}
+.data-preview .key { color: var(--accent2); }
+.data-preview .val { color: var(--accent3); }
+.data-preview .comment { color: var(--muted); font-style: italic; }
+
+/* ===== TIMELINE VISUAL LAYOUT (text + phone screenshot) ===== */
+.timeline-visual-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  margin-top: 14px;
+}
+.timeline-visual-text {
+  flex: 1;
+  min-width: 0;
+}
+.timeline-visual-text .info-box {
+  margin-top: 0;
+}
+.timeline-phone {
+  flex-shrink: 0;
+  width: 140px;
+  padding: 6px;
+  background: linear-gradient(145deg, #2a2a3e, #1a1a2e);
+  border-radius: 20px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06),
+    0 8px 24px rgba(0,0,0,0.25);
+  cursor: pointer;
+  transition: transform 0.4s var(--ease-out-expo);
+}
+.timeline-phone:hover { transform: translateY(-4px); }
+.timeline-phone::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 12px;
+  background: #0f0f1e;
+  border-radius: 0 0 8px 8px;
+  z-index: 10;
+}
+.timeline-phone {
+  position: relative;
+}
+.timeline-phone-screen {
+  width: 100%;
+  aspect-ratio: 9/19;
+  border-radius: 15px;
+  overflow: hidden;
+  background: #1a1a2e;
+}
+.timeline-phone-screen img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+/* KPI mini grid (replaces JSON data blocks) */
+.loop-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+.loop-kpi-item {
+  padding: 14px 16px;
+  background: rgba(59, 130, 246, 0.04);
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  border-radius: 12px;
+  text-align: center;
+}
+.loop-kpi-value {
+  font-family: 'Azeret Mono', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent2);
+  line-height: 1.2;
+}
+.loop-kpi-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-weight: 500;
+}
+.loop-kpi-item:nth-child(2) .loop-kpi-value { color: var(--accent3); }
+.loop-kpi-item:nth-child(3) .loop-kpi-value { color: #34d399; }
+.loop-kpi-item:nth-child(4) .loop-kpi-value { color: #fbbf24; }
+
+@media (max-width: 900px) {
+  .timeline-visual-layout { flex-direction: column; }
+  .timeline-phone { width: 120px; align-self: center; }
+}
+@media (max-width: 480px) {
+  .timeline-phone { width: 110px; padding: 5px; border-radius: 16px; }
+  .timeline-phone-screen { border-radius: 12px; }
+  .timeline-phone::before { width: 32px; height: 10px; }
+  .loop-kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .loop-kpi-value { font-size: 16px; }
+}
+
+/* Status flow inline */
+.status-flow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.status-badge.draft { background: rgba(100, 116, 139, 0.15); color: #94a3b8; }
+.status-badge.pending { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+.status-badge.approved { background: rgba(52, 211, 153, 0.12); color: #34d399; }
+.status-badge.rejected { background: rgba(239, 68, 68, 0.12); color: #ff6b6b; }
+.status-badge.completed { background: rgba(59, 130, 246, 0.12); color: #5b9bff; }
+.status-arrow {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Loop summary cards */
+.loop-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 48px;
+}
+.loop-summary-card {
+  padding: 24px 20px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  text-align: center;
+  transition: all 0.3s;
+}
+.loop-summary-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-4px);
+}
+.loop-summary-icon {
+  font-size: 28px;
+  margin-bottom: 12px;
+}
+.loop-summary-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.loop-summary-desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 900px) {
+  .step-grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    text-align: center;
+  }
+  .step-grid.reverse { direction: ltr; }
+  .feature-list { align-items: center; }
+  .stats-inner { grid-template-columns: repeat(2, 1fr); }
+  .flow-chart { gap: 4px; }
+  .flow-icon { width: 44px; height: 44px; font-size: 18px; }
+  .timeline-step { padding-left: 60px; }
+  .timeline::before { left: 20px; }
+  .timeline-number { left: 0; width: 40px; height: 40px; }
+  .credential-card { flex-direction: column; gap: 8px; align-items: flex-start; }
+  .loop-summary { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .nav-links { display: none; }
+  .hero h1 { font-size: 2rem; }
+  .hero-sub { font-size: 0.9rem; }
+  .hero-features { gap: 16px; }
+  .hero-feature-icon { width: 48px; height: 48px; font-size: 20px; }
+  .hero-feature-label { font-size: 11px; }
+  .phone-frame { width: 200px; padding: 10px; }
+  .dual-phones .phone-frame { width: 160px; }
+  .dual-phones .phone-frame:nth-child(2) { margin-top: 32px; }
+  .feature-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .phone-frame { width: 180px; padding: 8px; border-radius: 24px; }
+  .phone-frame::before { width: 56px; height: 18px; border-radius: 0 0 10px 10px; }
+  .phone-screen { border-radius: 18px; }
+  .dual-phones .phone-frame { width: 140px; }
+  .stats-inner { grid-template-columns: repeat(2, 1fr); }
+  .stat-card { padding: 24px 16px; }
+  .timeline-step { padding-left: 48px; padding-bottom: 32px; }
+  .timeline::before { left: 14px; }
+  .timeline-number { left: -4px; width: 36px; height: 36px; font-size: 12px; }
+  .timeline-content { padding: 18px 16px; }
+  .credential-card { padding: 10px 14px; }
+  .data-preview { padding: 12px 14px; font-size: 11px; }
+  .status-flow { gap: 4px; }
+  .status-badge { padding: 3px 8px; font-size: 10px; }
+  .loop-summary { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- Noise texture overlay -->
+<div class="noise" aria-hidden="true"></div>
+
+<!-- Navigation -->
+<nav class="nav" id="nav">
+  <a href="#hero" class="nav-logo">
+    <div class="nav-logo-icon">C</div>
+    <span>工厂管理平台</span>
+  </a>
+  <div class="nav-links">
+    <a href="#hero" class="nav-link active">概览</a>
+    <a href="#home" class="nav-link">首页</a>
+    <a href="#ai-center" class="nav-link">AI分析</a>
+    <a href="#reports" class="nav-link">报表</a>
+    <a href="#smartbi" class="nav-link">SmartBI</a>
+    <a href="#management" class="nav-link">管理</a>
+    <a href="#purchase" class="nav-link">进销存</a>
+    <a href="#work-report-loop" class="nav-link">报工闭环</a>
+    <a href="#psi-loop" class="nav-link">进销存闭环</a>
+    <a href="#employees" class="nav-link">员工</a>
+    <a href="#profile" class="nav-link">个人</a>
+    <a href="#login" class="nav-link">登录</a>
+  </div>
+</nav>
+
+<!-- ============== HERO ============== -->
+<section class="hero" id="hero">
+  <div class="hero-mesh" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+  <div class="hero-dots" aria-hidden="true"></div>
+  <div class="hero-line hero-line-top" aria-hidden="true"></div>
+  <div class="hero-line hero-line-bot" aria-hidden="true"></div>
+
+  <div class="hero-content">
+    <div class="hero-badge">
+      <span class="hero-badge-dot"></span>
+      Factory Management Platform
+    </div>
+    <h1>
+      <span class="gradient-text">工厂管理平台</span><br>功能展示
+    </h1>
+    <p class="hero-sub">
+      白垩纪食品溯源系统 React Native 移动端<br>
+      AI 驱动的全链路工厂管理，覆盖生产、仓储、BI 分析、进销存全场景
+    </p>
+
+    <!-- Feature Circles -->
+    <div class="hero-features">
+      <div class="hero-feature-circle">
+        <div class="hero-feature-icon">&#x1F3ED;</div>
+        <span class="hero-feature-label">生产管理</span>
+      </div>
+      <div class="hero-feature-circle">
+        <div class="hero-feature-icon">&#x1F4E6;</div>
+        <span class="hero-feature-label">仓储管理</span>
+      </div>
+      <div class="hero-feature-circle">
+        <div class="hero-feature-icon">&#x1F4CA;</div>
+        <span class="hero-feature-label">智能BI</span>
+      </div>
+      <div class="hero-feature-circle">
+        <div class="hero-feature-icon">&#x1F916;</div>
+        <span class="hero-feature-label">AI分析</span>
+      </div>
+      <div class="hero-feature-circle">
+        <div class="hero-feature-icon">&#x1F4B0;</div>
+        <span class="hero-feature-label">进销存</span>
+      </div>
+      <div class="hero-feature-circle">
+        <div class="hero-feature-icon">&#x2699;&#xFE0F;</div>
+        <span class="hero-feature-label">设备管理</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== STATS ============== -->
+<section class="stats" id="stats">
+  <div class="stats-inner">
+    <div class="stat-card reveal">
+      <div class="stat-number" data-target="11" data-suffix="">0</div>
+      <div class="stat-label">核心页面</div>
+    </div>
+    <div class="stat-card reveal reveal-d1">
+      <div class="stat-number" data-target="140" data-suffix="+">0</div>
+      <div class="stat-label">AI 意图</div>
+    </div>
+    <div class="stat-card reveal reveal-d2">
+      <div class="stat-number" data-target="26" data-suffix="">0</div>
+      <div class="stat-label">管理模块</div>
+    </div>
+    <div class="stat-card reveal reveal-d3">
+      <div class="stat-number" data-target="10" data-suffix="+">0</div>
+      <div class="stat-label">角色权限</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== S1: HOME ============== -->
+<section class="section" id="home">
+  <div class="section-inner">
+    <div class="step-grid reveal">
+      <div class="step-text">
+        <div class="section-label">Home Dashboard</div>
+        <h3>首页<span class="accent">概览</span></h3>
+        <p>
+          工厂管理首页汇聚关键经营数据，提供 AI 智能洞察卡片、生产统计网格与一键快捷操作入口。
+          管理者登录即可快速掌握工厂运行全貌。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>AI 洞察 — 自动生成经营趋势分析</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>统计网格 — 今日产量、订单数、质检通过率</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>快捷操作 — 一键跳转高频功能模块</div>
+          <div class="feature-item"><div class="feature-dot"></div>实时刷新 — 数据自动同步后端最新状态</div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="首页概览 — 工厂管理仪表盘" style="animation: floatSlow 7s ease-in-out infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-home-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="首页概览" loading="lazy" src="./screenshots/ss-home.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S2: AI CENTER ============== -->
+<section class="section" id="ai-center">
+  <div class="section-inner">
+    <div class="step-grid reverse reveal">
+      <div class="step-text">
+        <div class="section-label">AI Analytics</div>
+        <h3><span class="accent">AI</span> 分析中心</h3>
+        <p>
+          集成多维度 AI 分析能力，从配额管理到深度数据洞察，让每一个业务决策都有数据支撑。
+          支持成本趋势、质检分析、对话式 AI 问答等场景。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>AI 配额管理 — 智能分配分析资源</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>成本趋势分析 — 追踪成本变化与异常</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>质检分析 — AI 辅助质量趋势诊断</div>
+          <div class="feature-item"><div class="feature-dot"></div>AI 对话 — 自然语言智能交互</div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="AI 分析中心 — 多维度智能分析" style="animation: floatSlow 7s ease-in-out 1.5s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-ai-center-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="AI分析中心" loading="lazy" src="./screenshots/ss-ai-center.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S3: AI CHAT ============== -->
+<section class="section" id="ai-chat">
+  <div class="section-inner">
+    <div class="step-grid reveal">
+      <div class="step-text">
+        <div class="section-label">AI Chat Assistant</div>
+        <h3>AI <span class="accent2">智能对话</span></h3>
+        <p>
+          内置 AI 对话助手，支持 140+ 意图识别。用自然语言提问即可获取生产数据、
+          库存状态、订单信息、财务报表等。无需记忆操作路径，开口即查。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>自然语言查询 — "本月产量多少？"</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>多轮对话 — 上下文记忆连续追问</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>意图路由 — 自动识别并分发到对应模块</div>
+          <div class="feature-item"><div class="feature-dot"></div>结构化回答 — 表格、数据、操作建议</div>
+        </div>
+
+        <!-- Process flow -->
+        <div class="flow-chart">
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F4AC;</div>
+            <span class="flow-label">用户提问</span>
+          </div>
+          <span class="flow-arrow">&#x2192;</span>
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F9E0;</div>
+            <span class="flow-label">意图识别</span>
+          </div>
+          <span class="flow-arrow">&#x2192;</span>
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F50D;</div>
+            <span class="flow-label">数据查询</span>
+          </div>
+          <span class="flow-arrow">&#x2192;</span>
+          <div class="flow-node">
+            <div class="flow-icon">&#x2705;</div>
+            <span class="flow-label">格式化返回</span>
+          </div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="AI 智能对话 — 自然语言交互" style="animation: floatSlow 7s ease-in-out 0.8s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-ai-chat-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="AI对话" loading="lazy" src="./screenshots/ss-ai-chat.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S4: REPORTS ============== -->
+<section class="section" id="reports">
+  <div class="section-inner">
+    <div class="step-grid reverse reveal">
+      <div class="step-text">
+        <div class="section-label">Data Reports</div>
+        <h3>数据<span class="accent">报表</span></h3>
+        <p>
+          一站式报表中心，覆盖工厂运营全维度。从生产概览到人效分析，
+          每个报表模块都提供直观的可视化图表与趋势统计。
+        </p>
+        <div class="feature-grid">
+          <div class="feature-chip">生产概览</div>
+          <div class="feature-chip">质量概览</div>
+          <div class="feature-chip">效率概览</div>
+          <div class="feature-chip">成本概览</div>
+          <div class="feature-chip">人效概览</div>
+        </div>
+        <div class="info-box">
+          <strong>提示：</strong>报表数据来自后端实时聚合，支持按日、周、月等多时间维度切换查看。
+          每个概览模块独立计算关键指标，确保数据准确性。
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="数据报表 — 多维度运营分析" style="animation: floatSlow 7s ease-in-out 2s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-reports-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="数据报表" loading="lazy" src="./screenshots/ss-reports.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S5: SMARTBI ============== -->
+<section class="section" id="smartbi">
+  <div class="section-inner">
+    <div class="step-grid reveal">
+      <div class="step-text">
+        <div class="section-label">SmartBI Intelligence</div>
+        <h3><span class="accent">SmartBI</span> 智能分析</h3>
+        <p>
+          上传 Excel 即可自动生成图表、KPI 卡片与 AI 分析结论。
+          支持多 Sheet 解析、跨表分析、数据钻取与趋势预测，让数据分析零门槛。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>KPI 卡片 — 总收入、净利率、销售费用率、产量达标率</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>Excel 上传 — 自动解析多 Sheet 数据</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>AI 问答 — 对上传数据进行智能对话分析</div>
+          <div class="feature-item"><div class="feature-dot"></div>自动图表 — 折线、柱状、饼图、散点自动匹配</div>
+        </div>
+
+        <!-- SmartBI Flow -->
+        <div class="flow-chart">
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F4C4;</div>
+            <span class="flow-label">上传Excel</span>
+          </div>
+          <span class="flow-arrow">&#x2192;</span>
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F50E;</div>
+            <span class="flow-label">自动解析</span>
+          </div>
+          <span class="flow-arrow">&#x2192;</span>
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F4CA;</div>
+            <span class="flow-label">图表生成</span>
+          </div>
+          <span class="flow-arrow">&#x2192;</span>
+          <div class="flow-node">
+            <div class="flow-icon">&#x1F4A1;</div>
+            <span class="flow-label">AI 洞察</span>
+          </div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="SmartBI 智能分析 — KPI 与图表" style="animation: floatSlow 7s ease-in-out 1s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-smartbi-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="SmartBI分析" loading="lazy" src="./screenshots/ss-smartbi.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S6: MANAGEMENT ============== -->
+<section class="section" id="management">
+  <div class="section-inner">
+    <div class="step-grid reverse reveal">
+      <div class="step-text">
+        <div class="section-label">Management Hub</div>
+        <h3>管理<span class="accent2">中心</span></h3>
+        <p>
+          按功能域分组的模块化管理入口，一屏总览所有管理功能。
+          从核心业务到系统配置，高效触达每一个管理场景。
+        </p>
+        <div class="feature-grid">
+          <div class="feature-chip">核心管理 (5)</div>
+          <div class="feature-chip">业务管理 (3)</div>
+          <div class="feature-chip">供应链管理 (3)</div>
+          <div class="feature-chip">进销存管理 (7)</div>
+          <div class="feature-chip">系统配置 (8)</div>
+        </div>
+        <div class="info-box">
+          <strong>分组结构：</strong>核心管理包含用户管理、产品管理、生产批次、质检项管理、SOP配置；
+          业务管理涵盖设备分析、班次管理、报工审批；
+          系统配置提供工厂设置、多语言、权限控制等。
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="管理中心 — 模块化管理入口" style="animation: floatSlow 7s ease-in-out 0.5s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-management-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="管理中心" loading="lazy" src="./screenshots/ss-management.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S7: PURCHASE ============== -->
+<section class="section" id="purchase">
+  <div class="section-inner">
+    <div class="step-grid reveal">
+      <div class="step-text">
+        <div class="section-label">Inventory & Procurement</div>
+        <h3><span class="accent">进销存</span>管理</h3>
+        <p>
+          完整的进销存闭环，覆盖采购、销售、库存、调拨、应收应付与退货全流程。
+          每笔订单自动关联库存变动，确保账实一致。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>采购订单 — 供应商、物料、金额全流程跟踪</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>销售订单 — 客户下单到发货完整链路</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>成品库存 — 实时库存数量与预警</div>
+          <div class="feature-item"><div class="feature-dot"></div>调拨管理 — 跨仓库物料调配</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>应收应付 — 财务对账与账龄分析</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>价格表 / 退货管理</div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="进销存管理 — 采购订单列表" style="animation: floatSlow 7s ease-in-out 1.8s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-purchase-orders-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="采购订单" loading="lazy" src="./screenshots/ss-purchase-orders.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== TEST ACCOUNTS REFERENCE ============== -->
+<section class="loop-section" id="test-accounts" style="padding: 60px 0 30px;">
+  <div class="section-inner">
+    <div class="loop-header reveal">
+      <div class="section-label" style="justify-content: center;">System Test Accounts</div>
+      <h3 class="section-title">系统<span style="color: var(--accent);">测试账号</span>一览</h3>
+      <p class="section-desc" style="margin: 0 auto;">
+        系统支持 7 种角色，每个角色拥有独立的权限和功能入口。所有账号密码均为 <code style="color:var(--accent2);">123456</code>。
+      </p>
+    </div>
+    <div class="reveal reveal-d1" style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;margin:24px 0;font-size:0.95rem;">
+        <thead>
+          <tr style="border-bottom:2px solid rgba(255,255,255,0.15);">
+            <th style="text-align:left;padding:12px 16px;color:var(--accent);font-weight:600;">角色</th>
+            <th style="text-align:left;padding:12px 16px;color:var(--accent);font-weight:600;">用户名</th>
+            <th style="text-align:left;padding:12px 16px;color:var(--accent);font-weight:600;">密码</th>
+            <th style="text-align:left;padding:12px 16px;color:var(--accent);font-weight:600;">功能范围</th>
+          </tr>
+        </thead>
+        <tbody style="color:rgba(255,255,255,0.85);">
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+            <td style="padding:10px 16px;">&#x1F451; 工厂超级管理员</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">factory_admin1</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">全部模块 — 管理中心、报表、审批、系统设置</td>
+          </tr>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+            <td style="padding:10px 16px;">&#x1F310; 平台管理员</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">platform_admin</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">多工厂管理、系统配置、权限分配</td>
+          </tr>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+            <td style="padding:10px 16px;">&#x1F527; 车间主管</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">workshop_sup1</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">生产报工、批次管理、工单操作</td>
+          </tr>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+            <td style="padding:10px 16px;">&#x1F4E6; 仓储主管</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">warehouse_mgr1</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">入库/出库、库存盘点、调拨、温控管理</td>
+          </tr>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+            <td style="padding:10px 16px;">&#x1F465; HR 管理员</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">hr_admin1</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">员工管理、考勤、排班、部门设置</td>
+          </tr>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.06);">
+            <td style="padding:10px 16px;">&#x1F69A; 调度员</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">dispatcher1</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">生产调度、物流排程、任务分配</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 16px;">&#x1F50D; 质检员</td>
+            <td style="padding:10px 16px;"><code style="color:var(--accent2);">quality_insp1</code></td>
+            <td style="padding:10px 16px;"><code>123456</code></td>
+            <td style="padding:10px 16px;">质检扫码、拍照记录、检验报告、趋势分析</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============== LOOP 1: WORK REPORTING CLOSED LOOP ============== -->
+<section class="loop-section" id="work-report-loop">
+  <div class="section-inner">
+    <div class="loop-header reveal">
+      <div class="section-label" style="justify-content: center;">Work Reporting Closed Loop</div>
+      <h3 class="section-title"><span style="color: var(--accent);">报工</span>闭环 — 从扫码到数据汇总</h3>
+      <p class="section-desc" style="margin: 0 auto;">
+        车间主管扫码报工 → 填写产量数据 → 管理员审批 → 产量自动汇总到仪表盘。
+        支持个人报工、班组批量报工和离线草稿，确保车间数据零丢失。
+      </p>
+    </div>
+
+    <!-- Overview flow -->
+    <div class="flow-chart reveal reveal-d1">
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F511;</div>
+        <div class="flow-label">登录</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F4F7;</div>
+        <div class="flow-label">扫码</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F4DD;</div>
+        <div class="flow-label">填报</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x2705;</div>
+        <div class="flow-label">审批</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F4CA;</div>
+        <div class="flow-label">汇总</div>
+      </div>
+    </div>
+
+    <!-- Timeline steps -->
+    <div class="timeline reveal reveal-d2">
+
+      <!-- Step 1: Login -->
+      <div class="timeline-step">
+        <div class="timeline-number">1</div>
+        <div class="timeline-content">
+          <div class="timeline-role supervisor">&#x1F464; 车间主管</div>
+          <div class="timeline-title">登录系统 — 车间主管账号</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                车间主管打开 App，使用专属账号登录。系统自动识别角色权限，跳转到「生产管理」首页，
+                显示今日批次概况、快捷操作入口和待处理任务。
+              </div>
+              <div class="credential-card">
+                <div>
+                  <div class="credential-label">账号</div>
+                  <div class="credential-value">workshop_sup1</div>
+                </div>
+                <div>
+                  <div class="credential-label">密码</div>
+                  <div class="credential-value">123456</div>
+                </div>
+                <div>
+                  <div class="credential-label">角色</div>
+                  <div class="credential-value">车间主管</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="登录页面 — 车间主管账号">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-login-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="登录页面" loading="lazy" src="./screenshots/ss-login.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Scan -->
+      <div class="timeline-step">
+        <div class="timeline-number">2</div>
+        <div class="timeline-content">
+          <div class="timeline-role supervisor">&#x1F4F7; 扫码报工</div>
+          <div class="timeline-title">扫描批次条码 — 自动匹配生产任务</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                点击首页「扫码报工」按钮，摄像头扫描批次二维码/条形码。
+                系统自动识别批次 <code style="color:var(--accent2);">PB-2026-0221-001</code>，
+                匹配产品「有机全麦面包」，显示目标产量 500 件、当前已完成 320 件（进度 64%），
+                可直接进入填报。
+              </div>
+              <div class="info-box" style="margin-top: 10px;">
+                <strong>自动识别：</strong>
+                批次号 → 产品名称 → 目标产量 → 当前进度 → 一键进入填报
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="扫码报工 — 扫描批次条码">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-scan-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="扫码报工" loading="lazy" src="./screenshots/ss-loop-scan.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Fill form -->
+      <div class="timeline-step">
+        <div class="timeline-number">3</div>
+        <div class="timeline-content">
+          <div class="timeline-role supervisor">&#x1F4DD; 填写报工数据</div>
+          <div class="timeline-title">录入产量 — 个人报工或班组批量报工</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                <strong>个人报工：</strong>填写本次产出 80 件、合格 76 件、缺陷 4 件，备注「面团发酵时间延长10分钟」，一键提交。<br>
+                <strong>班组报工：</strong>选择在产批次（如「香酥鱼柳」PB20260212002）→ 勾选班组成员 → 逐个录入每人产量 → 批量提交。
+                无网络时自动保存为离线草稿，恢复网络后可一键重新提交。
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="班组报工 — 选择批次并填写数据">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-report-form-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="报工填报" loading="lazy" src="./screenshots/ss-loop-report-form.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Approval -->
+      <div class="timeline-step">
+        <div class="timeline-number">4</div>
+        <div class="timeline-content">
+          <div class="timeline-role admin">&#x1F464; 工厂管理员</div>
+          <div class="timeline-title">审批报工 — 管理员逐条审核</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                工厂管理员 (<code style="color:var(--accent2);">factory_admin1</code>)
+                在「管理中心 → 报工审批」页面查看待审批报工，可按状态筛选（待审批 / 已批准 / 已拒绝）。
+                点击「批准」或「拒绝」即可完成审核，拒绝时需填写原因，审批结果实时同步给报工人。
+              </div>
+              <div class="status-flow">
+                <div class="status-badge pending">待审批 SUBMITTED</div>
+                <div class="status-arrow">&#x2192;</div>
+                <div class="status-badge approved">已批准 APPROVED</div>
+                <div class="status-arrow"> / </div>
+                <div class="status-badge rejected">已拒绝 REJECTED</div>
+              </div>
+              <div class="credential-card" style="margin-top: 14px;">
+                <div>
+                  <div class="credential-label">审批账号</div>
+                  <div class="credential-value">factory_admin1</div>
+                </div>
+                <div>
+                  <div class="credential-label">密码</div>
+                  <div class="credential-value">123456</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="报工审批 — 筛选与审核">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-approval-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="报工审批" loading="lazy" src="./screenshots/ss-loop-approval.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: Data output -->
+      <div class="timeline-step">
+        <div class="timeline-number">5</div>
+        <div class="timeline-content">
+          <div class="timeline-role system">&#x1F4CA; 数据汇总</div>
+          <div class="timeline-title">产量仪表盘 — 实时数据汇总</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                审批通过后，数据自动汇入首页仪表盘和数据报表模块。管理员可查看：
+                今日产量、累计完成率、合格率趋势、各批次进度对比等。
+                还可同步至 SmartBI 进行深度 AI 分析与预测。
+              </div>
+              <div class="loop-kpi-grid">
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">24</div>
+                  <div class="loop-kpi-label">今日报工数</div>
+                </div>
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">1,860</div>
+                  <div class="loop-kpi-label">今日总产量</div>
+                </div>
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">96.2%</div>
+                  <div class="loop-kpi-label">合格率</div>
+                </div>
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">74.4%</div>
+                  <div class="loop-kpi-label">目标完成率</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="工厂管理员首页 — AI洞察与产量汇总">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-fa-home-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="管理员首页" loading="lazy" src="./screenshots/ss-loop-fa-home.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Summary cards -->
+    <div class="loop-summary reveal reveal-d3">
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F4F1;</div>
+        <div class="loop-summary-title">移动端报工</div>
+        <div class="loop-summary-desc">现场扫码即报，无需手工填表</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F465;</div>
+        <div class="loop-summary-title">班组批量报工</div>
+        <div class="loop-summary-desc">一次录入整个班组产量数据</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F4E1;</div>
+        <div class="loop-summary-title">离线草稿</div>
+        <div class="loop-summary-desc">网络中断自动保存，恢复后重传</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F50D;</div>
+        <div class="loop-summary-title">审批追溯</div>
+        <div class="loop-summary-desc">每条报工记录可追溯审批人与时间</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== LOOP 2: PSI (采购-销售-库存) CLOSED LOOP ============== -->
+<section class="loop-section" id="psi-loop" style="background: var(--bg);">
+  <div class="section-inner">
+    <div class="loop-header reveal">
+      <div class="section-label" style="justify-content: center;">Purchase · Sales · Inventory</div>
+      <h3 class="section-title"><span style="color: var(--accent2);">进销存</span>闭环 — 采购到出货全链路</h3>
+      <p class="section-desc" style="margin: 0 auto;">
+        从供应商采购下单 → 仓库入库验收 → 库存实时跟踪 → 生产消耗 → 销售出货 → 物流追踪，
+        全流程数据自动流转、账实一致、可追溯。
+      </p>
+    </div>
+
+    <!-- Overview flow (circular) -->
+    <div class="flow-chart reveal reveal-d1">
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F4E6;</div>
+        <div class="flow-label">采购</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F3ED;</div>
+        <div class="flow-label">入库</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F4CB;</div>
+        <div class="flow-label">库存</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x2699;</div>
+        <div class="flow-label">生产</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F4B0;</div>
+        <div class="flow-label">销售</div>
+      </div>
+      <div class="flow-arrow">&#x2192;</div>
+      <div class="flow-node">
+        <div class="flow-icon">&#x1F69A;</div>
+        <div class="flow-label">发货</div>
+      </div>
+    </div>
+
+    <!-- Timeline steps -->
+    <div class="timeline reveal reveal-d2">
+
+      <!-- Step 1: Purchase Order -->
+      <div class="timeline-step">
+        <div class="timeline-number">1</div>
+        <div class="timeline-content">
+          <div class="timeline-role admin">&#x1F4E6; 采购下单</div>
+          <div class="timeline-title">创建采购订单 — 选供应商、填物料、提交审批</div>
+          <div class="timeline-desc">
+            工厂管理员在「进销存 → 采购订单」创建新采购单：选择供应商 → 添加物料明细（种类、数量、单价）→
+            保存草稿或直接提交审批。支持无单采购（紧急备货）。
+          </div>
+          <div class="status-flow">
+            <div class="status-badge draft">草稿 DRAFT</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge pending">待审批 SUBMITTED</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge approved">已批准 APPROVED</div>
+          </div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="credential-card" style="margin-top: 0;">
+                <div>
+                  <div class="credential-label">操作账号</div>
+                  <div class="credential-value">factory_admin1</div>
+                </div>
+                <div>
+                  <div class="credential-label">路径</div>
+                  <div class="credential-value">管理 → 采购订单</div>
+                </div>
+              </div>
+              <div class="info-box" style="margin-top: 12px;">
+                <strong>示例：</strong>采购单 PO-202501-001，供应商 SUP-F001-001，
+                高筋面粉 200kg &#215; &#165;5.8 + 酵母粉 50kg &#215; &#165;28.0 = 合计 &#165;2,560
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="采购订单 — 订单列表与状态">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-purchase-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="采购订单" loading="lazy" src="./screenshots/ss-loop-purchase.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Inbound -->
+      <div class="timeline-step">
+        <div class="timeline-number">2</div>
+        <div class="timeline-content">
+          <div class="timeline-role warehouse">&#x1F3ED; 入库验收</div>
+          <div class="timeline-title">仓库收货 — 质检 → 上架 → 确认入库</div>
+          <div class="timeline-desc">
+            仓库主管 (<code style="color:var(--accent2);">warehouse_mgr1</code>) 在「仓库管理 → 入库」模块操作：<br>
+            <strong>收货登记：</strong>关联采购订单或无单入库，录入实际到货数量。<br>
+            <strong>质检：</strong>检验物料质量，标记合格/不合格/有条件接收。<br>
+            <strong>上架：</strong>分配存储位置（如「冷库-A区-货架3」）。<br>
+            <strong>确认入库：</strong>确认后系统自动创建物料批次，库存实时增加。
+          </div>
+          <div class="status-flow">
+            <div class="status-badge pending">待验收 PENDING</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge" style="background:rgba(251,191,36,0.12);color:#fbbf24;">质检中</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge" style="background:rgba(59,130,246,0.12);color:#5b9bff;">上架中</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge completed">已入库</div>
+          </div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="credential-card" style="margin-top: 0;">
+                <div>
+                  <div class="credential-label">操作账号</div>
+                  <div class="credential-value">warehouse_mgr1</div>
+                </div>
+                <div>
+                  <div class="credential-label">密码</div>
+                  <div class="credential-value">123456</div>
+                </div>
+                <div>
+                  <div class="credential-label">角色</div>
+                  <div class="credential-value">仓储主管</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="仓储管理 — 原材料批次入库">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-inbound-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="入库管理" loading="lazy" src="./screenshots/ss-loop-inbound.png?v=2"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Inventory tracking -->
+      <div class="timeline-step">
+        <div class="timeline-number">3</div>
+        <div class="timeline-content">
+          <div class="timeline-role warehouse">&#x1F4CB; 库存管理</div>
+          <div class="timeline-title">实时库存跟踪 — 批次追溯、预警、调拨</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                每个物料批次独立追踪：入库数量、已使用量、已预留量、剩余可用量。
+                系统自动预警：<strong>低库存预警</strong>（剩余 &le; 30%）、<strong>临期预警</strong>（&le; 7 天到期）。
+                支持跨仓库/跨工厂调拨，状态全程可追踪。
+              </div>
+              <div class="info-box" style="margin-top: 10px;">
+                <strong>示例：</strong>高筋面粉 MB-2026-0221-001，入库 200kg，已用 45kg，预留 30kg，
+                可用库存 125kg，存放于常温库-B区-货架1，有效期至 2026-05-21
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="成品库存 — 批次追踪与预警">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-inventory-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="库存管理" loading="lazy" src="./screenshots/ss-loop-inventory.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Production consumption -->
+      <div class="timeline-step">
+        <div class="timeline-number">4</div>
+        <div class="timeline-content">
+          <div class="timeline-role supervisor">&#x2699; 生产消耗</div>
+          <div class="timeline-title">物料领用 — 生产批次自动关联原料消耗</div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="timeline-desc">
+                车间开始生产时，根据 BOM（物料清单）自动关联所需原料批次。
+                领用后库存自动扣减，生产完成后成品自动入库到「成品库存」，生成新的成品批次。
+                关联报工数据，形成「原料 → 生产 → 成品」完整追溯链。
+              </div>
+              <div class="info-box" style="margin-top: 10px;">
+                <strong>追溯链路：</strong>
+                原料批次 MB-001 → 生产批次 PB-2026-0221-001 → 成品批次 FG-001 → 报工记录 WR-001
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="生产管理 — 批次与物料消耗">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-production-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="生产消耗" loading="lazy" src="./screenshots/ss-loop-production.png?v=2"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: Sales Order -->
+      <div class="timeline-step">
+        <div class="timeline-number">5</div>
+        <div class="timeline-content">
+          <div class="timeline-role sales">&#x1F4B0; 销售订单</div>
+          <div class="timeline-title">创建销售单 — 客户下单到确认发货</div>
+          <div class="timeline-desc">
+            工厂管理员在「进销存 → 销售订单」模块创建销售单：
+            选择客户 → 添加产品明细（从成品库存中选择）→ 确认订单。
+            系统自动检查/预留成品库存，确保不会超卖。
+          </div>
+          <div class="status-flow">
+            <div class="status-badge draft">草稿 DRAFT</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge approved">已确认 CONFIRMED</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge" style="background:rgba(251,191,36,0.12);color:#fbbf24;">处理中 PROCESSING</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge completed">已完成 COMPLETED</div>
+          </div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="info-box" style="margin-top: 0;">
+                <strong>示例：</strong>销售单 SO-2026-0221-002，客户「城市连锁超市A」，
+                有机全麦面包 200件 &#215; &#165;12.5 + 法式牛角包 150件 &#215; &#165;8.0 = 合计 &#165;3,700
+              </div>
+              <div class="credential-card" style="margin-top: 10px;">
+                <div>
+                  <div class="credential-label">操作账号</div>
+                  <div class="credential-value">factory_admin1</div>
+                </div>
+                <div>
+                  <div class="credential-label">路径</div>
+                  <div class="credential-value">管理 → 销售订单</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="销售订单 — 订单列表与状态流转">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-sales-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="销售订单" loading="lazy" src="./screenshots/ss-loop-sales.png"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 6: Outbound & Shipping -->
+      <div class="timeline-step">
+        <div class="timeline-number">6</div>
+        <div class="timeline-content">
+          <div class="timeline-role warehouse">&#x1F69A; 出库发货</div>
+          <div class="timeline-title">拣选 → 打包 → 装车 → 发货 → 物流追踪</div>
+          <div class="timeline-desc">
+            仓库主管在「仓库 → 出库」模块完成全流程：<br>
+            <strong>拣选：</strong>按发货单扫码拣货，核对数量。<br>
+            <strong>打包装车：</strong>确认包装完整，生成发货单。<br>
+            <strong>发货确认：</strong>录入物流公司与运单号，系统自动扣减成品库存。<br>
+            <strong>送达确认：</strong>客户或配送员确认收货，订单完结。
+          </div>
+          <div class="status-flow">
+            <div class="status-badge pending">待发货</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge" style="background:rgba(59,130,246,0.12);color:#5b9bff;">已发货 SHIPPED</div>
+            <div class="status-arrow">&#x2192;</div>
+            <div class="status-badge completed">已完成 COMPLETED</div>
+          </div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="info-box" style="margin-top: 0;">
+                <strong>示例：</strong>发货单 SH-2026-0221-001，物流「顺丰速运」，
+                运单号 SF1234567890，状态从「已发货 SHIPPED」到「已完成 COMPLETED」
+              </div>
+              <div class="credential-card" style="margin-top: 10px;">
+                <div>
+                  <div class="credential-label">操作账号</div>
+                  <div class="credential-value">warehouse_mgr1</div>
+                </div>
+                <div>
+                  <div class="credential-label">路径</div>
+                  <div class="credential-value">仓库 → 出库发货</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="出库发货 — 物流追踪与状态">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-shipping-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="出库发货" loading="lazy" src="./screenshots/ss-loop-shipping.png?v=2"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 7: Data Closed Loop -->
+      <div class="timeline-step">
+        <div class="timeline-number">7</div>
+        <div class="timeline-content">
+          <div class="timeline-role system">&#x1F504; 数据闭环</div>
+          <div class="timeline-title">全链路数据汇总 — 财务对账与 BI 分析</div>
+          <div class="timeline-desc">
+            所有交易数据自动汇总：采购应付账款、销售应收账款、库存成本、毛利计算。
+            数据可同步至 SmartBI 进行 AI 驱动的深度分析：
+            成本趋势、利润率变化、库存周转率、供应商评分等。
+          </div>
+          <div class="timeline-visual-layout">
+            <div class="timeline-visual-text">
+              <div class="loop-kpi-grid">
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">&#165;156,800</div>
+                  <div class="loop-kpi-label">采购总额</div>
+                </div>
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">&#165;287,500</div>
+                  <div class="loop-kpi-label">销售总额</div>
+                </div>
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">45.5%</div>
+                  <div class="loop-kpi-label">毛利率</div>
+                </div>
+                <div class="loop-kpi-item">
+                  <div class="loop-kpi-value">3.7次/月</div>
+                  <div class="loop-kpi-label">库存周转率</div>
+                </div>
+              </div>
+            </div>
+            <div class="timeline-phone" onclick="openLightbox(this)" data-caption="BI 数据驾驶舱 — 财务汇总分析">
+              <div class="timeline-phone-screen">
+                <picture><source type="image/webp" srcset="./screenshots/ss-loop-bi-375.webp 375w" sizes="375px"><img  width="375" height="812" alt="BI分析" loading="lazy" src="./screenshots/ss-loop-bi.png?v=2"></picture>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Summary cards -->
+    <div class="loop-summary reveal reveal-d3">
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F517;</div>
+        <div class="loop-summary-title">全链路追溯</div>
+        <div class="loop-summary-desc">从原料供应商到终端客户，每一步可追溯</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x26A0;</div>
+        <div class="loop-summary-title">智能预警</div>
+        <div class="loop-summary-desc">低库存、临期、超卖自动预警提醒</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F4B1;</div>
+        <div class="loop-summary-title">财务自动对账</div>
+        <div class="loop-summary-desc">应收应付自动计算，账龄分析清晰</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F310;</div>
+        <div class="loop-summary-title">多工厂调拨</div>
+        <div class="loop-summary-desc">跨仓库/跨工厂物料调配，状态全程追踪</div>
+      </div>
+      <div class="loop-summary-card">
+        <div class="loop-summary-icon">&#x1F4CA;</div>
+        <div class="loop-summary-title">BI 深度分析</div>
+        <div class="loop-summary-desc">数据同步 SmartBI，AI 生成经营洞察</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S8: EMPLOYEES ============== -->
+<section class="section" id="employees">
+  <div class="section-inner">
+    <div class="step-grid reverse reveal">
+      <div class="step-text">
+        <div class="section-label">Employee Management</div>
+        <h3>员工<span class="accent">管理</span></h3>
+        <p>
+          统一管理工厂全员信息，支持按角色筛选、状态统计与权限操作。
+          管理者可快速查看总用户数、激活数、停用数等关键指标。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>搜索 — 按姓名、工号快速定位</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>角色筛选 — 管理员、主管、操作员等分类查看</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>统计卡片 — 总用户 / 激活 / 停用 一目了然</div>
+          <div class="feature-item"><div class="feature-dot"></div>操作 — 编辑信息、激活/停用、删除</div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="员工管理 — 用户列表与统计" style="animation: floatSlow 7s ease-in-out 0.3s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-employees-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="员工管理" loading="lazy" src="./screenshots/ss-employees.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S9: PROFILE ============== -->
+<section class="section" id="profile">
+  <div class="section-inner">
+    <div class="step-grid reveal">
+      <div class="step-text">
+        <div class="section-label">User Profile</div>
+        <h3>个人<span class="accent2">中心</span></h3>
+        <p>
+          用户个人设置与系统偏好配置页面。支持账户信息修改、密码更新、
+          系统设置调整，以及多语言切换等个性化功能。
+        </p>
+        <div class="feature-list">
+          <div class="feature-item"><div class="feature-dot"></div>账户设置 — 修改个人信息与密码</div>
+          <div class="feature-item"><div class="feature-dot cyan"></div>系统设置 — 通知、主题等偏好配置</div>
+          <div class="feature-item"><div class="feature-dot purple"></div>帮助与支持 — 使用指南与反馈入口</div>
+          <div class="feature-item"><div class="feature-dot"></div>多语言支持 — 中英文界面自由切换</div>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="个人中心 — 设置与多语言" style="animation: floatSlow 7s ease-in-out 2.2s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-profile-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="个人中心" loading="lazy" src="./screenshots/ss-profile.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============== S10: LOGIN ============== -->
+<section class="section" id="login">
+  <div class="section-inner">
+    <div class="reveal" style="text-align: center; margin-bottom: 48px;">
+      <div class="section-label" style="justify-content: center;">Authentication</div>
+      <h3 class="section-title">安全<span style="color: var(--accent);">登录</span></h3>
+      <p class="section-desc" style="margin: 0 auto;">
+        支持密码登录与生物识别认证，多角色体系确保不同岗位看到对应功能模块。
+        JWT Token 自动刷新机制保障会话安全。
+      </p>
+    </div>
+
+    <div class="dual-phones reveal reveal-d1">
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="登录页面 — 安全认证" style="animation: floatSlow 7s ease-in-out infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-login-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="登录页" loading="lazy" src="./screenshots/ss-login.png"></picture>
+        </div>
+      </div>
+      <div class="phone-frame" onclick="openLightbox(this)" data-caption="引导页面 — 系统介绍" style="animation: floatSlow 7s ease-in-out 2s infinite;">
+        <div class="phone-screen">
+          <picture><source type="image/webp" srcset="./screenshots/ss-landing-390.webp 390w" sizes="390px"><img  width="390" height="844" alt="引导页" loading="lazy" src="./screenshots/ss-landing.png"></picture>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal reveal-d2" style="margin-top: 48px;">
+      <div class="feature-grid" style="max-width: 700px; margin: 0 auto;">
+        <div class="feature-chip">JWT 安全认证</div>
+        <div class="feature-chip">生物识别</div>
+        <div class="feature-chip">多角色权限</div>
+        <div class="feature-chip">Token 自动刷新</div>
+        <div class="feature-chip">SecureStore 存储</div>
+        <div class="feature-chip">10+ 角色支持</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== FOOTER ============== -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo">白垩纪食品科技</div>
+    <div class="footer-divider"></div>
+    <p>
+      工厂管理平台 — React Native 移动端功能展示<br>
+      &copy; 2026 Cretaceous Future Food Technology. All rights reserved.
+    </p>
+  </div>
+</footer>
+
+<!-- ============== LIGHTBOX ============== -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()" aria-label="关闭">&#x2715;</button>
+  <img id="lightbox-img" src="" alt="">
+  <div class="lightbox-caption" id="lightbox-caption"></div>
+</div>
+
+<script>
+/* ===== SCROLL REVEAL ===== */
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.08, rootMargin: '0px 0px -32px 0px' });
+
+document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+/* ===== ANIMATED COUNTERS ===== */
+let countersAnimated = false;
+const counterObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting && !countersAnimated) {
+      countersAnimated = true;
+      document.querySelectorAll('.stat-number[data-target]').forEach(el => {
+        animateCounter(el);
+      });
+    }
+  });
+}, { threshold: 0.3 });
+
+document.querySelectorAll('.stats').forEach(el => counterObserver.observe(el));
+
+function animateCounter(element) {
+  const target = parseInt(element.dataset.target);
+  const suffix = element.dataset.suffix || '';
+  const duration = target > 100 ? 2200 : 1600;
+  const startTime = performance.now();
+
+  function update(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+    const current = Math.round(target * eased);
+    element.textContent = current.toLocaleString('en-US') + suffix;
+    if (progress < 1) requestAnimationFrame(update);
+  }
+
+  requestAnimationFrame(update);
+}
+
+/* ===== NAV STATE ===== */
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 40);
+}, { passive: true });
+
+/* ===== ACTIVE NAV LINK ===== */
+const sections = document.querySelectorAll('section[id]');
+const navLinks = document.querySelectorAll('.nav-link');
+
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(section => {
+    const top = section.offsetTop - 120;
+    if (window.scrollY >= top) current = section.getAttribute('id');
+  });
+  navLinks.forEach(link => {
+    link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+  });
+}, { passive: true });
+
+/* ===== LIGHTBOX ===== */
+function openLightbox(el) {
+  const img = el.querySelector('img');
+  const caption = el.getAttribute('data-caption') || '';
+  const lightbox = document.getElementById('lightbox');
+  document.getElementById('lightbox-img').src = img.src;
+  document.getElementById('lightbox-caption').textContent = caption;
+  lightbox.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('active');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLightbox();
+});
+
+document.querySelector('.lightbox-close').addEventListener('click', e => {
+  e.stopPropagation();
+  closeLightbox();
+});
+</script>
+
+</body>
+</html>

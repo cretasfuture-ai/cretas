@@ -1,0 +1,380 @@
+package com.cretas.aims.repository;
+
+import com.cretas.aims.entity.LabelQcAnnotation;
+import com.cretas.aims.entity.LabelQcPhoto;
+import com.cretas.aims.entity.LabelQcTask;
+import com.cretas.aims.entity.LabelQcTrayCrop;
+import com.cretas.aims.entity.enums.*;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+@DataJpaTest(showSql = false)
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@ActiveProfiles("test")
+@EntityScan(basePackages = "com.cretas.aims.entity")
+@EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
+class LabelQcRepositoryQueryValidationTest {
+
+    @Autowired TestEntityManager entityManager;
+    @Autowired LabelQcTaskRepository taskRepository;
+    @Autowired LabelQcPhotoRepository photoRepository;
+    @Autowired LabelQcAnnotationRepository annotationRepository;
+    @Autowired LabelQcTrayCropRepository trayCropRepository;
+    @Autowired PlatformTransactionManager transactionManager;
+
+    @Test
+    void repositoriesBootAndQueriesKeepTenantIsolation() {
+        LabelQcTask taskA = persistTask("F-LABEL-A", 11L, "idem-a");
+        LabelQcTask taskB = persistTask("F-LABEL-B", 11L, "idem-b");
+        taskA.setTrainingStatus(LabelQcTrainingStatus.APPROVED);
+        LabelQcPhoto photoA = persistPhoto(taskA, "attachment-a");
+        persistAnnotation(taskA, photoA);
+        LabelQcTrayCrop cropA = persistTrayCrop(taskA, photoA, "crop-a");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(taskRepository.findByFactoryIdAndId("F-LABEL-A", taskA.getId())).isPresent();
+        assertThat(taskRepository.findByFactoryIdAndId("F-LABEL-B", taskA.getId())).isEmpty();
+        assertThat(taskRepository.findByFactoryIdAndIdForUpdate("F-LABEL-A", taskA.getId()))
+                .isPresent();
+        assertThat(taskRepository.findByFactoryIdAndIdForUpdate("F-LABEL-B", taskA.getId()))
+                .isEmpty();
+        assertThat(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
+                "F-LABEL-A", 11L, "idem-a")).isPresent();
+        assertThat(taskRepository.findFirstById(taskA.getId())).isPresent();
+        Page<LabelQcTask> matchingTasks =
+                taskRepository.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
+                        "F-LABEL-A",
+                        List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                        PageRequest.of(0, 10));
+        assertThat(matchingTasks.getTotalElements()).isEqualTo(1L);
+        assertThat(taskRepository.findByFactoryIdAndArchivedAndStatusInOrderByCreatedAtDesc(
+                "F-LABEL-A",
+                false,
+                List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndArchivedOrderByCreatedAtDesc(
+                "F-LABEL-A", false, PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+                "F-LABEL-A",
+                false,
+                LocalDate.now(),
+                LocalDate.now(),
+                PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndArchivedAndProductionDateBetweenOrderByCreatedAtDesc(
+                "F-LABEL-A",
+                false,
+                LocalDate.now().plusDays(1),
+                LocalDate.now().plusDays(3),
+                PageRequest.of(0, 10))).isEmpty();
+        assertThat(taskRepository
+                .findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                        "F-LABEL-A",
+                        false,
+                        List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                        LocalDate.now().minusDays(1),
+                        LocalDate.now().plusDays(1),
+                        PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository
+                .findByFactoryIdAndArchivedAndStatusInAndProductionDateBetweenOrderByCreatedAtDesc(
+                        "F-LABEL-B",
+                        false,
+                        List.of(LabelQcTaskStatus.NEEDS_REVIEW),
+                        LocalDate.now().minusDays(1),
+                        LocalDate.now().plusDays(1),
+                        PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.countByFactoryIdAndArchivedAndStatus(
+                "F-LABEL-A", false, LabelQcTaskStatus.NEEDS_REVIEW)).isEqualTo(1);
+        List<LabelQcPhoto> persistedPhotos = photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
+                "F-LABEL-A", taskA.getId());
+        assertThat(persistedPhotos).hasSize(1);
+        assertThat(persistedPhotos.get(0).getObjectReviewDetail())
+                .isEqualTo("{\"version\":1,\"complete\":true,\"trays\":[]}");
+        assertThat(persistedPhotos.get(0).getObjectReviewedBy()).isEqualTo(11L);
+        assertThat(persistedPhotos.get(0).getObjectReviewedAt()).isNotNull();
+        assertThat(photoRepository.findByFactoryIdAndTaskIdOrderByOrderIndexAsc(
+                "F-LABEL-B", taskA.getId())).isEmpty();
+        assertThat(photoRepository.findByFactoryIdAndId("F-LABEL-A", photoA.getId())).isPresent();
+        assertThat(photoRepository.findByFactoryIdAndId("F-LABEL-B", photoA.getId())).isEmpty();
+        assertThat(annotationRepository.countByFactoryIdAndTaskIdAndSource(
+                "F-LABEL-A", taskA.getId(), LabelQcAnnotationSource.AI)).isEqualTo(1);
+        assertThat(annotationRepository.countByFactoryIdAndTaskIdAndSourceAndAudience(
+                "F-LABEL-A", taskA.getId(), LabelQcAnnotationSource.AI,
+                LabelQcAnnotationAudience.CUSTOMER)).isEqualTo(1);
+        assertThat(annotationRepository.countByFactoryIdAndTaskIdAndSource(
+                "F-LABEL-B", taskA.getId(), LabelQcAnnotationSource.AI)).isZero();
+        assertThat(trayCropRepository.findByFactoryIdAndId("F-LABEL-A", cropA.getId())).isPresent();
+        assertThat(trayCropRepository.findByFactoryIdAndId("F-LABEL-B", cropA.getId())).isEmpty();
+        assertThat(trayCropRepository.findByFactoryIdAndCropSpecSha256("F-LABEL-A", "crop-a")).isPresent();
+        assertThat(trayCropRepository.findByFactoryIdAndStatusOrderByCreatedAtAsc(
+                "F-LABEL-A", LabelQcTrayCropStatus.PENDING, PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findByFactoryIdAndStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
+                "F-LABEL-A",
+                LabelQcTaskStatus.NEEDS_REVIEW,
+                LocalDateTime.now().minusDays(1),
+                LocalDateTime.now().plusDays(1),
+                PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository
+                .findByFactoryIdAndStatusAndTrainingStatusAndReviewedAtBetweenOrderByReviewedAtAsc(
+                        "F-LABEL-A",
+                        LabelQcTaskStatus.NEEDS_REVIEW,
+                        LabelQcTrainingStatus.APPROVED,
+                        LocalDateTime.now().minusDays(1),
+                        LocalDateTime.now().plusDays(1),
+                        PageRequest.of(0, 10))).hasSize(1);
+        assertThat(taskRepository.findTop20ByStatusOrderByCreatedAtAsc(
+                LabelQcTaskStatus.NEEDS_REVIEW)).hasSize(2);
+        assertThat(taskRepository.findTop20ByStatusAndUpdatedAtBeforeOrderByUpdatedAtAsc(
+                LabelQcTaskStatus.NEEDS_REVIEW,
+                LocalDateTime.now().plusMinutes(1))).hasSize(2);
+        assertThat(taskB.getFactoryId()).isEqualTo("F-LABEL-B");
+    }
+
+    @Test
+    void autoPassedStatusesPersistWithoutHumanReviewEvidence() {
+        LabelQcTask task = persistTask("F-LABEL-AUTO", 31L, "idem-auto");
+        task.setStatus(LabelQcTaskStatus.AUTO_PASSED);
+        task.setAiCandidateCount(0);
+        task.setReviewedAt(null);
+        LabelQcPhoto photo = persistPhoto(task, "attachment-auto");
+        photo.setStatus(LabelQcPhotoStatus.AUTO_PASSED);
+        photo.setObjectReviewDetail(null);
+        photo.setObjectReviewedBy(null);
+        photo.setObjectReviewedAt(null);
+        entityManager.flush();
+        entityManager.clear();
+
+        LabelQcTask reloadedTask = taskRepository
+                .findByFactoryIdAndId("F-LABEL-AUTO", task.getId())
+                .orElseThrow();
+        LabelQcPhoto reloadedPhoto = photoRepository
+                .findByFactoryIdAndId("F-LABEL-AUTO", photo.getId())
+                .orElseThrow();
+
+        assertThat(reloadedTask.getStatus()).isEqualTo(LabelQcTaskStatus.AUTO_PASSED);
+        assertThat(reloadedTask.getReviewedBy()).isNull();
+        assertThat(reloadedTask.getReviewedAt()).isNull();
+        assertThat(reloadedPhoto.getStatus()).isEqualTo(LabelQcPhotoStatus.AUTO_PASSED);
+        assertThat(reloadedPhoto.getObjectReviewedBy()).isNull();
+        assertThat(reloadedPhoto.getObjectReviewedAt()).isNull();
+    }
+
+    @Test
+    void platformCandidateQueriesSeparatePendingReviewedAndTenantScope() {
+        LabelQcTask task = persistTask("F-LABEL-PLATFORM", 41L, "idem-platform");
+        LabelQcPhoto photo = persistPhoto(task, "attachment-platform");
+        LabelQcAnnotation candidate = LabelQcAnnotation.builder()
+                .factoryId(task.getFactoryId())
+                .taskId(task.getId())
+                .photoId(photo.getId())
+                .source(LabelQcAnnotationSource.AI)
+                .audience(LabelQcAnnotationAudience.PLATFORM)
+                .aiCandidateId("platform-tray-9")
+                .aiLabel(LabelQcLabel.UNJUDGEABLE)
+                .aiConfidence(0.18)
+                .xMin(0.2).yMin(0.01).xMax(0.3).yMax(0.03)
+                .build();
+        entityManager.persist(candidate);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(annotationRepository
+                .findByFactoryIdAndSourceAndAudienceAndHumanLabelIsNullOrderByCreatedAtAsc(
+                        "F-LABEL-PLATFORM", LabelQcAnnotationSource.AI,
+                        LabelQcAnnotationAudience.PLATFORM, PageRequest.of(0, 10)))
+                .singleElement()
+                .extracting(LabelQcAnnotation::getAiCandidateId)
+                .isEqualTo("platform-tray-9");
+        assertThat(annotationRepository
+                .findByFactoryIdAndSourceAndAudienceAndHumanLabelIsNullOrderByCreatedAtAsc(
+                        "F-LABEL-OTHER", LabelQcAnnotationSource.AI,
+                        LabelQcAnnotationAudience.PLATFORM, PageRequest.of(0, 10)))
+                .isEmpty();
+        LabelQcAnnotation reloaded = annotationRepository
+                .findByFactoryIdAndIdAndAudience(
+                        "F-LABEL-PLATFORM", candidate.getId(),
+                        LabelQcAnnotationAudience.PLATFORM)
+                .orElseThrow();
+        reloaded.setHumanLabel(LabelQcLabel.NO_DEFECT);
+        reloaded.setReviewedAt(LocalDateTime.now());
+        annotationRepository.saveAndFlush(reloaded);
+        entityManager.clear();
+
+        assertThat(annotationRepository
+                .findByFactoryIdAndSourceAndAudienceAndHumanLabelIsNotNullOrderByCreatedAtAsc(
+                        "F-LABEL-PLATFORM", LabelQcAnnotationSource.AI,
+                        LabelQcAnnotationAudience.PLATFORM, PageRequest.of(0, 10)))
+                .hasSize(1);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void reviewLockSerializesTwoDevicesAndExposesFirstCommitToSecond() throws Exception {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        String taskId = transaction.execute(status -> {
+            LabelQcTask task = LabelQcTask.builder()
+                    .factoryId("F-LABEL-LOCK")
+                    .productTypeId("sku")
+                    .skuCode("SKU-LOCK")
+                    .skuName("并发审核测试")
+                    .batchNumber("BATCH-LOCK")
+                    .productionDate(LocalDate.now())
+                    .createdBy(21L)
+                    .idempotencyKey("idem-lock")
+                    .status(LabelQcTaskStatus.NEEDS_REVIEW)
+                    .photoCount(1)
+                    .aiCandidateCount(1)
+                    .finalDefectCount(0)
+                    .build();
+            return taskRepository.saveAndFlush(task).getId();
+        });
+        assertThat(taskId).isNotBlank();
+
+        CountDownLatch firstDeviceLocked = new CountDownLatch(1);
+        CountDownLatch allowFirstDeviceCommit = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> firstDevice = executor.submit(() ->
+                    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                        LabelQcTask task = taskRepository
+                                .findByFactoryIdAndIdForUpdate("F-LABEL-LOCK", taskId)
+                                .orElseThrow();
+                        firstDeviceLocked.countDown();
+                        try {
+                            if (!allowFirstDeviceCommit.await(5, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("等待第一台设备提交超时");
+                            }
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(interrupted);
+                        }
+                        task.setStatus(LabelQcTaskStatus.REVIEWED);
+                        task.setReviewRequestId("review-device-a");
+                        taskRepository.saveAndFlush(task);
+                    }));
+
+            assertThat(firstDeviceLocked.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<String> secondDevice = executor.submit(() ->
+                    new TransactionTemplate(transactionManager).execute(status -> {
+                        LabelQcTask task = taskRepository
+                                .findByFactoryIdAndIdForUpdate("F-LABEL-LOCK", taskId)
+                                .orElseThrow();
+                        return task.getStatus() + ":" + task.getReviewRequestId();
+                    }));
+
+            assertThatThrownBy(() -> secondDevice.get(200, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+
+            allowFirstDeviceCommit.countDown();
+            firstDevice.get(5, TimeUnit.SECONDS);
+            assertThat(secondDevice.get(5, TimeUnit.SECONDS))
+                    .isEqualTo("REVIEWED:review-device-a");
+        } finally {
+            allowFirstDeviceCommit.countDown();
+            executor.shutdownNow();
+            transaction.executeWithoutResult(status -> taskRepository.deleteById(taskId));
+        }
+    }
+
+    private LabelQcTask persistTask(String factoryId, Long userId, String key) {
+        LabelQcTask task = LabelQcTask.builder()
+                .factoryId(factoryId)
+                .productTypeId("sku")
+                .skuCode("SKU-1")
+                .skuName("测试产品")
+                .batchNumber("BATCH-1")
+                .productionDate(LocalDate.now())
+                .createdBy(userId)
+                .idempotencyKey(key)
+                .status(LabelQcTaskStatus.NEEDS_REVIEW)
+                .photoCount(1)
+                .aiCandidateCount(1)
+                .finalDefectCount(0)
+                .reviewedAt(LocalDateTime.now())
+                .build();
+        entityManager.persist(task);
+        return task;
+    }
+
+    private LabelQcPhoto persistPhoto(LabelQcTask task, String attachmentId) {
+        LabelQcPhoto photo = LabelQcPhoto.builder()
+                .factoryId(task.getFactoryId())
+                .taskId(task.getId())
+                .attachmentId(attachmentId)
+                .orderIndex(0)
+                .imageWidth(1000)
+                .imageHeight(2000)
+                .status(LabelQcPhotoStatus.ANALYZED)
+                .objectReviewDetail("{\"version\":1,\"complete\":true,\"trays\":[]}")
+                .objectReviewedBy(11L)
+                .objectReviewedAt(LocalDateTime.now())
+                .build();
+        entityManager.persist(photo);
+        return photo;
+    }
+
+    private void persistAnnotation(LabelQcTask task, LabelQcPhoto photo) {
+        LabelQcAnnotation annotation = LabelQcAnnotation.builder()
+                .factoryId(task.getFactoryId())
+                .taskId(task.getId())
+                .photoId(photo.getId())
+                .source(LabelQcAnnotationSource.AI)
+                .audience(LabelQcAnnotationAudience.CUSTOMER)
+                .aiCandidateId("ai-1")
+                .aiLabel(LabelQcLabel.MISSING_WHITE_LABEL)
+                .aiConfidence(0.8)
+                .xMin(0.1)
+                .yMin(0.1)
+                .xMax(0.5)
+                .yMax(0.5)
+                .build();
+        entityManager.persist(annotation);
+    }
+
+    private LabelQcTrayCrop persistTrayCrop(LabelQcTask task, LabelQcPhoto photo, String cropSpec) {
+        LabelQcTrayCrop crop = LabelQcTrayCrop.builder()
+                .factoryId(task.getFactoryId())
+                .taskId(task.getId())
+                .photoId(photo.getId())
+                .sourceAttachmentId(photo.getAttachmentId())
+                .sourceDecision(LabelQcObjectDecision.CONFIRMED)
+                .trayIndex(0)
+                .trayXMin(0.1).trayYMin(0.1).trayXMax(0.9).trayYMax(0.9)
+                .cropXMin(0.08).cropYMin(0.08).cropXMax(0.92).cropYMax(0.92)
+                .paddingRatio(0.03)
+                .cropAlgorithmVersion("test-v1")
+                .objectReviewSha256("b".repeat(64))
+                .cropSpecSha256(cropSpec)
+                .coordinateTransform("{}")
+                .factoryLabelProposals("{\"version\":1,\"complete\":true,\"unjudgeable\":true,\"whitePresence\":\"UNJUDGEABLE\",\"colorPresence\":\"UNJUDGEABLE\",\"labels\":[]}")
+                .status(LabelQcTrayCropStatus.PENDING)
+                .build();
+        entityManager.persist(crop);
+        return crop;
+    }
+}

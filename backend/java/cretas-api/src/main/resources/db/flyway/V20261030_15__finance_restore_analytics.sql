@@ -1,0 +1,35 @@
+-- 恢复财务主管的 analytics (2026-08-22, 同日回滚 V20261030_14 的一行)
+--
+-- 【为什么回滚这一行】
+-- V20261030_14 砍掉 finance_manager 的 analytics 之后, owner 实测:
+--   「经营驾驶舱 / 经营分析 / AI问答 / 查询模板管理 / 智能数据分析 全是 403」
+--
+-- 🔴 我漏看了权限的**第四个承载点**: router/guards.ts 的 ROLE_PATH_WHITELIST。
+--    它**只给 finance_manager 一个角色**(16 条路径), 且与模块闸**串联(AND)**:
+--        路径在白名单里 AND 模块权限通过 -> 才放行
+--    那张表里写着:
+--        '/smart-bi/analysis-hub',   // 经营分析合并模块 — finance_manager **主入口**
+--    并且注释白纸黑字警告过:
+--        「删掉这两行会让 finance_manager 直接吃 403, 即使模块权限是通的。
+--          要改访问范围, **两处都得改**。」
+--    ⇒ 我只改了模块那一处 —— 正是这条注释警告过的事。
+--
+-- 【owner 裁定】恢复 analytics, 五项全留。
+--   理由: 财务本职就是看收入/成本/毛利, 而代码把 analysis-hub 明确设计成它的主入口。
+--   ⚠️ owner 此前那句「数据分析是管理员/老板级」说的是**销售**和**生产文员**,
+--      ⛔ 不能推广到财务 —— 那是我上一轮的过度推广。
+--
+-- 【⛔ V20261030_14 的其余四项不回滚】
+--   production / rd / sales / procurement 保持砍掉:
+--   · 它们不在 ROLE_PATH_WHITELIST 里, 砍掉不会造成本次这种 403
+--   · 财务看订单详情已由**只读速览抽屉**承载(⛔ 不注册路由, 进不了导航栏),
+--     那正是 owner 要的「能看详情但不能跨模块」。
+--
+-- 【尺子已补】漂移扫描器新增 check_role_path_whitelist_consistency():
+--   双向检查(白名单放行但没模块 / 有模块但不在白名单), 本次这 5 处它现在报得出来。
+--   同批还修了「只读 router/index.ts 漏掉 router/modules/ 那 30 条路由」——
+--   经营驾驶舱等**全在 modules/smartbi.ts 里**, 此前一条都没扫到,
+--   所以尺子才会在我砍完之后照报「0 处漂移」。
+
+UPDATE platform_role_permissions SET permission_level = 'rw', updated_at = NOW()
+  WHERE role_code = 'finance_manager' AND module_code = 'analytics' AND deleted_at IS NULL;

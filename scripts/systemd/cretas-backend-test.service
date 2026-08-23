@@ -1,0 +1,68 @@
+[Unit]
+Description=Cretas Java Backend (port 10011, test env)
+After=network.target postgresql.service cretas-embedding.service redis.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+Wants=cretas-embedding.service
+
+[Service]
+Type=simple
+SuccessExitStatus=143
+User=root
+WorkingDirectory=/www/wwwroot/cretas
+
+# Environment variables — loaded from .env.test (mirrors prod's .env.prod pattern)
+EnvironmentFile=/www/wwwroot/cretas/.env.test
+Environment=ALIYUN_OSS_ENABLED=false
+Environment=SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE=500MB
+Environment=SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE=500MB
+
+ExecStart=/usr/bin/java \
+  -Xms512m -Xmx1500m \
+  -XX:MaxMetaspaceSize=256m \
+  -XX:+UseG1GC \
+  -XX:+HeapDumpOnOutOfMemoryError \
+  -XX:HeapDumpPath=/www/wwwroot/cretas/logs/cretas-test-heap-dump.hprof \
+  -jar aims-0.0.1-SNAPSHOT.jar \
+  --spring.profiles.active=pg-prod,test \
+  --spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect \
+  --spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect \
+  --server.port=10011 \
+  --management.server.port=10013 \
+  --smartbi.postgres.enabled=true \
+  --cretas.ai.fusion.timeout-ms=2000 \
+  --cretas.ai.service.url=http://localhost:8084 \
+  --cretas.python.base-url=http://localhost:8084 \
+  --python-smartbi.url=http://localhost:8084 \
+  --python-error-analysis.url=http://localhost:8084 \
+  --python-classifier.url=http://localhost:8084 \
+  --cretas.ai.dashscope.enabled=true \
+  --cretas.ai.dashscope.model=qwen3.5-plus \
+  --cretas.ai.dashscope.correction-model=qwen3.5-35b-a3b \
+  --cretas.ai.dashscope.vision-model=qwen3.5-plus \
+  --cretas.ai.arena-rl.llm.model=qwen3.5-35b-a3b \
+  --cretas.ai.dashscope.migration.use-direct=true \
+  --cretas.ai.dashscope.migration.intent-classify=true
+
+StandardOutput=append:/www/wwwroot/cretas/cretas-test.log
+StandardError=append:/www/wwwroot/cretas/cretas-test.log
+
+# Restart policy: 2026-05-07 changed on-failure → always.
+# Investigation found Java test env staying DOWN after SIGTERM (code=exited
+# status=143). Java test gets SIGTERM during sister chat parallel testing
+# (deploy script restarts / manual stop / etc) which counts as "successful"
+# exit (SuccessExitStatus=143) so Restart=on-failure didn't fire.
+# Restart=always restarts on ANY exit including clean SIGTERM, ensuring
+# Java test env always available for sister chat smoke tests.
+Restart=always
+RestartSec=15
+
+# Spring Boot start budget
+# TimeoutStopSec bumped 30→90s 2026-05-06: under heap pressure shutdown hooks
+# blocked >30s causing systemd SIGKILL cycle (May 6 incident, journalctl 10:08:34
+# code=killed status=9). Bumped heap to 1.5g + give shutdown more headroom.
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

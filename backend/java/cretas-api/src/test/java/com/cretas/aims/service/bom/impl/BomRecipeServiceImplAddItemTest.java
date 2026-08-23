@@ -1,0 +1,624 @@
+package com.cretas.aims.service.bom.impl;
+
+import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
+import com.cretas.aims.service.bom.NestedBomCostService;
+import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
+import com.cretas.aims.service.unit.UnitContractService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+/**
+ * Regression test: BomRecipeServiceImpl.addItem / updateItem / deleteItem must NOT replace
+ * the Hibernate-managed BomRecipe.items collection reference.
+ *
+ * <p>Root cause: {@code BomRecipe.items} is annotated with
+ * {@code cascade = CascadeType.ALL, orphanRemoval = true}. Calling
+ * {@code recipe.setItems(newList)} after a Hibernate session load replaces the
+ * PersistentBag with a plain ArrayList, causing:
+ * {@code HibernateException: A collection with cascade="all-delete-orphan" was no longer
+ * referenced by the owning entity instance}.
+ *
+ * <p>Fix: {@link BomRecipeServiceImpl#refreshItemsInPlace(BomRecipe)} uses
+ * {@code recipe.getItems().clear(); recipe.getItems().addAll(fresh)} to keep the same
+ * collection instance. This test asserts that the original list instance is preserved
+ * (i.e., {@code setItems} is never called with a different object reference after load).
+ */
+@DisplayName("BomRecipeServiceImpl.addItem — orphanRemoval collection identity preserved")
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class BomRecipeServiceImplAddItemTest {
+
+    @Mock
+    BomRecipeRepository recipeRepo;
+
+    @Mock
+    BomRecipeItemRepository itemRepo;
+
+    @Mock
+    ProductTypeRepository productTypeRepo;
+
+    @Mock
+    BomSeasoningItemRepository seasoningItemRepo;
+
+    @Mock
+    BomProcessInjectionConfigRepository processInjectionConfigRepo;
+
+    @Mock
+    RawMaterialTypeRepository materialTypeRepo;
+
+    @Mock
+    MaterialUomConverter materialUomConverter;
+
+    @Mock
+    UnitContractService unitContractService;
+
+    /** SP1: NestedBomCostService must be mocked so @InjectMocks can inject it. */
+    @Mock
+    NestedBomCostService nestedBomCostService;
+
+    @InjectMocks
+    BomRecipeServiceImpl service;
+
+    private BomRecipe recipe;
+    private BomRecipeItem existingItem;
+    /** The Hibernate-managed list instance that must NOT be replaced. */
+    private List<BomRecipeItem> managedList;
+
+    @BeforeEach
+    void setUp() {
+        recipe = new BomRecipe();
+        recipe.setId("RECIPE-ORPHAN-TEST");
+        recipe.setFactoryId("F006");
+        recipe.setStatus(BomRecipe.Status.DRAFT);
+
+        existingItem = new BomRecipeItem();
+        existingItem.setId(1L);
+        existingItem.setRecipeId("RECIPE-ORPHAN-TEST");
+        existingItem.setFactoryId("F006");
+        existingItem.setMaterialTypeId("MT-001");
+        existingItem.setMaterialName("猪舌原料");
+        existingItem.setUnit("kg");
+        existingItem.setStandardQuantity(BigDecimal.valueOf(800));
+
+        // Simulate Hibernate-managed PersistentBag by using a specific ArrayList instance
+        managedList = new ArrayList<>();
+        managedList.add(existingItem);
+        recipe.setItems(managedList);
+
+        // Mock repo lookups
+        when(recipeRepo.findById("RECIPE-ORPHAN-TEST")).thenReturn(Optional.of(recipe));
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(managedList);
+
+        ProductType product = new ProductType();
+        product.setId("SKU-001");
+        product.setFactoryId("F006");
+        product.setName("测试产品");
+        product.setUnit("袋");
+        product.setGramsPerUnit(new BigDecimal("500"));
+        when(productTypeRepo.findByIdAndFactoryIdForUpdate("SKU-001", "F006"))
+                .thenReturn(Optional.of(product));
+
+        RawMaterialType mt = new RawMaterialType();
+        mt.setId("MT-001");
+        mt.setName("猪舌原料");
+        mt.setUnit("kg");
+        mt.setFactoryId("F006");
+        mt.setPrimaryCode("001");
+        mt.setTaxRate(TaxRate.TAX_9);
+        mt.setUnitPrice(new BigDecimal("10.0000"));
+        mt.setMovingAvgPrice(new BigDecimal("12.0000"));
+        when(materialTypeRepo.findById("MT-001")).thenReturn(Optional.of(mt));
+        when(materialTypeRepo.findById("MT-002")).thenReturn(Optional.of(newMt("MT-002", "包材A", "g", "002")));
+
+        // uom converter: allow write unit (service calls isWriteUnitCompatible)
+        when(materialUomConverter.isWriteUnitCompatible(anyString(), anyString())).thenReturn(true);
+        when(materialUomConverter.toComparableQuantity(
+                anyString(), any(BigDecimal.class), anyString(), anyString()))
+                .thenAnswer(invocation -> MaterialUomConverter.ConversionResult.converted(
+                        invocation.getArgument(1), invocation.getArgument(3)));
+        UnitContractService canonicalUnits = TestUnitContractFactory.contract();
+        when(unitContractService.normalize(anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.normalize(
+                        invocation.getArgument(0), invocation.getArgument(1)));
+    }
+
+    @Test
+    @DisplayName("激活新版本时旧 ACTIVE 版本必须同时归档并取消 current")
+    void activateArchivesEveryCompetingActiveVersion() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setIsCurrent(false);
+
+        BomRecipe oldCurrent = new BomRecipe();
+        oldCurrent.setId("RECIPE-V2");
+        oldCurrent.setFactoryId("F006");
+        oldCurrent.setProductTypeId("SKU-001");
+        oldCurrent.setStatus(BomRecipe.Status.ACTIVE);
+        oldCurrent.setIsCurrent(true);
+
+        BomRecipe staleActive = new BomRecipe();
+        staleActive.setId("RECIPE-V1");
+        staleActive.setFactoryId("F006");
+        staleActive.setProductTypeId("SKU-001");
+        staleActive.setStatus(BomRecipe.Status.ACTIVE);
+        staleActive.setIsCurrent(false);
+
+        when(recipeRepo.findById(recipe.getId())).thenReturn(Optional.of(recipe));
+        when(recipeRepo.findCompetingVersionsForActivation(
+                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(oldCurrent, staleActive));
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 7L);
+
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activated.getIsCurrent()).isTrue();
+        assertThat(oldCurrent.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+        assertThat(oldCurrent.getIsCurrent()).isFalse();
+        assertThat(staleActive.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+        assertThat(staleActive.getIsCurrent()).isFalse();
+        verify(recipeRepo).flush();
+    }
+
+    @Test
+    @DisplayName("历史 BOM 可以重新激活，且不创建新版本")
+    void archivedVersionCanBeReactivated() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setStatus(BomRecipe.Status.ARCHIVED);
+        recipe.setIsCurrent(false);
+        when(recipeRepo.findCompetingVersionsForActivation(
+                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of());
+
+        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 8L);
+
+        assertThat(activated.getId()).isEqualTo("RECIPE-ORPHAN-TEST");
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activated.getIsCurrent()).isTrue();
+        verify(recipeRepo, never()).findMaxVersion(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("历史 BOM 可删除，当前生效 BOM 不可删除")
+    void deleteAllowsHistoryButRejectsActive() {
+        recipe.setStatus(BomRecipe.Status.ARCHIVED);
+        service.deleteRecipe("F006", recipe.getId());
+        assertThat(recipe.getDeletedAt()).isNotNull();
+
+        BomRecipe active = new BomRecipe();
+        active.setId("ACTIVE-1");
+        active.setFactoryId("F006");
+        active.setStatus(BomRecipe.Status.ACTIVE);
+        when(recipeRepo.findById("ACTIVE-1")).thenReturn(Optional.of(active));
+        assertThatThrownBy(() -> service.deleteRecipe("F006", "ACTIVE-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("不能删除");
+    }
+
+    @Test
+    @DisplayName("每个 SKU 最多保留十个未删除 BOM 版本")
+    void cloneRejectsEleventhVersion() {
+        recipe.setProductTypeId("SKU-001");
+        when(recipeRepo.countByFactoryIdAndProductTypeId("F006", "SKU-001")).thenReturn(10L);
+
+        assertThatThrownBy(() -> service.cloneRecipe("F006", recipe.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(409);
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_VERSION_LIMIT_REACHED");
+                });
+        verify(recipeRepo, never()).save(argThat(candidate -> candidate != recipe));
+    }
+
+    @Test
+    @DisplayName("ensureDraft clones the one current ACTIVE version completely")
+    void ensureDraftClonesCurrentActiveVersion() {
+        recipe.setProductTypeId("SKU-001");
+        recipe.setProductName("测试产品");
+        recipe.setVersion(1);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("500"));
+        recipe.setOutputUnit("袋");
+        existingItem.setSubProductTypeId("SUB-SKU-1");
+        existingItem.setActualQuantity(new BigDecimal("808"));
+        existingItem.setItemCost(new BigDecimal("9.99"));
+
+        BomSeasoningItem seasoning = new BomSeasoningItem();
+        seasoning.setId(11L);
+        seasoning.setRecipeId(recipe.getId());
+        seasoning.setFactoryId("F006");
+        seasoning.setName("盐");
+        seasoning.setWorkProcessId("WP-1");
+
+        BomProcessInjectionConfig config = new BomProcessInjectionConfig();
+        config.setId(12L);
+        config.setRecipeId(recipe.getId());
+        config.setFactoryId("F006");
+        config.setWorkProcessId("WP-1");
+        config.setInjectionAmountKg(new BigDecimal("2.5"));
+
+        when(recipeRepo.findByFactoryIdAndProductTypeIdOrderByVersionDesc("F006", "SKU-001"))
+                .thenReturn(List.of(recipe));
+        when(recipeRepo.countByFactoryIdAndProductTypeId("F006", "SKU-001")).thenReturn(1L);
+        when(recipeRepo.findMaxVersion("F006", "SKU-001")).thenReturn(1);
+        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> {
+            BomRecipe saved = invocation.getArgument(0);
+            if (saved.getId() == null) saved.setId("RECIPE-V2-DRAFT");
+            return saved;
+        });
+        when(seasoningItemRepo.findByRecipeIdOrderBySeqAsc(recipe.getId())).thenReturn(List.of(seasoning));
+        when(processInjectionConfigRepo.findByRecipeIdAndDeletedAtIsNull(recipe.getId()))
+                .thenReturn(List.of(config));
+
+        BomRecipe draft = service.ensureDraft("F006", "SKU-001");
+
+        assertThat(draft.getVersion()).isEqualTo(2);
+        assertThat(draft.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+        assertThat(draft.getIsCurrent()).isFalse();
+        assertThat(recipe.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(recipe.getIsCurrent()).isTrue();
+        assertThat(draft.getItems()).singleElement().satisfies(item -> {
+            assertThat(item.getSubProductTypeId()).isEqualTo("SUB-SKU-1");
+            assertThat(item.getActualQuantity()).isEqualByComparingTo("808");
+            assertThat(item.getItemCost()).isEqualByComparingTo("9.99");
+        });
+        verify(seasoningItemRepo).saveAll(argThat(rows -> rows.iterator().hasNext()));
+        verify(processInjectionConfigRepo).saveAll(argThat(rows -> rows.iterator().hasNext()));
+    }
+
+    /*
+     * 🔴 2026-08-12: 这条原来断言 `BOM_CURRENT_ACTIVE_REQUIRED`(有历史版本但 0 个 ACTIVE ⇒ 拒绝)。
+     * 用例名写着「instead of guessing a source」—— 作者担心的是**从哪一版克隆**要靠猜, 那是对的;
+     * 但结论下错了: 正确做法不是拒绝, 而是**根本不克隆** —— 照当前画布 revision 投一份新草稿
+     * (画布是权威、BOM 是投影)。真机上那句「请先修复版本状态」指向一个**没有界面**的动作。
+     *
+     * 新语义连同「绝不从归档版克隆」的守卫, 移到了
+     * {@link BomDraftWithoutActiveBaselineTest} —— 那里能把所需依赖 mock 干净;
+     * 本类的夹具缺 bomWorkflowRevisionService / unitContractService, 走不到投影路径。
+     */
+
+    @Test
+    @DisplayName("ensureDraft rejects ambiguous multiple drafts")
+    void ensureDraftRejectsMultipleDrafts() {
+        recipe.setProductTypeId("SKU-001");
+        BomRecipe secondDraft = new BomRecipe();
+        secondDraft.setId("RECIPE-DRAFT-2");
+        secondDraft.setFactoryId("F006");
+        secondDraft.setProductTypeId("SKU-001");
+        secondDraft.setStatus(BomRecipe.Status.DRAFT);
+        when(recipeRepo.findByFactoryIdAndProductTypeIdOrderByVersionDesc("F006", "SKU-001"))
+                .thenReturn(List.of(recipe, secondDraft));
+
+        assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-001"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_MULTIPLE_DRAFTS"));
+    }
+
+    @Test
+    @DisplayName("ensureDraft rejects invalid SKU grams before creating a version")
+    void ensureDraftRejectsInvalidSkuGrams() {
+        ProductType invalid = new ProductType();
+        invalid.setId("SKU-BAD");
+        invalid.setFactoryId("F006");
+        invalid.setName("错误 SKU");
+        invalid.setUnit("袋");
+        invalid.setGramsPerUnit(BigDecimal.ZERO);
+        when(productTypeRepo.findByIdAndFactoryIdForUpdate("SKU-BAD", "F006"))
+                .thenReturn(Optional.of(invalid));
+
+        assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-BAD"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_SKU_GRAMS_PER_UNIT_REQUIRED"));
+        verify(recipeRepo, never()).save(argThat(candidate -> "SKU-BAD".equals(candidate.getProductTypeId())));
+    }
+
+    @Test
+    @DisplayName("activation rejects an empty draft with an actionable error")
+    void activationRejectsEmptyDraft() {
+        recipe.setProductTypeId("SKU-001");
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_ITEMS_REQUIRED");
+                    assertThat(ex.getActionHint()).contains("至少添加一条");
+                });
+        verify(recipeRepo, never()).findCompetingVersionsForActivation(
+                anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("activation rejects packaging without a positive quantity")
+    void activationRejectsPackagingWithoutQuantity() {
+        recipe.setProductTypeId("SKU-001");
+        existingItem.setMaterialCategory("PACKAGING");
+        existingItem.setStandardQuantity(null);
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_QUANTITY_REQUIRED"));
+    }
+
+    @Test
+    @DisplayName("addItem: collection reference stays the same instance after call (no setItems replacement)")
+    void addItem_keepsOriginalCollectionInstance() {
+        BomRecipeItem newItem = new BomRecipeItem();
+        newItem.setId(2L);
+        newItem.setRecipeId("RECIPE-ORPHAN-TEST");
+        newItem.setFactoryId("F006");
+        newItem.setMaterialTypeId("MT-002");
+        newItem.setMaterialName("包材A");
+        newItem.setUnit("g");
+        newItem.setStandardQuantity(BigDecimal.valueOf(50));
+
+        when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(newItem);
+        // findByRecipeIdOrderBySortOrderAsc returns the updated list (including new item)
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem, newItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        // The collection instance on the entity must be the SAME object as managedList
+        // (not a brand-new ArrayList). If setItems() was called with a new list, this fails.
+        assertThat(recipe.getItems())
+                .as("Hibernate-managed collection instance must be preserved after addItem")
+                .isSameAs(managedList);
+
+        // Content should be updated in-place
+        assertThat(recipe.getItems()).hasSize(2);
+        assertThat(recipe.getItems()).contains(existingItem, newItem);
+    }
+
+    // ── F6: taxRate 未传 → 保持 null (不默认 0%), 成本侧诚实标缺 ──────────────
+    @Test
+    @DisplayName("addItem 未传价格税率时从物料档案继承")
+    void addItem_pricingNotProvided_inheritsMaterialMaster() {
+        org.mockito.ArgumentCaptor<BomRecipeItem> captor =
+                org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
+        when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        // buildDto 不设 taxRate → dto.getTaxRate() == null
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("9.00");
+        assertThat(captor.getValue().getUnitPrice()).isEqualByComparingTo("12.0000");
+    }
+
+    @Test
+    @DisplayName("addItem 忽略页面价格税率，以物料档案为真值")
+    void addItem_payloadPricingIgnored_materialMasterWins() {
+        org.mockito.ArgumentCaptor<BomRecipeItem> captor =
+                org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
+        when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        ReflectionTestUtils.setField(dto, "taxRate", new BigDecimal("13.00"));
+        ReflectionTestUtils.setField(dto, "unitPrice", new BigDecimal("999.00"));
+        ReflectionTestUtils.setField(dto, "yieldRate", new BigDecimal("55.00"));
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("9.00");
+        assertThat(captor.getValue().getUnitPrice()).isEqualByComparingTo("12.0000");
+        assertThat(captor.getValue().getYieldRate()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    @DisplayName("RAW BOM 可只建立物料关联，不填每成品用量")
+    void addRawItem_standardQuantityMayBeNull() {
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-001", null, "kg", "RAW");
+        BomRecipeItem saved = service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(saved.getStandardQuantity()).isNull();
+        assertThat(saved.getActualQuantity()).isNull();
+        assertThat(saved.getItemCost()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    @DisplayName("包材 BOM 仍必须填每成品用量")
+    void addPackagingItem_standardQuantityRequired() {
+        BomRecipeItemDTO dto = buildDto("MT-002", null, "g", "PACKAGING");
+
+        assertThatThrownBy(() -> service.addItem("F006", "RECIPE-ORPHAN-TEST", dto))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("每成品用量");
+    }
+
+    @Test
+    @DisplayName("包材主数据 box 与中文显示值盒统一持久化为 canonical box")
+    void addPackagingItem_boxAliasPersistsCanonicalCode() {
+        RawMaterialType box = newMt("MT-BOX", "内盒", "box", "003");
+        when(materialTypeRepo.findById("MT-BOX")).thenReturn(Optional.of(box));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        BomRecipeItem saved = service.addItem("F006", recipe.getId(),
+                buildDto("MT-BOX", new BigDecimal("1"), "盒", "PACKAGING"));
+
+        assertThat(saved.getUnit()).isEqualTo("box");
+        assertThat(saved.getPriceUnit()).isEqualTo("box");
+        assertThat(saved.getStandardQuantity()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    @DisplayName("包材主数据 case 与中文显示值箱统一持久化为 canonical case")
+    void addPackagingItem_caseAliasPersistsCanonicalCode() {
+        RawMaterialType outerCase = newMt("MT-CASE", "外箱", "case", "004");
+        when(materialTypeRepo.findById("MT-CASE")).thenReturn(Optional.of(outerCase));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        BomRecipeItem saved = service.addItem("F006", recipe.getId(),
+                buildDto("MT-CASE", new BigDecimal("0.125"), "箱", "PACKAGING"));
+
+        assertThat(saved.getUnit()).isEqualTo("case");
+        assertThat(saved.getPriceUnit()).isEqualTo("case");
+        assertThat(saved.getStandardQuantity()).isEqualByComparingTo("0.125");
+    }
+
+    @Test
+    @DisplayName("g/kg 继续通过统一单位契约并保持 canonical code")
+    void addMassItems_keepCanonicalGramAndKilogramCodes() {
+        RawMaterialType material = newMt("MT-MASS", "粉料", "kg", "005");
+        when(materialTypeRepo.findById("MT-MASS")).thenReturn(Optional.of(material));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
+
+        BomRecipeItem grams = service.addItem("F006", recipe.getId(),
+                buildDto("MT-MASS", new BigDecimal("125"), "g", "AUXILIARY"));
+        BomRecipeItem kilograms = service.addItem("F006", recipe.getId(),
+                buildDto("MT-MASS", new BigDecimal("1"), "kg", "AUXILIARY"));
+
+        assertThat(grams.getUnit()).isEqualTo("g");
+        assertThat(kilograms.getUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    @DisplayName("未知单位返回明确 400 业务校验而不是进入数据库")
+    void addItem_unknownUnitReturnsBusinessValidation() {
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.ONE, "unknown-unit", "PACKAGING");
+
+        assertThatThrownBy(() -> service.addItem("F006", recipe.getId(), dto))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(400);
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_ITEM_UNIT_UNKNOWN");
+                    assertThat(ex.getActionHint()).contains("单位目录");
+                });
+        verify(itemRepo, never()).save(any(BomRecipeItem.class));
+    }
+
+    @Test
+    @DisplayName("SP8: addItem 未传 primaryCode 时从物料主数据回填")
+    void addItem_primaryCodeBackfilledFromMaterial() {
+        org.mockito.ArgumentCaptor<BomRecipeItem> captor =
+                org.mockito.ArgumentCaptor.forClass(BomRecipeItem.class);
+        when(itemRepo.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(captor.getValue().getPrimaryCode()).isEqualTo("002");
+    }
+
+    @Test
+    @DisplayName("SP8: addItem 传入 primaryCode 与物料主编码不一致 -> 400")
+    void addItem_primaryCodeMismatchRejected() {
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.valueOf(50), "g", "PACKAGING");
+        ReflectionTestUtils.setField(dto, "primaryCode", "001");
+
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(BusinessException.class,
+                () -> service.addItem("F006", "RECIPE-ORPHAN-TEST", dto));
+
+        assertThat(ex.getCode()).isEqualTo(400);
+        assertThat(ex.getMessage()).contains("MT-002").contains("001").contains("002");
+        verify(itemRepo, never()).save(any(BomRecipeItem.class));
+    }
+
+    @Test
+    @DisplayName("addItem: AUXILIARY item accepted — B-41 AUXILIARY category supported")
+    void addItem_auxiliaryCategory_accepted() {
+        BomRecipeItem auxItem = new BomRecipeItem();
+        auxItem.setId(3L);
+        auxItem.setRecipeId("RECIPE-ORPHAN-TEST");
+        auxItem.setFactoryId("F006");
+        auxItem.setMaterialTypeId("MT-001");
+        auxItem.setMaterialName("辅料A");
+        auxItem.setUnit("g");
+
+        when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(auxItem);
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(existingItem, auxItem));
+
+        BomRecipeItemDTO dto = buildDto("MT-001", BigDecimal.valueOf(10), "g", "AUXILIARY");
+        BomRecipeItem result = service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(result).isEqualTo(auxItem);
+    }
+
+    @Test
+    @DisplayName("deleteItem: collection reference stays the same instance after soft-delete")
+    void deleteItem_keepsOriginalCollectionInstance() {
+        when(itemRepo.findById(1L)).thenReturn(Optional.of(existingItem));
+        when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(existingItem);
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of());  // after soft-delete, returns empty
+
+        service.deleteItem("F006", 1L);
+
+        assertThat(recipe.getItems())
+                .as("Hibernate-managed collection instance must be preserved after deleteItem")
+                .isSameAs(managedList);
+        assertThat(recipe.getItems()).isEmpty();
+    }
+
+    // ─── helpers ───────────────────────────────────────────────────────────
+
+    private BomRecipeItemDTO buildDto(String materialTypeId, BigDecimal qty, String unit, String category) {
+        BomRecipeItemDTO dto = new BomRecipeItemDTO();
+        ReflectionTestUtils.setField(dto, "materialTypeId", materialTypeId);
+        ReflectionTestUtils.setField(dto, "standardQuantity", qty);
+        ReflectionTestUtils.setField(dto, "unit", unit);
+        ReflectionTestUtils.setField(dto, "materialCategory", category);
+        return dto;
+    }
+
+    private RawMaterialType newMt(String id, String name, String unit, String primaryCode) {
+        RawMaterialType mt = new RawMaterialType();
+        mt.setId(id);
+        mt.setName(name);
+        mt.setUnit(unit);
+        mt.setFactoryId("F006");
+        mt.setPrimaryCode(primaryCode);
+        mt.setTaxRate(TaxRate.TAX_9);
+        mt.setUnitPrice(new BigDecimal("10.0000"));
+        mt.setMovingAvgPrice(new BigDecimal("12.0000"));
+        return mt;
+    }
+}

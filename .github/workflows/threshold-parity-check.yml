@@ -1,0 +1,18 @@
+name: threshold-parity-check (manual)
+
+# Verifies bundled Python copy of alert_thresholds.json stays byte-equal to Java source.
+# Drift defense: Java edited, Python forgot. Either side touched → both must match.
+# See docs/superpowers/specs/2026-04-29-alerts-full-port-design.md §3.2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diff Java vs Python alert_thresholds.json
+        run: |
+          diff backend/python/smartbi_compat/config/alert_thresholds.json \
+               backend/java/cretas-api/src/main/resources/config/smartbi/alert_thresholds.json

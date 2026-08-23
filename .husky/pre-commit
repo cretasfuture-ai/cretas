@@ -1,0 +1,41 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# 检查任务进度
+node scripts/check-progress-ticks.js
+
+# 运行测试
+npm test
+
+# 原有的lint-staged检查
+npx lint-staged
+
+# 编码完整性检查
+echo "🔍 检查文件编码完整性..."
+powershell -ExecutionPolicy Bypass -File "./scripts/utils/encoding-checker.ps1" -Verbose:$false
+
+# 检查是否有编码问题
+if [ $? -ne 0 ]; then
+    echo "❌ 发现编码问题，请运行编码检查脚本修复后再提交"
+    echo "运行: powershell -File './scripts/utils/encoding-checker.ps1' -Verbose"
+    exit 1
+fi
+
+echo "✅ 编码检查通过"
+
+# R74-FIX-A guard: 拒绝新 .sql 写入 backend/java/cretas-api/src/main/resources/db/migration/
+# 项目 spring.flyway.locations=classpath:db/flyway, 不是 db/migration/. 后者 Flyway 不扫描.
+# R67-R71 多次踩坑 (V20260428_07 / V20260429_01 / V20260430_03 写错位置, 没自动 run).
+DB_MIGRATION_NEW=$(git diff --cached --name-only --diff-filter=A | grep -E '^backend/java/cretas-api/src/main/resources/db/migration/.+\.sql$' || true)
+if [ -n "$DB_MIGRATION_NEW" ]; then
+    echo ""
+    echo "❌ Flyway 路径错误: 检测到新 .sql 文件写入 db/migration/ (Flyway 不扫描此目录)"
+    echo ""
+    echo "$DB_MIGRATION_NEW"
+    echo ""
+    echo "项目配置 spring.flyway.locations=classpath:db/flyway"
+    echo "请把文件移到 backend/java/cretas-api/src/main/resources/db/flyway/"
+    echo ""
+    echo "如果是有意写入 db/migration/ (legacy/手动应用), 用 git commit --no-verify 跳过."
+    exit 1
+fi

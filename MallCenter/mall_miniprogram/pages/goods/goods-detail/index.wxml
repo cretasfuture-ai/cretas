@@ -1,0 +1,332 @@
+<!--
+  - Copyright (C) 2018-2019
+  - 食品商城小程序
+  - 注意：
+  - 基于 JooLun 框架二次开发
+-->
+<!-- 图片轮播 -->
+<view class='product-carousel'>
+  <swiper class="carousel-swiper" indicator-dots="false" circular="true" autoplay="true" interval="5000" duration="500" bindchange="change">
+    <swiper-item wx:for="{{goodsSpu.picUrls}}" wx:key="index">
+      <image class="carousel-image" src="{{item}}" mode="aspectFill"></image>
+    </swiper-item>
+  </swiper>
+  <view class="carousel-indicators">
+    <view class="carousel-dot {{currents === index + 1 ? 'active' : ''}}" wx:for="{{goodsSpu.picUrls}}" wx:key="index"></view>
+  </view>
+  <view class="share-btn" bindtap="shareShow">
+    <text class="cuIcon-share"></text>
+  </view>
+</view>
+
+<!-- 产品信息区域 -->
+<view class="product-info-section">
+  <!-- 产品标题和标签 -->
+  <view class="product-header">
+    <view class="product-title">{{goodsSpu.name}}</view>
+    <view class="product-subtitle">{{goodsSpu.sellPoint}}</view>
+    <view class="product-tags-row">
+      <view class="tag tag-trace">可溯源</view>
+      <view class="tag tag-hot" wx:if="{{goodsSpu.saleNum > 100}}">热销</view>
+      <view class="tag" wx:if="{{goodsSpu.freightTemplat}}">包邮</view>
+    </view>
+  </view>
+
+  <!-- 价格区域 -->
+  <view class="price-section">
+    <view class="price-header">
+      <text class="price-current">¥{{hasTiers && currentPrice ? currentPrice : goodsSpu.salesPrice}}</text>
+      <text class="price-unit">/{{goodsSpu.unit || '件'}}</text>
+      <text class="price-original" wx:if="{{goodsSpu.marketPrice}}">¥{{goodsSpu.marketPrice}}</text>
+    </view>
+
+    <!-- 阶梯定价提示 -->
+    <view class="tier-hint" wx:if="{{hasTiers && nextTier}}">
+      <text class="cuIcon-hot"></text>
+      <text>再买{{quantityToNextTier}}件，单价降至¥{{nextTier.price}}</text>
+    </view>
+
+    <!-- 阶梯定价表 -->
+    <view class="tier-pricing-table" wx:if="{{hasTiers && priceTiers.length > 0}}">
+      <view class="tier-row header">
+        <text>起订量</text>
+        <text>单价</text>
+      </view>
+      <view class="tier-row {{currentTier && currentTier.id === item.id ? 'active' : ''}}" wx:for="{{priceTiers}}" wx:key="id">
+        <text class="tier-qty">≥{{item.minQuantity}}{{goodsSpu.unit || '件'}}</text>
+        <text class="tier-price">¥{{item.price}}/{{goodsSpu.unit || '件'}}</text>
+      </view>
+    </view>
+  </view>
+</view>
+
+<!-- 供货商信息 -->
+<view class="supplier-section">
+  <view class="section-title">
+    <text class="cuIcon-shop"></text>
+    <text>供货商信息</text>
+  </view>
+  <view class="supplier-card" bindtap="goToMerchant">
+    <view class="supplier-header">
+      <view class="supplier-logo">工</view>
+      <view class="supplier-info">
+        <view class="supplier-name">{{goods.merchantName || '供应商'}}</view>
+        <view class="supplier-meta">{{goods.merchantAddress || ''}}</view>
+      </view>
+      <view class="supplier-arrow">
+        <text class="cuIcon-right"></text>
+      </view>
+    </view>
+    <view class="supplier-stats">
+      <text class="stat-item">产品: 12</text>
+      <text class="stat-item">评分: 4.8</text>
+      <text class="stat-item">好评率: 98%</text>
+    </view>
+  </view>
+</view>
+
+<!-- 溯源信息 -->
+<view class="traceability-section">
+  <view class="section-title">
+    <text class="cuIcon-safe"></text>
+    <text>产品溯源信息</text>
+  </view>
+  <view class="trace-timeline">
+    <view class="trace-item">
+      <view class="trace-dot"></view>
+      <view class="trace-content">
+        <view class="trace-time">{{traceInfo.inspectionTime || '2025-01-15 14:30'}}</view>
+        <view class="trace-title">质检合格</view>
+        <view class="trace-desc">批次号: {{traceInfo.batchNo || 'BATCH-20250115-001'}} · 检验员: {{traceInfo.inspector || '张三'}}</view>
+      </view>
+    </view>
+    <view class="trace-item">
+      <view class="trace-dot"></view>
+      <view class="trace-content">
+        <view class="trace-time">{{traceInfo.processTime || '2025-01-15 10:00'}}</view>
+        <view class="trace-title">加工完成</view>
+        <view class="trace-desc">加工车间: {{traceInfo.workshop || 'A区3号线'}} · 操作员: {{traceInfo.operator || '李四'}}</view>
+      </view>
+    </view>
+    <view class="trace-item">
+      <view class="trace-dot"></view>
+      <view class="trace-content">
+        <view class="trace-time">{{traceInfo.receiveTime || '2025-01-15 08:00'}}</view>
+        <view class="trace-title">原料入库</view>
+        <view class="trace-desc">供应商: {{traceInfo.supplier || '海鲜批发市场'}} · 重量: {{traceInfo.weight || '500kg'}}</view>
+      </view>
+    </view>
+  </view>
+  <view class="trace-footer">
+    <button class="trace-detail-btn" bindtap="goToTrace">查看完整溯源</button>
+  </view>
+</view>
+
+<!-- 产品规格 -->
+<view class="specs-section">
+  <view class="section-title">
+    <text class="cuIcon-list"></text>
+    <text>产品规格</text>
+  </view>
+  <view class="spec-list">
+    <view class="spec-item">
+      <text class="spec-label">产品分类</text>
+      <text class="spec-value">{{goodsSpu.categoryName || '冷冻食品'}}</text>
+    </view>
+    <view class="spec-item">
+      <text class="spec-label">产地</text>
+      <text class="spec-value">{{goodsSpu.origin || '中国'}}</text>
+    </view>
+    <view class="spec-item">
+      <text class="spec-label">保质期</text>
+      <text class="spec-value">{{goodsSpu.shelfLife || '12个月'}}</text>
+    </view>
+    <view class="spec-item">
+      <text class="spec-label">储存条件</text>
+      <text class="spec-value">{{goodsSpu.storage || '-18℃冷冻保存'}}</text>
+    </view>
+    <view class="spec-item">
+      <text class="spec-label">库存数量</text>
+      <text class="spec-value">{{goodsSpu.stock}}{{goodsSpu.unit || '件'}}</text>
+    </view>
+    <view class="spec-item" wx:if="{{goodsSpu.saleNum}}">
+      <text class="spec-label">累计销量</text>
+      <text class="spec-value">{{goodsSpu.saleNum}}{{goodsSpu.unit || '件'}}</text>
+    </view>
+  </view>
+</view>
+
+<!-- AI 智能分析入口 -->
+<view class="ai-analysis-section" wx:if="{{showAiAssistant}}">
+  <view class="section-title">
+    <text class="cuIcon-creativefill"></text>
+    <text>AI 智能分析</text>
+  </view>
+  <view class="ai-cards-grid">
+    <view class="ai-entry-card product-analysis" bindtap="goToAiAnalysis" data-type="product">
+      <text class="ai-icon">📊</text>
+      <text class="ai-label">产品分析</text>
+    </view>
+    <view class="ai-entry-card factory-analysis" bindtap="goToAiAnalysis" data-type="factory">
+      <text class="ai-icon">🏭</text>
+      <text class="ai-label">工厂分析</text>
+    </view>
+    <view class="ai-entry-card industry-analysis" bindtap="goToAiAnalysis" data-type="industry">
+      <text class="ai-icon">📈</text>
+      <text class="ai-label">行业分析</text>
+    </view>
+  </view>
+</view>
+
+<!-- 商品详情 -->
+<view class="description-section">
+  <view class="section-title">
+    <text class="cuIcon-text"></text>
+    <text>商品详情</text>
+  </view>
+  <view class="description-content">
+    <template is="wxParse" data="{{wxParseData:description.nodes}}"/>
+  </view>
+</view>
+
+<!-- 相似商品推荐 -->
+<view class="similar-section" wx:if="{{similarProducts.length > 0 || similarLoading}}">
+  <view class="section-header">
+    <view class="section-title">
+      <view class="title-decoration"></view>
+      <text>相似商品</text>
+    </view>
+  </view>
+
+  <!-- 加载状态 -->
+  <view class="similar-loading" wx:if="{{similarLoading}}">
+    <view class="loading-spinner"></view>
+    <text>加载中...</text>
+  </view>
+
+  <!-- 相似商品横向滚动列表 -->
+  <scroll-view class="similar-scroll" scroll-x wx:if="{{!similarLoading && similarProducts.length > 0}}">
+    <view class="similar-item"
+          wx:for="{{similarProducts}}"
+          wx:key="id"
+          data-product="{{item}}"
+          bindtap="onSimilarProductClick">
+      <view class="similar-img-box">
+        <image src="{{item.picUrls[0] ? item.picUrls[0] : '/public/img/no_pic.png'}}" mode="aspectFill"></image>
+      </view>
+      <view class="similar-info">
+        <text class="similar-name">{{item.name}}</text>
+        <view class="similar-price-row">
+          <text class="similar-price"><text class="price-symbol">¥</text>{{item.salesPrice}}</text>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+</view>
+
+<view class="page-bottom-space"></view>
+
+<!-- 底部操作栏 -->
+<view class="bottom-action-bar">
+  <view class="action-contact-btn" bindtap="contactSupplier">
+    <text class="cuIcon-service"></text>
+    <text>联系供应商</text>
+  </view>
+  <button class="action-cart-btn" bindtap="showQtyModal">
+    <text class="cuIcon-cart"></text>
+    <text>加入购物车</text>
+  </button>
+</view>
+
+<!-- 浮动AI按钮 -->
+<view class="fab-ai" bindtap="goToAiChat" wx:if="{{showAiAssistant}}">
+  <text class="cuIcon-creativefill"></text>
+</view>
+
+<!-- 浮动购物车按钮 -->
+<navigator class="fab-cart" open-type='switchTab' url='/pages/shopping-cart/index' wx:if="{{shoppingCartCount > 0}}">
+  <text class="cuIcon-cart"></text>
+  <view class="fab-cart-badge">{{shoppingCartCount}}</view>
+</navigator>
+
+<!-- html转wxml -->
+<import src="/public/wxParse/wxParse.wxml"/>
+
+<!-- 商品下架提示 -->
+<view class="cu-modal {{goodsSpu.shelf=='0'?'show':''}}">
+  <view class="cu-dialog">
+    <view class="cu-bar bg-white justify-end">
+      <view class="content">提示</view>
+    </view>
+    <view class="padding-xl">
+      抱歉，该商品已下架
+    </view>
+  </view>
+</view>
+
+<!-- 海报组件 -->
+<poster id="poster" hide-loading="{{false}}" preload="{{false}}" config="{{posterConfig}}" bind:success="onPosterSuccess" bind:fail="onPosterFail"></poster>
+
+<!-- 分享弹窗 -->
+<view class="cu-modal bottom-modal {{shareShow}}">
+  <view class="cu-dialog">
+    <view class="cu-bar bg-white">
+      <view class="action text-green"></view>
+      <view class="action text-red" bindtap="shareHide">取消</view>
+    </view>
+    <view class="padding flex flex-direction">
+      <button class="cu-btn bg-green lg" open-type='share'>发送给朋友</button>
+      <button class="cu-btn bg-orange lg margin-top-sm" bindtap="onCreatePoster">生成海报</button>
+    </view>
+  </view>
+</view>
+
+<!-- 海报预览弹窗 -->
+<view class="cu-modal {{posterShow ? 'show' : ''}}">
+  <view class="cu-dialog">
+    <view style="height: calc(100vh - 200rpx)">
+      <image src="{{posterUrl}}" style="height: 100%;"></image>
+    </view>
+    <view class="cu-bar bg-white">
+      <view class="action margin-0 flex-sub" bindtap="hidePosterShow">取消</view>
+      <view class="action margin-0 flex-sub solid-left text-red text-bold" bindtap="savePoster">保存到相册</view>
+    </view>
+  </view>
+</view>
+
+<!-- 数量选择器弹窗 -->
+<view class="qty-modal {{showQtyModal ? 'show' : ''}}" bindtap="hideQtyModal">
+  <view class="qty-modal-content" catchtap="preventClose">
+    <view class="qty-header">
+      <text class="qty-title">选择数量</text>
+      <text class="qty-close cuIcon-close" bindtap="hideQtyModal"></text>
+    </view>
+
+    <view class="qty-product-info">
+      <image class="qty-product-image" src="{{goodsSpu.picUrls[0]}}" mode="aspectFill"></image>
+      <view class="qty-product-detail">
+        <text class="qty-product-name">{{goodsSpu.name}}</text>
+        <text class="qty-product-price">¥{{hasTiers && currentPrice ? currentPrice : goodsSpu.salesPrice}}/{{goodsSpu.unit || '件'}}</text>
+      </view>
+    </view>
+
+    <view class="qty-selector">
+      <button class="qty-btn" bindtap="minusNum" disabled="{{cartNum <= 1}}">-</button>
+      <input type="number" class="qty-input" value="{{cartNum}}" bindchange="onQuantityChange"/>
+      <button class="qty-btn" bindtap="addNum">+</button>
+    </view>
+
+    <view class="qty-price-info">
+      <view class="qty-total-label">总价</view>
+      <view class="qty-total-price">¥{{(hasTiers && currentPrice ? currentPrice : goodsSpu.salesPrice) * cartNum}}</view>
+      <view class="qty-tier-hint" wx:if="{{hasTiers && nextTier}}">
+        再购买{{quantityToNextTier}}{{goodsSpu.unit || '件'}}可享¥{{nextTier.price}}优惠价
+      </view>
+    </view>
+
+    <view class="qty-actions">
+      <button class="qty-action-btn add-cart" bindtap="toDo" data-type="1">加入购物车</button>
+      <button class="qty-action-btn buy-now" bindtap="toDo" data-type="2">立即购买</button>
+    </view>
+  </view>
+</view>

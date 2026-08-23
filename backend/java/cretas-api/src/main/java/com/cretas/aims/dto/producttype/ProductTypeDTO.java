@@ -1,0 +1,360 @@
+package com.cretas.aims.dto.producttype;
+
+import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.security.PriceSensitive;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * 产品类型数据传输对象
+ *
+ * @author Cretas Team
+ * @version 2.0.0
+ * @since 2025-01-09
+ * @updated 2025-12-30 Phase 5: Added SKU configuration fields
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ProductTypeDTO {
+    private String id;
+    private String factoryId;
+    private String code;
+    @NotBlank(message = "产品名称不能为空")
+    private String name;
+    private String category;
+    @NotBlank(message = "单位不能为空")
+    private String unit;
+    private BigDecimal unitPrice;
+    private Integer productionTimeMinutes;
+    private Integer shelfLifeDays;
+    /** 单锅产能 (配料单按锅配料): 1 锅产出数量, 与计划产量同单位。配料单算锅数据此。 */
+    private BigDecimal singlePotCapacity;
+    private String packageSpec;
+
+    @Schema(description = "产品大类: FINISHED_PRODUCT, RAW_MATERIAL, PACKAGING, SEASONING, CUSTOMER_MATERIAL")
+    private String productCategory;
+
+    @Schema(description = "规格（如 310g*42袋/箱）")
+    private String specification;
+
+    @Schema(description = "关联客户名称")
+    private String relatedCustomer;
+
+    @Schema(description = "产品图片URL")
+    private String imageUrl;
+
+    @Schema(description = "温区: 常温, 冷藏, 冷冻")
+    private String temperatureZone;
+
+    @Schema(description = "P0-2 标准克重: 1 份/盒 = X 克 (报工末道折算/成品入库换算用; null=无标准)")
+    private BigDecimal gramsPerUnit;
+
+    @JsonIgnore
+    private boolean gramsPerUnitPresent;
+
+    @Schema(description = "每个基本销售单位的净含量数量；必须与 netContentUnit 同时提供")
+    private BigDecimal netContentQuantity;
+
+    @Schema(description = "净含量 canonical 单位，仅允许 g/kg/ml/L")
+    private String netContentUnit;
+
+    @JsonIgnore
+    private boolean netContentQuantityPresent;
+
+    @JsonIgnore
+    private boolean netContentUnitPresent;
+
+    @Schema(description = "T133 半成品→成品出成率 (0~1 乘数; null=备货看板按 1.0 即偏乐观; 如 0.55 表示 55% 出成率)")
+    private BigDecimal wipToFgYield;
+
+    @Schema(description = "SP9-M1 研发预估人工成本(元/kg成品); null=未填, 前端显示'-'; @PriceSensitive")
+    private BigDecimal quotedLaborCostPerKg;
+
+    @PriceSensitive
+    @Schema(description = "SP5 standard unit cost; null means margin redline check is skipped")
+    private BigDecimal standardCost;
+
+    @Schema(description = "SP5 product-level target gross margin override, 0-1 decimal; e.g. 0.10 means 10%; null falls back to factory config")
+    private BigDecimal targetGrossMargin;
+
+    @JsonIgnore
+    private boolean standardCostPresent;
+
+    @JsonIgnore
+    private boolean targetGrossMarginPresent;
+
+    @Schema(description = "T123 一级单位(大包装, 如 筐/框/箱), 与 boxConversionCoefficient 联用")
+    private String level1Unit;
+
+    @Schema(description = "装箱换算: 1 一级单位 = N 二级单位 (如 1筐=20盒 → 20)")
+    private BigDecimal boxConversionCoefficient;
+
+    @Schema(description = "同一 SKU 的可选装箱规格；标准克重仍由 gramsPerUnit 唯一定义")
+    @Valid
+    private List<ProductPackagingSpecDTO> packagingSpecs;
+
+    @JsonIgnore
+    private boolean boxConversionCoefficientPresent;
+
+    // ==================== 商务/税务字段 ====================
+
+    /** 含税单价 (scale=4). 与 taxRate 联动: 有税率时 service 层自动推导 unitPrice = 含税/(1+rate). */
+    @Schema(description = "含税单价; 与 taxRate 联动自动推导未税 unitPrice")
+    private BigDecimal taxIncludedUnitPrice;
+
+    // ==================== SP4-A8: 税率换算 ====================
+
+    /**
+     * SP4-A8: 含税单价对应的税率枚举 (9%农产品 / 13%一般货物).
+     * <p>设置后 service 层自动计算 unitPrice = taxIncludedUnitPrice / (1 + rate), scale=4, HALF_UP.</p>
+     * <p>null = 未配置税率 (unitPrice 不自动换算, 由调用方直接传入).</p>
+     */
+    @Schema(description = "SP4-A8 税率: TAX_9=9%农产品 / TAX_13=13%一般货物 / null=未配置")
+    private TaxRate taxRate;
+
+    // ==================== End SP4-A8 ====================
+
+    private Boolean isActive;
+    private String notes;
+    private Long createdBy;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+
+    // ==================== Sprint 2 S2-1: Form Template Association ====================
+
+    /**
+     * Associated form template ID for this product type
+     * Allows different product types to have specialized input forms
+     */
+    @Schema(description = "关联的表单模板ID")
+    private String formTemplateId;
+
+    /**
+     * Form template name (for display purposes)
+     */
+    @Schema(description = "表单模板名称")
+    private String formTemplateName;
+
+    // ==================== Sprint 2 S2-5: SOP Configuration Association ====================
+
+    /**
+     * Default SOP configuration ID for this product type
+     * Links to SopConfig entity for standardized operating procedures
+     */
+    @Schema(description = "默认SOP配置ID")
+    private String defaultSopConfigId;
+
+    /**
+     * SOP configuration name (for display purposes)
+     */
+    @Schema(description = "SOP配置名称")
+    private String defaultSopConfigName;
+
+    // ==================== Phase 5: SKU Configuration Fields ====================
+
+    /**
+     * Standard work hours to produce one unit
+     */
+    @Schema(description = "Standard work hours per unit")
+    private BigDecimal workHours;
+
+    /**
+     * Processing steps with stage type, order, and skill requirements
+     */
+    @Schema(description = "Processing steps configuration")
+    private List<ProcessingStepDTO> processingSteps;
+
+    /**
+     * Skill requirements for production
+     */
+    @Schema(description = "Skill requirements")
+    private SkillRequirementDTO skillRequirements;
+
+    /**
+     * Required equipment IDs
+     */
+    @Schema(description = "Required equipment IDs")
+    private List<String> equipmentIds;
+
+    /**
+     * Associated quality check item IDs
+     */
+    @Schema(description = "Quality check item IDs")
+    private List<String> qualityCheckIds;
+
+    /**
+     * Production complexity score (1-5)
+     */
+    @Schema(description = "Complexity score 1-5 for LinUCB")
+    private Integer complexityScore;
+
+    // ==================== End Phase 5 Fields ====================
+
+    // ==================== Custom Form Schema Configuration ====================
+
+    /**
+     * Custom schema overrides for various entity types associated with this product type.
+     * JSON format allows defining specialized input forms for MATERIAL_BATCH, QUALITY_CHECK, etc.
+     *
+     * Example:
+     * {
+     *   "MATERIAL_BATCH": { "additionalFields": [...], "requiredFields": [...] },
+     *   "QUALITY_CHECK": { "checkItems": [...] }
+     * }
+     */
+    @Schema(description = "Custom schema overrides for different entity types (JSON)")
+    private String customSchemaOverrides;
+
+    // ==================== End Custom Form Schema Configuration ====================
+
+    // 关联信息
+    private String factoryName;
+    private String createdByName;
+
+    // 统计信息
+    private Integer totalProductionPlans;
+    private Integer activePlans;
+    private BigDecimal totalProducedQuantity;
+
+    // ==================== 前端字段别名 ====================
+
+    /**
+     * productCode 别名（兼容前端）
+     * 前端使用 productCode，后端使用 code
+     */
+    @JsonProperty("productCode")
+    @Schema(description = "产品编码(前端别名)")
+    public String getProductCode() {
+        return code;
+    }
+
+    public void setStandardCost(BigDecimal standardCost) {
+        this.standardCost = standardCost;
+        this.standardCostPresent = true;
+    }
+
+    public void setTargetGrossMargin(BigDecimal targetGrossMargin) {
+        this.targetGrossMargin = targetGrossMargin;
+        this.targetGrossMarginPresent = true;
+    }
+
+    public void setGramsPerUnit(BigDecimal gramsPerUnit) {
+        this.gramsPerUnit = gramsPerUnit;
+        this.gramsPerUnitPresent = true;
+    }
+
+    public void setNetContentQuantity(BigDecimal netContentQuantity) {
+        this.netContentQuantity = netContentQuantity;
+        this.netContentQuantityPresent = true;
+    }
+
+    public void setNetContentUnit(String netContentUnit) {
+        this.netContentUnit = netContentUnit;
+        this.netContentUnitPresent = true;
+    }
+
+    public void setBoxConversionCoefficient(BigDecimal boxConversionCoefficient) {
+        this.boxConversionCoefficient = boxConversionCoefficient;
+        this.boxConversionCoefficientPresent = true;
+    }
+
+    @JsonIgnore
+    public void markStandardCostPresent() {
+        this.standardCostPresent = true;
+    }
+
+    @JsonIgnore
+    public void markTargetGrossMarginPresent() {
+        this.targetGrossMarginPresent = true;
+    }
+
+    @JsonIgnore
+    public void markGramsPerUnitPresent() {
+        this.gramsPerUnitPresent = true;
+    }
+
+    @JsonIgnore
+    public void markBoxConversionCoefficientPresent() {
+        this.boxConversionCoefficientPresent = true;
+    }
+
+    // ==================== Inner DTOs ====================
+
+    /**
+     * Processing step configuration
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ProcessingStepDTO {
+        /**
+         * Processing stage type (e.g., SLICING, PACKAGING)
+         */
+        @Schema(description = "Processing stage type from ProcessingStageType enum")
+        private String stageType;
+
+        /**
+         * Order index (1-based)
+         */
+        @Schema(description = "Step order, 1-based")
+        private Integer orderIndex;
+
+        /**
+         * Required skill level (1-5)
+         */
+        @Schema(description = "Required skill level 1-5")
+        private Integer requiredSkillLevel;
+
+        /**
+         * Estimated time in minutes
+         */
+        @Schema(description = "Estimated time in minutes")
+        private Integer estimatedMinutes;
+
+        /**
+         * Optional notes for this step
+         */
+        @Schema(description = "Optional notes")
+        private String notes;
+    }
+
+    /**
+     * Skill requirements configuration
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SkillRequirementDTO {
+        /**
+         * Minimum skill level required (1-5)
+         */
+        @Schema(description = "Minimum skill level 1-5")
+        private Integer minLevel;
+
+        /**
+         * Preferred skill level (1-5)
+         */
+        @Schema(description = "Preferred skill level 1-5")
+        private Integer preferredLevel;
+
+        /**
+         * Special skills required (e.g., knife_handling, quality_inspection)
+         */
+        @Schema(description = "List of special skill tags")
+        private List<String> specialSkills;
+    }
+}

@@ -1,0 +1,1492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="白垩纪 Cretas AI 工厂入驻向导：几步说清你的业务，我们给出可落地的方案与上线路径。">
+<title>AI 工厂入驻向导 — 白垩纪食品溯源系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════
+   1. Custom Properties
+   ═══════════════════════════════════════════════════ */
+:root {
+  --primary: #4338ca;
+  --primary-light: #6366f1;
+  --primary-glow: rgba(99, 102, 241, 0.35);
+  --accent: #f59e0b;
+  --accent-glow: rgba(245, 158, 11, 0.3);
+  --success: #059669;
+  --success-light: #34d399;
+  --danger: #dc2626;
+  --warning: #f59e0b;
+
+  --text: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #525c6b;
+
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --glass-blur: blur(20px) saturate(180%);
+
+  --chat-dark: #0f172a;
+  --chat-surface: #1e293b;
+  --chat-ai-bg: rgba(99, 102, 241, 0.12);
+  --chat-ai-border: rgba(99, 102, 241, 0.25);
+  --chat-user-bg: rgba(16, 185, 129, 0.12);
+  --chat-user-border: rgba(16, 185, 129, 0.25);
+
+  --radius: 20px;
+  --radius-sm: 12px;
+  --radius-xs: 8px;
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --font-display: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+  --font-body: 'Noto Sans SC', 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+/* ═══════════════════════════════════════════════════
+   2. Reset & Base
+   ═══════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-body);
+  background: #e8eaf6;
+  color: var(--text);
+  line-height: 1.7;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+::selection { background: rgba(99, 102, 241, 0.2); color: var(--primary); }
+:focus-visible { outline: 2px solid var(--primary-light); outline-offset: 2px; }
+
+/* ═══════════════════════════════════════════════════
+   3. Animated Background
+   ═══════════════════════════════════════════════════ */
+.bg-effects {
+  position: fixed; inset: 0; z-index: 0;
+  overflow: hidden; pointer-events: none;
+}
+.bg-orb {
+  position: absolute; border-radius: 50%;
+  filter: blur(90px); opacity: 0.55;
+  will-change: transform;
+}
+.bg-orb-1 {
+  width: 650px; height: 650px;
+  background: #c7d2fe;
+  top: -15%; left: -10%;
+  animation: orb1 28s ease-in-out infinite;
+}
+.bg-orb-2 {
+  width: 500px; height: 500px;
+  background: #ddd6fe;
+  top: 30%; right: -8%;
+  animation: orb2 24s ease-in-out infinite;
+}
+.bg-orb-3 {
+  width: 400px; height: 400px;
+  background: #fce7f3;
+  bottom: -5%; left: 25%;
+  animation: orb3 30s ease-in-out infinite;
+}
+.bg-orb-4 {
+  width: 350px; height: 350px;
+  background: #bae6fd;
+  top: 10%; right: 30%;
+  animation: orb4 22s ease-in-out infinite;
+}
+@keyframes orb1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(80px, 60px) scale(1.05); }
+  66% { transform: translate(-40px, 80px) scale(0.95); }
+}
+@keyframes orb2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-60px, -40px) scale(0.95); }
+  66% { transform: translate(40px, -60px) scale(1.08); }
+}
+@keyframes orb3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40% { transform: translate(70px, -50px) scale(1.1); }
+  70% { transform: translate(-50px, 30px) scale(0.92); }
+}
+@keyframes orb4 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-60px, 50px); }
+}
+
+.bg-grid {
+  position: absolute; inset: 0;
+  background-image: radial-gradient(circle, rgba(0,0,0,0.03) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.bg-noise {
+  position: absolute; inset: 0;
+  opacity: 0.018;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ═══════════════════════════════════════════════════
+   4. Brand Header
+   ═══════════════════════════════════════════════════ */
+.brand-header {
+  position: relative; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  max-width: 960px; margin: 0 auto;
+  padding: 24px 24px 0;
+}
+.brand-left {
+  display: flex; align-items: center; gap: 12px;
+}
+.brand-mark {
+  width: 44px; height: 44px; border-radius: 14px;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; color: #fff;
+  box-shadow: 0 4px 14px rgba(67, 56, 202, 0.3);
+}
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 20px; font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.brand-sub {
+  font-size: 12px; color: var(--text-muted); font-weight: 400;
+  letter-spacing: 0.02em;
+}
+.ai-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 16px; border-radius: 100px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  color: var(--primary); font-size: 13px; font-weight: 600;
+  font-family: var(--font-display);
+}
+.ai-badge::before {
+  content: '✦'; font-size: 14px;
+  animation: sparkle 2s ease-in-out infinite;
+}
+@keyframes sparkle {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ═══════════════════════════════════════════════════
+   5. Wizard Container & Step Indicator
+   ═══════════════════════════════════════════════════ */
+.wizard-container {
+  position: relative; z-index: 10;
+  max-width: 960px; margin: 0 auto;
+  padding: 16px 24px 40px;
+}
+
+.step-indicator {
+  display: flex; align-items: center; justify-content: center;
+  gap: 0; margin: 20px 0 28px;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: 100px; padding: 10px 28px;
+  box-shadow: var(--glass-shadow);
+}
+.step-dot {
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+  font-family: var(--font-display);
+  background: #e2e8f0; color: #525c6b;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative; cursor: default;
+}
+.step-dot.active {
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2), 0 4px 12px rgba(67, 56, 202, 0.3);
+  transform: scale(1.08);
+}
+.step-dot.completed {
+  background: var(--success); color: #fff;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+}
+.step-line {
+  width: 48px; height: 3px; border-radius: 2px;
+  background: #e2e8f0; margin: 0 4px;
+  transition: background 0.5s ease;
+}
+.step-line.completed {
+  background: linear-gradient(90deg, var(--success), var(--success-light));
+}
+
+/* ═══════════════════════════════════════════════════
+   6. Glass Card
+   ═══════════════════════════════════════════════════ */
+.card {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: 32px;
+  margin-bottom: 20px;
+  box-shadow: var(--glass-shadow);
+  animation: cardIn 0.55s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.card h2 {
+  font-family: var(--font-display);
+  font-size: 22px; font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text); margin-bottom: 20px;
+  display: flex; align-items: center; gap: 10px;
+}
+.card h2::before {
+  content: '';
+  width: 4px; height: 24px; border-radius: 2px;
+  background: linear-gradient(180deg, var(--primary), #7c3aed);
+  flex-shrink: 0;
+}
+.card h3 {
+  font-family: var(--font-display);
+  font-size: 16px; font-weight: 600;
+  margin-bottom: 12px; color: var(--text);
+}
+
+/* ═══════════════════════════════════════════════════
+   7. Form Controls
+   ═══════════════════════════════════════════════════ */
+.form-group { margin-bottom: 20px; }
+.form-group label {
+  display: block; font-size: 13px; font-weight: 500;
+  margin-bottom: 6px; color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+.form-group label .req { color: var(--danger); margin-right: 2px; }
+.form-group input, .form-group textarea, .form-group select {
+  width: 100%; padding: 11px 16px;
+  background: rgba(255,255,255,0.6);
+  border: 1.5px solid rgba(0,0,0,0.08);
+  border-radius: var(--radius-xs);
+  font-size: 14px; font-family: var(--font-body);
+  color: var(--text);
+  transition: all var(--transition);
+}
+.form-group input:hover, .form-group textarea:hover, .form-group select:hover {
+  border-color: rgba(0,0,0,0.15);
+}
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+  outline: none;
+  border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  background: rgba(255,255,255,0.85);
+}
+.form-group input::placeholder, .form-group textarea::placeholder {
+  color: #b0b8c9;
+}
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+/* ═══════════════════════════════════════════════════
+   8. Buttons
+   ═══════════════════════════════════════════════════ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 11px 26px; border: none; border-radius: var(--radius-xs);
+  font-size: 14px; font-weight: 600; font-family: var(--font-body);
+  cursor: pointer; transition: all var(--transition);
+  letter-spacing: 0.01em;
+}
+.btn-primary {
+  background: linear-gradient(135deg, var(--primary), #6d28d9);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(67, 56, 202, 0.25);
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(67, 56, 202, 0.35);
+}
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled {
+  background: #cbd5e1; color: #94a3b8;
+  box-shadow: none; cursor: not-allowed; transform: none;
+}
+.btn-outline {
+  background: rgba(255,255,255,0.5);
+  color: var(--primary); border: 1.5px solid rgba(67, 56, 202, 0.2);
+}
+.btn-outline:hover {
+  background: rgba(99, 102, 241, 0.06);
+  border-color: rgba(67, 56, 202, 0.35);
+}
+.btn-success {
+  background: linear-gradient(135deg, var(--success), #0d9488);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.25);
+}
+.btn-success:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
+}
+.btn-row {
+  display: flex; gap: 12px; justify-content: flex-end; margin-top: 28px;
+}
+
+/* ═══════════════════════════════════════════════════
+   9. Module Cards (Step 2)
+   ═══════════════════════════════════════════════════ */
+.module-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px;
+}
+.module-card {
+  position: relative; padding: 20px;
+  background: rgba(255,255,255,0.5);
+  border: 2px solid rgba(0,0,0,0.06);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.35s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.module-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(99, 102, 241, 0.25);
+  box-shadow: 0 8px 25px rgba(99, 102, 241, 0.1);
+}
+.module-card.selected {
+  border-color: var(--primary);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(139, 92, 246, 0.04));
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12), 0 4px 16px rgba(67, 56, 202, 0.1);
+}
+.module-card .icon {
+  width: 48px; height: 48px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; margin-bottom: 10px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.05));
+}
+.module-card.selected .icon {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.1));
+}
+.module-card .name {
+  font-family: var(--font-display);
+  font-size: 15px; font-weight: 700; color: var(--text);
+}
+.module-card .desc { font-size: 12.5px; color: var(--text-secondary); margin-top: 4px; }
+.module-card .field-count {
+  font-size: 11.5px; color: var(--text-muted); margin-top: 8px;
+  font-weight: 500; letter-spacing: 0.01em;
+}
+.module-card .check {
+  position: absolute; top: 12px; right: 12px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  color: #fff;
+  display: none; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+  box-shadow: 0 2px 8px rgba(67, 56, 202, 0.3);
+}
+.module-card.selected .check { display: flex; }
+
+/* ═══════════════════════════════════════════════════
+   10. Chat UI (Step 3) — Dark Mode
+   ═══════════════════════════════════════════════════ */
+#step3 {
+  background: var(--chat-dark);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  padding: 0;
+  overflow: hidden;
+}
+.chat-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+  color: #fff;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.chat-header strong {
+  font-family: var(--font-display);
+  font-size: 16px; font-weight: 700;
+}
+.chat-header .module-label {
+  font-size: 13px; opacity: 0.85; margin-top: 2px;
+}
+.chat-header .btn-outline {
+  color: rgba(255,255,255,0.9); border-color: rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.08);
+  padding: 6px 14px; font-size: 12px;
+}
+.chat-header .btn-outline:hover {
+  background: rgba(255,255,255,0.15);
+  border-color: rgba(255,255,255,0.5);
+}
+
+.chat-body {
+  height: 420px; overflow-y: auto; padding: 20px;
+  background: var(--chat-dark);
+  border-left: 1px solid rgba(148, 163, 184, 0.06);
+  border-right: 1px solid rgba(148, 163, 184, 0.06);
+  scroll-behavior: smooth;
+}
+.chat-body::-webkit-scrollbar { width: 5px; }
+.chat-body::-webkit-scrollbar-track { background: transparent; }
+.chat-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.15); border-radius: 3px;
+}
+
+.chat-msg { margin-bottom: 18px; display: flex; gap: 10px; }
+.chat-msg.ai { flex-direction: row; }
+.chat-msg.user { flex-direction: row-reverse; }
+
+.chat-avatar {
+  width: 36px; height: 36px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
+.chat-msg.ai .chat-avatar {
+  background: rgba(99, 102, 241, 0.15);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+.chat-msg.user .chat-avatar {
+  background: rgba(16, 185, 129, 0.15);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+.chat-bubble {
+  max-width: 78%; padding: 12px 16px;
+  border-radius: 16px; font-size: 14px; line-height: 1.7;
+}
+.chat-msg.ai .chat-bubble {
+  background: var(--chat-ai-bg);
+  border: 1px solid var(--chat-ai-border);
+  border-top-left-radius: 4px;
+  color: #e2e8f0;
+}
+.chat-msg.user .chat-bubble {
+  background: var(--chat-user-bg);
+  border: 1px solid var(--chat-user-border);
+  border-top-right-radius: 4px;
+  color: #e2e8f0;
+}
+
+.quick-replies {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 10px 0 10px 46px;
+}
+.quick-reply-btn {
+  padding: 7px 16px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 100px;
+  color: #a5b4fc; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all var(--transition);
+  font-family: var(--font-body);
+}
+.quick-reply-btn:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #c7d2fe;
+  transform: translateY(-1px);
+}
+
+.topics-bar {
+  margin: 8px 0 8px 46px; font-size: 12px; color: #64748b;
+  display: flex; gap: 14px; flex-wrap: wrap;
+}
+.topics-bar .covered { color: var(--success-light); }
+.topics-bar .remaining { color: #fbbf24; }
+
+.chat-loading {
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 0 10px 46px;
+  font-size: 13px; color: #64748b;
+}
+.chat-loading .dots span {
+  display: inline-block; width: 7px; height: 7px;
+  background: #6366f1; border-radius: 50%; margin: 0 2px;
+  animation: bounce 1.4s ease-in-out infinite;
+}
+.chat-loading .dots span:nth-child(2) { animation-delay: 0.2s; }
+.chat-loading .dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-10px); opacity: 1; }
+}
+
+.module-complete-card {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 16px 20px; margin: 14px 0 14px 46px;
+}
+.module-complete-card h4 {
+  color: var(--success-light); font-size: 14px;
+  font-family: var(--font-display); font-weight: 700;
+  margin-bottom: 6px;
+}
+.module-complete-card p { font-size: 13px; color: #94a3b8; }
+
+.chat-footer {
+  display: flex; gap: 10px; padding: 14px 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
+  background: var(--chat-surface);
+}
+.chat-footer input {
+  flex: 1; padding: 11px 16px;
+  background: rgba(255,255,255,0.05);
+  border: 1.5px solid rgba(148, 163, 184, 0.12);
+  border-radius: var(--radius-xs);
+  font-size: 14px; font-family: var(--font-body);
+  color: #e2e8f0; transition: all var(--transition);
+}
+.chat-footer input::placeholder { color: #475569; }
+.chat-footer input:focus {
+  outline: none;
+  border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  background: rgba(255,255,255,0.08);
+}
+.chat-footer .btn-primary {
+  padding: 11px 20px;
+}
+
+#step3 .step3-bottom-bar {
+  padding: 14px 20px;
+  display: flex; gap: 12px; justify-content: space-between;
+  background: var(--chat-surface);
+  border-top: 1px solid rgba(148, 163, 184, 0.06);
+}
+#step3 .step3-bottom-bar .btn-outline {
+  color: #94a3b8; border-color: rgba(148, 163, 184, 0.15);
+  background: transparent;
+}
+#step3 .step3-bottom-bar .btn-outline:hover {
+  color: #e2e8f0; border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(255,255,255,0.03);
+}
+
+/* ═══════════════════════════════════════════════════
+   11. Assessment (Step 4)
+   ═══════════════════════════════════════════════════ */
+.assess-summary {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(139, 92, 246, 0.04));
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  border-radius: var(--radius-sm); padding: 18px 22px; margin-bottom: 22px;
+  font-size: 15px;
+}
+.assess-summary strong { color: var(--text); }
+.confidence {
+  display: inline-flex; align-items: center;
+  padding: 3px 12px; border-radius: 100px;
+  font-size: 12px; font-weight: 700;
+  font-family: var(--font-display);
+}
+.conf-high { background: rgba(5, 150, 105, 0.1); color: var(--success); border: 1px solid rgba(5, 150, 105, 0.2); }
+.conf-med { background: rgba(245, 158, 11, 0.1); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.2); }
+.conf-low { background: rgba(220, 38, 38, 0.1); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.2); }
+
+.assess-table {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  font-size: 13px; border-radius: var(--radius-xs); overflow: hidden;
+}
+.assess-table th {
+  background: rgba(99, 102, 241, 0.06);
+  padding: 10px 14px; text-align: left;
+  font-family: var(--font-display); font-weight: 600;
+  color: var(--text-secondary); font-size: 12px;
+  letter-spacing: 0.03em; text-transform: uppercase;
+  border-bottom: 2px solid rgba(99, 102, 241, 0.1);
+}
+.assess-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+  color: var(--text);
+}
+.assess-table tr:hover td { background: rgba(99, 102, 241, 0.02); }
+.assess-table tr:last-child td { border-bottom: none; }
+
+/* ═══════════════════════════════════════════════════
+   12. Result (Step 5)
+   ═══════════════════════════════════════════════════ */
+.result-card { text-align: center; padding: 44px 32px; }
+.result-card .icon {
+  font-size: 64px; margin-bottom: 18px;
+  animation: resultPop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) 0.2s both;
+}
+@keyframes resultPop {
+  from { opacity: 0; transform: scale(0.3); }
+  to { opacity: 1; transform: scale(1); }
+}
+.result-card h2 {
+  font-family: var(--font-display);
+  color: var(--success); font-size: 24px;
+  margin-bottom: 8px; justify-content: center;
+}
+.result-card h2::before { display: none; }
+
+.result-info {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  margin-top: 28px; text-align: left;
+}
+.result-item {
+  background: rgba(255,255,255,0.5);
+  border: 1px solid rgba(0,0,0,0.04);
+  padding: 16px 18px; border-radius: var(--radius-sm);
+  transition: all var(--transition);
+}
+.result-item:hover {
+  background: rgba(255,255,255,0.7);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+}
+.result-item .label {
+  font-size: 12px; color: var(--text-muted);
+  font-weight: 500; letter-spacing: 0.02em;
+  text-transform: uppercase; margin-bottom: 4px;
+}
+.result-item .value {
+  font-size: 17px; font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--primary);
+}
+
+/* ═══════════════════════════════════════════════════
+   13. Step Transition Animation
+   ═══════════════════════════════════════════════════ */
+.animate-in {
+  animation: cardIn 0.55s cubic-bezier(0.23, 1, 0.32, 1) both !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   14. Responsive
+   ═══════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  .brand-header { padding: 16px 16px 0; flex-wrap: wrap; gap: 8px; }
+  .wizard-container { padding: 12px 16px 32px; }
+  .card { padding: 22px 18px; border-radius: 16px; }
+  .form-row { grid-template-columns: 1fr; }
+  .module-grid { grid-template-columns: 1fr; }
+  .chat-body { height: 320px; }
+  .chat-bubble { max-width: 88%; }
+  .step-indicator { padding: 8px 16px; }
+  .step-dot { width: 30px; height: 30px; font-size: 12px; }
+  .step-line { width: 28px; }
+  .result-info { grid-template-columns: 1fr; }
+  .ai-badge { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════
+   15. Utilities
+   ═══════════════════════════════════════════════════ */
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- ===== Animated Background ===== -->
+<div class="bg-effects" aria-hidden="true">
+  <div class="bg-orb bg-orb-1"></div>
+  <div class="bg-orb bg-orb-2"></div>
+  <div class="bg-orb bg-orb-3"></div>
+  <div class="bg-orb bg-orb-4"></div>
+  <div class="bg-grid"></div>
+  <div class="bg-noise"></div>
+</div>
+
+<!-- ===== Brand Header ===== -->
+<header class="brand-header">
+  <div class="brand-left">
+    <div class="brand-mark">C</div>
+    <div>
+      <div class="brand-name">CRETAS</div>
+      <div class="brand-sub">白垩纪食品溯源系统</div>
+    </div>
+  </div>
+  <div class="ai-badge">AI 智能入驻</div>
+</header>
+
+<!-- ===== Wizard ===== -->
+<div class="wizard-container">
+  <!-- Step Indicator -->
+  <div class="step-indicator" id="stepIndicator">
+    <div class="step-dot active" data-step="1">1</div>
+    <div class="step-line"></div>
+    <div class="step-dot" data-step="2">2</div>
+    <div class="step-line"></div>
+    <div class="step-dot" data-step="3">3</div>
+    <div class="step-line"></div>
+    <div class="step-dot" data-step="4">4</div>
+    <div class="step-line"></div>
+    <div class="step-dot" data-step="5">5</div>
+  </div>
+
+  <!-- Step 1: Basic Info -->
+  <div id="step1" class="card">
+    <h2>工厂基本信息</h2>
+    <p style="color:var(--text-secondary);margin:-12px 0 22px;font-size:14px;">请填写您的工厂信息，帮助 AI 更好地了解您的需求</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label><span class="req">*</span> 工厂名称</label>
+        <input id="factoryName" placeholder="如：六膳门食品加工厂">
+      </div>
+      <div class="form-group">
+        <label>联系人</label>
+        <input id="contactName" placeholder="负责人姓名">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>联系电话</label>
+        <input id="contactPhone" placeholder="手机号码">
+      </div>
+      <div class="form-group">
+        <label>行业</label>
+        <select id="industry">
+          <option value="">请选择行业</option>
+          <option value="肉类加工">肉类加工</option>
+          <option value="水产加工">水产加工</option>
+          <option value="乳制品">乳制品</option>
+          <option value="烘焙食品">烘焙食品</option>
+          <option value="果蔬加工">果蔬加工</option>
+          <option value="饮料">饮料</option>
+          <option value="调味品">调味品</option>
+          <option value="冷冻食品">冷冻食品</option>
+          <option value="休闲食品">休闲食品</option>
+          <option value="粮油加工">粮油加工</option>
+          <option value="其他">其他</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>工厂规模</label>
+        <select id="scale">
+          <option value="">请选择</option>
+          <option value="小型(50人以下)">小型 (50人以下)</option>
+          <option value="中型(50-200人)">中型 (50-200人)</option>
+          <option value="大型(200-500人)">大型 (200-500人)</option>
+          <option value="超大型(500人以上)">超大型 (500人以上)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>主要产品</label>
+        <input id="products" placeholder="如：猪肉香肠、腊肉、火腿">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>工厂简介 (可选)</label>
+      <textarea id="description" rows="3" placeholder="简要描述您的工厂情况、当前信息化水平..."></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="goToStep2()">下一步 →</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Module Selection -->
+  <div id="step2" class="card hidden">
+    <h2>选择功能模块</h2>
+    <p style="color:var(--text-secondary);margin:-12px 0 22px;font-size:14px;">请选择您需要的系统模块（至少选1个），AI 将针对选中模块与您深入对话</p>
+    <div class="module-grid" id="moduleGrid"></div>
+    <div class="btn-row">
+      <button class="btn btn-outline" onclick="goToStep(1)">← 上一步</button>
+      <button class="btn btn-primary" id="btnStep2Next" onclick="goToStep3()" disabled>下一步 →</button>
+    </div>
+  </div>
+
+  <!-- Step 3: AI Chat -->
+  <div id="step3" class="card hidden" style="padding:0;">
+    <div class="chat-header">
+      <div>
+        <strong>AI 需求调研</strong>
+        <div class="module-label" id="chatModuleLabel">模块 1/4: 人效数据采集</div>
+      </div>
+      <button class="btn btn-outline" onclick="skipModule()">跳过此模块</button>
+    </div>
+    <div class="chat-body" id="chatBody"></div>
+    <div class="chat-footer">
+      <input id="chatInput" placeholder="请输入或选择上方快捷回复..." onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="btn btn-primary" onclick="sendChat()">发送</button>
+    </div>
+    <div class="step3-bottom-bar">
+      <button class="btn btn-outline" onclick="goToStep(2)">← 返回模块选择</button>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-success hidden" id="btnNextModule" onclick="nextModule()">继续下一模块 →</button>
+        <button class="btn btn-success hidden" id="btnToAssess" onclick="goToStep4()">生成评估报告</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4: Assessment -->
+  <div id="step4" class="card hidden">
+    <h2>AI 评估结果</h2>
+    <div id="assessContent">
+      <div style="text-align:center;padding:44px;color:var(--text-muted);">
+        <div class="chat-loading" style="justify-content:center;"><div class="dots"><span></span><span></span><span></span></div> AI 正在分析对话记录并生成评估...</div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-outline" onclick="goToStep(3)">← 返回对话</button>
+      <button class="btn btn-success" id="btnFinalize" onclick="goToStep5()" disabled>确认创建工厂</button>
+    </div>
+  </div>
+
+  <!-- Step 5: Result -->
+  <div id="step5" class="card hidden">
+    <div class="result-card" id="resultContent">
+      <div style="text-align:center;padding:44px;color:var(--text-muted);">
+        <div class="chat-loading" style="justify-content:center;"><div class="dots"><span></span><span></span><span></span></div> 正在创建工厂...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== Configuration ==========
+const API_BASE = '/api/public/client-requirement';
+
+// ========== MODULES constant (field catalog) ==========
+const MODULES = [
+  {
+    id: "m0", name: "人效数据采集", icon: "🎯",
+    desc: "视觉识别补充的人工录入字段",
+    sections: [
+      { id: "s-vl-1", title: "工人身份信息", fields: [{name:"工号"},{name:"姓名"},{name:"班组"},{name:"工种/岗位"},{name:"技能等级"},{name:"时薪/日薪"}]},
+      { id: "s-vl-2", title: "考勤打卡", fields: [{name:"打卡日期"},{name:"上班打卡时间"},{name:"下班打卡时间"},{name:"考勤状态"},{name:"打卡方式"}]},
+      { id: "s-vl-3", title: "工时记录", fields: [{name:"生产批次号"},{name:"签入时间"},{name:"签出时间"},{name:"休息时长"},{name:"实际工作时长"}]},
+      { id: "s-vl-4", title: "设备/工位绑定", fields: [{name:"工位编号"},{name:"工位名称"},{name:"绑定设备"},{name:"摄像头ID"}]},
+      { id: "s-vl-5", title: "产量数据", fields: [{name:"产品类型"},{name:"计划产量"},{name:"实际产量"},{name:"合格品数量"},{name:"不良品数量"},{name:"返工数量"}]},
+      { id: "s-vl-6", title: "工序关联", fields: [{name:"工序类型"},{name:"关联批次"},{name:"工序开始时间"},{name:"工序结束时间"}]}
+    ]
+  },
+  {
+    id: "m1", name: "基础数据", icon: "📦",
+    desc: "原材料、产品、供应商、客户、设备",
+    sections: [
+      { id: "s3-1", title: "原材料类型", fields: [{name:"材料编码"},{name:"材料名称"},{name:"材料分类"},{name:"计量单位"},{name:"参考单价"},{name:"存储类型"},{name:"保质期天数"},{name:"最低库存预警"},{name:"最高库存上限"},{name:"备注"}]},
+      { id: "s3-2", title: "产品类型", fields: [{name:"产品编码"},{name:"产品名称"},{name:"产品分类"},{name:"计量单位"},{name:"出厂单价"},{name:"产品规格"},{name:"包装规格"},{name:"保质期天数"},{name:"标准工时"},{name:"工序步骤"},{name:"产品图片"},{name:"备注"}]},
+      { id: "s3-3", title: "供应商信息", fields: [{name:"供应商编码"},{name:"供应商名称"},{name:"联系人"},{name:"联系电话"},{name:"邮箱"},{name:"地址"},{name:"营业执照号"},{name:"经营类型"},{name:"供应材料"},{name:"资质证书"},{name:"付款条件"},{name:"供货周期"},{name:"信用额度"},{name:"供应商评分"}]},
+      { id: "s3-4", title: "客户信息", fields: [{name:"客户编码"},{name:"客户名称"},{name:"客户类型"},{name:"行业"},{name:"联系人"},{name:"联系电话"},{name:"收货地址"},{name:"开票地址"},{name:"税号"},{name:"付款条件"},{name:"信用额度"},{name:"客户评分"}]},
+      { id: "s3-5", title: "设备信息", fields: [{name:"设备编码"},{name:"设备名称"},{name:"设备类型"},{name:"型号"},{name:"制造商"},{name:"序列号"},{name:"购入日期"},{name:"购入价格"},{name:"折旧年限"},{name:"每小时成本"},{name:"功率"},{name:"安装位置"},{name:"保养周期"},{name:"保修到期"}]},
+      { id: "s3-6", title: "产品配方（BOM）", fields: [{name:"产品类型"},{name:"原材料类型"},{name:"标准用量"},{name:"得率"},{name:"参考单价"},{name:"税率"}]}
+    ]
+  },
+  {
+    id: "m2", name: "生产管理", icon: "🏭",
+    desc: "生产计划、批次执行、工序记录、质检",
+    sections: [
+      { id: "s4-2", title: "生产计划", fields: [{name:"计划编号"},{name:"产品类型"},{name:"计划数量"},{name:"计量单位"},{name:"计划开始时间"},{name:"计划结束时间"},{name:"优先级"},{name:"计划状态"},{name:"计划类型"},{name:"来源类型"},{name:"客户订单号"},{name:"客户名称"},{name:"预估材料成本"},{name:"预估人工成本"},{name:"备注"}]},
+      { id: "s4-3", title: "生产批次", fields: [{name:"批次号"},{name:"关联计划"},{name:"产品类型"},{name:"计划产量"},{name:"投入量"},{name:"实际产量"},{name:"良品数量"},{name:"不良品数量"},{name:"得率"},{name:"生产效率"},{name:"批次状态"},{name:"质量状态"},{name:"开始时间"},{name:"结束时间"},{name:"使用设备"},{name:"生产负责人"},{name:"工人数量"},{name:"材料成本"},{name:"人工成本"},{name:"设备成本"},{name:"总成本"},{name:"单位成本"},{name:"备注"}]},
+      { id: "s4-4", title: "工序过程记录", fields: [{name:"关联批次"},{name:"工序类型"},{name:"开始时间"},{name:"结束时间"},{name:"工序时长"},{name:"投入重量"},{name:"产出重量"},{name:"损耗重量"},{name:"损耗率"},{name:"合格数量"},{name:"不合格数量"},{name:"返工数量"},{name:"环境温度"},{name:"产品温度"},{name:"目标温度"},{name:"使用设备"},{name:"设备运行时长"},{name:"设备停机时长"},{name:"设备OEE"},{name:"用水量"},{name:"用电量"},{name:"操作员"},{name:"工人数量"},{name:"pH值"},{name:"盐度"},{name:"ATP检测值"},{name:"备注"}]},
+      { id: "s4-5", title: "原材料消耗记录", fields: [{name:"关联生产批次"},{name:"原材料批次"},{name:"消耗数量"},{name:"单价"},{name:"消耗金额"},{name:"消耗时间"},{name:"记录人"},{name:"备注"}]},
+      { id: "s4-6", title: "质量检验记录", fields: [{name:"关联生产批次"},{name:"质检员"},{name:"检验日期"},{name:"抽样数量"},{name:"合格数量"},{name:"不合格数量"},{name:"合格率"},{name:"检验结论"},{name:"检验详情"}]}
+    ]
+  },
+  {
+    id: "m3", name: "人效管理", icon: "👷",
+    desc: "员工考勤、工时统计、人工成本",
+    sections: [
+      { id: "s5-1", title: "考勤打卡记录", fields: [{name:"员工"},{name:"打卡日期"},{name:"上班打卡时间"},{name:"下班打卡时间"},{name:"休息开始时间"},{name:"休息结束时间"},{name:"工作时长"},{name:"休息时长"},{name:"考勤状态"},{name:"打卡位置"},{name:"打卡设备"}]},
+      { id: "s5-2", title: "生产批次工时记录", fields: [{name:"生产批次"},{name:"员工"},{name:"签入时间"},{name:"签出时间"},{name:"工作时长"},{name:"人工成本"},{name:"分配人"},{name:"状态"},{name:"备注"}]}
+    ]
+  },
+  {
+    id: "m4", name: "仓储物流", icon: "🚚",
+    desc: "原材料入库、成品出货、溯源标签",
+    sections: [
+      { id: "s4-1", title: "原材料入库", fields: [{name:"批次号"},{name:"原材料类型"},{name:"供应商"},{name:"入库数量"},{name:"计量单位"},{name:"单件重量"},{name:"进货单价"},{name:"入库日期"},{name:"生产日期"},{name:"到期日期"},{name:"存储位置"},{name:"质检证书"},{name:"入库状态"},{name:"备注"}]},
+      { id: "s4-7", title: "出货发运记录", fields: [{name:"出货单号"},{name:"客户"},{name:"订单号"},{name:"产品名称"},{name:"出货数量"},{name:"计量单位"},{name:"单价"},{name:"总金额"},{name:"发货日期"},{name:"收货地址"},{name:"物流公司"},{name:"运单号"},{name:"出货状态"},{name:"备注"}]},
+      { id: "s4-8", title: "溯源标签", fields: [{name:"标签编码"},{name:"标签类型"},{name:"关联类型"},{name:"关联批次"},{name:"溯源码"},{name:"二维码内容"},{name:"产品名称"},{name:"产品规格"},{name:"生产日期"},{name:"保质期"},{name:"到期日期"},{name:"标签状态"},{name:"打印次数"},{name:"贴标时间"}]}
+    ]
+  },
+  {
+    id: "m5", name: "其他", icon: "📊",
+    desc: "废弃处置、环境监控",
+    sections: [
+      { id: "s6-1", title: "废弃处置记录", fields: [{name:"处置类型"},{name:"数量"},{name:"原因"},{name:"日期"},{name:"处置方式"},{name:"预估损失"},{name:"实际损失"},{name:"回收价值"},{name:"审批人"},{name:"审批日期"}]},
+      { id: "s7-1", title: "环境监控数据", fields: [{name:"监控设备"},{name:"数据类型"},{name:"监控值"},{name:"位置"},{name:"采集时间"},{name:"数据来源"}]}
+    ]
+  }
+];
+
+const TOTAL_FIELDS = MODULES.reduce((sum, m) => sum + m.sections.reduce((s, sec) => s + sec.fields.length, 0), 0);
+
+// ========== State ==========
+let state = {
+  currentStep: 1,
+  companyId: null,
+  selectedModules: [],
+  currentModuleIndex: 0,
+  conversations: {},
+  moduleSummaries: {},
+  completedModules: [],
+  chatLoading: false,
+  assessmentData: null,
+  resultData: null,
+};
+
+try {
+  const saved = localStorage.getItem('onboarding_wizard_state');
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    Object.assign(state, parsed);
+  }
+} catch(e) {}
+
+function saveState() {
+  try { localStorage.setItem('onboarding_wizard_state', JSON.stringify(state)); } catch(e) {}
+}
+
+// ========== Step Navigation ==========
+function goToStep(n) {
+  state.currentStep = n;
+  saveState();
+  renderStep();
+}
+
+function renderStep() {
+  for (let i = 1; i <= 5; i++) {
+    const el = document.getElementById('step' + i);
+    const wasHidden = el.classList.contains('hidden');
+    el.classList.toggle('hidden', i !== state.currentStep);
+    // Trigger animation when step becomes visible
+    if (wasHidden && i === state.currentStep) {
+      el.classList.remove('animate-in');
+      void el.offsetHeight;
+      el.classList.add('animate-in');
+    }
+  }
+  document.querySelectorAll('.step-dot').forEach(dot => {
+    const s = parseInt(dot.dataset.step);
+    dot.classList.remove('active', 'completed');
+    if (s === state.currentStep) dot.classList.add('active');
+    else if (s < state.currentStep) dot.classList.add('completed');
+  });
+  document.querySelectorAll('.step-line').forEach((line, i) => {
+    line.classList.toggle('completed', i + 1 < state.currentStep);
+  });
+  // Scroll to top smoothly
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ========== Step 1 ==========
+function goToStep2() {
+  const name = document.getElementById('factoryName').value.trim();
+  if (!name) { alert('请输入工厂名称'); return; }
+  goToStep(2);
+  renderModuleGrid();
+}
+
+// ========== Step 2: Module Selection ==========
+function renderModuleGrid() {
+  const grid = document.getElementById('moduleGrid');
+  grid.innerHTML = '';
+  MODULES.forEach((m, idx) => {
+    const fieldCount = m.sections.reduce((s, sec) => s + sec.fields.length, 0);
+    const selected = state.selectedModules.includes(m.id);
+    const div = document.createElement('div');
+    div.className = 'module-card' + (selected ? ' selected' : '');
+    div.onclick = () => toggleModule(m.id);
+    div.style.animationDelay = (idx * 0.06) + 's';
+    div.innerHTML = `
+      <div class="check">&#10003;</div>
+      <div class="icon">${m.icon}</div>
+      <div class="name">${m.name}</div>
+      <div class="desc">${m.desc}</div>
+      <div class="field-count">${fieldCount} 个数据字段</div>
+    `;
+    grid.appendChild(div);
+  });
+  updateStep2Btn();
+}
+
+function toggleModule(id) {
+  const idx = state.selectedModules.indexOf(id);
+  if (idx >= 0) state.selectedModules.splice(idx, 1);
+  else state.selectedModules.push(id);
+  saveState();
+  renderModuleGrid();
+}
+
+function updateStep2Btn() {
+  document.getElementById('btnStep2Next').disabled = state.selectedModules.length === 0;
+}
+
+// ========== Step 3: AI Chat ==========
+async function goToStep3() {
+  goToStep(3);
+  state.currentModuleIndex = 0;
+
+  // Create company if not yet created (needed for chat API)
+  if (!state.companyId) {
+    try {
+      const resp = await fetch(API_BASE + '/wizard/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(getBasicInfo())
+      });
+      const data = await resp.json();
+      if (data.success) {
+        state.companyId = data.data.companyId;
+        saveState();
+      }
+    } catch(e) {
+      console.error('Failed to create company:', e);
+    }
+  }
+
+  const selectedMods = state.selectedModules.filter(m => !state.completedModules.includes(m));
+  if (selectedMods.length === 0) {
+    goToStep4();
+    return;
+  }
+  await startModuleChat();
+}
+
+function getCurrentModuleId() {
+  const remaining = state.selectedModules.filter(m => !state.completedModules.includes(m));
+  return remaining.length > 0 ? remaining[0] : null;
+}
+
+async function startModuleChat() {
+  const moduleId = getCurrentModuleId();
+  if (!moduleId) { goToStep4(); return; }
+
+  const mod = MODULES.find(m => m.id === moduleId);
+  const completedCount = state.completedModules.length;
+  const totalSelected = state.selectedModules.length;
+  document.getElementById('chatModuleLabel').textContent =
+    `模块 ${completedCount + 1}/${totalSelected}: ${mod ? mod.name : moduleId}`;
+
+  if (!state.conversations[moduleId]) {
+    state.conversations[moduleId] = [];
+  }
+
+  renderChat();
+
+  if (state.conversations[moduleId].length === 0) {
+    state.chatLoading = true;
+    renderChat();
+
+    try {
+      const basicInfo = getBasicInfo();
+      const resp = await fetch(API_BASE + '/wizard/start-module', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          companyId: state.companyId || 'preview',
+          moduleId: moduleId,
+          selectedModules: state.selectedModules,
+          priorModulesSummary: state.moduleSummaries,
+        })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        const d = data.data;
+        state.conversations[moduleId].push({ role: 'assistant', content: d.message });
+        handleAIResponse(d);
+      } else {
+        console.warn('Start module API returned:', data.message);
+        const fallbackMsg = mod
+          ? `您好！让我们来了解一下贵工厂在「${mod.name}」方面的情况。请简要描述一下目前的管理流程和数据记录方式。`
+          : '您好！请描述一下贵工厂在这个模块方面的基本情况。';
+        state.conversations[moduleId].push({ role: 'assistant', content: fallbackMsg });
+      }
+    } catch(e) {
+      console.error('Start module chat failed:', e);
+      const fallbackMsg = mod
+        ? `您好！让我们来了解一下贵工厂在「${mod.name}」方面的情况。请简要描述一下目前的管理流程和数据记录方式。`
+        : '您好！请描述一下贵工厂在这个模块方面的基本情况。';
+      state.conversations[moduleId].push({ role: 'assistant', content: fallbackMsg });
+    }
+    state.chatLoading = false;
+    saveState();
+    renderChat();
+  }
+}
+
+async function sendChat() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg || state.chatLoading) return;
+  input.value = '';
+
+  const moduleId = getCurrentModuleId();
+  if (!moduleId) return;
+
+  state.conversations[moduleId].push({ role: 'user', content: msg });
+  state.chatLoading = true;
+  saveState();
+  renderChat();
+
+  try {
+    const resp = await fetch(API_BASE + '/wizard/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        companyId: state.companyId || 'preview',
+        moduleId: moduleId,
+        message: msg,
+        conversationHistory: state.conversations[moduleId],
+      })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      const d = data.data;
+      state.conversations[moduleId].push({ role: 'assistant', content: d.message });
+      handleAIResponse(d);
+    } else {
+      state.conversations[moduleId].push({ role: 'assistant', content: data.message || '抱歉，AI 暂时无法回复。请再试一次。' });
+    }
+  } catch(e) {
+    state.conversations[moduleId].push({ role: 'assistant', content: '抱歉，暂时无法连接AI服务。请稍后重试。' });
+  }
+
+  state.chatLoading = false;
+  saveState();
+  renderChat();
+}
+
+function sendQuickReply(text) {
+  document.getElementById('chatInput').value = text;
+  sendChat();
+}
+
+let lastAIResponse = null;
+
+function handleAIResponse(d) {
+  lastAIResponse = d;
+  if (d.moduleComplete) {
+    const moduleId = getCurrentModuleId();
+    if (moduleId && d.moduleSummary) {
+      state.moduleSummaries[moduleId] = d.moduleSummary;
+    }
+    if (moduleId && !state.completedModules.includes(moduleId)) {
+      state.completedModules.push(moduleId);
+    }
+    saveState();
+  }
+  updateChatButtons();
+}
+
+function updateChatButtons() {
+  const remaining = state.selectedModules.filter(m => !state.completedModules.includes(m));
+  const btnNext = document.getElementById('btnNextModule');
+  const btnAssess = document.getElementById('btnToAssess');
+
+  if (lastAIResponse && lastAIResponse.moduleComplete) {
+    if (remaining.length > 0) {
+      btnNext.classList.remove('hidden');
+      btnAssess.classList.add('hidden');
+    } else {
+      btnNext.classList.add('hidden');
+      btnAssess.classList.remove('hidden');
+    }
+  } else {
+    btnNext.classList.add('hidden');
+    btnAssess.classList.add('hidden');
+  }
+}
+
+function skipModule() {
+  const moduleId = getCurrentModuleId();
+  if (moduleId && !state.completedModules.includes(moduleId)) {
+    state.completedModules.push(moduleId);
+    state.moduleSummaries[moduleId] = '(跳过)';
+  }
+  saveState();
+  nextModule();
+}
+
+async function nextModule() {
+  lastAIResponse = null;
+  document.getElementById('btnNextModule').classList.add('hidden');
+  const remaining = state.selectedModules.filter(m => !state.completedModules.includes(m));
+  if (remaining.length === 0) {
+    goToStep4();
+  } else {
+    await startModuleChat();
+  }
+}
+
+function renderChat() {
+  const body = document.getElementById('chatBody');
+  const moduleId = getCurrentModuleId();
+  if (!moduleId) { body.innerHTML = ''; return; }
+
+  const msgs = state.conversations[moduleId] || [];
+  let html = '';
+
+  msgs.forEach((msg, i) => {
+    const isAI = msg.role === 'assistant';
+    html += `<div class="chat-msg ${isAI ? 'ai' : 'user'}">
+      <div class="chat-avatar">${isAI ? '🤖' : '👤'}</div>
+      <div class="chat-bubble">${escapeHtml(msg.content)}</div>
+    </div>`;
+  });
+
+  if (lastAIResponse && lastAIResponse.suggestedReplies && lastAIResponse.suggestedReplies.length > 0 && !state.chatLoading) {
+    html += '<div class="quick-replies">';
+    lastAIResponse.suggestedReplies.forEach(r => {
+      html += `<button class="quick-reply-btn" onclick="sendQuickReply('${escapeAttr(r)}')">${escapeHtml(r)}</button>`;
+    });
+    html += '</div>';
+  }
+
+  if (lastAIResponse && (lastAIResponse.topicsCovered?.length || lastAIResponse.topicsRemaining?.length)) {
+    html += '<div class="topics-bar">';
+    if (lastAIResponse.topicsCovered?.length) {
+      html += `<span class="covered">&#10003; 已覆盖: ${lastAIResponse.topicsCovered.join(', ')}</span>`;
+    }
+    if (lastAIResponse.topicsRemaining?.length) {
+      html += `<span class="remaining">&#9679; 待了解: ${lastAIResponse.topicsRemaining.join(', ')}</span>`;
+    }
+    html += '</div>';
+  }
+
+  if (lastAIResponse && lastAIResponse.moduleComplete) {
+    const summary = lastAIResponse.moduleSummary || state.moduleSummaries[moduleId] || '';
+    html += `<div class="module-complete-card">
+      <h4>&#10003; 模块调研完成</h4>
+      <p>${escapeHtml(summary)}</p>
+    </div>`;
+  }
+
+  if (state.chatLoading) {
+    html += `<div class="chat-loading"><div class="dots"><span></span><span></span><span></span></div> AI 正在思考...</div>`;
+  }
+
+  body.innerHTML = html;
+  body.scrollTop = body.scrollHeight;
+  updateChatButtons();
+}
+
+// ========== Step 4: Assessment ==========
+async function goToStep4() {
+  goToStep(4);
+  document.getElementById('btnFinalize').disabled = true;
+
+  try {
+    const resp = await fetch(API_BASE + '/wizard/assess', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        companyId: state.companyId || 'preview',
+        selectedModules: state.selectedModules,
+        allConversations: state.conversations,
+      })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      state.assessmentData = data.data;
+      saveState();
+      renderAssessment(data.data);
+      document.getElementById('btnFinalize').disabled = false;
+    } else {
+      document.getElementById('assessContent').innerHTML =
+        `<div style="color:var(--danger);padding:20px;">评估失败: ${data.message || '未知错误'}</div>`;
+    }
+  } catch(e) {
+    document.getElementById('assessContent').innerHTML =
+      `<div style="color:var(--danger);padding:20px;">无法连接AI服务: ${e.message}</div>`;
+  }
+}
+
+function renderAssessment(data) {
+  const confClass = data.confidence >= 0.8 ? 'conf-high' : data.confidence >= 0.6 ? 'conf-med' : 'conf-low';
+  let html = `
+    <div class="assess-summary">
+      <strong>${escapeHtml(data.summary || '')}</strong>
+      <span class="confidence ${confClass}" style="margin-left:12px;">
+        置信度: ${Math.round((data.confidence || 0) * 100)}%
+      </span>
+    </div>
+  `;
+
+  if (data.moduleInsights && Object.keys(data.moduleInsights).length > 0) {
+    html += '<h3 style="margin-top:16px;">模块洞察</h3>';
+    for (const [mid, insight] of Object.entries(data.moduleInsights)) {
+      const mod = MODULES.find(m => m.id === mid);
+      html += `<div style="padding:10px 14px;margin:6px 0;background:rgba(99,102,241,0.04);border:1px solid rgba(99,102,241,0.08);border-radius:10px;font-size:14px;">
+        <strong>${mod ? mod.icon + ' ' + mod.name : mid}:</strong> ${escapeHtml(insight)}
+      </div>`;
+    }
+  }
+
+  if (data.items && data.items.length > 0) {
+    html += `<h3 style="margin-top:20px;">字段评估 (${data.items.length} 项)</h3>
+    <div style="max-height:300px;overflow-y:auto;border-radius:10px;border:1px solid rgba(0,0,0,0.04);">
+    <table class="assess-table">
+      <thead><tr><th>模块</th><th>字段</th><th>适用</th><th>置信度</th><th>输入方式</th><th>理由</th></tr></thead>
+      <tbody>`;
+    data.items.forEach(item => {
+      const confC = item.confidence >= 0.8 ? 'conf-high' : item.confidence >= 0.6 ? 'conf-med' : 'conf-low';
+      html += `<tr>
+        <td>${escapeHtml(item.section || '')}</td>
+        <td>${escapeHtml(item.fieldName || '')}</td>
+        <td>${item.applicable ? '<span style="color:var(--success);font-weight:700;">&#10003;</span>' : '<span style="color:var(--text-muted);">&#10007;</span>'}</td>
+        <td><span class="confidence ${confC}" style="font-size:11px;">${Math.round(item.confidence * 100)}%</span></td>
+        <td><span style="font-size:12px;color:var(--text-secondary);">${escapeHtml(item.inputMode || '')}</span></td>
+        <td style="font-size:12px;color:var(--text-secondary);">${escapeHtml(item.reasoning || '')}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (data.stageTemplates && data.stageTemplates.length > 0) {
+    html += '<h3 style="margin-top:20px;">工序模板</h3><div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    data.stageTemplates.forEach(s => {
+      const style = s.isKey
+        ? 'background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);color:var(--primary);'
+        : 'background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.06);color:var(--text-secondary);';
+      html += `<div style="${style}padding:7px 14px;border-radius:100px;font-size:13px;font-weight:500;">
+        ${s.order}. ${escapeHtml(s.displayName || s.stageName)}${s.isKey ? ' <strong style="color:var(--primary);">(关键)</strong>' : ''}
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('assessContent').innerHTML = html;
+}
+
+// ========== Step 5: Finalize ==========
+async function goToStep5() {
+  goToStep(5);
+
+  if (!state.companyId) {
+    try {
+      const resp = await fetch(API_BASE + '/wizard/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(getBasicInfo())
+      });
+      const data = await resp.json();
+      if (data.success) {
+        state.companyId = data.data.companyId;
+        saveState();
+      }
+    } catch(e) {
+      console.error('Failed to create company:', e);
+    }
+  }
+
+  try {
+    const resp = await fetch(API_BASE + '/wizard/finalize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        companyId: state.companyId,
+        assessmentData: state.assessmentData || {},
+      })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      state.resultData = data.data;
+      saveState();
+      renderResult(data.data);
+    } else {
+      document.getElementById('resultContent').innerHTML =
+        `<div style="color:var(--danger);padding:20px;">创建失败: ${escapeHtml(data.message || '未知错误')}</div>`;
+    }
+  } catch(e) {
+    document.getElementById('resultContent').innerHTML =
+      `<div style="color:var(--danger);padding:20px;">连接失败: ${e.message}</div>`;
+  }
+}
+
+function renderResult(data) {
+  const users = data.users || [];
+  let usersHtml = '';
+  if (users.length > 0) {
+    usersHtml = users.map(u => `<div style="font-size:13px;color:var(--text);">${u.username || u.name} <span style="color:var(--text-muted);">(密码: 123456)</span></div>`).join('');
+  } else {
+    usersHtml = '<div style="font-size:13px;color:var(--text-muted);">默认用户已创建（密码: 123456）</div>';
+  }
+
+  document.getElementById('resultContent').innerHTML = `
+    <div class="icon">&#10003;</div>
+    <h2>工厂创建成功!</h2>
+    <p style="color:var(--text-secondary);font-size:15px;">您的工厂已成功入驻白垩纪食品溯源系统</p>
+    <div class="result-info">
+      <div class="result-item">
+        <div class="label">工厂 ID</div>
+        <div class="value">${escapeHtml(data.factoryId || '')}</div>
+      </div>
+      <div class="result-item">
+        <div class="label">表单模板</div>
+        <div class="value">${data.formTemplatesCreated || 0} 个</div>
+      </div>
+      <div class="result-item">
+        <div class="label">预警规则</div>
+        <div class="value">${data.alertsCreated || 0} 条</div>
+      </div>
+      <div class="result-item">
+        <div class="label">默认用户</div>
+        <div class="value">${usersHtml}</div>
+      </div>
+    </div>
+    <div style="margin-top:28px;">
+      <button class="btn btn-primary" onclick="resetWizard()">创建另一个工厂</button>
+    </div>
+  `;
+}
+
+function resetWizard() {
+  state = {
+    currentStep: 1,
+    companyId: null,
+    selectedModules: [],
+    currentModuleIndex: 0,
+    conversations: {},
+    moduleSummaries: {},
+    completedModules: [],
+    chatLoading: false,
+    assessmentData: null,
+    resultData: null,
+  };
+  localStorage.removeItem('onboarding_wizard_state');
+  document.getElementById('factoryName').value = '';
+  document.getElementById('contactName').value = '';
+  document.getElementById('contactPhone').value = '';
+  document.getElementById('industry').value = '';
+  document.getElementById('scale').value = '';
+  document.getElementById('products').value = '';
+  document.getElementById('description').value = '';
+  goToStep(1);
+}
+
+// ========== Helpers ==========
+function getBasicInfo() {
+  return {
+    factoryName: document.getElementById('factoryName').value.trim(),
+    contactName: document.getElementById('contactName').value.trim(),
+    contactPhone: document.getElementById('contactPhone').value.trim(),
+    industry: document.getElementById('industry').value,
+    scale: document.getElementById('scale').value,
+    products: document.getElementById('products').value.trim(),
+    description: document.getElementById('description').value.trim(),
+  };
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escapeAttr(str) {
+  if (!str) return '';
+  return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ========== Init ==========
+renderStep();
+if (state.currentStep === 2) renderModuleGrid();
+</script>
+</body>
+</html>

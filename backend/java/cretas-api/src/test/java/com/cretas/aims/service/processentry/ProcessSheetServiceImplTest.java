@@ -1,0 +1,1235 @@
+package com.cretas.aims.service.processentry;
+
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.RawInput;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef;
+import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
+
+/**
+ * SP-F Task 1.5 — ProcessSheetService.saveRow 新建路径集成测试 (真 H2 写库)。
+ *
+ * <p>模仿 ClerkProcessEntryIntegrationTest: SET REFERENTIAL_INTEGRITY FALSE 后种子,
+ * 让 MaterialConsumption / WIP MaterialBatch / SEASONING ProductionReport 真落库并断言。
+ *
+ * <p>覆盖:
+ * <ol>
+ *   <li>修油单行 (rawInputs + output>0) → RAW consumption + WIP 批 (CLERK_WIP, identity from output)</li>
+ *   <li>熟制混锅多源 + seasoningStep → 2 SEMI edges + SEASONING report + output identity</li>
+ *   <li>产出 productTypeId 缺失 → 400 (fail-closed)</li>
+ *   <li>output<=0 → DRAFT 行不物化</li>
+ *   <li>跨租户 planId → 403; 未知上游 batchNumber → 409</li>
+ * </ol>
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
+@Transactional
+@DisplayName("ProcessSheetServiceImplTest - SP-F Task 1.5 saveRow 新建路径")
+class ProcessSheetServiceImplTest {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private ProcessSheetService processSheetService;
+
+    @Autowired
+    private ProcessSheetServiceImpl processSheetServiceImpl;
+
+    @Autowired
+    private MaterialBatchRepository materialBatchRepo;
+
+    @Autowired
+    private MaterialConsumptionRepository consumptionRepo;
+
+    @Autowired
+    private ProductionBatchRepository batchRepo;
+
+    @Autowired
+    private ProductionReportRepository reportRepo;
+
+    @Autowired
+    private ProductionPlanRepository planRepo;
+
+    @Autowired
+    private ProcessSheetRowRepository rowRepo;
+
+    @Autowired
+    private ProcessSheetRowChangeLogRepository changeLogRepo;
+
+    @Autowired
+    private UserRepository userRepo;
+
+    @Autowired
+    private BomRecipeRepository recipeRepo;
+
+    @Autowired
+    private BomRecipeItemRepository recipeItemRepo;
+
+    @Autowired
+    private BomSeasoningItemRepository ingredientRepo;
+
+    @Autowired
+    private FactoryWarehouseRepository warehouseRepo;
+
+    @Autowired
+    private SemiFinishedInventoryRepository sfiRepo;
+
+    @Autowired
+    private ProductTypeRepository productTypeRepo;
+
+    private static final String FACTORY_ID = "PSF-FACTORY";
+    private static final String OTHER_FACTORY_ID = "PSF-OTHER";
+    private static final String PRODUCT_TYPE_ID = "PSF-PTYPE-001";
+    private static final String RAW_MATERIAL_TYPE_ID = "PSF-MATTYPE-PORK";
+
+    private static final BigDecimal RAW_PRICE = new BigDecimal("10.00"); // ¥10/kg
+
+    private Long operatorId;
+    private String planId;
+    private String rawBatchId;
+    private String rawWarehouseId;
+
+    @BeforeEach
+    void setUp() {
+        jdbcTemplate.execute("SET REFERENTIAL_INTEGRITY FALSE");
+
+        // User (valid created_by id)
+        User user = new User();
+        user.setFactoryId(FACTORY_ID);
+        user.setUsername("psf_clerk_" + UUID.randomUUID().toString().substring(0, 8));
+        user.setPasswordHash("$2a$10$DUMMYHASHFORTESTPLACEHOLDERONLY1");
+        user.setIsActive(true);
+        user = userRepo.saveAndFlush(user);
+        operatorId = user.getId();
+
+        seedProductType(PRODUCT_TYPE_ID);
+        seedProductType("PT-UPSTREAM-A");
+        seedProductType("PT-UPSTREAM-C");
+
+        FactoryWarehouse rawWarehouse = new FactoryWarehouse();
+        rawWarehouseId = "PSF-WH-LOG-" + UUID.randomUUID().toString().substring(0, 8);
+        rawWarehouse.setId(rawWarehouseId);
+        rawWarehouse.setFactoryId(FACTORY_ID);
+        rawWarehouse.setCode("WH-LOG");
+        rawWarehouse.setName("测试物流仓");
+        rawWarehouse.setType(WarehouseType.LOGISTICS);
+        rawWarehouse.setIsActive(true);
+        warehouseRepo.saveAndFlush(rawWarehouse);
+
+        // Plan (belongs to FACTORY_ID)
+        planId = "PSF-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(planId);
+        plan.setFactoryId(FACTORY_ID);
+        plan.setPlanNumber("PSF-PN-" + System.currentTimeMillis() % 100000);
+        plan.setProductTypeId(PRODUCT_TYPE_ID);
+        plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setPlannedUnit("kg");
+        plan.setStatus(ProductionPlanStatus.PENDING);
+        plan.setCreatedBy(operatorId);
+        plan.setIsLocked(false);
+        plan.setSkipProcessReporting(false);
+        plan.setCreatedAt(LocalDateTime.now());
+        plan.setUpdatedAt(LocalDateTime.now());
+        planRepo.save(plan);
+
+        // Raw material batch (the 修油 source) — carries materialTypeId for FK safety net
+        rawBatchId = "PSF-MB-RAW-" + UUID.randomUUID().toString().substring(0, 8);
+        MaterialBatch raw = new MaterialBatch();
+        raw.setId(rawBatchId);
+        raw.setFactoryId(FACTORY_ID);
+        raw.setBatchNumber("PSF-RAW-" + System.currentTimeMillis() % 100000);
+        raw.setMaterialTypeId(RAW_MATERIAL_TYPE_ID);
+        raw.setWarehouseId(rawWarehouseId);
+        raw.setReceiptQuantity(new BigDecimal("100.00"));
+        raw.setQuantityUnit("kg");
+        raw.setUsedQuantity(BigDecimal.ZERO);
+        raw.setReservedQuantity(BigDecimal.ZERO);
+        raw.setUnitPrice(RAW_PRICE);
+        raw.setStatus(MaterialBatchStatus.AVAILABLE);
+        raw.setReceiptDate(LocalDate.now());
+        raw.setCreatedBy(operatorId);
+        materialBatchRepo.saveAndFlush(raw);
+    }
+
+    private void seedProductType(String id) {
+        ProductType product = new ProductType();
+        product.setId(id);
+        product.setFactoryId(FACTORY_ID);
+        product.setCode(id);
+        product.setName(id);
+        product.setUnit("kg");
+        product.setCategory("SEMI_FINISHED");
+        product.setProductCategory("SEMI_FINISHED");
+        product.setIsActive(true);
+        product.setCreatedBy(operatorId);
+        productTypeRepo.saveAndFlush(product);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Builders
+    // ─────────────────────────────────────────────────────────────
+
+    private RawInput rawInput(String mbId, String qty) {
+        RawInput r = new RawInput();
+        r.setMaterialBatchId(mbId);
+        r.setQuantity(new BigDecimal(qty));
+        return r;
+    }
+
+    private UpstreamRef upstreamRef(String batchNumber, String feedKg) {
+        UpstreamRef u = new UpstreamRef();
+        u.setSourceBatchNumber(batchNumber);
+        u.setFeedQuantityKg(new BigDecimal(feedKg));
+        return u;
+    }
+
+    /** 种一行常驻半成品库存 (SFI), 供 SFI 投料存在性校验通过。 */
+    private void seedSfi(String intermediateBatchNo, String available) {
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(intermediateBatchNo)
+                .productTypeId(PRODUCT_TYPE_ID)
+                .producedQuantity(new BigDecimal(available))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal(available))
+                .unit("kg")
+                .build();
+        sfiRepo.saveAndFlush(sfi);
+    }
+
+    private ProcessSheetRowRequest baseReq(String clientRowId, String processCode,
+                                           int order, String output) {
+        ProcessSheetRowRequest r = new ProcessSheetRowRequest();
+        r.setClientRowId(clientRowId);
+        r.setProcessCode(processCode);
+        r.setProcessOrder(order);
+        r.setProcessName(processCode);
+        r.setProductTypeId(PRODUCT_TYPE_ID);
+        r.setFinished(false);
+        r.setOutputQuantity(new BigDecimal(output));
+        r.setUnit("kg");
+        return r;
+    }
+
+    /** Saves a xiuyou-style row and returns its result (materialized WIP). */
+    private ProcessSheetRowResult saveXiuyou(String clientRowId, String rawQty, String output) {
+        return saveXiuyou(clientRowId, rawQty, output, PRODUCT_TYPE_ID);
+    }
+
+    private ProcessSheetRowResult saveXiuyou(
+            String clientRowId, String rawQty, String output, String outputProductTypeId) {
+        ProcessSheetRowRequest req = baseReq(clientRowId, "xiuyou", 1, output);
+        req.setProductTypeId(outputProductTypeId);
+        req.setInputQuantity(new BigDecimal(rawQty));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, rawQty)));
+        return processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Tests
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("1: 修油行 → RAW provenance + CLERK_WIP 批, materialTypeId 来自产出产品")
+    void saveRow_xiuyou_writesRawConsumptionAndWipBatch() {
+        ProcessSheetRowResult result = saveXiuyou("row-xiuyou-1", "100", "80");
+
+        assertThat(result.isMaterialized()).as("output>0 → materialized").isTrue();
+        assertThat(result.isUpdated()).as("new create → updated=false").isFalse();
+        assertThat(result.getBatchNumber()).as("batchNumber 系统生成").isNotBlank();
+        assertThat(result.getBatchId()).isNotNull();
+
+        // ProductionBatch is CLERK_WIP，且 2026-08-11 起**也挂 planId**
+        ProductionBatch pb = batchRepo.findByIdAndFactoryId(result.getBatchId(), FACTORY_ID).orElseThrow();
+        assertThat(pb.getBatchType()).as("WIP → CLERK_WIP").isEqualTo("CLERK_WIP");
+        assertThat(pb.getProductionPlanId())
+                .as("WIP 也挂 planId —— DB 触发器把「无计划」当 LEGACY 老路拒绝(V20261029_77), "
+                        + "不挂就报不了工; 防重复计成本改由读取侧按 batch_type 排除")
+                .isEqualTo(planId);
+
+        // 防重复计成本的守卫搬到读取侧: 按 planId 查批次必须看不到这个 CLERK_WIP 批次。
+        // 这条断言承接了原来 "planId=null" 所守的东西 —— 若哪天有人把排除去掉,
+        // OrderCostBreakdownService / ProductionSummaryService / completeProduction 会重新
+        // 把中间工件当正式批次, 这里就会红。
+        assertThat(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, planId))
+                .as("按 planId 查批次不得返回 CLERK_WIP 中间工件(否则成本重复计/计划永远判不出完成)")
+                .noneMatch(b -> "CLERK_WIP".equals(b.getBatchType()));
+
+        // RAW MaterialConsumption on the new batch
+        List<MaterialConsumption> cons = consumptionRepo.findByProductionBatchId(result.getBatchId());
+        assertThat(cons).hasSize(1);
+        MaterialConsumption c = cons.get(0);
+        assertThat(c.getSourceType()).isEqualTo("RAW_MATERIAL");
+        assertThat(c.getBatchId()).as("consumes the raw batch").isEqualTo(rawBatchId);
+        assertThat(c.getQuantity()).isEqualByComparingTo("100");
+        // 100kg × ¥10 = ¥1000
+        assertThat(c.getTotalCost()).isEqualByComparingTo("1000.00");
+
+        // WIP MaterialBatch via findByFactoryIdAndSourceDocTypeAndSourceDocId
+        MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
+        assertThat(wip.getProductTypeId())
+                .as("WIP identity == row output product; raw only remains provenance")
+                .isEqualTo(PRODUCT_TYPE_ID);
+        assertThat(wip.getReceiptQuantity()).isEqualByComparingTo("80");
+        // unitPrice = rowTotalCost / output = 1000 / 80 = 12.5
+        assertThat(wip.getUnitPrice()).isEqualByComparingTo("12.5");
+
+        // yieldRate = 80/100*100 = 80
+        assertThat(result.getYieldRate()).isEqualByComparingTo("80");
+        assertThat(result.getRowTotalCost()).isEqualByComparingTo("1000.00");
+        assertThat(result.getUnitPrice()).isEqualByComparingTo("12.5");
+    }
+
+    @Test
+    @DisplayName("2: 熟制混锅 2 上游 + seasoningStep → provenance 全保留且 WIP identity 来自产出")
+    void saveRow_shuzhi_mixedPots_writesSemiEdgesAndSeasoning() {
+        // Two upstream 修油 WIP batches
+        ProcessSheetRowResult up1 = saveXiuyou("row-x1", "60", "50", "PT-UPSTREAM-A");
+        ProcessSheetRowResult up2 = saveXiuyou("row-x2", "60", "50", "PT-UPSTREAM-C");
+        MaterialBatch upstreamA = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(up1.getBatchId())).orElseThrow();
+        MaterialBatch upstreamC = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(up2.getBatchId())).orElseThrow();
+        assertThat(upstreamA.getProductTypeId()).isEqualTo("PT-UPSTREAM-A");
+        assertThat(upstreamC.getProductTypeId()).isEqualTo("PT-UPSTREAM-C");
+
+        // Recipe so seasoning cost > 0 (ACTIVE for PRODUCT_TYPE_ID)
+        seedSeasoningRecipe();
+
+        // 熟制 row: 2 upstreamSources by their batchNumbers, seasoningStep=true
+        ProcessSheetRowRequest req = baseReq("row-shuzhi-1", "shuzhi", 3, "90");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setSeasoningStep(true);
+        req.setPotCount(1);
+        req.setUpstreamSources(List.of(
+                upstreamRef(up1.getBatchNumber(), "50"),
+                upstreamRef(up2.getBatchNumber(), "50")
+        ));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isMaterialized()).isTrue();
+
+        // 2 SEMI_FINISHED MaterialConsumption edges
+        List<MaterialConsumption> cons = consumptionRepo.findByProductionBatchId(result.getBatchId());
+        List<MaterialConsumption> semi = cons.stream()
+                .filter(c -> "SEMI_FINISHED".equals(c.getSourceType()))
+                .toList();
+        assertThat(semi).as("2 SEMI edges (混锅 2 来源)").hasSize(2);
+        // each: 50kg × upstream unitPrice (¥12 = 600/50) = ¥600
+        BigDecimal semiTotal = semi.stream()
+                .map(MaterialConsumption::getTotalCost)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // up unitPrice = 600/50 = 12; 50×12 × 2 = 1200
+        assertThat(semiTotal).isEqualByComparingTo("1200.00");
+
+        // SEASONING ProductionReport on the cooked batch
+        List<ProductionReport> yields = reportRepo.findYieldReportsByBatch(FACTORY_ID, result.getBatchId());
+        assertThat(yields)
+                .as("SEASONING report present")
+                .anyMatch(r -> "SEASONING".equals(r.getCostCategory())
+                        && r.getMaterialCost() != null
+                        && r.getMaterialCost().signum() > 0);
+
+        // productTypeId belongs to the cooked output, never either upstream WIP.
+        MaterialBatch cookedWip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
+        assertThat(cookedWip.getProductTypeId())
+                .as("2→1 merge identity follows output product, not first input")
+                .isEqualTo(PRODUCT_TYPE_ID);
+    }
+
+    // Test 3 (missing output identity → 400) lives in ProcessSheetServiceImplNullLineageTest
+    // (legacy filename retained): a mocked upstream with a valid identity proves the service
+    // still fails closed instead of borrowing that first provenance value.
+
+    @Test
+    @DisplayName("4: output<=0 → DRAFT 行不物化")
+    void saveRow_outputZero_savesDraftNoMaterialize() {
+        ProcessSheetRowRequest req = baseReq("row-draft", "xiuyou", 1, "0");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isMaterialized()).as("output<=0 → not materialized").isFalse();
+        assertThat(result.getBatchId()).isNull();
+        assertThat(result.getBatchNumber()).isNull();
+        // No ProductionBatch created for this row → no consumption rows for a non-existent batch.
+    }
+
+    @Test
+    @DisplayName("正式报工: 已声明上游批次但投入为 0 → 400 且零持久化")
+    void submitRow_declaredUpstreamWithZeroFeed_rejectedBeforeWrites() {
+        ProcessSheetRowRequest req = baseReq("row-zero-upstream", "qidiao", 2, "5");
+        req.setFinished(true);
+        req.setProcessDate(LocalDate.of(2026, 7, 20));
+        // 即使客户端伪造正的汇总投入，也不能掩盖所选批次实际 feedQuantityKg=0。
+        req.setInputQuantity(new BigDecimal("4.5"));
+        req.setUpstreamSources(List.of(upstreamRef("CLK-W-ZERO", "0")));
+        long batchCountBefore = batchRepo.count();
+
+        assertThatThrownBy(() -> processSheetService.submitRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(400);
+                    assertThat(business.getErrorCode()).isEqualTo("PROCESS_SHEET_UPSTREAM_INPUT_REQUIRED");
+                    assertThat(business.getMessage()).contains("大于 0 的实际投入量");
+                });
+
+        assertThat(rowRepo.findByFactoryIdAndPlanId(FACTORY_ID, planId)).isEmpty();
+        assertThat(batchRepo.count()).isEqualTo(batchCountBefore);
+    }
+
+    @Test
+    @DisplayName("正式报工: 指定本计划 WIP 4.5kg → 原子耗尽且只生成 1 个 5 单位成品，重复提交不重复扣减")
+    void submitRow_inPlanWip_consumesExactBatchAndIsIdempotent() {
+        ProcessSheetRowResult upstream = saveXiuyou("row-upstream-4_5", "5", "4.5");
+        var before = processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1);
+        assertThat(before).singleElement().satisfies(item -> {
+            assertThat(item.getBatchNumber()).isEqualTo(upstream.getBatchNumber());
+            assertThat(item.getRemaining()).isEqualByComparingTo("4.5");
+        });
+
+        ProcessSheetRowRequest req = baseReq("row-finished-5", "qidiao", 2, "5");
+        req.setFinished(true);
+        req.setProcessDate(LocalDate.of(2026, 7, 20));
+        req.setInputQuantity(new BigDecimal("4.5"));
+        req.setUpstreamSources(List.of(upstreamRef(upstream.getBatchNumber(), "4.5")));
+
+        ProcessSheetRowResult submitted = processSheetService.submitRow(
+                FACTORY_ID, planId, req, operatorId);
+
+        assertThat(submitted.getSubmissionStatus()).isEqualTo(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        assertThat(submitted.isMaterialized()).isTrue();
+        var after = processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1);
+        assertThat(after).singleElement().satisfies(item -> {
+            assertThat(item.getBatchNumber()).isEqualTo(upstream.getBatchNumber());
+            assertThat(item.getUsed()).isEqualByComparingTo("4.5");
+            assertThat(item.getRemaining()).isEqualByComparingTo("0");
+            assertThat(item.getStatus()).isEqualTo("DEPLETED");
+        });
+        var finishedRows = processSheetService.getRows(FACTORY_ID, planId, "qidiao", 2);
+        assertThat(finishedRows).singleElement().satisfies(row -> {
+            assertThat(row.getSubmissionStatus()).isEqualTo(ProcessSheetRow.SUBMISSION_SUBMITTED);
+            assertThat(row.getPayload().getOutputQuantity()).isEqualByComparingTo("5");
+            assertThat(row.getPayload().getUpstreamSources()).singleElement().satisfies(source -> {
+                assertThat(source.getSourceBatchNumber()).isEqualTo(upstream.getBatchNumber());
+                assertThat(source.getFeedQuantityKg()).isEqualByComparingTo("4.5");
+            });
+        });
+
+        assertThatThrownBy(() -> processSheetService.submitRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("PROCESS_SHEET_ROW_ALREADY_SUBMITTED"));
+        assertThat(processSheetService.getRows(FACTORY_ID, planId, "qidiao", 2)).hasSize(1);
+        assertThat(processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1))
+                .singleElement().satisfies(item -> assertThat(item.getUsed()).isEqualByComparingTo("4.5"));
+    }
+
+    @Test
+    @DisplayName("5a: 跨租户 planId → 403")
+    void saveRow_crossTenantPlan_throws403() {
+        // A plan belonging to OTHER_FACTORY_ID
+        String otherPlanId = "PSF-OTHERPLAN-" + UUID.randomUUID().toString().substring(0, 8);
+        ProductionPlan op = new ProductionPlan();
+        op.setId(otherPlanId);
+        op.setFactoryId(OTHER_FACTORY_ID);
+        op.setPlanNumber("PSF-OPN-" + System.currentTimeMillis() % 100000);
+        op.setProductTypeId(PRODUCT_TYPE_ID);
+        op.setPlannedQuantity(new BigDecimal("100"));
+        op.setPlannedUnit("kg");
+        op.setStatus(ProductionPlanStatus.PENDING);
+        op.setCreatedBy(operatorId);
+        op.setIsLocked(false);
+        op.setSkipProcessReporting(false);
+        op.setCreatedAt(LocalDateTime.now());
+        op.setUpdatedAt(LocalDateTime.now());
+        planRepo.saveAndFlush(op);
+
+        ProcessSheetRowRequest req = baseReq("row-x", "xiuyou", 1, "80");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+
+        // FACTORY_ID user accessing OTHER_FACTORY_ID's plan → 403
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, otherPlanId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(403));
+    }
+
+    @Test
+    @DisplayName("5b: 未知上游 batchNumber → 409")
+    void saveRow_unknownUpstreamBatch_throws409() {
+        ProcessSheetRowRequest req = baseReq("row-unknownup", "shuzhi", 3, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        req.setUpstreamSources(List.of(upstreamRef("DOES-NOT-EXIST-BN", "50")));
+
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SFI feedstock (半成品库存可作逐道录入投料来源)
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("SFI-1: 混批 原料+SFI半成品投料 → 仅 RAW consumption 落库, SFI 投料不写 MaterialConsumption")
+    void saveRow_rawPlusSfiFeed_onlyRawConsumptionWritten() {
+        seedSfi("SFI-STANDING-1", "50");   // 保存需 SFI 真实存在 (loud-fail 存在性校验)
+        ProcessSheetRowRequest req = baseReq("row-raw-sfi", "shuzhi", 2, "90");
+        req.setInputQuantity(new BigDecimal("120"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-1", "20");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isMaterialized()).isTrue();
+        // 仅 1 条 RAW 消耗边 — SFI 投料 (semiFinished=true) 不写 MaterialConsumption
+        List<MaterialConsumption> cons = consumptionRepo.findByProductionBatchId(result.getBatchId());
+        assertThat(cons).as("仅 RAW; SFI 投料不写消耗边").hasSize(1);
+        assertThat(cons.get(0).getSourceType()).isEqualTo("RAW_MATERIAL");
+        assertThat(cons.get(0).getBatchId()).isEqualTo(rawBatchId);
+        // 无任何 SEMI_FINISHED 消耗边 (SFI 不解析为 in-plan WIP)
+        assertThat(cons).noneMatch(c -> "SEMI_FINISHED".equals(c.getSourceType()));
+        // WIP productTypeId 来自产出产品 (RAW/SFI 都只保留为 provenance)
+        MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())).orElseThrow();
+        assertThat(wip.getProductTypeId()).isEqualTo(PRODUCT_TYPE_ID);
+        // 行 payload 持久化 semiFinished 标记 (跨保存往返 → 小结时 consumeClerkSemi 可识别)
+        var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
+        assertThat(views).hasSize(1);
+        UpstreamRef persisted = views.get(0).getPayload().getUpstreamSources().get(0);
+        assertThat(persisted.getSourceBatchNumber()).isEqualTo("SFI-STANDING-1");
+        assertThat(persisted.isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-2: 半成品直接产成品 — 成品道仅 SFI 投料 → 物化(无 WIP/无消耗边)")
+    void saveRow_finishedSfiOnly_materializesWithNoConsumption() {
+        seedSfi("SFI-STANDING-2", "100");   // 保存需 SFI 真实存在
+        ProcessSheetRowRequest req = baseReq("row-sfi-finished", "qidiao", 5, "50");
+        req.setFinished(true);
+        req.setInputQuantity(new BigDecimal("60"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-2", "60");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isMaterialized()).as("成品道 output>0 → materialized").isTrue();
+        assertThat(result.getBatchId()).isNotNull();
+        // 无消耗边 (SFI 投料不写 MaterialConsumption; 无 raw 来源)
+        assertThat(consumptionRepo.findByProductionBatchId(result.getBatchId()))
+                .as("成品道仅 SFI 投料 → 0 消耗边").isEmpty();
+        // 成品道不物化 WIP MaterialBatch (materializeBatch 仅 !finished 时建 WIP)
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(result.getBatchId())))
+                .as("成品道无 WIP").isEmpty();
+        // payload round-trip 保 semiFinished
+        var views = processSheetService.getRows(FACTORY_ID, planId, "qidiao", 5);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getPayload().getUpstreamSources().get(0).isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-3 (option F): 中间道(非成品)仅 SFI 投料 + output>0 → 保存成功, 不物化 WIP/ProductionBatch, batchNumber=SFI 锚, rowStatus=SAVED_SFI, 成本诚实 null")
+    void saveRow_nonFinishedSfiOnly_savesToSfiNoWip() {
+        seedSfi("SFI-STANDING-3", "50");   // 保存需 SFI 真实存在 (loud-fail 存在性校验)
+        ProcessSheetRowRequest req = baseReq("row-sfi-mid", "shuzhi", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-3", "50");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        // #1252 中段起步: 不物化 raw-lineage WIP (SFI 只有 product-type 维度), 但产出<b>保存时</b>即入 SFI 库 → materialized=true
+        assertThat(result.isMaterialized()).as("产出保存时即入 SFI 库 (下游可选) → materialized").isTrue();
+        assertThat(result.getBatchId()).as("无 WIP/ProductionBatch").isNull();
+        // batchNumber = SFI 锚 (SFI IN 定位), yieldRate 仍算 (40/50*100=80), 成本诚实 null
+        String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
+                .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
+        assertThat(result.getYieldRate()).isEqualByComparingTo("80");
+        assertThat(result.getRowTotalCost()).as("SFI 成本诚实 null (不假成 0)").isNull();
+
+        // 无任何 WIP MaterialBatch 落库 (未物化)
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", "0"))
+                .as("不物化 → 无 WIP (探测无副作用)").isEmpty();
+
+        // #1252 核心 oracle: 产出已 SFI IN 入库 → 锚 SFI 行 producedQuantity=40, 阶段序=本道 (下游道保存期可选)
+        SemiFinishedInventory posted = sfiRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, expectedAnchor)
+                .orElseThrow();
+        assertThat(posted.getProducedQuantity()).as("产出保存时即入 SFI 库").isEqualByComparingTo("40");
+        assertThat(posted.getAvailableQuantity()).isEqualByComparingTo("40");
+        assertThat(posted.getProcessOrder()).as("阶段序落值供 picker 可见性过滤").isEqualTo(2);
+        assertThat(posted.getUnitCost()).as("输入 SFI 成本未接通 → 产出成本诚实 null").isNull();
+
+        // 行持久化: rowStatus=SAVED_SFI, batchNumber=锚, 未物化, payload 保 semiFinished
+        var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
+        assertThat(views.get(0).isMaterialized()).isFalse();
+        assertThat(views.get(0).getBatchNumber()).isEqualTo(expectedAnchor);
+        assertThat(views.get(0).getPayload().getUpstreamSources().get(0).isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-3b (option F): DRAFT(output≤0) 再存为纯 SFI 中间道(output>0) → resave 不物化, SAVED_SFI")
+    void resave_draftToPureSfi_savesToSfiNoWip() {
+        seedSfi("SFI-STANDING-3B", "50");
+        // 先存 DRAFT (output 0)
+        ProcessSheetRowRequest draft = baseReq("row-sfi-mid-b", "shuzhi", 2, "0");
+        draft.setOutputQuantity(BigDecimal.ZERO);
+        ProcessSheetRowResult d = processSheetService.saveRow(FACTORY_ID, planId, draft, operatorId);
+        assertThat(d.isMaterialized()).isFalse();
+
+        // 再存: 纯 SFI 中间道 output>0
+        ProcessSheetRowRequest req = baseReq("row-sfi-mid-b", "shuzhi", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-3B", "50");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        assertThat(result.isUpdated()).as("resave → updated=true").isTrue();
+        assertThat(result.isMaterialized()).as("纯 SFI 产出保存时入 SFI 库 → materialized").isTrue();
+        assertThat(result.getBatchId()).isNull();
+        String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
+                .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
+        var views = processSheetService.getRows(FACTORY_ID, planId, "shuzhi", 2);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
+        // DRAFT→SFI 只入库一次 (DRAFT 阶段无入库, 无冲销) → 产出 40 (非 0/80)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, expectedAnchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("40");
+    }
+
+    @Test
+    @DisplayName("SFI-4: 引用不存在的半成品库存 batchNo → 保存即 409 (loud-fail, 禁止降级 — 不留到小结产 phantom)")
+    void saveRow_sfiNonexistent_throws409AtSave() {
+        ProcessSheetRowRequest req = baseReq("row-sfi-missing", "qidiao", 5, "50");
+        req.setFinished(true);
+        req.setInputQuantity(new BigDecimal("60"));
+        UpstreamRef sfi = upstreamRef("SFI-NOPE-XYZ", "60");   // 未 seed → 不存在
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_NOT_FOUND");
+                    assertThat(ex.getMessage()).contains("半成品库存不存在");
+                });
+    }
+
+    @Test
+    @DisplayName("SFI-5 (option F, 单上游道): 滚揉道(非混锅)仅 SFI 投料 + output>0 → SAVED_SFI, 不物化 WIP, batchNumber=SFI 锚 (③=F 对单上游道 process-agnostic — '从滚揉起步选半成品')")
+    void saveRow_singleUpstreamGunrou_sfiOnly_savesToSfiNoWip() {
+        // 客户 07-01: 从滚揉起步选半成品 (链起步单上游道纯 SFI 投料)。滚揉不是混锅道 (熟制/气调),
+        //   但后端 isPureSemiFinishedFed 只看 upstreamSources.semiFinished + 无 rawMaterialInputs,
+        //   完全 process-agnostic → 单上游道同样走 ③=F SAVED_SFI 路径 (镜像 SFI-3 的 shuzhi 版)。
+        seedSfi("SFI-STANDING-GR", "80");
+        ProcessSheetRowRequest req = baseReq("row-sfi-gunrou", "gunrou", 2, "60");
+        req.setInputQuantity(new BigDecimal("80"));
+        UpstreamRef sfi = upstreamRef("SFI-STANDING-GR", "80");
+        sfi.setSemiFinished(true);
+        req.setUpstreamSources(List.of(sfi));
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        // 纯 SFI 单上游道: 不物化 raw-lineage WIP, 产出保存时即入 SFI (#1252)
+        assertThat(result.isMaterialized()).as("纯 SFI 单上游道产出入 SFI 库 → materialized").isTrue();
+        assertThat(result.getBatchId()).as("无 WIP/ProductionBatch").isNull();
+        String expectedAnchor = com.cretas.aims.service.wip.WipInventoryService
+                .clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(result.getBatchNumber()).isEqualTo(expectedAnchor);
+        // yieldRate 仍算 (60/80*100=75); 成本诚实 null
+        assertThat(result.getYieldRate()).isEqualByComparingTo("75");
+        assertThat(result.getRowTotalCost()).as("SFI 成本诚实 null").isNull();
+
+        // 行持久化: rowStatus=SAVED_SFI, batchNumber=锚, 未物化, payload 保 semiFinished
+        var views = processSheetService.getRows(FACTORY_ID, planId, "gunrou", 2);
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).getRowStatus()).isEqualTo(ProcessSheetRow.STATUS_SAVED_SFI);
+        assertThat(views.get(0).isMaterialized()).isFalse();
+        assertThat(views.get(0).getBatchNumber()).isEqualTo(expectedAnchor);
+        UpstreamRef persisted = views.get(0).getPayload().getUpstreamSources().get(0);
+        assertThat(persisted.getSourceBatchNumber()).isEqualTo("SFI-STANDING-GR");
+        assertThat(persisted.isSemiFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SFI-6 (#1252 核心 oracle): 从中段起步 — 滚揉(注入)产出保存即入 SFI → 下游 焯水 能引用其产出保存成功 (链不再阻断)")
+    void injectionMidChain_downstreamCanReferenceOutput_chainNotBlocked() {
+        // 从仓库 SFI 起步: 滚揉(order=2, 注入)吃外部 SFI → 产出 40 保存时入 SFI 锚
+        seedSfi("SFI-WAREHOUSE-6", "50");
+        ProcessSheetRowRequest gunrou = baseReq("row-inj-gunrou", "gunrou", 2, "40");
+        gunrou.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src = upstreamRef("SFI-WAREHOUSE-6", "50");
+        src.setSemiFinished(true);
+        gunrou.setUpstreamSources(List.of(src));
+        ProcessSheetRowResult gr = processSheetService.saveRow(FACTORY_ID, planId, gunrou, operatorId);
+
+        String anchor = com.cretas.aims.service.wip.WipInventoryService.clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(gr.getBatchNumber()).isEqualTo(anchor);
+        // 产出已入 SFI 锚 (下游保存期解析上游能命中 → 不再 SFI_NOT_FOUND 阻断)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getAvailableQuantity()).isEqualByComparingTo("40");
+
+        // 下游 焯水(order=3) 引用 滚揉 的产出 (= SFI 锚, semiFinished) → 保存成功 (修复前会 409 SFI_NOT_FOUND)
+        ProcessSheetRowRequest chaoshui = baseReq("row-inj-chaoshui", "chaoshui", 3, "35");
+        chaoshui.setInputQuantity(new BigDecimal("40"));
+        UpstreamRef up = upstreamRef(anchor, "40");
+        up.setSemiFinished(true);
+        chaoshui.setUpstreamSources(List.of(up));
+        ProcessSheetRowResult cs = processSheetService.saveRow(FACTORY_ID, planId, chaoshui, operatorId);
+
+        assertThat(cs).as("下游道保存成功 → 链不再阻断").isNotNull();
+        assertThat(cs.getBatchNumber()).as("焯水 亦纯 SFI 喂 → 产出同锚").isEqualTo(anchor);
+        // 焯水 产出 35 亦保存时入锚 (滚揉 40 + 焯水 35, 保存期不扣输入 → 阶段性叠加, 小结 SFI OUT 扣减)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("75");
+    }
+
+    @Test
+    @DisplayName("SFI-7 (#1252): 删除注入行 → 冲销保存时的 SFI IN (无幽灵库存)")
+    void deleteInjectionRow_reversesSfiOutput() {
+        seedSfi("SFI-WAREHOUSE-7", "50");
+        ProcessSheetRowRequest req = baseReq("row-inj-del", "gunrou", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src = upstreamRef("SFI-WAREHOUSE-7", "50");
+        src.setSemiFinished(true);
+        req.setUpstreamSources(List.of(src));
+        processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        String anchor = com.cretas.aims.service.wip.WipInventoryService.clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("40");
+
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-inj-del", operatorId);
+
+        // 冲销后 producedQuantity 归 0 (无幽灵库存); 行软删
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("0");
+        assertThat(processSheetService.getRows(FACTORY_ID, planId, "gunrou", 2)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SFI-8 (#1252): 重存注入行改产出 → 冲销旧 SFI IN + 重新入库 (不叠加双计)")
+    void resaveInjectionRow_reversesThenReposts() {
+        seedSfi("SFI-WAREHOUSE-8", "80");
+        ProcessSheetRowRequest req = baseReq("row-inj-resave", "gunrou", 2, "40");
+        req.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src = upstreamRef("SFI-WAREHOUSE-8", "50");
+        src.setSemiFinished(true);
+        req.setUpstreamSources(List.of(src));
+        processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+
+        String anchor = com.cretas.aims.service.wip.WipInventoryService.clerkSemiAnchor(planId, PRODUCT_TYPE_ID);
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).isEqualByComparingTo("40");
+
+        // 重存: 产出改 60 (同 clientRowId)
+        ProcessSheetRowRequest req2 = baseReq("row-inj-resave", "gunrou", 2, "60");
+        req2.setInputQuantity(new BigDecimal("50"));
+        UpstreamRef src2 = upstreamRef("SFI-WAREHOUSE-8", "50");
+        src2.setSemiFinished(true);
+        req2.setUpstreamSources(List.of(src2));
+        processSheetService.saveRow(FACTORY_ID, planId, req2, operatorId);
+
+        // 冲销旧 40 + 重入 60 → 60 (不是 40+60=100 双计)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, anchor)
+                .orElseThrow().getProducedQuantity()).as("冲销旧入库后重入 → 不叠加").isEqualByComparingTo("60");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-F Task 1.6 — re-save (update-in-place) path
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("6: re-save 无下游 → 原地更新保 id, 旧边软删, WIP 同 id 量价刷新")
+    void resave_noDownstream_updatesInPlacePreservingIds() {
+        // 初次保存 修油 output=80
+        ProcessSheetRowResult first = saveXiuyou("row-resave", "100", "80");
+        Long originalBatchId = first.getBatchId();
+        String originalBatchNumber = first.getBatchNumber();
+        assertThat(originalBatchId).isNotNull();
+
+        MaterialBatch wipBefore = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(originalBatchId)).orElseThrow();
+        String originalWipId = wipBefore.getId();
+        assertThat(wipBefore.getReceiptQuantity()).isEqualByComparingTo("80");
+
+        // re-save 同 clientRowId, output=90, 无下游
+        ProcessSheetRowResult second = saveXiuyou("row-resave", "100", "90");
+
+        assertThat(second.isUpdated()).as("re-save → updated=true").isTrue();
+        assertThat(second.isMaterialized()).isTrue();
+        assertThat(second.getBatchId()).as("batchId 保留不变").isEqualTo(originalBatchId);
+        assertThat(second.getBatchNumber()).as("batchNumber 保留不变").isEqualTo(originalBatchNumber);
+
+        // 恰好一条 active RAW consumption (旧的已软删, @Where deleted_at IS NULL 排除)
+        List<MaterialConsumption> active = consumptionRepo.findByProductionBatchId(originalBatchId);
+        assertThat(active).as("旧边软删后只剩 1 条 active").hasSize(1);
+        assertThat(active.get(0).getSourceType()).isEqualTo("RAW_MATERIAL");
+        // 新边量 100kg × ¥10 = ¥1000 (input 不变)
+        assertThat(active.get(0).getTotalCost()).isEqualByComparingTo("1000.00");
+
+        // WIP 同 id, receiptQuantity 刷为 90, unitPrice 重算 (1000/90 = 11.1111)
+        MaterialBatch wipAfter = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(originalBatchId)).orElseThrow();
+        assertThat(wipAfter.getId()).as("WIP id 保留不变").isEqualTo(originalWipId);
+        assertThat(wipAfter.getReceiptQuantity()).isEqualByComparingTo("90");
+        assertThat(wipAfter.getUnitPrice()).isEqualByComparingTo("11.1111");
+
+        // ProductionBatch.quantity 刷为 90
+        ProductionBatch pb = batchRepo.findByIdAndFactoryId(originalBatchId, FACTORY_ID).orElseThrow();
+        assertThat(pb.getQuantity()).isEqualByComparingTo("90");
+    }
+
+    @Test
+    @DisplayName("7: re-save 已被下游消耗 → 409")
+    void resave_withDownstreamConsumed_throws409() {
+        // 上游 修油 batch
+        ProcessSheetRowResult up = saveXiuyou("row-up", "60", "50");
+
+        // 下游 熟制 消耗它
+        seedSeasoningRecipe();
+        ProcessSheetRowRequest down = baseReq("row-down", "shuzhi", 3, "45");
+        down.setInputQuantity(new BigDecimal("50"));
+        down.setSeasoningStep(true);
+        down.setPotCount(1);
+        down.setUpstreamSources(List.of(upstreamRef(up.getBatchNumber(), "50")));
+        processSheetService.saveRow(FACTORY_ID, planId, down, operatorId);
+
+        // re-save 上游行 → 409 (已被下游消耗)
+        ProcessSheetRowRequest upResave = baseReq("row-up", "xiuyou", 1, "55");
+        upResave.setInputQuantity(new BigDecimal("60"));
+        upResave.setRawMaterialInputs(List.of(rawInput(rawBatchId, "60")));
+
+        assertThatThrownBy(() -> processSheetService.saveRow(FACTORY_ID, planId, upResave, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(ex.getMessage()).contains("已被下游");
+                });
+    }
+
+    @Test
+    @DisplayName("8: DRAFT 行 re-save 带产出 → 物化 (batchId 由 null 变非空)")
+    void resave_draftThenMaterialize() {
+        // 初次 output=0 → DRAFT
+        ProcessSheetRowResult draft = saveXiuyou("row-draft-mat", "100", "0");
+        assertThat(draft.getBatchId()).isNull();
+        assertThat(draft.isMaterialized()).isFalse();
+
+        // re-save 同 clientRowId, output=50 → 物化
+        ProcessSheetRowResult materialized = saveXiuyou("row-draft-mat", "100", "50");
+
+        assertThat(materialized.isUpdated()).isTrue();
+        assertThat(materialized.isMaterialized()).as("DRAFT → 物化").isTrue();
+        assertThat(materialized.getBatchId()).as("batchId 现已设置").isNotNull();
+
+        // 行状态 SAVED, batchId 落库
+        ProcessSheetRow row = rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                FACTORY_ID, planId, "xiuyou", "row-draft-mat").orElseThrow();
+        assertThat(row.getRowStatus()).isEqualTo("SAVED");
+        assertThat(row.getBatchId()).isEqualTo(materialized.getBatchId());
+
+        // WIP 批已物化, receiptQuantity=50
+        MaterialBatch wip = materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(materialized.getBatchId())).orElseThrow();
+        assertThat(wip.getReceiptQuantity()).isEqualByComparingTo("50");
+    }
+
+    @Test
+    @DisplayName("9: 已物化行 re-save output=0 无下游 → 逆向为 DRAFT (软删 WIP/批)")
+    void resave_materializedToZero_reversesToDraft() {
+        // 初次 output=80 → 物化
+        ProcessSheetRowResult mat = saveXiuyou("row-reverse", "100", "80");
+        Long batchId = mat.getBatchId();
+        assertThat(batchId).isNotNull();
+
+        // re-save output=0 无下游 → 逆向 DRAFT
+        ProcessSheetRowResult reversed = saveXiuyou("row-reverse", "100", "0");
+
+        assertThat(reversed.isUpdated()).isTrue();
+        assertThat(reversed.isMaterialized()).as("逆向 → 不再物化").isFalse();
+        assertThat(reversed.getBatchId()).as("batchId 置 null").isNull();
+
+        // 行 batchId null, status DRAFT
+        ProcessSheetRow row = rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                FACTORY_ID, planId, "xiuyou", "row-reverse").orElseThrow();
+        assertThat(row.getBatchId()).isNull();
+        assertThat(row.getRowStatus()).isEqualTo("DRAFT");
+
+        // WIP MaterialBatch 软删 (@Where deleted_at IS NULL → 查询排除)
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId)))
+                .as("WIP 软删后查不到").isEmpty();
+
+        // ProductionBatch 软删 (@Where → findByIdAndFactoryId 排除)
+        assertThat(batchRepo.findByIdAndFactoryId(batchId, FACTORY_ID))
+                .as("ProductionBatch 软删后查不到").isEmpty();
+
+        // 旧边软删 → 0 条 active consumption
+        assertThat(consumptionRepo.findByProductionBatchId(batchId))
+                .as("旧消耗边软删").isEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-F Task 1.8 — deleteRow
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("10: deleteRow 已物化无下游 → 软删行 + WIP + ProductionBatch + 消耗边")
+    void deleteRow_materializedNoDownstream_softDeletesAll() {
+        // 创建物化行
+        ProcessSheetRowResult mat = saveXiuyou("row-del-mat", "100", "80");
+        Long batchId = mat.getBatchId();
+        assertThat(batchId).isNotNull();
+
+        // 确认 WIP 存在
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId))).isPresent();
+
+        // 删除
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-mat", operatorId);
+
+        // 行已软删 (@Where deleted_at IS NULL → 查不到)
+        assertThat(rowRepo.findByFactoryIdAndPlanIdAndClientRowId(FACTORY_ID, planId, "row-del-mat"))
+                .as("行已软删").isEmpty();
+
+        // WIP MaterialBatch 软删
+        assertThat(materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(batchId)))
+                .as("WIP 软删后查不到").isEmpty();
+
+        // ProductionBatch 软删
+        assertThat(batchRepo.findByIdAndFactoryId(batchId, FACTORY_ID))
+                .as("ProductionBatch 软删后查不到").isEmpty();
+
+        // 消耗边 0 条 active
+        assertThat(consumptionRepo.findByProductionBatchId(batchId))
+                .as("消耗边全软删").isEmpty();
+    }
+
+    @Test
+    @DisplayName("11: deleteRow 已被下游消耗 → 409 含 '已被下游'")
+    void deleteRow_withDownstreamConsumed_throws409() {
+        // 上游 修油 batch
+        ProcessSheetRowResult up = saveXiuyou("row-del-up", "60", "50");
+
+        // 下游 熟制 消耗它
+        seedSeasoningRecipe();
+        ProcessSheetRowRequest down = baseReq("row-del-down", "shuzhi", 3, "45");
+        down.setInputQuantity(new BigDecimal("50"));
+        down.setSeasoningStep(true);
+        down.setPotCount(1);
+        down.setUpstreamSources(List.of(upstreamRef(up.getBatchNumber(), "50")));
+        processSheetService.saveRow(FACTORY_ID, planId, down, operatorId);
+
+        // 删除上游行 → 409 (已被下游消耗)
+        assertThatThrownBy(() -> processSheetService.deleteRow(FACTORY_ID, planId, "row-del-up", operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(ex.getMessage()).contains("已被下游");
+                });
+    }
+
+    @Test
+    @DisplayName("12: deleteRow DRAFT 行 (batchId null) → 仅软删行, 无批次操作")
+    void deleteRow_draftRow_removesRowOnly() {
+        // output=0 → DRAFT
+        ProcessSheetRowRequest req = baseReq("row-del-draft", "xiuyou", 1, "0");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+        ProcessSheetRowResult draft = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+        assertThat(draft.getBatchId()).isNull();
+
+        // 删除
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-del-draft", operatorId);
+
+        // 行已软删
+        assertThat(rowRepo.findByFactoryIdAndPlanIdAndClientRowId(FACTORY_ID, planId, "row-del-draft"))
+                .as("DRAFT 行已软删").isEmpty();
+        // 无 ProductionBatch / WIP 创建, 断言 consumption 列表也为空 (无 batchId 可查)
+    }
+
+    @Test
+    @DisplayName("13: deleteRow 不存在的行 → 404")
+    void deleteRow_notFound_throws404() {
+        assertThatThrownBy(() ->
+                processSheetService.deleteRow(FACTORY_ID, planId, "DOES-NOT-EXIST", operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(404));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // SP-G P3: 行级操作记录 (字段级 diff 审计)
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("SP-G P3: saveRow 首存 → 1 条 CREATE 操作记录")
+    void saveRow_create_writesCreateChangeLog() {
+        saveXiuyou("row-log-create", "100", "80");
+
+        var history = processSheetService.getRowHistory(
+                FACTORY_ID, planId, "xiuyou", "row-log-create");
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).getOperation()).isEqualTo("CREATE");
+        assertThat(history.get(0).getDiffSummary()).isEqualTo("新建行");
+        assertThat(history.get(0).getBeforeValue()).as("CREATE before 为 null").isNull();
+        assertThat(history.get(0).getAfterValue()).as("CREATE after 含字段快照").isNotNull();
+        assertThat(history.get(0).getOperatorId()).isEqualTo(operatorId);
+    }
+
+    @Test
+    @DisplayName("SP-G P3: saveRow 覆盖已存行 → 追加 1 条 UPDATE, diffSummary 含变更字段")
+    void resaveRow_update_writesUpdateChangeLogWithChangedField() {
+        // 首存 output=80, 再覆盖 output=90 (同 clientRowId → resave UPDATE)
+        saveXiuyou("row-log-update", "100", "80");
+        saveXiuyou("row-log-update", "100", "90");
+
+        var history = processSheetService.getRowHistory(
+                FACTORY_ID, planId, "xiuyou", "row-log-update");
+        // 倒序: [0]=UPDATE (最新), [1]=CREATE
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).getOperation()).isEqualTo("UPDATE");
+        assertThat(history.get(1).getOperation()).isEqualTo("CREATE");
+
+        // UPDATE diffSummary 应含变更的产出字段 (outputQuantity: 80→90)
+        assertThat(history.get(0).getDiffSummary())
+                .as("diffSummary 列出变更字段").contains("outputQuantity");
+        assertThat(history.get(0).getBeforeValue()).as("UPDATE before 非 null").isNotNull();
+        assertThat(history.get(0).getAfterValue()).as("UPDATE after 非 null").isNotNull();
+    }
+
+    @Test
+    @DisplayName("SP-G P3: deleteRow → 追加 1 条 DELETE 操作记录 (before=被删行, after=null)")
+    void deleteRow_writesDeleteChangeLog() {
+        saveXiuyou("row-log-delete", "100", "80");
+        processSheetService.deleteRow(FACTORY_ID, planId, "row-log-delete", operatorId);
+
+        var history = processSheetService.getRowHistory(
+                FACTORY_ID, planId, "xiuyou", "row-log-delete");
+        // [0]=DELETE (最新), [1]=CREATE
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).getOperation()).isEqualTo("DELETE");
+        assertThat(history.get(0).getDiffSummary()).isEqualTo("删除行");
+        assertThat(history.get(0).getBeforeValue()).as("DELETE before 含被删行快照").isNotNull();
+        assertThat(history.get(0).getAfterValue()).as("DELETE after 为 null").isNull();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Seasoning recipe seed
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Pinned BOM packaging scales 10 boxes to 10 boxes, 10 slices and 1.25 cases")
+    void pinnedBomPackagingRequirementsScaleInNativeUnits() {
+        String recipeId = "PSF-PACK-" + UUID.randomUUID().toString().substring(0, 8);
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId(recipeId);
+        recipe.setFactoryId(FACTORY_ID);
+        recipe.setRecipeCode("BOM-" + recipeId);
+        recipe.setProductTypeId(PRODUCT_TYPE_ID);
+        recipe.setProductName("PSF packaging contract");
+        recipe.setVersion(3);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("8"));
+        recipe.setOutputUnit("box");
+        recipe.setSeasoningRevision(0L);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setSourceType(BomRecipe.SourceType.MANUAL);
+        List<BomRecipeItem> packagingItems = List.of(
+                packagingItem(recipeId, "PACK-BOX", "Box", "8", "box", 1),
+                packagingItem(recipeId, "PACK-SLICE", "Slice", "8", "slice", 2),
+                packagingItem(recipeId, "PACK-CASE", "Case", "1", "case", 3));
+        packagingItems.forEach(item -> item.setRecipe(recipe));
+        recipe.setItems(packagingItems);
+        recipeRepo.saveAndFlush(recipe);
+
+        ProductionPlan plan = planRepo.findById(planId).orElseThrow();
+        plan.setSelectedBomRecipeId(recipeId);
+        plan.setSelectedBomVersion(3);
+        planRepo.saveAndFlush(plan);
+        assertThat(planRepo.findByIdAndFactoryId(planId, FACTORY_ID))
+                .get()
+                .extracting(ProductionPlan::getSelectedBomRecipeId)
+                .isEqualTo(recipeId);
+        assertThat(recipeItemRepo.findByRecipeIdOrderBySortOrderAsc(recipeId))
+                .extracting(
+                        BomRecipeItem::getMaterialTypeId,
+                        BomRecipeItem::getMaterialCategory,
+                        BomRecipeItem::getIsOptional)
+                .containsExactly(
+                        tuple("PACK-BOX", "PACKAGING", false),
+                        tuple("PACK-SLICE", "PACKAGING", false),
+                        tuple("PACK-CASE", "PACKAGING", false));
+        ProcessSheetServiceImpl target = AopTestUtils.getUltimateTargetObject(processSheetServiceImpl);
+        assertThat(ReflectionTestUtils.getField(target, "bomRecipeRepository"))
+                .isSameAs(recipeRepo);
+        assertThat(ReflectionTestUtils.getField(target, "bomRecipeItemRepository"))
+                .isSameAs(recipeItemRepo);
+
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setFinished(true);
+        request.setProductTypeId(PRODUCT_TYPE_ID);
+        request.setOutputQuantity(new BigDecimal("10"));
+        request.setOutputUnit("box");
+        request.setUnit("box");
+        // 2026-08-04 修复长期红: 单产出的 finishedOutputQuantity 已被 #1898 (2026-07-27,
+        // 「preserve Workflow BOM SKU and family reporting」) 换成多产出的 finishedBomOutputs,
+        // 返回 (productTypeId, quantity, unit) 三元组以支持一次报 N 个成品。这条断言一直照旧
+        // 反射老方法名, 于是抛 IllegalState「Method not found」—— 红了 8 天没人动。
+        // 断言意图不变: 成品产出数量按**原生单位**取值(10 box 就是 10, 不做质量折算)。
+        List<?> reportedOutputs = ReflectionTestUtils.invokeMethod(
+                target, "finishedBomOutputs", request);
+        assertThat(reportedOutputs).as("单产出报工应解析出恰好一条成品产出").hasSize(1);
+        Object onlyOutput = reportedOutputs.get(0);
+        assertThat((BigDecimal) ReflectionTestUtils.invokeGetterMethod(onlyOutput, "quantity"))
+                .isEqualByComparingTo("10");
+        assertThat((String) ReflectionTestUtils.invokeGetterMethod(onlyOutput, "unit"))
+                .isEqualTo("box");
+        assertThat((String) ReflectionTestUtils.invokeGetterMethod(onlyOutput, "productTypeId"))
+                .isEqualTo(PRODUCT_TYPE_ID);
+
+        List<ProductionStockAllocationService.AutomaticRequirement> requirements =
+                ReflectionTestUtils.invokeMethod(
+                        target,
+                        "buildAutomaticBomRequirements",
+                        FACTORY_ID,
+                        planId,
+                        request,
+                        true);
+
+        assertThat(requirements)
+                .extracting(
+                        ProductionStockAllocationService.AutomaticRequirement::materialTypeId,
+                        ProductionStockAllocationService.AutomaticRequirement::quantity,
+                        ProductionStockAllocationService.AutomaticRequirement::unit,
+                        ProductionStockAllocationService.AutomaticRequirement::sourceType)
+                .containsExactly(
+                        tuple("PACK-BOX", new BigDecimal("10"), "box", "PACKAGING"),
+                        tuple("PACK-SLICE", new BigDecimal("10"), "slice", "PACKAGING"),
+                        tuple("PACK-CASE", new BigDecimal("1.25"), "case", "PACKAGING"));
+    }
+
+    private void seedSeasoningRecipe() {
+        String recipeId = "PSF-RECIPE-" + UUID.randomUUID().toString().substring(0, 8);
+        BomRecipe recipe = new BomRecipe();
+        recipe.setId(recipeId);
+        recipe.setFactoryId(FACTORY_ID);
+        recipe.setRecipeCode("BOM-PSF-" + recipeId);
+        recipe.setProductTypeId(PRODUCT_TYPE_ID);
+        recipe.setProductName("PSF-Test-Recipe");
+        recipe.setVersion(1);
+        recipe.setIsCurrent(true);
+        recipe.setOutputQuantityPerUnit(new BigDecimal("1000"));
+        recipe.setOutputUnit("g");
+        recipe.setSeasoningRevision(0L);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
+        recipe.setSourceType(BomRecipe.SourceType.MANUAL);
+        recipeRepo.save(recipe);
+
+        BomSeasoningItem cook = new BomSeasoningItem();
+        cook.setRecipeId(recipeId);
+        cook.setFactoryId(FACTORY_ID);
+        cook.setSection(BomSeasoningItem.SECTION_COOKING);
+        cook.setSeq(1);
+        cook.setName("PSF-Cooking-Spice");
+        cook.setDosagePerKgG(new BigDecimal("310"));
+        cook.setPriceSource1(new BigDecimal("10.0"));
+        cook.setCountInSeasoning(true);
+        ingredientRepo.save(cook);
+    }
+
+    private BomRecipeItem packagingItem(
+            String recipeId,
+            String materialTypeId,
+            String materialName,
+            String quantity,
+            String unit,
+            int sortOrder) {
+        BomRecipeItem item = new BomRecipeItem();
+        item.setRecipeId(recipeId);
+        item.setFactoryId(FACTORY_ID);
+        item.setMaterialTypeId(materialTypeId);
+        item.setMaterialName(materialName);
+        item.setStandardQuantity(new BigDecimal(quantity));
+        item.setYieldRate(new BigDecimal("100"));
+        item.setUnit(unit);
+        item.setMaterialCategory("PACKAGING");
+        item.setSortOrder(sortOrder);
+        item.setIsOptional(false);
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        item.setPerPortion(false);
+        return item;
+    }
+}

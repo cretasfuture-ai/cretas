@@ -1,0 +1,802 @@
+package com.cretas.aims.service.inventory;
+
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.factory.WarehouseCodes;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.lang.reflect.Method;
+import java.math.BigDecimal;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * D5: SalesOrder 发货 → 仅从总仓 (WH-LOG) 出货 (PR #316, 2026-05-11).
+ *
+ * <p>验证 {@link SalesServiceImpl#deductFinishedGoodsInventory} (FIFO 扣减)
+ * 通过 {@link WarehouseResolver#resolveLogisticsId} 解析 WH-LOG 仓库 id,
+ * 仅扣减该仓库的批次。WH-WKS (鲜棉仓) 批次不参与销售扣减。
+ *
+ * <p>测试 pattern：参考 {@code SalesServiceImplSalespersonTest} — 用 null ctor
+ * 构造 service, 反射设置需要的字段 (warehouseResolver, finishedGoodsBatchRepository).
+ *
+ * @since 2026-05-11 PR #316 D5 (sales from WH-LOG)
+ */
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+@DisplayName("D5: SalesOrder fulfillment WH-LOG 过滤")
+class SalesOrderFulfillmentWarehouseTest {
+
+    @Mock
+    private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
+
+    @Mock
+    private SalesOrderRepository salesOrderRepository;
+
+    @Mock
+    private SalesOrderItemRepository salesOrderItemRepository;
+
+    @Mock
+    private ProductTypeRepository productTypeRepository;
+
+    @Mock
+    private SalesDeliveryBatchAllocationService batchAllocationService;
+
+    @Mock
+    private WarehouseResolver warehouseResolver;
+
+    private SalesServiceImpl salesService;
+
+    private static final String FACTORY_A = "F001";
+    private static final String PRODUCT_TYPE = "PT-001";
+    private static final String WH_LOG_ID = "wh-log-f001";
+
+    @BeforeEach
+    void setUp() {
+        // Mirror SalesServiceImplSalespersonTest pattern: 8-arg ctor with null + reflective injection.
+        salesService = new SalesServiceImpl(
+                salesOrderRepository,
+                null,    // salesOrderItemRepository
+                null,    // deliveryRecordRepository
+                finishedGoodsBatchRepository,
+                null,    // customerRepository
+                null,    // productTypeRepository
+                null,    // arApService
+                null);   // applicationEventPublisher
+        ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
+        when(warehouseResolver.resolveLogisticsId(FACTORY_A)).thenReturn(WH_LOG_ID);
+        // getAvailableBatches (read path) blank source 走 resolveSalesOutboundWh (2026-07-02 用途拆分),
+        // fallback WH-LOG = 现状. LENIENT: 未用到的测试忽略。
+        when(warehouseResolver.resolveSalesOutboundWh(FACTORY_A)).thenReturn(WH_LOG_ID);
+    }
+
+    /** Invoke private deductFinishedGoodsInventory via reflection. */
+    private void invokeDeduct(SalesDeliveryItem item) throws Exception {
+        invokeDeduct(null, item);
+    }
+
+    private void invokeDeduct(String salesOrderId, SalesDeliveryItem item) throws Exception {
+        Method m = SalesServiceImpl.class.getDeclaredMethod(
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(salesService, FACTORY_A, salesOrderId, item);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            // Unwrap so callers can catch BusinessException directly.
+            if (e.getCause() instanceof RuntimeException) {
+                throw (RuntimeException) e.getCause();
+            }
+            throw e;
+        }
+    }
+
+    private SalesDeliveryItem buildDeliveryItem(BigDecimal quantity) {
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductTypeId(PRODUCT_TYPE);
+        item.setDeliveredQuantity(quantity);
+        return item;
+    }
+
+    private FinishedGoodsBatch buildAvailableBatch(String batchNumber, String warehouseId, BigDecimal produced) {
+        FinishedGoodsBatch b = new FinishedGoodsBatch();
+        b.setFactoryId(FACTORY_A);
+        b.setBatchNumber(batchNumber);
+        b.setProductTypeId(PRODUCT_TYPE);
+        b.setWarehouseId(warehouseId);
+        b.setStatus("AVAILABLE");
+        b.setProducedQuantity(produced);
+        b.setShippedQuantity(BigDecimal.ZERO);
+        b.setReservedQuantity(BigDecimal.ZERO);
+        return b;
+    }
+
+    private void invokeUpdateOrderDeliveryStatus(SalesDeliveryRecord record) throws Exception {
+        Method m = SalesServiceImpl.class.getDeclaredMethod("updateOrderDeliveryStatus", SalesDeliveryRecord.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(salesService, record);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException) {
+                throw (RuntimeException) e.getCause();
+            }
+            throw e;
+        }
+    }
+
+    private SalesDeliveryItemBatchAllocation buildAllocation(String batchId, BigDecimal qty, String unit) {
+        SalesDeliveryItemBatchAllocation allocation = new SalesDeliveryItemBatchAllocation();
+        allocation.setFactoryId(FACTORY_A);
+        allocation.setDeliveryItemId("167");
+        allocation.setFinishedGoodsBatchId(batchId);
+        allocation.setBatchNumber("FG-BATCH-001");
+        allocation.setAllocatedQty(qty);
+        allocation.setUnit(unit);
+        return allocation;
+    }
+
+    // ============================================================
+    // Standard path — WH-LOG batches only
+    // ============================================================
+
+    @Test
+    @DisplayName("🔴 G1: blank source → 跨全部可售仓库 (除 WH-RD) 扣减, 不再单仓 WH-LOG")
+    void deduct_queriesAllShippableWarehouses() throws Exception {
+        FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
+        // 🔴 G1: blank source 走 findShippableBatchesAllWarehousesExcluding (跨仓, 排 WH-RD)
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(whLogBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
+        invokeDeduct(item);
+
+        // blank 不再解析单一物流仓, 也不走单仓 shippable 查询
+        verify(warehouseResolver, never()).resolveLogisticsId(FACTORY_A);
+        verify(finishedGoodsBatchRepository, times(1))
+                .findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
+        verify(finishedGoodsBatchRepository, never())
+                .findShippableBatchesByWarehouse(anyString(), anyString(), anyString());
+
+        // 扣减 30 / 50
+        assertEquals(0, whLogBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
+        assertEquals("B-LOG-001", whLogBatch.getBatchNumber());
+    }
+
+    @Test
+    @DisplayName("标准: FEFO 跨多个批次扣减 (blank source, 跨仓候选)")
+    void deduct_consumesAcrossBatchesFefo() throws Exception {
+        FinishedGoodsBatch oldBatch = buildAvailableBatch("B-LOG-OLD", WH_LOG_ID, new BigDecimal("20"));
+        FinishedGoodsBatch newBatch = buildAvailableBatch("B-LOG-NEW", WH_LOG_ID, new BigDecimal("40"));
+        // Repository returns FEFO ordered (oldest first)
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(oldBatch, newBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("35"));
+        invokeDeduct(item);
+
+        // 第一批 20/20 全用, 第二批 15/40 部分
+        assertEquals(0, oldBatch.getShippedQuantity().compareTo(new BigDecimal("20")));
+        assertEquals(0, newBatch.getShippedQuantity().compareTo(new BigDecimal("15")));
+        // 第一批 depleted
+        assertEquals("DEPLETED", oldBatch.getStatus());
+        // 第二批仍 AVAILABLE
+        assertEquals("AVAILABLE", newBatch.getStatus());
+
+        verify(finishedGoodsBatchRepository, times(1)).save(eq(oldBatch));
+        verify(finishedGoodsBatchRepository, times(1)).save(eq(newBatch));
+    }
+
+    @Test
+    @DisplayName("代加工订单仅扣同一客户、同一销售订单的客供成品")
+    void deduct_customerOwnedFinishedGoods_usesExactCustomerAndSalesOrderScope() throws Exception {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-CUSTOMER-1");
+        order.setFactoryId(FACTORY_A);
+        order.setCustomerId("CUS-1");
+        order.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
+
+        FinishedGoodsBatch ownedBatch = buildAvailableBatch(
+                "B-CUSTOMER-1", WH_LOG_ID, new BigDecimal("5"));
+        ownedBatch.setUnit("box");
+        ownedBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        ownedBatch.setOwnerCustomerId(order.getCustomerId());
+        ownedBatch.setSourceSalesOrderId(order.getId());
+        when(finishedGoodsBatchRepository.findShippableCustomerOwnedBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD, order.getCustomerId(), order.getId()))
+                .thenReturn(List.of(ownedBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("2"));
+        item.setUnit("box");
+        invokeDeduct(order.getId(), item);
+
+        assertEquals(0, ownedBatch.getShippedQuantity().compareTo(new BigDecimal("2")));
+        verify(finishedGoodsBatchRepository).findShippableCustomerOwnedBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD, order.getCustomerId(), order.getId());
+        verify(finishedGoodsBatchRepository, never())
+                .findShippableBatchesAllWarehousesExcluding(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("普通销售订单即使异常候选返回客供成品也必须拒绝扣减")
+    void deduct_standardOrder_rejectsCustomerOwnedFinishedGoodsDefenseInDepth() throws Exception {
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-STANDARD-1");
+        order.setFactoryId(FACTORY_A);
+        order.setCustomerId("CUS-1");
+        order.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
+
+        FinishedGoodsBatch customerOwned = buildAvailableBatch(
+                "B-CUSTOMER-FORBIDDEN", WH_LOG_ID, BigDecimal.ONE);
+        customerOwned.setUnit("box");
+        customerOwned.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        customerOwned.setOwnerCustomerId("CUS-1");
+        customerOwned.setSourceSalesOrderId("SO-OTHER");
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(customerOwned));
+
+        SalesDeliveryItem item = buildDeliveryItem(BigDecimal.ONE);
+        item.setUnit("box");
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> invokeDeduct(order.getId(), item));
+
+        assertEquals("CUSTOMER_OWNED_FINISHED_GOODS_FORBIDDEN", error.getErrorCode());
+        assertEquals(0, customerOwned.getShippedQuantity().compareTo(BigDecimal.ZERO));
+        verify(finishedGoodsBatchRepository, never()).save(customerOwned);
+    }
+
+    // ============================================================
+    // 🔴 G1 bug repro — FG only in WH-WKS, blank source → NOW ships (was insufficient)
+    // ============================================================
+
+    @Test
+    @DisplayName("🔴 G1 repro: 成品仅在 WH-WKS + blank source → 现在能发货 (旧逻辑误报库存不足)")
+    void deduct_onlyWhWksAvailable_blankSource_nowShips() throws Exception {
+        final String WH_WKS_ID = "wh-wks-f001";
+        FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", WH_WKS_ID, new BigDecimal("50"));
+        // 跨仓候选集包含 WH-WKS 批次 (生产落点)
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(wksBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
+        invokeDeduct(item);  // 不再抛"库存不足"
+
+        assertEquals(0, wksBatch.getShippedQuantity().compareTo(new BigDecimal("10")));
+        verify(finishedGoodsBatchRepository, times(1)).save(eq(wksBatch));
+    }
+
+    @Test
+    @DisplayName("负: blank source 全厂无可发货成品 → 抛 BusinessException + message 提示可售仓库")
+    void deduct_noStockAnywhere_blankSource_throwsInsufficient() throws Exception {
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(Collections.emptyList());
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
+        BusinessException ex = assertThrows(BusinessException.class, () -> invokeDeduct(item));
+
+        assertNotNull(ex.getMessage());
+        assertEquals(true, ex.getMessage().contains("成品库存不足"));
+        assertEquals(true, ex.getMessage().contains(PRODUCT_TYPE));
+    }
+
+    // ============================================================
+    // getAvailableBatches — public read path
+    // ============================================================
+
+    @Test
+    @DisplayName("🔴 getAvailableBatches: blank source → 跨全部可售仓 (除 WH-RD), 与 recommend-fifo (G1) 同口径")
+    void getAvailableBatches_returnsAllSellableWarehouses() {
+        // 2026-07-04: blank source 不再单仓 WH-LOG (成品落生产仓 WH-WKS 时库存查询假报无货) —
+        //   跨全部可售仓 (findAvailableBatchesFefoAllWarehousesExcluding, 排 WH-RD), 与发货推荐/扣减 G1 一致。
+        FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", "wh-wks-f001", new BigDecimal("100"));
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(wksBatch));
+
+        List<FinishedGoodsBatch> batches = salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE);
+
+        assertEquals(1, batches.size());
+        assertEquals("wh-wks-f001", batches.get(0).getWarehouseId());
+        // blank source 不解析单仓, 直接跨全可售仓查询。
+        verify(warehouseResolver, never()).resolveSalesOutboundWh(anyString());
+        verify(finishedGoodsBatchRepository, times(1))
+                .findAvailableBatchesFefoAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
+    }
+
+    @Test
+    @DisplayName("WH-LOG warehouseCode 常量稳定 (D5 spec 锁定)")
+    void warehouseCodeConstantIsStable() {
+        // Defensive: 若未来重命名 WH-LOG → 这个 test 立即 fail, 提醒 grep 所有 site
+        assertEquals("WH-LOG", WarehouseCodes.WH_LOG);
+    }
+
+    @Test
+    @DisplayName("shipment updates sales order item cost from allocated FG batch unit cost")
+    void updateOrderDeliveryStatus_backfillsCostUnitPriceFromAllocatedBatch() throws Exception {
+        salesService = new SalesServiceImpl(
+                salesOrderRepository,
+                salesOrderItemRepository,
+                null,
+                finishedGoodsBatchRepository,
+                null,
+                productTypeRepository,
+                null,
+                null);
+        ReflectionTestUtils.setField(salesService, "batchAllocationService", batchAllocationService);
+
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-001");
+        order.setFactoryId(FACTORY_A);
+        order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+
+        SalesOrderItem orderItem = new SalesOrderItem();
+        orderItem.setSalesOrderId(order.getId());
+        orderItem.setProductTypeId(PRODUCT_TYPE);
+        orderItem.setQuantity(new BigDecimal("10"));
+        orderItem.setDeliveredQuantity(BigDecimal.ZERO);
+        orderItem.setUnit("\u76d2");
+        orderItem.setUnitPrice(new BigDecimal("8.0000"));
+
+        SalesDeliveryItem deliveryItem = new SalesDeliveryItem();
+        deliveryItem.setId(167L);
+        deliveryItem.setProductTypeId(PRODUCT_TYPE);
+        deliveryItem.setDeliveredQuantity(new BigDecimal("10"));
+        deliveryItem.setUnit("\u76d2");
+
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setFactoryId(FACTORY_A);
+        record.setSalesOrderId(order.getId());
+        record.setItems(List.of(deliveryItem));
+
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE);
+        productType.setGramsPerUnit(new BigDecimal("200"));
+
+        FinishedGoodsBatch batch = buildAvailableBatch("FG-BATCH-001", WH_LOG_ID, new BigDecimal("10.8"));
+        batch.setId("FG-BATCH-ID");
+        batch.setUnit("kg");
+        batch.setUnitCost(new BigDecimal("4.1667"));
+
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(orderItem));
+        when(productTypeRepository.findById(PRODUCT_TYPE)).thenReturn(Optional.of(productType));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, "167"))
+                .thenReturn(List.of(buildAllocation(batch.getId(), new BigDecimal("10"), "\u76d2")));
+        when(finishedGoodsBatchRepository.findById(batch.getId())).thenReturn(Optional.of(batch));
+
+        invokeUpdateOrderDeliveryStatus(record);
+
+        assertEquals(0, orderItem.getDeliveredQuantity().compareTo(new BigDecimal("10")));
+        assertEquals(0, orderItem.getCostUnitPrice().compareTo(new BigDecimal("0.8333")));
+        assertEquals(SalesOrderStatus.COMPLETED, order.getStatus());
+        assertEquals("DELIVERED", order.getTransportPlanStatus());
+        assertEquals(0, order.getActualShippedAmount().compareTo(new BigDecimal("80.00")));
+        verify(salesOrderItemRepository, times(1)).saveAll(List.of(orderItem));
+        verify(salesOrderRepository, times(1)).save(order);
+    }
+
+    @Test
+    @DisplayName("shipment weights cost across two allocated FG batches and preserves gross margin math")
+    void updateOrderDeliveryStatus_weightsCostAcrossAllocatedBatches() throws Exception {
+        salesService = new SalesServiceImpl(
+                salesOrderRepository,
+                salesOrderItemRepository,
+                null,
+                finishedGoodsBatchRepository,
+                null,
+                productTypeRepository,
+                null,
+                null);
+        ReflectionTestUtils.setField(salesService, "batchAllocationService", batchAllocationService);
+
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-MIX-001");
+        order.setFactoryId(FACTORY_A);
+        order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+
+        SalesOrderItem orderItem = new SalesOrderItem();
+        orderItem.setSalesOrderId(order.getId());
+        orderItem.setProductTypeId(PRODUCT_TYPE);
+        orderItem.setQuantity(new BigDecimal("50"));
+        orderItem.setDeliveredQuantity(BigDecimal.ZERO);
+        orderItem.setUnit("\u76d2");
+        orderItem.setUnitPrice(new BigDecimal("40.0000"));
+
+        SalesDeliveryItem deliveryItem = new SalesDeliveryItem();
+        deliveryItem.setId(167L);
+        deliveryItem.setProductTypeId(PRODUCT_TYPE);
+        deliveryItem.setDeliveredQuantity(new BigDecimal("50"));
+        deliveryItem.setUnit("\u76d2");
+
+        SalesDeliveryRecord record = new SalesDeliveryRecord();
+        record.setFactoryId(FACTORY_A);
+        record.setSalesOrderId(order.getId());
+        record.setItems(List.of(deliveryItem));
+
+        ProductType productType = new ProductType();
+        productType.setId(PRODUCT_TYPE);
+        productType.setGramsPerUnit(new BigDecimal("200"));
+
+        FinishedGoodsBatch batchA = buildAvailableBatch("FG-MIX-A", WH_LOG_ID, new BigDecimal("30"));
+        batchA.setId("FG-MIX-A-ID");
+        batchA.setUnit("\u76d2");
+        batchA.setUnitCost(new BigDecimal("20.0000"));
+
+        FinishedGoodsBatch batchB = buildAvailableBatch("FG-MIX-B", WH_LOG_ID, new BigDecimal("20"));
+        batchB.setId("FG-MIX-B-ID");
+        batchB.setUnit("\u76d2");
+        batchB.setUnitCost(new BigDecimal("26.0000"));
+
+        when(salesOrderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(order.getId(), FACTORY_A))
+                .thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(order.getId())).thenReturn(List.of(orderItem));
+        when(productTypeRepository.findById(PRODUCT_TYPE)).thenReturn(Optional.of(productType));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, "167"))
+                .thenReturn(List.of(
+                        buildAllocation(batchA.getId(), new BigDecimal("30"), "\u76d2"),
+                        buildAllocation(batchB.getId(), new BigDecimal("20"), "\u76d2")));
+        when(finishedGoodsBatchRepository.findById(batchA.getId())).thenReturn(Optional.of(batchA));
+        when(finishedGoodsBatchRepository.findById(batchB.getId())).thenReturn(Optional.of(batchB));
+
+        invokeUpdateOrderDeliveryStatus(record);
+
+        assertEquals(0, orderItem.getDeliveredQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, orderItem.getCostUnitPrice().compareTo(new BigDecimal("22.4000")));
+        assertEquals(0, orderItem.getCostTotal().compareTo(new BigDecimal("1120.00")));
+        assertEquals(0, orderItem.getLineAmount().compareTo(new BigDecimal("2000.00")));
+        BigDecimal grossProfit = orderItem.getLineAmount().subtract(orderItem.getCostTotal());
+        BigDecimal grossMargin = grossProfit.divide(orderItem.getLineAmount(), 4, java.math.RoundingMode.HALF_UP);
+        assertEquals(0, grossProfit.compareTo(new BigDecimal("880.00")));
+        assertEquals(0, grossMargin.compareTo(new BigDecimal("0.4400")));
+        assertEquals(SalesOrderStatus.COMPLETED, order.getStatus());
+        assertEquals("DELIVERED", order.getTransportPlanStatus());
+        assertEquals(0, order.getActualShippedAmount().compareTo(new BigDecimal("2000.00")));
+        verify(salesOrderItemRepository, times(1)).saveAll(List.of(orderItem));
+        verify(salesOrderRepository, times(1)).save(order);
+    }
+
+    // ============================================================
+    // T4-D5 #572: per-row sourceWarehouseCode honored (PR #547/#564 chain)
+    // ============================================================
+
+    @Test
+    @DisplayName("T4-D5 #572: sourceWarehouseCode=WH-WKS → 查 WH-WKS 仓库批次, 不走 WH-LOG 默认")
+    void deduct_honorsSourceWarehouseCode_whWks() throws Exception {
+        final String WH_WKS_ID = "wh-wks-f001";
+        when(warehouseResolver.resolveId(FACTORY_A, WarehouseCodes.WH_WKS)).thenReturn(WH_WKS_ID);
+
+        FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", WH_WKS_ID, new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
+                .thenReturn(List.of(wksBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
+        item.setSourceWarehouseCode(WarehouseCodes.WH_WKS);
+        invokeDeduct(item);
+
+        // 解析走 resolveId(code), 不走 resolveLogisticsId 默认
+        verify(warehouseResolver, times(1)).resolveId(FACTORY_A, WarehouseCodes.WH_WKS);
+        verify(warehouseResolver, never()).resolveLogisticsId(anyString());
+        verify(finishedGoodsBatchRepository, times(1))
+                .findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID);
+
+        // 扣减 30 / 50
+        assertEquals(0, wksBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
+    }
+
+    @Test
+    @DisplayName("🔴 G1: sourceWarehouseCode=null → 跨全部可售仓库 (除 WH-RD), 不再单仓 WH-LOG")
+    void deduct_nullSourceWarehouseCode_searchesAllWarehouses() throws Exception {
+        FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(whLogBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
+        // sourceWarehouseCode 留 null
+        invokeDeduct(item);
+
+        // 不再解析单仓, 也不调 resolveId(code)
+        verify(warehouseResolver, never()).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+        verify(finishedGoodsBatchRepository, times(1))
+                .findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
+
+        assertEquals(0, whLogBatch.getShippedQuantity().compareTo(new BigDecimal("30")));
+    }
+
+    @Test
+    @DisplayName("🔴 G1: sourceWarehouseCode=空字符串 → 也走跨仓发现 (blank-safe)")
+    void deduct_blankSourceWarehouseCode_searchesAllWarehouses() throws Exception {
+        FinishedGoodsBatch whLogBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(whLogBatch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("30"));
+        item.setSourceWarehouseCode("   ");
+        invokeDeduct(item);
+
+        verify(warehouseResolver, never()).resolveLogisticsId(FACTORY_A);
+        verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+        verify(finishedGoodsBatchRepository, times(1))
+                .findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
+    }
+
+    @Test
+    @DisplayName("T4-D5 #572: 错误信息含选中仓库 code (UX — 用户看得到自己选哪个仓)")
+    void deduct_insufficientStock_errorMessageIncludesWarehouse() throws Exception {
+        final String WH_WKS_ID = "wh-wks-f001";
+        when(warehouseResolver.resolveId(FACTORY_A, WarehouseCodes.WH_WKS)).thenReturn(WH_WKS_ID);
+        when(finishedGoodsBatchRepository.findShippableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
+                .thenReturn(Collections.emptyList());
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("10"));
+        item.setSourceWarehouseCode(WarehouseCodes.WH_WKS);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> invokeDeduct(item));
+        assertNotNull(ex.getMessage());
+        // 用户看到 message 里显式提到 WH-WKS — 知道是选错仓的问题, 不是没生产
+        assertEquals(true, ex.getMessage().contains("WH-WKS"));
+        assertEquals(true, ex.getMessage().contains("成品库存不足"));
+    }
+
+    // ============================================================
+    // T4-D5 #572 Phase B-1: getAvailableBatches 三参重载 sourceWarehouseCode 过滤
+    // ============================================================
+
+    @Test
+    @DisplayName("Phase B-1: getAvailableBatches(sourceWarehouseCode=WH-WKS) → 仅返回 WH-WKS 批次")
+    void getAvailableBatches_withSourceWarehouseCode_filtersToWks() {
+        final String WH_WKS_ID = "wh-wks-f001";
+        when(warehouseResolver.resolveId(FACTORY_A, WarehouseCodes.WH_WKS)).thenReturn(WH_WKS_ID);
+        FinishedGoodsBatch wksBatch = buildAvailableBatch("B-WKS-001", WH_WKS_ID, new BigDecimal("100"));
+        when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(FACTORY_A, PRODUCT_TYPE, WH_WKS_ID))
+                .thenReturn(List.of(wksBatch));
+
+        List<FinishedGoodsBatch> batches = salesService.getAvailableBatches(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_WKS);
+
+        assertEquals(1, batches.size());
+        assertEquals(WH_WKS_ID, batches.get(0).getWarehouseId());
+        verify(warehouseResolver, times(1)).resolveId(FACTORY_A, WarehouseCodes.WH_WKS);
+        verify(warehouseResolver, never()).resolveLogisticsId(anyString());
+    }
+
+    @Test
+    @DisplayName("getAvailableBatches(sourceWarehouseCode=null) → 跨全部可售仓 (除 WH-RD)")
+    void getAvailableBatches_nullSourceWarehouseCode_allSellable() {
+        FinishedGoodsBatch logBatch = buildAvailableBatch("B-LOG-001", WH_LOG_ID, new BigDecimal("100"));
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(logBatch));
+
+        List<FinishedGoodsBatch> batches = salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE, null);
+
+        assertEquals(1, batches.size());
+        assertEquals(WH_LOG_ID, batches.get(0).getWarehouseId());
+        verify(warehouseResolver, never()).resolveSalesOutboundWh(anyString());
+        verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("getAvailableBatches(sourceWarehouseCode=空字符串) → blank-safe 跨全部可售仓")
+    void getAvailableBatches_blankSourceWarehouseCode_allSellable() {
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(Collections.emptyList());
+
+        salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE, "   ");
+
+        verify(finishedGoodsBatchRepository, times(1))
+                .findAvailableBatchesFefoAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
+        verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+    }
+
+    // ============================================================
+    // R6 #6: 发货释放预留 reservedQuantity (避免 available 双扣低估)
+    // ============================================================
+
+    @Test
+    @DisplayName("R6 #6: 部分预留批次发货 → shipped 增 + reserved 释放对应量, available 不双扣")
+    void deduct_releasesReservedOnShip() throws Exception {
+        // produced=100, reserved=50 (本 SO 预留), available=50. 发货 50。
+        FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-RSV", WH_LOG_ID, new BigDecimal("100"));
+        batch.setReservedQuantity(new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(batch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
+        invokeDeduct(item);
+
+        // Pass 1 先扣 available(50) — shipped=50. 不动 reserved (扣的是未预留部分)。
+        assertEquals(0, batch.getShippedQuantity().compareTo(new BigDecimal("50")));
+        // 修复后 available = 100 - 50 - 50 = 0 (仍正确: 这 50 是预留给别的/还没发)。
+        // 关键: reserved 没被"发货+预留"双占。本场景 Pass1 已满足, reserved 不变 (=50)。
+        assertEquals(0, batch.getReservedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
+    }
+
+    @Test
+    @DisplayName("R6 #6: 批次被预留耗尽 (available=0) 仍可发货 — 动用预留物理库存并释放")
+    void deduct_fullyReservedBatch_shipsAndReleasesReserved() throws Exception {
+        // produced=50, reserved=50, available=0. 本 SO 预留了全部 50, 现在发货 50。
+        // 旧逻辑: available=0 → 报"库存不足"无法发货 (幻影预留 bug)。
+        // 新逻辑: findShippableBatchesByWarehouse 返回该批 (produced-shipped=50>0), Pass2 动用预留发货。
+        FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-FULLRSV", WH_LOG_ID, new BigDecimal("50"));
+        batch.setReservedQuantity(new BigDecimal("50"));
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(batch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
+        invokeDeduct(item);  // 不应抛"库存不足"
+
+        // shipped=50, reserved 释放 50 → reserved=0, available=50-50-0=0
+        assertEquals(0, batch.getShippedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getReservedQuantity().compareTo(BigDecimal.ZERO));
+        assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
+        assertEquals("DEPLETED", batch.getStatus());  // produced - shipped = 0 → depleted
+    }
+
+    @Test
+    @DisplayName("R6 #6: 发超过 available 但有预留 → 先扣 available 再动用预留, 释放对应预留量")
+    void deduct_partlyFromAvailableThenReserved() throws Exception {
+        // produced=100, reserved=70, available=30. 发货 50 (> available 30)。
+        // Pass1 扣 available 30; Pass2 从预留再发 20, 释放预留 20。
+        FinishedGoodsBatch batch = buildAvailableBatch("B-LOG-MIX", WH_LOG_ID, new BigDecimal("100"));
+        batch.setReservedQuantity(new BigDecimal("70"));
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(batch));
+
+        SalesDeliveryItem item = buildDeliveryItem(new BigDecimal("50"));
+        invokeDeduct(item);
+
+        // shipped=50, reserved=70-20=50, available=100-50-50=0
+        assertEquals(0, batch.getShippedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getReservedQuantity().compareTo(new BigDecimal("50")));
+        assertEquals(0, batch.getAvailableQuantity().compareTo(BigDecimal.ZERO));
+    }
+
+    // ============================================================
+    // 🔴 C1 (2026-07-05): 跨单位批次扣减 — F006 现场确认同产品批次可记录在不同单位
+    // (一批小结填了 productWeight → kg, 另一批未填 → 盒/件). 扣减必须换算, 不裸相减.
+    // ============================================================
+
+    @Test
+    @DisplayName("🔴 C1: 发货行单位=kg, 批次原生单位=盒 → 扣减前先换算, 不裸减")
+    void deduct_mixedUnitBatch_convertsBeforeDeducting() throws Exception {
+        var ptRepo = org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        com.cretas.aims.entity.ProductType pt = new com.cretas.aims.entity.ProductType();
+        pt.setId(PRODUCT_TYPE);
+        pt.setGramsPerUnit(new BigDecimal("15")); // 15g/盒 (F006 现场量级)
+        when(ptRepo.findById(PRODUCT_TYPE)).thenReturn(java.util.Optional.of(pt));
+
+        SalesServiceImpl mixedUnitService = new SalesServiceImpl(
+                null, null, null, finishedGoodsBatchRepository, null, ptRepo, null, null);
+        ReflectionTestUtils.setField(mixedUnitService, "warehouseResolver", warehouseResolver);
+
+        // 批次记录单位=盒, produced=4454.5盒 → 换算 kg = 4454.5 × 15 / 1000 = 66.8175kg 可用.
+        FinishedGoodsBatch boxBatch = buildAvailableBatch("B-BOX-001", WH_LOG_ID, new BigDecimal("4454.5"));
+        boxBatch.setUnit("盒");
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(boxBatch));
+
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductTypeId(PRODUCT_TYPE);
+        item.setDeliveredQuantity(new BigDecimal("10")); // 发货行要 10kg
+        item.setUnit("kg");
+
+        Method m = SalesServiceImpl.class.getDeclaredMethod(
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+        m.setAccessible(true);
+        m.invoke(mixedUnitService, FACTORY_A, (String) null, item);
+
+        // 10kg 目标量换算回批次原生单位(盒): 10 × 1000 / 15 = 666.6666... → HALF_UP scale2 → 666.67盒
+        assertEquals(0, new BigDecimal("666.67").compareTo(boxBatch.getShippedQuantity()));
+        // 66.8175kg 可用 >> 10kg 需求 → 一批即够, 未误报库存不足.
+        verify(finishedGoodsBatchRepository, times(1)).save(eq(boxBatch));
+    }
+
+    @Test
+    @DisplayName("🔴 C1: 单位不同且产品缺 gramsPerUnit → 该批跳过(诚实null), 未裸误扣")
+    void deduct_mixedUnitBatch_missingGramsPerUnit_skipsBatch() throws Exception {
+        var ptRepo = org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        com.cretas.aims.entity.ProductType pt = new com.cretas.aims.entity.ProductType();
+        pt.setId(PRODUCT_TYPE);
+        pt.setGramsPerUnit(null); // 缺克重配置 → 无法换算
+        when(ptRepo.findById(PRODUCT_TYPE)).thenReturn(java.util.Optional.of(pt));
+
+        SalesServiceImpl mixedUnitService = new SalesServiceImpl(
+                null, null, null, finishedGoodsBatchRepository, null, ptRepo, null, null);
+        ReflectionTestUtils.setField(mixedUnitService, "warehouseResolver", warehouseResolver);
+
+        FinishedGoodsBatch boxBatch = buildAvailableBatch("B-BOX-002", WH_LOG_ID, new BigDecimal("4454.5"));
+        boxBatch.setUnit("盒");
+        when(finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(List.of(boxBatch));
+
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductTypeId(PRODUCT_TYPE);
+        item.setDeliveredQuantity(new BigDecimal("10"));
+        item.setUnit("kg");
+
+        Method m = SalesServiceImpl.class.getDeclaredMethod(
+                "deductFinishedGoodsInventory", String.class, String.class, SalesDeliveryItem.class);
+        m.setAccessible(true);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> {
+                    try {
+                        m.invoke(mixedUnitService, FACTORY_A, (String) null, item);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        if (e.getCause() instanceof RuntimeException re) throw re;
+                        throw new RuntimeException(e);
+                    }
+                });
+        // 批次不可换算 → 被跳过, 视为"无可用库存" → 报库存不足 (而不是裸误扣该批 10 单位).
+        assertEquals(true, ex.getMessage().contains("成品库存不足"));
+        assertEquals(0, BigDecimal.ZERO.compareTo(boxBatch.getShippedQuantity()));
+    }
+
+    @Test
+    @DisplayName("getAvailableBatches 二参旧路径 → 委托走 null(blank) → 跨全部可售仓 (向后兼容)")
+    void getAvailableBatches_legacyTwoArg_delegatesToAllSellable() {
+        // 覆盖旧签名委托新签名的逻辑: 未传 code → blank → 跨全可售仓查询 (非单仓 WH-LOG)。
+        when(finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
+                FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD))
+                .thenReturn(Collections.emptyList());
+
+        salesService.getAvailableBatches(FACTORY_A, PRODUCT_TYPE);
+
+        verify(finishedGoodsBatchRepository, times(1))
+                .findAvailableBatchesFefoAllWarehousesExcluding(FACTORY_A, PRODUCT_TYPE, WarehouseCodes.WH_RD);
+        verify(warehouseResolver, never()).resolveId(anyString(), anyString());
+    }
+}

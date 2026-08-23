@@ -1,0 +1,72 @@
+/* 商品卡片组件样式 */
+.goods-container {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 20rpx;
+}
+
+.goods-box {
+  width: 345rpx;
+  background-color: #fff;
+  overflow: hidden;
+  margin-bottom: 20rpx;
+  border-radius: 16rpx;
+  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
+}
+
+.goods-box .img-box {
+  width: 100%;
+  height: 345rpx;
+  overflow: hidden;
+}
+
+.goods-box .img-box .goods-image {
+  width: 100%;
+  height: 100%;
+}
+
+.goods-info {
+  padding: 16rpx 20rpx 20rpx;
+}
+
+.goods-name {
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #333;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 78rpx;
+}
+
+.price-row {
+  display: flex;
+  align-items: baseline;
+  margin-top: 12rpx;
+}
+
+.sales-price {
+  font-size: 36rpx;
+  font-weight: bold;
+  color: #e74c3c;
+}
+
+.market-price {
+  font-size: 24rpx;
+  color: #999;
+  text-decoration: line-through;
+  margin-left: 12rpx;
+}
+
+/* 未登录时的价格提示 */
+.price-login-hint {
+  font-size: 22rpx;
+  color: #D4AF37;
+  padding: 8rpx 16rpx;
+  background: rgba(212, 175, 55, 0.1);
+  border: 1rpx solid #D4AF37;
+  border-radius: 20rpx;
+}

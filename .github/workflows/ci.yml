@@ -1,0 +1,420 @@
+name: CI/CD Pipeline (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      full_audit:
+        description: 'Run the independent Java, Python, Vue and RN audit'
+        required: false
+        default: true
+        type: boolean
+      package_java_artifact:
+        description: 'Build and retain the exact-main Java deploy artifact'
+        required: false
+        default: false
+        type: boolean
+      target_tests:
+        description: >-
+          Maven test selector the packaged artifact must pass (e.g.
+          ProductionStockAllocationServiceTest). Empty means the artifact
+          carries NO test evidence and cannot be trusted for deployment.
+        required: false
+        default: ''
+        type: string
+  # Build the deployable artifact as soon as backend source lands, so the
+  # compile happens while the change is being reviewed rather than inside the
+  # deploy window. full_audit stays manual -- the whole suite takes over an hour
+  # and is not what this trigger is for.
+  #
+  # ⚠️ paths 必须覆盖【整个】 RELEASE_BACKEND_PATH (= backend/java/cretas-api),
+  # 因为消费端认制品靠的是 `git rev-parse <sha>:backend/java/cretas-api` 这棵树。
+  # 需要成立的不变量是: 【那棵树变了 ⟺ CI 被触发】。
+  #
+  # 原先只列 src/main + pom + lib, 于是 src/test/** 或 lombok.config 之类的改动会
+  # 改变 backend_tree 却不触发构建 → 那个 commit 上【永远】取不到匹配的制品, 发布只能
+  # 回退本地 Maven 构建。实测最近 120 个 main commit 中有 23 个碰 cretas-api, 其中 3 个
+  # (13%) 命中这个洞, 全是纯测试改动。
+  #
+  # 这不只是效率问题: 制品的 vouching 是「ci.yml 在打包【之前】跑过那组测试」, 而测试源
+  # 属于这棵树。测试改了却复用旧制品, 等于拿旧测试的结论给新测试背书。所以测试改动
+  # 【应该】重建制品 —— 原先注释里"test-only commits must not trigger a build"这条
+  # 判断是错的。
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    paths:
+      - 'backend/java/cretas-api/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---- Java Backend: Build + Test ----
+  java-build-test:
+    if: >-
+      ${{ github.event_name == 'push' || inputs.full_audit || inputs.package_java_artifact }}
+    runs-on: ubuntu-latest
+
+    # attestations/id-token 是签制品 provenance 所必需的; 其余保持最小。
+    # 显式声明会【替换】掉仓库默认权限, 所以这里列全: 本 job 只有 checkout 需要
+    # contents:read, upload-artifact 走 ACTIONS_RUNTIME_TOKEN 不吃 GITHUB_TOKEN 权限。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    # PostgreSQL service container — enables PG-required IT classes (e.g.
+    # FactoryConfigServiceImplReorderIT) to run against real PostgreSQL
+    # instead of being skipped due to H2 fallback failing on PG-specific
+    # types (BLOB / JSONB / vector). Image matches e2e-pr.yml for consistency
+    # (pgvector pre-installed for any future entity that uses vector(N)).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: cretas_user
+          POSTGRES_PASSWORD: cretas_pass
+          POSTGRES_DB: cretas_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: backend/java/cretas-api/pom.xml
+
+      # Bootstrap IT database matching application-r10-it.properties:
+      # cretas_r10_it_test owned by cretas_user. Schema is auto-applied
+      # by Spring Boot via spring.sql.init.schema-locations=r10-it-schema.sql
+      # at @DataJpaTest startup, so we only need to provision the empty DB.
+      # pgvector ext is enabled defensively — TrainingSample.embedding_blob
+      # is BLOB (not vector), but other entities scanned via @EntityScan
+      # may declare vector columns and Hibernate can't validate without ext.
+      - name: Bootstrap cretas_r10_it_test DB + pgvector ext
+        env:
+          PGPASSWORD: cretas_pass
+        run: |
+          psql -h localhost -U cretas_user -d cretas_db -c "CREATE DATABASE cretas_r10_it_test OWNER cretas_user;"
+          psql -h localhost -U cretas_user -d cretas_db             -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -h localhost -U cretas_user -d cretas_r10_it_test    -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      # Fast, explicit startup gate for declared Repository JPQL/HQL.
+      # Mockito service tests never instantiate Repository proxies, so invalid
+      # queries otherwise survive compilation and fail only when Spring starts.
+      # The naming convention is enforced by AGENTS.md for all new query tests.
+      - name: JPA repository query startup gate
+        if: inputs.full_audit
+        working-directory: backend/java/cretas-api
+        timeout-minutes: 15
+        run: >-
+          mvn -B test
+          -Dspring.profiles.active=test
+          -Dtest='*RepositoryQueryValidationTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+
+      # Produce the deployable JAR before the long full-suite verify. The PR
+      # gates and JPA startup gate still authorize merges; this step only makes
+      # the exact-main artifact available early so deploy does not rebuild it.
+      #
+      # 🔴 2026-08-12: selector 从只有 '*RepositoryQueryValidationTest' 扩到三项。
+      # 那天 prod 部署失败(OssServiceImpl 上的 @ConditionalOnBean 依赖 jar 条目物理
+      # 顺序, 重新构建把顺序翻了过来 → bean 被静默跳过 → APPLICATION FAILED TO START)。
+      # 修复带了一条守卫测试, 然后发现**它不会在任何地方跑** —— 通配符匹配不上它,
+      # FlywayVersionUniquenessTest 同样一直没被 CI 跑过(只存在于人工的部署前命令里)。
+      #
+      # 这两条都属于同一类: **编译通过、单测通过, 要到【启动】那一刻才炸, 而那一刻是
+      # prod 部署**。所以它们必须跟 JPA 那批一起进这个 selector。
+      #
+      # `*StartupGuardTest` 是给这类闸立的命名约定 —— 以后新写的启动期守卫按这个后缀
+      # 命名就自动被捞进来, 不用再改 CI(改 CI 这件事没人会记得, 于是新闸又不跑)。
+      #
+      # 🔴 2026-08-16: 再扩一项 `*ContractTest`, 并显式排除一个类。
+      # 上面那条「约定就能自动捞进来」的设想, 实测没有兑现 —— 因为**约定只有人记得才生效**,
+      # 而那正是它自己想解决的问题。当天量的结果:
+      #   全仓 1277 个测试类, push 上真正被执行的只有 37 个(= 2.9%);
+      #   46 个「会去读 src/main 源码」的闸里, **29 个**不匹配任何约定后缀, 一条都没跑过;
+      #   而前一晚新写的 PurchaseOrderIdempotency… 闸, 即使把选择器扩到 4 项**仍然**匹配不上
+      #   (它当时叫 …ContentDimensionTest)。差一点就换来一道同样不执行的闸。
+      #
+      # 所以这次不只是加后缀, 而是把约定**机械化**:
+      # `GateSelectorCoverageContractTest` 枚举所有读 src/main 的测试类, 断言它们的类名
+      # 落在本选择器的匹配面里。存量 29 个冻结成棘轮(只许变短), 名单外新增的当场红。
+      # ⇒ 下一个忘记按约定命名的人, 会在 CI 上被拦住, 而不是安静地多一道哑闸。
+      #
+      # 2026-08-16: 曾经排除过的 `!SkuUnitStorageIsCodeContractTest` 已还清并摘掉 ——
+      # 它那 2 条红守的是已被有意改掉的行为(两侧都从 normalized.code() 迁到了权威函数
+      # storageUnit, 因为 code() 会把「只」写成 pcs), 现在守的性质改成
+      # 「两侧都走同一个权威出口」, 恢复进选择器。⛔ 别再往这里加新的排除项 ——
+      # 排除一个类等于让它退回「编译得到、断言看不见」, 那正是本节要解决的问题。
+      #
+      # 实测代价: 选择器从 54 条 → 358 条测试, 本地 wall 129s(热编译), 远低于本步 30min 上限。
+      #
+      # ⚠️ 下面两处 TARGET_TESTS 必须**逐字相同**: 后者写进制品 manifest 的
+      # target_tests, 预热的覆盖检查(requested ⊆ ci_ran)拿它做判据。
+      # target_tests is passed through the environment, never interpolated into
+      # the shell: a selector is operator-supplied text and ${{ }} inside run:
+      # would be a command-injection sink.
+      - name: Package exact-commit deploy artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        working-directory: backend/java/cretas-api
+        timeout-minutes: 30
+        env:
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest' || '') }}
+        run: |
+          started=$(date +%s)
+          if [ -n "$TARGET_TESTS" ]; then
+            # Tests run BEFORE the artifact exists, so a failing selector means
+            # no artifact rather than an artifact nobody vetted.
+            mvn -B package -Dtest="$TARGET_TESTS" \
+              -Dsurefire.failIfNoSpecifiedTests=false -pl .
+            maven_command="mvn -B package -Dtest=$TARGET_TESTS -pl ."
+          else
+            mvn -B package -Dmaven.test.skip=true -pl .
+            maven_command="mvn -B package -Dmaven.test.skip=true -pl ."
+          fi
+          {
+            echo "MAVEN_WALL_SECONDS=$(( $(date +%s) - started ))"
+            echo "MAVEN_COMMAND=$maven_command"
+          } >> "$GITHUB_ENV"
+
+      # Emit the same key=value manifest that release-jar-manifest.sh produces
+      # locally, so the ECS verifier can decide deployable_trust_verified from
+      # a CI artifact exactly as it does from a locally built one.
+      - name: Prepare exact-commit deploy artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        working-directory: backend/java/cretas-api/target
+        env:
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name == 'push' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest' || '') }}
+        run: |
+          JAR=cretas-backend-system-1.0.0.jar
+          test -f "$JAR"
+          sha256sum "$JAR" > "$JAR.sha256"
+          printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
+          backend_tree=$(git -C "$GITHUB_WORKSPACE" rev-parse "HEAD:backend/java/cretas-api")
+          {
+            echo "format=cretas-release-jar-manifest-v1"
+            echo "success=true"
+            echo "build_commit=$GITHUB_SHA"
+            echo "backend_tree=$backend_tree"
+            echo "jar_sha256=$(cut -d ' ' -f 1 < "$JAR.sha256")"
+            echo "jar_path=$JAR"
+            echo "jdk_vendor=$(java -XshowSettings:properties -version 2>&1 |
+              sed -n 's/.*java.vendor = //p' | head -1)"
+            echo "jdk_version=$(java -XshowSettings:properties -version 2>&1 |
+              sed -n 's/.*java.version = //p' | head -1)"
+            echo "maven_command=$MAVEN_COMMAND"
+            echo "target_tests=$TARGET_TESTS"
+            echo "maven_wall_seconds=$MAVEN_WALL_SECONDS"
+            echo "jar_size_bytes=$(stat -c %s "$JAR")"
+            echo "built_by=github-actions"
+          } > release-jar.manifest
+          echo "--- manifest ---"
+          cat release-jar.manifest
+      # ---- provenance ----
+      # 上面那份 manifest 能证明【内部自洽】, 但证明不了【出处】: 它和 JAR 装在同一
+      # 个 ZIP 里, 任何能造出这个 ZIP 的人都能自己写一份"测试通过了"。所以 ECS 侧的
+      # deployable_trust_verified 在拿到可信签名之前一直是 false —— 这是设计, 不是缺陷。
+      #
+      # 这一步补上那个签名。subject 刻意是 JAR 而不是 ZIP: JAR 才是最终装到服务器上
+      # 跑的东西, 而 ZIP 只是运输包装, 中途会被东京拆掉。
+      - name: Attest deploy artifact provenance
+        id: attest
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
+
+      # 把签名 bundle 放进制品 ZIP 一起下发。
+      #
+      # 这样做安全, 而且是关键的一环: bundle 已经被签过, 中途改一个字节验签就挂, 所以
+      # 它可以走任何不可信通路(包括东京中继)。代价是 ECS 侧【完全不需要访问 GitHub】
+      # 就能验 provenance —— 上海到 GitHub 实测 0.001 MB/s, 指望 ECS 现取 bundle 是不
+      # 现实的。
+      #
+      # ⚠️ trusted root 绝不能也这么下发。信任根必须走独立通路并钉在 ECS 上, 否则就是
+      # 把"验证者"和"被验证者"装进同一个包 —— 犯的正是上面那个 unsigned manifest 的错。
+      - name: Ship attestation bundle with the artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          test -n "$BUNDLE_PATH"
+          test -s "$BUNDLE_PATH"
+          cp -- "$BUNDLE_PATH" \
+            backend/java/cretas-api/target/release-jar.attestation.jsonl
+          echo "attestation bundle bytes: $(stat -c %s \
+            backend/java/cretas-api/target/release-jar.attestation.jsonl)"
+
+      - name: Upload exact-commit deploy artifact
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cretas-java-${{ github.sha }}
+          path: |
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.sha256
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
+            backend/java/cretas-api/target/release-jar.manifest
+            backend/java/cretas-api/target/release-jar.attestation.jsonl
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      # 堆该给多少不该靠猜。把 runner 的真实规格打出来, 第一次运行就能确认 4g
+      # 是否留了足够余量给 Postgres 服务容器和 Maven 自身。
+      - name: Report runner resources
+        if: inputs.full_audit
+        run: |
+          echo "CPU cores: $(nproc)"
+          free -h
+          df -h / | tail -1
+
+      - name: Maven compile and test
+        if: inputs.full_audit
+        working-directory: backend/java/cretas-api
+        # Keep the complete suite after artifact upload. It reuses the package
+        # output already in target/ and remains visible as a separate CI gate.
+        #
+        # 2026-07-29: 这一步连续三次以 `Java heap space` 失败 (每次烧掉 ~78 分钟),
+        # 也就是【全量套件从来没跑完过一次】—— 那 1119 个测试类的实际保护力是未知数,
+        # 不是"通过了"。根因不是测试有 bug:
+        #   - 全仓没有任何 -Xmx / MAVEN_OPTS 设置, JVM 用默认堆
+        #   - surefire 没配 forkCount/reuseForks → 默认 forkCount=1, reuseForks=true
+        #     即 1119 个测试类全挤在同一个 forked JVM 里, 中途从不重启
+        #   - 其中 110 个是 @SpringBootTest(36) / @DataJpaTest(74), 每个缓存一份
+        #     Spring 上下文, TestContext 框架默认最多缓存 32 份且不主动驱逐
+        # 先显式给堆, 目的是【拿到一个能跑完的真实基线】—— 在此之前"全量要多久"
+        # 和"有多少真失败"两个问题都没有可信答案, 任何并行化/拆 job 的讨论都建立
+        # 在假数字上。跑通后再按真实基线决定要不要 forkCount 并行或更大的 runner。
+        #
+        # 分配依据: MAVEN_OPTS 只管 Maven 自身 (不跑测试, 1g 足够); -DargLine 管
+        # surefire fork 出来的那个 JVM —— 测试真正跑的地方, OOM 就发生在这里。
+        # argLine 覆盖会【替换】pom 里的 <argLine>, 所以把原有两个 flag 原样带上
+        # (确认过没有 jacoco 之类靠 @{argLine} 注入的插件, 覆盖是安全的)。
+        # 加 HeapDumpOnOutOfMemoryError: 万一 4g 仍然不够, 下次就有 dump 可查,
+        # 不用再靠猜。
+        env:
+          MAVEN_OPTS: -Xmx1g
+        run: >-
+          mvn -B verify -Dspring.profiles.active=test -pl .
+          -DargLine="-Xmx4g -XX:+EnableDynamicAgentLoading -Xshare:off -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/surefire-oom.hprof"
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-results
+          path: backend/java/cretas-api/target/surefire-reports/
+          retention-days: 3
+
+  # ---- Python Service: Lint + Test ----
+  python-lint-test:
+    if: inputs.full_audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/python/requirements.txt
+      - name: Install dependencies
+        # NOTE: legacy-resolver fallback chain handles resolution-too-deep failures.
+        # Recent CI runs (2026-05-09) show step exits 0 cleanly — continue-on-error removed.
+        run: |
+          pip install --upgrade pip
+          pip install --use-deprecated=legacy-resolver -r requirements.txt || pip install -r requirements.txt
+          pip install flake8 pytest pytest-asyncio pytest-cov pytest-timeout
+      - name: Flake8 lint (enforced)
+        # 2026-05-09: continue-on-error removed after debt cleanup PR. Sub-1
+        # (PR #233) cleared 563 zero-risk auto-fixable; this PR cleared the
+        # remaining ~933 (E501/E402/E128/F841/F821/F811/F601/etc.) via
+        # autopep8 + targeted noqa with provenance comments. Followups can
+        # gradually replace each # noqa with a proper rewrite.
+        # grpc_stubs/ excluded — auto-generated protobuf code (per PR #217 §1).
+        run: flake8 --max-line-length=120 --statistics --count --exclude=venv,__pycache__,.git,grpc_stubs .
+      - name: Phase 2B endpoint coverage gate
+        # Runs pytest collection-only with the semantic endpoint gate enabled.
+        # Verifies every endpoint in conftest.KNOWN_ENDPOINTS (34 canonical)
+        # has >=3 tests carrying @pytest.mark.api_endpoint markers. The gate
+        # raises pytest.exit(returncode=1) on a miss; this is its own step
+        # (rather than env on "Run pytest") because that step ends in
+        # `|| true`, which would silently swallow the gate's exit code.
+        env:
+          CRETAS_TEST_ENDPOINT_GATE: "1"
+        run: pytest --collect-only -q tests/
+      - name: Run pytest
+        run: |
+          pytest tests/ -v --timeout=30 \
+            --ignore=tests/test_data_accuracy.py \
+            -k "not e2e and not integration" \
+            --tb=short || true
+
+  # ---- Vue Web Admin: Build + Type Check ----
+  vue-build-check:
+    if: inputs.full_audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web-admin/package-lock.json
+      - run: npm ci --legacy-peer-deps
+      - name: Build
+        run: npm run build
+      - name: Type check
+        run: npx vue-tsc -b
+        continue-on-error: true
+      - name: Vitest unit tests
+        # CI cleanup PR-2 (May 9 2026): pre-existing failures are now green
+        # (118/118 tests pass locally as of 2026-05-09). Empty-suite file
+        # useSmartBIShortcuts.test.ts converted to real describe/it block.
+        # continue-on-error removed — vitest now enforced.
+        run: npm test
+
+  # ---- React Native: Jest Tests ----
+  rn-test:
+    if: inputs.full_audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/CretasFoodTrace
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+          cache-dependency-path: frontend/CretasFoodTrace/yarn.lock
+      - run: yarn install --frozen-lockfile
+      - name: Run tests
+        # CI cleanup PR-2 (May 9 2026): jest + jest-expo added to devDeps,
+        # 44/44 suites + 880 tests pass locally. continue-on-error removed.
+        # 3 integration/screens/* tests deferred via jest.config.js
+        # testPathIgnorePatterns (pre-existing @react-navigation ESM transform debt
+        # — separate follow-up to fix transformIgnorePatterns).
+        run: yarn test --ci --coverage --forceExit
+      - name: Upload coverage
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rn-coverage
+          path: frontend/CretasFoodTrace/coverage/
+          retention-days: 3

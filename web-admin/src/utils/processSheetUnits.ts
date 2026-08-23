@@ -1,0 +1,251 @@
+export type ProcessSheetUnits = {
+  inputUnit: string;
+  outputUnit: string;
+};
+
+type UnitConfig = {
+  unitOverride?: string | null;
+  defaultUnit?: string | null;
+  defaultOutputUnit?: string | null;
+  /** @deprecated Kept only for call-site compatibility; fail-closed resolution ignores it. */
+  fallbackOutputUnit?: string;
+};
+
+type WorkflowUnitPort = {
+  workflowPortId?: string | null;
+  unit?: string | null;
+  materialKind?: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD' | null;
+  finished?: boolean | null;
+  gramsPerUnit?: number | null;
+};
+
+type WorkflowUnitConfig = {
+  processName?: string | null;
+  inputs?: readonly WorkflowUnitPort[] | null;
+  output?: WorkflowUnitPort | null;
+  outputs?: readonly WorkflowUnitPort[] | null;
+};
+
+type LabelColumn = { key: string; label: string };
+
+const INPUT_KEYS = new Set(['outWeight', 'feedWeight', 'before', 'input', 'remain']);
+const OUTPUT_KEYS = new Set(['output', 'after', 'storage', 'sample', 'remainBox', 'claim', 'actualProd']);
+/**
+ * 展示映射 —— 规则见 `utils/unitPricing.ts` 的 UNIT_LABELS 注释 (Steve 2026-07-31 拍板):
+ * 可换算的国际单位保留英文码, **计数 / 包装单位一律不得以英文码示人**。
+ *
+ * 🔴 少一条就漏英文: `displayProcessUnit` 查不到就原样返回。原表缺 pack / can / crate /
+ * pail / roll / item, 而库里这些码是后端保存时自己写进去的 (规范码), 不是脏数据。
+ * 同目录 `__tests__/unitDisplayContract.spec.ts` 直接读后端权威表比对, 后端加单位这里没加就红。
+ */
+const DISPLAY_UNIT_ALIASES: Record<string, string> = {
+  // 计数 / 包装 —— 一律中文
+  box: '盒', case: '箱', slice: '片', bag: '袋', pcs: '件', each: '件', piece: '件',
+  portion: '份', bottle: '瓶', pack: '包', can: '罐', crate: '框', pail: '桶',
+  roll: '卷', item: '项',
+  // 2026-08-01 补: 后端权威表(UnitContractServiceImpl.systemUnits)加了这三个 COUNT 码,
+  // 而本表没跟 —— 上面那句「后端加单位这里没加就红」正是说的这种情况。
+  // 中文名取自后端 UnitDisplayNames, 不自己另起一套。
+  sheet: '张', tray: '托盘', plate: '板',
+  // 2026-08-14 补: unitDisplayContract 新加的「英文别名必须翻成中文」断言当场抓到 ——
+  // 后端 systemAliases 里 carton→箱、pc/pieces→件 一直在, 本表漏了这三个,
+  // 于是它们原样以英文示人。取自后端权威表, 不自己另起一套。
+  carton: '箱', pc: '件', pieces: '件',
+  '盒': '盒', '箱': '箱', '片': '片', '袋': '袋', '件': '件', '份': '份', '瓶': '瓶',
+  '包': '包', '罐': '罐', '框': '框', '筐': '框', '桶': '桶', '卷': '卷', '项': '项',
+  '张': '张', '托盘': '托盘', '板': '板',
+  // ⛔ 刻意**不**把「只」「个」并进「件」: #1976 —— 计数单位按字面区分, 一只 ≠ 一件。
+  //    本次改动的目标是「英文码不示人」, 不是合并中文计量单位; 合并会改掉一条既有业务判据
+  //    (ProcessDataTable 里那句「归一只到显示层为止, 「只」不会和「件」合并」正是这条)。
+  // 中文计量单位 —— 英文码对用户无意义
+  jin: '斤', '斤': '斤', t: '吨', '吨': '吨',
+  // 可换算国际单位 —— 保持英文
+  g: 'g', '克': 'g', kg: 'kg', '千克': 'kg', '公斤': 'kg',
+  mg: 'mg', '毫克': 'mg', ml: 'mL', '毫升': 'mL', l: 'L', '升': 'L',
+};
+
+function nonBlank(value: string | null | undefined): string | undefined {
+  const unit = value?.trim();
+  return unit || undefined;
+}
+
+function isMassUnit(unit: string): boolean {
+  const normalized = unit.trim().toLowerCase();
+  return normalized === 'g' || normalized === 'kg' || normalized === '克' || normalized === '千克';
+}
+
+function reportingUnit(port: WorkflowUnitPort, unit: string): string {
+  if ((port.materialKind === 'RAW_MATERIAL' || port.materialKind === 'SEMI_FINISHED') && isMassUnit(unit)) {
+    return 'kg';
+  }
+  return unit;
+}
+
+export function displayProcessUnit(unit: string | null | undefined): string {
+  const value = nonBlank(unit);
+  if (!value) return '';
+  return DISPLAY_UNIT_ALIASES[value.toLowerCase()] || value;
+}
+
+export function workflowPortDisplayUnit(port: WorkflowUnitPort | null | undefined): string {
+  const unit = nonBlank(port?.unit);
+  if (!port || !unit) return '';
+  return displayProcessUnit(reportingUnit(port, unit));
+}
+
+/** 只转换显示值；持久化快照保持原样。 */
+export function normalizeMassQuantityForReporting(
+  quantity: number,
+  unit: string | null | undefined,
+): { quantity: number; unit: string } {
+  const source = nonBlank(unit);
+  if (!source) return { quantity, unit: '' };
+  const normalized = source.toLowerCase();
+  if (normalized === 'g' || normalized === '克') {
+    return { quantity: Number((quantity / 1000).toFixed(6)), unit: 'kg' };
+  }
+  return { quantity, unit: displayProcessUnit(source) };
+}
+
+function massQuantityInGrams(quantity: number, unit: string): number | null {
+  const normalized = unit.trim().toLowerCase();
+  if (normalized === 'g' || normalized === '克') return quantity;
+  if (normalized === 'kg' || normalized === '千克') return quantity * 1000;
+  return null;
+}
+
+/**
+ * 把 quantity 从 fromUnit 换算到 toUnit; **无法确定性换算时返回 null** (不臆造)。
+ *
+ * 规则与后端一致 (#1976, 2026-07-29 定): **等价码只对科学单位成立, 计数/包装单位按字面
+ * 比较** —— 「一只 ≠ 一件」, 所以只有质量单位 (g/kg/克/千克) 之间换算, 其余单位仅在字面
+ * 相同时视为同一单位。
+ *
+ * 🔴 不要拿 `displayProcessUnit` / `DISPLAY_UNIT_ALIASES` 做这件事: 那张表是**显示**别名
+ * (pcs / each / piece 全映射成「件」), 用它比较会把后端会拒的两个单位算成同一个, 于是汇总
+ * 出一个偏大、看着权威的「可用量」—— 正是 2026-07-30「界面有货、报工说可用 0」那一类错。
+ *
+ * 「每单位重量」桥 (计数单位 ↔ 质量) 已由 Steve 拍板暂不做, 前端也拿不到 gramsPerUnit,
+ * 故此处一律不跨维度换算。
+ */
+export function convertQuantityToUnit(
+  quantity: number,
+  fromUnit: string | null | undefined,
+  toUnit: string | null | undefined,
+): number | null {
+  const from = nonBlank(fromUnit);
+  const to = nonBlank(toUnit);
+  if (!from || !to) return null;
+  if (from.trim().toLowerCase() === to.trim().toLowerCase()) return quantity;
+  const grams = massQuantityInGrams(quantity, from);
+  const gramsPerTargetUnit = massQuantityInGrams(1, to);
+  if (grams == null || gramsPerTargetUnit == null) return null;
+  return grams / gramsPerTargetUnit;
+}
+
+export function resolveProcessSheetUnits(config: UnitConfig): ProcessSheetUnits {
+  const inputUnit = nonBlank(config.unitOverride) ?? nonBlank(config.defaultUnit);
+  if (!inputUnit) throw new Error('legacy 工序投入单位未配置');
+  const outputUnit = nonBlank(config.defaultOutputUnit);
+  if (!outputUnit) throw new Error('legacy 工序产出单位未配置');
+  return { inputUnit, outputUnit };
+}
+
+/**
+ * Workflow 报工的单位只认端口快照，不接受 plannedUnit、产品单位或 kg 默认值。
+ * 当前保存请求只有一个 inputUnit，因此多投入必须同单位；异单位不能静默取第一个。
+ */
+export function resolveWorkflowProcessSheetUnits(config: WorkflowUnitConfig): ProcessSheetUnits {
+  const processLabel = nonBlank(config.processName) ?? '未命名工序';
+  if (!Array.isArray(config.inputs) || config.inputs.length === 0) {
+    throw new Error(`工序「${processLabel}」未配置投入端口，无法确定投入单位`);
+  }
+
+  const inputUnits = config.inputs.map((port, index) => {
+    const unit = nonBlank(port.unit);
+    if (!unit) {
+      const portLabel = nonBlank(port.workflowPortId) ?? `#${index + 1}`;
+      throw new Error(`工序「${processLabel}」投入端口 ${portLabel} 缺少单位`);
+    }
+    return reportingUnit(port, unit);
+  });
+  const distinctInputUnits = [...new Set(inputUnits)];
+  if (distinctInputUnits.length !== 1) {
+    throw new Error(`工序「${processLabel}」投入端口单位不一致：${distinctInputUnits.join('、')}`);
+  }
+
+  const rawOutputUnit = nonBlank(config.output?.unit);
+  const outputUnit = rawOutputUnit && config.output ? reportingUnit(config.output, rawOutputUnit) : undefined;
+  if (!outputUnit) {
+    const portLabel = nonBlank(config.output?.workflowPortId) ?? '未配置';
+    throw new Error(`工序「${processLabel}」产出端口 ${portLabel} 缺少单位`);
+  }
+  config.outputs?.forEach((port, index) => {
+    const unit = nonBlank(port.unit);
+    if (!unit) {
+      const portLabel = nonBlank(port.workflowPortId) ?? `#${index + 1}`;
+      throw new Error(`工序「${processLabel}」产出端口 ${portLabel} 缺少单位`);
+    }
+  });
+
+  return { inputUnit: distinctInputUnits[0], outputUnit };
+}
+
+export function formatWorkflowPlannedOutput(
+  quantity: number | null | undefined,
+  plannedUnit: string | null | undefined,
+  terminalOutput: WorkflowUnitPort | null | undefined,
+): string {
+  if (quantity == null || quantity === 0 || !terminalOutput) return formatPlannedOutput(quantity, plannedUnit);
+  const sourceUnit = nonBlank(plannedUnit);
+  const targetUnit = nonBlank(terminalOutput.unit);
+  if (!sourceUnit || !targetUnit) return formatPlannedOutput(quantity, plannedUnit);
+
+  const grams = massQuantityInGrams(quantity, sourceUnit);
+  if ((terminalOutput.finished === true || terminalOutput.materialKind === 'FINISHED_GOOD') && grams != null) {
+    const gramsPerUnit = terminalOutput.gramsPerUnit;
+    if (gramsPerUnit != null && gramsPerUnit > 0 && !isMassUnit(targetUnit)) {
+      return formatPlannedOutput(Number((grams / gramsPerUnit).toFixed(6)), targetUnit);
+    }
+  }
+  if ((terminalOutput.materialKind === 'RAW_MATERIAL' || terminalOutput.materialKind === 'SEMI_FINISHED') && grams != null) {
+    return formatPlannedOutput(Number((grams / 1000).toFixed(6)), 'kg');
+  }
+  return formatPlannedOutput(quantity, targetUnit);
+}
+
+export function formatPlannedOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
+  if (quantity == null || quantity === 0) return '计划成品 —';
+  const normalizedUnit = displayProcessUnit(unit) || '（单位未配置）';
+  return `计划成品 ${quantity} ${normalizedUnit}`;
+}
+
+export function formatProcessOutput(quantity: number | null | undefined, unit: string | null | undefined): string {
+  if (quantity == null) return '—';
+  return `产出 ${Number(quantity).toFixed(2)} ${displayProcessUnit(unit) || '（单位未配置）'}`;
+}
+
+export function formatSourceFeedSummary(sourceCount: number, quantity: number, unit: string | null | undefined): string {
+  if (sourceCount === 0) return '+ 来源批';
+  return `${sourceCount}批 · ${Number(quantity).toFixed(1)}${displayProcessUnit(unit) || '（单位未配置）'}`;
+}
+
+export function formatFeedPlaceholder(unit: string | null | undefined): string {
+  return `投料${displayProcessUnit(unit) || '（单位未配置）'}`;
+}
+
+export function withProcessSheetUnits<T extends LabelColumn>(
+  cols: readonly T[],
+  units: ProcessSheetUnits,
+): T[] {
+  return cols.map((col) => {
+    const unit = INPUT_KEYS.has(col.key) ? units.inputUnit
+      : OUTPUT_KEYS.has(col.key) ? units.outputUnit
+        : undefined;
+    if (!unit || !col.label.includes('(kg)')) return { ...col };
+
+    let label = col.label.replace('(kg)', `(${unit})`);
+    if (unit !== 'kg') label = label.replace('出库重量', '出库数量').replace('投料重量', '投料数量');
+    return { ...col, label };
+  });
+}

@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "test": "echo \"No root-level tests\" && exit 0"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "axios": "^1.15.0",
+    "miniprogram-automator": "^0.12.1"
+  }
+}

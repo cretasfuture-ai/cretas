@@ -1,0 +1,361 @@
+import { apiClient } from './apiClient';
+import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+
+/**
+ * 采购管理API客户端
+ * 路径：/api/mobile/{factoryId}/purchase/*
+ */
+
+// ========== 类型定义 ==========
+
+export interface PurchaseOrder {
+  id: string;
+  factoryId: string;
+  orderNumber: string;
+  supplierId: string;
+  supplierName?: string;
+  status:
+    | 'DRAFT'
+    | 'SUBMITTED'
+    | 'APPROVED'
+    | 'REJECTED'
+    | 'PENDING_FINANCE_REVIEW'
+    | 'FINANCE_APPROVED'
+    | 'FINANCE_REJECTED'
+    | 'PARTIAL_RECEIVED'
+    | 'COMPLETED'
+    | 'CANCELLED'
+    | 'CLOSED';
+  financeReviewedBy?: number;
+  financeReviewedAt?: string;
+  financeReviewNotes?: string;
+  totalAmount: number;
+  orderDate: string;
+  expectedDeliveryDate?: string;
+  remark?: string;
+  createdBy?: string;
+  approvedBy?: string;
+  items?: PurchaseOrderItem[];
+  receiveRecords?: PurchaseReceiveRecord[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PurchaseOrderItem {
+  id: string;
+  materialTypeId: string;
+  /**
+   * 品名。
+   *
+   * 🔴 2026-08-21: 这里原来叫 `materialTypeName` —— **后端从来不发这个名字**。
+   * `GET /purchase/orders/by-status` 直接序列化实体 `PurchaseOrderItem`,
+   * 它的字段是 `materialName` (PurchaseOrderItem.java:49)。
+   * 而 TS 里它声明成可选(`?`), 所以类型检查一路绿, 界面恒显示兜底的「未知材料」。
+   *
+   * ▎可选字段 + 兜底文案 = 字段名写错不会报错, 只会变成一个看起来合理的显示值。
+   * ⛔ 不要为了"兼容"再加回 `materialTypeName?` —— 两个名字并存就是形态 D,
+   *    下一个人还会挑错那个。同族先例: MaterialBatchScreen 里有人写过
+   *    `materialTypeName: b.materialName` 的本地绕行, 说明这个坑撞过不止一次。
+   */
+  materialName?: string;
+  quantity: number;
+  receivedQuantity: number;
+  unitPrice: number;
+  unit: string;
+  materialPackagingSpecId?: string;
+  purchasePackageUnitSnapshot?: string;
+  inventoryBaseUnitSnapshot?: string;
+  packageToBaseFactorSnapshot?: number;
+  inventoryQuantitySnapshot?: number;
+  totalPrice: number;
+  remark?: string;
+}
+
+export interface PurchaseReceiveRecord {
+  id: string;
+  receiveNumber: string;
+  receiveDate: string;
+  receivedBy?: string;
+  status: string;
+  remark?: string;
+  items?: PurchaseReceiveItem[];
+}
+
+export interface PurchaseReceiveItem {
+  id: string;
+  materialTypeId: string;
+  /** 同上 —— 后端 `PurchaseReceiveItem.java:59` 也叫 `materialName`。 */
+  materialName?: string;
+  receivedQuantity: number;
+  unit: string;
+  batchNumber?: string;
+}
+
+export interface CreatePurchaseOrderRequest {
+  supplierId: string;
+  /**
+   * 下单日期 (YYYY-MM-DD)。**必填** —— 后端 CreatePurchaseOrderRequest 上是
+   * `@NotNull(message = "下单日期不能为空")`。
+   *
+   * 2026-08-04 客户反馈「不能新建采购订单，提示 request failed code 400」的唯一原因就是
+   * 这个字段整个不在契约里: 界面没收集、类型没声明、payload 没送 —— TS 也就不会提醒。
+   * prod 实测: 按旧形状发 → 400「下单日期不能为空」(hintTarget: orderDate);
+   * 只补这一个字段 → 请求穿过校验进入业务层。
+   *
+   * 声明成**必填**而不是可选, 就是让 tsc 在每个调用点替我们守这条契约。
+   */
+  orderDate: string;
+  expectedDeliveryDate?: string;
+  remark?: string;
+  items: {
+    materialTypeId: string;
+    supplierMaterialId?: string;
+    purchasePackagingSpecId?: string;
+    materialPackagingSpecId?: string;
+    quantity: number;
+    unitPrice: number;
+    unit: string;
+  }[];
+}
+
+export interface CreateReceiveRecordRequest {
+  /** 关联采购订单ID（可选，支持无单入库） */
+  purchaseOrderId?: string;
+  supplierId: string;
+  receiveDate: string; // ISO date string: YYYY-MM-DD
+  warehouseId?: string;
+  remark?: string;
+  items: {
+    purchaseOrderItemId?: number;
+    materialTypeId: string;
+    materialPackagingSpecId?: string;
+    materialName?: string;
+    receivedQuantity: number;
+    unit: string;
+    unitPrice?: number;
+    qcResult?: string;
+    remark?: string;
+  }[];
+}
+
+// ========== Sprint2-J P-FIN-1: 三价对比 + 财务审核 ==========
+
+export interface MaterialPriceComparison {
+  materialTypeId: string;
+  materialName: string | null;
+  materialCode: string | null;
+  unit: string | null;
+  bomStandardPrice: number | null;
+  movingAvgPrice: number | null;
+  currentPrice: number | null;
+  varianceFromBom: number | null;
+  varianceFromAvg: number | null;
+  priceAlert: boolean;
+  bomProductNames: string | null;
+  dataSourceHint: string | null;
+}
+
+export interface PageResponse<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+}
+
+// ========== 价格表类型定义 ==========
+
+export type PriceType = 'PURCHASE_PRICE' | 'SELLING_PRICE' | 'TRANSFER_PRICE';
+
+export interface PriceListItem {
+  id: number;
+  priceListId: string;
+  materialTypeId: string | null;
+  productTypeId: string | null;
+  itemName: string | null;
+  unit: string | null;
+  standardPrice: number;
+  minPrice: number | null;
+  maxPrice: number | null;
+  remark: string | null;
+}
+
+export interface PriceList {
+  id: string;
+  factoryId: string;
+  name: string;
+  priceType: PriceType;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  isActive: boolean;
+  createdBy: number | null;
+  remark: string | null;
+  items: PriceListItem[];
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+// ========== API客户端类 ==========
+
+class PurchaseApiClient {
+  private getPath(factoryId?: string) {
+    const currentFactoryId = getCurrentFactoryId(factoryId);
+    if (!currentFactoryId) {
+      throw new Error('factoryId 是必需的，请先登录或提供 factoryId 参数');
+    }
+    return `/api/mobile/${currentFactoryId}/purchase`;
+  }
+
+  /** 获取采购单列表 */
+  async getOrders(params?: { page?: number; size?: number; status?: string }, factoryId?: string): Promise<{ success: boolean; data: PageResponse<PurchaseOrder> }> {
+    return apiClient.get(this.getPath(factoryId) + '/orders', { params });
+  }
+
+  /** 获取采购单详情 */
+  async getOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.get(this.getPath(factoryId) + `/orders/${orderId}`);
+  }
+
+  /**
+   * 按订单号查采购单详情 (PDF QR 扫码场景).
+   *
+   * 用法: 扫 PDF QR 拿到 orderNumber 字符串 (如 PO-20260514-001) → 调本接口
+   * 拿订单 + 关联明细 → 跳入库收货页. 后端 GET /orders/by-number/{orderNumber}.
+   */
+  async getOrderByNumber(orderNumber: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.get(this.getPath(factoryId) + `/orders/by-number/${encodeURIComponent(orderNumber)}`);
+  }
+
+  /** 创建采购单 */
+  async createOrder(data: CreatePurchaseOrderRequest, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.post(this.getPath(factoryId) + '/orders', data);
+  }
+
+  /** 提交审批 */
+  async submitOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/submit`);
+  }
+
+  /** 审批通过 */
+  async approveOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/approve`);
+  }
+
+  /** 驳回 */
+  async rejectOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/reject`);
+  }
+
+  /** 取消 */
+  async cancelOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.post(this.getPath(factoryId) + `/orders/${orderId}/cancel`);
+  }
+
+  /** 编辑草稿采购单 */
+  async updateOrder(orderId: string, data: CreatePurchaseOrderRequest, factoryId?: string): Promise<{ success: boolean; data: PurchaseOrder }> {
+    return apiClient.put(this.getPath(factoryId) + `/orders/${orderId}`, data);
+  }
+
+  /** 按状态查询采购单列表 */
+  async getOrdersByStatus(status: PurchaseOrder['status'], params?: { page?: number; size?: number }, factoryId?: string): Promise<{ success: boolean; data: PageResponse<PurchaseOrder> }> {
+    return apiClient.get(this.getPath(factoryId) + '/orders/by-status', { params: { status, ...params } });
+  }
+
+  /*
+   * ========== 已移除: Sprint2-J P-FIN-1 采购财务审核三件套 (2026-08-16) ==========
+   *
+   * submitForFinanceReview / financeApprove / financeReject 打的三个端点
+   * 在 2026-07-21 (#1557) 全部停用, 后端无条件抛 410
+   * 「采购审批只能在 OA 审批中心处理」(PurchaseController.legacyApprovalEndpointDisabled)。
+   *
+   * 采购的财务节点现在由同一条 OA 流程推进: 走 /workflow/instances/{id}/actions,
+   * 待办从 my-todos 取 (见 myTodoApiClient + OA 待办屏)。
+   *
+   * ⛔ 别再加回来 —— oaTodoUsesLiveApprovalEndpointContract 会红。
+   * 退货单与销售单的 finance-approve/reject 是**另外两个仍然活着的端点**, 不受影响。
+   */
+
+  /** 采购单三价对比 (priceAlert=true → 红行) */
+  async getOrderPriceComparison(orderId: string, factoryId?: string): Promise<{ success: boolean; data: MaterialPriceComparison[] }> {
+    return apiClient.get(this.getPath(factoryId) + `/orders/${orderId}/price-comparison`);
+  }
+
+  // ========== 入库单 (receives) ==========
+
+  /** 创建入库单 */
+  async createReceive(data: CreateReceiveRecordRequest, factoryId?: string): Promise<{ success: boolean; data: PurchaseReceiveRecord }> {
+    return apiClient.post(this.getPath(factoryId) + '/receives', data);
+  }
+
+  /** 入库单列表 */
+  async getReceives(params?: { page?: number; size?: number }, factoryId?: string): Promise<{ success: boolean; data: PageResponse<PurchaseReceiveRecord> }> {
+    return apiClient.get(this.getPath(factoryId) + '/receives', { params });
+  }
+
+  /** 入库单详情 */
+  async getReceive(receiveId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseReceiveRecord }> {
+    return apiClient.get(this.getPath(factoryId) + `/receives/${receiveId}`);
+  }
+
+  /** 确认入库（触发物料批次创建） */
+  async confirmReceive(receiveId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseReceiveRecord }> {
+    return apiClient.post(this.getPath(factoryId) + `/receives/${receiveId}/confirm`);
+  }
+
+  /** 按采购单查询关联入库记录 */
+  async getReceivesByOrder(orderId: string, factoryId?: string): Promise<{ success: boolean; data: PurchaseReceiveRecord[] }> {
+    return apiClient.get(this.getPath(factoryId) + `/receives/by-order/${orderId}`);
+  }
+
+  // ========== 统计 ==========
+
+  /** 采购统计数据 */
+  async getStatistics(factoryId?: string): Promise<{ success: boolean; data: Record<string, unknown> }> {
+    return apiClient.get(this.getPath(factoryId) + '/statistics');
+  }
+
+  // ========== 价格表 (price-lists) ==========
+
+  /** 获取价格表列表（分页） */
+  async getPriceLists(
+    params?: { page?: number; size?: number },
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: PageResponse<PriceList> }> {
+    const basePath = this.getPriceListPath(factoryId);
+    return apiClient.get(basePath, { params });
+  }
+
+  /** 获取当前生效的价格表列表 */
+  async getEffectivePriceLists(factoryId?: string): Promise<{ success: boolean; data: PriceList[] }> {
+    const basePath = this.getPriceListPath(factoryId);
+    return apiClient.get(basePath + '/effective');
+  }
+
+  /** 获取价格表详情 */
+  async getPriceList(
+    priceListId: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: PriceList }> {
+    const basePath = this.getPriceListPath(factoryId);
+    return apiClient.get(basePath + `/${priceListId}`);
+  }
+
+  /** 删除价格表 */
+  async deletePriceList(
+    priceListId: string,
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: null }> {
+    const basePath = this.getPriceListPath(factoryId);
+    return apiClient.delete(basePath + `/${priceListId}`);
+  }
+
+  private getPriceListPath(factoryId?: string): string {
+    const currentFactoryId = getCurrentFactoryId(factoryId);
+    if (!currentFactoryId) {
+      throw new Error('factoryId 是必需的，请先登录或提供 factoryId 参数');
+    }
+    return `/api/mobile/${currentFactoryId}/price-lists`;
+  }
+}
+
+export const purchaseApiClient = new PurchaseApiClient();

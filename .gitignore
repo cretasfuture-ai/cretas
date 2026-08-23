@@ -1,0 +1,329 @@
+# 依赖目录
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# 环境变量文件
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 编辑器目录和文件
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+**/.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 构建输出
+dist/
+build/
+out/
+target/
+*.jar
+*.war
+*.zip
+*.msi
+*.exe
+
+# iOS依赖
+ios/Pods/
+Pods/
+
+# 临时文件
+tmp/
+temp/
+temp*
+# Negation: 防止 Windows case-insensitive 误杀 Template* 类文件
+!**/Template*.vue
+!**/Template*.java
+!**/Template*.ts
+# Negation: 防止 Windows case-insensitive 误杀 Temperature* 类文件 (logistics domain,
+# TemperatureMode.java 被 temp* 静默排除, git status 显示 clean 但文件从未入库)
+!**/Temperature*.java
+!**/template_engine*.go
+!backend/python/smartbi/shared/temporal_comparator.py
+!backend/python/smartbi/services/restaurant/sections/temporal_comparison.py
+!backend/python/smartbi/services/materialized_analytics/templates/
+!backend/python/smartbi/canonical/templates/
+!backend/python/smartbi/services/template_rag.py
+!backend/python/smartbi/services/template_embedding_index.py
+!backend/python/printing/services/template_renderer.py
+!web-admin/src/views/platform/print-template-editor/utils/templateRenderer.ts
+!web-admin/src/views/platform/print-template-editor/__tests__/templateRenderer.spec.ts
+!web-admin/src/views/smart-bi/components/Template*.vue
+!backend/python/smartbi/capability/template_status.py
+!backend/python/tests/test_template_status.py
+!backend/java/cretas-api/src/main/java/com/cretas/aims/service/notify/TemplateEngine.java
+!backend/java/cretas-api/src/test/java/com/cretas/aims/service/notify/TemplateEngineTest.java
+.tmp/
+*.tmp
+*.temp
+
+# 备份文件
+*.backup
+*.bak
+*.old
+.backup/
+
+# Java/Maven
+*.class
+*.jar
+!gradle-wrapper.jar
+!backend/java/cretas-api/lib/MvCameraControlWrapper.jar
+target/
+# Negation: web-admin Vue views/api source folders named "target" are not Maven artifacts.
+# Sprint 7 wave 2 T5 (2026-05-20): added web-admin/src/views/sales/target/ for sales target
+# + commission UI. Without this negation, gitignore line 86 (`target/`) silently swallows them.
+!web-admin/src/views/sales/target/
+!web-admin/src/views/sales/target/**
+BOOT-INF/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 归档项目
+_archived/
+
+# Claude 本地配置（包含敏感信息）
+.claude/settings.local.json
+
+# 凭证和密钥文件（绝不提交到版本控制）
+.claude/rules/*-credentials.md
+.claude/rules/*-keys.md
+.claude/rules/aliyun-credentials.md
+.claude/skills/server-operations/db-credentials.md
+.claude/skills/server-operations/aliyun-credentials.md
+.claude/skills/**/*-credentials.md
+.claude/skills/**/*-keys.md
+.codex/rules/*-credentials.md
+.codex/rules/*-keys.md
+.codex/rules/aliyun-credentials.md
+
+# Runtime environment files on deployment hosts. Templates must use the
+# explicit .template/.example suffix so real credentials can never be staged.
+.env.prod
+.env.test
+.env.gold-etl
+.env.ota
+**/.env.prod
+**/.env.test
+**/.env.gold-etl
+**/.env.ota
+
+# APK 文件（太大，使用 Git LFS 或单独管理）
+*.apk
+
+# Android CMake 构建缓存（buildStagingDirectory 产物）
+frontend/CretasFoodTrace/android/C:/
+frontend/CretasFoodTrace/android/.cxx/
+
+# 截图和图片文件
+*.png
+*.jpeg
+*.jpg
+screenshots/
+audit-screenshots/
+
+# 但保留项目资产PNG
+!platform/assets/images/**/*.png
+# 官网 V6 改版本地化摄影资产 + 产品截图 (2026-07-21)
+!platform/assets/img/**/*.jpg
+!platform/assets/img/**/*.jpeg
+!platform/assets/img/**/*.png
+!platform/restaurantbi-example/screenshots/
+!platform/restaurantbi-example/screenshots/**
+!platform/factorybi-example/screenshots/
+!platform/factorybi-example/screenshots/**
+# client-request-example 当初漏了这两行 —— 它的 9 张截图一直在本地却从没进过仓,
+# 部署自然也带不上去, 线上那一页 9 张图全部被 nginx 301 到 /404/。
+# (2026-08-05 排查发现; 这三个 example 目录的截图都是页面内容, 不是调试产物。)
+!platform/client-request-example/screenshots/
+!platform/client-request-example/screenshots/**
+!frontend/CretasFoodTrace/assets/**/*.png
+!frontend/CretasFoodTrace/android/app/src/main/res/**/*.png
+# 审计证据截图 (Sprint 11 MealClaw 等)
+!docs/audits/**/*.png
+!frontend/CretasFoodTrace/ios/**/*.png
+!MallCenter/**/public/**/*.png
+!MallCenter/**/src/assets/**/*.png
+!MallCenter/**/doc/**/*.png
+!assets/**/*.png
+
+# 运维脚本中的大文件目录
+scripts/finetune/models/
+scripts/food-kb/models/
+scripts/food-kb/__pycache__/
+
+# 大文件和数据目录
+# backend/java/ — 已纳入 git 管理 (2026-02-19)
+backend/python/smartbi/exports/
+backend/python/smartbi/services/temp_frames/
+backend/python/smartbi/smartbi_cache/
+backend/python/smartbi/Test.xlsx
+backend/python/smartbi/test_complex_5sheets.xlsx
+tests/emulator-hermes/
+test-ai-chat/
+uploads/
+web-admin-dist.tar.gz
+*.tar.gz
+*.patch
+
+# 备份目录
+.backup-v21/
+
+# 临时分析和调试文件
+# *.xml — removed: was blocking pom.xml from git, breaking server-side builds
+configs.json
+redundancy_analysis.txt
+rag_test_results.py
+tmp_*
+test-output/
+test-results/
+smartbi_server.log
+
+# 产品图片目录（不推送到仓库）
+MallCenter/product image/
+
+# 临时 I18N 迁移文档（开发过程中生成，不需要版本控制）
+frontend/CretasFoodTrace/*I18N*.md
+frontend/CretasFoodTrace/*_MIGRATION*.md
+frontend/CretasFoodTrace/batch-*.txt
+frontend/CretasFoodTrace/batch-*.json
+frontend/CretasFoodTrace/hr-i18n-*.json
+frontend/CretasFoodTrace/warehouse-*.json
+frontend/CretasFoodTrace/migrate-*.sh~$*
+
+# 防止凭证在脚本中泄露（SSH、API key 等不应硬编码）
+**/password
+**/passwd
+**/token
+**/api_key
+**/apikey
+**/secret_key
+**/ssh_key
+credentials.txt
+secrets.txt
+
+nul
+scripts/run_new_server.py
+scripts/run_old_server.py
+
+# 食品标注数据集（太大不提交）
+食品标注/
+frontend/标注食品异物图片/
+.claude/worktrees/
+tests/canvas-security-e2e/results/
+
+# E2E auth-cache — stores live JWT refresh tokens, MUST NOT be committed
+tests/e2e-comprehensive/results/auth-cache/
+
+# YOLO / VL training pipeline scratch (算力项目, not Cretas core)
+/.ossutil_checkpoint/
+/r2_presigned_url.txt
+/analyze_quality.py
+/bone_rerun.py
+/check_parse_errors.py
+/final_merge.py
+/final_training_setup.py
+/labeling_pipeline*.py
+/leakage_check.py
+/orchestrator.py
+/post_pipeline.py
+/vl_compare_remote.py
+/vl_test_single.py
+/vl_test_transformers.py
+/dl_models_*.sh
+/upload_datasets_*.sh
+/upload_r2*.sh
+
+# Android build artifacts
+frontend/CretasFoodTrace/android/app/src/main/assets/
+
+# Playwright MCP snapshots + network logs (transient test artifacts)
+.playwright-mcp/
+
+# Claude Code runtime locks
+.claude/scheduled_tasks.lock
+
+# Superpowers visual brainstorming sessions (local mockups, state, and access tokens)
+.superpowers/
+
+# Transient debug/batch artifacts (ad-hoc shell output)
+/p1_batch*.txt
+/p1_all.txt
+/prod_batch*.txt
+/NOW()
+/TASK_*_COMPLETE.txt
+
+video-training-data/2*/
+video-training-data/*.mp4
+
+# Worktrees for subagent-driven development
+.worktrees/
+
+# Apr 26 deep-aiq test artifacts (unzipped data + screenshots — too large for repo)
+tests/e2e-comprehensive/results/depth-aiq-2026-04-26/unzipped/
+tests/e2e-comprehensive/results/depth-aiq-2026-04-26/screenshots-upload/
+
+# Apr 29 ad-hoc factory food KB RAG test artifacts (one-off runner + results, not project code)
+/factory_rag_*.py
+/factory_rag_*.sh
+/factory_rag_*.json
+/factory_rag_*.jsonl
+
+# ML model training samples + datasets at repo root (binary, too large for git)
+/models/
+
+# Python service runtime logs (rotating)
+backend/python/python-service.log*
+
+# T6.6 Sub-ETL-1 — restaurant chain raw + canonical CSV (gitignore policy per PR #330)
+# Q-DEC verbal sign-off 2026-05-12: 餐饮客户数据不提交仓 (raw Excel + canonical CSV
+# generated by scripts/etl/normalize_restaurant_chains.py both stay local).
+# Glob children — directory parents stay tracked so .gitkeep placeholders preserve
+# the directory tree (git negation can't re-include a file under an excluded dir).
+data/imports/restaurant-chains/**
+data/imports/_quarantine/**
+data/imports/_index.json
+!data/imports/restaurant-chains/.gitkeep
+!data/imports/_quarantine/.gitkeep
+
+# 宏见竞品分析 — exclude bulky playwright-mcp evidence (309MB) + random binaries
+宏见竞品分析/04-最终决策/evidence/playwright-mcp/
+宏见竞品分析/**/*.exe
+宏见竞品分析/**/*.webm
+宏见竞品分析/**/*.mp4
+
+# 客户真实生产数据 (不提交)
+六扇门工厂数据/
+产品信息_*.xlsx
+产品信息_*.zip
+
+# 演示 ETL 中间产物 — extract_shift_*.py 生成的 JSONL 由真实客户数据 (青花椒等)
+# 时移派生, 含 member-grain / bill-grain 记录, 绝不提交到 public repo (F1, PII 防泄漏).
+# 覆盖 member (卡详情/卡充值) + void (撤单) + billgrain (POS) 等所有 demo ops JSONL.
+backend/python/smartbi/scripts/_demo_rest_*.jsonl
+
+# Playwright E2E 登录态。不能放 test-results/ —— 那是 outputDir, 每轮启动会被清空,
+# 于是登录态无法跨轮复用, --no-deps 跑子集时报 Error reading storage state (2026-08-15 实测)。
+web-admin/.auth/

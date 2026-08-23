@@ -1,0 +1,438 @@
+package com.cretas.aims.service.impl;
+
+import com.cretas.aims.dto.bom.BomCostSummaryDTO;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.service.BomService;
+
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * BOM 成本计算服务实现
+ *
+ * {@link #calculateProductCost} 口径 = 仅包材 (materialCategory=PACKAGING 行):
+ * - 总成本 = SUM(包材行: 实际用量 / 出成率 * 单价)
+ * 不含原料 (standard_quantity 是已废弃的历史脏数据)、不含辅料 (真实辅料成本在
+ * bom_seasoning_items, 本类不联查)、不含人工/均摊 (人工要等结算, 均摊要等成本分析,
+ * 两者在返回 DTO 中为 null 表示"此处不归集", 不是 0)。
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2025-01-13
+ */
+@Service
+@RequiredArgsConstructor
+public class BomServiceImpl implements BomService {
+
+    private static final Logger log = LoggerFactory.getLogger(BomServiceImpl.class);
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final String COST_CALIBER_PRE_TAX = "PRE_TAX";
+    private static final String PRE_TAX_CALIBER_HINT =
+            "BOM成本按未税价核算；BOM unitPrice 为未税价，含税采购价需先按税率换算税前。";
+    private static final String MISSING_TAX_RATE_HINT =
+            "部分物料缺税率，请补齐税率用于含税/未税来源追踪；成本仍按已存未税 unitPrice 计算。";
+
+    private final BomRecipeItemRepository bomRecipeItemRepository;
+
+
+
+    /** Canvas V2: DB-driven formula engine */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.engine.FormulaEngine formulaEngine;
+
+
+    /**
+     * R13 (2026-06-22): 计量单位换算 — 成本计算前把 BOM 行用量按重量单位归一到
+     * 物料主数据单位, 使其与"按主数据单位计价"的 unitPrice 口径一致.
+     * 可选注入: 单测旧构造器 (3-arg) 不传, null → 退化为不归一 (旧行为, 不崩).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.UnitConversionService unitConversionService;
+
+    /**
+     * R13: 物料主数据仓库 — 取 RawMaterialType.unit 作为计价单位标尺.
+     * 可选注入, 同上.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
+    /** Read-only finished-product master lookup for an explicit summary cost unit. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
+
+
+
+    // ============ Cost Calculation ============
+
+    @Override
+    @Transactional(readOnly = true)
+    public BomCostSummaryDTO calculateProductCost(String factoryId, String productTypeId) {
+        log.info("计算产品成本: factoryId={}, productTypeId={}", factoryId, productTypeId);
+
+        // 1. 获取BOM项目
+        List<BomRecipeItem> bomItems = bomRecipeItemRepository.findCurrentByProduct(factoryId, productTypeId);
+
+        // 4. 计算原辅料成本
+        List<BomCostSummaryDTO.MaterialCostItem> materialCostItems = new ArrayList<>();
+        BigDecimal materialCostTotal = BigDecimal.ZERO;
+        boolean hasMissingTaxRate = false;
+        // B-BUG-1 (2026-06-21 transcript-e2e R1): 显式追踪缺单价行 (禁止降级)。
+        // 缺单价行无法计入成本 (单价未知), 之前静默当 ¥0 使 materialCostTotal "看起来完整",
+        // 现在标记每行 + 汇总, 让前端展示"成本不完整, 缺 N 行价格"。
+        List<String> missingPriceMaterials = new ArrayList<>();
+
+        for (BomRecipeItem item : bomItems) {
+            BigDecimal actualQuantity = calculateActualQuantity(factoryId, item.getStandardQuantity(), item.getYieldRate());
+            com.cretas.aims.entity.RawMaterialType currentMaterial =
+                    loadRawMaterialTypeSafely(item.getMaterialTypeId());
+            BigDecimal currentMovingAverage = currentMaterial != null
+                    ? currentMaterial.getMovingAvgPrice() : null;
+            BigDecimal estimateUnitPrice = currentMovingAverage != null
+                    ? currentMovingAverage : item.getUnitPrice();
+            String pricingUnit = firstNonBlank(
+                    currentMaterial != null ? currentMaterial.getUnit() : null,
+                    item.getUnit(),
+                    "基本单位");
+            // R13: 价-量口径对齐. unitPrice 按物料主数据单位计价 (auto-fill 自
+            //   RawMaterialType.unitPrice), 但 BOM 行用量可能按"斤"等其他重量单位录入.
+            //   计价用量须先折算到主数据单位 (e.g. 斤→kg), 否则 斤量×kg价 翻倍/折半失真.
+            BigDecimal pricingQuantity = reconcileQuantityForPricing(actualQuantity, item);
+            if (item.getTaxRate() == null) {
+                hasMissingTaxRate = true;
+            }
+            // 成本只归集包材行。
+            // RAW/AUXILIARY 的 standard_quantity 是已废弃的历史脏数据(新行写 null),
+            // 真实辅料成本在 bom_seasoning_items, 不经本循环;
+            // BYPRODUCT 的 standard_quantity 是「预计产出量」, 加进成本符号是反的。
+            // 明细行保留(能看到物料与单价), 小计置 null 表示「此处不归集」——
+            // 与 computeItemCost() 在无用量时返回 null 同一口径, 禁止写 0。
+            boolean aggregatable = "PACKAGING".equals(item.getMaterialCategory());
+            BigDecimal subtotal = aggregatable
+                    ? calculateMaterialCost(factoryId, pricingQuantity, estimateUnitPrice)
+                    : null;
+            // 非归集行没有价格不算「缺价」(它本来就不参与合计)。
+            boolean missingPrice = aggregatable && estimateUnitPrice == null;
+            if (missingPrice) {
+                missingPriceMaterials.add(
+                    item.getMaterialName() != null ? item.getMaterialName()
+                        : (item.getMaterialTypeId() != null ? item.getMaterialTypeId() : "(未命名物料)"));
+            }
+
+            BomCostSummaryDTO.MaterialCostItem costItem = BomCostSummaryDTO.MaterialCostItem.builder()
+                .materialName(item.getMaterialName())
+                .materialTypeId(item.getMaterialTypeId())
+                .materialCategory(item.getMaterialCategory())
+                .standardQuantity(item.getStandardQuantity())
+                .yieldRate(item.getYieldRate())
+                .actualQuantity(actualQuantity)
+                .unit(item.getUnit())
+                .unitPrice(estimateUnitPrice)
+                .unitPriceCaliber(COST_CALIBER_PRE_TAX)
+                .caliberHint(materialCaliberHint(item.getTaxRate())
+                        + " 当前估算优先采用物料主数据移动平均价，不改写 BOM 快照或历史实际成本。")
+                .unitPriceUnit(costDisplayUnit(pricingUnit))
+                .priceSource(currentMovingAverage != null
+                        ? "CURRENT_MOVING_AVERAGE" : "BOM_SNAPSHOT_FALLBACK")
+                .estimatedPrice(true)
+                .taxRate(item.getTaxRate())
+                .subtotal(subtotal)
+                .missingPrice(missingPrice)
+                .build();
+
+            materialCostItems.add(costItem);
+            if (subtotal != null) {
+                materialCostTotal = materialCostTotal.add(subtotal);
+            }
+        }
+        boolean hasMissingPrice = !missingPriceMaterials.isEmpty();
+
+        // 5. 人工与均摊不在 BOM 归集
+        // 人工要等结算（实际工时 × 时薪 ÷ 实际箱数，见 processSheetLaborCost.ts），
+        // 均摊要等成本分析。BOM 只配「每单位固定消耗的实物」。
+        // 空列表 + null 总额：null 表示「此处不归集」，写 0 会被读成「不要钱」。
+        List<BomCostSummaryDTO.LaborCostItem> laborCostItems = List.of();
+        List<BomCostSummaryDTO.OverheadCostItem> overheadCostItems = List.of();
+
+        // 7. 计算总成本
+        BigDecimal totalCost = materialCostTotal
+            .setScale(4, RoundingMode.HALF_UP);
+
+        // 8. 获取产品名称
+        String productName = bomItems.isEmpty() ? null : bomItems.get(0).getRecipe().getProductName();
+
+        // 9. 构建返回结果
+        BomCostSummaryDTO summary = BomCostSummaryDTO.builder()
+            .productTypeId(productTypeId)
+            .productName(productName)
+            .materialCosts(materialCostItems)
+            .materialCostTotal(materialCostTotal.setScale(4, RoundingMode.HALF_UP))
+            .laborCosts(laborCostItems)
+            .laborCostTotal(null)
+            .overheadCosts(overheadCostItems)
+            .overheadCostTotal(null)
+            .totalCost(totalCost)
+            .costCaliber(COST_CALIBER_PRE_TAX)
+            .caliberHint(summaryCaliberHint(hasMissingTaxRate, hasMissingPrice, missingPriceMaterials.size()))
+            .costNature("CURRENT_ESTIMATE")
+            .costUnit(resolveSummaryCostUnit(factoryId, productTypeId))
+            // B-BUG-1: 缺价完整性标记
+            .hasMissingPrice(hasMissingPrice)
+            .missingPriceCount(missingPriceMaterials.size())
+            .missingPriceMaterials(hasMissingPrice ? missingPriceMaterials : null)
+            .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
+            .build();
+
+        log.info("产品成本计算完成: productTypeId={}, totalCost={}", productTypeId, totalCost);
+        return summary;
+    }
+
+    /**
+     * 「元/{单位}」的<b>唯一</b>写法。
+     *
+     * <p>🔴 2026-08-19 收敛: 这里原先有两份格式化, 同一个输入给出两种写法 ——
+     * {@code costDisplayUnit("盒")} 得到「元/基本单位（盒）」, 而
+     * {@code resolveSummaryCostUnit} 对同一个「盒」得到「元/盒」。
+     * 同一屏上两种写法, 而且「基本单位」是内部黑话, 不该给客户看。
+     *
+     * <p>⚠️ 两个<b>调用点</b>不合并 —— 它们的分母不是一回事:
+     * <ul>
+     *   <li>{@code unitPriceUnit}: 这一行<b>原料</b>的计价单位 (元/kg 的 kg 是原料的 kg)</li>
+     *   <li>{@code costUnit}: 整个<b>成品</b>的成本分母 (1 个 SKU 基本单位)</li>
+     * </ul>
+     * 合并它们就是把两个不同的量说成一个。这里只统一<b>写法</b>。
+     *
+     * @return 「元/kg」这类标签; 入参为空时返回 null 由调用方决定兜底文案
+     */
+    private static String perUnitLabel(String unit) {
+        String normalized = trimToNull(unit);
+        if (normalized == null) {
+            return null;
+        }
+        if ("kg".equalsIgnoreCase(normalized)
+                || "公斤".equals(normalized)
+                || "千克".equals(normalized)) {
+            return "元/kg";
+        }
+        return "元/" + normalized;
+    }
+
+    /** 物料行的计价单位标签 (分母 = 该<b>原料</b>的计价单位)。 */
+    private String costDisplayUnit(String unit) {
+        String label = perUnitLabel(unit);
+        return label != null ? label : "元/基本单位";
+    }
+
+    /**
+     * 成品成本的分母标签 —— 分母固定是<b>1 个 SKU 基本单位</b>。
+     *
+     * <p>owner 2026-08-19 定案「BOM 总成本按每 1 个成品」。实测这已经是现状, 且有两道闸钉住:
+     * {@code BomRecipeServiceImpl.applyProductOutputSnapshot} 强制
+     * {@code outputQuantityPerUnit = 1} 且 {@code outputUnit = ProductType.unit} 的规范码;
+     * {@code validateRecipeOutputContract} 对任何偏离抛
+     * {@code BOM_OUTPUT_QUANTITY_MISMATCH} / {@code BOM_OUTPUT_UNIT_MISMATCH}。
+     * ⇒ {@code totalCost} 是「每 1 个成品」的 Σ(单位用量 × 单价), 与成本卡同口径, 可对账。
+     *
+     * <p>⚠️ {@code BomRecipe.outputUnit} 的字段初始值 {@code "g"} 是**过期默认值** ——
+     * 走上面那条路的每一次保存都会覆盖它。⛔ 不要拿它当口径来源, 权威是 {@code ProductType.unit}。
+     */
+    private String resolveSummaryCostUnit(String factoryId, String productTypeId) {
+        if (productTypeRepository == null) {
+            return "元/基本单位";
+        }
+        try {
+            String unit = productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                    .map(com.cretas.aims.entity.ProductType::getUnit)
+                    .map(BomServiceImpl::trimToNull)
+                    .orElse(null);
+            String label = perUnitLabel(unit);
+            return label != null ? label : "元/基本单位";
+        } catch (Exception e) {
+            log.warn("[BOM-COST] product unit lookup failed factory={} product={}: {}",
+                    factoryId, productTypeId, e.getMessage());
+            return "元/基本单位";
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<BomCostSummaryDTO> calculateProductCosts(String factoryId, List<String> productTypeIds) {
+        log.info("批量计算产品成本: factoryId={}, count={}", factoryId, productTypeIds.size());
+        return productTypeIds.stream()
+            .map(productTypeId -> calculateProductCost(factoryId, productTypeId))
+            .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> getProductTypesWithBom(String factoryId) {
+        log.debug("获取有BOM配置的产品类型: factoryId={}", factoryId);
+        return bomRecipeItemRepository.findDistinctCurrentProductTypeIds(factoryId);
+    }
+
+    // ============ Private Helper Methods ============
+
+    private String summaryCaliberHint(boolean hasMissingTaxRate, boolean hasMissingPrice, int missingPriceCount) {
+        StringBuilder sb = new StringBuilder(PRE_TAX_CALIBER_HINT);
+        if (hasMissingTaxRate) {
+            sb.append(MISSING_TAX_RATE_HINT);
+        }
+        // B-BUG-1: 缺价时显式提示成本不完整 (禁止降级 — 不假装总成本完整)。
+        if (hasMissingPrice) {
+            sb.append("⚠️ 成本不完整: 有 ").append(missingPriceCount)
+              .append(" 行原辅料缺单价, 其成本未计入合计, 总成本被低估, 请补全单价后重新计算。");
+        }
+        return sb.toString();
+    }
+
+    private String materialCaliberHint(BigDecimal taxRate) {
+        if (taxRate == null) {
+            return "BOM unitPrice 为未税价；缺税率，无法展示含税/未税换算来源。";
+        }
+        return "BOM unitPrice 为未税价；税率仅用于发票口径追踪，成本不二次除税。";
+    }
+
+
+    private com.cretas.aims.entity.RawMaterialType loadRawMaterialTypeSafely(String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) return null;
+        try {
+            return rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+        } catch (Exception e) {
+            log.debug("[BOM-COST] load material type failed {}: {}", materialTypeId, e.getMessage());
+            return null;
+        }
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String value : values) {
+            String trimmed = trimToNull(value);
+            if (trimmed != null) return trimmed;
+        }
+        return null;
+    }
+
+    /**
+     * 计算实际用量（考虑出成率）
+     * 公式: 实际用量 = 标准用量 / (出成率 / 100)
+     */
+    private BigDecimal calculateActualQuantity(String factoryId, BigDecimal standardQuantity, BigDecimal yieldRate) {
+        // standardQuantity == null 是「此处未归集」(RAW/AUXILIARY 的历史脏数据/新行),
+        // 不是「用量为 0」。0 会被下游/AI 上下文读成"零消耗"这类假数据(见 CLAUDE.md 核心
+        // 原则1)。非归集行根本走不到 calculateMaterialCost() —— 类别过滤已先把 subtotal 置 null;
+        // (注意 calculateMaterialCost() 自己对 null 入参返回的是 ZERO 不是 null, 别指望它守这条不变量)。
+        // reconcileQuantityForPricing() 对 null 输入直接透传, 故此处返回 null 不会引入 NPE。
+        if (standardQuantity == null) return null;
+        if (yieldRate == null || yieldRate.compareTo(BigDecimal.ZERO) == 0) return standardQuantity;
+
+        // Canvas V2: try DB formula first
+        if (formulaEngine != null && factoryId != null) {
+            BigDecimal result = formulaEngine.evaluate(factoryId, "bom", "ACTUAL_QUANTITY",
+                    java.util.Map.of("standardQuantity", standardQuantity, "yieldRate", yieldRate));
+            if (result != null) return result;
+        }
+
+        // Hardcoded fallback
+        return standardQuantity.divide(
+            yieldRate.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP),
+            6, RoundingMode.HALF_UP
+        );
+    }
+
+    /**
+     * R13 (2026-06-22): 计价口径对齐 — 把 BOM 行用量折算到物料主数据计价单位.
+     *
+     * <p><b>问题:</b> BOM 行 {@code unitPrice} 默认 auto-fill 自 {@link com.cretas.aims.entity.RawMaterialType#getUnitPrice()}
+     * (见 {@code BomBatchOperationServiceImpl#290}, {@code BomReverseQueryServiceImpl#134}),
+     * 该价按物料主数据单位 ({@code RawMaterialType.unit}, 通常 kg) 计价. 但 BOM 行用量
+     * ({@code standardQuantity}) 可能按"斤"等其他<b>重量</b>单位录入 (R10 加入斤白名单).
+     * 直接 {@code 斤量 × kg价} = 失真 2× (1斤=0.5kg).
+     *
+     * <p><b>归一规则 (仅重量维度, 最小爆炸半径):</b>
+     * <ul>
+     *   <li>行单位与主数据单位<b>都是重量单位且不同</b> (e.g. 斤 vs kg, g vs kg) → 把用量
+     *       从行单位折算到主数据单位 (经 {@link com.cretas.aims.service.UnitConversionService}),
+     *       使 {@code 折算量 × 主数据价} 口径一致.</li>
+     *   <li>行单位 == 主数据单位 (e.g. 都 kg, 或 BOM 自定价 per 斤) → 透传, 不变 (旧行为).</li>
+     *   <li>非重量单位 (个/箱/袋) / 跨维度 / 缺主数据 / 缺换算依赖 → 透传原量 (绝不强行当 kg).</li>
+     * </ul>
+     *
+     * <p><b>为何只在成本层归一, 不改存储:</b> 改存储语义 (把斤量存成kg) 会动 BOM 行展示
+     * 与所有读路径, 爆炸半径大且不可逆. 成本计算点归一是单点、可逆、口径自洽的最小改动.
+     *
+     * @param actualQuantity 行实际用量 (行单位)
+     * @param item           BOM 行 (取 unit + materialTypeId)
+     * @return 折算到主数据计价单位后的用量; 无法/无需归一时返回原量
+     */
+    private BigDecimal reconcileQuantityForPricing(BigDecimal actualQuantity, BomRecipeItem item) {
+        if (actualQuantity == null || item == null) return actualQuantity;
+        // 依赖未注入 (旧单测 3-arg 构造) → 退化为不归一 (旧行为)
+        if (unitConversionService == null || rawMaterialTypeRepository == null) return actualQuantity;
+
+        String itemUnit = item.getUnit();
+        String materialTypeId = item.getMaterialTypeId();
+        if (itemUnit == null || itemUnit.isBlank() || materialTypeId == null || materialTypeId.isBlank()) {
+            return actualQuantity;
+        }
+        // 仅重量单位参与归一; 个/箱/袋/ml/L 等不归一
+        if (!unitConversionService.isWeightUnit(itemUnit)) {
+            return actualQuantity;
+        }
+
+        com.cretas.aims.entity.RawMaterialType material;
+        try {
+            material = rawMaterialTypeRepository.findById(materialTypeId).orElse(null);
+        } catch (Exception e) {
+            log.debug("[R13-UOM] 加载物料失败 {}: {} — 用量不归一", materialTypeId, e.getMessage());
+            return actualQuantity;
+        }
+        if (material == null) return actualQuantity;
+
+        String masterUnit = material.getUnit();
+        if (masterUnit == null || masterUnit.isBlank()) return actualQuantity;
+        // 主数据单位非重量 (e.g. 主数据按"箱"计价) → 不在本最小修范围内, 透传 (见终审点)
+        if (!unitConversionService.isWeightUnit(masterUnit)) return actualQuantity;
+
+        BigDecimal converted = unitConversionService.convert(actualQuantity, itemUnit, masterUnit);
+        if (converted == null) return actualQuantity;   // 不应发生 (两者均重量), 防御
+        if (converted.compareTo(actualQuantity) != 0) {
+            log.debug("[R13-UOM] BOM 计价口径归一: material={} {}{} → {}{} (主数据计价单位)",
+                    materialTypeId, actualQuantity, itemUnit, converted, masterUnit);
+        }
+        return converted;
+    }
+
+    /**
+     * 计算原料成本
+     * 公式: 成本 = 实际用量 * 单价
+     */
+    private BigDecimal calculateMaterialCost(String factoryId, BigDecimal actualQuantity, BigDecimal unitPrice) {
+        if (actualQuantity == null || unitPrice == null) return BigDecimal.ZERO;
+
+        if (formulaEngine != null && factoryId != null) {
+            BigDecimal result = formulaEngine.evaluate(factoryId, "bom", "MATERIAL_COST",
+                    java.util.Map.of("actualQuantity", actualQuantity, "unitPrice", unitPrice));
+            if (result != null) return result;
+        }
+        return actualQuantity.multiply(unitPrice).setScale(4, RoundingMode.HALF_UP);
+    }
+
+}

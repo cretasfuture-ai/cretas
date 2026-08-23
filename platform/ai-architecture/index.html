@@ -1,0 +1,2790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 意图识别系统 V7.0 - 白垩纪食品溯源</title>
+  <meta name="description" content="白垩纪AI意图识别系统V7.0 - 支持47+业务意图，95%+识别准确率，覆盖生产、库存、质检、调度全场景。">
+
+  <!-- Canonical -->
+  <link rel="canonical" href="https://cretaceousfuture.com/ai-architecture/">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cretaceousfuture.com/ai-architecture/">
+  <meta property="og:title" content="AI 意图识别系统 V7.0 | 白垩纪AI">
+  <meta property="og:description" content="支持47+业务意图，95%+识别准确率，覆盖生产、库存、质检、调度全场景。">
+  <meta property="og:image" content="https://cretaceousfuture.com/share-image.png">
+
+  <!-- Twitter Cards -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="AI 意图识别系统 V7.0 | 白垩纪AI">
+  <meta name="twitter:description" content="支持47+业务意图，95%+识别准确率。">
+  <meta name="twitter:image" content="https://cretaceousfuture.com/share-image.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================
+       白垩纪 Design System V5 - 意图识别系统
+       ============================================ */
+    :root {
+      --bg-base: #FAFAF8;
+      --bg-surface: #FFFFFF;
+      --bg-warm: #F5F3EF;
+      --bg-muted: #EDEBE7;
+      --bg-dark: #1A1A1A;
+      --text-primary: #1A1A1A;
+      --text-secondary: #5C5C5C;
+      --text-tertiary: #8A8A8A;
+      --text-inverse: #FFFFFF;
+      --accent: #C45C26;
+      --accent-hover: #A84D1F;
+      --accent-light: #FDF8F5;
+      --accent-glow: rgba(196, 92, 38, 0.15);
+      --success: #2D6A4F;
+      --success-light: #E8F5E9;
+      --warning: #D4A574;
+      --warning-light: #FFF8E1;
+      --error: #BC4749;
+      --error-light: #FFEBEE;
+      --info: #4A90A4;
+      --info-light: #E3F2FD;
+      --purple: #7C3AED;
+      --purple-light: #EDE9FE;
+      --border-subtle: rgba(0, 0, 0, 0.06);
+      --border-medium: rgba(0, 0, 0, 0.1);
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.1);
+      --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.12);
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Noto Sans SC', sans-serif;
+      --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --duration-fast: 150ms;
+      --duration-normal: 250ms;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      background: var(--bg-base);
+    }
+
+    /* Layout */
+    .container { max-width: 1400px; margin: 0 auto; padding: 0 24px; }
+    .container-narrow { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+    /* Header */
+    .header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 16px 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(8px);
+    }
+    .header-content { display: flex; align-items: center; justify-content: space-between; }
+    .logo { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+    .logo-icon {
+      width: 44px; height: 44px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-weight: 700; font-size: 18px;
+    }
+    .logo-text { font-size: 22px; font-weight: 600; color: var(--text-primary); }
+    .logo-text span { color: var(--accent); }
+    .back-link {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--text-secondary); text-decoration: none;
+      font-size: 14px; font-weight: 500;
+      transition: color var(--duration-fast);
+    }
+    .back-link:hover { color: var(--accent); }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 8px;
+      background: var(--bg-warm);
+      padding: 4px;
+      border-radius: 12px;
+    }
+    .tab {
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all var(--duration-fast) var(--ease-out);
+    }
+    .tab:hover { color: var(--text-primary); }
+    .tab.active {
+      background: var(--bg-surface);
+      color: var(--accent);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Hero Section */
+    .hero {
+      background: linear-gradient(135deg, var(--bg-dark) 0%, #2D2D2D 100%);
+      color: var(--text-inverse);
+      padding: 80px 0 60px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      opacity: 0.5;
+    }
+    .hero-content { position: relative; z-index: 1; }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(196, 92, 38, 0.2);
+      border: 1px solid rgba(196, 92, 38, 0.3);
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #F5A623;
+      margin-bottom: 24px;
+    }
+    .hero-title {
+      font-size: 56px;
+      font-weight: 700;
+      line-height: 1.1;
+      margin: 0 0 16px;
+      letter-spacing: -0.02em;
+    }
+    .hero-title span { color: var(--accent); }
+    .hero-subtitle {
+      font-size: 20px;
+      color: rgba(255, 255, 255, 0.7);
+      margin: 0 0 40px;
+      max-width: 600px;
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+    }
+    @media (max-width: 900px) {
+      .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .stat-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+      transition: all var(--duration-fast) var(--ease-out);
+    }
+    .stat-card:hover {
+      background: rgba(255, 255, 255, 0.08);
+      transform: translateY(-4px);
+    }
+    .stat-value { font-size: 36px; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 14px; color: rgba(255, 255, 255, 0.6); margin-top: 4px; }
+
+    /* Main */
+    main { padding: 48px 0 80px; }
+
+    /* Section */
+    .section {
+      background: var(--bg-surface);
+      border-radius: 20px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--border-subtle);
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+    .section-title {
+      font-size: 22px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0;
+    }
+    .section-title::before {
+      content: '';
+      width: 4px;
+      height: 28px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+    .section-subtitle {
+      font-size: 14px;
+      color: var(--text-tertiary);
+      margin-top: 4px;
+    }
+
+    /* Architecture Diagram - New Design */
+    .architecture-container {
+      background: linear-gradient(135deg, var(--bg-warm) 0%, var(--bg-muted) 100%);
+      border-radius: 16px;
+      padding: 32px;
+      overflow-x: auto;
+    }
+    .arch-flow {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 12px;
+      min-width: 1100px;
+    }
+    .arch-node {
+      background: var(--bg-surface);
+      border: 2px solid var(--border-medium);
+      border-radius: 16px;
+      padding: 20px;
+      min-width: 140px;
+      text-align: center;
+      transition: all var(--duration-fast) var(--ease-out);
+      cursor: pointer;
+      position: relative;
+    }
+    .arch-node:hover {
+      border-color: var(--accent);
+      box-shadow: 0 8px 24px var(--accent-glow);
+      transform: translateY(-4px);
+    }
+    .arch-node.highlight {
+      border-color: var(--accent);
+      background: var(--accent-light);
+    }
+    .arch-node-icon {
+      width: 48px; height: 48px;
+      margin: 0 auto 12px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+    }
+    .arch-node-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+    .arch-node-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.4; }
+    .arch-arrow {
+      display: flex;
+      align-items: center;
+      color: var(--text-tertiary);
+      font-size: 20px;
+    }
+
+    /* Feature Cards */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    @media (max-width: 900px) {
+      .feature-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .feature-grid { grid-template-columns: 1fr; }
+    }
+    .feature-card {
+      background: var(--bg-warm);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all var(--duration-fast) var(--ease-out);
+      border: 1px solid transparent;
+    }
+    .feature-card:hover {
+      background: var(--bg-surface);
+      border-color: var(--border-medium);
+      box-shadow: var(--shadow-md);
+      transform: translateY(-4px);
+    }
+    .feature-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+      margin-bottom: 16px;
+    }
+    .feature-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .feature-desc { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+    .feature-tag {
+      display: inline-block;
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 12px;
+      margin-top: 12px;
+    }
+    .feature-tag.new { background: var(--success-light); color: var(--success); }
+    .feature-tag.core { background: var(--info-light); color: var(--info); }
+
+    /* Recognition Layers */
+    .layers-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    @media (max-width: 900px) {
+      .layers-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .layer-card {
+      background: var(--bg-warm);
+      border-radius: 12px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .layer-card::before {
+      content: attr(data-layer);
+      position: absolute;
+      top: 12px; right: 12px;
+      width: 28px; height: 28px;
+      background: var(--accent);
+      color: white;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700;
+    }
+    .layer-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+    .layer-code { font-size: 11px; font-family: var(--font-mono); color: var(--accent); margin-bottom: 8px; }
+    .layer-desc { font-size: 13px; color: var(--text-secondary); }
+
+    /* Multi-Intent Section */
+    .multi-intent-demo {
+      background: linear-gradient(135deg, var(--purple-light) 0%, #F5F3FF 100%);
+      border-radius: 16px;
+      padding: 32px;
+      border: 1px solid rgba(124, 58, 237, 0.2);
+    }
+    .multi-intent-flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .multi-intent-box {
+      background: var(--bg-surface);
+      border-radius: 12px;
+      padding: 20px 24px;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+    }
+    .multi-intent-box.input {
+      border: 2px dashed var(--purple);
+    }
+    .multi-intent-box.output {
+      border: 2px solid var(--success);
+    }
+
+    /* Calibration Section */
+    .calibration-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+    }
+    @media (max-width: 768px) {
+      .calibration-grid { grid-template-columns: 1fr; }
+    }
+    .calibration-card {
+      background: var(--bg-warm);
+      border-radius: 16px;
+      padding: 24px;
+      border-left: 4px solid var(--accent);
+    }
+    .calibration-title {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .calibration-desc { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; }
+    .calibration-metrics {
+      display: flex;
+      gap: 16px;
+    }
+    .calibration-metric {
+      background: var(--bg-surface);
+      padding: 12px 16px;
+      border-radius: 8px;
+      flex: 1;
+    }
+    .calibration-metric-value { font-size: 20px; font-weight: 700; color: var(--accent); }
+    .calibration-metric-label { font-size: 11px; color: var(--text-tertiary); }
+
+    /* Category Grid */
+    .category-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .category-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: all var(--duration-fast);
+    }
+    .category-card:hover { border-color: var(--border-medium); box-shadow: var(--shadow-md); }
+    .category-header {
+      padding: 16px;
+      background: var(--bg-warm);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+    .category-name {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+    }
+    .category-icon {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .category-count {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      background: var(--bg-surface);
+      padding: 4px 12px;
+      border-radius: 12px;
+    }
+    .category-expand {
+      transition: transform var(--duration-fast);
+    }
+    .category-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s var(--ease-out);
+    }
+    .category-card.expanded .category-content { max-height: 600px; }
+    .category-card.expanded .category-expand { transform: rotate(180deg); }
+    .intent-list { padding: 16px; }
+    .intent-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-radius: 8px;
+      transition: background var(--duration-fast);
+    }
+    .intent-item:hover { background: var(--bg-warm); }
+    .intent-name { font-size: 14px; }
+    .intent-code { font-size: 11px; font-family: var(--font-mono); color: var(--text-tertiary); }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 12px;
+    }
+    .badge.low { background: var(--success-light); color: var(--success); }
+    .badge.medium { background: var(--warning-light); color: #9A6700; }
+    .badge.high { background: var(--error-light); color: var(--error); }
+    .badge.critical { background: var(--purple-light); color: var(--purple); }
+
+    /* Tools Grid */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .tool-card {
+      padding: 16px;
+      background: var(--bg-warm);
+      border-radius: 10px;
+      border: 1px solid transparent;
+      transition: all var(--duration-fast);
+    }
+    .tool-card:hover {
+      background: var(--bg-surface);
+      border-color: var(--accent);
+      box-shadow: var(--shadow-sm);
+    }
+    .tool-name {
+      font-size: 13px;
+      font-weight: 500;
+      font-family: var(--font-mono);
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .tool-desc { font-size: 12px; color: var(--text-secondary); }
+
+    /* Search */
+    .search-box {
+      position: relative;
+      margin-bottom: 20px;
+    }
+    .search-input {
+      width: 100%;
+      padding: 14px 16px 14px 48px;
+      font-size: 15px;
+      border: 2px solid var(--border-subtle);
+      border-radius: 12px;
+      outline: none;
+      transition: border-color var(--duration-fast);
+      background: var(--bg-surface);
+    }
+    .search-input:focus { border-color: var(--accent); }
+    .search-icon {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-tertiary);
+    }
+
+    /* Filter Tags */
+    .filter-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .filter-tag {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--bg-warm);
+      border: 1px solid var(--border-subtle);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all var(--duration-fast);
+    }
+    .filter-tag:hover { border-color: var(--accent); color: var(--accent); }
+    .filter-tag.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+    /* Tab Content */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Demo Area */
+    .demo-area {
+      background: var(--bg-warm);
+      border-radius: 16px;
+      padding: 24px;
+    }
+    .demo-input-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .demo-input {
+      flex: 1;
+      padding: 14px 20px;
+      font-size: 16px;
+      font-family: var(--font-sans);
+      border: 2px solid var(--border-medium);
+      border-radius: 12px;
+      outline: none;
+      transition: border-color var(--duration-fast);
+    }
+    .demo-input:focus { border-color: var(--accent); }
+    .demo-btn {
+      padding: 14px 28px;
+      font-size: 16px;
+      font-weight: 600;
+      color: white;
+      background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all var(--duration-fast);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .demo-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 16px var(--accent-glow); }
+    .case-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    .case-btn {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all var(--duration-fast);
+    }
+    .case-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Process Steps */
+    .process-steps { padding: 24px 0; }
+    .process-step {
+      display: flex;
+      gap: 20px;
+      padding: 20px;
+      border-left: 3px solid var(--border-subtle);
+      margin-left: 16px;
+      position: relative;
+      transition: all var(--duration-fast);
+    }
+    .process-step.active {
+      border-left-color: var(--accent);
+      background: var(--accent-light);
+      border-radius: 0 12px 12px 0;
+    }
+    .process-step.completed { border-left-color: var(--success); }
+    .process-step-num {
+      position: absolute;
+      left: -18px;
+      width: 32px; height: 32px;
+      background: var(--bg-surface);
+      border: 3px solid var(--border-subtle);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 600;
+      color: var(--text-tertiary);
+    }
+    .process-step.active .process-step-num { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+    .process-step.completed .process-step-num { border-color: var(--success); color: white; background: var(--success); }
+    .process-step-content { flex: 1; margin-left: 20px; }
+    .process-step-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .process-step-desc { font-size: 14px; color: var(--text-secondary); }
+    .process-step-data {
+      margin-top: 12px;
+      padding: 12px;
+      background: var(--bg-surface);
+      border-radius: 8px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+    .process-step-data .key { color: var(--accent); }
+    .process-step-data .value { color: var(--success); }
+
+    /* Result Area */
+    .result-area { margin-top: 24px; display: none; }
+    .result-area.visible { display: block; animation: fadeIn 0.3s var(--ease-out); }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .result-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .result-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .result-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .result-icon.success { background: var(--success-light); color: var(--success); }
+    .result-icon.info { background: var(--info-light); color: var(--info); }
+    .result-icon.warning { background: var(--warning-light); color: var(--warning); }
+    .result-icon.error { background: var(--error-light); color: var(--error); }
+    .result-card-title { font-size: 16px; font-weight: 600; }
+    .result-card-subtitle { font-size: 13px; color: var(--text-tertiary); }
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .result-item { padding: 12px; background: var(--bg-warm); border-radius: 8px; }
+    .result-item-label { font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px; }
+    .result-item-value { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+    .result-item-value.highlight { color: var(--accent); }
+
+    /* Footer */
+    .footer {
+      background: var(--bg-dark);
+      color: rgba(255, 255, 255, 0.6);
+      padding: 32px 0;
+      text-align: center;
+    }
+    .footer-text { font-size: 14px; margin: 0; }
+
+    /* Animations */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-in { animation: fadeInUp 0.6s var(--ease-out) forwards; }
+    .delay-1 { animation-delay: 0.1s; }
+    .delay-2 { animation-delay: 0.2s; }
+    .delay-3 { animation-delay: 0.3s; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <a href="../ai-intent/" class="logo">
+          <div class="logo-icon">CJ</div>
+          <div class="logo-text"><span>白垩纪</span> AI</div>
+        </a>
+        <div class="tabs">
+          <button class="tab active" onclick="switchTab('overview')">架构总览</button>
+          <button class="tab" onclick="switchTab('intents')">意图库</button>
+          <button class="tab" onclick="switchTab('tools')">工具库</button>
+          <button class="tab" onclick="switchTab('demo')">演示</button>
+        </div>
+        <a href="../ai-intent/" class="back-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          返回技术中心
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+          <span>V7.0 架构升级</span>
+        </div>
+        <h1 class="hero-title">AI <span>意图识别</span>系统</h1>
+        <p class="hero-subtitle">企业级多模态自然语言理解引擎，支持多意图识别、行为校准、自我纠正</p>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="intentCount">150+</div>
+            <div class="stat-label">AI 意图</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="toolCount">122</div>
+            <div class="stat-label">工具函数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">8</div>
+            <div class="stat-label">识别层级</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">&lt;100ms</div>
+            <div class="stat-label">平均延迟</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">99.2%</div>
+            <div class="stat-label">识别准确率</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Content -->
+  <main>
+    <div class="container">
+      <!-- Tab: Overview -->
+      <div id="tab-overview" class="tab-content active">
+        <!-- System Architecture -->
+        <section class="section animate-in">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">系统架构</h2>
+              <p class="section-subtitle">V7.0 全新 7 阶段处理流程</p>
+            </div>
+          </div>
+          <div class="architecture-container">
+            <div class="arch-flow">
+              <div class="arch-node" data-step="1">
+                <div class="arch-node-icon" style="background: #E3F2FD;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+                <div class="arch-node-title">查询预处理</div>
+                <div class="arch-node-desc">时间归一化<br>口语标准化<br>指代消解</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-node" data-step="2">
+                <div class="arch-node-icon" style="background: #E8F5E9;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></svg></div>
+                <div class="arch-node-title">意图识别</div>
+                <div class="arch-node-desc">8层匹配<br>多意图分类<br>置信度评估</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-node" data-step="3">
+                <div class="arch-node-icon" style="background: #FFF3E0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></div>
+                <div class="arch-node-title">工具路由</div>
+                <div class="arch-node-desc">动态选择<br>参数提取<br>权限校验</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-node" data-step="4">
+                <div class="arch-node-icon" style="background: #F3E5F5;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+                <div class="arch-node-title">执行引擎</div>
+                <div class="arch-node-desc">工具调用<br>并行执行<br>流式响应</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-node" data-step="5">
+                <div class="arch-node-icon" style="background: #FFEBEE;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div>
+                <div class="arch-node-title">结果验证</div>
+                <div class="arch-node-desc">规则验证<br>语义验证<br>重试策略</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-node" data-step="6">
+                <div class="arch-node-icon" style="background: #E8EAF6;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
+                <div class="arch-node-title">行为校准</div>
+                <div class="arch-node-desc">工具去重<br>自我纠正<br>外部验证</div>
+              </div>
+              <div class="arch-arrow">→</div>
+              <div class="arch-node" data-step="7">
+                <div class="arch-node-icon" style="background: #E0F7FA;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></div>
+                <div class="arch-node-title">记忆更新</div>
+                <div class="arch-node-desc">实体槽位<br>对话摘要<br>规则学习</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Recognition Layers -->
+        <section class="section animate-in delay-1">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">八层意图识别</h2>
+              <p class="section-subtitle">多层级渐进式匹配策略</p>
+            </div>
+          </div>
+          <div class="layers-grid">
+            <div class="layer-card" data-layer="1">
+              <div class="layer-title">精确匹配</div>
+              <div class="layer-code">EXACT</div>
+              <div class="layer-desc">intentCode 完全一致，用于系统内部调用</div>
+            </div>
+            <div class="layer-card" data-layer="2">
+              <div class="layer-title">短语映射</div>
+              <div class="layer-code">PHRASE_MATCH</div>
+              <div class="layer-desc">预设短语到意图的精确映射</div>
+            </div>
+            <div class="layer-card" data-layer="3">
+              <div class="layer-title">正则匹配</div>
+              <div class="layer-code">REGEX</div>
+              <div class="layer-desc">正则表达式模式匹配</div>
+            </div>
+            <div class="layer-card" data-layer="4">
+              <div class="layer-title">关键词匹配</div>
+              <div class="layer-code">KEYWORD</div>
+              <div class="layer-desc">正向/负向关键词评分</div>
+            </div>
+            <div class="layer-card" data-layer="5">
+              <div class="layer-title">语义匹配</div>
+              <div class="layer-code">SEMANTIC</div>
+              <div class="layer-desc">Embedding 向量余弦相似度</div>
+            </div>
+            <div class="layer-card" data-layer="6">
+              <div class="layer-title">融合匹配</div>
+              <div class="layer-code">FUSION</div>
+              <div class="layer-desc">语义 + 关键词加权融合</div>
+            </div>
+            <div class="layer-card" data-layer="7">
+              <div class="layer-title">域默认</div>
+              <div class="layer-code">DOMAIN_DEFAULT</div>
+              <div class="layer-desc">基于业务领域的默认意图</div>
+            </div>
+            <div class="layer-card" data-layer="8">
+              <div class="layer-title">LLM 兜底</div>
+              <div class="layer-code">LLM</div>
+              <div class="layer-desc">大模型理解 + Few-shot</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Core Features -->
+        <section class="section animate-in delay-2">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">核心能力</h2>
+              <p class="section-subtitle">V7.0 新增 7 大核心模块</p>
+            </div>
+          </div>
+          <div class="feature-grid">
+            <div class="feature-card">
+              <div class="feature-icon" style="background: var(--purple-light);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></div>
+              <div class="feature-title">多意图识别</div>
+              <div class="feature-desc">Sigmoid-based 多标签分类，支持单输入触发多个独立意图，可配置并行或顺序执行策略</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: var(--success-light);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
+              <div class="feature-title">行为校准</div>
+              <div class="feature-desc">ET-Agent 行为校准系统，包含工具调用去重、自我纠正、外部验证器</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: #E0F7FA;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg></div>
+              <div class="feature-title">Arena RL 锦标赛</div>
+              <div class="feature-desc">基于 LLM Judge 的歧义裁决系统，支持意图消歧、工具选择、Agent分析比较</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: var(--warning-light);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></div>
+              <div class="feature-title">自我纠正</div>
+              <div class="feature-desc">基于反射记忆的错误自动修复，支持历史失败模式学习</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: var(--info-light);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
+              <div class="feature-title">结果验证</div>
+              <div class="feature-desc">规则验证 + 语义验证双重校验，自动重试策略</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: var(--error-light);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></div>
+              <div class="feature-title">关键词学习</div>
+              <div class="feature-desc">自动追踪关键词效果，低效关键词自动清理</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: #E8F5E9;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+              <div class="feature-title">参数学习</div>
+              <div class="feature-desc">用户确认后自动学习参数提取规则，减少 LLM 调用</div>
+              <span class="feature-tag new">V7.0 新增</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: #E3F2FD;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+              <div class="feature-title">查询预处理</div>
+              <div class="feature-desc">时间归一化、口语标准化、指代消解、实体识别</div>
+              <span class="feature-tag core">核心</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: #FFF3E0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+              <div class="feature-title">多轮对话</div>
+              <div class="feature-desc">会话记忆管理，实体槽位追踪，上下文推理</div>
+              <span class="feature-tag core">核心</span>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon" style="background: #F3E5F5;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+              <div class="feature-title">流式执行</div>
+              <div class="feature-desc">SSE 实时推送执行进度，低延迟响应</div>
+              <span class="feature-tag core">核心</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Multi-Intent Recognition -->
+        <section class="section animate-in delay-3">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">多意图识别 (Multi-Label Classification)</h2>
+              <p class="section-subtitle">V7.0 核心能力：一次输入，多个意图</p>
+            </div>
+          </div>
+          <div class="multi-intent-demo">
+            <div class="multi-intent-flow">
+              <div class="multi-intent-box input">
+                <div style="font-size: 13px; color: var(--text-tertiary); margin-bottom: 8px;">用户输入</div>
+                <div style="font-size: 15px; font-weight: 500;">"查一下 MB-001 的质检结果，顺便看看库存"</div>
+              </div>
+              <div style="font-size: 24px; color: var(--purple);">→</div>
+              <div style="display: flex; flex-direction: column; gap: 12px;">
+                <div class="multi-intent-box output">
+                  <div style="font-size: 11px; color: var(--success); margin-bottom: 4px;">意图 1</div>
+                  <div style="font-size: 14px; font-weight: 500;">QUALITY_CHECK_QUERY</div>
+                  <div style="font-size: 12px; color: var(--text-tertiary);">置信度: 0.92</div>
+                </div>
+                <div class="multi-intent-box output">
+                  <div style="font-size: 11px; color: var(--success); margin-bottom: 4px;">意图 2</div>
+                  <div style="font-size: 14px; font-weight: 500;">INVENTORY_QUERY</div>
+                  <div style="font-size: 12px; color: var(--text-tertiary);">置信度: 0.87</div>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top: 24px; padding: 16px; background: var(--bg-surface); border-radius: 12px;">
+              <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">执行策略</div>
+              <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 200px; padding: 12px; background: var(--bg-warm); border-radius: 8px;">
+                  <div style="font-size: 13px; font-weight: 600; color: var(--purple);">PARALLEL</div>
+                  <div style="font-size: 12px; color: var(--text-secondary);">并行执行多个意图</div>
+                </div>
+                <div style="flex: 1; min-width: 200px; padding: 12px; background: var(--bg-warm); border-radius: 8px;">
+                  <div style="font-size: 13px; font-weight: 600; color: var(--info);">SEQUENTIAL</div>
+                  <div style="font-size: 12px; color: var(--text-secondary);">按顺序依次执行</div>
+                </div>
+                <div style="flex: 1; min-width: 200px; padding: 12px; background: var(--bg-warm); border-radius: 8px;">
+                  <div style="font-size: 13px; font-weight: 600; color: var(--warning);">USER_CONFIRM</div>
+                  <div style="font-size: 12px; color: var(--text-secondary);">用户确认后执行</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Behavior Calibration -->
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">行为校准系统 (ET-Agent)</h2>
+              <p class="section-subtitle">V7.0 新增：自动错误检测与修复</p>
+            </div>
+          </div>
+          <div class="calibration-grid">
+            <div class="calibration-card">
+              <div class="calibration-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+                工具调用去重
+              </div>
+              <div class="calibration-desc">
+                检测并合并重复的工具调用，避免资源浪费。基于语义相似度和参数比对判断重复。
+              </div>
+              <div class="calibration-metrics">
+                <div class="calibration-metric">
+                  <div class="calibration-metric-value">~30%</div>
+                  <div class="calibration-metric-label">调用量减少</div>
+                </div>
+                <div class="calibration-metric">
+                  <div class="calibration-metric-value">5min</div>
+                  <div class="calibration-metric-label">缓存窗口</div>
+                </div>
+              </div>
+            </div>
+            <div class="calibration-card">
+              <div class="calibration-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                自我纠正机制
+              </div>
+              <div class="calibration-desc">
+                基于反射记忆的错误自动修复。记录历史失败模式，自动生成修复建议并重试。
+              </div>
+              <div class="calibration-metrics">
+                <div class="calibration-metric">
+                  <div class="calibration-metric-value">3</div>
+                  <div class="calibration-metric-label">最大重试</div>
+                </div>
+                <div class="calibration-metric">
+                  <div class="calibration-metric-value">~85%</div>
+                  <div class="calibration-metric-label">自动修复率</div>
+                </div>
+              </div>
+            </div>
+            <div class="calibration-card">
+              <div class="calibration-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                外部验证器
+              </div>
+              <div class="calibration-desc">
+                独立的结果验证服务。支持规则验证、语义验证、数据完整性检查。
+              </div>
+              <div class="calibration-metrics">
+                <div class="calibration-metric">
+                  <div class="calibration-metric-value">Rule + Semantic</div>
+                  <div class="calibration-metric-label">双重验证</div>
+                </div>
+              </div>
+            </div>
+            <div class="calibration-card">
+              <div class="calibration-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
+                纠正 Agent
+              </div>
+              <div class="calibration-desc">
+                专门的纠正 Agent，分析失败原因并生成修复方案。支持提示词注入优化。
+              </div>
+              <div class="calibration-metrics">
+                <div class="calibration-metric">
+                  <div class="calibration-metric-value">LLM-Powered</div>
+                  <div class="calibration-metric-label">智能分析</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Arena RL Tournament -->
+        <section class="section">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Arena RL 锦标赛</h2>
+              <p class="section-subtitle">V7.0 新增：基于 LLM Judge 的歧义裁决系统</p>
+            </div>
+          </div>
+
+          <!-- Arena RL Flow -->
+          <div style="background: linear-gradient(135deg, #1A1A1A, #2D2D2D); border-radius: 16px; padding: 32px; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
+              <!-- Trigger Condition -->
+              <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; text-align: center; min-width: 160px;">
+                <div style="font-size: 24px; margin-bottom: 8px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+                <div style="color: #FFF; font-size: 14px; font-weight: 600;">歧义触发</div>
+                <div style="color: rgba(255,255,255,0.6); font-size: 12px; margin-top: 4px;">top1-top2 &lt; 阈值</div>
+              </div>
+
+              <div style="color: var(--accent); font-size: 24px;">→</div>
+
+              <!-- Seed Ranking -->
+              <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; text-align: center; min-width: 160px;">
+                <div style="font-size: 24px; margin-bottom: 8px;"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg></div>
+                <div style="color: #FFF; font-size: 14px; font-weight: 600;">种子排名</div>
+                <div style="color: rgba(255,255,255,0.6); font-size: 12px; margin-top: 4px;">按置信度排序</div>
+              </div>
+
+              <div style="color: var(--accent); font-size: 24px;">→</div>
+
+              <!-- Pairwise Comparison -->
+              <div style="background: rgba(196, 92, 38, 0.3); border: 2px solid var(--accent); border-radius: 12px; padding: 20px; text-align: center; min-width: 160px;">
+                <div style="font-size: 24px; margin-bottom: 8px;"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="M13 19l6-6"/><path d="M16 16l4 4"/><path d="M19 21l2-2"/></svg></div>
+                <div style="color: #FFF; font-size: 14px; font-weight: 600;">两两比较</div>
+                <div style="color: rgba(255,255,255,0.6); font-size: 12px; margin-top: 4px;">LLM Judge 评估</div>
+              </div>
+
+              <div style="color: var(--accent); font-size: 24px;">→</div>
+
+              <!-- Winner -->
+              <div style="background: rgba(45, 106, 79, 0.3); border: 2px solid var(--success); border-radius: 12px; padding: 20px; text-align: center; min-width: 160px;">
+                <div style="font-size: 24px; margin-bottom: 8px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg></div>
+                <div style="color: #FFF; font-size: 14px; font-weight: 600;">胜出结果</div>
+                <div style="color: rgba(255,255,255,0.6); font-size: 12px; margin-top: 4px;">最佳匹配确定</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tournament Types -->
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 24px;">
+            <div style="background: var(--bg-surface); border: 2px solid var(--info); border-radius: 16px; padding: 24px;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                <div style="width: 48px; height: 48px; background: var(--info-light); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></svg></div>
+                <div>
+                  <div style="font-size: 16px; font-weight: 600;">意图消歧</div>
+                  <div style="font-size: 12px; color: var(--text-tertiary);">INTENT_DISAMBIGUATION</div>
+                </div>
+              </div>
+              <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 16px;">
+                当多个意图候选置信度接近时触发，通过 LLM 两两比较选出最佳匹配意图
+              </div>
+              <div style="display: flex; gap: 12px;">
+                <div style="flex: 1; background: var(--bg-warm); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--info);">0.15</div>
+                  <div style="font-size: 11px; color: var(--text-tertiary);">歧义阈值</div>
+                </div>
+                <div style="flex: 1; background: var(--bg-warm); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--info);">4</div>
+                  <div style="font-size: 11px; color: var(--text-tertiary);">最大候选</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="background: var(--bg-surface); border: 2px solid var(--accent); border-radius: 16px; padding: 24px;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                <div style="width: 48px; height: 48px; background: var(--accent-light); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
+                <div>
+                  <div style="font-size: 16px; font-weight: 600;">工具选择</div>
+                  <div style="font-size: 12px; color: var(--text-tertiary);">TOOL_SELECTION</div>
+                </div>
+              </div>
+              <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 16px;">
+                当多个工具候选相似度接近时触发，评估工具与查询的匹配程度
+              </div>
+              <div style="display: flex; gap: 12px;">
+                <div style="flex: 1; background: var(--bg-warm); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--accent);">0.10</div>
+                  <div style="font-size: 11px; color: var(--text-tertiary);">歧义阈值</div>
+                </div>
+                <div style="flex: 1; background: var(--bg-warm); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--accent);">4</div>
+                  <div style="font-size: 11px; color: var(--text-tertiary);">最大候选</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="background: var(--bg-surface); border: 2px solid var(--purple); border-radius: 16px; padding: 24px;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                <div style="width: 48px; height: 48px; background: var(--purple-light); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
+                <div>
+                  <div style="font-size: 16px; font-weight: 600;">分析比较</div>
+                  <div style="font-size: 12px; color: var(--text-tertiary);">AGENT_ANALYSIS</div>
+                </div>
+              </div>
+              <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 16px;">
+                比较多个 Agent 生成的分析结果，选出最优解答
+              </div>
+              <div style="display: flex; gap: 12px;">
+                <div style="flex: 1; background: var(--bg-warm); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--purple);">LLM</div>
+                  <div style="font-size: 11px; color: var(--text-tertiary);">Judge 模型</div>
+                </div>
+                <div style="flex: 1; background: var(--bg-warm); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--purple);">3</div>
+                  <div style="font-size: 11px; color: var(--text-tertiary);">最大候选</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tournament Modes -->
+          <div style="background: var(--bg-warm); border-radius: 16px; padding: 24px;">
+            <div style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">锦标赛模式</div>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+              <div style="background: var(--bg-surface); padding: 16px; border-radius: 12px; border-left: 4px solid var(--success);">
+                <div style="font-size: 14px; font-weight: 600; color: var(--success);">SEEDED_SINGLE_ELIMINATION</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">种子单淘汰制，按初始分数排种子</div>
+                <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px; font-family: var(--font-mono);">O(N-1) 比较</div>
+              </div>
+              <div style="background: var(--bg-surface); padding: 16px; border-radius: 12px; border-left: 4px solid var(--info);">
+                <div style="font-size: 14px; font-weight: 600; color: var(--info);">SIMPLE_SINGLE_ELIMINATION</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">简单单淘汰制，随机配对</div>
+                <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px; font-family: var(--font-mono);">O(N-1) 比较</div>
+              </div>
+              <div style="background: var(--bg-surface); padding: 16px; border-radius: 12px; border-left: 4px solid var(--warning);">
+                <div style="font-size: 14px; font-weight: 600; color: #9A6700;">SWISS_SYSTEM</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">瑞士轮制，多轮积分不完全淘汰</div>
+                <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px; font-family: var(--font-mono);">O(N log N) 比较</div>
+              </div>
+              <div style="background: var(--bg-surface); padding: 16px; border-radius: 12px; border-left: 4px solid var(--purple);">
+                <div style="font-size: 14px; font-weight: 600; color: var(--purple);">ROUND_ROBIN</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">全配对制，所有候选两两比较</div>
+                <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px; font-family: var(--font-mono);">O(N²) 比较</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Performance Metrics -->
+          <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-top: 24px;">
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 20px; border-radius: 12px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700; color: var(--accent);">15s</div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">超时时间</div>
+            </div>
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 20px; border-radius: 12px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700; color: var(--accent);">10</div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">最大 LLM 调用</div>
+            </div>
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 20px; border-radius: 12px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700; color: var(--success);">5min</div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">结果缓存</div>
+            </div>
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 20px; border-radius: 12px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700; color: var(--info);">Async</div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">异步执行</div>
+            </div>
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 20px; border-radius: 12px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700; color: var(--purple);">双向</div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">减少位置偏见</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Sensitivity Levels -->
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">敏感度级别</h2>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+            <div style="padding: 20px; background: var(--success-light); border-radius: 12px; text-align: center;">
+              <div style="font-size: 18px; font-weight: 700; color: var(--success);">LOW</div>
+              <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">只读查询</div>
+              <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;">配额 1 · 无需审批</div>
+            </div>
+            <div style="padding: 20px; background: var(--warning-light); border-radius: 12px; text-align: center;">
+              <div style="font-size: 18px; font-weight: 700; color: #9A6700;">MEDIUM</div>
+              <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">有限修改</div>
+              <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;">配额 2 · 需权限</div>
+            </div>
+            <div style="padding: 20px; background: var(--error-light); border-radius: 12px; text-align: center;">
+              <div style="font-size: 18px; font-weight: 700; color: var(--error);">HIGH</div>
+              <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">重要操作</div>
+              <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;">配额 2-3 · 高级权限</div>
+            </div>
+            <div style="padding: 20px; background: var(--purple-light); border-radius: 12px; text-align: center;">
+              <div style="font-size: 18px; font-weight: 700; color: var(--purple);">CRITICAL</div>
+              <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">需要审批</div>
+              <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 8px;">配额 3-5 · 审批链</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Tab: Intents -->
+      <div id="tab-intents" class="tab-content">
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">意图库 (<span id="totalIntents">150</span>个意图)</h2>
+          </div>
+          <div class="search-box">
+            <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+            <input type="text" class="search-input" id="intentSearch" placeholder="搜索意图名称或代码..." oninput="filterIntents()">
+          </div>
+          <div class="category-grid" id="categoryGrid"></div>
+        </section>
+      </div>
+
+      <!-- Tab: Tools -->
+      <div id="tab-tools" class="tab-content">
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">工具库 (<span id="totalTools">122</span>个工具)</h2>
+          </div>
+          <div class="search-box">
+            <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+            <input type="text" class="search-input" id="toolSearch" placeholder="搜索工具名称..." oninput="filterTools()">
+          </div>
+          <div class="filter-tags" id="toolFilters"></div>
+          <div class="tools-grid" id="toolsGrid"></div>
+        </section>
+      </div>
+
+      <!-- Tab: Demo -->
+      <div id="tab-demo" class="tab-content">
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title">交互式演示</h2>
+          </div>
+
+          <div class="demo-area">
+            <div class="demo-input-row">
+              <input type="text" class="demo-input" id="demoInput" placeholder="输入自然语言查询，例如：这批的质检情况怎么样">
+              <button class="demo-btn" id="demoBtn" onclick="runDemo()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                运行演示
+              </button>
+            </div>
+            <div style="margin-bottom:12px;color:var(--text-secondary);font-size:14px;">预设案例：</div>
+            <div class="case-buttons" id="caseButtons"></div>
+          </div>
+
+          <!-- Process Visualization -->
+          <div class="process-steps" id="processSteps">
+            <div class="process-step" data-step="1">
+              <div class="process-step-num">1</div>
+              <div class="process-step-content">
+                <div class="process-step-title">查询预处理</div>
+                <div class="process-step-desc">时间归一化、口语标准化、指代消解、质量评估</div>
+                <div class="process-step-data" id="step1Data" style="display:none;"></div>
+              </div>
+            </div>
+            <div class="process-step" data-step="2">
+              <div class="process-step-num">2</div>
+              <div class="process-step-content">
+                <div class="process-step-title">意图识别</div>
+                <div class="process-step-desc">多层匹配（正则→关键词→向量→LLM）</div>
+                <div class="process-step-data" id="step2Data" style="display:none;"></div>
+              </div>
+            </div>
+            <div class="process-step" data-step="3">
+              <div class="process-step-num">3</div>
+              <div class="process-step-content">
+                <div class="process-step-title">Arena RL 裁决</div>
+                <div class="process-step-desc">置信度接近时触发锦标赛歧义裁决</div>
+                <div class="process-step-data" id="step3Data" style="display:none;"></div>
+              </div>
+            </div>
+            <div class="process-step" data-step="4">
+              <div class="process-step-num">4</div>
+              <div class="process-step-content">
+                <div class="process-step-title">工具执行</div>
+                <div class="process-step-desc">参数提取、冗余检查、自动重试</div>
+                <div class="process-step-data" id="step4Data" style="display:none;"></div>
+              </div>
+            </div>
+            <div class="process-step" data-step="5">
+              <div class="process-step-num">5</div>
+              <div class="process-step-content">
+                <div class="process-step-title">结果验证</div>
+                <div class="process-step-desc">规则验证 + 纠错 Agent</div>
+                <div class="process-step-data" id="step5Data" style="display:none;"></div>
+              </div>
+            </div>
+            <div class="process-step" data-step="6">
+              <div class="process-step-num">6</div>
+              <div class="process-step-content">
+                <div class="process-step-title">记忆更新</div>
+                <div class="process-step-desc">更新实体槽位和对话上下文</div>
+                <div class="process-step-data" id="step6Data" style="display:none;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Result Display -->
+          <div class="result-area" id="resultArea">
+            <div class="result-card" id="resultCard"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p class="footer-text">白垩纪食品溯源系统 &copy; 2026 · AI 意图识别系统 V7.0</p>
+    </div>
+  </footer>
+
+  <script>
+    // ============================================
+    // 完整意图数据 (19个分类，137个意图)
+    // ============================================
+    const intentCategories = {
+      QUALITY: {
+        name: "质检管理",
+        icon: "✓",
+        color: "#2D6A4F",
+        intents: [
+          { code: "QUALITY_CHECK_QUERY", name: "质检项查询", sensitivity: "LOW", tool: "quality_check_query" },
+          { code: "QUALITY_CHECK_EXECUTE", name: "执行质检", sensitivity: "MEDIUM", tool: "quality_check_update" },
+          { code: "QUALITY_DISPOSITION_EVALUATE", name: "处置评估", sensitivity: "MEDIUM", tool: null },
+          { code: "QUALITY_DISPOSITION_EXECUTE", name: "执行处置", sensitivity: "HIGH", tool: "quality_result_submit" },
+          { code: "QUALITY_STATS", name: "质检统计", sensitivity: "LOW", tool: "quality_stats_query" },
+          { code: "QUALITY_CRITICAL_ITEMS", name: "关键质检项", sensitivity: "LOW", tool: "quality_check_query" }
+        ]
+      },
+      MATERIAL: {
+        name: "原料管理",
+        icon: "📦",
+        color: "#D4A574",
+        intents: [
+          { code: "MATERIAL_BATCH_QUERY", name: "原料批次查询", sensitivity: "LOW", tool: "material_batch_query" },
+          { code: "MATERIAL_BATCH_USE", name: "使用原料", sensitivity: "HIGH", tool: "material_batch_use" },
+          { code: "MATERIAL_BATCH_RESERVE", name: "预留原料", sensitivity: "MEDIUM", tool: "material_batch_reserve" },
+          { code: "MATERIAL_BATCH_RELEASE", name: "释放预留", sensitivity: "MEDIUM", tool: "material_batch_release" },
+          { code: "MATERIAL_BATCH_CONSUME", name: "消耗预留", sensitivity: "HIGH", tool: "material_batch_consume" },
+          { code: "MATERIAL_FIFO_RECOMMEND", name: "FIFO推荐", sensitivity: "LOW", tool: "material_fifo_recommend" },
+          { code: "MATERIAL_EXPIRING_ALERT", name: "即将过期预警", sensitivity: "LOW", tool: "material_expiring_alert" },
+          { code: "MATERIAL_LOW_STOCK_ALERT", name: "低库存预警", sensitivity: "LOW", tool: "material_low_stock_alert" },
+          { code: "MATERIAL_EXPIRED_QUERY", name: "已过期查询", sensitivity: "LOW", tool: "material_expired_query" },
+          { code: "MATERIAL_ADJUST_QUANTITY", name: "调整数量", sensitivity: "HIGH", tool: "material_adjust_quantity" }
+        ]
+      },
+      SHIPMENT: {
+        name: "出货溯源",
+        icon: "🚚",
+        color: "#4A90A4",
+        intents: [
+          { code: "SHIPMENT_CREATE", name: "创建出货", sensitivity: "HIGH", tool: "shipment_create" },
+          { code: "SHIPMENT_QUERY", name: "查询出货", sensitivity: "LOW", tool: "shipment_query" },
+          { code: "SHIPMENT_UPDATE", name: "更新出货", sensitivity: "MEDIUM", tool: "shipment_update" },
+          { code: "SHIPMENT_STATUS_UPDATE", name: "更新出货状态", sensitivity: "MEDIUM", tool: "shipment_status_update" },
+          { code: "SHIPMENT_STATS", name: "出货统计", sensitivity: "LOW", tool: "shipment_stats_query" },
+          { code: "SHIPMENT_BY_CUSTOMER", name: "客户出货", sensitivity: "LOW", tool: "shipment_by_customer" },
+          { code: "SHIPMENT_BY_DATE", name: "日期出货", sensitivity: "LOW", tool: "shipment_by_date" },
+          { code: "TRACE_BATCH", name: "批次溯源", sensitivity: "LOW", tool: "trace_batch" },
+          { code: "TRACE_FULL", name: "完整溯源", sensitivity: "LOW", tool: "trace_full" },
+          { code: "TRACE_PUBLIC", name: "公开溯源", sensitivity: "LOW", tool: "trace_public" }
+        ]
+      },
+      REPORT: {
+        name: "报表生成",
+        icon: "📊",
+        color: "#8B5CF6",
+        intents: [
+          { code: "REPORT_DASHBOARD_OVERVIEW", name: "仪表盘总览", sensitivity: "LOW", tool: "report_dashboard_overview" },
+          { code: "REPORT_PRODUCTION", name: "生产报表", sensitivity: "LOW", tool: "report_production" },
+          { code: "REPORT_QUALITY", name: "质量报表", sensitivity: "LOW", tool: "report_quality" },
+          { code: "REPORT_INVENTORY", name: "库存报表", sensitivity: "LOW", tool: "report_inventory" },
+          { code: "REPORT_FINANCE", name: "财务报表", sensitivity: "MEDIUM", tool: "report_finance" },
+          { code: "REPORT_EFFICIENCY", name: "效率分析报表", sensitivity: "LOW", tool: "report_efficiency" },
+          { code: "REPORT_KPI", name: "KPI指标报表", sensitivity: "LOW", tool: "report_kpi" },
+          { code: "REPORT_ANOMALY", name: "异常报表", sensitivity: "MEDIUM", tool: "report_anomaly" },
+          { code: "REPORT_TRENDS", name: "趋势报表", sensitivity: "LOW", tool: "report_trends" }
+        ]
+      },
+      ALERT: {
+        name: "告警管理",
+        icon: "🔔",
+        color: "#EF4444",
+        intents: [
+          { code: "ALERT_LIST", name: "告警列表", sensitivity: "LOW", tool: "alert_list" },
+          { code: "ALERT_ACTIVE", name: "活跃告警", sensitivity: "LOW", tool: "alert_active" },
+          { code: "ALERT_STATS", name: "告警统计", sensitivity: "LOW", tool: "alert_stats" },
+          { code: "ALERT_ACKNOWLEDGE", name: "确认告警", sensitivity: "MEDIUM", tool: "alert_acknowledge" },
+          { code: "ALERT_RESOLVE", name: "解决告警", sensitivity: "MEDIUM", tool: "alert_resolve" },
+          { code: "ALERT_TRIAGE", name: "告警分级", sensitivity: "LOW", tool: "alert_triage" },
+          { code: "ALERT_DIAGNOSE", name: "告警诊断", sensitivity: "MEDIUM", tool: "alert_diagnose" },
+          { code: "ALERT_BY_EQUIPMENT", name: "按设备告警", sensitivity: "LOW", tool: "alert_by_equipment" },
+          { code: "ALERT_BY_LEVEL", name: "按级别告警", sensitivity: "LOW", tool: "alert_by_level" }
+        ]
+      },
+      HR: {
+        name: "考勤管理",
+        icon: "👤",
+        color: "#F59E0B",
+        intents: [
+          { code: "ATTENDANCE_STATUS", name: "打卡状态", sensitivity: "LOW", tool: "attendance_status" },
+          { code: "ATTENDANCE_HISTORY", name: "考勤历史", sensitivity: "LOW", tool: "attendance_history" },
+          { code: "ATTENDANCE_STATS", name: "考勤统计", sensitivity: "LOW", tool: "attendance_stats" },
+          { code: "ATTENDANCE_MONTHLY", name: "月度考勤", sensitivity: "LOW", tool: "attendance_monthly" },
+          { code: "ATTENDANCE_ANOMALY", name: "考勤异常", sensitivity: "MEDIUM", tool: "attendance_anomaly" },
+          { code: "ATTENDANCE_DEPARTMENT", name: "部门考勤", sensitivity: "LOW", tool: "attendance_department" },
+          { code: "ATTENDANCE_TODAY", name: "今日打卡记录", sensitivity: "LOW", tool: "attendance_today" },
+          { code: "CLOCK_IN", name: "上班打卡", sensitivity: "MEDIUM", tool: "clock_in" },
+          { code: "CLOCK_OUT", name: "下班打卡", sensitivity: "MEDIUM", tool: "clock_out" }
+        ]
+      },
+      CRM: {
+        name: "客户供应商",
+        icon: "🤝",
+        color: "#06B6D4",
+        intents: [
+          { code: "CUSTOMER_LIST", name: "客户列表", sensitivity: "LOW", tool: "customer_list" },
+          { code: "CUSTOMER_SEARCH", name: "客户搜索", sensitivity: "LOW", tool: "customer_search" },
+          { code: "CUSTOMER_STATS", name: "客户统计", sensitivity: "LOW", tool: "customer_stats" },
+          { code: "CUSTOMER_BY_TYPE", name: "按类型客户", sensitivity: "LOW", tool: "customer_by_type" },
+          { code: "CUSTOMER_ACTIVE", name: "活跃客户", sensitivity: "LOW", tool: "customer_active" },
+          { code: "CUSTOMER_PURCHASE_HISTORY", name: "客户购买历史", sensitivity: "LOW", tool: "customer_purchase_history" },
+          { code: "SUPPLIER_LIST", name: "供应商列表", sensitivity: "LOW", tool: "supplier_list" },
+          { code: "SUPPLIER_SEARCH", name: "供应商搜索", sensitivity: "LOW", tool: "supplier_search" },
+          { code: "SUPPLIER_EVALUATE", name: "供应商评估", sensitivity: "MEDIUM", tool: "supplier_evaluate" },
+          { code: "SUPPLIER_BY_CATEGORY", name: "按类别供应商", sensitivity: "LOW", tool: "supplier_by_category" },
+          { code: "SUPPLIER_ACTIVE", name: "活跃供应商", sensitivity: "LOW", tool: "supplier_active" },
+          { code: "SUPPLIER_RANKING", name: "供应商排名", sensitivity: "LOW", tool: "supplier_ranking" }
+        ]
+      },
+      EQUIPMENT: {
+        name: "设备管理",
+        icon: "⚙️",
+        color: "#64748B",
+        intents: [
+          { code: "EQUIPMENT_LIST", name: "查询设备列表", sensitivity: "LOW", tool: "equipment_list" },
+          { code: "EQUIPMENT_DETAIL", name: "查询设备详情", sensitivity: "LOW", tool: "equipment_detail" },
+          { code: "EQUIPMENT_STATS", name: "设备统计", sensitivity: "LOW", tool: "equipment_stats" },
+          { code: "EQUIPMENT_START", name: "启动设备", sensitivity: "MEDIUM", tool: "equipment_start" },
+          { code: "EQUIPMENT_STOP", name: "停止设备", sensitivity: "MEDIUM", tool: "equipment_stop" },
+          { code: "EQUIPMENT_STATUS_UPDATE", name: "更新设备状态", sensitivity: "MEDIUM", tool: "equipment_status_update" },
+          { code: "EQUIPMENT_ALERT_LIST", name: "查询设备告警", sensitivity: "LOW", tool: "equipment_alert_list" },
+          { code: "EQUIPMENT_ALERT_ACKNOWLEDGE", name: "确认设备告警", sensitivity: "MEDIUM", tool: "equipment_alert_acknowledge" },
+          { code: "EQUIPMENT_ALERT_RESOLVE", name: "解决设备告警", sensitivity: "MEDIUM", tool: "equipment_alert_resolve" },
+          { code: "EQUIPMENT_ALERT_STATS", name: "设备告警统计", sensitivity: "LOW", tool: "equipment_alert_stats" }
+        ]
+      },
+      PROCESSING: {
+        name: "生产批次",
+        icon: "🏭",
+        color: "#84CC16",
+        intents: [
+          { code: "PROCESSING_BATCH_CREATE", name: "创建生产批次", sensitivity: "HIGH", tool: "processing_batch_create" },
+          { code: "PROCESSING_BATCH_LIST", name: "查询批次列表", sensitivity: "LOW", tool: "processing_batch_list" },
+          { code: "PROCESSING_BATCH_DETAIL", name: "查询批次详情", sensitivity: "LOW", tool: "processing_batch_detail" },
+          { code: "PROCESSING_BATCH_START", name: "开始生产批次", sensitivity: "HIGH", tool: "processing_batch_start" },
+          { code: "PROCESSING_BATCH_PAUSE", name: "暂停生产批次", sensitivity: "HIGH", tool: "processing_batch_pause" },
+          { code: "PROCESSING_BATCH_RESUME", name: "恢复生产批次", sensitivity: "HIGH", tool: "processing_batch_resume" },
+          { code: "PROCESSING_BATCH_COMPLETE", name: "完成生产批次", sensitivity: "HIGH", tool: "processing_batch_complete" },
+          { code: "PROCESSING_BATCH_CANCEL", name: "取消生产批次", sensitivity: "MEDIUM", tool: "processing_batch_cancel" },
+          { code: "PROCESSING_WORKER_ASSIGN", name: "分配工人", sensitivity: "MEDIUM", tool: "processing_worker_assign" },
+          { code: "PROCESSING_WORKER_CHECKOUT", name: "工人签出", sensitivity: "MEDIUM", tool: "processing_worker_checkout" }
+        ]
+      },
+      SCALE: {
+        name: "秤设备",
+        icon: "⚖️",
+        color: "#A855F7",
+        intents: [
+          { code: "SCALE_ADD_MODEL", name: "添加秤型号", sensitivity: "MEDIUM", tool: null },
+          { code: "SCALE_PROTOCOL_DETECT", name: "协议自动识别", sensitivity: "LOW", tool: "scale_protocol_detect" },
+          { code: "SCALE_CONFIG_GENERATE", name: "AI生成秤配置", sensitivity: "MEDIUM", tool: null },
+          { code: "SCALE_TROUBLESHOOT", name: "秤故障排查", sensitivity: "LOW", tool: null },
+          { code: "SCALE_LIST_PROTOCOLS", name: "列出可用协议", sensitivity: "LOW", tool: null },
+          { code: "SCALE_TEST_PARSE", name: "测试数据解析", sensitivity: "LOW", tool: null },
+          { code: "SCALE_SEARCH_MODEL", name: "搜索秤型号", sensitivity: "LOW", tool: null },
+          { code: "SCALE_MODEL_DETAIL", name: "查看秤详情", sensitivity: "LOW", tool: null },
+          { code: "SCALE_ADD_DEVICE", name: "添加秤设备", sensitivity: "MEDIUM", tool: "scale_add_device" },
+          { code: "SCALE_ADD_DEVICE_VISION", name: "图片识别添加秤", sensitivity: "MEDIUM", tool: "scale_add_device_vision" },
+          { code: "SCALE_LIST_DEVICES", name: "列出秤设备", sensitivity: "LOW", tool: "scale_list_devices" },
+          { code: "SCALE_DEVICE_DETAIL", name: "查看秤设备详情", sensitivity: "LOW", tool: "scale_device_detail" },
+          { code: "SCALE_UPDATE_DEVICE", name: "更新秤设备", sensitivity: "MEDIUM", tool: "scale_update_device" },
+          { code: "SCALE_DELETE_DEVICE", name: "删除秤设备", sensitivity: "HIGH", tool: "scale_delete_device" }
+        ]
+      },
+      CAMERA: {
+        name: "摄像头",
+        icon: "📹",
+        color: "#EC4899",
+        intents: [
+          { code: "CAMERA_ADD", name: "添加摄像头", sensitivity: "MEDIUM", tool: null },
+          { code: "CAMERA_LIST", name: "查看摄像头列表", sensitivity: "LOW", tool: null },
+          { code: "CAMERA_DETAIL", name: "摄像头详情", sensitivity: "LOW", tool: null },
+          { code: "CAMERA_CAPTURE", name: "抓拍图片", sensitivity: "MEDIUM", tool: null },
+          { code: "CAMERA_SUBSCRIBE", name: "订阅摄像头告警", sensitivity: "MEDIUM", tool: null },
+          { code: "CAMERA_UNSUBSCRIBE", name: "取消订阅告警", sensitivity: "MEDIUM", tool: null },
+          { code: "CAMERA_EVENTS", name: "查看告警记录", sensitivity: "LOW", tool: null },
+          { code: "CAMERA_STATUS", name: "摄像头状态", sensitivity: "LOW", tool: null },
+          { code: "CAMERA_STREAMS", name: "获取流地址", sensitivity: "LOW", tool: null }
+        ]
+      },
+      ANALYSIS: {
+        name: "数据分析",
+        icon: "📈",
+        color: "#0EA5E9",
+        intents: [
+          { code: "COST_ANALYSIS", name: "成本分析", sensitivity: "MEDIUM", tool: null },
+          { code: "COST_QUERY", name: "成本查询", sensitivity: "LOW", tool: null },
+          { code: "QUALITY_ANALYSIS", name: "质量分析", sensitivity: "LOW", tool: null },
+          { code: "PRODUCTION_ANALYSIS", name: "生产分析", sensitivity: "LOW", tool: null },
+          { code: "INVENTORY_ANALYSIS", name: "库存分析", sensitivity: "LOW", tool: null },
+          { code: "INVENTORY_QUERY", name: "库存查询", sensitivity: "LOW", tool: null },
+          { code: "TREND_PREDICTION", name: "趋势预测", sensitivity: "MEDIUM", tool: null }
+        ]
+      },
+      DATA_OP: {
+        name: "数据操作",
+        icon: "✏️",
+        color: "#F97316",
+        intents: [
+          { code: "BATCH_UPDATE", name: "批量更新", sensitivity: "HIGH", tool: "batch_update" },
+          { code: "BATCH_QUERY", name: "批次查询", sensitivity: "LOW", tool: null },
+          { code: "DATA_CORRECTION", name: "数据修正", sensitivity: "HIGH", tool: null },
+          { code: "BATCH_DELETE", name: "批量删除", sensitivity: "CRITICAL", tool: null },
+          { code: "PLAN_UPDATE", name: "生产计划更新", sensitivity: "HIGH", tool: "plan_update" },
+          { code: "PRODUCT_UPDATE", name: "产品更新", sensitivity: "HIGH", tool: "product_update" },
+          { code: "MATERIAL_UPDATE", name: "原料更新", sensitivity: "HIGH", tool: "material_update" },
+          { code: "QUANTITY_ADJUST", name: "数量调整", sensitivity: "HIGH", tool: null }
+        ]
+      },
+      FORM: {
+        name: "表单生成",
+        icon: "📝",
+        color: "#14B8A6",
+        intents: [
+          { code: "FORM_GENERATION", name: "表单生成", sensitivity: "LOW", tool: "form_generation" },
+          { code: "FORM_VALIDATION", name: "表单校验", sensitivity: "LOW", tool: null },
+          { code: "FORM_SUGGESTION", name: "表单建议", sensitivity: "LOW", tool: null }
+        ]
+      },
+      SCHEDULE: {
+        name: "排程优化",
+        icon: "📅",
+        color: "#6366F1",
+        intents: [
+          { code: "SCHEDULE_OPTIMIZATION", name: "排程优化", sensitivity: "MEDIUM", tool: null },
+          { code: "RESOURCE_ALLOCATION", name: "资源分配", sensitivity: "MEDIUM", tool: null },
+          { code: "CAPACITY_PLANNING", name: "产能规划", sensitivity: "MEDIUM", tool: null },
+          { code: "URGENT_INSERT", name: "紧急插单", sensitivity: "HIGH", tool: null }
+        ]
+      },
+      SYSTEM: {
+        name: "系统管理",
+        icon: "🔧",
+        color: "#78716C",
+        intents: [
+          { code: "SYSTEM_REPORT", name: "系统报表", sensitivity: "LOW", tool: null },
+          { code: "SYSTEM_CONFIG", name: "系统配置", sensitivity: "CRITICAL", tool: null },
+          { code: "USER_QUERY", name: "用户咨询", sensitivity: "LOW", tool: null },
+          { code: "SCHEDULING_SET_AUTO", name: "排产全自动", sensitivity: "HIGH", tool: "scheduling_set_auto" },
+          { code: "SCHEDULING_SET_MANUAL", name: "排产人工确认", sensitivity: "HIGH", tool: "scheduling_set_manual" },
+          { code: "SCHEDULING_SET_DISABLED", name: "禁用自动排产", sensitivity: "HIGH", tool: "scheduling_set_disabled" },
+          { code: "FACTORY_FEATURE_TOGGLE", name: "功能开关", sensitivity: "HIGH", tool: "factory_feature_toggle" },
+          { code: "FACTORY_NOTIFICATION_CONFIG", name: "通知设置", sensitivity: "MEDIUM", tool: "factory_notification_config" }
+        ]
+      },
+      USER: {
+        name: "用户管理",
+        icon: "👥",
+        color: "#DC2626",
+        intents: [
+          { code: "USER_CREATE", name: "创建用户", sensitivity: "HIGH", tool: "user_create" },
+          { code: "USER_DISABLE", name: "禁用用户", sensitivity: "HIGH", tool: "user_disable" },
+          { code: "USER_ROLE_ASSIGN", name: "角色分配", sensitivity: "CRITICAL", tool: "user_role_assign" }
+        ]
+      },
+      CONFIG: {
+        name: "配置管理",
+        icon: "⚡",
+        color: "#EA580C",
+        intents: [
+          { code: "EQUIPMENT_MAINTENANCE", name: "设备维护", sensitivity: "MEDIUM", tool: "equipment_maintenance" },
+          { code: "CONVERSION_RATE_UPDATE", name: "转换率配置", sensitivity: "MEDIUM", tool: "conversion_rate_update" },
+          { code: "RULE_CONFIG", name: "规则配置", sensitivity: "HIGH", tool: "rule_config" }
+        ]
+      },
+      META: {
+        name: "意图自扩展",
+        icon: "🧠",
+        color: "#7C3AED",
+        intents: [
+          { code: "INTENT_CREATE", name: "创建AI意图", sensitivity: "CRITICAL", tool: "create_new_intent" },
+          { code: "INTENT_UPDATE", name: "更新AI意图", sensitivity: "HIGH", tool: "update_intent" },
+          { code: "INTENT_ANALYZE", name: "分析意图使用", sensitivity: "LOW", tool: null }
+        ]
+      }
+    };
+
+    // 工具列表
+    const toolsList = [
+      { name: "quality_check_create", desc: "创建质检项", category: "质检" },
+      { name: "quality_check_query", desc: "查询质检项", category: "质检" },
+      { name: "quality_check_update", desc: "更新质检项", category: "质检" },
+      { name: "quality_result_submit", desc: "提交质检结果", category: "质检" },
+      { name: "quality_record_query", desc: "查询质检记录", category: "质检" },
+      { name: "quality_stats_query", desc: "查询质检统计", category: "质检" },
+      { name: "material_batch_query", desc: "查询原料批次", category: "原料" },
+      { name: "material_batch_use", desc: "使用原料", category: "原料" },
+      { name: "material_batch_reserve", desc: "预留原料", category: "原料" },
+      { name: "material_batch_release", desc: "释放预留", category: "原料" },
+      { name: "material_batch_consume", desc: "消耗预留", category: "原料" },
+      { name: "material_fifo_recommend", desc: "FIFO推荐", category: "原料" },
+      { name: "material_expiring_alert", desc: "即将过期预警", category: "原料" },
+      { name: "material_low_stock_alert", desc: "低库存预警", category: "原料" },
+      { name: "material_expired_query", desc: "已过期查询", category: "原料" },
+      { name: "material_adjust_quantity", desc: "调整数量", category: "原料" },
+      { name: "shipment_create", desc: "创建出货", category: "出货" },
+      { name: "shipment_query", desc: "查询出货", category: "出货" },
+      { name: "shipment_update", desc: "更新出货", category: "出货" },
+      { name: "shipment_status_update", desc: "更新出货状态", category: "出货" },
+      { name: "shipment_stats_query", desc: "出货统计", category: "出货" },
+      { name: "shipment_by_customer", desc: "按客户出货", category: "出货" },
+      { name: "shipment_by_date", desc: "按日期出货", category: "出货" },
+      { name: "shipment_cancel", desc: "取消出货", category: "出货" },
+      { name: "shipment_complete", desc: "完成出货", category: "出货" },
+      { name: "shipment_confirm", desc: "确认出货", category: "出货" },
+      { name: "trace_batch", desc: "批次溯源", category: "溯源" },
+      { name: "trace_full", desc: "完整溯源", category: "溯源" },
+      { name: "trace_public", desc: "公开溯源", category: "溯源" },
+      { name: "report_dashboard_overview", desc: "仪表盘总览", category: "报表" },
+      { name: "report_production", desc: "生产报表", category: "报表" },
+      { name: "report_quality", desc: "质量报表", category: "报表" },
+      { name: "report_inventory", desc: "库存报表", category: "报表" },
+      { name: "report_finance", desc: "财务报表", category: "报表" },
+      { name: "report_efficiency", desc: "效率分析报表", category: "报表" },
+      { name: "report_kpi", desc: "KPI指标报表", category: "报表" },
+      { name: "report_anomaly", desc: "异常报表", category: "报表" },
+      { name: "report_trends", desc: "趋势报表", category: "报表" },
+      { name: "report_bom_cost", desc: "BOM成本报表", category: "报表" },
+      { name: "report_cost_variance", desc: "成本差异报表", category: "报表" },
+      { name: "report_oee", desc: "OEE报表", category: "报表" },
+      { name: "alert_list", desc: "告警列表", category: "告警" },
+      { name: "alert_active", desc: "活跃告警", category: "告警" },
+      { name: "alert_stats", desc: "告警统计", category: "告警" },
+      { name: "alert_acknowledge", desc: "确认告警", category: "告警" },
+      { name: "alert_resolve", desc: "解决告警", category: "告警" },
+      { name: "alert_triage", desc: "告警分级", category: "告警" },
+      { name: "alert_diagnose", desc: "告警诊断", category: "告警" },
+      { name: "alert_by_equipment", desc: "按设备告警", category: "告警" },
+      { name: "alert_by_level", desc: "按级别告警", category: "告警" },
+      { name: "attendance_status", desc: "打卡状态", category: "考勤" },
+      { name: "attendance_history", desc: "考勤历史", category: "考勤" },
+      { name: "attendance_stats", desc: "考勤统计", category: "考勤" },
+      { name: "attendance_monthly", desc: "月度考勤", category: "考勤" },
+      { name: "attendance_anomaly", desc: "考勤异常", category: "考勤" },
+      { name: "attendance_department", desc: "部门考勤", category: "考勤" },
+      { name: "attendance_today", desc: "今日打卡", category: "考勤" },
+      { name: "clock_in", desc: "上班打卡", category: "考勤" },
+      { name: "clock_out", desc: "下班打卡", category: "考勤" },
+      { name: "customer_list", desc: "客户列表", category: "CRM" },
+      { name: "customer_search", desc: "客户搜索", category: "CRM" },
+      { name: "customer_stats", desc: "客户统计", category: "CRM" },
+      { name: "customer_by_type", desc: "按类型客户", category: "CRM" },
+      { name: "customer_active", desc: "活跃客户", category: "CRM" },
+      { name: "customer_purchase_history", desc: "客户购买历史", category: "CRM" },
+      { name: "supplier_list", desc: "供应商列表", category: "CRM" },
+      { name: "supplier_search", desc: "供应商搜索", category: "CRM" },
+      { name: "supplier_evaluate", desc: "供应商评估", category: "CRM" },
+      { name: "supplier_by_category", desc: "按类别供应商", category: "CRM" },
+      { name: "supplier_active", desc: "活跃供应商", category: "CRM" },
+      { name: "supplier_ranking", desc: "供应商排名", category: "CRM" },
+      { name: "scale_add_device", desc: "添加秤设备", category: "秤" },
+      { name: "scale_add_device_vision", desc: "图片识别添加秤", category: "秤" },
+      { name: "scale_list_devices", desc: "列出秤设备", category: "秤" },
+      { name: "scale_device_detail", desc: "秤设备详情", category: "秤" },
+      { name: "scale_update_device", desc: "更新秤设备", category: "秤" },
+      { name: "scale_delete_device", desc: "删除秤设备", category: "秤" },
+      { name: "scale_protocol_detect", desc: "协议自动识别", category: "秤" },
+      { name: "equipment_list", desc: "设备列表", category: "设备" },
+      { name: "equipment_detail", desc: "设备详情", category: "设备" },
+      { name: "equipment_stats", desc: "设备统计", category: "设备" },
+      { name: "equipment_start", desc: "启动设备", category: "设备" },
+      { name: "equipment_stop", desc: "停止设备", category: "设备" },
+      { name: "equipment_status_update", desc: "更新设备状态", category: "设备" },
+      { name: "equipment_alert_list", desc: "设备告警列表", category: "设备" },
+      { name: "equipment_alert_acknowledge", desc: "确认设备告警", category: "设备" },
+      { name: "equipment_alert_resolve", desc: "解决设备告警", category: "设备" },
+      { name: "equipment_alert_stats", desc: "设备告警统计", category: "设备" },
+      { name: "user_create", desc: "创建用户", category: "用户" },
+      { name: "user_disable", desc: "禁用用户", category: "用户" },
+      { name: "user_role_assign", desc: "角色分配", category: "用户" },
+      { name: "scheduling_set_auto", desc: "排产全自动", category: "系统" },
+      { name: "scheduling_set_manual", desc: "排产人工确认", category: "系统" },
+      { name: "scheduling_set_disabled", desc: "禁用自动排产", category: "系统" },
+      { name: "factory_feature_toggle", desc: "功能开关", category: "系统" },
+      { name: "factory_notification_config", desc: "通知设置", category: "系统" },
+      { name: "batch_update", desc: "批量更新", category: "数据" },
+      { name: "plan_update", desc: "生产计划更新", category: "数据" },
+      { name: "product_update", desc: "产品更新", category: "数据" },
+      { name: "material_update", desc: "原料更新", category: "数据" },
+      { name: "product_type_query", desc: "产品类型查询", category: "数据" },
+      { name: "processing_batch_create", desc: "创建生产批次", category: "生产" },
+      { name: "processing_batch_list", desc: "批次列表", category: "生产" },
+      { name: "processing_batch_detail", desc: "批次详情", category: "生产" },
+      { name: "processing_batch_start", desc: "开始生产", category: "生产" },
+      { name: "processing_batch_pause", desc: "暂停生产", category: "生产" },
+      { name: "processing_batch_resume", desc: "恢复生产", category: "生产" },
+      { name: "processing_batch_complete", desc: "完成生产", category: "生产" },
+      { name: "processing_batch_cancel", desc: "取消生产", category: "生产" },
+      { name: "processing_batch_timeline", desc: "批次时间线", category: "生产" },
+      { name: "processing_batch_workers", desc: "批次工人列表", category: "生产" },
+      { name: "processing_worker_assign", desc: "分配工人", category: "生产" },
+      { name: "processing_worker_checkout", desc: "工人签出", category: "生产" },
+      { name: "form_generation", desc: "表单生成", category: "表单" },
+      { name: "equipment_maintenance", desc: "设备维护", category: "配置" },
+      { name: "conversion_rate_update", desc: "转换率配置", category: "配置" },
+      { name: "rule_config", desc: "规则配置", category: "配置" },
+      { name: "create_new_intent", desc: "创建意图", category: "意图" },
+      { name: "update_intent", desc: "更新意图", category: "意图" },
+      { name: "test_intent_matching", desc: "测试意图匹配", category: "意图" },
+      { name: "query_entity_schema", desc: "查询Entity Schema", category: "查询" },
+      { name: "query_drools_rules", desc: "查询Drools规则", category: "查询" },
+      { name: "generate_handler_config", desc: "生成Handler配置", category: "查询" }
+    ];
+
+    // 演示案例
+    const demoCases = [
+      {
+        name: "质检查询",
+        input: "这批的质检情况怎么样",
+        context: "上一轮查询了批次 MB-2026-0115-001",
+        result: {
+          preprocessed: "MB-2026-0115-001 的质检结果",
+          changes: ["指代消解: 这批 → MB-2026-0115-001"],
+          intent: { code: "QUALITY_STATS", name: "质检统计", confidence: 0.92, layer: 3 },
+          tool: "quality_stats_query",
+          validation: { status: "VALID", checks: ["非空检查 ✓", "实体匹配 ✓"] },
+          memory: { slot: "BATCH", value: "MB-2026-0115-001" },
+          data: {
+            type: "quality",
+            batchId: "MB-2026-0115-001",
+            productName: "冷冻三文鱼片",
+            totalItems: 12,
+            passedItems: 11,
+            failedItems: 1,
+            passRate: "91.7%",
+            lastCheckTime: "2026-01-15 14:30",
+            items: [
+              { name: "外观检查", result: "合格", value: "色泽正常，无异味" },
+              { name: "重量检测", result: "合格", value: "502g (标准500±10g)" },
+              { name: "温度检测", result: "合格", value: "-18.2°C" },
+              { name: "微生物检测", result: "不合格", value: "大肠杆菌超标" }
+            ]
+          }
+        }
+      },
+      {
+        name: "时间查询",
+        input: "昨天入库了多少原料",
+        context: "无上下文",
+        result: {
+          preprocessed: "2026-01-15 入库的原料数量",
+          changes: ["时间归一化: 昨天 → 2026-01-15"],
+          intent: { code: "MATERIAL_BATCH_QUERY", name: "原料批次查询", confidence: 0.88, layer: 4 },
+          tool: "material_batch_query",
+          validation: { status: "VALID", checks: ["非空检查 ✓", "时间验证 ✓"] },
+          memory: { slot: "TIME_RANGE", value: "2026-01-15" },
+          data: {
+            type: "material_list",
+            date: "2026-01-15",
+            totalBatches: 8,
+            totalWeight: "4,250 kg",
+            batches: [
+              { id: "MB-0115-001", name: "冷冻三文鱼", weight: "1,200 kg", supplier: "挪威渔业", time: "08:30" },
+              { id: "MB-0115-002", name: "冷冻虾仁", weight: "800 kg", supplier: "山东海鲜", time: "09:15" },
+              { id: "MB-0115-003", name: "生蚝", weight: "500 kg", supplier: "广东海产", time: "10:00" },
+              { id: "MB-0115-004", name: "鳕鱼片", weight: "750 kg", supplier: "青岛冷链", time: "11:20" },
+              { id: "MB-0115-005", name: "带子", weight: "400 kg", supplier: "大连水产", time: "13:45" },
+              { id: "MB-0115-006", name: "龙虾", weight: "300 kg", supplier: "澳洲海鲜", time: "14:30" },
+              { id: "MB-0115-007", name: "金枪鱼", weight: "200 kg", supplier: "日本水产", time: "15:00" },
+              { id: "MB-0115-008", name: "墨鱼", weight: "100 kg", supplier: "福建渔业", time: "16:20" }
+            ]
+          }
+        }
+      },
+      {
+        name: "口语查询",
+        input: "货到了没",
+        context: "无上下文",
+        result: {
+          preprocessed: "查询待入库原料状态",
+          changes: ["口语标准化: 货到了没 → 查询入库状态"],
+          intent: { code: "MATERIAL_BATCH_QUERY", name: "原料批次查询", confidence: 0.85, layer: 2 },
+          arenaRL: { triggered: true, candidates: 3, winner: "MATERIAL_BATCH_QUERY", reason: "语义匹配最优" },
+          tool: "material_batch_query",
+          validation: { status: "VALID", checks: ["非空检查 ✓"] },
+          memory: { slot: null, value: null },
+          data: {
+            type: "pending_inbound",
+            summary: { total: 3, arrived: 2, pending: 1 },
+            items: [
+              { id: "PO-2026-0116-001", name: "冷冻鲈鱼", status: "已到货", weight: "600 kg", eta: "已到达", supplier: "青岛冷链" },
+              { id: "PO-2026-0116-002", name: "生蚝", status: "已到货", weight: "400 kg", eta: "已到达", supplier: "广东海产" },
+              { id: "PO-2026-0116-003", name: "龙虾", status: "运输中", weight: "500 kg", eta: "预计 16:00", supplier: "澳洲海鲜" }
+            ]
+          }
+        }
+      },
+      {
+        name: "多轮对话",
+        input: "供应商是谁",
+        context: "上一轮查询了批次 MB-2026-0115-001 的详情",
+        result: {
+          preprocessed: "MB-2026-0115-001 的供应商信息",
+          changes: ["上下文注入: 继承批次参数"],
+          intent: { code: "SUPPLIER_SEARCH", name: "供应商搜索", confidence: 0.87, layer: 5 },
+          tool: "supplier_search",
+          validation: { status: "VALID", checks: ["非空检查 ✓", "实体匹配 ✓"] },
+          memory: { slot: "SUPPLIER", value: "挪威渔业有限公司" },
+          data: {
+            type: "supplier_detail",
+            supplier: {
+              id: "SUP-001",
+              name: "挪威渔业有限公司",
+              shortName: "挪威渔业",
+              category: "海产品",
+              level: "A级",
+              contact: "张经理",
+              phone: "138****5678",
+              address: "挪威奥斯陆港口区",
+              rating: 4.8,
+              totalOrders: 156,
+              onTimeRate: "98.2%",
+              qualityRate: "99.1%",
+              cooperationYears: 3
+            }
+          }
+        }
+      },
+      {
+        name: "统计报表",
+        input: "本月的生产效率怎么样",
+        context: "无上下文",
+        result: {
+          preprocessed: "2026年1月的生产效率报表",
+          changes: ["时间归一化: 本月 → 2026-01-01 至 2026-01-16"],
+          intent: { code: "REPORT_EFFICIENCY", name: "效率分析报表", confidence: 0.91, layer: 3 },
+          tool: "report_efficiency",
+          validation: { status: "VALID", checks: ["非空检查 ✓"] },
+          memory: { slot: "TIME_RANGE", value: "2026-01" },
+          data: {
+            type: "efficiency_report",
+            period: "2026年1月",
+            oee: "87.5%",
+            availability: "92.3%",
+            performance: "95.1%",
+            quality: "99.7%",
+            trends: [
+              { week: "第1周", oee: "85.2%", production: "12,500 kg" },
+              { week: "第2周", oee: "88.1%", production: "13,200 kg" },
+              { week: "第3周(进行中)", oee: "89.2%", production: "6,800 kg" }
+            ],
+            topProducts: [
+              { name: "冷冻三文鱼片", output: "8,500 kg", efficiency: "91.2%" },
+              { name: "冷冻虾仁", output: "6,200 kg", efficiency: "88.5%" },
+              { name: "生蚝", output: "4,300 kg", efficiency: "86.3%" }
+            ]
+          }
+        }
+      },
+      {
+        name: "告警处理",
+        input: "有什么紧急告警需要处理",
+        context: "无上下文",
+        result: {
+          preprocessed: "查询当前紧急级别的活跃告警",
+          changes: [],
+          intent: { code: "ALERT_ACTIVE", name: "活跃告警", confidence: 0.93, layer: 2 },
+          tool: "alert_active",
+          validation: { status: "VALID", checks: ["非空检查 ✓"] },
+          memory: { slot: null, value: null },
+          data: {
+            type: "alert_list",
+            summary: { critical: 1, high: 2, medium: 3, low: 5 },
+            criticalAlerts: [
+              {
+                id: "ALT-2026-0116-001",
+                level: "CRITICAL",
+                title: "冷库温度异常",
+                equipment: "华东冷库A区",
+                message: "温度升至 -12°C，超出安全阈值 (-18±2°C)",
+                time: "10分钟前",
+                suggestion: "建议立即检查制冷设备，必要时转移货物"
+              }
+            ],
+            highAlerts: [
+              { id: "ALT-2026-0116-002", level: "HIGH", title: "原料即将过期", message: "3批原料将在24小时内过期", time: "30分钟前" },
+              { id: "ALT-2026-0116-003", level: "HIGH", title: "设备维护提醒", message: "3号生产线需要例行维护", time: "1小时前" }
+            ]
+          }
+        }
+      }
+    ];
+
+    // ============================================
+    // API Configuration
+    // ============================================
+    // 使用相对路径，通过 Nginx 代理，避免 CORS/混合内容问题
+    const API_BASE_URL = '';
+    const API_DEMO_ENDPOINT = '/api/public/ai-demo/execute';
+    let useLiveAPI = true; // 默认使用真实API
+
+    // ============================================
+    // UI Functions
+    // ============================================
+    let currentTab = 'overview';
+    let selectedCaseIndex = 0;
+    let isRunning = false;
+
+    function switchTab(tabId) {
+      currentTab = tabId;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.querySelector(`.tab[onclick="switchTab('${tabId}')"]`).classList.add('active');
+      document.getElementById(`tab-${tabId}`).classList.add('active');
+    }
+
+    function highlightStep(step) {
+      document.querySelectorAll('.arch-node').forEach((node, i) => {
+        node.classList.toggle('active', i === step - 1);
+      });
+    }
+
+    // Render functions
+    function renderCaseButtons() {
+      const container = document.getElementById('caseButtons');
+      container.innerHTML = demoCases.map((c, i) =>
+        `<button class="case-btn ${i === 0 ? 'active' : ''}" onclick="selectCase(${i})">${c.name}</button>`
+      ).join('');
+    }
+
+    function selectCase(index) {
+      selectedCaseIndex = index;
+      document.querySelectorAll('.case-btn').forEach((btn, i) => btn.classList.toggle('active', i === index));
+      document.getElementById('demoInput').value = demoCases[index].input;
+      resetProcessSteps();
+    }
+
+    function resetProcessSteps() {
+      document.querySelectorAll('.process-step').forEach(step => {
+        step.classList.remove('active', 'completed');
+        step.querySelector('.process-step-data').style.display = 'none';
+      });
+      document.getElementById('resultArea').classList.remove('visible');
+    }
+
+    async function runDemo() {
+      if (isRunning) return;
+      isRunning = true;
+      document.getElementById('demoBtn').disabled = true;
+      resetProcessSteps();
+
+      const userInput = document.getElementById('demoInput').value.trim();
+      if (!userInput) {
+        alert('请输入查询内容');
+        isRunning = false;
+        document.getElementById('demoBtn').disabled = false;
+        return;
+      }
+
+      const steps = document.querySelectorAll('.process-step');
+
+      if (useLiveAPI) {
+        // 使用真实 API
+        try {
+          await runLiveDemo(userInput, steps);
+        } catch (error) {
+          console.error('API调用失败，使用演示模式:', error);
+          showAPIError('API 连接失败: ' + error.message);
+        }
+      } else {
+        // 使用静态演示数据
+        await runStaticDemo(steps);
+      }
+
+      isRunning = false;
+      document.getElementById('demoBtn').disabled = false;
+    }
+
+    // 真实 API 调用
+    async function runLiveDemo(userInput, steps) {
+      // Step 1: 预处理（显示用户输入）
+      await animateStep(steps[0], `<span class="key">用户输入:</span> "${userInput}"<br><span class="key">状态:</span> <span class="value">正在调用 AI 服务...</span>`);
+
+      // 调用真实 API
+      const response = await fetch(API_BASE_URL + API_DEMO_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userInput: userInput })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const apiResult = await response.json();
+      const data = apiResult.data;
+
+      if (!data) {
+        throw new Error('API 返回数据为空');
+      }
+
+      // Step 2: 意图识别
+      if (data.intentRecognized) {
+        const confidence = data.confidence ? (data.confidence * 100).toFixed(0) : '?';
+        const matchMethod = data.matchMethod || 'KEYWORD';
+        const layer = matchMethod === 'REGEX' ? 1 : matchMethod === 'KEYWORD' ? 3 : matchMethod === 'SEMANTIC' ? 5 : 6;
+        await animateStep(steps[1], `<span class="key">命中层:</span> 第${layer}层 (${matchMethod})<br><span class="key">意图:</span> <span class="value">${data.intentName || '-'}</span> (${data.intentCode || '-'})<br><span class="key">置信度:</span> ${confidence}%`);
+      } else {
+        await animateStep(steps[1], `<span class="key">状态:</span> <span class="value" style="color:var(--warning)">未识别到匹配意图</span><br><span class="key">建议:</span> 尝试更具体的描述`);
+      }
+
+      // Step 3: Arena RL 裁决
+      const arenaTriggered = data.arenaTriggered || false;
+      const arenaStatus = arenaTriggered ? '已触发' : '未触发（置信度足够）';
+      const arenaColor = arenaTriggered ? 'var(--accent)' : 'var(--text-secondary)';
+      await animateStep(steps[2], `<span class="key">锦标赛:</span> <span class="value" style="color:${arenaColor}">${arenaStatus}</span><br><span class="key">候选意图:</span> ${data.candidateIntents || 1} 个`);
+
+      // Step 4: 工具执行
+      const toolInfo = data.intentCode ? `工具绑定 → ${data.intentCode.toLowerCase().replace(/_/g, '_')}` : '无工具绑定';
+      await animateStep(steps[3], `<span class="key">敏感度:</span> ${data.sensitivityLevel || 'LOW'}<br><span class="key">执行:</span> <span class="value">${toolInfo}</span>`);
+
+      // Step 5: 结果验证
+      const statusIcon = data.status === 'COMPLETED' ? '✓' : data.status === 'NO_PERMISSION' ? '🔒' : '⚠️';
+      const statusColor = data.status === 'COMPLETED' ? 'var(--success)' : data.status === 'NO_PERMISSION' ? 'var(--warning)' : 'var(--error)';
+      await animateStep(steps[4], `<span class="key">执行状态:</span> <span class="value" style="color:${statusColor}">${statusIcon} ${data.status || 'UNKNOWN'}</span><br><span class="key">消息:</span> ${data.message || '-'}`);
+
+      // Step 6: 记忆更新
+      await animateStep(steps[5], `<span class="key">会话ID:</span> ${data.sessionId || '无'}<br><span class="key">轮次:</span> ${data.conversationRound || 1}`);
+
+      // 显示结果
+      showAPIResult(data);
+    }
+
+    // 静态演示模式
+    async function runStaticDemo(steps) {
+      const caseData = demoCases[selectedCaseIndex];
+
+      // Step 1: 查询预处理
+      await animateStep(steps[0], `<span class="key">输入:</span> "${caseData.input}"<br><span class="key">输出:</span> <span class="value">"${caseData.result.preprocessed}"</span><br><span class="key">变更:</span> ${caseData.result.changes.length > 0 ? caseData.result.changes.join(', ') : '无'}`);
+      // Step 2: 意图识别
+      await animateStep(steps[1], `<span class="key">命中层:</span> 第${caseData.result.intent.layer}层<br><span class="key">意图:</span> <span class="value">${caseData.result.intent.name}</span> (${caseData.result.intent.code})<br><span class="key">置信度:</span> ${(caseData.result.intent.confidence * 100).toFixed(0)}%`);
+      // Step 3: Arena RL 裁决
+      const arenaData = caseData.result.arenaRL || { triggered: false, candidates: 1 };
+      const arenaStatus = arenaData.triggered ? '已触发' : '未触发（置信度足够）';
+      const arenaColor = arenaData.triggered ? 'var(--accent)' : 'var(--text-secondary)';
+      await animateStep(steps[2], `<span class="key">锦标赛:</span> <span class="value" style="color:${arenaColor}">${arenaStatus}</span><br><span class="key">候选意图:</span> ${arenaData.candidates} 个`);
+      // Step 4: 工具执行
+      await animateStep(steps[3], `<span class="key">路径:</span> 硬绑定<br><span class="key">工具:</span> <span class="value">${caseData.result.tool}</span>`);
+      // Step 5: 结果验证
+      await animateStep(steps[4], `<span class="key">状态:</span> <span class="value">${caseData.result.validation.status}</span><br><span class="key">检查:</span> ${caseData.result.validation.checks.join(', ')}`);
+      // Step 6: 记忆更新
+      await animateStep(steps[5], `<span class="key">槽位:</span> ${caseData.result.memory.slot || '无更新'}<br><span class="key">值:</span> <span class="value">${caseData.result.memory.value || '-'}</span>`);
+
+      showResultCard(caseData.result.data);
+    }
+
+    // 格式化结果数据为用户友好的展示
+    function formatResultData(resultData, intentCode) {
+      if (!resultData) return '';
+
+      // 获取实际数据数组（可能在 content 或 items 字段中）
+      const items = resultData.content || resultData.items || (Array.isArray(resultData) ? resultData : null);
+
+      // 质检数据格式化
+      if (intentCode && intentCode.includes('QUALITY') ||
+          (items && items.length > 0 && (items[0].qualityResult || items[0].passRate || items[0].qualityGrade))) {
+        return formatQualityInspectionData(items || [resultData]);
+      }
+
+      // 原料库存数据格式化
+      if (intentCode && intentCode.includes('MATERIAL') ||
+          (items && items.length > 0 && (items[0].materialName || items[0].remainingQuantity || items[0].expiryDate))) {
+        return formatMaterialData(items || [resultData]);
+      }
+
+      // 批次数据格式化
+      if (intentCode && intentCode.includes('BATCH') ||
+          (items && items.length > 0 && (items[0].batchNumber || items[0].productionDate))) {
+        return formatBatchData(items || [resultData]);
+      }
+
+      // 默认：格式化 JSON
+      return `<pre style="background:var(--bg-warm);padding:16px;border-radius:8px;overflow-x:auto;font-size:13px;font-family:var(--font-mono);white-space:pre-wrap;word-break:break-word;">${JSON.stringify(resultData, null, 2)}</pre>`;
+    }
+
+    // 格式化质检数据为表格
+    function formatQualityInspectionData(items) {
+      if (!items || items.length === 0) {
+        return '<div style="padding:16px;color:var(--text-secondary);text-align:center;">暂无质检记录</div>';
+      }
+
+      let html = `
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead>
+              <tr style="background:var(--bg-warm);border-bottom:2px solid var(--border);">
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">批次号</th>
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">质检结果</th>
+                <th style="padding:12px 16px;text-align:center;font-weight:600;">合格率</th>
+                <th style="padding:12px 16px;text-align:center;font-weight:600;">质量等级</th>
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">检测时间</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+      items.forEach((item, index) => {
+        const bgColor = index % 2 === 0 ? 'transparent' : 'var(--bg-warm)';
+        const resultBadge = item.qualityResult === 'PASSED' || item.qualityResult === '合格'
+          ? '<span style="background:var(--success-light);color:var(--success);padding:4px 12px;border-radius:12px;font-size:12px;">✓ 合格</span>'
+          : '<span style="background:var(--error-light);color:var(--error);padding:4px 12px;border-radius:12px;font-size:12px;">✗ 不合格</span>';
+        const passRate = item.passRate != null ? `${(item.passRate * 100).toFixed(1)}%` : '-';
+        const grade = item.qualityGrade || item.grade || '-';
+        const time = item.inspectionDate || item.createdAt || '-';
+
+        html += `
+          <tr style="background:${bgColor};border-bottom:1px solid var(--border);">
+            <td style="padding:12px 16px;font-family:var(--font-mono);font-size:13px;">${item.batchNumber || item.batchId || '-'}</td>
+            <td style="padding:12px 16px;">${resultBadge}</td>
+            <td style="padding:12px 16px;text-align:center;font-weight:500;color:${item.passRate >= 0.9 ? 'var(--success)' : 'var(--warning)'};">${passRate}</td>
+            <td style="padding:12px 16px;text-align:center;"><span style="background:var(--info-light);color:var(--info);padding:4px 12px;border-radius:12px;font-size:12px;">${grade}</span></td>
+            <td style="padding:12px 16px;color:var(--text-secondary);font-size:13px;">${time}</td>
+          </tr>`;
+      });
+
+      html += `</tbody></table></div>`;
+
+      // 添加统计摘要
+      const total = items.length;
+      const passed = items.filter(i => i.qualityResult === 'PASSED' || i.qualityResult === '合格').length;
+      html += `
+        <div style="margin-top:16px;padding:12px 16px;background:var(--bg-warm);border-radius:8px;display:flex;gap:24px;font-size:13px;">
+          <span>共 <strong>${total}</strong> 条记录</span>
+          <span>合格 <strong style="color:var(--success);">${passed}</strong> 条</span>
+          <span>合格率 <strong style="color:${passed/total >= 0.9 ? 'var(--success)' : 'var(--warning)'};">${((passed/total)*100).toFixed(1)}%</strong></span>
+        </div>`;
+
+      return html;
+    }
+
+    // 格式化原料数据为表格
+    function formatMaterialData(items) {
+      if (!items || items.length === 0) {
+        return '<div style="padding:16px;color:var(--text-secondary);text-align:center;">暂无原料记录</div>';
+      }
+
+      let html = `
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead>
+              <tr style="background:var(--bg-warm);border-bottom:2px solid var(--border);">
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">原料名称</th>
+                <th style="padding:12px 16px;text-align:right;font-weight:600;">剩余数量</th>
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">供应商</th>
+                <th style="padding:12px 16px;text-align:center;font-weight:600;">过期日期</th>
+                <th style="padding:12px 16px;text-align:center;font-weight:600;">状态</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+      items.forEach((item, index) => {
+        const bgColor = index % 2 === 0 ? 'transparent' : 'var(--bg-warm)';
+        const qty = item.remainingQuantity || item.quantity || item.stockQuantity || 0;
+        const unit = item.unit || 'kg';
+        const expiryDate = item.expiryDate || item.expireDate || '-';
+        const isExpiringSoon = expiryDate !== '-' && new Date(expiryDate) <= new Date(Date.now() + 7*24*60*60*1000);
+        const isLowStock = qty < 100;
+
+        let statusBadge = '<span style="background:var(--success-light);color:var(--success);padding:4px 12px;border-radius:12px;font-size:12px;">正常</span>';
+        if (isExpiringSoon) {
+          statusBadge = '<span style="background:var(--warning-light);color:var(--warning);padding:4px 12px;border-radius:12px;font-size:12px;">即将过期</span>';
+        } else if (isLowStock) {
+          statusBadge = '<span style="background:var(--warning-light);color:var(--warning);padding:4px 12px;border-radius:12px;font-size:12px;">库存偏低</span>';
+        }
+
+        html += `
+          <tr style="background:${bgColor};border-bottom:1px solid var(--border);">
+            <td style="padding:12px 16px;font-weight:500;">${item.materialName || item.name || '-'}</td>
+            <td style="padding:12px 16px;text-align:right;font-family:var(--font-mono);">${qty.toLocaleString()} ${unit}</td>
+            <td style="padding:12px 16px;color:var(--text-secondary);">${item.supplierName || item.supplier || '-'}</td>
+            <td style="padding:12px 16px;text-align:center;color:${isExpiringSoon ? 'var(--warning)' : 'var(--text-secondary)'};">${expiryDate}</td>
+            <td style="padding:12px 16px;text-align:center;">${statusBadge}</td>
+          </tr>`;
+      });
+
+      html += `</tbody></table></div>`;
+
+      return html;
+    }
+
+    // 格式化批次数据为表格
+    function formatBatchData(items) {
+      if (!items || items.length === 0) {
+        return '<div style="padding:16px;color:var(--text-secondary);text-align:center;">暂无批次记录</div>';
+      }
+
+      let html = `
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead>
+              <tr style="background:var(--bg-warm);border-bottom:2px solid var(--border);">
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">批次号</th>
+                <th style="padding:12px 16px;text-align:left;font-weight:600;">产品名称</th>
+                <th style="padding:12px 16px;text-align:right;font-weight:600;">数量</th>
+                <th style="padding:12px 16px;text-align:center;font-weight:600;">生产日期</th>
+                <th style="padding:12px 16px;text-align:center;font-weight:600;">状态</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+      items.forEach((item, index) => {
+        const bgColor = index % 2 === 0 ? 'transparent' : 'var(--bg-warm)';
+        const status = item.status || 'ACTIVE';
+        const statusMap = {
+          'ACTIVE': { label: '生产中', color: 'var(--info)' },
+          'COMPLETED': { label: '已完成', color: 'var(--success)' },
+          'PENDING': { label: '待处理', color: 'var(--warning)' },
+          'CANCELLED': { label: '已取消', color: 'var(--text-secondary)' }
+        };
+        const statusInfo = statusMap[status] || { label: status, color: 'var(--text-secondary)' };
+
+        html += `
+          <tr style="background:${bgColor};border-bottom:1px solid var(--border);">
+            <td style="padding:12px 16px;font-family:var(--font-mono);font-size:13px;">${item.batchNumber || '-'}</td>
+            <td style="padding:12px 16px;font-weight:500;">${item.productName || item.materialName || '-'}</td>
+            <td style="padding:12px 16px;text-align:right;font-family:var(--font-mono);">${(item.quantity || 0).toLocaleString()} ${item.unit || ''}</td>
+            <td style="padding:12px 16px;text-align:center;color:var(--text-secondary);">${item.productionDate || item.createdAt || '-'}</td>
+            <td style="padding:12px 16px;text-align:center;"><span style="background:color-mix(in srgb, ${statusInfo.color} 15%, transparent);color:${statusInfo.color};padding:4px 12px;border-radius:12px;font-size:12px;">${statusInfo.label}</span></td>
+          </tr>`;
+      });
+
+      html += `</tbody></table></div>`;
+
+      return html;
+    }
+
+    // 显示 API 返回结果
+    function showAPIResult(data) {
+      const resultArea = document.getElementById('resultArea');
+      const resultCard = document.getElementById('resultCard');
+      let html = '';
+
+      if (data.status === 'NEED_MORE_INFO' || data.status === 'NEED_CLARIFICATION') {
+        // 需要更多信息 - 显示澄清问题
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon info">💬</div>
+            <div>
+              <div class="result-card-title">需要更多信息</div>
+              <div class="result-card-subtitle">请补充以下信息以完成操作</div>
+            </div>
+          </div>
+          <div style="padding:16px;background:var(--info-light);border-radius:8px;margin-top:16px;border-left:4px solid var(--info);">
+            <div style="font-size:15px;color:var(--text-primary);line-height:1.8;">${data.message || '请提供更多信息'}</div>
+          </div>`;
+        if (data.clarificationQuestions && data.clarificationQuestions.length > 0) {
+          html += `
+            <div style="margin-top:16px;">
+              <div style="font-weight:600;margin-bottom:12px;color:var(--text-secondary);font-size:13px;">您可以这样回答：</div>
+              <ul style="margin:0;padding-left:20px;color:var(--text-primary);line-height:2;">
+                ${data.clarificationQuestions.map(q => `<li>${q}</li>`).join('')}
+              </ul>
+            </div>`;
+        }
+      } else if (data.status === 'NO_PERMISSION') {
+        // 权限拒绝 - 写入操作
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon warning">🔒</div>
+            <div>
+              <div class="result-card-title">需要权限验证</div>
+              <div class="result-card-subtitle">${data.intentName || '未知操作'} · ${data.sensitivityLevel || 'MEDIUM'} 敏感度</div>
+            </div>
+            <span class="badge warning">${data.sensitivityLevel || 'MEDIUM'}</span>
+          </div>
+          <div style="padding:16px;background:var(--warning-light);border-radius:8px;margin-top:16px;border-left:4px solid var(--warning);">
+            <div style="white-space:pre-line;font-size:14px;color:var(--text-primary);line-height:1.8;">${data.message || '该操作需要验证权限'}</div>
+          </div>
+          <div class="result-grid" style="margin-top:16px;">
+            <div class="result-item"><div class="result-item-label">意图代码</div><div class="result-item-value" style="font-family:var(--font-mono)">${data.intentCode || '-'}</div></div>
+            <div class="result-item"><div class="result-item-label">分类</div><div class="result-item-value">${data.intentCategory || '-'}</div></div>
+            <div class="result-item"><div class="result-item-label">配额消耗</div><div class="result-item-value">${data.quotaCost || 0}</div></div>
+            <div class="result-item"><div class="result-item-label">需要审批</div><div class="result-item-value">${data.requiresApproval ? '是' : '否'}</div></div>
+          </div>`;
+      } else if ((data.status === 'COMPLETED' || data.status === 'SUCCESS') && (data.resultData || data.formattedText)) {
+        // 成功执行 - 优先显示自然语言摘要，其次显示格式化数据
+        const hasFormattedText = data.formattedText && data.formattedText.trim().length > 0;
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon success">✓</div>
+            <div>
+              <div class="result-card-title">${data.intentName || '查询结果'}</div>
+              <div class="result-card-subtitle">状态: SUCCESS</div>
+            </div>
+            <span class="badge success">成功</span>
+          </div>
+          ${hasFormattedText ? `
+            <div style="padding:16px;background:var(--bg-warm);border-radius:8px;margin-top:16px;border-left:4px solid var(--success);">
+              <div style="font-size:15px;line-height:1.8;white-space:pre-line;color:var(--text-primary);">${data.formattedText}</div>
+            </div>
+          ` : ''}
+          ${data.resultData ? `
+            <details style="margin-top:16px;">
+              <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:8px 0;">
+                ${hasFormattedText ? '查看原始数据' : '执行成功'}
+              </summary>
+              <div style="margin-top:8px;">
+                ${formatResultData(data.resultData, data.intentCode)}
+              </div>
+            </details>
+          ` : ''}`;
+      } else if (data.status === 'NOT_RECOGNIZED') {
+        // 未识别意图
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon info">❓</div>
+            <div>
+              <div class="result-card-title">未识别到意图</div>
+              <div class="result-card-subtitle">请尝试更具体的描述</div>
+            </div>
+          </div>
+          <div style="padding:16px;background:var(--info-light);border-radius:8px;margin-top:16px;">
+            <div style="font-size:14px;color:var(--text-secondary);">${data.message || '系统无法理解您的请求，请尝试以下方式：'}</div>
+            <ul style="margin-top:12px;padding-left:20px;color:var(--text-secondary);">
+              <li>使用更具体的业务术语</li>
+              <li>明确指定操作对象（如批次号、产品名）</li>
+              <li>尝试"查询XXX"、"统计XXX"等格式</li>
+            </ul>
+          </div>`;
+      } else {
+        // 其他状态
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon info">ℹ️</div>
+            <div>
+              <div class="result-card-title">${data.intentName || 'AI 响应'}</div>
+              <div class="result-card-subtitle">状态: ${data.status || 'UNKNOWN'}</div>
+            </div>
+          </div>
+          <div style="padding:16px;background:var(--bg-warm);border-radius:8px;margin-top:16px;">
+            <div style="font-size:14px;">${data.message || '操作已处理'}</div>
+          </div>
+          ${data.resultData ? `<pre style="margin-top:16px;background:var(--bg-muted);padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;font-family:var(--font-mono);">${JSON.stringify(data.resultData, null, 2)}</pre>` : ''}`;
+      }
+
+      resultCard.innerHTML = html;
+      resultArea.classList.add('visible');
+    }
+
+    // 显示 API 错误
+    function showAPIError(message) {
+      const resultArea = document.getElementById('resultArea');
+      const resultCard = document.getElementById('resultCard');
+      resultCard.innerHTML = `
+        <div class="result-card-header">
+          <div class="result-icon error">✗</div>
+          <div>
+            <div class="result-card-title">连接失败</div>
+            <div class="result-card-subtitle">无法连接到 AI 服务</div>
+          </div>
+        </div>
+        <div style="padding:16px;background:var(--error-light);border-radius:8px;margin-top:16px;border-left:4px solid var(--error);">
+          <div style="font-size:14px;color:var(--error);">${message}</div>
+          <div style="margin-top:12px;font-size:13px;color:var(--text-secondary);">
+            提示：请确保后端服务 (${API_BASE_URL}) 已启动并可访问。
+          </div>
+        </div>`;
+      resultArea.classList.add('visible');
+    }
+
+    async function animateStep(stepEl, html) {
+      stepEl.classList.add('active');
+      const dataEl = stepEl.querySelector('.process-step-data');
+      dataEl.innerHTML = html;
+      dataEl.style.display = 'block';
+      await sleep(800);
+      stepEl.classList.remove('active');
+      stepEl.classList.add('completed');
+    }
+
+    function showResultCard(data) {
+      const resultArea = document.getElementById('resultArea');
+      const resultCard = document.getElementById('resultCard');
+
+      let html = '';
+      if (data.type === 'quality') {
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon success">✓</div>
+            <div>
+              <div class="result-card-title">质检结果 - ${data.batchId}</div>
+              <div class="result-card-subtitle">${data.productName} · 最后检测: ${data.lastCheckTime}</div>
+            </div>
+            <span class="badge ${data.passRate === '100%' ? 'success' : 'warning'}">${data.passRate} 合格率</span>
+          </div>
+          <div class="result-grid">
+            <div class="result-item"><div class="result-item-label">检测项目</div><div class="result-item-value">${data.totalItems} 项</div></div>
+            <div class="result-item"><div class="result-item-label">合格项目</div><div class="result-item-value highlight">${data.passedItems} 项</div></div>
+            <div class="result-item"><div class="result-item-label">不合格项目</div><div class="result-item-value" style="color:var(--error)">${data.failedItems} 项</div></div>
+          </div>
+          <table class="result-table" style="margin-top:16px;">
+            <thead><tr><th>检测项</th><th>结果</th><th>数值</th></tr></thead>
+            <tbody>
+              ${data.items.map(item => `<tr><td>${item.name}</td><td><span class="badge ${item.result === '合格' ? 'success' : 'error'}">${item.result}</span></td><td>${item.value}</td></tr>`).join('')}
+            </tbody>
+          </table>`;
+      } else if (data.type === 'material_list') {
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon info">📦</div>
+            <div>
+              <div class="result-card-title">${data.date} 入库记录</div>
+              <div class="result-card-subtitle">共 ${data.totalBatches} 批次，总重量 ${data.totalWeight}</div>
+            </div>
+          </div>
+          <table class="result-table">
+            <thead><tr><th>批次号</th><th>原料名称</th><th>重量</th><th>供应商</th><th>入库时间</th></tr></thead>
+            <tbody>
+              ${data.batches.map(b => `<tr><td style="font-family:var(--font-mono);color:var(--accent)">${b.id}</td><td>${b.name}</td><td>${b.weight}</td><td>${b.supplier}</td><td>${b.time}</td></tr>`).join('')}
+            </tbody>
+          </table>`;
+      } else if (data.type === 'pending_inbound') {
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon info">🚚</div>
+            <div>
+              <div class="result-card-title">入库状态</div>
+              <div class="result-card-subtitle">已到货 ${data.summary.arrived} 批，待到货 ${data.summary.pending} 批</div>
+            </div>
+          </div>
+          <table class="result-table">
+            <thead><tr><th>订单号</th><th>原料</th><th>状态</th><th>重量</th><th>预计到达</th><th>供应商</th></tr></thead>
+            <tbody>
+              ${data.items.map(item => `<tr><td style="font-family:var(--font-mono)">${item.id}</td><td>${item.name}</td><td><span class="badge ${item.status === '已到货' ? 'success' : 'info'}">${item.status}</span></td><td>${item.weight}</td><td>${item.eta}</td><td>${item.supplier}</td></tr>`).join('')}
+            </tbody>
+          </table>`;
+      } else if (data.type === 'supplier_detail') {
+        const s = data.supplier;
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon success">🤝</div>
+            <div>
+              <div class="result-card-title">${s.name}</div>
+              <div class="result-card-subtitle">${s.category} · ${s.level}供应商 · 合作${s.cooperationYears}年</div>
+            </div>
+            <span class="badge success">⭐ ${s.rating}</span>
+          </div>
+          <div class="result-grid">
+            <div class="result-item"><div class="result-item-label">联系人</div><div class="result-item-value">${s.contact}</div></div>
+            <div class="result-item"><div class="result-item-label">电话</div><div class="result-item-value">${s.phone}</div></div>
+            <div class="result-item"><div class="result-item-label">累计订单</div><div class="result-item-value highlight">${s.totalOrders} 单</div></div>
+            <div class="result-item"><div class="result-item-label">准时率</div><div class="result-item-value">${s.onTimeRate}</div></div>
+            <div class="result-item"><div class="result-item-label">质量合格率</div><div class="result-item-value">${s.qualityRate}</div></div>
+            <div class="result-item"><div class="result-item-label">地址</div><div class="result-item-value">${s.address}</div></div>
+          </div>`;
+      } else if (data.type === 'efficiency_report') {
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon success">📊</div>
+            <div>
+              <div class="result-card-title">${data.period} 生产效率报表</div>
+              <div class="result-card-subtitle">OEE: ${data.oee}</div>
+            </div>
+          </div>
+          <div class="result-grid">
+            <div class="result-item"><div class="result-item-label">设备可用率</div><div class="result-item-value highlight">${data.availability}</div></div>
+            <div class="result-item"><div class="result-item-label">性能效率</div><div class="result-item-value highlight">${data.performance}</div></div>
+            <div class="result-item"><div class="result-item-label">质量率</div><div class="result-item-value highlight">${data.quality}</div></div>
+          </div>
+          <div style="margin-top:16px;"><strong>周趋势:</strong></div>
+          <table class="result-table" style="margin-top:8px;">
+            <thead><tr><th>周</th><th>OEE</th><th>产量</th></tr></thead>
+            <tbody>${data.trends.map(t => `<tr><td>${t.week}</td><td>${t.oee}</td><td>${t.production}</td></tr>`).join('')}</tbody>
+          </table>
+          <div style="margin-top:16px;"><strong>产品效率 TOP3:</strong></div>
+          <table class="result-table" style="margin-top:8px;">
+            <thead><tr><th>产品</th><th>产量</th><th>效率</th></tr></thead>
+            <tbody>${data.topProducts.map(p => `<tr><td>${p.name}</td><td>${p.output}</td><td>${p.efficiency}</td></tr>`).join('')}</tbody>
+          </table>`;
+      } else if (data.type === 'alert_list') {
+        html = `
+          <div class="result-card-header">
+            <div class="result-icon warning">🔔</div>
+            <div>
+              <div class="result-card-title">活跃告警</div>
+              <div class="result-card-subtitle">紧急 ${data.summary.critical} · 高 ${data.summary.high} · 中 ${data.summary.medium} · 低 ${data.summary.low}</div>
+            </div>
+          </div>
+          ${data.criticalAlerts.map(a => `
+            <div style="padding:16px;background:var(--error-light);border-radius:8px;margin-bottom:12px;border-left:4px solid var(--error);">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <strong style="color:var(--error)">${a.title}</strong>
+                <span class="badge error">${a.level}</span>
+              </div>
+              <div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px;">${a.message}</div>
+              <div style="font-size:13px;color:var(--text-tertiary);">设备: ${a.equipment} · ${a.time}</div>
+              <div style="margin-top:12px;padding:12px;background:white;border-radius:6px;font-size:13px;"><strong>建议:</strong> ${a.suggestion}</div>
+            </div>`).join('')}
+          <div style="margin-top:8px;"><strong>高优先级告警:</strong></div>
+          ${data.highAlerts.map(a => `
+            <div style="padding:12px;background:var(--warning-light);border-radius:8px;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+              <div><strong>${a.title}</strong><div style="font-size:13px;color:var(--text-secondary)">${a.message}</div></div>
+              <span style="font-size:12px;color:var(--text-tertiary)">${a.time}</span>
+            </div>`).join('')}`;
+      }
+
+      resultCard.innerHTML = html;
+      resultArea.classList.add('visible');
+    }
+
+    // Intent Categories
+    function renderIntentCategories() {
+      const container = document.getElementById('intentCategories');
+      const filters = document.getElementById('categoryFilters');
+
+      // Render filters
+      filters.innerHTML = `<span class="filter-tag active" onclick="filterByCategory('all')">全部</span>` +
+        Object.entries(intentCategories).map(([key, cat]) =>
+          `<span class="filter-tag" onclick="filterByCategory('${key}')">${cat.icon} ${cat.name}</span>`
+        ).join('');
+
+      // Render categories
+      renderCategoryCards(Object.entries(intentCategories));
+    }
+
+    function renderCategoryCards(entries) {
+      const container = document.getElementById('intentCategories');
+      container.innerHTML = entries.map(([key, cat]) => `
+        <div class="category-card" data-category="${key}">
+          <div class="category-header" onclick="toggleCategory(this)">
+            <div class="category-name">
+              <span class="category-icon" style="background:${cat.color}20;color:${cat.color}">${cat.icon}</span>
+              ${cat.name}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="category-count">${cat.intents.length} 个意图</span>
+              <svg class="category-expand" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+          </div>
+          <div class="category-content">
+            <div class="intent-list">
+              ${cat.intents.map(intent => `
+                <div class="intent-item">
+                  <div>
+                    <div class="intent-name">${intent.name}</div>
+                    <div class="intent-code">${intent.code}</div>
+                  </div>
+                  <span class="badge ${intent.sensitivity === 'LOW' ? 'success' : intent.sensitivity === 'MEDIUM' ? 'info' : intent.sensitivity === 'HIGH' ? 'warning' : 'error'}">${intent.sensitivity}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function toggleCategory(header) {
+      header.parentElement.classList.toggle('expanded');
+    }
+
+    function filterByCategory(category) {
+      document.querySelectorAll('#categoryFilters .filter-tag').forEach(tag => tag.classList.remove('active'));
+      event.target.classList.add('active');
+
+      if (category === 'all') {
+        renderCategoryCards(Object.entries(intentCategories));
+      } else {
+        renderCategoryCards([[category, intentCategories[category]]]);
+      }
+    }
+
+    function filterIntents() {
+      const query = document.getElementById('intentSearch').value.toLowerCase();
+      if (!query) {
+        renderCategoryCards(Object.entries(intentCategories));
+        return;
+      }
+
+      const filtered = {};
+      Object.entries(intentCategories).forEach(([key, cat]) => {
+        const matchedIntents = cat.intents.filter(i =>
+          i.name.toLowerCase().includes(query) || i.code.toLowerCase().includes(query)
+        );
+        if (matchedIntents.length > 0) {
+          filtered[key] = { ...cat, intents: matchedIntents };
+        }
+      });
+      renderCategoryCards(Object.entries(filtered));
+    }
+
+    // Tools
+    function renderTools() {
+      const container = document.getElementById('toolsGrid');
+      const filters = document.getElementById('toolFilters');
+
+      const categories = [...new Set(toolsList.map(t => t.category))];
+      filters.innerHTML = `<span class="filter-tag active" onclick="filterTools('all')">全部 (${toolsList.length})</span>` +
+        categories.map(cat => {
+          const count = toolsList.filter(t => t.category === cat).length;
+          return `<span class="filter-tag" onclick="filterTools('${cat}')">${cat} (${count})</span>`;
+        }).join('');
+
+      renderToolCards(toolsList);
+    }
+
+    function renderToolCards(tools) {
+      const container = document.getElementById('toolsGrid');
+      container.innerHTML = tools.map(tool => `
+        <div class="tool-card">
+          <div class="tool-name">${tool.name}</div>
+          <div class="tool-desc">${tool.desc}</div>
+        </div>
+      `).join('');
+    }
+
+    function filterTools(category) {
+      if (typeof category === 'string' && category !== 'all') {
+        document.querySelectorAll('#toolFilters .filter-tag').forEach(tag => tag.classList.remove('active'));
+        event.target.classList.add('active');
+        renderToolCards(toolsList.filter(t => t.category === category));
+      } else if (category === 'all') {
+        document.querySelectorAll('#toolFilters .filter-tag').forEach(tag => tag.classList.remove('active'));
+        event.target.classList.add('active');
+        renderToolCards(toolsList);
+      } else {
+        // Search
+        const query = document.getElementById('toolSearch').value.toLowerCase();
+        if (!query) {
+          renderToolCards(toolsList);
+        } else {
+          renderToolCards(toolsList.filter(t => t.name.includes(query) || t.desc.includes(query)));
+        }
+      }
+    }
+
+    function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      renderCaseButtons();
+      renderIntentCategories();
+      renderTools();
+      selectCase(0);
+
+      document.getElementById('demoInput').addEventListener('keypress', e => {
+        if (e.key === 'Enter') runDemo();
+      });
+    });
+  </script>
+</body>
+</html>

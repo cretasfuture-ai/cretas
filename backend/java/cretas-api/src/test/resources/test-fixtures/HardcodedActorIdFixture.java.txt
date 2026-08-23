@@ -1,0 +1,90 @@
+// NOT compiled. Parsed as source text by HardcodedActorIdContractTest to prove the
+// detector can return BOTH true and false — 形态 B⁴: a gate whose acceptance
+// environment contains no input that makes it fire is a tautology in that environment.
+//
+// After the 2026-08-19 fixes the product tree has no constant-backed site left
+// (SYSTEM_USER_ID was the only one, and it is gone), so the constant-resolution
+// branch would never execute against src/main. This fixture is the input that
+// exercises it. ⛔ Do not "clean up" this file — it is the instrument's own control.
+package fixture;
+
+class HardcodedActorIdFixture {
+
+    /** Constant-backed actor id — the shape that actually caused 13 prod FK violations. */
+    private static final long SYSTEM_USER_ID = 0L;
+
+    /** A non-actor constant. Must NOT be reported: the gate is about actor ids only. */
+    private static final int PAGE_SIZE = 50;
+
+    void mustBeFlagged_literalLong(Thing t) {
+        t.setCreatedBy(1L);
+    }
+
+    void mustBeFlagged_literalInt(Thing t) {
+        t.setUpdatedBy(0);
+    }
+
+    void mustBeFlagged_namedConstant(Thing t) {
+        t.setCreatedBy(SYSTEM_USER_ID);
+    }
+
+    Thing mustBeFlagged_builderLiteral() {
+        return Thing.builder().createdBy(1L).build();
+    }
+
+    void mustNotBeFlagged_parameter(Thing t, Long createdBy) {
+        t.setCreatedBy(createdBy);
+    }
+
+    void mustNotBeFlagged_methodCall(Thing t, Event e) {
+        t.setCreatedBy(e.getApprovedBy());
+    }
+
+    Thing mustNotBeFlagged_builderParameter(Long appliedBy) {
+        return Thing.builder().createdBy(appliedBy).build();
+    }
+
+    void mustNotBeFlagged_unrelatedSetterWithLiteral(Thing t) {
+        t.setPageSize(PAGE_SIZE);
+        t.setQuantity(1L);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Second shape, added 2026-08-19: a constant passed as a POSITIONAL
+    // ARGUMENT into an actor parameter.
+    //
+    // The setter-name detector above is blind to this. That blindness is why
+    // ReverseTransferService / ProductionPlanTransferLifecycleListener kept
+    // their SYSTEM_USER_ID = 0L through the 2026-08-19 sweep, and why prod ended
+    // up with 2 rows of internal_transfers.requested_by = 0.
+    // ⛔ Do not remove these — src/main has exactly one site of this shape left
+    //    (SmartBIServiceImpl, frozen), so without them the branch is a tautology.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /** Declares the actor parameter the detector keys off. Boxed Long = a users.id. */
+    void recordAction(String factoryId, Long userId, String note) { }
+
+    /**
+     * A device-local user SLOT, not a users.id. Primitive int on purpose:
+     * the detector must ignore this — it is the real false positive that
+     * IsapiDeviceService#buildChangePasswordXml(1, ...) produced.
+     */
+    void setDeviceSlot(int userId, String password) { }
+
+    void mustBeFlagged_actorArgLiteral() {
+        recordAction("F006", 0L, "hardcoded nobody");
+    }
+
+    void mustBeFlagged_actorArgConstant() {
+        recordAction("F006", SYSTEM_USER_ID, "constant-backed nobody");
+    }
+
+    void mustNotBeFlagged_actorArgRealValue(Long operator) {
+        recordAction("F006", operator, "a real person");
+    }
+
+    /** int userId is a device slot, not an actor — flagging this is what kills gates. */
+    void mustNotBeFlagged_primitiveIntUserIdIsNotAnActor() {
+        setDeviceSlot(1, "secret");
+    }
+}

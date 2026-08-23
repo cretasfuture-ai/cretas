@@ -1,0 +1,103 @@
+/**
+ * Warehouse 入库 Stack 导航器
+ * 包含: 入库列表、入库详情、新建入库、质检、上架、扫码作业
+ */
+
+import React from "react";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { WHInboundStackParamList } from "../../types/navigation";
+
+// 导入入库相关页面组件
+import WHInboundListScreen from "../../screens/warehouse/inbound/WHInboundListScreen";
+import WHInboundDetailScreen from "../../screens/warehouse/inbound/WHInboundDetailScreen";
+import WHInspectScreen from "../../screens/warehouse/inbound/WHInspectScreen";
+import WHPutawayScreen from "../../screens/warehouse/inbound/WHPutawayScreen";
+import WHReceiptCreateScreen from "../../screens/warehouse/inbound/WHReceiptCreateScreen";
+import WHPurchaseReceiveListScreen from "../../screens/warehouse/inbound/WHPurchaseReceiveListScreen";
+import WHUnorderedInboundReceiveScreen from "../../screens/warehouse/inbound/WHUnorderedInboundReceiveScreen";
+import WHScanOperationScreen from "../../screens/warehouse/shared/WHScanOperationScreen";
+import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
+import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
+import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
+import PriceAnomalyApprovalScreen from "../../screens/restaurant/supplier-delivery/PriceAnomalyApprovalScreen";
+import WHTransitLedgerScreen from "../../screens/warehouse/inventory/WHTransitLedgerScreen";
+
+const Stack = createNativeStackNavigator<WHInboundStackParamList>();
+
+export function WHInboundStackNavigator() {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+      }}
+    >
+      {/* 入库列表 */}
+      <Stack.Screen name="WHInboundList" component={WHInboundListScreen} />
+
+      {/* 生产结单后的成品实收属于现场入库动作。库存 Tab 收敛隐藏时仍须可达。 */}
+      <Stack.Screen
+        name="WHTransitLedger"
+        component={WHTransitLedgerScreen}
+        options={{ title: "生产成品入库" }}
+      />
+
+      {/* 入库详情 */}
+      <Stack.Screen
+        name="WHInboundDetail"
+        component={WHInboundDetailScreen}
+        options={{ title: "入库详情" }}
+      />
+
+      {/* 「新建入库」已删: 它调停用的 POST /material-batches(409), 而且**没有任何地方
+          跳它**。仓储侧的正规入库是 WHPurchaseReceiveList / WHUnorderedInboundReceive。 */}
+
+      {/* 质检 */}
+      <Stack.Screen
+        name="WHInspect"
+        component={WHInspectScreen}
+        options={{ title: "质检" }}
+      />
+
+      {/* 上架 */}
+      <Stack.Screen
+        name="WHPutaway"
+        component={WHPutawayScreen}
+        options={{ title: "上架入库" }}
+      />
+
+      {/* 扫码作业 */}
+      <Stack.Screen
+        name="WHScanOperation"
+        component={WHScanOperationScreen}
+        options={{ title: "扫码作业" }}
+      />
+
+      {/* W-ABA-1 Day 5: PDF 扫码 → 2-字段收货页 */}
+      <Stack.Screen
+        name="WHReceiptCreate"
+        component={WHReceiptCreateScreen}
+        options={{ title: "扫码入库录入" }}
+      />
+
+      {/* SP6 Tier1 #25: 无扫码直接选单收货列表 */}
+      <Stack.Screen
+        name="WHPurchaseReceiveList"
+        component={WHPurchaseReceiveListScreen}
+        options={{ title: "待收货任务" }}
+      />
+
+      <Stack.Screen
+        name="WHUnorderedInboundReceive"
+        component={WHUnorderedInboundReceiveScreen}
+        options={{ title: "无订单入库" }}
+      />
+
+      <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
+      <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} options={{ title: "新建送货单" }} />
+      <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} options={{ title: "送货单详情" }} />
+      <Stack.Screen name="PriceAnomalyApproval" component={PriceAnomalyApprovalScreen} options={{ title: "价格异常审批" }} />
+    </Stack.Navigator>
+  );
+}
+
+export default WHInboundStackNavigator;

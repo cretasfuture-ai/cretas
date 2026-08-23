@@ -1,0 +1,392 @@
+package com.cretas.aims.entity.enums;
+
+/**
+ * 工厂用户角色枚举
+ *
+ * 角色层级架构:
+ * - Level 0: 工厂总监 (最高权限)
+ * - Level 10: 职能部门经理 (各部门主管)
+ * - Level 20: 车间管理层 (车间主任)
+ * - Level 30: 一线员工 (操作员、质检员、仓库员)
+ * - Level 50/99: 特殊角色 (查看者/未激活)
+ *
+ * 所有角色支持双平台 (Web + Mobile)
+ *
+ * @author Cretas Team
+ * @version 2.0.0
+ * @since 2025-01-09
+ */
+public enum FactoryUserRole {
+    // ===== Level -1: 平台最高管理层 (跨工厂) =====
+    /**
+     * 平台管理员
+     * 跨工厂权限, factoryId 可为 null 或特殊值 "PLATFORM"
+     * 拥有所有工厂所有模块 rw
+     */
+    platform_admin("平台管理员", "跨工厂平台级权限", -1, "platform"),
+
+    // ===== Level 0: 工厂最高管理层 =====
+    /**
+     * 工厂超级管理员/总监
+     * 拥有工厂所有权限
+     */
+    factory_super_admin("工厂总监", "拥有工厂所有权限", 0, "all"),
+
+    // ===== Level 10: 职能部门经理 =====
+    /**
+     * HR管理员
+     * 人事管理、考勤、薪资、白名单
+     */
+    hr_admin("HR管理员", "人事管理、考勤、薪资", 10, "hr"),
+
+    /**
+     * 采购主管
+     * 供应商管理、采购订单、成本控制
+     */
+    procurement_manager("采购主管", "供应商、采购、成本", 10, "procurement"),
+
+    /**
+     * 销售主管
+     * 客户管理、销售订单、出货管理
+     */
+    sales_manager("销售主管", "客户、订单、出货", 10, "sales"),
+
+    /**
+     * 运营协调员
+     * 创建跨部门来源/协调单并查看履约状态；不直接执行仓储、销售、生产或财务写操作。
+     */
+    operations_coordinator("运营协调员", "跨部门来源单、到料预告与履约协调", 10, "operations"),
+
+    /**
+     * 调度
+     * 生产调度、数据分析、趋势监控、全局视图
+     */
+    dispatcher("调度", "生产调度、数据分析、趋势监控", 10, "dispatch"),
+
+    /**
+     * 生产经理
+     *
+     * <p>⚠️ <b>2026-08-21 拆分记</b>：此前长期是 {@code dispatcher} 的别名
+     * （{@code PermissionServiceImpl} 里 {@code PERMISSION_MATRIX.put(production_manager, dispatcherPerms)}），
+     * 结果生产经理拿到调度岗的全模块只读（含 hr/finance/system），侧边栏几乎等同 admin。
+     * 现已拆成独立权限对象：生产/报工/调度读写，质量/设备/采购/仓储/库存/报表/销售只读，
+     * 不再碰 hr/finance/system。见 {@code PermissionServiceImpl.initPermissionMatrix()}。
+     */
+    production_manager("生产经理", "生产统筹、排产协调、报工审核", 10, "production"),
+
+    /**
+     * 生产文员 —— 生产经理下属的数据录入/报工审核岗（2026-08-21 owner 拍板新增）。
+     *
+     * <p>「蹲在电脑前审核报工数据、录入数据、看生产情况、有新产品简单添加一下」，
+     * 与「实际在车间用手机报工的」操作员（{@link #operator}）区分开。核心差异是
+     * 审核权：{@code ProcessWorkReportingController} 的报工审核端点对她开放。
+     */
+    production_clerk("生产文员", "审核报工数据、录入生产数据、维护产品基础数据", 15, "production"),
+
+    /**
+     * 仓储主管
+     * 库存管理、出入库、盘点
+     */
+    warehouse_manager("仓储主管", "库存、出入库、盘点", 10, "warehouse"),
+
+    /**
+     * 设备管理员
+     * 设备台账、维护保养、告警处理
+     */
+    equipment_admin("设备管理员", "设备维护、保养、告警", 10, "equipment"),
+
+    /**
+     * 质量经理
+     * 质量体系、质检审核、标准制定
+     */
+    quality_manager("质量经理", "质量体系、质检审核", 10, "quality"),
+
+    /**
+     * 品控 (SP12 T1 新增)
+     * 质量标准制定、特批、处置审核
+     */
+    quality_controller("品控", "质量标准制定、特批、处置审核", 15, "quality"),
+
+    /**
+     * 财务主管
+     * 成本核算、费用管理、财务报表
+     */
+    finance_manager("财务主管", "成本核算、费用、报表", 10, "finance"),
+
+    /**
+     * 出纳 (SP12 T1 新增)
+     * 负责付款操作、银行对账
+     */
+    cashier("出纳", "负责付款操作、银行对账", 15, "finance"),
+
+    /**
+     * 餐饮管理
+     * 菜单/配方/厨房/餐厅运营
+     */
+    restaurant_manager("餐饮管理", "菜单、配方、餐厅运营", 10, "restaurant"),
+
+    /**
+     * 餐饮老板
+     * 全餐饮运营视角: restaurant/procurement/finance/warehouse/analytics 完整读写
+     * 价格异常审批、月对账确认、采购付款等老板级操作
+     */
+    restaurant_owner("餐饮老板", "全餐饮运营、价格异常审批、月对账", 5, "restaurant"),
+
+    /**
+     * 厨师长 — ⛔ <b>已停用，不要按活岗位对待</b>（2026-08-06 记）。
+     *
+     * <p>餐饮租户收敛后，<b>唯一活跃的餐饮租户 MOCK_REST 没有这个角色</b>。
+     * prod 全库只剩 2 个 {@code restaurant_chef} 账号（{@code dr_qhj_chef} /
+     * {@code qhj_chef}），且<b>都是 {@code is_active=f}</b>，各自所属租户
+     * （DEMO_REST / RES_3101_009）本身也已停用。
+     *
+     * <p><b>餐饮实际是四个部门：运营(店长) / 市场 / 财务 / 人事</b>
+     * ——对应 {@code restaurant_manager} / {@code sales_manager} /
+     * {@code finance_manager} / {@code hr_admin}，即 MOCK_REST 的四个部门账号。
+     * 后厨不是其中之一。
+     *
+     * <p>⚠️ <b>为什么留着这个枚举值</b>：{@code V20261029_52} 部门权限 migration、
+     * {@code PermissionServiceImpl}、web-admin 的权限 store / 路由守卫 / 菜单配置，
+     * 以及 4 个测试套件都还引用它。硬删会连带一串失败，需要单独排期清理。
+     *
+     * <p>🔴 <b>给下一个读到这里的人（包括 AI）</b>：停用发生在<b>数据层</b>
+     * （账号停用），<b>代码层从未清理</b>。所以「代码里有它」不是「它还活着」的
+     * 证据。此前已多次出现「读了代码就把厨师长当活岗位加回去」——
+     * {@code WorkdeskRoleTest.headChefIsNotAWorkdeskRole} 就是为此加的断言闸。
+     * 判据永远是 prod 的 {@code users.is_active}，不是这个枚举是否存在。
+     *
+     * @deprecated 已随餐饮租户收敛停用；新功能不得把它当作目标岗位。
+     */
+    @Deprecated
+    restaurant_chef("厨师长", "报货、领料、验收入库", 15, "restaurant"),
+
+    /**
+     * 餐饮采购 — <b>独立部门的载体角色</b>（2026-08-06 Steve 拍板）。
+     *
+     * <p>决定经过一次反复，记下最终态免得再绕：先定「采购并入市场」，但实施时
+     * 发现 {@code /procurement/requisitions/my} 的 module 是全局
+     * {@code procurement}，给 {@code sales_manager} 开会波及 <b>28 个活跃工厂
+     * 销售账号</b>（餐饮侧只有 1 个）。Steve 据此改为<b>采购独立成第五个部门</b>。
+     *
+     * <p><b>餐饮五个部门</b>：运营(店长) / 市场 / 财务 / 人事 / <b>采购</b> ——
+     * {@code restaurant_manager} / {@code sales_manager} / {@code finance_manager} /
+     * {@code hr_admin} / {@code restaurant_purchaser}。厨师长
+     * （{@link #restaurant_chef}）仍然退役，不在其中。
+     *
+     * <p>⚠️ prod 目前 2 个账号都是 {@code is_active=f}，权限表零行 —— 部门要真正
+     * 可用还需要: 新增 {@code restaurantProcurement} 模块权限行、
+     * {@code departmentConfig.ts} 的驾驶舱配置、以及给 MOCK_REST 建采购账号。
+     *
+     */
+    restaurant_purchaser("餐饮采购", "请购、采购确认、采购审批", 15, "restaurant"),
+
+    // ===== Level 20: 车间管理层 =====
+    /**
+     * 车间主任
+     * 车间日常管理、人员调度、生产执行
+     */
+    workshop_supervisor("车间主任", "车间日常、人员调度", 20, "workshop"),
+
+    /**
+     * 大组长
+     * 管理多个小组,承担车间主任下一级的带班职责
+     */
+    team_leader("大组长", "多组带班、任务分派", 25, "workshop"),
+
+    /**
+     * 小组长
+     * 管理单个生产小组,负责本组日常执行
+     */
+    group_leader("小组长", "本组日常、现场执行", 28, "workshop"),
+
+    // ===== Level 30: 一线员工 =====
+    /**
+     * 质检员
+     * 执行质检、提交报告
+     * 双重汇报: 日常归车间主任，质检结果报质量经理
+     */
+    quality_inspector("质检员", "执行质检、提交报告", 30, "quality"),
+
+    /**
+     * 操作员
+     * 生产执行、打卡记录、批次操作
+     */
+    operator("操作员", "生产执行、打卡记录", 30, "production"),
+
+    /**
+     * 报工操作员 (X-6 六扇门补全)
+     * 仅负责报工写入 (产量/工时/工序报告), 无管理界面
+     * V20261011_02 liushanmen_rbac_matrix 引用此角色; 无此枚举值则 fromRoleCode 静默返回 unactivated
+     */
+    yield_operator("报工操作员", "报工写入: 产量/工时/工序报告", 30, "production"),
+
+    /**
+     * 仓库员
+     * 出入库操作、盘点、库存维护
+     */
+    warehouse_worker("仓库员", "出入库操作、盘点", 30, "warehouse"),
+
+    // ===== 特殊角色 =====
+    /**
+     * 权限管理员 (向后兼容)
+     * @deprecated 建议使用 factory_super_admin 或具体部门角色
+     */
+    @Deprecated
+    permission_admin("权限管理员", "管理用户权限和角色", 10, "system"),
+
+    /**
+     * 部门管理员 (向后兼容)
+     * @deprecated 建议使用具体的部门经理角色
+     */
+    @Deprecated
+    department_admin("部门管理员", "管理部门相关业务", 15, "department"),
+
+    /**
+     * 查看者
+     * 只读访问所有数据
+     */
+    viewer("查看者", "只读访问", 50, "none"),
+
+    /**
+     * 未激活用户
+     * 账户未激活，无任何权限
+     */
+    unactivated("未激活", "账户未激活", 99, "none");
+
+    private final String displayName;
+    private final String description;
+    private final int level;
+    private final String department;
+
+    FactoryUserRole(String displayName, String description, int level, String department) {
+        this.displayName = displayName;
+        this.description = description;
+        this.level = level;
+        this.department = department;
+    }
+
+    /**
+     * 获取显示名称
+     */
+    public String getDisplayName() {
+        return displayName;
+    }
+
+    /**
+     * 获取角色描述
+     */
+    public String getDescription() {
+        return description;
+    }
+
+    /**
+     * 获取权限级别 (0最高, 99最低)
+     */
+    public int getLevel() {
+        return level;
+    }
+
+    /**
+     * 获取所属部门
+     */
+    public String getDepartment() {
+        return department;
+    }
+
+    /**
+     * 检查是否为管理层角色 (Level 0-20)
+     */
+    public boolean isManager() {
+        return level <= 20;
+    }
+
+    /**
+     * 检查是否为一线员工 (Level 30)
+     */
+    public boolean isWorker() {
+        return level == 30;
+    }
+
+    /**
+     * 检查是否有效角色 (非未激活)
+     */
+    public boolean isActive() {
+        return this != unactivated;
+    }
+
+    /**
+     * 检查是否可以管理指定角色
+     * @param target 目标角色
+     * @return 如果当前角色级别更高返回true
+     */
+    public boolean canManage(FactoryUserRole target) {
+        return this.level < target.level;
+    }
+
+    /**
+     * 获取角色的权限前缀
+     * 用于 module:action 格式的权限检查
+     */
+    public String getPermissionPrefix() {
+        switch (this) {
+            case platform_admin:
+            case factory_super_admin:
+            case permission_admin:
+                return "*";
+            case restaurant_manager:
+            case restaurant_owner:
+            case restaurant_chef:
+            case restaurant_purchaser:
+                return "restaurant";
+            case hr_admin:
+                return "hr";
+            case procurement_manager:
+                return "procurement";
+            case sales_manager:
+                return "sales";
+            case operations_coordinator:
+                return "operations";
+            case dispatcher:
+            case production_manager:
+            case production_clerk:
+            case workshop_supervisor:
+            case team_leader:
+            case group_leader:
+            case operator:
+            case yield_operator:
+                return "production";
+            case warehouse_manager:
+            case warehouse_worker:
+                return "warehouse";
+            case equipment_admin:
+                return "equipment";
+            case quality_manager:
+            case quality_controller:
+            case quality_inspector:
+                return "quality";
+            case finance_manager:
+            case cashier:
+                return "finance";
+            case viewer:
+                return "view";
+            default:
+                return "none";
+        }
+    }
+
+    /**
+     * 根据角色代码获取角色枚举
+     * @param roleCode 角色代码字符串
+     * @return 对应的角色枚举，如果未找到返回 unactivated
+     */
+    public static FactoryUserRole fromRoleCode(String roleCode) {
+        if (roleCode == null || roleCode.isEmpty()) {
+            return unactivated;
+        }
+        try {
+            return valueOf(roleCode);
+        } catch (IllegalArgumentException e) {
+            return unactivated;
+        }
+    }
+}

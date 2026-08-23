@@ -1,0 +1,10 @@
+{
+  "code": 200,
+  "message": "Schema changes applied",
+  "data": null,
+  "timestamp": "2026-05-09T10:01:20.221203187",
+  "success": true,
+  "actionHint": null,
+  "severity": null,
+  "hintTarget": null
+}

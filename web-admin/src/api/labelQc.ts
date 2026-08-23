@@ -1,0 +1,404 @@
+import { adminGet, adminPut, get, post, put } from './request';
+import type { ApiResponse } from '@/types/api';
+
+export type LabelQcTaskStatus =
+  | 'DRAFT'
+  | 'UPLOADING'
+  | 'QUEUED'
+  | 'ANALYZING'
+  | 'NEEDS_REVIEW'
+  | 'AUTO_PASSED'
+  | 'REVIEWED'
+  | 'ANALYSIS_FAILED';
+
+export type LabelQcTrainingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export type LabelQcPhotoStatus =
+  | 'UPLOADED'
+  | 'QUEUED'
+  | 'ANALYZING'
+  | 'ANALYZED'
+  | 'ANALYSIS_FAILED'
+  | 'AUTO_PASSED'
+  | 'REVIEWED';
+
+export type LabelQcLabel =
+  | 'MISSING_WHITE_LABEL'
+  | 'MISSING_COLOR_LABEL'
+  | 'NO_DEFECT'
+  | 'UNJUDGEABLE';
+
+export interface LabelQcBoundingBox {
+  xMin: number;
+  yMin: number;
+  xMax: number;
+  yMax: number;
+}
+
+export type LabelQcObjectDecision = 'CONFIRMED' | 'CORRECTED' | 'ADDED';
+export type LabelQcObjectType = 'WHITE_LABEL' | 'COLOR_LABEL';
+export type LabelQcPresence = 'PRESENT' | 'MISSING' | 'UNJUDGEABLE';
+
+export interface LabelQcObjectReviewItem {
+  aiObjectKey?: string | null;
+  type: LabelQcObjectType;
+  bbox: LabelQcBoundingBox;
+  decision: LabelQcObjectDecision;
+  truncated: boolean;
+}
+
+export interface LabelQcTrayObjectReview {
+  trayIndex: number;
+  aiTrayKey?: string | null;
+  bbox: LabelQcBoundingBox;
+  decision: LabelQcObjectDecision;
+  whitePresence: LabelQcPresence;
+  colorPresence: LabelQcPresence;
+  labels: LabelQcObjectReviewItem[];
+  rejectedAiObjectKeys: string[];
+}
+
+export interface LabelQcObjectReviewPayload {
+  version: 1;
+  complete: boolean;
+  trays: LabelQcTrayObjectReview[];
+  rejectedAiTrayKeys: string[];
+}
+
+export interface LabelQcAnnotation {
+  id: string;
+  source: 'AI' | 'HUMAN';
+  aiCandidateId?: string | null;
+  aiLabel?: LabelQcLabel | null;
+  aiConfidence?: number | null;
+  aiEvidence?: string | null;
+  humanLabel?: LabelQcLabel | null;
+  bbox?: LabelQcBoundingBox | null;
+  reviewerNotes?: string | null;
+}
+
+export interface LabelQcPhoto {
+  id: string;
+  attachmentId: string;
+  orderIndex: number;
+  imageWidth: number;
+  imageHeight: number;
+  status: LabelQcPhotoStatus;
+  imageUrl?: string | null;
+  aiModel?: string | null;
+  promptVersion?: string | null;
+  analysisError?: string | null;
+  /** AI 初筛明细原文 JSON：托盘框 + 每盒识别到的白标/彩标框。可能为 null（旧数据或 VL 模式）。 */
+  screeningDetail?: string | null;
+  objectReview?: LabelQcObjectReviewPayload | null;
+  annotations: LabelQcAnnotation[];
+}
+
+export interface LabelQcTaskSummary {
+  id: string;
+  productTypeId: string;
+  skuCode: string;
+  skuName: string;
+  batchNumber: string;
+  productionDate: string;
+  createdBy: number;
+  status: LabelQcTaskStatus;
+  version: number;
+  photoCount: number;
+  aiCandidateCount: number;
+  finalDefectCount: number;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
+  archived: boolean;
+  archivedBy?: number | null;
+  archivedAt?: string | null;
+  trainingStatus: LabelQcTrainingStatus;
+  trainingDecidedBy?: number | null;
+  trainingDecidedAt?: string | null;
+  trainingDecisionNotes?: string | null;
+  backupExportedBy?: number | null;
+  backupExportedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LabelQcTaskDetail {
+  task: LabelQcTaskSummary;
+  photos: LabelQcPhoto[];
+}
+
+export interface LabelQcPage<T> {
+  content: T[];
+  page: number;
+  currentPage: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  first: boolean;
+  last: boolean;
+}
+
+export interface LabelQcStatusCounts {
+  counts: Partial<Record<LabelQcTaskStatus, number>>;
+}
+
+export interface LabelQcAnnotationReview {
+  annotationId?: string;
+  label: LabelQcLabel;
+  bbox?: LabelQcBoundingBox | null;
+  notes?: string;
+}
+
+export interface LabelQcPhotoReview {
+  photoId: string;
+  annotations: LabelQcAnnotationReview[];
+  objectReview?: LabelQcObjectReviewPayload;
+}
+
+export interface LabelQcReviewRequest {
+  expectedVersion?: number;
+  reviewRequestId?: string;
+  photos: LabelQcPhotoReview[];
+}
+
+export interface LabelQcTrainingDecisionRequest {
+  approved: boolean;
+  expectedVersion: number;
+  notes?: string;
+}
+
+export interface LabelQcTaskBackup {
+  data: LabelQcTaskDetail;
+  exportedAt: string;
+  exportedBy: number;
+}
+
+export interface LabelQcTrainingPhoto {
+  taskId: string;
+  photoId: string;
+  imageUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  skuCode: string;
+  skuName: string;
+  batchNumber: string;
+  productionDate: string;
+  reviewedAt: string;
+  objectReview?: LabelQcObjectReviewPayload | null;
+  finalAnnotations: LabelQcAnnotation[];
+}
+
+export interface LabelQcPlatformCandidate {
+  id: string;
+  version: number;
+  taskId: string;
+  photoId: string;
+  aiCandidateId: string;
+  aiLabel: LabelQcLabel;
+  aiConfidence: number;
+  aiEvidence: string;
+  bbox: LabelQcBoundingBox;
+  humanLabel?: LabelQcLabel | null;
+  reviewerNotes?: string | null;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
+  imageUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  screeningDetail?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LabelQcPlatformCandidateReview {
+  expectedVersion: number;
+  label: LabelQcLabel;
+  bbox: LabelQcBoundingBox;
+  notes?: string;
+}
+
+export type LabelQcTrayCropStatus = 'PENDING' | 'REVIEWED' | 'UNJUDGEABLE';
+
+export interface LabelQcPlatformLabelReview {
+  type: LabelQcObjectType;
+  bbox: LabelQcBoundingBox;
+  truncated: boolean;
+}
+
+export interface LabelQcPlatformTrayReview {
+  version: 1;
+  complete: boolean;
+  unjudgeable: boolean;
+  whitePresence: LabelQcPresence;
+  colorPresence: LabelQcPresence;
+  labels: LabelQcPlatformLabelReview[];
+}
+
+export interface LabelQcTrayCrop {
+  id: string;
+  version: number;
+  taskId: string;
+  photoId: string;
+  trayIndex: number;
+  aiTrayKey?: string | null;
+  sourceDecision: LabelQcObjectDecision;
+  sourceImageSha256?: string | null;
+  objectReviewSha256: string;
+  cropSpecSha256: string;
+  cropAlgorithmVersion: string;
+  paddingRatio: number;
+  trayBox: LabelQcBoundingBox;
+  cropBox: LabelQcBoundingBox;
+  coordinateTransform: string;
+  originalImageUrl: string;
+  originalImageWidth: number;
+  originalImageHeight: number;
+  status: LabelQcTrayCropStatus;
+  factoryProposals: LabelQcPlatformTrayReview;
+  platformReview?: LabelQcPlatformTrayReview | null;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function listLabelQcTasks(
+  factoryId: string,
+  params: {
+    statuses?: LabelQcTaskStatus[];
+    archived?: boolean;
+    /** 生产日期起（YYYY-MM-DD，含当天） */
+    productionDateFrom?: string;
+    /** 生产日期止（YYYY-MM-DD，含当天） */
+    productionDateTo?: string;
+    page?: number;
+    size?: number;
+  } = {},
+): Promise<ApiResponse<LabelQcPage<LabelQcTaskSummary>>> {
+  const statuses = params.statuses?.length ? params.statuses.join(',') : undefined;
+  return get<LabelQcPage<LabelQcTaskSummary>>(`/${factoryId}/label-qc/tasks`, {
+    params: {
+      page: params.page ?? 1,
+      size: params.size ?? 20,
+      statuses,
+      archived: params.archived ?? false,
+      productionDateFrom: params.productionDateFrom || undefined,
+      productionDateTo: params.productionDateTo || undefined,
+    },
+  });
+}
+
+export function getLabelQcStatusCounts(
+  factoryId: string,
+): Promise<ApiResponse<LabelQcStatusCounts>> {
+  return get<LabelQcStatusCounts>(`/${factoryId}/label-qc/tasks/status-counts`);
+}
+
+export function getLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return get<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}`);
+}
+
+export function reviewLabelQcTask(
+  factoryId: string,
+  taskId: string,
+  payload: LabelQcReviewRequest,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return put<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/review`, payload);
+}
+
+export function retryLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return post<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/retry`);
+}
+
+export function archiveLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return post<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/archive`);
+}
+
+export function restoreLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return post<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/restore`);
+}
+
+export function backupLabelQcTask(
+  factoryId: string,
+  taskId: string,
+): Promise<ApiResponse<LabelQcTaskBackup>> {
+  return post<LabelQcTaskBackup>(`/${factoryId}/label-qc/tasks/${taskId}/backup`);
+}
+
+export function decideLabelQcTraining(
+  factoryId: string,
+  taskId: string,
+  payload: LabelQcTrainingDecisionRequest,
+): Promise<ApiResponse<LabelQcTaskDetail>> {
+  return put<LabelQcTaskDetail>(
+    `/${factoryId}/label-qc/tasks/${taskId}/training-decision`,
+    payload,
+  );
+}
+
+export function exportLabelQcTrainingData(
+  factoryId: string,
+  params: { from: string; to: string; limit?: number },
+): Promise<ApiResponse<LabelQcTrainingPhoto[]>> {
+  return get<LabelQcTrainingPhoto[]>(`/${factoryId}/label-qc/training-export`, { params });
+}
+
+export function listLabelQcTrayCrops(
+  factoryId: string,
+  params: { status?: LabelQcTrayCropStatus; page?: number; size?: number } = {},
+): Promise<ApiResponse<LabelQcPage<LabelQcTrayCrop>>> {
+  return get<LabelQcPage<LabelQcTrayCrop>>(`/${factoryId}/label-qc/tray-crops`, {
+    params: { status: params.status, page: params.page ?? 1, size: params.size ?? 20 },
+  });
+}
+
+export function listLabelQcPlatformCandidates(
+  factoryId: string,
+  params: { reviewed?: boolean; page?: number; size?: number } = {},
+): Promise<ApiResponse<LabelQcPage<LabelQcPlatformCandidate>>> {
+  return adminGet<LabelQcPage<LabelQcPlatformCandidate>>(
+    `/api/platform/label-qc/${encodeURIComponent(factoryId)}/candidates`,
+    {
+      params: {
+        reviewed: params.reviewed ?? false,
+        page: params.page ?? 1,
+        size: params.size ?? 100,
+      },
+    },
+  );
+}
+
+export function reviewLabelQcPlatformCandidate(
+  factoryId: string,
+  candidateId: string,
+  payload: LabelQcPlatformCandidateReview,
+): Promise<ApiResponse<LabelQcPlatformCandidate>> {
+  return adminPut<LabelQcPlatformCandidate>(
+    `/api/platform/label-qc/${encodeURIComponent(factoryId)}/candidates/${encodeURIComponent(candidateId)}/review`,
+    payload,
+  );
+}
+
+export function reviewLabelQcTrayCrop(
+  factoryId: string,
+  cropId: string,
+  expectedVersion: number,
+  review: LabelQcPlatformTrayReview,
+): Promise<ApiResponse<LabelQcTrayCrop>> {
+  return put<LabelQcTrayCrop>(`/${factoryId}/label-qc/tray-crops/${cropId}/review`, {
+    expectedVersion,
+    review,
+  });
+}

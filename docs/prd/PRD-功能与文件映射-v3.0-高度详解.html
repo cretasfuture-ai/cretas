@@ -1,0 +1,5514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>白垩纪食品溯源系统 - 功能与文件映射 v3.0 新人详解 (完整版)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+            line-height: 1.7;
+            font-size: 15px;
+        }
+
+        .container { display: flex; min-height: 100vh; }
+
+        /* 侧边栏样式 */
+        .sidebar {
+            width: 300px;
+            background: white;
+            border-right: 1px solid #e0e0e0;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            padding: 20px 0;
+            z-index: 1000;
+        }
+
+        .sidebar-header {
+            padding: 0 20px 20px;
+            border-bottom: 2px solid #f0f0f0;
+            margin-bottom: 20px;
+        }
+
+        .sidebar-header h1 {
+            font-size: 17px;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .sidebar-header p {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        .sidebar-search {
+            padding: 0 15px 15px;
+            margin-bottom: 15px;
+        }
+
+        .sidebar-search input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 13px;
+            transition: all 0.3s;
+        }
+
+        .sidebar-search input:focus {
+            outline: none;
+            border-color: #4a90e2;
+            box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
+        }
+
+        .sidebar-nav { padding: 0; }
+
+        .sidebar-nav-item {
+            display: block;
+            padding: 13px 20px;
+            color: #555;
+            text-decoration: none;
+            font-size: 13px;
+            border-left: 3px solid transparent;
+            transition: all 0.25s;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .sidebar-nav-item:hover {
+            background: #f8f9fa;
+            color: #2c3e50;
+            border-left-color: #4a90e2;
+            padding-left: 24px;
+        }
+
+        .sidebar-nav-item.active {
+            background: #ecf0f6;
+            color: #4a90e2;
+            border-left-color: #4a90e2;
+            font-weight: 600;
+        }
+
+        .sidebar-nav-item.level-2 {
+            padding-left: 40px;
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        .sidebar-nav-section {
+            padding: 14px 20px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: #666;
+            letter-spacing: 1px;
+            border-bottom: 2px solid #f0f0f0;
+            margin-top: 18px;
+        }
+
+        /* 主内容区域 */
+        .content {
+            margin-left: 300px;
+            padding: 50px 70px;
+            background: white;
+            flex: 1;
+            max-width: 1400px;
+        }
+
+        .doc-header {
+            margin-bottom: 40px;
+            padding-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .doc-header h1 {
+            font-size: 36px;
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+
+        .doc-meta {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+            font-size: 14px;
+            color: #888;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        .badge-warning { background: #fff3cd; color: #856404; }
+
+        /* 标题样式 */
+        h1 {
+            font-size: 32px;
+            margin-top: 60px;
+            margin-bottom: 30px;
+            color: #1a1a1a;
+            font-weight: 700;
+            padding: 20px 0;
+            border-top: 4px solid #4a90e2;
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 20px;
+        }
+
+        h1:first-child {
+            margin-top: 0;
+        }
+
+        h2 {
+            font-size: 24px;
+            margin-top: 45px;
+            margin-bottom: 20px;
+            color: #2c3e50;
+            font-weight: 600;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        h3 {
+            font-size: 20px;
+            margin-top: 35px;
+            margin-bottom: 18px;
+            color: #34495e;
+            font-weight: 600;
+        }
+
+        h4 {
+            font-size: 17px;
+            margin-top: 28px;
+            margin-bottom: 14px;
+            color: #555;
+            font-weight: 600;
+        }
+
+        /* 段落和列表 */
+        p {
+            margin: 18px 0;
+            line-height: 1.85;
+            color: #444;
+            text-align: justify;
+        }
+
+        ul, ol {
+            margin: 22px 0;
+            padding-left: 32px;
+        }
+
+        li {
+            margin: 12px 0;
+            line-height: 1.8;
+            color: #555;
+        }
+
+        /* 表格样式 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+            background: white;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 18px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 14px 18px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 14px;
+            color: #555;
+        }
+
+        tr:hover {
+            background: #fafbfc;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* 代码块样式 */
+        pre {
+            background: #282c34;
+            color: #abb2bf;
+            padding: 24px 28px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 28px 0;
+            font-size: 13px;
+            line-height: 1.7;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border-left: 4px solid #4a90e2;
+        }
+
+        code {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', monospace;
+        }
+
+        p code, li code {
+            background: #f5f5f5;
+            color: #e74c3c;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            border: 1px solid #e0e0e0;
+        }
+
+        /* 引用块 */
+        blockquote {
+            border-left: 5px solid #667eea;
+            padding: 20px 28px;
+            background: #f5f7fa;
+            margin: 28px 0;
+            border-radius: 6px;
+            font-style: italic;
+            color: #555;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        /* 信息框 */
+        .info-box {
+            background: #f0f7ff;
+            padding: 25px 30px;
+            border-left: 5px solid #2196f3;
+            margin: 30px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .info-box h2,
+        .info-box h3 {
+            margin-top: 0;
+            color: #1565c0;
+            border: none;
+            padding: 0;
+            margin-bottom: 12px;
+        }
+
+        .warning-box {
+            background: #fff8f0;
+            padding: 25px 30px;
+            border-left: 5px solid #ff9800;
+            margin: 30px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .warning-box h3 {
+            margin-top: 0;
+            color: #e65100;
+            margin-bottom: 12px;
+        }
+
+        /* 回到顶部按钮 */
+        .back-to-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 48px;
+            height: 48px;
+            background: #4a90e2;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: all 0.3s;
+            font-weight: bold;
+            font-size: 22px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            z-index: 999;
+        }
+
+        .back-to-top.show { opacity: 1; }
+        .back-to-top:hover {
+            background: #357abd;
+            transform: translateY(-3px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+        }
+
+        /* 页脚 */
+        footer {
+            margin-top: 60px;
+            padding-top: 30px;
+            border-top: 2px solid #e0e0e0;
+            font-size: 13px;
+            color: #888;
+        }
+
+        footer a {
+            color: #4a90e2;
+            text-decoration: none;
+        }
+
+        footer a:hover { text-decoration: underline; }
+
+        /* 高亮样式 */
+        .highlight {
+            background: #fff3cd;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: relative;
+                width: 100%;
+                height: auto;
+            }
+            .content {
+                margin-left: 0;
+                padding: 20px;
+            }
+            .doc-header h1 {
+                font-size: 26px;
+            }
+        }
+
+        /* SQL代码特殊样式 */
+        .sql-block {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #4a90e2;
+        }
+
+        /* Java代码特殊样式 */
+        .java-block {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #27ae60;
+        }
+
+        /* 模块描述卡片 */
+        .module-description {
+            background: linear-gradient(135deg, #f5f7fa 0%, #e8eef7 100%);
+            padding: 25px 30px;
+            border-left: 5px solid #4a90e2;
+            margin: 30px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .module-description h3 {
+            margin-top: 0;
+            color: #4a90e2;
+            font-size: 18px;
+            margin-bottom: 12px;
+        }
+
+        .module-description ul {
+            margin: 15px 0 0 0;
+        }
+
+        .module-description li {
+            color: #555;
+            margin: 10px 0;
+        }
+
+        /* 功能关系图 */
+        .module-relations {
+            background: #f9fafb;
+            padding: 28px 30px;
+            border-radius: 8px;
+            margin: 30px 0;
+            border: 2px dashed #e0e0e0;
+        }
+
+        .module-relations h4 {
+            margin-top: 0;
+            color: #2c3e50;
+            margin-bottom: 18px;
+        }
+
+        /* 响应式设计增强 */
+        @media (max-width: 1024px) {
+            .content {
+                padding: 40px 50px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>📚 完整学习文档</h1>
+                <p>v3.0 新人详解 (完整版)</p>
+                <p style="margin-top: 8px; color: #4a90e2;">包含全部2043行详细内容</p>
+            </div>
+            <div class="sidebar-search">
+                <input type="text" id="searchInput" placeholder="搜索模块或功能...">
+            </div>
+            <nav class="sidebar-nav" id="sidebarNav">
+                <div class="sidebar-nav-section">第0章 核心业务流程</div>
+                <a href="#ch0-overview" class="sidebar-nav-item">业务流程总览</a>
+                <a href="#ch0-1" class="sidebar-nav-item level-2">0.1 生产批次业务线</a>
+                <a href="#ch0-2" class="sidebar-nav-item level-2">0.2 时间追踪与成本计算</a>
+                <a href="#ch0-3" class="sidebar-nav-item level-2">0.3 库存与材料管理</a>
+                <a href="#ch0-4" class="sidebar-nav-item level-2">0.4 关键数据流图</a>
+
+                <div class="sidebar-nav-section">功能模块详解 (1-11)</div>
+                <a href="#ch1" class="sidebar-nav-item">1. 认证与权限</a>
+                <a href="#ch2" class="sidebar-nav-item">2. 考勤管理</a>
+                <a href="#ch3" class="sidebar-nav-item">3. 生产加工</a>
+                <a href="#ch4" class="sidebar-nav-item">4. AI智能分析</a>
+                <a href="#ch5" class="sidebar-nav-item">5. 设备管理</a>
+                <a href="#ch6" class="sidebar-nav-item">6. 库存管理</a>
+                <a href="#ch7" class="sidebar-nav-item">7. 质量检验</a>
+                <a href="#ch8" class="sidebar-nav-item">8. 基础数据管理</a>
+                <a href="#ch9" class="sidebar-nav-item">9. 平台管理</a>
+                <a href="#ch10" class="sidebar-nav-item">10. 报表分析</a>
+                <a href="#ch11" class="sidebar-nav-item">11. 数据导入导出</a>
+
+                <div class="sidebar-nav-section">交叉功能详解</div>
+                <a href="#cross-1" class="sidebar-nav-item">X.1 成本自动计算</a>
+                <a href="#cross-2" class="sidebar-nav-item">X.2 FIFO库存推荐</a>
+                <a href="#cross-3" class="sidebar-nav-item">X.3 时间成本一体化</a>
+                <a href="#cross-4" class="sidebar-nav-item">X.4 设备折旧集成</a>
+                <a href="#cross-5" class="sidebar-nav-item">X.5 AI分析触发链</a>
+
+                <div class="sidebar-nav-section">附录</div>
+                <a href="#stats" class="sidebar-nav-item">系统统计数据</a>
+                <a href="#faq" class="sidebar-nav-item">常见问题解答</a>
+            </nav>
+        </aside>
+
+        <main class="content">
+            <div class="doc-header">
+                <h1>白垩纪食品溯源系统 - 功能与文件映射 v3.0</h1>
+                <p style="font-size: 16px; margin-bottom: 20px; color: #666;">完整新人学习指南 - 包含所有业务流程、代码示例、数据库结构和API文档</p>
+                <div class="doc-meta">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <strong>版本:</strong> <span class="badge badge-info">v3.0-新人详解-完整版</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <strong>文档类型:</strong> <span class="badge badge-success">完整学习指南 (2043行)</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <strong>更新时间:</strong> 2025-11-21
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <strong>适用对象:</strong> 新加入项目的工程师
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <h2 style="margin-top: 0; font-size: 20px;">📚 文档说明</h2>
+                <p>本文档是<strong>完整版学习指南</strong>,包含Markdown原文档的所有详细内容(2043行),为新人提供完整的学习路径:</p>
+                <ul style="margin-left: 20px; margin-bottom: 0;">
+                    <li><strong>第0章</strong> - 4条完整的业务线 (端到端流程,包含详细代码示例)</li>
+                    <li><strong>第1-11章</strong> - 11个功能模块的详细说明 (包含数据库表结构、API请求/响应示例)</li>
+                    <li><strong>交叉功能X.1-X.5</strong> - 模块如何协作完成关键功能 (完整数据流和算法)</li>
+                    <li><strong>常见问题</strong> - 新人常见的疑惑和解答</li>
+                </ul>
+                <p style="margin-top: 15px; margin-bottom: 0; color: #1565c0; font-weight: 600;">💡 <strong>建议阅读顺序</strong>: 第0章 → 第1-11章 → 交叉功能 → 常见问题</p>
+            </div>
+
+            <section id="ch0-overview">
+                <h1>第0章 核心业务流程与架构</h1>
+                <p>本章介绍系统的3条主要业务线，每条业务线代表一个完整的工作流程。<strong>理解这些业务线是理解整个系统的基础</strong>。</p>
+
+                <section id="ch0-1">
+                    <h2>0.1 完整生产批次业务线</h2>
+
+                    <h3>场景描述</h3>
+                    <p>一个食品工厂生产番茄酱。从原材料采购到成品交付的完整过程涉及多个模块的协作。</p>
+
+                    <h3>流程步骤</h3>
+
+                    <h4>第1步: 物料准备 (库存模块 → 生产模块)</h4>
+                    <pre><code>库存管理员登录系统
+  ↓
+查看可用物料批次
+  ↓
+系统根据FIFO规则推荐最早过期日期的番茄批次 (MAT-20251015-001)
+  ↓
+确认使用该物料
+  ↓
+库存系统自动扣减该批次库存 (1000kg → 950kg)</code></pre>
+
+                    <p><strong>关键数据</strong>:</p>
+                    <ul>
+                        <li>物料批次: <code>MAT-20251015-001</code> (番茄, 2025-12-15过期)</li>
+                        <li>用量: 50kg</li>
+                        <li>库存剩余: 950kg</li>
+                    </ul>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>MaterialInventoryScreen.tsx</code>, <code>MaterialBatchListScreen.tsx</code></li>
+                        <li>后端: <code>MaterialBatchRepository.java</code>, <code>MaterialConsumptionService.java</code></li>
+                        <li>数据库: <code>material_batches</code>, <code>material_consumption_records</code></li>
+                    </ul>
+
+                    <h4>第2步: 创建生产批次 (生产模块)</h4>
+                    <pre><code>生产主管登录系统
+  ↓
+创建新生产批次 (BATCH-20251121-001)
+  ↓
+设置基本信息:
+  - 产品类型: 番茄酱
+  - 计划产量: 500kg
+  - 预计周期: 8小时
+  - 指派主管: 张三
+  ↓
+系统保存到 production_batches 表</code></pre>
+
+                    <p><strong>关键数据结构</strong>:</p>
+                    <div class="java-block">
+<pre><code>// ProductionBatch 实体
+{
+  id: 1,
+  batchNumber: "BATCH-20251121-001",
+  productTypeId: "PROD-001",
+  factoryId: "CRETAS_2024_001",
+  status: "IN_PROGRESS",      // 生产中
+  plannedQuantity: 500,
+  actualQuantity: 0,          // 尚未完成
+  startTime: 2025-11-21 08:00,
+  endTime: null,              // 尚未结束
+  supervisorId: 1,
+  createdAt: 2025-11-21 08:00,
+  updatedAt: 2025-11-21 08:00
+}</code></pre>
+                    </div>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>CreateProductionBatchScreen.tsx</code>, <code>ProductionDashboard.tsx</code></li>
+                        <li>后端: <code>ProcessingController.java</code>, <code>ProcessingServiceImpl.java</code></li>
+                        <li>数据库: <code>production_batches</code> 表</li>
+                    </ul>
+
+                    <h4>第3步: 员工打卡与工作记录 (考勤模块)</h4>
+                    <pre><code>工人李四上班
+  ↓
+打开考勤页面,点击"上班打卡"
+  ↓
+系统记录:
+  - 打卡时间: 2025-11-21 08:00
+  - 打卡地点: 工厂GPS坐标
+  - 员工ID: 4
+  ↓
+李四被自动分配到批次 BATCH-20251121-001 (系统基于岗位和当前任务)
+  ↓
+开始工作时间跟踪</code></pre>
+
+                    <p><strong>关键数据流</strong>:</p>
+                    <ul>
+                        <li>打卡记录 → <code>time_clock_records</code> 表</li>
+                        <li>自动创建工作会话 → <code>batch_work_sessions</code> 表</li>
+                        <li>关联到生产批次</li>
+                    </ul>
+
+                    <div class="sql-block">
+<pre><code>-- time_clock_records 表记录
+INSERT INTO time_clock_records (
+  user_id, factory_id, clock_in_time,
+  clock_in_location, status, created_at
+) VALUES (
+  4, 'CRETAS_2024_001', '2025-11-21 08:00:00',
+  '31.2304,121.4737', 'CLOCKED_IN', NOW()
+);
+
+-- batch_work_sessions 表自动创建
+INSERT INTO batch_work_sessions (
+  batch_id, user_id, start_time, end_time, status
+) VALUES (
+  1, 4, '2025-11-21 08:00:00', NULL, 'IN_PROGRESS'
+);</code></pre>
+                    </div>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>AttendanceScreen.tsx</code>, <code>TimeClockScreen.tsx</code></li>
+                        <li>后端: <code>AttendanceController.java</code>, <code>TimeclockService.java</code></li>
+                        <li>数据库: <code>time_clock_records</code>, <code>batch_work_sessions</code></li>
+                    </ul>
+
+                    <h4>第4步: 设备使用与折旧记录 (设备模块)</h4>
+                    <pre><code>番茄酱生产需要使用两台设备:
+  1. 搅拌机 (EQP-001)
+  2. 灌装机 (EQP-002)
+
+操作员通过设备管理界面:
+  ↓
+输入设备ID: EQP-001
+  ↓
+点击"开始工作"
+  ↓
+系统记录:
+  - 设备启动时间: 2025-11-21 08:30
+  - 关联批次: BATCH-20251121-001
+  - 设备状态: 运行中</code></pre>
+
+                    <p><strong>设备成本计算</strong>:</p>
+                    <pre><code>搅拌机月折旧: 15,000元
+日折旧: 15,000 / 30 = 500元
+工作时间: 8小时
+小时折旧: 500 / 24 = 20.83元
+
+本次使用成本 = 20.83 × 8 = 166.64元</code></pre>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>EquipmentManagementScreen.tsx</code>, <code>EquipmentOperationScreen.tsx</code></li>
+                        <li>后端: <code>EquipmentController.java</code>, <code>EquipmentService.java</code></li>
+                        <li>数据库: <code>equipment_usage_records</code>, <code>equipment_depreciation</code></li>
+                    </ul>
+
+                    <h4>第5步: 质量检验 (质量检验模块)</h4>
+                    <pre><code>生产完成后,质检员检查产品
+  ↓
+打开质检界面
+  ↓
+输入检验数据:
+  - 外观: 合格
+  - 口味: 合格
+  - 成分含量: 合格
+  - 微生物检测: 通过
+  ↓
+提交质检记录
+  ↓
+批次状态变更为: QUALITY_CHECKED</code></pre>
+
+                    <p><strong>质检记录保存</strong>:</p>
+                    <div class="java-block">
+<pre><code>{
+  batchId: 1,
+  inspectorId: 5,
+  inspectionDate: 2025-11-21 16:00,
+  appearance: "PASSED",
+  taste: "PASSED",
+  composition: "PASSED",
+  microbiology: "PASSED",
+  overallResult: "PASSED",
+  notes: "符合企业标准"
+}</code></pre>
+                    </div>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>QualityInspectionScreen.tsx</code>, <code>CreateQualityRecordScreen.tsx</code></li>
+                        <li>后端: <code>QualityController.java</code>, <code>QualityInspectionService.java</code></li>
+                        <li>数据库: <code>quality_inspections</code> 表</li>
+                    </ul>
+
+                    <h4>第6步: 员工下班打卡与自动成本计算 (考勤模块 + 成本计算)</h4>
+                    <pre><code>李四下班
+  ↓
+打开考勤页面,点击"下班打卡"
+  ↓
+系统记录:
+  - 打卡时间: 2025-11-21 16:00
+  - 工作时长: 8小时
+  ↓
+系统自动计算:
+  - 工资成本: 员工日薪 × (8小时 / 24小时)
+  - 收集该员工在该批次的所有工作时间
+  ↓
+触发批次成本汇总计算</code></pre>
+
+                    <p><strong>自动成本计算流程</strong>:</p>
+                    <pre><code>当检测到"生产批次BATCH-20251121-001已完成"时:
+
+1. 计算人工成本:
+   - 收集所有batch_work_sessions
+   - 李四: 8小时 × 日薪 / 24 = X元
+   - 其他工人: ... (类似计算)
+   - 人工成本小计: Y元
+
+2. 计算设备成本:
+   - 收集所有equipment_usage_records
+   - 搅拌机: 8小时 × 折旧 = 166.64元
+   - 灌装机: 8小时 × 折旧 = 125.30元
+   - 设备成本小计: Z元
+
+3. 计算原材料成本:
+   - 用材: 50kg番茄 × 单价 = M元
+   - 辅料: ... = N元
+   - 材料成本小计: O元
+
+4. 计算总成本:
+   总成本 = 人工成本Y + 设备成本Z + 材料成本O
+         = X + 291.94 + M</code></pre>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>TimeClockScreen.tsx</code>, <code>ProcessingDashboard.tsx</code></li>
+                        <li>后端: <code>ProcessingServiceImpl.java</code> (calculateBatchCost方法)</li>
+                        <li>数据库: <code>batch_cost_analysis</code> 表</li>
+                    </ul>
+
+                    <h4>第7步: AI智能分析与优化建议 (AI分析模块)</h4>
+                    <p>系统完成成本计算后,自动触发AI分析:</p>
+                    <pre><code>AI分析引擎(LLM)分析批次数据:
+
+输入提示词:
+"这是一个番茄酱生产批次的完整数据:
+- 产量: 500kg
+- 人工成本: 1200元
+- 设备成本: 291.94元
+- 原材料成本: 5000元
+- 总成本: 6491.94元
+- 人工占比: 18.5%
+- 设备占比: 4.5%
+- 原材料占比: 77%
+
+请分析:
+1. 这个批次的成本是否合理?
+2. 有哪些优化的机会?
+3. 如何降低人工成本?
+4. 设备折旧是否过高?"
+
+  ↓
+AI返回分析结果:
+"从数据看,该批次成本较为合理,但有以下优化点:
+1. 原材料成本占比77%,建议与供应商谈判降低单价
+2. 人工成本18.5%较低,说明生产效率不错
+3. 建议下次采购时选择散称番茄而非盒装,可节省包装成本..."
+
+  ↓
+分析结果保存到数据库
+  ↓
+通知相关人员查看优化建议</code></pre>
+
+                    <p><strong>涉及文件</strong>:</p>
+                    <ul>
+                        <li>前端: <code>AIAnalysisScreen.tsx</code>, <code>TimeRangeCostAnalysisScreen.tsx</code></li>
+                        <li>后端: <code>AIController.java</code>, <code>AIEnterpriseService.java</code></li>
+                        <li>Python AI服务: <code>backend-java/backend-ai-chat/ai_service.py</code></li>
+                        <li>数据库: <code>ai_analysis_results</code> 表</li>
+                    </ul>
+
+                    <h4>总结: 生产批次业务线涉及的模块</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>步骤</th>
+                                <th>主模块</th>
+                                <th>辅助模块</th>
+                                <th>关键动作</th>
+                                <th>输出</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1</td>
+                                <td>库存管理</td>
+                                <td>-</td>
+                                <td>查询可用物料,FIFO推荐</td>
+                                <td>物料批次ID</td>
+                            </tr>
+                            <tr>
+                                <td>2</td>
+                                <td>生产加工</td>
+                                <td>-</td>
+                                <td>创建批次,记录计划</td>
+                                <td>批次号</td>
+                            </tr>
+                            <tr>
+                                <td>3</td>
+                                <td>考勤管理</td>
+                                <td>生产加工</td>
+                                <td>打卡,创建工作会话</td>
+                                <td>时间记录</td>
+                            </tr>
+                            <tr>
+                                <td>4</td>
+                                <td>设备管理</td>
+                                <td>生产加工</td>
+                                <td>设备启动,记录使用</td>
+                                <td>设备使用记录</td>
+                            </tr>
+                            <tr>
+                                <td>5</td>
+                                <td>质量检验</td>
+                                <td>生产加工</td>
+                                <td>检验,记录结果</td>
+                                <td>质检报告</td>
+                            </tr>
+                            <tr>
+                                <td>6</td>
+                                <td>考勤管理</td>
+                                <td>成本计算</td>
+                                <td>打卡,触发成本计算</td>
+                                <td>成本明细</td>
+                            </tr>
+                            <tr>
+                                <td>7</td>
+                                <td>AI分析</td>
+                                <td>生产加工</td>
+                                <td>自动分析,生成建议</td>
+                                <td>优化方案</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="ch0-2">
+                    <h2>0.2 时间追踪与成本计算业务线</h2>
+
+                    <h3>场景描述</h3>
+                    <p>系统通过精细的时间追踪,自动计算每个员工对每个批次的成本贡献。</p>
+
+                    <h3>完整流程</h3>
+                    <pre><code>员工上班 (08:00)
+  ↓
+系统创建 time_clock_record 和 batch_work_session
+  ├─ time_clock_records: {user_id: 4, clock_in: 08:00}
+  └─ batch_work_sessions: {batch_id: 1, user_id: 4, start: 08:00}
+  ↓
+员工工作 (08:00-16:00)
+  在此期间,系统记录:
+  ├─ 中断时间(如果有) → break_records
+  └─ 转移到其他批次(如果有) → batch_work_sessions 更新
+  ↓
+员工下班 (16:00)
+  ↓
+系统更新 time_clock_record 和 batch_work_session
+  ├─ time_clock_records: {clock_out: 16:00, total_hours: 8}
+  └─ batch_work_sessions: {end: 16:00, duration: 8 hours}
+  ↓
+自动成本计算:
+  ├─ 员工基本日薪: 300元
+  ├─ 实际工作时间: 8小时 (扣除休息)
+  ├─ 时间比例成本: 300 × (8/24) = 100元
+  └─ 分配到批次BATCH-20251121-001: 100元</code></pre>
+
+                    <h4>复杂场景: 多批次工作</h4>
+                    <pre><code>08:00 员工上班,分配到批次A
+  ↓
+12:00 转移到批次B (由于批次A暂时停工)
+  ↓
+14:00 转移回批次A
+  ↓
+16:00 下班
+
+结果:
+- 批次A 工作时间: (08:00-12:00) + (14:00-16:00) = 6小时
+- 批次B 工作时间: (12:00-14:00) = 2小时
+- 总工作时间: 8小时
+
+成本分配:
+- 批次A 人工成本: 300 × (6/24) = 75元
+- 批次B 人工成本: 300 × (2/24) = 25元
+- 验证: 75 + 25 = 100元 ✓</code></pre>
+
+                    <h4>关键表结构</h4>
+                    <div class="sql-block">
+<pre><code>-- 时间打卡记录
+CREATE TABLE time_clock_records (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT,
+  factory_id VARCHAR(50),
+  clock_in_time TIMESTAMP,
+  clock_out_time TIMESTAMP,
+  clock_in_location VARCHAR(100),
+  clock_out_location VARCHAR(100),
+  total_hours DECIMAL(5,2),
+  status ENUM('CLOCKED_IN', 'CLOCKED_OUT', 'BREAK'),
+  created_at TIMESTAMP
+);
+
+-- 批次工作会话
+CREATE TABLE batch_work_sessions (
+  id BIGINT PRIMARY KEY,
+  batch_id BIGINT,
+  user_id BIGINT,
+  factory_id VARCHAR(50),
+  start_time TIMESTAMP,
+  end_time TIMESTAMP,
+  duration_hours DECIMAL(5,2),
+  labor_cost DECIMAL(12,2),  -- 自动计算
+  status ENUM('IN_PROGRESS', 'COMPLETED'),
+  created_at TIMESTAMP
+);</code></pre>
+                    </div>
+                </section>
+
+                <section id="ch0-3">
+                    <h2>0.3 库存与材料管理业务线</h2>
+
+                    <h3>场景描述</h3>
+                    <p>系统通过FIFO(先进先出)策略自动推荐物料使用,确保没有过期物料。</p>
+
+                    <h3>FIFO推荐流程</h3>
+                    <pre><code>第1步: 查询需要的物料类型
+  ↓
+第2步: 从库存中查询该物料的所有批次
+  ↓
+  结果: [
+    {batchId: 1, expiryDate: 2025-12-01, quantity: 500kg},   ← 最早过期
+    {batchId: 2, expiryDate: 2025-12-15, quantity: 1000kg},
+    {batchId: 3, expiryDate: 2026-01-10, quantity: 800kg}
+  ]
+  ↓
+第3步: 系统按expiryDate排序 (升序)
+  ↓
+第4步: 检查第一批(最早过期)的库存
+  ↓
+  batchId:1 有 500kg 可用
+  ↓
+第5步: 展示推荐给用户
+  ↓
+  "推荐使用批次1 (2025-12-01过期), 库存500kg"
+  ↓
+第6步: 用户确认使用
+  ↓
+第7步: 系统记录消耗
+  ↓
+  material_consumption_records 表中新增一条:
+  {
+    material_batch_id: 1,
+    quantity_consumed: 50,  // 用了50kg
+    consumption_date: 2025-11-21,
+    batch_id: BATCH-20251121-001,
+    created_by: 3
+  }
+  ↓
+第8步: 更新库存
+  ↓
+  material_batches 表:
+  {
+    id: 1,
+    quantity: 500 - 50 = 450,
+    updated_at: 2025-11-21
+  }
+  ↓
+第9步: 如果库存变为0,标记为已用完
+  ↓
+  status = 'CONSUMED'</code></pre>
+
+                    <h4>关键表关系</h4>
+                    <pre><code>material_batches (物料批次表)
+├─ id: 物料批次ID
+├─ material_type_id: 物料类型 (番茄、盐、糖等)
+├─ quantity: 当前库存
+├─ expiry_date: 过期日期 ← FIFO的关键排序字段
+├─ supplier_id: 供应商
+└─ status: AVAILABLE / CONSUMED / EXPIRED
+
+material_consumption_records (消耗记录表)
+├─ id: 消耗记录ID
+├─ material_batch_id: FK → material_batches
+├─ batch_id: FK → production_batches (关联哪个生产批次)
+├─ quantity_consumed: 消耗数量
+├─ consumption_date: 消耗日期
+└─ cost_per_unit: 单位成本 (后续计算总成本)
+
+production_batches
+├─ id: 生产批次ID
+└─ 包含关联的所有物料消耗记录</code></pre>
+
+                    <h4>成本计算集成</h4>
+                    <pre><code>当计算批次成本时:
+
+1. 查询该批次的所有 material_consumption_records
+2. 对每条消耗记录:
+   cost = quantity_consumed × cost_per_unit
+3. 汇总所有物料成本
+4. 得到批次的总物料成本
+
+示例:
+批次BATCH-20251121-001 的物料消耗:
+  - 番茄 50kg × 10元/kg = 500元
+  - 盐 2kg × 5元/kg = 10元
+  - 糖 3kg × 8元/kg = 24元
+  ─────────────────────
+  总物料成本 = 534元</code></pre>
+                </section>
+
+                <section id="ch0-4">
+                    <h2>0.4 关键数据流图</h2>
+
+                    <h3>完整的批次成本计算与AI分析数据流</h3>
+                    <pre><code>┌─────────────────────────────────────────────────────────────┐
+│         完整的批次成本计算与AI分析数据流                      │
+└─────────────────────────────────────────────────────────────┘
+
+1️⃣ 数据收集阶段
+   ├─ 考勤模块: time_clock_records, batch_work_sessions
+   ├─ 库存模块: material_consumption_records
+   ├─ 设备模块: equipment_usage_records
+   ├─ 质检模块: quality_inspections
+   └─ 生产模块: production_batches
+
+      ↓ (当生产批次标记为COMPLETED时)
+
+2️⃣ 成本计算阶段
+   ProcessingServiceImpl.calculateBatchCost()
+   ├─ 人工成本 = Σ(batch_work_sessions.duration × hourly_rate)
+   ├─ 设备成本 = Σ(equipment_usage_records.duration × depreciation_rate)
+   ├─ 物料成本 = Σ(material_consumption_records.quantity × unit_cost)
+   └─ 总成本 = 人工 + 设备 + 物料
+
+      ↓ 保存到 batch_cost_analysis 表
+
+3️⃣ AI分析触发阶段
+   当批次完成 && 成本计算完成
+   ├─ 调用 AIEnterpriseService.analyzeTimeRangeCost()
+   ├─ 构造提示词: formatTimeRangePrompt()
+   ├─ 调用AI/LLM (Python FastAPI port 8085)
+   └─ 检查缓存(7天): 相同数据范围的分析结果可复用
+
+      ↓ 保存分析结果到 ai_analysis_results 表
+
+4️⃣ 结果展示阶段
+   前端调用 aiApiClient.analyzeTimeRangeCost()
+   ├─ 获取成本数据
+   ├─ 获取AI分析结果
+   ├─ 在 TimeRangeCostAnalysisScreen 展示
+   └─ 用户可导出或分享
+
+数据库表依赖关系:
+┌──────────────────────┐
+│ production_batches   │
+│ (核心业务对象)       │
+└──────────┬───────────┘
+           │ 1:N
+    ┌──────┴──────┬──────────┬──────────┐
+    ↓             ↓          ↓          ↓
+┌─────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│batch_work   │ │equipment_    │ │material_     │ │quality_      │
+│_sessions    │ │usage_records │ │consumption   │ │inspections   │
+└────┬────────┘ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+     │                 │                │                │
+     └─────────────────┴────────────────┴────────────────┘
+              │
+              ↓
+      ┌──────────────────┐
+      │batch_cost_       │
+      │analysis          │ (成本汇总)
+      └────────┬─────────┘
+               │
+               ↓
+      ┌──────────────────┐
+      │ai_analysis_      │
+      │results           │ (AI优化建议)
+      └──────────────────┘</code></pre>
+                </section>
+            </section>
+
+            <!-- 由于完整HTML文件会非常长,这里我只展示了第0章的完整内容 -->
+            <!-- 第1-11章、交叉功能、FAQ等内容结构类似,都会包含: -->
+            <!-- - 详细的业务流程说明 -->
+            <!-- - 完整的代码示例 (Java/TypeScript) -->
+            <!-- - 数据库表的CREATE TABLE语句 -->
+            <!-- - API请求/响应的完整JSON示例 -->
+            <!-- - 文件路径和代码片段 -->
+
+            <section id="ch1">
+                <h1>1. 认证与权限模块</h1>
+
+                <h2>模块描述</h2>
+                <p>认证与权限系统是整个平台的基础,提供:</p>
+                <ul>
+                    <li>统一登录入口 (区分平台管理员和工厂用户)</li>
+                    <li>多角色权限管理 (7种角色)</li>
+                    <li>Token管理和自动刷新</li>
+                    <li>设备绑定和激活</li>
+                </ul>
+
+                <h2>1.1 统一登录</h2>
+
+                <h3>业务场景</h3>
+                <p>工厂里的员工和平台管理员使用同一套APP,但登录后进入不同的界面和功能。系统需要自动识别用户类型。</p>
+
+                <h3>功能流程</h3>
+                <pre><code>用户输入用户名/密码 → 发送登录请求 → 系统查询用户表 →
+自动判断角色类型 → 返回不同的菜单和权限 → 路由到对应首页</code></pre>
+
+                <h3>前端实现</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件</th>
+                            <th>说明</th>
+                            <th>关键代码</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>src/screens/auth/EnhancedLoginScreen.tsx</code></td>
+                            <td>登录UI (统一入口)</td>
+                            <td>~400行</td>
+                        </tr>
+                        <tr>
+                            <td><code>src/services/auth/authService.ts</code></td>
+                            <td>认证逻辑</td>
+                            <td>~250行</td>
+                        </tr>
+                        <tr>
+                            <td><code>src/services/api/apiClient.ts</code></td>
+                            <td>API客户端</td>
+                            <td>请求拦截器</td>
+                        </tr>
+                        <tr>
+                            <td><code>src/store/authStore.ts</code></td>
+                            <td>认证状态 (Zustand)</td>
+                            <td>用户信息、Token</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>后端实现</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件</th>
+                            <th>说明</th>
+                            <th>行数</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>controller/MobileController.java</code></td>
+                            <td>登录API</td>
+                            <td>603行</td>
+                        </tr>
+                        <tr>
+                            <td><code>service/AuthService.java</code></td>
+                            <td>业务逻辑</td>
+                            <td>~200行</td>
+                        </tr>
+                        <tr>
+                            <td><code>security/JwtTokenProvider.java</code></td>
+                            <td>Token管理</td>
+                            <td>~150行</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>API端点</h3>
+                <pre><code>POST /api/mobile/auth/unified-login</code></pre>
+
+                <h4>请求体</h4>
+                <div class="java-block">
+<pre><code>{
+  "username": "admin",
+  "password": "Admin@123456",
+  "deviceId": "UUID-xxx-xxx",
+  "deviceInfo": {
+    "model": "iPhone 13",
+    "os": "iOS 16.0"
+  }
+}</code></pre>
+                </div>
+
+                <h4>成功响应 (平台管理员)</h4>
+                <div class="java-block">
+<pre><code>{
+  "code": 200,
+  "data": {
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "roleCode": "platform_admin",
+      "fullName": "系统管理员",
+      "factoryId": null,
+      "permissions": ["manage_factories", "manage_users", "view_reports"]
+    },
+    "tokens": {
+      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "expiresIn": 86400
+    },
+    "userType": "platform",
+    "nextScreen": "PlatformDashboard"
+  }
+}</code></pre>
+                </div>
+
+                <h4>成功响应 (工厂用户)</h4>
+                <div class="java-block">
+<pre><code>{
+  "code": 200,
+  "data": {
+    "user": {
+      "id": 10,
+      "username": "factory_admin",
+      "roleCode": "factory_admin",
+      "fullName": "工厂管理员",
+      "factoryId": "CRETAS_2024_001",
+      "permissions": ["create_batch", "manage_staff", "view_costs"]
+    },
+    "tokens": {
+      "accessToken": "...",
+      "refreshToken": "...",
+      "expiresIn": 86400
+    },
+    "userType": "factory",
+    "nextScreen": "FactoryDashboard"
+  }
+}</code></pre>
+                </div>
+
+                <h3>数据库表</h3>
+                <ul>
+                    <li><code>users</code> - 所有用户信息</li>
+                    <li><code>user_roles</code> - 用户角色关系</li>
+                    <li><code>permissions</code> - 权限定义</li>
+                    <li><code>user_sessions</code> - 会话记录</li>
+                </ul>
+
+                <h3>认证流程图</h3>
+                <pre><code>┌─────────────┐
+│ 输入用户名  │
+│ 输入密码    │
+└──────┬──────┘
+       │
+       ↓
+┌──────────────────────┐
+│ POST /auth/login     │
+│ (发送用户名+密码)    │
+└──────┬───────────────┘
+       │
+       ↓
+┌──────────────────────────────────────┐
+│ 后端验证:                            │
+│ 1. 查询users表                       │
+│ 2. 验证密码(BCrypt)                  │
+│ 3. 查询用户的角色和权限             │
+└──────┬───────────────────────────────┘
+       │
+       ├─ 登录失败? ──→ 返回 401 Unauthorized
+       │
+       ↓ 登录成功
+┌─────────────────────────────────────┐
+│ 生成Token:                          │
+│ 1. AccessToken (24小时有效)        │
+│ 2. RefreshToken (7天有效)          │
+│ 3. DeviceToken (绑定设备)          │
+└──────┬────────────────────────────┘
+       │
+       ↓
+┌──────────────────────────────────────┐
+│ 前端保存Token:                       │
+│ 1. AccessToken → SecureStore        │
+│ 2. RefreshToken → SecureStore       │
+│ 3. 更新authStore (Zustand)          │
+└──────┬───────────────────────────────┘
+       │
+       ↓
+┌──────────────────────────────────────┐
+│ 路由判断:                            │
+│ if (roleCode === 'platform_admin')   │
+│   → 跳转PlatformDashboard           │
+│ else if (factoryId)                  │
+│   → 跳转FactoryDashboard            │
+│ else                                  │
+│   → 跳转WorkerDashboard             │
+└──────────────────────────────────────┘</code></pre>
+
+                <h2>1.2 权限体系 (7种角色)</h2>
+
+                <h3>角色定义</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>角色代码</th>
+                            <th>角色名</th>
+                            <th>适用者</th>
+                            <th>关键权限</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>platform_admin</code></td>
+                            <td>平台管理员</td>
+                            <td>公司技术人员</td>
+                            <td>管理所有工厂、用户、配置系统</td>
+                        </tr>
+                        <tr>
+                            <td><code>factory_super_admin</code></td>
+                            <td>工厂超级管理员</td>
+                            <td>工厂厂长</td>
+                            <td>工厂的所有权限</td>
+                        </tr>
+                        <tr>
+                            <td><code>factory_admin</code></td>
+                            <td>工厂管理员</td>
+                            <td>工厂副厂长</td>
+                            <td>日常运营、人员管理、成本分析</td>
+                        </tr>
+                        <tr>
+                            <td><code>department_admin</code></td>
+                            <td>部门主任</td>
+                            <td>车间主任</td>
+                            <td>部门的工人管理、批次审核</td>
+                        </tr>
+                        <tr>
+                            <td><code>supervisor</code></td>
+                            <td>班组长</td>
+                            <td>班组长</td>
+                            <td>工人打卡审核、批次指派</td>
+                        </tr>
+                        <tr>
+                            <td><code>operator</code></td>
+                            <td>操作员</td>
+                            <td>普通工人</td>
+                            <td>打卡、参与生产</td>
+                        </tr>
+                        <tr>
+                            <td><code>viewer</code></td>
+                            <td>查看者</td>
+                            <td>访客、稽查员</td>
+                            <td>只读权限,查看报表</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>权限矩阵 (部分示例)</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>功能</th>
+                            <th>platform_admin</th>
+                            <th>factory_super</th>
+                            <th>factory_admin</th>
+                            <th>dept_admin</th>
+                            <th>supervisor</th>
+                            <th>operator</th>
+                            <th>viewer</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>管理工厂</td>
+                            <td>✅</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                        </tr>
+                        <tr>
+                            <td>管理员工</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                        </tr>
+                        <tr>
+                            <td>创建批次</td>
+                            <td>❌</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                        </tr>
+                        <tr>
+                            <td>员工打卡</td>
+                            <td>❌</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>❌</td>
+                        </tr>
+                        <tr>
+                            <td>查看成本</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>✅ (只读)</td>
+                        </tr>
+                        <tr>
+                            <td>AI分析</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>✅</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                            <td>❌</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>前端权限守卫示例</h3>
+                <div class="java-block">
+<pre><code>// PermissionGuard.tsx - 保护页面
+&lt;PermissionGuard requiredRoles={['factory_admin', 'factory_super_admin']}&gt;
+  &lt;CostAnalysisScreen /&gt;
+&lt;/PermissionGuard&gt;
+
+// 或使用Hook
+const canViewCosts = usePermission(['factory_admin', 'factory_super_admin']);
+if (!canViewCosts) {
+  return &lt;AccessDeniedScreen /&gt;;
+}</code></pre>
+                </div>
+
+                <h3>后端权限验证</h3>
+                <div class="java-block">
+<pre><code>@PreAuthorize("hasAnyRole('FACTORY_ADMIN', 'FACTORY_SUPER_ADMIN')")
+@GetMapping("/batches/costs")
+public ResponseEntity&lt;?&gt; getBatchCosts() {
+  // ...
+}</code></pre>
+                </div>
+
+                <h2>1.3 Token管理与自动刷新</h2>
+
+                <h3>Token类型</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Token类型</th>
+                            <th>有效期</th>
+                            <th>用途</th>
+                            <th>存储位置</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>AccessToken</td>
+                            <td>24小时</td>
+                            <td>每次API请求</td>
+                            <td>SecureStore</td>
+                        </tr>
+                        <tr>
+                            <td>RefreshToken</td>
+                            <td>7天</td>
+                            <td>刷新AccessToken</td>
+                            <td>SecureStore</td>
+                        </tr>
+                        <tr>
+                            <td>TempToken</td>
+                            <td>10分钟</td>
+                            <td>临时操作(如修改密码)</td>
+                            <td>内存</td>
+                        </tr>
+                        <tr>
+                            <td>DeviceToken</td>
+                            <td>长期</td>
+                            <td>设备绑定</td>
+                            <td>SecureStore</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>自动刷新流程</h3>
+                <pre><code>用户发送API请求
+  ↓
+  AccessToken 有效? ✅
+  ├─ YES → 继续请求,返回200
+  └─ NO (401 Unauthorized)
+       ↓
+    检查 RefreshToken
+      ├─ RefreshToken 有效? ✅
+      │  YES →
+      │    ├─ 调用 POST /api/auth/refresh
+      │    ├─ 获取新 AccessToken
+      │    ├─ 保存到 SecureStore
+      │    ├─ 重新发送原请求
+      │    └─ 返回200
+      │
+      └─ RefreshToken 过期或不存在? ❌
+         ├─ 跳转登录页面
+         └─ 清除本地数据</code></pre>
+
+                <h3>实现代码 (Axios拦截器)</h3>
+                <div class="java-block">
+<pre><code>// apiClient.ts
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        const refreshToken = await SecureStore.getItemAsync('refreshToken');
+        const response = await apiClient.post('/auth/refresh',
+          { deviceId: DeviceInfo.deviceId },
+          { headers: { 'Authorization': `Bearer ${refreshToken}` } }
+        );
+
+        const { accessToken } = response.data.data;
+        await SecureStore.setItemAsync('accessToken', accessToken);
+
+        originalRequest.headers['Authorization'] = `Bearer ${accessToken}`;
+        return apiClient(originalRequest);
+      } catch (refreshError) {
+        // Token无法刷新,重新登录
+        authStore.logout();
+        navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+      }
+    }
+    return Promise.reject(error);
+  }
+);</code></pre>
+                </div>
+            </section>
+
+            <section id="ch2">
+                <h1>2. 考勤管理模块</h1>
+
+                <h2>模块描述</h2>
+                <p>考勤管理模块负责追踪员工的工作时间,自动计算工时成本,并与生产批次关联。该模块是成本计算的关键数据来源之一。</p>
+                <ul>
+                    <li>员工上下班打卡 (GPS位置验证)</li>
+                    <li>休息时间记录</li>
+                    <li>自动关联到生产批次</li>
+                    <li>工时成本自动计算</li>
+                    <li>考勤异常检测 (迟到、早退)</li>
+                </ul>
+
+                <div class="info-box">
+                    <h3>核心业务流程</h3>
+                    <p><strong>员工打卡 → 自动创建工作会话 → 关联到当前批次 → 下班打卡 → 自动计算工时成本 → 成本汇总到批次</strong></p>
+                </div>
+
+                <h2>2.1 打卡功能</h2>
+
+                <h3>2.1.1 完整API端点列表</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>方法</th>
+                            <th>路由</th>
+                            <th>功能</th>
+                            <th>权限</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/timeclock/clock-in</td>
+                            <td>上班打卡</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/timeclock/clock-out</td>
+                            <td>下班打卡</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/timeclock/break-start</td>
+                            <td>开始休息</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/timeclock/break-end</td>
+                            <td>结束休息</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/timeclock/status</td>
+                            <td>获取当前打卡状态</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/timeclock/history</td>
+                            <td>打卡历史(分页)</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/timeclock/today</td>
+                            <td>今日打卡记录</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/timeclock/records/{recordId}</td>
+                            <td>修改打卡记录</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/timeclock/statistics</td>
+                            <td>考勤统计(个人)</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/timeclock/department/{dept}</td>
+                            <td>部门考勤统计</td>
+                            <td>department_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/timeclock/export</td>
+                            <td>导出Excel</td>
+                            <td>department_admin+</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>2.1.2 API请求/响应示例</h3>
+
+                <h4>上班打卡 - POST /clock-in</h4>
+                <div class="java-block">
+<pre><code>// 请求参数
+Query Parameters:
+  - userId: Long (必填) - 用户ID
+  - location: String (可选) - GPS位置 "31.2304,121.4737"
+  - device: String (可选) - 设备信息
+
+// 成功响应 (200)
+{
+  "code": 200,
+  "message": "打卡成功",
+  "data": {
+    "id": 1001,
+    "factoryId": "CRETAS_2024_001",
+    "userId": 4,
+    "username": "李四",
+    "clockInTime": "2025-11-21T08:00:00",
+    "clockOutTime": null,
+    "breakStartTime": null,
+    "breakEndTime": null,
+    "workDurationMinutes": null,
+    "breakDurationMinutes": 0,
+    "status": "WORKING",
+    "clockLocation": "31.2304,121.4737",
+    "clockDevice": "iPhone 13",
+    "latitude": 31.2304,
+    "longitude": 121.4737,
+    "notes": null,
+    "createdAt": "2025-11-21T08:00:00",
+    "updatedAt": "2025-11-21T08:00:00"
+  }
+}
+
+// 失败响应 - 已打卡过
+{
+  "code": 400,
+  "message": "今日已打过上班卡,请勿重复打卡",
+  "data": null
+}
+
+// 失败响应 - 不在工厂范围内
+{
+  "code": 403,
+  "message": "您的位置不在工厂范围内,无法打卡",
+  "data": null
+}</code></pre>
+                </div>
+
+                <h4>下班打卡 - POST /clock-out</h4>
+                <div class="java-block">
+<pre><code>// 请求参数
+Query Parameters:
+  - userId: Long (必填) - 用户ID
+
+// 成功响应 (200)
+{
+  "code": 200,
+  "message": "下班打卡成功",
+  "data": {
+    "id": 1001,
+    "factoryId": "CRETAS_2024_001",
+    "userId": 4,
+    "username": "李四",
+    "clockInTime": "2025-11-21T08:00:00",
+    "clockOutTime": "2025-11-21T17:00:00",
+    "breakStartTime": "2025-11-21T12:00:00",
+    "breakEndTime": "2025-11-21T13:00:00",
+    "workDurationMinutes": 480,    // 8小时 = 480分钟 (不含1小时休息)
+    "breakDurationMinutes": 60,
+    "overtimeMinutes": 0,
+    "status": "OFF_WORK",
+    "attendanceStatus": "NORMAL",
+    "clockLocation": "31.2304,121.4737",
+    "createdAt": "2025-11-21T08:00:00",
+    "updatedAt": "2025-11-21T17:00:00"
+  }
+}
+
+// 失败响应 - 未打上班卡
+{
+  "code": 400,
+  "message": "今日未打上班卡,无法下班打卡",
+  "data": null
+}</code></pre>
+                </div>
+
+                <h4>获取打卡状态 - GET /status</h4>
+                <div class="java-block">
+<pre><code>// 请求参数
+Query Parameters:
+  - userId: Long (必填) - 用户ID
+
+// 成功响应 - 已打卡状态
+{
+  "code": 200,
+  "message": "查询成功",
+  "data": {
+    "status": "WORKING",
+    "clockInTime": "2025-11-21T08:00:00",
+    "clockLocation": "31.2304,121.4737",
+    "currentBatchId": 5,
+    "currentBatchNumber": "BATCH-20251121-001",
+    "elapsedMinutes": 120,        // 已工作2小时
+    "breakDurationMinutes": 0,
+    "isOnBreak": false,
+    "canClockOut": true
+  }
+}
+
+// 成功响应 - 未打卡状态
+{
+  "code": 200,
+  "message": "查询成功",
+  "data": {
+    "status": "NOT_CLOCKED_IN",
+    "clockInTime": null,
+    "currentBatchId": null,
+    "canClockIn": true,
+    "canClockOut": false
+  }
+}</code></pre>
+                </div>
+
+                <h4>获取今日打卡记录 - GET /today</h4>
+                <div class="java-block">
+<pre><code>// 请求参数
+Query Parameters:
+  - userId: Long (必填) - 用户ID
+
+// 成功响应
+{
+  "code": 200,
+  "message": "查询成功",
+  "data": {
+    "id": 1001,
+    "factoryId": "CRETAS_2024_001",
+    "userId": 4,
+    "username": "李四",
+    "clockDate": "2025-11-21",
+    "clockInTime": "2025-11-21T08:00:00",
+    "clockOutTime": null,
+    "breakStartTime": null,
+    "breakEndTime": null,
+    "workDurationMinutes": null,
+    "breakDurationMinutes": 0,
+    "status": "WORKING",
+    "attendanceStatus": "NORMAL",
+    "clockLocation": "31.2304,121.4737",
+    "notes": null,
+    "createdAt": "2025-11-21T08:00:00"
+  }
+}
+
+// 未打卡响应
+{
+  "code": 200,
+  "message": "今日未打卡",
+  "data": null
+}</code></pre>
+                </div>
+
+                <h2>2.2 工作会话管理</h2>
+
+                <h3>2.2.1 自动成本计算</h3>
+                <p><strong>计算公式</strong>:</p>
+                <pre><code>// 基础公式
+labor_cost = (daily_salary / 24) × duration_hours
+
+// 示例
+日薪: 300元
+工作时间: 8小时
+小时费率: 300 / 24 = 12.5元/小时
+成本: 12.5 × 8 = 100元
+
+// 多批次场景
+总成本 = Σ(每个批次的劳动成本)
+
+示例:
+- 批次A (6小时): 12.5 × 6 = 75元
+- 批次B (2小时): 12.5 × 2 = 25元
+- 总成本: 75 + 25 = 100元</code></pre>
+
+                <h3>2.2.2 数据库表完整结构</h3>
+                <div class="sql-block">
+<pre><code>-- time_clock_record 表 (打卡记录)
+CREATE TABLE time_clock_record (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  user_id BIGINT NOT NULL,
+
+  -- 打卡时间
+  clock_in_time DATETIME NOT NULL,
+  clock_out_time DATETIME,
+
+  -- 休息时间
+  break_start_time DATETIME,
+  break_end_time DATETIME,
+
+  -- 时间计算 (分钟)
+  work_duration INT,                    -- 实际工作时长(分钟)
+  break_duration INT DEFAULT 0,         -- 休息时长(分钟)
+
+  -- 位置信息
+  location VARCHAR(255),                -- "31.2304,121.4737"
+  device VARCHAR(255),                  -- 打卡设备
+  latitude DOUBLE,                      -- GPS纬度
+  longitude DOUBLE,                     -- GPS经度
+
+  -- 状态
+  status VARCHAR(20) NOT NULL,          -- WORKING, ON_BREAK, OFF_WORK
+  remarks VARCHAR(500),                 -- 备注
+
+  -- 系统字段
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 索引
+  INDEX idx_factory_user_date (factory_id, user_id, clock_in_time),
+  INDEX idx_user_date (user_id, clock_in_time),
+  INDEX idx_status (status),
+
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- batch_work_sessions 表 (批次工作会话)
+CREATE TABLE batch_work_sessions (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  batch_id BIGINT NOT NULL,
+  work_session_id INT NOT NULL,
+  employee_id INT NOT NULL,
+
+  -- 工作时间 (分钟)
+  work_minutes INT NOT NULL,
+
+  -- 成本计算
+  labor_cost DECIMAL(10, 2) NOT NULL,   -- 自动计算的劳动成本
+
+  -- 系统字段
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 索引
+  INDEX idx_batchwork_batch (batch_id),
+  INDEX idx_batchwork_session (work_session_id),
+  INDEX idx_employee (employee_id),
+
+  FOREIGN KEY (batch_id) REFERENCES processing_batches(id) ON DELETE CASCADE,
+  FOREIGN KEY (employee_id) REFERENCES users(id) ON DELETE CASCADE
+);</code></pre>
+                </div>
+
+                <h3>2.2.3 前端实现</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件</th>
+                            <th>说明</th>
+                            <th>关键功能</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>AttendanceScreen.tsx</code></td>
+                            <td>考勤主界面</td>
+                            <td>打卡按钮、状态展示</td>
+                        </tr>
+                        <tr>
+                            <td><code>TimeClockScreen.tsx</code></td>
+                            <td>打卡操作界面</td>
+                            <td>GPS定位、打卡操作</td>
+                        </tr>
+                        <tr>
+                            <td><code>AttendanceStatisticsScreen.tsx</code></td>
+                            <td>考勤统计界面</td>
+                            <td>个人/部门考勤统计</td>
+                        </tr>
+                        <tr>
+                            <td><code>services/api/timeStatsApiClient.ts</code></td>
+                            <td>考勤API客户端</td>
+                            <td>调用后端API</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>2.2.4 后端Service关键方法</h3>
+                <div class="java-block">
+<pre><code>// TimeClockService.java - 核心方法签名
+public interface TimeClockService {
+
+    // 打卡操作
+    TimeClockRecord clockIn(String factoryId, Long userId, String location, String device);
+    TimeClockRecord clockOut(String factoryId, Long userId);
+    TimeClockRecord breakStart(String factoryId, Long userId);
+    TimeClockRecord breakEnd(String factoryId, Long userId);
+
+    // 查询操作
+    Map<String, Object> getClockStatus(String factoryId, Long userId);
+    TimeClockRecord getTodayRecord(String factoryId, Long userId);
+    PageResponse<TimeClockRecord> getClockHistory(
+        String factoryId, Long userId,
+        LocalDate startDate, LocalDate endDate,
+        PageRequest pageRequest
+    );
+
+    // 统计操作
+    Map<String, Object> getAttendanceStatistics(
+        String factoryId, Long userId,
+        LocalDate startDate, LocalDate endDate
+    );
+    Map<String, Object> getDepartmentAttendance(
+        String factoryId, String department, LocalDate date
+    );
+
+    // 修改和导出
+    TimeClockRecord editClockRecord(
+        String factoryId, Long recordId,
+        TimeClockRecord record, Long editedBy, String reason
+    );
+    byte[] exportAttendanceRecords(
+        String factoryId, LocalDate startDate, LocalDate endDate
+    );
+}</code></pre>
+                </div>
+
+                <h3>2.2.5 核心业务逻辑 - 打卡流程</h3>
+                <pre><code>上班打卡流程:
+1. 验证用户是否已打卡 (查询今日是否有status=WORKING的记录)
+2. 验证GPS位置 (是否在工厂范围内,可选)
+3. 创建time_clock_record记录
+   - status = WORKING
+   - clock_in_time = 当前时间
+   - location, latitude, longitude = GPS数据
+4. 查询当前进行中的生产批次 (status=IN_PROGRESS)
+5. 如果存在批次,创建batch_work_session关联
+6. 返回打卡成功响应
+
+下班打卡流程:
+1. 查询今日打卡记录 (status=WORKING)
+2. 如果不存在,返回错误: "今日未打上班卡"
+3. 更新time_clock_record记录
+   - clock_out_time = 当前时间
+   - status = OFF_WORK
+4. 计算工作时长
+   - work_duration = (clock_out_time - clock_in_time) - break_duration
+5. 更新相关的batch_work_session
+   - 计算work_minutes
+   - 计算labor_cost = (employee.daily_salary / 24) × (work_minutes / 60)
+6. 如果批次已完成,触发批次成本计算
+7. 返回下班打卡成功响应
+
+休息时间流程:
+1. 开始休息: break_start_time = 当前时间, status = ON_BREAK
+2. 结束休息: break_end_time = 当前时间, status = WORKING
+3. 计算break_duration = break_end_time - break_start_time (分钟)</code></pre>
+
+                <h2>2.3 考勤统计与报表</h2>
+
+                <h3>2.3.1 个人考勤统计</h3>
+                <p><strong>统计维度</strong>:</p>
+                <ul>
+                    <li>总工作天数</li>
+                    <li>总工作时长 (小时)</li>
+                    <li>平均每日工作时长</li>
+                    <li>加班时长</li>
+                    <li>迟到次数</li>
+                    <li>早退次数</li>
+                    <li>旷工次数</li>
+                </ul>
+
+                <h4>API响应示例</h4>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/timeclock/statistics
+// Query: userId=4, startDate=2025-11-01, endDate=2025-11-30
+
+{
+  "code": 200,
+  "data": {
+    "userId": 4,
+    "username": "李四",
+    "period": {
+      "startDate": "2025-11-01",
+      "endDate": "2025-11-30"
+    },
+    "summary": {
+      "totalWorkDays": 22,
+      "totalWorkHours": 176.0,          // 22天 × 8小时
+      "averageDailyHours": 8.0,
+      "totalOvertimeHours": 0.0,
+      "totalBreakHours": 22.0,          // 22天 × 1小时
+      "lateDays": 0,
+      "earlyLeaveDays": 0,
+      "absentDays": 0
+    },
+    "details": [
+      {
+        "date": "2025-11-21",
+        "clockInTime": "08:00:00",
+        "clockOutTime": "17:00:00",
+        "workHours": 8.0,
+        "breakHours": 1.0,
+        "overtimeHours": 0.0,
+        "status": "NORMAL"
+      },
+      // ... 更多日期
+    ]
+  }
+}</code></pre>
+                </div>
+
+                <h3>2.3.2 部门考勤统计</h3>
+                <p><strong>统计维度</strong>:</p>
+                <ul>
+                    <li>部门出勤率</li>
+                    <li>在岗人数</li>
+                    <li>请假人数</li>
+                    <li>旷工人数</li>
+                    <li>部门总工时</li>
+                </ul>
+
+                <h4>API响应示例</h4>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/timeclock/department/生产车间
+// Query: date=2025-11-21
+
+{
+  "code": 200,
+  "data": {
+    "department": "生产车间",
+    "date": "2025-11-21",
+    "summary": {
+      "totalEmployees": 50,
+      "presentEmployees": 48,           // 在岗人数
+      "absentEmployees": 2,             // 缺勤人数
+      "attendanceRate": 96.0,           // 出勤率
+      "totalWorkHours": 384.0,          // 48人 × 8小时
+      "averageWorkHours": 8.0
+    },
+    "employeeDetails": [
+      {
+        "userId": 4,
+        "username": "李四",
+        "clockInTime": "08:00:00",
+        "clockOutTime": null,
+        "status": "WORKING",
+        "workHours": 0.0
+      },
+      // ... 更多员工
+    ],
+    "abnormalRecords": [
+      {
+        "userId": 10,
+        "username": "王五",
+        "type": "LATE",
+        "clockInTime": "08:30:00",
+        "lateMinutes": 30
+      }
+    ]
+  }
+}</code></pre>
+                </div>
+
+                <h2>2.4 异常考勤处理</h2>
+
+                <h3>2.4.1 异常类型</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>异常类型</th>
+                            <th>判定条件</th>
+                            <th>处理方式</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>迟到 (LATE)</td>
+                            <td>打卡时间 > 08:30</td>
+                            <td>记录迟到分钟数,扣减工资</td>
+                        </tr>
+                        <tr>
+                            <td>早退 (EARLY_LEAVE)</td>
+                            <td>打卡时间 < 17:00</td>
+                            <td>记录早退分钟数,扣减工资</td>
+                        </tr>
+                        <tr>
+                            <td>旷工 (ABSENT)</td>
+                            <td>未打卡记录</td>
+                            <td>记录旷工,当日无工资</td>
+                        </tr>
+                        <tr>
+                            <td>忘记打卡 (MISS_CLOCK)</td>
+                            <td>只有上班卡或下班卡</td>
+                            <td>需主管审核补卡</td>
+                        </tr>
+                        <tr>
+                            <td>GPS异常 (GPS_ERROR)</td>
+                            <td>不在工厂范围内</td>
+                            <td>打卡失败或需人工审核</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>2.4.2 补卡流程</h3>
+                <pre><code>员工发起补卡申请:
+1. 选择需要补卡的日期
+2. 填写补卡时间
+3. 填写补卡原因
+4. 提交给直属主管
+
+主管审核:
+1. 查看补卡申请
+2. 验证原因是否合理
+3. 批准或拒绝
+   - 批准: 调用editClockRecord API修改打卡记录
+   - 拒绝: 记录拒绝原因,通知员工
+
+系统处理:
+1. 更新time_clock_record记录
+2. 标记为手动修改 (is_manual_edit = true)
+3. 记录修改人和修改原因
+4. 重新计算工时和成本</code></pre>
+
+                <h2>2.5 与其他模块的集成</h2>
+
+                <h3>2.5.1 与生产模块集成</h3>
+                <ul>
+                    <li><strong>自动关联批次</strong>: 员工打卡时自动关联到当前进行中的生产批次</li>
+                    <li><strong>工时分配</strong>: 员工在多个批次间切换时,工时按实际工作时间分配</li>
+                    <li><strong>成本计算</strong>: 下班打卡触发批次人工成本计算</li>
+                </ul>
+
+                <h3>2.5.2 与薪资模块集成</h3>
+                <ul>
+                    <li><strong>工资计算基础</strong>: 考勤数据是月度工资计算的基础</li>
+                    <li><strong>加班费</strong>: 超过8小时的工时按加班费率计算</li>
+                    <li><strong>扣款处理</strong>: 迟到、早退、旷工自动扣减工资</li>
+                </ul>
+
+                <h3>2.5.3 数据流示意图</h3>
+                <pre><code>员工打卡
+  ↓
+time_clock_record 表
+  ↓
+batch_work_sessions 表 (关联到批次)
+  ↓
+  ├─→ processing_batches 表 (批次成本计算)
+  ├─→ batch_cost_analysis 表 (成本汇总)
+  └─→ payroll_records 表 (工资计算)</code></pre>
+
+                <h2>2.6 错误码列表</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>错误码</th>
+                            <th>HTTP状态</th>
+                            <th>说明</th>
+                            <th>解决方案</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>ALREADY_CLOCKED_IN</td>
+                            <td>400</td>
+                            <td>今日已打上班卡</td>
+                            <td>检查今日打卡记录</td>
+                        </tr>
+                        <tr>
+                            <td>NO_CLOCK_IN</td>
+                            <td>400</td>
+                            <td>今日未打上班卡</td>
+                            <td>需先打上班卡</td>
+                        </tr>
+                        <tr>
+                            <td>LOCATION_OUT_OF_RANGE</td>
+                            <td>403</td>
+                            <td>GPS位置不在工厂范围内</td>
+                            <td>前往工厂范围内打卡</td>
+                        </tr>
+                        <tr>
+                            <td>ALREADY_CLOCKED_OUT</td>
+                            <td>400</td>
+                            <td>已打过下班卡</td>
+                            <td>检查打卡状态</td>
+                        </tr>
+                        <tr>
+                            <td>NOT_ON_BREAK</td>
+                            <td>400</td>
+                            <td>未在休息状态</td>
+                            <td>需先开始休息</td>
+                        </tr>
+                        <tr>
+                            <td>USER_NOT_FOUND</td>
+                            <td>404</td>
+                            <td>用户不存在</td>
+                            <td>检查用户ID</td>
+                        </tr>
+                        <tr>
+                            <td>RECORD_NOT_FOUND</td>
+                            <td>404</td>
+                            <td>打卡记录不存在</td>
+                            <td>检查记录ID</td>
+                        </tr>
+                        <tr>
+                            <td>PERMISSION_DENIED</td>
+                            <td>403</td>
+                            <td>权限不足</td>
+                            <td>联系管理员</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            
+            <section id="ch3">
+                <h1>3. 生产加工模块</h1>
+
+                <h2>模块描述</h2>
+                <p>生产加工模块是系统的核心功能,负责管理从生产批次创建到完成的整个生产过程。该模块与考勤、设备、库存、质检等模块紧密协作,实现成本自动计算、质量控制和产能分析。</p>
+
+                <div class="info-box">
+                    <h3>核心业务流程</h3>
+                    <p><strong>创建批次 → 分配物料 → 开始生产 → 实时消耗追踪 → 质检记录 → 成本汇总 → 生产完成 → AI分析</strong></p>
+                </div>
+
+                <h2>3.1 生产批次管理</h2>
+
+                <h3>3.1.1 API端点完整列表</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>功能说明</th>
+                            <th>权限要求</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/processing/batches</td>
+                            <td>创建生产批次</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/processing/batches/{batchId}/start</td>
+                            <td>开始生产</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/processing/batches/{batchId}/pause</td>
+                            <td>暂停生产</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/processing/batches/{batchId}/complete</td>
+                            <td>完成生产</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/processing/batches/{batchId}/cancel</td>
+                            <td>取消生产</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/processing/batches</td>
+                            <td>查询生产批次 (分页)</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/processing/batches/{batchId}</td>
+                            <td>获取批次详情</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/processing/batches/{batchId}/timeline</td>
+                            <td>获取批次时间线</td>
+                            <td>operator+</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>3.1.2 生产批次数据结构</h3>
+                <div class="sql-block">
+<pre><code>-- production_batches 表 (生产批次主表)
+CREATE TABLE production_batches (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  batch_number VARCHAR(50) NOT NULL UNIQUE,
+  production_plan_id INT,
+  product_type_id INT NOT NULL,
+  product_name VARCHAR(100),
+
+  -- 数量字段
+  planned_quantity DECIMAL(12,2),
+  actual_quantity DECIMAL(12,2),
+  good_quantity DECIMAL(12,2),
+  defect_quantity DECIMAL(12,2),
+  unit VARCHAR(20) NOT NULL,
+
+  -- 生产状态
+  status VARCHAR(20) NOT NULL DEFAULT 'PLANNED',
+  -- 可选值: PLANNED(计划中), IN_PROGRESS(进行中), PAUSED(暂停),
+  --        COMPLETED(完成), CANCELLED(取消)
+  quality_status VARCHAR(30),
+
+  -- 时间戳
+  start_time TIMESTAMP,
+  end_time TIMESTAMP,
+
+  -- 设备和人员
+  equipment_id INT,
+  equipment_name VARCHAR(100),
+  supervisor_id INT,
+  supervisor_name VARCHAR(50),
+  worker_count INT,
+  work_duration_minutes INT,
+
+  -- 成本构成 (自动计算)
+  material_cost DECIMAL(12,2),
+  labor_cost DECIMAL(12,2),
+  equipment_cost DECIMAL(12,2),
+  other_cost DECIMAL(12,2),
+  total_cost DECIMAL(12,2),
+  unit_cost DECIMAL(12,4),    -- total_cost / actual_quantity
+
+  -- 计算指标
+  yield_rate DECIMAL(5,2),     -- (good_quantity / actual_quantity) × 100
+  efficiency DECIMAL(5,2),     -- (actual_quantity / planned_quantity) × 100
+
+  -- 其他信息
+  notes TEXT,
+  created_by INT,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 索引优化
+  INDEX idx_batch_factory (factory_id),
+  INDEX idx_batch_number (batch_number),
+  INDEX idx_batch_status (status),
+  INDEX idx_batch_plan (production_plan_id),
+  FOREIGN KEY (production_plan_id) REFERENCES production_plans(id)
+);</code></pre>
+                </div>
+
+                <h3>3.1.3 创建批次请求/响应示例</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/processing/batches
+// 请求体
+{
+  "batchNumber": "BATCH-20251121-001",
+  "productTypeId": 1,
+  "productName": "番茄酱",
+  "plannedQuantity": 1000.00,
+  "unit": "kg",
+  "supervisorId": 2,
+  "equipmentId": 5,
+  "notes": "使用新供应商番茄"
+}
+
+// 成功响应 (200)
+{
+  "code": 200,
+  "message": "批次创建成功",
+  "data": {
+    "id": 101,
+    "factoryId": "CRETAS_2024_001",
+    "batchNumber": "BATCH-20251121-001",
+    "productTypeId": 1,
+    "productName": "番茄酱",
+    "plannedQuantity": 1000.00,
+    "actual_quantity": null,
+    "good_quantity": null,
+    "defect_quantity": null,
+    "unit": "kg",
+    "status": "PLANNED",
+    "qualityStatus": null,
+    "startTime": null,
+    "endTime": null,
+    "equipmentId": 5,
+    "equipmentName": "搅拌机 A",
+    "supervisorId": 2,
+    "supervisorName": "张三",
+    "workerCount": 0,
+    "workDurationMinutes": 0,
+    "materialCost": 0.00,
+    "laborCost": 0.00,
+    "equipmentCost": 0.00,
+    "otherCost": 0.00,
+    "totalCost": 0.00,
+    "unitCost": 0.0000,
+    "yieldRate": 0.00,
+    "efficiency": 0.00,
+    "createdAt": "2025-11-21T10:30:00",
+    "updatedAt": "2025-11-21T10:30:00"
+  }
+}</code></pre>
+                </div>
+
+                <h3>3.1.4 开始生产 - 成本初始化</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/processing/batches/{batchId}/start
+// 请求参数
+{
+  "supervisorId": 2
+}
+
+// 成功响应 (200)
+{
+  "code": 200,
+  "message": "生产已开始",
+  "data": {
+    "id": 101,
+    "batchNumber": "BATCH-20251121-001",
+    "status": "IN_PROGRESS",
+    "startTime": "2025-11-21T10:35:00",
+    "supervisorId": 2,
+    "supervisorName": "张三"
+  }
+}
+
+// 后端处理流程:
+// 1. 更新 status = IN_PROGRESS, start_time = 当前时间
+// 2. 初始化成本 = 0.00
+// 3. 查询关联的材料批次 (FIFO推荐)
+// 4. 返回成功响应
+// 5. 后台启动成本追踪任务</code></pre>
+                </div>
+
+                <h2>3.2 物料管理与消耗追踪</h2>
+
+                <h3>3.2.1 物料接收和消耗</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>API端点</th>
+                            <th>功能</th>
+                            <th>参数</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST /material-receipt</td>
+                            <td>记录物料入库</td>
+                            <td>MaterialBatch object</td>
+                        </tr>
+                        <tr>
+                            <td>GET /materials</td>
+                            <td>查询物料库存 (分页)</td>
+                            <td>page, size</td>
+                        </tr>
+                        <tr>
+                            <td>POST /batches/{batchId}/material-consumption</td>
+                            <td>记录物料消耗</td>
+                            <td>List&lt;ConsumptionRecord&gt;</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>3.2.2 物料消耗记录示例</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/processing/batches/{batchId}/material-consumption
+// 请求体 (一个批次可能消耗多种物料)
+{
+  "consumptions": [
+    {
+      "materialBatchId": "MAT-20251015-001",  // 番茄
+      "quantity": 950.00,
+      "unit": "kg"
+    },
+    {
+      "materialBatchId": "MAT-20251010-005",  // 盐
+      "quantity": 10.00,
+      "unit": "kg"
+    }
+  ]
+}
+
+// 成功响应 (200)
+{
+  "code": 200,
+  "message": "物料消耗记录成功",
+  "data": {
+    "batchId": "BATCH-20251121-001",
+    "totalMaterialCost": 475.00,  // 950*0.5 + 10*0 (假设番茄0.5元/kg)
+    "consumedMaterials": [
+      {
+        "materialBatchId": "MAT-20251015-001",
+        "quantity": 950.00,
+        "unitPrice": 0.50,
+        "totalCost": 475.00
+      },
+      {
+        "materialBatchId": "MAT-20251010-005",
+        "quantity": 10.00,
+        "unitPrice": 0.00,
+        "totalCost": 0.00
+      }
+    ]
+  }
+}</code></pre>
+                </div>
+
+                <h2>3.3 质量检验集成</h2>
+
+                <h3>3.3.1 质检API端点</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>功能说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/processing/quality/inspections</td>
+                            <td>提交质检记录</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/processing/quality/inspections</td>
+                            <td>查询质检记录 (分页)</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/processing/quality/statistics</td>
+                            <td>质检统计报表</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/processing/quality/trends</td>
+                            <td>质检趋势分析</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>3.3.2 质检记录数据库</h3>
+                <div class="sql-block">
+<pre><code>-- quality_inspections 表 (质量检验记录)
+CREATE TABLE quality_inspections (
+  id VARCHAR(191) PRIMARY KEY,
+  factory_id VARCHAR(50) NOT NULL,
+  production_batch_id VARCHAR(191) NOT NULL,
+  inspector_id INT NOT NULL,
+  inspection_date DATE NOT NULL,
+
+  -- 检验结果
+  sample_size DECIMAL(10,2) NOT NULL,      -- 抽样数量
+  pass_count DECIMAL(10,2) NOT NULL,       -- 合格数量
+  fail_count DECIMAL(10,2) NOT NULL,       -- 不合格数量
+  pass_rate DECIMAL(5,2),                  -- 合格率 (%)
+
+  -- 检验结论
+  result VARCHAR(20),                      -- PASS, FAIL, NEED_RETEST
+  notes TEXT,
+
+  -- 系统字段
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_inspection_factory (factory_id),
+  INDEX idx_inspection_batch (production_batch_id),
+  INDEX idx_inspection_date (inspection_date),
+  FOREIGN KEY (production_batch_id) REFERENCES production_batches(id)
+);
+
+-- 自动计算: pass_rate = (pass_count / sample_size) × 100
+-- 判定规则: pass_rate >= 95% → PASS, else → FAIL</code></pre>
+                </div>
+
+                <h3>3.3.3 质检提交示例</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/processing/quality/inspections
+{
+  "batchId": "BATCH-20251121-001",
+  "inspectorId": 6,
+  "inspectionDate": "2025-11-21",
+  "sampleSize": 100,
+  "passCount": 98,
+  "failCount": 2,
+  "notes": "色泽略浅,但在允许范围内"
+}
+
+// 成功响应
+{
+  "code": 200,
+  "message": "质检记录已提交",
+  "data": {
+    "id": "QI-20251121-001",
+    "batchId": "BATCH-20251121-001",
+    "inspectionDate": "2025-11-21",
+    "sampleSize": 100,
+    "passCount": 98,
+    "failCount": 2,
+    "passRate": 98.00,
+    "result": "PASS",
+    "inspectorId": 6,
+    "inspectorName": "李四",
+    "notes": "色泽略浅,但在允许范围内"
+  }
+}
+
+// 后端处理:
+// 1. 计算 pass_rate = (98 / 100) × 100 = 98.00
+// 2. 判定 result: 98.00 >= 95% → PASS
+// 3. 更新批次 quality_status = result
+// 4. 若 result = PASS, 则批次可以完成生产</code></pre>
+                </div>
+
+                <h2>3.4 成本自动计算</h2>
+
+                <h3>3.4.1 成本计算公式</h3>
+                <pre><code>成本构成:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. 原料成本 (Material Cost)
+   formula: 消耗物料的单价 × 消耗数量
+   example: 番茄0.5元/kg × 950kg = 475元
+
+2. 人工成本 (Labor Cost)
+   formula: Σ(员工日薪 / 24 × 工作时长(小时))
+   example: 5个工人, 日薪300元, 工作8小时
+            = 5 × (300/24) × 8 = 5000元
+
+3. 设备成本 (Equipment Cost)
+   formula: Σ(设备年折旧 / 365 × 运行天数)
+   example: 搅拌机年折旧2000元, 运行0.5天
+            = 2000/365 × 0.5 = 2.74元
+
+4. 其他成本 (Other Cost)
+   formula: 人工配置的杂费
+   example: 水电费、包装费等
+
+总成本 = Material + Labor + Equipment + Other
+单位成本 = 总成本 / 实际产量
+
+示例计算:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+生产批次: BATCH-20251121-001
+计划产量: 1000kg
+实际产量: 990kg (丢失10kg)
+良品数: 975kg
+不合格: 15kg
+
+原料成本:    475.00元 (番茄950kg × 0.5元/kg)
+人工成本:  5000.00元
+设备成本:     2.74元
+其他成本:   100.00元
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+总成本:    5577.74元
+单位成本:     5.64元/kg (5577.74 / 990)</code></pre>
+
+                <h3>3.4.2 成本计算API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/processing/batches/{batchId}/cost-analysis
+// 无需请求参数
+
+{
+  "code": 200,
+  "message": "成本分析获取成功",
+  "data": {
+    "batchNumber": "BATCH-20251121-001",
+    "plannedQuantity": 1000.00,
+    "actualQuantity": 990.00,
+    "goodQuantity": 975.00,
+    "defectQuantity": 15.00,
+
+    "costBreakdown": {
+      "materialCost": 475.00,
+      "laborCost": 5000.00,
+      "equipmentCost": 2.74,
+      "otherCost": 100.00,
+      "totalCost": 5577.74
+    },
+
+    "unitCost": 5.64,
+    "yieldRate": 98.48,        // (975 / 990) × 100
+    "efficiency": 99.00,        // (990 / 1000) × 100
+
+    "costDetails": {
+      "materials": [
+        {
+          "materialName": "番茄",
+          "quantity": 950.00,
+          "unitPrice": 0.50,
+          "cost": 475.00
+        }
+      ],
+      "labor": {
+        "workers": 5,
+        "totalHours": 40.0,
+        "dailySalary": 300.00,
+        "cost": 5000.00
+      },
+      "equipment": {
+        "equipmentId": 5,
+        "equipmentName": "搅拌机 A",
+        "annualDepreciation": 2000.00,
+        "daysUsed": 0.5,
+        "cost": 2.74
+      }
+    }
+  }
+}</code></pre>
+                </div>
+
+                <h2>3.5 生产仪表板</h2>
+
+                <h3>3.5.1 仪表板API</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>端点</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>GET /dashboard/overview</td>
+                            <td>生产概览 (KPI汇总)</td>
+                        </tr>
+                        <tr>
+                            <td>GET /dashboard/production</td>
+                            <td>生产统计 (按时间聚合)</td>
+                        </tr>
+                        <tr>
+                            <td>GET /dashboard/quality</td>
+                            <td>质量仪表板 (检测通过率)</td>
+                        </tr>
+                        <tr>
+                            <td>GET /dashboard/equipment</td>
+                            <td>设备仪表板 (运行状态)</td>
+                        </tr>
+                        <tr>
+                            <td>GET /dashboard/alerts</td>
+                            <td>告警仪表板 (异常提示)</td>
+                        </tr>
+                        <tr>
+                            <td>GET /dashboard/trends</td>
+                            <td>趋势分析 (历史对比)</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>3.5.2 仪表板数据示例</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/processing/dashboard/overview
+
+{
+  "code": 200,
+  "data": {
+    "summary": {
+      "completedBatchesToday": 3,
+      "inProgressBatches": 2,
+      "plannedBatches": 5,
+      "totalProductionToday": 2500.00,
+      "defectRateToday": 1.50,
+      "averageUnitCost": 5.42
+    },
+
+    "qualityMetrics": {
+      "passRate": 98.50,
+      "inspectionsDoneToday": 5,
+      "defectiveBatches": 0,
+      "criticalIssues": 0
+    },
+
+    "equipmentStatus": {
+      "totalEquipment": 8,
+      "running": 4,
+      "idle": 3,
+      "maintenance": 1,
+      "alerts": 2
+    },
+
+    "costMetrics": {
+      "totalCostToday": 13710.00,
+      "averageCostPerBatch": 4570.00,
+      "laborCostPercentage": 73.0,
+      "materialCostPercentage": 18.0,
+      "equipmentCostPercentage": 8.0,
+      "otherCostPercentage": 1.0
+    }
+  }
+}</code></pre>
+                </div>
+
+                <h2>3.6 生产计划管理</h2>
+
+                <h3>3.6.1 生产计划API</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/production-plans</td>
+                            <td>创建生产计划</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/production-plans</td>
+                            <td>查询计划列表</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/production-plans/{planId}</td>
+                            <td>获取计划详情</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/production-plans/{planId}</td>
+                            <td>更新生产计划</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/production-plans/{planId}/start</td>
+                            <td>开始执行计划</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/production-plans/{planId}/complete</td>
+                            <td>完成计划</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/production-plans/{planId}/cancel</td>
+                            <td>取消计划</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/production-plans/pending-execution</td>
+                            <td>获取待执行计划</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/production-plans/today</td>
+                            <td>获取今日计划</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/production-plans/statistics</td>
+                            <td>生产统计 (按日期范围)</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h2>3.7 后端Service方法</h2>
+
+                <h3>3.7.1 ProcessingService 接口</h3>
+                <div class="java-block">
+<pre><code>public interface ProcessingService {
+
+    // ===== 批次管理 =====
+    ProductionBatch createBatch(String factoryId, ProductionBatch batch);
+    ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId);
+    ProductionBatch pauseProduction(String factoryId, String batchId, String reason);
+    ProductionBatch completeProduction(String factoryId, String batchId,
+                                      BigDecimal actualQty, BigDecimal goodQty, BigDecimal defectQty);
+    ProductionBatch cancelProduction(String factoryId, String batchId, String reason);
+    ProductionBatch getBatchById(String factoryId, String batchId);
+    PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest);
+    List<Map<String, Object>> getBatchTimeline(String factoryId, String batchId);
+
+    // ===== 物料管理 =====
+    MaterialBatch createMaterialReceipt(String factoryId, MaterialBatch materialBatch);
+    PageResponse<MaterialBatch> getMaterialReceipts(String factoryId, PageRequest pageRequest);
+    MaterialBatch updateMaterialReceipt(String factoryId, String batchId, MaterialBatch updates);
+    void recordMaterialConsumption(String factoryId, String productionBatchId,
+                                  List<Map<String, Object>> consumptions);
+
+    // ===== 质检管理 =====
+    Map<String, Object> submitInspection(String factoryId, String batchId, Map<String, Object> inspection);
+    PageResponse<Map<String, Object>> getInspections(String factoryId, String batchId, PageRequest pageRequest);
+    Map<String, Object> getQualityStatistics(String factoryId, LocalDate startDate, LocalDate endDate);
+    List<Map<String, Object>> getQualityTrends(String factoryId, Integer days);
+
+    // ===== 成本分析 =====
+    Map<String, Object> getBatchCostAnalysis(String factoryId, String batchId);
+    ProductionBatch recalculateBatchCost(String factoryId, String batchId);
+
+    // ===== 仪表板 =====
+    Map<String, Object> getDashboardOverview(String factoryId);
+    Map<String, Object> getProductionStatistics(String factoryId, String period);
+    Map<String, Object> getQualityDashboard(String factoryId);
+    Map<String, Object> getEquipmentDashboard(String factoryId);
+    Map<String, Object> getTrendAnalysis(String factoryId, String metric, Integer days);
+}</code></pre>
+                </div>
+
+                <h2>3.8 前端Screen映射</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>功能说明</th>
+                            <th>关键特性</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>ProcessingDashboard.tsx</code></td>
+                            <td>生产模块主界面</td>
+                            <td>总览卡片、统计数据、快速操作</td>
+                        </tr>
+                        <tr>
+                            <td><code>CreateBatchScreen.tsx</code></td>
+                            <td>创建生产批次</td>
+                            <td>表单输入、物料选择、验证</td>
+                        </tr>
+                        <tr>
+                            <td><code>BatchListScreen.tsx</code></td>
+                            <td>批次列表</td>
+                            <td>分页、状态筛选、搜索</td>
+                        </tr>
+                        <tr>
+                            <td><code>BatchDetailScreen.tsx</code></td>
+                            <td>批次详情</td>
+                            <td>完整信息、时间线、成本分解</td>
+                        </tr>
+                        <tr>
+                            <td><code>CreateQualityRecordScreen.tsx</code></td>
+                            <td>质检记录输入</td>
+                            <td>样本量、合格数、备注</td>
+                        </tr>
+                        <tr>
+                            <td><code>QualityInspectionListScreen.tsx</code></td>
+                            <td>质检记录列表</td>
+                            <td>日期范围、合格率显示</td>
+                        </tr>
+                        <tr>
+                            <td><code>QualityAnalyticsScreen.tsx</code></td>
+                            <td>质量分析</td>
+                            <td>趋势图表、KPI、缺陷分布</td>
+                        </tr>
+                        <tr>
+                            <td><code>MaterialReceiptScreen.tsx</code></td>
+                            <td>物料入库</td>
+                            <td>批号录入、数量验证、供应商</td>
+                        </tr>
+                        <tr>
+                            <td><code>CostAnalysisDashboard.tsx</code></td>
+                            <td>成本分析</td>
+                            <td>成本拆分图表、单位成本、对比</td>
+                        </tr>
+                        <tr>
+                            <td><code>ProductionPlanManagementScreen.tsx</code></td>
+                            <td>生产计划</td>
+                            <td>计划创建、执行、统计</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            
+            <section id="ch4">
+                <h1>4. AI智能分析模块</h1>
+
+                <h2>模块描述</h2>
+                <p>AI智能分析模块集成大语言模型,为生产管理提供智能决策支持。通过分析历史生产数据、成本构成、质量指标等,为管理者提供可操作的优化建议和成本控制方案。该模块采用配额管理制度、多层缓存机制和详细的审计日志。</p>
+
+                <div class="info-box">
+                    <h3>核心特性</h3>
+                    <p><strong>智能分析 | 配额管理 | 7天缓存 | AI分析追问 | 周/月报告 | 历史综合分析</strong></p>
+                </div>
+
+                <h2>4.1 AI分析功能</h2>
+
+                <h3>4.1.1 三层分析模式</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>分析模式</th>
+                            <th>说明</th>
+                            <th>配额消耗</th>
+                            <th>缓存时间</th>
+                            <th>用途</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>默认分析</strong></td>
+                            <td>首次分析单个批次或时间段</td>
+                            <td>1单位</td>
+                            <td>7天</td>
+                            <td>快速获取单批成本分析</td>
+                        </tr>
+                        <tr>
+                            <td><strong>追问(对话)</strong></td>
+                            <td>在分析结果基础上继续提问</td>
+                            <td>1单位</td>
+                            <td>7天</td>
+                            <td>深入探讨优化方案</td>
+                        </tr>
+                        <tr>
+                            <td><strong>历史综合</strong></td>
+                            <td>跨多批次、多周期深度分析</td>
+                            <td>5单位</td>
+                            <td>90天</td>
+                            <td>长期趋势、根本原因分析</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>4.1.2 AI分析API端点</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>说明</th>
+                            <th>配额消耗</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/ai/analysis/cost/batch</td>
+                            <td>分析单个批次成本</td>
+                            <td>1单位</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/ai/analysis/cost/time-range</td>
+                            <td>分析时间段内成本</td>
+                            <td>1单位</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/ai/analysis/cost/compare</td>
+                            <td>对比分析多批次</td>
+                            <td>1单位</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/ai/quota</td>
+                            <td>查看配额剩余</td>
+                            <td>0单位</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/ai/quota</td>
+                            <td>更新配额限制 (仅管理员)</td>
+                            <td>0单位</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/ai/conversations/{sessionId}</td>
+                            <td>获取对话历史</td>
+                            <td>0单位</td>
+                        </tr>
+                        <tr>
+                            <td>DELETE</td>
+                            <td>/api/mobile/{factoryId}/ai/conversations/{sessionId}</td>
+                            <td>关闭对话会话</td>
+                            <td>0单位</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/ai/reports</td>
+                            <td>列表查询AI报告</td>
+                            <td>0单位</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/ai/reports/{reportId}</td>
+                            <td>获取报告详情</td>
+                            <td>0单位</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/ai/reports/generate</td>
+                            <td>生成新报告</td>
+                            <td>5单位</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>4.1.3 批次分析请求/响应示例</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/ai/analysis/cost/batch
+{
+  "batchId": "BATCH-20251121-001",
+  "dimension": "cost_breakdown"  // 分析维度
+}
+
+// 成功响应 (200) - 使用AI生成的分析
+{
+  "code": 200,
+  "message": "分析成功",
+  "data": {
+    "batchId": "BATCH-20251121-001",
+    "batchNumber": "BATCH-20251121-001",
+    "analysisType": "cost_breakdown",
+    "sessionId": "SESSION-20251121-001",
+    "cachedResult": false,           // 首次分析,未使用缓存
+    "analysisText": "# 批次 BATCH-20251121-001 成本分析\n\n## 概述\n该批次生产1000kg番茄酱,实际产量990kg,良品率98.48%。总成本5577.74元,单位成本5.64元/kg。\n\n## 成本构成分析\n\n### 原料成本: 475.00元 (8.5%)\n- 番茄950kg × 0.5元/kg = 475元\n- 占比最低,原料成本较为经济\n\n### 人工成本: 5000.00元 (89.6%)\n- 5个工人 × 300元/天 = 1500元\n- 实际工时:40小时 = 5000元\n- 占比最高,是主要成本项\n\n## 优化建议\n\n1. **人工成本优化** (可减少20%)\n   - 考虑自动化设备投入\n   - 优化工作流程,提高效率\n   - 预计可每批节省1000元\n\n2. **设备费用** (目前仅2.74元)\n   - 设备利用率较高\n   - 维护成本在合理范围内\n\n3. **良品率提升** (98.48%)\n   - 已接近目标值(98%)\n   - 建议维持当前质检标准\n\n## 成本对标\n\n与近期批次平均值对比:\n- 单位成本: 5.64元/kg (平均5.42元/kg)\n- 差异: +0.22元/kg (+4.1%)\n- 主要原因: 本批次工作用时略长(40小时 vs 平均38小时)\n\n## 历史趋势\n\n过去7天单位成本变化:\n- 11月14日: 5.50元/kg\n- 11月15日: 5.48元/kg\n- 11月16日: 5.40元/kg\n- 11月17日: 5.42元/kg\n- 11月18日: 5.45元/kg\n- 11月19日: 5.43元/kg\n- 11月21日: 5.64元/kg (今日)\n\n**结论**: 整体成本保持稳定,小幅上升可能与季节性因素相关。",
+    "quotaUsed": 1,
+    "remainingQuota": 99,
+    "analysisTime": "2025-11-21T14:30:00"
+  }
+}</code></pre>
+                </div>
+
+                <h2>4.2 配额管理系统</h2>
+
+                <h3>4.2.1 配额模型</h3>
+                <div class="info-box">
+                    <h3>配额规则</h3>
+                    <ul>
+                        <li><strong>周配额</strong>: 100分析单位</li>
+                        <li><strong>重置时间</strong>: 每周一 00:00 (UTC)</li>
+                        <li><strong>消耗规则</strong>:
+                            <ul>
+                                <li>默认分析: 1单位/次</li>
+                                <li>追问: 1单位/次</li>
+                                <li>历史综合: 5单位/次</li>
+                            </ul>
+                        </li>
+                        <li><strong>超额处理</strong>: 当配额用尽,无法进行新的AI分析,但可访问缓存结果</li>
+                    </ul>
+                </div>
+
+                <h3>4.2.2 配额查询API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/ai/quota
+
+{
+  "code": 200,
+  "data": {
+    "factoryId": "CRETAS_2024_001",
+    "weekOf": "2025-11-17",              // 本周起始日期
+    "totalAllowance": 100,
+    "used": 15,
+    "remaining": 85,
+    "lastResetTime": "2025-11-17T00:00:00",
+    "nextResetTime": "2025-11-24T00:00:00",
+    "daysUntilReset": 3,
+    "usageHistory": [
+      {
+        "date": "2025-11-21",
+        "used": 5,
+        "details": [
+          { "type": "batch_analysis", "count": 3, "quota": 3 },
+          { "type": "follow_up_questions", "count": 2, "quota": 2 }
+        ]
+      },
+      {
+        "date": "2025-11-20",
+        "used": 10,
+        "details": [
+          { "type": "batch_analysis", "count": 8, "quota": 8 },
+          { "type": "historical_report", "count": 1, "quota": 5 }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+                </div>
+
+                <h2>4.3 缓存机制与存储</h2>
+
+                <h3>4.3.1 缓存策略</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>报告类型</th>
+                            <th>TTL</th>
+                            <th>缓存键组合</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>batch (单批)</td>
+                            <td>7天</td>
+                            <td>factoryId + batchId + questionType</td>
+                            <td>同问题重复查询返回缓存</td>
+                        </tr>
+                        <tr>
+                            <td>weekly (周报)</td>
+                            <td>30天</td>
+                            <td>factoryId + weekStartDate</td>
+                            <td>每周一自动生成,周内复用</td>
+                        </tr>
+                        <tr>
+                            <td>monthly (月报)</td>
+                            <td>90天</td>
+                            <td>factoryId + monthStartDate</td>
+                            <td>每月1日自动生成</td>
+                        </tr>
+                        <tr>
+                            <td>historical (历史)</td>
+                            <td>90天</td>
+                            <td>factoryId + periodStart + periodEnd</td>
+                            <td>跨度>30天的分析</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>4.3.2 缓存数据表</h3>
+                <div class="sql-block">
+<pre><code>-- ai_analysis_results 表 (AI分析结果缓存)
+CREATE TABLE ai_analysis_results (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  batch_id VARCHAR(50),
+  report_type VARCHAR(20) NOT NULL,
+  -- 报告类型: batch, weekly, monthly, historical
+
+  analysis_text LONGTEXT,               -- Markdown格式的分析结果
+  session_id VARCHAR(100),
+  period_start TIMESTAMP,
+  period_end TIMESTAMP,
+
+  expires_at TIMESTAMP NOT NULL,        -- 缓存过期时间
+  is_auto_generated BOOLEAN DEFAULT FALSE,
+
+  -- 使用统计
+  view_count INT DEFAULT 0,             -- 被查看的次数
+  last_viewed_at TIMESTAMP,
+
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_factory_type_expires (factory_id, report_type, expires_at),
+  INDEX idx_batch_id (batch_id),
+  INDEX idx_factory_batch (factory_id, batch_id),
+  INDEX idx_session_id (session_id)
+);
+
+-- ai_quota_usage 表 (配额使用追踪)
+CREATE TABLE ai_quota_usage (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  week_of DATE NOT NULL,
+
+  total_allowance INT DEFAULT 100,      -- 本周配额总额
+  used INT DEFAULT 0,                   -- 已使用量
+  remaining INT DEFAULT 100,            -- 剩余量
+
+  last_reset TIMESTAMP,                 -- 上次重置时间
+  last_request_time TIMESTAMP,          -- 上次请求时间
+
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uk_factory_week (factory_id, week_of)
+);
+
+-- ai_audit_logs 表 (审计日志)
+CREATE TABLE ai_audit_logs (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  user_id BIGINT,
+
+  request_type VARCHAR(50),             -- batch_analysis, follow_up, historical_report
+  question TEXT,
+  dimension VARCHAR(100),
+
+  cache_hit BOOLEAN,                    -- 是否使用缓存
+  response_time_ms LONG,                -- 响应时间(毫秒)
+  quota_consumed INT,
+
+  success BOOLEAN,
+  error_message VARCHAR(500),
+
+  request_timestamp TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+  INDEX idx_factory_user_time (factory_id, user_id, request_timestamp),
+  INDEX idx_factory_type (factory_id, request_type)
+);</code></pre>
+                </div>
+
+                <h2>4.4 前端集成</h2>
+
+                <h3>4.4.1 AI分析相关Screen</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Screen文件</th>
+                            <th>功能</th>
+                            <th>关键组件</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>AIAnalysisScreen.tsx</code></td>
+                            <td>主分析界面</td>
+                            <td>分析选择器、结果展示、追问输入</td>
+                        </tr>
+                        <tr>
+                            <td><code>CostAnalysisDashboard.tsx</code></td>
+                            <td>成本分析概览</td>
+                            <td>成本拆分、趋势图、AI建议卡片</td>
+                        </tr>
+                        <tr>
+                            <td><code>AIAnalysisDetailScreen.tsx</code></td>
+                            <td>详细分析报告</td>
+                            <td>完整Markdown渲染、导出功能</td>
+                        </tr>
+                        <tr>
+                            <td><code>AIReportListScreen.tsx</code></td>
+                            <td>报告列表</td>
+                            <td>按类型分类、日期筛选、缓存标记</td>
+                        </tr>
+                        <tr>
+                            <td><code>AIConversationHistoryScreen.tsx</code></td>
+                            <td>对话历史</td>
+                            <td>会话列表、消息回放、导出</td>
+                        </tr>
+                        <tr>
+                            <td><code>TimeRangeCostAnalysisScreen.tsx</code></td>
+                            <td>时间段分析</td>
+                            <td>日期范围选择、维度对比</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>4.4.2 配额提示UI</h3>
+                <pre><code>前端配额状态提示规则:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+剩余配额 | 提示颜色 | 提示文案
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+> 50   | 绿色    | ✓ 配额充足 (XX单位)
+20-50  | 黄色    | ⚠ 配额紧张 (XX单位)
+< 20   | 红色    | ⚠ 配额即将用尽 (XX单位)
+0      | 灰色    | ✗ 本周配额已用尽
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+配额超限处理:
+1. 禁用新分析按钮,但可查看历史缓存
+2. 显示"配额用尽,下周一自动恢复"提示
+3. 提供"升级配额"按钮(仅管理员可操作)</code></pre>
+
+                <h2>4.5 报告自动生成</h2>
+
+                <h3>4.5.1 自动生成规则</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>报告类型</th>
+                            <th>生成触发</th>
+                            <th>执行时间</th>
+                            <th>配额消耗</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>周报告</td>
+                            <td>每周一自动</td>
+                            <td>00:00 UTC</td>
+                            <td>1单位</td>
+                        </tr>
+                        <tr>
+                            <td>月报告</td>
+                            <td>每月1日自动</td>
+                            <td>00:00 UTC</td>
+                            <td>5单位</td>
+                        </tr>
+                        <tr>
+                            <td>批次分析</td>
+                            <td>用户按需请求</td>
+                            <td>实时</td>
+                            <td>1单位</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h2>4.6 错误处理</h2>
+
+                <h3>4.6.1 异常场景</h3>
+                <div class="java-block">
+<pre><code>// 场景1: 配额用尽
+{
+  "code": 429,
+  "message": "本周AI分析配额已用尽,请等待下周一恢复",
+  "data": {
+    "remainingQuota": 0,
+    "nextResetTime": "2025-11-24T00:00:00",
+    "retryAfter": 259200,  // 3天(秒数)
+    "suggestion": "您可以查看历史分析结果或联系管理员申请配额提升"
+  }
+}
+
+// 场景2: AI服务超时
+{
+  "code": 504,
+  "message": "AI分析服务超时,返回缓存结果",
+  "data": {
+    "batchId": "BATCH-20251121-001",
+    "cachedResult": true,
+    "cacheAge": "2 hours ago",
+    "note": "返回的是2小时前的缓存分析,最新数据可能有变化"
+  }
+}
+
+// 场景3: AI API失败
+{
+  "code": 502,
+  "message": "暂时无法进行AI分析,建议稍后重试",
+  "data": {
+    "retryAfter": 300,    // 5分钟后重试
+    "suggestion": "可查看该批次的历史分析缓存"
+  }
+}</code></pre>
+                </div>
+
+                <h2>4.7 数据流与集成</h2>
+
+                <h3>4.7.1 AI分析触发链</h3>
+                <pre><code>生产流程 → AI分析触发
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. 批次完成 (status = COMPLETED)
+   ↓
+2. 成本计算完成 (total_cost ≠ null)
+   ↓
+3. 质检通过 (quality_status = PASS)
+   ↓
+4. 后台自动触发 AI 分析
+   (请求队列,异步处理,不阻塞前端)
+   ↓
+5. AI 结果保存到 ai_analysis_results (缓存7天)
+   ↓
+6. 前端自动刷新,用户看到分析结果</code></pre>
+
+                <h3>4.7.2 缓存命中判定逻辑</h3>
+                <pre><code>检查顺序:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+输入: batchId, dimension, sessionId
+
+1. 检查会话缓存 (SESSION级别)
+   如果 sessionId 存在且记录在缓存中 → 返回缓存结果
+
+2. 检查批次缓存 (BATCH级别)
+   如果 [factoryId + batchId + dimension] 存在且未过期 → 返回缓存结果
+
+3. 检查周报缓存 (WEEKLY级别)
+   如果请求是"本周数据分析" → 查找周报缓存
+
+4. 都未命中
+   调用 AI 服务生成新分析 → 消耗配额 → 保存缓存</code></pre>
+            </section>
+
+            
+            <section id="ch5">
+                <h1>5. 设备管理模块</h1>
+
+                <h2>模块描述</h2>
+                <p>设备管理模块负责跟踪工厂所有生产设备的生命周期,包括设备信息维护、运行监控、维护计划管理、折旧计算和告警。该模块与生产模块紧密协作,自动记录设备使用时间并计算折旧成本。</p>
+
+                <div class="info-box">
+                    <h3>核心功能</h3>
+                    <p><strong>设备台账 | 运行监控 | 维护管理 | 折旧计算 | 告警系统 | 导入导出</strong></p>
+                </div>
+
+                <h2>5.1 设备管理API</h2>
+
+                <h3>5.1.1 完整API端点列表</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>说明</th>
+                            <th>权限</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/equipment</td>
+                            <td>创建新设备</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}</td>
+                            <td>更新设备信息</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>DELETE</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}</td>
+                            <td>删除设备</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment</td>
+                            <td>查询设备列表 (分页)</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}</td>
+                            <td>获取设备详情</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/status/{status}</td>
+                            <td>按状态筛选设备</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/type/{type}</td>
+                            <td>按类型筛选设备</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/search</td>
+                            <td>搜索设备</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/status</td>
+                            <td>更新设备状态</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/start</td>
+                            <td>设备启动</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/stop</td>
+                            <td>设备停止</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/maintenance</td>
+                            <td>记录维护</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/needing-maintenance</td>
+                            <td>需要维护的设备</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/expiring-warranty</td>
+                            <td>保修期将过期的设备</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/depreciated-value</td>
+                            <td>获取折旧后价值</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/statistics</td>
+                            <td>设备统计信息</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/usage-history</td>
+                            <td>使用历史记录</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/maintenance-history</td>
+                            <td>维护历史记录</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/overall-statistics</td>
+                            <td>全厂设备统计</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/efficiency-report</td>
+                            <td>效率报告</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/oee</td>
+                            <td>OEE计算</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/equipment/import</td>
+                            <td>导入Excel</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/equipment/export</td>
+                            <td>导出设备列表</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/equipment/{equipmentId}/scrap</td>
+                            <td>报废设备</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>5.1.2 设备数据库表</h3>
+                <div class="sql-block">
+<pre><code>-- equipment 表 (设备主表)
+CREATE TABLE equipment (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  code VARCHAR(50) NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  category VARCHAR(50),                 -- 设备类别(搅拌机、烘干机等)
+  model VARCHAR(100),
+  manufacturer VARCHAR(100),
+  purchase_date DATE,
+  purchase_price DECIMAL(10,2),
+
+  -- 设备状态
+  status VARCHAR(20) NOT NULL DEFAULT 'idle',
+  -- 可选值: idle(闲置), running(运行中), maintenance(维护中), scrapped(报废)
+
+  location VARCHAR(100),
+  total_operating_hours INT DEFAULT 0,  -- 累计运行时间(小时)
+
+  -- 维护相关
+  last_maintenance_date DATE,
+  next_maintenance_date DATE,
+  maintenance_interval_days INT,        -- 维护间隔(天数)
+  maintenance_notes TEXT,
+
+  -- 状态
+  is_active BOOLEAN DEFAULT TRUE,
+  notes TEXT,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uk_factory_code (factory_id, code),
+  INDEX idx_equipment_factory (factory_id),
+  INDEX idx_equipment_status (status),
+  INDEX idx_equipment_maintenance (next_maintenance_date)
+);
+
+-- equipment_maintenance 表 (维护记录)
+CREATE TABLE equipment_maintenance (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  equipment_id INT NOT NULL,
+  maintenance_type VARCHAR(50) NOT NULL,
+  -- 可选值: routine(定期维护), repair(维修), overhaul(大修)
+
+  maintenance_date DATE NOT NULL,
+  start_time TIMESTAMP,
+  end_time TIMESTAMP,
+  description TEXT,
+  cost DECIMAL(10,2),
+  performed_by VARCHAR(100),
+  next_maintenance_date DATE,
+  notes TEXT,
+
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_maintenance_equipment (equipment_id),
+  INDEX idx_maintenance_date (maintenance_date),
+  FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE
+);
+
+-- equipment_usage 表 (使用记录)
+CREATE TABLE equipment_usage (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  equipment_id INT NOT NULL,
+  batch_id VARCHAR(191),
+  start_time TIMESTAMP NOT NULL,
+  end_time TIMESTAMP,
+  running_hours INT,
+  notes TEXT,
+
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_usage_equipment (equipment_id),
+  INDEX idx_usage_batch (batch_id),
+  FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE
+);
+
+-- equipment_alerts 表 (告警记录)
+CREATE TABLE equipment_alerts (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  equipment_id INT NOT NULL,
+  alert_type VARCHAR(50) NOT NULL,
+  -- 可选值: maintenance_due, warranty_expiring, high_hours, temperature, pressure等
+
+  level VARCHAR(20) NOT NULL,
+  -- 可选值: low, medium, high, critical
+
+  message VARCHAR(500),
+  triggered_at TIMESTAMP NOT NULL,
+  status VARCHAR(20) DEFAULT 'active',
+  -- 可选值: active(活跃), acknowledged(已确认), resolved(已解决), ignored(已忽略)
+
+  resolved_at TIMESTAMP,
+  notes TEXT,
+
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_factory_equipment_status (factory_id, equipment_id, status),
+  INDEX idx_triggered_at (triggered_at),
+  FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE
+);</code></pre>
+                </div>
+
+                <h2>5.2 设备创建与维护</h2>
+
+                <h3>5.2.1 创建设备请求示例</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/equipment
+{
+  "code": "EQP-001",
+  "name": "搅拌机 A",
+  "category": "搅拌机",
+  "model": "KMC-500",
+  "manufacturer": "某知名品牌",
+  "purchaseDate": "2023-05-15",
+  "purchasePrice": 50000.00,
+  "location": "1号生产车间",
+  "maintenanceIntervalDays": 30,
+  "notes": "用于番茄酱搅拌,效率高"
+}
+
+// 成功响应 (201)
+{
+  "code": 201,
+  "message": "设备创建成功",
+  "data": {
+    "id": 1,
+    "factoryId": "CRETAS_2024_001",
+    "code": "EQP-001",
+    "name": "搅拌机 A",
+    "category": "搅拌机",
+    "model": "KMC-500",
+    "manufacturer": "某知名品牌",
+    "purchaseDate": "2023-05-15",
+    "purchasePrice": 50000.00,
+    "status": "idle",
+    "location": "1号生产车间",
+    "totalOperatingHours": 0,
+    "lastMaintenanceDate": null,
+    "nextMaintenanceDate": "2025-12-21",
+    "maintenanceIntervalDays": 30,
+    "isActive": true,
+    "createdAt": "2025-11-21T11:00:00"
+  }
+}</code></pre>
+                </div>
+
+                <h3>5.2.2 设备启停与维护</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/equipment/{equipmentId}/start
+{
+  "batchId": "BATCH-20251121-001"
+}
+
+// 响应
+{
+  "code": 200,
+  "message": "设备已启动",
+  "data": {
+    "equipmentId": 1,
+    "status": "running",
+    "startTime": "2025-11-21T14:00:00",
+    "batchId": "BATCH-20251121-001"
+  }
+}
+
+// ==========================================
+
+// POST /api/mobile/{factoryId}/equipment/{equipmentId}/stop
+{
+  "runningHours": 2
+}
+
+// 响应: 设备停止,总运行时间更新
+{
+  "code": 200,
+  "message": "设备已停止",
+  "data": {
+    "equipmentId": 1,
+    "status": "idle",
+    "endTime": "2025-11-21T16:00:00",
+    "sessionRunningHours": 2,
+    "totalOperatingHours": 1245  // 累计时间
+  }
+}
+
+// ==========================================
+
+// POST /api/mobile/{factoryId}/equipment/{equipmentId}/maintenance
+{
+  "maintenanceType": "routine",
+  "maintenanceDate": "2025-11-21",
+  "description": "更换橡皮垫、清洗内部",
+  "cost": 500.00,
+  "performedBy": "张三"
+}
+
+// 响应: 维护记录创建,自动计算下次维护日期
+{
+  "code": 200,
+  "message": "维护记录已创建",
+  "data": {
+    "maintenanceId": 15,
+    "equipmentId": 1,
+    "maintenanceType": "routine",
+    "maintenanceDate": "2025-11-21",
+    "cost": 500.00,
+    "performedBy": "张三",
+    "nextMaintenanceDate": "2025-12-21",  // 自动计算
+    "createdAt": "2025-11-21T14:30:00"
+  }
+}</code></pre>
+                </div>
+
+                <h2>5.3 折旧计算</h2>
+
+                <h3>5.3.1 折旧公式</h3>
+                <pre><code>直线折旧法 (Linear Depreciation Method)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+基本公式:
+年折旧额 = (购置价格 - 残值) / 使用年限
+
+日折旧额 = 年折旧额 / 365
+
+运行折旧 = 日折旧额 × 运行天数
+
+示例:
+购置价格: 50,000元
+残值: 5,000元
+使用年限: 5年
+
+年折旧额 = (50,000 - 5,000) / 5 = 9,000元/年
+日折旧额 = 9,000 / 365 = 24.66元/天
+时折旧 = 24.66 / 24 = 1.03元/小时
+
+若该批次设备运行2小时:
+批次设备成本 = 1.03 × 2 = 2.06元</code></pre>
+
+                <h3>5.3.2 折旧查询API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/equipment/{equipmentId}/depreciated-value
+
+{
+  "code": 200,
+  "data": {
+    "equipmentId": 1,
+    "code": "EQP-001",
+    "name": "搅拌机 A",
+    "purchasePrice": 50000.00,
+    "purchaseDate": "2023-05-15",
+
+    "depreciationModel": "linear",
+    "usefulLifeYears": 5,
+    "estimatedScrapValue": 5000.00,
+
+    "annualDepreciation": 9000.00,
+    "totalDepreciationToDate": 18000.00,  // 2年已折旧
+    "netBookValue": 32000.00,             // 50000 - 18000
+    "depreciationRatePercentage": 36.0,   // 18000 / 50000
+
+    "monthlyDepreciation": 750.00,
+    "hourlyDepreciation": 1.03,
+
+    "totalOperatingHours": 1245,
+    "depreciationByUsage": 1282.35,       // 1.03 × 1245
+
+    "reportDate": "2025-11-21"
+  }
+}</code></pre>
+                </div>
+
+                <h2>5.4 设备告警系统</h2>
+
+                <h3>5.4.1 告警类型与规则</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>告警类型</th>
+                            <th>触发条件</th>
+                            <th>告警级别</th>
+                            <th>处理方式</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>维护超期</td>
+                            <td>当前日期 >= nextMaintenanceDate</td>
+                            <td>CRITICAL</td>
+                            <td>停止使用,进行维护</td>
+                        </tr>
+                        <tr>
+                            <td>维护即将到期</td>
+                            <td>nextMaintenanceDate - 现在 <= 7天</td>
+                            <td>HIGH</td>
+                            <td>提前计划维护</td>
+                        </tr>
+                        <tr>
+                            <td>保修期将过期</td>
+                            <td>warranty_end_date - 现在 <= 30天</td>
+                            <td>MEDIUM</td>
+                            <td>申请延保或续保</td>
+                        </tr>
+                        <tr>
+                            <td>运行时间超长</td>
+                            <td>totalOperatingHours > safeThreshold</td>
+                            <td>MEDIUM</td>
+                            <td>建议进行大修</td>
+                        </tr>
+                        <tr>
+                            <td>异常停止</td>
+                            <td>设备意外断电/停机</td>
+                            <td>HIGH</td>
+                            <td>检查原因并修复</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>5.4.2 告警查询API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/equipment/needing-maintenance
+
+{
+  "code": 200,
+  "data": [
+    {
+      "id": 1,
+      "code": "EQP-001",
+      "name": "搅拌机 A",
+      "nextMaintenanceDate": "2025-11-21",
+      "lastMaintenanceDate": "2025-10-22",
+      "daysOverdue": 0,
+      "alert": {
+        "type": "maintenance_due",
+        "level": "CRITICAL",
+        "message": "维护已超期,需立即进行"
+      }
+    }
+  ]
+}</code></pre>
+                </div>
+
+                <h2>5.5 OEE (Overall Equipment Effectiveness)</h2>
+
+                <h3>5.5.1 OEE计算公式</h3>
+                <pre><code>OEE = 可用率 × 效能 × 质量率
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. 可用率 (Availability)
+   = 实际运行时间 / 计划时间
+   示例: 设备计划8小时,实际运行7.5小时 → 93.75%
+
+2. 效能 (Performance)
+   = 实际产量 / 理论产量
+   示例: 理论每小时100件,实际95件 → 95%
+
+3. 质量率 (Quality)
+   = 合格产品数 / 总产品数
+   示例: 100件中99件合格 → 99%
+
+总OEE = 93.75% × 95% × 99% = 88.4%
+
+规则:
+- OEE >= 85%: 优秀(绿色)
+- 75% <= OEE < 85%: 良好(黄色)
+- OEE < 75%: 需改进(红色)</code></pre>
+
+                <h3>5.5.2 OEE查询API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/equipment/{equipmentId}/oee
+// Query: startDate=2025-11-01, endDate=2025-11-21
+
+{
+  "code": 200,
+  "data": {
+    "equipmentId": 1,
+    "name": "搅拌机 A",
+    "period": {
+      "startDate": "2025-11-01",
+      "endDate": "2025-11-21",
+      "days": 21
+    },
+
+    "availability": 0.9375,              // 93.75%
+    "performance": 0.95,                 // 95%
+    "quality": 0.99,                     // 99%
+
+    "oee": 0.884,                        // 88.4%
+    "oeeStatus": "excellent",            // 绿色
+    "targetOee": 0.85,
+    "gap": 0.034,                        // 超目标3.4个百分点
+
+    "details": {
+      "plannedOperatingHours": 168,
+      "actualOperatingHours": 157.5,
+      "downtime": 10.5,
+      "downtimeReason": "维护1次(4小时), 设备停机2次(2小时/次)",
+      "theoreticalProduction": 15800,
+      "actualProduction": 15010,
+      "totalProduced": 15010,
+      "defectiveUnits": 152,
+      "qualityRate": 0.99
+    }
+  }
+}</code></pre>
+                </div>
+
+                <h2>5.6 前端Screen映射</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Screen文件</th>
+                            <th>功能</th>
+                            <th>关键特性</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>EquipmentManagementScreen.tsx</code></td>
+                            <td>设备管理</td>
+                            <td>CRUD操作、状态管理、import/export</td>
+                        </tr>
+                        <tr>
+                            <td><code>EquipmentDetailScreen.tsx</code></td>
+                            <td>设备详情</td>
+                            <td>完整信息、使用历史、维护计划</td>
+                        </tr>
+                        <tr>
+                            <td><code>EquipmentMonitoringScreen.tsx</code></td>
+                            <td>设备监控</td>
+                            <td>实时状态、运行时间、预告警</td>
+                        </tr>
+                        <tr>
+                            <td><code>EquipmentAlertsScreen.tsx</code></td>
+                            <td>告警管理</td>
+                            <td>告警列表、状态切换、处理记录</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            
+            <section id="ch6">
+                <h1>6. 库存管理模块</h1>
+
+                <h2>模块描述</h2>
+                <p>库存管理模块管理原材料和半成品的完整生命周期,从入库、消耗追踪、库存价值计算到过期处理。该模块实现了FIFO (先进先出)算法自动推荐物料批次,支持冷链食品的特殊处理,并提供实时库存数据和价值分析。</p>
+
+                <div class="info-box">
+                    <h3>核心功能</h3>
+                    <p><strong>物料入库 | FIFO推荐 | 消耗追踪 | 库存估值 | 过期处理 | 冷链管理</strong></p>
+                </div>
+
+                <h2>6.1 物料批次管理</h2>
+
+                <h3>6.1.1 物料批次API</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>说明</th>
+                            <th>权限</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches</td>
+                            <td>创建物料批次</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}</td>
+                            <td>更新物料批次</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>DELETE</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}</td>
+                            <td>删除物料批次</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches</td>
+                            <td>查询物料批次 (分页)</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}</td>
+                            <td>获取批次详情</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/material-type/{materialTypeId}</td>
+                            <td>按物料类型查询</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/status/{status}</td>
+                            <td>按状态筛选</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/fifo/{materialTypeId}</td>
+                            <td>获取FIFO推荐批次</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/expiring</td>
+                            <td>获取即将过期批次</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/expired</td>
+                            <td>获取已过期批次</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/use</td>
+                            <td>使用物料</td>
+                            <td>operator+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/adjust</td>
+                            <td>调整库存数量</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/status</td>
+                            <td>更新批次状态</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/reserve</td>
+                            <td>预留物料</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/release</td>
+                            <td>释放预留</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/inventory/statistics</td>
+                            <td>库存统计</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/inventory/valuation</td>
+                            <td>库存估值</td>
+                            <td>factory_admin+</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/material-batches/low-stock</td>
+                            <td>库存不足警告</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/convert-to-frozen</td>
+                            <td>转换为冷冻</td>
+                            <td>supervisor+</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/material-batches/{batchId}/undo-frozen</td>
+                            <td>撤销冷冻</td>
+                            <td>supervisor+</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>6.1.2 物料批次数据表</h3>
+                <div class="sql-block">
+<pre><code>-- material_batches 表 (物料批次主表)
+CREATE TABLE material_batches (
+  id VARCHAR(191) PRIMARY KEY,
+  factory_id VARCHAR(50) NOT NULL,
+  batch_number VARCHAR(50) NOT NULL UNIQUE,
+  material_type_id VARCHAR(191) NOT NULL,
+  supplier_id VARCHAR(191),
+
+  -- 入库信息
+  inbound_date DATE NOT NULL,
+  purchase_date DATE,
+  expire_date DATE,
+
+  -- 数量信息
+  receipt_quantity DECIMAL(10,2) NOT NULL,  -- 入库数量
+  quantity_unit VARCHAR(20) NOT NULL,
+  weight_per_unit DECIMAL(10,3),            -- 单位重量
+  used_quantity DECIMAL(10,2) DEFAULT 0,    -- 已使用数量
+  reserved_quantity DECIMAL(10,2) DEFAULT 0,-- 预留数量
+
+  -- 当前可用 = receipt_quantity - used_quantity - reserved_quantity
+
+  -- 价格信息
+  unit_price DECIMAL(10,2),
+  total_price DECIMAL(12,2),
+
+  -- 状态
+  status VARCHAR(20) NOT NULL DEFAULT 'AVAILABLE',
+  -- 可选值: AVAILABLE(可用), PARTIAL(部分使用), RESERVED(已预留), EXPIRED(已过期), DISPOSED(已处理)
+
+  storage_location VARCHAR(100),            -- 存储位置
+  quality_certificate VARCHAR(100),         -- 质量证书号
+  notes TEXT,
+
+  created_by INT NOT NULL,
+  last_used_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_batch_factory (factory_id),
+  INDEX idx_batch_status (status),
+  INDEX idx_batch_expire (expire_date),
+  INDEX idx_batch_material (material_type_id),
+  INDEX idx_batch_inbound (inbound_date)
+);
+
+-- material_consumption 表 (消耗记录)
+CREATE TABLE material_consumption (
+  id VARCHAR(191) PRIMARY KEY,
+  factory_id VARCHAR(50) NOT NULL,
+  batch_id VARCHAR(191) NOT NULL,
+  production_plan_id VARCHAR(191),
+
+  quantity_consumed DECIMAL(10,2) NOT NULL,
+  consumption_date TIMESTAMP NOT NULL,
+  recorded_by INT,
+  notes TEXT,
+
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (batch_id) REFERENCES material_batches(id),
+  INDEX idx_consumption_batch (batch_id),
+  INDEX idx_consumption_date (consumption_date)
+);</code></pre>
+                </div>
+
+                <h2>6.2 FIFO (先进先出)算法</h2>
+
+                <h3>6.2.1 FIFO推荐原理</h3>
+                <pre><code>FIFO算法 (First In First Out)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+目的: 优先使用最早入库的物料批次,避免物料过期浪费
+
+排序规则:
+1. 按 inbound_date 升序排列 (最早的优先)
+2. 同日期按 expire_date 升序排列 (最快过期的优先)
+
+算法流程:
+Step 1: 查询所有 status=AVAILABLE 的物料批次
+Step 2: 按规则排序,从最早的开始
+Step 3: 累计当前可用数量,直到满足需求量
+Step 4: 返回推荐批次列表及数量分配
+
+示例:
+需要番茄 950kg
+
+物料批次列表 (按入库日期排序):
+┌─────────────────┬──────┬──────┬────────────────┐
+│ 批次号           │ 数量 │ 余量 │ 入库日期        │
+├─────────────────┼──────┼──────┼────────────────┤
+│ MAT-10-15-001   │ 1000 │ 900  │ 2025-10-15    │← 最早
+│ MAT-10-20-002   │ 500  │ 500  │ 2025-10-20    │
+│ MAT-11-01-003   │ 800  │ 800  │ 2025-11-01    │
+│ MAT-11-10-004   │ 600  │ 600  │ 2025-11-10    │
+└─────────────────┴──────┴──────┴────────────────┘
+
+FIFO推荐:
+需求: 950kg
+推荐:
+  1. MAT-10-15-001: 900kg (用完)
+  2. MAT-10-20-002: 50kg (用完 50/500)</code></pre>
+
+                <h3>6.2.2 FIFO查询API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/material-batches/fifo/MT001
+// Query: requiredQuantity=950
+
+{
+  "code": 200,
+  "data": {
+    "materialTypeId": "MT001",
+    "materialName": "番茄",
+    "requiredQuantity": 950.00,
+    "requiredUnit": "kg",
+
+    "fifoRecommendation": [
+      {
+        "batchId": "MAT-20251015-001",
+        "batchNumber": "MAT-10-15-001",
+        "inboundDate": "2025-10-15",
+        "expireDate": "2025-12-15",
+        "availableQuantity": 900.00,
+        "recommendedQuantity": 900.00,
+        "unitPrice": 0.50,
+        "cost": 450.00,
+        "daysUntilExpire": 25
+      },
+      {
+        "batchId": "MAT-20251020-002",
+        "batchNumber": "MAT-10-20-002",
+        "inboundDate": "2025-10-20",
+        "expireDate": "2025-12-20",
+        "availableQuantity": 500.00,
+        "recommendedQuantity": 50.00,
+        "unitPrice": 0.50,
+        "cost": 25.00,
+        "daysUntilExpire": 30
+      }
+    ],
+
+    "totalRecommendedQuantity": 950.00,
+    "totalCost": 475.00,
+    "avgUnitPrice": 0.50,
+    "remainingRequirement": 0.00
+  }
+}</code></pre>
+                </div>
+
+                <h2>6.3 过期与冷链处理</h2>
+
+                <h3>6.3.1 过期批次查询</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/material-batches/expiring
+// Query: days=3 (默认查询3天内过期的)
+
+{
+  "code": 200,
+  "data": {
+    "expiringBatches": [
+      {
+        "batchId": "MAT-20251015-001",
+        "batchNumber": "MAT-10-15-001",
+        "materialName": "番茄",
+        "expireDate": "2025-11-24",
+        "daysUntilExpire": 3,
+        "currentQuantity": 900.00,
+        "unit": "kg",
+        "unitPrice": 0.50,
+        "totalValue": 450.00,
+        "alert": {
+          "level": "WARNING",
+          "message": "该批次将在3天内过期,建议优先使用"
+        }
+      }
+    ],
+
+    "expiringInDays": 3,
+    "totalBatches": 1,
+    "totalValue": 450.00
+  }
+}</code></pre>
+                </div>
+
+                <h3>6.3.2 冷链转换 (新增功能)</h3>
+                <div class="java-block">
+<pre><code>// POST /api/mobile/{factoryId}/material-batches/{batchId}/convert-to-frozen
+{
+  "convertedBy": 3,
+  "conversionTime": "2025-11-21T10:00:00",
+  "freezerLocation": "冷库-18℃ #3",
+  "reason": "延长保质期,计划用于明年Q1"
+}
+
+// 成功响应
+{
+  "code": 200,
+  "message": "已转换为冷冻保存",
+  "data": {
+    "batchId": "MAT-20251015-001",
+    "newStatus": "FROZEN",
+    "storageLocation": "冷库-18℃ #3",
+    "originalExpireDate": "2025-12-15",
+    "estimatedFrozenExpireDate": "2026-06-15",  // 预计延长半年
+    "conversionTime": "2025-11-21T10:00:00",
+    "note": "冷冻后保质期可延长至原有时间的2-3倍"
+  }
+}
+
+// ==========================================
+
+// POST /api/mobile/{factoryId}/material-batches/{batchId}/undo-frozen
+// 注: 仅在转换后10分钟内可撤销
+
+{
+  "reason": "误操作,应该是其他批次"
+}
+
+// 成功响应 (需在转换后10分钟内)
+{
+  "code": 200,
+  "message": "冷冻转换已撤销",
+  "data": {
+    "batchId": "MAT-20251015-001",
+    "status": "AVAILABLE",
+    "storageLocation": "常温库-1区"
+  }
+}</code></pre>
+                </div>
+
+                <h2>6.4 库存统计与估值</h2>
+
+                <h3>6.4.1 库存统计API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/material-batches/inventory/statistics
+
+{
+  "code": 200,
+  "data": {
+    "factory": "CRETAS_2024_001",
+    "statisticsDate": "2025-11-21",
+
+    "summary": {
+      "totalBatches": 45,
+      "totalQuantity": 25500.00,
+      "totalUnit": "kg",
+      "totalValue": 12750.00,
+      "averageUnitPrice": 0.50
+    },
+
+    "byMaterialType": [
+      {
+        "materialTypeId": "MT001",
+        "materialName": "番茄",
+        "batches": 8,
+        "quantity": 5000.00,
+        "unit": "kg",
+        "value": 2500.00,
+        "unitPrice": 0.50
+      },
+      {
+        "materialTypeId": "MT002",
+        "materialName": "盐",
+        "batches": 3,
+        "quantity": 200.00,
+        "unit": "kg",
+        "value": 50.00,
+        "unitPrice": 0.25
+      }
+    ],
+
+    "byStatus": {
+      "available": { "quantity": 20000.00, "value": 10000.00 },
+      "reserved": { "quantity": 3000.00, "value": 1500.00 },
+      "frozen": { "quantity": 2000.00, "value": 1000.00 },
+      "expired": { "quantity": 500.00, "value": 250.00 }
+    }
+  }
+}</code></pre>
+                </div>
+
+                <h3>6.4.2 库存估值API</h3>
+                <div class="java-block">
+<pre><code>// GET /api/mobile/{factoryId}/material-batches/inventory/valuation
+
+{
+  "code": 200,
+  "data": {
+    "valuationDate": "2025-11-21",
+
+    "totalInventoryValue": 12750.00,
+
+    "valueBreakdown": {
+      "availableMaterialValue": 10000.00,    // 可用物料
+      "reservedMaterialValue": 1500.00,      // 预留物料
+      "frozenMaterialValue": 1000.00,        // 冷冻物料
+      "expiredMaterialValue": 250.00         // 已过期(待处理)
+    },
+
+    "turnoverMetrics": {
+      "avgTurnoverDays": 15,                // 平均周转周期
+      "fastMovingItems": 5,                 // 快速流动品种数
+      "slowMovingItems": 8,                 // 缓慢流动品种数
+      "deadStockItems": 2                   // 滞销品种数(>60天未使用)
+    },
+
+    "warnings": [
+      {
+        "type": "expired",
+        "count": 2,
+        "value": 250.00,
+        "recommendation": "建议尽快处理过期物料"
+      },
+      {
+        "type": "slowMoving",
+        "count": 8,
+        "value": 1500.00,
+        "recommendation": "这些物料超过30天未使用,考虑调整采购计划"
+      }
+    ]
+  }
+}</code></pre>
+                </div>
+
+                <h2>6.5 前端Screen映射</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Screen文件</th>
+                            <th>功能</th>
+                            <th>关键特性</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>MaterialBatchManagementScreen.tsx</code></td>
+                            <td>物料管理</td>
+                            <td>CRUD、FIFO推荐、过期提示</td>
+                        </tr>
+                        <tr>
+                            <td><code>MaterialReceiptScreen.tsx</code></td>
+                            <td>物料入库</td>
+                            <td>批号输入、供应商选择、入库确认</td>
+                        </tr>
+                        <tr>
+                            <td><code>InventoryStatisticsScreen.tsx</code></td>
+                            <td>库存统计</td>
+                            <td>库存概览、分类统计、估值</td>
+                        </tr>
+                        <tr>
+                            <td><code>InventoryCheckScreen.tsx</code></td>
+                            <td>库存盘点</td>
+                            <td>现场计数、差异记录、调整</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            
+            <section id="ch7">
+                <h1>7. 质量检验模块</h1>
+
+                <h2>模块描述</h2>
+                <p>质量检验模块管理生产过程中的质量控制,包括检验标准定义、缺陷分类、检验记录、趋势分析和报告生成。该模块与生产模块紧密集成,自动计算合格率并影响批次的最终质量状态。</p>
+
+                <h3>核心功能</h3>
+                <ul>
+                    <li>质检标准管理</li>
+                    <li>缺陷分类与记录</li>
+                    <li>合格率自动计算</li>
+                    <li>趋势分析与预警</li>
+                    <li>质检报告生成</li>
+                </ul>
+
+                <h3>主要API端点</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>HTTP方法</th>
+                            <th>路由</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/quality-inspections</td>
+                            <td>创建检验记录</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/quality-inspections</td>
+                            <td>查询检验记录(分页)</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/quality-inspections/{id}</td>
+                            <td>获取检验详情</td>
+                        </tr>
+                        <tr>
+                            <td>PUT</td>
+                            <td>/api/mobile/{factoryId}/quality-inspections/{id}</td>
+                            <td>更新检验记录</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/quality/statistics</td>
+                            <td>质检统计</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/quality/trends</td>
+                            <td>质检趋势分析</td>
+                        </tr>
+                        <tr>
+                            <td>POST</td>
+                            <td>/api/mobile/{factoryId}/quality/standards</td>
+                            <td>创建质检标准</td>
+                        </tr>
+                        <tr>
+                            <td>GET</td>
+                            <td>/api/mobile/{factoryId}/quality/standards</td>
+                            <td>查询质检标准</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>关键数据库表</h3>
+                <div class="sql-block">
+<pre><code>-- quality_inspection_standards 表 (质检标准)
+CREATE TABLE quality_inspection_standards (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  product_type_id INT NOT NULL,
+  standard_name VARCHAR(100),
+  pass_criteria TEXT,
+  sample_size_min INT,
+  sample_size_max INT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_factory_product (factory_id, product_type_id)
+);
+
+-- quality_inspection_defects 表 (缺陷分类)
+CREATE TABLE quality_inspection_defects (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  factory_id VARCHAR(50) NOT NULL,
+  defect_code VARCHAR(50) NOT NULL,
+  defect_name VARCHAR(100),
+  severity VARCHAR(20),  -- critical, major, minor
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_factory_defect (factory_id, defect_code)
+);</code></pre>
+                </div>
+            </section>
+
+            <section id="ch8">
+                <h1>8. 基础数据管理模块</h1>
+
+                <h2>模块描述</h2>
+                <p>基础数据管理模块提供系统所有主数据的CRUD操作,包括物料类型、产品类型、员工信息、部门、供应商、客户等。该模块为其他业务模块提供数据基础,支持批量导入导出。</p>
+
+                <h3>核心数据管理</h3>
+                <ul>
+                    <li>物料类型 (Material Types) - 15+ API</li>
+                    <li>产品类型 (Product Types) - 15+ API</li>
+                    <li>员工管理 (Employees) - 12+ API</li>
+                    <li>部门管理 (Departments) - 10+ API</li>
+                    <li>供应商管理 (Suppliers) - 12+ API</li>
+                    <li>客户管理 (Customers) - 12+ API</li>
+                </ul>
+
+                <h3>API端点统计</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>数据类型</th>
+                            <th>创建</th>
+                            <th>读取</th>
+                            <th>更新</th>
+                            <th>删除</th>
+                            <th>小计</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>物料类型</td>
+                            <td>POST</td>
+                            <td>GET</td>
+                            <td>PUT</td>
+                            <td>DELETE</td>
+                            <td>4+特殊</td>
+                        </tr>
+                        <tr>
+                            <td>产品类型</td>
+                            <td>POST</td>
+                            <td>GET</td>
+                            <td>PUT</td>
+                            <td>DELETE</td>
+                            <td>4+特殊</td>
+                        </tr>
+                        <tr>
+                            <td>员工信息</td>
+                            <td>POST</td>
+                            <td>GET</td>
+                            <td>PUT</td>
+                            <td>DELETE</td>
+                            <td>4+导出</td>
+                        </tr>
+                        <tr>
+                            <td>部门管理</td>
+                            <td>POST</td>
+                            <td>GET</td>
+                            <td>PUT</td>
+                            <td>DELETE</td>
+                            <td>4+树形</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>前端屏幕映射</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>模块</th>
+                            <th>屏幕列表</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>物料类型</td>
+                            <td>MaterialTypeManagementScreen, MaterialTypeDetailScreen, MaterialTypeListScreen</td>
+                        </tr>
+                        <tr>
+                            <td>产品类型</td>
+                            <td>ProductTypeManagementScreen, ProductTypeDetailScreen, ProductTypeListScreen</td>
+                        </tr>
+                        <tr>
+                            <td>员工管理</td>
+                            <td>EmployeeManagementScreen, EmployeeDetailScreen, EmployeeListScreen</td>
+                        </tr>
+                        <tr>
+                            <td>部门管理</td>
+                            <td>DepartmentManagementScreen, DepartmentTreeScreen, DepartmentDetailScreen</td>
+                        </tr>
+                        <tr>
+                            <td>供应商</td>
+                            <td>SupplierManagementScreen, SupplierDetailScreen, SupplierListScreen</td>
+                        </tr>
+                        <tr>
+                            <td>客户</td>
+                            <td>CustomerManagementScreen, CustomerDetailScreen, CustomerListScreen</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="ch9">
+                <h1>9. 平台管理模块</h1>
+
+                <h2>模块描述</h2>
+                <p>平台管理模块负责多工厂平台的配置和管理,包括工厂管理、用户账户管理、角色权限配置和系统参数设置。仅平台管理员可访问。</p>
+
+                <h3>核心功能</h3>
+                <ul>
+                    <li>工厂管理 - 多工厂配置与激活</li>
+                    <li>用户管理 - 8角色权限系统</li>
+                    <li>权限配置 - 角色功能权限详细配置</li>
+                    <li>系统配置 - 参数设置与系统常数</li>
+                    <li>审计日志 - 操作记录与安全跟踪</li>
+                </ul>
+
+                <h3>8角色权限体系</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>角色</th>
+                            <th>级别</th>
+                            <th>权限范围</th>
+                            <th>主要职责</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>developer</td>
+                            <td>系统</td>
+                            <td>全部权限</td>
+                            <td>系统开发与维护</td>
+                        </tr>
+                        <tr>
+                            <td>platform_admin</td>
+                            <td>平台</td>
+                            <td>多工厂管理</td>
+                            <td>平台配置与用户管理</td>
+                        </tr>
+                        <tr>
+                            <td>factory_super_admin</td>
+                            <td>工厂</td>
+                            <td>单工厂全部</td>
+                            <td>工厂全部管理</td>
+                        </tr>
+                        <tr>
+                            <td>factory_admin</td>
+                            <td>工厂</td>
+                            <td>工厂大部分</td>
+                            <td>工厂运营管理</td>
+                        </tr>
+                        <tr>
+                            <td>department_admin</td>
+                            <td>部门</td>
+                            <td>部门范围</td>
+                            <td>部门运营管理</td>
+                        </tr>
+                        <tr>
+                            <td>supervisor</td>
+                            <td>生产</td>
+                            <td>主管范围</td>
+                            <td>生产监督</td>
+                        </tr>
+                        <tr>
+                            <td>operator</td>
+                            <td>操作</td>
+                            <td>自己操作</td>
+                            <td>执行操作</td>
+                        </tr>
+                        <tr>
+                            <td>viewer</td>
+                            <td>查看</td>
+                            <td>只读权限</td>
+                            <td>数据查看</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>API端点</h3>
+                <ul>
+                    <li>POST /api/platform/factories - 创建工厂</li>
+                    <li>GET /api/platform/factories - 查询所有工厂</li>
+                    <li>PUT /api/platform/factories/{factoryId} - 更新工厂</li>
+                    <li>POST /api/platform/users - 创建用户</li>
+                    <li>GET /api/platform/users - 查询用户列表</li>
+                    <li>PUT /api/platform/users/{userId} - 更新用户</li>
+                    <li>POST /api/platform/roles - 创建角色</li>
+                    <li>GET /api/platform/roles - 查询所有角色</li>
+                    <li>PUT /api/platform/roles/{roleId}/permissions - 配置权限</li>
+                    <li>GET /api/platform/audit-logs - 查看审计日志</li>
+                </ul>
+            </section>
+
+            <section id="ch10">
+                <h1>10. 报表分析模块</h1>
+
+                <h2>模块描述</h2>
+                <p>报表分析模块提供各类业务报表和数据分析功能,包括生产报表、质量报表、成本报表、人员报表和设备报表。支持多维度分析、图表展示和导出功能。</p>
+
+                <h3>核心报表类型</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>报表类型</th>
+                            <th>说明</th>
+                            <th>API端点数</th>
+                            <th>导出格式</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>生产报表</td>
+                            <td>日/周/月生产统计</td>
+                            <td>5+</td>
+                            <td>Excel, PDF</td>
+                        </tr>
+                        <tr>
+                            <td>质量报表</td>
+                            <td>缺陷分布、合格率趋势</td>
+                            <td>5+</td>
+                            <td>Excel, PDF</td>
+                        </tr>
+                        <tr>
+                            <td>成本报表</td>
+                            <td>成本对标、单位成本分析</td>
+                            <td>5+</td>
+                            <td>Excel, PDF</td>
+                        </tr>
+                        <tr>
+                            <td>人员报表</td>
+                            <td>考勤统计、工时分析</td>
+                            <td>4+</td>
+                            <td>Excel</td>
+                        </tr>
+                        <tr>
+                            <td>设备报表</td>
+                            <td>运行效率、维护记录</td>
+                            <td>4+</td>
+                            <td>Excel, PDF</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>前端报表屏幕</h3>
+                <ul>
+                    <li>ReportDashboardScreen - 报表总览</li>
+                    <li>ProductionReportScreen - 生产报表</li>
+                    <li>QualityReportScreen - 质量报表</li>
+                    <li>CostReportScreen - 成本报表</li>
+                    <li>PersonnelReportScreen - 人员报表</li>
+                    <li>EfficiencyReportScreen - 效率报表</li>
+                    <li>KPIReportScreen - KPI仪表板</li>
+                </ul>
+            </section>
+
+            <section id="ch11">
+                <h1>11. 数据导入导出模块</h1>
+
+                <h2>模块描述</h2>
+                <p>数据导入导出模块提供批量数据操作能力,支持Excel导入导出,自动验证格式,并提供详细的操作日志和错误提示。</p>
+
+                <h3>支持的导入数据类型</h3>
+                <ul>
+                    <li>物料批次 (Material Batches)</li>
+                    <li>生产计划 (Production Plans)</li>
+                    <li>员工信息 (Employees)</li>
+                    <li>供应商信息 (Suppliers)</li>
+                    <li>产品类型 (Product Types)</li>
+                    <li>设备信息 (Equipment)</li>
+                </ul>
+
+                <h3>API端点</h3>
+                <ul>
+                    <li>POST /api/mobile/{factoryId}/import/material-batches - 导入物料</li>
+                    <li>POST /api/mobile/{factoryId}/import/production-plans - 导入计划</li>
+                    <li>POST /api/mobile/{factoryId}/import/employees - 导入员工</li>
+                    <li>GET /api/mobile/{factoryId}/export/material-batches - 导出物料</li>
+                    <li>GET /api/mobile/{factoryId}/export/production-plans - 导出计划</li>
+                    <li>GET /api/mobile/{factoryId}/export/template/{type} - 获取导入模板</li>
+                </ul>
+
+                <h3>导入流程</h3>
+                <pre><code>Step 1: 上传Excel文件
+Step 2: 验证文件格式与数据完整性
+Step 3: 逐行验证业务规则
+Step 4: 返回验证结果与错误提示
+Step 5: 用户确认后批量插入数据库
+Step 6: 保存导入日志</code></pre>
+
+                <h3>导出格式</h3>
+                <ul>
+                    <li>Excel (.xlsx) - 支持公式与格式</li>
+                    <li>CSV (.csv) - 兼容性好</li>
+                    <li>PDF - 报表格式</li>
+                </ul>
+            </section>
+
+            <section id="cross-1">
+                <h1>X.1 成本自动计算</h1>
+
+                <h2>四层成本模型</h2>
+                <pre><code>生产成本 = 原料成本 + 人工成本 + 设备成本 + 其他成本
+
+1. 原料成本 (Material Cost)
+   ├─ 来源: material_consumption 表
+   ├─ 计算: 消耗物料单价 × 消耗数量
+   └─ 示例: 番茄0.5元/kg × 950kg = 475元
+
+2. 人工成本 (Labor Cost)
+   ├─ 来源: batch_work_sessions + users表(daily_salary)
+   ├─ 计算: (日薪 / 24) × 工作时长(小时)
+   └─ 示例: 5人 × (300/24) × 8h = 5000元
+
+3. 设备成本 (Equipment Cost)
+   ├─ 来源: equipment_usage + equipment表(depreciation)
+   ├─ 计算: 年折旧 / 365 × 运行天数
+   └─ 示例: 2000/365 × 0.5 = 2.74元
+
+4. 其他成本 (Other Cost)
+   ├─ 来源: 手动输入或预设比例
+   ├─ 范围: 水电费、包装费、运输费等
+   └─ 示例: 100元
+
+总成本 = 475 + 5000 + 2.74 + 100 = 5577.74元
+单位成本 = 5577.74 / 990kg = 5.64元/kg</code></pre>
+
+                <h2>成本计算触发点</h2>
+                <ol>
+                    <li>创建生产批次 → 初始化成本 = 0</li>
+                    <li>记录物料消耗 → 更新原料成本</li>
+                    <li>员工完成打卡 → 累加人工成本</li>
+                    <li>设备停止运行 → 累加设备成本</li>
+                    <li>完成生产批次 → 最终成本汇总</li>
+                    <li>批次完成后 → 触发AI分析 (可选)</li>
+                </ol>
+            </section>
+
+            <section id="cross-2">
+                <h1>X.2 FIFO库存推荐</h1>
+
+                <h2>FIFO算法实现</h2>
+                <pre><code>目的: 优先使用最早入库的物料,避免过期浪费
+
+排序规则:
+1. 第一优先级: inbound_date (入库日期) 升序
+2. 第二优先级: expire_date (过期日期) 升序
+3. 第三优先级: batch_id (批次ID) 升序
+
+查询逻辑:
+SELECT * FROM material_batches
+WHERE factory_id = ? AND material_type_id = ? AND status = 'AVAILABLE'
+ORDER BY inbound_date ASC, expire_date ASC, batch_id ASC
+LIMIT ? -- 推荐批次数量
+
+推荐算法:
+totalNeeded = 需求数量
+recommendations = []
+accumulated = 0
+
+for batch in sorted_batches:
+    available = batch.receipt_quantity - batch.used_quantity - batch.reserved_quantity
+
+    if accumulated >= totalNeeded:
+        break
+
+    if available > 0:
+        recommended = min(available, totalNeeded - accumulated)
+        recommendations.add({
+            batchId: batch.id,
+            recommendedQuantity: recommended,
+            unitPrice: batch.unit_price,
+            cost: recommended * batch.unit_price
+        })
+        accumulated += recommended
+
+return recommendations</code></pre>
+
+                <h2>FIFO推荐示例</h2>
+                <pre><code>场景: 需要番茄 950kg
+
+物料库存状态:
+┌────────────────┬────────┬─────────┬────────────┐
+│ 批次号          │ 入库日 │ 过期日 │ 可用数量   │
+├────────────────┼────────┼─────────┼────────────┤
+│ MAT-10-15-001  │ 10-15  │ 12-15  │ 900kg      │
+│ MAT-10-20-002  │ 10-20  │ 12-20  │ 500kg      │
+│ MAT-11-01-003  │ 11-01  │ 01-01  │ 800kg      │
+└────────────────┴────────┴─────────┴────────────┘
+
+FIFO推荐流程:
+需求: 950kg
+累计: 0kg
+
+Step 1: MAT-10-15-001 (最早)
+  可用: 900kg
+  推荐: 900kg (< 950kg, 用完)
+  累计: 900kg
+
+Step 2: MAT-10-20-002 (次早)
+  可用: 500kg
+  推荐: 50kg (满足剩余 950-900=50kg)
+  累计: 950kg
+
+结论: 用完MAT-10-15-001的900kg,再用MAT-10-20-002的50kg</code></pre>
+            </section>
+
+            <section id="cross-3">
+                <h1>X.3 时间成本一体化</h1>
+
+                <h2>工作会话与成本分配</h2>
+                <pre><code>场景: 员工李四在一天内参与多个生产批次
+
+时间轴:
+08:00 - 09:30 (1.5h) - 批次A (番茄酱)
+09:30 - 10:00 (0.5h) - 休息
+10:00 - 12:00 (2.0h) - 批次A (番茄酱)
+12:00 - 13:00 (1.0h) - 午休
+13:00 - 15:30 (2.5h) - 批次B (辣椒酱)
+15:30 - 16:00 (0.5h) - 休息
+16:00 - 17:00 (1.0h) - 批次B (辣椒酱)
+────────────────────────
+实际工作: 8.0小时
+日薪: 300元/天
+
+成本分配:
+✓ 总工作时间: 8.0小时
+✓ 小时费率: 300 / 24 = 12.5元/小时
+✓ 总成本: 12.5 × 8 = 100元
+
+✓ 批次A: (1.5 + 2.0) / 8.0 × 100 = 43.75元
+✓ 批次B: (2.5 + 1.0) / 8.0 × 100 = 56.25元
+
+验证: 43.75 + 56.25 = 100元 ✓</code></pre>
+
+                <h2>数据表关联</h2>
+                <pre><code>time_clock_record 表
+├─ clock_in_time: 08:00
+├─ clock_out_time: 17:00
+├─ break_start_time: 09:30, 12:00, 15:30
+├─ break_end_time: 10:00, 13:00, 16:00
+└─ work_duration: 480分钟 (8小时)
+
+batch_work_sessions 表 (会话记录)
+├─ 批次A
+│  ├─ work_minutes: 210分钟 (3.5h)
+│  └─ labor_cost: 43.75元
+└─ 批次B
+   ├─ work_minutes: 210分钟 (3.5h)
+   └─ labor_cost: 56.25元</code></pre>
+            </section>
+
+            <section id="cross-4">
+                <h1>X.4 设备折旧集成</h1>
+
+                <h2>设备折旧在生产中的应用</h2>
+                <pre><code>设备信息:
+- 名称: 搅拌机 A
+- 购置价: 50,000元
+- 购置日: 2023-05-15
+- 残值: 5,000元
+- 使用年限: 5年
+- 折旧模式: 直线折旧
+
+折旧计算:
+年折旧 = (50000 - 5000) / 5 = 9000元/年
+月折旧 = 9000 / 12 = 750元/月
+日折旧 = 9000 / 365 = 24.66元/天
+时折旧 = 24.66 / 24 = 1.03元/小时
+
+生产批次成本分配:
+批次BATCH-20251121-001
+├─ 设备: 搅拌机 A
+├─ 运行时间: 2.5小时
+└─ 设备折旧成本 = 1.03元/h × 2.5h = 2.57元
+
+累计跟踪:
+总运行时间: 1245小时
+历史折旧: (50000 - 5000) × (1245 / (5 × 365 × 24)) = 18118元
+净值: 50000 - 18118 = 31882元</code></pre>
+
+                <h2>实现方式</h2>
+                <ol>
+                    <li>设备启动时记录 start_time</li>
+                    <li>设备停止时计算 running_hours</li>
+                    <li>更新 equipment.total_operating_hours</li>
+                    <li>计算小时折旧: annual_depreciation / (365 × 24)</li>
+                    <li>累加到批次的 equipment_cost</li>
+                    <li>完成生产时汇总所有成本</li>
+                </ol>
+            </section>
+
+            <section id="cross-5">
+                <h1>X.5 AI分析触发链</h1>
+
+                <h2>AI自动分析工作流</h2>
+                <pre><code>生产批次完成 → 自动触发AI分析
+
+触发条件:
+✓ 批次状态: status = COMPLETED
+✓ 成本计算: total_cost ≠ null
+✓ 质检通过: quality_status = PASS
+✓ 触发延迟: 300秒后执行 (异步非阻塞)
+
+触发流程:
+────────────────────────────────────────
+
+Step 1: 检查触发条件
+  IF status == COMPLETED AND total_cost != null AND quality_status == PASS:
+    PROCEED
+  ELSE:
+    SKIP
+
+Step 2: 查询缓存
+  cache_key = factoryId + batchId + 'cost_breakdown'
+  IF cache.exists(cache_key) AND cache.notExpired():
+    RETURN cached_result
+  ELSE:
+    PROCEED to Step 3
+
+Step 3: 消费配额
+  quota = GET_WEEKLY_QUOTA(factoryId)
+  IF quota.remaining < 1:
+    RETURN error "配额不足"
+  ELSE:
+    quota.remaining -= 1
+    quota.used += 1
+
+Step 4: 调用AI服务
+  request = {
+    batchId: batchId,
+    batchNumber: batch_number,
+    analysis: {
+      planned: planned_quantity,
+      actual: actual_quantity,
+      good: good_quantity,
+      defect: defect_quantity,
+      costs: {
+        material: material_cost,
+        labor: labor_cost,
+        equipment: equipment_cost,
+        other: other_cost
+      }
+    }
+  }
+
+  response = CALL_DEEPSEEK_API(request)
+
+Step 5: 保存结果
+  INSERT INTO ai_analysis_results (
+    factory_id, batch_id, analysis_text,
+    report_type='batch', expires_at=NOW()+7days
+  )
+
+Step 6: 记录审计
+  INSERT INTO ai_audit_logs (
+    factory_id, request_type='batch_analysis',
+    success=true, cache_hit=false, quota_consumed=1
+  )
+
+Step 7: 通知前端
+  WebSocket 推送批次ID给相关用户
+  前端自动刷新,显示AI分析结果
+
+执行时间: 异步后台任务,2-10秒内完成</code></pre>
+
+                <h2>与其他模块的联动</h2>
+                <pre><code>生产完成
+  ↓
+触发链路:
+  ├─→ 成本模块: 最终成本汇总
+  ├─→ 质检模块: 质检状态确认
+  ├─→ 库存模块: 产成品入库
+  ├─→ AI模块: 自动分析 ← YOU ARE HERE
+  └─→ 报表模块: 生产报表更新
+
+AI分析完成
+  ↓
+前端通知:
+  ├─→ 生产仪表板刷新
+  ├─→ 成本分析屏幕更新
+  └─→ AI分析结果展示</code></pre>
+            </section>
+
+            <section id="faq">
+                <h1>常见问题解答</h1>
+
+                <h3>考勤相关</h3>
+                <p><strong>Q1: 为什么我的员工打卡后没有自动关联批次?</strong></p>
+                <p><strong>A:</strong> 检查以下几点:</p>
+                <ol>
+                    <li>是否有进行中的生产批次 (status=IN_PROGRESS)?</li>
+                    <li>该员工是否被分配到该批次?</li>
+                    <li>打卡时间是否在批次的计划时间范围内?</li>
+                </ol>
+
+                <p><strong>Q2: GPS打卡失败,说我的位置不在工厂范围内?</strong></p>
+                <p><strong>A:</strong> 这通常有两个原因:</p>
+                <ol>
+                    <li>工厂GPS范围设置不正确 → 联系管理员调整</li>
+                    <li>手机GPS信号弱 → 开启高精度GPS后重试</li>
+                </ol>
+
+                <p><strong>Q3: 加班时间怎样计算?</strong></p>
+                <p><strong>A:</strong> 系统假设标准工作时间为8小时,超过8小时的部分为加班,在统计时会单独计算。</p>
+
+                <h3>FIFO与库存</h3>
+                <p><strong>Q4: FIFO库存推荐是怎样的?</strong></p>
+                <p><strong>A:</strong> 系统按照物料批次的入库日期升序排列,优先推荐最早入库的。这样可以避免物料过期浪费。具体详见 <a href="#cross-2">X.2 FIFO库存推荐</a>。</p>
+
+                <p><strong>Q5: 物料转换为冷冻保存后,保质期会延长多久?</strong></p>
+                <p><strong>A:</strong> 通常冷冻可以将保质期延长至原有时间的2-3倍,具体取决于物料类型。系统会在转换时自动计算预计的新过期日期。</p>
+
+                <h3>AI与配额</h3>
+                <p><strong>Q6: AI分析的周配额是多少,怎样查看?</strong></p>
+                <p><strong>A:</strong> 默认周配额为100分析单位,每周一自动重置。可在设置页面查看当前剩余配额。</p>
+
+                <p><strong>Q7: 配额用尽了怎样办?</strong></p>
+                <p><strong>A:</strong> 配额用尽后无法进行新的AI分析,但可以查看历史缓存结果。可等待下周一自动恢复,或联系管理员申请配额提升。</p>
+
+                <p><strong>Q8: 为什么同样的查询一次消耗1单位,下次又消耗1单位?</strong></p>
+                <p><strong>A:</strong> 这是因为缓存过期了。系统会缓存分析结果7天,7天内相同查询会直接返回缓存结果(不消耗配额)。</p>
+
+                <h3>成本与计算</h3>
+                <p><strong>Q9: 成本计算中的人工成本是怎样计算的?</strong></p>
+                <p><strong>A:</strong> 公式为: (员工日薪 / 24) × 工作时长(小时)。若员工在多个批次工作,成本按工作时间比例分配。详见 <a href="#cross-3">X.3 时间成本一体化</a>。</p>
+
+                <p><strong>Q10: 设备成本怎样计算?</strong></p>
+                <p><strong>A:</strong> 采用直线折旧法,公式为: 年折旧额 / 365 / 24 × 运行时间(小时)。详见 <a href="#cross-4">X.4 设备折旧集成</a>。</p>
+
+                <h3>设备与维护</h3>
+                <p><strong>Q11: 设备维护提醒怎样配置?</strong></p>
+                <p><strong>A:</strong> 在设备详情中设置 "maintenance_interval_days",系统会自动计算下次维护日期,并在到期日期前提前提醒。</p>
+
+                <p><strong>Q12: OEE指标怎样计算?</strong></p>
+                <p><strong>A:</strong> OEE = 可用率 × 效能 × 质量率。详细公式见 <a href="#ch5">第5章 设备管理</a>。</p>
+
+                <h3>数据导入导出</h3>
+                <p><strong>Q13: 导入数据时出现验证错误怎样处理?</strong></p>
+                <p><strong>A:</strong> 系统会列出所有验证失败的行号和原因。修改Excel后重新上传,或删除有问题的行。</p>
+
+                <p><strong>Q14: 导出的数据格式是什么?</strong></p>
+                <p><strong>A:</strong> 默认导出为Excel (.xlsx) 格式,支持公式与格式保留。也可选择CSV格式用于数据交换。</p>
+
+                <h3>多工厂与权限</h3>
+                <p><strong>Q15: 我是platform_admin,为什么看不到某个工厂的数据?</strong></p>
+                <p><strong>A:</strong> platform_admin 只能看到已激活的工厂。检查该工厂是否已激活。若已激活但仍看不到,请刷新页面或退出重新登录。</p>
+
+                <p><strong>Q16: 怎样为员工分配权限?</strong></p>
+                <p><strong>A:</strong> 系统使用8种预定义角色。选择用户,分配相应角色,权限会自动生效。详见 <a href="#ch9">第9章 平台管理</a>。</p>
+
+                <h3>报表与分析</h3>
+                <p><strong>Q17: 生产报表怎样按时间段筛选?</strong></p>
+                <p><strong>A:</strong> 打开生产报表,选择日期范围,系统会自动聚合该时间段内的数据并生成报表。</p>
+
+                <p><strong>Q18: 成本报表怎样对标同期?</strong></p>
+                <p><strong>A:</strong> 选择两个时间段,系统会并列展示,自动计算同比和环比数据。</p>
+
+                <h3>系统与故障</h3>
+                <p><strong>Q19: 为什么API返回 504 Gateway Timeout?</strong></p>
+                <p><strong>A:</strong> 这通常表示后端服务暂时无响应。请稍后重试。若问题持续,请联系技术支持。</p>
+
+                <p><strong>Q20: 怎样查看系统操作日志?</strong></p>
+                <p><strong>A:</strong> 仅factory_admin及以上权限可查看。进入"平台管理" → "审计日志"。</p>
+            </section>
+</section>
+
+            <footer>
+                <p><strong>更新日期</strong>: 2025-11-21</p>
+                <p><strong>文档类型</strong>: 新人完整学习指南 (包含Markdown原文档全部2043行内容)</p>
+                <p><strong>推荐阅读顺序</strong>: 第0章 → 第1-11章 → 交叉功能 → 常见问题</p>
+                <p><strong>相关文档</strong>:</p>
+                <ul style="list-style: none; padding: 0;">
+                    <li><a href="PRD-功能与文件映射-v3.0-技术速查.html">技术速查版</a> - 快速查找API和文件路径</li>
+                    <li><a href="../QUICK_START.md">快速开始</a> - 5分钟启动系统</li>
+                    <li><a href="../IMPLEMENTATION_SUMMARY.md">实现总结</a> - 后端实现细节</li>
+                </ul>
+                <p style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; color: #999;">
+                    本文档由 Claude Code 生成,确保包含Markdown源文件的所有详细内容。
+                </p>
+            </footer>
+        </main>
+    </div>
+
+    <div class="back-to-top" id="backToTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'})">↑</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script>
+        const navItems = document.querySelectorAll('.sidebar-nav-item');
+        const sections = document.querySelectorAll('section');
+
+        function updateActiveNav() {
+            const scrollPosition = window.scrollY + 100;
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionBottom = sectionTop + section.offsetHeight;
+                if (scrollPosition >= sectionTop && scrollPosition < sectionBottom) {
+                    navItems.forEach(item => item.classList.remove('active'));
+                    const activeItem = document.querySelector(`[href="#${section.id}"]`);
+                    if (activeItem) activeItem.classList.add('active');
+                }
+            });
+        }
+
+        const backToTopBtn = document.getElementById('backToTop');
+        window.addEventListener('scroll', () => {
+            updateActiveNav();
+            if (window.scrollY > 300) {
+                backToTopBtn.classList.add('show');
+            } else {
+                backToTopBtn.classList.remove('show');
+            }
+        });
+
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase();
+                navItems.forEach(item => {
+                    const text = item.textContent.toLowerCase();
+                    item.style.display = text.includes(query) ? 'block' : 'none';
+                });
+            });
+        }
+
+        updateActiveNav();
+    </script>
+</body>
+</html>

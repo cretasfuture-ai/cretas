@@ -1,0 +1,265 @@
+"""Customer-facing text safety for restaurant AI responses."""
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+_INTERNAL_IDENTIFIER = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
+_API_PATH = re.compile(r"/api/[A-Za-z0-9_./?=&%\-]+")
+_TOOL_EXPLANATION = re.compile(
+    r"(?:通过|经由)?\s*(?:调用|使用)\s*[^，。；\n]{0,80}?(?:工具|接口|数据表)(?:来|进行|获取|查询)?"
+)
+_TECH_ONLY = re.compile(
+    r"^[\s，。；：、]*(?:(?:来源|内部意图|意图|与|和|来自|数据表|利润表数据|"
+    r"业务数据|经营数据|数据|结果)[\s，。；：、]*)*$"
+)
+NO_DISPLAYABLE_BUSINESS_RESULT = "没有获得可展示的业务结果，本次不生成结论。"
+
+# ── 店长读不懂的词：两张表，各自写明「谁在强制它」 ────────────────────────
+#
+# 🔴 2026-08-12 搬到这里的理由：`INTERNAL_VOCAB` 原本只活在
+#    `test_no_internal_jargon_in_customer_text.py` 里。那道闸扫的是**源码字符串**，
+#    因此运行时判据（答案里有没有黑话）想复用同一份词表时**够不着它** ——
+#    production 代码 import 测试模块是反的。两边各抄一份就会漂，而这正是本仓
+#    反复拆过的形状（会随环境变的东西只能有一处定义）。
+#    搬过来之后：源码闸和运行时判据读同一个元组，加一个词两边同时生效。
+#
+# ⛔ 两张表**不能合并**，因为强制它们的载体不同，合并会立刻让 CI 变红：
+
+#: 内部概念名。**源码闸 + 运行时判据双方强制。**
+#: 只收「店长读不懂且没法据此行动」的词；「毛利」「门店」这类业务词不在此列。
+INTERNAL_VOCAB = (
+    "问题对象", "分析范围", "执行范围", "语义规划", "查询计划", "计划版本",
+    "维度", "槽位", "解析器", "置信度", "相似度", "向量", "意图代码",
+    # 🔴 2026-08-13 加入。店长不说「字段」——他说「数据」「这项没接进来」。
+    # ⚠️ 加它**之前**先改掉了两处现存违例(`restaurant_intent:1330` 的价格弹性
+    #    拒答、`generic_answer` 的缺列说明), 否则就是在改文案之前先把 CI 弄红
+    #    —— 2026-08-12 有人这么干过一次, 当场红在 `restaurant_intent:1316`。
+    #    顺序: 先改违例 → 再加词 → 闸从此挡住新的。
+    "字段",
+    # 🔴 2026-08-13 盲区 4: **词表此前只有中文形**。
+    #    prod 实测那句「查询维度超出计划 **resolver** 的能力范围」——
+    #    「解析器」在表里, 而它的英文形不在, 于是那半句谁也拦不住。
+    # ⛔ 英文技术词对店长比中文黑话**更不可读**: 中文黑话至少还像句话,
+    #    英文标识符直接是「这不是给我看的」。
+    # ⚠️ 只收**真的会漏进面向用户文本**的那些, 不是把技术词典搬进来 ——
+    #    词表越长误报越多, 而误报会让人把闸关掉(比没有闸更糟)。
+    "resolver", "dimension", "aggregation", "grain",
+    "planner", "spec", "provenance", "fallback",
+)
+
+#: 统计/计量黑话。**只由运行时判据强制，源码闸刻意不扫。**
+#:
+#: ⚠️ 这个「刻意」有实测依据，不是偷懒：2026-08-12 把这五个词并进
+#:    `INTERNAL_VOCAB` 跑源码闸，当场红在
+#:    `restaurant_intent:1316`「…才能计算弹性、置信区间和决定系数」——
+#:    那是一句**真的会发给店长**的话。也就是说源码里现存违例，
+#:    合并两张表 = 在改文案之前先把 CI 弄红。
+#:    改那句文案属于 P-B（契约白话化）的范围，不属于评估升级。
+#:    在它改完之前，这五个词由运行时判据盯着：答案里真出现了就报，
+#:    而不是靠一句「记得改」的注释（注释不构成约束力，只有会红的断言构成）。
+#: ⚠️ 2026-08-12 P-B① 之后复查：那条违例**仍然在**
+#:    (`restaurant_intent:1330`「字段完整后才能计算弹性、置信区间和决定系数。」)。
+#:    P-B① 改的是「拒答/部分覆盖」那一批串，价格弹性这条不在其中。
+#:    所以这两张表**继续分开**；等它也改完，这五个词才能并进 INTERNAL_VOCAB。
+ANALYST_JARGON = (
+    "置信区间", "因果效果", "回归估计", "显著性", "决定系数", "p值", "P值",
+)
+
+
+# ── 面向店长的固定说法：**一处定义，产品和断言都引用它** ────────────────────
+#
+# 🔴 2026-08-12 建立的理由（owner 裁定）：
+#    这些串是**我们自己敲进源码的**，不是模型生成的。
+#      「…我不会改走相邻分析。」  「…没有返回可验证结果…」
+#      「…只分析当前已有的维度。」「本次结果没有可靠覆盖…」
+#    先写黑话再靠 `sanitize_customer_ai_text` 洗掉，是三层里最弱的一层说了算：
+#    清洗靠词表，词表靠人**先想到**那个词。「相邻分析」没人列过，词表就是瞎的。
+#    **正解是一开始就别写。**
+#
+# ⛔ 为什么做成常量而不是各处直接写字面量：
+#    实测有 5 条测试断言 + 2 处电池排除项**锁在这些串的字面量上**。
+#    各处直接写 = 改文案时断言不会跟着变 —— 要么忘了改导致红，要么改了之后
+#    断言指向一个产品里已经没有的串，变成**恒真**（本轮已经因此拆掉 6 条）。
+#    引用同一个常量，改文案 = 产品与断言原子同步。
+#
+# ⚠️ 这不是「把黑话搬个地方」：右边的措辞本身已经改成店长话。
+#    常量解决的是**同步**问题，措辞解决的是**读得懂**问题，两件事。
+
+#: 「我没有拿别的指标顶替」这个承诺的统一说法。
+#: 旧版三个变体「改走相邻分析 / 相近指标替代 / 改走相邻指标」全部收敛到这里。
+NO_SUBSTITUTION = "我不会拿别的数据凑"
+
+#: 模型没听懂这句话（planner 不可用）。旧版含「语义规划」「相邻分析」两个内部词。
+PLANNER_UNAVAILABLE = f"系统这会儿没能弄懂这句话，这次什么都没算，{NO_SUBSTITUTION}。请稍后再问一次。"
+
+#: 查询执行链挂了。旧版含「相邻分析」。
+EXECUTION_UNAVAILABLE = f"系统这会儿有点忙，这次什么都没算，{NO_SUBSTITUTION}。请稍后再问一次。"
+
+#: 计划跑完了但没拿到能给人看的东西。旧版含「可验证结果」「相邻分析」。
+NO_USABLE_RESULT = f"这次没算出可以给你的结果，{NO_SUBSTITUTION}。请确认一下数据范围再试。"
+
+#: 契约没覆盖住问的指标 → 整份不发。这段话**可辨认的那一句**。
+#:
+#: ⚠️ 单独抽出来是给**电池的排除项**用的：电池要断言「这几道题不许走到契约拒答」，
+#:    而它原来挂的是旧措辞 `"本次结果没有可靠覆盖"` —— P-B① 改完文案后那两处
+#:    排除**当场变成恒真**（本轮已经因为同型腐烂拆掉 6 条，不能再造两条）。
+#:    引用这个常量，改文案时电池自动跟着变。
+#:
+#: ⛔ 取的是「答非所问」那半句而不是「这次没算出」——后者与 `NO_USABLE_RESULT`
+#:    的开头撞车，两种不同的拒答会被同一个排除项混在一起，红了分不清是哪条路。
+CONTRACT_REFUSAL_MARK = "没有把可能答非所问的数据端给你"
+
+# The restaurant chat is read by owners and store managers, not engineers.
+# Keep the replacements ordered from specific phrases to individual jargon so
+# that the resulting sentences remain natural instead of becoming word-for-word
+# translations of implementation details.
+_CUSTOMER_PLAIN_LANGUAGE_REPLACEMENTS = (
+    ("叙述模型预算已用完", "今天的智能分析次数已经用完"),
+    ("叙述模型暂时不可用", "智能分析暂时有点忙"),
+    ("叙述未通过数据因果门禁", "刚才生成的说明和系统数据对不上"),
+    ("确定性多维分析", "按系统真实数据做的综合分析"),
+    ("确定性计算发现", "从系统数据里看到的重点"),
+    ("主因判定（确定性）", "从数据看，主要原因"),
+    ("分维度数据与覆盖情况", "各方面的经营数据"),
+    ("本轮已纳入维度", "这次已经查看的方面"),
+    ("尚缺但可补充的维度", "还可以补充的方面"),
+    ("还可补充的分析维度", "还可以补充的方面"),
+    ("缺失维度清单", "还没有数据的方面"),
+    ("缺失维度", "还没有数据的方面"),
+    ("页面聚焦上下文", "当前页面信息"),
+    ("结构化分析提示", "分析提示"),
+    ("结构化上下文", "已经整理好的信息"),
+    ("结构化数据", "系统里已经整理好的数据"),
+    ("显式指定", "直接告诉我"),
+    ("显式提供", "已经提供"),
+    ("显式选择", "直接选择"),
+    ("显式确认", "亲自确认"),
+    ("语义规划", "问题理解"),
+    ("语义解析", "问题理解"),
+    ("实体槽位", "菜品、门店等条件"),
+    ("时间槽位", "时间条件"),
+    ("门店槽位", "门店条件"),
+    ("Answer Contract", "回答检查"),
+    ("QueryPlan", "查询安排"),
+    ("可比基线", "能公平对比的历史数据"),
+    ("同口径", "用同一种算法"),
+    ("同一口径", "用同一种算法"),
+    ("应收口径", "按订单应收金额计算"),
+    ("聚合口径", "按全部数据合并计算"),
+    ("数据口径与限制", "数据说明"),
+    ("投诉类型为商家申诉口径", "这里的投诉只统计商家申诉记录"),
+    ("相关≠因果", "一起变化不代表就是原因"),
+    ("相关不等于因果", "一起变化不代表就是原因"),
+    ("不宣称因果", "不能直接说它就是原因"),
+    ("因果需标推测", "只能说可能有关，不能说就是原因"),
+    ("因果归因", "判断原因"),
+    ("因果增量", "由活动带来的新增效果"),
+    ("相关信号", "一起变化的数据"),
+    ("相邻指标替代", "拿别的数据顶替"),
+    ("数据因果门禁", "数据核对"),
+    ("Demo 租户", "演示账号"),
+    ("Top 门店", "营业额靠前的门店"),
+    ("POS/agg_daily", "收银和营业汇总"),
+    ("POS+agg_daily_cost", "收银和成本汇总"),
+    ("agg_product/POS明细+dim_product", "菜品销售明细"),
+    ("restaurant_sku_forms完整BOM成本", "菜品配方与成本"),
+    ("POS门店聚合", "各门店收银数据"),
+    ("POS就餐人数", "收银记录的就餐人数"),
+    ("收银就餐人数", "收银记录的就餐人数"),
+    ("POS订单类型", "收银记录的订单类型"),
+    ("POS餐段", "收银记录的用餐时段"),
+    ("POS优惠金额与构成", "收银记录的优惠金额和类型"),
+    ("非VIP", "非会员"),
+    ("VIP", "会员"),
+    ("评价ID DISTINCT", "评价编号去重"),
+    ("按 评价编号去重", "按评价编号去重"),
+    ("观测日", "有数据的天数"),
+    ("全链基准", "全部门店平均值"),
+    ("全链客单价", "全部门店每单平均消费"),
+    ("客流效应", "订单量带来的差额"),
+    ("客单价效应", "每单平均消费带来的差额"),
+    ("客单价", "每单平均消费"),
+    ("数据关系", "从数据看"),
+    ("[小样本，结论需谨慎]", "（数据量较少，结论需谨慎）"),
+    ("[口味/品质标签，非菜名]", "（口味或品质评价，不是菜名）"),
+    ("resolver", "数据查询"),
+    ("确定性", "按系统数据算出的"),
+    ("显式", "明确"),
+    ("结构化", "整理后的"),
+    ("语义", "意思"),
+    ("槽位", "条件"),
+    ("多维", "多个方面"),
+    ("维度", "方面"),
+    ("可比基准", "能公平对比的历史数据"),
+    ("基线", "用来对比的历史数据"),
+    ("口径", "计算方法"),
+    ("小样本", "数据量较少"),
+    ("推测", "可能"),
+)
+
+_CUSTOMER_PLAIN_LANGUAGE_REGEX_REPLACEMENTS = (
+    (re.compile(r"\bVIP\b", re.IGNORECASE), "会员"),
+    (re.compile(r"\bBOM\b", re.IGNORECASE), "菜品配方"),
+    (re.compile(r"\bROI\b", re.IGNORECASE), "活动是否划算"),
+    (re.compile(r"\bSIMULATED\b", re.IGNORECASE), "演示数据"),
+    (re.compile(r"\bPROXY\b", re.IGNORECASE), "参考数据"),
+    (re.compile(r"\bMISSING\b", re.IGNORECASE), "暂无数据"),
+    (re.compile(r"\bREAL\b", re.IGNORECASE), "真实数据"),
+    (re.compile(r"\bDemo\b", re.IGNORECASE), "演示"),
+)
+
+
+def sanitize_customer_ai_text(value: Optional[str]) -> str:
+    """Remove implementation details and rewrite jargon as store-manager language."""
+    if not value:
+        return ""
+    cleaned_lines = []
+    for raw_line in str(value).splitlines():
+        # ⛔ 空行是 markdown 的**块分隔符**, 不是可有可无的留白。
+        #
+        # 🔴 2026-08-11 prod 实测(打真接口读渲染结果): 08-10 起陆续上线的 8 张
+        #    markdown 表格, 到用户手里全都少了表头前的空行 ——
+        #        '**本月…菜品销量排行（卖得最好前 5）：**\n| # | 菜品 | …'
+        #    resolver 拼的明明是 `[标题, ""] + _markdown_table(...)`, 而响应里
+        #    `answer_text` 的连续空行数是 **0**。根因就是这里: 原实现用
+        #    `if line and ...` 把空行整行丢掉, 再用单个 `\n` 重拼。
+        #    不报错 —— markdown-it 需要空行才把表格当成一个块, 少了它整张表被并进
+        #    上一段渲染成一坨。
+        #
+        # 判据: **清洗文本的函数不能顺手改文本的结构。** 要删的是「实现细节」,
+        #       空行不是实现细节。
+        # ⚠️ 只保留**原本就是空行**的那些: 清洗之后才变空的(纯实现细节行)照旧丢掉,
+        #    否则删掉一行技术噪音会在原地留下一个空行。
+        if not raw_line.strip():
+            cleaned_lines.append("")
+            continue
+        line = raw_line
+        for old, new in _CUSTOMER_PLAIN_LANGUAGE_REPLACEMENTS:
+            line = line.replace(old, new)
+        for pattern, replacement in _CUSTOMER_PLAIN_LANGUAGE_REGEX_REPLACEMENTS:
+            line = pattern.sub(replacement, line)
+        line = _TOOL_EXPLANATION.sub("", line)
+        line = _API_PATH.sub("", line)
+        line = _INTERNAL_IDENTIFIER.sub("", line)
+        line = re.sub(r"\bGold\b", "", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bmaterialize\b", "数据准备", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bETL\b", "数据整理", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bLLM\b", "智能分析", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bJSON\b", "数据格式", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bPOS\b", "收银", line, flags=re.IGNORECASE)
+        line = re.sub(r"(?:内部)?意图(?:代码)?\s*[：:]?\s*", "", line)
+        line = re.sub(r"(?:来源|读取自|查询自)\s*(?=[，。；\n]|$)", "", line)
+        line = re.sub(r"（\s*[，,]\s*", "（", line)
+        line = re.sub(r"\s+([（(])", r"\1", line)
+        line = re.sub(r"[ \t]+([，。；：])", r"\1", line).strip(" ，；：")
+        if line and not _TECH_ONLY.fullmatch(line):
+            cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines).strip()
+    return cleaned or NO_DISPLAYABLE_BUSINESS_RESULT
+
+
+def has_displayable_business_result(value: Optional[str]) -> bool:
+    """Return false when sanitization removed every business-facing fact."""
+    text = (value or "").strip()
+    return bool(text and text != NO_DISPLAYABLE_BUSINESS_RESULT)

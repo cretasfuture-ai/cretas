@@ -1,0 +1,2169 @@
+<script setup lang="ts">
+/**
+ * 原料类型字典管理 (raw_material_types)
+ *
+ * 张权 Apr 29 2026 反馈: "没有 新建的入口哦 这个入口是入库登记".
+ * 仓储 → 原料 / 物料 (采购入库) 页面只有"入库登记"(material_batches CRUD),
+ * 但缺一个"原料类型字典"管理页, 用户无法在 UI 里创建新原料类型 (冻猪蹄/吸塑盒).
+ * 后端 /raw-material-types 全 CRUD 早齐, 只缺前端页面 — 本页补上.
+ *
+ * May 7 2026 用户需求 (PR #114/#116/#120 后端落地):
+ * 1. 按基本类型建议简短料号，创建前允许用户修改
+ * 2. 分段字典只作为可选分类树，不参与料号生成
+ * 3. 单位下拉 + 智能默认 (suggest-unit 按相似名称+类别取最近原料的 unit)
+ * 4. 去掉单价 (按采购价浮动, 在采购订单里录)
+ * 5. 包装层级: 一级 (kg, 必填=unit) + 二/三级 (10kg/箱, 12箱/柜)
+ *
+ * T159-A-form (2026-06-08): 防呆复刻 SKU 表单模式
+ *   1. 料号建议 (create mode): GET .../raw-material-types/preview-code?category=
+ *   2. 全字段智能匹配 cascade: GET .../raw-material-types/suggest?name=&category=
+ *      → 填 unit/category/storageType/shelfLifeDays/level1PerLevel2/level2Unit
+ *      + *ManuallyEdited flags + cascadeWriting guard (exact SKU pattern)
+ *      + clearCascadeFields when name cleared
+ *      null 字段 → 不覆盖; 端点 404/error → graceful degrade to suggest-unit fallback
+ *   3. 包装层级内联换算行 (SKU-style):
+ *      「1 [二级单位] = [换算数] [一级单位]」+ live preview tag
+ *      一级单位 = 只读 echo 主单位 (single source of truth)
+ *   4. 单位下拉统一使用 UnitSelect，支持搜索、查重和现场创建
+ *   foldable #1: 批次列表单位列 → 修 materials/list.vue 显示 quantityUnit 而非 unit
+ */
+import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue';
+import { useRoute } from 'vue-router';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import { get, post, put, del } from '@/api/request';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
+import { formatAmount } from '@/utils/tableFormatters';
+import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES } from '@/utils/materialCategory';
+import { displayUnit, sameUnit } from '@/utils/unitPricing';
+import { handleCatchError } from '@/utils/errorToast';
+import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import UnitSelect from '@/components/common/UnitSelect.vue';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
+import type { TableRow } from '@/types/api';
+import {
+  listActiveSuppliers,
+  listMaterialSuppliers,
+  createSupplierMaterial,
+  updateSupplierMaterial,
+  deleteSupplierMaterial,
+  type SupplierMaterialPayload,
+  type SupplierMaterialRelation,
+  type SupplierRecord,
+} from '@/api/supplierManagement';
+
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const route = useRoute();
+const factoryId = computed(() => authStore.factoryId);
+// 🔴 2026-08-22: 绑到 production —— 原来绑 warehouse, 而**原料类型的增/改/删
+//   后端要 production:read_write**(RawMaterialType / material-packaging 两组端点都是)。
+//   ⇒ warehouse_worker 看得见新增/编辑/删除, 点下去必 403。
+// ⛔ 不放宽后端: 原料类型是主数据, 仓库工人不该增删改(收货时**选**它, 读端点没拦)。
+// ⚠️ 同文件的 canManageClassification 已经绑对了(system), ⛔ 别把两者合并 ——
+//   它们守的是两组不同端点。
+const canWrite = computed(() => permissionStore.canWrite('production'));
+const canManageSupplierRelations = computed(() => permissionStore.canWrite('procurement'));
+const canManageClassification = computed(() => permissionStore.canWrite('system'));
+// T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
+const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
+
+const loading = ref(false);
+// 客户张权反馈 (2026-07-02): "搜不出来 filter 不了" — 搜索框绑了 searchKeyword 但后端
+// GET /{factoryId}/raw-material-types 列表接口 (list.vue 实际调用的接口) 从不接收 keyword 参数
+// (只有独立的 /raw-material-types/search 子路由支持 keyword) — 输入框敲字对结果毫无影响,
+// 关键字和分类节点统一下推后端分页，避免只取前 2000 条后在客户端假筛选。
+const tableData = ref<TableRow[]>([]);
+const pagination = ref({ page: 1, size: 20, total: 0 });
+const searchKeyword = ref('');
+// 可选分类筛选：分类节点只用系统生成 ID，不再存在编码前缀。
+const filterSegmentL1 = ref<number | null>(null);
+const filterSegmentL2 = ref<number | null>(null);
+const filterSegmentL3 = ref<number | null>(null);
+const selectedClassificationId = computed(() =>
+  filterSegmentL3.value || filterSegmentL2.value || filterSegmentL1.value,
+);
+
+// 储存类型读取系统字典；单位由 UnitSelect 统一加载；基本类型来自平台枚举及存量值。
+interface DictItem { enumCode: string; enumLabel: string; sortOrder: number }
+const storageTypeOptions = ref<DictItem[]>([]);
+
+onMounted(async () => {
+  const keyword = route.query.keyword;
+  if (typeof keyword === 'string' && keyword.trim()) {
+    searchKeyword.value = keyword.trim();
+  }
+  await Promise.all([loadDictionaries(), loadSegmentTree()]);
+  await loadData();
+});
+
+async function loadDictionaries() {
+  if (!factoryId.value) return;
+  try {
+    const storageRes = await get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_STORAGE_TYPE`);
+    storageTypeOptions.value = (storageRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  } catch (e) {
+    console.warn('字典加载失败, 用空选项', e);
+  }
+}
+
+function mergeHistoricStorage(current?: string): { value: string; label: string }[] {
+  const opts = storageTypeOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
+  if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
+    return [{ value: current, label: `${current} (历史)` }, ...opts];
+  }
+  return opts;
+}
+
+async function loadData() {
+  if (!factoryId.value) return;
+  loading.value = true;
+  try {
+    const res = await get<{ content: TableRow[]; totalElements: number }>(
+      `/${factoryId.value}/raw-material-types`,
+      {
+        params: {
+          page: pagination.value.page,
+          size: pagination.value.size,
+          classificationId: selectedClassificationId.value || undefined,
+          keyword: searchKeyword.value.trim() || undefined,
+        },
+      },
+    );
+    if (res.success && res.data) {
+      tableData.value = res.data.content || [];
+      pagination.value.total = res.data.totalElements || 0;
+      // 无字典模式下的类别下拉要并上存量在用的取值, 见 materialFamilyOptions 注释
+      rememberCategories(tableData.value);
+    }
+  } catch (e) { console.error(e); }
+  finally { loading.value = false; }
+}
+
+// ==================== Create / Edit Dialog ====================
+const dialogVisible = ref(false);
+const editingId = ref<string | null>(null);
+const form = ref({
+  code: '',
+  name: '',
+  category: '',
+  // 副产标记: 与 category 正交 —— 副产仍保留材质分类, 因此能被别的 workflow 当投入投料
+  isByproduct: false,
+  unit: 'kg',
+  storageType: '',
+  shelfLifeDays: null as number | null,
+  notes: '',
+  // SP4: 税率 + 含税单价
+  taxTreatment: 'TAXABLE' as 'TAXABLE' | 'EXEMPT',
+  taxRate: 'TAX_13' as string,
+  taxExemptionReason: '',
+  taxIncludedUnitPrice: null as number | null,
+  // P8: 包材关联固定客户 (选填, 非 PACKAGING 类留空)
+  associatedCustomerId: null as string | null,
+  // #759: 包材每产品单位用量 (选填, 仅 PACKAGING 有意义)
+  packQtyPerProduct: null as number | null,
+});
+
+function isPackagingCategory(category: string | null | undefined): boolean {
+  return bigCategoryOf(String(category || '')) === '包材';
+}
+
+const isPackagingMaterial = computed(() => isPackagingCategory(form.value.category));
+
+// P8: 客户列表 (用于 associatedCustomerId 下拉)
+// 客户张权反馈 (2026-07-02): "关联固定客户" 下拉显示"没有数据"。根因排查 (headed + curl F006 对比):
+// 之前调的 GET /{factoryId}/customers 是 CRM 客户列表页用的接口, 服务端加了
+// @DataScope("created_by") (Sprint 6 W2-B RBAC 第2维数据权限) — SELF/SELF_AND_BELOW/DEPT_AND_BELOW
+// 数据域的角色只能看到"自己创建过的客户", 仓库管理员角色几乎从没建过客户记录, 所以这个接口对他们
+// 合法返回 0 条 (不是 bug, 是 CRM 列表页故意的数据域隔离), 但拿来给"关联固定客户"这种引用型下拉用
+// 就是错的接口 — 后端另有专门为下拉场景准备的 GET /{factoryId}/customers/active
+// (CustomerController.getActiveCustomers, 无 DataScope 限制, 文档原话"用于下拉选择等场景"),
+// 跟本文件"关联原料"下拉复用的 /raw-material-types/active 是同一套设计模式。改调这个接口即修复
+// (curl 对比: F006 /customers 对 factory_super_admin 返 17 条能"凑巧"验证通过, 但换 DataScope=SELF
+// 角色会是 0 条; /customers/active 两种角色都稳定返回全部 17 条)。
+interface CustomerItem { id: string; name: string }
+const customerOptions = ref<CustomerItem[]>([]);
+const customerOptionsLoaded = ref(false);
+async function loadCustomers() {
+  if (!factoryId.value || customerOptions.value.length > 0) return;
+  try {
+    const res = await get<CustomerItem[] | { content?: CustomerItem[] }>(
+      `/${factoryId.value}/customers/active`,
+    );
+    const data = res.data;
+    customerOptions.value = Array.isArray(data) ? data : (data as { content?: CustomerItem[] })?.content ?? [];
+  } catch {
+    customerOptions.value = [];
+  } finally {
+    customerOptionsLoaded.value = true;
+  }
+}
+interface MaterialPackagingRule {
+  id?: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  conversionFactor?: number;
+  defaultSpec: boolean;
+  active: boolean;
+  sortOrder: number;
+  version?: number;
+}
+
+function blankPackagingRule(index = 0): MaterialPackagingRule {
+  return {
+    name: index === 0 ? '默认包装' : `包装规格 ${index + 1}`,
+    packageUnit: '',
+    baseUnit: form.value.unit?.trim() || '',
+    conversionFactor: undefined,
+    defaultSpec: index === 0,
+    active: true,
+    sortOrder: index,
+  };
+}
+
+const packagingRules = ref<MaterialPackagingRule[]>([blankPackagingRule()]);
+
+function addPackagingRule(): void {
+  packagingRules.value.push(blankPackagingRule(packagingRules.value.length));
+}
+
+function removePackagingRule(index: number): void {
+  // ⛔ 这里原本 `if (index === 0) return` —— 第一条永远删不掉, 配上「至少一条」的
+  // 强制校验, 用户就没有任何办法表达「这个原料没有固定包装」。现在允许删光。
+  packagingRules.value.splice(index, 1);
+  packagingRules.value.forEach((rule, ruleIndex) => {
+    rule.name = ruleIndex === 0 ? '默认包装' : `包装规格 ${ruleIndex + 1}`;
+    rule.defaultSpec = ruleIndex === 0;
+    rule.sortOrder = ruleIndex;
+  });
+}
+
+function packagingRuleText(rule: MaterialPackagingRule): string {
+  const factor = Number(rule.conversionFactor);
+  if (!rule.packageUnit || !form.value.unit || !Number.isFinite(factor) || factor <= 0) return '';
+  return `1 ${displayUnit(rule.packageUnit)} = ${factor} ${displayUnit(form.value.unit)}`;
+}
+const dialogTitle = computed(() => (editingId.value ? '编辑原料类型' : '新建原料类型'));
+
+// SP4: 含税单价 → 未税联动
+const preTaxUnitPrice = computed(() => {
+  const price = form.value.taxIncludedUnitPrice;
+  const rate = form.value.taxRate;
+  if (price == null) return null;
+  if (form.value.taxTreatment === 'EXEMPT') return Number(price);
+  if (!rate) return null;
+  const rateNum = rate === 'TAX_9' ? 0.09 : rate === 'TAX_13' ? 0.13 : null;
+  if (rateNum == null) return null;
+  return Math.round((price / (1 + rateNum)) * 100) / 100;
+});
+
+// 可选分类级联下拉 (MaterialCodeSegmentController)
+interface SegmentNode {
+  id: number;
+  segmentLabel: string;
+  level: number;
+  parentId: number | null;
+  isActive: boolean;
+  children?: SegmentNode[];
+}
+
+function formatSegmentOptionLabel(option: { segmentLabel?: string; label?: string }): string {
+  const label = String(option.segmentLabel || option.label || '').trim();
+  return label || '未命名分类';
+}
+
+function materialDisplayCode(row: TableRow): string {
+  return String(row.code || '-').trim() || '-';
+}
+const segmentTree = ref<SegmentNode[]>([]);
+const segmentL1 = ref<number | null>(null);
+const segmentL2 = ref<number | null>(null);
+const segmentL3 = ref<number | string | null>(null);
+const segmentLoading = ref(false);
+const codeContractHint = ref('');
+const editingDisplayCode = ref('');
+const codeSuggestionLoading = ref(false);
+const codeSuggestionError = ref('');
+const codeManuallyEdited = ref(false);
+const QUICK_CREATE_L3 = '__quick_create_l3__';
+const createL3DialogVisible = ref(false);
+const createL3Submitting = ref(false);
+const createL3Form = ref({ label: '' });
+const l3MatchHint = ref('');
+const l3ManuallyEdited = ref(false);
+const unitSuggestionHint = ref('');
+interface TaxonomyCandidate {
+  l1Id: number;
+  l1Label: string;
+  l2Id: number;
+  l2Label: string;
+  l3Id: number;
+  l3Label: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  reason: string;
+}
+const taxonomyCandidates = ref<TaxonomyCandidate[]>([]);
+let segmentTreeRequestVersion = 0;
+
+async function loadSegmentTree() {
+  if (!factoryId.value) return;
+  const requestFactoryId = factoryId.value;
+  const requestVersion = ++segmentTreeRequestVersion;
+  segmentLoading.value = true;
+  try {
+    const res = await get<SegmentNode[]>(`/${requestFactoryId}/material-segments/tree`);
+    if (requestVersion !== segmentTreeRequestVersion || requestFactoryId !== factoryId.value) return;
+    if (res.success && Array.isArray(res.data)) {
+      segmentTree.value = res.data;
+    } else {
+      segmentTree.value = [];
+    }
+  } catch {
+    if (requestVersion === segmentTreeRequestVersion) segmentTree.value = [];
+  } finally {
+    if (requestVersion === segmentTreeRequestVersion) segmentLoading.value = false;
+  }
+}
+
+// L1 options = top-level nodes
+const segmentL1Options = computed(() =>
+  segmentTree.value.filter((n) => n.level === 1 && n.isActive),
+);
+// 新建类别与列表大类共用此组选项，避免旧 MATERIAL_CATEGORY 枚举与编码类族漂移。
+/** 是否存在可选物料分类树；它不会切换料号生成模式。 */
+const hasSegmentDictionary = computed(() => segmentL1Options.value.length > 0);
+
+/**
+ * 无字典模式下**存量在用**的类别取值。
+ *
+ * 🔴 光有平台枚举不够: 枚举是 主材/辅材/调味料/包材/添加剂, 而字典模式下写进去的
+ * category 是 L1 类族的名字(六膳门那 14 个换过料号的物料就是 `原料`)。工厂一旦从
+ * 「有字典」切成「无字典」, 这些历史取值在下拉里一个都对不上 —— 编辑时类别框显示空白,
+ * 列表也按它筛不出来, 而用户什么都没做错。
+ *
+ * 所以选项 = 平台枚举 ∪ 已加载数据里真实出现过的类别。跨页累积(只增不减), 免得翻页
+ * 把上一页见过的取值又弄丢。fool-proof-design Rule 5: 宁缺勿藏。
+ */
+const seenCategories = ref<string[]>([]);
+function rememberCategories(rows: { category?: string | null }[]) {
+  for (const row of rows) {
+    const c = (row.category || '').trim();
+    if (c && !seenCategories.value.includes(c)) seenCategories.value.push(c);
+  }
+}
+
+/**
+ * 基本类型始终来自平台枚举、存量值与分类树 L1 的并集。
+ * 是否配置分类树不再改变新建路径。
+ */
+const materialFamilyOptions = computed(() => {
+  const values = [...MATERIAL_CATEGORY_ENUM_VALUES] as string[];
+  for (const c of seenCategories.value) {
+    if (!values.includes(c)) values.push(c);
+  }
+  for (const node of segmentL1Options.value) {
+    if (!values.includes(node.segmentLabel)) values.push(node.segmentLabel);
+  }
+  const current = (form.value?.category || '').trim();
+  if (current && !values.includes(current)) values.push(current);
+  return values.map((label) => ({
+    value: label,
+    label,
+    classificationId: segmentL1Options.value.find((node) => node.segmentLabel === label)?.id || null,
+  }));
+});
+const filterSegmentL2Options = computed(() => {
+  if (!filterSegmentL1.value) return [];
+  const l1Node = segmentTree.value.find((node) => node.id === filterSegmentL1.value);
+  return l1Node?.children?.filter((node) => node.level === 2 && node.isActive) ?? [];
+});
+const filterSegmentL3Options = computed(() => {
+  if (!filterSegmentL2.value) return [];
+  for (const l1Node of segmentTree.value) {
+    const l2Node = l1Node.children?.find((node) => node.id === filterSegmentL2.value);
+    if (l2Node) return l2Node.children?.filter((node) => node.level === 3 && node.isActive) ?? [];
+  }
+  return [];
+});
+
+watch(filterSegmentL1, () => {
+  filterSegmentL2.value = null;
+  filterSegmentL3.value = null;
+  pagination.value.page = 1;
+  loadData();
+});
+watch(filterSegmentL2, () => {
+  filterSegmentL3.value = null;
+  pagination.value.page = 1;
+  loadData();
+});
+watch(filterSegmentL3, () => {
+  pagination.value.page = 1;
+  loadData();
+});
+
+function resolveMaterialFamily(category: string | null | undefined): string | null {
+  const raw = String(category || '').trim();
+  if (!raw) return null;
+  const exact = materialFamilyOptions.value.find((option) => option.value === raw);
+  if (exact) return exact.value;
+
+  // 历史枚举归并到当前三类 L1：主材→原料，辅材/添加剂/调味料→辅料，PACKAGING→包材。
+  const bucket = bigCategoryOf(raw);
+  const canonical = bucket === '调料' ? '辅料' : bucket;
+  return materialFamilyOptions.value.find((option) => option.value === canonical)?.value ?? null;
+}
+
+function isMaterialFamily(category: string | null | undefined): boolean {
+  return materialFamilyOptions.value.some((option) => option.value === category);
+}
+
+function syncMaterialFamilyFromSegment(classificationId: number | null) {
+  if (editingId.value || !classificationId) return;
+  const option = materialFamilyOptions.value.find((item) => item.classificationId === classificationId);
+  if (!option || form.value.category === option.value) return;
+  cascadeWriting.value = true;
+  try {
+    form.value.category = option.value;
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
+// L2 options = children of selected L1
+const segmentL2Options = computed(() => {
+  if (!segmentL1.value) return [];
+  const l1Node = segmentTree.value.find((n) => n.id === segmentL1.value);
+  return l1Node?.children?.filter((c) => c.level === 2 && c.isActive) ?? [];
+});
+// L3 options = children of selected L2
+const segmentL3Options = computed(() => {
+  if (!segmentL2.value) return [];
+  for (const l1 of segmentTree.value) {
+    const l2Node = l1.children?.find((c) => c.id === segmentL2.value);
+    if (l2Node) return l2Node.children?.filter((c) => c.level === 3 && c.isActive) ?? [];
+  }
+  return [];
+});
+const selectedL2Label = computed(() =>
+  segmentL2Options.value.find((node) => node.id === segmentL2.value)?.segmentLabel || '',
+);
+
+// When L1 changes, reset L2/L3
+watch(segmentL1, (classificationId) => {
+  segmentL2.value = null;
+  segmentL3.value = null;
+  resetCodeContractPreview();
+  syncMaterialFamilyFromSegment(classificationId);
+});
+watch(segmentL2, () => {
+  segmentL3.value = null;
+  resetCodeContractPreview();
+  l3MatchHint.value = '';
+  l3ManuallyEdited.value = false;
+});
+
+watch(segmentL3, (value) => {
+  resetCodeContractPreview();
+  if (dialogVisible.value && !editingId.value && typeof value === 'number' && form.value.category) {
+    void refreshCodeSuggestion(false);
+  }
+});
+
+function handleL3Change(value: number | string | null): void {
+  if (value === QUICK_CREATE_L3) {
+    segmentL3.value = null;
+    // L3 is shared taxonomy, not the current purchasable MaterialType.
+    // Never copy the material name into a new shared classification.
+    createL3Form.value = { label: '' };
+    createL3DialogVisible.value = true;
+    return;
+  }
+  l3ManuallyEdited.value = true;
+  l3MatchHint.value = '';
+  taxonomyCandidates.value = [];
+}
+
+async function applyTaxonomyCandidate(candidate: TaxonomyCandidate, manual: boolean): Promise<void> {
+  cascadeWriting.value = true;
+  try {
+    segmentL1.value = candidate.l1Id;
+    await nextTick();
+    segmentL2.value = candidate.l2Id;
+    await nextTick();
+    segmentL3.value = candidate.l3Id;
+    l3ManuallyEdited.value = manual;
+    taxonomyCandidates.value = [];
+    l3MatchHint.value = `${manual ? '已确认分类' : '已根据名称智能匹配'}：${candidate.l1Label} > ${candidate.l2Label} > ${candidate.l3Label}；${candidate.reason}`;
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
+
+function rematchTaxonomy(): void {
+  l3ManuallyEdited.value = false;
+  segmentL3.value = null;
+  l3MatchHint.value = '已允许重新匹配，请继续编辑名称或稍候系统重新推荐';
+  suggestionRefreshToken.value += 1;
+}
+
+async function handleCreateL3(): Promise<void> {
+  if (!canManageClassification.value) {
+    ElMessage.error('没有共享分类维护权限，请联系系统管理员新增三级分类');
+    createL3DialogVisible.value = false;
+    return;
+  }
+  const label = createL3Form.value.label.trim();
+  if (!segmentL2.value) { ElMessage.warning('请先选择二级分类'); return; }
+  if (!label) { ElMessage.warning('请输入新品类名称'); return; }
+  if (!factoryId.value) return;
+
+  const normalizedLabel = label.toLocaleLowerCase();
+  const existing = segmentL3Options.value.find(
+    (node) => node.segmentLabel.trim().toLocaleLowerCase() === normalizedLabel,
+  );
+  if (existing) {
+    segmentL3.value = existing.id;
+    l3ManuallyEdited.value = true;
+    createL3DialogVisible.value = false;
+    ElMessage.success(`“${existing.segmentLabel}”已存在，已直接选中`);
+    return;
+  }
+
+  createL3Submitting.value = true;
+  try {
+    const response = await post<SegmentNode>(`/${factoryId.value}/material-segments`, {
+      level: 3,
+      segmentLabel: label,
+      parentId: segmentL2.value,
+      sortOrder: segmentL3Options.value.length,
+      isActive: true,
+    });
+    if (!response.success || !response.data) {
+      throw new Error(response.message || '创建三级分类失败');
+    }
+    await loadSegmentTree();
+    segmentL3.value = response.data.id;
+    l3ManuallyEdited.value = true;
+    createL3DialogVisible.value = false;
+    ElMessage.success(`已创建新品类「${response.data.segmentLabel}」`);
+  } catch (error) {
+    handleCatchError(error, '创建三级分类失败');
+  } finally {
+    createL3Submitting.value = false;
+  }
+}
+
+let l3MatchTimer: ReturnType<typeof setTimeout> | undefined;
+let l3MatchRequestVersion = 0;
+watch(
+  () => [form.value.name, segmentL1.value, segmentL2.value, dialogVisible.value, editingId.value] as const,
+  ([name, _l1, l2, visible, currentEditingId]) => {
+    const requestVersion = ++l3MatchRequestVersion;
+    if (l3MatchTimer) clearTimeout(l3MatchTimer);
+    l3MatchHint.value = '';
+    const normalizedName = String(name || '').trim();
+    if (!visible || currentEditingId || !l2 || normalizedName.length < 2 || l3ManuallyEdited.value) return;
+    l3MatchTimer = setTimeout(async () => {
+      try {
+        const response = await get<{ content: TableRow[] }>(`/${factoryId.value}/raw-material-types`, {
+          params: { page: 1, size: 20, classificationId: l2, keyword: normalizedName },
+        });
+        if (requestVersion !== l3MatchRequestVersion) return;
+        const rows = response.success && Array.isArray(response.data?.content) ? response.data.content : [];
+        const query = normalizedName.toLocaleLowerCase();
+        // Only an exact same-factory historic identity may be auto-selected.
+        // Fuzzy results are exposed by the explainable candidate UI instead.
+        const matched = rows.find((row) => String(row.name || '').trim().toLocaleLowerCase() === query);
+        const matchedL3 = Number(matched?.classificationId || 0);
+        const option = segmentL3Options.value.find((node) => node.id === matchedL3);
+        if (option && !l3ManuallyEdited.value) {
+          segmentL3.value = option.id;
+          l3MatchHint.value = `已按历史物料「${String(matched?.name || '')}」匹配 ${option.segmentLabel}`;
+        }
+      } catch {
+        // 历史匹配失败不影响手工选择，也不虚构 L3。
+      }
+    }, 400);
+  },
+);
+
+interface MaterialCodePreview {
+  code: string;
+  classificationId?: number | null;
+  selectable: boolean;
+  guidance: string;
+}
+
+let codeContractRequestVersion = 0;
+
+function resetCodeContractPreview(): void {
+  codeContractHint.value = '';
+  codeSuggestionError.value = '';
+}
+
+async function refreshCodeSuggestion(notifyError = true): Promise<boolean> {
+  if (!form.value.category) {
+    codeSuggestionError.value = '请先选择基本类型，系统才能计算下一个可用料号';
+    return false;
+  }
+  const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value);
+  if (hasPartialClassification && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+    codeSuggestionError.value = '分类如需填写，必须完整选择一级、二级、三级；也可以全部留空';
+    if (notifyError) ElMessage.warning(codeSuggestionError.value);
+    return false;
+  }
+  if (!factoryId.value) return false;
+  const requestVersion = ++codeContractRequestVersion;
+  const requestedCategory = form.value.category;
+  codeSuggestionLoading.value = true;
+  codeSuggestionError.value = '';
+  try {
+    const res = await get<MaterialCodePreview>(
+      `/${factoryId.value}/raw-material-types/preview-code`,
+      {
+        params: {
+          category: requestedCategory,
+          classificationId: typeof segmentL3.value === 'number' ? segmentL3.value : undefined,
+        },
+        _silent: !notifyError,
+      },
+    );
+    if (requestVersion !== codeContractRequestVersion || requestedCategory !== form.value.category) {
+      return false;
+    }
+    if (res.success && res.data?.code && res.data.selectable) {
+      codeContractHint.value = res.data.guidance;
+      if (!codeManuallyEdited.value) form.value.code = res.data.code;
+      return true;
+    } else {
+      resetCodeContractPreview();
+      codeSuggestionError.value = res.message || '系统无法计算下一个可用料号';
+      if (notifyError) ElMessage.error(codeSuggestionError.value);
+      return false;
+    }
+  } catch (error) {
+    if (requestVersion !== codeContractRequestVersion || requestedCategory !== form.value.category) {
+      return false;
+    }
+    resetCodeContractPreview();
+    codeSuggestionError.value = '系统暂时无法计算下一个可用料号，请稍后重试';
+    if (notifyError) handleCatchError(error, codeSuggestionError.value);
+    return false;
+  } finally {
+    if (requestVersion === codeContractRequestVersion) {
+      codeSuggestionLoading.value = false;
+    }
+  }
+}
+
+// ==================== T159-A: *ManuallyEdited flags + cascadeWriting guard ====================
+// Exact mirror of SKU's pattern:
+//   - cascadeWriting=true while cascade writes → watchers skip marking as manual
+//   - User direct edits → *ManuallyEdited=true → cascade will NOT overwrite that field
+const cascadeWriting = ref(false);
+const unitManuallyEdited = ref(false);
+const categoryManuallyEdited = ref(false);
+const storageTypeManuallyEdited = ref(false);
+const shelfLifeManuallyEdited = ref(false);
+const packagingManuallyEdited = ref(false);
+
+function handleCodeInput(value: string): void {
+  codeManuallyEdited.value = true;
+  form.value.code = value.toUpperCase();
+}
+
+// Unit manual state is driven by UnitSelect's user-only change event. Watching
+// v-model cannot distinguish form initialization from a real user action.
+function handleUnitUserChange(value: string): void {
+  if (cascadeWriting.value) return;
+  unitManuallyEdited.value = true;
+  unitSuggestionHint.value = '';
+  form.value.unit = value;
+}
+watch(() => form.value.category, (category) => {
+  if (!cascadeWriting.value) categoryManuallyEdited.value = true;
+  if (dialogVisible.value && !editingId.value) {
+    codeManuallyEdited.value = false;
+    form.value.code = '';
+    resetCodeContractPreview();
+    if (category) void refreshCodeSuggestion(false);
+  }
+  if (!isPackagingCategory(category)) {
+    form.value.associatedCustomerId = null;
+    form.value.packQtyPerProduct = null;
+  }
+});
+watch(() => form.value.storageType, () => {
+  if (!cascadeWriting.value) storageTypeManuallyEdited.value = true;
+});
+watch(() => form.value.shelfLifeDays, () => {
+  if (!cascadeWriting.value) shelfLifeManuallyEdited.value = true;
+});
+watch(packagingRules, () => {
+  if (!cascadeWriting.value) packagingManuallyEdited.value = true;
+}, { deep: true, flush: 'sync' });
+
+function resetManuallyEditedFlags() {
+  codeManuallyEdited.value = false;
+  unitManuallyEdited.value = false;
+  categoryManuallyEdited.value = false;
+  storageTypeManuallyEdited.value = false;
+  shelfLifeManuallyEdited.value = false;
+  packagingManuallyEdited.value = false;
+  unitSuggestionHint.value = '';
+  taxonomyCandidates.value = [];
+}
+
+// clearCascadeFields: when name is cleared entirely, reset cascade-filled fields
+// ONLY for fields the user hasn't manually edited
+function clearCascadeFields() {
+  cascadeWriting.value = true;
+  try {
+    if (!unitManuallyEdited.value) form.value.unit = 'kg';
+    if (!categoryManuallyEdited.value) form.value.category = '';
+    if (!storageTypeManuallyEdited.value) form.value.storageType = storageTypeOptions.value[0]?.enumLabel || '';
+    if (!shelfLifeManuallyEdited.value) form.value.shelfLifeDays = null;
+    if (!packagingManuallyEdited.value) {
+      packagingRules.value = [blankPackagingRule()];
+    }
+  } finally {
+    cascadeWriting.value = false;
+  }
+}
+
+// ==================== T159-A: Full smart-match cascade ====================
+// Debounced watch: name (or name+category) change → call suggest endpoint → fill fields.
+// null fields from suggest → leave as-is (don't overwrite with null).
+// Endpoint 404/error → fallback to suggest-unit only (backward compat).
+let suggestTimer: number | undefined;
+let suggestRequestVersion = 0;
+const suggestionRefreshToken = ref(0);
+watch(
+  () => [form.value.name, form.value.category, dialogVisible.value, editingId.value, suggestionRefreshToken.value] as const,
+  ([name, _cat, visible, eid]) => {
+    const requestVersion = ++suggestRequestVersion;
+    if (!visible || eid) return; // edit mode: no cascade
+    if (suggestTimer) clearTimeout(suggestTimer);
+    const trimmedName = String(name || '').trim();
+
+    // Name cleared → reset cascade fields (graceful)
+    if (trimmedName.length === 0) {
+      clearCascadeFields();
+      return;
+    }
+    if (trimmedName.length < 2) return;
+
+    suggestTimer = window.setTimeout(async () => {
+      try {
+        const params: Record<string, string> = { name: trimmedName };
+        const cat = String(form.value.category || '').trim();
+        if (cat) params.category = cat;
+
+        // Try full suggest endpoint (T159-B-codegen provides this)
+        const res = await get<{
+          unit?: string | null;
+          matchedMaterialName?: string | null;
+          unitConfidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+          category?: string | null;
+          storageType?: string | null;
+          shelfLifeDays?: number | null;
+          level1PerLevel2?: number | null;
+          level2Unit?: string | null;
+          classificationL1Id?: number | null;
+          classificationL2Id?: number | null;
+          classificationL3Id?: number | null;
+          classificationConfidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+          classificationReason?: string | null;
+          classificationCandidates?: TaxonomyCandidate[] | null;
+        }>(`/${factoryId.value}/raw-material-types/suggest`, { params });
+        if (requestVersion !== suggestRequestVersion) return;
+
+        if (!res.success) {
+          // Fallback: old suggest-unit endpoint (original behavior)
+          const unitRes = await get<string>(
+            `/${factoryId.value}/raw-material-types/suggest-unit`,
+            { params },
+          );
+          if (unitRes.success && unitRes.data && !unitManuallyEdited.value) {
+            cascadeWriting.value = true;
+            try {
+              form.value.unit = unitRes.data;
+              unitSuggestionHint.value = `已根据同工厂相似原料智能匹配为「${displayUnit(unitRes.data)}」，可手动修改`;
+            } finally { cascadeWriting.value = false; }
+          }
+          return;
+        }
+
+        const d = res.data;
+        if (!d) return;
+
+        const candidates = (d.classificationCandidates || []).slice(0, 3);
+        if (l3ManuallyEdited.value) {
+          taxonomyCandidates.value = [];
+          l3MatchHint.value = '名称已变化，但分类已手动修改；如需采用新名称建议，请点击“重新匹配分类”';
+        } else if (d.classificationConfidence === 'HIGH' && candidates[0]) {
+          await applyTaxonomyCandidate(candidates[0], false);
+        } else if (d.classificationConfidence === 'MEDIUM') {
+          taxonomyCandidates.value = candidates;
+          l3MatchHint.value = '找到可能的现有分类，请确认后再保存；系统不会自动创建分类';
+        } else {
+          taxonomyCandidates.value = [];
+        }
+
+        // Apply cascade — only fields user hasn't manually edited, skip null values
+        cascadeWriting.value = true;
+        try {
+          if (d.unit != null && !unitManuallyEdited.value && d.unitConfidence !== 'LOW') {
+            form.value.unit = d.unit;
+            const source = d.matchedMaterialName ? `，参考相似原料「${d.matchedMaterialName}」` : '';
+            unitSuggestionHint.value = `已根据同工厂相似原料智能匹配为「${displayUnit(d.unit)}」${source}，可手动修改`;
+          }
+          if (d.category != null && !categoryManuallyEdited.value) {
+            const family = resolveMaterialFamily(d.category);
+            if (family) form.value.category = family;
+          }
+          if (d.storageType != null && !storageTypeManuallyEdited.value) form.value.storageType = d.storageType;
+          if (d.shelfLifeDays != null && !shelfLifeManuallyEdited.value) form.value.shelfLifeDays = d.shelfLifeDays;
+          if (!packagingManuallyEdited.value) {
+            // ⛔ 智能填充**不能填出一条必被拒绝的规则**: 若历史同类原料的包装单位
+            // 归一后就等于基本单位(两边都按 kg 收), 填进去立刻触发
+            // 「包装单位不能与库存基本单位相同」——用户什么都没做就看到红字, 且
+            // 不知道那是自动填的。这种情况直接不填, 让它保持「无固定包装」。
+            const suggestedSameAsBase = d.level2Unit != null
+              && sameUnit(d.level2Unit, form.value.unit);
+            if (!suggestedSameAsBase) {
+              const firstRule = packagingRules.value[0] || blankPackagingRule();
+              if (!packagingRules.value[0]) packagingRules.value = [firstRule];
+              if (d.level1PerLevel2 != null) firstRule.conversionFactor = d.level1PerLevel2;
+              if (d.level2Unit != null) firstRule.packageUnit = d.level2Unit;
+              firstRule.baseUnit = form.value.unit;
+            }
+          }
+        } finally {
+          cascadeWriting.value = false;
+        }
+      } catch {
+        // silent — endpoint may not be deployed yet
+      }
+    }, 400);
+  },
+);
+
+/**
+ * 🔴 2026-08-07 客户事故(张权:「牛肉入仓都是抄码的 他没有固定重量一箱」)的**残留**:
+ * 2026-08-06 已经把「至少一条包装规则」的强制去掉、第一条也能删了, 但**新建时仍然默认
+ * 插一条空行**, 而保存校验会拦「请完整填写每条包装规则」。
+ * 于是提示写着「不定重的原料请留空」, 用户照做把格子留空 → 被拦;
+ * 真正能过的走法是点「删除」把整行去掉。**说的和做的相反。**
+ *
+ * 改成默认**一条都不给**: 什么都不动就是「无固定包装」(下方空状态会明说),
+ * 真有固定包装的人点「添加多包装换算规则」。
+ */
+function resetPackaging() {
+  packagingRules.value = [];
+}
+
+function openCreate() {
+  editingId.value = null;
+  form.value = {
+    code: '',
+    name: '',
+    category: '',
+    isByproduct: false,
+    unit: 'kg',
+    storageType: storageTypeOptions.value[0]?.enumLabel || '',
+    shelfLifeDays: null,
+    notes: '',
+    taxTreatment: 'TAXABLE',
+    taxRate: 'TAX_13',
+    taxExemptionReason: '',
+    taxIncludedUnitPrice: null,
+    associatedCustomerId: null,
+    packQtyPerProduct: null,
+  };
+  resetPackaging();
+  resetManuallyEditedFlags();
+  // Reset optional classification.
+  segmentL1.value = null;
+  segmentL2.value = null;
+  segmentL3.value = null;
+  resetCodeContractPreview();
+  editingDisplayCode.value = '';
+  l3MatchHint.value = '';
+  l3ManuallyEdited.value = false;
+  if (segmentTree.value.length === 0) loadSegmentTree();
+  loadCustomers();
+  dialogVisible.value = true;
+}
+
+/**
+ * 把物料已有的三级分类 id 反解成 L1/L2/L3 并回填选择器。
+ *
+ * 后端 `RawMaterialTypeDTO.classificationId` 给的是 **L3** 节点 id, 而界面是三级级联,
+ * 所以要沿 `segmentTree` 往上找它的 L2/L1。找不到(分类被停用/删了/树还没加载)就保持
+ * 三个都为空 —— 空表示「本次不改分类」, 提交时不带 classificationId, 后端不动原值。
+ */
+function applyExistingClassification(classificationId: number | string | null | undefined): void {
+  const target = Number(classificationId ?? NaN);
+  if (!Number.isFinite(target)) return;
+  for (const l1 of segmentTree.value) {
+    for (const l2 of l1.children ?? []) {
+      const l3 = (l2.children ?? []).find((node) => Number(node.id) === target);
+      if (l3) {
+        segmentL1.value = l1.id;
+        segmentL2.value = l2.id;
+        segmentL3.value = l3.id;
+        return;
+      }
+    }
+  }
+}
+
+async function openEdit(row: TableRow) {
+  editingId.value = String(row.id || '');
+  form.value = {
+    code: String(row.code || ''),
+    name: String(row.name || ''),
+    category: String(row.category || ''),
+    // 编辑时保留既有副产标记 —— 漏了这行会让编辑一次就把标记悄悄抹掉
+    isByproduct: row.isByproduct === true || row.isByproduct === 'true',
+    unit: String(row.unit || 'kg'),
+    storageType: String(row.storageType || ''),
+    shelfLifeDays: row.shelfLifeDays as number | null ?? null,
+    notes: String(row.notes || ''),
+    taxTreatment: row.taxTreatment === 'EXEMPT' ? 'EXEMPT' : 'TAXABLE',
+    taxRate: String(row.taxRate || ''),
+    taxExemptionReason: String(row.taxExemptionReason || ''),
+    taxIncludedUnitPrice: (row.taxIncludedUnitPrice as number | null) ?? null,
+    associatedCustomerId: (row.associatedCustomerId as string | null) ?? null,
+    packQtyPerProduct: row.packQtyPerProduct != null ? Number(row.packQtyPerProduct) : null,
+  };
+  editingDisplayCode.value = materialDisplayCode(row);
+  loadCustomers();
+  resetPackaging();
+  resetManuallyEditedFlags();
+  segmentL1.value = null;
+  segmentL2.value = null;
+  segmentL3.value = null;
+  resetCodeContractPreview();
+  l3MatchHint.value = '';
+  l3ManuallyEdited.value = false;
+  if (segmentTree.value.length === 0) await loadSegmentTree();
+  // 🔴 回填已有分类。不回填的话三级选择器一打开就是空的, 用户随手一保存
+  // 就会把原来的分类改成别的(或者以为自己没选就不会动它, 其实选了才会动)。
+  applyExistingClassification(row.classificationId as number | string | null | undefined);
+  // 原料、辅料和包材共用计量/包装层级；库存基本单位始终来自 form.unit。
+  try {
+    const res = await get<{
+      level1PerLevel2: number | null;
+      level2Unit: string | null;
+      level2PerLevel3: number | null;
+      level3Unit: string | null;
+      packagingSpecs?: MaterialPackagingRule[] | null;
+    }>(
+      `/${factoryId.value}/material-packaging/by-material/${editingId.value}`,
+    );
+    if (res.success && res.data) {
+      if (res.data.packagingSpecs?.length) {
+        packagingRules.value = res.data.packagingSpecs.map((rule, index) => ({
+          ...rule,
+          baseUnit: form.value.unit,
+          defaultSpec: index === 0,
+          active: rule.active !== false,
+          sortOrder: index,
+        }));
+      } else {
+        const legacyRules: MaterialPackagingRule[] = [];
+        const firstFactor = Number(res.data.level1PerLevel2);
+        if (res.data.level2Unit && firstFactor > 0) {
+          legacyRules.push({
+            ...blankPackagingRule(0),
+            packageUnit: res.data.level2Unit,
+            conversionFactor: firstFactor,
+          });
+        }
+        const secondFactor = Number(res.data.level2PerLevel3);
+        if (res.data.level3Unit && firstFactor > 0 && secondFactor > 0) {
+          legacyRules.push({
+            ...blankPackagingRule(1),
+            packageUnit: res.data.level3Unit,
+            conversionFactor: firstFactor * secondFactor,
+          });
+        }
+        // 没有历史规则 = 这个物料本来就没有固定包装, 别塞空行(见 resetPackaging 注释)
+        packagingRules.value = legacyRules;
+      }
+    }
+  } catch { /* 未配置换算时正常空 */ }
+  dialogVisible.value = true;
+}
+
+const submitting = ref(false);
+/**
+ * 🔴 2026-08-13: 原本是 `&& !editingId.value` —— 分类段只在【新建】时能选,
+ * 编辑既有物料时这一段整个不显示, 提交时也不带 `classificationId`。
+ * 后果是**存量物料的分类永远补不上**: 生产实测 479 个启用物料只有 10 个挂了分类
+ * (包材 63 个里 0 个)。而画布上「替代包材」正是按分类判作用域的, 于是那栏
+ * 对所有人恒灰, 提示让人去维护档案 —— 档案里却没有这个控件。
+ *
+ * 后端两条路径本来就都支持(createMaterialType / updateMaterialType 都会
+ * requireValidSegmentChain + ensureCategoryMatchesSegment), 缺的只是界面。
+ */
+const showSegmentEditor = computed(() => hasSegmentDictionary.value);
+async function handleSave() {
+  if (!form.value.name) return ElMessage.warning('请填写原料名称');
+  if (!form.value.category) return ElMessage.warning('请选择类别');
+  if (!form.value.unit) return ElMessage.warning('请选择单位');
+  if (!isPackagingMaterial.value && !form.value.storageType) return ElMessage.warning('请选择储存类型');
+  if (canViewPrice.value) {
+    if (form.value.taxTreatment === 'TAXABLE' && !form.value.taxRate) return ElMessage.warning('请选择税率');
+    if (form.value.taxTreatment === 'EXEMPT' && !form.value.taxExemptionReason.trim()) {
+      return ElMessage.warning('免税物料必须填写免税依据');
+    }
+    if (form.value.taxIncludedUnitPrice != null && Number(form.value.taxIncludedUnitPrice) <= 0) {
+      return ElMessage.warning(isPackagingMaterial.value
+        ? '采购参考价必须大于 0'
+        : '采购参考价如填写，必须大于 0；未知价格请留空');
+    }
+    // 🔴 2026-08-13 真机: 包材的采购参考价在后端是【必填】——
+    // RawMaterialTypeServiceImpl 的 create/update 两条路径都有
+    // `if (packaging) validateRequiredPricing(...)`, 缺价直接 400「含税单价必须大于0」。
+    // 而界面上这个字段一直写着「选填；未知价格请留空」, 于是留空 → 保存 → 后端拒绝。
+    // LIUSHANMEN 25 个启用包材里 24 个价格是空的, 等于它们**保存任何修改都会被拦**
+    // (实测: 不带价格的 PUT 与带价格的 PUT 只差这一项, 前者 400 后者 200)。
+    // 这里先拦一道并说清原因, 免得用户按界面说的做了却存不进去。
+    if (isPackagingMaterial.value
+      && (form.value.taxIncludedUnitPrice == null || Number(form.value.taxIncludedUnitPrice) <= 0)) {
+      return ElMessage.warning('包材必须填写采购参考价 —— BOM 要按它算包装成本，留空会被后端拒绝保存');
+    }
+  }
+  const hasPartialClassification = Boolean(segmentL1.value || segmentL2.value || segmentL3.value);
+  if (hasPartialClassification && (!segmentL1.value || !segmentL2.value || !segmentL3.value)) {
+    return ElMessage.error('分类如需填写，必须完整选择一级、二级、三级；不需要分类时请全部留空');
+  }
+  if (!editingId.value && !String(form.value.code || '').trim()) {
+    if (!codeSuggestionError.value) await refreshCodeSuggestion(true);
+    if (!String(form.value.code || '').trim()) return;
+  }
+
+  // 每条包装规则都直接换算到唯一库存基本单位。
+  //
+  // ⛔ 2026-08-06 客户事故: 这里原本强制「至少一条」, 而另一条校验又禁止
+  // 「包装单位 == 基本单位」, 且第一条规则**没有删除按钮** —— 三条合起来,
+  // 「抄码牛肉、没有固定重量一箱」这个客观事实在系统里没有任何合法表达方式。
+  // 六膳门于是编了个假的 `1 斤 = 1 kg`(物理上 1 斤 = 0.5kg), 收货界面从此把
+  // kg 显示成「斤」。
+  //
+  // 后端本来就允许空列表(ProductPackagingSpecServiceImpl#replace 接受 []),
+  // 收货侧也会优雅回落到「采购单规格」(PendingPurchaseReceivingPanel 的
+  // orderOption), 所以「不配包装换算」是完全支持的 —— 只是前端不让填而已。
+  const incompleteRule = packagingRules.value.some((rule) => {
+    const hasUnit = Boolean(rule.packageUnit?.trim());
+    const hasFactor = Number(rule.conversionFactor) > 0;
+    return !hasUnit || !hasFactor;
+  });
+  if (incompleteRule) return ElMessage.warning('请完整填写每条包装规则的包装单位和换算数');
+
+  const submittedPackagingRules = packagingRules.value
+    .map((rule, index) => ({
+      id: rule.id,
+      name: index === 0 ? '默认包装' : `包装规格 ${index + 1}`,
+      packageUnit: rule.packageUnit.trim(),
+      baseUnit: form.value.unit,
+      conversionFactor: Number(rule.conversionFactor),
+      defaultSpec: index === 0,
+      active: true,
+      sortOrder: index,
+      version: rule.version,
+    }));
+  const repeatedUnits = submittedPackagingRules.some((rule, index, all) =>
+    all.findIndex(candidate =>
+      candidate.packageUnit.trim().toLowerCase() === rule.packageUnit.trim().toLowerCase()) !== index);
+  if (repeatedUnits) return ElMessage.warning('同一种包装单位只能配置一条换算规则');
+  // 用 sameUnit 而不是字面比较: `kg` 与 `公斤`、`pcs` 与 `件` 是同一个单位的两种写法,
+  // 字面比较放得过去, 存进去就是一条恒等换算(1公斤=1kg), 与不填没区别却更容易误导。
+  if (submittedPackagingRules.some(rule => sameUnit(rule.packageUnit, form.value.unit))) {
+    return ElMessage.warning('包装单位不能与库存基本单位相同——若本来就没有固定包装，请把这条规则删掉');
+  }
+
+  submitting.value = true;
+  try {
+    let materialId: string;
+    // 关弹窗会重置 editingId, 而下面的提示文案要在关窗之后才拼 —— 先把它记下来。
+    const editingWas = Boolean(editingId.value);
+    const materialPayload: Record<string, unknown> = { ...form.value };
+    // 编辑态料号不可修改；新建态必须把建议值或用户修改值原样提交。
+    if (editingId.value) {
+      delete materialPayload.code;
+    }
+    if (!canViewPrice.value) {
+      delete materialPayload.taxTreatment;
+      delete materialPayload.taxRate;
+      delete materialPayload.taxExemptionReason;
+      delete materialPayload.taxIncludedUnitPrice;
+    }
+    if (isPackagingMaterial.value) {
+      delete materialPayload.storageType;
+    } else {
+      delete materialPayload.associatedCustomerId;
+      delete materialPayload.packQtyPerProduct;
+    }
+    if (editingId.value) {
+      const res = await put(`/${factoryId.value}/raw-material-types/${editingId.value}`, {
+        ...materialPayload,
+        // 与新建同源: 不带这个字段, 存量物料的分类就永远补不上(见 showSegmentEditor 注释)。
+        // 后端 updateMaterialType 只在非 null 时才动它, 所以没选分类时保持原值。
+        classificationId: typeof segmentL3.value === 'number' ? segmentL3.value : undefined,
+      });
+      if (!res.success) throw new Error(res.message || '更新失败');
+      materialId = editingId.value;
+      ElMessage.success('更新成功');
+    } else {
+      const payload = {
+        ...materialPayload,
+        classificationId: typeof segmentL3.value === 'number' ? segmentL3.value : undefined,
+      };
+      const res = await post<{ id: string }>(`/${factoryId.value}/raw-material-types`, payload);
+      if (!res.success) throw new Error(res.message || '创建失败');
+      materialId = res.data?.id || '';
+      ElMessage.success('创建成功');
+    }
+
+    // 动态包装规则 upsert / delete；后端同时投影旧层级字段，兼容历史调用方。
+    //
+    // 🔴 2026-08-19: 这里原来直接 `await put(...)` 裸挂在外层 try 上。物料主记录在上面
+    //    已经【独立事务提交】了(RawMaterialTypeServiceImpl.createMaterialType 无后置副作用),
+    //    而包装规则是【另一个接口、另一个事务】(MaterialPackagingHierarchyController
+    //    PUT /material-packaging/by-material/{id}), 它的 400/404 回滚不掉已建好的物料。
+    //    于是包装校验一失败就跳到外层 catch, 弹「原料类型保存失败」, 同时
+    //    `dialogVisible=false` / `loadData()` 都不执行 —— 用户看到失败提示、列表里也看不到
+    //    新记录, 但库里那一行**已经在了**。测试同学报的「新建辅料SKU副产提示失败, 但新建成功」
+    //    就是这条路径 (副产开关与包装规则同在这个表单里)。
+    //
+    //    ⇒ 包装规则单独 try/catch: 主记录成败与包装成败是两件事, 必须分开说。
+    let packagingError: unknown = null;
+    if (submittedPackagingRules.length) {
+      try {
+        await put(`/${factoryId.value}/material-packaging/by-material/${materialId}`, {
+          level1Unit: form.value.unit,
+          packagingSpecs: submittedPackagingRules,
+        });
+      } catch (e) {
+        packagingError = e;
+      }
+    } else if (editingId.value) {
+      // 编辑模式下用户清空全部规则 → 删除现有配置
+      try { await del(`/${factoryId.value}/material-packaging/by-material/${materialId}`); }
+      catch { /* 不存在也 OK */ }
+    }
+
+    // 主记录已落库 —— 无论包装规则成败都要关弹窗 + 刷新列表, 否则用户看不到那条已建好的记录,
+    // 会照着「失败」提示再建一次, 撞重复料号。
+    dialogVisible.value = false;
+    loadData();
+
+    if (packagingError) {
+      // 4 位一体: 说清「哪一半成了、哪一半没成」+ 下一步动作, 不要再谎报整体失败。
+      handleCatchError(
+        packagingError,
+        `${editingWas ? '物料已保存' : '物料已创建'}，但包装规格未保存。请在列表中编辑该物料重新填写包装规格`,
+      );
+    }
+  } catch (e) {
+    console.error(e);
+    handleCatchError(e, '原料类型保存失败，请稍后重试');
+  } finally {
+    submitting.value = false;
+  }
+}
+
+// ==================== SupplierMaterial 双向关系 ====================
+// 原料侧与供应商详情共用同一 SupplierMaterial 关系实体/API；采购历史不是关系配置真值。
+const suppliersDialogVisible = ref(false);
+const suppliersForMaterial = ref<SupplierMaterialRelation[]>([]);
+const suppliersLoading = ref(false);
+const suppliersDialogMaterialName = ref('');
+const suppliersDialogMaterial = ref<{ id: string; name: string; code?: string; unit?: string } | null>(null);
+const activeSupplierOptions = ref<SupplierRecord[]>([]);
+const relationDialogVisible = ref(false);
+const relationEditing = ref<SupplierMaterialRelation | null>(null);
+const relationSaving = ref(false);
+const relationForm = reactive({
+  supplierId: '', supplierMaterialCode: '', purchaseUnit: '', defaultPurchasePrice: null as number | null,
+  currency: 'CNY', minOrderQuantity: null as number | null, leadTimeDays: null as number | null,
+  preferred: false, active: true,
+});
+
+const availableSupplierOptions = computed(() => {
+  const linked = new Set(suppliersForMaterial.value.map((row) => String(row.supplierId || '')));
+  return activeSupplierOptions.value.filter((supplier) => !linked.has(String(supplier.id)));
+});
+
+async function reloadMaterialSuppliers(): Promise<void> {
+  const material = suppliersDialogMaterial.value;
+  if (!material) return;
+  suppliersForMaterial.value = await listMaterialSuppliers(factoryId.value, material.id);
+}
+
+async function openSuppliersForMaterial(row: TableRow) {
+  const materialId = String(row.id || '').trim();
+  const materialName = String(row.name || '').trim();
+  if (!materialId || !materialName) {
+    ElMessage.warning('物料身份不完整，无法查询关联供应商');
+    return;
+  }
+  suppliersDialogMaterialName.value = materialName;
+  suppliersDialogMaterial.value = {
+    id: materialId,
+    name: materialName,
+    code: String(row.code || ''),
+    unit: String(row.unit || ''),
+  };
+  suppliersForMaterial.value = [];
+  suppliersDialogVisible.value = true;
+  suppliersLoading.value = true;
+  try {
+    await reloadMaterialSuppliers();
+  } catch {
+    /* interceptor */
+  } finally {
+    suppliersLoading.value = false;
+  }
+}
+
+async function ensureActiveSupplierOptions(): Promise<void> {
+  activeSupplierOptions.value = await listActiveSuppliers(factoryId.value);
+}
+
+async function openMaterialRelationCreate(): Promise<void> {
+  if (!canManageSupplierRelations.value) return;
+  await ensureActiveSupplierOptions();
+  relationEditing.value = null;
+  Object.assign(relationForm, {
+    supplierId: '', supplierMaterialCode: '', purchaseUnit: suppliersDialogMaterial.value?.unit || '',
+    defaultPurchasePrice: null, currency: 'CNY', minOrderQuantity: null, leadTimeDays: null,
+    preferred: false, active: true,
+  });
+  relationDialogVisible.value = true;
+}
+
+async function openMaterialRelationEdit(row: SupplierMaterialRelation): Promise<void> {
+  if (!canManageSupplierRelations.value) return;
+  await ensureActiveSupplierOptions();
+  relationEditing.value = row;
+  Object.assign(relationForm, {
+    supplierId: String(row.supplierId || ''),
+    supplierMaterialCode: row.supplierMaterialCode || '',
+    purchaseUnit: row.purchaseUnit || row.baseUnit || suppliersDialogMaterial.value?.unit || '',
+    defaultPurchasePrice: row.defaultPurchasePrice ?? null,
+    currency: row.currency || 'CNY',
+    minOrderQuantity: row.minOrderQuantity ?? null,
+    leadTimeDays: row.leadTimeDays ?? null,
+    preferred: Boolean(row.preferred),
+    active: row.active !== false,
+  });
+  relationDialogVisible.value = true;
+}
+
+async function saveMaterialRelation(): Promise<void> {
+  const material = suppliersDialogMaterial.value;
+  if (!material) return;
+  if (!relationForm.supplierId) return void ElMessage.warning('请选择供应商');
+  if (!relationForm.purchaseUnit) return void ElMessage.warning('请选择采购单位');
+  if (!relationForm.currency.trim()) return void ElMessage.warning('请输入币种');
+  const payload: SupplierMaterialPayload = {
+    materialTypeId: material.id,
+    supplierMaterialCode: relationForm.supplierMaterialCode.trim() || undefined,
+    purchaseUnit: relationForm.purchaseUnit,
+    defaultPurchasePrice: relationForm.defaultPurchasePrice,
+    currency: relationForm.currency.trim().toUpperCase(),
+    minOrderQuantity: relationForm.minOrderQuantity,
+    leadTimeDays: relationForm.leadTimeDays,
+    preferred: relationForm.preferred,
+    active: relationForm.active,
+    version: relationEditing.value?.version ?? undefined,
+  };
+  relationSaving.value = true;
+  try {
+    if (relationEditing.value) {
+      await updateSupplierMaterial(factoryId.value, relationForm.supplierId, relationEditing.value.id, payload);
+    } else {
+      await createSupplierMaterial(factoryId.value, relationForm.supplierId, payload);
+    }
+    await reloadMaterialSuppliers();
+    relationDialogVisible.value = false;
+    ElMessage.success('供应商—物料关系已保存');
+  } finally {
+    relationSaving.value = false;
+  }
+}
+
+async function deactivateMaterialRelation(row: SupplierMaterialRelation): Promise<void> {
+  const supplierId = String(row.supplierId || '');
+  if (!supplierId) return void ElMessage.warning('供应商身份缺失，无法停用关系');
+  await ElMessageBox.confirm(
+    `确定停用「${row.supplierName || supplierId}」与当前物料的供应关系吗？历史采购记录不会被删除。`,
+    '停用供应关系',
+    { type: 'warning', confirmButtonText: '停用', cancelButtonText: '取消' },
+  );
+  await deleteSupplierMaterial(factoryId.value, supplierId, row.id, row.version);
+  await reloadMaterialSuppliers();
+  ElMessage.success('供应关系已停用');
+}
+
+async function handleDelete(row: TableRow) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除原料类型「${row.name}」? 该原料关联的批次仍保留, 但无法新建新批次.`,
+      '删除确认',
+      { type: 'warning' },
+    );
+    const res = await del(`/${factoryId.value}/raw-material-types/${row.id}`);
+    if (res.success) {
+      ElMessage.success('删除成功');
+      loadData();
+    }
+  } catch { /* user cancelled or interceptor toasted */ }
+}
+
+// 关键字过滤是纯客户端 (filteredData computed 已实时响应 searchKeyword), 敲字/清空即生效,
+// 不需要等 Enter/点搜索按钮才刷新 — 这里只需把页码归 1 (换关键字后从第一页开始看结果)。
+watch(searchKeyword, () => {
+  pagination.value.page = 1;
+});
+
+function handleSearch() {
+  pagination.value.page = 1;
+  loadData();
+}
+function handleRefresh() {
+  searchKeyword.value = '';
+  filterSegmentL1.value = null;
+  filterSegmentL2.value = null;
+  filterSegmentL3.value = null;
+  pagination.value.page = 1;
+  loadData();
+}
+function handlePageChange(page: number) {
+  pagination.value.page = page;
+  loadData();
+}
+function handleSizeChange(size: number) {
+  pagination.value.size = size;
+  pagination.value.page = 1;
+  loadData();
+}
+</script>
+
+<template>
+  <div class="page-wrapper">
+    <ConceptDisambiguationAlert
+      here-name="原料类型字典"
+      here="原料的「分类抽象」（如「冻猪蹄」「吸塑盒2014-3.5」），定义后才能在采购订单 / 入库登记 / BOM 里被选择"
+      other-name="仓储管理 → 原料 / 物料 (采购入库)"
+      other="原料的「具体批次」，记录某次入库的数量、价格、保质期"
+      other-path="/warehouse/materials"
+      consequence="先在这里建原料类型, 再去入库登记里给它建批次"
+    />
+    <el-card class="page-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <div class="header-left">
+            <span class="page-title">原料类型字典</span>
+            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+          </div>
+          <div class="header-right">
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">
+              新建原料类型
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <div class="search-bar">
+        <!-- 分类层级筛选：用户只看分类名称，节点 ID 由系统维护。 -->
+        <el-select
+          v-model="filterSegmentL1"
+          placeholder="全部一级分类"
+          clearable
+          style="width: 170px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in segmentL1Options"
+            :key="opt.id"
+            :label="formatSegmentOptionLabel(opt)"
+            :value="opt.id"
+          />
+        </el-select>
+        <el-select
+          v-model="filterSegmentL2"
+          placeholder="全部二级分类"
+          clearable
+          filterable
+          :disabled="!filterSegmentL1"
+          style="width: 190px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in filterSegmentL2Options"
+            :key="opt.id"
+            :label="formatSegmentOptionLabel(opt)"
+            :value="opt.id"
+          />
+        </el-select>
+        <el-select
+          v-model="filterSegmentL3"
+          placeholder="全部三级分类"
+          clearable
+          filterable
+          :disabled="!filterSegmentL2"
+          style="width: 220px"
+          @change="handleSearch"
+        >
+          <el-option
+            v-for="opt in filterSegmentL3Options"
+            :key="opt.id"
+            :label="formatSegmentOptionLabel(opt)"
+            :value="opt.id"
+          />
+        </el-select>
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索原料名称 / 料号"
+          clearable
+          style="width: 280px"
+          @keyup.enter="handleSearch"
+        />
+        <el-button :icon="Search" @click="handleSearch">搜索</el-button>
+        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+      </div>
+
+      <el-table v-loading="loading" :data="tableData" stripe>
+        <el-table-column label="料号" min-width="180">
+          <template #default="{ row }">
+            <div class="material-code-cell">
+              <span class="material-code-value">{{ materialDisplayCode(row) }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="原料名称" min-width="180" />
+        <el-table-column prop="category" label="类别" width="120" />
+        <el-table-column prop="unit" label="单位" width="80">
+          <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
+        </el-table-column>
+        <el-table-column prop="storageType" label="储存类型" width="100" />
+        <el-table-column prop="shelfLifeDays" label="保质期 (天)" width="120">
+          <template #default="{ row }">{{ row.shelfLifeDays ?? '-' }}</template>
+        </el-table-column>
+        <!-- T2-5b (issue #534): F006 客户反馈 — expose 移动均价 (RawMaterialTypeDTO.movingAvgPrice)
+             gated by canViewPrice RBAC (per PR #443/#467 price-field policy) -->
+        <el-table-column v-if="canViewPrice" prop="movingAvgPrice" label="移动均价" width="120" align="right">
+          <template #default="{ row }">
+            <span v-if="row.movingAvgPrice != null">{{ formatAmount(row.movingAvgPrice) }}</span>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="240" fixed="right">
+          <template #default="{ row }">
+            <!-- Issue #779: 反查供应商入口 -->
+            <el-button link type="primary" :icon="View" @click="openSuppliersForMaterial(row)">供应商</el-button>
+            <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-pagination
+        v-model:current-page="pagination.page"
+        v-model:page-size="pagination.size"
+        :total="pagination.total"
+        :page-sizes="[10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next, jumper"
+        style="margin-top: 16px; justify-content: flex-end"
+        @current-change="handlePageChange"
+        @size-change="handleSizeChange"
+      />
+    </el-card>
+
+    <!-- ==================== T159-A: Create / Edit Dialog ==================== -->
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
+      <el-form :model="form" label-width="120px">
+
+        <el-form-item v-if="editingId" label="料号">
+          <el-input :model-value="editingDisplayCode" disabled :prefix-icon="Lock" />
+          <div class="field-hint">料号创建后不可修改。</div>
+        </el-form-item>
+        <el-form-item v-else label="料号" required>
+          <el-input
+            :model-value="form.code"
+            maxlength="32"
+            placeholder="选择基本类型后自动建议"
+            :disabled="!form.category || codeSuggestionLoading || Boolean(codeSuggestionError)"
+            @input="handleCodeInput"
+          />
+          <el-button
+            size="small"
+            :disabled="!form.category"
+            :loading="codeSuggestionLoading"
+            @click="refreshCodeSuggestion(true)"
+          >重新计算建议</el-button>
+          <div v-if="!form.category" class="field-hint">请先选择基本类型，系统才能计算下一个可用料号。</div>
+          <div v-else-if="codeSuggestionError" class="field-hint field-hint--error">{{ codeSuggestionError }}</div>
+          <div v-else-if="codeContractHint" class="field-hint field-hint--matched">{{ codeContractHint }}</div>
+          <div v-else class="field-hint">系统建议后可修改；同一工厂内不可重复。</div>
+        </el-form-item>
+
+        <el-form-item label="原料名称" required>
+          <el-input v-model="form.name" placeholder="如 冻猪蹄 / 三文鱼 / 吸塑盒2014-3.5" />
+          <div class="field-hint">输入名称后自动匹配历史同类原料，智能填充单位 / 类别 / 保质期 / 包装换算</div>
+        </el-form-item>
+
+        <el-form-item label="类别" required>
+          <el-select v-model="form.category" placeholder="请选择类别" style="width: 100%" filterable>
+            <el-option
+              v-if="editingId && form.category && !isMaterialFamily(form.category)"
+              :label="`${form.category} (历史)`"
+              :value="form.category"
+              disabled
+            />
+            <el-option
+              v-for="opt in materialFamilyOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <div class="field-hint">基本类型决定料号前缀；下方详细分类为选填。</div>
+        </el-form-item>
+
+        <!-- 副产是「来历」不是「材质」: 打了标记的物料仍保留其类别(如原料), 因此既能被排除出
+             采购/补货建议, 又能被别的 workflow 当原料投入 —— 后者正是副产进原料字典的初衷。 -->
+        <el-form-item label="副产">
+          <el-switch v-model="form.isByproduct" active-text="这是副产（生产产出，无采购来源）" />
+          <div class="field-hint">
+            勾选后：不出现在采购下拉与补货建议；可在 BOM 配方内容的「副产」页签被声明；
+            报工产出落生产仓。它的类别仍按上方材质填写，不影响被当作原料投入。
+          </div>
+        </el-form-item>
+
+        <!-- 单位统一入口：搜索不到时可现场创建，重复时直接选择已有单位 -->
+        <el-form-item label="入库计量单位" required>
+          <UnitSelect
+            v-model="form.unit"
+            :factory-id="factoryId"
+            usage-scope="INVENTORY_QUANTITY"
+            :show-symbol="false"
+            placeholder="请选择或搜索入库计量单位"
+            :clearable="false"
+            @change="handleUnitUserChange"
+          />
+          <div class="field-hint">新建默认 kg（公斤），可按实际入库计量单位修改</div>
+          <div v-if="unitSuggestionHint && !unitManuallyEdited && !editingId" class="field-hint field-hint--matched">
+            {{ unitSuggestionHint }}
+          </div>
+          <div v-if="unitManuallyEdited && !editingId" class="field-hint field-hint--manual">
+            已手动设置，自动填充将不再覆盖此字段
+          </div>
+        </el-form-item>
+
+        <!--
+          采购包装直接换算到唯一库存基本单位。**不是必填** ——
+          抄码/不定重原料(如按实际过磅收的牛肉)本来就没有固定包装, 强制填只会逼出
+          假换算(六膳门就填过 `1 斤 = 1 kg`)。见 handleSave 里的说明。
+        -->
+        <el-form-item v-if="form.unit" label="包装换算">
+          <div class="material-packaging-spec-list">
+            <div class="packaging-rule-note">
+              库存按上方入库计量单位记账。<strong>按箱/袋等固定包装采购时才需要填</strong>，例如：1 箱 = 10 kg。
+              抄码、不定重（按实际过磅收）的原料请留空——收货时直接按{{ displayUnit(form.unit) }}记账。
+            </div>
+            <div v-if="!packagingRules.length" class="packaging-rule-empty">
+              未配置包装换算：收货按 {{ displayUnit(form.unit) }} 直接记账，不做包装折算。
+            </div>
+            <div
+              v-for="(rule, index) in packagingRules"
+              :key="rule.id || `new-${index}`"
+              class="material-packaging-spec-item"
+            >
+              <div class="spec-conversion-row">
+                <el-tag v-if="index === 0" type="success" size="small">默认</el-tag>
+                <span v-else class="packaging-rule-index">规则 {{ index + 1 }}</span>
+                <span class="conversion-label">1</span>
+                <UnitSelect
+                  v-model="rule.packageUnit"
+                  :factory-id="factoryId"
+                  usage-scope="PURCHASE_QUANTITY"
+                  placeholder="包装单位（必填，如箱）"
+                  class="spec-unit-select"
+                />
+                <span class="conversion-equals">=</span>
+                <el-input-number
+                  v-model="rule.conversionFactor"
+                  :min="0.00000001"
+                  :precision="8"
+                  :controls="false"
+                  placeholder="换算数（必填）"
+                  class="spec-factor-input"
+                />
+                <el-input
+                  :model-value="displayUnit(form.unit)"
+                  disabled
+                  class="spec-base-unit"
+                />
+                <!-- 第一条也可以删 —— 否则「没有固定包装」就无从表达 -->
+                <el-button type="danger" link @click="removePackagingRule(index)">
+                  删除
+                </el-button>
+              </div>
+              <div
+                v-if="rule.packageUnit && sameUnit(rule.packageUnit, form.unit)"
+                class="spec-same-warn"
+              >
+                包装单位不能与库存基本单位相同——若本来就没有固定包装，点右侧「删除」即可
+              </div>
+              <div v-else-if="packagingRuleText(rule)" class="spec-echo">
+                {{ packagingRuleText(rule) }}
+              </div>
+            </div>
+            <el-button class="add-packaging-rule-button" @click="addPackagingRule">
+              添加多包装换算规则
+            </el-button>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="!isPackagingMaterial" label="储存类型" required>
+          <el-select v-model="form.storageType" placeholder="请选择储存类型" style="width: 100%">
+            <el-option
+              v-for="opt in mergeHistoricStorage(form.storageType)"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="保质期 (天)">
+          <el-input-number v-model="form.shelfLifeDays" :min="0" style="width: 100%" />
+        </el-form-item>
+
+        <el-form-item label="备注">
+          <el-input v-model="form.notes" type="textarea" :rows="2" />
+        </el-form-item>
+
+        <!-- SP4: 税率 + 含税/未税单价 (canViewPrice 门控) -->
+        <template v-if="canViewPrice">
+          <el-form-item label="计税方式" required>
+            <el-radio-group v-model="form.taxTreatment">
+              <el-radio value="TAXABLE">正常计税</el-radio>
+              <el-radio value="EXEMPT">免税</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="form.taxTreatment === 'TAXABLE'" label="采购税率" required>
+            <el-select v-model="form.taxRate" placeholder="请选择税率" style="width: 100%">
+              <el-option label="9% (农产品等)" value="TAX_9" />
+              <el-option label="13% (标准税率)" value="TAX_13" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-else label="免税依据" required>
+            <el-input v-model="form.taxExemptionReason" placeholder="填写政策、票据或业务依据" maxlength="255" />
+          </el-form-item>
+          <!--
+            🔴 包材是【必填】: 后端 create/update 两条路径都有
+            `if (packaging) validateRequiredPricing(...)`, 缺价直接 400。
+            这里原本一律标「选填；未知价格请留空」—— 界面说的和闸判的不是一回事,
+            用户照界面留空就存不进去(实测 LIUSHANMEN 24/25 个包材因此改不动)。
+          -->
+          <el-form-item
+            :required="isPackagingMaterial"
+            :label="form.taxTreatment === 'EXEMPT' ? `免税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）` : `含税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`"
+          >
+            <el-input-number
+              v-model="form.taxIncludedUnitPrice"
+              :min="0.0001"
+              :precision="4"
+              :controls="false"
+              :placeholder="isPackagingMaterial ? '包材必填' : '选填；未知价格请留空'"
+              style="width: 100%"
+            />
+            <div class="field-hint">
+              {{ isPackagingMaterial
+                ? '包材必填 —— BOM 按它算包装成本；留空会被后端拒绝保存。价格按库存主单位维护。'
+                : '价格按库存主单位维护，并可作为供应关系未单独报价时的采购参考；空值不会被当作 0 元。' }}
+            </div>
+          </el-form-item>
+          <el-form-item v-if="form.taxIncludedUnitPrice != null && (form.taxRate || form.taxTreatment === 'EXEMPT')" :label="`未税采购参考价（元/${displayUnit(form.unit) || '库存主单位'}）`">
+            <el-input
+              :model-value="preTaxUnitPrice != null ? preTaxUnitPrice.toFixed(4) : '—'"
+              disabled
+              style="width: 100%"
+            />
+            <div class="field-hint">{{ form.taxTreatment === 'EXEMPT' ? '免税时未税价等于采购参考价' : '= 含税采购参考价 ÷ (1 + 税率)，自动计算' }}</div>
+          </el-form-item>
+        </template>
+
+        <!-- 包材专属字段只在包材建档时显示和提交。 -->
+        <template v-if="isPackagingMaterial">
+          <el-divider>
+            <span class="divider-title">包材专属字段（选填）</span>
+          </el-divider>
+          <el-form-item label="关联固定客户">
+          <el-select
+            v-model="form.associatedCustomerId"
+            placeholder="该包材专供某客户（可选）"
+            clearable
+            filterable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="c in customerOptions"
+              :key="c.id"
+              :label="c.name"
+              :value="c.id"
+            />
+            <!-- fool-proof-design Rule 5: 拉不到客户不能只显空白"无数据", 给明确下一步 -->
+            <template #empty>
+              <div style="padding: 8px 12px">
+                <UpstreamMissingHint
+                  v-if="customerOptionsLoaded"
+                  description="本工厂暂无客户"
+                  target-module="sales"
+                  action-text="去添加客户"
+                  contact-text="请联系销售或管理员先添加客户"
+                  @action="goCreate('/sales/customers')"
+                />
+                <span v-else style="color: #909399; font-size: 12px">加载中…</span>
+              </div>
+            </template>
+          </el-select>
+          <div class="field-hint">选填 — 如吸塑盒专供某客户，留空表示通用包材</div>
+          </el-form-item>
+        <!-- #759: 每成品单位用量 (仅 PACKAGING 类型显示，后端自动推 BOM standardQuantity) -->
+          <el-form-item label="每产品用量">
+          <el-input-number
+            v-model="form.packQtyPerProduct"
+            :min="0"
+            :precision="6"
+            :step="0.1"
+            style="width: 100%"
+            placeholder="每个成品单位需要该包材多少个"
+          />
+          <div class="field-hint">
+            例：吸塑盒 1 个/成品填 1；外箱 20 盒/箱填 0.05（=1/20）。留空则 BOM 行需手填用量
+          </div>
+          </el-form-item>
+        </template>
+
+        <!-- 分类字典只承担可选归类，不参与料号生成。 -->
+        <el-divider v-if="showSegmentEditor">
+          <span class="divider-title">详细分类（选填）</span>
+        </el-divider>
+        <template v-if="showSegmentEditor">
+          <template v-if="segmentL1Options.length > 0 || segmentLoading">
+            <el-form-item label="一级分类">
+              <el-select
+                v-model="segmentL1"
+                placeholder="请选择物料大类"
+                clearable
+                filterable
+                style="width: 100%"
+                :loading="segmentLoading"
+              >
+                <el-option
+                  v-for="opt in segmentL1Options"
+                  :key="opt.id"
+                  :label="formatSegmentOptionLabel(opt)"
+                  :value="opt.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="二级分类">
+              <el-select
+                v-model="segmentL2"
+                :placeholder="segmentL1 ? '请选择二级分类' : '请先选择一级分类'"
+                clearable
+                filterable
+                style="width: 100%"
+                :disabled="!segmentL1"
+              >
+                <el-option
+                  v-for="opt in segmentL2Options"
+                  :key="opt.id"
+                  :label="formatSegmentOptionLabel(opt)"
+                  :value="opt.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="三级分类">
+              <el-select
+                v-model="segmentL3"
+                placeholder="请先选择二级分类"
+                clearable
+                filterable
+                style="width: 100%"
+                :disabled="!segmentL2"
+                @change="handleL3Change"
+              >
+                <el-option
+                  v-if="canManageClassification"
+                  :key="QUICK_CREATE_L3"
+                  label="＋ 新建共享三级分类"
+                  :value="QUICK_CREATE_L3"
+                />
+                <el-option
+                  v-for="opt in segmentL3Options"
+                  :key="opt.id"
+                  :label="formatSegmentOptionLabel(opt)"
+                  :value="opt.id"
+                />
+              </el-select>
+              <div class="field-hint">分类可全部留空；一旦选择则须完整选到三级。分类只用于归类和筛选，不会改变料号。</div>
+              <div v-if="!canManageClassification" class="field-hint">没有共享分类维护权限；如无合适分类，请联系系统管理员在“物料分类字典”中新增。</div>
+              <div v-if="l3MatchHint" class="field-hint field-hint--matched">{{ l3MatchHint }}</div>
+              <div v-if="taxonomyCandidates.length" class="taxonomy-candidates" aria-label="分类建议">
+                <el-button
+                  v-for="candidate in taxonomyCandidates"
+                  :key="candidate.l3Id"
+                  size="small"
+                  plain
+                  @click="applyTaxonomyCandidate(candidate, true)"
+                >
+                  {{ candidate.l1Label }} &gt; {{ candidate.l2Label }} &gt; {{ candidate.l3Label }}
+                </el-button>
+              </div>
+              <el-button
+                v-if="l3ManuallyEdited && l3MatchHint.includes('名称已变化')"
+                link
+                type="primary"
+                @click="rematchTaxonomy"
+              >重新匹配分类</el-button>
+            </el-form-item>
+          </template>
+        </template>
+
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleSave">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="createL3DialogVisible"
+      title="新建共享三级分类"
+      width="460px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        title="这里创建的是可被多个原料复用的共享分类，不是当前具体原料"
+        description="例如三级分类可填写“鱼类原料”或“鸡胸肉”；具体规格、供应商形态和包装信息请填写在原料类型中。系统不会复制当前原料名称。"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+      />
+      <el-form label-width="110px">
+        <el-form-item label="所属二级分类">
+          <el-input :model-value="selectedL2Label" disabled />
+        </el-form-item>
+        <el-form-item label="小类名称" required>
+          <el-input v-model="createL3Form.label" maxlength="100" placeholder="例如：鱼类原料 / 鸡胸肉 / 箱类包材" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createL3DialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="createL3Submitting" @click="handleCreateL3">创建并选中</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- SupplierMaterial 双向关系：原料侧维护入口 -->
+    <el-dialog
+      v-model="suppliersDialogVisible"
+      :title="`${suppliersDialogMaterialName} — 供应商关系`"
+      width="980px"
+      destroy-on-close
+    >
+      <div class="supplier-relation-toolbar">
+        <span>一个物料可关联多个供应商；关系价格与采购单位将直接用于采购订单。</span>
+        <el-button
+          v-if="canManageSupplierRelations"
+          type="primary"
+          :icon="Plus"
+          @click="openMaterialRelationCreate"
+        >关联供应商</el-button>
+      </div>
+      <el-table
+        v-loading="suppliersLoading"
+        :data="suppliersForMaterial"
+        empty-text="该物料暂无供应商关系"
+        stripe
+        size="small"
+      >
+        <el-table-column prop="supplierName" label="供应商" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.supplierName || row.supplierId }}</template>
+        </el-table-column>
+        <el-table-column prop="supplierMaterialCode" label="供应商料号" width="130">
+          <template #default="{ row }">{{ row.supplierMaterialCode || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="采购单位" width="100">
+          <template #default="{ row }">{{ displayUnit(row.purchaseUnit || row.baseUnit) }}</template>
+        </el-table-column>
+        <el-table-column label="默认采购价" width="155" align="right">
+          <template #default="{ row }">
+            {{ row.defaultPurchasePrice == null ? '未配置' : `${row.currency || 'CNY'} ${Number(row.defaultPurchasePrice).toFixed(2)}/${displayUnit(row.purchaseUnit || row.baseUnit)}` }}
+          </template>
+        </el-table-column>
+        <el-table-column label="最小起订量" width="120" align="right">
+          <template #default="{ row }">{{ row.minOrderQuantity ?? '-' }} {{ displayUnit(row.purchaseUnit || row.baseUnit) }}</template>
+        </el-table-column>
+        <el-table-column label="交期" width="90">
+          <template #default="{ row }">{{ row.leadTimeDays == null ? '-' : `${row.leadTimeDays}天` }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.active === false ? 'info' : 'success'" size="small">
+              {{ row.active === false ? '已停用' : row.preferred ? '首选' : '启用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canManageSupplierRelations" label="操作" width="125" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link @click="openMaterialRelationEdit(row)">编辑</el-button>
+            <el-button v-if="row.active !== false" type="warning" link @click="deactivateMaterialRelation(row)">停用</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="suppliersDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="relationDialogVisible"
+      :title="relationEditing ? '编辑供应商—物料关系' : '关联供应商'"
+      width="620px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="145px">
+        <el-form-item label="供应商" required>
+          <el-select v-model="relationForm.supplierId" filterable :disabled="Boolean(relationEditing)" style="width: 100%" placeholder="请选择当前工厂的合作中供应商">
+            <el-option
+              v-if="relationEditing"
+              :label="relationEditing.supplierName || relationEditing.supplierId"
+              :value="relationEditing.supplierId"
+            />
+            <el-option
+              v-for="supplier in availableSupplierOptions"
+              :key="supplier.id"
+              :label="`${supplier.name}${supplier.supplierCode || supplier.code ? ` (${supplier.supplierCode || supplier.code})` : ''}`"
+              :value="supplier.id"
+            />
+          </el-select>
+          <div class="field-hint">已关联的供应商不会再次出现，后端唯一约束同时阻止重复关系。</div>
+        </el-form-item>
+        <el-form-item label="物料">
+          <el-input :model-value="`${suppliersDialogMaterial?.name || '-'} (${suppliersDialogMaterial?.code || suppliersDialogMaterial?.id || '-'})`" disabled />
+        </el-form-item>
+        <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" /></el-form-item>
+        <el-form-item label="采购单位" required>
+          <UnitSelect
+            v-model="relationForm.purchaseUnit"
+            :factory-id="factoryId"
+            usage-scope="PURCHASE_QUANTITY"
+            placeholder="请选择采购单位"
+          />
+          <div class="field-hint">采购订单沿用此单位；页面显示中文，API 保存标准单位代码。</div>
+        </el-form-item>
+        <el-form-item :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
+          <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
+          <div class="field-hint">价格与采购单位绑定；未配置时采购单明确提示，不会静默变成 0 元。</div>
+        </el-form-item>
+        <el-form-item label="币种" required><el-input v-model="relationForm.currency" maxlength="3" /></el-form-item>
+        <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
+        <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
+        <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" /></el-form-item>
+        <el-form-item label="关系启用"><el-switch v-model="relationForm.active" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="relationDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="relationSaving" @click="saveMaterialRelation">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.page-wrapper { padding: 20px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.header-left { display: flex; align-items: baseline; gap: 12px; }
+.page-title { font-size: 18px; font-weight: 600; }
+.data-count { font-size: 13px; color: #909399; }
+.search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.supplier-relation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: #606266; font-size: 13px; }
+.divider-title { font-size: 14px; color: #606266; font-weight: 500; }
+
+/* T159-A: Code preview row */
+.code-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+.code-preview-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.code-preview-label {
+  min-width: 132px;
+  color: #606266;
+  font-size: 12px;
+}
+.code-preview-tag {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.code-preview-tag.code-preview-loading {
+  opacity: 0.6;
+}
+.code-preview-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+.material-code-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.material-code-value {
+  color: #303133;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  overflow-wrap: anywhere;
+}
+
+/* T159-A: Field hints */
+.field-hint {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.field-hint--manual {
+  color: #e6a23c;
+}
+
+.field-hint--error {
+  color: #e6a23c;
+}
+
+.field-hint--matched {
+  color: #67c23a;
+}
+
+.field-hint--error {
+  color: #f56c6c;
+}
+
+/* 与 SKU 新建保持相同的动态包装规则编辑体验 */
+.material-packaging-spec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.packaging-rule-empty {
+  padding: 10px 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #67c23a;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  border-radius: 4px;
+}
+
+.packaging-rule-note {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #606266;
+  background: #f5f7fa;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+}
+.material-packaging-spec-item {
+  padding: 10px 12px;
+  background: #fafcff;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+}
+.spec-conversion-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(150px, 1fr) auto minmax(110px, 0.75fr) minmax(92px, 0.55fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.packaging-rule-index {
+  min-width: 42px;
+  color: #909399;
+  font-size: 12px;
+}
+.spec-unit-select,
+.spec-factor-input,
+.spec-base-unit {
+  width: 100%;
+}
+.conversion-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  min-width: 10px;
+}
+.conversion-equals {
+  font-size: 16px;
+  color: #606266;
+  padding: 0 2px;
+}
+.spec-echo,
+.spec-same-warn {
+  margin-top: 6px;
+  padding-left: 54px;
+  font-size: 12px;
+}
+.spec-echo {
+  color: #67c23a;
+}
+.spec-same-warn {
+  color: #e6a23c;
+}
+.add-packaging-rule-button {
+  width: 100%;
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
+}
+@media (max-width: 760px) {
+  .spec-conversion-row {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+  }
+  .spec-factor-input,
+  .spec-base-unit {
+    grid-column: span 2;
+  }
+  .spec-echo,
+  .spec-same-warn {
+    padding-left: 0;
+  }
+}
+</style>

@@ -1,0 +1,161 @@
+package com.cretas.aims.ai.tool.impl.material;
+
+import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.finding.FindingService;
+import com.cretas.aims.service.finding.FindingTextRenderer;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.*;
+
+/**
+ * 库存汇总查询工具
+ *
+ * 查询工厂的原材料库存汇总信息，包括总批次数、低库存预警数等。
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2026-03-08
+ */
+@Slf4j
+@Component
+public class MaterialStockSummaryTool extends AbstractBusinessTool {
+
+    @Autowired
+    private MaterialBatchService materialBatchService;
+
+    @Autowired
+    private FindingService findingService;
+
+    @Autowired
+    private FindingTextRenderer findingTextRenderer;
+
+    @Override
+    public String getToolName() {
+        return "material_stock_summary";
+    }
+
+    @Override
+    public String getDescription() {
+        return "查询原材料库存汇总信息。" +
+                "返回总批次数、低库存预警数量、库存概览等。" +
+                "适用场景：查看库存总览、了解整体库存水平、生成库存报告。";
+    }
+
+    @Override
+    public ActionType getActionType() {
+        return ActionType.READ;
+    }
+
+    @Override
+    public RiskLevel getRiskLevel() {
+        return RiskLevel.LOW;
+    }
+
+    @Override
+    public boolean supportsPreview() {
+        return false;
+    }
+
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public boolean hasPermission(String userRole) {
+        return false;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of(
+                "warehouse:read",
+                "warehouse:read_write",
+                "inventory:read",
+                "inventory:read_write");
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("material");
+    }
+
+    @Override
+    public Map<String, Object> getParametersSchema() {
+        Map<String, Object> schema = new HashMap<>();
+        schema.put("type", "object");
+        schema.put("properties", new HashMap<>());
+        schema.put("required", Collections.emptyList());
+        return schema;
+    }
+
+    @Override
+    protected List<String> getRequiredParameters() {
+        return Collections.emptyList();
+    }
+
+    @Override
+    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+        log.info("查询库存汇总: factoryId={}", factoryId);
+
+        PageResponse<MaterialBatchDTO> batchPage = materialBatchService.getMaterialBatchList(
+                factoryId, PageRequest.of(1, 100));
+        List<MaterialBatchDTO> batches = batchPage.getContent();
+        long total = batchPage.getTotalElements();
+
+        // 低库存不再由本 Tool 直接查询 —— 统一走发现层，避免同一口径在两处各写一遍
+        // (见 ListSummaryServiceImpl.java:43-50 的 footer/KPI 口径漂移事故)。
+        FindingService.Result findingResult = findingService.detectInline(factoryId, "inventory");
+
+        // 🔴 禁止降级处理: FindingServiceImpl 对单条规则失败做了隔离(catch 掉、
+        // 从 checkedRules 剔除), 这是发现层内部的设计——对本 Tool 而言, 低库存
+        // 是唯一规则, 它失败就意味着 countsByCode 里根本没有 LOW_STOCK 这个
+        // key, getOrDefault(...,0) 会把"没查到"读成"查到了 0 个"。改造前
+        // getLowStockWarnings 抛异常会直接冒泡到 AbstractBusinessTool.execute()
+        // 变成失败响应；这里原样重建那个失败语义——不吞掉、不编数字。
+        if (!findingResult.complete()) {
+            throw new IllegalStateException(
+                    "低库存发现规则未能完整执行, 拒绝返回可能失真的库存汇总: 失败规则=" + findingResult.failedRules());
+        }
+
+        int lowStock = findingResult.countsByCode().getOrDefault("LOW_STOCK", 0);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("totalBatches", total);
+        result.put("lowStockCount", lowStock);
+        result.put("batches", batches.size() > 20 ? batches.subList(0, 20) : batches);
+        result.put("findings", findingResult.findings());
+
+        String findingsText = findingTextRenderer.renderInline(findingResult);
+        result.put("findingsText", findingsText);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("库存汇总：");
+        sb.append("总批次数: ").append(total);
+        sb.append("，低库存预警: ").append(lowStock).append("个");
+        if (!findingsText.isEmpty()) {
+            sb.append("\n\n").append(findingsText);
+        }
+
+        result.put("message", sb.toString());
+
+        return result;
+    }
+
+    /** spec §8.2 只读查询, 无副作用 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
+}

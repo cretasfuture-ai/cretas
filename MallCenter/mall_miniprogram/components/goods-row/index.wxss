@@ -1,0 +1,9 @@
+/* 组件不导入全局样式，避免选择器警告 */
+.row-img{
+  width: 280rpx!important;
+  height: 280rpx!important;
+  border-radius: 10rpx
+}
+.row-info{
+  display: block!important;
+}

@@ -1,0 +1,5 @@
+# Dispatch 完成记录 — 2026-08-21
+
+## 已完成
+
+- `SOP-RAG-SYNC-20260821` — `merged` — Owner: Codex automation `/root` — Base SHA: `9e8553427ee8fa5b8606b1a0da83f2f928c4183b`。GitHub 账号封控导致 fetch/push/PR 均不可用，本轮按离线例外完整核对上次基线 `9806859e23c45fcf89757c5adb31aa803291d4eb` 至 clean 本地 `main`，工厂与餐饮均判定有用户可见变化并独立同步；代码与文档离线汇合到 `8439b903277705e25e76b454980365d3be2c3b9a`，未声称进入 `origin/main`。共享 AI Assist、工厂 SOP、餐饮 SOP 生产 SHA-256 为 `24fecba720df57df537296653ce832e82c993d3bd9f0ca30033db88653aa159f`、`04b788e01da4b02caf14be8d9cee0478a9db6d32689ce3279f0a044794b7a15c`、`e9e970dda61a87a85701ae9b14ef216b4e2c3e3a44e5b9f92d549e8e37488acd`，服务器文件与公网最终响应一致。四个 canonical source 原子重建后正式块为 F006 73、餐饮全链路 87、产品手册 250、指数字典 176，`.NEW=0`、旧工厂 source=0；工厂只引用 F006，餐饮只引用三个已注册餐饮 source。首轮发现“批次数量/入库日期”误命中生产执行 guard，补充同源 FAQ 并修正确定性路由；目标测试 134/134、`py_compile`、HTML/JS parse、release-preflight 与 `git diff --check` 通过。生产 migration dry-run 0 pending，Python 发布脚本确认 142/142 已应用并通过依赖/import/route/Torch/8083 健康门禁；原错误问法与两条等价问法、BOM/Workflow 固定基准、餐饮单菜毛利及部分可答/实体/未来窗口/导览边界真实 canary 均通过。回滚点为 `.bak.sop-20260821T091557+0800` 与 `.bak.sop-20260821T093000+0800`；生产 ERP 业务写入 0。scope 锁已释放；仅余 GitHub 恢复后逐提交补 PR/CI 与远端核销。

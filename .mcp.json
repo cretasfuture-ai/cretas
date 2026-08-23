@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "playwright-rn": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "@playwright/mcp@latest",
+        "--browser", "chromium"
+      ]
+    },
+    "playwright-test": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "playwright",
+        "run-test-mcp-server"
+      ]
+    },
+    "weapp-dev": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y", "@yfme/weapp-dev-mcp"
+      ],
+      "env": {
+        "WEAPP_WS_ENDPOINT": "ws://localhost:9420"
+      }
+    }
+  }
+}

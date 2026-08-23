@@ -1,0 +1,1367 @@
+package com.cretas.aims.service.impl;
+
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.producttype.ProductTypeDTO;
+import com.cretas.aims.dto.producttype.ProductTypeOptionDTO;
+import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.ProductCategory;
+import com.cretas.aims.entity.enums.TaxRate;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.product.ProductPackagingSpecService;
+import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
+import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
+
+/**
+ * 产品类型服务实现
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2025-01-09
+ */
+@Service
+public class ProductTypeServiceImpl implements ProductTypeService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductTypeServiceImpl.class);
+
+    /**
+     * 把成品单位归一到权威表的码 (kg / pcs / box / bag …)。
+     *
+     * <p>⛔ 刻意比原料侧 {@code normalizeInventoryUnit} <b>宽松</b>: 那边认不出会抛 400
+     * (原料要入库计量, 单位不合法必须挡住); 成品这边**认不出就原样返回**, 不拦创建 ——
+     * 库里真有「半只」这种规格值(F006 干式熟成鸡—前处理), 硬拦会让存量 SKU 改不动。
+     * 归一是为了消除「袋 vs bag」这类同义异写, 不是为了收紧成品单位的取值范围。
+     *
+     * <p>⛔ 也不给空值兜底成 kg: 原料侧那么做是因为入库必须有计量单位;
+     * 成品单位为空是合法的(有些 SKU 按件不计量), 编一个 kg 会让下游按重量算。
+     */
+    private String normalizeProductUnit(String factoryId, String unit) {
+        if (unit == null) {
+            return null;
+        }
+        String value = unit.trim();
+        if (value.isEmpty() || unitContractService == null) {
+            return value.isEmpty() ? value : value;
+        }
+        try {
+            // 落库字面值由权威函数统一决定(与原料侧同一个) —— 原来是 normalized.code(),
+            // 会把「只」写成 pcs、把自定义单位写成自动生成的拼音码。
+            // storageUnit 的规则 1 本身就是「认不出原样返回」, 与这里原有策略一致。
+            return unitContractService.storageUnit(factoryId, value);
+        } catch (RuntimeException e) {
+            // 归一失败不该挡住建品 —— 原样存, 由展示层兜底
+            log.warn("成品单位归一失败, 原样保留: factoryId={}, unit={}, err={}", factoryId, value, e.getMessage());
+            return value;
+        }
+    }
+
+    private final ProductTypeRepository productTypeRepository;
+    private final ObjectMapper objectMapper;
+    private final CustomerRepository customerRepository;
+    private final WorkflowUnitReviewService workflowUnitReviewService;
+    private final ProductSpecificationConversionSyncService specificationConversionSyncService;
+    private final ProductPackagingSpecService productPackagingSpecService;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /**
+     * 单位权威表 —— 成品单位也要归一到码。
+     *
+     * <p>🔴 2026-08-02: 此前成品侧 unit 是**裸传**(创建 setUnit(dto.getUnit())、
+     * 更新同样), 而原料侧 RawMaterialTypeServiceImpl#normalizeInventoryUnit 早就归一成
+     * normalized.code() —— 两边方向不一致, prod 实测成品 629 中文 / 原料 660 英文。
+     * 客户撞到的「报工单位袋, BOM 单位 bag」409 就是这么来的。
+     *
+     * <p>字段注入而非构造器: 该类构造器被既有测试按参数列表装配, 加参数会一次性打断它们;
+     * 且归一逻辑对 null 容错(服务缺失时原样返回, 与原料侧同策略)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
+    // Manual constructor (Lombok @RequiredArgsConstructor not working)
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
+                                  CustomerRepository customerRepository,
+                                  WorkflowUnitReviewService workflowUnitReviewService,
+                                  ProductSpecificationConversionSyncService specificationConversionSyncService,
+                                  ProductPackagingSpecService productPackagingSpecService) {
+        this.productTypeRepository = productTypeRepository;
+        this.objectMapper = objectMapper;
+        this.customerRepository = customerRepository;
+        this.workflowUnitReviewService = workflowUnitReviewService;
+        this.specificationConversionSyncService = specificationConversionSyncService;
+        this.productPackagingSpecService = productPackagingSpecService;
+    }
+
+    /** Legacy isolated-test constructor. Spring production wiring uses the six-argument constructor. */
+    public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
+                                  CustomerRepository customerRepository,
+                                  WorkflowUnitReviewService workflowUnitReviewService,
+                                  ProductSpecificationConversionSyncService specificationConversionSyncService) {
+        this(productTypeRepository, objectMapper, customerRepository, workflowUnitReviewService,
+                specificationConversionSyncService, null);
+    }
+
+    /** T149 Part A: 自动生成编号撞 UNIQUE 约束时的重试次数 (并发/竞态防御). */
+    private static final int GENERATED_CODE_MAX_RETRIES = 5;
+
+    @Override
+    @Transactional
+    @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
+    public ProductTypeDTO createProductType(String factoryId, ProductTypeDTO dto) {
+        String normalizedName = normalizeRequiredName(dto.getName(), "产品名称不能为空");
+        if (productTypeRepository.existsByFactoryIdAndNormalizedName(factoryId, normalizedName)) {
+            throw duplicateProductName(normalizedName);
+        }
+        dto.setName(normalizedName);
+
+        // T149 Part A: 区分「自动生成编号」与「用户手输编号」.
+        // - 用户手输 (manual): 提前检查存在性 → 友好 409, 不重试 (用户本就该换一个).
+        // - 自动生成 (generated): count+1 序号在并发下可能撞 UNIQUE 约束 → 拦截
+        //   DataIntegrityViolationException 重新生成下一序号, 最多重试若干次.
+        boolean codeAutoGenerated = (dto.getCode() == null || dto.getCode().trim().isEmpty());
+        if (codeAutoGenerated) {
+            String category = dto.getCategory() != null ? dto.getCategory() : dto.getProductCategory();
+            String generatedCode = buildGeneratedCode(factoryId, category, dto.getRelatedCustomer());
+            dto.setCode(generatedCode);
+            log.info("自动生成产品代码: {}", generatedCode);
+        }
+
+        log.info("创建产品类型: factoryId={}, code={}", factoryId, dto.getCode());
+
+        // 手输编号: 提前检查存在性 → 友好 409 (避免裸 500)
+        if (!codeAutoGenerated && productTypeRepository.existsByFactoryIdAndCode(factoryId, dto.getCode())) {
+            throw new BusinessException(409, "产品编号已存在，请更换或留空自动生成: " + dto.getCode())
+                    .withHint("请使用其他产品编号，或留空由系统自动生成").withHintTarget("code");
+        }
+
+        ProductType productType = buildProductTypeEntity(factoryId, dto);
+        applySkuCategoryContract(productType);
+
+        // T149 Part A: 仅对自动生成编号做 retry-on-collision (并发 count+1 竞态防御).
+        if (codeAutoGenerated) {
+            productType = saveWithCodeCollisionRetry(factoryId, dto, productType);
+        } else try {
+            productType = productTypeRepository.save(productType);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // 手输编号在 pre-check 与 insert 之间被并发抢注 → 翻译为友好 409, 不重试
+            log.warn("手输产品编号插入撞唯一约束: factoryId={}, code={}", factoryId, dto.getCode());
+            throw new BusinessException(409, "产品编号已存在，请更换或留空自动生成: " + dto.getCode())
+                    .withHint("请使用其他产品编号，或留空由系统自动生成").withHintTarget("code");
+        }
+        log.info("产品类型创建成功: id={}", productType.getId());
+        if (productPackagingSpecService != null
+                && ProductCategory.SEMI_FINISHED.equals(productType.getProductCategory())) {
+            productPackagingSpecService.replace(productType, List.of());
+        } else if (productPackagingSpecService != null && dto.getPackagingSpecs() != null) {
+            productPackagingSpecService.replace(productType, dto.getPackagingSpecs());
+        } else if (productPackagingSpecService != null) {
+            productPackagingSpecService.synchronizeLegacyDefault(productType);
+        }
+        specificationConversionSyncService.synchronize(productType);
+        return convertToDTO(productType);
+    }
+
+    /**
+     * T149 Part A: 自动生成编号 save, 撞 UNIQUE 约束时重新生成下一序号重试.
+     * 并发场景下多个请求 count+1 算出同一序号 → 第一个成功, 其余撞约束 → 重试取新序号.
+     */
+    private ProductType saveWithCodeCollisionRetry(String factoryId, ProductTypeDTO dto, ProductType productType) {
+        String category = dto.getCategory() != null ? dto.getCategory() : dto.getProductCategory();
+        for (int attempt = 1; attempt <= GENERATED_CODE_MAX_RETRIES; attempt++) {
+            try {
+                ProductType saved = productTypeRepository.save(productType);
+                log.info("产品类型创建成功: id={}, code={}, attempt={}", saved.getId(), saved.getCode(), attempt);
+                return saved;
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                if (attempt >= GENERATED_CODE_MAX_RETRIES) {
+                    log.error("自动生成产品编号重试 {} 次仍撞唯一约束: factoryId={}, lastCode={}",
+                            GENERATED_CODE_MAX_RETRIES, factoryId, productType.getCode());
+                    throw new BusinessException(409, "产品编号自动生成冲突，请稍后重试")
+                            .withHint("系统繁忙，自动编号暂时冲突，请重试").withHintTarget("code");
+                }
+                String regenerated = buildGeneratedCode(factoryId, category, dto.getRelatedCustomer());
+                log.warn("自动生成产品编号撞唯一约束, 重新生成重试: factoryId={}, old={}, new={}, attempt={}",
+                        factoryId, productType.getCode(), regenerated, attempt);
+                productType.setCode(regenerated);
+            }
+        }
+        // 理论不可达 (循环内必 return 或 throw)
+        throw new BusinessException(409, "产品编号自动生成冲突，请稍后重试").withHintTarget("code");
+    }
+
+    /**
+     * T149 Part A: 抽出实体组装逻辑, createProductType 与 retry 路径复用.
+     */
+    private ProductType buildProductTypeEntity(String factoryId, ProductTypeDTO dto) {
+        ProductType productType = new ProductType();
+        productType.setId(java.util.UUID.randomUUID().toString());
+        productType.setFactoryId(factoryId);
+        productType.setCode(dto.getCode());
+        productType.setName(dto.getName());
+        productType.setCategory(dto.getCategory());
+        productType.setUnit(normalizeProductUnit(factoryId, dto.getUnit()));
+        productType.setUnitPrice(dto.getUnitPrice());
+        productType.setProductionTimeMinutes(dto.getProductionTimeMinutes());
+        productType.setShelfLifeDays(dto.getShelfLifeDays());
+        productType.setSinglePotCapacity(dto.getSinglePotCapacity());
+        productType.setPackageSpec(dto.getPackageSpec());
+        productType.setSpecification(dto.getSpecification());
+        productType.setRelatedCustomer(dto.getRelatedCustomer());
+        productType.setImageUrl(dto.getImageUrl());
+        productType.setProductCategory(requireProductCategory(dto));
+        productType.setTemperatureZone(dto.getTemperatureZone());
+        applyNetContentContract(productType, dto, false);
+        productType.setWipToFgYield(dto.getWipToFgYield());
+        productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
+        productType.setStandardCost(dto.getStandardCost());
+        productType.setTargetGrossMargin(dto.getTargetGrossMargin());
+        productType.setLevel1Unit(dto.getLevel1Unit());
+        productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
+        productType.setNotes(dto.getNotes());
+        productType.setIsActive(true);
+        productType.setCreatedBy(dto.getCreatedBy() != null ? Long.valueOf(dto.getCreatedBy()) : null);
+        productType.setCreatedAt(LocalDateTime.now());
+        productType.setUpdatedAt(LocalDateTime.now());
+
+        // Sprint 2 S2-1: Form Template Association
+        productType.setFormTemplateId(dto.getFormTemplateId());
+
+        // Sprint 2 S2-5: SOP Configuration Association
+        productType.setDefaultSopConfigId(dto.getDefaultSopConfigId());
+
+        // Phase 5: SKU Configuration fields
+        productType.setWorkHours(dto.getWorkHours() != null ? dto.getWorkHours() : BigDecimal.ONE);
+        productType.setComplexityScore(dto.getComplexityScore() != null ? dto.getComplexityScore() : 3);
+        productType.setProcessingSteps(serializeToJson(dto.getProcessingSteps()));
+        productType.setSkillRequirements(serializeToJson(dto.getSkillRequirements()));
+        productType.setEquipmentIds(serializeToJson(dto.getEquipmentIds()));
+        productType.setQualityCheckIds(serializeToJson(dto.getQualityCheckIds()));
+
+        // Custom Form Schema Configuration
+        productType.setCustomSchemaOverrides(dto.getCustomSchemaOverrides());
+
+        // SP4-A8: 税率换算 — 含税↔未税自动推导 unitPrice
+        applyTaxConversion(productType, dto);
+
+        return productType;
+    }
+
+    /**
+     * SP4-A8: 税率换算辅助方法.
+     * <ul>
+     *   <li>若 taxRate + taxIncludedUnitPrice 均非 null → unitPrice = taxIncludedUnitPrice / (1 + rate),
+     *       scale=4, HALF_UP (与 TaxRate.preTaxPrice 一致).</li>
+     *   <li>若 taxRate + unitPrice 均非 null 且 taxIncludedUnitPrice 为 null → 反算含税价
+     *       taxIncludedUnitPrice = unitPrice * (1 + rate), scale=4, HALF_UP.</li>
+     *   <li>其余情况 (无税率 / 价格缺失) → 不修改.</li>
+     * </ul>
+     */
+    private void applyTaxConversion(ProductType entity, ProductTypeDTO dto) {
+        TaxRate rate = dto.getTaxRate();
+        entity.setTaxRate(rate);
+
+        if (rate == null) {
+            // 无税率 — taxIncludedUnitPrice 直接存, 不推导 unitPrice
+            if (dto.getTaxIncludedUnitPrice() != null) {
+                entity.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+            }
+            return;
+        }
+
+        if (dto.getTaxIncludedUnitPrice() != null) {
+            // 含税单价已知 → 推导未税 unitPrice
+            entity.setTaxIncludedUnitPrice(dto.getTaxIncludedUnitPrice());
+            entity.setUnitPrice(rate.preTaxPrice(dto.getTaxIncludedUnitPrice()));
+            log.info("SP4-A8 税换算(含→未): taxIncluded={} rate={} → unitPrice={}",
+                    dto.getTaxIncludedUnitPrice(), rate, entity.getUnitPrice());
+        } else if (dto.getUnitPrice() != null) {
+            // 未税单价已知, 含税单价未传 → 反算含税价
+            entity.setUnitPrice(dto.getUnitPrice());
+            entity.setTaxIncludedUnitPrice(rate.withTaxPrice(dto.getUnitPrice()));
+            log.info("SP4-A8 税换算(未→含): unitPrice={} rate={} → taxIncluded={}",
+                    dto.getUnitPrice(), rate, entity.getTaxIncludedUnitPrice());
+        }
+        // 两者均 null → 只设税率, 价格保持原值
+    }
+
+    @Override
+    @Transactional
+    @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
+    public ProductTypeDTO updateProductType(String factoryId, String id, ProductTypeDTO dto) {
+        log.info("更新产品类型: factoryId={}, id={}", factoryId, id);
+
+        ProductType productType = productTypeRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("产品类型不存在: " + id));
+
+        String previousUnit = productType.getUnit();
+        BigDecimal previousGramsPerUnit = productType.getGramsPerUnit();
+        String previousLevel1Unit = productType.getLevel1Unit();
+        BigDecimal previousBoxConversionCoefficient = productType.getBoxConversionCoefficient();
+
+        if (!productType.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权限操作此产品类型")
+                    .withHint("当前产品类型不属于该工厂, 无法操作");
+        }
+
+        if (dto.getName() != null) {
+            String normalizedName = normalizeRequiredName(dto.getName(), "产品名称不能为空");
+            if (productTypeRepository.existsByFactoryIdAndNormalizedNameExcludingId(
+                    factoryId, normalizedName, id)) {
+                throw duplicateProductName(normalizedName);
+            }
+            dto.setName(normalizedName);
+        }
+
+        assertUnitChangeDoesNotBypassMigration(productType, dto);
+
+        // A-24: 产品编码建立后不可修改（ERP 稳定标识，改了破坏历史单据引用）
+        // dto.code 为 null（前端省略字段）或与现值相同（无变更）→ 放行；否则 409
+        if (dto.getCode() != null && !dto.getCode().equals(productType.getCode())) {
+            throw new BusinessException(409, "产品编码建立后不可修改: 当前编码为 " + productType.getCode())
+                    .withHint("产品编码是系统稳定标识，建立后不允许修改，以防止历史订单/批次数据引用断裂")
+                    .withHintTarget("code");
+        }
+
+        // 更新其他字段
+        if (dto.getName() != null) productType.setName(dto.getName());
+        if (dto.getCategory() != null) productType.setCategory(dto.getCategory());
+        if (dto.getUnit() != null) productType.setUnit(normalizeProductUnit(factoryId, dto.getUnit()));
+        if (dto.getUnitPrice() != null) productType.setUnitPrice(dto.getUnitPrice());
+        if (dto.getProductionTimeMinutes() != null) productType.setProductionTimeMinutes(dto.getProductionTimeMinutes());
+        if (dto.getShelfLifeDays() != null) productType.setShelfLifeDays(dto.getShelfLifeDays());
+        if (dto.getSinglePotCapacity() != null) productType.setSinglePotCapacity(dto.getSinglePotCapacity());
+        if (dto.getPackageSpec() != null) productType.setPackageSpec(dto.getPackageSpec());
+        if (dto.getNotes() != null) productType.setNotes(dto.getNotes());
+        if (dto.getIsActive() != null) productType.setIsActive(dto.getIsActive());
+        if (dto.getSpecification() != null) productType.setSpecification(dto.getSpecification());
+        if (dto.getRelatedCustomer() != null) productType.setRelatedCustomer(dto.getRelatedCustomer());
+        if (dto.getImageUrl() != null) productType.setImageUrl(dto.getImageUrl());
+        if (dto.getProductCategory() != null) productType.setProductCategory(dto.getProductCategory());
+        if (dto.getTemperatureZone() != null) productType.setTemperatureZone(dto.getTemperatureZone());
+        if (dto.isGramsPerUnitPresent()
+                || dto.isNetContentQuantityPresent()
+                || dto.isNetContentUnitPresent()) {
+            applyNetContentContract(productType, dto, true);
+        }
+        if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
+        if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
+        if (dto.isStandardCostPresent()) productType.setStandardCost(dto.getStandardCost());
+        if (dto.isTargetGrossMarginPresent()) productType.setTargetGrossMargin(dto.getTargetGrossMargin());
+        if (dto.getLevel1Unit() != null) productType.setLevel1Unit(dto.getLevel1Unit());
+        if (dto.isBoxConversionCoefficientPresent()) {
+            productType.setBoxConversionCoefficient(dto.getBoxConversionCoefficient());
+        }
+
+        applySkuCategoryContract(productType);
+
+        // Sprint 2 S2-1: Form Template Association
+        if (dto.getFormTemplateId() != null) productType.setFormTemplateId(dto.getFormTemplateId());
+
+        // Sprint 2 S2-5: SOP Configuration Association
+        if (dto.getDefaultSopConfigId() != null) productType.setDefaultSopConfigId(dto.getDefaultSopConfigId());
+
+        // Phase 5: SKU Configuration fields
+        if (dto.getWorkHours() != null) productType.setWorkHours(dto.getWorkHours());
+        if (dto.getComplexityScore() != null) productType.setComplexityScore(dto.getComplexityScore());
+        if (dto.getProcessingSteps() != null) productType.setProcessingSteps(serializeToJson(dto.getProcessingSteps()));
+        if (dto.getSkillRequirements() != null) productType.setSkillRequirements(serializeToJson(dto.getSkillRequirements()));
+        if (dto.getEquipmentIds() != null) productType.setEquipmentIds(serializeToJson(dto.getEquipmentIds()));
+        if (dto.getQualityCheckIds() != null) productType.setQualityCheckIds(serializeToJson(dto.getQualityCheckIds()));
+
+        // Custom Form Schema Configuration
+        if (dto.getCustomSchemaOverrides() != null) productType.setCustomSchemaOverrides(dto.getCustomSchemaOverrides());
+
+        // SP4-A8: 税率换算 — 更新时如传入 taxRate 或含税/未税价则重新推导
+        if (dto.getTaxRate() != null || dto.getTaxIncludedUnitPrice() != null) {
+            // 构建临时 DTO 用于换算 (以 entity 当前值兜底)
+            ProductTypeDTO taxDto = ProductTypeDTO.builder()
+                    .taxRate(dto.getTaxRate() != null ? dto.getTaxRate() : productType.getTaxRate())
+                    .taxIncludedUnitPrice(dto.getTaxIncludedUnitPrice())
+                    .unitPrice(dto.getUnitPrice() != null ? dto.getUnitPrice() : productType.getUnitPrice())
+                    .build();
+            applyTaxConversion(productType, taxDto);
+        }
+
+        productType.setUpdatedAt(LocalDateTime.now());
+        productType = productTypeRepository.save(productType);
+        if (productPackagingSpecService != null
+                && ProductCategory.SEMI_FINISHED.equals(productType.getProductCategory())) {
+            productPackagingSpecService.replace(productType, List.of());
+        } else if (productPackagingSpecService != null && dto.getPackagingSpecs() != null) {
+            productPackagingSpecService.replace(productType, dto.getPackagingSpecs());
+        } else if (productPackagingSpecService != null
+                && (!Objects.equals(previousUnit, productType.getUnit())
+                || !Objects.equals(previousLevel1Unit, productType.getLevel1Unit())
+                || !sameDecimal(previousBoxConversionCoefficient, productType.getBoxConversionCoefficient()))) {
+            productPackagingSpecService.synchronizeLegacyDefault(productType);
+        }
+        boolean conversionChanged = specificationConversionSyncService.synchronize(productType);
+
+        if (!Objects.equals(previousUnit, productType.getUnit())
+                || !sameDecimal(previousGramsPerUnit, productType.getGramsPerUnit())
+                || !Objects.equals(previousLevel1Unit, productType.getLevel1Unit())
+                || !sameDecimal(previousBoxConversionCoefficient, productType.getBoxConversionCoefficient())
+                || conversionChanged) {
+            workflowUnitReviewService.markPublishedWorkflowsForReview(factoryId);
+        }
+
+        log.info("产品类型更新成功: id={}", productType.getId());
+        return convertToDTO(productType);
+    }
+
+    private boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.compareTo(right) == 0;
+    }
+
+    /** 半成品 SKU 只定义 kg 基本单位；净重、规格与装箱关系属于成品契约。 */
+    private void applySkuCategoryContract(ProductType productType) {
+        if (!ProductCategory.SEMI_FINISHED.equals(productType.getProductCategory())) {
+            return;
+        }
+        // 半成品只定义基本单位；保留用户选择的重量或计数单位，不再强制改写为 kg。
+        if (productType.getUnit() != null) {
+            String normalized = productType.getUnit().trim();
+            if ("公斤".equals(normalized) || "千克".equals(normalized)) normalized = "kg";
+            if ("克".equals(normalized)) normalized = "g";
+            productType.setUnit(normalized);
+        }
+        productType.setGramsPerUnit(null);
+        productType.setWipToFgYield(null);
+        productType.setLevel1Unit(null);
+        productType.setBoxConversionCoefficient(null);
+        productType.setSpecification(null);
+    }
+
+    /**
+     * Existing quantity semantics may only change through the preview/execution migration flow.
+     * A normal metadata edit must never reinterpret historical g inventory as kg or count units.
+     */
+    private void assertUnitChangeDoesNotBypassMigration(ProductType existing, ProductTypeDTO dto) {
+        String requestedCategory = dto.getProductCategory();
+        if (requestedCategory != null
+                && !Objects.equals(requestedCategory, existing.getProductCategory())) {
+            throw migrationRequired("SKU 大类");
+        }
+        if (dto.getUnit() != null
+                && !ProductCategory.SEMI_FINISHED.equals(existing.getProductCategory())
+                && !Objects.equals(dto.getUnit().trim(),
+                existing.getUnit() == null ? null : existing.getUnit().trim())) {
+            throw migrationRequired("基本单位");
+        }
+    }
+
+    /**
+     * SKU 大类必填 —— 创建时缺了就<b>当场报错</b>, 不静默落空。
+     *
+     * <p>🔴 2026-08-03: 这里原来是 {@code setProductCategory(dto.getProductCategory())} 裸传,
+     * 传空就存空。后果不是马上可见, 而是绕一圈才炸: Workflow 校验读的正是
+     * {@code product_category}, 于是报
+     * {@code 400 半成品 Cell 只能绑定 SEMI_FINISHED 分类 SKU, 当前分类: 未分类}。
+     * 想回头补 → {@link #assertUnitChangeDoesNotBypassMigration} 又用
+     * {@code SKU_UNIT_MIGRATION_REQUIRED} 挡住, <b>哪怕这个 SKU 是刚建的、零库存零单据</b>
+     * (那道守卫只比对值变没变, 并不真查库存)。前一轮因此只能删掉重建。
+     *
+     * <p>从源头堵住比事后放宽那道守卫安全: 守卫保护的是「历史数量口径不被普通编辑重新解释」,
+     * 放宽它要能证明真的零痕迹; 而创建期必填没有这个负担。
+     */
+    private String requireProductCategory(ProductTypeDTO dto) {
+        String category = dto.getProductCategory();
+        if (category == null || category.isBlank()) {
+            throw new BusinessException(400, "请选择 SKU 大类(成品 / 半成品 / 原料等)")
+                    .withCode("PRODUCT_CATEGORY_REQUIRED")
+                    .withHint("大类决定该 SKU 能绑到 Workflow 的哪种节点; 建好后不能在普通编辑里改, "
+                            + "所以创建时必须选定")
+                    .withHintTarget("productCategory")
+                    .withSeverity("BLOCKING");
+        }
+        return category;
+    }
+
+    private BusinessException migrationRequired(String field) {
+        return new BusinessException(409, field + "已关联库存与历史单据，不能在普通编辑中直接修改")
+                .withCode("SKU_UNIT_MIGRATION_REQUIRED")
+                .withHint("请先生成单位迁移预览，核对数量、单价和总金额后执行受控迁移")
+                .withHintTarget(field)
+                .withSeverity("BLOCKING");
+    }
+
+    @Override
+    @Transactional
+    @CacheEvict(value = {"productTypes", "productTypeOptions"}, key = "#factoryId")
+    public void deleteProductType(String factoryId, String id) {
+        log.info("删除产品类型: factoryId={}, id={}", factoryId, id);
+
+        ProductType productType = productTypeRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("产品类型不存在: " + id));
+
+        if (!productType.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权限操作此产品类型")
+                    .withHint("当前产品类型不属于该工厂, 无法操作");
+        }
+
+        // 🔴 删之前必须查引用 —— 原来这里只有一条从没实现的 TODO。
+        //
+        // `product_types` 是**硬删**, 而数据库外键只保护了 6 张表
+        // (combo_items / material_batches / material_product_conversions /
+        //  production_plans / sales_delivery_items / material_product_conversions),
+        // **`sales_order_items` 和 `bom_recipes` 没有外键** —— 于是:
+        //   删 SKU 不被拦 → 销售订单明细留着一个死 product_type_id, 页面看着一切正常
+        //   → 直到用户建发货单, `sales_delivery_items` 那条外键才拒绝插入,
+        //     报「关联资源「product_types」不存在」。
+        // 2026-08-01 六膳门 SO-20260709-0001「干式熟成鸡（半只）」就是这么卡住的:
+        // 订单已财务审批, 却永远发不出货, 而且报错完全看不出是哪个产品被删了。
+        //
+        // 所以在没有外键的那两张表上补应用层的闸, 且提示要说清**去哪看**。
+        assertNotReferenced(productType, "sales_order_items", "销售订单", "/sales/orders");
+        assertNotReferenced(productType, "bom_recipes", "BOM 配方", "/production/bom");
+
+        productTypeRepository.delete(productType);
+        log.info("产品类型删除成功: id={}", id);
+    }
+
+    /**
+     * 数据库外键没覆盖到的引用检查 —— 有引用就拒绝删除, 并把用户指到能处理的模块。
+     *
+     * <p>为什么不靠外键: `sales_order_items` / `bom_recipes` 上没有指向 product_types 的外键,
+     * 硬删因此畅通无阻, 引用变成悬空; 而 `sales_delivery_items` **有**外键, 于是问题延迟到
+     * 发货那一步才爆, 且错误里只有表名没有产品名。宁可在删除时拦住, 也不要让单据烂在半路。</p>
+     */
+    private void assertNotReferenced(
+            ProductType productType, String table, String moduleName, String route) {
+        Number count = (Number) entityManager
+                .createNativeQuery("SELECT count(*) FROM " + table
+                        + " WHERE product_type_id = :pid AND deleted_at IS NULL")
+                .setParameter("pid", productType.getId())
+                .getSingleResult();
+        if (count != null && count.longValue() > 0) {
+            throw new BusinessException(409,
+                    "无法删除产品「" + productType.getName() + "」: 它还被 " + count.longValue()
+                            + " 条「" + moduleName + "」引用")
+                    .withCode("PRODUCT_TYPE_IN_USE")
+                    .withHint("请先到「" + moduleName + "」处理这些单据(作废或改用其它产品)后再删除")
+                    .withHintTarget(route)
+                    .withSeverity("BLOCKING");
+        }
+    }
+
+    @Override
+    public ProductTypeDTO getProductTypeById(String factoryId, String id) {
+        log.info("获取产品类型详情: factoryId={}, id={}", factoryId, id);
+
+        ProductType productType = productTypeRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("产品类型不存在: " + id));
+
+        if (!productType.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权限查看此产品类型")
+                    .withHint("当前产品类型不属于该工厂, 无法查看");
+        }
+
+        return convertToDTO(productType);
+    }
+
+    @Override
+    public PageResponse<ProductTypeDTO> getProductTypes(String factoryId, PageRequest pageRequest) {
+        // 兼容老调用 — 不传 productCategory / keyword
+        return getProductTypes(factoryId, null, null, pageRequest);
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public PageResponse<ProductTypeDTO> getProductTypes(String factoryId, String productCategory,
+                                                         String keyword, PageRequest pageRequest) {
+        // 兼容老调用 — 不传 unit / temperatureZone (零行为变化, 走下方 else 分支老查询)
+        return getProductTypes(factoryId, productCategory, keyword, null, null, pageRequest);
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public PageResponse<ProductTypeDTO> getProductTypes(String factoryId, String productCategory,
+                                                         String keyword, String unit, String temperatureZone,
+                                                         PageRequest pageRequest) {
+        log.info("获取产品类型列表: factoryId={}, productCategory={}, keyword={}, unit={}, temperatureZone={}, page={}, size={}",
+                factoryId, productCategory, keyword, unit, temperatureZone, pageRequest.getPage(), pageRequest.getSize());
+
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "createdAt")
+        );
+
+        // V3 P0-2 修复 — 按 productCategory 真正隔离查询
+        boolean hasCategory = productCategory != null && !productCategory.trim().isEmpty();
+        boolean hasKeyword = keyword != null && !keyword.trim().isEmpty();
+        boolean hasUnit = unit != null && !unit.trim().isEmpty();
+        boolean hasTemperatureZone = temperatureZone != null && !temperatureZone.trim().isEmpty();
+
+        String safeKeyword = hasKeyword ? com.cretas.aims.util.SqlLikeEscaper.escape(keyword) : keyword;
+        Page<ProductType> page;
+        if (hasUnit || hasTemperatureZone) {
+            // 成品/SKU 管理页 单位/温区 筛选 (2026-07-14) — 组合查询覆盖 category/keyword 均可空的场景,
+            // 不改动下方既有 4 条老查询路径的行为 (unit/temperatureZone 均为空时永远不走这条分支)。
+            page = productTypeRepository.findByFiltersWithUnitAndTemperatureZone(
+                    factoryId,
+                    hasCategory ? productCategory : null,
+                    hasKeyword ? safeKeyword : null,
+                    hasUnit ? unit : null,
+                    hasTemperatureZone ? temperatureZone : null,
+                    pageable);
+        } else if (hasCategory && hasKeyword) {
+            page = productTypeRepository.searchVisibleByFactoryIdAndProductCategory(
+                    factoryId, productCategory, safeKeyword, pageable);
+        } else if (hasCategory) {
+            page = productTypeRepository.findVisibleByFactoryIdAndProductCategory(factoryId, productCategory, pageable);
+        } else if (hasKeyword) {
+            page = productTypeRepository.searchVisibleProductTypes(factoryId, safeKeyword, pageable);
+        } else {
+            page = productTypeRepository.findVisibleByFactoryId(factoryId, pageable);
+        }
+
+        List<ProductTypeDTO> dtos = page.getContent().stream()
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+
+        return PageResponse.of(
+                dtos,
+                pageRequest.getPage(),
+                pageRequest.getSize(),
+                page.getTotalElements()
+        );
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    @Cacheable(value = "productTypeOptions", key = "#factoryId")
+    public List<ProductTypeOptionDTO> getProductTypeOptions(String factoryId) {
+        log.info("获取产品类型选项列表 (精简): factoryId={}", factoryId);
+        return productTypeRepository.findOptionsByFactoryId(factoryId);
+    }
+
+    @Override
+    @Cacheable(value = "productTypes", key = "#factoryId")
+    public List<ProductTypeDTO> getActiveProductTypes(String factoryId) {
+        log.info("获取激活的产品类型: factoryId={}", factoryId);
+
+        List<ProductType> productTypes = productTypeRepository.findVisibleByFactoryIdAndIsActiveTrue(factoryId);
+        return productTypes.stream()
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 销售订单商品选择用的口径 —— 与上面 {@code getActiveProductTypes} 是<b>两条</b>口径, 别合并。
+     *
+     * <p>上面那条(findVisible…)服务于<b>生产侧</b>: 生产计划/批次/工时/毛利红线/成本差异/餐饮,
+     * 共 11 个前端调用点。它排除 RAW_MATERIAL 而<b>保留半成品</b> —— 因为生产计划就是要生产半成品。
+     *
+     * <p>销售侧恰好相反(2026-08-12 Steve 拍板):「出了半成品全开吧」——
+     * 原料/辅料/包材都卖, 只有半成品不卖。
+     *
+     * <p>所以这里不能复用 findVisible…: 它把要卖的 RAW_MATERIAL 挡在外面, 又把不卖的半成品放进来,
+     * <b>两个方向都反</b>。改它会波及那 11 处生产侧调用。
+     *
+     * <p>类别口径的唯一权威是 {@link ProductCategory#isSellable} —— 不在 JPQL 里再写一份。
+     */
+    @Override
+    public List<ProductTypeDTO> getSellableProductTypes(String factoryId) {
+        log.info("获取可销售的产品类型: factoryId={}", factoryId);
+
+        return productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId).stream()
+                .filter(p -> ProductCategory.isSellable(p.getProductCategory()))
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<ProductTypeDTO> getProductTypesByCategory(String factoryId, String category) {
+        log.info("根据类别获取产品类型: factoryId={}, category={}", factoryId, category);
+
+        List<ProductType> productTypes = productTypeRepository.findVisibleByFactoryIdAndCategory(factoryId, category);
+        return productTypes.stream()
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public PageResponse<ProductTypeDTO> searchProductTypes(String factoryId, String keyword, PageRequest pageRequest) {
+        log.info("搜索产品类型: factoryId={}, keyword={}", factoryId, keyword);
+
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "createdAt")
+        );
+
+        Page<ProductType> page = productTypeRepository.searchVisibleProductTypes(factoryId,
+            com.cretas.aims.util.SqlLikeEscaper.escape(keyword), pageable);
+        List<ProductTypeDTO> dtos = page.getContent().stream()
+                .map(this::convertToDTO)
+                .collect(Collectors.toList());
+
+        return PageResponse.of(
+                dtos,
+                pageRequest.getPage(),
+                pageRequest.getSize(),
+                page.getTotalElements()
+        );
+    }
+
+    @Override
+    public List<String> getProductCategories(String factoryId) {
+        log.info("获取产品类别列表: factoryId={}", factoryId);
+
+        return productTypeRepository.findVisibleByFactoryId(factoryId).stream()
+                .map(ProductType::getCategory)
+                .filter(category -> category != null && !category.isEmpty())
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public void updateProductTypesStatus(String factoryId, List<String> ids, Boolean isActive) {
+        log.info("批量更新产品类型状态: factoryId={}, ids={}, isActive={}", factoryId, ids, isActive);
+
+        for (String id : ids) {
+            ProductType productType = productTypeRepository.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("产品类型不存在: " + id));
+
+            if (!productType.getFactoryId().equals(factoryId)) {
+                throw new BusinessException(403, "无权限操作产品类型: " + id)
+                        .withHint("批量操作中包含其他工厂的产品类型, 请重新选择");
+            }
+
+            productType.setIsActive(isActive);
+            productType.setUpdatedAt(LocalDateTime.now());
+            productTypeRepository.save(productType);
+        }
+
+        log.info("批量更新产品类型状态成功: count={}", ids.size());
+    }
+
+    /**
+     * 获取客户名称的拼音首字母缩写（用于自动编码）
+     * 如 "大东" → "DD", "六扇门" → "LSM"
+     * 无客户则使用 factoryId 作为后备
+     */
+    private String getCustomerInitials(String customerName, String factoryId) {
+        if (customerName == null || customerName.trim().isEmpty()) {
+            return factoryId != null ? factoryId : "";
+        }
+        StringBuilder initials = new StringBuilder();
+        for (char c : customerName.trim().toCharArray()) {
+            if (c >= 0x4e00 && c <= 0x9fff) {
+                // 简易拼音首字母映射（基于 Unicode 区间粗略映射）
+                initials.append(getPinyinInitial(c));
+            } else if (Character.isLetter(c)) {
+                initials.append(Character.toUpperCase(c));
+            }
+        }
+        return initials.length() > 0 ? initials.toString() : (factoryId != null ? factoryId : "");
+    }
+
+    /**
+     * 简易汉字拼音首字母（基于 GB2312 区间近似映射）
+     */
+    private char getPinyinInitial(char ch) {
+        // 按 GB2312 转换后的拼音声母区间
+        byte[] bytes;
+        try {
+            bytes = String.valueOf(ch).getBytes("GBK");
+        } catch (Exception e) {
+            return 'X';
+        }
+        if (bytes.length < 2) return 'X';
+        int code = ((bytes[0] & 0xFF) << 8) | (bytes[1] & 0xFF);
+        if (code < 0xB0A1) return 'X';
+        if (code < 0xB0C5) return 'A';
+        if (code < 0xB2C1) return 'B';
+        if (code < 0xB4EE) return 'C';
+        if (code < 0xB6EA) return 'D';
+        if (code < 0xB7A2) return 'E';
+        if (code < 0xB8C1) return 'F';
+        if (code < 0xB9FE) return 'G';
+        if (code < 0xBBF7) return 'H';
+        if (code < 0xBFA6) return 'J';
+        if (code < 0xC0AC) return 'K';
+        if (code < 0xC2E8) return 'L';
+        if (code < 0xC4C3) return 'M';
+        if (code < 0xC5B6) return 'N';
+        if (code < 0xC5BE) return 'O';
+        if (code < 0xC6DA) return 'P';
+        if (code < 0xC8BB) return 'Q';
+        if (code < 0xC8F6) return 'R';
+        if (code < 0xCBFA) return 'S';
+        if (code < 0xCDDA) return 'T';
+        if (code < 0xCEF4) return 'W';
+        if (code < 0xD1B9) return 'X';
+        if (code < 0xD4D1) return 'Y';
+        if (code <= 0xD7F9) return 'Z';
+        return 'X';
+    }
+
+    private String getCategoryPrefix(String category) {
+        if (category == null) return "PT";
+        switch (category.toUpperCase()) {
+            case "FINISHED_PRODUCT": return "CP";
+            case "RAW_MATERIAL": return "YL";
+            case "PACKAGING": return "BF";
+            case "SEASONING": return "TW";
+            case "CUSTOMER_MATERIAL": return "KH";
+            default: return "PT";
+        }
+    }
+
+    /**
+     * T147 Fix2: 统一的编号生成逻辑 (前缀 + 客户首字母 + 4位序号),
+     * createProductType 与 previewGeneratedCode 共用, 保证预览与最终落库一致.
+     */
+    private String buildGeneratedCode(String factoryId, String category, String relatedCustomer) {
+        String prefix = getCategoryPrefix(category);
+        String customerInitials = getCustomerInitials(relatedCustomer, factoryId);
+        String generatedPrefix = prefix + customerInitials;
+        long maxSuffix = productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix(factoryId, generatedPrefix)
+                .stream()
+                .filter(Objects::nonNull)
+                .filter(code -> code.startsWith(generatedPrefix))
+                .map(code -> code.substring(generatedPrefix.length()))
+                .filter(suffix -> !suffix.isEmpty() && suffix.chars().allMatch(Character::isDigit))
+                .mapToLong(suffix -> {
+                    try {
+                        return Long.parseLong(suffix);
+                    } catch (NumberFormatException ignored) {
+                        return 0;
+                    }
+                })
+                .max()
+                .orElse(0);
+        return String.format("%s%04d", generatedPrefix, maxSuffix + 1);
+    }
+
+    private String normalizeRequiredName(String name, String emptyMessage) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new BusinessException(400, emptyMessage).withHintTarget("name");
+        }
+        return name.trim();
+    }
+
+    private BusinessException duplicateProductName(String name) {
+        return new BusinessException(409, "产品名称已存在: " + name)
+                .withHint("同一工厂内产品名称不能重复，请修改名称")
+                .withHintTarget("name");
+    }
+
+    @Override
+    public String previewGeneratedCode(String factoryId, String productCategory,
+                                       String customerId, String relatedCustomer) {
+        // 优先用 customerId 解析客户名 (与表单的 entity link 对齐); 解析不到则用传入的 relatedCustomer 名后备
+        String customerName = relatedCustomer;
+        if (customerId != null && !customerId.trim().isEmpty()) {
+            customerName = customerRepository.findByIdAndFactoryId(customerId, factoryId)
+                    .map(c -> c.getName())
+                    .orElse(relatedCustomer);
+        }
+        String code = buildGeneratedCode(factoryId, productCategory, customerName);
+        log.info("预览产品编号: factoryId={}, category={}, customerId={}, name={}, code={}",
+                factoryId, productCategory, customerId, customerName, code);
+        return code;
+    }
+
+    // ==================== T149: SKU 智能防呆填充 — 历史记忆建议 ====================
+
+    /** 名称匹配最低分阈值 (低于此分视为"无把握", 不返回名称匹配建议). */
+    private static final double SUGGEST_MATCH_THRESHOLD = 0.34;
+
+    /**
+     * T149 Part B: 按产品名称从历史 SKU 记忆推断填充建议.
+     * 只读, 无写副作用.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ProductTypeSuggestionDTO suggestDefaults(String factoryId, String name, String productCategory) {
+        String trimmedName = name == null ? "" : name.trim();
+        if (trimmedName.isEmpty()) {
+            return ProductTypeSuggestionDTO.builder().build(); // 全 null
+        }
+
+        List<String> inputTokens = tokenizeProductName(trimmedName);
+
+        // 1) 名称相似度匹配同工厂已有产品 (取 name + baseProductName 比对)
+        List<ProductType> existing = productTypeRepository.findByFactoryId(factoryId);
+        ProductType best = null;
+        double bestScore = 0.0;
+        for (ProductType p : existing) {
+            double score = nameMatchScore(inputTokens, trimmedName, p);
+            if (score > bestScore) {
+                bestScore = score;
+                best = p;
+            }
+        }
+
+        if (best != null && bestScore >= SUGGEST_MATCH_THRESHOLD) {
+            log.info("智能填充: name='{}' 匹配历史产品 '{}' (score={})", trimmedName, best.getName(), bestScore);
+            // T150: 扩展带入温区/规格/标准克重/出成率 — null 原样透传 (禁假数据)
+            return ProductTypeSuggestionDTO.builder()
+                    .productCategory(best.getProductCategory())
+                    .unit(emptyToNull(best.getUnit()))
+                    .level1Unit(emptyToNull(best.getLevel1Unit()))
+                    .boxConversionCoefficient(best.getBoxConversionCoefficient())
+                    .temperatureZone(emptyToNull(best.getTemperatureZone()))
+                    .specification(emptyToNull(best.getSpecification()))
+                    .gramsPerUnit(best.getGramsPerUnit())
+                    .wipToFgYield(best.getWipToFgYield())
+                    .baseProductName(emptyToNull(best.getBaseProductName())) // T153: 带入基础名称 (历史未配则 null, 禁假数据)
+                    .matchedFrom(best.getName())
+                    .build();
+        }
+
+        // 2) 名称无匹配 → 仅按关键词规则推断大类 (单位等留 null, 禁假数据)
+        String keywordCategory = inferCategoryByKeyword(trimmedName);
+        if (keywordCategory != null) {
+            log.info("智能填充: name='{}' 无历史名称匹配, 按关键词推断大类={}", trimmedName, keywordCategory);
+            return ProductTypeSuggestionDTO.builder()
+                    .productCategory(keywordCategory)
+                    .build();
+        }
+
+        // 3) 都没把握 → 全 null (不臆造)
+        return ProductTypeSuggestionDTO.builder().build();
+    }
+
+    private static String emptyToNull(String s) {
+        return (s == null || s.trim().isEmpty()) ? null : s;
+    }
+
+    /**
+     * 产品名称分词: 去空格/规格数字(如 200g)/常见单位后缀, 切成中文 2-gram + 英文/数字段.
+     * 用于关键词/子串重叠打分.
+     */
+    private List<String> tokenizeProductName(String name) {
+        if (name == null) return Collections.emptyList();
+        // 去掉规格类噪声 (200g / 1.5kg / *42袋 等数字+单位组合), 保留产品本体词
+        String cleaned = name.toLowerCase()
+                .replaceAll("[0-9]+(\\.[0-9]+)?\\s*(g|kg|克|千克|ml|l|升|袋|盒|箱|包|份|筐|框|件|桶|瓶)", " ")
+                .replaceAll("[\\s/*x×·\\-_()（）]+", " ")
+                .trim();
+        java.util.LinkedHashSet<String> tokens = new java.util.LinkedHashSet<>();
+        // 英文/数字连续段
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("[a-z0-9]+").matcher(cleaned);
+        while (m.find()) {
+            if (m.group().length() >= 2) tokens.add(m.group());
+        }
+        // 中文 2-gram (滑窗)
+        String han = cleaned.replaceAll("[^\\u4e00-\\u9fff]", "");
+        for (int i = 0; i + 1 < han.length(); i++) {
+            tokens.add(han.substring(i, i + 2));
+        }
+        // 单字中文也保留 (短名如"卤"用于子串命中, 但权重低)
+        for (int i = 0; i < han.length(); i++) {
+            tokens.add(han.substring(i, i + 1));
+        }
+        return new ArrayList<>(tokens);
+    }
+
+    /**
+     * 名称匹配打分: 输入 token 与目标产品 (name + baseProductName) 的 token 重叠占比 (Jaccard-ish),
+     * 叠加子串包含奖励, 再叠加 LCS (最长公共连续子串) 信号.
+     *
+     * <p>T152: 简化为关键词包含逻辑 (Steve 指令: "只要名称里面有关键词就匹配").
+     * LCS ≥ 2 中文字即为匹配, 去掉 T151 的 ≥40% 占比限制.
+     * 分数按 LCS 长度线性升, 使更长的共享子串排名更高 (最具体的匹配获胜).
+     *
+     * <ul>
+     *   <li>LCS ≥ 2 中文字: lcsScore = min(1.0, 0.4 + 0.2 * lcsLen)
+     *       — LCS=2 → 0.8, LCS=3 → 1.0, 全部超过阈值 0.34;</li>
+     *   <li>LCS = 1 或 0: 不加分 (单字噪声太多, 如「的」「光」);</li>
+     *   <li>最终 score = max(coverage + substrBonus, lcsScore);</li>
+     *   <li>最高分产品获胜 — 更长 LCS (更具体的关键词) 优先于更短的偶然 2 字重叠.</li>
+     * </ul>
+     */
+    private double nameMatchScore(List<String> inputTokens, String inputName, ProductType target) {
+        if (inputTokens.isEmpty()) return 0.0;
+        java.util.LinkedHashSet<String> targetTokens = new java.util.LinkedHashSet<>();
+        targetTokens.addAll(tokenizeProductName(target.getName()));
+        if (target.getBaseProductName() != null) {
+            targetTokens.addAll(tokenizeProductName(target.getBaseProductName()));
+        }
+        if (targetTokens.isEmpty()) return 0.0;
+
+        int overlap = 0;
+        for (String t : inputTokens) {
+            if (targetTokens.contains(t)) overlap++;
+        }
+        // 重叠占输入 token 的比例 (输入越被覆盖, 越像同一产品)
+        double coverage = (double) overlap / inputTokens.size();
+
+        // 子串包含奖励: 双向 (输入名含目标基础名 或 反之), 抓"叮咚好食光卤猪蹄 200g" vs "好食光卤猪蹄"
+        double substrBonus = 0.0;
+        String inLower = inputName.toLowerCase().replaceAll("\\s+", "");
+        String tgtName = (target.getBaseProductName() != null ? target.getBaseProductName() : target.getName())
+                .toLowerCase().replaceAll("\\s+", "");
+        if (!tgtName.isEmpty() && (inLower.contains(tgtName) || tgtName.contains(inLower))) {
+            substrBonus = 0.3;
+        }
+        double baseScore = Math.min(1.0, coverage + substrBonus);
+
+        // T152: LCS (最长公共连续子串) 信号 — 仅对中文字符计算, 排除数字/规格/英文噪声.
+        // 简化规则: LCS ≥ 2 即匹配 (关键词包含), 去掉 T151 的 ≥40% 占比限制.
+        String inHan = inputName.replaceAll("[^\\u4e00-\\u9fff]", "");
+        String tgtNameHan = target.getName().replaceAll("[^\\u4e00-\\u9fff]", "");
+        String tgtBaseHan = (target.getBaseProductName() != null)
+                ? target.getBaseProductName().replaceAll("[^\\u4e00-\\u9fff]", "")
+                : "";
+        int lcsFromName = longestCommonSubstring(inHan, tgtNameHan);
+        int lcsFromBase = tgtBaseHan.isEmpty() ? 0 : longestCommonSubstring(inHan, tgtBaseHan);
+        int maxLcs = Math.max(lcsFromName, lcsFromBase);
+
+        // LCS ≥ 2: score = 0.4 + 0.2 * lcsLen (capped 1.0); LCS=2 → 0.8, LCS=3 → 1.0
+        // 长 LCS 产品优先 (更具体关键词排名更高, 相同 LCS 时 coverage 决定)
+        double lcsScore = maxLcs >= 2 ? Math.min(1.0, 0.4 + 0.2 * maxLcs) : 0.0;
+
+        return Math.max(baseScore, lcsScore);
+    }
+
+    /**
+     * 计算两个字符串的最长公共连续子串长度 (经典 DP, O(m*n)).
+     * 仅内部使用于 nameMatchScore, 输入均为短中文串 (&lt;100 chars), 性能无虞.
+     */
+    private static int longestCommonSubstring(String a, String b) {
+        if (a == null || b == null || a.isEmpty() || b.isEmpty()) return 0;
+        int m = a.length(), n = b.length(), maxLen = 0;
+        // dp[i][j] = length of LCS ending at a[i-1], b[j-1]
+        int[] prev = new int[n + 1];
+        for (int i = 1; i <= m; i++) {
+            int[] curr = new int[n + 1];
+            for (int j = 1; j <= n; j++) {
+                if (a.charAt(i - 1) == b.charAt(j - 1)) {
+                    curr[j] = prev[j - 1] + 1;
+                    if (curr[j] > maxLen) maxLen = curr[j];
+                }
+            }
+            prev = curr;
+        }
+        return maxLen;
+    }
+
+    /**
+     * 关键词规则推断产品大类 (best-effort, 无把握返 null — 禁假数据).
+     * 仅推断大类; 单位等无法从关键词可靠推断, 留 null.
+     */
+    private String inferCategoryByKeyword(String name) {
+        if (name == null) return null;
+        String n = name.toLowerCase();
+        // 包辅材: 盒/袋/膜/吸塑/包装/标签 等 (优先于成品判断, 避免"包装盒"被误判成品)
+        if (containsAny(n, "吸塑", "包装", "包材", "标签", "封口", "保鲜膜", "塑料盒", "纸箱", "周转筐", "周转框", "打包")) {
+            return "PACKAGING";
+        }
+        // 调味品: 料/酱/调味/香辛/卤料/腌料
+        if (containsAny(n, "调味", "酱料", "卤料", "腌料", "香辛", "味精", "蘸料", "底料")) {
+            return "SEASONING";
+        }
+        // 原料: 冻/鲜/原料/生鲜 (raw)
+        if (containsAny(n, "原料", "生鲜", "冻品", "鲜货")) {
+            return "RAW_MATERIAL";
+        }
+        // 成品: 卤/熟/即食 + 常见菜品名 (猪蹄/掌中宝/牛腱 等)
+        if (containsAny(n, "卤", "熟", "即食", "猪蹄", "猪舌", "掌中宝", "牛腱", "鸭", "鸡爪", "凤爪", "猪耳", "肥肠")) {
+            return "FINISHED_PRODUCT";
+        }
+        return null; // 没把握 — 不臆造
+    }
+
+    private boolean containsAny(String haystack, String... needles) {
+        for (String n : needles) {
+            if (haystack.contains(n)) return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean checkCodeExists(String factoryId, String code, String excludeId) {
+        log.info("检查产品编码是否存在: factoryId={}, code={}, excludeId={}", factoryId, code, excludeId);
+
+        if (excludeId != null) {
+            ProductType existing = productTypeRepository.findByFactoryIdAndCode(factoryId, code).orElse(null);
+            return existing != null && !existing.getId().equals(excludeId);
+        }
+
+        return productTypeRepository.existsByFactoryIdAndCode(factoryId, code);
+    }
+
+    @Override
+    @Transactional
+    public void initializeDefaultProductTypes(String factoryId, Long createdBy) {
+        log.info("初始化默认产品类型: factoryId={}, createdBy={}", factoryId, createdBy);
+
+        if (createdBy == null) {
+            // 形态 A¹⁰: 兜底一个假 id 会把「不知道是谁」写成「就是那个人」。
+            // product_types.created_by 是 NOT NULL + 外键 fkgkrl6wos59gkhsuwoo7472uvi → users(id),
+            // 兜底一个不存在的 id 只会在 save 时炸, 而且是在建厂流程里炸。
+            throw new IllegalStateException(
+                    "初始化默认产品类型缺少操作人 (createdBy 为空): factoryId=" + factoryId
+                            + " —— product_types.created_by 是 NOT NULL 且有外键指向 users, "
+                            + "⛔ 不要用写死的 user id 兜底 (上一个写死的 1L 已随 F001 租户被清理而失效)");
+        }
+
+        // 检查是否已有产品类型
+        long count = productTypeRepository.countByFactoryId(factoryId);
+        if (count > 0) {
+            log.info("工厂已有产品类型，跳过初始化: count={}", count);
+            return;
+        }
+
+        // 创建默认产品类型
+        List<ProductType> defaultTypes = Arrays.asList(
+                createDefaultProductType(factoryId, "P001", "面包", "烘焙", "个", BigDecimal.valueOf(5.00), 120, 3, createdBy),
+                createDefaultProductType(factoryId, "P002", "蛋糕", "烘焙", "个", BigDecimal.valueOf(25.00), 180, 5, createdBy),
+                createDefaultProductType(factoryId, "P003", "饼干", "烘焙", "盒", BigDecimal.valueOf(15.00), 60, 30, createdBy),
+                createDefaultProductType(factoryId, "P004", "月饼", "糕点", "盒", BigDecimal.valueOf(50.00), 240, 60, createdBy),
+                createDefaultProductType(factoryId, "P005", "牛奶", "乳制品", "瓶", BigDecimal.valueOf(8.00), 30, 7, createdBy)
+        );
+
+        productTypeRepository.saveAll(defaultTypes);
+        log.info("默认产品类型初始化成功: count={}", defaultTypes.size());
+    }
+
+    private ProductType createDefaultProductType(String factoryId, String code, String name,
+                                                 String category, String unit, BigDecimal price,
+                                                 Integer productionTime, Integer shelfLife,
+                                                 Long createdBy) {
+        ProductType productType = new ProductType();
+        productType.setFactoryId(factoryId);
+        productType.setCode(code);
+        productType.setName(name);
+        productType.setCategory(category);
+        productType.setUnit(unit);
+        productType.setUnitPrice(price);
+        productType.setProductionTimeMinutes(productionTime);
+        productType.setShelfLifeDays(shelfLife);
+        productType.setIsActive(true);
+        // 🔴 2026-08-19: 原来是 `setCreatedBy(1L) // 系统创建`。users 表里没有 id=1
+        //    (2026-08-07 被 V20261029_68 连同 F001 租户删掉; prod 实测 min(id)=1309),
+        //    而这一列 NOT NULL + 外键 → users。归给点按钮的人, ⛔ 不要换一个新的写死 id。
+        productType.setCreatedBy(createdBy);
+        productType.setCreatedAt(LocalDateTime.now());
+        productType.setUpdatedAt(LocalDateTime.now());
+        return productType;
+    }
+
+    private ProductTypeDTO convertToDTO(ProductType productType) {
+        return ProductTypeDTO.builder()
+                .id(productType.getId())
+                .factoryId(productType.getFactoryId())
+                .code(productType.getCode())
+                .name(productType.getName())
+                .category(productType.getCategory())
+                .unit(productType.getUnit())
+                .unitPrice(productType.getUnitPrice())
+                .productionTimeMinutes(productType.getProductionTimeMinutes())
+                .shelfLifeDays(productType.getShelfLifeDays())
+                .singlePotCapacity(productType.getSinglePotCapacity())
+                .packageSpec(productType.getPackageSpec())
+                .relatedCustomer(productType.getRelatedCustomer())
+                .imageUrl(productType.getImageUrl())
+                .specification(productType.getSpecification())
+                .productCategory(productType.getProductCategory())
+                .temperatureZone(productType.getTemperatureZone())
+                .gramsPerUnit(productType.getGramsPerUnit())
+                .netContentQuantity(productType.getNetContentQuantity())
+                .netContentUnit(productType.getNetContentUnit())
+                .wipToFgYield(productType.getWipToFgYield())
+                .quotedLaborCostPerKg(productType.getQuotedLaborCostPerKg()) // SP9-M1
+                .standardCost(productType.getStandardCost())
+                .targetGrossMargin(productType.getTargetGrossMargin())
+                .level1Unit(productType.getLevel1Unit())
+                .boxConversionCoefficient(productType.getBoxConversionCoefficient())
+                .isActive(productType.getIsActive())
+                .notes(productType.getNotes())
+                .createdBy(productType.getCreatedBy())
+                .createdAt(productType.getCreatedAt())
+                .updatedAt(productType.getUpdatedAt())
+                // Sprint 2 S2-1: Form Template Association
+                .formTemplateId(productType.getFormTemplateId())
+                // Sprint 2 S2-5: SOP Configuration Association
+                .defaultSopConfigId(productType.getDefaultSopConfigId())
+                // Phase 5: SKU Configuration fields
+                .workHours(productType.getWorkHours())
+                .complexityScore(productType.getComplexityScore())
+                .processingSteps(parseProcessingSteps(productType.getProcessingSteps()))
+                .skillRequirements(parseSkillRequirements(productType.getSkillRequirements()))
+                .equipmentIds(parseStringList(productType.getEquipmentIds()))
+                .qualityCheckIds(parseStringList(productType.getQualityCheckIds()))
+                // Custom Form Schema Configuration
+                .customSchemaOverrides(productType.getCustomSchemaOverrides())
+                // SP4-A8: 税率 + 含税单价
+                .taxRate(productType.getTaxRate())
+                .taxIncludedUnitPrice(productType.getTaxIncludedUnitPrice())
+                .build();
+    }
+
+    /**
+     * 统一 SKU 净含量契约。质量型同时维护 gramsPerUnit 兼容桥；容量型绝不伪装为克重。
+     */
+    private void applyNetContentContract(ProductType entity, ProductTypeDTO dto, boolean update) {
+        boolean structuredPresent = dto.isNetContentQuantityPresent() || dto.isNetContentUnitPresent();
+        if (structuredPresent) {
+            if (!dto.isNetContentQuantityPresent() || !dto.isNetContentUnitPresent()) {
+                throw new BusinessException(400, "净含量数量和单位必须同时提供")
+                        .withCode("PRODUCT_NET_CONTENT_PAIR_REQUIRED")
+                        .withHintTarget("netContentQuantity");
+            }
+            BigDecimal quantity = dto.getNetContentQuantity();
+            String unit = canonicalNetContentUnit(dto.getNetContentUnit());
+            if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "净含量必须大于 0")
+                        .withCode("PRODUCT_NET_CONTENT_INVALID")
+                        .withHintTarget("netContentQuantity");
+            }
+            entity.setNetContentQuantity(quantity.stripTrailingZeros());
+            entity.setNetContentUnit(unit);
+            entity.setGramsPerUnit(toGrams(quantity, unit));
+            return;
+        }
+
+        // 兼容旧客户端：只传 gramsPerUnit 时，结构化为 g；显式 null 仍允许清空历史克重。
+        if (dto.isGramsPerUnitPresent() || !update) {
+            BigDecimal grams = dto.getGramsPerUnit();
+            entity.setGramsPerUnit(grams);
+            if (grams == null) {
+                if (dto.isGramsPerUnitPresent()) {
+                    entity.setNetContentQuantity(null);
+                    entity.setNetContentUnit(null);
+                }
+            } else {
+                if (grams.compareTo(BigDecimal.ZERO) <= 0) {
+                    throw new BusinessException(400, "净含量必须大于 0")
+                            .withCode("PRODUCT_NET_CONTENT_INVALID")
+                            .withHintTarget("gramsPerUnit");
+                }
+                entity.setNetContentQuantity(grams.stripTrailingZeros());
+                entity.setNetContentUnit("g");
+            }
+        }
+    }
+
+    private String canonicalNetContentUnit(String rawUnit) {
+        if (rawUnit == null) {
+            throw new BusinessException(400, "净含量单位不能为空")
+                    .withCode("PRODUCT_NET_CONTENT_UNIT_REQUIRED")
+                    .withHintTarget("netContentUnit");
+        }
+        return switch (rawUnit.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "g", "克" -> "g";
+            case "kg", "千克", "公斤" -> "kg";
+            case "ml", "毫升" -> "ml";
+            case "l", "升" -> "L";
+            default -> throw new BusinessException(400, "净含量单位仅允许 g/kg/ml/L")
+                    .withCode("PRODUCT_NET_CONTENT_UNIT_INVALID")
+                    .withHintTarget("netContentUnit");
+        };
+    }
+
+    private BigDecimal toGrams(BigDecimal quantity, String unit) {
+        return switch (unit) {
+            case "g" -> quantity.stripTrailingZeros();
+            case "kg" -> quantity.multiply(BigDecimal.valueOf(1000)).stripTrailingZeros();
+            case "ml", "L" -> null;
+            default -> throw new IllegalStateException("Unexpected net content unit: " + unit);
+        };
+    }
+
+    // ==================== Phase 5: JSON Serialization/Deserialization Helpers ====================
+
+    /**
+     * Serialize object to JSON string
+     */
+    private String serializeToJson(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (JsonProcessingException e) {
+            log.error("JSON序列化失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Parse processing steps from JSON string
+     */
+    private List<ProductTypeDTO.ProcessingStepDTO> parseProcessingSteps(String json) {
+        if (json == null || json.isEmpty() || "[]".equals(json)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(json,
+                    new TypeReference<List<ProductTypeDTO.ProcessingStepDTO>>() {});
+        } catch (JsonProcessingException e) {
+            log.error("解析 processingSteps JSON 失败: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Parse skill requirements from JSON string
+     */
+    private ProductTypeDTO.SkillRequirementDTO parseSkillRequirements(String json) {
+        if (json == null || json.isEmpty() || "{}".equals(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, ProductTypeDTO.SkillRequirementDTO.class);
+        } catch (JsonProcessingException e) {
+            log.error("解析 skillRequirements JSON 失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Parse string list from JSON string
+     */
+    private List<String> parseStringList(String json) {
+        if (json == null || json.isEmpty() || "[]".equals(json)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<String>>() {});
+        } catch (JsonProcessingException e) {
+            log.error("解析 JSON 数组失败: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+}

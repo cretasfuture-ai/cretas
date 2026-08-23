@@ -1,0 +1,177 @@
+name: E2E PR Gate (manual)
+
+# PR 门禁: 对 PR 改动到 backend/java、web-admin 或 tests/v1-e2e/ 的变更, 跑 L1 + G1/G2/G3 共 14 个 @pr-gate 测试.
+#
+# 预期时长: ~15-20 分钟 (maven download + 后端启动 + web 启动 + 测试 ~1.5 分钟).
+# 参考: tests/v1-e2e/scripts/run-pr-gate.sh (本地指挥官)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-pr-gate:
+    # Expensive fresh-DB/Flyway/Spring startup gate is now explicit-only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17  # pgvector pre-installed; backend Flyway migrations need CREATE EXTENSION vector
+        env:
+          POSTGRES_USER: cretas_user
+          POSTGRES_PASSWORD: cretas_pass
+          POSTGRES_DB: cretas_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_PASSWORD: cretas_pass
+      POSTGRES_SMARTBI_PASSWORD: smartbi_pass
+      JWT_SECRET: ci_e2e_jwt_secret_at_least_32_chars_long_for_github_actions
+      SPRING_PROFILES_ACTIVE: pg
+      PG_HOST: localhost
+      PG_PORT: 5432
+      PG_USER: cretas_user
+      PG_DB: cretas_db
+      PGPASSWORD: cretas_pass
+      BACKEND_URL: http://localhost:10010
+      WEB_URL: http://localhost:5173
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── DB setup: create smartbi_db + smartbi_user + pgvector ext on both DBs ──
+      - name: Bootstrap smartbi_db + user + pgvector ext on cretas_db & smartbi_db
+        run: |
+          psql -h localhost -U cretas_user -d cretas_db -c "CREATE USER smartbi_user WITH PASSWORD 'smartbi_pass';"
+          psql -h localhost -U cretas_user -d cretas_db -c "CREATE DATABASE smartbi_db OWNER smartbi_user;"
+          psql -h localhost -U cretas_user -d cretas_db -c "GRANT ALL PRIVILEGES ON DATABASE smartbi_db TO smartbi_user;"
+          # pgvector ext IS pre-installed in pgvector/pgvector:pg17 image (see services.postgres.image above)
+          # but each DB still needs explicit `CREATE EXTENSION vector` (extension is per-database).
+          # cretas_db: Java backend Flyway migrations create vector(N) columns → need ext.
+          # smartbi_db: Python smartbi schemas (food_kb embeddings etc.) need ext.
+          # Without this, Java backend Spring Boot startup dies during Hibernate init when
+          # encountering vector-typed entities; e2e-pr-gate fails with "Backend not responding"
+          # 4 minutes after wait-for-health timeout.
+          psql -h localhost -U cretas_user -d cretas_db   -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -h localhost -U cretas_user -d smartbi_db  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      # ── Toolchain ────────────────────────────────────────────────────────────
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: backend/java/cretas-api/pom.xml
+
+      # ── Backend startup ──────────────────────────────────────────────────────
+      # Start Maven/Spring before Node setup so dependency installation and the
+      # Playwright browser download overlap the slow Java bootstrap/migrations.
+      - name: Start Java backend (background)
+        working-directory: backend/java/cretas-api
+        run: |
+          nohup mvn spring-boot:run \
+            -Dspring-boot.run.jvmArguments="-DDB_PASSWORD=${DB_PASSWORD} -DPOSTGRES_SMARTBI_PASSWORD=${POSTGRES_SMARTBI_PASSWORD} -DJWT_SECRET=${JWT_SECRET}" \
+            -Dspring-boot.run.profiles=pg \
+            > /tmp/backend.log 2>&1 &
+          echo "backend_pid=$!" >> $GITHUB_ENV
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Production read-only harness unit and skill-drift gate
+        run: node --test scripts/e2e/production-readonly/tests/unit.test.js
+
+      # ── Dependencies (overlapped with background Java startup) ────────────────
+      - name: Install web-admin deps
+        working-directory: web-admin
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+
+      - name: Install v1-e2e deps
+        working-directory: tests/v1-e2e
+        run: npm ci --no-audit --no-fund --legacy-peer-deps
+
+      - name: Install playwright browsers (chromium only)
+        working-directory: tests/v1-e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for backend health (up to 4 min)
+        run: bash tests/v1-e2e/scripts/wait-for-health.sh http://localhost:10010/api/mobile/health 240 "$backend_pid"
+
+      # Diagnose backend startup failures: logback redirects all post-config logs to
+      # backend/java/cretas-api/logs/*.log (not /tmp/backend.log). Cat them when health
+      # check fails so root cause is visible in CI output.
+      - name: Diagnose backend on health failure
+        if: failure()
+        run: |
+          echo "=== /tmp/backend.log (mvn stdout — usually only logback init + Spring banner) ==="
+          tail -200 /tmp/backend.log || echo "(no /tmp/backend.log)"
+          echo ""
+          echo "=== backend/java/cretas-api/logs/*.log (Spring runtime — actual exceptions live here) ==="
+          for f in backend/java/cretas-api/logs/cretas-backend*.log; do
+            if [ -f "$f" ]; then
+              echo "--- $f (last 200 lines) ---"
+              tail -200 "$f"
+              echo ""
+            fi
+          done || echo "(no project logs/*.log files)"
+
+      # ── Web-admin startup ────────────────────────────────────────────────────
+      - name: Start Vite dev server (background)
+        working-directory: web-admin
+        run: |
+          nohup npm run dev > /tmp/web-admin.log 2>&1 &
+          echo "web_pid=$!" >> $GITHUB_ENV
+
+      - name: Wait for web-admin port (up to 2 min)
+        run: bash tests/v1-e2e/scripts/wait-for-port.sh localhost 5173 120
+
+      # ── Run PR gate suite ────────────────────────────────────────────────────
+      - name: Run PR gate tests (L1 smoke + G1/G2/G3)
+        run: bash tests/v1-e2e/scripts/run-pr-gate.sh
+
+      # ── Artifacts ────────────────────────────────────────────────────────────
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/v1-e2e/playwright-report/
+          retention-days: 3
+
+      - name: Upload Playwright traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: tests/v1-e2e/test-results/
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Upload backend log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-log
+          path: /tmp/backend.log
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Upload web-admin log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-admin-log
+          path: /tmp/web-admin.log
+          retention-days: 3
+          if-no-files-found: ignore

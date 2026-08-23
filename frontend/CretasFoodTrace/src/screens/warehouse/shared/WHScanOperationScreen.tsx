@@ -1,0 +1,402 @@
+/**
+ * 扫码作业页面 — 真实摄像头 + QR/Code128 扫描.
+ *
+ * 入库 (inbound): 扫 PDF 二维码 → orderNumber → 调 by-number 接口拿订单 →
+ *                跳 WHReceiptCreate (2 字段收货页).
+ *                六扇门 May 7 transcript: "扫一下上面的拳运码 然后开始入库"
+ *
+ * 出库 (outbound): 扫物料批次一物一码标签 → 拿 batchId/materialName/
+ *                remainingQuantity → 跳 WHOutboundIssue (出库数量 1 字段闭环,
+ *                与入库对称). 剩余量为 0 时 honest-fail, 不跳转.
+ *                Phase 2 收口 (此前只 Alert 展示信息, 不落实际出库).
+ *
+ * 历史: 原实现是 setTimeout + 假批次号 mock (TODO 注释明示). 本次 W-ABA-1
+ * Day 4 改造为真实 expo-camera + onBarcodeScanned, 支持 QR + Code128 双格式
+ * (PDF 上 PR #413 两种都打印).
+ */
+
+import React, { useCallback, useRef, useState } from "react";
+import { View, StyleSheet, TouchableOpacity, Alert, Vibration } from "react-native";
+import { Text, Surface, Button, Portal, Dialog, TextInput } from "react-native-paper";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useNavigation, useRoute } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
+import { WHInboundStackParamList, WHOutboundStackParamList } from "../../../types/navigation";
+import { purchaseApiClient } from "../../../services/api/purchaseApiClient";
+import {
+  materialLabelApiClient,
+  MaterialBatchLabelScanResponse,
+} from "../../../services/api/materialLabelApiClient";
+import { handleError } from "../../../utils/errorHandler";
+
+// 本页在 WHInboundStackNavigator 和 WHOutboundStackNavigator 两个 stack 里都注册
+// (shared screen), 按扫码时的 mode 分别导航到各自 stack 的目标页, 用交叉类型让
+// navigate() 对两边的路由名都类型安全.
+type NavigationProp = NativeStackNavigationProp<WHInboundStackParamList & WHOutboundStackParamList>;
+
+/**
+ * 兼容旧/新参数:
+ * - brief & navigation.ts 用 `type`
+ * - 旧 outbound stack 也用 `type`
+ * - 旧本文件接收的是 `mode` (内部别名)
+ */
+interface ScanOperationParams {
+  type?: "inbound" | "outbound";
+  mode?: "inbound" | "outbound";
+  orderId?: string;
+}
+
+interface PurchaseOrderLookup {
+  id?: string;
+  orderNumber?: string;
+}
+
+// 🔴 2026-08-17 删掉了 AlertPrompt / AlertWithPrompt 两个类型 —— 它们只为 Alert.prompt 存在,
+// 而那是 iOS 独有 API。手动输入改用本组件自己的 Dialog(见 handleManualInput)。
+
+const SCAN_COOLDOWN_MS = 2000; // 同一扫码冷却, 防 onBarcodeScanned 高频重复触发
+
+function formatMaterialLabel(label: MaterialBatchLabelScanResponse): string {
+  return [
+    `物料: ${label.materialName}`,
+    `批次: ${label.batchNumber}`,
+    label.factoryNumber ? `厂号: ${label.factoryNumber}` : null,
+    label.originPlace ? `产地: ${label.originPlace}` : null,
+    label.specification ? `规格: ${label.specification}` : null,
+    `标签状态: ${label.labelStatus}`,
+  ].filter((line): line is string => line != null).join("\n");
+}
+
+export function WHScanOperationScreen() {
+  const navigation = useNavigation<NavigationProp>();
+  const route = useRoute();
+  const params = route.params as ScanOperationParams | undefined;
+  const mode: "inbound" | "outbound" = params?.type ?? params?.mode ?? "inbound";
+
+  const [permission, requestPermission] = useCameraPermissions();
+  const [cameraActive, setCameraActive] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [scannedCount, setScannedCount] = useState(0);
+  const [lastScan, setLastScan] = useState<string | null>(null);
+  // 手动输入弹窗 (三端一致; 替代只有 iOS 有的 Alert.prompt, 见 handleManualInput 注释)
+  const [manualVisible, setManualVisible] = useState(false);
+  const [manualText, setManualText] = useState("");
+  const lastScanAtRef = useRef<number>(0);
+
+  const modeConfig = {
+    inbound: { title: "扫码入库 (PDF QR)", color: "#4CAF50", action: "入库" },
+    outbound: { title: "扫码出库", color: "#2196F3", action: "出库" },
+  };
+  const config = modeConfig[mode];
+
+  // 处理扫码结果 — 冷却防抖 + 路由分发
+  const resolveScan = useCallback(async (raw: string) => {
+    const now = Date.now();
+    if (now - lastScanAtRef.current < SCAN_COOLDOWN_MS) return;
+    lastScanAtRef.current = now;
+
+    const code = raw?.trim();
+    if (!code) return;
+
+    Vibration.vibrate(100);
+    setLastScan(code);
+    setScannedCount((prev) => prev + 1);
+
+    setResolving(true);
+    setCameraActive(false);
+    try {
+      try {
+        const labelRes = await materialLabelApiClient.scanMaterialBatchLabel(code);
+        if (labelRes.success && labelRes.data) {
+          if (mode === "outbound") {
+            const label = labelRes.data;
+            const remaining = label.remainingQuantity ?? 0;
+            // 防呆 honest-fail: 剩余量为 0/缺值, 明确告知不跳转 (不是静默失败)
+            if (!(remaining > 0) || !label.batchId) {
+              Alert.alert(
+                "无法出库",
+                `批次 ${label.batchNumber ?? code} 剩余库存为 0 或数据异常, 无法继续出库.\n请确认扫描的是正确的批次标签, 或联系仓库主管核实.`,
+              );
+              return;
+            }
+            navigation.navigate("WHOutboundIssue", {
+              batchId: label.batchId,
+              batchNumber: label.batchNumber,
+              materialName: label.materialName ?? undefined,
+              remainingQuantity: remaining,
+              quantityUnit: label.quantityUnit ?? undefined,
+            });
+            return;
+          }
+          Alert.alert("物料标签已识别", formatMaterialLabel(labelRes.data));
+          return;
+        }
+      } catch (labelErr) {
+        if (mode === "outbound") {
+          handleError(labelErr, { title: "物料标签识别失败" });
+          return;
+        }
+      }
+
+      if (mode === "outbound") {
+        Alert.alert("未识别到物料标签", `扫码内容: ${code}\n请确认扫描的是一物一码标签。`);
+        return;
+      }
+
+      // 入库: 非物料标签时沿用采购单 QR/Code128 识别.
+      const res = await purchaseApiClient.getOrderByNumber(code);
+      const order = res?.data as PurchaseOrderLookup | undefined;
+      if (!order || !order.id) {
+        Alert.alert("订单未找到", `订单号 ${code} 在当前工厂查不到. 请确认 PDF 是本工厂打印的供货单.`);
+        return;
+      }
+      navigation.navigate("WHReceiptCreate", {
+        purchaseOrderId: order.id,
+        orderNumber: order.orderNumber ?? code,
+      });
+    } catch (err) {
+      handleError(err, { title: "扫码识别失败" });
+    } finally {
+      setResolving(false);
+    }
+  }, [mode, navigation]);
+
+  const handleBarcodeScanned = useCallback((result: BarcodeScanningResult) => {
+    if (resolving) return;
+    resolveScan(result.data);
+  }, [resolveScan, resolving]);
+
+  /**
+   * 打开手动输入弹窗。
+   *
+   * 🔴 2026-08-17: 这里曾经用 {@code Alert.prompt} —— 那是 **iOS 独有的 API**。
+   * Android 和 Web 上 {@code typeof Alert.prompt !== "function"}, 走 else 分支弹
+   * 「当前平台不支持手动输入弹窗, 请使用扫码功能」。
+   * 而**工人用的就是 Android**, 同屏说明里还白纸黑字写着「如无法扫码, 可点击"手动输入"」——
+   * 于是标签牌脏了/光线不好扫不出来时, 现场**没有任何退路**。
+   *
+   * ⇒ 改用本组件自己的受控弹窗, 三端行为一致。⛔ 不要退回 Alert.prompt。
+   */
+  const handleManualInput = useCallback(() => {
+    setManualText("");
+    setManualVisible(true);
+  }, []);
+
+  const submitManualInput = useCallback(() => {
+    const text = manualText.trim();
+    if (!text) return;          // 空值不提交 —— 事先拦住, 不是提交后报错
+    setManualVisible(false);
+    resolveScan(text);
+  }, [manualText, resolveScan]);
+
+  const toggleCamera = useCallback(async () => {
+    if (cameraActive) {
+      setCameraActive(false);
+      return;
+    }
+    if (!permission?.granted) {
+      const result = await requestPermission();
+      if (!result.granted) {
+        Alert.alert("权限不足", "需要相机权限才能扫描二维码. 请到系统设置中授权.");
+        return;
+      }
+    }
+    setCameraActive(true);
+  }, [cameraActive, permission, requestPermission]);
+
+  return (
+    <SafeAreaView style={styles.container} edges={["top"]}>
+      {/* Header */}
+      <View style={[styles.header, { backgroundColor: config.color }]}>
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{config.title}</Text>
+        <View style={styles.headerRight} />
+      </View>
+
+      <View style={styles.content}>
+        {/* 扫码区域 */}
+        <View style={styles.scanArea}>
+          <View style={[styles.scanFrame, { borderColor: config.color }]}>
+            {cameraActive && !resolving ? (
+              <CameraView
+                style={StyleSheet.absoluteFill}
+                facing="back"
+                barcodeScannerSettings={{ barcodeTypes: ["qr", "code128"] }}
+                onBarcodeScanned={handleBarcodeScanned}
+              />
+            ) : resolving ? (
+              <>
+                <MaterialCommunityIcons name="loading" size={64} color={config.color} />
+                <Text style={styles.scanHint}>识别中...</Text>
+              </>
+            ) : (
+              <>
+                <MaterialCommunityIcons name="qrcode-scan" size={80} color={config.color} />
+                <Text style={styles.scanHint}>
+                  {mode === "inbound" ? "扫 PDF 二维码 / 一维条码" : "扫批次条码"}
+                </Text>
+              </>
+            )}
+          </View>
+        </View>
+
+        {/* 统计 */}
+        <Surface style={styles.statsCard} elevation={1}>
+          <View style={styles.statsRow}>
+            <View style={styles.statsItem}>
+              <Text style={[styles.statsValue, { color: config.color }]}>{scannedCount}</Text>
+              <Text style={styles.statsLabel}>已扫描</Text>
+            </View>
+            <View style={styles.statsDivider} />
+            <View style={styles.statsItem}>
+              <Text style={styles.lastScanText} numberOfLines={1}>
+                {lastScan ?? "暂无扫描记录"}
+              </Text>
+              <Text style={styles.statsLabel}>最近扫描</Text>
+            </View>
+          </View>
+        </Surface>
+
+        {/* 操作按钮 */}
+        <View style={styles.actions}>
+          <Button
+            mode="contained"
+            onPress={toggleCamera}
+            style={[styles.scanButton, { backgroundColor: config.color }]}
+            labelStyle={styles.scanButtonLabel}
+            icon={cameraActive ? "stop" : "qrcode-scan"}
+            disabled={resolving}
+          >
+            {cameraActive ? "停止扫码" : resolving ? "识别中..." : "开始扫码"}
+          </Button>
+
+          <Button
+            mode="outlined"
+            onPress={handleManualInput}
+            style={styles.manualButton}
+            labelStyle={styles.manualButtonLabel}
+            icon="keyboard"
+            disabled={resolving || cameraActive}
+          >
+            手动输入
+          </Button>
+        </View>
+
+        {/* 提示 */}
+        <View style={styles.tips}>
+          <Text style={styles.tipTitle}>扫码说明</Text>
+          <View style={styles.tipItem}>
+            <MaterialCommunityIcons name="check-circle" size={16} color="#4CAF50" />
+            <Text style={styles.tipText}>
+              {mode === "inbound" ? "对准 PDF 供货单上的二维码 / Code128 条码" : "对准批次标签条码"}
+            </Text>
+          </View>
+          <View style={styles.tipItem}>
+            <MaterialCommunityIcons name="check-circle" size={16} color="#4CAF50" />
+            <Text style={styles.tipText}>识别成功后自动跳入库录入页 (仅 2 字段)</Text>
+          </View>
+          <View style={styles.tipItem}>
+            <MaterialCommunityIcons name="check-circle" size={16} color="#4CAF50" />
+            <Text style={styles.tipText}>如无法扫码, 可点击"手动输入"</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* 手动输入弹窗 —— 三端一致。⛔ 不要换回 Alert.prompt(仅 iOS 有)。 */}
+      <Portal>
+        <Dialog
+          visible={manualVisible}
+          onDismiss={() => setManualVisible(false)}
+          testID="wh-scan-manual-dialog"
+        >
+          <Dialog.Title>
+            {mode === "inbound" ? "手动输入采购订单号" : "手动输入批次号"}
+          </Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              mode="outlined"
+              autoFocus
+              value={manualText}
+              onChangeText={setManualText}
+              placeholder={mode === "inbound" ? "示例: PO-20260514-001" : "示例: MB-20260514-001"}
+              onSubmitEditing={submitManualInput}
+              testID="wh-scan-manual-input"
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setManualVisible(false)} testID="wh-scan-manual-cancel">
+              取消
+            </Button>
+            <Button
+              onPress={submitManualInput}
+              disabled={!manualText.trim()}
+              testID="wh-scan-manual-confirm"
+            >
+              确定
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#f5f5f5" },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  backButton: { padding: 4 },
+  headerTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#fff",
+    textAlign: "center",
+    marginRight: 28,
+  },
+  headerRight: { width: 28 },
+  content: { flex: 1, padding: 16 },
+  scanArea: { alignItems: "center", marginVertical: 24 },
+  scanFrame: {
+    width: 240,
+    height: 240,
+    borderWidth: 3,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    overflow: "hidden",
+  },
+  scanHint: { marginTop: 16, fontSize: 14, color: "#666" },
+  statsCard: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+  },
+  statsRow: { flexDirection: "row", alignItems: "center" },
+  statsItem: { flex: 1, alignItems: "center" },
+  statsDivider: { width: 1, height: 40, backgroundColor: "#e0e0e0" },
+  statsValue: { fontSize: 32, fontWeight: "bold" },
+  statsLabel: { fontSize: 12, color: "#999", marginTop: 4 },
+  lastScanText: { fontSize: 14, color: "#333", fontFamily: "monospace" },
+  actions: { gap: 12, marginBottom: 24 },
+  scanButton: { borderRadius: 8, paddingVertical: 8 },
+  scanButtonLabel: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  manualButton: { borderRadius: 8, borderColor: "#ddd" },
+  manualButtonLabel: { color: "#666" },
+  tips: { backgroundColor: "#fff", borderRadius: 12, padding: 16 },
+  tipTitle: { fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 12 },
+  tipItem: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  tipText: { fontSize: 13, color: "#666", flex: 1 },
+});
+
+export default WHScanOperationScreen;

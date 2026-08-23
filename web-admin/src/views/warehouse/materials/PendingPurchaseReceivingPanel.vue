@@ -1,0 +1,1450 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
+import { Refresh, WarningFilled } from '@element-plus/icons-vue';
+import { get, post, put } from '@/api/request';
+import {
+  createCustomerSuppliedReceipt,
+  createCustomerMaterialArrivalReceipt,
+  closePurchaseReceivingTask,
+  getPendingWarehouseReceivingTasks,
+  getPurchaseInboundDefaultWarehouse,
+  type CustomerSuppliedReceivingTask,
+  type CustomerMaterialArrivalTask,
+  type PurchaseReceivingTask,
+  type PurchaseReceivingTaskItem,
+  type PurchaseReceivingCloseReason,
+  type WarehouseReceivingTask,
+} from '@/api/purchaseReceive';
+import { listManufacturers, type ManufacturerRegistry } from '@/api/manufacturer';
+import {
+  listWarehouses,
+  WAREHOUSE_TYPE_LABELS,
+  type FactoryWarehouse,
+} from '@/api/factoryWarehouse';
+import AttachmentList from '@/components/attachment/AttachmentList.vue';
+import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
+import { displayUnit } from '@/utils/unitPricing';
+import { fmtQty } from '@/utils/tableFormatters';
+import {
+  defaultPurchaseReceiveWarehouseId,
+  purchaseReceiveWarehouseOptions,
+} from '@/views/procurement/receives/purchaseReceiveWarehouse';
+import {
+  filterReceivingTasks,
+  receivingLifecycleCounts,
+  receivingLifecycleLabel,
+  type ReceivingLifecycleCounts,
+  type ReceivingTaskFilter,
+} from './warehouseInboundLifecycle';
+
+const props = withDefaults(defineProps<{
+  factoryId: string;
+  canWrite: boolean;
+  statusFilter?: ReceivingTaskFilter;
+  showHeading?: boolean;
+}>(), {
+  statusFilter: 'ALL',
+  showHeading: true,
+});
+const emit = defineEmits<{
+  refreshed: [];
+  countsChanged: [counts: ReceivingLifecycleCounts];
+}>();
+const route = useRoute();
+
+interface ReceiveItemForm {
+  purchaseOrderItemId?: number;
+  materialTypeId: string;
+  materialName: string;
+  receivedQuantity: number;
+  unit: string;
+  materialPackagingSpecId?: string;
+  packagingKey: string;
+  inventoryBaseUnit: string;
+  packageToBaseFactor: number;
+  packagingOptions: PackagingOption[];
+}
+
+interface PackagingOption {
+  key: string;
+  id?: string;
+  name: string;
+  packageUnit: string;
+  baseUnit: string;
+  factor: number;
+}
+
+interface PurchaseReceiptDetail {
+  id: string;
+  receiveNumber: string;
+  status: 'DRAFT' | 'PENDING_QC' | 'CONFIRMED' | 'REJECTED' | 'CANCELLED';
+  purchaseOrderId: string;
+  supplierId: string;
+  warehouseId?: string | null;
+  receiveDate: string;
+  items: ReceiveItemForm[];
+}
+
+const loading = ref(false);
+const tasks = ref<WarehouseReceivingTask[]>([]);
+const filteredTasks = computed(() => filterReceivingTasks(tasks.value, props.statusFilter));
+const taskCounts = computed(() => receivingLifecycleCounts(tasks.value));
+
+watch(taskCounts, (counts) => emit('countsChanged', counts), { immediate: true });
+const dialogVisible = ref(false);
+const openingTaskId = ref('');
+const submitting = ref(false);
+const confirming = ref(false);
+const formRef = ref<FormInstance>();
+const selectedTask = ref<PurchaseReceivingTask | null>(null);
+const receipt = ref<PurchaseReceiptDetail | null>(null);
+const warehouseOptions = ref<FactoryWarehouse[]>([]);
+const attachmentRefreshKey = ref(0);
+const attachmentQueue = ref({ pending: 0, failed: 0 });
+/**
+ * 已上传的凭证条数。
+ *
+ * 🔴 2026-08-03: 「确认收货入库」按钮此前<b>没有任何 disabled 绑定</b> —— 附件数为 0 也能点,
+ * 点完还要再过一次二次确认弹窗, 才由服务端返回「409 确认收货前必须上传供应商供货单或收货凭证」。
+ * 校验本身没错, 错在<b>太晚</b>: 用户已经点了两次才被告知一件进门就能看出来的事。
+ * 与「实际产出至少选 1 项」那处对齐 —— 按钮禁用 + title 说清为什么。
+ */
+const attachmentCount = ref(0);
+const receiptBlockReason = computed(() => {
+  if (attachmentCount.value <= 0) return '请先上传供应商供货单或收货凭证, 再确认入库';
+  if (attachmentQueue.value.pending > 0) return '附件仍在上传, 请等待完成';
+  if (attachmentQueue.value.failed > 0) return '存在上传失败的附件, 请重试或删除后再确认';
+  return '';
+});
+/**
+ * M-14 (2026-08-20): 一屏做完收货 —— 尚未创建收货单草稿时, 供货凭证先落在这个「暂存区」
+ * (auto-upload=false, 不带 entity-id, 文件只留在浏览器里), 点「确认收货入库」时才连续调
+ * create → uploadQueued(新 receiptId) → confirm, 对用户是一次点击。
+ * 「仅保存草稿」仍保留作为可选的中途退出出口 (见 createReceipt), 不强制走一屏流程。
+ */
+interface AttachmentDropZoneExposed {
+  uploadQueued: (entityId?: string) => Promise<{ succeeded: number; failed: number }>;
+  clear: () => void;
+}
+const stagingAttachmentRef = ref<AttachmentDropZoneExposed>();
+const stagingQueue = ref({ total: 0, pending: 0, failed: 0 });
+const createBlockReason = computed(() => {
+  if (stagingQueue.value.total <= 0) return '请先添加供应商供货单或收货凭证, 再确认入库';
+  return '';
+});
+/** M-15 (2026-08-20): 草稿作废中 loading 态, 与 confirming/submitting 分开互不干扰。 */
+const cancelling = ref(false);
+const customerDialogVisible = ref(false);
+const selectedCustomerTask = ref<CustomerSuppliedReceivingTask | null>(null);
+const customerConfirming = ref(false);
+const customerAttachmentRefreshKey = ref(0);
+const customerAttachmentQueue = ref({ pending: 0, failed: 0 });
+const customerIdempotencyKey = ref('');
+const arrivalDialogVisible = ref(false);
+const selectedArrivalTask = ref<CustomerMaterialArrivalTask | null>(null);
+const arrivalConfirming = ref(false);
+const materialOptions = ref<Array<{ id: string; name: string; code?: string; unit?: string; measurementUnit?: string }>>([]);
+const arrivalForm = ref({
+  materialTypeId: '',
+  materialName: '',
+  warehouseId: '',
+  receivedQuantity: 0,
+  unit: '',
+  productionDate: '',
+  expireDate: '',
+  externalBatchNumber: '',
+  contractNumber: '',
+  factoryNumber: '',
+  boxCount: undefined as number | undefined,
+  originPlace: '',
+  notes: '',
+  completeNotice: true,
+  idempotencyKey: '',
+});
+// 厂号沿用手工入库那套「选厂商登记 → 自动带产地」, 不新造自由文本口径
+// (materials/list.vue#handleManufacturerChange)。allow-create 保留现场临时录入。
+const manufacturerOptions = ref<ManufacturerRegistry[]>([]);
+
+async function loadManufacturerOptions(): Promise<void> {
+  if (!props.factoryId) return;
+  try {
+    const res = await listManufacturers(props.factoryId, true);
+    if (res.success && Array.isArray(res.data)) manufacturerOptions.value = res.data;
+  } catch { /* 下拉可选, 拿不到不阻断收货 */ }
+}
+
+function onFactoryNumberChange(row: { factoryNumber?: string; originPlace?: string }): void {
+  const matched = manufacturerOptions.value.find((item) => item.code === row.factoryNumber);
+  if (matched?.originPlace) row.originPlace = matched.originPlace;
+}
+
+/** 客供料表单同样「选厂号 → 自动带产地」, 与采购收货一致。 */
+function onCustomerFactoryNumberChange(): void {
+  onFactoryNumberChange(customerForm.value);
+}
+
+/** 空串转 undefined —— 免得把「没填」写成一个空字符串, 之后分不清「填过空」和「没填」。 */
+function blankToUndefined(value: unknown): string | undefined {
+  const text = String(value ?? '').trim();
+  return text === '' ? undefined : text;
+}
+
+const closeDialogVisible = ref(false);
+const selectedCloseTask = ref<PurchaseReceivingTask | null>(null);
+const closingTask = ref(false);
+const closeForm = ref<{
+  reasonCode: PurchaseReceivingCloseReason | '';
+  notes: string;
+}>({
+  reasonCode: '',
+  notes: '',
+});
+const closeReasonOptions: Array<{ value: PurchaseReceivingCloseReason; label: string }> = [
+  { value: 'SUPPLIER_SHORT_SHIPMENT', label: '供应商少发且不再补发' },
+  { value: 'QUALITY_REJECTION', label: '质检拒收造成少收' },
+  { value: 'PURCHASE_BALANCE_CANCELLED', label: '采购取消剩余数量' },
+  { value: 'DEMAND_CHANGED', label: '需求或计划发生变化' },
+  { value: 'OTHER', label: '其他原因' },
+];
+const selectedCustomerLine = computed(() => selectedCustomerTask.value
+  ? customerTaskItem(selectedCustomerTask.value)
+  : null);
+const customerForm = ref({
+  receivedQuantity: 0,
+  externalBatchNumber: '',
+  // 与采购收货同一套可追溯字段 —— 客供料与采购来料没有理由只有一边能记
+  // (客户台账「原辅材进出库明细」不区分来料是买的还是客户送的)。
+  contractNumber: '',
+  factoryNumber: '',
+  boxCount: undefined as number | undefined,
+  productionDate: '',
+  expireDate: '',
+  originPlace: '',
+  notes: '',
+});
+const form = ref({
+  purchaseOrderId: '',
+  supplierId: '',
+  receiveDate: '',
+  warehouseId: '',
+  remark: '',
+  items: [] as ReceiveItemForm[],
+});
+
+const rules: FormRules = {
+  warehouseId: [{ required: true, message: '请选择实际入库仓库', trigger: 'change' }],
+  receiveDate: [{ required: true, message: '请选择收货日期', trigger: 'change' }],
+};
+
+const exactPurchaseOrderId = computed(() => String(route.query.purchaseOrderId || '').trim());
+const exactOrderNumber = computed(() => String(route.query.orderNo || route.query.orderNumber || '').trim());
+const highlightedOrder = computed(() => exactOrderNumber.value || exactPurchaseOrderId.value);
+const exactSalesOrderId = computed(() => String(route.query.salesOrderId || '').trim());
+const exactSalesOrderNumber = computed(() => String(route.query.salesOrderNo || route.query.salesOrderNumber || '').trim());
+const exactArrivalNoticeId = computed(() => String(route.query.arrivalNoticeId || '').trim());
+const requestedSourceType = computed(() => {
+  const sourceType = String(route.query.sourceType || '').trim().toUpperCase();
+  return sourceType === 'SALES_ORDER_CUSTOMER_SUPPLIED'
+    ? 'SALES_ORDER_CUSTOMER_SUPPLIED' as const
+    : sourceType === 'CUSTOMER_MATERIAL_ARRIVAL'
+      ? 'CUSTOMER_MATERIAL_ARRIVAL' as const
+    : sourceType === 'PURCHASE'
+      ? 'PURCHASE' as const
+      : undefined;
+});
+const highlightedSource = computed(() => highlightedOrder.value
+  || exactSalesOrderNumber.value || exactSalesOrderId.value || exactArrivalNoticeId.value);
+
+function isPurchaseTask(task: WarehouseReceivingTask): task is PurchaseReceivingTask {
+  return task.sourceType === 'PURCHASE';
+}
+
+function isCustomerSuppliedTask(task: WarehouseReceivingTask): task is CustomerSuppliedReceivingTask {
+  return task.sourceType === 'SALES_ORDER_CUSTOMER_SUPPLIED';
+}
+
+function isCustomerMaterialArrivalTask(task: WarehouseReceivingTask): task is CustomerMaterialArrivalTask {
+  return task.sourceType === 'CUSTOMER_MATERIAL_ARRIVAL';
+}
+
+function localDateText(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function unitGroups(
+  task: WarehouseReceivingTask,
+  field: 'orderedQuantity' | 'receivedQuantity' | 'activeDraftAllocatedQuantity' | 'remainingReceivableQuantity',
+) {
+  const groups = new Map<string, number>();
+  for (const item of task.items || []) {
+    const unit = displayUnit(item.unit) || '未配置';
+    groups.set(unit, (groups.get(unit) || 0) + Number(item[field] || 0));
+  }
+  return Array.from(groups.entries())
+    .map(([unit, quantity]) => `${fmtQty(quantity)}${unit}`)
+    .join(' + ') || '—';
+}
+
+function shortfallForItem(item: PurchaseReceivingTaskItem): number {
+  return Math.max(Number(item.orderedQuantity || 0) - Number(item.receivedQuantity || 0), 0);
+}
+
+function confirmedShortfallGroups(task: WarehouseReceivingTask): string {
+  const groups = new Map<string, number>();
+  for (const item of task.items || []) {
+    const unit = displayUnit(item.unit) || '未配置';
+    groups.set(unit, (groups.get(unit) || 0) + shortfallForItem(item));
+  }
+  return Array.from(groups.entries())
+    .map(([unit, quantity]) => `${fmtQty(quantity)}${unit}`)
+    .join(' + ') || '—';
+}
+
+function materialSummary(task: WarehouseReceivingTask): string {
+  return (task.items || [])
+    .map((item) => `${item.materialName} ${fmtQty(shortfallForItem(item))}${displayUnit(item.unit)}`)
+    .join('；');
+}
+
+function isOverdue(task: PurchaseReceivingTask): boolean {
+  return Boolean(task.expectedDeliveryDate && task.expectedDeliveryDate < localDateText());
+}
+
+async function loadTasks() {
+  if (!props.factoryId) return;
+  loading.value = true;
+  try {
+    const response = await getPendingWarehouseReceivingTasks(props.factoryId, {
+          purchaseOrderId: exactPurchaseOrderId.value || undefined,
+          orderNumber: exactPurchaseOrderId.value ? undefined : exactOrderNumber.value || undefined,
+          salesOrderId: exactSalesOrderId.value || undefined,
+          salesOrderNo: exactSalesOrderId.value ? undefined : exactSalesOrderNumber.value || undefined,
+          arrivalNoticeId: exactArrivalNoticeId.value || undefined,
+          sourceType: requestedSourceType.value,
+        });
+    const rows = response.success && Array.isArray(response.data) ? response.data : [];
+    tasks.value = rows.filter((task) => {
+      if (requestedSourceType.value && task.sourceType !== requestedSourceType.value) return false;
+      if (isCustomerSuppliedTask(task) && exactSalesOrderId.value && task.salesOrderId !== exactSalesOrderId.value) return false;
+      if (isCustomerSuppliedTask(task) && !exactSalesOrderId.value && exactSalesOrderNumber.value
+        && task.salesOrderNo !== exactSalesOrderNumber.value) return false;
+      if (isCustomerMaterialArrivalTask(task) && exactArrivalNoticeId.value
+        && task.sourceId !== exactArrivalNoticeId.value) return false;
+      return true;
+    });
+  } finally {
+    loading.value = false;
+  }
+}
+
+function notifyTaskDataChanged(): void {
+  emit('refreshed');
+  window.dispatchEvent(new CustomEvent('cretas:task-badges-refresh'));
+}
+
+async function loadMaterialOptions() {
+  const response = await get(`/${props.factoryId}/raw-material-types/active`, { _silent: true } as never);
+  materialOptions.value = Array.isArray(response.data)
+    ? response.data
+    : Array.isArray((response.data as { content?: unknown[] } | undefined)?.content)
+      ? (response.data as { content: typeof materialOptions.value }).content
+      : [];
+}
+
+async function loadWarehouses() {
+  const [warehouses, defaultWarehouse] = await Promise.all([
+    listWarehouses(props.factoryId),
+    getPurchaseInboundDefaultWarehouse(props.factoryId).catch((): {
+      success: boolean;
+      data: FactoryWarehouse | null;
+    } => ({ success: false, data: null })),
+  ]);
+  const configuredDefault = defaultWarehouse.data || null;
+  warehouseOptions.value = purchaseReceiveWarehouseOptions(warehouses.data || [], configuredDefault);
+  if (!form.value.warehouseId) {
+    form.value.warehouseId = defaultPurchaseReceiveWarehouseId(
+      warehouseOptions.value,
+      configuredDefault,
+    );
+  }
+}
+
+async function loadExistingReceipt(receiptId: string) {
+  const response = await get<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts/${receiptId}`);
+  if (!response.success || !response.data) throw new Error('活动收货单加载失败');
+  receipt.value = response.data;
+}
+
+async function openReceive(task: PurchaseReceivingTask) {
+  if (openingTaskId.value) return;
+  if (task.receiptConflict) {
+    ElMessage.error(task.activeReceiptCount > 1
+      ? `该采购单存在 ${task.activeReceiptCount} 张活动收货草稿，请先由仓储主管核对；系统不会自动取消或合并历史草稿`
+      : '该历史收货草稿缺少明确的采购订单行身份，系统无法安全分配同物料多行；请由仓储主管核对');
+    return;
+  }
+  openingTaskId.value = task.purchaseOrderId;
+  try {
+    selectedTask.value = task;
+    receipt.value = null;
+    attachmentRefreshKey.value = 0;
+    attachmentQueue.value = { pending: 0, failed: 0 };
+    stagingQueue.value = { total: 0, pending: 0, failed: 0 };
+    stagingAttachmentRef.value?.clear();
+    form.value = {
+      purchaseOrderId: task.purchaseOrderId,
+      supplierId: task.supplierId,
+      receiveDate: localDateText(),
+      warehouseId: task.warehouseId || '',
+      remark: '',
+      items: task.items
+        .filter((item) => Number(item.remainingReceivableQuantity) > 0)
+        .map((item) => ({
+          ...(() => {
+            const orderOption: PackagingOption = {
+              key: '__ORDER__',
+              id: item.materialPackagingSpecId || undefined,
+              name: '采购单规格',
+              packageUnit: item.unit,
+              baseUnit: item.inventoryBaseUnit || item.unit,
+              factor: Number(item.packageToBaseFactor || 1),
+            };
+            const masterOptions: PackagingOption[] = (item.packagingSpecs || []).map((spec) => ({
+              key: spec.id,
+              id: spec.id,
+              name: spec.name,
+              packageUnit: spec.packageUnit,
+              baseUnit: spec.baseUnit,
+              factor: Number(spec.conversionFactor),
+            }));
+            const selected = masterOptions.find((option) => option.id === item.materialPackagingSpecId)
+              || masterOptions.find((option) =>
+                option.packageUnit === item.unit
+                && option.baseUnit === item.inventoryBaseUnit
+                && option.factor === Number(item.packageToBaseFactor || 1))
+              || orderOption;
+            const options = selected.key === '__ORDER__'
+              ? [orderOption, ...masterOptions]
+              : masterOptions;
+            return {
+              materialPackagingSpecId: selected.id,
+              packagingKey: selected.key,
+              inventoryBaseUnit: selected.baseUnit,
+              packageToBaseFactor: selected.factor,
+              packagingOptions: options,
+              unit: selected.packageUnit,
+            };
+          })(),
+          purchaseOrderItemId: item.purchaseOrderItemId,
+          materialTypeId: item.materialTypeId,
+          materialName: item.materialName,
+          receivedQuantity: Number(item.remainingReceivableQuantity),
+        })),
+    };
+    await loadWarehouses();
+    if (task.activeReceiptId) await loadExistingReceipt(task.activeReceiptId);
+    dialogVisible.value = true;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '收货任务加载失败，请刷新后重试');
+    selectedTask.value = null;
+    receipt.value = null;
+  } finally {
+    openingTaskId.value = '';
+  }
+}
+
+function remainingLimit(row: ReceiveItemForm): number {
+  const line = selectedTask.value?.items.find((item) =>
+    item.purchaseOrderItemId === row.purchaseOrderItemId);
+  const orderFactor = Number(line?.packageToBaseFactor || 1);
+  const selectedFactor = Number(row.packageToBaseFactor || 1);
+  return Number(line?.remainingReceivableQuantity || 0) * orderFactor / selectedFactor;
+}
+
+/**
+ * M-15 (2026-08-20): 已存在草稿时, 「本次实收」的可调上限。
+ * `selectedTask` 的 `remainingReceivableQuantity` 已经把这张草稿自己占的量刨掉了
+ * (见后端 toReceivingTask 的 activeDraftAllocatedQuantity 语义), 所以这一行能调到的
+ * 上限 = 当前真正空闲的待收 + 这一行草稿目前已占的量 (调小/调大都在这个范围内)。
+ * 草稿的包装规格创建后不再改, 不需要像 remainingLimit 那样做换算系数换算。
+ */
+function remainingLimitForReceiptRow(row: ReceiveItemForm): number {
+  const line = selectedTask.value?.items.find((item) =>
+    item.purchaseOrderItemId === row.purchaseOrderItemId);
+  return Number(line?.remainingReceivableQuantity || 0) + Number(row.receivedQuantity || 0);
+}
+
+function onPackagingChange(row: ReceiveItemForm) {
+  const selected = row.packagingOptions.find((option) => option.key === row.packagingKey);
+  if (!selected) return;
+  row.materialPackagingSpecId = selected.id;
+  row.unit = selected.packageUnit;
+  row.inventoryBaseUnit = selected.baseUnit;
+  row.packageToBaseFactor = selected.factor;
+  row.receivedQuantity = Number(remainingLimit(row).toFixed(4));
+}
+
+function baseQuantityPreview(row: ReceiveItemForm): string {
+  const quantity = Number(row.receivedQuantity || 0) * Number(row.packageToBaseFactor || 1);
+  return `${fmtQty(quantity)}${displayUnit(row.inventoryBaseUnit)}`;
+}
+
+/**
+ * 表单态明细行 → 建单/改单共用的行 payload。
+ * M-16 (2026-08-20): owner 现场核对后收窄 —— 合同号/供应商批次号/厂号/产地/件数这 5 个
+ * 可追溯字段从采购收货表格里整体拿掉, 不再随本 payload 提交(后端字段仍是选填,
+ * 合同号缺失时按既有逻辑回落到采购单头; 其余 4 项本就选填, 不传即可)。
+ */
+function buildReceiveItemPayload(item: ReceiveItemForm) {
+  return {
+    purchaseOrderItemId: item.purchaseOrderItemId,
+    materialTypeId: item.materialTypeId,
+    materialName: item.materialName,
+    receivedQuantity: item.receivedQuantity,
+    unit: item.unit,
+    materialPackagingSpecId: item.materialPackagingSpecId,
+  };
+}
+
+/** 校验「本次实收」逐行必须 > 0, 共用于创建 / 一键确认 / 改草稿数量三条路径。 */
+function firstInvalidQuantityLine(items: Array<{ materialName: string; receivedQuantity: number }>) {
+  return items.find((item) => !(Number(item.receivedQuantity) > 0));
+}
+
+/** 仅创建草稿（不传附件、不确认）—— M-14 保留的「可选」中途退出出口。 */
+async function createReceipt() {
+  if (!formRef.value || !await formRef.value.validate().catch(() => false)) return;
+  const invalidLine = firstInvalidQuantityLine(form.value.items);
+  if (invalidLine) {
+    ElMessage.error(`「${invalidLine.materialName}」本次实收必须大于 0`);
+    return;
+  }
+  submitting.value = true;
+  try {
+    const payload = { ...form.value, items: form.value.items.map(buildReceiveItemPayload) };
+    const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, payload);
+    if (response.success && response.data) {
+      receipt.value = response.data;
+      ElMessage.success('收货单草稿已创建；请上传供货凭证并核对后确认入库');
+      await loadTasks();
+    }
+  } finally {
+    submitting.value = false;
+  }
+}
+
+/** 确认入库的公共尾段：安全确认弹窗 → POST confirm → 收尾提示与刷新。
+ *  createAndConfirmReceipt / updateAndConfirmReceipt 共用, 避免两条路径各写一份、以后漂开。 */
+async function doConfirmReceive(): Promise<void> {
+  if (!receipt.value) return;
+  const lines = (receipt.value.items || [])
+    .map((item) => `• ${item.materialName}：${fmtQty(item.receivedQuantity)}${displayUnit(item.unit)}`)
+    .join('\n');
+  await ElMessageBox.confirm(
+    `${lines}\n\n确认后才会生成库存批次；重复确认不会重复入库。`,
+    `确认收货入库 — ${receipt.value.receiveNumber}`,
+    { type: 'warning', confirmButtonText: '确认收货入库', cancelButtonText: '返回核对' },
+  );
+  const confirmedOrderId = selectedTask.value?.purchaseOrderId;
+  await post(`/${props.factoryId}/warehouse/receiving/receipts/${receipt.value.id}/confirm`);
+  dialogVisible.value = false;
+  await loadTasks();
+  const automaticallyCompleted = Boolean(confirmedOrderId
+    && !tasks.value.some((task) =>
+      isPurchaseTask(task) && task.purchaseOrderId === confirmedOrderId));
+  ElMessage.success(automaticallyCompleted
+    ? '收货入库完成，计划已收齐，入库任务已自动完成'
+    : '本次收货入库完成，库存批次已生成');
+  notifyTaskDataChanged();
+}
+
+/**
+ * M-14 (2026-08-20): 尚未创建收货单草稿时的「确认收货入库」—— 一次点击内连续完成
+ * create → 上传暂存区里的凭证 → confirm, 对用户是一屏一次提交。
+ *
+ * 附件必须先于 `receipt.value` 赋值前上传：一旦 receipt 有值, 模板会切到「已有草稿」分支,
+ * 挂着 stagingAttachmentRef 的暂存区组件随之卸载, 那之后再想调它的 uploadQueued 就拿不到了。
+ * 所以这里创建成功后先用局部变量 `created` 完成上传, 最后才写回 receipt.value。
+ */
+async function createAndConfirmReceipt(): Promise<void> {
+  if (!formRef.value || !await formRef.value.validate().catch(() => false)) return;
+  const invalidLine = firstInvalidQuantityLine(form.value.items);
+  if (invalidLine) {
+    ElMessage.error(`「${invalidLine.materialName}」本次实收必须大于 0`);
+    return;
+  }
+  if (stagingQueue.value.total <= 0) {
+    ElMessage.warning('请先添加供应商供货单或收货凭证，再确认入库');
+    return;
+  }
+  if (confirming.value) return;
+  confirming.value = true;
+  try {
+    const payload = { ...form.value, items: form.value.items.map(buildReceiveItemPayload) };
+    const response = await post<PurchaseReceiptDetail>(`/${props.factoryId}/warehouse/receiving/receipts`, payload);
+    if (!response.success || !response.data) return;
+    const created = response.data;
+    const uploadResult = await stagingAttachmentRef.value?.uploadQueued(created.id);
+    if ((uploadResult?.failed ?? 0) > 0) {
+      // 草稿已经建好了、部分附件传失败 —— 不回滚, 切到「已有草稿」分支让用户在那边重试补传
+      // (M-15 之后草稿本身可编辑、可作废, 不再是死胡同)。
+      receipt.value = created;
+      attachmentCount.value = uploadResult?.succeeded ?? 0;
+      await loadTasks();
+      ElMessage.error('收货单已创建，但部分凭证上传失败；请在下方重试或补传后再确认入库');
+      return;
+    }
+    receipt.value = created;
+    attachmentCount.value = uploadResult?.succeeded ?? 0;
+    await loadTasks();
+    await doConfirmReceive();
+  } finally {
+    confirming.value = false;
+  }
+}
+
+/**
+ * M-15 (2026-08-20): 已有草稿时的「确认收货入库」—— 先把本屏改过的数量落到后端
+ * (PUT .../items), 再确认入库。分批收货（比如 1200kg 先收 200 再收 1000）走的就是这条路。
+ */
+async function updateAndConfirmReceipt(): Promise<void> {
+  if (!receipt.value || confirming.value) return;
+  const invalidLine = firstInvalidQuantityLine(receipt.value.items);
+  if (invalidLine) {
+    ElMessage.error(`「${invalidLine.materialName}」本次实收必须大于 0`);
+    return;
+  }
+  confirming.value = true;
+  try {
+    const payload = { items: receipt.value.items.map(buildReceiveItemPayload) };
+    const response = await put<PurchaseReceiptDetail>(
+      `/${props.factoryId}/warehouse/receiving/receipts/${receipt.value.id}/items`, payload);
+    if (!response.success || !response.data) return;
+    receipt.value = response.data;
+    await doConfirmReceive();
+  } finally {
+    confirming.value = false;
+  }
+}
+
+/**
+ * M-15 (2026-08-20): 作废一张建错/不再需要的草稿 —— 释放它占用的预留量,
+ * 使该采购单可以重新创建收货单（解开"建错→改不了→删不掉"的死锁）。
+ */
+async function cancelDraftReceipt(): Promise<void> {
+  if (!receipt.value || cancelling.value) return;
+  const receiptToCancel = receipt.value;
+  try {
+    await ElMessageBox.confirm(
+      `确定要作废收货单 ${receiptToCancel.receiveNumber} 吗？\n作废后不会生成库存批次，且该采购单可以重新收货。`,
+      '作废本次收货',
+      { type: 'warning', confirmButtonText: '确认作废', cancelButtonText: '再想想' },
+    );
+  } catch {
+    return; // 用户点了「再想想」
+  }
+  cancelling.value = true;
+  try {
+    const response = await post<PurchaseReceiptDetail>(
+      `/${props.factoryId}/warehouse/receiving/receipts/${receiptToCancel.id}/cancel`);
+    if (!response.success) return;
+    ElMessage.success('收货单已作废，该采购单可以重新收货');
+    dialogVisible.value = false;
+    await loadTasks();
+    notifyTaskDataChanged();
+  } finally {
+    cancelling.value = false;
+  }
+}
+
+function openShortClose(task: PurchaseReceivingTask) {
+  if (task.activeReceiptCount > 0 || task.activeReceiptId) {
+    ElMessage.warning('该任务仍有收货草稿，请先继续收货并确认入库后再决定是否少收关闭');
+    return;
+  }
+  selectedCloseTask.value = task;
+  closeForm.value = { reasonCode: '', notes: '' };
+  closeDialogVisible.value = true;
+}
+
+async function submitShortClose() {
+  const task = selectedCloseTask.value;
+  if (!task || closingTask.value) return;
+  if (!closeForm.value.reasonCode) {
+    ElMessage.warning('请选择少收关闭原因');
+    return;
+  }
+  const notes = closeForm.value.notes.trim();
+  if (closeForm.value.reasonCode === 'OTHER' && !notes) {
+    ElMessage.warning('选择“其他原因”时必须填写补充说明');
+    return;
+  }
+  closingTask.value = true;
+  try {
+    const response = await closePurchaseReceivingTask(props.factoryId, task.purchaseOrderId, {
+      reasonCode: closeForm.value.reasonCode,
+      notes: notes || undefined,
+    });
+    if (!response.success) return;
+    closeDialogVisible.value = false;
+    selectedCloseTask.value = null;
+    await loadTasks();
+    ElMessage.success(response.message || '入库任务已结束');
+    notifyTaskDataChanged();
+  } finally {
+    closingTask.value = false;
+  }
+}
+
+function customerTaskItem(task: CustomerSuppliedReceivingTask): PurchaseReceivingTaskItem | null {
+  return task.items?.[0] || null;
+}
+
+async function openCustomerReceive(task: CustomerSuppliedReceivingTask) {
+  if (openingTaskId.value) return;
+  const line = customerTaskItem(task);
+  if (!line) {
+    ElMessage.error('客供料任务缺少物料明细，无法安全收货');
+    return;
+  }
+  if (!(Number(line.remainingReceivableQuantity) > 0)) {
+    ElMessage.warning('该客供料需求已无待收数量，请刷新任务列表');
+    return;
+  }
+  openingTaskId.value = task.taskId;
+  try {
+    selectedCustomerTask.value = task;
+    customerAttachmentRefreshKey.value = 0;
+    customerAttachmentQueue.value = { pending: 0, failed: 0 };
+    // 🔴 2026-08-07 走客供料全流程时撞到的硬阻断: 后端 @Size(max = 64), 而原来这里是
+    //   `warehouse-customer-receipt-` (28) + taskId(UUID 36) + `-` (1) + Date.now() (13) = 78
+    //   —— taskId 恒为 UUID, 所以**每一次**客户来料收货都必然 400「幂等键不能超过64个字符」,
+    //   这条路上没有任何人收得了货。(前端零校验, 后端拒得也晚, 用户只看到一个红字。)
+    // 改法: 前缀缩短 + 只取 taskId 去掉横线的后 24 位(仍足够唯一) + 时间戳转 36 进制。
+    //   'wcr-' (4) + 24 + '-' (1) + ≤9 = 38 字符, 稳在 64 内; 同一次弹窗内保持不变 → 幂等仍成立。
+    customerIdempotencyKey.value =
+      `wcr-${String(task.taskId).replace(/-/g, '').slice(-24)}-${Date.now().toString(36)}`;
+    customerForm.value = {
+      receivedQuantity: Number(line.remainingReceivableQuantity),
+      externalBatchNumber: '',
+      contractNumber: '',
+      factoryNumber: '',
+      boxCount: undefined,
+      productionDate: '',
+      expireDate: '',
+      originPlace: '',
+      notes: '',
+    };
+    customerDialogVisible.value = true;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '客供料收货任务加载失败，请刷新后重试');
+    selectedCustomerTask.value = null;
+  } finally {
+    openingTaskId.value = '';
+  }
+}
+
+async function confirmCustomerReceipt() {
+  const task = selectedCustomerTask.value;
+  const line = task ? customerTaskItem(task) : null;
+  if (!task || !line || customerConfirming.value) return;
+  const quantity = Number(customerForm.value.receivedQuantity);
+  if (!(quantity > 0)) return ElMessage.warning('本次实收必须大于 0');
+  if (quantity > Number(line.remainingReceivableQuantity)) {
+    return ElMessage.error(`本次实收不能超过待收 ${fmtQty(line.remainingReceivableQuantity)}${displayUnit(line.unit)}`);
+  }
+  if (customerAttachmentQueue.value.pending > 0) {
+    ElMessage.warning('附件仍在上传，请等待完成后再确认入库');
+    return;
+  }
+  if (customerAttachmentQueue.value.failed > 0) {
+    ElMessage.error('存在上传失败的附件，请重试或删除后再确认入库');
+    return;
+  }
+  customerConfirming.value = true;
+  try {
+    await ElMessageBox.confirm(
+      `销售订单：${task.salesOrderNo}\n客户：${task.customerName}\n物料：${line.materialName}\n本次实收：${fmtQty(quantity)}${displayUnit(line.unit)}\n所有权：客户所有（仅限该客户/订单）\n\n确认后将直接生成客户所有库存批次；重复请求不会重复入库。`,
+      '确认客户来料入库',
+      { type: 'warning', confirmButtonText: '确认客户来料入库', cancelButtonText: '返回核对' },
+    );
+    const response = await createCustomerSuppliedReceipt(props.factoryId, task.taskId, {
+      ...customerForm.value,
+      unit: line.unit,
+      idempotencyKey: customerIdempotencyKey.value,
+    });
+    if (!response.success) return;
+    ElMessage.success('客户来料收货完成，客户所有库存批次已生成');
+    customerDialogVisible.value = false;
+    await loadTasks();
+    notifyTaskDataChanged();
+  } finally {
+    customerConfirming.value = false;
+  }
+}
+
+async function openArrivalReceive(task: CustomerMaterialArrivalTask) {
+  if (openingTaskId.value) return;
+  openingTaskId.value = task.taskId;
+  try {
+    selectedArrivalTask.value = task;
+    await Promise.all([loadWarehouses(), loadMaterialOptions()]);
+    arrivalForm.value = {
+      materialTypeId: '', materialName: '',
+      warehouseId: defaultPurchaseReceiveWarehouseId(warehouseOptions.value, null),
+      receivedQuantity: 0, unit: '', productionDate: '', expireDate: '',
+      externalBatchNumber: '', contractNumber: '', factoryNumber: '',
+      boxCount: undefined, originPlace: '', notes: '', completeNotice: true,
+      idempotencyKey: `arrival-${task.taskId}-${Date.now().toString(36)}`,
+    };
+    arrivalDialogVisible.value = true;
+  } finally {
+    openingTaskId.value = '';
+  }
+}
+
+function onArrivalMaterialChange() {
+  const material = materialOptions.value.find((option) => option.id === arrivalForm.value.materialTypeId);
+  arrivalForm.value.materialName = material?.name || '';
+  arrivalForm.value.unit = String(material?.unit || material?.measurementUnit || '');
+}
+
+function arrivalReasonLabel(task: CustomerMaterialArrivalTask): string {
+  const labels: Record<CustomerMaterialArrivalTask['inboundReason'], string> = {
+    CUSTOMER_MATERIAL: '客户来料',
+    GIFT: '赠予',
+    OTHER: '其他无订单入库',
+  };
+  return labels[task.inboundReason || 'CUSTOMER_MATERIAL'];
+}
+
+function arrivalOwnershipLabel(task: CustomerMaterialArrivalTask): string {
+  return task.inboundReason === 'CUSTOMER_MATERIAL'
+    ? `客户所有（${task.customerName || '客户待核对'}，未绑定销售订单）`
+    : '公司所有（本厂普通库存）';
+}
+
+async function confirmArrivalReceipt() {
+  const task = selectedArrivalTask.value;
+  if (!task || arrivalConfirming.value) return;
+  if (!arrivalForm.value.materialTypeId) return ElMessage.warning('请选择现场实际收到的原料');
+  if (!arrivalForm.value.warehouseId) return ElMessage.warning('请选择实际入库仓库');
+  if (!(Number(arrivalForm.value.receivedQuantity) > 0)) return ElMessage.warning('本次实收必须大于 0');
+  arrivalConfirming.value = true;
+  try {
+    await ElMessageBox.confirm(
+      `申请：${task.sourceNumber}\n原因：${arrivalReasonLabel(task)}\n关联客户：${task.customerName || '不关联客户'}\n物料：${arrivalForm.value.materialName}\n实收：${fmtQty(arrivalForm.value.receivedQuantity)}${displayUnit(arrivalForm.value.unit)}\n所有权：${arrivalOwnershipLabel(task)}\n\n确认后直接生成原料库存批次，不触发来料质检。`,
+      '确认无订单入库',
+      { type: 'warning', confirmButtonText: '确认入库', cancelButtonText: '返回核对' },
+    );
+    const response = await createCustomerMaterialArrivalReceipt(props.factoryId, task.taskId, {
+      ...arrivalForm.value,
+      externalBatchNumber: blankToUndefined(arrivalForm.value.externalBatchNumber),
+      contractNumber: blankToUndefined(arrivalForm.value.contractNumber),
+      factoryNumber: blankToUndefined(arrivalForm.value.factoryNumber),
+      originPlace: blankToUndefined(arrivalForm.value.originPlace),
+      notes: blankToUndefined(arrivalForm.value.notes),
+    });
+    if (!response.success) return;
+    ElMessage.success(arrivalForm.value.completeNotice
+      ? '无订单入库完成，申请已结束'
+      : '本次到货已入库，申请保留等待下一次到货');
+    arrivalDialogVisible.value = false;
+    await loadTasks();
+    notifyTaskDataChanged();
+  } finally {
+    arrivalConfirming.value = false;
+  }
+}
+
+function sourceLabel(task: WarehouseReceivingTask): string {
+  if (isPurchaseTask(task)) return '采购入库';
+  return isCustomerMaterialArrivalTask(task) ? arrivalReasonLabel(task) : '销售订单来料';
+}
+
+function sourceNumber(task: WarehouseReceivingTask): string {
+  if (isPurchaseTask(task)) return task.orderNumber;
+  return isCustomerMaterialArrivalTask(task) ? task.sourceNumber : task.salesOrderNo;
+}
+
+function counterparty(task: WarehouseReceivingTask): string {
+  if (isPurchaseTask(task)) return task.supplierName || task.supplierId;
+  return task.customerName || '不关联客户';
+}
+
+function expectedArrival(task: WarehouseReceivingTask): string {
+  return isPurchaseTask(task)
+    ? (task.expectedDeliveryDate || '未维护')
+    : (task.expectedArrivalAt ? String(task.expectedArrivalAt).slice(0, 10) : '未维护');
+}
+
+function taskMaterialSummary(task: WarehouseReceivingTask): string {
+  return materialSummary(task);
+}
+
+function plannedQuantity(task: WarehouseReceivingTask): string {
+  return unitGroups(task, 'orderedQuantity');
+}
+
+function receivedQuantity(task: WarehouseReceivingTask): string {
+  return unitGroups(task, 'receivedQuantity');
+}
+
+function remainingQuantity(task: WarehouseReceivingTask): string {
+  return confirmedShortfallGroups(task);
+}
+
+function draftQuantity(task: WarehouseReceivingTask): string {
+  return unitGroups(task, 'activeDraftAllocatedQuantity');
+}
+
+function taskWarehouse(task: WarehouseReceivingTask): string {
+  return task.warehouseName || (task.warehouseId ? '已选择' : '收货时选择');
+}
+
+function taskRowClass({ row }: { row: WarehouseReceivingTask }) {
+  const focused = isPurchaseTask(row)
+    ? Boolean(highlightedOrder.value
+      && (row.orderNumber === highlightedOrder.value || row.purchaseOrderId === highlightedOrder.value))
+    : isCustomerSuppliedTask(row)
+      ? Boolean((exactSalesOrderId.value && row.salesOrderId === exactSalesOrderId.value)
+        || (exactSalesOrderNumber.value && row.salesOrderNo === exactSalesOrderNumber.value))
+      : false;
+  return focused
+    ? 'pending-receive-row pending-receive-row--focused'
+    : 'pending-receive-row';
+}
+
+onMounted(() => { void loadTasks(); void loadManufacturerOptions(); });
+defineExpose({ loadTasks });
+</script>
+
+<template>
+  <section class="receiving-task-panel" aria-label="仓储待收货任务">
+    <div v-if="showHeading" class="task-heading">
+      <div>
+        <h3>待收货 / 待入库任务</h3>
+        <p>审批完成的采购订单、销售订单客供料和无订单入库申请会进入这里；打开和刷新只查询数据，不会创建收货单或库存。</p>
+      </div>
+      <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新待办</el-button>
+    </div>
+
+    <el-alert
+      v-if="highlightedSource && tasks.length === 0 && !loading"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="`未找到 ${highlightedSource} 的可收货任务`"
+      description="请确认来源订单已完成审批且仍有待收数量；本页面不会自动补写、桥接历史数据或创建库存。"
+    />
+
+    <el-table
+      :data="filteredTasks"
+      v-loading="loading"
+      :row-class-name="taskRowClass"
+      empty-text="当前分类暂无入库任务"
+      border
+      row-key="taskId"
+    >
+      <el-table-column label="状态" width="115" fixed="left">
+        <template #default="{ row }">
+          <el-tag type="danger" effect="dark">{{ row.receiptConflict ? '收货草稿冲突' : receivingLifecycleLabel(row) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="来源" width="105"><template #default="{ row }">{{ sourceLabel(row) }}</template></el-table-column>
+      <el-table-column label="来源单号" min-width="175" show-overflow-tooltip>
+        <template #default="{ row }">{{ sourceNumber(row) }}</template>
+      </el-table-column>
+      <el-table-column label="供应商 / 客户" min-width="170" show-overflow-tooltip>
+        <template #default="{ row }">{{ counterparty(row) }}</template>
+      </el-table-column>
+      <el-table-column label="预计到货" width="125">
+        <template #default="{ row }">
+          <span :class="{ overdue: isPurchaseTask(row) && isOverdue(row) }">{{ expectedArrival(row) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="物料 / 待收" min-width="260" show-overflow-tooltip>
+        <template #default="{ row }">{{ taskMaterialSummary(row) }}</template>
+      </el-table-column>
+      <el-table-column label="计划数量" min-width="120">
+        <template #default="{ row }">{{ plannedQuantity(row) }}</template>
+      </el-table-column>
+      <el-table-column label="已确认收货" min-width="120">
+        <template #default="{ row }">{{ receivedQuantity(row) }}</template>
+      </el-table-column>
+      <el-table-column label="草稿待确认" min-width="120">
+        <template #default="{ row }">{{ draftQuantity(row) }}</template>
+      </el-table-column>
+      <el-table-column label="待收数量" min-width="120">
+        <template #default="{ row }"><strong>{{ remainingQuantity(row) }}</strong></template>
+      </el-table-column>
+      <el-table-column label="仓库" min-width="130">
+        <template #default="{ row }">{{ taskWarehouse(row) }}</template>
+      </el-table-column>
+      <el-table-column label="责任人" width="125">
+        <template #default="{ row }">{{ row.responsibleName || '仓储待确认' }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="205" fixed="right">
+        <template #default="{ row }">
+          <div v-if="canWrite && isPurchaseTask(row)" class="task-actions">
+            <el-button type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
+              :loading="openingTaskId === row.purchaseOrderId" @click="openReceive(row)">
+              {{ row.activeReceiptId ? '继续收货' : '收货' }}
+            </el-button>
+            <el-tooltip
+              :content="row.activeReceiptCount > 0 ? '请先确认当前收货草稿，再处理剩余少收数量' : '保留已确认库存并关闭剩余未收数量'"
+              placement="top"
+            >
+              <span>
+                <el-button
+                  link
+                  type="danger"
+                  :disabled="row.activeReceiptCount > 0 || Boolean(openingTaskId)"
+                  @click="openShortClose(row)"
+                >
+                  少收关闭
+                </el-button>
+              </span>
+            </el-tooltip>
+          </div>
+          <el-button v-else-if="canWrite && isCustomerSuppliedTask(row)" type="danger" :disabled="row.receiptConflict || Boolean(openingTaskId)"
+            :loading="openingTaskId === row.taskId" @click="openCustomerReceive(row)">
+            {{ row.activeReceiptId ? '继续收货' : '收货' }}
+          </el-button>
+          <el-button v-else-if="canWrite && isCustomerMaterialArrivalTask(row)" type="danger"
+            :disabled="Boolean(openingTaskId)" :loading="openingTaskId === row.taskId"
+            @click="openArrivalReceive(row)">
+            核实并入库
+          </el-button>
+          <span v-else>只读</span>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-dialog v-model="dialogVisible" :title="`采购收货 — ${selectedTask?.orderNumber || ''}`"
+      width="min(920px, calc(100vw - 32px))" :close-on-click-modal="false">
+      <template v-if="selectedTask">
+        <el-descriptions :column="3" border>
+          <el-descriptions-item label="来源">采购订单</el-descriptions-item>
+          <el-descriptions-item label="采购单号">{{ selectedTask.orderNumber }}</el-descriptions-item>
+          <el-descriptions-item label="供应商">{{ selectedTask.supplierName || selectedTask.supplierId }}</el-descriptions-item>
+          <el-descriptions-item label="预计到货">{{ selectedTask.expectedDeliveryDate || '未维护' }}</el-descriptions-item>
+          <el-descriptions-item label="已收">{{ unitGroups(selectedTask, 'receivedQuantity') }}</el-descriptions-item>
+          <el-descriptions-item label="待收">{{ unitGroups(selectedTask, 'remainingReceivableQuantity') }}</el-descriptions-item>
+        </el-descriptions>
+
+        <template v-if="!receipt">
+          <el-form ref="formRef" :model="form" :rules="rules" label-width="110px" class="receive-form">
+            <el-form-item label="本次收货日期" prop="receiveDate">
+              <el-date-picker v-model="form.receiveDate" type="date" value-format="YYYY-MM-DD" />
+            </el-form-item>
+            <el-form-item label="目标仓库" prop="warehouseId">
+              <el-select v-model="form.warehouseId" filterable placeholder="选择实际入库仓库" style="width:100%">
+                <el-option v-for="warehouse in warehouseOptions" :key="warehouse.id"
+                  :label="`${warehouse.name} (${warehouse.code}) · ${WAREHOUSE_TYPE_LABELS[warehouse.type]}`" :value="warehouse.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
+          </el-form>
+          <el-table :data="form.items" border>
+            <el-table-column prop="materialName" label="物料" min-width="210" />
+            <el-table-column label="实际到货包装" min-width="255">
+              <template #default="{ row }">
+                <el-select v-model="row.packagingKey" style="width:100%" @change="onPackagingChange(row)">
+                  <el-option
+                    v-for="option in row.packagingOptions"
+                    :key="option.key"
+                    :label="`${option.name} · 1${displayUnit(option.packageUnit)}=${fmtQty(option.factor)}${displayUnit(option.baseUnit)}`"
+                    :value="option.key"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="本次实收" width="190">
+              <template #default="{ row }">
+                <el-input-number v-model="row.receivedQuantity" :min="0.001" :max="remainingLimit(row)"
+                  :precision="3" :controls="false" style="width:120px" />
+                <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="折合基本量" width="150">
+              <template #default="{ row }">{{ baseQuantityPreview(row) }}</template>
+            </el-table-column>
+          </el-table>
+          <!--
+            M-14 (2026-08-20): 一屏做完 —— 凭证在这里先暂存(auto-upload=false, 不带 entity-id,
+            文件只留在浏览器里), 点「确认收货入库」时才连续调 create -> uploadQueued(新 receiptId)
+            -> confirm。「仅保存草稿」按钮仍走老的两步流程, 作为可选的中途退出出口。
+          -->
+          <el-divider content-position="left">
+            <span class="required-field-label"><span class="required-marker">*</span>供应商供货单 / 收货凭证</span>
+          </el-divider>
+          <AttachmentDropZone
+            v-if="canWrite"
+            ref="stagingAttachmentRef"
+            entity-type="PURCHASE_RECEIPT"
+            :factory-id="factoryId"
+            business-tag="RECEIVE_PHOTO"
+            file-category="PHOTO"
+            accept="image/*,.pdf,.xlsx,.xls"
+            :auto-upload="false"
+            @queue-change="stagingQueue = { total: $event.total, pending: $event.pending, failed: $event.failed }"
+          />
+          <p v-if="createBlockReason" class="receipt-block-hint" role="alert">
+            <el-icon><WarningFilled /></el-icon>
+            <span>{{ createBlockReason }}</span>
+          </p>
+        </template>
+
+        <template v-else>
+          <el-alert type="warning" :closable="false" show-icon
+            :title="`现有收货单 ${receipt.receiveNumber} · ${receipt.status === 'DRAFT' ? '待确认' : '待质检'}`"
+            description="本订单已有活动收货单，系统不会重复创建；请继续上传凭证并核对后确认入库。" />
+          <!--
+            M-15 (2026-08-20): 「本次实收」始终是输入框(草稿态也是) —— 之前一建草稿就把它锁成
+            纯文本, 分批收货想改小/改大都做不到, 只能删了重建, 而删除入口又不存在, 三条叠成死锁。
+            这里改数量, 点「确认收货入库」时会先 PUT .../items 落到后端再确认(见 updateAndConfirmReceipt)。
+          -->
+          <el-table :data="receipt.items" border class="receipt-lines">
+            <el-table-column prop="materialName" label="物料" min-width="220" />
+            <el-table-column label="本次实收" width="200">
+              <template #default="{ row }">
+                <el-input-number v-model="row.receivedQuantity" :min="0.001" :max="remainingLimitForReceiptRow(row)"
+                  :precision="3" :controls="false" style="width:120px" />
+                <span class="unit-suffix">{{ displayUnit(row.unit) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <p class="draft-editable-hint">
+            分批收货：可在此调整本次实收数量后再确认；如需重新收货，请先「作废本次收货」。
+          </p>
+          <el-divider content-position="left">
+            <span class="required-field-label"><span class="required-marker">*</span>供应商供货单 / 收货凭证</span>
+          </el-divider>
+          <AttachmentList entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
+            :refresh-key="attachmentRefreshKey" empty-text="必须上传供应商供货单或收货凭证才能确认入库"
+            @count-change="attachmentCount = $event" />
+          <AttachmentDropZone v-if="canWrite" entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
+            business-tag="RECEIVE_PHOTO" file-category="PHOTO" accept="image/*,.pdf,.xlsx,.xls"
+            @uploaded="attachmentRefreshKey++"
+            @queue-change="attachmentQueue = { pending: $event.pending, failed: $event.failed }" />
+          <!--
+            M-8 (2026-08-20): 禁用原因此前只在按钮 title 里说 (hover 才出现), 触屏设备等于没有提示。
+            这里把同一份 receiptBlockReason 显式渲染出来 —— 一处来源, 不会与按钮的判据漂开。
+          -->
+          <p v-if="receiptBlockReason" class="receipt-block-hint" role="alert">
+            <el-icon><WarningFilled /></el-icon>
+            <span>{{ receiptBlockReason }}</span>
+          </p>
+        </template>
+      </template>
+
+      <template #footer>
+        <el-button @click="dialogVisible = false">关闭</el-button>
+        <template v-if="!receipt">
+          <!-- M-14: 「仅保存草稿」是可选的中途退出出口, 不是必经之路 -->
+          <el-button link :disabled="confirming" :loading="submitting" @click="createReceipt">仅保存草稿（暂不上传/确认）</el-button>
+          <el-button type="primary" :loading="confirming" :disabled="!!createBlockReason"
+                :title="createBlockReason || undefined"
+                @click="createAndConfirmReceipt">确认收货入库</el-button>
+        </template>
+        <template v-else-if="receipt.status === 'DRAFT'">
+          <!-- M-15: 建错的草稿不再是死胡同, 可以作废后重新收货 -->
+          <el-button type="danger" link :loading="cancelling" :disabled="confirming" @click="cancelDraftReceipt">作废本次收货</el-button>
+          <el-button type="success" :loading="confirming"
+                :disabled="!!receiptBlockReason" :title="receiptBlockReason || undefined"
+                @click="updateAndConfirmReceipt">确认收货入库</el-button>
+        </template>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="arrivalDialogVisible"
+      :title="`无订单入库收货 — ${selectedArrivalTask?.sourceNumber || ''}`"
+      width="min(760px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <template v-if="selectedArrivalTask">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="申请只登记到货原因和可选客户。物料、数量和仓库以现场实物为准；本流程不做来料质检。"
+        />
+        <el-descriptions :column="2" border class="customer-task-context">
+          <el-descriptions-item label="申请单号">{{ selectedArrivalTask.sourceNumber }}</el-descriptions-item>
+          <el-descriptions-item label="入库原因">{{ arrivalReasonLabel(selectedArrivalTask) }}</el-descriptions-item>
+          <el-descriptions-item label="关联客户">{{ selectedArrivalTask.customerName || '不关联客户' }}</el-descriptions-item>
+          <el-descriptions-item label="所有权">{{ arrivalOwnershipLabel(selectedArrivalTask) }}</el-descriptions-item>
+          <el-descriptions-item label="预计到达">{{ expectedArrival(selectedArrivalTask) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="112px" class="receive-form">
+          <el-form-item label="实际原料" required>
+            <el-select v-model="arrivalForm.materialTypeId" filterable placeholder="按现场实物选择" style="width: 100%" @change="onArrivalMaterialChange">
+              <el-option
+                v-for="material in materialOptions"
+                :key="material.id"
+                :label="`${material.name} (${material.code || '无编码'})`"
+                :value="material.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="本次实收" required>
+                <el-input-number v-model="arrivalForm.receivedQuantity" :min="0.01" :precision="2" :controls="false" style="width: 100%" />
+                <span class="unit-suffix">{{ displayUnit(arrivalForm.unit) || '按物料库存单位' }}</span>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="实际仓库" required>
+                <el-select v-model="arrivalForm.warehouseId" filterable placeholder="选择入库仓库" style="width: 100%">
+                  <el-option
+                    v-for="warehouse in warehouseOptions"
+                    :key="warehouse.id"
+                    :label="`${warehouse.name} (${warehouse.code})`"
+                    :value="warehouse.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="arrivalForm.productionDate" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="到期日期"><el-date-picker v-model="arrivalForm.expireDate" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
+          </el-row>
+          <el-form-item label="外部批次号"><el-input v-model="arrivalForm.externalBatchNumber" maxlength="100" /></el-form-item>
+          <el-form-item label="合同号"><el-input v-model="arrivalForm.contractNumber" maxlength="100" /></el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12"><el-form-item label="厂号"><el-input v-model="arrivalForm.factoryNumber" maxlength="100" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="件数"><el-input-number v-model="arrivalForm.boxCount" :min="0" :precision="0" :controls="false" style="width:100%" /></el-form-item></el-col>
+          </el-row>
+          <el-form-item label="产地"><el-input v-model="arrivalForm.originPlace" maxlength="200" /></el-form-item>
+          <el-form-item label="备注"><el-input v-model="arrivalForm.notes" type="textarea" :rows="2" maxlength="500" /></el-form-item>
+          <el-form-item label="本次后">
+            <el-radio-group v-model="arrivalForm.completeNotice">
+              <el-radio-button :value="true">货已全部到齐，结束预告</el-radio-button>
+              <el-radio-button :value="false">还有下一车，保留待办</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="arrivalDialogVisible = false">关闭</el-button>
+        <el-button type="success" :loading="arrivalConfirming" @click="confirmArrivalReceipt">确认入库</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="closeDialogVisible"
+      :title="`少收关闭 — ${selectedCloseTask?.orderNumber || ''}`"
+      width="min(760px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <template v-if="selectedCloseTask">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="关闭后，已确认入库的库存保持不变；剩余未收数量不再生成待入库任务。"
+          description="本操作用于供应商不再补发或计划确实终止的少收场景。若仍会补货，请取消并继续收货。"
+        />
+        <el-descriptions :column="2" border class="short-close-context">
+          <el-descriptions-item label="采购单号">{{ selectedCloseTask.orderNumber }}</el-descriptions-item>
+          <el-descriptions-item label="供应商">{{ selectedCloseTask.supplierName || selectedCloseTask.supplierId }}</el-descriptions-item>
+          <el-descriptions-item label="计划数量">{{ plannedQuantity(selectedCloseTask) }}</el-descriptions-item>
+          <el-descriptions-item label="已确认收货">{{ receivedQuantity(selectedCloseTask) }}</el-descriptions-item>
+          <el-descriptions-item label="少收差额" :span="2">
+            <strong class="shortfall-value">{{ remainingQuantity(selectedCloseTask) }}</strong>
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-table :data="selectedCloseTask.items" border class="short-close-lines">
+          <el-table-column prop="materialName" label="物料" min-width="220" />
+          <el-table-column label="计划" width="130">
+            <template #default="{ row }">{{ fmtQty(row.orderedQuantity) }}{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
+          <el-table-column label="已确认" width="130">
+            <template #default="{ row }">{{ fmtQty(row.receivedQuantity) }}{{ displayUnit(row.unit) }}</template>
+          </el-table-column>
+          <el-table-column label="少收" width="130">
+            <template #default="{ row }"><strong>{{ fmtQty(shortfallForItem(row)) }}{{ displayUnit(row.unit) }}</strong></template>
+          </el-table-column>
+        </el-table>
+        <el-form label-width="110px" class="short-close-form">
+          <el-form-item label="关闭原因" required>
+            <el-select v-model="closeForm.reasonCode" placeholder="请选择标准原因" style="width: 100%">
+              <el-option
+                v-for="option in closeReasonOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="补充说明" :required="closeForm.reasonCode === 'OTHER'">
+            <el-input
+              v-model="closeForm.notes"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+              show-word-limit
+              placeholder="可填写供应商确认、质检结论或计划变更依据"
+            />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button :disabled="closingTask" @click="closeDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="closingTask" @click="submitShortClose">
+          确认少收并关闭
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="customerDialogVisible"
+      :title="`客户来料收货 — ${selectedCustomerTask?.salesOrderNo || ''}`"
+      width="min(820px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <template v-if="selectedCustomerTask && selectedCustomerLine">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="来源、客户、物料、单位和目标仓库均由销售订单锁定，仓储只能填写本次实际收货事实。"
+        />
+        <el-descriptions :column="2" border class="customer-task-context">
+          <el-descriptions-item label="来源">客户自带原料</el-descriptions-item>
+          <el-descriptions-item label="销售订单">{{ selectedCustomerTask.salesOrderNo }}</el-descriptions-item>
+          <el-descriptions-item label="客户">{{ selectedCustomerTask.customerName }}</el-descriptions-item>
+          <el-descriptions-item label="所有权">客户所有（仅限该客户 / 订单）</el-descriptions-item>
+          <el-descriptions-item label="原料">{{ selectedCustomerLine.materialName }}</el-descriptions-item>
+          <el-descriptions-item label="目标仓库">{{ taskWarehouse(selectedCustomerTask) }}</el-descriptions-item>
+          <el-descriptions-item label="预计来料">{{ fmtQty(selectedCustomerLine.orderedQuantity) }}{{ displayUnit(selectedCustomerLine.unit) }}</el-descriptions-item>
+          <el-descriptions-item label="已收 / 待收">
+            {{ fmtQty(selectedCustomerLine.receivedQuantity) }}{{ displayUnit(selectedCustomerLine.unit) }} /
+            {{ fmtQty(selectedCustomerLine.remainingReceivableQuantity) }}{{ displayUnit(selectedCustomerLine.unit) }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <el-form label-width="112px" class="receive-form">
+          <el-form-item label="本次实收" required>
+            <el-input-number
+              v-model="customerForm.receivedQuantity"
+              :min="0.0001"
+              :max="Number(selectedCustomerLine.remainingReceivableQuantity)"
+              :precision="4"
+              :controls="false"
+              style="width: 220px"
+            />
+            <span class="unit-suffix">{{ displayUnit(selectedCustomerLine.unit) }}</span>
+            <span class="quantity-limit">最多可收 {{ fmtQty(selectedCustomerLine.remainingReceivableQuantity) }}{{ displayUnit(selectedCustomerLine.unit) }}</span>
+          </el-form-item>
+          <el-form-item label="客户批次号">
+            <el-input v-model="customerForm.externalBatchNumber" maxlength="100" placeholder="客户/供应商给的批号，如 20251029" />
+          </el-form-item>
+          <!-- 与采购收货同一套可追溯字段, 客户台账不区分来料是买的还是客户送的 -->
+          <el-form-item label="合同号">
+            <el-input v-model="customerForm.contractNumber" maxlength="100" placeholder="如 SAN-16572" />
+          </el-form-item>
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="厂号">
+                <el-select
+                  v-model="customerForm.factoryNumber"
+                  filterable
+                  allow-create
+                  clearable
+                  default-first-option
+                  placeholder="选或填"
+                  style="width: 100%"
+                  @change="onCustomerFactoryNumberChange"
+                >
+                  <el-option
+                    v-for="m in manufacturerOptions"
+                    :key="m.code"
+                    :label="`${m.code}${m.name ? ' ' + m.name : ''}`"
+                    :value="m.code"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="件数">
+                <el-input-number v-model="customerForm.boxCount" :min="0" :precision="0" :controls="false" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="customerForm.productionDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="到期日期"><el-date-picker v-model="customerForm.expireDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item></el-col>
+          </el-row>
+          <el-form-item label="产地"><el-input v-model="customerForm.originPlace" maxlength="200" /></el-form-item>
+          <el-form-item label="备注"><el-input v-model="customerForm.notes" type="textarea" :rows="2" maxlength="500" /></el-form-item>
+        </el-form>
+
+        <el-divider content-position="left">客户送货单 / 收货凭证</el-divider>
+        <AttachmentList entity-type="CUSTOMER_SUPPLIED_RECEIPT" :entity-id="selectedCustomerTask.taskId" :factory-id="factoryId"
+          :refresh-key="customerAttachmentRefreshKey" empty-text="尚未上传客户送货凭证" />
+        <AttachmentDropZone v-if="canWrite" entity-type="CUSTOMER_SUPPLIED_RECEIPT" :entity-id="selectedCustomerTask.taskId" :factory-id="factoryId"
+          business-tag="RECEIVE_PHOTO" file-category="PHOTO" accept="image/*,.pdf,.xlsx,.xls"
+          @uploaded="customerAttachmentRefreshKey++"
+          @queue-change="customerAttachmentQueue = { pending: $event.pending, failed: $event.failed }" />
+      </template>
+
+      <template #footer>
+        <el-button @click="customerDialogVisible = false">关闭</el-button>
+        <el-button type="success" :loading="customerConfirming" @click="confirmCustomerReceipt">确认客户来料入库</el-button>
+      </template>
+    </el-dialog>
+  </section>
+</template>
+
+<style scoped>
+.receiving-task-panel { margin-bottom: 18px; }
+.task-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.task-heading h3 { margin: 0 0 4px; font-size: 17px; }
+.task-heading p { margin: 0; color: #606266; }
+:deep(.pending-receive-row > td.el-table__cell) { background: #fff1f0 !important; }
+:deep(.pending-receive-row:hover > td.el-table__cell) { background: #ffe5e3 !important; }
+:deep(.pending-receive-row--focused > td.el-table__cell) { box-shadow: inset 0 2px #d93025, inset 0 -2px #d93025; }
+.overdue { color: #b42318; font-weight: 700; }
+.receive-form { margin-top: 16px; }
+.unit-suffix { margin-left: 8px; color: #606266; }
+.receipt-lines { margin: 12px 0; }
+.task-actions { display: flex; align-items: center; gap: 4px; }
+.short-close-context { margin-top: 12px; }
+.short-close-lines { margin-top: 12px; }
+.short-close-form { margin-top: 16px; }
+.shortfall-value { color: #b42318; }
+.customer-task-context { margin-top: 12px; }
+.quantity-limit { margin-left: 12px; color: #606266; font-size: 12px; }
+/* M-8: 禁用原因不再只靠 hover title, 在按钮上方常驻可见 */
+.receipt-block-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: #fdf6ec;
+  border: 1px solid #f5dab1;
+  border-radius: 4px;
+  color: #b88230;
+  font-size: 13px;
+}
+.receipt-block-hint .el-icon { color: #e6a23c; flex-shrink: 0; }
+.required-field-label { font-weight: 600; }
+.required-marker { color: #f56c6c; margin-right: 2px; }
+.draft-editable-hint { margin: 4px 0 12px; color: #606266; font-size: 12px; }
+@media (max-width: 720px) {
+  .task-heading { flex-direction: column; }
+  :deep(.el-dialog__body) { padding: 12px; overflow-x: auto; }
+}
+</style>

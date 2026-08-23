@@ -1,0 +1,828 @@
+package com.cretas.aims.service.voucher.impl;
+
+import com.cretas.aims.dto.finance.VoucherBatchPostResultDTO;
+import com.cretas.aims.dto.finance.VoucherEntrySpec;
+import com.cretas.aims.entity.PayrollRecord;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.VoucherFlag;
+import com.cretas.aims.entity.enums.VoucherStatus;
+import com.cretas.aims.entity.enums.VoucherType;
+import com.cretas.aims.entity.finance.Voucher;
+import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.entity.inventory.InternalTransfer;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.ReturnOrder;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.restaurant.WastageRecord;
+import com.cretas.aims.repository.PayrollRecordRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.VoucherRepository;
+import com.cretas.aims.repository.inventory.InternalTransferRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.restaurant.WastageRecordRepository;
+import com.cretas.aims.service.LinkArrayService;
+import com.cretas.aims.service.finance.AccountingPeriodService;
+import com.cretas.aims.service.voucher.VoucherGenerator;
+import com.cretas.aims.service.voucher.VoucherGeneratorRegistry;
+import com.cretas.aims.service.voucher.VoucherService;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.EntityNotFoundException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * VoucherService 默认实现. createFromBusiness 是核心入口 — 4 event listener +
+ * AIChat tool + 批量补单 全部通过此方法走.
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class VoucherServiceImpl implements VoucherService {
+
+    private final VoucherRepository voucherRepo;
+    private final VoucherGeneratorRegistry registry;
+    private final LinkArrayService linkArrayService;
+
+    /** Part 2 批量过账 (2026-07-04): 每张凭证独立 REQUIRES_NEW 事务, 见 {@link #batchPost}. */
+    private final PlatformTransactionManager transactionManager;
+
+    /**
+     * Sprint 7 T2 F-PERIOD: 期间结账 gate.
+     *
+     * <p>必传 @Autowired(required=false) — T2 ship 后是默认存在的 bean, 但保留 fail-open
+     * 容错性 (测试环境 / module 未启用 finance 时)所需. assertOpen 内 null-check 等价
+     * 于 silently pass (backwards compat — no row → OPEN, no gate enforcement).
+     */
+    @Autowired(required = false)
+    private AccountingPeriodService accountingPeriodService;
+
+    // 6 业务单 repo (ProductionPlan 暂不 hook generator, repo 留 batch-补单 用)
+    private final SalesOrderRepository salesOrderRepo;
+    private final PurchaseOrderRepository purchaseOrderRepo;
+    private final ReturnOrderRepository returnOrderRepo;
+    private final InternalTransferRepository internalTransferRepo;
+    private final WastageRecordRepository wastageRecordRepo;
+    private final PayrollRecordRepository payrollRecordRepo;
+    private final ProductionPlanRepository productionPlanRepo;  // reserved for future production-completion voucher
+
+    @Override
+    @Transactional
+    @SuppressWarnings("unchecked")
+    public Voucher createFromBusiness(String factoryId, String businessType, String businessId) {
+        // 1. Idempotent: 同业务单已有凭证 → 直接返回
+        Optional<Voucher> existing = voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull(
+                businessType, businessId);
+        if (existing.isPresent()) {
+            log.debug("Voucher 已存在 (idempotent hit): {}/{} → {}", businessType, businessId, existing.get().getId());
+            return existing.get();
+        }
+
+        // 2. Load source entity
+        Object entity = loadEntity(businessType, businessId);
+        if (entity == null) {
+            throw new EntityNotFoundException(
+                    "源业务单不存在: " + businessType + "/" + businessId);
+        }
+
+        // 跨租户校验 (Rule 8 sweep): loadEntity 用裸 findById, 不校验业务单归属工厂。
+        // 攻击者把自己的 factoryId 放 URL、传别厂业务单 id → 把别厂数据生成进本厂凭证。
+        // 这里校验加载到的业务实体 factoryId 必须 == 路径 factoryId。
+        assertEntityBelongsToFactory(businessType, businessId, entity, factoryId);
+
+        // 3. Find generator
+        @SuppressWarnings("rawtypes")
+        VoucherGenerator generator = registry.findByBusinessType(businessType)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "无 generator 处理 businessType=" + businessType));
+
+        // 4. Generate (含 validateBalanced 自校验)
+        Voucher voucher = generator.generate(factoryId, entity);
+
+        // 4.5. Sprint 7 T2 F-PERIOD: 期间结账 gate — voucherDate 落在 CLOSED 期间则拒
+        assertPeriodOpen(factoryId, voucher.getVoucherDate());
+
+        // 5. Assign voucher number + persist
+        voucher.setVoucherNumber(generateVoucherNumber(factoryId, voucher.getVoucherDate()));
+        Voucher saved = voucherRepo.save(voucher);
+
+        log.info("✅ Voucher 生成: {} (type={}, source={}/{}, total={})",
+                saved.getVoucherNumber(), saved.getVoucherType(),
+                businessType, businessId, saved.getTotalDebit());
+
+        // 6. Sprint 3 #720: link Voucher → source business entity via LinkArrayService
+        // Swallow exceptions — link failure must not roll back voucher persistence.
+        try {
+            String linkType = mapLinkType(saved.getVoucherType());
+            linkArrayService.link(
+                    factoryId,
+                    "VOUCHER", saved.getId(),
+                    linkType,
+                    businessType, businessId,
+                    "凭证自动生成 by " + saved.getVoucherNumber(),
+                    null);
+        } catch (Exception e) {
+            log.warn("LinkArray hook failed for voucher={} business={}/{}: {}",
+                    saved.getId(), businessType, businessId, e.getMessage());
+        }
+
+        return saved;
+    }
+
+    /**
+     * Map VoucherType → LinkArrayService 8-class linkType taxonomy
+     * (sale / sample / request / produce / outsource / stock / project / free).
+     */
+    private String mapLinkType(VoucherType type) {
+        if (type == null) return "free";
+        return switch (type) {
+            case SALES_RECEIPT, RETURN, CASH_RECEIPT -> "sale";
+            case PURCHASE_PAYMENT, INVENTORY_TRANSFER, INVENTORY_STOCKTAKE, CASH_PAYMENT -> "stock";
+            case WAGE, EXPENSE, DEPRECATION, PL_CLOSING, COST_CARRYOVER -> "free";
+        };
+    }
+
+    @Override
+    @Transactional
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public Voucher createDepreciation(String factoryId, Map<String, Object> input) {
+        String businessId = String.valueOf(input.get("businessId"));
+        Optional<Voucher> existing = voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull(
+                "DEPRECATION", businessId);
+        if (existing.isPresent()) return existing.get();
+
+        VoucherGenerator generator = registry.findByBusinessType("DEPRECATION")
+                .orElseThrow(() -> new IllegalStateException("无 DEPRECATION generator"));
+        Voucher voucher = generator.generate(factoryId, input);
+        // Sprint 7 T2 F-PERIOD: 期间结账 gate
+        assertPeriodOpen(factoryId, voucher.getVoucherDate());
+        voucher.setVoucherNumber(generateVoucherNumber(factoryId, voucher.getVoucherDate()));
+        return voucherRepo.save(voucher);
+    }
+
+    /**
+     * 批量补凭证 —— <b>每单独立事务</b>, 一单失败不拖垮整批。
+     *
+     * <p><b>缺陷</b> (2026-08-09 prod 实测, F006): 原实现是<b>整批一个 {@code @Transactional}</b> +
+     * 逐单 try/catch。看着像"一单失败不影响其余", 实际完全不是 —— 逐单 catch 挡得住 Java 异常,
+     * 挡不住<b>PostgreSQL 已经把整个事务标记为 aborted</b>: 第一单插入违反约束后, 同一事务里
+     * 后续每一条语句都直接返回 {@code current transaction is aborted, commands ignored until
+     * end of transaction block}, 连 {@code updateVflag(FAILED)} 都写不进去; 最后 proxy commit
+     * 看到 rollback-only → {@code UnexpectedRollbackException} → 调用方收到一个语焉不详的 409,
+     * 而<b>一张凭证都没生成</b>。实测 F006 一次批量补: 第一单是零金额调拨触发
+     * {@code chk_ve_single_side}, 后面 7 单全部陪葬, 日志里是同一条失败 SQL 重复 8 次。
+     *
+     * <p>修法照 {@link #batchPost} —— 那边 2026-07-04 已经踩过同一个坑并落地了正解:
+     * 每单 {@code PROPAGATION_REQUIRES_NEW} 独立事务, 失败的单独回滚, 成功的照常提交。
+     * 批量补凭证同样不是"全有全无"语义: 财务要的是"补上了几张、哪几张没补上、为什么"。
+     */
+    @Override
+    public int batchCreateForFactory(String factoryId, String businessType) {
+        List<String> ids = findUncreatedIds(factoryId, businessType);
+        // 每单独立事务: 一单违反约束只回滚它自己, 不会把整批的 DB 会话弄脏。
+        TransactionTemplate tt = new TransactionTemplate(transactionManager);
+        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        int count = 0;
+        for (String id : ids) {
+            try {
+                tt.execute(status -> {
+                    createFromBusiness(factoryId, businessType, id);
+                    updateVflag(businessType, id, VoucherFlag.CREATED);
+                    return null;
+                });
+                count++;
+            } catch (Exception e) {
+                log.warn("Batch generate failed: {}/{} — {}", businessType, id, e.getMessage());
+                // 标 FAILED 也必须在【干净的新事务】里做 —— 上面那个事务已经回滚,
+                // 沿用它写不进去 (这正是旧实现连 FAILED 都标不上的原因)。
+                try {
+                    tt.execute(status -> {
+                        updateVflag(businessType, id, VoucherFlag.FAILED);
+                        return null;
+                    });
+                } catch (Exception ignored) {
+                    log.warn("Batch generate: 标记 FAILED 也失败 {}/{}", businessType, id);
+                }
+            }
+        }
+        return count;
+    }
+
+    @Override
+    @Transactional
+    public Voucher post(String factoryId, String voucherId, Long userId) {
+        return doPost(factoryId, voucherId, userId);
+    }
+
+    /**
+     * 过账实际逻辑 (DRAFT → POSTED), 由 {@link #post} 和
+     * {@link #batchPost(String, List, Long)} 共用同一校验 (借贷已在生成时校验平衡,
+     * 此处校验 DRAFT 状态 + 期间结账 gate) — 批量过账不重复实现一套弱化版规则.
+     */
+    private Voucher doPost(String factoryId, String voucherId, Long userId) {
+        // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权过账别厂凭证)
+        Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
+                .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
+        if (v.getStatus() != VoucherStatus.DRAFT) {
+            throw new IllegalStateException("仅 DRAFT 凭证可过账, 当前=" + v.getStatus());
+        }
+        // Sprint 7 T2 F-PERIOD: 过账修改 voucher 状态, 走期间结账 gate
+        assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
+        v.setStatus(VoucherStatus.POSTED);
+        v.setApprovedBy(userId);
+        v.setApprovedAt(LocalDateTime.now());
+        return voucherRepo.save(v);
+    }
+
+    @Override
+    public List<VoucherBatchPostResultDTO> batchPost(String factoryId, List<String> voucherIds, Long userId) {
+        List<VoucherBatchPostResultDTO> results = new ArrayList<>();
+        // 每张凭证独立事务 (REQUIRES_NEW): 一张不平/已锁期间的凭证过账失败, 不影响其余凭证的过账
+        // 结果 (批量过账不是"全有全无"事务, 人工审核制下财务需要看到哪几张成功哪几张失败+原因)。
+        TransactionTemplate tt = new TransactionTemplate(transactionManager);
+        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        for (String voucherId : voucherIds) {
+            try {
+                Optional<Voucher> existing = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId);
+                if (existing.isEmpty()) {
+                    results.add(VoucherBatchPostResultDTO.builder()
+                            .voucherId(voucherId).success(false).skipped(false)
+                            .message("凭证不存在").build());
+                    continue;
+                }
+                Voucher v = existing.get();
+                // 幂等 (fool-proof Rule 4): 已过账凭证跳过, 不视为失败 — 批量重试/重复选中同一批
+                // 凭证时不应报错, 应告知"已过账无需重复操作".
+                if (v.getStatus() == VoucherStatus.POSTED) {
+                    results.add(VoucherBatchPostResultDTO.builder()
+                            .voucherId(voucherId).success(true).skipped(true)
+                            .voucherNumber(v.getVoucherNumber())
+                            .message("已过账, 跳过").build());
+                    continue;
+                }
+                final String id = voucherId;
+                Voucher posted = tt.execute(status -> doPost(factoryId, id, userId));
+                results.add(VoucherBatchPostResultDTO.builder()
+                        .voucherId(voucherId).success(true).skipped(false)
+                        .voucherNumber(posted != null ? posted.getVoucherNumber() : null)
+                        .message("过账成功").build());
+            } catch (Exception e) {
+                log.warn("批量过账失败: factoryId={}, voucherId={} — {}", factoryId, voucherId, e.getMessage());
+                results.add(VoucherBatchPostResultDTO.builder()
+                        .voucherId(voucherId).success(false).skipped(false)
+                        .message(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+                        .build());
+            }
+        }
+        return results;
+    }
+
+    @Override
+    @Transactional
+    public void voidVoucher(String factoryId, String voucherId, String reason, Long userId) {
+        // 跨租户校验: 凭证须属于当前工厂 (findByIdAndFactoryIdAndDeletedAtIsNull, 防越权作废别厂凭证)
+        Voucher v = voucherRepo.findByIdAndFactoryIdAndDeletedAtIsNull(voucherId, factoryId)
+                .orElseThrow(() -> new EntityNotFoundException("Voucher 不存在: " + voucherId));
+
+        // H-BUG-4 (2026-06-21 transcript-e2e R1): 已作废凭证不可重复"作废" (幂等终态)。
+        // 已红字冲销凭证 (REVERSED) 同样是终态, 不可再次冲销/作废。
+        if (v.getStatus() == VoucherStatus.VOID) {
+            throw new BusinessException(409, "凭证已作废, 不可重复作废")
+                    .withCode("VOUCHER_ALREADY_VOID");
+        }
+        if (v.getStatus() == VoucherStatus.REVERSED) {
+            throw new BusinessException(409, "凭证已红字冲销, 不可重复冲销/作废")
+                    .withCode("VOUCHER_ALREADY_REVERSED")
+                    .withHint("如需查看冲销凭证, 请打开关联的红字冲销凭证");
+        }
+        // 红字冲销凭证本身 (original_voucher_id 非 null) 不允许再被作废/冲销 — 它已是账务终态。
+        if (v.getOriginalVoucherId() != null) {
+            throw new BusinessException(409, "红字冲销凭证不可作废/再冲销")
+                    .withCode("VOUCHER_IS_REVERSAL");
+        }
+
+        // Feature #7 (R12): 金蝶规范 — 已过账 (POSTED) 凭证不可直接 VOID 抹掉 (已进账簿),
+        // 应生成一张红字冲销凭证 (借贷方向互换) 关联原凭证, 原凭证标记 REVERSED, 账簿可追溯。
+        if (v.getStatus() == VoucherStatus.POSTED) {
+            reversePostedVoucher(v, reason, userId);
+            return;
+        }
+
+        // DRAFT 凭证: 未过账, 无需红字冲销, 保持直接置 VOID (向后兼容)。
+        // Sprint 7 T2 F-PERIOD: 作废也是修改 voucher 状态, 走期间结账 gate
+        assertPeriodOpen(v.getFactoryId(), v.getVoucherDate());
+        v.setStatus(VoucherStatus.VOID);
+        v.setApprovedBy(userId);
+        v.setApprovedAt(LocalDateTime.now());
+        v.setDescription((v.getDescription() == null ? "" : v.getDescription()) + " [作废: " + reason + "]");
+        voucherRepo.save(v);
+    }
+
+    /**
+     * Feature #7 (R12): 已过账凭证红字冲销 (金蝶规范).
+     *
+     * <p>生成一张红字冲销凭证 — 复制原凭证所有分录, <b>借贷方向互换</b> (原借→贷, 原贷→借),
+     * 金额保持正数。互换 (而非负数) 与现有账务模型最一致:
+     * <ul>
+     *   <li>{@link Voucher#validateBalanced()} 要求 sum(debit)==sum(credit)==totalDebit==totalCredit,
+     *       互换后 borrow/credit 各自总额对调仍精确相等, 全程正数无需放宽不变式。</li>
+     *   <li>{@code aggregateByAuxiliary} 的 SUM(debit)/SUM(credit) 已排除 VOID, 但纳入冲销凭证:
+     *       原凭证 debit X + 冲销凭证 credit X → 该辅助核算实体净额归零, 账务自洽。</li>
+     * </ul>
+     *
+     * <p>期间: 冲销凭证沿用原凭证日期/期间 (与原凭证同期对冲, 账簿逐期可追溯);
+     * 复用 {@link #assertPeriodOpen} — 若原期间已结账则拒绝冲销, 与 post/void 一致的 gate 行为。
+     *
+     * <p>原凭证标记 {@link VoucherStatus#REVERSED} (不物理删), 双向关联 reversal_voucher_id /
+     * original_voucher_id。冲销凭证状态直接 POSTED (冲销即生效)。
+     */
+    private void reversePostedVoucher(Voucher original, String reason, Long userId) {
+        // 期间结账 gate: 原凭证日期落在 CLOSED 期间则拒绝冲销 (与 void/post 一致)。
+        assertPeriodOpen(original.getFactoryId(), original.getVoucherDate());
+
+        LocalDate reversalDate = original.getVoucherDate();
+        String reversalNumber = generateVoucherNumber(original.getFactoryId(), reversalDate);
+
+        Voucher reversal = Voucher.builder()
+                .factoryId(original.getFactoryId())
+                .voucherNumber(reversalNumber)
+                .voucherType(original.getVoucherType())
+                .voucherDate(reversalDate)
+                // ⚠️ 红字冲销凭证 source business 的两难 (prod 活体逐层暴露, 单测 mock repo 全照不到):
+                //   1) 复制原凭证 source → 撞 uk_voucher_source_business 唯一约束 (DataIntegrity 409)
+                //   2) 置 null → prod source_business_type/id 是 NOT NULL 约束 → DataIntegrity 409
+                // 正解: 用合成 source — type="VOUCHER_REVERSAL" + id=原凭证 id。非 null 满足 NOT NULL,
+                // 且 (VOUCHER_REVERSAL, 原凭证id) 唯一 (一原凭证至多一次冲销, 重复冲销被 REVERSED 幂等守卫挡)。
+                .sourceBusinessType("VOUCHER_REVERSAL")
+                .sourceBusinessId(original.getId())
+                // 红字冲销凭证创建即生效 (POSTED), approver = 操作人
+                .status(VoucherStatus.POSTED)
+                .createdBy(userId)
+                .approvedBy(userId)
+                .approvedAt(LocalDateTime.now())
+                .description("红字冲销凭证 [冲销 " + original.getVoucherNumber() + "]"
+                        + (reason == null || reason.isBlank() ? "" : " 原因: " + reason))
+                .originalVoucherId(original.getId())
+                .build();
+
+        // 复制原分录, 借贷互换 (debit↔credit), 金额正数, 辅助核算保持不变。
+        int lineNo = 1;
+        for (VoucherEntry oe : original.getEntries()) {
+            VoucherEntry re = VoucherEntry.builder()
+                    .lineNo(lineNo++)
+                    .subjectCode(oe.getSubjectCode())
+                    .subjectName(oe.getSubjectName())
+                    // 方向互换: 原借方金额 → 冲销贷方; 原贷方金额 → 冲销借方
+                    .debit(nz(oe.getCredit()))
+                    .credit(nz(oe.getDebit()))
+                    .description("红冲: " + (oe.getDescription() == null ? "" : oe.getDescription()))
+                    .costCenter(oe.getCostCenter())
+                    .auxiliaryType(oe.getAuxiliaryType())
+                    .auxiliaryEntityId(oe.getAuxiliaryEntityId())
+                    .voucher(reversal)
+                    .build();
+            reversal.getEntries().add(re);
+        }
+
+        // totals: 互换后总借=原总贷, 总贷=原总借 (原凭证已平, 故两者仍相等)。
+        BigDecimal totalDebit = reversal.getEntries().stream()
+                .map(e -> nz(e.getDebit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = reversal.getEntries().stream()
+                .map(e -> nz(e.getCredit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        reversal.setTotalDebit(totalDebit);
+        reversal.setTotalCredit(totalCredit);
+
+        // 借贷必平自校验 (与 generator 一致)
+        reversal.validateBalanced();
+
+        Voucher savedReversal = voucherRepo.save(reversal);
+
+        // 原凭证标记 REVERSED + 双向关联 (不物理删, 账簿可追溯)
+        original.setStatus(VoucherStatus.REVERSED);
+        original.setReversalVoucherId(savedReversal.getId());
+        original.setApprovedBy(userId);
+        original.setApprovedAt(LocalDateTime.now());
+        original.setDescription((original.getDescription() == null ? "" : original.getDescription())
+                + " [红字冲销: " + reason + " → " + savedReversal.getVoucherNumber() + "]");
+        voucherRepo.save(original);
+
+        log.info("✅ 红字冲销: 原凭证 {} (POSTED→REVERSED) → 冲销凭证 {} (POSTED), factory={}, total={}",
+                original.getVoucherNumber(), savedReversal.getVoucherNumber(),
+                original.getFactoryId(), totalDebit);
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
+    }
+
+    @Override
+    public Optional<Voucher> findBySourceBusiness(String businessType, String businessId) {
+        return voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull(businessType, businessId);
+    }
+
+    @Override
+    public List<Voucher> findByStatus(String factoryId, VoucherStatus status) {
+        return voucherRepo.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status,
+                org.springframework.data.domain.Pageable.unpaged()).getContent();
+    }
+
+    @Override
+    @Transactional
+    public Voucher createManual(String factoryId, VoucherType type, LocalDate voucherDate,
+                                List<VoucherEntrySpec> entries, String sourceBusinessType,
+                                String sourceBusinessId, String description, Long userId) {
+        if (entries == null || entries.isEmpty()) {
+            throw new IllegalArgumentException("createManual: entries 不能为空");
+        }
+        // ⚠️ 不调 assertPeriodOpen — 结转凭证须能过进 LOCKED 期间 (见接口注释)。
+        Voucher voucher = Voucher.builder()
+                .factoryId(factoryId)
+                .voucherNumber(generateVoucherNumber(factoryId, voucherDate))
+                .voucherType(type)
+                .voucherDate(voucherDate)
+                .sourceBusinessType(sourceBusinessType)
+                .sourceBusinessId(sourceBusinessId)
+                .status(VoucherStatus.POSTED)
+                .createdBy(userId)
+                .approvedBy(userId)
+                .approvedAt(LocalDateTime.now())
+                .description(description)
+                .build();
+
+        int lineNo = 1;
+        for (VoucherEntrySpec spec : entries) {
+            VoucherEntry e = VoucherEntry.builder()
+                    .lineNo(lineNo++)
+                    .subjectCode(spec.subjectCode())
+                    .subjectName(spec.subjectName())
+                    .debit(nz(spec.debit()))
+                    .credit(nz(spec.credit()))
+                    .description(spec.description())
+                    .voucher(voucher)
+                    .build();
+            voucher.getEntries().add(e);
+        }
+        BigDecimal totalDebit = voucher.getEntries().stream()
+                .map(e -> nz(e.getDebit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = voucher.getEntries().stream()
+                .map(e -> nz(e.getCredit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        voucher.setTotalDebit(totalDebit);
+        voucher.setTotalCredit(totalCredit);
+        voucher.validateBalanced();
+
+        Voucher saved = voucherRepo.save(voucher);
+        log.info("✅ 手工凭证 (POSTED): {} type={} source={}/{} total={}",
+                saved.getVoucherNumber(), type, sourceBusinessType, sourceBusinessId, totalDebit);
+        return saved;
+    }
+
+    @Override
+    @Transactional
+    public Voucher createCashMovementVoucher(String factoryId, VoucherType type, LocalDate voucherDate,
+                                             List<VoucherEntry> entries, String sourceBusinessType,
+                                             String sourceBusinessId, String description, Long userId) {
+        if (entries == null || entries.isEmpty()) {
+            throw new IllegalArgumentException("createCashMovementVoucher: entries 不能为空");
+        }
+        // 幂等: (sourceBusinessType, sourceBusinessId) 唯一标识该笔现金流水的凭证
+        // (uk_voucher_source_business)。防 AFTER_COMMIT 监听器重投 / 同笔重复确认导致重复生成。
+        Optional<Voucher> existing = voucherRepo.findBySourceBusinessTypeAndSourceBusinessIdAndDeletedAtIsNull(
+                sourceBusinessType, sourceBusinessId);
+        if (existing.isPresent()) {
+            log.debug("现金流水凭证已存在 (idempotent hit): {}/{} → {}",
+                    sourceBusinessType, sourceBusinessId, existing.get().getId());
+            return existing.get();
+        }
+
+        // 期间结账 gate: 现金凭证落在 CLOSED 期间则拒 (与 createFromBusiness 一致)。
+        // 监听器 fail-soft 兜住抛出的 PeriodClosedException — 结转/月结对账会暴露漂移。
+        assertPeriodOpen(factoryId, voucherDate);
+
+        Voucher voucher = Voucher.builder()
+                .factoryId(factoryId)
+                .voucherNumber(generateVoucherNumber(factoryId, voucherDate))
+                .voucherType(type)
+                .voucherDate(voucherDate)
+                .sourceBusinessType(sourceBusinessType)
+                .sourceBusinessId(sourceBusinessId)
+                .status(VoucherStatus.DRAFT)   // 业务凭证惯例: 生成 DRAFT, 财务手工过账
+                .createdBy(userId)
+                .description(description)
+                .build();
+
+        int lineNo = 1;
+        for (VoucherEntry e : entries) {
+            e.setLineNo(lineNo++);
+            e.setDebit(nz(e.getDebit()));
+            e.setCredit(nz(e.getCredit()));
+            e.setVoucher(voucher);
+            voucher.getEntries().add(e);
+        }
+        BigDecimal totalDebit = voucher.getEntries().stream()
+                .map(e -> nz(e.getDebit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = voucher.getEntries().stream()
+                .map(e -> nz(e.getCredit())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        voucher.setTotalDebit(totalDebit);
+        voucher.setTotalCredit(totalCredit);
+        voucher.validateBalanced();
+
+        Voucher saved = voucherRepo.save(voucher);
+        log.info("✅ 现金流水凭证 (DRAFT): {} type={} source={}/{} total={}",
+                saved.getVoucherNumber(), type, sourceBusinessType, sourceBusinessId, totalDebit);
+        return saved;
+    }
+
+    // ==================== private helpers ====================
+
+    /**
+     * 跨租户校验 (Rule 8 sweep): 校验 {@link #loadEntity} 加载的业务实体归属当前工厂。
+     * 各业务单的工厂字段不同 (InternalTransfer 用 sourceFactoryId)，逐类型取归属工厂比对。
+     * 不属于当前工厂 → 403。
+     */
+    private void assertEntityBelongsToFactory(String businessType, String businessId,
+                                              Object entity, String factoryId) {
+        String entityFactoryId;
+        switch (businessType) {
+            case "SALES_ORDER":      entityFactoryId = ((SalesOrder) entity).getFactoryId(); break;
+            case "PURCHASE_ORDER":   entityFactoryId = ((PurchaseOrder) entity).getFactoryId(); break;
+            case "RETURN_ORDER":     entityFactoryId = ((ReturnOrder) entity).getFactoryId(); break;
+            case "INTERNAL_TRANSFER":entityFactoryId = ((InternalTransfer) entity).getSourceFactoryId(); break;
+            case "WASTAGE_RECORD":   entityFactoryId = ((WastageRecord) entity).getFactoryId(); break;
+            case "PAYROLL_RECORD":   entityFactoryId = ((PayrollRecord) entity).getFactoryId(); break;
+            default:                 return; // 未知类型不在 loadEntity 支持范围, 不阻塞
+        }
+        if (entityFactoryId == null || !entityFactoryId.equals(factoryId)) {
+            throw new com.cretas.aims.exception.BusinessException(403,
+                    "无权操作该业务单 / 该业务单不属于当前工厂: " + businessType + "/" + businessId)
+                    .withHint("请确认业务单 ID 是否属于本工厂");
+        }
+    }
+
+    private Object loadEntity(String businessType, String businessId) {
+        switch (businessType) {
+            case "SALES_ORDER":
+                return salesOrderRepo.findById(businessId).orElse(null);
+            case "PURCHASE_ORDER":
+                return purchaseOrderRepo.findById(businessId).orElse(null);
+            case "RETURN_ORDER":
+                return returnOrderRepo.findById(businessId).orElse(null);
+            case "INTERNAL_TRANSFER":
+                return internalTransferRepo.findById(businessId).orElse(null);
+            case "WASTAGE_RECORD":
+                return wastageRecordRepo.findById(businessId).orElse(null);
+            case "PAYROLL_RECORD":
+                try {
+                    return payrollRecordRepo.findById(Long.parseLong(businessId)).orElse(null);
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 批量补凭证的取数 —— <b>每一支的范围必须与该类型 listener 的生成条件一致</b>。
+     *
+     * <p><b>为什么必须一致</b> (2026-08-09 prod 审计): 原实现<b>只按 vflag 过滤, 完全不看业务
+     * 状态</b>。而各类型的凭证都是在某个业务节点由 listener 生成的 —— 没走到那个节点的单据
+     * 自然一直停在 {@code UNCREATED}。于是"批量补凭证"会把这些<b>本来就不该有凭证</b>的单据
+     * 一并补上, 制造幽灵凭证。实测各支的误捞量:
+     *
+     * <pre>
+     *   INTERNAL_TRANSFER  47 张   (已修)
+     *   PURCHASE_ORDER      8 张   9 张里只有 1 张该补
+     *   SALES_ORDER         6 张
+     *   WASTAGE_RECORD      5 张
+     * </pre>
+     *
+     * <p>下面每一支的判据都<b>直接抄自该类型 listener 的触发事件</b>, 不是我另定的会计口径:
+     * <ul>
+     *   <li>SALES_ORDER ← {@code SalesOrderFinanceApprovedEvent} (财务审批通过后生成)</li>
+     *   <li>PURCHASE_ORDER ← {@code PurchaseReceiveConfirmedEvent} (收货确认后生成)</li>
+     *   <li>RETURN_ORDER ← {@code ReturnOrderCreatedEvent} (创建即生成; 驳回时另有作废 listener)</li>
+     *   <li>INTERNAL_TRANSFER ← {@code TransferConfirmedEvent} (确认入库后生成)</li>
+     *   <li>WASTAGE_RECORD / PAYROLL_RECORD: <b>没有 listener</b>, 批量补是唯一生成路径</li>
+     * </ul>
+     */
+    /**
+     * 可以尝试补凭证的 vflag —— {@code UNCREATED} / {@code FAILED} / {@code PENDING}。
+     *
+     * <p><b>为什么 FAILED 和 PENDING 都要收</b> (2026-08-10 prod 审计): 这两个都是<b>死胡同</b>,
+     * 没有任何路径会把它们捡回来 —— listener 只在事件到来时跑一次, 批量补原先只扫 UNCREATED。
+     * <ul>
+     *   <li>{@code FAILED}: 生成时抛异常。一次瞬时失败 = 该单永久没有凭证, 且静默无告警。</li>
+     *   <li>{@code PENDING}: listener 写了"开始生成"之后、还没写"成功/失败"就中断 (进程重启等)。
+     *       实测 27 张 PENDING 里 26 张<b>其实已经有凭证</b>, 只是 flag 没写回 CREATED;
+     *       剩 1 张 (六膳门 PO-20260717-0001, 已完成的采购单) 是真漏账。</li>
+     * </ul>
+     *
+     * <p>收 PENDING 是安全的: {@link #createFromBusiness} 第一步就是幂等 —— 同业务单已有凭证
+     * 直接返回既有的, 不会重复生成。所以对那 26 张是"把 flag 纠正成 CREATED", 对那 1 张才是
+     * 真的补一张。
+     */
+    // package-private: 同包单测直调真方法
+    boolean isRetryableFlag(VoucherFlag flag) {
+        return flag == VoucherFlag.UNCREATED || flag == VoucherFlag.FAILED || flag == VoucherFlag.PENDING;
+    }
+
+    private List<String> findUncreatedIds(String factoryId, String businessType) {
+        switch (businessType) {
+            case "SALES_ORDER":
+                // listener 在【财务审批通过】后才生成 → 补的范围同样必须是已过财审的。
+                // DRAFT / CONFIRMED / PENDING_FINANCE_REVIEW / FINANCE_REJECTED / CANCELLED
+                // 都不该有凭证 (实测误捞 6 张, 含 4 张 CANCELLED)。
+                return salesOrderRepo.findAll().stream()
+                        .filter(o -> factoryId.equals(o.getFactoryId())
+                                && isRetryableFlag(o.getVflag())
+                                && isBookableSalesStatus(o.getStatus()))
+                        .map(SalesOrder::getId).toList();
+            case "PURCHASE_ORDER":
+                // listener 在【收货确认】后才生成 → 没收货的一律不补。
+                // 实测 9 张 UNCREATED 里只有 1 张真的收过货, 其余 8 张是 DRAFT/SUBMITTED/
+                // APPROVED/CANCELLED —— 货都没到, 补出来就是幽灵应付。
+                return purchaseOrderRepo.findAll().stream()
+                        .filter(o -> factoryId.equals(o.getFactoryId())
+                                && isRetryableFlag(o.getVflag())
+                                && isBookablePurchaseStatus(o.getStatus()))
+                        .map(PurchaseOrder::getId).toList();
+            case "RETURN_ORDER":
+                // listener 是【创建即生成】, 所以这一支不加"必须审批过"的门槛 —— 那会与已上线
+                // 行为不一致。只排除 REJECTED (被驳回的退货由 ReturnOrderRejectedEvent 作废凭证,
+                // 补一张回来等于跟那条 listener 对着干)。
+                return returnOrderRepo.findAll().stream()
+                        .filter(o -> factoryId.equals(o.getFactoryId())
+                                && isRetryableFlag(o.getVflag())
+                                && o.getStatus() != com.cretas.aims.entity.enums.ReturnOrderStatus.REJECTED)
+                        .map(ReturnOrder::getId).toList();
+            case "INTERNAL_TRANSFER":
+                // ⚠️ 除 vflag 外还必须判业务状态。2026-08-09 起 INVENTORY_TRANSFER 凭证只在
+                // 【确认入库】时生成, 于是草稿/待审/已取消/已驳回的调拨会长期停在 UNCREATED ——
+                // 只按 vflag 扫的话, "批量补凭证" 会给这些【库存一分没动】的单子补出凭证,
+                // 正是刚修掉的那种幽灵凭证, 从另一个入口原样长回来。
+                // 只有 CONFIRMED (库存真正搬完) 才允许补。
+                //
+                // 🔴 FAILED 也要收 (2026-08-09 prod 审计): 生成失败后 vflag 置 FAILED, 而
+                // 【没有任何路径会重试 FAILED】—— listener 只在事件到来时跑一次, 批量补凭证
+                // 又只扫 UNCREATED。于是一次瞬时失败 = 该单永久没有凭证, 且静默无告警。
+                // prod 实测 F006 有 4 张已确认、有金额、vflag=FAILED、至今无凭证的调拨
+                // (最早 2026-07-30), 其中两张是"创建后 40~70ms 就确认"、老逻辑的异步生成
+                // 与确认事务撞车所致。把 FAILED 纳入可补范围, 让这类漏账可恢复。
+                //
+                // 已有凭证的一律排除 —— FAILED 不保证"一定没生成", 重复生成会撞唯一约束、
+                // 再把 vflag 打回 FAILED, 制造"越补越失败"的假象。
+                // 🔴 零金额必须跳过 (2026-08-09 prod 实测): TransferVoucherListener 一直有这道
+                // 守卫 (totalAmount<=0 → 无会计影响, 不生成), 而这里【没有】—— 口径不一致。
+                // 后果不是"多生成一张废凭证"那么轻: 0 值调拨会造出 debit=0/credit=0 的分录,
+                // 违反 chk_ve_single_side, 把整个 DB 事务打成 aborted。实测 F006 一次批量补
+                // 就是被一张零金额调拨 (TRF-20260703-5801) 带崩全批。
+                return internalTransferRepo.findAll().stream()
+                        .filter(t -> factoryId.equals(t.getSourceFactoryId())
+                                && isRetryableFlag(t.getVflag())
+                                && t.getStatus() == com.cretas.aims.entity.enums.TransferStatus.CONFIRMED
+                                && t.getTotalAmount() != null && t.getTotalAmount().signum() > 0
+                                && findBySourceBusiness("INTERNAL_TRANSFER", t.getId()).isEmpty())
+                        .map(InternalTransfer::getId).toList();
+            case "WASTAGE_RECORD":
+                // 报损【没有 listener】, 批量补是唯一生成路径 —— 没有已上线逻辑可抄, 但
+                // DRAFT / SUBMITTED / REJECTED 显然不该入账 (草稿和被驳回的损耗不是损失)。
+                // 实测 67 张 UNCREATED 里 5 张属于这三种状态。
+                return wastageRecordRepo.findAll().stream()
+                        .filter(w -> factoryId.equals(w.getFactoryId())
+                                && isRetryableFlag(w.getVflag())
+                                && w.getStatus() == com.cretas.aims.entity.restaurant.WastageRecord.Status.APPROVED)
+                        .map(WastageRecord::getId).toList();
+            case "PAYROLL_RECORD":
+                return payrollRecordRepo.findAll().stream()
+                        .filter(p -> factoryId.equals(p.getFactoryId()) && isRetryableFlag(p.getVflag()))
+                        .map(p -> p.getId().toString()).toList();
+            default:
+                return List.of();
+        }
+    }
+
+    /**
+     * 销售单可入账的状态 —— 对齐 {@code SalesFinanceApproveVoucherListener}: 财务审批通过
+     * 之后的各阶段都算已入账区间; 财审之前 (DRAFT/CONFIRMED/PENDING_FINANCE_REVIEW)、
+     * 被财审驳回 (FINANCE_REJECTED)、以及已取消 (CANCELLED) 都不该有凭证。
+     */
+    // package-private: 让同包单测直接调真方法断言判定表 (测试里再抄一份表就是恒真式)
+    boolean isBookableSalesStatus(com.cretas.aims.entity.enums.SalesOrderStatus status) {
+        if (status == null) return false;
+        return switch (status) {
+            case FINANCE_APPROVED, PROCESSING, PARTIAL_DELIVERED, COMPLETED -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * 采购单可入账的状态 —— 对齐 {@code PurchaseOrderVoucherListener}: 凭证挂在
+     * {@code PurchaseReceiveConfirmedEvent} (收货确认) 上, 所以只有<b>确实收过货</b>的单据
+     * 才在补的范围内。下单/审批完但货没到, 补出来就是幽灵应付。
+     */
+    // package-private: 让同包单测直接调真方法断言判定表 (测试里再抄一份表就是恒真式)
+    boolean isBookablePurchaseStatus(com.cretas.aims.entity.enums.PurchaseOrderStatus status) {
+        if (status == null) return false;
+        return switch (status) {
+            case PARTIAL_RECEIVED, COMPLETED, CLOSED -> true;
+            default -> false;
+        };
+    }
+
+    private void updateVflag(String businessType, String businessId, VoucherFlag newFlag) {
+        switch (businessType) {
+            case "SALES_ORDER":
+                salesOrderRepo.findById(businessId).ifPresent(o -> {
+                    o.setVflag(newFlag);
+                    salesOrderRepo.save(o);
+                });
+                break;
+            case "PURCHASE_ORDER":
+                purchaseOrderRepo.findById(businessId).ifPresent(o -> {
+                    o.setVflag(newFlag);
+                    purchaseOrderRepo.save(o);
+                });
+                break;
+            case "RETURN_ORDER":
+                returnOrderRepo.findById(businessId).ifPresent(o -> {
+                    o.setVflag(newFlag);
+                    returnOrderRepo.save(o);
+                });
+                break;
+            case "INTERNAL_TRANSFER":
+                internalTransferRepo.findById(businessId).ifPresent(t -> {
+                    t.setVflag(newFlag);
+                    internalTransferRepo.save(t);
+                });
+                break;
+            case "WASTAGE_RECORD":
+                wastageRecordRepo.findById(businessId).ifPresent(w -> {
+                    w.setVflag(newFlag);
+                    wastageRecordRepo.save(w);
+                });
+                break;
+            case "PAYROLL_RECORD":
+                try {
+                    payrollRecordRepo.findById(Long.parseLong(businessId)).ifPresent(p -> {
+                        p.setVflag(newFlag);
+                        payrollRecordRepo.save(p);
+                    });
+                } catch (NumberFormatException ignored) {}
+                break;
+            default:
+                log.warn("Unknown businessType for vflag update: {}", businessType);
+        }
+    }
+
+    /**
+     * 凭证号 = {@code V-<年>-<已占用最大序号+1>}。
+     *
+     * <p>🔴 2026-08-03: 原来用的是「未删<b>条数</b>+1」。软删过凭证的工厂, 条数与已占号段就此脱节,
+     * 生成的号必撞已存在的号, 且每次算出同一个号 —— <b>永久撞</b>。
+     * prod 实证 F006: 总 302 条 / 未删 66 / 最大号 V-2026-0302 → 生成 V-2026-0067 → 必然
+     * {@code 409 数据已存在}。期初建账因此从某一刻起彻底不可用, 却被记成「每天只能一次」的额度。
+     *
+     * <p>取最大序号且<b>不排除软删</b>: 号段发出就不回收, 软删的凭证仍占着它的号。
+     */
+    private String generateVoucherNumber(String factoryId, LocalDate voucherDate) {
+        String year = String.valueOf(voucherDate != null ? voucherDate.getYear() : LocalDate.now().getYear());
+        long maxSeq = voucherRepo.maxVoucherSequenceByFactoryIdAndYear(factoryId, year);
+        return String.format("V-%s-%04d", year, maxSeq + 1);
+    }
+
+    /**
+     * Sprint 7 T2 F-PERIOD: 期间结账 gate.
+     *
+     * <p>查 (factoryId, voucherDate.year, voucherDate.month) period.status:
+     * <ul>
+     *   <li>CLOSED → 抛 {@link com.cretas.aims.exception.PeriodClosedException}</li>
+     *   <li>OPEN / PENDING_CLOSE / 无 row → silently pass</li>
+     * </ul>
+     *
+     * <p>{@code accountingPeriodService} null (测试 / 模块未启用) 或 voucherDate null
+     * → silently pass (backwards compat).
+     */
+    private void assertPeriodOpen(String factoryId, LocalDate voucherDate) {
+        if (accountingPeriodService == null || voucherDate == null || factoryId == null) {
+            return;  // backwards compat: 服务未注入 / 数据不全 → 不 gate
+        }
+        accountingPeriodService.assertOpen(factoryId, voucherDate.getYear(), voucherDate.getMonthValue());
+    }
+}

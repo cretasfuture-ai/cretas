@@ -1,0 +1,129 @@
+package com.cretas.aims.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerInterceptor;
+
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * 演示租户只读锁.
+ *
+ * 对配置的 demo 工厂 (cretas.demo.factory-ids) 拦截所有写操作 (POST/PUT/PATCH/DELETE),
+ * 但放行查询 / 分析 / AI 类 POST (本系统大量"读"是 POST). 用于路演公开扫码演示, 防数据被改坏.
+ * 注册在 JwtAuthInterceptor (order 1) 之后, 此时 request 已带 factoryId 属性.
+ *
+ * @author Cretas Team
+ * @since 2026-06-14
+ */
+@Slf4j
+@Component
+public class DemoReadOnlyInterceptor implements HandlerInterceptor {
+
+    @Value("${cretas.demo.enabled:false}")
+    private boolean demoEnabled;
+
+    // 2026-07-28: fallback 对齐 application.properties 的实际值。原值 `DEMO_REST,DEMO_FACTORY`
+    // 里的 DEMO_FACTORY 是已废弃的租户 ID (实际是 DEMO_FACTORY2), 且漏了 F_DEMO。
+    // 该 fallback 仅在 property key 从所有配置源消失时才生效 (properties 打进 jar, 实际
+    // 概率极低), 但陈旧值会误导读者, 且与编排器同源配置的 fallback 不一致。
+    // 2026-08-05: DEMO_REST 随租户收敛停用, 从 fallback 移除 (与 application.properties 同步)。
+    @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2,F_DEMO}")
+    private String demoFactoryIdsCsv;
+
+    // POST 路径含以下任一片段 = 读取 / 分析 / AI, 放行 (否则演示自身的查询会被误拦).
+    private static final List<String> READ_POST_ALLOW = List.of(
+            "/auth/",        // demo-login / refresh / logout / me
+            "/smart-bi/",    // BI 查询 / 经营驾驶舱 / 分析
+            "/ai-intents/",  // AI 意图 chat
+            "/ai/",          // AI
+            // 表单助手只把用户的一句话解析成字段值返回给前端预览, 自身不写任何库
+            // (真正建单要用户在表单上确认后走各自的业务 API, 那条路仍受只读锁约束)。
+            // 2026-07-28 实测: 演示租户调 /form-assistant/parse 被这个拦截器 403,
+            // 导致演示账号上填表 AI 完全不可用 —— 是白名单漏了它, 不是它该被拦。
+            "/form-assistant/",
+            "/chat",         // chat
+            "/analysis",     // 分析
+            "/chart-insight", // chart insight read-only POST
+            "/reports/",     // 报表查询
+            "/list-summary/", // 列表底部合计/一表一分析上下文 (读性质 POST)
+            "/dashboard",    // 仪表盘查询
+            "/query",        // 查询
+            "/statistics",   // 统计
+            "/export",       // 导出
+            "/preview",      // 预览
+            "/search"        // 搜索
+    );
+
+    /**
+     * Restaurant Agent 的 start/cancel 仅写隔离的 AI run/event 台账，不执行 ERP
+     * 业务写入。使用完整路径匹配，避免把未来新增的 restaurant-agent 写接口
+     * 一并放出演示租户只读锁。
+     */
+    private static final Pattern READ_ONLY_RESTAURANT_AGENT_POST = Pattern.compile(
+            "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/restaurant-agent/runs"
+                    + "(?:/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                    + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/cancel)?$");
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
+            throws IOException {
+        if (!demoEnabled) {
+            return true;
+        }
+        Object fid = request.getAttribute("factoryId");
+        if (fid == null) {
+            return true; // 公开端点 / 未带工厂 -> 不管
+        }
+        Set<String> demoIds = new HashSet<>(Arrays.asList(demoFactoryIdsCsv.split(",")));
+        if (!demoIds.contains(fid.toString().trim())) {
+            return true; // 非 demo 工厂 -> 正常 (不误伤真实租户)
+        }
+
+        String method = request.getMethod();
+        if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
+            return true;
+        }
+
+        // 写方法: PUT/PATCH/DELETE 一律拦; POST 放行读取/分析类.
+        String uri = request.getRequestURI();
+        if ("POST".equals(method)) {
+            if (READ_ONLY_RESTAURANT_AGENT_POST.matcher(uri).matches()) {
+                return true;
+            }
+            for (String allow : READ_POST_ALLOW) {
+                if (uri.contains(allow)) {
+                    return true;
+                }
+            }
+        }
+
+        log.info("演示只读锁拦截写操作: {} {} (factoryId={})", method, uri, fid);
+        sendReadOnly(response);
+        return false;
+    }
+
+    private void sendReadOnly(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json;charset=UTF-8");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", false);
+        body.put("code", 403);
+        body.put("message", "演示模式为只读，欢迎浏览全部数据 🙂");
+        body.put("severity", "info");
+        body.put("actionHint", "这是公开演示账号，仅供查看，无法修改数据");
+        body.put("timestamp", java.time.LocalDateTime.now().toString());
+        response.getWriter().write(new ObjectMapper().writeValueAsString(body));
+    }
+}

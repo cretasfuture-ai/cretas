@@ -1,0 +1,50 @@
+# These legacy Windows-console Python files intentionally retain CRLF. Keep
+# diff whitespace checks sensitive to spaces while treating CR as EOL syntax.
+backend/python/smartbi/tests/test_auto_learning.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/tests/test_e2e_performance_monitor.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/tests/test_e2e_unified_analyzer.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/conftest.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/services/materialized_analytics/templates/member_deep_analytics.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/services/materialized_analytics/templates/period_comparison_trend.py whitespace=trailing-space,cr-at-eol
+
+# These two legacy Java controllers still store CRLF blobs. Keep space checks
+# strict while treating CR as EOL; remove these exact rules after a dedicated
+# no-behavior-change LF normalization makes the same range pass without them.
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FormAssistantController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductTypeController.java whitespace=trailing-space,cr-at-eol
+
+# These three files still store CRLF blobs. Keep real trailing-space checks
+# strict while treating CR as EOL; remove these exact rules after a dedicated
+# no-behavior-change LF normalization makes the same daily range pass.
+backend/java/cretas-api/src/main/java/com/cretas/aims/controller/MaterialBatchController.java whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/types/navigation.ts whitespace=trailing-space,cr-at-eol
+
+# These 2026-08-15 audit paths still store CRLF blobs. Keep real trailing
+# spaces visible while treating CR as EOL syntax; delete each exact rule after
+# that file is deliberately normalized to LF in a no-behavior-change commit.
+backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/restaurant/gold/GoldBackedRestaurantTool.java whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/context_bleed.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/daily_close.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/follow_up_actions.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/generic_executor.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/metric_registry.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/provenance.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/gold/restaurant/restaurant_ops_router.py whitespace=trailing-space,cr-at-eol
+backend/python/smartbi/scripts/seed_mock_rest_coverage_gap.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/test_context_bleed.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/test_grouped_margin_allocation.py whitespace=trailing-space,cr-at-eol
+backend/python/tests/test_margin_parity.py whitespace=trailing-space,cr-at-eol
+docs/decisions/2026-08-15-成本卡录入设计卡.md whitespace=trailing-space,cr-at-eol
+web-admin/capture-new-features.spec.ts whitespace=trailing-space,cr-at-eol
+
+# These 2026-08-18 audit paths still store CRLF blobs. Keep real trailing
+# spaces visible while treating CR as EOL syntax; delete each exact rule after
+# that file is deliberately normalized to LF in a no-behavior-change commit.
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/ProcessWorkReportingService.java whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/__tests__/integration/screens/ProcessTaskListScreen.test.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessTaskListScreen.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessTaskDetailScreen.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/services/api/materialBatchApiClient.ts whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessTaskHistoryScreen.tsx whitespace=trailing-space,cr-at-eol
+frontend/CretasFoodTrace/src/screens/processing/ProcessRunOverviewScreen.tsx whitespace=trailing-space,cr-at-eol

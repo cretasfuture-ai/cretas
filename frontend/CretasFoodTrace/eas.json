@@ -1,0 +1,47 @@
+{
+  "cli": {
+    "version": ">= 5.9.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "development",
+      "android": {
+        "gradleCommand": ":app:assembleDebug"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "staging",
+      "env": {
+        "ENVFILE": ".env.test"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "channel": "production",
+      "env": {
+        "ENVFILE": ".env.production"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    }
+  },
+  "update": {
+    "production": {
+      "channel": "production"
+    },
+    "staging": {
+      "channel": "staging"
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
+
+

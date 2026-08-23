@@ -1,0 +1,142 @@
+package com.cretas.aims.entity.inventory;
+
+import com.cretas.aims.entity.BaseEntity;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.security.PriceSensitive;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import lombok.*;
+
+import jakarta.persistence.*;
+import java.math.BigDecimal;
+import org.hibernate.annotations.Where;
+
+/**
+ * 采购入库行项目
+ * 每行对应一种原料/食材的实际入库明细
+ * 入库确认后关联到创建的 MaterialBatch
+ *
+ * @author Cretas Team
+ * @since 2026-02-19
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@ToString(exclude = {"receiveRecord", "materialType", "materialBatch"})
+@AllArgsConstructor
+@NoArgsConstructor
+@Entity
+@Table(name = "purchase_receive_items",
+        indexes = {
+                @Index(name = "idx_pri_record", columnList = "receive_record_id"),
+                @Index(name = "idx_pri_order_item", columnList = "purchase_order_item_id"),
+                @Index(name = "idx_pri_material", columnList = "material_type_id"),
+                @Index(name = "idx_pri_batch", columnList = "material_batch_id")
+        }
+)
+@Where(clause = "deleted_at IS NULL")
+public class PurchaseReceiveItem extends BaseEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "receive_record_id", nullable = false, length = 191)
+    private String receiveRecordId;
+
+    /** Stable PO line identity. Historical rows can be null. */
+    @Column(name = "purchase_order_item_id")
+    private Long purchaseOrderItemId;
+
+    /** Material-master packaging identity selected at receipt time. */
+    @Column(name = "material_packaging_spec_id", length = 36)
+    private String materialPackagingSpecId;
+
+    @Column(name = "material_type_id", nullable = false, length = 191)
+    private String materialTypeId;
+
+    /** 原料/食材名称（冗余） */
+    @Column(name = "material_name", length = 200)
+    private String materialName;
+
+    /** 实际到货数量 */
+    @Column(name = "received_quantity", nullable = false, precision = 15, scale = 4)
+    private BigDecimal receivedQuantity;
+
+    @Column(name = "unit", nullable = false, length = 20)
+    private String unit;
+
+    /** Immutable receipt-package to inventory-base conversion snapshots. */
+    @Column(name = "receive_package_unit_snapshot", length = 20)
+    private String receivePackageUnitSnapshot;
+
+    @Column(name = "inventory_base_unit_snapshot", length = 20)
+    private String inventoryBaseUnitSnapshot;
+
+    @Column(name = "package_to_base_factor_snapshot", precision = 24, scale = 12)
+    private BigDecimal packageToBaseFactorSnapshot;
+
+    @Column(name = "inventory_quantity_snapshot", precision = 24, scale = 12)
+    private BigDecimal inventoryQuantitySnapshot;
+
+    /** Canonical denominator of unitPrice. Receipt prices are normalized to {@link #unit}. */
+    @Column(name = "price_unit", nullable = false, length = 20)
+    private String priceUnit;
+
+    @PriceSensitive
+    @Column(name = "unit_price", precision = 15, scale = 4)
+    private BigDecimal unitPrice;
+
+    /** 入库后创建的 MaterialBatch ID */
+    @Column(name = "material_batch_id", length = 191)
+    private String materialBatchId;
+
+    /** 质检结果 */
+    @Column(name = "qc_result", length = 32)
+    private String qcResult;
+
+    @Column(name = "factory_number", length = 100)
+    private String factoryNumber;
+
+    @Column(name = "origin_place", length = 200)
+    private String originPlace;
+
+    /**
+     * 合同号 —— <b>行级</b>, 不是订单级。
+     *
+     * <p>客户实测: 同一张 PO 下 08-02 那批是 SAN-16572、08-04 那批是 SAN-16562,
+     * {@code purchase_orders.contract_number} 装不下 (V20261029_61)。</p>
+     */
+    @Column(name = "contract_number", length = 100)
+    private String contractNumber;
+
+    /**
+     * 供应商/客户给的批次号 —— 与系统生成的 {@code material_batches.batch_number}
+     * 是两件事, 不可互相占用。
+     */
+    @Column(name = "supplier_batch_number", length = 100)
+    private String supplierBatchNumber;
+
+    /** 件数(件/箱) —— 与重量并存: 抄码来料件数固定而重量不定。 */
+    @Column(name = "box_count")
+    private Integer boxCount;
+
+    @Column(name = "remark", length = 500)
+    private String remark;
+
+    // ==================== 关联 ====================
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "receive_record_id", referencedColumnName = "id", insertable = false, updatable = false)
+    private PurchaseReceiveRecord receiveRecord;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "material_type_id", referencedColumnName = "id", insertable = false, updatable = false)
+    private RawMaterialType materialType;
+
+    @JsonIgnore
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "material_batch_id", referencedColumnName = "id", insertable = false, updatable = false)
+    private MaterialBatch materialBatch;
+}

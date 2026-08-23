@@ -1,0 +1,69 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath('com.android.tools.build:gradle')
+    classpath('com.facebook.react:react-native-gradle-plugin')
+    classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+  }
+}
+
+def reactNativeAndroidDir = new File(
+  providers.exec {
+    workingDir(rootDir)
+    commandLine("node", "--print", "require.resolve('react-native/package.json')")
+  }.standardOutput.asText.get().trim(),
+  "../android"
+)
+
+allprojects {
+  repositories {
+    maven {
+      // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+      url(reactNativeAndroidDir)
+    }
+
+    google()
+    mavenCentral()
+    maven { url 'https://www.jitpack.io' }
+  }
+}
+
+// CMake path workaround for Windows MAX_PATH (react-native-reanimated)
+subprojects { subproject ->
+    def applyCmakeWorkaround = {
+        def androidExt = subproject.extensions.findByName('android')
+        if (androidExt != null) {
+            try {
+                if (androidExt.externalNativeBuild?.cmake?.path != null) {
+                    androidExt.externalNativeBuild.cmake.buildStagingDirectory = file("C:/b/${subproject.name}")
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+    try { subproject.afterEvaluate { applyCmakeWorkaround() } }
+    catch (Exception e) { applyCmakeWorkaround() }
+}
+
+apply plugin: "expo-root-project"
+apply plugin: "com.facebook.react.rootproject"
+
+// CMake path length workaround (Windows MAX_PATH)
+subprojects { subproject ->
+    def applyCmakeWorkaround = {
+        def androidExt = subproject.extensions.findByName('android')
+        if (androidExt != null) {
+            try {
+                if (androidExt.externalNativeBuild?.cmake?.path != null) {
+                    androidExt.externalNativeBuild.cmake.buildStagingDirectory = file("C:/b/${subproject.name}")
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+    try { subproject.afterEvaluate { applyCmakeWorkaround() } }
+    catch (Exception e) { applyCmakeWorkaround() }
+}

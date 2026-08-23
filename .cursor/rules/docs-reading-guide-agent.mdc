@@ -1,0 +1,196 @@
+---
+description: 开始新的开发任务时 - 进行架构相关工作时 - 需要了解项目规范和标准时 - 进行API开发或集成时 - 组件开发和设计时
+globs: 
+alwaysApply: false
+---
+
+# docs目录阅读指导规则
+
+## 使用场景
+- 开始新的开发任务时
+- 进行架构相关工作时
+- 需要了解项目规范和标准时
+- 进行API开发或集成时
+- 组件开发和设计时
+
+## docs目录结构与阅读时机
+
+### 📁 docs/architecture/ - 架构文档
+**何时阅读**：
+- 进行系统架构设计或重构时
+- 新团队成员了解系统设计时
+- 需要理解代码组织原则时
+
+**核心文件**：
+- [docs/architecture/design-principles.md](mdc:docs/architecture/design-principles.md) - **必读**：系统设计原则和组织思想
+- [docs/architecture/overview.md](mdc:docs/architecture/overview.md) - 系统架构概览
+- [docs/architecture/technologies.md](mdc:docs/architecture/technologies.md) - 技术栈说明
+- [DIRECTORY_STRUCTURE.md](mdc:DIRECTORY_STRUCTURE.md) - **权威**：当前目录结构说明
+
+### 📁 docs/api/ - API文档
+**何时阅读**：
+- 进行API开发或修改时
+- 集成第三方服务时
+- 前后端联调时
+- 了解数据接口规范时
+
+**核心文件**：
+- [docs/api/api-specification.md](mdc:docs/api/api-specification.md) - API接口规范权威来源（整合了原overview内容）
+- [docs/api/trace.md](mdc:docs/api/trace.md) - 溯源API文档
+- [docs/api/authentication.md](mdc:docs/api/authentication.md) - 认证API文档
+
+### 📁 docs/components/ - 组件文档
+**何时阅读**：
+- 开发新组件时
+- 使用现有组件时
+- 进行UI/UX相关工作时
+- 建立组件库时
+
+**核心文件**：
+- [docs/components/overview.md](mdc:docs/components/overview.md) - 组件概览
+- [docs/components/common/](mdc:docs/components/common) - 通用组件文档
+- [docs/components/modules/](mdc:docs/components/modules) - 业务组件文档
+
+### 📁 docs/guides/ - 开发指南
+**何时阅读**：
+- 新团队成员入门时
+- 需要了解开发流程时
+- 遇到开发问题时
+
+**核心文件**：
+- [docs/guides/getting-started.md](mdc:docs/guides/getting-started.md) - **新人必读**：快速开始指南
+
+### 📁 docs/project-management/ - 项目管理文档
+**何时阅读**：
+- 进行项目规划时
+- 了解项目演进方向时
+- 制定技术决策时
+- 进行长期规划时
+
+**核心文件**：
+- [docs/project-management/evolution-roadmap.md](mdc:docs/project-management/evolution-roadmap.md) - 项目演进路线图
+
+### 📁 docs/prd/ - 产品需求文档
+**何时阅读**：
+- 开发新功能时
+- 了解业务需求时
+- 进行产品设计时
+
+### 📁 docs/archive/ - 归档文档
+**何时阅读**：
+- 了解历史决策时
+- 查找过时但有参考价值的信息时
+
+## 阅读优先级指导
+
+### 🔴 高优先级（必读）
+**新团队成员**：
+1. [docs/guides/getting-started.md](mdc:docs/guides/getting-started.md)
+2. [docs/architecture/design-principles.md](mdc:docs/architecture/design-principles.md)
+3. [DIRECTORY_STRUCTURE.md](mdc:DIRECTORY_STRUCTURE.md)
+
+**架构相关工作**：
+1. [docs/architecture/design-principles.md](mdc:docs/architecture/design-principles.md)
+2. [docs/architecture/overview.md](mdc:docs/architecture/overview.md)
+3. [docs/project-management/evolution-roadmap.md](mdc:docs/project-management/evolution-roadmap.md)
+
+**API开发**：
+1. [docs/api/api-specification.md](mdc:docs/api/api-specification.md) - API接口规范权威来源
+2. 相关业务API文档（trace.md、authentication.md等）
+
+### 🟡 中优先级（按需阅读）
+**组件开发**：
+- [docs/components/overview.md](mdc:docs/components/overview.md)
+- 相关组件类型文档
+
+**产品功能开发**：
+- 相关PRD文档
+- 相关API文档
+
+### 🟢 低优先级（参考性阅读）
+**历史了解**：
+- [docs/archive/](mdc:docs/archive) 下的归档文档
+
+## 工作流程中的docs阅读检查清单
+
+### 开始新任务前
+- [ ] 确认任务类型（架构/API/组件/功能开发）
+- [ ] 根据任务类型查看对应的高优先级docs文件
+- [ ] 检查是否有相关的PRD或API文档需要阅读
+
+### 架构相关工作
+- [ ] 必读：[docs/architecture/design-principles.md](mdc:docs/architecture/design-principles.md)
+- [ ] 参考：[docs/architecture/overview.md](mdc:docs/architecture/overview.md)
+- [ ] 了解：[docs/project-management/evolution-roadmap.md](mdc:docs/project-management/evolution-roadmap.md)
+
+### API开发工作
+- [ ] 必读：[docs/api/api-specification.md](mdc:docs/api/api-specification.md) - API接口规范权威来源
+- [ ] 查看：相关业务API文档
+- [ ] 确认：认证和权限要求
+
+### 组件开发工作
+- [ ] 参考：[docs/components/overview.md](mdc:docs/components/overview.md)
+- [ ] 查看：相关组件类型文档
+- [ ] 确认：设计系统规范
+
+## 文档更新责任
+
+### 开发者责任
+- 修改架构时更新architecture文档
+- 新增API时更新api文档
+- 开发组件时更新components文档
+
+### 项目管理责任
+- 定期更新project-management文档
+- 维护guides文档的时效性
+- 管理archive文档的归档
+
+## 示例
+
+<example>
+  **正确的docs阅读流程**：
+  
+  **场景：开发新的溯源API**
+  1. 阅读 [docs/api/api-specification.md](mdc:docs/api/api-specification.md) 了解完整API规范（权威来源）
+  2. 查看 [docs/api/trace.md](mdc:docs/api/trace.md) 了解现有溯源API
+  3. 参考 [docs/architecture/design-principles.md](mdc:docs/architecture/design-principles.md) 确保符合架构原则
+  4. 开发完成后更新相关API文档
+  
+  **场景：新团队成员入门**
+  1. 首先阅读 [docs/guides/getting-started.md](mdc:docs/guides/getting-started.md)
+  2. 了解 [docs/architecture/design-principles.md](mdc:docs/architecture/design-principles.md)
+  3. 查看 [DIRECTORY_STRUCTURE.md](mdc:DIRECTORY_STRUCTURE.md) 了解项目结构
+  4. 根据分配任务阅读相关专业文档
+</example>
+
+<example type="invalid">
+  **错误的docs使用方式**：
+  1. 开始开发工作前不查看任何docs文档
+  2. 进行架构修改但不参考design-principles.md
+  3. 开发API但不了解现有API规范
+  4. 修改代码后不更新相关文档
+  5. 只阅读代码不阅读文档就开始工作
+</example>
+
+## 文档维护规则
+
+### 创建新docs文件时
+- 确定文件应该放在哪个子目录
+- 在本规则文件中添加相应的阅读指导
+- 更新相关的overview文档
+
+### 删除或移动docs文件时
+- 更新本规则文件中的引用
+- 检查其他文档中的链接
+- 在changelog中记录变更
+
+---
+
+**规则类型**: docs阅读指导  
+**适用范围**: 所有开发和项目管理活动  
+**维护频率**: docs目录结构变更时更新  
+**最后更新**: 2025-05-22
+
+
+
+

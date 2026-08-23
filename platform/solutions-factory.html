@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fdfcfa">
+<title>食品工厂 · 白垩纪 Cretas</title>
+<meta name="description" content="没有固定产线也管得住的食品工厂运营中枢：收货、生产、质检、出库、开票，每一步 AI 都在场。仓管零培训、车间装上 AI 的眼睛、全链路批次溯源、复杂 BOM 分层管清。">
+<link rel="canonical" href="https://cretaceousfuture.com/solutions-factory/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="食品工厂 · 白垩纪 Cretas，从一块原料，到一张发票">
+<meta name="twitter:description" content="没有固定产线也管得住，收货、生产、质检、出库、开票，每一步 AI 都在场。车间装上 AI 的眼睛，仓管零培训上手。">
+<meta name="twitter:image" content="https://cretaceousfuture.com/assets/img/og-card.jpg">
+<meta name="keywords" content="食品工厂,非标生产,工序追溯,人效识别,视觉AI,批次溯源,BOM管理,防呆易用,冷链监控">
+<meta property="og:type" content="website">
+<meta property="og:title" content="食品工厂 · 白垩纪 Cretas，从一块原料，到一张发票">
+<meta property="og:description" content="没有固定产线也管得住，收货、生产、质检、出库、开票，每一步 AI 都在场。车间装上 AI 的眼睛，仓管零培训上手。">
+<meta property="og:image" content="https://cretaceousfuture.com/assets/img/og-card.jpg">
+<meta property="og:url" content="https://cretaceousfuture.com/solutions-factory/">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Crect x='1' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='1' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='1' y='8.5' width='5.5' height='5.5' rx='1.5' fill='%23111'/%3E%3Crect x='8.5' y='8.5' width='5.5' height='5.5' rx='2.75' fill='%2300b377'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/v6.css?v=20260805f">
+<script>document.documentElement.classList.add('v6-js')</script>
+<style>
+/* Reveal must never gate content: without JS (or if the observer never fires)
+   everything stays fully visible; JS opt-in re-enables the hidden→fade entrance. */
+html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
+/* ---- page-level composition (colors/radii/fonts come from v6.css vars) ---- */
+.v6-nav a:hover{color:var(--v6-ink)}
+.v6-nav .nav-links{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+
+/* HERO ------------------------------------------------------------------- */
+.hero-wrap{position:relative}
+.hero-wrap .v6-glow{top:20px;height:420px}
+.v6-hero{height:min(76vh,620px)}
+.v6-hero-mask img{object-position:center 42%}
+.hero-copy{position:absolute;left:clamp(24px,5.5vw,80px);top:50%;transform:translateY(-50%);
+  max-width:min(50%,580px);z-index:2}
+.hero-copy h1{font-size:clamp(34px,5.6vw,64px);font-weight:900;color:#fff;line-height:1.18;
+  letter-spacing:-0.02em;margin:0 0 20px;text-shadow:0 2px 26px rgba(0,0,0,.32);text-wrap:balance}
+.hero-copy p{font-size:clamp(15px,1.55vw,19px);color:rgba(255,255,255,.92);line-height:1.85;
+  margin:0 0 28px;max-width:40ch;text-wrap:pretty}
+.hero-cta{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.hero-cta .v6-link{color:#fff;font-weight:600;font-size:15px;text-decoration:none;opacity:.94}
+.hero-cta .v6-link:hover{opacity:1}
+.ai-box-1{right:9%;top:15%;width:clamp(150px,17vw,230px);height:46%}
+.ai-box-2{right:30%;top:56%;width:clamp(110px,11vw,150px);height:22%}
+.ai-box-1 .v6-ai-tag{top:-16px;left:0}
+.ai-box-2 .v6-ai-tag{bottom:-16px;left:0}
+.v6-live-bar #liveTicker{transition:opacity .26s ease}
+
+/* section rhythm --------------------------------------------------------- */
+.mod{max-width:1200px;margin:0 auto;padding:clamp(52px,7.5vw,112px) clamp(16px,4vw,48px)}
+.mod-tint{background:linear-gradient(180deg,rgba(0,135,92,.045),rgba(0,135,92,.02))}
+.mod-split{display:grid;grid-template-columns:1fr 1fr;gap:clamp(30px,5vw,76px);align-items:center}
+.mod-split.rev .mod-visual{order:-1}
+.mod h2{font-size:clamp(27px,3.5vw,44px);font-weight:900;letter-spacing:-0.025em;line-height:1.16;
+  margin:0 0 20px;text-wrap:balance}
+.mod-copy>p{font-size:clamp(15px,1.5vw,17.5px);color:var(--v6-ink-2);line-height:1.85;margin:0 0 6px;max-width:56ch;text-wrap:pretty}
+.pain{font-size:clamp(19px,2.3vw,27px);font-weight:800;line-height:1.5;color:#2a2622;
+  letter-spacing:-0.01em;margin:0 0 22px;text-wrap:balance}
+.pain b{color:var(--v6-cta-ink)}
+
+/* feature points (no cards) */
+.pts{list-style:none;margin:24px 0 0;padding:0;display:flex;flex-direction:column;gap:14px}
+.pts li{display:flex;gap:13px;align-items:flex-start;font-size:clamp(14.5px,1.5vw,16px);color:var(--v6-ink);line-height:1.55}
+.pts li .dot{flex:0 0 auto;width:20px;height:20px;margin-top:1px;border-radius:99px;
+  background:rgba(0,179,119,.12);color:var(--v6-cta-ink);display:grid;place-items:center;font-size:11px;font-weight:900}
+.pts li b{font-weight:800}
+.pts li small{display:block;color:var(--v6-ink-2);font-weight:400;font-size:13.5px;margin-top:3px;line-height:1.6}
+
+/* green AI annotation readout */
+.ai-note{display:flex;gap:11px;align-items:center;margin-top:26px;font-family:var(--v6-mono);
+  font-size:clamp(11.5px,1.2vw,13.5px);color:var(--v6-cta-ink);background:rgba(0,179,119,.07);
+  border:1px solid rgba(0,179,119,.24);padding:11px 17px;border-radius:12px;max-width:max-content}
+.ai-note .eye{flex:0 0 auto;width:9px;height:9px;border-radius:99px;background:var(--v6-cta);
+  box-shadow:0 0 0 4px rgba(0,179,119,.16)}
+.ai-note em{font-style:normal;color:var(--v6-ink);font-weight:700}
+.ai-note .mut{color:#6d6862}
+
+/* phone frame (module 1) */
+.phone{width:clamp(230px,25vw,286px);margin:0 auto;border-radius:38px;padding:11px;
+  background:linear-gradient(160deg,#1c1a17,#0c0b0a);box-shadow:0 30px 60px -22px rgba(40,26,14,.5)}
+.phone .screen{position:relative;border-radius:28px;overflow:hidden;background:#fff}
+.phone .screen img{width:100%;display:block}
+.phone .notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:78px;height:6px;
+  border-radius:99px;background:rgba(255,255,255,.5);z-index:2}
+
+/* wide product shot (module 2) uses .v6-shot from v6.css */
+.mod-visual .v6-shot img{width:100%;display:block}
+
+/* MODULE 3，视觉 AI 之眼 (dark climax) --------------------------------- */
+.eye{position:relative;background:linear-gradient(165deg,#0b1310 0%,#081a12 55%,#0a1410 100%);
+  color:#eafff5;overflow:hidden;margin-top:clamp(20px,3vw,40px)}
+.eye::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 60% 50% at 78% 24%,rgba(0,226,138,.16),transparent 60%)}
+.eye-inner{position:relative;max-width:1320px;margin:0 auto;padding:clamp(60px,8vw,128px) clamp(16px,4vw,48px);z-index:1}
+.eye-badge{display:inline-flex;gap:9px;align-items:center;font-family:var(--v6-mono);font-size:12px;
+  letter-spacing:.14em;color:var(--v6-tag);margin-bottom:20px}
+.eye-badge .rec{width:8px;height:8px;border-radius:99px;background:var(--v6-tag);box-shadow:0 0 0 5px rgba(0,226,138,.18);animation:eyePulse 2.4s ease-in-out infinite}
+.eye h2{font-size:clamp(30px,4.4vw,56px);font-weight:900;letter-spacing:-0.03em;line-height:1.1;
+  margin:0 0 18px;color:#fff;text-wrap:balance}
+.eye .pain-d{font-size:clamp(19px,2.4vw,28px);font-weight:800;color:#bff3dd;line-height:1.45;margin:0 0 16px;letter-spacing:-0.01em}
+.eye .eye-lead{font-size:clamp(15px,1.6vw,18px);color:rgba(224,255,242,.78);line-height:1.85;max-width:60ch;margin:0}
+.eye-stage{display:grid;grid-template-columns:1.35fr 1fr;gap:clamp(22px,3vw,40px);align-items:stretch;margin-top:clamp(34px,4.5vw,58px)}
+
+/* camera feed */
+.feed{position:relative;border-radius:16px;overflow:hidden;
+  border:1px solid rgba(0,226,138,.32);min-height:340px}
+.feed img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.feed .grade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(6,18,12,.34) 0%,rgba(6,18,12,.12) 40%,rgba(6,18,12,.72) 100%)}
+.feed .cam-top{position:absolute;top:12px;left:14px;right:14px;display:flex;justify-content:space-between;
+  align-items:center;font-family:var(--v6-mono);font-size:11px;color:#d6ffee;z-index:3}
+.feed .cam-top .live{display:flex;align-items:center;gap:7px;color:var(--v6-tag);font-weight:700}
+.feed .cam-top .live i{width:7px;height:7px;border-radius:99px;background:var(--v6-tag);animation:eyePulse 2.4s ease-in-out infinite}
+.det{position:absolute;border:1px solid rgba(0,226,138,.25);border-radius:6px;
+  background:
+    linear-gradient(#00e28a,#00e28a) left 0 top 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) left 0 top 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) right 0 top 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) right 0 top 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) left 0 bottom 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) left 0 bottom 0/2px 12px,
+    linear-gradient(#00e28a,#00e28a) right 0 bottom 0/12px 2px,
+    linear-gradient(#00e28a,#00e28a) right 0 bottom 0/2px 12px;
+  background-repeat:no-repeat;box-shadow:0 0 14px rgba(0,226,138,.12);z-index:2}
+.det span{position:absolute;top:-15px;left:-1px;background:var(--v6-tag);color:#04140d;font-family:var(--v6-mono);
+  font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:99px;white-space:nowrap}
+.det.d1{left:36%;top:5%;width:26%;height:58%}
+.det.d2{left:8%;top:62%;width:28%;height:30%}
+.det.d2 span{background:rgba(4,20,13,.72);color:var(--v6-tag);backdrop-filter:blur(4px)}
+.feed .scan{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(0,226,138,.85),transparent);
+  z-index:2;animation:scanY 4.6s cubic-bezier(.6,.02,.4,.98) infinite}
+.feed .readout{position:absolute;left:0;right:0;bottom:0;padding:12px 16px;z-index:3;display:flex;
+  flex-wrap:wrap;gap:14px 20px;font-family:var(--v6-mono);font-size:11.5px;color:#c8f5e3;
+  background:linear-gradient(180deg,transparent,rgba(4,14,9,.7))}
+.feed .readout b{color:#fff}
+
+/* headline capability: 人效识别 */
+.eye-hero-cap{display:flex;flex-direction:column;justify-content:center;background:rgba(0,226,138,.05);border:1px solid rgba(0,226,138,.24);border-radius:16px;
+  padding:clamp(20px,2.4vw,30px);display:flex;flex-direction:column}
+.eye-hero-cap .t{font-size:clamp(19px,2vw,24px);font-weight:900;color:#fff;letter-spacing:-0.01em;margin-bottom:8px}
+.eye-hero-cap .d{font-size:14px;color:rgba(224,255,242,.72);line-height:1.7;margin:0 0 18px}
+.metrics{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto}
+.metrics span{font-family:var(--v6-mono);font-size:12px;color:#d6ffee;background:rgba(0,226,138,.09);
+  border:1px solid rgba(0,226,138,.2);border-radius:8px;padding:6px 11px}
+
+/* three supporting capabilities */
+.caps{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,1.8vw,20px);margin-top:clamp(18px,2.2vw,26px)}
+.cap{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);border-radius:14px;
+  padding:clamp(18px,2vw,26px)}
+.cap .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;margin-bottom:14px;
+  background:rgba(0,226,138,.12);color:var(--v6-tag)}
+.cap h3{font-size:clamp(16px,1.7vw,19px);font-weight:800;color:#fff;margin:0 0 7px;letter-spacing:-0.01em}
+.cap p{font-size:13.5px;color:rgba(224,255,242,.7);line-height:1.7;margin:0}
+
+/* MODULE 4，traceability (big type) ------------------------------------ */
+.trace-head{max-width:640px}
+.trace-chain{display:flex;align-items:stretch;gap:0;margin-top:clamp(34px,4.5vw,54px);flex-wrap:wrap}
+.tnode{flex:1 1 0;min-width:132px;padding:20px 18px;border-top:2px solid rgba(0,179,119,.28);position:relative}
+.tnode .k{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:.06em}
+.tnode .v{font-size:clamp(17px,1.9vw,22px);font-weight:900;color:var(--v6-ink);margin-top:8px;letter-spacing:-0.01em}
+.tnode .s{font-size:13px;color:var(--v6-ink-2);margin-top:5px;line-height:1.5}
+.tnode .pin{position:absolute;top:-7px;left:0;width:12px;height:12px;border-radius:99px;background:var(--v6-cta);box-shadow:0 0 0 4px rgba(0,179,119,.14)}
+.trace-scan{margin-top:30px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+  padding:18px 22px;border-radius:14px;background:#0c1210;color:#eafff5}
+.trace-scan .qr{flex:0 0 auto;width:48px;height:48px;border-radius:10px;background:#fff;display:grid;place-items:center}
+.trace-scan .qr svg{display:block}
+.trace-scan .tx b{color:#fff;font-weight:800;font-size:15.5px}
+.trace-scan .tx p{margin:4px 0 0;font-size:13.5px;color:rgba(224,255,242,.72);line-height:1.6}
+
+/* MODULE 5，BOM ledger --------------------------------------------------- */
+.bom{border-radius:16px;background:#fff;overflow:hidden;
+  box-shadow:0 22px 50px -30px rgba(80,60,30,.4)}
+.bom .bom-h{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;
+  border-bottom:1px solid rgba(0,0,0,.06);font-weight:800;font-size:15px}
+.bom .bom-h .y{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);font-weight:700}
+.bom-row{display:flex;align-items:center;gap:14px;padding:13px 22px;font-size:14.5px}
+.bom-row+.bom-row{border-top:1px solid rgba(0,0,0,.05)}
+.bom-row .lv{font-family:var(--v6-mono);font-size:11px;color:#6d6862;width:42px;flex:0 0 auto}
+.bom-row .nm{flex:1;color:var(--v6-ink)}
+.bom-row .qt{font-weight:800;color:var(--v6-ink);font-variant-numeric:tabular-nums}
+.bom-row.warn{background:rgba(214,120,20,.06)}
+.bom-row.warn .qt{color:var(--v6-warn-ink)}
+
+/* MODULE 6，quality inspection flow (process chain, node + connector) --- */
+.qchain{position:relative;margin-top:clamp(38px,5vw,64px);display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(18px,3vw,44px)}
+.qchain::before{content:"";position:absolute;top:32px;left:16%;right:16%;height:2px;z-index:0;
+  background:linear-gradient(90deg,rgba(0,179,119,.12),rgba(0,179,119,.42),rgba(0,179,119,.12))}
+.qstage{position:relative;z-index:1;text-align:center;padding:0 8px}
+.qstage .node{width:66px;height:66px;border-radius:99px;margin:0 auto 20px;display:grid;place-items:center;
+  color:#fff;background:var(--v6-cta);box-shadow:0 10px 22px rgba(0,179,119,.24)}
+.qstage .step{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:.08em}
+.qstage h3{font-size:clamp(17px,1.9vw,21px);font-weight:800;margin:9px 0 9px;letter-spacing:-0.01em}
+.qstage p{font-size:14px;color:var(--v6-ink-2);line-height:1.7;margin:0 auto;max-width:30ch}
+
+/* MODULE 7，pipeline (deep band) ---------------------------------------- */
+.pipe{background:linear-gradient(165deg,#0a0f0d,#08130d);color:#eafff5;overflow:hidden;position:relative}
+.pipe-inner{max-width:1200px;margin:0 auto;padding:clamp(56px,7.5vw,116px) clamp(16px,4vw,48px)}
+.pipe h2{color:#fff;font-size:clamp(27px,3.5vw,44px);font-weight:900;letter-spacing:-0.025em;margin:0 0 18px;line-height:1.16;text-wrap:balance}
+.pipe>.pipe-inner>p{font-size:clamp(15px,1.6vw,17.5px);color:rgba(224,255,242,.76);line-height:1.8;max-width:58ch;margin:0}
+.rail{list-style:none;margin:clamp(34px,4.5vw,54px) 0 0;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:16px;counter-reset:r}
+.rail li{position:relative;padding:22px 20px;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(0,226,138,.16)}
+.rail li .k{font-family:var(--v6-mono);font-size:12px;color:var(--v6-tag)}
+.rail li .v{font-size:clamp(16px,1.8vw,19px);font-weight:800;color:#fff;margin-top:8px;letter-spacing:-0.01em}
+.rail li .s{font-size:13px;color:rgba(224,255,242,.66);margin-top:6px;line-height:1.55}
+.rail li:not(:last-child)::after{content:"→";position:absolute;right:-13px;top:50%;transform:translateY(-50%);
+  color:rgba(0,226,138,.6);font-size:16px;z-index:2}
+.pipe-note{margin-top:26px;display:inline-flex;gap:10px;align-items:center;font-family:var(--v6-mono);
+  font-size:13px;color:#c8f5e3;background:rgba(0,226,138,.07);border:1px solid rgba(0,226,138,.2);padding:11px 18px;border-radius:12px}
+
+
+/* 案例段: 客户教我们的（引用叙事体） */
+.lesson{max-width:1000px;margin:0 auto;padding:clamp(48px,7vw,104px) clamp(16px,4vw,48px)}
+.lesson .kicker{font-family:var(--v6-mono);font-size:12px;color:var(--v6-cta-ink);letter-spacing:2px;margin-bottom:18px}
+.lesson blockquote{margin:0 0 18px;font-size:clamp(20px,2.8vw,32px);font-weight:900;line-height:1.6;
+  letter-spacing:-0.01em;text-wrap:balance;position:relative;padding-left:clamp(18px,3vw,34px)}
+.lesson blockquote::before{content:'\201C';position:absolute;left:-6px;top:-12px;font-size:2.2em;color:rgba(0,179,119,.35);font-weight:900}
+.lesson cite{display:block;font-style:normal;font-size:13.5px;color:#6d6862;margin-bottom:26px;padding-left:clamp(18px,3vw,34px)}
+.lesson .story{font-size:clamp(14px,1.5vw,16.5px);color:var(--v6-ink-2);line-height:1.95;max-width:62ch;margin:0 0 14px}
+.lesson .story b{color:var(--v6-ink)}
+.lesson .result{display:inline-flex;gap:10px;align-items:baseline;margin-top:10px;font-size:clamp(14px,1.5vw,16.5px);
+  font-weight:800;color:var(--v6-cta-ink);background:rgba(0,179,119,.08);padding:10px 20px;border-radius:99px}
+.lesson + .lesson{padding-top:0}
+
+
+/* lesson 双栏: 左叙事右证据拟物 */
+.lesson{display:grid;grid-template-columns:1.1fr .9fr;gap:clamp(28px,4.5vw,72px);align-items:center}
+.lesson .lvis{justify-self:center;width:100%;max-width:420px}
+/* 收货确认拟物卡 */
+.rcvcard{background:#fff;border-radius:16px;box-shadow:0 24px 56px -28px rgba(40,40,40,.32);padding:clamp(18px,2vw,26px)}
+.rcvcard .ph{font-family:var(--v6-mono);font-size:11px;color:var(--v6-ink-3);letter-spacing:1.2px;margin-bottom:14px}
+.rcvcard .big{font-size:clamp(24px,2.6vw,32px);font-weight:900;letter-spacing:-0.01em;line-height:1.35}
+.rcvcard .big b{color:var(--v6-cta-ink)}
+.rcvcard .sub{font-size:13px;color:var(--v6-ink-2);margin-top:8px;line-height:1.7}
+.rcvcard .sub b{color:var(--v6-warn-ink)}
+.rcvcard .btns{display:flex;gap:10px;margin-top:18px}
+.rcvcard .ok{flex:1;text-align:center;background:var(--v6-cta);color:#0b1a12;font-size:14px;font-weight:800;padding:12px 0;border-radius:10px}
+.rcvcard .alt{flex:0 0 auto;padding:12px 18px;font-size:13px;color:var(--v6-ink-2);background:rgba(0,0,0,.05);border-radius:10px}
+/* 物料归一拟物 */
+.mergevis{display:flex;flex-direction:column;gap:14px}
+.mergevis .alias{display:flex;flex-wrap:wrap;gap:8px}
+.mergevis .alias span{border:1.5px dashed rgba(180,83,9,.4);color:#8a5a2b;font-size:12px;padding:6px 13px;border-radius:99px;background:#fffdf7}
+.mergevis .down{align-self:center;color:var(--v6-cta-ink)}
+.mergevis .master{background:linear-gradient(160deg,#0d1210,#0a1a13);color:#fff;border-radius:12px;padding:14px 18px;
+  box-shadow:0 18px 40px -20px rgba(10,40,28,.4)}
+.mergevis .master b{color:var(--v6-tag);font-size:15px}
+.mergevis .master small{display:block;font-family:var(--v6-mono);font-size:10.5px;color:rgba(255,255,255,.55);margin-top:5px;letter-spacing:.5px}
+@media (max-width:900px){.lesson{grid-template-columns:1fr}.lesson .lvis{max-width:460px}}
+
+/* 差异化对比条 ----------------------------------------------------------- */
+.versus{max-width:1120px;margin:0 auto;padding:clamp(56px,8vw,120px) clamp(16px,4vw,48px);text-align:center}
+.versus .lead{font-size:clamp(24px,3.6vw,42px);font-weight:900;line-height:1.35;letter-spacing:-0.02em;margin:0 auto 40px;max-width:20ch;text-wrap:balance}
+.versus .lead .q{color:#6d6862;font-weight:700}
+.versus .lead b{color:var(--v6-cta-ink)}
+.versus-pts{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(16px,2.4vw,28px);text-align:left}
+.vpt{padding:26px 24px;border-radius:15px;background:#fff;border:1px solid rgba(0,0,0,.07)}
+.vpt .ck{width:30px;height:30px;border-radius:99px;background:rgba(0,179,119,.12);color:var(--v6-cta-ink);
+  display:grid;place-items:center;font-weight:900;margin-bottom:14px}
+.vpt b{font-size:clamp(16px,1.8vw,19px);font-weight:800;letter-spacing:-0.01em;display:block}
+.vpt p{margin:8px 0 0;font-size:14px;color:var(--v6-ink-2);line-height:1.65}
+
+/* 客户之声 --------------------------------------------------------------- */
+.quote-band{max-width:1200px;margin:0 auto;padding:clamp(44px,7vw,92px) clamp(16px,4vw,48px);
+  display:flex;justify-content:space-between;align-items:flex-end;gap:clamp(24px,4vw,48px);
+  flex-wrap:wrap;border-top:1px solid rgba(0,0,0,.07)}
+.quote-band .v6-quote{max-width:44ch}
+.quote-cta{flex:0 0 auto;color:#0b1a12;font-weight:800;text-decoration:none;font-size:15px;
+  background:var(--v6-cta);padding:13px 28px;border-radius:99px;white-space:nowrap;
+  box-shadow:0 6px 18px rgba(0,179,119,.35);transition:transform .3s ease}
+.quote-cta:hover{transform:translateY(-2px)}
+
+/* footer ----------------------------------------------------------------- */
+.v6-foot{border-top:1px solid rgba(0,0,0,.07);padding:clamp(28px,4vw,44px) clamp(16px,4vw,48px);
+  max-width:1320px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;
+  gap:20px;flex-wrap:wrap;color:#6d6862;font-size:13px}
+.v6-foot a{color:#57534e;text-decoration:none;margin-left:20px}
+.v6-foot a:hover{color:var(--v6-ink)}
+.v6-foot .foot-links{display:flex;flex-wrap:wrap}
+
+/* motion ----------------------------------------------------------------- */
+@keyframes eyePulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes scanY{0%{top:6%}100%{top:92%}}
+html.v6-js .feed .det{animation:v6BoxTrack 8s ease-in-out infinite}
+
+/* responsive ------------------------------------------------------------- */
+@media (max-width:900px){
+  .eye-stage{grid-template-columns:1fr}
+  .caps{grid-template-columns:1fr}
+  .qchain{grid-template-columns:1fr;gap:28px}
+  .qchain::before{display:none}
+  .versus-pts{grid-template-columns:1fr}
+  .rail{grid-template-columns:1fr}
+  .rail li:not(:last-child)::after{content:"↓";right:auto;left:50%;top:auto;bottom:-14px;transform:translateX(-50%)}
+}
+@media (max-width:768px){
+  .v6-nav{flex-direction:column;gap:12px;align-items:flex-start}
+  .v6-nav .nav-links{justify-content:flex-start}
+  .v6-nav a{margin-left:0;margin-right:18px}
+  .v6-hero{height:72vh;min-height:430px}
+  .v6-hero-scrim{background:linear-gradient(175deg,rgba(12,10,8,.28) 0%,rgba(12,10,8,.55) 46%,rgba(12,10,8,.9) 100%)}
+  .hero-copy{left:clamp(20px,6vw,32px);right:clamp(20px,6vw,32px);top:auto;bottom:13%;transform:none;max-width:none}
+  .hero-copy p{max-width:100%}
+  .v6-ai-box{display:none}
+  .mod-split{grid-template-columns:1fr;gap:34px}
+  .mod-split.rev .mod-visual{order:0}
+  .trace-chain{flex-direction:column}
+  .tnode{padding:20px 0 4px}
+  .tnode .pin{top:-7px;left:0}
+  .quote-band{flex-direction:column;align-items:flex-start}
+}
+@media (prefers-reduced-motion: reduce){
+  .eye-badge .rec,.feed .cam-top .live i{animation:none}
+  .feed .scan{display:none}
+  html.v6-js .feed .det{animation:none}
+}
+</style>
+</head>
+<body>
+
+<nav class="v6-nav">
+  <a href="/" style="display:flex;align-items:center;gap:8px;margin:0;text-decoration:none">
+    <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.5" fill="#111"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="2.75" fill="#00b377"/></svg>
+    <b style="color:#111;font-size:17px">白垩纪</b><small style="color:var(--v6-ink-3);letter-spacing:2px;font-size:11px">CRETAS</small>
+  </a>
+  <div class="nav-links">
+    <a class="active" href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a class="v6-btn-ghost" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero-wrap">
+  <div class="v6-glow"></div>
+  <div class="v6-hero">
+    <div class="v6-hero-mask">
+      <picture><source type="image/webp" srcset="/assets/img/warehouse-480.webp 480w, /assets/img/warehouse-768.webp 768w" sizes="(max-width:900px) 100vw, 560px"><img fetchpriority="high" decoding="async" width="800" height="532" alt="食品工厂立体货架仓储，AI 正在逐个库位核对入库批次" src="/assets/img/warehouse.jpg"></picture>
+    </div>
+    <div class="v6-hero-scrim"></div>
+
+    <div class="v6-ai-box ai-box-1">
+      <span class="v6-ai-tag">库位 A-12 · 批次 MB-0721-08 ✓</span>
+    </div>
+    <div class="v6-ai-box ai-box-2" style="border-color:rgba(0,226,138,.55);box-shadow:none">
+      <span class="v6-ai-tag v6-ai-tag--dark">入库核对 · 无差异</span>
+    </div>
+
+    <div class="hero-copy">
+      <h1>从一块原料，到一张发票。</h1>
+      <p>没有固定产线也管得住，收货、生产、质检、出库、开票，每一步 AI 都在场。</p>
+      <div class="hero-cta">
+        <a class="v6-btn" href="mailto:stevenj4xie@gmail.com">预约演示</a>
+        <a class="v6-link" href="/demo.html">看工厂怎么跑通全链路 →</a>
+      </div>
+    </div>
+
+    <div class="v6-live-bar">
+      <span class="v6-live-dot">● LIVE</span>
+      <span id="liveTicker">酱卤车间 · 第 3 道工序进行中</span>
+    </div>
+  </div>
+</section>
+
+<!-- 模块 1 · 收多少，AI 说了算 -->
+<section class="mod">
+  <div class="mod-split">
+    <div class="mod-copy">
+      <p class="pain v6-reveal">“仓管师傅年纪大，你不能指望他记住每张单。”</p>
+      <h2 class="v6-reveal">收多少，AI 说了算</h2>
+      <p class="v6-reveal">收货前，系统先算好这一票能收多少，直接把数字摆在他面前，不用查订单、不用背规则、不怕多收漏收。超过上限，提交按钮直接锁死，错误挡在发生之前。</p>
+      <div class="ai-note v6-reveal">
+        <span class="eye"></span>
+        <span>下单 <em>100</em> · 已收 <em>30</em> · 还可入 <em>70</em> <span class="mut">（含 30% 超收）</span></span>
+      </div>
+    </div>
+    <div class="mod-visual v6-reveal">
+      <div class="phone">
+        <div class="screen">
+          <span class="notch"></span>
+          <picture><source type="image/webp" srcset="/assets/img/shots/receipt-rn-480.webp 480w" sizes="(max-width:900px) 100vw, 1100px"><img loading="lazy" decoding="async" width="720" height="1616" alt="手机端入库详情：带鱼冻品 124.5kg，批次、供应商、存储温度一目了然" src="/assets/img/shots/receipt-rn.png"></picture>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 模块 2 · 报工不用教 -->
+<section class="mod mod-tint">
+  <div class="mod-split rev">
+    <div class="mod-copy">
+      <p class="pain v6-reveal">“换个产品换套工序，老系统就废了。”</p>
+      <h2 class="v6-reveal">报工不用教</h2>
+      <p class="v6-reveal">工序不是写死的产线，是画出来的流程图。产品变了，拖两下就改好；工人在工位刷一下卡就开工，报数按工序走、良率自动算，谁都不用培训。</p>
+      <ul class="pts">
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>可视化工作流编辑器</b><small>拖拽即配工序链，一句话让 AI 生成草稿，改配方不用求 IT。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>多工序良率报工</b><small>按工序维度累积上报，投入产出、良率、损耗自动结算。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>NFC 打卡开工</b><small>工位刷卡即认领工序，谁在做、做了多少，全程留痕。</small></span></li>
+      </ul>
+    </div>
+    <div class="mod-visual v6-reveal">
+      <div class="v6-shot">
+        <picture><source type="image/webp" srcset="/assets/img/shots/workflow-480.webp 480w, /assets/img/shots/workflow-768.webp 768w, /assets/img/shots/workflow-1200.webp 1200w" sizes="(max-width:900px) 100vw, 1100px"><img loading="lazy" decoding="async" width="1280" height="662" alt="产品-工序配置画布：可视化工作流编辑器，右侧 AI 助手辅助生成与校验工序链" src="/assets/img/shots/workflow.png"></picture>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 模块 3 · 车间装上 AI 的眼睛 (视觉 AI 高潮) -->
+<section class="eye">
+  <div class="eye-inner">
+    <div class="eye-badge v6-reveal"><span class="rec"></span>CRETAS VISION · 视觉 AI</div>
+    <h2 class="v6-reveal">车间装上 AI 的眼睛</h2>
+    <p class="pain-d v6-reveal">“你不可能盯着每个摄像头。”</p>
+    <p class="eye-lead v6-reveal">那就让 AI 替你盯。接上现有摄像头，它自己看：谁在干活、干得快不快、有没有违规、有没有异物，不增加一个人，车间 24 小时有双眼睛。</p>
+
+    <div class="eye-stage">
+      <div class="feed v6-reveal">
+        <picture><source type="image/webp" srcset="/assets/img/workshop-480.webp 480w, /assets/img/workshop-768.webp 768w, /assets/img/workshop-1200.webp 1200w" sizes="(max-width:900px) 100vw, 700px"><img decoding="async" width="1440" height="810" alt="卤味加工车间实时画面：穿戴整齐的工人在分装卤味，AI 正在框选识别工序" loading="lazy" src="/assets/img/workshop.jpg"></picture>
+        <div class="grade"></div>
+        <div class="cam-top">
+          <span class="live"><i></i>CAM-03 · 分割工位</span>
+          <span>FPS 25 · AI 在线</span>
+        </div>
+        <div class="det d1"><span>工人 · 装盘工序</span></div>
+        <div class="det d2"><span>出品 ×12 · 已计件</span></div>
+        <div class="scan"></div>
+        <div class="readout">
+          <span>在岗 <b>4</b></span>
+          <span>空闲 <b>1</b></span>
+          <span>当前工序 <b>装盘</b></span>
+          <span>节拍 <b>6.2s/件</b></span>
+          <span>效率评分 <b>92</b></span>
+        </div>
+      </div>
+
+      <div class="eye-hero-cap v6-reveal">
+        <div class="t">人效识别</div>
+        <p class="d">不用工人手动报，AI 从画面里数出来：几个人在岗、谁在干活谁在空、每个动作算一件产量。11 类工序自动识别，一个综合效率评分，车间产能第一次看得见。</p>
+        <div class="metrics">
+          <span>工人数统计</span><span>干活 / 空闲</span><span>动作计件</span><span>11 类工序自动识别</span><span>效率评分</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="caps">
+      <div class="cap v6-reveal">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <h3>穿戴合规检测</h3>
+        <p>帽、口罩、手套没戴齐，AI 当场识别、当场记录，卫生红线不靠人盯。</p>
+      </div>
+      <div class="cap v6-reveal">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
+        <h3>异物检测</h3>
+        <p>产线画面里混入的异物实时抓取报警，食品安全事故提前一步拦下。</p>
+      </div>
+      <div class="cap v6-reveal">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3"/></svg></div>
+        <h3>海康 / 大华即插即用</h3>
+        <p>现有摄像头不用换，接上就能用。不加硬件成本，老设备直接长出 AI。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 模块 4 · 出了事，30 秒追到人 -->
+<section class="mod">
+  <div class="trace-head">
+    <h2 class="v6-reveal">出了事，30 秒追到人</h2>
+    <p class="v6-reveal" style="font-size:clamp(15px,1.5vw,17.5px);color:var(--v6-ink-2);line-height:1.85;margin:0">每一批料从原料到成品全程留痕，谁验收、谁经手、谁签字，正查反查都在。一旦出问题，不用翻纸箱翻记录，一条链，直接追到那一批、那个人。</p>
+  </div>
+  <div class="trace-chain">
+    <div class="tnode v6-reveal"><span class="pin"></span><div class="k">原料</div><div class="v">猪前蹄 · 批次 0517</div><div class="s">供应商、到货温度、验收人留痕</div></div>
+    <div class="tnode v6-reveal"><span class="pin"></span><div class="k">生产</div><div class="v">分割 → 腌制 → 卤制</div><div class="s">每道工序报工，责任组长可查</div></div>
+    <div class="tnode v6-reveal"><span class="pin"></span><div class="k">质检</div><div class="v">CCP 合格 · 98.1%</div><div class="s">拍照留证，不合格自动拦截</div></div>
+    <div class="tnode v6-reveal"><span class="pin"></span><div class="k">成品</div><div class="v">卤猪蹄 · 3184 盒</div><div class="s">生产批次 + 先进先出出库</div></div>
+  </div>
+  <div class="trace-scan v6-reveal">
+    <div class="qr"><svg width="30" height="30" viewBox="0 0 24 24" fill="#111"><path d="M3 3h7v7H3V3zm2 2v3h3V5H5zm9-2h7v7h-7V3zm2 2v3h3V5h-3zM3 14h7v7H3v-7zm2 2v3h3v-3H5zm11-2h2v2h-2v-2zm3 0h2v2h-2v-2zm-3 3h2v2h-2v-2zm3 0h2v2h-2v-2zm-3 3h2v2h-2v-2zm3 0h2v2h-2v-2z"/></svg></div>
+    <div class="tx"><b>消费者扫码，公开溯源</b><p>成品贴上溯源码，顾客扫一扫就能看到这盒货从哪来、怎么做的，信任写在包装上。</p></div>
+  </div>
+</section>
+
+<!-- 模块 5 · 配方是本清楚账 -->
+<section class="mod mod-tint">
+  <div class="mod-split">
+    <div class="mod-copy">
+      <p class="pain v6-reveal">“一个产品几十种料。”</p>
+      <h2 class="v6-reveal">配方是本清楚账</h2>
+      <p class="v6-reveal">原料、辅料、包材分层管理，再多也不糊。配方改一次留一道痕，出成率提前预览，料快过期、库存见底 AI 主动提醒，账清了，成本才算得清。</p>
+      <ul class="pts">
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>BOM 版本 / ECN 审批</b><small>每次配方变更走审批、留版本，改了什么一目了然。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>一句话转 BOM</b><small>把配方说给 AI，自动拆成结构化物料清单，不用一行行敲。</small></span></li>
+        <li class="v6-reveal"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><span><b>FIFO 推荐 + 过期低库存预警</b><small>先进先出自动推荐批次，临期、见底提前预警。</small></span></li>
+      </ul>
+    </div>
+    <div class="mod-visual v6-reveal">
+      <div class="bom">
+        <div class="bom-h"><span>卤猪蹄 200g · 物料清单</span><span class="y">v3 · 出成率 76%</span></div>
+        <div class="bom-row"><span class="lv">原料</span><span class="nm">猪前蹄</span><span class="qt">120 kg</span></div>
+        <div class="bom-row"><span class="lv">辅料</span><span class="nm">卤料包</span><span class="qt">3.2 kg</span></div>
+        <div class="bom-row"><span class="lv">辅料</span><span class="nm">老抽 / 冰糖 / 香辛料</span><span class="qt">+ 38 项</span></div>
+        <div class="bom-row"><span class="lv">包材</span><span class="nm">真空袋 200g</span><span class="qt">3184 只</span></div>
+        <div class="bom-row warn"><span class="lv">预警</span><span class="nm">卤料包 · 库存低于安全线</span><span class="qt">待补</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 模块 6 · 质检长在流程里 -->
+<section class="mod">
+  <div style="max-width:640px">
+    <h2 class="v6-reveal">质检长在流程里</h2>
+    <p class="v6-reveal" style="font-size:clamp(15px,1.5vw,17.5px);color:var(--v6-ink-2);line-height:1.85;margin:0">质检不是事后补一张表，而是卡在工序节点上，该测的测了才能往下走，不合格自动拦截、闭环处置。拍张照、说句话，记录就成了。</p>
+  </div>
+  <div class="qchain">
+    <div class="qstage v6-reveal">
+      <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="2"/></svg></div>
+      <div class="step">检验</div><h3>CCP 关键控制点</h3>
+      <p>温度、时间等关键控制点卡在工序上，漏检直接拦住，不放行。</p>
+    </div>
+    <div class="qstage v6-reveal">
+      <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg></div>
+      <div class="step">记录</div><h3>拍照 + 语音质检</h3>
+      <p>拍张照、说句话就录入，一线工人零门槛，证据自动归档。</p>
+    </div>
+    <div class="qstage v6-reveal">
+      <div class="node"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.6 5.3"/><path d="M20 5v6h-6"/></svg></div>
+      <div class="step">处置闭环</div><h3>不合格自动流转</h3>
+      <p>判不合格自动发起返工 / 报废 / 隔离，处置到底、责任到人。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 模块 7 · 下单到开票，一条线 -->
+<section class="pipe">
+  <div class="pipe-inner">
+    <h2 class="v6-reveal">下单到开票，一条线</h2>
+    <p class="v6-reveal">销售订单一进来，排产、出库、开票自动串起来。生产关联订单，成本抓得住；出库批次分配、开票税率分组、金额联动，财务对得上账。</p>
+    <ol class="rail">
+      <li class="v6-reveal"><div class="k">01</div><div class="v">销售下单</div><div class="s">订单确认，关联客户与交期</div></li>
+      <li class="v6-reveal"><div class="k">02</div><div class="v">排产报工</div><div class="s">生产计划关联订单，成本归集</div></li>
+      <li class="v6-reveal"><div class="k">03</div><div class="v">出库批次分配</div><div class="s">按批次发货，先进先出可追溯</div></li>
+      <li class="v6-reveal"><div class="k">04</div><div class="v">开票回传</div><div class="s">税率分组，金额联动出库</div></li>
+    </ol>
+    <div class="pipe-note v6-reveal"><span class="eye" style="width:9px;height:9px;border-radius:99px;background:var(--v6-tag);box-shadow:0 0 0 4px rgba(0,226,138,.16)"></span>冷链设备监控 · 温度异常实时告警，整条线上的货始终在安全区间</div>
+  </div>
+</section>
+
+<!-- 案例: 客户教我们的 -->
+<section class="lesson">
+  <div class="lcopy">
+  <div class="kicker v6-reveal">真实案例 · 一家卤味工厂的收货台</div>
+  <blockquote class="v6-reveal">做仓管的年纪都比较大，你不能太依赖他们，最好的办法，就是你告诉他要收多少，就行了。</blockquote>
+  <cite class="v6-reveal">— 某卤味工厂创始人，第一次见面就给我们上了一课</cite>
+  <p class="story v6-reveal">我们回去把收货页面改到只剩一句话：<b>今天收猪前腿 300kg。</b>供应商是谁、超收上限多少、差多少要打差异单，全部系统兜底，老师傅只管核对眼前这批货。</p>
+  <p class="story v6-reveal">这就是后来「防呆设计」成为 Cretas 铁律的起点：<b>不是用户错了报错，而是让用户没机会错。</b></p>
+  <span class="result v6-reveal">收货差错单：月均 17 张 → 2 张</span>
+  </div>
+  <div class="lvis v6-reveal">
+    <div class="rcvcard">
+      <div class="ph">仓管端 · 今日收货</div>
+      <div class="big">收 <b>猪前腿 300kg</b></div>
+      <p class="sub">供应商 A · 已收 0kg<br>超收上限 390kg，<b>超了系统自动拦</b></p>
+      <div class="btns"><span class="ok">核对无误</span><span class="alt">打差异单</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="lesson">
+  <div class="lcopy">
+  <div class="kicker v6-reveal">真实案例 · 仓库里的 7 种酱油</div>
+  <p class="story v6-reveal">盘点那天我们跟着下仓库，系统里同名的"酱油"有 <b>7 条记录</b>、香菇有 6 条，每换一任厨师长，就多一套叫法。账对不上，不是人偷懒，是名字先乱了。</p>
+  <p class="story v6-reveal">AI 物料归一 + 别名映射上线后，老名字照样搜得到，但账只算到同一条上。<b>历史数据不用推倒重来，脏数据当场开始变干净。</b></p>
+  <span class="result v6-reveal">全仓盘点：6 张纸一下午 → 手机上 40 分钟</span>
+  </div>
+  <div class="lvis v6-reveal">
+    <div class="mergevis">
+      <div class="alias">
+        <span>酱油</span><span>黄豆酱油</span><span>3 号酱油</span><span>厨用酱油</span><span>宴会酱油</span><span>老酱油</span><span>酱油(新)</span>
+      </div>
+      <svg class="down" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg>
+      <div class="master"><b>酱油 · 主数据 M-0117</b><small>7 个别名已映射 · 老名字照样搜得到</small></div>
+    </div>
+  </div>
+</section>
+
+<!-- 差异化对比条 -->
+<section class="versus">
+  <p class="lead v6-reveal"><span class="q">传统 ERP 让工厂适应产品；</span><br><b>Cretas 让产品适应工厂。</b></p>
+  <div class="versus-pts">
+    <div class="vpt v6-reveal"><div class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div><b>零培训上手</b><p>系统直接告诉工人该做什么、该收多少，不背规则、不怕做错。</p></div>
+    <div class="vpt v6-reveal"><div class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div><b>没有固定产线也能管</b><p>工序动态认领、按需报工，非标加工的真实节奏照样管得住。</p></div>
+    <div class="vpt v6-reveal"><div class="ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div><b>AI 主动预警，不等你来查</b><p>库存见底、料快过期、温度异常、违规操作，AI 先一步提醒。</p></div>
+  </div>
+</section>
+
+<!-- 客户之声 -->
+<section class="quote-band">
+  <div class="v6-quote v6-reveal">
+    “让系统迁就人，而不是人迁就系统。”
+    <small>— 防呆设计的全部含义，也是这一页每个功能的出发点</small>
+  </div>
+  <a class="quote-cta v6-reveal" href="mailto:stevenj4xie@gmail.com">预约一场演示 →</a>
+</section>
+
+<footer class="v6-foot">
+  <div>© 2026 白垩纪 Cretas · cretaceousfuture.com</div>
+  <div class="foot-links">
+    <a href="/solutions-factory.html">食品工厂</a>
+    <a href="/solutions-restaurant.html">餐饮连锁</a>
+    <a href="/solutions-logistics.html">物流配送</a>
+    <a href="/solutions-ai.html">AI 中枢</a>
+    <a href="/solutions-custom.html">定制开发</a>
+    <a href="/demo.html">在线演示</a>
+    <a href="mailto:stevenj4xie@gmail.com">联系我们</a>
+  </div>
+</footer>
+
+<script src="/js/v6.js?v=20260805f"></script>
+<script src="/js/gsap.min.js"></script>
+<script src="/js/ScrollTrigger.min.js"></script>
+<script src="/js/lenis.min.js"></script>
+<script src="/js/v6-premium.js?v=20260805f"></script>
+<script>
+/* Safety net: guarantee no reveal section ever stays hidden (slow JS / headless / IO miss). */
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    var vb = window.innerHeight + 40;
+    document.querySelectorAll('.v6-reveal:not(.in)').forEach(function(e){
+      if (e.getBoundingClientRect().top < vb) e.classList.add('in');
+    });
+  }, 1200);
+});
+v6LiveTicker(
+  document.getElementById('liveTicker'),
+  ['酱卤车间 · 第 3 道工序进行中','入库核对 · 库位 A-12 无差异','CAM-03 分割工位 · 在岗 4 · 效率 92','今日开票已对账 · 异常 0']
+);
+</script>
+</body>
+</html>

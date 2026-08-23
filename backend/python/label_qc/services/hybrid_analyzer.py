@@ -1,0 +1,543 @@
+"""YOLO screening + optional VL review for customer risk routing.
+
+YOLO screens every tray cheaply and locally; only the trays it flags are sent to
+the vision model, cutting VL call volume by roughly an order of magnitude
+(whole-photo tiling: 8 calls per photo; screening: ~1-2).
+
+VL ranks rather than vetoes. A tray the VL clears is still surfaced as a
+low-confidence risk instead of being dropped. Customer review sees only risks,
+unjudgeable regions, missing object coverage, or analysis failures. A trusted
+pipeline may explicitly auto-pass a photo only after detecting at least one tray
+and finding no risk; that result is never represented as human truth.
+
+Every screening decision is persisted for the independent platform annotation
+and active-learning flow. Platform selection is not constrained by whether the
+customer task entered review.
+
+Legacy models retain the historical VL-only fallback. The hash-bound v8 route is
+fail-closed when its manifest or model files are unavailable.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import json
+import logging
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+from PIL import Image, ImageOps
+
+from common.llm_metrics import llm_caller_context
+from common.llm_router import SLOT, call_chain
+from label_qc.services.analyzer import LabelQcAnalyzer, MAX_IMAGE_BYTES
+from label_qc.services.screening import (
+    ScreeningParams,
+    ScreeningResult,
+    TrayResult,
+    VERDICT_MISSING_BOTH,
+    VERDICT_MISSING_COLOR,
+    VERDICT_MISSING_WHITE,
+    VERDICT_OK,
+    VERDICT_UNJUDGEABLE,
+    screen_image,
+)
+from label_qc.services.yolo_detector import (
+    LabelQcYoloModels,
+    crop_with_padding,
+    resize_crop,
+)
+from label_qc.services.v8_pipeline import build_models_from_env
+
+logger = logging.getLogger(__name__)
+
+SCREENING_VERSION = "yolo-screen-v1"
+REVIEW_PROMPT_VERSION = "label-tray-review-v1"
+# Reviews are independent single-tray calls, so they parallelise cleanly. The
+# whole-photo tiling path uses 2 for 8 tiles (4 rounds); 4 here keeps a similar
+# peak load while halving the rounds for a typical 7-suspect photo.
+DEFAULT_CONCURRENT_REVIEWS = 4
+# Cap VL work per photo. Beyond this the screening verdict stands on its own --
+# a human reviews every photo anyway, so extra VL calls buy ordering, not safety.
+DEFAULT_MAX_REVIEW_TRAYS = 8
+REVIEW_TIMEOUT_SECONDS = 30.0
+REVIEW_CROP_WIDTH = 768
+REVIEW_PAD_RATIO = 0.25
+
+_REVIEW_PROMPT = """
+你是食品包装标签质检员。这张图是一个肉盒的特写（可能带少量相邻盒子的边缘）。
+
+正常的盒子同时具有两种标签：
+1. 彩标：红黑色或绿色的长条品牌标签；
+2. 白标：白色矩形称重/条码标签。
+
+只判断**画面中央这一个盒子**的标签是否存在，不要根据旁边盒子下结论，也不识别文字内容。
+
+初筛系统怀疑这个盒子是：{suspicion}
+
+请独立判断，不要被初筛结论带偏：
+- 中央盒子确实缺白色矩形标签：MISSING_WHITE_LABEL
+- 确实缺红黑/绿色长条彩标：MISSING_COLOR_LABEL
+- 两种都缺：BOTH_MISSING
+- 两种都在：CLEAR
+- 遮挡、反光、模糊或只露窄边，无法可靠确认：UNJUDGEABLE
+
+只返回一行 JSON，不要 Markdown，不要解释：
+{{"verdict":"CLEAR|MISSING_WHITE_LABEL|MISSING_COLOR_LABEL|BOTH_MISSING|UNJUDGEABLE","confidence":0.0,"evidence":"不超过40字"}}
+""".strip()
+
+_ALLOWED = {"CLEAR", "MISSING_WHITE_LABEL", "MISSING_COLOR_LABEL",
+            "BOTH_MISSING", "UNJUDGEABLE"}
+
+_SUSPICION_TEXT = {
+    VERDICT_MISSING_WHITE: "缺白标",
+    VERDICT_MISSING_COLOR: "缺彩标",
+    VERDICT_MISSING_BOTH: "白标和彩标都缺",
+    VERDICT_UNJUDGEABLE: "画面只露窄边，暂时无法判断",
+}
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, ""))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        return max(low, min(high, int(os.getenv(name, ""))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _screen_evidence(tray: TrayResult) -> str:
+    """Reviewer-facing explanation.
+
+    This string is rendered verbatim in the review workbench, so it must read as
+    an AI finding, not as internal plumbing. State what was and was not found on
+    the tray -- screening actually knows both, which is more than the VL path
+    could reliably say.
+    """
+    if tray.verdict == VERDICT_MISSING_WHITE:
+        detail = "已识别到彩色品牌标签，未识别到白色称重/条码标签"
+    elif tray.verdict == VERDICT_MISSING_COLOR:
+        detail = "已识别到白色称重/条码标签，未识别到彩色品牌标签"
+    elif tray.verdict == VERDICT_MISSING_BOTH:
+        detail = "未识别到白色称重/条码标签，也未识别到彩色品牌标签"
+    elif tray.verdict == VERDICT_UNJUDGEABLE:
+        detail = "盒体只露窄边或区域过小，无法可靠判断标签"
+    else:
+        detail = "标签识别异常"
+
+    if tray.confidence >= 0.85:
+        hint = "该盒定位清晰，建议优先核对"
+    elif tray.confidence >= 0.70:
+        hint = "建议人工核对"
+    else:
+        hint = "该盒成像不够清晰，请人工确认"
+    return f"AI 识别：{detail}。{hint}。"
+
+
+def _screen_confidence(tray: TrayResult) -> float:
+    """Confidence for a tray the VL never judged.
+
+    Without a VL verdict a flat 0.5 would leave the reviewer with an unsortable
+    list. Grade it from what screening does know:
+      - the tray detector's own confidence scales the whole thing;
+      - BOTH_MISSING is the likeliest screening artefact (a bad crop loses both
+        labels at once), so it is discounted relative to a single missing label.
+    """
+    if tray.verdict == VERDICT_UNJUDGEABLE:
+        base = 0.25
+    else:
+        base = 0.45 if tray.verdict == VERDICT_MISSING_BOTH else 0.75
+    return round(max(0.05, min(0.9, base * max(tray.confidence, 0.0))), 4)
+
+
+def _encode(image: np.ndarray) -> str:
+    buffer = io.BytesIO()
+    Image.fromarray(image).save(buffer, format="JPEG", quality=90, optimize=True)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _extract_content(response: Dict[str, Any]) -> str:
+    try:
+        content = response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("VL response has no message content") from exc
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    raise ValueError("VL response content has unsupported type")
+
+
+def _parse_verdict(text: str) -> Dict[str, Any]:
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            raise
+        value = json.loads(match.group(0))
+    if not isinstance(value, dict):
+        raise ValueError("VL review response is not a JSON object")
+    verdict = str(value.get("verdict", "")).strip().upper()
+    if verdict not in _ALLOWED:
+        raise ValueError(f"unsupported verdict: {verdict or '<empty>'}")
+    try:
+        confidence = min(1.0, max(0.0, float(value.get("confidence", 0))))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return {"verdict": verdict, "confidence": confidence,
+            "evidence": str(value.get("evidence", ""))[:120]}
+
+
+class HybridLabelQcAnalyzer:
+    """Screen with YOLO, confirm with VL, keep the existing response contract."""
+
+    def __init__(
+        self,
+        models: Optional[LabelQcYoloModels] = None,
+        vl_analyzer: Optional[LabelQcAnalyzer] = None,
+        params: Optional[ScreeningParams] = None,
+    ) -> None:
+        self._models = models or build_models_from_env()
+        self._vl = vl_analyzer or LabelQcAnalyzer()
+        recommended_params = getattr(self._models, "recommended_params", None)
+        self._params = params or (
+            recommended_params()
+            if callable(recommended_params)
+            else ScreeningParams(
+                tray_conf=_env_float("LABEL_QC_TRAY_CONF", 0.60),
+                label_conf=_env_float("LABEL_QC_LABEL_CONF", 0.25),
+                min_crop_px=_env_int("LABEL_QC_MIN_CROP_PX", 150, 32, 1024),
+            )
+        )
+        self._review_enabled = _env_flag("LABEL_QC_VL_REVIEW", True)
+        self._review_concurrency = _env_int(
+            "LABEL_QC_REVIEW_CONCURRENCY", DEFAULT_CONCURRENT_REVIEWS, 1, 8
+        )
+        self._max_review_trays = _env_int(
+            "LABEL_QC_MAX_REVIEW_TRAYS", DEFAULT_MAX_REVIEW_TRAYS, 1, 40
+        )
+
+    # ------------------------------------------------------------------ VL review
+    async def _review_tray(
+        self, image: np.ndarray, tray: TrayResult, semaphore: asyncio.Semaphore
+    ) -> Tuple[TrayResult, Optional[Dict[str, Any]], str]:
+        crop, _ = crop_with_padding(image, tray.box, REVIEW_PAD_RATIO)
+        if crop.size == 0:
+            return tray, None, "unknown"
+        crop = resize_crop(crop, REVIEW_CROP_WIDTH)
+        prompt = _REVIEW_PROMPT.format(
+            suspicion=_SUSPICION_TEXT.get(tray.verdict, tray.verdict)
+        )
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/jpeg;base64,{_encode(crop)}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 200,
+        }
+        try:
+            async with semaphore:
+                with llm_caller_context("label_qc.tray_review"):
+                    response = await asyncio.wait_for(
+                        call_chain(SLOT.VL, payload, timeout=REVIEW_TIMEOUT_SECONDS),
+                        timeout=REVIEW_TIMEOUT_SECONDS + 5,
+                    )
+            parsed = _parse_verdict(_extract_content(response))
+            return tray, parsed, str(response.get("model", "unknown"))
+        except Exception as exc:
+            # Never downgrade a suspect to OK because review failed -- keep the
+            # screening verdict and say so in the evidence.
+            logger.warning("Label QC tray review failed (tray %s): %s", tray.index, exc)
+            return tray, None, "unknown"
+
+    # ------------------------------------------------------------------ assembly
+    @staticmethod
+    def _candidate(
+        tray: TrayResult, label: str, confidence: float, evidence: str,
+        width: int, height: int, index: int,
+    ) -> Dict[str, Any]:
+        x0, y0, x1, y1 = tray.box
+        return {
+            "candidateId": f"ai-{index}",
+            "label": label,
+            "confidence": round(float(confidence), 4),
+            "bbox": [
+                round(max(0.0, min(1.0, x0 / max(width, 1))), 6),
+                round(max(0.0, min(1.0, y0 / max(height, 1))), 6),
+                round(max(0.0, min(1.0, x1 / max(width, 1))), 6),
+                round(max(0.0, min(1.0, y1 / max(height, 1))), 6),
+            ],
+            "evidence": evidence[:120],
+            "sourceTiles": [tray.index],
+        }
+
+    @staticmethod
+    def _norm_box(box, width: int, height: int) -> List[float]:
+        return [
+            round(max(0.0, min(1.0, box[0] / max(width, 1))), 6),
+            round(max(0.0, min(1.0, box[1] / max(height, 1))), 6),
+            round(max(0.0, min(1.0, box[2] / max(width, 1))), 6),
+            round(max(0.0, min(1.0, box[3] / max(height, 1))), 6),
+        ]
+
+    def _screening_payload(self, screening: ScreeningResult) -> Dict[str, Any]:
+        """Persisted verbatim so corrections can be tied back to a specific tray."""
+        return {
+            "version": SCREENING_VERSION,
+            "params": {
+                "trayConf": screening.params.tray_conf,
+                "labelConf": screening.params.label_conf,
+                "padRatio": screening.params.pad_ratio,
+                "ownLabelsOnly": screening.params.own_labels_only,
+            },
+            "trayCount": len(screening.trays),
+            "suspectCount": len(screening.suspects),
+            "reviewCandidateCount": len(screening.review_candidates),
+            "trays": [
+                {
+                    "index": t.index,
+                    "bbox": self._norm_box(t.box, screening.image_width,
+                                           screening.image_height),
+                    "trayConfidence": round(t.confidence, 4),
+                    "hasWhite": t.has_white,
+                    "hasColor": t.has_color,
+                    "screenVerdict": t.verdict,
+                    "ownLabels": t.own_label_count,
+                    "droppedNeighbourLabels": t.dropped_neighbour_labels,
+                    # What the model actually saw, so the review UI can outline
+                    # the tray and the individual stickers separately.
+                    "labels": [
+                        {
+                            "type": "white" if lb.is_white else "color",
+                            "confidence": round(lb.confidence, 4),
+                            "bbox": self._norm_box(lb.box, screening.image_width,
+                                                   screening.image_height),
+                        }
+                        for lb in t.labels
+                    ],
+                }
+                for t in screening.trays
+            ],
+        }
+
+    async def analyze(self, image_bytes: bytes) -> Dict[str, Any]:
+        if not image_bytes:
+            raise ValueError("empty image")
+        if len(image_bytes) > MAX_IMAGE_BYTES:
+            raise ValueError("image exceeds 10 MB limit")
+
+        if not self._models.available:
+            if getattr(self._models, "fail_closed", False):
+                raise RuntimeError(
+                    f"configured label-QC pipeline unavailable: {self._models.load_error}"
+                )
+            logger.info("Label QC: YOLO unavailable (%s), using VL-only analyzer",
+                        self._models.load_error)
+            result = await self._vl.analyze(image_bytes)
+            result["screeningMode"] = "vl-only-fallback"
+            result["screeningUnavailableReason"] = self._models.load_error
+            # Legacy/VL-only analysis has not passed the deterministic object
+            # coverage gate, so it may never silently remove a customer task.
+            result["customerReviewRequired"] = True
+            return result
+
+        try:
+            source = Image.open(io.BytesIO(image_bytes))
+            source = ImageOps.exif_transpose(source)
+            source.load()
+            source = source.convert("RGB")
+        except Exception as exc:
+            raise ValueError("invalid or unsupported image") from exc
+
+        image = np.array(source)
+        model_screen = getattr(self._models, "screen_image", None)
+        if callable(model_screen):
+            screening = await asyncio.to_thread(model_screen, image, self._params)
+        else:
+            screening = await asyncio.to_thread(
+                screen_image, image, self._models, self._params,
+            )
+        review_candidates = screening.review_candidates
+
+        # Review the least certain trays first, and cap how many go to the VL:
+        # BOTH_MISSING is the most likely screening artefact, and a low tray
+        # confidence means the crop itself is shakier.
+        ordered = sorted(
+            review_candidates,
+            key=lambda t: (
+                t.verdict not in {VERDICT_MISSING_BOTH, VERDICT_UNJUDGEABLE},
+                t.confidence,
+            ),
+        )
+        to_review = ordered[: self._max_review_trays] if self._review_enabled else []
+        screen_only = [t for t in review_candidates if t not in to_review]
+
+        reviews: List[Tuple[TrayResult, Optional[Dict[str, Any]], str]] = []
+        if to_review:
+            semaphore = asyncio.Semaphore(self._review_concurrency)
+            reviews = list(await asyncio.gather(
+                *(self._review_tray(image, tray, semaphore) for tray in to_review)
+            ))
+        reviews += [(tray, None, "screen-only") for tray in screen_only]
+
+        # Customer risk and platform diagnostics are deliberately separate.
+        # A locally unjudgeable tray is not evidence that a label is missing;
+        # sending it to the factory queue made operators review background
+        # stacks and tiny detector fragments.  Keep those boxes traceable for
+        # platform correction without presenting them as customer defects.
+        candidates: List[Dict[str, Any]] = []
+        platform_candidates: List[Dict[str, Any]] = []
+        models_used = {f"yolo:{SCREENING_VERSION}"}
+        confirmed = rejected = unreviewed = 0
+
+        if not screening.trays:
+            # No detected tray is not proof that the photo is clean. It can be a
+            # wrong/empty photo or a detector miss, both of which are customer
+            # risks and valuable platform annotation candidates.
+            no_tray = TrayResult(
+                index=-1,
+                box=[0.0, 0.0, float(screening.image_width), float(screening.image_height)],
+                confidence=0.0,
+                has_white=False,
+                has_color=False,
+                verdict=VERDICT_UNJUDGEABLE,
+            )
+            candidates.append(self._candidate(
+                no_tray,
+                VERDICT_UNJUDGEABLE,
+                0.0,
+                "AI 未识别到可核查的盒子，请确认照片和盒子范围。",
+                screening.image_width,
+                screening.image_height,
+                1,
+            ))
+
+        for tray, review, model_name in reviews:
+            models_used.add(model_name)
+            if review is None:
+                # No VL verdict: review disabled, past the per-photo cap, or the
+                # call failed. Keep the screening verdict rather than silently
+                # clearing a suspect tray, and grade confidence from what the
+                # screener itself knows so a reviewer can still sort the list.
+                unreviewed += 1
+                verdict = tray.verdict
+                confidence = _screen_confidence(tray)
+                # Reviewer-facing text stays uniform ("AI 识别：…") regardless of
+                # which internal path produced it; the distinction between
+                # disabled / capped / failed review is kept in `screening` for
+                # diagnostics, not surfaced to the shop floor.
+                evidence = _screen_evidence(tray)
+            else:
+                verdict, confidence = review["verdict"], review["confidence"]
+                evidence = review["evidence"] or "视觉复核"
+                if verdict == "CLEAR":
+                    # Every photo is reviewed by a human anyway, so a VL veto is
+                    # not worth trading against a missed defect: keep the tray as
+                    # a low-confidence candidate instead of dropping it.
+                    rejected += 1
+                    verdict = tray.verdict
+                    confidence = round(min(0.25, max(0.05, 1.0 - confidence)), 4)
+                    if tray.verdict == VERDICT_UNJUDGEABLE:
+                        evidence = (
+                            "AI 识别：该盒区域过小，暂时无法可靠判断；"
+                            f"复核后判断可能正常（{evidence}）。请人工确认。"
+                        )
+                    else:
+                        evidence = (
+                            "AI 识别：该盒标签疑似缺失，"
+                            f"但复核后判断可能正常（{evidence}）。请人工确认。"
+                        )
+                elif verdict == "UNJUDGEABLE":
+                    # Not a defect claim, but must not be treated as clean.
+                    unreviewed += 1
+                    verdict, confidence = tray.verdict, min(confidence, 0.4)
+                    evidence = evidence or "视觉复核判定不可判定"
+                else:
+                    confirmed += 1
+
+            labels = ([VERDICT_MISSING_WHITE, VERDICT_MISSING_COLOR]
+                      if verdict == VERDICT_MISSING_BOTH else [verdict])
+            for label in labels:
+                if label == VERDICT_OK:
+                    continue
+                target = (platform_candidates
+                          if label == VERDICT_UNJUDGEABLE else candidates)
+                candidate = self._candidate(
+                    tray, label, confidence, evidence,
+                    screening.image_width, screening.image_height, len(target) + 1,
+                )
+                if target is platform_candidates:
+                    candidate["candidateId"] = f"platform-tray-{tray.index}"
+                target.append(candidate)
+
+        # Highest confidence first so the reviewer sees VL-confirmed defects
+        # before the screening-only leftovers.
+        candidates.sort(key=lambda c: -c["confidence"])
+        for index, candidate in enumerate(candidates, start=1):
+            candidate["candidateId"] = f"ai-{index}"
+        platform_candidates.sort(key=lambda c: -c["confidence"])
+
+        payload = self._screening_payload(screening)
+        payload["reviewed"] = len(to_review)
+        payload["confirmedByVl"] = confirmed
+        payload["rejectedByVl"] = rejected
+        payload["unreviewed"] = unreviewed
+        payload["reviewCap"] = self._max_review_trays
+        payload["reviewConcurrency"] = self._review_concurrency
+        payload["skippedByCap"] = len(screen_only)
+        payload["platformReviewCandidateCount"] = len(platform_candidates)
+        runtime_audit = screening.runtime_audit or getattr(
+            self._models, "runtime_audit", None,
+        )
+        if runtime_audit:
+            payload["runtimeAudit"] = runtime_audit
+
+        return {
+            "verdict": "SUSPECTED" if candidates else "NO_DEFECT_FOUND",
+            "candidates": candidates,
+            "platformCandidates": platform_candidates,
+            "platformReviewRequired": bool(platform_candidates),
+            "customerReviewRequired": not (
+                bool(screening.trays)
+                and not candidates
+                and bool(getattr(self._models, "customer_auto_pass_supported", False))
+            ),
+            "model": getattr(self._models, "model_id", None)
+            or ",".join(sorted(m for m in models_used if m != "screen-only")),
+            "promptVersion": REVIEW_PROMPT_VERSION,
+            "imageWidth": screening.image_width,
+            "imageHeight": screening.image_height,
+            # Kept for contract compatibility: downstream reads this as "how many
+            # model calls backed this result".
+            "tilesAnalyzed": len(to_review),
+            "screeningMode": "yolo-screen+vl-review" if self._review_enabled else "yolo-screen-only",
+            "screening": payload,
+        }

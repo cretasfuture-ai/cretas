@@ -1,0 +1,711 @@
+package com.cretas.aims.service.inventory.impl;
+
+import com.cretas.aims.dto.inventory.CreateWastageReportRequest;
+import com.cretas.aims.dto.inventory.WastageReportDTO;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialBatchAdjustment;
+import com.cretas.aims.entity.inventory.WastageReport;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.inventory.WastageReportRepository;
+import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.math.BigDecimal;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.atLeastOnce;
+
+/**
+ * WastageReportServiceImpl 单元测试 (SP7 T3).
+ *
+ * <p>覆盖 16 个关键场景 (W2 角色码修复后扩展):
+ * <ol>
+ *   <li>照片强制: photoUrls null → 422</li>
+ *   <li>照片强制: photoUrls "[]" → 422</li>
+ *   <li>create 正常: 有照片 → DRAFT 创建成功</li>
+ *   <li>WAREHOUSE 轨 + operator 角色 approve → 403</li>
+ *   <li>FACTORY 轨 + finance_manager 角色 approve → 403 (错轨)</li>
+ *   <li>WAREHOUSE 轨 finance_manager 角色 approve → 原子写 adjustment + 扣减库存</li>
+ *   <li>approve 幂等: 非 PENDING_APPROVAL → 409</li>
+ *   <li>approve 库存不足 → 422</li>
+ *   <li>FACTORY 轨 production_manager 角色 approve → APPLIED</li>
+ *   <li>factory_super_admin 可审批 WAREHOUSE 轨 → APPLIED</li>
+ *   <li>factory_super_admin 可审批 FACTORY 轨 → APPLIED</li>
+ *   <li>listPending: finance_manager → 仅 WAREHOUSE 轨</li>
+ *   <li>listPending: production_manager → 仅 FACTORY 轨</li>
+ *   <li>listPending: factory_super_admin → WAREHOUSE + FACTORY 双轨</li>
+ *   <li>listPending: operator → 空 Page</li>
+ *   <li>submit 设置 approverRole 为小写真实码 (非旧大写虚构码)</li>
+ * </ol>
+ */
+@DisplayName("WastageReportServiceImpl 单元测试 (SP7)")
+@ExtendWith(MockitoExtension.class)
+class WastageReportServiceImplTest {
+
+    @Mock private WastageReportRepository wastageReportRepo;
+    @Mock private MaterialBatchRepository materialBatchRepo;
+    @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+
+    @InjectMocks private WastageReportServiceImpl service;
+
+    private static final String FACTORY_ID = "F006";
+    private static final Long USER_ID = 42L;
+    private static final String BATCH_ID = "BATCH-123";
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+    }
+
+    // -------------------------------------------------------
+    // 1. 照片强制: null → 422
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T1: photoUrls null → 422 必须上传至少一张照片")
+    void create_noPhotos_null_throws422() {
+        CreateWastageReportRequest req = buildReq(WastageReport.TrackType.WAREHOUSE);
+        req.setPhotoUrls(null);
+
+        assertThatThrownBy(() -> service.create(FACTORY_ID, req, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(422);
+    }
+
+    // -------------------------------------------------------
+    // 2. 照片强制: "[]" → 422
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T2: photoUrls '[]' → 422 空数组不允许")
+    void create_noPhotos_emptyArray_throws422() {
+        CreateWastageReportRequest req = buildReq(WastageReport.TrackType.WAREHOUSE);
+        req.setPhotoUrls("[]");
+
+        assertThatThrownBy(() -> service.create(FACTORY_ID, req, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("照片");
+    }
+
+    // -------------------------------------------------------
+    // 3. create 正常: 有照片 → DRAFT
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T3: 有照片 + 有效数据 → 创建 DRAFT 报损单")
+    void create_validRequest_returnsDraft() {
+        CreateWastageReportRequest req = buildReq(WastageReport.TrackType.WAREHOUSE);
+        req.setPhotoUrls("[\"https://oss.example.com/photo1.jpg\"]");
+        req.setWarehouseId("WH-001"); // WAREHOUSE 轨必填
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setMaterialTypeId("MT-001");
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(wastageReportRepo.save(any())).thenAnswer(inv -> {
+            WastageReport r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(UUID.randomUUID().toString());
+            return r;
+        });
+
+        WastageReportDTO result = service.create(FACTORY_ID, req, USER_ID);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getStatus()).isEqualTo("DRAFT");
+        verify(wastageReportRepo).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 4. WAREHOUSE 轨 + operator 角色 approve → 403
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T4: WAREHOUSE 轨 + operator 角色 approve → 403")
+    void approve_warehouseTrack_wrongRole_throws403() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "operator"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(403);
+    }
+
+    // -------------------------------------------------------
+    // 5. FACTORY 轨 + finance_manager 角色 approve → 403 (错轨)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T5: FACTORY 轨 + finance_manager 角色 approve → 403 (finance_manager 只能审 WAREHOUSE 轨)")
+    void approve_factoryTrack_wrongRole_throws403() {
+        WastageReport report = buildReport(WastageReport.TrackType.FACTORY, WastageReport.Status.PENDING_APPROVAL);
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(403);
+    }
+
+    // -------------------------------------------------------
+    // 6. WAREHOUSE 轨 finance_manager 角色 approve → 原子写 adjustment + 扣减库存
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T6: WAREHOUSE 轨 finance_manager approve → 写 adjustment + 增 usedQuantity 扣减 + 状态 APPLIED")
+    void approve_warehouseTrack_finance_writesAdjustmentAndUpdatesStock() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(batchRepo().save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        // Verify adjustment written with negative quantity; before/after 取可用量 (currentQuantity)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        MaterialBatchAdjustment adj = adjCaptor.getValue();
+        assertThat(adj.getAdjustmentType()).isEqualTo("WASTAGE");
+        assertThat(adj.getAdjustmentQuantity()).isNegative();
+        assertThat(adj.getQuantityBefore().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(adj.getQuantityAfter().compareTo(new BigDecimal("90.00"))).isEqualTo(0);
+
+        // Verify batch decremented via usedQuantity (receiptQuantity 不变), currentQuantity = 90
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(batchRepo()).save(batchCaptor.capture());
+        MaterialBatch savedBatch = batchCaptor.getValue();
+        assertThat(savedBatch.getReceiptQuantity().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(savedBatch.getUsedQuantity().compareTo(new BigDecimal("10.00"))).isEqualTo(0);
+        assertThat(savedBatch.getCurrentQuantity().compareTo(new BigDecimal("90.00"))).isEqualTo(0);
+        verify(inventoryLowStockEventPublisher).publishIfLowStock(FACTORY_ID, batch, "WASTAGE");
+
+        // Verify status → APPLIED (entity enum, not DTO string)
+        ArgumentCaptor<WastageReport> rptCaptor = ArgumentCaptor.forClass(WastageReport.class);
+        verify(wastageReportRepo, atLeastOnce()).save(rptCaptor.capture());
+        // The last save should set APPLIED
+        WastageReport lastSaved = rptCaptor.getAllValues().stream()
+                .filter(r -> r.getStatus() == WastageReport.Status.APPLIED)
+                .findFirst().orElse(null);
+        assertThat(lastSaved).isNotNull();
+    }
+
+    // -------------------------------------------------------
+    // 7. approve 错误状态 → 409
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T7: approve 状态非 PENDING_APPROVAL → 409")
+    void approve_wrongStatus_throws409() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.DRAFT);
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(409);
+    }
+
+    // -------------------------------------------------------
+    // 8. approve 库存不足 → 422
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T8: 报损数量超过库存 → 422")
+    void approve_exceedsStock_throws422() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("200.0000")); // more than stock 100
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(422);
+    }
+
+    // -------------------------------------------------------
+    // 9. FACTORY 轨 production_manager 角色 approve → APPLIED
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T9: FACTORY 轨 production_manager approve → 状态 APPLIED")
+    void approve_factoryTrack_productionManager_succeeds() {
+        WastageReport report = buildReport(WastageReport.TrackType.FACTORY, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("5.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("50.00"));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "production_manager");
+
+        ArgumentCaptor<WastageReport> captor = ArgumentCaptor.forClass(WastageReport.class);
+        verify(wastageReportRepo, atLeastOnce()).save(captor.capture());
+        boolean hasApplied = captor.getAllValues().stream()
+                .anyMatch(r -> r.getStatus() == WastageReport.Status.APPLIED);
+        assertThat(hasApplied).isTrue();
+    }
+
+    // -------------------------------------------------------
+    // 10. factory_super_admin 可审批 WAREHOUSE 轨 → APPLIED
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T10: factory_super_admin 可审批 WAREHOUSE 轨 → APPLIED")
+    void approve_superAdmin_warehouseTrack_succeeds() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("5.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("50.00"));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "factory_super_admin");
+
+        ArgumentCaptor<WastageReport> captor = ArgumentCaptor.forClass(WastageReport.class);
+        verify(wastageReportRepo, atLeastOnce()).save(captor.capture());
+        boolean hasApplied = captor.getAllValues().stream()
+                .anyMatch(r -> r.getStatus() == WastageReport.Status.APPLIED);
+        assertThat(hasApplied).isTrue();
+    }
+
+    // -------------------------------------------------------
+    // 11. factory_super_admin 可审批 FACTORY 轨 → APPLIED
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T11: factory_super_admin 可审批 FACTORY 轨 → APPLIED")
+    void approve_superAdmin_factoryTrack_succeeds() {
+        WastageReport report = buildReport(WastageReport.TrackType.FACTORY, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("5.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("50.00"));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "factory_super_admin");
+
+        ArgumentCaptor<WastageReport> captor = ArgumentCaptor.forClass(WastageReport.class);
+        verify(wastageReportRepo, atLeastOnce()).save(captor.capture());
+        boolean hasApplied = captor.getAllValues().stream()
+                .anyMatch(r -> r.getStatus() == WastageReport.Status.APPLIED);
+        assertThat(hasApplied).isTrue();
+    }
+
+    // -------------------------------------------------------
+    // 12. listPending: finance_manager → 仅 WAREHOUSE 轨
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T12: listPending finance_manager → 调用 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc([WAREHOUSE])")
+    void listPending_financeManager_queriesWarehouseOnly() {
+        Pageable pageable = PageRequest.of(0, 20);
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(List.of(WastageReport.TrackType.WAREHOUSE)),
+                eq(pageable)))
+                .thenReturn(new PageImpl<>(Collections.emptyList()));
+
+        service.listPending(FACTORY_ID, "finance_manager", pageable);
+
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(List.of(WastageReport.TrackType.WAREHOUSE)),
+                eq(pageable));
+    }
+
+    // -------------------------------------------------------
+    // 13. listPending: production_manager → 仅 FACTORY 轨
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T13: listPending production_manager → 调用 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc([FACTORY])")
+    void listPending_productionManager_queriesFactoryOnly() {
+        Pageable pageable = PageRequest.of(0, 20);
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(List.of(WastageReport.TrackType.FACTORY)),
+                eq(pageable)))
+                .thenReturn(new PageImpl<>(Collections.emptyList()));
+
+        service.listPending(FACTORY_ID, "production_manager", pageable);
+
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
+                eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL),
+                eq(List.of(WastageReport.TrackType.FACTORY)),
+                eq(pageable));
+    }
+
+    // -------------------------------------------------------
+    // 14. listPending: factory_super_admin → WAREHOUSE + FACTORY 双轨
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T14: listPending factory_super_admin → 调用 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc([WAREHOUSE, FACTORY])")
+    void listPending_superAdmin_queriesBothTracks() {
+        Pageable pageable = PageRequest.of(0, 20);
+        List<WastageReport.TrackType> bothTracks = List.of(
+                WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY);
+        when(wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(bothTracks), eq(pageable)))
+                .thenReturn(new PageImpl<>(Collections.emptyList()));
+
+        service.listPending(FACTORY_ID, "factory_super_admin", pageable);
+
+        verify(wastageReportRepo).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(bothTracks), eq(pageable));
+    }
+
+    // -------------------------------------------------------
+    // 15. listPending: operator → 空 Page，不调 repo
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T15: listPending operator → 空 Page，不调 findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc")
+    void listPending_operator_returnsEmptyPage() {
+        Pageable pageable = PageRequest.of(0, 20);
+
+        Page<WastageReportDTO> result = service.listPending(FACTORY_ID, "operator", pageable);
+
+        assertThat(result).isNotNull();
+        assertThat(result.isEmpty()).isTrue();
+        verify(wastageReportRepo, never()).findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(any(), any(), any(), any());
+    }
+
+    // -------------------------------------------------------
+    // 16. submit 设置 approverRole 为小写真实码
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T16: submit WAREHOUSE 轨 → approverRole 存 'finance_manager' 非旧 'FINANCE'")
+    void submit_setsRealLowercaseApproverRole() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.DRAFT);
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(wastageReportRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.submit(report.getId(), FACTORY_ID, USER_ID);
+
+        ArgumentCaptor<WastageReport> captor = ArgumentCaptor.forClass(WastageReport.class);
+        verify(wastageReportRepo).save(captor.capture());
+        assertThat(captor.getValue().getApproverRole()).isEqualTo("finance_manager");
+    }
+
+    // -------------------------------------------------------
+    // 17. H1 过扣修复: receipt=100 / used=80 (可用20) / 报损50 → 422 (不能吃已领量, 不 save)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T17: H1 过扣修复 — receipt=100/used=80/报损50 → 422 (不能吃已领30), 不扣库存")
+    void approve_wastageExceedsCurrentQuantity_throws422_doesNotSave() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("50.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(new BigDecimal("80.00"));   // 可用 = 100 - 80 = 20
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        // 报损50 > 可用20 → 旧逻辑 (100-50=50≥0) 会通过并把库存吃成负 (-30); 新逻辑 422 阻止
+        assertThatThrownBy(() -> service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getCode())
+                .isEqualTo(422);
+
+        // 不写 adjustment, 不扣库存, 不改报损单状态
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(wastageReportRepo, never()).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 18. H1 边界: receipt=100 / used=80 (可用20) / 报损20 → 成功, usedQuantity 80→100, 可用→0
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T18: receipt=100/used=80/报损20 → 成功, usedQuantity 80→100, currentQuantity→0, adjustment 留痕用可用量")
+    void approve_wastageEqualsCurrentQuantity_succeeds_incrementsUsedQuantity() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("20.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(new BigDecimal("80.00"));   // 可用 = 20
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        // adjustment 留痕: before=20 (可用), after=0 (可用)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        assertThat(adjCaptor.getValue().getQuantityBefore().compareTo(new BigDecimal("20.00"))).isEqualTo(0);
+        assertThat(adjCaptor.getValue().getQuantityAfter().compareTo(new BigDecimal("0.00"))).isEqualTo(0);
+
+        // usedQuantity 80 → 100, receiptQuantity 不变, currentQuantity → 0
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getUsedQuantity().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(saved.getReceiptQuantity().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(saved.getCurrentQuantity().compareTo(BigDecimal.ZERO)).isEqualTo(0);
+    }
+
+    // -------------------------------------------------------
+    // 19. 无已领量: receipt=100 / used=0 / 报损30 → 成功, currentQuantity 100→70
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T19: receipt=100/used=0/报损30 → 成功, usedQuantity 0→30, currentQuantity 100→70")
+    void approve_freshBatch_succeeds_currentQuantityReflectsWastage() {
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("30.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(new BigDecimal("100.00"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenReturn(batch);
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        MaterialBatch saved = batchCaptor.getValue();
+        assertThat(saved.getUsedQuantity().compareTo(new BigDecimal("30.00"))).isEqualTo(0);
+        assertThat(saved.getCurrentQuantity().compareTo(new BigDecimal("70.00"))).isEqualTo(0);
+
+        // adjustment before=100 (可用), after=70 (可用)
+        ArgumentCaptor<MaterialBatchAdjustment> adjCaptor = ArgumentCaptor.forClass(MaterialBatchAdjustment.class);
+        verify(adjustmentRepo).save(adjCaptor.capture());
+        assertThat(adjCaptor.getValue().getQuantityBefore().compareTo(new BigDecimal("100.00"))).isEqualTo(0);
+        assertThat(adjCaptor.getValue().getQuantityAfter().compareTo(new BigDecimal("70.00"))).isEqualTo(0);
+    }
+
+    // =======================================================
+    // 财务过账 (借 6602.01 管理费用-损耗 / 贷 1403 原材料)
+    // =======================================================
+
+    /** 装配 voucherService (mock) + 真实 generator (共用 materialBatchRepo mock)。 */
+    private com.cretas.aims.service.voucher.VoucherService wireVoucher() {
+        com.cretas.aims.service.voucher.VoucherService voucherService =
+                mock(com.cretas.aims.service.voucher.VoucherService.class);
+        com.cretas.aims.service.voucher.impl.WastageReportVoucherGenerator gen =
+                new com.cretas.aims.service.voucher.impl.WastageReportVoucherGenerator(materialBatchRepo);
+        ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        ReflectionTestUtils.setField(service, "wastageReportVoucherGenerator", gen);
+        return voucherService;
+    }
+
+    private MaterialBatch pricedBatch(BigDecimal receipt, BigDecimal unitPrice) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(BATCH_ID);
+        batch.setReceiptQuantity(receipt);
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnitPrice(unitPrice);
+        return batch;
+    }
+
+    // -------------------------------------------------------
+    // 20. WAREHOUSE 轨 approve → 过账 借 6602.01 / 贷 1403 借贷平衡 = 报损价值 (10 × 3.00 = 30.00)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T20: approve 过账 借6602.01/贷1403 借贷平衡=30.00 (10×3.00), source=WASTAGE_REPORT, type=EXPENSE")
+    @SuppressWarnings("unchecked")
+    void approve_postsBalancedWastageVoucher() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any())).thenReturn(Optional.empty());
+
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("100.00"), new BigDecimal("3.00"))));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        ArgumentCaptor<List<com.cretas.aims.dto.finance.VoucherEntrySpec>> specsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(
+                eq(FACTORY_ID), eq(com.cretas.aims.entity.enums.VoucherType.EXPENSE), any(),
+                specsCaptor.capture(), eq("WASTAGE_REPORT"), eq(report.getId()), any(), eq(USER_ID));
+
+        List<com.cretas.aims.dto.finance.VoucherEntrySpec> specs = specsCaptor.getValue();
+        assertThat(specs).hasSize(2);
+        var debit = specs.get(0);
+        var credit = specs.get(1);
+        assertThat(debit.subjectCode()).isEqualTo("6602.01");
+        assertThat(debit.debit()).isEqualByComparingTo("30.00");
+        assertThat(credit.subjectCode()).isEqualTo("1403");
+        assertThat(credit.credit()).isEqualByComparingTo("30.00");
+        // 借贷平衡
+        BigDecimal totalDebit = specs.stream().map(s -> s.debit() == null ? BigDecimal.ZERO : s.debit()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCredit = specs.stream().map(s -> s.credit() == null ? BigDecimal.ZERO : s.credit()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(totalDebit).isEqualByComparingTo(totalCredit).isEqualByComparingTo("30.00");
+
+        // 库存仍扣减 (usedQuantity 0 → 10)
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        assertThat(batchCaptor.getValue().getUsedQuantity()).isEqualByComparingTo("10.00");
+    }
+
+    // -------------------------------------------------------
+    // 21. honest-null: 批次无单价 → 库存扣减但不过账凭证 (不产假凭证)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T21: honest-null — 批次 unitPrice=null → 扣库存但不调 createManual")
+    void approve_noUnitPrice_deductsStockButNoVoucher() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any())).thenReturn(Optional.empty());
+
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("100.00"), null))); // 无单价
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        // 库存仍扣减
+        ArgumentCaptor<MaterialBatch> batchCaptor = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepo).save(batchCaptor.capture());
+        assertThat(batchCaptor.getValue().getUsedQuantity()).isEqualByComparingTo("10.00");
+        // 但不过账凭证 (honest-null)
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // -------------------------------------------------------
+    // 22. 幂等: 已有凭证 → 不重复过账
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T22: 幂等 — findBySourceBusiness 已存在 → 不再调 createManual")
+    void approve_idempotent_existingVoucher_skipsPosting() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any()))
+                .thenReturn(Optional.of(mock(com.cretas.aims.entity.finance.Voucher.class)));
+
+        WastageReport report = buildReport(WastageReport.TrackType.WAREHOUSE, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("10.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("100.00"), new BigDecimal("3.00"))));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "finance_manager");
+
+        verify(voucherService, never()).createManual(any(), any(), any(), any(), any(), any(), any(), any());
+        // 库存仍扣减 (幂等只作用于凭证, 不影响本次扣减)
+        verify(materialBatchRepo).save(any());
+    }
+
+    // -------------------------------------------------------
+    // 23. FACTORY 轨也过账 (双轨同科目 借6602.01/贷1403)
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("T23: FACTORY 轨 production_manager approve → 同样过账 借6602.01/贷1403 = 5×4.00 = 20.00")
+    @SuppressWarnings("unchecked")
+    void approve_factoryTrack_alsoPostsVoucher() {
+        var voucherService = wireVoucher();
+        when(voucherService.findBySourceBusiness(eq("WASTAGE_REPORT"), any())).thenReturn(Optional.empty());
+
+        WastageReport report = buildReport(WastageReport.TrackType.FACTORY, WastageReport.Status.PENDING_APPROVAL);
+        report.setWastageQty(new BigDecimal("5.0000"));
+        when(wastageReportRepo.findById(any())).thenReturn(Optional.of(report));
+        when(materialBatchRepo.findById(BATCH_ID)).thenReturn(Optional.of(pricedBatch(new BigDecimal("50.00"), new BigDecimal("4.00"))));
+        when(adjustmentRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(wastageReportRepo.save(any())).thenReturn(report);
+
+        service.approve(report.getId(), FACTORY_ID, USER_ID, "production_manager");
+
+        ArgumentCaptor<List<com.cretas.aims.dto.finance.VoucherEntrySpec>> specsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(voucherService).createManual(
+                eq(FACTORY_ID), eq(com.cretas.aims.entity.enums.VoucherType.EXPENSE), any(),
+                specsCaptor.capture(), eq("WASTAGE_REPORT"), eq(report.getId()), any(), eq(USER_ID));
+        List<com.cretas.aims.dto.finance.VoucherEntrySpec> specs = specsCaptor.getValue();
+        assertThat(specs.get(0).debit()).isEqualByComparingTo("20.00");
+        assertThat(specs.get(1).credit()).isEqualByComparingTo("20.00");
+    }
+
+    // -------------------------------------------------------
+    // helpers
+    // -------------------------------------------------------
+
+    private MaterialBatchRepository batchRepo() {
+        return materialBatchRepo;
+    }
+
+    private CreateWastageReportRequest buildReq(WastageReport.TrackType trackType) {
+        CreateWastageReportRequest req = new CreateWastageReportRequest();
+        req.setTrackType(trackType);
+        req.setMaterialBatchId(BATCH_ID);
+        req.setWastageQty(new BigDecimal("10.0000"));
+        req.setWastageReason(WastageReport.WastageReason.EXPIRED);
+        req.setPhotoUrls("[\"url\"]");
+        return req;
+    }
+
+    private WastageReport buildReport(WastageReport.TrackType trackType, WastageReport.Status status) {
+        WastageReport r = new WastageReport();
+        r.setId(UUID.randomUUID().toString());
+        r.setFactoryId(FACTORY_ID);
+        r.setReportNo("WR-20260601-001");
+        r.setTrackType(trackType);
+        r.setMaterialBatchId(BATCH_ID);
+        r.setWastageQty(new BigDecimal("10.0000"));
+        r.setWastageReason(WastageReport.WastageReason.EXPIRED);
+        r.setPhotoUrls("[\"url\"]");
+        r.setStatus(status);
+        return r;
+    }
+}

@@ -1,0 +1,425 @@
+"""供应商进价数据管道 — material_batches → agg_supplier_price。
+
+cretas_db.material_batches（真实采购价 162 条）→ smartbi_db.agg_supplier_price，
+点亮供应商涨价预警（price_anomaly.py 下游现成）。
+
+设计要点
+--------
+- 读 cretas_db（cretas_pool）：material_batches WHERE unit_price IS NOT NULL
+  AND deleted_at IS NULL，JOIN raw_material_types(name)、suppliers(name)。
+  JOIN 不到名字时诚实兜底（ingredient_name = material_type_id 字符串），不编假名。
+- source_note_id = "mb:{id}" 唯一标识来源是 material_batch 行。
+- 幂等去重：写入前查 agg_supplier_price 中已存在的 source_note_id SET；
+  只对新增行调用 upsert_supplier_price_batch，跳过已有行。重复跑安全。
+- delivery_date 优先选 purchase_date；其次 inbound_date；仍 None 则跳过（无日期无法
+  排趋势）。
+- RLS：upsert_supplier_price_batch 内部已设 set_config('app.factory_id')，无需再设。
+- factory_id None 拒绝（Rule 6）。
+
+入口
+----
+    stats = await run_supplier_price_ingest(cretas_pool, smartbi_pool, factory_id)
+    # stats: dict with keys: total_read, skipped_no_price, skipped_no_date,
+    #                         skipped_existing, inserted, errors
+
+Path bootstrap（独立脚本运行时 smartbi/ 入 sys.path）mirrors factory_production_etl。
+"""
+from __future__ import annotations
+
+import logging
+import sys
+import os
+from typing import Any, Dict, List, Optional, Set
+
+# ── Path bootstrap ────────────────────────────────────────────────────────────
+_here = os.path.dirname(os.path.abspath(__file__))
+_service_root = os.path.dirname(os.path.dirname(_here))  # .../backend/python
+if _service_root not in sys.path:
+    sys.path.insert(0, _service_root)
+
+from smartbi.gold.supplier_price_etl import _normalize_name  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sanity guard — drop garbage / sentinel unit_prices before they propagate
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A single dirty material_batches.unit_price flows: agg_supplier_price →
+# _get_latest_real_purchase_prices() → dim_ingredient.unit_price (real_purchase
+# override) → fact_restaurant_recipe_line.line_cost → agg_restaurant_product_cost
+# .food_cost → gross-margin KPI. One bad row poisons the whole dish's food cost.
+#
+# Real incident (DEMO_REST 鲈鱼): unit_price 99999.00 / 119998.80 (a total purchase
+# amount mistakenly entered as per-kg price) made food_cost ≈ ¥30k/份 and gross
+# margin ≈ -23526%. Per-unit ingredient prices for restaurant raw materials never
+# legitimately reach this magnitude, so we drop any row at/above the sentinel cap
+# rather than ingest it (honest skip + stat, not a silently fabricated price).
+#
+# This is an absolute ceiling: cheap and robust without needing per-category
+# medians at ingest time. Legitimate high-value-per-unit goods stay well under it.
+MAX_SANE_UNIT_PRICE: float = 99999.0
+
+
+def _is_sane_unit_price(price: Optional[float]) -> bool:
+    """True if price is a plausible per-unit ingredient price.
+
+    Rejects None, non-positive, and absurd sentinel/garbage values
+    (>= MAX_SANE_UNIT_PRICE) so they never override dim_ingredient.unit_price.
+    """
+    if price is None:
+        return False
+    return 0.0 < price < MAX_SANE_UNIT_PRICE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _source_note_id(batch_id: Any) -> str:
+    """Canonical source_note_id for a material_batch row."""
+    return f"mb:{batch_id}"
+
+
+def _to_float_safe(v: Any) -> Optional[float]:
+    """Decimal / numeric DB value → float, None preserved."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: fetch raw data from cretas_db
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _fetch_material_batches(cretas_pool, factory_id: str) -> list:
+    """Fetch material_batches with price, JOINed to names.
+
+    JOINs raw_material_types and suppliers for display names.
+    LEFT JOIN so that missing FK rows do not drop the batch price row (fallback
+    to raw ID strings instead — honest, not fabricated).
+
+    Returns list of asyncpg Record / dict-like rows.
+    """
+    sql = """
+        SELECT
+            mb.id,
+            mb.factory_id,
+            mb.material_type_id,
+            mb.supplier_id,
+            mb.purchase_date,
+            mb.inbound_date,
+            mb.unit_price,
+            mb.receipt_quantity  AS quantity,
+            mb.quantity_unit     AS unit,
+            rmt.name             AS material_name,
+            s.name               AS supplier_name
+        FROM material_batches mb
+        LEFT JOIN raw_material_types rmt
+               ON rmt.id = mb.material_type_id
+              AND rmt.deleted_at IS NULL
+        LEFT JOIN suppliers s
+               ON s.id = mb.supplier_id
+              AND s.deleted_at IS NULL
+        WHERE mb.factory_id  = $1::varchar
+          AND mb.unit_price  IS NOT NULL
+          AND mb.deleted_at  IS NULL
+        ORDER BY mb.id
+    """
+    async with cretas_pool.acquire() as conn:
+        return await conn.fetch(sql, factory_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: load existing source_note_ids from smartbi_db (idempotency)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _load_existing_source_ids(smartbi_pool, factory_id: str) -> Set[str]:
+    """Return set of source_note_ids already in agg_supplier_price for this factory.
+
+    Only loads ids that look like 'mb:*' to avoid false collisions with Java-pushed
+    delivery-note rows (whose source_note_ids are note UUIDs).
+
+    ⚠️ RLS: set_config(..., is_local=true) is transaction-scoped. asyncpg runs each
+    statement in its own implicit transaction (autocommit), so a bare set_config +
+    separate fetch would reset app.factory_id BEFORE the fetch → RLS reads 0 rows →
+    every row treated as new → duplicate inserts (the prod 2x dedup-failure root cause).
+    Wrapping both in an explicit conn.transaction() keeps the local GUC alive for the
+    fetch so RLS USING(factory_id = current_setting('app.factory_id', true)) passes.
+    """
+    async with smartbi_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
+            )
+            rows = await conn.fetch(
+                """
+                SELECT source_note_id
+                  FROM agg_supplier_price
+                 WHERE factory_id     = $1
+                   AND source_note_id LIKE 'mb:%'
+                """,
+                factory_id,
+            )
+    return {r["source_note_id"] for r in rows}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2b: dedicated ingest insert (ON CONFLICT DO NOTHING via partial unique idx)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _insert_ingest_rows(smartbi_pool, factory_id: str, rows: List[dict]) -> int:
+    """Insert material-batch ingest rows into agg_supplier_price (idempotent).
+
+    Unlike the shared append-only ``upsert_supplier_price_batch`` (used by Java
+    delivery-note confirms, which MUST append every confirmed line), the ingest path
+    keys on source_note_id = 'mb:{batch_id}' and is idempotent: re-running must NOT
+    duplicate. This uses ``ON CONFLICT ... DO NOTHING`` against the partial unique
+    index ``uq_agg_sp_mb_source`` (WHERE source_note_id LIKE 'mb:%') so that even if
+    the existing-id pre-check races / returns stale data, the DB is the final backstop.
+
+    The partial index only covers 'mb:%' rows, so delivery-note append rows are
+    unaffected (their ON CONFLICT target index does not exist → they keep appending).
+
+    RLS: set_config + INSERT wrapped in one explicit transaction (is_local=true GUC
+    must outlive the INSERT for the WITH CHECK policy to pass).
+
+    Returns count actually inserted (conflicts skipped are excluded from RETURNING).
+    """
+    if factory_id is None or factory_id == "":
+        raise ValueError(
+            f"_insert_ingest_rows: factory_id required (got {factory_id!r})"
+        )
+    if not rows:
+        return 0
+
+    source_note_ids = [r.get("source_note_id") for r in rows]
+    supplier_ids = [r.get("supplier_id") for r in rows]
+    supplier_names = [r.get("supplier_name") for r in rows]
+    ingredient_names = [r.get("ingredient_name") or "" for r in rows]
+    normalized_names = [
+        r.get("normalized_name") or _normalize_name(r.get("ingredient_name") or "")
+        for r in rows
+    ]
+    raw_material_type_ids = [r.get("raw_material_type_id") for r in rows]
+    delivery_dates = [r.get("delivery_date") for r in rows]
+    unit_prices = [r.get("unit_price") for r in rows]
+    quantities = [r.get("quantity") for r in rows]
+    units = [r.get("unit") for r in rows]
+    line_amounts = [r.get("line_amount") for r in rows]
+
+    async with smartbi_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.factory_id', $1, false)", factory_id
+            )
+            result = await conn.fetch(
+                """
+                INSERT INTO agg_supplier_price (
+                    factory_id, source_note_id, supplier_id, supplier_name,
+                    ingredient_name, normalized_name, raw_material_type_id,
+                    delivery_date, unit_price, quantity, unit, line_amount
+                )
+                SELECT $1, sni, sid, sname, iname, nname, rmt,
+                       ddate, uprice, qty, u, lamt
+                  FROM UNNEST(
+                    $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+                    $7::text[], $8::date[], $9::numeric[], $10::numeric[],
+                    $11::text[], $12::numeric[]
+                  ) AS t(sni, sid, sname, iname, nname, rmt, ddate, uprice, qty, u, lamt)
+                ON CONFLICT (factory_id, source_note_id)
+                       WHERE source_note_id LIKE 'mb:%'
+                  DO NOTHING
+                RETURNING id
+                """,
+                factory_id,
+                source_note_ids,
+                supplier_ids,
+                supplier_names,
+                ingredient_names,
+                normalized_names,
+                raw_material_type_ids,
+                delivery_dates,
+                unit_prices,
+                quantities,
+                units,
+                line_amounts,
+            )
+    count = len(result) if result is not None else 0
+    logger.info(
+        "[supplier-ingest] inserted %d/%d rows for factory=%s "
+        "(conflicts skipped: %d)",
+        count, len(rows), factory_id, len(rows) - count,
+    )
+    return count
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 3: transform to upsert row dicts
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _to_upsert_row(raw_row, existing_ids: Set[str]) -> Optional[dict]:
+    """Convert a material_batch DB row to an upsert-ready dict.
+
+    Returns None if the row should be skipped (existing, no date, etc.).
+    The caller should log skip reasons separately via stats.
+    """
+    batch_id = raw_row["id"]
+    source_id = _source_note_id(batch_id)
+
+    if source_id in existing_ids:
+        return None  # already ingested; idempotent skip
+
+    # delivery_date: prefer purchase_date, fall back to inbound_date
+    delivery_date = raw_row.get("purchase_date") or raw_row.get("inbound_date")
+    if delivery_date is None:
+        return None  # no date → cannot place on price timeline; skip
+
+    # sanity guard: drop garbage / sentinel unit_prices (e.g. 99999 total-amount-as-
+    # per-unit mistakes) before they poison dim_ingredient.unit_price → food_cost.
+    unit_price = _to_float_safe(raw_row["unit_price"])
+    if not _is_sane_unit_price(unit_price):
+        return None  # insane price → skip (caller counts as skipped_bad_price)
+
+    # ingredient_name: honest fallback to material_type_id string (not fabricated)
+    material_name = raw_row.get("material_name")
+    ingredient_name = (
+        material_name
+        if material_name is not None
+        else str(raw_row["material_type_id"])
+    )
+
+    # supplier_name: honest fallback to supplier_id string
+    supplier_name_raw = raw_row.get("supplier_name")
+    supplier_name = (
+        supplier_name_raw
+        if supplier_name_raw is not None
+        else (str(raw_row["supplier_id"]) if raw_row.get("supplier_id") else None)
+    )
+
+    return {
+        "source_note_id":      source_id,
+        "raw_material_type_id": str(raw_row["material_type_id"]),
+        "supplier_id":         str(raw_row["supplier_id"]) if raw_row.get("supplier_id") else None,
+        "supplier_name":       supplier_name,
+        "ingredient_name":     ingredient_name,
+        # normalized_name left to upsert_supplier_price_batch._normalize_name
+        "delivery_date":       delivery_date,
+        "unit_price":          unit_price,
+        "quantity":            _to_float_safe(raw_row.get("quantity")),
+        "unit":                raw_row.get("unit"),
+        "line_amount":         None,  # material_batches has no line_amount field
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def run_supplier_price_ingest(
+    cretas_pool,
+    smartbi_pool,
+    factory_id: str,
+) -> Dict[str, Any]:
+    """Ingest material_batches prices into agg_supplier_price.
+
+    Idempotent: rows already present (source_note_id = 'mb:{id}') are skipped.
+
+    Returns stats dict:
+        total_read        — rows from material_batches (with price)
+        skipped_no_date   — rows without purchase_date or inbound_date
+        skipped_existing  — rows already in agg_supplier_price
+        skipped_bad_price — rows with garbage/sentinel unit_price (>= cap) dropped
+        inserted          — rows actually inserted
+        errors            — list of error strings (empty on full success)
+    """
+    if factory_id is None or factory_id == "":
+        raise ValueError(
+            f"run_supplier_price_ingest: factory_id required (got {factory_id!r})"
+        )
+
+    stats: Dict[str, Any] = {
+        "total_read":         0,
+        "skipped_no_date":    0,
+        "skipped_existing":   0,
+        "skipped_bad_price":  0,
+        "inserted":           0,
+        "errors":             [],
+    }
+
+    try:
+        raw_rows = await _fetch_material_batches(cretas_pool, factory_id)
+    except Exception as exc:
+        stats["errors"].append(f"fetch: {exc}")
+        logger.exception("[supplier-ingest] fetch failed for factory=%s", factory_id)
+        return stats
+
+    stats["total_read"] = len(raw_rows)
+    if not raw_rows:
+        logger.info("[supplier-ingest] no priced material_batches for factory=%s", factory_id)
+        return stats
+
+    try:
+        existing_ids = await _load_existing_source_ids(smartbi_pool, factory_id)
+    except Exception as exc:
+        stats["errors"].append(f"load_existing: {exc}")
+        logger.exception("[supplier-ingest] failed to load existing ids for factory=%s", factory_id)
+        return stats
+
+    upsert_rows: List[dict] = []
+    for raw in raw_rows:
+        row = _to_upsert_row(raw, existing_ids)
+        if row is None:
+            batch_id = raw["id"]
+            source_id = _source_note_id(batch_id)
+            # Mirror the skip-reason precedence inside _to_upsert_row:
+            # existing > no_date > bad_price.
+            if source_id in existing_ids:
+                stats["skipped_existing"] += 1
+            elif (raw.get("purchase_date") or raw.get("inbound_date")) is None:
+                stats["skipped_no_date"] += 1
+            elif not _is_sane_unit_price(_to_float_safe(raw["unit_price"])):
+                stats["skipped_bad_price"] += 1
+                logger.warning(
+                    "[supplier-ingest] factory=%s batch=%s dropped: insane unit_price=%s "
+                    "(>= %.0f sentinel cap)",
+                    factory_id, batch_id, raw["unit_price"], MAX_SANE_UNIT_PRICE,
+                )
+            else:
+                # defensive: unexpected None — count as no_date to avoid silent loss
+                stats["skipped_no_date"] += 1
+        else:
+            upsert_rows.append(row)
+
+    if not upsert_rows:
+        logger.info(
+            "[supplier-ingest] nothing new to insert for factory=%s "
+            "(total=%d existing=%d no_date=%d)",
+            factory_id, stats["total_read"],
+            stats["skipped_existing"], stats["skipped_no_date"],
+        )
+        return stats
+
+    try:
+        inserted = await _insert_ingest_rows(smartbi_pool, factory_id, upsert_rows)
+        stats["inserted"] = inserted
+    except Exception as exc:
+        stats["errors"].append(f"upsert: {exc}")
+        logger.exception("[supplier-ingest] upsert failed for factory=%s", factory_id)
+        return stats
+
+    logger.info(
+        "[supplier-ingest] factory=%s total=%d existing=%d no_date=%d "
+        "bad_price=%d inserted=%d",
+        factory_id,
+        stats["total_read"],
+        stats["skipped_existing"],
+        stats["skipped_no_date"],
+        stats["skipped_bad_price"],
+        stats["inserted"],
+    )
+    return stats

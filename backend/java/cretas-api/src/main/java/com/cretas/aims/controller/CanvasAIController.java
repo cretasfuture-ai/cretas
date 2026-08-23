@@ -1,0 +1,891 @@
+package com.cretas.aims.controller;
+
+import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.PrincipalType;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.user.UserDTO;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.MobileService;
+import com.cretas.aims.utils.TokenUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.regex.Pattern;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/mobile/{factoryId}/config/v2/ai")
+@RequiredArgsConstructor
+@Tag(name = "Canvas AI Agent", description = "Canvas AI 配置助手 (DashScope Qwen)")
+public class CanvasAIController {
+
+    private final ToolRegistry toolRegistry;
+    private final ObjectMapper objectMapper;
+    private final DashScopeClient dashScopeClient;
+    private final MobileService mobileService;
+    private final ToolExecutionGateway toolExecutionGateway;
+
+    private static final String PRODUCT_WORK_PROCESS_MODULE = "product_work_process_config";
+    private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
+    private static final String PRODUCT_WORK_PROCESS_VERSION = "1.0.0";
+    private static final String PRODUCT_WORK_PROCESS_DRAFT_REPLY = "已生成工序配置草稿";
+
+    private static final String PRODUCT_PROCESS_WORKFLOW_MODULE = "product_process_workflow_config";
+    private static final String PRODUCT_PROCESS_WORKFLOW_TOOL = "canvas_product_process_workflow_config";
+    private static final String PRODUCT_PROCESS_WORKFLOW_REPLY = "已生成可审核的 Workflow 本地补丁";
+    private static final String PRODUCT_PROCESS_WORKFLOW_SYSTEM_PROMPT = """
+            You are a preview-only product-process Workflow configuration assistant.
+            Return only a JSON WorkflowPatch[] array. Never call tools, APIs, save, publish,
+            activate, create products, create reports, create tasks, or change inventory.
+            Allowed operations: UPSERT_NODE, REMOVE_NODE, UPSERT_EDGE, REMOVE_EDGE, SET_NODE_FIELD.
+            SET_NODE_FIELD roots: name, skuId, skuCode, specification, ports, conversionRule,
+            reportingRequired. Do not return any other operation or field path.
+            The patch array is atomic. Order dependent patches as UPSERT_NODE first,
+            SET_NODE_FIELD second, and UPSERT_EDGE last. Any invalid member rejects the whole array.
+
+            Current definition: %s
+            Selected node id: %s
+            """;
+
+    private static final String APPROVAL_WORKFLOW_MODULE = "approval_workflow_config";
+    private static final String APPROVAL_WORKFLOW_REPLY = "当前审批草稿已更新";
+    private static final String APPROVAL_WORKFLOW_SYSTEM_PROMPT = """
+            You are a preview-only approval Workflow draft editor. Return ONLY one JSON object.
+            Never call tools, APIs, save, publish, enable, archive, approve, reject, or change
+            running approval instances. The frontend applies the result only to the reversible
+            local DRAFT.
+
+            Output shape:
+            {
+              "name": "<friendly workflow name>",
+              "startNodeId": "<id of the only start node>",
+              "nodes": [
+                {
+                  "id": "<preserve existing id; new ids use ai_<short_key>>",
+                  "type": "start|approval|condition|parallel|join|notify|end",
+                  "label": "<friendly Chinese label>",
+                  "config": {
+                    "approverRoles": ["<exact role code from directory>"],
+                    "approverUserIds": ["<exact user id from directory>"],
+                    "requiredApprovers": 1,
+                    "timeoutMinutes": 0,
+                    "departmentIds": [],
+                    "delegateUserId": "<exact user id from directory>",
+                    "notifyRoles": ["<exact role code from directory>"],
+                    "channels": ["wechat|dingtalk|email"],
+                    "mode": "ALL|N_OF_M|ANY",
+                    "n": 2,
+                    "outcome": "APPROVED|REJECTED|TIMEOUT|CANCELLED",
+                    "description": "<friendly condition description>"
+                  }
+                }
+              ],
+              "edges": [
+                {
+                  "id": "<preserve existing id; new ids use ai_edge_<short_key>>",
+                  "source": "<node id>",
+                  "target": "<node id>",
+                  "label": "<friendly branch label>",
+                  "priority": 0,
+                  "amountThreshold": 50000,
+                  "default": false
+                }
+              ]
+            }
+
+            Rules:
+            - Return the complete desired draft, preserving every unchanged node and edge.
+            - Existing ids must remain stable. Do not invent role codes, user ids, or department ids.
+            - Use only directory identities included in context. If the requested person or role
+              is absent, return {"error":"<clear Chinese reason>"}.
+            - Never output raw JSON expressions, SpEL, UUIDs for people, hashes, or database code.
+              For amount routing use amountThreshold/default only.
+            - Keep exactly one start node, at least one end node, no duplicate edges, no cycles,
+              and no edges entering start or leaving end.
+            - Omit config keys irrelevant to the node type. Preserve advanced fields that the user
+              did not ask to change by keeping the existing node config.
+            - If a selected Cell is present and the request says "this/current/selected", modify it.
+
+            Current approval draft and allowed directories:
+            %s
+            """;
+
+    // 长久方案 (弃补丁): LLM 只出「语义规格」(rawMaterials + steps), 不再拼底层图补丁。
+    // 前端确定性编译器 (复用 createProcessBranch) 把规格建成合法图 —— LLM 再也不碰 node/edge/id。
+    private static final String PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT = """
+            You are a product-process Workflow planning assistant. From the user's natural-language
+            description, output ONLY a JSON object describing the workflow at a SEMANTIC level.
+            Do NOT output graph nodes / edges / ids / patches. Never call tools, save, publish, or
+            change data. The frontend deterministically builds the graph from your JSON.
+
+            Output shape (JSON only, no prose):
+            {
+              "rawMaterials": ["<entry raw material name>", ...],
+              "steps": [
+                {
+                  "process": "<work process name, e.g. 清洗/卤制/切片装盒>",
+                  "inputs": ["<extra raw material name>", ...],
+                  "processCategory": "<optional: 熟制/注射/切配/... — the work process category>",
+                  "outputs": [
+                    { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>",
+                      "unit": "<kg/盒/只/...>", "byproduct": false }
+                  ],
+                  "seasonings": [
+                    { "name": "<seasoning/auxiliary material name>", "dosagePerKgG": <grams per kg of input>,
+                      "subsequentPotRatio": <optional 0-100, ONLY for 熟制 steps> }
+                  ],
+                  "injectionAmount": <optional kg, ONLY for 注射 steps>
+                }
+              ]
+            }
+            Rules:
+            - steps are ordered; each step consumes the previous step's first output
+              (step 1 consumes the rawMaterials).
+            - a step with multiple outputs = 分流/多产出 (one process yields several products).
+            - "inputs" (optional) = 合流/混批: EXTRA raw materials this step也投入, on TOP of
+              the previous step's output. Use it when the user says several ingredients/materials
+              are combined/mixed/assembled into one process (e.g. 拼装/分装/调配/混合). Omit or []
+              when the step只沿主链 consumes the upstream output. Do NOT list the previous step's
+              output here — only NEW raw materials entering at this step.
+            - the LAST step output is usually FINISHED_GOOD; intermediate outputs are SEMI_FINISHED.
+            - use the user's own wording for process/output/material names. Keep it minimal, valid JSON only.
+            - "byproduct": true marks an output as 副产 (a by-product such as 鸡架/骨头/肥油 that is
+              warehoused but is not the main product). Quantity is entered at reporting time, never here.
+            - "seasonings" (optional) = 调料/辅料 INPUT amounts for this step. dosagePerKgG MUST be > 0.
+            - "subsequentPotRatio" (0-100) is ONLY meaningful on 熟制 steps; "injectionAmount" (> 0) is
+              ONLY meaningful on 注射 steps. Do NOT emit them on other步骤 —— the frontend rejects
+              them and tells the user, which just wastes a round trip.
+
+            Current definition (context, may be empty): %s
+            Selected node id: %s
+            """;
+
+    // D3: narrow route for work-process catalog (create/update work-process master data)
+    private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
+    private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
+    private static final String WORK_PROCESS_CATALOG_VERSION = "1.0.0";
+    /**
+     * Prose → canvas_work_process_catalog parameters. This prompt used to live in the
+     * browser (WorkProcessAIChatPanel.buildInstruction) and was posted as the chat
+     * `message`, which meant it was never read by any model — this narrow route skips
+     * the generic LLM path. It belongs on the server, next to the tool whose schema it
+     * describes, so the two cannot drift apart.
+     */
+    private static final String WORK_PROCESS_CATALOG_SYSTEM_PROMPT = """
+            你是工序主数据抽取器。把用户的中文描述转成工序管理工具的调用参数。
+            只返回一个 JSON 对象，不要解释，不要代码围栏。
+
+            字段:
+            - action: "create"(新建/新增/加一道) 或 "update"(修改/更新/把某工序改成)，必填
+            - id: action=update 且用户给了工序ID时填；没给就省略
+            - processName: 工序名称，如 焯水、滚揉、装盒
+            - processCategory: 工序类别，如 前处理、加工、包装、质检
+            - estimatedMinutes: 标准工时，整数，单位分钟
+            - standardYieldMin / standardYieldMax: 标准出成率上下限，用小数，例如 30% 写 0.30
+            - needsInput: 是否需要录投入量，true / false
+            - standardHourlyRate: 标准时薪，数字，单位元/小时
+
+            规则:
+            - 工序主数据不维护投入/产出单位，禁止生成 unit 或 outputUnit。
+            - 用户没提到的字段一律省略，不要猜、不要补默认值。
+            - 如果无法判断要做什么，返回 {"error":"<一句中文说明还缺什么>"}。
+
+            例子:
+            输入: 新建焯水工序，加工类，标准时薪25
+            输出: {"action":"create","processName":"焯水","processCategory":"加工","standardHourlyRate":25}
+            """;
+
+    /**
+     * Only canvas_* tools are allowed via AI chat to prevent prompt injection from
+     * calling data-destructive or system-level tools.
+     */
+    private static final Pattern CANVAS_TOOL_PATTERN = Pattern.compile("^canvas_[a-z0-9_]+$");
+
+    private void validateCanvasTool(String toolName) {
+        if (toolName == null || !CANVAS_TOOL_PATTERN.matcher(toolName).matches()) {
+            // e.getMessage() 会原样进 errors 列表回传前端 Canvas AI 聊天面板 (applyDiffs 里的
+            // catch 块) —— 此前是纯英文, 用户看到的是一句读不懂的技术报错。
+            throw new BusinessException("Canvas AI 只允许调用 canvas_* 工具, 已拒绝: " + toolName);
+        }
+    }
+
+    private Map<String, Object> buildToolContext(String factoryId, String authorization) {
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("factoryId", factoryId);
+        try {
+            if (authorization != null) {
+                String token = TokenUtils.extractToken(authorization);
+                Long userId = mobileService.getUserFromToken(token).getId();
+                if (userId != null) {
+                    ctx.put("userId", userId);
+                    ctx.put("operatorId", userId);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract userId from token: {}", e.getMessage());
+        }
+        return ctx;
+    }
+
+    private static final String CANVAS_SYSTEM_PROMPT = """
+            你是工厂配置助手。用户通过 Canvas 配置系统管理工厂的模块、字段、工作流、校验规则、触发链和AI工具。
+
+            你可以调用以下 Canvas 配置工具:
+            - canvas_toggle_module: 启用/禁用工厂模块 (参数: moduleCode, enabled)
+            - canvas_toggle_tool: 启用/禁用AI工具 (参数: toolName, enabled)
+            - canvas_toggle_skill: 启用/禁用AI技能 (参数: skillName, enabled)
+            - canvas_update_field: 修改字段属性 (参数: moduleCode, fieldCode, property[visible/required/label/defaultValue], value)
+            - canvas_update_trigger_chain: 修改触发链 (参数: chainCode, enabled, stepOrder, stepEnabled)
+            - canvas_apply_template: 应用行业模板 (参数: templateCode[FOOD_PROCESSING/BAKERY/RESTAURANT/AQUACULTURE])
+
+            可用模块: sales_order, purchase_order, bom, production_plan, production_report,
+            quality_inspection, inventory, inbound, outbound, equipment, customer, supplier,
+            finance_ar, finance_ap, hr_employee, transfer, traceability
+            """;
+
+    @Data
+    public static class AIRequest {
+        private String message;
+        private String mode; // autopilot, plan, action
+        private String moduleCode;
+        private Map<String, Object> params;
+    }
+
+    @Data
+    public static class AIResponse {
+        private String reply;
+        private List<Map<String, Object>> diffs;
+        private boolean applied;
+    }
+
+    @PostMapping("/chat")
+    @Operation(summary = "Canvas AI 对话 (DashScope Qwen)")
+    // Round 7a P0 fix: AI chat in autopilot mode calls arbitrary canvas_* tools via LLM.
+    // Previously NO auth check — any authenticated user (viewer/operator/etc) could run
+    // "禁用 production / 应用 RESTAURANT 模板" and the LLM would execute DDL-level changes.
+    // Now restricted to canvas config admins only.
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<AIResponse> chat(
+            @PathVariable String factoryId,
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody AIRequest request) {
+
+        AIResponse response = new AIResponse();
+        String mode = request.getMode() != null ? request.getMode() : "action";
+        String message = request.getMessage();
+        log.info("Canvas AI [{}] factory={}: {}", mode, factoryId, message);
+        try {
+            if (PRODUCT_WORK_PROCESS_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleProductWorkProcessConfigChat(
+                        request, authenticatedPrincipal(factoryId, authorization)));
+            }
+            // D3: work_process_catalog narrow route — bypasses LLM prompt entirely
+            if (WORK_PROCESS_CATALOG_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleWorkProcessCatalogChat(
+                        request, authenticatedPrincipal(factoryId, authorization)));
+            }
+            if (APPROVAL_WORKFLOW_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleApprovalWorkflowConfigChat(request));
+            }
+
+            Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
+            if (PRODUCT_PROCESS_WORKFLOW_MODULE.equals(request.getModuleCode())) {
+                return ApiResponse.success(handleProductProcessWorkflowConfigChat(request, toolContext));
+            }
+
+            switch (mode) {
+                case "autopilot" -> {
+                    List<Map<String, Object>> diffs = generatePlan(factoryId, message);
+                    response.setDiffs(diffs);
+                    response.setReply("自动模式已生成 " + diffs.size()
+                            + " 项候选变更。首次请求不会写入，请明确确认后执行。");
+                    response.setApplied(false);
+                }
+                case "plan" -> {
+                    List<Map<String, Object>> diffs = generatePlan(factoryId, message);
+                    response.setDiffs(diffs);
+                    response.setReply("已生成 " + diffs.size() + " 项变更方案，请逐项审核后应用。");
+                    response.setApplied(false);
+                }
+                case "action" -> {
+                    response.setReply(analyzeImpact(factoryId, message));
+                    response.setApplied(false);
+                }
+                default -> response.setReply("未知模式: " + mode);
+            }
+        } catch (Exception e) {
+            log.error("Canvas AI error: {}", e.getMessage(), e);
+            response.setReply("AI 处理失败: " + e.getMessage());
+        }
+
+        return ApiResponse.success(response);
+    }
+
+    private AIResponse handleApprovalWorkflowConfigChat(AIRequest request) throws Exception {
+        Map<String, Object> requestParams = request.getParams() != null
+                ? request.getParams()
+                : Map.of();
+        Map<String, Object> context = readStringObjectMap(requestParams.get("context"));
+        String prompt = APPROVAL_WORKFLOW_SYSTEM_PROMPT.formatted(
+                objectMapper.writeValueAsString(context));
+        String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
+        Map<String, Object> spec;
+        try {
+            spec = objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+        } catch (Exception parseError) {
+            return approvalWorkflowFailureResponse("AI 未能生成可用的审批草稿，请换一种说法重试");
+        }
+        if (spec.get("error") != null) {
+            return approvalWorkflowFailureResponse(Objects.toString(spec.get("error")));
+        }
+        if (!(spec.get("nodes") instanceof List<?> nodeList) || nodeList.isEmpty()
+                || !(spec.get("edges") instanceof List<?>)
+                || !(spec.get("startNodeId") instanceof String startNodeId)
+                || startNodeId.isBlank()) {
+            return approvalWorkflowFailureResponse("AI 返回的审批草稿结构不完整，请把审批顺序说清楚后重试");
+        }
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(APPROVAL_WORKFLOW_REPLY);
+        response.setDiffs(List.of(Map.of(
+                "type", "APPROVAL_WORKFLOW_SPEC",
+                "tool", "canvas_approval_workflow_draft",
+                "params", Map.of("spec", spec),
+                "description", APPROVAL_WORKFLOW_REPLY)));
+        return response;
+    }
+
+    private AIResponse approvalWorkflowFailureResponse(String message) {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setDiffs(List.of());
+        response.setReply(message);
+        return response;
+    }
+
+    /**
+     * Workflow-only route. It always returns before generic autopilot/plan/action handling and
+     * can only call the dedicated tool's public preview entry point.
+     */
+    private AIResponse handleProductProcessWorkflowConfigChat(
+            AIRequest request, Map<String, Object> toolContext) throws Exception {
+        ToolExecutor executor = toolRegistry.getExecutor(PRODUCT_PROCESS_WORKFLOW_TOOL)
+                .orElseThrow(() -> new BusinessException("工具不存在: " + PRODUCT_PROCESS_WORKFLOW_TOOL));
+
+        Map<String, Object> requestParams = request.getParams() != null
+                ? request.getParams()
+                : Map.of();
+        Map<String, Object> nestedContext = readStringObjectMap(requestParams.get("context"));
+        Object definition = requestParams.containsKey("definition")
+                ? requestParams.get("definition")
+                : nestedContext.get("definition");
+        Object selectedNodeId = requestParams.containsKey("selectedNodeId")
+                ? requestParams.get("selectedNodeId")
+                : nestedContext.get("selectedNodeId");
+
+        // 弃补丁: 让 LLM 只产出语义规格 (rawMaterials + steps), 前端确定性编译成图。
+        String prompt = PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT.formatted(
+                objectMapper.writeValueAsString(definition),
+                Objects.toString(selectedNodeId, "null"));
+        String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
+        Map<String, Object> spec;
+        try {
+            // 规格是 JSON 对象 {...} 不是数组, 必须用 extractJsonObject (extractJson 只抓 [...] 数组)。
+            spec = objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+        } catch (Exception parseError) {
+            return workflowSpecFailureResponse();
+        }
+        // 只校验规格 shape (steps 非空); 图的合法性由前端编译器保证 (端口/边/id 全代码生成)。
+        if (!(spec.get("steps") instanceof List<?> stepList) || stepList.isEmpty()) {
+            return workflowSpecFailureResponse();
+        }
+
+        Map<String, Object> diffParams = new LinkedHashMap<>();
+        diffParams.put("spec", spec);
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(PRODUCT_PROCESS_WORKFLOW_REPLY);
+        response.setDiffs(List.of(Map.of(
+                "type", "PRODUCT_PROCESS_WORKFLOW_SPEC",
+                "tool", PRODUCT_PROCESS_WORKFLOW_TOOL,
+                "params", diffParams,
+                "description", PRODUCT_PROCESS_WORKFLOW_REPLY)));
+        return response;
+    }
+
+    private AIResponse workflowPatchFailureResponse() {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setDiffs(List.of());
+        response.setReply("AI 未返回可审核的 Workflow 补丁，请调整描述后重试");
+        return response;
+    }
+
+    private AIResponse workflowSpecFailureResponse() {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setDiffs(List.of());
+        response.setReply("AI 未能从描述里解析出可用的工序步骤，请把每一步的工序名和产出说清楚后重试");
+        return response;
+    }
+
+    private Map<String, Object> readStringObjectMap(Object value) {
+        if (!(value instanceof Map<?, ?> source)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, entryValue) -> {
+            if (key instanceof String stringKey) {
+                result.put(stringKey, entryValue);
+            }
+        });
+        return result;
+    }
+
+    /**
+     * D1 narrow module route: product work-process config needs catalog-aware
+     * parsing by a business Tool, not the generic Canvas prompt. Existing canvas
+     * modules keep the original LLM path above.
+     */
+    private AIResponse handleProductWorkProcessConfigChat(
+            AIRequest request, ExecutionPrincipal principal) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (request.getParams() != null) {
+            params.putAll(request.getParams());
+        }
+        params.put("message", request.getMessage());
+        params.put("apply", false);
+
+        ToolExecutionResult gatewayResult = executePreview(
+                PRODUCT_WORK_PROCESS_TOOL, PRODUCT_WORK_PROCESS_VERSION, params, principal);
+        Map<String, Object> toolResponse = gatewayPayload(gatewayResult);
+
+        // D1 B-1: surface tool failures instead of silently returning a fake success draft
+        if (!Boolean.TRUE.equals(toolResponse.get("success"))) {
+            String errorMsg = toolFailureMessage(toolResponse,
+                    "工序配置工具没能处理这次请求。请补充产品和工序顺序后重试。");
+            AIResponse errorResponse = new AIResponse();
+            errorResponse.setApplied(false);
+            errorResponse.setReply(errorMsg);
+            errorResponse.setDiffs(List.of());
+            return errorResponse;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toolResponse.getOrDefault("data", Map.of());
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(Objects.toString(
+                data.getOrDefault("message", PRODUCT_WORK_PROCESS_DRAFT_REPLY),
+                PRODUCT_WORK_PROCESS_DRAFT_REPLY));
+        response.setDiffs(List.of(Map.of(
+                "type", "PRODUCT_WORK_PROCESS_DRAFT",
+                "tool", PRODUCT_WORK_PROCESS_TOOL,
+                "params", data,
+                "description", response.getReply()
+        )));
+        return response;
+    }
+
+    /**
+     * D3 narrow module route: work-process catalog (create/update work-process master data).
+     * Mirrors handleProductWorkProcessConfigChat — directly calls the tool, no LLM intermediary.
+     * This ensures canvas_work_process_catalog is reachable without being listed in
+     * CANVAS_SYSTEM_PROMPT (where it was previously missing and thus never called via autopilot/plan).
+     */
+    private AIResponse handleWorkProcessCatalogChat(
+            AIRequest request, ExecutionPrincipal principal) {
+        String mode = request.getMode() == null ? "action" : request.getMode().trim().toLowerCase();
+        if (!"autopilot".equals(mode) && !"plan".equals(mode) && !"action".equals(mode)) {
+            throw new BusinessException(400, "未知模式: " + mode);
+        }
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (request.getParams() != null) {
+            params.putAll(request.getParams());
+        }
+
+        // D3 fix (2026-08-19): canvas_work_process_catalog takes typed parameters
+        // (action / processName / processCategory / ...), and on this route nobody
+        // ever produced them — the panel posted prose and this narrow route skips the
+        // generic LLM plan path, so `action` was always absent and every one of the
+        // three entries (计划/自动/建议) died in validateRequiredParams.
+        // Extract the parameters here, mirroring handleApprovalWorkflowConfigChat:
+        // the tool keeps its typed contract (so ToolRouter / Skill function-calling
+        // still work off getParametersSchema), and the prose→params step lives on the
+        // server next to the tool it describes.
+        if (params.get("action") == null) {
+            AIResponse extractionFailure =
+                    fillWorkProcessCatalogParams(request.getMessage(), params);
+            if (extractionFailure != null) {
+                return extractionFailure;
+            }
+        }
+        params.put("message", request.getMessage());
+
+        ToolExecutionResult gatewayResult = executePreview(
+                WORK_PROCESS_CATALOG_TOOL, WORK_PROCESS_CATALOG_VERSION, params, principal);
+        Map<String, Object> toolResponse = gatewayPayload(gatewayResult);
+
+        // D3 B-1: surface tool failures — never return a fake success
+        if (!Boolean.TRUE.equals(toolResponse.get("success"))) {
+            String errorMsg = toolFailureMessage(toolResponse,
+                    "工序管理工具没能处理这次请求。请写清楚动作和工序名，"
+                            + "例如「新建焯水工序，加工类，标准时薪25」。");
+            AIResponse errorResponse = new AIResponse();
+            errorResponse.setApplied(false);
+            errorResponse.setReply(errorMsg);
+            errorResponse.setDiffs(List.of());
+            return errorResponse;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toolResponse.getOrDefault("data", Map.of());
+        String replyMsg = Objects.toString(data.getOrDefault("message", "工序操作已完成"), "工序操作已完成");
+
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(switch (mode) {
+            case "autopilot" -> replyMsg + "；自动模式首次仅预览，请点击“确认并执行”后写入。";
+            case "plan" -> replyMsg + "；计划模式仅生成方案，请审核后点击“应用”。";
+            case "action" -> "建议模式仅分析，不会写入。" + replyMsg;
+            default -> replyMsg;
+        });
+        Map<String, Object> diff = Map.of(
+                "type", "WORK_PROCESS_CATALOG",
+                "tool", WORK_PROCESS_CATALOG_TOOL,
+                "params", data,
+                "description", replyMsg
+        );
+        response.setDiffs("action".equals(mode) ? List.of() : List.of(diff));
+        return response;
+    }
+
+    /**
+     * D3 fix: turn the operator's prose into canvas_work_process_catalog's typed
+     * parameters. Mutates {@code params} in place.
+     *
+     * @return {@code null} when extraction succeeded, otherwise a ready-to-send
+     *         failure response that says what could not be understood. It never
+     *         returns a half-filled params map with a success-looking response —
+     *         a missing {@code action} is reported, not guessed.
+     */
+    private AIResponse fillWorkProcessCatalogParams(String message, Map<String, Object> params) {
+        String userMessage = Objects.toString(message, "").trim();
+        if (userMessage.isEmpty()) {
+            return workProcessCatalogFailure(
+                    "还没有收到工序描述。请写清楚动作和工序名，例如「新建焯水工序，加工类，标准时薪25」。");
+        }
+
+        Map<String, Object> extracted;
+        try {
+            String llmResponse = dashScopeClient.chatLowTemp(
+                    WORK_PROCESS_CATALOG_SYSTEM_PROMPT, userMessage);
+            extracted = objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.warn("工序主数据参数抽取失败: message={}, error={}", userMessage, e.getMessage());
+            return workProcessCatalogFailure(
+                    "没能从这句话里读出要对哪道工序做什么。请写清楚动作和工序名，"
+                            + "例如「新建焯水工序，加工类，标准时薪25」。");
+        }
+
+        if (extracted.get("error") != null) {
+            return workProcessCatalogFailure(Objects.toString(extracted.get("error")));
+        }
+        extracted.forEach((key, value) -> {
+            // "message" 是工具自己的入参名, 不让模型覆写它
+            if (value != null && !"message".equals(key)) {
+                params.putIfAbsent(key, value);
+            }
+        });
+
+        if (params.get("action") == null) {
+            return workProcessCatalogFailure(
+                    "没听出这是要新建工序还是修改已有工序。请在描述里写明「新建」或「修改」，"
+                            + "例如「新建焯水工序，加工类」。");
+        }
+        return null;
+    }
+
+    private AIResponse workProcessCatalogFailure(String message) {
+        AIResponse response = new AIResponse();
+        response.setApplied(false);
+        response.setReply(message);
+        response.setDiffs(List.of());
+        return response;
+    }
+
+    /**
+     * A failed tool result carries its reason under {@code error}
+     * (AbstractTool#buildErrorResult) or under {@code message}
+     * (AbstractBusinessTool#buildNeedMoreInfoResult). Reading only {@code error}
+     * replaced every clarification request with one generic sentence and threw away
+     * the single piece of information the user actually needed — that is how
+     * "工序管理工具执行失败" reached prod with no content behind it.
+     */
+    private String toolFailureMessage(Map<String, Object> toolResponse, String fallback) {
+        for (String key : List.of("error", "message")) {
+            Object value = toolResponse.get(key);
+            if (value != null && !Objects.toString(value).isBlank()) {
+                return Objects.toString(value);
+            }
+        }
+        return fallback;
+    }
+
+    private ExecutionPrincipal authenticatedPrincipal(
+            String pathFactoryId,
+            String authorization) {
+        String token = TokenUtils.extractToken(authorization);
+        UserDTO authenticated = mobileService.getUserFromToken(token);
+        if (authenticated == null
+                || authenticated.getId() == null
+                || authenticated.getFactoryId() == null
+                || authenticated.getFactoryType() == null
+                || authenticated.getFactoryType().isBlank()
+                || authenticated.getRoleCode() == null) {
+            throw new BusinessException(401, "登录身份不完整，请重新登录");
+        }
+        if (!pathFactoryId.equals(authenticated.getFactoryId())) {
+            throw new BusinessException(403, "无权访问其他组织的 Canvas 配置");
+        }
+        return new ExecutionPrincipal(
+                authenticated.getFactoryId(),
+                authenticated.getFactoryType(),
+                authenticated.getId().toString(),
+                PrincipalType.USER,
+                Set.of(authenticated.getRoleCode().name()),
+                Set.of(),
+                Set.of());
+    }
+
+    private ToolExecutionResult executePreview(
+            String toolName,
+            String descriptorVersion,
+            Map<String, Object> params,
+            ExecutionPrincipal principal) {
+        String requestId = "canvas-preview-" + UUID.randomUUID();
+        ToolExecutionCommand command = new ToolExecutionCommand(
+                requestId,
+                "canvas-chat-" + UUID.randomUUID(),
+                "canvas-trace-" + UUID.randomUUID(),
+                toolName,
+                descriptorVersion,
+                objectMapper.valueToTree(params),
+                principal,
+                ToolExecutionSource.HTTP_CONTROLLER,
+                ToolExecutionMode.PREVIEW,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Instant.now().plusSeconds(30));
+        return toolExecutionGateway.execute(command);
+    }
+
+    private Map<String, Object> gatewayPayload(ToolExecutionResult result) {
+        if (result.status() == ToolExecutionStatus.PREVIEW_UNSUPPORTED) {
+            throw new BusinessException(409, "该工具不支持无写入预览，已阻止执行");
+        }
+        if (result.status() != ToolExecutionStatus.SUCCEEDED
+                && result.status() != ToolExecutionStatus.FAILED) {
+            throw new BusinessException(403, "工具预览未获授权");
+        }
+        if (!result.payload().isObject()) {
+            throw new BusinessException(502, "工具预览返回格式无效");
+        }
+        return objectMapper.convertValue(
+                result.payload(), new TypeReference<Map<String, Object>>() {});
+    }
+
+    @PostMapping("/apply-diffs")
+    @Operation(summary = "批量应用 Plan Mode 生成的变更")
+    // Round 7a P0 fix: same exposure as /chat — plan-mode diffs execute canvas_* tools.
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<String> applyDiffs(
+            @PathVariable String factoryId,
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody List<Map<String, Object>> diffs) {
+
+        Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
+        String operationId = "canvas-confirm-" + UUID.randomUUID();
+        toolContext.put("operationId", operationId);
+        toolContext.put("confirmationSource", "explicit-user-confirmation");
+        log.info("Canvas AI confirmed apply started: operationId={}, factory={}, operator={}, diffs={}",
+                operationId, factoryId, toolContext.get("operatorId"), diffs.size());
+        int applied = 0;
+        List<String> errors = new ArrayList<>();
+        for (Map<String, Object> diff : diffs) {
+            String toolName = (String) diff.get("tool");
+            if (toolName == null) continue;
+
+            if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)) {
+                errors.add(toolName + ": WORKFLOW_AI_PREVIEW_ONLY");
+                continue;
+            }
+
+            try {
+                validateCanvasTool(toolName);
+            } catch (Exception e) {
+                errors.add(e.getMessage());
+                continue;
+            }
+
+            Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+            if (executor.isEmpty()) {
+                errors.add("工具不存在: " + toolName);
+                continue;
+            }
+
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> params = (Map<String, Object>) diff.getOrDefault("params", Map.of());
+                String argsJson = objectMapper.writeValueAsString(params);
+                ToolCall toolCall = ToolCall.of(operationId + "-" + applied, toolName, argsJson);
+                executor.get().execute(toolCall, toolContext);
+                applied++;
+            } catch (Exception e) {
+                errors.add(toolName + ": " + e.getMessage());
+                log.warn("Failed to apply diff {}: {}", toolName, e.getMessage());
+            }
+        }
+
+        String msg = "已应用 " + applied + "/" + diffs.size() + " 项变更。操作ID: " + operationId;
+        if (!errors.isEmpty()) msg += "。失败: " + String.join("; ", errors);
+        log.info("Canvas AI confirmed apply completed: operationId={}, factory={}, applied={}, errors={}",
+                operationId, factoryId, applied, errors.size());
+        return ApiResponse.success(msg);
+    }
+
+    /**
+     * Plan Mode: LLM 生成变更方案 (不执行)，用户逐项审核后批量应用
+     */
+    private List<Map<String, Object>> generatePlan(String factoryId, String message) {
+        String prompt = CANVAS_SYSTEM_PROMPT + """
+
+                模式: PLAN (生成方案，不执行)
+                工厂ID: %s
+
+                用户需求: "%s"
+
+                请分析需求，生成配置变更方案。格式为 JSON 数组:
+                [{"type":"TOOL_TOGGLE|FIELD_CHANGE|TRIGGER_CHAIN_CHANGE|VALIDATION_RULE_CHANGE",
+                  "tool":"canvas_xxx",
+                  "params":{"key":"value"},
+                  "description":"中文说明这个变更的目的"}]
+
+                只返回 JSON 数组。每个变更必须有清晰的中文 description。
+                """.formatted(factoryId, message);
+
+        String llmResponse = dashScopeClient.chatFast(prompt, message);
+        log.info("Canvas AI Plan LLM response: {}", llmResponse);
+
+        try {
+            String json = extractJson(llmResponse);
+            return objectMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {});
+        } catch (Exception e) {
+            log.warn("Plan JSON parse failed: {}", e.getMessage());
+            // Return a single item explaining the error
+            return List.of(Map.of(
+                    "type", "INFO",
+                    "tool", "",
+                    "params", Map.of(),
+                    "description", "AI 分析: " + llmResponse
+            ));
+        }
+    }
+
+    /**
+     * Action Mode: LLM 分析用户操作的关联影响
+     */
+    private String analyzeImpact(String factoryId, String message) {
+        String prompt = CANVAS_SYSTEM_PROMPT + """
+
+                模式: ACTION (实时提示)
+                工厂ID: %s
+
+                用户正在操作: "%s"
+
+                请分析这个操作可能的关联影响:
+                1. 哪些模块/字段/工具会受影响？
+                2. 有什么潜在风险？
+                3. 有什么建议？
+
+                用简洁的中文回答，不超过 200 字。
+                """.formatted(factoryId, message);
+
+        return dashScopeClient.chatFast(prompt, message);
+    }
+
+    /**
+     * Extract JSON array from LLM response (handles markdown code blocks)
+     */
+    private String extractJson(String response) {
+        if (response == null) return "[]";
+        String trimmed = response.trim();
+        // Remove markdown code block if present
+        if (trimmed.startsWith("```json")) {
+            trimmed = trimmed.substring(7);
+        } else if (trimmed.startsWith("```")) {
+            trimmed = trimmed.substring(3);
+        }
+        if (trimmed.endsWith("```")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3);
+        }
+        trimmed = trimmed.trim();
+        // Find first [ and last ]
+        int start = trimmed.indexOf('[');
+        int end = trimmed.lastIndexOf(']');
+        if (start >= 0 && end > start) {
+            return trimmed.substring(start, end + 1);
+        }
+        return "[]";
+    }
+
+    /** 抽取 JSON 对象 {...} (语义规格用; extractJson 只抓数组 [...])。 */
+    private String extractJsonObject(String response) {
+        if (response == null) {
+            return "{}";
+        }
+        String trimmed = response.trim();
+        if (trimmed.startsWith("```json")) {
+            trimmed = trimmed.substring(7);
+        } else if (trimmed.startsWith("```")) {
+            trimmed = trimmed.substring(3);
+        }
+        if (trimmed.endsWith("```")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3);
+        }
+        trimmed = trimmed.trim();
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return trimmed.substring(start, end + 1);
+        }
+        return "{}";
+    }
+}

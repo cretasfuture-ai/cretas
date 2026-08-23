@@ -1,0 +1,698 @@
+package com.cretas.aims.ai.tool.impl.workprocess;
+
+import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.AbstractTool;
+import com.cretas.aims.constant.SeasoningProcessCategory;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/** Preview-only validator for AI generated product-process Workflow patches. */
+@Component
+public class ProductProcessWorkflowConfigTool extends AbstractTool {
+
+    private static final String TOOL_NAME = "canvas_product_process_workflow_config";
+    private static final Set<String> ALLOWED_OPERATIONS = Set.of(
+            "UPSERT_NODE", "REMOVE_NODE", "UPSERT_EDGE", "REMOVE_EDGE", "SET_NODE_FIELD",
+            // 2026-08-07 阶段 4(画布即 BOM): 让 AI 能增删调料/辅料行。
+            "UPSERT_MATERIAL_BINDING", "REMOVE_MATERIAL_BINDING");
+    private static final Set<String> ALLOWED_FIELD_ROOTS = Set.of(
+            "name", "skuId", "skuCode", "specification", "ports",
+            "conversionRule", "reportingRequired",
+            // 阶段 2: 副产是带标记的普通产出节点(不是第 5 种 kind)
+            "isByproduct",
+            // 阶段 4: BOM 字段进入 AI 可改范围
+            "materialBindings", "injectionAmount");
+
+    /**
+     * 一条 materialBinding(调料/辅料投入行)允许出现的键。
+     * 这是**投入**侧: 每 kg 投入多少克。副产是产出侧, 走节点+边, 不在这里。
+     */
+    private static final Set<String> MATERIAL_BINDING_KEYS = Set.of(
+            "materialTypeId", "materialName", "dosagePerKgG", "subsequentPotRatio", "unit");
+
+    /**
+     * 只有这些工序类别才允许配「后续锅调料比例」/「注射量」。
+     * ⛔ 判据用常量, 不写裸字符串 —— 见 SeasoningProcessCategory 的类注释。
+     */
+    private static final Set<String> POT_RATIO_CATEGORIES = Set.of(SeasoningProcessCategory.COOKING);
+    private static final Set<String> INJECTION_CATEGORIES = Set.of(SeasoningProcessCategory.INJECTION);
+    private static final Set<String> NODE_KINDS = Set.of(
+            "RAW_MATERIAL", "PROCESS", "SEMI_FINISHED", "FINISHED_GOOD");
+    private static final Set<String> MATERIAL_NODE_KINDS = Set.of(
+            "RAW_MATERIAL", "SEMI_FINISHED", "FINISHED_GOOD");
+    private static final Set<String> CONVERSION_MODES = Set.of(
+            "ACTUAL_WEIGHT", "FIXED_RATIO", "SUM_OUTPUTS", "FORMULA");
+    private static final Set<String> MATERIAL_DATA_KEYS = Set.of(
+            "name", "skuId", "skuCode", "specification", "baseUnit", "bound");
+    private static final Set<String> PROCESS_DATA_KEYS = Set.of(
+            "workProcessId", "processName", "processCategory", "inputUnit", "outputUnit",
+            "standardTime", "ports", "conversionRule", "reportingRequired",
+            "allowMultipleUpstreamSources", "allowFinishedGoodsSource");
+    private static final Set<String> PORT_KEYS = Set.of(
+            "id", "direction", "materialNodeId", "materialName", "skuId",
+            "materialKind", "unit", "ordinal");
+    private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
+            "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
+    private final ProductProcessWorkflowValidator workflowValidator;
+
+    public ProductProcessWorkflowConfigTool(
+            ObjectMapper objectMapper,
+            ProductProcessWorkflowValidator workflowValidator) {
+        this.objectMapper = objectMapper;
+        this.workflowValidator = workflowValidator;
+    }
+
+    @Override
+    public String getToolName() {
+        return TOOL_NAME;
+    }
+
+    @Override
+    public String getDescription() {
+        return "Validates and previews local product-process WorkflowPatch objects without business execution";
+    }
+
+    @Override
+    public Map<String, Object> getParametersSchema() {
+        return Map.of(
+                "type", "object",
+                "properties", Map.of(
+                        "message", Map.of("type", "string"),
+                        "definition", Map.of("type", "object"),
+                        "selectedNodeId", Map.of("type", List.of("string", "null")),
+                        "patches", Map.of("type", "array", "items", Map.of("type", "object"))),
+                "required", List.of("definition", "patches"));
+    }
+
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    @Override
+    public ActionType getActionType() {
+        return ActionType.GENERATE;
+    }
+
+    @Override
+    public Set<String> getDomainTags() {
+        return Set.of("product-process", "workflow", "configuration");
+    }
+
+    @Override
+    public String preview(ToolCall toolCall, Map<String, Object> context) {
+        try {
+            Map<String, Object> arguments = parseArguments(toolCall);
+            if (!(arguments.get("definition") instanceof Map<?, ?> definition)) {
+                return buildSemanticError(
+                        "WORKFLOW_DEFINITION_REQUIRED", "Workflow definition is required for preview");
+            }
+            List<Map<String, Object>> patches = sanitizePatches(arguments.get("patches"));
+            ProductProcessWorkflowDTO candidate = objectMapper.convertValue(
+                    definition, ProductProcessWorkflowDTO.class);
+            applyCandidateBatch(candidate, patches);
+            workflowValidator.validateForDraft(candidate);
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("status", "PREVIEW");
+            data.put("applied", false);
+            data.put("patches", patches);
+            return buildSuccessResult(data);
+        } catch (PatchRejectedException | BusinessException | IllegalArgumentException error) {
+            return buildSemanticError("WORKFLOW_PATCH_REJECTED", rejectionMessage(error));
+        }
+    }
+
+    @Override
+    public String execute(ToolCall toolCall, Map<String, Object> context) {
+        try {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("success", false);
+            error.put("errorCode", "WORKFLOW_AI_PREVIEW_ONLY");
+            error.put("error", "Workflow AI can only generate a local preview patch");
+            return objectMapper.writeValueAsString(error);
+        } catch (Exception serializationError) {
+            return "{\"success\":false,\"errorCode\":\"WORKFLOW_AI_PREVIEW_ONLY\","
+                    + "\"error\":\"Workflow AI preview only\"}";
+        }
+    }
+
+    private List<Map<String, Object>> sanitizePatches(Object rawPatches) {
+        if (!(rawPatches instanceof List<?> patches) || patches.isEmpty()) {
+            throw new PatchRejectedException();
+        }
+        List<Map<String, Object>> accepted = new ArrayList<>();
+        for (Object rawPatch : patches) {
+            if (!(rawPatch instanceof Map<?, ?> patch)) {
+                throw new PatchRejectedException();
+            }
+            Map<String, Object> sanitized = sanitizePatch(patch);
+            if (sanitized == null) throw new PatchRejectedException();
+            accepted.add(sanitized);
+        }
+        return List.copyOf(accepted);
+    }
+
+    private Map<String, Object> sanitizePatch(Map<?, ?> patch) {
+        String operation = readNonBlankString(patch.get("op"));
+        if (operation == null || !ALLOWED_OPERATIONS.contains(operation)) return null;
+        return switch (operation) {
+            case "UPSERT_NODE" -> sanitizeNodePatch(patch);
+            case "REMOVE_NODE" -> sanitizeIdPatch(patch, "nodeId");
+            case "UPSERT_EDGE" -> sanitizeEdgePatch(patch);
+            case "REMOVE_EDGE" -> sanitizeIdPatch(patch, "edgeId");
+            case "SET_NODE_FIELD" -> sanitizeFieldPatch(patch);
+            case "UPSERT_MATERIAL_BINDING" -> sanitizeMaterialBindingPatch(patch);
+            case "REMOVE_MATERIAL_BINDING" -> sanitizeRemoveMaterialBindingPatch(patch);
+            default -> null;
+        };
+    }
+
+    private Map<String, Object> sanitizeNodePatch(Map<?, ?> patch) {
+        if (!hasExactKeys(patch, Set.of("op", "node")) || !(patch.get("node") instanceof Map<?, ?> node)) {
+            return null;
+        }
+        Map<String, Object> sanitizedNode = sanitizeNode(node);
+        return sanitizedNode == null ? null : linkedMap("op", "UPSERT_NODE", "node", sanitizedNode);
+    }
+
+    private Map<String, Object> sanitizeNode(Map<?, ?> node) {
+        if (!hasExactKeys(node, Set.of("id", "kind", "position", "data"))) return null;
+        String id = readNonBlankString(node.get("id"));
+        String kind = readNonBlankString(node.get("kind"));
+        if (id == null || kind == null || !NODE_KINDS.contains(kind)
+                || !(node.get("position") instanceof Map<?, ?> position)
+                || !(node.get("data") instanceof Map<?, ?> data)) return null;
+        Map<String, Object> sanitizedPosition = sanitizePosition(position);
+        Map<String, Object> sanitizedData = "PROCESS".equals(kind)
+                ? sanitizeProcessData(data) : sanitizeMaterialData(data);
+        if (sanitizedPosition == null || sanitizedData == null) return null;
+        return linkedMap("id", id, "kind", kind, "position", sanitizedPosition, "data", sanitizedData);
+    }
+
+    private Map<String, Object> sanitizePosition(Map<?, ?> position) {
+        if (!hasExactKeys(position, Set.of("x", "y"))
+                || !isFiniteNumber(position.get("x")) || !isFiniteNumber(position.get("y"))) return null;
+        return linkedMap("x", position.get("x"), "y", position.get("y"));
+    }
+
+    private Map<String, Object> sanitizeMaterialData(Map<?, ?> data) {
+        if (!hasAllowedKeys(data, MATERIAL_DATA_KEYS)
+                || readNonBlankString(data.get("name")) == null
+                || !(data.get("skuId") instanceof String)
+                || !isOptionalNullableString(data, "skuCode")
+                || !isOptionalNullableString(data, "specification")
+                || !isOptionalString(data, "baseUnit")
+                || !isOptionalBoolean(data, "bound")) return null;
+        return copyKnownValues(data, MATERIAL_DATA_KEYS);
+    }
+
+    private Map<String, Object> sanitizeProcessData(Map<?, ?> data) {
+        if (!hasAllowedKeys(data, PROCESS_DATA_KEYS)
+                || readNonBlankString(data.get("workProcessId")) == null
+                || readNonBlankString(data.get("processName")) == null
+                || readNonBlankString(data.get("inputUnit")) == null
+                || readNonBlankString(data.get("outputUnit")) == null
+                || !(data.get("reportingRequired") instanceof Boolean)
+                || !(data.get("ports") instanceof List<?> ports)
+                || !(data.get("conversionRule") instanceof Map<?, ?> conversionRule)
+                || !isOptionalNullableString(data, "processCategory")
+                || !isOptionalFiniteNumber(data, "standardTime")
+                || !isOptionalBoolean(data, "allowMultipleUpstreamSources")
+                || !isOptionalBoolean(data, "allowFinishedGoodsSource")) return null;
+        List<Map<String, Object>> sanitizedPorts = sanitizePorts(ports);
+        Map<String, Object> sanitizedRule = sanitizeConversionRule(conversionRule);
+        if (sanitizedPorts == null || sanitizedRule == null) return null;
+        Map<String, Object> result = copyKnownValues(data, PROCESS_DATA_KEYS);
+        result.put("ports", sanitizedPorts);
+        result.put("conversionRule", sanitizedRule);
+        return result;
+    }
+
+    private List<Map<String, Object>> sanitizePorts(List<?> ports) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object rawPort : ports) {
+            if (!(rawPort instanceof Map<?, ?> port) || !hasAllowedKeys(port, PORT_KEYS)) return null;
+            String id = readNonBlankString(port.get("id"));
+            String direction = readNonBlankString(port.get("direction"));
+            String unit = readNonBlankString(port.get("unit"));
+            if (id == null || !("INPUT".equals(direction) || "OUTPUT".equals(direction))
+                    || unit == null || !(port.get("ordinal") instanceof Number ordinal)
+                    || !isFiniteNumber(ordinal)
+                    || ordinal.doubleValue() < 0 || ordinal.doubleValue() != Math.rint(ordinal.doubleValue())
+                    || !isOptionalString(port, "materialNodeId")
+                    || !isOptionalString(port, "materialName")
+                    || !isOptionalString(port, "skuId")) return null;
+            Object materialKind = port.get("materialKind");
+            if (materialKind != null && (!(materialKind instanceof String kind)
+                    || !MATERIAL_NODE_KINDS.contains(kind))) return null;
+            result.add(copyKnownValues(port, PORT_KEYS));
+        }
+        return List.copyOf(result);
+    }
+
+    private Map<String, Object> sanitizeConversionRule(Map<?, ?> rule) {
+        if (!hasAllowedKeys(rule, Set.of("mode", "expression"))) return null;
+        String mode = readNonBlankString(rule.get("mode"));
+        if (mode == null || !CONVERSION_MODES.contains(mode)) return null;
+        Object expression = rule.get("expression");
+        if (expression != null && !(expression instanceof String)) return null;
+        return copyKnownValues(rule, Set.of("mode", "expression"));
+    }
+
+    private Map<String, Object> sanitizeEdgePatch(Map<?, ?> patch) {
+        if (!hasExactKeys(patch, Set.of("op", "edge")) || !(patch.get("edge") instanceof Map<?, ?> edge)
+                || !hasExactKeys(edge, Set.of("id", "source", "sourceHandle", "target", "targetHandle"))) return null;
+        Map<String, Object> sanitizedEdge = new LinkedHashMap<>();
+        for (String key : List.of("id", "source", "sourceHandle", "target", "targetHandle")) {
+            String value = readNonBlankString(edge.get(key));
+            if (value == null) return null;
+            sanitizedEdge.put(key, value);
+        }
+        return linkedMap("op", "UPSERT_EDGE", "edge", sanitizedEdge);
+    }
+
+    private Map<String, Object> sanitizeIdPatch(Map<?, ?> patch, String idKey) {
+        if (!hasExactKeys(patch, Set.of("op", idKey))) return null;
+        String id = readNonBlankString(patch.get(idKey));
+        return id == null ? null : linkedMap("op", patch.get("op"), idKey, id);
+    }
+
+    private Map<String, Object> sanitizeFieldPatch(Map<?, ?> patch) {
+        if (!hasExactKeys(patch, Set.of("op", "nodeId", "path", "value"))) return null;
+        String nodeId = readNonBlankString(patch.get("nodeId"));
+        String path = readNonBlankString(patch.get("path"));
+        if (nodeId == null || !isAllowedFieldPath(path) || !isAllowedFieldValue(path, patch.get("value"))) return null;
+        return linkedMap("op", "SET_NODE_FIELD", "nodeId", nodeId, "path", path, "value", patch.get("value"));
+    }
+
+    /**
+     * 一行调料/辅料投入的清洗(阶段 4)。
+     *
+     * 约束 2「数值域」在这里落地: **越界一律拒绝, 不截断**。
+     * 截断会把「AI 说 5000 克/kg」悄悄变成「100 克/kg」并当成用户意图存下去 ——
+     * 那比报错危险得多(扣料与成本都跟着错, 而且没有任何痕迹)。
+     *
+     * 约束 3「AI 不许凭空造物料」: materialTypeId 必填且非空; 它是否属于本工厂由
+     * 应用阶段核对(见 applyMaterialBindingPatch), 因为那里才拿得到 factoryId 上下文。
+     */
+    private Map<String, Object> sanitizeMaterialBinding(Map<?, ?> binding) {
+        if (!hasAllowedKeys(binding, MATERIAL_BINDING_KEYS)
+                || readNonBlankString(binding.get("materialTypeId")) == null
+                || !isOptionalString(binding, "materialName")
+                || !isOptionalString(binding, "unit")) return null;
+
+        Object dosage = binding.get("dosagePerKgG");
+        if (dosage != null) {
+            // 用量必须 > 0。0 不是「没配」, 是「配了个错的」——0 克/kg 会让这行在扣料时静默无效。
+            if (!(dosage instanceof Number n) || !isFiniteNumber(n) || n.doubleValue() <= 0d) return null;
+        }
+        Object potRatio = binding.get("subsequentPotRatio");
+        if (potRatio != null) {
+            // 锅序比例 0–100(百分比)。0 合法: 「后续锅不再加这味调料」是真实配置。
+            if (!(potRatio instanceof Number n) || !isFiniteNumber(n)
+                    || n.doubleValue() < 0d || n.doubleValue() > 100d) return null;
+        }
+        return copyKnownValues(binding, MATERIAL_BINDING_KEYS);
+    }
+
+    private Map<String, Object> sanitizeMaterialBindingPatch(Map<?, ?> patch) {
+        if (!hasExactKeys(patch, Set.of("op", "nodeId", "binding"))) return null;
+        String nodeId = readNonBlankString(patch.get("nodeId"));
+        if (nodeId == null || !(patch.get("binding") instanceof Map<?, ?> binding)) return null;
+        Map<String, Object> sanitized = sanitizeMaterialBinding(binding);
+        if (sanitized == null) return null;
+        return linkedMap("op", "UPSERT_MATERIAL_BINDING", "nodeId", nodeId, "binding", sanitized);
+    }
+
+    private Map<String, Object> sanitizeRemoveMaterialBindingPatch(Map<?, ?> patch) {
+        if (!hasExactKeys(patch, Set.of("op", "nodeId", "materialTypeId"))) return null;
+        String nodeId = readNonBlankString(patch.get("nodeId"));
+        String materialTypeId = readNonBlankString(patch.get("materialTypeId"));
+        if (nodeId == null || materialTypeId == null) return null;
+        return linkedMap("op", "REMOVE_MATERIAL_BINDING", "nodeId", nodeId,
+                "materialTypeId", materialTypeId);
+    }
+
+    private boolean isAllowedFieldPath(String path) {
+        if (path == null || !SAFE_FIELD_PATH.matcher(path).matches()) return false;
+        String root = path.split("\\.", 2)[0];
+        if (!ALLOWED_FIELD_ROOTS.contains(root)) return false;
+        return switch (root) {
+            case "conversionRule" -> Set.of("conversionRule", "conversionRule.mode", "conversionRule.expression").contains(path);
+            case "ports" -> "ports".equals(path);
+            // materialBindings 整体替换走 SET_NODE_FIELD; 单行增删走
+            // UPSERT/REMOVE_MATERIAL_BINDING(更小的爆炸半径, AI 不必重发整张表)。
+            case "materialBindings" -> "materialBindings".equals(path);
+            default -> !path.contains(".");
+        };
+    }
+
+    private List<Map<String, Object>> sanitizeMaterialBindings(List<?> bindings) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object raw : bindings) {
+            if (!(raw instanceof Map<?, ?> binding)) return null;
+            Map<String, Object> sanitized = sanitizeMaterialBinding(binding);
+            if (sanitized == null) return null;
+            result.add(sanitized);
+        }
+        return List.copyOf(result);
+    }
+
+    private boolean isAllowedFieldValue(String path, Object value) {
+        return switch (path) {
+            case "name" -> readNonBlankString(value) != null;
+            case "skuId" -> value instanceof String;
+            case "skuCode", "specification", "conversionRule.expression" ->
+                    value == null || value instanceof String;
+            case "reportingRequired" -> value instanceof Boolean;
+            case "conversionRule.mode" -> value instanceof String mode && CONVERSION_MODES.contains(mode);
+            case "conversionRule" -> value instanceof Map<?, ?> rule && sanitizeConversionRule(rule) != null;
+            case "ports" -> value instanceof List<?> ports && sanitizePorts(ports) != null;
+            case "isByproduct" -> value instanceof Boolean;
+            case "materialBindings" -> value instanceof List<?> bindings && sanitizeMaterialBindings(bindings) != null;
+            // 注射量 > 0。同 dosagePerKgG: 0 不是「不注射」, 不注射就不该是注射类工序。
+            case "injectionAmount" -> value instanceof Number n && isFiniteNumber(n) && n.doubleValue() > 0d;
+            default -> false;
+        };
+    }
+
+    private boolean hasExactKeys(Map<?, ?> value, Set<String> keys) {
+        return value.size() == keys.size() && hasAllowedKeys(value, keys);
+    }
+
+    private boolean hasAllowedKeys(Map<?, ?> value, Set<String> keys) {
+        return value.keySet().stream().allMatch(key -> key instanceof String && keys.contains(key));
+    }
+
+    private Map<String, Object> copyKnownValues(Map<?, ?> source, Set<String> allowedKeys) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (String key : allowedKeys) if (source.containsKey(key)) result.put(key, source.get(key));
+        return result;
+    }
+
+    private String readNonBlankString(Object value) {
+        return value instanceof String string && !string.isBlank() ? string : null;
+    }
+
+    private boolean isFiniteNumber(Object value) {
+        return value instanceof Number number && Double.isFinite(number.doubleValue());
+    }
+
+    private boolean isOptionalString(Map<?, ?> value, String key) {
+        return !value.containsKey(key) || value.get(key) instanceof String;
+    }
+
+    private boolean isOptionalNullableString(Map<?, ?> value, String key) {
+        return !value.containsKey(key) || value.get(key) == null || value.get(key) instanceof String;
+    }
+
+    private boolean isOptionalBoolean(Map<?, ?> value, String key) {
+        return !value.containsKey(key) || value.get(key) instanceof Boolean;
+    }
+
+    private boolean isOptionalFiniteNumber(Map<?, ?> value, String key) {
+        return !value.containsKey(key) || value.get(key) == null || isFiniteNumber(value.get(key));
+    }
+
+    private void applyCandidateBatch(
+            ProductProcessWorkflowDTO candidate,
+            List<Map<String, Object>> patches) {
+        patches.stream()
+                .filter(patch -> Set.of("UPSERT_NODE", "REMOVE_NODE").contains(patch.get("op")))
+                .forEach(patch -> applyNodePatch(candidate, patch));
+        patches.stream()
+                .filter(patch -> "SET_NODE_FIELD".equals(patch.get("op")))
+                .forEach(patch -> applyFieldPatch(candidate, patch));
+        patches.stream()
+                .filter(patch -> Set.of("UPSERT_EDGE", "REMOVE_EDGE").contains(patch.get("op")))
+                .forEach(patch -> applyEdgePatch(candidate, patch));
+        patches.stream()
+                .filter(patch -> String.valueOf(patch.get("op")).endsWith("_MATERIAL_BINDING"))
+                .forEach(patch -> applyMaterialBindingPatch(candidate, patch));
+    }
+
+    private void applyNodePatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        if ("REMOVE_NODE".equals(patch.get("op"))) {
+            String nodeId = String.valueOf(patch.get("nodeId"));
+            boolean removed = candidate.getNodes().removeIf(node -> nodeId.equals(node.getId()));
+            if (!removed) throw new PatchRejectedException();
+            candidate.getEdges().removeIf(edge ->
+                    nodeId.equals(edge.getSource()) || nodeId.equals(edge.getTarget()));
+            return;
+        }
+        ProductProcessWorkflowDTO.Node next = objectMapper.convertValue(
+                patch.get("node"), ProductProcessWorkflowDTO.Node.class);
+        ProductProcessWorkflowDTO.Node existing = findNode(candidate, next.getId());
+        if (existing != null && !Objects.equals(existing.getKind(), next.getKind())) {
+            throw new PatchRejectedException();
+        }
+        if (existing == null) candidate.getNodes().add(next);
+        else candidate.getNodes().set(candidate.getNodes().indexOf(existing), next);
+    }
+
+    private void applyFieldPatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        ProductProcessWorkflowDTO.Node target = findNode(candidate, String.valueOf(patch.get("nodeId")));
+        if (target == null) throw new PatchRejectedException();
+        String path = String.valueOf(patch.get("path"));
+        if (!isPathCompatibleWithNodeKind(target.getKind(), path)) {
+            throw new PatchRejectedException();
+        }
+        // 约束 1: 注射量只允许出现在注射类工序上
+        if ("injectionAmount".equals(path)) {
+            assertSeasoningCategoryAllows(target, "injectionAmount", INJECTION_CATEGORIES, "注射量");
+        }
+        // 整表替换同样要过类别闸 —— 否则 AI 绕开单行动作就能把锅序比例塞进任意工序
+        if ("materialBindings".equals(path) && patch.get("value") instanceof List<?> rows) {
+            boolean hasPotRatio = rows.stream().anyMatch(row ->
+                    row instanceof Map<?, ?> map && map.get("subsequentPotRatio") != null);
+            if (hasPotRatio) {
+                assertSeasoningCategoryAllows(target, "subsequentPotRatio", POT_RATIO_CATEGORIES, "后续锅调料比例");
+            }
+        }
+        Map<String, Object> data = target.getData();
+        if (data == null) {
+            data = new LinkedHashMap<>();
+            target.setData(data);
+        }
+        Object value = patch.get("value");
+        if (path.startsWith("conversionRule.")) {
+            Object existingRule = data.get("conversionRule");
+            Map<String, Object> rule = existingRule instanceof Map<?, ?> source
+                    ? copyStringObjectMap(source)
+                    : new LinkedHashMap<>();
+            rule.put(path.substring("conversionRule.".length()), value);
+            data.put("conversionRule", rule);
+        } else {
+            data.put(path, value);
+        }
+    }
+
+    private void applyEdgePatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        if ("REMOVE_EDGE".equals(patch.get("op"))) {
+            String edgeId = String.valueOf(patch.get("edgeId"));
+            if (!candidate.getEdges().removeIf(edge -> edgeId.equals(edge.getId()))) {
+                throw new PatchRejectedException();
+            }
+            return;
+        }
+        ProductProcessWorkflowDTO.Edge next = objectMapper.convertValue(
+                patch.get("edge"), ProductProcessWorkflowDTO.Edge.class);
+        ProductProcessWorkflowDTO.Edge existing = candidate.getEdges().stream()
+                .filter(edge -> next.getId().equals(edge.getId()))
+                .findFirst()
+                .orElse(null);
+        if (existing == null) candidate.getEdges().add(next);
+        else candidate.getEdges().set(candidate.getEdges().indexOf(existing), next);
+    }
+
+    private boolean isPathCompatibleWithNodeKind(String kind, String path) {
+        if ("PROCESS".equals(kind)) {
+            return path.equals("ports")
+                    || path.equals("conversionRule")
+                    || path.startsWith("conversionRule.")
+                    || path.equals("reportingRequired")
+                    // 阶段 4: 调料投入与注射量挂在工序上
+                    || path.equals("materialBindings")
+                    || path.equals("injectionAmount");
+        }
+        return MATERIAL_NODE_KINDS.contains(kind)
+                && Set.of("name", "skuId", "skuCode", "specification", "isByproduct").contains(path);
+    }
+
+    /**
+     * 约束 1「类别闸」—— 往错类别的工序写调味参数一律拒绝, 并给出可读原因。
+     *
+     * 为什么必须在**应用阶段**而不是 sanitize 阶段判: sanitize 只看补丁本身,
+     * 拿不到"目标工序是什么类别"。类别在图里, 只有把补丁对上节点才知道。
+     *
+     * ⛔ 判据用 SeasoningProcessCategory 常量, 不写裸字符串"熟制"/"注射"。
+     */
+    private void assertSeasoningCategoryAllows(
+            ProductProcessWorkflowDTO.Node target,
+            String parameter,
+            Set<String> allowedCategories,
+            String humanParameterName) {
+        Map<String, Object> data = target.getData();
+        Object category = data == null ? null : data.get("processCategory");
+        String categoryText = category instanceof String text ? text.trim() : "";
+        if (allowedCategories.contains(categoryText)) return;
+        String processName = data == null ? null : readNonBlankString(data.get("processName"));
+        throw new PatchRejectedException(String.format(
+                "工序「%s」的类别是「%s」，不能配置%s —— %s只在%s类工序上有意义。"
+                        + "如果这道工序确实需要，请先把工序类别改成%s。",
+                processName == null ? target.getId() : processName,
+                categoryText.isEmpty() ? "未设置" : categoryText,
+                humanParameterName,
+                humanParameterName,
+                String.join("/", allowedCategories),
+                String.join("/", allowedCategories)));
+    }
+
+    /**
+     * 增删一行调料/辅料投入。
+     *
+     * 单行操作而不是整表替换 —— 爆炸半径更小: AI 想改一味调料的克数, 不必重发整张表,
+     * 也就不会在重发时把它没提到的行悄悄丢掉。
+     */
+    private void applyMaterialBindingPatch(
+            ProductProcessWorkflowDTO candidate,
+            Map<String, Object> patch) {
+        ProductProcessWorkflowDTO.Node target = findNode(candidate, String.valueOf(patch.get("nodeId")));
+        if (target == null || !"PROCESS".equals(target.getKind())) {
+            throw new PatchRejectedException();
+        }
+        Map<String, Object> data = target.getData();
+        if (data == null) {
+            data = new LinkedHashMap<>();
+            target.setData(data);
+        }
+        List<Map<String, Object>> bindings = new ArrayList<>();
+        if (data.get("materialBindings") instanceof List<?> existing) {
+            for (Object row : existing) {
+                if (row instanceof Map<?, ?> map) bindings.add(copyStringObjectMap(map));
+            }
+        }
+
+        if ("REMOVE_MATERIAL_BINDING".equals(patch.get("op"))) {
+            String materialTypeId = String.valueOf(patch.get("materialTypeId"));
+            if (!bindings.removeIf(row -> materialTypeId.equals(String.valueOf(row.get("materialTypeId"))))) {
+                throw new PatchRejectedException();
+            }
+            data.put("materialBindings", bindings);
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> binding = (Map<String, Object>) patch.get("binding");
+        // 约束 1: 锅序比例只允许出现在熟制类工序上
+        if (binding.get("subsequentPotRatio") != null) {
+            assertSeasoningCategoryAllows(target, "subsequentPotRatio", POT_RATIO_CATEGORIES, "后续锅调料比例");
+        }
+        String materialTypeId = String.valueOf(binding.get("materialTypeId"));
+        int at = -1;
+        for (int index = 0; index < bindings.size(); index++) {
+            if (materialTypeId.equals(String.valueOf(bindings.get(index).get("materialTypeId")))) {
+                at = index;
+                break;
+            }
+        }
+        if (at >= 0) bindings.set(at, binding);
+        else bindings.add(binding);
+        data.put("materialBindings", bindings);
+    }
+
+    private ProductProcessWorkflowDTO.Node findNode(
+            ProductProcessWorkflowDTO definition,
+            String nodeId) {
+        return definition.getNodes().stream()
+                .filter(node -> nodeId.equals(node.getId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private Map<String, Object> copyStringObjectMap(Map<?, ?> source) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, value) -> {
+            if (key instanceof String stringKey) result.put(stringKey, value);
+        });
+        return result;
+    }
+
+    /** 业务性拒绝带具体原因; 其余用通用文案(不把内部路径名/id 规则漏给用户)。 */
+    private String rejectionMessage(Throwable error) {
+        if (error instanceof PatchRejectedException rejected && rejected.readableReason() != null) {
+            return rejected.readableReason();
+        }
+        return "Workflow patch batch rejected";
+    }
+
+    private String buildSemanticError(String errorCode, String message) {
+        try {
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("success", false);
+            error.put("errorCode", errorCode);
+            error.put("error", message);
+            return objectMapper.writeValueAsString(error);
+        } catch (Exception serializationError) {
+            return "{\"success\":false,\"errorCode\":\"WORKFLOW_PATCH_REJECTED\","
+                    + "\"error\":\"Workflow patch batch rejected\"}";
+        }
+    }
+
+    /**
+     * 补丁被拒。
+     *
+     * `reason` 是**给用户看的中文原因**(阶段 4 约束 1 要求「拒绝并给可读原因」)。
+     * 空 reason = 结构性拒绝(路径不合法 / 节点不存在这类), 沿用通用文案;
+     * 有 reason = 业务性拒绝(往错类别的工序写参数), 必须把原因带到界面 ——
+     * 否则 AI 改不动却不说为什么, 用户只会反复重试同一句话。
+     */
+    private static final class PatchRejectedException extends RuntimeException {
+        private final transient String reason;
+
+        PatchRejectedException() {
+            this(null);
+        }
+
+        PatchRejectedException(String reason) {
+            super(reason);
+            this.reason = reason;
+        }
+
+        String readableReason() {
+            return reason;
+        }
+    }
+
+    private Map<String, Object> linkedMap(Object... keyValues) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (int index = 0; index < keyValues.length; index += 2) {
+            result.put(String.valueOf(keyValues[index]), keyValues[index + 1]);
+        }
+        return result;
+    }
+
+    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.WRITE;
+    }
+}

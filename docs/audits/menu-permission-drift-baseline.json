@@ -1,0 +1,61 @@
+[
+  {
+    "role": "finance_manager",
+    "view": "analytics/SupplyChainOverview.vue",
+    "menu_module": "analytics",
+    "endpoint": "/processing/batches",
+    "verb": "GET",
+    "controller": "ProcessingController",
+    "requires": [],
+    "requiresAll": [
+      "production"
+    ],
+    "gate": "module"
+  },
+  {
+    "role": "finance_manager",
+    "view": "production-analytics/EfficiencyAnalysis.vue",
+    "menu_module": "analytics",
+    "endpoint": "/production-analytics/budget-vs-actual",
+    "verb": "GET",
+    "controller": "ProductionAnalyticsController",
+    "requires": [
+      "finance",
+      "production"
+    ],
+    "requiresAll": [
+      "production"
+    ],
+    "gate": "module"
+  },
+  {
+    "role": "finance_manager",
+    "view": "production-analytics/M67CostSummary.vue",
+    "menu_module": "analytics",
+    "endpoint": "/production/cost-summary",
+    "verb": "GET",
+    "controller": "OrderCostSummaryController",
+    "requires": [
+      "production"
+    ],
+    "requiresAll": [
+      "production"
+    ],
+    "gate": "module"
+  },
+  {
+    "role": "finance_manager",
+    "view": "production-analytics/ThreePriceComparison.vue",
+    "menu_module": "analytics",
+    "endpoint": "/cost/three-price-comparison",
+    "verb": "GET",
+    "controller": "ThreePriceComparisonController",
+    "requires": [
+      "production"
+    ],
+    "requiresAll": [
+      "production"
+    ],
+    "gate": "module"
+  }
+]

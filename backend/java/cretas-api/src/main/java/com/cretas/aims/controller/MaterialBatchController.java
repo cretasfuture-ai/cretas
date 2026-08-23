@@ -1,0 +1,1486 @@
+package com.cretas.aims.controller;
+
+import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.common.PageRequest;
+import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.material.*;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.PriceMaskResolver;
+import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.MobileService;
+import com.cretas.aims.utils.TokenUtils;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.*;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+import com.cretas.aims.annotation.RequireModule;
+
+/**
+ * 原材料批次管理控制器
+ *
+ * <p>本控制器负责处理原材料批次相关的所有HTTP请求，提供完整的批次管理功能。</p>
+ *
+ * <h3>功能说明</h3>
+ * <p>原材料批次管理是生产管理系统的核心模块之一，负责管理原材料的入库、出库、库存、过期处理等全生命周期。</p>
+ *
+ * <h3>API路径</h3>
+ * <p>基础路径: <code>/api/mobile/{factoryId}/material-batches</code></p>
+ *
+ * <h3>提供的API端点 (共26个接口)</h3>
+ * <ol>
+ *   <li><b>GET</b>    /material-batches                          - 获取原材料批次列表（分页，支持关键词搜索）</li>
+ *   <li><b>POST</b>   /material-batches                          - 创建原材料批次（入库）</li>
+ *   <li><b>POST</b>   /material-batches/batch                    - 批量创建材料批次</li>
+ *   <li><b>GET</b>    /material-batches/{batchId}                - 获取原材料批次详情</li>
+ *   <li><b>PUT</b>    /material-batches/{batchId}                - 更新原材料批次</li>
+ *   <li><b>DELETE</b> /material-batches/{batchId}                - 删除原材料批次</li>
+ *   <li><b>GET</b>    /material-batches/material-type/{materialTypeId} - 按材料类型获取批次</li>
+ *   <li><b>GET</b>    /material-batches/status/{status}          - 按状态获取批次</li>
+ *   <li><b>GET</b>    /material-batches/fifo/{materialTypeId}    - 获取FIFO批次（先进先出）</li>
+ *   <li><b>GET</b>    /material-batches/expiring                 - 获取即将过期的批次</li>
+ *   <li><b>GET</b>    /material-batches/expired                  - 获取已过期的批次</li>
+ *   <li><b>GET</b>    /material-batches/inventory/statistics     - 获取库存统计</li>
+ *   <li><b>GET</b>    /material-batches/inventory/valuation      - 获取库存价值</li>
+ *   <li><b>GET</b>    /material-batches/inventory/alerts         - 获取库存预警（综合）⭐新增</li>
+ *   <li><b>GET</b>    /material-batches/low-stock                - 获取低库存警告</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/use            - 使用批次材料</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/adjust         - 调整批次数量</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/receipt-date-correction - 更正入库日期（原因必填, 写审计台账）</li>
+ *   <li><b>PUT</b>    /material-batches/{batchId}/status         - 更新批次状态</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/reserve        - 预留批次材料</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/release        - 释放预留材料</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/consume        - 消耗批次材料</li>
+ *   <li><b>GET</b>    /material-batches/{batchId}/usage-history  - 获取批次使用历史</li>
+ *   <li><b>POST</b>   /material-batches/handle-expired           - 处理过期批次</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/convert-to-frozen - 将批次转为冻品</li>
+ *   <li><b>POST</b>   /material-batches/{batchId}/undo-frozen    - 撤销转冻品操作</li>
+ *   <li><b>GET</b>    /material-batches/export                   - 导出库存报表</li>
+ * </ol>
+ *
+ * <h3>批次状态说明</h3>
+ * <ul>
+ *   <li><b>AVAILABLE</b>：可用 - 批次已入库，可以正常使用</li>
+ *   <li><b>RESERVED</b>：已预留 - 批次已被生产计划预留，等待使用</li>
+ *   <li><b>IN_USE</b>：使用中 - 批次正在被生产使用</li>
+ *   <li><b>DEPLETED</b>：已耗尽 - 批次数量已用完</li>
+ *   <li><b>EXPIRED</b>：已过期 - 批次已超过保质期</li>
+ * </ul>
+ *
+ * <h3>核心业务功能</h3>
+ * <ul>
+ *   <li><b>批次入库</b>：创建新的原材料批次，记录入库信息</li>
+ *   <li><b>FIFO出库</b>：按照先进先出原则推荐出库批次</li>
+ *   <li><b>批次预留</b>：为生产计划预留原材料</li>
+ *   <li><b>批次使用</b>：记录原材料的使用情况</li>
+ *   <li><b>过期管理</b>：自动检测和处理过期批次</li>
+ *   <li><b>库存统计</b>：提供库存数量、价值等统计信息</li>
+ * </ul>
+ *
+ * <h3>业务规则</h3>
+ * <ul>
+ *   <li><b>唯一性</b>：批次号（batchNumber）必须全局唯一</li>
+ *   <li><b>数量管理</b>：可用数量 = 入库数量 - 已用数量 - 预留数量</li>
+ *   <li><b>状态流转</b>：AVAILABLE -> RESERVED -> IN_USE -> DEPLETED</li>
+ *   <li><b>过期处理</b>：系统自动检测过期批次并更新状态</li>
+ *   <li><b>数据隔离</b>：所有操作基于工厂ID进行数据隔离</li>
+ * </ul>
+ *
+ * @author Cretas Team
+ * @version 1.0.0
+ * @since 2025-01-09
+ * @see MaterialBatchService 业务逻辑层
+ * @see MaterialBatch 实体类
+ * @see MaterialBatchRepository 数据访问层
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/mobile/{factoryId}/material-batches")
+@RequiredArgsConstructor
+@Tag(name = "原材料批次管理", description = "原材料批次管理相关接口")
+public class MaterialBatchController {
+
+    private final MaterialBatchService materialBatchService;
+    private final MobileService mobileService;
+
+    /** material_batch_adjustments.reason 是 varchar(255), 超长会落库失败成 500。 */
+    private static final int ADJUSTMENT_REASON_MAX_LENGTH = 255;
+
+    private static String trimToNull(String s) {
+        return StringUtils.hasText(s) ? s.trim() : null;
+    }
+
+    /**
+     * MaterialConsumption 只有 notes 一个自由文本列, 没有 purpose 列。
+     * 把领料用途拼进 notes 一并落库, 而不是收下就丢。两者皆空时返回 null
+     * (让 notes 保持 NULL, 不写一个空串进去)。
+     */
+    private static String joinConsumptionNotes(String purpose, String notes) {
+        String p = trimToNull(purpose);
+        String n = trimToNull(notes);
+        if (p == null) return n;
+        return n == null ? "用途: " + p : "用途: " + p + " — " + n;
+    }
+    private final PriceMaskResolver priceMaskResolver;
+    private final com.cretas.aims.service.inventory.OpeningInventoryService openingInventoryService;
+
+    /**
+     * 兼容墓碑：普通页面的无来源单批次写入口已关闭。
+     *
+     * <p>保留路由只为让旧客户端收到带迁移提示的 409，而不是误判 404 后重试或改走其他
+     * 无来源写路径。新库存只能由仓储来源任务、盘点/受控调整或独立期初建账写入；这里不得
+     * 恢复 Service 调用。</p>
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping
+    @Deprecated
+    @Operation(summary = "旧无来源单批次写入口（已停用）",
+            description = "兼容旧客户端并返回迁移提示；请使用仓储来源任务、受控调整或期初建账")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "CREATE",
+            entityType = "MaterialBatch")
+    public ApiResponse<MaterialBatchDTO> createMaterialBatch(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "访问令牌", required = true, example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody CreateMaterialBatchRequest request) {
+        throw directInventoryWriteDisabled();
+    }
+
+    /**
+     * 期初建账 (opening inventory onboarding) —— 批量建立起始库存 + 过期初凭证 (借 1403 / 贷 4001)，
+     * <b>不产生任何供应商应付</b>。
+     *
+     * <p>修复此前客户被迫走采购入库建账 (每个物料挂供应商应付 → 幽灵应付) 的问题。支持 200+ 行一次导入
+     * (前端把 Excel 逐行解析进 items)。诚实-null: 未录单价的行仍建批次但不计入凭证金额。幂等: 相同
+     * batchKey / 相同内容重复提交不双建。</p>
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/opening")
+    @Operation(summary = "期初建账 (批量起始库存 + 借1403/贷4001 期初凭证, 无应付)",
+            description = "凭空建立起始库存并过期初凭证; 不挂供应商应付。诚实-null + 幂等 + 支持批量。")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "OPENING_INVENTORY",
+            entityType = "MaterialBatch")
+    public ApiResponse<com.cretas.aims.dto.material.OpeningInventoryResult> createOpeningInventory(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.material.OpeningInventoryRequest request) {
+
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        log.info("期初建账: factoryId={}, items={}", factoryId,
+                request.getItems() != null ? request.getItems().size() : 0);
+        com.cretas.aims.dto.material.OpeningInventoryResult result =
+                openingInventoryService.createOpeningInventory(factoryId, request, userId);
+        return ApiResponse.success(
+                result.isIdempotentHit() ? "期初建账已存在 (幂等命中)" : "期初建账成功", result);
+    }
+
+    /**
+     * 更新原材料批次 —— <b>只改描述性信息, 不改账实数据</b>。
+     *
+     * <p>⚠️ 这段说明 2026-08-20 前是<b>过期的</b>: 它写着只能改
+     * storageLocation/qualityGrade/notes/expiryDate, 而实际 DTO 一直接受
+     * receiptQuantity / totalWeight / totalValue / materialTypeId / supplierId,
+     * web-admin 的"编辑批次"弹窗正是靠它直接改库存数量的。现已在 service 层堵死。</p>
+     *
+     * <h4>可更新字段 (描述性信息)</h4>
+     * <ul>
+     *   <li>storageLocation: 存储位置</li>
+     *   <li>notes: 备注信息</li>
+     *   <li>expireDate: 过期日期</li>
+     *   <li>boxCount: 箱数 (粗略统计, 不参与库存计算)</li>
+     *   <li>qualityCertificate / factoryNumber / originPlace: 质检证书 / 厂号 / 产地</li>
+     * </ul>
+     *
+     * <h4>⛔ 拒绝的字段 (账实数据, 任何角色都会 403)</h4>
+     * <p>receiptQuantity / quantityUnit / weightPerUnit / totalWeight / totalValue /
+     * unitPrice / materialTypeId / supplierId / <b>receiptDate</b>。每个被锁的字段都有一条
+     * <b>留痕的正路</b>, 403 的 hint 按字段指过去 (⛔ 不许出现只锁不给路的字段):</p>
+     * <ul>
+     *   <li>数量 / 成本 / 单位 / 原料类型 / 供应商 → <b>盘点与期初库存</b> (StocktakeController)
+     *       或 <b>库存调整</b> ({@code POST /{batchId}/adjust}) —— 写 MaterialBatchAdjustment</li>
+     *   <li><b>入库日期</b> (2026-08-20 新纳入) → {@code POST /{batchId}/receipt-date-correction}
+     *       —— 写 MaterialBatchDateCorrection (含改前改后的日期 + 原因)。
+     *       ⚠️ 盘点<b>改不了</b>日期, 别把这一支的报错指过去。</li>
+     * </ul>
+     * <p>判据见 {@code MaterialBatchServiceImpl#inventoryFieldChangedByRequest}
+     * —— 是「<b>值真的变了</b>」, 不是「请求里带了这个字段」(partial body 回传原值不该被拦)。</p>
+     *
+     * @param factoryId 工厂ID
+     * @param batchId 批次ID
+     * @param request 更新请求参数
+     * @return 更新后的批次信息
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PutMapping("/{batchId}")
+    @Operation(summary = "更新原材料批次", description = "更新指定批次的信息 — 允许 partial body (qa-prompt Rule 17.6)")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "UPDATE",
+            entityType = "MaterialBatch", entityIdParam = "batchId")
+    public ApiResponse<MaterialBatchDTO> updateMaterialBatch(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Valid @RequestBody UpdateMaterialBatchRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+
+        // W4 红线: 取调用者角色 (JwtAuthInterceptor 设入 request attribute, C1 孪生坑 — 非 SecurityContext),
+        // 传入 service 拦截纯操作员经 PUT 改库存量/单价/重量等字段。
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("更新原材料批次: factoryId={}, batchId={}, role={}", factoryId, batchId, callerRole);
+        MaterialBatchDTO batch = materialBatchService.updateMaterialBatch(factoryId, batchId, request, callerRole);
+        return ApiResponse.success("原材料批次更新成功", batch);
+    }
+
+    /**
+     * 删除原材料批次
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @DeleteMapping("/{batchId}")
+    @Operation(summary = "删除原材料批次")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "DELETE",
+            entityType = "MaterialBatch", entityIdParam = "batchId")
+    public ApiResponse<Void> deleteMaterialBatch(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+
+        // W4 红线: 删批次 = 无单据移除库存, 仅管理员/仓储主管可删, 纯操作员拦截。
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("删除原材料批次: factoryId={}, batchId={}, role={}", factoryId, batchId, callerRole);
+        materialBatchService.deleteMaterialBatch(factoryId, batchId, callerRole);
+        return ApiResponse.success("原材料批次删除成功", null);
+    }
+
+    /**
+     * 获取原材料批次详情
+     */
+    @GetMapping("/{batchId}")
+    @Operation(summary = "获取原材料批次详情")
+    public ApiResponse<MaterialBatchDTO> getMaterialBatchById(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId) {
+
+        MaterialBatchDTO batch = materialBatchService.getMaterialBatchById(factoryId, batchId);
+        return ApiResponse.success(batch);
+    }
+
+    /**
+     * 获取原材料批次列表（分页）
+     *
+     * <p>根据工厂ID获取原材料批次列表，支持分页、排序和关键词搜索。</p>
+     *
+     * <h4>功能说明</h4>
+     * <ul>
+     *   <li>分页查询：通过page和size参数控制分页</li>
+     *   <li>排序功能：通过sortBy和sortDirection参数自定义排序</li>
+     *   <li>关键词搜索：通过keyword参数搜索批次号或材料类型名称</li>
+     * </ul>
+     *
+     * <h4>请求示例</h4>
+     * <pre>
+     * GET /api/mobile/F001/material-batches?page=1&size=20&sortBy=createdAt&sortDirection=DESC&keyword=MT001
+     * </pre>
+     *
+     * <h4>参数说明</h4>
+     * <ul>
+     *   <li><code>factoryId</code> (路径参数, 必填): 工厂ID</li>
+     *   <li><code>page</code> (查询参数, 可选, 默认1): 页码（从1开始）</li>
+     *   <li><code>size</code> (查询参数, 可选, 默认20): 每页大小</li>
+     *   <li><code>sortBy</code> (查询参数, 可选, 默认createdAt): 排序字段</li>
+     *   <li><code>sortDirection</code> (查询参数, 可选, 默认DESC): 排序方向（ASC/DESC）</li>
+     *   <li><code>keyword</code> (查询参数, 可选): 搜索关键词（批次号或材料类型名称）</li>
+     * </ul>
+     *
+     * <h4>响应示例</h4>
+     * <pre>
+     * {
+     *   "success": true,
+     *   "code": 200,
+     *   "message": "操作成功",
+     *   "data": {
+     *     "content": [...],  // 批次列表
+     *     "totalElements": 100,
+     *     "totalPages": 5,
+     *     "currentPage": 1,
+     *     "pageSize": 20
+     *   }
+     * }
+     * </pre>
+     *
+     * @param factoryId 工厂ID（路径参数，必填）
+     * @param pageRequest 分页请求对象（包含page、size、sortBy、sortDirection、keyword）
+     * @return 分页的批次列表
+     */
+    @GetMapping
+    @Operation(summary = "获取原材料批次列表（分页）",
+               description = "支持分页、排序和关键词搜索（批次号或材料类型名称）")
+    public ApiResponse<PageResponse<MaterialBatchDTO>> getMaterialBatchList(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Valid PageRequest pageRequest) {
+
+        log.debug("获取原材料批次列表: factoryId={}, page={}, size={}, keyword={}", 
+                 factoryId, pageRequest.getPage(), pageRequest.getSize(), pageRequest.getKeyword());
+        PageResponse<MaterialBatchDTO> response = materialBatchService.getMaterialBatchList(factoryId, pageRequest);
+        return ApiResponse.success(response);
+    }
+
+    /**
+     * 🟢 PURE DISPLAY (fool-proof-design Rule 1, 2026-07-05): 批量查未小结报工消耗量,
+     * 供 报损/调拨 弹窗算「货架实物」= availableQuantity − 未小结消耗 提示, 让仓管员在报损/调拨前
+     * 就看到真实可动用量, 而不是账面未扣的 stale-high 可用量。⛔ 只读, 不改任何库存/gate/校验。
+     */
+    @GetMapping("/unsettled-consumption")
+    @Operation(summary = "批量查批次未小结报工消耗量 (报损/调拨货架实物提示, 只读)")
+    public ApiResponse<Map<String, java.math.BigDecimal>> getUnsettledConsumptionByBatchIds(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID列表 (逗号分隔)", required = true)
+            @RequestParam List<String> batchIds) {
+        Map<String, java.math.BigDecimal> result =
+                materialBatchService.getUnsettledConsumptionByBatchIds(factoryId, batchIds);
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 按材料类型获取批次
+     */
+    @GetMapping("/material-type/{materialTypeId}")
+    @Operation(summary = "按材料类型获取批次")
+    public ApiResponse<List<MaterialBatchDTO>> getMaterialBatchesByType(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "材料类型ID", required = true, example = "RMT-F001-001")
+            @PathVariable @NotBlank String materialTypeId) {
+
+        List<MaterialBatchDTO> batches = materialBatchService.getMaterialBatchesByType(factoryId, materialTypeId);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 按状态获取批次，可选 BOM 过滤 (防呆).
+     *
+     * <p>当传入 {@code productTypeId} 时，仅返回该产品 ACTIVE BOM 中包含的原料类型对应的批次。
+     * 若产品无 ACTIVE BOM 或 BOM 无明细，回退返回全部批次（不阻断操作员）。
+     */
+    @GetMapping("/status/{status}")
+    @Operation(summary = "按状态获取批次", description = "可选传 productTypeId 按 BOM 过滤 (防呆)")
+    public ApiResponse<List<MaterialBatchDTO>> getMaterialBatchesByStatus(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "状态", required = true, example = "AVAILABLE")
+            @PathVariable MaterialBatchStatus status,
+            @Parameter(description = "产品类型ID (可选, 传入则按 BOM 原料过滤)", example = "PT-F001-001")
+            @RequestParam(required = false) String productTypeId,
+            @Parameter(description = "仓库ID (可选, 传入则限定仓库)", example = "WH-LOG-ID")
+            @RequestParam(required = false) String warehouseId) {
+
+        List<MaterialBatchDTO> batches = materialBatchService.getMaterialBatchesByStatus(
+                factoryId, status, productTypeId, warehouseId);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 获取在制品 (WIP) 批次列表 (Sprint 4 Wave 2 M-WIP-1).
+     *
+     * <p>"在制品" 指 status = PRODUCING_RESERVED 的原材料批次 —
+     * 即已被进行中的生产批次 (ProductionBatch.status IN_PROGRESS) 占用的物料。</p>
+     *
+     * <p>当前为工厂作用域。跨工厂全局视图 (admin scope) 由 {@link MaterialBatchService#getAllWipBatches()} 提供,
+     * 后续接入独立 admin endpoint 暴露 (需 platform_super_admin 角色)。</p>
+     */
+    @GetMapping("/wip")
+    @Operation(summary = "获取在制品 (WIP) 批次列表", description = "查询本工厂 PRODUCING_RESERVED 状态批次 (在制品)。")
+    public ApiResponse<List<MaterialBatchDTO>> getWipBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        List<MaterialBatchDTO> batches = materialBatchService.getWipBatches(factoryId);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 获取FIFO批次（先进先出）
+     *
+     * <p>根据先进先出原则获取指定材料类型的批次，用于生产消耗推荐。</p>
+     *
+     * <h4>FIFO算法说明</h4>
+     * <ol>
+     *   <li>查询指定材料类型的所有可用批次（状态为AVAILABLE或FROZEN）</li>
+     *   <li>按接收日期升序排列（最早入库的优先）</li>
+     *   <li>从第一个批次开始分配，直到满足需求数量</li>
+     *   <li>返回需要使用的批次列表及每个批次的建议使用量</li>
+     * </ol>
+     *
+     * <h4>请求示例</h4>
+     * <pre>
+     * GET /api/mobile/F001/material-batches/fifo/MT001?requiredQuantity=200
+     * </pre>
+     *
+     * <h4>响应示例</h4>
+     * <pre>
+     * {
+     *   "success": true,
+     *   "data": [
+     *     {"batchNumber": "MAT-001", "currentQuantity": 150, "toUseQuantity": 150},
+     *     {"batchNumber": "MAT-002", "currentQuantity": 100, "toUseQuantity": 50}
+     *   ]
+     * }
+     * </pre>
+     *
+     * @param factoryId 工厂ID
+     * @param materialTypeId 材料类型ID
+     * @param requiredQuantity 需求数量
+     * @return FIFO推荐的批次列表
+     */
+    @GetMapping("/fifo/{materialTypeId}")
+    @Operation(summary = "获取FIFO批次（先进先出）",
+               description = "根据先进先出原则获取指定材料类型的批次，用于生产消耗推荐")
+    public ApiResponse<List<MaterialBatchDTO>> getFIFOBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "材料类型ID", required = true, example = "RMT-F001-001")
+            @PathVariable @NotBlank String materialTypeId,
+            @Parameter(description = "需求数量 (兼容: quantity 或 requiredQuantity)")
+            @RequestParam(required = false) BigDecimal requiredQuantity,
+            @Parameter(description = "需求数量 (前端兼容参数名)", hidden = true)
+            @RequestParam(required = false) BigDecimal quantity) {
+
+        // 兼容前端发送的 quantity 参数和后端的 requiredQuantity 参数
+        BigDecimal actualQuantity = requiredQuantity != null ? requiredQuantity : quantity;
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "需求数量参数不能为空 (quantity 或 requiredQuantity)").withHint("请填写需求数量").withHintTarget("quantity");
+        }
+
+        List<MaterialBatchDTO> batches = materialBatchService.getFIFOBatches(factoryId, materialTypeId, actualQuantity);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 获取FEFO批次（先到期先出，食品行业合规）
+     */
+    @GetMapping("/fefo/{materialTypeId}")
+    @Operation(summary = "获取FEFO批次（先到期先出）",
+               description = "根据先到期先出原则获取指定材料类型的批次，适用于食品行业保质期管理")
+    public ApiResponse<List<MaterialBatchDTO>> getFEFOBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "材料类型ID", required = true, example = "RMT-F001-001")
+            @PathVariable @NotBlank String materialTypeId,
+            @Parameter(description = "需求数量")
+            @RequestParam(required = false) BigDecimal requiredQuantity,
+            @Parameter(description = "需求数量 (前端兼容参数名)", hidden = true)
+            @RequestParam(required = false) BigDecimal quantity) {
+
+        BigDecimal actualQuantity = requiredQuantity != null ? requiredQuantity : quantity;
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "需求数量参数不能为空 (quantity 或 requiredQuantity)").withHint("请填写需求数量").withHintTarget("quantity");
+        }
+
+        List<MaterialBatchDTO> batches = materialBatchService.getFEFOBatches(factoryId, materialTypeId, actualQuantity);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 获取即将过期的批次
+     */
+    @GetMapping("/expiring")
+    @Operation(summary = "获取即将过期的批次")
+    public ApiResponse<List<MaterialBatchDTO>> getExpiringBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "天数", required = true, example = "3")
+            @RequestParam(defaultValue = "3") Integer days) {
+
+        List<MaterialBatchDTO> batches = materialBatchService.getExpiringBatches(factoryId, days);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 获取已过期的批次
+     */
+    @GetMapping("/expired")
+    @Operation(summary = "获取已过期的批次")
+    public ApiResponse<List<MaterialBatchDTO>> getExpiredBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        List<MaterialBatchDTO> batches = materialBatchService.getExpiredBatches(factoryId);
+        return ApiResponse.success(batches);
+    }
+
+    /**
+     * 使用批次材料
+     * 兼容两种参数格式：
+     * 1. RequestBody: {"quantity": 100, "productionPlanId": "xxx"}
+     * 2. URL Params: ?quantity=100&productionPlanId=xxx
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/use")
+    @Operation(summary = "使用批次材料")
+    public ApiResponse<MaterialBatchDTO> useBatchMaterial(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
+            @Parameter(description = "使用数量 (URL参数)", hidden = true)
+            @RequestParam(required = false) BigDecimal quantity,
+            @Parameter(description = "生产计划ID (URL参数)", hidden = true)
+            @RequestParam(required = false) String productionPlanId,
+            @RequestBody(required = false) UseMaterialBatchRequest request) {
+
+        // 获取当前用户ID (写入 MaterialConsumption.recordedBy)
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        // 兼容URL参数和RequestBody两种格式
+        BigDecimal actualQuantity = quantity;
+        String actualPlanId = productionPlanId;
+
+        if (request != null) {
+            if (request.getQuantity() != null) {
+                actualQuantity = request.getQuantity();
+            }
+            if (request.getProductionPlanId() != null) {
+                actualPlanId = request.getProductionPlanId();
+            }
+        }
+
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "使用数量不能为空").withHint("请填写使用数量").withHintTarget("usedQuantity");
+        }
+
+        // 🔴 2026-08-13: purpose / notes 此前收下就丢 —— 生产库 39 条消耗记录 notes 全空。
+        // MaterialConsumption 没有 purpose 列, 按本仓既有做法(web-admin 对「其他」调整原因、
+        // 以及 adjust 端点对 notes)把它拼进 notes 一并落库, 而不是继续假装收下。
+        String consumptionNotes = request != null
+                ? joinConsumptionNotes(request.getPurpose(), request.getNotes())
+                : null;
+
+        log.info("使用批次材料: factoryId={}, batchId={}, quantity={}", factoryId, batchId, actualQuantity);
+        MaterialBatchDTO batch = materialBatchService.useBatchMaterial(
+                factoryId, batchId, actualQuantity, actualPlanId, userId, consumptionNotes);
+        return ApiResponse.success("材料使用成功", batch);
+    }
+
+    /**
+     * 调整批次数量
+     * 支持两种参数传递方式：
+     * 1. URL参数：newQuantity, reason（前端当前使用）
+     * 2. RequestBody：quantity, reason
+     *
+     * ⚠️ 数量语义是【调整后的剩余数量(绝对值)】, 不是增减量 —— service 侧
+     * {@code adjustment = newQuantity − 当前剩余}, receiptQuantity 按该差额加减。
+     *
+     * 🔴 2026-08-13: 此前 DTO 还公布了一个 {@code adjustmentType}(INCREASE/DECREASE)
+     * 字段, 与 quantity 合起来长得像「增减量」契约, 但本方法从来不读它 —— 照
+     * Swagger 发 {@code {adjustmentType:"DECREASE", quantity:50}} 会被执行成
+     * 「把剩余量设为 50」, 方向相反且**可以凭空造出库存**(剩 3 的批次会变成 50),
+     * 落库的审计行还会被标成 INCREASE。web-admin 早就在自己那侧把 delta 换算成
+     * 绝对值绕过去了(见 warehouse/inventory/index.vue 的 W-03 注释), 但绕过写在
+     * 一个客户端里, 对外公布的契约仍是错的。现在改为**显式拒绝**: 宁可 400,
+     * 不做方向相反的静默写入。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/adjust")
+    @Operation(summary = "调整批次数量")
+    public ApiResponse<MaterialBatchDTO> adjustBatchQuantity(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
+            @Parameter(description = "新数量（URL参数，与RequestBody二选一）")
+            @RequestParam(required = false) BigDecimal newQuantity,
+            @Parameter(description = "调整原因（URL参数）")
+            @RequestParam(required = false) String reason,
+            @RequestBody(required = false) AdjustMaterialBatchRequest request) {
+
+        // 优先使用URL参数，其次使用RequestBody
+        BigDecimal actualQuantity = newQuantity;
+        String actualReason = reason;
+
+        if (actualQuantity == null && request != null) {
+            actualQuantity = request.getQuantity();
+        }
+        if (actualReason == null && request != null) {
+            actualReason = request.getReason();
+        }
+
+        // ⚠️ 入参校验全部排在取 token / 调 service 之前 —— 这几道 guard 只依赖入参,
+        // 放在前面才能保证「被拒的请求一次写入都没发生过」是可断言的。
+
+        // 拒绝「增减量」契约: 该字段从未被实现, 静默忽略会做出方向相反的写入。
+        if (request != null && StringUtils.hasText(request.getAdjustmentType())) {
+            throw new BusinessException(400, "本接口不接受 adjustmentType(增减量语义)")
+                    .withHint("quantity 是调整后的剩余数量(绝对值), 不是增减量。"
+                            + "要减少请传【调整后应剩多少】, 例如剩 53 要减 50 就传 3")
+                    .withHintTarget("adjustmentType");
+        }
+
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "调整数量不能为空").withHint("请填写调整数量").withHintTarget("adjustQuantity");
+        }
+
+        // reason 落库列是 NOT NULL, 缺它会在 service 里炸成通用 500 —— 在入口拦成 400。
+        if (!StringUtils.hasText(actualReason)) {
+            throw new BusinessException(400, "调整原因不能为空")
+                    .withHint("库存调整必须留下原因, 会写入调整审计记录")
+                    .withHintTarget("reason");
+        }
+
+        // notes 在审计表里没有独立入口, 不拼进 reason 就是彻底丢掉。拼法与 web-admin
+        // 对「其他」原因的既有做法一致(warehouse/inventory/index.vue Bug 5)。
+        if (request != null && StringUtils.hasText(request.getNotes())) {
+            actualReason = actualReason + " — " + request.getNotes().trim();
+        }
+        // reason 列是 varchar(255), 超长会在落库时炸成通用 500 —— 同样拦成 400。
+        // 不截断: 审计原因被悄悄砍掉一半比报错更糟。
+        if (actualReason.length() > ADJUSTMENT_REASON_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "调整原因过长(" + actualReason.length() + "/" + ADJUSTMENT_REASON_MAX_LENGTH + " 字)")
+                    .withHint("原因与备注会拼接后写入审计记录, 请精简")
+                    .withHintTarget("reason");
+        }
+
+        // 获取当前用户ID
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        log.info("调整批次数量: factoryId={}, batchId={}, newRemainingQuantity={}, reason={}",
+                factoryId, batchId, actualQuantity, actualReason);
+        MaterialBatchDTO batch = materialBatchService.adjustBatchQuantity(factoryId, batchId, actualQuantity, actualReason, userId);
+        return ApiResponse.success("批次数量调整成功", batch);
+    }
+
+    /**
+     * 更正批次入库日期 —— 唯一能改 {@code receiptDate} 的正路，<b>必留痕</b>。
+     *
+     * <p><b>为什么是一个新端点，而不是扩 {@code /adjust}</b>：{@code /adjust} 的
+     * javadoc、DTO ({@code AdjustMaterialBatchRequest} 只有 quantity/reason/notes)、
+     * 落库表 ({@code material_batch_adjustments}，quantityBefore/adjustmentQuantity/
+     * quantityAfter 三列全 NOT NULL) 三处一致地写着「这是数量调整」。把日期塞进去，要么
+     * 写三个 0 进数量台账、把真正变了的东西藏进 reason 自由文本；要么让那三列变可空，
+     * 于是既有的每一条数量审计都失去 NOT NULL 保证。两条都是拿一个已经收敛的接口换一个
+     * 口袋接口 —— 本仓刚在这个端点上因为「一个字段两种语义」踩过
+     * (2026-08-13 的 {@code adjustmentType}，方向相反的静默写入)。
+     *
+     * <h4>与 PUT 的分工</h4>
+     * <ul>
+     *   <li>PUT /{batchId} —— 描述性信息 (备注/库位/过期日期/箱数/厂号/产地)，任何仓管可改，不留痕</li>
+     *   <li>本端点        —— 入库日期，需财务经理/工厂超管，<b>原因必填</b>，写
+     *       {@code material_batch_date_corrections} (含 old/new)</li>
+     *   <li>盘点 / {@code /adjust} —— 数量与成本，写 {@code material_batch_adjustments}</li>
+     * </ul>
+     *
+     * <p>⚠️ {@code @Loggable(action="UPDATE")} 只记「谁更新了哪个批次」，<b>不记字段级新旧值</b> ——
+     * 所以它不是本端点的留痕，真正的痕迹是 service 写的那张台账。这里挂 @Loggable 只是为了
+     * 与兄弟端点在操作日志里长得一样。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/receipt-date-correction")
+    @Operation(summary = "更正批次入库日期 (原因必填, 写审计台账)",
+            description = "唯一能改 receiptDate 的路径。需财务经理/工厂超管 (与盘点审批同级)。")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "CORRECT_RECEIPT_DATE",
+            entityType = "MaterialBatch", entityIdParam = "batchId")
+    public ApiResponse<MaterialBatchDTO> correctReceiptDate(
+            @Parameter(description = "工厂ID", required = true, example = "F006")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", required = true)
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.material.CorrectReceiptDateRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+        // C1 孪生坑: 角色在 request attribute 上, 不在 SecurityContext 里。
+        String callerRole = (String) httpRequest.getAttribute("role");
+
+        log.info("更正批次入库日期: factoryId={}, batchId={}, newDate={}, role={}",
+                factoryId, batchId, request.getReceiptDate(), callerRole);
+        MaterialBatchDTO batch = materialBatchService.correctReceiptDate(
+                factoryId, batchId, request.getReceiptDate(), request.getReason(), userId, callerRole);
+        return ApiResponse.success("入库日期已更正, 已记录更正原因与改前改后的日期", batch);
+    }
+
+    /**
+     * 兼容墓碑：旧“续入已有批次”会丢失本次来源、价格、保质期与所有权快照，已永久关闭。
+     * 保留路由只为给旧客户端明确迁移提示；后端不再保留可达的续入 Service 实现。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/replenish")
+    @Deprecated
+    @Operation(summary = "旧批次续入口（已停用）",
+            description = "兼容旧客户端并返回迁移提示；请从有来源的仓储任务进入")
+    public ApiResponse<MaterialBatchDTO> replenishExistingBatch(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌")
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody ReplenishMaterialBatchRequest request) {
+        throw directInventoryWriteDisabled();
+    }
+
+    /**
+     * 更新批次状态
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PutMapping("/{batchId}/status")
+    @Operation(summary = "更新批次状态")
+    public ApiResponse<MaterialBatchDTO> updateBatchStatus(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Valid @RequestBody UpdateBatchStatusRequest request) {
+
+        MaterialBatchStatus status = MaterialBatchStatus.valueOf(request.getStatus());
+        log.info("更新批次状态: factoryId={}, batchId={}, status={}", factoryId, batchId, status);
+        MaterialBatchDTO batch = materialBatchService.updateBatchStatus(factoryId, batchId, status);
+        return ApiResponse.success("批次状态更新成功", batch);
+    }
+
+    /**
+     * 预留批次材料
+     * 兼容两种参数格式：
+     * 1. RequestBody: {"quantity": 100, "planId": "xxx"}
+     * 2. URL Params: ?quantity=100&productionPlanId=xxx
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/reserve")
+    @Operation(summary = "预留批次材料")
+    public ApiResponse<Void> reserveBatchMaterial(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "预留数量 (URL参数)", hidden = true)
+            @RequestParam(required = false) BigDecimal quantity,
+            @Parameter(description = "生产计划ID (URL参数)", hidden = true)
+            @RequestParam(required = false) String productionPlanId,
+            @RequestBody(required = false) ReserveMaterialBatchRequest request) {
+
+        // 兼容URL参数和RequestBody两种格式
+        BigDecimal actualQuantity = quantity;
+        String actualPlanId = productionPlanId;
+
+        if (request != null) {
+            if (request.getQuantity() != null) {
+                actualQuantity = request.getQuantity();
+            }
+            if (request.getPlanId() != null) {
+                actualPlanId = request.getPlanId();
+            } else if (request.getProductionBatchId() != null) {
+                actualPlanId = request.getProductionBatchId();
+            }
+        }
+
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "预留数量不能为空").withHint("请填写预留数量").withHintTarget("reservedQuantity");
+        }
+
+        log.info("预留批次材料: factoryId={}, batchId={}, quantity={}, productionPlanId={}",
+                factoryId, batchId, actualQuantity, actualPlanId);
+        materialBatchService.reserveBatchMaterial(factoryId, batchId, actualQuantity, actualPlanId);
+        return ApiResponse.success("材料预留成功", null);
+    }
+
+    /**
+     * 释放预留材料
+     * 兼容两种参数格式：
+     * 1. RequestBody: {"quantity": 100, "productionPlanId": "xxx"}
+     * 2. URL Params: ?quantity=100&productionPlanId=xxx
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/release")
+    @Operation(summary = "释放预留材料")
+    public ApiResponse<Void> releaseBatchReservation(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "释放数量 (URL参数)", hidden = true)
+            @RequestParam(required = false) BigDecimal quantity,
+            @Parameter(description = "生产计划ID (URL参数)", hidden = true)
+            @RequestParam(required = false) String productionPlanId,
+            @RequestBody(required = false) ReleaseMaterialBatchRequest request) {
+
+        // 兼容URL参数和RequestBody两种格式
+        BigDecimal actualQuantity = quantity;
+        String actualPlanId = productionPlanId;
+
+        if (request != null) {
+            if (request.getQuantity() != null) {
+                actualQuantity = request.getQuantity();
+            }
+            if (request.getProductionPlanId() != null) {
+                actualPlanId = request.getProductionPlanId();
+            }
+        }
+
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "释放数量不能为空").withHint("请填写释放数量").withHintTarget("releaseQuantity");
+        }
+
+        log.info("释放预留材料: factoryId={}, batchId={}, quantity={}, productionPlanId={}",
+                factoryId, batchId, actualQuantity, actualPlanId);
+        materialBatchService.releaseBatchReservation(factoryId, batchId, actualQuantity, actualPlanId);
+        return ApiResponse.success("预留释放成功", null);
+    }
+
+    /**
+     * 消耗批次材料
+     * 兼容两种参数格式：
+     * 1. RequestBody: {"quantity": 100, "processId": "xxx", "notes": "..."}
+     * 2. URL Params: ?quantity=100&productionPlanId=xxx  (processId 为旧名别名)
+     *
+     * ⚠️ 计划ID 落库到 {@code MaterialConsumption.productionPlanId}
+     * (FK → production_plans)。表里另有 {@code production_batch_id}
+     * (FK → production_batches), 本端点不写它 —— 不要把加工批次ID传进来。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/consume")
+    @Operation(summary = "消耗批次材料")
+    public ApiResponse<Void> consumeBatchMaterial(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
+            @Parameter(description = "消耗数量 (URL参数)", hidden = true)
+            @RequestParam(required = false) BigDecimal quantity,
+            @Parameter(description = "生产计划ID (URL参数)", hidden = true)
+            @RequestParam(required = false) String productionPlanId,
+            @Parameter(description = "加工流程ID (URL参数, 旧名, 等价于 productionPlanId)", hidden = true)
+            @RequestParam(required = false) String processId,
+            @RequestBody(required = false) ConsumeMaterialBatchRequest request) {
+
+        // 获取当前用户ID (写入 MaterialConsumption.recordedBy)
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+
+        // 兼容URL参数和RequestBody两种格式
+        BigDecimal actualQuantity = quantity;
+        // 🔴 2026-08-13: 本端点原来【只】收 processId, 而 /use /reserve /release 三个
+        // 兄弟端点收的都是 productionPlanId, RN 客户端对四个端点统一发 productionPlanId
+        // (materialBatchApiClient.consumeBatch)。于是这里恒绑不上 → 落库
+        // MaterialConsumption.productionPlanId 永远是 null, 原料消耗与生产计划的
+        // 追溯关联被静默丢弃 —— 而服务层参数名与实体字段本来就叫 productionPlanId,
+        // 只有这个 controller 参数走偏了。现在优先收 productionPlanId, processId 保留为旧名别名。
+        String actualPlanId = productionPlanId != null ? productionPlanId : processId;
+
+        if (request != null) {
+            if (request.getQuantity() != null) {
+                actualQuantity = request.getQuantity();
+            }
+            if (request.getProcessId() != null) {
+                actualPlanId = request.getProcessId();
+            }
+        }
+
+        if (actualQuantity == null) {
+            throw new BusinessException(400, "消耗数量不能为空").withHint("请填写消耗数量").withHintTarget("consumedQuantity");
+        }
+
+        String consumptionNotes = request != null ? trimToNull(request.getNotes()) : null;
+
+        log.info("消耗批次材料: factoryId={}, batchId={}, quantity={}, productionPlanId={}",
+                factoryId, batchId, actualQuantity, actualPlanId);
+        materialBatchService.consumeBatchMaterial(
+                factoryId, batchId, actualQuantity, actualPlanId, userId, consumptionNotes);
+        return ApiResponse.success("材料消耗成功", null);
+    }
+
+    /**
+     * 获取库存统计
+     */
+    @GetMapping("/inventory/statistics")
+    @Operation(summary = "获取库存统计")
+    public ApiResponse<Map<String, Object>> getInventoryStatistics(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        Map<String, Object> statistics = materialBatchService.getInventoryStatistics(factoryId);
+        return ApiResponse.success(statistics);
+    }
+
+    /**
+     * 获取库存价值
+     *
+     * <p>RBAC: 仅授予 {@code procurement:price:view} 权限的角色可访问 (factory_super_admin /
+     * procurement_manager / finance_manager / sales_manager / dispatcher / restaurant_manager).
+     * 仓库/质检/操作员等无该权限的角色返回 403. 原因: 响应体是裸 {@code BigDecimal} 聚合金额,
+     * {@code PriceFieldResponseAdvice} 的字段级 strip 无 field path 可作用; 且 per-batch
+     * {@code totalValue} 已对这些角色 strip, 允许其访问 SUM 聚合自相矛盾.
+     * 参考 {@code EquipmentController.calculateDepreciatedValue} 同形态先例.
+     * 决策记录: {@code docs/qa-audits/2026-05-12-e5-valuation-rbac-decision.md}.
+     */
+    @RequirePermission({"procurement:price:view"})
+    @GetMapping("/inventory/valuation")
+    @Operation(summary = "获取库存价值")
+    public ApiResponse<BigDecimal> getInventoryValuation(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        BigDecimal valuation = materialBatchService.getInventoryValuation(factoryId);
+        return ApiResponse.success(valuation);
+    }
+
+    /**
+     * 获取工厂级原料总库存汇总 (按物料聚合, 跨所有仓库) — F006 六膳门 "总库存查询" 页。
+     *
+     * <p>区别于 分仓库存查询 (按单仓批次级)。本端点把每个原料类型在所有仓库的所有在库批次
+     * 的当前剩余量 / 价值 汇总成 一行/物料 的工厂级视图。</p>
+     *
+     * <h4>聚合口径</h4>
+     * <ul>
+     *   <li>仅统计在库批次: status NOT IN (DEPLETED/USED_UP/EXPIRED/SCRAPPED/DEFECTIVE)
+     *       且 当前剩余量 (receiptQuantity - usedQuantity - reservedQuantity) &gt; 0</li>
+     *   <li>软删除批次自动排除 (实体级 @Where)</li>
+     *   <li>factoryId 维度过滤 (多租户)</li>
+     *   <li>totalQuantity = SUM(剩余量); totalValue = SUM(剩余量 * 单价)</li>
+     *   <li>batchCount = COUNT(批次); warehouseCount = COUNT(DISTINCT 仓库)</li>
+     *   <li>avgUnitPrice = totalValue / totalQuantity (移动均价, 除零 → null)</li>
+     * </ul>
+     *
+     * <h4>请求示例</h4>
+     * <pre>GET /api/mobile/F001/material-batches/stock-summary</pre>
+     *
+     * <p>RBAC: 仓储 / 库存读写或只读角色可访问 (warehouse:read_write / warehouse:read /
+     * inventory:read_write / inventory:read)。</p>
+     *
+     * @param factoryId 工厂ID
+     * @return 按物料聚合的总库存列表 (无数据返回空 list)
+     */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
+    @GetMapping("/stock-summary")
+    @Operation(summary = "获取工厂级原料总库存汇总",
+               description = "按物料类型聚合, 跨所有仓库, 仅统计在库批次 (剩余量 > 0 且非耗尽/过期/报废)")
+    public ApiResponse<List<MaterialStockSummaryDTO>> getStockSummary(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        log.info("获取工厂级原料总库存汇总: factoryId={}", factoryId);
+        List<MaterialStockSummaryDTO> summary = materialBatchService.listStockSummary(factoryId);
+        return ApiResponse.success(summary);
+    }
+
+    /**
+     * 获取低库存警告
+     *
+     * <p>获取库存低于最低阈值的原材料列表。</p>
+     *
+     * <h4>请求示例</h4>
+     * <pre>
+     * GET /api/mobile/F001/material-batches/low-stock
+     * </pre>
+     *
+     * <h4>响应示例</h4>
+     * <pre>
+     * {
+     *   "success": true,
+     *   "code": 200,
+     *   "data": [
+     *     {
+     *       "materialTypeId": "MT001",
+     *       "materialTypeName": "三文鱼",
+     *       "currentQuantity": 50,
+     *       "minQuantity": 100,
+     *       "unit": "kg",
+     *       "severity": "HIGH"
+     *     }
+     *   ]
+     * }
+     * </pre>
+     *
+     * @param factoryId 工厂ID
+     * @return 低库存预警列表
+     */
+    @GetMapping("/low-stock")
+    @Operation(summary = "获取低库存警告", description = "获取库存低于最低阈值的原材料列表")
+    public ApiResponse<List<Map<String, Object>>> getLowStockWarnings(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        log.info("获取低库存警告: factoryId={}", factoryId);
+        List<Map<String, Object>> warnings = materialBatchService.getLowStockWarnings(factoryId);
+        return ApiResponse.success(warnings);
+    }
+
+    /**
+     * 获取库存预警（综合）
+     *
+     * <p>获取所有类型的库存预警，包括：低库存、即将过期、已过期。</p>
+     *
+     * <h4>预警类型说明</h4>
+     * <ul>
+     *   <li><b>LOW_STOCK</b>：低库存预警 - 库存数量低于最低阈值</li>
+     *   <li><b>EXPIRING</b>：即将过期预警 - 批次将在指定天数内过期</li>
+     *   <li><b>EXPIRED</b>：已过期预警 - 批次已超过保质期</li>
+     * </ul>
+     *
+     * <h4>请求示例</h4>
+     * <pre>
+     * GET /api/mobile/F001/material-batches/inventory/alerts?days=7
+     * </pre>
+     *
+     * <h4>响应示例</h4>
+     * <pre>
+     * {
+     *   "success": true,
+     *   "code": 200,
+     *   "data": [
+     *     {
+     *       "alertType": "LOW_STOCK",
+     *       "materialTypeName": "三文鱼",
+     *       "batchNumber": null,
+     *       "currentQuantity": 50,
+     *       "minQuantity": 100,
+     *       "expiryDate": null,
+     *       "daysUntilExpiry": null,
+     *       "severity": "HIGH"
+     *     },
+     *     {
+     *       "alertType": "EXPIRING",
+     *       "materialTypeName": "带鱼",
+     *       "batchNumber": "MAT-20251120-001",
+     *       "currentQuantity": 30,
+     *       "minQuantity": null,
+     *       "expiryDate": "2025-11-25",
+     *       "daysUntilExpiry": 5,
+     *       "severity": "MEDIUM"
+     *     }
+     *   ]
+     * }
+     * </pre>
+     *
+     * @param factoryId 工厂ID
+     * @param days 即将过期的天数阈值（默认7天）
+     * @return 库存预警列表
+     */
+    @GetMapping("/inventory/alerts")
+    @Operation(summary = "获取库存预警（综合）",
+               description = "获取所有类型的库存预警，包括低库存、即将过期、已过期")
+    public ApiResponse<List<Map<String, Object>>> getInventoryAlerts(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "即将过期天数阈值", example = "7")
+            @RequestParam(defaultValue = "7") Integer days) {
+
+        log.info("获取库存预警: factoryId={}, days={}", factoryId, days);
+        
+        List<Map<String, Object>> alerts = new java.util.ArrayList<>();
+        
+        // 1. 获取低库存预警
+        List<Map<String, Object>> lowStockWarnings = materialBatchService.getLowStockWarnings(factoryId);
+        for (Map<String, Object> warning : lowStockWarnings) {
+            Map<String, Object> alert = new java.util.HashMap<>(warning);
+            alert.put("alertType", "LOW_STOCK");
+            alert.put("severity", determineSeverity(warning));
+            alerts.add(alert);
+        }
+        
+        // 2. 获取即将过期的批次
+        List<MaterialBatchDTO> expiringBatches = materialBatchService.getExpiringBatches(factoryId, days);
+        for (MaterialBatchDTO batch : expiringBatches) {
+            Map<String, Object> alert = new java.util.HashMap<>();
+            alert.put("alertType", "EXPIRING");
+            alert.put("batchId", batch.getId());
+            alert.put("materialTypeName", batch.getMaterialName());
+            alert.put("batchNumber", batch.getBatchNumber());
+            alert.put("currentQuantity", batch.getCurrentQuantity());
+            alert.put("expiryDate", batch.getExpireDate());
+            alert.put("daysUntilExpiry", batch.getRemainingDays());
+            alert.put("storageLocation", batch.getStorageLocation());
+            alert.put("severity", batch.getRemainingDays() != null && batch.getRemainingDays() <= 3 ? "HIGH" : "MEDIUM");
+            alerts.add(alert);
+        }
+
+        // 3. 获取已过期的批次
+        List<MaterialBatchDTO> expiredBatches = materialBatchService.getExpiredBatches(factoryId);
+        for (MaterialBatchDTO batch : expiredBatches) {
+            Map<String, Object> alert = new java.util.HashMap<>();
+            alert.put("alertType", "EXPIRED");
+            alert.put("batchId", batch.getId());
+            alert.put("materialTypeName", batch.getMaterialName());
+            alert.put("batchNumber", batch.getBatchNumber());
+            alert.put("currentQuantity", batch.getCurrentQuantity());
+            alert.put("expiryDate", batch.getExpireDate());
+            alert.put("daysUntilExpiry", batch.getRemainingDays());
+            alert.put("storageLocation", batch.getStorageLocation());
+            alert.put("severity", "HIGH");
+            alerts.add(alert);
+        }
+        
+        return ApiResponse.success(alerts);
+    }
+    
+    /**
+     * 根据预警信息确定严重程度
+     */
+    private String determineSeverity(Map<String, Object> warning) {
+        Object currentQty = warning.get("currentQuantity");
+        Object minQty = warning.get("minQuantity");
+        
+        if (currentQty instanceof Number && minQty instanceof Number) {
+            double current = ((Number) currentQty).doubleValue();
+            double min = ((Number) minQty).doubleValue();
+            
+            if (current <= 0) {
+                return "HIGH";
+            } else if (current < min * 0.5) {
+                return "HIGH";
+            } else if (current < min * 0.8) {
+                return "MEDIUM";
+            }
+        }
+        return "LOW";
+    }
+
+    /**
+     * 临期三级预警（食品行业合规）
+     * - URGENT (红): < 30天
+     * - WARNING (橙): 30-60天
+     * - NOTICE (绿): 60-90天
+     * - 距保质期不足1/3时标记需单独存放
+     */
+    @GetMapping("/inventory/expiry-warnings")
+    @Operation(summary = "临期三级预警", description = "食品行业临期管理：30/60/90天三级预警 + 单独存放标记")
+    public ApiResponse<Map<String, Object>> getExpiryWarnings(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        log.info("临期三级预警查询: factoryId={}", factoryId);
+
+        // 查询90天内到期的批次
+        java.time.LocalDate warningDate = java.time.LocalDate.now().plusDays(90);
+        List<MaterialBatchDTO> expiringBatches = materialBatchService.getExpiringBatches(factoryId, 90);
+
+        int urgent = 0, warning = 0, notice = 0, separateStorageCount = 0;
+        List<Map<String, Object>> items = new java.util.ArrayList<>();
+
+        for (MaterialBatchDTO batch : expiringBatches) {
+            Integer daysRemaining = batch.getRemainingDays();
+            if (daysRemaining == null) continue;
+
+            String tier;
+            if (daysRemaining <= 30) {
+                tier = "URGENT";
+                urgent++;
+            } else if (daysRemaining <= 60) {
+                tier = "WARNING";
+                warning++;
+            } else {
+                tier = "NOTICE";
+                notice++;
+            }
+
+            // 检查是否需要单独存放：剩余保质期 < 总保质期的1/3
+            // 用入库日期(receiptDate)近似生产日期来估算总保质期
+            boolean separateStorage = false;
+            if (batch.getReceiptDate() != null && batch.getExpireDate() != null) {
+                long totalShelfDays = java.time.temporal.ChronoUnit.DAYS.between(
+                        batch.getReceiptDate(), batch.getExpireDate());
+                if (totalShelfDays > 0 && daysRemaining < totalShelfDays / 3) {
+                    separateStorage = true;
+                    separateStorageCount++;
+                }
+            }
+
+            Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("batchId", batch.getId());
+            item.put("batchNumber", batch.getBatchNumber());
+            item.put("materialTypeName", batch.getMaterialName());
+            item.put("daysRemaining", daysRemaining);
+            item.put("expireDate", batch.getExpireDate());
+            item.put("tier", tier);
+            item.put("currentQuantity", batch.getCurrentQuantity());
+            item.put("unit", batch.getUnit());
+            item.put("separateStorage", separateStorage);
+            item.put("storageLocation", batch.getStorageLocation());
+            items.add(item);
+        }
+
+        Map<String, Object> summary = new java.util.LinkedHashMap<>();
+        summary.put("urgent", urgent);
+        summary.put("warning", warning);
+        summary.put("notice", notice);
+        summary.put("separateStorage", separateStorageCount);
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("summary", summary);
+        result.put("items", items);
+
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 兼容墓碑：普通页面的无来源批量入库已关闭。
+     * 保留路由只为给旧客户端明确迁移提示；真正的批量期初库存使用 /opening。
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/batch")
+    @Deprecated
+    @Operation(summary = "旧无来源批量入库入口（已停用）",
+            description = "兼容旧客户端并返回迁移提示；期初库存请使用 /opening")
+    public ApiResponse<List<MaterialBatchDTO>> batchCreateMaterialBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "访问令牌", required = true, example = "Bearer eyJhbGciOiJIUzI1NiJ9...")
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody List<CreateMaterialBatchRequest> requests) {
+        throw directInventoryWriteDisabled();
+    }
+
+    private BusinessException directInventoryWriteDisabled() {
+        return new BusinessException(409, "普通批次页面已关闭无来源入库与续入")
+                .withHint("请从仓储待收货、客供料、调拨、退货、盘点或受控调整任务进入；期初建账使用独立入口")
+                .withHintTarget("sourceTaskId")
+                .withSeverity("BLOCKING");
+    }
+
+    /**
+     * 获取批次使用历史
+     */
+    @GetMapping("/{batchId}/usage-history")
+    @Operation(summary = "获取批次使用历史")
+    public ApiResponse<List<Map<String, Object>>> getBatchUsageHistory(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId) {
+
+        List<Map<String, Object>> history = materialBatchService.getBatchUsageHistory(factoryId, batchId);
+        return ApiResponse.success(history);
+    }
+
+    /**
+     * 导出库存报表
+     */
+    @GetMapping("/export")
+    @Operation(summary = "导出库存报表",
+            description = "导出原材料批次库存报表为Excel文件。"
+                    + "RBAC: 无 procurement:price:view 权限的角色, Excel 中 采购单价 / 库存价值 列显示 '—'.")
+    public byte[] exportInventoryReport(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "开始日期", example = "2025-01-01")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "结束日期", example = "2025-01-31")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestHeader("Authorization") String authorization) {
+
+        // RBAC defense-in-depth (P0-C sweep, 2026-05-12): mirror PR #450 pattern.
+        boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization);
+
+        log.info("导出库存报表: factoryId={}, startDate={}, endDate={}, maskPrice={}",
+                factoryId, startDate, endDate, maskPrice);
+        return materialBatchService.exportInventoryReport(factoryId, startDate, endDate, maskPrice);
+    }
+
+    /**
+     * 处理过期批次
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/handle-expired")
+    @Operation(summary = "处理过期批次")
+    public ApiResponse<Integer> handleExpiredBatches(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId) {
+
+        log.info("处理过期批次: factoryId={}", factoryId);
+        int count = materialBatchService.handleExpiredBatches(factoryId);
+        return ApiResponse.success(String.format("已处理%d个过期批次", count), count);
+    }
+
+    /**
+     * 转冻品 ⭐E2E测试已验证
+     *
+     * <p>将原材料批次从鲜品（FRESH/AVAILABLE）转换为冻品（FROZEN）状态。</p>
+     *
+     * <h4>业务规则</h4>
+     * <ul>
+     *   <li>批次当前状态必须是 FRESH 或 AVAILABLE</li>
+     *   <li>转换后状态变为 FROZEN</li>
+     *   <li>存储位置更新为新的冷冻库位置</li>
+     *   <li>原存储位置记录到notes字段（用于撤销时恢复）</li>
+     *   <li>转换后10分钟内可撤销</li>
+     * </ul>
+     *
+     * <h4>请求示例</h4>
+     * <pre>
+     * POST /api/mobile/F001/material-batches/{batchId}/convert-to-frozen
+     * Content-Type: application/json
+     *
+     * {
+     *   "convertedBy": 1,
+     *   "convertedDate": "2025-11-20",
+     *   "storageLocation": "冷冻库-F区",
+     *   "notes": "原料质量良好，转冻保存"
+     * }
+     * </pre>
+     *
+     * <h4>响应示例</h4>
+     * <pre>
+     * {
+     *   "success": true,
+     *   "code": 200,
+     *   "message": "已成功转为冻品",
+     *   "data": {
+     *     "id": "batch-uuid",
+     *     "batchNumber": "MAT-20251120-001",
+     *     "status": "FROZEN",
+     *     "storageLocation": "冷冻库-F区"
+     *   }
+     * }
+     * </pre>
+     *
+     * @param factoryId 工厂ID
+     * @param batchId 批次ID
+     * @param request 转换请求参数（包含操作人、转换日期、新存储位置、备注）
+     * @return 转换后的批次信息
+     * @since 2025-11-20
+     * @see #undoFrozen 撤销转冻品操作
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/convert-to-frozen")
+    @Operation(summary = "将原材料批次转为冻品",
+               description = "将鲜品批次转换为冻品，更新批次状态和存储条件。转换后10分钟内可撤销。")
+    public ApiResponse<MaterialBatchDTO> convertToFrozen(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "转换请求参数", required = true)
+            @RequestBody @Valid ConvertToFrozenRequest request) {
+
+        log.info("转冻品: factoryId={}, batchId={}, convertedBy={}",
+                factoryId, batchId, request.getConvertedBy());
+        MaterialBatchDTO result = materialBatchService.convertToFrozen(factoryId, batchId, request);
+        return ApiResponse.success("已成功转为冻品", result);
+    }
+
+    /**
+     * 撤销转冻品操作 ⭐E2E测试已验证
+     *
+     * <p>撤销误操作的转冻品，将批次状态恢复为鲜品。</p>
+     *
+     * <h4>业务规则（10分钟时间窗口保护）</h4>
+     * <ul>
+     *   <li>批次当前状态必须是 FROZEN</li>
+     *   <li>转换时间必须在10分钟内</li>
+     *   <li>超过10分钟无法撤销，需联系管理员处理</li>
+     *   <li>撤销后状态恢复为 FRESH/AVAILABLE</li>
+     *   <li>存储位置恢复为原位置（从notes字段解析）</li>
+     * </ul>
+     *
+     * <h4>错误场景</h4>
+     * <ul>
+     *   <li><b>400</b>: 批次状态不是FROZEN</li>
+     *   <li><b>400</b>: 转换已超过10分钟</li>
+     *   <li><b>400</b>: 无法解析转换时间</li>
+     *   <li><b>404</b>: 批次不存在</li>
+     * </ul>
+     *
+     * <h4>请求示例</h4>
+     * <pre>
+     * POST /api/mobile/F001/material-batches/{batchId}/undo-frozen
+     * Content-Type: application/json
+     *
+     * {
+     *   "operatorId": 1,
+     *   "reason": "误操作，该批次应保持鲜品状态"
+     * }
+     * </pre>
+     *
+     * <h4>响应示例</h4>
+     * <pre>
+     * // 成功响应
+     * {
+     *   "success": true,
+     *   "code": 200,
+     *   "message": "已成功撤销转冻品操作",
+     *   "data": {
+     *     "status": "FRESH",
+     *     "storageLocation": "A区-01货架"  // 恢复原位置
+     *   }
+     * }
+     *
+     * // 超时错误响应
+     * {
+     *   "success": false,
+     *   "code": 400,
+     *   "message": "转换已超过10分钟（已过15分钟），无法撤销"
+     * }
+     * </pre>
+     *
+     * @param factoryId 工厂ID
+     * @param batchId 批次ID
+     * @param request 撤销请求参数（包含操作人ID和撤销原因）
+     * @return 撤销后的批次信息
+     * @since 2025-11-20
+     * @see #convertToFrozen 转冻品操作
+     */
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/undo-frozen")
+    @Operation(summary = "撤销转冻品操作",
+               description = "撤销误操作的转冻品，仅允许转换后10分钟内撤销。超时需联系管理员。")
+    public ApiResponse<MaterialBatchDTO> undoFrozen(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Parameter(description = "批次ID", required = true, example = "MB-2025-001")
+            @PathVariable @NotBlank String batchId,
+            @Parameter(description = "撤销请求参数", required = true)
+            @RequestBody @Valid UndoFrozenRequest request) {
+
+        log.info("撤销转冻品: factoryId={}, batchId={}, operatorId={}, reason={}",
+                factoryId, batchId, request.getOperatorId(), request.getReason());
+        MaterialBatchDTO result = materialBatchService.undoFrozen(factoryId, batchId, request);
+        return ApiResponse.success("已成功撤销转冻品操作", result);
+    }
+}

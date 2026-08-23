@@ -1,0 +1,114 @@
+{
+  "expo": {
+    "name": "白垩纪AI Agent",
+    "slug": "CretasFoodTrace",
+    "version": "1.0.4",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "runtimeVersion": "1.0.4",
+    "updates": {
+      "enabled": true,
+      "url": "https://ota.cretaceousfuture.com/api/ota/manifest",
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0,
+      "codeSigningCertificate": "./ota_cert.pem",
+      "codeSigningMetadata": {
+        "keyid": "main",
+        "alg": "rsa-v1_5-sha256"
+      },
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#2d5016"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cretaceousfuture",
+      "buildNumber": "4",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "允许白垩纪AI Agent使用麦克风进行语音输入和语音识别"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.cretas.foodtrace",
+      "versionCode": 15,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "NFC",
+        "RECORD_AUDIO"
+      ],
+      "useNextNotificationsApi": true,
+      "config": {
+        "googleMaps": {
+          "apiKey": ""
+        }
+      },
+      "softwareKeyboardLayoutMode": "pan",
+      "usesCleartextTraffic": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#1976D2",
+          "sounds": ["./assets/notification-sound.wav"]
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location for GPS tracking and location-based features."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera for QR code scanning and photo capture."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos for uploading images."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID for secure authentication."
+        }
+      ],
+      "./plugins/withSelfHostedOta"
+    ],
+    "extra": {
+      "router": {}
+    }
+  }
+}

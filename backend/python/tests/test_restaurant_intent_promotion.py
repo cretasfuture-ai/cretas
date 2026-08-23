@@ -1,0 +1,803 @@
+"""Unit tests for the restaurant intent flywheel promotion module.
+
+Design docs:
+  docs/superpowers/specs/2026-07-07-restaurant-intent-tiered-routing-design.md (section 5)
+  docs/superpowers/specs/2026-07-07-restaurant-intent-phase2-java-entry-design.md
+
+Everything here is mocked (no live DB, no live embedding service) -- mirrors
+the mocking style of test_restaurant_intent.py (fake asyncpg pool/conn
+doubles) and test_learning_promotion.py (ledger-file monkeypatching).
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from smartbi.gold.restaurant import restaurant_intent_promotion as promo
+
+
+# ─── Fake asyncpg pool/conn doubles (mirrors test_restaurant_intent.py) ────
+
+class _AcquireCtx:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, rows=None, exc=None, foreign_rows=None):
+        self.rows = rows or []
+        # 「别的租户有、本租户没有」的实体名; 默认空 = 不剔任何条目。
+        self.foreign_rows = foreign_rows or []
+        self.exc = exc
+        self.calls = []
+        self.guc_calls = []  # set_config 调用 (RLS GUC — 2026-07-23 修)
+
+    async def execute(self, sql, *args):
+        self.guc_calls.append((sql, args))
+
+    async def fetch(self, sql, *args):
+        self.calls.append((sql, args))
+        if self.exc:
+            raise self.exc
+        # ⚠️ 2026-08-10: 原实现对**任何**查询都返回 self.rows。生产侧 2026-08-09
+        #    给 aggregate_misses 加了第二条查询 `_foreign_entity_names`
+        #    (查 dim_store / dim_product, 剔掉别的租户才有的实体名), 它拿到的是
+        #    miss 行 → `KeyError: 'name'` → 被 fail-open 吞掉 → 整个函数返回 []。
+        #    症状是「out 是空的」, 离真因(假桩不区分查询)很远。
+        #    判据: **假连接必须按查询区分应答** —— 对所有 SQL 返回同一批行, 等于
+        #    默认「被测代码只发一条查询」, 而那是一个会过期的假设。
+        if "FROM dim_store" in sql:
+            return self.foreign_rows
+        return self.rows
+
+
+class _FakePool:
+    def __init__(self, conn: _FakeConn):
+        self._conn = conn
+
+    def acquire(self):
+        return _AcquireCtx(self._conn)
+
+
+def _row(query, codes, occurrence_count, max_confidence, last_seen="2026-07-07",
+         latest_answer="（当时的真实回答）", tenant_count=1):
+    """假的聚合行。
+
+    ⚠️ 形状必须跟着 SQL 走：2026-08-07 SQL 补了 `latest_answer` / `tenant_count`
+    （人审台要看「当时的真实回答」），这里没跟上就是**假数据在说谎**——
+    6 条测试当场 KeyError，那是对的，比悄悄用 `.get()` 兜过去好。
+    """
+    return {
+        "norm_query": query,
+        "codes": codes,
+        "occurrence_count": occurrence_count,
+        "max_confidence": max_confidence,
+        "latest_answer": latest_answer,
+        "tenant_count": tenant_count,
+        "last_seen": last_seen,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ledger(tmp_path, monkeypatch):
+    """Point LEDGER_FILE at a fresh (initially nonexistent) per-test path so
+    no test reads or writes the real repo ledger. `merge_samples()` still
+    pulls in the REAL `restaurant_ops_router.SAMPLE_QUERIES` as its base --
+    none of the synthetic Chinese test queries below are exact-string matches
+    for any of the 8 codes' shipped sample phrases, so this does not create
+    accidental "already known" collisions; tests that need a query to be
+    "already known" write it into this same tmp_path ledger file explicitly."""
+    monkeypatch.setattr(promo, "LEDGER_FILE", tmp_path / "ledger.json")
+    monkeypatch.setattr(promo, "REJECTED_FILE", tmp_path / "rejected.json")
+    yield
+
+
+# ─── aggregate_candidates: recommendation gate ─────────────────────────────
+
+async def test_aggregate_recommends_on_count_path():
+    conn = _FakeConn(rows=[
+        _row("这两个月生意咋样", ["RESTAURANT_OPS_SALES_SUMMARY"] * 3, 3, 0.5),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c["recommended"] is True
+    assert c["conflict"] is False
+    assert c["code"] == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert c["occurrence_count"] == 3
+
+
+async def test_high_confidence_alone_no_longer_recommends():
+    """🔴 2026-08-07 契约变更（Steve 拍板）：**置信度不作晋升门槛**。
+
+    原契约是「次数>=2 **或** 置信>=0.85」，只出现过 1 次但模型自称 0.9 就推荐。
+    但置信度和向量相似度是同一种失效：一段长话里只差「高/低」一个字，
+    置信度照样很高 —— **连续的数、不可证伪**。用它放行，等于让一个无法被反驳的
+    分数决定「这条可以零 token 永久回放」。
+
+    ⇒ 现在只认「次数>=2」当筛子，真正的闸是人审 + `latest_answer` 证据。
+    """
+    conn = _FakeConn(rows=[
+        _row("挣着钱没", ["RESTAURANT_OPS_SALES_SUMMARY"], 1, 0.9),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates[0]["recommended"] is False, "只凭高置信度不该放行"
+    assert candidates[0]["occurrence_count"] == 1
+    # 置信度仍然透出（供人参考），只是不再参与判定。
+    assert candidates[0]["max_confidence"] == 0.9
+
+
+async def test_candidate_carries_the_real_answer_for_human_review():
+    """人审必须看到「当时的真实回答」，否则无从判断这条晋升进去会答成什么样。"""
+    conn = _FakeConn(rows=[
+        _row("本月营收多少", ["RESTAURANT_OPS_SALES_SUMMARY"], 3, 0.7,
+             latest_answer="最近30天总营收 ¥74,561,894.90，共 207,122 单。",
+             tenant_count=2),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates[0]["recommended"] is True, "次数>=2 且无冲突 -> 达标待审"
+    assert "74,561,894.90" in candidates[0]["latest_answer"]
+    assert candidates[0]["tenant_count"] == 2
+
+
+async def test_aggregate_not_recommended_below_threshold():
+    conn = _FakeConn(rows=[
+        _row("今天咋样", ["RESTAURANT_OPS_SALES_SUMMARY"], 1, 0.5),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates[0]["recommended"] is False
+    assert candidates[0]["conflict"] is False
+
+
+async def test_aggregate_conflict_marks_not_recommended_even_with_high_count():
+    # Same normalized query resolved to two different codes across repeats --
+    # even though occurrence_count clears the count-path threshold, a code
+    # disagreement must never be auto-recommended.
+    conn = _FakeConn(rows=[
+        _row("情况怎么样", [
+            "RESTAURANT_OPS_SALES_SUMMARY", "RESTAURANT_OPS_SALES_SUMMARY",
+            "RESTAURANT_OPS_TREND_ANALYSIS", "RESTAURANT_OPS_TREND_ANALYSIS",
+        ], 4, 0.95),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates[0]["conflict"] is True
+    assert candidates[0]["recommended"] is False
+    # majority code (tie broken by Counter.most_common's stable insertion order)
+    assert candidates[0]["code"] == "RESTAURANT_OPS_SALES_SUMMARY"
+    assert candidates[0]["codes"] == ["RESTAURANT_OPS_SALES_SUMMARY", "RESTAURANT_OPS_TREND_ANALYSIS"]
+
+
+async def test_aggregate_excludes_already_known_query(tmp_path):
+    # _isolated_ledger (autouse) already points promo.LEDGER_FILE at this
+    # same tmp_path -- write the query into it so merge_samples()'s "known"
+    # set includes it via the (real) ledger-merge path, not a mocked stand-in.
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps({"RESTAURANT_OPS_SALES_SUMMARY": ["这两个月生意咋样"]}),
+        encoding="utf-8",
+    )
+    conn = _FakeConn(rows=[
+        _row("这两个月生意咋样", ["RESTAURANT_OPS_SALES_SUMMARY"] * 3, 3, 0.9),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates == []
+
+
+async def test_aggregate_excludes_group_with_no_valid_codes():
+    conn = _FakeConn(rows=[
+        _row("某问题", ["NOT_A_REAL_CODE"], 5, 0.99),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates == []
+
+
+async def test_aggregate_ignores_invalid_codes_within_a_mixed_group():
+    # A stray non-canonical code in the array (defensive -- shouldn't happen
+    # given the WHERE clause, but the aggregation must not choke on it) is
+    # dropped rather than causing a spurious conflict.
+    conn = _FakeConn(rows=[
+        _row("库存盘点差异", ["RESTAURANT_OPS_STOCK_SHORTAGE", "NOT_A_REAL_CODE"], 2, 0.5),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert len(candidates) == 1
+    assert candidates[0]["conflict"] is False
+    assert candidates[0]["code"] == "RESTAURANT_OPS_STOCK_SHORTAGE"
+
+
+async def test_aggregate_fail_open_on_db_error():
+    conn = _FakeConn(exc=RuntimeError("db unavailable"))
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates == []
+
+
+async def test_aggregate_empty_query_skipped():
+    conn = _FakeConn(rows=[
+        _row("   ", ["RESTAURANT_OPS_SALES_SUMMARY"], 3, 0.9),
+    ])
+    pool = _FakePool(conn)
+
+    candidates = await promo.aggregate_candidates(pool)
+
+    assert candidates == []
+
+
+async def test_aggregate_passes_min_confidence_and_min_count_params():
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_candidates(pool, min_confidence=0.8, min_count=3, limit=50)
+
+    assert conn.calls
+    _sql, args = conn.calls[0]
+    assert args == (0.8, 3, 50)
+
+
+# ─── merge_samples / load_promoted_samples ─────────────────────────────────
+
+def test_load_promoted_samples_missing_file_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(promo, "LEDGER_FILE", tmp_path / "does-not-exist.json")
+
+    assert promo.load_promoted_samples() == {}
+
+
+def test_load_promoted_samples_corrupt_file_fails_open(tmp_path, monkeypatch):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(promo, "LEDGER_FILE", bad)
+
+    assert promo.load_promoted_samples() == {}
+
+
+def test_merge_samples_appends_ledger_only_entries(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps({"RESTAURANT_OPS_SALES_SUMMARY": ["新问法一", "新问法二"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+
+    merged = promo.merge_samples({"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]})
+
+    assert merged["RESTAURANT_OPS_SALES_SUMMARY"][0] == "老问法"  # base order preserved first
+    assert "新问法一" in merged["RESTAURANT_OPS_SALES_SUMMARY"]
+    assert "新问法二" in merged["RESTAURANT_OPS_SALES_SUMMARY"]
+    assert len(merged["RESTAURANT_OPS_SALES_SUMMARY"]) == 3
+
+
+def test_merge_samples_dedupes_ledger_entries_already_in_base(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps({"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+
+    merged = promo.merge_samples({"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]})
+
+    assert merged["RESTAURANT_OPS_SALES_SUMMARY"] == ["老问法"]
+
+
+def test_merge_samples_no_ledger_returns_base_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(promo, "LEDGER_FILE", tmp_path / "missing.json")
+
+    base = {"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]}
+    merged = promo.merge_samples(base)
+
+    assert merged == {"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]}
+    assert merged is not base  # a fresh dict, not the same object
+
+
+# ─── apply_promotions: the only write path ─────────────────────────────────
+
+def test_apply_promotions_writes_new_ledger(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.json"
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+
+    result = promo.apply_promotions([
+        {"query": "这两个月生意咋样", "code": "RESTAURANT_OPS_SALES_SUMMARY"},
+    ])
+
+    assert result["added"] == [{"query": "这两个月生意咋样", "code": "RESTAURANT_OPS_SALES_SUMMARY"}]
+    assert result["skipped"] == []
+    assert ledger.exists()
+    on_disk = json.loads(ledger.read_text(encoding="utf-8"))
+    assert on_disk == {"RESTAURANT_OPS_SALES_SUMMARY": ["这两个月生意咋样"]}
+
+
+def test_apply_promotions_rejects_invalid_code(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.json"
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+
+    result = promo.apply_promotions([
+        {"query": "某问题", "code": "NOT_A_REAL_CODE"},
+    ])
+
+    assert result["added"] == []
+    assert result["skipped"][0]["reason"] == "invalid_code_or_empty_query"
+    assert not ledger.exists()  # nothing added -> no gratuitous write
+
+
+def test_apply_promotions_rejects_empty_query(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.json"
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+
+    result = promo.apply_promotions([
+        {"query": "   ", "code": "RESTAURANT_OPS_SALES_SUMMARY"},
+    ])
+
+    assert result["added"] == []
+    assert result["skipped"][0]["reason"] == "invalid_code_or_empty_query"
+
+
+def test_apply_promotions_is_idempotent_on_repeat(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.json"
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+    entry = {"query": "这两个月生意咋样", "code": "RESTAURANT_OPS_SALES_SUMMARY"}
+
+    first = promo.apply_promotions([entry])
+    second = promo.apply_promotions([entry])
+
+    assert len(first["added"]) == 1
+    assert second["added"] == []
+    assert second["skipped"][0]["reason"] == "already_in_ledger"
+    on_disk = json.loads(ledger.read_text(encoding="utf-8"))
+    assert on_disk == {"RESTAURANT_OPS_SALES_SUMMARY": ["这两个月生意咋样"]}
+
+
+def test_aggregate_candidates_never_calls_apply_promotions():
+    # aggregate_candidates (the read-only listing path) must never itself
+    # invoke apply_promotions (the only write path) -- a candidate-listing
+    # call site must not be able to trigger a silent write. Structural guard:
+    # look for an actual call expression, not just the name appearing in a
+    # comment/docstring cross-reference.
+    import inspect
+    src = inspect.getsource(promo.aggregate_candidates)
+    assert "apply_promotions(" not in src
+
+
+# ─── populate_restaurant_ops: merges the ledger into what gets embedded ────
+
+async def test_populate_restaurant_ops_merges_ledger(tmp_path, monkeypatch):
+    from smartbi.services import template_embedding_index as tei
+
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps({"RESTAURANT_OPS_SALES_SUMMARY": ["新问法"]}), encoding="utf-8",
+    )
+    monkeypatch.setattr(promo, "LEDGER_FILE", ledger)
+    monkeypatch.setattr(
+        "smartbi.gold.restaurant.restaurant_ops_router.SAMPLE_QUERIES",
+        {"RESTAURANT_OPS_SALES_SUMMARY": ["老问法"]},
+    )
+
+    captured = {}
+
+    async def fake_embed_and_upsert(pool, code_to_samples, *, log_prefix="template-emb"):
+        captured["code_to_samples"] = code_to_samples
+        return {code: len(qs) for code, qs in code_to_samples.items()}
+
+    monkeypatch.setattr(tei, "_embed_and_upsert_samples", fake_embed_and_upsert)
+
+    summary = await tei.populate_restaurant_ops(pool=object())
+
+    merged = captured["code_to_samples"]["RESTAURANT_OPS_SALES_SUMMARY"]
+    assert "老问法" in merged
+    assert "新问法" in merged
+    assert summary["RESTAURANT_OPS_SALES_SUMMARY"] == 2
+
+
+# ─── question-family classification (2026-07-08 evidence-based backlog) ─────
+from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
+    classify_question_family,
+    family_breakdown,
+)
+
+
+class TestQuestionFamily:
+    def test_attribution_cues(self):
+        for q in ["哪家店拖后腿，是客流还是客单价", "为什么这个月毛利低了",
+                  "哪个菜拖累了整体毛利", "差评变多的原因"]:
+            assert classify_question_family(q) == "attribution", q
+
+    def test_write_cues(self):
+        for q in ["帮我建个领料单", "录入今天的盘点", "新建一张调拨单"]:
+            assert classify_question_family(q) == "write", q
+
+    def test_attribution_colloquial_cues(self):
+        # F2 (2026-07-08 role-play): plain-speech attribution must be labeled
+        # attribution so the synthesis demand report doesn't under-count it.
+        for q in ["十六家店里头哪家最不行，是没人来还是客人花的钱少",
+                  "有的店生意就是做不起来", "谁最差"]:
+            assert classify_question_family(q) == "attribution", q
+
+    def test_chabuduo_neutral_stays_query(self):
+        # 哪家差 dropped (⊂ 哪家差不多, neutral) → must stay query (audit B#3).
+        assert classify_question_family("这两家店哪家差不多能达标") == "query"
+
+    def test_query_default(self):
+        # Neutral/positive queries (incl. superlatives like 最多) stay query —
+        # the new colloquial attribution cues are underperformance-specific.
+        for q in ["这个月营收多少", "哪家店订单最多", "本周销量排行", ""]:
+            assert classify_question_family(q) == "query", q
+
+    def test_family_breakdown_counts(self):
+        cands = [
+            {"query": "哪家店拖后腿"}, {"query": "为什么亏钱"},
+            {"query": "帮我建个领料单"}, {"query": "本月营收多少"},
+            {"family": "query", "query": "x"},  # pre-tagged honored
+        ]
+        b = family_breakdown(cands)
+        assert b == {"attribution": 2, "write": 1, "query": 2}
+
+
+# ─── Miss capture (flywheel 盲区修补 2026-07-23) ───────────────────────────
+
+class TestAggregateMisses:
+    def _miss_row(self, query, n, reasons, spec_intents, last_seen="2026-07-23",
+                  answered_missing=None, codes=None):
+        # 🔴 2026-08-09 (commit ab7e717365) aggregate_misses 的 SQL 增了两列:
+        #    判定模型说的「缺什么」+ 命中的 template_code, 映射时直接下标取值。
+        #    真 asyncpg Record 必然带这两列(SELECT 里就有), 夹具漏了会以
+        #    KeyError 的形式冒充「代码坏了」—— 加新列时这里必须跟着加。
+        return {
+            "norm_query": query, "occurrence_count": n,
+            "reasons": reasons, "spec_intents": spec_intents,
+            "last_seen": last_seen,
+            "answered_missing": answered_missing,
+            "codes": codes,
+        }
+
+    @pytest.mark.asyncio
+    async def test_sets_rls_guc_before_fetch(self):
+        conn = _FakeConn(rows=[])
+        await promo.aggregate_misses(_FakePool(conn), factory_id="RES_3101_009")
+        assert conn.guc_calls, "must set app.factory_id GUC (FORCE RLS)"
+        assert conn.guc_calls[0][1] == ("RES_3101_009",)
+
+    @pytest.mark.asyncio
+    async def test_maps_rows_and_family(self):
+        conn = _FakeConn(rows=[
+            self._miss_row("帮我建个领料单", 3, ["prefilter"], None),
+            self._miss_row("外卖利润率咋算", 2, ["should_delegate"],
+                           ["RESTAURANT_OPS_SALES_SUMMARY"]),
+            self._miss_row("  ", 1, ["prefilter"], None),  # blank dropped
+        ])
+        out = await promo.aggregate_misses(_FakePool(conn))
+        assert len(out) == 2
+        assert out[0]["family"] == "write"
+        assert out[1]["spec_intents"] == ["RESTAURANT_OPS_SALES_SUMMARY"]
+        # 没有判定结论时给空列表, 不是 None —— 下游按它分组。
+        assert out[0]["answered_missing"] == []
+        assert out[0]["codes"] == []
+
+    @pytest.mark.asyncio
+    async def test_maps_answered_missing_and_codes(self):
+        """「算出来了但答非所问」这一类的两列必须映射出来。
+
+        answered_missing 是判定模型说的「缺什么」, 待办清单按它分组才知道
+        要补哪个能力; codes 是命中的 template_code。两列都要滤掉 NULL ——
+        array_agg 的 FILTER 只挡住了 answered_missing 那一列, codes 没挡。
+        """
+        conn = _FakeConn(rows=[
+            self._miss_row(
+                "客单价最高的店是哪家", 2, ["answered_judgment"], None,
+                answered_missing=["按客单价排序", None],
+                codes=["RESTAURANT_OPS_SALES_SUMMARY", None],
+            ),
+        ])
+        out = await promo.aggregate_misses(_FakePool(conn))
+        assert out[0]["answered_missing"] == ["按客单价排序"]
+        assert out[0]["codes"] == ["RESTAURANT_OPS_SALES_SUMMARY"]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_on_db_error(self):
+        conn = _FakeConn(exc=RuntimeError("boom"))
+        assert await promo.aggregate_misses(_FakePool(conn)) == []
+
+
+class TestLogIntentMiss:
+    @pytest.mark.asyncio
+    async def test_writes_sentinel_code_and_served_false(self, monkeypatch):
+        from smartbi.gold.restaurant import restaurant_intent as ri
+        calls = []
+
+        async def _fake_hit(pool, query, factory_id, upload_id, template_code,
+                            answer, wall_ms, agg_meta=None):
+            calls.append((template_code, agg_meta))
+            return 1
+
+        import smartbi.services.llm_fallback_logger as fl
+        monkeypatch.setattr(fl, "log_template_hit", _fake_hit)
+        out = await ri.log_intent_miss(
+            object(), factory_id="DEMO_REST", query="帮我导出报表",
+            reason="prefilter", java_tool_name="restaurant_ops_gold_analysis",
+        )
+        assert out == 1
+        code, meta = calls[0]
+        assert code == "RESTAURANT_OPS_MISS"
+        assert meta["served"] is False
+        assert meta["miss_reason"] == "prefilter"
+        assert meta["java_tool_name"] == "restaurant_ops_gold_analysis"
+
+    @pytest.mark.asyncio
+    async def test_never_raises(self, monkeypatch):
+        from smartbi.gold.restaurant import restaurant_intent as ri
+        import smartbi.services.llm_fallback_logger as fl
+
+        async def _boom(*a, **k):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(fl, "log_template_hit", _boom)
+        assert await ri.log_intent_miss(
+            object(), factory_id="F", query="q", reason="should_delegate",
+        ) is None
+
+
+# ─── Rejected ledger (2026-07-23): 人审否决不再重复上榜 ─────────────────────
+
+async def test_rejected_query_excluded_from_candidates(tmp_path):
+    (tmp_path / "rejected.json").write_text(
+        json.dumps([{"query": "帮我录入今天的报损", "reason": "写操作错接"}]),
+        encoding="utf-8",
+    )
+    conn = _FakeConn(rows=[
+        _row("帮我录入今天的报损", ["RESTAURANT_OPS_WASTAGE_TOP"], 3, 0.95),
+        _row("这个月生意怎么样", ["RESTAURANT_OPS_SALES_SUMMARY"] * 3, 3, 0.9),
+    ])
+    candidates = await promo.aggregate_candidates(_FakePool(conn))
+    assert [c["query"] for c in candidates] == ["这个月生意怎么样"]
+
+
+def test_rejected_file_missing_or_corrupt_fails_open(tmp_path):
+    assert promo.load_rejected_queries() == frozenset()
+    (tmp_path / "rejected.json").write_text("{not json", encoding="utf-8")
+    assert promo.load_rejected_queries() == frozenset()
+
+
+# ─── 卡5b: platform admin channel (factory_id=None -> GUC reset to '') ──────
+# See `_set_rls_guc` docstring for the full RLS reasoning: the asyncpg pool's
+# own `setup` callback (`tenant_ctx.set_pg_connection_tenant`) defaults an
+# unset ambient factory_id to the sentinel "__internal__", NOT ''  — so a
+# cross-tenant admin read (卡5b 运营台) must explicitly reset the GUC to ''
+# itself rather than relying on "nobody set anything".
+
+async def test_aggregate_candidates_admin_channel_resets_guc_to_empty_string():
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_candidates(pool, factory_id=None)
+
+    assert conn.guc_calls, "admin channel must still call set_config"
+    assert conn.guc_calls[0][1] == ("",), "admin channel must reset GUC to '' (not None, not skip)"
+
+
+async def test_aggregate_candidates_tenant_channel_unaffected():
+    # Backward-compat: CLI-style explicit tenant string still works exactly
+    # as before (default "DEMO_REST" behavior is untouched by the new
+    # factory_id=None branch).
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_candidates(pool, factory_id="RES_3101_009")
+
+    assert conn.guc_calls[0][1] == ("RES_3101_009",)
+
+
+async def test_aggregate_misses_admin_channel_resets_guc_to_empty_string():
+    conn = _FakeConn(rows=[])
+    pool = _FakePool(conn)
+
+    await promo.aggregate_misses(pool, factory_id=None)
+
+    assert conn.guc_calls[0][1] == ("",)
+
+
+# ─── reject_candidate: 卡5b web 否决通道 (writes REJECTED_FILE) ────────────
+
+def test_reject_candidate_writes_new_entry(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    result = promo.reject_candidate("帮我录入今天的报损", "写操作错接", rejected_by="reviewer_zhang")
+
+    assert result["ok"] is True
+    assert result["already_rejected"] is False
+    assert result["durable"] is False
+    on_disk = json.loads(rejected.read_text(encoding="utf-8"))
+    assert on_disk == [{
+        "query": "帮我录入今天的报损", "reason": "写操作错接", "rejected_by": "reviewer_zhang",
+    }]
+
+
+def test_reject_candidate_idempotent_on_repeat(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    first = promo.reject_candidate("某问题", "理由A")
+    second = promo.reject_candidate("某问题", "理由B（会被忽略）")
+
+    assert first["already_rejected"] is False
+    assert second["already_rejected"] is True
+    on_disk = json.loads(rejected.read_text(encoding="utf-8"))
+    assert len(on_disk) == 1
+    assert on_disk[0]["reason"] == "理由A"  # first write wins, not overwritten
+
+
+def test_reject_candidate_empty_query_rejected(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    result = promo.reject_candidate("   ", "理由")
+
+    assert result["ok"] is False
+    assert not rejected.exists()
+
+
+def test_reject_candidate_appends_to_existing_file(tmp_path, monkeypatch):
+    rejected = tmp_path / "rejected.json"
+    rejected.write_text(
+        json.dumps([{"query": "已有问题", "reason": "旧理由"}]), encoding="utf-8",
+    )
+    monkeypatch.setattr(promo, "REJECTED_FILE", rejected)
+
+    result = promo.reject_candidate("新问题", "新理由")
+
+    assert result["ledger_size"] == 2
+    on_disk = json.loads(rejected.read_text(encoding="utf-8"))
+    assert [e["query"] for e in on_disk] == ["已有问题", "新问题"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# list_route_promotions / summarize_route_promotions — 「40」和「0」同一个读数
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 2026-08-20 实测 prod: 表里 40 行, 回放真跑一次 **0 条生效**, 而 `/overview`
+# 只报得出 40。755 次日志告警、12 天、零消费方。这一节钉的就是「两个数必须
+# 同时拿得到」。⛔ 不钉判定本身 —— 那 40 条失效是有台账依据的设计。
+
+
+class _TxnConn:
+    """支持 `async with conn.transaction()` 的假连接。
+
+    ⚠️ 上面那个 `_FakeConn` 没有 `transaction()` —— `list_route_promotions`
+    用它, 不补就是 AttributeError, 而那和「查不到行」长得完全不一样(会当场炸,
+    这是对的)。⛔ 不给上面那个加 transaction: 别的用例不走事务, 加了等于
+    悄悄放宽它们的桩。
+    """
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.sql_calls = []
+        self.guc_calls = []
+
+    def acquire_ctx(self):
+        return _AcquireCtx(self)
+
+    def transaction(self):
+        return _AcquireCtx(self)
+
+    async def execute(self, sql, *args):
+        self.guc_calls.append((sql, args))
+
+    async def fetch(self, sql, *args):
+        self.sql_calls.append((sql, args))
+        return self.rows
+
+
+def _promoted_row(phrase, fingerprint):
+    """晋升表一行。⚠️ 形状跟着 SELECT 走 —— 少一列就是假数据在说谎。"""
+    return {
+        "normalized_phrase": phrase,
+        "plan_json": json.dumps({"intent": "sales_summary"}),
+        "plan_version": 3,
+        "source": "manual_seed",
+        "scope": "global",
+        "reviewed_by": "zhangquan",
+        "created_at": "2026-07-28",
+        "hit_count": 0,
+        "routing_fingerprint": fingerprint,
+    }
+
+
+def _live_fingerprint():
+    """当前完整指纹 `<语义段>.<prompt段>`。⛔ 不硬编码 —— 钉死一个哈希值
+    等于做一道「换词汇表就红」的闸, 而它红的时候和真缺陷长得一样。"""
+    from smartbi.gold.restaurant.restaurant_intent import compose_routing_fingerprint
+    return compose_routing_fingerprint()
+
+
+@pytest.mark.asyncio
+async def test_list_route_promotions_returns_routing_fingerprint():
+    """SELECT 里必须取 `routing_fingerprint` 并透出来。
+
+    ⛔ 这是「40 vs 0」在同一个读数里出现的**前提** —— 修前 SELECT 根本没取它,
+       所以任何调用方都无法分辨「表里有 40 条」和「40 条都不生效」。
+    """
+    live = _live_fingerprint()
+    conn = _TxnConn([_promoted_row("甲", live)])
+    rows = await promo.list_route_promotions(_FakePool(conn), domain="restaurant")
+
+    assert rows[0]["routing_fingerprint"] == live
+    # 结构判据: SQL 文本里确实点了这一列 (⛔ 不是只看返回字典 —— 返回字典
+    # 可以由桩伪造, SQL 不能)
+    sql = conn.sql_calls[0][0]
+    assert "routing_fingerprint" in sql
+    # RLS: 这张表的万能钥匙是 `__internal__`, ⛔ 不是空串 (与别处相反)
+    assert conn.guc_calls and conn.guc_calls[0][1][0] == "__internal__"
+
+
+@pytest.mark.asyncio
+async def test_summarize_counts_effective_and_stale_separately():
+    live = _live_fingerprint()
+    stale_shape = live.split(".", 1)[0]   # 裸 8-hex = prod 上 39/40 行的形状
+    conn = _TxnConn([
+        _promoted_row("甲", live),
+        _promoted_row("乙", stale_shape),
+        _promoted_row("丙", stale_shape),
+        _promoted_row("丁", None),        # ⚠️ NULL 也算失效
+    ])
+    out = await promo.summarize_route_promotions(_FakePool(conn), domain="restaurant")
+
+    assert out["route_count"] == 4
+    assert out["effective_count"] == 1
+    assert out["stale_count"] == 3
+    assert out["instrument_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_summarize_does_not_revive_bare_hex_that_equals_current_segment():
+    """🔴 阴性对照: 旧行存的裸 8-hex **逐字等于**当前语义段(prod 上 39 行正是
+    这个形状)。写成「取第一段比值」的实现会在这里把它们判成有效 ——
+    那正是设计上明令禁止的**静默复活**。"""
+    same_as_current = _live_fingerprint().split(".", 1)[0]
+    conn = _TxnConn([_promoted_row(str(i), same_as_current) for i in range(39)])
+    out = await promo.summarize_route_promotions(_FakePool(conn), domain="restaurant")
+
+    assert out["stale_count"] == 39, "39 条人审被静默复活了 —— 判定被改坏了"
+    assert out["effective_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_summarize_reports_upper_bound_caliber():
+    """报一个数要带口径: `effective_count` 是上界, 回放还会按
+    plan_version / scope / intent 按租户再筛一遍。"""
+    conn = _TxnConn([])
+    out = await promo.summarize_route_promotions(_FakePool(conn), domain="restaurant")
+
+    assert out["effective_count_is_upper_bound"] is True
+    for word in ("plan_version", "scope", "intent"):
+        assert word in out["counts_methodology"]

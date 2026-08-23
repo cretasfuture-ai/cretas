@@ -1,0 +1,49 @@
+import { describe, expect, it } from 'vitest';
+import { productAiGuard, productionPlanAiGuard } from '../aiEntryGuards';
+
+describe('AI entry guards', () => {
+  it('routes raw materials away from the SKU page', () => {
+    expect(productAiGuard({ productCategory: 'RAW_MATERIAL' })).toContain('原料类型字典');
+    expect(productAiGuard({ productCategory: 'SEMI_FINISHED' })).toBeNull();
+  });
+
+  it('requires quantity plus a unit matching the unique SKU', () => {
+    const products = [{ id: 'PT-1', name: '干式熟成脆皮鸡 400g', unit: '袋' }];
+    expect(productionPlanAiGuard({ productTypeName: '干式熟成脆皮鸡 400g', plannedQuantity: 500 }, products)).toContain('缺少数量单位');
+    // 2026-07-31: 期望从「SKU 单位为 bag」改成「袋」。
+    // 🔴 旧期望**锁住的是缺陷本身** —— 提示直接插值 canonicalUnitCode 的结果, 于是 SKU 单位明明是
+    // 「袋」, 弹给用户的却是英文码 bag。Steve 定的规则: 计数/包装单位不得以英文码示人。
+    expect(productionPlanAiGuard({ productTypeName: '干式熟成脆皮鸡 400g', plannedQuantity: 500, quantityUnit: 'kg' }, products)).toContain('SKU 单位为 袋');
+    // 用户填英文码 bag 仍应通过 —— 判定认中英两种写法, 只是**显示**统一成中文
+    expect(productionPlanAiGuard({ productTypeName: '干式熟成脆皮鸡 400g', plannedQuantity: 500, quantityUnit: 'bag' }, products)).toBeNull();
+    expect(productionPlanAiGuard({ productTypeName: '干式熟成脆皮鸡 400g', plannedQuantity: 500, quantityUnit: '袋' }, products)).toBeNull();
+  });
+
+  it('allows authoritative physical conversions instead of forcing exact unit text', () => {
+    expect(productionPlanAiGuard(
+      { productTypeName: '盐水', plannedQuantity: 500, quantityUnit: 'g' },
+      [{ id: 'PT-2', name: '盐水', unit: 'kg' }],
+    )).toBeNull();
+    expect(productionPlanAiGuard(
+      { productTypeName: '干式熟成脆皮鸡 400g', plannedQuantity: 10, quantityUnit: 'kg' },
+      [{ id: 'PT-3', name: '干式熟成脆皮鸡 400g', unit: '袋', gramsPerUnit: 400 }],
+    )).toBeNull();
+  });
+
+  it('requires a real unique SKU entity and rejects a conflicting AI SKU id', () => {
+    const products = [
+      { id: 'PT-400', name: '干式熟成脆皮鸡 400g', unit: '袋' },
+      { id: 'PT-350', name: '干式熟成脆皮鸡 350g', unit: '袋' },
+    ];
+
+    expect(productionPlanAiGuard({
+      productTypeName: '干式熟成脆皮鸡 400g',
+      productTypeId: 'PT-350',
+      quantityUnit: '袋',
+    }, products)).toContain('编号与完整产品名称不一致');
+    expect(productionPlanAiGuard({
+      productTypeName: '干式熟成脆皮鸡 400g',
+      quantityUnit: '袋',
+    }, [{ name: '干式熟成脆皮鸡 400g', unit: '袋' }])).toContain('未唯一匹配');
+  });
+});

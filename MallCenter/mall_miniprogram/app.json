@@ -1,0 +1,90 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/base/search/index",
+    "pages/base/webview/index",
+    "pages/auth/login/index",
+    "pages/auth/register/index",
+    "pages/auth/bind-merchant/index",
+    "pages/goods/goods-category/index",
+    "pages/goods/goods-list/index",
+    "pages/goods/goods-detail/index",
+    "pages/goods/price-calculator/index",
+    "pages/shopping-cart/index",
+    "pages/order/order-confirm/index",
+    "pages/order/order-list/index",
+    "pages/order/order-detail/index",
+    "pages/order/order-logistics/index",
+    "pages/appraises/form/index",
+    "pages/user/user-center/index",
+    "pages/user/settings/index",
+    "pages/user/user-address/list/index",
+    "pages/user/user-address/form/index",
+    "pages/traceability/scan/index",
+    "pages/traceability/detail/index",
+    "pages/traceability/quality-report/index",
+    "pages/ai-rag/chat/index",
+    "pages/ai-rag/history/index",
+    "pages/ai-analysis/product/index",
+    "pages/ai-analysis/factory/index",
+    "pages/ai-analysis/industry/index",
+    "pages/notification/index",
+    "pages/referral/share/index",
+    "pages/referral/my-referrals/index",
+    "pages/referral/rewards/index",
+    "pages/merchant-center/index/index",
+    "pages/merchant-center/orders/index",
+    "pages/merchant-center/product-list/index",
+    "pages/merchant-center/product-edit/index",
+    "pages/merchant-center/staff/index",
+    "pages/merchant-center/stats/index",
+    "pages/merchant-center/settings/index",
+    "pages/merchant-center/shop-design/index",
+    "pages/merchant-center/decoration-chat/index",
+    "pages/orders/checkout/index"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#fefefe",
+    "navigationBarTitleText": "WeChat",
+    "navigationBarTextStyle": "black"
+  },
+  "sitemapLocation": "sitemap.json",
+  "tabBar": {
+    "backgroundColor": "#ffffff",
+    "color": "#484848",
+    "selectedColor": "#2967ff",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "iconPath": "public/img/1-001.png",
+        "selectedIconPath": "public/img/1-002.png",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/goods/goods-category/index",
+        "iconPath": "public/img/2-001.png",
+        "selectedIconPath": "public/img/2-002.png",
+        "text": "分类"
+      },
+      {
+        "pagePath": "pages/order/order-list/index",
+        "iconPath": "public/img/3-001.png",
+        "selectedIconPath": "public/img/3-002.png",
+        "text": "订单"
+      },
+      {
+        "pagePath": "pages/user/user-center/index",
+        "iconPath": "public/img/4-001.png",
+        "selectedIconPath": "public/img/4-002.png",
+        "text": "我的"
+      }
+    ]
+  },
+  "requiredPrivateInfos": [
+    "chooseAddress"
+  ],
+  "usingComponents": {
+    
+  }
+}

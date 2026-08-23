@@ -1,0 +1,578 @@
+from __future__ import annotations
+"""
+Chart Building API
+
+Endpoints for building ECharts configurations.
+"""
+import asyncio
+import logging
+from typing import Any, Optional, List, Dict
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from common.responses import ApiException, ErrorCode
+
+from services.chart_builder import ChartBuilder, _sanitize_for_json
+from services.shared_pool import shared_executor
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# Initialize service
+chart_builder = ChartBuilder()
+_chart_executor = shared_executor
+
+
+class ChartBuildRequest(BaseModel):
+    """Chart build request model"""
+    chartType: str
+    data: List[Dict[str, Any]]
+    xField: Optional[str] = None
+    yFields: Optional[List[str]] = None
+    seriesField: Optional[str] = None
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    theme: str = "default"
+    options: Optional[dict] = None
+
+
+class ChartBuildResponse(BaseModel):
+    """Chart build response model"""
+    success: bool
+    chartType: Optional[str] = None
+    config: Optional[dict] = None
+    anomalies: Optional[Dict[str, Any]] = None  # Phase 3.1: IQR anomaly detection
+    error: Optional[str] = None
+
+
+class ChartTypeInfo(BaseModel):
+    """Chart type information"""
+    id: str
+    name: str
+    description: str
+
+
+@router.post("/build", response_model=ChartBuildResponse)
+async def build_chart(request: ChartBuildRequest):
+    """
+    Build ECharts configuration from data
+
+    - **chartType**: Type of chart to build:
+        - `line`: Line chart for trends
+        - `bar`: Bar chart for comparisons
+        - `pie`: Pie chart for proportions
+        - `area`: Area chart for cumulative trends
+        - `scatter`: Scatter chart for correlations
+        - `waterfall`: Waterfall chart for incremental changes
+        - `radar`: Radar chart for multi-dimensional comparison
+        - `funnel`: Funnel chart for conversion analysis
+        - `gauge`: Gauge chart for KPI display
+        - `heatmap`: Heatmap for distribution
+        - `combination`: Combined bar and line chart
+    - **data**: Data records
+    - **xField**: Field name for X-axis
+    - **yFields**: Field names for Y-axis values
+    - **seriesField**: Field name for series grouping
+    - **title**: Chart title
+    - **subtitle**: Chart subtitle
+    - **theme**: Color theme (default, dark)
+    - **options**: Additional ECharts options to merge
+
+    Returns complete ECharts configuration object.
+    """
+    try:
+        if not request.data:
+            raise ApiException("Data is required", ErrorCode.VALIDATION_ERROR, 400)
+
+        result = chart_builder.build(
+            chart_type=request.chartType,
+            data=request.data,
+            x_field=request.xField,
+            y_fields=request.yFields,
+            series_field=request.seriesField,
+            title=request.title,
+            subtitle=request.subtitle,
+            theme=request.theme,
+            options=request.options
+        )
+
+        sanitized = _sanitize_for_json(result)
+        return ChartBuildResponse(
+            success=sanitized.get("success", False),
+            chartType=sanitized.get("chartType"),
+            config=sanitized.get("config"),
+            anomalies=sanitized.get("anomalies"),
+            error=sanitized.get("error")
+        )
+
+    except (HTTPException, ApiException):
+        raise
+    except Exception as e:
+        logger.error(f"Chart build error: {e}", exc_info=True)
+        return ChartBuildResponse(success=False, error="图表生成失败，请稍后重试")
+
+
+@router.get("/types")
+async def get_chart_types():
+    """
+    Get available chart types with descriptions
+    """
+    types = chart_builder.get_available_chart_types()
+    return {"success": True, "data": [ChartTypeInfo(**t).dict() for t in types], "message": "ok"}
+
+
+@router.post("/preview")
+async def preview_chart(request: ChartBuildRequest):
+    """
+    Build chart configuration with sample data for preview
+
+    Same as /build but includes additional preview information.
+    """
+    try:
+        result = chart_builder.build(
+            chart_type=request.chartType,
+            data=request.data,
+            x_field=request.xField,
+            y_fields=request.yFields,
+            series_field=request.seriesField,
+            title=request.title,
+            subtitle=request.subtitle,
+            theme=request.theme,
+            options=request.options
+        )
+
+        if result.get("success"):
+            # Add preview metadata
+            result["preview"] = {
+                "dataPoints": len(request.data),
+                "xField": request.xField,
+                "yFields": request.yFields,
+                "seriesField": request.seriesField
+            }
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Chart preview error: {e}", exc_info=True)
+        return {"success": False, "data": None, "message": "图表生成失败，请稍后重试"}
+
+
+@router.post("/batch")
+async def batch_build(requests: List[ChartBuildRequest]):
+    """
+    Build multiple chart configurations in batch
+
+    Useful for dashboard generation with multiple charts.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_chart_executor, lambda req=req: chart_builder.build(
+                chart_type=req.chartType,
+                data=req.data,
+                x_field=req.xField,
+                y_fields=req.yFields,
+                series_field=req.seriesField,
+                title=req.title,
+                subtitle=req.subtitle,
+                theme=req.theme,
+                options=req.options
+            ))
+            for req in requests
+        ]
+        results = await asyncio.gather(*tasks)
+        results = list(results)
+
+        return _sanitize_for_json({
+            "success": True,
+            "data": {"charts": results, "totalCharts": len(results)},
+            "message": "ok"
+        })
+
+    except Exception as e:
+        logger.error(f"Batch chart build error: {e}", exc_info=True)
+        return {"success": False, "data": None, "message": "图表生成失败，请稍后重试"}
+
+
+@router.get("/themes")
+async def get_themes():
+    """
+    Get available chart themes
+    """
+    return {
+        "success": True,
+        "data": {
+            "themes": [
+                {
+                    "id": "business",
+                    "name": "Business Blue",
+                    "description": "Professional business theme (Tableau + Power BI inspired)",
+                    "colors": ChartBuilder.THEME_PALETTES["business"]["charts"]
+                },
+                {
+                    "id": "dark",
+                    "name": "Dark",
+                    "description": "Dark mode theme",
+                    "colors": ["#4992ff", "#7cffb2", "#fddd60", "#ff6e76", "#58d9f9"]
+                },
+                {
+                    "id": "vintage",
+                    "name": "Vintage",
+                    "description": "Vintage color palette",
+                    "colors": ["#d87c7c", "#919e8b", "#d7ab82", "#6e7074", "#61a0a8"]
+                }
+            ]
+        },
+        "message": "ok"
+    }
+
+
+@router.post("/recommend")
+async def recommend_chart(data: List[Dict[str, Any]], fields: Optional[List[dict]] = None):
+    """
+    Recommend best chart type based on data characteristics
+
+    - **data**: Data records
+    - **fields**: Optional field detection results from /field/detect
+
+    Returns recommended chart types with reasons.
+    """
+    try:
+        import pandas as pd
+        from smartbi.config import coerce_numeric_columns
+        from smartbi.api.chart_heuristics import (
+            filter_id_like_columns,
+            is_id_like_column_name,
+            pick_categorical_xfield,
+        )
+
+        df = coerce_numeric_columns(pd.DataFrame(data))
+        recommendations = []
+
+        # Analyze data characteristics
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        date_cols = []
+
+        # Try to detect date columns
+        # Guard 1: skip numeric columns — pd.to_datetime parses raw numbers as Unix
+        # nanoseconds, which would falsely classify measure columns (营业额/销售额 etc.)
+        # as time columns and cause xField=measure on line charts.
+        # Guard 2: skip ID-named columns (账单号/编号/ID/uuid) — text values like
+        # "20240315001" would otherwise be parsed as ISO date prefixes.
+        import pandas.api.types as ptypes
+        for col in df.columns:
+            if ptypes.is_numeric_dtype(df[col]):
+                continue
+            if is_id_like_column_name(col):
+                continue
+            try:
+                pd.to_datetime(df[col], errors='raise')
+                date_cols.append(col)
+            except (ValueError, TypeError, OverflowError):
+                pass
+
+        # ID-suffix guard: filter ID-named columns out of measures (账单号 with numeric
+        # values would otherwise be summed/averaged as a yField).
+        numeric_cols = filter_id_like_columns(numeric_cols)
+        # Cardinality + ID guard: when picking categorical xField, prefer low-cardinality
+        # non-ID columns. Falls back to first available if all are high-cardinality.
+        clean_categorical_cols = filter_id_like_columns(categorical_cols)
+        preferred_x = pick_categorical_xfield(df, clean_categorical_cols) or (
+            clean_categorical_cols[0] if clean_categorical_cols else None
+        )
+
+        # Recommend based on data structure
+        if date_cols and numeric_cols:
+            recommendations.append({
+                "chartType": "line",
+                "reason": "Time series data detected - line chart shows trends over time",
+                "xField": date_cols[0],
+                "yFields": numeric_cols[:3],
+                "priority": 1
+            })
+
+        if preferred_x and numeric_cols:
+            recommendations.append({
+                "chartType": "bar",
+                "reason": "Categorical data detected - bar chart compares values across categories",
+                "xField": preferred_x,
+                "yFields": [numeric_cols[0]],
+                "priority": 2
+            })
+
+            if len(df[preferred_x].unique()) <= 8:
+                recommendations.append({
+                    "chartType": "pie",
+                    "reason": "Low cardinality categorical data - pie chart shows proportions",
+                    "xField": preferred_x,
+                    "yFields": [numeric_cols[0]],
+                    "priority": 3
+                })
+
+        if len(numeric_cols) >= 2:
+            recommendations.append({
+                "chartType": "scatter",
+                "reason": "Multiple numeric columns - scatter chart shows correlations",
+                "xField": numeric_cols[0],
+                "yFields": [numeric_cols[1]],
+                "priority": 4
+            })
+
+        if len(numeric_cols) >= 3:
+            recommendations.append({
+                "chartType": "radar",
+                "reason": "Multiple metrics - radar chart compares across dimensions",
+                "yFields": numeric_cols[:6],
+                "priority": 5
+            })
+
+        return {
+            "success": True,
+            "data": {
+                "recommendations": sorted(recommendations, key=lambda x: x["priority"]),
+                "dataInfo": {
+                    "rowCount": len(df),
+                    "numericColumns": numeric_cols,
+                    "categoricalColumns": categorical_cols,
+                    "dateColumns": date_cols
+                }
+            },
+            "message": "ok"
+        }
+
+    except Exception as e:
+        logger.error(f"Chart recommendation error: {e}", exc_info=True)
+        return {"success": False, "data": None, "message": "图表生成失败，请稍后重试"}
+
+
+_DEPT_KEYWORDS = [
+    "department", "dept", "division", "branch", "unit",
+    "部门", "分部", "事业部", "科室", "组", "区域", "分公司"
+]
+_BUDGET_KEYWORDS = [
+    "budget", "target", "plan", "planned", "goal",
+    "预算", "目标", "计划", "指标", "预算数", "预算金额"
+]
+_ACTUAL_KEYWORDS = [
+    "actual", "realized", "completed", "achieved",
+    "实际", "完成", "达成", "实际数", "实际金额", "执行"
+]
+
+
+def _find_col(df, keywords):
+    """Find a column matching any keyword (exact then partial)."""
+    cols_lower = {c: c.lower().strip() for c in df.columns}
+    for col, cl in cols_lower.items():
+        for kw in keywords:
+            if cl == kw.lower():
+                return col
+    for col, cl in cols_lower.items():
+        for kw in keywords:
+            if len(kw) >= 2 and kw.lower() in cl:
+                return col
+    return None
+
+
+def _try_budget_comparison_recommendation(df):
+    """Detect dept+budget+actual columns and return a ChartRecommendation or None."""
+    import pandas as pd
+    logger.info(f"[BudgetInjection] Checking columns: {list(df.columns)}")
+    dept_col = _find_col(df, _DEPT_KEYWORDS)
+    budget_col = _find_col(df, _BUDGET_KEYWORDS)
+    actual_col = _find_col(df, _ACTUAL_KEYWORDS)
+    logger.info(f"[BudgetInjection] dept={dept_col}, budget={budget_col}, actual={actual_col}")
+
+    if not dept_col or not budget_col or not actual_col:
+        return None
+
+    # Verify numeric data
+    try:
+        b = pd.to_numeric(df[budget_col], errors='coerce')
+        a = pd.to_numeric(df[actual_col], errors='coerce')
+        if b.notna().sum() < 2 or a.notna().sum() < 2:
+            return None
+    except Exception:
+        return None
+
+    # Create a lightweight recommendation object
+    from services.chart_recommender import ChartRecommendation
+    return ChartRecommendation(
+        chart_type="budget_comparison",
+        title="分部预实对比分析",
+        reason="检测到部门+预算+实际列，自动生成分部预实对比图",
+        x_axis=dept_col,
+        y_axis=[budget_col, actual_col],
+        priority=2,
+        category="ranking",
+        confidence=0.95,
+    )
+
+
+class SmartRecommendRequest(BaseModel):
+    """Smart chart recommendation request using LLM"""
+    data: List[Dict[str, Any]]
+    columns: Optional[List[Dict[str, Any]]] = None
+    columnTypes: Optional[Dict[str, str]] = None
+    sheetName: Optional[str] = None
+    context: Optional[str] = None
+    scenario: str = "general"
+    maxRecommendations: int = 7
+    excludeTypes: Optional[List[str]] = None
+
+
+@router.post("/smart-recommend")
+async def smart_recommend_chart(request: SmartRecommendRequest):
+    """
+    LLM-powered smart chart recommendation.
+
+    Uses ChartRecommender service with caching for intelligent,
+    diverse chart type recommendations based on data features.
+    """
+    try:
+        import pandas as pd
+        from services.chart_recommender import get_chart_recommender, DataSummary
+        from smartbi.api.chart_heuristics import (
+            filter_id_like_columns,
+            is_id_like_column_name,
+        )
+
+        recommender = get_chart_recommender()
+
+        # Build DataSummary from request data
+        df = pd.DataFrame(request.data)
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        date_cols = []
+        # Guard 1: skip numeric columns — pd.to_datetime parses raw numbers as Unix
+        # nanoseconds, which would falsely classify measure columns (营业额/销售额 etc.)
+        # as time columns and cause xField=measure on line charts.
+        # Guard 2: skip ID-named columns (账单号/编号/ID/uuid) — text values like
+        # "20240315001" would otherwise be parsed as ISO date prefixes.
+        import pandas.api.types as ptypes
+        for col in df.columns:
+            if ptypes.is_numeric_dtype(df[col]):
+                continue
+            if is_id_like_column_name(col):
+                continue
+            try:
+                pd.to_datetime(df[col], errors='raise')
+                date_cols.append(col)
+            except (ValueError, TypeError, OverflowError):
+                pass
+
+        # ID-suffix guard: filter ID-named columns out of measures and categorical
+        # dimensions so DataSummary doesn't suggest 账单号/订单ID as xField/yField.
+        numeric_cols = filter_id_like_columns(numeric_cols)
+        clean_categorical_cols = filter_id_like_columns(categorical_cols)
+
+        # Build column feature list
+        columns_info = []
+        for col in df.columns:
+            col_info = {"columnName": col}
+            if col in numeric_cols:
+                col_info["dataType"] = "NUMERIC"
+                col_info["sampleValues"] = df[col].dropna().head(3).tolist()
+            elif col in date_cols:
+                col_info["dataType"] = "DATE"
+                col_info["sampleValues"] = df[col].dropna().head(3).astype(str).tolist()
+            else:
+                col_info["dataType"] = "CATEGORICAL"
+                col_info["sampleValues"] = df[col].dropna().head(3).tolist()
+            columns_info.append(col_info)
+
+        # Override with provided column info if available
+        if request.columns:
+            columns_info = request.columns
+
+        data_summary = DataSummary(
+            columns=columns_info,
+            row_count=len(df),
+            dimensions=clean_categorical_cols + date_cols,
+            measures=numeric_cols,
+            time_columns=date_cols,
+            category_columns=clean_categorical_cols
+        )
+
+        # Detect scenario from sheet name
+        scenario = request.scenario
+        if request.sheetName:
+            name_lower = request.sheetName.lower()
+            if any(k in name_lower for k in ['利润', '收入', '成本', '费用', '财务', 'profit', 'revenue', 'cost']):
+                scenario = "finance"
+            elif any(k in name_lower for k in ['销售', '订单', '客户', 'sales', 'order']):
+                scenario = "sales"
+            elif any(k in name_lower for k in ['产能', '效率', '库存', 'production', 'inventory']):
+                scenario = "operations"
+
+        # Get LLM recommendations
+        recommendations = await recommender.recommend(
+            data_summary=data_summary,
+            scenario=scenario,
+            user_intent=request.context,
+            max_recommendations=request.maxRecommendations,
+            use_cache=True
+        )
+
+        # ── Rule-based injection: budget_comparison chart ──
+        if not any(r.chart_type == "budget_comparison" for r in recommendations):
+            budget_rec = _try_budget_comparison_recommendation(df)
+            if budget_rec:
+                recommendations.append(budget_rec)
+                logger.info("[BudgetInjection] Appended budget_comparison recommendation")
+
+        # Filter excluded types
+        if request.excludeTypes:
+            exclude_set = set(request.excludeTypes)
+            recommendations = [r for r in recommendations if r.chart_type not in exclude_set]
+
+        # Convert to response format
+        result = {
+            "success": True,
+            "data": {
+                "recommendations": [
+                    {
+                        "chartType": r.chart_type,
+                        "title": r.title,
+                        "reason": r.reason,
+                        "xField": r.x_axis,
+                        "yFields": r.y_axis or [],
+                        "seriesField": r.series,
+                        "priority": r.priority,
+                        "category": r.category,
+                        "confidence": r.confidence,
+                        "configHints": r.config_hints
+                    }
+                    for r in recommendations
+                ],
+                "diversityScore": len(set(r.chart_type for r in recommendations)) / max(len(recommendations), 1),
+                "method": "llm" if recommender.settings.llm_api_key else "fallback",
+                "dataInfo": {
+                    "rowCount": len(df),
+                    "numericColumns": numeric_cols,
+                    "categoricalColumns": categorical_cols,
+                    "dateColumns": date_cols
+                }
+            },
+            "message": "ok"
+        }
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Smart chart recommendation error: {e}", exc_info=True)
+        return {"success": False, "data": None, "message": "图表生成失败，请稍后重试"}
+
+
+@router.get("/smart-recommend/cache-stats")
+async def get_recommendation_cache_stats():
+    """Get LLM recommendation cache statistics"""
+    try:
+        from services.chart_recommender import get_chart_recommender
+        recommender = get_chart_recommender()
+        stats = recommender.get_cache_stats()
+        return {"success": True, "data": stats, "message": "ok"}
+    except Exception as e:
+        logger.error(f"Recommendation cache stats error: {e}", exc_info=True)
+        return {"success": False, "data": None, "message": "图表生成失败，请稍后重试"}

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# 餐饮 AI 每日回归评测 — R6→R22 全部问法类的可执行断言 (52 案例)。
+# 数据刷新 (refresh-demo-rest, 03:17) 之后跑; 失败追加 alerts 日志。
+#
+# 2026-07-23 飞轮日报: 评测后追加晋升候选 (--list) 与 miss 复盘 (--misses)
+# 报告到本日志; 有待人审条目时各追加一行 alerts (报告失败不影响 eval rc —
+# 报告是 best-effort, 评测是硬门)。
+# 本文件由 deploy-smartbi-python 同步到服务器；运行时通过 venv-current
+# 原子链接切换，避免定时任务与主服务使用不同 Python。
+set -uo pipefail
+
+PYDIR=/www/wwwroot/cretas/code/backend/python
+CODEDIR=/www/wwwroot/cretas/code
+LOG=/www/wwwroot/cretas/logs/restaurant-ai-eval.log
+ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
+
+{
+  echo "=== $(date '+%F %T') restaurant AI eval ==="
+  cd "$PYDIR"
+  # shellcheck disable=SC1091
+  source "$PYDIR/venv-current/bin/activate"
+  # 评测凭证: 2026-08-09 起电池用**租户自己的账号**登录, 不再走免密 demo-login
+  # (8-05 租户收敛把 cretas.demo.rest.* 清空、DEMO_REST 账号全停用, 电池从此
+  #  登录就崩, 连挂 4 天没人处理)。凭证只从 .env.prod 注入, 绝不落进仓库。
+  set -a
+  # shellcheck disable=SC1091
+  source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  set +a
+  PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.restaurant_ai_eval \
+    --base https://admin.cretaceousfuture.com
+  rc=$?
+  echo "=== done (rc=$rc) ==="
+  if [ "$rc" -ne 0 ]; then
+    echo "RESTAURANT AI EVAL FAILED rc=$rc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+  fi
+
+  # ── 工厂读电池 (2026-07-24 验收轮建立) ──
+  echo "=== $(date '+%F %T') factory READ eval ==="
+  PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.factory_ai_eval \
+    --base https://admin.cretaceousfuture.com
+  frc=$?
+  echo "=== factory read done (rc=$frc) ==="
+  if [ "$frc" -ne 0 ]; then
+    echo "FACTORY READ EVAL FAILED rc=$frc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    rc=$((rc || frc))
+  fi
+
+  # ── 工厂写路径电池 (读写分块契约: 意图命中/READ拦截/TCC/demo闸) ──
+  echo "=== $(date '+%F %T') factory WRITE eval ==="
+  PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.factory_write_eval \
+    --base https://admin.cretaceousfuture.com
+  wrc=$?
+  echo "=== factory write done (rc=$wrc) ==="
+  if [ "$wrc" -ne 0 ]; then
+    echo "FACTORY WRITE EVAL FAILED rc=$wrc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    rc=$((rc || wrc))
+  fi
+
+  # ── 飞轮日报 (best-effort, 不影响 rc) ──
+  if [ -f "$CODEDIR/scripts/restaurant-intent-promote.py" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /www/wwwroot/cretas/.env.prod 2>/dev/null
+    set +a
+    export POSTGRES_HOST=localhost POSTGRES_PORT=5432 \
+           POSTGRES_DB=smartbi_prod_db POSTGRES_USER=smartbi_user \
+           POSTGRES_PASSWORD="${SMARTBI_DB_PASSWORD:-}"
+    echo "=== $(date '+%F %T') 飞轮日报: 晋升候选 ==="
+    LIST_OUT=$(cd "$CODEDIR" && PYTHONIOENCODING=utf-8 python -X utf8 \
+      scripts/restaurant-intent-promote.py --list 2>&1) || true
+    echo "$LIST_OUT"
+    N_PROMOTE=$(printf '%s\n' "$LIST_OUT" | grep -oE '[0-9]+ 条达标推荐晋升' | grep -oE '^[0-9]+' | head -1 || true)
+    if [ "${N_PROMOTE:-0}" -gt 0 ] 2>/dev/null; then
+      echo "FLYWHEEL: ${N_PROMOTE} 条晋升候选待人审 $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    fi
+    echo "=== $(date '+%F %T') 飞轮日报: miss 复盘 ==="
+    MISS_OUT=$(cd "$CODEDIR" && PYTHONIOENCODING=utf-8 python -X utf8 \
+      scripts/restaurant-intent-promote.py --misses 2>&1) || true
+    echo "$MISS_OUT"
+    N_MISS=$(printf '%s\n' "$MISS_OUT" | grep -c '^共 .* 组 miss' || true)
+    if [ "${N_MISS:-0}" -gt 0 ]; then
+      MISS_LINE=$(printf '%s\n' "$MISS_OUT" | grep '^共 .* 组 miss' | head -1)
+      echo "FLYWHEEL: ${MISS_LINE} 待复盘 $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    fi
+    unset POSTGRES_PASSWORD SMARTBI_DB_PASSWORD DB_PASSWORD JWT_SECRET
+  else
+    echo "飞轮日报跳过: $CODEDIR/scripts/restaurant-intent-promote.py 不存在 (需 scp 同步)"
+  fi
+
+  exit "$rc"
+} >> "$LOG" 2>&1

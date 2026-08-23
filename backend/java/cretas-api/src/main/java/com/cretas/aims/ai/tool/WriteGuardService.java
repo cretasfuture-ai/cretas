@@ -1,0 +1,154 @@
+package com.cretas.aims.ai.tool;
+
+import com.cretas.aims.entity.config.AIIntentConfig;
+import org.springframework.stereotype.Service;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * W0 write-guard: the single source of truth for "is this a write/destructive operation".
+ * Confidence-INDEPENDENT by design. Stateless + thread-safe (callable from worker threads);
+ * MUST NOT read ThreadLocal/SecurityContext.
+ */
+@Service
+public class WriteGuardService {
+
+    /**
+     * Process-local authority marker. JSON deserialization can reproduce the key but can never
+     * reproduce this object identity, so request context is not an authentication channel.
+     */
+    private static final String SERVER_CONFIRMATION_KEY = "cretas.internal.confirmation.authority";
+    private static final Object SERVER_CONFIRMATION_MARKER = new Object();
+
+    // Confidence-independent write-verb allowlist. matched via upper.contains(suffix) on the
+    // tool/intent NAME. getActionType() only recognizes _create/_update/_delete and defaults the
+    // rest to READ/GENERATE/NOTIFY (none of which isWriteAction() treats as a write), so genuinely
+    // destructive tools (bom_recipe_activate, alert_rule_toggle, processing_worker_assign,
+    // notify_send, factory_material_requisition_generate, ...) would slip the guard if their verb
+    // isn't listed here. Over-block of a read tool (extra confirm) is the safe direction.
+    //
+    // W0 final review (M1): expanded with verbs that were confirmed-exploitable on real tools.
+    // Suffixes chosen to avoid substring over-match with common read tool names — verified by
+    // grepping every getToolName() literal: zero read-style name (*_query/_list/_detail/_stats/
+    // _search/_overview/_trend/_ranking/_report/_status/_history/_today/_monthly) matches any
+    // suffix below. NOTE: deliberately NOT adding _SHIP (over-matches _SHIPMENT → would over-block
+    // shipment queries) or _SET (over-matches _SETTINGS). _MARK over-matches MARKET-style names
+    // (none exist today) which is an acceptable over-block (safe direction).
+    private static final Set<String> WRITE_SUFFIXES = Set.of(
+            "_CREATE", "_UPDATE", "_DELETE", "_START", "_STOP", "_PAUSE", "_RESUME",
+            "_COMPLETE", "_EXECUTE", "_CONSUME", "_RELEASE", "_RESERVE", "_ACKNOWLEDGE",
+            "_RESOLVE", "_CLEAR", "_CLOSE", "_REOPEN", "_FREEZE", "_RESET", "_DEDUCT",
+            "_APPROVE", "_CANCEL", "_CONFIRM", "_ADJUST", "_SUBMIT",
+            // W0 final review (M1) additions:
+            "_ACTIVATE", "_DEACTIVATE", "_TOGGLE", "_ASSIGN", "_UNASSIGN", "_GENERATE",
+            "_SPLIT", "_MERGE", "_SEND", "_DISPOSE", "_REGISTER", "_TRANSITION", "_SETTLE",
+            "_ALLOCATE", "_VOID", "_REJECT", "_DISPATCH", "_DISABLE", "_ENABLE", "_MARK",
+            "_IMPORT", "_UPLOAD", "_BIND", "_UNBIND", "_ARCHIVE", "_RESTORE", "_ROLLBACK",
+            // Verb-FIRST form: split_order names the verb as a prefix, so "_SPLIT" (leading underscore)
+            // never matches "SPLIT_ORDER". Add the "SPLIT_" prefix form. Verified: only SPLIT_ORDER
+            // starts with SPLIT_ among all getToolName() literals — no read-style over-match.
+            "SPLIT_");
+
+    private static final Set<String> NON_DESTRUCTIVE_GENERATE_NAMES = Set.of("REVENUE_REPORT_GENERATE");
+
+    public boolean isWriteAction(ToolExecutor.ActionType t) {
+        return t == ToolExecutor.ActionType.WRITE
+                || t == ToolExecutor.ActionType.UPDATE
+                || t == ToolExecutor.ActionType.DELETE;
+    }
+
+    public boolean isWriteTool(ToolExecutor tool) {
+        // spec §8.2: the DECLARATION (ToolExecutor.getAccessMode, fail-closed default WRITE) is now
+        // the primary authority; the old name-suffix/ActionType heuristic is kept as a second opinion
+        // that can only ADD writes, never remove them.
+        //
+        // Why keep both: the heuristic under-flags (it missed 39 real write tools — canvas_add_field /
+        // dictionary_add / create_new_intent / update_intent / scale_add_device / inventory_operation /
+        // sales_record_payment ... none of which carry a write verb in the position the suffix list
+        // scans, yet all of them persist), and the declaration can be stale on a tool whose body grew
+        // a write after it was declared READ. OR-ing them means a tool has to be judged read-only by
+        // BOTH to skip the guard. Over-flagging a read tool (extra confirm) is acceptable; under-
+        // flagging a write is not. ToolAccessModeDeclarationTest fails the build if any tool declares
+        // READ while the heuristic says WRITE, so the two cannot silently drift apart.
+        return tool != null
+                && (ToolAccessModes.isWrite(tool)
+                    || isWriteAction(tool.getActionType())
+                    || hasWriteSuffix(tool.getToolName()));
+    }
+
+    public boolean isWriteIntent(AIIntentConfig intent) {
+        if (intent == null) return false;
+        String sens = intent.getSensitivityLevel();
+        if ("HIGH".equals(sens) || "CRITICAL".equals(sens)) return true;
+        return hasWriteSuffix(intent.getIntentCode());
+    }
+
+    public boolean hasWriteSuffix(String intentCode) {
+        if (intentCode == null) return false;
+        String upper = intentCode.toUpperCase();
+        if (NON_DESTRUCTIVE_GENERATE_NAMES.contains(upper)) return false;
+        if (upper.contains("CLOCK_IN") || upper.contains("CLOCK_OUT")) return true;
+        for (String suffix : WRITE_SUFFIXES) {
+            if (upper.contains(suffix)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Removes confirmation-like authority from an untrusted HTTP/request context while retaining
+     * ordinary business parameters. Key comparison ignores case and separators so aliases such as
+     * {@code force_execute} cannot survive the boundary.
+     */
+    public static Map<String, Object> withoutCallerConfirmation(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return context == null ? null : new HashMap<>();
+        }
+        Map<String, Object> sanitized = new HashMap<>(context);
+        sanitized.keySet().removeIf(WriteGuardService::isCallerConfirmationKey);
+        return sanitized;
+    }
+
+    /**
+     * Adds confirmation authority only after a server-side proof has been atomically claimed.
+     * Package callers must keep the returned map intact until the write guard has inspected it.
+     */
+    public Map<String, Object> withServerConfirmation(Map<String, Object> context) {
+        Map<String, Object> trusted = context != null ? new HashMap<>(context) : new HashMap<>();
+        trusted.put(SERVER_CONFIRMATION_KEY, SERVER_CONFIRMATION_MARKER);
+        return trusted;
+    }
+
+    /**
+     * Removes only the process-local authority carrier after W0/RBAC have consumed it. The legacy
+     * business parameter {@code confirmed=true} remains available to destructive tools, while the
+     * private marker can never enter ToolCall JSON, preview JSON, hashes, caches or tool arguments.
+     */
+    public static Map<String, Object> withoutServerConfirmationMarker(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return context == null ? null : new HashMap<>();
+        }
+        Map<String, Object> sanitized = new HashMap<>(context);
+        sanitized.keySet().removeIf(WriteGuardService::isServerConfirmationKey);
+        return sanitized;
+    }
+
+    /** Raw booleans/strings in request context are never confirmation authority. */
+    public boolean isConfirmed(Map<String, Object> context) {
+        return context != null && context.get(SERVER_CONFIRMATION_KEY) == SERVER_CONFIRMATION_MARKER;
+    }
+
+    private static boolean isCallerConfirmationKey(String key) {
+        if (key == null) return false;
+        String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(java.util.Locale.ROOT);
+        return "confirmed".equals(normalized)
+                || "forceexecute".equals(normalized)
+                || isServerConfirmationKey(key);
+    }
+
+    private static boolean isServerConfirmationKey(String key) {
+        if (key == null) return false;
+        String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(java.util.Locale.ROOT);
+        return "cretasinternalconfirmationauthority".equals(normalized);
+    }
+}

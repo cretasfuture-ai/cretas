@@ -1,0 +1,1322 @@
+package com.cretas.aims.service.yield;
+
+import com.cretas.aims.dto.yield.BatchYieldDTO;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost;
+import com.cretas.aims.dto.yield.StepYieldDTO;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionSettlementConsumption;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.ByproductLine;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.PackagingItem;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.LaborDetail;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.PackagingDetail;
+import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.RawMaterialDetail;
+import com.cretas.aims.entity.bom.BomVersion;
+import com.cretas.aims.repository.bom.BomVersionRepository;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
+
+/**
+ * 订单级单盒成本拆分 — 单一权威服务 (T1 谱系遍历 + T2 上游成本回溯 + T3 人工归集).
+ *
+ * <p>原料成本沿 {@link MaterialConsumption} 边回溯: 若上游 {@link MaterialBatch} 由某生产批次产出
+ * ({@code source_doc_type='PRODUCTION_BATCH'}), 递归进其消耗 (多级); 否则该消耗即叶子, 成本=其
+ * 实测 total_cost (= 该上游链累计成本)。混批按各批实测投料量×各自单价精确归集 (非按重量糊平均)。
+ *
+ * <p>人工/调料/包装来自该批 {@code ProductionReport} 逐道报工 (复用 {@link YieldReportService#getYield});
+ * 首道(原料道)材料不计入 (原料由上游 traced 承载, 避免双计)。
+ *
+ * <p>价格脱敏: maskPrice 时金额字段全置 null, 仅保留投料量/重量占比 (红线: procurement:price:view)。
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class OrderCostBreakdownService {
+
+    private final ProductionPlanRepository planRepository;
+    private final ProductionBatchRepository batchRepository;
+    private final MaterialConsumptionRepository consumptionRepository;
+    private final MaterialBatchRepository materialBatchRepository;
+    private final com.cretas.aims.repository.ProductionReportRepository productionReportRepository;
+    private final YieldReportService yieldReportService;
+    // ── R4 (2026-07-04): SFI/FG 投料成本补计 (投料边不写 MaterialConsumption → traceCost 失明) ──
+    //   与小结 InterimSettleServiceImpl.computeOutputUnitCost 同口径同源服务。@Autowired(required=false)
+    //   + null-guard: 既有纯 Mockito 单测 (@InjectMocks 不提供这些 mock) 下为 null → SFI 补计整体跳过
+    //   (那些测试本就无 SFI/FG 投料, 零回归)。
+    private final com.cretas.aims.repository.ProcessSheetRowRepository processSheetRowRepository;
+    private final com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    private final com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final BomVersionRepository bomVersionRepository;
+
+    /**
+     * 结单领用行 —— 成本归集的第二个来源（2026-08-18，owner 拍板走「读侧接通」）。
+     *
+     * <p>⚠️ 故意用<b>字段注入</b>而不是加进构造参数：本类的构造器被多个测试直接 new，
+     * 改签名会让并行线的测试编译不过。今天 main 已经因为同类语义冲突炸过一次
+     * （git 自动合并零冲突，合完编译失败）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionSettlementConsumptionRepository
+            settlementConsumptionRepository;
+
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final int MAX_DEPTH = 10;
+
+    public OrderCostBreakdownDTO compute(String factoryId, String orderId, boolean maskPrice) {
+        List<String> planIds = planRepository.findByFactoryIdAndSourceOrderId(factoryId, orderId).stream()
+                .map(ProductionPlan::getId).filter(Objects::nonNull).collect(Collectors.toList());
+        if (planIds.isEmpty()) {
+            return empty(orderId, maskPrice);
+        }
+        List<ProductionBatch> batches = batchRepository.findByFactoryIdAndProductionPlanIdIn(factoryId, planIds);
+        if (batches.isEmpty()) {
+            return empty(orderId, maskPrice);
+        }
+        return computeForBatches(factoryId, orderId, batches, maskPrice);
+    }
+
+    /**
+     * 按生产计划查单盒成本 (结单族 CUSTOMER_ORDER 成品入库成本传导用).
+     *
+     * <p>{@link #compute}(by-order) 走 sourceOrderId→planIds→batches; 本方法直接以单个 planId 取
+     * 该计划全部生产批次, 复用同一 {@link #computeForBatches} 内核 (单一权威成本: 原料沿
+     * MaterialConsumption 边回溯 + 逐道人工/调料/包装, diamond-safe)。给
+     * {@code createFinishedGoodsFromReceipt} 提供成品单位成本基准, 与 出厂核算/汇总页字节一致。
+     *
+     * <p>DTO.orderId 字段填 planId (仅作展示 label)。无批次 → hasData=false (诚实, 不造 0 行)。
+     */
+    public OrderCostBreakdownDTO computeByPlan(String factoryId, String planId, boolean maskPrice) {
+        List<ProductionBatch> batches = batchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        if (batches == null || batches.isEmpty()) {
+            return empty(planId, maskPrice);
+        }
+        return computeForBatches(factoryId, planId, batches, maskPrice);
+    }
+
+    /**
+     * SP-C: 按批次号查单盒成本 (存货生产无订单号场景).
+     * findByFactoryIdAndBatchNumber 是 factory-scoped — 跨租户安全。
+     * DTO.orderId 字段填 batchNumber (前端仅作展示 label)。
+     */
+    public OrderCostBreakdownDTO computeByBatch(String factoryId, String batchNumber, boolean maskPrice) {
+        ProductionBatch b = batchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "生产批次不存在: " + batchNumber));
+        return computeForBatches(factoryId, batchNumber, List.of(b), maskPrice);
+    }
+
+    /**
+     * 内核: 已有 batches 列表 → 成本归集 → OrderCostBreakdownDTO.
+     * by-order 与 by-batch 共用此方法; {@code label} 填入 DTO.orderId (展示用, by-order=orderId, by-batch=batchNumber).
+     * <p>纯 extract-method: 无任何逻辑变更, by-order 行为零回归。
+     */
+    private OrderCostBreakdownDTO computeForBatches(String factoryId, String label,
+                                                     List<ProductionBatch> batches, boolean maskPrice) {
+        BigDecimal labor = BigDecimal.ZERO;
+        BigDecimal seasoning = BigDecimal.ZERO;
+        BigDecimal packaging = BigDecimal.ZERO;
+        BigDecimal equipment = BigDecimal.ZERO;
+        BigDecimal other = BigDecimal.ZERO;
+        BigDecimal raw = BigDecimal.ZERO;
+        int boxCount = 0;
+        int sampleRetain = 0;             // 留样数 (不可售; Σ各道, 通常仅末道)
+        BigDecimal waste = BigDecimal.ZERO; // 损耗/料头量 (仅展示; 已体现在出成率, 不二次扣成本)
+        List<SourceCost> sources = new ArrayList<>();
+        // 副产物按 名称|单位 归集 (跨批次跨道)
+        LinkedHashMap<String, ByproductLine> byproductAcc = new LinkedHashMap<>();
+        // AUDIT-002 包装明细按 名称 归集成本 (跨批次跨道)
+        LinkedHashMap<String, BigDecimal> packagingAcc = new LinkedHashMap<>();
+        // AUDIT-004 辅料按锅分摊明细 (按 锅号 去重)
+        LinkedHashMap<String, OrderCostBreakdownDTO.AuxiliaryAllocation> auxAllocAcc = new LinkedHashMap<>();
+        // ★ 严格审计 2026-06-25: 上游 WIP 链传播来的副产回收 (本批自身副产已由 byproductAcc 计入)
+        BigDecimal upstreamByproductCredit = BigDecimal.ZERO;
+        // ── R4 (2026-07-04): 外部库存投料 (SFI/FG) 成本补计 ──
+        //   semiFeedCost = Σ(feedInSourceUnit × 输入 SFI/FG.unitCost) 跨本次全部批次 process-row 投料边。
+        //   anySemiFeed = 存在任一 SFI/FG 投料边 (决定 DTO.semiFeedCost 是否为 null=N/A)。
+        //   semiFeedUnknown = 任一投料的 unitCost/折算未知 → 诚实 null (整批成本未知, 见 costComplete)。
+        BigDecimal semiFeedCost = BigDecimal.ZERO;
+        boolean anySemiFeed = false;
+        boolean semiFeedUnknown = false;
+        boolean auditEligible = false;
+        boolean anyAuthoritativePackaging = false;
+        boolean equipmentComplete = true;
+        boolean otherComplete = true;
+        List<String> missingCostItems = new ArrayList<>();
+        List<RawMaterialDetail> rawMaterialDetails = new ArrayList<>();
+        List<PackagingDetail> packagingDetails = new ArrayList<>();
+        List<LaborDetail> laborDetails = new ArrayList<>();
+        List<ProductionPlan> auditPlans = new ArrayList<>();
+        List<ProductionBatch> auditBatches = new ArrayList<>();
+        BigDecimal auditOutputQuantity = BigDecimal.ZERO;
+        BigDecimal auditConvertedOutputKg = BigDecimal.ZERO;
+        boolean outputConversionComplete = true;
+        String auditOutputUnit = null;
+
+        // 结单领用行按【计划】存, 而本循环按【批次】走 —— 同一个计划的多个批次不能各加一遍,
+        // 否则原料成本翻倍。用这个集合保证每个计划只并入一次。
+        java.util.Set<String> settlementPlansMerged = new java.util.HashSet<>();
+        for (ProductionBatch b : batches) {
+            auditBatches.add(b);
+            List<MaterialConsumption> batchConsumptions = new ArrayList<>(
+                    consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), factoryId));
+            batchConsumptions.addAll(
+                    settlementConsumptionsFor(factoryId, b, batchConsumptions, settlementPlansMerged));
+            boolean hasActualPackaging = batchConsumptions.stream()
+                    .anyMatch(c -> "PACKAGING".equalsIgnoreCase(c.getSourceType()));
+            boolean hasActualSeasoning = batchConsumptions.stream()
+                    .anyMatch(c -> "SEASONING".equalsIgnoreCase(c.getSourceType()));
+            ProductionPlan plan = b.getProductionPlanId() == null ? null
+                    : planRepository.findByIdAndFactoryId(b.getProductionPlanId(), factoryId).orElse(null);
+            if (plan != null) {
+                auditPlans.add(plan);
+                auditEligible = auditEligible || plan.getSelectedBomRecipeId() != null
+                        || plan.getPlannedNetWeightGrams() != null || plan.getSelectedWorkflowId() != null;
+            }
+            BatchYieldDTO y = yieldReportService.getYield(factoryId, b.getId());
+            BigDecimal reportedPackagingBefore = packaging;
+            if (y != null) {
+                if (y.getTotalLaborCost() != null) {
+                    labor = labor.add(y.getTotalLaborCost());
+                }
+                List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
+                for (int i = 0; i < steps.size(); i++) {
+                    accumulateLaborDetails(laborDetails, missingCostItems, steps.get(i), auditEligible);
+                    accumulateByproducts(byproductAcc, steps.get(i).getByproducts());
+                    if (steps.get(i).getSampleRetainQuantity() != null) {
+                        sampleRetain += steps.get(i).getSampleRetainQuantity();
+                    }
+                    if (steps.get(i).getWasteQuantity() != null) {
+                        waste = waste.add(steps.get(i).getWasteQuantity());
+                    }
+                    accumulatePackaging(packagingAcc, steps.get(i).getPackagingDetail());
+                    BigDecimal m = steps.get(i).getMaterialCost();
+                    if (m == null) {
+                        continue;
+                    }
+                    // CALC-003: 显式 costCategory 优先分类; null/未知 → 回退 step-index 启发式 (向后兼容)
+                    String bucket = resolveCostBucket(steps.get(i).getCostCategory(), i, steps.size(), factoryId, label);
+                    if ("PACKAGING".equals(bucket)) {
+                        if (!hasActualPackaging) {
+                            packaging = packaging.add(m);
+                        }
+                    } else if ("SEASONING".equals(bucket)) {
+                        if (hasActualSeasoning) {
+                            continue;
+                        }
+                        // AUDIT-004: 该道辅料若标了共享锅 → 按产出量分摊本批 share (替代报工 material_cost); 否则原样计
+                        BigDecimal contribution = m;
+                        StepYieldDTO step = steps.get(i);
+                        if (step.getAuxPotNo() != null && step.getAuxPotTotalCost() != null) {
+                            BigDecimal potOutput = nz(productionReportRepository.sumOutputByAuxPotNo(factoryId, step.getAuxPotNo()));
+                            BigDecimal myOutput = nz(step.getTotalOutput());
+                            BigDecimal share = potOutput.signum() > 0
+                                    ? step.getAuxPotTotalCost().multiply(myOutput).divide(potOutput, 2, RoundingMode.HALF_UP)
+                                    : step.getAuxPotTotalCost();
+                            contribution = share;
+                            auxAllocAcc.put(step.getAuxPotNo(), OrderCostBreakdownDTO.AuxiliaryAllocation.builder()
+                                    .potNo(step.getAuxPotNo())
+                                    .method(step.getAuxAllocMethod())
+                                    .potTotalCost(step.getAuxPotTotalCost())
+                                    .potTotalOutput(potOutput)
+                                    .batchOutput(myOutput)
+                                    .batchShare(share)
+                                    .batchSharePct(potOutput.signum() > 0
+                                            ? myOutput.multiply(HUNDRED).divide(potOutput, 1, RoundingMode.HALF_UP) : null)
+                                    .build());
+                        }
+                        seasoning = seasoning.add(contribution);
+                    }
+                    // "SKIP" → 原料由上游 traced consumption 承载, 不计 (避免双计)
+                }
+
+                BigDecimal output = positiveOrNull(y.getLastStepOutput(), b.getActualQuantity(), b.getQuantity());
+                if (output != null) {
+                    auditOutputQuantity = auditOutputQuantity.add(output);
+                    auditOutputUnit = mergeUnit(auditOutputUnit, y.getLastStepOutputUnit());
+                    BigDecimal outputKg = toPinnedKilograms(output, y.getLastStepOutputUnit(), plan);
+                    if (outputKg == null) {
+                        outputConversionComplete = false;
+                    } else {
+                        auditConvertedOutputKg = auditConvertedOutputKg.add(outputKg);
+                    }
+                }
+
+                PinnedPackagingResult pinnedPackaging = resolvePinnedPackaging(
+                        factoryId, plan, output, y.getLastStepOutputUnit());
+                if (!hasActualPackaging && pinnedPackaging.pinned()) {
+                    anyAuthoritativePackaging = true;
+                    BigDecimal reportedContribution = packaging.subtract(reportedPackagingBefore);
+                    packaging = packaging.subtract(reportedContribution).add(pinnedPackaging.knownCost());
+                    packagingDetails.addAll(pinnedPackaging.details());
+                    missingCostItems.addAll(pinnedPackaging.missingItems());
+                }
+            }
+            if (b.getEquipmentCost() == null) {
+                equipmentComplete = false;
+                if (auditEligible) missingCostItems.add("EQUIPMENT_COST:" + b.getBatchNumber());
+            } else {
+                equipment = equipment.add(b.getEquipmentCost());
+            }
+            if (b.getOtherCost() == null) {
+                otherComplete = false;
+                if (auditEligible) missingCostItems.add("OTHER_COST:" + b.getBatchNumber());
+            } else {
+                other = other.add(b.getOtherCost());
+            }
+            if (b.getQuantity() != null) {
+                boxCount += b.getQuantity().intValue();
+            }
+            for (MaterialConsumption c : batchConsumptions) {
+                java.util.Set<Long> visited = new java.util.HashSet<>();
+                visited.add(b.getId());   // 起点批次入环检测集
+                BigDecimal[] leaf = traceCost(factoryId, c, 1, visited);
+                BigDecimal cost = leaf[0];
+                int depth = leaf[1].intValue();
+                MaterialBatch mb = c.getBatchId() == null ? null
+                        : materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
+                String actualCategory = c.getSourceType() == null
+                        ? "RAW_MATERIAL" : c.getSourceType().trim().toUpperCase();
+                boolean actualPriceKnown = mb == null
+                        ? c.getUnitPrice() != null
+                        : mb.getUnitPrice() != null;
+                if ("PACKAGING".equals(actualCategory)) {
+                    anyAuthoritativePackaging = true;
+                    packaging = packaging.add(cost);
+                    if (!actualPriceKnown && auditEligible) {
+                        missingCostItems.add("PACKAGING_PRICE:" + c.getMaterialTypeId());
+                    }
+                    packagingDetails.add(PackagingDetail.builder()
+                            .materialCode(c.getMaterialTypeId())
+                            .materialName(mb != null ? mb.getBatchNumber() : c.getMaterialTypeId())
+                            .quantity(c.getQuantity())
+                            .unit(mb != null ? mb.getQuantityUnit() : null)
+                            .unitPrice(actualPriceKnown ? c.getUnitPrice() : null)
+                            .priceSource("ACTUAL_MATERIAL_BATCH")
+                            .amount(actualPriceKnown ? cost : null)
+                            .collectionStatus(actualPriceKnown ? "COLLECTED" : "MISSING_PRICE")
+                            .missingReason(actualPriceKnown ? null : "实际包材批次缺少可验证单价")
+                            .build());
+                    continue;
+                }
+                if ("SEASONING".equals(actualCategory)) {
+                    seasoning = seasoning.add(cost);
+                    if (!actualPriceKnown && auditEligible) {
+                        missingCostItems.add("SEASONING_PRICE:" + c.getMaterialTypeId());
+                    }
+                    continue;
+                }
+                raw = raw.add(cost);
+                sources.add(SourceCost.builder()
+                        .batchId(c.getBatchId())
+                        .batchName(mb != null ? mb.getBatchNumber() : c.getBatchId())
+                        .quantity(c.getQuantity())
+                        .unit(mb != null ? mb.getQuantityUnit() : "kg")
+                        .unitPrice(c.getUnitPrice())
+                        .cost(cost)
+                        .depth(depth)
+                        .build());
+                boolean rawPriceKnown = c.getTotalCost() != null || c.getUnitPrice() != null
+                        || cost.signum() != 0;
+                if (!rawPriceKnown && auditEligible) {
+                    missingCostItems.add("RAW_MATERIAL_PRICE:" + c.getBatchId());
+                }
+                rawMaterialDetails.add(RawMaterialDetail.builder()
+                        .batchNumber(mb != null ? mb.getBatchNumber() : c.getBatchId())
+                        .materialCode(mb != null ? mb.getMaterialTypeId() : null)
+                        .materialName(mb != null ? mb.getBatchNumber() : c.getBatchId())
+                        .quantity(c.getQuantity())
+                        .unit(mb != null ? mb.getQuantityUnit() : "kg")
+                        .unitPrice(c.getUnitPrice())
+                        .priceSource("MATERIAL_CONSUMPTION_SNAPSHOT")
+                        .amount(rawPriceKnown ? cost : null)
+                        .collectionStatus(rawPriceKnown ? "COLLECTED" : "MISSING_PRICE")
+                        .missingReason(rawPriceKnown ? null : "实际耗用记录缺少可验证单价/金额")
+                        .build());
+
+                // ★ SP-F ①b: 沿 WIP 链回溯上游 *生产批次* 的 人工/调料, 按与 traceCost 相同的
+                //   consumedQty/upstreamReceiptQty 比例分摊累加。本批自身的人工/调料已由上方 getYield
+                //   循环计入, 故只从上游(WIP 产出批)起累加, 不重复计本批。
+                //   只有 clerk/逐工序录入链会产出 MaterialBatch(sourceDocType=PRODUCTION_BATCH)
+                //   被 MaterialConsumption 消耗 —— 常规生产批不走此链, 故对常规批零影响 (见 traceCost javadoc)。
+                java.util.Set<Long> chainVisited = new java.util.HashSet<>();
+                chainVisited.add(b.getId());
+                BigDecimal[] up = aggregateUpstreamLaborSeasoning(factoryId, c, 1, chainVisited);
+                labor = labor.add(up[0]);
+                seasoning = seasoning.add(up[1]);
+                upstreamByproductCredit = upstreamByproductCredit.add(up[2]);
+            }
+
+            // ── R4: 本批 process-row 的 SFI/FG 投料成本 (MaterialConsumption 之外的边) ──
+            //   返回 [knownCost, anyFlag(0/1), unknownFlag(0/1)]。null-guard: 新注入依赖缺失 → 全 0 (跳过)。
+            BigDecimal[] feed = accumulateStockFeedCost(factoryId, b);
+            semiFeedCost = semiFeedCost.add(feed[0]);
+            anySemiFeed = anySemiFeed || feed[1].signum() > 0;
+            semiFeedUnknown = semiFeedUnknown || feed[2].signum() > 0;
+        }
+
+        // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
+        // 文员逐道录入(SP-F)的气调步只写 packaging_detail 明细不写 materialCost-PACKAGING;
+        // M67 等有 materialCost-PACKAGING 的批 packaging>0 → 不重复加明细。严格测试 2026-06-24 抓到。
+        if (!anyAuthoritativePackaging && packaging.signum() == 0 && !packagingAcc.isEmpty()) {
+            packaging = packagingAcc.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        // R4: total 含 SFI/FG 投料成本 (已知部分)。诚实 null: 有 SFI/FG 投料但任一成本未知 →
+        //   costComplete=false, 下方派生成本字段 (total/perBox/net.../semiFeedCost) 全置 null (不伪造 ¥0)。
+        if (semiFeedUnknown) {
+            missingCostItems.add("SEMI_FINISHED_OR_FINISHED_FEED_PRICE");
+        }
+        missingCostItems = missingCostItems.stream().distinct().collect(Collectors.toCollection(ArrayList::new));
+        boolean costComplete = !semiFeedUnknown && (!auditEligible || missingCostItems.isEmpty());
+        BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost)
+                .add(equipment).add(other);
+        BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
+        List<ByproductLine> byproducts = new ArrayList<>(byproductAcc.values());
+        BigDecimal byproductCredit = byproducts.stream().map(l -> nz(l.getValue())).reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(upstreamByproductCredit);   // ★ 加上游 WIP 链传播来的副产回收 (严格审计 2026-06-25)
+        BigDecimal netTotal = total.subtract(byproductCredit);
+        BigDecimal netPerBox = boxCount > 0 ? netTotal.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+
+        // 可售成本: 留样产出但不可售 → 净成本摊到 (产出盒数 − 留样数), 每个售出盒真实承担留样成本。
+        // 损耗/料头(waste)已体现在出成率(产出更低→盒数更少), 不二次扣, 仅展示。
+        int sellableBoxCount = Math.max(0, boxCount - sampleRetain);
+        BigDecimal sellablePerBox = sellableBoxCount > 0
+                ? netTotal.divide(BigDecimal.valueOf(sellableBoxCount), 2, RoundingMode.HALF_UP) : netPerBox;
+
+        // AUDIT-002 包装明细 (按名称归集成本; null=未拆)
+        List<PackagingItem> packagingDetail;
+        if (anyAuthoritativePackaging) {
+            packagingDetail = packagingDetails.stream()
+                    .map(item -> PackagingItem.builder()
+                            .name(item.getMaterialName())
+                            .cost(item.getAmount())
+                            .build())
+                    .collect(Collectors.toList());
+        } else {
+            packagingDetail = packagingAcc.isEmpty() ? null
+                    : packagingAcc.entrySet().stream()
+                            .map(e -> PackagingItem.builder().name(e.getKey()).cost(e.getValue()).build())
+                            .collect(Collectors.toList());
+        }
+
+        // AUDIT-004 辅料按锅分摊明细 (null=无共享锅)
+        List<OrderCostBreakdownDTO.AuxiliaryAllocation> auxiliaryAllocations =
+                auxAllocAcc.isEmpty() ? null : new ArrayList<>(auxAllocAcc.values());
+
+        BigDecimal totalQty = sources.stream().map(s -> nz(s.getQuantity())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        for (SourceCost s : sources) {
+            s.setWeightSharePct(totalQty.signum() > 0
+                    ? nz(s.getQuantity()).multiply(HUNDRED).divide(totalQty, 1, RoundingMode.HALF_UP) : null);
+            s.setCostSharePct(raw.signum() > 0
+                    ? nz(s.getCost()).multiply(HUNDRED).divide(raw, 1, RoundingMode.HALF_UP) : null);
+        }
+
+        ProductionPlan auditPlan = uniqueOrNull(auditPlans, ProductionPlan::getId);
+        ProductionBatch auditBatch = uniqueOrNull(auditBatches, ProductionBatch::getId);
+        String normalizedAuditOutputUnit = "__MIXED__".equals(auditOutputUnit) ? null : auditOutputUnit;
+        BigDecimal netWeight = auditPlan == null ? null : auditPlan.getPlannedNetWeightGrams();
+        String equipmentStatus = !auditEligible ? "NOT_EVALUATED"
+                : (!equipmentComplete ? "UNCOLLECTED"
+                : (equipment.signum() == 0 ? "CONFIRMED_ZERO" : "COLLECTED"));
+        String otherStatus = !auditEligible ? "NOT_EVALUATED"
+                : (!otherComplete ? "UNCOLLECTED"
+                : (other.signum() == 0 ? "CONFIRMED_ZERO" : "COLLECTED"));
+
+        OrderCostBreakdownDTO dto = OrderCostBreakdownDTO.builder()
+                .orderId(label)
+                .orderNumber(auditPlan == null ? null : auditPlan.getCustomerOrderNumber())
+                .productionPlanId(auditPlan == null ? null : auditPlan.getId())
+                .productionPlanNumber(auditPlan == null ? null : auditPlan.getPlanNumber())
+                .finishedBatchNumber(auditBatch == null ? null : auditBatch.getBatchNumber())
+                .productSku(auditPlan != null ? auditPlan.getProductTypeId()
+                        : (auditBatch == null ? null : auditBatch.getProductTypeId()))
+                .productName(auditBatch == null ? null : auditBatch.getProductName())
+                .pinnedBomRecipeId(auditPlan == null ? null : auditPlan.getSelectedBomRecipeId())
+                .pinnedBomVersion(auditPlan == null ? null : auditPlan.getSelectedBomVersion())
+                .pinnedWorkflowId(auditPlan == null ? null : auditPlan.getSelectedWorkflowId())
+                .pinnedWorkflowVersion(auditPlan == null ? null : auditPlan.getSelectedWorkflowVersion())
+                .calculatedAt(LocalDateTime.now())
+                .calculationStatus(costComplete ? "COMPLETE" : "PARTIAL")
+                .outputQuantity(auditOutputQuantity.signum() > 0 ? auditOutputQuantity : null)
+                .outputUnit(normalizedAuditOutputUnit)
+                .netWeightGramsPerUnit(netWeight)
+                .convertedOutputKg(outputConversionComplete && auditOutputQuantity.signum() > 0
+                        ? auditConvertedOutputKg : null)
+                .costDenominatorQuantity(auditOutputQuantity.signum() > 0 ? auditOutputQuantity : null)
+                .costDenominatorUnit(normalizedAuditOutputUnit)
+                .boxCount(boxCount)
+                .hasData(true)
+                .priceMasked(maskPrice)
+                .rawMaterialCost(raw)
+                .laborCost(labor)
+                .seasoningCost(seasoning)
+                .packagingCost(packaging)
+                .equipmentCost(equipmentComplete || equipment.signum() != 0 ? equipment : null)
+                .equipmentCostStatus(equipmentStatus)
+                .otherCost(otherComplete || other.signum() != 0 ? other : null)
+                .otherCostStatus(otherStatus)
+                .semiFeedCost(anySemiFeed ? semiFeedCost : null)   // null = 无 SFI/FG 投料 (N/A)
+                .costComplete(costComplete)
+                .missingCostItemCount(missingCostItems.size())
+                .missingCostItems(missingCostItems)
+                .rawMaterialDetails(rawMaterialDetails)
+                .packagingDetails(packagingDetails)
+                .laborDetails(laborDetails)
+                .totalCost(total)
+                .perBoxCost(perBox)
+                // 已知成本合计: 与 totalCost 同一算式, 但 costComplete=false 时不被清空
+                // (2026-07-30 Steve 拍板: 设备/其他成本不强制填写, 填了就算进去)。
+                .knownCostSubtotal(total)
+                .knownPerBoxCost(perBox)
+                .byproductCredit(byproductCredit)
+                .netTotalCost(netTotal)
+                .netPerBoxCost(netPerBox)
+                .byproducts(byproducts)
+                .sampleRetainCount(sampleRetain)
+                .wasteQuantity(waste.signum() > 0 ? waste : null)
+                .sellableBoxCount(sellableBoxCount)
+                .sellablePerBoxCost(sellablePerBox)
+                .packagingDetail(packagingDetail)
+                .auxiliaryAllocations(auxiliaryAllocations)
+                .sources(sources)
+                .build();
+        // R4 诚实 null: 有 SFI/FG 投料但成本未知 → 派生成本字段全 null (不伪造 ¥0 稀释),
+        //   与小结 computeOutputUnitCost null 传播对齐。已知的料/工/调/包分桶仍保留展示。
+        if (!costComplete) {
+            nullIncompleteCosts(dto);
+        }
+        if (maskPrice) {
+            maskCosts(dto);
+        }
+        return dto;
+    }
+
+    /**
+     * R4 (2026-07-04): 读某物化批次 process-row 的 SFI/FG 投料边, 返回其成本贡献。
+     * 返回 {@code [knownCost, anyFlag(0/1), unknownFlag(0/1)]}:
+     * <ul>
+     *   <li>knownCost = Σ(feedInSourceUnit × 输入 unitCost) — 仅成本已知的投料累加。</li>
+     *   <li>anyFlag = 存在任一 SFI/FG 投料边 (feed&gt;0) → 1。</li>
+     *   <li>unknownFlag = 任一投料的折算/unitCost 未知 → 1 (诚实 null 触发)。</li>
+     * </ul>
+     * 与小结 {@code computeOutputUnitCost} 同口径同源服务 (resolveFeedQtyInSourceUnit + getSemiUnitCost/
+     * getFeedUnitCost)。null-guard: 新注入依赖任一缺失 (纯 Mockito 单测) → 全 0 (跳过, 零回归)。
+     *
+     * <p>不与 {@code traceCost} 双计: SFI/FG 投料边<b>不写</b> MaterialConsumption (投常驻外部库存, 非本计划
+     * 在制 WIP), traceCost/aggregateUpstreamLaborSeasoning 只沿 MaterialConsumption→PRODUCTION_BATCH 链走,
+     * 永远看不到这些边。扁平查表 (无递归), 无环风险。
+     */
+    private BigDecimal[] accumulateStockFeedCost(String factoryId, ProductionBatch b) {
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        if (processSheetRowRepository == null || wipInventoryService == null
+                || finishedGoodsFeedService == null || objectMapper == null
+                || b == null || b.getId() == null) {
+            return zero;
+        }
+        BigDecimal known = BigDecimal.ZERO;
+        boolean any = false;
+        boolean unknown = false;
+        for (com.cretas.aims.entity.processentry.ProcessSheetRow row :
+                processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, b.getId())) {
+            com.cretas.aims.dto.processentry.ProcessSheetRowRequest req = parseRowPayload(row.getRowPayload());
+            if (req == null || req.getUpstreamSources() == null) {
+                continue;
+            }
+            for (com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                boolean semi = ref.isSemiFinished();
+                boolean fg = ref.isFinishedGoods();
+                if (!semi && !fg) {
+                    continue;   // 在制 WIP 投料成本已在 traceCost (MaterialConsumption 边) 内
+                }
+                BigDecimal feed = nz(ref.getFeedQuantityKg());
+                if (feed.signum() <= 0) {
+                    continue;
+                }
+                any = true;
+                String srcBatchNo = ref.getSourceBatchNumber();
+                // 盒⇄kg 折算 (计数单位来源缺每盒克重 → null → 诚实 unknown); 与扣减/小结成本同源。
+                BigDecimal feedInSourceUnit = fg
+                        ? finishedGoodsFeedService.resolveFeedQtyInSourceUnit(factoryId, srcBatchNo, feed)
+                        : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, srcBatchNo, feed);
+                if (feedInSourceUnit == null) {
+                    unknown = true;
+                    continue;
+                }
+                BigDecimal inputUnitCost = fg
+                        ? finishedGoodsFeedService.getFeedUnitCost(factoryId, srcBatchNo)
+                        : wipInventoryService.getSemiUnitCost(factoryId, srcBatchNo);
+                if (inputUnitCost == null) {
+                    unknown = true;   // 输入 SFI/FG 无成本 → 本批产出成本未知
+                    continue;
+                }
+                known = known.add(feedInSourceUnit.multiply(inputUnitCost));
+            }
+        }
+        return new BigDecimal[]{known, any ? BigDecimal.ONE : BigDecimal.ZERO,
+                unknown ? BigDecimal.ONE : BigDecimal.ZERO};
+    }
+
+    private com.cretas.aims.dto.processentry.ProcessSheetRowRequest parseRowPayload(String payload) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(payload,
+                    com.cretas.aims.dto.processentry.ProcessSheetRowRequest.class);
+        } catch (Exception e) {
+            log.warn("[M67CostBreakdown] 无法解析 process_sheet_row payload (SFI/FG 投料成本跳过): {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** R4 诚实 null: 成本不完整 (未计价 SFI/FG 投料) → 派生成本字段全置 null (料/工/调/包已知分桶保留)。 */
+    private void nullIncompleteCosts(OrderCostBreakdownDTO dto) {
+        dto.setSemiFeedCost(null);
+        dto.setTotalCost(null);
+        dto.setPerBoxCost(null);
+        dto.setNetTotalCost(null);
+        dto.setNetPerBoxCost(null);
+        dto.setSellablePerBoxCost(null);
+    }
+
+    /**
+     * T1 递归回溯: 返回 [该消耗回溯到的成本, 谱系深度].
+     * 上游批次由生产批次产出且有消耗 → 递归取其上游成本和 (回溯到更上游); 否则叶子 = consumption.totalCost。
+     *
+     * <p><b>共享上游按消耗比例分摊 (SP-B1):</b> 若上游批次被多个下游消耗, 每个下游只取上游总成本的
+     * {@code consumedQty / upstreamReceiptQty} 份额, 防止双重计数。
+     * <br>向后兼容论证: 既有单链 1:1 全量消耗时 consumedQty == upstreamReceiptQty → 比例=1 →
+     * apportioned == upstreamSum, 与改前一致。只有「部分消耗/共享上游」才缩放。
+     * <br>缺量兜底: consumedQty 或 upstreamReceiptQty 为 null/0 时退回 own
+     * (consumption.totalCost = 写入时 qty×单价 的切片, 已是合理估值)。
+     */
+    /**
+     * 把<b>结单领用行</b>转成 {@link MaterialConsumption} 的形状，并入成本归集。
+     *
+     * <h3>🔴 为什么需要它（2026-08-18 prod 实测，owner 拍板走「读侧接通」）</h3>
+     *
+     * 结单把领用事实写进 {@code production_settlement_consumptions}（note「自动带入自逐道报工」），
+     * 而本类一直按 {@code material_consumptions.production_batch_id} 归集 —— <b>两张表不相交</b>：
+     * <pre>
+     * production_settlement_consumptions   4 行 /  1 个计划
+     * material_consumptions               69 行 /  6 个计划
+     *   其中 production_batch_id 有值      22 行, 为空 47 行   ← 归集按这个键查, 47 行看不见
+     * 只出现在结单表、归集完全看不到的计划   1 个
+     * 两表都有的 (计划, 批次) 组合          0 个                ← 所以并入不会重复计
+     * </pre>
+     * 净效果：{@code totalRawInput=0} → {@code totalCost=0} → {@code resolvePlanTotalCost} 返回 null
+     * → 结单产出的成品 {@code unit_cost} 恒为空。
+     *
+     * <h3>为什么是「转形状并入」而不是新写一套成本算法</h3>
+     * 下游那一整套（{@code traceCost} 谱系回溯、包材/调料分类、缺价登记 {@code missingCostItems}、
+     * 明细行）原样复用。⛔ 不复制第二份成本算法 —— 本仓形态 D：同一个东西有两份必定漂。
+     *
+     * <h3>价从哪来</h3>
+     * {@code production_settlement_consumptions} <b>没有单价/成本列</b>（实测 0 列），
+     * 回 {@code material_batches.unit_price} 取（实测 4/4 行都连得上且都有单价）。
+     * ⛔ <b>取不到价时留 null，不填 0</b> —— 0 是个看起来很确定的假答案，
+     * 而下游的 {@code missingCostItems} 正是靠 null 才报得出「缺价」。
+     *
+     * @param covered 本批次已经从 {@code material_consumptions} 取到的行；同一物料批次不重复并入
+     * @param plansMerged 已并入过的计划 id；同一计划的多个生产批次只并入一次
+     */
+    private List<MaterialConsumption> settlementConsumptionsFor(
+            String factoryId,
+            ProductionBatch batch,
+            List<MaterialConsumption> covered,
+            java.util.Set<String> plansMerged) {
+        if (settlementConsumptionRepository == null || batch == null
+                || batch.getProductionPlanId() == null) {
+            return List.of();
+        }
+        String planId = batch.getProductionPlanId();
+        if (!plansMerged.add(planId)) {
+            return List.of();   // 这个计划已经并过了, 多批次不重复计
+        }
+        List<ProductionSettlementConsumption> rows;
+        try {
+            rows = settlementConsumptionRepository
+                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId);
+        } catch (RuntimeException ex) {
+            // ⛔ 读不到结单领用不能让整个成本分解挂掉, 但也不装作没这回事 —— 留痕给排查用。
+            log.warn("[M67CostBreakdown] 结单领用行读不出来 factory={} plan={}: {}",
+                    factoryId, planId, ex.getMessage());
+            return List.of();
+        }
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        java.util.Set<String> coveredBatchIds = covered.stream()
+                .map(MaterialConsumption::getBatchId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<MaterialConsumption> merged = new ArrayList<>();
+        for (ProductionSettlementConsumption r : rows) {
+            if (r == null || r.getMaterialBatchId() == null
+                    || coveredBatchIds.contains(r.getMaterialBatchId())) {
+                continue;   // 已经从 material_consumptions 取到了, 不重复计
+            }
+            MaterialBatch mb = materialBatchRepository
+                    .findByIdAndFactoryId(r.getMaterialBatchId(), factoryId).orElse(null);
+            BigDecimal unitPrice = mb == null ? null : mb.getUnitPrice();
+            BigDecimal qty = r.getQuantity();
+            MaterialConsumption c = new MaterialConsumption();
+            c.setFactoryId(factoryId);
+            c.setProductionPlanId(planId);
+            c.setProductionBatchId(batch.getId());
+            c.setBatchId(r.getMaterialBatchId());
+            c.setMaterialTypeId(r.getMaterialTypeId());
+            c.setSourceType(r.getSourceType());
+            c.setQuantity(qty);
+            c.setUnitPrice(unitPrice);
+            // ⛔ 价未知就让 totalCost 保持 null: 下游 traceCost 的 nz() 会当 0 算,
+            //    而 missingCostItems 靠 unitPrice/totalCost 皆为 null 才报得出「缺价」。
+            c.setTotalCost(unitPrice == null || qty == null ? null : qty.multiply(unitPrice));
+            c.setConsumptionTime(r.getCreatedAt());
+            merged.add(c);
+        }
+        if (!merged.isEmpty()) {
+            log.info("[M67CostBreakdown] 并入结单领用 {} 行 factory={} plan={}",
+                    merged.size(), factoryId, planId);
+        }
+        return merged;
+    }
+
+    private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {
+        BigDecimal own = nz(c.getTotalCost());
+        if (c.getBatchId() == null) {
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        if (depth >= MAX_DEPTH) {
+            log.warn("[M67CostBreakdown] traceCost 达 MAX_DEPTH={} (factory={}, batchId={}) — 按叶子截断, 疑似超深链/环", MAX_DEPTH, factoryId, c.getBatchId());
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
+        if (mb == null || !"PRODUCTION_BATCH".equalsIgnoreCase(mb.getSourceDocType()) || mb.getSourceDocId() == null) {
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};   // 叶子 (原料/外购)
+        }
+        Long upstreamBatchId = parseLong(mb.getSourceDocId());
+        if (upstreamBatchId == null) {
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        if (!visited.add(upstreamBatchId)) {   // 真环检测: 该上游批次已在**当前回溯路径**(祖先链)
+            log.warn("[M67CostBreakdown] 检测到批次谱系环 (factory={}, upstreamBatchId={}) — 截断防无限递归", factoryId, upstreamBatchId);
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        // ★ 严格审计 2026-06-25: visited 改**路径作用域**(出栈即移除) —— 否则 diamond(同上游被多个兄弟
+        // 消耗, 如 焯水1-1+焯水1-2 都源自滚揉1-1) 第二条路径被误判为环 → 回退 own(WIP含labor) → labor
+        // 漏进 raw。双计由下方 consumedQty/upstreamQty 分摊防, 不靠 visited, 故移除合法 diamond 不双计。
+        List<MaterialConsumption> up = consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId);
+        if (up.isEmpty()) {
+            visited.remove(upstreamBatchId);
+            return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
+        }
+        BigDecimal sum = BigDecimal.ZERO;
+        int maxChildDepth = depth;
+        for (MaterialConsumption u : up) {
+            BigDecimal[] r = traceCost(factoryId, u, depth + 1, visited);
+            sum = sum.add(r[0]);
+            maxChildDepth = Math.max(maxChildDepth, r[1].intValue());
+        }
+        // ★ SP-B1: 按消耗比例分摊上游成本, 防共享上游双重计数。
+        // 向后兼容(Opus 终审收紧): 仅当 consumedQty 与 upstreamReceiptQty 都可用时才分摊;
+        // 1:1 全量消耗时 consumedQty==upstreamReceiptQty → 比例=1 → apportioned==sum (无变化)。
+        // 缺量兜底**严格保留改前行为** (sum>0?sum:own), 不切换到 own —— 避免影响 receiptQuantity
+        // 缺失的既有订单成本数据。新 SP-B1 物化的 WIP 批必带 receiptQuantity, 故分摊分支总能命中。
+        // ★ 严格审计 2026-06-25 (Edge G): 真实 0 消耗 (consumedQty 显式 = 0, 非 null) →
+        // 本批未从该上游源取料, 贡献 0 成本。**显式 0 必须早返回**, 否则下方 legacy 兜底
+        // (sum>0?sum:own) + L 末 (apportioned>0?apportioned:own) 两处都会把它推成"全量", 造成
+        // 混批 feed=0 的源被全额计入 → 原料虚高 (Edge G: g1投50+g2投0, 原料应 466 实得 932)。
+        // 仅对**显式 0** 生效; consumedQty 为 null (缺量旧数据) 仍走下方 legacy 兜底, 零回归。
+        if (c.getQuantity() != null && c.getQuantity().signum() == 0) {
+            visited.remove(upstreamBatchId);
+            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.valueOf(maxChildDepth)};
+        }
+        BigDecimal legacy = sum.signum() > 0 ? sum : own;
+        BigDecimal consumedQty = nz(c.getQuantity());
+        BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
+        BigDecimal apportioned;
+        if (sum.signum() > 0 && consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
+            apportioned = sum.multiply(consumedQty)
+                    .divide(upstreamQty, 4, java.math.RoundingMode.HALF_UP);
+        } else {
+            apportioned = legacy;   // 缺量数据 → 改前行为, 既有数据零回归
+        }
+        visited.remove(upstreamBatchId);   // 路径作用域出栈 (见上方 diamond 注释)
+        return new BigDecimal[]{apportioned.signum() > 0 ? apportioned : own, BigDecimal.valueOf(maxChildDepth)};
+    }
+
+    /**
+     * SP-F ①b: 沿 WIP 链回溯, 累加上游 *生产批次* 的 人工/调料 成本, 按与 {@link #traceCost} 完全相同的
+     * {@code consumedQty/upstreamReceiptQty} 比例分摊。返回 {@code [labor, seasoning]}。
+     *
+     * <p><b>仅 WIP 链 (clerk/逐工序录入) 受影响:</b> 只有当某消耗的上游 {@link MaterialBatch} 是
+     * {@code sourceDocType='PRODUCTION_BATCH'} 且该生产批有自己的消耗时, 才递归进上游并累加其
+     * 人工/调料。常规生产批次不产出此类 MaterialBatch 被消耗 (它们经成品库存/SemiFinishedInventory 流转,
+     * 非 MaterialConsumption→MaterialBatch(PRODUCTION_BATCH) 链), 故 {@code aggregate} 在常规批上
+     * 命中 leaf-分支立即返回 [0,0] —— 对常规批成本拆分零回归。
+     *
+     * <p>本批自身的人工/调料<b>不</b>在此累加 (已由 computeForBatches 的 getYield 主循环计入);
+     * 此方法从上游 (depth≥2) 起累加, 避免双计。叶子/缺量/环/超深 → 返回 [0,0]。
+     *
+     * <p>分摊镜像 traceCost: 上游成本 sum × consumedQty/upstreamReceiptQty。1:1 全量消耗时比例=1。
+     * 缺量 (consumedQty/upstreamReceiptQty 任一为 null/0) → 不分摊, 取上游全额 (与 traceCost 的
+     * legacy 兜底一致, WIP 物化批必带 receiptQuantity 故分摊分支总命中)。
+     */
+    private BigDecimal[] aggregateUpstreamLaborSeasoning(String factoryId, MaterialConsumption c,
+                                                         int depth, java.util.Set<Long> visited) {
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        if (c.getBatchId() == null || depth >= MAX_DEPTH) {
+            return zero;
+        }
+        MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
+        if (mb == null || !"PRODUCTION_BATCH".equalsIgnoreCase(mb.getSourceDocType()) || mb.getSourceDocId() == null) {
+            return zero;   // 叶子 (原料/外购) — 无上游生产批, 无可累加的人工/调料
+        }
+        Long upstreamBatchId = parseLong(mb.getSourceDocId());
+        if (upstreamBatchId == null || !visited.add(upstreamBatchId)) {
+            return zero;   // 解析失败 或 环 → 截断
+        }
+        // 上游生产批自身的 人工/调料 (该批的 getYield)
+        BigDecimal[] self = batchLaborSeasoning(factoryId, upstreamBatchId);
+        BigDecimal labor = self[0];
+        BigDecimal seasoning = self[1];
+        BigDecimal byproductCredit = self[2];   // ★ 副产回收沿 WIP 链传播 (严格审计 2026-06-25)
+        // 再递归该上游批的消耗 → 更上游的 人工/调料/副产
+        for (MaterialConsumption u : consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId)) {
+            BigDecimal[] r = aggregateUpstreamLaborSeasoning(factoryId, u, depth + 1, visited);
+            labor = labor.add(r[0]);
+            seasoning = seasoning.add(r[1]);
+            byproductCredit = byproductCredit.add(r[2]);
+        }
+        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料/副产 × consumedQty/upstreamReceiptQty。
+        BigDecimal consumedQty = nz(c.getQuantity());
+        BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
+        if (consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
+            labor = labor.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            seasoning = seasoning.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            byproductCredit = byproductCredit.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+        }
+        // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
+        // ★ 严格审计 2026-06-25: 路径作用域出栈 — 允许兄弟 diamond 路径遍历同上游
+        // (否则第二条路径被误判为环 → 返 zero → diamond 下 labor/调料/副产少计; 镜像 traceCost)。
+        visited.remove(upstreamBatchId);
+        return new BigDecimal[]{labor, seasoning, byproductCredit};
+    }
+
+    /**
+     * SP-F ①b: 计算单个生产批次 *自身* (不含上游链) 的 人工/调料 成本, 返回 {@code [labor, seasoning]}。
+     *
+     * <p>人工 = {@code getYield(batchId).totalLaborCost}。调料 = Σ 该批各道 SEASONING 桶 materialCost
+     * (按 {@link #resolveCostBucket} 分类; 与 computeForBatches 主循环同口径, 含 AUDIT-004 共享锅分摊)。
+     * 这是为 WIP 上游批准备的 —— clerk WIP 批的调料报工不带共享锅 (auxPotNo=null), 故走原样累加分支。
+     */
+    private BigDecimal[] batchLaborSeasoning(String factoryId, Long batchId) {
+        BatchYieldDTO y = yieldReportService.getYield(factoryId, batchId);
+        if (y == null) {
+            return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        }
+        BigDecimal labor = nz(y.getTotalLaborCost());
+        BigDecimal seasoning = BigDecimal.ZERO;
+        // ★ 严格审计 2026-06-25: 同时归集本批副产回收 (qty×unitPrice), 供上游 WIP 链传播
+        // (多批链场景: 副产在上游半成品批回收, 之前不传播到成品批 byproductCredit → 回收额丢失)。
+        java.util.LinkedHashMap<String, ByproductLine> bpAcc = new java.util.LinkedHashMap<>();
+        List<StepYieldDTO> steps = y.getSteps() == null ? List.of() : y.getSteps();
+        for (int i = 0; i < steps.size(); i++) {
+            StepYieldDTO step = steps.get(i);
+            accumulateByproducts(bpAcc, step.getByproducts());   // 副产不依赖 materialCost, 先于下方 null-check
+            BigDecimal m = step.getMaterialCost();
+            if (m == null) {
+                continue;
+            }
+            String bucket = resolveCostBucket(step.getCostCategory(), i, steps.size(), factoryId, "WIP:" + batchId);
+            if (!"SEASONING".equals(bucket)) {
+                continue;   // 只取 SEASONING 桶; PACKAGING/SKIP 不计 (包装由末道成品计, 原料由 traceCost 承载)
+            }
+            BigDecimal contribution = m;
+            if (step.getAuxPotNo() != null && step.getAuxPotTotalCost() != null) {
+                BigDecimal potOutput = nz(productionReportRepository.sumOutputByAuxPotNo(factoryId, step.getAuxPotNo()));
+                BigDecimal myOutput = nz(step.getTotalOutput());
+                contribution = potOutput.signum() > 0
+                        ? step.getAuxPotTotalCost().multiply(myOutput).divide(potOutput, 2, RoundingMode.HALF_UP)
+                        : step.getAuxPotTotalCost();
+            }
+            seasoning = seasoning.add(contribution);
+        }
+        BigDecimal byproductCredit = bpAcc.values().stream().map(l -> nz(l.getValue())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new BigDecimal[]{labor, seasoning, byproductCredit};
+    }
+
+    /**
+     * 归集副产物明细 (名称|单位 维度跨批次累加)。变现价值 = quantity×unitPrice;
+     * 报工 jsonb 可直接录 value/totalValue (优先), 否则按 quantity×unitPrice; 单价缺失 → value=null (诚实, 不臆造)。
+     */
+    private void accumulateByproducts(LinkedHashMap<String, ByproductLine> acc, List<Map<String, Object>> raws) {
+        if (raws == null) {
+            return;
+        }
+        for (Map<String, Object> r : raws) {
+            if (r == null) {
+                continue;
+            }
+            String name = r.get("name") == null ? "副产物" : String.valueOf(r.get("name")).trim();
+            String unit = r.get("unit") == null ? "" : String.valueOf(r.get("unit")).trim();
+            BigDecimal qty = toBigDecimal(r.get("quantity"));
+            BigDecimal unitPrice = toBigDecimal(r.get("unitPrice"));
+            BigDecimal value = toBigDecimal(r.get("value"));
+            if (value == null) {
+                value = toBigDecimal(r.get("totalValue"));
+            }
+            if (value == null && qty != null && unitPrice != null) {
+                value = qty.multiply(unitPrice);
+            }
+            String key = name + "|" + unit;
+            ByproductLine line = acc.get(key);
+            if (line == null) {
+                line = ByproductLine.builder().name(name).unit(unit)
+                        .quantity(BigDecimal.ZERO).build();
+                acc.put(key, line);
+            }
+            if (qty != null) {
+                line.setQuantity(nz(line.getQuantity()).add(qty));
+            }
+            if (value != null) {
+                line.setValue(nz(line.getValue()).add(value));
+            }
+            // 归集后 unitPrice 由 value/quantity 反推 (混录多单价时取加权), 仅 value 有值时
+            if (line.getValue() != null && line.getQuantity() != null && line.getQuantity().signum() > 0) {
+                line.setUnitPrice(line.getValue().divide(line.getQuantity(), 4, RoundingMode.HALF_UP));
+            }
+        }
+    }
+
+    /**
+     * AUDIT-002: 归集包装明细 (名称维度跨批次累加成本)。jsonb [{name, cost}]; cost 缺失则按 quantity×unitPrice。
+     */
+    private void accumulatePackaging(LinkedHashMap<String, BigDecimal> acc, List<Map<String, Object>> raws) {
+        if (raws == null) {
+            return;
+        }
+        for (Map<String, Object> r : raws) {
+            if (r == null) {
+                continue;
+            }
+            String name = r.get("name") == null ? "其他" : String.valueOf(r.get("name")).trim();
+            BigDecimal cost = toBigDecimal(r.get("cost"));
+            if (cost == null) {
+                BigDecimal qty = toBigDecimal(r.get("quantity"));
+                BigDecimal unitPrice = toBigDecimal(r.get("unitPrice"));
+                if (qty != null && unitPrice != null) {
+                    cost = qty.multiply(unitPrice);
+                }
+            }
+            if (cost == null) {
+                continue;   // 无成本信息的明细项跳过 (诚实, 不臆造)
+            }
+            acc.merge(name, cost, BigDecimal::add);
+        }
+    }
+
+    private PinnedPackagingResult resolvePinnedPackaging(String factoryId, ProductionPlan plan,
+                                                          BigDecimal outputQuantity, String outputUnit) {
+        if (plan == null || plan.getSelectedBomRecipeId() == null || plan.getSelectedBomVersion() == null) {
+            return PinnedPackagingResult.notPinned();
+        }
+        List<String> missing = new ArrayList<>();
+        if (bomVersionRepository == null) {
+            missing.add("PINNED_BOM_SNAPSHOT_UNAVAILABLE:" + plan.getId());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        BomVersion version = bomVersionRepository
+                .findByFactoryIdAndBomRecipeIdOrderByVersionNumberDesc(factoryId, plan.getSelectedBomRecipeId())
+                .stream()
+                .filter(item -> Objects.equals(item.getVersionNumber(), plan.getSelectedBomVersion()))
+                .findFirst()
+                .orElse(null);
+        if (version == null || version.getSnapshotJson() == null) {
+            missing.add("PINNED_BOM_SNAPSHOT_MISSING:" + plan.getSelectedBomRecipeId()
+                    + ":v" + plan.getSelectedBomVersion());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        Map<String, Object> snapshot = version.getSnapshotJson();
+        BigDecimal recipeOutput = toBigDecimal(snapshot.get("outputQuantityPerUnit"));
+        String recipeOutputUnit = snapshot.get("outputUnit") == null ? null
+                : String.valueOf(snapshot.get("outputUnit"));
+        BigDecimal outputInRecipeUnit = convertPinnedOutputQuantity(
+                outputQuantity, outputUnit, recipeOutputUnit, plan);
+        if (outputInRecipeUnit == null || outputInRecipeUnit.signum() <= 0 || recipeOutput == null
+                || recipeOutput.signum() <= 0) {
+            missing.add("PINNED_BOM_OUTPUT_BASIS_UNVERIFIABLE:" + plan.getSelectedBomRecipeId()
+                    + ":v" + plan.getSelectedBomVersion());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        BigDecimal scale = outputInRecipeUnit.divide(recipeOutput, 12, RoundingMode.HALF_UP);
+        Object rawItems = snapshot.get("items");
+        if (!(rawItems instanceof List<?> items)) {
+            missing.add("PINNED_BOM_ITEMS_MISSING:" + plan.getSelectedBomRecipeId()
+                    + ":v" + plan.getSelectedBomVersion());
+            return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
+        }
+        List<PackagingDetail> details = new ArrayList<>();
+        BigDecimal knownCost = BigDecimal.ZERO;
+        for (Object rawItem : items) {
+            if (!(rawItem instanceof Map<?, ?> item)
+                    || !"PACKAGING".equalsIgnoreCase(String.valueOf(item.get("materialCategory")))) {
+                continue;
+            }
+            String materialCode = stringValue(item.get("materialTypeId"));
+            String materialName = stringValue(item.get("materialName"));
+            BigDecimal standardQuantity = toBigDecimal(item.get("standardQuantity"));
+            BigDecimal quantity = standardQuantity == null ? null : standardQuantity.multiply(scale);
+            BigDecimal pinnedItemCost = toBigDecimal(item.get("itemCost"));
+            BigDecimal amount = pinnedItemCost == null ? null : pinnedItemCost.multiply(scale);
+            BigDecimal effectiveUnitPrice = pinnedItemCost != null && standardQuantity != null
+                    && standardQuantity.signum() > 0
+                    ? pinnedItemCost.divide(standardQuantity, 8, RoundingMode.HALF_UP)
+                    : null;
+            boolean collected = quantity != null && amount != null;
+            String missingKey = "PACKAGING_PRICE:" + (materialCode == null ? materialName : materialCode);
+            if (!collected) missing.add(missingKey);
+            if (amount != null) knownCost = knownCost.add(amount);
+            details.add(PackagingDetail.builder()
+                    .materialCode(materialCode)
+                    .materialName(materialName)
+                    .quantity(quantity)
+                    .unit(stringValue(item.get("unit")))
+                    .unitPrice(effectiveUnitPrice)
+                    .priceSource("PINNED_BOM_ITEM_COST:v" + version.getVersionNumber())
+                    .amount(amount)
+                    .collectionStatus(collected ? "COLLECTED" : "MISSING_PRICE")
+                    .missingReason(collected ? null : "pinned BOM 缺少可验证 itemCost/标准耗用量")
+                    .build());
+        }
+        return new PinnedPackagingResult(true, knownCost, details, missing);
+    }
+
+    private void accumulateLaborDetails(List<LaborDetail> details, List<String> missing,
+                                        StepYieldDTO step, boolean auditEligible) {
+        List<Map<String, Object>> segments = step.getLaborSegments();
+        if (segments == null || segments.isEmpty()) {
+            if (step.getTotalWorkMinutes() == null && step.getTotalWorkers() == null
+                    && step.getLaborCost() == null) {
+                return;
+            }
+            int workers = step.getTotalWorkers() == null ? 0 : step.getTotalWorkers();
+            int duration = step.getTotalWorkMinutes() == null ? 0 : step.getTotalWorkMinutes();
+            addLaborDetail(details, missing, step, workers, null, null, duration,
+                    workers * duration, step.getLaborCost(), auditEligible);
+            return;
+        }
+        int totalLaborMinutes = 0;
+        for (Map<String, Object> segment : segments) {
+            Integer workers = toInteger(segment.get("headcount"));
+            Integer duration = durationMinutes(stringValue(segment.get("startTime")),
+                    stringValue(segment.get("endTime")));
+            if (workers != null && duration != null) totalLaborMinutes += workers * duration;
+        }
+        BigDecimal rate = step.getLaborCost() != null && totalLaborMinutes > 0
+                ? step.getLaborCost().multiply(BigDecimal.valueOf(60))
+                        .divide(BigDecimal.valueOf(totalLaborMinutes), 8, RoundingMode.HALF_UP)
+                : null;
+        for (Map<String, Object> segment : segments) {
+            Integer workers = toInteger(segment.get("headcount"));
+            String start = stringValue(segment.get("startTime"));
+            String end = stringValue(segment.get("endTime"));
+            Integer duration = durationMinutes(start, end);
+            int laborMinutes = workers == null || duration == null ? 0 : workers * duration;
+            addLaborDetail(details, missing, step, workers == null ? 0 : workers, start, end,
+                    duration == null ? 0 : duration, laborMinutes, rate == null ? null
+                            : rate.multiply(BigDecimal.valueOf(laborMinutes))
+                                    .divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP), auditEligible);
+        }
+    }
+
+    private void addLaborDetail(List<LaborDetail> details, List<String> missing, StepYieldDTO step,
+                                int workers, String start, String end, int duration, int laborMinutes,
+                                BigDecimal amount, boolean auditEligible) {
+        BigDecimal hours = laborMinutes > 0
+                ? BigDecimal.valueOf(laborMinutes).divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP)
+                : null;
+        BigDecimal rate = amount != null && hours != null && hours.signum() > 0
+                ? amount.divide(hours, 8, RoundingMode.HALF_UP) : null;
+        boolean collected = workers > 0 && duration > 0 && rate != null;
+        if (!collected && auditEligible) {
+            missing.add("LABOR_RATE_OR_TIME:process-" + step.getProcessOrder());
+        }
+        details.add(LaborDetail.builder()
+                .processOrder(step.getProcessOrder())
+                .processName(step.getProcessName())
+                .workerCount(workers > 0 ? workers : null)
+                .startTime(start)
+                .endTime(end)
+                .durationMinutes(duration > 0 ? duration : null)
+                .laborMinutes(laborMinutes > 0 ? laborMinutes : null)
+                .laborHours(hours)
+                .hourlyRate(rate)
+                .rateSource(rate == null ? null : "DERIVED_FROM_PERSISTED_REPORT_LABOR_COST")
+                .amount(amount)
+                .collectionStatus(collected ? "COLLECTED" : "UNCOLLECTED")
+                .missingReason(collected ? null : "缺少可验证工时段或持久化人工成本")
+                .build());
+    }
+
+    private BigDecimal toPinnedKilograms(BigDecimal quantity, String unit, ProductionPlan plan) {
+        if (quantity == null || unit == null) return null;
+        String normalized = normalizeUnit(unit);
+        if ("kg".equals(normalized)) return quantity;
+        if ("g".equals(normalized)) {
+            return quantity.divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+        }
+        if (plan == null || plan.getPlannedNetWeightGrams() == null
+                || plan.getPlannedNetWeightGrams().signum() <= 0
+                || !sameUnit(unit, plan.getPlannedUnit())) {
+            return null;
+        }
+        return quantity.multiply(plan.getPlannedNetWeightGrams())
+                .divide(BigDecimal.valueOf(1000), 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal convertPinnedOutputQuantity(BigDecimal quantity, String fromUnit,
+                                                    String toUnit, ProductionPlan plan) {
+        if (quantity == null || fromUnit == null || toUnit == null) return null;
+        if (sameUnit(fromUnit, toUnit)) return quantity;
+        BigDecimal kilograms = toPinnedKilograms(quantity, fromUnit, plan);
+        if (kilograms == null) return null;
+        String normalizedTarget = normalizeUnit(toUnit);
+        if ("kg".equals(normalizedTarget)) return kilograms;
+        if ("g".equals(normalizedTarget)) return kilograms.multiply(BigDecimal.valueOf(1000));
+        if (plan == null || plan.getPlannedNetWeightGrams() == null
+                || plan.getPlannedNetWeightGrams().signum() <= 0
+                || !sameUnit(toUnit, plan.getPlannedUnit())) {
+            return null;
+        }
+        return kilograms.multiply(BigDecimal.valueOf(1000))
+                .divide(plan.getPlannedNetWeightGrams(), 8, RoundingMode.HALF_UP);
+    }
+
+    private static String mergeUnit(String current, String next) {
+        if (next == null) return current;
+        if (current == null) return next;
+        if ("__MIXED__".equals(current)) return current;
+        return sameUnit(current, next) ? current : "__MIXED__";
+    }
+
+    private static boolean sameUnit(String left, String right) {
+        return left != null && right != null && Objects.equals(normalizeUnit(left), normalizeUnit(right));
+    }
+
+    /**
+     * 订单成本拆分的单位归一 —— 走权威表的<b>跨语言</b>归一。
+     *
+     * <p>原表与 {@code YieldReportServiceImpl.normalizeUnit} 是<b>逐字相同的两份拷贝</b>,
+     * 都只认 5 组。判错时 {@code sameUnit} 返回 false → {@code toPinnedKilograms} 返回 null
+     * → 该行成本在 M67 页显示<b>「未归集」</b> (不会算出错数, 但也拿不到)。</p>
+     *
+     * <p>用 {@code crossLanguageCode} 而非 {@code canonicalCodeOrRaw}: 后者会把 只/个/件
+     * 并成 pcs, 违反 #1976「一只 ≠ 一件」。</p>
+     */
+    private static String normalizeUnit(String unit) {
+        if (unit == null || unit.isBlank()) return null;
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(unit);
+    }
+
+    private static Integer durationMinutes(String start, String end) {
+        if (start == null || end == null) return null;
+        try {
+            LocalTime from = LocalTime.parse(start);
+            LocalTime to = LocalTime.parse(end);
+            long minutes = ChronoUnit.MINUTES.between(from, to);
+            if (minutes < 0) minutes += 24 * 60;
+            return Math.toIntExact(minutes);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Integer toInteger(Object value) {
+        BigDecimal decimal = toBigDecimal(value);
+        return decimal == null ? null : decimal.intValue();
+    }
+
+    private static String stringValue(Object value) {
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static BigDecimal positiveOrNull(BigDecimal... values) {
+        for (BigDecimal value : values) {
+            if (value != null && value.signum() > 0) return value;
+        }
+        return null;
+    }
+
+    private static <T, K> T uniqueOrNull(List<T> values, java.util.function.Function<T, K> key) {
+        if (values == null || values.isEmpty()) return null;
+        T first = values.get(0);
+        K firstKey = key.apply(first);
+        return values.stream().allMatch(value -> Objects.equals(firstKey, key.apply(value))) ? first : null;
+    }
+
+    private record PinnedPackagingResult(boolean pinned, BigDecimal knownCost,
+                                         List<PackagingDetail> details, List<String> missingItems) {
+        private static PinnedPackagingResult notPinned() {
+            return new PinnedPackagingResult(false, BigDecimal.ZERO, List.of(), List.of());
+        }
+    }
+
+    /**
+     * CALC-003: 解析本道材料成本归入哪个桶 — PACKAGING(包装) / SEASONING(调料) / SKIP(原料, 由上游 traced 承载不计)。
+     * 显式 costCategory 优先 (分类不依赖工序顺序); null 或未知值 → 回退 step-index 启发式 (末道=包装, 中间道=调料, 首道=原料)。
+     */
+    private String resolveCostBucket(String costCategory, int idx, int stepCount, String factoryId, String orderId) {
+        if (costCategory != null) {
+            switch (costCategory.trim().toUpperCase()) {
+                case "PACKAGING":
+                    return "PACKAGING";
+                case "SEASONING":
+                case "AUXILIARY":
+                case "OTHER":
+                    return "SEASONING";
+                case "RAW_MATERIAL":
+                    return "SKIP";   // 原料由上游 traced consumption 承载, 不计
+                default:
+                    log.warn("[M67CostBreakdown] 未知 costCategory={} (factory={}, order={}) — 回退 step-index 启发式",
+                            costCategory, factoryId, orderId);
+                    // 落入下方启发式
+            }
+        }
+        // 启发式 (向后兼容): 首道=原料(traced 承载, SKIP) > 末道=包装 > 中间道=调料。
+        // 首道优先判断: 单工序批次(stepCount==1, 首道即末道)归 SKIP 而非 PACKAGING,
+        // 否则其 materialCost 会与 traced consumption 的原料重复计 (单工序批次启发式双计 bug)。
+        if (idx == 0) {
+            return "SKIP";
+        }
+        if (idx == stepCount - 1) {
+            return "PACKAGING";
+        }
+        return "SEASONING";
+    }
+
+    private static BigDecimal toBigDecimal(Object o) {
+        if (o == null) {
+            return null;
+        }
+        if (o instanceof BigDecimal) {
+            return (BigDecimal) o;
+        }
+        if (o instanceof Number) {
+            return new BigDecimal(o.toString());
+        }
+        try {
+            String s = o.toString().trim();
+            return s.isEmpty() ? null : new BigDecimal(s);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void maskCosts(OrderCostBreakdownDTO dto) {
+        dto.setRawMaterialCost(null);
+        dto.setLaborCost(null);
+        dto.setSeasoningCost(null);
+        dto.setPackagingCost(null);
+        dto.setEquipmentCost(null);
+        dto.setOtherCost(null);
+        dto.setSemiFeedCost(null);
+        dto.setTotalCost(null);
+        dto.setPerBoxCost(null);
+        dto.setKnownCostSubtotal(null);    // 脱敏一律清空: 展示口径也是金额
+        dto.setKnownPerBoxCost(null);
+        dto.setByproductCredit(null);
+        dto.setNetTotalCost(null);
+        dto.setNetPerBoxCost(null);
+        dto.setSellablePerBoxCost(null);   // 成本派生; sampleRetainCount/sellableBoxCount/wasteQuantity 是物理量, 保留
+        if (dto.getByproducts() != null) {
+            for (ByproductLine l : dto.getByproducts()) {
+                l.setUnitPrice(null);
+                l.setValue(null);   // 价值/单价价格敏感; 保留 name/quantity/unit (物理量)
+            }
+        }
+        if (dto.getSources() != null) {
+            for (SourceCost s : dto.getSources()) {
+                s.setUnitPrice(null);
+                s.setCost(null);
+                s.setCostSharePct(null);
+            }
+        }
+        if (dto.getPackagingDetail() != null) {
+            for (PackagingItem p : dto.getPackagingDetail()) {
+                p.setCost(null);   // 成本敏感; 保留 name (包材项名是物理信息)
+            }
+        }
+        if (dto.getAuxiliaryAllocations() != null) {
+            for (OrderCostBreakdownDTO.AuxiliaryAllocation a : dto.getAuxiliaryAllocations()) {
+                a.setPotTotalCost(null);
+                a.setBatchShare(null);   // 金额敏感; 保留 potNo/method/产出量/占比 (物理量)
+            }
+        }
+        if (dto.getRawMaterialDetails() != null) {
+            for (RawMaterialDetail detail : dto.getRawMaterialDetails()) {
+                detail.setUnitPrice(null);
+                detail.setAmount(null);
+            }
+        }
+        if (dto.getPackagingDetails() != null) {
+            for (PackagingDetail detail : dto.getPackagingDetails()) {
+                detail.setUnitPrice(null);
+                detail.setAmount(null);
+            }
+        }
+        if (dto.getLaborDetails() != null) {
+            for (LaborDetail detail : dto.getLaborDetails()) {
+                detail.setHourlyRate(null);
+                detail.setAmount(null);
+            }
+        }
+    }
+
+    private OrderCostBreakdownDTO empty(String orderId, boolean maskPrice) {
+        return OrderCostBreakdownDTO.builder()
+                .orderId(orderId).boxCount(0).hasData(false).priceMasked(maskPrice)
+                .calculatedAt(LocalDateTime.now()).calculationStatus("NO_DATA")
+                .missingCostItemCount(0).missingCostItems(List.of())
+                .sources(List.of()).byproducts(List.of())
+                .rawMaterialDetails(List.of()).packagingDetails(List.of()).laborDetails(List.of())
+                .build();
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    private static Long parseLong(String s) {
+        try {
+            return Long.parseLong(s.trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+}

@@ -1,0 +1,72 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const source = (path: string): string =>
+  readFileSync(resolve(process.cwd(), path), 'utf8');
+
+describe('label QC training lifecycle UI contract', () => {
+  const page = source('src/views/quality/label-qc/index.vue');
+  const api = source('src/api/labelQc.ts');
+
+  it('separates daily review, reviewed-data management, and archives', () => {
+    expect(page).toContain('待人工审核');
+    expect(page).toContain('已审核整理');
+    expect(page).toContain('归档记录');
+    expect(page).toContain('归档不删除，可随时恢复');
+    expect(api).toContain('/archive');
+    expect(api).toContain('/restore');
+  });
+
+  it('keeps backup export separate from approved training export', () => {
+    expect(page).toContain('下载照片备份');
+    expect(page).toContain('createPhotoArchive');
+    expect(page.indexOf('const archive = await createPhotoArchive'))
+      .toBeLessThan(page.indexOf('const recordResponse = await backupLabelQcTask'));
+    expect(page).toContain('导出已批准训练集');
+    expect(api).toContain('/backup');
+    expect(api).toContain('/training-export');
+  });
+
+  it('supports reviewed-task selection and builds one complete bulk archive before audit writes', () => {
+    expect(page).toContain('type="selection"');
+    expect(page).toContain(':selectable="canSelectForPhotoBackup"');
+    expect(page).toContain('批量下载照片');
+    expect(page).toContain('createBulkPhotoArchive');
+    expect(page.indexOf('const archive = await createBulkPhotoArchive(details);'))
+      .toBeLessThan(page.indexOf('const recordResults = await Promise.allSettled'));
+    expect(page.indexOf('const recordResults = await Promise.allSettled'))
+      .toBeLessThan(page.indexOf('downloadPhotoArchive(archive);', page.indexOf('async function backupSelectedTasks')));
+  });
+
+  it('narrows the queue by production date and allows big pages before exporting', () => {
+    expect(page).toContain('生产日期起');
+    expect(page).toContain('生产日期止');
+    expect(page).toContain('productionDateFrom: productionDateRange.value?.[0]');
+    expect(page).toContain('productionDateTo: productionDateRange.value?.[1]');
+    expect(page).toContain('const PAGE_SIZES = [20, 50, 100, 200, 500];');
+    expect(page).toContain(':page-sizes="PAGE_SIZES"');
+    expect(page).toContain('@size-change="changePageSize"');
+    expect(api).toContain('productionDateFrom');
+    expect(api).toContain('productionDateTo');
+  });
+
+  it('gates explicit training approval behind the system permission', () => {
+    expect(page).toContain("permissions.includes('system:read_write')");
+    expect(page).toContain('批准训练');
+    expect(page).toContain('拒绝训练');
+    expect(page).toContain('此操作不会自动训练或发布模型');
+    expect(api).toContain('/training-decision');
+  });
+
+  it('keeps the customer risk queue separate from platform training truth', () => {
+    expect(api).toContain("| 'AUTO_PASSED'");
+    expect(page).toContain("? ['NEEDS_REVIEW', 'ANALYSIS_FAILED']");
+    expect(page).toContain(": ['AUTO_PASSED', 'REVIEWED']");
+    expect(page).toContain('客户只处理 AI 风险与无法判断照片');
+    expect(page).toContain("row.status === 'AUTO_PASSED'");
+    expect(page).toContain('非人工真值');
+    expect(page).toContain("return task.status === 'REVIEWED'");
+    expect(page).toContain("<template v-if=\"row.status === 'REVIEWED'\">");
+  });
+});

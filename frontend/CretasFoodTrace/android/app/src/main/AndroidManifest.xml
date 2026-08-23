@@ -1,0 +1,37 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+  <uses-permission android:name="android.permission.CAMERA"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+  <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.BROWSABLE"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:usesCleartextTraffic="true" android:fullBackupContent="@xml/secure_store_backup_rules" android:dataExtractionRules="@xml/secure_store_data_extraction_rules">
+    <meta-data android:name="expo.modules.updates.CODE_SIGNING_CERTIFICATE" android:value="-----BEGIN CERTIFICATE-----&#xA;MIIC+zCCAeOgAwIBAgIJfwrMMBYAMBEPMA0GCSqGSIb3DQEBCwUAMCcxJTAjBgNV&#xA;BAMTHENyZXRhcyBPVEEgQ29kZSBTaWduaW5nIDIwMjYwHhcNMjYwNzI2MTIwMTIz&#xA;WhcNMzYwNzI2MTIwMTIzWjAnMSUwIwYDVQQDExxDcmV0YXMgT1RBIENvZGUgU2ln&#xA;bmluZyAyMDI2MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxGYlufhV&#xA;oBsN2BznlDcjkRLHv7vPDjDLjwMNIL77MM9AvqeNr6v3Opw52G+0gXy61uJommKR&#xA;tBnBUwx2J6xWD2rbJEGEwSS63EgnnEAmlDRvfkvm5gvEN7cyQItQWBqJMepF02Cl&#xA;E3Erjc9NqZPOigh7itPXFYbw9he8E7m1+Q6XquyxWCGfEBBrf3xuL9lJXBKwySNq&#xA;em/KLdi1dtlkz4bIwgqYFjPYbNt5Z/aaiT0sVZwCI6TsQaVY2wtK3NxuqydeyBiX&#xA;F96p7UaWdHk7RP6WYuPXl9hR+9snDq1+k9QUrt1oFQxS3Ai+pFL/B8NpsLcL/3R0&#xA;vMKM6kspBGQJzwIDAQABoyowKDAOBgNVHQ8BAf8EBAMCB4AwFgYDVR0lAQH/BAww&#xA;CgYIKwYBBQUHAwMwDQYJKoZIhvcNAQELBQADggEBABh/r+bMPn4WA1vdmS6lJizw&#xA;5yCPYyqms494v1N2mHzdpl0uw6dqfMz8oPQ7FTlNT6JFtMtjeA0QMBY2xo2Vem8Q&#xA;rrjFXwHbu3nHkPSvh9j6YqDih59vVtXVP8y3x8Cy0lsHY1YA9tZnq6wU1JsLD8w2&#xA;06DoFJlOZJsnrz2sQrmnMYn7XR79kePOPofGbVwwwIUDQfEYOigR+SiiiMT9iUhX&#xA;p82GaMkCkJW+TnwL0+A1G+PxNqMBIslWbR1eTCCZnF56rp171MQrtvAOebPQmG44&#xA;TUf/X2NHiMIlK+u6uFC+LEWNEUnzHmbCGCwisY8xkYuRqvCEhKkdZY7JPXvhP6s=&#xA;-----END CERTIFICATE-----&#xA;"/>
+    <meta-data android:name="expo.modules.updates.CODE_SIGNING_METADATA" android:value="{&quot;keyid&quot;:&quot;main&quot;,&quot;alg&quot;:&quot;rsa-v1_5-sha256&quot;}"/>
+    <meta-data android:name="expo.modules.updates.ENABLED" android:value="true"/>
+    <meta-data android:name="expo.modules.updates.EXPO_RUNTIME_VERSION" android:value="@string/expo_runtime_version"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="NEVER"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATE_URL" android:value="https://ota.cretaceousfuture.com/api/ota/manifest"/>
+    <meta-data android:name="expo.modules.updates.UPDATES_CONFIGURATION_REQUEST_HEADERS_KEY" android:value="{&quot;expo-channel-name&quot;:&quot;production&quot;}"/>
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|locale|layoutDirection" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

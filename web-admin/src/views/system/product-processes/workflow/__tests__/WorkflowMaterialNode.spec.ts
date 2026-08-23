@@ -1,0 +1,292 @@
+import ElementPlus, { ElOption, ElOptionGroup } from 'element-plus';
+import { mount } from '@vue/test-utils';
+import { describe, expect, it, vi } from 'vitest';
+import { defineComponent, h } from 'vue';
+import WorkflowMaterialNode from '../WorkflowMaterialNode.vue';
+import type { MaterialNodeData } from '../types';
+
+// WorkflowMaterialNode 用 @vue-flow/core 的 <Handle>，真实实现要求组件挂在
+// <VueFlow> provider 下才能拿到画布上下文；单测只关心原料 picker 本身的分组/
+// 过滤/提示逻辑，跟连线 handle 无关，桩掉即可（同 WorkflowProcessNode.spec.ts
+// 里 PositionedHandleStub 的做法）。
+const HandleStub = defineComponent({
+  name: 'Handle',
+  inheritAttrs: false,
+  // must-fix #2 需要断言 :connectable="false" 有没有被传下来 —— 加一个 data-connectable
+  // 属性把 prop 值反映到 DOM 上, 才能从渲染结果里查得到(其余既有用例都不读这个属性,
+  // 纯加法, 不影响它们)。
+  props: { id: String, type: String, position: String, connectable: { type: [Boolean, String, Number, Function], default: true } },
+  setup(props) {
+    return () => h('span', { 'data-testid': 'handle-stub', 'data-handle-id': props.id, 'data-connectable': String(props.connectable) });
+  },
+});
+
+/**
+ * #3 (Steve 定: BOM 原料优先、可加其他) — 原料 Cell picker 按 BOM 原辅料清单
+ * 分组置顶，仍可选其它，BOM 为空时给出跳转提示（不硬禁）。
+ */
+
+const RAW_OPTIONS = [
+  { id: 'RM-PIG', name: '猪蹄', unit: 'kg', category: '主材' },
+  { id: 'RM-CHICKEN', name: '鸡胸肉', unit: 'kg', category: '原料' },
+  { id: 'RM-SALT', name: '食盐', unit: 'kg', category: '调味料' },
+  { id: 'RM-BOX', name: '包装盒', unit: '个', category: '包材' },
+];
+
+const RAW_SEGMENTS = [{
+  level: 1,
+  segmentCode: '001',
+  segmentLabel: '原料',
+  children: [{
+    level: 2,
+    segmentCode: '001001',
+    segmentLabel: '猪肉原料',
+    children: [{ level: 3, segmentCode: '0010010001', segmentLabel: '猪蹄' }],
+  }, {
+    level: 2,
+    segmentCode: '001003',
+    segmentLabel: '禽类原料',
+    children: [{ level: 3, segmentCode: '0010030001', segmentLabel: '鸡胸肉' }],
+  }],
+}];
+
+const RAW_DATA: MaterialNodeData = {
+  name: '入口原料',
+  skuId: '',
+  bound: false,
+};
+
+function mountNode(overrides: {
+  kind?: 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_GOOD';
+  bomRawMaterialIds?: string[];
+  data?: MaterialNodeData;
+  unitError?: string;
+  validationError?: string;
+  validationAttention?: boolean;
+  excludedRawMaterialIds?: string[];
+} = {}) {
+  return mount(WorkflowMaterialNode, {
+    props: {
+      kind: overrides.kind || 'RAW_MATERIAL',
+      data: overrides.data || RAW_DATA,
+      canWrite: true,
+      rawMaterialOptions: RAW_OPTIONS,
+      rawMaterialSegments: RAW_SEGMENTS,
+      bomRawMaterialIds: overrides.bomRawMaterialIds ?? [],
+      semiOptions: [],
+      finishedOptions: [],
+      unitError: overrides.unitError,
+      validationError: overrides.validationError,
+      validationAttention: overrides.validationAttention,
+      excludedRawMaterialIds: overrides.excludedRawMaterialIds ?? [],
+    },
+    global: {
+      plugins: [ElementPlus],
+      stubs: {
+        Handle: HandleStub,
+        // 组件里的 <router-link> 需要真实/桩装的 vue-router 才能 resolve；单测只关心
+        // "BOM 为空时有一个跳转出口"这件事本身，不关心真实路由跳转行为，桩装即可。
+        RouterLink: { template: '<a class="router-link-stub"><slot /></a>', props: ['to'] },
+      },
+    },
+  });
+}
+
+describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3)', () => {
+  it('splits candidates into a "本产品 BOM 原料" group (top) and an "其它原料" group when the product has a BOM', () => {
+    const wrapper = mountNode({ bomRawMaterialIds: ['RM-PIG'] });
+
+    const groups = wrapper.findAllComponents(ElOptionGroup);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].props('label')).toBe('本产品 BOM 原料');
+    expect(groups[1].props('label')).toBe('其它原料');
+
+    const bomGroupOptions = groups[0].findAllComponents(ElOption).map((o) => o.props('value'));
+    const otherGroupOptions = groups[1].findAllComponents(ElOption).map((o) => o.props('value'));
+    expect(bomGroupOptions).toEqual(['RM-PIG']);
+    expect(otherGroupOptions).toEqual(['RM-CHICKEN']);
+  });
+
+  it('does not hard-block selecting a raw material outside the BOM (soft constraint per Steve)', () => {
+    const wrapper = mountNode({ bomRawMaterialIds: ['RM-PIG'] });
+
+    const groups = wrapper.findAllComponents(ElOptionGroup);
+    const otherOption = groups[1].findAllComponents(ElOption).find((o) => o.props('value') === 'RM-CHICKEN');
+    expect(otherOption?.props('disabled')).toBeFalsy();
+  });
+
+  it('shows a single "全部原料" group (no BOM/other split) and a configure-BOM hint with a next-action link when the product has no BOM configured', async () => {
+    const wrapper = mountNode({ bomRawMaterialIds: [] });
+
+    const groups = wrapper.findAllComponents(ElOptionGroup);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].props('label')).toBe('全部原料');
+    expect(groups[0].findAllComponents(ElOption).map((o) => o.props('value')))
+      .toEqual(['RM-PIG', 'RM-CHICKEN']);
+
+    // 缺失 BOM 的提示已统一移动到 Workflow 顶部 banner，原料 Cell 不重复展示。
+    expect(wrapper.find('[data-testid="bom-hint"]').exists()).toBe(false);
+  });
+
+  it('filters both groups by pinyin-initial match, keeping BOM priority grouping intact while searching', async () => {
+    const wrapper = mountNode({ bomRawMaterialIds: ['RM-CHICKEN'] });
+    const select = wrapper.getComponent({ name: 'ElSelect' });
+
+    // filter-method 场景下真正驱动可见性的是组件自己的 filteredBomRawOptions/
+    // filteredOtherRawOptions computed（不依赖 el-select 内部私有过滤），所以直接
+    // 调用绑定给 el-select 的 filter-method prop 函数，贴近真实输入触发路径。
+    const filterMethod = select.props('filterMethod') as (query: string) => void;
+    filterMethod('zt');
+    await wrapper.vm.$nextTick();
+
+    const groups = wrapper.findAllComponents(ElOptionGroup);
+    // BOM 组本身只有「鸡胸肉」，拼音 zt 不命中鸡胸肉 -> BOM 组应该整体消失
+    // (bomRawOptions.length === 0 分支之外，这里 bomRawOptions 本身不为空，只是
+    // filteredBomRawOptions 过滤后为空 —— 组的 v-if 只看 bomRawOptions 是否为空,
+    // 所以分组标题仍在，只是组内没有可见 option)。
+    const bomGroup = groups.find((g) => g.props('label') === '本产品 BOM 原料');
+    expect(bomGroup?.findAllComponents(ElOption)).toHaveLength(0);
+    const otherGroup = groups.find((g) => g.props('label') === '其它原料');
+    expect(otherGroup?.findAllComponents(ElOption).map((o) => o.props('value'))).toEqual(['RM-PIG']);
+  });
+
+  it('emits selectRawSku with the picked SKU id', async () => {
+    const wrapper = mountNode({ bomRawMaterialIds: ['RM-PIG'] });
+    const select = wrapper.getComponent({ name: 'ElSelect' });
+
+    await select.vm.$emit('change', 'RM-PIG');
+
+    expect(wrapper.emitted('selectRawSku')).toEqual([['RM-PIG']]);
+  });
+
+  it('removes raw materials already used by another Cell while preserving the current Cell selection', async () => {
+    const wrapper = mountNode({
+      excludedRawMaterialIds: ['RM-PIG'],
+      data: { ...RAW_DATA, skuId: 'RM-CHICKEN', name: '鸡胸肉', bound: true },
+    });
+
+    await wrapper.get('[data-testid="change-raw-material"]').trigger('click');
+
+    expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
+      .toEqual(['RM-CHICKEN']);
+  });
+
+  it('shows one bound identity by default and reveals the picker only after explicit replacement', async () => {
+    const wrapper = mountNode({
+      data: { ...RAW_DATA, skuId: 'RM-PIG', skuCode: 'YL001', name: '猪蹄', bound: true },
+    });
+
+    expect(wrapper.text()).toContain('猪蹄');
+    expect(wrapper.text()).toContain('已绑定');
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'ElCascader' }).exists()).toBe(false);
+
+    await wrapper.get('[data-testid="change-raw-material"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'ElCascader' }).exists()).toBe(true);
+
+    wrapper.getComponent({ name: 'ElSelect' }).vm.$emit('change', 'RM-CHICKEN');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted('selectRawSku')).toEqual([['RM-CHICKEN']]);
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false);
+  });
+
+  it('never offers seasoning or packaging entries in a raw Cell', () => {
+    const wrapper = mountNode();
+    const values = wrapper.findAllComponents(ElOption).map((option) => option.props('value'));
+
+    expect(values).toEqual(['RM-PIG', 'RM-CHICKEN']);
+    expect(values).not.toContain('RM-SALT');
+    expect(values).not.toContain('RM-BOX');
+  });
+
+  it('filters raw candidates by the selected L1/L2/L3 segment while retaining text search', async () => {
+    const wrapper = mountNode();
+    const cascader = wrapper.getComponent({ name: 'ElCascader' });
+
+    await cascader.vm.$emit('update:modelValue', ['001', '001003']);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAllComponents(ElOption).map((option) => option.props('value')))
+      .toEqual(['RM-CHICKEN']);
+  });
+
+  it('keeps the category popper local, preserves wheel scrolling, and closes on leaf, Esc, or outside click', async () => {
+    const wrapper = mountNode();
+    const cascader = wrapper.getComponent({ name: 'ElCascader' });
+    const rawSelect = wrapper.getComponent({ name: 'ElSelect' });
+    expect(cascader.props('teleported')).toBe(false);
+    expect(rawSelect.props('teleported')).toBe(false);
+    expect(cascader.props('popperClass')).toContain('nowheel');
+    const shell = wrapper.get('[data-testid="raw-segment-filter-shell"]');
+    expect(shell.classes()).toContain('nowheel');
+    const parentWheel = vi.fn();
+    wrapper.element.addEventListener('wheel', parentWheel);
+    await shell.trigger('wheel', { deltaY: 120 });
+    expect(parentWheel).not.toHaveBeenCalled();
+
+    const exposed = cascader.vm.$.exposed as { togglePopperVisible: (visible: boolean) => void };
+    const closeSpy = vi.spyOn(exposed, 'togglePopperVisible');
+
+    await cascader.vm.$emit('change', ['001', '001003', '0010030001']);
+    expect(closeSpy).toHaveBeenCalledWith(false);
+
+    cascader.vm.$emit('keydown', new KeyboardEvent('keydown', { key: 'Escape' }));
+    await wrapper.vm.$nextTick();
+    expect(closeSpy).toHaveBeenCalledTimes(2);
+
+    cascader.vm.$emit('visible-change', true);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    expect(closeSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('shows the unit-contract error on the affected material cell', () => {
+    const wrapper = mountNode({ unitError: 'SKU RM-PIG 缺少规范主单位，请先维护 SKU 单位' });
+
+    expect(wrapper.classes()).toContain('unit-error');
+    expect(wrapper.get('[data-testid="unit-error"]').text()).toContain('缺少规范主单位');
+  });
+
+  it('gives material names a full-width heading row with a hover title', () => {
+    const name = 'E2E-替代链-处理后半成品';
+    const wrapper = mountNode({
+      data: { ...RAW_DATA, name, skuId: 'SKU-SEMI-1', bound: true },
+    });
+
+    expect(wrapper.get('.material-name').text()).toBe(name);
+    expect(wrapper.get('.material-name').attributes('title')).toBe(name);
+    expect(wrapper.get('.material-name').element.parentElement?.classList).toContain('node-heading');
+  });
+
+  it('keeps an unbound Cell red and pulses until the user starts handling it', () => {
+    const wrapper = mountNode({
+      validationError: '入口原料尚未绑定 SKU',
+      validationAttention: true,
+    });
+
+    expect(wrapper.classes()).toContain('validation-error');
+    expect(wrapper.classes()).toContain('validation-attention');
+    expect(wrapper.get('[data-testid="binding-validation-error"]').text()).toContain('请在这里绑定 SKU');
+  });
+});
+
+// must-fix #2 (final whole-branch review of Phase 3-1): 这个分支给 FINISHED_GOOD 新增了
+// 一个 source handle(PACK_OVERLAY_TARGET_HANDLE), 纯粹是给 BOM 浮层的包材 cell 挂投影连线
+// 用的视觉锚点。在这个分支之前, 成品 Cell 没有任何 output handle(它是链的终端) ——
+// evaluateWorkflowConnection 把"非 PROCESS 源 → PROCESS 目标"一律判合法, 如果这个新
+// handle 可以真的发起连线, 用户就能从"成品"拖一条线到任意工序, onConnect/
+// attachInputBinding 会把它当真写进该工序 data.ports 里一个真实 INPUT 端口——
+// 这处腐败发生在一个真实节点内部, stripBomOverlay 的 id 前缀闸对此完全无能为力。
+describe('成品 Cell 的浮层挂点 handle 不可连线 (must-fix #2)', () => {
+  it('FINISHED_GOOD 的 PACK_OVERLAY_TARGET_HANDLE 设了 :connectable="false"', () => {
+    const wrapper = mountNode({
+      kind: 'FINISHED_GOOD',
+      data: { name: '成品', skuId: 'SKU-FIN', bound: true },
+    });
+
+    const handles = wrapper.findAll('[data-testid="handle-stub"]');
+    const packHandle = handles.find((h2) => h2.attributes('data-handle-id') === 'bom-pack-in');
+    expect(packHandle, 'FINISHED_GOOD 应该渲染出 bom-pack-in 这个 handle').toBeTruthy();
+    expect(packHandle!.attributes('data-connectable')).toBe('false');
+  });
+});

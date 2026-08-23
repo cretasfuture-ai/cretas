@@ -1,0 +1,20 @@
+name: KB Drift Check (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kb-drift-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check meta freshness (restaurant §1/§2/§11 + factory §0A/§0B/§6/§7/§10)
+        run: python scripts/ci/check-kb-meta-freshness.py
+      - name: Check synthesis anchor consistency (both manuals)
+        run: python scripts/ci/check-kb-anchor-consistency.py
+      - name: Check manual_chat.py contract integrity
+        run: python scripts/ci/check-manual-chat-contract.py

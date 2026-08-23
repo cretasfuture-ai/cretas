@@ -1,0 +1,755 @@
+---
+description: 食品溯源系统API集成代理规则 - API对接开发时 - API客户端封装时 - API文档编写时 - 环境切换配置时 - 错误处理优化时 - API测试验证时 - 确保类型安全的API服务层实现
+globs:
+alwaysApply: false
+---
+
+# 食品溯源系统API集成代理规则
+
+## 使用场景
+- **API对接开发时** - 无论是Mock API还是真实后端API
+- **API客户端封装时** - 创建类型安全的API服务层
+- **API文档编写时** - 基于标准化模板创建文档
+- **环境切换配置时** - Mock环境与生产环境的无缝切换
+- **错误处理优化时** - 统一的错误处理和重试机制
+- **API测试验证时** - 确保接口功能正确性
+
+## 🏗️ 核心原则
+
+### 📋 API设计标准
+严格遵循食品溯源系统的API设计规范：
+
+#### RESTful架构
+- **资源导向**: URL使用名词复数 (`/traces`, `/products`, `/users`)
+- **HTTP语义**: GET(查询)、POST(创建)、PUT(更新)、PATCH(部分更新)、DELETE(删除)
+- **标准状态码**: 200/201/400/401/403/404/422/500
+- **分页支持**: `?page=1&limit=20&sort=createdAt&order=desc`
+
+#### URL结构规范
+```typescript
+// 基础模式
+/api/v1/{resource}
+/api/v1/{resource}/{id}
+/api/v1/{resource}/{id}/{sub-resource}
+
+// 食品溯源具体实例
+/api/v1/traces                    // 溯源批次列表
+/api/v1/traces/{id}              // 特定批次详情
+/api/v1/traces/{id}/verify       // 批次验证
+/api/v1/products                 // 产品列表
+/api/v1/users/profile           // 用户资料
+```
+
+#### 响应格式标准
+```typescript
+// 成功响应
+interface SuccessResponse<T> {
+  success: true;
+  data: T;
+  meta?: PaginationMeta;
+}
+
+// 错误响应
+interface ErrorResponse {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+    details?: ValidationError[];
+  };
+}
+
+// 分页元数据
+interface PaginationMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+```
+
+### 🔧 技术实现要求
+
+#### TypeScript类型安全
+```typescript
+// 1. 定义完整的接口类型
+interface TraceResponse {
+  id: string;
+  batchCode: string;
+  productName: string;
+  status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+  stages: ProductionStage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 2. API客户端类型安全调用
+const trace = await apiClient.get<TraceResponse>(`/traces/${id}`);
+const traces = await apiClient.get<PaginatedResponse<TraceResponse>>('/traces');
+
+// 3. 请求参数类型定义
+interface TraceCreateRequest {
+  batchCode: string;
+  productName: string;
+  farmId: string;
+  harvestDate: string;
+}
+```
+
+#### 环境抽象层设计
+```typescript
+// 环境配置抽象
+interface ApiConfig {
+  baseURL: string;
+  timeout: number;
+  useMockData: boolean;
+  mockDelay?: number;
+  retryAttempts: number;
+}
+
+// 自动环境检测
+export const getApiConfig = (): ApiConfig => {
+  const env = process.env.NEXT_PUBLIC_API_ENV || 'mock';
+
+  const configs = {
+    mock: {
+      baseURL: '/api',
+      timeout: 10000,
+      useMockData: true,
+      mockDelay: 300,
+      retryAttempts: 3
+    },
+    development: {
+      baseURL: 'http://localhost:8000/api/v1',
+      timeout: 15000,
+      useMockData: false,
+      retryAttempts: 3
+    },
+    production: {
+      baseURL: 'https://api.farm.com/v1',
+      timeout: 20000,
+      useMockData: false,
+      retryAttempts: 5
+    }
+  };
+
+  return configs[env] || configs.mock;
+};
+```
+
+#### 服务层封装模式
+```typescript
+// 基础API服务类
+export abstract class BaseApiService {
+  protected apiClient: ApiClient;
+
+  constructor(apiClient: ApiClient) {
+    this.apiClient = apiClient;
+  }
+
+  protected async handleRequest<T>(request: () => Promise<T>): Promise<T> {
+    try {
+      return await request();
+    } catch (error) {
+      if (error instanceof ApiError) {
+        this.handleApiError(error);
+      }
+      throw error;
+    }
+  }
+
+  protected handleApiError(error: ApiError): void {
+    // 统一错误处理逻辑
+    console.error(`API Error [${error.status}]:`, error.message);
+  }
+}
+
+// 具体业务服务实现
+export class TraceService extends BaseApiService {
+  async getTrace(id: string): Promise<TraceResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.get<TraceResponse>(`/traces/${id}`)
+    );
+  }
+
+  async createTrace(data: TraceCreateRequest): Promise<TraceResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.post<TraceResponse>('/traces', data)
+    );
+  }
+
+  async verifyTrace(id: string, verificationCode?: string): Promise<VerificationResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.post<VerificationResponse>(`/traces/${id}/verify`, { verificationCode })
+    );
+  }
+}
+```
+
+### 🔄 环境切换机制
+
+#### Mock API支持
+```typescript
+// Mock环境标识和配置
+const isMockEnv = process.env.NEXT_PUBLIC_API_ENV === 'mock';
+
+// 服务工厂模式
+export class ApiServiceFactory {
+  static createTraceService(): TraceService {
+    const config = getApiConfig();
+    const apiClient = new ApiClient(config);
+
+    if (config.useMockData) {
+      return new MockTraceService(apiClient);
+    }
+
+    return new TraceService(apiClient);
+  }
+}
+
+// Mock服务实现
+class MockTraceService extends TraceService {
+  async getTrace(id: string): Promise<TraceResponse> {
+    // Mock特定逻辑，如模拟延迟
+    await this.simulateDelay();
+    return super.getTrace(id);
+  }
+
+  private async simulateDelay(): Promise<void> {
+    const delay = process.env.NEXT_PUBLIC_MOCK_DELAY || 300;
+    await new Promise(resolve => setTimeout(resolve, Number(delay)));
+  }
+}
+```
+
+#### 真实API集成准备
+```typescript
+// 生产环境API服务
+class ProductionTraceService extends TraceService {
+  constructor(apiClient: ApiClient) {
+    super(apiClient);
+
+    // 生产环境特殊配置
+    this.setupProductionInterceptors();
+  }
+
+  private setupProductionInterceptors(): void {
+    // 请求签名
+    this.apiClient.interceptors.request.use((config) => {
+      config.headers['X-API-Key'] = process.env.NEXT_PUBLIC_API_KEY;
+      return config;
+    });
+
+    // 响应验证
+    this.apiClient.interceptors.response.use((response) => {
+      this.validateResponseSignature(response);
+      return response;
+    });
+  }
+}
+```
+
+## 🎯 业务域API实现
+
+### 认证模块 (AuthService)
+```typescript
+export class AuthService extends BaseApiService {
+  async login(credentials: LoginRequest): Promise<AuthResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.post<AuthResponse>('/auth/login', credentials)
+    );
+  }
+
+  async logout(): Promise<void> {
+    return this.handleRequest(() =>
+      this.apiClient.post<void>('/auth/logout')
+    );
+  }
+
+  async refreshToken(): Promise<TokenResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.post<TokenResponse>('/auth/refresh')
+    );
+  }
+
+  async verifyToken(): Promise<UserProfile> {
+    return this.handleRequest(() =>
+      this.apiClient.get<UserProfile>('/auth/verify')
+    );
+  }
+}
+```
+
+### 溯源模块 (TraceService)
+```typescript
+export class TraceService extends BaseApiService {
+  async getTraces(params?: TraceQueryParams): Promise<PaginatedResponse<TraceResponse>> {
+    return this.handleRequest(() =>
+      this.apiClient.get<PaginatedResponse<TraceResponse>>('/traces', { params })
+    );
+  }
+
+  async getTraceByBatchCode(batchCode: string): Promise<TraceResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.get<TraceResponse>(`/traces/batch/${batchCode}`)
+    );
+  }
+
+  async generateQRCode(traceId: string): Promise<QRCodeResponse> {
+    return this.handleRequest(() =>
+      this.apiClient.post<QRCodeResponse>(`/traces/${traceId}/qr-code`)
+    );
+  }
+}
+```
+
+### 农业模块 (FarmingService)
+```typescript
+export class FarmingService extends BaseApiService {
+  async getFarmingRecords(farmId: string): Promise<FarmingRecord[]> {
+    return this.handleRequest(() =>
+      this.apiClient.get<FarmingRecord[]>(`/farming/farms/${farmId}/records`)
+    );
+  }
+
+  async createFarmingActivity(data: FarmingActivityRequest): Promise<FarmingActivity> {
+    return this.handleRequest(() =>
+      this.apiClient.post<FarmingActivity>('/farming/activities', data)
+    );
+  }
+
+  async updateEnvironmentData(recordId: string, data: EnvironmentData): Promise<void> {
+    return this.handleRequest(() =>
+      this.apiClient.put<void>(`/farming/records/${recordId}/environment`, data)
+    );
+  }
+}
+```
+
+### 加工模块 (ProcessingService)
+```typescript
+export class ProcessingService extends BaseApiService {
+  async getProcessingRecords(facilityId: string): Promise<ProcessingRecord[]> {
+    return this.handleRequest(() =>
+      this.apiClient.get<ProcessingRecord[]>(`/processing/facilities/${facilityId}/records`)
+    );
+  }
+
+  async startProcessing(data: ProcessingStartRequest): Promise<ProcessingRecord> {
+    return this.handleRequest(() =>
+      this.apiClient.post<ProcessingRecord>('/processing/start', data)
+    );
+  }
+
+  async addQualityTest(recordId: string, data: QualityTestData): Promise<QualityTest> {
+    return this.handleRequest(() =>
+      this.apiClient.post<QualityTest>(`/processing/records/${recordId}/quality-tests`, data)
+    );
+  }
+}
+```
+
+### 物流模块 (LogisticsService)
+```typescript
+export class LogisticsService extends BaseApiService {
+  async getLogisticsRecords(carrierId: string): Promise<LogisticsRecord[]> {
+    return this.handleRequest(() =>
+      this.apiClient.get<LogisticsRecord[]>(`/logistics/carriers/${carrierId}/records`)
+    );
+  }
+
+  async startTransport(data: TransportStartRequest): Promise<LogisticsRecord> {
+    return this.handleRequest(() =>
+      this.apiClient.post<LogisticsRecord>('/logistics/transport/start', data)
+    );
+  }
+
+  async updateLocation(recordId: string, location: LocationUpdate): Promise<void> {
+    return this.handleRequest(() =>
+      this.apiClient.put<void>(`/logistics/records/${recordId}/location`, location)
+    );
+  }
+}
+```
+
+## 🛠️ 错误处理与重试机制
+
+### 统一错误处理
+```typescript
+export class ApiErrorHandler {
+  static handle(error: ApiError): void {
+    switch (error.status) {
+      case 401:
+        // 未授权，重定向到登录页
+        window.location.href = '/login';
+        break;
+      case 403:
+        // 权限不足，显示错误信息
+        showErrorMessage('权限不足，请联系管理员');
+        break;
+      case 422:
+        // 验证错误，显示具体字段错误
+        showValidationErrors(error.details);
+        break;
+      case 500:
+        // 服务器错误，显示通用错误信息
+        showErrorMessage('服务器错误，请稍后重试');
+        break;
+      default:
+        showErrorMessage(error.message || '未知错误');
+    }
+  }
+}
+```
+
+### 自动重试机制
+```typescript
+export class RetryHandler {
+  static async withRetry<T>(
+    operation: () => Promise<T>,
+    maxRetries: number = 3,
+    delay: number = 1000
+  ): Promise<T> {
+    let lastError: Error;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error as Error;
+
+        if (attempt === maxRetries) {
+          throw lastError;
+        }
+
+        // 指数退避
+        await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, attempt - 1)));
+      }
+    }
+
+    throw lastError!;
+  }
+}
+```
+
+## 📝 使用示例
+
+### 基本使用
+```typescript
+// 1. 创建API服务实例
+const traceService = ApiServiceFactory.createTraceService();
+const authService = new AuthService(apiClient);
+
+// 2. 使用服务
+try {
+  const traces = await traceService.getTraces({ page: 1, limit: 20 });
+  console.log('溯源记录:', traces.data);
+} catch (error) {
+  ApiErrorHandler.handle(error as ApiError);
+}
+
+// 3. 带重试的操作
+const trace = await RetryHandler.withRetry(
+  () => traceService.getTrace('trace-123'),
+  3,
+  1000
+);
+```
+
+### 环境切换
+```typescript
+// 开发环境配置
+process.env.NEXT_PUBLIC_API_ENV = 'development';
+
+// Mock环境配置
+process.env.NEXT_PUBLIC_API_ENV = 'mock';
+process.env.NEXT_PUBLIC_MOCK_DELAY = '500';
+
+// 生产环境配置
+process.env.NEXT_PUBLIC_API_ENV = 'production';
+process.env.NEXT_PUBLIC_API_KEY = 'your-api-key';
+```
+
+## 🚀 真实API功能扩展标准化流程
+
+基于项目认证API集成的成功实现，为新功能添加真实API支持的6步标准化流程：
+
+### 第一步：API端点配置
+在 `web-app-next/src/config/api-endpoints.ts` 中添加新功能的API判断逻辑：
+
+```typescript
+// 添加新功能的判断函数
+export const isYourFeatureAPI = (endpoint: string): boolean => {
+  return endpoint.includes('/your-feature/') || 
+         endpoint.includes('/another-feature/');
+};
+
+// 在getApiBaseUrl函数中添加新的判断逻辑
+export const getApiBaseUrl = (endpoint: string): string => {
+  if (isAuthAPI(endpoint) || isYourFeatureAPI(endpoint)) {
+    return isProduction ? REAL_API_BASE_URL : 
+           (shouldUseMockAPI() ? MOCK_API_BASE_URL : REAL_API_BASE_URL);
+  }
+  return MOCK_API_BASE_URL; // 其他功能继续使用Mock
+};
+```
+
+### 第二步：类型定义
+在 `web-app-next/src/types/` 目录创建对应的TypeScript接口定义：
+
+```typescript
+// 例如：types/logistics.ts
+export interface ShipmentInfo {
+  id: string;
+  origin: string;
+  destination: string;
+  status: 'pending' | 'in_transit' | 'delivered';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateShipmentRequest {
+  origin: string;
+  destination: string;
+  estimatedDelivery: string;
+}
+
+export interface ShipmentResponse extends ApiResponse<ShipmentInfo> {}
+export interface ShipmentsResponse extends ApiResponse<ShipmentInfo[]> {}
+```
+
+### 第三步：服务层实现
+在 `web-app-next/src/services/` 目录创建对应的API服务类：
+
+```typescript
+// 例如：services/logistics.service.ts
+import { BaseApiService } from './base.service';
+import { ShipmentInfo, CreateShipmentRequest } from '@/types/logistics';
+
+export class LogisticsService extends BaseApiService {
+  async getShipments(): Promise<ShipmentInfo[]> {
+    return this.request<ShipmentInfo[]>('/logistics/shipments');
+  }
+
+  async createShipment(data: CreateShipmentRequest): Promise<ShipmentInfo> {
+    return this.request<ShipmentInfo>('/logistics/shipments', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getShipment(id: string): Promise<ShipmentInfo> {
+    return this.request<ShipmentInfo>(`/logistics/shipments/${id}`);
+  }
+}
+
+export const logisticsService = new LogisticsService();
+```
+
+### 第四步：状态管理集成
+更新或创建相关的Zustand Store：
+
+```typescript
+// 例如：store/logisticsStore.ts
+import { create } from 'zustand';
+import { logisticsService } from '@/services/logistics.service';
+import { ShipmentInfo } from '@/types/logistics';
+
+interface LogisticsState {
+  shipments: ShipmentInfo[];
+  loading: boolean;
+  error: string | null;
+  
+  fetchShipments: () => Promise<void>;
+  createShipment: (data: CreateShipmentRequest) => Promise<void>;
+  clearError: () => void;
+}
+
+export const useLogisticsStore = create<LogisticsState>((set, get) => ({
+  shipments: [],
+  loading: false,
+  error: null,
+  
+  fetchShipments: async () => {
+    set({ loading: true, error: null });
+    try {
+      const shipments = await logisticsService.getShipments();
+      set({ shipments, loading: false });
+    } catch (error) {
+      set({ 
+        error: error instanceof Error ? error.message : '获取物流信息失败',
+        loading: false 
+      });
+    }
+  },
+  
+  createShipment: async (data) => {
+    set({ loading: true, error: null });
+    try {
+      const newShipment = await logisticsService.createShipment(data);
+      set(state => ({ 
+        shipments: [...state.shipments, newShipment],
+        loading: false 
+      }));
+    } catch (error) {
+      set({ 
+        error: error instanceof Error ? error.message : '创建物流单失败',
+        loading: false 
+      });
+    }
+  },
+  
+  clearError: () => set({ error: null }),
+}));
+```
+
+### 第五步：页面组件更新
+修改现有页面组件使用新的API服务：
+
+```typescript
+// 在相关页面组件中
+import { useLogisticsStore } from '@/store/logisticsStore';
+import { useEffect } from 'react';
+
+export default function LogisticsPage() {
+  const { 
+    shipments, 
+    loading, 
+    error, 
+    fetchShipments, 
+    clearError 
+  } = useLogisticsStore();
+  
+  useEffect(() => {
+    fetchShipments();
+  }, [fetchShipments]);
+
+  if (loading) return <div>加载中...</div>;
+  
+  if (error) {
+    return (
+      <div className="error-container">
+        <p>错误：{error}</p>
+        <button onClick={clearError}>清除错误</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="logistics-page">
+      {shipments.map(shipment => (
+        <div key={shipment.id} className="shipment-card">
+          <h3>{shipment.origin} → {shipment.destination}</h3>
+          <p>状态：{shipment.status}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### 第六步：环境配置验证
+测试不同环境下的API切换功能：
+
+```bash
+# 开发环境使用Mock API（默认）
+npm run dev
+# 访问 http://localhost:3000/logistics
+
+# 开发环境使用真实API
+npm run dev
+# 访问 http://localhost:3000/logistics?mock=false
+
+# 生产环境自动使用真实API
+npm run build && npm start
+```
+
+### 快速参考模板
+
+**参考现有实现**：
+- 配置模式：`config/api-endpoints.ts` (认证API配置)
+- 类型定义：`types/auth.ts` (认证相关类型)
+- 服务实现：`services/auth.service.ts` (BaseApiService继承)
+- 状态管理：`store/authStore.ts` (Zustand模式)
+
+**常见字段映射**：
+```typescript
+// 后端蛇形命名 → 前端驼峰命名
+{
+  "user_name": "admin",        // → username: string;
+  "phone_number": "123456",    // → phoneNumber: string;
+  "department_id": 1,          // → departmentId: number;
+  "created_at": "2025-01-01",  // → createdAt: string;
+}
+```
+
+**错误处理统一模式**：
+```typescript
+export class YourFeatureApiError extends BaseApiError {
+  constructor(message: string, endpoint: string, status?: number) {
+    super(message, endpoint, status);
+    this.name = 'YourFeatureApiError';
+  }
+}
+```
+
+这套标准化流程确保了：
+- ✅ 架构一致性：遵循项目现有模式
+- ✅ 类型安全：完整TypeScript支持  
+- ✅ 环境切换：Mock/Real API无缝切换
+- ✅ 错误处理：统一的错误处理机制
+- ✅ 可维护性：标准化的代码结构
+
+## 关键规则
+- 始终使用TypeScript类型定义确保类型安全
+- 通过环境变量控制API环境切换
+- 实现统一的错误处理和重试机制
+- 遵循RESTful API设计规范
+- 使用服务层模式封装API调用
+- 支持Mock API和真实API的无缝切换
+- **新增功能严格按照6步标准化流程实施**
+
+## 示例
+
+<example>
+**正确的API集成实现**：
+
+```typescript
+// 1. 定义类型
+interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  role: 'ADMIN' | 'USER';
+}
+
+// 2. 创建服务
+class UserService extends BaseApiService {
+  async getProfile(): Promise<UserProfile> {
+    return this.handleRequest(() =>
+      this.apiClient.get<UserProfile>('/users/profile')
+    );
+  }
+}
+
+// 3. 使用服务
+const userService = new UserService(apiClient);
+const profile = await userService.getProfile();
+```
+</example>
+
+<example type="invalid">
+**错误的API集成方式**：
+
+```typescript
+// 1. 缺少类型定义
+const response = await fetch('/api/users/profile');
+const data = await response.json(); // any类型
+
+// 2. 没有错误处理
+const user = await apiClient.get('/users/profile'); // 可能抛出异常
+
+// 3. 硬编码URL
+const url = 'http://localhost:8000/api/users/profile'; // 不支持环境切换
+```
+</example>

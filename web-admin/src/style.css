@@ -1,0 +1,910 @@
+/*
+ * 全局样式 - 白垩纪AI Agent
+ * 现代商务风格 Design Token System
+ */
+
+/* ============================================================
+ * Design Tokens — Single Source of Truth
+ * ============================================================ */
+:root {
+  /* ---- Brand / Theme Colors ---- */
+  --primary-color: #1B65A8;
+  --color-primary: #1B65A8;
+  --color-primary-light: #2B7EC1;
+  --color-primary-dark: #14507F;
+  --color-success: #36B37E;
+  --color-warning: #FFAB00;
+  --color-danger: #FF5630;
+  --color-info: #6B778C;
+  --success-color: #36B37E;
+  --warning-color: #FFAB00;
+  --danger-color: #FF5630;
+  --info-color: #6B778C;
+
+  /* ---- Text ---- */
+  --text-color-primary: #1A2332;
+  --text-color-regular: #4A5568;
+  --text-color-secondary: #7A8599;
+  --text-color-placeholder: #A0AEC0;
+  --color-text-primary: #1A2332;
+  --color-text-regular: #4A5568;
+  --color-text-secondary: #7A8599;
+  --color-text-placeholder: #A0AEC0;
+
+  /* ---- Background ---- */
+  --bg-color: #F4F6F9;
+  --bg-color-page: #F4F6F9;
+  --bg-color-overlay: #ffffff;
+  --color-bg-page: #F4F6F9;
+  --color-bg-card: #ffffff;
+  --color-bg-hover: #EDF2F7;
+
+  /* ---- Border ---- */
+  --border-color: #E2E8F0;
+  --border-color-light: #EDF2F7;
+  --border-color-lighter: #F4F6F9;
+  --color-border: #E2E8F0;
+  --color-border-light: #EDF2F7;
+  --color-border-lighter: #F4F6F9;
+
+  /* ---- Data Visualization ---- */
+  --color-positive: #36B37E;
+  --color-negative: #FF5630;
+
+  /* ---- Chart Palette ---- */
+  --chart-color-1: #1B65A8;
+  --chart-color-2: #36B37E;
+  --chart-color-3: #FFAB00;
+  --chart-color-4: #FF5630;
+  --chart-color-5: #6B778C;
+
+  /* ---- Element Plus CSS Variable Overrides ---- */
+  --el-color-primary: #1B65A8;
+  --el-color-primary-light-3: #4A8DC4;
+  --el-color-primary-light-5: #8DB2D4;
+  --el-color-primary-light-7: #BDD3E7;
+  --el-color-primary-light-8: #D3E2EF;
+  --el-color-primary-light-9: #E9F0F7;
+  --el-color-primary-dark-2: #165286;
+  --el-color-success: #36B37E;
+  --el-color-success-light-3: #6DC9A0;
+  --el-color-success-light-5: #9BD9BF;
+  --el-color-success-light-9: #EAFAF2;
+  --el-color-warning: #FFAB00;
+  --el-color-warning-light-3: #FFC247;
+  --el-color-warning-light-5: #FFD580;
+  --el-color-warning-light-9: #FFF8E6;
+  --el-color-danger: #FF5630;
+  --el-color-danger-light-3: #FF8A6D;
+  --el-color-danger-light-5: #FFAB98;
+  --el-color-danger-light-9: #FFF0EC;
+  --el-color-info: #6B778C;
+  --el-text-color-primary: #1A2332;
+  --el-text-color-regular: #4A5568;
+  --el-text-color-secondary: #7A8599;
+  --el-text-color-placeholder: #A0AEC0;
+  --el-border-color: #E2E8F0;
+  --el-border-color-light: #EDF2F7;
+  --el-border-color-lighter: #F4F6F9;
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #F4F6F9;
+  --el-fill-color-light: #F4F6F9;
+  --el-font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  /* ---- Typography ---- */
+  --font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-family-base: 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-family-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+
+  --font-size-xs: 10px;
+  --font-size-2xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 20px;
+  --font-size-xl: 24px;
+  --font-size-2xl: 32px;
+  --font-size-3xl: 48px;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* ---- Spacing ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --page-padding: 20px;
+  --card-padding: 20px;
+  --section-gap: 24px;
+
+  /* ---- Layout ---- */
+  --header-height: 64px;
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 64px;
+
+  /* ---- Elevation (blue-tinted shadows) ---- */
+  --shadow-sm: 0 1px 3px rgba(27, 101, 168, 0.06);
+  --shadow-md: 0 2px 8px rgba(27, 101, 168, 0.08);
+  --shadow-lg: 0 4px 16px rgba(27, 101, 168, 0.10);
+  --shadow-xl: 0 8px 28px rgba(27, 101, 168, 0.14);
+  --box-shadow-base: 0 2px 12px rgba(27, 101, 168, 0.08);
+  --box-shadow-light: 0 2px 8px rgba(27, 101, 168, 0.06);
+
+  /* ---- Border Radius ---- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+
+  /* ---- Transition ---- */
+  --transition-fast: 0.2s ease;
+  --transition-base: 0.3s ease;
+  --transition-slow: 0.3s ease-in-out;
+}
+
+/* ============================================================
+ * Dark Mode — override design tokens via data-theme attribute
+ * ============================================================ */
+[data-theme="dark"] {
+  --primary-color: #4A9FE5;
+  --color-primary: #4A9FE5;
+  --color-primary-light: #6BB5F0;
+  --color-primary-dark: #2B7EC1;
+  --color-success: #57D9A3;
+  --color-warning: #FFC400;
+  --color-danger: #FF8B6A;
+  --color-info: #9CA3AF;
+
+  --text-color-primary: #E8ECF1;
+  --text-color-regular: #C8CDD5;
+  --text-color-secondary: #9CA3AF;
+  --text-color-placeholder: #6B7280;
+  --color-text-primary: #E8ECF1;
+  --color-text-regular: #C8CDD5;
+  --color-text-secondary: #9CA3AF;
+  --color-text-placeholder: #6B7280;
+
+  --bg-color: #0F1420;
+  --bg-color-page: #0F1420;
+  --bg-color-overlay: #1A2332;
+  --color-bg-page: #0F1420;
+  --color-bg-card: #1A2332;
+  --color-bg-hover: #243044;
+
+  --border-color: #2D3748;
+  --border-color-light: #243044;
+  --border-color-lighter: #1A2332;
+  --color-border: #2D3748;
+  --color-border-light: #243044;
+  --color-border-lighter: #1A2332;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 8px 28px rgba(0, 0, 0, 0.6);
+  --box-shadow-base: 0 2px 12px rgba(0, 0, 0, 0.4);
+  --box-shadow-light: 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  /* Element Plus dark overrides */
+  --el-color-primary: #4A9FE5;
+  --el-color-primary-light-3: #6BB5F0;
+  --el-color-primary-light-5: #8DC8F5;
+  --el-color-primary-light-7: #B0D9F8;
+  --el-color-primary-light-8: #C5E3FA;
+  --el-color-primary-light-9: #1E3A5F;
+  --el-color-primary-dark-2: #2B7EC1;
+  --el-text-color-primary: #E8ECF1;
+  --el-text-color-regular: #C8CDD5;
+  --el-text-color-secondary: #9CA3AF;
+  --el-text-color-placeholder: #6B7280;
+  --el-border-color: #2D3748;
+  --el-border-color-light: #243044;
+  --el-border-color-lighter: #1A2332;
+  --el-bg-color: #1A2332;
+  --el-bg-color-page: #0F1420;
+  --el-bg-color-overlay: #1E293B;
+  --el-fill-color-light: #243044;
+  --el-fill-color-blank: #1A2332;
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+}
+
+/* ============================================================
+ * Global Reset
+ * ============================================================ */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 1.5715;
+  color: var(--text-color-primary);
+  background-color: var(--bg-color);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================
+ * Small-screen business overlay baseline
+ *
+ * Long ERP dialogs used to size themselves from content. On 1366×768 and
+ * narrow windows that could move the footer below the viewport. Keep the
+ * shell inside the viewport and make only the business body scroll.
+ * Fullscreen dialogs retain Element Plus' native behavior.
+ * ============================================================ */
+.el-overlay-dialog {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.el-overlay-dialog > .el-dialog:not(.is-fullscreen) {
+  width: min(var(--cretas-dialog-width, 960px), calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  margin: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__header,
+.el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__footer {
+  border-top: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color-overlay);
+}
+
+.el-drawer {
+  max-width: 100vw;
+}
+
+.el-drawer__body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.el-drawer__footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+@media (max-width: 768px), (max-height: 720px) {
+  .el-overlay-dialog {
+    align-items: stretch;
+    padding: 8px;
+  }
+
+  .el-overlay-dialog > .el-dialog:not(.is-fullscreen) {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    border-radius: var(--radius-md);
+  }
+
+  .el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__header {
+    padding: 16px 44px 12px 16px;
+  }
+
+  .el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__body {
+    padding: 12px 16px 16px;
+  }
+
+  .el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__footer {
+    padding: 12px 16px;
+  }
+
+  .el-overlay-dialog > .el-dialog:not(.is-fullscreen) > .el-dialog__footer .el-button {
+    min-height: 40px;
+  }
+
+  .el-drawer.rtl,
+  .el-drawer.ltr {
+    width: min(92vw, 560px) !important;
+  }
+}
+
+/* ============================================================
+ * Links
+ * ============================================================ */
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-primary-light);
+}
+
+/* ============================================================
+ * Scrollbar
+ * ============================================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #B0BEC5;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #7A8599;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-color);
+}
+
+/* ============================================================
+ * Element Plus Overrides
+ * ============================================================ */
+.el-card {
+  border-radius: var(--radius-md);
+  border: none;
+  box-shadow: var(--box-shadow-light);
+  transition: box-shadow var(--transition-base), transform var(--transition-base);
+}
+
+.el-card:hover {
+  box-shadow: var(--shadow-lg);
+}
+
+.el-table {
+  --el-table-border-color: var(--border-color-lighter);
+}
+
+/* ============================================================
+ * Page Container
+ * ============================================================ */
+.page-container {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+ * Transitions
+ * ============================================================ */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--transition-fast);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* ============================================================
+ * Utility Classes
+ * ============================================================ */
+.flex {
+  display: flex;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.gap-2 {
+  gap: 8px;
+}
+
+.gap-4 {
+  gap: 16px;
+}
+
+.mb-4 {
+  margin-bottom: 16px;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+ * Section Badges (AUDIT-088)
+ * ============================================================ */
+.section-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+}
+
+.section-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+
+.section-badge--chart::before {
+  background: var(--chart-color-1);
+}
+
+.section-badge--data::before {
+  background: var(--chart-color-2);
+}
+
+.section-badge--insight::before {
+  background: var(--chart-color-3);
+}
+
+.section-badge--warning::before {
+  background: var(--color-warning);
+}
+
+.section-badge--ai::before {
+  background: var(--color-primary);
+}
+
+/* ============================================================
+ * Keyboard Focus Styles (WCAG 2.1)
+ * ============================================================ */
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ============================================================
+ * Mobile Responsive — Global Rules
+ * Covers all 80+ pages without per-page changes
+ * ============================================================ */
+
+/* ---- Tablet breakpoint ---- */
+@media (max-width: 1024px) {
+  :root {
+    --page-padding: 16px;
+    --card-padding: 16px;
+  }
+}
+
+/* ---- Mobile breakpoint ---- */
+@media (max-width: 768px) {
+  :root {
+    --page-padding: 12px;
+    --card-padding: 12px;
+    --section-gap: 16px;
+    --header-height: 56px;
+  }
+
+  /* Global table horizontal scroll (covers 35+ table pages) */
+  .el-table {
+    overflow-x: auto;
+  }
+  .el-card__body {
+    overflow-x: auto;
+  }
+
+  /* Global dialog max-width (covers 30+ dialogs) */
+  .el-dialog {
+    --el-dialog-width: 92vw !important;
+    max-width: 92vw !important;
+    margin: 8vh auto !important;
+  }
+  .el-drawer {
+    width: 100% !important;
+  }
+
+  /* Dialog body overflow protection */
+  .el-dialog__body {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .el-dialog__body > * {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Card headers wrap on mobile */
+  .card-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .card-header .header-right,
+  .card-header .header-left {
+    flex-wrap: wrap;
+  }
+
+  /* Search bars wrap */
+  .search-bar {
+    flex-wrap: wrap;
+  }
+  .el-form--inline .el-form-item {
+    margin-right: 8px;
+    margin-bottom: 8px;
+  }
+
+  /* Content padding reduction */
+  .page-container,
+  .ai-reports-page {
+    padding: var(--page-padding) !important;
+  }
+  .el-card__header {
+    padding: 12px 16px !important;
+  }
+  .el-card__body {
+    padding: 12px 16px !important;
+  }
+
+  /* Descriptions responsive */
+  .el-descriptions {
+    --el-descriptions-item-bordered-label-background: var(--bg-color);
+  }
+  .el-descriptions .el-descriptions__body .el-descriptions__table {
+    display: block;
+  }
+
+  /* Pagination compact */
+  .pagination-wrapper {
+    flex-wrap: wrap;
+    justify-content: center !important;
+  }
+
+  /* Steps compact */
+  .el-steps {
+    flex-wrap: wrap;
+  }
+
+  /* Form items stack */
+  .item-row {
+    flex-wrap: wrap;
+  }
+
+  /* Grid layouts single column */
+  .connection-grid,
+  .module-grid,
+  [class*="stats-grid"],
+  [class*="summary-grid"],
+  [class*="metric-grid"],
+  [class*="kpi-grid"] {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* Search bar fixed-width inputs → fluid */
+  .search-bar .el-select,
+  .search-bar .el-input,
+  .card-header .el-select,
+  .card-header .el-input {
+    width: 100% !important;
+    min-width: unset !important;
+  }
+}
+
+/* ============================================================
+ * Print Styles — SmartBI charts & dashboards
+ * ============================================================ */
+@media print {
+  /* Hide interactive controls */
+  .app-sidebar,
+  .app-header,
+  .el-overlay,
+  .header-actions,
+  .search-bar,
+  .pagination-wrapper,
+  .el-upload,
+  .upload-section,
+  .el-button,
+  [class*="toolbox"] {
+    display: none !important;
+  }
+
+  /* Full-width content */
+  .app-main,
+  .main-content {
+    margin-left: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Cards: remove shadow, thin border */
+  .el-card {
+    box-shadow: none !important;
+    border: 1px solid #e2e8f0 !important;
+    break-inside: avoid;
+  }
+
+  /* Charts: ensure visible height and avoid page breaks inside */
+  [id^="chart-"],
+  .chart-container {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    min-height: 200px;
+  }
+
+  /* KPI cards: inline layout for print */
+  .kpi-grid,
+  [class*="kpi-grid"] {
+    grid-template-columns: repeat(4, 1fr) !important;
+  }
+
+  /* Force background colors for charts */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* ============================================================
+ * UX 进阶 2026-04-18: Pulse hint animation — backend errors with
+ * hintTarget label cause the matching button to pulse for 5s,
+ * giving users a visual breadcrumb to the next action.
+ * ============================================================ */
+@keyframes cretas-pulse-hint {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0.7); }
+  50%  { box-shadow: 0 0 0 12px rgba(245, 108, 108, 0.1); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 108, 108, 0); }
+}
+
+.cretas-pulse-hint {
+  position: relative !important;
+  outline: 3px solid #F56C6C !important;
+  outline-offset: 2px !important;
+  animation: cretas-pulse-hint 1.2s ease-out infinite !important;
+  transition: outline 0.2s ease;
+  z-index: 10 !important;
+}
+
+/* ============================================================
+ * RBAC defense-in-depth 2026-05-13 (P1-D, PR #442 follow-up):
+ * .price-masked is applied to em-dash placeholders that fill in for
+ * @PriceSensitive fields stripped by backend ResponseAdvice / Jackson
+ * serializer for roles lacking procurement:price:view. The class is
+ * a semantic marker (used by static-Vue v-if defense in
+ * procurement/orders/list.vue + procurement/receives/list.vue +
+ * sales/orders/list.vue, AND by Canvas Dynamic SchemaTableRenderer
+ * after P1-D fix). Subtle muted styling avoids drawing attention while
+ * keeping the placeholder distinguishable from a legitimately empty
+ * cell on hover/zoom.
+ * ============================================================ */
+.price-masked {
+  color: var(--color-text-placeholder, #A0AEC0);
+  font-style: italic;
+  user-select: none;
+}
+
+/* Global semantic table sizing (2026-07-20).
+ * Business names, SKU descriptions, addresses and remarks must remain readable.
+ * Element Plus' default single-line ellipsis hid identity-bearing text and forced
+ * every screen to guess a fixed width. Let content establish the natural width,
+ * keep short numeric/status columns compact, and wrap when the viewport is the
+ * limiting factor. Tables still retain their native horizontal scrollbar. */
+.el-table .el-table__header,
+.el-table .el-table__body,
+.el-table .el-table__footer {
+  table-layout: auto !important;
+  min-width: 100% !important;
+}
+
+.el-table .cell {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.el-table td.semantic-text-column .cell,
+.el-table td[class*="name"] .cell,
+.el-table td[class*="address"] .cell,
+.el-table td[class*="remark"] .cell {
+  min-width: max-content;
+  max-width: 32rem;
+}
+
+/* Core business lists use a fixed grid so header/body/fixed-operation columns
+ * share the same width contract. Other detail tables retain the semantic
+ * content-driven sizing above. */
+.business-list-table .el-table__header,
+.business-list-table .el-table__body,
+.business-list-table .el-table__footer {
+  table-layout: fixed !important;
+  width: 100% !important;
+}
+
+/* Drag-resizable tables (2026-08-19). Element Plus renders the header and the
+ * body as TWO separate <table> elements whenever `table-layout="fixed"`, and the
+ * semantic `auto !important` rule above lands on both of them. Each table then
+ * sizes from its own content, so the moment a user drags a column BELOW the
+ * intrinsic width of its header text the two stop agreeing — measured in
+ * Chromium: 「批次号」 dragged to 60px renders header=95.55px / body=60px, and
+ * every column to its right inherits the drift. That is the customer's
+ * 「压缩后表头和数据宽度不一致」.
+ *
+ * Tables wired to `useTableColumnWidth` therefore opt back into a fixed grid so
+ * the persisted width is the ONE width both tables honour. They already declared
+ * `table-layout="fixed"` in their templates; this rule is what makes that
+ * declaration actually take effect. Non-resizable tables keep the semantic
+ * content-driven sizing above — they never compress a column past its header. */
+.resizable-column-table .el-table__header,
+.resizable-column-table .el-table__body,
+.resizable-column-table .el-table__footer {
+  table-layout: fixed !important;
+  width: 100% !important;
+}
+
+.business-list-table th.el-table__cell,
+.business-list-table td.el-table__cell {
+  box-sizing: border-box;
+  border-right-color: var(--el-table-border-color);
+  padding-block: 9px;
+}
+
+.business-list-table th.el-table__cell > .cell,
+.business-list-table td.el-table__cell > .cell {
+  box-sizing: border-box;
+  width: 100%;
+  padding-inline: 12px;
+}
+
+.business-list-table th.el-table__cell > .cell {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.business-list-table .el-table__fixed-right {
+  z-index: 4;
+}
+
+.business-list-table .el-table__fixed-right-patch {
+  background: var(--el-bg-color);
+}
+
+.business-list-table .el-table__body tr td.el-table-fixed-column--right {
+  background: var(--el-bg-color);
+}
+
+.business-list-table .el-table__body tr.el-table__row--striped td.el-table-fixed-column--right {
+  background: var(--el-fill-color-lighter);
+}
+
+.business-list-table .el-table__body tr:hover > td.el-table-fixed-column--right {
+  background: var(--el-table-row-hover-bg-color);
+}
+
+.business-list-table td.business-list-table__actions,
+.business-list-table th.business-list-table__actions {
+  border-left: 1px solid var(--el-table-border-color);
+  box-shadow: -8px 0 14px rgb(31 45 61 / 7%);
+}
+
+.business-list-table td.business-list-table__actions > .cell {
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.business-action-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
+
+.business-action-row .el-button + .el-button {
+  margin-left: 0;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   客户 2026-07-20 (Sheet 第 13 行):「在任务框中, 背景为白色、鼠标指针为白色,
+   对比度非常低, 找不到指针。自定义系统鼠标颜色与任务框内鼠标无关联。
+   具体场景为: 标签栏宽度调整时、WorkFlow 编辑时。」
+
+   两个场景都是网页能改的 —— 换成自带白色描边的 SVG 光标: 深色主体 + 白色外描边,
+   白底黑底都看得见。末尾一律保留标准关键字作回退, 浏览器不认 data URI 时行为不变。
+
+   ⚠️ 2026-08-19 订正了这一段原来的两个说法, 两个都是**没量就写下的**:
+
+   1. 原文说「全局这条优先级更高, 编辑器里那两条裸 crosshair 不用管」。**实测是反的。**
+      Vue 的 scoped 编译会给选择器补一个 [data-v-xxxx], 于是
+      `.canvas-shell.is-connecting[data-v-ecdbf913]` (0-3-0) 压过这里的
+      `.canvas-shell.is-connecting` (0-2-0)。真实 Chrome 里量到的 computed cursor
+      是 `crosshair` —— 描边光标从 2026-08-05 上线起就没生效过。
+      ⇒ 现在把 `cursor:` 写在 **组件自己的 scoped 块里**(引用下面这个变量),
+        这里不再重复一条注定输掉的规则。变量留在这儿, 保持「光标图形只定义一处」。
+
+   2. 原文说列宽那半「光标是 Element Plus 用 JS 设到 body 上的标准 col-resize,
+      网页覆盖不了系统配色」, 并据此只美化了落点指示线。**前半句对, 结论错**:
+      EP 设的是**行内样式**(`document.body.style.cursor = "col-resize"`,
+      见 table-header/event-helper.mjs:125), 而作者样式表里的 `!important`
+      本来就压得过行内样式。实测: 加上下面这条规则后 computed cursor 变成 url(...),
+      不加则是 col-resize。⇒ 这一半同样能修, 下面就修了。
+      落点指示线 (.el-table__column-resize-proxy) 是另一回事, 继续保留。
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --cretas-cursor-crosshair:
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><g fill="none" stroke="%23ffffff" stroke-width="4" stroke-linecap="round"><path d="M12 3v18M3 12h18"/></g><g fill="none" stroke="%23111111" stroke-width="1.6" stroke-linecap="round"><path d="M12 3v18M3 12h18"/></g></svg>') 12 12,
+    crosshair;
+  --cretas-cursor-col-resize:
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><g fill="none" stroke="%23ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/></g><g fill="none" stroke="%23111111" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/></g></svg>') 12 12,
+    col-resize;
+}
+
+/* EP 把 col-resize 写成行内样式(body 一处, 可排序表头 th 与它的 .caret-wrapper 各一处),
+ * 所以这里必须 !important —— 作者样式表的 important 声明压过作者行内样式。 */
+body[style*="col-resize"],
+.el-table th.el-table__cell[style*="col-resize"],
+.el-table th.el-table__cell[style*="col-resize"] .caret-wrapper {
+  cursor: var(--cretas-cursor-col-resize) !important;
+}
+
+.el-table__column-resize-proxy {
+  border-left: 2px solid var(--el-color-primary, #409eff);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 90%);
+}

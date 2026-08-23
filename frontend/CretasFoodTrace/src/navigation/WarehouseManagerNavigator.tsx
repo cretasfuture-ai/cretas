@@ -1,0 +1,25 @@
+/**
+ * Warehouse Manager 导航器入口
+ * 仅 warehouse_manager 和 warehouse_worker 角色使用
+ * 5个Tab: 首页 | 入库 | 发货 | 库存 | 我的
+ */
+
+import React from 'react';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import WarehouseManagerTabNavigator from './WarehouseManagerTabNavigator';
+// AI 对话 (U-NAV-1 跨角色复用 FA 端 AIChatScreen, Sprint 2 Track G Day 9)
+import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
+
+const Stack = createNativeStackNavigator();
+
+export function WarehouseManagerNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="WarehouseManagerMain" component={WarehouseManagerTabNavigator} />
+      {/* AI 对话 (U-NAV-1 Sprint 2 Track G Day 9) */}
+      <Stack.Screen name="AIChat" component={AIChatScreen} options={{ headerShown: true, title: 'AI 对话' }} />
+    </Stack.Navigator>
+  );
+}
+
+export default WarehouseManagerNavigator;

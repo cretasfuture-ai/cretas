@@ -1,0 +1,1043 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import { useBusinessMode } from '@/composables/useBusinessMode';
+import { get, post } from '@/api/request';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { ArrowLeft, Plus, Refresh } from '@element-plus/icons-vue';
+import { formatAmount } from '@/utils/tableFormatters';
+import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
+import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import type { TableRow } from '@/types/api';
+import { TableFooter } from '@/components/list';
+import { useListSummary } from '@/composables/useListSummary';
+import { formatSummaryForAI } from '@/utils/aiSummaryContext';
+import type { ListSummaryRequest } from '@/types/listSummary';
+import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
+import { displayUnit } from '@/utils/unitPricing';
+import {
+  aggregateFinishedGoodsOptions,
+  aggregateMaterialInventoryOptions,
+  applyTransferCategory,
+  applySelectedOption,
+  findDuplicateTransferRow,
+  buildTransferCategoryOptions,
+  optionsForTransferCategory,
+  resetSelectedOption,
+  TRANSFER_TYPE_OPTIONS,
+  toTransferItemPayload,
+  type FinishedGoodsInventoryBatch,
+  type MaterialInventoryBatch,
+  type TransferCreateRow,
+  type TransferSelectableItem,
+  type TransferType,
+} from './transferCreate';
+
+const router = useRouter();
+const route = useRoute();
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const { label } = useBusinessMode();
+const factoryId = computed(() => authStore.factoryId);
+const canWrite = computed(() => permissionStore.canWrite('warehouse'));
+const canViewPrice = computed(() => permissionStore.canViewPrice);
+const { goCreate } = useCreateAndReturn();
+const isCreateWorkspace = computed(() => route.name === 'TransferCreate');
+
+const loading = ref(false);
+const tableData = ref<TableRow[]>([]);
+const pagination = ref({ page: 1, size: 10, total: 0 });
+
+// U-FOOTER-1
+const summaryRequest = computed<ListSummaryRequest>(() => ({ filterConditions: {} }));
+const { summary: footerSummary, loading: footerLoading } = useListSummary('internalTransfer', summaryRequest);
+
+/**
+ * 同厂调拨 APPROVED = 审批过了但库存还没动, 必须再点一次「确认调拨入库」才扣源仓/建目标仓批次
+ * (TransferServiceImpl#confirmTransfer 的 intraFactory 分支)。跨厂还要走发运→签收, 不在此列。
+ * 客户 2026-07-30 反馈「审核后 库存没有过来」, 实测 3 张单卡在 APPROVED 最早一张 6 周。
+ */
+function awaitingInboundConfirm(row: Record<string, unknown>): boolean {
+  if (String(row.status) !== 'APPROVED') return false;
+  return String(row.sourceFactoryId || '') === String(row.targetFactoryId || '');
+}
+
+const statusMap: Record<string, { text: string; type: string }> = {
+  DRAFT: { text: '草稿', type: 'info' },
+  REQUESTED: { text: '已申请', type: 'warning' },
+  APPROVED: { text: '已批准', type: '' },
+  REJECTED: { text: '已驳回', type: 'danger' },
+  SHIPPED: { text: '已发运', type: 'warning' },
+  RECEIVED: { text: '已签收', type: '' },
+  CONFIRMED: { text: '已确认', type: 'success' },
+  CANCELLED: { text: '已取消', type: 'info' },
+  // #1214 缺口修复: 撤销小结连带冲销同厂调拨记录时置此状态 (物理货物需人工核实/退回, 见调拨单备注)。
+  REVERSED: { text: '已冲销', type: 'danger' },
+};
+
+const typeMap: Record<string, string> = {
+  HQ_TO_BRANCH: '总部→分部',
+  BRANCH_TO_BRANCH: '分部→分部',
+  BRANCH_TO_HQ: '分部→总部',
+  WAREHOUSE_TO_WAREHOUSE: '仓库间调拨',
+};
+
+// PR #289 §B9 — manual transfer create dialog state
+// T4-B4 (issue #532): backend ReferenceDataController.findMaterials now emits currentStock
+// (PR adds it via MaterialBatchRepository.sumQuantityByMaterialType bulk query — issue #540).
+// Treat as optional + accept string|number to tolerate BigDecimal-as-string JSON encoding.
+interface FactoryNetworkEntry { factoryId: string; factoryName: string }
+
+const submitting = ref(false);
+const submittingTransferId = ref('');
+const formRef = ref();
+const today = () => new Date().toISOString().slice(0, 10);
+const form = ref({
+  transferType: 'BRANCH_TO_HQ' as TransferType,
+  targetFactoryId: '',
+  sourceWarehouseId: '',
+  targetWarehouseId: '',
+  transferDate: today(),
+  expectedArrivalDate: '',
+  remark: '',
+  items: [] as TransferCreateRow[],
+});
+const createProgressStep = computed(() => submitting.value ? 2 : (form.value.items.length > 0 ? 1 : 0));
+function validateWarehouseTransferSource(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  if (!value) {
+    callback(new Error('请选择调出仓库'));
+    return;
+  }
+  callback();
+}
+
+function validateWarehouseTransferTarget(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  if (!value) {
+    callback(new Error('请选择调入仓库'));
+    return;
+  }
+  if (form.value.transferType === 'WAREHOUSE_TO_WAREHOUSE'
+      && form.value.sourceWarehouseId && value === form.value.sourceWarehouseId) {
+    callback(new Error('调入仓库不能和调出仓库相同'));
+    return;
+  }
+  callback();
+}
+
+const formRules = {
+  sourceWarehouseId: [{ required: true, validator: validateWarehouseTransferSource, trigger: 'change' }],
+  targetWarehouseId: [{ required: true, validator: validateWarehouseTransferTarget, trigger: 'change' }],
+  transferType: [{ required: true, message: '请选择调拨类型', trigger: 'change' }],
+  targetFactoryId: [{ required: true, message: '请选择调入方', trigger: 'change' }],
+  transferDate: [{ required: true, message: '请选择调拨日期', trigger: 'change' }],
+};
+const sourceMaterialOptions = ref<TransferSelectableItem[]>([]);
+const finishedGoodsOptions = ref<TransferSelectableItem[]>([]);
+const sourceInventoryLoading = ref(false);
+const sourceInventoryLoaded = ref(false);
+const sourceInventoryError = ref('');
+const factoryNetworkOptions = ref<FactoryNetworkEntry[]>([]);
+const factoryNetworkLoading = ref(false);
+// F-FP-4: 仓库下拉 (参考 stocktakes/index.vue 写法)
+interface WarehouseOption { id: string | number; name: string; code?: string; type?: string }
+const sourceWarehouseOptions = ref<WarehouseOption[]>([]);
+const targetWarehouseOptions = ref<WarehouseOption[]>([]);
+
+async function syncRouteWorkspace() {
+  if (isCreateWorkspace.value) {
+    initializeCreateForm();
+    await Promise.all([loadFactoryNetwork(), loadSourceWarehouses()]);
+    return;
+  }
+  await loadData();
+}
+
+onMounted(syncRouteWorkspace);
+watch(() => route.name, syncRouteWorkspace);
+
+async function loadData() {
+  if (!factoryId.value) return;
+  loading.value = true;
+  try {
+    const res = await get(`/${factoryId.value}/transfers`, {
+      params: { page: pagination.value.page, size: pagination.value.size },
+    });
+    if (res.success && res.data) {
+      tableData.value = res.data.content || [];
+      pagination.value.total = res.data.totalElements || 0;
+    } else if (res.success === false) {
+      ElMessage.error(res.message || '加载失败');
+    }
+  } catch { /* axios interceptor already displayed error toast */ }
+  finally { loading.value = false; }
+}
+
+interface InventoryByWarehouseResponse {
+  materials?: MaterialInventoryBatch[];
+  products?: FinishedGoodsInventoryBatch[];
+}
+
+async function loadSourceInventoryOptions() {
+  sourceMaterialOptions.value = [];
+  finishedGoodsOptions.value = [];
+  sourceInventoryError.value = '';
+  sourceInventoryLoaded.value = Boolean(form.value.sourceWarehouseId);
+  if (!factoryId.value || !form.value.sourceWarehouseId) return;
+  sourceInventoryLoading.value = true;
+  try {
+    const res = await get<InventoryByWarehouseResponse>(`/${factoryId.value}/inventory/by-warehouse`, {
+      params: {
+        targetFactoryId: factoryId.value,
+        warehouseId: form.value.sourceWarehouseId,
+      },
+    });
+    const inventory = res?.data;
+    sourceMaterialOptions.value = aggregateMaterialInventoryOptions(inventory?.materials || []);
+    finishedGoodsOptions.value = aggregateFinishedGoodsOptions(inventory?.products || []);
+  } catch {
+    sourceInventoryError.value = '库存基本类型读取失败，请刷新后重试或联系仓库管理员。';
+  }
+  finally { sourceInventoryLoading.value = false; }
+}
+
+async function handleSourceWarehouseChange() {
+  form.value.items.forEach((row) => {
+    row.selectionCategory = '';
+    row.materialCategoryFilter = undefined;
+    row.itemType = 'RAW_MATERIAL';
+    resetSelectedOption(row);
+  });
+  await loadSourceInventoryOptions();
+}
+
+const availableTransferCategories = computed(() => buildTransferCategoryOptions(
+  sourceMaterialOptions.value,
+  finishedGoodsOptions.value,
+));
+
+const transferCategoryUnavailableReason = computed(() => {
+  if (!form.value.sourceWarehouseId) return '请先选择调出仓库';
+  if (sourceInventoryLoading.value) return '正在读取库存基本类型';
+  if (sourceInventoryError.value) return sourceInventoryError.value;
+  if (sourceInventoryLoaded.value && availableTransferCategories.value.length === 0) {
+    return '所选仓库暂无可调拨库存';
+  }
+  return '';
+});
+
+async function handleTransferCategoryChange(row: TransferCreateRow, categoryValue: string) {
+  const option = availableTransferCategories.value.find((candidate) => candidate.value === categoryValue);
+  if (!option) {
+    row.selectionCategory = '';
+    row.materialCategoryFilter = undefined;
+    row.itemType = 'RAW_MATERIAL';
+    resetSelectedOption(row);
+    return;
+  }
+  applyTransferCategory(row, option);
+  if (form.value.sourceWarehouseId && !sourceInventoryLoaded.value) await loadSourceInventoryOptions();
+}
+
+function selectableOptions(row: TransferCreateRow): TransferSelectableItem[] {
+  return optionsForTransferCategory(row, sourceMaterialOptions.value, finishedGoodsOptions.value);
+}
+
+/**
+ * 已在本单其它行选过的物料, 在下拉里置灰 —— fool-proof Rule 1 (边界前置, 不事后报错)。
+ * 2026-08-09 六膳门 TRF-20260809-1790: 同一原料被选了两次, 每行 1000 都 ≤ 现有库存 1000,
+ * 逐行校验全过, 直到审批后确认入库才炸。
+ */
+function isPickedInAnotherRow(row: TransferCreateRow, optionId: string): boolean {
+  return form.value.items.some(other => other !== row
+    && other.itemType === row.itemType
+    && other.selectedItemId === optionId);
+}
+
+// PR #309 C2 — load visible factory network for 调入方 dropdown
+async function loadFactoryNetwork() {
+  if (!factoryId.value) return;
+  factoryNetworkLoading.value = true;
+  try {
+    const res = await get<FactoryNetworkEntry[]>(`/${factoryId.value}/factories/network`);
+    const entries = (res?.data ?? []) as FactoryNetworkEntry[];
+    factoryNetworkOptions.value = Array.isArray(entries) ? entries : [];
+    // Default to own factory if only one entry visible (and form not yet filled)
+    if (factoryNetworkOptions.value.length === 1 && !form.value.targetFactoryId) {
+      form.value.targetFactoryId = factoryNetworkOptions.value[0].factoryId;
+      await loadTargetWarehouses();
+    }
+  } catch {
+    // Fallback: at minimum let user fill in manually (so we keep filterable allow-create on the select)
+    factoryNetworkOptions.value = [];
+  } finally {
+    factoryNetworkLoading.value = false;
+  }
+}
+
+// F-FP-4: 加载本厂仓库列表 (同 stocktakes/index.vue loadWarehouses)
+async function loadWarehousesForFactory(targetFactoryId: string): Promise<WarehouseOption[]> {
+  if (!factoryId.value || !targetFactoryId) return [];
+  try {
+    const ownFactory = targetFactoryId === factoryId.value;
+    const url = ownFactory
+      ? `/${factoryId.value}/factory/warehouses`
+      : `/${factoryId.value}/inventory/warehouses`;
+    const res = await get<WarehouseOption[]>(url, ownFactory ? undefined : {
+      params: { targetFactoryId },
+    });
+    return Array.isArray(res.data) ? res.data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function loadSourceWarehouses() {
+  sourceWarehouseOptions.value = factoryId.value
+    ? await loadWarehousesForFactory(factoryId.value)
+    : [];
+}
+
+async function loadTargetWarehouses() {
+  targetWarehouseOptions.value = form.value.targetFactoryId
+    ? await loadWarehousesForFactory(form.value.targetFactoryId)
+    : [];
+}
+
+async function handleTargetFactoryChange() {
+  form.value.targetWarehouseId = '';
+  await loadTargetWarehouses();
+}
+
+async function handleTransferTypeChange(value: TransferType) {
+  form.value.targetWarehouseId = '';
+  if (value === 'WAREHOUSE_TO_WAREHOUSE') {
+    form.value.targetFactoryId = factoryId.value || '';
+  }
+  await loadTargetWarehouses();
+}
+
+function initializeCreateForm() {
+  form.value = {
+    transferType: 'BRANCH_TO_HQ',
+    targetFactoryId: '',
+    sourceWarehouseId: '',
+    targetWarehouseId: '',
+    transferDate: today(),
+    expectedArrivalDate: '',
+    remark: '',
+    items: [],
+  };
+  sourceMaterialOptions.value = [];
+  finishedGoodsOptions.value = [];
+  sourceInventoryLoaded.value = false;
+  sourceInventoryError.value = '';
+}
+
+function openCreateWorkspace() {
+  router.push({ name: 'TransferCreate' });
+}
+
+function cancelCreate() {
+  router.push({ name: 'TransferList' });
+}
+
+function addItem() {
+  form.value.items.push({
+    itemType: 'RAW_MATERIAL',
+    selectionCategory: '',
+    materialCategoryFilter: undefined,
+    selectedItemId: '',
+    materialTypeId: undefined,
+    productTypeId: undefined,
+    itemName: '',
+    quantity: undefined,
+    unit: '',
+    materialPackagingSpecId: undefined,
+    packagingOptions: [],
+    _inventoryUnit: '',
+    _packageFactor: 1,
+    unitPrice: undefined,
+    remark: '',
+  });
+}
+
+function removeItem(idx: number) {
+  form.value.items.splice(idx, 1);
+}
+
+async function handleMaterialChange(idx: number, selectedId: string) {
+  const row = form.value.items[idx];
+  const m = selectableOptions(row).find(o => o.id === selectedId);
+  if (m) {
+    applySelectedOption(row, m);
+    if (row.itemType !== 'FINISHED_GOODS' && row.materialTypeId) {
+      const response = await get<{
+        packagingSpecs?: NonNullable<TransferCreateRow['packagingOptions']>;
+      } | null>(`/${factoryId.value}/material-packaging/by-material/${row.materialTypeId}`);
+      row.packagingOptions = (response.data?.packagingSpecs || []).filter((spec) => spec);
+      const selected = row.packagingOptions.find((spec) => spec.defaultSpec)
+        || (row.packagingOptions.length === 1 ? row.packagingOptions[0] : undefined);
+      if (selected) applyTransferPackaging(row, selected.id);
+      else if (row.packagingOptions.length > 1) {
+        row.unit = '';
+        row.materialPackagingSpecId = undefined;
+      }
+    }
+  }
+}
+
+function applyTransferPackaging(row: TransferCreateRow, specId: string) {
+  const selected = row.packagingOptions?.find((spec) => spec.id === specId);
+  if (!selected) return;
+  row.materialPackagingSpecId = selected.id;
+  row.unit = selected.packageUnit;
+  row._inventoryUnit = selected.baseUnit;
+  row._packageFactor = Number(selected.conversionFactor);
+}
+
+function transferBaseQuantity(row: TransferCreateRow): number {
+  return Number(row.quantity || 0) * Number(row._packageFactor || 1);
+}
+
+function transferPackageLimit(row: TransferCreateRow): number | undefined {
+  if (row._currentStock == null || row._currentStock === '') return undefined;
+  return Number(row._currentStock) / Number(row._packageFactor || 1);
+}
+
+function formatStock(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '-';
+  const n = Number(v);
+  if (Number.isNaN(n)) return String(v);
+  return n.toLocaleString('zh-CN', { maximumFractionDigits: 3 });
+}
+
+async function submitCreate() {
+  if (!formRef.value) return;
+  const valid = await formRef.value.validate().catch(() => false);
+  if (!valid) return;
+  if (form.value.items.length === 0) {
+    ElMessage.warning('请至少添加一行调拨物料');
+    return;
+  }
+  // 同一物料重复行 (TRF-20260809-1790): 逐行库存校验对它完全沉默 —— 两行各自 ≤ 库存,
+  // 合计却是库存的两倍。必须在逐行校验之前拦, 否则下面的循环会逐行报"够", 一路放行。
+  const duplicate = findDuplicateTransferRow(form.value.items);
+  if (duplicate) {
+    ElMessage({
+      message: `「${duplicate.name}」在本单里重复出现 ${duplicate.rows.length} 行`
+        + `（合计 ${formatStock(duplicate.totalBaseQuantity)} ${displayUnit(duplicate.baseUnit)}）,`
+        + ` 同一物料请合并成一行 —— 多行会各自去扣同一批库存, 看着每行都够, 审批通过后确认入库才会失败`,
+      type: 'error', duration: 0, showClose: true,
+    });
+    return;
+  }
+  for (const it of form.value.items) {
+    if (!it.selectionCategory) {
+      ElMessage.warning('请为每行选择与建品一致的基本类型'); return;
+    }
+    if (!it.selectedItemId || (it.itemType === 'FINISHED_GOODS' ? !it.productTypeId : !it.materialTypeId)) {
+      ElMessage.warning('请为每行选择与基本类型匹配的物料或成品'); return;
+    }
+    if (!it.quantity || it.quantity <= 0) { ElMessage.warning('每行数量必须大于 0'); return; }
+    if (!it.unit) { ElMessage.warning('每行必须有单位'); return; }
+    if (it.itemType !== 'FINISHED_GOODS'
+        && (it.packagingOptions?.length || 0) > 0
+        && !it.materialPackagingSpecId) {
+      ElMessage.warning(`请为「${it.itemName}」选择调拨包装规格`); return;
+    }
+    // F-FP-3 Rule1: 超过现有库存时阻止提交，边界前置
+    const stock = (it as any)._currentStock;
+    if (stock != null && stock !== '' && transferBaseQuantity(it) > Number(stock)) {
+      ElMessage({ message: `折合基本量 ${transferBaseQuantity(it)} ${displayUnit(it._inventoryUnit)} 超过现有库存 ${stock}（物料：${it.itemName || it.materialTypeId}），请调整数量`, type: 'error', duration: 0, showClose: true });
+      return;
+    }
+  }
+  submitting.value = true;
+  try {
+    const payload: Record<string, unknown> = {
+      transferType: form.value.transferType,
+      targetFactoryId: form.value.targetFactoryId.trim(),
+      transferDate: form.value.transferDate,
+      remark: form.value.remark || undefined,
+      items: form.value.items.map(toTransferItemPayload),
+    };
+    payload.sourceWarehouseId = form.value.sourceWarehouseId.trim();
+    payload.targetWarehouseId = form.value.targetWarehouseId.trim();
+    if (form.value.expectedArrivalDate) payload.expectedArrivalDate = form.value.expectedArrivalDate;
+
+    const res = await post(`/${factoryId.value}/transfers`, payload);
+    if (res.success && res.data) {
+      ElMessage.success('调拨单已创建 (DRAFT)，可在详情页继续走 申请→审批→发货→签收 流程');
+      const created = res.data as { id?: string | number };
+      if (created.id !== undefined && created.id !== null) {
+        await router.replace({ name: 'TransferDetail', params: { id: String(created.id) } });
+      } else {
+        await router.replace({ name: 'TransferList' });
+      }
+    }
+  } catch (e) {
+    if (e === 'cancel') return;
+    const err = e as { status?: number; message?: string; actionHint?: string | null } | undefined;
+    if (!err || (err.status !== 409 && !err.actionHint)) {
+      ElMessage.error(err?.message || '创建调拨单失败');
+    }
+  } finally {
+    submitting.value = false;
+  }
+}
+
+function goDetail(id: string) { router.push(`/transfer/${id}`); }
+
+async function submitForApproval(row: TableRow) {
+  if (submittingTransferId.value || row.status !== 'DRAFT') return;
+  try {
+    await ElMessageBox.confirm(
+      `提交调拨单「${row.transferNumber || row.id}」到统一 OA 审批？提交后请在个人 OA 查看进度。`,
+      '提交 OA 审批',
+      { confirmButtonText: '确认提交', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  submittingTransferId.value = String(row.id);
+  try {
+    const res = await post(`/${factoryId.value}/transfers/${row.id}/request`);
+    if (!res.success) throw new Error(res.message || '提交 OA 审批失败');
+    ElMessage.success('已提交统一 OA 审批');
+    await loadData();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '提交 OA 审批失败';
+    ElMessage.error(message);
+  } finally {
+    submittingTransferId.value = '';
+  }
+}
+function handlePageChange(page: number) { pagination.value.page = page; loadData(); }
+function handleSizeChange(size: number) { pagination.value.size = size; pagination.value.page = 1; loadData(); }
+
+function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.value; }
+</script>
+
+<template>
+  <div class="page-wrapper">
+    <ConceptDisambiguationAlert
+      v-if="!isCreateWorkspace"
+      here-name="调拨单"
+      here="把物料从一个工厂/仓库搬到另一个工厂/仓库（实际搬动物料、转移所有权）"
+      other-name="仓储管理 → 盘点管理"
+      other="清点仓库实际库存与系统数对比，发现差异（盘盈/盘亏，不搬动物料）"
+      other-path="/warehouse/inventory"
+    />
+    <el-card v-if="!isCreateWorkspace" class="page-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <div class="header-left">
+            <span class="page-title">{{ label('transfer') }}管理</span>
+            <span class="data-count">共 {{ pagination.total }} 条</span>
+          </div>
+          <div class="header-right">
+            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+            <el-button
+              v-if="canWrite"
+              type="primary" :icon="Plus"
+              @click="openCreateWorkspace"
+            >手动新建调拨单</el-button>
+          </div>
+        </div>
+      </template>
+
+      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+        <el-table-column prop="transferNumber" label="调拨编号" width="170" />
+        <el-table-column label="方向" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="isOutbound(row) ? 'danger' : 'success'" size="small">
+              {{ isOutbound(row) ? '调出' : '调入' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="类型" width="120" align="center">
+          <template #default="{ row }">{{ typeMap[row.transferType] || row.transferType }}</template>
+        </el-table-column>
+        <el-table-column label="调出方" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.sourceFactory?.name || row.sourceFactoryId }}</template>
+        </el-table-column>
+        <el-table-column label="调入方" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.targetFactory?.name || row.targetFactoryId }}</template>
+        </el-table-column>
+        <el-table-column prop="transferDate" label="调拨日期" width="120" />
+        <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="120" align="right">
+          <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="132" align="center">
+          <template #default="{ row }">
+            <el-tag :type="(statusMap[row.status]?.type) || 'info'" size="small">
+              {{ statusMap[row.status]?.text || row.status }}
+            </el-tag>
+            <!-- 客户 2026-07-30「审核后 库存没有过来」: 「已批准」在客户眼里等于办完了, 但同厂调拨
+                 还要点一次「确认调拨入库」库存才动。只显示状态词 = 看不出还有事要做 (防呆 Rule 5)。 -->
+            <div v-if="awaitingInboundConfirm(row)" class="tf-await-confirm">待确认入库</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="goDetail(row.id)">详情</el-button>
+            <el-button
+              v-if="awaitingInboundConfirm(row)"
+              type="success" link size="small"
+              @click="goDetail(row.id)"
+            >去确认入库</el-button>
+            <el-button
+              v-if="canWrite && row.status === 'DRAFT'"
+              type="warning"
+              link
+              size="small"
+              :loading="submittingTransferId === String(row.id)"
+              @click="submitForApproval(row)"
+            >提交审批</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <TableFooter
+        :stats="footerSummary?.stats ?? []"
+        :loading="footerLoading"
+        :show-export="false"
+        @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前调拨${formatSummaryForAI(footerSummary)}`, duration: 8000, showClose: true })"
+      />
+
+      <div class="pagination-wrapper">
+        <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
+          :page-sizes="[10, 20, 50]" :total="pagination.total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="handlePageChange" @size-change="handleSizeChange" />
+      </div>
+    </el-card>
+
+    <section v-if="isCreateWorkspace" class="create-workspace" aria-labelledby="transfer-create-title">
+      <header class="workspace-header">
+        <div class="workspace-heading">
+          <el-button :icon="ArrowLeft" text class="back-button" @click="cancelCreate">返回调拨单列表</el-button>
+          <div class="title-line">
+            <div>
+              <h1 id="transfer-create-title">手动新建调拨单</h1>
+              <p>创建仓储调拨草稿，后续在详情页提交 OA 审批并执行调拨。</p>
+            </div>
+            <el-tag type="info" effect="plain" round>新建草稿</el-tag>
+          </div>
+        </div>
+      </header>
+
+      <div class="workspace-progress" aria-label="新建调拨单步骤">
+        <el-steps :active="createProgressStep" finish-status="success" align-center simple>
+          <el-step title="调拨信息" />
+          <el-step title="调拨物料" />
+          <el-step title="创建草稿" />
+        </el-steps>
+      </div>
+
+      <div class="workspace-grid">
+        <main class="workspace-main">
+          <el-card class="form-card" shadow="never">
+            <el-alert
+              type="info" show-icon :closable="false"
+              class="scenario-alert"
+              title="适合领用、研发样品、仓库互调或分部退总仓"
+              description="创建后为草稿，不会立即移动库存；提交统一 OA 审批后，再由仓储执行后续调拨。"
+            />
+            <el-form ref="formRef" :model="form" :rules="formRules" label-width="110px">
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="调拨类型" prop="transferType">
+              <el-select v-model="form.transferType" style="width:100%" @change="handleTransferTypeChange">
+                <el-option
+                  v-for="option in TRANSFER_TYPE_OPTIONS"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="调出方" prop="sourceFactoryId">
+              <el-input :value="factoryId" disabled placeholder="当前工厂 (自动填充)" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="调入方" prop="targetFactoryId">
+              <el-select
+                v-model="form.targetFactoryId"
+                :loading="factoryNetworkLoading"
+                filterable
+                default-first-option
+                placeholder="请选择调入方"
+                clearable
+                style="width:100%"
+                @change="handleTargetFactoryChange"
+              >
+                <el-option
+                  v-for="opt in factoryNetworkOptions"
+                  :key="opt.factoryId"
+                  :label="`${opt.factoryName} (${opt.factoryId})`"
+                  :value="opt.factoryId"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="调拨日期" prop="transferDate">
+              <el-date-picker
+                v-model="form.transferDate" type="date" value-format="YYYY-MM-DD"
+                style="width:100%"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <!-- F-FP-4 Rule3: 仓库改 el-select，仓管员无需记 UUID，参考 stocktakes/index.vue -->
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="调出仓库" prop="sourceWarehouseId">
+              <el-select
+                v-model="form.sourceWarehouseId"
+                placeholder="请选择调出仓库"
+                clearable
+                filterable
+                style="width:100%"
+                @change="handleSourceWarehouseChange"
+              >
+                <el-option
+                  v-for="w in sourceWarehouseOptions"
+                  :key="String(w.id)"
+                  :label="`${w.name}${w.code ? ` (${w.code})` : ''}`"
+                  :value="String(w.id)"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="调入仓库" prop="targetWarehouseId">
+              <el-select
+                v-model="form.targetWarehouseId"
+                placeholder="请选择调入仓库"
+                clearable
+                filterable
+                :disabled="!form.targetFactoryId"
+                style="width:100%"
+              >
+                <el-option
+                  v-for="w in targetWarehouseOptions"
+                  :key="String(w.id)"
+                  :label="`${w.name}${w.code ? ` (${w.code})` : ''}`"
+                  :value="String(w.id)"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="预计到货">
+              <el-date-picker
+                v-model="form.expectedArrivalDate" type="date" value-format="YYYY-MM-DD"
+                style="width:100%" clearable
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="备注 / 原因">
+          <el-input
+            v-model="form.remark" type="textarea" :rows="2"
+            placeholder="如: 领用 / 研发样品 / 余料退总仓 等"
+            maxlength="5000" show-word-limit
+          />
+        </el-form-item>
+
+        <el-divider content-position="left">调拨物料</el-divider>
+        <el-alert
+          v-if="sourceInventoryError"
+          :title="sourceInventoryError"
+          type="error"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 8px"
+        />
+        <UpstreamMissingHint v-else-if="sourceInventoryLoaded && sourceMaterialOptions.length === 0 && finishedGoodsOptions.length === 0" description="所选调出仓库暂无可调拨物料或成品库存" target-module="warehouse" require-write action-text="去创建物料类型" contact-text="请联系仓库管理员核对库存" @action="goCreate('/warehouse/material-types')" />
+        <el-button size="small" :icon="Plus" @click="addItem" style="margin-bottom:8px">添加物料</el-button>
+        <div class="material-table-scroll" role="region" aria-label="调拨物料明细" tabindex="0">
+        <el-table :data="form.items" border empty-text="点击「添加物料」开始">
+          <el-table-column label="基本类型" width="160">
+            <template #default="{ row }">
+              <el-select
+                v-model="row.selectionCategory"
+                size="small"
+                style="width:100%"
+                :loading="sourceInventoryLoading"
+                :disabled="Boolean(transferCategoryUnavailableReason)"
+                :placeholder="transferCategoryUnavailableReason || '选择基本类型'"
+                @change="(value: string) => handleTransferCategoryChange(row, value)"
+              >
+                <el-option
+                  v-for="option in availableTransferCategories"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="物料" min-width="220">
+            <template #default="{ row, $index }">
+              <el-select
+                v-model="row.selectedItemId"
+                :placeholder="!form.sourceWarehouseId ? '请先选择调出仓库' : '选择物料/成品'"
+                :loading="sourceInventoryLoading"
+                :disabled="!form.sourceWarehouseId"
+                filterable size="small" style="width:100%"
+                @change="(val: string) => handleMaterialChange($index, val)"
+              >
+                <el-option
+                  v-for="m in selectableOptions(row)" :key="m.id"
+                  :label="`${m.name}${m.code ? ' (' + m.code + ')' : ''} · 可用 ${formatStock(m.currentStock)} ${displayUnit(m.unit)}${isPickedInAnotherRow(row, m.id) ? ' · 已在本单其它行' : ''}`"
+                  :value="m.id"
+                  :disabled="isPickedInAnotherRow(row, m.id)"
+                />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="调拨包装" min-width="230">
+            <template #default="{ row }">
+              <el-select
+                v-if="row.itemType !== 'FINISHED_GOODS' && (row.packagingOptions?.length || 0) > 0"
+                v-model="row.materialPackagingSpecId"
+                placeholder="选择包装规格"
+                size="small"
+                style="width:100%"
+                @change="(value: string) => applyTransferPackaging(row, value)"
+              >
+                <el-option
+                  v-for="spec in row.packagingOptions"
+                  :key="spec.id"
+                  :label="`${spec.name} · 1${displayUnit(spec.packageUnit)}=${spec.conversionFactor}${displayUnit(spec.baseUnit)}`"
+                  :value="spec.id"
+                />
+              </el-select>
+              <span v-else>{{ row.selectedItemId ? `${displayUnit(row.unit)}（基本单位）` : '请先选择物料' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="数量 / 单位" width="190">
+            <!-- F-FP-3 Rule1: :max = 现有库存，超量时橙色提示边框，超量禁提交 -->
+            <template #default="{ row }">
+              <div class="quantity-unit-cell">
+                <el-input-number
+                  v-model="row.quantity" :min="0.01" :precision="3"
+                  :max="transferPackageLimit(row)"
+                  :controls="false" size="small" placeholder="数量"
+                  :disabled="!row.selectedItemId"
+                  :class="{ 'over-stock': row._currentStock != null && row._currentStock !== '' && transferBaseQuantity(row) > Number(row._currentStock) }"
+                />
+                <span class="unit-chip">{{ row.selectedItemId ? displayUnit(row.unit) : '单位' }}</span>
+              </div>
+              <div v-if="row.selectedItemId && row.quantity" class="base-quantity-preview">
+                折合 {{ formatStock(transferBaseQuantity(row)) }} {{ displayUnit(row._inventoryUnit || row.unit) }}
+              </div>
+            </template>
+          </el-table-column>
+          <!-- T4-B4 (issue #532): F006 customer asked for 现有库存 inline next to 调拨数量 so user
+               knows the upper bound before submitting. Backend ReferenceDataController.findMaterials
+               populates currentStock (issue #540 fix). Red when 调拨数量 exceeds available; green otherwise. -->
+          <el-table-column label="现有库存" width="110" align="right">
+            <template #default="{ row }">
+              <span v-if="row._currentStock != null && row._currentStock !== ''"
+                    :style="{ color: Number(row._currentStock) < transferBaseQuantity(row) ? '#f56c6c' : '#67c23a' }">
+                {{ formatStock(row._currentStock) }} {{ displayUnit(row._inventoryUnit || row.unit) }}
+              </span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="单价" width="120">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.unitPrice" :min="0" :precision="2"
+                :controls="false" size="small" style="width:100%"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="行备注" min-width="140">
+            <template #default="{ row }">
+              <el-input v-model="row.remark" size="small" placeholder="(可选)" maxlength="5000" />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="80" align="center">
+            <template #default="{ $index }">
+              <el-button type="danger" link size="small" @click="removeItem($index)">删除</el-button>
+            </template>
+          </el-table-column>
+              </el-table>
+            </div>
+          </el-form>
+        </el-card>
+      </main>
+
+      <aside class="workspace-aside" aria-label="创建提示">
+        <el-card class="guide-card" shadow="never">
+          <h2>创建后怎么走</h2>
+          <ol class="process-list">
+            <li><span>1</span><div><strong>创建草稿</strong><p>只保存申请内容，不移动库存。</p></div></li>
+            <li><span>2</span><div><strong>提交 OA 审批</strong><p>在调拨详情页提交并查看审批进度。</p></div></li>
+            <li><span>3</span><div><strong>仓储执行</strong><p>审批通过后按调拨类型发运、签收或确认入库。</p></div></li>
+          </ol>
+        </el-card>
+        <el-card class="guide-card rules-card" shadow="never">
+          <h2>提交前系统会检查</h2>
+          <ul>
+            <li>调出仓库与调入仓库有效且不冲突</li>
+            <li>物料来自所选仓库的真实可用库存</li>
+            <li>包装折算后的数量不超过库存</li>
+            <li>同一种物料不能拆成重复行</li>
+          </ul>
+        </el-card>
+      </aside>
+      </div>
+
+      <footer class="workspace-actions">
+        <span class="action-hint">创建后进入详情页，继续提交审批。</span>
+        <div>
+          <el-button :disabled="submitting" @click="cancelCreate">取消</el-button>
+          <el-button type="primary" :loading="submitting" @click="submitCreate">创建调拨草稿</el-button>
+        </div>
+      </footer>
+    </section>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; overflow: auto; }
+.page-card { flex: 1; display: flex; flex-direction: column;
+  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
+  :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
+}
+.card-header { display: flex; justify-content: space-between; align-items: center;
+  .header-left { display: flex; align-items: baseline; gap: 12px;
+    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
+    .data-count { font-size: 13px; color: #909399; }
+  }
+  .header-right { display: flex; gap: 8px; }
+}
+.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+/* F-FP-3: 超库存时橙色边框提示 */
+:deep(.over-stock .el-input__wrapper) { box-shadow: 0 0 0 1px #e6a23c inset !important; }
+.quantity-unit-cell { display: flex; align-items: center; gap: 8px;
+  :deep(.el-input-number) { flex: 1; min-width: 0; }
+}
+.unit-chip { flex: 0 0 36px; text-align: center; color: #606266; font-weight: 600; }
+.tf-await-confirm {
+  margin-top: 3px; font-size: 12px; line-height: 1.3;
+  color: var(--el-color-warning); font-weight: 600; white-space: nowrap;
+}
+
+.create-workspace {
+  height: calc(100dvh - var(--header-height, 64px) - 84px);
+  min-height: 480px;
+  background: var(--el-bg-color-page);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-header {
+  padding: 18px 24px 14px;
+  background: var(--el-bg-color-overlay);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.workspace-heading { max-width: 1500px; width: 100%; margin: 0 auto; }
+.back-button { margin: 0 0 8px -12px; color: var(--el-text-color-regular); }
+.title-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.title-line h1 { margin: 0; font-size: 22px; line-height: 1.4; color: var(--el-text-color-primary); }
+.title-line p { margin: 5px 0 0; font-size: 13px; color: var(--el-text-color-secondary); }
+.workspace-progress { max-width: 1500px; width: calc(100% - 48px); margin: 16px auto 0; }
+.workspace-progress :deep(.el-steps--simple) { padding: 12px 20px; border: 1px solid var(--el-border-color-light); border-radius: 10px; background: var(--el-bg-color-overlay); }
+.workspace-grid {
+  max-width: 1500px;
+  width: calc(100% - 48px);
+  margin: 16px auto 0;
+  padding-bottom: 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.workspace-main { min-width: 0; }
+.form-card { border-radius: 10px; }
+.form-card :deep(.el-card__body) { padding: 20px; }
+.scenario-alert { margin-bottom: 18px; }
+.material-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  border-radius: 6px;
+}
+.material-table-scroll:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.material-table-scroll :deep(.el-table) { min-width: 1260px; }
+.workspace-aside { display: grid; gap: 12px; position: sticky; top: 12px; }
+.guide-card { border-radius: 10px; }
+.guide-card :deep(.el-card__body) { padding: 18px; }
+.guide-card h2 { margin: 0 0 14px; font-size: 15px; color: var(--el-text-color-primary); }
+.process-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+.process-list li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
+.process-list li > span {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 700;
+}
+.process-list strong { font-size: 13px; color: var(--el-text-color-primary); }
+.process-list p { margin: 3px 0 0; font-size: 12px; line-height: 1.55; color: var(--el-text-color-secondary); }
+.rules-card ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; color: var(--el-text-color-regular); font-size: 12px; line-height: 1.55; }
+.workspace-actions {
+  position: relative;
+  z-index: 6;
+  flex: 0 0 auto;
+  min-height: 64px;
+  padding: 12px 84px 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--el-border-color-light);
+  background: color-mix(in srgb, var(--el-bg-color-overlay) 94%, transparent);
+  box-shadow: 0 -6px 18px rgba(27, 101, 168, 0.08);
+  backdrop-filter: blur(8px);
+}
+.action-hint { color: var(--el-text-color-secondary); font-size: 12px; }
+
+@media (max-width: 1180px) {
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+  .workspace-aside { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 768px) {
+  .workspace-header { padding: 14px 16px 12px; }
+  .title-line { align-items: center; }
+  .title-line h1 { font-size: 19px; }
+  .title-line p { font-size: 12px; }
+  .workspace-progress,
+  .workspace-grid { width: calc(100% - 24px); margin-top: 12px; }
+  .workspace-progress :deep(.el-steps--simple) { padding: 10px 12px; }
+  .workspace-progress :deep(.el-step__title) { font-size: 12px; }
+  .form-card :deep(.el-card__body) { padding: 14px; }
+  .create-workspace :deep(.el-col-12) { max-width: 100%; flex: 0 0 100%; }
+  .create-workspace :deep(.el-form-item) { display: block; }
+  .create-workspace :deep(.el-form-item__label) { width: 100% !important; justify-content: flex-start; margin-bottom: 5px; }
+  .create-workspace :deep(.el-form-item__content) { margin-left: 0 !important; }
+  .workspace-aside { grid-template-columns: 1fr; }
+  .workspace-actions { padding: 10px 76px 10px 12px; flex-wrap: wrap; }
+  .workspace-actions > div { display: flex; flex: 1 1 auto; justify-content: flex-end; }
+  .workspace-actions .el-button { min-height: 40px; }
+  .action-hint { display: none; }
+}
+</style>
