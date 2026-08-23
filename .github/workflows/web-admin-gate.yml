@@ -19,7 +19,6 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
     paths:
       - 'web-admin/**'
       - '.github/workflows/web-admin-gate.yml'

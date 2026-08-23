@@ -42,7 +42,6 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
     paths:
       - 'backend/java/cretas-api/**'
 

@@ -70,7 +70,6 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
     paths:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'

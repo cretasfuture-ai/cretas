@@ -3,6 +3,10 @@ name: KB Drift Check (manual)
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   kb-drift-check:
     runs-on: ubuntu-latest
