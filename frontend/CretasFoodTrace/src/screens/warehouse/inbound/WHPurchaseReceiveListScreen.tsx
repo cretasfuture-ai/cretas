@@ -51,7 +51,7 @@ import {
   warehouseReceivingApiClient,
 } from '../../../services/api/warehouseReceivingApiClient';
 import { UNORDERED_INBOUND_REASON_LABEL } from './unorderedInboundReceiving';
-import { sortReceivingOrders } from '../warehouseList.logic';
+import { sortReceivingOrders, statusesToFetchForReceivingPage } from '../warehouseList.logic';
 
 /** 加载失败态 (区别于"真的没有待收货采购单"的正常空态) */
 interface LoadFailure {
@@ -155,6 +155,10 @@ export default function WHPurchaseReceiveListScreen() {
     FINANCE_APPROVED: 0,
     PARTIAL_RECEIVED: 0,
   });
+  const statusHasMoreRef = useRef<Partial<Record<PurchaseOrder['status'], boolean>>>({
+    FINANCE_APPROVED: true,
+    PARTIAL_RECEIVED: true,
+  });
   const hasMore = RECEIVABLE_STATUSES.some((status) => statusHasMore[status]);
   const [loadingMore, setLoadingMore] = useState(false);
   // 区分"请求失败"(权限/网络/服务器) vs "请求成功但确实没有待收货单" — 前者绝不能静默当空态显示.
@@ -169,7 +173,11 @@ export default function WHPurchaseReceiveListScreen() {
   const fetchOrders = useCallback(
     async (pageNum: number, append: boolean) => {
       try {
-        const requests = RECEIVABLE_STATUSES.map((status) => ({
+        const requests = statusesToFetchForReceivingPage(
+          RECEIVABLE_STATUSES,
+          statusHasMoreRef.current,
+          append,
+        ).map((status) => ({
           status,
           page: append ? (statusPagesRef.current[status] ?? 0) + 1 : pageNum,
         }));
@@ -229,9 +237,11 @@ export default function WHPurchaseReceiveListScreen() {
             const status = request.status;
             const requestedPage = request.page;
             statusPagesRef.current[status] = requestedPage;
+            const hasMorePage = requestedPage < (r.value.data.totalPages ?? requestedPage);
+            statusHasMoreRef.current[status] = hasMorePage;
             setStatusHasMore((previous) => ({
               ...previous,
-              [status]: requestedPage < (r.value.data.totalPages ?? requestedPage),
+              [status]: hasMorePage,
             }));
           }
         });
@@ -281,6 +291,7 @@ export default function WHPurchaseReceiveListScreen() {
       void (async () => {
         setLoading(true);
         statusPagesRef.current = { FINANCE_APPROVED: 0, PARTIAL_RECEIVED: 0 };
+        statusHasMoreRef.current = { FINANCE_APPROVED: true, PARTIAL_RECEIVED: true };
         setStatusHasMore({ FINANCE_APPROVED: true, PARTIAL_RECEIVED: true });
         await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
         if (active) setLoading(false);
@@ -294,6 +305,7 @@ export default function WHPurchaseReceiveListScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     statusPagesRef.current = { FINANCE_APPROVED: 0, PARTIAL_RECEIVED: 0 };
+    statusHasMoreRef.current = { FINANCE_APPROVED: true, PARTIAL_RECEIVED: true };
     setStatusHasMore({ FINANCE_APPROVED: true, PARTIAL_RECEIVED: true });
     await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
     setRefreshing(false);

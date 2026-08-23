@@ -1,5 +1,5 @@
 /** 仓管入库首页：采购收货任务是真值，物料批次不再冒充待收货任务。 */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Button, Chip, Searchbar, Surface, Text, TouchableRipple } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,8 +14,9 @@ import { handleError } from '../../../utils/errorHandler';
 import { warehouseReceivingApiClient } from '../../../services/api/warehouseReceivingApiClient';
 import {
   countInboundTasks,
+  filterReceivingOrders,
   sortReceivingOrders,
-  toReceivingStatus,
+  statusesToFetchForReceivingPage,
   type InboundCounts,
   type ReceivingStatus,
 } from '../warehouseList.logic';
@@ -31,6 +32,7 @@ export const INBOUND_ORDER_STATUSES: PurchaseOrder['status'][] = [
 ];
 
 export { countInboundTasks, sortReceivingOrders, toReceivingStatus } from '../warehouseList.logic';
+export { filterReceivingOrders } from '../warehouseList.logic';
 export type { InboundCounts, ReceivingStatus } from '../warehouseList.logic';
 // 状态优先级固定为 pending: 0, partial: 1, completed: 2。
 
@@ -61,44 +63,70 @@ export default function WHInboundListScreen() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [statusHasMore, setStatusHasMore] = useState<Partial<Record<PurchaseOrder['status'], boolean>>>(() =>
+    Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])) as Partial<Record<PurchaseOrder['status'], boolean>>,
+  );
+  const [loadingMore, setLoadingMore] = useState(false);
+  const statusPagesRef = useRef<Partial<Record<PurchaseOrder['status'], number>>>({});
+  const statusHasMoreRef = useRef<Partial<Record<PurchaseOrder['status'], boolean>>>(
+    Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])) as Partial<Record<PurchaseOrder['status'], boolean>>,
+  );
+  const statusTotalsRef = useRef<Partial<Record<PurchaseOrder['status'], { totalElements?: number; content?: PurchaseOrder[] }>>>({});
+  const unorderedInboundCountRef = useRef(0);
+  const PAGE_SIZE = 20;
+  const hasMore = INBOUND_ORDER_STATUSES.some((status) => statusHasMore[status]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (append = false) => {
     try {
+      const statuses = statusesToFetchForReceivingPage(INBOUND_ORDER_STATUSES, statusHasMoreRef.current, append);
+      if (append && statuses.length === 0) return;
+      const requests = statuses.map((status) => ({
+        status,
+        page: append ? (statusPagesRef.current[status] ?? 0) + 1 : 1,
+      }));
       const [results, arrivalResults] = await Promise.all([
-        Promise.allSettled(
-          INBOUND_ORDER_STATUSES.map((status) =>
-            purchaseApiClient.getOrdersByStatus(status, { page: 1, size: 50 }, factoryId),
-          ),
-        ),
-        Promise.allSettled([
+        Promise.allSettled(requests.map(({ status, page }) =>
+          purchaseApiClient.getOrdersByStatus(status, { page, size: PAGE_SIZE }, factoryId))),
+        append ? Promise.resolve(null) : Promise.allSettled([
           warehouseReceivingApiClient.listCustomerMaterialArrivalTasks(undefined, factoryId),
         ]),
       ]);
-      const arrivalResult = arrivalResults[0];
+      const arrivalResult = arrivalResults?.[0];
       const fulfilled = results.filter(
         (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof purchaseApiClient.getOrdersByStatus>>> =>
           result.status === 'fulfilled',
       );
       const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       const statusLoadFailed = fulfilled.length !== INBOUND_ORDER_STATUSES.length;
-      const arrivalLoadFailed = !arrivalResult || arrivalResult.status === 'rejected';
+      const arrivalLoadFailed = !append && (!arrivalResult || arrivalResult.status === 'rejected');
       const hasLoadFailure = statusLoadFailed || arrivalLoadFailed;
       const arrivalTasks = arrivalResult?.status === 'fulfilled' ? (arrivalResult.value?.data || []) : [];
-      const unique = new Map<string, PurchaseOrder>();
-      const pages: Partial<Record<PurchaseOrder['status'], { totalElements?: number; content?: PurchaseOrder[] }>> = {};
+      const pageOrders: PurchaseOrder[] = [];
       results.forEach((result, index) => {
         if (result.status !== 'fulfilled') return;
-        const status = INBOUND_ORDER_STATUSES[index];
+        const request = requests[index];
+        const status = request?.status;
         if (!status) return;
-        pages[status] = result.value.data;
-        (result.value?.data?.content || []).forEach((order) => unique.set(order.id, order));
+        statusPagesRef.current[status] = request.page;
+        const hasMorePage = request.page < (result.value.data.totalPages ?? request.page);
+        statusHasMoreRef.current[status] = hasMorePage;
+        setStatusHasMore((previous) => ({ ...previous, [status]: hasMorePage }));
+        statusTotalsRef.current[status] = result.value.data;
+        pageOrders.push(...(result.value?.data?.content || []));
       });
-      const nextOrders = sortReceivingOrders([...unique.values()]);
-      if (!hasLoadFailure) {
+      const nextOrders = sortReceivingOrders(pageOrders);
+      if (!hasLoadFailure && !append) {
         setOrders(nextOrders);
         setUnorderedInboundCount(arrivalTasks.length);
-        setInboundCounts(countInboundTasks(pages, arrivalTasks.length));
+        unorderedInboundCountRef.current = arrivalTasks.length;
+        setInboundCounts(countInboundTasks(statusTotalsRef.current, arrivalTasks.length));
         setLoadError(null);
+      } else if (!hasLoadFailure && append) {
+        setOrders((previous) => {
+          const byId = new Map(previous.map((order) => [order.id, order]));
+          pageOrders.forEach((order) => byId.set(order.id, order));
+          return sortReceivingOrders([...byId.values()]);
+        });
       } else {
         // 部分/全部失败时保留上次可信列表，不把不完整数据伪装成全量成功。
         setLoadError('部分入库任务加载失败，请点击重试。');
@@ -109,7 +137,15 @@ export default function WHInboundListScreen() {
             : new Error('无订单入库任务加载失败');
           handleError(arrivalReason, { title: '入库任务部分加载失败' });
         }
-        setOrders((previous) => (previous.length > 0 ? previous : nextOrders));
+        setOrders((previous) => {
+          if (!append && previous.length === 0) return nextOrders;
+          const byId = new Map(previous.map((order) => [order.id, order]));
+          pageOrders.forEach((order) => byId.set(order.id, order));
+          return sortReceivingOrders([...byId.values()]);
+        });
+      }
+      if (append) {
+        setInboundCounts(countInboundTasks(statusTotalsRef.current, unorderedInboundCountRef.current));
       }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : '请检查网络或账号权限后重试');
@@ -120,23 +156,33 @@ export default function WHInboundListScreen() {
     }
   }, [factoryId]);
 
-  useFocusEffect(useCallback(() => { void loadData(); }, [loadData]));
+  useFocusEffect(useCallback(() => {
+    statusPagesRef.current = {};
+    statusHasMoreRef.current = Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true]));
+    statusTotalsRef.current = {};
+    setStatusHasMore(Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])));
+    void loadData(false);
+  }, [loadData]));
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    void loadData();
+    statusPagesRef.current = {};
+    statusHasMoreRef.current = Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true]));
+    statusTotalsRef.current = {};
+    setStatusHasMore(Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])));
+    void loadData(false);
   }, [loadData]);
+
+  const onLoadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    await loadData(true);
+    setLoadingMore(false);
+  }, [hasMore, loadData, loadingMore]);
 
   const stats = inboundCounts;
 
-  const visibleOrders = useMemo(() => orders.filter((order) => {
-    if (filter !== 'all' && toReceivingStatus(order.status) !== filter) return false;
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return true;
-    return order.orderNumber.toLowerCase().includes(normalized)
-      || (order.supplierName || '').toLowerCase().includes(normalized)
-      || (order.items || []).some((item) => (item.materialName || '').toLowerCase().includes(normalized));
-  }), [filter, orders, query]);
+  const visibleOrders = useMemo(() => filterReceivingOrders(orders, filter, query), [filter, orders, query]);
 
   const openOrder = useCallback((order: PurchaseOrder) => {
     // 终态采购单进入同一详情页只读回看；详情页会根据状态禁用写操作。
@@ -253,6 +299,17 @@ export default function WHInboundListScreen() {
               </TouchableRipple>
             );
               })}
+              {hasMore && (
+                <Button
+                  testID="wh-inbound-load-more"
+                  mode="outlined"
+                  icon="chevron-down"
+                  onPress={() => void onLoadMore()}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? '正在加载更多…' : '加载更多入库任务'}
+                </Button>
+              )}
             </>
           )}
         </View>

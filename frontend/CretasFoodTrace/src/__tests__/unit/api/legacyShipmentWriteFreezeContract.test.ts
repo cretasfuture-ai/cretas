@@ -38,6 +38,6 @@ describe('legacy shipment write freeze contract', () => {
 
     expect(source).toContain('getDeliveryHistory');
     expect(source).toContain("this.warehousePath(factoryId) + '/history'");
-    expect(source).toContain('params: { page: 1, size: 50 }');
+    expect(source).toContain('params: { page: params?.page ?? 1, size: params?.size ?? 20 }');
   });
 });

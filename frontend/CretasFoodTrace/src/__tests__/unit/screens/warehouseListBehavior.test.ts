@@ -1,10 +1,12 @@
 import {
   countInboundTasks,
+  filterReceivingOrders,
   filterPendingDeliveries,
   isConfirmableDeliveryStatus,
   isCompletedDeliveryStatus,
   mergeDeliveryRecords,
   sortReceivingOrders,
+  statusesToFetchForReceivingPage,
 } from '../../../screens/warehouse/warehouseList.logic';
 
 describe('仓库列表行为口径', () => {
@@ -17,6 +19,19 @@ describe('仓库列表行为口径', () => {
     }, 4);
 
     expect(counts).toEqual({ all: 19, pending: 6, partial: 3, completed: 10 });
+  });
+
+  it('入库翻页跳过已耗尽状态，只重试仍有下一页的来源', () => {
+    expect(statusesToFetchForReceivingPage(
+      ['FINANCE_APPROVED', 'PARTIAL_RECEIVED'],
+      { FINANCE_APPROVED: false, PARTIAL_RECEIVED: true },
+      true,
+    )).toEqual(['PARTIAL_RECEIVED']);
+    expect(statusesToFetchForReceivingPage(
+      ['FINANCE_APPROVED', 'PARTIAL_RECEIVED'],
+      { FINANCE_APPROVED: false, PARTIAL_RECEIVED: false },
+      false,
+    )).toEqual(['FINANCE_APPROVED', 'PARTIAL_RECEIVED']);
   });
 
   it('采购收货先按状态，再按业务时间倒序；分页合并后顺序仍全局稳定', () => {
@@ -35,6 +50,23 @@ describe('仓库列表行为口径', () => {
       'partial-new',
       'partial-old',
     ]);
+  });
+
+  it('入库首页跨页后仍按状态、日期排序，并可搜索到第二页物料', () => {
+    const loadedPages = [
+      [
+        { id: 'p1', orderNumber: 'PO-001', status: 'FINANCE_APPROVED', expectedDeliveryDate: '2026-08-20', supplierName: '甲供应商', items: [] },
+        { id: 'c1', orderNumber: 'PO-003', status: 'COMPLETED', expectedDeliveryDate: '2026-08-23', supplierName: '丙供应商', items: [] },
+      ],
+      [
+        { id: 'p2', orderNumber: 'PO-002', status: 'FINANCE_APPROVED', expectedDeliveryDate: '2026-08-23', supplierName: '乙供应商', items: [{ materialName: '第二页番茄' }] },
+      ],
+    ] as never[][];
+    const sorted = sortReceivingOrders(loadedPages.flat());
+
+    expect(sorted.map((order) => order.id)).toEqual(['p2', 'p1', 'c1']);
+    expect(filterReceivingOrders(sorted, 'pending').map((order) => order.id)).toEqual(['p2', 'p1']);
+    expect(filterReceivingOrders(sorted, 'all', '第二页番茄').map((order) => order.id)).toEqual(['p2']);
   });
 
   it('发货状态筛选只改变当前页列表，不把已确认历史混入待确认队列', () => {

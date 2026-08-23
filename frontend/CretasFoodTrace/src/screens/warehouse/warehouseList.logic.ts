@@ -43,6 +43,15 @@ export function countInboundTasks(
   return { all: pending + partial + completed, pending, partial, completed };
 }
 
+/** Skip sources that are exhausted when appending another page. */
+export function statusesToFetchForReceivingPage(
+  statuses: PurchaseOrder['status'][],
+  hasMoreByStatus: Partial<Record<PurchaseOrder['status'], boolean>>,
+  append: boolean,
+): PurchaseOrder['status'][] {
+  return append ? statuses.filter((status) => hasMoreByStatus[status] !== false) : statuses;
+}
+
 function receivingBusinessTime(order: PurchaseOrder): string {
   return order.expectedDeliveryDate || order.orderDate || order.updatedAt || order.createdAt || '';
 }
@@ -54,6 +63,22 @@ export function sortReceivingOrders(orders: PurchaseOrder[]): PurchaseOrder[] {
     const bStatus = PURCHASE_STATUS_PRIORITY[b.status] ?? 99;
     if (aStatus !== bStatus) return aStatus - bStatus;
     return receivingBusinessTime(b).localeCompare(receivingBusinessTime(a));
+  });
+}
+
+/** Filter after all loaded status pages have been merged. */
+export function filterReceivingOrders(
+  orders: PurchaseOrder[],
+  filter: ReceivingStatus | 'all',
+  query = '',
+): PurchaseOrder[] {
+  const normalized = query.trim().toLowerCase();
+  return orders.filter((order) => {
+    if (filter !== 'all' && toReceivingStatus(order.status) !== filter) return false;
+    if (!normalized) return true;
+    return order.orderNumber.toLowerCase().includes(normalized)
+      || (order.supplierName || '').toLowerCase().includes(normalized)
+      || (order.items || []).some((item) => (item.materialName || '').toLowerCase().includes(normalized));
   });
 }
 
