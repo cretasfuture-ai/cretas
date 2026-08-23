@@ -4305,6 +4305,7 @@ public class SalesServiceImpl implements SalesService {
                 .findByIdAndFactoryIdForUpdate(record.getSalesOrderId(), record.getFactoryId())
                 .orElse(null);
         if (order == null) return;
+        boolean wasCompleted = order.getStatus() == SalesOrderStatus.COMPLETED;
 
         List<SalesOrderItem> orderItems = salesOrderItemRepository.findBySalesOrderId(order.getId());
 
@@ -4368,7 +4369,15 @@ public class SalesServiceImpl implements SalesService {
             order.setStatus(SalesOrderStatus.PARTIAL_DELIVERED);
             order.setTransportPlanStatus("IN_TRANSIT");
         }
-        salesOrderRepository.save(order);
+        SalesOrder savedOrder = salesOrderRepository.save(order);
+        if (allDelivered && !wasCompleted && applicationEventPublisher != null) {
+            try {
+                applicationEventPublisher.publishEvent(new com.cretas.aims.event.SalesOrderCompletedEvent(
+                        this, record.getFactoryId(), savedOrder.getId()));
+            } catch (Exception e) {
+                log.error("发布 SalesOrderCompletedEvent 失败，不影响发货: SO={}", savedOrder.getId(), e);
+            }
+        }
     }
 
     /**

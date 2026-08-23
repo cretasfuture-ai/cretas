@@ -1,8 +1,11 @@
 package com.cretas.aims.controller.inventory;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceTodoDTO;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceViewDTO;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.PurchaseInvoiceService;
 import com.cretas.aims.utils.TokenUtils;
@@ -36,9 +39,10 @@ public class PurchaseInvoiceController {
     // ─── 上传发票 ──────────────────────────────────────────────────────────────
 
     @PostMapping("/upload")
+    @RequireRole({"factory_super_admin", "platform_admin", "permission_admin", "finance_manager", "procurement_manager"})
     @Operation(summary = "上传采购发票", description = "发票号在工厂内唯一（相同发票号返回 409）")
     public ApiResponse<PurchaseInvoice> upload(
-            @PathVariable @NotBlank String factoryId,
+            @PathVariable("factoryId") @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @RequestBody Map<String, Object> body) {
         Long userId = extractUserId(authorization);
@@ -57,10 +61,11 @@ public class PurchaseInvoiceController {
     // ─── 对账 ─────────────────────────────────────────────────────────────────
 
     @PutMapping("/{invoiceId}/reconcile")
+    @RequireRole({"factory_super_admin", "platform_admin", "permission_admin", "finance_manager", "procurement_manager"})
     @Operation(summary = "发票对账", description = "reconcileStatus: MATCHED（对账通过）/ MISMATCHED（不一致）")
     public ApiResponse<Void> reconcile(
-            @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String invoiceId,
+            @PathVariable("factoryId") @NotBlank String factoryId,
+            @PathVariable("invoiceId") @NotBlank String invoiceId,
             @RequestHeader("Authorization") String authorization,
             @RequestBody Map<String, String> body) {
         Long userId = extractUserId(authorization);
@@ -83,23 +88,40 @@ public class PurchaseInvoiceController {
     @Operation(summary = "查询待开票 PO 逾期提醒", description = "返回已超 invoice_reminder_days 且发票仍为 PENDING 的 PO ID 列表")
     @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
     public ApiResponse<List<String>> pendingReminder(
-            @PathVariable @NotBlank String factoryId) {
+            @PathVariable("factoryId") @NotBlank String factoryId) {
         List<String> poIds = purchaseInvoiceService.listPendingReminder(factoryId);
         return ApiResponse.success("查询成功", poIds);
+    }
+
+    @GetMapping("/pending-orders")
+    @Operation(summary = "查询采购待收票工作项", description = "完成/关闭且尚未收到供应商发票的采购单自动进入本列表")
+    @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
+    public ApiResponse<List<PurchaseInvoiceTodoDTO>> pendingOrders(
+            @PathVariable("factoryId") @NotBlank String factoryId) {
+        return ApiResponse.success("查询成功", purchaseInvoiceService.listPendingReceiptTodos(factoryId));
     }
 
     // ─── 查询发票列表 (poId 可选: 传则按 PO 查, 不传则列本厂全量) ──────────────────
 
     @GetMapping
-    @Operation(summary = "查询发票列表", description = "poId 可选: 传则按采购订单查; 不传则列本工厂全部发票 (采购发票管理页直接进入)")
+    @Operation(summary = "查询发票列表", description = "兼容原接口，返回完整采购发票实体")
     @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
     public ApiResponse<List<PurchaseInvoice>> listByPurchaseOrder(
-            @PathVariable @NotBlank String factoryId,
+            @PathVariable("factoryId") @NotBlank String factoryId,
             @RequestParam(required = false) String poId) {
-        List<PurchaseInvoice> list = (poId == null || poId.isBlank())
+        List<PurchaseInvoice> invoices = (poId == null || poId.isBlank())
                 ? purchaseInvoiceService.listByFactory(factoryId)
                 : purchaseInvoiceService.listByPurchaseOrder(factoryId, poId);
-        return ApiResponse.success("查询成功", list);
+        return ApiResponse.success("查询成功", invoices);
+    }
+
+    @GetMapping("/views")
+    @Operation(summary = "查询采购发票工作台视图", description = "补齐采购单号和供应商名称，不改变原发票列表契约")
+    @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
+    public ApiResponse<List<PurchaseInvoiceViewDTO>> listViews(
+            @PathVariable("factoryId") @NotBlank String factoryId,
+            @RequestParam(required = false) String poId) {
+        return ApiResponse.success("查询成功", purchaseInvoiceService.listViews(factoryId, poId));
     }
 
     // ─── 私有工具 ────────────────────────────────────────────────────────────

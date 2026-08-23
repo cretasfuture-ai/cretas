@@ -5,6 +5,7 @@ import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
+import com.cretas.aims.event.SalesOrderCompletedEvent;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
@@ -33,7 +34,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * Bug fix (F006 live sales audit, 2026-07): SO detail header "已发货金额" was stuck at
@@ -141,7 +142,8 @@ class SalesServiceImplShippedAmountRollupTest {
         SalesDeliveryRecord delivery = makeDelivery(new ArrayList<>(List.of(deliveryItem)));
         SalesOrder order = makeOrder();
 
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
+                .thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
                 .thenReturn(new ArrayList<>(List.of(orderItem)));
         when(salesOrderItemRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -153,6 +155,11 @@ class SalesServiceImplShippedAmountRollupTest {
 
         SalesOrder savedOrder = savedOrderCaptor.getValue();
         assertThat(savedOrder.getActualShippedAmount()).isEqualByComparingTo("1000.00");
+        ArgumentCaptor<SalesOrderCompletedEvent> eventCaptor =
+                ArgumentCaptor.forClass(SalesOrderCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getFactoryId()).isEqualTo(FACTORY_ID);
+        assertThat(eventCaptor.getValue().getSalesOrderId()).isEqualTo(ORDER_ID);
     }
 
     @Test
@@ -165,7 +172,8 @@ class SalesServiceImplShippedAmountRollupTest {
         SalesDeliveryRecord delivery = makeDelivery(new ArrayList<>(List.of(deliveryItem)));
         SalesOrder order = makeOrder();
 
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
+                .thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
                 .thenReturn(new ArrayList<>(List.of(orderItem)));
         when(salesOrderItemRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -195,7 +203,8 @@ class SalesServiceImplShippedAmountRollupTest {
         SalesDeliveryRecord delivery = makeDelivery(new ArrayList<>(List.of(deliveryItem1, deliveryItem2)));
         SalesOrder order = makeOrder();
 
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
+                .thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
                 .thenReturn(new ArrayList<>(List.of(pricedItem, unpricedItem)));
         when(salesOrderItemRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -208,5 +217,28 @@ class SalesServiceImplShippedAmountRollupTest {
         // Only the priced line (2 * 50 = 100.00) contributes; unpriced line contributes 0.
         SalesOrder savedOrder = savedOrderCaptor.getValue();
         assertThat(savedOrder.getActualShippedAmount()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    @DisplayName("重复回放已完成订单不会再次发布自动开票事件")
+    void alreadyCompletedOrder_doesNotRepublishInvoiceEvent() {
+        SalesOrderItem orderItem = makeOrderItem("PT-005",
+                new BigDecimal("1.0000"), new BigDecimal("50.0000"), BigDecimal.ZERO,
+                BigDecimal.ZERO);
+        SalesDeliveryRecord delivery = makeDelivery(new ArrayList<>(List.of(
+                makeDeliveryItem("PT-005", new BigDecimal("1.0000")))));
+        SalesOrder order = makeOrder();
+        order.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED);
+
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
+                .thenReturn(Optional.of(order));
+        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID))
+                .thenReturn(new ArrayList<>(List.of(orderItem)));
+        when(salesOrderItemRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(salesOrderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ReflectionTestUtils.invokeMethod(salesService, "updateOrderDeliveryStatus", delivery);
+
+        verify(eventPublisher, never()).publishEvent(any(SalesOrderCompletedEvent.class));
     }
 }

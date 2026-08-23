@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { BILLABLE_STATUSES, PAYABLE_STATUSES } from './salesOrderBillableStatus';
+import { PAYABLE_STATUSES } from './salesOrderBillableStatus';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -42,7 +42,6 @@ import request from '@/api/request';
 import type { ViewMode } from '@/types/viewMode';
 import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
-import TaxGroupInvoiceDialog from './components/TaxGroupInvoiceDialog.vue';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -87,35 +86,9 @@ import {
   type SalesOrderShipmentState,
 } from './salesOrderListUx';
 
-// G1: 税率分组开票对话框 (客户原话 2645-2660s)
-// Sprint 4 W2 S-INVOICE-CLIENT-1: defaultInvoiceType 字段从 SO 行带过来 (后端在 SO 创建时已 prefill 自 customer)
-const taxGroupInvoiceVisible = ref(false);
-const taxGroupInvoiceOrder = ref<{
-  id: string;
-  orderNumber: string;
-  customerName: string;
-  totalAmount: number | string;
-  defaultInvoiceType: string;
-}>({
-  id: '', orderNumber: '', customerName: '', totalAmount: 0, defaultInvoiceType: '',
-});
-function openTaxGroupInvoice(row: TableRow) {
-  taxGroupInvoiceOrder.value = {
-    id: String(row.id || ''),
-    orderNumber: String(row.orderNumber || ''),
-    customerName: String(row.customerName || ''),
-    totalAmount: (row.totalAmount as number | string) ?? 0,
-    defaultInvoiceType: String(row.defaultInvoiceType || ''),
-  };
-  taxGroupInvoiceVisible.value = true;
-}
-
 // Quick action dialogs
 const deliveryDialogVisible = ref(false);
 const deliveryForm = ref<Record<string, any>>({ orderId: '', customerId: '', deliveryDate: '', items: [], notes: '' });
-
-const invoiceDialogVisible = ref(false);
-const invoiceForm = ref({ orderId: '', counterpartyId: '', amount: 0, notes: '' });
 
 const paymentDialogVisible = ref(false);
 const paymentForm = ref({ orderId: '', counterpartyId: '', amount: 0, paymentMethod: 'BANK_TRANSFER', notes: '' });
@@ -135,30 +108,10 @@ const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT'
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 
 const canViewPrice = computed(() => permissionStore.canViewPrice);
-// 🔴 2026-08-22: 「快速开票」和「登记收款」直写 ar_ap_transactions,
-//   后端 POST /finance/receivable(/payment) 要 finance ⇒ 4 个角色
-//   (sales_manager / production_manager / warehouse_manager / operations_coordinator)
-//   看得见这两项、点下去必 403。
-// ⛔ 不放宽后端: 直接生成应收/收款流水是财务动作。
-// ⚠️ 「税率分组开票」**不在此列** —— 它走的是开票**申请**端点
-//   (/finance/invoices/request-from-order), 后端本来就允许 sales:read_write。
-// ⚠️ 也不能拿 canViewPrice 当判据: 「看得到金额」和「能记一笔账」是两件事。
+// 财务写操作仍由 finance 权限控制；销售订单完成后系统自动生成开票待办。
 const canWriteFinance = computed(() => permissionStore.canWrite('finance'));
-/**
- * 需要 finance 的行内操作。
- *
- * 🔴 2026-08-22 订正: 起初只放了 quick-invoice / quick-payment, 理由是
- *   「税率分组开票走的是**申请**端点 /finance/invoices/request-from-order,
- *     后端本来就允许 sales:read_write」——**那只看了第一道闸**。
- *
- *   本仓有两道独立的闸, 是**与**关系:
- *     闸一 @RequirePermission({"finance:read_write", "sales:read_write"})  ← 特意放行了 sales
- *     闸二 @RequireModule("finance_ar") -> 映射到 permission 模块 finance  ← **必须有 finance**
- *   ⇒ 闸一放行的 sales 被闸二默默否决, 点下去仍是 403。
- *
- * ▎有人特意在一道闸上开了口子, 另一道闸把它废掉了 —— 而两处都没提到对方。
- */
-const FINANCE_WRITE_ACTIONS = new Set(['quick-invoice', 'quick-payment', 'tax-invoice']);
+// 开票待办在订单全部发货完成后自动生成；销售列表不再提供手工开票入口。
+const FINANCE_WRITE_ACTIONS = new Set(['quick-payment']);
 const SALES_DEFAULT_COLUMNS = [
   'processingMode',
   'materialSupply',
@@ -235,12 +188,6 @@ function rowActionsFor(row: TableRow) {
       requiresConfirm: true, aiHint: '取消这张销售订单',
     });
   }
-  if (BILLABLE_STATUSES.includes(status)) {
-    secondaryActions.push({ id: 'quick-invoice', icon: '▤', label: '开票', priceRelated: true });
-  }
-  if (PAYABLE_STATUSES.includes(status)) {
-    secondaryActions.push({ id: 'tax-invoice', icon: '％', label: '税率分组开票', priceRelated: true });
-  }
   if (PAYABLE_STATUSES.includes(status)) {
     secondaryActions.push({ id: 'quick-payment', icon: '¥', label: '登记收款', priceRelated: true });
   }
@@ -308,8 +255,6 @@ function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
     case 'edit': handleEdit(row); break;
-    case 'quick-invoice': handleQuickInvoice(row); break;
-    case 'tax-invoice': openTaxGroupInvoice(row); break;
     case 'quick-payment': handleQuickPayment(row); break;
     // T131 Part 1 — 'approve' (DRAFT→CONFIRMED) 仍走 confirm；提交 OA 审批走独立的链式/单次路径。
     case 'approve': handleAction(String(row.id), 'confirm'); break;
@@ -2154,30 +2099,6 @@ async function submitQuickDelivery() {
   } catch { /* axios interceptor already displays specific error toast (including #739 idempotency 409) */ }
 }
 
-async function handleQuickInvoice(row: TableRow) {
-  invoiceForm.value = {
-    orderId: row.id,
-    counterpartyId: row.customerId || row.customer?.id || '',
-    amount: row.totalAmount || 0,
-    notes: `销售订单 ${row.orderNumber || ''} 开票`,
-  };
-  invoiceDialogVisible.value = true;
-}
-
-async function submitQuickInvoice() {
-  if (!invoiceForm.value.counterpartyId) return ElMessage.warning('缺少客户信息');
-  try {
-    const res = await post(`/${factoryId.value}/finance/receivable`, invoiceForm.value);
-    if (res.success) {
-      ElMessage.success('开票成功');
-      invoiceDialogVisible.value = false;
-      loadData();
-    } else {
-      ElMessage.error(res.message || '开票失败');
-    }
-  } catch { /* axios interceptor already displayed error toast */ }
-}
-
 async function handleQuickPayment(row: TableRow) {
   // Issue #317 fix: include orderId so AR_PAYMENT persists salesOrderId. Was
   // orphan-receipt: SO.paidAmount stayed null.
@@ -2798,22 +2719,6 @@ function handleMergePurchase() {
       </template>
     </el-dialog>
 
-    <!-- 开票对话框 -->
-    <el-dialog v-model="invoiceDialogVisible" title="快速开票" width="400px">
-      <el-form :model="invoiceForm" label-width="80px">
-        <el-form-item label="开票金额">
-          <el-input-number v-model="invoiceForm.amount" :min="0" :precision="2" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="invoiceForm.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="invoiceDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitQuickInvoice">确认开票</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 收款对话框 -->
     <el-dialog v-model="paymentDialogVisible" title="快速收款" width="400px">
       <el-form :model="paymentForm" label-width="80px">
@@ -3187,18 +3092,6 @@ function handleMergePurchase() {
       v-model="aiEntryVisible"
       :config="SALES_ORDER_CONFIG"
       @fill-form="handleAiFill"
-    />
-
-    <!-- G1: 税率分组开票对话框 (Sprint 4 W2 S-INVOICE-CLIENT-1: 传入 default-invoice-type 用于 R3 dropdown prefill) -->
-    <TaxGroupInvoiceDialog
-      v-model="taxGroupInvoiceVisible"
-      :factory-id="factoryId || ''"
-      :sales-order-id="taxGroupInvoiceOrder.id"
-      :order-number="taxGroupInvoiceOrder.orderNumber"
-      :customer-name="taxGroupInvoiceOrder.customerName"
-      :order-total-amount="taxGroupInvoiceOrder.totalAmount"
-      :default-invoice-type="taxGroupInvoiceOrder.defaultInvoiceType"
-      @success="loadData"
     />
 
     <!-- 合并采购弹窗 — 多张 SO 合并成一张采购单 (转录行3650 "加号逐个追加合并") -->

@@ -1,12 +1,10 @@
 package com.cretas.aims.ai.tool.impl.finance;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.service.finance.InvoiceService;
+import com.cretas.aims.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -14,14 +12,11 @@ import java.util.Map;
 @Component
 public class InvoiceRequestTool extends AbstractBusinessTool {
 
-    @Autowired
-    private InvoiceService invoiceService;
-
     @Override
     public String getToolName() { return "finance_invoice_request"; }
 
     @Override
-    public String getDescription() { return "提交开票申请，关联销售订单"; }
+    public String getDescription() { return "兼容入口：手工开票申请已停用，销售订单全部发货后由系统自动生成待审核记录"; }
 
     @Override
     public Map<String, Object> getParametersSchema() {
@@ -39,18 +34,10 @@ public class InvoiceRequestTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        var record = invoiceService.requestInvoice(
-                factoryId,
-                getString(params, "salesOrderId"),
-                new BigDecimal(params.get("amount").toString()),
-                params.get("taxAmount") != null ? new BigDecimal(params.get("taxAmount").toString()) : BigDecimal.ZERO,
-                getString(params, "invoiceType"),
-                getLong(params, "userId"),
-                getString(params, "remark"));
-        return buildSimpleResult("开票申请已提交", Map.of(
-                "invoiceNumber", record.getInvoiceNumber(),
-                "status", record.getStatus().name(),
-                "totalAmount", record.getTotalAmount()));
+        throw new BusinessException(410,
+                "手工开票申请已停用；销售订单全部发货完成后，系统会自动生成待审核开票记录")
+                .withHint("请到销售开票工作台处理系统生成的记录")
+                .withHintTarget("销售开票");
     }
 
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
@@ -58,4 +45,21 @@ public class InvoiceRequestTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }
+
+    @Override
+    public boolean isEnabled() { return false; }
+
+    @Override
+    public boolean requiresPermission() { return true; }
+
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read_write");
+    }
+
+    @Override
+    public ActionType getActionType() { return ActionType.WRITE; }
+
+    @Override
+    public RiskLevel getRiskLevel() { return RiskLevel.HIGH; }
 }

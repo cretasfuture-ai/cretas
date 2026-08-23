@@ -21,6 +21,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
@@ -37,6 +38,9 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class InvoiceServiceImpl implements InvoiceService {
+
+    /** Stable marker used to distinguish the durable delivery-completion automation from manual/other triggers. */
+    public static final String AUTOMATIC_INVOICE_REMARK = "销售订单全部发货完成，系统自动生成待审核开票记录";
 
     private final InvoiceRecordRepository invoiceRecordRepository;
     private final SalesOrderRepository salesOrderRepository;
@@ -74,13 +78,11 @@ public class InvoiceServiceImpl implements InvoiceService {
             "amount", amount != null ? amount : BigDecimal.ZERO,
             "invoiceType", invoiceType != null ? invoiceType : "",
             "salesOrderId", salesOrderId != null ? salesOrderId : ""));
-        SalesOrder so = salesOrderRepository.findById(salesOrderId)
-                .orElseThrow(() -> new IllegalArgumentException("销售订单不存在: " + salesOrderId));
-
-        // Tenant isolation guard (parity with requestInvoiceFromOrder)
-        if (!factoryId.equals(so.getFactoryId())) {
-            throw new IllegalArgumentException("销售订单不存在或无权访问: " + salesOrderId);
-        }
+        // Serialize check + insert by sales order. Both the delivery-completed listener and the
+        // historical settlement listener can arrive concurrently after commit; a plain
+        // "find active then insert" check allows two REQUESTED rows to slip through.
+        SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(salesOrderId, factoryId)
+                .orElseThrow(() -> new IllegalArgumentException("销售订单不存在或无权访问: " + salesOrderId));
 
         // R18 audit: enforce business invariant — only post-finance-approved SOs can be invoiced.
         // Previously only the dropdown UX (R17) gated this, but direct API POST would bypass.
@@ -168,41 +170,19 @@ public class InvoiceServiceImpl implements InvoiceService {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public InvoiceRecord requestInvoiceFromOrder(String factoryId, String salesOrderId,
                                                   String invoiceType, Long requestedBy, String remark) {
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "salesOrderId", salesOrderId != null ? salesOrderId : "",
             "invoiceType", invoiceType != null ? invoiceType : ""));
-        SalesOrder so = salesOrderRepository.findById(salesOrderId)
-                .orElseThrow(() -> new IllegalArgumentException("销售订单不存在: " + salesOrderId));
-
-        // Tenant isolation guard
-        if (!factoryId.equals(so.getFactoryId())) {
-            throw new IllegalArgumentException("销售订单不存在或无权访问: " + salesOrderId);
-        }
+        // The pessimistic order-row lock makes the active-record/idempotency check below atomic
+        // for one sales order without serializing invoice work for unrelated orders.
+        SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(salesOrderId, factoryId)
+                .orElseThrow(() -> new IllegalArgumentException("销售订单不存在或无权访问: " + salesOrderId));
 
         // R18 audit: business invariant (see requestInvoice above).
         validateInvoiceableStatus(so);
-
-        // Bug #2 fix (R2 2026-04-16): prevent duplicate invoice requests for same SO.
-        // Reject if an active (REQUESTED/APPROVED) invoice exists — caller must wait or cancel it first.
-        List<InvoiceRecord> existing = invoiceRecordRepository
-                .findByFactoryIdAndSalesOrderIdAndStatusInAndDeletedAtIsNull(
-                        factoryId, salesOrderId,
-                        List.of(InvoiceStatus.REQUESTED, InvoiceStatus.APPROVED));
-        if (!existing.isEmpty()) {
-            String existingNumbers = existing.stream()
-                    .map(InvoiceRecord::getInvoiceNumber)
-                    .collect(java.util.stream.Collectors.joining(", "));
-            // UX 2026-04-18 进阶: use BusinessException with hints so frontend
-            // renders ElNotification with "去查看发票" button instead of plain toast.
-            // Still returns 409 via GlobalExceptionHandler (BusinessException code=409).
-            throw new com.cretas.aims.exception.BusinessException(409,
-                    "该销售订单已有待处理开票申请 (" + existing.size() + " 张: " + existingNumbers + "), 请先处理或撤销")
-                    .withHint("请在 \"开票申请\" Tab 里审核通过或驳回已有的发票, 再提交新的开票申请")
-                    .withHintTarget("开票申请");
-        }
 
         List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(salesOrderId);
         if (items.isEmpty()) {
@@ -219,6 +199,59 @@ public class InvoiceServiceImpl implements InvoiceService {
             totalTax = totalTax.add(entry.getTaxAmount());
         }
 
+        BigDecimal expectedTotal = totalTaxable.add(totalTax);
+        InvoiceType expectedInvoiceType = resolveInvoiceType(invoiceType, so);
+        final BigDecimal finalExpectedTotal = expectedTotal;
+        final BigDecimal finalExpectedAmount = totalTaxable;
+        final BigDecimal finalExpectedTax = totalTax;
+        final InvoiceType finalExpectedInvoiceType = expectedInvoiceType;
+        final String finalRemark = remark;
+
+        // Bug #2 fix (R2 2026-04-16): prevent duplicate invoice requests for same SO,
+        // while allowing the exact durable automatic record to be replayed after a
+        // process crash.  A same-order manual/other automatic record is still a
+        // blocking conflict and must not make the outbox DONE.
+        List<InvoiceRecord> existing = invoiceRecordRepository
+                .findByFactoryIdAndSalesOrderIdAndStatusInAndDeletedAtIsNull(
+                        factoryId, salesOrderId,
+                        List.of(InvoiceStatus.REQUESTED, InvoiceStatus.APPROVED));
+        if (!existing.isEmpty()) {
+            InvoiceRecord exactAutomatic = existing.stream()
+                    .filter(record -> isExactAutomaticInvoice(record, finalExpectedTotal, finalExpectedAmount,
+                            finalExpectedTax, finalExpectedInvoiceType, finalRemark))
+                    .findFirst()
+                    .orElse(null);
+            if (exactAutomatic != null) {
+                return exactAutomatic;
+            }
+            String existingNumbers = existing.stream()
+                    .map(InvoiceRecord::getInvoiceNumber)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "该销售订单已有待处理开票申请 (" + existing.size() + " 张: " + existingNumbers + "), 请先处理或撤销")
+                    .withCode("AUTO_INVOICE_ACTIVE_CONFLICT")
+                    .withHint("请在 \"开票申请\" Tab 里审核通过或驳回已有的发票, 再提交新的开票申请")
+                    .withHintTarget("开票申请");
+        }
+
+        BigDecimal alreadyInvoiced = so.getInvoicedAmount() != null
+                ? so.getInvoicedAmount() : BigDecimal.ZERO;
+        BigDecimal orderTotal = so.getTotalAmount() != null ? so.getTotalAmount() : expectedTotal;
+        if (alreadyInvoiced.compareTo(orderTotal) >= 0 && orderTotal.signum() > 0) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "该销售订单已全额开票，系统不会重复生成整单开票记录")
+                    .withCode("AUTO_INVOICE_ALREADY_FULL")
+                    .withHint("请在销售开票中核对现有发票记录")
+                    .withHintTarget("销售开票");
+        }
+        if (alreadyInvoiced.signum() > 0) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "该销售订单已有部分开票金额，系统不会重复生成整单开票记录")
+                    .withCode("AUTO_INVOICE_PARTIAL_CONFLICT")
+                    .withHint("请在销售开票中补齐未开金额或核对现有发票记录")
+                    .withHintTarget("销售开票");
+        }
+
         InvoiceRecord record = new InvoiceRecord();
         record.setFactoryId(factoryId);
         record.setInvoiceNumber(generateInvoiceNumber());
@@ -230,7 +263,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         record.setTaxAmount(totalTax);
         record.setTotalAmount(totalTaxable.add(totalTax));
         record.setTaxBreakdown(breakdown);
-        record.setInvoiceType(resolveInvoiceType(invoiceType, so));
+        record.setInvoiceType(expectedInvoiceType);
         record.setStatus(InvoiceStatus.REQUESTED);
         record.setRequestedBy(requestedBy);
         record.setRequestedAt(LocalDateTime.now());
@@ -240,6 +273,20 @@ public class InvoiceServiceImpl implements InvoiceService {
         log.info("税率分组开票申请创建: orderId={}, breakdownGroups={}, totalAmount={}",
                 salesOrderId, breakdown.size(), saved.getTotalAmount());
         return saved;
+    }
+
+    private boolean isExactAutomaticInvoice(InvoiceRecord record, BigDecimal expectedTotal,
+                                            BigDecimal expectedAmount, BigDecimal expectedTax,
+                                            InvoiceType expectedType, String remark) {
+        return AUTOMATIC_INVOICE_REMARK.equals(remark)
+                && AUTOMATIC_INVOICE_REMARK.equals(record.getRemark())
+                && record.getTotalAmount() != null
+                && record.getTotalAmount().compareTo(expectedTotal) == 0
+                && record.getAmount() != null
+                && record.getAmount().compareTo(expectedAmount) == 0
+                && (record.getTaxAmount() == null ? expectedTax.signum() == 0
+                        : record.getTaxAmount().compareTo(expectedTax) == 0)
+                && record.getInvoiceType() == expectedType;
     }
 
     /**
@@ -486,8 +533,11 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     private String generateInvoiceNumber() {
         String dateStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        long count = invoiceRecordRepository.count() + 1;
-        return String.format("INV-%s-%04d", dateStr, count);
+        // count()+1 races across different orders. A random suffix keeps invoice todo
+        // creation collision-free without introducing a database sequence migration.
+        String suffix = java.util.UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 10).toUpperCase(java.util.Locale.ROOT);
+        return String.format("INV-%s-%s", dateStr, suffix);
     }
 
     /**

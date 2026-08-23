@@ -193,6 +193,26 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
                                                 @Param("maxAttempts") int maxAttempts,
                                                 Pageable pageable);
 
+    /**
+     * Close an expired lease that has already consumed the retry budget.  This
+     * update intentionally runs before candidate claiming: an exhausted crash
+     * lease must become a visible terminal failure and must never call the
+     * invoice service again.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = 'FAILED', " +
+            "so.invoiceTodoNextAttemptAt = NULL, " +
+            "so.invoiceTodoLastError = :error " +
+            "WHERE so.status = com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED " +
+            "AND so.invoiceTodoStatus = 'PROCESSING' " +
+            "AND so.invoiceTodoNextAttemptAt IS NOT NULL " +
+            "AND so.invoiceTodoNextAttemptAt <= :now " +
+            "AND COALESCE(so.invoiceTodoAttempts, 0) >= :maxAttempts")
+    int markExpiredInvoiceTodosFailed(@Param("now") LocalDateTime now,
+                                      @Param("maxAttempts") int maxAttempts,
+                                      @Param("error") String error);
+
     /** Claim one todo with a short lease, so a crashed process is retried after restart. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
@@ -239,4 +259,9 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
             "so.invoiceTodoLastError = NULL " +
             "WHERE so.id = :id AND so.factoryId = :factoryId AND so.invoiceTodoStatus = 'FAILED'")
     int retryFailedInvoiceTodo(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    /** Finance-visible dead letters that exhausted the bounded automatic-invoice retry policy. */
+    List<SalesOrder> findByFactoryIdAndInvoiceTodoStatusAndInvoiceTodoAttemptsGreaterThanEqualOrderByUpdatedAtDesc(
+            String factoryId, String invoiceTodoStatus, Integer invoiceTodoAttempts,
+            Pageable pageable);
 }

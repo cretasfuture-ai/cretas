@@ -126,4 +126,19 @@ class SalesOrderInvoiceTodoProcessorTest {
         org.mockito.Mockito.verify(salesOrderRepository).claimInvoiceTodo(eq("SO-LEASE"), eq("F006"),
                 any(LocalDateTime.class), argThat(lease -> lease.isAfter(LocalDateTime.now().plusMinutes(9))), eq(5));
     }
+    @Test
+    void exhaustedExpiredProcessingLeaseIsFailedWithoutInvoiceRequest() {
+        when(salesOrderRepository.markExpiredInvoiceTodosFailed(
+                any(LocalDateTime.class), eq(5), contains("耗尽"))).thenReturn(1);
+        when(salesOrderRepository.findInvoiceTodoCandidates(any(LocalDateTime.class), eq(5), any()))
+                .thenReturn(List.of());
+
+        assertThat(processor.processDueTodos()).isZero();
+
+        verify(salesOrderRepository).markExpiredInvoiceTodosFailed(
+                any(LocalDateTime.class), eq(5), contains("耗尽"));
+        verifyNoInteractions(invoiceService);
+        verify(salesOrderRepository, never()).claimInvoiceTodo(
+                anyString(), anyString(), any(LocalDateTime.class), any(LocalDateTime.class), anyInt());
+    }
 }

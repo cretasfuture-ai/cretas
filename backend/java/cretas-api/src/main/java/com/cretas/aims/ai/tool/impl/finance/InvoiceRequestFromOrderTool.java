@@ -1,37 +1,22 @@
 package com.cretas.aims.ai.tool.impl.finance;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.entity.finance.InvoiceRecord;
-import com.cretas.aims.service.finance.InvoiceService;
+import com.cretas.aims.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 一键基于销售订单生成税率分组开票申请。
+ * 旧“按订单手工申请”工具的兼容墓碑。
  *
- * V3 P0-3 / G1 — 客户原话 (会议 2645-2660s):
- * "一笔订单可能同时含 9% 原料 + 13% 加工费两个税项, 开票申请要自动按税率分组拆分"
- *
- * 与 InvoiceRequestTool 的区别:
- * - InvoiceRequestTool: 用户手动输入金额和税额 (单一税率场景)
- * - 本 Tool: 自动从销售订单 items 按 tax_rate 聚合分组 (多税率场景, 六扇门核心诉求)
- *
- * 触发场景:
- * - "为销售订单 SO123 一键开票"
- * - "把这单按税率开票"
- * - "9% 和 13% 分开开"
+ * <p>保留名称供历史调用得到可解释错误；工具禁用且 fail closed。税率分组记录只由
+ * 销售订单全部发货后的持久待办自动生成。</p>
  */
 @Slf4j
 @Component
 public class InvoiceRequestFromOrderTool extends AbstractBusinessTool {
-
-    @Autowired
-    private InvoiceService invoiceService;
 
     @Override
     public String getToolName() {
@@ -40,8 +25,7 @@ public class InvoiceRequestFromOrderTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "基于销售订单一键生成税率分组开票申请。系统自动按 9% 原料 + 13% 加工费等税率分组聚合, " +
-                "无需手动输入金额。适用场景: '为订单一键开票'、'按税率分组开票'、'9% 和 13% 分开开'。";
+        return "兼容入口：手工按订单申请开票已停用；销售订单全部发货后由系统自动按税率分组生成待审核记录";
     }
 
     @Override
@@ -69,29 +53,10 @@ public class InvoiceRequestFromOrderTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                              Map<String, Object> context) throws Exception {
-        InvoiceRecord record = invoiceService.requestInvoiceFromOrder(
-                factoryId,
-                getString(params, "salesOrderId"),
-                getString(params, "invoiceType"),
-                getLong(params, "userId"),
-                getString(params, "remark"));
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("invoiceNumber", record.getInvoiceNumber());
-        result.put("status", record.getStatus().name());
-        result.put("amount", record.getAmount());
-        result.put("taxAmount", record.getTaxAmount());
-        result.put("totalAmount", record.getTotalAmount());
-        result.put("taxBreakdown", record.getTaxBreakdown());
-        result.put("breakdownGroups",
-                record.getTaxBreakdown() != null ? record.getTaxBreakdown().size() : 0);
-
-        String message = String.format("已生成开票申请 %s, 共 %d 个税率组, 价税合计 %s",
-                record.getInvoiceNumber(),
-                record.getTaxBreakdown() != null ? record.getTaxBreakdown().size() : 0,
-                record.getTotalAmount());
-
-        return buildSimpleResult(message, result);
+        throw new BusinessException(410,
+                "手工按订单申请开票已停用；销售订单全部发货完成后，系统会自动按税率分组生成待审核开票记录")
+                .withHint("请到销售开票工作台处理系统生成的记录")
+                .withHintTarget("销售开票");
     }
 
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
@@ -99,4 +64,21 @@ public class InvoiceRequestFromOrderTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }
+
+    @Override
+    public boolean isEnabled() { return false; }
+
+    @Override
+    public boolean requiresPermission() { return true; }
+
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read_write");
+    }
+
+    @Override
+    public ActionType getActionType() { return ActionType.WRITE; }
+
+    @Override
+    public RiskLevel getRiskLevel() { return RiskLevel.HIGH; }
 }

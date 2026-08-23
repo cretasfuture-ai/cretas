@@ -233,10 +233,10 @@ test.describe('J5 sales_mgr full cycle @post-deploy', () => {
   });
 
   // ==========================================================================
-  // Test 4: Tax-group invoice (P0-3) using DEMO_SO_G1 (mixed 9%+13%)
+  // Test 4: Automatic invoice record view has no manual request action
   // ==========================================================================
 
-  test('P0-3 tax-group invoice UI + submit', async ({ page }) => {
+  test('P0-3 invoice tab is record-only before full delivery', async ({ page }) => {
     await page.goto(`/sales/orders/${DEMO_SO_G1_ID}`);
 
     const card = page.locator('.el-card').first();
@@ -245,48 +245,13 @@ test.describe('J5 sales_mgr full cycle @post-deploy', () => {
     // Verify order number
     await expect(page.locator('text=DEMO_SO_G1')).toBeVisible({ timeout: 10_000 });
 
-    // Verify status is CONFIRMED (\u5DF2\u786E\u8BA4)
-    const statusTag = page.locator('.el-tag:has-text("\u5DF2\u786E\u8BA4")');
-    await expect(statusTag).toBeVisible({ timeout: 5_000 });
-
-    // Switch to invoice tab (\u5F00\u7968\u7533\u8BF7)
-    const invoiceTab = page.locator('.el-tabs__item:has-text("\u5F00\u7968\u7533\u8BF7")');
+    // The tab remains a record view, but all manual request actions are retired.
+    const invoiceTab = page.locator('.el-tabs__item:has-text("\u5F00\u7968\u8BB0\u5F55")');
     await expect(invoiceTab).toBeVisible({ timeout: 5_000 });
     await invoiceTab.click();
-    await page.waitForTimeout(500);
-
-    // Click the invoice request button (\u4E00\u952E\u5F00\u7968\u7533\u8BF7)
-    const invoiceBtn = page.locator('button:has-text("\u4E00\u952E\u5F00\u7968\u7533\u8BF7")');
-    await expect(invoiceBtn).toBeVisible({ timeout: 5_000 });
-    await invoiceBtn.click();
-
-    // Invoice dialog should appear
-    const invoiceDialog = page.locator('.el-dialog:visible');
-    await expect(invoiceDialog).toBeVisible({ timeout: 10_000 });
-
-    // Find and click submit button
-    const submitBtn = invoiceDialog.locator(
-      '.el-dialog__footer button.el-button--primary, button:has-text("\u786E\u8BA4\u5F00\u7968"), button:has-text("\u63D0\u4EA4")'
-    ).first();
-    await expect(submitBtn).toBeVisible({ timeout: 5_000 });
-
-    const [invoiceResp] = await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().includes('/finance/invoices/request-from-order') && r.request().method() === 'POST',
-        { timeout: 15_000 }
-      ),
-      submitBtn.click(),
-    ]);
-
-    const invoiceBody = await invoiceResp.json();
-    // Invoice may succeed or fail due to permissions -- assert on the response structure
-    if (invoiceBody.success) {
-      const breakdown = invoiceBody.data?.taxBreakdown || [];
-      expect(breakdown.length, 'Should have at least 1 tax group').toBeGreaterThanOrEqual(1);
-    } else {
-      // If permission denied, still a valid test -- the endpoint was reached
-      expect(invoiceBody.message, 'Should get a structured error response').toBeTruthy();
-    }
+    await expect(page.getByRole('button', {
+      name: /\u4E00\u952E\u5F00\u7968\u7533\u8BF7|\u7533\u8BF7\u5F00\u7968|\u624B\u5DE5\u5F00\u7968/,
+    })).toHaveCount(0);
   });
 
   // ==========================================================================
@@ -416,8 +381,8 @@ test.describe('J5 sales_mgr full cycle @post-deploy', () => {
     // Verify business tabs exist:
     // \u8BA2\u5355\u8BE6\u60C5 = 订单详情
     const detailTab = page.locator('.el-tabs__item:has-text("\u8BA2\u5355\u8BE6\u60C5")');
-    // \u5F00\u7968\u7533\u8BF7 = 开票申请
-    const invoiceTab = page.locator('.el-tabs__item:has-text("\u5F00\u7968\u7533\u8BF7")');
+    // \u5F00\u7968\u8BB0\u5F55 = 开票记录
+    const invoiceTab = page.locator('.el-tabs__item:has-text("\u5F00\u7968\u8BB0\u5F55")');
     // \u6536\u6B3E = 收款
     const paymentTab = page.locator('.el-tabs__item:has-text("\u6536\u6B3E")');
 

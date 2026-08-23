@@ -28,12 +28,7 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     // current node, role and explicit assignee.
     '/workflow',
     '/finance',
-    // 🔴 2026-08-22: 补上。菜单和路由都写着 module: 'finance'(财务有),
-    //   但路径不在本白名单里 ⇒ **串联的另一半没通** ⇒ 财务点「财务待审销售单」必 403。
-    //   owner 实测撞到。⚠️ 它在 /sales/ 下, 但归属是财务审核队列, ⛔ 不需要 sales 模块。
-    //   ▎这正是本表注释早就写过的「要改访问范围, 两处都得改」的反方向:
-    //     模块给了、白名单没给, 一样 403。
-    '/sales/finance-review',
+    // 销售/采购审批统一在个人 OA；财务角色不再通过旧销售财审索引跨模块浏览。
     // 🔴 2026-08-22: 补上工作台。财务有 dashboard/finance 模块 ⇒ 菜单显示「工作台」,
     //   但路径不在本白名单里 ⇒ 点进去 403。owner 没点到, 是扫描器 B 类查出来的。
     '/workdesk',

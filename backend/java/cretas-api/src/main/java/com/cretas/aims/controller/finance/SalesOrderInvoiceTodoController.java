@@ -7,11 +7,13 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.service.finance.impl.SalesOrderInvoiceTodoProcessor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.List;
 
 /** Finance-admin recovery endpoint for exhausted automatic invoice todos. */
 @RestController
@@ -24,10 +26,16 @@ public class SalesOrderInvoiceTodoController {
 
     private final SalesOrderInvoiceTodoProcessor processor;
 
+    /** Visible dead-letter queue for finance operators; tenant is constrained by the path relation gate. */
+    @GetMapping("/failed")
+    public ApiResponse<List<Map<String, Object>>> failed(@PathVariable("factoryId") String factoryId) {
+        return ApiResponse.success("查询成功", processor.listFailedTodos(factoryId));
+    }
+
     /** Reset one FAILED todo; the scheduler performs the leased invoice attempt afterward. */
     @PostMapping("/{salesOrderId}/retry")
-    public ApiResponse<Map<String, Object>> retry(@PathVariable String factoryId,
-                                                   @PathVariable String salesOrderId) {
+    public ApiResponse<Map<String, Object>> retry(@PathVariable("factoryId") String factoryId,
+                                                   @PathVariable("salesOrderId") String salesOrderId) {
         boolean retried = processor.retryFailedTodo(factoryId, salesOrderId);
         if (!retried) {
             throw new com.cretas.aims.exception.BusinessException(409,

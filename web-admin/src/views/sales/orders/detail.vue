@@ -262,10 +262,6 @@ const batchAllocForm = ref<{ deliveryId: string; deliveryNumber: string; items: 
   deliveryId: '', deliveryNumber: '', items: [],
 });
 
-// 开票申请对话框
-const invoiceDialogVisible = ref(false);
-const invoiceForm = ref<{ invoiceType: string; remark: string }>({ invoiceType: 'NORMAL', remark: '' });
-
 // 上传发票 PDF 对话框 (V3 P0-3c)
 const issueDialogVisible = ref(false);
 const issueTargetInvoiceId = ref<string>('');
@@ -1243,44 +1239,6 @@ async function handleBatchAllocate() {
   }
 }
 
-// ──────────────────────────────────────────────
-// 开票申请 (V3 P0-3 / G1 — 税率分组)
-// ──────────────────────────────────────────────
-
-function openInvoiceDialog() {
-  invoiceForm.value = { invoiceType: 'NORMAL', remark: '' };
-  invoiceDialogVisible.value = true;
-}
-
-async function handleCreateInvoice() {
-  if (submitting.value) return;
-  submitting.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/finance/invoices/request-from-order`, {
-      salesOrderId: orderId.value,
-      invoiceType: invoiceForm.value.invoiceType,
-      remark: invoiceForm.value.remark,
-    });
-    if (res.success) {
-      ElMessage.success(`开票申请已提交 (${res.data?.taxBreakdown?.length || 0} 个税率组)`);
-      invoiceDialogVisible.value = false;
-      loadInvoices();
-      loadOrder();
-    } else { ElMessage.error(res.message || '开票申请创建失败'); }
-  } catch (e: unknown) {
-    // Bug #8 fix (R21 2026-04-16): axios response interceptor 对所有 4xx/5xx 已显示 toast,
-    // 这里 catch 不再叠加 "请检查网络" (否则用户看到两个 toast: 业务消息 + 误导网络提示)
-    // 仅在 ApiError.status 未设 (纯网络错, 如无响应/CORS) 时才兜底
-    const err = e as { status?: number };
-    if (!err?.status) {
-      // 真网络错误 — interceptor 来不及显示 (e.g. 断网)
-      ElMessage.error('开票申请创建失败，请检查网络');
-    }
-    // 否则 interceptor 已显示后端 message, 此处不再 toast
-  }
-  finally { submitting.value = false; }
-}
-
 async function handleApproveInvoice(invoiceId: string) {
   if (submitting.value) return;
   try {
@@ -1388,17 +1346,6 @@ function computedRemainingAmount() {
 const paymentOverLimit = computed(
   () => Number(paymentForm.value.amount || 0) > computedRemainingAmount() + 0.001,
 );
-
-// 防呆 Rule 1 (fool-proof-design): 开票申请 上限展示 — 订单总额 / 已开票 / 可开票.
-// 缺失导致六膳门全生命周期测试踩坑: 收款登记已有对等 computedRemainingAmount() 上限,
-// 开票申请此前无任何上限展示 (mirror finance/invoices/list.vue R1+R2 retrofit 2026-05-17
-// 和 finance/payments/list.vue E-FP-3 retrofit 的同款模式).
-function computedInvoiceableAmount() {
-  if (!order.value) return 0;
-  const total = Number(order.value.totalAmount || 0);
-  const invoiced = Number(order.value.invoicedAmount || 0);
-  return Math.max(0, total - invoiced);
-}
 
 // V3 P0-11 补强 — 审批进度时间线 (Verification Round 2 / Agent A 截图 3 硬伤)
 // 客户截图底部固定显示 "张权 提交申请 → 刘会林 审批人(已同意)" timeline
@@ -2073,20 +2020,16 @@ async function handleQuickPayFull() {
             </div>
           </el-tab-pane>
 
-          <!-- ─── Tab 2: 开票申请 (V3 P0-3 / G1) ─── -->
+          <!-- ─── Tab 2: 自动生成的开票记录 ─── -->
           <el-tab-pane name="invoice">
             <template #label>
-              开票申请
+              开票记录
               <el-badge v-if="invoices.length" :value="invoices.length" :max="99" class="tab-badge" />
             </template>
 
             <div class="tab-toolbar">
-              <el-button v-if="canWrite && canWriteFinance" type="primary" @click="openInvoiceDialog">
-                + 一键开票申请 (按税率分组)
-              </el-button>
-              <!-- 防呆 Rule 1: 订单总额/已开票/可开票 上限, mirror 收款 tab 的 待收 提示 (line 1536) -->
-              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已开票 {{ formatAmount(order.invoicedAmount || 0) }} / 可开票 {{ formatAmount(computedInvoiceableAmount()) }}</span>
-              <span class="tab-hint">客户原话: 一笔订单可同时含 9% 原料 + 13% 加工费, 按税率分组拆分</span>
+              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已开票 {{ formatAmount(order.invoicedAmount || 0) }}</span>
+              <span class="tab-hint">全部发货完成后，系统自动按税率分组生成待审核开票记录</span>
             </div>
 
             <el-table :data="invoices" border stripe style="margin-top: 12px">
@@ -2555,63 +2498,6 @@ async function handleQuickPayFull() {
       <template #footer>
         <el-button @click="batchAllocDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleBatchAllocate">确认分配</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- ─── 一键开票对话框 ─── -->
-    <el-dialog
-      v-model="invoiceDialogVisible"
-      :title="order
-        ? `一键开票申请 — ${order.customerName || order.customer?.name || '客户未知'} (${order.orderNumber || orderId})`
-        : '一键开票申请 (按税率自动分组)'"
-      width="520px"
-      destroy-on-close
-    >
-      <!-- 防呆 Rule 1 (fool-proof-design): 提交前先显订单总额/已开票/可开票上限,
-           mirror 收款登记 computedRemainingAmount() 的展示方式 + finance/invoices/list.vue
-           R1+R2 retrofit 的 banner 样式 (订单总额/已开/可开 三段 + 超限变红). -->
-      <el-alert
-        v-if="canViewPrice"
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px"
-      >
-        <template #title>
-          订单总额 <b>{{ formatAmount(order?.totalAmount || 0) }}</b>
-          · 已开票 <b>{{ formatAmount(order?.invoicedAmount || 0) }}</b>
-          · <span :style="{ color: computedInvoiceableAmount() > 0 ? '#67c23a' : '#f56c6c' }">可开票 <b>{{ formatAmount(computedInvoiceableAmount()) }}</b></span>
-        </template>
-        <template v-if="computedInvoiceableAmount() === 0" #default>
-          该订单已全额开票, 无需再次申请
-        </template>
-      </el-alert>
-      <el-alert
-        type="info"
-        :closable="false"
-        title="系统将自动按销售订单明细的税率分组聚合"
-        description="若订单含 9% 原料 + 13% 加工费, 会生成两组明细供财务审批。提交后按上方「可开票」余额为限自动生成本次开票明细。"
-        style="margin-bottom: 16px"
-      />
-      <el-form label-width="90px">
-        <el-form-item label="发票类型">
-          <el-radio-group v-model="invoiceForm.invoiceType">
-            <el-radio value="NORMAL">普通发票</el-radio>
-            <el-radio value="SPECIAL">增值税专票</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="invoiceForm.remark" type="textarea" :rows="2" placeholder="选填" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="invoiceDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="submitting"
-          :disabled="canViewPrice && computedInvoiceableAmount() === 0"
-          @click="handleCreateInvoice"
-        >提交开票申请</el-button>
       </template>
     </el-dialog>
 

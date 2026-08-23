@@ -60,11 +60,9 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     return findGroup(groupPath)?.children?.filter((c) => c.groupLabel).map((c) => c.groupLabel!) ?? [];
   }
 
-  it('keeps the sales finance review queue discoverable, and no longer offers the dead purchase one', () => {
-    expect(childPaths('/sales')).toContain('/sales/finance-review');
-    expect(childPaths('/finance')).toEqual(expect.arrayContaining([
-      '/sales/finance-review',
-    ]));
+  it('keeps sales and purchase approval actions in personal OA, not module navigation', () => {
+    expect(childPaths('/sales')).not.toContain('/sales/finance-review');
+    expect(childPaths('/finance')).not.toContain('/sales/finance-review');
     // 2026-08-16: 采购那条恒空且按钮打 410, 已整条移除; 阴性对照钉住它别回来。
     expect(childPaths('/procurement')).not.toContain('/procurement/finance-review');
     expect(childPaths('/finance')).not.toContain('/procurement/finance-review');
@@ -232,10 +230,9 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/procurement')).not.toContain('/procurement/receives');
   });
 
-  it('groups sales into business, approval, and configuration sections', () => {
+  it('keeps sales business and configuration sections after approvals move to OA', () => {
     expect(childGroupLabels('/sales')).toEqual([
       '销售业务',
-      '销售审批',
       '销售配置',
     ]);
     expect(childPaths('/sales')).toEqual([
@@ -244,7 +241,6 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/sales/shipments',
       '/sales/returns',
       '/sales/payment-requests',
-      '/sales/finance-review',
       '/sales/vehicles',
     ]);
   });
@@ -257,13 +253,13 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '财务配置',
     ]);
     expect(childPaths('/finance')).toEqual([
-      '/sales/finance-review',
       '/finance/adjustments',
       '/finance/costs',
       '/finance/three-statements',
       '/finance/reports',
       '/finance/ar-ap',
       '/finance/invoices',
+      '/finance/purchase-invoices',
       '/finance/payments',
       '/finance/sku-margin',
       '/finance/gross-margin-redline',
@@ -542,6 +538,35 @@ describe('menuConfig — personal OA workbench', () => {
       '我发起的',
       '已处理',
       '抄送我的',
+    ]);
+  });
+
+  it('keeps finance operations in finance and sends order approvals to personal OA', () => {
+    expect(financeManagerMenu.map((item) => item.path)).toEqual(expect.arrayContaining([
+      '/workflow',
+      '/finance/ar-ap',
+      '/finance/invoices?status=REQUESTED',
+      '/finance/purchase-invoices',
+      '/finance/payments',
+    ]));
+    expect(financeManagerMenu.some((item) => item.path === '/sales/finance-review')).toBe(false);
+    for (const path of [
+      '/finance/ar-ap',
+      '/finance/invoices?status=REQUESTED',
+      '/finance/purchase-invoices',
+      '/finance/payments',
+    ]) {
+      expect(financeManagerMenu.find((item) => item.path === path)?.hideForFactoryTypes)
+        .toContain('RESTAURANT');
+    }
+  });
+
+  it('limits the purchase-invoice workbench to finance roles', () => {
+    expect(findDescendant('/finance', '/finance/purchase-invoices')?.roles).toEqual([
+      'factory_super_admin',
+      'platform_admin',
+      'permission_admin',
+      'finance_manager',
     ]);
   });
 });

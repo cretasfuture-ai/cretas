@@ -1124,6 +1124,18 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '开票管理', module: 'finance' }
           },
           {
+            path: 'purchase-invoices',
+            name: 'FinancePurchaseInvoices',
+            component: () => import('@/views/procurement/invoices/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '采购收票',
+              module: 'finance',
+              roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'],
+              hideForFactoryTypes: ['RESTAURANT']
+            }
+          },
+          {
             path: 'payments',
             name: 'FinancePayments',
             component: () => import('@/views/finance/payments/list.vue'),
