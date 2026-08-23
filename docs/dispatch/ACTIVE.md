@@ -6,8 +6,6 @@
 ## 在飞任务
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
-- `RELEASE-F006-WAREHOUSE-FINANCE-SALES-WORKFLOW-20260823` — `review` — Owner: `/root` — Base SHA: `3ea7444364d12d345d3a66cfca19e06d05820474`; candidate `838234503a40bd4505e9fda1f6c09f6558b8f7e9` — Scope lock: 本批仓储 RN/采购收货、财务应收应付与自动开票/收票、销售全屏建单和一次/分批发货、Workflow 自动分叉/历史不可变/生产引用锁、对应 Java/Web/RN/迁移/测试/发布与 F006 验收。子任务已全部汇入 exact-origin 候选，完成记录见 `archive/2026-08-24-active-history.md`；当前只剩 PR/CI、合并、exact origin/main 生产发布、角色退出重登后的 Web/RN/API E2E 与本轮 F006 数据精确清理。权限/Security、Entity/Repository/Flyway 仍按高风险门禁；生产只读 harness 必须业务写 0，写入型验收仅限已证明 `factoryId=F006` 的本轮实体；禁止影响其他租户、回滚既有 RBAC、修改主工作区或绕过发布回执。
-
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
 
 - `UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802` — `blocked` — Owner: `/root` — 实现提交已进入迁移树，代码与 Expo Web 验收可核销；当前餐饮 RN OTA runtime 与真实设备验收无法确认。实现文件 scope 已释放；如继续，仅新建 exact-commit OTA/设备验收项。

@@ -137,7 +137,7 @@ try {
   state.entities.qualityInspection = inspection;
   state.mutations.push({ phase: 'expo-app-quality', action: 'create-passing-quality-inspection', entityId: inspection.id, at: new Date().toISOString() });
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-  await page.getByText('检验结果', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+  await page.getByText('检验结果', { exact: true }).first().waitFor({ state: 'visible', timeout: 30_000 });
   await page.screenshot({ path: path.join(evidenceDir, '12-expo-quality-inspection-passed.png'), fullPage: true });
   report.result = 'PASS';
 } catch (error) {

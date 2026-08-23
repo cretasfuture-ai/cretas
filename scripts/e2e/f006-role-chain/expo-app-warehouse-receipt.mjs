@@ -82,6 +82,9 @@ try {
     throw new Error(`Expo App F006 warehouse login proof failed: ${JSON.stringify(report.login)}`);
   }
 
+  const warehouseHome = page.locator('[data-testid="wh-home-screen"]');
+  await warehouseHome.waitFor({ state: 'visible', timeout: 60_000 });
+  await page.locator('[data-testid="wh-home-inbound"]').click();
   const entry = page.locator('[data-testid="wh-production-receipt-entry"]');
   await entry.waitFor({ state: 'visible', timeout: 60_000 });
   await page.screenshot({ path: path.join(evidenceDir, '11-expo-warehouse-inbound-home.png'), fullPage: true });
