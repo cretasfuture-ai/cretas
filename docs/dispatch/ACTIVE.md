@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `FIX-WEB-DIST-HEAP-20260823` — `in-progress` — Owner: `/root` — Base SHA: `d6411f475b378b9c4e412c607092f8e7f49f14ec` — Scope lock: `.github/workflows/web-dist.yml`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`。PR #10 合并后的 exact-main 制品 run `32632119734` 在 Vite build 达到约 2 GiB V8 heap 后 OOM（exit 134）；仅为 Build 步骤显式提供 4 GiB heap，保持 build/package/provenance/upload 全链不变。验收：YAML/preflight、精确 HEAD Secret/Web Gate、合并后 exact-main `workflow_dispatch` 必须生成带 provenance 的制品；不重复部署已通过四方哈希的生产 Web，不修改产品代码、依赖、Java/Python/RN/Mall 或生产数据。
+
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
@@ -36,6 +38,8 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
+
+- `FIX-WEB-DIST-HEAP-20260823`：仅 `.github/workflows/web-dist.yml`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`；不得修改 Web 产品源码/依赖、其他工作流、Java/Python/RN/Mall 或生产。验收：Vite build 不再因默认约 2 GiB heap 失败，package、attestation、artifact upload 全部完成，run head 必须等于 exact `origin/main`。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
