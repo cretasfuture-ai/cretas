@@ -119,8 +119,11 @@ class ProductProcessWorkflowPostgresIntegrationTest {
     @BeforeEach
     void setUpControllerWithRealRepository() {
         ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
+        ProductType owner = mock(ProductType.class);
         when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
-                .thenReturn(java.util.Optional.of(mock(ProductType.class)));
+                .thenReturn(java.util.Optional.of(owner));
+        when(productTypeRepository.findByIdAndFactoryIdForUpdate(PRODUCT_ID, FACTORY_ID))
+                .thenReturn(java.util.Optional.of(owner));
 
         ProductProcessWorkflowCatalogValidator catalogValidator =
                 mock(ProductProcessWorkflowCatalogValidator.class);
@@ -375,6 +378,55 @@ class ProductProcessWorkflowPostgresIntegrationTest {
         assertEquals(7, ((Number) storedJson[0]).intValue());
         assertEquals(6, ((Number) storedJson[1]).intValue());
         assertEquals("200 kg = 400 box", storedJson[2]);
+    }
+
+    @Test
+    @Order(4)
+    void autoForkFailureRollsBackFrozenAndNewDraftRowsTogether() throws Exception {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            connection.setAutoCommit(false);
+            statement.execute("""
+                    INSERT INTO product_process_workflows
+                        (factory_id, product_type_id, schema_version, status, definition_version,
+                         nodes_json, edges_json, viewport_json, lock_version)
+                    VALUES ('WF-ROLLBACK', 'PT-ROLLBACK', 1, 'DRAFT', 1,
+                            '[]'::jsonb, '[]'::jsonb, '{"x":0,"y":0,"zoom":1}'::jsonb, 0)
+                    """);
+            statement.execute("""
+                    UPDATE product_process_workflows
+                    SET status = 'SNAPSHOT'
+                    WHERE factory_id = 'WF-ROLLBACK' AND product_type_id = 'PT-ROLLBACK'
+                    """);
+            statement.execute("""
+                    INSERT INTO product_process_workflows
+                        (factory_id, product_type_id, schema_version, status, definition_version,
+                         nodes_json, edges_json, viewport_json, lock_version)
+                    VALUES ('WF-ROLLBACK', 'PT-ROLLBACK', 1, 'DRAFT', 2,
+                            '[]'::jsonb, '[]'::jsonb, '{"x":0,"y":0,"zoom":1}'::jsonb, 0)
+                    """);
+            SQLException failure = assertThrows(SQLException.class, () -> statement.execute("""
+                    INSERT INTO product_process_workflows
+                        (id, factory_id, product_type_id, schema_version, status, definition_version,
+                         nodes_json, edges_json, viewport_json, lock_version)
+                    SELECT id, factory_id, product_type_id, schema_version, status, definition_version,
+                           nodes_json, edges_json, viewport_json, lock_version
+                    FROM product_process_workflows
+                    WHERE factory_id = 'WF-ROLLBACK' AND product_type_id = 'PT-ROLLBACK'
+                    LIMIT 1
+                    """));
+            assertEquals("23505", failure.getSQLState());
+            connection.rollback();
+        }
+
+        try (Connection connection = dataSource.getConnection()) {
+            assertEquals(0, scalarInt(connection, """
+                    SELECT count(*)
+                    FROM product_process_workflows
+                    WHERE factory_id = 'WF-ROLLBACK'
+                      AND product_type_id = 'PT-ROLLBACK'
+                    """));
+        }
     }
 
     private ProductProcessWorkflowDTO validMultiInputMultiOutputDefinition() {

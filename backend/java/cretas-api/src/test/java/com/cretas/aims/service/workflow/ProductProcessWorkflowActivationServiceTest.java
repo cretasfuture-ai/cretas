@@ -293,7 +293,7 @@ class ProductProcessWorkflowActivationServiceTest {
         verify(activationRepository, never()).deleteById(any());
         verify(entityManager).createNativeQuery(
                 "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockSeed AS text), 0))");
-        verify(advisoryLockQuery).setParameter("lockSeed", "F006\u001fPT-PIG");
+        verify(advisoryLockQuery).setParameter("lockSeed", "F006\\x1fPT-PIG");
     }
 
     @Test

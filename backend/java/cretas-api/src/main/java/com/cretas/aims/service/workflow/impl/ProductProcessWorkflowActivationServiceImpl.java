@@ -122,7 +122,9 @@ public class ProductProcessWorkflowActivationServiceImpl
     private void lockWorkflowOwner(String factoryId, String productTypeId) {
         entityManager.createNativeQuery(
                         "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockSeed AS text), 0))")
-                .setParameter("lockSeed", factoryId + "\u001f" + productTypeId)
+                // V20261028_53/V20261028_65 use E'\\x1f', which PostgreSQL
+                // evaluates to the literal four-character separator "\\x1f".
+                .setParameter("lockSeed", factoryId + "\\x1f" + productTypeId)
                 .getSingleResult();
     }
 

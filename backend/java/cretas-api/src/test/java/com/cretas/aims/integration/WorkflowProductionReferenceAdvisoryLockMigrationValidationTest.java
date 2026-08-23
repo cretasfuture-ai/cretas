@@ -28,8 +28,14 @@ class WorkflowProductionReferenceAdvisoryLockMigrationValidationTest {
         assertTrue(sql.contains("pg_advisory_xact_lock"));
         assertTrue(sql.contains("production_plans"));
         assertTrue(sql.contains("production_batches"));
+        assertTrue(sql.contains("product_process_workflows"));
+        assertTrue(sql.contains("workflow.product_type_id"));
+        assertTrue(sql.contains("trg_z_guard_workflow_activation_deactivation"));
+        assertTrue(sql.contains("deactivate rejected after recheck"));
         assertTrue(sql.contains("BEFORE INSERT OR UPDATE OF status, selected_workflow_id"));
-        assertTrue(sql.contains("E'\\x1f'"));
+        assertTrue(sql.contains("E'\\\\x1f'"));
+        assertTrue(!sql.contains("E'\\x1f'"),
+                "V21 must produce the literal backslash separator, not ASCII control U+001F");
         assertTrue(sql.contains("IN_PROGRESS"));
         assertTrue(sql.contains("PRODUCING"));
         assertTrue(sql.contains("PAUSED"));
