@@ -38,6 +38,14 @@ describe('入库首页任务真值', () => {
     expect(inbound).toContain('testID="wh-inbound-load-more"');
   });
 
+  it('部分成功保留列表，并只重试失败来源的原页码', () => {
+    expect(inbound).toContain('failedStatusesRef.current[status] = request.page');
+    expect(inbound).toContain("mode === 'retryFailed'");
+    expect(inbound).toContain('retryFailed ? \'retryFailed\' : \'refresh\'');
+    expect(inbound).toContain('loadError && orders.length === 0');
+    expect(inbound).toContain('重试失败来源');
+  });
+
   it('采购来源部分失败持续提示，并保留旧列表供仓管继续核对', () => {
     expect(receiving).toContain('setLoadError(info)');
     expect(receiving).toContain('部分来源失败时保留旧列表，同时补入本次成功来源');

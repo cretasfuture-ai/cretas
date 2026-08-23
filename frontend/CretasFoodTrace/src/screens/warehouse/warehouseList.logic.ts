@@ -66,6 +66,16 @@ export function sortReceivingOrders(orders: PurchaseOrder[]): PurchaseOrder[] {
   });
 }
 
+/** Merge a newly fulfilled source page without dropping already loaded rows. */
+export function mergeReceivingOrders(
+  existing: PurchaseOrder[],
+  incoming: PurchaseOrder[],
+): PurchaseOrder[] {
+  const byId = new Map(existing.map((order) => [order.id, order]));
+  incoming.forEach((order) => byId.set(order.id, order));
+  return sortReceivingOrders([...byId.values()]);
+}
+
 /** Filter after all loaded status pages have been merged. */
 export function filterReceivingOrders(
   orders: PurchaseOrder[],

@@ -15,6 +15,7 @@ import { warehouseReceivingApiClient } from '../../../services/api/warehouseRece
 import {
   countInboundTasks,
   filterReceivingOrders,
+  mergeReceivingOrders,
   sortReceivingOrders,
   statusesToFetchForReceivingPage,
   toReceivingStatus,
@@ -73,17 +74,25 @@ export default function WHInboundListScreen() {
     Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])) as Partial<Record<PurchaseOrder['status'], boolean>>,
   );
   const statusTotalsRef = useRef<Partial<Record<PurchaseOrder['status'], { totalElements?: number; content?: PurchaseOrder[] }>>>({});
+  // status -> page that failed; a retry must not advance successful sources.
+  const failedStatusesRef = useRef<Partial<Record<PurchaseOrder['status'], number>>>({});
   const unorderedInboundCountRef = useRef(0);
   const PAGE_SIZE = 20;
   const hasMore = INBOUND_ORDER_STATUSES.some((status) => statusHasMore[status]);
 
-  const loadData = useCallback(async (append = false) => {
+  const loadData = useCallback(async (mode: 'refresh' | 'append' | 'retryFailed' = 'refresh') => {
     try {
-      const statuses = statusesToFetchForReceivingPage(INBOUND_ORDER_STATUSES, statusHasMoreRef.current, append);
+      const append = mode !== 'refresh';
+      const retryFailed = mode === 'retryFailed';
+      const statuses = retryFailed
+        ? (Object.keys(failedStatusesRef.current) as PurchaseOrder['status'][])
+        : statusesToFetchForReceivingPage(INBOUND_ORDER_STATUSES, statusHasMoreRef.current, append);
       if (append && statuses.length === 0) return;
       const requests = statuses.map((status) => ({
         status,
-        page: append ? (statusPagesRef.current[status] ?? 0) + 1 : 1,
+        page: retryFailed
+          ? (failedStatusesRef.current[status] ?? (statusPagesRef.current[status] ?? 0) + 1)
+          : append ? (statusPagesRef.current[status] ?? 0) + 1 : 1,
       }));
       const [results, arrivalResults] = await Promise.all([
         Promise.allSettled(requests.map(({ status, page }) =>
@@ -106,10 +115,14 @@ export default function WHInboundListScreen() {
       const arrivalTasks = arrivalResult?.status === 'fulfilled' ? (arrivalResult.value?.data || []) : [];
       const pageOrders: PurchaseOrder[] = [];
       results.forEach((result, index) => {
-        if (result.status !== 'fulfilled') return;
         const request = requests[index];
         const status = request?.status;
         if (!status) return;
+        if (result.status !== 'fulfilled') {
+          failedStatusesRef.current[status] = request.page;
+          return;
+        }
+        delete failedStatusesRef.current[status];
         statusPagesRef.current[status] = request.page;
         const hasMorePage = request.page < (result.value.data.totalPages ?? request.page);
         statusHasMoreRef.current[status] = hasMorePage;
@@ -125,11 +138,8 @@ export default function WHInboundListScreen() {
         setInboundCounts(countInboundTasks(statusTotalsRef.current, arrivalTasks.length));
         setLoadError(null);
       } else if (!hasLoadFailure && append) {
-        setOrders((previous) => {
-          const byId = new Map(previous.map((order) => [order.id, order]));
-          pageOrders.forEach((order) => byId.set(order.id, order));
-          return sortReceivingOrders([...byId.values()]);
-        });
+        setOrders((previous) => mergeReceivingOrders(previous, pageOrders));
+        setLoadError(null);
       } else {
         // 部分/全部失败时保留上次可信列表，不把不完整数据伪装成全量成功。
         setLoadError('部分入库任务加载失败，请点击重试。');
@@ -142,9 +152,7 @@ export default function WHInboundListScreen() {
         }
         setOrders((previous) => {
           if (!append && previous.length === 0) return nextOrders;
-          const byId = new Map(previous.map((order) => [order.id, order]));
-          pageOrders.forEach((order) => byId.set(order.id, order));
-          return sortReceivingOrders([...byId.values()]);
+          return mergeReceivingOrders(previous, pageOrders);
         });
       }
       if (append) {
@@ -160,26 +168,32 @@ export default function WHInboundListScreen() {
   }, [factoryId]);
 
   useFocusEffect(useCallback(() => {
-    statusPagesRef.current = {};
-    statusHasMoreRef.current = Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true]));
-    statusTotalsRef.current = {};
-    setStatusHasMore(Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])));
-    void loadData(false);
+    const retryFailed = Object.keys(failedStatusesRef.current).length > 0;
+    if (!retryFailed) {
+      statusPagesRef.current = {};
+      statusHasMoreRef.current = Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true]));
+      statusTotalsRef.current = {};
+      setStatusHasMore(Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])));
+    }
+    void loadData(retryFailed ? 'retryFailed' : 'refresh');
   }, [loadData]));
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    statusPagesRef.current = {};
-    statusHasMoreRef.current = Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true]));
-    statusTotalsRef.current = {};
-    setStatusHasMore(Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])));
-    void loadData(false);
+    const retryFailed = Object.keys(failedStatusesRef.current).length > 0;
+    if (!retryFailed) {
+      statusPagesRef.current = {};
+      statusHasMoreRef.current = Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true]));
+      statusTotalsRef.current = {};
+      setStatusHasMore(Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])));
+    }
+    void loadData(retryFailed ? 'retryFailed' : 'refresh');
   }, [loadData]);
 
   const onLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
-    await loadData(true);
+    await loadData('append');
     setLoadingMore(false);
   }, [hasMore, loadData, loadingMore]);
 
@@ -250,19 +264,26 @@ export default function WHInboundListScreen() {
         </ScrollView>
 
         <View style={styles.list}>
-          {loadError ? (
+          {loadError && orders.length === 0 ? (
             <Surface style={styles.empty} elevation={1}>
               <MaterialCommunityIcons name="alert-circle-outline" size={42} color="#C62828" />
               <Text style={styles.errorTitle}>入库任务加载失败</Text><Text style={styles.emptyHint}>{loadError}</Text>
               <Button mode="contained" icon="refresh" onPress={onRefresh}>重试</Button>
             </Surface>
-          ) : visibleOrders.length === 0 && !hasMore && !(filter !== 'completed' && !query.trim() && stats.pending > 0) ? (
+          ) : visibleOrders.length === 0 && !hasMore && !(filter !== 'completed' && !query.trim() && stats.pending > 0) && !(loadError && orders.length > 0) ? (
             <Surface style={styles.empty} elevation={1}>
               <MaterialCommunityIcons name="package-variant-closed" size={42} color="#BDBDBD" />
               <Text style={styles.emptyTitle}>当前筛选下没有入库任务</Text>
             </Surface>
           ) : (
             <>
+              {loadError && orders.length > 0 && (
+                <Surface style={styles.warning} elevation={1}>
+                  <Text style={styles.errorTitle}>部分入库任务加载失败</Text>
+                  <Text style={styles.emptyHint}>{loadError}</Text>
+                  <Button mode="outlined" icon="refresh" onPress={onRefresh}>重试失败来源</Button>
+                </Surface>
+              )}
               {filter !== 'completed' && !query.trim() && unorderedInboundCount > 0 && (
                 <TouchableRipple
                   onPress={openReceivingTasks}
@@ -352,6 +373,7 @@ const styles = StyleSheet.create({
   actionText: { color: '#2E7D32', fontSize: 14, fontWeight: '700' },
   doneText: { color: '#757575' },
   empty: { backgroundColor: '#FFF', borderRadius: 12, padding: 30, alignItems: 'center', gap: 10 },
+  warning: { backgroundColor: '#FFF8E1', borderRadius: 12, padding: 16, marginBottom: 12, gap: 6 },
   emptyTitle: { color: '#666', fontSize: 15, fontWeight: '600' },
   errorTitle: { color: '#C62828', fontSize: 16, fontWeight: '700' },
   emptyHint: { color: '#666', fontSize: 13, textAlign: 'center', lineHeight: 20 },

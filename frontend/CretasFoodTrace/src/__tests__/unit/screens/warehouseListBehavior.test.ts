@@ -1,6 +1,7 @@
 import {
   countInboundTasks,
   filterReceivingOrders,
+  mergeReceivingOrders,
   filterPendingDeliveries,
   isConfirmableDeliveryStatus,
   isCompletedDeliveryStatus,
@@ -32,6 +33,21 @@ describe('仓库列表行为口径', () => {
       { FINANCE_APPROVED: false, PARTIAL_RECEIVED: false },
       false,
     )).toEqual(['FINANCE_APPROVED', 'PARTIAL_RECEIVED']);
+  });
+
+  it('入库部分成功时保留已加载内容，重试失败来源成功页只追加并去重', () => {
+    const existing = [
+      { id: 'already-loaded', status: 'FINANCE_APPROVED', expectedDeliveryDate: '2026-08-20' },
+    ] as never[];
+    const retriedPage = [
+      { id: 'retried-page', status: 'FINANCE_APPROVED', expectedDeliveryDate: '2026-08-23' },
+      { id: 'already-loaded', status: 'FINANCE_APPROVED', expectedDeliveryDate: '2026-08-21' },
+    ] as never[];
+
+    expect(mergeReceivingOrders(existing, retriedPage).map((order) => order.id)).toEqual([
+      'retried-page',
+      'already-loaded',
+    ]);
   });
 
   it('采购收货先按状态，再按业务时间倒序；分页合并后顺序仍全局稳定', () => {
