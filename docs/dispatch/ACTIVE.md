@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `MIGRATE-SALES-ORDER-READONLY-E2E-20260823` — `review` — Owner: `/root` — Base SHA: `f112c032fd9f9acc52456be8c368823a4fc59ba6` — 将旧销售订单生命周期只读验收重写到公司仓统一 guarded harness；独立审计已关闭默认数据依赖与异步请求竞态，当前候选仅待 PR/CI/合并。不得运行生产验收、扩大 query POST 白名单、修改产品代码/凭证或产生业务写入。
+
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
@@ -36,6 +38,8 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
+
+- `MIGRATE-SALES-ORDER-READONLY-E2E-20260823`：仅 `scripts/e2e/production-readonly/config/routes.js`、`core/run-suite.js`、`mcp-entry.js`、`scenarios/sales-order-lifecycle-readonly.js`、`tests/fixture.spec.js`、`tests/sales-order-lifecycle-readonly.test.js`、`tests/unit.test.js`、`docs/dispatch/ACTIVE.md` 与当日归档；验收为 unit、local fixture、bundle drift、显式/默认场景选择与 zero-write 断言。生产真实 F006 验收不在本任务范围。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
