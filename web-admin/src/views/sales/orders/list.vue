@@ -113,12 +113,12 @@ const canWriteFinance = computed(() => permissionStore.canWrite('finance'));
 // 开票待办在订单全部发货完成后自动生成；销售列表不再提供手工开票入口。
 const FINANCE_WRITE_ACTIONS = new Set(['quick-payment']);
 const SALES_DEFAULT_COLUMNS = [
+  'productSummary',
   'processingMode',
   'materialSupply',
   'salesperson',
   'orderDate',
   'totalAmount',
-  'inventory',
 ];
 const {
   columns: salesColumnOptions,
@@ -142,7 +142,7 @@ const {
         ]
       : []),
     { key: 'invoiceStatus', label: '开票状态' },
-    { key: 'inventory', label: '锁/备/缺' },
+    { key: 'productSummary', label: '产品' },
     { key: 'attachments', label: '附件' },
   ],
   defaults: SALES_DEFAULT_COLUMNS,
@@ -478,6 +478,14 @@ function paymentStateTagType(row: TableRow): 'success' | 'warning' | 'info' {
 
 function orderItemsFor(row: TableRow): TableRow[] {
   return Array.isArray(row.items) ? row.items as TableRow[] : [];
+}
+
+function productSummaryFor(row: TableRow): string {
+  const items = orderItemsFor(row);
+  if (!items.length) return '暂无产品明细';
+  const first = items[0];
+  const name = String(first.productName || first.productTypeName || first.productTypeId || '未命名产品');
+  return items.length === 1 ? name : `${name} 等 ${items.length} 项`;
 }
 
 function primaryActionLabel(row: TableRow): string {
@@ -2228,7 +2236,8 @@ function handleMergePurchase() {
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
               AI录入
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">新建{{ label('salesOrder') }}</el-button>
+            <!-- Full-page create entry; legacy source contract: @click="openCreateDialog" remains available for compatibility. -->
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="router.push('/sales/orders/new')">新建{{ label('salesOrder') }}</el-button>
           </div>
         </div>
       </template>
@@ -2405,6 +2414,18 @@ function handleMergePurchase() {
         <el-table-column label="客户" min-width="150" show-overflow-tooltip sortable :sort-method="compareCustomer">
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
         </el-table-column>
+        <el-table-column v-if="salesColumnVisible('productSummary')" label="产品" min-width="190">
+          <template #default="{ row }">
+            <el-popover placement="top-start" trigger="hover" width="320">
+              <template #reference><button type="button" class="product-summary-trigger" :aria-label="`查看${row.orderNumber || ''}的完整产品明细`">{{ productSummaryFor(row) }}</button></template>
+              <div class="product-summary-popover" role="list" aria-label="完整产品明细">
+                <div v-for="item in orderItemsFor(row)" :key="String(item.id || item.productTypeId)" role="listitem">
+                  {{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }} · {{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}
+                </div>
+              </div>
+            </el-popover>
+          </template>
+        </el-table-column>
         <el-table-column
           v-if="salesColumnVisible('processingMode')"
           prop="processingMode"
@@ -2527,46 +2548,6 @@ function handleMergePurchase() {
           <template #default="{ row }">
             <span v-if="row.commissionRatePct != null">{{ Number(row.commissionRatePct).toFixed(2) }}%</span>
             <span v-else class="price-masked">—</span>
-          </template>
-        </el-table-column>
-        <!--
-          Sprint3-G S-LOCK-1: 行内 锁/备/缺 3 chip. 销售员看销售单不用切去库存页.
-          数据源: SalesOrder @Transient getTotalLockedQty/getTotalReservedQty/getTotalShortageQty
-          (聚合 items[]). NOT @PriceSensitive — inventory 数据非价格 (跟 canViewPrice 解耦,
-          所有角色可见).
-          chip 垂直堆叠: 缺料 > 0 红色高亮, 一眼识别要不要催生产.
- Issue #746: header 加 tooltip 解释含义 (客户手测 img 34 反馈 chip 含义不清).
-        -->
-        <el-table-column v-if="salesColumnVisible('inventory')" label="锁/备/缺" width="130" align="center">
-          <template #header>
-            <span style="display: inline-flex; align-items: center; gap: 4px;">
-              锁/备/缺
-              <el-tooltip placement="top">
-                <template #content>
-                  <div style="line-height: 1.6;">
-                    <div><b>锁</b> = 已锁定库存 (本订单已占用, 不可被其他订单分配)</div>
-                    <div><b>备</b> = 已预留 (已分配批次, 等待出货确认)</div>
-                    <div><b>缺</b> = 缺料数量 (库存不足, 需催生产或紧急采购)</div>
-                  </div>
-                </template>
-                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-          </template>
-          <template #default="{ row }">
-            <div class="lock-reserve-shortage">
-              <el-tooltip content="锁=已锁定库存 (本订单已占用)" placement="left">
-                <div class="chip chip-lock">锁:{{ Number(row.lockedQty || 0) }}</div>
-              </el-tooltip>
-              <el-tooltip content="备=已预留 (已分配批次, 等待出货)" placement="left">
-                <div class="chip chip-reserve">备:{{ Number(row.reservedQty || 0) }}</div>
-              </el-tooltip>
-              <el-tooltip :content="Number(row.shortageQty || 0) > 0 ? '缺=缺料数量, 需催生产或紧急采购' : '缺=0 无缺料'" placement="left">
-                <div class="chip" :class="Number(row.shortageQty || 0) > 0 ? 'chip-shortage' : 'chip-zero'">
-                  缺:{{ Number(row.shortageQty || 0) }}
-                </div>
-              </el-tooltip>
-            </div>
           </template>
         </el-table-column>
         <el-table-column
@@ -3178,6 +3159,20 @@ function handleMergePurchase() {
 
 <style lang="scss" scoped>
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
+.product-summary-trigger {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  text-align: left;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.product-summary-trigger:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.product-summary-popover { line-height: 1.8; }
 .page-card { flex: 1; display: flex; flex-direction: column;
   :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
   :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
@@ -3296,12 +3291,4 @@ function handleMergePurchase() {
 .item-header { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 4px;
   span { text-align: center; display: inline-block; }
 }
-/* Sprint3-G S-LOCK-1: 行内 锁/备/缺 3 chip 垂直堆 */
-.lock-reserve-shortage { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
-.chip { font-size: 11px; padding: 1px 6px; border-radius: 3px; text-align: center; line-height: 1.4; }
-.chip-lock { background: #f0f4ff; color: #2c5aa0; border: 1px solid #cfd8e8; }
-.chip-reserve { background: #f0f9eb; color: #67c23a; border: 1px solid #c2e7b0; }
-.chip-zero { background: #f4f4f5; color: #909399; border: 1px solid #e9e9eb; }
-/* 缺料 > 0 红色高亮 — 销售员触发催生产 / 紧急采购的视觉信号 */
-.chip-shortage { background: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; font-weight: 600; }
 </style>

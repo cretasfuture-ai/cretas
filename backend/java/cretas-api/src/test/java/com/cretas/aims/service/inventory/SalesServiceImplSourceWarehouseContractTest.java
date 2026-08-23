@@ -206,6 +206,29 @@ class SalesServiceImplSourceWarehouseContractTest {
         verify(salesOrderItemRepository, never()).saveAndFlush(conflicting);
     }
 
+    @Test
+    @DisplayName("source warehouse accepts workshop stage but rejects OTHER")
+    void sourceWarehouseTypeGateIsFailClosed() {
+        SalesOrder order = approvedOrder();
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        SalesOrderItem item = orderItem(null);
+        when(salesOrderItemRepository.findById(726L)).thenReturn(Optional.of(item));
+        when(salesOrderItemRepository.saveAndFlush(item)).thenReturn(item);
+
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, "WH-WKS"))
+                .thenReturn(Optional.of(warehouse("WH-WKS", "车间仓", FactoryWarehouse.WarehouseType.WORKSHOP)));
+        assertThat(service.repairMissingSourceWarehouse(FACTORY_ID, ORDER_ID, 726L, "WH-WKS")
+                .getSourceWarehouseCode()).isEqualTo("WH-WKS");
+
+        SalesOrderItem other = orderItem(null);
+        when(salesOrderItemRepository.findById(726L)).thenReturn(Optional.of(other));
+        when(factoryWarehouseRepository.findByFactoryIdAndCodeAndDeletedAtIsNull(FACTORY_ID, "WH-OTHER"))
+                .thenReturn(Optional.of(warehouse("WH-OTHER", "其他仓", FactoryWarehouse.WarehouseType.OTHER)));
+        assertThatThrownBy(() -> service.repairMissingSourceWarehouse(FACTORY_ID, ORDER_ID, 726L, "WH-OTHER"))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo("SOURCE_WAREHOUSE_INVALID"));
+    }
+
     private SalesOrder approvedOrder() {
         SalesOrder order = new SalesOrder();
         order.setId(ORDER_ID);
@@ -231,12 +254,16 @@ class SalesServiceImplSourceWarehouseContractTest {
     }
 
     private FactoryWarehouse warehouse(String code, String name) {
+        return warehouse(code, name, FactoryWarehouse.WarehouseType.FINISHED);
+    }
+
+    private FactoryWarehouse warehouse(String code, String name, FactoryWarehouse.WarehouseType type) {
         FactoryWarehouse warehouse = new FactoryWarehouse();
         warehouse.setId("WAREHOUSE-" + code);
         warehouse.setFactoryId(FACTORY_ID);
         warehouse.setCode(code);
         warehouse.setName(name);
-        warehouse.setType(FactoryWarehouse.WarehouseType.FINISHED);
+        warehouse.setType(type);
         warehouse.setIsActive(true);
         return warehouse;
     }

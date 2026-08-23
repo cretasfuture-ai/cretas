@@ -721,6 +721,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '销售订单', module: 'sales' }
           },
           {
+            path: 'orders/new',
+            name: 'SalesOrderNew',
+            component: () => import('@/views/sales/orders/new.vue'),
+            meta: { requiresAuth: true, title: '新建销售订单', module: 'sales', hidden: true }
+          },
+          {
             path: 'orders/:id',
             name: 'SalesOrderDetail',
             component: () => import('@/views/sales/orders/detail.vue'),

@@ -151,8 +151,8 @@ const deliveryDialogVisible = ref(false);
  */
 const highlightedDeliveryNumber = ref('');
 const deliveryIdempotencyKey = ref('');
-const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; items: TableRow[] }>({
-  deliveryAddress: '', logisticsCompany: '', items: [],
+const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; deliveryMode: 'FULL' | 'PARTIAL'; items: TableRow[] }>({
+  deliveryAddress: '', logisticsCompany: '', deliveryMode: 'FULL', items: [],
 });
 const shipmentDialogVisible = ref(false);
 const shipmentParent = ref<TableRow | null>(null);
@@ -841,6 +841,7 @@ function openDeliveryDialog() {
   deliveryForm.value = {
     deliveryAddress: address,
     logisticsCompany: '',
+    deliveryMode: 'FULL',
     items: (order.value.items as TableRow[]).map((it) => ({
       salesOrderItemId: it.id,
       productTypeId: it.productTypeId,
@@ -965,6 +966,29 @@ async function handleCreateDelivery() {
       // 建完停在「订单详情」tab, 单子是建出来了但人看不到, 得自己去点「发货记录」。
       // 直接切过去并把新建那条高亮, 让"建好了"这件事**看得见**。
       const createdNumber = (res.data as { deliveryNumber?: string } | null)?.deliveryNumber || '';
+      // 一次性全量发货仍遵循母/子单状态机：母单只负责计划，自动建立唯一全量子单，
+      // 后续由仓库确认并扣库；分批模式保留母单供销售逐批创建子发运单。
+      if (deliveryForm.value.deliveryMode === 'FULL') {
+        const master = res.data as { id?: string; items?: TableRow[] } | null;
+        const masterItems = Array.isArray(master?.items) ? master.items : [];
+        const childItems = filteredItems.map((planned) => {
+          const masterItem = masterItems.find((item) => String(item.salesOrderItemId || '') === String(planned.salesOrderItemId || ''))
+            || masterItems.find((item) => String(item.productTypeId || '') === String(planned.productTypeId || ''));
+          return masterItem ? { parentDeliveryItemId: Number(masterItem.id), quantity: Number(planned.deliveredQuantity) } : null;
+        }).filter((item): item is { parentDeliveryItemId: number; quantity: number } => Number.isFinite(Number(item?.parentDeliveryItemId)));
+        if (master?.id && childItems.length === filteredItems.length) {
+          await post(`/${factoryId.value}/sales/deliveries/${master.id}/shipments`, {
+            idempotencyKey: `web-full-shipment-${master.id}`,
+            plannedShipmentDate: new Date().toISOString().slice(0, 10),
+            deliveryMethod: 'LOGISTICS',
+            logisticsCompany: deliveryForm.value.logisticsCompany,
+            deliveryAddress: deliveryForm.value.deliveryAddress,
+            items: childItems,
+          });
+        } else {
+          ElMessage.warning('母发货单已创建，但未能自动建立全量子发运单，请在发货记录中重试');
+        }
+      }
       ElMessage.success(createdNumber ? `发货单 ${createdNumber} 已创建` : '发货单创建成功');
       deliveryDialogVisible.value = false;
       activeTab.value = 'delivery';
@@ -979,6 +1003,18 @@ async function handleCreateDelivery() {
 function deliveryRowClass({ row }: { row: TableRow }): string {
   const number = String((row as { deliveryNumber?: string }).deliveryNumber || '');
   return number && number === highlightedDeliveryNumber.value ? 'just-created-row' : '';
+}
+
+function deliveryQuantitySummary(row: TableRow): string {
+  const items = Array.isArray(row.items) ? row.items as TableRow[] : [];
+  if (!items.length) return '暂无明细';
+  return items.map((item) => `${item.productName || item.productTypeId || '产品'} ${Number(item.deliveredQuantity || 0)}${displayUnit(String(item.unit || ''))}`).join('、');
+}
+
+function deliveryAuditSummary(row: TableRow): string {
+  const operator = row.shippedByName || row.shippedBy || row.createdByName || row.createdBy || '待仓库处理';
+  const time = row.updatedAt || row.shippedAt || row.createdAt || '时间待记录';
+  return `${operator} · ${time}`;
 }
 
 function openShipmentDialog(parent: TableRow) {
@@ -2146,6 +2182,12 @@ async function handleQuickPayFull() {
                   <span v-else>0/0</span>
                 </template>
               </el-table-column>
+              <el-table-column label="数量与操作审计" min-width="250">
+                <template #default="{ row }">
+                  <div>{{ deliveryQuantitySummary(row) }}</div>
+                  <div class="muted-audit">{{ deliveryAuditSummary(row) }}</div>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="330" align="center">
                 <template #default="{ row }">
                   <el-button
@@ -2284,6 +2326,12 @@ async function handleQuickPayFull() {
           <el-input v-model="deliveryForm.deliveryAddress" placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址" />
         </el-form-item>
         <el-form-item label="物流公司"><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
+        <el-form-item label="发货模式" required>
+          <el-radio-group v-model="deliveryForm.deliveryMode">
+            <el-radio value="FULL">一次性全量发货（自动建一张全量子单）</el-radio>
+            <el-radio value="PARTIAL">分批发货（后续逐批建子单）</el-radio>
+          </el-radio-group>
+        </el-form-item>
       </el-form>
       <el-table :data="deliveryForm.items" border style="margin-top: 12px">
         <el-table-column prop="productName" :label="label('product')" min-width="190" class-name="semantic-text-column" />
@@ -2722,4 +2770,5 @@ async function handleQuickPayFull() {
 :deep(.just-created-row > td) {
   background: var(--el-color-primary-light-9) !important;
 }
+.muted-audit { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

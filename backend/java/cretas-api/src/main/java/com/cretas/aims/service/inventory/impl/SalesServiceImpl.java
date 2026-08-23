@@ -4810,6 +4810,18 @@ public class SalesServiceImpl implements SalesService {
         return factoryWarehouseRepository
                 .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, normalized)
                 .filter(warehouse -> Boolean.TRUE.equals(warehouse.getIsActive()))
+                // Sales source warehouses are deliberately limited to real stock
+                // stages and the logistics/finished-goods stores.  UI filtering is
+                // only a convenience; this server-side gate protects API callers,
+                // old clients, and cross-role warehouse edits alike.
+                .filter(warehouse -> warehouse.getType() != null && java.util.Set.of(
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.RAW,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.WORKSHOP,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.WIP,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.LINESIDE,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.LOGISTICS,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.FINISHED
+                ).contains(warehouse.getType()))
                 .map(warehouse -> warehouse.getCode())
                 .orElseThrow(() -> new BusinessException(400, "来源仓库不存在、已停用或不属于当前工厂")
                         .withCode("SOURCE_WAREHOUSE_INVALID")
