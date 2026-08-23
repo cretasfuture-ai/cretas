@@ -38,8 +38,8 @@ jobs:
       attestations: write
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -132,7 +132,7 @@ jobs:
           echo "attestation bundle bytes: $(stat -c %s release-web-dist.attestation.jsonl)"
 
       - name: Upload web dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # 名字带 commit, 取回方靠它 + workflow_run.head_sha 双向核对
           name: cretas-web-${{ github.sha }}
