@@ -5,8 +5,6 @@
 
 ## 在飞任务
 
-- `MIGRATE-LOCATEANYTHING-TEACHER-HARDENING-20260823` — `in-progress` — Owner: `/root/worktree_value_audit` — Base SHA: `bc0fadd3d0153035b151a8740dddba8a88c5f910` — 从旧 e887 分支选择性迁移 LocateAnything 模型 seal/只读 verify、teacher admin crop-smoke 与 640px/256 tokens/每图最多 3 crop/重复框去重边界；与下方 ROI 父任务串行，由当前协调者唯一写台账。禁止整 commit cherry-pick、恢复旧 teacher 配额、重建队列、重新 seal 模型、运行 4K/GPU 推理或修改人工真值/模型/生产。
-
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
@@ -38,8 +36,6 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
-
-- `MIGRATE-LOCATEANYTHING-TEACHER-HARDENING-20260823`：仅 `tools/vision-lab/mine_tray_queue.py`、`locateanything_teacher_admin.py`、`locateanything_snapshot_v1_manifest.json`、`config.liushanmen.example.json`、`tests/test_mine_tray_queue.py`、`tests/test_tray_teacher_admin.py`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；此子任务是父 ROI 锁内当前唯一代码写者。验收：两份目标测试、raw-work-area-plan/保护集回归、receipt 缺失/SHA/revision/全量文件漂移 fail closed、现有 B 盘 receipt + tracked legacy manifest 只读 verify、proposal receipt 校验、CLI 可终止 timeout、`git diff --check`；D 盘 receipts/queue 与生产零写入。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
