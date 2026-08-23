@@ -19,6 +19,10 @@ describe('resolvePurchaseOrderStatus', () => {
     expect(view.label).toBe('财务已审核');
   });
 
+  it('采购单收货完毕时说「已收货」而不是笼统的「已完成」', () => {
+    expect(resolvePurchaseOrderStatus({ status: 'COMPLETED' }).label).toBe('已收货');
+  });
+
   // 🔴 核心断言: 没有财务节点时不许谎称财务审核过。
   it.each([undefined, null, 0])(
     '没有财务审核人 (financeReviewedBy=%p) 时改说「无需财务审核」',
@@ -79,5 +83,11 @@ describe('两块采购屏不许各自再抄一份状态表', () => {
     expect(src).toContain('resolvePurchaseOrderStatus');
     // 本地再定义一张表 = 又一次漂移的起点。
     expect(src).not.toMatch(/const\s+STATUS_MAP\s*[:=]/);
+  });
+
+  it('采购列表的 COMPLETED 筛选也显示「已收货」', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../screens/factory-admin/inventory/PurchaseOrderListScreen.tsx'), 'utf8');
+    expect(src).toContain("{ value: 'COMPLETED', label: '已收货' }");
+    expect(src).not.toContain("{ value: 'COMPLETED', label: '已完成' }");
   });
 });

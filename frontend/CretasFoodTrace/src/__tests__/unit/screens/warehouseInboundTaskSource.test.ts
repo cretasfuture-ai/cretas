@@ -17,9 +17,10 @@ describe('入库首页任务真值', () => {
     expect(inbound).not.toContain('getMaterialBatches');
   });
 
-  it('全部列表按待收货、部分入库、已完成排序', () => {
+  it('全部列表按待收货、部分入库、已收货排序', () => {
     expect(inbound).toContain("pending: 0, partial: 1, completed: 2");
     expect(inbound).toContain('sortReceivingOrders');
+    expect(inbound).toContain("已收货");
   });
 
   it('四类状态任一路失败就显式报错，不用残缺结果冒充完整计数', () => {

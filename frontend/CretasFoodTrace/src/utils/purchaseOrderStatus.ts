@@ -37,7 +37,7 @@ export const PURCHASE_ORDER_STATUS_MAP: Record<string, PurchaseOrderStatusView> 
   FINANCE_REJECTED: { label: '财务驳回', color: '#f56c6c' },
   REJECTED: { label: '已驳回', color: '#f56c6c' },
   PARTIAL_RECEIVED: { label: '部分收货', color: '#e6a23c' },
-  COMPLETED: { label: '已完成', color: '#67c23a' },
+  COMPLETED: { label: '已收货', color: '#67c23a' },
   CANCELLED: { label: '已取消', color: '#909399' },
   CLOSED: { label: '已关闭', color: '#909399' },
 };

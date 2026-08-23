@@ -46,7 +46,7 @@ export function sortReceivingOrders(orders: PurchaseOrder[]): PurchaseOrder[] {
 const STATUS_STYLE: Record<ReceivingStatus, { label: string; color: string; bg: string }> = {
   pending: { label: '待收货', color: '#1565C0', bg: '#E3F2FD' },
   partial: { label: '部分入库', color: '#E65100', bg: '#FFF3E0' },
-  completed: { label: '已完成', color: '#2E7D32', bg: '#E8F5E9' },
+  completed: { label: '已收货', color: '#2E7D32', bg: '#E8F5E9' },
 };
 
 function lineQuantity(order: PurchaseOrder): string {
@@ -172,7 +172,7 @@ export default function WHInboundListScreen() {
             ['all', '全部', stats.all],
             ['pending', '待收货', stats.pending],
             ['partial', '部分入库', stats.partial],
-            ['completed', '已完成', stats.completed],
+            ['completed', '已收货', stats.completed],
           ] as const).map(([value, label, count]) => (
             <Chip key={value} selected={filter === value} onPress={() => setFilter(value)}
               style={[styles.filter, filter === value && styles.filterActive]}
@@ -210,7 +210,7 @@ export default function WHInboundListScreen() {
                   <Text style={styles.lines}>{lineQuantity(order)}</Text>
                   <View style={styles.footer}>
                     <Text style={styles.dateText}>期望交货：{order.expectedDeliveryDate || '未填写'}</Text>
-                    <Text style={[styles.actionText, status === 'completed' && styles.doneText]}>{status === 'completed' ? '已全部入库' : '开始收货 ›'}</Text>
+                    <Text style={[styles.actionText, status === 'completed' && styles.doneText]}>{status === 'completed' ? '已全部收货' : '开始收货 ›'}</Text>
                   </View>
                 </Surface>
               </TouchableRipple>
