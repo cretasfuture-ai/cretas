@@ -112,6 +112,43 @@ class VisionLabTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "duplicates"):
                 vision_lab.config_with_queue_roots(config, [queue, queue])
 
+    def test_evaluate_candidate_passes_optional_truth_adjudication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "registry" / "label.onnx"
+            artifact.parent.mkdir()
+            artifact.write_bytes(b"candidate")
+            truth = root / "truth-adjudication.json"
+            truth.write_text("{}", encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["evaluation"] = {
+                "repo_root": str(root / "repo"),
+                "tray_model": str(root / "tray.onnx"),
+                "production_label_model": str(root / "production-label.onnx"),
+                "threshold": 0.2,
+                "manifests": [str(root / "protected.json")],
+                "truth_adjudication": str(truth),
+            }
+            model = {
+                "artifact": str(artifact), "onnx_parity_mismatches": 1,
+            }
+
+            def complete(command, **_kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(json.dumps({"status": "evaluated"}), encoding="utf-8")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(vision_lab.subprocess, "run", side_effect=complete) as run:
+                output, metrics = vision_lab.evaluate_candidate(cfg, model)
+
+            command = run.call_args.args[0]
+            self.assertEqual(
+                command[command.index("--truth-adjudication") + 1],
+                str(truth.resolve()),
+            )
+            self.assertTrue(output.is_file())
+            self.assertEqual(metrics["status"], "evaluated")
+
     def test_collect_is_content_addressed_and_advances_watermark(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -282,6 +319,44 @@ class VisionLabTests(unittest.TestCase):
             metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
             result = vision_lab.evaluate_gate(config(root), model, metrics_path)
             self.assertTrue(result["passed"], result["errors"])
+
+    def test_promotion_gate_rejects_evaluation_only_truth_adjudication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "label.onnx"
+            artifact.write_bytes(b"candidate")
+            truth = root / "truth-adjudication.json"
+            truth.write_text(json.dumps({"promotion_ready": False}), encoding="utf-8")
+            digest = vision_lab.sha256_file(artifact)
+            cfg = config(root)
+            cfg["evaluation"] = {"truth_adjudication": str(truth)}
+            model = {"model_id": "truth-shadow", "artifact": str(artifact), "artifact_sha256": digest}
+            metrics = {
+                "artifact_sha256": digest,
+                "production_pipeline_replay": True,
+                "onnx_parity_mismatches": 0,
+                "truth_adjudication": {
+                    "path": str(truth.resolve()),
+                    "sha256": vision_lab.sha256_file(truth),
+                    "promotion_ready": False,
+                },
+                "baseline": {"defect_hits": 2, "false_flags": 1, "p95_latency_ms": 1000},
+                "candidate": {
+                    "defect_total": 2, "defect_hits": 2, "false_flags": 0,
+                    "p95_latency_ms": 900,
+                    "groups": {"new_blind_defect": {"defect_total": 2, "defect_hits": 2}},
+                },
+            }
+            metrics_path = root / "metrics.json"
+            metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+
+            result = vision_lab.evaluate_gate(cfg, model, metrics_path)
+
+            self.assertFalse(result["passed"])
+            self.assertIn(
+                "truth adjudication is evaluation-only and not promotion-ready",
+                result["errors"],
+            )
 
     def test_promotion_gate_accepts_preserved_zero_false_flag_baseline(self):
         with tempfile.TemporaryDirectory() as temporary:

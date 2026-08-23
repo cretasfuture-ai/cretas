@@ -666,6 +666,12 @@ def evaluate_candidate(config: dict[str, Any], model: dict[str, Any]) -> tuple[P
     ]
     for manifest in evaluation.get("manifests", []):
         command.extend(["--manifest", str(Path(os.path.expandvars(manifest)))])
+    truth_adjudication = evaluation.get("truth_adjudication")
+    if truth_adjudication:
+        command.extend([
+            "--truth-adjudication",
+            str(Path(os.path.expandvars(truth_adjudication)).resolve()),
+        ])
     result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", timeout=7200)
     if result.returncode != 0 or not output.is_file():
         raise RuntimeError(f"candidate evaluation failed with exit code {result.returncode}")
@@ -730,6 +736,21 @@ def evaluate_gate(
     gate = config["promotion_gates"]
     baseline = metrics.get("baseline") or {}
     candidate = metrics.get("candidate") or {}
+    configured_truth = (config.get("evaluation") or {}).get("truth_adjudication")
+    if configured_truth:
+        truth_path = Path(os.path.expandvars(str(configured_truth))).resolve()
+        truth_metrics = metrics.get("truth_adjudication")
+        if not truth_path.is_file():
+            errors.append("configured truth adjudication is missing")
+        elif not isinstance(truth_metrics, dict):
+            errors.append("evaluation did not bind the configured truth adjudication")
+        elif (
+            truth_metrics.get("path") != str(truth_path)
+            or truth_metrics.get("sha256") != sha256_file(truth_path)
+        ):
+            errors.append("evaluated truth adjudication does not match configuration")
+        elif truth_metrics.get("promotion_ready") is not True:
+            errors.append("truth adjudication is evaluation-only and not promotion-ready")
     defect_total = int(candidate.get("defect_total", 0))
     if defect_total < int(gate.get("min_independent_defects", 7)):
         errors.append("insufficient independent real defects")
