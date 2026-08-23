@@ -65,6 +65,18 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("status") ProductionBatchStatus status, Pageable pageable);
 
     /**
+     * Counts running/paused batches pinned to a Workflow before deactivation.
+     * Completed and cancelled historical batches do not block deactivation.
+     */
+    long countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+            String factoryId,
+            Long selectedWorkflowId,
+            java.util.Collection<ProductionBatchStatus> statuses);
+
+    /** Counts all immutable batch snapshots pinned to a Workflow. */
+    long countByFactoryIdAndSelectedWorkflowId(String factoryId, Long selectedWorkflowId);
+
+    /**
      * SP10: 按试制标记分页查找 (中报价试制批次下拉)
      */
     Page<ProductionBatch> findByFactoryIdAndIsTrial(String factoryId, Boolean isTrial, Pageable pageable);

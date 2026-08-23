@@ -10,6 +10,8 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
@@ -63,6 +65,12 @@ class ProductProcessWorkflowServiceImplTest {
     private com.cretas.aims.repository.ProductProcessWorkflowActivationRepository activationRepository;
 
     @Mock
+    private ProductionPlanRepository productionPlanRepository;
+
+    @Mock
+    private ProductionBatchRepository productionBatchRepository;
+
+    @Mock
     private ProductProcessWorkflowCatalogValidator catalogValidator;
 
     @Mock
@@ -100,6 +108,7 @@ class ProductProcessWorkflowServiceImplTest {
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
                 workflowBomSynchronizationService, workflowActivationService,
                 activationRepository,
+                productionPlanRepository, productionBatchRepository,
                 objectMapper, validator, catalogValidator, unitValidator,
                 productTypeRepository, rawMaterialTypeRepository);
         com.cretas.aims.entity.ProductProcessWorkflowRevision revision =
@@ -320,6 +329,41 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(2, saved.getVersion());
         assertEquals(92L, saved.getId());
         verify(revisionSnapshotService).captureDraft(any(ProductProcessWorkflow.class));
+    }
+
+    @Test
+    @DisplayName("已有计划或批次引用草稿时冻结旧身份并自动分叉新草稿")
+    void referencedDraftIsForkedBeforeSave() throws Exception {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(3L);
+        ProductProcessWorkflow draft = persistedDraft(request, 3L);
+        draft.setId(91L);
+        draft.setDefinitionVersion(2);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        when(productionPlanRepository.countByFactoryIdAndSelectedWorkflowId(FACTORY_ID, 91L))
+                .thenReturn(1L);
+        when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(2));
+        when(revisionSnapshotService.capture(any(ProductProcessWorkflow.class)))
+                .thenReturn(currentRevision());
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            if (saved.getId() == null) saved.setId(92L);
+            if (saved.getLockVersion() == null) saved.setLockVersion(0L);
+            return saved;
+        });
+
+        ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
+
+        ArgumentCaptor<ProductProcessWorkflow> rows = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
+        verify(repository, times(3)).saveAndFlush(rows.capture());
+        assertEquals(ProductProcessWorkflow.Status.SNAPSHOT, rows.getAllValues().get(0).getStatus());
+        assertEquals(91L, rows.getAllValues().get(0).getId());
+        assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
+        assertEquals(3, saved.getVersion());
+        assertEquals(92L, saved.getId());
+        verify(revisionSnapshotService).capture(draft);
     }
 
     @Test
@@ -890,6 +934,7 @@ class ProductProcessWorkflowServiceImplTest {
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
                 workflowBomSynchronizationService, workflowActivationService,
                 activationRepository,
+                productionPlanRepository, productionBatchRepository,
                 new ObjectMapper(), validator, realCatalogValidator, unitValidator,
                 productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
 

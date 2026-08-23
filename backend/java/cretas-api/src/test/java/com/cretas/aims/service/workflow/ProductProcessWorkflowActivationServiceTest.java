@@ -6,6 +6,8 @@ import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
@@ -30,6 +32,8 @@ class ProductProcessWorkflowActivationServiceTest {
 
     @Mock private ProductProcessWorkflowActivationRepository activationRepository;
     @Mock private ProductProcessWorkflowRepository workflowRepository;
+    @Mock private ProductionPlanRepository productionPlanRepository;
+    @Mock private ProductionBatchRepository productionBatchRepository;
     @Mock private ProductProcessWorkflowValidator validator;
     @Mock private ProductProcessWorkflowCatalogValidator catalogValidator;
     @Mock private ProductProcessWorkflowUnitValidator unitValidator;
@@ -41,7 +45,8 @@ class ProductProcessWorkflowActivationServiceTest {
     @BeforeEach
     void setUp() {
         service = new com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl(
-                activationRepository, workflowRepository, validator, catalogValidator, unitValidator, compiler,
+                activationRepository, workflowRepository, productionPlanRepository, productionBatchRepository,
+                validator, catalogValidator, unitValidator, compiler,
                 bomWorkflowRevisionService, new ObjectMapper());
     }
 
@@ -278,6 +283,43 @@ class ProductProcessWorkflowActivationServiceTest {
         verify(activationRepository).saveAndFlush(current);
         verify(activationRepository, never()).delete(any());
         verify(activationRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void deactivateRejectsRunningPlanAndBatchReferencesWithCounts() {
+        ProductProcessWorkflowActivation current = activation(
+                91L, publishedWorkflow(44L, "F006", "PT-PIG", 3), true, 5L);
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.of(current));
+        when(productionPlanRepository.countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                eq("F006"), eq(44L), any())).thenReturn(2L);
+        when(productionBatchRepository.countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                eq("F006"), eq(44L), any())).thenReturn(1L);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.deactivate("F006", "PT-PIG", 5L));
+
+        assertEquals("WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE", error.getErrorCode());
+        assertTrue(error.getMessage().contains("2 个进行中/暂停计划"));
+        assertTrue(error.getMessage().contains("1 个进行中/暂停批次"));
+        assertNotNull(error.getActionHint());
+        verify(activationRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void deactivateFailsClosedWhenActiveWorkflowIdentityIsMissing() {
+        ProductProcessWorkflowActivation current = activation(
+                91L, publishedWorkflow(44L, "F006", "PT-PIG", 3), true, 5L);
+        current.setActiveWorkflowId(null);
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.of(current));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.deactivate("F006", "PT-PIG", 5L));
+
+        assertEquals("WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN", error.getErrorCode());
+        verifyNoInteractions(productionPlanRepository, productionBatchRepository);
+        verify(activationRepository, never()).saveAndFlush(any());
     }
 
     @Test

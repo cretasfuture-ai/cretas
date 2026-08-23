@@ -94,6 +94,19 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
 
     List<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses);
 
+    /**
+     * Counts non-terminal plan references before a Workflow activation is disabled.
+     * The selected workflow is an immutable creation-time authority and must not be
+     * orphaned while the plan is still running.
+     */
+    long countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+            String factoryId,
+            Long selectedWorkflowId,
+            Collection<ProductionPlanStatus> statuses);
+
+    /** Counts all immutable plan snapshots pinned to a Workflow. */
+    long countByFactoryIdAndSelectedWorkflowId(String factoryId, Long selectedWorkflowId);
+
     Page<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses, Pageable pageable);
 
     /**

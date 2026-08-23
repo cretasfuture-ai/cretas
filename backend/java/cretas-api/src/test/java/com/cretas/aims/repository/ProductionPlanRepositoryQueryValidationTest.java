@@ -38,6 +38,7 @@ class ProductionPlanRepositoryQueryValidationTest {
 
     @Autowired TestEntityManager entityManager;
     @Autowired ProductionPlanRepository productionPlanRepository;
+    @Autowired ProductionBatchRepository productionBatchRepository;
     @Autowired MaterialBatchRepository materialBatchRepository;
     @Autowired MaterialConsumptionRepository materialConsumptionRepository;
     @Autowired JdbcTemplate jdbcTemplate;
@@ -155,6 +156,30 @@ class ProductionPlanRepositoryQueryValidationTest {
         assertThatThrownBy(() -> entityManager.persistAndFlush(duplicateKey))
                 .as("database unique constraint is the final concurrent-create guard")
                 .isInstanceOf(PersistenceException.class);
+    }
+
+    @Test
+    void workflowReferenceCountQueriesBootAgainstTheRealJpaContext() {
+        assertThat(productionPlanRepository
+                .countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                        "F-JPA-WORKFLOW-REF", 999L,
+                        java.util.List.of(
+                                ProductionPlanStatus.IN_PROGRESS,
+                                ProductionPlanStatus.PAUSED)))
+                .isZero();
+        assertThat(productionPlanRepository
+                .countByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
+                .isZero();
+        assertThat(productionBatchRepository
+                .countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                        "F-JPA-WORKFLOW-REF", 999L,
+                        java.util.List.of(
+                                com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS,
+                                com.cretas.aims.entity.enums.ProductionBatchStatus.PAUSED)))
+                .isZero();
+        assertThat(productionBatchRepository
+                .countByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
+                .isZero();
     }
 
     @Test

@@ -42,13 +42,13 @@
             :disabled="!canEdit || !dirty"
             :loading="saving"
             @click="() => saveDraft()"
-          >保存草稿</el-button>
+          >{{ saveActionLabel }}</el-button>
           <el-button
             data-testid="snapshot-workflow"
             :disabled="!canEdit || flowNodes.length === 0"
             :loading="snapshotting"
             @click="snapshotWorkflow"
-          >另存为版本</el-button>
+          >另存独立版本</el-button>
           <!-- #12a: 发布版本 = 发布并启用当前版本 (一步); 不再有单独「启用版本」按钮 -->
           <el-tooltip :content="publishDisabledReason" :disabled="!publishDisabledReason" placement="bottom">
             <span class="disabled-action-tooltip" data-testid="publish-workflow-tooltip">
@@ -84,6 +84,18 @@
         show-icon
         title="SKU 单位契约需要复核：请创建新草稿并重新发布；已有计划不受影响。"
       />
+
+      <el-alert
+        v-if="editingEnabledWorkflow && dirty"
+        class="workflow-auto-fork-alert"
+        data-testid="workflow-auto-fork-notice"
+        type="info"
+        :closable="false"
+        show-icon
+        title="当前正在编辑已启用版本"
+      >
+        保存会自动创建新的 Workflow 草稿版本；生产继续使用当前已启用版本，无需先手工另存为版本。
+      </el-alert>
 
       <el-alert
         v-if="publishBindingErrors.length > 0"
@@ -1790,6 +1802,15 @@ const currentDefinitionIsEnabled = computed(() => (
   && activation.value.activeDefinitionVersion === definition.value.version
 ));
 const publishActionCompleted = computed(() => currentDefinitionIsEnabled.value && !dirty.value);
+const editingEnabledWorkflow = computed(() => (
+  definition.value?.status === 'PUBLISHED'
+  && activation.value?.enabled === true
+  && activation.value.activeWorkflowId === definition.value.id
+  && activation.value.activeDefinitionVersion === definition.value.version
+));
+const saveActionLabel = computed(() => (
+  editingEnabledWorkflow.value ? '保存草稿（自动新版本）' : '保存草稿'
+));
 const publishActionLabel = computed(() => (
   publishActionCompleted.value ? '已发布并启用' : '自动同步并发布'
 ));
@@ -5035,6 +5056,7 @@ async function deactivateWorkflow(): Promise<void> {
   } catch (error) {
     if (generation === activationMutationGeneration && isLoadedIdentityCurrent(identity)) {
       console.error('[ProductProcessWorkflow] deactivation failed', error);
+      ElMessage.error(workflowErrorMessage(error, 'Workflow 停用失败，请稍后重试'));
     }
   } finally {
     if (generation === activationMutationGeneration) activationChanging.value = false;
@@ -5060,6 +5082,26 @@ function workflowErrorCode(error: unknown): string | null {
     ?? responseData?.errorCode
     ?? responseData?.code;
   return typeof errorCode === 'string' ? errorCode : null;
+}
+
+function workflowErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== 'object') return fallback;
+  const candidate = error as {
+    message?: unknown;
+    actionHint?: unknown;
+    response?: { data?: { message?: unknown; actionHint?: unknown } };
+  };
+  const responseData = candidate.response?.data;
+  const message = candidate.message
+    ?? responseData?.message;
+  const hint = candidate.actionHint
+    ?? responseData?.actionHint;
+  if (typeof message === 'string' && message.trim()) {
+    return typeof hint === 'string' && hint.trim()
+      ? `${message}（${hint}）`
+      : message;
+  }
+  return fallback;
 }
 
 function isWorkflowConflict(error: unknown): boolean {
