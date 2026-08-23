@@ -1,0 +1,23 @@
+version: 2
+
+# Pilot the security-update workflow on the production Web Admin first. The
+# repository-level automatic security-fix switch remains disabled until this
+# grouped configuration and its CI path have been validated on main.
+updates:
+  - package-ecosystem: npm
+    directory: /web-admin
+    schedule:
+      interval: weekly
+      day: sunday
+      time: "07:00"
+      timezone: Asia/Singapore
+    # Version-update PRs stay disabled. Security updates are grouped below.
+    open-pull-requests-limit: 0
+    rebase-strategy: disabled
+    commit-message:
+      prefix: deps(web-security)
+    groups:
+      web-admin-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
