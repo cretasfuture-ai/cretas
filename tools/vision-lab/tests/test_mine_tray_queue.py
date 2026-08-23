@@ -44,13 +44,37 @@ class MineTrayQueueTests(unittest.TestCase):
             model = Path(temporary)
             self.make_teacher_snapshot(model)
             receipt = module.seal_teacher_model(model, module.TEACHER_REVISION)
+            self.assertEqual(receipt["version"], module.TEACHER_MODEL_RECEIPT_V2)
+            self.assertEqual(len(receipt["files"]), 7)
             self.assertEqual(receipt["revision"], module.TEACHER_REVISION)
             self.assertTrue(receipt["full_image_inference_forbidden"])
             evidence = module.verify_teacher_model(model, module.TEACHER_REVISION)
             self.assertEqual(len(evidence["critical_files"]), 3)
             self.assertEqual(evidence["file_count"], 7)
             (model / "model-00002-of-00002.safetensors").write_bytes(b"changed")
-            with self.assertRaisesRegex(RuntimeError, "critical file mismatch"):
+            with self.assertRaisesRegex(RuntimeError, "snapshot file mismatch"):
+                module.verify_teacher_model(model, module.TEACHER_REVISION)
+
+    def test_teacher_model_seal_is_immutable_and_full_manifest_detects_any_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            self.make_teacher_snapshot(model)
+            module.seal_teacher_model(model, module.TEACHER_REVISION)
+            with self.assertRaisesRegex(RuntimeError, "immutable and already exists"):
+                module.seal_teacher_model(model, module.TEACHER_REVISION)
+
+            config = model / "config.json"
+            config.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "snapshot file mismatch: config.json"):
+                module.verify_teacher_model(model, module.TEACHER_REVISION)
+
+    def test_teacher_model_full_manifest_rejects_exact_file_set_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            self.make_teacher_snapshot(model)
+            module.seal_teacher_model(model, module.TEACHER_REVISION)
+            (model / "unexpected-remote-code.py").write_text("pass", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "exact file set mismatch"):
                 module.verify_teacher_model(model, module.TEACHER_REVISION)
 
     def test_teacher_model_verify_rejects_missing_receipt_and_revision_drift(self):
@@ -91,6 +115,66 @@ class MineTrayQueueTests(unittest.TestCase):
             receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "revision must be fixed"):
                 module.verify_teacher_model(model, alternate_revision)
+
+    @staticmethod
+    def make_valid_teacher_proposals_receipt() -> dict[str, object]:
+        return {
+            "version": module.TEACHER_PROPOSAL_RECEIPT_VERSION,
+            "status": "completed",
+            "model_id": module.TEACHER_MODEL_ID,
+            "model_revision": module.TEACHER_REVISION,
+            "offline_only": True,
+            "teacher_scope": "local_crops_only",
+            "full_image_inference": False,
+            "teacher_max_side": module.TEACHER_MAX_SIDE,
+            "teacher_max_new_tokens": module.TEACHER_MAX_NEW_TOKENS,
+            "teacher_max_crops_per_image": module.TEACHER_MAX_CROPS_PER_IMAGE,
+            "teacher_is_ground_truth": False,
+            "cloud_calls": 0,
+            "model_integrity": {
+                "version": module.TEACHER_MODEL_INTEGRITY_VERSION,
+                "receipt_version": module.TEACHER_MODEL_RECEIPT_V2,
+                "manifest_version": module.TEACHER_MODEL_RECEIPT_V2,
+                "model_id": module.TEACHER_MODEL_ID,
+                "revision": module.TEACHER_REVISION,
+                "receipt": "sealed-model/VISIONLAB_MODEL_RECEIPT.json",
+                "file_count": 7,
+                "files_verified": 7,
+                "total_bytes": 1234,
+                "exact_file_set": True,
+                "full_file_sha256_verified": True,
+                "offline_only": True,
+                "crop_max_side": module.TEACHER_MAX_SIDE,
+            },
+            "records": {"photo-1": {"proposals": [], "crop_prompts": []}},
+        }
+
+    def test_teacher_proposals_receipt_requires_complete_bounded_integrity(self):
+        payload = self.make_valid_teacher_proposals_receipt()
+        records, integrity = module.validate_teacher_proposals_receipt(payload)
+        self.assertEqual(records, payload["records"])
+        self.assertEqual(integrity, payload["model_integrity"])
+        drifts = (
+            ("status", "in_progress"),
+            ("model_revision", "a" * 40),
+            ("offline_only", False),
+            ("teacher_scope", "full_image"),
+            ("teacher_max_side", 1024),
+            ("teacher_max_new_tokens", 2048),
+            ("teacher_max_crops_per_image", 8),
+            ("teacher_is_ground_truth", True),
+            ("records", []),
+        )
+        for field, value in drifts:
+            with self.subTest(field=field):
+                candidate = json.loads(json.dumps(payload))
+                candidate[field] = value
+                with self.assertRaisesRegex(RuntimeError, "teacher proposals"):
+                    module.validate_teacher_proposals_receipt(candidate)
+        incomplete = json.loads(json.dumps(payload))
+        incomplete["model_integrity"]["files_verified"] = 6
+        with self.assertRaisesRegex(RuntimeError, "model_integrity incomplete"):
+            module.validate_teacher_proposals_receipt(incomplete)
 
     def test_teacher_regions_are_local_crops_and_map_back_to_full_image(self):
         image = Image.new("RGB", (400, 300), (30, 30, 30))
