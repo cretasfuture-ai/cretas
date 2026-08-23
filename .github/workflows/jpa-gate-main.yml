@@ -85,9 +85,9 @@ jobs:
     # 且 Postgres 路径几乎未被验证 —— 单独立项处理, 不在本门禁的范围内。
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
