@@ -100,16 +100,15 @@ describe('R-3 · 仓储 App 信息架构', () => {
     });
   });
 
-  describe('② 统计卡跟着 tab 走', () => {
+  describe('② 首页只做业务分流', () => {
     const home = read('screens/warehouse/home/WHHomeScreen.tsx');
 
-    it('统计区由 activeTab 决定显示什么', () => {
-      expect(home).toMatch(/statsGrid[\s\S]{0,400}activeTab === 'inbound'/);
-    });
-
-    it('发货 tab 下不再出现库存预警数（下面整块「库存预警」已经在说同一件事）', () => {
-      // alertCount 仍然被加载(供下方区块用)，但不再作为统计卡渲染
-      expect(home).not.toMatch(/statTitle[^\n]*home\.stats\.alertCount/);
+    it('不加载统计和任务，只提供入库、发货两个大入口', () => {
+      expect(home).toContain('testID="wh-home-inbound"');
+      expect(home).toContain('testID="wh-home-outbound"');
+      expect(home).not.toContain('statsGrid');
+      expect(home).not.toContain('dashboardAPI');
+      expect(home).not.toContain('shipmentApiClient');
     });
   });
 
@@ -158,16 +157,14 @@ describe('R-3 · 仓储 App 信息架构', () => {
     });
   });
 
-  describe('M-21 · 首页两个数曾经拿别的量顶替', () => {
+  describe('M-21 · 首页不再显示无法保证口径的统计', () => {
     const home = read('screens/warehouse/home/WHHomeScreen.tsx');
 
-    it('「今日发货量」不再由 ordersCompleted 冒充（那是完成的生产批次数，还挂着 kg）', () => {
+    it('旧的伪统计与聚合状态全部不可达', () => {
       expect(home).not.toMatch(/todayOutbound:\s*overview\.todayStats\?\.ordersCompleted/);
-    });
-
-    it('「待发货」用 shipments 的 totalElements，⛔ 不是在产批次数、也不是本页条数', () => {
       expect(home).not.toMatch(/pendingOutbound:\s*overview\.summary\?\.activeBatches/);
-      expect(home).toMatch(/setPendingOutboundCount\([^)]*totalElements/);
+      expect(home).not.toContain('setPendingOutboundCount');
+      expect(home).not.toContain('alertCount');
     });
   });
 });

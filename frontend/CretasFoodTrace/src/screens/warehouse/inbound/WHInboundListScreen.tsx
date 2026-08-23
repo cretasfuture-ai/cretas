@@ -1,607 +1,259 @@
-/**
- * 入库管理列表页面
- * 对应原型: warehouse/inbound.html
- *
- * API集成:
- * - materialBatchApiClient - 获取原材料批次列表
- */
+/** 仓管入库首页：采购收货任务是真值，物料批次不再冒充待收货任务。 */
+import React, { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Button, Chip, Searchbar, Surface, Text, TouchableRipple } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-import React, { useState, useCallback, useEffect } from "react";
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  RefreshControl,
-  ActivityIndicator,
-} from "react-native";
-import {
-  Text,
-  Surface,
-  Chip,
-  Button,
-  Searchbar,
-  TouchableRipple,
-  useTheme,
-} from "react-native-paper";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { useTranslation } from 'react-i18next';
-import { toBatchWorkStatus } from '../../../utils/materialBatchStatus';
-import { WHInboundStackParamList } from "../../../types/navigation";
-import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
-import { handleError } from "../../../utils/errorHandler";
-import { logger } from "../../../utils/logger";
-import { formatShortDateTime } from "../../../utils/formatters";
+import { WHInboundStackParamList } from '../../../types/navigation';
+import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchaseApiClient';
+import { useAuthStore } from '../../../store/authStore';
+import { handleError } from '../../../utils/errorHandler';
 
 type NavigationProp = NativeStackNavigationProp<WHInboundStackParamList>;
+export type ReceivingStatus = 'pending' | 'partial' | 'completed';
+type FilterStatus = 'all' | ReceivingStatus;
 
-// 入库状态类型
-type InboundStatus = "pending" | "inspecting" | "putaway" | "completed";
+export const INBOUND_ORDER_STATUSES: PurchaseOrder['status'][] = [
+  'APPROVED',
+  'FINANCE_APPROVED',
+  'PARTIAL_RECEIVED',
+  'COMPLETED',
+];
 
-interface InboundItem {
-  id: string;
-  batchNumber: string;
-  material: string;
-  materialType: string;
-  supplier: string;
-  quantity: number;
-  /** 批次真实计量单位; 后端可能不返回 → '未标注'。别再假设是 kg。 */
-  unit: string;
-  status: InboundStatus;
-  createdAt: string;
-  location?: string;
-  inspectResult?: string;
+export function toReceivingStatus(status: PurchaseOrder['status']): ReceivingStatus {
+  if (status === 'PARTIAL_RECEIVED') return 'partial';
+  if (status === 'COMPLETED') return 'completed';
+  return 'pending';
 }
 
-const getStatusConfig = (t: (key: string) => string): Record<
-  InboundStatus,
-  { label: string; color: string; bgColor: string }
-> => ({
-  pending: { label: t('inbound.list.status.pending'), color: "#f57c00", bgColor: "#fff3e0" },
-  inspecting: { label: t('inbound.list.status.inspecting'), color: "#1976d2", bgColor: "#e3f2fd" },
-  putaway: { label: t('inbound.list.status.putaway'), color: "#7b1fa2", bgColor: "#f3e5f5" },
-  completed: { label: t('inbound.list.status.completed'), color: "#388e3c", bgColor: "#e8f5e9" },
-});
+const STATUS_PRIORITY: Record<ReceivingStatus, number> = { pending: 0, partial: 1, completed: 2 };
 
-// 将后端状态映射到前端状态
-// 2026-08-20: 收敛到 utils/materialBatchStatus。
-// ⚠️ 原来这一份把 fresh/frozen 判成 'pending'（鲜品/冻品其实已经在库），
-//    首页那一份则根本没有这两个 case —— 两份同源映射已经漂开了，这正是抽出来的原因。
-const mapBatchStatusToInbound = (backendStatus: string | undefined): InboundStatus =>
-  toBatchWorkStatus(backendStatus) as InboundStatus;
+export function sortReceivingOrders(orders: PurchaseOrder[]): PurchaseOrder[] {
+  return [...orders].sort((a, b) => {
+    const statusDiff = STATUS_PRIORITY[toReceivingStatus(a.status)] - STATUS_PRIORITY[toReceivingStatus(b.status)];
+    if (statusDiff !== 0) return statusDiff;
+    const aDate = a.expectedDeliveryDate || a.updatedAt || a.createdAt || '';
+    const bDate = b.expectedDeliveryDate || b.updatedAt || b.createdAt || '';
+    return toReceivingStatus(a.status) === 'completed'
+      ? bDate.localeCompare(aDate)
+      : aDate.localeCompare(bDate);
+  });
+}
 
-export function WHInboundListScreen() {
-  const { t } = useTranslation('warehouse');
-  const theme = useTheme();
+const STATUS_STYLE: Record<ReceivingStatus, { label: string; color: string; bg: string }> = {
+  pending: { label: '待收货', color: '#1565C0', bg: '#E3F2FD' },
+  partial: { label: '部分入库', color: '#E65100', bg: '#FFF3E0' },
+  completed: { label: '已完成', color: '#2E7D32', bg: '#E8F5E9' },
+};
+
+function lineQuantity(order: PurchaseOrder): string {
+  if (!order.items?.length) return '暂无物料明细';
+  const lines = order.items.slice(0, 3).map((item) => {
+    const name = item.materialName || item.materialTypeId;
+    const pending = Math.max(0, (item.quantity || 0) - (item.receivedQuantity || 0));
+    return `${name}：待收 ${pending} ${item.unit || '单位未标注'}`;
+  });
+  return lines.join('\n') + (order.items.length > 3 ? `\n还有 ${order.items.length - 3} 项` : '');
+}
+
+export default function WHInboundListScreen() {
   const navigation = useNavigation<NavigationProp>();
+  const factoryId = useAuthStore((state) => state.user?.factoryId);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  // 2026-08-21: 默认从「全部」改成「待入库」——收敛后这是仓管的落地页,
-  // 他打开 App 就该看见"还有哪几单要收", ⛔ 不是先看一堆已收完的再自己去筛。
-  // ⛔ 不删筛选 Chip: 质检中/已入库偶尔要回查。改的是默认值, 不是可选项。
-  const [selectedStatus, setSelectedStatus] = useState<string>("pending");
-  const [inboundList, setInboundList] = useState<InboundItem[]>([]);
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<FilterStatus>('all');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // 加载数据
   const loadData = useCallback(async () => {
     try {
-      logger.info('[WHInboundListScreen] 开始加载入库列表');
-
-      const response = await materialBatchApiClient.getMaterialBatches({ page: 1, size: 50 }) as
-        { data?: { content?: MaterialBatch[] }; content?: MaterialBatch[] } | undefined;
-
-      // 处理响应数据
-      const batchData = response?.data?.content ?? response?.content ?? [];
-      const batches = Array.isArray(batchData) ? batchData : [];
-
-      const mappedList: InboundItem[] = batches.map((b: MaterialBatch) => ({
-        id: b.id,
-        batchNumber: b.batchNumber || b.id,
-        material: b.materialName || '原材料',
-        materialType: b.storageType?.toLowerCase() === 'frozen' ? '冻品' : b.storageType?.toLowerCase() === 'fresh' ? '鲜品' : '干货',
-        supplier: b.supplierName || b.supplierId || '未知供应商',
-        quantity: b.inboundQuantity || 0,
-        // 口径修正 (2026-08-02): 卡片原本一律写死 " kg"。实测 F006 这一页 50 条里
-        // 12 条不是 kg (box/slice/roll/case/无单位), 带上真实单位。
-        unit: b.unit || '未标注',
-        status: mapBatchStatusToInbound(b.status),
-        createdAt: b.inboundDate
-          ? formatShortDateTime(b.inboundDate)
-          : '未知时间',
-        location: b.storageLocation,
-        inspectResult: b.qualityGrade ? `质量等级: ${b.qualityGrade}` : undefined,
-      }));
-
-      setInboundList(mappedList);
-      logger.info(`[WHInboundListScreen] 加载入库列表成功: ${mappedList.length}条`);
-
+      const results = await Promise.allSettled(
+        INBOUND_ORDER_STATUSES.map((status) =>
+          purchaseApiClient.getOrdersByStatus(status, { page: 1, size: 50 }, factoryId),
+        ),
+      );
+      const fulfilled = results.filter(
+        (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof purchaseApiClient.getOrdersByStatus>>> =>
+          result.status === 'fulfilled',
+      );
+      // 四类状态任意一路失败都不能显示“不完整但看起来正常”的计数。
+      // 仓管会据此判断是否还有车要收，少一类比整页报错更危险。
+      if (fulfilled.length !== INBOUND_ORDER_STATUSES.length) {
+        const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        throw firstFailure?.reason || new Error('待收货任务加载失败');
+      }
+      const unique = new Map<string, PurchaseOrder>();
+      fulfilled.forEach(({ value }) => {
+        (value?.data?.content || []).forEach((order) => unique.set(order.id, order));
+      });
+      setOrders(sortReceivingOrders([...unique.values()]));
+      setLoadError(null);
     } catch (error) {
-      logger.error('[WHInboundListScreen] 加载入库列表失败:', error);
-      handleError(error, { title: t('messages.loadListFailed') });
-      setInboundList([]);
+      setOrders([]);
+      setLoadError(error instanceof Error ? error.message : '请检查网络或账号权限后重试');
+      handleError(error, { title: '加载入库任务失败' });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [factoryId]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useFocusEffect(useCallback(() => { void loadData(); }, [loadData]));
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadData();
+    void loadData();
   }, [loadData]);
 
-  // 筛选数据
-  const filteredList = inboundList.filter((item) => {
-    if (selectedStatus !== "all" && item.status !== selectedStatus) return false;
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return (
-        item.batchNumber.toLowerCase().includes(query) ||
-        item.material.toLowerCase().includes(query) ||
-        item.supplier.toLowerCase().includes(query)
-      );
-    }
-    return true;
-  });
+  const stats = useMemo(() => ({
+    all: orders.length,
+    pending: orders.filter((order) => toReceivingStatus(order.status) === 'pending').length,
+    partial: orders.filter((order) => toReceivingStatus(order.status) === 'partial').length,
+    completed: orders.filter((order) => toReceivingStatus(order.status) === 'completed').length,
+  }), [orders]);
 
-  // 统计数据 (仅供筛选 Chip 计数用 —— 2026-08-21 收敛后不再单独渲染一屏统计,
-  // owner: 仓管不查库存/不看统计, 那块信息属于办公室在 web 上做的事)
-  const stats = {
-    total: inboundList.length,
-    pending: inboundList.filter((i) => i.status === "pending").length,
-    inspecting: inboundList.filter((i) => i.status === "inspecting").length,
-    completed: inboundList.filter((i) => i.status === "completed").length,
-  };
+  const visibleOrders = useMemo(() => orders.filter((order) => {
+    if (filter !== 'all' && toReceivingStatus(order.status) !== filter) return false;
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return true;
+    return order.orderNumber.toLowerCase().includes(normalized)
+      || (order.supplierName || '').toLowerCase().includes(normalized)
+      || (order.items || []).some((item) => (item.materialName || '').toLowerCase().includes(normalized));
+  }), [filter, orders, query]);
 
-  const getActionText = (status: InboundStatus): string => {
-    switch (status) {
-      case "pending":
-        return t('inbound.list.actions.confirmInbound');
-      case "inspecting":
-        return t('inbound.list.actions.continueInspect');
-      case "putaway":
-        return t('inbound.list.actions.confirmPutaway');
-      case "completed":
-        return t('inbound.list.actions.viewDetail');
-      default:
-        return t('inbound.list.actions.viewDetail');
-    }
-  };
-
-  const statusConfig = getStatusConfig(t);
-
-  const handleItemPress = (item: InboundItem) => {
-    switch (item.status) {
-      case "pending":
-        navigation.navigate("WHInboundDetail", { batchId: item.id });
-        break;
-      case "inspecting":
-        navigation.navigate("WHInspect", { batchId: item.id });
-        break;
-      case "putaway":
-        navigation.navigate("WHPutaway", { batchId: item.id });
-        break;
-      case "completed":
-        navigation.navigate("WHInboundDetail", { batchId: item.id });
-        break;
-    }
-  };
+  const openOrder = useCallback((order: PurchaseOrder) => {
+    if (toReceivingStatus(order.status) === 'completed') return;
+    navigation.navigate('WHReceiptCreate', {
+      purchaseOrderId: order.id,
+      orderNumber: order.orderNumber,
+    });
+  }, [navigation]);
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={["top"]}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>{t('inbound.list.title')}</Text>
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>{t('inbound.list.loading')}</Text>
-        </View>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.header}><Text style={styles.headerTitle}>入库管理</Text></View>
+        <View style={styles.center}><ActivityIndicator size="large" color="#4CAF50" /><Text>正在加载入库任务…</Text></View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Header */}
+    <SafeAreaView style={styles.container} edges={['top']} testID="wh-inbound-home">
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>{t('inbound.list.title')}</Text>
-        <Text style={styles.headerSubtitle}>
-          {t('inbound.list.headerSubtitle', { pending: stats.pending })}
-        </Text>
+        <Text style={styles.headerTitle}>入库管理</Text>
+        <Text style={styles.headerSubtitle}>待处理 {stats.pending + stats.partial} 单</Text>
       </View>
-
-      <ScrollView
-        style={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        showsVerticalScrollIndicator={false}
-      >
-        {/* 快捷操作 —— 2026-08-21 收敛: 三个按钮原来同权重并排, 仓管分不清先点哪个。
-            改成 1 主 + 2 副: 「待收货任务」是他 90% 时候要点的那个, 单独一整行、
-            填色更重; 扫码 / 餐饮待验收降级成小一号的次要入口, 并排在下面一行。
-            ⛔ 不删任何入口, 只改视觉权重 (内联 UX 规则「主操作按钮唯一」)。
-
-            🔴 2026-08-17 删除「新建入库」按钮 —— 它是一块过期的标签牌。
-            原本跳 WHInboundCreate, 那个屏调已停用的 POST /material-batches(409), 屏已删;
-            删屏时把 onPress 改成了 WHPurchaseReceiveList, 但**按钮上的字没改**。
-            于是它和下面那个「待收货任务」跳的是同一行代码, 而仓管点进去看到的是一个空列表
-            (F006 实测: 采购单只有 2 张 COMPLETED, 客户来料通知 1 条已 RECEIVED),
-            读起来就是「新建入库点不动」。
-
-            ⛔ 不要在这里再放一个「新建入库」—— 目前 App 侧**没有**无预告直接建批次的路径:
-            正规无单入库 WHUnorderedInboundReceive 必须带 noticeId, 唯一入口就是
-            WHPurchaseReceiveList 里的预告项。要不要开这个入口是产品决策, 见
-            HANDOFF-2026-08-17b 第七节第 3 问。
-            少一个按钮, 好过一个说谎的按钮。 */}
-        <View style={styles.actionBar}>
-          {/* SP6 Tier1 #25: 无扫码直接选单收货 —— 唯一主操作 */}
-          <Button
-            mode="contained"
-            icon="clipboard-check-outline"
-            onPress={() => navigation.navigate("WHPurchaseReceiveList")}
-            style={[styles.primaryActionButton, { backgroundColor: '#1565c0' }]}
-            labelStyle={styles.actionButtonLabel}
-            contentStyle={styles.primaryActionButtonContent}
-          >
+      <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+        <View style={styles.actions}>
+          <Button mode="contained" icon="clipboard-check-outline" contentStyle={styles.primaryContent}
+            onPress={() => navigation.navigate('WHPurchaseReceiveList')} style={styles.primaryButton}>
             待收货任务
           </Button>
-        </View>
-        <View style={styles.productionReceiptActionBar}>
-          <Button
-            testID="wh-production-receipt-entry"
-            mode="outlined"
-            icon="package-down"
-            onPress={() => navigation.navigate("WHTransitLedger")}
-            style={styles.productionReceiptActionButton}
-            contentStyle={styles.productionReceiptActionContent}
-          >
+          <Button testID="wh-scan-inbound" mode="outlined" icon="qrcode-scan"
+            contentStyle={styles.largeActionContent} style={styles.largeAction}
+            onPress={() => navigation.navigate('WHScanOperation', { type: 'inbound' })}>
+            扫码入库
+          </Button>
+          <Button testID="wh-production-receipt-entry" mode="outlined" icon="package-down"
+            contentStyle={styles.largeActionContent} style={styles.largeAction}
+            onPress={() => navigation.navigate('WHTransitLedger')}>
             生产成品入库
           </Button>
         </View>
-        <View style={styles.secondaryActionBar}>
-          <Button
-            mode="outlined"
-            compact
-            icon="qrcode-scan"
-            onPress={() => navigation.navigate("WHScanOperation", { type: "inbound" })}
-            style={styles.secondaryActionButton}
-            labelStyle={styles.secondaryActionButtonLabel}
-          >
-            {t('inbound.list.scanInbound')}
-          </Button>
-          <Button
-            mode="outlined"
-            compact
-            icon="truck-delivery"
-            onPress={() => navigation.navigate("SupplierDeliveryList")}
-            style={styles.secondaryActionButton}
-            labelStyle={styles.secondaryActionButtonLabel}
-          >
-            餐饮待验收
-          </Button>
-        </View>
 
-        {/* 搜索栏 */}
-        <Searchbar
-          placeholder={t('inbound.list.search')}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          style={styles.searchBar}
-          inputStyle={styles.searchInput}
-        />
-
-        {/* 筛选标签 */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.filterContainer}
-        >
-          <Chip
-            selected={selectedStatus === "all"}
-            onPress={() => setSelectedStatus("all")}
-            style={[
-              styles.filterChip,
-              selectedStatus === "all" && styles.filterChipActive,
-            ]}
-            textStyle={selectedStatus === "all" ? styles.filterChipTextActive : undefined}
-          >
-            {t('inbound.list.filter.all')}({stats.total})
-          </Chip>
-          <Chip
-            selected={selectedStatus === "pending"}
-            onPress={() => setSelectedStatus("pending")}
-            style={[
-              styles.filterChip,
-              selectedStatus === "pending" && styles.filterChipActive,
-            ]}
-            textStyle={selectedStatus === "pending" ? styles.filterChipTextActive : undefined}
-          >
-            {t('inbound.list.filter.pending')}({stats.pending})
-          </Chip>
-          <Chip
-            selected={selectedStatus === "inspecting"}
-            onPress={() => setSelectedStatus("inspecting")}
-            style={[
-              styles.filterChip,
-              selectedStatus === "inspecting" && styles.filterChipActive,
-            ]}
-            textStyle={selectedStatus === "inspecting" ? styles.filterChipTextActive : undefined}
-          >
-            {t('inbound.list.filter.inspecting')}({stats.inspecting})
-          </Chip>
-          <Chip
-            selected={selectedStatus === "completed"}
-            onPress={() => setSelectedStatus("completed")}
-            style={[
-              styles.filterChip,
-              selectedStatus === "completed" && styles.filterChipActive,
-            ]}
-            textStyle={selectedStatus === "completed" ? styles.filterChipTextActive : undefined}
-          >
-            {t('inbound.list.filter.completed')}({stats.completed})
-          </Chip>
+        <Searchbar placeholder="搜索订单号 / 物料 / 供应商" value={query} onChangeText={setQuery} style={styles.search} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
+          {([
+            ['all', '全部', stats.all],
+            ['pending', '待收货', stats.pending],
+            ['partial', '部分入库', stats.partial],
+            ['completed', '已完成', stats.completed],
+          ] as const).map(([value, label, count]) => (
+            <Chip key={value} selected={filter === value} onPress={() => setFilter(value)}
+              style={[styles.filter, filter === value && styles.filterActive]}
+              textStyle={filter === value ? styles.filterTextActive : undefined}>
+              {label}({count})
+            </Chip>
+          ))}
         </ScrollView>
 
-        {/* 入库列表 */}
-        <View style={styles.listContainer}>
-          {filteredList.map((item) => {
-            const config = statusConfig[item.status];
+        <View style={styles.list}>
+          {loadError ? (
+            <Surface style={styles.empty} elevation={1}>
+              <MaterialCommunityIcons name="alert-circle-outline" size={42} color="#C62828" />
+              <Text style={styles.errorTitle}>入库任务加载失败</Text><Text style={styles.emptyHint}>{loadError}</Text>
+              <Button mode="contained" icon="refresh" onPress={onRefresh}>重试</Button>
+            </Surface>
+          ) : visibleOrders.length === 0 ? (
+            <Surface style={styles.empty} elevation={1}>
+              <MaterialCommunityIcons name="package-variant-closed" size={42} color="#BDBDBD" />
+              <Text style={styles.emptyTitle}>当前筛选下没有入库任务</Text>
+            </Surface>
+          ) : visibleOrders.map((order) => {
+            const status = toReceivingStatus(order.status);
+            const config = STATUS_STYLE[status];
             return (
-              <TouchableRipple
-                key={item.id}
-                onPress={() => handleItemPress(item)}
-                rippleColor="rgba(76, 175, 80, 0.15)"
-              >
-                <Surface style={styles.inboundCard} elevation={1}>
+              <TouchableRipple key={order.id} disabled={status === 'completed'} onPress={() => openOrder(order)}
+                rippleColor="rgba(76,175,80,0.15)" style={styles.cardTouch}>
+                <Surface style={styles.card} elevation={1}>
                   <View style={styles.cardHeader}>
-                    <Text style={styles.batchNumber}>{item.batchNumber}</Text>
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        { backgroundColor: config.bgColor },
-                      ]}
-                    >
-                      <Text style={[styles.statusText, { color: config.color }]}>
-                        {config.label}
-                      </Text>
-                    </View>
+                    <Text style={styles.orderNumber}>{order.orderNumber}</Text>
+                    <View style={[styles.badge, { backgroundColor: config.bg }]}><Text style={{ color: config.color }}>{config.label}</Text></View>
                   </View>
-
-                  <View style={styles.cardContent}>
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>{t('inbound.list.material')}</Text>
-                      <Text style={styles.infoValue}>
-                        {item.material} ({item.materialType})
-                      </Text>
-                    </View>
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>{t('inbound.list.supplier')}</Text>
-                      <Text style={styles.infoValue}>{item.supplier}</Text>
-                    </View>
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>{t('inbound.list.quantity')}</Text>
-                      <Text style={[styles.infoValue, styles.quantityValue]}>
-                        {item.quantity} {item.unit}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.cardFooter}>
-                    <Text style={styles.timeText}>
-                      {item.createdAt}
-                      {item.location && ` | ${item.location}`}
-                      {item.inspectResult && ` | ${item.inspectResult}`}
-                    </Text>
-                    <View style={styles.actionLink}>
-                      <Text style={styles.actionText}>
-                        {getActionText(item.status)}
-                      </Text>
-                      <MaterialCommunityIcons
-                        name="chevron-right"
-                        size={16}
-                        color="#4CAF50"
-                      />
-                    </View>
+                  <View style={styles.metaRow}><Text style={styles.metaLabel}>供应商</Text><Text style={styles.metaValue}>{order.supplierName || '未知供应商'}</Text></View>
+                  <View style={styles.metaRow}><Text style={styles.metaLabel}>物料</Text><Text style={styles.metaValue}>共 {order.items?.length || 0} 项</Text></View>
+                  <Text style={styles.lines}>{lineQuantity(order)}</Text>
+                  <View style={styles.footer}>
+                    <Text style={styles.dateText}>期望交货：{order.expectedDeliveryDate || '未填写'}</Text>
+                    <Text style={[styles.actionText, status === 'completed' && styles.doneText]}>{status === 'completed' ? '已全部入库' : '开始收货 ›'}</Text>
                   </View>
                 </Surface>
               </TouchableRipple>
             );
           })}
         </View>
-
-        {/* 2026-08-21 收敛: 底部「已加载批次统计」4 格聚合数已删除 ——
-            owner: 仓管不查库存/不看统计, 这块信息不帮他做「收哪一单」这个决定,
-            只是每次都要先滑过去的额外重量。⛔ 不是白工: 与首页统计(F3)同一类问题,
-            只是首页那份因为首页 tab 隐藏已经不可达, 而这份在本屏依旧可达, 需要单独砍。
-            要查这些数字, 走 web-admin。 */}
-        <View style={{ height: 20 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f5f5f5",
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#666",
-  },
-  header: {
-    backgroundColor: "#4CAF50",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#fff",
-  },
-  headerSubtitle: {
-    fontSize: 13,
-    color: "rgba(255,255,255,0.9)",
-    marginTop: 4,
-  },
-  content: {
-    flex: 1,
-  },
-  actionBar: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  primaryActionButton: {
-    borderRadius: 8,
-  },
-  primaryActionButtonContent: {
-    height: 48,
-  },
-  productionReceiptActionBar: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-  },
-  productionReceiptActionButton: {
-    borderRadius: 8,
-  },
-  productionReceiptActionContent: {
-    minHeight: 48,
-  },
-  actionButtonLabel: {
-    color: "#fff",
-    fontWeight: "600",
-    fontSize: 15,
-  },
-  secondaryActionBar: {
-    flexDirection: "row",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 10,
-  },
-  secondaryActionButton: {
-    flex: 1,
-    borderRadius: 8,
-    borderColor: "#c8e6c9",
-  },
-  secondaryActionButtonLabel: {
-    color: "#4CAF50",
-    fontWeight: "500",
-    fontSize: 12,
-  },
-  searchBar: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderRadius: 8,
-    backgroundColor: "#fff",
-  },
-  searchInput: {
-    fontSize: 14,
-  },
-  filterContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  filterChip: {
-    marginRight: 8,
-    backgroundColor: "#fff",
-  },
-  filterChipActive: {
-    backgroundColor: "#4CAF50",
-  },
-  filterChipTextActive: {
-    color: "#fff",
-  },
-  listContainer: {
-    paddingHorizontal: 16,
-  },
-  inboundCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  batchNumber: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#333",
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  cardContent: {
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-    paddingTop: 12,
-  },
-  infoRow: {
-    flexDirection: "row",
-    marginBottom: 8,
-  },
-  infoLabel: {
-    width: 60,
-    fontSize: 13,
-    color: "#999",
-  },
-  infoValue: {
-    flex: 1,
-    fontSize: 13,
-    color: "#333",
-  },
-  quantityValue: {
-    // 数量是仓管确认这一单对不对的关键数字 —— 放大字号防看错 (对应 fool-proof 数字大字号约束)。
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#4CAF50",
-  },
-  cardFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-  timeText: {
-    fontSize: 12,
-    color: "#999",
-  },
-  actionLink: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  actionText: {
-    fontSize: 13,
-    color: "#4CAF50",
-    fontWeight: "500",
-  },
+  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  header: { backgroundColor: '#4CAF50', paddingHorizontal: 16, paddingVertical: 16 },
+  headerTitle: { color: '#FFF', fontSize: 22, fontWeight: '700' },
+  headerSubtitle: { color: 'rgba(255,255,255,0.9)', fontSize: 14, marginTop: 5 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  actions: { padding: 16, gap: 10 },
+  primaryButton: { borderRadius: 10, backgroundColor: '#1565C0' },
+  primaryContent: { minHeight: 56 },
+  largeAction: { borderRadius: 10, borderColor: '#A5D6A7' },
+  largeActionContent: { minHeight: 56 },
+  search: { marginHorizontal: 16, backgroundColor: '#FFF' },
+  filters: { paddingHorizontal: 16, paddingVertical: 12 },
+  filter: { marginRight: 8, backgroundColor: '#FFF' },
+  filterActive: { backgroundColor: '#4CAF50' },
+  filterTextActive: { color: '#FFF' },
+  list: { paddingHorizontal: 16, paddingBottom: 28 },
+  cardTouch: { borderRadius: 12, marginBottom: 12 },
+  card: { backgroundColor: '#FFF', borderRadius: 12, padding: 16 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 },
+  orderNumber: { flex: 1, fontSize: 16, fontWeight: '700', color: '#263238' },
+  badge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14 },
+  metaRow: { flexDirection: 'row', marginBottom: 6 },
+  metaLabel: { width: 58, fontSize: 13, color: '#8A8A8A' },
+  metaValue: { flex: 1, fontSize: 14, color: '#333' },
+  lines: { backgroundColor: '#F7FAF8', color: '#2F4F3A', fontSize: 14, lineHeight: 23, padding: 10, borderRadius: 8, marginTop: 4 },
+  footer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 12 },
+  dateText: { flex: 1, color: '#8A8A8A', fontSize: 12 },
+  actionText: { color: '#2E7D32', fontSize: 14, fontWeight: '700' },
+  doneText: { color: '#757575' },
+  empty: { backgroundColor: '#FFF', borderRadius: 12, padding: 30, alignItems: 'center', gap: 10 },
+  emptyTitle: { color: '#666', fontSize: 15, fontWeight: '600' },
+  errorTitle: { color: '#C62828', fontSize: 16, fontWeight: '700' },
+  emptyHint: { color: '#666', fontSize: 13, textAlign: 'center', lineHeight: 20 },
 });
-
-export default WHInboundListScreen;

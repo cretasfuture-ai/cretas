@@ -62,14 +62,14 @@ describe('仓储入库列表: 快捷操作里不许有两个按钮跳同一个�
   });
 
   it('快捷操作区里没有两块跳同一处的标签牌', () => {
-    // ⚠️ 口径收窄到 actionBar 那一段, 不扫全文件。
+    // ⚠️ 口径收窄到首页快捷操作容器，不扫全文件。
     //    第一版写的是「全文件不许有重复 navigate 目标」, 实测**误报** ——
     //    `WHInboundDetail` 从卡片点击和「查看详情」各跳一次, 那是合理的。
     //    一道会误报的闸最终会被关掉, 那时它覆盖率归零。
     const code = stripComments(inboundList);
-    const start = code.indexOf('styles.actionBar');
+    const start = code.indexOf('styles.actions');
     expect(start).toBeGreaterThan(0);        // 阳性对照: 真的定位到了那一段
-    const region = code.slice(start, code.indexOf('搜索栏') > 0 ? code.indexOf('搜索栏') : start + 3000);
+    const region = code.slice(start, code.indexOf('<Searchbar') > 0 ? code.indexOf('<Searchbar') : start + 3000);
 
     const targets = navTargets(region);
     expect(targets.length).toBeGreaterThan(1);   // 阳性对照: 这一段里确实有多个按钮

@@ -1,7 +1,7 @@
 /**
  * Warehouse Manager 导航器入口
  * 仅 warehouse_manager 和 warehouse_worker 角色使用
- * 5个Tab: 首页 | 入库 | 发货 | 库存 | 我的
+ * 现场模式 4 个 Tab: 首页 | 入库 | 发货 | 我的（库存能力保留但不显示）
  */
 
 import React from 'react';
