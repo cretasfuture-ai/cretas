@@ -60,7 +60,7 @@ class MineTrayQueueTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "receipt missing"):
                 module.verify_teacher_model(model, module.TEACHER_REVISION)
             module.seal_teacher_model(model, module.TEACHER_REVISION)
-            with self.assertRaisesRegex(RuntimeError, "fixed revision mismatch"):
+            with self.assertRaisesRegex(RuntimeError, "revision must be fixed"):
                 module.verify_teacher_model(model, "unexpected-revision")
 
     def test_teacher_model_verify_rejects_receipt_safety_policy_drift(self):
@@ -74,6 +74,23 @@ class MineTrayQueueTests(unittest.TestCase):
             receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "safety policy mismatch"):
                 module.verify_teacher_model(model, module.TEACHER_REVISION)
+
+    def test_teacher_model_rejects_alternate_revision_even_when_argument_and_receipt_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            self.make_teacher_snapshot(model)
+            alternate_revision = "a" * 40
+            with self.assertRaisesRegex(RuntimeError, "revision must be fixed"):
+                module.seal_teacher_model(model, alternate_revision)
+            self.assertFalse((model / module.TEACHER_MODEL_RECEIPT).exists())
+
+            module.seal_teacher_model(model, module.TEACHER_REVISION)
+            receipt_path = model / module.TEACHER_MODEL_RECEIPT
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["revision"] = alternate_revision
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "revision must be fixed"):
+                module.verify_teacher_model(model, alternate_revision)
 
     def test_teacher_regions_are_local_crops_and_map_back_to_full_image(self):
         image = Image.new("RGB", (400, 300), (30, 30, 30))

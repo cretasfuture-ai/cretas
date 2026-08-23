@@ -29,6 +29,7 @@ from mine_tray_queue import (
 
 SMOKE_MAX_SECONDS = 30.0
 SMOKE_MAX_RAW_BOXES = 64
+SMOKE_MAX_CROP_AREA_RATIO = 0.72
 
 
 def parse_crop(value: str) -> tuple[int, int, int, int]:
@@ -52,12 +53,18 @@ def smoke(
     prompt_name: str,
     receipt_path: Path,
 ) -> dict[str, object]:
-    integrity = verify_teacher_model(model_path, revision)
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
     x0, y0, x1, y1 = crop_box
     if x1 > image.width or y1 > image.height:
         raise RuntimeError(f"crop exceeds image bounds {image.size}: {crop_box}")
+    crop_area_ratio = ((x1 - x0) * (y1 - y0)) / (image.width * image.height)
+    if crop_area_ratio >= SMOKE_MAX_CROP_AREA_RATIO:
+        raise RuntimeError(
+            "smoke crop must remain local: "
+            f"area ratio {crop_area_ratio:.4f} must be below {SMOKE_MAX_CROP_AREA_RATIO:.2f}"
+        )
+    integrity = verify_teacher_model(model_path, revision)
     crop = image.crop(crop_box)
     original_crop_size = crop.size
     if max(crop.size) > TEACHER_MAX_SIDE:
@@ -83,6 +90,8 @@ def smoke(
         "model_integrity": integrity,
         "image": str(image_path),
         "crop_box_pixels": list(crop_box),
+        "crop_area_ratio": crop_area_ratio,
+        "maximum_crop_area_ratio": SMOKE_MAX_CROP_AREA_RATIO,
         "original_crop_size": list(original_crop_size),
         "inference_size": list(crop.size),
         "crop_max_side": TEACHER_MAX_SIDE,

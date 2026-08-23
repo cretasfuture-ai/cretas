@@ -79,6 +79,8 @@ def teacher_model_files(model_path: Path) -> list[Path]:
 
 def seal_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
     """Create the immutable snapshot receipt for a newly staged teacher model."""
+    if revision != TEACHER_REVISION:
+        raise RuntimeError(f"teacher revision must be fixed at {TEACHER_REVISION}")
     if not model_path.is_dir():
         raise FileNotFoundError(model_path)
     incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
@@ -114,6 +116,8 @@ def seal_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
 
 def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
     """Verify the sealed local snapshot without mutating model files or its receipt."""
+    if revision != TEACHER_REVISION:
+        raise RuntimeError(f"teacher revision must be fixed at {TEACHER_REVISION}")
     receipt_path = model_path / TEACHER_MODEL_RECEIPT
     if not receipt_path.is_file():
         raise RuntimeError(f"teacher model receipt missing: {receipt_path}")

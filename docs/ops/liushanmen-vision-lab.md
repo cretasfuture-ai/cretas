@@ -25,8 +25,8 @@ B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py verify 
 ```
 
 `seal` 只用于操作员明确批准并完整复制好的全新固定 snapshot；它会在模型目录写 receipt，不能作为
-常规校验命令。需要验证推理链时也只能给出明确像素 crop，并把结果写入新的 D 盘 receipt；工具没有
-全图 smoke 入口：
+常规校验命令。需要验证推理链时也只能给出明确像素 crop，crop 面积必须严格小于原图的 72%，并把
+结果写入新的 D 盘 receipt；工具没有全图 smoke 入口：
 
 ```powershell
 B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py smoke `

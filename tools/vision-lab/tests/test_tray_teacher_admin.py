@@ -77,6 +77,10 @@ class TrayTeacherAdminTests(unittest.TestCase):
             self.assertEqual(result["status"], "passed")
             self.assertEqual(result["inference_size"], [640, 384])
             self.assertEqual(result["max_new_tokens"], 256)
+            self.assertLess(result["crop_area_ratio"], module.SMOKE_MAX_CROP_AREA_RATIO)
+            self.assertEqual(
+                result["maximum_crop_area_ratio"], module.SMOKE_MAX_CROP_AREA_RATIO,
+            )
             self.assertEqual(result["raw_box_count"], 2)
             self.assertEqual(result["deduplicated_box_count"], 1)
             self.assertFalse(result["full_image_inference"])
@@ -101,6 +105,27 @@ class TrayTeacherAdminTests(unittest.TestCase):
                         (0, 0, 50, 50), "all", root / "receipt.json",
                     )
             teacher.assert_not_called()
+
+    def test_smoke_rejects_full_or_oversized_crop_before_model_or_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image_path = root / "readonly-source.png"
+            Image.new("RGB", (100, 100), (30, 40, 50)).save(image_path)
+            for crop_box in ((0, 0, 100, 100), (0, 0, 90, 80)):
+                with self.subTest(crop_box=crop_box):
+                    receipt_path = root / f"receipt-{crop_box[2]}.json"
+                    with (
+                        mock.patch.object(module, "verify_teacher_model") as verify,
+                        mock.patch.object(module, "LocateAnythingTeacher") as teacher,
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "must remain local"):
+                            module.smoke(
+                                root / "model", module.TEACHER_REVISION, image_path,
+                                crop_box, "all", receipt_path,
+                            )
+                    verify.assert_not_called()
+                    teacher.assert_not_called()
+                    self.assertFalse(receipt_path.exists())
 
 
 if __name__ == "__main__":
