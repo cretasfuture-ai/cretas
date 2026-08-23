@@ -2,6 +2,8 @@
 
 ## 已完成
 
+- `MIGRATE-LOCATEANYTHING-TEACHER-HARDENING-20260823` — `merged` — Owner: `/root` — Base SHA: `bc0fadd3d0153035b151a8740dddba8a88c5f910` — 公司仓 PR #16。从旧 e887 分支只选择性迁移 LocateAnything 模型完整性/admin/资源边界，不恢复旧 teacher-only 队列配额或旧 ACTIVE。固定 640px、256 tokens、每图最多 3 个局部 crop、重复框去重与 `<72%` smoke；seal 不可覆盖且仅允许确认后的新 snapshot 目录，30 秒 worker 可 terminate/kill。现有 B 盘 v1 snapshot 通过 tracked legacy manifest 逐一只读验证 38/38 文件、`7,667,993,263` bytes、exact set 与全量 SHA；新 v2 receipt 记录全部文件 hashes。外部 proposal 必须绑定现场模型 receipt/manifest SHA 与严格 crop/box/support 结构，失败时 teacher 保持 disabled。目标+raw-plan/保护集 26/26（22 subtests）、Python compile、manifest parse、`git diff --check` 与两轮独立终审通过，未见 P0/P1/P2。未执行 seal、GPU/4K 推理、队列重建，未修改 B/D receipt、模型、人工真值或生产，严格 `NOT_DEPLOYED`；旧 D receipt 因缺 status 被正确拒绝且前后 SHA 不变，scope 已释放。
+
 - `MIGRATE-SALES-ORDER-READONLY-E2E-20260823` — `merged` — Owner: `/root` — Base SHA: `f112c032fd9f9acc52456be8c368823a4fc59ba6` — 公司仓 PR #14。将销售订单生命周期只读验收重写到统一 guarded harness，覆盖 7 个生命周期标签、出库/收款筛选、下一步动作与三段追溯；场景默认禁用、仅显式选择时运行，六次 GET 刷新均串行等待响应与表格稳定。独立代码复审未发现 P0/P1/P2；unit 28/28、本地 Playwright fixture 5/5、bundle drift 与默认/显式场景解析通过，夹具断言六次读取、最大并发 1、业务写入 0。未修改产品代码、凭证、query POST 白名单或 mutation guard，未运行生产 F006 验收或部署；旧个人仓 Sales Order 实现由本迁移替代，旧证据已另行校验归档，scope 已释放。
 
 - `UX-F006-WAREHOUSE-RECEIVED-LABEL-20260823` — `merged` — Owner: `/root` — Base SHA: `f112c032fd9f9acc52456be8c368823a4fc59ba6` — RN 采购单的内部状态值继续使用 `COMPLETED`，采购列表/详情的共用状态文案、采购筛选以及仓储入库筛选/卡片统一改为「已收货」，卡片底部改为「已全部收货」；其他业务的「已完成」不变，后端流转和生产数据零修改。`ux-flow` 按动作结果语义要求更新了现有 spec；目标 Jest 36/36、RN TypeScript、Android Expo export 和 `git diff --check` 通过，代码 scope 已释放。

@@ -11,6 +11,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -24,8 +25,19 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 TEACHER_MODEL_ID = "nvidia/LocateAnything-3B"
 TEACHER_REVISION = "c32291ca5e996f5a7a485845b4f57a233936bba0"
 TEACHER_LICENSE = "NVIDIA non-commercial research use"
-TEACHER_MAX_SIDE = 1024
+TEACHER_MAX_SIDE = 640
+TEACHER_MAX_NEW_TOKENS = 256
+TEACHER_MAX_CROPS_PER_IMAGE = 3
 DEFAULT_TEACHER_PATH = Path(r"B:\AIModels\LocateAnything-3B")
+TEACHER_MODEL_RECEIPT = "VISIONLAB_MODEL_RECEIPT.json"
+TEACHER_MODEL_RECEIPT_V1 = "vision-lab-locateanything-model-v1"
+TEACHER_MODEL_RECEIPT_V2 = "vision-lab-locateanything-model-v2"
+TEACHER_MODEL_INTEGRITY_VERSION = "vision-lab-locateanything-integrity-v2"
+TEACHER_LEGACY_MANIFEST_VERSION = "vision-lab-locateanything-legacy-manifest-v1"
+TEACHER_LEGACY_MANIFEST = Path(__file__).with_name("locateanything_snapshot_v1_manifest.json")
+TEACHER_LEGACY_FILE_COUNT = 38
+TEACHER_LEGACY_TOTAL_BYTES = 7_667_993_263
+TEACHER_PROPOSAL_RECEIPT_VERSION = "locateanything-tray-teacher-v1"
 TEACHER_PROMPTS = {
     "all": "each individual foreground sealed plastic food tray package used for quality inspection",
     "edge": "each partially visible sealed food tray at an image edge",
@@ -34,6 +46,9 @@ TEACHER_PROMPTS = {
 }
 RAW_WORK_AREA_PLAN_VERSION = "vision-lab-work-area-raw-tray-plan-v1"
 BOX_PATTERN = re.compile(r"<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
+TEACHER_SUPPORT_PATTERN = re.compile(
+    r"^crop(\d+):(" + "|".join(re.escape(prompt) for prompt in TEACHER_PROMPTS) + r")$"
+)
 
 
 def utc_now() -> str:
@@ -53,6 +68,196 @@ def write_json(path: Path, payload: Any) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def teacher_model_files(model_path: Path) -> list[Path]:
+    index_path = model_path / "model.safetensors.index.json"
+    required = [
+        model_path / "config.json",
+        model_path / "tokenizer_config.json",
+        model_path / "processor_config.json",
+        model_path / "preprocessor_config.json",
+        index_path,
+    ]
+    if index_path.is_file():
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        shards = sorted(set(payload.get("weight_map", {}).values()))
+        if not shards:
+            raise RuntimeError(f"teacher weight index has no shards: {index_path}")
+        required.extend(model_path / shard for shard in shards)
+    return required
+
+
+def teacher_snapshot_files(model_path: Path) -> list[Path]:
+    receipt_path = model_path / TEACHER_MODEL_RECEIPT
+    return sorted(
+        path for path in model_path.rglob("*")
+        if path.is_file() and path != receipt_path
+    )
+
+
+def teacher_snapshot_manifest(model_path: Path) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": path.relative_to(model_path).as_posix(),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in teacher_snapshot_files(model_path)
+    ]
+
+
+def seal_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
+    """Create the immutable snapshot receipt for a newly staged teacher model."""
+    if revision != TEACHER_REVISION:
+        raise RuntimeError(f"teacher revision must be fixed at {TEACHER_REVISION}")
+    receipt_path = model_path / TEACHER_MODEL_RECEIPT
+    if receipt_path.exists():
+        raise RuntimeError(f"teacher model receipt is immutable and already exists: {receipt_path}")
+    if not model_path.is_dir():
+        raise FileNotFoundError(model_path)
+    incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
+    required = teacher_model_files(model_path)
+    missing = [str(path.relative_to(model_path)) for path in required if not path.is_file()]
+    if incomplete or missing:
+        raise RuntimeError(f"teacher model incomplete: missing={missing}, incomplete={incomplete}")
+    files = teacher_snapshot_manifest(model_path)
+    receipt = {
+        "version": TEACHER_MODEL_RECEIPT_V2,
+        "created_at": utc_now(),
+        "model_id": TEACHER_MODEL_ID,
+        "revision": revision,
+        "model_path": str(model_path),
+        "offline_only": True,
+        "full_image_inference_forbidden": True,
+        "crop_max_side": TEACHER_MAX_SIDE,
+        "file_count": len(files),
+        "total_bytes": sum(int(row["bytes"]) for row in files),
+        "files": files,
+    }
+    write_json(receipt_path, receipt)
+    return receipt
+
+
+def _teacher_expected_manifest(receipt: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    receipt_version = receipt.get("version")
+    if receipt_version == TEACHER_MODEL_RECEIPT_V2:
+        manifest = receipt
+        manifest_version = TEACHER_MODEL_RECEIPT_V2
+    elif receipt_version == TEACHER_MODEL_RECEIPT_V1:
+        if not TEACHER_LEGACY_MANIFEST.is_file():
+            raise RuntimeError(f"tracked teacher legacy manifest missing: {TEACHER_LEGACY_MANIFEST}")
+        manifest = json.loads(TEACHER_LEGACY_MANIFEST.read_text(encoding="utf-8"))
+        manifest_version = manifest.get("version")
+        if (manifest_version != TEACHER_LEGACY_MANIFEST_VERSION
+                or manifest.get("receipt_version") != TEACHER_MODEL_RECEIPT_V1):
+            raise RuntimeError("tracked teacher legacy manifest version mismatch")
+        for field in ("model_id", "revision", "file_count", "total_bytes"):
+            if receipt.get(field) != manifest.get(field):
+                raise RuntimeError(f"legacy teacher receipt metadata mismatch: {field}")
+    else:
+        raise RuntimeError(f"unsupported teacher model receipt version: {receipt_version}")
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files:
+        raise RuntimeError("teacher full-file manifest missing")
+    return str(manifest_version), files
+
+
+def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
+    """Verify the sealed local snapshot without mutating model files or its receipt."""
+    if revision != TEACHER_REVISION:
+        raise RuntimeError(f"teacher revision must be fixed at {TEACHER_REVISION}")
+    receipt_path = model_path / TEACHER_MODEL_RECEIPT
+    if not receipt_path.is_file():
+        raise RuntimeError(f"teacher model receipt missing: {receipt_path}")
+    receipt_bytes = receipt_path.read_bytes()
+    receipt = json.loads(receipt_bytes.decode("utf-8"))
+    receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
+    if receipt.get("model_id") != TEACHER_MODEL_ID or receipt.get("revision") != revision:
+        raise RuntimeError("teacher model id or fixed revision mismatch")
+    if (receipt.get("offline_only") is not True
+            or receipt.get("full_image_inference_forbidden") is not True
+            or int(receipt.get("crop_max_side", -1)) != TEACHER_MAX_SIDE):
+        raise RuntimeError("teacher model safety policy mismatch")
+
+    legacy_manifest_sha_before = (
+        sha256_file(TEACHER_LEGACY_MANIFEST)
+        if receipt.get("version") == TEACHER_MODEL_RECEIPT_V1 else None
+    )
+    manifest_version, expected_rows = _teacher_expected_manifest(receipt)
+    if receipt.get("version") == TEACHER_MODEL_RECEIPT_V1:
+        if (receipt.get("file_count") != TEACHER_LEGACY_FILE_COUNT
+                or receipt.get("total_bytes") != TEACHER_LEGACY_TOTAL_BYTES
+                or manifest_version != TEACHER_LEGACY_MANIFEST_VERSION):
+            raise RuntimeError("legacy teacher snapshot fixed manifest boundary mismatch")
+        manifest_path = TEACHER_LEGACY_MANIFEST
+        manifest_sha256 = sha256_file(manifest_path)
+        if manifest_sha256 != legacy_manifest_sha_before:
+            raise RuntimeError("tracked teacher legacy manifest changed during verification")
+    else:
+        if manifest_version != TEACHER_MODEL_RECEIPT_V2:
+            raise RuntimeError("v2 teacher receipt and manifest version mismatch")
+        manifest_path = receipt_path
+        manifest_sha256 = receipt_sha256
+    required = teacher_model_files(model_path)
+    incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
+    missing = [str(path.relative_to(model_path)) for path in required if not path.is_file()]
+    if incomplete or missing:
+        raise RuntimeError(f"teacher model incomplete: missing={missing}, incomplete={incomplete}")
+    expected: dict[str, dict[str, Any]] = {}
+    for row in expected_rows:
+        if (not isinstance(row, dict) or not isinstance(row.get("path"), str)
+                or not isinstance(row.get("bytes"), int)
+                or not isinstance(row.get("sha256"), str)):
+            raise RuntimeError("teacher full-file manifest entry invalid")
+        relative = row["path"]
+        if relative in expected:
+            raise RuntimeError(f"teacher full-file manifest duplicate: {relative}")
+        expected[relative] = row
+    snapshot_files = teacher_snapshot_files(model_path)
+    actual_paths = {path.relative_to(model_path).as_posix() for path in snapshot_files}
+    if actual_paths != set(expected):
+        missing_paths = sorted(set(expected) - actual_paths)
+        unexpected_paths = sorted(actual_paths - set(expected))
+        raise RuntimeError(
+            f"teacher snapshot exact file set mismatch: missing={missing_paths}, unexpected={unexpected_paths}"
+        )
+    verified: dict[str, dict[str, Any]] = {}
+    critical: dict[str, dict[str, Any]] = {}
+    for path in snapshot_files:
+        relative = path.relative_to(model_path).as_posix()
+        expected_row = expected[relative]
+        actual_size = path.stat().st_size
+        actual_sha = sha256_file(path)
+        if actual_size != expected_row["bytes"] or actual_sha != expected_row["sha256"]:
+            raise RuntimeError(f"teacher snapshot file mismatch: {relative}")
+        verified[relative] = {"bytes": actual_size, "sha256": actual_sha}
+        if path.name == "model.safetensors.index.json" or path.suffix == ".safetensors":
+            critical[relative] = verified[relative]
+    total_bytes = sum(row["bytes"] for row in verified.values())
+    if (len(verified) != int(receipt.get("file_count", -1))
+            or total_bytes != int(receipt.get("total_bytes", -1))):
+        raise RuntimeError("teacher snapshot file count or total size mismatch")
+    return {
+        "version": TEACHER_MODEL_INTEGRITY_VERSION,
+        "receipt_version": receipt.get("version"),
+        "manifest_version": manifest_version,
+        "model_id": TEACHER_MODEL_ID,
+        "revision": revision,
+        "model_path": str(model_path),
+        "receipt": str(receipt_path),
+        "receipt_sha256": receipt_sha256,
+        "manifest": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "critical_files": critical,
+        "file_count": len(verified),
+        "files_verified": len(verified),
+        "exact_file_set": True,
+        "full_file_sha256_verified": True,
+        "total_bytes": total_bytes,
+        "offline_only": True,
+        "crop_max_side": TEACHER_MAX_SIDE,
+    }
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -104,7 +309,7 @@ def parse_teacher_boxes(answer: str) -> list[list[float]]:
     for match in BOX_PATTERN.finditer(answer):
         values = [int(value) / 1000.0 for value in match.groups()]
         box = valid_box(values, max_area=0.35)
-        if box is not None:
+        if box is not None and not any(box_iou(box, retained) >= 0.90 for retained in boxes):
             boxes.append(box)
     return boxes
 
@@ -312,6 +517,8 @@ def detector_disagreement(
 
 class LocateAnythingTeacher:
     def __init__(self, model_path: str, revision: str | None) -> None:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
         import torch
         from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
@@ -337,7 +544,7 @@ class LocateAnythingTeacher:
             response = self.model.generate(
                 pixel_values=inputs["pixel_values"].to(self.dtype), input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"], image_grid_hws=inputs.get("image_grid_hws"),
-                tokenizer=self.tokenizer, max_new_tokens=2048, use_cache=True,
+                tokenizer=self.tokenizer, max_new_tokens=TEACHER_MAX_NEW_TOKENS, use_cache=True,
                 generation_mode="hybrid", do_sample=False, repetition_penalty=1.1, verbose=False,
             )
         return str(response[0] if isinstance(response, tuple) else response)
@@ -489,7 +696,10 @@ def load_planned_candidates(
     return records
 
 
-def teacher_crop_regions(record: dict[str, Any], image: Image.Image, limit: int = 8) -> list[dict[str, Any]]:
+def teacher_crop_regions(
+    record: dict[str, Any], image: Image.Image,
+    limit: int = TEACHER_MAX_CROPS_PER_IMAGE,
+) -> list[dict[str, Any]]:
     detector = record.get("detector_boxes", [])
     comparison = record.get("comparison_boxes", [])
     centers = [((row["box"][0] + row["box"][2]) / 2, (row["box"][1] + row["box"][3]) / 2) for row in detector]
@@ -546,8 +756,193 @@ def map_crop_box(box: list[float], crop: list[float]) -> list[float]:
     ]
 
 
+def _strict_teacher_box(value: Any, label: str, max_area: float) -> list[float]:
+    if (not isinstance(value, list) or len(value) != 4
+            or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value)):
+        raise RuntimeError(f"teacher proposals {label} must be numeric normalized xyxy")
+    numbers = [float(item) for item in value]
+    if not all(math.isfinite(item) and 0.0 <= item <= 1.0 for item in numbers):
+        raise RuntimeError(f"teacher proposals {label} must be finite and within [0,1]")
+    normalized = valid_box(numbers, max_area=max_area)
+    if normalized is None:
+        raise RuntimeError(f"teacher proposals {label} violates box geometry or area boundary")
+    return normalized
+
+
+def _validate_teacher_record(photo_id: str, record: Any) -> None:
+    if not isinstance(record, dict):
+        raise RuntimeError(f"teacher proposals record invalid: {photo_id}")
+    crop_prompts = record.get("crop_prompts")
+    proposals = record.get("proposals")
+    if not isinstance(crop_prompts, list) or not isinstance(proposals, list):
+        raise RuntimeError(f"teacher proposals record lists invalid: {photo_id}")
+
+    crop_indexes: dict[tuple[float, ...], int] = {}
+    prompt_mapped_boxes: dict[tuple[int, str], list[list[float]]] = {}
+    for prompt_row in crop_prompts:
+        if not isinstance(prompt_row, dict):
+            raise RuntimeError(f"teacher crop_prompt invalid: {photo_id}")
+        crop = _strict_teacher_box(prompt_row.get("crop"), "crop", max_area=1.0)
+        if box_area(crop) >= 0.72:
+            raise RuntimeError(f"teacher proposals crop must cover less than 72%: {photo_id}")
+        crop_key = tuple(crop)
+        if crop_key not in crop_indexes:
+            if len(crop_indexes) >= TEACHER_MAX_CROPS_PER_IMAGE:
+                raise RuntimeError(f"teacher proposals exceeds unique crop limit: {photo_id}")
+            crop_indexes[crop_key] = len(crop_indexes)
+        crop_index = crop_indexes[crop_key]
+        prompt = prompt_row.get("prompt")
+        if prompt not in TEACHER_PROMPTS:
+            raise RuntimeError(f"teacher proposals prompt invalid: {photo_id}")
+        prompt_key = (crop_index, str(prompt))
+        if prompt_key in prompt_mapped_boxes:
+            raise RuntimeError(f"teacher proposals duplicate crop prompt: {photo_id}")
+        reasons = prompt_row.get("crop_reasons")
+        if (not isinstance(reasons, list) or not reasons
+                or any(not isinstance(reason, str) or not reason for reason in reasons)
+                or len(reasons) != len(set(reasons))):
+            raise RuntimeError(f"teacher proposals crop reasons invalid: {photo_id}")
+        if not isinstance(prompt_row.get("answer"), str):
+            raise RuntimeError(f"teacher proposals answer invalid: {photo_id}")
+        local_boxes = prompt_row.get("local_boxes")
+        mapped_boxes = prompt_row.get("mapped_boxes")
+        if (not isinstance(local_boxes, list) or not isinstance(mapped_boxes, list)
+                or len(local_boxes) != len(mapped_boxes)):
+            raise RuntimeError(f"teacher proposals prompt boxes invalid: {photo_id}")
+        retained: list[list[float]] = []
+        for local_value, mapped_value in zip(local_boxes, mapped_boxes):
+            local_box = _strict_teacher_box(local_value, "local box", max_area=0.35)
+            mapped_box = _strict_teacher_box(mapped_value, "mapped box", max_area=0.35)
+            if mapped_box != map_crop_box(local_box, crop):
+                raise RuntimeError(f"teacher proposals mapped box does not match crop transform: {photo_id}")
+            if any(box_iou(local_box, prior) >= 0.90 for prior in retained):
+                raise RuntimeError(f"teacher proposals local boxes are not deduplicated: {photo_id}")
+            retained.append(local_box)
+        prompt_mapped_boxes[prompt_key] = [
+            _strict_teacher_box(value, "mapped box", max_area=0.35) for value in mapped_boxes
+        ]
+
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            raise RuntimeError(f"teacher proposal invalid: {photo_id}")
+        proposal_box = _strict_teacher_box(proposal.get("box"), "proposal box", max_area=0.35)
+        proposal_prompt = proposal.get("prompt")
+        if proposal_prompt not in TEACHER_PROMPTS:
+            raise RuntimeError(f"teacher proposal prompt invalid: {photo_id}")
+        support = proposal.get("support")
+        if (not isinstance(support, list) or not support
+                or any(not isinstance(item, str) for item in support)
+                or len(support) != len(set(support))):
+            raise RuntimeError(f"teacher proposal support must be nonempty and deduplicated: {photo_id}")
+        support_prompts: set[str] = set()
+        for support_item in support:
+            match = TEACHER_SUPPORT_PATTERN.fullmatch(support_item)
+            if match is None:
+                raise RuntimeError(f"teacher proposal support format invalid: {photo_id}")
+            crop_index, prompt = int(match.group(1)), match.group(2)
+            if crop_index >= TEACHER_MAX_CROPS_PER_IMAGE:
+                raise RuntimeError(f"teacher proposal support crop index invalid: {photo_id}")
+            referenced_boxes = prompt_mapped_boxes.get((crop_index, prompt))
+            if not referenced_boxes or not any(
+                box_iou(proposal_box, referenced) >= 0.55 for referenced in referenced_boxes
+            ):
+                raise RuntimeError(f"teacher proposal support is not backed by crop_prompt: {photo_id}")
+            support_prompts.add(prompt)
+        if proposal_prompt not in support_prompts:
+            raise RuntimeError(f"teacher proposal prompt is not present in support: {photo_id}")
+
+
+def validate_teacher_proposals_receipt(
+    payload: Any, live_integrity: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise RuntimeError("teacher proposals receipt must be an object")
+    expected = {
+        "version": TEACHER_PROPOSAL_RECEIPT_VERSION,
+        "status": "completed",
+        "model_id": TEACHER_MODEL_ID,
+        "model_revision": TEACHER_REVISION,
+        "offline_only": True,
+        "teacher_scope": "local_crops_only",
+        "full_image_inference": False,
+        "teacher_max_side": TEACHER_MAX_SIDE,
+        "teacher_max_new_tokens": TEACHER_MAX_NEW_TOKENS,
+        "teacher_max_crops_per_image": TEACHER_MAX_CROPS_PER_IMAGE,
+        "teacher_is_ground_truth": False,
+        "cloud_calls": 0,
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise RuntimeError(f"teacher proposals receipt boundary mismatch: {field}")
+    integrity = payload.get("model_integrity")
+    if not isinstance(integrity, dict) or not isinstance(live_integrity, dict):
+        raise RuntimeError("teacher proposals model_integrity missing")
+    integrity_expected = {
+        "version": TEACHER_MODEL_INTEGRITY_VERSION,
+        "model_id": TEACHER_MODEL_ID,
+        "revision": TEACHER_REVISION,
+        "offline_only": True,
+        "crop_max_side": TEACHER_MAX_SIDE,
+        "exact_file_set": True,
+        "full_file_sha256_verified": True,
+    }
+    for field, value in integrity_expected.items():
+        if integrity.get(field) != value:
+            raise RuntimeError(f"teacher proposals model_integrity mismatch: {field}")
+    receipt_version = integrity.get("receipt_version")
+    manifest_version = integrity.get("manifest_version")
+    if receipt_version == TEACHER_MODEL_RECEIPT_V1:
+        if (manifest_version != TEACHER_LEGACY_MANIFEST_VERSION
+                or integrity.get("file_count") != TEACHER_LEGACY_FILE_COUNT
+                or integrity.get("total_bytes") != TEACHER_LEGACY_TOTAL_BYTES):
+            raise RuntimeError("teacher proposals legacy integrity boundary mismatch")
+    elif receipt_version == TEACHER_MODEL_RECEIPT_V2:
+        if manifest_version != TEACHER_MODEL_RECEIPT_V2:
+            raise RuntimeError("teacher proposals v2 integrity version pairing invalid")
+    else:
+        raise RuntimeError("teacher proposals model_integrity receipt version invalid")
+    file_count = integrity.get("file_count")
+    if (not isinstance(file_count, int) or file_count <= 0
+            or integrity.get("files_verified") != file_count
+            or not isinstance(integrity.get("total_bytes"), int)
+            or integrity["total_bytes"] <= 0
+            or not isinstance(integrity.get("receipt"), str)
+            or not integrity["receipt"]
+            or not isinstance(integrity.get("receipt_sha256"), str)
+            or not isinstance(integrity.get("manifest"), str)
+            or not isinstance(integrity.get("manifest_sha256"), str)):
+        raise RuntimeError("teacher proposals model_integrity incomplete")
+    receipt_path = Path(live_integrity.get("receipt", ""))
+    manifest_path = Path(live_integrity.get("manifest", ""))
+    if (not receipt_path.is_file()
+            or sha256_file(receipt_path) != live_integrity.get("receipt_sha256")):
+        raise RuntimeError("teacher proposals live receipt SHA mismatch")
+    if (not manifest_path.is_file()
+            or sha256_file(manifest_path) != live_integrity.get("manifest_sha256")):
+        raise RuntimeError("teacher proposals live manifest SHA mismatch")
+    if integrity != live_integrity:
+        raise RuntimeError("teacher proposals model_integrity is not identical to live verification")
+    records = payload.get("records")
+    if not isinstance(records, dict):
+        raise RuntimeError("teacher proposals records must be an object")
+    for photo_id, record in records.items():
+        if not isinstance(photo_id, str) or not photo_id:
+            raise RuntimeError(f"teacher proposals record invalid: {photo_id}")
+        _validate_teacher_record(photo_id, record)
+    return records, integrity
+
+
+def load_teacher_proposals(
+    proposal_path: Path, model_path: Path, revision: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    live_integrity = verify_teacher_model(model_path, revision)
+    payload = json.loads(proposal_path.read_text(encoding="utf-8"))
+    return validate_teacher_proposals_receipt(payload, live_integrity)
+
+
 def run_teacher(
-    records: list[dict[str, Any]], model_path: str, revision: str | None, receipt_path: Path
+    records: list[dict[str, Any]], model_path: str, revision: str,
+    model_integrity: dict[str, Any], receipt_path: Path,
 ) -> dict[str, Any]:
     teacher = LocateAnythingTeacher(model_path, revision)
     output: dict[str, Any] = {}
@@ -557,7 +952,9 @@ def run_teacher(
             image = ImageOps.exif_transpose(opened).convert("RGB")
         prompt_results = []
         grouped: list[dict[str, Any]] = []
-        for crop_index, crop_spec in enumerate(teacher_crop_regions(record, image)):
+        for crop_index, crop_spec in enumerate(
+            teacher_crop_regions(record, image, limit=TEACHER_MAX_CROPS_PER_IMAGE)
+        ):
             x0, y0, x1, y1 = crop_spec["box"]
             crop = image.crop((round(x0 * image.width), round(y0 * image.height), round(x1 * image.width), round(y1 * image.height)))
             if max(crop.size) > TEACHER_MAX_SIDE:
@@ -588,12 +985,19 @@ def run_teacher(
                 calls += 1
         output[str(record["photo_id"])] = {"crop_prompts": prompt_results, "proposals": grouped}
         write_json(receipt_path, {
-            "version": "locateanything-tray-teacher-v1", "created_at": utc_now(),
-            "model_id": TEACHER_MODEL_ID, "model_revision": TEACHER_REVISION,
+            "version": TEACHER_PROPOSAL_RECEIPT_VERSION,
+            "status": "completed" if len(output) == len(records) else "in_progress",
+            "created_at": utc_now(),
+            "model_id": TEACHER_MODEL_ID, "model_revision": revision,
             "license_scope": TEACHER_LICENSE, "teacher_is_ground_truth": False,
+            "offline_only": True,
             "teacher_scope": "local_crops_only", "full_image_inference": False,
-            "teacher_max_side": TEACHER_MAX_SIDE, "cloud_calls": 0,
-            "local_teacher_calls": calls, "records": output,
+            "teacher_max_side": TEACHER_MAX_SIDE,
+            "teacher_max_new_tokens": TEACHER_MAX_NEW_TOKENS,
+            "teacher_max_crops_per_image": TEACHER_MAX_CROPS_PER_IMAGE,
+            "cloud_calls": 0,
+            "local_teacher_calls": calls, "model_integrity": model_integrity,
+            "records": output,
         })
     return output
 
@@ -777,13 +1181,19 @@ def main() -> None:
     teacher_receipt = args.output_root.parent / "receipts" / f"tray-teacher-{stamp}.json"
     teacher_used = False
     teacher_skip_reason: str | None = None
+    teacher_integrity: dict[str, Any] | None = None
     if args.skip_teacher:
         teacher_results = {}
         teacher_skip_reason = "optional teacher explicitly skipped"
     elif args.teacher_proposals:
-        teacher_payload = json.loads(args.teacher_proposals.read_text(encoding="utf-8"))
-        teacher_results = teacher_payload.get("records", teacher_payload)
-        teacher_used = True
+        try:
+            teacher_results, teacher_integrity = load_teacher_proposals(
+                args.teacher_proposals, Path(args.teacher_model), args.teacher_revision,
+            )
+            teacher_used = True
+        except Exception as exc:
+            teacher_results = {}
+            teacher_skip_reason = f"teacher proposals rejected: {type(exc).__name__}: {exc}"
     else:
         teacher_path = Path(args.teacher_model)
         if not teacher_path.is_dir():
@@ -791,15 +1201,19 @@ def main() -> None:
             teacher_skip_reason = f"offline teacher path unavailable: {teacher_path}"
         else:
             try:
-                teacher_results = run_teacher(shortlist, str(teacher_path), None, teacher_receipt)
+                teacher_integrity = verify_teacher_model(teacher_path, args.teacher_revision)
+                teacher_results = run_teacher(
+                    shortlist, str(teacher_path), args.teacher_revision,
+                    teacher_integrity, teacher_receipt,
+                )
                 teacher_used = True
             except Exception as exc:  # teacher is explicitly non-blocking
                 teacher_results = {}
                 teacher_skip_reason = f"optional teacher failed: {type(exc).__name__}: {exc}"
                 write_json(teacher_receipt, {
-                    "version": "locateanything-tray-teacher-v1", "status": "skipped",
+                    "version": TEACHER_PROPOSAL_RECEIPT_VERSION, "status": "skipped",
                     "created_at": utc_now(), "model_path": str(teacher_path),
-                    "model_revision": TEACHER_REVISION, "offline_only": True,
+                    "model_revision": args.teacher_revision, "offline_only": True,
                     "teacher_is_ground_truth": False, "cloud_calls": 0,
                     "reason": teacher_skip_reason,
                 })
@@ -886,10 +1300,13 @@ def main() -> None:
         "purpose": "tray detector active learning with human-complete box review",
         "teacher": {
             "enabled": teacher_used, "model_id": TEACHER_MODEL_ID,
-            "revision": TEACHER_REVISION, "license_scope": TEACHER_LICENSE,
+            "revision": args.teacher_revision, "license_scope": TEACHER_LICENSE,
             "is_ground_truth": False,
             "offline_only": True, "scope": "local_crops_only",
             "full_image_inference": False, "crop_max_side": TEACHER_MAX_SIDE,
+            "max_new_tokens": TEACHER_MAX_NEW_TOKENS,
+            "max_crops_per_image": TEACHER_MAX_CROPS_PER_IMAGE,
+            "model_path": str(args.teacher_model), "model_integrity": teacher_integrity,
             "skipped_reason": teacher_skip_reason,
         },
         "detector_model": str(args.tray_model), "detector_sha256": sha256_file(args.tray_model),

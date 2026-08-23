@@ -12,6 +12,45 @@ Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆�
 `B:\AIModels\LocateAnything-3B`、固定 revision
 `c32291ca5e996f5a7a485845b4f57a233936bba0` 加载，并且只处理不超过 640 长边的局部 crop；
 禁止 4K/2400 全图推理、运行时联网下载、将 proposal 当真值或因 teacher 失败阻塞 MARK。
+每张图最多提交 3 个局部 crop，每次生成最多 256 tokens。运行 teacher 前必须只读校验固定目录中的
+`VISIONLAB_MODEL_RECEIPT.json`、revision，以及 exact 文件集合中每个配置、tokenizer、processor、
+remote-code、权重索引和权重分片的 bytes/SHA-256；缺失或任一文件漂移时跳过 teacher 并写失败回执，
+不得继续加载未封印模型。现有 B 盘 v1 receipt 通过仓库 tracked legacy manifest 做同等的 38 文件全量校验，
+不得为升级格式而改写或重新 seal B 盘 snapshot。
+外部 `--teacher-proposals` receipt 不能只靠历史自述复用：运行时会先对 `--teacher-model` 做一次 live
+全量校验，并要求 receipt 中的 model integrity（含模型 receipt SHA、tracked/v2 manifest SHA、文件数和
+总字节数）与 live 结果逐字段完全一致。每条 proposal 的 crop、prompt、local/mapped box 和 support
+引用也必须闭环匹配；不合格 receipt 仅记录 skip reason，不会被标记为 teacher 已使用。
+
+现有 `B:\AIModels\LocateAnything-3B` 已有固定 receipt，日常使用只运行 `verify`，不得重新 seal：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py verify `
+  --model-path B:\AIModels\LocateAnything-3B `
+  --revision c32291ca5e996f5a7a485845b4f57a233936bba0
+```
+
+`seal` 只用于操作员明确批准并完整复制好的全新固定 snapshot，必须显式给出非 B 默认目录和确认口令；
+已有 receipt 永久拒绝覆盖。它会记录 exact 文件集合的逐文件 bytes/SHA-256，不能作为常规校验命令：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py seal `
+  --model-path <new-complete-snapshot-directory> `
+  --confirm-seal SEAL-NEW-SNAPSHOT
+```
+
+需要验证推理链时也只能给出明确像素 crop，crop 面积必须严格小于原图的 72%，并把结果写入新的 D 盘
+receipt；工具没有全图 smoke 入口。模型完整性校验、模型加载和推理都在独立 worker 内受 30 秒硬超时
+约束，超时会 terminate/kill worker 且不会生成成功 receipt：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\locateanything_teacher_admin.py smoke `
+  --model-path B:\AIModels\LocateAnything-3B `
+  --image <local-readonly-image> `
+  --crop <x0,y0,x1,y1> `
+  --prompt all `
+  --receipt D:\CretasVisionLab\receipts\locateanything-crop-smoke-<timestamp>.json
+```
 
 连续候选若都卡在蓝筐顶部孤立托盘，可对未使用且非保护集的本地副本启用
 `mine_tray_queue.py --prefer-blue-basket`。它只把确定性的蓝色区域当场景排序特征，不生成
