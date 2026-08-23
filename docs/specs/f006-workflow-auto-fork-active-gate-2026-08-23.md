@@ -11,6 +11,15 @@
 - 生产计划和生产批次通过 `selectedWorkflowId` 固定创建时的 Workflow 权威。该门禁不修改计划快照、批次或任何生产数据。
 - 若当前可编辑草稿已被任一计划或批次快照引用，保存会先将旧 Workflow 行冻结为 `SNAPSHOT`，再以更高版本号创建新的 `DRAFT`；未被引用的草稿仍原位保存。旧 Workflow、Revision、计划和批次 identity 均保持不变。
 
+## 迁移与并发验证门禁
+
+本变更包含 Flyway V20261030_21：生产计划/批次进入运行状态时，触发器必须与停用服务使用同一
+工厂、产品和字面 \x1f advisory transaction key。发布前必须扫描版本唯一性，并在一次真实 PostgreSQL
+验证中执行 V20261028_53、V20261028_65、V20261028_83 与 V20261030_21 的组合；分别证明“生产开始阻塞停用”
+和“停用先持锁阻塞生产开始”两种事务顺序均无 deadlock。仅执行 Mockito、复制 advisory SQL 或
+flyway=false + create-drop 不能替代该门禁；auto-fork 保存失败还必须证明事务回滚，不留下冻结旧草稿、
+新草稿或 Revision 半成品。
+
 ## 活动生产引用门禁
 
 停用前按工厂和活动 Workflow ID 统计：
@@ -31,4 +40,4 @@
 
 ## 非目标
 
-本变更不涉及 WorkProcess 治理、BOM 替代/投入派生、计划快照改写、Flyway、Entity 结构、生产数据写入或部署。
+本变更不涉及 WorkProcess 治理、BOM 替代/投入派生、计划快照业务规则改写、生产数据写入或部署。

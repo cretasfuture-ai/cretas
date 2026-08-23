@@ -37,12 +37,14 @@ BEGIN
             FROM public.production_plans plan
            WHERE plan.factory_id = NEW.factory_id
              AND plan.selected_workflow_id = NEW.active_workflow_id
+             AND plan.deleted_at IS NULL
              AND plan.status IN ('IN_PROGRESS', 'PRODUCING', 'PAUSED')
           UNION ALL
           SELECT 1
             FROM public.production_batches batch
            WHERE batch.factory_id = NEW.factory_id
              AND batch.selected_workflow_id = NEW.active_workflow_id
+             AND batch.deleted_at IS NULL
              AND batch.status IN ('IN_PROGRESS', 'PRODUCING', 'PAUSED')
         ) references_in_use;
 
@@ -66,6 +68,7 @@ BEGIN
     FROM public.product_process_workflows workflow
    WHERE workflow.id = NEW.selected_workflow_id
      AND workflow.factory_id = NEW.factory_id
+     AND workflow.definition_version = NEW.selected_workflow_version
    LIMIT 1;
   IF lock_product_type_id IS NULL THEN
     RETURN NEW;
@@ -87,6 +90,13 @@ BEGIN
   RETURN NEW;
 END;
 $function$;
+
+-- Both the immutable-history count (factory/workflow prefix) and the active
+-- deactivation recheck (full key including status) use these non-partial indexes.
+CREATE INDEX IF NOT EXISTS idx_production_plans_workflow_reference
+  ON public.production_plans (factory_id, selected_workflow_id, status);
+CREATE INDEX IF NOT EXISTS idx_production_batches_workflow_reference
+  ON public.production_batches (factory_id, selected_workflow_id, status);
 
 DROP TRIGGER IF EXISTS trg_z_lock_workflow_production_plan_reference
   ON public.production_plans;
