@@ -32,4 +32,12 @@ describe('legacy shipment write freeze contract', () => {
 
     expect(source).toContain('this.warehousePath(factoryId) + `/${deliveryId}/confirm`');
   });
+
+  it('reads warehouse delivery history through the fixed read-only contract', () => {
+    const source = readSource('services/api/warehouseDeliveryApiClient.ts');
+
+    expect(source).toContain('getDeliveryHistory');
+    expect(source).toContain("this.warehousePath(factoryId) + '/history'");
+    expect(source).toContain('params: { page: 1, size: 50 }');
+  });
 });

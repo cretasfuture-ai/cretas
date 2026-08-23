@@ -24,8 +24,14 @@ export type SalesDeliveryStatus =
   | 'DRAFT'
   | 'PENDING_WAREHOUSE_CONFIRM'
   | 'PICKED'
+  | 'PENDING_SPLIT'
+  | 'PARTIALLY_SCHEDULED'
+  | 'FULLY_SCHEDULED'
+  | 'PARTIALLY_SHIPPED'
   | 'SHIPPED'
   | 'DELIVERED'
+  | 'SIGNED'
+  | 'CANCELLED'
   | 'RETURNED';
 
 /** 发货明细行 (sales_delivery_items). id 是 Long, 序列化为 number. */
@@ -108,6 +114,18 @@ class WarehouseDeliveryApiClient {
   ): Promise<{ success: boolean; data: PageResponse<WarehouseDeliveryRecord>; message?: string }> {
     return apiClient.get(this.warehousePath(factoryId) + '/pending', {
       params: { page: params?.page ?? 1, size: params?.size ?? 20 },
+    });
+  }
+
+  /**
+   * 已确认/历史发货单 (只读)。契约固定为 1-based page=1、size=50，
+   * 由仓库发货页与待确认队列同屏展示；不要改用旧 /shipments 手工登记接口。
+   */
+  async getDeliveryHistory(
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: PageResponse<WarehouseDeliveryRecord>; message?: string }> {
+    return apiClient.get(this.warehousePath(factoryId) + '/history', {
+      params: { page: 1, size: 50 },
     });
   }
 

@@ -57,7 +57,55 @@ export function sortReceivingOrders(orders: PurchaseOrder[]): PurchaseOrder[] {
   });
 }
 
-export type DeliveryStatusFilter = 'all' | 'DRAFT' | 'PENDING_WAREHOUSE_CONFIRM' | 'PICKED';
+export type DeliveryStatusFilter =
+  | 'all'
+  | 'pending'
+  | 'completed'
+  | 'DRAFT'
+  | 'PENDING_WAREHOUSE_CONFIRM'
+  | 'PICKED';
+
+/** 后端已确认/历史状态；这些卡片只能回看，不能再次进入确认写流程。 */
+export const COMPLETED_DELIVERY_STATUSES = [
+  'SHIPPED',
+  'DELIVERED',
+  'SIGNED',
+  'CANCELLED',
+  'RETURNED',
+  'PARTIALLY_SHIPPED',
+] as const;
+
+export const CONFIRMABLE_DELIVERY_STATUSES = [
+  'DRAFT',
+  'PENDING_WAREHOUSE_CONFIRM',
+  'PICKED',
+] as const;
+
+export function isCompletedDeliveryStatus(status: WarehouseDeliveryRecord['status']): boolean {
+  return COMPLETED_DELIVERY_STATUSES.includes(String(status).toUpperCase() as (typeof COMPLETED_DELIVERY_STATUSES)[number]);
+}
+
+export function isConfirmableDeliveryStatus(status: WarehouseDeliveryRecord['status']): boolean {
+  return CONFIRMABLE_DELIVERY_STATUSES.includes(String(status).toUpperCase() as (typeof CONFIRMABLE_DELIVERY_STATUSES)[number]);
+}
+
+export function deliveryRecordKey(row: WarehouseDeliveryRecord): string {
+  return String(row.id || row.deliveryNumber);
+}
+
+/** pending 优先，避免同一发货单同时出现在两个来源时重复展示。 */
+export function mergeDeliveryRecords(
+  pending: WarehouseDeliveryRecord[],
+  history: WarehouseDeliveryRecord[],
+): WarehouseDeliveryRecord[] {
+  const seen = new Set<string>();
+  return [...pending, ...history].filter((row) => {
+    const key = deliveryRecordKey(row);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 export function filterPendingDeliveries(
   deliveries: WarehouseDeliveryRecord[],
@@ -66,7 +114,10 @@ export function filterPendingDeliveries(
 ): WarehouseDeliveryRecord[] {
   const normalized = query.trim().toLowerCase();
   return deliveries.filter((row) => {
-    if (filter !== 'all' && String(row.status).toUpperCase() !== filter) return false;
+    const status = String(row.status).toUpperCase();
+    if (filter === 'pending' && !isConfirmableDeliveryStatus(status)) return false;
+    if (filter === 'completed' && !isCompletedDeliveryStatus(status)) return false;
+    if (!['all', 'pending', 'completed'].includes(filter) && status !== filter) return false;
     if (!normalized) return true;
     const haystack = [
       row.deliveryNumber,
