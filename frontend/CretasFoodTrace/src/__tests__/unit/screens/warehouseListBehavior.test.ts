@@ -57,7 +57,7 @@ describe('仓库列表行为口径', () => {
     expect(filterPendingDeliveries(deliveries, 'all', '甲客户').map((row) => row.id)).toEqual(['a']);
   });
 
-  it('发货历史终态进入已完成筛选且与待确认重复时只展示一次', () => {
+  it('发货历史覆盖同 ID 的过期待确认状态且与待确认重复时只展示一次', () => {
     const pending = [{ id: 'same', status: 'PICKED' }, { id: 'p', status: 'DRAFT' }] as never[];
     const history = [
       { id: 'same', status: 'SHIPPED' },
@@ -67,7 +67,8 @@ describe('仓库列表行为口径', () => {
     const merged = mergeDeliveryRecords(pending, history);
 
     expect(merged.map((row) => row.id)).toEqual(['same', 'p', 'h', 'c']);
-    expect(filterPendingDeliveries(merged, 'completed').map((row) => row.id)).toEqual(['h', 'c']);
+    expect(merged.find((row) => row.id === 'same')?.status).toBe('SHIPPED');
+    expect(filterPendingDeliveries(merged, 'completed').map((row) => row.id)).toEqual(['same', 'h', 'c']);
     expect(isCompletedDeliveryStatus('SIGNED')).toBe(true);
     expect(isCompletedDeliveryStatus('PICKED')).toBe(false);
     expect(isConfirmableDeliveryStatus('PICKED')).toBe(true);

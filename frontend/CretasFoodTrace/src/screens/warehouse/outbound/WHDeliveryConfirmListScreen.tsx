@@ -8,7 +8,7 @@
  * 客户原话 (六扇门 F006 仓管场景): "你告诉他这个东西你要收多少就行了" → 防呆: 计划数量作上限, 上下文带全.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   ScrollView,
@@ -113,38 +113,81 @@ export function WHDeliveryConfirmListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [pendingDeliveries, setPendingDeliveries] = useState<WarehouseDeliveryRecord[]>([]);
   const [historyDeliveries, setHistoryDeliveries] = useState<WarehouseDeliveryRecord[]>([]);
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [, setPendingPage] = useState(0);
+  const [, setHistoryPage] = useState(0);
+  const [pendingHasMore, setPendingHasMore] = useState(true);
+  const [historyHasMore, setHistoryHasMore] = useState(true);
+  const pendingPageRef = useRef(0);
+  const historyPageRef = useRef(0);
+  const pendingHasMoreRef = useRef(true);
+  const historyHasMoreRef = useRef(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<DeliveryStatusFilter>('all');
   const [query, setQuery] = useState('');
   const [loadError, setLoadError] = useState<ReturnType<typeof describeDeliveryListFailure> | null>(null);
 
-  const loadData = useCallback(async () => {
+  const PAGE_SIZE = 20;
+
+  const loadData = useCallback(async (append = false) => {
+    const nextPendingPage = append ? pendingPageRef.current + 1 : 1;
+    const nextHistoryPage = append ? historyPageRef.current + 1 : 1;
+    const shouldLoadPending = !append || pendingHasMoreRef.current;
+    const shouldLoadHistory = !append || historyHasMoreRef.current;
+    if (append && !shouldLoadPending && !shouldLoadHistory) return;
+
+    if (append) setLoadingMore(true);
     const [pendingResult, historyResult] = await Promise.allSettled([
-      // 两个仓库接口都是 1-based；history 客户端固定传 page=1,size=50。
-      warehouseDeliveryApiClient.getPendingDeliveries({ page: 1, size: 50 }),
-      warehouseDeliveryApiClient.getDeliveryHistory(),
+      shouldLoadPending
+        ? warehouseDeliveryApiClient.getPendingDeliveries({ page: nextPendingPage, size: PAGE_SIZE })
+        : Promise.resolve(null),
+      shouldLoadHistory
+        ? warehouseDeliveryApiClient.getDeliveryHistory({ page: nextHistoryPage, size: PAGE_SIZE })
+        : Promise.resolve(null),
     ]);
 
     const failures: ('pending' | 'history')[] = [];
-    if (pendingResult.status === 'fulfilled' && pendingResult.value.success && pendingResult.value.data) {
+    if (pendingResult.status === 'fulfilled' && pendingResult.value?.success && pendingResult.value.data) {
       const page = pendingResult.value.data;
-      setPendingDeliveries(page.content ?? []);
+      setPendingDeliveries((previous) => append
+        ? [...previous, ...(page.content ?? []).filter((row) => !previous.some((item) => item.id === row.id))]
+        : (page.content ?? []));
+      const hasMorePage = nextPendingPage < (page.totalPages ?? nextPendingPage);
+      pendingPageRef.current = nextPendingPage;
+      pendingHasMoreRef.current = hasMorePage;
+      setPendingPage(nextPendingPage);
+      setPendingHasMore(hasMorePage);
+      setPendingTotal(page.totalElements ?? page.content?.length ?? 0);
     } else {
-      failures.push('pending');
-      if (pendingResult.status === 'fulfilled') {
-        handleError(new Error(pendingResult.value.message || '服务器没有返回待确认发货单，请重试。'), { title: '加载待确认发货单失败' });
-      } else {
-        handleError(pendingResult.reason, { title: '加载待确认发货单失败' });
+      if (shouldLoadPending) {
+        failures.push('pending');
+        if (pendingResult.status === 'fulfilled') {
+          handleError(new Error(pendingResult.value?.message || '服务器没有返回待确认发货单，请重试。'), { title: '加载待确认发货单失败' });
+        } else {
+          handleError(pendingResult.reason, { title: '加载待确认发货单失败' });
+        }
       }
     }
-    if (historyResult.status === 'fulfilled' && historyResult.value.success && historyResult.value.data) {
+    if (historyResult.status === 'fulfilled' && historyResult.value?.success && historyResult.value.data) {
       const page = historyResult.value.data;
-      setHistoryDeliveries(page.content ?? []);
+      setHistoryDeliveries((previous) => append
+        ? [...previous, ...(page.content ?? []).filter((row) => !previous.some((item) => item.id === row.id))]
+        : (page.content ?? []));
+      const hasMorePage = nextHistoryPage < (page.totalPages ?? nextHistoryPage);
+      historyPageRef.current = nextHistoryPage;
+      historyHasMoreRef.current = hasMorePage;
+      setHistoryPage(nextHistoryPage);
+      setHistoryHasMore(hasMorePage);
+      setHistoryTotal(page.totalElements ?? page.content?.length ?? 0);
     } else {
-      failures.push('history');
-      if (historyResult.status === 'fulfilled') {
-        handleError(new Error(historyResult.value.message || '服务器没有返回发货历史，请重试。'), { title: '加载发货历史失败' });
-      } else {
-        handleError(historyResult.reason, { title: '加载发货历史失败' });
+      if (shouldLoadHistory) {
+        failures.push('history');
+        if (historyResult.status === 'fulfilled') {
+          handleError(new Error(historyResult.value?.message || '服务器没有返回发货历史，请重试。'), { title: '加载发货历史失败' });
+        } else {
+          handleError(historyResult.reason, { title: '加载发货历史失败' });
+        }
       }
     }
 
@@ -155,11 +198,12 @@ export function WHDeliveryConfirmListScreen() {
       const firstFailure = failures[0] === 'pending' ? pendingResult : historyResult;
       const error = firstFailure.status === 'rejected'
         ? firstFailure.reason
-        : new Error(firstFailure.value.message || '部分发货数据加载失败，请重试。');
+        : new Error(firstFailure.value?.message || '部分发货数据加载失败，请重试。');
       setLoadError(describeDeliveryListFailure(error, source));
     }
     setLoading(false);
     setRefreshing(false);
+    if (append) setLoadingMore(false);
   }, []);
 
   // 从确认页返回后自动刷新 (已确认的发货单应从待确认队列消失)
@@ -171,8 +215,21 @@ export function WHDeliveryConfirmListScreen() {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    void loadData();
+    pendingPageRef.current = 0;
+    historyPageRef.current = 0;
+    pendingHasMoreRef.current = true;
+    historyHasMoreRef.current = true;
+    setPendingPage(0);
+    setHistoryPage(0);
+    setPendingHasMore(true);
+    setHistoryHasMore(true);
+    void loadData(false);
   }, [loadData]);
+
+  const onLoadMore = useCallback(() => {
+    if (loadingMore || (!pendingHasMore && !historyHasMore)) return;
+    void loadData(true);
+  }, [historyHasMore, loadData, loadingMore, pendingHasMore]);
 
   const openConfirm = (row: WarehouseDeliveryRecord) => {
     if (!isConfirmableDeliveryStatus(row.status)) return;
@@ -206,7 +263,7 @@ export function WHDeliveryConfirmListScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>发货确认</Text>
-        <Text style={styles.headerSubtitle}>待仓库确认 {total} 单</Text>
+          <Text style={styles.headerSubtitle}>待仓库确认 {pendingTotal} 单 · 历史 {historyTotal} 单</Text>
       </View>
 
       <ScrollView
@@ -358,8 +415,21 @@ export function WHDeliveryConfirmListScreen() {
                 </TouchableRipple>
               );
             })
-          )}
+            )}
             </View>
+            {(pendingHasMore || historyHasMore) && (
+              <Button
+                mode="outlined"
+                compact
+                loading={loadingMore}
+                disabled={loadingMore}
+                onPress={onLoadMore}
+                testID="wh-outbound-load-more"
+                style={styles.loadMoreButton}
+              >
+                加载更多
+              </Button>
+            )}
           </>
         )}
 
@@ -395,6 +465,7 @@ const styles = StyleSheet.create({
   filterContainer: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 8 },
   statusFilterButton: { minHeight: 44, marginRight: 0, borderRadius: 18 },
   listContainer: { paddingHorizontal: 16, paddingTop: 12 },
+  loadMoreButton: { marginHorizontal: 16, marginTop: 4, marginBottom: 12 },
   emptyCard: {
     backgroundColor: '#fff',
     borderRadius: 12,

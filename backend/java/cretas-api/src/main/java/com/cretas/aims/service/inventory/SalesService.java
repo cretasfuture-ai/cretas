@@ -167,6 +167,9 @@ public interface SalesService {
      */
     PageResponse<SalesDeliveryRecord> getPendingWarehouseDeliveries(String factoryId, int page, int size);
 
+    /** Read-only warehouse history, always filtered by factory and terminal status. */
+    PageResponse<SalesDeliveryRecord> getWarehouseDeliveryHistory(String factoryId, int page, int size);
+
     /**
      * Issue #740 warehouse-side confirm endpoint. Takes 实际发货数量 (actual quantities may differ
      * from sales-planned), updates items, then 扣库存 + 转 SHIPPED + auto AR. Mirrors

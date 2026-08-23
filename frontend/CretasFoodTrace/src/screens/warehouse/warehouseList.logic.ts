@@ -93,18 +93,31 @@ export function deliveryRecordKey(row: WarehouseDeliveryRecord): string {
   return String(row.id || row.deliveryNumber);
 }
 
-/** pending 优先，避免同一发货单同时出现在两个来源时重复展示。 */
+/**
+ * Merge the two independently paginated sources. History is authoritative when
+ * the same id is present in both responses: a just-confirmed row must not remain
+ * actionable merely because the pending page is stale.
+ */
 export function mergeDeliveryRecords(
   pending: WarehouseDeliveryRecord[],
   history: WarehouseDeliveryRecord[],
 ): WarehouseDeliveryRecord[] {
+  const historyByKey = new Map(history.map((row) => [deliveryRecordKey(row), row]));
   const seen = new Set<string>();
-  return [...pending, ...history].filter((row) => {
+  const merged: WarehouseDeliveryRecord[] = [];
+  for (const row of pending) {
     const key = deliveryRecordKey(row);
-    if (seen.has(key)) return false;
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    merged.push(historyByKey.get(key) ?? row);
+  }
+  for (const row of history) {
+    const key = deliveryRecordKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
 }
 
 export function filterPendingDeliveries(

@@ -118,14 +118,15 @@ class WarehouseDeliveryApiClient {
   }
 
   /**
-   * 已确认/历史发货单 (只读)。契约固定为 1-based page=1、size=50，
+   * 已确认/历史发货单 (只读)。与待确认队列一样支持 1-based 分页，
    * 由仓库发货页与待确认队列同屏展示；不要改用旧 /shipments 手工登记接口。
    */
   async getDeliveryHistory(
+    params?: { page?: number; size?: number },
     factoryId?: string,
   ): Promise<{ success: boolean; data: PageResponse<WarehouseDeliveryRecord>; message?: string }> {
     return apiClient.get(this.warehousePath(factoryId) + '/history', {
-      params: { page: 1, size: 50 },
+      params: { page: params?.page ?? 1, size: params?.size ?? 20 },
     });
   }
 

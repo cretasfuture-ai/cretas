@@ -16,7 +16,7 @@
  * 防呆 Rule 2: 卡片标题显示 供应商名 + 订单号 + 期望交货日 (上下文)
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -147,8 +147,15 @@ export default function WHPurchaseReceiveListScreen() {
   const [arrivalTasks, setArrivalTasks] = useState<CustomerMaterialArrivalTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  const [statusHasMore, setStatusHasMore] = useState<Partial<Record<PurchaseOrder['status'], boolean>>>({
+    FINANCE_APPROVED: true,
+    PARTIAL_RECEIVED: true,
+  });
+  const statusPagesRef = useRef<Partial<Record<PurchaseOrder['status'], number>>>({
+    FINANCE_APPROVED: 0,
+    PARTIAL_RECEIVED: 0,
+  });
+  const hasMore = RECEIVABLE_STATUSES.some((status) => statusHasMore[status]);
   const [loadingMore, setLoadingMore] = useState(false);
   // 区分"请求失败"(权限/网络/服务器) vs "请求成功但确实没有待收货单" — 前者绝不能静默当空态显示.
   const [loadError, setLoadError] = useState<LoadFailure | null>(null);
@@ -162,11 +169,15 @@ export default function WHPurchaseReceiveListScreen() {
   const fetchOrders = useCallback(
     async (pageNum: number, append: boolean) => {
       try {
+        const requests = RECEIVABLE_STATUSES.map((status) => ({
+          status,
+          page: append ? (statusPagesRef.current[status] ?? 0) + 1 : pageNum,
+        }));
         const results = await Promise.allSettled(
-          RECEIVABLE_STATUSES.map((status) =>
+          requests.map(({ status, page }) =>
             purchaseApiClient.getOrdersByStatus(
               status,
-              { page: pageNum, size: PAGE_SIZE },
+              { page, size: PAGE_SIZE },
               factoryId,
             ),
           ),
@@ -193,7 +204,6 @@ export default function WHPurchaseReceiveListScreen() {
               customMessage: info.hint ? `${info.message}\n${info.hint}` : info.message,
             });
           }
-          setHasMore(false);
           return;
         }
 
@@ -211,34 +221,40 @@ export default function WHPurchaseReceiveListScreen() {
         }
 
         const merged: PurchaseOrder[] = [];
-        results.forEach((r) => {
+        results.forEach((r, index) => {
           if (r.status === 'fulfilled' && r.value?.data?.content) {
+            const request = requests[index];
+            if (!request) return;
             merged.push(...r.value.data.content);
+            const status = request.status;
+            const requestedPage = request.page;
+            statusPagesRef.current[status] = requestedPage;
+            setStatusHasMore((previous) => ({
+              ...previous,
+              [status]: requestedPage < (r.value.data.totalPages ?? requestedPage),
+            }));
           }
         });
 
         const sortedPage = sortReceivingOrders(merged);
 
-        if (append && !firstRejected) {
+        if (append) {
           setOrders((prev) => {
             // 去重 (同一 page 不同 status 可能有重叠)
             const existing = new Set(prev.map((o) => o.id));
             return sortReceivingOrders([...prev, ...sortedPage.filter((o) => !existing.has(o.id))]);
           });
         } else if (firstRejected) {
-          setOrders((prev) => (prev.length > 0 ? prev : sortedPage));
+          setOrders((prev) => {
+            // 部分来源失败时保留旧列表，同时补入本次成功来源，避免刷新后丢任务。
+            const existing = new Set(prev.map((o) => o.id));
+            return prev.length > 0
+              ? sortReceivingOrders([...prev, ...sortedPage.filter((o) => !existing.has(o.id))])
+              : sortedPage;
+          });
         } else {
           setOrders(sortedPage);
         }
-
-        // 若任意 status 还有下一页就继续
-        const anyHasMore = results.some(
-          (r) =>
-            r.status === 'fulfilled' &&
-            r.value?.data?.totalPages != null &&
-            pageNum < r.value.data.totalPages,
-        );
-        setHasMore(anyHasMore);
       } catch (err) {
         handleError(err, { title: '加载采购单失败' });
       }
@@ -264,7 +280,8 @@ export default function WHPurchaseReceiveListScreen() {
       let active = true;
       void (async () => {
         setLoading(true);
-        setPage(1);
+        statusPagesRef.current = { FINANCE_APPROVED: 0, PARTIAL_RECEIVED: 0 };
+        setStatusHasMore({ FINANCE_APPROVED: true, PARTIAL_RECEIVED: true });
         await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
         if (active) setLoading(false);
       })();
@@ -276,19 +293,18 @@ export default function WHPurchaseReceiveListScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setPage(1);
+    statusPagesRef.current = { FINANCE_APPROVED: 0, PARTIAL_RECEIVED: 0 };
+    setStatusHasMore({ FINANCE_APPROVED: true, PARTIAL_RECEIVED: true });
     await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
     setRefreshing(false);
   }, [fetchArrivalTasks, fetchOrders]);
 
   const onLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
-    const nextPage = page + 1;
     setLoadingMore(true);
-    await fetchOrders(nextPage, true);
-    setPage(nextPage);
+    await fetchOrders(1, true);
     setLoadingMore(false);
-  }, [loadingMore, hasMore, page, fetchOrders]);
+  }, [loadingMore, hasMore, fetchOrders]);
 
   // ============================================================
   // 点击选单 → 跳到收货页

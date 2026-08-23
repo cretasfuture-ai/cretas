@@ -3288,6 +3288,21 @@ public class SalesServiceImpl implements SalesService {
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<SalesDeliveryRecord> getWarehouseDeliveryHistory(String factoryId, int page, int size) {
+        PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<SalesDeliveryRecord> result = deliveryRecordRepository.findByFactoryIdAndStatusIn(
+                factoryId,
+                List.of(SalesDeliveryStatus.PARTIALLY_SHIPPED,
+                        SalesDeliveryStatus.SHIPPED,
+                        SalesDeliveryStatus.DELIVERED,
+                        SalesDeliveryStatus.CANCELLED,
+                        SalesDeliveryStatus.RETURNED),
+                pageRequest);
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
     /**
      * Issue #740: warehouse-side confirm. Allows override of 实际发货数量 per-line
      * (车装不下 / 现场少装 等场景), then 扣库存 + 转 SHIPPED + auto AR.

@@ -35,7 +35,7 @@ describe('入库首页任务真值', () => {
 
   it('采购来源部分失败持续提示，并保留旧列表供仓管继续核对', () => {
     expect(receiving).toContain('setLoadError(info)');
-    expect(receiving).toContain('setOrders((prev) => (prev.length > 0 ? prev : sortedPage))');
+    expect(receiving).toContain('部分来源失败时保留旧列表，同时补入本次成功来源');
     expect(receiving).not.toContain('setOrders([])');
     expect(receiving).toContain('请点击重试');
   });

@@ -65,6 +65,20 @@ describe('warehouseDeliveryApiClient', () => {
     });
   });
 
+  describe('getDeliveryHistory', () => {
+    it('uses the tenant warehouse history endpoint with independent pagination', async () => {
+      mock.onGet(`${WH_BASE}/history`).reply(200, {
+        success: true,
+        data: { content: [], totalElements: 21, totalPages: 2, size: 20, number: 1 },
+      });
+
+      const res = await warehouseDeliveryApiClient.getDeliveryHistory({ page: 2, size: 20 });
+
+      expect(res.success).toBe(true);
+      expect(mock.history.get[0].params).toEqual({ page: 2, size: 20 });
+    });
+  });
+
   describe('confirmDelivery', () => {
     it('POSTs actualQuantities to /warehouse/deliveries/{id}/confirm (real FG deduction)', async () => {
       mock.onPost(`${WH_BASE}/d1/confirm`).reply(200, { success: true, data: { id: 'd1', status: 'SHIPPED' } });
