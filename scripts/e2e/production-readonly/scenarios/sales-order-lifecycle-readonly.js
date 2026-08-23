@@ -17,12 +17,32 @@ async function waitForTableSettled(page) {
   ]);
 }
 
+function isSalesOrderListResponse(response) {
+  const request = response.request();
+  const urlWithoutQuery = String(response.url() || '').split(/[?#]/, 1)[0];
+  return request.method() === 'GET'
+    && /\/sales\/orders(?:\/by-status)?$/.test(urlWithoutQuery);
+}
+
+async function interactAndWaitForSalesOrderRefresh(page, action) {
+  const responsePromise = page.waitForResponse(isSalesOrderListResponse, { timeout: 30_000 });
+  await action();
+  const response = await responsePromise;
+  if (!response.ok()) {
+    throw new Error(`Sales order list refresh failed with HTTP ${response.status()}`);
+  }
+  await waitForTableSettled(page);
+}
+
 async function selectReadOnlyDimension(page, label, optionLabel) {
   const control = page.getByRole('combobox', { name: label }).first();
   await control.waitFor({ state: 'visible' });
   const tagName = await control.evaluate((element) => element.tagName);
   if (tagName === 'SELECT') {
-    await control.selectOption({ label: optionLabel });
+    await interactAndWaitForSalesOrderRefresh(
+      page,
+      () => control.selectOption({ label: optionLabel }),
+    );
     return control.locator('option:checked').innerText();
   }
 
@@ -30,13 +50,16 @@ async function selectReadOnlyDimension(page, label, optionLabel) {
     .locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " el-select ")][1]')
     .locator('.el-select__wrapper');
   await wrapper.click();
-  await page.getByRole('option', { name: optionLabel, exact: true }).click();
-  await page.waitForTimeout(250);
+  await interactAndWaitForSalesOrderRefresh(
+    page,
+    () => page.getByRole('option', { name: optionLabel, exact: true }).click(),
+  );
   return wrapper.innerText();
 }
 
 module.exports = {
   id: 'sales-order-lifecycle-readonly',
+  defaultEnabled: false,
   path: ROUTES.salesOrders,
   run: (ctx) => runReadOnlyPageScenario(ctx, {
     id: 'sales-order-lifecycle-readonly',
@@ -83,7 +106,6 @@ module.exports = {
 
       const shipmentValue = await selectReadOnlyDimension(page, '出库状态', '部分出库');
       const paymentValue = await selectReadOnlyDimension(page, '收款状态', '部分收款');
-      await waitForTableSettled(page);
       const combinationApplied = shipmentValue.includes('部分出库') && paymentValue.includes('部分收款');
       const filteredRows = page.locator('.el-table__body-wrapper tbody tr');
       const filteredRowTexts = await filteredRows.allInnerTexts();
@@ -91,14 +113,16 @@ module.exports = {
         && filteredRowTexts.every((text) => text.includes('部分出库') && text.includes('部分收款'));
 
       const fulfillingTab = tabs.filter({ hasText: '履约中' }).first();
-      await fulfillingTab.click();
-      await page.waitForTimeout(300);
+      await interactAndWaitForSalesOrderRefresh(page, () => fulfillingTab.click());
       const fulfillmentSelected = await fulfillingTab.getAttribute('aria-selected') === 'true'
         || (await fulfillingTab.getAttribute('class') || '').includes('is-active');
 
       await selectReadOnlyDimension(page, '出库状态', '全部出库状态');
       await selectReadOnlyDimension(page, '收款状态', '全部收款状态');
-      await tabs.filter({ hasText: '全部' }).first().click();
+      await interactAndWaitForSalesOrderRefresh(
+        page,
+        () => tabs.filter({ hasText: '全部' }).first().click(),
+      );
 
       const structuralPassed = lifecycleExact
         && shipmentFilterCount === 1

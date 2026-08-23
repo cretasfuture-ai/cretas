@@ -35,6 +35,9 @@ function describeHarness() {
   return {
     name: 'cretas-production-readonly',
     scenarios: SCENARIOS.map((scenario) => scenario.id),
+    defaultScenarios: SCENARIOS
+      .filter((scenario) => scenario.defaultEnabled !== false)
+      .map((scenario) => scenario.id),
     safety: {
       requestInterception: 'before-send',
       guardedMethods: ['POST', 'PUT', 'PATCH', 'DELETE'],
@@ -45,7 +48,9 @@ function describeHarness() {
 }
 
 function resolveScenarios(requested) {
-  if (!requested || requested.length === 0) return SCENARIOS;
+  if (!requested || requested.length === 0) {
+    return SCENARIOS.filter((scenario) => scenario.defaultEnabled !== false);
+  }
   const ids = Array.isArray(requested) ? requested : String(requested).split(',');
   return ids.map((id) => {
     const scenario = SCENARIOS.find((candidate) => candidate.id === id.trim());

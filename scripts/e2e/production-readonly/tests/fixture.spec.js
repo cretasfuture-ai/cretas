@@ -48,9 +48,13 @@ function pageHtml(pathname) {
             <div class="order-trace-panel" hidden><section class="trace-section"><h3 class="trace-section-title">订单明细</h3></section><section class="trace-section"><h3 class="trace-section-title">出库履约</h3></section><section class="trace-section"><h3 class="trace-section-title">收款进度</h3></section></div>
           </div>
           <script>
+            async function refreshSalesOrders() {
+              await fetch('/api/mobile/F006/sales/orders?page=1&size=200');
+            }
             document.querySelectorAll('[role="tab"]').forEach((tab) => tab.addEventListener('click', () => {
               document.querySelectorAll('[role="tab"]').forEach((item) => item.setAttribute('aria-selected', 'false'));
               tab.setAttribute('aria-selected', 'true');
+              void refreshSalesOrders();
             }));
             document.querySelector('.el-table__expand-icon').addEventListener('click', () => {
               document.querySelector('.order-trace-panel').hidden = false;
@@ -58,6 +62,7 @@ function pageHtml(pathname) {
             document.querySelectorAll('[role="option"]').forEach((option) => option.addEventListener('click', () => {
               const selected = document.querySelector('.el-select[data-filter="' + option.dataset.filter + '"] .el-select__selected-item');
               selected.textContent = option.textContent;
+              void refreshSalesOrders();
             }));
           </script>
         </main>`
@@ -70,11 +75,17 @@ test.describe('production read-only harness local fixture', () => {
   let baseUrl;
   let businessWriteCount;
   let readonlyResolverCount;
+  let salesOrderReadCount;
+  let concurrentSalesOrderReads;
+  let maxConcurrentSalesOrderReads;
   let loginStatus;
 
   test.beforeEach(async () => {
     businessWriteCount = 0;
     readonlyResolverCount = 0;
+    salesOrderReadCount = 0;
+    concurrentSalesOrderReads = 0;
+    maxConcurrentSalesOrderReads = 0;
     loginStatus = 200;
     server = http.createServer((request, response) => {
       const url = new URL(request.url, 'http://fixture');
@@ -102,6 +113,18 @@ test.describe('production read-only harness local fixture', () => {
             },
           }));
         });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/mobile/F006/sales/orders') {
+        salesOrderReadCount += 1;
+        concurrentSalesOrderReads += 1;
+        maxConcurrentSalesOrderReads = Math.max(maxConcurrentSalesOrderReads, concurrentSalesOrderReads);
+        const delayMs = salesOrderReadCount % 2 === 1 ? 120 : 20;
+        setTimeout(() => {
+          concurrentSalesOrderReads -= 1;
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ success: true, data: { content: [], totalElements: 0 } }));
+        }, delayMs);
         return;
       }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) businessWriteCount += 1;
@@ -155,6 +178,8 @@ test.describe('production read-only harness local fixture', () => {
     expect(report.actualBusinessWrites).toBe(0);
     expect(report.blockedMutationAttempts).toHaveLength(0);
     expect(businessWriteCount).toBe(0);
+    expect(salesOrderReadCount).toBe(6);
+    expect(maxConcurrentSalesOrderReads).toBe(1);
   });
 
   test('aborts an unexpected mutation before the fixture server receives it', async ({ page }) => {
