@@ -5,8 +5,6 @@
 
 ## 在飞任务
 
-- `MIGRATE-CODEX-ORCHESTRATION-ROUTING-20260823` — `review` — Owner: `/root` — Base SHA: `7129c9b527e5c4fc823e5827b0a50d3b5bcfc8cd` — 在公司最新 main 上无冲突重放已验证的 `ba22cbc92b03ff9ac2468eebe1761dcb7541d7ef`：单代理优先静默路由、5 个窄职责 Cretas agent、删除旧 `agent-team`、model-effort 非阻塞、F006 凭证模板边界纠偏。来源与重放 patch-id 一致；TOML 6/6、agent schema、Codex config load、hook 5/5、tracked-secret scan、阻塞模型门禁零命中、ACTIVE 36→16/Scope 34→10/逐项归档20条、独立只读终审和 `git diff --check` 已通过。未修改 Claude/Cursor、产品代码、生产或凭证真值；待 PR/CI/合并，严格 `NOT_DEPLOYED`。
-
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
@@ -38,8 +36,6 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
-
-- `MIGRATE-CODEX-ORCHESTRATION-ROUTING-20260823`：仅 `.agents/skills/agent-team/SKILL.md`、`.agents/skills/model-effort-router/SKILL.md`、`.codex/agents/*.toml`、`.codex/config.toml`、`.codex/rules/test-credentials.example.md`、`AGENTS.md`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`；不得修改 Claude/Cursor 配置、其他 skill、产品代码、生产状态或凭证真值。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 

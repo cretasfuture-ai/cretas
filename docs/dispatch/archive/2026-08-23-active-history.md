@@ -36,3 +36,5 @@
 - `BUG-F006-R2-WORKFLOW-INLINE-PROCESS-CATEGORY` — `merged` — 前端现场新建分类必选与后端 taxonomy/跨工厂校验及测试已进入公司树；scope 已释放。
 - `BUG-F006-R2-WORKFLOW-CELL-ACTIONS-UX` — `merged` — 节点 edit/delete 在 hover/focus/selected/touch 下的行为与编辑器测试已进入公司树；scope 已释放。
 - `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `merged`（当前模型取代）— 后端当前明确丢弃 process portGroups，替代关系由原料节点 substituteOfNodeId 表达；旧独立 input-group scope 已释放。
+
+- `MIGRATE-CODEX-ORCHESTRATION-ROUTING-20260823` — `merged` — Owner: `/root` — Base SHA: `7129c9b527e5c4fc823e5827b0a50d3b5bcfc8cd` — 公司仓 PR #11。在最新 main 上无冲突重放已验证的 `ba22cbc92b03ff9ac2468eebe1761dcb7541d7ef`，来源与重放 patch-id 均为 `8db12e9e504146736fe5d6fc6ee636bca75b0f52`；新增单代理优先静默路由与 5 个窄职责 Cretas agent，删除旧项目 `agent-team`，保持 model-effort 非阻塞，并纠正 F006 凭证模板边界。TOML 6/6、agent schema、Codex config load、hook 5/5、tracked-secret scan、阻塞模型门禁零命中、独立只读终审和 `git diff --check` 通过。ACTIVE 全量审计以实时 Git/worktree/PR/commit/process/task 证据将 36 条收敛为 15 条、34 个 scope 收敛为 9 个，20 条完成/重复记录逐项归档，证据不足的 6 条已恢复保留。未修改 Claude/Cursor、产品代码、生产或凭证真值，严格 `NOT_DEPLOYED`；scope 已释放。
