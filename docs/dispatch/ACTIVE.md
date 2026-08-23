@@ -39,7 +39,7 @@
 
 ## Scope 锁地图
 
-- `MIGRATE-LOCATEANYTHING-TEACHER-HARDENING-20260823`：仅 `tools/vision-lab/mine_tray_queue.py`、`locateanything_teacher_admin.py`、`config.liushanmen.example.json`、`tests/test_mine_tray_queue.py`、`tests/test_tray_teacher_admin.py`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；此子任务是父 ROI 锁内当前唯一代码写者。验收：两份目标测试、raw-work-area-plan/保护集回归、receipt 缺失/SHA/revision 漂移 fail closed、现有 B 盘 receipt 只读 verify、`git diff --check`；D 盘 receipts/queue 与生产零写入。
+- `MIGRATE-LOCATEANYTHING-TEACHER-HARDENING-20260823`：仅 `tools/vision-lab/mine_tray_queue.py`、`locateanything_teacher_admin.py`、`locateanything_snapshot_v1_manifest.json`、`config.liushanmen.example.json`、`tests/test_mine_tray_queue.py`、`tests/test_tray_teacher_admin.py`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；此子任务是父 ROI 锁内当前唯一代码写者。验收：两份目标测试、raw-work-area-plan/保护集回归、receipt 缺失/SHA/revision/全量文件漂移 fail closed、现有 B 盘 receipt + tracked legacy manifest 只读 verify、proposal receipt 校验、CLI 可终止 timeout、`git diff --check`；D 盘 receipts/queue 与生产零写入。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
