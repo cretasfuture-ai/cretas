@@ -8,7 +8,7 @@
  * 客户原话 (六扇门 F006 仓管场景): "你告诉他这个东西你要收多少就行了" → 防呆: 计划数量作上限, 上下文带全.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   ScrollView,
@@ -16,18 +16,26 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native';
-import { Text, Surface, Button, TouchableRipple } from 'react-native-paper';
+import { Text, Surface, Button, Searchbar, TouchableRipple } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { isAxiosError } from 'axios';
 import { WHOutboundStackParamList } from '../../../types/navigation';
 import {
   warehouseDeliveryApiClient,
   WarehouseDeliveryRecord,
 } from '../../../services/api/warehouseDeliveryApiClient';
 import { handleError } from '../../../utils/errorHandler';
+import {
+  filterPendingDeliveries,
+  isConfirmableDeliveryStatus,
+  isCompletedDeliveryStatus,
+  mergeDeliveryRecords,
+  type DeliveryStatusFilter,
+} from '../warehouseList.logic';
 
 type NavigationProp = NativeStackNavigationProp<WHOutboundStackParamList>;
 
@@ -41,7 +49,40 @@ const statusConfig: Record<string, StatusStyle> = {
   DRAFT: { label: '草稿', color: '#616161', bgColor: '#f5f5f5' },
   PENDING_WAREHOUSE_CONFIRM: DEFAULT_STATUS,
   PICKED: { label: '已拣货', color: '#1976d2', bgColor: '#e3f2fd' },
+  PENDING_SPLIT: { label: '待分批', color: '#616161', bgColor: '#f5f5f5' },
+  PARTIALLY_SCHEDULED: { label: '部分已安排', color: '#7b1fa2', bgColor: '#f3e5f5' },
+  FULLY_SCHEDULED: { label: '已全部安排', color: '#7b1fa2', bgColor: '#f3e5f5' },
+  PARTIALLY_SHIPPED: { label: '部分已发货', color: '#00838f', bgColor: '#e0f7fa' },
+  SHIPPED: { label: '已发货', color: '#00838f', bgColor: '#e0f7fa' },
+  DELIVERED: { label: '已签收', color: '#2e7d32', bgColor: '#e8f5e9' },
+  SIGNED: { label: '已签收', color: '#2e7d32', bgColor: '#e8f5e9' },
+  CANCELLED: { label: '已取消', color: '#757575', bgColor: '#eeeeee' },
+  RETURNED: { label: '已退回', color: '#757575', bgColor: '#eeeeee' },
 };
+
+export { filterPendingDeliveries } from '../warehouseList.logic';
+
+export function describeDeliveryListFailure(
+  error: unknown,
+  source: 'pending' | 'history' | 'both' = 'pending',
+): { title: string; message: string; hint?: string } {
+  const sourceLabel = source === 'history' ? '发货历史' : source === 'both' ? '待确认和发货历史' : '待确认发货单';
+  if (isAxiosError(error)) {
+    const data = error.response?.data as { message?: string; actionHint?: string } | undefined;
+    if (!error.response) {
+      return { title: `${sourceLabel}加载失败`, message: '手机暂时连不上服务器，请检查网络后重试。' };
+    }
+    return {
+      title: `加载${sourceLabel}失败`,
+      message: data?.message || `服务器返回错误 (${error.response.status})，请稍后重试。`,
+      hint: data?.actionHint,
+    };
+  }
+  return {
+    title: `加载${sourceLabel}失败`,
+    message: error instanceof Error ? error.message : '未知错误，请重试。',
+  };
+}
 
 function customerText(row: WarehouseDeliveryRecord): string {
   return row.customerName || row.customerId || '未知客户';
@@ -70,39 +111,125 @@ export function WHDeliveryConfirmListScreen() {
   const navigation = useNavigation<NavigationProp>();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [deliveries, setDeliveries] = useState<WarehouseDeliveryRecord[]>([]);
-  const [total, setTotal] = useState(0);
+  const [pendingDeliveries, setPendingDeliveries] = useState<WarehouseDeliveryRecord[]>([]);
+  const [historyDeliveries, setHistoryDeliveries] = useState<WarehouseDeliveryRecord[]>([]);
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [, setPendingPage] = useState(0);
+  const [, setHistoryPage] = useState(0);
+  const [pendingHasMore, setPendingHasMore] = useState(true);
+  const [historyHasMore, setHistoryHasMore] = useState(true);
+  const pendingPageRef = useRef(0);
+  const historyPageRef = useRef(0);
+  const pendingHasMoreRef = useRef(true);
+  const historyHasMoreRef = useRef(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState<DeliveryStatusFilter>('all');
+  const [query, setQuery] = useState('');
+  const [loadError, setLoadError] = useState<ReturnType<typeof describeDeliveryListFailure> | null>(null);
 
-  const loadData = useCallback(async () => {
-    try {
-      // 后端 pending 分页是 1-based
-      const res = await warehouseDeliveryApiClient.getPendingDeliveries({ page: 1, size: 50 });
-      if (res.success && res.data) {
-        setDeliveries(res.data.content ?? []);
-        setTotal(res.data.totalElements ?? (res.data.content?.length ?? 0));
-      } else {
-        setDeliveries([]);
-        setTotal(0);
+  const PAGE_SIZE = 20;
+
+  const loadData = useCallback(async (append = false) => {
+    const nextPendingPage = append ? pendingPageRef.current + 1 : 1;
+    const nextHistoryPage = append ? historyPageRef.current + 1 : 1;
+    const shouldLoadPending = !append || pendingHasMoreRef.current;
+    const shouldLoadHistory = !append || historyHasMoreRef.current;
+    if (append && !shouldLoadPending && !shouldLoadHistory) return;
+
+    if (append) setLoadingMore(true);
+    const [pendingResult, historyResult] = await Promise.allSettled([
+      shouldLoadPending
+        ? warehouseDeliveryApiClient.getPendingDeliveries({ page: nextPendingPage, size: PAGE_SIZE })
+        : Promise.resolve(null),
+      shouldLoadHistory
+        ? warehouseDeliveryApiClient.getDeliveryHistory({ page: nextHistoryPage, size: PAGE_SIZE })
+        : Promise.resolve(null),
+    ]);
+
+    const failures: ('pending' | 'history')[] = [];
+    if (pendingResult.status === 'fulfilled' && pendingResult.value?.success && pendingResult.value.data) {
+      const page = pendingResult.value.data;
+      setPendingDeliveries((previous) => append
+        ? [...previous, ...(page.content ?? []).filter((row) => !previous.some((item) => item.id === row.id))]
+        : (page.content ?? []));
+      const hasMorePage = nextPendingPage < (page.totalPages ?? nextPendingPage);
+      pendingPageRef.current = nextPendingPage;
+      pendingHasMoreRef.current = hasMorePage;
+      setPendingPage(nextPendingPage);
+      setPendingHasMore(hasMorePage);
+      setPendingTotal(page.totalElements ?? page.content?.length ?? 0);
+    } else {
+      if (shouldLoadPending) {
+        failures.push('pending');
+        if (pendingResult.status === 'fulfilled') {
+          handleError(new Error(pendingResult.value?.message || '服务器没有返回待确认发货单，请重试。'), { title: '加载待确认发货单失败' });
+        } else {
+          handleError(pendingResult.reason, { title: '加载待确认发货单失败' });
+        }
       }
-    } catch (error) {
-      handleError(error, { title: '加载待确认发货单失败' });
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
     }
+    if (historyResult.status === 'fulfilled' && historyResult.value?.success && historyResult.value.data) {
+      const page = historyResult.value.data;
+      setHistoryDeliveries((previous) => append
+        ? [...previous, ...(page.content ?? []).filter((row) => !previous.some((item) => item.id === row.id))]
+        : (page.content ?? []));
+      const hasMorePage = nextHistoryPage < (page.totalPages ?? nextHistoryPage);
+      historyPageRef.current = nextHistoryPage;
+      historyHasMoreRef.current = hasMorePage;
+      setHistoryPage(nextHistoryPage);
+      setHistoryHasMore(hasMorePage);
+      setHistoryTotal(page.totalElements ?? page.content?.length ?? 0);
+    } else {
+      if (shouldLoadHistory) {
+        failures.push('history');
+        if (historyResult.status === 'fulfilled') {
+          handleError(new Error(historyResult.value?.message || '服务器没有返回发货历史，请重试。'), { title: '加载发货历史失败' });
+        } else {
+          handleError(historyResult.reason, { title: '加载发货历史失败' });
+        }
+      }
+    }
+
+    if (failures.length === 0) {
+      setLoadError(null);
+    } else {
+      const source = failures.length === 2 ? 'both' : failures[0];
+      const firstFailure = failures[0] === 'pending' ? pendingResult : historyResult;
+      const error = firstFailure.status === 'rejected'
+        ? firstFailure.reason
+        : new Error(firstFailure.value?.message || '部分发货数据加载失败，请重试。');
+      setLoadError(describeDeliveryListFailure(error, source));
+    }
+    setLoading(false);
+    setRefreshing(false);
+    if (append) setLoadingMore(false);
   }, []);
 
   // 从确认页返回后自动刷新 (已确认的发货单应从待确认队列消失)
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      void loadData();
     }, [loadData]),
   );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadData();
+    pendingPageRef.current = 0;
+    historyPageRef.current = 0;
+    pendingHasMoreRef.current = true;
+    historyHasMoreRef.current = true;
+    setPendingPage(0);
+    setHistoryPage(0);
+    setPendingHasMore(true);
+    setHistoryHasMore(true);
+    void loadData(false);
   }, [loadData]);
+
+  const onLoadMore = useCallback(() => {
+    if (loadingMore || (!pendingHasMore && !historyHasMore)) return;
+    void loadData(true);
+  }, [historyHasMore, loadData, loadingMore, pendingHasMore]);
 
   const openConfirm = (row: WarehouseDeliveryRecord) => {
     navigation.navigate('WHDeliveryConfirm', {
@@ -110,6 +237,11 @@ export function WHDeliveryConfirmListScreen() {
       deliveryNumber: row.deliveryNumber,
     });
   };
+
+  const deliveries = mergeDeliveryRecords(pendingDeliveries, historyDeliveries);
+  const total = deliveries.length;
+  const filteredDeliveries = filterPendingDeliveries(deliveries, selectedStatus, query);
+  const showFullError = Boolean(loadError && deliveries.length === 0);
 
   if (loading) {
     return (
@@ -130,7 +262,7 @@ export function WHDeliveryConfirmListScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>发货确认</Text>
-        <Text style={styles.headerSubtitle}>待仓库确认 {total} 单</Text>
+          <Text style={styles.headerSubtitle}>待仓库确认 {pendingTotal} 单 · 历史 {historyTotal} 单</Text>
       </View>
 
       <ScrollView
@@ -143,6 +275,7 @@ export function WHDeliveryConfirmListScreen() {
           <MaterialCommunityIcons name="information-outline" size={20} color="#1976d2" />
           <Text style={styles.noticeText}>
             销售员创建的发货单列在这里。确认实际发货数量后，系统自动扣减成品库存并生成送货单。
+            已发货、已签收、已取消等终态在“已完成/历史”中只读展示，不会再次扣库存。
           </Text>
         </Surface>
 
@@ -156,20 +289,64 @@ export function WHDeliveryConfirmListScreen() {
             testID="wh-goto-manual-shipment"
             style={styles.secondaryLinkTouchable}
           >
-            <Text style={styles.secondaryLinkText}>手工发货登记（旧流程·不扣库存）</Text>
+            <Text style={styles.secondaryLinkText}>查看手工发货历史（旧流程·不扣库存）</Text>
           </TouchableRipple>
         </View>
 
-        {/* 列表 */}
-        <View style={styles.listContainer}>
-          {deliveries.length === 0 ? (
+        {showFullError && loadError ? (
+          <Surface style={styles.errorCard} elevation={1} testID="wh-outbound-load-error">
+            <MaterialCommunityIcons name="alert-circle-outline" size={42} color="#C62828" />
+            <Text style={styles.errorTitle}>{loadError.title}</Text>
+            <Text style={styles.errorMessage}>{loadError.message}</Text>
+            {loadError.hint && <Text style={styles.errorHint}>{loadError.hint}</Text>}
+            <Button mode="contained" icon="refresh" onPress={onRefresh} testID="wh-outbound-retry">
+              重试
+            </Button>
+          </Surface>
+        ) : (
+          <>
+            {loadError && (
+              <Surface style={styles.partialErrorCard} elevation={1} testID="wh-outbound-partial-error">
+                <MaterialCommunityIcons name="alert-outline" size={22} color="#e65100" />
+                <Text style={styles.partialErrorText}>{loadError.title}：{loadError.message}</Text>
+                <Button mode="text" compact onPress={onRefresh} testID="wh-outbound-retry-partial">重试</Button>
+              </Surface>
+            )}
+            <Searchbar
+              placeholder="搜索发货单号 / 销售单 / 客户 / 货品"
+              value={query}
+              onChangeText={setQuery}
+              style={styles.search}
+              accessibilityLabel="搜索发货任务"
+            />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterContainer}>
+              {([
+                ['all', '全部', deliveries.length],
+                ['pending', '待确认', deliveries.filter((row) => isConfirmableDeliveryStatus(row.status)).length],
+                ['completed', '已完成/历史', deliveries.filter((row) => isCompletedDeliveryStatus(row.status)).length],
+              ] as const).map(([value, label, count]) => (
+                <Button
+                  key={value}
+                  mode={selectedStatus === value ? 'contained' : 'outlined'}
+                  compact
+                  onPress={() => setSelectedStatus(value)}
+                  style={styles.statusFilterButton}
+                >
+                  {label}({count})
+                </Button>
+              ))}
+            </ScrollView>
+
+            {/* 列表 */}
+            <View style={styles.listContainer}>
+          {filteredDeliveries.length === 0 ? (
             <Surface style={styles.emptyCard} elevation={1}>
               <MaterialCommunityIcons name="package-variant-closed" size={40} color="#bbb" />
-              <Text style={styles.emptyText}>暂无待确认发货单</Text>
-              <Text style={styles.emptyHint}>销售员创建发货单后会出现在这里</Text>
+              <Text style={styles.emptyText}>{selectedStatus === 'all' ? '暂无待确认发货单' : '当前状态暂无发货单'}</Text>
+              <Text style={styles.emptyHint}>销售员创建发货单后会出现在这里；已确认单据可查看发货历史</Text>
             </Surface>
           ) : (
-            deliveries.map((row) => {
+            filteredDeliveries.map((row) => {
               const config = statusConfig[String(row.status).toUpperCase()] ?? DEFAULT_STATUS;
               const itemLines = deliveryItemLines(row);
               return (
@@ -209,6 +386,24 @@ export function WHDeliveryConfirmListScreen() {
                           <Text style={styles.infoValue}>{row.logisticsCompany}</Text>
                         </View>
                       )}
+                      {!!row.trackingNumber && (
+                        <View style={styles.infoRow}>
+                          <Text style={styles.infoLabel}>物流单号</Text>
+                          <Text style={styles.infoValue}>{row.trackingNumber}</Text>
+                        </View>
+                      )}
+                      {isCompletedDeliveryStatus(row.status) && (
+                        <>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>操作者</Text>
+                            <Text style={styles.infoValue}>{row.shippedBy ? `用户 ${row.shippedBy}` : '系统未记录'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>完成时间</Text>
+                            <Text style={styles.infoValue}>{row.updatedAt || '-'}</Text>
+                          </View>
+                        </>
+                      )}
                     </View>
 
                     <View style={styles.itemLines}>
@@ -226,7 +421,9 @@ export function WHDeliveryConfirmListScreen() {
                     <View style={styles.cardFooter}>
                       <Text style={styles.itemCountText}>共 {itemLines.length} 项</Text>
                       <View style={styles.actionLink}>
-                        <Text style={styles.actionText}>确认并发货</Text>
+                        <Text style={styles.actionText}>
+                          {isCompletedDeliveryStatus(row.status) ? '查看发货记录' : '下一步：确认并发货'}
+                        </Text>
                         <MaterialCommunityIcons name="chevron-right" size={16} color="#4CAF50" />
                       </View>
                     </View>
@@ -234,8 +431,23 @@ export function WHDeliveryConfirmListScreen() {
                 </TouchableRipple>
               );
             })
-          )}
-        </View>
+            )}
+            </View>
+            {(pendingHasMore || historyHasMore) && (
+              <Button
+                mode="outlined"
+                compact
+                loading={loadingMore}
+                disabled={loadingMore}
+                onPress={onLoadMore}
+                testID="wh-outbound-load-more"
+                style={styles.loadMoreButton}
+              >
+                加载更多
+              </Button>
+            )}
+          </>
+        )}
 
         <View style={{ height: 24 }} />
       </ScrollView>
@@ -265,7 +477,11 @@ const styles = StyleSheet.create({
   actionBar: { paddingHorizontal: 16, paddingTop: 12, alignItems: 'flex-end' },
   secondaryLinkTouchable: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 },
   secondaryLinkText: { color: '#757575', fontSize: 13, textDecorationLine: 'underline' },
+  search: { marginHorizontal: 16, marginTop: 12, backgroundColor: '#fff' },
+  filterContainer: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 8 },
+  statusFilterButton: { minHeight: 44, marginRight: 0, borderRadius: 18 },
   listContainer: { paddingHorizontal: 16, paddingTop: 12 },
+  loadMoreButton: { marginHorizontal: 16, marginTop: 4, marginBottom: 12 },
   emptyCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -275,6 +491,12 @@ const styles = StyleSheet.create({
   },
   emptyText: { marginTop: 12, fontSize: 15, color: '#666', fontWeight: '600' },
   emptyHint: { marginTop: 4, fontSize: 12, color: '#999' },
+  errorCard: { backgroundColor: '#fff', borderRadius: 12, padding: 28, alignItems: 'center', marginHorizontal: 16, marginTop: 12, gap: 8 },
+  errorTitle: { color: '#C62828', fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  errorMessage: { color: '#4a5568', fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  errorHint: { color: '#e65100', fontSize: 13, lineHeight: 20, textAlign: 'center' },
+  partialErrorCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff8e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginHorizontal: 16, marginTop: 12, gap: 8 },
+  partialErrorText: { flex: 1, color: '#8d4b00', fontSize: 12, lineHeight: 18 },
   orderCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12 },
   cardHeader: {
     flexDirection: 'row',

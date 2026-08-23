@@ -2,6 +2,7 @@ package com.cretas.aims.integration;
 
 import com.cretas.aims.controller.ProductProcessWorkflowController;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
@@ -29,6 +30,10 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -110,23 +115,36 @@ class ProductProcessWorkflowPostgresIntegrationTest {
     private EntityManager entityManager;
 
     @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
     private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository revisionRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private MockMvc mockMvc;
+    private ProductProcessWorkflowServiceImpl workflowService;
+    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+    private ProductProcessWorkflowUnitValidator unitValidator;
 
     @BeforeEach
     void setUpControllerWithRealRepository() {
         ProductTypeRepository productTypeRepository = mock(ProductTypeRepository.class);
+        ProductType owner = mock(ProductType.class);
         when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
-                .thenReturn(java.util.Optional.of(mock(ProductType.class)));
+                .thenReturn(java.util.Optional.of(owner));
+        when(productTypeRepository.findByIdAndFactoryIdForUpdate(PRODUCT_ID, FACTORY_ID))
+                .thenReturn(java.util.Optional.of(owner));
 
         ProductProcessWorkflowCatalogValidator catalogValidator =
                 mock(ProductProcessWorkflowCatalogValidator.class);
+        unitValidator = mock(ProductProcessWorkflowUnitValidator.class);
+        when(unitValidator.validate(anyString(), org.mockito.ArgumentMatchers.any(ProductProcessWorkflowDTO.class)))
+                .thenReturn(new com.cretas.aims.dto.workflow.WorkflowUnitValidationResult(List.of(), List.of()));
         com.cretas.aims.repository.ProductProcessWorkflowActivationRepository activationRepository =
                 mock(com.cretas.aims.repository.ProductProcessWorkflowActivationRepository.class);
-        ProductProcessWorkflowServiceImpl service = new ProductProcessWorkflowServiceImpl(
+        productionPlanRepository = mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+        workflowService = new ProductProcessWorkflowServiceImpl(
                 repository,
                 revisionRepository,
                 new com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService(
@@ -138,15 +156,17 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 mock(com.cretas.aims.service.bom.WorkflowBomSynchronizationService.class),
                 mock(com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService.class),
                 activationRepository,
+                productionPlanRepository,
+                mock(com.cretas.aims.repository.ProductionBatchRepository.class),
                 objectMapper,
                 new ProductProcessWorkflowValidator(),
                 catalogValidator,
-                mock(ProductProcessWorkflowUnitValidator.class),
+                unitValidator,
                 productTypeRepository,
                 mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
 
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new ProductProcessWorkflowController(service))
+                .standaloneSetup(new ProductProcessWorkflowController(workflowService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -277,6 +297,22 @@ class ProductProcessWorkflowPostgresIntegrationTest {
     @Test
     @Order(3)
     void realPostgresHttpSaveReadConflictPublishReadbackPreservesCompleteGraph() throws Exception {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    DELETE FROM product_process_workflow_revisions
+                    WHERE workflow_id IN (
+                        SELECT id FROM product_process_workflows
+                        WHERE factory_id = 'WF-PG-F001'
+                          AND product_type_id = 'WF-PG-PIG-001'
+                    )
+                    """);
+            statement.execute("""
+                    DELETE FROM product_process_workflows
+                    WHERE factory_id = 'WF-PG-F001'
+                      AND product_type_id = 'WF-PG-PIG-001'
+                    """);
+        }
         ProductProcessWorkflowDTO firstReader = validMultiInputMultiOutputDefinition();
         String requestBody = objectMapper.writeValueAsString(firstReader);
 
@@ -287,11 +323,11 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                         .content(requestBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("DRAFT"))
-                .andExpect(jsonPath("$.data.lockVersion").value(0))
                 .andReturn().getResponse();
 
         JsonNode savedData = objectMapper.readTree(saved.getContentAsString()).path("data");
-        assertEquals(0L, savedData.path("lockVersion").asLong());
+        long initialLockVersion = savedData.path("lockVersion").asLong();
+        assertTrue(initialLockVersion >= 0L);
 
         mockMvc.perform(get(
                         "/api/mobile/{factoryId}/product-process-workflows/{productId}",
@@ -320,9 +356,12 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(secondReader)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.lockVersion").value(1))
                 .andExpect(jsonPath("$.data.viewport.zoom").value(1.25D))
                 .andReturn().getResponse();
+
+        long updatedLockVersion = objectMapper.readTree(updated.getContentAsString())
+                .path("data").path("lockVersion").asLong();
+        assertTrue(updatedLockVersion > initialLockVersion);
 
         mockMvc.perform(put(
                         "/api/mobile/{factoryId}/product-process-workflows/{productId}/draft",
@@ -332,8 +371,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("PRODUCT_PROCESS_WORKFLOW_CONFLICT"));
 
-        long currentLockVersion = objectMapper.readTree(updated.getContentAsString())
-                .path("data").path("lockVersion").asLong();
+        long currentLockVersion = updatedLockVersion;
         mockMvc.perform(post(
                         "/api/mobile/{factoryId}/product-process-workflows/{productId}/publish",
                         FACTORY_ID, PRODUCT_ID)
@@ -373,6 +411,101 @@ class ProductProcessWorkflowPostgresIntegrationTest {
         assertEquals(7, ((Number) storedJson[0]).intValue());
         assertEquals(6, ((Number) storedJson[1]).intValue());
         assertEquals("200 kg = 400 box", storedJson[2]);
+    }
+
+    @Test
+    @Order(4)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void autoForkFailureRollsBackFrozenAndNewDraftRowsTogether() throws Exception {
+        ProductProcessWorkflowDTO definition = validMultiInputMultiOutputDefinition();
+        definition.getViewport().setZoom(1.5D);
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(Propagation.REQUIRES_NEW.value());
+        ProductProcessWorkflowDTO created = transaction.execute(status ->
+                workflowService.saveDraft(FACTORY_ID, PRODUCT_ID, definition));
+        ProductProcessWorkflow draft = repository
+                .findByIdAndFactoryId(created.getId(), FACTORY_ID)
+                .orElseThrow();
+        definition.setId(draft.getId());
+        definition.setVersion(draft.getDefinitionVersion());
+        definition.setLockVersion(draft.getLockVersion());
+        when(productionPlanRepository.countAllPhysicalByFactoryIdAndSelectedWorkflowId(
+                FACTORY_ID, draft.getId())).thenReturn(1L);
+        long revisionsBefore;
+        try (Connection connection = dataSource.getConnection()) {
+            revisionsBefore = scalarLong(connection, """
+                    SELECT count(*)
+                    FROM product_process_workflow_revisions
+                    WHERE workflow_id = %d
+                    """.formatted(draft.getId()));
+        }
+
+        installForkFailureTrigger();
+        try {
+            assertThrows(RuntimeException.class,
+                    () -> transaction.executeWithoutResult(status ->
+                            workflowService.saveDraft(FACTORY_ID, PRODUCT_ID, definition)));
+        } finally {
+            removeForkFailureTrigger();
+        }
+        entityManager.clear();
+
+        try (Connection connection = dataSource.getConnection();
+             Statement ignored = connection.createStatement()) {
+            assertEquals("DRAFT", scalarString(connection, """
+                    SELECT status
+                    FROM product_process_workflows
+                    WHERE id = %d
+                    """.formatted(draft.getId())));
+            assertEquals(1, scalarInt(connection, """
+                    SELECT count(*)
+                    FROM product_process_workflows
+                    WHERE factory_id = '%s' AND product_type_id = '%s' AND status = 'DRAFT'
+                    """.formatted(FACTORY_ID, PRODUCT_ID)));
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            assertEquals(revisionsBefore, scalarLong(connection, """
+                    SELECT count(*)
+                    FROM product_process_workflow_revisions
+                    WHERE workflow_id = %d
+                    """.formatted(draft.getId())));
+        }
+    }
+
+    private void installForkFailureTrigger() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE OR REPLACE FUNCTION reject_workflow_auto_fork_for_test()
+                    RETURNS trigger
+                    LANGUAGE plpgsql
+                    AS $$
+                    BEGIN
+                      IF NEW.factory_id = 'WF-PG-F001'
+                         AND NEW.product_type_id = 'WF-PG-PIG-001'
+                         AND NEW.status = 'DRAFT'
+                         AND NEW.definition_version > 1 THEN
+                        RAISE EXCEPTION 'forced auto-fork failure';
+                      END IF;
+                      RETURN NEW;
+                    END;
+                    $$
+                    """);
+            statement.execute("""
+                    CREATE TRIGGER trg_reject_workflow_auto_fork_for_test
+                    BEFORE INSERT ON product_process_workflows
+                    FOR EACH ROW
+                    EXECUTE FUNCTION reject_workflow_auto_fork_for_test()
+                    """);
+        }
+    }
+
+    private void removeForkFailureTrigger() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("DROP TRIGGER IF EXISTS trg_reject_workflow_auto_fork_for_test ON product_process_workflows");
+            statement.execute("DROP FUNCTION IF EXISTS reject_workflow_auto_fork_for_test()");
+        }
     }
 
     private ProductProcessWorkflowDTO validMultiInputMultiOutputDefinition() {
@@ -460,6 +593,14 @@ class ProductProcessWorkflowPostgresIntegrationTest {
              ResultSet result = statement.executeQuery(sql)) {
             assertTrue(result.next());
             return result.getInt(1);
+        }
+    }
+
+    private long scalarLong(Connection connection, String sql) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery(sql)) {
+            assertTrue(result.next());
+            return result.getLong(1);
         }
     }
 

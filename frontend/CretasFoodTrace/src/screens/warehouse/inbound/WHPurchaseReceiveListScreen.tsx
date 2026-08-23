@@ -8,7 +8,7 @@
  *   WHInboundListScreen → "选采购单收货" 按钮 → 本页
  *   本页 → 点任意一张采购单卡片 → WHReceiptCreate
  *
- * 显示状态过滤: APPROVED / FINANCE_APPROVED / PARTIAL_RECEIVED
+ * 显示状态过滤: FINANCE_APPROVED / PARTIAL_RECEIVED
  *   (DRAFT/SUBMITTED/PENDING_FINANCE_REVIEW 未审批通过, 不能收货)
  *   (COMPLETED/CLOSED/CANCELLED 不需要收货)
  *
@@ -16,7 +16,7 @@
  * 防呆 Rule 2: 卡片标题显示 供应商名 + 订单号 + 期望交货日 (上下文)
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   RefreshControl,
@@ -51,6 +51,7 @@ import {
   warehouseReceivingApiClient,
 } from '../../../services/api/warehouseReceivingApiClient';
 import { UNORDERED_INBOUND_REASON_LABEL } from './unorderedInboundReceiving';
+import { sortReceivingOrders, statusesToFetchForReceivingPage } from '../warehouseList.logic';
 
 /** 加载失败态 (区别于"真的没有待收货采购单"的正常空态) */
 interface LoadFailure {
@@ -114,16 +115,16 @@ type Nav = NativeStackNavigationProp<WHInboundStackParamList, 'WHPurchaseReceive
 
 /** 可收货的订单状态 */
 const RECEIVABLE_STATUSES: PurchaseOrder['status'][] = [
-  'APPROVED',
   'FINANCE_APPROVED',
   'PARTIAL_RECEIVED',
 ];
 
 const STATUS_LABEL: Record<string, { text: string; color: string; bg: string }> = {
-  APPROVED:          { text: '待收货', color: '#1565c0', bg: '#e3f2fd' },
   FINANCE_APPROVED:  { text: '待收货', color: '#1565c0', bg: '#e3f2fd' },
   PARTIAL_RECEIVED:  { text: '部分入库', color: '#e65100', bg: '#fff3e0' },
 };
+
+export { sortReceivingOrders } from '../warehouseList.logic';
 
 export function getOrderQuantityPresentation(order: PurchaseOrder) {
   const items = order.items || [];
@@ -146,8 +147,19 @@ export default function WHPurchaseReceiveListScreen() {
   const [arrivalTasks, setArrivalTasks] = useState<CustomerMaterialArrivalTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  const [statusHasMore, setStatusHasMore] = useState<Partial<Record<PurchaseOrder['status'], boolean>>>({
+    FINANCE_APPROVED: true,
+    PARTIAL_RECEIVED: true,
+  });
+  const statusPagesRef = useRef<Partial<Record<PurchaseOrder['status'], number>>>({
+    FINANCE_APPROVED: 0,
+    PARTIAL_RECEIVED: 0,
+  });
+  const statusHasMoreRef = useRef<Partial<Record<PurchaseOrder['status'], boolean>>>({
+    FINANCE_APPROVED: true,
+    PARTIAL_RECEIVED: true,
+  });
+  const hasMore = RECEIVABLE_STATUSES.some((status) => statusHasMore[status]);
   const [loadingMore, setLoadingMore] = useState(false);
   // 区分"请求失败"(权限/网络/服务器) vs "请求成功但确实没有待收货单" — 前者绝不能静默当空态显示.
   const [loadError, setLoadError] = useState<LoadFailure | null>(null);
@@ -156,16 +168,24 @@ export default function WHPurchaseReceiveListScreen() {
   const PAGE_SIZE = 20;
 
   // ============================================================
-  // 数据加载: 并行拉三个状态, 合并排序 (按期望交货日升序)
+  // 数据加载: 并行拉三个状态, 合并排序 (同状态按业务时间倒序)
   // ============================================================
   const fetchOrders = useCallback(
     async (pageNum: number, append: boolean) => {
       try {
+        const requests = statusesToFetchForReceivingPage(
+          RECEIVABLE_STATUSES,
+          statusHasMoreRef.current,
+          append,
+        ).map((status) => ({
+          status,
+          page: append ? (statusPagesRef.current[status] ?? 0) + 1 : pageNum,
+        }));
         const results = await Promise.allSettled(
-          RECEIVABLE_STATUSES.map((status) =>
+          requests.map(({ status, page }) =>
             purchaseApiClient.getOrdersByStatus(
               status,
-              { page: pageNum, size: PAGE_SIZE },
+              { page, size: PAGE_SIZE },
               factoryId,
             ),
           ),
@@ -184,57 +204,67 @@ export default function WHPurchaseReceiveListScreen() {
         // 静默降级、无 next-action). 现在显式区分, loud 展示且不清空已有数据(翻页场景).
         if (fulfilledCount === 0 && firstRejected) {
           const info = describeListFailure(firstRejected.reason);
+          setLoadError(info);
           if (append) {
             // 翻页失败: 保留已加载列表，只提示，不清空
             handleError(firstRejected.reason, {
               title: info.title,
               customMessage: info.hint ? `${info.message}\n${info.hint}` : info.message,
             });
-          } else {
-            setLoadError(info);
-            setOrders([]);
           }
-          setHasMore(false);
           return;
         }
 
-        if (!append) {
+        if (firstRejected) {
+          const info = describeListFailure(firstRejected.reason);
+          setLoadError(info);
+          if (append) {
+            handleError(firstRejected.reason, {
+              title: info.title,
+              customMessage: info.hint ? `${info.message}\n${info.hint}` : info.message,
+            });
+          }
+        } else if (!append) {
           setLoadError(null);
         }
 
         const merged: PurchaseOrder[] = [];
-        results.forEach((r) => {
+        results.forEach((r, index) => {
           if (r.status === 'fulfilled' && r.value?.data?.content) {
+            const request = requests[index];
+            if (!request) return;
             merged.push(...r.value.data.content);
+            const status = request.status;
+            const requestedPage = request.page;
+            statusPagesRef.current[status] = requestedPage;
+            const hasMorePage = requestedPage < (r.value.data.totalPages ?? requestedPage);
+            statusHasMoreRef.current[status] = hasMorePage;
+            setStatusHasMore((previous) => ({
+              ...previous,
+              [status]: hasMorePage,
+            }));
           }
         });
 
-        // 按期望交货日升序 (最紧迫排前), 无日期排末尾
-        merged.sort((a, b) => {
-          if (!a.expectedDeliveryDate && !b.expectedDeliveryDate) return 0;
-          if (!a.expectedDeliveryDate) return 1;
-          if (!b.expectedDeliveryDate) return -1;
-          return a.expectedDeliveryDate.localeCompare(b.expectedDeliveryDate);
-        });
+        const sortedPage = sortReceivingOrders(merged);
 
         if (append) {
           setOrders((prev) => {
             // 去重 (同一 page 不同 status 可能有重叠)
             const existing = new Set(prev.map((o) => o.id));
-            return [...prev, ...merged.filter((o) => !existing.has(o.id))];
+            return sortReceivingOrders([...prev, ...sortedPage.filter((o) => !existing.has(o.id))]);
+          });
+        } else if (firstRejected) {
+          setOrders((prev) => {
+            // 部分来源失败时保留旧列表，同时补入本次成功来源，避免刷新后丢任务。
+            const existing = new Set(prev.map((o) => o.id));
+            return prev.length > 0
+              ? sortReceivingOrders([...prev, ...sortedPage.filter((o) => !existing.has(o.id))])
+              : sortedPage;
           });
         } else {
-          setOrders(merged);
+          setOrders(sortedPage);
         }
-
-        // 若任意 status 还有下一页就继续
-        const anyHasMore = results.some(
-          (r) =>
-            r.status === 'fulfilled' &&
-            r.value?.data?.totalPages != null &&
-            pageNum < r.value.data.totalPages,
-        );
-        setHasMore(anyHasMore);
       } catch (err) {
         handleError(err, { title: '加载采购单失败' });
       }
@@ -251,7 +281,6 @@ export default function WHPurchaseReceiveListScreen() {
       setArrivalTasks(response.data || []);
       setArrivalLoadError(null);
     } catch (error) {
-      setArrivalTasks([]);
       setArrivalLoadError(describeListFailure(error));
     }
   }, [factoryId]);
@@ -261,7 +290,9 @@ export default function WHPurchaseReceiveListScreen() {
       let active = true;
       void (async () => {
         setLoading(true);
-        setPage(1);
+        statusPagesRef.current = { FINANCE_APPROVED: 0, PARTIAL_RECEIVED: 0 };
+        statusHasMoreRef.current = { FINANCE_APPROVED: true, PARTIAL_RECEIVED: true };
+        setStatusHasMore({ FINANCE_APPROVED: true, PARTIAL_RECEIVED: true });
         await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
         if (active) setLoading(false);
       })();
@@ -273,19 +304,19 @@ export default function WHPurchaseReceiveListScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setPage(1);
+    statusPagesRef.current = { FINANCE_APPROVED: 0, PARTIAL_RECEIVED: 0 };
+    statusHasMoreRef.current = { FINANCE_APPROVED: true, PARTIAL_RECEIVED: true };
+    setStatusHasMore({ FINANCE_APPROVED: true, PARTIAL_RECEIVED: true });
     await Promise.all([fetchOrders(1, false), fetchArrivalTasks()]);
     setRefreshing(false);
   }, [fetchArrivalTasks, fetchOrders]);
 
   const onLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
-    const nextPage = page + 1;
     setLoadingMore(true);
-    await fetchOrders(nextPage, true);
-    setPage(nextPage);
+    await fetchOrders(1, true);
     setLoadingMore(false);
-  }, [loadingMore, hasMore, page, fetchOrders]);
+  }, [loadingMore, hasMore, fetchOrders]);
 
   // ============================================================
   // 点击选单 → 跳到收货页
@@ -520,7 +551,7 @@ export default function WHPurchaseReceiveListScreen() {
           />
           <Text style={styles.emptyTitle}>暂无待收货任务</Text>
           <Text style={styles.emptyHint}>
-            已审批采购单和运营创建的无订单入库预告会在此显示
+            已通过财务审核的采购单和运营创建的无订单入库预告会在此显示
           </Text>
           <Button
             mode="outlined"
@@ -571,7 +602,8 @@ export default function WHPurchaseReceiveListScreen() {
     return (
       <View style={styles.partialWarning}>
         <MaterialCommunityIcons name="alert-outline" size={18} color="#B45309" />
-        <Text style={styles.partialWarningText}>{hiddenSource}加载失败，当前仅显示另一类任务。下拉可重试。</Text>
+        <Text style={styles.partialWarningText}>{hiddenSource}加载失败，当前仅显示已加载任务。请点击重试。</Text>
+        <Button mode="text" compact onPress={onRefresh}>重试</Button>
       </View>
     );
   }, [arrivalLoadError, loadError]);

@@ -1,26 +1,15 @@
 package com.cretas.aims.ai.tool.impl.sales;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.dto.finance.RecordTransactionRequest;
-import com.cretas.aims.entity.finance.ArApTransaction;
-import com.cretas.aims.service.finance.ArApService;
+import com.cretas.aims.exception.BusinessException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Slf4j
 @Component
 public class SalesCreateInvoiceTool extends AbstractBusinessTool {
-
-    @Autowired
-    private ArApService arApService;
-
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     @Override
     public String getToolName() {
@@ -29,7 +18,7 @@ public class SalesCreateInvoiceTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "创建应收账款记录（开票/挂账）。记录客户应付金额，支持关联销售订单。";
+        return "兼容墓碑：sales_create_invoice 已永久停用，不创建应收或发票记录；销售订单完成后由系统自动生成财务待办";
     }
 
     @Override
@@ -77,29 +66,10 @@ public class SalesCreateInvoiceTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String counterpartyId = getString(params, "counterpartyId");
-        String orderId = getString(params, "orderId");
-        BigDecimal amount = getBigDecimal(params, "amount");
-
-        LocalDate dueDate = null;
-        String dueDateStr = getString(params, "dueDate");
-        if (dueDateStr != null) {
-            dueDate = LocalDate.parse(dueDateStr, DATE_FORMATTER);
-        }
-
-        String remark = getString(params, "remark");
-        Long userId = context.get("userId") != null ? ((Number) context.get("userId")).longValue() : 0L;
-
-        ArApTransaction transaction = arApService.recordReceivable(
-                factoryId, counterpartyId, orderId, amount, dueDate, userId, remark);
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("message", "应收记录创建成功");
-        result.put("transactionId", transaction.getId());
-        result.put("counterpartyId", counterpartyId);
-        result.put("amount", amount);
-        result.put("type", transaction.getTransactionType());
-        return result;
+        throw new BusinessException(410,
+                "sales_create_invoice 已停用；禁止通过兼容入口创建手工应收或发票记录")
+                .withHint("请等待销售订单完成后处理系统生成的财务待办")
+                .withHintTarget("销售开票");
     }
 
     @Override
@@ -125,5 +95,30 @@ public class SalesCreateInvoiceTool extends AbstractBusinessTool {
     @Override
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return false;
+    }
+
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public Set<String> getRequiredPermissions() {
+        return Set.of("finance:read_write");
+    }
+
+    @Override
+    public ActionType getActionType() {
+        return ActionType.WRITE;
+    }
+
+    @Override
+    public RiskLevel getRiskLevel() {
+        return RiskLevel.HIGH;
     }
 }

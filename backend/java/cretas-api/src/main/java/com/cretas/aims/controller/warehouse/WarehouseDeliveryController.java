@@ -6,6 +6,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -47,6 +48,24 @@ public class WarehouseDeliveryController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesDeliveryRecord> result = salesService.getPendingWarehouseDeliveries(factoryId, page, size);
+        return ApiResponse.success("查询成功", result);
+    }
+
+    /**
+     * Read-only history for the warehouse workbench.  This intentionally uses the
+     * same tenant-scoped service boundary as the pending queue; the warehouse must
+     * never query the sales-delivery table directly by an unscoped id or status.
+     */
+    @GetMapping("/history")
+    @Operation(summary = "已完成发货历史",
+            description = "返回本工厂已发货、已签收、已取消或退回的发货单，只读")
+    @RequireModule("warehouse")
+    @RequirePermission({"warehouse:read_write", "warehouse:read"})
+    public ApiResponse<PageResponse<SalesDeliveryRecord>> listHistory(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        PageResponse<SalesDeliveryRecord> result = salesService.getWarehouseDeliveryHistory(factoryId, page, size);
         return ApiResponse.success("查询成功", result);
     }
 

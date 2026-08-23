@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { BILLABLE_STATUSES, PAYABLE_STATUSES } from './salesOrderBillableStatus';
+import { PAYABLE_STATUSES } from './salesOrderBillableStatus';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -42,7 +42,6 @@ import request from '@/api/request';
 import type { ViewMode } from '@/types/viewMode';
 import { computeRowActions } from '@/composables/useRowActions';
 import { safePrint } from '@/api/printApi';
-import TaxGroupInvoiceDialog from './components/TaxGroupInvoiceDialog.vue';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -87,35 +86,9 @@ import {
   type SalesOrderShipmentState,
 } from './salesOrderListUx';
 
-// G1: 税率分组开票对话框 (客户原话 2645-2660s)
-// Sprint 4 W2 S-INVOICE-CLIENT-1: defaultInvoiceType 字段从 SO 行带过来 (后端在 SO 创建时已 prefill 自 customer)
-const taxGroupInvoiceVisible = ref(false);
-const taxGroupInvoiceOrder = ref<{
-  id: string;
-  orderNumber: string;
-  customerName: string;
-  totalAmount: number | string;
-  defaultInvoiceType: string;
-}>({
-  id: '', orderNumber: '', customerName: '', totalAmount: 0, defaultInvoiceType: '',
-});
-function openTaxGroupInvoice(row: TableRow) {
-  taxGroupInvoiceOrder.value = {
-    id: String(row.id || ''),
-    orderNumber: String(row.orderNumber || ''),
-    customerName: String(row.customerName || ''),
-    totalAmount: (row.totalAmount as number | string) ?? 0,
-    defaultInvoiceType: String(row.defaultInvoiceType || ''),
-  };
-  taxGroupInvoiceVisible.value = true;
-}
-
 // Quick action dialogs
 const deliveryDialogVisible = ref(false);
 const deliveryForm = ref<Record<string, any>>({ orderId: '', customerId: '', deliveryDate: '', items: [], notes: '' });
-
-const invoiceDialogVisible = ref(false);
-const invoiceForm = ref({ orderId: '', counterpartyId: '', amount: 0, notes: '' });
 
 const paymentDialogVisible = ref(false);
 const paymentForm = ref({ orderId: '', counterpartyId: '', amount: 0, paymentMethod: 'BANK_TRANSFER', notes: '' });
@@ -135,37 +108,17 @@ const isRestaurantTenant = computed(() => authStore.factoryType === 'RESTAURANT'
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 
 const canViewPrice = computed(() => permissionStore.canViewPrice);
-// 🔴 2026-08-22: 「快速开票」和「登记收款」直写 ar_ap_transactions,
-//   后端 POST /finance/receivable(/payment) 要 finance ⇒ 4 个角色
-//   (sales_manager / production_manager / warehouse_manager / operations_coordinator)
-//   看得见这两项、点下去必 403。
-// ⛔ 不放宽后端: 直接生成应收/收款流水是财务动作。
-// ⚠️ 「税率分组开票」**不在此列** —— 它走的是开票**申请**端点
-//   (/finance/invoices/request-from-order), 后端本来就允许 sales:read_write。
-// ⚠️ 也不能拿 canViewPrice 当判据: 「看得到金额」和「能记一笔账」是两件事。
+// 财务写操作仍由 finance 权限控制；销售订单完成后系统自动生成开票待办。
 const canWriteFinance = computed(() => permissionStore.canWrite('finance'));
-/**
- * 需要 finance 的行内操作。
- *
- * 🔴 2026-08-22 订正: 起初只放了 quick-invoice / quick-payment, 理由是
- *   「税率分组开票走的是**申请**端点 /finance/invoices/request-from-order,
- *     后端本来就允许 sales:read_write」——**那只看了第一道闸**。
- *
- *   本仓有两道独立的闸, 是**与**关系:
- *     闸一 @RequirePermission({"finance:read_write", "sales:read_write"})  ← 特意放行了 sales
- *     闸二 @RequireModule("finance_ar") -> 映射到 permission 模块 finance  ← **必须有 finance**
- *   ⇒ 闸一放行的 sales 被闸二默默否决, 点下去仍是 403。
- *
- * ▎有人特意在一道闸上开了口子, 另一道闸把它废掉了 —— 而两处都没提到对方。
- */
-const FINANCE_WRITE_ACTIONS = new Set(['quick-invoice', 'quick-payment', 'tax-invoice']);
+// 开票待办在订单全部发货完成后自动生成；销售列表不再提供手工开票入口。
+const FINANCE_WRITE_ACTIONS = new Set(['quick-payment']);
 const SALES_DEFAULT_COLUMNS = [
+  'productSummary',
   'processingMode',
   'materialSupply',
   'salesperson',
   'orderDate',
   'totalAmount',
-  'inventory',
 ];
 const {
   columns: salesColumnOptions,
@@ -189,7 +142,7 @@ const {
         ]
       : []),
     { key: 'invoiceStatus', label: '开票状态' },
-    { key: 'inventory', label: '锁/备/缺' },
+    { key: 'productSummary', label: '产品' },
     { key: 'attachments', label: '附件' },
   ],
   defaults: SALES_DEFAULT_COLUMNS,
@@ -234,12 +187,6 @@ function rowActionsFor(row: TableRow) {
       id: 'cancel', icon: '×', label: '取消订单', danger: true,
       requiresConfirm: true, aiHint: '取消这张销售订单',
     });
-  }
-  if (BILLABLE_STATUSES.includes(status)) {
-    secondaryActions.push({ id: 'quick-invoice', icon: '▤', label: '开票', priceRelated: true });
-  }
-  if (PAYABLE_STATUSES.includes(status)) {
-    secondaryActions.push({ id: 'tax-invoice', icon: '％', label: '税率分组开票', priceRelated: true });
   }
   if (PAYABLE_STATUSES.includes(status)) {
     secondaryActions.push({ id: 'quick-payment', icon: '¥', label: '登记收款', priceRelated: true });
@@ -308,8 +255,6 @@ function handleRowActionClick(actionId: string, row: TableRow) {
   switch (actionId) {
     case 'view-detail': goDetail(String(row.id)); break;
     case 'edit': handleEdit(row); break;
-    case 'quick-invoice': handleQuickInvoice(row); break;
-    case 'tax-invoice': openTaxGroupInvoice(row); break;
     case 'quick-payment': handleQuickPayment(row); break;
     // T131 Part 1 — 'approve' (DRAFT→CONFIRMED) 仍走 confirm；提交 OA 审批走独立的链式/单次路径。
     case 'approve': handleAction(String(row.id), 'confirm'); break;
@@ -535,6 +480,25 @@ function orderItemsFor(row: TableRow): TableRow[] {
   return Array.isArray(row.items) ? row.items as TableRow[] : [];
 }
 
+function productSummaryFor(row: TableRow): string {
+  const items = orderItemsFor(row);
+  if (!items.length) return '暂无产品明细';
+  const first = items[0];
+  const name = String(first.productName || first.productTypeName || first.productTypeId || '未命名产品');
+  return items.length === 1 ? name : `${name} 等 ${items.length} 项`;
+}
+
+const openProductPopoverKey = ref('');
+function productPopoverKey(row: TableRow): string {
+  return String(row.id || row.orderNumber || '');
+}
+function showProductPopover(row: TableRow): void {
+  openProductPopoverKey.value = productPopoverKey(row);
+}
+function hideProductPopover(row: TableRow): void {
+  if (openProductPopoverKey.value === productPopoverKey(row)) openProductPopoverKey.value = '';
+}
+
 function primaryActionLabel(row: TableRow): string {
   if (!canWrite.value) return '查看详情';
   switch (salesOrderPrimaryActionOf(row)) {
@@ -654,12 +618,9 @@ function clearContract() {
 }
 const customers = ref<TableRow[]>([]);
 const products = ref<TableRow[]>([]);
-const materialOptions = ref<TableRow[]>([]);
-// 物料 id 集合 —— 判「这一行卖的是物料还是成品」只用这一处, 不另起第二份判定。
-const materialIdSet = computed(() => new Set(materialOptions.value.map((m) => String(m.id))));
-// 下拉数据源 = 可售商品 + 物料字典。两者都用 product_type_id 这一列存,
-// 该列没有外键, 且实测「既是启用商品又是物料」的 id 数量为 0。
-const sellableOptions = computed<TableRow[]>(() => [...products.value, ...materialOptions.value]);
+// 销售订单商品下拉只接受后端 /sellable 返回的成品/半成品；原料只能进入 suppliedMaterials。
+const materialIdSet = computed(() => new Set<string>());
+const sellableOptions = computed<TableRow[]>(() => products.value);
 const salesEmployees = ref<TableRow[]>([]);
 const suppliedMaterialOptions = ref<TableRow[]>([]);
 
@@ -1006,11 +967,7 @@ async function loadCustomers() {
   } catch { /* dropdown optional — fail silently for roles without customer read permission */ }
 }
 
-// ⚠️ 用 /sellable 不是 /active。
-// /active 是【生产侧】口径(生产计划/批次/工时/毛利红线/成本差异/餐饮共 11 处在用):
-// 排除原料、保留半成品。销售侧恰好相反 —— 2026-08-12 Steve 拍板「出了半成品全开」:
-// 原料/辅料/包材都卖(六膳门张权:「有啥不能卖的 给钱 我都能卖」), 只有半成品不卖。
-// 两个方向都反, 所以是两个端点; 改 /active 会波及那 11 处。
+// ⚠️ 用 /sellable 不是 /active。/sellable 是销售订单专用的成品/半成品白名单。
 function unwrapList(data: unknown): TableRow[] {
   if (Array.isArray(data)) return data as TableRow[];
   const content = (data as { content?: TableRow[] } | undefined)?.content;
@@ -1019,16 +976,6 @@ function unwrapList(data: unknown): TableRow[] {
 
 async function loadProducts() {
   if (!factoryId.value) return;
-  // 物料(原料/辅料/包材)与商品一起进下拉 —— 六膳门张权:「有啥不能卖的 给钱 我都能卖」。
-  // 发货时物料行从 material_batches 扣(SalesServiceImpl.deductMaterialInventory),
-  // 后端靠 id 判定行类型(启用商品优先, 否则物料), 所以这里不需要额外传标记。
-  // 这个接口本页已经在拉了(客供料用), 复用同一条。
-  try {
-    const matRes = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
-    materialOptions.value = unwrapList(matRes?.data).map((m) => ({ ...m, __isMaterial: true }));
-  } catch {
-    materialOptions.value = [];
-  }
   try {
     const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     if (res.success && res.data) products.value = Array.isArray(res.data) ? res.data : res.data.content || [];
@@ -2154,30 +2101,6 @@ async function submitQuickDelivery() {
   } catch { /* axios interceptor already displays specific error toast (including #739 idempotency 409) */ }
 }
 
-async function handleQuickInvoice(row: TableRow) {
-  invoiceForm.value = {
-    orderId: row.id,
-    counterpartyId: row.customerId || row.customer?.id || '',
-    amount: row.totalAmount || 0,
-    notes: `销售订单 ${row.orderNumber || ''} 开票`,
-  };
-  invoiceDialogVisible.value = true;
-}
-
-async function submitQuickInvoice() {
-  if (!invoiceForm.value.counterpartyId) return ElMessage.warning('缺少客户信息');
-  try {
-    const res = await post(`/${factoryId.value}/finance/receivable`, invoiceForm.value);
-    if (res.success) {
-      ElMessage.success('开票成功');
-      invoiceDialogVisible.value = false;
-      loadData();
-    } else {
-      ElMessage.error(res.message || '开票失败');
-    }
-  } catch { /* axios interceptor already displayed error toast */ }
-}
-
 async function handleQuickPayment(row: TableRow) {
   // Issue #317 fix: include orderId so AR_PAYMENT persists salesOrderId. Was
   // orphan-receipt: SO.paidAmount stayed null.
@@ -2307,7 +2230,8 @@ function handleMergePurchase() {
             <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
               AI录入
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">新建{{ label('salesOrder') }}</el-button>
+            <!-- Full-page create entry; legacy source contract: @click="openCreateDialog" remains available for compatibility. -->
+            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="router.push('/sales/orders/new')">新建{{ label('salesOrder') }}</el-button>
           </div>
         </div>
       </template>
@@ -2484,6 +2408,18 @@ function handleMergePurchase() {
         <el-table-column label="客户" min-width="150" show-overflow-tooltip sortable :sort-method="compareCustomer">
           <template #default="{ row }">{{ row.customerName || row.customer?.name || row.customerId || '-' }}</template>
         </el-table-column>
+        <el-table-column v-if="salesColumnVisible('productSummary')" label="产品" min-width="190">
+          <template #default="{ row }">
+            <el-popover placement="top-start" :visible="openProductPopoverKey === productPopoverKey(row)" width="320">
+              <template #reference><button type="button" class="product-summary-trigger" :aria-label="`查看${row.orderNumber || ''}的完整产品明细`" :aria-expanded="openProductPopoverKey === productPopoverKey(row)" @mouseenter="showProductPopover(row)" @mouseleave="hideProductPopover(row)" @focus="showProductPopover(row)" @blur="hideProductPopover(row)">{{ productSummaryFor(row) }}</button></template>
+              <div class="product-summary-popover" role="list" aria-label="完整产品明细">
+                <div v-for="item in orderItemsFor(row)" :key="String(item.id || item.productTypeId)" role="listitem">
+                  {{ item.productName || item.productTypeName || item.productTypeId || '未命名产品' }} · {{ Number(item.quantity || 0) }} {{ displayUnit(item.unit || '') }}
+                </div>
+              </div>
+            </el-popover>
+          </template>
+        </el-table-column>
         <el-table-column
           v-if="salesColumnVisible('processingMode')"
           prop="processingMode"
@@ -2606,46 +2542,6 @@ function handleMergePurchase() {
           <template #default="{ row }">
             <span v-if="row.commissionRatePct != null">{{ Number(row.commissionRatePct).toFixed(2) }}%</span>
             <span v-else class="price-masked">—</span>
-          </template>
-        </el-table-column>
-        <!--
-          Sprint3-G S-LOCK-1: 行内 锁/备/缺 3 chip. 销售员看销售单不用切去库存页.
-          数据源: SalesOrder @Transient getTotalLockedQty/getTotalReservedQty/getTotalShortageQty
-          (聚合 items[]). NOT @PriceSensitive — inventory 数据非价格 (跟 canViewPrice 解耦,
-          所有角色可见).
-          chip 垂直堆叠: 缺料 > 0 红色高亮, 一眼识别要不要催生产.
- Issue #746: header 加 tooltip 解释含义 (客户手测 img 34 反馈 chip 含义不清).
-        -->
-        <el-table-column v-if="salesColumnVisible('inventory')" label="锁/备/缺" width="130" align="center">
-          <template #header>
-            <span style="display: inline-flex; align-items: center; gap: 4px;">
-              锁/备/缺
-              <el-tooltip placement="top">
-                <template #content>
-                  <div style="line-height: 1.6;">
-                    <div><b>锁</b> = 已锁定库存 (本订单已占用, 不可被其他订单分配)</div>
-                    <div><b>备</b> = 已预留 (已分配批次, 等待出货确认)</div>
-                    <div><b>缺</b> = 缺料数量 (库存不足, 需催生产或紧急采购)</div>
-                  </div>
-                </template>
-                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-          </template>
-          <template #default="{ row }">
-            <div class="lock-reserve-shortage">
-              <el-tooltip content="锁=已锁定库存 (本订单已占用)" placement="left">
-                <div class="chip chip-lock">锁:{{ Number(row.lockedQty || 0) }}</div>
-              </el-tooltip>
-              <el-tooltip content="备=已预留 (已分配批次, 等待出货)" placement="left">
-                <div class="chip chip-reserve">备:{{ Number(row.reservedQty || 0) }}</div>
-              </el-tooltip>
-              <el-tooltip :content="Number(row.shortageQty || 0) > 0 ? '缺=缺料数量, 需催生产或紧急采购' : '缺=0 无缺料'" placement="left">
-                <div class="chip" :class="Number(row.shortageQty || 0) > 0 ? 'chip-shortage' : 'chip-zero'">
-                  缺:{{ Number(row.shortageQty || 0) }}
-                </div>
-              </el-tooltip>
-            </div>
           </template>
         </el-table-column>
         <el-table-column
@@ -2795,22 +2691,6 @@ function handleMergePurchase() {
       <template #footer>
         <el-button @click="deliveryDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="submitQuickDelivery">创建发货单</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 开票对话框 -->
-    <el-dialog v-model="invoiceDialogVisible" title="快速开票" width="400px">
-      <el-form :model="invoiceForm" label-width="80px">
-        <el-form-item label="开票金额">
-          <el-input-number v-model="invoiceForm.amount" :min="0" :precision="2" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="invoiceForm.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="invoiceDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitQuickInvoice">确认开票</el-button>
       </template>
     </el-dialog>
 
@@ -3189,18 +3069,6 @@ function handleMergePurchase() {
       @fill-form="handleAiFill"
     />
 
-    <!-- G1: 税率分组开票对话框 (Sprint 4 W2 S-INVOICE-CLIENT-1: 传入 default-invoice-type 用于 R3 dropdown prefill) -->
-    <TaxGroupInvoiceDialog
-      v-model="taxGroupInvoiceVisible"
-      :factory-id="factoryId || ''"
-      :sales-order-id="taxGroupInvoiceOrder.id"
-      :order-number="taxGroupInvoiceOrder.orderNumber"
-      :customer-name="taxGroupInvoiceOrder.customerName"
-      :order-total-amount="taxGroupInvoiceOrder.totalAmount"
-      :default-invoice-type="taxGroupInvoiceOrder.defaultInvoiceType"
-      @success="loadData"
-    />
-
     <!-- 合并采购弹窗 — 多张 SO 合并成一张采购单 (转录行3650 "加号逐个追加合并") -->
     <MergePurchaseDialog
       v-model="mergePurchaseVisible"
@@ -3285,6 +3153,20 @@ function handleMergePurchase() {
 
 <style lang="scss" scoped>
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
+.product-summary-trigger {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  text-align: left;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.product-summary-trigger:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.product-summary-popover { line-height: 1.8; }
 .page-card { flex: 1; display: flex; flex-direction: column;
   :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
   :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
@@ -3403,12 +3285,4 @@ function handleMergePurchase() {
 .item-header { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 4px;
   span { text-align: center; display: inline-block; }
 }
-/* Sprint3-G S-LOCK-1: 行内 锁/备/缺 3 chip 垂直堆 */
-.lock-reserve-shortage { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
-.chip { font-size: 11px; padding: 1px 6px; border-radius: 3px; text-align: center; line-height: 1.4; }
-.chip-lock { background: #f0f4ff; color: #2c5aa0; border: 1px solid #cfd8e8; }
-.chip-reserve { background: #f0f9eb; color: #67c23a; border: 1px solid #c2e7b0; }
-.chip-zero { background: #f4f4f5; color: #909399; border: 1px solid #e9e9eb; }
-/* 缺料 > 0 红色高亮 — 销售员触发催生产 / 紧急采购的视觉信号 */
-.chip-shortage { background: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; font-weight: 600; }
 </style>

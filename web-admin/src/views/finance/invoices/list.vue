@@ -7,7 +7,6 @@ import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { formatAmount } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
-import { confirmDiscardIfDirty } from '@/utils/confirmDiscardChanges';
 import { WorkflowBar } from '@/components/workflow';
 import { useWorkflowStats } from '@/composables/useWorkflowStats';
 import { getBucketPrimaryStatus, getBucketLabel } from '@/types/workflow';
@@ -48,6 +47,14 @@ const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 0, size: 20, total: 0 });
 const statusFilter = ref('');
 const invoiceTypeFilter = ref('');
+type FailedInvoiceTodo = {
+  salesOrderId: string;
+  orderNumber: string;
+  attempts: number;
+  lastError: string;
+  updatedAt: string;
+};
+const failedTodos = ref<FailedInvoiceTodo[]>([]);
 
 const statusMap: Record<string, { text: string; type: string }> = {
   REQUESTED: { text: '待审核', type: 'warning' },
@@ -73,8 +80,33 @@ onMounted(() => {
   const qs = route.query.status;
   if (typeof qs === 'string' && statusMap[qs]) statusFilter.value = qs;
   loadData();
-  loadSalesOrderOptions();
+  loadFailedTodos();
 });
+
+async function loadFailedTodos() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/finance/invoice-todos/failed`);
+    failedTodos.value = res.success && Array.isArray(res.data) ? res.data : [];
+  } catch {
+    failedTodos.value = [];
+  }
+}
+
+async function retryFailedTodo(todo: FailedInvoiceTodo) {
+  try {
+    await ElMessageBox.confirm(
+      `确认重新处理销售单 ${todo.orderNumber} 的自动开票待办？`,
+      '重新排队',
+      { type: 'warning', confirmButtonText: '重新排队', cancelButtonText: '取消' },
+    );
+    await post(`/${factoryId.value}/finance/invoice-todos/${todo.salesOrderId}/retry`, {});
+    ElMessage.success('已重新排队，系统将自动重试');
+    await loadFailedTodos();
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') handleCatchError(error, '重新排队失败');
+  }
+}
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -114,34 +146,6 @@ function handleReset() {
 }
 // 筛选下拉 change 时同 handleSearch 一样把 page 归零 (system/logs/index.vue 同款 filter-bar 模式)
 function handleFilterChange() { pagination.value.page = 0; loadData(); }
-
-// Apr 21 2026: load invoiceable sales orders so FE can offer a dropdown
-// instead of asking users to hand-copy 订单号 like SO-20260420-0001.
-// 防呆 R1 (fool-proof-design 2026-05-17): include invoicedAmount so dialog
-// can compute + display "可开 ¥{unbilled}" and gate input :max.
-interface SalesOrderOption { id: string; orderNumber: string; customerName: string; totalAmount?: number; invoicedAmount?: number }
-const salesOrderOptions = ref<SalesOrderOption[]>([]);
-async function loadSalesOrderOptions() {
-  if (!factoryId.value) return;
-  try {
-    // Note: endpoint is /sales/orders (SalesController), not /sales-orders.
-    // List all then filter to invoicable statuses client-side (CONFIRMED
-    // through COMPLETED; exclude DRAFT / CANCELLED).
-    const res = await get<{ content: (SalesOrderOption & { status?: string })[] }>(
-      `/${factoryId.value}/sales/orders`,
-      { params: { page: 1, size: 200 } }
-    );
-    if (res.success && res.data) {
-      const invoicableStatuses = new Set([
-        'CONFIRMED', 'PENDING_FINANCE_REVIEW', 'FINANCE_APPROVED',
-        'PROCESSING', 'PARTIAL_DELIVERED', 'COMPLETED',
-      ]);
-      salesOrderOptions.value = (res.data.content || []).filter(
-        o => !o.status || invoicableStatuses.has(o.status)
-      );
-    }
-  } catch { /* silent */ }
-}
 
 async function handleAction(id: string, action: 'approve' | 'reject' | 'issue') {
   const labels = { approve: '审核通过', reject: '驳回', issue: '开具发票' };
@@ -271,9 +275,6 @@ function handlePdfChange(file: { raw: File } | File) {
   return false;
 }
 
-// 开票申请弹窗
-const requestDialogVisible = ref(false);
-
 // ── 订单速览(只读抽屉) ────────────────────────────────────────────
 // ⛔ 只有「打开」这一个动作, 没有任何写操作 —— 能力不是靠挡出来的, 是一开始就不给。
 const peekOrderId = ref<string | null>(null);
@@ -281,62 +282,6 @@ const peekVisible = ref(false);
 function peekOrder(id: string) {
   peekOrderId.value = id;
   peekVisible.value = true;
-}
-const requestForm = ref({ salesOrderId: '', amount: 0, taxAmount: 0, invoiceType: 'NORMAL', remark: '' });
-const submitting = ref(false);
-
-// 防呆 R1+R2 (fool-proof-design 2026-05-17): 选定 SO 后计算未开金额, gate input :max,
-// dialog 标题 + hint 也基于 selectedSO 显示 customer/order context.
-const selectedSO = computed<SalesOrderOption | null>(() =>
-  salesOrderOptions.value.find(o => o.id === requestForm.value.salesOrderId) || null
-);
-const unbilledAmount = computed<number>(() => {
-  if (!selectedSO.value) return 0;
-  const total = Number(selectedSO.value.totalAmount || 0);
-  const invoiced = Number(selectedSO.value.invoicedAmount || 0);
-  return Math.max(0, total - invoiced);
-});
-const requestOverLimit = computed<boolean>(() => {
-  // 价税合计 vs 未开金额 (后端 totalAmount = amount + taxAmount)
-  const total = Number(requestForm.value.amount || 0) + Number(requestForm.value.taxAmount || 0);
-  return total > unbilledAmount.value + 0.001;
-});
-
-// 防呆: 关弹窗前若表单已被改动 (相对打开时的快照) 二次确认
-const requestFormSnapshot = ref('');
-function openRequestDialog() {
-  requestDialogVisible.value = true;
-  requestFormSnapshot.value = JSON.stringify(requestForm.value);
-}
-function requestFormIsDirty(): boolean {
-  return JSON.stringify(requestForm.value) !== requestFormSnapshot.value;
-}
-async function requestCloseRequestDialog() {
-  if (await confirmDiscardIfDirty(requestFormIsDirty())) {
-    requestDialogVisible.value = false;
-  }
-}
-async function handleRequestDialogBeforeClose(done: () => void) {
-  if (await confirmDiscardIfDirty(requestFormIsDirty())) done();
-}
-
-async function handleRequestSubmit() {
-  // 防呆 Rule 4 defense-in-depth: 同一 JS tick 内快速双击, :disabled 响应式更新来不及生效,
-  // 顶部同步 guard 兜底 (后端 409 幂等是最后一道防线, 这里省一次无谓请求)
-  if (submitting.value) return;
-  if (!requestForm.value.salesOrderId || !requestForm.value.amount) {
-    ElMessage.warning('请填写订单ID和金额'); return;
-  }
-  submitting.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/finance/invoices/request`, requestForm.value);
-    if (res.success) {
-      ElMessage.success('开票申请已提交');
-      requestDialogVisible.value = false;
-      loadData();
-    } else { ElMessage.error(res.message || '提交失败'); }
-  } catch { /* axios interceptor already displayed error toast */ }
-  finally { submitting.value = false; }
 }
 </script>
 
@@ -351,6 +296,15 @@ async function handleRequestSubmit() {
       @node-click="handleWorkflowNodeClick"
       @ai-trigger="handleWorkflowAITrigger"
     />
+
+    <el-alert v-if="failedTodos.length" type="error" :closable="false" show-icon style="margin-bottom:16px">
+      <template #title>有 {{ failedTodos.length }} 条自动开票待办已停止重试</template>
+      <div v-for="todo in failedTodos" :key="todo.salesOrderId" style="display:flex;align-items:center;gap:12px;margin-top:8px">
+        <strong>{{ todo.orderNumber }}</strong>
+        <span>已尝试 {{ todo.attempts }} 次：{{ todo.lastError }}</span>
+        <el-button v-if="canWrite" type="danger" link @click="retryFailedTodo(todo)">重新排队</el-button>
+      </div>
+    </el-alert>
     <el-card shadow="never">
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -366,7 +320,7 @@ async function handleRequestSubmit() {
             </el-select>
             <el-button type="primary" @click="handleSearch">搜索</el-button>
             <el-button @click="handleReset">重置</el-button>
-            <el-button v-if="canWrite && canViewPrice" type="primary" @click="openRequestDialog">申请开票</el-button>
+            <el-tag type="info" effect="plain">销售订单完成后自动生成</el-tag>
           </div>
         </div>
       </template>
@@ -455,106 +409,6 @@ async function handleRequestSubmit() {
         @current-change="(p: number) => { pagination.page = p - 1; loadData(); }"
       />
     </el-card>
-
-    <!-- 开票申请弹窗 (防呆 R1+R2 retrofit 2026-05-17) -->
-    <el-dialog
-      v-model="requestDialogVisible"
-      :title="selectedSO
-        ? `申请开票 — ${selectedSO.customerName || '客户未知'} (${selectedSO.orderNumber})`
-        : '申请开票'"
-      width="540px"
-      destroy-on-close
-      :before-close="handleRequestDialogBeforeClose"
-    >
-      <el-form label-width="90px">
-        <el-form-item label="销售订单" required>
-          <el-select
-            v-model="requestForm.salesOrderId"
-            placeholder="选择已确认的销售订单"
-            filterable
-            style="width:100%"
-          >
-            <el-option
-              v-for="o in salesOrderOptions"
-              :key="o.id"
-              :value="o.id"
-              :label="`${o.orderNumber} · ${o.customerName || '-'} · ¥${(o.totalAmount || 0).toLocaleString()}`"
-            />
-            <template #empty>
-              <div style="padding:8px 12px;color:#909399">暂无已确认的销售订单</div>
-            </template>
-          </el-select>
-        </el-form-item>
-        <!-- 防呆 R1: 显式列出 订单总额 / 已开 / 可开 + input :max -->
-        <el-alert
-          v-if="canViewPrice && selectedSO"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom:12px"
-        >
-          <template #title>
-            订单总额 <b>¥{{ Number(selectedSO.totalAmount || 0).toFixed(2) }}</b>
-            · 已开 <b>¥{{ Number(selectedSO.invoicedAmount || 0).toFixed(2) }}</b>
-            · <span :style="{ color: unbilledAmount > 0 ? '#67c23a' : '#f56c6c' }">可开 <b>¥{{ unbilledAmount.toFixed(2) }}</b></span>
-          </template>
-          <template v-if="unbilledAmount === 0" #default>
-            该订单已全额开票, 无需再次申请
-          </template>
-        </el-alert>
-        <!-- fool-proof-design Rule 1 (block-not-clamp fix): 不绑定 :max — ElementPlus
-             InputNumber 会在按键时静默 clamp modelValue 到 max (见 sales/orders/detail.vue
-             收款对话框同款修复注释), 之前这里绑了 :max 导致 requestOverLimit 永远算不出
-             true (值还没来得及超限就被静默拉回), 红字警示 v-if="requestOverLimit" 死代码
-             永不触发 —— 用户体验是"输入超限金额被悄悄改小", 跟收款对话框行为不一致。
-             改用 over-limit-input/over-limit-hint 显式红框 + 红字 + 禁用提交 三重防御. -->
-        <el-form-item v-if="canViewPrice" label="不含税金额" required>
-          <el-input-number
-            v-model="requestForm.amount"
-            :min="0"
-            :precision="2"
-            style="width:100%"
-            :class="{ 'over-limit-input': requestOverLimit }"
-          />
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="税额">
-          <el-input-number
-            v-model="requestForm.taxAmount"
-            :min="0"
-            :precision="2"
-            style="width:100%"
-            :class="{ 'over-limit-input': requestOverLimit }"
-          />
-        </el-form-item>
-        <!-- 防呆 R1: 实时显示 价税合计 vs 未开 上限 + 超限警示 -->
-        <el-form-item v-if="canViewPrice && selectedSO" label="价税合计">
-          <span :style="{ color: requestOverLimit ? '#f56c6c' : '#303133', fontWeight: 'bold' }">
-            ¥{{ (Number(requestForm.amount || 0) + Number(requestForm.taxAmount || 0)).toFixed(2) }}
-          </span>
-          <div v-if="requestOverLimit" class="over-limit-hint over-limit-hint--danger">
-            超过未开金额 ¥{{ unbilledAmount.toFixed(2) }}, 请调低
-          </div>
-        </el-form-item>
-        <el-form-item label="发票类型">
-          <el-select v-model="requestForm.invoiceType" style="width:100%">
-            <el-option label="普通发票" value="NORMAL" />
-            <el-option label="增值税专用发票" value="SPECIAL" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="requestForm.remark" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="requestCloseRequestDialog">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="submitting"
-          :disabled="!requestForm.salesOrderId || !canViewPrice || requestOverLimit || unbilledAmount === 0"
-          @click="handleRequestSubmit"
-        >提交申请</el-button>
-      </template>
-    </el-dialog>
 
     <!-- Bug #4 R7 fix: 开具发票 + PDF 上传 (防呆 R2 retrofit 2026-05-17) -->
     <el-dialog

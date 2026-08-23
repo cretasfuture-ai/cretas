@@ -2,6 +2,7 @@ package com.cretas.aims.dto;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -30,10 +31,16 @@ public class ProductProcessWorkflowDTO {
     private Integer schemaVersion = 1;
 
     private String status;
+    @JsonAlias("definitionVersion")
     private Integer version;
     private Long lockVersion;
     private Long revisionId;
     private String revisionHash;
+
+    /** Save metadata: the referenced draft was frozen and a new draft was created. */
+    private Boolean autoForked = false;
+    private Long forkedFromWorkflowId;
+    private Integer forkedFromVersion;
 
     private List<WorkflowUnitIssueDTO> unitWarnings = new ArrayList<>();
     private Boolean unitReviewRequired = false;

@@ -85,6 +85,25 @@ async function authenticatedGet(page, pathname) {
   }, { url: `${baseUrl}${pathname}` });
 }
 
+async function waitForAutomaticInvoice(page, salesOrderId, timeoutMs = 35_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await authenticatedGet(page,
+      `/api/mobile/F006/finance/invoices/by-sales-order/${encodeURIComponent(salesOrderId)}`);
+    const rows = Array.isArray(last.body?.data) ? last.body.data : [];
+    const requested = rows.filter((row) => row?.salesOrderId === salesOrderId && row?.status === 'REQUESTED');
+    if (last.status < 400 && last.body?.success === true && requested.length === 1) {
+      return { response: last, invoice: requested[0], all: rows };
+    }
+    if (requested.length > 1) {
+      throw new Error(`Automatic invoice is not idempotent for ${salesOrderId}: ${requested.length} REQUESTED records`);
+    }
+    await page.waitForTimeout(1_000);
+  }
+  throw new Error(`Automatic invoice did not appear after completed delivery: ${JSON.stringify(last)}`);
+}
+
 async function selectOption(page, selectRoot, label) {
   await selectRoot.click();
   const option = page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: label }).first();
@@ -1513,9 +1532,9 @@ async function financeInvoiceAndCollect(page, state, report) {
   report.login = await loginRole(page, 'f006_finance_mgr', 'finance_manager');
   if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before invoice/payment mutations');
   report.intendedMutations.push({
-    step: '财务主管完成开票申请、审核、PDF 开具、全额收款登记与确认',
+    step: '财务主管核对系统自动开票待办，完成审核、PDF 开具、全额收款登记与确认',
     methods: [
-      { method: 'POST', endpoint: '/api/mobile/F006/finance/invoices/request' },
+      { method: 'GET', endpoint: '/api/mobile/F006/finance/invoices/by-sales-order/{salesOrderId}' },
       { method: 'POST', endpoint: '/api/mobile/F006/finance/invoices/{invoiceId}/approve' },
       { method: 'POST', endpoint: '/api/mobile/F006/finance/invoices/{invoiceId}/issue', multipart: true },
       { method: 'POST', endpoint: '/api/mobile/F006/finance/payments/record' },
@@ -1527,38 +1546,48 @@ async function financeInvoiceAndCollect(page, state, report) {
 
   await page.goto(`${baseUrl}/finance/invoices`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('main').getByText('开票管理', { exact: true }).waitFor({ state: 'visible', timeout: 35_000 });
-  const invoiceEntry = page.getByRole('button', { name: '申请开票', exact: true });
-  await invoiceEntry.waitFor({ state: 'visible', timeout: 20_000 });
-  await invoiceEntry.click();
-  const requestDialog = page.locator('.el-dialog:visible').filter({ hasText: '申请开票' });
-  await requestDialog.waitFor({ state: 'visible', timeout: 20_000 });
-  const orderSelect = requestDialog.getByRole('combobox').first();
-  await orderSelect.click();
-  await orderSelect.fill(salesOrder.orderNumber);
-  const orderOption = page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: salesOrder.orderNumber }).first();
-  await orderOption.waitFor({ state: 'visible', timeout: 20_000 });
-  await orderOption.click();
-  report.invoiceRequestDialog = await requestDialog.innerText();
-  if (!report.invoiceRequestDialog.includes('可开') || !report.invoiceRequestDialog.includes('¥10001.00')) {
-    throw new Error(`Invoice request did not expose the exact order limit: ${report.invoiceRequestDialog}`);
-  }
-  const amountItem = requestDialog.locator('.el-form-item').filter({ hasText: '不含税金额' });
-  await amountItem.locator('input[role="spinbutton"]').fill(String(salesOrder.totalAmount));
-  await requestDialog.locator('.el-form-item').filter({ hasText: '备注' }).locator('textarea').fill(runKey);
-  const requestResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
-    && new URL(response.url()).pathname === '/api/mobile/F006/finance/invoices/request', { timeout: 35_000 });
-  await requestDialog.getByRole('button', { name: '提交申请', exact: true }).click();
-  const requestResponse = await requestResponsePromise;
-  const requestBody = await requestResponse.json().catch(() => null);
-  const requestedInvoice = requestBody?.data || {};
-  report.actualMutations.push({ method: 'POST', url: requestResponse.url(), statusCode: requestResponse.status(), response: requestedInvoice });
-  if (requestResponse.status() >= 400 || !requestBody?.success || !requestedInvoice.id
-      || requestedInvoice.factoryId !== 'F006' || requestedInvoice.salesOrderId !== salesOrder.id
-      || requestedInvoice.status !== 'REQUESTED') {
-    throw new Error(`Invoice request mismatch: ${requestResponse.status()} ${requestBody?.message} ${requestedInvoice.status}`);
+  const manualEntry = page.getByRole('button', { name: /申请开票|手工开票/, exact: true });
+  if (await manualEntry.count() !== 0) throw new Error('Manual invoice entry must not be exposed');
+  const automatic = await waitForAutomaticInvoice(page, salesOrder.id);
+  const requestedInvoice = automatic.invoice;
+  report.automaticInvoiceObservation = {
+    statusCode: automatic.response.status,
+    salesOrderId: salesOrder.id,
+    recordCount: automatic.all.length,
+    requestedInvoice,
+  };
+  if (!requestedInvoice.id || requestedInvoice.factoryId !== 'F006'
+      || requestedInvoice.salesOrderId !== salesOrder.id || requestedInvoice.status !== 'REQUESTED'
+      || Number(requestedInvoice.amount) !== Number(salesOrder.totalAmount)) {
+    throw new Error(`Automatic invoice mismatch: ${JSON.stringify(requestedInvoice)}`);
   }
   state.entities.invoice = requestedInvoice;
-  state.mutations.push({ phase, action: 'request-invoice', entityId: requestedInvoice.id, at: new Date().toISOString() });
+  const automaticInvoiceLedger = {
+    operation: 'AUTO_CREATE_INVOICE_RECORD',
+    recordId: requestedInvoice.id,
+    factoryId: 'F006',
+    salesOrderId: salesOrder.id,
+    orderNumber: salesOrder.orderNumber,
+    expectedMutation: {
+      method: 'SYSTEM_EVENT_AFTER_DELIVERY',
+      status: 'REQUESTED',
+      amount: salesOrder.totalAmount,
+      exactlyOneRecord: true,
+    },
+    actualMutation: {
+      method: 'GET_READBACK',
+      statusCode: automatic.response.status,
+      status: requestedInvoice.status,
+      amount: requestedInvoice.amount,
+      retained: true,
+    },
+    cleanupOutcome: 'RETAINED_FOR_FINANCE_AUDIT; no production cleanup attempted',
+  };
+  report.automaticInvoiceMutationLedger = automaticInvoiceLedger;
+  state.observations = [
+    ...(state.observations || []),
+    { phase, action: 'observe-automatic-invoice', ...automaticInvoiceLedger, at: new Date().toISOString() },
+  ];
   persistState(state);
 
   const invoiceRow = page.locator('.el-table__row:visible').filter({ hasText: requestedInvoice.invoiceNumber }).first();

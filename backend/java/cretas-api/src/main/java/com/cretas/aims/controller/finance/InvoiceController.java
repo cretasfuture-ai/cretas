@@ -3,6 +3,7 @@ package com.cretas.aims.controller.finance;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.enums.InvoiceStatus;
 import com.cretas.aims.entity.enums.InvoiceType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.finance.InvoiceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -10,7 +11,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.math.BigDecimal;
 import java.util.Map;
 import com.cretas.aims.annotation.RequireModule;
 
@@ -38,37 +38,10 @@ public class InvoiceController {
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
-        // D1 fix: null-guard on amount to prevent NPE → 500 during demo
-        if (body.get("salesOrderId") == null) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "缺少必要参数: salesOrderId"));
-        }
-        if (body.get("amount") == null) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "缺少必要参数: amount"));
-        }
-        var record = invoiceService.requestInvoice(
-                factoryId,
-                (String) body.get("salesOrderId"),
-                new BigDecimal(body.get("amount").toString()),
-                body.get("taxAmount") != null ? new BigDecimal(body.get("taxAmount").toString()) : BigDecimal.ZERO,
-                (String) body.get("invoiceType"),
-                userId,
-                (String) body.get("remark"));
-        return ResponseEntity.ok(Map.of("success", true, "data", record, "message", "开票申请已提交"));
+        throw manualRequestGone();
     }
 
-    /**
-     * 基于销售订单一键生成开票申请,自动按 tax_rate 分组聚合。
-     *
-     * V3 P0-3 / G1 — 客户原话: 一笔订单可同时含 9% 原料 + 13% 加工费两个税项,
-     * 开票申请必须按税率分组拆分显示。
-     *
-     * 请求体:
-     * <pre>
-     * { "salesOrderId": "...", "invoiceType": "NORMAL", "remark": "..." }
-     * </pre>
-     *
-     * 响应里的 record.taxBreakdown 含分组明细供前端按组渲染。
-     */
+    /** 兼容墓碑：按订单手工申请已停用，保留明确 410，防止旧客户端静默误操作。 */
     @RequireModule("finance_ar")
     @PostMapping("/request-from-order")
     @RequirePermission({"finance:read_write", "sales:read_write"})
@@ -76,14 +49,13 @@ public class InvoiceController {
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
-        var record = invoiceService.requestInvoiceFromOrder(
-                factoryId,
-                (String) body.get("salesOrderId"),
-                (String) body.get("invoiceType"),
-                userId,
-                (String) body.get("remark"));
-        return ResponseEntity.ok(Map.of("success", true, "data", record,
-                "message", "开票申请已提交 (按税率分组)"));
+        throw manualRequestGone();
+    }
+
+    private BusinessException manualRequestGone() {
+        return new BusinessException(410, "手工开票申请入口已停用；销售订单全部发货完成后，系统会自动生成待审核开票记录")
+                .withHint("请到销售开票工作台审核、驳回或开具系统生成的记录")
+                .withHintTarget("销售开票");
     }
 
     @RequireModule("finance_ar")

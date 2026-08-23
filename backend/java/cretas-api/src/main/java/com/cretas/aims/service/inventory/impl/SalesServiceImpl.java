@@ -2826,6 +2826,29 @@ public class SalesServiceImpl implements SalesService {
                                 item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
                                 BigDecimal::add)));
 
+        Map<Long, BigDecimal> requestedByOrderItem = new HashMap<>();
+        for (CreateDeliveryShipmentRequest.Item requested : request.getItems()) {
+            SalesDeliveryItem source = parentItems.get(requested.getParentDeliveryItemId());
+            if (source == null) {
+                throw new BusinessException(400, "子发运明细不属于当前母发货单")
+                        .withCode("PARENT_DELIVERY_ITEM_INVALID");
+            }
+            requestedByOrderItem.merge(source.getSalesOrderItemId(), requested.getQuantity(), BigDecimal::add);
+        }
+        if ("FULL".equalsIgnoreCase(request.getDeliveryMode())) {
+            for (SalesDeliveryItem source : parentItems.values()) {
+                BigDecimal parentQty = source.getDeliveredQuantity() != null ? source.getDeliveredQuantity() : BigDecimal.ZERO;
+                BigDecimal remaining = parentQty.subtract(
+                        arrangedByOrderItem.getOrDefault(source.getSalesOrderItemId(), BigDecimal.ZERO)).max(BigDecimal.ZERO);
+                BigDecimal requested = requestedByOrderItem.get(source.getSalesOrderItemId());
+                if (requested == null || requested.compareTo(remaining) != 0) {
+                    throw new BusinessException(409, "一次性全量发运必须覆盖母单每一行的全部剩余数量")
+                            .withCode("DELIVERY_FULL_QUANTITY_REQUIRED")
+                            .withHintTarget("items");
+                }
+            }
+        }
+
         int sequence = children.stream().map(SalesDeliveryRecord::getShipmentSequence)
                 .filter(Objects::nonNull).max(Integer::compareTo).orElse(0) + 1;
         SalesDeliveryRecord child = new SalesDeliveryRecord();
@@ -2845,6 +2868,16 @@ public class SalesServiceImpl implements SalesService {
         child.setTrackingNumber(request.getTrackingNumber());
         child.setDeliveryMethod(hasText(request.getDeliveryMethod())
                 ? request.getDeliveryMethod().trim().toUpperCase() : "LOGISTICS");
+        if ("LOGISTICS".equals(child.getDeliveryMethod())) {
+            if (!hasText(child.getLogisticsCompany())) {
+                throw new BusinessException(400, "物流配送必须填写物流公司")
+                        .withCode("SHIPMENT_LOGISTICS_COMPANY_REQUIRED");
+            }
+            if (!hasText(child.getTrackingNumber())) {
+                throw new BusinessException(400, "物流配送必须填写运单号")
+                        .withCode("SHIPMENT_TRACKING_REQUIRED");
+            }
+        }
         child.setRemark(request.getRemark());
         child.setStatus(SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
         child.setShippedBy(userId);
@@ -3065,6 +3098,9 @@ public class SalesServiceImpl implements SalesService {
         }
 
         record.setStatus(SalesDeliveryStatus.SHIPPED);
+        // shipped_by is the durable warehouse-confirm actor after shipment. Before
+        // confirmation it identifies the sales creator for legacy compatibility.
+        record.setShippedBy(userId);
 
         // 更新销售订单状态
         if (record.getSalesOrderId() != null) {
@@ -3284,6 +3320,21 @@ public class SalesServiceImpl implements SalesService {
                 List.of(SalesDeliveryStatus.DRAFT,
                         SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM,
                         SalesDeliveryStatus.PICKED),
+                pageRequest);
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<SalesDeliveryRecord> getWarehouseDeliveryHistory(String factoryId, int page, int size) {
+        PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<SalesDeliveryRecord> result = deliveryRecordRepository.findByFactoryIdAndStatusIn(
+                factoryId,
+                List.of(SalesDeliveryStatus.PARTIALLY_SHIPPED,
+                        SalesDeliveryStatus.SHIPPED,
+                        SalesDeliveryStatus.DELIVERED,
+                        SalesDeliveryStatus.CANCELLED,
+                        SalesDeliveryStatus.RETURNED),
                 pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
@@ -4305,6 +4356,7 @@ public class SalesServiceImpl implements SalesService {
                 .findByIdAndFactoryIdForUpdate(record.getSalesOrderId(), record.getFactoryId())
                 .orElse(null);
         if (order == null) return;
+        boolean wasCompleted = order.getStatus() == SalesOrderStatus.COMPLETED;
 
         List<SalesOrderItem> orderItems = salesOrderItemRepository.findBySalesOrderId(order.getId());
 
@@ -4368,7 +4420,15 @@ public class SalesServiceImpl implements SalesService {
             order.setStatus(SalesOrderStatus.PARTIAL_DELIVERED);
             order.setTransportPlanStatus("IN_TRANSIT");
         }
-        salesOrderRepository.save(order);
+        SalesOrder savedOrder = salesOrderRepository.save(order);
+        if (allDelivered && !wasCompleted && applicationEventPublisher != null) {
+            try {
+                applicationEventPublisher.publishEvent(new com.cretas.aims.event.SalesOrderCompletedEvent(
+                        this, record.getFactoryId(), savedOrder.getId()));
+            } catch (Exception e) {
+                log.error("发布 SalesOrderCompletedEvent 失败，不影响发货: SO={}", savedOrder.getId(), e);
+            }
+        }
     }
 
     /**
@@ -4564,22 +4624,7 @@ public class SalesServiceImpl implements SalesService {
         target.setPackagingFactor(source.getPackagingFactor());
     }
 
-    /**
-     * 下单行必须是<b>可售</b>的东西 —— 半成品不卖。
-     *
-     * <h3>🔴 为什么有这道守卫 (2026-08-18 prod 实测)</h3>
-     * 销售下拉 {@code GET /product-types/sellable} 已经把半成品排除了, 但<b>后端不校验</b>:
-     * 直接 POST 一条 {@code productTypeId} 指向「SOP-20260817-01-黄油鸡-处理后半成品」的行,
-     * 返回 200「销售订单创建成功」。防呆只在前端下拉里 = 半吊子 ——
-     * 前端换个版本、AI 工具直接调接口、或者从别处复制订单, 都能把半成品卖出去。
-     *
-     * <p>⛔ 判定<b>只用</b> {@link ProductCategory#isSellable} —— 它自己的 javadoc 写着
-     * 「这里是唯一权威, 不要在别处再写一份类别条件」。本方法不重复那个条件。
-     *
-     * <p>⚠️ 只拦<b>确实查得到且确实是半成品</b>的行:
-     * 查不到 productType 的行(原料/辅料/包材走物料字典, 本来就不在 product_types 里)一律放行 ——
-     * 那四类都要能卖(Steve 2026-08-12「出了半成品全开」), 误拦它们比漏拦半成品更糟。
-     */
+    /** 下单行必须是明确的成品或半成品；原料/包材只能进入 suppliedMaterials。 */
     /**
      * 单位落库前归一成权威码 —— 销售侧<b>所有</b>写入点都走这一个函数。
      *
@@ -4662,17 +4707,19 @@ public class SalesServiceImpl implements SalesService {
             if (pid == null || pid.isBlank()) {
                 continue;
             }
-            productTypeRepository.findByIdAndFactoryId(pid, factoryId)
-                    .filter(pt -> !ProductCategory.isSellable(pt.getProductCategory()))
-                    .ifPresent(pt -> {
-                        throw new BusinessException(400,
-                                "半成品不能开销售单: " + pt.getName())
-                                .withCode("SALES_ORDER_ITEM_NOT_SELLABLE")
-                                .withHint("半成品是生产中间物, 请改选成品; "
-                                        + "若确实要外卖这批半成品, 先在产品档案里把它建成可售产品")
-                                .withHintTarget("productTypeId")
-                                .withSeverity("BLOCKING");
-                    });
+            ProductType product = productTypeRepository.findByIdAndFactoryId(pid, factoryId)
+                    .orElseThrow(() -> new BusinessException(400, "销售订单商品不存在或不属于当前工厂")
+                            .withCode("SALES_ORDER_ITEM_NOT_SELLABLE")
+                            .withHintTarget("productTypeId")
+                            .withSeverity("BLOCKING"));
+            if (!ProductCategory.isSalesOrderSellable(product.getProductCategory())) {
+                throw new BusinessException(400,
+                        "销售订单只能选择成品或半成品: " + product.getName())
+                        .withCode("SALES_ORDER_ITEM_NOT_SELLABLE")
+                        .withHint("原料、包材和未知分类请移至客户供料 suppliedMaterials")
+                        .withHintTarget("productTypeId")
+                        .withSeverity("BLOCKING");
+            }
         }
     }
 
@@ -4786,6 +4833,18 @@ public class SalesServiceImpl implements SalesService {
         return factoryWarehouseRepository
                 .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, normalized)
                 .filter(warehouse -> Boolean.TRUE.equals(warehouse.getIsActive()))
+                // Sales source warehouses are deliberately limited to real stock
+                // stages and the logistics/finished-goods stores.  UI filtering is
+                // only a convenience; this server-side gate protects API callers,
+                // old clients, and cross-role warehouse edits alike.
+                .filter(warehouse -> warehouse.getType() != null && java.util.Set.of(
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.RAW,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.WORKSHOP,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.WIP,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.LINESIDE,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.LOGISTICS,
+                        com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.FINISHED
+                ).contains(warehouse.getType()))
                 .map(warehouse -> warehouse.getCode())
                 .orElseThrow(() -> new BusinessException(400, "来源仓库不存在、已停用或不属于当前工厂")
                         .withCode("SOURCE_WAREHOUSE_INVALID")

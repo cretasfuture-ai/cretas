@@ -151,8 +151,8 @@ const deliveryDialogVisible = ref(false);
  */
 const highlightedDeliveryNumber = ref('');
 const deliveryIdempotencyKey = ref('');
-const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; items: TableRow[] }>({
-  deliveryAddress: '', logisticsCompany: '', items: [],
+const deliveryForm = ref<{ deliveryAddress: string; logisticsCompany: string; trackingNumber: string; deliveryMethod: 'LOGISTICS' | 'SELF_DELIVERY' | 'SELF_PICKUP'; deliveryMode: 'FULL' | 'PARTIAL'; items: TableRow[] }>({
+  deliveryAddress: '', logisticsCompany: '', trackingNumber: '', deliveryMethod: 'LOGISTICS', deliveryMode: 'FULL', items: [],
 });
 const shipmentDialogVisible = ref(false);
 const shipmentParent = ref<TableRow | null>(null);
@@ -175,6 +175,8 @@ type AllocationSummary = {
   materialLines: number;
   /** 成品行单位一致时的显示单位; 混单位时为空串(不标, 避免拿一个单位去标另一种的数)。 */
   unit: string;
+  /** 真实批次号与该批次分配数量，供销售/仓储追溯。 */
+  batches: string[];
 };
 const allocationSummary = ref<Record<string, AllocationSummary>>({});
 const masterDeliveries = computed(() => deliveries.value.filter((row) => !row.parentDeliveryId && row.recordRole !== 'SHIPMENT'));
@@ -261,10 +263,6 @@ type AllocItem = { deliveryItemId: string; productName: string; productTypeId: s
 const batchAllocForm = ref<{ deliveryId: string; deliveryNumber: string; items: AllocItem[] }>({
   deliveryId: '', deliveryNumber: '', items: [],
 });
-
-// 开票申请对话框
-const invoiceDialogVisible = ref(false);
-const invoiceForm = ref<{ invoiceType: string; remark: string }>({ invoiceType: 'NORMAL', remark: '' });
 
 // 上传发票 PDF 对话框 (V3 P0-3c)
 const issueDialogVisible = ref(false);
@@ -411,17 +409,11 @@ async function loadProductsForEdit() {
   if (!factoryId.value) return;
   try {
     // Mirror list.vue loadProducts — same endpoints / response shape.
-    // ⚠️ /sellable 不是 /active: /active 是生产侧口径(保留半成品、排除原料), 销售侧相反。
-    // ⚠️ 并且要和列表页一样把【物料】也并进来 —— 列表页能选到而详情页编辑时选不到,
-    //    是最难查的那种不一致(salesProductEndpoint.source.spec.ts 守这条)。
-    const [res, matRes] = await Promise.all([
-      get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never),
-      get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never),
-    ]);
+    // /sellable 是销售订单专用白名单；原料只能在客供原料区维护。
+    const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     const unwrap = (d: any) => (Array.isArray(d) ? d : (d?.content ?? [])) as any[];
-    const mats = unwrap(matRes?.data);
-    materialIdSet.value = new Set(mats.map((m: any) => String(m.id)));
-    const list = [...unwrap(res?.data), ...mats];
+    materialIdSet.value = new Set();
+    const list = unwrap(res?.data);
     products.value = list.map((p: any) => ({
       id: String(p.id),
       name: String(p.name ?? p.productName ?? ''),
@@ -653,6 +645,7 @@ async function loadAllocationSummaries() {
     let allocated = 0;
     let goodsLines = 0;
     let materialLines = 0;
+    const batches: string[] = [];
     const units = new Set<string>();
     for (const item of items) {
       const productTypeId = String(item.productTypeId ?? item.productType?.id ?? '');
@@ -671,6 +664,9 @@ async function loadAllocationSummaries() {
         const res = await get<TableRow[]>(`/${factoryId.value}/sales-deliveries/items/${item.id}/batch-allocations`);
         if (res.success && Array.isArray(res.data)) {
           allocated += res.data.reduce((sum, row) => sum + Number(row.allocatedQty || 0), 0);
+          res.data.forEach((row) => batches.push(
+            `${String(item.productName || item.productTypeId || '产品')} · ${String(row.batchNumber || row.finishedGoodsBatchId || '批次未标注')} ${Number(row.allocatedQty || 0)}${displayUnit(String(row.unit || item.unit || ''))}`,
+          ));
         }
       } catch { /* fail closed: leave incomplete */ }
     }
@@ -686,6 +682,7 @@ async function loadAllocationSummaries() {
       // 🔴 单位只在【成品行单位一致】时才敢标。原来固定取 items[0].unit,
       // 于是「2只 + 1个」被汇总成一句「3 只」——把两种单位的数加起来再随便挑一个标上。
       unit: units.size === 1 ? [...units][0] : '',
+      batches,
     };
   }
   allocationSummary.value = next;
@@ -845,6 +842,9 @@ function openDeliveryDialog() {
   deliveryForm.value = {
     deliveryAddress: address,
     logisticsCompany: '',
+    trackingNumber: '',
+    deliveryMethod: 'LOGISTICS',
+    deliveryMode: 'FULL',
     items: (order.value.items as TableRow[]).map((it) => ({
       salesOrderItemId: it.id,
       productTypeId: it.productTypeId,
@@ -953,6 +953,20 @@ async function handleCreateDelivery() {
   if (filteredItems.length === 0) return ElMessage.warning('请至少填写一个发货数量');
   const overLimit = filteredItems.find((item) => Number(item.deliveredQuantity) > Number(item.maxDeliverableQuantity) + 0.000001);
   if (overLimit) return ElMessage.warning(`${overLimit.productName || '产品'} 发货数量超过剩余可安排数量`);
+  if (deliveryForm.value.deliveryMode === 'FULL'
+    && filteredItems.length !== deliveryForm.value.items.length) {
+    return ElMessage.warning('一次性全量发运必须覆盖每一行的全部剩余数量');
+  }
+  if (deliveryForm.value.deliveryMode === 'FULL'
+    && filteredItems.some((item) => Math.abs(Number(item.deliveredQuantity) - Number(item.maxDeliverableQuantity)) > 0.000001)) {
+    return ElMessage.warning('一次性全量发运的每一行数量必须等于全部剩余量');
+  }
+  if (deliveryForm.value.deliveryMethod === 'LOGISTICS' && !deliveryForm.value.logisticsCompany.trim()) {
+    return ElMessage.warning('物流配送必须填写物流公司');
+  }
+  if (deliveryForm.value.deliveryMethod === 'LOGISTICS' && !deliveryForm.value.trackingNumber.trim()) {
+    return ElMessage.warning('物流配送必须填写运单号');
+  }
   submitting.value = true;
   try {
     const res = await post(`/${factoryId.value}/sales/deliveries`, {
@@ -969,6 +983,31 @@ async function handleCreateDelivery() {
       // 建完停在「订单详情」tab, 单子是建出来了但人看不到, 得自己去点「发货记录」。
       // 直接切过去并把新建那条高亮, 让"建好了"这件事**看得见**。
       const createdNumber = (res.data as { deliveryNumber?: string } | null)?.deliveryNumber || '';
+      // 一次性全量发货仍遵循母/子单状态机：母单只负责计划，自动建立唯一全量子单，
+      // 后续由仓库确认并扣库；分批模式保留母单供销售逐批创建子发运单。
+      if (deliveryForm.value.deliveryMode === 'FULL') {
+        const master = res.data as { id?: string; items?: TableRow[] } | null;
+        const masterItems = Array.isArray(master?.items) ? master.items : [];
+        const childItems = filteredItems.map((planned) => {
+          const masterItem = masterItems.find((item) => String(item.salesOrderItemId || '') === String(planned.salesOrderItemId || ''))
+            || masterItems.find((item) => String(item.productTypeId || '') === String(planned.productTypeId || ''));
+          return masterItem ? { parentDeliveryItemId: Number(masterItem.id), quantity: Number(planned.deliveredQuantity) } : null;
+        }).filter((item): item is { parentDeliveryItemId: number; quantity: number } => Number.isFinite(Number(item?.parentDeliveryItemId)));
+        if (master?.id && childItems.length === filteredItems.length) {
+          await post(`/${factoryId.value}/sales/deliveries/${master.id}/shipments`, {
+            idempotencyKey: `web-full-shipment-${master.id}`,
+            plannedShipmentDate: new Date().toISOString().slice(0, 10),
+            deliveryMethod: deliveryForm.value.deliveryMethod,
+            logisticsCompany: deliveryForm.value.logisticsCompany,
+            trackingNumber: deliveryForm.value.trackingNumber,
+            deliveryMode: 'FULL',
+            deliveryAddress: deliveryForm.value.deliveryAddress,
+            items: childItems,
+          });
+        } else {
+          ElMessage.warning('母发货单已创建，但未能自动建立全量子发运单，请在发货记录中重试');
+        }
+      }
       ElMessage.success(createdNumber ? `发货单 ${createdNumber} 已创建` : '发货单创建成功');
       deliveryDialogVisible.value = false;
       activeTab.value = 'delivery';
@@ -983,6 +1022,19 @@ async function handleCreateDelivery() {
 function deliveryRowClass({ row }: { row: TableRow }): string {
   const number = String((row as { deliveryNumber?: string }).deliveryNumber || '');
   return number && number === highlightedDeliveryNumber.value ? 'just-created-row' : '';
+}
+
+function deliveryQuantitySummary(row: TableRow): string {
+  const items = Array.isArray(row.items) ? row.items as TableRow[] : [];
+  if (!items.length) return '暂无明细';
+  return items.map((item) => `${item.productName || item.productTypeId || '产品'} ${Number(item.deliveredQuantity || 0)}${displayUnit(String(item.unit || ''))}`).join('、');
+}
+
+function deliveryAuditSummary(row: TableRow): string {
+  const shipped = ['SHIPPED', 'DELIVERED', 'SIGNED'].includes(String(row.status || ''));
+  const operator = row.shippedByName || (row.shippedBy ? `用户 #${row.shippedBy}` : '待仓库处理');
+  const time = shipped ? (row.updatedAt || row.shippedAt || '时间待记录') : (row.createdAt || '时间待记录');
+  return `${shipped ? '仓库确认' : '销售创建'}：${operator} · ${time}`;
 }
 
 function openShipmentDialog(parent: TableRow) {
@@ -1243,44 +1295,6 @@ async function handleBatchAllocate() {
   }
 }
 
-// ──────────────────────────────────────────────
-// 开票申请 (V3 P0-3 / G1 — 税率分组)
-// ──────────────────────────────────────────────
-
-function openInvoiceDialog() {
-  invoiceForm.value = { invoiceType: 'NORMAL', remark: '' };
-  invoiceDialogVisible.value = true;
-}
-
-async function handleCreateInvoice() {
-  if (submitting.value) return;
-  submitting.value = true;
-  try {
-    const res = await post(`/${factoryId.value}/finance/invoices/request-from-order`, {
-      salesOrderId: orderId.value,
-      invoiceType: invoiceForm.value.invoiceType,
-      remark: invoiceForm.value.remark,
-    });
-    if (res.success) {
-      ElMessage.success(`开票申请已提交 (${res.data?.taxBreakdown?.length || 0} 个税率组)`);
-      invoiceDialogVisible.value = false;
-      loadInvoices();
-      loadOrder();
-    } else { ElMessage.error(res.message || '开票申请创建失败'); }
-  } catch (e: unknown) {
-    // Bug #8 fix (R21 2026-04-16): axios response interceptor 对所有 4xx/5xx 已显示 toast,
-    // 这里 catch 不再叠加 "请检查网络" (否则用户看到两个 toast: 业务消息 + 误导网络提示)
-    // 仅在 ApiError.status 未设 (纯网络错, 如无响应/CORS) 时才兜底
-    const err = e as { status?: number };
-    if (!err?.status) {
-      // 真网络错误 — interceptor 来不及显示 (e.g. 断网)
-      ElMessage.error('开票申请创建失败，请检查网络');
-    }
-    // 否则 interceptor 已显示后端 message, 此处不再 toast
-  }
-  finally { submitting.value = false; }
-}
-
 async function handleApproveInvoice(invoiceId: string) {
   if (submitting.value) return;
   try {
@@ -1388,17 +1402,6 @@ function computedRemainingAmount() {
 const paymentOverLimit = computed(
   () => Number(paymentForm.value.amount || 0) > computedRemainingAmount() + 0.001,
 );
-
-// 防呆 Rule 1 (fool-proof-design): 开票申请 上限展示 — 订单总额 / 已开票 / 可开票.
-// 缺失导致六膳门全生命周期测试踩坑: 收款登记已有对等 computedRemainingAmount() 上限,
-// 开票申请此前无任何上限展示 (mirror finance/invoices/list.vue R1+R2 retrofit 2026-05-17
-// 和 finance/payments/list.vue E-FP-3 retrofit 的同款模式).
-function computedInvoiceableAmount() {
-  if (!order.value) return 0;
-  const total = Number(order.value.totalAmount || 0);
-  const invoiced = Number(order.value.invoicedAmount || 0);
-  return Math.max(0, total - invoiced);
-}
 
 // V3 P0-11 补强 — 审批进度时间线 (Verification Round 2 / Agent A 截图 3 硬伤)
 // 客户截图底部固定显示 "张权 提交申请 → 刘会林 审批人(已同意)" timeline
@@ -2073,20 +2076,16 @@ async function handleQuickPayFull() {
             </div>
           </el-tab-pane>
 
-          <!-- ─── Tab 2: 开票申请 (V3 P0-3 / G1) ─── -->
+          <!-- ─── Tab 2: 自动生成的开票记录 ─── -->
           <el-tab-pane name="invoice">
             <template #label>
-              开票申请
+              开票记录
               <el-badge v-if="invoices.length" :value="invoices.length" :max="99" class="tab-badge" />
             </template>
 
             <div class="tab-toolbar">
-              <el-button v-if="canWrite && canWriteFinance" type="primary" @click="openInvoiceDialog">
-                + 一键开票申请 (按税率分组)
-              </el-button>
-              <!-- 防呆 Rule 1: 订单总额/已开票/可开票 上限, mirror 收款 tab 的 待收 提示 (line 1536) -->
-              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已开票 {{ formatAmount(order.invoicedAmount || 0) }} / 可开票 {{ formatAmount(computedInvoiceableAmount()) }}</span>
-              <span class="tab-hint">客户原话: 一笔订单可同时含 9% 原料 + 13% 加工费, 按税率分组拆分</span>
+              <span v-if="canViewPrice" class="tab-hint">订单总额 {{ formatAmount(order.totalAmount) }} / 已开票 {{ formatAmount(order.invoicedAmount || 0) }}</span>
+              <span class="tab-hint">全部发货完成后，系统自动按税率分组生成待审核开票记录</span>
             </div>
 
             <el-table :data="invoices" border stripe style="margin-top: 12px">
@@ -2196,11 +2195,18 @@ async function handleQuickPayFull() {
                   <span v-else-if="allocationSummary[String(row.id)]">
                     已分配 {{ allocationSummary[String(row.id)].allocated }}/{{ allocationSummary[String(row.id)].planned }}
                     {{ allocationSummary[String(row.id)].unit }}
+                    <div v-for="batch in allocationSummary[String(row.id)].batches" :key="batch" class="muted-audit">{{ batch }}</div>
                     <span v-if="allocationSummary[String(row.id)].materialLines" style="color: var(--el-text-color-secondary)">
                       (另 {{ allocationSummary[String(row.id)].materialLines }} 行物料自动扣减)
                     </span>
                   </span>
                   <span v-else>0/0</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="数量与操作审计" min-width="250">
+                <template #default="{ row }">
+                  <div>{{ deliveryQuantitySummary(row) }}</div>
+                  <div class="muted-audit">{{ deliveryAuditSummary(row) }}</div>
                 </template>
               </el-table-column>
               <el-table-column label="操作" width="330" align="center">
@@ -2340,7 +2346,21 @@ async function handleQuickPayFull() {
         <el-form-item label="发货地址" required>
           <el-input v-model="deliveryForm.deliveryAddress" placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址" />
         </el-form-item>
-        <el-form-item label="物流公司"><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
+        <el-form-item label="配送方式" required>
+          <el-radio-group v-model="deliveryForm.deliveryMethod">
+            <el-radio value="LOGISTICS">物流配送</el-radio>
+            <el-radio value="SELF_DELIVERY">自送</el-radio>
+            <el-radio value="SELF_PICKUP">客户自提</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司" required><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
+        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号" required><el-input v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号" /></el-form-item>
+        <el-form-item label="发货模式" required>
+          <el-radio-group v-model="deliveryForm.deliveryMode">
+            <el-radio value="FULL">一次性全量发货（自动建一张全量子单）</el-radio>
+            <el-radio value="PARTIAL">分批发货（后续逐批建子单）</el-radio>
+          </el-radio-group>
+        </el-form-item>
       </el-form>
       <el-table :data="deliveryForm.items" border style="margin-top: 12px">
         <el-table-column prop="productName" :label="label('product')" min-width="190" class-name="semantic-text-column" />
@@ -2555,63 +2575,6 @@ async function handleQuickPayFull() {
       <template #footer>
         <el-button @click="batchAllocDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleBatchAllocate">确认分配</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- ─── 一键开票对话框 ─── -->
-    <el-dialog
-      v-model="invoiceDialogVisible"
-      :title="order
-        ? `一键开票申请 — ${order.customerName || order.customer?.name || '客户未知'} (${order.orderNumber || orderId})`
-        : '一键开票申请 (按税率自动分组)'"
-      width="520px"
-      destroy-on-close
-    >
-      <!-- 防呆 Rule 1 (fool-proof-design): 提交前先显订单总额/已开票/可开票上限,
-           mirror 收款登记 computedRemainingAmount() 的展示方式 + finance/invoices/list.vue
-           R1+R2 retrofit 的 banner 样式 (订单总额/已开/可开 三段 + 超限变红). -->
-      <el-alert
-        v-if="canViewPrice"
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px"
-      >
-        <template #title>
-          订单总额 <b>{{ formatAmount(order?.totalAmount || 0) }}</b>
-          · 已开票 <b>{{ formatAmount(order?.invoicedAmount || 0) }}</b>
-          · <span :style="{ color: computedInvoiceableAmount() > 0 ? '#67c23a' : '#f56c6c' }">可开票 <b>{{ formatAmount(computedInvoiceableAmount()) }}</b></span>
-        </template>
-        <template v-if="computedInvoiceableAmount() === 0" #default>
-          该订单已全额开票, 无需再次申请
-        </template>
-      </el-alert>
-      <el-alert
-        type="info"
-        :closable="false"
-        title="系统将自动按销售订单明细的税率分组聚合"
-        description="若订单含 9% 原料 + 13% 加工费, 会生成两组明细供财务审批。提交后按上方「可开票」余额为限自动生成本次开票明细。"
-        style="margin-bottom: 16px"
-      />
-      <el-form label-width="90px">
-        <el-form-item label="发票类型">
-          <el-radio-group v-model="invoiceForm.invoiceType">
-            <el-radio value="NORMAL">普通发票</el-radio>
-            <el-radio value="SPECIAL">增值税专票</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="invoiceForm.remark" type="textarea" :rows="2" placeholder="选填" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="invoiceDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="submitting"
-          :disabled="canViewPrice && computedInvoiceableAmount() === 0"
-          @click="handleCreateInvoice"
-        >提交开票申请</el-button>
       </template>
     </el-dialog>
 
@@ -2836,4 +2799,5 @@ async function handleQuickPayFull() {
 :deep(.just-created-row > td) {
   background: var(--el-color-primary-light-9) !important;
 }
+.muted-audit { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

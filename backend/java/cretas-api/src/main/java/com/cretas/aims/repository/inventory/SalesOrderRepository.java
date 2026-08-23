@@ -7,11 +7,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -176,4 +179,89 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
     @Query("SELECT so FROM SalesOrder so WHERE so.id = :id AND so.factoryId = :factoryId")
     Optional<SalesOrder> findByIdAndFactoryIdForUpdate(
             @Param("id") String id, @Param("factoryId") String factoryId);
+
+    /** Only explicitly marked completions are candidates; historical nulls are never scanned. */
+    @Query("SELECT so FROM SalesOrder so WHERE so.status = " +
+            "com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED " +
+            "AND so.invoiceTodoStatus IN ('PENDING', 'FAILED', 'PROCESSING') " +
+            "AND COALESCE(so.invoiceTodoAttempts, 0) < :maxAttempts " +
+            "AND ((so.invoiceTodoStatus IN ('PENDING', 'FAILED') " +
+            "AND (so.invoiceTodoNextAttemptAt IS NULL OR so.invoiceTodoNextAttemptAt <= :now)) " +
+            "OR (so.invoiceTodoStatus = 'PROCESSING' AND so.invoiceTodoNextAttemptAt <= :now)) " +
+            "ORDER BY so.invoiceTodoNextAttemptAt ASC, so.updatedAt ASC")
+    List<SalesOrder> findInvoiceTodoCandidates(@Param("now") LocalDateTime now,
+                                                @Param("maxAttempts") int maxAttempts,
+                                                Pageable pageable);
+
+    /**
+     * Close an expired lease that has already consumed the retry budget.  This
+     * update intentionally runs before candidate claiming: an exhausted crash
+     * lease must become a visible terminal failure and must never call the
+     * invoice service again.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = 'FAILED', " +
+            "so.invoiceTodoNextAttemptAt = NULL, " +
+            "so.invoiceTodoLastError = :error " +
+            "WHERE so.status = com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED " +
+            "AND so.invoiceTodoStatus = 'PROCESSING' " +
+            "AND so.invoiceTodoNextAttemptAt IS NOT NULL " +
+            "AND so.invoiceTodoNextAttemptAt <= :now " +
+            "AND COALESCE(so.invoiceTodoAttempts, 0) >= :maxAttempts")
+    int markExpiredInvoiceTodosFailed(@Param("now") LocalDateTime now,
+                                      @Param("maxAttempts") int maxAttempts,
+                                      @Param("error") String error);
+
+    /** Claim one todo with a short lease, so a crashed process is retried after restart. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = 'PROCESSING', " +
+            "so.invoiceTodoAttempts = COALESCE(so.invoiceTodoAttempts, 0) + 1, " +
+            "so.invoiceTodoNextAttemptAt = :leaseUntil " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId " +
+            "AND so.status = com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED " +
+            "AND COALESCE(so.invoiceTodoAttempts, 0) < :maxAttempts " +
+            "AND ((so.invoiceTodoStatus IN ('PENDING', 'FAILED') " +
+            "AND (so.invoiceTodoNextAttemptAt IS NULL OR so.invoiceTodoNextAttemptAt <= :now)) " +
+            "OR (so.invoiceTodoStatus = 'PROCESSING' AND so.invoiceTodoNextAttemptAt <= :now))")
+    int claimInvoiceTodo(@Param("id") String id, @Param("factoryId") String factoryId,
+                         @Param("now") LocalDateTime now, @Param("leaseUntil") LocalDateTime leaseUntil,
+                         @Param("maxAttempts") int maxAttempts);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = 'DONE', " +
+            "so.invoiceTodoNextAttemptAt = NULL, so.invoiceTodoLastError = NULL " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId AND so.invoiceTodoStatus = 'PROCESSING'")
+    int markInvoiceTodoDone(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = " +
+            "CASE WHEN COALESCE(so.invoiceTodoAttempts, 0) >= :maxAttempts THEN 'FAILED' ELSE 'PENDING' END, " +
+            "so.invoiceTodoNextAttemptAt = :nextAttemptAt, so.invoiceTodoLastError = :error " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId AND so.invoiceTodoStatus = 'PROCESSING'")
+    int markInvoiceTodoFailure(@Param("id") String id, @Param("factoryId") String factoryId,
+                               @Param("nextAttemptAt") LocalDateTime nextAttemptAt,
+                               @Param("error") String error, @Param("maxAttempts") int maxAttempts);
+
+    /** Read the post-claim attempt number for an observable bounded-retry decision. */
+    @Query("SELECT COALESCE(so.invoiceTodoAttempts, 0) FROM SalesOrder so " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId")
+    Optional<Integer> findInvoiceTodoAttempts(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    /** Explicit finance-admin recovery after a durable todo reaches FAILED. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SalesOrder so SET so.invoiceTodoStatus = 'PENDING', " +
+            "so.invoiceTodoAttempts = 0, so.invoiceTodoNextAttemptAt = NULL, " +
+            "so.invoiceTodoLastError = NULL " +
+            "WHERE so.id = :id AND so.factoryId = :factoryId AND so.invoiceTodoStatus = 'FAILED'")
+    int retryFailedInvoiceTodo(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    /** Finance-visible dead letters that exhausted the bounded automatic-invoice retry policy. */
+    List<SalesOrder> findByFactoryIdAndInvoiceTodoStatusAndInvoiceTodoAttemptsGreaterThanEqualOrderByUpdatedAtDesc(
+            String factoryId, String invoiceTodoStatus, Integer invoiceTodoAttempts,
+            Pageable pageable);
 }

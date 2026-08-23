@@ -62,6 +62,15 @@ class ProductCategorySellableTest {
     }
 
     @Test
+    void salesOrderSellableIsStrictFinishedOrSemiFinishedOnly() {
+        assertThat(ProductCategory.isSalesOrderSellable(ProductCategory.FINISHED_PRODUCT)).isTrue();
+        assertThat(ProductCategory.isSalesOrderSellable(ProductCategory.SEMI_FINISHED)).isTrue();
+        assertThat(ProductCategory.isSalesOrderSellable(ProductCategory.RAW_MATERIAL)).isFalse();
+        assertThat(ProductCategory.isSalesOrderSellable("UNKNOWN_CATEGORY")).isFalse();
+        assertThat(ProductCategory.isSalesOrderSellable(null)).isFalse();
+    }
+
+    @Test
     @DisplayName("大小写与首尾空白不影响判定(库里是自由文本列)")
     void toleratesCasingAndWhitespace() {
         assertThat(ProductCategory.isSellable("semi_finished")).isFalse();

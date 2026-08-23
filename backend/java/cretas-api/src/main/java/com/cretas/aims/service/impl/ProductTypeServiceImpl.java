@@ -693,14 +693,14 @@ public class ProductTypeServiceImpl implements ProductTypeService {
      * <p>所以这里不能复用 findVisible…: 它把要卖的 RAW_MATERIAL 挡在外面, 又把不卖的半成品放进来,
      * <b>两个方向都反</b>。改它会波及那 11 处生产侧调用。
      *
-     * <p>类别口径的唯一权威是 {@link ProductCategory#isSellable} —— 不在 JPQL 里再写一份。
+     * <p>类别口径的唯一权威是 {@link ProductCategory#isSalesOrderSellable} —— 不在 JPQL 里再写一份。
      */
     @Override
     public List<ProductTypeDTO> getSellableProductTypes(String factoryId) {
         log.info("获取可销售的产品类型: factoryId={}", factoryId);
 
         return productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId).stream()
-                .filter(p -> ProductCategory.isSellable(p.getProductCategory()))
+                .filter(p -> ProductCategory.isSalesOrderSellable(p.getProductCategory()))
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
     }

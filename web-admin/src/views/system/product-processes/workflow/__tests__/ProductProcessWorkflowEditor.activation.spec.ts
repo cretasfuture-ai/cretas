@@ -1,5 +1,5 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
-import { ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProductProcessWorkflowEditor from '../ProductProcessWorkflowEditor.vue';
@@ -493,6 +493,35 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
 
     expect(wrapper.get('[data-testid="activation-status"]').text()).toContain('已启用 v4');
     expect(wrapper.get('[data-testid="activation-status"]').text()).not.toContain('v3');
+  });
+
+  it('prefers the backend 409 response.data.message over an Axios generic message', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({
+      success: true,
+      data: definition('PT-A', 'PUBLISHED', 1, 43),
+    });
+    apiMocks.getProductProcessWorkflowActivation.mockResolvedValue({
+      success: true,
+      data: activation('PT-A', 44, 1),
+    });
+    apiMocks.deactivateProductProcessWorkflow.mockRejectedValue({
+      status: 409,
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: {
+          message: 'Workflow 仍被运行中的生产批次引用',
+          actionHint: '请先完成批次',
+        },
+      },
+    });
+    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: vi.fn() }) as never);
+    const wrapper = mountEditor();
+    await flushPromises();
+    await (wrapper.vm as unknown as { deactivateWorkflow: () => Promise<void> }).deactivateWorkflow();
+    await flushPromises();
+
+    expect(errorMessage).toHaveBeenCalledWith('Workflow 仍被运行中的生产批次引用（请先完成批次）');
   });
 
   it('keeps published workflow read-only when a broad unit-review marker is stale', async () => {

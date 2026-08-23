@@ -5054,19 +5054,19 @@ descriptors:
     implementationClass: "com.cretas.aims.ai.tool.impl.sales.SalesCreateInvoiceTool"
     provenance: LEGACY_INFERRED
     actionType: WRITE
-    riskLevel: MEDIUM
+    riskLevel: HIGH
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["finance:read_write"]
     version: "1.0.0"
-    domainTags: ["sales"]
+    domainTags: ["finance"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
+      actionType: true
+      riskLevel: true
       supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10618,40 +10618,40 @@ descriptors:
   - toolName: "finance_invoice_request"
     implementationClass: "com.cretas.aims.ai.tool.impl.finance.InvoiceRequestTool"
     provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
+    actionType: WRITE
+    riskLevel: HIGH
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["finance:read_write"]
     version: "1.0.0"
     domainTags: ["finance"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
+      actionType: true
+      riskLevel: true
       supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
   - toolName: "finance_invoice_request_from_order"
     implementationClass: "com.cretas.aims.ai.tool.impl.finance.InvoiceRequestFromOrderTool"
     provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
+    actionType: WRITE
+    riskLevel: HIGH
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["finance:read_write"]
     version: "1.0.0"
     domainTags: ["finance"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
+      actionType: true
+      riskLevel: true
       supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

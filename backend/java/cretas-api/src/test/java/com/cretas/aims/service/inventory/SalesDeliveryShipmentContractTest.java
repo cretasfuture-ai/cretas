@@ -66,6 +66,7 @@ class SalesDeliveryShipmentContractTest {
 
         SalesDeliveryRecord result = service.shipDelivery("F006", "S2", 1309L);
         assertThat(result.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
+        assertThat(result.getShippedBy()).isEqualTo(1309L);
     }
 
     @Test
@@ -102,6 +103,29 @@ class SalesDeliveryShipmentContractTest {
                 .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo("SHIPMENT_QUANTITY_EXCEEDS_PARENT_REMAINING"));
         verify(salesOrderRepository).findByIdAndFactoryIdForUpdate("SO-1", "F006");
+    }
+
+    @Test
+    @DisplayName("FULL child must cover every mother's exact remaining quantity")
+    void fullShipmentRejectsPartialQuantity() {
+        SalesDeliveryRecord parent = delivery("M1", SalesDeliveryStatus.PENDING_SPLIT);
+        parent.setRecordRole("MASTER");
+        parent.setSalesOrderId("SO-1");
+        parent.setDeliveryAddress("客户地址");
+        parent.setItems(new ArrayList<>(List.of(item(100L, 726L, "5"))));
+        when(deliveryRecordRepository.findById("M1")).thenReturn(Optional.of(parent));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate("SO-1", "F006"))
+                .thenReturn(Optional.of(new SalesOrder()));
+        when(deliveryRecordRepository.findBySalesOrderId("SO-1")).thenReturn(List.of(parent));
+
+        CreateDeliveryShipmentRequest request = shipmentRequest("full-partial", new BigDecimal("4"));
+        request.setDeliveryMode("FULL");
+
+        assertThatThrownBy(() -> service.createDeliveryShipment("F006", "M1", request, 1309L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("DELIVERY_FULL_QUANTITY_REQUIRED"));
+        verify(deliveryRecordRepository, never()).save(any());
     }
 
     @Test

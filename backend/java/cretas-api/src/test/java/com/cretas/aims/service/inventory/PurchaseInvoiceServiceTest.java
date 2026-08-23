@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
+import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.exception.BusinessException;
@@ -75,10 +76,19 @@ class PurchaseInvoiceServiceTest {
         PurchaseOrder po = new PurchaseOrder();
         po.setId(PO_ID);
         po.setFactoryId(FACTORY_ID);
+        po.setSupplierId("SUP-001");
         po.setTotalAmount(BigDecimal.valueOf(9999));
         po.setInvoiceStatus(PurchaseInvoiceStatus.NOT_RECEIVED);
         when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID))
                 .thenReturn(Optional.of(po));
+        lenient().when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(anyString(), anyString()))
+                .thenAnswer(invocation -> purchaseOrderRepository.findByIdAndFactoryId(
+                        invocation.getArgument(0), invocation.getArgument(1)));
+        lenient().when(invoiceRepository.findByIdAndFactoryIdForUpdate(anyString(), anyString()))
+                .thenAnswer(invocation -> invoiceRepository.findById(invocation.getArgument(0)));
+        lenient().when(invoiceRepository.findByFactoryIdAndInvoiceNumberForUpdate(anyString(), anyString()))
+                .thenAnswer(invocation -> invoiceRepository.findByFactoryIdAndInvoiceNumber(
+                        invocation.getArgument(0), invocation.getArgument(1)));
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -88,6 +98,28 @@ class PurchaseInvoiceServiceTest {
     @Nested
     @DisplayName("upload() 上传发票")
     class UploadTests {
+
+        @Test
+        @DisplayName("金额为空或非正数时拒绝登记")
+        void upload_rejectsMissingOrNonPositiveAmount() {
+            assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
+                    FACTORY_ID, PO_ID, "SUP-001", "FP-ZERO", BigDecimal.ZERO, null, 1L));
+            assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
+                    FACTORY_ID, PO_ID, "SUP-001", "FP-NULL", null, null, 1L));
+            verify(invoiceRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("供应商必须与采购订单一致")
+        void upload_rejectsSupplierMismatch() {
+            when(invoiceRepository.findByFactoryIdAndInvoiceNumber(FACTORY_ID, "FP-WRONG-SUP"))
+                    .thenReturn(Optional.empty());
+
+            assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
+                    FACTORY_ID, PO_ID, "SUP-OTHER", "FP-WRONG-SUP",
+                    BigDecimal.ONE, null, 1L));
+            verify(invoiceRepository, never()).save(any());
+        }
 
         @Test
         @DisplayName("正常上传：factoryId 正确设置")
@@ -100,6 +132,7 @@ class PurchaseInvoiceServiceTest {
                     BigDecimal.valueOf(3000), null, 1L);
 
             assertEquals(FACTORY_ID, result.getFactoryId());
+            verify(purchaseOrderRepository).findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID);
         }
 
         @Test
@@ -156,6 +189,7 @@ class PurchaseInvoiceServiceTest {
                             FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
                             BigDecimal.valueOf(3000), null, 1L));
 
+            verify(invoiceRepository).findByFactoryIdAndInvoiceNumberForUpdate(FACTORY_ID, "FP-2026-001");
             verify(invoiceRepository, never()).save(any());
         }
 
@@ -182,6 +216,7 @@ class PurchaseInvoiceServiceTest {
             PurchaseOrder po = new PurchaseOrder();
             po.setId(PO_ID);
             po.setFactoryId(FACTORY_ID);
+            po.setSupplierId("SUP-001");
             po.setTotalAmount(BigDecimal.valueOf(3000));
             po.setInvoiceStatus(PurchaseInvoiceStatus.NOT_RECEIVED);
             when(invoiceRepository.findByFactoryIdAndInvoiceNumber(FACTORY_ID, "FP-2026-009"))
@@ -229,6 +264,9 @@ class PurchaseInvoiceServiceTest {
             when(invoiceRepository.findById(INVOICE_ID)).thenReturn(Optional.of(inv));
 
             purchaseInvoiceService.reconcile(INVOICE_ID, FACTORY_ID, "MATCHED", "金额核对一致", 2L);
+
+            verify(invoiceRepository).findByIdAndFactoryIdForUpdate(INVOICE_ID, FACTORY_ID);
+            verify(purchaseOrderRepository).findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID);
 
             ArgumentCaptor<PurchaseInvoice> captor = ArgumentCaptor.forClass(PurchaseInvoice.class);
             verify(invoiceRepository).save(captor.capture());
@@ -282,6 +320,19 @@ class PurchaseInvoiceServiceTest {
             assertThrows(BusinessException.class, () ->
                     purchaseInvoiceService.reconcile("MISSING", FACTORY_ID, "MATCHED", "", 2L));
         }
+
+        @Test
+        @DisplayName("跨租户发票通过 tenant-scoped lock 查不到且不写入")
+        void reconcile_wrongTenant_isRejectedBeforeMutation() {
+            when(invoiceRepository.findByIdAndFactoryIdForUpdate(INVOICE_ID, "F999"))
+                    .thenReturn(Optional.empty());
+
+            assertThrows(BusinessException.class, () ->
+                    purchaseInvoiceService.reconcile(INVOICE_ID, "F999", "MATCHED", "", 2L));
+
+            verify(invoiceRepository, never()).save(any());
+            verify(purchaseOrderRepository, never()).findByIdAndFactoryIdForUpdate(anyString(), anyString());
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -320,6 +371,69 @@ class PurchaseInvoiceServiceTest {
             List<PurchaseInvoice> result = purchaseInvoiceService.listByPurchaseOrder(FACTORY_ID, PO_ID);
 
             assertEquals(2, result.size());
+        }
+
+        @Test
+        @DisplayName("完成且未收票的采购单自动成为待收票工作项")
+        void listPendingReceiptTodos_completedOrder_returnsTodo() {
+            PurchaseOrder completed = new PurchaseOrder();
+            completed.setId("PO-COMPLETED");
+            completed.setFactoryId(FACTORY_ID);
+            completed.setOrderNumber("CG-20260823-001");
+            completed.setSupplierId("SUP-001");
+            completed.setSupplierName("测试供应商");
+            completed.setOrderDate(LocalDate.of(2026, 8, 23));
+            completed.setStatus(PurchaseOrderStatus.COMPLETED);
+            completed.setInvoiceStatus(PurchaseInvoiceStatus.NOT_RECEIVED);
+            completed.setTotalAmount(new BigDecimal("238.31"));
+            when(purchaseOrderRepository.findInvoiceChaseCandidates(FACTORY_ID))
+                    .thenReturn(List.of(completed));
+
+            var todos = purchaseInvoiceService.listPendingReceiptTodos(FACTORY_ID);
+
+            assertEquals(1, todos.size());
+            assertEquals("CG-20260823-001", todos.get(0).getPurchaseOrderNumber());
+            assertEquals("测试供应商", todos.get(0).getSupplierName());
+            assertEquals(new BigDecimal("238.31"), todos.get(0).getOrderAmount());
+        }
+
+        @Test
+        @DisplayName("已付款但采购未完成的候选不提前进入待收票工作项")
+        void listPendingReceiptTodos_paidButOpenOrder_isExcluded() {
+            PurchaseOrder open = new PurchaseOrder();
+            open.setId("PO-OPEN");
+            open.setFactoryId(FACTORY_ID);
+            open.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
+            when(purchaseOrderRepository.findInvoiceChaseCandidates(FACTORY_ID))
+                    .thenReturn(List.of(open));
+
+            assertTrue(purchaseInvoiceService.listPendingReceiptTodos(FACTORY_ID).isEmpty());
+        }
+
+        @Test
+        @DisplayName("采购发票视图补齐采购单号和供应商名称")
+        void listViews_enrichesOrderAndSupplierNames() {
+            PurchaseInvoice invoice = new PurchaseInvoice();
+            invoice.setId(INVOICE_ID);
+            invoice.setPurchaseOrderId(PO_ID);
+            invoice.setSupplierId("SUP-001");
+            invoice.setInvoiceNumber("FP-001");
+            invoice.setAmount(new BigDecimal("99.00"));
+            invoice.setReconcileStatus("PENDING");
+            PurchaseOrder order = new PurchaseOrder();
+            order.setId(PO_ID);
+            order.setFactoryId(FACTORY_ID);
+            order.setOrderNumber("CG-001");
+            order.setSupplierName("测试供应商");
+            when(invoiceRepository.findByFactoryIdOrderByCreatedAtDesc(FACTORY_ID))
+                    .thenReturn(List.of(invoice));
+            when(purchaseOrderRepository.findAllById(List.of(PO_ID))).thenReturn(List.of(order));
+
+            var rows = purchaseInvoiceService.listViews(FACTORY_ID, null);
+
+            assertEquals(1, rows.size());
+            assertEquals("CG-001", rows.get(0).getPurchaseOrderNumber());
+            assertEquals("测试供应商", rows.get(0).getSupplierName());
         }
     }
 }

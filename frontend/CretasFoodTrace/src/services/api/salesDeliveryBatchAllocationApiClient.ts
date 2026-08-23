@@ -35,11 +35,30 @@ export interface BatchAllocationInput {
   quantity: number;
 }
 
+export interface DeliveryBatchAllocation {
+  id: string;
+  deliveryItemId: string;
+  finishedGoodsBatchId: string;
+  batchNumber: string;
+  allocatedQty: number;
+  unit?: string;
+}
+
 class SalesDeliveryBatchAllocationApiClient {
   private base(deliveryItemId: string, factoryId?: string): string {
     const fid = getCurrentFactoryId(factoryId);
     if (!fid) throw new Error('factoryId 是必需的，请先登录');
     return `/api/mobile/${fid}/sales-deliveries/items/${deliveryItemId}/batch-allocations`;
+  }
+
+  /** 已保存的真实批次分配；发货历史只能读这一份，不能重新跑 FIFO 推荐。 */
+  async list(
+    deliveryItemId: string,
+    factoryId?: string,
+  ): Promise<ApiResponse<DeliveryBatchAllocation[]>> {
+    return apiClient.get<ApiResponse<DeliveryBatchAllocation[]>>(
+      this.base(deliveryItemId, factoryId),
+    );
   }
 
   /** FIFO 推荐（按生产日期升序）—— 手机端「一键分配」的数据来源。 */

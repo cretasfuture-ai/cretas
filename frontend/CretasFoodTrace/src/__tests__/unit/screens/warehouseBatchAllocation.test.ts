@@ -69,8 +69,9 @@ describe('发货确认 · App 上不出现「批次」概念', () => {
     expect(confirm).toMatch(/salesDeliveryBatchAllocationApiClient\.recommendFifo\(/);
   });
 
-  it('⛔ 能不能提交只取决于数量填得对不对', () => {
-    expect(confirm).toMatch(/canSubmit\s*=\s*!loading && !submitting && canSubmitRows\(items\);/);
+  it('⛔ 待确认单能不能提交只取决于数量；历史单永远只读', () => {
+    expect(confirm).toMatch(/canSubmit\s*=\s*!readOnlyHistory && !loading && !submitting && canSubmitRows\(items\);/);
+    expect(confirm).toContain("!isConfirmableDeliveryStatus(record.status)");
   });
 });
 

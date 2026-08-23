@@ -6,10 +6,14 @@ import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +27,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -30,19 +35,27 @@ class ProductProcessWorkflowActivationServiceTest {
 
     @Mock private ProductProcessWorkflowActivationRepository activationRepository;
     @Mock private ProductProcessWorkflowRepository workflowRepository;
+    @Mock private ProductionPlanRepository productionPlanRepository;
+    @Mock private ProductionBatchRepository productionBatchRepository;
     @Mock private ProductProcessWorkflowValidator validator;
     @Mock private ProductProcessWorkflowCatalogValidator catalogValidator;
     @Mock private ProductProcessWorkflowUnitValidator unitValidator;
     @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
     @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
+    @Mock private EntityManager entityManager;
+    @Mock private Query advisoryLockQuery;
 
     private ProductProcessWorkflowActivationService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(advisoryLockQuery);
+        lenient().when(advisoryLockQuery.setParameter(anyString(), any())).thenReturn(advisoryLockQuery);
+        lenient().when(advisoryLockQuery.getSingleResult()).thenReturn(0);
         service = new com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl(
-                activationRepository, workflowRepository, validator, catalogValidator, unitValidator, compiler,
-                bomWorkflowRevisionService, new ObjectMapper());
+                activationRepository, workflowRepository, productionPlanRepository, productionBatchRepository,
+                validator, catalogValidator, unitValidator, compiler,
+                bomWorkflowRevisionService, new ObjectMapper(), entityManager);
     }
 
     @Test
@@ -278,6 +291,46 @@ class ProductProcessWorkflowActivationServiceTest {
         verify(activationRepository).saveAndFlush(current);
         verify(activationRepository, never()).delete(any());
         verify(activationRepository, never()).deleteById(any());
+        verify(entityManager).createNativeQuery(
+                "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockSeed AS text), 0))");
+        verify(advisoryLockQuery).setParameter("lockSeed", "F006\\x1fPT-PIG");
+    }
+
+    @Test
+    void deactivateRejectsRunningPlanAndBatchReferencesWithCounts() {
+        ProductProcessWorkflowActivation current = activation(
+                91L, publishedWorkflow(44L, "F006", "PT-PIG", 3), true, 5L);
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.of(current));
+        when(productionPlanRepository.countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                eq("F006"), eq(44L), any())).thenReturn(2L);
+        when(productionBatchRepository.countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                eq("F006"), eq(44L), any())).thenReturn(1L);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.deactivate("F006", "PT-PIG", 5L));
+
+        assertEquals("WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE", error.getErrorCode());
+        assertTrue(error.getMessage().contains("2 个运行中/暂停计划"), error.getMessage());
+        assertTrue(error.getMessage().contains("1 个运行中/生产中/暂停批次"), error.getMessage());
+        assertNotNull(error.getActionHint());
+        verify(activationRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void deactivateFailsClosedWhenActiveWorkflowIdentityIsMissing() {
+        ProductProcessWorkflowActivation current = activation(
+                91L, publishedWorkflow(44L, "F006", "PT-PIG", 3), true, 5L);
+        current.setActiveWorkflowId(null);
+        when(activationRepository.findByFactoryIdAndProductTypeId("F006", "PT-PIG"))
+                .thenReturn(Optional.of(current));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.deactivate("F006", "PT-PIG", 5L));
+
+        assertEquals("WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN", error.getErrorCode());
+        verifyNoInteractions(productionPlanRepository, productionBatchRepository);
+        verify(activationRepository, never()).saveAndFlush(any());
     }
 
     @Test

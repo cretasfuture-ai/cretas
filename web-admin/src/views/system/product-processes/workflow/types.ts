@@ -192,6 +192,10 @@ export interface ProductProcessWorkflowDefinition {
   lockVersion?: number;
   revisionId?: number | null;
   revisionHash?: string | null;
+  /** Save response metadata when the server froze a referenced row and forked a draft. */
+  autoForked?: boolean;
+  forkedFromWorkflowId?: number | null;
+  forkedFromVersion?: number | null;
   unitReviewRequired?: boolean;
   nodes: ProductProcessWorkflowNode[];
   edges: ProductProcessWorkflowEdge[];

@@ -4,7 +4,11 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.workflow.ProductProcessWorkflowActivationDTO;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
@@ -20,6 +24,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.OptimisticLockException;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -37,12 +42,16 @@ public class ProductProcessWorkflowActivationServiceImpl
 
     private final ProductProcessWorkflowActivationRepository activationRepository;
     private final ProductProcessWorkflowRepository workflowRepository;
+    private final ProductionPlanRepository productionPlanRepository;
+    private final ProductionBatchRepository productionBatchRepository;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
     private final ProductProcessWorkflowUnitValidator unitValidator;
     private final ProductProcessWorkflowRuntimeCompiler compiler;
     private final BomWorkflowRevisionService bomWorkflowRevisionService;
     private final ObjectMapper objectMapper;
+
+    private final EntityManager entityManager;
 
     @Override
     @Transactional
@@ -96,12 +105,66 @@ public class ProductProcessWorkflowActivationServiceImpl
             String factoryId,
             String productTypeId,
             Long expectedLockVersion) {
+        // Must be the exact key used by V20261028_53's batch-pin and activation
+        // triggers. Taking it before reading references closes the start-first
+        // race: a concurrent batch insert cannot decide its pin between our
+        // reference counts and the activation update.
+        lockWorkflowOwner(factoryId, productTypeId);
         ProductProcessWorkflowActivation activation = findActivation(factoryId, productTypeId);
         if (expectedLockVersion == null || !expectedLockVersion.equals(activation.getLockVersion())) {
             throw conflict();
         }
+        assertNoRunningProductionReferences(factoryId, activation);
         activation.setEnabled(false);
         return toDTO(save(activation));
+    }
+
+    private void lockWorkflowOwner(String factoryId, String productTypeId) {
+        entityManager.createNativeQuery(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockSeed AS text), 0))")
+                // V20261028_53/V20261028_65 use E'\\x1f', which PostgreSQL
+                // evaluates to the literal four-character separator "\\x1f".
+                .setParameter("lockSeed", factoryId + "\\x1f" + productTypeId)
+                .getSingleResult();
+    }
+
+    private void assertNoRunningProductionReferences(
+            String factoryId,
+            ProductProcessWorkflowActivation activation) {
+        Long workflowId = activation.getActiveWorkflowId();
+        if (workflowId == null) {
+            throw new BusinessException(409, "当前启用记录缺少 Workflow 身份，不能安全停用")
+                    .withCode("WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN")
+                    .withHint("请刷新当前 Workflow；管理员确认引用后再重试")
+                    .withHintTarget("workflow")
+                    .withSeverity("warning");
+        }
+
+        long runningPlans = productionPlanRepository
+                .countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                        factoryId,
+                        workflowId,
+                        List.of(
+                                ProductionPlanStatus.IN_PROGRESS,
+                                ProductionPlanStatus.PAUSED));
+        long runningBatches = productionBatchRepository
+                .countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                        factoryId,
+                        workflowId,
+                        List.of(
+                                ProductionBatchStatus.IN_PROGRESS,
+                                ProductionBatchStatus.PRODUCING,
+                                ProductionBatchStatus.PAUSED));
+        if (runningPlans == 0 && runningBatches == 0) return;
+
+        String reason = String.format(
+                "Workflow v%s 仍被运行中的生产引用，不能停用：%d 个运行中/暂停计划、%d 个运行中/生产中/暂停批次。",
+                activation.getActiveDefinitionVersion(), runningPlans, runningBatches);
+        throw new BusinessException(409, reason)
+                .withCode("WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE")
+                .withHint("请先完成或取消这些生产计划和批次，再停用 Workflow")
+                .withHintTarget("workflow")
+                .withSeverity("warning");
     }
 
     @Override

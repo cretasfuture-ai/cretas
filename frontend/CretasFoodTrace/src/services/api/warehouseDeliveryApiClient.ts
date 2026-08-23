@@ -24,8 +24,14 @@ export type SalesDeliveryStatus =
   | 'DRAFT'
   | 'PENDING_WAREHOUSE_CONFIRM'
   | 'PICKED'
+  | 'PENDING_SPLIT'
+  | 'PARTIALLY_SCHEDULED'
+  | 'FULLY_SCHEDULED'
+  | 'PARTIALLY_SHIPPED'
   | 'SHIPPED'
   | 'DELIVERED'
+  | 'SIGNED'
+  | 'CANCELLED'
   | 'RETURNED';
 
 /** 发货明细行 (sales_delivery_items). id 是 Long, 序列化为 number. */
@@ -61,12 +67,15 @@ export interface WarehouseDeliveryRecord {
   deliveryAddress?: string | null;
   logisticsCompany?: string | null;
   trackingNumber?: string | null;
+  deliveryMethod?: 'LOGISTICS' | 'SELF_PICKUP' | 'SELF_DELIVERY' | string | null;
   status: SalesDeliveryStatus | string;
   totalAmount?: number;
   remark?: string | null;
   items?: WarehouseDeliveryItem[];
   createdAt?: string;
   updatedAt?: string;
+  /** 仓库最终确认发货的用户 ID；历史页用于责任追溯。 */
+  shippedBy?: number;
 }
 
 /** Spring 分页响应 (后端 PageResponse). */
@@ -107,6 +116,19 @@ class WarehouseDeliveryApiClient {
     factoryId?: string,
   ): Promise<{ success: boolean; data: PageResponse<WarehouseDeliveryRecord>; message?: string }> {
     return apiClient.get(this.warehousePath(factoryId) + '/pending', {
+      params: { page: params?.page ?? 1, size: params?.size ?? 20 },
+    });
+  }
+
+  /**
+   * 已确认/历史发货单 (只读)。与待确认队列一样支持 1-based 分页，
+   * 由仓库发货页与待确认队列同屏展示；不要改用旧 /shipments 手工登记接口。
+   */
+  async getDeliveryHistory(
+    params?: { page?: number; size?: number },
+    factoryId?: string,
+  ): Promise<{ success: boolean; data: PageResponse<WarehouseDeliveryRecord>; message?: string }> {
+    return apiClient.get(this.warehousePath(factoryId) + '/history', {
       params: { page: params?.page ?? 1, size: params?.size ?? 20 },
     });
   }

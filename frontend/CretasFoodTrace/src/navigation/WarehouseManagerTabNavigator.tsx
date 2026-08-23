@@ -24,8 +24,9 @@
  */
 
 import React from "react";
+import { StyleSheet, View } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Icon } from "react-native-paper";
+import { Icon, Text } from "react-native-paper";
 import { WarehouseManagerTabParamList } from "../types/navigation";
 import { useFactoryFeatureStore } from "../store/factoryFeatureStore";
 
@@ -53,8 +54,28 @@ const TAB_COLORS = {
  */
 export const SIMPLIFIED_WAREHOUSE_NAV = true;
 
+function InboundUnavailableScreen() {
+  return <WarehouseFeatureUnavailable title="入库功能未开通" />;
+}
+
+function OutboundUnavailableScreen() {
+  return <WarehouseFeatureUnavailable title="发货功能未开通" />;
+}
+
+function WarehouseFeatureUnavailable({ title }: { title: string }) {
+  return (
+    <View style={styles.unavailable} testID="wh-feature-unavailable">
+      <Icon source="lock-outline" size={44} color="#616161" />
+      <Text variant="titleLarge" style={styles.unavailableTitle}>{title}</Text>
+      <Text variant="bodyLarge" style={styles.unavailableHint}>请联系管理员开通后再操作。</Text>
+    </View>
+  );
+}
+
 export function WarehouseManagerTabNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
+  const inboundEnabled = isScreenEnabled('InboundManagement');
+  const outboundEnabled = isScreenEnabled('OutboundManagement');
 
   return (
     <Tab.Navigator
@@ -91,10 +112,9 @@ export function WarehouseManagerTabNavigator() {
       />
 
       {/* 入库Tab */}
-      {isScreenEnabled('InboundManagement') && (
       <Tab.Screen
         name="WHInboundTab"
-        component={WHInboundStackNavigator}
+        component={inboundEnabled ? WHInboundStackNavigator : InboundUnavailableScreen}
         options={{
           title: "入库",
           tabBarButtonTestID: "wh-tab-inbound",
@@ -103,13 +123,11 @@ export function WarehouseManagerTabNavigator() {
           ),
         }}
       />
-      )}
 
       {/* 发货Tab */}
-      {isScreenEnabled('OutboundManagement') && (
       <Tab.Screen
         name="WHOutboundTab"
-        component={WHOutboundStackNavigator}
+        component={outboundEnabled ? WHOutboundStackNavigator : OutboundUnavailableScreen}
         options={{
           title: "发货",
           tabBarButtonTestID: "wh-tab-outbound",
@@ -118,7 +136,6 @@ export function WarehouseManagerTabNavigator() {
           ),
         }}
       />
-      )}
 
       {/* 库存Tab —— 收敛时隐藏 (owner: 不让仓管在 App 上查库存) */}
       {!SIMPLIFIED_WAREHOUSE_NAV && (
@@ -152,3 +169,23 @@ export function WarehouseManagerTabNavigator() {
 }
 
 export default WarehouseManagerTabNavigator;
+
+const styles = StyleSheet.create({
+  unavailable: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    paddingHorizontal: 32,
+    backgroundColor: "#F7F8FA",
+  },
+  unavailableTitle: {
+    color: "#212121",
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  unavailableHint: {
+    color: "#616161",
+    textAlign: "center",
+  },
+});

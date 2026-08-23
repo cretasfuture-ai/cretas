@@ -2,8 +2,8 @@
   <div class="page-container">
     <!-- 页面标题 -->
     <div class="page-header">
-      <h2 class="page-title">采购发票</h2>
-      <p class="page-subtitle">管理采购发票上传、核对与逾期提醒</p>
+      <h2 class="page-title">采购收票</h2>
+      <p class="page-subtitle">采购单完成后自动进入待收票；供应商来票后登记并核对</p>
     </div>
 
     <!-- 逾期提醒卡 (Fool-proof Rule 5: 有待办就导航) -->
@@ -40,6 +40,49 @@
       </el-alert>
     </el-card>
 
+    <el-card class="data-card todo-card" shadow="never">
+      <template #header>
+        <div class="card-title-row">
+          <span>待收票任务</span>
+          <el-tag type="warning" effect="plain">{{ pendingOrders.length }} 单</el-tag>
+        </div>
+      </template>
+      <el-alert
+        v-if="pendingOrdersError"
+        type="error"
+        :closable="false"
+        title="待收票任务加载失败"
+        description="网络或权限异常，现有待办未被清空。请重试，仍失败时联系管理员检查财务只读权限。"
+        show-icon
+        class="pending-error"
+      />
+      <el-button v-if="pendingOrdersError" type="primary" plain @click="fetchPendingOrders">重试加载</el-button>
+      <el-table
+        v-loading="pendingOrdersLoading"
+        :data="pendingOrders"
+        stripe
+        row-key="purchaseOrderId"
+        empty-text="暂无待收票采购单"
+      >
+        <el-table-column prop="purchaseOrderNumber" label="采购单号" width="180" />
+        <el-table-column prop="supplierName" label="供应商" min-width="150">
+          <template #default="{ row }">{{ row.supplierName || row.supplierId || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="订单金额" width="130" align="right">
+          <template #default="{ row }">{{ row.orderAmount == null ? '—' : `¥${formatAmount(row.orderAmount)}` }}</template>
+        </el-table-column>
+        <el-table-column prop="orderDate" label="下单日期" width="120" />
+        <el-table-column label="状态" width="100" align="center">
+          <template #default><el-tag type="warning" size="small">待收票</el-tag></template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="canWrite" type="primary" link @click="openUploadDialog(row)">登记发票</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- 过滤栏 -->
     <el-card class="filter-card" shadow="never">
       <el-row :gutter="16" align="middle">
@@ -52,10 +95,9 @@
             @change="handleFilterChange"
           >
             <el-option label="全部" value="" />
-            <el-option label="待收票" value="PENDING" />
-            <el-option label="已收票" value="RECEIVED" />
-            <el-option label="已核对" value="RECONCILED" />
-            <el-option label="已逾期" value="OVERDUE" />
+            <el-option label="待核对" value="PENDING" />
+            <el-option label="已核对" value="MATCHED" />
+            <el-option label="金额不符" value="MISMATCHED" />
           </el-select>
         </el-col>
         <el-col :span="6">
@@ -76,7 +118,7 @@
           <el-button
             v-if="canWrite"
             type="primary"
-            @click="openUploadDialog"
+            @click="openUploadDialog()"
           >
             上传发票
           </el-button>
@@ -112,18 +154,6 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="核对结果" prop="reconcileResult" width="100">
-          <template #default="{ row }">
-            <el-tag
-              v-if="row.reconcileResult"
-              :type="row.reconcileResult === 'MATCHED' ? 'success' : 'danger'"
-              size="small"
-            >
-              {{ row.reconcileResult === 'MATCHED' ? '金额相符' : '金额不符' }}
-            </el-tag>
-            <span v-else style="color: #C0C4CC">—</span>
-          </template>
-        </el-table-column>
         <el-table-column label="核对备注" prop="reconcileNote" min-width="120">
           <template #default="{ row }">
             {{ row.reconcileNote || '—' }}
@@ -137,7 +167,7 @@
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button
-              v-if="canWrite && row.reconcileStatus === 'RECEIVED'"
+              v-if="canWrite && row.reconcileStatus === 'PENDING'"
               type="primary"
               link
               size="small"
@@ -201,7 +231,7 @@
           <el-input-number
             v-model="uploadForm.amount"
             :precision="2"
-            :min="0"
+            :min="0.01"
             style="width: 100%"
             placeholder="发票金额"
           />
@@ -307,16 +337,6 @@
               {{ statusLabel(currentRow.reconcileStatus) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="核对结果">
-            <el-tag
-              v-if="currentRow.reconcileResult"
-              :type="currentRow.reconcileResult === 'MATCHED' ? 'success' : 'danger'"
-              size="small"
-            >
-              {{ currentRow.reconcileResult === 'MATCHED' ? '金额相符' : '金额不符' }}
-            </el-tag>
-            <span v-else>—</span>
-          </el-descriptions-item>
           <el-descriptions-item label="核对备注" :span="2">{{ currentRow.reconcileNote || '—' }}</el-descriptions-item>
           <el-descriptions-item label="上传时间">{{ formatDate(currentRow.createdAt) }}</el-descriptions-item>
           <el-descriptions-item label="更新时间">{{ formatDate(currentRow.updatedAt) }}</el-descriptions-item>
@@ -344,8 +364,7 @@ import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
 
 // ─── 类型定义 ───────────────────────────────────────────────
-type InvoiceStatus = 'PENDING' | 'RECEIVED' | 'RECONCILED' | 'OVERDUE'
-type ReconcileResult = 'MATCHED' | 'MISMATCHED'
+type InvoiceStatus = 'PENDING' | 'MATCHED' | 'MISMATCHED'
 
 interface InvoiceRow {
   id: string
@@ -356,23 +375,42 @@ interface InvoiceRow {
   invoiceNumber: string
   amount: number | null   // @PriceSensitive
   reconcileStatus: InvoiceStatus
-  reconcileResult: ReconcileResult | null
   reconcileNote: string | null
   ocrRawResult: string | null
   createdAt: string | null
   updatedAt: string | null
 }
 
+interface PendingInvoiceOrder {
+  purchaseOrderId: string
+  purchaseOrderNumber: string
+  supplierId: string | null
+  supplierName: string | null
+  orderAmount: number | null
+  orderDate: string | null
+}
+
 // ─── Store ────────────────────────────────────────────────────
 const authStore = useAuthStore()
 const permStore = usePermissionStore()
 const factoryId = computed(() => authStore.factoryId)
-const canWrite = computed(() => permStore.canWrite('procurement'))
+const canWrite = computed(() =>
+  authStore.hasRole([
+    'factory_super_admin',
+    'platform_admin',
+    'permission_admin',
+    'finance_manager',
+    'procurement_manager',
+  ]) && (permStore.canWrite('procurement') || permStore.canWrite('finance')),
+)
 
 // ─── 状态 ────────────────────────────────────────────────────
 const loading = ref(false)
 const submitting = ref(false)
 const tableData = ref<InvoiceRow[]>([])
+const pendingOrders = ref<PendingInvoiceOrder[]>([])
+const pendingOrdersLoading = ref(false)
+const pendingOrdersError = ref(false)
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
@@ -389,18 +427,28 @@ const currentRow = ref<InvoiceRow | null>(null)
 
 // 上传表单
 const uploadFormRef = ref<FormInstance>()
-const uploadForm = ref({
+interface UploadInvoiceForm {
+  purchaseOrderId: string
+  supplierId: string
+  invoiceNumber: string
+  amount: number | null
+  ocrRawResult: string
+}
+const uploadForm = ref<UploadInvoiceForm>({
   purchaseOrderId: '',
   supplierId: '',
   invoiceNumber: '',
-  amount: 0,
+  amount: null,
   ocrRawResult: ''
 })
 const uploadRules: FormRules = {
   purchaseOrderId: [{ required: true, message: '请填写采购单 ID', trigger: 'blur' }],
   supplierId: [{ required: true, message: '请填写供应商 ID', trigger: 'blur' }],
   invoiceNumber: [{ required: true, message: '请填写发票号', trigger: 'blur' }],
-  amount: [{ required: true, type: 'number', message: '请填写发票金额', trigger: 'change' }]
+  amount: [
+    { required: true, message: '请填写发票金额', trigger: 'change' },
+    { type: 'number', min: 0.01, message: '发票金额必须大于 0', trigger: 'change' },
+  ]
 }
 
 // 核对表单
@@ -413,20 +461,18 @@ const reconcileRules: FormRules = {
 // ─── 标签映射 ────────────────────────────────────────────────
 function statusLabel(s: string): string {
   const map: Record<string, string> = {
-    PENDING: '待收票',
-    RECEIVED: '已收票',
-    RECONCILED: '已核对',
-    OVERDUE: '已逾期'
+    PENDING: '待核对',
+    MATCHED: '已核对',
+    MISMATCHED: '金额不符'
   }
   return map[s] ?? s
 }
 
 function statusTag(s: string): '' | 'success' | 'warning' | 'danger' | 'info' {
   const map: Record<string, '' | 'success' | 'warning' | 'danger' | 'info'> = {
-    PENDING: 'info',
-    RECEIVED: '',
-    RECONCILED: 'success',
-    OVERDUE: 'danger'
+    PENDING: 'warning',
+    MATCHED: 'success',
+    MISMATCHED: 'danger'
   }
   return map[s] ?? 'info'
 }
@@ -467,29 +513,48 @@ async function fetchData() {
   if (!factoryId.value) return
   loading.value = true
   try {
-    const params: Record<string, unknown> = {
-      page: page.value - 1,
-      size: pageSize.value
-    }
-    // 后端 GET /invoices 要求 poId，如未传则使用空字符串列全量
-    if (filterPoId.value) params.poId = filterPoId.value
-    if (filterStatus.value) params.status = filterStatus.value
-
-    const res = await get(`/${factoryId.value}/invoices`, params)
+    // The current backend contract returns an array and only accepts poId on
+    // this GET.  Send Axios query params correctly, then apply status and
+    // pagination locally so the controls reflect the actual response.
+    const res = await get(`/${factoryId.value}/invoices/views`, {
+      params: filterPoId.value ? { poId: filterPoId.value } : {}
+    })
     if (res.success) {
       const data = res.data
       if (data && typeof data === 'object' && 'content' in data) {
         tableData.value = (data as { content: InvoiceRow[]; totalElements: number }).content
         total.value = (data as { content: InvoiceRow[]; totalElements: number }).totalElements
       } else if (Array.isArray(data)) {
-        tableData.value = data as InvoiceRow[]
-        total.value = data.length
+        const rows = data as InvoiceRow[]
+        const filteredRows = filterStatus.value
+          ? rows.filter((row) => row.reconcileStatus === filterStatus.value)
+          : rows
+        total.value = filteredRows.length
+        const start = (page.value - 1) * pageSize.value
+        tableData.value = filteredRows.slice(start, start + pageSize.value)
       }
     }
   } catch (err) {
     console.error('获取发票列表失败', err)
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchPendingOrders() {
+  if (!factoryId.value) return
+  pendingOrdersLoading.value = true
+  pendingOrdersError.value = false
+  try {
+    const res = await get(`/${factoryId.value}/invoices/pending-orders`, {})
+    if (!res.success || !Array.isArray(res.data)) {
+      throw new Error(res.message || '待收票任务响应格式异常')
+    }
+    pendingOrders.value = res.data as PendingInvoiceOrder[]
+  } catch {
+    pendingOrdersError.value = true
+  } finally {
+    pendingOrdersLoading.value = false
   }
 }
 
@@ -505,9 +570,16 @@ function resetFilter() {
 }
 
 // ─── 上传发票 ────────────────────────────────────────────────
-function openUploadDialog() {
-  uploadForm.value = { purchaseOrderId: '', supplierId: '', invoiceNumber: '', amount: 0, ocrRawResult: '' }
+function openUploadDialog(todo?: PendingInvoiceOrder) {
   uploadFormRef.value?.resetFields()
+  uploadForm.value = {
+    purchaseOrderId: todo?.purchaseOrderId || '',
+    supplierId: todo?.supplierId || '',
+    invoiceNumber: '',
+    // 订单金额只用于对照，不能冒充供应商真实来票金额；否则后端会把相等金额自动判为 MATCHED。
+    amount: null,
+    ocrRawResult: ''
+  }
   uploadDialogVisible.value = true
 }
 
@@ -529,6 +601,7 @@ async function doUpload() {
         uploadDialogVisible.value = false
         fetchData()
         fetchReminders()
+        fetchPendingOrders()
       } else {
         ElMessage({ message: res.message || '上传失败', type: 'error', duration: 0, showClose: true })
       }
@@ -588,6 +661,7 @@ function openDetailDialog(row: InvoiceRow) {
 onMounted(() => {
   fetchData()
   fetchReminders()
+  fetchPendingOrders()
 })
 </script>
 
@@ -632,6 +706,10 @@ onMounted(() => {
   border-radius: 10px;
   box-shadow: 0 2px 12px rgba(27, 101, 168, 0.06);
 }
+
+.todo-card { margin-bottom: 16px; }
+.card-title-row { display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
+.pending-error { margin-bottom: 12px; }
 
 .pagination-wrap {
   display: flex;

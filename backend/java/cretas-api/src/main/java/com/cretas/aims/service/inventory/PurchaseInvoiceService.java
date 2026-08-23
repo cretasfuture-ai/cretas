@@ -1,6 +1,8 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceTodoDTO;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceViewDTO;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -59,9 +61,15 @@ public interface PurchaseInvoiceService {
      */
     List<String> listPendingReminder(String factoryId);
 
+    /** 完成/关闭且仍未收到供应商发票的采购单，自动形成待收票工作项。 */
+    List<PurchaseInvoiceTodoDTO> listPendingReceiptTodos(String factoryId);
+
     /** 查询某采购订单的全部发票 */
     List<PurchaseInvoice> listByPurchaseOrder(String factoryId, String poId);
 
     /** 查询本工厂全部发票 (采购发票管理页直接进入, 不带 poId 时列全量, 按创建时间倒序) */
     List<PurchaseInvoice> listByFactory(String factoryId);
+
+    /** 财务工作台列表视图，补齐采购单号和供应商名称。 */
+    List<PurchaseInvoiceViewDTO> listViews(String factoryId, String poId);
 }

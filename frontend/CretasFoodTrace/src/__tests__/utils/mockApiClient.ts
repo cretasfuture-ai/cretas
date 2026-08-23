@@ -4,8 +4,9 @@
  */
 
 import MockAdapter from 'axios-mock-adapter';
-import { AxiosInstance } from 'axios';
 import { apiClient } from '../../services/api/apiClient';
+
+type MockAxiosInstance = ConstructorParameters<typeof MockAdapter>[0];
 
 /**
  * 创建Axios Mock实例
@@ -13,8 +14,9 @@ import { apiClient } from '../../services/api/apiClient';
  * @returns MockAdapter实例
  */
 export function createApiMock(delayResponse = false): MockAdapter {
-  // Cast apiClient to AxiosInstance for MockAdapter compatibility
-  const mock = new MockAdapter(apiClient as unknown as AxiosInstance, { delayResponse: delayResponse ? 100 : 0 });
+  // The production client is a wrapper; use the adapter's own constructor type
+  // so test-only Axios generic versions cannot conflict with the app's wrapper.
+  const mock = new MockAdapter(apiClient as unknown as MockAxiosInstance, { delayResponse: delayResponse ? 100 : 0 });
   return mock;
 }
 
