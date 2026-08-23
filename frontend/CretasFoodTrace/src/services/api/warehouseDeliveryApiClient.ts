@@ -67,12 +67,15 @@ export interface WarehouseDeliveryRecord {
   deliveryAddress?: string | null;
   logisticsCompany?: string | null;
   trackingNumber?: string | null;
+  deliveryMethod?: 'LOGISTICS' | 'SELF_PICKUP' | 'SELF_DELIVERY' | string | null;
   status: SalesDeliveryStatus | string;
   totalAmount?: number;
   remark?: string | null;
   items?: WarehouseDeliveryItem[];
   createdAt?: string;
   updatedAt?: string;
+  /** 仓库最终确认发货的用户 ID；历史页用于责任追溯。 */
+  shippedBy?: number;
 }
 
 /** Spring 分页响应 (后端 PageResponse). */

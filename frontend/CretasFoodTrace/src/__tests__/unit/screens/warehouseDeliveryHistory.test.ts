@@ -5,6 +5,10 @@ const source = fs.readFileSync(
   path.resolve(__dirname, '../../../screens/warehouse/outbound/WHDeliveryConfirmListScreen.tsx'),
   'utf8',
 );
+const detailSource = fs.readFileSync(
+  path.resolve(__dirname, '../../../screens/warehouse/outbound/WHDeliveryConfirmScreen.tsx'),
+  'utf8',
+);
 
 describe('发货确认与历史同屏契约', () => {
   it('并行读取待确认与只读历史，来源失败时保留另一来源并可重试', () => {
@@ -21,10 +25,14 @@ describe('发货确认与历史同屏契约', () => {
     expect(source).toContain('historyPageRef.current + 1');
   });
 
-  it('终态卡片不进入确认写流程并明确标为只读历史', () => {
-    expect(source).toContain('disabled={!isConfirmableDeliveryStatus(row.status)}');
-    expect(source).toContain("if (!isConfirmableDeliveryStatus(row.status)) return;");
-    expect(source).toContain('只读历史 · 不可确认');
+  it('终态卡片可打开核账，但明细页保持只读且展示责任与实际批次', () => {
+    expect(source).toContain("isCompletedDeliveryStatus(row.status) ? '查看发货记录'");
+    expect(source).toContain('row.shippedBy');
+    expect(source).toContain('row.updatedAt');
     expect(source).toContain("['completed', '已完成/历史'");
+    expect(detailSource).toContain('const readOnlyHistory = Boolean(record && !isConfirmableDeliveryStatus(record.status))');
+    expect(detailSource).toContain('salesDeliveryBatchAllocationApiClient.list(row.id)');
+    expect(detailSource).toContain("readOnlyHistory ? '实际出库批次：'");
+    expect(detailSource).toContain('{!readOnlyHistory && <Surface style={styles.footer}');
   });
 });

@@ -232,7 +232,6 @@ export function WHDeliveryConfirmListScreen() {
   }, [historyHasMore, loadData, loadingMore, pendingHasMore]);
 
   const openConfirm = (row: WarehouseDeliveryRecord) => {
-    if (!isConfirmableDeliveryStatus(row.status)) return;
     navigation.navigate('WHDeliveryConfirm', {
       deliveryId: row.id,
       deliveryNumber: row.deliveryNumber,
@@ -354,7 +353,6 @@ export function WHDeliveryConfirmListScreen() {
                 <TouchableRipple
                   key={row.id}
                   onPress={() => openConfirm(row)}
-                  disabled={!isConfirmableDeliveryStatus(row.status)}
                   rippleColor="rgba(76, 175, 80, 0.15)"
                 >
                   <Surface style={styles.orderCard} elevation={1}>
@@ -388,6 +386,24 @@ export function WHDeliveryConfirmListScreen() {
                           <Text style={styles.infoValue}>{row.logisticsCompany}</Text>
                         </View>
                       )}
+                      {!!row.trackingNumber && (
+                        <View style={styles.infoRow}>
+                          <Text style={styles.infoLabel}>物流单号</Text>
+                          <Text style={styles.infoValue}>{row.trackingNumber}</Text>
+                        </View>
+                      )}
+                      {isCompletedDeliveryStatus(row.status) && (
+                        <>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>操作者</Text>
+                            <Text style={styles.infoValue}>{row.shippedBy ? `用户 ${row.shippedBy}` : '系统未记录'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>完成时间</Text>
+                            <Text style={styles.infoValue}>{row.updatedAt || '-'}</Text>
+                          </View>
+                        </>
+                      )}
                     </View>
 
                     <View style={styles.itemLines}>
@@ -406,7 +422,7 @@ export function WHDeliveryConfirmListScreen() {
                       <Text style={styles.itemCountText}>共 {itemLines.length} 项</Text>
                       <View style={styles.actionLink}>
                         <Text style={styles.actionText}>
-                          {isCompletedDeliveryStatus(row.status) ? '只读历史 · 不可确认' : '确认并发货'}
+                          {isCompletedDeliveryStatus(row.status) ? '查看发货记录' : '下一步：确认并发货'}
                         </Text>
                         <MaterialCommunityIcons name="chevron-right" size={16} color="#4CAF50" />
                       </View>

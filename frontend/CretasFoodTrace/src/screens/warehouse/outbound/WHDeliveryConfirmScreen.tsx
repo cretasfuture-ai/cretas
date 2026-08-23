@@ -25,6 +25,7 @@ import {
 import { handleError } from '../../../utils/errorHandler';
 import { validateQty, canSubmitRows, buildActualQuantities, shortfallOf } from './warehouseDeliveryConfirm.logic';
 import { salesDeliveryBatchAllocationApiClient } from '../../../services/api/salesDeliveryBatchAllocationApiClient';
+import { isConfirmableDeliveryStatus } from '../warehouseList.logic';
 
 type NavigationProp = NativeStackNavigationProp<WHOutboundStackParamList, 'WHDeliveryConfirm'>;
 type ScreenRoute = RouteProp<WHOutboundStackParamList, 'WHDeliveryConfirm'>;
@@ -82,6 +83,7 @@ export function WHDeliveryConfirmScreen() {
         return;
       }
       setRecord(res.data);
+      const readOnlyHistory = !isConfirmableDeliveryStatus(res.data.status);
       const detailItems = Array.isArray(res.data.items) ? res.data.items : [];
       const mapped: EditableItem[] = detailItems.map((it) => {
         const planned = Number(it.deliveredQuantity) || 0;
@@ -107,6 +109,16 @@ export function WHDeliveryConfirmScreen() {
       void (async () => {
         try {
           const withPicks = await Promise.all(mapped.map(async (row) => {
+            if (readOnlyHistory) {
+              const saved = await salesDeliveryBatchAllocationApiClient.list(row.id);
+              const picks = (saved?.data ?? [])
+                .map((allocation) => ({
+                  batchNumber: String(allocation.batchNumber ?? ''),
+                  qty: Number(allocation.allocatedQty ?? 0),
+                }))
+                .filter((pick) => pick.batchNumber && pick.qty > 0);
+              return { ...row, pickBatches: picks };
+            }
             if (!row.productTypeId) return row;
             const need = Number(row.actualQtyText) || row.plannedQty;
             const rec = await salesDeliveryBatchAllocationApiClient.recommendFifo(row.id, {
@@ -153,7 +165,8 @@ export function WHDeliveryConfirmScreen() {
     .find((e) => e != null);
   const hasError = firstError != null;
   const anyChanged = items.some((it) => Number(it.actualQtyText) !== it.plannedQty);
-  const canSubmit = !loading && !submitting && canSubmitRows(items);
+  const readOnlyHistory = Boolean(record && !isConfirmableDeliveryStatus(record.status));
+  const canSubmit = !readOnlyHistory && !loading && !submitting && canSubmitRows(items);
 
   // 库存不足时的出路对话框(⛔ 不是只弹一句他做不到的话)
   const [shortageDialogVisible, setShortageDialogVisible] = useState(false);
@@ -226,7 +239,7 @@ export function WHDeliveryConfirmScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Header title="发货确认" onBack={() => navigation.goBack()} />
+      <Header title={readOnlyHistory ? '发货记录' : '发货确认'} onBack={() => navigation.goBack()} />
 
       <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
         {/* Rule 2: 上下文 — 单号 / 客户 / 销售单 */}
@@ -244,20 +257,48 @@ export function WHDeliveryConfirmScreen() {
             <Text style={styles.infoLabel}>计划日期</Text>
             <Text style={styles.infoValue}>{record?.deliveryDate || '-'}</Text>
           </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>当前状态</Text>
+            <Text style={styles.infoValue}>{record?.status || '-'}</Text>
+          </View>
           {!!record?.logisticsCompany && (
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>物流公司</Text>
               <Text style={styles.infoValue}>{record.logisticsCompany}</Text>
             </View>
           )}
+          {!!record?.trackingNumber && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>物流单号</Text>
+              <Text style={styles.infoValue}>{record.trackingNumber}</Text>
+            </View>
+          )}
+          {readOnlyHistory && (
+            <>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>操作者</Text>
+                <Text style={styles.infoValue}>{record?.shippedBy ? `用户 ${record.shippedBy}` : '系统未记录'}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>完成时间</Text>
+                <Text style={styles.infoValue}>{record?.updatedAt || '-'}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>下一步</Text>
+                <Text style={styles.infoValue}>只读留档；签收状态由销售端继续跟进</Text>
+              </View>
+            </>
+          )}
         </Surface>
 
         {/* 提示: 默认按计划, 改动需重新分配批次 */}
         <Surface style={styles.warnCard} elevation={1}>
-          <MaterialCommunityIcons name="alert-outline" size={18} color="#f57c00" />
+          <MaterialCommunityIcons name={readOnlyHistory ? 'check-circle-outline' : 'alert-outline'} size={18} color={readOnlyHistory ? '#2e7d32' : '#f57c00'} />
           <Text style={styles.warnText}>
-            请填写每行实际发货数量（默认 = 计划数量）。确认后系统扣减成品库存。
-            {anyChanged ? ' 已修改数量 —— 如批次已分配，需先到"发货记录"重新分配保证总量匹配。' : ''}
+            {readOnlyHistory
+              ? '这是已完成的发货记录。数量和实际出库批次只读展示，不会再次扣减库存。'
+              : '请填写每行实际发货数量（默认 = 计划数量）。确认后系统扣减成品库存。'}
+            {!readOnlyHistory && anyChanged ? ' 已修改数量 —— 系统会按实发数量重新核对批次。' : ''}
           </Text>
         </Surface>
 
@@ -298,6 +339,12 @@ export function WHDeliveryConfirmScreen() {
                       </Text>
                     </View>
                     <View style={styles.actualBox}>
+                      {readOnlyHistory ? (
+                        <View style={styles.plannedBox}>
+                          <Text style={styles.plannedLabel}>实际发货</Text>
+                          <Text style={styles.plannedValue}>{it.actualQtyText} {it.unit}</Text>
+                        </View>
+                      ) : (
                       <TextInput
                         mode="outlined"
                         label={`实发 (最多 ${it.plannedQty})`}
@@ -310,6 +357,7 @@ export function WHDeliveryConfirmScreen() {
                         contentStyle={styles.qtyInputContent}
                         testID={`wh-actual-qty-${it.id}`}
                       />
+                      )}
                       {!!err && <Text style={styles.errText}>{err}</Text>}
                     </View>
                   </View>
@@ -322,7 +370,7 @@ export function WHDeliveryConfirmScreen() {
                     <View style={styles.pickBox} testID={`wh-pick-batches-${it.id}`}>
                       <View style={styles.pickHeader}>
                         <MaterialCommunityIcons name="package-variant" size={14} color="#409eff" />
-                        <Text style={styles.pickTitle}>请从这些货里取：</Text>
+                        <Text style={styles.pickTitle}>{readOnlyHistory ? '实际出库批次：' : '请从这些货里取：'}</Text>
                       </View>
                       {it.pickBatches.map((p) => (
                         <Text key={p.batchNumber} style={styles.pickLine}>
@@ -370,7 +418,7 @@ export function WHDeliveryConfirmScreen() {
       </ScrollView>
 
       {/* 底部确认按钮 — 直接触发写操作, 不藏 Alert 回调 */}
-      <Surface style={styles.footer} elevation={4}>
+      {!readOnlyHistory && <Surface style={styles.footer} elevation={4}>
         <Button
           mode="contained"
           onPress={submitConfirm}
@@ -385,7 +433,7 @@ export function WHDeliveryConfirmScreen() {
           {submitting ? '确认中...' : '确认并扣库存'}
         </Button>
         {hasError && <Text style={styles.footerHint}>请修正数量后再确认（{firstError}）</Text>}
-      </Surface>
+      </Surface>}
 
       <Snackbar
         visible={snackbar.visible}
