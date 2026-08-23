@@ -13,6 +13,7 @@ const ROUTES = Object.freeze({
   bomAchievement: '/production/bom-achievement',
   labelQc: '/quality/label-qc',
   restaurantStaffing: '/restaurant/staffing',
+  salesOrders: '/sales/orders',
 });
 
 module.exports = { ROUTES };
