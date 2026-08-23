@@ -7,8 +7,6 @@
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
-- `UX-F006-WAREHOUSE-RN-HOME-RECEIVING-20260823` — `review` — Owner: `/root` — Base SHA: `e356afc69af2215839625b435becadf2e256b57d` — Scope lock: RN 仓管 `WarehouseManagerTabNavigator`/`WarehouseManagerNavigator`、`WHHomeScreen`、`WHInboundListScreen`、`WHPurchaseReceiveListScreen`、`WHDeliveryConfirmListScreen`、对应 warehouse navigation/screen unit tests、`docs/specs/f006-warehouse-rn-home-and-receiving-ux-2026-08-23.md`、本行与当日归档。验收：四导航与两按钮首页；入库列表以采购收货任务为真值，筛选和排序为待收货→部分入库→已完成；移除餐饮入口、财审通过与明细行；收发货逐项显示真实单位且多单位不错误合计；目标 Jest、TypeScript、Expo export、离线本地 main 合入及生产 RN OTA 后设备验收分开记录。
-
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
 
 - `UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802` — `blocked` — Owner: `/root` — 实现提交已进入迁移树，代码与 Expo Web 验收可核销；当前餐饮 RN OTA runtime 与真实设备验收无法确认。实现文件 scope 已释放；如继续，仅新建 exact-commit OTA/设备验收项。
