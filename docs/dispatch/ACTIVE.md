@@ -5,8 +5,6 @@
 
 ## 在飞任务
 
-- `SEC-DEPENDENCY-BASELINE-20260823` — `in-progress` — Owner: `/root` — Base SHA: `7129c9b527e5c4fc823e5827b0a50d3b5bcfc8cd` — Scope lock: `.github/dependabot.yml`、`.github/workflows/web-admin-gate.yml`、`.github/workflows/web-dist.yml`、`web-admin/package.json`、`web-admin/package-lock.json`、对应 Web 依赖审计/类型检查/测试/build、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`。先建立 security-only、按生态分组的 Dependabot 配置，禁止自动批量 version update；Web 工作流在受控启用前升级到 GitHub 官方当前主版本；本批只修复活跃 Web Admin 可安全升级的漏洞依赖，不抢写六扇门锁定的 `backend/python/requirements.txt`，不修改业务代码或生产数据。验收：修改前后 GitHub/npm 告警清单、锁文件完整性、Web typecheck/目标测试/build、Secret gate、精确 HEAD PR/CI；合并后仅在 Web tree 真实变化时从 clean exact `origin/main` 原子发布并通过四方哈希。
-
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
@@ -38,8 +36,6 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
-
-- `SEC-DEPENDENCY-BASELINE-20260823`：仅 `.github/dependabot.yml`、`.github/workflows/web-admin-gate.yml`、`.github/workflows/web-dist.yml`、`web-admin/package.json`、`web-admin/package-lock.json`、Web 依赖审计/类型检查/目标测试/build、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-23-active-history.md`；不得修改业务源码、`backend/python/requirements.txt`、Java/RN/Mall 依赖或生产数据。验收：Dependabot 仅生成分组 security-update PR，版本更新关闭；Web 工作流使用 GitHub 官方当前主版本并通过受控远程运行；Web Critical/High 可修复项升级后 lockfile 完整，`npm audit`、`vue-tsc`、目标测试和 build 通过；PR 精确 HEAD、Secret gate 通过，合并后 exact-main Web 发布四方哈希一致。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
