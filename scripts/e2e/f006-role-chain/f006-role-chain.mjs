@@ -72,6 +72,7 @@ async function loginRole(page, username, expectedRole) {
     expectedUsername: username,
     expectedFactoryId: 'F006',
     expectedRole,
+    allowMobileOnlyLanding: expectedRole === 'quality_inspector',
   });
 }
 
@@ -403,32 +404,33 @@ async function salesCreateSubmit(page, state, report) {
 
   await page.goto(`${baseUrl}/sales/orders`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: /新建销售订单/ }).click();
-  const dialog = page.locator('.el-dialog:visible').filter({ hasText: '新建销售订单' });
-  await dialog.waitFor({ state: 'visible', timeout: 20_000 });
-  await dialog.locator('.create-options-loading').waitFor({ state: 'hidden', timeout: 20_000 }).catch(() => {});
+  await page.waitForURL(/\/sales\/orders\/new$/, { timeout: 20_000 });
+  const formPage = page.locator('.sales-order-new-page');
+  await formPage.waitFor({ state: 'visible', timeout: 20_000 });
+  await formPage.locator('.el-skeleton').waitFor({ state: 'hidden', timeout: 20_000 }).catch(() => {});
 
-  const customerItem = dialog.locator('.el-form-item').filter({ hasText: '客户' }).first();
+  const customerItem = formPage.locator('.el-form-item').filter({ hasText: '客户' }).first();
   await selectOption(page, customerItem.locator('.el-select').first(), '叮咚');
-  const addressItem = dialog.locator('.el-form-item').filter({ hasText: '交货地址' }).first();
+  const addressItem = formPage.locator('.el-form-item').filter({ hasText: '交货地址' }).first();
   await addressItem.locator('input').fill(`${runKey} F006 测试收货地址`);
-  await dialog.locator('.el-form-item').filter({ hasText: '备注' }).first().locator('textarea').fill(runKey);
+  await formPage.locator('.el-form-item').filter({ hasText: '备注' }).first().locator('textarea').fill(runKey);
 
-  const itemRow = dialog.locator('.item-row:not(.item-header)').first();
+  await formPage.getByRole('button', { name: '添加产品', exact: true }).click();
+  const productDialog = page.locator('.el-dialog:visible').filter({ hasText: '选择销售产品' });
+  await productDialog.getByPlaceholder('搜索中文名 / 编码 / 全拼 / 首字母').fill(productSearch);
+  const productOption = productDialog.locator('.product-picker-row').filter({ hasText: productSearch }).first();
+  await productOption.waitFor({ state: 'visible', timeout: 20_000 });
+  await productOption.click();
+
+  const itemRow = formPage.locator('.line-table .el-table__row').first();
   await itemRow.waitFor({ state: 'visible', timeout: 20_000 });
-  await selectOption(page, itemRow.locator('.el-select').first(), productSearch);
   await itemRow.locator('.el-input-number input').nth(0).fill('1');
   await itemRow.locator('.el-input-number input').nth(1).fill('10001');
-  const packagingInput = itemRow.locator('input[placeholder="请选择箱规"], input[placeholder="默认箱规"]').first();
-  if (await packagingInput.isVisible().catch(() => false)) {
-    await packagingInput.click();
-    const firstPackaging = page.locator('.el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)').first();
-    await firstPackaging.waitFor({ state: 'visible', timeout: 15_000 });
-    await firstPackaging.click();
-  }
+  await selectOption(page, itemRow.locator('.el-select').first(), '成品仓');
 
   const createResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/mobile/F006/sales/orders', { timeout: 25_000 });
-  await dialog.getByRole('button', { name: '创建', exact: true }).click();
+  await formPage.getByRole('button', { name: '保存草稿', exact: true }).click();
   const createResponse = await createResponsePromise;
   const created = compactBusinessData(await createResponse.json());
   report.actualMutations.push({ method: 'POST', url: createResponse.url(), statusCode: createResponse.status(), response: created });
@@ -440,9 +442,7 @@ async function salesCreateSubmit(page, state, report) {
   state.mutations.push({ phase, action: 'create-sales-order', entityId: created.id, at: new Date().toISOString() });
   persistState(state);
 
-  await dialog.waitFor({ state: 'hidden', timeout: 20_000 });
-  const row = page.locator('.el-table__row:visible').filter({ hasText: created.orderNumber }).first();
-  await row.waitFor({ state: 'visible', timeout: 20_000 });
+  await page.waitForURL(new RegExp(`/sales/orders/${created.id}$`), { timeout: 20_000 });
   const submitResponses = [];
   const responseListener = (response) => {
     const pathname = new URL(response.url()).pathname;
@@ -453,7 +453,7 @@ async function salesCreateSubmit(page, state, report) {
     }
   };
   page.on('response', responseListener);
-  await row.locator('.business-action-row').getByRole('button').first().click();
+  await page.getByRole('button', { name: '确认并提交 OA 审批', exact: true }).click();
   const confirmation = page.locator('.el-message-box:visible').filter({ hasText: created.orderNumber });
   await confirmation.getByRole('button', { name: '提交并判定', exact: true }).click();
   await page.waitForTimeout(1500);
@@ -1374,6 +1374,7 @@ async function salesCreateDeliveryAllocate(page, state, report) {
     const addressInput = dialog.locator('input[placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址"]');
     if (!(await addressInput.inputValue()).trim()) await addressInput.fill(`F006 ${runKey} 测试收货地址`);
     await dialog.locator('input[placeholder="如：顺丰冷链"]').fill('E2E冷链');
+    await dialog.locator('input[placeholder="填写物流运单号"]').fill(`E2E-${Date.now()}`);
     report.deliveryDialog = await dialog.innerText();
     if (!report.deliveryDialog.includes('剩余可安排 1盒')) {
       throw new Error(`Sales delivery prefill does not show exact remaining 1 box: ${report.deliveryDialog}`);
@@ -1419,6 +1420,33 @@ async function salesCreateDeliveryAllocate(page, state, report) {
   });
 
   let shipment = state.entities.salesShipment;
+  if (!shipment) {
+    const shipmentReadback = await authenticatedGet(page, `/api/mobile/F006/sales/deliveries/${delivery.id}/shipments`);
+    const existingShipments = Array.isArray(shipmentReadback.body?.data) ? shipmentReadback.body.data : [];
+    const automaticFullShipment = existingShipments.find((item) => item?.parentDeliveryId === delivery.id
+      && item?.salesOrderId === salesOrder.id && Array.isArray(item?.items)
+      && item.items.some((line) => Number(line.deliveredQuantity) === 1));
+    report.automaticFullShipmentReadback = { statusCode: shipmentReadback.status, records: existingShipments };
+    if (automaticFullShipment) {
+      shipment = {
+        success: true,
+        message: '一次性全量发货已自动建立唯一子发运单',
+        id: automaticFullShipment.id,
+        factoryId: automaticFullShipment.factoryId || 'F006',
+        deliveryNumber: automaticFullShipment.deliveryNumber,
+        parentDeliveryId: automaticFullShipment.parentDeliveryId,
+        salesOrderId: automaticFullShipment.salesOrderId,
+        status: automaticFullShipment.status,
+        items: automaticFullShipment.items,
+      };
+      state.entities.salesShipment = shipment;
+      state.observations = [
+        ...(state.observations || []),
+        { phase, action: 'observe-automatic-full-shipment', entityId: shipment.id, at: new Date().toISOString() },
+      ];
+      persistState(state);
+    }
+  }
   if (!shipment) {
     const createShipmentEntry = page.locator('button:visible').filter({ hasText: '新建分批发运' }).first();
     await createShipmentEntry.waitFor({ state: 'visible', timeout: 30_000 });
@@ -1526,8 +1554,8 @@ async function financeInvoiceAndCollect(page, state, report) {
       || shipment.factoryId !== 'F006' || shipment.status !== 'SHIPPED') {
     throw new Error('Tracked shipped F006 sales order is required');
   }
-  if (state.entities.invoice || state.entities.customerPayment) {
-    throw new Error('Invoice/payment already tracked; refusing duplicate finance mutations');
+  if (state.entities.customerPayment || (state.entities.invoice && state.entities.invoice.status !== 'REQUESTED')) {
+    throw new Error('Completed invoice/payment already tracked; refusing duplicate finance mutations');
   }
   report.login = await loginRole(page, 'f006_finance_mgr', 'finance_manager');
   if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before invoice/payment mutations');
@@ -1590,6 +1618,8 @@ async function financeInvoiceAndCollect(page, state, report) {
   ];
   persistState(state);
 
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('main').getByText('开票管理', { exact: true }).waitFor({ state: 'visible', timeout: 35_000 });
   const invoiceRow = page.locator('.el-table__row:visible').filter({ hasText: requestedInvoice.invoiceNumber }).first();
   await invoiceRow.waitFor({ state: 'visible', timeout: 30_000 });
   const approveResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'

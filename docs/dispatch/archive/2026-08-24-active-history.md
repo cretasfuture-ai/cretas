@@ -20,3 +20,12 @@
 - 真实 PostgreSQL：9 tests，0 failure、0 error、0 skipped；已知无关 Hibernate DDL 警告不影响目标断言。
 - 发布构建：29 个 Java 测试类共 128 tests，0 failure、0 error、9 个显式 opt-in PG 用例在该生命周期内跳过（已在独立真实 PG 生命周期全部通过）；Java 与 Web 各构建 1 次，可信 JAR SHA-256 `a98d078772674ba822f0f9d5b8fc3e5a16cdf87840486a9fe32b1cf6d517d850`，Web archive SHA-256 `45beb17a54cf72832e7a985ec57bc72b25d0e50e1c56a5fb4567b2e2ae934b3b`。JAR 仅预上传缓存，未安装、未重启、未切流。
 - Web：8 files / 122 tests 与 `vue-tsc --noEmit` 通过；仓储 RN 6 suites / 52 tests 通过。实现、测试、PR/合并、部署与用户验收继续分开记录。
+
+## `RELEASE-F006-WAREHOUSE-FINANCE-SALES-WORKFLOW-20260823` — `merged`
+
+- **合并真值**：PR #17 已 squash merge；`origin/main` 为 `96175083beba3570eeeb35d265f182a67a2b0a77`。最终 exact-main 候选完成 Java 29 个显式测试类（148 tests，0 failure / 0 error；9 个 opt-in PostgreSQL 用例在独立真实 PostgreSQL 生命周期通过）、Web 生产构建、Web 421 files / 3439 tests（5 skipped）、RN 6 suites / 52 tests、权限漂移基线 4 / 当前 4 / 新增 0。
+- **部署真值**：统一发布回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787504466-41.json` 为 `deployed`。Java/Web 均复用可信 manifest，生产 upstream 已切至 `47.100.235.168:10010`；`cretas-backend` 启动于 `2026-08-24 01:01:45 CST`，JAR mtime 为 `2026-08-24 01:01:34.824708980 +0800`，进程晚于制品。直连 health 为 `UP`，Web HTTP 200 且线上 index SHA-256 为 `44ef691e6dab9f166ebee1774468115927e0be1f83c4a7623f677bf9a89e0296`。Flyway `20261030.20` 与 `20261030.21` 均成功。
+- **生产只读验收**：F006 质检角色价格掩码通过，批次名称/数量可见且 price/cost/amount 键均不可见；租户隔离通过。生产只读 harness 的 blocked mutation attempts 与 actual business writes 均为 0。部分通用菜单爬虫因移动端角色落点和首屏渲染时机标记为工具 `UNVERIFIED`，未当作产品失败。
+- **F006 写入型 E2E**：每次切换角色均使用新的浏览器上下文重新登录并证明 `factoryId=F006`。采购单 `PO-20260824-0001` 完成收货并显示 `COMPLETED/已收货`，AP `1784106f-1118-493c-979c-835163183206` 已核销为 `PAID`；销售单 `SO-20260824-0003` 完成生产、结单、RN 成品入库与 RN 质检，生产结单 `6505ded4-373a-4f7c-a251-487058a2d709` 为 `POSTED`、质检 `f0ed1469-fecc-420f-b58a-18ae6d4656bf` 为 `PASS`。销售 Web 一次性全量发货自动生成唯一子单 `DLV-20260824-4489-01`，FIFO 批次分配后由仓管 RN 确认为 `SHIPPED`；系统随后仅生成 1 张自动开票记录 `INV-20260824-ABD9413F80`，已审核并开具为 `ISSUED`，收款 `PAY-20260824-0016` 已确认为 `VERIFIED`。生产数据库最终回读采购单、销售单均为 `COMPLETED`，自动发票计数精确为 1。
+- **数据收尾**：两张无可生产/脚本不兼容的失败销售草稿、其一失败生产计划/批次及对应 2 条审批实例和 1 条生产 Workflow 实例共 7 条记录已按 F006 + 精确实体 ID 做可恢复软删除，回读剩余 0。成功的采购、库存、生产、发货、发票与收付款凭证属于本次完整审计链，按财务/库存可追溯要求保留，不做破坏性回滚。
+- **scope 释放**：父任务已从 ACTIVE 移除；仓储 RN、采购/销售/财务、Workflow、迁移、测试和发布 scope 全部释放。实现、测试、commit、合并、部署与上述生产验收均已分别取得证据。
