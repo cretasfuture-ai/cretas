@@ -12,6 +12,8 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +27,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -39,15 +42,20 @@ class ProductProcessWorkflowActivationServiceTest {
     @Mock private ProductProcessWorkflowUnitValidator unitValidator;
     @Mock private ProductProcessWorkflowRuntimeCompiler compiler;
     @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
+    @Mock private EntityManager entityManager;
+    @Mock private Query advisoryLockQuery;
 
     private ProductProcessWorkflowActivationService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(advisoryLockQuery);
+        lenient().when(advisoryLockQuery.setParameter(anyString(), any())).thenReturn(advisoryLockQuery);
+        lenient().when(advisoryLockQuery.getSingleResult()).thenReturn(0);
         service = new com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl(
                 activationRepository, workflowRepository, productionPlanRepository, productionBatchRepository,
                 validator, catalogValidator, unitValidator, compiler,
-                bomWorkflowRevisionService, new ObjectMapper());
+                bomWorkflowRevisionService, new ObjectMapper(), entityManager);
     }
 
     @Test
@@ -283,6 +291,9 @@ class ProductProcessWorkflowActivationServiceTest {
         verify(activationRepository).saveAndFlush(current);
         verify(activationRepository, never()).delete(any());
         verify(activationRepository, never()).deleteById(any());
+        verify(entityManager).createNativeQuery(
+                "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockSeed AS text), 0))");
+        verify(advisoryLockQuery).setParameter("lockSeed", "F006\u001fPT-PIG");
     }
 
     @Test

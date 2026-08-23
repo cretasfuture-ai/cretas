@@ -104,8 +104,13 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             Long selectedWorkflowId,
             Collection<ProductionPlanStatus> statuses);
 
-    /** Counts all immutable plan snapshots pinned to a Workflow. */
-    long countByFactoryIdAndSelectedWorkflowId(String factoryId, Long selectedWorkflowId);
+    /** Counts every physical immutable plan snapshot, including soft-deleted history. */
+    @Query(value = "SELECT COUNT(*) FROM production_plans " +
+            "WHERE factory_id = :factoryId AND selected_workflow_id = :selectedWorkflowId",
+            nativeQuery = true)
+    long countAllPhysicalByFactoryIdAndSelectedWorkflowId(
+            @Param("factoryId") String factoryId,
+            @Param("selectedWorkflowId") Long selectedWorkflowId);
 
     Page<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses, Pageable pageable);
 

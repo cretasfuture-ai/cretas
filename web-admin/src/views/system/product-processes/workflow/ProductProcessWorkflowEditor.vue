@@ -2117,11 +2117,31 @@ async function exitVersionPreview(): Promise<void> {
   await loadDefinition(); // 回到当前草稿/最新版本
   await fitCanvas();
 }
-function restorePreviewAsDraft(): void {
-  // 把正在预览的历史版本内容作为新草稿 (标 dirty → 自动保存写回 draft)
-  previewingVersion.value = null;
-  dirty.value = true;
-  ElMessage.success('已将该历史版本恢复为当前草稿，正在自动保存');
+async function restorePreviewAsDraft(): Promise<void> {
+  const identity = currentLoadedIdentity();
+  if (!identity || previewingVersion.value === null) return;
+  // Keep the historical graph, but reload the server's current envelope first. Saving with
+  // the historical row's lockVersion races or conflicts with an existing DRAFT and can discard
+  // the restore intent.
+  const historicalGraph = currentDefinition();
+  try {
+    const current = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId);
+    if (!current.success || !current.data || !definitionMatchesIdentity(current.data, identity)) {
+      ElMessage.error('当前 Workflow 草稿加载失败，历史版本仍保持只读预览');
+      return;
+    }
+    hydrate({
+      ...toPlainWorkflowValue(current.data),
+      nodes: historicalGraph.nodes,
+      edges: historicalGraph.edges,
+      viewport: historicalGraph.viewport,
+    });
+    previewingVersion.value = null;
+    dirty.value = true;
+    ElMessage.success('已将该历史版本恢复为当前草稿，正在自动保存');
+  } catch (error) {
+    console.error('[ProductProcessWorkflow] restore preview failed', error);
+  }
 }
 
 watch(() => [props.factoryId, props.productTypeId] as const, async (next, previous) => {
@@ -4715,7 +4735,11 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
       // #11 fix: PUT 往返期间用户又改了 → 绝不 hydrate 覆盖 (会丢新编辑)。只把服务端 envelope
       // (lockVersion/id/version) 更新到 definition 供下次保存, 本地节点保留, dirty 保持 true, 重排补存。
       definition.value = toPlainWorkflowValue(response.data);
-      if (!options.silent) ElMessage.success('Workflow 草稿已独立保存');
+      if (!options.silent) {
+        ElMessage.success(response.data.autoForked
+          ? `已自动创建 Workflow 草稿 v${response.data.version}；旧版本 v${response.data.forkedFromVersion ?? '?'} 保持不变`
+          : 'Workflow 草稿已保存');
+      }
       scheduleAutoSave();
       return true;
     }
@@ -4725,7 +4749,11 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
     if (!options.preserveHistory) {
       history.value = [];
     }
-    if (!options.silent) ElMessage.success('Workflow 草稿已独立保存');
+    if (!options.silent) {
+      ElMessage.success(response.data.autoForked
+        ? `已自动创建 Workflow 草稿 v${response.data.version}；旧版本 v${response.data.forkedFromVersion ?? '?'} 保持不变`
+        : 'Workflow 草稿已保存');
+    }
     return true;
   } catch (error) {
     if (generation !== saveGeneration || !isLoadedIdentityCurrent(identity)) return false;
@@ -5056,7 +5084,11 @@ async function deactivateWorkflow(): Promise<void> {
   } catch (error) {
     if (generation === activationMutationGeneration && isLoadedIdentityCurrent(identity)) {
       console.error('[ProductProcessWorkflow] deactivation failed', error);
-      ElMessage.error(workflowErrorMessage(error, 'Workflow 停用失败，请稍后重试'));
+      // Rich business 409 is already shown by request.ts; only add a local message for
+      // transport/unclassified failures to avoid duplicate toasts.
+      if (!workflowErrorCode(error)) {
+        ElMessage.error(workflowErrorMessage(error, 'Workflow 停用失败，请稍后重试'));
+      }
     }
   } finally {
     if (generation === activationMutationGeneration) activationChanging.value = false;
@@ -5088,12 +5120,17 @@ function workflowErrorMessage(error: unknown, fallback: string): string {
   if (!error || typeof error !== 'object') return fallback;
   const candidate = error as {
     message?: unknown;
+    data?: { message?: unknown };
     actionHint?: unknown;
-    response?: { data?: { message?: unknown; actionHint?: unknown } };
+    response?: { data?: { message?: unknown; actionHint?: unknown; data?: { message?: unknown } } };
   };
   const responseData = candidate.response?.data;
-  const message = candidate.message
-    ?? responseData?.message;
+  // Prefer the backend's 409 envelope over Axios' generic error message. Some
+  // gateways wrap that envelope once more in response.data.data.
+  const message = responseData?.message
+    ?? responseData?.data?.message
+    ?? candidate.data?.message
+    ?? candidate.message;
   const hint = candidate.actionHint
     ?? responseData?.actionHint;
   if (typeof message === 'string' && message.trim()) {

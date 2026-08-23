@@ -24,6 +24,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.OptimisticLockException;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -49,6 +50,8 @@ public class ProductProcessWorkflowActivationServiceImpl
     private final ProductProcessWorkflowRuntimeCompiler compiler;
     private final BomWorkflowRevisionService bomWorkflowRevisionService;
     private final ObjectMapper objectMapper;
+
+    private final EntityManager entityManager;
 
     @Override
     @Transactional
@@ -102,6 +105,11 @@ public class ProductProcessWorkflowActivationServiceImpl
             String factoryId,
             String productTypeId,
             Long expectedLockVersion) {
+        // Must be the exact key used by V20261028_53's batch-pin and activation
+        // triggers. Taking it before reading references closes the start-first
+        // race: a concurrent batch insert cannot decide its pin between our
+        // reference counts and the activation update.
+        lockWorkflowOwner(factoryId, productTypeId);
         ProductProcessWorkflowActivation activation = findActivation(factoryId, productTypeId);
         if (expectedLockVersion == null || !expectedLockVersion.equals(activation.getLockVersion())) {
             throw conflict();
@@ -109,6 +117,13 @@ public class ProductProcessWorkflowActivationServiceImpl
         assertNoRunningProductionReferences(factoryId, activation);
         activation.setEnabled(false);
         return toDTO(save(activation));
+    }
+
+    private void lockWorkflowOwner(String factoryId, String productTypeId) {
+        entityManager.createNativeQuery(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockSeed AS text), 0))")
+                .setParameter("lockSeed", factoryId + "\u001f" + productTypeId)
+                .getSingleResult();
     }
 
     private void assertNoRunningProductionReferences(

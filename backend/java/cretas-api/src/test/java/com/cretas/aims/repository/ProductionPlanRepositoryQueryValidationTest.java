@@ -5,11 +5,13 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -168,7 +170,7 @@ class ProductionPlanRepositoryQueryValidationTest {
                                 ProductionPlanStatus.PAUSED)))
                 .isZero();
         assertThat(productionPlanRepository
-                .countByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
                 .isZero();
         assertThat(productionBatchRepository
                 .countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
@@ -178,8 +180,86 @@ class ProductionPlanRepositoryQueryValidationTest {
                                 com.cretas.aims.entity.enums.ProductionBatchStatus.PAUSED)))
                 .isZero();
         assertThat(productionBatchRepository
-                .countByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
                 .isZero();
+    }
+
+    @Test
+    void physicalReferenceCountsIncludeSoftDeletedRowsAndIsolateFactories() {
+        String factory = "F-JPA-WORKFLOW-PHYSICAL";
+        String otherFactory = "F-JPA-WORKFLOW-OTHER";
+        long workflowId = 991L;
+
+        Factory physicalFactory = new Factory();
+        physicalFactory.setId(factory);
+        physicalFactory.setName("JPA workflow physical-reference factory");
+        physicalFactory.setType(FactoryType.FACTORY);
+        physicalFactory.setLevel(0);
+        physicalFactory.setIsActive(true);
+        physicalFactory.setManuallyVerified(false);
+        physicalFactory.setAiWeeklyQuota(20);
+        entityManager.persist(physicalFactory);
+
+        User user = new User();
+        user.setFactoryId(factory);
+        user.setUsername("jpa-workflow-physical-reference-user");
+        user.setPasswordHash("test-only");
+        user.setIsActive(true);
+        entityManager.persist(user);
+        entityManager.flush();
+
+        ProductType product = new ProductType();
+        product.setId("PRODUCT-JPA-WORKFLOW-SOFT-DELETED");
+        product.setFactoryId(factory);
+        product.setCreatedBy(user.getId());
+        product.setCode("JPA-WORKFLOW-SOFT-DELETED");
+        product.setName("JPA workflow physical-reference product");
+        product.setUnit("kg");
+        product.setCategory("FINISHED_PRODUCT");
+        product.setProductCategory("FINISHED_PRODUCT");
+        product.setIsActive(true);
+        entityManager.persist(product);
+        entityManager.flush();
+
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-JPA-WORKFLOW-SOFT-DELETED");
+        plan.setFactoryId(factory);
+        plan.setPlanNumber("PLAN-JPA-WORKFLOW-SOFT-DELETED");
+        plan.setProductTypeId(product.getId());
+        plan.setPlannedQuantity(BigDecimal.ONE);
+        plan.setPlannedUnit("kg");
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        plan.setSourceType(PlanSourceType.MANUAL);
+        plan.setCreatedBy(user.getId());
+        plan.setSelectedWorkflowId(workflowId);
+        entityManager.persist(plan);
+
+        ProductionBatch batch = new ProductionBatch();
+        batch.setFactoryId(factory);
+        batch.setBatchNumber("BATCH-JPA-WORKFLOW-SOFT-DELETED");
+        batch.setProductTypeId(product.getId());
+        batch.setQuantity(BigDecimal.ONE);
+        batch.setPlannedQuantity(BigDecimal.ONE);
+        batch.setUnit("kg");
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        ProductionBatch savedBatch = productionBatchRepository.save(batch);
+        entityManager.flush();
+        jdbcTemplate.update("UPDATE production_batches SET selected_workflow_id = ?, deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+                workflowId, savedBatch.getId());
+        jdbcTemplate.update("UPDATE production_plans SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", plan.getId());
+
+        assertThat(productionPlanRepository
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(factory, workflowId)).isEqualTo(1L);
+        assertThat(productionBatchRepository
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(factory, workflowId)).isEqualTo(1L);
+        assertThat(productionPlanRepository
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(otherFactory, workflowId)).isZero();
+        assertThat(productionBatchRepository
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(otherFactory, workflowId)).isZero();
+        assertThat(productionPlanRepository.countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                factory, workflowId, java.util.List.of(ProductionPlanStatus.IN_PROGRESS))).isZero();
+        assertThat(productionBatchRepository.countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
+                factory, workflowId, java.util.List.of(ProductionBatchStatus.IN_PROGRESS))).isZero();
     }
 
     @Test

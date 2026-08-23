@@ -73,8 +73,13 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             Long selectedWorkflowId,
             java.util.Collection<ProductionBatchStatus> statuses);
 
-    /** Counts all immutable batch snapshots pinned to a Workflow. */
-    long countByFactoryIdAndSelectedWorkflowId(String factoryId, Long selectedWorkflowId);
+    /** Counts every physical immutable batch snapshot, including soft-deleted history. */
+    @Query(value = "SELECT COUNT(*) FROM production_batches " +
+            "WHERE factory_id = :factoryId AND selected_workflow_id = :selectedWorkflowId",
+            nativeQuery = true)
+    long countAllPhysicalByFactoryIdAndSelectedWorkflowId(
+            @Param("factoryId") String factoryId,
+            @Param("selectedWorkflowId") Long selectedWorkflowId);
 
     /**
      * SP10: 按试制标记分页查找 (中报价试制批次下拉)

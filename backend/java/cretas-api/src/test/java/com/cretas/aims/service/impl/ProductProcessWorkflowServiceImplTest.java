@@ -40,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
@@ -129,6 +130,8 @@ class ProductProcessWorkflowServiceImplTest {
         owner.setFactoryId(FACTORY_ID);
         lenient().when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
                 .thenReturn(Optional.of(owner));
+        lenient().when(productTypeRepository.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY_ID)))
+                .thenReturn(Optional.of(owner));
         lenient().when(unitValidator.validate(any(), any()))
                 .thenReturn(new com.cretas.aims.dto.workflow.WorkflowUnitValidationResult(List.of(), List.of()));
         lenient().when(repository.lockByIdAndFactoryId(1L, FACTORY_ID)).thenAnswer(invocation ->
@@ -194,6 +197,7 @@ class ProductProcessWorkflowServiceImplTest {
 
         ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
 
+        verify(productTypeRepository).findByIdAndFactoryIdForUpdate(PRODUCT_ID, FACTORY_ID);
         ArgumentCaptor<ProductProcessWorkflow> captor = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
         verify(repository, times(2)).saveAndFlush(captor.capture());
         assertTrue(captor.getAllValues().get(0).getNodesJson().contains("红烧熟制"));
@@ -336,13 +340,15 @@ class ProductProcessWorkflowServiceImplTest {
     void referencedDraftIsForkedBeforeSave() throws Exception {
         ProductProcessWorkflowDTO request = validDefinition();
         request.setLockVersion(3L);
+        request.setId(91L);
+        request.setVersion(2);
         ProductProcessWorkflow draft = persistedDraft(request, 3L);
         draft.setId(91L);
         draft.setDefinitionVersion(2);
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
                 .thenReturn(Optional.of(draft));
-        when(productionPlanRepository.countByFactoryIdAndSelectedWorkflowId(FACTORY_ID, 91L))
+        when(productionPlanRepository.countAllPhysicalByFactoryIdAndSelectedWorkflowId(FACTORY_ID, 91L))
                 .thenReturn(1L);
         when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(2));
         var frozenRevision = currentRevision();
@@ -364,6 +370,9 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), saved.getStatus());
         assertEquals(3, saved.getVersion());
         assertEquals(92L, saved.getId());
+        assertTrue(Boolean.TRUE.equals(saved.getAutoForked()));
+        assertEquals(91L, saved.getForkedFromWorkflowId());
+        assertEquals(2, saved.getForkedFromVersion());
         verify(revisionSnapshotService).capture(draft);
     }
 
@@ -465,6 +474,8 @@ class ProductProcessWorkflowServiceImplTest {
                 .thenReturn(Optional.of(existing));
 
         ProductProcessWorkflowDTO request = validDefinition();
+        request.setId(existing.getId());
+        request.setVersion(existing.getDefinitionVersion());
         request.setLockVersion(4L);
 
         BusinessException error = assertThrows(
@@ -475,6 +486,31 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals("PRODUCT_PROCESS_WORKFLOW_CONFLICT", error.getErrorCode());
         assertTrue(error.getActionHint().contains("复制当前草稿 JSON"));
         assertFalse(error.getActionHint().contains("另存为新草稿"));
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("保存草稿同时校验 id、definitionVersion 和 lockVersion")
+    void saveDraftRejectsMismatchedDefinitionIdentityEvenWhenLockVersionMatches() {
+        ProductProcessWorkflow existing = entityFrom(validDefinition());
+        existing.setId(91L);
+        existing.setDefinitionVersion(7);
+        existing.setLockVersion(5L);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(existing));
+
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setId(90L);
+        request.setVersion(6);
+        request.setLockVersion(5L);
+
+        BusinessException error = assertThrows(
+                BusinessException.class,
+                () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, request));
+
+        assertEquals(409, error.getCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CONFLICT", error.getErrorCode());
         verify(repository, never()).saveAndFlush(any());
     }
 
@@ -923,6 +959,8 @@ class ProductProcessWorkflowServiceImplTest {
         owner.setId(PRODUCT_ID);
         owner.setFactoryId(FACTORY_ID);
         when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
+                .thenReturn(Optional.of(owner));
+        when(productTypeRepository.findByIdAndFactoryIdForUpdate(PRODUCT_ID, FACTORY_ID))
                 .thenReturn(Optional.of(owner));
         ProductProcessWorkflowCatalogValidator realCatalogValidator =
                 new ProductProcessWorkflowCatalogValidator(

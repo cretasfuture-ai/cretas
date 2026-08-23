@@ -90,6 +90,8 @@ interface EditorVm {
   ) => Promise<void>;
   publishWorkflow: () => Promise<void>;
   saveDraft: () => Promise<boolean>;
+  previewVersion: (version: { definitionVersion: number; status: string; updatedAt: string | null; active: boolean }) => Promise<void>;
+  restorePreviewAsDraft: () => Promise<void>;
   currentDefinition: () => ProductProcessWorkflowDefinition;
   onViewportChangeEnd: (viewport: { x: number; y: number; zoom: number }) => void;
   confirmCreateSku: () => Promise<void>;
@@ -567,6 +569,41 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
     expect(apiMocks.getProductProcessWorkflow).toHaveBeenCalledTimes(2);
     expect(vm.flowNodes.map((node) => node.id)).toEqual(['node:latest']);
     expect(vm.dirty).toBe(false);
+  });
+
+  it('restores a historical graph on top of the latest draft identity envelope', async () => {
+    const current = definitionFor('PT-A');
+    current.id = 41;
+    current.version = 8;
+    current.lockVersion = 12;
+    const historical = definitionFor('PT-A', 'node:historical');
+    historical.id = 37;
+    historical.version = 6;
+    historical.lockVersion = 4;
+    apiMocks.getProductProcessWorkflow
+      .mockResolvedValueOnce({ success: true, data: current })
+      .mockResolvedValueOnce({ success: true, data: current });
+    apiMocks.listProductProcessWorkflowVersions.mockResolvedValue({
+      success: true,
+      data: [{ definitionVersion: 6, status: 'SNAPSHOT', updatedAt: null, active: false }],
+    });
+    apiMocks.getProductProcessWorkflowVersion.mockResolvedValue({ success: true, data: historical });
+
+    const wrapper = mountEditor();
+    await flushPromises();
+    const vm = editorVm(wrapper);
+    await vm.previewVersion({ definitionVersion: 6, status: 'SNAPSHOT', updatedAt: null, active: false });
+    expect(vm.currentDefinition().nodes[0]?.id).toBe('node:historical');
+
+    await vm.restorePreviewAsDraft();
+
+    expect(vm.currentDefinition()).toEqual(expect.objectContaining({
+      id: 41,
+      version: 8,
+      lockVersion: 12,
+    }));
+    expect(vm.currentDefinition().nodes[0]?.id).toBe('node:historical');
+    expect(vm.dirty).toBe(true);
   });
 
   it('copies the exact local draft for a semantic JPA optimistic-lock 409 without retrying the mutation', async () => {

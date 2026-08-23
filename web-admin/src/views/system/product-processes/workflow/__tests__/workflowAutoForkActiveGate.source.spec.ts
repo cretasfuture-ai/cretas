@@ -23,6 +23,18 @@ describe('Workflow 自动分叉与历史预览编辑闸', () => {
     expect(source).toContain('function restorePreviewAsDraft');
   });
 
+  it('恢复历史版本先读取当前 envelope，再只替换历史图内容', () => {
+    expect(source).toContain('const current = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId)');
+    expect(source).toContain('...toPlainWorkflowValue(current.data)');
+    expect(source).toContain('nodes: historicalGraph.nodes');
+    expect(source).toContain('previewingVersion.value = null');
+  });
+
+  it('保存响应如实提示服务端是否自动分叉', () => {
+    expect(source).toContain('response.data.autoForked');
+    expect(source).toContain('旧版本 v${response.data.forkedFromVersion ?? \'?\'} 保持不变');
+  });
+
   it('停用失败必须把后端业务原因展示给操作者', () => {
     expect(source).toContain("ElMessage.error(workflowErrorMessage(error, 'Workflow 停用失败，请稍后重试'))");
     expect(source).toContain('responseData?.message');

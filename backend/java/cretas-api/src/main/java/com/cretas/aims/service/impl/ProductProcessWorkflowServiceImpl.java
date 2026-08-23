@@ -84,6 +84,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
         requireWorkflowOwner(factoryId, productTypeId);
+        lockWorkflowOwner(factoryId, productTypeId);
         WorkflowActualIoSemantics.normalizeDraft(definition);
         validator.validateForDraft(definition);
         var unitValidation = unitValidator.validate(factoryId, definition);
@@ -94,10 +95,16 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT);
 
         ProductProcessWorkflow entity;
+        boolean autoForked = false;
+        Long forkedFromWorkflowId = null;
+        Integer forkedFromVersion = null;
         if (existingDraft.isPresent()) {
             ProductProcessWorkflow currentDraft = existingDraft.get();
-            assertCurrentVersion(definition.getLockVersion(), currentDraft);
+            assertCurrentIdentity(definition, currentDraft);
             if (hasImmutableReference(factoryId, currentDraft)) {
+                autoForked = true;
+                forkedFromWorkflowId = currentDraft.getId();
+                forkedFromVersion = currentDraft.getDefinitionVersion();
                 entity = forkReferencedDraft(factoryId, currentDraft);
             } else {
                 entity = currentDraft;
@@ -130,6 +137,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         entity.setCurrentRevisionHash(revision.getRevisionHash());
         ProductProcessWorkflowDTO saved = toDTO(repository.saveAndFlush(entity));
         saved.setUnitWarnings(definition.getUnitWarnings());
+        saved.setAutoForked(autoForked);
+        saved.setForkedFromWorkflowId(forkedFromWorkflowId);
+        saved.setForkedFromVersion(forkedFromVersion);
         return saved;
     }
 
@@ -141,9 +151,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private boolean hasImmutableReference(String factoryId, ProductProcessWorkflow workflow) {
         if (workflow.getId() == null) return false;
         long plans = productionPlanRepository
-                .countByFactoryIdAndSelectedWorkflowId(factoryId, workflow.getId());
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(factoryId, workflow.getId());
         long batches = productionBatchRepository
-                .countByFactoryIdAndSelectedWorkflowId(factoryId, workflow.getId());
+                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(factoryId, workflow.getId());
         boolean active = activationRepository.findByFactoryIdAndProductTypeId(factoryId,
                         workflow.getProductTypeId())
                 .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
@@ -175,8 +185,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String factoryId,
             String productTypeId,
             Long lockVersion,
-            Long operatorId) {
+        Long operatorId) {
         requireWorkflowOwner(factoryId, productTypeId);
+        lockWorkflowOwner(factoryId, productTypeId);
         repository.lockByFactoryId(factoryId);
         ProductProcessWorkflowDTO published =
                 publishInternal(factoryId, productTypeId, lockVersion, operatorId, true, null);
@@ -221,6 +232,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             Long operatorId) {
         String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
         requireWorkflowOwner(factoryId, productTypeId);
+        lockWorkflowOwner(factoryId, productTypeId);
         // The key is factory-scoped. Reuse the existing factory serialization point
         // so two concurrent products cannot both claim the same key before the
         // partial unique index becomes visible to the second transaction.
@@ -472,6 +484,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @Transactional
     public ProductProcessWorkflowDTO snapshot(String factoryId, String productTypeId, Long lockVersion) {
         requireWorkflowOwner(factoryId, productTypeId);
+        lockWorkflowOwner(factoryId, productTypeId);
         ProductProcessWorkflow candidate = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
                 .orElseThrow(() -> new BusinessException(409, "没有可另存的 Workflow 草稿")
                         .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
@@ -663,12 +676,36 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         }
     }
 
+    /** Product-row lock serializes the first draft as well, when no Workflow row exists yet. */
+    private void lockWorkflowOwner(String factoryId, String ownerId) {
+        productTypeRepository.findByIdAndFactoryIdForUpdate(ownerId, factoryId)
+                .orElseThrow(() -> new BusinessException(409, "Workflow 所属对象正在变化，请刷新后重试")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
+                        .withHint("请重新加载后再次保存")
+                        .withSeverity("warning"));
+    }
+
     private String rawOwnerAnchorCode(RawMaterialType rawOwner) {
         String source = rawOwner.getCode() == null || rawOwner.getCode().isBlank()
                 ? rawOwner.getId() : rawOwner.getCode();
         String normalized = source.replaceAll("[^A-Za-z0-9_-]", "");
         String code = "WFRAW-" + (normalized.isBlank() ? Integer.toUnsignedString(source.hashCode()) : normalized);
         return code.length() <= 50 ? code : code.substring(0, 50);
+    }
+
+    private void assertCurrentIdentity(ProductProcessWorkflowDTO request,
+                                      ProductProcessWorkflow entity) {
+        if (request.getId() == null
+                || request.getVersion() == null
+                || request.getLockVersion() == null
+                || !request.getId().equals(entity.getId())
+                || !request.getVersion().equals(entity.getDefinitionVersion())
+                || !request.getLockVersion().equals(entity.getLockVersion())) {
+            throw new BusinessException(409, "该 Workflow 已被其他人更新")
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
+                    .withHint("请重新加载最新版本；如需保留当前内容，可复制当前草稿 JSON")
+                    .withSeverity("warning");
+        }
     }
 
     private void assertCurrentVersion(Long requestVersion, ProductProcessWorkflow entity) {
