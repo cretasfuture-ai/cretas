@@ -11,3 +11,28 @@
 - `MIGRATE-LIUSHANMEN-LABEL-QC-SIDECAR-20260823` — `merged` — Owner: `/root` — Base SHA: `292a2f704f69e84027f321445f1bce016263f2f7` — 公司仓 PR #9。实际 label evaluator CLI 已接收经版本、manifest 路径/SHA、源图 SHA 与 human-reviewed evidence 绑定的 truth-adjudication sidecar，并把 records 前后数量、排除清单与 `promotion_ready` 写入 metrics；VisionLab promotion gate 对 sidecar 缺失、路径/SHA 漂移或非 ready 一律 fail closed。真实 CLI 子进程冒烟、目标测试与完整 VisionLab 235/235、`git diff --check` 通过；未重复 parity，未修改模型、数据集、人工真值、保护集、运行配置或生产，严格 `NOT_DEPLOYED`；scope 锁已释放。
 
 - `POLICY-CODEX-MODEL-ADVISORY-20260810` — `merged`（迁移核销）— Owner: `/root` — 原 Base SHA: `9aaecef811e5159cde424f8e670a2c93400adeee`。公司迁移基线已逐文件确认包含“模型/effort 仅非阻塞建议、不得等待切换确认”的目标语义；旧任务不再单独占用 `AGENTS.md`、rules-maintenance 或 dispatch scope。更完整的静默自动路由与窄职责 agent 配置由 `MIGRATE-CODEX-ORCHESTRATION-ROUTING-20260823` 在公司最新 main 上独立处理。
+
+## 2026-08-23 ACTIVE 实时证据审计归档
+
+以下记录均逐条核对公司 main、迁移源 tree、旧 commit/PR、当前 worktree/ref、远端 open PR、进程与计划任务；“merged”只表示实现已被当前代码树覆盖，不自动表示生产部署或设备验收。
+
+- `E2E-F006-RBAC-ROLE-CHAIN-20260823` — `merged` — Web 96/96、App 7 角色/24 Tab 与跨端链已有最终回执，迁移源实现和 QA 文档进入公司树，生产清理零残留；仅未完成的 ADB/Maestro 应另建窄设备验收项，原代码 scope 已释放。
+- `RELEASE-LIUSHANMEN-QC-RISK-ROUTING-20260822` — `merged` — risk routing、dual queue 与 transport retry 均进入迁移源，v8 生产回放有 222 任务/871 图/0 分析失败证据；sidecar 又由公司 PR #9 补齐，scope 已释放。
+- `REST-AI-READ-PATH-20260812` — `merged` — B0–B5、归因、时间词语料、DeepSeek 接线与 cron 均已入迁移树且有线上回执；后续观察/续 key 属运营项，restaurant 广域代码锁已释放。
+- `FIX-F006-PRESTOCKED-SHIPMENT-E2E-20260809` — `merged` — 实现进入迁移源，后续 F006 跨端链已覆盖创建发货单、仓库确认、库存回读和清理；scope 已释放。
+- `AUDIT-RESTAURANT-SYNTHESIS-RETENTION-20260727` — `merged` — 兼容保留审计 commit 已汇入迁移源，公司文件 blob 一致；任务本身严格 NOT_DEPLOYED，scope 已释放。
+- `BUG-F006-WORKFLOW-OUTPUT-KIND-SNAPSHOT-20260810` — `merged` — 旧 PR #2448 的 Vue/测试文件与公司树一致，原目标验证回执 35/35；scope 已释放。
+- `ARCH-F006-MATERIAL-TAXONOMY-DUPLICATION-001` — `merged` — 可选共享 classificationId、禁止名称驱动自动建 L3、父内规范化去重及 DB/JPA 门禁已进入公司树；scope 已释放。
+- `BUG-F006-PURCHASE-ORDER-CREATE-ATTACHMENTS-001` — `merged` — 订单只创建一次、获 ID 后绑定附件、部分失败仅重试附件的 UI/测试已进入公司树；scope 已释放。
+- `BUG-F006-PURCHASE-ORDER-TAX-RATE-INHERIT-001` — `merged` — 税率继承/免税/缺配置 422、后端重算及金额快照和测试已进入公司树；scope 已释放。
+- `BUG-F006-PURCHASE-ORDER-ACTION-IA-001` — `merged` — 合法状态动作与去重更多菜单已进入公司树，审计 UI 不再暴露；scope 已释放。
+- `BUG-F006-PURCHASE-WAREHOUSE-RECEIVING-BOUNDARY-001` — `merged` — WarehouseReceiving 入口、模块/权限复用和目标测试已进入公司树，采购详情不再直接确认收货；scope 已释放。
+- `BUG-F006-PURCHASE-RECEIPT-DUPLICATE-001` — `merged` — 唯一收货任务、active receipt 冲突、部分收货、幂等/QC/关闭测试已进入公司树；旧“打印收货单”要求已被产品决定取消，scope 已释放。
+- `BUG-F006-PURCHASE-AP-PAYMENT-BOUNDARY-001-CORE` — `merged` — V94、AP settlement Controller/Service/DTO/Entity/Repository、幂等余额约束及 JPA/边界测试已进入公司树；独立 CORE scope 已释放。
+- `BUG-F006-R2-CUSTOMER-NAV-001` — `merged` — 客户列表/详情导航、状态保留及 source spec 已进入公司树；scope 已释放。
+- `UX-F006-R2-SKU-PROCESS-001` — `merged`（后续架构吸收）— 工序 drawer/search/filter 已在公司树，旧 output-unit 语义被后续工序治理明确移除；独立 scope 已释放。
+- `BUG-F006-R2-WORKFLOW-VIEWPORT-001` — `merged` — 1366/1440/1920、缩放与布局预算 helper/spec 已接入编辑器；scope 已释放。
+- `FEATURE-F006-R2-BOM-SUBSTITUTE-001-CORE` — `merged` — V99、结构化替代料 Entity/Repository/Service 与真实 JPA/Service 测试已进入公司树；scope 已释放。
+- `BUG-F006-R2-WORKFLOW-INLINE-PROCESS-CATEGORY` — `merged` — 前端现场新建分类必选与后端 taxonomy/跨工厂校验及测试已进入公司树；scope 已释放。
+- `BUG-F006-R2-WORKFLOW-CELL-ACTIONS-UX` — `merged` — 节点 edit/delete 在 hover/focus/selected/touch 下的行为与编辑器测试已进入公司树；scope 已释放。
+- `BUG-F006-R2-WORKFLOW-INPUT-MODE-DERIVATION` — `merged`（当前模型取代）— 后端当前明确丢弃 process portGroups，替代关系由原料节点 substituteOfNodeId 表达；旧独立 input-group scope 已释放。
