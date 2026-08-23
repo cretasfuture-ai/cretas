@@ -141,7 +141,7 @@ public class ProductProcessWorkflowActivationServiceImpl
         if (runningPlans == 0 && runningBatches == 0) return;
 
         String reason = String.format(
-                "Workflow v%s 仍被运行中的生产引用，不能停用：%d 个进行中/暂停计划、%d 个进行中/暂停批次。",
+                "Workflow v%s 仍被运行中的生产引用，不能停用：%d 个运行中/暂停计划、%d 个运行中/生产中/暂停批次。",
                 activation.getActiveDefinitionVersion(), runningPlans, runningBatches);
         throw new BusinessException(409, reason)
                 .withCode("WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE")

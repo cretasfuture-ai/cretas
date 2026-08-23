@@ -345,8 +345,9 @@ class ProductProcessWorkflowServiceImplTest {
         when(productionPlanRepository.countByFactoryIdAndSelectedWorkflowId(FACTORY_ID, 91L))
                 .thenReturn(1L);
         when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(2));
+        var frozenRevision = currentRevision();
         when(revisionSnapshotService.capture(any(ProductProcessWorkflow.class)))
-                .thenReturn(currentRevision());
+                .thenReturn(frozenRevision);
         when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
             ProductProcessWorkflow saved = invocation.getArgument(0);
             if (saved.getId() == null) saved.setId(92L);

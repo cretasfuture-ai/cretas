@@ -300,8 +300,8 @@ class ProductProcessWorkflowActivationServiceTest {
                 () -> service.deactivate("F006", "PT-PIG", 5L));
 
         assertEquals("WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE", error.getErrorCode());
-        assertTrue(error.getMessage().contains("2 个进行中/暂停计划"));
-        assertTrue(error.getMessage().contains("1 个进行中/暂停批次"));
+        assertTrue(error.getMessage().contains("2 个运行中/暂停计划"), error.getMessage());
+        assertTrue(error.getMessage().contains("1 个运行中/生产中/暂停批次"), error.getMessage());
         assertNotNull(error.getActionHint());
         verify(activationRepository, never()).saveAndFlush(any());
     }
