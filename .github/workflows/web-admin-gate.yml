@@ -74,4 +74,9 @@ jobs:
       # 打包耗时更长, 而 web-dist.yml 已经在每次 web-admin push 上真的构建一次,
       # 构建坏了那边会红 —— 再加一遍是重复承载。
       - name: Type check (vue-tsc)
+        env:
+          # The full project requires more than Node's ~2 GiB default heap on
+          # GitHub-hosted runners. Keep the complete check; raise only V8's
+          # ceiling instead of weakening the TypeScript project or exclusions.
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npx vue-tsc -b --force
