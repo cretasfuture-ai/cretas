@@ -27,6 +27,7 @@ const SCENARIOS = [
   require('../scenarios/label-qc-readonly'),
   require('../scenarios/restaurant-live-command-readonly'),
   require('../scenarios/restaurant-staffing-readonly'),
+  require('../scenarios/sales-order-lifecycle-readonly'),
   require('../scenarios/ui-stability'),
 ];
 
