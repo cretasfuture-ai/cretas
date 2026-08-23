@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image, ImageDraw
 
@@ -51,6 +52,8 @@ class MineTrayQueueTests(unittest.TestCase):
             evidence = module.verify_teacher_model(model, module.TEACHER_REVISION)
             self.assertEqual(len(evidence["critical_files"]), 3)
             self.assertEqual(evidence["file_count"], 7)
+            self.assertEqual(evidence["receipt_sha256"], module.sha256_file(Path(evidence["receipt"])))
+            self.assertEqual(evidence["manifest_sha256"], evidence["receipt_sha256"])
             (model / "model-00002-of-00002.safetensors").write_bytes(b"changed")
             with self.assertRaisesRegex(RuntimeError, "snapshot file mismatch"):
                 module.verify_teacher_model(model, module.TEACHER_REVISION)
@@ -117,7 +120,39 @@ class MineTrayQueueTests(unittest.TestCase):
                 module.verify_teacher_model(model, alternate_revision)
 
     @staticmethod
-    def make_valid_teacher_proposals_receipt() -> dict[str, object]:
+    def make_live_teacher_integrity(root: Path) -> dict[str, object]:
+        receipt = root / "VISIONLAB_MODEL_RECEIPT.json"
+        manifest = root / "locateanything_snapshot_v1_manifest.json"
+        receipt.write_text('{"version":"v1"}', encoding="utf-8")
+        manifest.write_text('{"files":38}', encoding="utf-8")
+        return {
+            "version": module.TEACHER_MODEL_INTEGRITY_VERSION,
+            "receipt_version": module.TEACHER_MODEL_RECEIPT_V1,
+            "manifest_version": module.TEACHER_LEGACY_MANIFEST_VERSION,
+            "model_id": module.TEACHER_MODEL_ID,
+            "revision": module.TEACHER_REVISION,
+            "model_path": str(root),
+            "receipt": str(receipt),
+            "receipt_sha256": module.sha256_file(receipt),
+            "manifest": str(manifest),
+            "manifest_sha256": module.sha256_file(manifest),
+            "critical_files": {"weights": {"bytes": 1, "sha256": "a" * 64}},
+            "file_count": module.TEACHER_LEGACY_FILE_COUNT,
+            "files_verified": module.TEACHER_LEGACY_FILE_COUNT,
+            "total_bytes": module.TEACHER_LEGACY_TOTAL_BYTES,
+            "exact_file_set": True,
+            "full_file_sha256_verified": True,
+            "offline_only": True,
+            "crop_max_side": module.TEACHER_MAX_SIDE,
+        }
+
+    @staticmethod
+    def make_valid_teacher_proposals_receipt(
+        integrity: dict[str, object],
+    ) -> dict[str, object]:
+        crop = [0.1, 0.1, 0.7, 0.7]
+        local = [0.1, 0.1, 0.3, 0.3]
+        mapped = module.map_crop_box(local, crop)
         return {
             "version": module.TEACHER_PROPOSAL_RECEIPT_VERSION,
             "status": "completed",
@@ -131,50 +166,124 @@ class MineTrayQueueTests(unittest.TestCase):
             "teacher_max_crops_per_image": module.TEACHER_MAX_CROPS_PER_IMAGE,
             "teacher_is_ground_truth": False,
             "cloud_calls": 0,
-            "model_integrity": {
-                "version": module.TEACHER_MODEL_INTEGRITY_VERSION,
-                "receipt_version": module.TEACHER_MODEL_RECEIPT_V2,
-                "manifest_version": module.TEACHER_MODEL_RECEIPT_V2,
-                "model_id": module.TEACHER_MODEL_ID,
-                "revision": module.TEACHER_REVISION,
-                "receipt": "sealed-model/VISIONLAB_MODEL_RECEIPT.json",
-                "file_count": 7,
-                "files_verified": 7,
-                "total_bytes": 1234,
-                "exact_file_set": True,
-                "full_file_sha256_verified": True,
-                "offline_only": True,
-                "crop_max_side": module.TEACHER_MAX_SIDE,
-            },
-            "records": {"photo-1": {"proposals": [], "crop_prompts": []}},
+            "model_integrity": integrity,
+            "records": {"photo-1": {
+                "crop_prompts": [
+                    {
+                        "crop": crop, "crop_reasons": ["isolated"], "prompt": "all",
+                        "answer": "answer-all", "local_boxes": [local], "mapped_boxes": [mapped],
+                    },
+                    {
+                        "crop": crop, "crop_reasons": ["isolated"], "prompt": "isolated",
+                        "answer": "answer-isolated", "local_boxes": [local], "mapped_boxes": [mapped],
+                    },
+                ],
+                "proposals": [{
+                    "box": mapped, "support": ["crop0:all", "crop0:isolated"], "prompt": "all",
+                }],
+            }},
         }
 
     def test_teacher_proposals_receipt_requires_complete_bounded_integrity(self):
-        payload = self.make_valid_teacher_proposals_receipt()
-        records, integrity = module.validate_teacher_proposals_receipt(payload)
-        self.assertEqual(records, payload["records"])
-        self.assertEqual(integrity, payload["model_integrity"])
-        drifts = (
-            ("status", "in_progress"),
-            ("model_revision", "a" * 40),
-            ("offline_only", False),
-            ("teacher_scope", "full_image"),
-            ("teacher_max_side", 1024),
-            ("teacher_max_new_tokens", 2048),
-            ("teacher_max_crops_per_image", 8),
-            ("teacher_is_ground_truth", True),
-            ("records", []),
-        )
-        for field, value in drifts:
-            with self.subTest(field=field):
-                candidate = json.loads(json.dumps(payload))
-                candidate[field] = value
-                with self.assertRaisesRegex(RuntimeError, "teacher proposals"):
-                    module.validate_teacher_proposals_receipt(candidate)
-        incomplete = json.loads(json.dumps(payload))
-        incomplete["model_integrity"]["files_verified"] = 6
-        with self.assertRaisesRegex(RuntimeError, "model_integrity incomplete"):
-            module.validate_teacher_proposals_receipt(incomplete)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = self.make_live_teacher_integrity(root)
+            payload = self.make_valid_teacher_proposals_receipt(live)
+            records, integrity = module.validate_teacher_proposals_receipt(payload, live)
+            self.assertEqual(records, payload["records"])
+            self.assertEqual(integrity, live)
+            drifts = (
+                ("status", "in_progress"),
+                ("model_revision", "a" * 40),
+                ("offline_only", False),
+                ("teacher_scope", "full_image"),
+                ("teacher_max_side", 1024),
+                ("teacher_max_new_tokens", 2048),
+                ("teacher_max_crops_per_image", 8),
+                ("teacher_is_ground_truth", True),
+                ("records", []),
+            )
+            for field, value in drifts:
+                with self.subTest(field=field):
+                    candidate = json.loads(json.dumps(payload))
+                    candidate[field] = value
+                    with self.assertRaisesRegex(RuntimeError, "teacher proposals"):
+                        module.validate_teacher_proposals_receipt(candidate, live)
+            fictional = json.loads(json.dumps(payload))
+            fictional["model_integrity"]["receipt"] = "fictional/receipt.json"
+            fictional["model_integrity"]["total_bytes"] = 1234
+            with self.assertRaisesRegex(RuntimeError, "legacy integrity boundary"):
+                module.validate_teacher_proposals_receipt(fictional, live)
+
+            proposal_path = root / "teacher-proposals.json"
+            proposal_path.write_text(json.dumps(payload), encoding="utf-8")
+            with mock.patch.object(module, "verify_teacher_model", return_value=live) as verify:
+                loaded, loaded_integrity = module.load_teacher_proposals(
+                    proposal_path, root, module.TEACHER_REVISION,
+                )
+            verify.assert_called_once_with(root, module.TEACHER_REVISION)
+            self.assertEqual(loaded, records)
+            self.assertEqual(loaded_integrity, live)
+
+            detached = json.loads(json.dumps(payload))
+            detached["model_integrity"]["model_path"] = "fictional-model"
+            with self.assertRaisesRegex(RuntimeError, "not identical to live verification"):
+                module.validate_teacher_proposals_receipt(detached, live)
+
+            Path(live["receipt"]).write_text("tampered", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "live receipt SHA mismatch"):
+                module.validate_teacher_proposals_receipt(payload, live)
+
+    def test_teacher_proposals_records_reject_forged_support_and_unsafe_geometry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            live = self.make_live_teacher_integrity(root)
+            payload = self.make_valid_teacher_proposals_receipt(live)
+
+            cases: list[tuple[str, dict[str, object], str]] = []
+            oversized = json.loads(json.dumps(payload))
+            oversized["records"]["photo-1"]["crop_prompts"][0]["crop"] = [0.0, 0.0, 0.9, 0.8]
+            cases.append(("72-percent-crop", oversized, "less than 72%"))
+
+            nonfinite = json.loads(json.dumps(payload))
+            nonfinite["records"]["photo-1"]["proposals"][0]["box"][0] = float("nan")
+            cases.append(("nonfinite-box", nonfinite, "finite"))
+
+            mapped_drift = json.loads(json.dumps(payload))
+            mapped_drift["records"]["photo-1"]["crop_prompts"][0]["mapped_boxes"][0] = [0.2, 0.2, 0.3, 0.3]
+            cases.append(("mapped-drift", mapped_drift, "does not match crop transform"))
+
+            duplicate_support = json.loads(json.dumps(payload))
+            duplicate_support["records"]["photo-1"]["proposals"][0]["support"] = [
+                "crop0:all", "crop0:all",
+            ]
+            cases.append(("duplicate-support", duplicate_support, "deduplicated"))
+
+            forged_support = json.loads(json.dumps(payload))
+            local = [0.6, 0.6, 0.8, 0.8]
+            crop = forged_support["records"]["photo-1"]["crop_prompts"][1]["crop"]
+            forged_support["records"]["photo-1"]["crop_prompts"][1]["local_boxes"] = [local]
+            forged_support["records"]["photo-1"]["crop_prompts"][1]["mapped_boxes"] = [
+                module.map_crop_box(local, crop),
+            ]
+            cases.append(("forged-dual-support", forged_support, "not backed by crop_prompt"))
+
+            bad_prompt = json.loads(json.dumps(payload))
+            bad_prompt["records"]["photo-1"]["crop_prompts"][0]["prompt"] = "invented"
+            cases.append(("bad-prompt", bad_prompt, "prompt invalid"))
+
+            four_crops = json.loads(json.dumps(payload))
+            template = four_crops["records"]["photo-1"]["crop_prompts"][0]
+            for crop in ([0.0, 0.0, 0.2, 0.2], [0.2, 0.2, 0.4, 0.4], [0.4, 0.4, 0.6, 0.6]):
+                row = json.loads(json.dumps(template))
+                row["crop"] = crop
+                row["mapped_boxes"] = [module.map_crop_box(row["local_boxes"][0], crop)]
+                four_crops["records"]["photo-1"]["crop_prompts"].append(row)
+            cases.append(("four-crops", four_crops, "unique crop limit"))
+
+            for name, candidate, message in cases:
+                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, message):
+                    module.validate_teacher_proposals_receipt(candidate, live)
 
     def test_teacher_regions_are_local_crops_and_map_back_to_full_image(self):
         image = Image.new("RGB", (400, 300), (30, 30, 30))

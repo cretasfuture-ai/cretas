@@ -17,6 +17,10 @@ Tray 主动学习使用独立的 `MARK-NEEDS-TRAY-ANNOTATION.json`，不得覆�
 remote-code、权重索引和权重分片的 bytes/SHA-256；缺失或任一文件漂移时跳过 teacher 并写失败回执，
 不得继续加载未封印模型。现有 B 盘 v1 receipt 通过仓库 tracked legacy manifest 做同等的 38 文件全量校验，
 不得为升级格式而改写或重新 seal B 盘 snapshot。
+外部 `--teacher-proposals` receipt 不能只靠历史自述复用：运行时会先对 `--teacher-model` 做一次 live
+全量校验，并要求 receipt 中的 model integrity（含模型 receipt SHA、tracked/v2 manifest SHA、文件数和
+总字节数）与 live 结果逐字段完全一致。每条 proposal 的 crop、prompt、local/mapped box 和 support
+引用也必须闭环匹配；不合格 receipt 仅记录 skip reason，不会被标记为 teacher 已使用。
 
 现有 `B:\AIModels\LocateAnything-3B` 已有固定 receipt，日常使用只运行 `verify`，不得重新 seal：
 

@@ -35,6 +35,8 @@ TEACHER_MODEL_RECEIPT_V2 = "vision-lab-locateanything-model-v2"
 TEACHER_MODEL_INTEGRITY_VERSION = "vision-lab-locateanything-integrity-v2"
 TEACHER_LEGACY_MANIFEST_VERSION = "vision-lab-locateanything-legacy-manifest-v1"
 TEACHER_LEGACY_MANIFEST = Path(__file__).with_name("locateanything_snapshot_v1_manifest.json")
+TEACHER_LEGACY_FILE_COUNT = 38
+TEACHER_LEGACY_TOTAL_BYTES = 7_667_993_263
 TEACHER_PROPOSAL_RECEIPT_VERSION = "locateanything-tray-teacher-v1"
 TEACHER_PROMPTS = {
     "all": "each individual foreground sealed plastic food tray package used for quality inspection",
@@ -44,6 +46,9 @@ TEACHER_PROMPTS = {
 }
 RAW_WORK_AREA_PLAN_VERSION = "vision-lab-work-area-raw-tray-plan-v1"
 BOX_PATTERN = re.compile(r"<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
+TEACHER_SUPPORT_PATTERN = re.compile(
+    r"^crop(\d+):(" + "|".join(re.escape(prompt) for prompt in TEACHER_PROMPTS) + r")$"
+)
 
 
 def utc_now() -> str:
@@ -165,7 +170,9 @@ def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
     receipt_path = model_path / TEACHER_MODEL_RECEIPT
     if not receipt_path.is_file():
         raise RuntimeError(f"teacher model receipt missing: {receipt_path}")
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_bytes = receipt_path.read_bytes()
+    receipt = json.loads(receipt_bytes.decode("utf-8"))
+    receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
     if receipt.get("model_id") != TEACHER_MODEL_ID or receipt.get("revision") != revision:
         raise RuntimeError("teacher model id or fixed revision mismatch")
     if (receipt.get("offline_only") is not True
@@ -173,7 +180,25 @@ def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
             or int(receipt.get("crop_max_side", -1)) != TEACHER_MAX_SIDE):
         raise RuntimeError("teacher model safety policy mismatch")
 
+    legacy_manifest_sha_before = (
+        sha256_file(TEACHER_LEGACY_MANIFEST)
+        if receipt.get("version") == TEACHER_MODEL_RECEIPT_V1 else None
+    )
     manifest_version, expected_rows = _teacher_expected_manifest(receipt)
+    if receipt.get("version") == TEACHER_MODEL_RECEIPT_V1:
+        if (receipt.get("file_count") != TEACHER_LEGACY_FILE_COUNT
+                or receipt.get("total_bytes") != TEACHER_LEGACY_TOTAL_BYTES
+                or manifest_version != TEACHER_LEGACY_MANIFEST_VERSION):
+            raise RuntimeError("legacy teacher snapshot fixed manifest boundary mismatch")
+        manifest_path = TEACHER_LEGACY_MANIFEST
+        manifest_sha256 = sha256_file(manifest_path)
+        if manifest_sha256 != legacy_manifest_sha_before:
+            raise RuntimeError("tracked teacher legacy manifest changed during verification")
+    else:
+        if manifest_version != TEACHER_MODEL_RECEIPT_V2:
+            raise RuntimeError("v2 teacher receipt and manifest version mismatch")
+        manifest_path = receipt_path
+        manifest_sha256 = receipt_sha256
     required = teacher_model_files(model_path)
     incomplete = sorted(str(path.relative_to(model_path)) for path in model_path.rglob("*.incomplete"))
     missing = [str(path.relative_to(model_path)) for path in required if not path.is_file()]
@@ -221,6 +246,9 @@ def verify_teacher_model(model_path: Path, revision: str) -> dict[str, Any]:
         "revision": revision,
         "model_path": str(model_path),
         "receipt": str(receipt_path),
+        "receipt_sha256": receipt_sha256,
+        "manifest": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
         "critical_files": critical,
         "file_count": len(verified),
         "files_verified": len(verified),
@@ -728,8 +756,104 @@ def map_crop_box(box: list[float], crop: list[float]) -> list[float]:
     ]
 
 
+def _strict_teacher_box(value: Any, label: str, max_area: float) -> list[float]:
+    if (not isinstance(value, list) or len(value) != 4
+            or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value)):
+        raise RuntimeError(f"teacher proposals {label} must be numeric normalized xyxy")
+    numbers = [float(item) for item in value]
+    if not all(math.isfinite(item) and 0.0 <= item <= 1.0 for item in numbers):
+        raise RuntimeError(f"teacher proposals {label} must be finite and within [0,1]")
+    normalized = valid_box(numbers, max_area=max_area)
+    if normalized is None:
+        raise RuntimeError(f"teacher proposals {label} violates box geometry or area boundary")
+    return normalized
+
+
+def _validate_teacher_record(photo_id: str, record: Any) -> None:
+    if not isinstance(record, dict):
+        raise RuntimeError(f"teacher proposals record invalid: {photo_id}")
+    crop_prompts = record.get("crop_prompts")
+    proposals = record.get("proposals")
+    if not isinstance(crop_prompts, list) or not isinstance(proposals, list):
+        raise RuntimeError(f"teacher proposals record lists invalid: {photo_id}")
+
+    crop_indexes: dict[tuple[float, ...], int] = {}
+    prompt_mapped_boxes: dict[tuple[int, str], list[list[float]]] = {}
+    for prompt_row in crop_prompts:
+        if not isinstance(prompt_row, dict):
+            raise RuntimeError(f"teacher crop_prompt invalid: {photo_id}")
+        crop = _strict_teacher_box(prompt_row.get("crop"), "crop", max_area=1.0)
+        if box_area(crop) >= 0.72:
+            raise RuntimeError(f"teacher proposals crop must cover less than 72%: {photo_id}")
+        crop_key = tuple(crop)
+        if crop_key not in crop_indexes:
+            if len(crop_indexes) >= TEACHER_MAX_CROPS_PER_IMAGE:
+                raise RuntimeError(f"teacher proposals exceeds unique crop limit: {photo_id}")
+            crop_indexes[crop_key] = len(crop_indexes)
+        crop_index = crop_indexes[crop_key]
+        prompt = prompt_row.get("prompt")
+        if prompt not in TEACHER_PROMPTS:
+            raise RuntimeError(f"teacher proposals prompt invalid: {photo_id}")
+        prompt_key = (crop_index, str(prompt))
+        if prompt_key in prompt_mapped_boxes:
+            raise RuntimeError(f"teacher proposals duplicate crop prompt: {photo_id}")
+        reasons = prompt_row.get("crop_reasons")
+        if (not isinstance(reasons, list) or not reasons
+                or any(not isinstance(reason, str) or not reason for reason in reasons)
+                or len(reasons) != len(set(reasons))):
+            raise RuntimeError(f"teacher proposals crop reasons invalid: {photo_id}")
+        if not isinstance(prompt_row.get("answer"), str):
+            raise RuntimeError(f"teacher proposals answer invalid: {photo_id}")
+        local_boxes = prompt_row.get("local_boxes")
+        mapped_boxes = prompt_row.get("mapped_boxes")
+        if (not isinstance(local_boxes, list) or not isinstance(mapped_boxes, list)
+                or len(local_boxes) != len(mapped_boxes)):
+            raise RuntimeError(f"teacher proposals prompt boxes invalid: {photo_id}")
+        retained: list[list[float]] = []
+        for local_value, mapped_value in zip(local_boxes, mapped_boxes):
+            local_box = _strict_teacher_box(local_value, "local box", max_area=0.35)
+            mapped_box = _strict_teacher_box(mapped_value, "mapped box", max_area=0.35)
+            if mapped_box != map_crop_box(local_box, crop):
+                raise RuntimeError(f"teacher proposals mapped box does not match crop transform: {photo_id}")
+            if any(box_iou(local_box, prior) >= 0.90 for prior in retained):
+                raise RuntimeError(f"teacher proposals local boxes are not deduplicated: {photo_id}")
+            retained.append(local_box)
+        prompt_mapped_boxes[prompt_key] = [
+            _strict_teacher_box(value, "mapped box", max_area=0.35) for value in mapped_boxes
+        ]
+
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            raise RuntimeError(f"teacher proposal invalid: {photo_id}")
+        proposal_box = _strict_teacher_box(proposal.get("box"), "proposal box", max_area=0.35)
+        proposal_prompt = proposal.get("prompt")
+        if proposal_prompt not in TEACHER_PROMPTS:
+            raise RuntimeError(f"teacher proposal prompt invalid: {photo_id}")
+        support = proposal.get("support")
+        if (not isinstance(support, list) or not support
+                or any(not isinstance(item, str) for item in support)
+                or len(support) != len(set(support))):
+            raise RuntimeError(f"teacher proposal support must be nonempty and deduplicated: {photo_id}")
+        support_prompts: set[str] = set()
+        for support_item in support:
+            match = TEACHER_SUPPORT_PATTERN.fullmatch(support_item)
+            if match is None:
+                raise RuntimeError(f"teacher proposal support format invalid: {photo_id}")
+            crop_index, prompt = int(match.group(1)), match.group(2)
+            if crop_index >= TEACHER_MAX_CROPS_PER_IMAGE:
+                raise RuntimeError(f"teacher proposal support crop index invalid: {photo_id}")
+            referenced_boxes = prompt_mapped_boxes.get((crop_index, prompt))
+            if not referenced_boxes or not any(
+                box_iou(proposal_box, referenced) >= 0.55 for referenced in referenced_boxes
+            ):
+                raise RuntimeError(f"teacher proposal support is not backed by crop_prompt: {photo_id}")
+            support_prompts.add(prompt)
+        if proposal_prompt not in support_prompts:
+            raise RuntimeError(f"teacher proposal prompt is not present in support: {photo_id}")
+
+
 def validate_teacher_proposals_receipt(
-    payload: Any,
+    payload: Any, live_integrity: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(payload, dict):
         raise RuntimeError("teacher proposals receipt must be an object")
@@ -751,7 +875,7 @@ def validate_teacher_proposals_receipt(
         if payload.get(field) != value:
             raise RuntimeError(f"teacher proposals receipt boundary mismatch: {field}")
     integrity = payload.get("model_integrity")
-    if not isinstance(integrity, dict):
+    if not isinstance(integrity, dict) or not isinstance(live_integrity, dict):
         raise RuntimeError("teacher proposals model_integrity missing")
     integrity_expected = {
         "version": TEACHER_MODEL_INTEGRITY_VERSION,
@@ -765,30 +889,55 @@ def validate_teacher_proposals_receipt(
     for field, value in integrity_expected.items():
         if integrity.get(field) != value:
             raise RuntimeError(f"teacher proposals model_integrity mismatch: {field}")
-    if integrity.get("receipt_version") not in {
-        TEACHER_MODEL_RECEIPT_V1, TEACHER_MODEL_RECEIPT_V2,
-    }:
+    receipt_version = integrity.get("receipt_version")
+    manifest_version = integrity.get("manifest_version")
+    if receipt_version == TEACHER_MODEL_RECEIPT_V1:
+        if (manifest_version != TEACHER_LEGACY_MANIFEST_VERSION
+                or integrity.get("file_count") != TEACHER_LEGACY_FILE_COUNT
+                or integrity.get("total_bytes") != TEACHER_LEGACY_TOTAL_BYTES):
+            raise RuntimeError("teacher proposals legacy integrity boundary mismatch")
+    elif receipt_version == TEACHER_MODEL_RECEIPT_V2:
+        if manifest_version != TEACHER_MODEL_RECEIPT_V2:
+            raise RuntimeError("teacher proposals v2 integrity version pairing invalid")
+    else:
         raise RuntimeError("teacher proposals model_integrity receipt version invalid")
-    if integrity.get("manifest_version") not in {
-        TEACHER_LEGACY_MANIFEST_VERSION, TEACHER_MODEL_RECEIPT_V2,
-    }:
-        raise RuntimeError("teacher proposals model_integrity manifest version invalid")
     file_count = integrity.get("file_count")
     if (not isinstance(file_count, int) or file_count <= 0
             or integrity.get("files_verified") != file_count
             or not isinstance(integrity.get("total_bytes"), int)
             or integrity["total_bytes"] <= 0
             or not isinstance(integrity.get("receipt"), str)
-            or not integrity["receipt"]):
+            or not integrity["receipt"]
+            or not isinstance(integrity.get("receipt_sha256"), str)
+            or not isinstance(integrity.get("manifest"), str)
+            or not isinstance(integrity.get("manifest_sha256"), str)):
         raise RuntimeError("teacher proposals model_integrity incomplete")
+    receipt_path = Path(live_integrity.get("receipt", ""))
+    manifest_path = Path(live_integrity.get("manifest", ""))
+    if (not receipt_path.is_file()
+            or sha256_file(receipt_path) != live_integrity.get("receipt_sha256")):
+        raise RuntimeError("teacher proposals live receipt SHA mismatch")
+    if (not manifest_path.is_file()
+            or sha256_file(manifest_path) != live_integrity.get("manifest_sha256")):
+        raise RuntimeError("teacher proposals live manifest SHA mismatch")
+    if integrity != live_integrity:
+        raise RuntimeError("teacher proposals model_integrity is not identical to live verification")
     records = payload.get("records")
     if not isinstance(records, dict):
         raise RuntimeError("teacher proposals records must be an object")
     for photo_id, record in records.items():
-        if (not isinstance(photo_id, str) or not isinstance(record, dict)
-                or not isinstance(record.get("proposals"), list)):
+        if not isinstance(photo_id, str) or not photo_id:
             raise RuntimeError(f"teacher proposals record invalid: {photo_id}")
+        _validate_teacher_record(photo_id, record)
     return records, integrity
+
+
+def load_teacher_proposals(
+    proposal_path: Path, model_path: Path, revision: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    live_integrity = verify_teacher_model(model_path, revision)
+    payload = json.loads(proposal_path.read_text(encoding="utf-8"))
+    return validate_teacher_proposals_receipt(payload, live_integrity)
 
 
 def run_teacher(
@@ -1038,8 +1187,9 @@ def main() -> None:
         teacher_skip_reason = "optional teacher explicitly skipped"
     elif args.teacher_proposals:
         try:
-            teacher_payload = json.loads(args.teacher_proposals.read_text(encoding="utf-8"))
-            teacher_results, teacher_integrity = validate_teacher_proposals_receipt(teacher_payload)
+            teacher_results, teacher_integrity = load_teacher_proposals(
+                args.teacher_proposals, Path(args.teacher_model), args.teacher_revision,
+            )
             teacher_used = True
         except Exception as exc:
             teacher_results = {}
