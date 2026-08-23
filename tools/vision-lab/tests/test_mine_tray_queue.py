@@ -21,6 +21,59 @@ SPEC.loader.exec_module(module)
 class MineTrayQueueTests(unittest.TestCase):
     def test_teacher_default_is_stable_offline_b_drive_path(self):
         self.assertEqual(module.DEFAULT_TEACHER_PATH, Path(r"B:\AIModels\LocateAnything-3B"))
+        self.assertEqual(module.TEACHER_MAX_SIDE, 640)
+        self.assertEqual(module.TEACHER_MAX_NEW_TOKENS, 256)
+        self.assertEqual(module.TEACHER_MAX_CROPS_PER_IMAGE, 3)
+
+    @staticmethod
+    def make_teacher_snapshot(root: Path) -> None:
+        for name in (
+            "config.json", "tokenizer_config.json",
+            "processor_config.json", "preprocessor_config.json",
+        ):
+            (root / name).write_text("{}", encoding="utf-8")
+        (root / "model-00001-of-00002.safetensors").write_bytes(b"first-weight-shard")
+        (root / "model-00002-of-00002.safetensors").write_bytes(b"second-weight-shard")
+        (root / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {
+            "layer.0": "model-00001-of-00002.safetensors",
+            "layer.1": "model-00002-of-00002.safetensors",
+        }}), encoding="utf-8")
+
+    def test_teacher_model_seal_pins_revision_and_detects_weight_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            self.make_teacher_snapshot(model)
+            receipt = module.seal_teacher_model(model, module.TEACHER_REVISION)
+            self.assertEqual(receipt["revision"], module.TEACHER_REVISION)
+            self.assertTrue(receipt["full_image_inference_forbidden"])
+            evidence = module.verify_teacher_model(model, module.TEACHER_REVISION)
+            self.assertEqual(len(evidence["critical_files"]), 3)
+            self.assertEqual(evidence["file_count"], 7)
+            (model / "model-00002-of-00002.safetensors").write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "critical file mismatch"):
+                module.verify_teacher_model(model, module.TEACHER_REVISION)
+
+    def test_teacher_model_verify_rejects_missing_receipt_and_revision_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            self.make_teacher_snapshot(model)
+            with self.assertRaisesRegex(RuntimeError, "receipt missing"):
+                module.verify_teacher_model(model, module.TEACHER_REVISION)
+            module.seal_teacher_model(model, module.TEACHER_REVISION)
+            with self.assertRaisesRegex(RuntimeError, "fixed revision mismatch"):
+                module.verify_teacher_model(model, "unexpected-revision")
+
+    def test_teacher_model_verify_rejects_receipt_safety_policy_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary)
+            self.make_teacher_snapshot(model)
+            module.seal_teacher_model(model, module.TEACHER_REVISION)
+            receipt_path = model / module.TEACHER_MODEL_RECEIPT
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["crop_max_side"] = 1024
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "safety policy mismatch"):
+                module.verify_teacher_model(model, module.TEACHER_REVISION)
 
     def test_teacher_regions_are_local_crops_and_map_back_to_full_image(self):
         image = Image.new("RGB", (400, 300), (30, 30, 30))
@@ -34,6 +87,7 @@ class MineTrayQueueTests(unittest.TestCase):
         }
         regions = module.teacher_crop_regions(record, image)
         self.assertTrue(regions)
+        self.assertLessEqual(len(regions), module.TEACHER_MAX_CROPS_PER_IMAGE)
         self.assertTrue(any("blue_basket" in row["reasons"] for row in regions))
         self.assertTrue(all(module.box_area(row["box"]) < 0.72 for row in regions))
         self.assertNotIn([0.0, 0.0, 1.0, 1.0], [row["box"] for row in regions])
@@ -80,6 +134,7 @@ class MineTrayQueueTests(unittest.TestCase):
         answer = (
             "<ref>tray</ref><box><0><0><1000><1000></box>"
             "<ref>tray</ref><box><100><200><500><500></box>"
+            "<ref>tray duplicate</ref><box><101><201><501><501></box>"
         )
         self.assertEqual(module.parse_teacher_boxes(answer), [[0.1, 0.2, 0.5, 0.5]])
 

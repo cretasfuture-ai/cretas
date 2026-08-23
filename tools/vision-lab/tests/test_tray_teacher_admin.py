@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from PIL import Image
+
+
+MODULE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(MODULE_DIR))
+MODULE_PATH = MODULE_DIR / "locateanything_teacher_admin.py"
+SPEC = importlib.util.spec_from_file_location("locateanything_teacher_admin", MODULE_PATH)
+assert SPEC and SPEC.loader
+module = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(module)
+
+
+class FakeCuda:
+    @staticmethod
+    def memory_allocated() -> int:
+        return 123
+
+    @staticmethod
+    def reset_peak_memory_stats() -> None:
+        return None
+
+    @staticmethod
+    def max_memory_allocated() -> int:
+        return 456
+
+
+class FakeTeacher:
+    def __init__(self, model_path: str, revision: str) -> None:
+        self.model_path = model_path
+        self.revision = revision
+        self.torch = type("FakeTorch", (), {"cuda": FakeCuda})()
+
+    @staticmethod
+    def predict(image: Image.Image, _prompt: str) -> str:
+        assert max(image.size) <= module.TEACHER_MAX_SIDE
+        return (
+            "<ref>tray</ref><box><100><200><500><500></box>"
+            "<ref>duplicate</ref><box><101><201><501><501></box>"
+        )
+
+
+class TrayTeacherAdminTests(unittest.TestCase):
+    def test_parse_crop_requires_explicit_positive_pixel_region(self):
+        self.assertEqual(module.parse_crop("10,20,310,220"), (10, 20, 310, 220))
+        for value in ("10,20,30", "10,20,5,30", "-1,0,20,20", "x,0,20,20"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                module.parse_crop(value)
+
+    def test_smoke_is_bounded_and_writes_integrity_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image_path = root / "readonly-source.png"
+            Image.new("RGB", (1200, 800), (30, 40, 50)).save(image_path)
+            receipt_path = root / "receipts" / "smoke.json"
+            integrity = {"revision": module.TEACHER_REVISION, "critical_files": {"weights": {}}}
+            with (
+                mock.patch.object(module, "verify_teacher_model", return_value=integrity),
+                mock.patch.object(module, "LocateAnythingTeacher", FakeTeacher),
+            ):
+                result = module.smoke(
+                    root / "model", module.TEACHER_REVISION, image_path,
+                    (100, 100, 1100, 700), "all", receipt_path,
+                )
+
+            persisted = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["inference_size"], [640, 384])
+            self.assertEqual(result["max_new_tokens"], 256)
+            self.assertEqual(result["raw_box_count"], 2)
+            self.assertEqual(result["deduplicated_box_count"], 1)
+            self.assertFalse(result["full_image_inference"])
+            self.assertEqual(result["model_integrity"], integrity)
+            self.assertEqual(persisted, result)
+
+    def test_smoke_fails_closed_before_model_load_when_integrity_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image_path = root / "readonly-source.png"
+            Image.new("RGB", (100, 100), (30, 40, 50)).save(image_path)
+            with (
+                mock.patch.object(
+                    module, "verify_teacher_model",
+                    side_effect=RuntimeError("teacher model receipt missing"),
+                ),
+                mock.patch.object(module, "LocateAnythingTeacher") as teacher,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "receipt missing"):
+                    module.smoke(
+                        root / "model", module.TEACHER_REVISION, image_path,
+                        (0, 0, 50, 50), "all", root / "receipt.json",
+                    )
+            teacher.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
