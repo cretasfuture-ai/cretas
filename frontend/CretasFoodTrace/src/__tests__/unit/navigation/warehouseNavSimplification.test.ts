@@ -14,7 +14,11 @@ describe('仓管四导航与首页分流', () => {
     expect(nav).toMatch(/initialRouteName="WHHomeTab"/);
     expect(nav).toMatch(/!SIMPLIFIED_WAREHOUSE_NAV[\s\S]{0,200}name="WHInventoryTab"/);
     expect(nav).not.toMatch(/!SIMPLIFIED_WAREHOUSE_NAV[\s\S]{0,200}name="WHHomeTab"/);
-    expect(nav).not.toContain('isScreenEnabled');
+    expect(nav).toContain("isScreenEnabled('InboundManagement')");
+    expect(nav).toContain("isScreenEnabled('OutboundManagement')");
+    expect(nav).toContain('inboundEnabled ? WHInboundStackNavigator : InboundUnavailableScreen');
+    expect(nav).toContain('outboundEnabled ? WHOutboundStackNavigator : OutboundUnavailableScreen');
+    expect(nav).toContain('testID="wh-feature-unavailable"');
   });
 
   it('首页只有两个大业务入口并切到对应底部导航', () => {
