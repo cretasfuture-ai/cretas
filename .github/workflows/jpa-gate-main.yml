@@ -4,6 +4,8 @@ name: JPA repository query gate
 # workflow ran only after merge. Current AGENTS.md and daily integration policy
 # require the same real JPA Context startup check before merge. Keep the main
 # push trigger as defense in depth; it is no longer the authorization gate.
+# Remove that push backstop only after branch protection requires this PR job
+# and duplicate post-merge runs are proven unnecessary.
 #
 # 刻意只跑这一道, 不跑全量套件:
 #   - 全量 1119 个测试类要 78 分钟, 而且现在会 OOM 崩掉 (ci.yml 里有单独的堆修复)
