@@ -93,11 +93,13 @@ class TransitLedgerApiClient {
   async confirm(
     productionPlanId: string,
     payload: TransitConfirmPayload,
+    idempotencyKey: string,
     factoryId?: string,
   ): Promise<ApiEnvelope<WarehouseReceiptConfirmResult>> {
     return apiClient.post<ApiEnvelope<WarehouseReceiptConfirmResult>>(
       `${this.basePath(factoryId)}/${productionPlanId}/confirm`,
       payload,
+      { headers: { 'Idempotency-Key': idempotencyKey } },
     );
   }
 }

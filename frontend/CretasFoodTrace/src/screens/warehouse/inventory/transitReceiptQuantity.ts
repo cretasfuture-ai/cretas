@@ -3,6 +3,16 @@ export interface ReceiptQuantityLine {
   receivedQuantity?: number | null;
 }
 
+export function createTransitReceiptIdempotencyKey(
+  itemId: string,
+  now: number = Date.now(),
+  random: number = Math.random(),
+): string {
+  const safeItemId = itemId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'receipt';
+  const randomPart = Math.floor(random * 0xFFFFFFFF).toString(36).padStart(7, '0');
+  return `rn-wh-receipt-${safeItemId}-${now.toString(36)}-${randomPart}`;
+}
+
 export function remainingReceiptQuantity(line: ReceiptQuantityLine): number {
   const reported = Number(line.reportedQuantity ?? 0);
   const received = Number(line.receivedQuantity ?? 0);

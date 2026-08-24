@@ -1,4 +1,5 @@
 import {
+  createTransitReceiptIdempotencyKey,
   isValidReceiptDelta,
   receiptDeltaError,
   remainingReceiptQuantity,
@@ -43,5 +44,16 @@ describe('production transit receipt quantity', () => {
     const decimalLine = { reportedQuantity: 0.3, receivedQuantity: 0.2 };
     expect(remainingReceiptQuantity(decimalLine)).toBe(0.1);
     expect(isValidReceiptDelta(0.1, decimalLine)).toBe(true);
+  });
+
+  it('creates bounded receipt-attempt keys and rotates them for a new mutation', () => {
+    const first = createTransitReceiptIdempotencyKey('plan-1234567890', 1_700_000_000_000, 0.1);
+    const retry = createTransitReceiptIdempotencyKey('plan-1234567890', 1_700_000_000_000, 0.1);
+    const nextMutation = createTransitReceiptIdempotencyKey('plan-1234567890', 1_700_000_000_001, 0.2);
+
+    expect(first).toBe(retry);
+    expect(nextMutation).not.toBe(first);
+    expect(first).toMatch(/^rn-wh-receipt-[A-Za-z0-9]+-[a-z0-9]+-[a-z0-9]+$/);
+    expect(first.length).toBeLessThanOrEqual(96);
   });
 });

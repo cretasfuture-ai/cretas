@@ -49,7 +49,7 @@ describe('transitLedgerApiClient', () => {
         quantityUnit: 'kg',
       }],
       note: 'scale checked',
-    }, 'F006')).resolves.toBe(response);
+    }, 'rn-wh-receipt-attempt-2', 'F006')).resolves.toBe(response);
 
     expect(mockedApiClient.post).toHaveBeenCalledWith(
       '/api/mobile/F006/warehouse/transit-ledgers/PLAN-1/confirm',
@@ -62,6 +62,7 @@ describe('transitLedgerApiClient', () => {
         }],
         note: 'scale checked',
       },
+      { headers: { 'Idempotency-Key': 'rn-wh-receipt-attempt-2' } },
     );
   });
 });

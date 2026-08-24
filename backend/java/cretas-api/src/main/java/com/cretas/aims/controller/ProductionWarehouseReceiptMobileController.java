@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,14 +37,12 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -121,10 +120,11 @@ public class ProductionWarehouseReceiptMobileController {
     public ApiResponse<ProductionWarehouseReceiptResponse> confirmTransitLedger(
             @PathVariable @NotBlank String factoryId,
             @PathVariable("id") @NotBlank String productionPlanId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody ProductionWarehouseReceiptMobileConfirmRequest body) {
         Long receivedBy = currentUserId();
         ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
-        request.setIdempotencyKey(idempotencyKey(factoryId, productionPlanId));
+        request.setIdempotencyKey(idempotencyKey(idempotencyKey));
         request.setReceivedQuantity(body.getReceivedQuantity());
         request.setOutputLines(body.getOutputLines());
         request.setVarianceNote(trimToNull(body.getNote()));
@@ -343,10 +343,21 @@ public class ProductionWarehouseReceiptMobileController {
         throw new BusinessException(401, "Missing userId in request context");
     }
 
-    private String idempotencyKey(String factoryId, String productionPlanId) {
-        UUID stable = UUID.nameUUIDFromBytes((factoryId + ":" + productionPlanId)
-                .getBytes(StandardCharsets.UTF_8));
-        return "mobile-wh-receipt:" + stable;
+    private String idempotencyKey(String clientKey) {
+        String normalized = trimToNull(clientKey);
+        if (normalized == null) {
+            throw new BusinessException(400, "仓库实收请求缺少幂等键")
+                    .withCode("WAREHOUSE_RECEIPT_IDEMPOTENCY_KEY_REQUIRED")
+                    .withHint("请刷新仓储页面后重新提交；系统不会在缺少幂等键时写入库存")
+                    .withHintTarget("Idempotency-Key");
+        }
+        if (normalized.length() > 96) {
+            throw new BusinessException(400, "仓库实收幂等键长度不能超过 96 个字符")
+                    .withCode("WAREHOUSE_RECEIPT_IDEMPOTENCY_KEY_INVALID")
+                    .withHint("请刷新仓储页面生成新的请求标识后重试")
+                    .withHintTarget("Idempotency-Key");
+        }
+        return "mobile-wh-receipt:" + normalized;
     }
 
     private BigDecimal receiptTolerance(String unit) {

@@ -18,4 +18,12 @@ describe('WHTransitLedger split receipt contract', () => {
     expect(source).toContain('{COPY.remaining} {formatQty(remaining, line.unit)}');
     expect(source).toContain('delete next[outputLineKey(item.id, line, index)]');
   });
+
+  it('keeps one idempotency key for retries and clears it after a successful receipt', () => {
+    expect(source).toContain('const idempotencyKeyById = useRef<Record<string, string>>({})');
+    expect(source).toContain('idempotencyKeyById.current[item.id]');
+    expect(source).toContain('createTransitReceiptIdempotencyKey(item.id)');
+    expect(source).toContain('delete idempotencyKeyById.current[item.id]');
+    expect(source).toContain('}, idempotencyKey)');
+  });
 });
