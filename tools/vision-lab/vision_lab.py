@@ -34,6 +34,8 @@ SAFE_REMOTE_PATH = re.compile(r"^/[A-Za-z0-9_./-]+$")
 SAFE_SERVICE = re.compile(r"^[A-Za-z0-9_.@-]+$")
 OPERATOR_RECALL_OVERRIDE_TOKEN = "ACCEPT-INCOMPLETE-RECALL"
 WAIVABLE_RECALL_ERROR_PREFIX = "required defect group did not reach full recall: "
+LABEL_CLASS_IDS = {"white_label": 0, "color_label": 1}
+ISOLATED_MISSING_REPEAT_STRATEGY = "human-confirmed-isolated-missing-v1"
 
 
 def utc_now() -> str:
@@ -509,9 +511,58 @@ def yolo_line(box: dict[str, Any]) -> str:
     return f"{cls} {(x0+x1)/2:.6f} {(y0+y1)/2:.6f} {x1-x0:.6f} {y1-y0:.6f}"
 
 
+def isolated_missing_class(annotation: dict[str, Any]) -> str | None:
+    """Return the missing class only for unambiguous single-tray supervision.
+
+    A confirmed missing-label crop is safe to upweight only when the human
+    annotation declares exactly one missing class and contains exactly one box
+    for the complementary class.  Multi-box crops may include neighbouring
+    trays, so they remain ordinary detector samples instead of receiving extra
+    hard-negative weight.
+    """
+    if annotation.get("missing_confirmed_by_human") is not True:
+        return None
+    missing = annotation.get("declared_missing_classes")
+    if not isinstance(missing, list) or not missing:
+        raise RuntimeError("confirmed missing-label annotation has unsupported declared classes")
+    normalized_missing: list[str] = []
+    for value in missing:
+        if value in LABEL_CLASS_IDS:
+            normalized_missing.append(str(value))
+        elif isinstance(value, int) and not isinstance(value, bool) and value in LABEL_CLASS_IDS.values():
+            normalized_missing.append(next(name for name, class_id in LABEL_CLASS_IDS.items() if class_id == value))
+        else:
+            raise RuntimeError("confirmed missing-label annotation has unsupported declared classes")
+    if len(set(normalized_missing)) != len(normalized_missing):
+        raise RuntimeError("confirmed missing-label annotation repeats a declared class")
+    if len(normalized_missing) != 1:
+        return None
+    boxes = annotation.get("boxes") or []
+    present_classes = [int(box["c"]) for box in boxes]
+    missing_class = normalized_missing[0]
+    missing_id = LABEL_CLASS_IDS[missing_class]
+    complementary_id = 1 - missing_id
+    if missing_id in present_classes:
+        raise RuntimeError(f"confirmed missing-label annotation contains {missing_class} box")
+    if len(present_classes) != 1 or present_classes[0] != complementary_id:
+        return None
+    return missing_class
+
+
+def isolated_missing_repeat(training: dict[str, Any]) -> int:
+    value = training.get("isolated_missing_repeat", 1)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("training option isolated_missing_repeat must be an integer")
+    if not 1 <= value <= 10:
+        raise ValueError("training option isolated_missing_repeat must be between 1 and 10")
+    return value
+
+
 def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     root = Path(config["runtime_root"])
-    validation_percent = int(config.get("training", {}).get("validation_percent", 20))
+    training = config.get("training", {})
+    validation_percent = int(training.get("validation_percent", 20))
+    missing_repeat = isolated_missing_repeat(training)
     rows: list[dict[str, Any]] = []
     manifest_hashes: list[str] = []
     identity_rows: list[dict[str, str]] = []
@@ -543,8 +594,9 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
                 raise RuntimeError(f"queue image drift: {image}")
             task_id = str(source.get("source_task_id") or source.get("task_id") or source.get("source_photo_id") or source["crop_id"])
             annotation_sha = sha256_file(annotation_path)
+            missing_class = isolated_missing_class(annotation)
             rows.append({"source": source, "annotation": annotation, "image": image, "task_id": task_id,
-                         "annotation_sha256": annotation_sha})
+                         "annotation_sha256": annotation_sha, "isolated_missing_class": missing_class})
             identity_rows.append({
                 "crop": str(source["crop_id"]),
                 "image": source["image_sha256"],
@@ -554,10 +606,19 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     minimum = int(config.get("training", {}).get("min_reviewed_images", 100))
     if len(rows) < minimum:
         raise RuntimeError(f"training gate: {len(rows)} reviewed images < {minimum}")
-    dataset_id = "label-" + hashlib.sha256(stable_json({
+    identity: dict[str, Any] = {
         "schema": "effective-training-rows-v2",
         "rows": sorted(identity_rows, key=lambda row: (row["task"], row["crop"])),
-    })).hexdigest()[:12]
+    }
+    # Preserve the established dataset ID when weighting is disabled.  This
+    # prevents a code-only rollout from triggering an accidental retrain.
+    if missing_repeat > 1:
+        identity |= {
+            "schema": "effective-training-rows-v3",
+            "isolated_missing_repeat": missing_repeat,
+            "isolated_missing_strategy": ISOLATED_MISSING_REPEAT_STRATEGY,
+        }
+    dataset_id = "label-" + hashlib.sha256(stable_json(identity)).hexdigest()[:12]
     out = root / "datasets" / dataset_id
     exclusion_receipt = {
         "total": sum(training_exclusions.values()),
@@ -574,24 +635,45 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     for split in ("train", "val"):
         (out / "images" / split).mkdir(parents=True)
         (out / "labels" / split).mkdir(parents=True)
-    counts = {"train": 0, "val": 0, "white_boxes": 0, "color_boxes": 0}
+    counts = {
+        "train": 0, "val": 0, "white_boxes": 0, "color_boxes": 0,
+        "unique_train": 0, "unique_val": 0,
+        "isolated_missing_unique": 0,
+        "isolated_missing_train_unique": 0,
+        "isolated_missing_val_unique": 0,
+        "isolated_missing_train_copies": 0,
+    }
     manifest_rows = []
     for item in rows:
         split = deterministic_split(item["task_id"], validation_percent)
         crop_id = str(item["source"]["crop_id"])
-        image_out = out / "images" / split / f"{crop_id}{item['image'].suffix.lower()}"
-        label_out = out / "labels" / split / f"{crop_id}.txt"
-        shutil.copy2(item["image"], image_out)
         lines = [yolo_line(box) for box in item["annotation"].get("boxes") or []]
-        label_out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-        counts[split] += 1
-        counts["white_boxes"] += sum(1 for box in item["annotation"].get("boxes") or [] if int(box["c"]) == 0)
-        counts["color_boxes"] += sum(1 for box in item["annotation"].get("boxes") or [] if int(box["c"]) == 1)
-        manifest_rows.append({
-            "crop_id": crop_id, "task_id": item["task_id"], "split": split,
-            "source_sha256": item["source"]["image_sha256"], "image": str(image_out), "label": str(label_out),
-            "annotation_sha256": item["annotation_sha256"],
-        })
+        missing_class = item["isolated_missing_class"]
+        repeat = missing_repeat if split == "train" and missing_class else 1
+        counts[f"unique_{split}"] += 1
+        if missing_class:
+            counts["isolated_missing_unique"] += 1
+            counts[f"isolated_missing_{split}_unique"] += 1
+        for repeat_index in range(repeat):
+            sample_id = crop_id if repeat_index == 0 else f"{crop_id}__missing_r{repeat_index + 1:02d}"
+            image_out = out / "images" / split / f"{sample_id}{item['image'].suffix.lower()}"
+            label_out = out / "labels" / split / f"{sample_id}.txt"
+            shutil.copy2(item["image"], image_out)
+            label_out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            counts[split] += 1
+            counts["white_boxes"] += sum(1 for box in item["annotation"].get("boxes") or [] if int(box["c"]) == 0)
+            counts["color_boxes"] += sum(1 for box in item["annotation"].get("boxes") or [] if int(box["c"]) == 1)
+            if repeat_index > 0:
+                counts["isolated_missing_train_copies"] += 1
+            manifest_rows.append({
+                "crop_id": crop_id, "sample_id": sample_id,
+                "task_id": item["task_id"], "split": split,
+                "source_sha256": item["source"]["image_sha256"],
+                "image": str(image_out), "label": str(label_out),
+                "annotation_sha256": item["annotation_sha256"],
+                "isolated_missing_class": missing_class,
+                "sample_role": "original" if repeat_index == 0 else "isolated_missing_repeat",
+            })
     if min(counts["train"], counts["val"], counts["white_boxes"], counts["color_boxes"]) <= 0:
         raise RuntimeError(f"dataset coverage gate failed: {counts}")
     yaml_path = out / "data.yaml"
@@ -603,6 +685,13 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
         "version": VERSION, "dataset_id": dataset_id, "created_at": utc_now(),
         "train_only": True, "protected_holdout_included": False,
         "task_level_split": True, "counts": counts, "rows": manifest_rows,
+        "isolated_missing_supervision": {
+            "strategy": ISOLATED_MISSING_REPEAT_STRATEGY,
+            "train_repeat": missing_repeat,
+            "validation_repeated": False,
+            "requires_human_confirmation": True,
+            "requires_single_complementary_box": True,
+        },
         "source_manifest_sha256": manifest_hashes,
         "training_exclusions": exclusion_receipt,
         "data_yaml": str(yaml_path),

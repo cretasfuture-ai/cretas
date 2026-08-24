@@ -86,6 +86,12 @@ B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
 框体使用可透视内容的深青蓝半透明填充，选中时改为更深的黄色；边线保持细线，拖拽热区保留但
 不绘制方块手柄。
 
+人工确认的缺标样本可通过 `training.isolated_missing_repeat`（整数 `1..10`，默认 `1`）增加训练权重。
+该策略只重复任务级划分后进入 train 的样本，validation 永不复制；并且只接受“明确声明缺一个类别、
+缺失类别没有框、互补类别恰好一个框”的单目标裁图。多框画面可能包含相邻托盘，只作为普通检测样本，
+不会获得 hard-negative 权重；声明缺标却又画出该类别框时直接失败。模糊或无法稳定画框的图片继续由
+人工设置 `training_eligible=false` 排除，既不改写人工真值，也不会因代码发布自动触发重新训练。
+
 ### 金属工作区 ROI 与台外真实缺标
 
 工作区 ROI 是独立于 tray MARK 和 label MARK 的第三层人工真值。不得删除台外托盘框，也不得把
