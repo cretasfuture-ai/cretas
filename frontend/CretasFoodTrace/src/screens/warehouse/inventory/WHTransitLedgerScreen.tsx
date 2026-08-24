@@ -12,6 +12,11 @@ import {
   TransitOutputLine,
 } from '../../../services/api/transitLedgerApiClient';
 import { theme } from '../../../theme';
+import {
+  isValidReceiptDelta,
+  receiptDeltaError,
+  remainingReceiptQuantity,
+} from './transitReceiptQuantity';
 
 const COPY = {
   title: '\u4e2d\u8f6c\u5b9e\u6536\u786e\u8ba4',
@@ -25,6 +30,9 @@ const COPY = {
   reported: '\u62a5\u5de5\u4ea7\u51fa',
   tolerance: '\u5bb9\u5dee',
   receivedQty: '\u5b9e\u6536\u6570\u91cf',
+  receivedCumulative: '\u5df2\u6536',
+  remaining: '\u5f85\u6536',
+  thisReceipt: '\u672c\u6b21',
   receivedPlaceholder: '\u8bf7\u586b\u5199\u4ed3\u5e93\u590d\u6838\u540e\u7684\u5b9e\u6536\u6570\u91cf',
   receivedHint: '\u63d0\u4ea4\u524d\u6838\u5bf9\u6765\u6e90\u5355\u3001\u62a5\u5de5\u4ea7\u51fa\u548c\u73b0\u573a\u5b9e\u7269\uff1b\u63d0\u4ea4\u540e\u7531\u540e\u7aef\u5199\u5165\u6210\u54c1\u5e93\u5b58\u3002',
   outputLines: '\u7ec8\u7aef\u4ea7\u51fa\u9010\u884c\u5b9e\u6536',
@@ -42,7 +50,7 @@ const COPY = {
   invalidQtyTitle: '\u8bf7\u586b\u5199\u5b9e\u6536\u6570\u91cf',
   invalidQtyMessage: '\u5b9e\u6536\u6570\u91cf\u5fc5\u987b\u5927\u4e8e 0\uff0c\u4e0d\u5141\u8bb8\u7a7a\u503c\u6216\u8d1f\u6570\u3002',
   invalidQtyScaleMessage: '\u5b9e\u6536\u6570\u91cf\u6700\u591a\u652f\u6301 4 \u4f4d\u5c0f\u6570\uff0c\u7cfb\u7edf\u4e0d\u4f1a\u81ea\u52a8\u56db\u820d\u4e94\u5165\u3002',
-  invalidLineMessage: '\u8bf7\u9010\u884c\u6838\u5bf9\u5b9e\u6536\u3002\u5f53\u524d\u6bcf\u884c\u5fc5\u987b\u4e0e\u5df2\u63d0\u4ea4\u62a5\u4ea7\u6570\u91cf\u4e00\u81f4\uff1b\u5982\u73b0\u573a\u4e0d\u4e00\u81f4\uff0c\u8bf7\u5148\u8ba9\u751f\u4ea7\u4fee\u6b63\u62a5\u5de5\u3002',
+  invalidLineMessage: '\u8bf7\u9010\u884c\u6838\u5bf9\u672c\u6b21\u5b9e\u6536\u3002\u6570\u91cf\u5fc5\u987b\u5927\u4e8e 0 \u4e14\u4e0d\u80fd\u8d85\u8fc7\u5f85\u6536\u6570\u91cf\uff1b\u53ef\u5206\u6b21\u786e\u8ba4\uff0c\u7cfb\u7edf\u4f1a\u7d2f\u8ba1\u5df2\u6536\u3002',
   successTitle: '\u786e\u8ba4\u6210\u529f',
   successMessage: '\u4ed3\u5e93\u5b9e\u6536\u5df2\u63d0\u4ea4\uff0c\u5e93\u5b58\u548c\u7ed3\u5355\u72b6\u6001\u5df2\u7531\u540e\u7aef\u5904\u7406\u3002',
   failedTitle: '\u786e\u8ba4\u5931\u8d25',
@@ -130,7 +138,7 @@ export default function WHTransitLedgerScreen() {
             (item.outputLines ?? []).forEach((line, index) => {
               const key = outputLineKey(item.id, line, index);
               if (next[key] == null && line.reportedQuantity != null) {
-                next[key] = String(line.reportedQuantity);
+                next[key] = String(remainingReceiptQuantity(line));
               }
             });
           });
@@ -175,13 +183,21 @@ export default function WHTransitLedgerScreen() {
       quantityUnit: line.unit,
       reportedQuantity: Number(line.reportedQuantity),
     }));
-    const invalidOutputLine = confirmedOutputLines.some((line) =>
-      line.receivedQuantity == null
-      || line.receivedQuantity <= 0
-      || line.receivedQuantity !== line.reportedQuantity
-    );
-    if (outputLines.length > 0 && invalidOutputLine) {
-      appAlert(COPY.invalidQtyTitle, COPY.invalidLineMessage);
+    const invalidOutputLineIndex = confirmedOutputLines.findIndex((line, index) => {
+      const output = outputLines[index];
+      return output == null || !isValidReceiptDelta(line.receivedQuantity, output);
+    });
+    if (outputLines.length > 0 && invalidOutputLineIndex >= 0) {
+      const input = confirmedOutputLines[invalidOutputLineIndex];
+      const output = outputLines[invalidOutputLineIndex];
+      if (input == null || output == null) {
+        appAlert(COPY.invalidQtyTitle, COPY.invalidLineMessage);
+        return;
+      }
+      appAlert(
+        COPY.invalidQtyTitle,
+        receiptDeltaError(input.receivedQuantity, output, output.unit) ?? COPY.invalidLineMessage,
+      );
       return;
     }
     if (outputLines.length === 0 && (receivedQuantity == null || receivedQuantity <= 0)) {
@@ -204,6 +220,9 @@ export default function WHTransitLedgerScreen() {
         setReceivedById((prev) => {
           const next = { ...prev };
           delete next[item.id];
+          outputLines.forEach((line, index) => {
+            delete next[outputLineKey(item.id, line, index)];
+          });
           return next;
         });
         setNoteById((prev) => {
@@ -229,12 +248,12 @@ export default function WHTransitLedgerScreen() {
     const name = item.productName || item.batchNumber || item.sourceNumber || item.id;
     const confirming = confirmingId === item.id;
     const outputLines = item.outputLines ?? [];
-    const lineValuesValid = outputLines.length > 0 && outputLines.every((line, index) => {
+    const lineValuesPresent = outputLines.length > 0 && outputLines.every((line, index) => {
       const value = parseQuantity(receivedById[outputLineKey(item.id, line, index)]);
-      return value != null && value > 0 && value === Number(line.reportedQuantity);
+      return value != null && value > 0;
     });
     const canConfirm = (outputLines.length > 0
-      ? lineValuesValid
+      ? lineValuesPresent
       : receivedQuantity != null && receivedQuantity > 0) && !confirming;
 
     return (
@@ -266,14 +285,18 @@ export default function WHTransitLedgerScreen() {
             <Text style={styles.inputHint}>{COPY.outputLineHint}</Text>
             {outputLines.map((line, index) => {
               const key = outputLineKey(item.id, line, index);
+              const remaining = remainingReceiptQuantity(line);
               return (
                 <View key={key} style={styles.outputLine}>
                   <Text style={styles.outputIdentity}>
                     {COPY.sku}: {line.productName || line.productTypeId}  ·  {COPY.batch}: {line.batchNumber}
                   </Text>
+                  <Text style={styles.inputHint}>
+                    {COPY.receivedCumulative} {formatQty(line.receivedQuantity, line.unit)} · {COPY.remaining} {formatQty(remaining, line.unit)}
+                  </Text>
                   <TextInput
                     mode="outlined"
-                    label={`${COPY.receivedQty} / ${formatQty(line.reportedQuantity, line.unit)}`}
+                    label={`${COPY.thisReceipt}${COPY.receivedQty} / ${COPY.remaining} ${formatQty(remaining, line.unit)}`}
                     keyboardType="decimal-pad"
                     value={receivedById[key] ?? ''}
                     onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [key]: text }))}
