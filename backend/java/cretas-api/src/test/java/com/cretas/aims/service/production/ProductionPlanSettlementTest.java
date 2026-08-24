@@ -1289,6 +1289,8 @@ class ProductionPlanSettlementTest {
 
         ProductionWarehouseReceiptResponse first = service.confirmWarehouseReceipt(
                 FACTORY_ID, PLAN_ID, workflowReceipt("split-6", "FG-SKU-A", "FG-SPLIT-001", "6"), 11L);
+        assertEquals(0, new BigDecimal("6").compareTo(line.getReceivedQuantity()));
+        assertEquals("PARTIALLY_RECEIVED", line.getStatus());
         ProductionWarehouseReceiptResponse replay = service.confirmWarehouseReceipt(
                 FACTORY_ID, PLAN_ID, workflowReceipt("split-6", "FG-SKU-A", "FG-SPLIT-001", "6"), 11L);
         ProductionWarehouseReceiptResponse second = service.confirmWarehouseReceipt(
