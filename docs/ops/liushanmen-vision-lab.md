@@ -92,6 +92,19 @@ B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
 不会获得 hard-negative 权重；声明缺标却又画出该类别框时直接失败。模糊或无法稳定画框的图片继续由
 人工设置 `training_eligible=false` 排除，既不改写人工真值，也不会因代码发布自动触发重新训练。
 
+当两个缺标类别数量明显失衡时，可用
+`training.isolated_missing_repeat_by_class={"white_label":1,"color_label":3}` 对两个类别分别设置
+1–10 的仅训练集重复倍数；未配置时继续继承 `isolated_missing_repeat`，因此历史默认 dataset ID 不变。
+类别配置进入 dataset ID 和 manifest，回执分别记录两个类别的副本数。它只用于人明确确认、且只有
+一个互补标签框的 isolated missing 样本，不能复制模糊、unjudgeable、多框歧义或受保护回放样本。
+
+Label-presence 预检必须与生产的目标托盘归属保持一致。默认读取
+`evaluation.presence_ownership_pad_ratio=0.14`。人工框始终是已审核目标托盘真值；旧裁剪可能在原图
+边缘截断且没有保存精确 `tray_box/crop_rect`，所以固定边距不得删除人工框。只有人工确认某类别缺失
+时，该类别中心落在边缘 padding 的预测才作为邻盘上下文排除，并在训练回执 `ownership` 中逐项记录。
+baseline 和 candidate 必须使用同一 ratio；该预检只允许候选继续完整生产链路回放，不能代替 tray
+检测、原图坐标 ownership、受保护缺陷召回或零误报门禁。
+
 ### 金属工作区 ROI 与台外真实缺标
 
 工作区 ROI 是独立于 tray MARK 和 label MARK 的第三层人工真值。不得删除台外托盘框，也不得把

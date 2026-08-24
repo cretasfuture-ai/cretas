@@ -159,13 +159,83 @@ class VisionLabTests(unittest.TestCase):
         self.assertEqual(result["training"]["warmup_epochs"], 1.0)
         self.assertEqual(parity.call_args.args[-1], 960)
         self.assertEqual(presence.call_count, 2)
+        self.assertEqual(presence.call_args_list[0].args[-1], vision_lab.DEFAULT_TRAY_PAD_RATIO)
+        self.assertEqual(presence.call_args_list[1].args[-1], vision_lab.DEFAULT_TRAY_PAD_RATIO)
         self.assertEqual(result["label_presence_validation"]["baseline"]["exact_matches"], 9)
 
+    def test_label_presence_keeps_human_truth_and_drops_absent_class_border_prediction(self):
+        class FakeTensor:
+            def __init__(self, values):
+                self.values = values
+
+            def cpu(self):
+                return self
+
+            def tolist(self):
+                return self.values
+
+        class FakeBoxes:
+            cls = FakeTensor([0.0, 1.0])
+            conf = FakeTensor([0.9, 0.8])
+            xyxyn = FakeTensor([
+                [0.0, 0.3, 0.08, 0.7],
+                [0.0, 0.3, 0.08, 0.7],
+            ])
+
+            def __len__(self):
+                return 2
+
+        class FakeYolo:
+            def __init__(self, _model_path, task):
+                self.task = task
+
+            def predict(self, *_args, **_kwargs):
+                return [SimpleNamespace(boxes=FakeBoxes())]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            validation = root / "images" / "val"
+            labels = root / "labels" / "val"
+            validation.mkdir(parents=True)
+            labels.mkdir(parents=True)
+            (validation / "sample.jpg").write_bytes(b"image")
+            # Human truth is authoritative even at a clipped crop boundary.
+            # The absent colour class prediction is neighbouring context and
+            # is dropped by the ownership approximation.
+            (labels / "sample.txt").write_text(
+                "0 0.040000 0.500000 0.080000 0.200000\n",
+                encoding="utf-8",
+            )
+            model = root / "model.pt"
+            model.write_bytes(b"model")
+            fake_ultralytics = SimpleNamespace(YOLO=FakeYolo)
+
+            with mock.patch.dict(sys.modules, {"ultralytics": fake_ultralytics}):
+                result = vision_lab.evaluate_label_presence(model, validation, 0.2)
+
+        self.assertEqual(result["exact_matches"], 1)
+        self.assertEqual(result["classes"]["white_label"], {"tp": 1, "fp": 0, "fn": 0, "tn": 0})
+        self.assertEqual(result["classes"]["color_label"], {"tp": 0, "fp": 0, "fn": 0, "tn": 1})
+        self.assertEqual(
+            result["ownership"]["dropped_predictions_at_or_above_threshold"]["color_label"], 1,
+        )
+        self.assertEqual(result["ownership"]["dropped_prediction_details"][0]["image"], "sample.jpg")
+
+    def test_label_presence_rejects_ownership_pad_ratio_outside_supported_range(self):
+        with self.assertRaisesRegex(ValueError, "ownership pad ratio"):
+            vision_lab.evaluate_label_presence(Path("model.pt"), Path("val"), 0.2, ownership_pad_ratio=0.6)
+
     def test_label_presence_gate_rejects_any_fp_or_fn_regression(self):
+        ownership = {
+            "rule": "human_truth_authoritative_absent_class_prediction_center_inside_target",
+            "pad_ratio": 0.14,
+            "normalized_margin": 0.109375,
+        }
         model = {
             "model_id": "regressed",
             "label_presence_validation": {
                 "baseline": {
+                    "ownership": ownership,
                     "total_images": 99,
                     "exact_matches": 95,
                     "classes": {
@@ -174,6 +244,7 @@ class VisionLabTests(unittest.TestCase):
                     },
                 },
                 "candidate": {
+                    "ownership": ownership,
                     "total_images": 99,
                     "exact_matches": 94,
                     "classes": {
@@ -192,10 +263,16 @@ class VisionLabTests(unittest.TestCase):
         self.assertIn("label-presence color_label fn regressed", result["errors"])
 
     def test_label_presence_gate_accepts_candidate_that_preserves_baseline(self):
+        ownership = {
+            "rule": "human_truth_authoritative_absent_class_prediction_center_inside_target",
+            "pad_ratio": 0.14,
+            "normalized_margin": 0.109375,
+        }
         model = {
             "model_id": "preserved",
             "label_presence_validation": {
                 "baseline": {
+                    "ownership": ownership,
                     "total_images": 99,
                     "exact_matches": 95,
                     "classes": {
@@ -204,6 +281,7 @@ class VisionLabTests(unittest.TestCase):
                     },
                 },
                 "candidate": {
+                    "ownership": ownership,
                     "total_images": 99,
                     "exact_matches": 95,
                     "classes": {
@@ -217,6 +295,47 @@ class VisionLabTests(unittest.TestCase):
         result = vision_lab.evaluate_label_presence_gate(model)
 
         self.assertTrue(result["passed"], result["errors"])
+
+    def test_label_presence_gate_rejects_missing_or_mismatched_ownership_contract(self):
+        model = {
+            "model_id": "ownership-mismatch",
+            "label_presence_validation": {
+                "baseline": {
+                    "ownership": {
+                        "rule": "human_truth_authoritative_absent_class_prediction_center_inside_target",
+                        "pad_ratio": 0.14,
+                        "normalized_margin": 0.109375,
+                    },
+                    "total_images": 1,
+                    "exact_matches": 1,
+                    "classes": {
+                        "white_label": {"fp": 0, "fn": 0},
+                        "color_label": {"fp": 0, "fn": 0},
+                    },
+                },
+                "candidate": {
+                    "ownership": {
+                        "rule": "human_truth_authoritative_absent_class_prediction_center_inside_target",
+                        "pad_ratio": 0.10,
+                        "normalized_margin": 1 / 12,
+                    },
+                    "total_images": 1,
+                    "exact_matches": 1,
+                    "classes": {
+                        "white_label": {"fp": 0, "fn": 0},
+                        "color_label": {"fp": 0, "fn": 0},
+                    },
+                },
+            },
+        }
+
+        result = vision_lab.evaluate_label_presence_gate(model)
+
+        self.assertFalse(result["passed"])
+        self.assertIn(
+            "label-presence ownership contract is missing or inconsistent",
+            result["errors"],
+        )
 
     def test_training_source_forces_offline_without_amp_probe(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -459,18 +578,19 @@ class VisionLabTests(unittest.TestCase):
             (queue / "annotations-human").mkdir()
             rows = []
             samples = (
-                ("missing-train", "task-d", True, [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}]),
-                ("missing-val", "task-a", True, [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}]),
-                ("normal-train", "task-e", False, [
+                ("missing-train", "task-d", "white_label", [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}]),
+                ("missing-color-train", "task-d", "color_label", [{"c": 0, "b": [0.1, 0.1, 0.4, 0.4]}]),
+                ("missing-val", "task-a", "white_label", [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}]),
+                ("normal-train", "task-e", None, [
                     {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
                     {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
                 ]),
-                ("ambiguous-train", "task-d", True, [
+                ("ambiguous-train", "task-d", "white_label", [
                     {"c": 1, "b": [0.1, 0.1, 0.4, 0.4]},
                     {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
                 ]),
             )
-            for crop_id, task, missing, boxes in samples:
+            for crop_id, task, missing_class, boxes in samples:
                 image = queue / "images" / f"{crop_id}.jpg"
                 image.write_bytes(crop_id.encode())
                 rows.append({
@@ -480,8 +600,8 @@ class VisionLabTests(unittest.TestCase):
                 })
                 annotation = {
                     "reviewed": True, "unjudgeable": False, "boxes": boxes,
-                    "missing_confirmed_by_human": missing,
-                    "declared_missing_classes": ["white_label"] if missing else [],
+                    "missing_confirmed_by_human": missing_class is not None,
+                    "declared_missing_classes": [missing_class] if missing_class else [],
                 }
                 (queue / "annotations-human" / f"{crop_id}.json").write_text(
                     json.dumps(annotation), encoding="utf-8",
@@ -500,20 +620,39 @@ class VisionLabTests(unittest.TestCase):
 
             self.assertEqual(default_dataset["dataset_id"], explicit_disabled_dataset["dataset_id"])
             self.assertNotEqual(default_dataset["dataset_id"], dataset["dataset_id"])
-            self.assertEqual(default_dataset["counts"]["train"], 3)
-            self.assertEqual(dataset["counts"]["unique_train"], 3)
+            self.assertEqual(default_dataset["counts"]["train"], 4)
+            self.assertEqual(dataset["counts"]["unique_train"], 4)
             self.assertEqual(dataset["counts"]["unique_val"], 1)
-            self.assertEqual(dataset["counts"]["train"], 5)
+            self.assertEqual(dataset["counts"]["train"], 8)
             self.assertEqual(dataset["counts"]["val"], 1)
-            self.assertEqual(dataset["counts"]["isolated_missing_train_unique"], 1)
+            self.assertEqual(dataset["counts"]["isolated_missing_train_unique"], 2)
             self.assertEqual(dataset["counts"]["isolated_missing_val_unique"], 1)
-            self.assertEqual(dataset["counts"]["isolated_missing_train_copies"], 2)
+            self.assertEqual(dataset["counts"]["isolated_missing_train_copies"], 4)
             repeats = [row for row in dataset["rows"] if row["sample_role"] == "isolated_missing_repeat"]
-            self.assertEqual([row["crop_id"] for row in repeats], ["missing-train", "missing-train"])
+            self.assertEqual(
+                [row["crop_id"] for row in repeats],
+                ["missing-train", "missing-train", "missing-color-train", "missing-color-train"],
+            )
             self.assertTrue(all(row["split"] == "train" for row in repeats))
             ambiguous = [row for row in dataset["rows"] if row["crop_id"] == "ambiguous-train"]
             self.assertEqual(len(ambiguous), 1)
             self.assertIsNone(ambiguous[0]["isolated_missing_class"])
+
+            cfg["training"]["isolated_missing_repeat_by_class"] = {
+                "white_label": 1,
+                "color_label": 3,
+            }
+            class_balanced = vision_lab.build_dataset(cfg)
+            self.assertNotEqual(class_balanced["dataset_id"], dataset["dataset_id"])
+            self.assertEqual(class_balanced["counts"]["train"], 6)
+            self.assertEqual(
+                class_balanced["counts"]["isolated_missing_train_copies_by_class"],
+                {"white_label": 0, "color_label": 2},
+            )
+            self.assertEqual(
+                class_balanced["isolated_missing_supervision"]["train_repeat_by_class"],
+                {"white_label": 1, "color_label": 3},
+            )
 
     def test_confirmed_missing_annotation_rejects_contradictory_missing_box(self):
         annotation = {
@@ -546,6 +685,20 @@ class VisionLabTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     vision_lab.isolated_missing_repeat({"isolated_missing_repeat": value})
+
+        for overrides in (
+            [],
+            {},
+            {"unknown": 2},
+            {"white_label": True},
+            {"color_label": 0},
+            {"color_label": 11},
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(ValueError):
+                    vision_lab.isolated_missing_repeats({
+                        "isolated_missing_repeat_by_class": overrides,
+                    })
 
     def test_promotion_gate_fails_closed_on_recall_regression(self):
         with tempfile.TemporaryDirectory() as temporary:
