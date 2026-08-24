@@ -80,6 +80,18 @@ describe('productionMoreCommands', () => {
     expect(commands).not.toContain('stop-production');
   });
 
+  it('待执行的二次加工必须走原子开工入口，不下发仅建批次的 APP 报工', () => {
+    const commands = productionMoreCommands({
+      status: 'PENDING',
+      sourceType: 'MANUAL',
+      planNumber: 'SEC-F006-20260825-8C457D',
+      canCancel: true,
+    });
+    expect(commands).toContain('start-secondary');
+    expect(commands).not.toContain('app-reporting');
+    expect(commands).not.toContain('generate-transfer');
+  });
+
   it('停产只在存货生产且后端 canStop 时给出, 否则给出被挡原因', () => {
     const stoppable: ProductionMoreActionRow = {
       status: 'IN_PROGRESS',

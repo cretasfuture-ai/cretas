@@ -120,9 +120,22 @@ const PHASE_ROLES = {
   'production-start-inspect': ['f006_production_mgr', 'production_manager', '生产经理'],
   'production-report-first': ['f006_production_mgr', 'production_manager', '生产经理'],
   'production-report-first-main': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-first-round2': ['f006_production_mgr', 'production_manager', '生产经理'],
   'production-inspect-second': ['f006_production_mgr', 'production_manager', '生产经理'],
   'production-report-second': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-second-round2': ['f006_production_mgr', 'production_manager', '生产经理'],
   'production-interim-summary-first': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-interim-summary-second': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-stop-final': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-stop-reconcile': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-create-leftover-plan': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-start-leftover': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-leftover-small': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-leftover-main': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-leftover-packaging': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-interim-summary-leftover': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'warehouse-wip-readback': ['f006_warehouse_mgr', 'warehouse_manager', '仓储经理'],
+  'production-create-secondary-wip': ['f006_production_mgr', 'production_manager', '生产经理'],
   'quality-inspect-batch': ['f006_quality_insp', 'quality_inspector', '质检员'],
   'production-settle': ['f006_production_mgr', 'production_manager', '生产经理'],
   'warehouse-confirm-production-receipt': ['f006_warehouse_mgr', 'warehouse_manager', '仓储经理'],
@@ -814,8 +827,90 @@ async function productionCreatePlan(page, state, report) {
   await page.screenshot({ path: path.join(evidenceDir, '06-production-plan-created.png'), fullPage: true });
 }
 
+async function productionCreateLeftoverPlan(page, state, report) {
+  if (state.entities.leftoverProductionPlan) {
+    throw new Error(`Leftover production plan already tracked: ${state.entities.leftoverProductionPlan.id}`);
+  }
+  const canonical = state.entities.productionPlan;
+  if (!canonical?.id || canonical.factoryId !== 'F006' || canonical.status !== 'COMPLETED') {
+    throw new Error('Completed canonical F006 plan is required before creating the isolated leftover plan');
+  }
+  report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before leftover-plan mutation');
+  const note = `${runKey} WIP-0.04-ISOLATED`;
+  report.intendedMutations.push({
+    step: '创建独立的剩余0.04kg在制品 SAFETY_STOCK 计划',
+    method: 'POST',
+    endpoint: '/api/mobile/F006/production-plans',
+    target: { productTypeId: canonical.productTypeId, productName: canonical.productName },
+    payloadBoundary: { sourceType: 'SAFETY_STOCK', plannedQuantity: 1, plannedUnit: '盒', notes: note },
+  });
+  persistRunningReport(report);
+
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: '新建计划', exact: true }).click();
+  const dialog = page.locator('.el-dialog:visible').filter({ hasText: '新建生产计划' });
+  await dialog.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-leftover-plan-before-create.png`), fullPage: false });
+
+  const finishedProductItem = dialog.locator('.el-form-item').filter({ hasText: '生产成品' }).first();
+  await selectOption(page, finishedProductItem.locator('.el-select'), canonical.productName);
+  await dialog.getByText('本计划已固定工序路线', { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
+  const qtyItem = dialog.locator('.el-form-item').filter({ hasText: '计划成品数量' }).first();
+  const qtyInput = qtyItem.locator('input[role="spinbutton"]');
+  if (await qtyInput.count()) await qtyInput.fill('1');
+  await dialog.locator('.el-form-item').filter({ hasText: '备注' }).locator('textarea').fill(note);
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-leftover-plan-form-filled.png`), fullPage: false });
+
+  const createResponses = [];
+  const onResponse = async (response) => {
+    if (response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/mobile/F006/production-plans') {
+      createResponses.push({ response, body: await response.json().catch(() => null) });
+    }
+  };
+  page.on('response', onResponse);
+  await dialog.getByRole('button', { name: '确定', exact: true }).click();
+  const duplicate = page.locator('.el-message-box:visible').filter({ hasText: '可能重复' });
+  if (await duplicate.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false)) {
+    await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-leftover-plan-duplicate-confirmation.png`), fullPage: false });
+    await duplicate.getByRole('button', { name: '确认仍要创建', exact: true }).click();
+  }
+  await dialog.waitFor({ state: 'hidden', timeout: 35_000 });
+  page.off('response', onResponse);
+  const successful = createResponses.find((item) => item.response.status() < 400 && item.body?.success && item.body?.data?.id);
+  report.actualMutations = createResponses.map((item) => ({
+    method: 'POST', url: item.response.url(), statusCode: item.response.status(), response: item.body,
+  }));
+  if (!successful) throw new Error(`Leftover plan creation did not return one success: ${JSON.stringify(report.actualMutations)}`);
+  const created = compactProductionPlan(successful.body.data);
+  if (!created.id || created.factoryId !== 'F006' || created.sourceType !== 'SAFETY_STOCK'
+      || created.productTypeId !== canonical.productTypeId) {
+    throw new Error(`Leftover plan create mismatch: ${JSON.stringify(created)}`);
+  }
+  state.entities.canonicalProductionPlan = canonical;
+  state.entities.canonicalProductionBatch = state.entities.productionBatch;
+  state.entities.leftoverProductionPlan = created;
+  state.entities.productionPlan = created;
+  delete state.entities.productionBatch;
+  state.mutations.push({ phase, action: 'create-leftover-production-plan', entityId: created.id, at: new Date().toISOString() });
+  persistState(state);
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-leftover-plan-created-feedback.png`), fullPage: false });
+
+  const search = page.locator('input[placeholder="搜索计划编号/产品名称"]');
+  await search.fill(created.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  const row = page.locator('.el-table__row:visible').filter({ hasText: created.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-leftover-plan-persisted.png`), fullPage: false });
+  await row.locator('button[title="查看生产计划详情"]').click();
+  await page.locator('.el-dialog:visible').filter({ hasText: '计划详情' }).waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-leftover-plan-detail-readback.png`), fullPage: false });
+}
+
 async function productionStartInspect(page, state, report) {
-  const productionPlan = state.entities.productionPlan;
+  const leftoverRun = phase === 'production-start-leftover';
+  const productionPlan = leftoverRun ? state.entities.leftoverProductionPlan : state.entities.productionPlan;
   if (!productionPlan?.id || productionPlan.factoryId !== 'F006') {
     throw new Error('Tracked F006 production plan is required');
   }
@@ -913,6 +1008,10 @@ async function productionStartInspect(page, state, report) {
     status: batchData.status,
     productionPlanId: batchData.productionPlanId || productionPlan.id,
   };
+  if (leftoverRun) {
+    state.entities.leftoverProductionPlan = state.entities.productionPlan;
+    state.entities.leftoverProductionBatch = state.entities.productionBatch;
+  }
   state.mutations.push({ phase, action: 'create-production-batch-from-plan-ui', entityId: batchData.id, at: new Date().toISOString() });
   persistState(state);
   await page.screenshot({ path: path.join(evidenceDir, '07-production-process-sheet-opened.png'), fullPage: true });
@@ -983,13 +1082,20 @@ async function openTrackedProcessSheet(page, productionPlan) {
 }
 
 async function productionReportFirstProcess(page, state, report) {
-  const mainQuantityRun = phase === 'production-report-first-main';
-  const resumeSavedDraft = mainQuantityRun
+  const leftoverSmall = phase === 'production-report-leftover-small';
+  const leftoverMain = phase === 'production-report-leftover-main';
+  const firstRoundMain = phase === 'production-report-first-main';
+  const secondRoundMain = phase === 'production-report-first-round2';
+  const mainQuantityRun = firstRoundMain || secondRoundMain || leftoverMain;
+  const resumeSavedDraft = firstRoundMain
     && Boolean(state.entities.firstMainProcessDraft?.clientRowId)
     && !state.entities.firstMainProcessReport;
-  const entityKey = mainQuantityRun ? 'firstMainProcessReport' : 'firstProcessReport';
+  const entityKey = leftoverSmall ? 'leftoverSmallProcessReport' : leftoverMain ? 'leftoverMainProcessReport' : secondRoundMain
+    ? 'round2FirstProcessReport'
+    : mainQuantityRun ? 'firstMainProcessReport' : 'firstProcessReport';
   const materialQuantity = mainQuantityRun ? 0.2 : 0.01;
   const outputQuantity = mainQuantityRun ? 0.8 : 0.04;
+  const timeRange = secondRoundMain ? ['09:00', '09:10'] : ['08:00', '08:10'];
   const productionPlan = state.entities.productionPlan;
   const productionBatch = state.entities.productionBatch;
   if (!productionPlan?.id || productionPlan.factoryId !== 'F006' || productionPlan.status !== 'IN_PROGRESS') {
@@ -1039,9 +1145,9 @@ async function productionReportFirstProcess(page, state, report) {
     method: 'POST',
     endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/row/submit`,
     target: { productionPlanId: productionPlan.id, productionBatchId: productionBatch.id },
-    payloadBoundary: { fourRawInputsKg: materialQuantity, outputKg: outputQuantity, workerCount: 1, time: '08:00-08:10' },
+    payloadBoundary: { fourRawInputsKg: materialQuantity, outputKg: outputQuantity, workerCount: 1, time: timeRange.join('-') },
   });
-  if (mainQuantityRun && !resumeSavedDraft) {
+  if (firstRoundMain && !resumeSavedDraft) {
     report.intendedMutations.unshift({
       step: '第一轮原料处理先保存草稿并证明不占用生产库存',
       method: 'POST',
@@ -1087,8 +1193,8 @@ async function productionReportFirstProcess(page, state, report) {
     if (!(await checkbox.count()) || !(await checkbox.isChecked())) await outputSelector.click();
   }
   await outputLine.locator('input[aria-label$="产出数量"]').fill(String(outputQuantity));
-  await setVueInputValue(outputLine.locator('input[aria-label$="开始时间"]'), '08:00');
-  await setVueInputValue(outputLine.locator('input[aria-label$="结束时间"]'), '08:10');
+  await setVueInputValue(outputLine.locator('input[aria-label$="开始时间"]'), timeRange[0]);
+  await setVueInputValue(outputLine.locator('input[aria-label$="结束时间"]'), timeRange[1]);
   const workerCount = outputLine.locator('input[aria-label$="人数"]');
   if ((await workerCount.inputValue()) !== '1') await workerCount.fill('1');
 
@@ -1097,7 +1203,7 @@ async function productionReportFirstProcess(page, state, report) {
     fullPage: false,
   });
 
-  if (mainQuantityRun && !resumeSavedDraft) {
+  if (firstRoundMain && !resumeSavedDraft) {
     report.inventoryBeforeDraft = await summaryRawInventoryReadback(page);
     const draftResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
       && new URL(response.url()).pathname === `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/row/draft`,
@@ -1178,8 +1284,10 @@ async function productionReportFirstProcess(page, state, report) {
     throw new Error(`First process reporting failed: ${response.status()} ${result.message} ${result.submissionStatus}`);
   }
   state.entities[entityKey] = result;
-  if (mainQuantityRun) delete state.entities.firstMainProcessDraft;
-  state.mutations.push({ phase, action: mainQuantityRun ? 'submit-first-process-main-report' : 'submit-first-process-report', entityId: result.clientRowId, at: new Date().toISOString() });
+  if (firstRoundMain) delete state.entities.firstMainProcessDraft;
+  state.mutations.push({ phase, action: secondRoundMain
+    ? 'submit-first-process-round2-report'
+    : mainQuantityRun ? 'submit-first-process-main-report' : 'submit-first-process-report', entityId: result.clientRowId, at: new Date().toISOString() });
   persistState(state);
   report.inventoryAfterFormalSubmit = await summaryRawInventoryReadback(page);
   await page.screenshot({
@@ -1229,13 +1337,19 @@ async function productionInspectSecondProcess(page, state, report) {
 }
 
 async function productionReportSecondProcess(page, state, report) {
+  const leftoverPackaging = phase === 'production-report-leftover-packaging';
+  const secondRoundMain = phase === 'production-report-second-round2';
   const productionPlan = state.entities.productionPlan;
-  const upstream = state.entities.firstMainProcessReport;
+  const upstream = leftoverPackaging ? state.entities.leftoverMainProcessReport
+    : secondRoundMain ? state.entities.round2FirstProcessReport : state.entities.firstMainProcessReport;
+  const entityKey = leftoverPackaging ? 'leftoverPackagingProcessReport'
+    : secondRoundMain ? 'round2SecondProcessReport' : 'secondProcessReport';
+  const timeRange = secondRoundMain ? ['09:20', '09:30'] : ['08:20', '08:30'];
   if (!productionPlan?.id || productionPlan.factoryId !== 'F006' || productionPlan.status !== 'IN_PROGRESS') {
     throw new Error('Tracked in-progress F006 production plan is required');
   }
   if (!upstream?.clientRowId || !upstream.batchNumber) throw new Error('Tracked 0.8kg upstream report is required');
-  if (state.entities.secondProcessReport) throw new Error(`Second process already reported: ${state.entities.secondProcessReport.clientRowId}`);
+  if (state.entities[entityKey]) throw new Error(`Second process already reported: ${state.entities[entityKey].clientRowId}`);
   report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
   if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before second process reporting mutation');
   report.intendedMutations.push({
@@ -1243,7 +1357,7 @@ async function productionReportSecondProcess(page, state, report) {
     method: 'POST',
     endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/row/submit`,
     target: { productionPlanId: productionPlan.id, upstreamBatchNumber: upstream.batchNumber },
-    payloadBoundary: { upstreamInputKg: 0.8, finishedOutputBoxes: 1, workerCount: 1, time: '08:20-08:30' },
+    payloadBoundary: { upstreamInputKg: 0.8, finishedOutputBoxes: 1, workerCount: 1, time: timeRange.join('-') },
   });
   persistRunningReport(report);
 
@@ -1272,8 +1386,8 @@ async function productionReportSecondProcess(page, state, report) {
   const outputSelector = outputLine.locator('[data-testid="port-selected"]');
   if (await outputSelector.count()) await outputSelector.click();
   await outputLine.locator('input[aria-label$="产出数量"]').fill('1');
-  await setVueInputValue(outputLine.locator('input[aria-label$="开始时间"]'), '08:20');
-  await setVueInputValue(outputLine.locator('input[aria-label$="结束时间"]'), '08:30');
+  await setVueInputValue(outputLine.locator('input[aria-label$="开始时间"]'), timeRange[0]);
+  await setVueInputValue(outputLine.locator('input[aria-label$="结束时间"]'), timeRange[1]);
   const workerCount = outputLine.locator('input[aria-label$="人数"]');
   if ((await workerCount.inputValue()) !== '1') await workerCount.fill('1');
 
@@ -1307,8 +1421,9 @@ async function productionReportSecondProcess(page, state, report) {
       || !result.clientRowId || !result.batchNumber) {
     throw new Error(`Second process reporting failed: ${response.status()} ${result.message} ${result.submissionStatus}`);
   }
-  state.entities.secondProcessReport = result;
-  state.mutations.push({ phase, action: 'submit-second-process-report', entityId: result.clientRowId, at: new Date().toISOString() });
+  state.entities[entityKey] = result;
+  state.mutations.push({ phase, action: secondRoundMain
+    ? 'submit-second-process-round2-report' : 'submit-second-process-report', entityId: result.clientRowId, at: new Date().toISOString() });
   persistState(state);
   report.processRowsReadback = await authenticatedGet(
     page,
@@ -1321,27 +1436,33 @@ async function productionReportSecondProcess(page, state, report) {
   await page.screenshot({ path: path.join(evidenceDir, '09-production-second-process-reported.png'), fullPage: true });
 }
 
-async function productionInterimSummaryFirst(page, state, report) {
+async function productionInterimSummary(page, state, report) {
+  const leftoverSummary = phase === 'production-interim-summary-leftover';
+  const secondSummary = phase === 'production-interim-summary-second';
+  const sessionSeq = secondSummary ? 2 : 1;
+  const entityKey = leftoverSummary ? 'leftoverInterimSummary' : secondSummary ? 'secondInterimSummary' : 'firstInterimSummary';
+  const terminalReport = leftoverSummary ? state.entities.leftoverPackagingProcessReport
+    : secondSummary ? state.entities.round2SecondProcessReport : state.entities.secondProcessReport;
   const productionPlan = state.entities.productionPlan;
   if (!productionPlan?.id || productionPlan.factoryId !== 'F006' || productionPlan.status !== 'IN_PROGRESS') {
     throw new Error('Tracked in-progress F006 SAFETY_STOCK production plan is required');
   }
-  if (!state.entities.secondProcessReport?.clientRowId) {
-    throw new Error('Tracked first-round terminal process report is required before interim summary');
+  if (!terminalReport?.clientRowId) {
+    throw new Error(`Tracked round-${sessionSeq} terminal process report is required before interim summary`);
   }
-  if (state.entities.firstInterimSummary) {
-    throw new Error(`First interim summary already tracked: ${state.entities.firstInterimSummary.sessionSeq}`);
+  if (state.entities[entityKey]) {
+    throw new Error(`Interim summary ${sessionSeq} already tracked: ${state.entities[entityKey].sessionSeq}`);
   }
 
   report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
   if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before first interim summary mutation');
-  const note = `${runKey}-summary-1`;
+  const note = leftoverSummary ? `${runKey}-leftover-summary` : `${runKey}-summary-${sessionSeq}`;
   report.intendedMutations.push({
-    step: '生产经理执行第一次生产小结',
+    step: `生产经理执行第${sessionSeq === 1 ? '一' : '二'}次增量生产小结`,
     method: 'POST',
     endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}/interim-settle`,
     target: { productionPlanId: productionPlan.id, planNumber: productionPlan.planNumber },
-    payloadBoundary: { note, expectedSessionSeq: 1, expectedFinishedQuantity: 1, unit: '盒' },
+    payloadBoundary: { note, expectedSessionSeq: sessionSeq, expectedFinishedQuantity: 1, unit: '盒' },
   });
   persistRunningReport(report);
 
@@ -1352,7 +1473,7 @@ async function productionInterimSummaryFirst(page, state, report) {
   let row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
   await row.waitFor({ state: 'visible', timeout: 25_000 });
   await page.screenshot({
-    path: path.join(videoSourceDir, `${assetPrefix}-summary1-before.png`),
+    path: path.join(videoSourceDir, `${assetPrefix}-summary${sessionSeq}-before.png`),
     fullPage: false,
   });
 
@@ -1361,7 +1482,7 @@ async function productionInterimSummaryFirst(page, state, report) {
   await prompt.waitFor({ state: 'visible', timeout: 15_000 });
   await prompt.locator('input').fill(note);
   await page.screenshot({
-    path: path.join(videoSourceDir, `${assetPrefix}-summary1-form-filled.png`),
+    path: path.join(videoSourceDir, `${assetPrefix}-summary${sessionSeq}-form-filled.png`),
     fullPage: false,
   });
 
@@ -1378,12 +1499,12 @@ async function productionInterimSummaryFirst(page, state, report) {
     statusCode: response.status(),
     response: { success: body?.success ?? null, message: body?.message || null, ...summary },
   });
-  if (response.status() >= 400 || !body?.success || summary.sessionSeq !== 1
+  if (response.status() >= 400 || !body?.success || summary.sessionSeq !== sessionSeq
       || String(summary.finishedQuantity) !== '1' || summary.note !== note) {
     throw new Error(`First interim summary mismatch: ${response.status()} ${body?.message} seq=${summary.sessionSeq} qty=${summary.finishedQuantity} note=${summary.note}`);
   }
   await page.screenshot({
-    path: path.join(videoSourceDir, `${assetPrefix}-summary1-submit-success.png`),
+    path: path.join(videoSourceDir, `${assetPrefix}-summary${sessionSeq}-submit-success.png`),
     fullPage: false,
   });
 
@@ -1393,7 +1514,7 @@ async function productionInterimSummaryFirst(page, state, report) {
   row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
   await row.waitFor({ state: 'visible', timeout: 25_000 });
   await page.screenshot({
-    path: path.join(videoSourceDir, `${assetPrefix}-summary1-persisted-after-reload.png`),
+    path: path.join(videoSourceDir, `${assetPrefix}-summary${sessionSeq}-persisted-after-reload.png`),
     fullPage: false,
   });
 
@@ -1408,17 +1529,268 @@ async function productionInterimSummaryFirst(page, state, report) {
     throw new Error(`First interim summary readback failed: plan=${planReadback.status} summary=${summaryReadback.status}`);
   }
   await page.screenshot({
-    path: path.join(videoSourceDir, `${assetPrefix}-summary1-api-readback.png`),
+    path: path.join(videoSourceDir, `${assetPrefix}-summary${sessionSeq}-api-readback.png`),
     fullPage: false,
   });
 
-  state.entities.firstInterimSummary = { ...summary, note };
+  state.entities[entityKey] = { ...summary, note };
   state.mutations.push({
     phase,
-    action: 'first-interim-summary',
-    entityId: `${productionPlan.id}:1`,
+    action: secondSummary ? 'second-interim-summary' : 'first-interim-summary',
+    entityId: `${productionPlan.id}:${sessionSeq}`,
     at: new Date().toISOString(),
   });
+  persistState(state);
+}
+
+async function productionStopFinal(page, state, report) {
+  const productionPlan = state.entities.productionPlan;
+  if (!productionPlan?.id || productionPlan.factoryId !== 'F006' || productionPlan.status !== 'IN_PROGRESS') {
+    throw new Error('Tracked in-progress F006 SAFETY_STOCK plan is required before final stop');
+  }
+  if (state.entities.secondInterimSummary?.sessionSeq !== 2) {
+    throw new Error('Second incremental summary is required before final stop');
+  }
+  if (state.entities.productionStop) throw new Error(`Production stop already tracked: ${state.entities.productionStop.planId}`);
+
+  report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before final production stop mutation');
+  report.intendedMutations.push({
+    step: '生产经理在两次增量小结后执行最终停产结算',
+    method: 'POST',
+    endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}/stop-production`,
+    target: { productionPlanId: productionPlan.id, planNumber: productionPlan.planNumber },
+    payloadBoundary: { expectedStatusBefore: 'IN_PROGRESS', expectedStatusAfter: 'COMPLETED', summaryCount: 2 },
+  });
+  persistRunningReport(report);
+
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  const search = page.locator('input[placeholder="搜索计划编号/产品名称"]');
+  await search.fill(productionPlan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  let row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-before.png`), fullPage: false });
+
+  await row.getByRole('button', { name: '更多', exact: true }).click();
+  const stopItem = page.locator('.el-dropdown-menu:visible').getByText('停产', { exact: true });
+  await stopItem.waitFor({ state: 'visible', timeout: 10_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-menu.png`), fullPage: false });
+  await stopItem.click();
+  const confirmation = page.locator('.el-message-box:visible').filter({ hasText: '确认停产' });
+  await confirmation.waitFor({ state: 'visible', timeout: 10_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-confirmation.png`), fullPage: false });
+
+  const responsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === `/api/mobile/F006/production-plans/${productionPlan.id}/stop-production`,
+  { timeout: 40_000 });
+  await confirmation.getByRole('button', { name: '停产', exact: true }).click();
+  const response = await responsePromise;
+  const body = await response.json().catch(() => null);
+  report.actualMutations.push({ method: 'POST', url: response.url(), statusCode: response.status(), response: body });
+  if (response.status() >= 400 || !body?.success) {
+    throw new Error(`Final production stop failed: ${response.status()} ${body?.message}`);
+  }
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-success.png`), fullPage: false });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await search.fill(productionPlan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-persisted.png`), fullPage: false });
+
+  const planReadback = await authenticatedGet(page, `/api/mobile/F006/production-plans/${productionPlan.id}`);
+  const data = planReadback.body?.data || planReadback.body;
+  report.planReadback = { statusCode: planReadback.status, body: planReadback.body };
+  if (planReadback.status >= 400 || data?.factoryId !== 'F006' || data?.status !== 'COMPLETED') {
+    throw new Error(`Final production stop readback mismatch: ${planReadback.status} ${data?.factoryId} ${data?.status}`);
+  }
+  state.entities.productionPlan = { ...productionPlan, status: data.status, endTime: data.endTime || null };
+  state.entities.productionStop = { planId: productionPlan.id, status: data.status, endTime: data.endTime || null };
+  state.mutations.push({ phase, action: 'stop-production-final', entityId: productionPlan.id, at: new Date().toISOString() });
+  persistState(state);
+}
+
+async function productionStopReconcile(page, state, report) {
+  const productionPlan = state.entities.productionPlan;
+  if (!productionPlan?.id || productionPlan.factoryId !== 'F006') {
+    throw new Error('Tracked F006 SAFETY_STOCK plan is required for final-stop reconciliation');
+  }
+  report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before final-stop reconciliation');
+  report.intendedMutations.push({
+    step: '零写入补录最终停产持久化证据',
+    method: 'NONE',
+    endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}`,
+    target: { productionPlanId: productionPlan.id, planNumber: productionPlan.planNumber },
+    payloadBoundary: { expectedStatus: 'COMPLETED', expectedBusinessWrites: 0 },
+  });
+  persistRunningReport(report);
+
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  const search = page.locator('input[placeholder="搜索计划编号/产品名称"]');
+  await search.waitFor({ state: 'visible', timeout: 25_000 });
+  await search.fill(productionPlan.planNumber);
+  const statusSelect = page.locator('.search-bar .el-select').first();
+  await selectOption(page, statusSelect, '已结单');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  let row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  const rowText = await row.innerText();
+  if (!rowText.includes('已完成') && !rowText.includes('已结单')) {
+    throw new Error(`Completed-plan UI row does not expose final status: ${rowText}`);
+  }
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-persisted-after-fresh-login.png`), fullPage: false });
+
+  await row.locator('button[title="查看生产计划详情"]').click();
+  const detail = page.locator('.el-dialog:visible').filter({ hasText: '计划详情' });
+  await detail.waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-detail-readback.png`), fullPage: false });
+  await detail.getByRole('button', { name: '关闭', exact: true }).click().catch(async () => {
+    await detail.locator('.el-dialog__headerbtn').click();
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await search.fill(productionPlan.planNumber);
+  await selectOption(page, page.locator('.search-bar .el-select').first(), '已结单');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-final-stop-refresh-unchanged.png`), fullPage: false });
+
+  const planReadback = await authenticatedGet(page, `/api/mobile/F006/production-plans/${productionPlan.id}`);
+  const data = planReadback.body?.data || planReadback.body;
+  report.planReadback = { statusCode: planReadback.status, body: planReadback.body };
+  if (planReadback.status >= 400 || data?.factoryId !== 'F006' || data?.id !== productionPlan.id
+      || data?.status !== 'COMPLETED' || !data?.endTime) {
+    throw new Error(`Final production stop readback mismatch: ${planReadback.status} ${data?.factoryId} ${data?.status} ${data?.endTime}`);
+  }
+  state.entities.productionPlan = { ...productionPlan, status: data.status, endTime: data.endTime };
+  state.entities.productionStop = { planId: productionPlan.id, status: data.status, endTime: data.endTime };
+  state.observations = [...(state.observations || []), {
+    phase,
+    action: 'reconcile-stop-production-final',
+    entityId: productionPlan.id,
+    businessWrites: 0,
+    at: new Date().toISOString(),
+  }];
+  persistState(state);
+}
+
+async function warehouseWipReadback(page, state, report) {
+  const productionBatch = state.entities.leftoverProductionBatch;
+  const summary = state.entities.leftoverInterimSummary;
+  if (!productionBatch?.id || productionBatch.factoryId !== 'F006'
+      || Number(summary?.semiInQuantity) !== 0.04) {
+    throw new Error('Tracked 0.04kg F006 leftover summary is required');
+  }
+  report.login = await loginRole(page, 'f006_warehouse_mgr', 'warehouse_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before WIP readback');
+  report.intendedMutations.push({
+    step: '仓储经理查看0.04kg剩余在制品',
+    method: 'NONE',
+    endpoint: '/api/mobile/F006/semi-finished/inventory',
+    target: { productionBatchId: productionBatch.id, expectedQuantity: 0.04, unit: 'kg' },
+    payloadBoundary: { expectedBusinessWrites: 0 },
+  });
+  await page.goto(`${baseUrl}/warehouse/semi-finished`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('heading', { name: '半成品重量库存', exact: true }).waitFor({ state: 'visible', timeout: 25_000 });
+  const response = await authenticatedGet(page, '/api/mobile/F006/semi-finished/inventory');
+  const rows = Array.isArray(response.body?.data) ? response.body.data : [];
+  // Summary-created WIP is anchored by its immutable intermediate batch number.
+  // It is not attached to the numeric production_batch row (`batch_id` is null).
+  const expectedIntermediateBatchNo = summary.reversalDetail?.sfiIn?.[0]?.anchor;
+  const candidates = rows.filter((row) => Number(row.availableQuantity) === 0.04
+    && String(row.intermediateBatchNo) === String(expectedIntermediateBatchNo));
+  report.wipReadback = { statusCode: response.status, candidates, rowCount: rows.length };
+  if (response.status >= 400 || candidates.length !== 1 || candidates[0].status !== 'AVAILABLE') {
+    throw new Error(`Expected one available 0.04kg WIP row, got ${JSON.stringify(candidates)}`);
+  }
+  const wip = candidates[0];
+  const row = page.locator('.el-table__row:visible').filter({ hasText: String(wip.intermediateBatchNo) }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  const rowText = await row.innerText();
+  if (!rowText.includes('0.04 kg') || !rowText.includes('可用')) {
+    throw new Error(`WIP UI row mismatch: ${rowText}`);
+  }
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-wip-004-visible.png`), fullPage: false });
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.waitForTimeout(1_000);
+  await page.locator('.el-table__row:visible').filter({ hasText: String(wip.intermediateBatchNo) }).first()
+    .waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-wip-004-after-refresh.png`), fullPage: false });
+  state.entities.leftoverWip = wip;
+  state.observations = [...(state.observations || []), {
+    phase, action: 'readback-leftover-wip', entityId: wip.id, businessWrites: 0, at: new Date().toISOString(),
+  }];
+  persistState(state);
+}
+
+async function productionCreateSecondaryWip(page, state, report) {
+  const warehouseWip = state.entities.leftoverWip;
+  const originPlan = state.entities.leftoverProductionPlan;
+  if (!warehouseWip?.intermediateBatchNo || Number(warehouseWip.availableQuantity) !== 0.04 || !originPlan?.productTypeId
+      || originPlan.factoryId !== 'F006') {
+    throw new Error('Tracked available 0.04kg F006 WIP is required for a secondary plan');
+  }
+  if (state.entities.secondaryWipPlan) throw new Error(`Secondary WIP plan already tracked: ${state.entities.secondaryWipPlan.id}`);
+  report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before secondary-plan mutation');
+  const availableResponse = await authenticatedGet(page, '/api/mobile/F006/wip/available');
+  const availableRows = Array.isArray(availableResponse.body?.data) ? availableResponse.body.data : [];
+  const matches = availableRows.filter((row) => String(row.intermediateBatchNo) === String(warehouseWip.intermediateBatchNo)
+    && Number(row.availableQuantity) === 0.04);
+  if (availableResponse.status >= 400 || matches.length !== 1 || !matches[0].id) {
+    throw new Error(`Production-manager WIP readback mismatch: ${availableResponse.status} ${JSON.stringify(matches)}`);
+  }
+  const wip = matches[0];
+  report.intendedMutations.push({
+    step: '生产经理将0.04kg剩余WIP纳入独立再加工/返工计划',
+    method: 'POST',
+    endpoint: '/api/mobile/F006/processing/secondary-plan',
+    target: { wipId: wip.id, intermediateBatchNo: wip.intermediateBatchNo },
+    payloadBoundary: { quantity: 0.04, unit: 'kg', productTypeId: originPlan.productTypeId },
+  });
+  persistRunningReport(report);
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: '独立再加工/返工', exact: true }).click();
+  const dialog = page.locator('.el-dialog:visible').filter({ hasText: '独立再加工/返工' });
+  await dialog.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-wip-before.png`), fullPage: false });
+  const selects = dialog.locator('.el-select');
+  await selectOption(page, selects.nth(0), String(wip.intermediateBatchNo));
+  // Selecting a WIP currently prefills the intermediate product itself. A
+  // secondary plan must target the finished product whose Workflow consumes it.
+  await selectOption(page, selects.nth(1), String(originPlan.productName));
+  const quantityInput = dialog.locator('input[role="spinbutton"]');
+  await quantityInput.fill('0.04');
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-wip-form-filled.png`), fullPage: false });
+  const [response] = await Promise.all([
+    page.waitForResponse((candidate) => candidate.request().method() === 'POST'
+      && new URL(candidate.url()).pathname === '/api/mobile/F006/processing/secondary-plan', { timeout: 35_000 }),
+    dialog.getByRole('button', { name: '创建独立再加工/返工计划', exact: true }).click(),
+  ]);
+  const body = await response.json().catch(() => null);
+  const created = compactProductionPlan(body?.data || {});
+  report.actualMutations.push({ method: 'POST', url: response.url(), statusCode: response.status(), response: body });
+  if (response.status() >= 400 || !body?.success || !created.id || created.factoryId !== 'F006'
+      || !String(created.planNumber).startsWith('SEC-F006-') || Number(created.plannedQuantity) !== 0.04) {
+    throw new Error(`Secondary WIP plan create mismatch: ${response.status()} ${JSON.stringify(created)}`);
+  }
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-wip-created-feedback.png`), fullPage: false });
+  await dialog.waitFor({ state: 'hidden', timeout: 20_000 });
+  const search = page.locator('input[placeholder="搜索计划编号/产品名称"]');
+  await search.fill(created.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  const row = page.locator('.el-table__row:visible').filter({ hasText: created.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-wip-persisted.png`), fullPage: false });
+  await row.locator('button[title="查看生产计划详情"]').click();
+  await page.locator('.el-dialog:visible').filter({ hasText: '计划详情' }).waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-wip-detail-readback.png`), fullPage: false });
+  state.entities.secondaryWipPlan = created;
+  state.mutations.push({ phase, action: 'create-secondary-wip-plan', entityId: created.id, at: new Date().toISOString() });
   persistState(state);
 }
 
@@ -2350,9 +2722,22 @@ async function main() {
     else if (phase === 'production-start-inspect') await productionStartInspect(page, state, report);
     else if (phase === 'production-report-first') await productionReportFirstProcess(page, state, report);
     else if (phase === 'production-report-first-main') await productionReportFirstProcess(page, state, report);
+    else if (phase === 'production-report-first-round2') await productionReportFirstProcess(page, state, report);
     else if (phase === 'production-inspect-second') await productionInspectSecondProcess(page, state, report);
     else if (phase === 'production-report-second') await productionReportSecondProcess(page, state, report);
-    else if (phase === 'production-interim-summary-first') await productionInterimSummaryFirst(page, state, report);
+    else if (phase === 'production-report-second-round2') await productionReportSecondProcess(page, state, report);
+    else if (phase === 'production-interim-summary-first') await productionInterimSummary(page, state, report);
+    else if (phase === 'production-interim-summary-second') await productionInterimSummary(page, state, report);
+    else if (phase === 'production-stop-final') await productionStopFinal(page, state, report);
+    else if (phase === 'production-stop-reconcile') await productionStopReconcile(page, state, report);
+    else if (phase === 'production-create-leftover-plan') await productionCreateLeftoverPlan(page, state, report);
+    else if (phase === 'production-start-leftover') await productionStartInspect(page, state, report);
+    else if (phase === 'production-report-leftover-small') await productionReportFirstProcess(page, state, report);
+    else if (phase === 'production-report-leftover-main') await productionReportFirstProcess(page, state, report);
+    else if (phase === 'production-report-leftover-packaging') await productionReportSecondProcess(page, state, report);
+    else if (phase === 'production-interim-summary-leftover') await productionInterimSummary(page, state, report);
+    else if (phase === 'warehouse-wip-readback') await warehouseWipReadback(page, state, report);
+    else if (phase === 'production-create-secondary-wip') await productionCreateSecondaryWip(page, state, report);
     else if (phase === 'quality-inspect-batch') await qualityInspectProductionBatch(page, state, report);
     else if (phase === 'production-settle') await productionSettlePlan(page, state, report);
     else if (phase === 'warehouse-confirm-production-receipt') await warehouseConfirmProductionReceipt(page, state, report);
@@ -2377,6 +2762,9 @@ async function main() {
     fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     await context.close();
     const temporaryVideoPath = await recordedVideo?.path().catch(() => null);
+    // Windows can retain the WebM handle until Chromium itself exits even after
+    // BrowserContext.close(). Close the browser before moving the immutable evidence.
+    await browser.close();
     if (temporaryVideoPath && fs.existsSync(temporaryVideoPath)) {
       const finalVideoPath = path.join(videoSourceDir, `${assetPrefix}-${phase}.webm`);
       fs.renameSync(temporaryVideoPath, finalVideoPath);
@@ -2388,7 +2776,6 @@ async function main() {
       };
       fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     }
-    await browser.close();
   }
   console.log(JSON.stringify({ result: report.result, reportPath, statePath, entities: state.entities }, null, 2));
 }
