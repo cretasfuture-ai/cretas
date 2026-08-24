@@ -88,47 +88,73 @@ public interface QualityDispositionRuleService {
     );
 
     /**
+     * 执行已经通过审批的处置动作。
+     *
+     * <p>只允许审批端点在核验待审批记录、租户、审批角色和可信登录用户后调用，
+     * 避免再次进入审批分支，也避免审批通过后库存桥接永远不执行。</p>
+     */
+    DispositionExecutionResult executeApprovedDisposition(
+            String factoryId,
+            QualityInspection inspection,
+            DispositionAction action,
+            Long approverId,
+            String reason
+    );
+
+    /**
      * 处置动作枚举
      */
     enum DispositionAction {
         /**
          * 直接放行 - 质检合格
          */
-        RELEASE("放行"),
+        RELEASE("放行", false, null),
 
         /**
          * 条件放行 - 有限期或有条件使用
          */
-        CONDITIONAL_RELEASE("条件放行"),
+        CONDITIONAL_RELEASE("条件放行", true, "SUPERVISOR"),
 
         /**
          * 返工 - 可修复的不合格
          */
-        REWORK("返工"),
+        REWORK("返工", true, "SUPERVISOR"),
 
         /**
          * 报废 - 无法修复的严重不合格
          */
-        SCRAP("报废"),
+        SCRAP("报废", true, "QUALITY_HEAD"),
 
         /**
          * 特批申请 - 超出常规规则，需要高级审批
          */
-        SPECIAL_APPROVAL("特批申请"),
+        SPECIAL_APPROVAL("特批申请", true, "FACTORY_MANAGER"),
 
         /**
          * 待定 - 需要进一步检测或评估
          */
-        HOLD("待定");
+        HOLD("待定", true, "MANAGER");
 
         private final String description;
+        private final boolean requiresApproval;
+        private final String approvalLevel;
 
-        DispositionAction(String description) {
+        DispositionAction(String description, boolean requiresApproval, String approvalLevel) {
             this.description = description;
+            this.requiresApproval = requiresApproval;
+            this.approvalLevel = approvalLevel;
         }
 
         public String getDescription() {
             return description;
+        }
+
+        public boolean requiresApproval() {
+            return requiresApproval;
+        }
+
+        public String getApprovalLevel() {
+            return approvalLevel;
         }
     }
 

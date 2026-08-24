@@ -71,8 +71,8 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         BigDecimal confidence = calculateConfidence(inspection, recommendedAction);
 
         // 检查是否需要审批
-        boolean requiresApproval = checkApprovalRequirement(
-                factoryId, recommendedAction, evalContext);
+        boolean requiresApproval = recommendedAction.requiresApproval()
+                || checkApprovalRequirement(factoryId, recommendedAction, evalContext);
 
         // 查找匹配的规则配置
         Optional<ApprovalChainConfig> matchedConfig = Optional.empty();
@@ -153,6 +153,29 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
             Long executorId,
             String reason) {
 
+        return executeDispositionInternal(factoryId, inspection, action, executorId, reason, false);
+    }
+
+    @Override
+    @Transactional
+    public DispositionExecutionResult executeApprovedDisposition(
+            String factoryId,
+            QualityInspection inspection,
+            DispositionAction action,
+            Long approverId,
+            String reason) {
+
+        return executeDispositionInternal(factoryId, inspection, action, approverId, reason, true);
+    }
+
+    private DispositionExecutionResult executeDispositionInternal(
+            String factoryId,
+            QualityInspection inspection,
+            DispositionAction action,
+            Long executorId,
+            String reason,
+            boolean approvalGranted) {
+
         log.info("执行质检处置: factoryId={}, inspectionId={}, action={}, executorId={}",
                 factoryId, inspection.getId(), action, executorId);
 
@@ -166,26 +189,27 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         context.put("executorId", executorId);
         context.put("reason", reason);
 
-        // 检查是否需要特批
-        boolean needsSpecialApproval = requiresSpecialApproval(factoryId, inspection, action);
+        // 动作静态审批契约是最低门禁；工厂动态规则可以进一步要求审批，不能放宽。
+        boolean needsApproval = !approvalGranted && (action.requiresApproval()
+                || requiresSpecialApproval(factoryId, inspection, action));
 
         String auditLogId = null;
         String approvalRequestId = null;
         boolean approvalInitiated = false;
         String newStatus = null;
 
-        if (needsSpecialApproval) {
+        if (needsApproval) {
             // 需要特批 - 记录审计并启动审批流程
             Optional<ApprovalChainConfig> config = approvalChainService.findMatchingConfig(
                     factoryId, DecisionType.QUALITY_EXCEPTION, context);
 
-            var auditLog = decisionAuditService.logForceInsertWithRuleConfig(
+            var auditLog = decisionAuditService.logPendingApproval(
                     factoryId,
                     "QualityInspection",
                     inspection.getId(),
                     context,
+                    action.name(),
                     reason,
-                    true,
                     executorId,
                     executor.getFullName(),
                     executor.getRole() != null ? executor.getRole() : "UNKNOWN",

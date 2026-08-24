@@ -183,6 +183,47 @@ public class DecisionAuditServiceImpl implements DecisionAuditService {
 
     @Override
     @Transactional
+    public DecisionAuditLog logPendingApproval(
+            String factoryId,
+            String entityType,
+            String entityId,
+            Map<String, Object> inputContext,
+            String actionCode,
+            String reason,
+            Long executorId,
+            String executorName,
+            String executorRole,
+            String ruleConfigId,
+            Integer ruleConfigVersion,
+            String ruleConfigName
+    ) {
+        DecisionAuditLog auditLog = DecisionAuditLog.builder()
+                .decisionType(DecisionType.APPROVAL)
+                .factoryId(factoryId)
+                .entityType(entityType)
+                .entityId(entityId)
+                .inputContext(toJson(inputContext))
+                .decisionMade(actionCode)
+                .reason(reason)
+                .requiresApproval(true)
+                .approvalStatus(ApprovalStatus.PENDING)
+                .executorId(executorId)
+                .executorName(executorName)
+                .executorRole(executorRole)
+                .executionMode(ExecutionMode.MANUAL)
+                .previousState("PENDING_REVIEW")
+                .newState("PENDING_APPROVAL")
+                .ruleConfigId(ruleConfigId)
+                .ruleConfigVersion(ruleConfigVersion)
+                .ruleConfigName(ruleConfigName)
+                .build();
+
+        setReplayData(auditLog, inputContext, null);
+        return auditLogRepository.save(auditLog);
+    }
+
+    @Override
+    @Transactional
     public DecisionAuditLog logApproval(
             String factoryId,
             String entityType,
