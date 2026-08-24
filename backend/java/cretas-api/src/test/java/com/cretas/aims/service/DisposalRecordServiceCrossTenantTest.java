@@ -19,6 +19,9 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.Optional;
+import java.util.List;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -138,6 +141,44 @@ class DisposalRecordServiceCrossTenantTest {
 
         assertThat(service.getById("F006", 54L)).isEmpty();          // 跨租户 → 空 (404)
         assertThat(service.getById("F999", 54L)).isPresent();        // 本厂 → 可见
+    }
+
+    @Test
+    void getByFactoryId_finishedGoodsRecord_hydratesBatchProductAndUnit() {
+        DisposalRecord r = record(58L, "F006");
+        r.setFinishedGoodsBatchId("FG-READBACK");
+        FinishedGoodsBatch batch = fgBatch("FG-READBACK", "F006",
+                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ONE);
+        batch.setBatchNumber("PB-F006-READBACK");
+        batch.setProductName("黄油鸡成品");
+        batch.setUnit("盒");
+        when(repo.findByFactoryId(org.mockito.ArgumentMatchers.eq("F006"), any()))
+                .thenReturn(new PageImpl<>(List.of(r), PageRequest.of(0, 10), 1));
+        when(fgBatchRepo.findAllById(List.of("FG-READBACK"))).thenReturn(List.of(batch));
+
+        DisposalRecord result = service.getByFactoryId("F006", 0, 10).getContent().get(0);
+
+        assertThat(result.getBatchNumber()).isEqualTo("PB-F006-READBACK");
+        assertThat(result.getBatchDisplayName()).isEqualTo("黄油鸡成品");
+        assertThat(result.getQuantityUnit()).isEqualTo("盒");
+    }
+
+    @Test
+    void getByFactoryId_crossTenantFinishedGoodsReference_isNotExposed() {
+        DisposalRecord r = record(59L, "F006");
+        r.setFinishedGoodsBatchId("FG-FOREIGN");
+        FinishedGoodsBatch batch = fgBatch("FG-FOREIGN", "F999",
+                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ONE);
+        batch.setBatchNumber("PB-F999-SECRET");
+        when(repo.findByFactoryId(org.mockito.ArgumentMatchers.eq("F006"), any()))
+                .thenReturn(new PageImpl<>(List.of(r), PageRequest.of(0, 10), 1));
+        when(fgBatchRepo.findAllById(List.of("FG-FOREIGN"))).thenReturn(List.of(batch));
+
+        DisposalRecord result = service.getByFactoryId("F006", 0, 10).getContent().get(0);
+
+        assertThat(result.getBatchNumber()).isNull();
+        assertThat(result.getBatchDisplayName()).isNull();
+        assertThat(result.getQuantityUnit()).isNull();
     }
 
     @Test

@@ -130,6 +130,14 @@ public class DisposalRecord extends BaseEntity {
     @Column(name = "disposal_method", columnDefinition = "TEXT")
     private String disposalMethod;
 
+    /** 创建申请时从登录态固化的申请人 ID。历史记录可能为空。 */
+    @Column(name = "applicant_id")
+    private Integer applicantId;
+
+    /** 创建申请时从登录态固化的申请人名称。历史记录可能为空。 */
+    @Column(name = "applicant_name", length = 100)
+    private String applicantName;
+
     /**
      * 审批人ID
      */
@@ -241,6 +249,18 @@ public class DisposalRecord extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "approved_by", referencedColumnName = "id", insertable = false, updatable = false)
     private User approver;
+
+    /** 成品批次只读回读字段，不参与持久化。 */
+    @Transient
+    private String batchNumber;
+
+    /** 成品名称只读回读字段，不参与持久化。 */
+    @Transient
+    private String batchDisplayName;
+
+    /** 报损数量单位只读回读字段，不参与持久化。 */
+    @Transient
+    private String quantityUnit;
 
     // ===================================================================
     // 业务方法

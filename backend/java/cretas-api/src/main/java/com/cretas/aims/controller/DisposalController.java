@@ -117,10 +117,13 @@ public class DisposalController {
     @Operation(summary = "创建报废记录", description = "创建新的报废记录，需要指定报废类型、数量、原因等信息。创建后默认状态为待审批")
     public ResponseEntity<?> createDisposalRecord(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
-            @Valid @RequestBody @Parameter(description = "报废记录请求") CreateDisposalRecordRequest request) {
+            @Valid @RequestBody @Parameter(description = "报废记录请求") CreateDisposalRecordRequest request,
+            HttpServletRequest httpRequest) {
         try {
             DisposalRecord record = toDisposalRecord(request);
             record.setFactoryId(factoryId);
+            record.setApplicantId(extractApproverId(httpRequest));
+            record.setApplicantName(extractApproverName(httpRequest));
             DisposalRecord created = disposalRecordService.createDisposalRecord(record);
             return ResponseEntity.ok(Map.of(
                 "success", true,
