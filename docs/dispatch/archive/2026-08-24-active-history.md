@@ -51,3 +51,9 @@
 - **权限边界**：四个前端承载点保持原边界，财务仍无销售/采购菜单或跨模块路由；后端 `@RequirePermission` 已对齐，追踪控制器没有额外 `@RequireModule` 串联误拦。权限漂移基线 4 / 当前 4 / 新增 0。
 - **验证与候选制品**：三类发布阻断契约 7 tests 通过；统一最终生命周期共 65 tests，0 failure / 0 error / 0 skipped，隔离 PostgreSQL Workflow 4/4 真实执行。回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787541774-7002.json` 为 `built`，JAR SHA-256 `32e7fefc405d7186d709fe8815a1ce23d1dff69c8f2c11820112e5c5cb686d3d`，仅预上传、未安装/重启/切流。
 - **scope 释放**：任务已从 ACTIVE 移除，追踪只读权限、迁移源码闸与对应测试 scope 释放；PR/远端合并、生产部署和 F006 验收继续按独立事实记录。
+
+## `BUG-RELEASE-SSH-COMMENT-SUBSTITUTION-20260824` — `review complete`
+
+- **发现与修复**：最新 exact-main 发布日志暴露 `deploy-backend.sh` 的双引号 SSH 远端安装字符串中含反引号注释；Bash 在发送 SSH 前执行了本机 `ls -t` 命令替换，把仓库文件名拼进远端脚本。删除注释中的命令替换语法，未修改任何发布行为、远端命令、业务代码或生产配置。
+- **回归门禁**：新增静态测试，扫描双引号 SSH 段内的注释反引号并 fail closed；`bash -n scripts/deploy/deploy-backend.sh`、新契约测试和 `git diff --check` 均通过。
+- **状态边界**：本修复只完成实现与目标验证，未触发新的生产部署；scope 已从 ACTIVE 移除并释放。后续 PR/远端合并须以独立回执为准。
