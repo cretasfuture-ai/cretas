@@ -17,6 +17,8 @@ import {
   DispositionEvaluation,
   DispositionResult,
   DispositionAction,
+  DispositionHistory,
+  DispositionStatus,
   getActionLabel,
   getActionColor,
   getActionIcon,
@@ -94,12 +96,19 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
         failCount: 0,
       };
 
-      const result = await qualityDispositionAPI.evaluateDisposition(
-        user.factoryId,
-        qualityResult
-      );
+      const [result, history] = await Promise.all([
+        qualityDispositionAPI.evaluateDisposition(user.factoryId, qualityResult),
+        qualityDispositionAPI.getDispositionHistory(user.factoryId, batchId),
+      ]);
 
       setEvaluation(result);
+      const existingDisposition = history
+        .filter((item) => item.inspectionId === inspectionId)
+        .filter((item) => item.approvalStatus?.toUpperCase() !== 'REJECTED')
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+      setExecutionResult(existingDisposition
+        ? mapHistoryToExecutionResult(existingDisposition)
+        : null);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : '加载处置建议失败';
       setError(errorMessage);
@@ -381,6 +390,31 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
     </>
   );
 };
+
+function mapHistoryToExecutionResult(history: DispositionHistory): DispositionResult {
+  const approvalStatus = history.approvalStatus?.toUpperCase();
+  const status = approvalStatus === 'PENDING' || approvalStatus === 'PENDING_APPROVAL'
+    ? DispositionStatus.PENDING_APPROVAL
+    : approvalStatus === 'APPROVED'
+      ? DispositionStatus.APPROVED
+      : DispositionStatus.EXECUTED;
+
+  return {
+    dispositionId: history.id,
+    status,
+    executedAction: history.action,
+    message: status === DispositionStatus.PENDING_APPROVAL
+      ? '已存在处置申请，等待审批'
+      : '该质检记录已有处置结果',
+    nextSteps: status === DispositionStatus.PENDING_APPROVAL
+      ? '审批通过前不会变更库存'
+      : undefined,
+    newBatchStatus: history.newStatus,
+    approvalInitiated: history.requiresApproval,
+    approvalRequestId: history.requiresApproval ? history.id : undefined,
+    executedAt: history.createdAt,
+  };
+}
 
 const styles = StyleSheet.create({
   card: {
