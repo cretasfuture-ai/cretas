@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `CI-JPA-PREMERGE-GATE-20260825` — `in-progress` — Owner: `/root` — Base SHA `4e40e77c9062eefe5a643286051c789df00e48a9`。每日审计确认 PR #39 的 Entity/Repository/Flyway 变更只在合并后触发 JPA startup，违反当前 `AGENTS.md` 与 daily integration 的预合并门禁；在不扩大测试范围的前提下恢复 PR exact-head 触发，并保留 main push 复验。生产部署与业务写入均为 0。
+
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `3dfce77462cb8f24db5f3e56876ce7e714f852dd`; runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。专项验证 Workflow“当前配置/版本记录”产品真值、F006 计划按首次正式报工分流、历史恢复、幂等/并发冲突、权限和 PostgreSQL 事务顺序；当前 Chat 是唯一写 Owner，F006 写入必须绑定本 runKey，其他租户写入为 0。
 
 - `E2E-F006-PRODUCTION-POST-REPORT-20260824` — `in-progress` — Owner: `/root` — Base SHA `c6bf2b181f1bfa5938802ce3e5ab73d1c35366fa`；专用 worktree `C:\Users\Steve\cretas-f006-production-closeout-e2e-20260824`；分支 `codex/f006-sales-defective-batch-guard-20260825`；当前 runKey `E2E-F006-PROD-CLOSEOUT-20260824-105104`。质检处置审批路由已发布并完成 REWORK 审批与 10/10 复检。销售隔离边界生产复现 `BUG-F006-SALES-DEFECTIVE-BATCH-ALLOCATION-009`：Web UI 正确排除 `DEFECTIVE` 批次，但后端批次分配端点仍接受精确不良批次并落一条 allocation；该测试子发运已通过合法取消流程恢复为 `CANCELLED`，allocation 清零且不良批次库存 10 盒未变。当前 Owner 负责在分配 Service 增加可售状态门禁、目标测试、Java/Web 门禁、合并部署和部署后重试拒绝场景；修复部署前暂停新的生产业务写入。写入仅限本 runKey 精确 F006 实体，其他租户写入为 0。
@@ -37,6 +39,8 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
+
+- `CI-JPA-PREMERGE-GATE-20260825`：仅 `.github/workflows/jpa-gate-main.yml`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-25-active-history.md`；不得修改 Repository、Entity、Flyway、业务代码、分支保护或生产。验收：workflow 可解析，PR/main paths 精确，job 名保持 `JPA repository query startup gate`，daily PR exact head 的真实 JPA Context gate 完成并通过，`git diff --check` 通过。
 
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824`：Workflow 当前配置编辑、版本记录/绑定清单/历史恢复/乐观锁与权限的 Web 页面、API/types/tests；Java `ProductProcessWorkflow` Controller/Service/DTO/Repository 及生产计划首次正式报工 started 判定/版本重绑定；真实 PostgreSQL 集成测试、专项 Playwright driver、gitignored 本 runKey 证据和 dispatch。只有发现并证明本专项缺陷后才修改实现；若触及 Repository/Entity/Flyway，必须补真实 JPA/迁移门禁。明确排除 WorkProcess 去重、BOM substitutes、Workflow/BOM 完整性准入、上一 runKey 后段生产实体、其他租户和全局配置；与现有三个 Workflow/BOM backlog 串行且不吸收其 scope。
 
