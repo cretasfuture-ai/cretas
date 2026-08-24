@@ -48,9 +48,12 @@ describe('production plan operator guardrails', () => {
     expect(source).toContain('quantityUnit: receiptHasOutputLines.value ? null : receiptUnit.value');
   });
 
-  it('confirms Workflow terminal outputs per SKU and preserves exact DAG input identity', () => {
-    expect(source).toContain('本计划包含多个终端产出');
-    expect(source).toContain('不同单位不会相加');
+  it('confirms Workflow terminal outputs incrementally per SKU and preserves exact DAG input identity', () => {
+    expect(source).toContain('支持分次入库');
+    expect(source).toContain('每次填写本次实收');
+    expect(source).toContain('originalReceivedQuantity');
+    expect(source).toContain('剩余');
+    expect(source).toContain('提交后系统将拒绝且不会改动库存');
     expect(source).toContain('v-for="(line, index) in receiptForm.outputLines"');
     expect(source).toContain('batchNumber: line.reportedBatchNumber');
     expect(source).toContain(':precision="4"');
