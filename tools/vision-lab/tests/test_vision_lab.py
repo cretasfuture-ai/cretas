@@ -451,6 +451,102 @@ class VisionLabTests(unittest.TestCase):
                 {"operator clarified blur severity": 1},
             )
 
+    def test_dataset_repeats_only_isolated_confirmed_missing_train_samples(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "queue"
+            (queue / "images").mkdir(parents=True)
+            (queue / "annotations-human").mkdir()
+            rows = []
+            samples = (
+                ("missing-train", "task-d", True, [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}]),
+                ("missing-val", "task-a", True, [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}]),
+                ("normal-train", "task-e", False, [
+                    {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
+                    {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
+                ]),
+                ("ambiguous-train", "task-d", True, [
+                    {"c": 1, "b": [0.1, 0.1, 0.4, 0.4]},
+                    {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
+                ]),
+            )
+            for crop_id, task, missing, boxes in samples:
+                image = queue / "images" / f"{crop_id}.jpg"
+                image.write_bytes(crop_id.encode())
+                rows.append({
+                    "crop_id": crop_id, "image": str(image),
+                    "image_sha256": vision_lab.sha256_file(image),
+                    "source_task_id": task,
+                })
+                annotation = {
+                    "reviewed": True, "unjudgeable": False, "boxes": boxes,
+                    "missing_confirmed_by_human": missing,
+                    "declared_missing_classes": ["white_label"] if missing else [],
+                }
+                (queue / "annotations-human" / f"{crop_id}.json").write_text(
+                    json.dumps(annotation), encoding="utf-8",
+                )
+            (queue / "manifest.json").write_text(
+                json.dumps({"version": "q", "rows": rows}), encoding="utf-8",
+            )
+            cfg = config(root / "runtime")
+            cfg["queue_roots"] = [str(queue)]
+            default_dataset = vision_lab.build_dataset(cfg)
+            cfg["training"]["isolated_missing_repeat"] = 1
+            explicit_disabled_dataset = vision_lab.build_dataset(cfg)
+            cfg["training"]["isolated_missing_repeat"] = 3
+
+            dataset = vision_lab.build_dataset(cfg)
+
+            self.assertEqual(default_dataset["dataset_id"], explicit_disabled_dataset["dataset_id"])
+            self.assertNotEqual(default_dataset["dataset_id"], dataset["dataset_id"])
+            self.assertEqual(default_dataset["counts"]["train"], 3)
+            self.assertEqual(dataset["counts"]["unique_train"], 3)
+            self.assertEqual(dataset["counts"]["unique_val"], 1)
+            self.assertEqual(dataset["counts"]["train"], 5)
+            self.assertEqual(dataset["counts"]["val"], 1)
+            self.assertEqual(dataset["counts"]["isolated_missing_train_unique"], 1)
+            self.assertEqual(dataset["counts"]["isolated_missing_val_unique"], 1)
+            self.assertEqual(dataset["counts"]["isolated_missing_train_copies"], 2)
+            repeats = [row for row in dataset["rows"] if row["sample_role"] == "isolated_missing_repeat"]
+            self.assertEqual([row["crop_id"] for row in repeats], ["missing-train", "missing-train"])
+            self.assertTrue(all(row["split"] == "train" for row in repeats))
+            ambiguous = [row for row in dataset["rows"] if row["crop_id"] == "ambiguous-train"]
+            self.assertEqual(len(ambiguous), 1)
+            self.assertIsNone(ambiguous[0]["isolated_missing_class"])
+
+    def test_confirmed_missing_annotation_rejects_contradictory_missing_box(self):
+        annotation = {
+            "missing_confirmed_by_human": True,
+            "declared_missing_classes": ["white_label"],
+            "boxes": [
+                {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
+                {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
+            ],
+        }
+        with self.assertRaisesRegex(RuntimeError, "contains white_label box"):
+            vision_lab.isolated_missing_class(annotation)
+
+    def test_isolated_missing_class_accepts_legacy_numeric_class_and_skips_two_class_empty(self):
+        legacy = {
+            "missing_confirmed_by_human": True,
+            "declared_missing_classes": [0],
+            "boxes": [{"c": 1, "b": [0.1, 0.1, 0.4, 0.4]}],
+        }
+        empty = {
+            "missing_confirmed_by_human": True,
+            "declared_missing_classes": [0, 1],
+            "boxes": [],
+        }
+        self.assertEqual(vision_lab.isolated_missing_class(legacy), "white_label")
+        self.assertIsNone(vision_lab.isolated_missing_class(empty))
+
+    def test_isolated_missing_repeat_rejects_unsafe_values(self):
+        for value in (True, 0, 11, 2.5, "3"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    vision_lab.isolated_missing_repeat({"isolated_missing_repeat": value})
+
     def test_promotion_gate_fails_closed_on_recall_regression(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
