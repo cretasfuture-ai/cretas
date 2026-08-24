@@ -111,10 +111,17 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         } else {
             Optional<ProductProcessWorkflow> published = find(
                     factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED);
-            if (published.isPresent() && sameBusinessGraph(published.get(), definition)) {
-                ProductProcessWorkflowDTO unchanged = toDTO(published.get());
-                unchanged.setUnitWarnings(definition.getUnitWarnings());
-                return unchanged;
+            if (published.isPresent()) {
+                ProductProcessWorkflow currentPublished = published.get();
+                if (sameBusinessGraph(currentPublished, definition)) {
+                    ProductProcessWorkflowDTO unchanged = toDTO(currentPublished);
+                    unchanged.setUnitWarnings(definition.getUnitWarnings());
+                    return unchanged;
+                }
+                // A delayed identical autosave is harmless, but a different graph must
+                // originate from the exact currently published identity. Otherwise a
+                // stale browser could recreate its obsolete graph as the next draft.
+                assertCurrentIdentity(definition, currentPublished);
             }
             entity = new ProductProcessWorkflow();
             entity.setFactoryId(factoryId);
