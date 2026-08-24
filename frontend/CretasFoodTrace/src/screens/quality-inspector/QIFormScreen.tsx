@@ -37,6 +37,10 @@ import {
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
 import { attachmentApi } from '../../services/api/attachmentApi';
+import {
+  deriveQualityInspectionResult,
+  getQualityInspectionSubmitErrorMessage,
+} from './qualityInspectionSubmission.logic';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QIForm'>;
@@ -100,6 +104,7 @@ export default function QIFormScreen() {
   const [batch, setBatch] = useState<QIBatch | null>(null);
   const [sampleSize, setSampleSize] = useState('10');
   const [remarks, setRemarks] = useState('');
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // 评分数据
   const [scores, setScores] = useState<Record<string, ScoreItem>>({
@@ -189,6 +194,7 @@ export default function QIFormScreen() {
 
     try {
       setSubmitting(true);
+      setSubmitError(null);
 
       const defaultScore: ScoreItem = { score: 0, notes: [] };
       // Backend expects passCount/failCount — derive from HACCP score
@@ -198,7 +204,7 @@ export default function QIFormScreen() {
         sampleSize: sampleSizeNum,
         passCount: computedPassCount,
         failCount,
-        result: passed ? 'PASS' : 'FAIL',
+        result: deriveQualityInspectionResult(computedPassRate),
         notes: remarks || '',
         appearance: scores.appearance ?? defaultScore,
         smell: scores.smell ?? defaultScore,
@@ -257,7 +263,12 @@ export default function QIFormScreen() {
       });
     } catch (error) {
       console.error('提交失败:', error);
-      Alert.alert(t('form.submitFailed'), t('form.checkNetworkAndRetry'));
+      const message = getQualityInspectionSubmitErrorMessage(
+        error,
+        t('form.checkNetworkAndRetry'),
+      );
+      setSubmitError(message);
+      Alert.alert(t('form.submitFailed'), message);
     } finally {
       setSubmitting(false);
     }
@@ -436,6 +447,12 @@ export default function QIFormScreen() {
 
       {/* 底部操作栏 */}
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
+        {submitError ? (
+          <View style={styles.submitErrorBanner} accessibilityRole="alert">
+            <Ionicons name="alert-circle" size={18} color={QI_COLORS.danger} />
+            <Text style={styles.submitErrorText}>提交失败：{submitError}</Text>
+          </View>
+        ) : null}
         <TouchableOpacity
           style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
           onPress={handleSubmit}
@@ -778,6 +795,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
+  },
+  submitErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: QI_COLORS.danger,
+    backgroundColor: '#FFF1F0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  submitErrorText: {
+    flex: 1,
+    color: QI_COLORS.danger,
+    fontSize: 14,
+    lineHeight: 20,
   },
   submitBtnDisabled: {
     opacity: 0.6,

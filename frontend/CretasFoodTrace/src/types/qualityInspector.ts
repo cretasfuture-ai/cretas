@@ -19,6 +19,10 @@ export interface ScoreItem {
 export interface QualityInspectionForm {
   batchId: string;
   sampleSize: number;           // 抽样数量
+  passCount?: number;
+  failCount?: number;
+  result?: QualityInspectionResult;
+  notes?: string;
 
   // 评分项 (每项0-20分)
   appearance: ScoreItem;        // 外观
@@ -51,6 +55,7 @@ export interface QualityInspectionForm {
 // ============================================
 
 export type QualityGrade = 'A' | 'B' | 'C' | 'D';
+export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL';
 
 export const GRADE_THRESHOLDS = {
   A: 95,   // ≥95分
