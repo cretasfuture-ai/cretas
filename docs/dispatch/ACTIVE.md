@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824` — `in-progress` — Owner: `/root` — Base SHA `edc706385c494e81bcff5335e65c5c6aa6b63565`。工厂审核与平台技术页已优化、部署并完成双角色验收；当前续作定位新候选相对生产 v8 的漏检根因，修复 VisionLab 增量微调参数透传，从已验收 v8 fallback 权重在扩展人工数据上训练候选并执行完整 v8/正常/hard-negative/parity 门禁。保护集和原图不改写，其他租户写入为 0，门禁失败不替换线上。
+- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824` — `in-progress` — Owner: `/root` — Base SHA `c99eec847dfc8bf916ea051c2d8e50dc34012f98`。审核双角色 UI 与候选训练门禁已进入 main；当前续作修复 VisionLab 队列 glob 把评估 `records` manifest 误识别为人工 `rows` 队列的问题，并把失败的日常计划任务从旧 dirty detached worktree 迁到 clean exact-main、安全配置。保护集和原图不改写，其他租户写入为 0，候选训练和部署保持关闭。
 
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `3dfce77462cb8f24db5f3e56876ce7e714f852dd`; runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。专项验证 Workflow“当前配置/版本记录”产品真值、F006 计划按首次正式报工分流、历史恢复、幂等/并发冲突、权限和 PostgreSQL 事务顺序；当前 Chat 是唯一写 Owner，F006 写入必须绑定本 runKey，其他租户写入为 0。
 
