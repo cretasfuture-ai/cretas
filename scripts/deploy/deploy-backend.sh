@@ -1759,7 +1759,7 @@ deploy_jar() {
             echo \"   备份: \$BACKUP_NAME\"
             # 🔴 2026-08-12: 把备份名落到标记文件。BACKUP_NAME 是本 heredoc 里的远端
             # 局部变量, 后面「idle 起不来 → 回退磁盘 jar」那一步是**另一次 ssh**, 读不到它。
-            # 没有这个文件, 那一步就只能靠 `ls -t` 猜, 并发部署时会猜错。
+            # 没有这个文件, 那一步就只能靠 ls -t 猜, 并发部署时会猜错。
             printf '%s\n' \"\$BACKUP_NAME\" > .last-deploy-backup
             ls -t aims-0.0.1-SNAPSHOT.jar.bak.* 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
         fi
