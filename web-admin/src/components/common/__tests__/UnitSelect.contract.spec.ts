@@ -44,4 +44,11 @@ describe('shared UnitSelect contract', () => {
     expect(source).toContain('canonicalSystemUnitCode(current?.unitCode || props.modelValue)');
     expect(source).toContain('canonicalSystemUnitCode(findDuplicateUnit(activeUnits.value, [value])?.unitCode || value)');
   });
+
+  it('can consume a caller-filtered authoritative option set without free text', () => {
+    expect(source).toContain('options?: SystemUnit[] | null');
+    expect(source).toContain('const sourceUnits = computed(() => props.options ?? units.value)');
+    expect(source).toContain('if (props.options !== null) return');
+    expect(source).not.toContain('allow-create');
+  });
 });

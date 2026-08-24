@@ -201,8 +201,17 @@
           <UnitSelect
             v-model="relationForm.purchaseUnit"
             :factory-id="factoryId"
+            :options="relationPurchaseUnitOptions"
             usage-scope="PURCHASE_QUANTITY"
             placeholder="请选择采购单位"
+          />
+          <el-alert
+            v-if="relationUnitReason"
+            class="relation-unit-alert"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="relationUnitReason"
           />
           <div class="field-hint">采购订单将沿用该单位；系统内部保存标准单位代码，页面只显示中文业务单位。</div>
         </el-form-item>
@@ -225,7 +234,7 @@
           <el-form label-width="120px" class="inline-spec-form">
             <el-form-item label="规格名称" required><el-input v-model="inlineSpecForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
             <el-form-item label="采购包装单位" required>
-              <UnitSelect v-model="inlineSpecForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE_QUANTITY" />
+              <UnitSelect v-model="inlineSpecForm.purchasePackageUnit" :factory-id="factoryId" :options="purchaseUnitOptions" usage-scope="PURCHASE_QUANTITY" />
             </el-form-item>
             <el-form-item label="换算系数" required>
               <el-input-number v-model="inlineSpecForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
@@ -310,6 +319,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
 import { get } from '@/api/request';
+import { listSystemUnits, type SystemUnit } from '@/api/systemUnits';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import SupplierProfileCollections from './SupplierProfileCollections.vue';
 import {
@@ -332,6 +342,7 @@ import {
   type SupplierSavePayload,
 } from '@/api/supplierManagement';
 import { displayUnit } from '@/utils/unitPricing';
+import { purchaseUnitSelectionReason, resolvePurchaseUnits } from '@/utils/purchaseUnitContract';
 import {
   supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
 } from './supplierModel';
@@ -354,6 +365,8 @@ const detail = ref<SupplierRecord | null>(null);
 const history = ref<SupplierHistoryViewRow[]>([]);
 const materialRelations = ref<SupplierMaterialRelation[]>([]);
 const materialOptions = ref<Array<{ id: string; name: string; code?: string | null; unit?: string | null }>>([]);
+const allUnitOptions = ref<SystemUnit[]>([]);
+const purchaseUnitOptions = ref<SystemUnit[]>([]);
 const relationDialogVisible = ref(false);
 const relationEditingId = ref('');
 const relationSaving = ref(false);
@@ -382,6 +395,16 @@ const form = reactive<SupplierSavePayload>({
 });
 
 const isActive = computed(() => detail.value ? supplierStatus(detail.value) === 'ACTIVE' : false);
+const relationMaterial = computed(() => materialOptions.value.find((row) => row.id === relationForm.materialTypeId));
+const relationUnitResolution = computed(() => resolvePurchaseUnits(
+  relationMaterial.value?.unit,
+  allUnitOptions.value,
+  purchaseUnitOptions.value,
+));
+const relationPurchaseUnitOptions = computed(() => relationUnitResolution.value.compatibleUnits);
+const relationUnitReason = computed(() => (relationForm.materialTypeId
+  ? purchaseUnitSelectionReason(relationForm.purchaseUnit, relationUnitResolution.value)
+  : ''));
 const dirty = computed(() => editing.value && JSON.stringify(normalizeSupplierPayload(form)) !== originalForm.value);
 
 watch(() => props.modelValue, (open) => {
@@ -501,11 +524,20 @@ function resetState(): void {
 }
 
 async function ensureMaterialOptions(): Promise<void> {
-  if (materialOptions.value.length) return;
-  const response = await get<Array<{ id: string; name: string; code?: string | null; unit?: string | null }>>(
-    `/${props.factoryId}/raw-material-types/active`,
-  );
-  materialOptions.value = response.data ?? [];
+  const [materials, allUnits, purchaseUnits] = await Promise.all([
+    materialOptions.value.length
+      ? Promise.resolve(null)
+      : get<Array<{ id: string; name: string; code?: string | null; unit?: string | null }>>(
+        `/${props.factoryId}/raw-material-types/active`,
+      ),
+    allUnitOptions.value.length ? Promise.resolve(null) : listSystemUnits(props.factoryId),
+    purchaseUnitOptions.value.length
+      ? Promise.resolve(null)
+      : listSystemUnits(props.factoryId, 'PURCHASE_QUANTITY'),
+  ]);
+  if (materials) materialOptions.value = materials.data ?? [];
+  if (allUnits) allUnitOptions.value = allUnits.data ?? [];
+  if (purchaseUnits) purchaseUnitOptions.value = purchaseUnits.data ?? [];
 }
 
 async function openRelationCreate(): Promise<void> {
@@ -526,9 +558,10 @@ function resetInlineSpecForm(): void {
 }
 
 function onRelationMaterialChange(materialTypeId: string): void {
-  if (relationEditingId.value || relationForm.purchaseUnit) return;
+  if (relationEditingId.value) return;
   const material = materialOptions.value.find((row) => row.id === materialTypeId);
-  relationForm.purchaseUnit = material?.unit || '';
+  const resolution = resolvePurchaseUnits(material?.unit, allUnitOptions.value, purchaseUnitOptions.value);
+  relationForm.purchaseUnit = resolution.defaultUnit;
 }
 
 async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
@@ -556,7 +589,7 @@ async function saveRelation(): Promise<void> {
   if (!detail.value) return;
   if (!isActive.value) return void ElMessage.warning('供应商已暂停合作，不能保存供应原料关系');
   if (!relationForm.materialTypeId) return void ElMessage.warning('请选择物料');
-  if (!relationForm.purchaseUnit.trim()) return void ElMessage.warning('请输入采购单位');
+  if (relationUnitReason.value) return void ElMessage.warning(relationUnitReason.value);
   if (!relationForm.currency.trim()) return void ElMessage.warning('请输入币种');
   const wantsInlineSpec = !relationEditingId.value && inlineSpecEnabled.value;
   if (wantsInlineSpec) {

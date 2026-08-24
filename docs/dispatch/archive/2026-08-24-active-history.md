@@ -57,3 +57,10 @@
 - **发现与修复**：最新 exact-main 发布日志暴露 `deploy-backend.sh` 的双引号 SSH 远端安装字符串中含反引号注释；Bash 在发送 SSH 前执行了本机 `ls -t` 命令替换，把仓库文件名拼进远端脚本。删除注释中的命令替换语法，未修改任何发布行为、远端命令、业务代码或生产配置。
 - **回归门禁**：新增静态测试，扫描双引号 SSH 段内的注释反引号并 fail closed；`bash -n scripts/deploy/deploy-backend.sh`、新契约测试和 `git diff --check` 均通过。
 - **状态边界**：本修复只完成实现与目标验证，未触发新的生产部署；scope 已从 ACTIVE 移除并释放。后续 PR/远端合并须以独立回执为准。
+
+## `BUG-F006-UNIT-DIMENSION-SCOPE-001` — `review complete`
+
+- **生产复现与根因**：吸收 `E2E-F006-PROC-REL-20260824083721`。供应关系页面曾直接继承 POF 热缩膜 BC013 的库存单位 `m`，而 `V20261028_91` 与 `UnitContractService` 把 LENGTH 仅限于规格展示，导致提交后才返回 `SUPPLIER_MATERIAL_UNIT_SCOPE_INVALID`。失败证据保留，未生成供应关系。
+- **实现**：LENGTH 的库存、采购、BOM 与规格 scope 统一由 `UnitContractService` 和增量 Flyway 目录维护；迁移保留既有自定义 scope。供应商详情与原料侧关系入口均先读取完整目录和 `PURCHASE_QUANTITY` 目录，只自动选择兼容的物料基本单位，UnitSelect 仅展示同量纲直采单位；无合法单位时立即展示完整中文原因，跨量纲包装采购继续要求显式规格换算。
+- **验证与候选制品**：Java 窄门禁 62/62；最终单次 `clean package` 7 个测试类共 81/81，含 m、kg、跨量纲零保存、采购规格、采购价/单位快照、Controller、迁移契约与 Flyway 版本唯一性。真实 PostgreSQL 验证 LENGTH 行增量合并 scope、TIME 行不变。Web 3 files / 14 tests、`vue-tsc -b` 和生产构建通过。统一 build 回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787564299-19798.json` 为 `built`；JAR SHA-256 `7e22a4fce2921e9e4e49bca56e69b24980b5c2a12acdab76691de8437e215fcd` 已仅预上传，未安装、未重启、未切流。
+- **scope 释放**：实现、目标验证、最终审查和候选制品完成，任务已从 ACTIVE 移除并释放 UnitContract、供应关系、UnitSelect、迁移和对应测试 scope。PR/远端合并、生产部署与 F006 Playwright 验收仍是后续独立事实，必须以各自回执为准。

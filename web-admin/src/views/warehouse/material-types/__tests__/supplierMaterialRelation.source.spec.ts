@@ -44,6 +44,19 @@ describe('supplier material bidirectional relation contract', () => {
     expect(supplierSource).not.toContain('<el-input v-model="relationForm.purchaseUnit"');
   });
 
+  it('resolves the material dimension before defaulting or exposing purchase units', () => {
+    for (const source of [materialSource, supplierSource]) {
+      expect(source).toContain("listSystemUnits(");
+      expect(source).toContain("'PURCHASE_QUANTITY'");
+      expect(source).toContain('resolvePurchaseUnits(');
+      expect(source).toContain('purchaseUnitSelectionReason(');
+      expect(source).toContain(':options=');
+      expect(source).toContain('<el-alert');
+    }
+    expect(supplierSource).not.toContain("relationForm.purchaseUnit = material?.unit || ''");
+    expect(materialSource).not.toContain("purchaseUnit: suppliersDialogMaterial.value?.unit || ''");
+  });
+
   it('keeps material reference prices optional and bound to the inventory base unit', () => {
     expect(materialSource).toContain('选填；未知价格请留空');
     expect(materialSource).toContain('displayUnit(form.unit)');

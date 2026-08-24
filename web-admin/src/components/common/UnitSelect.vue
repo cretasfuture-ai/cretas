@@ -22,6 +22,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean;
   usageScope?: string;
   showSymbol?: boolean;
+  options?: SystemUnit[] | null;
 }>(), {
   modelValue: '',
   factoryId: '',
@@ -30,6 +31,7 @@ const props = withDefaults(defineProps<{
   disabled: false,
   usageScope: '',
   showSymbol: true,
+  options: null,
 });
 
 const emit = defineEmits<{
@@ -52,7 +54,8 @@ const form = reactive({
   category: 'COUNT' as SystemUnitCategory,
 });
 
-const activeUnits = computed(() => units.value.filter((unit) => unit.isActive !== false && unit.unitName?.trim()));
+const sourceUnits = computed(() => props.options ?? units.value);
+const activeUnits = computed(() => sourceUnits.value.filter((unit) => unit.isActive !== false && unit.unitName?.trim()));
 const filteredUnits = computed(() => {
   const needle = normalizeUnitIdentity(query.value);
   if (!needle) return activeUnits.value;
@@ -79,6 +82,7 @@ const rules = {
 };
 
 async function loadUnits(): Promise<void> {
+  if (props.options !== null) return;
   if (!props.factoryId) return;
   loading.value = true;
   try {
@@ -183,7 +187,7 @@ async function submitUnit(): Promise<void> {
   }
 }
 
-watch(() => [props.factoryId, props.usageScope], (): void => { void loadUnits(); });
+watch(() => [props.factoryId, props.usageScope, props.options], (): void => { void loadUnits(); });
 onMounted((): void => { void loadUnits(); });
 </script>
 

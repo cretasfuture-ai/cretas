@@ -58,6 +58,21 @@ class SupplierMaterialServiceImplTest {
     }
 
     @Test
+    void createsMetreBasedMaterialRelationWhenPurchaseIsByMetre() {
+        stubOwnedMasterData(material("m", new BigDecimal("11.30")));
+        stubUnits();
+
+        SupplierMaterialRequest request = request("米");
+        request.setDefaultPurchasePrice(new BigDecimal("11.30"));
+        var result = service.create("F006", "sup", request);
+
+        assertThat(result.getPurchaseUnit()).isEqualTo("m");
+        assertThat(result.getEffectivePurchasePrice()).isEqualByComparingTo("11.30");
+        assertThat(result.getEffectivePriceUnit()).isEqualTo("m");
+        verify(repository).saveAndFlush(any(SupplierMaterial.class));
+    }
+
+    @Test
     void fallsBackToMaterialReferencePriceWithSafeMassConversion() {
         stubOwnedMasterData(material("kg", new BigDecimal("10.00")));
         stubUnits();
@@ -88,6 +103,17 @@ class SupplierMaterialServiceImplTest {
         assertThatThrownBy(() -> service.create("F006", "sup", request("case")))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("采购包装规格");
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void rejectsCrossDimensionPurchaseUnitWithoutPartialWrite() {
+        stubOwnedMasterData(material("kg", new BigDecimal("10")));
+        stubUnits();
+
+        assertThatThrownBy(() -> service.create("F006", "sup", request("m")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不兼容");
         verify(repository, never()).saveAndFlush(any());
     }
 
@@ -129,10 +155,11 @@ class SupplierMaterialServiceImplTest {
     private void stubUnits() {
         lenient().when(unitContractService.normalize(eq("F006"), anyString())).thenAnswer(invocation -> {
             String raw = invocation.getArgument(1);
-            String code = raw.equalsIgnoreCase("KG") ? "kg" : raw;
+            String code = raw.equalsIgnoreCase("KG") ? "kg" : raw.equals("米") ? "m" : raw;
             CanonicalUnit unit = switch (code) {
                 case "kg" -> unit("kg", UnitDimension.MASS, "g", "1000");
                 case "g" -> unit("g", UnitDimension.MASS, "g", "1");
+                case "m" -> unit("m", UnitDimension.LENGTH, "m", "1");
                 case "case" -> unit("case", UnitDimension.PACKAGE, "case", "1");
                 case "minute" -> unit("minute", UnitDimension.TIME, "minute", "1");
                 default -> null;
