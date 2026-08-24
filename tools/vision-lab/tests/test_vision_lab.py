@@ -392,32 +392,64 @@ class VisionLabTests(unittest.TestCase):
             (queue / "images").mkdir(parents=True)
             (queue / "annotations-human").mkdir()
             rows = []
-            for index, task in enumerate(("task-a", "task-b", "task-c", "task-d")):
+            # Keep both split buckets represented after the final blurry sample
+            # is explicitly excluded from training.
+            for index, task in enumerate(("task-a", "task-d", "task-e", "task-b")):
                 image = queue / "images" / f"c{index}.jpg"
                 image.write_bytes(f"image-{index}".encode())
                 rows.append({
                     "crop_id": f"c{index}", "image": str(image),
                     "image_sha256": vision_lab.sha256_file(image), "source_task_id": task,
                 })
-                (queue / "annotations-human" / f"c{index}.json").write_text(json.dumps({
+                annotation = {
                     "reviewed": True, "unjudgeable": False,
                     "boxes": [
                         {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
                         {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
                     ],
-                }), encoding="utf-8")
+                }
+                if index == 3:
+                    annotation |= {
+                        "training_eligible": False,
+                        "training_exclusion_reason": "too blurry for stable boxes",
+                    }
+                (queue / "annotations-human" / f"c{index}.json").write_text(
+                    json.dumps(annotation), encoding="utf-8",
+                )
             (queue / "manifest.json").write_text(json.dumps({"version": "q", "rows": rows}), encoding="utf-8")
             cfg = config(root / "runtime")
             cfg["queue_roots"] = [str(queue)]
             dataset = vision_lab.build_dataset(cfg)
             self.assertTrue(dataset["task_level_split"])
             self.assertFalse(dataset["protected_holdout_included"])
-            self.assertEqual(dataset["counts"]["white_boxes"], 4)
-            self.assertEqual(dataset["counts"]["color_boxes"], 4)
+            self.assertEqual(dataset["counts"]["white_boxes"], 3)
+            self.assertEqual(dataset["counts"]["color_boxes"], 3)
+            self.assertEqual(dataset["training_exclusions"]["total"], 1)
+            self.assertEqual(
+                dataset["training_exclusions"]["reasons"],
+                {"too blurry for stable boxes": 1},
+            )
+            self.assertNotIn("c3", {row["crop_id"] for row in dataset["rows"]})
             by_task = {}
             for row in dataset["rows"]:
                 by_task.setdefault(row["task_id"], set()).add(row["split"])
             self.assertTrue(all(len(splits) == 1 for splits in by_task.values()))
+
+            excluded_annotation = queue / "annotations-human" / "c3.json"
+            changed = json.loads(excluded_annotation.read_text(encoding="utf-8"))
+            changed["training_exclusion_reason"] = "operator clarified blur severity"
+            excluded_annotation.write_text(json.dumps(changed), encoding="utf-8")
+            changed_manifest = json.loads((queue / "manifest.json").read_text(encoding="utf-8"))
+            changed_manifest["rows"][3]["training_eligible"] = False
+            (queue / "manifest.json").write_text(
+                json.dumps(changed_manifest), encoding="utf-8",
+            )
+            rebuilt = vision_lab.build_dataset(cfg)
+            self.assertEqual(rebuilt["dataset_id"], dataset["dataset_id"])
+            self.assertEqual(
+                rebuilt["training_exclusions"]["reasons"],
+                {"operator clarified blur severity": 1},
+            )
 
     def test_promotion_gate_fails_closed_on_recall_regression(self):
         with tempfile.TemporaryDirectory() as temporary:

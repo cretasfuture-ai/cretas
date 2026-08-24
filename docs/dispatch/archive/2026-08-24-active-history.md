@@ -64,3 +64,11 @@
 - **实现**：LENGTH 的库存、采购、BOM 与规格 scope 统一由 `UnitContractService` 和增量 Flyway 目录维护；迁移保留既有自定义 scope。供应商详情与原料侧关系入口均先读取完整目录和 `PURCHASE_QUANTITY` 目录，只自动选择兼容的物料基本单位，UnitSelect 仅展示同量纲直采单位；无合法单位时立即展示完整中文原因，跨量纲包装采购继续要求显式规格换算。
 - **验证与候选制品**：Java 窄门禁 62/62；最终单次 `clean package` 7 个测试类共 81/81，含 m、kg、跨量纲零保存、采购规格、采购价/单位快照、Controller、迁移契约与 Flyway 版本唯一性。真实 PostgreSQL 验证 LENGTH 行增量合并 scope、TIME 行不变。Web 3 files / 14 tests、`vue-tsc -b` 和生产构建通过。统一 build 回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787564299-19798.json` 为 `built`；JAR SHA-256 `7e22a4fce2921e9e4e49bca56e69b24980b5c2a12acdab76691de8437e215fcd` 已仅预上传，未安装、未重启、未切流。
 - **scope 释放**：实现、目标验证、最终审查和候选制品完成，任务已从 ACTIVE 移除并释放 UnitContract、供应关系、UnitSelect、迁移和对应测试 scope。PR/远端合并、生产部署与 F006 Playwright 验收仍是后续独立事实，必须以各自回执为准。
+
+## `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824` — `review complete`
+
+- **审核与队列**：平台管理员与六扇门工厂超级管理员/QC 的审核入口均收敛为模型筛出的可疑框，不要求全局标注；缺标、重复/误标和不确定均进入人工裁决。队列 glob 只接受非空 `rows` 人工标注 manifest，评估 `records` 不再误入训练队列。前两批实现分别由 PR #35、#36 进入 main。
+- **运行时核销**：Windows 计划任务已从旧 dirty detached worktree 迁到 `C:\Users\Steve\cretas-vision-main-v2` 的 clean exact-main 和外部配置，真实运行 LastResult=0；本轮 300 张历史正常图只筛出 1 个可疑框，生产读取 1、生产业务写入 0、原图修改 0。
+- **人工真值与训练裁决**：用户确认唯一待审样本两个标签都存在，但画面过于模糊。该真值已保存，样本显式 `training_eligible=false`，仅保留作低清误报回归观察，不进入训练。有效训练集仍为 521 张（train 422 / val 99，白框 593 / 彩框 631）；相对上轮训练集逐行身份和全部图片/标签文件哈希差异均为 0，因此未启动训练、未生成候选、未替换生产 v8。
+- **实现与验证**：数据集构建支持人工显式排除，并以实际入训行生成稳定 dataset ID；排除原因和 source manifest 继续进入审计回执，后续仅新增/修改排除样本不会触发无意义微调。VisionLab 目标测试 25/25 与 `git diff --check` 通过。
+- **scope 释放**：审核 UI、VisionLab 队列/训练、v8 pipeline 与对应测试 scope 已从 ACTIVE 释放。最终排除实现的 PR/远端合并、计划任务 exact-main 刷新和运行时 dataset baseline 迁移仍须以各自回执为准；模型训练与部署保持关闭。
