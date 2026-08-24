@@ -5,8 +5,6 @@
 
 ## 在飞任务
 
-- `SOP-RAG-SYNC-20260824` — `in-progress` — Owner: `/root` — Base SHA `2b29eaea784d6f45af34093c1fde7d313a5ed151`。同步本次已合入 main 的工厂仓管四入口/真实采购收货、销售母单→子发运单与自动开票待办、Workflow 自动分叉和活动生产引用门禁；餐饮独立判定为 no-op，仅回归注册 source 与真实回答。验收：`python -m pytest backend/python/tests/test_food_kb_manual_chat_sop_contract.py -q`、`python -m py_compile backend/python/food_kb/services/manual_chat.py backend/python/food_kb/services/manual_ingester.py`、HTML/内联 JavaScript parse、`git diff --check`、三页哈希/生产健康/RAG `.NEW=0` 与工厂 3+、餐饮 1+ 真实问答。严格 `NOT_DEPLOYED`，仅合入 `origin/main` 后发布。
-
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
 
@@ -37,8 +35,6 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
-
-- `SOP-RAG-SYNC-20260824`：仅 `web-admin/public/aiassist.html` 工厂 tab、`docs/manual/F006-production-full-chain-manual-test-sop.html`、`backend/python/food_kb/data/f006_production_sop.md`、必要的 `backend/python/food_kb/api/manual_chat.py` 确定性回答合同、`backend/python/tests/test_food_kb_manual_chat_sop_contract.py`、`docs/dispatch/ACTIVE.md` 与当日归档；餐饮 tab、`/cysop/` 和三个餐饮 source 只读，不改 Java/RN/Web 业务实现，不写任何生产 ERP 数据。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 

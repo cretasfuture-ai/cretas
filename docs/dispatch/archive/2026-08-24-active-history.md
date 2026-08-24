@@ -29,3 +29,11 @@
 - **F006 写入型 E2E**：每次切换角色均使用新的浏览器上下文重新登录并证明 `factoryId=F006`。采购单 `PO-20260824-0001` 完成收货并显示 `COMPLETED/已收货`，AP `1784106f-1118-493c-979c-835163183206` 已核销为 `PAID`；销售单 `SO-20260824-0003` 完成生产、结单、RN 成品入库与 RN 质检，生产结单 `6505ded4-373a-4f7c-a251-487058a2d709` 为 `POSTED`、质检 `f0ed1469-fecc-420f-b58a-18ae6d4656bf` 为 `PASS`。销售 Web 一次性全量发货自动生成唯一子单 `DLV-20260824-4489-01`，FIFO 批次分配后由仓管 RN 确认为 `SHIPPED`；系统随后仅生成 1 张自动开票记录 `INV-20260824-ABD9413F80`，已审核并开具为 `ISSUED`，收款 `PAY-20260824-0016` 已确认为 `VERIFIED`。生产数据库最终回读采购单、销售单均为 `COMPLETED`，自动发票计数精确为 1。
 - **数据收尾**：两张无可生产/脚本不兼容的失败销售草稿、其一失败生产计划/批次及对应 2 条审批实例和 1 条生产 Workflow 实例共 7 条记录已按 F006 + 精确实体 ID 做可恢复软删除，回读剩余 0。成功的采购、库存、生产、发货、发票与收付款凭证属于本次完整审计链，按财务/库存可追溯要求保留，不做破坏性回滚。
 - **scope 释放**：父任务已从 ACTIVE 移除；仓储 RN、采购/销售/财务、Workflow、迁移、测试和发布 scope 全部释放。实现、测试、commit、合并、部署与上述生产验收均已分别取得证据。
+
+## `SOP-RAG-SYNC-20260824` — `merged`
+
+- **独立判定**：从上次运行时间有界审计新公司仓库的 14 个 `origin/main` commit；旧基线 SHA 与当前远端无共同祖先。工厂线因仓管四入口/真实采购收货、销售母单与子发运、自动开票、Workflow 自动分叉和活动生产门禁发生语义变化；餐饮 tab、三份已注册文档和 MANUAL_SOURCES 均无变化，独立判定为 no-op。
+- **实现与合并**：PR #20 由候选 `401c5defcae05a2d3ea1b4fa6b7dbde98c64ef8e` squash merge 到 `897a55cf83ba8db86812729cb6e1be53dd55cabb`。工厂在线 SOP、唯一 F006 KB source、共享 AI Assist 的工厂建议和确定性回答合同完成同步；餐饮文件未修改。目标 pytest 132 项、Python compile、5 个 HTML parse、2 个内联 JavaScript parse、diff check、Secret gate 和 Web Admin gate 均通过。
+- **生产同步**：Python 从 clean exact main 发布并于 `2026-08-24 09:43:44 CST` 启动；migration dry-run 为 142 已应用、0 待执行。共享 Web 通过可信 manifest 原子发布，回滚点 `web-admin.bak.20260824_094612`；工厂 SOP 回滚点 `/www/wwwroot/lsmsop/index.html.bak.20260824_094711`。AI Assist / 工厂 SOP / 餐饮 SOP 线上与仓库 SHA-256 分别为 `520de2a90bcca729fa7b560b2b66556bc3bde3483dee8cfea6acdb6d1ad565a4`、`a1bfc87c7a8b80a4032a981dfe4f272c252be515d84e64ae50fca49151afa8a8`、`e9e970dda61a87a85701ae9b14ef216b4e2c3e3a44e5b9f92d549e8e37488acd`。
+- **RAG 与回答验收**：仅 `f006-production-full-chain-sop.md` 原子重建为 76 块（原 75），`.NEW=0`、非 canonical 工厂块为 0；餐饮三 source 保持 87 / 250 / 176 块及原创建时间。工厂 6 个真实问答覆盖固定 BOM 顺序、RN、销售/发运/开票和 Workflow，全部只引用 F006 source；餐饮固定毛利与导览 canary 2/2 通过且只引用餐饮注册 source。Python、Embedding、PostgreSQL、Redis 健康，生产 ERP 业务写入为 0。
+- **scope 释放**：任务已从 ACTIVE 移除；AI Assist 工厂 tab、工厂 SOP、F006 KB、回答合同与测试 scope 全部释放。分支和 worktree 按规则保留，未清理。
