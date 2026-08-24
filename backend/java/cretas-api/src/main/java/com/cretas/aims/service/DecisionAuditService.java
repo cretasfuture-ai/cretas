@@ -79,6 +79,24 @@ public interface DecisionAuditService {
     );
 
     /**
+     * 记录待审批业务动作，并保留审批通过后需要执行的精确动作代码。
+     */
+    DecisionAuditLog logPendingApproval(
+            String factoryId,
+            String entityType,
+            String entityId,
+            Map<String, Object> inputContext,
+            String actionCode,
+            String reason,
+            Long executorId,
+            String executorName,
+            String executorRole,
+            String ruleConfigId,
+            Integer ruleConfigVersion,
+            String ruleConfigName
+    );
+
+    /**
      * 记录审批决策
      */
     DecisionAuditLog logApproval(

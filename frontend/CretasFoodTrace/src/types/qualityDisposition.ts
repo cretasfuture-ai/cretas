@@ -256,8 +256,7 @@ export function getActionIcon(action: DispositionAction): string {
  * 判断动作是否需要审批
  */
 export function requiresApproval(action: DispositionAction): boolean {
-  return action === DispositionAction.SPECIAL_APPROVAL ||
-         action === DispositionAction.SCRAP;
+  return action !== DispositionAction.RELEASE;
 }
 
 /**

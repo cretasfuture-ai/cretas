@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -65,7 +66,7 @@ class QualityDispositionRuleServiceInventoryHookTest {
         User executor = mock(User.class);
         lenient().when(executor.getFullName()).thenReturn("张质检");
         lenient().when(executor.getRole()).thenReturn("quality_manager");
-        when(userRepository.findById(9L)).thenReturn(Optional.of(executor));
+        lenient().when(userRepository.findById(9L)).thenReturn(Optional.of(executor));
     }
 
     @Test
@@ -91,12 +92,62 @@ class QualityDispositionRuleServiceInventoryHookTest {
                 .thenReturn(true);
         when(approvalChainService.findMatchingConfig(eq(FACTORY_ID), eq(DecisionType.QUALITY_EXCEPTION), anyMap()))
                 .thenReturn(Optional.empty());
-        when(decisionAuditService.logForceInsertWithRuleConfig(anyString(), anyString(), anyString(), anyMap(),
-                anyString(), anyBoolean(), anyLong(), anyString(), anyString(), any(), any(), any()))
+        when(decisionAuditService.logPendingApproval(anyString(), anyString(), anyString(), anyMap(),
+                anyString(), anyString(), anyLong(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(DecisionAuditLog.builder().id("al-2").build());
 
         service.executeDisposition(FACTORY_ID, inspection, DispositionAction.RELEASE, 9L, "低合格率放行申请");
 
         verify(dispositionInventoryService, never()).applyDisposition(any(), any());
+    }
+
+    @Test
+    @DisplayName("HOOK-03: 返工静态要求审批，即使工厂未配置异常审批也不能直接执行")
+    void reworkAlwaysInitiatesApproval() {
+        when(approvalChainService.findMatchingConfig(eq(FACTORY_ID), eq(DecisionType.QUALITY_EXCEPTION), anyMap()))
+                .thenReturn(Optional.empty());
+        when(decisionAuditService.logPendingApproval(anyString(), anyString(), anyString(), anyMap(),
+                anyString(), anyString(), anyLong(), anyString(), anyString(), any(), any(), any()))
+                .thenReturn(DecisionAuditLog.builder().id("al-rework-pending").build());
+
+        var result = service.executeDisposition(
+                FACTORY_ID, inspection, DispositionAction.REWORK, 9L, "申请返工");
+
+        assertTrue(result.isApprovalInitiated());
+        assertEquals("al-rework-pending", result.getApprovalRequestId());
+        assertEquals("PENDING_APPROVAL", result.getNewBatchStatus());
+        verify(decisionAuditService).logPendingApproval(
+                eq(FACTORY_ID), eq("QualityInspection"), eq(inspection.getId()), anyMap(),
+                eq("REWORK"), eq("申请返工"), eq(9L), anyString(), anyString(), any(), any(), any());
+        verify(dispositionInventoryService, never()).applyDisposition(any(), any());
+        verify(approvalChainService, never()).requiresApproval(
+                eq(FACTORY_ID), eq(DecisionType.QUALITY_EXCEPTION), anyMap());
+    }
+
+    @Test
+    @DisplayName("HOOK-04: 审批通过后的返工只执行一次库存桥接，不再次进入审批")
+    void approvedReworkExecutesBridgeOnce() {
+        when(decisionAuditService.logRuleExecution(anyString(), anyString(), anyString(), anyMap(), anyMap(),
+                anyList(), anyString(), anyLong(), anyString(), anyString()))
+                .thenReturn(DecisionAuditLog.builder().id("al-rework-approved").build());
+
+        var result = service.executeApprovedDisposition(
+                FACTORY_ID, inspection, DispositionAction.REWORK, 9L, "返工审批通过");
+
+        assertFalse(result.isApprovalInitiated());
+        assertEquals("REWORK_REQUIRED", result.getNewBatchStatus());
+        verify(dispositionInventoryService, times(1)).applyDisposition(inspection, DispositionAction.REWORK);
+        verifyNoInteractions(approvalChainService);
+    }
+
+    @Test
+    @DisplayName("HOOK-05: 动作审批真值由枚举单一来源提供")
+    void actionApprovalPolicyIsSingleSource() {
+        assertFalse(DispositionAction.RELEASE.requiresApproval());
+        assertNull(DispositionAction.RELEASE.getApprovalLevel());
+        assertTrue(DispositionAction.REWORK.requiresApproval());
+        assertEquals("SUPERVISOR", DispositionAction.REWORK.getApprovalLevel());
+        assertTrue(DispositionAction.SCRAP.requiresApproval());
+        assertEquals("QUALITY_HEAD", DispositionAction.SCRAP.getApprovalLevel());
     }
 }

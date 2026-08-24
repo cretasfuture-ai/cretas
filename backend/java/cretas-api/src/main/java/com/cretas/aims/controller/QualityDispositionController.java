@@ -2,10 +2,13 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.annotation.RequireModule;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.quality.*;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.DecisionAuditLog;
 import com.cretas.aims.exception.EntityNotFoundException;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.repository.DecisionAuditLogRepository;
 import com.cretas.aims.service.QualityDispositionRuleService;
@@ -28,8 +31,7 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import com.cretas.aims.annotation.RequireModule;
-import com.cretas.aims.exception.BusinessException;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 质检处置规则控制器
@@ -83,6 +85,7 @@ public class QualityDispositionController {
         // 查找质检记录
         QualityInspection inspection = qualityInspectionRepository.findById(qualityResult.getInspectionId())
                 .orElseThrow(() -> new EntityNotFoundException("Quality inspection", qualityResult.getInspectionId()));
+        validateInspectionScope(factoryId, qualityResult.getProductionBatchId(), inspection);
 
         // 评估处置
         DispositionResult result = qualityDispositionRuleService.evaluateDisposition(factoryId, inspection);
@@ -103,7 +106,7 @@ public class QualityDispositionController {
                         .map(action -> DispositionEvaluationDTO.AlternativeAction.builder()
                                 .action(action.name())
                                 .description(action.getDescription())
-                                .requiresApproval(true)
+                                .requiresApproval(action.requiresApproval())
                                 .build())
                         .collect(Collectors.toList()))
                 .inspectionSummary(DispositionEvaluationDTO.InspectionSummary.builder()
@@ -162,17 +165,24 @@ public class QualityDispositionController {
     @RequirePermission({"quality:read_write"})
     @RequireModule("quality_inspection")
     @PostMapping("/execute")
+    @Transactional
     @Operation(summary = "执行处置动作", description = "执行质检处置动作，集成状态机门禁")
     public ApiResponse<DispositionResultDTO> executeDisposition(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
-            @Valid @RequestBody @Parameter(description = "执行处置请求") ExecuteDispositionRequest request) {
+            @Valid @RequestBody @Parameter(description = "执行处置请求") ExecuteDispositionRequest request,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
 
         log.info("执行质检处置 - factoryId={}, batchId={}, action={}",
                 factoryId, request.getBatchId(), request.getActionCode());
 
+        if (!Objects.equals(request.getExecutorId(), authenticatedUserId)) {
+            throw new BusinessException(400, "处置执行人必须与当前登录用户一致");
+        }
+
         // 查找质检记录
         QualityInspection inspection = qualityInspectionRepository.findById(request.getInspectionId())
                 .orElseThrow(() -> new EntityNotFoundException("Quality inspection", request.getInspectionId()));
+        validateInspectionScope(factoryId, request.getBatchId(), inspection);
 
         // 解析处置动作
         DispositionAction action;
@@ -194,7 +204,7 @@ public class QualityDispositionController {
                 factoryId,
                 inspection,
                 action,
-                request.getExecutorId(),
+                authenticatedUserId,
                 reason
         );
 
@@ -490,26 +500,43 @@ public class QualityDispositionController {
     @RequirePermission({"quality:read_write"})
     @RequireModule("quality_inspection")
     @PostMapping("/apply")
+    @Transactional
     @Operation(summary = "申请处置", description = "提交质检处置申请")
     public ApiResponse<DispositionApplicationDTO> applyDisposition(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
-            @Valid @RequestBody @Parameter(description = "处置申请请求") DispositionApplyRequest request) {
+            @Valid @RequestBody @Parameter(description = "处置申请请求") DispositionApplyRequest request,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
 
         log.info("申请处置 - factoryId={}, batchId={}, action={}",
                 factoryId, request.getBatchId(), request.getActionCode());
 
-        // 获取审批级别
-        String approvalLevel = getApprovalLevelForAction(request.getActionCode());
+        if (!Objects.equals(request.getApplicantId(), authenticatedUserId)) {
+            throw new BusinessException(400, "处置申请人必须与当前登录用户一致");
+        }
+        QualityInspection scopedInspection = qualityInspectionRepository.findById(request.getInspectionId())
+                .orElseThrow(() -> new EntityNotFoundException("Quality inspection", request.getInspectionId()));
+        validateInspectionScope(factoryId, request.getBatchId(), scopedInspection);
+
+        DispositionAction requestedAction;
+        try {
+            requestedAction = DispositionAction.valueOf(request.getActionCode());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "无效的处置动作: " + request.getActionCode());
+        }
+        if (!requestedAction.requiresApproval()) {
+            throw new BusinessException(400, "该处置动作无需审批，请直接执行");
+        }
+        String approvalLevel = requestedAction.getApprovalLevel();
 
         // 创建审计日志记录申请
         DecisionAuditLog auditLog = DecisionAuditLog.builder()
                 .factoryId(factoryId)
-                .entityType("QualityDisposition")
+                .entityType("QualityInspection")
                 .entityId(request.getInspectionId())
                 .decisionType(DecisionAuditLog.DecisionType.APPROVAL)
-                .decisionMade(request.getActionCode())
+                .decisionMade(requestedAction.name())
                 .reason(request.getReason())
-                .executorId(request.getApplicantId())
+                .executorId(authenticatedUserId)
                 .executorName(request.getApplicantName())
                 .executionMode(DecisionAuditLog.ExecutionMode.MANUAL)
                 .requiresApproval(true)
@@ -557,7 +584,7 @@ public class QualityDispositionController {
                 log.warn("无法解析 inspectionId: {}", request.getInspectionId());
             }
             pushNotificationService.sendQualityNotification(
-                    request.getApplicantId(), // 暂时发给申请人，实际应发给审批人
+                    authenticatedUserId, // 暂时发给申请人，实际应发给审批人
                     inspectionIdLong,
                     request.getActionCode(),
                     String.format("批次 %d 的质检处置申请需要审批", request.getBatchId())
@@ -576,7 +603,7 @@ public class QualityDispositionController {
                 .actionCode(request.getActionCode())
                 .status("PENDING_APPROVAL")
                 .approvalLevel(approvalLevel)
-                .applicantId(request.getApplicantId())
+                .applicantId(authenticatedUserId)
                 .applicantName(request.getApplicantName())
                 .createdAt(auditLog.getCreatedAt())
                 .message("处置申请已提交，等待审批")
@@ -591,13 +618,16 @@ public class QualityDispositionController {
      * 审批处置申请
      */
     @RequirePermission({"quality:read_write"})
+    @RequireRole({"quality_manager", "factory_super_admin", "platform_admin", "permission_admin"})
     @RequireModule("quality_inspection")
     @PostMapping("/{id}/approve")
+    @Transactional
     @Operation(summary = "审批处置", description = "审批或拒绝质检处置申请")
     public ApiResponse<DispositionApprovalResultDTO> approveDisposition(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "处置申请ID", example = "a1b2c3d4-e5f6-7890-abcd-ef1234567890") String id,
-            @Valid @RequestBody @Parameter(description = "审批请求") DispositionApproveRequest request) {
+            @Valid @RequestBody @Parameter(description = "审批请求") DispositionApproveRequest request,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
 
         log.info("审批处置 - factoryId={}, id={}, approved={}", factoryId, id, request.getApproved());
 
@@ -609,12 +639,22 @@ public class QualityDispositionController {
         if (!auditLog.getFactoryId().equals(factoryId)) {
             throw new BusinessException(400, "无权审批此处置申请");
         }
+        if (!Boolean.TRUE.equals(auditLog.getRequiresApproval())
+                || auditLog.getApprovalStatus() != DecisionAuditLog.ApprovalStatus.PENDING) {
+            throw new BusinessException(409, "该处置申请已处理或不是待审批状态");
+        }
+        if (!Objects.equals(request.getApproverId(), authenticatedUserId)) {
+            throw new BusinessException(400, "审批人必须与当前登录用户一致");
+        }
+        if (Objects.equals(auditLog.getExecutorId(), authenticatedUserId)) {
+            throw new BusinessException(403, "申请人与审批人不能为同一用户");
+        }
 
         // 更新审批状态
         auditLog.setApprovalStatus(request.getApproved()
                 ? DecisionAuditLog.ApprovalStatus.APPROVED
                 : DecisionAuditLog.ApprovalStatus.REJECTED);
-        auditLog.setApproverId(request.getApproverId());
+        auditLog.setApproverId(authenticatedUserId);
         auditLog.setApproverName(request.getApproverName());
         auditLog.setApprovalComment(request.getComment());
         auditLog.setApprovedAt(LocalDateTime.now());
@@ -633,26 +673,27 @@ public class QualityDispositionController {
         String newBatchStatus = null;
 
         // 如果批准，执行处置动作
-        if (request.getApproved() && auditLog.getEntityId() != null) {
+        if (request.getApproved()) {
             try {
-                QualityInspection inspection = qualityInspectionRepository.findById(auditLog.getEntityId())
-                        .orElse(null);
-                if (inspection != null) {
-                    productionBatchId = inspection.getProductionBatchId();
-                    DispositionAction action = DispositionAction.valueOf(auditLog.getDecisionMade());
-                    var executionResult = qualityDispositionRuleService.executeDisposition(
-                            factoryId, inspection, action,
-                            request.getApproverId(),
-                            "审批通过后执行: " + request.getComment()
-                    );
-                    executionStatus = "EXECUTED";
-                    newBatchStatus = executionResult.getNewBatchStatus();
-                }
+                String inspectionId = auditLog.getEntityId();
+                QualityInspection inspection = qualityInspectionRepository.findById(inspectionId)
+                        .orElseThrow(() -> new EntityNotFoundException(
+                                "Quality inspection", inspectionId));
+                validateInspectionScope(factoryId, inspection.getProductionBatchId(), inspection);
+                productionBatchId = inspection.getProductionBatchId();
+                DispositionAction action = DispositionAction.valueOf(auditLog.getDecisionMade());
+                var executionResult = qualityDispositionRuleService.executeApprovedDisposition(
+                        factoryId, inspection, action,
+                        authenticatedUserId,
+                        "审批通过后执行: " + request.getComment()
+                );
+                executionStatus = "EXECUTED";
+                newBatchStatus = executionResult.getNewBatchStatus();
             } catch (BusinessException be) {
                 throw be;
             } catch (Exception e) {
-                log.warn("执行处置动作失败", e);
-                executionStatus = "EXECUTION_FAILED";
+                log.error("审批通过后执行处置失败，回滚审批", e);
+                throw new BusinessException(500, "审批执行失败，处置申请未生效");
             }
         }
 
@@ -714,7 +755,7 @@ public class QualityDispositionController {
                 .applicationId(id)
                 .batchId(productionBatchId)
                 .approved(request.getApproved())
-                .approverId(request.getApproverId())
+                .approverId(authenticatedUserId)
                 .approverName(request.getApproverName())
                 .comment(request.getComment())
                 .approvedAt(auditLog.getApprovedAt())
@@ -744,6 +785,18 @@ public class QualityDispositionController {
 
     // ==================== 私有辅助方法 ====================
 
+    private void validateInspectionScope(
+            String factoryId,
+            Long requestedBatchId,
+            QualityInspection inspection) {
+        if (!Objects.equals(factoryId, inspection.getFactoryId())) {
+            throw new BusinessException(400, "质检记录不属于当前工厂");
+        }
+        if (!Objects.equals(requestedBatchId, inspection.getProductionBatchId())) {
+            throw new BusinessException(400, "质检记录与生产批次不匹配");
+        }
+    }
+
     /**
      * 获取动作完整描述
      */
@@ -770,40 +823,14 @@ public class QualityDispositionController {
      * 判断动作是否需要审批
      */
     private Boolean getActionRequiresApproval(DispositionAction action) {
-        switch (action) {
-            case RELEASE:
-                return false;
-            case CONDITIONAL_RELEASE:
-            case REWORK:
-                return true;
-            case SCRAP:
-            case SPECIAL_APPROVAL:
-            case HOLD:
-                return true;
-            default:
-                return true;
-        }
+        return action.requiresApproval();
     }
 
     /**
      * 获取审批级别
      */
     private String getActionApprovalLevel(DispositionAction action) {
-        switch (action) {
-            case RELEASE:
-                return null;
-            case CONDITIONAL_RELEASE:
-            case REWORK:
-                return "SUPERVISOR";
-            case SCRAP:
-                return "QUALITY_HEAD";
-            case SPECIAL_APPROVAL:
-                return "FACTORY_MANAGER";
-            case HOLD:
-                return "MANAGER";
-            default:
-                return "SUPERVISOR";
-        }
+        return action.getApprovalLevel();
     }
 
     /**

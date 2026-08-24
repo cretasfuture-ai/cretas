@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import {
   Card,
   Text,
@@ -58,6 +58,8 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
   const [executing, setExecuting] = useState(false);
   const [evaluation, setEvaluation] = useState<DispositionEvaluation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [executionResult, setExecutionResult] = useState<DispositionResult | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
 
   // 确认对话框状态
   const [confirmDialogVisible, setConfirmDialogVisible] = useState(false);
@@ -101,7 +103,6 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : '加载处置建议失败';
       setError(errorMessage);
-      Alert.alert('错误', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -111,6 +112,7 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
    * 执行处置动作
    */
   const handleExecuteDisposition = async (action: DispositionAction) => {
+    setExecutionError(null);
     setSelectedAction(action);
     setOperatorComment('');
     setConfirmDialogVisible(true);
@@ -139,7 +141,7 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
         request
       );
 
-      Alert.alert('成功', result.message);
+      setExecutionResult(result);
 
       // 回调通知父组件
       if (onDispositionComplete) {
@@ -147,7 +149,7 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : '执行处置失败';
-      Alert.alert('错误', errorMessage);
+      setExecutionError(errorMessage);
     } finally {
       setExecuting(false);
       setSelectedAction(null);
@@ -191,6 +193,10 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
   const { recommendedAction, inspectionSummary, alternativeActions } = evaluation;
   const actionColor = getActionColor(recommendedAction as DispositionAction);
   const actionIcon = getActionIcon(recommendedAction as DispositionAction);
+  const selectedActionRequiresApproval = selectedAction === recommendedAction
+    ? evaluation.requiresApproval
+    : Boolean(alternativeActions?.find((item) => item.action === selectedAction)?.requiresApproval);
+  const actionCompleted = executionResult !== null;
 
   return (
     <>
@@ -227,6 +233,36 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
               </Text>
             </View>
           </Surface>
+
+          {executionResult && (
+            <Surface style={styles.successNotice} accessibilityRole="alert">
+              <MaterialCommunityIcons
+                name={executionResult.status === 'PENDING_APPROVAL' ? 'clock-check-outline' : 'check-circle'}
+                size={24}
+                color="#1B5E20"
+              />
+              <View style={styles.feedbackContent}>
+                <Text style={styles.successTitle}>
+                  {executionResult.status === 'PENDING_APPROVAL' ? '处置申请已提交' : '处置已执行'}
+                </Text>
+                <Text style={styles.feedbackMessage}>{executionResult.message}</Text>
+                <Text style={styles.feedbackMeta}>单据编号：{executionResult.dispositionId}</Text>
+                {executionResult.status === 'PENDING_APPROVAL' && (
+                  <Text style={styles.feedbackMeta}>当前状态：待审批，审批通过前不会变更库存</Text>
+                )}
+              </View>
+            </Surface>
+          )}
+
+          {executionError && (
+            <Surface style={styles.executionErrorNotice} accessibilityRole="alert">
+              <MaterialCommunityIcons name="alert-circle" size={24} color="#B71C1C" />
+              <View style={styles.feedbackContent}>
+                <Text style={styles.executionErrorTitle}>处置提交失败</Text>
+                <Text style={styles.feedbackMessage}>{executionError}</Text>
+              </View>
+            </Surface>
+          )}
 
           {/* 推荐动作 */}
           <Surface style={[styles.recommendedCard, { borderColor: actionColor }]}>
@@ -267,7 +303,7 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
               mode="contained"
               onPress={() => handleExecuteDisposition(recommendedAction as DispositionAction)}
               loading={executing}
-              disabled={executing}
+              disabled={executing || actionCompleted}
               style={[styles.executeButton, { backgroundColor: actionColor }]}
               icon={actionIcon}
             >
@@ -301,6 +337,7 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
                       mode="outlined"
                       onPress={() => handleExecuteDisposition(alt.action as DispositionAction)}
                       style={styles.alternativeButton}
+                      disabled={executing || actionCompleted}
                       compact
                     >
                       选择此方案
@@ -316,10 +353,12 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
       {/* 确认对话框 */}
       <Portal>
         <Dialog visible={confirmDialogVisible} onDismiss={() => setConfirmDialogVisible(false)}>
-          <Dialog.Title>确认执行处置</Dialog.Title>
+          <Dialog.Title>{selectedActionRequiresApproval ? '确认提交审批' : '确认执行处置'}</Dialog.Title>
           <Dialog.Content>
             <Text>
-              确定要执行 {selectedAction && getActionLabel(selectedAction)} 吗？
+              {selectedActionRequiresApproval ? '确定要提交' : '确定要执行'}{' '}
+              {selectedAction && getActionLabel(selectedAction)}
+              {selectedActionRequiresApproval ? '审批吗？审批通过前不会变更库存。' : '吗？'}
             </Text>
             <TextInput
               label="备注 (可选)"
@@ -334,7 +373,7 @@ export const DispositionSuggestion: React.FC<DispositionSuggestionProps> = ({
           <Dialog.Actions>
             <Button onPress={() => setConfirmDialogVisible(false)}>取消</Button>
             <Button onPress={confirmExecuteDisposition} mode="contained">
-              确认
+              {selectedActionRequiresApproval ? '提交审批' : '确认执行'}
             </Button>
           </Dialog.Actions>
         </Dialog>
@@ -394,6 +433,47 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#F5F5F5',
     marginBottom: 16,
+  },
+  successNotice: {
+    flexDirection: 'row',
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#E8F5E9',
+    borderWidth: 1,
+    borderColor: '#66BB6A',
+    marginBottom: 16,
+  },
+  executionErrorNotice: {
+    flexDirection: 'row',
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1,
+    borderColor: '#EF5350',
+    marginBottom: 16,
+  },
+  feedbackContent: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  successTitle: {
+    color: '#1B5E20',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  executionErrorTitle: {
+    color: '#B71C1C',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  feedbackMessage: {
+    color: '#263238',
+    lineHeight: 20,
+  },
+  feedbackMeta: {
+    color: '#455A64',
+    fontSize: 12,
+    marginTop: 4,
   },
   summaryRow: {
     flexDirection: 'row',
