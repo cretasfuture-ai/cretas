@@ -136,6 +136,7 @@ const PHASE_ROLES = {
   'production-interim-summary-leftover': ['f006_production_mgr', 'production_manager', '生产经理'],
   'warehouse-wip-readback': ['f006_warehouse_mgr', 'warehouse_manager', '仓储经理'],
   'production-create-secondary-wip': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-start-secondary-wip': ['f006_production_mgr', 'production_manager', '生产经理'],
   'quality-inspect-batch': ['f006_quality_insp', 'quality_inspector', '质检员'],
   'production-settle': ['f006_production_mgr', 'production_manager', '生产经理'],
   'warehouse-confirm-production-receipt': ['f006_warehouse_mgr', 'warehouse_manager', '仓储经理'],
@@ -1794,6 +1795,89 @@ async function productionCreateSecondaryWip(page, state, report) {
   persistState(state);
 }
 
+async function productionStartSecondaryWip(page, state, report) {
+  const plan = state.entities.secondaryWipPlan;
+  const wip = state.entities.leftoverWip;
+  if (!plan?.id || plan.factoryId !== 'F006' || plan.status !== 'PENDING'
+      || !wip?.intermediateBatchNo || Number(wip.availableQuantity) !== 0.04) {
+    throw new Error('Tracked pending F006 secondary plan and available 0.04kg WIP are required');
+  }
+  report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before secondary-plan start');
+  const availableBefore = await authenticatedGet(page, '/api/mobile/F006/wip/available');
+  const beforeRows = Array.isArray(availableBefore.body?.data) ? availableBefore.body.data : [];
+  const before = beforeRows.filter((row) => String(row.intermediateBatchNo) === String(wip.intermediateBatchNo));
+  if (availableBefore.status >= 400 || before.length !== 1 || Number(before[0].availableQuantity) !== 0.04) {
+    throw new Error(`Secondary WIP pre-readback mismatch: ${availableBefore.status} ${JSON.stringify(before)}`);
+  }
+  report.wipBefore = { statusCode: availableBefore.status, data: before[0] };
+  report.intendedMutations.push({
+    step: '生产经理开始二次加工并原子扣减0.04kg源WIP',
+    method: 'POST',
+    endpoint: `/api/mobile/F006/production-plans/${plan.id}/start`,
+    target: { productionPlanId: plan.id, planNumber: plan.planNumber, wipId: before[0].id },
+    payloadBoundary: { expectedWipDeductKg: 0.04, expectedPlanStatus: 'IN_PROGRESS' },
+  });
+  persistRunningReport(report);
+
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  const search = page.locator('input[placeholder="搜索计划编号/产品名称"]');
+  await search.fill(plan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  let row = page.locator('.el-table__row:visible').filter({ hasText: plan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-start-before.png`), fullPage: false });
+  await row.getByRole('button', { name: '更多', exact: true }).click();
+  const startItem = page.locator('.el-dropdown-menu:visible').getByText('开始二次加工', { exact: true });
+  await startItem.waitFor({ state: 'visible', timeout: 15_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-start-menu.png`), fullPage: false });
+  await startItem.click();
+  const confirmation = page.locator('.el-message-box:visible').filter({ hasText: '确定开始此生产计划' });
+  await confirmation.waitFor({ state: 'visible', timeout: 15_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-start-confirmation.png`), fullPage: false });
+  const [response] = await Promise.all([
+    page.waitForResponse((candidate) => candidate.request().method() === 'POST'
+      && new URL(candidate.url()).pathname === `/api/mobile/F006/production-plans/${plan.id}/start`, { timeout: 45_000 }),
+    confirmation.getByRole('button', { name: '确定', exact: true }).click(),
+  ]);
+  const body = await response.json().catch(() => null);
+  report.actualMutations.push({ method: 'POST', url: response.url(), statusCode: response.status(), response: body });
+  if (response.status() >= 400 || !body?.success) {
+    throw new Error(`Secondary plan start failed: ${response.status()} ${body?.message}`);
+  }
+  await page.getByText('已开始生产', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-start-success.png`), fullPage: false });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await search.fill(plan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  row = page.locator('.el-table__row:visible').filter({ hasText: plan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  const rowText = await row.innerText();
+  if (!rowText.includes('进行中')) throw new Error(`Secondary plan UI status mismatch: ${rowText}`);
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-start-persisted.png`), fullPage: false });
+  await row.locator('button[title="查看生产计划详情"]').click();
+  await page.locator('.el-dialog:visible').filter({ hasText: '计划详情' }).waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({ path: path.join(videoSourceDir, `${assetPrefix}-secondary-start-detail-readback.png`), fullPage: false });
+
+  const planReadback = await authenticatedGet(page, `/api/mobile/F006/production-plans/${plan.id}`);
+  const inventoryReadback = await authenticatedGet(page, '/api/mobile/F006/semi-finished/inventory');
+  const inventoryRows = Array.isArray(inventoryReadback.body?.data) ? inventoryReadback.body.data : [];
+  const after = inventoryRows.filter((item) => String(item.intermediateBatchNo) === String(wip.intermediateBatchNo));
+  report.planReadback = { statusCode: planReadback.status, body: planReadback.body };
+  report.wipAfter = { statusCode: inventoryReadback.status, data: after[0] || null };
+  const planData = planReadback.body?.data || planReadback.body;
+  if (planReadback.status >= 400 || planData?.factoryId !== 'F006' || planData?.status !== 'IN_PROGRESS'
+      || inventoryReadback.status >= 400 || after.length !== 1
+      || Number(after[0].availableQuantity) !== 0 || Number(after[0].consumedQuantity) !== 0.04) {
+    throw new Error(`Secondary start readback mismatch: plan=${planData?.status} wip=${JSON.stringify(after)}`);
+  }
+  state.entities.secondaryWipPlan = { ...plan, status: 'IN_PROGRESS' };
+  state.entities.leftoverWip = after[0];
+  state.mutations.push({ phase, action: 'start-secondary-wip-plan', entityId: plan.id, at: new Date().toISOString() });
+  persistState(state);
+}
+
 async function qualityInspectProductionBatch(page, state, report) {
   const productionBatch = state.entities.productionBatch;
   const secondProcessReport = state.entities.secondProcessReport;
@@ -2738,6 +2822,7 @@ async function main() {
     else if (phase === 'production-interim-summary-leftover') await productionInterimSummary(page, state, report);
     else if (phase === 'warehouse-wip-readback') await warehouseWipReadback(page, state, report);
     else if (phase === 'production-create-secondary-wip') await productionCreateSecondaryWip(page, state, report);
+    else if (phase === 'production-start-secondary-wip') await productionStartSecondaryWip(page, state, report);
     else if (phase === 'quality-inspect-batch') await qualityInspectProductionBatch(page, state, report);
     else if (phase === 'production-settle') await productionSettlePlan(page, state, report);
     else if (phase === 'warehouse-confirm-production-receipt') await warehouseConfirmProductionReceipt(page, state, report);

@@ -51,6 +51,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -96,6 +97,7 @@ class ProductionPlanStartValidationTest {
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private BomYieldSuggestionRepository bomYieldSuggestionRepository;
     @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
+    @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
 
     private ProductionPlanServiceImpl service;
 
@@ -113,6 +115,7 @@ class ProductionPlanStartValidationTest {
         // 2026-08-02: 开工现在会把批次一起建出来 (两个「开工」入口收敛), 所以这条路径
         // 需要工序任务服务。此前 startProduction 只翻状态, 不碰它。
         setField(service, "workProcessTaskService", workProcessTaskService);
+        setField(service, "wipInventoryService", wipInventoryService);
 
         // toDTOWithConversionInfo 的依赖默认 stub — 成功 path 才会用上
         ProductionPlanDTO emptyDto = new ProductionPlanDTO();
@@ -193,6 +196,21 @@ class ProductionPlanStartValidationTest {
         assertNotNull(result);
         assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
         assertNotNull(plan.getStartTime());
+    }
+
+    @Test
+    @DisplayName("二次加工开工把已认证用户写入 WIP 扣减审计")
+    void startProduction_secondaryWip_passesAuthenticatedOperator() {
+        ProductionPlan plan = pendingPlan(new BigDecimal("0.04"));
+        plan.setPlanSourceType("SECONDARY");
+        plan.setSecondarySourceWipId(347L);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.startProduction(FACTORY_ID, PLAN_ID, 77L);
+
+        verify(wipInventoryService).deductForSecondaryPlan(
+                347L, new BigDecimal("0.04"), FACTORY_ID, 77L);
     }
 
     @Test

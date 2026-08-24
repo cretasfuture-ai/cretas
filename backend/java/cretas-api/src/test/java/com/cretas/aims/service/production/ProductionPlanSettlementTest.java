@@ -75,6 +75,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -814,7 +815,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
 
         assertEquals(new BigDecimal("10"), response.getActualFinishedQuantity());
-        assertEquals("box", response.getQuantityUnit());
+        assertEquals("盒", response.getQuantityUnit());
         assertEquals(new BigDecimal("10"), plan.getActualQuantity());
     }
 
@@ -836,7 +837,7 @@ class ProductionPlanSettlementTest {
 
         ProductionSettlementResponse response = service.getProductionSettlement(FACTORY_ID, PLAN_ID);
 
-        assertEquals("box", response.getQuantityUnit());
+        assertEquals("盒", response.getQuantityUnit());
         assertNull(settlement.getQuantityUnit(), "只读 GET 不应修改历史结单实体");
         verify(productionSettlementRepository, never()).save(any());
         verify(finishedGoodsBatchRepository, never()).save(any());
@@ -931,9 +932,9 @@ class ProductionPlanSettlementTest {
 
         ArgumentCaptor<FinishedGoodsBatch> batchCaptor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
         verify(finishedGoodsBatchRepository).save(batchCaptor.capture());
-        assertEquals("box", response.getQuantityUnit());
-        assertEquals("box", settlement.getQuantityUnit());
-        assertEquals("box", batchCaptor.getValue().getUnit());
+        assertEquals("盒", response.getQuantityUnit());
+        assertEquals("盒", settlement.getQuantityUnit());
+        assertEquals("盒", batchCaptor.getValue().getUnit());
         assertEquals(new BigDecimal("5"), batchCaptor.getValue().getProducedQuantity());
     }
 
@@ -995,7 +996,7 @@ class ProductionPlanSettlementTest {
         assertEquals(first.getSettlementId(), replay.getSettlementId());
         assertEquals("POSTED", first.getPostingStatus());
         assertEquals(new BigDecimal("5.0000"), first.getActualFinishedQuantity());
-        assertEquals("box", first.getQuantityUnit());
+        assertEquals("盒", first.getQuantityUnit());
         assertEquals("fg-interim-1", first.getFinishedGoodsBatchId());
         verify(productionSettlementRepository, times(1)).save(any(ProductionSettlement.class));
         verify(finishedGoodsBatchRepository, never()).save(any());
@@ -1010,10 +1011,10 @@ class ProductionPlanSettlementTest {
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.getProductionSettlement(FACTORY_ID, PLAN_ID));
+        ProductionSettlementResponse response = service.getProductionSettlement(FACTORY_ID, PLAN_ID);
 
-        assertEquals(404, ex.getCode());
+        assertFalse(response.getSettled());
+        assertEquals(PLAN_ID, response.getProductionPlanId());
         verify(productionPlanRepository, never()).findByIdForUpdate(any());
         verify(productionSettlementRepository, never()).save(any());
     }
@@ -1247,6 +1248,92 @@ class ProductionPlanSettlementTest {
         assertNull(response.getProductionReportedQuantity());
         assertNull(response.getWarehouseReceivedQuantity());
         verify(finishedGoodsBatchRepository, times(2)).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
+    @DisplayName("Workflow 成品支持 6+3+1 分次入库，重放不重复增加，收齐后才完结")
+    void confirmWarehouseReceipt_workflowOutput_supportsIncrementalReceipts() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        ProductionSettlement settlement = settled();
+        settlement.setActualFinishedQuantity(new BigDecimal("10"));
+        settlement.setQuantityUnit("box");
+        ProductionSettlementOutputLine line = workflowOutputLine(
+                settlement, "FG-SKU-A", "FG-SPLIT-001", "box", "bom-a", new BigDecimal("10"));
+        java.util.concurrent.atomic.AtomicReference<FinishedGoodsBatch> storedBatch =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(
+                FACTORY_ID, settlement.getId())).thenReturn(List.of(line));
+        when(productionSettlementOutputLineRepository
+                .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                        FACTORY_ID, settlement.getId())).thenReturn(List.of(line));
+        when(productTypeRepository.findByIdAndFactoryId("FG-SKU-A", FACTORY_ID))
+                .thenReturn(Optional.of(productType("FG-SKU-A", "box")));
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-SPLIT-001"))
+                .thenAnswer(invocation -> Optional.ofNullable(storedBatch.get()));
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(invocation -> {
+            FinishedGoodsBatch batch = invocation.getArgument(0);
+            if (batch.getId() == null) batch.setId("fg-split-001");
+            storedBatch.set(batch);
+            return batch;
+        });
+        when(productionSettlementOutputLineRepository.saveAll(anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProductionWarehouseReceiptResponse first = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("split-6", "FG-SKU-A", "FG-SPLIT-001", "6"), 11L);
+        ProductionWarehouseReceiptResponse replay = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("split-6", "FG-SKU-A", "FG-SPLIT-001", "6"), 11L);
+        ProductionWarehouseReceiptResponse second = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("split-3", "FG-SKU-A", "FG-SPLIT-001", "3"), 11L);
+        ProductionWarehouseReceiptResponse third = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("split-1", "FG-SKU-A", "FG-SPLIT-001", "1"), 11L);
+
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", first.getPostingStatus());
+        assertEquals(0, new BigDecimal("4").compareTo(first.getVarianceQuantity()));
+        assertEquals(0, new BigDecimal("6").compareTo(replay.getWarehouseReceivedQuantity()));
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", second.getPostingStatus());
+        assertEquals(0, new BigDecimal("1").compareTo(second.getVarianceQuantity()));
+        assertEquals("POSTED", third.getPostingStatus());
+        assertEquals(0, BigDecimal.ZERO.compareTo(third.getVarianceQuantity()));
+        assertEquals(0, new BigDecimal("10").compareTo(line.getReceivedQuantity()));
+        assertEquals(0, new BigDecimal("10").compareTo(storedBatch.get().getProducedQuantity()));
+        assertEquals("RECEIVED", line.getStatus());
+        verify(finishedGoodsBatchRepository, times(3)).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
+    @DisplayName("Workflow 分次入库累计超收原子拒绝且库存与结单均不写")
+    void confirmWarehouseReceipt_workflowOutput_overReceiptRejectedWithoutPartialWrite() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        ProductionSettlement settlement = settled();
+        ProductionSettlementOutputLine line = workflowOutputLine(
+                settlement, "FG-SKU-A", "FG-SPLIT-OVER", "box", "bom-a", new BigDecimal("10"));
+        line.setReceivedQuantity(new BigDecimal("9"));
+        line.setStatus("PARTIALLY_RECEIVED");
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(
+                FACTORY_ID, settlement.getId())).thenReturn(List.of(line));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("split-over", "FG-SKU-A", "FG-SPLIT-OVER", "2"), 11L));
+
+        assertEquals("RECEIPT_EXCEEDS_PRODUCTION_REPORTED", ex.getErrorCode());
+        assertEquals(new BigDecimal("9"), line.getReceivedQuantity());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(productionSettlementOutputLineRepository, never()).saveAll(anyList());
+        verify(productionSettlementRepository, never()).save(any());
     }
 
     @Test
@@ -1630,6 +1717,44 @@ class ProductionPlanSettlementTest {
         plan.setWorkflowOutputUnitsByProduct(Map.of("FG-A", "box", "FG-B", "kg"));
         plan.setTargetFinishedGoodIds(List.of("FG-A", "FG-B"));
         return plan;
+    }
+
+    private ProductionPlan workflowPlanWithSingleOutput() {
+        ProductionPlan plan = plan();
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
+        plan.setSelectedWorkflowRevisionId(4403L);
+        plan.setSelectedWorkflowRevisionHash("revision-hash-v3");
+        plan.setSelectedBomFamilyId("family-v3");
+        plan.setSelectedBomRecipeIdsByProduct(Map.of("FG-SKU-A", "bom-a"));
+        plan.setSelectedBomVersionsByProduct(Map.of("FG-SKU-A", 2));
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-SKU-A", "box"));
+        plan.setTargetFinishedGoodIds(List.of("FG-SKU-A"));
+        return plan;
+    }
+
+    private ProductType productType(String id, String unit) {
+        ProductType product = new ProductType();
+        product.setId(id);
+        product.setFactoryId(FACTORY_ID);
+        product.setName(id);
+        product.setUnit(unit);
+        return product;
+    }
+
+    private ProductionWarehouseReceiptRequest workflowReceipt(
+            String key, String productTypeId, String batchNumber, String quantity) {
+        ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
+        request.setIdempotencyKey(key);
+        request.setOutputLines(List.of(ProductionWarehouseReceiptRequest.ReceiptLine.builder()
+                .productTypeId(productTypeId)
+                .batchNumber(batchNumber)
+                .receivedQuantity(new BigDecimal(quantity))
+                .quantityUnit("box")
+                .build()));
+        return request;
     }
 
     private void stubWorkflowPinnedBom(String recipeId,

@@ -428,10 +428,12 @@ public class ProductionPlanController {
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
-            @PathVariable @NotNull String planId) {
+            @PathVariable @NotNull String planId,
+            @RequestHeader("Authorization") String authorization) {
 
-        log.info("开始生产: factoryId={}, planId={}", factoryId, planId);
-        ProductionPlanDTO plan = productionPlanService.startProduction(factoryId, planId);
+        Long userId = extractUserId(authorization);
+        log.info("开始生产: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
+        ProductionPlanDTO plan = productionPlanService.startProduction(factoryId, planId, userId);
         return ApiResponse.success("生产已开始", plan);
     }
 

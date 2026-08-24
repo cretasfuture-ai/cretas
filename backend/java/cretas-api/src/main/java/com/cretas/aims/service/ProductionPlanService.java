@@ -178,6 +178,9 @@ public interface ProductionPlanService {
     * 开始生产
      */
     ProductionPlanDTO startProduction(String factoryId, String planId);
+
+    /** Start production and attach the authenticated operator to inventory audit rows. */
+    ProductionPlanDTO startProduction(String factoryId, String planId, Long operatorId);
      /**
      * 完成生产。
      *
