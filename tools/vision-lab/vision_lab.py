@@ -36,6 +36,8 @@ OPERATOR_RECALL_OVERRIDE_TOKEN = "ACCEPT-INCOMPLETE-RECALL"
 WAIVABLE_RECALL_ERROR_PREFIX = "required defect group did not reach full recall: "
 LABEL_CLASS_IDS = {"white_label": 0, "color_label": 1}
 ISOLATED_MISSING_REPEAT_STRATEGY = "human-confirmed-isolated-missing-v1"
+ISOLATED_MISSING_CLASS_REPEAT_STRATEGY = "human-confirmed-isolated-missing-by-class-v2"
+DEFAULT_TRAY_PAD_RATIO = 0.14
 
 
 def utc_now() -> str:
@@ -558,11 +560,48 @@ def isolated_missing_repeat(training: dict[str, Any]) -> int:
     return value
 
 
+def isolated_missing_repeats(training: dict[str, Any]) -> dict[str, int]:
+    base_repeat = isolated_missing_repeat(training)
+    repeats = {class_name: base_repeat for class_name in LABEL_CLASS_IDS}
+    overrides = training.get("isolated_missing_repeat_by_class")
+    if overrides is None:
+        return repeats
+    if not isinstance(overrides, dict):
+        raise ValueError(
+            "training option isolated_missing_repeat_by_class must be an object"
+        )
+    if not overrides:
+        raise ValueError(
+            "training option isolated_missing_repeat_by_class must not be empty"
+        )
+    unknown = sorted(set(overrides) - set(LABEL_CLASS_IDS))
+    if unknown:
+        raise ValueError(
+            "training option isolated_missing_repeat_by_class has unknown classes: "
+            + ", ".join(unknown)
+        )
+    for class_name, value in overrides.items():
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"training option isolated_missing_repeat_by_class.{class_name} "
+                "must be an integer"
+            )
+        if not 1 <= value <= 10:
+            raise ValueError(
+                f"training option isolated_missing_repeat_by_class.{class_name} "
+                "must be between 1 and 10"
+            )
+        repeats[class_name] = value
+    return repeats
+
+
 def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     root = Path(config["runtime_root"])
     training = config.get("training", {})
     validation_percent = int(training.get("validation_percent", 20))
     missing_repeat = isolated_missing_repeat(training)
+    missing_repeats = isolated_missing_repeats(training)
+    class_repeat_overrides = training.get("isolated_missing_repeat_by_class") is not None
     rows: list[dict[str, Any]] = []
     manifest_hashes: list[str] = []
     identity_rows: list[dict[str, str]] = []
@@ -612,7 +651,13 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     }
     # Preserve the established dataset ID when weighting is disabled.  This
     # prevents a code-only rollout from triggering an accidental retrain.
-    if missing_repeat > 1:
+    if class_repeat_overrides:
+        identity |= {
+            "schema": "effective-training-rows-v4",
+            "isolated_missing_repeat_by_class": missing_repeats,
+            "isolated_missing_strategy": ISOLATED_MISSING_CLASS_REPEAT_STRATEGY,
+        }
+    elif missing_repeat > 1:
         identity |= {
             "schema": "effective-training-rows-v3",
             "isolated_missing_repeat": missing_repeat,
@@ -642,6 +687,9 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
         "isolated_missing_train_unique": 0,
         "isolated_missing_val_unique": 0,
         "isolated_missing_train_copies": 0,
+        "isolated_missing_train_copies_by_class": {
+            class_name: 0 for class_name in LABEL_CLASS_IDS
+        },
     }
     manifest_rows = []
     for item in rows:
@@ -649,7 +697,7 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
         crop_id = str(item["source"]["crop_id"])
         lines = [yolo_line(box) for box in item["annotation"].get("boxes") or []]
         missing_class = item["isolated_missing_class"]
-        repeat = missing_repeat if split == "train" and missing_class else 1
+        repeat = missing_repeats[missing_class] if split == "train" and missing_class else 1
         counts[f"unique_{split}"] += 1
         if missing_class:
             counts["isolated_missing_unique"] += 1
@@ -665,6 +713,7 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
             counts["color_boxes"] += sum(1 for box in item["annotation"].get("boxes") or [] if int(box["c"]) == 1)
             if repeat_index > 0:
                 counts["isolated_missing_train_copies"] += 1
+                counts["isolated_missing_train_copies_by_class"][missing_class] += 1
             manifest_rows.append({
                 "crop_id": crop_id, "sample_id": sample_id,
                 "task_id": item["task_id"], "split": split,
@@ -686,8 +735,12 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
         "train_only": True, "protected_holdout_included": False,
         "task_level_split": True, "counts": counts, "rows": manifest_rows,
         "isolated_missing_supervision": {
-            "strategy": ISOLATED_MISSING_REPEAT_STRATEGY,
+            "strategy": (
+                ISOLATED_MISSING_CLASS_REPEAT_STRATEGY
+                if class_repeat_overrides else ISOLATED_MISSING_REPEAT_STRATEGY
+            ),
             "train_repeat": missing_repeat,
+            "train_repeat_by_class": missing_repeats,
             "validation_repeated": False,
             "requires_human_confirmation": True,
             "requires_single_complementary_box": True,
@@ -790,6 +843,11 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
     candidate_presence_threshold = float(
         training.get("candidate_presence_threshold", baseline_presence_threshold)
     )
+    presence_ownership_pad_ratio = float(
+        config.get("evaluation", {}).get(
+            "presence_ownership_pad_ratio", DEFAULT_TRAY_PAD_RATIO,
+        )
+    )
     for threshold_name, threshold in (
         ("baseline_presence_threshold", baseline_presence_threshold),
         ("candidate_presence_threshold", candidate_presence_threshold),
@@ -801,9 +859,11 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         "protected_holdout_included": False,
         "baseline": evaluate_label_presence(
             base_model, validation_dir, baseline_presence_threshold, imgsz,
+            presence_ownership_pad_ratio,
         ),
         "candidate": evaluate_label_presence(
             onnx, validation_dir, candidate_presence_threshold, imgsz,
+            presence_ownership_pad_ratio,
         ),
     }
     result = {
@@ -865,8 +925,19 @@ def verify_export_parity(
 
 def evaluate_label_presence(
     model_path: Path, validation_dir: Path, threshold: float, imgsz: int = 640,
+    ownership_pad_ratio: float = DEFAULT_TRAY_PAD_RATIO,
 ) -> dict[str, Any]:
     from ultralytics import YOLO
+
+    if not 0.0 <= ownership_pad_ratio <= 0.5:
+        raise ValueError("label-presence ownership pad ratio must be between 0 and 0.5")
+    ownership_margin = ownership_pad_ratio / (1.0 + 2.0 * ownership_pad_ratio)
+
+    def owned_center(x: float, y: float) -> bool:
+        return (
+            ownership_margin <= x <= 1.0 - ownership_margin
+            and ownership_margin <= y <= 1.0 - ownership_margin
+        )
 
     images = sorted(
         path for path in validation_dir.iterdir()
@@ -884,6 +955,8 @@ def evaluate_label_presence(
     }
     exact_matches = 0
     mismatches: list[dict[str, Any]] = []
+    dropped_predictions = {0: 0, 1: 0}
+    dropped_prediction_details: list[dict[str, Any]] = []
     for image in images:
         expected = {0: False, 1: False}
         label_path = labels_dir / f"{image.stem}.txt"
@@ -895,12 +968,20 @@ def evaluate_label_presence(
                 if not line:
                     continue
                 try:
-                    class_id = int(line.split()[0])
+                    parts = line.split()
+                    class_id = int(parts[0])
+                    float(parts[1])
+                    float(parts[2])
                 except (ValueError, IndexError) as exc:
                     raise RuntimeError(
                         f"invalid validation label at {label_path}:{line_number}"
                     ) from exc
                 if class_id in expected:
+                    # Human boxes already describe labels belonging to the
+                    # reviewed target tray.  Old crops do not retain exact
+                    # source crop/tray geometry and can be clipped at image
+                    # boundaries, so a fixed padding margin must never erase
+                    # human truth.
                     expected[class_id] = True
         result = model.predict(
             str(image), imgsz=imgsz, conf=0.001, iou=0.45,
@@ -908,14 +989,36 @@ def evaluate_label_presence(
         )[0]
         confidence = {0: 0.0, 1: 0.0}
         if result.boxes is not None and len(result.boxes):
-            for class_id, score in zip(
+            for class_id, score, box in zip(
                 result.boxes.cls.cpu().tolist(), result.boxes.conf.cpu().tolist(),
+                result.boxes.xyxyn.cpu().tolist(),
             ):
                 normalized_class = int(class_id)
-                if normalized_class in confidence:
-                    confidence[normalized_class] = max(
-                        confidence[normalized_class], float(score),
-                    )
+                if normalized_class not in confidence:
+                    continue
+                if not isinstance(box, list) or len(box) != 4:
+                    raise RuntimeError("label-presence prediction box is not normalized xyxy")
+                center_x = (float(box[0]) + float(box[2])) / 2.0
+                center_y = (float(box[1]) + float(box[3])) / 2.0
+                # A prediction for a human-present class is allowed anywhere
+                # in the reviewed crop.  For a human-absent class, border
+                # predictions are audited as neighbouring-tray context and
+                # excluded from false-positive presence scoring.  The full
+                # production replay remains authoritative for source-image
+                # tray ownership.
+                if not expected[normalized_class] and not owned_center(center_x, center_y):
+                    if float(score) >= threshold:
+                        dropped_predictions[normalized_class] += 1
+                        dropped_prediction_details.append({
+                            "image": image.name,
+                            "class": classes[normalized_class]["name"],
+                            "confidence": float(score),
+                            "center": [center_x, center_y],
+                        })
+                    continue
+                confidence[normalized_class] = max(
+                    confidence[normalized_class], float(score),
+                )
         predicted = {
             class_id: confidence[class_id] >= threshold for class_id in confidence
         }
@@ -942,6 +1045,16 @@ def evaluate_label_presence(
         "model_sha256": sha256_file(model_path),
         "threshold": threshold,
         "imgsz": imgsz,
+        "ownership": {
+            "rule": "human_truth_authoritative_absent_class_prediction_center_inside_target",
+            "pad_ratio": ownership_pad_ratio,
+            "normalized_margin": ownership_margin,
+            "dropped_predictions_at_or_above_threshold": {
+                classes[class_id]["name"]: count
+                for class_id, count in dropped_predictions.items()
+            },
+            "dropped_prediction_details": dropped_prediction_details,
+        },
         "total_images": len(images),
         "exact_matches": exact_matches,
         "classes": {counters["name"]: {
@@ -960,6 +1073,14 @@ def evaluate_label_presence_gate(model: dict[str, Any]) -> dict[str, Any]:
     candidate_total = int(candidate.get("total_images", 0))
     if baseline_total <= 0 or candidate_total != baseline_total:
         errors.append("label-presence validation set is missing or inconsistent")
+    baseline_ownership = baseline.get("ownership") or {}
+    candidate_ownership = candidate.get("ownership") or {}
+    ownership_contract = ("rule", "pad_ratio", "normalized_margin")
+    if any(field not in baseline_ownership for field in ownership_contract) or any(
+        baseline_ownership.get(field) != candidate_ownership.get(field)
+        for field in ownership_contract
+    ):
+        errors.append("label-presence ownership contract is missing or inconsistent")
     if int(candidate.get("exact_matches", -1)) < int(baseline.get("exact_matches", 0)):
         errors.append("label-presence exact accuracy regressed")
     baseline_classes = baseline.get("classes") or {}
