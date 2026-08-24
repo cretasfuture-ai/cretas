@@ -28,8 +28,6 @@
 
 - `ENH-F006-SUPPLIER-IMPORT-001` — `blocked` — Owner: `/root` — 供应商必填资料、Excel 预览/幂等确认、状态生命周期、采购门禁与详情信息架构尚无本轮完整 tree/test 核销证据；当前无专用 PR。需求和 scope 均保留，恢复时先核对公司 main 的现有实现，严格 `NOT_DEPLOYED`。
 
-- `BUG-F006-UNIT-DIMENSION-SCOPE-001` — `in-progress` — Owner: `/root` — Base SHA: `21015111b2118aeea4e5487a09ae87f44c2d87ad` — 吸收生产复现 `E2E-F006-PROC-REL-20260824083721`，修复供应关系新增页采购单位盲目继承、`PURCHASE_QUANTITY` 长度量纲 `m` 同源契约、选择物料后的中文前置门禁，并覆盖 m/kg/跨量纲 Java/Web/Playwright；完成目标测试、PR 合入、exact-main 串行部署与 F006 部署后复验。
-
 - `BUG-F006-R2-SKU-UNIT-001` — `blocked` — Owner: `/root/supplier_frontend` — SKU displayUnit、净含量单位、同维度 canonical 化与历史回填尚无本轮完整 tree/test 核销证据；保留 Web scope，Java 契约仍须协调者另行审计，严格 `NOT_DEPLOYED`。
 
 - `FEATURE-F006-R2-WORKPROCESS-DEDUP-001` — `blocked` — Owner: `/root/workprocess_governance` — canonical/mergedInto、未来候选排除、既有 Workflow/SKU/计划/报工引用不迁移，以及排序/单位从主数据移除的完整 JPA/Web 验收尚未本轮核销；保留 scope，生产重复组零治理。
@@ -51,8 +49,6 @@
 - `ENH-F006-CUSTOMER-CREATE-PROGRESSIVE-DISCLOSURE-001`：客户 Web 共享表单与 Java Customer DTO/Service/Repository/API/import、销售使用门禁、目标测试/dispatch；先裁定联系人/电话/地址是否强制，再实施。不得修改生产客户数据。
 
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购门禁、共享 Excel 导入与目标测试；Web 供应商列表/详情/新增编辑/导入及 API/types/tests；必须真实 JPA Context（如触及查询），生产业务写入为 0。
-
-- `BUG-F006-UNIT-DIMENSION-SCOPE-001`：Java 单位 Entity/DTO/Repository/UnitContractService、原料/采购/入库/BOM 场景校验及真实 JPA/Service 测试；Web UnitSelect/API/types/display helper 与目标测试；不得改变历史异常记录或生产数据。
 
 - `BUG-F006-R2-SKU-UNIT-001`：仅 Web SKU 新建/编辑基础规格、displayUnit/净含量单位 helper 与目标测试；Java 净含量契约须另行登记不重叠 scope。
 
