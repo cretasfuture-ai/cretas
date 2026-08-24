@@ -43,12 +43,6 @@
             :loading="saving"
             @click="() => saveDraft()"
           >{{ saveActionLabel }}</el-button>
-          <el-button
-            data-testid="snapshot-workflow"
-            :disabled="!canEdit || flowNodes.length === 0"
-            :loading="snapshotting"
-            @click="snapshotWorkflow"
-          >另存独立版本</el-button>
           <!-- #12a: 发布版本 = 发布并启用当前版本 (一步); 不再有单独「启用版本」按钮 -->
           <el-tooltip :content="publishDisabledReason" :disabled="!publishDisabledReason" placement="bottom">
             <span class="disabled-action-tooltip" data-testid="publish-workflow-tooltip">
@@ -63,7 +57,7 @@
             </span>
           </el-tooltip>
           <!-- #12b: 版本浏览 (查看之前发布过的版本) -->
-          <el-button data-testid="browse-versions" :disabled="!productTypeId" @click="openVersionDrawer">版本记录</el-button>
+          <el-button data-testid="browse-versions" :disabled="!productTypeId" @click="openVersionDrawer">生产版本记录</el-button>
           <el-button
             v-if="activation?.enabled"
             data-testid="deactivate-workflow"
@@ -92,9 +86,9 @@
         type="info"
         :closable="false"
         show-icon
-        title="当前正在编辑已启用版本"
+        title="正在更新当前配置"
       >
-        保存会自动创建新的 Workflow 草稿版本；生产继续使用当前已启用版本，无需先手工另存为版本。
+        不需要另存版本。更新生效后，未开始报工的计划自动使用新配置；已经报工的计划保留旧配置并进入生产版本记录。
       </el-alert>
 
       <el-alert
@@ -218,8 +212,8 @@
       <div ref="canvasRef" class="canvas-shell" :class="{ 'is-connecting': !!connectingFromKind }" v-loading="loading">
         <!-- #12b: 历史版本预览横幅 (只读, 不会自动保存覆盖草稿) -->
         <div v-if="previewingVersion !== null" class="version-preview-bar" data-testid="version-preview-bar">
-          <span>正在预览历史版本 <strong>v{{ previewingVersion }}</strong>（只读，不会覆盖当前草稿）</span>
-          <el-button size="small" type="primary" @click="restorePreviewAsDraft">恢复为当前草稿</el-button>
+          <span>正在预览生产历史版本 <strong>v{{ previewingVersion }}</strong>（只读，不会覆盖当前配置）</span>
+          <el-button size="small" type="primary" @click="restorePreviewAsDraft">用此版本更新当前配置</el-button>
           <el-button size="small" @click="exitVersionPreview">退出预览</el-button>
         </div>
         <div
@@ -789,18 +783,28 @@
       </div>
     </div>
 
-    <!-- #12b: 版本记录抽屉 (只读浏览之前发布过的版本) -->
-    <el-drawer v-model="versionDrawerVisible" title="版本记录" direction="rtl" size="440px">
+    <!-- 版本记录只展示当前生效配置及真实绑定过生产计划的历史配置。 -->
+    <el-drawer v-model="versionDrawerVisible" title="生产版本记录" direction="rtl" size="520px">
       <div v-loading="versionLoading" class="version-list">
         <el-empty v-if="!versionList.length && !versionLoading" description="暂无版本记录" :image-size="80" />
         <div v-for="v in versionList" :key="v.definitionVersion" class="version-row" data-testid="version-row">
           <div class="version-meta">
             <span class="version-num">v{{ v.definitionVersion }}</span>
             <el-tag size="small" :type="v.status === 'PUBLISHED' ? 'success' : v.status === 'SNAPSHOT' ? 'warning' : 'info'">
-              {{ v.status === 'PUBLISHED' ? '已发布' : v.status === 'SNAPSHOT' ? '独立版本' : '草稿' }}
+              {{ v.active ? '当前生效' : '生产历史' }}
             </el-tag>
             <el-tag v-if="v.active" size="small" type="warning">已启用</el-tag>
             <span class="version-time">{{ (v.updatedAt || '').replace('T', ' ').slice(0, 16) }}</span>
+          </div>
+          <div v-if="v.productionPlans.length" class="version-plan-list">
+            <div class="version-plan-heading">绑定生产计划（{{ v.productionPlans.length }}）</div>
+            <div v-for="plan in v.productionPlans" :key="plan.planId" class="version-plan-row">
+              <span class="version-plan-number">{{ plan.planNumber || plan.planId }}</span>
+              <span class="version-plan-status">{{ workflowPlanStatusLabel(plan.status) }}</span>
+              <el-tag size="small" :type="plan.productionStarted ? 'warning' : 'info'">
+                {{ plan.productionStarted ? '已开始报工 · 固定此版本' : '未报工' }}
+              </el-tag>
+            </div>
           </div>
           <el-button size="small" @click="previewVersion(v)">查看</el-button>
         </div>
@@ -924,7 +928,6 @@ import {
   listProductProcessWorkflowVersions,
   publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft,
-  snapshotProductProcessWorkflow,
   type WorkflowVersionSummary,
 } from './workflowApi';
 import {
@@ -1045,7 +1048,6 @@ const loading = ref(false);
 const catalogLoading = ref(false);
 const loadedCatalogFactoryId = ref<string | null>(null);
 const saving = ref(false);
-const snapshotting = ref(false);
 const publishing = ref(false);
 const workflowBomSyncPreflight = ref<WorkflowBomSyncPreflight | null>(null);
 const workflowBomSyncIssues = computed(() => (
@@ -1808,11 +1810,9 @@ const editingEnabledWorkflow = computed(() => (
   && activation.value.activeWorkflowId === definition.value.id
   && activation.value.activeDefinitionVersion === definition.value.version
 ));
-const saveActionLabel = computed(() => (
-  editingEnabledWorkflow.value ? '保存草稿（自动新版本）' : '保存草稿'
-));
+const saveActionLabel = computed(() => '保存当前配置');
 const publishActionLabel = computed(() => (
-  publishActionCompleted.value ? '已发布并启用' : '自动同步并发布'
+  publishActionCompleted.value ? '当前配置已生效' : '更新并应用'
 ));
 const publishDisabledReason = computed(() => {
   if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
@@ -1826,7 +1826,7 @@ const publishDisabledReason = computed(() => {
     return `Workflow v${definition.value.version} 已发布；请先修改并保存为新草稿后再发布`;
   }
   if (definition.value && definition.value.status !== 'DRAFT' && !dirty.value) {
-    return '当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿';
+    return '当前没有待应用的配置修改；请先修改并保存当前配置';
   }
   if (flowNodes.value.length === 0) return '请先在画布中配置 Workflow Cell';
   const outputContractError = validateWorkflow(currentDefinition(), 'publish')
@@ -2097,6 +2097,20 @@ async function openVersionDrawer(): Promise<void> {
     versionLoading.value = false;
   }
 }
+
+function workflowPlanStatusLabel(status: string | null): string {
+  const labels: Record<string, string> = {
+    PREPARED: '准备中',
+    PENDING: '待执行',
+    IN_PROGRESS: '进行中',
+    PAUSED: '已暂停',
+    PENDING_WAREHOUSE_RECEIPT: '待成品入库',
+    COMPLETED: '已完成',
+    CANCELLED: '已取消',
+  };
+  return status ? (labels[status] || status) : '状态未知';
+}
+
 async function previewVersion(v: WorkflowVersionSummary): Promise<void> {
   const identity = currentLoadedIdentity();
   if (!identity) return;
@@ -4737,8 +4751,8 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
       definition.value = toPlainWorkflowValue(response.data);
       if (!options.silent) {
         ElMessage.success(response.data.autoForked
-          ? `已自动创建 Workflow 草稿 v${response.data.version}；旧版本 v${response.data.forkedFromVersion ?? '?'} 保持不变`
-          : 'Workflow 草稿已保存');
+          ? `当前配置已保存；正在报工的旧配置 v${response.data.forkedFromVersion ?? '?'} 已自动保留`
+          : '当前 Workflow 配置已保存');
       }
       scheduleAutoSave();
       return true;
@@ -4751,8 +4765,8 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
     }
     if (!options.silent) {
       ElMessage.success(response.data.autoForked
-        ? `已自动创建 Workflow 草稿 v${response.data.version}；旧版本 v${response.data.forkedFromVersion ?? '?'} 保持不变`
-        : 'Workflow 草稿已保存');
+        ? `当前配置已保存；正在报工的旧配置 v${response.data.forkedFromVersion ?? '?'} 已自动保留`
+        : '当前 Workflow 配置已保存');
     }
     return true;
   } catch (error) {
@@ -4767,41 +4781,6 @@ async function saveDraft(options: { silent?: boolean; preserveHistory?: boolean 
     if (generation === saveGeneration) {
       saving.value = false;
     }
-  }
-}
-
-async function snapshotWorkflow(): Promise<void> {
-  let identity = currentLoadedIdentity();
-  if (!identity || !canEdit.value || flowNodes.value.length === 0) return;
-  if (dirty.value && !(await saveDraft())) return;
-  identity = currentLoadedIdentity();
-  const lockVersion = definition.value?.lockVersion;
-  if (!identity || lockVersion === undefined) {
-    ElMessage.warning('请先保存草稿，再另存为版本');
-    return;
-  }
-  snapshotting.value = true;
-  try {
-    const response = await snapshotProductProcessWorkflow(
-      identity.factoryId,
-      identity.productTypeId,
-      lockVersion,
-    );
-    if (!isLoadedIdentityCurrent(identity) || !response.success || !response.data) return;
-    hydrate(response.data);
-    dirty.value = false;
-    history.value = [];
-    ElMessage.success(`已另存独立版本，当前继续编辑草稿 v${response.data.version}`);
-    if (versionDrawerVisible.value) await openVersionDrawer();
-  } catch (error) {
-    if (isWorkflowConflict(error)) {
-      await recoverWorkflowConflict(identity);
-      return;
-    }
-    console.error('[ProductProcessWorkflow] snapshot failed', error);
-    ElMessage.error('另存 Workflow 版本失败');
-  } finally {
-    snapshotting.value = false;
   }
 }
 
@@ -4827,7 +4806,7 @@ async function publishWorkflow(): Promise<void> {
     return;
   }
   if (definition.value && definition.value.status !== 'DRAFT' && !dirty.value) {
-    ElMessage.info('当前不是可发布的 Workflow 草稿；请先另存或修改后保存草稿');
+    ElMessage.info('当前没有待应用的配置修改；请先修改并保存当前配置');
     return;
   }
   await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
@@ -4924,8 +4903,8 @@ async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): P
     publishConfirming.value = true;
     try {
       const confirmMessage = freshPreflight.classification === 'AUTO_MIGRATABLE'
-        ? '系统将自动创建或复用 BOM 同步草稿、保留已有配方，并与当前 Workflow 一并生效。已有生产计划继续使用原快照。'
-        : 'BOM 与 Workflow 已一致。发布后只影响之后新建的生产计划，已有计划继续使用原快照。';
+        ? '系统将同步 BOM 并更新当前 Workflow。未开始报工的生产计划会自动使用新配置；已经报工的计划保持旧配置并进入生产版本记录。'
+        : '更新后，未开始报工的生产计划会自动使用新配置；已经报工的计划保持旧配置并进入生产版本记录。';
       await ElMessageBox.confirm(
         confirmMessage,
         '自动同步并发布',
@@ -4988,9 +4967,16 @@ async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): P
     unitReviewPending.value = false;
     dirty.value = false;
     await loadProductBom({ force: true });
+    const planRebind = response.data.planRebind;
+    const appliedMessage = planRebind?.reboundPlanCount
+      ? `，${planRebind.reboundPlanCount} 个未报工计划已同步更新`
+      : '';
+    const historyMessage = planRebind?.preservedStartedPlanCount
+      ? `，${planRebind.preservedStartedPlanCount} 个已报工计划保留旧版`
+      : '';
     ElMessage.success(response.data.replayed
-      ? '已确认上次自动同步发布结果，Workflow 与 BOM 均已生效'
-      : 'Workflow 与 BOM 已自动同步、发布并生效');
+      ? '已确认上次更新结果，Workflow 与 BOM 均已生效'
+      : `当前 Workflow 配置已更新并生效${appliedMessage}${historyMessage}`);
   } catch (error) {
     if (generation !== publishGeneration || !isLoadedIdentityCurrent(identity)) return;
     if (isWorkflowConflict(error)) {
@@ -5656,12 +5642,29 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 .version-list { display: flex; flex-direction: column; gap: 8px; }
 .version-row {
-  display: flex; align-items: center; justify-content: space-between;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px 12px;
   padding: 10px 12px; border: 1px solid #ebeef5; border-radius: 8px;
 }
 .version-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .version-num { font-weight: 700; color: #1a2332; }
 .version-time { font-size: 12px; color: #909399; }
+.version-plan-list {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+}
+.version-plan-heading { color: #7a8599; font-size: 12px; }
+.version-plan-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+.version-plan-number { color: #1a2332; font-weight: 600; overflow-wrap: anywhere; }
+.version-plan-status { color: #7a8599; font-size: 12px; }
 /* #9: 选中连线的浮动删除条 */
 .edge-delete-bar {
   position: absolute;

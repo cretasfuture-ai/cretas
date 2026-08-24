@@ -18,6 +18,8 @@ import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO;
+import com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
@@ -518,10 +520,97 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionPlan repinPlanToCurrentAuthority(String factoryId, String planId, Long operatorId) {
-        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在")
                         .withCode("PRODUCTION_PLAN_NOT_FOUND"));
         requirePlanNotStarted(factoryId, planId, plan);
+
+        return applyCurrentAuthorityToPlan(factoryId, plan);
+    }
+
+    @Override
+    @Transactional
+    public WorkflowPlanRebindSummaryDTO repinUnstartedPlansToCurrentAuthority(
+            String factoryId,
+            Collection<Long> previousWorkflowIds,
+            Long operatorId) {
+        Set<Long> workflowIds = previousWorkflowIds == null
+                ? Set.of()
+                : previousWorkflowIds.stream().filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (workflowIds.isEmpty()) {
+            return WorkflowPlanRebindSummaryDTO.empty();
+        }
+
+        List<ProductionPlan> candidates = productionPlanRepository
+                .findByFactoryIdAndSelectedWorkflowIdIn(factoryId, workflowIds).stream()
+                .sorted(Comparator.comparing(ProductionPlan::getId))
+                .toList();
+        List<String> rebound = new ArrayList<>();
+        List<String> preserved = new ArrayList<>();
+
+        for (ProductionPlan candidate : candidates) {
+            ProductionPlan plan = productionPlanRepository.findByIdForUpdate(candidate.getId())
+                    .filter(row -> factoryId.equals(row.getFactoryId()))
+                    .orElse(null);
+            if (plan == null || !workflowIds.contains(plan.getSelectedWorkflowId())) {
+                continue;
+            }
+            if (hasStartedProduction(factoryId, plan.getId())) {
+                preserved.add(planReference(plan));
+                continue;
+            }
+            // Workflow 更新是系统级权威迁移，不是人工修改计划。只要尚未开始报工，
+            // 即使计划因排产确认而锁定，也必须跟随当前配置；锁只继续约束人工重钉入口。
+            applyCurrentAuthorityToPlan(factoryId, plan);
+            rebound.add(planReference(plan));
+        }
+
+        return WorkflowPlanRebindSummaryDTO.builder()
+                .reboundPlanCount(rebound.size())
+                .preservedStartedPlanCount(preserved.size())
+                .reboundPlanNumbers(List.copyOf(rebound))
+                .preservedPlanNumbers(List.copyOf(preserved))
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<Long, List<WorkflowPlanBindingDTO>> listWorkflowPlanBindings(
+            String factoryId,
+            Collection<Long> workflowIds) {
+        Set<Long> ids = workflowIds == null
+                ? Set.of()
+                : workflowIds.stream().filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<WorkflowPlanBindingDTO>> bindings = new LinkedHashMap<>();
+        productionPlanRepository.findByFactoryIdAndSelectedWorkflowIdIn(factoryId, ids).stream()
+                .sorted(Comparator.comparing(this::planReference))
+                .forEach(plan -> bindings.computeIfAbsent(plan.getSelectedWorkflowId(), ignored -> new ArrayList<>())
+                        .add(WorkflowPlanBindingDTO.builder()
+                                .planId(plan.getId())
+                                .planNumber(plan.getPlanNumber())
+                                .status(plan.getStatus() == null ? null : plan.getStatus().name())
+                                .productionStarted(hasStartedProduction(factoryId, plan.getId()))
+                                .build()));
+        return bindings.entrySet().stream().collect(Collectors.toMap(
+                Map.Entry::getKey,
+                entry -> List.copyOf(entry.getValue()),
+                (left, right) -> left,
+                LinkedHashMap::new));
+    }
+
+    private String planReference(ProductionPlan plan) {
+        return plan.getPlanNumber() == null || plan.getPlanNumber().isBlank()
+                ? plan.getId()
+                : plan.getPlanNumber();
+    }
+
+    private ProductionPlan applyCurrentAuthorityToPlan(String factoryId, ProductionPlan plan) {
 
         PlanUnitAuthority authority = resolvePlanUnitAuthority(
                 factoryId, plan.getProductTypeId(), plan.getTargetFinishedGoodIds());
@@ -719,6 +808,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .anyMatch(row -> ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())
                         || "SUBMITTED".equals(row.getRowStatus())
                         || row.getInterimSettledAt() != null);
+    }
+
+    private boolean hasStartedProduction(String factoryId, String planId) {
+        return startedByProcessSheetRows(factoryId, planId)
+                || hasRealProductionActivity(factoryId, planId);
     }
 
     private void requirePlanNotStarted(String factoryId, String planId, ProductionPlan plan) {

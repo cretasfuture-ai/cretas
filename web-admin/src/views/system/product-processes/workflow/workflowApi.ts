@@ -108,6 +108,12 @@ export interface WorkflowVersionSummary {
   status: 'DRAFT' | 'SNAPSHOT' | 'PUBLISHED';
   updatedAt: string | null;
   active: boolean;
+  productionPlans: Array<{
+    planId: string;
+    planNumber: string | null;
+    status: string | null;
+    productionStarted: boolean;
+  }>;
 }
 
 export function listProductProcessWorkflowVersions(factoryId: string, productTypeId: string) {

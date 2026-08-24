@@ -752,18 +752,10 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     ]);
   });
 
-  it('stores an independent version and continues with the incremented draft', async () => {
+  it('manages only the current configuration and does not expose manual version snapshots', async () => {
     const vm = await mountEditor();
-    apiMocks.snapshotProductProcessWorkflow.mockResolvedValue({
-      success: true,
-      data: { ...JSON.parse(JSON.stringify(vm.definition)), version: 2, lockVersion: 1 },
-    });
-
-    await vm.snapshotWorkflow();
-
-    expect(apiMocks.snapshotProductProcessWorkflow).toHaveBeenCalledWith('F006', 'PT-PIG-400', 0);
-    expect(vm.definition).toMatchObject({ status: 'DRAFT', version: 2, lockVersion: 1 });
-    expect(vm.dirty).toBe(false);
+    expect(vm.snapshotWorkflow).toBeUndefined();
+    expect(apiMocks.snapshotProductProcessWorkflow).not.toHaveBeenCalled();
   });
 
   it('requires a taxonomy category and does not submit a unit for onsite process creation', async () => {

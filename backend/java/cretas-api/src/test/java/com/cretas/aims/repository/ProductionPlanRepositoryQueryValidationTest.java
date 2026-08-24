@@ -172,6 +172,10 @@ class ProductionPlanRepositoryQueryValidationTest {
         assertThat(productionPlanRepository
                 .countAllPhysicalByFactoryIdAndSelectedWorkflowId("F-JPA-WORKFLOW-REF", 999L))
                 .isZero();
+        assertThat(productionPlanRepository
+                .findByFactoryIdAndSelectedWorkflowIdIn(
+                        "F-JPA-WORKFLOW-REF", java.util.List.of(998L, 999L)))
+                .isEmpty();
         assertThat(productionBatchRepository
                 .countByFactoryIdAndSelectedWorkflowIdAndStatusIn(
                         "F-JPA-WORKFLOW-REF", 999L,
@@ -233,6 +237,15 @@ class ProductionPlanRepositoryQueryValidationTest {
         plan.setCreatedBy(user.getId());
         plan.setSelectedWorkflowId(workflowId);
         entityManager.persist(plan);
+        entityManager.flush();
+
+        assertThat(productionPlanRepository
+                .findByFactoryIdAndSelectedWorkflowIdIn(factory, java.util.List.of(workflowId, 992L)))
+                .extracting(ProductionPlan::getId)
+                .containsExactly(plan.getId());
+        assertThat(productionPlanRepository
+                .findByFactoryIdAndSelectedWorkflowIdIn(otherFactory, java.util.List.of(workflowId)))
+                .isEmpty();
 
         ProductionBatch batch = new ProductionBatch();
         batch.setFactoryId(factory);

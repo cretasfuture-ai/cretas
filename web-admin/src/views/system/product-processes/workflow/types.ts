@@ -272,8 +272,16 @@ export interface WorkflowPublishAndActivateResponse {
   workflow: ProductProcessWorkflowDefinition;
   activation: ProductProcessWorkflowActivation;
   bomSync: WorkflowBomSyncPreflight;
+  planRebind: WorkflowPlanRebindSummary;
   idempotencyKey: string;
   replayed: boolean;
+}
+
+export interface WorkflowPlanRebindSummary {
+  reboundPlanCount: number;
+  preservedStartedPlanCount: number;
+  reboundPlanNumbers: string[];
+  preservedPlanNumbers: string[];
 }
 
 export type WorkflowPatch =

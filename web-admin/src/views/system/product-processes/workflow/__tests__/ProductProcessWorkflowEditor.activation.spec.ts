@@ -161,7 +161,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(vm.publishDisabledReason).toContain('v2 已发布并启用');
     const publishButton = wrapper.get('[data-testid="publish-workflow"]');
     expect(publishButton.attributes('disabled')).toBeDefined();
-    expect(publishButton.text()).toBe('已发布并启用');
+    expect(publishButton.text()).toBe('当前配置已生效');
     expect(publishButton.attributes('plain')).toBe('true');
 
     await vm.publishWorkflow();
@@ -188,7 +188,7 @@ describe('ProductProcessWorkflowEditor activation controls', () => {
     expect(vm.publishDisabledReason).toBe('');
     const publishButton = wrapper.get('[data-testid="publish-workflow"]');
     expect(publishButton.attributes('disabled')).toBe('false');
-    expect(publishButton.text()).toBe('自动同步并发布');
+    expect(publishButton.text()).toBe('更新并应用');
     await vm.publishWorkflow();
     await flushPromises();
     expect(apiMocks.publishAndActivateProductProcessWorkflow).toHaveBeenCalledTimes(1);
