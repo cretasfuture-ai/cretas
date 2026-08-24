@@ -1,5 +1,11 @@
 # Dispatch 完成记录 — 2026-08-25
 
+## `CI-JPA-PREMERGE-GATE-20260825` — `review`
+
+- **发现**：PR #39 的 exact head 同时改动 Entity、Repository 与 Flyway，但 PR 只有 Secret/Web checks；`JPA repository query startup gate` 仅在 merge commit `8f25662a8c4c0f0ac4ffbeff4153e7b0c478f0c9` 合入 main 后运行并通过，不能充当合并授权。
+- **修复**：`.github/workflows/jpa-gate-main.yml` 新增 `pull_request` main + 精确 JPA paths 触发，保留 main push 复验；workflow 自身改动也会触发。job 名保持不变，供分支保护与 daily integration 归属 exact head。
+- **范围**：仅 CI workflow 与 dispatch 记录；Repository、Entity、Flyway、业务代码、生产和数据均未修改。实现 scope 已释放，等待 daily PR exact-head JPA gate。
+
 ## `ML-LIUSHANMEN-TRAY-AWARE-HARD-NEGATIVE-20260825` — `review complete`
 
 - **实现**：VisionLab 新增默认关闭的 `training.isolated_missing_repeat`。只对任务级划分后进入 train、人工确认缺一个类别且只有一个互补类别框的单目标裁图重复采样；validation 永不复制，多框邻盘歧义和两类都缺的空框图不加权，声明缺失类别却又存在该类别框时直接失败。旧数字 `0/1` 与新字符串类别格式均受支持；权重策略进入不可变 dataset ID，默认值 `1` 保持既有 ID，代码合入不会自动触发重训。
