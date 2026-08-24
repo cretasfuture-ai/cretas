@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compare a candidate label ONNX with the registered production ONNX.
+"""Run a bounded legacy two-model comparison for candidate diagnostics.
 
-The manifest contains full production photos and human truth.  Both models use
-the same production tray detector and the repository's real screening code.
+This is not a replay of the production v8 multi-model cascade and therefore
+must never satisfy the production-pipeline promotion gate.
 """
 from __future__ import annotations
 
@@ -176,10 +176,11 @@ def main() -> None:
         candidate = evaluate(candidate_dir, records, screening_module, yolo_module, args.threshold)
     payload = {
         "version": "vision-lab-evaluation-v1",
+        "evaluation_pipeline": "legacy_two_model",
         "artifact_sha256": sha256_file(args.candidate_label),
         "production_artifact_sha256": sha256_file(args.production_label),
         "tray_artifact_sha256": sha256_file(args.tray),
-        "production_pipeline_replay": True,
+        "production_pipeline_replay": False,
         "onnx_parity_mismatches": args.onnx_parity_mismatches,
         "threshold": args.threshold, "records": len(records),
         "records_before_truth_adjudication": original_record_count,

@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824` — `in-progress` — Owner: `/root` — Base SHA `21015111b2118aeea4e5487a09ae87f44c2d87ad`。同批优化六扇门工厂超级管理员的任务队列/逐图逐盒审核与平台管理员的技术诊断/单盒精修；修复平台管理员无 factoryId 时队列误空、大队列分页/优先级/恢复能力、OSS 图片可见性、直接框编辑与快捷审核误操恢复。先完成两角色前端验收，再按 LIUSHANMEN 显式授权范围执行人工复核、训练批准、去重/保护集门禁和候选训练；其他租户写入为 0，模型门禁失败不替换线上。
+- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824` — `in-progress` — Owner: `/root` — Base SHA `c99eec847dfc8bf916ea051c2d8e50dc34012f98`。审核双角色 UI 与候选训练门禁已进入 main；当前续作修复 VisionLab 队列 glob 把评估 `records` manifest 误识别为人工 `rows` 队列的问题，并把失败的日常计划任务从旧 dirty detached worktree 迁到 clean exact-main、安全配置。保护集和原图不改写，其他租户写入为 0，候选训练和部署保持关闭。
 
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `3dfce77462cb8f24db5f3e56876ce7e714f852dd`; runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。专项验证 Workflow“当前配置/版本记录”产品真值、F006 计划按首次正式报工分流、历史恢复、幂等/并发冲突、权限和 PostgreSQL 事务顺序；当前 Chat 是唯一写 Owner，F006 写入必须绑定本 runKey，其他租户写入为 0。
 
@@ -40,7 +40,7 @@
 
 ## Scope 锁地图
 
-- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824`：`web-admin/src/views/quality/label-qc/**`、`web-admin/src/views/platform/label-qc-crops/**`、`web-admin/src/views/platform/label-qc-diagnostics/**`、`web-admin/src/api/labelQc.ts`、`backend/python/label_qc/services/hybrid_analyzer.py` 及对应测试；如 OSS 直链无法安全显示，可窄范围修改 Java `LabelQcPlatformController`、工厂 `LabelQcController`、附件只读代理服务及目标测试。前端验收后允许的外部动作仅限用户本轮明确授权的 LIUSHANMEN 人工复核、训练决策、只读导出/去重与本地候选训练；每次写入前必须验证租户、请求路径、payload 和预期记录 ID/行数，其他租户写入为 0。禁止 Entity/Repository/Flyway、远程生产模型替换和保护集改写。验收：Python 标签质检目标测试、Web 目标测试/typecheck/build、Java Controller/Service 目标测试（如触及）、六扇门工厂超管+平台管理员双角色浏览器验收、`git diff --check`；训练后候选必须通过不低于 v8 的缺陷/正常/hard-negative/parity 门禁，失败则 `NOT_DEPLOYED`。
+- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824`：已完成的 Web/Java/Python 审核 scope 保持冻结；续作仅允许 `tools/vision-lab/vision_lab.py`、`tools/vision-lab/evaluate_candidate.py` 及两者目标测试、`backend/python/label_qc/services/v8_pipeline.py`、`backend/python/tests/test_label_qc_v8_pipeline.py`、`docs/dispatch/ACTIVE.md`、对应当日归档，以及 `D:\CretasVisionLab` 下新的训练配置、候选制品和只读验收回执。允许的外部动作仅限用户本轮明确授权的 LIUSHANMEN 人工复核、训练决策、只读导出/去重与本地候选训练；每次写入前必须验证租户、请求路径、payload 和预期记录 ID/行数，其他租户写入为 0。禁止 Entity/Repository/Flyway、远程生产模型替换、保护集/原图改写和旧回执覆盖；旧两模型评估仅作诊断，不得声明为生产 v8 全级联回放。验收：VisionLab 与 v8 pipeline 目标测试、`git diff --check`、候选 PT/ONNX parity，以及不低于生产 v8 的缺陷、正常、hard-negative、逐图决策和延迟门禁；失败则 `NOT_DEPLOYED`。
 
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824`：Workflow 当前配置编辑、版本记录/绑定清单/历史恢复/乐观锁与权限的 Web 页面、API/types/tests；Java `ProductProcessWorkflow` Controller/Service/DTO/Repository 及生产计划首次正式报工 started 判定/版本重绑定；真实 PostgreSQL 集成测试、专项 Playwright driver、gitignored 本 runKey 证据和 dispatch。只有发现并证明本专项缺陷后才修改实现；若触及 Repository/Entity/Flyway，必须补真实 JPA/迁移门禁。明确排除 WorkProcess 去重、BOM substitutes、Workflow/BOM 完整性准入、上一 runKey 后段生产实体、其他租户和全局配置；与现有三个 Workflow/BOM backlog 串行且不吸收其 scope。
 
