@@ -34,6 +34,8 @@
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
+- `FIX-F006-WORKFLOW-EDITOR-RELEASE-GATES-20260824` — `in-progress` — Owner: `/root` — Base SHA: `e3af27783c86994a431a9eb096ccbf0f441655b5` — PR #22 合并后的广域 Java 契约门禁发现销售/采购单追踪权限与各自详情不一致、V21 Workflow 迁移源码闸无法被 CI 选择；修复并通过权限漂移、契约/迁移目标测试和统一候选构建后再发布。
+
 ## Scope 锁地图
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
@@ -53,6 +55,8 @@
 - `FEATURE-F006-R2-BOM-SUBSTITUTE-001`：BOM 替代关系的 Web、版本/计划/领料/报工/成本/追溯快照与目标测试；Java CORE 已完成，父任务不得重复修改 CORE Flyway/Entity，必须与统一 Workflow/BOM 任务串行。
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE`：Workflow 草稿结构、BOM 完整性 DTO/Service/API、激活/发布/生产计划准入、Web 阶段引导与目标测试；不得改写历史快照或生产数据。
+
+- `FIX-F006-WORKFLOW-EDITOR-RELEASE-GATES-20260824`：仅 Java `BusinessDocumentTraceController` 销售/采购单追踪只读权限、`BusinessDocumentTracePermissionContractTest`、V21 Workflow 迁移源码门禁类名/文件名、`GateSelectorCoverageContractTest`（仅必要时）、权限漂移证据、`docs/dispatch/ACTIVE.md` 与当日归档。不得扩大写权限、修改菜单/路由角色范围、迁移 SQL 或生产业务数据。
 
 ## 阻塞项
 

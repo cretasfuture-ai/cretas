@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Static migration gate for the shared Workflow/production reference lock contract. */
-class WorkflowProductionReferenceAdvisoryLockMigrationValidationTest {
+class WorkflowProductionReferenceAdvisoryLockMigrationContractTest {
 
     private static final String VERSION = "V20261030_21";
     private static final Path MIGRATION_DIR = Path.of("src/main/resources/db/flyway");
