@@ -583,20 +583,62 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         from ultralytics import YOLO
     except ImportError as exc:
         raise RuntimeError("ultralytics is required for training") from exc
+    imgsz = int(training.get("imgsz", 640))
+    train_options: dict[str, Any] = {
+        "data": dataset["data_yaml"],
+        "epochs": int(training.get("epochs", 80)),
+        "imgsz": imgsz,
+        "batch": int(training.get("batch", 8)),
+        "device": training.get("device", 0),
+        "workers": int(training.get("workers", 0)),
+        "project": str(root / "runs"),
+        "name": run_id,
+        "exist_ok": False,
+        "seed": int(training.get("seed", 20260810)),
+        "deterministic": True,
+        "patience": int(training.get("patience", 20)),
+        "pretrained": False,
+        "amp": False,
+        "verbose": True,
+    }
+    optional_training_options = {
+        "optimizer": str,
+        "lr0": float,
+        "lrf": float,
+        "weight_decay": float,
+        "warmup_epochs": float,
+        "freeze": int,
+        "close_mosaic": int,
+        "mosaic": float,
+        "mixup": float,
+        "copy_paste": float,
+        "degrees": float,
+        "translate": float,
+        "scale": float,
+        "shear": float,
+        "perspective": float,
+        "fliplr": float,
+        "flipud": float,
+        "hsv_h": float,
+        "hsv_s": float,
+        "hsv_v": float,
+        "cache": bool,
+        "save_period": int,
+        "plots": bool,
+    }
+    for key, converter in optional_training_options.items():
+        if key in training and training[key] is not None:
+            value = training[key]
+            if converter is bool and not isinstance(value, bool):
+                raise ValueError(f"training option {key} must be a boolean")
+            train_options[key] = converter(value)
     model = YOLO(str(base_model))
-    model.train(
-        data=dataset["data_yaml"], epochs=int(training.get("epochs", 80)),
-        imgsz=int(training.get("imgsz", 640)), batch=int(training.get("batch", 8)),
-        device=training.get("device", 0), workers=int(training.get("workers", 0)),
-        project=str(root / "runs"), name=run_id, exist_ok=False,
-        seed=int(training.get("seed", 20260810)), deterministic=True,
-        patience=int(training.get("patience", 20)), pretrained=False, amp=False, verbose=True,
-    )
+    model.train(**train_options)
     best = root / "runs" / run_id / "weights" / "best.pt"
     if not best.is_file():
         raise RuntimeError("training completed without best.pt")
     exported = YOLO(str(best)).export(
-        format="onnx", imgsz=int(training.get("imgsz", 640)), opset=12,
+        format="onnx", imgsz=imgsz, opset=12,
         simplify=True, nms=True, dynamic=False, conf=float(training.get("export_floor", 0.05)),
     )
     exported_path = Path(exported)
@@ -607,7 +649,34 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
     parity_mismatches = verify_export_parity(
         best, onnx, Path(dataset["data_yaml"]).parent / "images" / "val",
         float(config.get("evaluation", {}).get("threshold", 0.20)),
+        imgsz,
     )
+    validation_dir = Path(dataset["data_yaml"]).parent / "images" / "val"
+    baseline_presence_threshold = float(
+        training.get(
+            "baseline_presence_threshold",
+            config.get("evaluation", {}).get("threshold", 0.20),
+        )
+    )
+    candidate_presence_threshold = float(
+        training.get("candidate_presence_threshold", baseline_presence_threshold)
+    )
+    for threshold_name, threshold in (
+        ("baseline_presence_threshold", baseline_presence_threshold),
+        ("candidate_presence_threshold", candidate_presence_threshold),
+    ):
+        if not 0.0 < threshold <= 1.0:
+            raise ValueError(f"{threshold_name} must be in (0, 1]")
+    label_presence_validation = {
+        "validation_dir": str(validation_dir),
+        "protected_holdout_included": False,
+        "baseline": evaluate_label_presence(
+            base_model, validation_dir, baseline_presence_threshold, imgsz,
+        ),
+        "candidate": evaluate_label_presence(
+            onnx, validation_dir, candidate_presence_threshold, imgsz,
+        ),
+    }
     result = {
         "version": VERSION, "model_id": run_id, "created_at": utc_now(),
         "dataset_id": dataset["dataset_id"], "base_model": str(base_model),
@@ -615,12 +684,26 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         "artifact": str(onnx), "artifact_sha256": sha256_file(onnx),
         "onnx_parity_mismatches": parity_mismatches, "status": "candidate",
         "offline_only": True, "amp_enabled": False,
+        "label_presence_validation": label_presence_validation,
+        "training": {
+            key: train_options[key]
+            for key in (
+                "epochs", "imgsz", "batch", "device", "workers", "seed", "patience",
+                "optimizer", "lr0", "lrf", "weight_decay", "warmup_epochs", "freeze",
+                "close_mosaic", "mosaic", "mixup", "copy_paste", "degrees", "translate",
+                "scale", "shear", "perspective", "fliplr", "flipud", "hsv_h", "hsv_s",
+                "hsv_v", "cache", "save_period", "plots",
+            )
+            if key in train_options
+        },
     }
     write_json(artifact_dir / "training-receipt.json", result)
     return result
 
 
-def verify_export_parity(best_pt: Path, onnx: Path, validation_dir: Path, threshold: float) -> int:
+def verify_export_parity(
+    best_pt: Path, onnx: Path, validation_dir: Path, threshold: float, imgsz: int = 640,
+) -> int:
     from ultralytics import YOLO
 
     images = sorted(
@@ -635,7 +718,7 @@ def verify_export_parity(best_pt: Path, onnx: Path, validation_dir: Path, thresh
         output: list[tuple[bool, bool]] = []
         for image in images:
             result = model.predict(
-                str(image), imgsz=640, conf=0.001, iou=0.45,
+                str(image), imgsz=imgsz, conf=0.001, iou=0.45,
                 verbose=False, device="cpu", rect=False,
             )[0]
             white = color = 0.0
@@ -649,6 +732,125 @@ def verify_export_parity(best_pt: Path, onnx: Path, validation_dir: Path, thresh
         return output
 
     return sum(left != right for left, right in zip(signatures(best_pt), signatures(onnx)))
+
+
+def evaluate_label_presence(
+    model_path: Path, validation_dir: Path, threshold: float, imgsz: int = 640,
+) -> dict[str, Any]:
+    from ultralytics import YOLO
+
+    images = sorted(
+        path for path in validation_dir.iterdir()
+        if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+    )
+    if not images:
+        raise RuntimeError("no validation images for label-presence gate")
+    labels_dir = validation_dir.parent.parent / "labels" / validation_dir.name
+    if not labels_dir.is_dir():
+        raise RuntimeError(f"validation labels directory is missing: {labels_dir}")
+    model = YOLO(str(model_path), task="detect")
+    classes = {
+        0: {"name": "white_label", "tp": 0, "fp": 0, "fn": 0, "tn": 0},
+        1: {"name": "color_label", "tp": 0, "fp": 0, "fn": 0, "tn": 0},
+    }
+    exact_matches = 0
+    mismatches: list[dict[str, Any]] = []
+    for image in images:
+        expected = {0: False, 1: False}
+        label_path = labels_dir / f"{image.stem}.txt"
+        if label_path.is_file():
+            for line_number, raw_line in enumerate(
+                label_path.read_text(encoding="utf-8").splitlines(), start=1,
+            ):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    class_id = int(line.split()[0])
+                except (ValueError, IndexError) as exc:
+                    raise RuntimeError(
+                        f"invalid validation label at {label_path}:{line_number}"
+                    ) from exc
+                if class_id in expected:
+                    expected[class_id] = True
+        result = model.predict(
+            str(image), imgsz=imgsz, conf=0.001, iou=0.45,
+            verbose=False, device="cpu", rect=False,
+        )[0]
+        confidence = {0: 0.0, 1: 0.0}
+        if result.boxes is not None and len(result.boxes):
+            for class_id, score in zip(
+                result.boxes.cls.cpu().tolist(), result.boxes.conf.cpu().tolist(),
+            ):
+                normalized_class = int(class_id)
+                if normalized_class in confidence:
+                    confidence[normalized_class] = max(
+                        confidence[normalized_class], float(score),
+                    )
+        predicted = {
+            class_id: confidence[class_id] >= threshold for class_id in confidence
+        }
+        if predicted == expected:
+            exact_matches += 1
+        else:
+            mismatches.append({
+                "image": image.name,
+                "expected": {classes[key]["name"]: value for key, value in expected.items()},
+                "predicted": {classes[key]["name"]: value for key, value in predicted.items()},
+                "confidence": {classes[key]["name"]: confidence[key] for key in confidence},
+            })
+        for class_id, counters in classes.items():
+            if expected[class_id] and predicted[class_id]:
+                counters["tp"] += 1
+            elif expected[class_id]:
+                counters["fn"] += 1
+            elif predicted[class_id]:
+                counters["fp"] += 1
+            else:
+                counters["tn"] += 1
+    return {
+        "model": str(model_path),
+        "model_sha256": sha256_file(model_path),
+        "threshold": threshold,
+        "imgsz": imgsz,
+        "total_images": len(images),
+        "exact_matches": exact_matches,
+        "classes": {counters["name"]: {
+            key: value for key, value in counters.items() if key != "name"
+        } for counters in classes.values()},
+        "mismatches": mismatches,
+    }
+
+
+def evaluate_label_presence_gate(model: dict[str, Any]) -> dict[str, Any]:
+    validation = model.get("label_presence_validation") or {}
+    baseline = validation.get("baseline") or {}
+    candidate = validation.get("candidate") or {}
+    errors: list[str] = []
+    baseline_total = int(baseline.get("total_images", 0))
+    candidate_total = int(candidate.get("total_images", 0))
+    if baseline_total <= 0 or candidate_total != baseline_total:
+        errors.append("label-presence validation set is missing or inconsistent")
+    if int(candidate.get("exact_matches", -1)) < int(baseline.get("exact_matches", 0)):
+        errors.append("label-presence exact accuracy regressed")
+    baseline_classes = baseline.get("classes") or {}
+    candidate_classes = candidate.get("classes") or {}
+    for class_name in ("white_label", "color_label"):
+        baseline_class = baseline_classes.get(class_name) or {}
+        candidate_class = candidate_classes.get(class_name) or {}
+        for metric in ("fp", "fn"):
+            if int(candidate_class.get(metric, baseline_total + 1)) > int(
+                baseline_class.get(metric, baseline_total)
+            ):
+                errors.append(f"label-presence {class_name} {metric} regressed")
+    return {
+        "version": VERSION,
+        "model_id": model["model_id"],
+        "evaluated_at": utc_now(),
+        "passed": not errors,
+        "errors": errors,
+        "validation": validation,
+    }
 
 
 def evaluate_candidate(config: dict[str, Any], model: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
@@ -1046,15 +1248,49 @@ def command_main(argv: list[str] | None = None) -> int:
                     return 0
                 stages["model"] = train_candidate(config, stages["dataset"])
                 persist_candidate(state, stages["model"], "candidate")
-                metrics_path, stages["evaluation"] = evaluate_candidate(config, stages["model"])
-                stages["gate"] = evaluate_gate(config, stages["model"], metrics_path)
-                if stages["gate"]["passed"]:
-                    persist_candidate(state, stages["model"], "approved", stages["evaluation"])
-                    stages["deployment"] = deploy_candidate(config, state, stages["model"], stages["gate"])
-                    stages["status"] = "deployed" if stages["deployment"].get("succeeded") else stages["deployment"]["status"]
+                stages["presence_gate"] = evaluate_label_presence_gate(stages["model"])
+                if not stages["presence_gate"]["passed"]:
+                    stages["evaluation"] = {
+                        "skipped": True,
+                        "reason": "label-presence preflight regressed against baseline",
+                    }
+                    stages["gate"] = {
+                        "version": VERSION,
+                        "model_id": stages["model"]["model_id"],
+                        "evaluated_at": utc_now(),
+                        "passed": False,
+                        "errors": stages["presence_gate"]["errors"],
+                        "metrics": {
+                            "artifact_sha256": stages["model"]["artifact_sha256"],
+                            "label_presence_validation": stages["model"]["label_presence_validation"],
+                            "production_pipeline_replay": False,
+                        },
+                    }
+                    write_json(
+                        Path(stages["model"]["artifact"]).parent / "promotion-gate.json",
+                        stages["gate"],
+                    )
+                    persist_candidate(
+                        state, stages["model"], "rejected", stages["gate"]["metrics"],
+                    )
+                    stages["status"] = "candidate-rejected-preflight"
                 else:
-                    persist_candidate(state, stages["model"], "rejected", stages["evaluation"])
-                    stages["status"] = "candidate-rejected"
+                    metrics_path, stages["evaluation"] = evaluate_candidate(
+                        config, stages["model"],
+                    )
+                    stages["gate"] = evaluate_gate(config, stages["model"], metrics_path)
+                    if stages["gate"]["passed"]:
+                        persist_candidate(state, stages["model"], "approved", stages["evaluation"])
+                        stages["deployment"] = deploy_candidate(
+                            config, state, stages["model"], stages["gate"],
+                        )
+                        stages["status"] = (
+                            "deployed" if stages["deployment"].get("succeeded")
+                            else stages["deployment"]["status"]
+                        )
+                    else:
+                        persist_candidate(state, stages["model"], "rejected", stages["evaluation"])
+                        stages["status"] = "candidate-rejected"
                 state.set_meta("last_trained_dataset_id", stages["dataset"]["dataset_id"])
                 if args.skip_mining:
                     stages["mining"] = {"status": "skipped-by-operator"}

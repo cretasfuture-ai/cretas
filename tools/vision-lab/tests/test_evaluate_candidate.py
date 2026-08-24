@@ -21,6 +21,12 @@ SPEC.loader.exec_module(module)
 
 
 class EvaluateCandidateTests(unittest.TestCase):
+    def test_legacy_evaluator_cannot_claim_production_pipeline_replay(self):
+        source = (ROOT / "evaluate_candidate.py").read_text(encoding="utf-8")
+
+        self.assertIn('"evaluation_pipeline": "legacy_two_model"', source)
+        self.assertIn('"production_pipeline_replay": False', source)
+
     def test_load_records_without_adjudication_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

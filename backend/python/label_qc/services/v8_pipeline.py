@@ -332,9 +332,12 @@ class _GenericLabelTypeDetector(_YoloxOnnxDetector):
 
 
 class _MissingClassFallbackDetector:
-    def __init__(self, primary: Any, fallback: Any) -> None:
+    def __init__(
+        self, primary: Any, fallback: Any, fallback_confidence_floor: float = 0.0,
+    ) -> None:
         self.primary = primary
         self.fallback = fallback
+        self.fallback_confidence_floor = float(fallback_confidence_floor)
         self.reset_stats()
 
     def reset_stats(self) -> None:
@@ -354,7 +357,9 @@ class _MissingClassFallbackDetector:
         self.fallback_calls += 1
         for class_id in missing:
             self.fallback_reasons[class_id] += 1
-        return list(self.fallback.detect(image, conf))
+        return list(self.fallback.detect(
+            image, max(float(conf), self.fallback_confidence_floor),
+        ))
 
     def stats(self) -> dict[str, Any]:
         return {
@@ -713,9 +718,15 @@ class LabelQcV8Models:
                     bindings["generic_label"].path,
                     bindings["proposal_classifier"].path,
                 )
+                fallback_confidence = float(
+                    self._manifest.get("labelFallbackConfidence", LABEL_CONFIDENCE)
+                )
+                if not LABEL_CONFIDENCE <= fallback_confidence <= 1.0:
+                    raise RuntimeError("invalid v8 label fallback confidence")
                 candidate_label = _MissingClassFallbackDetector(
                     primary_label,
                     _OnnxDetector(bindings["label_fallback"].path, imgsz=640),
+                    fallback_confidence,
                 )
                 self._models = _V8CascadeModels(
                     production=production,
