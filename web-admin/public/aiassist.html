@@ -1128,7 +1128,7 @@
 	<button class="suggestion" type="button" data-question="Workflow 的存放位置为什么可以和“本图产出”不同，原料分流发布后何时会自动重锚？"><span class="suggestion-index">18</span><span>存放位置、本图产出与自动重锚</span></button>
 	<button class="suggestion" type="button" data-question="Workflow 画布的 BOM 为什么必须为每个工序保留一个产出 Cell，顶部版本状态和包材连线应该怎样验收？"><span class="suggestion-index">19</span><span>产出门禁、版本状态与包材连线</span></button>
 	<button class="suggestion" type="button" data-question="Workflow 维护时单位怎样显示、辅料 Cell 何时折叠、旧投入失效或没有 ACTIVE BOM 时怎样处理？"><span class="suggestion-index">20</span><span>Workflow 维护与旧投入修复</span></button>
-	<button class="suggestion" type="button" data-question="原料、辅料和包材怎样直接加入销售订单并发货？物料批次、计件单位和小数数量分别怎样处理？"><span class="suggestion-index">21</span><span>物料销售、发货与单位</span></button>
+	<button class="suggestion" type="button" data-question="销售订单商品为什么只允许成品和半成品？客户自带原料怎样放进独立 suppliedMaterials，而不是混入商品行？"><span class="suggestion-index">21</span><span>销售商品白名单与客供原料</span></button>
 	<button class="suggestion" type="button" data-question="AI 表单助手什么时候才可以报告操作成功？模型说成功但服务端没有写入时应该怎样提示？"><span class="suggestion-index">22</span><span>表单助手的真实成功边界</span></button>
 	<button class="suggestion" type="button" data-question="BOM 现在只能在哪里维护，手机和 AI 还能不能直接改？旧投入怎样移除，库存批次调整为什么要区分增减量和最终剩余量？"><span class="suggestion-index">23</span><span>BOM 单一入口与批次调整审计</span></button>
 	<button class="suggestion" type="button" data-question="调拨批次账面有库存但实物可用量更少时怎样处理？FEFO 跨多个批次发运后，怎样从 TRANSFER_OUT 台账追到每批材料？"><span class="suggestion-index">24</span><span>调拨实物库存与逐批消耗台账</span></button>
@@ -1141,11 +1141,13 @@
 		<button class="suggestion" type="button" data-question="手机仓储怎样从真正的待收货任务收货、提前关单，并在发货时由系统按 FIFO 推荐实际取货批次？"><span class="suggestion-index">31</span><span>移动仓储待收货、关单与 FIFO 发货</span></button>
 		<button class="suggestion" type="button" data-question="批次的账实数量和入库日期为什么不能在编辑页直接改？盘点与留痕更正分别从哪里走？"><span class="suggestion-index">32</span><span>批次数量、入库日期与留痕更正</span></button>
 		<button class="suggestion" type="button" data-question="正式报工为什么立即占用生产仓库存？小结、撤回和取消怎样释放，多产出成本为什么不能按节点名称或顺序分摊？"><span class="suggestion-index">33</span><span>报工占用释放与多产出成本</span></button>
-		<button class="suggestion" type="button" data-question="手机仓储为什么现在只有入库、发货、我的三个入口？库存入口隐藏后怎样进入生产成品入库，FIFO 推荐不足时又怎样处理？"><span class="suggestion-index">34</span><span>仓储三入口、成品入库与 FIFO 预检</span></button>
+		<button class="suggestion" type="button" data-question="手机仓储为什么现在是首页、入库、发货、我的四个入口？首页怎样分流，采购收货、生产成品入库和 FIFO 推荐不足又怎样处理？"><span class="suggestion-index">34</span><span>仓储四入口、真实收货与 FIFO 预检</span></button>
 		<button class="suggestion" type="button" data-question="操作员还能不能扫码报工？已分配工序和本地草稿现在分别从哪里继续真实报工？"><span class="suggestion-index">35</span><span>取消扫码报工后的正确入口</span></button>
 		<button class="suggestion" type="button" data-question="生产经理和生产文员当前分别能做什么、只能看什么、哪些模块不可用，报工审批应该怎样交接？"><span class="suggestion-index">36</span><span>生产经理与生产文员精确边界</span></button>
 		<button class="suggestion" type="button" data-question="仓库收货后财务怎样从 AP_INVOICE 未清应付付款核销？旧采购付款申请为什么固定返回 410？"><span class="suggestion-index">37</span><span>未清应付核销与旧付款链退役</span></button>
 		<button class="suggestion" type="button" data-question="正式报工撤回审批为什么必须整笔原子执行、提交人与审批人分离，历史 APPROVED 半执行记录怎样安全恢复？"><span class="suggestion-index">38</span><span>冲销原子性、四眼与安全恢复</span></button>
+		<button class="suggestion" type="button" data-question="已启用 Workflow 编辑后为什么保存草稿会自动新版本？草稿被生产引用或活动生产未结束时，保存与停用分别怎样处理？"><span class="suggestion-index">39</span><span>Workflow 自动分叉与活动引用门禁</span></button>
+		<button class="suggestion" type="button" data-question="销售母单怎样创建 FULL 或 PARTIAL 子发运单？仓库确认出库后，全部发完为什么自动生成唯一开票待办，手工入口为什么返回 410？"><span class="suggestion-index">40</span><span>母单、子发运与自动开票</span></button>
               </div>
               <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>

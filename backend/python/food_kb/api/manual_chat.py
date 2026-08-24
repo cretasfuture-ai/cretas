@@ -315,14 +315,33 @@ _FACTORY_RN_READONLY_ANSWER = """\
 当前 RN App 的业务入口只面向仓库主管和仓库操作员；其余 11 个业务角色登录后进入“请使用电脑端”指引页，平台管理员与超级管理员仅保留技术支持例外，不能据此把 Web 能力说成手机能力。
 
 **仓库手机端：**
-1. 底部导航当前只保留“入库 / 发货 / 我的”三个入口，默认打开待入库任务。“首页”与“库存”已隐藏但没有删除；库存查询、盘点和其它办公室工作使用电脑 Web。“我的”必须保留退出和切换账号，不能把用户锁死在当前账号。
-2. 旧“AI 智能入库”、空白“新建入库”和生产看板“原料入库”已退役。采购等来源收货必须从“仓储待收货 / 采购收货列表”选择真实任务；生产结单后的成品实收则从同一“入库”页进入“生产成品入库”，逐行核对产品、计划、批次和报产量。库存 Tab 即使隐藏，这条现场入库动作仍然可达。列表物料显示服务端真实品名，不能恒显示“未知材料”。
-3. 收货列表进入上架页后，选择库位并确认会实际更新该批次的 `storageLocation`；只有接口成功后才显示“上架成功”。验收要独立刷新/回读新库位，不能用 Toast 证明已经上架；失败时停留当前页并显示真实原因。
-4. 发货进屏即读取服务端 FIFO 推荐并用业务名称显示“从哪一批取多少”。推荐量不足时先说明“还差约多少”并提供“去调拨”；该提示是进屏快照，不硬禁提交，最终仍由服务端权威校验并原样显示业务原因。普通仓管不手工维护内部批次分配，也不能静默少发。
+1. 底部固定为“首页 / 入库 / 发货 / 我的”四个入口，登录后先到首页；首页只放两个大号入口，把现场人员带到入库或发货，不重复展示统计或任务列表。“库存”仅从导航隐藏、代码未删除，库存查询、盘点和其它办公室工作使用电脑 Web。“我的”必须保留退出和切换账号。
+2. 入库首页以真实采购收货任务为真值，不能用已生成物料批次冒充待收货。筛选固定为“全部 / 待收货 / 部分入库 / 已收货”；同状态内优先显示交期更早的任务。采购单 `COMPLETED` 在仓储列表明确显示“已收货”，不能写成含糊的“已完成”。每张卡片显示“共 N 项”，数量紧邻真实单位；多单位订单不伪造总量，只提示按明细核对。
+3. 旧“AI 智能入库”、空白“新建入库”和生产看板“原料入库”已退役。生产结单后的成品实收从“入库 → 生产成品入库”进入；列表物料显示服务端真实品名。加载失败必须给原因和重试，不能伪装成 0 单或空列表。
+4. 收货列表进入上架页后，选择库位并确认会实际更新该批次的 `storageLocation`；只有接口成功后才显示“上架成功”。验收要独立刷新/回读新库位，不能用 Toast 证明已经上架；失败时停留当前页并显示真实原因。
+5. 发货进屏即读取服务端 FIFO 推荐并用业务名称显示“从哪一批取多少”。推荐量不足时先说明“还差约多少”并提供“去调拨”；该提示是进屏快照，不硬禁提交，最终仍由服务端权威校验并原样显示业务原因。普通仓管不手工维护内部批次分配，也不能静默少发。
 
 **物料需求单：**
 物料需求单和生产工作台属于电脑 Web。手机端非仓库业务角色只显示电脑端地址、复制地址、退出和切换仓库账号提示，不提供隐藏的写入口。
 """
+_FACTORY_WORKFLOW_AUTOFORK_ANSWER = """\
+当前已启用 Workflow 可以直接进入编辑，但保存不会原地改写生产正在使用的版本。
+
+1. 编辑已启用版本时，按钮显示“保存草稿（自动新版本）”；业务图确有变化且没有现成草稿时，保存自动创建更高版本的 `DRAFT`，原已启用版本继续服务生产。“另存独立版本”只是可选历史快照动作，不是发布前置步骤。
+2. 当前可编辑草稿已被生产计划或生产批次引用时，保存先把原 Workflow 行冻结为 `SNAPSHOT`，再创建更高版本 `DRAFT`。计划和批次继续通过 `selectedWorkflowId` 固定创建时版本，旧 Workflow、Revision 和生产身份都不回写。
+3. 停用前按工厂与活动 Workflow 统计生产计划 `IN_PROGRESS/PAUSED`，以及生产批次 `IN_PROGRESS/PRODUCING/PAUSED`。任一计数非零即返回 409 `WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE`，并提示先完成或取消相关生产后重试；活动 Workflow 身份无法确认时返回 409 `WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN`，失败关闭。
+4. 已完成、已取消和仅待处理的历史/未开工引用不阻止停用；历史预览保持只读，退出预览或恢复到当前草稿后才重新开放编辑入口。
+
+**验收结果：** 保存后回读新的 DRAFT 版本及原版本不变；既有计划/批次仍指向创建时 Workflow；有活动生产时停用写入为 0，页面展示服务端原因和下一步。发布新草稿仍须遵守“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”及 ACTIVE BOM 前置门禁。"""
+_FACTORY_SALES_DELIVERY_INVOICE_ANSWER = """\
+当前销售闭环是“全屏建销售母单 → 创建一张或多张子发运单 → 仓库确认实际出库 → 全部发完后系统生成唯一开票待办”，母单、子单、库存和发票分别留痕。
+
+1. 新建订单使用全屏页面。商品行只允许 `FINISHED_PRODUCT` 和 `SEMI_FINISHED`；空分类、未知 ID、原料和包材一律失败关闭。客户自带原料只进入独立 `suppliedMaterials`，不混入商品搜索，也不会由销售侧直接增加库存。每个商品行必须选择服务端允许的来源仓库，后端再次校验。
+2. 销售先建立母发货单，母单永远不能直接扣库存或确认发货。`FULL` 子发运单在订单锁内逐行等于母单全部剩余量；`PARTIAL` 可按明确数量创建多张。每张子单创建前选择配送方式；物流配送必须填写物流公司和运单号。
+3. 子单进入 `PENDING_WAREHOUSE_CONFIRM` 后由仓管核对实际数量、来源仓和 FIFO 批次再确认出库；确认记录真实仓管用户和时间。累计实发不能超过订单量，重试不能重复扣库存，销售与仓储两端都能回读状态、创建/确认人、时间和逐批数量。
+4. 全部子单发完的完成态边沿只生成一个持久化自动开票待办。手工 `/request`、`/request-from-order` 与旧 AI 开票工具固定返回 410，不创建并行发票；系统有界重试，耗尽后只允许财务经理在失败待办工作台显式重试。财务继续审核、驳回或开具系统生成的记录，再独立登记收款并核对应收余额。
+
+**验收结果：** 母单不扣库；每张子单只确认一次；最后一张完成后只出现一条自动开票记录；手工兼容入口业务写入为 0。"""
 _FACTORY_PRODUCTION_ROLE_SPLIT_ANSWER = """\
 生产经理与生产文员是两个独立岗位，不再把生产经理当成调度员的权限别名。
 
@@ -423,12 +442,12 @@ _FACTORY_BATCH_ADJUSTMENT_ANSWER = """\
 
 **验收结果：** 普通编辑页数量和入库日期只读；受控路径中的调前/调后值、原因、操作人、时间、库存流水和生产计划关联一致；被拒请求的业务写入为 0。"""
 _FACTORY_MATERIAL_SALES_ANSWER = """\
-原料、辅料和包材可以直接进入销售订单，只有半成品保持不可售。
+当前销售订单商品行使用严格白名单，只允许 `FINISHED_PRODUCT` 和 `SEMI_FINISHED`；原料、辅料、包材、空分类和未知 ID 都不能伪装成销售商品。
 
-1. 物料行使用物料字典中的名称与库存单位，不要求成品箱规，也不需要先建立生产计划。
-2. 创建发货任务时允许 0.5kg 等小数；“只、个、件”按原字面保存和回读，不能统一改写成“件”。
-3. 物料行不参加成品批次分配。仓库确认发货时，服务端从物料批次按 FIFO 自动扣减；页面应显示“物料无需分配批次”，不能提示先生产入库，也不能提交空的成品分配列表。
-4. 物料库存不足时整次发货失败，不能少扣后仍发货。成品行继续走原有 FEFO、库存归属与批次分配门禁。"""
+1. 客户自带原料只进入独立 `suppliedMaterials`，与销售商品搜索和商品行完全分开；它只登记预计到货、单位、时间和目标仓库，不会由销售侧直接增加库存。
+2. 商品搜索覆盖中文名、编码、完整拼音和拼音首字母；每行选择合法来源仓库，前端分组展示，后端再次校验，不能用 `OTHER/RETURNS/SCRAP`、研发仓或停用仓绕过。
+3. 创建母单不扣库存；实际出库只发生在子发运单进入 `PENDING_WAREHOUSE_CONFIRM` 后，由仓管核对来源仓、FIFO 批次和实际数量并确认。
+4. 空分类、未知 ID、原料或包材命中商品行时整单失败关闭；不能回退到旧“除了半成品都能卖”的宽口径。"""
 _FACTORY_FORM_ASSISTANT_RESULT_ANSWER = """\
 AI 表单助手只有在服务端实际执行成功且业务结果可以回读时，才能报告操作成功。
 
@@ -946,9 +965,10 @@ def _needs_factory_rn_readonly_guard(query: str) -> bool:
     mentions_simplified_nav = any(
         term in normalized
         for term in (
-            "三个入口", "3个入口", "入库、发货、我的", "入库/发货/我的",
-            "只有入库", "首页隐藏", "库存入口", "去调拨", "fifo推荐",
-            "fifo 推荐", "发货库存", "还差约",
+            "四个入口", "4个入口", "首页、入库、发货、我的", "首页/入库/发货/我的",
+            "仓储首页", "首页大入口", "库存入口", "去调拨", "fifo推荐",
+            "fifo 推荐", "发货库存", "还差约", "部分入库", "已收货",
+            "共 n 项", "多单位",
         )
     ) and any(term in normalized for term in ("手机", "app", "rn", "仓储", "仓管", "发货"))
     rn_signals = sum(
@@ -967,6 +987,43 @@ def _needs_factory_rn_readonly_guard(query: str) -> bool:
             )
         )
     )
+
+
+def _needs_factory_workflow_autofork_guard(query: str) -> bool:
+    """Keep enabled-version edits and active-production deactivation fail closed."""
+    normalized = (query or "").lower()
+    mentions_workflow = "workflow" in normalized or "工艺版本" in normalized
+    mentions_auto_fork = any(
+        term in normalized
+        for term in (
+            "自动新版本", "自动分叉", "已启用版本", "保存草稿", "另存独立版本",
+            "草稿被引用", "计划引用", "批次引用", "snapshot", "selectedworkflowid",
+        )
+    )
+    mentions_deactivation_gate = any(
+        term in normalized
+        for term in (
+            "活动生产", "停用", "正在生产", "生产引用",
+            "workflow_deactivation_active_production_reference",
+            "workflow_deactivation_reference_unknown",
+        )
+    )
+    return mentions_workflow and (mentions_auto_fork or mentions_deactivation_gate)
+
+
+def _needs_factory_sales_delivery_invoice_guard(query: str) -> bool:
+    """Keep the sales mother-order, child-shipment and auto-invoice chain together."""
+    normalized = (query or "").lower()
+    mentions_sales = any(
+        term in normalized for term in ("销售订单", "销售建单", "销售母单", "母发货单")
+    )
+    signals = (
+        any(term in normalized for term in ("全屏", "商品行", "半成品", "客供原料", "suppliedmaterials")),
+        any(term in normalized for term in ("子发运单", "子单", "full", "partial", "配送方式", "运单号")),
+        any(term in normalized for term in ("仓库确认", "pending_warehouse_confirm", "实际出库", "fifo")),
+        any(term in normalized for term in ("自动开票", "开票待办", "手工开票", "410", "财务重试")),
+    )
+    return mentions_sales and any(signals)
 
 
 def _needs_factory_production_role_split_guard(query: str) -> bool:
@@ -1930,13 +1987,14 @@ FACTORY_SYSTEM_PROMPT = """\
 - 普通质检照片在质检记录成功创建后逐张登记为 `QUALITY_CHECK` 附件；记录成功与附件上传成功分别报告，详情必须回读可打开原图，单张失败不能冒充证据齐全。
 - 包装标签拍检是另一条独立流程：客户“待我审核”只保留缺标风险、无法判断、未识别到可核查盒子或分析失败；受信任流水线明确识别到盒子且无风险时显示“系统未见风险”并退出客户人工队列，但不能冒充人工真值。进入待审后仍按盒子、白标、彩标三层参考框逐项复核。客户风险复核、平台训练选样、工厂整图审核与单盒精修彼此隔离；平台精修不覆盖工厂真值，AI 提议和系统自动通过都不能直接成为训练真值。训练批准只允许导出，不会自动训练或发布模型。
 - 报工页面按配置单位显示和提交。kg/g 等同量纲可科学换算；盒、袋、只等计数/包装单位按字面量匹配且不得暗中折重。跨量纲成品率必须先补充每单位重量，否则明确不可比，不能输出伪造百分比。
-- RN App 的业务入口只面向仓库主管和仓库操作员；其它 11 个业务角色使用电脑 Web，平台管理员和超级管理员仅有技术支持例外。仓储底部当前只保留“入库 / 发货 / 我的”，默认待入库；“首页”和“库存”隐藏，库存查询与盘点回到电脑 Web。采购等来源从真实待收货任务进入；生产结单后的成品从“入库 → 生产成品入库”核对实收，不能因为库存 Tab 隐藏就丢失入口。旧 AI/空白新建入库与生产侧原料入库已退役，物料显示真实品名，上架只有实际更新并回读 `storageLocation` 后才成功。发货进屏读取 FIFO 推荐，缺口先说明“还差约多少”并给“去调拨”，最终仍以服务端校验为准。
+- RN App 的业务入口只面向仓库主管和仓库操作员；其它 11 个业务角色使用电脑 Web，平台管理员和超级管理员仅有技术支持例外。仓储底部固定为“首页 / 入库 / 发货 / 我的”，登录后先到只含两个大入口的首页；“库存”仅隐藏，库存查询与盘点回到电脑 Web。入库以真实采购收货任务为真值，按“全部 / 待收货 / 部分入库 / 已收货”筛选，卡片显示项数及带单位数量，多单位不合计；读取失败不能伪装空列表。生产结单后的成品仍从“入库 → 生产成品入库”核对实收。旧 AI/空白新建入库与生产侧原料入库已退役，上架只有实际更新并回读 `storageLocation` 后才成功。发货进屏读取 FIFO 推荐，缺口先说明“还差约多少”并给“去调拨”，最终仍以服务端校验为准。
 - 生产经理与生产文员是独立角色：生产经理可写生产、排程、工作报工和看板，研发/质量/仓储/库存只读，销售/分析/设备/采购/报表/HR/财务/系统不可用；生产文员可写生产和工作报工、可复核待审批报工，看板/仓储/库存/报表只读，数据分析、排程、销售、采购、质量、研发、HR、设备、财务和系统不可用。菜单可见、模块可写和单据允许动作必须分别判断。
 - F006 财务经理只在财务/OA 范围工作；采购、销售、生产、研发菜单不再开放，工厂侧经营分析入口暂时隐藏。销售/采购依据通过财务页内只读速览或当前 OA 节点回读，不靠跨模块导航。仓库确认收货生成 `AP_INVOICE` 未清应付后，财务从应收应付选择该行付款并核销；旧采购付款申请写入口固定返回 410 `PAYMENT_REQUEST_LEGACY_WRITE_DISABLED`，不能恢复成新付款路径。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 画布首次保存 BOM 配置时自动固定该工艺修订 → 生效该草稿 → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，画布只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 当前 BOM 成本摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。该摘要不是完整产品成本，不能直接与正式报工、结算形成的实际完整成本比较；不可比时成本差异、差异率和状态保持空值。
 - 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
+- 编辑已启用 Workflow 时使用“保存草稿（自动新版本）”，无需先“另存独立版本”；保存自动创建更高版本 DRAFT，生产继续使用原已启用版本。草稿若已被计划/批次引用则先冻结为 SNAPSHOT，再创建新 DRAFT，既有 `selectedWorkflowId` 不变。停用前检查活动计划与批次；命中时 409 `WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE`，身份未知时 409 `WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN`，均失败关闭。
 - 当前没有扫码报工。操作员从“分配给我的工序”点开已分配任务，按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；旧扫码页/死端点已移除，草稿只能恢复编辑。保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
 - 同一上游物料能否多选批次以计划冻结节点的 `allowMultipleUpstreamSources` 为准；过期库存不可用。中间工序调料沿计划读取终端成品 BOM，BOM 激活拒绝孤儿槽位，结单保留未绑定工序的辅料与包材。上游工序形成的中间 WIP 批次继续携带同一生产计划身份，供下一道工序在同一计划链中领用。
 - 会计期间关账申请只创建 OA；APPROVE 后才 CLOSED 并生成库存台账快照和凭证，REJECT 保持 OPEN。CLOSED/LOCKED 不能靠重复审批重开，只能走专用重开流程。
@@ -1947,7 +2005,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
 - BOM 唯一写入口是电脑 Web 的 Workflow 画布；RN BOM 页面和旧式 AI BOM 写工具已退役，AI 只能导览。Workflow 维护时单位显示中文标签（例如 `1盒=200g`）但提交规范单位码；无辅料的辅料 Cell 可折叠。没有 ACTIVE BOM 基线时按当前画布唯一终端产出创建首版投影；旧投入失效时必须逐行确认，由服务端删除对应旧行及数量/成本绑定后重试，取消则不改，不能静默删除。
 - Web 库存批次页面输入增减量并显示调整后数量；服务端 `/adjust` 的 `quantity` 是最终剩余绝对值，旧 `adjustmentType` 明确拒绝。原因必填、备注进审计；领料/消耗用 `productionPlanId` 关联计划，`processId` 只作旧名兼容，用途/备注不能收下后丢失。
-- 原料、辅料和包材可直接销售，只有半成品不可售。物料行不查成品箱规、不参加成品批次分配，发货时从物料批次 FIFO 扣减；保留“只/个/件”字面与小数数量，库存不足整体失败。
+- 销售订单商品行只允许 `FINISHED_PRODUCT` 和 `SEMI_FINISHED`；原料、辅料、包材、空分类和未知 ID 失败关闭。客户自带原料只进独立 `suppliedMaterials`，不混入商品行，也不由销售侧直接增库存。销售先建母单，再建 `FULL` 或 `PARTIAL` 子发运单；母单不扣库，子单进入 `PENDING_WAREHOUSE_CONFIRM` 后由仓管核对实际数量、来源仓和 FIFO 批次。全部子单发完只生成一个自动开票待办；手工开票 API/旧 AI 工具固定 410，财务处理系统记录及失败重试。
 - AI 表单助手只能以服务端实际成功和写后回读为成功依据；模型自报成功、填入草稿或关闭面板都不等于业务写入。
 - 如果检索片段出现旧版“全部必投、主投入、固定转换率、Workflow 填出成率”等冲突说法，以当前 F006 生产全链路 SOP 为准，不得拼接旧口径。
 
@@ -2488,6 +2546,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_workflow_autofork_guard(request.question)
+    ):
+        guard_answer = _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_bom_canvas_cost_guard(request.question)
     ):
         guard_answer = _FACTORY_BOM_CANVAS_COST_ANSWER
@@ -2556,6 +2619,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_factory_batch_adjustment_guard(request.question)
     ):
         guard_answer = _FACTORY_BATCH_ADJUSTMENT_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_sales_delivery_invoice_guard(request.question)
+    ):
+        guard_answer = _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     elif (
         not is_restaurant_request
         and _needs_factory_material_sales_guard(request.question)
