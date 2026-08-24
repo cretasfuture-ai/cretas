@@ -32,11 +32,13 @@ import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
+import { listSystemUnits, type SystemUnit } from '@/api/systemUnits';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES } from '@/utils/materialCategory';
 import { displayUnit, sameUnit } from '@/utils/unitPricing';
+import { purchaseUnitSelectionReason, resolvePurchaseUnits } from '@/utils/purchaseUnitContract';
 import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
@@ -1189,6 +1191,8 @@ const suppliersLoading = ref(false);
 const suppliersDialogMaterialName = ref('');
 const suppliersDialogMaterial = ref<{ id: string; name: string; code?: string; unit?: string } | null>(null);
 const activeSupplierOptions = ref<SupplierRecord[]>([]);
+const relationAllUnitOptions = ref<SystemUnit[]>([]);
+const relationPurchaseUnitOptions = ref<SystemUnit[]>([]);
 const relationDialogVisible = ref(false);
 const relationEditing = ref<SupplierMaterialRelation | null>(null);
 const relationSaving = ref(false);
@@ -1202,6 +1206,15 @@ const availableSupplierOptions = computed(() => {
   const linked = new Set(suppliersForMaterial.value.map((row) => String(row.supplierId || '')));
   return activeSupplierOptions.value.filter((supplier) => !linked.has(String(supplier.id)));
 });
+const materialRelationUnitResolution = computed(() => resolvePurchaseUnits(
+  suppliersDialogMaterial.value?.unit,
+  relationAllUnitOptions.value,
+  relationPurchaseUnitOptions.value,
+));
+const compatibleMaterialPurchaseUnits = computed(() => materialRelationUnitResolution.value.compatibleUnits);
+const materialRelationUnitReason = computed(() => (suppliersDialogMaterial.value
+  ? purchaseUnitSelectionReason(relationForm.purchaseUnit, materialRelationUnitResolution.value)
+  : ''));
 
 async function reloadMaterialSuppliers(): Promise<void> {
   const material = suppliersDialogMaterial.value;
@@ -1239,12 +1252,28 @@ async function ensureActiveSupplierOptions(): Promise<void> {
   activeSupplierOptions.value = await listActiveSuppliers(factoryId.value);
 }
 
+async function ensureRelationUnitOptions(): Promise<void> {
+  const [allUnits, purchaseUnits] = await Promise.all([
+    relationAllUnitOptions.value.length ? Promise.resolve(null) : listSystemUnits(factoryId.value),
+    relationPurchaseUnitOptions.value.length
+      ? Promise.resolve(null)
+      : listSystemUnits(factoryId.value, 'PURCHASE_QUANTITY'),
+  ]);
+  if (allUnits) relationAllUnitOptions.value = allUnits.data ?? [];
+  if (purchaseUnits) relationPurchaseUnitOptions.value = purchaseUnits.data ?? [];
+}
+
 async function openMaterialRelationCreate(): Promise<void> {
   if (!canManageSupplierRelations.value) return;
-  await ensureActiveSupplierOptions();
+  await Promise.all([ensureActiveSupplierOptions(), ensureRelationUnitOptions()]);
   relationEditing.value = null;
+  const resolution = resolvePurchaseUnits(
+    suppliersDialogMaterial.value?.unit,
+    relationAllUnitOptions.value,
+    relationPurchaseUnitOptions.value,
+  );
   Object.assign(relationForm, {
-    supplierId: '', supplierMaterialCode: '', purchaseUnit: suppliersDialogMaterial.value?.unit || '',
+    supplierId: '', supplierMaterialCode: '', purchaseUnit: resolution.defaultUnit,
     defaultPurchasePrice: null, currency: 'CNY', minOrderQuantity: null, leadTimeDays: null,
     preferred: false, active: true,
   });
@@ -1253,7 +1282,7 @@ async function openMaterialRelationCreate(): Promise<void> {
 
 async function openMaterialRelationEdit(row: SupplierMaterialRelation): Promise<void> {
   if (!canManageSupplierRelations.value) return;
-  await ensureActiveSupplierOptions();
+  await Promise.all([ensureActiveSupplierOptions(), ensureRelationUnitOptions()]);
   relationEditing.value = row;
   Object.assign(relationForm, {
     supplierId: String(row.supplierId || ''),
@@ -1273,7 +1302,7 @@ async function saveMaterialRelation(): Promise<void> {
   const material = suppliersDialogMaterial.value;
   if (!material) return;
   if (!relationForm.supplierId) return void ElMessage.warning('请选择供应商');
-  if (!relationForm.purchaseUnit) return void ElMessage.warning('请选择采购单位');
+  if (materialRelationUnitReason.value) return void ElMessage.warning(materialRelationUnitReason.value);
   if (!relationForm.currency.trim()) return void ElMessage.warning('请输入币种');
   const payload: SupplierMaterialPayload = {
     materialTypeId: material.id,
@@ -1975,8 +2004,16 @@ function handleSizeChange(size: number) {
           <UnitSelect
             v-model="relationForm.purchaseUnit"
             :factory-id="factoryId"
+            :options="compatibleMaterialPurchaseUnits"
             usage-scope="PURCHASE_QUANTITY"
             placeholder="请选择采购单位"
+          />
+          <el-alert
+            v-if="materialRelationUnitReason"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="materialRelationUnitReason"
           />
           <div class="field-hint">采购订单沿用此单位；页面显示中文，API 保存标准单位代码。</div>
         </el-form-item>

@@ -853,7 +853,12 @@ public class UnitContractServiceImpl implements UnitContractService {
                     UnitUsageScope.PURCHASE_QUANTITY,
                     UnitUsageScope.BOM_QUANTITY,
                     UnitUsageScope.SPECIFICATION);
-            case LENGTH, AREA -> Set.of(UnitUsageScope.SPECIFICATION);
+            case LENGTH -> Set.of(
+                    UnitUsageScope.INVENTORY_QUANTITY,
+                    UnitUsageScope.PURCHASE_QUANTITY,
+                    UnitUsageScope.BOM_QUANTITY,
+                    UnitUsageScope.SPECIFICATION);
+            case AREA -> Set.of(UnitUsageScope.SPECIFICATION);
             case TIME -> Set.of(UnitUsageScope.PROCESS_DURATION);
             case TEMPERATURE -> Set.of(UnitUsageScope.STORAGE_TEMPERATURE);
             case RATIO -> Set.of(UnitUsageScope.YIELD_RATE);

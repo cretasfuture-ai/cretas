@@ -88,7 +88,7 @@ class UnitContractServiceTest {
     }
 
     @Test
-    void inventoryCatalogExcludesLengthTimeTemperatureAndRatio() {
+    void lengthCatalogSupportsInventoryPurchaseAndBomButExcludesUnrelatedDimensions() {
         UnitOfMeasurement minute = catalogUnit("minute", "TIME", "分钟");
         UnitOfMeasurement celsius = catalogUnit("celsius", "TEMPERATURE", "摄氏度");
         UnitOfMeasurement percent = catalogUnit("percent", "RATIO", "百分比");
@@ -97,8 +97,13 @@ class UnitContractServiceTest {
 
         assertThat(service.catalog(FACTORY_ID, UnitUsageScope.INVENTORY_QUANTITY))
                 .extracting(CanonicalUnit::code)
-                .contains("g", "kg", "盒", "箱", "片")
-                .doesNotContain("mm", "cm", "m", "km", "minute", "celsius", "percent");
+                .contains("g", "kg", "盒", "箱", "片", "mm", "cm", "m", "km")
+                .doesNotContain("minute", "celsius", "percent");
+        assertThat(service.catalog(FACTORY_ID, UnitUsageScope.PURCHASE_QUANTITY))
+                .extracting(CanonicalUnit::code)
+                .contains("kg", "m")
+                .doesNotContain("minute", "celsius", "percent");
+        assertThat(service.supportsUsage(FACTORY_ID, "米", UnitUsageScope.BOM_QUANTITY)).isTrue();
     }
 
     @Test

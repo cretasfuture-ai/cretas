@@ -28,7 +28,7 @@
 
 - `ENH-F006-SUPPLIER-IMPORT-001` — `blocked` — Owner: `/root` — 供应商必填资料、Excel 预览/幂等确认、状态生命周期、采购门禁与详情信息架构尚无本轮完整 tree/test 核销证据；当前无专用 PR。需求和 scope 均保留，恢复时先核对公司 main 的现有实现，严格 `NOT_DEPLOYED`。
 
-- `BUG-F006-UNIT-DIMENSION-SCOPE-001` — `blocked` — Owner: `/root` — UnitContractService、原料/采购/入库/BOM 单位门禁及“件/个/只”字面单位的完整验收尚未本轮核销；保留 scope 与真实 JPA/Service 门禁，生产业务写入为 0。
+- `BUG-F006-UNIT-DIMENSION-SCOPE-001` — `in-progress` — Owner: `/root` — Base SHA: `21015111b2118aeea4e5487a09ae87f44c2d87ad` — 吸收生产复现 `E2E-F006-PROC-REL-20260824083721`，修复供应关系新增页采购单位盲目继承、`PURCHASE_QUANTITY` 长度量纲 `m` 同源契约、选择物料后的中文前置门禁，并覆盖 m/kg/跨量纲 Java/Web/Playwright；完成目标测试、PR 合入、exact-main 串行部署与 F006 部署后复验。
 
 - `BUG-F006-R2-SKU-UNIT-001` — `blocked` — Owner: `/root/supplier_frontend` — SKU displayUnit、净含量单位、同维度 canonical 化与历史回填尚无本轮完整 tree/test 核销证据；保留 Web scope，Java 契约仍须协调者另行审计，严格 `NOT_DEPLOYED`。
 
