@@ -51,6 +51,7 @@ import com.cretas.aims.service.inventory.SalesOrderSuppliedMaterialRequirementSe
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
+import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
@@ -4209,6 +4210,7 @@ public class SalesServiceImpl implements SalesService {
                     !prestockedCustomerStock
                             || orderReservedNative.compareTo(BigDecimal.ZERO) > 0,
                     "finishedGoodsBatchId");
+            FinishedGoodsBatchSaleabilityGuard.assertSaleable(batch, "finishedGoodsBatchId");
             String allocUnit = alloc.getUnit() != null ? alloc.getUnit() : targetUnit;
             // 分配量换算到 targetUnit (通常 allocUnit==targetUnit → 恒等), 统一在发货单位记账。
             BigDecimal allocQtyInTarget = FgQuantityUnitConverter

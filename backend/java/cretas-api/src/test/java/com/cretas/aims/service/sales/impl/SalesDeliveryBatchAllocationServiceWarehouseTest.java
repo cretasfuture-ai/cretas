@@ -152,6 +152,33 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
     }
 
     @Test
+    void allocateBatches_rejectsDefectiveBatchWithoutReplacingExistingAllocations() {
+        SalesDeliveryItem item = deliveryItem("WH-WKS", new BigDecimal("10"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-WKS")).thenReturn(WH_WKS_ID);
+
+        FinishedGoodsBatch defectiveBatch = batch("b-defective", WH_WKS_ID, new BigDecimal("20"));
+        defectiveBatch.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
+        when(finishedGoodsBatchRepository.findById("b-defective"))
+                .thenReturn(Optional.of(defectiveBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b-defective");
+        dto.setAllocatedQty(new BigDecimal("10"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("FINISHED_GOODS_BATCH_NOT_SALEABLE", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("BATCH-b-defective"));
+        assertTrue(ex.getMessage().contains("DEFECTIVE"));
+        assertTrue(ex.getMessage().contains("不可用于销售分配或仓库发货"));
+        verify(allocationRepository, never()).deleteByFactoryIdAndDeliveryItemId(FID, ITEM_ID);
+        verify(allocationRepository, never()).saveAll(anyList());
+    }
+
+    @Test
     void allocateBatches_convertsBaseInventoryUsingSelectedPackagingSnapshot() {
         SalesDeliveryItem item = deliveryItem("WH-WKS", new BigDecimal("2"));
         item.setProductTypeId(PRODUCT_ID);

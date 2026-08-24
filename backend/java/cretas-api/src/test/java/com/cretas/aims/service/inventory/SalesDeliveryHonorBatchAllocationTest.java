@@ -250,6 +250,29 @@ class SalesDeliveryHonorBatchAllocationTest {
         assertEquals(true, ex.getMessage().contains("不存在"));
     }
 
+    @Test
+    @DisplayName("🔴 分配后批次变为不良品 → 仓库确认发货再次拒绝且不扣库存")
+    void ship_allocatedBatchBecameDefective_rejectsWithoutInventoryMutation() throws Exception {
+        FinishedGoodsBatch defectiveBatch = buildBatch("id-defective", "B-DEFECTIVE", "件",
+                new BigDecimal("10"), BigDecimal.ZERO);
+        defectiveBatch.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("id-defective", FACTORY_A))
+                .thenReturn(Optional.of(defectiveBatch));
+        when(batchAllocationService.listByDeliveryItem(FACTORY_A, ITEM_ID_STR))
+                .thenReturn(List.of(alloc("id-defective", "B-DEFECTIVE", new BigDecimal("10"), "件")));
+
+        SalesDeliveryItem item = buildItem(new BigDecimal("10"), "件");
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> invokeDeduct(salesService, item));
+
+        assertEquals(409, ex.getCode());
+        assertEquals("FINISHED_GOODS_BATCH_NOT_SALEABLE", ex.getErrorCode());
+        assertEquals(true, ex.getMessage().contains("B-DEFECTIVE"));
+        assertEquals(true, ex.getMessage().contains("DEFECTIVE"));
+        assertEquals(0, BigDecimal.ZERO.compareTo(defectiveBatch.getShippedQuantity()));
+        verify(finishedGoodsBatchRepository, never()).save(defectiveBatch);
+    }
+
     // ============================================================
     // 跨单位 (C1): 发货单位 kg, 批次原生 盒 → 换算后扣减, 不裸减
     // ============================================================
