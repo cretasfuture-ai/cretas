@@ -37,7 +37,9 @@ public class BusinessDocumentTraceController {
     private final BusinessDocumentTraceService traceService;
 
     @GetMapping("/sales/orders/{orderId}/document-trace")
-    @RequirePermission({"sales:read_write", "sales:read"})
+    // 必须与 SalesController#getOrder 详情权限逐字相同。财务只读速览能打开销售单详情，
+    // 也必须能读取同一页面内的关联单据追踪；写权限仍由各业务端点独立控制。
+    @RequirePermission({"sales:read_write", "sales:read", "finance:read"})
     @Operation(summary = "销售订单关联单据追踪")
     public ApiResponse<BusinessDocumentTraceResponse> traceSalesOrder(
             @PathVariable @NotBlank String factoryId,
@@ -50,7 +52,7 @@ public class BusinessDocumentTraceController {
     // 权限比它窄就会出现「页面打得开、抽屉一开就 403」。详情页多出的 warehouse:* 是有理由的:
     // 仓库员选中待收货采购单后, RN 的 WHReceiptCreateScreen 用它拉明细预填收货行。
     // ⚠️ 别照 PurchaseController#listOrders (行 113) 抄 —— 那是**列表**接口, 只有 procurement:*。
-    @RequirePermission({"procurement:read_write", "procurement:read", "warehouse:read_write", "warehouse:read"})
+    @RequirePermission({"procurement:read_write", "procurement:read", "warehouse:read_write", "warehouse:read", "finance:read"})
     @Operation(summary = "采购订单关联单据追踪")
     public ApiResponse<BusinessDocumentTraceResponse> tracePurchaseOrder(
             @PathVariable @NotBlank String factoryId,
