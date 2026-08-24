@@ -408,11 +408,11 @@ class HybridLabelQcAnalyzer:
             ))
         reviews += [(tray, None, "screen-only") for tray in screen_only]
 
-        # Customer risk and platform diagnostics are deliberately separate.
-        # A locally unjudgeable tray is not evidence that a label is missing;
-        # sending it to the factory queue made operators review background
-        # stacks and tiny detector fragments.  Keep those boxes traceable for
-        # platform correction without presenting them as customer defects.
+        # Customer risk and platform diagnostics have different purposes, but
+        # uncertainty is still an actionable factory risk. The factory queue
+        # receives only the selected suspect tray (never every detected tray),
+        # while platform diagnostics retain the same uncertain sample for the
+        # finer detector/ownership diagnosis.
         candidates: List[Dict[str, Any]] = []
         platform_candidates: List[Dict[str, Any]] = []
         models_used = {f"yolo:{SCREENING_VERSION}"}
@@ -488,15 +488,15 @@ class HybridLabelQcAnalyzer:
             for label in labels:
                 if label == VERDICT_OK:
                     continue
-                target = (platform_candidates
-                          if label == VERDICT_UNJUDGEABLE else candidates)
                 candidate = self._candidate(
                     tray, label, confidence, evidence,
-                    screening.image_width, screening.image_height, len(target) + 1,
+                    screening.image_width, screening.image_height, len(candidates) + 1,
                 )
-                if target is platform_candidates:
-                    candidate["candidateId"] = f"platform-tray-{tray.index}"
-                target.append(candidate)
+                candidates.append(candidate)
+                if label == VERDICT_UNJUDGEABLE:
+                    platform_candidate = dict(candidate)
+                    platform_candidate["candidateId"] = f"platform-tray-{tray.index}"
+                    platform_candidates.append(platform_candidate)
 
         # Highest confidence first so the reviewer sees VL-confirmed defects
         # before the screening-only leftovers.

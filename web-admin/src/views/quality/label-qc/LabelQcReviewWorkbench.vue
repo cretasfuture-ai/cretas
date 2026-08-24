@@ -28,6 +28,7 @@ import type {
   LabelQcReviewRequest,
   LabelQcTaskDetail,
 } from '@/api/labelQc';
+import { getLabelQcPhotoImageBlob } from '@/api/labelQc';
 import {
   appendHumanBox,
   buildReviewDraft,
@@ -71,6 +72,7 @@ import {
 } from './overlayGeometry';
 
 const props = defineProps<{
+  factoryId: string;
   detail: LabelQcTaskDetail;
   canReview: boolean;
   submitting: boolean;
@@ -124,6 +126,9 @@ type PointerInteraction = {
 };
 
 const pointerInteraction = ref<PointerInteraction | null>(null);
+const showTechnicalObjectReview = ref(false);
+const proxiedImageUrl = ref<string | null>(null);
+let imageRequestToken = 0;
 
 const activePhoto = computed<LabelQcPhoto>(
   () => props.detail.photos[activePhotoIndex.value]!,
@@ -192,7 +197,8 @@ const aiReviewStatusText = computed(() => {
   if (currentAiTotalCount.value > 0) {
     return `${currentAiTotalCount.value} 个 AI 疑点已处理`;
   }
-  return 'AI 未发现疑点，仍需人工确认';
+  if (activePhoto.value.status === 'AUTO_PASSED') return '高置信正常，不需要人工逐盒确认';
+  return '本图没有模型疑点';
 });
 const nextButtonText = computed(() => {
   if (!currentPhotoComplete.value) return '请先完成本图';
@@ -216,8 +222,9 @@ const imagePlaneStyle = computed(() => {
 const activeImageKey = computed(() => (
   `${activePhoto.value.id}:${imageReloadAttempt.value}`
 ));
+const displayImageUrl = computed(() => proxiedImageUrl.value || activePhoto.value.imageUrl || '');
 const mainImageErrorText = computed(() => (
-  activePhoto.value.imageUrl
+  displayImageUrl.value
     ? '照片加载失败，请重试；仍失败可在新窗口打开原图。'
     : '这张照片没有可用的访问地址，请联系管理员检查附件记录。'
 ));
@@ -301,7 +308,23 @@ function resetView(): void {
 function resetMainImageState(): void {
   decodedImageSize.value = null;
   imageReloadAttempt.value = 0;
-  imageLoadState.value = activePhoto.value?.imageUrl ? 'loading' : 'error';
+  imageLoadState.value = displayImageUrl.value ? 'loading' : 'error';
+}
+
+async function loadActiveImage(): Promise<void> {
+  const token = ++imageRequestToken;
+  const previousUrl = proxiedImageUrl.value;
+  proxiedImageUrl.value = null;
+  if (previousUrl) URL.revokeObjectURL(previousUrl);
+  resetMainImageState();
+  try {
+    const blob = await getLabelQcPhotoImageBlob(props.factoryId, activePhoto.value.id);
+    if (token !== imageRequestToken) return;
+    proxiedImageUrl.value = URL.createObjectURL(blob);
+    resetMainImageState();
+  } catch {
+    if (token === imageRequestToken) resetMainImageState();
+  }
 }
 
 function selectPhoto(index: number): void {
@@ -310,6 +333,7 @@ function selectPhoto(index: number): void {
   selectedKey.value = null;
   selectedTrayKey.value = drafts.value[index]?.objectReview?.trays[0]?.key ?? null;
   selectedObjectKey.value = selectedTrayKey.value;
+  showTechnicalObjectReview.value = false;
   resetView();
   resetMainImageState();
   scheduleViewportMeasurement();
@@ -1120,6 +1144,7 @@ function onShortcutKey(event: KeyboardEvent): void {
 
 onMounted(() => window.addEventListener('keydown', onShortcutKey));
 onBeforeUnmount(() => window.removeEventListener('keydown', onShortcutKey));
+watch(() => activePhoto.value.id, () => { void loadActiveImage(); }, { immediate: true });
 
 function previousPhoto(): void {
   if (activePhotoIndex.value > 0) selectPhoto(activePhotoIndex.value - 1);
@@ -1204,10 +1229,11 @@ function handleMainImageError(event: Event): void {
 }
 
 function retryMainImage(): void {
-  if (!activePhoto.value.imageUrl) return;
+  if (!displayImageUrl.value) return;
   decodedImageSize.value = null;
   imageLoadState.value = 'loading';
   imageReloadAttempt.value += 1;
+  void loadActiveImage();
   scheduleViewportMeasurement();
 }
 
@@ -1238,6 +1264,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  if (proxiedImageUrl.value) URL.revokeObjectURL(proxiedImageUrl.value);
   if (typeof window === 'undefined') return;
   if (measureFrame != null) window.cancelAnimationFrame(measureFrame);
   if (settleMeasureTimer != null) window.clearTimeout(settleMeasureTimer);
@@ -1378,9 +1405,9 @@ onBeforeUnmount(() => {
         >
           <div ref="planeRef" class="image-plane" :style="imagePlaneStyle">
             <img
-              v-if="activePhoto.imageUrl"
+              v-if="displayImageUrl"
               :key="activeImageKey"
-              :src="activePhoto.imageUrl"
+              :src="displayImageUrl"
               :data-photo-id="activePhoto.id"
               class="main-review-image"
               :class="{ loaded: imageLoadState === 'loaded' }"
@@ -1504,15 +1531,15 @@ onBeforeUnmount(() => {
             <span>{{ mainImageErrorText }}</span>
             <div class="image-fallback-actions">
               <button
-                v-if="activePhoto.imageUrl"
+                v-if="displayImageUrl"
                 type="button"
                 @click="retryMainImage"
               >
                 重新加载
               </button>
               <a
-                v-if="activePhoto.imageUrl"
-                :href="activePhoto.imageUrl"
+                v-if="displayImageUrl"
+                :href="displayImageUrl"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -1527,13 +1554,25 @@ onBeforeUnmount(() => {
 
       <aside class="decision-rail">
         <div class="decision-scroll">
-          <section v-if="objectDraft" class="object-review-card">
+          <section v-if="objectDraft && !showTechnicalObjectReview" class="object-review-card object-review-summary">
+            <div>
+              <span>模型框仅作定位参考</span>
+              <strong>本页只需处理下方 {{ currentAiPendingCount }} 个疑点，不要求逐盒标注</strong>
+              <p>高置信正常盒已由系统跳过；只有发现盒框、重复框或标签归属明显错误时，才进入技术框校正。</p>
+            </div>
+            <button type="button" @click="showTechnicalObjectReview = true">技术框校正（可选）</button>
+          </section>
+
+          <section v-if="objectDraft && showTechnicalObjectReview" class="object-review-card">
             <div class="object-review-heading">
               <div>
-                <span>第 1 步 · 逐盒核对</span>
-                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个盒子状态有效</strong>
+                <span>可选 · 技术框校正</span>
+                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个模型盒框状态有效</strong>
               </div>
-              <button type="button" :disabled="!canReview" @click="addObjectTray">+ 漏了盒子</button>
+              <div class="object-review-heading-actions">
+                <button type="button" @click="showTechnicalObjectReview = false">收起</button>
+                <button type="button" :disabled="!canReview" @click="addObjectTray">+ 漏了盒子</button>
+              </div>
             </div>
             <div v-if="objectDraft.trays.length" class="tray-chip-row">
               <button
@@ -1610,7 +1649,7 @@ onBeforeUnmount(() => {
 
           <section class="must-act-card" :class="{ resolved: selectedItem?.label }">
           <div class="must-act-heading">
-            <span>当前必须操作</span>
+            <span>当前模型疑点</span>
             <em v-if="pendingItems.length">{{ pendingItems.length }} 个待确认</em>
             <em v-else class="done">框已处理</em>
           </div>
@@ -1626,10 +1665,10 @@ onBeforeUnmount(() => {
             <p v-if="selectedItem.aiEvidence" class="evidence">{{ selectedItem.aiEvidence }}</p>
             <div class="primary-decisions">
               <button type="button" class="confirm" :disabled="!canReview" @click="confirmAiCandidate">
-                <Check /> 确认：{{ labelText(selectedItem.aiLabel) }}
+                <Check /> 确认问题：{{ labelText(selectedItem.aiLabel) }}
               </button>
               <button type="button" class="reject" :disabled="!canReview" @click="rejectAiCandidate">
-                <Close /> 拒绝并移除框
+                <Close /> 误报 / 无问题
               </button>
             </div>
             <div class="correction-row">
@@ -1710,9 +1749,9 @@ onBeforeUnmount(() => {
         </div>
 
         <section class="whole-photo-card" :class="{ complete: currentPhotoComplete }">
-          <div class="step-label">第 2 步</div>
+          <div class="step-label">完成</div>
           <div>
-            <strong>给出本图结论</strong>
+            <strong>确认疑点处理结果</strong>
             <span v-if="pendingItemCount(activeDraft)">
               先处理上方 {{ pendingItemCount(activeDraft) }} 个待确认框
             </span>
@@ -2872,6 +2911,11 @@ button:disabled {
   border-radius: 12px;
   background: #eff6ff;
 }
+.object-review-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.object-review-summary strong, .object-review-summary span { display: block; }
+.object-review-summary p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.object-review-summary button, .object-review-heading-actions button { min-height: 36px; border: 1px solid #cbd8d2; border-radius: 8px; background: #fff; cursor: pointer; }
+.object-review-heading-actions { display: flex; gap: 8px; }
 
 .missing-label-guide {
   display: grid;

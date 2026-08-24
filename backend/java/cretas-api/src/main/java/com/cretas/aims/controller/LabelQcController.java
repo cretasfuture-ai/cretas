@@ -9,6 +9,7 @@ import com.cretas.aims.dto.labelqc.LabelQcDtos.*;
 import com.cretas.aims.entity.enums.LabelQcTaskStatus;
 import com.cretas.aims.entity.enums.LabelQcTrayCropStatus;
 import com.cretas.aims.service.LabelQcService;
+import com.cretas.aims.service.LabelQcImageProxyService;
 import com.cretas.aims.utils.SecurityUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -17,6 +18,9 @@ import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -32,6 +36,7 @@ import java.util.List;
 public class LabelQcController {
 
     private final LabelQcService labelQcService;
+    private final LabelQcImageProxyService imageProxyService;
 
     @PostMapping("/tasks")
     @RequirePermission({"quality:read_write"})
@@ -117,6 +122,20 @@ public class LabelQcController {
             HttpServletRequest servletRequest) {
         trustedUser(factoryId, servletRequest);
         return ApiResponse.success(labelQcService.detail(factoryId, taskId));
+    }
+
+    @GetMapping("/photos/{photoId}/image")
+    @RequirePermission({"quality:read_write", "quality:read"})
+    public ResponseEntity<byte[]> photoImage(
+            @PathVariable String factoryId,
+            @PathVariable String photoId,
+            HttpServletRequest servletRequest) {
+        trustedUser(factoryId, servletRequest);
+        var image = imageProxyService.load(factoryId, photoId);
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .contentType(MediaType.parseMediaType(image.contentType()))
+                .body(image.bytes());
     }
 
     @PutMapping("/tasks/{taskId}/review")

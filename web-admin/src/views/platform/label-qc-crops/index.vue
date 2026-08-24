@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import {
   listLabelQcTrayCrops,
+  getLabelQcPhotoImageBlob,
   reviewLabelQcTrayCrop,
   type LabelQcPlatformLabelReview,
   type LabelQcPlatformTrayReview,
@@ -13,6 +14,8 @@ import {
 } from '@/api/labelQc';
 
 const auth = useAuthStore();
+const DEFAULT_PLATFORM_FACTORY_ID = 'LIUSHANMEN';
+const targetFactoryId = computed(() => auth.factoryId || DEFAULT_PLATFORM_FACTORY_ID);
 const status = ref<LabelQcTrayCropStatus>('PENDING');
 const crops = ref<LabelQcTrayCrop[]>([]);
 const selectedId = ref<string | null>(null);
@@ -20,8 +23,30 @@ const draft = ref<LabelQcPlatformTrayReview | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const dirty = ref(false);
+const page = ref(1);
+const pageSize = 40;
+const total = ref(0);
+const proxiedImageUrl = ref<string | null>(null);
+let imageRequestToken = 0;
 
 const selected = computed(() => crops.value.find((crop) => crop.id === selectedId.value) ?? null);
+const selectedImageUrl = computed(() => proxiedImageUrl.value || selected.value?.originalImageUrl || '');
+
+async function loadSelectedImage(): Promise<void> {
+  const crop = selected.value;
+  const token = ++imageRequestToken;
+  const previousUrl = proxiedImageUrl.value;
+  proxiedImageUrl.value = null;
+  if (previousUrl) URL.revokeObjectURL(previousUrl);
+  if (!crop) return;
+  try {
+    const blob = await getLabelQcPhotoImageBlob(targetFactoryId.value, crop.photoId, true);
+    if (token !== imageRequestToken) return;
+    proxiedImageUrl.value = URL.createObjectURL(blob);
+  } catch {
+    // Keep the original signed URL as a last-resort fallback.
+  }
+}
 const cropStyle = computed(() => {
   const crop = selected.value;
   if (!crop) return {};
@@ -75,11 +100,15 @@ function validateReview(value: LabelQcPlatformTrayReview): string | null {
 }
 
 async function load(): Promise<void> {
-  if (!auth.factoryId) return;
   loading.value = true;
   try {
-    const response = await listLabelQcTrayCrops(auth.factoryId, { status: status.value, size: 100 });
+    const response = await listLabelQcTrayCrops(targetFactoryId.value, {
+      status: status.value,
+      page: page.value,
+      size: pageSize,
+    });
     crops.value = response.data?.content ?? [];
+    total.value = response.data?.totalElements ?? 0;
     selectedId.value = crops.value[0]?.id ?? null;
     const first = crops.value[0];
     draft.value = first ? cloneReview(first.platformReview ?? first.factoryProposals) : null;
@@ -91,7 +120,7 @@ async function load(): Promise<void> {
 
 async function saveCurrent(): Promise<boolean> {
   if (!dirty.value) return true;
-  if (!auth.factoryId || !selected.value || !draft.value) return false;
+  if (!selected.value || !draft.value) return false;
   const error = validateReview(draft.value);
   if (error) {
     ElMessage.warning(`${error}，请修正后再切换`);
@@ -100,7 +129,7 @@ async function saveCurrent(): Promise<boolean> {
   saving.value = true;
   try {
     const response = await reviewLabelQcTrayCrop(
-      auth.factoryId,
+      targetFactoryId.value,
       selected.value.id,
       selected.value.version,
       { ...draft.value, complete: true },
@@ -131,6 +160,13 @@ async function changeStatus(nextStatus: LabelQcTrayCropStatus): Promise<void> {
   if (nextStatus === status.value) return;
   if (!await saveCurrent()) return;
   status.value = nextStatus;
+  page.value = 1;
+  await load();
+}
+
+async function changePage(nextPage: number): Promise<void> {
+  if (!await saveCurrent()) return;
+  page.value = nextPage;
   await load();
 }
 
@@ -166,12 +202,16 @@ function markUnjudgeable(): void {
 }
 
 onMounted(load);
+watch(() => selected.value?.id, () => { void loadSelectedImage(); });
+onBeforeUnmount(() => {
+  if (proxiedImageUrl.value) URL.revokeObjectURL(proxiedImageUrl.value);
+});
 </script>
 
 <template>
   <section class="crop-workbench" v-loading="loading">
     <header>
-      <div><p>平台标注</p><h1>单盒标签精修</h1></div>
+      <div><p>平台标注 · {{ targetFactoryId }}</p><h1>单盒标签精修</h1><span>待办 {{ total }} 个；每页 {{ pageSize }} 个，切页前自动保存当前草稿。</span></div>
       <div class="filters">
         <el-select :model-value="status" @change="changeStatus">
           <el-option label="待精修" value="PENDING" />
@@ -203,7 +243,7 @@ onMounted(load);
           <span>裁切 SHA {{ selected.cropSpecSha256.slice(0, 12) }}</span>
         </div>
         <div class="crop-canvas" :style="cropStyle">
-          <img :src="selected.originalImageUrl" :style="imageStyle" alt="人工最终盒子裁切" draggable="false">
+          <img :src="selectedImageUrl" :style="imageStyle" alt="人工最终盒子裁切" draggable="false">
           <div
             v-for="(label, index) in draft.labels"
             :key="index"
@@ -247,6 +287,15 @@ onMounted(load);
       </main>
     </div>
     <el-empty v-else description="当前没有单盒标签精修任务" />
+    <el-pagination
+      v-if="total > pageSize"
+      class="queue-pagination"
+      layout="prev, pager, next, total"
+      :current-page="page"
+      :page-size="pageSize"
+      :total="total"
+      @current-change="changePage"
+    />
   </section>
 </template>
 
@@ -266,5 +315,6 @@ header p { margin: 0; color: #66756f; font-size: 12px; letter-spacing: .12em; } 
 .presence-row { display: grid; grid-template-columns: 50px repeat(4, minmax(70px, auto)); gap: 8px; align-items: center; margin-top: 14px; }.presence-row button { min-height: 36px; border: 1px solid #cad7d1; border-radius: 8px; background: #fff; cursor: pointer; }.presence-row button.on { color: #fff; border-color: #08745f; background: #08745f; }.presence-row .unjudgeable { grid-column: 1 / -1; color: #8b4b10; }
 .label-grid { display: grid; gap: 10px; margin-top: 14px; }.label-grid article { display: grid; grid-template-columns: 120px repeat(4, 1fr) 110px 70px; gap: 8px; align-items: end; padding: 10px; border-radius: 10px; background: #f7f9f8; }.label-grid label { color: #52615b; font-size: 11px; }.label-grid input[type=number], .label-grid select { width: 100%; min-height: 34px; box-sizing: border-box; }.delete { min-height: 34px; color: #a12d23; border: 1px solid #e4b7b2; border-radius: 7px; background: #fff; }
 .hint { margin: 14px 0 0; color: #66756f; font-size: 12px; }
+.queue-pagination { justify-content: center; margin-top: 16px; }
 @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; }.queue { max-height: 180px; }.label-grid article { grid-template-columns: repeat(2, 1fr); } }
 </style>

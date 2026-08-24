@@ -25,12 +25,18 @@ describe('label QC platform diagnostics workbench', () => {
     expect(source).toContain('await load()');
   });
 
-  it('supports one-action decisions and keyboard shortcuts', () => {
+  it('uses keyboard shortcuts to select a decision without auto-saving it', () => {
     expect(source).toContain("'1': ['NO_DEFECT'");
     expect(source).toContain("'2': ['UNJUDGEABLE'");
     expect(source).toContain("'3': ['MISSING_WHITE_LABEL'");
     expect(source).toContain("'4': ['MISSING_COLOR_LABEL'");
-    expect(source).toContain('await saveCurrent(true)');
+    expect(source).toContain('choose(action[0], action[1])');
+    expect(source).toContain('@click="saveCurrent(true)"');
+    const keydownHandler = source.slice(
+      source.indexOf('function onKeydown'),
+      source.indexOf('onMounted(() =>'),
+    );
+    expect(keydownHandler).not.toContain('saveCurrent(');
   });
 
   it('renders solid high-contrast problem boxes', () => {

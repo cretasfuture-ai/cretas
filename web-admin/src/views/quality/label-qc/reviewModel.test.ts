@@ -64,6 +64,18 @@ describe('label QC review model', () => {
     expect(validateReviewDraft(drafts)).toBe('第 1 张照片还有 1 个框未确认');
   });
 
+  it('skips clean auto-passed photos without turning model boxes into human truth', () => {
+    const detail = buildDetail(true);
+    detail.photos[1]!.status = 'AUTO_PASSED';
+    detail.photos[1]!.screeningDetail = JSON.stringify({ trays: [{ index: 0, bbox: [0, 0, 1, 1] }] });
+
+    const drafts = buildReviewDraft(detail);
+
+    expect(drafts[1]?.reviewed).toBe(true);
+    expect(drafts[1]?.objectReview).toBeUndefined();
+    expect(completedPhotoCount(drafts)).toBe(1);
+  });
+
   it('persists a rejected AI frame using the original annotation id', () => {
     const drafts = buildReviewDraft(buildDetail(true));
     drafts[0]!.items[0]!.label = 'NO_DEFECT';
