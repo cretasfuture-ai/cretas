@@ -20,6 +20,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -100,5 +101,15 @@ class ProductProcessWorkflowProducingRouteTest {
                 .andExpect(status().is4xxClientError());
 
         verifyNoInteractions(directoryService);
+    }
+
+    @Test
+    void manualSnapshotMutationEndpointIsRetired() throws Exception {
+        mockMvc.perform(post("/api/mobile/F006/product-process-workflows/PT-123/snapshot")
+                        .contentType("application/json")
+                        .content("{\"lockVersion\":8}"))
+                .andExpect(status().isNotFound());
+
+        verifyNoInteractions(workflowService, directoryService);
     }
 }

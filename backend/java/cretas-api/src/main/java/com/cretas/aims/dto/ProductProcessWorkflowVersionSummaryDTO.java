@@ -12,7 +12,7 @@ import com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO;
 /**
  * 产品工序 Workflow 版本历史摘要（只读）。
  *
- * <p>覆盖某个产品的全部版本行（DRAFT + SNAPSHOT + PUBLISHED），供版本历史列表展示。
+ * <p>只展示当前配置，以及仍被已正式报工计划绑定的旧配置。
  */
 @Data
 @NoArgsConstructor

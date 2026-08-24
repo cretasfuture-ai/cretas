@@ -90,19 +90,7 @@ export function publishAndActivateProductProcessWorkflow(
   );
 }
 
-export function snapshotProductProcessWorkflow(
-  factoryId: string,
-  productTypeId: string,
-  lockVersion: number,
-) {
-  return post<ProductProcessWorkflowDefinition>(
-    `/${factoryId}/product-process-workflows/${productTypeId}/snapshot`,
-    { lockVersion },
-    workflowConflictConfig,
-  );
-}
-
-// #12: 版本历史 (只读浏览之前版本)。发布和手动快照都会保留独立历史行。
+// #12: 生产版本记录。只展示当前配置和仍被已正式报工计划绑定的旧配置。
 export interface WorkflowVersionSummary {
   definitionVersion: number;
   status: 'DRAFT' | 'SNAPSHOT' | 'PUBLISHED';

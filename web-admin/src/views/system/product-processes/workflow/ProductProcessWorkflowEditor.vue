@@ -1322,7 +1322,7 @@ function toggleBomVersionPanel(): void {
 }
 
 /**
- * 生效是影响生产的动作(之后新建的生产计划会读新快照), 与 BOM 页一样先确认再执行。
+ * 生效是影响生产的动作，与 BOM 页一样先确认再执行。
  * 不在这里自己判「能不能生效」—— 后端做权威校验, 前端复述一遍只会两处口径打架。
  */
 async function activateBomDraft(notice: DraftBomNotice | undefined): Promise<void> {
@@ -1330,7 +1330,7 @@ async function activateBomDraft(notice: DraftBomNotice | undefined): Promise<voi
   try {
     await ElMessageBox.confirm(
       `激活后 ${notice.productName} 草稿 v${notice.draftVersion ?? '-'} 将成为唯一生效 BOM。`
-      + '仅之后新建的生产计划采用此版本；已有生产计划快照不受影响。确认生效？',
+      + '未开始正式报工的计划会同步采用新配置；已开始报工的计划保留原配置。确认生效？',
       '生效 BOM 草稿',
       { confirmButtonText: '生效', cancelButtonText: '取消', type: 'warning' },
     );
