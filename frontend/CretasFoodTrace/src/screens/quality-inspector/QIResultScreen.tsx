@@ -3,7 +3,7 @@
  * Quality Inspector - Inspection Result Screen
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
+import { QualityRecord } from '../../types/qualityInspector';
+import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
+import { DispositionSuggestion } from '../../components/quality';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QIResult'>;
@@ -28,6 +31,14 @@ export default function QIResultScreen() {
   const route = useRoute<RouteProps>();
   const insets = useSafeAreaInsets();
   const { recordId, passed } = route.params;
+  const [record, setRecord] = useState<QualityRecord | null>(null);
+
+  useEffect(() => {
+    if (passed) return;
+    qualityInspectorApi.getRecordDetail(recordId)
+      .then(setRecord)
+      .catch((error) => console.error('Load failed inspection for disposition:', error));
+  }, [passed, recordId]);
 
   const handleViewDetail = () => {
     navigation.navigate('QIRecordDetail', { recordId });
@@ -102,6 +113,16 @@ export default function QIResultScreen() {
               <Text style={styles.nextStepTitle}>{t('result.needsHandling')}</Text>
               <Text style={styles.nextStepDesc}>{t('result.pleaseIsolateBatch')}</Text>
             </View>
+          </View>
+        )}
+
+        {!passed && record && Number.isFinite(Number(record.batchId)) && (
+          <View style={styles.dispositionContainer}>
+            <DispositionSuggestion
+              batchId={Number(record.batchId)}
+              inspectionId={recordId}
+              qualityScore={record.scoreDetailsRecorded ? record.totalScore : record.passRate}
+            />
           </View>
         )}
 
@@ -252,6 +273,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingVertical: 12,
+  },
+  dispositionContainer: {
+    width: '100%',
   },
   viewDetailText: {
     fontSize: 15,

@@ -38,6 +38,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 /**
  * 生产加工服务实现类
@@ -1045,8 +1046,17 @@ public class ProcessingServiceImpl implements ProcessingService {
         } else {
             page = qualityInspectionRepository.findByFactoryId(factoryId, pageable);
         }
+        Map<Long, ProductionBatch> batchesById = productionBatchRepository.findAllById(
+                        page.getContent().stream()
+                                .map(QualityInspection::getProductionBatchId)
+                                .filter(Objects::nonNull)
+                                .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(ProductionBatch::getId, Function.identity()));
         List<Map<String, Object>> inspectionMaps = page.getContent().stream()
-                .map(this::convertInspectionToMap)
+                .map(inspection -> convertInspectionToMap(
+                        inspection,
+                        batchesById.get(inspection.getProductionBatchId())))
                 .collect(Collectors.toList());
         return PageResponse.of(
                 inspectionMaps,
@@ -1063,7 +1073,10 @@ public class ProcessingServiceImpl implements ProcessingService {
         QualityInspection inspection = qualityInspectionRepository.findById(inspectionId)
                 .filter(i -> factoryId.equals(i.getFactoryId()))
                 .orElseThrow(() -> new EntityNotFoundException("QualityInspection", inspectionId));
-        return convertInspectionToMap(inspection);
+        ProductionBatch batch = inspection.getProductionBatchId() == null
+                ? null
+                : productionBatchRepository.findById(inspection.getProductionBatchId()).orElse(null);
+        return convertInspectionToMap(inspection, batch);
     }
 
     public Map<String, Object> getQualityStatistics(String factoryId, LocalDate startDate, LocalDate endDate) {
@@ -2476,7 +2489,9 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .orElse(null);
     }
 
-    private Map<String, Object> convertInspectionToMap(QualityInspection inspection) {
+    private Map<String, Object> convertInspectionToMap(
+            QualityInspection inspection,
+            ProductionBatch productionBatch) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", inspection.getId());
         map.put("productionBatchId", inspection.getProductionBatchId());
@@ -2493,6 +2508,13 @@ public class ProcessingServiceImpl implements ProcessingService {
         map.put("passRate", inspection.getPassRate());
         map.put("result", inspection.getResult());
         map.put("notes", inspection.getNotes());
+        map.put("customFields", inspection.getCustomFields());
+        if (productionBatch != null) {
+            // The mobile quality detail must show the real business identity. Falling back to
+            // "B-{id}" or reusing inspection notes as a product name fabricates evidence.
+            map.put("batchNumber", productionBatch.getBatchNumber());
+            map.put("productName", productionBatch.getProductName());
+        }
         // 添加计算字段
         map.put("qualityGrade", inspection.getQualityGrade());
         map.put("defectRate", inspection.getDefectRate());

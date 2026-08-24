@@ -173,18 +173,36 @@ class QualityInspectorApiClient {
    */
   private mapInspectionToRecord(raw: Record<string, unknown>): QualityRecord {
     const passRate = Number(raw.passRate ?? 0);
+    const customFields = raw.customFields && typeof raw.customFields === 'object'
+      ? raw.customFields as Record<string, unknown>
+      : {};
+    const haccpScores = customFields.haccpScores && typeof customFields.haccpScores === 'object'
+      ? customFields.haccpScores as Record<string, unknown>
+      : null;
+    const scoreItem = (key: string) => {
+      const value = haccpScores?.[key];
+      if (!value || typeof value !== 'object') return { score: 0, notes: [] as string[] };
+      const item = value as Record<string, unknown>;
+      return {
+        score: Number(item.score ?? 0),
+        notes: Array.isArray(item.notes) ? item.notes.map(String) : [],
+      };
+    };
+    const scoreDetailsRecorded = haccpScores !== null;
     return {
       id: String(raw.id ?? ''),
       batchId: String(raw.productionBatchId ?? ''),
       batchNumber: String(raw.batchNumber || `B-${raw.productionBatchId ?? ''}`),
-      productName: String(raw.productName || raw.notes || '质检记录'),
+      productName: String(raw.productName || '未提供产品名称'),
       sampleSize: Number(raw.sampleSize ?? 0),
-      appearance: { score: 0, notes: [] },
-      smell: { score: 0, notes: [] },
-      specification: { score: 0, notes: [] },
-      weight: { score: 0, notes: [] },
-      packaging: { score: 0, notes: [] },
-      totalScore: passRate,
+      appearance: scoreItem('appearance'),
+      smell: scoreItem('smell'),
+      specification: scoreItem('specification'),
+      weight: scoreItem('weight'),
+      packaging: scoreItem('packaging'),
+      totalScore: Number(customFields.totalScore ?? 0),
+      passRate,
+      scoreDetailsRecorded,
       grade: (raw.qualityGrade as QualityRecord['grade']) ?? 'D',
       passed: ['PASS', 'PASSED', 'QUALIFIED', 'CONDITIONAL'].includes(String(raw.result ?? '').toUpperCase()),
       photos: [],
@@ -195,6 +213,7 @@ class QualityInspectorApiClient {
       inspectedAt: raw.inspectionDate
         ? `${raw.inspectionDate}T00:00:00`
         : new Date().toISOString(),
+      remarks: raw.notes ? String(raw.notes) : undefined,
     };
   }
 

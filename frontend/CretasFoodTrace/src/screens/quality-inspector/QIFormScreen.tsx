@@ -211,6 +211,17 @@ export default function QIFormScreen() {
         photos,
         inspectorId: user?.id ?? 0,
         inspectedAt: new Date().toISOString(),
+        customFields: {
+          haccpScores: {
+            appearance: scores.appearance ?? defaultScore,
+            smell: scores.smell ?? defaultScore,
+            specification: scores.specification ?? defaultScore,
+            weight: scores.weight ?? defaultScore,
+            packaging: scores.packaging ?? defaultScore,
+          },
+          totalScore,
+          grade,
+        },
       };
 
       const record = await qualityInspectorApi.submitInspection(batch.id, formData);
