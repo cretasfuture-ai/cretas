@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.workflow.WorkflowOutputDirectoryDTO;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.service.ProductProcessWorkflowService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
@@ -14,13 +15,16 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.List;
 import java.util.Optional;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -111,5 +115,36 @@ class ProductProcessWorkflowProducingRouteTest {
                 .andExpect(status().isNotFound());
 
         verifyNoInteractions(workflowService, directoryService);
+    }
+
+    @Test
+    void stalePublishedWorkflowDraftReturnsChineseConflictWithoutSaving() throws Exception {
+        when(workflowService.saveDraft(eq("F006"), eq("PT-123"), any()))
+                .thenThrow(new BusinessException(409, "该 Workflow 已被其他人更新")
+                        .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
+                        .withHint("请重新加载最新版本；如需保留当前内容，可复制当前草稿 JSON")
+                        .withSeverity("warning"));
+
+        mockMvc.perform(put("/api/mobile/F006/product-process-workflows/PT-123/draft")
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "id": 185,
+                                  "version": 4,
+                                  "lockVersion": 2,
+                                  "schemaVersion": 1,
+                                  "nodes": [],
+                                  "edges": [],
+                                  "viewport": {"x": 0, "y": 0, "zoom": 1}
+                                }
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("PRODUCT_PROCESS_WORKFLOW_CONFLICT"))
+                .andExpect(jsonPath("$.message").value("该 Workflow 已被其他人更新"))
+                .andExpect(jsonPath("$.actionHint")
+                        .value("请重新加载最新版本；如需保留当前内容，可复制当前草稿 JSON"));
+
+        verify(workflowService).saveDraft(eq("F006"), eq("PT-123"), any());
+        verifyNoInteractions(directoryService);
     }
 }

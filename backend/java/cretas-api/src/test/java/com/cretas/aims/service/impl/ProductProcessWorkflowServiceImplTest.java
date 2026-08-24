@@ -276,10 +276,92 @@ class ProductProcessWorkflowServiceImplTest {
     }
 
     @Test
+    @DisplayName("已发布版本变更后拒绝旧会话的不同图保存，且不创建新草稿")
+    void staleDifferentAutosaveAfterAnotherPublishIsRejectedWithoutMutation() {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setId(185L);
+        request.setVersion(4);
+        request.setLockVersion(2L);
+        request.getNodes().get(0).getPosition().setX(99D);
+
+        ProductProcessWorkflow published = entityFrom(validDefinition());
+        published.setId(186L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        published.setDefinitionVersion(5);
+        published.setLockVersion(2L);
+        pinCurrentRevision(published);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(published));
+        when(revisionSnapshotService.hash(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0) == published
+                        ? "published-graph" : "stale-different-graph");
+        lenient().when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(Optional.of(5));
+        lenient().when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            saved.setId(187L);
+            saved.setLockVersion(0L);
+            return saved;
+        });
+
+        BusinessException conflict = assertThrows(
+                BusinessException.class,
+                () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, request));
+
+        assertEquals(409, conflict.getCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CONFLICT", conflict.getErrorCode());
+        verify(repository, never()).findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID);
+        verify(repository, never()).saveAndFlush(any(ProductProcessWorkflow.class));
+        verify(revisionSnapshotService, never()).captureDraft(any(ProductProcessWorkflow.class));
+    }
+
+    @Test
+    @DisplayName("当前已发布版本 lockVersion 过期时拒绝不同图保存")
+    void stalePublishedLockVersionRejectsDifferentAutosaveWithoutMutation() {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setId(186L);
+        request.setVersion(5);
+        request.setLockVersion(1L);
+        request.getNodes().get(0).getPosition().setX(99D);
+
+        ProductProcessWorkflow published = entityFrom(validDefinition());
+        published.setId(186L);
+        published.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        published.setDefinitionVersion(5);
+        published.setLockVersion(2L);
+        pinCurrentRevision(published);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.PUBLISHED))
+                .thenReturn(Optional.of(published));
+        when(revisionSnapshotService.hash(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0) == published
+                        ? "published-graph" : "stale-lock-graph");
+
+        BusinessException conflict = assertThrows(
+                BusinessException.class,
+                () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, request));
+
+        assertEquals(409, conflict.getCode());
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_CONFLICT", conflict.getErrorCode());
+        verify(repository, never()).findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID);
+        verify(repository, never()).saveAndFlush(any(ProductProcessWorkflow.class));
+        verify(revisionSnapshotService, never()).captureDraft(any(ProductProcessWorkflow.class));
+    }
+
+    @Test
     @DisplayName("发布后真实画布修改仍创建下一版草稿")
     void changedAutosaveAfterPublishCreatesNextDraft() {
         ProductProcessWorkflowDTO request = validDefinition();
-        request.setLockVersion(3L);
+        request.setId(91L);
+        request.setVersion(1);
+        request.setLockVersion(4L);
         request.getNodes().get(0).getPosition().setX(99D);
         ProductProcessWorkflow published = entityFrom(validDefinition());
         published.setId(91L);

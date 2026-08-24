@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `39a673c7179dee7b2a365c27c1e9e89721bb9938`；专用 worktree `C:\Users\Steve\cretas-workflow-current-version-e2e-20260825`；分支 `codex/f006-workflow-current-version-e2e-20260825`；runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。P0 计划 A/B/C 分流、历史恢复和无历史 v1→v2→v3 已完成并保留原始证据；现从最新生产 SHA 继续幂等/并发冲突、手工快照退役、权限和 PostgreSQL 事务顺序。当前 Chat 是唯一写 Owner，F006 写入必须继续绑定本 runKey 与既有精确实体，其他租户写入为 0。
+- `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `39a673c7179dee7b2a365c27c1e9e89721bb9938`；专用 worktree `C:\Users\Steve\cretas-workflow-current-version-e2e-20260825`；分支 `codex/f006-workflow-current-version-e2e-20260825`；runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。P0 计划 A/B/C 分流、历史恢复、无历史 v1→v2→v3、发布快速双击幂等 v4 和旧会话相同图零写 no-op 已通过；`BUG-F006-WORKFLOW-STALE-PUBLISHED-IDENTITY-011` 已按先失败后修复补齐当前 PUBLISHED id/version/lockVersion 冲突门禁，Java 49/49、真实 PostgreSQL 双提交顺序 4/4、Web 56/56 与独立 typecheck/build 均通过。下一步按可信制品/exact-main 门禁合入部署，随后继续真实双浏览器不同图冲突、权限及历史只读验收。当前 Chat 是唯一写 Owner，F006 写入必须继续绑定本 runKey 与既有精确实体，其他租户写入为 0。
 
 - `E2E-F006-PRODUCTION-POST-REPORT-20260824` — `review` — Owner: `/root` — Base SHA `4e40e77c9062eefe5a643286051c789df00e48a9`；专用 worktree `C:\Users\Steve\cretas-f006-production-closeout-e2e-20260824`；分支 `codex/f006-fg-waste-readback-20260825`；当前 runKey `E2E-F006-PROD-CLOSEOUT-20260824-105104`。销售/仓储不合格批次门禁、报废处置、实际成品报损与 `BUG-F006-FINISHED-GOODS-WASTE-READBACK-010` 均已实现、验证、合入并部署到 `39a673c7179dee7b2a365c27c1e9e89721bb9938`；记录 26 的部署后新登录 UI/API/库存回读 PASS，批次号、产品、`10 盒`、历史申请人和 `DEPLETED/0` 守恒一致，生产业务写入为 0，Web/RN 已退出关闭。剩余仅与总 Handoff 一并归档 action-log、素材清单和验收表。
 
