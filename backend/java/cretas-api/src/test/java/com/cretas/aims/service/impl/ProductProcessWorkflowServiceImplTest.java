@@ -222,36 +222,6 @@ class ProductProcessWorkflowServiceImplTest {
     }
 
     @Test
-    @DisplayName("另存版本冻结当前草稿并递增可编辑草稿版本，不发布也不启用")
-    void snapshotFreezesCurrentDraftAndAdvancesEditableDraft() throws Exception {
-        ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
-        draft.setDefinitionVersion(2);
-        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
-                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
-                .thenReturn(Optional.of(draft));
-        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
-            ProductProcessWorkflow saved = invocation.getArgument(0);
-            if (saved.getId() == null) saved.setId(92L);
-            if (saved.getLockVersion() == null) saved.setLockVersion(0L);
-            return saved;
-        });
-
-        ProductProcessWorkflowDTO nextDraft = service.snapshot(FACTORY_ID, PRODUCT_ID, 3L);
-
-        ArgumentCaptor<ProductProcessWorkflow> rows = ArgumentCaptor.forClass(ProductProcessWorkflow.class);
-        verify(repository, times(3)).saveAndFlush(rows.capture());
-        ProductProcessWorkflow snapshot = rows.getAllValues().get(0);
-        assertEquals(ProductProcessWorkflow.Status.SNAPSHOT, snapshot.getStatus());
-        assertEquals(2, snapshot.getDefinitionVersion());
-        assertEquals(draft.getNodesJson(), snapshot.getNodesJson());
-        assertEquals(ProductProcessWorkflow.Status.DRAFT.name(), nextDraft.getStatus());
-        assertEquals(3, nextDraft.getVersion());
-        assertNull(nextDraft.getRevisionId());
-        assertNull(nextDraft.getRevisionHash());
-        verify(catalogValidator, never()).validateForPublish(any(), any(), any());
-    }
-
-    @Test
     @DisplayName("草稿重建时从独立版本之后继续编号")
     void recreatedDraftAdvancesPastSnapshotVersion() {
         ProductProcessWorkflowDTO request = validDefinition();
@@ -451,9 +421,17 @@ class ProductProcessWorkflowServiceImplTest {
                 .status("IN_PROGRESS")
                 .productionStarted(true)
                 .build();
+        var staleUnstartedBinding = com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO.builder()
+                .planId("PLAN-UNSTARTED")
+                .planNumber("PLAN-UNSTARTED")
+                .status("IN_PROGRESS")
+                .productionStarted(false)
+                .build();
         when(productionPlanService.listWorkflowPlanBindings(
                 FACTORY_ID, List.of(93L, 91L, 89L)))
-                .thenReturn(Map.of(91L, List.of(binding)));
+                .thenReturn(Map.of(
+                        91L, List.of(binding, staleUnstartedBinding),
+                        89L, List.of(staleUnstartedBinding)));
 
         var versions = service.listVersions(FACTORY_ID, PRODUCT_ID);
 

@@ -6,6 +6,10 @@ const source = readFileSync(
   resolve(import.meta.dirname, '../ProductProcessWorkflowEditor.vue'),
   'utf8',
 );
+const apiSource = readFileSync(
+  resolve(import.meta.dirname, '../workflowApi.ts'),
+  'utf8',
+);
 
 describe('Workflow 自动分叉与历史预览编辑闸', () => {
   it('用户只管理当前配置，生产历史由真实报工自动形成', () => {
@@ -14,6 +18,8 @@ describe('Workflow 自动分叉与历史预览编辑闸', () => {
     expect(source).toContain('不需要另存版本');
     expect(source).not.toContain('>另存独立版本</el-button>');
     expect(source).not.toContain('data-testid="snapshot-workflow"');
+    expect(apiSource).not.toContain('snapshotProductProcessWorkflow');
+    expect(apiSource).not.toContain('/snapshot');
     expect(source).toContain('已经报工的计划保留旧配置并进入生产版本记录');
   });
 

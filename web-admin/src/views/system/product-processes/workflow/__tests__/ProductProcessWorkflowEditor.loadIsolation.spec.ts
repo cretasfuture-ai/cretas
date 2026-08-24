@@ -16,7 +16,6 @@ const apiMocks = vi.hoisted(() => ({
   updateWorkProcess: vi.fn(),
   publishProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
-  snapshotProductProcessWorkflow: vi.fn(),
   getProductProcessWorkflowActivation: vi.fn(),
   getWorkflowBomSyncPreflight: vi.fn(),
   publishAndActivateProductProcessWorkflow: vi.fn(),
@@ -45,7 +44,6 @@ vi.mock('../workflowApi', () => ({
   publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
-  snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
   listProductProcessWorkflowVersions: apiMocks.listProductProcessWorkflowVersions,
   getProductProcessWorkflowVersion: apiMocks.getProductProcessWorkflowVersion,
 }));

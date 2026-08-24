@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `3dfce77462cb8f24db5f3e56876ce7e714f852dd`; runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。专项验证 Workflow“当前配置/版本记录”产品真值、F006 计划按首次正式报工分流、历史恢复、幂等/并发冲突、权限和 PostgreSQL 事务顺序；当前 Chat 是唯一写 Owner，F006 写入必须绑定本 runKey，其他租户写入为 0。
+
 - `E2E-F006-PRODUCTION-POST-REPORT-20260824` — `in-progress` — Owner: `/root` — Base SHA `21b13aa47b49c017843fcde36da39eca9c54d4d7`; 当前 runKey `E2E-F006-PROD-CLOSEOUT-20260824-105104`。执行生产后段全链专项 E2E；已发现生产小结缺少备注输入/持久化契约，先补 Java/Web 契约与目标测试，再部署后续测。F006 当前 runKey 业务写入已获用户授权，其他租户写入为 0。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
@@ -37,6 +39,8 @@
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
 ## Scope 锁地图
+
+- `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824`：Workflow 当前配置编辑、版本记录/绑定清单/历史恢复/乐观锁与权限的 Web 页面、API/types/tests；Java `ProductProcessWorkflow` Controller/Service/DTO/Repository 及生产计划首次正式报工 started 判定/版本重绑定；真实 PostgreSQL 集成测试、专项 Playwright driver、gitignored 本 runKey 证据和 dispatch。只有发现并证明本专项缺陷后才修改实现；若触及 Repository/Entity/Flyway，必须补真实 JPA/迁移门禁。明确排除 WorkProcess 去重、BOM substitutes、Workflow/BOM 完整性准入、上一 runKey 后段生产实体、其他租户和全局配置；与现有三个 Workflow/BOM backlog 串行且不吸收其 scope。
 
 - `E2E-F006-PRODUCTION-POST-REPORT-20260824`：`ProductionPlanController` 的 interim-settle 请求 DTO、`InterimSettleService*`、现有小结 summary JSON、Web `productionPlan.ts` / 生产计划小结交互、专项 E2E driver、对应 Java/Web tests、dispatch 与本次证据；不新增迁移、不改 Entity/Repository 查询、不触碰其他租户或全局配置。
 

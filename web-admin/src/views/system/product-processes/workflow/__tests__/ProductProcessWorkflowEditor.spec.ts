@@ -20,7 +20,6 @@ const apiMocks = vi.hoisted(() => ({
   publishProductProcessWorkflow: vi.fn(),
   publishAndActivateProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
-  snapshotProductProcessWorkflow: vi.fn(),
 }));
 
 vi.mock('@/api/request', () => ({
@@ -60,7 +59,6 @@ vi.mock('../workflowApi', () => ({
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
-  snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
 }));
 
 vi.mock('@vue-flow/core', async () => {
@@ -755,7 +753,6 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   it('manages only the current configuration and does not expose manual version snapshots', async () => {
     const vm = await mountEditor();
     expect(vm.snapshotWorkflow).toBeUndefined();
-    expect(apiMocks.snapshotProductProcessWorkflow).not.toHaveBeenCalled();
   });
 
   it('requires a taxonomy category and does not submit a unit for onsite process creation', async () => {

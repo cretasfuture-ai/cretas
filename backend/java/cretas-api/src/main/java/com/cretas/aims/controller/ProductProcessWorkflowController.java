@@ -147,18 +147,6 @@ public class ProductProcessWorkflowController {
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    @PostMapping("/{productTypeId}/snapshot")
-    @Operation(summary = "将当前 Workflow 草稿另存为独立版本，不发布、不启用")
-    public ApiResponse<ProductProcessWorkflowDTO> snapshot(
-            @PathVariable String factoryId,
-            @PathVariable String productTypeId,
-            @RequestBody @Valid ProductProcessWorkflowDTO.PublishRequest request) {
-        return ApiResponse.success(service.snapshot(factoryId, productTypeId, request.getLockVersion()));
-    }
-
-    @RequirePermission({"production:read_write"})
-    @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @PostMapping("/{productTypeId}/publish")
     @Operation(summary = "兼容入口：自动同步 BOM、发布并启用 Workflow")
     public ApiResponse<ProductProcessWorkflowDTO> publish(

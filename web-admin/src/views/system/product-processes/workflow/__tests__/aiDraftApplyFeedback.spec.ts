@@ -30,7 +30,6 @@ const apiMocks = vi.hoisted(() => ({
   publishProductProcessWorkflow: vi.fn(),
   publishAndActivateProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
-  snapshotProductProcessWorkflow: vi.fn(),
 }));
 
 vi.mock('@/api/request', () => ({
@@ -59,7 +58,6 @@ vi.mock('../workflowApi', () => ({
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
-  snapshotProductProcessWorkflow: apiMocks.snapshotProductProcessWorkflow,
 }));
 
 vi.mock('@vue-flow/core', async () => {

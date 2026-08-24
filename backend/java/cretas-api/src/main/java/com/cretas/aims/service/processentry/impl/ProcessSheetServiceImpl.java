@@ -223,6 +223,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     public ProcessSheetRowResult submitRow(String factoryId, String planId,
                                             ProcessSheetRowRequest req, Long userId) {
         assertAuthenticatedPlan(factoryId, planId, userId);
+        lockWorkflowPlanForFormalReport(factoryId, planId);
         // 🔴 2026-08-18 复验发现: 这条校验原来只放在 saveRow 里, 而 submitRow 在调 saveRow **之前**
         //    还要跑 workflow 端口校验 —— 于是拿 36 字符 processCode 探针打上去, 先撞到的是
         //    「Workflow 端口选择组不满足 AT_LEAST_ONE」, 我的前置校验**一次都没被执行到**。
@@ -756,6 +757,28 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (productionPlanRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
             throw new BusinessException(403, "无权访问该计划");
         }
+    }
+
+    /**
+     * Workflow 更新会逐计划取得同一行的悲观写锁，再判断是否已有正式报工并决定是否重绑。
+     * 第一次正式报工必须在写入 SUBMITTED 行前取得相同锁，否则两个事务都可能基于
+     * “尚未开始”的旧快照继续，造成报工运行时与计划最终 Workflow 指针分裂。
+     *
+     * <p>普通非 Workflow 计划不参与版本重绑，无需增加这道串行点。</p>
+     */
+    private void lockWorkflowPlanForFormalReport(String factoryId, String planId) {
+        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository
+                .findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(403, "无权访问该计划"));
+        if (plan.getSelectedWorkflowId() == null) {
+            return;
+        }
+        productionPlanRepository.findByIdForUpdate(planId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(409, "生产计划状态已变化，请刷新后重试")
+                        .withCode("PRODUCTION_PLAN_CONFLICT")
+                        .withHint("Workflow 配置或计划正在更新，请刷新后重新报工")
+                        .withSeverity("warning"));
     }
 
     private List<ProcessSheetRow> resolveSubmittedRows(

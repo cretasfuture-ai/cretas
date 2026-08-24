@@ -120,8 +120,8 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             entity.setFactoryId(factoryId);
             entity.setProductTypeId(productTypeId);
             entity.setStatus(ProductProcessWorkflow.Status.DRAFT);
-            // SNAPSHOT 也是正式占用的历史版本号；从全部状态取最大值，避免草稿被异常重建时
-            // 与已另存版本复用同一个 definitionVersion，导致历史查看命中不确定行。
+            // 历史行也占用版本号；从全部状态取最大值，避免草稿被异常重建时
+            // 与保留的生产历史复用同一个 definitionVersion。
             int nextVersion = repository.findMaxDefinitionVersion(factoryId, productTypeId).orElse(0) + 1;
             entity.setDefinitionVersion(nextVersion);
         }
@@ -482,50 +482,6 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     }
 
     @Override
-    @Transactional
-    public ProductProcessWorkflowDTO snapshot(String factoryId, String productTypeId, Long lockVersion) {
-        requireWorkflowOwner(factoryId, productTypeId);
-        lockWorkflowOwner(factoryId, productTypeId);
-        ProductProcessWorkflow candidate = find(factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT)
-                .orElseThrow(() -> new BusinessException(409, "没有可另存的 Workflow 草稿")
-                        .withCode("PRODUCT_PROCESS_WORKFLOW_DRAFT_MISSING")
-                        .withHint("请先保存草稿，再另存为版本")
-                        .withSeverity("warning"));
-        ProductProcessWorkflow draft = repository.lockByIdAndFactoryId(candidate.getId(), factoryId)
-                .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.DRAFT)
-                .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")
-                        .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
-                        .withSeverity("warning"));
-        assertCurrentVersion(lockVersion, draft);
-        ProductProcessWorkflowDTO definition = toDTO(draft);
-        validator.validateForDraft(definition);
-        unitValidator.validate(factoryId, definition);
-
-        ProductProcessWorkflow snapshot = new ProductProcessWorkflow();
-        snapshot.setFactoryId(factoryId);
-        snapshot.setProductTypeId(productTypeId);
-        snapshot.setSchemaVersion(draft.getSchemaVersion());
-        snapshot.setStatus(ProductProcessWorkflow.Status.SNAPSHOT);
-        snapshot.setDefinitionVersion(draft.getDefinitionVersion());
-        snapshot.setNodesJson(draft.getNodesJson());
-        snapshot.setEdgesJson(draft.getEdgesJson());
-        snapshot.setViewportJson(draft.getViewportJson());
-        snapshot.setUnitReviewRequired(draft.getUnitReviewRequired());
-        snapshot = repository.saveAndFlush(snapshot);
-        ProductProcessWorkflowRevision snapshotRevision = revisionSnapshotService.capture(snapshot);
-        snapshot.setCurrentRevisionId(snapshotRevision.getId());
-        snapshot.setCurrentRevisionHash(snapshotRevision.getRevisionHash());
-        repository.saveAndFlush(snapshot);
-
-        draft.setDefinitionVersion(draft.getDefinitionVersion() + 1);
-        // The draft now represents a new mutable definition version. It must not
-        // continue advertising the immutable revision captured for the snapshot.
-        draft.setCurrentRevisionId(null);
-        draft.setCurrentRevisionHash(null);
-        return toDTO(repository.saveAndFlush(draft));
-    }
-
-    @Override
     @Transactional(readOnly = true)
     public List<ProductProcessWorkflowVersionSummaryDTO> listVersions(String factoryId, String productTypeId) {
         requireWorkflowOwner(factoryId, productTypeId);
@@ -537,8 +493,19 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 factoryId,
                 rows.stream().map(ProductProcessWorkflowRepository.VersionSummaryProjection::getId).toList());
         return rows.stream()
-                .map(row -> toVersionSummaryDTO(
-                        row, activation, bindings.getOrDefault(row.getId(), List.of())))
+                .map(row -> {
+                    boolean active = activation
+                            .filter(a -> Boolean.TRUE.equals(a.getEnabled()))
+                            .map(a -> row.getId().equals(a.getActiveWorkflowId()))
+                            .orElse(false);
+                    List<com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO> visibleBindings =
+                            active
+                                    ? bindings.getOrDefault(row.getId(), List.of())
+                                    : bindings.getOrDefault(row.getId(), List.of()).stream()
+                                            .filter(com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO::isProductionStarted)
+                                            .toList();
+                    return toVersionSummaryDTO(row, active, visibleBindings);
+                })
                 .filter(row -> row.isActive() || !row.getProductionPlans().isEmpty())
                 .collect(Collectors.toList());
     }
@@ -559,12 +526,8 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
 
     private ProductProcessWorkflowVersionSummaryDTO toVersionSummaryDTO(
             ProductProcessWorkflowRepository.VersionSummaryProjection row,
-            Optional<ProductProcessWorkflowActivation> activation,
+            boolean active,
             List<com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO> productionPlans) {
-        boolean active = activation
-                .filter(a -> Boolean.TRUE.equals(a.getEnabled()))
-                .map(a -> row.getId().equals(a.getActiveWorkflowId()))
-                .orElse(false);
         return new ProductProcessWorkflowVersionSummaryDTO(
                 row.getDefinitionVersion(),
                 row.getStatus().name(),
