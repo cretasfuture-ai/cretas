@@ -37,3 +37,10 @@
 - **生产同步**：Python 从 clean exact main 发布并于 `2026-08-24 09:43:44 CST` 启动；migration dry-run 为 142 已应用、0 待执行。共享 Web 通过可信 manifest 原子发布，回滚点 `web-admin.bak.20260824_094612`；工厂 SOP 回滚点 `/www/wwwroot/lsmsop/index.html.bak.20260824_094711`。AI Assist / 工厂 SOP / 餐饮 SOP 线上与仓库 SHA-256 分别为 `520de2a90bcca729fa7b560b2b66556bc3bde3483dee8cfea6acdb6d1ad565a4`、`a1bfc87c7a8b80a4032a981dfe4f272c252be515d84e64ae50fca49151afa8a8`、`e9e970dda61a87a85701ae9b14ef216b4e2c3e3a44e5b9f92d549e8e37488acd`。
 - **RAG 与回答验收**：仅 `f006-production-full-chain-sop.md` 原子重建为 76 块（原 75），`.NEW=0`、非 canonical 工厂块为 0；餐饮三 source 保持 87 / 250 / 176 块及原创建时间。工厂 6 个真实问答覆盖固定 BOM 顺序、RN、销售/发运/开票和 Workflow，全部只引用 F006 source；餐饮固定毛利与导览 canary 2/2 通过且只引用餐饮注册 source。Python、Embedding、PostgreSQL、Redis 健康，生产 ERP 业务写入为 0。
 - **scope 释放**：任务已从 ACTIVE 移除；AI Assist 工厂 tab、工厂 SOP、F006 KB、回答合同与测试 scope 全部释放。分支和 worktree 按规则保留，未清理。
+
+## `BUG-F006-WORKFLOW-EDITOR-EDITABILITY-20260824` — `review complete`
+
+- **业务语义**：用户始终管理当前配置，不再手工“另存独立版本”。保存后，新建计划以及所有尚未开始报工的既有计划（包括已锁定计划）自动跟随当前配置；已经报工、扣料、产出或结算的计划继续固定旧版本。只有仍被已开始报工计划绑定的旧版本才进入“生产版本记录”，并展示实际绑定的生产计划。
+- **实现与验证**：Web 已移除独立版本入口并呈现当前配置、自动应用结果和真实计划绑定；Java 在同一事务内发布新版本并重钉未报工计划，保留已开工快照，Repository 新查询通过真实 JPA 启动门禁。Web 4 files / 74 tests、typecheck/build、Java 58 tests 均通过；隔离 PostgreSQL Workflow 集成测试 4/4 通过且 0 skipped；权限漂移基线 4 / 当前 4 / 新增 0。
+- **候选制品**：统一 build 回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787539339-5836.json` 为 `built`；Java/Web 各构建一次，Java SHA-256 `22e64b727c6f981473c081874066240abc70586bfca216f7b09aaad5463ec903`，Web archive SHA-256 `2362384b54463fe72e72849aec01fff0064cbdb7526f6f083bf386724fa73125`。Java 仅预上传，未安装、未重启、未切流。
+- **scope 释放**：实现、目标验证、最终审查和候选制品均完成，任务已从 ACTIVE 移除并释放 Workflow editor、Java Workflow/ProductionPlan 及对应测试 scope。PR/远端合并、生产部署和 F006 用户验收仍是后续独立事实，须以各自回执为准。

@@ -34,8 +34,6 @@
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
-- `BUG-F006-WORKFLOW-EDITOR-EDITABILITY-20260824` — `review` — Owner: `/root` — Base SHA: `21b13aa47b49c017843fcde36da39eca9c54d4d7` — 当前启用且已被生产计划引用的配置仍可编辑；保存/发布新版本时旧行不可覆盖，新版本成为后续计划默认，并自动改绑所有“三信号均未开始报工”的既有计划（包括已锁定但尚未报工计划），已开始报工计划继续固定旧版本；版本记录展示各版本实际绑定的生产计划。目标 Service/JPA/Web 测试、Web typecheck/build 与隔离 PostgreSQL 4/4 均通过，等待最终制品、合并、部署和 F006 页面验收后归档。
-
 ## Scope 锁地图
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
@@ -45,8 +43,6 @@
 - `ENH-F006-CUSTOMER-CREATE-PROGRESSIVE-DISCLOSURE-001`：客户 Web 共享表单与 Java Customer DTO/Service/Repository/API/import、销售使用门禁、目标测试/dispatch；先裁定联系人/电话/地址是否强制，再实施。不得修改生产客户数据。
 
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购门禁、共享 Excel 导入与目标测试；Web 供应商列表/详情/新增编辑/导入及 API/types/tests；必须真实 JPA Context（如触及查询），生产业务写入为 0。
-
-- `BUG-F006-WORKFLOW-EDITOR-EDITABILITY-20260824`：Web Admin `src/views/system/product-processes/workflow/**` 及对应组件/模型/视口/E2E 目标测试；Java `ProductProcessWorkflowServiceImpl`、`ProductionPlanServiceImpl`、对应 Service 接口、`ProductProcessWorkflowVersionSummaryDTO`、`WorkflowPublishAndActivateResponse`、`ProductionPlanRepository` 与精确 Service/Controller/JPA 测试；`docs/dispatch/ACTIVE.md` 与当日归档。验收：发布新版本与零报工计划改绑在同一事务，已锁但未报工计划同样跟随当前配置，已报工/已扣料计划固定旧版本，版本列表按真实 workflow id 展示计划号/状态，跨厂不可见，Repository 启动门禁与 PostgreSQL 集成测试通过。不得修改生产 Workflow 数据做诊断；F006 写入验收仅允许带唯一测试标记的专用配置/计划并记录写后回读。
 
 - `BUG-F006-UNIT-DIMENSION-SCOPE-001`：Java 单位 Entity/DTO/Repository/UnitContractService、原料/采购/入库/BOM 场景校验及真实 JPA/Service 测试；Web UnitSelect/API/types/display helper 与目标测试；不得改变历史异常记录或生产数据。
 
