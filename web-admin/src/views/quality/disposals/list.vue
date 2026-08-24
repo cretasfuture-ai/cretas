@@ -7,6 +7,12 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, Check, Close } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+import {
+  getApplicantName,
+  getBatchDisplayName,
+  getBatchNumber,
+  getQuantityDisplay
+} from './disposalReadback';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -273,7 +279,7 @@ const REJECT_REASONS = [
 function approvalContextHtml(row: TableRow): string {
   const name = getBatchDisplayName(row);
   const batchNumber = getBatchNumber(row);
-  const quantity = getDisposalQuantity(row);
+  const quantity = getQuantityDisplay(row);
   const batch = batchNumber !== '-' ? `批次 ${batchNumber}` : '';
   const qty = quantity !== '-' ? `数量 ${quantity}` : '';
   const type = getTypeText(row.disposalType as string);
@@ -374,43 +380,10 @@ function getRecordNumber(row: TableRow): string | number {
   return row.recordNumber ?? row.recordNo ?? row.id ?? '-';
 }
 
-function getBatchNumber(row: TableRow): string {
-  return row.batchNumber
-    || row.materialBatch?.batchNumber
-    || row.finishedGoodsBatch?.batchNumber
-    || row.productionBatch?.batchNumber
-    || '-';
-}
-
-function getBatchDisplayName(row: TableRow): string {
-  return row.materialName
-    || row.materialTypeName
-    || row.materialBatch?.materialName
-    || row.materialBatch?.materialTypeName
-    || row.materialBatch?.materialType?.name
-    || row.finishedGoodsBatch?.productName
-    || row.finishedGoodsBatch?.productTypeName
-    || row.finishedGoodsBatch?.productType?.name
-    || getBatchNumber(row)
-    || '报废记录';
-}
-
-function getDisposalQuantity(row: TableRow): string | number {
-  return row.quantity ?? row.disposalQuantity ?? '-';
-}
-
 function getDisposalReason(row: TableRow): string {
   return row.reason || row.disposalReason || '-';
 }
 
-function getApplicantName(row: TableRow): string {
-  return row.applicantName
-    || row.createdByName
-    || row.createdByUser?.fullName
-    || row.createdByUser?.name
-    || row.createdByUser?.username
-    || '-';
-}
 </script>
 
 <template>
@@ -467,7 +440,7 @@ function getApplicantName(row: TableRow): string {
         </el-table-column>
         <el-table-column label="数量" width="100" align="right">
           <template #default="{ row }">
-            {{ getDisposalQuantity(row) }}
+            {{ getQuantityDisplay(row) }}
           </template>
         </el-table-column>
         <el-table-column label="废弃原因" min-width="200" show-overflow-tooltip>
@@ -532,7 +505,7 @@ function getApplicantName(row: TableRow): string {
         <el-descriptions-item label="记录编号">{{ getRecordNumber(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="批次号">{{ getBatchNumber(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="废弃类型">{{ getTypeText(viewRecord.disposalType) }}</el-descriptions-item>
-        <el-descriptions-item label="数量">{{ getDisposalQuantity(viewRecord) }}</el-descriptions-item>
+        <el-descriptions-item label="数量">{{ getQuantityDisplay(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="废弃原因">{{ getDisposalReason(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="申请人">{{ getApplicantName(viewRecord) }}</el-descriptions-item>
         <el-descriptions-item label="状态">

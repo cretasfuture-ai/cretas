@@ -30,6 +30,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -81,7 +85,7 @@ public class DisposalRecordService implements IDisposalRecordService {
             record.setIsApproved(false);
         }
         log.info("创建报废记录: 工厂={}, 类型={}", record.getFactoryId(), record.getDisposalType());
-        return disposalRecordRepository.save(record);
+        return hydrateReadback(disposalRecordRepository.save(record));
     }
 
     /**
@@ -168,7 +172,7 @@ public class DisposalRecordService implements IDisposalRecordService {
 
         record.approve(approverId, approverName);
         log.info("审批报废记录: id={}, 审批人={} ({}), 实际损失={}", id, approverName, approverId, actualLoss);
-        return disposalRecordRepository.save(record);
+        return hydrateReadback(disposalRecordRepository.save(record));
     }
 
     /**
@@ -369,7 +373,7 @@ public class DisposalRecordService implements IDisposalRecordService {
 
         record.reject(approverId, approverName, reason);
         log.info("拒绝报废记录: id={}, 审批人={} ({}), 原因={}", id, approverName, approverId, reason);
-        return disposalRecordRepository.save(record);
+        return hydrateReadback(disposalRecordRepository.save(record));
     }
 
     /**
@@ -378,7 +382,8 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     public Optional<DisposalRecord> getById(String factoryId, Long id) {
         return disposalRecordRepository.findById(id)
-                .filter(r -> factoryId != null && factoryId.equals(r.getFactoryId()));
+                .filter(r -> factoryId != null && factoryId.equals(r.getFactoryId()))
+                .map(this::hydrateReadback);
     }
 
     /**
@@ -387,7 +392,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     public Page<DisposalRecord> getByFactoryId(String factoryId, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "disposalDate"));
-        return disposalRecordRepository.findByFactoryId(factoryId, pageable);
+        return hydrateReadback(disposalRecordRepository.findByFactoryId(factoryId, pageable));
     }
 
     /**
@@ -396,7 +401,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     public Page<DisposalRecord> getByFactoryIdAndType(String factoryId, String disposalType, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "disposalDate"));
-        return disposalRecordRepository.findByFactoryIdAndDisposalType(factoryId, disposalType, pageable);
+        return hydrateReadback(disposalRecordRepository.findByFactoryIdAndDisposalType(factoryId, disposalType, pageable));
     }
 
     /**
@@ -404,7 +409,7 @@ public class DisposalRecordService implements IDisposalRecordService {
      */
     @Override
     public List<DisposalRecord> getPendingApprovals(String factoryId) {
-        return disposalRecordRepository.findPendingApprovals(factoryId);
+        return hydrateReadback(disposalRecordRepository.findPendingApprovals(factoryId));
     }
 
     /**
@@ -412,7 +417,7 @@ public class DisposalRecordService implements IDisposalRecordService {
      */
     @Override
     public List<DisposalRecord> getByDateRange(String factoryId, LocalDateTime startDate, LocalDateTime endDate) {
-        return disposalRecordRepository.findByDateRange(factoryId, startDate, endDate);
+        return hydrateReadback(disposalRecordRepository.findByDateRange(factoryId, startDate, endDate));
     }
 
     /**
@@ -453,7 +458,7 @@ public class DisposalRecordService implements IDisposalRecordService {
      */
     @Override
     public List<DisposalRecord> getRecyclableDisposals(String factoryId) {
-        return disposalRecordRepository.findRecyclableDisposals(factoryId);
+        return hydrateReadback(disposalRecordRepository.findRecyclableDisposals(factoryId));
     }
 
     /**
@@ -497,7 +502,45 @@ public class DisposalRecordService implements IDisposalRecordService {
         }
 
         log.info("更新报废记录: id={}", id);
-        return disposalRecordRepository.save(existing);
+        return hydrateReadback(disposalRecordRepository.save(existing));
+    }
+
+    private DisposalRecord hydrateReadback(DisposalRecord record) {
+        hydrateReadback(Collections.singletonList(record));
+        return record;
+    }
+
+    private Page<DisposalRecord> hydrateReadback(Page<DisposalRecord> records) {
+        hydrateReadback(records.getContent());
+        return records;
+    }
+
+    /**
+     * Populate display-only fields for finished-goods disposal records in one repository read.
+     * A referenced batch from another factory is deliberately ignored to preserve tenant isolation.
+     */
+    private <T extends Collection<DisposalRecord>> T hydrateReadback(T records) {
+        List<String> ids = records.stream()
+                .map(DisposalRecord::getFinishedGoodsBatchId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return records;
+        }
+        Map<String, FinishedGoodsBatch> batches = finishedGoodsBatchRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(FinishedGoodsBatch::getId, Function.identity()));
+        records.forEach(record -> {
+            FinishedGoodsBatch batch = batches.get(record.getFinishedGoodsBatchId());
+            if (batch == null || record.getFactoryId() == null
+                    || !record.getFactoryId().equals(batch.getFactoryId())) {
+                return;
+            }
+            record.setBatchNumber(batch.getBatchNumber());
+            record.setBatchDisplayName(batch.getProductName());
+            record.setQuantityUnit(batch.getUnit());
+        });
+        return records;
     }
 
     /**

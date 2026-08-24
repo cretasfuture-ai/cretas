@@ -11,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -43,6 +44,7 @@ import static org.mockito.Mockito.when;
 class DisposalControllerCreateTest {
 
     @Mock DisposalRecordService disposalRecordService;
+    @Mock HttpServletRequest httpRequest;
 
     @InjectMocks DisposalController controller;
 
@@ -59,7 +61,9 @@ class DisposalControllerCreateTest {
         when(disposalRecordService.createDisposalRecord(any(DisposalRecord.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
-        ResponseEntity<?> resp = controller.createDisposalRecord("F001", req);
+        when(httpRequest.getAttribute("userId")).thenReturn(1309L);
+        when(httpRequest.getAttribute("username")).thenReturn("f006_admin");
+        ResponseEntity<?> resp = controller.createDisposalRecord("F001", req, httpRequest);
 
         ArgumentCaptor<DisposalRecord> captor = ArgumentCaptor.forClass(DisposalRecord.class);
         Mockito.verify(disposalRecordService).createDisposalRecord(captor.capture());
@@ -71,6 +75,8 @@ class DisposalControllerCreateTest {
         assertEquals("SCRAP", mapped.getDisposalType());
         // factoryId from path-variable (set AFTER mapper)
         assertEquals("F001", mapped.getFactoryId());
+        assertEquals(1309, mapped.getApplicantId());
+        assertEquals("f006_admin", mapped.getApplicantName());
         // Mapper does NOT pre-fill service-owned defaults (single source of truth)
         assertNull(mapped.getDisposalDate(), "disposalDate now-fallback belongs to service");
         // isApproved gets entity-level field default `= false` from new DisposalRecord()
@@ -115,7 +121,7 @@ class DisposalControllerCreateTest {
         when(disposalRecordService.createDisposalRecord(any(DisposalRecord.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
-        ResponseEntity<?> resp = controller.createDisposalRecord("F002", req);
+        ResponseEntity<?> resp = controller.createDisposalRecord("F002", req, httpRequest);
 
         ArgumentCaptor<DisposalRecord> captor = ArgumentCaptor.forClass(DisposalRecord.class);
         Mockito.verify(disposalRecordService).createDisposalRecord(captor.capture());
@@ -153,7 +159,7 @@ class DisposalControllerCreateTest {
         when(disposalRecordService.createDisposalRecord(any(DisposalRecord.class)))
                 .thenReturn(saved);
 
-        ResponseEntity<?> resp = controller.createDisposalRecord("F001", req);
+        ResponseEntity<?> resp = controller.createDisposalRecord("F001", req, httpRequest);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
