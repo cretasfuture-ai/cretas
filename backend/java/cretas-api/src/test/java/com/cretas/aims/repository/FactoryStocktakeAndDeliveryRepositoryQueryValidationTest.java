@@ -2,6 +2,8 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
+import com.cretas.aims.entity.factory.FactoryStocktakeItem;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import jakarta.persistence.EntityManager;
@@ -28,6 +30,7 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
 
     @Autowired private FactoryStocktakeRepository stocktakeRepository;
     @Autowired private SalesDeliveryItemRepository deliveryItemRepository;
+    @Autowired private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Autowired private EntityManager entityManager;
 
     @Test
@@ -35,7 +38,10 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
     void repositoriesAndMappingsBoot() {
         assertNotNull(stocktakeRepository);
         assertNotNull(deliveryItemRepository);
+        assertNotNull(finishedGoodsBatchRepository);
         assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("version")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("inventoryScope")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(FactoryStocktakeItem.class).getAttribute("finishedGoodsBatchId")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(SalesDeliveryItem.class).getAttribute("salesOrderItemId")).isNotNull();
     }
 }

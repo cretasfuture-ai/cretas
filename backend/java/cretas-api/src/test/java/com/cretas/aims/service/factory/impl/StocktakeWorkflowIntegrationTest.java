@@ -10,6 +10,8 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -52,6 +54,8 @@ class StocktakeWorkflowIntegrationTest {
     @Mock private FactoryStocktakeItemRepository stocktakeItemRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepo;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
     @Mock private ProductTypeRepository productTypeRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
@@ -72,6 +76,8 @@ class StocktakeWorkflowIntegrationTest {
                 stocktakeItemRepo,
                 materialBatchRepo,
                 adjustmentRepo,
+                finishedGoodsBatchRepo,
+                finishedGoodsAdjustmentLogRepo,
                 rawMaterialTypeRepo,
                 productTypeRepo,
                 materialConsumptionRepo);

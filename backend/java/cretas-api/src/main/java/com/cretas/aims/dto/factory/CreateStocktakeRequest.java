@@ -14,6 +14,10 @@ public class CreateStocktakeRequest {
     @NotBlank(message = "仓库 ID 不能为空")
     private String warehouseId;
 
+    /** RAW_MATERIAL(default) or FINISHED_GOODS. WIP uses its dedicated stocktake flow. */
+    private com.cretas.aims.entity.factory.FactoryStocktake.InventoryScope inventoryScope =
+            com.cretas.aims.entity.factory.FactoryStocktake.InventoryScope.RAW_MATERIAL;
+
     /**
      * Legacy compatibility only. The server ignores this value and derives the accounting
      * period from inventoryCutoffAt, which is always generated inside initiate().

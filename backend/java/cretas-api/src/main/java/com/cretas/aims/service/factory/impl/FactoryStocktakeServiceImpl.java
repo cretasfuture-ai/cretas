@@ -15,6 +15,8 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
+import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.exception.BusinessException;
@@ -26,6 +28,8 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.inventory.ByproductCreditService;
@@ -76,6 +80,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private final FactoryStocktakeItemRepository stocktakeItemRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final MaterialBatchAdjustmentRepository adjustmentRepo;
+    private final FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    private final FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepo;
     /** 🔴 Fix (previewDiff materialName 空白, 2026-07): 按 batch.materialTypeId 反查物料名, 镜像 StocktakeBulkImportServiceImpl.loadMaterialNames。 */
     private final RawMaterialTypeRepository rawMaterialTypeRepo;
     private final ProductTypeRepository productTypeRepo;
@@ -114,6 +120,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     // -------------------------------------------------------
     private static final String SUBJECT_INVENTORY_CODE = "1403";
     private static final String SUBJECT_INVENTORY_NAME = "原材料";
+    private static final String SUBJECT_FINISHED_GOODS_CODE = "1405";
+    private static final String SUBJECT_FINISHED_GOODS_NAME = "库存商品";
     private static final String SUBJECT_SURPLUS_INCOME_CODE = "6301";
     private static final String SUBJECT_SURPLUS_INCOME_NAME = "营业外收入";
     private static final String SUBJECT_SHORTAGE_LOSS_CODE = "6602";
@@ -165,8 +173,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
 
         // 防重复发起（同仓库同月份已有未完成盘点）
-        long existing = stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
-                factoryId, req.getWarehouseId(), periodMonth);
+        FactoryStocktake.InventoryScope inventoryScope = req.getInventoryScope() == null
+                ? FactoryStocktake.InventoryScope.RAW_MATERIAL : req.getInventoryScope();
+        if (opening && inventoryScope != FactoryStocktake.InventoryScope.RAW_MATERIAL) {
+            throw new BusinessException(400, "期初建账当前仅支持原料库存")
+                    .withCode("STOCKTAKE_OPENING_SCOPE_INVALID");
+        }
+        long existing = inventoryScope == FactoryStocktake.InventoryScope.RAW_MATERIAL
+                ? stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
+                        factoryId, req.getWarehouseId(), periodMonth)
+                : stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
+                        factoryId, req.getWarehouseId(), periodMonth, inventoryScope);
         if (existing > 0) {
             throw new BusinessException(409,
                     "该仓库本月已有进行中的盘点任务，请完成或拒绝后再发起")
@@ -177,6 +194,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         stocktake.setFactoryId(factoryId);
         stocktake.setStocktakeNo(generateStocktakeNo(factoryId));
         stocktake.setWarehouseId(req.getWarehouseId());
+        stocktake.setInventoryScope(inventoryScope);
         stocktake.setPeriodMonth(periodMonth);
         stocktake.setInventoryCutoffAt(inventoryCutoffAt);
         stocktake.setReconciliationEndAt(inventoryCutoffAt);
@@ -190,6 +208,31 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         stocktake.setInitiatedAt(inventoryCutoffAt);
         stocktake.setNotes(req.getNotes());
         stocktake.setImportMode(importMode); // null = 逐项 UI 盘点; NORMAL/OPENING = 批量导入
+
+        if (inventoryScope == FactoryStocktake.InventoryScope.FINISHED_GOODS) {
+            List<FactoryStocktakeItem> finishedItems = finishedGoodsBatchRepo
+                    .findByFactoryIdAndWarehouseId(factoryId, req.getWarehouseId()).stream()
+                    .filter(batch -> !FinishedGoodsBatch.Status.REVERSED.equals(batch.getStatus()))
+                    .filter(batch -> finishedGoodsPhysicalQty(batch).compareTo(BigDecimal.ZERO) > 0)
+                    .map(batch -> {
+                        FactoryStocktakeItem item = new FactoryStocktakeItem();
+                        item.setStocktake(stocktake);
+                        item.setFinishedGoodsBatchId(batch.getId());
+                        item.setProductTypeId(batch.getProductTypeId());
+                        item.setQuantityUnit(batch.getUnit());
+                        item.setSystemQty(finishedGoodsPhysicalQty(batch).setScale(4, RoundingMode.HALF_UP));
+                        return item;
+                    }).collect(Collectors.toList());
+            if (finishedItems.isEmpty()) {
+                throw new BusinessException(409, "所选仓库没有可盘点的成品批次，请选择有成品库存的仓库")
+                        .withCode("FINISHED_GOODS_STOCKTAKE_EMPTY");
+            }
+            stocktake.setItems(finishedItems);
+            FactoryStocktake saved = stocktakeRepo.save(stocktake);
+            log.info("SP7: 成品盘点任务已创建 factoryId={} stocktakeNo={} warehouseId={} itemCount={}",
+                    factoryId, saved.getStocktakeNo(), req.getWarehouseId(), finishedItems.size());
+            return toDetailedDTO(saved, factoryId);
+        }
 
         // 快照该仓库所有 MaterialBatch 的当前库存
         List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
@@ -206,6 +249,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             // batch. Raw batches use materialTypeId; WIP/product batches use
             // productTypeId. The public DTO splits the two identities again.
             item.setRawMaterialTypeId(inventoryTypeId(batch));
+            item.setQuantityUnit(batch.getQuantityUnit());
             // 🔴 Fix (🔒🔒 phantom-variance): 快照「货架实物量」= receiptQuantity − usedQuantity − 未小结报工消耗,
             // 既不是 gross receiptQuantity, 也不是可用量 getCurrentQuantity()(= receipt − used − reserved)。
             // 仓管盘点数的是货架上肉眼可见的实物: 已领用(used)的货已物理离开货架 → 扣减;
@@ -472,6 +516,11 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         assertStatus(stocktake, FactoryStocktake.Status.APPROVED, "生效");
         normalizeAndValidateEvidence(stocktake);
 
+        if (stocktake.getInventoryScope() == FactoryStocktake.InventoryScope.FINISHED_GOODS) {
+            applyFinishedGoods(stocktake, factoryId, userId);
+            return;
+        }
+
         // Validate every immutable snapshot identity before any inventory mutation. This is
         // deliberately broader than the non-zero difference set: a zero-difference apply is
         // still a final audited lock operation and must not silently accept a cross-tenant row.
@@ -661,6 +710,92 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         log.info("SP7: 盘点任务已生效 stocktakeId={} importMode={}", stocktakeId, stocktake.getImportMode());
     }
 
+    private void applyFinishedGoods(FactoryStocktake stocktake, String factoryId, Long userId) {
+        Map<String, FinishedGoodsBatch> locked = new LinkedHashMap<>();
+        List<String> drifted = new ArrayList<>();
+        for (FactoryStocktakeItem item : stocktake.getItems()) {
+            if (item.getFinishedGoodsBatchId() == null || item.getMaterialBatchId() != null) {
+                throw new BusinessException(409, "成品盘点明细身份不完整")
+                        .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+            }
+            FinishedGoodsBatch batch = finishedGoodsBatchRepo
+                    .findStocktakeBatchForUpdate(item.getFinishedGoodsBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(409,
+                            "成品盘点批次不存在或不属于当前工厂: " + item.getFinishedGoodsBatchId())
+                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
+            if (!Objects.equals(stocktake.getWarehouseId(), batch.getWarehouseId())
+                    || !Objects.equals(item.getProductTypeId(), batch.getProductTypeId())) {
+                throw new BusinessException(409, "成品盘点批次的仓库或产品身份已不一致: " + batch.getBatchNumber())
+                        .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+            }
+            locked.put(batch.getId(), batch);
+            if (item.getDifferenceQty() != null && item.getDifferenceQty().signum() != 0) {
+                BigDecimal live = finishedGoodsPhysicalQty(batch).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal snapshot = item.getSystemQty().setScale(2, RoundingMode.HALF_UP);
+                if (live.compareTo(snapshot) != 0) {
+                    drifted.add(batch.getBatchNumber() + "(盘点时=" + snapshot + ", 当前=" + live + ")");
+                }
+            }
+        }
+        if (!drifted.isEmpty()) {
+            throw new BusinessException(409, "以下成品批次在计数后库存已变化，无法按旧差异生效: "
+                    + String.join("；", drifted)).withCode("STOCKTAKE_DRIFT");
+        }
+
+        BigDecimal surplusValue = BigDecimal.ZERO;
+        BigDecimal shortageValue = BigDecimal.ZERO;
+        int uncostedCount = 0;
+        for (FactoryStocktakeItem item : stocktake.getItems()) {
+            BigDecimal delta = item.getDifferenceQty();
+            if (delta == null || delta.signum() == 0) continue;
+            FinishedGoodsBatch batch = locked.get(item.getFinishedGoodsBatchId());
+            BigDecimal before = nz(batch.getProducedQuantity());
+            BigDecimal after = before.add(delta).setScale(4, RoundingMode.HALF_UP);
+            BigDecimal floor = nz(batch.getShippedQuantity());
+            if (after.compareTo(floor) < 0) {
+                throw new BusinessException(409, "成品实盘数量不能使累计入库量低于已发货量: " + batch.getBatchNumber())
+                        .withCode("FINISHED_GOODS_STOCKTAKE_SHIPPED_FLOOR");
+            }
+            BigDecimal realized = after.subtract(before);
+            if (batch.getUnitCost() == null) {
+                uncostedCount++;
+            } else {
+                BigDecimal value = realized.multiply(batch.getUnitCost()).setScale(2, RoundingMode.HALF_UP);
+                if (value.signum() > 0) surplusValue = surplusValue.add(value);
+                else if (value.signum() < 0) shortageValue = shortageValue.add(value.abs());
+            }
+            finishedGoodsAdjustmentLogRepo.save(FinishedGoodsAdjustmentLog.builder()
+                    .factoryId(factoryId).batchId(batch.getId())
+                    .adjustmentQuantity(realized).beforeProduced(before).afterProduced(after)
+                    .reason("成品盘点生效 [" + stocktake.getStocktakeNo() + "] 差异: " + item.getDifferenceType())
+                    .referenceType("STOCKTAKE").operatorId(userId).build());
+            batch.setProducedQuantity(after);
+            BigDecimal physicalAfter = finishedGoodsPhysicalQty(batch);
+            if (physicalAfter.signum() == 0 && FinishedGoodsBatch.Status.AVAILABLE.equals(batch.getStatus())) {
+                batch.setStatus(FinishedGoodsBatch.Status.DEPLETED);
+            } else if (physicalAfter.signum() > 0 && FinishedGoodsBatch.Status.DEPLETED.equals(batch.getStatus())) {
+                batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+            }
+            finishedGoodsBatchRepo.save(batch);
+        }
+        if (voucherService != null) {
+            postStocktakeVoucher(stocktake, factoryId, surplusValue, shortageValue, uncostedCount, userId);
+        }
+        stocktake.setStatus(FactoryStocktake.Status.APPLIED);
+        stocktake.setAppliedAt(LocalDateTime.now());
+        stocktake.setAppliedBy(userId);
+        stocktakeRepo.save(stocktake);
+        log.info("SP7: 成品盘点任务已生效 stocktakeId={}", stocktake.getId());
+    }
+
+    private static BigDecimal finishedGoodsPhysicalQty(FinishedGoodsBatch batch) {
+        return nz(batch.getProducedQuantity()).subtract(nz(batch.getShippedQuantity())).max(BigDecimal.ZERO);
+    }
+
+    private static BigDecimal nz(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
     /**
      * 原料盘点差异过账。NORMAL/逐项=盘盈/盘亏损益; OPENING=期初建账权益 (Decision 2/3)。
      *
@@ -685,13 +820,16 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
 
         boolean opening = stocktake.getImportMode() == FactoryStocktake.ImportMode.OPENING;
+        boolean finishedGoods = stocktake.getInventoryScope() == FactoryStocktake.InventoryScope.FINISHED_GOODS;
+        String inventoryCode = finishedGoods ? SUBJECT_FINISHED_GOODS_CODE : SUBJECT_INVENTORY_CODE;
+        String inventoryName = finishedGoods ? SUBJECT_FINISHED_GOODS_NAME : SUBJECT_INVENTORY_NAME;
         String no = stocktake.getStocktakeNo();
         List<VoucherEntrySpec> entries = new ArrayList<>();
 
         if (opening) {
             // 期初建账: 借 原材料 / 贷 实收资本 (盘盈方向); 盘亏方向借贷互换。不进 6301。
             if (hasSurplus) {
-                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                entries.add(new VoucherEntrySpec(inventoryCode, inventoryName,
                         surplusValue, null, "期初建账入库 " + no));
                 entries.add(new VoucherEntrySpec(SUBJECT_OPENING_EQUITY_CODE, SUBJECT_OPENING_EQUITY_NAME,
                         null, surplusValue, "期初建账权益 " + no));
@@ -699,26 +837,26 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             if (hasShortage) {
                 entries.add(new VoucherEntrySpec(SUBJECT_OPENING_EQUITY_CODE, SUBJECT_OPENING_EQUITY_NAME,
                         shortageValue, null, "期初建账冲减权益 " + no));
-                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
+                entries.add(new VoucherEntrySpec(inventoryCode, inventoryName,
                         null, shortageValue, "期初建账减少存货 " + no));
             }
         } else {
             // NORMAL 常规盘点: 盘盈 借原材料/贷营业外收入; 盘亏 借管理费用/贷原材料。
             if (hasSurplus) {
-                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
-                        surplusValue, null, "原料盘盈 " + no));
+                entries.add(new VoucherEntrySpec(inventoryCode, inventoryName,
+                        surplusValue, null, (finishedGoods ? "成品盘盈 " : "原料盘盈 ") + no));
                 entries.add(new VoucherEntrySpec(SUBJECT_SURPLUS_INCOME_CODE, SUBJECT_SURPLUS_INCOME_NAME,
-                        null, surplusValue, "原料盘盈收益 " + no));
+                        null, surplusValue, (finishedGoods ? "成品盘盈收益 " : "原料盘盈收益 ") + no));
             }
             if (hasShortage) {
                 entries.add(new VoucherEntrySpec(SUBJECT_SHORTAGE_LOSS_CODE, SUBJECT_SHORTAGE_LOSS_NAME,
-                        shortageValue, null, "原料盘亏损耗 " + no));
-                entries.add(new VoucherEntrySpec(SUBJECT_INVENTORY_CODE, SUBJECT_INVENTORY_NAME,
-                        null, shortageValue, "原料盘亏库存减少 " + no));
+                        shortageValue, null, (finishedGoods ? "成品盘亏损耗 " : "原料盘亏损耗 ") + no));
+                entries.add(new VoucherEntrySpec(inventoryCode, inventoryName,
+                        null, shortageValue, (finishedGoods ? "成品盘亏库存减少 " : "原料盘亏库存减少 ") + no));
             }
         }
 
-        String summary = no + (opening ? " 原料期初建账" : " 原料盘点")
+        String summary = no + (opening ? " 原料期初建账" : (finishedGoods ? " 成品盘点" : " 原料盘点"))
                 + (hasSurplus ? "盘盈" : "") + (hasShortage ? "盘亏" : "") + "凭证";
         String sourceType = opening ? VOUCHER_SOURCE_TYPE_OPENING : VOUCHER_SOURCE_TYPE_NORMAL;
         voucherService.createManual(factoryId, VoucherType.INVENTORY_STOCKTAKE,
@@ -739,6 +877,41 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         preview.setReconciliationStartAt(stocktake.getReconciliationStartAt());
         preview.setReconciliationEndAt(stocktake.getReconciliationEndAt() != null
                 ? stocktake.getReconciliationEndAt() : effectiveInventoryCutoff(stocktake));
+
+        if (stocktake.getInventoryScope() == FactoryStocktake.InventoryScope.FINISHED_GOODS) {
+            Map<String, FinishedGoodsBatch> finishedById = finishedGoodsBatchRepo
+                    .findAllById(stocktake.getItems().stream()
+                            .map(FactoryStocktakeItem::getFinishedGoodsBatchId)
+                            .filter(Objects::nonNull).toList()).stream()
+                    .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                    .collect(Collectors.toMap(FinishedGoodsBatch::getId, batch -> batch, (a, b) -> a));
+            List<StocktakeDiffPreviewDTO.DiffLine> lines = new ArrayList<>();
+            int surplus = 0, shortage = 0, match = 0;
+            for (FactoryStocktakeItem item : stocktake.getItems()) {
+                StocktakeDiffPreviewDTO.DiffLine line = new StocktakeDiffPreviewDTO.DiffLine();
+                line.setItemId(item.getId());
+                line.setFinishedGoodsBatchId(item.getFinishedGoodsBatchId());
+                line.setSystemQty(item.getSystemQty());
+                line.setActualQty(item.getActualQty());
+                line.setDifferenceQty(item.getDifferenceQty());
+                line.setDifferenceType(item.getDifferenceType() == null ? null : item.getDifferenceType().name());
+                FinishedGoodsBatch batch = finishedById.get(item.getFinishedGoodsBatchId());
+                if (batch != null) {
+                    line.setBatchNumber(batch.getBatchNumber());
+                    line.setMaterialName(batch.getProductName());
+                    line.setQuantityUnit(batch.getUnit());
+                }
+                if (item.getDifferenceQty() != null && item.getDifferenceQty().signum() != 0) lines.add(line);
+                if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.SURPLUS) surplus++;
+                else if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.SHORTAGE) shortage++;
+                else if (item.getDifferenceType() == FactoryStocktakeItem.DifferenceType.MATCH) match++;
+            }
+            preview.setDiffLines(lines);
+            preview.setSurplusCount(surplus);
+            preview.setShortageCount(shortage);
+            preview.setMatchCount(match);
+            return preview;
+        }
 
         // 🔴 Fix (materialName 空白, 2026-07): 批量反查 batch → materialTypeId → 物料名,
         // 镜像 StocktakeBulkImportServiceImpl.loadMaterialNames() 的解法, 避免 previewDiff
@@ -774,6 +947,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             StocktakeDiffPreviewDTO.DiffLine line = new StocktakeDiffPreviewDTO.DiffLine();
             line.setItemId(item.getId());
             line.setMaterialBatchId(item.getMaterialBatchId());
+            line.setFinishedGoodsBatchId(item.getFinishedGoodsBatchId());
             line.setSystemQty(item.getSystemQty());
             line.setActualQty(item.getActualQty());
             line.setDifferenceQty(item.getDifferenceQty());
@@ -929,6 +1103,25 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
     private void enrichItemIdentity(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {
         if (dto.getItems() == null || dto.getItems().isEmpty()) {
+            return;
+        }
+        if (stocktake.getInventoryScope() == FactoryStocktake.InventoryScope.FINISHED_GOODS) {
+            Map<String, FinishedGoodsBatch> finishedById = finishedGoodsBatchRepo
+                    .findAllById(dto.getItems().stream()
+                            .map(StocktakeDTO.StocktakeItemDTO::getFinishedGoodsBatchId)
+                            .filter(Objects::nonNull).toList()).stream()
+                    .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                    .filter(batch -> Objects.equals(stocktake.getWarehouseId(), batch.getWarehouseId()))
+                    .collect(Collectors.toMap(FinishedGoodsBatch::getId, batch -> batch, (a, b) -> a));
+            dto.getItems().forEach(item -> {
+                FinishedGoodsBatch batch = finishedById.get(item.getFinishedGoodsBatchId());
+                if (batch == null) return;
+                item.setBatchNumber(batch.getBatchNumber());
+                item.setProductTypeId(batch.getProductTypeId());
+                item.setMaterialCode(batch.getProductTypeId());
+                item.setMaterialName(batch.getProductName());
+                item.setQuantityUnit(batch.getUnit());
+            });
             return;
         }
         List<String> batchIds = dto.getItems().stream()
