@@ -54,6 +54,8 @@ describe('qualityInspectorApi record detail mapping', () => {
       passRate: 50,
       scoreDetailsRecorded: true,
       appearance: { score: 10, notes: ['色泽异常'] },
+      result: 'FAIL',
+      passed: false,
     });
   });
 
@@ -80,5 +82,31 @@ describe('qualityInspectorApi record detail mapping', () => {
     expect(record.scoreDetailsRecorded).toBe(false);
     expect(record.totalScore).toBe(0);
     expect(record.passRate).toBe(100);
+    expect(record.result).toBe('PASS');
+    expect(record.passed).toBe(true);
+  });
+
+  it('keeps CONDITIONAL distinct from fully passed and preserves its disposition gate', async () => {
+    mock.onGet(`${base}/QI-CONDITIONAL`).reply(200, {
+      success: true,
+      data: {
+        id: 'QI-CONDITIONAL',
+        productionBatchId: 10814,
+        batchNumber: 'PB-REAL-10814',
+        productName: '有条件批次',
+        sampleSize: 10,
+        passCount: 7,
+        failCount: 3,
+        passRate: 70,
+        result: 'CONDITIONAL',
+        qualityGrade: 'C',
+      },
+    });
+
+    const record = await qualityInspectorApi.getRecordDetail('QI-CONDITIONAL');
+
+    expect(record.result).toBe('CONDITIONAL');
+    expect(record.passed).toBe(false);
+    expect(record.passRate).toBe(70);
   });
 });

@@ -35,11 +35,30 @@ export default function QIResultScreen() {
   const [record, setRecord] = useState<QualityRecord | null>(null);
 
   useEffect(() => {
-    if (passed) return;
     qualityInspectorApi.getRecordDetail(recordId)
       .then(setRecord)
-      .catch((error) => console.error('Load failed inspection for disposition:', error));
-  }, [passed, recordId]);
+      .catch((error) => console.error('Load inspection result detail:', error));
+  }, [recordId]);
+
+  const isConditional = record?.result === 'CONDITIONAL';
+  const isFullyPassed = record ? record.passed : passed;
+  const canDispose = record?.result === 'FAIL' || record?.result === 'CONDITIONAL';
+  const resultIcon = isConditional ? 'warning' : isFullyPassed ? 'checkmark-circle' : 'close-circle';
+  const resultTitle = isConditional
+    ? '有条件合格，待处置'
+    : isFullyPassed
+      ? t('result.inspectionPassed')
+      : t('result.inspectionFailed');
+  const resultDescription = isConditional
+    ? '该批次存在不合格样本，完成处置审批前不得进入包装或出货流程'
+    : isFullyPassed
+      ? t('result.passedDescription')
+      : t('result.failedDescription');
+  const resultLabel = isConditional
+    ? '有条件合格'
+    : isFullyPassed
+      ? t('result.qualified')
+      : t('result.unqualified');
 
   const handleViewDetail = () => {
     navigation.navigate('QIRecordsTab', qualityRecordDetailRoute(recordId));
@@ -59,23 +78,35 @@ export default function QIResultScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 }]}
       >
         {/* 结果图标 */}
-        <View style={[styles.resultIcon, passed ? styles.resultIconPass : styles.resultIconFail]}>
+        <View style={[
+          styles.resultIcon,
+          isConditional
+            ? styles.resultIconConditional
+            : isFullyPassed
+              ? styles.resultIconPass
+              : styles.resultIconFail,
+        ]}>
           <Ionicons
-            name={passed ? 'checkmark-circle' : 'close-circle'}
+            name={resultIcon}
             size={80}
             color="#fff"
           />
         </View>
 
         {/* 结果标题 */}
-        <Text style={[styles.resultTitle, passed ? styles.titlePass : styles.titleFail]}>
-          {passed ? t('result.inspectionPassed') : t('result.inspectionFailed')}
+        <Text style={[
+          styles.resultTitle,
+          isConditional
+            ? styles.titleConditional
+            : isFullyPassed
+              ? styles.titlePass
+              : styles.titleFail,
+        ]}>
+          {resultTitle}
         </Text>
 
         <Text style={styles.resultSubtitle}>
-          {passed
-            ? t('result.passedDescription')
-            : t('result.failedDescription')}
+          {resultDescription}
         </Text>
 
         {/* 结果详情卡片 */}
@@ -92,14 +123,21 @@ export default function QIResultScreen() {
           <View style={styles.divider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>{t('result.inspectionResult')}</Text>
-            <View style={[styles.statusBadge, passed ? styles.badgePass : styles.badgeFail]}>
-              <Text style={styles.statusText}>{passed ? t('result.qualified') : t('result.unqualified')}</Text>
+            <View style={[
+              styles.statusBadge,
+              isConditional
+                ? styles.badgeConditional
+                : isFullyPassed
+                  ? styles.badgePass
+                  : styles.badgeFail,
+            ]}>
+              <Text style={styles.statusText}>{resultLabel}</Text>
             </View>
           </View>
         </View>
 
         {/* 下一步操作提示 */}
-        {passed ? (
+        {isFullyPassed ? (
           <View style={styles.nextStepCard}>
             <Ionicons name="arrow-forward-circle" size={24} color={QI_COLORS.secondary} />
             <View style={styles.nextStepText}>
@@ -112,12 +150,16 @@ export default function QIResultScreen() {
             <Ionicons name="warning" size={24} color={QI_COLORS.warning} />
             <View style={styles.nextStepText}>
               <Text style={styles.nextStepTitle}>{t('result.needsHandling')}</Text>
-              <Text style={styles.nextStepDesc}>{t('result.pleaseIsolateBatch')}</Text>
+              <Text style={styles.nextStepDesc}>
+                {isConditional
+                  ? '请提交隔离、返工、报废或有条件放行处置，并等待审批'
+                  : t('result.pleaseIsolateBatch')}
+              </Text>
             </View>
           </View>
         )}
 
-        {!passed && record && Number.isFinite(Number(record.batchId)) && (
+        {canDispose && record && Number.isFinite(Number(record.batchId)) && (
           <View style={styles.dispositionContainer}>
             <DispositionSuggestion
               batchId={Number(record.batchId)}
@@ -175,6 +217,9 @@ const styles = StyleSheet.create({
   resultIconFail: {
     backgroundColor: QI_COLORS.danger,
   },
+  resultIconConditional: {
+    backgroundColor: QI_COLORS.warning,
+  },
 
   // 结果标题
   resultTitle: {
@@ -187,6 +232,9 @@ const styles = StyleSheet.create({
   },
   titleFail: {
     color: QI_COLORS.danger,
+  },
+  titleConditional: {
+    color: '#B26A00',
   },
   resultSubtitle: {
     fontSize: 15,
@@ -234,6 +282,9 @@ const styles = StyleSheet.create({
   },
   badgeFail: {
     backgroundColor: '#FFEBEE',
+  },
+  badgeConditional: {
+    backgroundColor: '#FFF3CD',
   },
   statusText: {
     fontSize: 14,

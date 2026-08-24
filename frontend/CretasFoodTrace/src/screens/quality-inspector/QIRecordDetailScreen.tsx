@@ -32,6 +32,7 @@ import {
 } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { AttachmentList, AttachmentUploadButton } from '../../components/attachment';
+import { DispositionSuggestion } from '../../components/quality';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QIRecordDetail'>;
@@ -91,31 +92,68 @@ export default function QIRecordDetailScreen() {
     );
   }
 
+  const isConditional = record.result === 'CONDITIONAL';
+  const isPending = record.result === 'PENDING';
+  const canDispose = record.result === 'FAIL' || record.result === 'CONDITIONAL';
+  const resultLabel = isConditional
+    ? '有条件合格'
+    : isPending
+      ? '待复检'
+      : record.passed
+        ? GRADE_LABELS[record.grade]
+        : t('recordDetail.unqualified');
+  const statusLabel = isConditional
+    ? '待处置'
+    : isPending
+      ? '待复检'
+      : record.passed
+        ? t('recordDetail.qualified')
+        : t('recordDetail.unqualified');
+  const statusIcon: IoniconsName = isConditional || isPending
+    ? 'warning'
+    : record.passed
+      ? 'checkmark-circle'
+      : 'close-circle';
+
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 20 }]}
     >
       {/* 结果头部 */}
-      <View style={[styles.resultHeader, record.passed ? styles.headerPass : styles.headerFail]}>
+      <View style={[
+        styles.resultHeader,
+        isConditional || isPending
+          ? styles.headerConditional
+          : record.passed
+            ? styles.headerPass
+            : styles.headerFail,
+      ]}>
         <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[record.grade] }]}>
           <Text style={styles.gradeText}>{record.grade}</Text>
         </View>
         <View style={styles.resultInfo}>
-          <Text style={styles.resultLabel}>{GRADE_LABELS[record.grade]}</Text>
+          <Text style={styles.resultLabel}>{resultLabel}</Text>
           <Text style={styles.resultScore}>
             {record.scoreDetailsRecorded
               ? `${record.totalScore}/100分`
               : `合格率 ${record.passRate}%`}
           </Text>
         </View>
-        <View style={[styles.statusTag, record.passed ? styles.tagPass : styles.tagFail]}>
+        <View style={[
+          styles.statusTag,
+          isConditional || isPending
+            ? styles.tagConditional
+            : record.passed
+              ? styles.tagPass
+              : styles.tagFail,
+        ]}>
           <Ionicons
-            name={record.passed ? 'checkmark-circle' : 'close-circle'}
+            name={statusIcon}
             size={16}
             color="#fff"
           />
-          <Text style={styles.statusTagText}>{record.passed ? t('recordDetail.qualified') : t('recordDetail.unqualified')}</Text>
+          <Text style={styles.statusTagText}>{statusLabel}</Text>
         </View>
       </View>
 
@@ -229,6 +267,16 @@ export default function QIRecordDetailScreen() {
           </View>
         </View>
       )}
+
+      {canDispose && Number.isFinite(Number(record.batchId)) && (
+        <View style={styles.section}>
+          <DispositionSuggestion
+            batchId={Number(record.batchId)}
+            inspectionId={record.id}
+            qualityScore={record.scoreDetailsRecorded ? record.totalScore : record.passRate}
+          />
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -278,6 +326,9 @@ const styles = StyleSheet.create({
   headerFail: {
     backgroundColor: '#FFEBEE',
   },
+  headerConditional: {
+    backgroundColor: '#FFF8E1',
+  },
   gradeBadge: {
     width: 56,
     height: 56,
@@ -317,6 +368,9 @@ const styles = StyleSheet.create({
   },
   tagFail: {
     backgroundColor: QI_COLORS.danger,
+  },
+  tagConditional: {
+    backgroundColor: QI_COLORS.warning,
   },
   statusTagText: {
     color: '#fff',

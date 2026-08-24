@@ -32,7 +32,6 @@ import {
   GRADE_LABELS,
   calculateGrade,
   calculateTotalScore,
-  isPassed,
 } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
@@ -177,13 +176,14 @@ export default function QIFormScreen() {
   });
 
   const grade = calculateGrade(totalScore);
-  const passed = isPassed(grade);
   const sampleSizeNum = parseInt(sampleSize, 10) || 10;
   const {
     passCount: computedPassCount,
     failCount: computedFailCount,
     passRate: computedPassRate,
   } = deriveQualityInspectionCounts(sampleSizeNum, totalScore);
+  const inspectionResult = deriveQualityInspectionResult(computedPassRate);
+  const passed = inspectionResult === 'PASS';
 
   const handleVoicePress = () => {
     navigation.navigate('QIVoice', { batchId, batchNumber });
@@ -207,7 +207,7 @@ export default function QIFormScreen() {
         sampleSize: sampleSizeNum,
         passCount: computedPassCount,
         failCount: computedFailCount,
-        result: deriveQualityInspectionResult(computedPassRate),
+        result: inspectionResult,
         notes: remarks || '',
         appearance: scores.appearance ?? defaultScore,
         smell: scores.smell ?? defaultScore,
