@@ -17,6 +17,7 @@ from label_qc.services.v8_pipeline import (
     PRODUCTION_TRAY_CONFIDENCE,
     LabelQcV8Models,
     _GenericLabelTypeDetector,
+    _MissingClassFallbackDetector,
     _apply_fail_closed_policies,
 )
 
@@ -101,6 +102,33 @@ def test_classifier_blob_matches_frozen_shape_and_normalization() -> None:
     assert blob.dtype == np.float32
     assert float(blob.max()) == 1.0
     assert float(blob.min()) > -0.2
+
+
+def test_fallback_detector_applies_bundle_confidence_floor() -> None:
+    class _Primary:
+        @staticmethod
+        def detect(_image, _conf):
+            return [SimpleNamespace(class_id=0)]
+
+        @staticmethod
+        def reset_stats() -> None:
+            return None
+
+    class _Fallback:
+        calls: list[float] = []
+
+        def detect(self, _image, conf):
+            self.calls.append(conf)
+            return []
+
+    fallback = _Fallback()
+    detector = _MissingClassFallbackDetector(
+        _Primary(), fallback, fallback_confidence_floor=0.40,
+    )
+
+    detector.detect(np.zeros((120, 160, 3), dtype=np.uint8), 0.20)
+
+    assert fallback.calls == [0.40]
 
 
 def test_bundle_hash_drift_disables_v8_without_legacy_fallback(tmp_path) -> None:

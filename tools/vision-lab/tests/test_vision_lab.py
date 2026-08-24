@@ -83,18 +83,160 @@ class VisionLabTests(unittest.TestCase):
             fake_ultralytics = SimpleNamespace(YOLO=FakeYolo)
 
             with mock.patch.dict(sys.modules, {"ultralytics": fake_ultralytics}):
-                mismatches = vision_lab.verify_export_parity(pt, onnx, validation, 0.2)
+                mismatches = vision_lab.verify_export_parity(pt, onnx, validation, 0.2, 960)
 
         self.assertEqual(mismatches, 0)
         self.assertEqual(len(FakeYolo.calls), 2)
         for _, _, kwargs in FakeYolo.calls:
             self.assertEqual(kwargs["device"], "cpu")
             self.assertIs(kwargs["rect"], False)
+            self.assertEqual(kwargs["imgsz"], 960)
+
+    def test_train_candidate_passes_incremental_finetune_options_and_records_them(self):
+        class FakeYolo:
+            train_calls = []
+
+            def __init__(self, model_path):
+                self.model_path = Path(model_path)
+
+            def train(self, **kwargs):
+                self.train_calls.append(kwargs)
+                best = Path(kwargs["project"]) / kwargs["name"] / "weights" / "best.pt"
+                best.parent.mkdir(parents=True)
+                best.write_bytes(b"best")
+
+            def export(self, **_kwargs):
+                exported = self.model_path.with_suffix(".onnx")
+                exported.write_bytes(b"onnx")
+                return str(exported)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "accepted-v8-fallback.pt"
+            base.write_bytes(b"base")
+            data_yaml = root / "dataset" / "data.yaml"
+            (data_yaml.parent / "images" / "val").mkdir(parents=True)
+            data_yaml.write_text("path: .\n", encoding="utf-8")
+            cfg = config(root)
+            cfg["training"] |= {
+                "base_model": str(base),
+                "epochs": 14,
+                "imgsz": 960,
+                "batch": 4,
+                "patience": 5,
+                "optimizer": "AdamW",
+                "lr0": 0.00002,
+                "lrf": 0.1,
+                "weight_decay": 0.0005,
+                "warmup_epochs": 1.0,
+                "freeze": 10,
+                "mosaic": 0.1,
+                "hsv_s": 0.15,
+            }
+            dataset = {"dataset_id": "expanded-human", "data_yaml": str(data_yaml)}
+            fake_ultralytics = SimpleNamespace(YOLO=FakeYolo)
+
+            with (
+                mock.patch.dict(sys.modules, {"ultralytics": fake_ultralytics}),
+                mock.patch.object(vision_lab, "verify_export_parity", return_value=0) as parity,
+                mock.patch.object(
+                    vision_lab, "evaluate_label_presence",
+                    side_effect=[
+                        {"total_images": 10, "exact_matches": 9, "classes": {}},
+                        {"total_images": 10, "exact_matches": 10, "classes": {}},
+                    ],
+                ) as presence,
+            ):
+                result = vision_lab.train_candidate(cfg, dataset)
+
+        options = FakeYolo.train_calls[-1]
+        self.assertEqual(options["optimizer"], "AdamW")
+        self.assertEqual(options["lr0"], 0.00002)
+        self.assertEqual(options["freeze"], 10)
+        self.assertEqual(options["imgsz"], 960)
+        self.assertEqual(options["mosaic"], 0.1)
+        self.assertEqual(options["hsv_s"], 0.15)
+        self.assertEqual(result["training"]["warmup_epochs"], 1.0)
+        self.assertEqual(parity.call_args.args[-1], 960)
+        self.assertEqual(presence.call_count, 2)
+        self.assertEqual(result["label_presence_validation"]["baseline"]["exact_matches"], 9)
+
+    def test_label_presence_gate_rejects_any_fp_or_fn_regression(self):
+        model = {
+            "model_id": "regressed",
+            "label_presence_validation": {
+                "baseline": {
+                    "total_images": 99,
+                    "exact_matches": 95,
+                    "classes": {
+                        "white_label": {"fp": 0, "fn": 2},
+                        "color_label": {"fp": 0, "fn": 2},
+                    },
+                },
+                "candidate": {
+                    "total_images": 99,
+                    "exact_matches": 94,
+                    "classes": {
+                        "white_label": {"fp": 1, "fn": 2},
+                        "color_label": {"fp": 0, "fn": 3},
+                    },
+                },
+            },
+        }
+
+        result = vision_lab.evaluate_label_presence_gate(model)
+
+        self.assertFalse(result["passed"])
+        self.assertIn("label-presence exact accuracy regressed", result["errors"])
+        self.assertIn("label-presence white_label fp regressed", result["errors"])
+        self.assertIn("label-presence color_label fn regressed", result["errors"])
+
+    def test_label_presence_gate_accepts_candidate_that_preserves_baseline(self):
+        model = {
+            "model_id": "preserved",
+            "label_presence_validation": {
+                "baseline": {
+                    "total_images": 99,
+                    "exact_matches": 95,
+                    "classes": {
+                        "white_label": {"fp": 0, "fn": 2},
+                        "color_label": {"fp": 0, "fn": 2},
+                    },
+                },
+                "candidate": {
+                    "total_images": 99,
+                    "exact_matches": 95,
+                    "classes": {
+                        "white_label": {"fp": 0, "fn": 2},
+                        "color_label": {"fp": 0, "fn": 2},
+                    },
+                },
+            },
+        }
+
+        result = vision_lab.evaluate_label_presence_gate(model)
+
+        self.assertTrue(result["passed"], result["errors"])
 
     def test_training_source_forces_offline_without_amp_probe(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
-        self.assertIn("pretrained=False, amp=False", source)
+        self.assertIn('"pretrained": False', source)
+        self.assertIn('"amp": False', source)
+
+    def test_train_candidate_rejects_string_boolean_training_options(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "base.pt"
+            base.write_bytes(b"base")
+            cfg = config(root)
+            cfg["training"] |= {"base_model": str(base), "cache": "false"}
+            dataset = {"dataset_id": "invalid-bool", "data_yaml": str(root / "data.yaml")}
+            fake_ultralytics = SimpleNamespace(YOLO=mock.Mock())
+
+            with mock.patch.dict(sys.modules, {"ultralytics": fake_ultralytics}):
+                with self.assertRaisesRegex(ValueError, "cache must be a boolean"):
+                    vision_lab.train_candidate(cfg, dataset)
 
     def test_explicit_queue_roots_disable_globs_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
