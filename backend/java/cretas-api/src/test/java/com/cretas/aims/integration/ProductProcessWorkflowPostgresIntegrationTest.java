@@ -124,7 +124,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
 
     private MockMvc mockMvc;
     private ProductProcessWorkflowServiceImpl workflowService;
-    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+    private com.cretas.aims.service.ProductionPlanService productionPlanService;
     private ProductProcessWorkflowUnitValidator unitValidator;
 
     @BeforeEach
@@ -143,9 +143,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 .thenReturn(new com.cretas.aims.dto.workflow.WorkflowUnitValidationResult(List.of(), List.of()));
         com.cretas.aims.repository.ProductProcessWorkflowActivationRepository activationRepository =
                 mock(com.cretas.aims.repository.ProductProcessWorkflowActivationRepository.class);
-        productionPlanRepository = mock(com.cretas.aims.repository.ProductionPlanRepository.class);
-        com.cretas.aims.service.ProductionPlanService productionPlanService =
-                mock(com.cretas.aims.service.ProductionPlanService.class);
+        productionPlanService = mock(com.cretas.aims.service.ProductionPlanService.class);
         when(productionPlanService.listWorkflowPlanBindings(anyString(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Map.of());
         when(productionPlanService.repinUnstartedPlansToCurrentAuthority(
@@ -435,8 +433,15 @@ class ProductProcessWorkflowPostgresIntegrationTest {
         definition.setId(draft.getId());
         definition.setVersion(draft.getDefinitionVersion());
         definition.setLockVersion(draft.getLockVersion());
-        when(productionPlanRepository.countAllPhysicalByFactoryIdAndSelectedWorkflowId(
-                FACTORY_ID, draft.getId())).thenReturn(1L);
+        when(productionPlanService.listWorkflowPlanBindings(
+                org.mockito.ArgumentMatchers.eq(FACTORY_ID), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Map.of(
+                        draft.getId(), List.of(com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO.builder()
+                                .planId("PLAN-PG-STARTED")
+                                .planNumber("PLAN-PG-STARTED")
+                                .status("IN_PROGRESS")
+                                .productionStarted(true)
+                                .build())));
         long revisionsBefore;
         try (Connection connection = dataSource.getConnection()) {
             revisionsBefore = scalarLong(connection, """

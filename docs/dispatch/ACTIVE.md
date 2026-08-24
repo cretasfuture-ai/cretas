@@ -34,7 +34,7 @@
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
-- `BUG-F006-WORKFLOW-EDITOR-EDITABILITY-20260824` — `review` — Owner: `/root` — Base SHA: `21b13aa47b49c017843fcde36da39eca9c54d4d7` — 当前启用且已被生产计划引用的配置仍可编辑；保存/发布新版本时旧行不可覆盖，新版本成为后续计划默认，并自动改绑所有“三信号均未开始报工”的既有计划（包括已锁定但尚未报工计划），已开始报工计划继续固定旧版本；版本记录展示各版本实际绑定的生产计划。目标 Service/JPA/Web 测试与 Web typecheck/build 已通过，等待最终 PostgreSQL 集成门禁、合并、部署和 F006 页面验收后归档。
+- `BUG-F006-WORKFLOW-EDITOR-EDITABILITY-20260824` — `review` — Owner: `/root` — Base SHA: `21b13aa47b49c017843fcde36da39eca9c54d4d7` — 当前启用且已被生产计划引用的配置仍可编辑；保存/发布新版本时旧行不可覆盖，新版本成为后续计划默认，并自动改绑所有“三信号均未开始报工”的既有计划（包括已锁定但尚未报工计划），已开始报工计划继续固定旧版本；版本记录展示各版本实际绑定的生产计划。目标 Service/JPA/Web 测试、Web typecheck/build 与隔离 PostgreSQL 4/4 均通过，等待最终制品、合并、部署和 F006 页面验收后归档。
 
 ## Scope 锁地图
 
