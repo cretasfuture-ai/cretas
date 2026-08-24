@@ -21,6 +21,7 @@ import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityIn
 import { QualityRecord } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { DispositionSuggestion } from '../../components/quality';
+import { qualityRecordDetailRoute } from '../../navigation/qualityInspectorRoutes';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type RouteProps = RouteProp<QualityInspectorStackParamList, 'QIResult'>;
@@ -41,7 +42,7 @@ export default function QIResultScreen() {
   }, [passed, recordId]);
 
   const handleViewDetail = () => {
-    navigation.navigate('QIRecordDetail', { recordId });
+    navigation.navigate('QIRecordsTab', qualityRecordDetailRoute(recordId));
   };
 
   const handleContinue = () => {
