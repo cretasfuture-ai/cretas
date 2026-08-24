@@ -269,7 +269,14 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   it('groups quality, equipment, scheduling, and system modules with inline labels', () => {
     expect(childGroupLabels('/quality')).toEqual(['质量检验', '处置闭环', '质量配置']);
     expect(childPaths('/quality')).toContain('/quality/label-qc');
+    expect(childPaths('/quality')).toContain('/quality/disposition');
     expect(childTitles('/quality')).toContain('包装标签拍检');
+    expect(findDescendant('/quality', '/quality/disposition')?.roles).toEqual([
+      'quality_manager',
+      'factory_super_admin',
+      'platform_admin',
+      'permission_admin',
+    ]);
     expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
     expect(childGroupLabels('/scheduling')).toEqual(['日常调度', '基础资料', '工厂智能调度', '资源与预警', '调度配置']);
     expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理']);

@@ -194,7 +194,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/quality/defects', title: '工序质检不良', icon: '', module: 'quality' },
       // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 不含客户销售退货)
       { path: '/quality/returns', title: '质检退回单', icon: '', module: 'quality' },
-      { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality', groupLabel: '处置闭环' },
+      {
+        path: '/quality/disposition', title: '不良品处置', icon: '', module: 'quality', groupLabel: '处置闭环',
+        roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
+      },
+      { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality' },
       { path: '/quality/standards', title: '质检标准', icon: '', module: 'quality', groupLabel: '质量配置' }
     ]
   },

@@ -532,6 +532,17 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
           },
           {
+            path: 'disposition',
+            name: 'QualityDisposition',
+            component: () => import('@/views/quality/disposition/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '不良品处置',
+              module: 'quality',
+              roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin']
+            }
+          },
+          {
             path: 'disposals',
             name: 'QualityDisposals',
             component: () => import('@/views/quality/disposals/list.vue'),
