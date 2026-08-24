@@ -31,6 +31,7 @@ describe('procurement order tax rate create entry', () => {
    */
   it('sends taxRate on normal create payload items without fake defaults', () => {
     expect(listSource).toContain('taxRate: normalizeTaxRateForPayload(i.taxRate)');
+    expect(listSource).toContain('unitPrice: i.unitPrice');
     expect(listSource).not.toContain('taxRate: 13');
   });
 });

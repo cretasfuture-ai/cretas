@@ -80,7 +80,7 @@ describe('采购订单详情页按「财务视角」裁剪 (owner 2026-08-20)', 
   });
 
   it('单价按有效位显示, 不再拖四个零', () => {
-    expect(source).toContain('formatUnitPrice(row.unitPrice)');
+    expect(source).toContain('formatUnitPrice(purchaseTaxIncludedUnitPrice(row.unitPrice, row.taxRate))');
     // 阴性对照: 定死 4 位小数的旧写法不许回来
     expect(source).not.toContain('Number(row.unitPrice || 0).toFixed(4)');
   });

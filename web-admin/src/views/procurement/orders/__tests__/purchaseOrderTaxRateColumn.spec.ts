@@ -10,6 +10,7 @@ describe('procurement order tax rate column', () => {
     expect(detailSource).toContain('label="税率"');
     expect(detailSource).toContain('{{ formatTaxRate(row.taxRate) }}');
     expect(detailSource).toContain('v-if="canViewPrice" prop="taxRate"');
+    expect(detailSource).toContain('label="含税单价"');
   });
 
   it('formats backend taxRate values without mock defaults', () => {

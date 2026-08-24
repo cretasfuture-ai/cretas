@@ -39,6 +39,8 @@ type SalesLine = {
   unit: string;
   taxIncludedUnitPrice: number;
   taxRate: number;
+  /** 随含税单价/税点实时反算，提交只发送当前快照。 */
+  unitPrice: number;
   sourceWarehouseCode: string;
 };
 type SuppliedMaterial = { materialTypeId: string; materialName: string; expectedQuantity: number; unit: string; expectedArrivalAt: string; targetWarehouseId: string };
@@ -126,17 +128,25 @@ function addProduct(product: Product): void {
   }
   const unit = salesOrderUnitOptions(product)[0]
     || canonicalUnitCodeKeepingCount(String(product.unit || product.measurementUnit || product.defaultUnit || '份'));
+  const taxIncludedPrice = initialTaxIncludedUnitPrice(product);
+  const taxRate = productTaxRatePercent(product);
   form.value.items.push({
     product,
     quantity: 1,
     unit,
-    taxIncludedUnitPrice: initialTaxIncludedUnitPrice(product),
-    taxRate: productTaxRatePercent(product),
+    taxIncludedUnitPrice: taxIncludedPrice,
+    taxRate,
+    unitPrice: untaxedUnitPrice(taxIncludedPrice, taxRate),
     sourceWarehouseCode: '',
   });
   dirty.value = true;
   showProductPicker.value = false;
   productQuery.value = '';
+}
+
+function recalculateSalesUnitPrice(line: SalesLine): void {
+  line.unitPrice = untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate);
+  dirty.value = true;
 }
 
 function removeProduct(index: number): void {
@@ -209,7 +219,7 @@ async function submit(): Promise<void> {
         productName: String(line.product.name || line.product.productName || ''),
         quantity: line.quantity,
         unit: storageUnitCode(line.unit),
-        unitPrice: untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate),
+        unitPrice: line.unitPrice,
         taxRate: line.taxRate,
         specification: line.product.specification || line.product.packageSpec || undefined,
         packagingSpecId: packagingSpecIdForUnit(line.product, line.unit),
@@ -293,8 +303,8 @@ onMounted(loadOptions);
           <el-table-column label="产品" min-width="240"><template #default="{ row }"><strong>{{ row.product.name || row.product.productName }}</strong><div class="muted">{{ row.product.code || '无编码' }} · {{ row.product.specification || row.product.packageSpec || '无规格' }}</div></template></el-table-column>
           <el-table-column label="数量" width="150"><template #default="{ row }"><el-input-number v-model="row.quantity" :min="0.001" :precision="3" @change="dirty = true" /></template></el-table-column>
           <el-table-column label="单位" width="150"><template #default="{ row }"><el-select v-model="row.unit" placeholder="选择规格单位" @change="dirty = true"><el-option v-for="unit in salesOrderUnitOptions(row.product)" :key="unit" :label="displayUnit(unit)" :value="unit" /></el-select></template></el-table-column>
-          <el-table-column label="含税单价" width="170"><template #default="{ row }"><el-input-number v-model="row.taxIncludedUnitPrice" :min="0.01" :precision="2" @change="dirty = true" /></template></el-table-column>
-          <el-table-column label="税点(%)" width="150"><template #default="{ row }"><el-input-number v-model="row.taxRate" :min="0" :max="100" :precision="2" @change="dirty = true" /></template></el-table-column>
+          <el-table-column label="含税单价" width="170"><template #default="{ row }"><el-input-number v-model="row.taxIncludedUnitPrice" :min="0.01" :precision="2" @update:model-value="recalculateSalesUnitPrice(row)" /></template></el-table-column>
+          <el-table-column label="税点(%)" width="150"><template #default="{ row }"><el-input-number v-model="row.taxRate" :min="0" :max="100" :precision="2" @update:model-value="recalculateSalesUnitPrice(row)" /></template></el-table-column>
           <el-table-column label="来源仓库" min-width="220"><template #default="{ row }"><el-select v-model="row.sourceWarehouseCode" filterable placeholder="请选择合法来源仓库" @change="dirty = true"><el-option-group v-for="group in warehouseGroups" :key="group.label" :label="group.label"><el-option v-for="warehouse in group.warehouses" :key="warehouse.code" :label="warehouseLabel(warehouse)" :value="warehouse.code" /></el-option-group></el-select></template></el-table-column>
           <el-table-column label="操作" width="80"><template #default="{ $index }"><el-button type="danger" link @click="removeProduct($index)">移除</el-button></template></el-table-column>
         </el-table>

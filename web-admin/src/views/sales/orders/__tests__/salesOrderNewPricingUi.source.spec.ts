@@ -13,10 +13,14 @@ describe('sales order full-page pricing and unit UI', () => {
     expect(source).not.toContain('label="未税单价"');
   });
 
-  it('uses a governed product-unit select and submits the derived untaxed price', () => {
+  it('uses a governed product-unit select and submits the real-time untaxed snapshot', () => {
     expect(source).toContain('v-for="unit in salesOrderUnitOptions(row.product)"');
     expect(source).not.toContain('<el-input v-model="row.unit"');
-    expect(source).toContain('unitPrice: untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate)');
+    expect(source).toContain('function recalculateSalesUnitPrice(line: SalesLine)');
+    expect(source).toContain('line.unitPrice = untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate)');
+    expect(source).toContain('@update:model-value="recalculateSalesUnitPrice(row)"');
+    expect(source).toContain('unitPrice: line.unitPrice');
+    expect(source).not.toContain('unitPrice: untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate)');
     expect(source).toContain('taxRate: line.taxRate');
     expect(source).toContain('packagingSpecId: packagingSpecIdForUnit(line.product, line.unit)');
   });
