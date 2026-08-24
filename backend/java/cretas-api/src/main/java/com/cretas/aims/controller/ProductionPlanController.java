@@ -33,6 +33,7 @@ import com.cretas.aims.service.orchestration.ProductionWorkflowOrchestrator;
 import com.cretas.aims.service.yield.InterimSettleService;
 import com.cretas.aims.service.yield.InterimSettleReversalRequestService;
 import com.cretas.aims.dto.production.InterimSettleReversalRequestDTO;
+import com.cretas.aims.dto.production.InterimSettleRequest;
 import com.cretas.aims.entity.InterimSettleReversalRequest;
 import org.springframework.data.domain.Page;
 import com.cretas.aims.entity.inventory.InternalTransfer;
@@ -581,11 +582,13 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true)
             @PathVariable @NotNull String planId,
+            @Valid @RequestBody(required = false) InterimSettleRequest request,
             @RequestHeader("Authorization") String authorization) {
 
         Long userId = extractUserId(authorization);
         log.info("库存生产小结: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
-        Map<String, Object> summary = interimSettleService.interimSettle(factoryId, planId, userId);
+        Map<String, Object> summary = interimSettleService.interimSettle(
+                factoryId, planId, userId, request == null ? null : request.getNote());
         return ApiResponse.success("小结已提交", summary);
     }
 

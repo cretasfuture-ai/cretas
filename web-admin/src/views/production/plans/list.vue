@@ -3205,19 +3205,27 @@ async function handleInterimSettle(row: TableRow) {
   const productLabel = String(row.productTypeName || row.productName || row.productTypeId || '');
   const planNumberLabel = String(row.planNumber || planId);
   const planLabel = productLabel ? `${productLabel} (${planNumberLabel})` : planNumberLabel;
+  let note = '';
   try {
-    await ElMessageBox.confirm(
+    const promptResult = await ElMessageBox.prompt(
       `小结「${planLabel}」将按当前已录入数量扣减已投入原料并产出半成品/成品入库，计划继续挂起。确认执行？`,
       '确认小结',
-      { type: 'warning', confirmButtonText: '确认小结', cancelButtonText: '取消' }
+      {
+        type: 'warning',
+        confirmButtonText: '确认小结',
+        cancelButtonText: '取消',
+        inputPlaceholder: '填写本次小结备注（选填，最多500字）',
+        inputValidator: (value: string) => value.trim().length <= 500 || '小结备注不能超过500个字符',
+      }
     );
+    note = promptResult.value;
   } catch {
     return; // 用户取消
   }
   if (interimSettleLoadingId.value) return;
   interimSettleLoadingId.value = planId;
   try {
-    const res = await interimSettle(factoryId.value, planId);
+    const res = await interimSettle(factoryId.value, planId, note);
     if (res.success) {
       ElMessage.success(res.data?.message as string || res.message || '已小结，计划继续挂起');
       loadData();

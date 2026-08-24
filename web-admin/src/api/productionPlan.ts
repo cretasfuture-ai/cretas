@@ -327,8 +327,11 @@ export interface ProductionPlanBase {
  * 小结 (存货生产 SAFETY_STOCK 计划专用): 增量入库成品 + 扣料, 计划继续挂起
  * POST /{factoryId}/production-plans/{planId}/interim-settle
  */
-export function interimSettle(factoryId: string, planId: string) {
-  return post<Record<string, unknown>>(`/${factoryId}/production-plans/${planId}/interim-settle`)
+export function interimSettle(factoryId: string, planId: string, note?: string) {
+  return post<Record<string, unknown>>(
+    `/${factoryId}/production-plans/${planId}/interim-settle`,
+    { note: note?.trim() || null },
+  )
 }
 
 /**
