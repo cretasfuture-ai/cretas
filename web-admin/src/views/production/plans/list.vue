@@ -2539,7 +2539,10 @@ const receiptSettlement = ref<ProductionSettlementStatus | null>(null);
 const receiptForm = ref({
   receivedQuantity: 0,
   quantityUnit: '',
-  outputLines: [] as Array<ProductionOutputLine & { receivedQuantity: number }>,
+  outputLines: [] as Array<ProductionOutputLine & {
+    receivedQuantity: number;
+    originalReceivedQuantity: number;
+  }>,
   varianceReason: '',
   otherVarianceReason: '',
   responsibilitySide: '',
@@ -2650,11 +2653,10 @@ const receiptSubmitDisabledReason = computed(() => {
   if (receiptHasOutputLines.value) {
     const invalidIndex = receiptForm.value.outputLines.findIndex((line) => {
       const received = Number(line.receivedQuantity || 0);
-      const reported = Number(line.reportedQuantity || 0);
-      return received <= 0 || received !== reported;
+      return received <= 0;
     });
     if (invalidIndex >= 0) {
-      return `第 ${invalidIndex + 1} 行实收必须与生产报产一致；如有差异，请先退回生产修正报工`;
+      return `第 ${invalidIndex + 1} 行本次实收必须大于 0`;
     }
     return '';
   }
@@ -2725,7 +2727,8 @@ async function handleWarehouseReceipt(row: TableRow) {
     receiptSettlement.value = res.data;
     const outputLines = (res.data.outputLines || []).map((line) => ({
       ...line,
-      receivedQuantity: Number(line.receivedQuantity ?? line.reportedQuantity ?? 0),
+      originalReceivedQuantity: Number(line.receivedQuantity ?? 0),
+      receivedQuantity: Number(line.reportedQuantity ?? 0) - Number(line.receivedQuantity ?? 0),
     }));
     receiptForm.value = {
       receivedQuantity: outputLines.length ? 0 : Number(res.data.actualFinishedQuantity || 0),
@@ -5688,7 +5691,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
         <el-alert
           v-if="receiptHasOutputLines"
-          title="本计划包含多个终端产出，仓库按 SKU、批次和各自单位逐行确认；不同单位不会相加。当前如有实收差异，请先退回生产修正报工。"
+          title="本计划按 SKU、批次和各自单位逐行确认，支持分次入库；每次填写本次实收，系统累计到生产报产上限。"
           type="info"
           show-icon
           :closable="false"
@@ -5708,17 +5711,21 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             <div class="receipt-output-line__reported">
               <span>生产报产</span>
               <strong>{{ line.reportedQuantity }} {{ displayUnit(line.quantityUnit) }}</strong>
+              <small>已入库 {{ line.originalReceivedQuantity || 0 }}，剩余 {{ Number(line.reportedQuantity) - Number(line.originalReceivedQuantity || 0) }}</small>
             </div>
             <el-form-item label="仓库实收" required class="receipt-output-line__input">
               <el-input-number
                 v-model="line.receivedQuantity"
                 :min="0"
-                :max="Number(line.reportedQuantity)"
                 :precision="4"
                 :step="0.0001"
                 style="width: 100%"
               />
               <span class="receipt-output-line__unit">{{ displayUnit(line.quantityUnit) }}</span>
+              <small
+                v-if="Number(line.receivedQuantity) > Number(line.reportedQuantity) - Number(line.originalReceivedQuantity || 0)"
+                class="danger"
+              >本次实收超过剩余待入库数量，提交后系统将拒绝且不会改动库存。</small>
             </el-form-item>
           </div>
         </div>

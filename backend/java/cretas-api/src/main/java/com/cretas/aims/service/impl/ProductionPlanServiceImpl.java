@@ -2799,6 +2799,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionPlanDTO startProduction(String factoryId, String planId) {
+        return startProduction(factoryId, planId, null);
+    }
+
+    @Override
+    @Transactional
+    public ProductionPlanDTO startProduction(String factoryId, String planId, Long operatorId) {
         // R6 (2026-06-14): 悲观写锁取计划, 并发双击/重试串行化。第二个请求拿锁后看到已 IN_PROGRESS → 409。
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
@@ -2835,7 +2841,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     plan.getSecondarySourceWipId(),
                     plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO,
                     factoryId,
-                    null /* operatorId — startProduction does not receive userId, set null */);
+                    operatorId);
             log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
         }
 
@@ -4918,6 +4924,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             List<ProductionSettlementOutputLine> outputLines,
             ProductionWarehouseReceiptRequest request,
             Long receivedBy) {
+        if (outputLines.stream().anyMatch(line ->
+                request.getIdempotencyKey().equals(line.getReceiptIdempotencyKey()))) {
+            return toWarehouseReceiptResponse(settlement,
+                    "该仓库分次入库请求已提交过, 已返回当前累计结果",
+                    Collections.emptyList());
+        }
         List<ProductionWarehouseReceiptRequest.ReceiptLine> receiptLines =
                 Optional.ofNullable(request.getOutputLines()).orElseGet(ArrayList::new);
         if (receiptLines.size() != outputLines.size()) {
@@ -4936,6 +4948,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         Map<String, BigDecimal> receivedByUnit = new LinkedHashMap<>();
+        Map<String, BigDecimal> receiptDeltaByKey = new LinkedHashMap<>();
         for (ProductionSettlementOutputLine output : outputLines) {
             String key = outputReceiptKey(output.getProductTypeId(), output.getReportedBatchNumber(),
                     output.getQuantityUnit());
@@ -4946,21 +4959,28 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withHint("Missing SKU/batch: " + output.getProductTypeId() + "/"
                                 + output.getReportedBatchNumber());
             }
-            BigDecimal received = requireInventoryQuantityScale(
+            BigDecimal receiptDelta = requireInventoryQuantityScale(
                     receipt.getReceivedQuantity(),
                     "WORKFLOW_RECEIPT_QUANTITY_SCALE_INVALID",
                     "Workflow 实收数量");
-            if (received == null || received.signum() <= 0
-                    || received.compareTo(output.getReportedQuantity()) != 0) {
-                throw new BusinessException(409,
-                        "Multi-output receipt currently requires exact per-line receipt quantities")
-                        .withCode("MULTI_OUTPUT_RECEIPT_VARIANCE_REQUIRES_LINE_LEDGER")
-                        .withHint("Reported " + output.getReportedQuantity() + output.getQuantityUnit()
-                                + ", received " + received + output.getQuantityUnit());
+            BigDecimal alreadyReceived = zeroIfNull(output.getReceivedQuantity());
+            BigDecimal cumulativeReceived = receiptDelta == null
+                    ? alreadyReceived : alreadyReceived.add(receiptDelta);
+            if (receiptDelta == null || receiptDelta.signum() <= 0) {
+                throw new BusinessException(409, "本次实收数量必须大于 0")
+                        .withCode("WORKFLOW_RECEIPT_DELTA_REQUIRED");
             }
-            output.setReceivedQuantity(received);
+            if (cumulativeReceived.compareTo(output.getReportedQuantity()) > 0) {
+                throw new BusinessException(409, "累计仓库实收不能超过生产报产")
+                        .withCode("RECEIPT_EXCEEDS_PRODUCTION_REPORTED")
+                        .withHint("生产报产 " + output.getReportedQuantity() + output.getQuantityUnit()
+                                + ", 已入库 " + alreadyReceived + output.getQuantityUnit()
+                                + ", 本次拟入库 " + receiptDelta + output.getQuantityUnit());
+            }
+            output.setReceivedQuantity(cumulativeReceived);
+            receiptDeltaByKey.put(key, receiptDelta);
             String canonicalUnit = canonicalReceiptUnit(output.getQuantityUnit());
-            receivedByUnit.merge(canonicalUnit, received, BigDecimal::add);
+            receivedByUnit.merge(canonicalUnit, cumulativeReceived, BigDecimal::add);
         }
         if (!receiptsByKey.isEmpty()) {
             throw new BusinessException(409, "Workflow warehouse receipt contains unreported output lines")
@@ -4976,22 +4996,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withCode("WORKFLOW_RECEIPT_AGGREGATE_MISMATCH");
         }
 
+        boolean allReceived = outputLines.stream().allMatch(output ->
+                zeroIfNull(output.getReceivedQuantity()).compareTo(output.getReportedQuantity()) == 0);
         String costWarning = allocateWorkflowOutputCosts(factoryId, plan.getId(), outputLines);
         LocalDateTime receivedAt = LocalDateTime.now();
         for (ProductionSettlementOutputLine output : outputLines) {
+            String key = outputReceiptKey(output.getProductTypeId(), output.getReportedBatchNumber(),
+                    output.getQuantityUnit());
             FinishedGoodsBatch batch = createFinishedGoodsForOutputLine(
-                    plan, settlement, output, receivedBy);
+                    plan, settlement, output, receiptDeltaByKey.get(key), receivedBy);
             output.setFinishedGoodsBatchId(batch.getId());
             output.setReceiptIdempotencyKey(request.getIdempotencyKey());
             output.setReceivedBy(receivedBy);
             output.setReceivedAt(receivedAt);
-            output.setStatus("RECEIVED");
+            output.setStatus(allReceived ? "RECEIVED" : "PARTIALLY_RECEIVED");
         }
         productionSettlementOutputLineRepository.saveAll(outputLines);
 
         settlement.setWarehouseReceiptIdempotencyKey(request.getIdempotencyKey());
         settlement.setWarehouseReceivedQuantity(aggregateReceived);
-        settlement.setWarehouseVarianceQuantity(aggregateReceived == null ? null : BigDecimal.ZERO);
+        settlement.setWarehouseVarianceQuantity(aggregateReceived == null
+                ? null : zeroIfNull(settlement.getActualFinishedQuantity()).subtract(aggregateReceived));
         settlement.setQuantityUnit(receivedByUnit.size() == 1
                 ? receivedByUnit.keySet().iterator().next()
                 : null);
@@ -5002,15 +5027,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 ? outputLines.getFirst().getFinishedGoodsBatchId() : null);
         settlement.setTransitLedgerId(null);
         settlement.setWarehouseReceivedBy(receivedBy);
-        settlement.setWarehouseReceivedAt(receivedAt);
-        settlement.setPostingStatus("POSTED");
+        settlement.setWarehouseReceivedAt(allReceived ? receivedAt : null);
+        settlement.setPostingStatus(allReceived ? "POSTED" : "PENDING_WAREHOUSE_RECEIPT");
         // ⛔ 这两句是【用户可见】的: 原来是英文("Warehouse confirmed every pinned Workflow
         //    terminal output line" / "Completed N production batch records"), 直接出现在
         //    App/web 的响应里。判据: 用户看到的必须是中文。
-        settlement.setPostingMessage("仓库已确认全部末道产出, 成品已入库");
+        settlement.setPostingMessage(allReceived
+                ? "仓库已确认全部末道产出, 成品已全部入库"
+                : "本次分次入库已过账, 剩余数量继续待仓库确认");
         productionSettlementRepository.save(settlement);
-        int completedBatchCount = markReceiptProductionBatchesCompleted(
-                factoryId, plan.getId(), settlement);
+        int completedBatchCount = allReceived
+                ? markReceiptProductionBatchesCompleted(factoryId, plan.getId(), settlement)
+                : 0;
         return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(),
                 buildReceiptWarnings(completedBatchCount, costWarning));
     }
@@ -6474,6 +6502,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             ProductionPlan plan,
             ProductionSettlement settlement,
             ProductionSettlementOutputLine output,
+            BigDecimal receiptDelta,
             Long receivedBy) {
         Optional<FinishedGoodsBatch> existing = finishedGoodsBatchRepository
                 .findByFactoryIdAndBatchNumber(settlement.getFactoryId(),
@@ -6482,15 +6511,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             FinishedGoodsBatch batch = existing.get();
             if (!Objects.equals(plan.getId(), batch.getProductionPlanId())
                     || !Objects.equals(output.getProductTypeId(), batch.getProductTypeId())
-                    || zeroIfNull(batch.getProducedQuantity())
-                            .compareTo(output.getReceivedQuantity()) != 0
                     || !Objects.equals(canonicalReceiptUnit(batch.getUnit()),
                             canonicalReceiptUnit(output.getQuantityUnit()))) {
                 throw new BusinessException(409,
                         "Reported output batch number already belongs to another production output")
                         .withCode("FINISHED_GOODS_BATCH_CONFLICT");
             }
-            return batch;
+            batch.setProducedQuantity(zeroIfNull(batch.getProducedQuantity()).add(receiptDelta));
+            return finishedGoodsBatchRepository.save(batch);
         }
 
         ProductType productType = productTypeRepository
@@ -6503,7 +6531,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setBatchNumber(output.getReportedBatchNumber());
         batch.setProductTypeId(output.getProductTypeId());
         batch.setProductName(productType.getName());
-        batch.setProducedQuantity(output.getReceivedQuantity());
+        batch.setProducedQuantity(receiptDelta);
         batch.setShippedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setUnit(output.getQuantityUnit());
