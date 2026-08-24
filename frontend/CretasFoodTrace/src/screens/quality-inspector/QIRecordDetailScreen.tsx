@@ -103,7 +103,11 @@ export default function QIRecordDetailScreen() {
         </View>
         <View style={styles.resultInfo}>
           <Text style={styles.resultLabel}>{GRADE_LABELS[record.grade]}</Text>
-          <Text style={styles.resultScore}>{record.totalScore}/100分</Text>
+          <Text style={styles.resultScore}>
+            {record.scoreDetailsRecorded
+              ? `${record.totalScore}/100分`
+              : `合格率 ${record.passRate}%`}
+          </Text>
         </View>
         <View style={[styles.statusTag, record.passed ? styles.tagPass : styles.tagFail]}>
           <Ionicons
@@ -137,6 +141,7 @@ export default function QIRecordDetailScreen() {
       {/* 评分详情 */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('recordDetail.scoreDetails')}</Text>
+        {record.scoreDetailsRecorded ? (
         <View style={styles.scoreGrid}>
           {SCORE_ITEMS.map((item) => {
             const scoreData = record[item.key as keyof QualityRecord] as { score: number; notes: string[] } | undefined;
@@ -161,6 +166,11 @@ export default function QIRecordDetailScreen() {
             );
           })}
         </View>
+        ) : (
+          <View style={styles.infoCard}>
+            <Text style={styles.infoValue}>该历史记录未保存分类评分；页面不会用 0 分伪造明细。</Text>
+          </View>
+        )}
       </View>
 
       {/* 照片证据 —— 走通用附件子系统(与采购单同一套)。

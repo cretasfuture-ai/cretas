@@ -35,6 +35,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 /**
  * Issue #813 fix — verifies new validation in {@link ProcessingServiceImpl#submitInspection}:
@@ -185,6 +187,58 @@ class ProcessingServiceImplInspectionValidationTest {
         when(qualityInspectionService.createInspection(anyString(), any(QualityInspection.class)))
                 .thenAnswer(inv -> inv.getArgument(1));
         assertDoesNotThrow(() -> service.submitInspection(F_ID, BATCH_ID, payload));
+    }
+
+    @Test
+    @DisplayName("质检表单分类评分通过 customFields 原样持久化")
+    void haccpScores_areForwardedAsCustomFields() {
+        Map<String, Object> payload = buildInspection(2, 1, 1, "FAIL");
+        Map<String, Object> customFields = Map.of(
+                "totalScore", 50,
+                "grade", "D",
+                "haccpScores", Map.of("appearance", Map.of("score", 10, "notes", java.util.List.of("色泽异常")))
+        );
+        payload.put("customFields", customFields);
+        when(qualityInspectionService.createInspection(anyString(), any(QualityInspection.class)))
+                .thenAnswer(inv -> inv.getArgument(1));
+
+        service.submitInspection(F_ID, BATCH_ID, payload);
+
+        org.mockito.ArgumentCaptor<QualityInspection> captor = org.mockito.ArgumentCaptor.forClass(QualityInspection.class);
+        verify(qualityInspectionService).createInspection(anyString(), captor.capture());
+        assertEquals(customFields, captor.getValue().getCustomFields());
+    }
+
+    @Test
+    @DisplayName("质检详情回读真实批次、产品和分类评分，不用备注伪造产品名")
+    void inspectionDetail_containsBatchIdentityAndCustomFields() {
+        QualityInspection inspection = new QualityInspection();
+        inspection.setId("QI-DETAIL-1");
+        inspection.setFactoryId(F_ID);
+        inspection.setProductionBatchId(1885L);
+        inspection.setNotes("仅是检验备注");
+        inspection.setSampleSize(java.math.BigDecimal.valueOf(2));
+        inspection.setPassCount(java.math.BigDecimal.ONE);
+        inspection.setFailCount(java.math.BigDecimal.ONE);
+        inspection.setPassRate(java.math.BigDecimal.valueOf(50));
+        inspection.setResult("FAIL");
+        Map<String, Object> customFields = Map.of("totalScore", 50, "grade", "D");
+        inspection.setCustomFields(customFields);
+        ProductionBatch batch = ProductionBatch.builder()
+                .id(1885L)
+                .factoryId(F_ID)
+                .batchNumber("PB-REAL-1885")
+                .productName("真实成品")
+                .build();
+        when(qualityInspectionRepository.findById("QI-DETAIL-1")).thenReturn(Optional.of(inspection));
+        when(productionBatchRepository.findById(1885L)).thenReturn(Optional.of(batch));
+
+        Map<String, Object> detail = service.getInspectionById(F_ID, "QI-DETAIL-1");
+
+        assertEquals("PB-REAL-1885", detail.get("batchNumber"));
+        assertEquals("真实成品", detail.get("productName"));
+        assertEquals("仅是检验备注", detail.get("notes"));
+        assertEquals(customFields, detail.get("customFields"));
     }
 
     @Test

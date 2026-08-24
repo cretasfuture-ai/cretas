@@ -39,6 +39,11 @@ export interface QualityInspectionForm {
   inspectorId: number;
   inspectedAt: string;
   remarks?: string;
+  customFields?: {
+    haccpScores: Record<'appearance' | 'smell' | 'specification' | 'weight' | 'packaging', ScoreItem>;
+    totalScore: number;
+    grade: QualityGrade;
+  };
 }
 
 // ============================================
@@ -126,6 +131,8 @@ export interface QualityRecord {
   weight: ScoreItem;
   packaging: ScoreItem;
   totalScore: number;
+  passRate: number;
+  scoreDetailsRecorded: boolean;
   grade: QualityGrade;
   passed: boolean;
 
