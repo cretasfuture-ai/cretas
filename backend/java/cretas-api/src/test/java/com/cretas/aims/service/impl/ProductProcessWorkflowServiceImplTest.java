@@ -17,6 +17,7 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
+import com.cretas.aims.service.ProductionPlanService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -72,6 +73,9 @@ class ProductProcessWorkflowServiceImplTest {
     private ProductionBatchRepository productionBatchRepository;
 
     @Mock
+    private ProductionPlanService productionPlanService;
+
+    @Mock
     private ProductProcessWorkflowCatalogValidator catalogValidator;
 
     @Mock
@@ -108,8 +112,7 @@ class ProductProcessWorkflowServiceImplTest {
         service = new ProductProcessWorkflowServiceImpl(
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
                 workflowBomSynchronizationService, workflowActivationService,
-                activationRepository,
-                productionPlanRepository, productionBatchRepository,
+                activationRepository, productionPlanService,
                 objectMapper, validator, catalogValidator, unitValidator,
                 productTypeRepository, rawMaterialTypeRepository);
         com.cretas.aims.entity.ProductProcessWorkflowRevision revision =
@@ -134,6 +137,10 @@ class ProductProcessWorkflowServiceImplTest {
                 .thenReturn(Optional.of(owner));
         lenient().when(unitValidator.validate(any(), any()))
                 .thenReturn(new com.cretas.aims.dto.workflow.WorkflowUnitValidationResult(List.of(), List.of()));
+        lenient().when(productionPlanService.listWorkflowPlanBindings(anyString(), any()))
+                .thenReturn(Map.of());
+        lenient().when(productionPlanService.repinUnstartedPlansToCurrentAuthority(anyString(), any(), any()))
+                .thenReturn(com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO.empty());
         lenient().when(repository.lockByIdAndFactoryId(1L, FACTORY_ID)).thenAnswer(invocation ->
                 repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                         FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT));
@@ -336,7 +343,7 @@ class ProductProcessWorkflowServiceImplTest {
     }
 
     @Test
-    @DisplayName("已有计划或批次引用草稿时冻结旧身份并自动分叉新草稿")
+    @DisplayName("已有真实报工计划引用草稿时冻结旧身份并自动分叉新草稿")
     void referencedDraftIsForkedBeforeSave() throws Exception {
         ProductProcessWorkflowDTO request = validDefinition();
         request.setLockVersion(3L);
@@ -348,8 +355,14 @@ class ProductProcessWorkflowServiceImplTest {
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
                 .thenReturn(Optional.of(draft));
-        when(productionPlanRepository.countAllPhysicalByFactoryIdAndSelectedWorkflowId(FACTORY_ID, 91L))
-                .thenReturn(1L);
+        var startedBinding = com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO.builder()
+                .planId("PLAN-STARTED")
+                .planNumber("PLAN-STARTED")
+                .status("IN_PROGRESS")
+                .productionStarted(true)
+                .build();
+        when(productionPlanService.listWorkflowPlanBindings(FACTORY_ID, List.of(91L)))
+                .thenReturn(Map.of(91L, List.of(startedBinding)));
         when(repository.findMaxDefinitionVersion(FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(2));
         var frozenRevision = currentRevision();
         when(revisionSnapshotService.capture(any(ProductProcessWorkflow.class)))
@@ -374,6 +387,83 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(91L, saved.getForkedFromWorkflowId());
         assertEquals(2, saved.getForkedFromVersion());
         verify(revisionSnapshotService).capture(draft);
+    }
+
+    @Test
+    @DisplayName("只有未报工计划引用时继续更新当前配置，不创建生产历史版本")
+    void unstartedPlanReferenceDoesNotForkCurrentDraft() throws Exception {
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(3L);
+        request.setId(91L);
+        request.setVersion(2);
+        ProductProcessWorkflow draft = persistedDraft(request, 3L);
+        draft.setId(91L);
+        draft.setDefinitionVersion(2);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.of(draft));
+        var unstartedBinding = com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO.builder()
+                .planId("PLAN-WAITING")
+                .planNumber("PLAN-WAITING")
+                .status("PENDING")
+                .productionStarted(false)
+                .build();
+        when(productionPlanService.listWorkflowPlanBindings(FACTORY_ID, List.of(91L)))
+                .thenReturn(Map.of(91L, List.of(unstartedBinding)));
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProductProcessWorkflowDTO saved = service.saveDraft(FACTORY_ID, PRODUCT_ID, request);
+
+        assertEquals(91L, saved.getId());
+        assertEquals(2, saved.getVersion());
+        assertFalse(Boolean.TRUE.equals(saved.getAutoForked()));
+        verify(revisionSnapshotService, never()).capture(draft);
+    }
+
+    @Test
+    @DisplayName("生产版本记录只显示当前版本和真实绑定计划的历史版本")
+    void versionHistoryHidesUnusedTechnicalRowsAndShowsBoundPlans() {
+        var current = mock(ProductProcessWorkflowRepository.VersionSummaryProjection.class);
+        when(current.getId()).thenReturn(93L);
+        when(current.getDefinitionVersion()).thenReturn(4);
+        when(current.getStatus()).thenReturn(ProductProcessWorkflow.Status.PUBLISHED);
+        var usedHistory = mock(ProductProcessWorkflowRepository.VersionSummaryProjection.class);
+        when(usedHistory.getId()).thenReturn(91L);
+        when(usedHistory.getDefinitionVersion()).thenReturn(2);
+        when(usedHistory.getStatus()).thenReturn(ProductProcessWorkflow.Status.PUBLISHED);
+        var unusedHistory = mock(ProductProcessWorkflowRepository.VersionSummaryProjection.class);
+        when(unusedHistory.getId()).thenReturn(89L);
+        when(unusedHistory.getDefinitionVersion()).thenReturn(1);
+        when(unusedHistory.getStatus()).thenReturn(ProductProcessWorkflow.Status.SNAPSHOT);
+        when(repository.findVersionSummaries(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(List.of(current, usedHistory, unusedHistory));
+        var activation = new com.cretas.aims.entity.ProductProcessWorkflowActivation();
+        activation.setFactoryId(FACTORY_ID);
+        activation.setProductTypeId(PRODUCT_ID);
+        activation.setActiveWorkflowId(93L);
+        activation.setActiveDefinitionVersion(4);
+        activation.setEnabled(true);
+        when(activationRepository.findByFactoryIdAndProductTypeId(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(Optional.of(activation));
+        var binding = com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO.builder()
+                .planId("PLAN-USED")
+                .planNumber("PLAN-USED")
+                .status("IN_PROGRESS")
+                .productionStarted(true)
+                .build();
+        when(productionPlanService.listWorkflowPlanBindings(
+                FACTORY_ID, List.of(93L, 91L, 89L)))
+                .thenReturn(Map.of(91L, List.of(binding)));
+
+        var versions = service.listVersions(FACTORY_ID, PRODUCT_ID);
+
+        assertEquals(List.of(4, 2), versions.stream()
+                .map(com.cretas.aims.dto.ProductProcessWorkflowVersionSummaryDTO::getDefinitionVersion)
+                .toList());
+        assertTrue(versions.get(0).isActive());
+        assertEquals(List.of("PLAN-USED"), versions.get(1).getProductionPlans().stream()
+                .map(com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO::getPlanNumber)
+                .toList());
     }
 
     @Test
@@ -641,8 +731,13 @@ class ProductProcessWorkflowServiceImplTest {
     @DisplayName("自动同步、发布、启用按顺序完成并返回完整结果")
     void publishAndActivateCompletesAtomicHappyPath() throws Exception {
         ProductProcessWorkflow draft = persistedDraft(validDefinition(), 3L);
+        ProductProcessWorkflow previous = persistedDraft(validDefinition(), 2L);
+        previous.setId(88L);
+        previous.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         pinCurrentRevision(draft);
         stubDraft(draft);
+        when(repository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(FACTORY_ID, PRODUCT_ID))
+                .thenReturn(List.of(draft, previous));
         WorkflowBomSyncPreflightResponse preflight = automaticPreflight();
         when(workflowBomSynchronizationService.preflight(
                 FACTORY_ID, PRODUCT_ID, currentRevision())).thenReturn(preflight);
@@ -655,6 +750,12 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowActivationDTO activation = activation(draft);
         when(workflowActivationService.activate(FACTORY_ID, draft.getId(), 77L))
                 .thenReturn(activation);
+        var planRebind = com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO.builder()
+                .reboundPlanCount(1)
+                .reboundPlanNumbers(List.of("PLAN-WAITING"))
+                .build();
+        when(productionPlanService.repinUnstartedPlansToCurrentAuthority(
+                FACTORY_ID, List.of(88L), 77L)).thenReturn(planRebind);
 
         WorkflowPublishAndActivateResponse result = service.publishAndActivate(
                 FACTORY_ID, PRODUCT_ID, 3L, "request-1",
@@ -664,6 +765,7 @@ class ProductProcessWorkflowServiceImplTest {
         assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), result.getWorkflow().getStatus());
         assertEquals(activation, result.getActivation());
         assertEquals(preflight, result.getBomSync());
+        assertEquals(planRebind, result.getPlanRebind());
         assertFalse(result.isReplayed());
         assertEquals("request-1", draft.getLastPublishIdempotencyKey());
         assertEquals(91L, draft.getLastPublishRevisionId());
@@ -675,6 +777,8 @@ class ProductProcessWorkflowServiceImplTest {
                 .synchronizeForPublish(FACTORY_ID, PRODUCT_ID, currentRevision(), 77L);
         order.verify(repository).saveAndFlush(draft);
         order.verify(workflowActivationService).activate(FACTORY_ID, draft.getId(), 77L);
+        verify(productionPlanService).repinUnstartedPlansToCurrentAuthority(
+                FACTORY_ID, List.of(88L), 77L);
     }
 
     @Test
@@ -972,8 +1076,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
                 workflowBomSynchronizationService, workflowActivationService,
-                activationRepository,
-                productionPlanRepository, productionBatchRepository,
+                activationRepository, productionPlanService,
                 new ObjectMapper(), validator, realCatalogValidator, unitValidator,
                 productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
 

@@ -144,6 +144,13 @@ class ProductProcessWorkflowPostgresIntegrationTest {
         com.cretas.aims.repository.ProductProcessWorkflowActivationRepository activationRepository =
                 mock(com.cretas.aims.repository.ProductProcessWorkflowActivationRepository.class);
         productionPlanRepository = mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+        com.cretas.aims.service.ProductionPlanService productionPlanService =
+                mock(com.cretas.aims.service.ProductionPlanService.class);
+        when(productionPlanService.listWorkflowPlanBindings(anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Map.of());
+        when(productionPlanService.repinUnstartedPlansToCurrentAuthority(
+                anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO.empty());
         workflowService = new ProductProcessWorkflowServiceImpl(
                 repository,
                 revisionRepository,
@@ -156,8 +163,7 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 mock(com.cretas.aims.service.bom.WorkflowBomSynchronizationService.class),
                 mock(com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService.class),
                 activationRepository,
-                productionPlanRepository,
-                mock(com.cretas.aims.repository.ProductionBatchRepository.class),
+                productionPlanService,
                 objectMapper,
                 new ProductProcessWorkflowValidator(),
                 catalogValidator,

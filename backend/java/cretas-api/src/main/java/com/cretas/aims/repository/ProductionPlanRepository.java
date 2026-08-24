@@ -112,6 +112,11 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             @Param("factoryId") String factoryId,
             @Param("selectedWorkflowId") Long selectedWorkflowId);
 
+    /** Exact Workflow row bindings used by version history and zero-report automatic repin. */
+    List<ProductionPlan> findByFactoryIdAndSelectedWorkflowIdIn(
+            String factoryId,
+            Collection<Long> selectedWorkflowIds);
+
     Page<ProductionPlan> findByFactoryIdAndStatusIn(String factoryId, Collection<ProductionPlanStatus> statuses, Pageable pageable);
 
     /**

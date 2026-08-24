@@ -22,9 +22,8 @@ import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.repository.ProductionBatchRepository;
-import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.ProductProcessWorkflowService;
+import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.bom.WorkflowBomSynchronizationService;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
@@ -33,6 +32,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
 import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
+import com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -56,8 +56,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final WorkflowBomSynchronizationService workflowBomSynchronizationService;
     private final ProductProcessWorkflowActivationService workflowActivationService;
     private final ProductProcessWorkflowActivationRepository activationRepository;
-    private final ProductionPlanRepository productionPlanRepository;
-    private final ProductionBatchRepository productionBatchRepository;
+    private final ProductionPlanService productionPlanService;
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
     private final ProductProcessWorkflowCatalogValidator catalogValidator;
@@ -101,7 +100,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         if (existingDraft.isPresent()) {
             ProductProcessWorkflow currentDraft = existingDraft.get();
             assertCurrentIdentity(definition, currentDraft);
-            if (hasImmutableReference(factoryId, currentDraft)) {
+            if (hasStartedProductionReference(factoryId, currentDraft)) {
                 autoForked = true;
                 forkedFromWorkflowId = currentDraft.getId();
                 forkedFromVersion = currentDraft.getDefinitionVersion();
@@ -144,22 +143,15 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     }
 
     /**
-     * A workflow row is part of the identity copied into plans and batches.  Once any such
-     * snapshot exists, mutating the row would make history appear to have used the new graph.
-     * Freeze that row as a SNAPSHOT and continue the edit in a fresh DRAFT row instead.
+     * A workflow row is part of the identity copied into plans and batches. Only a plan that
+     * has actually started reporting makes that identity historical. Freeze that row as a
+     * SNAPSHOT and continue the user's current-configuration edit in a fresh DRAFT row.
      */
-    private boolean hasImmutableReference(String factoryId, ProductProcessWorkflow workflow) {
+    private boolean hasStartedProductionReference(String factoryId, ProductProcessWorkflow workflow) {
         if (workflow.getId() == null) return false;
-        long plans = productionPlanRepository
-                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(factoryId, workflow.getId());
-        long batches = productionBatchRepository
-                .countAllPhysicalByFactoryIdAndSelectedWorkflowId(factoryId, workflow.getId());
-        boolean active = activationRepository.findByFactoryIdAndProductTypeId(factoryId,
-                        workflow.getProductTypeId())
-                .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
-                .map(row -> workflow.getId().equals(row.getActiveWorkflowId()))
-                .orElse(false);
-        return plans > 0 || batches > 0 || active;
+        return productionPlanService.listWorkflowPlanBindings(factoryId, List.of(workflow.getId()))
+                .getOrDefault(workflow.getId(), List.of()).stream()
+                .anyMatch(binding -> binding.isProductionStarted());
     }
 
     private ProductProcessWorkflow forkReferencedDraft(
@@ -189,10 +181,14 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         requireWorkflowOwner(factoryId, productTypeId);
         lockWorkflowOwner(factoryId, productTypeId);
         repository.lockByFactoryId(factoryId);
+        List<Long> previousWorkflowIds = lineageWorkflowIds(factoryId, productTypeId);
         ProductProcessWorkflowDTO published =
                 publishInternal(factoryId, productTypeId, lockVersion, operatorId, true, null);
         workflowActivationService.activate(factoryId, published.getId(), operatorId);
         reanchorByTopology(factoryId, productTypeId, published);
+        WorkflowPlanRebindSummaryDTO planRebind = rebindUnstartedPlans(
+                factoryId, previousWorkflowIds, published.getId(), operatorId);
+        logPlanRebind(factoryId, published, planRebind);
         return published;
     }
 
@@ -299,16 +295,20 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                     .withSeverity("warning");
         }
 
+        List<Long> previousWorkflowIds = lineageWorkflowIds(factoryId, productTypeId);
         ProductProcessWorkflowDTO published =
                 publishInternal(
                         factoryId, productTypeId, lockVersion, operatorId, true, normalizedKey);
         ProductProcessWorkflowActivationDTO activation =
                 workflowActivationService.activate(factoryId, published.getId(), operatorId);
         reanchorByTopology(factoryId, productTypeId, published);
+        WorkflowPlanRebindSummaryDTO planRebind = rebindUnstartedPlans(
+                factoryId, previousWorkflowIds, published.getId(), operatorId);
         return WorkflowPublishAndActivateResponse.builder()
                 .workflow(published)
                 .activation(activation)
                 .bomSync(preflight)
+                .planRebind(planRebind)
                 .idempotencyKey(normalizedKey)
                 .replayed(false)
                 .build();
@@ -359,6 +359,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 .workflow(toDTOWithUnitWarnings(publishedWorkflow))
                 .activation(activation)
                 .bomSync(preflight)
+                .planRebind(WorkflowPlanRebindSummaryDTO.empty())
                 .idempotencyKey(idempotencyKey)
                 .replayed(true)
                 .build();
@@ -532,8 +533,13 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 .findByFactoryIdAndProductTypeId(factoryId, productTypeId);
         List<ProductProcessWorkflowRepository.VersionSummaryProjection> rows = repository
                 .findVersionSummaries(factoryId, productTypeId);
+        var bindings = productionPlanService.listWorkflowPlanBindings(
+                factoryId,
+                rows.stream().map(ProductProcessWorkflowRepository.VersionSummaryProjection::getId).toList());
         return rows.stream()
-                .map(row -> toVersionSummaryDTO(row, activation))
+                .map(row -> toVersionSummaryDTO(
+                        row, activation, bindings.getOrDefault(row.getId(), List.of())))
+                .filter(row -> row.isActive() || !row.getProductionPlans().isEmpty())
                 .collect(Collectors.toList());
     }
 
@@ -553,7 +559,8 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
 
     private ProductProcessWorkflowVersionSummaryDTO toVersionSummaryDTO(
             ProductProcessWorkflowRepository.VersionSummaryProjection row,
-            Optional<ProductProcessWorkflowActivation> activation) {
+            Optional<ProductProcessWorkflowActivation> activation,
+            List<com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO> productionPlans) {
         boolean active = activation
                 .filter(a -> Boolean.TRUE.equals(a.getEnabled()))
                 .map(a -> row.getId().equals(a.getActiveWorkflowId()))
@@ -562,7 +569,40 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 row.getDefinitionVersion(),
                 row.getStatus().name(),
                 row.getUpdatedAt(),
-                active);
+                active,
+                productionPlans);
+    }
+
+    private List<Long> lineageWorkflowIds(String factoryId, String productTypeId) {
+        return repository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, productTypeId)
+                .stream()
+                .map(ProductProcessWorkflow::getId)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private WorkflowPlanRebindSummaryDTO rebindUnstartedPlans(
+            String factoryId,
+            List<Long> lineageWorkflowIds,
+            Long activeWorkflowId,
+            Long operatorId) {
+        List<Long> previousIds = lineageWorkflowIds.stream()
+                .filter(id -> !Objects.equals(id, activeWorkflowId))
+                .toList();
+        return productionPlanService.repinUnstartedPlansToCurrentAuthority(
+                factoryId, previousIds, operatorId);
+    }
+
+    private void logPlanRebind(
+            String factoryId,
+            ProductProcessWorkflowDTO published,
+            WorkflowPlanRebindSummaryDTO summary) {
+        log.info("[Workflow] 新版本应用到生产计划: factoryId={}, workflowId={}, version={}, rebound={}, preservedStarted={}",
+                factoryId,
+                published.getId(),
+                published.getVersion(),
+                summary.getReboundPlanCount(),
+                summary.getPreservedStartedPlanCount());
     }
 
     private Optional<ProductProcessWorkflow> find(

@@ -8,11 +8,13 @@ const source = readFileSync(
 );
 
 describe('Workflow 自动分叉与历史预览编辑闸', () => {
-  it('已启用版本的保存动作明确走自动新版本，不要求先手工另存', () => {
-    expect(source).toContain('保存草稿（自动新版本）');
-    expect(source).toContain('保存会自动创建新的 Workflow 草稿版本');
-    expect(source).toContain('无需先手工另存为版本');
-    expect(source).toContain('>另存独立版本</el-button>');
+  it('用户只管理当前配置，生产历史由真实报工自动形成', () => {
+    expect(source).toContain("const saveActionLabel = computed(() => '保存当前配置')");
+    expect(source).toContain("publishActionCompleted.value ? '当前配置已生效' : '更新并应用'");
+    expect(source).toContain('不需要另存版本');
+    expect(source).not.toContain('>另存独立版本</el-button>');
+    expect(source).not.toContain('data-testid="snapshot-workflow"');
+    expect(source).toContain('已经报工的计划保留旧配置并进入生产版本记录');
   });
 
   it('历史预览才关闭编辑，草稿入口仍统一由 canEdit 控制', () => {
@@ -32,7 +34,15 @@ describe('Workflow 自动分叉与历史预览编辑闸', () => {
 
   it('保存响应如实提示服务端是否自动分叉', () => {
     expect(source).toContain('response.data.autoForked');
-    expect(source).toContain('旧版本 v${response.data.forkedFromVersion ?? \'?\'} 保持不变');
+    expect(source).toContain('正在报工的旧配置 v${response.data.forkedFromVersion ?? \'?\'} 已自动保留');
+  });
+
+  it('更新生效后展示计划改绑结果，版本记录展示绑定计划', () => {
+    expect(source).toContain('response.data.planRebind');
+    expect(source).toContain('个未报工计划已同步更新');
+    expect(source).toContain('个已报工计划保留旧版');
+    expect(source).toContain('v.productionPlans');
+    expect(source).toContain('已开始报工 · 固定此版本');
   });
 
   it('停用失败必须把后端业务原因展示给操作者', () => {

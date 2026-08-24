@@ -14,6 +14,7 @@ public class WorkflowPublishAndActivateResponse {
     private ProductProcessWorkflowDTO workflow;
     private ProductProcessWorkflowActivationDTO activation;
     private WorkflowBomSyncPreflightResponse bomSync;
+    private WorkflowPlanRebindSummaryDTO planRebind;
     private String idempotencyKey;
     private boolean replayed;
 }

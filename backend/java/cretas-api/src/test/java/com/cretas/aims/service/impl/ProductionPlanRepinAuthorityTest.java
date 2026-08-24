@@ -57,8 +57,19 @@ class ProductionPlanRepinAuthorityTest {
         ctor.setAccessible(true);
         Object[] args = new Object[ctor.getParameterCount()];
         Class<?>[] types = ctor.getParameterTypes();
+        com.cretas.aims.repository.ProductTypeRepository productTypeRepo =
+                mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        com.cretas.aims.entity.ProductType product = new com.cretas.aims.entity.ProductType();
+        product.setId("PT-1");
+        product.setFactoryId(FACTORY);
+        product.setUnit("kg");
+        when(productTypeRepo.findByIdAndFactoryId("PT-1", FACTORY)).thenReturn(Optional.of(product));
         for (int i = 0; i < types.length; i++) {
-            args[i] = types[i] == ProductionPlanRepository.class ? planRepo : null;
+            args[i] = types[i] == ProductionPlanRepository.class
+                    ? planRepo
+                    : types[i] == com.cretas.aims.repository.ProductTypeRepository.class
+                    ? productTypeRepo
+                    : null;
         }
         ProductionPlanServiceImpl service = (ProductionPlanServiceImpl) ctor.newInstance(args);
         // processSheetRowRepository 是 @Autowired 字段(非构造参数), 反射注入。
@@ -80,6 +91,8 @@ class ProductionPlanRepinAuthorityTest {
         plan.setFactoryId(FACTORY);
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);   // ⚠️ 故意用 IN_PROGRESS: 状态不是判据
         plan.setProductTypeId("PT-1");
+        plan.setPlanNumber("PLAN-REPIN-1");
+        plan.setSelectedWorkflowId(91L);
         return plan;
     }
 
@@ -96,7 +109,7 @@ class ProductionPlanRepinAuthorityTest {
     private Throwable repinWith(List<ProcessSheetRow> rows) throws Exception {
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
         ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan()));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan()));
         when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(rows);
         return catchThrowable(() ->
                 newService(planRepo, rowRepo).repinPlanToCurrentAuthority(FACTORY, PLAN_ID, 1L));
@@ -343,5 +356,94 @@ class ProductionPlanRepinAuthorityTest {
         if (thrown instanceof BusinessException business) {
             assertThat(business.getErrorCode()).isNotEqualTo("PRODUCTION_PLAN_ALREADY_STARTED");
         }
+    }
+
+    @Test
+    @DisplayName("Workflow 更新时已开始报工计划保留旧版本")
+    void automaticRepinPreservesStartedPlans() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
+        ProductionPlan plan = plan();
+        plan.setIsLocked(true); // 系统级 Workflow 更新不能被人工计划锁挡住
+        when(planRepo.findByFactoryIdAndSelectedWorkflowIdIn(org.mockito.ArgumentMatchers.eq(FACTORY), any()))
+                .thenReturn(List.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(row("SUBMITTED", ProcessSheetRow.SUBMISSION_DRAFT, null)));
+
+        var summary = newService(planRepo, rowRepo)
+                .repinUnstartedPlansToCurrentAuthority(FACTORY, List.of(91L), 1L);
+
+        assertThat(summary.getReboundPlanCount()).isZero();
+        assertThat(summary.getPreservedStartedPlanCount()).isEqualTo(1);
+        assertThat(summary.getPreservedPlanNumbers()).containsExactly("PLAN-REPIN-1");
+    }
+
+    @Test
+    @DisplayName("Workflow 版本绑定列表标明哪些计划已经开始报工")
+    void versionBindingsExposeProductionStartedState() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
+        ProductionPlan plan = plan();
+        when(planRepo.findByFactoryIdAndSelectedWorkflowIdIn(org.mockito.ArgumentMatchers.eq(FACTORY), any()))
+                .thenReturn(List.of(plan));
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(row("SAVED", ProcessSheetRow.SUBMISSION_SUBMITTED, null)));
+
+        var bindings = newService(planRepo, rowRepo)
+                .listWorkflowPlanBindings(FACTORY, List.of(91L));
+
+        assertThat(bindings.get(91L)).singleElement().satisfies(binding -> {
+            assertThat(binding.getPlanNumber()).isEqualTo("PLAN-REPIN-1");
+            assertThat(binding.isProductionStarted()).isTrue();
+        });
+    }
+
+    @Test
+    @DisplayName("Workflow 更新时未报工计划自动改绑当前生效版本")
+    void automaticRepinMovesUnstartedPlansToCurrentWorkflow() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
+        ProductionPlan plan = plan();
+        plan.setIsLocked(true); // 排产锁不应阻止尚未报工计划跟随当前 Workflow
+        when(planRepo.findByFactoryIdAndSelectedWorkflowIdIn(org.mockito.ArgumentMatchers.eq(FACTORY), any()))
+                .thenReturn(List.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(planRepo.save(plan)).thenReturn(plan);
+        when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of());
+        ProductionPlanServiceImpl service = newService(planRepo, rowRepo);
+        com.cretas.aims.service.workflow.ProductWorkflowResolutionService resolution =
+                mock(com.cretas.aims.service.workflow.ProductWorkflowResolutionService.class);
+        when(resolution.resolveActivePlanOutputContract(FACTORY, "PT-1", null))
+                .thenReturn(Optional.of(new com.cretas.aims.service.workflow.WorkflowPlanOutputContract(
+                        92L, 3, 103L, "revision-3", java.util.Map.of("PT-1", "kg"), "kg")));
+        inject(service, "workflowResolutionService", resolution);
+        com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository =
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class);
+        com.cretas.aims.entity.bom.BomRecipe recipe = new com.cretas.aims.entity.bom.BomRecipe();
+        recipe.setId("BOM-PT-1-V3");
+        recipe.setFactoryId(FACTORY);
+        recipe.setProductTypeId("PT-1");
+        recipe.setVersion(3);
+        recipe.setBomFamilyId("BOM-FAMILY-V3");
+        recipe.setWorkflowId(92L);
+        recipe.setWorkflowDefinitionVersion(3);
+        recipe.setWorkflowRevisionId(103L);
+        recipe.setWorkflowRevisionHash("revision-3");
+        recipe.setTargetTerminalNodeId("terminal:PT-1");
+        recipe.setIsCurrent(true);
+        recipe.setStatus(com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE);
+        when(bomRecipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, 103L, com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(recipe));
+        inject(service, "bomRecipeRepository", bomRecipeRepository);
+
+        var summary = service.repinUnstartedPlansToCurrentAuthority(FACTORY, List.of(91L), 1L);
+
+        assertThat(summary.getReboundPlanCount()).isEqualTo(1);
+        assertThat(plan.getSelectedWorkflowId()).isEqualTo(92L);
+        assertThat(plan.getSelectedWorkflowVersion()).isEqualTo(3);
+        assertThat(plan.getSelectedWorkflowRevisionId()).isEqualTo(103L);
+        assertThat(plan.getSelectedWorkflowRevisionHash()).isEqualTo("revision-3");
     }
 }

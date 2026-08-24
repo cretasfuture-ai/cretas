@@ -14,6 +14,8 @@ import com.cretas.aims.dto.production.ProductionSettlementResponse;
 import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
+import com.cretas.aims.dto.workflow.WorkflowPlanBindingDTO;
+import com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import java.io.InputStream;
@@ -21,6 +23,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Collection;
 /**
  * 生产计划服务接口
  *
@@ -39,6 +42,20 @@ public interface ProductionPlanService {
      * @throws com.cretas.aims.exception.BusinessException 409 该计划已经开工(见实现里的三信号判据)
      */
     ProductionPlan repinPlanToCurrentAuthority(String factoryId, String planId, Long operatorId);
+
+    /**
+     * A newly active Workflow becomes authoritative for every plan that has not started real
+     * reporting. Plans with submitted/materialized/settled production remain pinned to history.
+     */
+    WorkflowPlanRebindSummaryDTO repinUnstartedPlansToCurrentAuthority(
+            String factoryId,
+            Collection<Long> previousWorkflowIds,
+            Long operatorId);
+
+    /** Read-only plan bindings grouped by the concrete Workflow row id. */
+    Map<Long, List<WorkflowPlanBindingDTO>> listWorkflowPlanBindings(
+            String factoryId,
+            Collection<Long> workflowIds);
 
     /**
      * 创建生产计划
