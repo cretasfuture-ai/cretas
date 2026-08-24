@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { ActivityIndicator, Appbar, Divider, TextInput } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -13,6 +13,7 @@ import {
 } from '../../../services/api/transitLedgerApiClient';
 import { theme } from '../../../theme';
 import {
+  createTransitReceiptIdempotencyKey,
   isValidReceiptDelta,
   receiptDeltaError,
   remainingReceiptQuantity,
@@ -124,6 +125,7 @@ export default function WHTransitLedgerScreen() {
   const [receivedById, setReceivedById] = useState<QuantityById>({});
   const [noteById, setNoteById] = useState<QuantityById>({});
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const idempotencyKeyById = useRef<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setError(null);
@@ -206,6 +208,9 @@ export default function WHTransitLedgerScreen() {
     }
 
     setConfirmingId(item.id);
+    const idempotencyKey = idempotencyKeyById.current[item.id]
+      ?? createTransitReceiptIdempotencyKey(item.id);
+    idempotencyKeyById.current[item.id] = idempotencyKey;
     try {
       const response = await transitLedgerApiClient.confirm(item.id, {
         receivedQuantity: outputLines.length === 0 ? receivedQuantity ?? undefined : undefined,
@@ -214,8 +219,9 @@ export default function WHTransitLedgerScreen() {
           receivedQuantity: line.receivedQuantity as number,
         })),
         note: noteById[item.id]?.trim() || undefined,
-      });
+      }, idempotencyKey);
       if (response.success) {
+        delete idempotencyKeyById.current[item.id];
         appAlert(COPY.successTitle, response.data?.message ?? COPY.successMessage);
         setReceivedById((prev) => {
           const next = { ...prev };
@@ -299,7 +305,10 @@ export default function WHTransitLedgerScreen() {
                     label={`${COPY.thisReceipt}${COPY.receivedQty} / ${COPY.remaining} ${formatQty(remaining, line.unit)}`}
                     keyboardType="decimal-pad"
                     value={receivedById[key] ?? ''}
-                    onChangeText={(text) => setReceivedById((prev) => ({ ...prev, [key]: text }))}
+                    onChangeText={(text) => {
+                      delete idempotencyKeyById.current[item.id];
+                      setReceivedById((prev) => ({ ...prev, [key]: text }));
+                    }}
                     style={styles.lineInput}
                     right={<TextInput.Affix text={line.unit || ''} />}
                     testID={`transit-received-${item.id}-${index}`}
@@ -332,7 +341,10 @@ export default function WHTransitLedgerScreen() {
           label={COPY.note}
           placeholder={COPY.notePlaceholder}
           value={noteById[item.id] ?? ''}
-          onChangeText={(text) => setNoteById((prev) => ({ ...prev, [item.id]: text }))}
+          onChangeText={(text) => {
+            delete idempotencyKeyById.current[item.id];
+            setNoteById((prev) => ({ ...prev, [item.id]: text }));
+          }}
           style={styles.input}
           multiline
           testID={`transit-note-${item.id}`}

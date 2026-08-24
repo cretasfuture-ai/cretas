@@ -196,7 +196,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
                 any(ProductionWarehouseReceiptRequest.class), eq(27L))).thenReturn(serviceResponse);
 
         ApiResponse<ProductionWarehouseReceiptResponse> response =
-                controller.confirmTransitLedger("F006", "PLAN-1", body);
+                controller.confirmTransitLedger("F006", "PLAN-1", "rn-attempt-1", body);
 
         assertSame(serviceResponse, response.getData());
         ArgumentCaptor<ProductionWarehouseReceiptRequest> requestCaptor =
@@ -204,7 +204,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
         verify(productionPlanService).confirmWarehouseReceipt(eq("F006"), eq("PLAN-1"),
                 requestCaptor.capture(), eq(27L));
         ProductionWarehouseReceiptRequest delegated = requestCaptor.getValue();
-        assertTrue(delegated.getIdempotencyKey().startsWith("mobile-wh-receipt:"));
+        assertEquals("mobile-wh-receipt:rn-attempt-1", delegated.getIdempotencyKey());
         assertEquals(new BigDecimal("95.00"), delegated.getReceivedQuantity());
         assertEquals(1, delegated.getOutputLines().size());
         assertEquals("PT-1", delegated.getOutputLines().getFirst().getProductTypeId());
@@ -231,7 +231,7 @@ class ProductionWarehouseReceiptMobileControllerTest {
                 any(ProductionWarehouseReceiptRequest.class), eq(27L))).thenThrow(conflict);
 
         try {
-            controller.confirmTransitLedger("F006", "PLAN-1", body);
+            controller.confirmTransitLedger("F006", "PLAN-1", "rn-attempt-over", body);
             fail("Expected conflict");
         } catch (BusinessException ex) {
             assertSame(conflict, ex);
@@ -274,7 +274,28 @@ class ProductionWarehouseReceiptMobileControllerTest {
 
         assertMethodPermission("listTransitLedgers", String.class, String.class);
         assertMethodPermission("confirmTransitLedger", String.class, String.class,
-                ProductionWarehouseReceiptMobileConfirmRequest.class);
+                String.class, ProductionWarehouseReceiptMobileConfirmRequest.class);
+    }
+
+    @Test
+    @DisplayName("POST confirm without client idempotency key is rejected before inventory mutation")
+    void confirmTransitLedger_missingIdempotencyKeyRejectedBeforeService() {
+        ProductionWarehouseReceiptMobileController controller = newController();
+        setCurrentUser(27L);
+        ProductionWarehouseReceiptMobileConfirmRequest body =
+                new ProductionWarehouseReceiptMobileConfirmRequest();
+        body.setReceivedQuantity(new BigDecimal("3.00"));
+
+        try {
+            controller.confirmTransitLedger("F006", "PLAN-1", null, body);
+            fail("Expected missing idempotency key rejection");
+        } catch (BusinessException ex) {
+            assertEquals(400, ex.getCode());
+            assertEquals("WAREHOUSE_RECEIPT_IDEMPOTENCY_KEY_REQUIRED", ex.getErrorCode());
+            assertEquals("Idempotency-Key", ex.getHintTarget());
+        }
+
+        verify(productionPlanService, never()).confirmWarehouseReceipt(anyString(), anyString(), any(), any());
     }
 
     private void assertMethodPermission(String methodName, Class<?>... parameterTypes) throws Exception {
