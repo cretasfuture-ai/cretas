@@ -453,11 +453,24 @@ def scan_queues(
 
 
 def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
+    def is_annotation_queue(path: Path) -> bool:
+        manifest_path = path / "manifest.json"
+        if not manifest_path.is_file():
+            return False
+        manifest = load_json(manifest_path)
+        if not isinstance(manifest, dict) or "rows" not in manifest:
+            return False
+        rows = manifest["rows"]
+        if not isinstance(rows, list):
+            raise ValueError(f"queue rows must be a list: {path}")
+        return bool(rows)
+
     found: dict[str, Path] = {}
     for value in config.get("queue_roots", []):
         path = Path(os.path.expandvars(value)).resolve()
-        if (path / "manifest.json").is_file():
-            found[str(path).lower()] = path
+        if not is_annotation_queue(path):
+            raise RuntimeError(f"explicit queue root has no annotation rows: {path}")
+        found[str(path).lower()] = path
     for value in config.get("queue_globs", []):
         expanded = os.path.expandvars(value)
         parent = Path(expanded).parent
@@ -465,7 +478,7 @@ def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
         if parent.is_dir():
             for path in parent.glob(pattern):
                 resolved = path.resolve()
-                if (resolved / "manifest.json").is_file():
+                if is_annotation_queue(resolved):
                     found[str(resolved).lower()] = resolved
     return [found[key] for key in sorted(found)]
 
@@ -474,14 +487,12 @@ def config_with_queue_roots(config: dict[str, Any], values: Sequence[Path] | Non
     if not values:
         return config
     roots = [Path(value).resolve() for value in values]
-    missing = [str(path) for path in roots if not (path / "manifest.json").is_file()]
-    if missing:
-        raise RuntimeError(f"explicit queue root missing manifest: {missing}")
     if len({str(path).lower() for path in roots}) != len(roots):
         raise RuntimeError("explicit queue roots contain duplicates")
     overridden = dict(config)
     overridden["queue_roots"] = [str(path) for path in roots]
     overridden["queue_globs"] = []
+    discover_queue_roots(overridden)
     return overridden
 
 

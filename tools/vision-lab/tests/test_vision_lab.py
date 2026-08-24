@@ -243,13 +243,15 @@ class VisionLabTests(unittest.TestCase):
             root = Path(temporary)
             queue = root / "queue"
             queue.mkdir()
-            (queue / "manifest.json").write_text("{}", encoding="utf-8")
+            (queue / "manifest.json").write_text(
+                json.dumps({"rows": [{"crop_id": "c1"}]}), encoding="utf-8",
+            )
             config = {"queue_roots": ["old"], "queue_globs": ["*"]}
             overridden = vision_lab.config_with_queue_roots(config, [queue])
             self.assertEqual(overridden["queue_roots"], [str(queue.resolve())])
             self.assertEqual(overridden["queue_globs"], [])
             self.assertEqual(config["queue_globs"], ["*"])
-            with self.assertRaisesRegex(RuntimeError, "missing manifest"):
+            with self.assertRaisesRegex(RuntimeError, "no annotation rows"):
                 vision_lab.config_with_queue_roots(config, [root / "missing"])
             with self.assertRaisesRegex(RuntimeError, "duplicates"):
                 vision_lab.config_with_queue_roots(config, [queue, queue])
@@ -673,11 +675,40 @@ class VisionLabTests(unittest.TestCase):
             root = Path(temporary)
             queue = root / "queues" / "q1"
             queue.mkdir(parents=True)
-            (queue / "manifest.json").write_text("{}", encoding="utf-8")
+            (queue / "manifest.json").write_text(
+                json.dumps({"rows": [{"crop_id": "c1"}]}), encoding="utf-8",
+            )
             cfg = config(root / "runtime")
             cfg["queue_roots"] = [str(queue)]
             cfg["queue_globs"] = [str(root / "queues" / "*")]
             self.assertEqual(vision_lab.discover_queue_roots(cfg), [queue.resolve()])
+
+    def test_queue_globs_ignore_evaluation_manifests_without_annotation_rows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evaluation = root / "queues" / "evaluation-replay"
+            evaluation.mkdir(parents=True)
+            (evaluation / "manifest.json").write_text(
+                json.dumps({"records": [{"photo_id": "p1"}]}), encoding="utf-8",
+            )
+            cfg = config(root / "runtime")
+            cfg["queue_globs"] = [str(root / "queues" / "*")]
+
+            self.assertEqual(vision_lab.discover_queue_roots(cfg), [])
+
+    def test_explicit_queue_root_without_annotation_rows_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evaluation = root / "evaluation-replay"
+            evaluation.mkdir()
+            (evaluation / "manifest.json").write_text(
+                json.dumps({"records": []}), encoding="utf-8",
+            )
+            cfg = config(root / "runtime")
+            cfg["queue_roots"] = [str(evaluation)]
+
+            with self.assertRaisesRegex(RuntimeError, "no annotation rows"):
+                vision_lab.discover_queue_roots(cfg)
 
     def test_cloud_vl_cannot_be_enabled_without_budget(self):
         with tempfile.TemporaryDirectory() as temporary:
