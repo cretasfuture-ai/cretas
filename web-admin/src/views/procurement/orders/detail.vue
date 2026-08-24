@@ -23,6 +23,7 @@ import {
 } from '@/utils/enumDisplay';
 import { canonicalUnitCode, formatPriceUnit, formatUnitPrice, pricingAmountPreview } from '@/utils/unitPricing';
 import { canDownloadSupplyOrder } from './purchaseOrderActionIa';
+import { purchaseTaxIncludedUnitPrice } from './purchaseOrderTaxInclusivePricing';
 // M-10 (2026-08-20 手动测试台账): 只借用类型做完全映射防漂移检查 (Record 要求覆盖
 // PurchaseOrderStatus 全部 11 个值), 详情页本身仍显示精确状态、不做归类, 所以不引入
 // 归类相关的常量/函数, 也不改这份 statusMap 自带的 financeReviewedBy 特判逻辑。
@@ -501,9 +502,9 @@ async function handleDownloadSupplyOrderPdf() {
           </el-table-column>
           <el-table-column prop="quantity" label="采购数量" width="110" align="right" />
           <el-table-column prop="unit" label="单位" width="80" align="center" />
-          <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="120" align="right">
+          <el-table-column v-if="canViewPrice" prop="unitPrice" label="含税单价" width="120" align="right">
             <template #default="{ row }">
-              {{ formatUnitPrice(row.unitPrice) }} {{ formatPriceUnit(canonicalUnitCode(row.priceUnit || row.unit)) }}
+              {{ formatUnitPrice(purchaseTaxIncludedUnitPrice(row.unitPrice, row.taxRate)) }} {{ formatPriceUnit(canonicalUnitCode(row.priceUnit || row.unit)) }}
             </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" prop="taxRate" label="税率" width="90" align="right">

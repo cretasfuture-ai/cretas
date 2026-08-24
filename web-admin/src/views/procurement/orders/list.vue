@@ -60,6 +60,10 @@ import { usePinyinFilter } from '@/utils/pinyinSearch';
 import { canDownloadSupplyOrder, canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
 import { resolveSupplierMaterialRelations } from './purchaseOrderEditPrefill';
 import {
+  purchaseTaxIncludedUnitPrice,
+  purchaseUntaxedUnitPrice,
+} from './purchaseOrderTaxInclusivePricing';
+import {
   listSupplierMaterials,
   listSupplierPurchaseSpecs,
   type SupplierMaterialRelation,
@@ -247,6 +251,8 @@ interface ProcurementOrderItem {
   unit: string;
   quantityUnit: string;
   unitPrice: number | null;
+  /** 仅供界面录入；输入变化时实时反算为后端既有的未税 unitPrice。 */
+  taxIncludedUnitPrice: number | null;
   priceUnit: string;
   priceSource?: string | null;
   lineAmount?: number | null;
@@ -345,7 +351,8 @@ function newPurchaseItem(): ProcurementOrderItem {
   return {
     supplierMaterialId: '', purchasePackagingSpecId: null, materialPackagingSpecId: null,
     materialTypeId: '', quantity: 0,
-    unit: '', quantityUnit: '', unitPrice: null, priceUnit: '', priceSource: null, taxRate: null,
+    unit: '', quantityUnit: '', unitPrice: null, taxIncludedUnitPrice: null,
+    priceUnit: '', priceSource: null, taxRate: null,
     // 行级合同号: 客户实际单据是同一张单两行两个合同号(SAN-16572 / SAN-16562),
     // 单头 form.contractNumber 是框架合同号, 放不下。为空时收货侧回落到单头。
     contractNumber: '',
@@ -467,8 +474,20 @@ function priceSourceLabel(source: string | null | undefined): string {
   return labels[String(source || '')] || '价格来源待确认';
 }
 
-function onUnitPriceEdited(item: ProcurementOrderItem): void {
-  item.priceSource = hasConfiguredPrice(item.unitPrice) ? 'MANUAL' : 'MISSING';
+function syncTaxIncludedPrice(item: ProcurementOrderItem): void {
+  item.taxIncludedUnitPrice = purchaseTaxIncludedUnitPrice(item.unitPrice, item.taxRate);
+}
+
+function onTaxIncludedPriceEdited(item: ProcurementOrderItem): void {
+  item.unitPrice = purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice, item.taxRate);
+  item.lineAmount = null;
+  item.priceSource = hasConfiguredPrice(item.taxIncludedUnitPrice) && item.unitPrice !== null
+    ? 'MANUAL' : 'MISSING';
+}
+
+function onTaxRateEdited(item: ProcurementOrderItem): void {
+  item.unitPrice = purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice, item.taxRate);
+  item.lineAmount = null;
 }
 
 async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<void> {
@@ -480,9 +499,10 @@ async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<voi
   const purchaseUnit = canonicalUnitCode(relation.purchaseUnit || relation.baseUnit);
   item.unit = purchaseUnit;
   item.quantityUnit = purchaseUnit;
-  applyRelationPrice(item, relation, purchaseUnit);
   const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
   item.taxRate = materialTaxRate(material?.taxRate);
+  applyRelationPrice(item, relation, purchaseUnit);
+  syncTaxIncludedPrice(item);
   const [supplierSpecs, materialSpecs] = await Promise.all([
     loadPurchaseSpecs(relation.id),
     loadMaterialSpecs(relation.materialTypeId, relation.id),
@@ -519,6 +539,7 @@ function onPurchaseSpecChange(item: ProcurementOrderItem): void {
   } else {
     applyRelationPrice(item, relation, unit);
   }
+  syncTaxIncludedPrice(item);
 }
 
 function inventoryQuantityPreview(item: ProcurementOrderItem): string {
@@ -764,16 +785,17 @@ async function handleCreate() {
     return ElMessage.warning(`第 ${invalidQtyIndex + 1} 行采购数量必须大于 0`);
   }
   if (form.value.items.some(i => !i.unit)) return ElMessage.warning('请填写所有明细的单位');
-  const missingPriceIndex = form.value.items.findIndex((i) => !hasConfiguredPrice(i.unitPrice));
+  const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
+  if (invalidTaxRateIndex >= 0) {
+    return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行${validateTaxRate(form.value.items[invalidTaxRateIndex].taxRate)}`);
+  }
+  const missingPriceIndex = form.value.items.findIndex((i) =>
+    !hasConfiguredPrice(i.taxIncludedUnitPrice) || i.unitPrice === null);
   if (missingPriceIndex >= 0) {
     return ElMessage.warning(`第 ${missingPriceIndex + 1} 行尚未配置采购价，请维护供应商关系/采购规格报价或明确填写本单价格`);
   }
   if (form.value.items.some(i => !canonicalUnitCode(i.priceUnit))) {
     return ElMessage.warning('采购价必须绑定明确的计价单位');
-  }
-  const invalidTaxRateIndex = form.value.items.findIndex((i) => validateTaxRate(i.taxRate));
-  if (invalidTaxRateIndex >= 0) {
-    return ElMessage.warning(`第 ${invalidTaxRateIndex + 1} 行${validateTaxRate(form.value.items[invalidTaxRateIndex].taxRate)}`);
   }
   submitting.value = true;
   try {
@@ -792,8 +814,10 @@ async function handleCreate() {
     const { relatedSalesOrderId: _unused, items, ...formData } = form.value;
     const payload = {
       ...formData,
-      items: items.map((i) => ({
+      items: items.map(({ taxIncludedUnitPrice: _taxIncludedUnitPrice, ...i }) => ({
         ...i,
+        // 含税单价或税点变化时已实时反算；提交只发送当时可见状态对应的未税快照。
+        unitPrice: i.unitPrice,
         purchasePackagingSpecId: i.purchasePackagingSpecId?.startsWith('material:')
           ? null : i.purchasePackagingSpecId,
         materialPackagingSpecId: i.purchasePackagingSpecId?.startsWith('material:')
@@ -964,6 +988,7 @@ async function openEditDialog(orderId: string) {
         unit: quantityUnit,
         quantityUnit,
         unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
+        taxIncludedUnitPrice: purchaseTaxIncludedUnitPrice(item.unitPrice, item.taxRate),
         priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit),
         priceSource: String(item.priceSource || 'ORDER_SNAPSHOT'),
         lineAmount: item.lineAmount == null ? null : Number(item.lineAmount),
@@ -1095,9 +1120,11 @@ function handleAiFill(params: TableRow) {
         quantity: Number(item.quantity || 0),
         unit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
         quantityUnit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
-        unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
+        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, item.taxRate),
+        taxIncludedUnitPrice: item.taxIncludedUnitPrice == null && item.unitPrice == null
+          ? null : Number(item.taxIncludedUnitPrice ?? item.unitPrice),
         priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit || 'kg'),
-        priceSource: item.unitPrice == null ? 'MISSING' : 'MANUAL',
+        priceSource: item.taxIncludedUnitPrice == null && item.unitPrice == null ? 'MISSING' : 'MANUAL',
         taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
       };
       });
@@ -1491,9 +1518,9 @@ function handleAiFill(params: TableRow) {
           <span style="width: 140px"><span class="req-star">*</span>采购数量</span>
           <span style="width: 90px">采购单位</span>
           <span style="width: 110px">折合入库量</span>
-          <span style="width: 158px">未税单价</span>
-          <span style="width: 100px">金额</span>
-          <span style="width: 110px"><span class="req-star">*</span>税率</span>
+          <span style="width: 158px">含税单价</span>
+          <span style="width: 100px">未税金额</span>
+          <span style="width: 110px"><span class="req-star">*</span>税点(%)</span>
           <span style="width: 90px">税额</span>
           <span style="width: 110px">含税金额</span>
           <span style="width: 150px">合同号</span>
@@ -1534,16 +1561,19 @@ function handleAiFill(params: TableRow) {
           <div class="inventory-preview" style="width: 110px">{{ inventoryQuantityPreview(item) }}</div>
           <div class="price-input-cell" style="width: 158px">
             <el-input-number
-              v-model="item.unitPrice"
+              v-model="item.taxIncludedUnitPrice"
               :min="0"
               :precision="2"
-              placeholder="未配置采购价"
+              placeholder="未配置含税采购价"
               controls-position="right"
               style="width: 130px"
-              @change="onUnitPriceEdited(item)"
+              @update:model-value="onTaxIncludedPriceEdited(item)"
             />
             <el-tooltip placement="top">
-              <template #content>{{ priceSourceLabel(item.priceSource) }} · 元/{{ displayUnit(item.priceUnit) || '-' }}</template>
+              <template #content>
+                {{ priceSourceLabel(item.priceSource) }} · 未税单价
+                {{ item.unitPrice == null ? '-' : item.unitPrice }} 元/{{ displayUnit(item.priceUnit) || '-' }}
+              </template>
               <el-icon :class="['price-source-icon', { 'price-source-icon--missing': item.priceSource === 'MISSING' }]"><QuestionFilled /></el-icon>
             </el-tooltip>
           </div>
@@ -1561,6 +1591,7 @@ function handleAiFill(params: TableRow) {
                 default-first-option
                 style="width: 100%"
                 :class="{ 'is-error-select': validateTaxRate(item.taxRate) }"
+                @update:model-value="onTaxRateEdited(item)"
               >
                 <el-option
                   v-for="opt in commonTaxRateOptions"
