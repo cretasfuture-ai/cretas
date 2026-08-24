@@ -48,12 +48,22 @@ public class FactoryStocktakeItem extends BaseEntity {
     private FactoryStocktake stocktake;
 
     /** FK → material_batches.id */
-    @Column(name = "material_batch_id", nullable = false, length = 191)
+    @Column(name = "material_batch_id", length = 191)
     private String materialBatchId;
+
+    /** FK identity for FINISHED_GOODS stocktakes. Exactly one batch identity is populated. */
+    @Column(name = "finished_goods_batch_id", length = 191)
+    private String finishedGoodsBatchId;
 
     /** 冗余品名 ID，用于展示，FK → raw_material_types.id */
     @Column(name = "raw_material_type_id", length = 191)
     private String rawMaterialTypeId;
+
+    @Column(name = "product_type_id", length = 191)
+    private String productTypeId;
+
+    @Column(name = "quantity_unit", length = 20)
+    private String quantityUnit;
 
     /** 账面库存快照（发起时记录，不随 MaterialBatch 变动而更新）*/
     @Column(name = "system_qty", nullable = false, precision = 12, scale = 4)

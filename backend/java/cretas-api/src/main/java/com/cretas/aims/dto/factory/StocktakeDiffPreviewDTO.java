@@ -27,6 +27,7 @@ public class StocktakeDiffPreviewDTO {
     public static class DiffLine {
         private String itemId;
         private String materialBatchId;
+        private String finishedGoodsBatchId;
         private String batchNumber;
         private String materialName;
         private String quantityUnit;

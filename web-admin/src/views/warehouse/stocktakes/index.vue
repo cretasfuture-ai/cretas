@@ -134,6 +134,7 @@ const initiateDialogVisible = ref(false);
 const initiateLoading = ref(false);
 const initiateForm = reactive({
   warehouseId: '',
+  inventoryScope: 'RAW_MATERIAL' as 'RAW_MATERIAL' | 'FINISHED_GOODS',
   notes: '',
   reconciliationPreset: 'LAST_APPLIED',
   reconciliationRange: [] as string[],
@@ -229,6 +230,7 @@ function approvalEvidence(row: TableRow | null): TableRow {
 
 function openInitiateDialog() {
   initiateForm.warehouseId = '';
+  initiateForm.inventoryScope = 'RAW_MATERIAL';
   initiateForm.notes = '';
   initiateForm.reconciliationPreset = 'LAST_APPLIED';
   initiateForm.reconciliationRange = [];
@@ -260,6 +262,7 @@ async function submitInitiate() {
     const adHocReason = resolveAdHocReason();
     const res = await post(`/${factoryId.value}/stocktakes`, {
       warehouseId: initiateForm.warehouseId,
+      inventoryScope: initiateForm.inventoryScope,
       notes: initiateForm.notes,
       reconciliationPreset: initiateForm.reconciliationPreset,
       reconciliationStartAt: initiateForm.reconciliationPreset === 'CUSTOM'
@@ -802,10 +805,10 @@ async function openCountDialog(row: TableRow): Promise<boolean> {
       const items = res.data.items || [];
       countItems.value = items.map((item: TableRow) => ({
         id: String(item.id),
-        batchId: String(item.materialBatchId || ''),
-        batchNo: String(item.batchNumber || item.materialBatchId || ''),
-        materialCode: String(item.materialCode || item.rawMaterialTypeId || ''),
-        materialName: String(item.materialName || item.materialCode || item.rawMaterialTypeId || ''),
+        batchId: String(item.finishedGoodsBatchId || item.materialBatchId || ''),
+        batchNo: String(item.batchNumber || item.finishedGoodsBatchId || item.materialBatchId || ''),
+        materialCode: String(item.materialCode || item.productTypeId || item.rawMaterialTypeId || ''),
+        materialName: String(item.materialName || item.materialCode || item.productTypeId || item.rawMaterialTypeId || ''),
         unit: String(item.quantityUnit || ''),
         systemQty: Number(item.systemQty ?? 0),
         actualQty: item.actualQty != null ? Number(item.actualQty) : null,
@@ -1152,6 +1155,8 @@ onMounted(async () => {
             <span>{{ row.stocktakeNo }}</span>
             <el-tag v-if="row.importMode === 'OPENING'" type="warning" size="small" effect="dark" style="margin-left: 6px">期初建账</el-tag>
             <el-tag v-else-if="row.importMode === 'NORMAL'" type="info" size="small" style="margin-left: 6px">批量导入</el-tag>
+            <el-tag v-else-if="row.inventoryScope === 'FINISHED_GOODS'" type="success" size="small" effect="plain" style="margin-left: 6px">成品</el-tag>
+            <el-tag v-else type="info" size="small" effect="plain" style="margin-left: 6px">原料</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="仓库" min-width="120">
@@ -1254,6 +1259,13 @@ onMounted(async () => {
         style="margin-bottom: 16px"
       />
       <el-form label-width="100px">
+        <el-form-item label="盘点范围" required>
+          <el-radio-group v-model="initiateForm.inventoryScope">
+            <el-radio-button value="RAW_MATERIAL">原料库存</el-radio-button>
+            <el-radio-button value="FINISHED_GOODS">成品库存</el-radio-button>
+          </el-radio-group>
+          <div class="field-hint">在制品请使用“半成品盘点”；这里按所选范围生成对应批次快照。</div>
+        </el-form-item>
         <el-form-item label="盘点仓库" required>
           <el-select v-model="initiateForm.warehouseId" placeholder="选择仓库" style="width: 100%">
             <el-option v-for="w in warehouses" :key="String(w.id)" :label="String(w.name)" :value="String(w.id)">

@@ -10,6 +10,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -18,6 +19,8 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.voucher.VoucherService;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +43,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -74,6 +78,8 @@ class FactoryStocktakeServiceImplTest {
     @Mock private FactoryStocktakeItemRepository stocktakeItemRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
     @Mock private ProductTypeRepository productTypeRepo;
@@ -1295,6 +1301,122 @@ class FactoryStocktakeServiceImplTest {
         verify(materialBatchRepo, never()).save(any());
     }
 
+    @Test
+    @DisplayName("成品范围发起时按仓库快照真实成品批次而不是原料批次")
+    void initiate_finishedGoods_snapshotsFinishedGoodsWarehouse() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setInventoryScope(FactoryStocktake.InventoryScope.FINISHED_GOODS);
+        FinishedGoodsBatch batch = finishedBatch("FG-1", "10", "0");
+        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
+                FACTORY_ID, WAREHOUSE_ID, java.time.YearMonth.now().toString(),
+                FactoryStocktake.InventoryScope.FINISHED_GOODS)).thenReturn(0L);
+        when(finishedGoodsBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(batch));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(finishedGoodsBatchRepo.findAllById(any())).thenReturn(List.of(batch));
+
+        StocktakeDTO result = service.initiate(FACTORY_ID, req, USER_ID);
+
+        assertThat(result.getInventoryScope()).isEqualTo("FINISHED_GOODS");
+        assertThat(result.getItems()).singleElement().satisfies(item -> {
+            assertThat(item.getMaterialBatchId()).isNull();
+            assertThat(item.getFinishedGoodsBatchId()).isEqualTo("FG-1");
+            assertThat(item.getSystemQty()).isEqualByComparingTo("10.0000");
+            assertThat(item.getQuantityUnit()).isEqualTo("盒");
+        });
+        verify(materialBatchRepo, never()).findByFactoryIdAndWarehouseId(any(), any());
+    }
+
+    @Test
+    @DisplayName("成品盘盈应用更新入库量并写唯一成品调整日志")
+    void apply_finishedGoodsSurplus_updatesBatchAndAuditLog() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setInventoryScope(FactoryStocktake.InventoryScope.FINISHED_GOODS);
+        FactoryStocktakeItem item = buildItem(stocktake, new BigDecimal("10"));
+        item.setMaterialBatchId(null);
+        item.setFinishedGoodsBatchId("FG-1");
+        item.setProductTypeId("P-1");
+        item.setActualQty(new BigDecimal("11"));
+        item.setDifferenceQty(BigDecimal.ONE);
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+        stocktake.setItems(new ArrayList<>(List.of(item)));
+        FinishedGoodsBatch batch = finishedBatch("FG-1", "10", "0");
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktake.getId(), FACTORY_ID))
+                .thenReturn(Optional.of(stocktake));
+        when(finishedGoodsBatchRepo.findStocktakeBatchForUpdate("FG-1", FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        assertThat(batch.getProducedQuantity()).isEqualByComparingTo("11.0000");
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPLIED);
+        verify(finishedGoodsAdjustmentLogRepo, times(1)).save(argThat(log ->
+                "FG-1".equals(log.getBatchId()) && "STOCKTAKE".equals(log.getReferenceType())
+                        && log.getAdjustmentQuantity().compareTo(BigDecimal.ONE) == 0));
+        verify(adjustmentRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("成品盘亏应用减少累计入库量并写负向审计")
+    void apply_finishedGoodsShortage_reducesProducedQuantity() {
+        FactoryStocktake stocktake = finishedGoodsApprovedStocktake("9", "-1",
+                FactoryStocktakeItem.DifferenceType.SHORTAGE);
+        FinishedGoodsBatch batch = finishedBatch("FG-1", "10", "0");
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktake.getId(), FACTORY_ID))
+                .thenReturn(Optional.of(stocktake));
+        when(finishedGoodsBatchRepo.findStocktakeBatchForUpdate("FG-1", FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.apply(stocktake.getId(), FACTORY_ID, USER_ID);
+
+        assertThat(batch.getProducedQuantity()).isEqualByComparingTo("9.0000");
+        verify(finishedGoodsAdjustmentLogRepo).save(argThat(log ->
+                log.getAdjustmentQuantity().compareTo(new BigDecimal("-1")) == 0
+                        && log.getBeforeProduced().compareTo(new BigDecimal("10")) == 0
+                        && log.getAfterProduced().compareTo(new BigDecimal("9.0000")) == 0));
+    }
+
+    @Test
+    @DisplayName("成品盘点应用前库存漂移必须整体拒绝")
+    void apply_finishedGoodsDrift_rejectedWithoutMutation() {
+        FactoryStocktake stocktake = finishedGoodsApprovedStocktake("11", "1",
+                FactoryStocktakeItem.DifferenceType.SURPLUS);
+        FinishedGoodsBatch liveBatch = finishedBatch("FG-1", "12", "0");
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktake.getId(), FACTORY_ID))
+                .thenReturn(Optional.of(stocktake));
+        when(finishedGoodsBatchRepo.findStocktakeBatchForUpdate("FG-1", FACTORY_ID))
+                .thenReturn(Optional.of(liveBatch));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.apply(stocktake.getId(), FACTORY_ID, USER_ID));
+
+        assertThat(error.getErrorCode()).isEqualTo("STOCKTAKE_DRIFT");
+        verify(finishedGoodsBatchRepo, never()).save(any());
+        verify(finishedGoodsAdjustmentLogRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("成品盘点不能锁定或调整其他工厂批次")
+    void apply_finishedGoodsCrossFactoryBatch_rejectedWithoutMutation() {
+        FactoryStocktake stocktake = finishedGoodsApprovedStocktake("11", "1",
+                FactoryStocktakeItem.DifferenceType.SURPLUS);
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktake.getId(), FACTORY_ID))
+                .thenReturn(Optional.of(stocktake));
+        when(finishedGoodsBatchRepo.findStocktakeBatchForUpdate("FG-1", FACTORY_ID))
+                .thenReturn(Optional.empty());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.apply(stocktake.getId(), FACTORY_ID, USER_ID));
+
+        assertThat(error.getErrorCode()).isEqualTo("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+        verify(finishedGoodsBatchRepo, never()).save(any());
+        verify(finishedGoodsAdjustmentLogRepo, never()).save(any());
+    }
+
     // -------------------------------------------------------
     // helpers
     // -------------------------------------------------------
@@ -1329,5 +1451,36 @@ class FactoryStocktakeServiceImplTest {
         item.setDifferenceType(FactoryStocktakeItem.DifferenceType.MATCH);
         item.setMaterialBatchId("BATCH-001");
         return item;
+    }
+
+    private FinishedGoodsBatch finishedBatch(String id, String produced, String shipped) {
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setWarehouseId(WAREHOUSE_ID);
+        batch.setBatchNumber("PB-" + id);
+        batch.setProductTypeId("P-1");
+        batch.setProductName("测试成品");
+        batch.setProducedQuantity(new BigDecimal(produced));
+        batch.setShippedQuantity(new BigDecimal(shipped));
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setUnit("盒");
+        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        return batch;
+    }
+
+    private FactoryStocktake finishedGoodsApprovedStocktake(String actualQty, String differenceQty,
+            FactoryStocktakeItem.DifferenceType differenceType) {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        stocktake.setInventoryScope(FactoryStocktake.InventoryScope.FINISHED_GOODS);
+        FactoryStocktakeItem item = buildItem(stocktake, new BigDecimal("10"));
+        item.setMaterialBatchId(null);
+        item.setFinishedGoodsBatchId("FG-1");
+        item.setProductTypeId("P-1");
+        item.setActualQty(new BigDecimal(actualQty));
+        item.setDifferenceQty(new BigDecimal(differenceQty));
+        item.setDifferenceType(differenceType);
+        stocktake.setItems(new ArrayList<>(List.of(item)));
+        return stocktake;
     }
 }

@@ -42,6 +42,10 @@ public class FactoryStocktake extends BaseEntity {
         INITIATED, COUNTING, PENDING_APPROVAL, APPROVED, APPLIED, REJECTED
     }
 
+    public enum InventoryScope {
+        RAW_MATERIAL, FINISHED_GOODS
+    }
+
     /**
      * 导入模式（仅批量导入创建的盘点任务有值；逐项 UI 发起的为 null）。
      *
@@ -74,6 +78,10 @@ public class FactoryStocktake extends BaseEntity {
     /** 被盘仓库 ID，FK → factory_warehouses.id */
     @Column(name = "warehouse_id", nullable = false, length = 64)
     private String warehouseId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "inventory_scope", nullable = false, length = 30)
+    private InventoryScope inventoryScope = InventoryScope.RAW_MATERIAL;
 
     /** 盘点月份，格式 "2026-06" */
     @Column(name = "period_month", nullable = false, length = 7)

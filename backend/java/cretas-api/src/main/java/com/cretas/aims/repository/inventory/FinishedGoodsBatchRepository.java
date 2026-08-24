@@ -489,6 +489,11 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      */
     List<FinishedGoodsBatch> findByFactoryIdAndWarehouseId(String factoryId, String warehouseId);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.id = :id AND b.factoryId = :factoryId")
+    Optional<FinishedGoodsBatch> findStocktakeBatchForUpdate(
+            @Param("id") String id, @Param("factoryId") String factoryId);
+
     /**
      * WH-LOG 可发量汇总（单工厂，按 warehouse code + unit 双过滤）。备货看板 T134 用。
      *

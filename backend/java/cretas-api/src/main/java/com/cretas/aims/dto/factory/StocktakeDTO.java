@@ -20,6 +20,7 @@ public class StocktakeDTO {
     private String factoryId;
     private String stocktakeNo;
     private String warehouseId;
+    private String inventoryScope;
     private String periodMonth;
     private LocalDateTime inventoryCutoffAt;
     private LocalDateTime countingStartedAt;
@@ -72,6 +73,7 @@ public class StocktakeDTO {
         private String id;
         private String stocktakeId;
         private String materialBatchId;
+        private String finishedGoodsBatchId;
         private String rawMaterialTypeId;
         /** Product/SKU identity for WIP and finished-product inventory batches. */
         private String productTypeId;
@@ -93,7 +95,10 @@ public class StocktakeDTO {
             dto.setId(item.getId());
             dto.setStocktakeId(item.getStocktake() != null ? item.getStocktake().getId() : null);
             dto.setMaterialBatchId(item.getMaterialBatchId());
+            dto.setFinishedGoodsBatchId(item.getFinishedGoodsBatchId());
             dto.setRawMaterialTypeId(item.getRawMaterialTypeId());
+            dto.setProductTypeId(item.getProductTypeId());
+            dto.setQuantityUnit(item.getQuantityUnit());
             dto.setSystemQty(item.getSystemQty());
             dto.setActualQty(item.getActualQty());
             dto.setDifferenceQty(item.getDifferenceQty());
@@ -110,6 +115,8 @@ public class StocktakeDTO {
         dto.setFactoryId(stocktake.getFactoryId());
         dto.setStocktakeNo(stocktake.getStocktakeNo());
         dto.setWarehouseId(stocktake.getWarehouseId());
+        dto.setInventoryScope(stocktake.getInventoryScope() != null
+                ? stocktake.getInventoryScope().name() : FactoryStocktake.InventoryScope.RAW_MATERIAL.name());
         dto.setPeriodMonth(stocktake.getPeriodMonth());
         dto.setInventoryCutoffAt(stocktake.getInventoryCutoffAt());
         dto.setCountingStartedAt(stocktake.getCountingStartedAt());
