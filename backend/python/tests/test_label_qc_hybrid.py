@@ -192,9 +192,9 @@ async def test_unjudgeable_tray_is_reviewable_without_claiming_missing_label(mon
 
     result = await analyzer.analyze(_image_bytes())
 
-    assert result["verdict"] == "NO_DEFECT_FOUND"
-    assert result["candidates"] == []
-    assert result["customerReviewRequired"] is False
+    assert result["verdict"] == "SUSPECTED"
+    assert [item["label"] for item in result["candidates"]] == [VERDICT_UNJUDGEABLE]
+    assert result["customerReviewRequired"] is True
     assert result["platformReviewRequired"] is True
     assert [item["label"] for item in result["platformCandidates"]] == [VERDICT_UNJUDGEABLE]
     assert result["screening"]["suspectCount"] == 0
@@ -219,7 +219,7 @@ async def test_vl_clear_keeps_unjudgeable_without_calling_it_missing(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_missing_and_unjudgeable_trays_are_split_between_audiences(monkeypatch):
+async def test_unjudgeable_reaches_factory_and_remains_in_platform_diagnostics(monkeypatch):
     trays = [
         _tray(4, VERDICT_MISSING_WHITE, (100, 100, 300, 300)),
         _tray(9, VERDICT_UNJUDGEABLE, (20, 10, 120, 30)),
@@ -232,8 +232,12 @@ async def test_missing_and_unjudgeable_trays_are_split_between_audiences(monkeyp
 
     result = await analyzer.analyze(_image_bytes())
 
-    assert [item["label"] for item in result["candidates"]] == [VERDICT_MISSING_WHITE]
+    assert [item["label"] for item in result["candidates"]] == [
+        VERDICT_MISSING_WHITE,
+        VERDICT_UNJUDGEABLE,
+    ]
     assert result["candidates"][0]["sourceTiles"] == [4]
+    assert result["candidates"][1]["sourceTiles"] == [9]
     assert [item["label"] for item in result["platformCandidates"]] == [VERDICT_UNJUDGEABLE]
     assert result["platformCandidates"][0]["sourceTiles"] == [9]
     assert result["platformCandidates"][0]["candidateId"] == "platform-tray-9"

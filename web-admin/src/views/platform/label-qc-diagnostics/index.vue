@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import {
   listLabelQcPlatformCandidates,
+  getLabelQcPhotoImageBlob,
   reviewLabelQcPlatformCandidate,
   type LabelQcBoundingBox,
   type LabelQcLabel,
@@ -22,10 +23,31 @@ const dirty = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const total = ref(0);
+const page = ref(1);
+const pageSize = 40;
+const proxiedImageUrl = ref<string | null>(null);
+let imageRequestToken = 0;
 
 const selected = computed(
   () => candidates.value.find((item) => item.id === selectedId.value) ?? null,
 );
+const selectedImageUrl = computed(() => proxiedImageUrl.value || selected.value?.imageUrl || '');
+
+async function loadSelectedImage(): Promise<void> {
+  const item = selected.value;
+  const token = ++imageRequestToken;
+  const previousUrl = proxiedImageUrl.value;
+  proxiedImageUrl.value = null;
+  if (previousUrl) URL.revokeObjectURL(previousUrl);
+  if (!item) return;
+  try {
+    const blob = await getLabelQcPhotoImageBlob(targetFactoryId.value, item.photoId, true);
+    if (token !== imageRequestToken) return;
+    proxiedImageUrl.value = URL.createObjectURL(blob);
+  } catch {
+    // Keep the original signed URL as a last-resort fallback.
+  }
+}
 
 const fullCanvasStyle = computed(() => {
   const item = selected.value;
@@ -105,7 +127,8 @@ async function load(): Promise<void> {
   try {
     const response = await listLabelQcPlatformCandidates(targetFactoryId.value, {
       reviewed: reviewed.value,
-      size: 100,
+      page: page.value,
+      size: pageSize,
     });
     candidates.value = response.data?.content ?? [];
     total.value = response.data?.totalElements ?? 0;
@@ -152,11 +175,10 @@ async function saveCurrent(advance = false): Promise<boolean> {
   }
 }
 
-async function choose(label: LabelQcLabel, defaultNotes: string): Promise<void> {
+function choose(label: LabelQcLabel, defaultNotes: string): void {
   decision.value = label;
   if (!notes.value.trim()) notes.value = defaultNotes;
   dirty.value = true;
-  await saveCurrent(true);
 }
 
 async function selectCandidate(item: LabelQcPlatformCandidate): Promise<void> {
@@ -170,6 +192,13 @@ async function changeQueue(next: boolean): Promise<void> {
   if (next === reviewed.value) return;
   if (!await saveCurrent()) return;
   reviewed.value = next;
+  page.value = 1;
+  await load();
+}
+
+async function changePage(nextPage: number): Promise<void> {
+  if (!await saveCurrent()) return;
+  page.value = nextPage;
   await load();
 }
 
@@ -185,14 +214,18 @@ function onKeydown(event: KeyboardEvent): void {
   const action = actions[event.key];
   if (!action || saving.value || !selected.value) return;
   event.preventDefault();
-  void choose(action[0], action[1]);
+  choose(action[0], action[1]);
 }
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   void load();
 });
-onUnmounted(() => window.removeEventListener('keydown', onKeydown));
+watch(() => selected.value?.id, () => { void loadSelectedImage(); });
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown);
+  if (proxiedImageUrl.value) URL.revokeObjectURL(proxiedImageUrl.value);
+});
 </script>
 
 <template>
@@ -236,32 +269,34 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           <section>
             <div class="visual-title"><strong>全图位置</strong><span>确认它是否属于当前工作台</span></div>
             <div class="full-canvas" :style="fullCanvasStyle">
-              <img :src="selected.imageUrl" alt="诊断原图" draggable="false">
+              <img :src="selectedImageUrl" alt="诊断原图" draggable="false">
               <div class="problem-box" :style="candidateStyle"><span>当前问题</span></div>
             </div>
           </section>
           <section>
             <div class="visual-title"><strong>局部放大</strong><span>红框保持原始位置和大小</span></div>
             <div class="crop-canvas" :style="cropCanvasStyle">
-              <img :src="selected.imageUrl" :style="cropImageStyle" alt="问题区域放大" draggable="false">
+              <img :src="selectedImageUrl" :style="cropImageStyle" alt="问题区域放大" draggable="false">
               <div class="problem-box" :style="cropCandidateStyle"><span>当前问题</span></div>
             </div>
           </section>
         </div>
 
         <div class="decision-panel">
-          <div class="decision-copy"><strong>你看到的实际情况是？</strong><span>点击后立即保存并进入下一项，也可按数字键。</span></div>
+          <div class="decision-copy"><strong>你看到的实际情况是？</strong><span>先选择，再确认保存；数字键只选择，不会误提交。</span></div>
           <div class="decision-grid">
-            <button class="safe" type="button" :disabled="saving" @click="choose('NO_DEFECT', '背景、重复或错误盒框，不是客户缺标风险')"><kbd>1</kbd><strong>不是有效风险</strong><small>背景盒、碎片、重复框或错框</small></button>
-            <button type="button" :disabled="saving" @click="choose('UNJUDGEABLE', '当前画面不足以形成可靠人工真值')"><kbd>2</kbd><strong>仍然看不清</strong><small>保留为困难样本，不当真值</small></button>
-            <button class="danger" type="button" :disabled="saving" @click="choose('MISSING_WHITE_LABEL', '平台复核确认缺少白标')"><kbd>3</kbd><strong>确实缺白标</strong><small>平台发现真实缺标</small></button>
-            <button class="danger" type="button" :disabled="saving" @click="choose('MISSING_COLOR_LABEL', '平台复核确认缺少彩标')"><kbd>4</kbd><strong>确实缺彩标</strong><small>平台发现真实缺标</small></button>
+            <button class="safe" :class="{ selected: decision === 'NO_DEFECT' }" type="button" :disabled="saving" @click="choose('NO_DEFECT', '背景、重复或错误盒框，不是客户缺标风险')"><kbd>1</kbd><strong>误报 / 无问题</strong><small>背景、碎片、重复框或错框</small></button>
+            <button :class="{ selected: decision === 'UNJUDGEABLE' }" type="button" :disabled="saving" @click="choose('UNJUDGEABLE', '当前画面不足以形成可靠人工真值')"><kbd>2</kbd><strong>仍然不确定</strong><small>保留为困难样本，不当缺标真值</small></button>
+            <button class="danger" :class="{ selected: decision === 'MISSING_WHITE_LABEL' }" type="button" :disabled="saving" @click="choose('MISSING_WHITE_LABEL', '平台复核确认缺少白标')"><kbd>3</kbd><strong>确认缺白标</strong><small>平台发现真实缺标</small></button>
+            <button class="danger" :class="{ selected: decision === 'MISSING_COLOR_LABEL' }" type="button" :disabled="saving" @click="choose('MISSING_COLOR_LABEL', '平台复核确认缺少彩标')"><kbd>4</kbd><strong>确认缺彩标</strong><small>平台发现真实缺标</small></button>
           </div>
           <label class="notes"><span>补充说明（可选）</span><textarea v-model="notes" rows="2" maxlength="500" @input="dirty = true" /></label>
+          <button class="save-decision" type="button" :disabled="!dirty || saving" @click="saveCurrent(true)">{{ saving ? '保存中…' : '确认保存并进入下一项' }}</button>
         </div>
       </main>
     </div>
     <el-empty v-else :description="reviewed ? '还没有已完成的诊断' : '当前没有待判断项，工厂无需为这些技术问题做审核'" />
+    <el-pagination v-if="total > pageSize" class="queue-pagination" layout="prev, pager, next, total" :current-page="page" :page-size="pageSize" :total="total" @current-change="changePage" />
   </section>
 </template>
 
@@ -280,6 +315,9 @@ h1 { margin: 0; font-size: 28px; line-height: 1.25; }.subtitle { margin: 6px 0 0
 .visual-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; margin-top: 16px; }.visual-title { display: flex; justify-content: space-between; margin-bottom: 8px; }.visual-title span { color: #7a8599; font-size: 11px; }.full-canvas,.crop-canvas { position: relative; width: 100%; max-height: 500px; overflow: hidden; border-radius: 10px; background: #111827; }.full-canvas img { display: block; width: 100%; height: 100%; object-fit: contain; }.crop-canvas img { position: absolute; max-width: none; object-fit: fill; }
 .problem-box { position: absolute; box-sizing: border-box; min-width: 8px; min-height: 8px; border: 4px solid #e31b0c; border-radius: 2px; background: rgba(227,27,12,.12); box-shadow: 0 0 0 1px rgba(255,255,255,.9), 0 0 12px rgba(227,27,12,.45); }.problem-box span { position: absolute; top: -27px; left: -4px; padding: 3px 7px; color: #fff; background: #d92d20; font-size: 11px; font-weight: 800; white-space: nowrap; }
 .decision-panel { margin-top: 16px; padding: 16px; border: 1px solid #edf2f7; border-radius: 10px; background: #fbfcfe; }.decision-copy { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }.decision-copy span { color: #7a8599; font-size: 12px; }.decision-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }.decision-grid button { position: relative; min-height: 84px; padding: 12px; border: 1px solid #dbe3ec; border-radius: 10px; text-align: left; background: #fff; cursor: pointer; transition: border-color .2s, transform .2s, box-shadow .2s; }.decision-grid button:hover { border-color: #1b65a8; box-shadow: 0 4px 14px rgba(27,101,168,.12); transform: translateY(-1px); }.decision-grid button.safe { border-color: #b9dfcf; }.decision-grid button.danger { border-color: #efc8c4; }.decision-grid strong,.decision-grid small { display: block; }.decision-grid small { margin-top: 6px; color: #7a8599; font-size: 11px; }.decision-grid kbd { position: absolute; top: 8px; right: 8px; min-width: 22px; padding: 2px 5px; border: 1px solid #dbe3ec; border-radius: 5px; color: #657289; background: #f6f8fb; text-align: center; font: 11px inherit; }.notes { display: grid; grid-template-columns: 140px 1fr; gap: 12px; align-items: center; margin-top: 12px; color: #657289; font-size: 12px; }.notes textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; resize: vertical; border: 1px solid #dbe3ec; border-radius: 8px; font: inherit; }
+.decision-grid button.selected { border-color: #1b65a8; box-shadow: 0 0 0 3px rgba(27,101,168,.14); }
+.save-decision { display: block; min-width: 240px; min-height: 42px; margin: 14px 0 0 auto; border: 0; border-radius: 9px; color: #fff; background: #1b65a8; font-weight: 700; cursor: pointer; }.save-decision:disabled { cursor: not-allowed; opacity: .5; }
+.queue-pagination { justify-content: center; margin-top: 16px; }
 @media (max-width: 1100px) { .workspace { grid-template-columns: 220px minmax(0,1fr); }.visual-grid { grid-template-columns: 1fr; }.decision-grid { grid-template-columns: repeat(2,1fr); } }
 @media (max-width: 760px) { .page-header { align-items: stretch; flex-direction: column; }.workspace { grid-template-columns: 1fr; }.queue-card { max-height: 190px; }.decision-grid { grid-template-columns: 1fr; }.decision-copy,.notes { align-items: stretch; grid-template-columns: 1fr; flex-direction: column; } }
 </style>

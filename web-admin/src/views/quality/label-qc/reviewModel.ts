@@ -55,9 +55,11 @@ const candidateDefault = (photo: LabelQcPhoto): LabelQcReviewDraft[] => (
 export function buildReviewDraft(detail: LabelQcTaskDetail): LabelQcPhotoDraft[] {
   return detail.photos.map((photo) => ({
     photoId: photo.id,
-    reviewed: photo.status === 'REVIEWED',
+    // A mixed task may contain clean photos next to one suspect photo. Clean,
+    // model-auto-passed photos are context, not factory annotation work.
+    reviewed: photo.status === 'REVIEWED' || photo.status === 'AUTO_PASSED',
     items: candidateDefault(photo),
-    objectReview: photo.objectReview || photo.screeningDetail
+    objectReview: photo.status !== 'AUTO_PASSED' && (photo.objectReview || photo.screeningDetail)
       ? buildObjectReviewDraft(photo)
       : undefined,
   }));

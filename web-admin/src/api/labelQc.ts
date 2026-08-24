@@ -1,4 +1,5 @@
-import { adminGet, adminPut, get, post, put } from './request';
+import request, { adminGet, adminPut, get, post, put } from './request';
+import type { AxiosResponse } from 'axios';
 import type { ApiResponse } from '@/types/api';
 
 export type LabelQcTaskStatus =
@@ -359,9 +360,11 @@ export function listLabelQcTrayCrops(
   factoryId: string,
   params: { status?: LabelQcTrayCropStatus; page?: number; size?: number } = {},
 ): Promise<ApiResponse<LabelQcPage<LabelQcTrayCrop>>> {
-  return get<LabelQcPage<LabelQcTrayCrop>>(`/${factoryId}/label-qc/tray-crops`, {
+  return adminGet<LabelQcPage<LabelQcTrayCrop>>(
+    `/api/platform/label-qc/${encodeURIComponent(factoryId)}/tray-crops`, {
     params: { status: params.status, page: params.page ?? 1, size: params.size ?? 20 },
-  });
+    },
+  );
 }
 
 export function listLabelQcPlatformCandidates(
@@ -397,8 +400,24 @@ export function reviewLabelQcTrayCrop(
   expectedVersion: number,
   review: LabelQcPlatformTrayReview,
 ): Promise<ApiResponse<LabelQcTrayCrop>> {
-  return put<LabelQcTrayCrop>(`/${factoryId}/label-qc/tray-crops/${cropId}/review`, {
-    expectedVersion,
-    review,
-  });
+  return adminPut<LabelQcTrayCrop>(
+    `/api/platform/label-qc/${encodeURIComponent(factoryId)}/tray-crops/${encodeURIComponent(cropId)}/review`,
+    { expectedVersion, review },
+  );
+}
+
+export async function getLabelQcPhotoImageBlob(
+  factoryId: string,
+  photoId: string,
+  platform = false,
+): Promise<Blob> {
+  const path = platform
+    ? `/api/platform/label-qc/${encodeURIComponent(factoryId)}/photos/${encodeURIComponent(photoId)}/image`
+    : `/${encodeURIComponent(factoryId)}/label-qc/photos/${encodeURIComponent(photoId)}/image`;
+  const response = await request.get(path, {
+    responseType: 'blob',
+    _keepResponse: true,
+    ...(platform ? { baseURL: '' } : {}),
+  }) as unknown as AxiosResponse<Blob>;
+  return response.data;
 }

@@ -790,7 +790,7 @@ onMounted(load);
         <div class="drawer-heading">
           <div>
             <strong>逐张人工审核</strong>
-            <span>每个 AI 疑点必须确认或拒绝，每张照片必须给出整图结论</span>
+            <span>只处理模型筛出的缺标、重复/错配和不确定疑点；高置信正常照片自动跳过</span>
           </div>
           <div class="drawer-statuses">
             <div v-if="reviewDirty" class="draft-status">● 未提交草稿</div>
@@ -802,6 +802,7 @@ onMounted(load);
       <div v-loading="detailLoading" class="drawer-body">
         <LabelQcReviewWorkbench
           v-if="detail"
+          :factory-id="factoryId"
           :detail="detail"
           :can-review="canReview"
           :submitting="submitting"
