@@ -98,6 +98,20 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     @Override
     @Transactional
     public Map<String, Object> interimSettle(String factoryId, String planId, Long userId) {
+        return interimSettle(factoryId, planId, userId, null);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> interimSettle(
+            String factoryId, String planId, Long userId, String note) {
+        String normalizedNote = note == null ? null : note.trim();
+        if (normalizedNote != null && normalizedNote.isEmpty()) {
+            normalizedNote = null;
+        }
+        if (normalizedNote != null && normalizedNote.length() > 500) {
+            throw new BusinessException(400, "小结备注不能超过500个字符");
+        }
         ProductionPlan plan = planRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
         if (plan.getSourceType() != PlanSourceType.SAFETY_STOCK) {
@@ -471,6 +485,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         summary.put("finishedGoodsOutQuantity", finishedGoodsOutQuantity);   // ①c FG 投料扣减量
         summary.put("finishedGoodsBatchNumbers", finishedBatchNumbers);
         summary.put("finishedQuantity", finishedQuantity);
+        summary.put("note", normalizedNote);
 
         // ── 撤销小结 (reversal) 明细: 逐笔库存动作, 供「撤销小结」精确逆转 (数量存字符串防 JSON 数值精度漂移) ──
         List<Map<String, Object>> sfiInDetail = new ArrayList<>();

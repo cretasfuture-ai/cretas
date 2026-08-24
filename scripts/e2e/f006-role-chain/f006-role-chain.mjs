@@ -13,12 +13,19 @@ const password = process.env.E2E_PASSWORD;
 const runKey = process.env.E2E_RUN_KEY;
 const phase = process.argv[2] || 'procurement-create-submit';
 if (!password || !runKey) throw new Error('E2E_PASSWORD and E2E_RUN_KEY are required');
-if (!/^E2E-RBAC-20260823-[A-Z0-9-]+$/.test(runKey)) throw new Error(`Unsafe run key: ${runKey}`);
+if (!/^(?:E2E-RBAC-20260823-[A-Z0-9-]+|E2E-F006-PROD-CLOSEOUT-\d{8}-\d{6})$/.test(runKey)) {
+  throw new Error(`Unsafe run key: ${runKey}`);
+}
 
 const evidenceDir = path.resolve(process.env.E2E_EVIDENCE_DIR || path.join('.playwright-mcp', 'f006-role-chain', runKey));
 const statePath = path.join(evidenceDir, 'state.json');
-const reportPath = path.join(evidenceDir, `${phase}.json`);
+const reportSuffix = process.env.E2E_REPORT_SUFFIX ? `-${process.env.E2E_REPORT_SUFFIX}` : '';
+const reportPath = path.join(evidenceDir, `${phase}${reportSuffix}.json`);
 fs.mkdirSync(evidenceDir, { recursive: true });
+const videoSourceDir = path.join(evidenceDir, 'video-source');
+fs.mkdirSync(videoSourceDir, { recursive: true });
+const assetPrefix = process.env.E2E_ASSET_PREFIX || '999';
+let freshLoginProof = null;
 
 function loadState() {
   if (!fs.existsSync(statePath)) return { runKey, factoryId: 'F006', entities: {}, mutations: [] };
@@ -29,6 +36,10 @@ function loadState() {
 
 function persistState(state) {
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+function persistRunningReport(report) {
+  fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
 function compactBusinessData(body) {
@@ -65,6 +76,28 @@ function compactPayableData(body) {
 }
 
 async function loginRole(page, username, expectedRole) {
+  if (freshLoginProof?.username === username
+      && freshLoginProof?.factoryId === 'F006'
+      && freshLoginProof?.role === expectedRole) {
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    const stored = await page.evaluate(() => {
+      try {
+        const value = JSON.parse(localStorage.getItem('cretas_user') || '{}');
+        const factoryUser = value.factoryUser || {};
+        return {
+          username: value.username || factoryUser.username || null,
+          factoryId: value.factoryId || factoryUser.factoryId || null,
+          role: String(value.role || factoryUser.role || '').toLowerCase(),
+        };
+      } catch {
+        return {};
+      }
+    });
+    if (stored.username !== username || stored.factoryId !== 'F006' || stored.role !== expectedRole) {
+      throw new Error(`Recorded-context auth mismatch: ${JSON.stringify(stored)}`);
+    }
+    return { ...freshLoginProof, credentialsCapturedInVideo: false, storageStateReusedAfterFreshUiLogin: true };
+  }
   await page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded' });
   return performUiLogin(page, {
     username,
@@ -76,6 +109,61 @@ async function loginRole(page, username, expectedRole) {
   });
 }
 
+const PHASE_ROLES = {
+  'procurement-create-submit': ['f006_procurement_mgr', 'procurement_manager', '采购经理'],
+  'warehouse-receive': ['f006_warehouse_mgr', 'warehouse_manager', '仓储经理'],
+  'finance-settle-payable': ['f006_finance_mgr', 'finance_manager', '财务经理'],
+  'sales-create-submit': ['f006_sales_mgr', 'sales_manager', '销售经理'],
+  'sales-cancel-unproducible': ['f006_sales_mgr', 'sales_manager', '销售经理'],
+  'finance-approve-sales': ['f006_finance_mgr', 'finance_manager', '财务经理'],
+  'production-create-plan': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-start-inspect': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-first': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-first-main': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-inspect-second': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-report-second': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'production-interim-summary-first': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'quality-inspect-batch': ['f006_quality_insp', 'quality_inspector', '质检员'],
+  'production-settle': ['f006_production_mgr', 'production_manager', '生产经理'],
+  'warehouse-confirm-production-receipt': ['f006_warehouse_mgr', 'warehouse_manager', '仓储经理'],
+  'sales-create-delivery-allocate': ['f006_sales_mgr', 'sales_manager', '销售经理'],
+  'finance-invoice-and-collect': ['f006_finance_mgr', 'finance_manager', '财务经理'],
+  'finance-verify-payment': ['f006_finance_mgr', 'finance_manager', '财务经理'],
+  'finance-replace-conflicting-payment': ['f006_finance_mgr', 'finance_manager', '财务经理'],
+  'production-discover-workflows': ['f006_production_mgr', 'production_manager', '生产经理'],
+};
+
+async function logoutRecordedRole(page, roleLabel) {
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-${phase}-before-role-logout.png`),
+    fullPage: false,
+  }).catch(() => {});
+  const drawer = page.locator('.el-drawer:visible');
+  if (await drawer.count()) {
+    await drawer.locator('.el-drawer__close-btn').click().catch(() => {});
+    const closeConfirm = page.locator('.el-message-box:visible');
+    if (await closeConfirm.count()) {
+      const confirmButton = closeConfirm.getByRole('button', { name: /确认关闭|确定/ }).last();
+      if (await confirmButton.count()) await confirmButton.click();
+    }
+    await drawer.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
+  }
+  const roleButton = page.getByRole('button', { name: new RegExp(roleLabel) }).last();
+  if (await roleButton.count()) {
+    await roleButton.click();
+    const logout = page.getByText('退出登录', { exact: true }).last();
+    await logout.waitFor({ state: 'visible', timeout: 5_000 });
+    await logout.click();
+    const confirm = page.locator('.el-message-box:visible').getByRole('button', { name: '确定', exact: true });
+    if (await confirm.count()) await confirm.click();
+    await page.waitForURL((url) => url.pathname.includes('/login'), { timeout: 10_000 });
+    await page.screenshot({
+      path: path.join(videoSourceDir, `${assetPrefix}-${phase}-logged-out.png`),
+      fullPage: false,
+    });
+  }
+}
+
 async function authenticatedGet(page, pathname) {
   return page.evaluate(async ({ url }) => {
     const token = localStorage.getItem('cretas_access_token');
@@ -84,6 +172,28 @@ async function authenticatedGet(page, pathname) {
     const body = await response.json().catch(() => null);
     return { status: response.status, body };
   }, { url: `${baseUrl}${pathname}` });
+}
+
+async function summaryRawInventoryReadback(page) {
+  const response = await authenticatedGet(page, '/api/mobile/F006/material-batches?page=1&size=200');
+  const data = response.body?.data;
+  const rows = Array.isArray(data) ? data : (data?.content || data?.records || data?.items || []);
+  return {
+    statusCode: response.status,
+    rows: rows
+      .filter((row) => /^SOP-20260817-01-黄油鸡-原料[A-D]$/.test(String(row.materialName || '')))
+      .map((row) => ({
+        id: row.id,
+        batchNumber: row.batchNumber,
+        materialTypeId: row.materialTypeId,
+        materialName: row.materialName,
+        currentQuantity: Number(row.currentQuantity),
+        remainingQuantity: Number(row.remainingQuantity),
+        unit: row.unit,
+        status: row.status,
+      }))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id))),
+  };
 }
 
 async function waitForAutomaticInvoice(page, salesOrderId, timeoutMs = 35_000) {
@@ -714,6 +824,15 @@ async function productionStartInspect(page, state, report) {
   }
   report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
   if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before production batch mutation');
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  const search = page.getByPlaceholder('搜索计划编号/产品名称');
+  await search.fill(productionPlan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await page.getByText(productionPlan.planNumber, { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-production-start-before.png`),
+    fullPage: false,
+  });
   report.intendedMutations.push({
     step: '生产主管从计划列表打开逐道录入并物化 Workflow 批次',
     method: 'POST',
@@ -721,6 +840,7 @@ async function productionStartInspect(page, state, report) {
     target: { productionPlanId: productionPlan.id, planNumber: productionPlan.planNumber },
     payloadBoundary: { factoryId: 'F006', productTypeId: productionPlan.productTypeId },
   });
+  persistRunningReport(report);
 
   const createBatchResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
     && new URL(response.url()).pathname === `/api/mobile/F006/production-plans/${productionPlan.id}/create-batch`,
@@ -752,6 +872,10 @@ async function productionStartInspect(page, state, report) {
 
   const drawer = page.locator('.el-drawer:visible').filter({ hasText: '逐工序录入' });
   await drawer.waitFor({ state: 'visible', timeout: 35_000 });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-production-start-submit-feedback.png`),
+    fullPage: false,
+  });
   const addRowButton = drawer.getByRole('button', { name: '+ 新增行', exact: true }).first();
   await addRowButton.waitFor({ state: 'visible', timeout: 35_000 });
   await addRowButton.click();
@@ -792,6 +916,20 @@ async function productionStartInspect(page, state, report) {
   state.mutations.push({ phase, action: 'create-production-batch-from-plan-ui', entityId: batchData.id, at: new Date().toISOString() });
   persistState(state);
   await page.screenshot({ path: path.join(evidenceDir, '07-production-process-sheet-opened.png'), fullPage: true });
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  await page.getByPlaceholder('搜索计划编号/产品名称').fill(productionPlan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await page.getByText(productionPlan.planNumber, { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-production-start-persisted.png`),
+    fullPage: false,
+  });
+  await page.getByRole('button', { name: productionPlan.planNumber, exact: true }).click();
+  await page.getByRole('heading', { name: '计划详情', exact: true }).waitFor({ state: 'visible', timeout: 10_000 });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-production-start-detail-readback.png`),
+    fullPage: false,
+  });
 }
 
 async function setVueInputValue(locator, value) {
@@ -846,6 +984,9 @@ async function openTrackedProcessSheet(page, productionPlan) {
 
 async function productionReportFirstProcess(page, state, report) {
   const mainQuantityRun = phase === 'production-report-first-main';
+  const resumeSavedDraft = mainQuantityRun
+    && Boolean(state.entities.firstMainProcessDraft?.clientRowId)
+    && !state.entities.firstMainProcessReport;
   const entityKey = mainQuantityRun ? 'firstMainProcessReport' : 'firstProcessReport';
   const materialQuantity = mainQuantityRun ? 0.2 : 0.01;
   const outputQuantity = mainQuantityRun ? 0.8 : 0.04;
@@ -900,31 +1041,115 @@ async function productionReportFirstProcess(page, state, report) {
     target: { productionPlanId: productionPlan.id, productionBatchId: productionBatch.id },
     payloadBoundary: { fourRawInputsKg: materialQuantity, outputKg: outputQuantity, workerCount: 1, time: '08:00-08:10' },
   });
+  if (mainQuantityRun && !resumeSavedDraft) {
+    report.intendedMutations.unshift({
+      step: '第一轮原料处理先保存草稿并证明不占用生产库存',
+      method: 'POST',
+      endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/row/draft`,
+      target: { productionPlanId: productionPlan.id, productionBatchId: productionBatch.id },
+      payloadBoundary: { fourRawInputsKg: materialQuantity, outputKg: outputQuantity, submissionStatus: 'DRAFT' },
+    });
+  }
+  persistRunningReport(report);
 
   const drawer = await openTrackedProcessSheet(page, productionPlan);
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process1-before-entry.png`),
+    fullPage: false,
+  });
   const firstTab = drawer.locator('[role="tab"]').first();
   if (await firstTab.getAttribute('aria-selected') !== 'true') await firstTab.click();
-  await drawer.getByRole('button', { name: '+ 新增行', exact: true }).first().click();
+  if (!resumeSavedDraft) {
+    await drawer.getByRole('button', { name: '+ 新增行', exact: true }).first().click();
+  } else {
+    report.reconciledSavedDraft = state.entities.firstMainProcessDraft;
+  }
 
   const materialRows = drawer.locator('[data-testid="material-input-total"]:visible');
+  await materialRows.first().waitFor({ state: 'visible', timeout: 35_000 }).catch(() => {});
   const materialCount = await materialRows.count();
   if (materialCount !== 4) throw new Error(`Expected four first-process raw material inputs, got ${materialCount}`);
   for (let index = 0; index < materialCount; index += 1) {
     const materialRow = materialRows.nth(index);
     const selector = materialRow.locator('[data-testid="port-selected"]');
-    if (await selector.count()) await selector.click();
+    if (await selector.count()) {
+      const checkbox = selector.locator('input[type="checkbox"]');
+      if (!(await checkbox.count()) || !(await checkbox.isChecked())) await selector.click();
+    }
     const quantityInput = materialRow.locator('input[role="spinbutton"]');
     await quantityInput.fill(String(materialQuantity));
   }
 
   const outputLine = drawer.locator('[data-testid="workflow-output-line"]:visible').first();
   const outputSelector = outputLine.locator('[data-testid="port-selected"]');
-  if (await outputSelector.count()) await outputSelector.click();
+  if (await outputSelector.count()) {
+    const checkbox = outputSelector.locator('input[type="checkbox"]');
+    if (!(await checkbox.count()) || !(await checkbox.isChecked())) await outputSelector.click();
+  }
   await outputLine.locator('input[aria-label$="产出数量"]').fill(String(outputQuantity));
   await setVueInputValue(outputLine.locator('input[aria-label$="开始时间"]'), '08:00');
   await setVueInputValue(outputLine.locator('input[aria-label$="结束时间"]'), '08:10');
   const workerCount = outputLine.locator('input[aria-label$="人数"]');
   if ((await workerCount.inputValue()) !== '1') await workerCount.fill('1');
+
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process1-form-filled.png`),
+    fullPage: false,
+  });
+
+  if (mainQuantityRun && !resumeSavedDraft) {
+    report.inventoryBeforeDraft = await summaryRawInventoryReadback(page);
+    const draftResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/row/draft`,
+    { timeout: 35_000 });
+    const draftButton = drawer.getByRole('button', { name: '保存草稿', exact: true }).first();
+    if (await draftButton.isDisabled()) {
+      throw new Error(`First process draft save remained disabled: ${await draftButton.getAttribute('title')}`);
+    }
+    await draftButton.click();
+    const draftResponse = await draftResponsePromise;
+    const draftResult = compactProcessSheetResult(await draftResponse.json().catch(() => null));
+    report.actualMutations.push({
+      method: 'POST',
+      url: draftResponse.url(),
+      statusCode: draftResponse.status(),
+      response: draftResult,
+    });
+    if (draftResponse.status() >= 400 || !draftResult.success || draftResult.submissionStatus !== 'DRAFT'
+        || draftResult.materialized !== false || !draftResult.clientRowId) {
+      throw new Error(`First process draft save failed: ${draftResponse.status()} ${draftResult.message} ${draftResult.submissionStatus}`);
+    }
+    await page.screenshot({
+      path: path.join(videoSourceDir, `${assetPrefix}-process1-draft-saved-feedback.png`),
+      fullPage: false,
+    });
+    report.inventoryAfterDraft = await summaryRawInventoryReadback(page);
+    report.draftInventoryUnchanged = JSON.stringify(report.inventoryBeforeDraft)
+      === JSON.stringify(report.inventoryAfterDraft);
+    if (!report.draftInventoryUnchanged) {
+      throw new Error('Draft save changed raw-material inventory');
+    }
+    const draftRows = await authenticatedGet(
+      page,
+      `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/rows?processOrder=1`,
+    );
+    report.draftRowsReadback = {
+      statusCode: draftRows.status,
+      rows: draftRows.body?.data,
+    };
+    state.entities.firstMainProcessDraft = draftResult;
+    state.mutations.push({
+      phase,
+      action: 'save-first-process-draft',
+      entityId: draftResult.clientRowId,
+      at: new Date().toISOString(),
+    });
+    persistState(state);
+    await page.screenshot({
+      path: path.join(videoSourceDir, `${assetPrefix}-process1-draft-persisted.png`),
+      fullPage: false,
+    });
+  }
 
   const submit = drawer.getByRole('button', { name: '正式报工', exact: true }).first();
   report.beforeSubmit = {
@@ -940,6 +1165,10 @@ async function productionReportFirstProcess(page, state, report) {
   { timeout: 35_000 });
   await submit.click();
   const confirmation = page.locator('.el-message-box:visible').filter({ hasText: '确认正式报工' });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process1-submit-confirmation.png`),
+    fullPage: false,
+  });
   await confirmation.getByRole('button', { name: '确认报工', exact: true }).click();
   const response = await responsePromise;
   const result = compactProcessSheetResult(await response.json().catch(() => null));
@@ -949,8 +1178,14 @@ async function productionReportFirstProcess(page, state, report) {
     throw new Error(`First process reporting failed: ${response.status()} ${result.message} ${result.submissionStatus}`);
   }
   state.entities[entityKey] = result;
+  if (mainQuantityRun) delete state.entities.firstMainProcessDraft;
   state.mutations.push({ phase, action: mainQuantityRun ? 'submit-first-process-main-report' : 'submit-first-process-report', entityId: result.clientRowId, at: new Date().toISOString() });
   persistState(state);
+  report.inventoryAfterFormalSubmit = await summaryRawInventoryReadback(page);
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process1-submit-success.png`),
+    fullPage: false,
+  });
   await page.screenshot({ path: path.join(evidenceDir, mainQuantityRun
     ? '08b-production-first-process-main-reported.png'
     : '08-production-first-process-reported.png'), fullPage: true });
@@ -1010,18 +1245,27 @@ async function productionReportSecondProcess(page, state, report) {
     target: { productionPlanId: productionPlan.id, upstreamBatchNumber: upstream.batchNumber },
     payloadBoundary: { upstreamInputKg: 0.8, finishedOutputBoxes: 1, workerCount: 1, time: '08:20-08:30' },
   });
+  persistRunningReport(report);
 
   const drawer = await openTrackedProcessSheet(page, productionPlan);
   await drawer.locator('[role="tab"]').nth(1).click();
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process2-before-entry.png`),
+    fullPage: false,
+  });
   const addRow = drawer.getByRole('button', { name: '+ 新增行', exact: true }).last();
   await addRow.waitFor({ state: 'visible', timeout: 20_000 });
   if (await addRow.isDisabled()) throw new Error(`Second process add row blocked: ${await addRow.getAttribute('title')}`);
   await addRow.click();
 
   const sourceInput = drawer.locator('input[aria-label$="原料处理批次"]:visible');
-  await sourceInput.waitFor({ state: 'visible', timeout: 20_000 });
-  const sourceSelect = sourceInput.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " el-select ")][1]');
-  await selectOption(page, sourceSelect, upstream.batchNumber);
+  if (await sourceInput.count()) {
+    const sourceSelect = sourceInput.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " el-select ")][1]');
+    await selectOption(page, sourceSelect, upstream.batchNumber);
+  } else {
+    await drawer.getByText(upstream.batchNumber, { exact: false }).first()
+      .waitFor({ state: 'visible', timeout: 20_000 });
+  }
   await drawer.locator('input[aria-label="本次投入量 (kg)"]:visible').fill('0.8');
 
   const outputLine = drawer.locator('[data-testid="workflow-output-line"]:visible').first();
@@ -1033,11 +1277,16 @@ async function productionReportSecondProcess(page, state, report) {
   const workerCount = outputLine.locator('input[aria-label$="人数"]');
   if ((await workerCount.inputValue()) !== '1') await workerCount.fill('1');
 
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process2-form-filled.png`),
+    fullPage: false,
+  });
+
   const submit = drawer.getByRole('button', { name: '正式报工', exact: true }).last();
   report.beforeSubmit = {
     disabled: await submit.isDisabled(),
     title: await submit.getAttribute('title'),
-    selectedSource: await sourceInput.inputValue(),
+    selectedSource: (await sourceInput.count()) ? await sourceInput.inputValue() : upstream.batchNumber,
     output: await outputLine.innerText(),
   };
   if (report.beforeSubmit.disabled) throw new Error(`Second process submit remained disabled: ${report.beforeSubmit.title}`);
@@ -1046,6 +1295,10 @@ async function productionReportSecondProcess(page, state, report) {
   { timeout: 35_000 });
   await submit.click();
   const confirmation = page.locator('.el-message-box:visible').filter({ hasText: '确认正式报工' });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process2-submit-confirmation.png`),
+    fullPage: false,
+  });
   await confirmation.getByRole('button', { name: '确认报工', exact: true }).click();
   const response = await responsePromise;
   const result = compactProcessSheetResult(await response.json().catch(() => null));
@@ -1057,7 +1310,116 @@ async function productionReportSecondProcess(page, state, report) {
   state.entities.secondProcessReport = result;
   state.mutations.push({ phase, action: 'submit-second-process-report', entityId: result.clientRowId, at: new Date().toISOString() });
   persistState(state);
+  report.processRowsReadback = await authenticatedGet(
+    page,
+    `/api/mobile/F006/production-plans/${productionPlan.id}/process-sheet/rows?process=${encodeURIComponent('SOP-20260817-01-黄油鸡-定量包装')}&processOrder=2`,
+  );
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-process2-submit-success.png`),
+    fullPage: false,
+  });
   await page.screenshot({ path: path.join(evidenceDir, '09-production-second-process-reported.png'), fullPage: true });
+}
+
+async function productionInterimSummaryFirst(page, state, report) {
+  const productionPlan = state.entities.productionPlan;
+  if (!productionPlan?.id || productionPlan.factoryId !== 'F006' || productionPlan.status !== 'IN_PROGRESS') {
+    throw new Error('Tracked in-progress F006 SAFETY_STOCK production plan is required');
+  }
+  if (!state.entities.secondProcessReport?.clientRowId) {
+    throw new Error('Tracked first-round terminal process report is required before interim summary');
+  }
+  if (state.entities.firstInterimSummary) {
+    throw new Error(`First interim summary already tracked: ${state.entities.firstInterimSummary.sessionSeq}`);
+  }
+
+  report.login = await loginRole(page, 'f006_production_mgr', 'production_manager');
+  if (report.login.factoryId !== 'F006') throw new Error('F006 proof failed before first interim summary mutation');
+  const note = `${runKey}-summary-1`;
+  report.intendedMutations.push({
+    step: '生产经理执行第一次生产小结',
+    method: 'POST',
+    endpoint: `/api/mobile/F006/production-plans/${productionPlan.id}/interim-settle`,
+    target: { productionPlanId: productionPlan.id, planNumber: productionPlan.planNumber },
+    payloadBoundary: { note, expectedSessionSeq: 1, expectedFinishedQuantity: 1, unit: '盒' },
+  });
+  persistRunningReport(report);
+
+  await page.goto(`${baseUrl}/production/plans`, { waitUntil: 'domcontentloaded' });
+  const search = page.locator('input[placeholder="搜索计划编号/产品名称"]');
+  await search.fill(productionPlan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  let row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-summary1-before.png`),
+    fullPage: false,
+  });
+
+  await row.getByRole('button', { name: '生产小结', exact: true }).click();
+  const prompt = page.locator('.el-message-box:visible').filter({ hasText: '确认小结' });
+  await prompt.waitFor({ state: 'visible', timeout: 15_000 });
+  await prompt.locator('input').fill(note);
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-summary1-form-filled.png`),
+    fullPage: false,
+  });
+
+  const responsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === `/api/mobile/F006/production-plans/${productionPlan.id}/interim-settle`,
+  { timeout: 40_000 });
+  await prompt.getByRole('button', { name: '确认小结', exact: true }).click();
+  const response = await responsePromise;
+  const body = await response.json().catch(() => null);
+  const summary = body?.data || {};
+  report.actualMutations.push({
+    method: 'POST',
+    url: response.url(),
+    statusCode: response.status(),
+    response: { success: body?.success ?? null, message: body?.message || null, ...summary },
+  });
+  if (response.status() >= 400 || !body?.success || summary.sessionSeq !== 1
+      || String(summary.finishedQuantity) !== '1' || summary.note !== note) {
+    throw new Error(`First interim summary mismatch: ${response.status()} ${body?.message} seq=${summary.sessionSeq} qty=${summary.finishedQuantity} note=${summary.note}`);
+  }
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-summary1-submit-success.png`),
+    fullPage: false,
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await search.fill(productionPlan.planNumber);
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  row = page.locator('.el-table__row:visible').filter({ hasText: productionPlan.planNumber }).first();
+  await row.waitFor({ state: 'visible', timeout: 25_000 });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-summary1-persisted-after-reload.png`),
+    fullPage: false,
+  });
+
+  const planReadback = await authenticatedGet(page, `/api/mobile/F006/production-plans/${productionPlan.id}`);
+  const summaryReadback = await authenticatedGet(
+    page,
+    `/api/mobile/F006/production-plans/${productionPlan.id}/production-summary`,
+  );
+  report.planReadback = { statusCode: planReadback.status, body: planReadback.body };
+  report.productionSummaryReadback = { statusCode: summaryReadback.status, body: summaryReadback.body };
+  if (planReadback.status >= 400 || summaryReadback.status >= 400) {
+    throw new Error(`First interim summary readback failed: plan=${planReadback.status} summary=${summaryReadback.status}`);
+  }
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-summary1-api-readback.png`),
+    fullPage: false,
+  });
+
+  state.entities.firstInterimSummary = { ...summary, note };
+  state.mutations.push({
+    phase,
+    action: 'first-interim-summary',
+    entityId: `${productionPlan.id}:1`,
+    at: new Date().toISOString(),
+  });
+  persistState(state);
 }
 
 async function qualityInspectProductionBatch(page, state, report) {
@@ -1938,9 +2300,36 @@ async function main() {
     observedDataResponses: [],
     result: 'RUNNING',
   };
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const roleSpec = PHASE_ROLES[phase];
+  if (!roleSpec) throw new Error(`No fresh-login role mapping for phase: ${phase}`);
+  const [roleUsername, roleName, roleLabel] = roleSpec;
+  const browser = await chromium.launch({ headless: false });
+  const authContext = await browser.newContext({ viewport: { width: 1920, height: 1080 }, locale: 'zh-CN' });
+  const authPage = await authContext.newPage();
+  await authPage.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded' });
+  freshLoginProof = await performUiLogin(authPage, {
+    username: roleUsername,
+    password,
+    expectedUsername: roleUsername,
+    expectedFactoryId: 'F006',
+    expectedRole: roleName,
+    allowMobileOnlyLanding: roleName === 'quality_inspector',
+  });
+  const storageState = await authContext.storageState();
+  await authContext.close();
+  const context = await browser.newContext({
+    storageState,
+    viewport: { width: 1920, height: 1080 },
+    locale: 'zh-CN',
+    recordVideo: { dir: videoSourceDir, size: { width: 1920, height: 1080 } },
+  });
   const page = await context.newPage();
+  const recordedVideo = page.video();
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await page.screenshot({
+    path: path.join(videoSourceDir, `${assetPrefix}-role-login-${roleName}.png`),
+    fullPage: false,
+  });
   page.on('console', (message) => {
     if (message.type() === 'error') report.consoleErrors.push({ text: message.text(), url: message.location().url || null });
   });
@@ -1963,6 +2352,7 @@ async function main() {
     else if (phase === 'production-report-first-main') await productionReportFirstProcess(page, state, report);
     else if (phase === 'production-inspect-second') await productionInspectSecondProcess(page, state, report);
     else if (phase === 'production-report-second') await productionReportSecondProcess(page, state, report);
+    else if (phase === 'production-interim-summary-first') await productionInterimSummaryFirst(page, state, report);
     else if (phase === 'quality-inspect-batch') await qualityInspectProductionBatch(page, state, report);
     else if (phase === 'production-settle') await productionSettlePlan(page, state, report);
     else if (phase === 'warehouse-confirm-production-receipt') await warehouseConfirmProductionReceipt(page, state, report);
@@ -1980,8 +2370,24 @@ async function main() {
     process.exitCode = 1;
   } finally {
     report.finishedAt = new Date().toISOString();
+    report.freshLoginProof = freshLoginProof;
+    await logoutRecordedRole(page, roleLabel).catch((error) => {
+      report.logoutError = error instanceof Error ? error.message : String(error);
+    });
     fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     await context.close();
+    const temporaryVideoPath = await recordedVideo?.path().catch(() => null);
+    if (temporaryVideoPath && fs.existsSync(temporaryVideoPath)) {
+      const finalVideoPath = path.join(videoSourceDir, `${assetPrefix}-${phase}.webm`);
+      fs.renameSync(temporaryVideoPath, finalVideoPath);
+      report.video = {
+        file: path.basename(finalVideoPath),
+        width: 1920,
+        height: 1080,
+        credentialsCaptured: false,
+      };
+      fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    }
     await browser.close();
   }
   console.log(JSON.stringify({ result: report.result, reportPath, statePath, entities: state.entities }, null, 2));

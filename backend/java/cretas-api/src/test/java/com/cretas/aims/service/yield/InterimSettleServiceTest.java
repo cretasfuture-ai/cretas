@@ -177,6 +177,18 @@ class InterimSettleServiceTest {
     }
 
     @Test
+    @DisplayName("小结备注 trim 后超过 500 字符 → 400 且无写入")
+    void rejectsOverlongInterimSettleNote() {
+        assertThatThrownBy(() -> service.interimSettle(
+                FACTORY, PLAN_ID, 1L, "x".repeat(501)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("小结备注不能超过500个字符");
+
+        verify(planRepository, never()).findByIdAndFactoryId(any(), any());
+        verify(settlementRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     @DisplayName("🔒🔒 Gap2: 已终结 (停产/完工→COMPLETED) 的存货计划再小结 → 409 拒绝 (防停产后残料从不扣减=幻库存)")
     void rejectsInterimSettleOnTerminalPlan() {
         ProductionPlan stopped = new ProductionPlan();
@@ -239,9 +251,13 @@ class InterimSettleServiceTest {
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate("RB1", FACTORY)).thenReturn(Optional.of(rb1));
 
         // ───────────────── 小结1 ─────────────────
-        Map<String, Object> s1 = service.interimSettle(FACTORY, PLAN_ID, 7L);
+        Map<String, Object> s1 = service.interimSettle(
+                FACTORY, PLAN_ID, 7L, " E2E summary 1 ");
 
         assertThat(s1.get("sessionSeq")).isEqualTo(1);
+        assertThat(s1.get("note")).isEqualTo("E2E summary 1");
+        assertThat(savedSettlements.get(0).getSummary().get("note"))
+                .isEqualTo("E2E summary 1");
         assertThat(s1.get("deductedConsumptionCount")).isEqualTo(1);
         // 原料扣减: RB1.usedQuantity 0 → 100
         assertThat(rb1.getUsedQuantity()).isEqualByComparingTo("100");

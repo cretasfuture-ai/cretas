@@ -32,5 +32,14 @@ public interface InterimSettleService {
      * @return 本次小结摘要 (sessionSeq / 扣减条数+量 / 半成品入出库 / 成品入库)
      * @throws com.cretas.aims.exception.BusinessException 404 计划不存在 / 400 非 BY_STOCK 计划
      */
-    Map<String, Object> interimSettle(String factoryId, String planId, Long userId);
+    default Map<String, Object> interimSettle(String factoryId, String planId, Long userId) {
+        return interimSettle(factoryId, planId, userId, null);
+    }
+
+    /**
+     * 对 BY_STOCK 计划执行一次带审计备注的小结。
+     *
+     * @param note 小结备注，trim 后最多 500 字符；空白按未填写处理
+     */
+    Map<String, Object> interimSettle(String factoryId, String planId, Long userId, String note);
 }
