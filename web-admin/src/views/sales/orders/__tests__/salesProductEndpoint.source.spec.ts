@@ -41,10 +41,12 @@ describe('sales order product dropdown endpoint', () => {
     expect(source).not.toContain('...mats');
   });
 
-  it('new.vue 将商品和 suppliedMaterials 分别赋值', () => {
+  it('new.vue 将商品和 suppliedMaterials 分别赋值，并按需加载客供原料', () => {
     const source = readFileSync(resolve(__dirname, '..', 'new.vue'), 'utf8');
     expect(source).toContain('products.value = unwrap<Product>(productResponse?.data).filter(isSalesOrderProduct)');
-    expect(source).toContain('suppliedMaterialOptions.value = unwrap<TableRow>(materialResponse?.data)');
+    expect(source).toContain('async function loadSuppliedMaterialOptions(): Promise<void>');
+    expect(source).toContain('suppliedMaterialOptions.value = unwrap<TableRow>(response?.data)');
+    expect(source).toContain('void loadSuppliedMaterialOptions();');
   });
 
   it('两个页面用的是同一个端点(不允许一个 sellable 一个 active)', () => {
