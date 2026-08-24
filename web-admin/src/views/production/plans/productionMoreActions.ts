@@ -18,6 +18,7 @@
 export type ProductionMoreCommand =
   | 'edit'
   | 'copy'
+  | 'start-secondary'
   | 'app-reporting'
   | 'generate-transfer'
   | 'reverse-interim-settle'
@@ -31,6 +32,7 @@ export interface ProductionMoreActionRow {
   repinBlockedReason?: unknown;
   status?: unknown;
   sourceType?: unknown;
+  planNumber?: unknown;
   isLocked?: unknown;
   canStop?: unknown;
   canCancel?: unknown;
@@ -110,14 +112,19 @@ export function planEditMenuLabel(row: ProductionMoreActionRow): string {
 export function productionMoreCommands(row: ProductionMoreActionRow): ProductionMoreCommand[] {
   const status = normalizeStatus(row);
   const safetyStock = row.sourceType === 'SAFETY_STOCK';
+  const secondary = String(row.planNumber ?? '').startsWith('SEC-');
   // 后端 startProduction / createBatchFromPlan 严格只接受 PENDING (PLANNED → 409)
   const startable = status === 'PENDING';
   const stopBlockedReason = String(row.stopBlockedReason ?? '').trim();
 
   const commands: ProductionMoreCommand[] = ['edit', 'copy'];
-  if (startable) commands.push('app-reporting');
+  // SECONDARY must use /start: that transaction deducts the linked WIP and
+  // creates the batch atomically. create-batch alone deliberately does not
+  // deduct WIP and would leave the secondary plan semantically unstarted.
+  if (startable && secondary) commands.push('start-secondary');
+  else if (startable) commands.push('app-reporting');
   // 存货生产不预排数量, 备料走「逐道录入/小结」, 没有可算 BOM 的计划量 → 不给调拨单入口
-  if (startable && !safetyStock) commands.push('generate-transfer');
+  if (startable && !safetyStock && !secondary) commands.push('generate-transfer');
   if (safetyStock) commands.push('reverse-interim-settle');
   // canStop / canCancel 一律以后端 enrichWithTerminalActionCapabilities 下发的为准,
   // 前端不自己推断 (字段缺失时 fail closed)。

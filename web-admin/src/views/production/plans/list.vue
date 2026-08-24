@@ -429,6 +429,7 @@ type ProductionActionCommand =
   | 'process-entry'
   | 'edit'
   | 'copy'
+  | 'start-secondary'
   | 'app-reporting'
   | 'generate-transfer'
   | 'reverse-interim-settle'
@@ -533,6 +534,9 @@ function handleProductionActionCommand(command: ProductionActionCommand, row: Ta
       break;
     case 'copy':
       void handleCopyPlan(row);
+      break;
+    case 'start-secondary':
+      void handleStart(row);
       break;
     case 'app-reporting':
       void handleCreateBatch(row);
@@ -660,10 +664,10 @@ function handleWipSelect(wipId: number) {
   if (wip) {
     // 防呆 Rule 1: 预填最大可用量
     secondaryForm.value.quantity = Number(wip.availableQuantity) || 0;
-    // 防呆 Rule 2: 自动填充目标产品 (来源产品与目标产品通常相同)
-    if (wip.productTypeId) {
-      secondaryForm.value.productTypeId = wip.productTypeId;
-    }
+    // WIP 的 productTypeId 是当前半成品，不等于二次加工的目标成品。
+    // 保持目标为空，要求操作者明确选择有 Workflow 覆盖的产出，避免
+    // 把半成品本身误提交为目标并得到 WORKFLOW_SINGLE_OUTPUT_NOT_FOUND。
+    secondaryForm.value.productTypeId = '';
   }
 }
 
@@ -4304,6 +4308,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     :disabled="actionLoading"
                   >复制为新计划</el-dropdown-item>
                   <el-dropdown-item
+                    v-if="hasProductionMoreCommand(row, 'start-secondary')"
+                    command="start-secondary"
+                    divided
+                    :disabled="actionLoading"
+                  >开始二次加工</el-dropdown-item>
+                  <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'app-reporting')"
                     command="app-reporting"
                     divided
@@ -6111,6 +6121,9 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :value="item.id"
             />
           </el-select>
+          <div v-if="selectedWip && !secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, #909399);">
+            请选择该半成品后续加工要产出的成品；系统不会将源半成品自动当作目标产品。
+          </div>
           <!-- 防呆 Rule 2: 来源上下文 -->
           <div v-if="selectedWip && secondaryForm.productTypeId" style="margin-top: 4px; font-size: 12px; color: var(--text-color-secondary, #909399);">
             源 WIP 批次: {{ selectedWip.intermediateBatchNo }}
