@@ -16,6 +16,9 @@ import com.cretas.aims.dto.sales.AdjustPriceRequest;
 import com.cretas.aims.dto.sales.AdjustPriceResponse;
 import com.cretas.aims.dto.sales.SalesPriceAdjustmentRecordDTO;
 import com.cretas.aims.dto.sales.SalesOrderLinkCountsDTO;
+import com.cretas.aims.dto.sales.SalesProductInventorySummaryDTO;
+import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -34,6 +37,8 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
@@ -62,6 +67,7 @@ import java.time.LocalDateTime;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -90,6 +96,13 @@ public class SalesController {
     // 改价留痕 + 审批
     private final SalesPriceAdjustmentService priceAdjustmentService;
     private final ProductPackagingSpecService productPackagingSpecService;
+
+    /** Field injection keeps the controller's existing direct-construction tests stable. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private FinishedGoodsFeedService finishedGoodsFeedService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private WipInventoryService wipInventoryService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WorkflowEngineService workflowEngine;
@@ -294,6 +307,49 @@ public class SalesController {
                 org.springframework.data.domain.PageRequest.of(safePage - 1, safeSize));
         var result = PageResponse.of(p.getContent(), safePage, safeSize, p.getTotalElements());
         return ApiResponse.success("查询成功", result);
+    }
+
+    /**
+     * One lightweight read gives the create-order picker inventory totals for all sellable
+     * finished and semi-finished products. Missing products intentionally mean zero stock.
+     */
+    @GetMapping("/product-inventory-summary")
+    @Operation(summary = "销售选品可用库存汇总")
+    @RequirePermission({"sales:read_write", "sales:read"})
+    public ApiResponse<List<SalesProductInventorySummaryDTO>> productInventorySummary(
+            @PathVariable @NotBlank String factoryId) {
+        Map<String, SalesProductInventorySummaryDTO> totals = new LinkedHashMap<>();
+        for (FinishedGoodsStockItem row : finishedGoodsFeedService.listAvailableForFeed(factoryId, null)) {
+            mergeProductInventory(totals, row.getProductTypeId(), row.getAvailableQuantity(), row.getUnit());
+        }
+        for (WipRowDTO row : wipInventoryService.listWipByFactory(factoryId, null, null)) {
+            mergeProductInventory(totals, row.getProductTypeId(), row.getAvailableQuantity(), row.getUnit());
+        }
+        return ApiResponse.success("查询成功", new ArrayList<>(totals.values()));
+    }
+
+    private static void mergeProductInventory(
+            Map<String, SalesProductInventorySummaryDTO> totals,
+            String productTypeId,
+            BigDecimal availableQuantity,
+            String unit) {
+        if (productTypeId == null || productTypeId.isBlank() || availableQuantity == null
+                || availableQuantity.signum() <= 0) {
+            return;
+        }
+        totals.compute(productTypeId, (ignored, existing) -> {
+            if (existing == null) {
+                return SalesProductInventorySummaryDTO.builder()
+                        .productTypeId(productTypeId)
+                        .availableQuantity(availableQuantity)
+                        .unit(unit)
+                        .build();
+            }
+            if (java.util.Objects.equals(existing.getUnit(), unit)) {
+                existing.setAvailableQuantity(existing.getAvailableQuantity().add(availableQuantity));
+            }
+            return existing;
+        });
     }
 
     /**

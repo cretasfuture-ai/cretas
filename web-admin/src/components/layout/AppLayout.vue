@@ -113,13 +113,13 @@ function pinDraggedReference(event: DragEvent): void {
       <div class="workspace-content-shell" :class="{ 'has-reference': workspace.referenceTab && !isReferenceFrame }">
         <main class="app-content" :class="{ 'reference-frame-content': isReferenceFrame }">
           <router-view v-slot="{ Component }">
+            <!--
+              键要经过 workspace.cacheKeyFor: 标签被关掉(或被挤掉)之后, 同一个路径会拿到一个
+              新键, keep-alive 因此认不出旧实例 → 重新 mount → onMounted 重新取数。
+              没关过的标签键不变, 标签间来回切换照旧命中缓存(输入不丢)。
+              见 store/modules/workspace.ts 的 cacheKeyFor 注释(2026-08-19 客户实报两条)。
+            -->
             <keep-alive :max="10">
-              <!--
-                键要经过 workspace.cacheKeyFor: 标签被关掉(或被挤掉)之后, 同一个路径会拿到一个
-                新键, keep-alive 因此认不出旧实例 → 重新 mount → onMounted 重新取数。
-                没关过的标签键不变, 标签间来回切换照旧命中缓存(输入不丢)。
-                见 store/modules/workspace.ts 的 cacheKeyFor 注释(2026-08-19 客户实报两条)。
-              -->
               <component
                 :is="Component"
                 :key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"

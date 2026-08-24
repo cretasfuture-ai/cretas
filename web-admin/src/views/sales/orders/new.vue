@@ -7,7 +7,14 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { MATERIAL_SUPPLY_MODE_OPTIONS, SALES_PROCESSING_MODE_OPTIONS, type MaterialSupplyMode, type SalesProcessingMode } from './salesOrderSupplyContract';
-import { filterSalesProducts, isSalesOrderProduct, type SalesProductOption } from './salesOrderProductSearch';
+import { isSalesOrderProduct, type SalesProductOption } from './salesOrderProductSearch';
+import {
+  buildSalesProductPickerOptions,
+  productIdsFromCustomerOrders,
+  salesProductCategory,
+  type SalesProductCategoryFilter,
+  type SalesProductInventorySummary,
+} from './salesOrderProductPicker';
 import type { TableRow } from '@/types/api';
 import { canonicalUnitCodeKeepingCount, displayUnit, storageUnitCode } from '@/utils/unitPricing';
 import {
@@ -52,14 +59,23 @@ const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 const loading = ref(false);
-const loadingOptions = ref(false);
+const loadingCustomers = ref(false);
+const loadingProducts = ref(false);
+const loadingWarehouses = ref(false);
+const loadingMaterials = ref(false);
+const loadingInventory = ref(false);
+const loadingCustomerHistory = ref(false);
 const customers = ref<Customer[]>([]);
 const products = ref<Product[]>([]);
 const suppliedMaterialOptions = ref<TableRow[]>([]);
 const warehouses = ref<Warehouse[]>([]);
 const productQuery = ref('');
+const productCategoryFilter = ref<SalesProductCategoryFilter>('ALL');
+const inventorySummaries = ref<SalesProductInventorySummary[]>([]);
+const customerHistoryCounts = ref(new Map<string, number>());
 const showProductPicker = ref(false);
 const dirty = ref(false);
+let customerHistoryRequestId = 0;
 
 const form = ref({
   customerId: '',
@@ -85,7 +101,14 @@ const warehouseGroups = computed(() => [
   ...group,
   warehouses: sourceWarehouses.value.filter((warehouse) => group.types.includes(String(warehouse.type || '').toUpperCase())),
 })).filter((group) => group.warehouses.length > 0));
-const filteredProducts = computed(() => filterSalesProducts(products.value, productQuery.value));
+const filteredProducts = computed(() => buildSalesProductPickerOptions(
+  products.value,
+  inventorySummaries.value,
+  customerHistoryCounts.value,
+  productQuery.value,
+  productCategoryFilter.value,
+));
+const selectedProductIds = computed(() => new Set(form.value.items.map((line) => String(line.product.id))));
 const selectedCustomer = computed(() => customers.value.find((customer) => String(customer.id) === form.value.customerId));
 const requiresSuppliedMaterials = computed(() => form.value.processingMode === 'TOLL_PROCESSING' && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED');
 
@@ -95,24 +118,75 @@ function unwrap<T>(data: unknown): T[] {
   return Array.isArray(content) ? content as T[] : [];
 }
 
-async function loadOptions(): Promise<void> {
+async function loadCustomers(): Promise<void> {
   if (!factoryId.value) return;
-  loadingOptions.value = true;
+  loadingCustomers.value = true;
   try {
-    const [customerResponse, productResponse, materialResponse, warehouseResponse] = await Promise.all([
-      get(`/${factoryId.value}/customers`, { params: { page: 1, size: 100 }, _silent: true } as never),
-      get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never),
-      get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never),
-      get(`/${factoryId.value}/factory/warehouses`, { _silent: true } as never),
-    ]);
+    const customerResponse = await get(`/${factoryId.value}/customers`, { params: { page: 1, size: 100 }, _silent: true } as never);
     customers.value = unwrap<Customer>(customerResponse?.data);
+  } catch { ElMessage.error('客户选项加载失败，请稍后重试'); }
+  finally { loadingCustomers.value = false; }
+}
+
+async function loadProducts(): Promise<void> {
+  if (!factoryId.value) return;
+  loadingProducts.value = true;
+  try {
+    const productResponse = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     products.value = unwrap<Product>(productResponse?.data).filter(isSalesOrderProduct);
-    suppliedMaterialOptions.value = unwrap<TableRow>(materialResponse?.data);
+  } catch { ElMessage.error('销售产品加载失败，请稍后重试'); }
+  finally { loadingProducts.value = false; }
+}
+
+async function loadWarehouses(): Promise<void> {
+  if (!factoryId.value) return;
+  loadingWarehouses.value = true;
+  try {
+    const warehouseResponse = await get(`/${factoryId.value}/factory/warehouses`, { _silent: true } as never);
     warehouses.value = unwrap<Warehouse>(warehouseResponse?.data).filter((warehouse) => warehouse.isActive !== false);
+  } catch { ElMessage.error('仓库选项加载失败，请稍后重试'); }
+  finally { loadingWarehouses.value = false; }
+}
+
+async function loadInventorySummary(): Promise<void> {
+  if (!factoryId.value) return;
+  loadingInventory.value = true;
+  try {
+    const response = await get(`/${factoryId.value}/sales/product-inventory-summary`, { _silent: true } as never);
+    inventorySummaries.value = unwrap<SalesProductInventorySummary>(response?.data);
+  } catch { inventorySummaries.value = []; }
+  finally { loadingInventory.value = false; }
+}
+
+async function loadSuppliedMaterialOptions(): Promise<void> {
+  if (!factoryId.value || suppliedMaterialOptions.value.length || loadingMaterials.value) return;
+  loadingMaterials.value = true;
+  try {
+    const response = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
+    suppliedMaterialOptions.value = unwrap<TableRow>(response?.data);
+  } catch { ElMessage.error('客供原料选项加载失败，请稍后重试'); }
+  finally { loadingMaterials.value = false; }
+}
+
+async function onCustomerChange(): Promise<void> {
+  dirty.value = true;
+  const requestId = ++customerHistoryRequestId;
+  const customerId = form.value.customerId;
+  customerHistoryCounts.value = new Map();
+  if (!factoryId.value || !customerId) return;
+  loadingCustomerHistory.value = true;
+  try {
+    const response = await get(`/${factoryId.value}/sales/orders/by-customer`, {
+      params: { customerId, page: 1, size: 50 },
+      _silent: true,
+    } as never);
+    if (requestId === customerHistoryRequestId && customerId === form.value.customerId) {
+      customerHistoryCounts.value = productIdsFromCustomerOrders(unwrap(response?.data));
+    }
   } catch {
-    ElMessage.error('客户、产品或仓库选项加载失败，请刷新后重试');
+    if (requestId === customerHistoryRequestId) customerHistoryCounts.value = new Map();
   } finally {
-    loadingOptions.value = false;
+    if (requestId === customerHistoryRequestId) loadingCustomerHistory.value = false;
   }
 }
 
@@ -140,8 +214,6 @@ function addProduct(product: Product): void {
     sourceWarehouseCode: '',
   });
   dirty.value = true;
-  showProductPicker.value = false;
-  productQuery.value = '';
 }
 
 function recalculateSalesUnitPrice(line: SalesLine): void {
@@ -175,7 +247,10 @@ function onProcessingModeChange(): void {
 
 function onMaterialSupplyModeChange(): void {
   if (form.value.materialSupplyMode !== 'CUSTOMER_SUPPLIED') form.value.suppliedMaterials = [];
-  else if (!form.value.suppliedMaterials.length) addSuppliedMaterial();
+  else {
+    void loadSuppliedMaterialOptions();
+    if (!form.value.suppliedMaterials.length) addSuppliedMaterial();
+  }
 }
 
 function validate(): string | null {
@@ -194,8 +269,18 @@ function validate(): string | null {
 }
 
 function productCategory(product: Product): string {
-  const value = String(product.productCategory || product.category || '').toUpperCase();
-  return value.includes('SEMI') || value === 'WIP' ? '半成品' : '成品';
+  return salesProductCategory(product) === 'SEMI_FINISHED' ? '半成品' : '成品';
+}
+
+function formatPickerStock(product: Product & { availableQuantity?: number; inventoryUnit?: string }): string {
+  const quantity = Number(product.availableQuantity || 0);
+  const unit = product.inventoryUnit
+    || salesOrderUnitOptions(product)[0]
+    || product.unit
+    || product.measurementUnit
+    || product.defaultUnit
+    || '';
+  return `${Number(quantity.toFixed(3))} ${displayUnit(unit) || '单位'}`;
 }
 
 async function submit(): Promise<void> {
@@ -246,7 +331,12 @@ async function leave(): Promise<void> {
   } catch { /* keep editing */ }
 }
 
-onMounted(loadOptions);
+onMounted(() => {
+  void loadCustomers();
+  void loadProducts();
+  void loadWarehouses();
+  void loadInventorySummary();
+});
 </script>
 
 <template>
@@ -263,13 +353,12 @@ onMounted(loadOptions);
       </div>
     </div>
 
-    <el-alert v-if="!sourceWarehouses.length && !loadingOptions" type="warning" :closable="false" show-icon title="当前没有合法来源仓库，保存会被阻止。请先配置 RAW / WORKSHOP / WIP / LINESIDE / LOGISTICS / FINISHED 仓库。" />
-    <el-skeleton v-if="loadingOptions" :rows="8" animated />
-    <el-form v-else :model="form" label-width="120px" class="order-form">
+    <el-alert v-if="!sourceWarehouses.length && !loadingWarehouses" type="warning" :closable="false" show-icon title="当前没有合法来源仓库，保存会被阻止。请先配置 RAW / WORKSHOP / WIP / LINESIDE / LOGISTICS / FINISHED 仓库。" />
+    <el-form :model="form" label-width="120px" class="order-form">
       <el-card shadow="never" class="content-card">
         <template #header><span class="section-title">客户与订单信息</span></template>
         <el-row :gutter="20">
-          <el-col :md="12" :xs="24"><el-form-item label="客户" required><el-select v-model="form.customerId" filterable placeholder="请选择客户" style="width:100%" @change="dirty = true"><el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="String(customer.id)" /></el-select><small v-if="selectedCustomer">{{ selectedCustomer.name }}</small></el-form-item></el-col>
+          <el-col :md="12" :xs="24"><el-form-item label="客户" required><el-select v-model="form.customerId" v-loading="loadingCustomers" filterable placeholder="请选择客户" style="width:100%" @change="onCustomerChange"><el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="String(customer.id)" /></el-select><small v-if="selectedCustomer">{{ selectedCustomer.name }}<span v-if="loadingCustomerHistory"> · 正在读取历史购买偏好</span></small></el-form-item></el-col>
           <el-col :md="6" :xs="24"><el-form-item label="交货日期"><el-date-picker v-model="form.requiredDeliveryDate" value-format="YYYY-MM-DD" type="date" style="width:100%" @change="dirty = true" /></el-form-item></el-col>
           <el-col :md="6" :xs="24"><el-form-item label="业务员"><el-input v-model="form.salesperson" @input="dirty = true" /></el-form-item></el-col>
         </el-row>
@@ -286,7 +375,7 @@ onMounted(loadOptions);
         <div v-if="requiresSuppliedMaterials" class="supplied-materials">
           <el-alert type="info" :closable="false" title="客户自带原料只登记预计到货，不会混入销售产品，也不会在销售侧直接增加库存。" />
           <div v-for="(row, index) in form.suppliedMaterials" :key="index" class="supplied-row">
-            <el-select v-model="row.materialTypeId" filterable placeholder="选择客供原料" @change="onSuppliedMaterialChange(row)"><el-option v-for="material in suppliedMaterialOptions" :key="material.id" :label="`${material.name} (${material.code || '无编码'})`" :value="String(material.id)" /></el-select>
+            <el-select v-model="row.materialTypeId" v-loading="loadingMaterials" filterable placeholder="选择客供原料" @change="onSuppliedMaterialChange(row)"><el-option v-for="material in suppliedMaterialOptions" :key="material.id" :label="`${material.name} (${material.code || '无编码'})`" :value="String(material.id)" /></el-select>
             <el-input-number v-model="row.expectedQuantity" :min="0" :precision="3" @change="dirty = true" /><span>{{ displayUnit(row.unit) || '单位' }}</span>
             <el-date-picker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" placeholder="预计到货" @change="dirty = true" />
             <el-select v-model="row.targetWarehouseId" placeholder="目标仓库" @change="dirty = true"><el-option v-for="warehouse in warehouses" :key="warehouse.id" :label="warehouseLabel(warehouse)" :value="warehouse.id" /></el-select>
@@ -297,7 +386,7 @@ onMounted(loadOptions);
       </el-card>
 
       <el-card shadow="never" class="content-card">
-        <template #header><div class="section-header"><span class="section-title">销售产品</span><el-button type="primary" @click="showProductPicker = true">添加产品</el-button></div></template>
+        <template #header><span class="section-title">销售产品</span></template>
         <el-alert type="success" :closable="false" title="可搜索中文名、产品编码、全拼或拼音首字母；这里只显示真实可销售成品/半成品。" />
         <el-table v-if="form.items.length" :data="form.items" border class="line-table">
           <el-table-column label="产品" min-width="240"><template #default="{ row }"><strong>{{ row.product.name || row.product.productName }}</strong><div class="muted">{{ row.product.code || '无编码' }} · {{ row.product.specification || row.product.packageSpec || '无规格' }}</div></template></el-table-column>
@@ -309,18 +398,29 @@ onMounted(loadOptions);
           <el-table-column label="操作" width="80"><template #default="{ $index }"><el-button type="danger" link @click="removeProduct($index)">移除</el-button></template></el-table-column>
         </el-table>
         <el-empty v-else description="尚未添加销售产品" />
+        <div class="add-product-row"><el-button type="primary" plain :loading="loadingProducts" @click="showProductPicker = true">+ 添加产品</el-button></div>
       </el-card>
 
     </el-form>
 
-    <el-dialog v-model="showProductPicker" title="选择销售产品" width="760px" destroy-on-close>
-      <el-input v-model="productQuery" clearable autofocus placeholder="搜索中文名 / 编码 / 全拼 / 首字母" />
-      <div class="product-picker-list" role="listbox" aria-label="可销售成品和半成品">
-        <button v-for="product in filteredProducts" :key="String(product.id)" type="button" class="product-picker-row" @click="addProduct(product)">
-          <span><strong>{{ product.name || product.productName }}</strong><small>{{ product.code || '无编码' }} · {{ product.specification || product.packageSpec || '无规格' }}</small></span><span>{{ productCategory(product) }}</span>
+    <el-dialog v-model="showProductPicker" title="选择销售产品" width="900px">
+      <div class="picker-toolbar">
+        <el-input v-model="productQuery" clearable autofocus placeholder="搜索中文名 / 编码 / 全拼 / 首字母" />
+        <el-radio-group v-model="productCategoryFilter">
+          <el-radio-button value="ALL">全部</el-radio-button>
+          <el-radio-button value="FINISHED_PRODUCT">成品</el-radio-button>
+          <el-radio-button value="SEMI_FINISHED">半成品</el-radio-button>
+        </el-radio-group>
+      </div>
+      <el-alert v-if="form.customerId" type="info" :closable="false" title="已优先排列该客户历史采购过的产品；同组内按可用库存从高到低排列，零库存排后。" />
+      <div v-loading="loadingProducts || loadingInventory" class="product-picker-list" role="listbox" aria-label="可销售成品和半成品">
+        <button v-for="product in filteredProducts" :key="String(product.id)" type="button" class="product-picker-row" :class="{ 'is-selected': selectedProductIds.has(String(product.id)) }" :disabled="selectedProductIds.has(String(product.id))" @click="addProduct(product)">
+          <span><strong>{{ product.name || product.productName }}</strong><small>{{ product.code || '无编码' }} · {{ product.specification || product.packageSpec || '无规格' }}</small></span>
+          <span class="picker-meta"><el-tag size="small" effect="plain">{{ productCategory(product) }}</el-tag><strong>可用 {{ formatPickerStock(product) }}</strong><small v-if="product.customerHistoryCount">该客户历史购买 {{ product.customerHistoryCount }} 次</small><small v-if="selectedProductIds.has(String(product.id))">已添加</small></span>
         </button>
         <el-empty v-if="!filteredProducts.length" description="没有匹配的可销售成品/半成品" />
       </div>
+      <template #footer><el-button type="primary" @click="showProductPicker = false">完成选择（已添加 {{ form.items.length }} 项）</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -336,9 +436,13 @@ onMounted(loadOptions);
 .supplied-row { display: flex; align-items: center; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
 .supplied-row .el-select { width: 220px; }
 .line-table { margin-top: 12px; }
+.add-product-row { display: flex; justify-content: center; padding: 16px 0 4px; }
+.picker-toolbar { display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 12px; margin-bottom: 12px; }
 .product-picker-list { max-height: 480px; overflow-y: auto; margin-top: 12px; }
 .product-picker-row { width: 100%; display: flex; justify-content: space-between; text-align: left; padding: 12px; border: 0; border-bottom: 1px solid #edf2f7; background: #fff; cursor: pointer; color: #1a2332; }
 .product-picker-row:hover, .product-picker-row:focus-visible { background: #f0f7ff; outline: 2px solid #1b65a8; outline-offset: -2px; }
 .product-picker-row span:first-child { display: flex; flex-direction: column; gap: 4px; }
+.product-picker-row.is-selected { background: #f4f6f9; color: #909399; cursor: not-allowed; }
+.picker-meta { min-width: 210px; display: flex; align-items: flex-end; flex-direction: column; gap: 4px; }
 @media (max-width: 760px) { .sales-order-new-page { padding: 12px; } .page-header { align-items: flex-start; flex-direction: column; } .page-actions { width: 100%; justify-content: flex-end; } }
 </style>
