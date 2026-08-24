@@ -173,6 +173,14 @@ class QualityInspectorApiClient {
    */
   private mapInspectionToRecord(raw: Record<string, unknown>): QualityRecord {
     const passRate = Number(raw.passRate ?? 0);
+    const rawResult = String(raw.result ?? '').toUpperCase();
+    const result: QualityRecord['result'] = ['PASS', 'PASSED', 'QUALIFIED'].includes(rawResult)
+      ? 'PASS'
+      : rawResult === 'CONDITIONAL'
+        ? 'CONDITIONAL'
+        : rawResult === 'PENDING'
+          ? 'PENDING'
+          : 'FAIL';
     const customFields = raw.customFields && typeof raw.customFields === 'object'
       ? raw.customFields as Record<string, unknown>
       : {};
@@ -202,9 +210,10 @@ class QualityInspectorApiClient {
       packaging: scoreItem('packaging'),
       totalScore: Number(customFields.totalScore ?? 0),
       passRate,
+      result,
       scoreDetailsRecorded,
       grade: (raw.qualityGrade as QualityRecord['grade']) ?? 'D',
-      passed: ['PASS', 'PASSED', 'QUALIFIED', 'CONDITIONAL'].includes(String(raw.result ?? '').toUpperCase()),
+      passed: result === 'PASS',
       photos: [],
       inspector: {
         id: Number(raw.inspectorId ?? 0),

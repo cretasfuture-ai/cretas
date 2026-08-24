@@ -55,7 +55,7 @@ export interface QualityInspectionForm {
 // ============================================
 
 export type QualityGrade = 'A' | 'B' | 'C' | 'D';
-export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL';
+export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL' | 'PENDING';
 
 export const GRADE_THRESHOLDS = {
   A: 95,   // ≥95分
@@ -137,6 +137,7 @@ export interface QualityRecord {
   packaging: ScoreItem;
   totalScore: number;
   passRate: number;
+  result: QualityInspectionResult;
   scoreDetailsRecorded: boolean;
   grade: QualityGrade;
   passed: boolean;
