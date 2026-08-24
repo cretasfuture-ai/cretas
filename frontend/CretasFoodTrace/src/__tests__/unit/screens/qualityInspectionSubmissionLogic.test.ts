@@ -1,9 +1,26 @@
 import {
+  deriveQualityInspectionCounts,
   deriveQualityInspectionResult,
   getQualityInspectionSubmitErrorMessage,
 } from '../../../screens/quality-inspector/qualityInspectionSubmission.logic';
 
 describe('质检提交结果契约', () => {
+  it.each([
+    [10, 100, 10, 0, 100],
+    [10, 95, 10, 0, 100],
+    [10, 93, 9, 1, 90],
+    [10, 69, 7, 3, 70],
+    [3, 69, 2, 1, 200 / 3],
+  ] as const)(
+    '抽样 %s、评分 %s 计算为合格 %s、不合格 %s、合格率 %s',
+    (sampleSize, score, passCount, failCount, passRate) => {
+      const counts = deriveQualityInspectionCounts(sampleSize, score);
+      expect(counts.passCount).toBe(passCount);
+      expect(counts.failCount).toBe(failCount);
+      expect(counts.passRate).toBeCloseTo(passRate, 8);
+    },
+  );
+
   it.each([
     [100, 'PASS'],
     [95, 'PASS'],

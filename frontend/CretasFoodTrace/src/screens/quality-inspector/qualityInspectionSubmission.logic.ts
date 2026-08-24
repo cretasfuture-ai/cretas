@@ -3,6 +3,28 @@ import type { QualityInspectionResult } from '../../types/qualityInspector';
 const PASS_THRESHOLD = 95;
 const CONDITIONAL_THRESHOLD = 70;
 
+export interface QualityInspectionCounts {
+  passCount: number;
+  failCount: number;
+  passRate: number;
+}
+
+export function deriveQualityInspectionCounts(
+  sampleSize: number,
+  totalScore: number,
+): QualityInspectionCounts {
+  const normalizedSampleSize = Math.max(1, Math.trunc(sampleSize));
+  const normalizedScore = Math.min(100, Math.max(0, totalScore));
+  const passCount = Math.min(
+    normalizedSampleSize,
+    Math.max(0, Math.round(normalizedSampleSize * normalizedScore / 100)),
+  );
+  const failCount = normalizedSampleSize - passCount;
+  const passRate = passCount / normalizedSampleSize * 100;
+
+  return { passCount, failCount, passRate };
+}
+
 export function deriveQualityInspectionResult(passRate: number): QualityInspectionResult {
   if (passRate >= PASS_THRESHOLD) return 'PASS';
   if (passRate >= CONDITIONAL_THRESHOLD) return 'CONDITIONAL';

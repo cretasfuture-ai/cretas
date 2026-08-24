@@ -38,6 +38,7 @@ import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
 import { attachmentApi } from '../../services/api/attachmentApi';
 import {
+  deriveQualityInspectionCounts,
   deriveQualityInspectionResult,
   getQualityInspectionSubmitErrorMessage,
 } from './qualityInspectionSubmission.logic';
@@ -178,8 +179,11 @@ export default function QIFormScreen() {
   const grade = calculateGrade(totalScore);
   const passed = isPassed(grade);
   const sampleSizeNum = parseInt(sampleSize, 10) || 10;
-  const computedPassCount = passed ? sampleSizeNum : Math.round(sampleSizeNum * totalScore / 100);
-  const computedPassRate = sampleSizeNum > 0 ? Math.round((computedPassCount / sampleSizeNum) * 100) : 0;
+  const {
+    passCount: computedPassCount,
+    failCount: computedFailCount,
+    passRate: computedPassRate,
+  } = deriveQualityInspectionCounts(sampleSizeNum, totalScore);
 
   const handleVoicePress = () => {
     navigation.navigate('QIVoice', { batchId, batchNumber });
@@ -198,12 +202,11 @@ export default function QIFormScreen() {
 
       const defaultScore: ScoreItem = { score: 0, notes: [] };
       // Backend expects passCount/failCount — derive from HACCP score
-      const failCount = sampleSizeNum - computedPassCount;
       const formData = {
         batchId: batch.id,
         sampleSize: sampleSizeNum,
         passCount: computedPassCount,
-        failCount,
+        failCount: computedFailCount,
         result: deriveQualityInspectionResult(computedPassRate),
         notes: remarks || '',
         appearance: scores.appearance ?? defaultScore,
@@ -418,7 +421,7 @@ export default function QIFormScreen() {
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.passRate')}</Text>
               <Text style={[styles.summaryValue, { color: QI_COLORS.success }]}>
-                {computedPassRate}%
+                {Math.round(computedPassRate)}%
               </Text>
             </View>
             <View style={styles.summaryItem}>
