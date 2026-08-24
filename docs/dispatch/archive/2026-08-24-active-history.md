@@ -44,3 +44,10 @@
 - **实现与验证**：Web 已移除独立版本入口并呈现当前配置、自动应用结果和真实计划绑定；Java 在同一事务内发布新版本并重钉未报工计划，保留已开工快照，Repository 新查询通过真实 JPA 启动门禁。Web 4 files / 74 tests、typecheck/build、Java 58 tests 均通过；隔离 PostgreSQL Workflow 集成测试 4/4 通过且 0 skipped；权限漂移基线 4 / 当前 4 / 新增 0。
 - **候选制品**：统一 build 回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787539339-5836.json` 为 `built`；Java/Web 各构建一次，Java SHA-256 `22e64b727c6f981473c081874066240abc70586bfca216f7b09aaad5463ec903`，Web archive SHA-256 `2362384b54463fe72e72849aec01fff0064cbdb7526f6f083bf386724fa73125`。Java 仅预上传，未安装、未重启、未切流。
 - **scope 释放**：实现、目标验证、最终审查和候选制品均完成，任务已从 ACTIVE 移除并释放 Workflow editor、Java Workflow/ProductionPlan 及对应测试 scope。PR/远端合并、生产部署和 F006 用户验收仍是后续独立事实，须以各自回执为准。
+
+## `FIX-F006-WORKFLOW-EDITOR-RELEASE-GATES-20260824` — `review complete`
+
+- **发布阻断修复**：销售、采购单据追踪端点的只读权限已与各自详情端点逐字对齐，补齐 `finance:read`，未扩大任何写权限；V21 Workflow 迁移源码闸改为 CI 可选择的 `*ContractTest` 命名，迁移 SQL 未修改。
+- **权限边界**：四个前端承载点保持原边界，财务仍无销售/采购菜单或跨模块路由；后端 `@RequirePermission` 已对齐，追踪控制器没有额外 `@RequireModule` 串联误拦。权限漂移基线 4 / 当前 4 / 新增 0。
+- **验证与候选制品**：三类发布阻断契约 7 tests 通过；统一最终生命周期共 65 tests，0 failure / 0 error / 0 skipped，隔离 PostgreSQL Workflow 4/4 真实执行。回执 `C:\Users\Steve\.cache\cretas\release-reports\cretas-1787541774-7002.json` 为 `built`，JAR SHA-256 `32e7fefc405d7186d709fe8815a1ce23d1dff69c8f2c11820112e5c5cb686d3d`，仅预上传、未安装/重启/切流。
+- **scope 释放**：任务已从 ACTIVE 移除，追踪只读权限、迁移源码闸与对应测试 scope 释放；PR/远端合并、生产部署和 F006 验收继续按独立事实记录。
