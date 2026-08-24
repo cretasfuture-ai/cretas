@@ -25,6 +25,8 @@ from food_kb.api.manual_chat import (
     _FACTORY_REPORTING_RUNTIME_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
+    _FACTORY_SALES_DELIVERY_INVOICE_ANSWER,
+    _FACTORY_WORKFLOW_AUTOFORK_ANSWER,
     _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
     _LABEL_QC_REVIEW_ANSWER,
@@ -78,6 +80,8 @@ from food_kb.api.manual_chat import (
     _needs_factory_reporting_runtime_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
+    _needs_factory_sales_delivery_invoice_guard,
+    _needs_factory_workflow_autofork_guard,
     _needs_factory_workflow_output_directory_guard,
     _needs_material_packaging_guard,
     _needs_label_qc_review_guard,
@@ -163,7 +167,7 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "中间 WIP 批次继续携带同一生产计划身份" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
     assert "RN App 的业务入口只面向仓库主管和仓库操作员" in FACTORY_SYSTEM_PROMPT
-    assert "入库 / 发货 / 我的" in FACTORY_SYSTEM_PROMPT
+    assert "首页 / 入库 / 发货 / 我的" in FACTORY_SYSTEM_PROMPT
     assert "发货进屏读取 FIFO 推荐" in FACTORY_SYSTEM_PROMPT
     assert "生产经理与生产文员是独立角色" in FACTORY_SYSTEM_PROMPT
     assert "当前没有扫码报工" in FACTORY_SYSTEM_PROMPT
@@ -171,6 +175,10 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "回读 `storageLocation` 后才成功" in FACTORY_SYSTEM_PROMPT
     assert "`allowMultipleUpstreamSources`" in FACTORY_SYSTEM_PROMPT
     assert "会计期间关账申请只创建 OA" in FACTORY_SYSTEM_PROMPT
+    assert "保存草稿（自动新版本）" in FACTORY_SYSTEM_PROMPT
+    assert "WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE" in FACTORY_SYSTEM_PROMPT
+    assert "商品行只允许 `FINISHED_PRODUCT` 和 `SEMI_FINISHED`" in FACTORY_SYSTEM_PROMPT
+    assert "全部子单发完只生成一个自动开票待办" in FACTORY_SYSTEM_PROMPT
 
 
 def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
@@ -228,8 +236,9 @@ def test_20260813_factory_contracts_are_deterministic_and_isolated():
     assert _needs_factory_material_sales_guard(
         "原料、辅料和包材怎样加入销售订单并发货？"
     )
-    assert "只有半成品保持不可售" in _FACTORY_MATERIAL_SALES_ANSWER
-    assert "物料批次按 FIFO" in _FACTORY_MATERIAL_SALES_ANSWER
+    assert "只允许 `FINISHED_PRODUCT` 和 `SEMI_FINISHED`" in _FACTORY_MATERIAL_SALES_ANSWER
+    assert "客户自带原料只进入独立 `suppliedMaterials`" in _FACTORY_MATERIAL_SALES_ANSWER
+    assert "不能回退到旧“除了半成品都能卖”的宽口径" in _FACTORY_MATERIAL_SALES_ANSWER
     assert _needs_factory_form_assistant_result_guard(
         "AI 表单助手模型说成功但没有写入怎么办？"
     )
@@ -558,25 +567,61 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
 
 def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
     equivalent_questions = (
-        "仓库手机端为什么只剩入库、发货、我的三个入口？",
+        "仓库手机端为什么现在是首页、入库、发货、我的四个入口？",
         "RN 发货的 FIFO 推荐不足时为什么提示还差约多少和去调拨？",
-        "手机首页和库存入口隐藏后，库存查询与盘点去哪里做？",
+        "手机入库为什么按待收货、部分入库和已收货展示采购任务？",
     )
     assert all(_needs_factory_rn_readonly_guard(q) for q in equivalent_questions)
     assert not _needs_factory_rn_readonly_guard("Web 后台怎么创建生产计划？")
-    assert "入库 / 发货 / 我的" in _FACTORY_RN_READONLY_ANSWER
-    assert "“首页”与“库存”已隐藏但没有删除" in _FACTORY_RN_READONLY_ANSWER
+    assert "首页 / 入库 / 发货 / 我的" in _FACTORY_RN_READONLY_ANSWER
+    assert "首页只放两个大号入口" in _FACTORY_RN_READONLY_ANSWER
+    assert "“库存”仅从导航隐藏" in _FACTORY_RN_READONLY_ANSWER
     assert "库存查询、盘点和其它办公室工作使用电脑 Web" in _FACTORY_RN_READONLY_ANSWER
     assert "业务入口只面向仓库主管和仓库操作员" in _FACTORY_RN_READONLY_ANSWER
     assert "物料显示服务端真实品名" in _FACTORY_RN_READONLY_ANSWER
     assert "物料需求单和生产工作台属于电脑 Web" in _FACTORY_RN_READONLY_ANSWER
-    assert "仓储待收货 / 采购收货列表" in _FACTORY_RN_READONLY_ANSWER
-    assert "入库”页进入“生产成品入库" in _FACTORY_RN_READONLY_ANSWER
+    assert "真实采购收货任务为真值" in _FACTORY_RN_READONLY_ANSWER
+    assert "全部 / 待收货 / 部分入库 / 已收货" in _FACTORY_RN_READONLY_ANSWER
+    assert "多单位订单不伪造总量" in _FACTORY_RN_READONLY_ANSWER
+    assert "入库 → 生产成品入库" in _FACTORY_RN_READONLY_ANSWER
     assert "实际更新该批次的 `storageLocation`" in _FACTORY_RN_READONLY_ANSWER
     assert "独立刷新/回读新库位" in _FACTORY_RN_READONLY_ANSWER
     assert "还差约多少" in _FACTORY_RN_READONLY_ANSWER
     assert "去调拨" in _FACTORY_RN_READONLY_ANSWER
     assert "最终仍由服务端权威校验" in _FACTORY_RN_READONLY_ANSWER
+
+
+def test_factory_workflow_autofork_and_active_reference_gate_are_deterministic():
+    equivalent_questions = (
+        "已启用 Workflow 编辑后为什么保存草稿会自动新版本？",
+        "Workflow 草稿已被生产计划引用时保存会怎样自动分叉？",
+        "正在生产引用 Workflow 时为什么不能停用？",
+    )
+    assert all(_needs_factory_workflow_autofork_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_workflow_autofork_guard("餐饮 Workflow 怎么配置？")
+    assert "保存草稿（自动新版本）" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "原已启用版本继续服务生产" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "先把原 Workflow 行冻结为 `SNAPSHOT`" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "`selectedWorkflowId` 固定创建时版本" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "ACTIVE BOM 前置门禁" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+
+
+def test_factory_sales_delivery_and_auto_invoice_chain_is_deterministic():
+    equivalent_questions = (
+        "销售订单全屏建单时商品和客供原料怎样分开？",
+        "销售母单与 FULL、PARTIAL 子发运单怎样由仓库确认？",
+        "销售订单全部发完后为什么自动开票，手工开票为什么返回 410？",
+    )
+    assert all(_needs_factory_sales_delivery_invoice_guard(q) for q in equivalent_questions)
+    assert not _needs_factory_sales_delivery_invoice_guard("餐饮外卖订单怎样开票？")
+    assert "`FINISHED_PRODUCT` 和 `SEMI_FINISHED`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "独立 `suppliedMaterials`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "母单永远不能直接扣库存" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "`PENDING_WAREHOUSE_CONFIRM`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "全部子单发完的完成态边沿只生成一个" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "固定返回 410" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
 
 
 def test_factory_production_manager_and_clerk_keep_distinct_capabilities():
@@ -1284,7 +1329,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
-    assert "SOP sync 2026-08-23" in html
+    assert "SOP sync 2026-08-24" in html
     assert "Workflow 画布是 BOM 唯一写入口" in html
     assert "批次领用与消耗审计" in html
     assert "调整后应剩多少的绝对值" in html
@@ -1886,6 +1931,18 @@ def test_20260818_reviewed_answers_keep_idempotency_and_store_isolation():
             "f006-production-full-chain-sop.md",
         ),
         (
+            "已启用 Workflow 编辑后为什么保存草稿会自动新版本？",
+            "factory",
+            _FACTORY_WORKFLOW_AUTOFORK_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "销售订单全部发完后为什么自动开票，手工开票为什么返回 410？",
+            "factory",
+            _FACTORY_SALES_DELIVERY_INVOICE_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
             "生产经理和生产文员的权限与报工审批怎么交接？",
             "factory",
             _FACTORY_PRODUCTION_ROLE_SPLIT_ANSWER,
@@ -2322,20 +2379,25 @@ def test_20260822_factory_mobile_roles_and_reporting_updates_are_complete_and_is
         assert "13 个关键角色" in factory_text or "13 角色" in factory_text
         assert "production_clerk" in factory_text
         assert "生产文员" in factory_text
-        assert "入库 / 发货 / 我的" in factory_text
+        assert "首页 / 入库 / 发货 / 我的" in factory_text
         assert "生产成品入库" in factory_text
         assert "去调拨" in factory_text
         assert "扫码报工" in factory_text
         assert "系统未见风险" in factory_text
         assert "PAYMENT_REQUEST_LEGACY_WRITE_DISABLED" in factory_text
         assert "历史 APPROVED" in factory_text
+        assert "suppliedMaterials" in factory_text
+        assert "WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE" in factory_text
+        assert "自动开票待办" in factory_text
 
     assert "生产文员" in ai_assist
-    assert "只有入库、发货、我的三个入口" in ai_assist
+    assert "首页、入库、发货、我的四个入口" in ai_assist
     assert "生产成品入库" in ai_assist
     assert "AP_INVOICE 未清应付" in ai_assist
     assert "历史 APPROVED 半执行记录" in ai_assist
     assert "扫码报工" in ai_assist
+    assert "suppliedMaterials" in ai_assist
+    assert "自动生成唯一开票待办" in ai_assist
     for restaurant_text in restaurant_sources:
         assert "production_clerk" not in restaurant_text
         assert "生产文员" not in restaurant_text
