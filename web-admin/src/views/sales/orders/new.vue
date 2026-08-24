@@ -10,11 +10,37 @@ import { MATERIAL_SUPPLY_MODE_OPTIONS, SALES_PROCESSING_MODE_OPTIONS, type Mater
 import { filterSalesProducts, isSalesOrderProduct, type SalesProductOption } from './salesOrderProductSearch';
 import type { TableRow } from '@/types/api';
 import { canonicalUnitCodeKeepingCount, displayUnit, storageUnitCode } from '@/utils/unitPricing';
+import {
+  ambiguousPackagingUnit,
+  initialTaxIncludedUnitPrice,
+  packagingSpecIdForUnit,
+  productTaxRatePercent,
+  salesOrderUnitOptions,
+  untaxedUnitPrice,
+  type SalesOrderPackagingSpec,
+} from './salesOrderNewLineContract';
 
 type Warehouse = TableRow & { id: string; code: string; name: string; type?: string; isActive?: boolean };
 type Customer = TableRow & { id: string; name: string };
-type Product = SalesProductOption & { unit?: string; measurementUnit?: string; defaultUnit?: string };
-type SalesLine = { product: Product; quantity: number; unit: string; unitPrice: number; sourceWarehouseCode: string };
+type Product = SalesProductOption & {
+  unit?: string;
+  measurementUnit?: string;
+  defaultUnit?: string;
+  level1Unit?: string;
+  boxConversionCoefficient?: number;
+  unitPrice?: number;
+  taxIncludedUnitPrice?: number;
+  taxRate?: number | string;
+  packagingSpecs?: SalesOrderPackagingSpec[];
+};
+type SalesLine = {
+  product: Product;
+  quantity: number;
+  unit: string;
+  taxIncludedUnitPrice: number;
+  taxRate: number;
+  sourceWarehouseCode: string;
+};
 type SuppliedMaterial = { materialTypeId: string; materialName: string; expectedQuantity: number; unit: string; expectedArrivalAt: string; targetWarehouseId: string };
 
 const router = useRouter();
@@ -98,8 +124,16 @@ function addProduct(product: Product): void {
     ElMessage.warning('同一订单不能重复添加产品');
     return;
   }
-  const unit = canonicalUnitCodeKeepingCount(String(product.unit || product.measurementUnit || product.defaultUnit || '份'));
-  form.value.items.push({ product, quantity: 1, unit, unitPrice: 0, sourceWarehouseCode: '' });
+  const unit = salesOrderUnitOptions(product)[0]
+    || canonicalUnitCodeKeepingCount(String(product.unit || product.measurementUnit || product.defaultUnit || '份'));
+  form.value.items.push({
+    product,
+    quantity: 1,
+    unit,
+    taxIncludedUnitPrice: initialTaxIncludedUnitPrice(product),
+    taxRate: productTaxRatePercent(product),
+    sourceWarehouseCode: '',
+  });
   dirty.value = true;
   showProductPicker.value = false;
   productQuery.value = '';
@@ -138,7 +172,9 @@ function validate(): string | null {
   if (!form.value.customerId) return '请选择客户';
   if (!form.value.processingMode || !form.value.materialSupplyMode) return '请选择加工方式和物料供应方式';
   if (!form.value.items.length) return '请至少添加一个成品或半成品';
-  if (form.value.items.some((line) => line.quantity <= 0 || !line.unit || line.unitPrice <= 0)) return '请完善产品数量、单位和销售单价';
+  if (form.value.items.some((line) => line.quantity <= 0 || !line.unit || line.taxIncludedUnitPrice <= 0)) return '请完善产品数量、单位和含税销售单价';
+  if (form.value.items.some((line) => line.taxRate < 0 || line.taxRate > 100)) return '税点必须在 0% 到 100% 之间';
+  if (form.value.items.some((line) => ambiguousPackagingUnit(line.product, line.unit))) return '所选单位存在多个包装规格，请先在产品档案设置默认规格';
   if (form.value.items.some((line) => !line.sourceWarehouseCode)) return '请为每个产品选择来源仓库';
   if (form.value.items.some((line) => !sourceWarehouses.value.some((warehouse) => warehouse.code === line.sourceWarehouseCode))) return '来源仓库无效或不属于销售允许的仓库类型';
   if (requiresSuppliedMaterials.value && form.value.suppliedMaterials.some((row) => !row.materialTypeId || row.expectedQuantity <= 0 || !row.unit || !row.expectedArrivalAt || !row.targetWarehouseId)) return '请完整填写客户自带原料明细';
@@ -173,8 +209,10 @@ async function submit(): Promise<void> {
         productName: String(line.product.name || line.product.productName || ''),
         quantity: line.quantity,
         unit: storageUnitCode(line.unit),
-        unitPrice: line.unitPrice,
+        unitPrice: untaxedUnitPrice(line.taxIncludedUnitPrice, line.taxRate),
+        taxRate: line.taxRate,
         specification: line.product.specification || line.product.packageSpec || undefined,
+        packagingSpecId: packagingSpecIdForUnit(line.product, line.unit),
         sourceWarehouseCode: line.sourceWarehouseCode,
       })),
     });
@@ -254,8 +292,9 @@ onMounted(loadOptions);
         <el-table v-if="form.items.length" :data="form.items" border class="line-table">
           <el-table-column label="产品" min-width="240"><template #default="{ row }"><strong>{{ row.product.name || row.product.productName }}</strong><div class="muted">{{ row.product.code || '无编码' }} · {{ row.product.specification || row.product.packageSpec || '无规格' }}</div></template></el-table-column>
           <el-table-column label="数量" width="150"><template #default="{ row }"><el-input-number v-model="row.quantity" :min="0.001" :precision="3" @change="dirty = true" /></template></el-table-column>
-          <el-table-column label="单位" width="130"><template #default="{ row }"><el-input v-model="row.unit" @input="dirty = true" /></template></el-table-column>
-          <el-table-column label="未税单价" width="160"><template #default="{ row }"><el-input-number v-model="row.unitPrice" :min="0.01" :precision="2" @change="dirty = true" /></template></el-table-column>
+          <el-table-column label="单位" width="150"><template #default="{ row }"><el-select v-model="row.unit" placeholder="选择规格单位" @change="dirty = true"><el-option v-for="unit in salesOrderUnitOptions(row.product)" :key="unit" :label="displayUnit(unit)" :value="unit" /></el-select></template></el-table-column>
+          <el-table-column label="含税单价" width="170"><template #default="{ row }"><el-input-number v-model="row.taxIncludedUnitPrice" :min="0.01" :precision="2" @change="dirty = true" /></template></el-table-column>
+          <el-table-column label="税点(%)" width="150"><template #default="{ row }"><el-input-number v-model="row.taxRate" :min="0" :max="100" :precision="2" @change="dirty = true" /></template></el-table-column>
           <el-table-column label="来源仓库" min-width="220"><template #default="{ row }"><el-select v-model="row.sourceWarehouseCode" filterable placeholder="请选择合法来源仓库" @change="dirty = true"><el-option-group v-for="group in warehouseGroups" :key="group.label" :label="group.label"><el-option v-for="warehouse in group.warehouses" :key="warehouse.code" :label="warehouseLabel(warehouse)" :value="warehouse.code" /></el-option-group></el-select></template></el-table-column>
           <el-table-column label="操作" width="80"><template #default="{ $index }"><el-button type="danger" link @click="removeProduct($index)">移除</el-button></template></el-table-column>
         </el-table>
