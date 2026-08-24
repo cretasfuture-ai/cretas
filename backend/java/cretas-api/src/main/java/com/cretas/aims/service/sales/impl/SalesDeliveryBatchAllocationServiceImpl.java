@@ -19,6 +19,7 @@ import com.cretas.aims.service.inventory.FgReservationLedgerService;
 import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
+import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -172,6 +173,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     !prestockedCustomerStock
                             || orderReservedNative.compareTo(BigDecimal.ZERO) > 0,
                     "finishedGoodsBatchId");
+            FinishedGoodsBatchSaleabilityGuard.assertSaleable(batch, "finishedGoodsBatchId");
             // T4-D5 (#572) + 🔴 G1: warehouse guard.
             if (hasExplicitSource) {
                 // EXPLICIT source → batch must be in that exact warehouse (409 guard preserved).
