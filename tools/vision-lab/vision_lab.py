@@ -515,6 +515,7 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     manifest_hashes: list[str] = []
     identity_rows: list[dict[str, str]] = []
+    training_exclusions: dict[str, int] = {}
     for queue_root in discover_queue_roots(config):
         manifest_path = queue_root / "manifest.json"
         manifest = load_json(manifest_path)
@@ -526,6 +527,17 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
             annotation = load_json(annotation_path)
             if not annotation.get("reviewed") or annotation.get("unjudgeable"):
                 continue
+            if (
+                annotation.get("training_eligible") is False
+                or source.get("training_eligible") is False
+            ):
+                reason = str(
+                    annotation.get("training_exclusion_reason")
+                    or source.get("training_exclusion_reason")
+                    or "explicitly_ineligible"
+                )
+                training_exclusions[reason] = training_exclusions.get(reason, 0) + 1
+                continue
             image = Path(source["image"])
             if not image.is_file() or sha256_file(image) != source["image_sha256"]:
                 raise RuntimeError(f"queue image drift: {image}")
@@ -533,16 +545,31 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
             annotation_sha = sha256_file(annotation_path)
             rows.append({"source": source, "annotation": annotation, "image": image, "task_id": task_id,
                          "annotation_sha256": annotation_sha})
-            identity_rows.append({"image": source["image_sha256"], "annotation": annotation_sha, "task": task_id})
+            identity_rows.append({
+                "crop": str(source["crop_id"]),
+                "image": source["image_sha256"],
+                "annotation": annotation_sha,
+                "task": task_id,
+            })
     minimum = int(config.get("training", {}).get("min_reviewed_images", 100))
     if len(rows) < minimum:
         raise RuntimeError(f"training gate: {len(rows)} reviewed images < {minimum}")
     dataset_id = "label-" + hashlib.sha256(stable_json({
-        "manifests": manifest_hashes, "rows": sorted(identity_rows, key=lambda row: (row["task"], row["image"])),
+        "schema": "effective-training-rows-v2",
+        "rows": sorted(identity_rows, key=lambda row: (row["task"], row["crop"])),
     })).hexdigest()[:12]
     out = root / "datasets" / dataset_id
+    exclusion_receipt = {
+        "total": sum(training_exclusions.values()),
+        "reasons": training_exclusions,
+    }
     if out.exists():
         existing = load_json(out / "manifest.json")
+        # Excluded review metadata is deliberately outside dataset identity.
+        # Return current audit fields without mutating or retraining the
+        # existing immutable effective dataset.
+        existing["source_manifest_sha256"] = manifest_hashes
+        existing["training_exclusions"] = exclusion_receipt
         return existing
     for split in ("train", "val"):
         (out / "images" / split).mkdir(parents=True)
@@ -576,6 +603,8 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
         "version": VERSION, "dataset_id": dataset_id, "created_at": utc_now(),
         "train_only": True, "protected_holdout_included": False,
         "task_level_split": True, "counts": counts, "rows": manifest_rows,
+        "source_manifest_sha256": manifest_hashes,
+        "training_exclusions": exclusion_receipt,
         "data_yaml": str(yaml_path),
     }
     write_json(out / "manifest.json", manifest)

@@ -5,13 +5,11 @@
 
 ## 在飞任务
 
-- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824` — `in-progress` — Owner: `/root` — Base SHA `c99eec847dfc8bf916ea051c2d8e50dc34012f98`。审核双角色 UI 与候选训练门禁已进入 main；当前续作修复 VisionLab 队列 glob 把评估 `records` manifest 误识别为人工 `rows` 队列的问题，并把失败的日常计划任务从旧 dirty detached worktree 迁到 clean exact-main、安全配置。保护集和原图不改写，其他租户写入为 0，候选训练和部署保持关闭。
-
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `in-progress` — Owner: `/root` — Base SHA `3dfce77462cb8f24db5f3e56876ce7e714f852dd`; runKey `E2E-F006-WORKFLOW-VERSION-20260824-144217`。专项验证 Workflow“当前配置/版本记录”产品真值、F006 计划按首次正式报工分流、历史恢复、幂等/并发冲突、权限和 PostgreSQL 事务顺序；当前 Chat 是唯一写 Owner，F006 写入必须绑定本 runKey，其他租户写入为 0。
 
 - `E2E-F006-PRODUCTION-POST-REPORT-20260824` — `in-progress` — Owner: `/root` — continuation Base SHA `bfe08dcabafffe521d1439e8ffcd855811bd528e`; 专用 worktree `C:\Users\Steve\cretas-f006-production-closeout-e2e-20260824`；当前 runKey `E2E-F006-PROD-CLOSEOUT-20260824-105104`。从已保存的安全检查点继续生产后段全链专项 E2E，先复核暂停实体和当前部署，再串行完成包装、入库、盘点、质检异常、权限与数量守恒；写入仅限本 runKey 的精确 F006 实体，其他租户写入为 0。`BUG-F006-WORKFLOW-SPLIT-RECEIPT-RN-001` 与 `BUG-F006-PARTIAL-RECEIPT-STATUS-CONSTRAINT-001` 已进入 main 并发布，部署后首笔 6 盒已成功；第二笔 3 盒复现 `BUG-F006-MOBILE-RECEIPT-IDEMPOTENCY-001`：mobile Controller 对同一计划恒定生成幂等键，导致后续合法分次请求被当作首笔重放，累计仍为 6 且库存不变。当前 Owner 负责客户端“同次重试稳定、成功后轮换”幂等键与后端 header 契约修复、目标测试、合入发布和部署后 3/1 复验。旧 dirty worktree 保留且不修改。
 
-- `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务 `Cretas-Liushanmen-VisionLab` 今日 LastResult=1，仍指向旧 detached worktree，须先迁到公司受控代码源并核销失败。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
+- `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed。计划任务 `Cretas-Liushanmen-VisionLab` 已迁到 clean exact-main 工作树并取得 LastResult=0；剩余阻塞仅为该 ROI 人工裁决。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
 
 - `UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802` — `blocked` — Owner: `/root` — 实现提交已进入迁移树，代码与 Expo Web 验收可核销；当前餐饮 RN OTA runtime 与真实设备验收无法确认。实现文件 scope 已释放；如继续，仅新建 exact-commit OTA/设备验收项。
@@ -40,8 +38,6 @@
 
 ## Scope 锁地图
 
-- `FIX-LIUSHANMEN-LABEL-QC-REVIEW-UX-20260824`：已完成的 Web/Java/Python 审核 scope 保持冻结；续作仅允许 `tools/vision-lab/vision_lab.py`、`tools/vision-lab/evaluate_candidate.py` 及两者目标测试、`backend/python/label_qc/services/v8_pipeline.py`、`backend/python/tests/test_label_qc_v8_pipeline.py`、`docs/dispatch/ACTIVE.md`、对应当日归档，以及 `D:\CretasVisionLab` 下新的训练配置、候选制品和只读验收回执。允许的外部动作仅限用户本轮明确授权的 LIUSHANMEN 人工复核、训练决策、只读导出/去重与本地候选训练；每次写入前必须验证租户、请求路径、payload 和预期记录 ID/行数，其他租户写入为 0。禁止 Entity/Repository/Flyway、远程生产模型替换、保护集/原图改写和旧回执覆盖；旧两模型评估仅作诊断，不得声明为生产 v8 全级联回放。验收：VisionLab 与 v8 pipeline 目标测试、`git diff --check`、候选 PT/ONNX parity，以及不低于生产 v8 的缺陷、正常、hard-negative、逐图决策和延迟门禁；失败则 `NOT_DEPLOYED`。
-
 - `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824`：Workflow 当前配置编辑、版本记录/绑定清单/历史恢复/乐观锁与权限的 Web 页面、API/types/tests；Java `ProductProcessWorkflow` Controller/Service/DTO/Repository 及生产计划首次正式报工 started 判定/版本重绑定；真实 PostgreSQL 集成测试、专项 Playwright driver、gitignored 本 runKey 证据和 dispatch。只有发现并证明本专项缺陷后才修改实现；若触及 Repository/Entity/Flyway，必须补真实 JPA/迁移门禁。明确排除 WorkProcess 去重、BOM substitutes、Workflow/BOM 完整性准入、上一 runKey 后段生产实体、其他租户和全局配置；与现有三个 Workflow/BOM backlog 串行且不吸收其 scope。
 
 - `E2E-F006-PRODUCTION-POST-REPORT-20260824`：`ProductionPlanController` 的 interim-settle 请求 DTO、`InterimSettleService*`、现有小结 summary JSON、Web `productionPlan.ts` / 生产计划小结交互、RN `WHTransitLedgerScreen.tsx`、同目录 `transitReceiptQuantity.ts`、`transitLedgerApiClient.ts`、`ProductionWarehouseReceiptMobileController` 与对应目标测试、专项 E2E driver、dispatch 和本次证据；已允许一个约束迁移及本次 mobile 分次实收幂等 header 契约修复。除已登记范围外不改 Entity/Repository 查询，不触碰其他租户或全局配置。
@@ -64,7 +60,7 @@
 
 ## 阻塞项
 
-- VisionLab：正式 ROI audit 仍有 1 个 unjudgeable；旧计划任务 LastResult=1 且代码源尚未迁到公司受控 worktree。
+- VisionLab：正式 ROI audit 仍有 1 个 unjudgeable；计划任务迁移与运行失败已核销。
 - LLM 运营：2026-09-13 aistore 续期换 key，以及 2026-09-04/2026-11-15 复审需要 Owner/供应商控制台动作。
 - 餐饮 RN：实现已入 main，但当前 OTA runtime 与真实设备验收未确认。
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
