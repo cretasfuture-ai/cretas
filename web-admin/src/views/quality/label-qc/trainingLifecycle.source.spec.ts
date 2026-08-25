@@ -71,9 +71,8 @@ describe('label QC training lifecycle UI contract', () => {
     expect(page).toContain("<template v-if=\"row.status === 'REVIEWED'\">");
   });
 
-  it('keeps factory review focused on suspicious boxes without tray outlines, guide rows, or brush tools', () => {
+  it('keeps only suspicious boxes actionable without tray outlines, guide rows, or brush tools', () => {
     expect(workbench).toContain('v-for="item in visibleItems"');
-    expect(workbench).toContain('v-if="showTechnicalObjectReview"');
     expect(workbench).toContain('托盘无需描框');
     expect(workbench).not.toContain('horizontal-guide');
     expect(workbench).not.toContain('buildHorizontalGuideRows');
@@ -83,14 +82,28 @@ describe('label QC training lifecycle UI contract', () => {
     expect(workbench).not.toContain('漏了盒子');
     expect(workbench).not.toContain('删错盒子');
     expect(workbench).toContain("showTechnicalObjectReview.value || selectedObject.value?.decision === 'ADDED'");
-    expect(workbench).toContain('if (!showTechnicalObjectReview.value) break;');
+    expect(workbench).toContain('if (!displayedObjectDraft.value.trays.length) break;');
+  });
+
+  it('shows normal label boxes and problem boxes together without requiring optional correction mode', () => {
+    expect(workbench).toContain('activeDraft.value?.items.filter((item) => Boolean(item.bbox))');
+    expect(workbench).toContain('objectDraft.value ?? buildObjectReviewDraft(activePhoto.value)');
+    expect(workbench).toContain('<div v-if="displayedObjectDraft.trays.length" class="layer-toggles"');
+    expect(workbench).toContain('<template v-for="tray in displayedObjectDraft.trays" :key="tray.key">');
+    expect(workbench).not.toContain('<template v-if="showTechnicalObjectReview">');
+    expect(workbench).toContain("'reference-label-box': !showTechnicalObjectReview && label.decision !== 'ADDED'");
+    expect(workbench).toContain('.object-final-box.reference-label-box');
+    expect(workbench).toContain('pointer-events: none');
+    expect(workbench).toContain('正常标签与风险位置同时显示');
+    expect(workbench).toContain('这些框以绿色正常框显示，可在提交前撤销');
+    expect(workbench).not.toContain('这些框不会显示在照片上');
   });
 
   it('uses category-colored translucent fills while retaining tray ownership for optional label correction', () => {
     expect(workbench).toContain("'--overlay-fill': `${itemColor(item)}2e`");
     expect(workbench).toContain("'--overlay-fill': `${color}29`");
     expect(workbench).toContain('background: var(--overlay-fill)');
-    expect(workbench).toContain('v-for="tray in objectDraft?.trays ?? []"');
+    expect(workbench).toContain('v-for="tray in displayedObjectDraft.trays"');
     expect(workbench).toContain('v-for="label in tray.labels"');
     expect(workbench).toContain('标签校正（可选）');
     expect(workbench).toContain('+ 补{{ objectLabelText(type) }}框');
