@@ -62,6 +62,31 @@ _KNOWN_DISTINCT = {
     # 环境变量开关, 且都 fail-safe(认不出就当 false)。收口价值低于改动风险,
     # 留在这里是**明知而不修**, 不是没看见。
     "_TRUTHY",
+    # ── 一次性探针/变异脚本的**本地用例表** (2026-08-26 登记) ───────────────
+    # `smartbi/scripts/` 下每个探针脚本各自声明一张自己的用例表, 而这类表的名字
+    # 天然就那么几个通用词。它们是**同名的不同概念**, 不是漂移。
+    #
+    # 逐个按「用途是否相同」验过, 不是按「名字像不像」:
+    #   CASES      4 处 —— 门店简称实体识别 / 未来窗口 / 闸够不着的路 / 繁体词表 A/B。
+    #                     **连元组形状都不同**(3/2/2/4 元)。
+    #   MUTATIONS  10 处 —— 各变异脚本各自要打的那批变异, 每个脚本针对不同被测面。
+    #   PAIRS      2 处 —— 维度效应 vs 词表确定性 A/B, 两种配对含义。
+    #   QUERIES    2 处 —— 词表闸接线 vs b1 路由探针。
+    #   QUESTIONS  5 处 —— 各全景/复现探针各自的问句集。
+    #   _MN_CASES  2 处 —— 指标未覆盖 vs 收窄变异。
+    #
+    # 关键证据(而不是只看名字): 跨文件 import 计数 ——
+    #   MUTATIONS / PAIRS / QUERIES / _MN_CASES  **0 处**, 纯本地 fixture;
+    #   CASES 有 4 处、QUESTIONS 有 1 处跨文件 import, 但**导出方都不在漂移集合里**
+    #   (共享的那份是 restaurant_ai_eval / restaurant_panorama_probe, 与上面几处无关)。
+    #   ⇒ 漂移集合里的每一份都只被本文件的 for 循环消费。
+    #
+    # ⚠️ 已知代价(明写): 这是按**名字**豁免, 所以将来产品代码里若真出现同名共享常量
+    #    漂移, 本闸看不见。之所以接受: 这几个名字都属探针脚本文体, 产品代码不用它们。
+    # ⛔ 曾考虑整目录排除 `smartbi/scripts/` —— **实测否掉**: 该目录被跨文件 import
+    #    56 次(如 `from smartbi.scripts.restaurant_ai_eval import CASES`), 不是可丢弃的
+    #    一次性代码, 整目录排除会把真共享常量一起放掉。
+    "CASES", "MUTATIONS", "PAIRS", "QUERIES", "QUESTIONS", "_MN_CASES",
 }
 
 
