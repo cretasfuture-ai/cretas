@@ -22,3 +22,22 @@
 - **生产部署**：从 clean exact `origin/main` 通过 release preflight；142 个 production SmartBI migration 与 main 逐文件 SHA-256 一致，当前 main runner dry-run 确认 pending=0。Python 服务发布并健康，工厂 `/lsmsop/` 与共享 `/aiassist.html` 从 main 原子替换并保留备份；仅工厂 canonical source 原子更新 76→79 块，`.NEW=0`。
 - **独立验收**：Python 目标测试 138 passed，GitHub tracked-secret-scan 与 Web Admin vitest/typecheck 均通过；三页线上/仓库 SHA-256 一致。工厂真实回答 7/7 仅引用工厂 source；餐饮真实回答 2/2 仅引用餐饮三个 registered source，餐饮页面/tab/source 与块创建时间保持 no-op，正式块分别为 87、250、176。
 - **安全与收尾**：Python、Embedding、PostgreSQL、Redis 健康；生产 ERP 业务写入为 0，未触碰测试环境与 `.env`，保留发布备份和两个 worktree。工厂 scope 已释放，餐饮 scope 从未占用。
+
+## `E2E-F006-PRODUCTION-POST-REPORT-20260824` — `merged`
+
+- **完整历史链路**：真实 F006 UI 已覆盖原料/WIP/成品盘点及盘盈盘亏审批、`6+3+1` 分次与短收入库、全部合格/部分不合格/全部不合格质检、隔离/返工/复检、成品报废报损及销售/仓储不合格批次拦截；所有结果以独立 runKey 原始截图和 API/库存回读为准。
+- **缺陷修复与部署**：`BUG-F006-FINISHED-GOODS-WASTE-READBACK-010` 已合入并发布；部署后重新登录回读证明申请单显示真实成品批次、产品、`10盒` 和历史申请人，库存守恒 `DEPLETED / 0`。Entity/Flyway/Repository 变更已通过对应迁移/JPA 门禁。
+- **范围收尾**：既有仓储、质检、财务和价格普通流程不再重复写入；原生产浏览器和 RN 已退出，其他租户写入 `0`。真实历史素材已与后续专项分离并标记对应部署 SHA；本任务和 scope 锁释放。
+
+## `E2E-F006-WORKFLOW-CURRENT-VERSION-20260824` — `merged`
+
+- **产品验收**：已开始正式报工的计划 B 保持旧 Workflow；未报工计划 A/C 及 `IN_PROGRESS` 但无正式报工的计划 D 自动绑定最新当前配置。历史版本只列出确有已报工计划引用的版本并展示绑定计划；旧快照只读，恢复历史仅更新当前配置，无“另存独立版本”。
+- **并发与安全**：独立双浏览器旧图提交返回明确 HTTP 409 `PRODUCT_PROCESS_WORKFLOW_CONFLICT`，刷新后无覆盖和无额外历史；相同图重试保持零写幂等。仓储主管真实退出/重新登录后页面及直接 API 均为 403，手工 `/snapshot` 在真实 Controller 契约中退役返回 404。
+- **修复、测试与发布**：`BUG-F006-WORKFLOW-STALE-PUBLISHED-IDENTITY-011` 通过 PR #52 合入并部署 `035db9a84c2eb93aa25a1616792525d978b987e6`；Java `49/49`、真实 PostgreSQL 双提交顺序 `4/4`、Web `56/56`、typecheck/build 和部署后写入型 E2E 均通过。`92.433` 秒真实截图视频已交付；本任务和 scope 锁释放，不吸收工序去重/BOM backlog。
+
+## `E2E-F006-PRODUCTION-GAP-CLOSURE-20260825` — `merged`
+
+- **修复与部署**：`BUG-F006-BY-STOCK-REVERSAL-REPOST-STOP-012` 通过 PR #53 合入并部署 `89624e7562885e76cc4926a003bfa94fbc92807b`；唯一可信 Maven 生命周期通过 Java `58/58`。真实 upstream `47.100.235.168:10010`、PID `2148416`、启动时间 `09:13:05`、JAR mtime `09:12:58`、直连及公网 health 均独立验证。
+- **当前部署后 E2E**：同一 F006 存货计划完成两轮正式报工、S1/S2 各 `1盒`、总监撤销 S2 后合法重结及最终 `COMPLETED / POSTED`。另一计划四项原料各 `2.01kg` 形成 `8.04kg` WIP，包装 `8kg→10盒`，剩余精确 `0.04kg` 由独立二次加工真实开工合法消耗。
+- **超收原子性**：本 runKey 唯一订单生产报产 `10盒`；真实 UI 输入 `11盒` 被 HTTP 409 完整中文拒绝，刷新/API 证明待收 `10`、已收 `0`、SKU 批次 `17`、库存 `209盒`、可用 `154盒`、目标批次/过账流水均不变。随后合法实收 `10盒`，唯一新增成品批次、库存 `209→219`、可用 `154→164`，结单 `POSTED`。
+- **视频、限制与收尾**：runKey `E2E-F006-PROD-GAPS-20260825-082131` 留存 `185` 张逐步真实截图、`37` 条 action、`111.033` 秒部署后生产视频和 `150` 秒明确标注的仓储质检历史视频。原始连续 WebM、Android 真机/OTA、原料成本归集和独立销售经理登录未伪称通过；其他租户写入 `0`。已实际退出生产页面并关闭浏览器；本任务和 scope 锁释放，独立 blocked/queued backlog 完整保留。
