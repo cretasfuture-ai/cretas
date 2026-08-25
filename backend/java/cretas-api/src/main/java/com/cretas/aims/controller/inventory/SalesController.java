@@ -38,6 +38,7 @@ import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.ApprovalWorkflowService;
@@ -103,6 +104,13 @@ public class SalesController {
 
     @org.springframework.beans.factory.annotation.Autowired
     private WipInventoryService wipInventoryService;
+
+    /**
+     * 单位同一性走契约, 不比裸字符串 (见 {@link #sameStockUnit}).
+     * {@code required = false} 与本类其它字段注入同一条纪律: 保持既有「直接 new 控制器」的用例可用。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UnitContractService unitContractService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WorkflowEngineService workflowEngine;
@@ -320,15 +328,18 @@ public class SalesController {
             @PathVariable @NotBlank String factoryId) {
         Map<String, SalesProductInventorySummaryDTO> totals = new LinkedHashMap<>();
         for (FinishedGoodsStockItem row : finishedGoodsFeedService.listAvailableForFeed(factoryId, null)) {
-            mergeProductInventory(totals, row.getProductTypeId(), row.getAvailableQuantity(), row.getUnit());
+            mergeProductInventory(
+                    factoryId, totals, row.getProductTypeId(), row.getAvailableQuantity(), row.getUnit());
         }
         for (WipRowDTO row : wipInventoryService.listWipByFactory(factoryId, null, null)) {
-            mergeProductInventory(totals, row.getProductTypeId(), row.getAvailableQuantity(), row.getUnit());
+            mergeProductInventory(
+                    factoryId, totals, row.getProductTypeId(), row.getAvailableQuantity(), row.getUnit());
         }
         return ApiResponse.success("查询成功", new ArrayList<>(totals.values()));
     }
 
-    private static void mergeProductInventory(
+    private void mergeProductInventory(
+            String factoryId,
             Map<String, SalesProductInventorySummaryDTO> totals,
             String productTypeId,
             BigDecimal availableQuantity,
@@ -345,11 +356,38 @@ public class SalesController {
                         .unit(unit)
                         .build();
             }
-            if (java.util.Objects.equals(existing.getUnit(), unit)) {
+            if (sameStockUnit(factoryId, existing.getUnit(), unit)) {
                 existing.setAvailableQuantity(existing.getAvailableQuantity().add(availableQuantity));
             }
             return existing;
         });
+    }
+
+    /**
+     * 同一个单位的两种写法必须能合并 —— 与 {@code TransferServiceImpl#sameTransferUnit} 同一口径。
+     *
+     * <p>这里曾是 {@code Objects.equals(existing.getUnit(), unit)} 的裸字符串比较。成品批次那侧
+     * 与 WIP 那侧的单位来自不同录入路径, 同一个单位一边存英文码一边存中文名是常态
+     * (LIUSHANMEN 2026-07-30 事故的形状: 调拨把「只」存成 {@code pcs}, 报工按字面比较看不见整批货)。
+     * 判不等的后果在这个接口上是<b>静默丢量</b>: 选品弹窗里这个产品的可用库存少算一整段。
+     *
+     * <p>⛔ 不用 {@code areEquivalent}: 它只比 {@code normalize().code()}, 会把「只/个/件」合并成
+     * 一个数, 等于替工厂断定「一只 = 一件」。#1976 已就此定案, 所以走 {@code storageUnit}:
+     * 「箱 ≡ case」这类单一中文写法归一到同一字面, 而「只/个/件」命中「同码多中文写法」规则
+     * 各自保留字面, 仍判不等。
+     *
+     * <p>契约服务缺失时(直接 new 出来的控制器用例)回落字面比较 —— 与注入前的旧行为一致。
+     */
+    private boolean sameStockUnit(String factoryId, String left, String right) {
+        if (java.util.Objects.equals(left, right)) {
+            return true;
+        }
+        if (left == null || right == null || unitContractService == null) {
+            return false;
+        }
+        String l = unitContractService.storageUnit(factoryId, left);
+        String r = unitContractService.storageUnit(factoryId, right);
+        return l != null && !l.isBlank() && l.equals(r);
     }
 
     /**

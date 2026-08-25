@@ -61,6 +61,14 @@ class UserFacingMessagesAreChineseContractTest {
      * <p>⛔ 若本地跑出更大的数字, 先查是不是提取逻辑变了, <b>不要直接把这个数字改大</b>——
      * 改大就是把棘轮松开, 等于这道闸不存在。
      */
+    // 2026-08-25(三次收紧): 38 -> 37。有人翻译/删除了一条却没把基线减一, 于是
+    //   baselineMustNotBeLooserThanReality 开火(expected 37 but was 38) —— 它在要求把空档收掉,
+    //   这正是它存在的理由。⚠️ 这次是【收紧】(38→37), 不是把基线改大放行新增。
+    //   对账口径(逐条比集合, 不是只比总数): 用同一组正则扫 4f8f09c051 与 41fcac427e 两棵树的
+    //   src/main/java/com/cretas/aims/service, 集合差是 —— 消失 1 条 / 新增 0 条:
+    //     - ProductionPlanServiceImpl.java: "Multi-output receipt currently requires exact
+    //       per-line receipt quantities"
+    //   总样本量同期 1159 -> 1177 条(仍在增长), 所以 37 不是「正则失配扫不到了」。
     // 2026-08-18(二次收紧): 41 -> 38。两条并行线各自修了一批, 各自绿;
     //   合到一起之后棘轮自己的「基线不许比实际欠账松」那条断言开火:
     //   expected 38 but was 41 —— 它在要求把空档收掉, 这是它该干的事, 不是缺陷。
@@ -68,7 +76,7 @@ class UserFacingMessagesAreChineseContractTest {
     // 2026-08-18: 45 -> 41, 结算链路上 BYPRODUCT_NRV_REQUIRED /
     // WORKFLOW_OUTPUT_UNIT_MISMATCH / PINNED_BOM_OUTPUT_POLICY_INCOMPLETE /
     // OUTPUT_COST_ALLOCATION_RATIO_REQUIRED 四条已翻成中文并补上下一步。
-    private static final int BASELINE = 38;
+    private static final int BASELINE = 37;
 
     private static final Path SERVICE_ROOT =
             Path.of("src/main/java/com/cretas/aims/service");
