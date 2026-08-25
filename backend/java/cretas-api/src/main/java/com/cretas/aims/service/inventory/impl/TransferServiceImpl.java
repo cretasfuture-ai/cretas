@@ -752,6 +752,24 @@ public class TransferServiceImpl implements TransferService {
     private static final String SOURCE_TRANSFER_OUT = "TRANSFER_OUT";
 
     /**
+     * 调入方新建批次的来源单据类型 (存 {@code material_batches.source_doc_type}, 列宽 varchar(32))。
+     *
+     * <p>🔴 2026-08-25 生产实测: 调入方 {@link #createTargetInventory} 建出来的批次
+     * {@code source_doc_type} / {@code source_doc_id} <b>一个字都不写</b> ——
+     * 从这个批次追不回它是哪张调拨单调进来的。这与上面 {@link #SOURCE_TRANSFER_OUT}
+     * 那条注释记的「调拨扣减此前完全不写流水」是<b>同一件事的入库侧镜像</b>:
+     * 出库侧的账 2026-08-14 补上了, 入库侧的来源一直没补。</p>
+     *
+     * <p>与 {@code TRANSFER_OUT} 对称命名。写入它对既有行为<b>中性</b>: 全仓按值消费
+     * {@code sourceDocType} 的三处 ({@code ProductionStockAllocationServiceImpl} 与
+     * {@code OrderCostBreakdownService} ×2) 都是与 {@code "PRODUCTION_BATCH"} 比相等,
+     * 而 {@code "PRODUCTION_BATCH".equals(null)} 与
+     * {@code "PRODUCTION_BATCH".equals("TRANSFER_IN")} 同为 false; 没有任何
+     * JPQL/native 查询按这一列过滤。</p>
+     */
+    private static final String SOURCE_DOC_TYPE_TRANSFER_IN = "TRANSFER_IN";
+
+    /**
      * 为调拨出库扣减的**每一个**批次写一条消耗流水。
      *
      * <p>🔴 2026-08-14 生产实测: 调拨扣减此前完全不写流水。三张流水表(material_consumptions /
@@ -1864,6 +1882,9 @@ public class TransferServiceImpl implements TransferService {
             batch.setStatus(MaterialBatchStatus.AVAILABLE);
             batch.setCreatedBy(userId);
             batch.setWarehouseId(resolvedTargetWarehouseId);  // D1 双仓
+            // 回写来源单据: 没有这两行, 调入建出来的批次追不回调拨单 (见常量 javadoc)。
+            batch.setSourceDocType(SOURCE_DOC_TYPE_TRANSFER_IN);
+            batch.setSourceDocId(item.getTransferId());
             materialBatchRepository.save(batch);
             item.setTargetBatchId(batch.getId());
 
