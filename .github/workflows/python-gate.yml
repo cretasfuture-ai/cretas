@@ -79,6 +79,14 @@ on:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
       - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
+  # 手动触发 —— 2026-08-26 加。
+  # 本闸此前在 GitHub 上被 disabled_manually, 停用期间攒了 8 条红(其中 1 条是真的
+  # 产品退化: 第二个 `mismatch == …` 身份比较长了出来)。清完重新启用时发现:
+  # 没有 workflow_dispatch 就**没有办法验证「开了之后它是绿的」** —— 只能等下一次
+  # 有人碰 backend/python 才知道, 而那时红了又会变成「谁的锅」。
+  # ⚠️ 本机 py3.11 跑绿 ≠ CI py3.10 跑绿, 所以「开闸后立刻手动跑一次」是必要动作,
+  #    不是方便功能。
+  workflow_dispatch:
 
 concurrency:
   group: python-gate-${{ github.ref }}
