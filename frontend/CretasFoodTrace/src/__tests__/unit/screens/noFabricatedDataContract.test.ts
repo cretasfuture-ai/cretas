@@ -179,12 +179,19 @@ describe('Stocktaking counting screens do not anchor the counter', () => {
   const list = readCode('restaurant/stocktaking/StocktakingListScreen.tsx');
 
   it('does not render the book quantity while the count is being entered', () => {
-    const inputIndex = execute.indexOf('onChangeText={setActualQty}');
-    expect(inputIndex).toBeGreaterThan(0); // 阳性对照: 输入框还在
+    expect(execute).toContain('onChangeText={setActualQty}'); // 阳性对照: 输入框还在
 
-    // 揭盲卡片(提交后)之前的那一段里, 不许出现账面数
-    const beforeReveal = execute.slice(0, execute.indexOf('result ? ('));
-    expect(beforeReveal).not.toContain('record.systemQuantity');
+    /*
+     * 这条断言的第一版写成「取 `result ? (` 之前的那一段, 断言它不含账面数」。
+     * 变异对照当场证明它是错的: 揭盲分支在文件里排在**录入表单之前**, 所以那个
+     * 切片根本不包含录入区 —— 把账面数放回录入框上方, 闸纹丝不动。
+     * (形态 A: 我想知道的是"录入区有没有", 我实际在量的是"文件开头那一段有没有"。)
+     *
+     * 改成按**变量**判, 不按位置判 —— 这两个名字本身就分开了盘前/盘后:
+     *   `record` = 提交**前**加载的记录 → 它的 systemQuantity 一次都不许渲染
+     *   `result` = 提交**后**后端返回的记录 → 揭盲用的就是它
+     */
+    expect(execute).not.toContain('record.systemQuantity');
   });
 
   it('reveals the variance only after submitting, using the server-computed value', () => {
