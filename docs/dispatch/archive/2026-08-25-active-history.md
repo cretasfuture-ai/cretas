@@ -15,3 +15,10 @@
 - **真实数据与候选**：累计 573 张唯一人工样本中，train 的缺白标/缺彩标为 54/9。类别平衡数据集 `label-d707c55a9594` 保留 unique train/val 463/110，只增加 18 个缺彩标训练副本。候选 `label-d707c55a9594-20260825-022454` 的 PT/ONNX mismatch=0；修正后的 presence 从 baseline 104/110 提升到 106/110，两类 FP 均为 0。
 - **生产链回放裁决**：同一候选在 310 张生产运行时回放仍将受保护缺彩标照片 `29c7e4bb-b9f3-4407-8eae-1c25174102ac` 从 `MISSING_COLOR_LABEL` 判成 `CLEAR`，protected/independent 均为 6/7；19+77+200 共 296 张正常图全部零误报。门禁失败，候选 `NOT_DEPLOYED`；生产模型 SHA-256 保持 `bfd8a3adccbbe0bf5ccbe84eec205858204f05013c97e9e1cc6fb192a9b1f3f2`，生产写入为 0，原图/人工真值/保护集均未改写。
 - **验证与下一步**：`py_compile`、VisionLab 全套测试和 `git diff --check` 通过。现有缺彩标真例不足，后续只从新照片中挖掘模型判 `CLEAR` 但存在缺彩标差异/不确定性的目标托盘交人工审核；不得把已暴露保护样本回灌训练，也不得推全量照片给审核员。实现 scope 已释放。
+
+## `SOP-RAG-SYNC-20260825` — `merged`
+
+- **工厂实现与合并**：PR #54 已合入 `af4024ae7100ae0a55df83e9fd1a8a6385b929d5`；仅更新现有工厂在线 SOP、唯一 `f006-production-full-chain-sop.md` 知识源、工厂确定性回答与 AI Assist 工厂 tab。口径覆盖 Workflow 当前配置/已开工历史/旧会话冲突、撤销重结后的真实停产门禁、分次入库及幂等、质检证据和处置审批、成品盘点/报废/可售批次，以及含税价和长度采购单位。
+- **生产部署**：从 clean exact `origin/main` 通过 release preflight；142 个 production SmartBI migration 与 main 逐文件 SHA-256 一致，当前 main runner dry-run 确认 pending=0。Python 服务发布并健康，工厂 `/lsmsop/` 与共享 `/aiassist.html` 从 main 原子替换并保留备份；仅工厂 canonical source 原子更新 76→79 块，`.NEW=0`。
+- **独立验收**：Python 目标测试 138 passed，GitHub tracked-secret-scan 与 Web Admin vitest/typecheck 均通过；三页线上/仓库 SHA-256 一致。工厂真实回答 7/7 仅引用工厂 source；餐饮真实回答 2/2 仅引用餐饮三个 registered source，餐饮页面/tab/source 与块创建时间保持 no-op，正式块分别为 87、250、176。
+- **安全与收尾**：Python、Embedding、PostgreSQL、Redis 健康；生产 ERP 业务写入为 0，未触碰测试环境与 `.env`，保留发布备份和两个 worktree。工厂 scope 已释放，餐饮 scope 从未占用。
