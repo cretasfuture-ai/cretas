@@ -8,6 +8,7 @@ const source = (path: string): string =>
 describe('label QC training lifecycle UI contract', () => {
   const page = source('src/views/quality/label-qc/index.vue');
   const api = source('src/api/labelQc.ts');
+  const workbench = source('src/views/quality/label-qc/LabelQcReviewWorkbench.vue');
 
   it('separates daily review, reviewed-data management, and archives', () => {
     expect(page).toContain('待人工审核');
@@ -68,5 +69,52 @@ describe('label QC training lifecycle UI contract', () => {
     expect(page).toContain('非人工真值');
     expect(page).toContain("return task.status === 'REVIEWED'");
     expect(page).toContain("<template v-if=\"row.status === 'REVIEWED'\">");
+  });
+
+  it('keeps factory review focused on suspicious boxes without tray outlines, guide rows, or brush tools', () => {
+    expect(workbench).toContain('v-for="item in visibleItems"');
+    expect(workbench).toContain('v-if="showTechnicalObjectReview"');
+    expect(workbench).toContain('托盘无需描框');
+    expect(workbench).not.toContain('horizontal-guide');
+    expect(workbench).not.toContain('buildHorizontalGuideRows');
+    expect(workbench).not.toContain('object-tray-box');
+    expect(workbench).not.toContain('reference-box');
+    expect(workbench).not.toContain("mode: 'brush'");
+    expect(workbench).not.toContain('漏了盒子');
+    expect(workbench).not.toContain('删错盒子');
+    expect(workbench).toContain("showTechnicalObjectReview.value || selectedObject.value?.decision === 'ADDED'");
+    expect(workbench).toContain('if (!showTechnicalObjectReview.value) break;');
+  });
+
+  it('uses category-colored translucent fills while retaining tray ownership for optional label correction', () => {
+    expect(workbench).toContain("'--overlay-fill': `${itemColor(item)}2e`");
+    expect(workbench).toContain("'--overlay-fill': `${color}29`");
+    expect(workbench).toContain('background: var(--overlay-fill)');
+    expect(workbench).toContain('v-for="tray in objectDraft?.trays ?? []"');
+    expect(workbench).toContain('v-for="label in tray.labels"');
+    expect(workbench).toContain('标签校正（可选）');
+    expect(workbench).toContain('+ 补{{ objectLabelText(type) }}框');
+  });
+
+  it('separates optional existing-label supplementation from real missing-label defect review', () => {
+    expect(workbench).toContain('标签数量参考');
+    expect(workbench).toContain('按同批固定数量');
+    expect(workbench).toContain('该图片可能存在模型未标注的白标或彩标');
+    expect(workbench).toContain('仅提醒，不强制补标，不影响审核提交');
+    expect(workbench).toContain('@click="beginLabelSupplement(type)"');
+    expect(workbench).toContain('findTrayForLabelBox(draft, bbox)');
+    expect(workbench).toContain('addSupplementalLabel(bbox)');
+    expect(workbench).toContain('v-for="entry in addedLabelObjects"');
+    expect(workbench).not.toContain('defaultLabelBox(tray)');
+  });
+
+  it('releases the submitting state before queue refresh and keeps timeout retries idempotent', () => {
+    expect(page).toContain('prepareLabelQcReviewAttempt(');
+    expect(page).toContain('reviewRequestId: attempt.requestId');
+    expect(page).toContain('本批暂未确认提交成功，标注已保留，可直接重试');
+    expect(page).toContain('本批已提交成功，但待审列表刷新失败');
+    expect(page.indexOf('submitting.value = false;', page.indexOf('async function submitReview')))
+      .toBeLessThan(page.indexOf('await load();', page.indexOf('async function submitReview')));
+    expect(api).toContain('{ timeout: 30_000 }');
   });
 });

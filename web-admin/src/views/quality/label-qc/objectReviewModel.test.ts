@@ -3,6 +3,7 @@ import type { LabelQcPhoto } from '@/api/labelQc';
 import {
   addObjectLabel,
   buildObjectReviewDraft,
+  findTrayForLabelBox,
   hasHumanObjectReview,
   setTrayPresence,
   toObjectReviewPayload,
@@ -218,5 +219,53 @@ describe('label QC object review model', () => {
     expect(draft.trays[0]?.labels).toHaveLength(1);
     expect(draft.trays[1]?.labels).toHaveLength(1);
     expect(draft.trays.flatMap((tray) => tray.rejectedAiObjectKeys)).toEqual([]);
+  });
+
+  it('assigns a hand-drawn physical label to the matching existing tray without creating a tray', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [
+        { index: 0, bbox: [0, 0, 0.48, 1], labels: [] },
+        { index: 1, bbox: [0.48, 0, 1, 1], labels: [] },
+      ],
+    })));
+
+    const tray = findTrayForLabelBox(draft, {
+      xMin: 0.62, yMin: 0.25, xMax: 0.78, yMax: 0.38,
+    });
+
+    expect(tray?.trayIndex).toBe(1);
+    addObjectLabel(tray!, 'WHITE_LABEL', {
+      xMin: 0.62, yMin: 0.25, xMax: 0.78, yMax: 0.38,
+    }, 'manual-white');
+    expect(draft.trays).toHaveLength(2);
+    expect(toObjectReviewPayload(draft).trays[1]?.labels[0]).toMatchObject({
+      type: 'WHITE_LABEL',
+      decision: 'ADDED',
+    });
+  });
+
+  it('fails safely when the detector missed the owning tray instead of inventing tray truth', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{ index: 0, bbox: [0, 0, 0.4, 0.4], labels: [] }],
+    })));
+
+    expect(findTrayForLabelBox(draft, {
+      xMin: 0.7, yMin: 0.7, xMax: 0.85, yMax: 0.85,
+    })).toBeNull();
+    expect(draft.trays).toHaveLength(1);
+    expect(hasHumanObjectReview(draft)).toBe(false);
+  });
+
+  it('chooses the closer existing tray when overlapping tray boxes both cover the label', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [
+        { index: 0, bbox: [0, 0, 0.8, 0.8], labels: [] },
+        { index: 1, bbox: [0.3, 0.3, 1, 1], labels: [] },
+      ],
+    })));
+
+    expect(findTrayForLabelBox(draft, {
+      xMin: 0.6, yMin: 0.6, xMax: 0.7, yMax: 0.7,
+    })?.trayIndex).toBe(1);
   });
 });

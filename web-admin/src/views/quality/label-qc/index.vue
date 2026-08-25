@@ -34,6 +34,10 @@ import {
   createPhotoArchive,
   downloadPhotoArchive,
 } from './photoArchive';
+import {
+  prepareLabelQcReviewAttempt,
+  type LabelQcReviewAttempt,
+} from './reviewSubmission';
 
 const STATUS_LABELS: Record<LabelQcTaskStatus, string> = {
   DRAFT: '草稿',
@@ -60,6 +64,7 @@ const drawerVisible = ref(false);
 const detailLoading = ref(false);
 const detail = ref<LabelQcTaskDetail | null>(null);
 const submitting = ref(false);
+const pendingReviewAttempt = ref<LabelQcReviewAttempt | null>(null);
 const retryingTaskId = ref<string | null>(null);
 const reviewDirty = ref(false);
 const allowDrawerClose = ref(false);
@@ -162,6 +167,7 @@ function statusText(status: LabelQcTaskStatus): string {
 
 async function openReview(row: LabelQcTaskSummary) {
   if (!factoryId.value) return;
+  if (pendingReviewAttempt.value?.taskId !== row.id) pendingReviewAttempt.value = null;
   reviewDirty.value = false;
   allowDrawerClose.value = false;
   drawerVisible.value = true;
@@ -176,7 +182,7 @@ async function openReview(row: LabelQcTaskSummary) {
 }
 
 async function submitReview(payload: LabelQcReviewRequest) {
-  if (!factoryId.value || !detail.value) return;
+  if (!factoryId.value || !detail.value || submitting.value) return;
   try {
     await ElMessageBox.confirm(
       `即将提交 ${payload.photos.length} 张照片的人工真值。提交后仍需技术管理员确认，才会进入训练集。`,
@@ -190,41 +196,61 @@ async function submitReview(payload: LabelQcReviewRequest) {
   } catch {
     return;
   }
+  if (!factoryId.value || !detail.value || submitting.value) return;
+
+  const taskId = detail.value.task.id;
+  const attempt = prepareLabelQcReviewAttempt(
+    pendingReviewAttempt.value,
+    taskId,
+    detail.value.task.version,
+    payload,
+  );
+  pendingReviewAttempt.value = attempt;
   submitting.value = true;
   try {
     const response = await reviewLabelQcTask(
       factoryId.value,
-      detail.value.task.id,
+      taskId,
       {
         ...payload,
         expectedVersion: detail.value.task.version,
-        reviewRequestId: globalThis.crypto?.randomUUID?.()
-          ?? `web-${detail.value.task.id}-${Date.now()}`,
+        reviewRequestId: attempt.requestId,
       },
     );
-    if (response.success) {
-      const finishedId = detail.value.task.id;
-      detail.value = response.data;
-      reviewDirty.value = false;
-      allowDrawerClose.value = true;
-      await load();
-
-      // 连审：一批做完直接进下一批，不用退回列表再点。审核几十批时这一步
-      // 省掉的往返比看起来多。没有下一批才关抽屉。
-      // 只在“待人工审核”队列里连审；管理/归档模式下保持原来的关闭行为。
-      const next = queueMode.value === 'REVIEW'
-        ? rows.value.find((row) => row.id !== finishedId && row.status === 'NEEDS_REVIEW')
-        : undefined;
-      if (next) {
-        ElMessage.success(`本批已完成，继续下一批：${next.batchNumber}`);
-        await openReview(next);
-      } else {
-        drawerVisible.value = false;
-        ElMessage.success('人工审核已完成，待审队列已清空');
-      }
+    if (!response.success) {
+      ElMessage.error(response.message || '本批提交失败，当前标注已保留，请重新提交');
+      return;
     }
+    detail.value = response.data;
+    reviewDirty.value = false;
+    allowDrawerClose.value = true;
+    pendingReviewAttempt.value = null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '网络异常';
+    ElMessage.warning(`本批暂未确认提交成功，标注已保留，可直接重试：${message}`);
+    return;
   } finally {
     submitting.value = false;
+  }
+
+  ElMessage.success('本批审核已提交，正在刷新待审队列');
+  try {
+    await load();
+
+    // 提交锁只覆盖真实写请求；刷新队列和打开下一批失败也不能卡住已完成批次。
+    const next = queueMode.value === 'REVIEW'
+      ? rows.value.find((row) => row.id !== taskId && row.status === 'NEEDS_REVIEW')
+      : undefined;
+    if (next) {
+      ElMessage.success(`本批已完成，继续下一批：${next.batchNumber}`);
+      await openReview(next);
+    } else {
+      drawerVisible.value = false;
+      ElMessage.success('人工审核已完成，待审队列已清空');
+    }
+  } catch {
+    drawerVisible.value = false;
+    ElMessage.warning('本批已提交成功，但待审列表刷新失败；请刷新页面后继续审核');
   }
 }
 

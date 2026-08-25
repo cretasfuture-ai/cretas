@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LabelQcTaskDetail } from '@/api/labelQc';
-import { setTrayPresence } from './objectReviewModel';
+import { addObjectLabel, setTrayPresence } from './objectReviewModel';
 import {
   appendHumanBox,
   buildReviewDraft,
@@ -107,6 +107,59 @@ describe('label QC review model', () => {
       label: 'NO_DEFECT',
     });
     expect(request.photos[0]?.objectReview).toBeUndefined();
+  });
+
+  it('allows review submission when a label-count reminder remains unresolved', () => {
+    const detail = buildDetail(true);
+    detail.photos[0]!.screeningDetail = JSON.stringify({
+      trays: [
+        {
+          index: 0,
+          bbox: [0, 0, 0.45, 1],
+          labels: [{ type: 'white', bbox: [0.1, 0.1, 0.2, 0.2] }],
+        },
+        {
+          index: 1,
+          bbox: [0.5, 0, 1, 1],
+          labels: [],
+        },
+      ],
+    });
+    const drafts = buildReviewDraft(detail);
+    drafts[0]!.items[0]!.label = 'NO_DEFECT';
+
+    expect(markPhotoReviewed(drafts[0]!)).toBeNull();
+    markPhotoNormal(drafts[1]!);
+    expect(validateReviewDraft(drafts)).toBeNull();
+    expect(toReviewRequest(drafts).photos[0]?.objectReview).toBeUndefined();
+  });
+
+  it('saves an existing supplemental label without turning it into a missing-label defect', () => {
+    const detail = buildDetail(true);
+    detail.photos[0]!.screeningDetail = JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], labels: [] }],
+    });
+    const drafts = buildReviewDraft(detail);
+
+    addObjectLabel(
+      drafts[0]!.objectReview!.trays[0]!,
+      'WHITE_LABEL',
+      { xMin: 0.2, yMin: 0.2, xMax: 0.4, yMax: 0.35 },
+      'human-existing-white-label',
+    );
+    drafts[0]!.items[0]!.label = 'NO_DEFECT';
+
+    expect(markPhotoReviewed(drafts[0]!)).toBeNull();
+    markPhotoNormal(drafts[1]!);
+
+    const reviewedPhoto = toReviewRequest(drafts).photos[0];
+    expect(reviewedPhoto?.annotations).toEqual([
+      expect.objectContaining({ annotationId: 'ai-1', label: 'NO_DEFECT' }),
+    ]);
+    expect(reviewedPhoto?.objectReview?.trays[0]?.labels).toEqual([
+      expect.objectContaining({ type: 'WHITE_LABEL', decision: 'ADDED' }),
+    ]);
+    expect(reviewedPhoto?.objectReview?.trays[0]?.whitePresence).toBe('PRESENT');
   });
 
   it('persists an explicitly reviewed missing label together with a matching defect conclusion', () => {
