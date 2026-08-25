@@ -412,7 +412,24 @@ public class OrderCostBreakdownService {
         List<String> blockingMissingItems = missingCostItems.stream()
                 .filter(item -> !isOptionalCostItem(item))
                 .collect(Collectors.toList());
-        boolean costComplete = !semiFeedUnknown && (!auditEligible || blockingMissingItems.isEmpty());
+        // ── 2026-08-25: 一个【已经有产出】的批次, 各成本桶全是 0 —— 那是「没归集」不是「零成本」 ──
+        //   实测(部署后 prod): PB-PLAN-1787560061105 读出 totalCost=0.0 / costComplete=true,
+        //   而它无领料、无人工、BOM 也没有包材行。结单侧本来就安全(usableTotalCost 要求
+        //   signum>0), 但成本【页面】上「0.0 且完整」会让人以为这批货真的不花钱。
+        //
+        //   本仓形态 A¹¹: 算「缺了多少」之前先问「这里的 0 是不是一种合法状态」——
+        //   一个已完工批次的全 0 几乎必然是没归集。
+        //   ⛔ 只对 auditEligible(有 BOM/Workflow 的正式计划)判: 那种批次不可能真的零投入。
+        boolean nothingCollected = auditEligible
+                && raw.signum() == 0 && labor.signum() == 0 && seasoning.signum() == 0
+                && packaging.signum() == 0 && semiFeedCost.signum() == 0;
+        if (nothingCollected) {
+            missingCostItems.add("NO_COST_COLLECTED");
+            blockingMissingItems = new ArrayList<>(blockingMissingItems);
+            blockingMissingItems.add("NO_COST_COLLECTED");
+        }
+        boolean costComplete = !semiFeedUnknown
+                && (!auditEligible || blockingMissingItems.isEmpty());
         BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost)
                 .add(equipment).add(other);
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;

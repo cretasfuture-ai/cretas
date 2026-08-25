@@ -5286,6 +5286,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             case "LABOR_RATE_OR_TIME":
                 // 历史码: 2026-08-25 拆成上面两个后不再产出, 保留是为了读旧数据不丢项。
                 return "工序 " + detail + " 缺工时段或人工成本";
+            case "NO_COST_COLLECTED":
+                return "本计划还没有归集到任何成本(没有领用、报工或投料记录)";
             case "SEMI_FINISHED_OR_FINISHED_FEED_PRICE":
                 return "半成品/成品投料缺单位成本";
             case "PINNED_BOM_SNAPSHOT_UNAVAILABLE":
