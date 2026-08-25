@@ -11407,7 +11407,12 @@ def resolver_supports_explicit_window(code: Optional[str]) -> bool:
     return "date_range" in inspect.signature(resolver).parameters
 
 
-def _future_window_answer(code: str, query: Optional[str] = None) -> OpsAnswer:
+def _future_window_answer(
+    code: str,
+    query: Optional[str] = None,
+    *,
+    today: Optional[date] = None,
+) -> OpsAnswer:
     """「你问的那段时间还没到」—— 未来窗口的**唯一**一份说法。
 
     ⛔ 只有这一处构造它。`resolve_sales_summary` 里那条既有分支也调本函数,
@@ -11431,8 +11436,15 @@ def _future_window_answer(code: str, query: Optional[str] = None) -> OpsAnswer:
     """
     #: 老板原话里如果就写着具体日期, 把它回读一遍 —— 比笼统说「未来」更能让他
     #: 确认「系统确实听懂了我问的是哪几天」。⛔ 解不出就不编, 只说「还没到」。
+    #: ⚠️ `today` 与 `_resolve_sales_date_range(query, today=…)` 是**同一个注入点**,
+    #:   缺它这条路就只能读墙上时钟 —— 2026-08-26 实测的后果: 本函数的测试把
+    #:   `TODAY` 钉在 2026-08-19(prod 复现当天), 问的是 8/25–8/31, 而解析层认这个
+    #:   注入、答案层不认, 于是日历一走过 8/25, 「把日期回读一遍」这段就不再执行,
+    #:   测试红成「产品不回读日期了」——**其实是测试自己随日历腐坏**。
+    #:   形态 D: 同一个「今天」有两份来源, 只有一份能被钉住。
+    anchor = today or date.today()
     requested = parse_absolute_date_range(query or "")
-    if requested is not None and requested[0] > date.today():
+    if requested is not None and requested[0] > anchor:
         window_text = "您问的 %s 至 %s 这段时间" % (requested[0], requested[1])
     else:
         window_text = "您问的时间段"
@@ -11501,6 +11513,14 @@ async def resolve_by_code(
     ):
         return _money_masked_answer(code)
     query_text = kwargs.get("query") or ""
+    #: 「今天」的注入点 —— 只给未来窗口那道闸用, 默认读墙上时钟, 行为逐字不变。
+    #: ⛔ 用 `pop` 不用 `get`: 各 resolver 的签名里没有 `today`, 留在 kwargs 里会被
+    #:   下面那段按签名过滤的逻辑漏给带 `**kwargs` 的 resolver。
+    #: ⚠️ 存在的理由不是「为了测试」, 而是这条路上的「今天」原本有**两份来源**:
+    #:   解析层 `_resolve_sales_date_range(query, today=…)` 认注入, 答案层与本闸只读
+    #:   `date.today()` —— 于是钉住日期的测试会随日历腐坏(2026-08-26 实测红了 2 条)。
+    #:   这里补齐的是那个已有惯例, 不是新造机制。
+    _future_anchor = kwargs.pop("today", None)
     if (
         code in _DATE_BACKREF_CODES
         and query_text
@@ -11549,9 +11569,10 @@ async def resolve_by_code(
             and kwargs["date_range"][1] is not None
         )
         and query_text
-        and _resolve_sales_date_range(query_text)[1] == _FUTURE_WINDOW_LABEL
+        and _resolve_sales_date_range(
+            query_text, today=_future_anchor)[1] == _FUTURE_WINDOW_LABEL
     ):
-        return _future_window_answer(code, query_text)
+        return _future_window_answer(code, query_text, today=_future_anchor)
     sig = inspect.signature(resolver)
     accepts_var_kw = any(
         p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()

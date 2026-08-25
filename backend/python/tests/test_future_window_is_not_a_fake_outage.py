@@ -156,7 +156,8 @@ def test_the_future_answer_does_not_blame_the_system_or_the_data():
     """④ 文案：⛔ 不甩锅。守的是**性质**，不是某一句措辞。"""
     text = _future_window_answer(
         "RESTAURANT_OPS_SALES_SUMMARY",
-        "2026年8月25号到8月31号的营收是多少").answer_text
+        "2026年8月25号到8月31号的营收是多少",
+        today=TODAY).answer_text
     for lie in ("系统这会儿有点忙", "稍后再问", "请稍后", "数据已经同步",
                 "账单已同步", "跑出来了"):
         assert lie not in text, f"未来窗口的答案里出现了甩锅措辞 {lie!r}"
@@ -207,7 +208,8 @@ async def test_dispatch_short_circuits_a_future_window(only_sentinel):
     """闸触发: ⛔ 一次库都不查（pool 传 None，查库就会炸）。"""
     got = await resolve_by_code(
         "RESTAURANT_OPS_SALES_SUMMARY", None, "MOCK_REST",
-        query="2026年8月25号到8月31号的营收是多少", role="restaurant_manager")
+        query="2026年8月25号到8月31号的营收是多少", role="restaurant_manager",
+        today=TODAY)
     assert got is not _SENTINEL, "闸没拦住 —— 未来窗口被送进了 resolver"
     assert got.meta.get("future_request") is True
 
