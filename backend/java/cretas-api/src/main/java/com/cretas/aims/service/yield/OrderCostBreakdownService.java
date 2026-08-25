@@ -1032,8 +1032,28 @@ public class OrderCostBreakdownService {
             String materialName = stringValue(item.get("materialName"));
             BigDecimal standardQuantity = toBigDecimal(item.get("standardQuantity"));
             BigDecimal quantity = standardQuantity == null ? null : standardQuantity.multiply(scale);
+            // ── 2026-08-25 owner 裁定: BOM 里的 itemCost=0 是【没填】, 不是「不要钱」 ──────
+            //   实测(生产库) 同一批包材, 两处读数完全对不上:
+            //
+            //     包材            raw_material_types.unit_price  含税价   BOM itemCost
+            //     成品盒                              0.01        0.01      0.0000
+            //     外箱                                0.44        0.50      0.0000
+            //     封膜                                8.85       10.00      0.0000
+            //
+            //   成本真值录在【物料 SKU】那边(raw_material_types / 采购→批次单价),
+            //   BOM 的 itemCost 只是一份没同步上的冗余字段, 全 0。
+            //   按 0 计入 = 把「没填」当成「零成本」, 会系统性低估 COGS、虚增毛利
+            //   —— 本仓明令禁止的那种假数据。
+            //
+            //   ⛔ 注意 RAW 行的 itemCost 是 null 而 PACKAGING 行是 0(实测 16 : 5),
+            //      同一个人录同一张表却是两种空值 ⇒ 这个 0 是默认值, 不是录入值。
+            //
+            //   ⚠️ 这里【只判不可信】, 不在本方法里替它找价: 找价的活已经有人干了 ——
+            //      判为不可信后整份快照回退 notPinned(), 包材成本走实际领用
+            //      (material_consumptions.unitPrice, 来自采购真实单价)。见下方 allPinnedCostsUnusable。
             BigDecimal pinnedItemCost = toBigDecimal(item.get("itemCost"));
-            BigDecimal amount = pinnedItemCost == null ? null : pinnedItemCost.multiply(scale);
+            boolean pinnedCostUsable = pinnedItemCost != null && pinnedItemCost.signum() != 0;
+            BigDecimal amount = pinnedCostUsable ? pinnedItemCost.multiply(scale) : null;
             BigDecimal effectiveUnitPrice = pinnedItemCost != null && standardQuantity != null
                     && standardQuantity.signum() > 0
                     ? pinnedItemCost.divide(standardQuantity, 8, RoundingMode.HALF_UP)
@@ -1053,6 +1073,19 @@ public class OrderCostBreakdownService {
                     .collectionStatus(collected ? "COLLECTED" : "MISSING_PRICE")
                     .missingReason(collected ? null : "pinned BOM 缺少可验证 itemCost/标准耗用量")
                     .build());
+        }
+        // 整份快照的包材价【全部】不可信 ⇒ 这份快照对包材成本没有参考价值。
+        // 回退 notPinned(): 让上游保留【实际领用】算出来的包材成本(有采购真实单价支撑),
+        // 而不是拿一堆 0 去把真实成本替换掉。
+        // ⛔ 部分可信时不回退: 那时快照仍是权威口径, 没填的那几项照常报 PACKAGING_PRICE 缺项。
+        boolean anyPackagingRow = details.stream()
+                .anyMatch(d -> d != null);
+        boolean allPinnedCostsUnusable = anyPackagingRow
+                && details.stream().allMatch(d -> d.getAmount() == null);
+        if (allPinnedCostsUnusable) {
+            log.info("[M67CostBreakdown] pinned BOM 的包材价全为空/0, 回退实际领用 factory={} plan={}",
+                    factoryId, plan.getId());
+            return PinnedPackagingResult.notPinned();
         }
         return new PinnedPackagingResult(true, knownCost, details, missing);
     }
