@@ -459,7 +459,8 @@ async function openReceive(task: PurchaseReceivingTask) {
   }
 }
 
-function remainingLimit(row: ReceiveItemForm): number {
+/** 还差多少**收齐**（不含超收余量）—— 用于「默认填满余量」，⛔ 不要拿它当输入上限。 */
+function outstandingQuantity(row: ReceiveItemForm): number {
   const line = selectedTask.value?.items.find((item) =>
     item.purchaseOrderItemId === row.purchaseOrderItemId);
   const orderFactor = Number(line?.packageToBaseFactor || 1);
@@ -468,16 +469,41 @@ function remainingLimit(row: ReceiveItemForm): number {
 }
 
 /**
+ * 「本次实收」输入框的上限 —— **必须是后端执行侧那个超收上限**，不是待收量。
+ *
+ * <p>⚠️ 2026-08-25 修：这里原来返回 `remainingReceivableQuantity`（还差多少收齐），
+ * 于是下单 100 箱、供应商送 105 箱时仓管员**根本输不进 105**，界面把货挡在门口，
+ * 而后端此刻允许超收。展示与执行必须读同一个值。
+ *
+ * <p>`maxReceivableQuantity == null` = 后端不限制超收 → 输入框也不设上限（`Infinity`）。
+ * ⛔ 不许在 null 时回落到待收量，那就是把缺陷装回去。
+ */
+function remainingLimit(row: ReceiveItemForm): number {
+  const line = selectedTask.value?.items.find((item) =>
+    item.purchaseOrderItemId === row.purchaseOrderItemId);
+  const cap = line?.maxReceivableQuantity;
+  if (cap === null || cap === undefined) return Infinity;
+  const orderFactor = Number(line?.packageToBaseFactor || 1);
+  const selectedFactor = Number(row.packageToBaseFactor || 1);
+  return Number(cap) * orderFactor / selectedFactor;
+}
+
+/**
  * M-15 (2026-08-20): 已存在草稿时, 「本次实收」的可调上限。
- * `selectedTask` 的 `remainingReceivableQuantity` 已经把这张草稿自己占的量刨掉了
+ * `selectedTask` 的 `maxReceivableQuantity` 已经把这张草稿自己占的量刨掉了
  * (见后端 toReceivingTask 的 activeDraftAllocatedQuantity 语义), 所以这一行能调到的
- * 上限 = 当前真正空闲的待收 + 这一行草稿目前已占的量 (调小/调大都在这个范围内)。
+ * 上限 = 当前真正空闲的可收量 + 这一行草稿目前已占的量 (调小/调大都在这个范围内)。
  * 草稿的包装规格创建后不再改, 不需要像 remainingLimit 那样做换算系数换算。
+ *
+ * <p>⚠️ 2026-08-25 修：基数从 `remainingReceivableQuantity`(还差多少收齐) 换成
+ * `maxReceivableQuantity`(后端执行侧真正允许收到多少)。null = 不限制超收 → 不设上限。
  */
 function remainingLimitForReceiptRow(row: ReceiveItemForm): number {
   const line = selectedTask.value?.items.find((item) =>
     item.purchaseOrderItemId === row.purchaseOrderItemId);
-  return Number(line?.remainingReceivableQuantity || 0) + Number(row.receivedQuantity || 0);
+  const cap = line?.maxReceivableQuantity;
+  if (cap === null || cap === undefined) return Infinity;
+  return Number(cap) + Number(row.receivedQuantity || 0);
 }
 
 function onPackagingChange(row: ReceiveItemForm) {
@@ -487,7 +513,9 @@ function onPackagingChange(row: ReceiveItemForm) {
   row.unit = selected.packageUnit;
   row.inventoryBaseUnit = selected.baseUnit;
   row.packageToBaseFactor = selected.factor;
-  row.receivedQuantity = Number(remainingLimit(row).toFixed(4));
+  // 默认填「还差多少收齐」，⛔ 不是上限 —— 上限可能是 Infinity(不限制超收)，
+  // Infinity.toFixed() 会把输入框填成 Infinity。
+  row.receivedQuantity = Number(outstandingQuantity(row).toFixed(4));
 }
 
 function baseQuantityPreview(row: ReceiveItemForm): string {
@@ -1037,6 +1065,11 @@ defineExpose({ loadTasks });
           <el-descriptions-item label="预计到货">{{ selectedTask.expectedDeliveryDate || '未维护' }}</el-descriptions-item>
           <el-descriptions-item label="已收">{{ unitGroups(selectedTask, 'receivedQuantity') }}</el-descriptions-item>
           <el-descriptions-item label="待收">{{ unitGroups(selectedTask, 'remainingReceivableQuantity') }}</el-descriptions-item>
+          <!--
+            超收上限直接印后端 label ("不限制" / "30%")。⛔ 不许在这里写死百分比 ——
+            展示写死 30% 而执行侧按别的值拦, 就是仓管员点确认吃 409、货堵在门口那个缺陷。
+          -->
+          <el-descriptions-item label="超收上限">{{ selectedTask.overReceiveLimitLabel || '不限制' }}</el-descriptions-item>
         </el-descriptions>
 
         <template v-if="!receipt">

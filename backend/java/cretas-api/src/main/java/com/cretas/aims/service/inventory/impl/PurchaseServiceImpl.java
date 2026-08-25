@@ -1795,6 +1795,10 @@ public class PurchaseServiceImpl implements PurchaseService {
                         .filter(item -> Objects.equals(materialTypeId, item.getMaterialTypeId()))
                         .count() > 1);
 
+        // 仓管员在这个页面上输数量, 所以他看到的"最多能收多少"必须来自执行侧那个上限,
+        // ⛔ 不能拿 remainingReceivableQuantity(= 还差多少收齐) 当上限 —— 那等于把超收的货挡在门口.
+        OverReceiveLimit overReceiveLimit = resolveOverReceiveLimit(order.getFactoryId());
+
         List<PurchaseReceivingTaskResponse.Item> lines = new ArrayList<>();
         BigDecimal remainingTotal = BigDecimal.ZERO;
         for (PurchaseOrderItem item : orderItems) {
@@ -1813,6 +1817,10 @@ public class PurchaseServiceImpl implements PurchaseService {
             }
             BigDecimal remaining = ordered.subtract(received).subtract(allocated).max(BigDecimal.ZERO);
             remainingTotal = remainingTotal.add(remaining);
+            // 不限制时 maxAllowed 返回 null → 这一行也保持 null, ⛔ 不兜底成 remaining.
+            BigDecimal maxCumulative = overReceiveLimit.maxAllowed(ordered);
+            BigDecimal maxReceivable = maxCumulative == null ? null
+                    : maxCumulative.subtract(received).subtract(allocated).max(BigDecimal.ZERO);
             lines.add(PurchaseReceivingTaskResponse.Item.builder()
                     .purchaseOrderItemId(item.getId())
                     .materialTypeId(item.getMaterialTypeId())
@@ -1821,6 +1829,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .receivedQuantity(received)
                     .activeDraftAllocatedQuantity(allocated)
                     .remainingReceivableQuantity(remaining)
+                    .maxReceivableQuantity(maxReceivable)
                     .unit(item.getUnit())
                     .specification(item.getSpecification())
                     // 行级为空回落到单头框架合同号 —— 两处都空才是真的没有
@@ -1861,6 +1870,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                 .activeReceiptNumber(activeReceipt != null ? activeReceipt.getReceiveNumber() : null)
                 .activeReceiptCount(activeReceipts.size())
                 .receiptConflict(activeReceipts.size() > 1 || legacyLineIdentityAmbiguous)
+                .overReceiveLimitRate(overReceiveLimit.rate())
+                .overReceiveLimitLabel(overReceiveLimit.label())
+                .overReceiveLimitSource(overReceiveLimit.source())
                 .items(lines)
                 .build();
     }

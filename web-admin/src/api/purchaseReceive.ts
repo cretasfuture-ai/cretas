@@ -76,7 +76,15 @@ export interface PurchaseReceivingTaskItem {
   orderedQuantity: number;
   receivedQuantity: number;
   activeDraftAllocatedQuantity: number;
+  /** 还差多少**收齐** = 下单 − 已收 − 草稿占用。⛔ 这不是"最多能收多少"。 */
   remainingReceivableQuantity: number;
+  /**
+   * 本次**最多还能收多少** = 下单×(1+超收上限) − 已收 − 草稿占用。
+   * `null` = 不限制超收 —— 输入框此时不该设上限。
+   * ⛔ 不要兜底成 `remainingReceivableQuantity`：那会把超收的货挡在门口，
+   *    而供应商多送 5% 是常态。
+   */
+  maxReceivableQuantity?: number | null;
   unit: string;
   specification?: string | null;
   /** 行级合同号(下单时填的); 后端在行级为空时已回落到单头框架合同号 */
@@ -112,6 +120,12 @@ export interface PurchaseReceivingTask {
   activeReceiptNumber?: string | null;
   activeReceiptCount: number;
   receiptConflict: boolean;
+  /** 本工厂实际生效的采购超收上限率 (0.30 = 最多多收 30%); `null` = 不限制超收。 */
+  overReceiveLimitRate?: number | null;
+  /** 面向仓管员的措辞: "不限制" / "30%"。直接显示, 不要自己格式化。 */
+  overReceiveLimitLabel?: string | null;
+  /** 上限来源: unconfigured / property:... / factory-settings:...。排查用。 */
+  overReceiveLimitSource?: string | null;
   items: PurchaseReceivingTaskItem[];
 }
 

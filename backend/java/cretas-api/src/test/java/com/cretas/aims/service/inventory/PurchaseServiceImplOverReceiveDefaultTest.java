@@ -140,6 +140,31 @@ class PurchaseServiceImplOverReceiveDefaultTest {
         return orderItem;
     }
 
+    /** 待收货任务(getPendingReceivingTasks)用的夹具 —— 走 findByIdAndFactoryId, 与收货入口不同。 */
+    private void mockReceivingTaskFixture(BigDecimal orderedQty, BigDecimal alreadyReceived) {
+        PurchaseOrder order = new PurchaseOrder();
+        order.setId(PO_ID);
+        order.setOrderNumber("PO-2026-0825-001");
+        order.setFactoryId(FACTORY_ID);
+        order.setSupplierId(SUPPLIER_ID);
+        order.setStatus(PurchaseOrderStatus.FINANCE_APPROVED);
+        when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID))
+                .thenReturn(Optional.of(order));
+        when(receiveRecordRepository.findByFactoryIdAndPurchaseOrderIdOrderByCreatedAtAsc(FACTORY_ID, PO_ID))
+                .thenReturn(List.of());
+
+        PurchaseOrderItem orderItem = new PurchaseOrderItem();
+        orderItem.setId(1L);
+        orderItem.setPurchaseOrderId(PO_ID);
+        orderItem.setMaterialTypeId(MAT_ID);
+        orderItem.setMaterialName(MAT_NAME);
+        orderItem.setUnit("kg");
+        orderItem.setPriceUnit("kg");
+        orderItem.setQuantity(orderedQty);
+        orderItem.setReceivedQuantity(alreadyReceived);
+        when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(orderItem));
+    }
+
     // ─────────────────────── 断言 helper ───────────────────────
 
     /** 走产品真实入口 createReceiveRecord，返回它抛出的东西（没抛就是 null）。 */
@@ -437,6 +462,47 @@ class PurchaseServiceImplOverReceiveDefaultTest {
             assertNotRejectedByCap(displayedCap, "展示说最多能收 " + displayedCap + ", 执行侧就该放行");
             assertRejectedByCap(displayedCap.add(BigDecimal.ONE),
                     "超过展示的上限 " + displayedCap + " 就该被拦");
+        }
+
+        /**
+         * 仓管员真正输数量的那个页面（web-admin {@code PendingPurchaseReceivingPanel}）
+         * 读的是待收货任务，不是 {@code getCumulativeReceived}。它过去把输入框上限绑到
+         * {@code remainingReceivableQuantity}（= 还差多少收齐），于是下单 100 送 105 时
+         * <b>仓管员根本输不进 105</b> —— 界面把货挡在门口，而后端此刻允许超收。
+         */
+        @Test
+        @DisplayName("⭐ 待收货任务上有「最多还能收多少」, 且它 ≠ 「还差多少收齐」")
+        void receivingTask_carriesCapDistinctFromOutstanding() {
+            ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
+            mockReceivingTaskFixture(new BigDecimal("100"), new BigDecimal("20"));
+
+            var task = service.getPendingReceivingTasks(FACTORY_ID, PO_ID, null).get(0);
+            var line = task.getItems().get(0);
+
+            assertEquals("30%", task.getOverReceiveLimitLabel());
+            assertEquals(0, new BigDecimal("80").compareTo(line.getRemainingReceivableQuantity()),
+                    "还差多少收齐 = 100 - 20");
+            assertEquals(0, new BigDecimal("110.00").compareTo(line.getMaxReceivableQuantity()),
+                    "最多还能收 = 100×1.3 - 20 = 110");
+            assertNotEquals(0,
+                    line.getRemainingReceivableQuantity().compareTo(line.getMaxReceivableQuantity()),
+                    "这两个数必须不同 —— 相同就说明上限又被算成了待收量, 超收的货照样进不来");
+        }
+
+        @Test
+        @DisplayName("⭐ 未配置上限 → 任务上的 maxReceivableQuantity 是 null (不是待收量)")
+        void receivingTask_unlimitedIsNull() {
+            mockReceivingTaskFixture(new BigDecimal("100"), new BigDecimal("20"));
+
+            var task = service.getPendingReceivingTasks(FACTORY_ID, PO_ID, null).get(0);
+            var line = task.getItems().get(0);
+
+            assertEquals("不限制", task.getOverReceiveLimitLabel());
+            assertNull(task.getOverReceiveLimitRate());
+            assertNull(line.getMaxReceivableQuantity(),
+                    "不限制时必须是 null; 兜底成待收量 80 就等于把「不限制」显示成「最多 80」");
+            assertEquals(0, new BigDecimal("80").compareTo(line.getRemainingReceivableQuantity()),
+                    "待收量本身不受影响");
         }
 
         @Test
