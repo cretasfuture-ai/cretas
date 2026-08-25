@@ -32,6 +32,8 @@
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
+- `BUG-F006-PRODUCTION-COST-CLOSURE-001` — `in-progress` — Owner: `claude-code/f006-remaining-closure` — Base SHA `9fc3e5aa1364442a04672be0ac3733528a39f9d4`，worktree `cretas-f006-remaining-closure-20260825` / branch `codex/f006-remaining-closure-20260825`。结单入库在算不出成品单位成本时，报的原因与事实不符：prod 计划 `ef5392c7-a575-42a3-8691-ebca0d8306e1` 提示「没有归集到本计划的原料领用成本」，而同刻读 `/production/batches/{no}/cost-breakdown` 得到 `rawMaterialCost=40.32`（7 行全 COLLECTED）、`knownCostSubtotal=93.12`、`totalCost=null`、`missingCostItems=[LABOR_RATE_OR_TIME:process-2, EQUIPMENT_COST:*, OTHER_COST:*]` —— 原料成本已归集，缺的是人工/设备/其他。验收命令 `mvn -o -Dtest='SettlementCostUnavailableReasonIsTruthfulContractTest,SettlementCostUnavailableIsSaidOutLoudContractTest,MultiOutputCostPolicyContractTest,ProductionWorkflowOutputCostAllocationTest' test`。停止条件：`totalCost` 的 COGS 口径不得松动（已知合计不许顶替），生产实体只读、零写入。
+
 ## Scope 锁地图
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
@@ -50,6 +52,8 @@
 - `FEATURE-F006-R2-BOM-SUBSTITUTE-001`：BOM 替代关系的 Web、版本/计划/领料/报工/成本/追溯快照与目标测试；Java CORE 已完成，父任务不得重复修改 CORE Flyway/Entity，必须与统一 Workflow/BOM 任务串行。
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE`：Workflow 草稿结构、BOM 完整性 DTO/Service/API、激活/发布/生产计划准入、Web 阶段引导与目标测试；不得改写历史快照或生产数据。
+
+- `BUG-F006-PRODUCTION-COST-CLOSURE-001`：仅 `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java` 的成本原因组装（`describeCostUnavailableReason` / `usableTotalCost` / 缺项中文标签）与对应 `src/test/java/com/cretas/aims/service/impl/*ContractTest`、`docs/dispatch/ACTIVE.md`。⛔ 不改 `OrderCostBreakdownService` 的成本算法、不改 Entity/Repository/Flyway、不动 `totalCost` 的完整性口径、生产 F006 业务写入为 0（本轮只用只读 GET 与只读 SQL 取证）。
 
 ## 阻塞项
 
