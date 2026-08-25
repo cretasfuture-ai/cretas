@@ -183,7 +183,10 @@ public class ProductConfigurationReadinessService {
             BomRecipe recipe) {
         ProductConfigurationCompletenessReport report = evaluate(factoryId, recipe.getProductTypeId(), recipe.getId());
         if (!report.isBomComplete()) {
-            String detail = report.getIssues().stream().map(ProductConfigurationCompletenessReport.Issue::getMessage)
+            // ⛔ 只拼 BLOCKING: 把 WARNING 也拼进错误消息, 等于把「提示」当成「拦住你的原因」
+            String detail = report.getIssues().stream()
+                    .filter(ProductConfigurationReadinessService::isBlocking)
+                    .map(ProductConfigurationCompletenessReport.Issue::getMessage)
                     .reduce((left, right) -> left + "；" + right).orElse("BOM 配置不完整");
             throw new BusinessException(409, detail)
                     .withCode("BOM_COMPLETENESS_REQUIRED")
@@ -285,6 +288,19 @@ public class ProductConfigurationReadinessService {
         if (!packagingComplete) {
             issues.add(issue("BOM_PACKAGING_REQUIRED",
                     "成品尚未配置任何包材关系", "packagingMaterials"));
+        }
+        // ── 2026-08-25 owner 裁定: 辅料【不分类、一律选填】, 但没配要提示一声 ──────
+        //   原话:「辅料它不是必须的, 也是 optional 的, 但是要做一个提示 ——
+        //         如果他没有配置辅料的话, 提示当前没有配置辅料, 请确定是否要配置,
+        //         如果不配置, 让他继续保存就好了。」
+        //   ⛔ 所以它是 WARNING 不是 BLOCKING: 不进 bomComplete, 不拦发布/激活。
+        //   为什么不按业务分类收窄: 实测 F006 成品里「原切」有 50 个(最大一类),
+        //   原切通常只是分割装盒、本就不用调料; 而 13 个 ACTIVE BOM 里只有 4 个配了辅料。
+        //   一刀切强制会把它们全挡住, 分类判定又要维护一份易漂的清单 —— 统一提示最稳。
+        if (finishedGoods && seasonings.isEmpty()) {
+            issues.add(warning("BOM_SEASONING_ABSENT",
+                    "当前没有配置辅料，请确认该成品是否需要配置辅料；不需要可直接继续保存",
+                    "seasonings"));
         }
         if (basePackagingRequired || finishedGoods) {
             packagingStatuses.add(ProductConfigurationCompletenessReport.PackagingLevelStatus.builder()
@@ -417,7 +433,22 @@ public class ProductConfigurationReadinessService {
 
     private ProductConfigurationCompletenessReport.Issue issue(String code, String message, String target) {
         return ProductConfigurationCompletenessReport.Issue.builder()
-                .code(code).message(message).target(target).build();
+                .code(code).message(message).target(target)
+                .severity(ProductConfigurationCompletenessReport.SEVERITY_BLOCKING).build();
+    }
+
+    /** 只提示、不拦人的项 —— 用户确认后可以继续保存。 */
+    private ProductConfigurationCompletenessReport.Issue warning(
+            String code, String message, String target) {
+        return ProductConfigurationCompletenessReport.Issue.builder()
+                .code(code).message(message).target(target)
+                .severity(ProductConfigurationCompletenessReport.SEVERITY_WARNING).build();
+    }
+
+    /** ⛔ 拦不拦人只看 BLOCKING —— WARNING 混进来会把「提示」变成「阻断」。 */
+    public static boolean isBlocking(ProductConfigurationCompletenessReport.Issue item) {
+        return item != null && !ProductConfigurationCompletenessReport.SEVERITY_WARNING
+                .equalsIgnoreCase(item.getSeverity());
     }
 
     private String string(Object value) {

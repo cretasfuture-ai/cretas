@@ -46,7 +46,18 @@ public class ProductConfigurationCompletenessReport {
         private String code;
         private String message;
         private String target;
+        /**
+         * {@code BLOCKING} = 拦住发布/激活; {@code WARNING} = 只提示, 用户确认后可继续。
+         *
+         * <p>⚠️ 默认 {@code BLOCKING}: 新加的项如果忘了标级别, 宁可误拦也不要静默放行 ——
+         * 反过来(默认 WARNING)会让一条本该拦人的项悄悄失效。
+         */
+        @Builder.Default
+        private String severity = SEVERITY_BLOCKING;
     }
+
+    public static final String SEVERITY_BLOCKING = "BLOCKING";
+    public static final String SEVERITY_WARNING = "WARNING";
 
     @Data
     @Builder
