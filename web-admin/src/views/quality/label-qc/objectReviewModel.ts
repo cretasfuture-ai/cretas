@@ -181,6 +181,42 @@ export function addObjectLabel(
   return label;
 }
 
+export function findTrayForLabelBox(
+  draft: LabelQcPhotoObjectDraft,
+  bbox: LabelQcBoundingBox,
+): LabelQcTrayObjectDraft | null {
+  const labelArea = (bbox.xMax - bbox.xMin) * (bbox.yMax - bbox.yMin);
+  if (labelArea <= 0) return null;
+
+  const centerX = (bbox.xMin + bbox.xMax) / 2;
+  const centerY = (bbox.yMin + bbox.yMax) / 2;
+  let bestTray: LabelQcTrayObjectDraft | null = null;
+  let bestCoverage = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const tray of draft.trays) {
+    const overlapWidth = Math.max(0, Math.min(bbox.xMax, tray.bbox.xMax)
+      - Math.max(bbox.xMin, tray.bbox.xMin));
+    const overlapHeight = Math.max(0, Math.min(bbox.yMax, tray.bbox.yMax)
+      - Math.max(bbox.yMin, tray.bbox.yMin));
+    const coverage = overlapWidth * overlapHeight / labelArea;
+    const containsCenter = centerX >= tray.bbox.xMin && centerX <= tray.bbox.xMax
+      && centerY >= tray.bbox.yMin && centerY <= tray.bbox.yMax;
+    if (!containsCenter && coverage < 0.5) continue;
+
+    const trayCenterX = (tray.bbox.xMin + tray.bbox.xMax) / 2;
+    const trayCenterY = (tray.bbox.yMin + tray.bbox.yMax) / 2;
+    const distance = Math.hypot(centerX - trayCenterX, centerY - trayCenterY);
+    if (coverage > bestCoverage || (coverage === bestCoverage && distance < bestDistance)) {
+      bestTray = tray;
+      bestCoverage = coverage;
+      bestDistance = distance;
+    }
+  }
+
+  return bestTray;
+}
+
 export function rejectObjectLabel(tray: LabelQcTrayObjectDraft, key: string): void {
   const label = tray.labels.find((item) => item.key === key);
   if (!label) return;

@@ -307,7 +307,11 @@ export function reviewLabelQcTask(
   taskId: string,
   payload: LabelQcReviewRequest,
 ): Promise<ApiResponse<LabelQcTaskDetail>> {
-  return put<LabelQcTaskDetail>(`/${factoryId}/label-qc/tasks/${taskId}/review`, payload);
+  return put<LabelQcTaskDetail>(
+    `/${factoryId}/label-qc/tasks/${taskId}/review`,
+    payload,
+    { timeout: 30_000 },
+  );
 }
 
 export function retryLabelQcTask(

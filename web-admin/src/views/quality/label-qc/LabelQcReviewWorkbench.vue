@@ -43,7 +43,6 @@ import {
   pointBox,
   resizeBox,
   restoreRejectedAiCandidate,
-  strokeBounds,
   toReviewRequest,
   validateReviewDraft,
   type LabelQcPhotoDraft,
@@ -51,7 +50,7 @@ import {
 } from './reviewModel';
 import {
   addObjectLabel,
-  defaultLabelBox,
+  findTrayForLabelBox,
   markObjectCorrected,
   rejectObjectLabel,
   setTrayPresence,
@@ -64,12 +63,7 @@ import {
   calculateImagePlaneStyle,
   resolveImageSize,
 } from './imageViewport';
-import {
-  buildHorizontalGuideRows,
-  deduplicateOverlayBoxes,
-  type HorizontalGuideRow,
-  type OverlayLabelBox,
-} from './overlayGeometry';
+import { summarizeLabelCoverage } from './labelCoverage';
 
 const props = defineProps<{
   factoryId: string;
@@ -127,6 +121,7 @@ type PointerInteraction = {
 
 const pointerInteraction = ref<PointerInteraction | null>(null);
 const showTechnicalObjectReview = ref(false);
+const supplementalLabelType = ref<LabelQcObjectType | null>(null);
 const proxiedImageUrl = ref<string | null>(null);
 let imageRequestToken = 0;
 
@@ -150,6 +145,23 @@ const selectedObject = computed<LabelQcObjectDraftItem | null>(() => (
 ));
 const confirmedTrayCount = computed(() => (
   objectDraft.value?.trays.filter((tray) => tray.confirmed).length ?? 0
+));
+const labelCoverage = computed(() => (
+  objectDraft.value ? summarizeLabelCoverage(objectDraft.value, props.detail.photos) : null
+));
+const addedLabelObjects = computed(() => (
+  objectDraft.value?.trays.flatMap((tray) => tray.labels
+    .filter((label) => label.decision === 'ADDED')
+    .map((label) => ({ tray, label }))) ?? []
+));
+const hasOptionalCoverageWarning = computed(() => (
+  Boolean(labelCoverage.value && (
+    labelCoverage.value.possibleMissingWhiteCount > 0
+    || labelCoverage.value.possibleMissingColorCount > 0
+    || labelCoverage.value.possibleMissingTrayCount > 0
+    || labelCoverage.value.duplicateWhiteLabelCount > 0
+    || labelCoverage.value.duplicateColorLabelCount > 0
+  ))
 ));
 const visibleItems = computed(() => (
   activeDraft.value?.items.filter((item) => (
@@ -246,7 +258,10 @@ function itemColor(item: LabelQcReviewDraft): string {
 }
 
 /** 预览用的颜色跟着"粘"住的类型走，画之前就知道这一笔会被标成什么 */
-const drawColor = computed(() => (activeLabel.value ? labelColor(activeLabel.value) : '#2f6fdd'));
+const drawColor = computed(() => {
+  if (supplementalLabelType.value) return objectColor(supplementalLabelType.value);
+  return activeLabel.value ? labelColor(activeLabel.value) : '#2f6fdd';
+});
 
 const draftRectStyle = computed<Record<string, string>>(() => {
   const rect = draftRect.value;
@@ -260,18 +275,6 @@ const draftRectStyle = computed<Record<string, string>>(() => {
   };
 });
 
-function brushDotStyle(point: { x: number; y: number }): Record<string, string> {
-  const size = brushRadius.value * 2;
-  return {
-    left: `${point.x - brushRadius.value}px`,
-    top: `${point.y - brushRadius.value}px`,
-    width: `${size}px`,
-    height: `${size}px`,
-    borderColor: drawColor.value,
-    backgroundColor: drawColor.value,
-  };
-}
-
 function confidence(value?: number | null): string {
   return value == null ? '—' : `${Math.round(value * 100)}%`;
 }
@@ -284,6 +287,7 @@ function annotationStyle(item: LabelQcReviewDraft) {
     width: `${(box.xMax - box.xMin) * 100}%`,
     height: `${(box.yMax - box.yMin) * 100}%`,
     borderColor: itemColor(item),
+    '--overlay-fill': `${itemColor(item)}2e`,
   };
 }
 
@@ -334,6 +338,7 @@ function selectPhoto(index: number): void {
   selectedTrayKey.value = drafts.value[index]?.objectReview?.trays[0]?.key ?? null;
   selectedObjectKey.value = selectedTrayKey.value;
   showTechnicalObjectReview.value = false;
+  supplementalLabelType.value = null;
   resetView();
   resetMainImageState();
   scheduleViewportMeasurement();
@@ -442,13 +447,13 @@ function objectBoxStyle(bbox: LabelQcBoundingBox, color: string): Record<string,
     width: `${(bbox.xMax - bbox.xMin) * 100}%`,
     height: `${(bbox.yMax - bbox.yMin) * 100}%`,
     borderColor: color,
+    '--overlay-fill': `${color}29`,
   };
 }
 
-function objectColor(type: LabelQcObjectType | 'TRAY'): string {
+function objectColor(type: LabelQcObjectType): string {
   if (type === 'WHITE_LABEL') return '#d40000';
-  if (type === 'COLOR_LABEL') return '#6f00b8';
-  return '#00a6b8';
+  return '#6f00b8';
 }
 
 function objectLabelText(type: LabelQcObjectType): string {
@@ -474,18 +479,42 @@ function changePresence(type: LabelQcObjectType, presence: LabelQcPresence): voi
   setDirty(true);
 }
 
-function addDefaultObjectLabel(type: LabelQcObjectType): void {
-  const tray = selectedTray.value;
-  if (!tray || !props.canReview) return;
+function beginLabelSupplement(type: LabelQcObjectType): void {
+  if (!objectDraft.value || !props.canReview) return;
+  setTool('box');
+  supplementalLabelType.value = type;
+  activeLabel.value = null;
+  selectedKey.value = null;
+  ElMessage.info(`请直接框住照片中已经存在、但模型漏识别的${objectLabelText(type)}；不用画托盘`);
+}
+
+function addSupplementalLabel(bbox: LabelQcBoundingBox): void {
+  const draft = objectDraft.value;
+  const type = supplementalLabelType.value;
+  if (!draft || !type || !props.canReview) return;
+  const tray = findTrayForLabelBox(draft, bbox);
+  if (!tray) {
+    ElMessage.warning('该位置没有可确认的所属盒子，可能是模型漏识别托盘；无需补画托盘，可跳过并继续审核');
+    return;
+  }
+
   const item = addObjectLabel(
     tray,
     type,
-    defaultLabelBox(tray),
+    bbox,
     `human-object-${tray.trayIndex}-${Date.now()}`,
   );
+  selectedTrayKey.value = tray.key;
   selectedObjectKey.value = item.key;
   setDirty(true);
-  ElMessage.info(`已在盒子 ${tray.trayIndex + 1} 中补一个${objectLabelText(type)}框，请在照片上拖动修正位置`);
+  ElMessage.success(`已补上盒子 ${tray.trayIndex + 1} 的${objectLabelText(type)}，可继续补同类标签`);
+}
+
+function deleteSupplementalLabel(tray: LabelQcTrayObjectDraft, item: LabelQcObjectDraftItem): void {
+  if (!props.canReview) return;
+  selectedTrayKey.value = tray.key;
+  selectedObjectKey.value = item.key;
+  deleteObjectLabel(item);
 }
 
 function deleteObjectLabel(item: LabelQcObjectDraftItem): void {
@@ -518,39 +547,6 @@ function toggleTruncated(item: LabelQcObjectDraftItem): void {
   setDirty(true);
 }
 
-function addObjectTray(): void {
-  const draft = objectDraft.value;
-  if (!draft || !props.canReview) return;
-  const trayIndex = draft.trays.reduce((max, tray) => Math.max(max, tray.trayIndex), -1) + 1;
-  const tray: LabelQcTrayObjectDraft = {
-    key: `human-tray-${trayIndex}-${Date.now()}`,
-    trayIndex,
-    bbox: { xMin: 0.35, yMin: 0.35, xMax: 0.65, yMax: 0.65 },
-    decision: 'ADDED',
-    whitePresence: 'UNJUDGEABLE',
-    colorPresence: 'UNJUDGEABLE',
-    labels: [],
-    rejectedAiObjectKeys: [],
-    confirmed: false,
-    humanTouched: true,
-  };
-  draft.trays.push(tray);
-  selectTray(tray);
-  setDirty(true);
-  ElMessage.info('已补一个盒子框，请拖动和缩放到正确位置');
-}
-
-function deleteSelectedTray(): void {
-  const draft = objectDraft.value;
-  const tray = selectedTray.value;
-  if (!draft || !tray || !props.canReview) return;
-  if (tray.aiTrayKey) draft.rejectedAiTrayKeys.push(tray.aiTrayKey);
-  draft.trays = draft.trays.filter((candidate) => candidate.key !== tray.key);
-  selectedTrayKey.value = draft.trays[0]?.key ?? null;
-  selectedObjectKey.value = selectedTrayKey.value;
-  setDirty(true);
-}
-
 function addHumanBoxAt(clientX: number, clientY: number): void {
   if (!props.canReview || !planeRef.value || !activeDraft.value) return;
   const rect = planeRef.value.getBoundingClientRect();
@@ -575,7 +571,7 @@ function toPlanePoint(clientX: number, clientY: number): { x: number; y: number 
 }
 
 function startViewportPointer(event: PointerEvent): void {
-  // 中键始终是平移：画框/涂抹时左键被占用，总得留一条挪画面的路
+  // 中键始终平移，左键只用于拉框或选择疑点。
   const wantsPan = event.button === 1 || toolMode.value === 'select';
   if (event.button !== 0 && event.button !== 1) return;
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
@@ -583,11 +579,7 @@ function startViewportPointer(event: PointerEvent): void {
   if (!wantsPan && props.canReview) {
     const point = toPlanePoint(event.clientX, event.clientY);
     if (!point) return;
-    if (toolMode.value === 'box') {
-      draftRect.value = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
-    } else {
-      brushStroke.value = [point];
-    }
+    draftRect.value = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
     pointerInteraction.value = {
       type: 'draw',
       pointerId: event.pointerId,
@@ -655,9 +647,6 @@ function startObjectPointer(
 }
 
 function movePointer(event: PointerEvent): void {
-  if (toolMode.value === 'brush') {
-    cursorPoint.value = toPlanePoint(event.clientX, event.clientY);
-  }
   const interaction = pointerInteraction.value;
   if (!interaction || interaction.pointerId !== event.pointerId) return;
   const deltaX = event.clientX - interaction.startX;
@@ -668,8 +657,6 @@ function movePointer(event: PointerEvent): void {
     if (!point) return;
     if (draftRect.value) {
       draftRect.value = { ...draftRect.value, x1: point.x, y1: point.y };
-    } else if (brushStroke.value.length) {
-      brushStroke.value = [...brushStroke.value, point];
     }
     return;
   }
@@ -717,6 +704,10 @@ function movePointer(event: PointerEvent): void {
 function commitHumanBox(bbox: LabelQcBoundingBox | null): void {
   const draft = activeDraft.value;
   if (!bbox || !draft || !props.canReview) return;
+  if (supplementalLabelType.value) {
+    addSupplementalLabel(bbox);
+    return;
+  }
   const item = appendHumanBox(draft, bbox, `human-${draft.photoId}-${Date.now()}`);
   if (activeLabel.value) {
     item.label = activeLabel.value;
@@ -734,9 +725,8 @@ function endPointer(event: PointerEvent): void {
 
   if (interaction.type === 'draw') {
     const rect = planeRef.value?.getBoundingClientRect();
-    const region = draftRect.value ?? strokeBounds(brushStroke.value, brushRadius.value);
+    const region = draftRect.value;
     draftRect.value = null;
-    brushStroke.value = [];
     if (!rect || !region) return;
     // 太小的拖拽多半是误触而不是标注意图, normalizedBox 会返回 null
     commitHumanBox(
@@ -767,12 +757,6 @@ function changeZoom(delta: number, anchor?: { x: number; y: number }): void {
 }
 
 function handleWheel(event: WheelEvent): void {
-  // 画笔模式下滚轮改笔刷大小 —— 调笔刷远比缩放频繁, 缩放还有按钮和双击复位
-  if (toolMode.value === 'brush') {
-    const next = brushRadius.value + (event.deltaY < 0 ? 3 : -3);
-    brushRadius.value = Math.min(BRUSH_MAX, Math.max(BRUSH_MIN, next));
-    return;
-  }
   changeZoom(event.deltaY < 0 ? 0.2 : -0.2, { x: event.clientX, y: event.clientY });
 }
 
@@ -830,123 +814,19 @@ function reopenCurrentPhoto(): void {
   choosePreferredItem();
 }
 
-// ---- AI 初筛参考层 ----------------------------------------------------------
-// 模型除了给出"哪盒疑似缺标"的候选，还知道每盒里识别到了哪些标签及其位置。
-// 把这三类画成只读参考层，质检员就能看到"白标在这、彩标在这、缺的位置是空的"，
-// 而不是只看到一个盒子框。参考层不参与人工判定，只是背景信息。
-type ScreenLayer = 'tray' | 'white' | 'color';
-
-type ScreenLabelBox = { type: string; confidence?: number; bbox: number[] };
-type ScreenTray = {
-  index: number;
-  bbox: number[];
-  trayConfidence?: number;
-  screenVerdict?: string;
-  labels?: ScreenLabelBox[];
-};
+// ---- 可选标签校正图层 -------------------------------------------------------
+// 日常审核只显示风险框；只有人工主动展开校正时，才显示白标和彩标的定位框。
+// 托盘归属继续保留在 objectDraft，但不要求工厂审核员描画或调整托盘轮廓。
+type ScreenLayer = 'white' | 'color';
 
 const LAYER_META: Record<ScreenLayer, { key: string; text: string; color: string }> = {
-  tray: { key: 'Q', text: '盒子', color: '#00a6b8' },
   white: { key: 'W', text: '白标', color: '#d40000' },
   color: { key: 'E', text: '彩标', color: '#6f00b8' },
 };
 
 const visibleLayers = ref<Record<ScreenLayer, boolean>>({
-  tray: true, white: true, color: true,
+  white: true, color: true,
 });
-
-const screenTrays = computed<ScreenTray[]>(() => {
-  const raw = activePhoto.value?.screeningDetail;
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as { trays?: ScreenTray[] };
-    return Array.isArray(parsed?.trays) ? parsed.trays : [];
-  } catch {
-    // 明细坏了不能拖垮整个复核台，静默降级为"没有参考层"
-    return [];
-  }
-});
-
-type RefBox = {
-  key: string;
-  layer: ScreenLayer;
-  style: Record<string, string>;
-  title: string;
-};
-
-const referenceBoxes = computed<RefBox[]>(() => {
-  const out: RefBox[] = [];
-  for (const tray of screenTrays.value) {
-    if (visibleLayers.value.tray && tray.bbox?.length === 4) {
-      out.push({
-        key: `tray-${tray.index}`,
-        layer: 'tray',
-        style: boxStyleFrom(tray.bbox, LAYER_META.tray.color),
-        title: `${LAYER_META.tray.text} #${tray.index + 1}${tray.trayConfidence != null
-          ? ` ${Math.round(tray.trayConfidence * 100)}%` : ''}`,
-      });
-    }
-    const labelCandidates = (tray.labels ?? []).flatMap((label, index) => {
-      if ((label.type !== 'white' && label.type !== 'color') || label.bbox?.length !== 4) return [];
-      const xMin = label.bbox[0]!;
-      const yMin = label.bbox[1]!;
-      const xMax = label.bbox[2]!;
-      const yMax = label.bbox[3]!;
-      if ([xMin, yMin, xMax, yMax].some((value) => !Number.isFinite(value))) return [];
-      return [{
-        key: `lb-${tray.index}-${index}`,
-        type: label.type === 'white' ? 'WHITE_LABEL' as const : 'COLOR_LABEL' as const,
-        bbox: { xMin, yMin, xMax, yMax },
-        label,
-      }];
-    });
-    const { kept } = deduplicateOverlayBoxes(labelCandidates);
-    for (const candidate of kept) {
-      const layer: ScreenLayer = candidate.type === 'WHITE_LABEL' ? 'white' : 'color';
-      if (!visibleLayers.value[layer]) continue;
-      out.push({
-        key: candidate.key,
-        layer,
-        style: boxStyleFrom(candidate.label.bbox, LAYER_META[layer].color),
-        title: `${LAYER_META[layer].text} ${candidate.label.confidence != null
-          ? Math.round(candidate.label.confidence * 100) + '%' : ''}`,
-      });
-    }
-  }
-  return out;
-});
-
-const horizontalGuides = computed<HorizontalGuideRow[]>(() => {
-  const labels: OverlayLabelBox[] = [];
-  for (const tray of objectDraft.value?.trays ?? []) {
-    for (const label of tray.labels) {
-      const layer: ScreenLayer = label.type === 'WHITE_LABEL' ? 'white' : 'color';
-      if (!visibleLayers.value[layer]) continue;
-      labels.push({ key: label.key, type: label.type, bbox: label.bbox });
-    }
-  }
-  return buildHorizontalGuideRows(labels);
-});
-
-function horizontalGuideStyle(guide: HorizontalGuideRow): Record<string, string> {
-  return {
-    left: `${guide.left * 100}%`,
-    top: `${guide.top * 100}%`,
-    width: `${guide.width * 100}%`,
-    '--guide-color': objectColor(guide.type),
-  };
-}
-
-function boxStyleFrom(bbox: number[], color: string): Record<string, string> {
-  const [x0, y0, x1, y1] = bbox;
-  return {
-    left: `${x0 * 100}%`,
-    top: `${y0 * 100}%`,
-    width: `${(x1 - x0) * 100}%`,
-    height: `${(y1 - y0) * 100}%`,
-    borderColor: color,
-  };
-}
 
 function toggleLayer(layer: ScreenLayer): void {
   visibleLayers.value[layer] = !visibleLayers.value[layer];
@@ -958,23 +838,17 @@ function toggleLayer(layer: ScreenLayer): void {
 // 画位置，是这类逐张标注界面的标准姿势。
 //
 // 工具与类型都是"粘"的：选一次之后连续画都沿用，不用每画一个框回去点一次。
-type ToolMode = 'select' | 'box' | 'brush';
+type ToolMode = 'select' | 'box';
 
 const toolMode = ref<ToolMode>('select');
 const activeLabel = ref<LabelQcLabel | null>(null);
-const brushRadius = ref(26);
-const BRUSH_MIN = 6;
-const BRUSH_MAX = 160;
 
-/** 正在拖的框 / 正在涂的笔迹，都只是预览，松手才落成标注 */
+/** 正在拖的框只是预览，松手才落成标注。 */
 const draftRect = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-const brushStroke = ref<{ x: number; y: number }[]>([]);
-const cursorPoint = ref<{ x: number; y: number } | null>(null);
 
 const TOOLS: { mode: ToolMode; key: string; text: string }[] = [
   { mode: 'select', key: 'V', text: '选择' },
   { mode: 'box', key: 'R', text: '拉框' },
-  { mode: 'brush', key: 'B', text: '画笔' },
 ];
 
 const QUICK_LABELS: { label: LabelQcLabel; key: string; text: string }[] = [
@@ -986,18 +860,19 @@ const QUICK_LABELS: { label: LabelQcLabel; key: string; text: string }[] = [
 
 const SHORTCUTS = [
   { keys: '1 / 2 / 3 / 4', text: '缺白标 / 缺彩标 / 正常 / 不可判定' },
-  { keys: 'V / R / B', text: '选择 / 拉框 / 画笔' },
-  { keys: '滚轮', text: '画笔模式调笔刷大小，否则缩放' },
+  { keys: 'V / R', text: '选择 / 拉框' },
+  { keys: '滚轮', text: '放大或缩小原图' },
   { keys: 'Space / Enter', text: '确认并下一张' },
   { keys: 'N', text: '整图正常' },
   { keys: 'A', text: '上一张' },
   { keys: 'Backspace', text: '删除当前框' },
-  { keys: 'Q / W / E', text: '盒子 / 白标 / 彩标 图层' },
+  { keys: 'W / E', text: '技术校正：白标 / 彩标图层' },
   { keys: 'Esc', text: '取消选中框' },
 ] as const;
 
 function setTool(mode: ToolMode): void {
   toolMode.value = mode;
+  supplementalLabelType.value = null;
   if (mode !== 'select') selectedKey.value = null;
 }
 
@@ -1006,6 +881,7 @@ function setTool(mode: ToolMode): void {
  * 接下来画的框自动带上它。同一个键在两种情形下都符合"我要标这个类型"的直觉。
  */
 function pickLabel(label: LabelQcLabel): void {
+  supplementalLabelType.value = null;
   activeLabel.value = label;
   if (selectedItem.value) resolveSelected(label);
 }
@@ -1038,7 +914,7 @@ function confirmAndGoNext(): void {
 }
 
 function deleteSelectedByKeyboard(): void {
-  if (selectedObject.value) {
+  if ((showTechnicalObjectReview.value || selectedObject.value?.decision === 'ADDED') && selectedObject.value) {
     deleteObjectLabel(selectedObject.value);
     return;
   }
@@ -1050,17 +926,6 @@ function deleteSelectedByKeyboard(): void {
     rejectAiCandidate();
     return;
   }
-  const tray = selectedTray.value;
-  if (!tray || selectedObjectKey.value !== tray.key) return;
-  void ElMessageBox.confirm(
-    `确认删除盒子 ${tray.trayIndex + 1} 及其标签框？`,
-    '删除盒子',
-    {
-      type: 'warning',
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消',
-    },
-  ).then((): void => deleteSelectedTray()).catch((): void => {});
 }
 
 function onShortcutKey(event: KeyboardEvent): void {
@@ -1105,18 +970,15 @@ function onShortcutKey(event: KeyboardEvent): void {
       }
       break;
     }
-    case 'q':
-    case 'Q':
-      event.preventDefault();
-      toggleLayer('tray');
-      break;
     case 'w':
     case 'W':
+      if (!showTechnicalObjectReview.value) break;
       event.preventDefault();
       toggleLayer('white');
       break;
     case 'e':
     case 'E':
+      if (!showTechnicalObjectReview.value) break;
       event.preventDefault();
       toggleLayer('color');
       break;
@@ -1129,11 +991,6 @@ function onShortcutKey(event: KeyboardEvent): void {
     case 'R':
       event.preventDefault();
       setTool('box');
-      break;
-    case 'b':
-    case 'B':
-      event.preventDefault();
-      setTool('brush');
       break;
     case 'Escape':
       if (selectedKey.value) {
@@ -1249,6 +1106,7 @@ watch(
     selectedKey.value = null;
     selectedTrayKey.value = drafts.value[0]?.objectReview?.trays[0]?.key ?? null;
     selectedObjectKey.value = selectedTrayKey.value;
+    supplementalLabelType.value = null;
     setDirty(false);
     resetView();
     resetMainImageState();
@@ -1321,7 +1179,7 @@ onBeforeUnmount(() => {
             <strong>{{ aiReviewStatusText }}</strong>
           </div>
           <div class="viewer-controls">
-            <div class="layer-toggles" aria-label="框图层显示">
+            <div v-if="showTechnicalObjectReview" class="layer-toggles" aria-label="标签框图层显示">
               <button
                 v-for="(meta, layer) in LAYER_META"
                 :key="layer"
@@ -1376,18 +1234,15 @@ onBeforeUnmount(() => {
               {{ quick.text }}<kbd>{{ quick.key }}</kbd>
             </button>
           </div>
-          <span v-if="toolMode === 'brush'" class="brush-size">
-            笔刷 {{ brushRadius }}px<em>滚轮调整</em>
-          </span>
         </div>
 
         <div class="gesture-hint">
           <Aim />
-          <span v-if="toolMode === 'box'">
-            <strong>按住左键拖出一个框</strong> · 键盘 1/2/3/4 先选类型，画完即定性 · 中键拖动画面
+          <span v-if="supplementalLabelType">
+            <strong>框住已经存在的{{ objectLabelText(supplementalLabelType) }}</strong> · 只补模型漏识别的标签，不画托盘 · 不补也可继续审核
           </span>
-          <span v-else-if="toolMode === 'brush'">
-            <strong>按住左键涂抹</strong> · 滚轮调笔刷大小 · 涂过的范围会圈成一个框 · 中键拖动画面
+          <span v-else-if="toolMode === 'box'">
+            <strong>按住左键拖出一个框</strong> · 键盘 1/2/3/4 先选类型，画完即定性 · 中键拖动画面
           </span>
           <span v-else>
             <strong>点照片空白处补框</strong> · 拖框移动 · 拖右下角缩放 · 滚轮以鼠标位置为中心放大
@@ -1397,13 +1252,12 @@ onBeforeUnmount(() => {
         <div
           ref="viewportRef"
           class="image-viewport"
-          :class="[`tool-${toolMode}`, { drawing: !!draftRect || !!brushStroke.length }]"
+          :class="[`tool-${toolMode}`, { drawing: !!draftRect }]"
           :aria-busy="imageLoadState === 'loading'"
           @pointerdown="startViewportPointer"
           @pointermove="movePointer"
           @pointerup="endPointer"
           @pointercancel="endPointer"
-          @pointerleave="cursorPoint = null"
           @wheel.prevent="handleWheel"
           @dblclick="resetView"
         >
@@ -1422,57 +1276,43 @@ onBeforeUnmount(() => {
               @load="handleMainImageLoad"
               @error="handleMainImageError"
             >
-            <!-- 仅在对象草稿不可用时回退显示 AI 参考框，避免同一个框叠画两遍。 -->
-            <div
-              v-for="ref in referenceBoxes"
-              v-show="!objectDraft"
-              :key="ref.key"
-              class="reference-box"
-              :class="`layer-${ref.layer}`"
-              :style="ref.style"
-              :title="ref.title"
-            >
-            </div>
-            <div
-              v-for="guide in horizontalGuides"
-              :key="guide.key"
-              class="horizontal-guide"
-              :class="guide.type === 'WHITE_LABEL' ? 'guide-white' : 'guide-color'"
-              :style="horizontalGuideStyle(guide)"
-              :title="`${objectLabelText(guide.type)}横排，共 ${guide.count} 个`"
-            />
-            <!-- 人工最终对象层：这是审核员实际修正和提交的唯一一套对象框。 -->
-            <template v-for="tray in objectDraft?.trays ?? []" :key="tray.key">
+            <!-- 工厂日常审核只显示疑点；显式技术校正时才展开标签框，托盘位置始终留在底层数据。 -->
+            <template v-if="showTechnicalObjectReview">
+              <template v-for="tray in objectDraft?.trays ?? []" :key="tray.key">
+                <div
+                  v-for="label in tray.labels"
+                  v-show="visibleLayers[label.type === 'WHITE_LABEL' ? 'white' : 'color']"
+                  :key="label.key"
+                  class="object-final-box object-label-box"
+                  :class="{ selected: selectedObjectKey === label.key, muted: selectedTray && selectedTray.key !== tray.key }"
+                  :style="objectBoxStyle(label.bbox, objectColor(label.type))"
+                  @pointerdown="startObjectPointer($event, tray, label, 'move')"
+                >
+                  <button
+                    v-if="canReview && selectedObjectKey === label.key"
+                    type="button"
+                    class="resize-handle"
+                    aria-label="缩放标签框"
+                    @pointerdown="startObjectPointer($event, tray, label, 'resize')"
+                  />
+                </div>
+              </template>
+            </template>
+            <template v-else>
               <div
-                v-if="visibleLayers.tray"
-                class="object-final-box object-tray-box"
-                :class="{ selected: selectedObjectKey === tray.key, muted: selectedTray && selectedTray.key !== tray.key }"
-                :style="objectBoxStyle(tray.bbox, objectColor('TRAY'))"
-                @pointerdown="startObjectPointer($event, tray, tray, 'move')"
+                v-for="entry in addedLabelObjects"
+                :key="entry.label.key"
+                class="object-final-box object-label-box supplemental-label-box"
+                :class="{ selected: selectedObjectKey === entry.label.key }"
+                :style="objectBoxStyle(entry.label.bbox, objectColor(entry.label.type))"
+                @pointerdown="startObjectPointer($event, entry.tray, entry.label, 'move')"
               >
                 <button
-                  v-if="canReview && selectedObjectKey === tray.key"
+                  v-if="canReview && selectedObjectKey === entry.label.key"
                   type="button"
                   class="resize-handle"
-                  aria-label="缩放盒子框"
-                  @pointerdown="startObjectPointer($event, tray, tray, 'resize')"
-                />
-              </div>
-              <div
-                v-for="label in tray.labels"
-                v-show="visibleLayers[label.type === 'WHITE_LABEL' ? 'white' : 'color']"
-                :key="label.key"
-                class="object-final-box object-label-box"
-                :class="{ selected: selectedObjectKey === label.key, muted: selectedTray && selectedTray.key !== tray.key }"
-                :style="objectBoxStyle(label.bbox, objectColor(label.type))"
-                @pointerdown="startObjectPointer($event, tray, label, 'move')"
-              >
-                <button
-                  v-if="canReview && selectedObjectKey === label.key"
-                  type="button"
-                  class="resize-handle"
-                  aria-label="缩放标签框"
-                  @pointerdown="startObjectPointer($event, tray, label, 'resize')"
+                  aria-label="缩放人工补充的标签框"
+                  @pointerdown="startObjectPointer($event, entry.tray, entry.label, 'resize')"
                 />
               </div>
             </template>
@@ -1497,19 +1337,8 @@ onBeforeUnmount(() => {
               />
             </div>
 
-            <!-- 落笔预览：拉框的橡皮筋 / 涂抹的笔迹 / 笔刷光标，都不接指针事件 -->
+            <!-- 拉框预览不接指针事件，避免截断当前拖拽。 -->
             <div v-if="draftRect" class="draft-rect" :style="draftRectStyle" />
-            <div
-              v-for="(dot, index) in brushStroke"
-              :key="`stroke-${index}`"
-              class="brush-dot"
-              :style="brushDotStyle(dot)"
-            />
-            <div
-              v-if="toolMode === 'brush' && cursorPoint && !brushStroke.length"
-              class="brush-cursor"
-              :style="brushDotStyle(cursorPoint)"
-            />
           </div>
 
           <div
@@ -1560,22 +1389,79 @@ onBeforeUnmount(() => {
         <div class="decision-scroll">
           <section v-if="objectDraft && !showTechnicalObjectReview" class="object-review-card object-review-summary">
             <div>
-              <span>模型框仅作定位参考</span>
+              <span>只关注模型标出的风险位置</span>
               <strong>本页只需处理下方 {{ currentAiPendingCount }} 个疑点，不要求逐盒标注</strong>
-              <p>高置信正常盒已由系统跳过；只有发现盒框、重复框或标签归属明显错误时，才进入技术框校正。</p>
+              <p>高置信正常盒已自动跳过，托盘无需描框；发现标签重复、漏框或归属错误时再展开校正。</p>
             </div>
-            <button type="button" @click="showTechnicalObjectReview = true">技术框校正（可选）</button>
+            <button type="button" @click="showTechnicalObjectReview = true">标签校正（可选）</button>
+          </section>
+
+          <section
+            v-if="labelCoverage"
+            class="label-coverage-card"
+            :class="{ warning: hasOptionalCoverageWarning }"
+            aria-label="标签数量参考与可选人工补框"
+          >
+            <div class="label-coverage-heading">
+              <strong>标签数量参考</strong>
+              <span>{{ labelCoverage.usesBatchReference ? '按同批固定数量' : '按已识别盒子' }}</span>
+            </div>
+            <div class="label-coverage-counts">
+              <span>
+                盒子 <strong>{{ labelCoverage.detectedTrayCount }}/{{ labelCoverage.expectedTrayCount }}</strong>
+              </span>
+              <span>
+                白标 <strong>{{ labelCoverage.whiteLabelCount }}/{{ labelCoverage.expectedTrayCount }}</strong>
+              </span>
+              <span>
+                彩标 <strong>{{ labelCoverage.colorLabelCount }}/{{ labelCoverage.expectedTrayCount }}</strong>
+              </span>
+            </div>
+            <p v-if="hasOptionalCoverageWarning" class="label-coverage-warning">
+              该图片可能存在模型未标注的白标或彩标，请按实际情况手动补框。
+              <template v-if="labelCoverage.possibleMissingTrayCount">
+                本图识别盒数少于同批参考，但无需人工补画托盘。
+              </template>
+              <template v-if="labelCoverage.duplicateWhiteLabelCount || labelCoverage.duplicateColorLabelCount">
+                部分盒子的标签框可能重复，请按需校正。
+              </template>
+            </p>
+            <p v-else class="label-coverage-note">白标和彩标数量与当前盒数一致，无需额外补框。</p>
+            <div class="label-supplement-actions">
+              <button
+                v-for="type in OBJECT_TYPES"
+                :key="type"
+                type="button"
+                :class="{ active: supplementalLabelType === type }"
+                :disabled="!canReview || labelCoverage.detectedTrayCount === 0"
+                :style="{ '--supplement-color': objectColor(type) }"
+                @click="beginLabelSupplement(type)"
+              >
+                补{{ objectLabelText(type) }}框
+              </button>
+            </div>
+            <div v-if="addedLabelObjects.length" class="supplemented-label-list">
+              <button
+                v-for="entry in addedLabelObjects"
+                :key="entry.label.key"
+                type="button"
+                :disabled="!canReview"
+                @click="deleteSupplementalLabel(entry.tray, entry.label)"
+              >
+                已补{{ objectLabelText(entry.label.type) }} · 盒 {{ entry.tray.trayIndex + 1 }} ×
+              </button>
+            </div>
+            <small>仅提醒，不强制补标，不影响审核提交。实物确实没有标签时，请选择缺标结论。</small>
           </section>
 
           <section v-if="objectDraft && showTechnicalObjectReview" class="object-review-card">
             <div class="object-review-heading">
               <div>
-                <span>可选 · 技术框校正</span>
-                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个模型盒框状态有效</strong>
+                <span>可选 · 标签位置与归属校正</span>
+                <strong>{{ confirmedTrayCount }}/{{ objectDraft.trays.length }} 个标签分组已确认</strong>
               </div>
               <div class="object-review-heading-actions">
                 <button type="button" @click="showTechnicalObjectReview = false">收起</button>
-                <button type="button" :disabled="!canReview" @click="addObjectTray">+ 漏了盒子</button>
               </div>
             </div>
             <div v-if="objectDraft.trays.length" class="tray-chip-row">
@@ -1590,7 +1476,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <div v-else class="empty-object-review">
-              模型没有识别到盒子。若照片里确实有盒子，请点“漏了盒子”补画；否则继续处理缺陷结论。
+              模型没有提供可校正的标签分组，请继续处理当前缺陷结论。
             </div>
 
             <template v-if="selectedTray">
@@ -1605,7 +1491,6 @@ onBeforeUnmount(() => {
               <div class="tray-context-row">
                 <strong>盒子 {{ selectedTray.trayIndex + 1 }}</strong>
                 <span>白标 {{ presenceText(selectedTray.whitePresence) }} · 彩标 {{ presenceText(selectedTray.colorPresence) }}</span>
-                <button type="button" class="danger-link" :disabled="!canReview" @click="deleteSelectedTray">删错盒子</button>
               </div>
 
               <div class="presence-editor">
@@ -1621,7 +1506,7 @@ onBeforeUnmount(() => {
                   >
                     {{ presenceActionText(presence) }}
                   </button>
-                  <button type="button" class="add-label" :disabled="!canReview" @click="addDefaultObjectLabel(type)">
+                  <button type="button" class="add-label" :disabled="!canReview" @click="beginLabelSupplement(type)">
                     + 补{{ objectLabelText(type) }}框
                   </button>
                 </div>
@@ -2244,19 +2129,8 @@ button {
 .tool-btn.on kbd { background: rgba(255, 255, 255, .25); }
 .tool-btn.label-btn.on { color: #fff; }
 
-.brush-size {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.brush-size em { font-style: normal; opacity: .7; }
-
-/* 光标形状直接表达当前工具：十字=画框，无光标=画笔(用自绘的圆代替) */
+/* 十字光标明确提示当前正在补问题框。 */
 .image-viewport.tool-box { cursor: crosshair; }
-.image-viewport.tool-brush { cursor: none; }
 
 /* ---- 落笔预览：一律不接指针事件，否则会截断正在进行的拖拽 ---- */
 .draft-rect {
@@ -2268,47 +2142,6 @@ button {
   pointer-events: none;
 }
 
-.brush-dot,
-.brush-cursor {
-  position: absolute;
-  z-index: 5;
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-.brush-dot { opacity: .28; }
-
-.brush-cursor {
-  background: transparent !important;
-  border: 2px solid;
-  opacity: .85;
-}
-
-/* AI 初筛参考层：常显类别，但保持不可交互，避免被误当成人工结论 */
-.reference-box {
-  position: absolute;
-  z-index: 1;
-  border: 2px solid;
-  border-radius: 3px;
-  pointer-events: none;
-  border-width: 3px;
-  opacity: 1;
-}
-
-.reference-box.layer-tray {
-  border-style: solid;
-  opacity: 1;
-}
-
-.horizontal-guide {
-  position: absolute;
-  z-index: 4;
-  height: 0;
-  border-top: 4px solid var(--guide-color);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 92%), 0 -1px 0 rgb(255 255 255 / 92%);
-  pointer-events: none;
-}
-
 /* 单层细框：原先是 3px 边框 + 1px 白描边 (选中时再叠 3px 白 + 6px 绿 = 一圈 9px)，
    在密排的肉盒上糊成一片。改为 2px 单线，选中只加深不加层。 */
 .annotation-box {
@@ -2316,16 +2149,16 @@ button {
   z-index: 2;
   border: 2px solid;
   border-radius: 4px;
+  background: var(--overlay-fill);
   cursor: move;
 }
 
 .annotation-box.pending {
   border-style: solid;
-  background: rgba(245, 165, 36, .08);
 }
 
 .annotation-box.human {
-  background: rgba(47, 111, 221, .10);
+  background: var(--overlay-fill);
 }
 
 .annotation-box.selected {
@@ -2900,6 +2733,7 @@ button:disabled {
   z-index: 2;
   border: 3px solid;
   border-radius: 3px;
+  background: var(--overlay-fill);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 72%);
   pointer-events: auto;
   cursor: move;
@@ -2907,7 +2741,7 @@ button:disabled {
 
 .object-final-box.muted { opacity: .68; }
 .object-final-box.selected { z-index: 3; box-shadow: 0 0 0 3px rgb(255 255 255 / 80%); }
-.object-tray-box { border-style: solid; }
+.supplemental-label-box { z-index: 3; }
 .object-review-card {
   margin-bottom: 12px;
   padding: 14px;
@@ -2920,6 +2754,74 @@ button:disabled {
 .object-review-summary p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .object-review-summary button, .object-review-heading-actions button { min-height: 36px; border: 1px solid #cbd8d2; border-radius: 8px; background: #fff; cursor: pointer; }
 .object-review-heading-actions { display: flex; gap: 8px; }
+
+.label-coverage-card {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #d7e4f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.label-coverage-card.warning {
+  border-color: #f0c77d;
+  background: #fffaf1;
+}
+
+.label-coverage-heading,
+.label-coverage-counts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.label-coverage-heading > strong { color: #1a2332; font-size: 13px; }
+.label-coverage-heading > span { color: #7a8599; font-size: 11px; }
+.label-coverage-counts > span { color: #627086; font-size: 12px; }
+.label-coverage-counts > span > strong { color: #1a2332; }
+
+.label-coverage-warning,
+.label-coverage-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.label-coverage-warning { color: #975a16; }
+.label-coverage-note { color: #607086; }
+
+.label-supplement-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.label-supplement-actions button,
+.supplemented-label-list button {
+  min-height: 36px;
+  border: 1px solid var(--supplement-color, #d7e4f0);
+  border-radius: 8px;
+  color: var(--supplement-color, #526074);
+  background: #fff;
+  cursor: pointer;
+}
+
+.label-supplement-actions button.active {
+  color: #fff;
+  background: var(--supplement-color);
+}
+
+.supplemented-label-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.supplemented-label-list button { min-height: 30px; padding: 0 8px; font-size: 11px; }
+.label-coverage-card > small { color: #7a8599; font-size: 11px; line-height: 1.5; }
 
 .missing-label-guide {
   display: grid;
