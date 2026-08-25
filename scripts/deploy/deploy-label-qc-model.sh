@@ -230,7 +230,9 @@ mv -f -- "$tmp" "$env_file"
 
 systemctl restart cretas-python
 systemctl is-active --quiet cretas-python
-health=$(curl -fsS --max-time 15 http://127.0.0.1:8083/health)
+# systemd reports active before uvicorn has bound its socket; keep rollback
+# armed while giving the real HTTP health endpoint bounded time to come up.
+health=$(curl -fsS --retry 15 --retry-connrefused --retry-delay 1 --max-time 5 http://127.0.0.1:8083/health)
 printf '%s' "$health" | "$runtime" -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status") == "healthy"; assert d.get("postgres") == "connected"'
 
 set -a
