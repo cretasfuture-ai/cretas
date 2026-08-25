@@ -41,7 +41,7 @@ const EMPTY_DAY = {
     totalPlannedQuantity: 0,
     totalReportedQuantity: 0,
   },
-  plans: [],
+  plans: [] as unknown[],
 };
 
 /** 有计划的一天 —— summary 是真实读数, 必须照常显示。 */
