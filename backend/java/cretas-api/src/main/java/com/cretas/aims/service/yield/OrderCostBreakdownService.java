@@ -81,6 +81,18 @@ public class OrderCostBreakdownService {
     private com.cretas.aims.repository.ProductionSettlementConsumptionRepository
             settlementConsumptionRepository;
 
+    /**
+     * pinned BOM 快照缺失时的回退来源 —— 画布那条路<b>不写</b> {@code bom_versions}。
+     *
+     * <p>字段注入 + {@code required=false}, 与上面同一条纪律: 本类构造器被多个测试直接 new,
+     * 改签名会让并行线编译不过; 缺失时回退逻辑整体跳过(退回原来的「报快照缺失」)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeFallbackRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeItemRepository bomRecipeItemFallbackRepository;
+
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final int MAX_DEPTH = 10;
 
@@ -981,6 +993,66 @@ public class OrderCostBreakdownService {
         }
     }
 
+    /**
+     * 从 {@code bom_recipes} + {@code bom_recipe_items} 现拼一份与 {@code bom_versions}
+     * 同形状的快照。
+     *
+     * @return {@code null} 表示回退不可用(仓储缺失 / recipe 不存在 / <b>版本号对不上</b>)
+     */
+    private Map<String, Object> pinnedBomSnapshotFromRecipe(String factoryId, ProductionPlan plan) {
+        if (bomRecipeFallbackRepository == null || bomRecipeItemFallbackRepository == null) {
+            return null;
+        }
+        com.cretas.aims.entity.bom.BomRecipe recipe;
+        try {
+            recipe = bomRecipeFallbackRepository.findById(plan.getSelectedBomRecipeId())
+                    .filter(r -> factoryId.equals(r.getFactoryId()))
+                    .orElse(null);
+        } catch (RuntimeException ex) {
+            log.warn("[M67CostBreakdown] BOM 回退读取失败 factory={} recipe={}: {}",
+                    factoryId, plan.getSelectedBomRecipeId(), ex.getMessage());
+            return null;
+        }
+        // 🔴 版本号必须对得上 —— 否则就是拿新版本的料冒充旧版本, 历史成本会悄悄变化。
+        if (recipe == null || !Objects.equals(recipe.getVersion(), plan.getSelectedBomVersion())) {
+            return null;
+        }
+        List<com.cretas.aims.entity.bom.BomRecipeItem> items;
+        try {
+            items = bomRecipeItemFallbackRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
+        } catch (RuntimeException ex) {
+            log.warn("[M67CostBreakdown] BOM 物料行回退读取失败 recipe={}: {}",
+                    recipe.getId(), ex.getMessage());
+            return null;
+        }
+        if (items == null || items.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (com.cretas.aims.entity.bom.BomRecipeItem it : items) {
+            if (it == null) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("materialCategory", it.getMaterialCategory());
+            row.put("materialTypeId", it.getMaterialTypeId());
+            row.put("materialName", it.getMaterialName());
+            row.put("standardQuantity", it.getStandardQuantity());
+            row.put("unit", it.getUnit());
+            // ⛔ 与 bom_versions 快照同一个键名和同一个口径: itemCost 是缓存的行成本。
+            //    它为 0 时下游会判为「不可信」(见 pinnedCostUsable), 这里不做特殊处理。
+            row.put("itemCost", it.getItemCost());
+            rows.add(row);
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("outputQuantityPerUnit", recipe.getOutputQuantityPerUnit());
+        snapshot.put("outputUnit", recipe.getOutputUnit());
+        snapshot.put("items", rows);
+        log.info("[M67CostBreakdown] bom_versions 无快照, 回退 bom_recipes 现拼 factory={} recipe={} v={}",
+                factoryId, recipe.getId(), recipe.getVersion());
+        return snapshot;
+    }
+
     private PinnedPackagingResult resolvePinnedPackaging(String factoryId, ProductionPlan plan,
                                                           BigDecimal outputQuantity, String outputUnit) {
         if (plan == null || plan.getSelectedBomRecipeId() == null || plan.getSelectedBomVersion() == null) {
@@ -997,12 +1069,27 @@ public class OrderCostBreakdownService {
                 .filter(item -> Objects.equals(item.getVersionNumber(), plan.getSelectedBomVersion()))
                 .findFirst()
                 .orElse(null);
-        if (version == null || version.getSnapshotJson() == null) {
+        Map<String, Object> snapshot = version == null ? null : version.getSnapshotJson();
+        if (snapshot == null) {
+            // ── 2026-08-25: 画布那条路【不写】 bom_versions ────────────────────────
+            //   实测(生产库): F006 13 个 ACTIVE bom_recipes 里, 在 bom_versions 有对应
+            //   版本快照的是【0 个】; bom_versions 全库 9 行、最近写入停在 2026-08-02,
+            //   只有 ECN 手工流程(BomVersionService)才写它。
+            //   而本方法只读 bom_versions ⇒ 对画布建的 BOM 永远读不到 ⇒ 7/23 个生产批次
+            //   卡在 PINNED_BOM_SNAPSHOT_MISSING, 包材成本被算成 0 且整单算不出单位成本。
+            //   本仓形态 D: 同一个东西两份, 读的是不再维护的那份。
+            //
+            //   ⛔ 回退【只在版本号对得上时】才用: recipe.version == plan.selectedBomVersion
+            //      保证 bom_recipe_items 里躺着的就是那个版本的内容。对不上说明 recipe 已经
+            //      往前走了、那个版本的内容确实丢了 —— 那时仍然诚实报 SNAPSHOT_MISSING,
+            //      不拿新版本的料去冒充旧版本(那会让历史成本悄悄变化)。
+            snapshot = pinnedBomSnapshotFromRecipe(factoryId, plan);
+        }
+        if (snapshot == null) {
             missing.add("PINNED_BOM_SNAPSHOT_MISSING:" + plan.getSelectedBomRecipeId()
                     + ":v" + plan.getSelectedBomVersion());
             return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
         }
-        Map<String, Object> snapshot = version.getSnapshotJson();
         BigDecimal recipeOutput = toBigDecimal(snapshot.get("outputQuantityPerUnit"));
         String recipeOutputUnit = snapshot.get("outputUnit") == null ? null
                 : String.valueOf(snapshot.get("outputUnit"));
