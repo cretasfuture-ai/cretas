@@ -1099,6 +1099,19 @@ onMounted(async () => {
   if (route.query.openEntry === '1' && canWrite.value) {
     openOpeningEntry();
   }
+  // OA 审批中心「详情」深链 (?stocktakeId=...) —— 审批人点进来必须直接看到**那一单**,
+  // 而不是自己在列表里翻。2026-08-25 之前库存调整根本没接详情页, 厂长点「详情」
+  // 只得到「暂未接入单据详情页」, 却被要求批准一次真实的库存数量调整。
+  const deepLinkId = route.query.stocktakeId;
+  if (typeof deepLinkId === 'string' && deepLinkId) {
+    const target = tableData.value.find((row: TableRow) => row.id === deepLinkId);
+    if (target) {
+      openDetail(target);
+    } else {
+      // ⛔ 不静默失败: 说清是「这一单不在当前筛选/页里」, 而不是让人以为点坏了。
+      ElMessage.warning('未在当前列表中找到该盘点单，请调整状态筛选或翻页后重试');
+    }
+  }
 });
 </script>
 

@@ -609,7 +609,15 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         int shelfLifeDays = productType != null && productType.getShelfLifeDays() != null
                 ? productType.getShelfLifeDays() : 180;
         batch.setExpireDate(LocalDate.now().plusDays(shelfLifeDays));
-        batch.setStorageLocation("库存生产小结入库");
+        // 🔴 2026-08-25 prod 实测: 这里原来把一句**来源描述**写进了 storage_location。
+        //    F006 的 18 条成品批次里 16 条因此躺着 "库存生产小结入库" 这类文字, 与本厂
+        //    WAREHOUSE_LAYOUT 里配置的位置编码匹配数为 0 ⇒ 仓储空间的位置筛选、
+        //    位置卡片「N 批」、countAt() 在生产数据上恒为 0 —— 核心功能被这一行掏空。
+        //    ⛔ 来源本来就记在 productionPlanId 等字段上, 不需要借位置字段再存一份(形态 D)。
+        //    ⇒ 留 null: 「未分配位置」是**真的**, 而一个假位置会让下游全部读错。
+        //       仓管在「仓储空间 → 现场盘点 → 调整位置」里填真实位置, 后端已校验它必须
+        //       存在于本厂配置(见 WarehouseLayoutController#moveFinishedGoods)。
+        // (不再写入 storage_location)
         batch.setProductionPlanId(plan.getId());
         // 客户归属存货生产仍走 SAFETY_STOCK 小结，但成品法律归属必须来自创建计划时固定的快照。
         // 与普通结单/仓库实收成品创建保持同一口径；否则客户来料会在最后一步被悄悄改成公司库存，

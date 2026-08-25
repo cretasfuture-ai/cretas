@@ -104,6 +104,17 @@ public class WorkflowInstanceController {
     @Autowired(required = false)
     private SalesOrderRepository salesOrderRepository;
 
+    /**
+     * Optional — 把 INVENTORY_ADJUSTMENT 待办上的业务实体 UUID 换成盘点单号。
+     *
+     * 🔴 2026-08-25 prod 实测: 厂长在待办里看到的是
+     * {@code INVENTORY_ADJUSTMENT 5a5f4e93-a8ac-461d-8e03-53f14952edae}, 点「详情」得到
+     * 「暂未接入单据详情页」, 通过前的确认框里业务单号还是那串 UUID、往来单位与金额都是「—」。
+     * 也就是**要求审批人在完全看不到批了什么的情况下批准一次库存调整**。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryStocktakeRepository factoryStocktakeRepository;
+
     @Autowired(required = false)
     private OaActionIdempotencyService oaActionIdempotencyService;
 
@@ -166,6 +177,7 @@ public class WorkflowInstanceController {
         Map<String, WorkflowInstancePendingDTO> partial = new HashMap<>();
         Set<String> poIds = new HashSet<>();
         Set<String> soIds = new HashSet<>();
+        Set<String> stocktakeIds = new HashSet<>();
         for (ApprovalWorkflowInstance inst : instances.getContent()) {
             WorkflowInstancePendingDTO dto = WorkflowInstancePendingDTO.builder()
                     .instanceId(inst.getId())
@@ -180,6 +192,9 @@ public class WorkflowInstanceController {
             if ("SALES_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
                 soIds.add(inst.getBusinessEntityId());
             }
+            if ("INVENTORY_ADJUSTMENT".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
+                stocktakeIds.add(inst.getBusinessEntityId());
+            }
         }
 
         // 3a. PURCHASE_ORDER 批量 fetch
@@ -192,6 +207,7 @@ public class WorkflowInstanceController {
             }
         }
         Map<String, SalesOrder> soById = loadSalesOrders(soIds);
+        Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById = loadStocktakes(stocktakeIds);
 
         // 3b. 用户名 hydrate (initiatedBy)
         Map<Long, String> usernameById = new HashMap<>();
@@ -220,11 +236,11 @@ public class WorkflowInstanceController {
             WorkflowInstancePendingDTO dto = partial.get(inst.getId());
 
             // businessSummary
-            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById));
+            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById));
 
             // M-12: 除了那句拼好的摘要, 再把单号/金额/往来单位**分开**下发。
             // 前端要拆成三列(金额得能右对齐+排序), ⛔ 不许它从 businessSummary 正则反解。
-            fillStructuredBusinessFields(dto, inst, poById, soById);
+            fillStructuredBusinessFields(dto, inst, poById, soById, stocktakeById, warehouseNameById);
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -610,6 +626,7 @@ public class WorkflowInstanceController {
         // 1. 收 PO ids + initiator ids
         Set<String> poIds = new HashSet<>();
         Set<String> soIds = new HashSet<>();
+        Set<String> stocktakeIds = new HashSet<>();
         Set<Long> initiatorIds = new HashSet<>();
         for (ApprovalWorkflowInstance inst : instances) {
             if ("PURCHASE_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
@@ -617,6 +634,9 @@ public class WorkflowInstanceController {
             }
             if ("SALES_ORDER".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
                 soIds.add(inst.getBusinessEntityId());
+            }
+            if ("INVENTORY_ADJUSTMENT".equals(inst.getModuleCode()) && inst.getBusinessEntityId() != null) {
+                stocktakeIds.add(inst.getBusinessEntityId());
             }
             if (inst.getInitiatedBy() != null) initiatorIds.add(inst.getInitiatedBy());
         }
@@ -631,6 +651,7 @@ public class WorkflowInstanceController {
             }
         }
         Map<String, SalesOrder> soById = loadSalesOrders(soIds);
+        Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById = loadStocktakes(stocktakeIds);
 
         // 3. 批量 fetch usernames
         Map<Long, String> usernameById = new HashMap<>();
@@ -655,7 +676,7 @@ public class WorkflowInstanceController {
                     .moduleCode(inst.getModuleCode())
                     .businessEntityId(inst.getBusinessEntityId())
                     .initiatedAt(inst.getInitiatedAt())
-                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById))
+                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById))
                     .status(inst.getStatus().name())
                     .completedAt(inst.getCompletedAt())
                     .build();
@@ -707,6 +728,18 @@ public class WorkflowInstanceController {
      * 批量取本工厂仓库名, 避免每条待办各查一次。
      * 仓库数量是工厂级常量(个位数), 一次全量取比按 ID 拼 IN 更简单也更省。
      */
+    /** 批量取盘点单, 用来把 INVENTORY_ADJUSTMENT 待办上的 UUID 换成盘点单号。⛔ 不做逐条查(1+N)。 */
+    private Map<String, com.cretas.aims.entity.factory.FactoryStocktake> loadStocktakes(java.util.Set<String> ids) {
+        Map<String, com.cretas.aims.entity.factory.FactoryStocktake> byId = new HashMap<>();
+        if (ids.isEmpty() || factoryStocktakeRepository == null) return byId;
+        try {
+            factoryStocktakeRepository.findAllById(ids).forEach(st -> byId.put(st.getId(), st));
+        } catch (Exception e) {
+            log.warn("批量加载盘点单失败, OA 摘要降级为业务实体 ID: {}", e.getMessage());
+        }
+        return byId;
+    }
+
     private Map<String, String> loadWarehouseNames(String factoryId) {
         Map<String, String> byId = new HashMap<>();
         if (factoryWarehouseRepository == null) return byId;
@@ -740,7 +773,9 @@ public class WorkflowInstanceController {
     private void fillStructuredBusinessFields(WorkflowInstancePendingDTO dto,
                                               ApprovalWorkflowInstance inst,
                                               Map<String, PurchaseOrder> poById,
-                                              Map<String, SalesOrder> soById) {
+                                              Map<String, SalesOrder> soById,
+                                              Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById,
+                                              Map<String, String> warehouseNameById) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PURCHASE_ORDER".equals(moduleCode)) {
@@ -760,6 +795,20 @@ public class WorkflowInstanceController {
                 dto.setCounterpartyName(so.getCustomerName());
             }
         }
+        if ("INVENTORY_ADJUSTMENT".equals(moduleCode)) {
+            com.cretas.aims.entity.factory.FactoryStocktake stocktake = stocktakeById.get(bizId);
+            if (stocktake != null) {
+                // 单号 —— 审批人认得的是 ST-202608-C20566F3, 不是业务实体 UUID。
+                dto.setBusinessCode(stocktake.getStocktakeNo());
+                // 「往来单位」这一列对盘点没有交易对手概念, 借它显示**仓库** ——
+                // 那正是审批人判断这单该不该批时要看的第二个信息。
+                String warehouse = warehouseNameById.get(stocktake.getWarehouseId());
+                dto.setCounterpartyName(warehouse != null ? warehouse : stocktake.getWarehouseId());
+            }
+            // ⛔ businessAmount 保持 null: 盘点差异是**数量**不是金额,
+            //    兜底成 0 会让审批人以为这是一张零元单(与本方法开头那条注释同一条纪律)。
+            return;
+        }
         // 其余模块暂无结构化来源 —— 三个字段保持 null,
         // 前端回落到 businessSummary 显示原来那句话(⛔ 不能变空白)。
     }
@@ -767,7 +816,8 @@ public class WorkflowInstanceController {
     private String buildBusinessSummary(ApprovalWorkflowInstance inst,
                                         Map<String, PurchaseOrder> poById,
                                         Map<String, SalesOrder> soById,
-                                        Map<String, String> warehouseNameById) {
+                                        Map<String, String> warehouseNameById,
+                                        Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PURCHASE_ORDER".equals(moduleCode)) {
@@ -828,6 +878,25 @@ public class WorkflowInstanceController {
                 return String.format("%s 年 %s 月 会计期间", year, month);
             }
             return "会计期间 " + bizId;
+        }
+        if ("INVENTORY_ADJUSTMENT".equals(moduleCode)) {
+            // 此前这里没有分支, 厂长在待办里看到的是裸串
+            // 「INVENTORY_ADJUSTMENT 5a5f4e93-a8ac-461d-8e03-53f14952edae」,
+            // 而这正是他要点「通过」去调整实际库存的那一单。
+            com.cretas.aims.entity.factory.FactoryStocktake stocktake = stocktakeById.get(bizId);
+            if (stocktake != null) {
+                StringBuilder sb = new StringBuilder(
+                        stocktake.getStocktakeNo() != null ? stocktake.getStocktakeNo() : bizId);
+                String warehouse = warehouseNameById.get(stocktake.getWarehouseId());
+                if (warehouse != null && !warehouse.isBlank()) {
+                    sb.append(" (").append(warehouse).append(")");
+                }
+                if (stocktake.getPeriodMonth() != null && !stocktake.getPeriodMonth().isBlank()) {
+                    sb.append(" ").append(stocktake.getPeriodMonth());
+                }
+                return sb.toString();
+            }
+            return "盘点单 " + bizId;
         }
         // generic fallback
         return (moduleCode == null ? "业务单据" : moduleCode) + " " + bizId;

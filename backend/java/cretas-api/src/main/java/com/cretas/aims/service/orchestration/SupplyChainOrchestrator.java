@@ -687,7 +687,15 @@ public class SupplyChainOrchestrator {
         fg.setBatchNumber(fgBatchNumber);
         fg.setProductionDate(LocalDate.now());
         fg.setExpireDate(LocalDate.now().plusDays(180));
-        fg.setStorageLocation("默认仓位");
+        // 🔴 2026-08-25 prod 实测: 这里原来把一句**来源描述**写进了 storage_location。
+        //    F006 的 18 条成品批次里 16 条因此躺着 "默认仓位" 这类文字, 与本厂
+        //    WAREHOUSE_LAYOUT 里配置的位置编码匹配数为 0 ⇒ 仓储空间的位置筛选、
+        //    位置卡片「N 批」、countAt() 在生产数据上恒为 0 —— 核心功能被这一行掏空。
+        //    ⛔ 来源本来就记在 productionPlanId 等字段上, 不需要借位置字段再存一份(形态 D)。
+        //    ⇒ 留 null: 「未分配位置」是**真的**, 而一个假位置会让下游全部读错。
+        //       仓管在「仓储空间 → 现场盘点 → 调整位置」里填真实位置, 后端已校验它必须
+        //       存在于本厂配置(见 WarehouseLayoutController#moveFinishedGoods)。
+        // (不再写入 storage_location)
         // 🔴 2026-08-19: 原来是写死的 `fg.setCreatedBy(0L)`。users 表里没有 id=0
         //    (prod 实测 min(id)=1309), 所以那个 0 从来不指向任何人 —— 它只是「没人填」
         //    伪装成了一个用户 id。
