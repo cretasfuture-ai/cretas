@@ -927,6 +927,7 @@ import {
   getProductProcessWorkflowVersion,
   listProductProcessWorkflowVersions,
   publishAndActivateProductProcessWorkflow,
+  getProductConfigurationReadiness,
   saveProductProcessWorkflowDraft,
   type WorkflowVersionSummary,
 } from './workflowApi';
@@ -938,6 +939,7 @@ import {
   canPublishWorkflowWithBomSync,
   executeWorkflowPublishMutation,
   workflowBomSyncBlockingIssues,
+  seasoningAbsenceWarning,
   workflowBomSyncStatusTitle,
 } from './workflowPublishGate';
 import {
@@ -4809,7 +4811,43 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.info('当前没有待应用的配置修改；请先修改并保存当前配置');
     return;
   }
+  if (!(await confirmSeasoningAbsence(identity))) return;
   await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
+}
+
+/**
+ * 成品没配辅料时提示一声 —— 2026-08-25 owner 裁定：
+ * 辅料一律**选填**，但发布前要问一句「确定不配吗」，确认后照常发布。
+ *
+ * ⛔ fail-open：读不到就绪报告时**直接放行**。它是提示不是闸，
+ * 不该因为一次网络抖动把发布挡住（真正拦人的项由后端 409 负责）。
+ *
+ * @returns `true` = 继续发布；`false` = 用户点了取消
+ */
+async function confirmSeasoningAbsence(identity: WorkflowIdentity): Promise<boolean> {
+  let warning: ReturnType<typeof seasoningAbsenceWarning> = null;
+  try {
+    const response = await getProductConfigurationReadiness(
+      identity.factoryId,
+      identity.productTypeId,
+    );
+    // 与本文件其它调用同一取法: ApiResponse 外壳 → .data。
+    // 取不到就当没提示放行(fail-open), 不在这里报错打断发布。
+    warning = seasoningAbsenceWarning(response?.data?.issues);
+  } catch {
+    return true;   // 读不到就放行, 见上面的 fail-open
+  }
+  if (!warning) return true;
+  try {
+    await ElMessageBox.confirm(warning.message, '未配置辅料', {
+      confirmButtonText: '继续发布',
+      cancelButtonText: '去配置辅料',
+      type: 'warning',
+    });
+    return true;
+  } catch {
+    return false;   // 用户选择去配置
+  }
 }
 
 async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): Promise<void> {

@@ -57,3 +57,33 @@ export async function executeWorkflowPublishMutation<T>(
   if (!canPublishWorkflowWithBomSync(preflight)) return null;
   return mutation();
 }
+
+/**
+ * 配置就绪报告里的一条。`severity` 缺省按 `BLOCKING` 处理 ——
+ * ⛔ 反过来(缺省 WARNING)会让一条本该拦人的项悄悄失效。
+ */
+export interface ProductConfigurationIssue {
+  code: string;
+  message: string;
+  target?: string | null;
+  severity?: string | null;
+}
+
+export const SEASONING_ABSENT_CODE = 'BOM_SEASONING_ABSENT';
+
+/**
+ * 「成品没配辅料」这条**只提示、不拦人**的项（2026-08-25 owner 裁定：
+ * 辅料一律选填，但没配要提示一声，用户确认后照常保存）。
+ *
+ * @returns 需要提示时返回那一条；不需要提示返回 `null`
+ */
+export function seasoningAbsenceWarning(
+  issues: ProductConfigurationIssue[] | null | undefined,
+): ProductConfigurationIssue | null {
+  if (!Array.isArray(issues)) return null;
+  return issues.find((item) => item
+    && item.code === SEASONING_ABSENT_CODE
+    // ⛔ 必须是 WARNING 才走「确认后继续」这条路 —— 若哪天后端把它改成
+    //    BLOCKING, 这里不该把它降级成一个可以点「继续」的提示框。
+    && String(item.severity ?? '').toUpperCase() === 'WARNING') ?? null;
+}

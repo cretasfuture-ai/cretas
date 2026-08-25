@@ -6,6 +6,7 @@ import type {
   WorkflowPublishAndActivateRequest,
   WorkflowPublishAndActivateResponse,
 } from './types';
+import type { ProductConfigurationIssue } from './workflowPublishGate';
 
 const workflowConflictConfig = {
   _handledErrorCodes: [
@@ -54,6 +55,23 @@ export function saveProductProcessWorkflowDraft(
     `/${factoryId}/product-process-workflows/${productTypeId}/draft`,
     definition,
     workflowConflictConfig,
+  );
+}
+
+/**
+ * 产品配置就绪报告（BOM 完整性 / 包材 / 辅料提示等）。
+ *
+ * <p>发布前用来取「只提示不拦人」的项（如成品没配辅料）。
+ * ⛔ 调用失败时调用方应当**放行**：它是提示，不是闸，不该让发布更脆弱。
+ */
+export function getProductConfigurationReadiness(
+  factoryId: string,
+  productTypeId: string,
+  recipeId?: string,
+) {
+  return get<{ issues?: ProductConfigurationIssue[] }>(
+    `/${factoryId}/product-configuration-readiness/${productTypeId}`,
+    recipeId ? { recipeId } : undefined,
   );
 }
 

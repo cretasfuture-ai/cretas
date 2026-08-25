@@ -362,6 +362,85 @@ class ProductConfigurationReadinessServiceTest {
                 .build();
     }
 
+    /**
+     * 🔴 2026-08-25 owner 裁定: 辅料<b>不分类、一律选填</b>, 但没配要提示一声。
+     *
+     * <p>原话:「辅料它不是必须的, 也是 optional 的, 但是要做一个提示 ——
+     * 如果他没有配置辅料的话, 提示当前没有配置辅料, 请确定是否要配置,
+     * 如果不配置, 让他继续保存就好了。」
+     *
+     * <p>所以这一条钉的是<b>「提示了」和「没拦人」同时成立</b> ——
+     * 只钉前者会让它变成一道拦人的闸, 只钉后者等于没提示。
+     */
+    @Test
+    void finishedGoodsWithoutSeasoningWarnsButDoesNotBlock() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of());   // 没有任何辅料
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId()))
+                .thenReturn(List.of(rawItem(recipe.getId()), packagingItem(recipe.getId())));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY))
+                .thenReturn(Optional.of(productOfCategory("FINISHED_PRODUCT", "kg")));
+        when(unitContractService.describe(FACTORY, "kg")).thenReturn(Optional.empty());
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        ProductConfigurationCompletenessReport.Issue seasoning = report.getIssues().stream()
+                .filter(i -> "BOM_SEASONING_ABSENT".equals(i.getCode()))
+                .findFirst().orElse(null);
+        assertTrue(seasoning != null, "没配辅料却一声不吭: " + report.getIssues());
+        assertEquals("WARNING", seasoning.getSeverity(),
+                "辅料提示被标成了阻断项 —— 那就不是「可以继续保存」了");
+
+        // 🔴 另一半: 它【不】影响完整性, 发布/激活照常放行
+        assertTrue(report.isBomComplete(),
+                "辅料只是提示, 不该把 BOM 判成不完整");
+    }
+
+    /** 阳性对照: 配了辅料就不提示 (否则「总是提示」和「该提示才提示」分不开)。 */
+    @Test
+    void finishedGoodsWithSeasoningIsNotWarned() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of(binding(null, "WP-LEGACY")));
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId()))
+                .thenReturn(List.of(rawItem(recipe.getId()), packagingItem(recipe.getId())));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY))
+                .thenReturn(Optional.of(productOfCategory("FINISHED_PRODUCT", "kg")));
+        when(unitContractService.describe(FACTORY, "kg")).thenReturn(Optional.empty());
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        assertTrue(report.getIssues().stream()
+                        .noneMatch(i -> "BOM_SEASONING_ABSENT".equals(i.getCode())),
+                "配了辅料还在提示没配: " + report.getIssues());
+    }
+
+    /** 阴性对照: 缺主原料仍然是 BLOCKING —— 别把整套 issue 都降级成提示。 */
+    @Test
+    void missingRawMaterialStaysBlocking() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of());
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId()))
+                .thenReturn(List.of());   // 连主原料都没有
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        ProductConfigurationCompletenessReport.Issue raw = report.getIssues().stream()
+                .filter(i -> "BOM_RAW_REQUIRED".equals(i.getCode()))
+                .findFirst().orElse(null);
+        assertTrue(raw != null, "缺主原料没报: " + report.getIssues());
+        assertEquals("BLOCKING", raw.getSeverity(), "缺主原料被降级成了提示");
+        assertFalse(report.isBomComplete());
+    }
+
     private void stubCommon(BomRecipe recipe, List<BomSeasoningItem> bindings) {
         when(recipeRepository.findByFactoryIdAndProductTypeIdOrderByVersionDesc(FACTORY, PRODUCT))
                 .thenReturn(List.of(recipe));
