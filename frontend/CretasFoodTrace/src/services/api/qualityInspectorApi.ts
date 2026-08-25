@@ -9,13 +9,25 @@ import {
   QualityRecord,
   QualityStatistics,
   QualityStatisticsResponse,
-  QualityTrendData,
   QualityInspectionForm,
   ClockRecord,
   QINotification,
   QIApiResponse,
   QIPagedResponse,
 } from '../../types/qualityInspector';
+
+/**
+ * `/processing/quality/trends` 的逐日返回项。
+ *
+ * 后端 (ProcessingServiceImpl#getQualityTrends) 每天只 put 三个键, 这里就只声明
+ * 这三个 —— 多声明一个后端不产出的字段, 下游就会拿到 undefined 并悄悄当成 0。
+ * `passRate` 是当天所有质检记录 passRate 的算术平均 (0-100)。
+ */
+export interface QITrendPointWire {
+  date: string; // YYYY-MM-DD
+  passRate: number | string;
+  inspectionCount: number;
+}
 
 type QINotificationWire = Omit<QINotification, 'id' | 'type' | 'read'> & {
   id: string | number;
@@ -292,17 +304,6 @@ class QualityInspectorApiClient {
   }
 
   /**
-   * 获取质检趋势数据
-   */
-  async getTrends(period: 'week' | 'month' | 'quarter' = 'week'): Promise<QualityTrendData> {
-    const response = await apiClient.get<QIApiResponse<QualityTrendData>>(
-      `${this.getBasePath()}/processing/quality/trends`,
-      { params: { period } }
-    );
-    return response.data;
-  }
-
-  /**
    * 获取分析数据 (用于分析概览页)
    */
   async getAnalysisData(): Promise<unknown> {
@@ -315,12 +316,28 @@ class QualityInspectorApiClient {
   }
 
   /**
-   * 获取趋势数据 (用于趋势分析页)
+   * 获取质检趋势数据 (用于趋势分析页 QITrendScreen)。
+   *
+   * APP-CONTRACT-005 (2026-08-25): 之前这里打的是 `/reports/dashboard/trends`,
+   * 那个端点返回 productionTrend / qualityTrend / costTrend / materialTrend /
+   * equipmentTrend —— 与 QITrendScreen 声明的 dates / passRates / avgScores /
+   * inspectionCounts / gradesTrend **零交集**, 请求成功时页面拿到的全是 undefined
+   * 并在 `values.length` 处崩掉; 而 catch 分支用 Math.random() 编了一整屏假数据,
+   * 于是"崩"被掩盖成了"看起来正常"。
+   *
+   * 现在打 ProcessingController#getQualityTrends —— 数据源是 quality_inspections
+   * 表 (ProcessingServiceImpl#getQualityTrends), 才是**质检口径**。
+   * 不用旧端点的第二个理由: 它的 qualityTrend.passRate 是
+   * `calculateDailyYieldRate` —— 生产批次的**得率**, 不是质检合格率;
+   * 把得率摆在质检趋势页上并标成"合格率", 是另一种形态的假数据。
+   *
+   * 后端逐日返回 (含没有质检记录的空日, 那些日子 passRate 会是 0 —— 调用方必须
+   * 用 inspectionCount === 0 把它认出来, 不要当成"当天合格率 0%")。
    */
-  async getTrendData(period: '7d' | '30d' | '90d' = '7d'): Promise<any> {
+  async getTrendData(period: '7d' | '30d' | '90d' = '7d'): Promise<QITrendPointWire[]> {
     const days = period === '7d' ? 7 : period === '30d' ? 30 : 90;
-    const response = await apiClient.get<QIApiResponse<any>>(
-      `${this.getBasePath()}/reports/dashboard/trends`,
+    const response = await apiClient.get<QIApiResponse<QITrendPointWire[]>>(
+      `${this.getBasePath()}/processing/quality/trends`,
       { params: { days } }
     );
     return response.data;
