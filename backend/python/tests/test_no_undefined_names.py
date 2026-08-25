@@ -39,6 +39,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _PY_ROOT = Path(__file__).resolve().parents[1]
 
 #: 🔴 已知未修的 F821，**逐条登记 + 写理由**（硬约束 8：故意不改的要留痕）。
@@ -72,6 +74,11 @@ def _violations(stdout: str) -> dict[str, str]:
     return out
 
 
+#: ⏱ 覆盖 python-gate 的全局 `--timeout=60`。本文件的每个用例都要对**整个仓**
+#: 跑一次 flake8, 不是普通单测。2026-08-26 实测: 本机 14.7s, 而 CI runner 上
+#: >60s 直接 Timeout —— 闸重新启用后的第一次真实运行就是这么红的。
+#: ⛔ 不放宽全局 60s: 那会让真正卡住的单测也失去保护; 只给这三条放宽。
+@pytest.mark.timeout(300)
 def test_no_new_undefined_names():
     """⛔ F821 只许减少。新增一条 = 放进来一个等着抛 NameError 的缺陷。"""
     proc = _run_flake8()
@@ -88,6 +95,7 @@ def test_no_new_undefined_names():
         + "\n  ".join(new.values()))
 
 
+@pytest.mark.timeout(300)
 def test_the_gate_can_actually_fire():
     """🔴 阳性对照 —— **「0 条违规」和「闸没在扫」长得一模一样**。
 
@@ -113,6 +121,7 @@ def test_the_gate_can_actually_fire():
         f"\nstdout={proc.stdout!r}\nstderr={proc.stderr[:300]!r}")
 
 
+@pytest.mark.timeout(300)
 def test_known_list_is_not_stale():
     """⛔ 登记表里的条目修好了要**摘掉**，否则它会遮住同一位置的新问题。
 
