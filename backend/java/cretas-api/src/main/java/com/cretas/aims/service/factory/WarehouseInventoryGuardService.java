@@ -36,7 +36,17 @@ public class WarehouseInventoryGuardService {
      * 校验给定的入库类型是否允许移入目标仓库类型。
      * 不通过时抛 BusinessException 422，附带 actionHint 指引。
      *
-     * <p>例: WIP 仓只允许 inboundType=SEMI_FINISHED；RAW/SALTED 仓只允许 inboundType=RAW。
+     * <p>例: WIP 仓只允许 inboundCategory=SEMI_FINISHED；RAW/SALTED 仓只允许 inboundCategory=RAW。
+     *
+     * <p>⚠️ 这里说的是本方法的 {@code inboundCategory} 形参 (字符串 RAW/SEMI_FINISHED/FINISHED),
+     * <b>不是</b> {@link com.cretas.aims.entity.enums.InboundType} —— 那个枚举里根本没有
+     * {@code SEMI_FINISHED} / {@code RAW} 这两个值 (它的值域是
+     * PURCHASE_ORDER / CUSTOMER_SUPPLIED / INVENTORY_COUNT / SUPPLIER_RETURN /
+     * FACTORY_RETURN / LEGACY_IMPORT / OTHER)。本注释此前写成 {@code inboundType},
+     * 是全仓<b>唯一</b>暗示 {@code InboundType} 参与仓库准入的地方, 而它并不参与:
+     * 2026-08-25 实测 {@code InboundType} 在 Java/web-admin/RN/Python 四侧
+     * <b>零个生产读取点</b>, 只有 4 个写入点和 3 处测试断言 (详见
+     * ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001 的核查结论)。
      *
      * @param warehouseId 目标仓库 ID
      * @param factoryId   工厂 ID
