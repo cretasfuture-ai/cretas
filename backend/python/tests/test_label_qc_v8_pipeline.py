@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from label_qc.services.screening import (
     DetectedLabel,
@@ -13,12 +14,16 @@ from label_qc.services.screening import (
 from label_qc.services.v8_pipeline import (
     CANDIDATE_MIN_CROP_PX,
     LABEL_CONFIDENCE,
+    DEFAULT_LABEL_FALLBACK_INPUT_SIZE,
     PIPELINE_ID,
     PRODUCTION_TRAY_CONFIDENCE,
     LabelQcV8Models,
     _GenericLabelTypeDetector,
     _MissingClassFallbackDetector,
     _apply_fail_closed_policies,
+    _label_fallback_input_size,
+    _label_fallback_onnx_threads,
+    _validate_label_fallback_input_shape,
 )
 
 
@@ -131,6 +136,80 @@ def test_fallback_detector_applies_bundle_confidence_floor() -> None:
     assert fallback.calls == [0.40]
 
 
+def test_fallback_detector_keeps_both_present_labels_on_fast_path() -> None:
+    class _Primary:
+        @staticmethod
+        def detect(_image, _conf):
+            return [SimpleNamespace(class_id=0), SimpleNamespace(class_id=1)]
+
+        @staticmethod
+        def reset_stats() -> None:
+            return None
+
+        @staticmethod
+        def stats() -> dict[str, int]:
+            return {"calls": 1}
+
+    class _Fallback:
+        calls = 0
+
+        def detect(self, _image, _conf):
+            self.calls += 1
+            return []
+
+    fallback = _Fallback()
+    detector = _MissingClassFallbackDetector(_Primary(), fallback)
+
+    labels = detector.detect(np.zeros((120, 160, 3), dtype=np.uint8), 0.20)
+
+    assert {label.class_id for label in labels} == {0, 1}
+    assert fallback.calls == 0
+    assert detector.stats()["fallbackCalls"] == 0
+
+
+def test_legacy_bundle_keeps_existing_fallback_resolution() -> None:
+    assert _label_fallback_input_size({}) == DEFAULT_LABEL_FALLBACK_INPUT_SIZE
+
+
+@pytest.mark.parametrize("size", [640, 960, 1280])
+def test_bundle_can_select_validated_fallback_resolution(size: int) -> None:
+    assert _label_fallback_input_size({"labelFallbackInputSize": size}) == size
+
+
+@pytest.mark.parametrize("size", [0, 639, 641, 1920, True, "1280", 1280.0, None])
+def test_invalid_fallback_resolution_fails_closed(size: object) -> None:
+    with pytest.raises(RuntimeError, match="invalid v8 label fallback input size"):
+        _label_fallback_input_size({"labelFallbackInputSize": size})
+
+
+def test_legacy_bundle_keeps_shared_onnx_thread_setting() -> None:
+    assert _label_fallback_onnx_threads({}) is None
+
+
+@pytest.mark.parametrize("threads", [1, 2, 4, 6, 8])
+def test_bundle_can_select_bounded_fallback_threads(threads: int) -> None:
+    assert _label_fallback_onnx_threads({"labelFallbackOnnxThreads": threads}) == threads
+
+
+@pytest.mark.parametrize("threads", [0, 9, True, "6", 6.0])
+def test_invalid_fallback_threads_fail_closed(threads: object) -> None:
+    with pytest.raises(RuntimeError, match="invalid v8 label fallback ONNX threads"):
+        _label_fallback_onnx_threads({"labelFallbackOnnxThreads": threads})
+
+
+def test_configured_fallback_resolution_must_match_bound_onnx_shape() -> None:
+    detector = SimpleNamespace(
+        _session=SimpleNamespace(
+            get_inputs=lambda: [SimpleNamespace(shape=[1, 3, 1280, 1280])]
+        )
+    )
+
+    _validate_label_fallback_input_shape(detector, 1280)
+
+    with pytest.raises(RuntimeError, match="v8 label fallback input shape drift"):
+        _validate_label_fallback_input_shape(detector, 640)
+
+
 def test_bundle_hash_drift_disables_v8_without_legacy_fallback(tmp_path) -> None:
     (tmp_path / "manifest.json").write_text(
         '{"pipelineId":"' + PIPELINE_ID + '","models":{}}',
@@ -174,5 +253,7 @@ def test_runtime_audit_is_bound_to_each_screening_result(monkeypatch) -> None:
     )
 
     assert returned.runtime_audit["modelId"] == "bound-model"
+    assert returned.runtime_audit["labelFallbackInputSize"] == 640
+    assert returned.runtime_audit["labelFallbackOnnxThreads"] is None
     assert returned.runtime_audit["tray"] == {"count": 1}
     assert returned.runtime_audit["label"] == {"calls": 2}

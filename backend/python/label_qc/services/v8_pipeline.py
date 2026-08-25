@@ -42,6 +42,9 @@ REQUIRED_MODELS = {
 PRODUCTION_TRAY_CONFIDENCE = 0.60
 CANDIDATE_TRAY_CONFIDENCE = 0.30
 LABEL_CONFIDENCE = 0.20
+DEFAULT_LABEL_FALLBACK_INPUT_SIZE = 640
+SUPPORTED_LABEL_FALLBACK_INPUT_SIZES = frozenset({640, 960, 1280})
+MAX_LABEL_FALLBACK_ONNX_THREADS = 8
 PRODUCTION_MIN_CROP_PX = 150
 CANDIDATE_MIN_CROP_PX = 120
 PAD_RATIO = 0.14
@@ -62,6 +65,30 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _label_fallback_input_size(manifest: dict[str, Any]) -> int:
+    value = manifest.get("labelFallbackInputSize", DEFAULT_LABEL_FALLBACK_INPUT_SIZE)
+    if type(value) is not int or value not in SUPPORTED_LABEL_FALLBACK_INPUT_SIZES:
+        raise RuntimeError(f"invalid v8 label fallback input size: {value!r}")
+    return value
+
+
+def _validate_label_fallback_input_shape(detector: _OnnxDetector, size: int) -> None:
+    shape = detector._session.get_inputs()[0].shape
+    if len(shape) != 4 or tuple(shape[-2:]) != (size, size):
+        raise RuntimeError(
+            f"v8 label fallback input shape drift: expected {size}x{size}, got {shape!r}"
+        )
+
+
+def _label_fallback_onnx_threads(manifest: dict[str, Any]) -> int | None:
+    value = manifest.get("labelFallbackOnnxThreads")
+    if value is None:
+        return None
+    if type(value) is not int or not 1 <= value <= MAX_LABEL_FALLBACK_ONNX_THREADS:
+        raise RuntimeError(f"invalid v8 label fallback ONNX threads: {value!r}")
+    return value
 
 
 def _box_iou(first: Sequence[float], second: Sequence[float]) -> float:
@@ -723,9 +750,19 @@ class LabelQcV8Models:
                 )
                 if not LABEL_CONFIDENCE <= fallback_confidence <= 1.0:
                     raise RuntimeError("invalid v8 label fallback confidence")
+                fallback_input_size = _label_fallback_input_size(self._manifest)
+                fallback_onnx_threads = _label_fallback_onnx_threads(self._manifest)
+                fallback_detector = _OnnxDetector(
+                    bindings["label_fallback"].path,
+                    imgsz=fallback_input_size,
+                    intra_op_num_threads=fallback_onnx_threads,
+                )
+                _validate_label_fallback_input_shape(
+                    fallback_detector, fallback_input_size
+                )
                 candidate_label = _MissingClassFallbackDetector(
                     primary_label,
-                    _OnnxDetector(bindings["label_fallback"].path, imgsz=640),
+                    fallback_detector,
                     fallback_confidence,
                 )
                 self._models = _V8CascadeModels(
@@ -786,6 +823,8 @@ class LabelQcV8Models:
         audit = {
             "pipelineId": PIPELINE_ID,
             "modelId": self.model_id,
+            "labelFallbackInputSize": _label_fallback_input_size(self._manifest),
+            "labelFallbackOnnxThreads": _label_fallback_onnx_threads(self._manifest),
             "tray": dict(models.last_stats),
             "label": models.label_stats(),
             "failClosedEvents": events,

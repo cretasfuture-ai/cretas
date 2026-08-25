@@ -20,11 +20,13 @@ export interface LabelQcObjectDraftItem extends LabelQcObjectReviewItem {
 export interface LabelQcTrayObjectDraft extends Omit<LabelQcTrayObjectReview, 'labels'> {
   key: string;
   confirmed: boolean;
+  humanTouched: boolean;
   labels: LabelQcObjectDraftItem[];
 }
 
 export interface LabelQcPhotoObjectDraft {
   photoId: string;
+  reviewedByHuman: boolean;
   trays: LabelQcTrayObjectDraft[];
   rejectedAiTrayKeys: string[];
 }
@@ -60,19 +62,23 @@ const parseRawTrays = (raw?: string | null): RawTray[] => {
   }
 };
 
-const presenceFrom = (explicit: boolean | undefined, count: number): LabelQcPresence => (
-  explicit === false && count === 0 ? 'MISSING' : count > 0 || explicit === true ? 'PRESENT' : 'UNJUDGEABLE'
+// Detector booleans are screening hints, never a human-confirmed presence decision.
+// Without an actual label box, only an explicit reviewer action may conclude MISSING.
+const presenceFrom = (count: number): LabelQcPresence => (
+  count > 0 ? 'PRESENT' : 'UNJUDGEABLE'
 );
 
 export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectDraft {
   if (photo.objectReview) {
     return {
       photoId: photo.id,
+      reviewedByHuman: true,
       rejectedAiTrayKeys: [...photo.objectReview.rejectedAiTrayKeys],
       trays: photo.objectReview.trays.map((tray) => ({
         ...tray,
         key: tray.aiTrayKey ?? `human-tray-${tray.trayIndex}`,
         confirmed: true,
+        humanTouched: false,
         rejectedAiObjectKeys: [...tray.rejectedAiObjectKeys],
         labels: tray.labels.map((label, index) => ({
           ...label,
@@ -109,11 +115,12 @@ export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectD
       aiTrayKey: `tray-${trayIndex}`,
       bbox,
       decision: 'CONFIRMED' as const,
-      whitePresence: presenceFrom(rawTray.hasWhite, whiteCount),
-      colorPresence: presenceFrom(rawTray.hasColor, colorCount),
+      whitePresence: presenceFrom(whiteCount),
+      colorPresence: presenceFrom(colorCount),
       labels,
       rejectedAiObjectKeys: rejected.flatMap((label) => label.aiObjectKey ? [label.aiObjectKey] : []),
       confirmed: true,
+      humanTouched: false,
     }];
   });
   const crossTrayCandidates = trays.flatMap((tray) => tray.labels.map((label) => ({
@@ -133,7 +140,7 @@ export function buildObjectReviewDraft(photo: LabelQcPhoto): LabelQcPhotoObjectD
       ...rejected.flatMap((label) => label.aiObjectKey ? [label.aiObjectKey] : []),
     ])];
   }
-  return { photoId: photo.id, trays, rejectedAiTrayKeys: [] };
+  return { photoId: photo.id, reviewedByHuman: false, trays, rejectedAiTrayKeys: [] };
 }
 
 export function setTrayPresence(
@@ -150,6 +157,7 @@ export function setTrayPresence(
     tray.labels = tray.labels.filter((label) => label.type !== type);
   }
   tray.confirmed = false;
+  tray.humanTouched = true;
 }
 
 export function addObjectLabel(
@@ -169,6 +177,7 @@ export function addObjectLabel(
   if (type === 'WHITE_LABEL') tray.whitePresence = 'PRESENT';
   else tray.colorPresence = 'PRESENT';
   tray.confirmed = false;
+  tray.humanTouched = true;
   return label;
 }
 
@@ -185,6 +194,15 @@ export function rejectObjectLabel(tray: LabelQcTrayObjectDraft, key: string): vo
     else tray.colorPresence = 'UNJUDGEABLE';
   }
   tray.confirmed = false;
+  tray.humanTouched = true;
+}
+
+export function hasHumanObjectReview(draft: LabelQcPhotoObjectDraft): boolean {
+  return draft.reviewedByHuman
+    || draft.rejectedAiTrayKeys.length > 0
+    || draft.trays.some((tray) => tray.humanTouched
+      || tray.decision !== 'CONFIRMED'
+      || tray.labels.some((label) => label.decision !== 'CONFIRMED'));
 }
 
 export function markObjectCorrected(item: { decision: 'CONFIRMED' | 'CORRECTED' | 'ADDED' }): void {
@@ -210,7 +228,7 @@ export function toObjectReviewPayload(draft: LabelQcPhotoObjectDraft): LabelQcOb
     version: 1,
     complete: true,
     rejectedAiTrayKeys: [...draft.rejectedAiTrayKeys],
-    trays: draft.trays.map(({ key: _key, confirmed: _confirmed, labels, ...tray }) => ({
+    trays: draft.trays.map(({ key: _key, confirmed: _confirmed, humanTouched: _humanTouched, labels, ...tray }) => ({
       ...tray,
       labels: labels.map(({ key: _labelKey, ...label }) => label),
     })),

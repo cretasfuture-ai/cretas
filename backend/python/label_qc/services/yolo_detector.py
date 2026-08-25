@@ -87,13 +87,19 @@ def _letterbox(image: np.ndarray, size: int) -> Tuple[np.ndarray, float, int, in
 class _OnnxDetector:
     """Thin wrapper around one exported detector."""
 
-    def __init__(self, model_path: Path, imgsz: int) -> None:
+    def __init__(
+        self, model_path: Path, imgsz: int, intra_op_num_threads: int | None = None
+    ) -> None:
         import onnxruntime as ort
 
         self._imgsz = imgsz
         options = ort.SessionOptions()
         # The FastAPI process already runs many things; keep the detector modest.
-        options.intra_op_num_threads = int(os.getenv("LABEL_QC_ONNX_THREADS", "2"))
+        options.intra_op_num_threads = (
+            int(intra_op_num_threads)
+            if intra_op_num_threads is not None
+            else int(os.getenv("LABEL_QC_ONNX_THREADS", "2"))
+        )
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self._session = ort.InferenceSession(
             str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
