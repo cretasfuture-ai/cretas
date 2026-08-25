@@ -105,15 +105,6 @@ describe('processingApiClient', () => {
     });
   });
 
-  describe('recordMaterialReceipt', () => {
-    it('should record material receipt', async () => {
-      const data = { materialId: 'M001', quantity: 100, supplierId: 'S001' };
-      mock.onPost(`${BASE}/material-receipt`).reply(200, { success: true, data: { id: 'R001' } });
-      const result = await processingApiClient.recordMaterialReceipt(data);
-      expect(result.success).toBe(true);
-    });
-  });
-
   describe('getQualityInspections', () => {
     it('should fetch quality inspections for batch', async () => {
       mock.onGet(`${BASE}/quality/inspections`).reply(200, { success: true, data: [] });

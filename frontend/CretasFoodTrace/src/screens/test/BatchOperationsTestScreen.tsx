@@ -193,35 +193,6 @@ export const BatchOperationsTestScreen = () => {
     }
   };
 
-  // Step 3: 原材料入库
-  const testMaterialReceipt = async () => {
-    if (!materialTypeId || !supplierId) {
-      Alert.alert('提示', '请先创建原材料类型和供应商');
-      return;
-    }
-
-    setLoading(true);
-    addLog('🚀 开始测试：原材料入库（500公斤）');
-
-    try {
-      const response = await processingApiClient.recordMaterialReceipt({
-        materialTypeId: materialTypeId,
-        quantity: 500,
-        unit: 'kg',
-        supplierId: supplierId,
-        receivedDate: new Date().toISOString().split('T')[0]
-      });
-
-      const id = extractId(response);
-      setBatchId(id);
-      addLog(`✅ 成功：原材料入库 Batch ID=${id}, 数量=500kg`);
-    } catch (error) {
-      addLog(`❌ 失败：${getErrorMessage(error)}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Step 4: 预留批次
   const testReserveBatch = async () => {
     if (!batchId) {
@@ -326,7 +297,6 @@ export const BatchOperationsTestScreen = () => {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Step 3
-      await testMaterialReceipt();
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Step 4
@@ -375,15 +345,6 @@ export const BatchOperationsTestScreen = () => {
               style={styles.buttonContainer}
             >
               2. 创建供应商
-            </Button>
-
-            <Button
-              mode="contained"
-              onPress={testMaterialReceipt}
-              disabled={loading || !materialTypeId || !supplierId}
-              style={styles.buttonContainer}
-            >
-              3. 原材料入库 (500kg)
             </Button>
 
             <Button

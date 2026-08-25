@@ -77,19 +77,7 @@ class MaterialBatchSourceDocContractTest {
      */
     private static final Map<String, String> KNOWN_WITHOUT_SOURCE_DOC = Map.of(
             "service/impl/ProcessingServiceImpl.java",
-            "非写入点: 该处 new MaterialBatch() 只是为拼报表 materialDetail 的临时占位对象, 从不落库",
-
-            "controller/ProcessingController.java",
-            "🔴 真实缺口, 待 Owner 裁定: POST /{factoryId}/material-receipt 是与 "
-                    + "/material-batches 并行的【第二个原料入库端点】, 经 "
-                    + "ProcessingService.createMaterialReceipt 真落库, 但 "
-                    + "CreateMaterialReceiptRequest 里没有任何来源字段(实测 0 处), "
-                    + "且整条路不过 validateSourceDoc / 补录时效锁 / 单位维度守卫 / 仓库类型守卫, "
-                    + "批次号还由用户手填(主路径是系统生成并忽略手填值)。"
-                    + "2026-08-25 实测其唯一调用方是 RN 的 screens/test/BatchOperationsTestScreen.tsx "
-                    + "(测试屏, 非生产屏) ⇒ 目前是【没上锁但没人走】的门, 不是正在渗漏。"
-                    + "裁定项: 下线该端点, 还是给它补来源字段并接上同一套守卫? "
-                    + "在裁定前不擅自改动一个线上端点的行为。");
+            "非写入点: 该处 new MaterialBatch() 只是为拼报表 materialDetail 的临时占位对象, 从不落库");
 
     private static Set<String> filesConstructingMaterialBatch() throws IOException {
         Set<String> hits = new TreeSet<>();
@@ -163,14 +151,14 @@ class MaterialBatchSourceDocContractTest {
     }
 
     /**
-     * 债务只许变短。当前 2 条: 1 条非写入点 + 1 条待裁定的真实缺口。
+     * 债务只许变短。当前 1 条, 且是【非写入点】—— 即真实缺口已清零。
      * 还清一条就把这个数字改小 —— 改大等于新增绕过守卫的写入点。
      */
     @Test
-    @DisplayName("棘轮: 债务条目数只许减少, 当前 2")
+    @DisplayName("棘轮: 债务条目数只许减少, 当前 1")
     void debtRatchetOnlyShrinks() {
         assertThat(KNOWN_WITHOUT_SOURCE_DOC)
                 .as("⛔ 不许新增豁免。新写入点必须写来源单据")
-                .hasSizeLessThanOrEqualTo(2);
+                .hasSizeLessThanOrEqualTo(1);
     }
 }
