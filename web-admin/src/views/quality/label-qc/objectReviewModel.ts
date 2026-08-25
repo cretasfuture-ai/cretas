@@ -217,6 +217,57 @@ export function findTrayForLabelBox(
   return bestTray;
 }
 
+export function suggestPointLabelBox(
+  draft: LabelQcPhotoObjectDraft,
+  type: LabelQcObjectType,
+  x: number,
+  y: number,
+): { tray: LabelQcTrayObjectDraft; bbox: LabelQcBoundingBox } | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) {
+    return null;
+  }
+
+  const probeRadius = 0.002;
+  const tray = findTrayForLabelBox(draft, {
+    xMin: Math.max(0, x - probeRadius),
+    yMin: Math.max(0, y - probeRadius),
+    xMax: Math.min(1, x + probeRadius),
+    yMax: Math.min(1, y + probeRadius),
+  });
+  if (!tray) return null;
+
+  const examples = draft.trays.flatMap((candidate) => candidate.labels
+    .filter((label) => label.type === type)
+    .map((label) => ({
+      width: label.bbox.xMax - label.bbox.xMin,
+      height: label.bbox.yMax - label.bbox.yMin,
+    })));
+  const median = (values: number[], fallback: number): number => {
+    if (!values.length) return fallback;
+    const sorted = [...values].sort((left, right) => left - right);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2
+      ? sorted[middle]!
+      : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  };
+  const trayWidth = tray.bbox.xMax - tray.bbox.xMin;
+  const trayHeight = tray.bbox.yMax - tray.bbox.yMin;
+  const width = Math.min(trayWidth * 0.8, median(examples.map((item) => item.width), trayWidth * 0.28));
+  const height = Math.min(trayHeight * 0.8, median(examples.map((item) => item.height), trayHeight * 0.28));
+  const xMin = Math.max(tray.bbox.xMin, Math.min(tray.bbox.xMax - width, x - width / 2));
+  const yMin = Math.max(tray.bbox.yMin, Math.min(tray.bbox.yMax - height, y - height / 2));
+
+  return {
+    tray,
+    bbox: {
+      xMin,
+      yMin,
+      xMax: xMin + width,
+      yMax: yMin + height,
+    },
+  };
+}
+
 export function rejectObjectLabel(tray: LabelQcTrayObjectDraft, key: string): void {
   const label = tray.labels.find((item) => item.key === key);
   if (!label) return;

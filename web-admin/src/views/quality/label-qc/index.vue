@@ -181,20 +181,22 @@ async function openReview(row: LabelQcTaskSummary) {
   }
 }
 
-async function submitReview(payload: LabelQcReviewRequest) {
+async function submitReview(payload: LabelQcReviewRequest, keyboardConfirmed = false) {
   if (!factoryId.value || !detail.value || submitting.value) return;
-  try {
-    await ElMessageBox.confirm(
-      `即将提交 ${payload.photos.length} 张照片的人工真值。提交后仍需技术管理员确认，才会进入训练集。`,
-      '确认完成整单审核',
-      {
-        type: 'warning',
-        confirmButtonText: '确认提交',
-        cancelButtonText: '继续检查',
-      },
-    );
-  } catch {
-    return;
+  if (!keyboardConfirmed) {
+    try {
+      await ElMessageBox.confirm(
+        `即将提交 ${payload.photos.length} 张照片的人工真值。提交后仍需技术管理员确认，才会进入训练集。`,
+        '确认完成整单审核',
+        {
+          type: 'warning',
+          confirmButtonText: '确认提交',
+          cancelButtonText: '继续检查',
+        },
+      );
+    } catch {
+      return;
+    }
   }
   if (!factoryId.value || !detail.value || submitting.value) return;
 
