@@ -53,6 +53,7 @@ import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.inventory.OverReceiveLimit;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
 import org.slf4j.Logger;
@@ -77,23 +78,60 @@ public class PurchaseServiceImpl implements PurchaseService {
     private static final Logger log = LoggerFactory.getLogger(PurchaseServiceImpl.class);
 
     /**
-     * 超收上限率。默认 0%，只有工厂显式配置后才允许超收；无配置时
-     * 必须 fail-closed，不能把某一行业经验值静默套用于全部采购收货。
+     * 超收上限率的<b>全局属性兜底值</b>（ops 用，全工厂生效）。
      *
-     * 实际累计收货量上限 = 下单量 × (1 + overReceiveRate)。超过则 confirmReceive 抛
-     * BusinessException 409 + 事务回滚，要求采购另下新订单。
+     * <p><b>默认 {@code null} = 不限制超收</b>（owner 2026-08-25 裁定：
+     * 「我们先默认允许无限超收，但是我们把规则做好」）。
      *
-     * 旧逻辑漏洞：updateOrderReceiveStatus 仅累加 + 设状态，无上限校验 → 分批入库
-     * 第二次/N 次可无限超收。客户在 audio 中提及的 30% 上限即此修复。
+     * <p>⚠️ 这里曾经写的是 {@code :0.00}，而 {@code cretas.purchase.over-receive-rate}
+     * 这个属性在 {@code src/main/resources} 下的任何配置文件、生产服务器的
+     * {@code .env.prod} 和 systemd unit 里<b>都没有设过</b> —— 于是生产上实际生效的是
+     * 0%，一件都不能多收；而 Workdesk 的三个 Tool 各自硬编码 0.30，界面在告诉仓管员
+     * 「30% 超收上限 = 130 箱」。仓管员照界面收货，{@code confirmReceive} 抛 409，
+     * 货堵在门口而他不知道为什么。{@code 0.00} 当默认值的根本问题是：
+     * <b>它让「没人配过」和「限制是 0%」变成同一个值，无法区分</b>。
+     * 换成 null 之后两者泾渭分明 —— 见 {@link OverReceiveLimit}。
      *
-     * 双轨说明：纯 backend service-level 校验，LEGACY 和 CANVAS (DynamicModulePage)
+     * <p>实际累计收货量上限 = 下单量 × (1 + rate)；超过则 {@code confirmReceive} 抛
+     * {@link BusinessException} 409 + 事务回滚。不限制时不做任何校验。
+     *
+     * <p>优先级：工厂级 {@code inventorySettings.purchaseOverReceiveRate} &gt; 本属性 &gt; 不限制。
+     * 梯子只有一份，在 {@link OverReceiveLimit#resolve}。
+     *
+     * <p>旧逻辑漏洞（保留记录）：updateOrderReceiveStatus 仅累加 + 设状态，无上限校验
+     * → 分批入库第二次/N 次可无限超收。校验本身是对的，错的只是它的默认值。
+     *
+     * <p>双轨说明：纯 backend service-level 校验，LEGACY 和 CANVAS (DynamicModulePage)
      * 都走同一 createReceiveRecord → confirmReceive 路径，不分模式。
      *
-     * Ops 调整：在 application.properties 设 cretas.purchase.over-receive-rate=0.50
-     * 等可临时放宽，无需 rebuild。
+     * <p>Ops 调整：在 application.properties 设 cretas.purchase.over-receive-rate=0.50
+     * 可给全部工厂临时收紧到 50%，无需 rebuild；<b>留空或不写就是不限制</b>。
      */
-    @org.springframework.beans.factory.annotation.Value("${cretas.purchase.over-receive-rate:0.00}")
+    @org.springframework.beans.factory.annotation.Value("${cretas.purchase.over-receive-rate:#{null}}")
     private BigDecimal overReceiveRate;
+
+    /**
+     * 工厂级超收上限配置的读取器（可选注入）。
+     *
+     * <p>{@code required=false} + null 时回落到 {@link #overReceiveRate}：
+     * 单元测试直接 {@code new PurchaseServiceImpl(...)} 时没有 Spring 上下文，
+     * 此时行为等价于"没有工厂级配置"。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.PurchaseOverReceivePolicy overReceivePolicy;
+
+    /**
+     * 解析本次收货实际生效的超收上限。<b>执行侧与展示侧唯一的取值入口。</b>
+     *
+     * <p>⚠️ 每次校验只调一次（在 validate* 的循环<b>外</b>），避免逐行打 DB。
+     */
+    private OverReceiveLimit resolveOverReceiveLimit(String factoryId) {
+        return OverReceiveLimit.resolve(
+                overReceivePolicy == null
+                        ? java.util.Optional.empty()
+                        : overReceivePolicy.factoryConfiguredRate(factoryId),
+                overReceiveRate);
+    }
 
     private final PurchaseOrderRepository purchaseOrderRepository;
 
@@ -2508,6 +2546,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
         List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
 
+        // 展示侧读的必须是执行侧真正会用的那个上限 —— 同一个 resolveOverReceiveLimit,
+        // ⛔ 不许前端/Tool 再写一份百分比字面量 (那正是本次缺陷的成因).
+        OverReceiveLimit limit = resolveOverReceiveLimit(factoryId);
+
         BigDecimal plannedTotal = BigDecimal.ZERO;
         BigDecimal cumulativeReceived = BigDecimal.ZERO;
         List<Map<String, Object>> lines = new ArrayList<>();
@@ -2525,6 +2567,9 @@ public class PurchaseServiceImpl implements PurchaseService {
             line.put("plannedQty", planned);
             line.put("receivedQty", received);
             line.put("pendingQty", pending);
+            // 累计可收上限 = 下单量 × (1 + 上限率); null = 不限制超收.
+            // ⛔ 前端读到 null 不许兜底成 0 或成 plannedQty —— null 只能读成"没有上限".
+            line.put("maxReceivableQty", limit.maxAllowed(planned));
             line.put("unit", item.getUnit());
             lines.add(line);
         }
@@ -2534,6 +2579,11 @@ public class PurchaseServiceImpl implements PurchaseService {
         result.put("orderNumber", order.getOrderNumber());
         result.put("plannedTotal", plannedTotal);
         result.put("cumulativeReceived", cumulativeReceived);
+        // 超收上限三件套: 比率 (null=不限制) / 面向用户的措辞 / 这个值是从哪来的.
+        result.put("overReceiveLimitRate", limit.rate());
+        result.put("overReceiveLimitLabel", limit.label());
+        result.put("overReceiveLimitSource", limit.source());
+        result.put("maxReceivableTotal", limit.maxAllowed(plannedTotal));
         result.put("lines", lines);
         return result;
     }
@@ -3485,6 +3535,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             List<CreateReceiveRecordRequest.ReceiveItemDTO> items) {
         if (items == null || items.isEmpty()) return;
 
+        OverReceiveLimit limit = resolveOverReceiveLimit(order.getFactoryId());
         List<PurchaseOrderItem> orderItems = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
         for (CreateReceiveRecordRequest.ReceiveItemDTO receiveItem : items) {
             PurchaseOrderItem orderItem = resolvePurchaseOrderItem(
@@ -3493,7 +3544,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                     receiveItem.getMaterialName(),
                     orderItem.getReceivedQuantity(),
                     receiptQuantityInOrderUnit(order.getFactoryId(), orderItem, receiveItem),
-                    orderItem.getQuantity());
+                    orderItem.getQuantity(),
+                    limit);
         }
     }
 
@@ -3510,6 +3562,7 @@ public class PurchaseServiceImpl implements PurchaseService {
      * @param record 已加载的 DRAFT/PENDING_QC 入库单 (其 purchaseOrderId 非 null, caller 责任)
      */
     private void validateOverReceiveCapForConfirm(PurchaseReceiveRecord record) {
+        OverReceiveLimit limit = resolveOverReceiveLimit(record.getFactoryId());
         List<PurchaseOrderItem> orderItems =
                 purchaseOrderItemRepository.findByPurchaseOrderId(record.getPurchaseOrderId());
         for (PurchaseReceiveItem receiveItem : record.getItems()) {
@@ -3519,7 +3572,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                     receiveItem.getMaterialName(),
                     orderItem.getReceivedQuantity(),
                     receiptQuantityInOrderUnit(record.getFactoryId(), orderItem, receiveItem),
-                    orderItem.getQuantity());
+                    orderItem.getQuantity(),
+                    limit);
         }
     }
 
@@ -3559,34 +3613,41 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     /**
-     * 超收上限校验核心 (单行). 超过 {@code orderedQty × (1 + overReceiveRate)} 抛 409.
+     * 超收上限校验核心 (单行). 超过 {@code orderedQty × (1 + limit.rate)} 抛 409.
      *
      * <p>所有调用站点 (createReceiveRecord 早返 / confirmReceive fail-fast / updateOrderReceiveStatus
      * 二次防御) 共享此核心, 保证 message 与边界语义一致. 不做任何 DB 写, 调用方负责在 DB mutation 前调用.
      *
+     * <p><b>{@code limit.isUnlimited()} 时直接放行</b> —— 这是 owner 裁定的默认形态, 不是漏判.
+     *
      * @param materialName    物料名 (用于 message)
      * @param alreadyReceived PO 行已累计收货量 (null 视为 0)
      * @param thisReceive     本次收货量 (null 视为 0)
-     * @param orderedQty      PO 行下单量 (null → 无上限, 跳过)
+     * @param orderedQty      PO 行下单量 (null → 无基准, 跳过)
+     * @param limit           本次生效的超收上限 (由 {@link #resolveOverReceiveLimit} 解析, 非 null)
      */
     private void checkOverReceiveCap(String materialName,
-            BigDecimal alreadyReceived, BigDecimal thisReceive, BigDecimal orderedQty) {
+            BigDecimal alreadyReceived, BigDecimal thisReceive, BigDecimal orderedQty,
+            OverReceiveLimit limit) {
         if (orderedQty == null) return;
+        if (limit.isUnlimited()) return;
         BigDecimal already = alreadyReceived != null ? alreadyReceived : BigDecimal.ZERO;
         BigDecimal thisQty = thisReceive != null ? thisReceive : BigDecimal.ZERO;
         BigDecimal newReceived = already.add(thisQty);
-        BigDecimal maxAllowed = orderedQty.multiply(BigDecimal.ONE.add(overReceiveRate));
+        BigDecimal maxAllowed = limit.maxAllowed(orderedQty);
         if (newReceived.compareTo(maxAllowed) > 0) {
             throw new BusinessException(409, String.format(
-                    "超出可入库上限: 物料「%s」已收 %s, 本次 %s, 累计 %s, 下单 %s, 最大可收 %s (含 %s%% 抄收)",
+                    "超出可入库上限: 物料「%s」已收 %s, 本次 %s, 累计 %s, 下单 %s, 最大可收 %s (含 %s 超收)",
                     materialName,
                     already.stripTrailingZeros().toPlainString(),
                     thisQty.stripTrailingZeros().toPlainString(),
                     newReceived.stripTrailingZeros().toPlainString(),
                     orderedQty.stripTrailingZeros().toPlainString(),
                     maxAllowed.stripTrailingZeros().toPlainString(),
-                    overReceiveRate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()))
-                    .withHint("如需更多入库, 请采购另下新订单或联系采购员调整下单量");
+                    limit.percentLabel()))
+                    .withHint("超出的部分本系统不会替你收下, 也不会自动退回 —— 请当场拒收多出的货,"
+                            + " 或联系采购员调整下单量/另下新订单后再收。"
+                            + " 若本厂应当允许收更多, 在「系统设置 → 库存设置」调高采购超收上限。");
         }
     }
 
@@ -3595,6 +3656,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (order == null) return;
 
         List<PurchaseOrderItem> orderItems = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
+        OverReceiveLimit overReceiveLimit = resolveOverReceiveLimit(record.getFactoryId());
 
         // 累加本次入库数量到订单行项目
         for (PurchaseReceiveItem receiveItem : record.getItems()) {
@@ -3611,7 +3673,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                             receiveItem.getMaterialName(),
                             orderItem.getReceivedQuantity(),
                             receiptQuantityInOrderUnit(record.getFactoryId(), orderItem, receiveItem),
-                            orderItem.getQuantity());
+                            orderItem.getQuantity(),
+                            overReceiveLimit);
 
                     BigDecimal receivedInOrderUnit =
                             receiptQuantityInOrderUnit(record.getFactoryId(), orderItem, receiveItem);

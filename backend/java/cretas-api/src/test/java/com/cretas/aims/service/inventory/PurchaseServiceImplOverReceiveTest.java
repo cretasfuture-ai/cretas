@@ -84,8 +84,12 @@ class PurchaseServiceImplOverReceiveTest {
                 /* arApService */ null,
                 /* applicationEventPublisher */ null,
                 /* materialBatchService */ null);
-        // overReceiveRate is @Value-injected, not ctor; default 0.30 in main code
-        // but we set explicitly so test is deterministic regardless of properties.
+        // overReceiveRate is @Value-injected, not ctor, so we set it explicitly here.
+        // ⚠️ 0.30 是本测试自选的夹具值, **不是**生产默认值。生产默认是
+        // @Value("${cretas.purchase.over-receive-rate:#{null}}") → null → 不限制超收
+        // (owner 2026-08-25 裁定)。「默认不限制」这个行为由
+        // PurchaseServiceImplOverReceiveDefaultTest 守, 不在本文件。
+        // (旧注释写的 "default 0.30 in main code" 是错的 —— 当时的默认是 0.00, 也不是 0.30。)
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
     }
 

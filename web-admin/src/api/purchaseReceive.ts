@@ -16,6 +16,12 @@ export interface CumulativeReceivedLine {
   plannedQty: number;
   receivedQty: number;
   pendingQty: number;
+  /**
+   * 累计可收上限 = plannedQty × (1 + 超收上限率)。
+   * ⛔ `null` = **不限制超收**，不是 0 也不是 plannedQty —— 兜底成数字会把
+   * 「没有上限」显示成一个具体的上限，正是 2026-08-25 那个缺陷的形状。
+   */
+  maxReceivableQty: number | null;
   unit: string;
 }
 
@@ -25,6 +31,21 @@ export interface CumulativeReceived {
   orderNumber: string;
   plannedTotal: number;
   cumulativeReceived: number;
+  /**
+   * 本工厂**实际生效**的采购超收上限率 (0.30 = 最多多收 30%)。
+   * `null` = 不限制超收。
+   *
+   * ⚠️ 这是后端执行侧 (`PurchaseServiceImpl.resolveOverReceiveLimit`) 用的同一个值。
+   * ⛔ 界面上的超收上限一律用它插值显示，不要再写死百分比 —— 展示写死 30% 而执行侧
+   * 实际是 0%，就是仓管员点确认收货吃 409、货堵在门口的那个缺陷。
+   */
+  overReceiveLimitRate: number | null;
+  /** 面向用户的措辞: "不限制" / "30%" / "12.5%"。直接显示这个，不要自己格式化。 */
+  overReceiveLimitLabel: string;
+  /** 这个上限从哪来: "unconfigured" / "property:..." / "factory-settings:..."。排查用。 */
+  overReceiveLimitSource: string;
+  /** 全单累计可收上限; `null` = 不限制。 */
+  maxReceivableTotal: number | null;
   lines: CumulativeReceivedLine[];
 }
 
