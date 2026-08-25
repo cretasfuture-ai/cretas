@@ -35,9 +35,11 @@ item 口径 → diff = **-31,125.59**（正是折扣额），而 executor 侧一
 ⇒ 两侧确实独立。⛔ 这一步不能用容差变异代替：容差变异硬改阈值，
    不管两侧从哪来，测不出同源。
 """
+import ast
 import inspect
 import io
 import re
+import textwrap
 
 import pytest
 from pathlib import Path
@@ -128,12 +130,89 @@ def test_the_note_is_conditional_on_there_being_a_discount():
     """阴性对照：没有折扣时（实收 == 原价）那句说明**不该出现**。
 
     ⛔ 无条件打印的说明等于噪音，而且会让「这次真的有折扣」这件事失去信号。
+
+    ## 🔴 这条断言原来钉的是**字面**，2026-08-26 抬成**性质**
+
+    原版写死 `"abs(total_rev_items - total_paid_rev) > 0.01" in src`。
+    而 resolver 后来**正确地**把差额的左操作数换成了全店全菜那一份
+    （`total_rev_items` 在点名单菜时已被削成一道菜，拿它去减全店实收，
+    差额恒为一个巨大的负数 ⇒ 这句限定语会在点名单菜时**恒出现**，
+    哪怕那天一分钱折扣都没有 —— 正是本条要拦的那个毛病）。
+
+    ▎断言守的是需求（「有折扣才说」），不是那个变量叫什么名字。
+    ⇒ 改成钉两件**结构上**的事，⛔ 不再钉字面：
+      ① 那次非空赋值必须被一个「差额 > 阈值」的 `if` 罩着（守「有条件」）；
+      ② 那个 `if` 里比的两边，必须与**折扣摊派**用的是同一个范围
+         （守「两边同范围」——形态 D：同一个口径有两份就一定会漂）。
+    ②不写死变量名：从 `_discount = X - total_paid_rev` 里把 `X` 读出来，
+    再要求闸的条件里出现的是**同一个** `X`。
     """
     from smartbi.gold.restaurant import restaurant_ops_router as router
 
-    src = inspect.getsource(router.resolve_gross_margin)
-    assert "abs(total_rev_items - total_paid_rev) > 0.01" in src, (
+    tree = ast.parse(textwrap.dedent(inspect.getsource(router.resolve_gross_margin)))
+
+    # ── 折扣摊派用的是哪个范围？（不写死名字，从源码里读出来）──────────
+    discount_assigns = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "_discount"
+                for t in node.targets)
+    ]
+    assert len(discount_assigns) == 1, (
+        f"折扣额的算法有 {len(discount_assigns)} 处，期望 1 处 —— "
+        "两份一定会漂（0 处 = 折扣摊派没了，这条断言无从判起）")
+    discount_expr = discount_assigns[0].value
+    assert (isinstance(discount_expr, ast.BinOp)
+            and isinstance(discount_expr.op, ast.Sub)
+            and isinstance(discount_expr.left, ast.Name)
+            and isinstance(discount_expr.right, ast.Name)), (
+        f"折扣额不再是「item 营收 − 实收」这个形状：{ast.unparse(discount_expr)}")
+    scope_name = discount_expr.left.id
+    paid_name = discount_expr.right.id
+
+    # ── ① 那次非空赋值必须挂在一个条件下面 ──────────────────────────
+    note_assigns = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "per_dish_no_discount_note"
+                for t in node.targets)
+        and not (isinstance(node.value, ast.Constant) and not node.value.value)
+    ]
+    assert len(note_assigns) == 1, (
+        f"给 `per_dish_no_discount_note` 赋非空值的地方有 {len(note_assigns)} 处，"
+        "期望 1 处（0 处 = 那句说明没了，见上一条测试）")
+    note_assign = note_assigns[0]
+
+    guards = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and any(child is note_assign
+                for stmt in node.body for child in ast.walk(stmt))
+    ]
+    assert guards, (
         "那句说明是无条件打印的 —— 没有折扣时也会出现")
+
+    # ── ② 闸比的两边必须与折扣摊派同范围 ────────────────────────────
+    conditional = [
+        ast.unparse(node.test) for node in guards
+        if paid_name in ast.unparse(node.test)
+    ]
+    assert conditional, (
+        f"罩着那句说明的条件里没有出现 `{paid_name}` —— "
+        f"它判的不是「这段时间有没有折扣」。条件："
+        f"{[ast.unparse(n.test) for n in guards]}")
+    guard_src = conditional[-1]
+    assert "abs(" in guard_src and "0.01" in guard_src, (
+        f"条件不是「差额超过阈值」这个形状：{guard_src}")
+    guard_names = {
+        node.id for node in ast.walk(ast.parse(guard_src, mode="eval"))
+        if isinstance(node, ast.Name)
+    }
+    assert scope_name in guard_names, (
+        f"折扣摊派比的是 `{scope_name} - {paid_name}`，而这道闸比的是 "
+        f"{guard_src} —— **两边不同范围**。点名单菜时被削成一道菜的那个口径"
+        f"减全店实收，差额恒为巨大负数 ⇒ 这句限定语会恒出现，"
+        f"哪怕一分钱折扣都没有。")
 
 
 def test_parity_cron_exists_and_is_three_state():

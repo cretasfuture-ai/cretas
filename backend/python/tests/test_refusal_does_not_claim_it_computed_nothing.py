@@ -33,6 +33,7 @@
 """
 import ast
 import inspect
+from datetime import date
 
 from smartbi.gold.restaurant import restaurant_intent_service as svc
 
@@ -98,7 +99,25 @@ def test_it_does_not_claim_nothing_was_computed_when_something_was():
 
 
 def test_the_produced_branch_tells_him_what_to_do_instead():
-    """答不了时要说清**他能做什么**（定义五），⛔ 不是干拒。"""
+    """答不了时要说清**他能做什么**（定义五），⛔ 不是干拒。
+
+    ## 🔴 这条原来钉的是**字面**，2026-08-26 抬成**性质**
+
+    原版找 `"你可以" in produced_branch`。而那句指引后来**正确地**从
+    硬编码搬进了 `_narrowing_suggestion(spec)` —— 因为硬编码那版是
+    「假建议」：它会去建议老板做他**已经做过**的事
+    （prod 实测 2/2 撞上兜底的问句都已经限定了门店/时间段）。
+
+    ▎搬走之后分支里只剩 `+ _narrowing`，字面查不到 —— 但需求**满足得更好**。
+    ⇒ 断言改钉两件事，⛔ 不再钉字面：
+      ① 分支里确实拼进了那份**算出来的**指引（而不是干拒）；
+      ② 阳性对照：那个生成器在「还有没限定的槽位」时**真的**给得出
+         一句「你可以…」——否则 ① 可能钉着一个恒返回空串的死机制
+         （形态 B：机制在、没接上）。
+
+    ⚠️ 三个槽位都限定了时它**故意**返回空串（「少一句废话，比多一句他做不到
+    的指引好」），所以 ⛔ 不能断言「任何情况下都有这句话」。
+    """
     src = _refusal_branch_src()
     tree = ast.parse(src)
     ifexp = next(n for n in ast.walk(tree)
@@ -106,8 +125,46 @@ def test_the_produced_branch_tells_him_what_to_do_instead():
                  and any(getattr(x, "id", None) == "produced_but_rejected"
                          for x in ast.walk(n.test)))
     produced_branch = ast.unparse(ifexp.body)
-    assert "你可以" in produced_branch or "换成" in produced_branch, (
-        "没告诉他下一步怎么问 —— 定义五要求说清「他自己要干什么」")
+
+    # ① 分支必须拼进**算出来的**下一步指引
+    narrowing_assigns = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Assign)
+        for t in n.targets
+        if isinstance(t, ast.Name) and t.id == "_narrowing"
+    ]
+    assert len(narrowing_assigns) == 1, (
+        f"`_narrowing` 赋值 {len(narrowing_assigns)} 次，期望 1 次")
+    assert "_narrowing_suggestion(" in ast.unparse(narrowing_assigns[0].value), (
+        "`_narrowing` 不是由 `_narrowing_suggestion` 算出来的 —— "
+        "写死的指引就是假建议，这个毛病已经回来过两次")
+    assert "_narrowing" in produced_branch, (
+        "没告诉他下一步怎么问 —— 定义五要求说清「他自己要干什么」。"
+        f"分支：{produced_branch[:200]}")
+
+    # ② 阳性对照：生成器在「还有没限定的槽位」时真的说得出话来。
+    #    ⛔ 少了这条，① 可能钉着一个恒返回空串的死机制。
+    class _OpenSpec:
+        store_slots = ()
+        dish_slot = None
+        date_range = (None, None)
+        window_label = "全部历史"
+        time_range_defaulted = False
+
+    advice = svc._narrowing_suggestion(_OpenSpec())
+    assert "你可以" in advice, (
+        f"三个槽位全没限定时也给不出指引 —— 那份「算出来的建议」是死的：{advice!r}")
+
+    # 阴性对照：三样都限定了就**不给**这句（少一句废话 > 多一句他做不到的）
+    class _ClosedSpec:
+        store_slots = ("徐汇美罗城店",)
+        dish_slot = "米饭"
+        date_range = (date(2026, 7, 1), date(2026, 7, 31))
+        window_label = "最近30天"
+        time_range_defaulted = False
+
+    assert svc._narrowing_suggestion(_ClosedSpec()) == "", (
+        "他三样都限定了还在建议他去限定 —— 那正是「假建议」本身")
 
 
 def test_the_rejected_text_is_still_not_forwarded():

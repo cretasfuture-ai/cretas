@@ -123,6 +123,12 @@ class WriteFailConnection:
                     "avg_ticket": Decimal("25.00"),
                     "discount_amount": Decimal("40.00"),
                     "gross_amount": Decimal("840.00"),
+                    # ⚠️ `store_comparison` 的 SELECT 里有 COUNT(DISTINCT a.date)
+                    #    AS days_with_data, 而消费端**无条件**读 r["days_with_data"]。
+                    #    这一格漏掉时 KeyError 被 gateway 吞成 EvidenceStatus.ERROR
+                    #    -> RuntimeSourceFailure -> 第一轮就中断, 于是 round-2 的
+                    #    dish 证据**整条路径从来没被跑过**, 而症状只是「tools 少一个」。
+                    "days_with_data": 31,
                 }
             ]
         if "WITH GROUPED AS" in upper and "FROM AGG_PRODUCT A" in upper:
