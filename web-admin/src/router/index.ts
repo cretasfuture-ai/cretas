@@ -417,6 +417,12 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/inventory/index.vue'),
             meta: { requiresAuth: true, title: '库存批次查询', module: 'warehouse' }
           },
+          {
+            path: 'storage-locations',
+            name: 'WarehouseStorageLocations',
+            component: () => import('@/views/warehouse/storage-locations/index.vue'),
+            meta: { requiresAuth: true, title: '储存位置与现场盘点', module: 'warehouse' }
+          },
           // SP7 六扇门 ERP-lite — 盘点任务管理 (发起→录入→审批→应用)
           {
             path: 'stocktakes',

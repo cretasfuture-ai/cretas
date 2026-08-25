@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>储存位置规则配置 · 交互预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      color: #172235;
+      background: #f3f6fa;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      --blue: #2468d5;
+      --blue-soft: #edf4ff;
+      --green: #17956b;
+      --line: #e7ecf3;
+      --muted: #78869a;
+      --soft: #f8fafd;
+      --shadow: 0 12px 34px rgb(30 49 78 / 7%);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { min-width: 390px; margin: 0; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #b9d2ff; outline-offset: 2px; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 216px 1fr; }
+
+    .sidebar { position: sticky; top: 0; height: 100vh; padding: 23px 15px; background: #fff; border-right: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 28px; }
+    .brand-mark { display: grid; width: 37px; height: 37px; place-items: center; border-radius: 11px; color: #fff; background: linear-gradient(145deg, #2468d5, #54a0e8); font-weight: 800; }
+    .brand strong, .brand span { display: block; }
+    .brand span { margin-top: 3px; font-size: 11px; color: var(--muted); }
+    .side-label { margin: 18px 8px 9px; font-size: 11px; letter-spacing: .06em; color: #97a3b4; }
+    .side-item { display: flex; height: 39px; align-items: center; gap: 10px; margin: 3px 0; padding: 0 10px; border: 0; border-radius: 8px; color: #536177; background: none; text-align: left; width: 100%; }
+    .side-item.active { color: var(--blue); background: var(--blue-soft); font-weight: 650; }
+    .side-item svg, .icon { width: 17px; height: 17px; }
+    .sidebar-footer { position: absolute; right: 15px; bottom: 20px; left: 15px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+    .sidebar-footer strong, .sidebar-footer span { display: block; }
+    .sidebar-footer span { margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+    .main { min-width: 0; }
+    .topbar { height: 66px; display: flex; justify-content: space-between; align-items: center; padding: 0 31px; background: rgb(255 255 255 / 94%); border-bottom: 1px solid var(--line); }
+    .crumb { color: #66758a; }
+    .crumb strong { margin-left: 10px; color: #263247; }
+    .preview-flag { padding: 7px 11px; border: 1px solid #f2dfa4; border-radius: 18px; color: #8b6413; background: #fff9e9; font-size: 12px; }
+    .workspace { max-width: 1490px; padding: 30px 31px 45px; margin: auto; }
+    .heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; }
+    h1 { margin: 0; font-size: 23px; letter-spacing: -.025em; }
+    .intro { max-width: 680px; margin: 8px 0 0; color: var(--muted); line-height: 1.7; }
+    .heading-actions { display: flex; gap: 9px; padding-top: 3px; }
+    .heading-actions { flex-wrap: wrap; justify-content: flex-end; }
+    .btn { height: 37px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid #dce4ee; border-radius: 8px; color: #48566b; background: #fff; }
+    .btn.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+    .btn.subtle { color: var(--blue); border-color: #d7e5fb; background: #f5f9ff; }
+    .btn:disabled { cursor: not-allowed; opacity: .48; }
+    .btn svg { width: 15px; height: 15px; }
+
+    .guide { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 13px; align-items: center; margin-bottom: 20px; padding: 16px 20px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+    .guide-step { display: flex; align-items: center; gap: 10px; }
+    .step-no { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 9px; color: var(--blue); background: var(--blue-soft); font-size: 12px; font-weight: 700; }
+    .guide-step strong, .guide-step span { display: block; }
+    .guide-step strong { font-size: 12px; }
+    .guide-step span { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .guide-arrow { color: #a8b3c2; }
+    .guide-step.current .step-no { color: #fff; background: var(--blue); box-shadow: 0 4px 11px rgb(36 104 213 / 22%); }
+    .guide-step.done .step-no { color: #fff; background: var(--green); }
+
+    .layout { display: grid; grid-template-columns: minmax(560px, 1fr) 348px; gap: 20px; align-items: start; }
+    .panel { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; min-height: 61px; padding: 0 19px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { margin: 0; font-size: 15px; }
+    .panel-head p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .panel-body { padding: 19px; }
+    .mode-note { margin: 0 0 16px; padding: 11px 13px; border: 1px solid #dce9fb; border-radius: 9px; color: #49627f; background: #f6faff; font-size: 12px; line-height: 1.65; }
+    .mode-note strong { color: #234f8e; }
+
+    .master-switch { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+    .master-switch strong { font-size: 13px; }
+    .master-switch p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+    .switch { position: relative; width: 41px; height: 23px; padding: 0; border: 0; border-radius: 14px; background: #cbd5e0; transition: background .18s; }
+    .switch::after { position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: #fff; content: ""; transition: transform .18s; }
+    .switch[aria-checked="true"] { background: var(--blue); }
+    .switch[aria-checked="true"]::after { transform: translateX(18px); }
+
+    .rule-head { display: flex; justify-content: space-between; align-items: center; margin: 20px 0 12px; }
+    .rule-head h3, .zones-head h3 { margin: 0; font-size: 13px; }
+    .tiny { color: var(--muted); font-size: 11px; }
+    .rule-box { display: grid; grid-template-columns: 1.1fr .8fr .8fr; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+    .field-label { display: block; margin-bottom: 7px; color: #56647a; font-size: 11px; }
+    .select, .input { width: 100%; height: 35px; padding: 0 10px; border: 1px solid #dce3ec; border-radius: 7px; color: #263247; background: #fff; }
+    .rule-example { grid-column: 1 / -1; padding-top: 10px; border-top: 1px dashed #e1e7ef; color: #66758a; font-size: 12px; }
+    .rule-example code { margin-left: 5px; padding: 3px 7px; border-radius: 5px; color: #1f5bbc; background: #eaf2ff; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-weight: 650; }
+
+    .zones-head { display: flex; align-items: center; justify-content: space-between; margin: 23px 0 12px; }
+    .zone-card { margin-bottom: 8px; border: 1px solid var(--line); border-radius: 10px; transition: border-color .18s, opacity .18s, background .18s; }
+    .zone-card:hover { border-color: #ccd9e9; }
+    .zone-card.active-type { border-color: #bfd4f5; background: #fbfdff; }
+    .zone-card.inactive { opacity: .62; }
+    .zone-top { display: grid; grid-template-columns: 29px minmax(110px, 1fr) minmax(83px, .72fr) 39px 28px; gap: 10px; align-items: end; padding: 11px 11px 8px; }
+    .zone-swatch { display: grid; width: 29px; height: 35px; align-items: center; justify-content: center; font-size: 17px; }
+    .zone-field label { display: block; margin-bottom: 5px; color: #8490a0; font-size: 10px; }
+    .zone-field input { height: 33px; padding: 0 8px; }
+    .prefix-input { font-family: "SFMono-Regular", Consolas, monospace; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+    .zone-switch { align-self: center; margin-top: 14px; transform: scale(.8); transform-origin: center; }
+    .icon-btn { display: grid; width: 29px; height: 33px; place-items: center; padding: 0; border: 0; border-radius: 6px; color: #8290a3; background: none; }
+    .icon-btn:hover { color: #c74848; background: #fff1f1; }
+    .zone-bottom { display: flex; align-items: center; justify-content: space-between; min-height: 33px; padding: 0 12px 9px 49px; }
+    .codes-preview { display: flex; flex-wrap: wrap; gap: 5px; }
+    .code-chip { padding: 4px 7px; border: 1px solid #dfebfc; border-radius: 6px; color: #3162a9; background: #f5f9ff; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
+    .code-more { align-self: center; color: #8996a7; font-size: 10px; }
+    .text-btn { padding: 4px; border: 0; color: var(--blue); background: transparent; font-size: 11px; white-space: nowrap; }
+
+    .type-location-count { align-self: center; color: #78869a; font-size: 11px; }
+    .add-zone { height: 42px; width: 100%; border: 1px dashed #cbd9ea; border-radius: 8px; color: var(--blue); background: #fbfdff; }
+    .location-manager { margin-top: 0; padding-top: 0; border-top: 0; }
+    .location-manager-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+    .location-manager-head h3 { margin: 0; font-size: 13px; }
+    .location-manager-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .type-filters { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+    .type-filter { min-height: 33px; padding: 0 10px; border: 1px solid #e2e8f0; border-radius: 7px; color: #526176; background: #fff; font-size: 11px; }
+    .type-filter.active { border-color: #bed4fa; color: var(--blue); background: var(--blue-soft); }
+    .type-filter span { margin-left: 5px; color: #8592a3; }
+    .position-header { display: grid; grid-template-columns: 133px minmax(130px, 1fr) 47px 31px; gap: 9px; padding: 9px 10px; color: #76859a; background: #f6f8fb; font-size: 10px; }
+    .position-list { max-height: 278px; overflow-y: auto; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; }
+    .position-row { display: grid; grid-template-columns: 133px minmax(130px, 1fr) 47px 31px; gap: 9px; align-items: center; min-height: 49px; padding: 7px 10px; border-bottom: 1px solid #eef1f5; }
+    .position-row:last-child { border-bottom: 0; }
+    .position-row.inactive { opacity: .55; }
+    .position-code-editor { display: flex; align-items: center; gap: 5px; }
+    .position-prefix { min-width: 31px; color: #3562a4; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; font-weight: 650; }
+    .position-number { width: 58px; height: 31px; padding: 0 7px; text-align: center; }
+    .position-label { height: 31px; font-size: 11px; }
+    .position-label-wrap { min-width: 0; display: grid; gap: 4px; padding: 3px 0; }
+    .position-load { color: #708197; font-size: 10px; }
+    .position-row .switch { transform: scale(.76); transform-origin: center; }
+    .position-empty { padding: 28px 12px; color: #77869a; text-align: center; font-size: 12px; line-height: 1.8; }
+    .location-toolbar { display: flex; gap: 8px; margin-top: 11px; }
+    .location-toolbar .btn { height: 34px; font-size: 11px; }
+    .warning { display: none; margin-top: 10px; padding: 10px 12px; border: 1px solid #f3d6b3; border-radius: 8px; color: #965512; background: #fff8ef; font-size: 12px; }
+    .warning.visible { display: block; }
+    .summary { display: flex; align-items: center; justify-content: space-between; margin-top: 17px; padding: 12px; border-radius: 8px; color: #53647a; background: #f5f8fc; font-size: 12px; }
+    .summary strong { color: #1c314b; }
+    .wizard-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .wizard-footer .tiny { max-width: 430px; line-height: 1.55; }
+    .wizard-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+
+    .phone-panel { position: sticky; top: 20px; }
+    .phone-panel .panel-head { align-items: flex-start; padding-top: 14px; }
+    .live-dot { display: inline-flex; align-items: center; gap: 5px; padding-top: 4px; color: var(--green); font-size: 11px; }
+    .live-dot::before { width: 7px; height: 7px; border-radius: 50%; background: #23b784; content: ""; }
+    .phone-stage { display: flex; justify-content: center; padding: 21px 11px 19px; background: linear-gradient(180deg, #f6f9fd, #fff); }
+    .phone { width: 286px; overflow: hidden; border: 7px solid #26344a; border-radius: 32px; background: #f4f6f9; box-shadow: 0 18px 35px rgb(32 47 69 / 19%); }
+    .phone-notch { height: 25px; position: relative; background: #fff; }
+    .phone-notch::after { position: absolute; top: 7px; left: 50%; width: 65px; height: 12px; border-radius: 9px; background: #26344a; content: ""; transform: translateX(-50%); }
+    .phone-header { display: flex; align-items: center; gap: 7px; padding: 12px 12px 13px; color: #fff; background: #2468d5; }
+    .phone-header strong { display: block; font-size: 12px; }
+    .phone-header small { display: block; margin-top: 3px; opacity: .78; font-size: 9px; }
+    .phone-scroll { min-height: 435px; padding: 11px 9px 0; }
+    .phone-card { margin-bottom: 9px; padding: 11px; border: 1px solid #e8edf3; border-radius: 9px; background: #fff; }
+    .phone-card h4 { margin: 0 0 9px; font-size: 11px; }
+    .phone-pair { display: flex; justify-content: space-between; margin-top: 6px; color: #77859a; font-size: 10px; }
+    .phone-pair strong { color: #334056; font-weight: 550; }
+    .phone-qty { display: flex; gap: 7px; margin-top: 10px; }
+    .phone-qty-box { flex: 1; padding: 8px 7px; border: 1px solid #e2e8f0; border-radius: 7px; }
+    .phone-qty-box span, .phone-qty-box strong { display: block; }
+    .phone-qty-box span { font-size: 9px; color: #758397; }
+    .phone-qty-box strong { margin-top: 5px; font-size: 13px; }
+    .location-title { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .location-title span { color: var(--muted); font-size: 9px; }
+    .phone-tabs { display: flex; overflow-x: auto; gap: 5px; padding-bottom: 8px; scrollbar-width: none; }
+    .phone-tabs::-webkit-scrollbar { display: none; }
+    .phone-tab { flex: 0 0 auto; padding: 5px 7px; border: 1px solid #e2e8f0; border-radius: 13px; color: #526176; background: #fff; font-size: 9px; }
+    .phone-tab.selected { color: var(--blue); border-color: #cadeff; background: #edf4ff; }
+    .phone-locations { display: grid; max-height: 176px; overflow-y: auto; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .phone-location { min-height: 47px; padding: 6px; border: 1px solid #e0e7f0; border-radius: 7px; color: #43516a; background: #fff; text-align: left; }
+    .phone-location strong, .phone-location span { display: block; }
+    .phone-location strong { font-size: 11px; }
+    .phone-location span { margin-top: 3px; color: #7d8a9d; font-size: 8px; }
+    .phone-location.selected { border-color: #2f73df; background: #edf4ff; }
+    .phone-location.selected strong { color: #235fc0; }
+    .phone-empty { padding: 19px 8px; color: #7c899a; font-size: 10px; text-align: center; line-height: 1.7; }
+    .phone-bottom { padding: 10px; border-top: 1px solid #e6ebf1; background: #fff; }
+    .phone-submit { width: 100%; height: 38px; border: 0; border-radius: 8px; color: #fff; background: #2468d5; font-size: 12px; font-weight: 650; }
+    .phone-submit:disabled { background: #c6cfdb; }
+    .preview-note { margin: 0 14px 15px; color: #788598; font-size: 11px; line-height: 1.7; }
+    .preview-note strong { color: #41526a; }
+
+    .toast { position: fixed; top: 21px; right: 24px; z-index: 5; max-width: 390px; padding: 11px 15px; border: 1px solid #c6eadb; border-radius: 9px; color: #176e51; background: #f0fbf6; box-shadow: 0 10px 28px rgb(25 55 44 / 10%); opacity: 0; transform: translateY(-8px); transition: opacity .18s, transform .18s; pointer-events: none; }
+    .toast.visible { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1230px) {
+      .app { grid-template-columns: 72px 1fr; }
+      .sidebar { padding-right: 11px; padding-left: 11px; }
+      .brand { padding-left: 5px; }
+      .brand div:last-child, .side-label, .side-item span, .sidebar-footer { display: none; }
+      .side-item { justify-content: center; }
+      .workspace { padding-right: 20px; padding-left: 20px; }
+      .layout { grid-template-columns: minmax(490px, 1fr) 330px; gap: 15px; }
+    }
+    @media (max-width: 930px) {
+      .app { display: block; }
+      .sidebar { display: none; }
+      .workspace { padding: 22px 14px 40px; }
+      .topbar { padding: 0 15px; }
+      .heading { gap: 13px; }
+      .heading-actions { flex-wrap: wrap; justify-content: flex-end; }
+      .layout { grid-template-columns: minmax(0, 1fr); }
+      .phone-panel { position: static; }
+      .guide { gap: 6px; padding: 13px 11px; }
+      .guide-step { gap: 6px; }
+      .guide-step span { display: none; }
+    }
+    @media (max-width: 540px) {
+      h1 { font-size: 20px; }
+      .heading { display: block; }
+      .heading-actions { justify-content: flex-start; margin-top: 13px; }
+      .rule-box { grid-template-columns: 1fr; }
+      .zone-top { grid-template-columns: 23px minmax(94px, 1fr) minmax(66px, .7fr) 33px 22px; gap: 6px; padding-right: 7px; padding-left: 7px; }
+      .zone-bottom { margin-left: 34px; }
+      .zone-bottom { padding-left: 5px; }
+      .panel-body { padding: 12px; }
+      .position-header, .position-row { grid-template-columns: 102px minmax(88px, 1fr) 37px 24px; gap: 5px; padding-right: 7px; padding-left: 7px; }
+      .position-number { width: 46px; }
+      .position-prefix { min-width: 24px; }
+      .wizard-footer { flex-wrap: wrap; }
+      .wizard-actions { width: 100%; justify-content: flex-end; }
+    }
+
+    /* Increase legibility and keep configuration focused on editable positions. */
+    :root { --muted: #66758a; --line: #e2e8f0; }
+    body { line-height: 1.5; }
+    .side-item { height: 44px; font-size: 14px; }
+    .side-label, .brand span { font-size: 12px; }
+    .workspace { max-width: 1580px; padding-top: 34px; }
+    h1 { font-size: 29px; font-weight: 760; }
+    .intro, .mode-note, .location-manager-head p, .preview-note, .phone-panel .panel-head p, .location-title > span { display: none; }
+    .heading { margin-bottom: 25px; }
+    .btn { height: 42px; padding: 0 15px; font-size: 14px; }
+    .layout { grid-template-columns: minmax(560px, 1fr) 414px; gap: 22px; }
+    .panel { border-radius: 15px; }
+    .panel-head { min-height: 69px; padding: 0 21px; }
+    .panel-head h2 { font-size: 17px; }
+    .panel-body { padding: 22px; }
+    .tiny, .live-dot { font-size: 12px; }
+    .location-manager-head { margin-bottom: 16px; }
+    .location-manager-head h3 { font-size: 16px; }
+    .type-filters { gap: 9px; margin-bottom: 15px; }
+    .type-filter { min-height: 42px; padding: 0 12px; border-radius: 9px; font-size: 14px; }
+    .position-header { min-height: 43px; align-items: center; font-size: 12px; font-weight: 600; }
+    .position-list { max-height: 390px; }
+    .position-row { min-height: 75px; padding-top: 9px; padding-bottom: 9px; }
+    .position-prefix { font-size: 14px; font-weight: 750; }
+    .position-number { height: 39px; font-size: 14px; }
+    .position-label { height: 37px; font-size: 13px; }
+    .position-label-wrap { gap: 6px; }
+    .position-load { color: #53657c; font-size: 12px; }
+    .location-toolbar { gap: 10px; margin-top: 15px; }
+    .location-toolbar .btn { height: 40px; font-size: 13px; }
+    .summary { margin-top: 20px; padding: 14px; font-size: 13px; }
+    .master-switch strong, .rule-head h3, .zones-head h3 { font-size: 15px; }
+    .master-switch p, .field-label, .zone-field label, .type-location-count { font-size: 12px; }
+    .select, .input { min-height: 37px; }
+    .zone-field input { min-height: 36px; }
+    .zone-card { border-radius: 11px; }
+    .text-btn { font-size: 12px; }
+    .guide-step strong { font-size: 14px; }
+
+    .phone-stage { padding: 25px 13px 22px; }
+    .phone { width: 350px; border-width: 8px; border-radius: 36px; }
+    .phone-header { gap: 10px; padding: 15px; }
+    .phone-header strong { font-size: 17px; }
+    .phone-header small { margin-top: 5px; font-size: 11px; }
+    .phone-scroll { min-height: 520px; padding: 14px 12px 0; }
+    .phone-card { margin-bottom: 12px; padding: 14px; border-radius: 11px; }
+    .phone-card h4 { margin-bottom: 11px; font-size: 14px; }
+    .phone-pair { margin-top: 9px; font-size: 12px; }
+    .phone-qty { gap: 9px; margin-top: 13px; }
+    .phone-qty-box { padding: 10px 8px; border-radius: 8px; }
+    .phone-qty-box span { font-size: 11px; }
+    .phone-qty-box strong { font-size: 17px; }
+    .location-title { margin-bottom: 10px; }
+    .phone-tabs { gap: 7px; padding-bottom: 10px; }
+    .phone-tab { padding: 7px 9px; border-radius: 15px; font-size: 12px; }
+    .phone-locations { max-height: 222px; gap: 8px; }
+    .phone-location { min-height: 65px; padding: 9px; border-radius: 9px; }
+    .phone-location strong { font-size: 15px; }
+    .phone-location span { margin-top: 5px; color: #62738a; font-size: 11px; }
+    .phone-bottom { padding: 12px; }
+    .phone-submit { height: 47px; border-radius: 9px; font-size: 15px; }
+
+    @media (max-width: 1230px) {
+      .layout { grid-template-columns: minmax(465px, 1fr) 373px; gap: 16px; }
+      .panel-body { padding: 17px; }
+      .phone { width: 337px; }
+    }
+    @media (max-width: 930px) {
+      .layout { grid-template-columns: minmax(0, 1fr); gap: 19px; }
+      .phone { width: min(360px, 100%); }
+      .heading-actions { justify-content: flex-end; }
+    }
+    @media (max-width: 540px) {
+      h1 { font-size: 25px; }
+      .panel-head { min-height: 61px; padding: 0 14px; }
+      .panel-head h2 { font-size: 15px; }
+      .panel-body { padding: 12px; }
+      .type-filters { gap: 6px; }
+      .type-filter { min-height: 38px; padding: 0 8px; font-size: 12px; }
+      .position-header, .position-row { grid-template-columns: 94px minmax(89px, 1fr) 35px 22px; gap: 5px; padding-right: 6px; padding-left: 6px; }
+      .position-prefix { min-width: 22px; font-size: 12px; }
+      .position-number { width: 45px; font-size: 12px; }
+      .position-label { font-size: 11px; }
+      .position-load { font-size: 10px; }
+      .summary { font-size: 11px; }
+      .phone-stage { padding-right: 8px; padding-left: 8px; }
+      .heading-actions { justify-content: flex-start; }
+    }
+
+    /* Continue the existing Web Admin shell instead of inventing a separate console. */
+    .app { grid-template-columns: 220px minmax(0, 1fr); }
+    .sidebar { padding: 16px 11px; color: rgb(255 255 255 / 74%); background: linear-gradient(180deg, #0c1929 0%, #132238 60%, #0f1d2e 100%); border-right: 0; }
+    .brand { min-height: 49px; margin-bottom: 15px; padding: 0 7px 13px; border-bottom: 1px solid rgb(83 143 205 / 25%); }
+    .brand strong { color: #fff; font-size: 15px; }
+    .brand span { color: rgb(255 255 255 / 64%); }
+    .brand-mark { width: 34px; height: 34px; }
+    .side-label { margin: 15px 8px 7px; color: rgb(255 255 255 / 46%); font-size: 11px; }
+    .side-item { height: 39px; color: rgb(255 255 255 / 72%); font-size: 13px; text-decoration: none; }
+    .side-item:hover { color: #fff; background: rgb(255 255 255 / 6%); }
+    .side-item.active { color: #fff; background: rgb(27 101 168 / 29%); }
+    .side-item.child { padding-left: 33px; }
+    .sidebar-footer { border-color: rgb(255 255 255 / 14%); }
+    .sidebar-footer strong { color: #fff; }
+    .sidebar-footer span { color: rgb(255 255 255 / 59%); }
+    .topbar { height: 64px; padding: 0 21px; }
+    .topbar-tools { display: flex; align-items: center; gap: 15px; }
+    .current-user { display: grid; gap: 2px; font-size: 12px; }
+    .current-user strong { font-size: 13px; }
+    .current-user span { color: var(--muted); }
+    .workspace-tabs { min-height: 45px; display: flex; align-items: stretch; gap: 5px; padding: 0 16px; border-bottom: 1px solid #e3eaf2; background: #f7f9fc; }
+    .workspace-tab { display: inline-flex; align-items: center; min-height: 44px; padding: 0 15px; border-bottom: 2px solid transparent; color: #66758a; font-size: 13px; text-decoration: none; }
+    .workspace-tab.active { border-bottom-color: #1b65a8; color: #1b65a8; background: #fff; font-weight: 650; }
+    .workspace { max-width: none; padding: 24px; }
+    .heading { align-items: center; margin-bottom: 17px; }
+    h1 { font-size: 29px; }
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .layout.preview-open { grid-template-columns: minmax(510px, 1fr) 402px; }
+    .phone-panel { position: sticky; top: 16px; }
+    .preview-control { border-color: #bdd3ef; color: #1b65a8; background: #f2f7ff; }
+    .preview-control.active { border-color: #1b65a8; color: #fff; background: #1b65a8; }
+    .phone-preview-role { display: block; margin-top: 5px; color: #6c788a; font-size: 12px; }
+
+    @media (max-width: 1240px) {
+      .app { grid-template-columns: 72px minmax(0, 1fr); }
+      .workspace { padding-right: 17px; padding-left: 17px; }
+      .layout.preview-open { grid-template-columns: minmax(420px, 1fr) 374px; gap: 14px; }
+    }
+    @media (max-width: 930px) {
+      .app { display: block; }
+      .workspace { padding: 18px 12px 35px; }
+      .layout.preview-open { grid-template-columns: minmax(0, 1fr); gap: 17px; }
+      .workspace-tabs { overflow-x: auto; }
+      .workspace-tab { flex: 0 0 auto; }
+      .current-user { display: none; }
+    }
+    @media (max-width: 540px) {
+      h1 { font-size: 25px; }
+      .preview-flag { display: none; }
+      .heading-actions { gap: 7px; }
+      .heading-actions .btn { min-height: 36px; height: auto; padding: 0 10px; font-size: 12px; }
+    }
+
+    /* Quiet, dense B2B workspace: the task owns the page, preview belongs to the global shell. */
+    :root { --blue: #1b65a8; --blue-soft: #edf4fb; --line: #e8edf3; --shadow: 0 2px 12px rgb(27 101 168 / 6%); background: #f4f6f9; }
+    .topbar { position: sticky; top: 0; z-index: 4; background: rgb(255 255 255 / 88%); backdrop-filter: blur(12px); }
+    .global-preview { min-height: 38px; gap: 7px; padding: 0 11px; border-color: #dce6f0; border-radius: 8px; color: #435268; background: #fff; font-size: 13px; }
+    .global-preview .device-icon { font-size: 16px; line-height: 1; }
+    .global-preview.active { border-color: #1b65a8; color: #1b65a8; background: #edf4fb; }
+    .workspace { padding: 25px 24px 40px; }
+    .heading { margin-bottom: 20px; }
+    .heading-actions { gap: 8px; }
+    .heading-actions .btn { height: 38px; border-radius: 8px; font-size: 13px; }
+    .heading-actions .subtle { border-color: transparent; color: #65758a; background: transparent; }
+    .panel { border-radius: 11px; box-shadow: var(--shadow); }
+    .panel-head { min-height: 62px; }
+    .panel-body { padding: 20px; }
+    .location-manager-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
+    .location-manager-head h3 { margin: 0; color: #29394e; font-size: 15px; }
+    .location-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+    .location-toolbar .btn { height: 36px; font-size: 12px; }
+    .location-toolbar .btn.subtle { border-color: #1b65a8; color: #fff; background: #1b65a8; }
+    .type-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; padding-bottom: 17px; border-bottom: 1px solid #edf1f5; }
+    .type-filter { min-height: 40px; gap: 8px; padding: 0 11px; border: 1px solid #e4eaf1; border-radius: 8px; background: #fff; }
+    .type-filter.active { border-color: #bfd5ea; color: #1b65a8; background: #edf4fb; }
+    .type-filter span { color: #8190a2; font-size: 12px; }
+    .position-header { display: none; }
+    .position-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 280px)); align-items: stretch; gap: 12px; max-height: none; overflow: visible; }
+    .position-row { position: relative; display: flex; min-height: 138px; flex-direction: column; align-items: stretch; gap: 9px; padding: 14px; border: 1px solid #e5ebf2; border-radius: 10px; background: #fff; transition: border-color 160ms ease, box-shadow 160ms ease; }
+    .position-row:hover, .position-row:focus-within { border-color: #bfd2e7; box-shadow: 0 3px 12px rgb(27 101 168 / 7%); }
+    .position-row.inactive { opacity: .62; background: #f8f9fb; }
+    .position-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .position-code-editor { display: inline-flex; align-items: center; gap: 1px; }
+    .position-prefix { min-width: auto; color: #1b65a8; font-size: 19px; font-weight: 760; }
+    .position-number { width: 43px; min-height: 35px; height: 35px; padding: 0 1px; border-color: transparent; color: #1b65a8; background: transparent; font-size: 19px; font-weight: 760; }
+    .position-number:hover, .position-number:focus { border-color: #d7e2ee; background: #fff; }
+    .position-actions { display: flex; align-items: center; gap: 7px; }
+    .position-actions .icon-btn { width: 30px; height: 32px; }
+    .position-label-wrap { display: grid; gap: 8px; }
+    .position-label { width: min(190px, 100%); min-height: 31px; height: 31px; padding: 0 7px; border-color: transparent; color: #526176; background: #f7f9fb; font-size: 13px; }
+    .position-label:focus { border-color: #cbd9e8; background: #fff; }
+    .position-load { display: inline-flex; width: fit-content; align-items: center; gap: 5px; color: #64748b; font-size: 12px; }
+    .position-load::before { width: 7px; height: 7px; border-radius: 50%; background: #69a785; content: ""; }
+    .position-row.vacant .position-load::before { background: #c4ccd6; }
+    .position-empty { grid-column: 1 / -1; }
+    #zones { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 11px; }
+    .zone-card { margin-bottom: 0; }
+    .master-switch p, .rule-head .tiny, .zones-head .tiny { display: none; }
+    .rule-box { background: #f8fafc; }
+    .zone-bottom { padding-left: 12px; }
+    .summary { margin-top: 19px; padding: 12px 0 0; border-top: 1px solid #edf1f5; border-radius: 0; color: #67768a; background: transparent; }
+    .phone-panel .panel-head { align-items: center; }
+    .preview-head-tools { display: flex; align-items: center; gap: 9px; }
+    .preview-close { width: 34px; height: 34px; border: 0; border-radius: 7px; color: #748295; background: transparent; font-size: 19px; }
+    .preview-close:hover { color: #24384d; background: #f2f5f8; }
+    .phone-tab { min-height: 44px; }
+
+    @media (min-width: 1550px) {
+      .position-list { grid-template-columns: repeat(auto-fit, minmax(220px, 270px)); }
+    }
+    @media (max-width: 1240px) {
+      .layout.preview-open .position-list { grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); }
+      .layout.preview-open .position-row { padding: 12px; }
+      .layout.preview-open .location-manager-head { align-items: flex-start; }
+    }
+    @media (max-width: 930px) {
+      .workspace { padding: 20px 14px 36px; }
+      .position-list, .layout.preview-open .position-list { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+    }
+    @media (max-width: 540px) {
+      .topbar { padding-right: 12px; padding-left: 12px; }
+      .topbar-tools { gap: 7px; }
+      .global-preview { min-width: 40px; padding: 0 9px; }
+      .global-preview-label { display: none; }
+      .workspace { padding-right: 11px; padding-left: 11px; }
+      .position-list, .layout.preview-open .position-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .position-row, .layout.preview-open .position-row { min-height: 127px; gap: 7px; padding: 10px 8px; }
+      .position-prefix, .position-number { font-size: 16px; }
+      .position-number { width: 37px; padding: 0 2px; }
+      .position-actions { gap: 3px; }
+      .position-actions .switch { transform: scale(.83); transform-origin: center; }
+      .position-actions .icon-btn { width: 22px; }
+      .position-label { width: 100%; font-size: 11px; }
+      .position-load { font-size: 10px; }
+      .location-manager-head { gap: 9px; }
+      .location-toolbar .btn { padding: 0 8px; font-size: 11px; }
+      .summary { font-size: 11px; }
+      #zones { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden">
+    <symbol id="grid" viewBox="0 0 24 24"><path d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="box" viewBox="0 0 24 24"><path d="m3 7 9-4 9 4v10l-9 4-9-4zm0 0 9 4 9-4m-9 4v10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="settings" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 4-2 1 .2 2.2-2 2-2.2-.2-1 2h-4l-1-2-2.2.2-2-2L5 13l-2-1 2-1-.2-2.2 2-2L9 7l1-2h4l1 2 2.2-.2 2 2L19 11z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+    <symbol id="plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="reset-icon" viewBox="0 0 24 24"><path d="M4 11a8 8 0 1 1 2 6M4 4v7h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v6m4-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <div class="app">
+    <aside class="sidebar" aria-label="系统导航">
+      <div class="brand"><div class="brand-mark">C</div><div><strong>白垩纪 ERP</strong><span>食品工厂管理平台</span></div></div>
+      <button class="side-item"><svg><use href="#grid" /></svg><span>工作台</span></button>
+      <div class="side-label">个人 OA</div>
+      <a class="side-item child" href="./warehouse-spot-check-preview.html"><svg><use href="#grid" /></svg><span>待我审批</span></a>
+      <div class="side-label">生产管理</div>
+      <a class="side-item child" href="./warehouse-spot-check-preview.html"><svg><use href="#grid" /></svg><span>生产计划</span></a>
+      <div class="side-label">仓储管理</div>
+      <button class="side-item"><svg><use href="#box" /></svg><span>入库任务与批次</span></button>
+      <button class="side-item child"><svg><use href="#grid" /></svg><span>库存批次查询</span></button>
+      <a class="side-item child" href="./warehouse-spot-check-preview.html"><svg><use href="#grid" /></svg><span>盘点与期初库存</span></a>
+      <button class="side-item child active" id="side-warehouse"><svg><use href="#box" /></svg><span>储存位置</span></button>
+      <div class="side-label">系统管理</div>
+      <button class="side-item child" id="side-settings"><svg><use href="#settings" /></svg><span>区域类型与编码规则</span></button>
+      <div class="sidebar-footer"><strong>六扇门食品工厂</strong><span>当前工厂 · F006</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><div class="crumb"><span id="crumb-parent">仓储管理</span> <span aria-hidden="true">/</span><strong id="crumb-current">储存位置</strong></div><div class="topbar-tools"><button class="btn global-preview" id="toggle-phone-preview" aria-label="打开全局手机预览"><span class="device-icon" aria-hidden="true">▯</span><span class="global-preview-label">手机预览</span></button><span class="current-user"><strong>张全</strong><span>仓储管理员</span></span></div></header>
+      <nav class="workspace-tabs" aria-label="已打开任务"><a class="workspace-tab" href="./warehouse-spot-check-preview.html">盘点与期初库存</a><a class="workspace-tab active" href="./storage-location-rule-preview.html">储存位置</a></nav>
+      <div class="workspace">
+        <div class="heading"><div><h1 id="page-title">储存位置管理</h1><p class="intro" id="page-intro">日常只维护实际位置：新增、改名、停用或调整编号。区域类型和编码规则在低频设置中单独维护。</p></div><div class="heading-actions"><button class="btn subtle" id="open-setup">首次配置</button><button class="btn" id="open-types"><svg><use href="#settings" /></svg>区域与规则</button><button class="btn" id="back-daily" hidden>返回位置管理</button><button class="btn" id="reset" hidden><svg><use href="#reset-icon" /></svg>恢复示例</button><button class="btn primary" id="save">保存</button></div></div>
+
+        <section class="guide" id="setup-guide" aria-label="首次配置步骤" hidden>
+          <div class="guide-step" id="guide-step-1"><div class="step-no">1</div><div><strong>配置区域类型</strong><span>名称、英文前缀和编号规则</span></div></div><span class="guide-arrow">→</span>
+          <div class="guide-step" id="guide-step-2"><div class="step-no">2</div><div><strong>建立首批具体位置</strong><span>按现场一次配置 GC01、GC02……</span></div></div><span class="guide-arrow">→</span>
+          <div class="guide-step" id="guide-step-3"><div class="step-no">✓</div><div><strong>开始日常使用</strong><span>以后默认只维护具体位置</span></div></div>
+        </section>
+
+        <div class="layout" id="workspace-layout">
+          <section class="panel config-panel"><div class="panel-head"><h2 id="panel-title">具体储存位置</h2><span class="tiny" id="panel-subtitle">高频维护 · 按当前工厂独立生效</span></div><div class="panel-body">
+            <p class="mode-note" id="mode-note"><strong>日常维护入口：</strong>仓库新增货架、位置变更或临时停用时，在这里直接处理，不需要重新进入区域规则。</p>
+            <div id="type-settings-section" hidden>
+            <div class="master-switch"><div><strong>启用入库储存位置选择</strong><p>开启后，仓管员在手机入库时需要选择实际存放位置。</p></div><button class="switch" id="master-switch" role="switch" aria-label="启用储存位置选择"></button></div>
+
+            <div class="rule-head"><h3>统一编码规则</h3><span class="tiny">调整后预览立即更新</span></div>
+            <div class="rule-box"><label><span class="field-label">区域与编号之间</span><select class="select" id="separator"><option value="">直接拼接</option><option value="-">短横线 -</option></select></label><label><span class="field-label">编号位数</span><select class="select" id="digits"><option value="2">两位 · 01</option><option value="3">三位 · 001</option></select></label><label><span class="field-label">从几号开始</span><select class="select" id="start"><option value="1">从 01 开始</option><option value="0">从 00 开始</option></select></label><div class="rule-example">干仓示例 <code id="rule-example">GC01</code></div></div>
+
+            <div class="zones-head"><div><h3 id="types-section-title">区域类型</h3><span class="tiny">一个类型只定义区域名称和英文前缀，不预设位置数量</span></div></div>
+            <div id="zones" aria-label="储存区域类型列表"></div>
+            <button class="add-zone" id="add-zone">＋ 添加区域类型</button>
+            </div>
+
+            <section class="location-manager" id="location-manager" aria-label="具体储存位置管理"><div class="location-manager-head"><div><h3 id="locations-section-title">具体储存位置</h3><p id="locations-section-copy">选择区域类型，再按现场实际位置逐个新增、编辑或停用</p></div><div class="location-toolbar"><button class="btn subtle" id="add-location"><svg><use href="#plus" /></svg>添加位置</button><button class="btn" id="add-five-locations">批量添加</button></div></div><div class="type-filters" id="type-filters" aria-label="按区域类型筛选"></div><div class="position-header"><span>位置编码</span><span>位置名称 / 备注</span><span>启用</span><span></span></div><div class="position-list" id="position-list"></div></section>
+            <div class="warning" id="warning" role="alert"></div>
+            <div class="summary"><span>已启用 <strong id="zone-total">0</strong> 个区域类型，共维护 <strong id="location-total">0</strong> 个储存位置</span><span id="summary-state">手机入库可选</span></div>
+            <div class="wizard-footer" id="wizard-footer" hidden><span class="tiny" id="wizard-help">下一步将按区域类型建立首批实际位置。</span><div class="wizard-actions"><button class="btn" id="setup-prev" hidden>上一步</button><button class="btn primary" id="setup-next">下一步：配置具体位置</button><button class="btn primary" id="setup-finish" hidden>完成首次配置</button></div></div>
+          </div></section>
+
+          <aside class="panel phone-panel" id="phone-preview-panel" hidden><div class="panel-head"><div><h2>手机预览</h2><span class="phone-preview-role">仓储管理员 · 张全</span></div><div class="preview-head-tools"><span class="live-dot">同步</span><button class="preview-close" id="close-phone-preview" aria-label="关闭手机预览">×</button></div></div><div class="phone-stage"><div class="phone"><div class="phone-notch"></div><div class="phone-header"><span aria-hidden="true">‹</span><div><strong>采购入库</strong><small>订单 PO-20260825-0003</small></div></div><div class="phone-scroll"><div class="phone-card"><h4>收货物料</h4><div class="phone-pair"><span>物料</span><strong>精修猪五花</strong></div><div class="phone-pair"><span>供应商</span><strong>上海鲜配供应链</strong></div><div class="phone-qty"><div class="phone-qty-box"><span>实收数量</span><strong>120 kg</strong></div><div class="phone-qty-box"><span>商品日期</span><strong>08-25</strong></div></div></div><div class="phone-card" id="phone-location-card"><div class="location-title"><h4>储存位置</h4><span>请选择实际存放位置</span></div><div class="phone-tabs" id="phone-tabs"></div><div class="phone-locations" id="phone-locations"></div><div class="phone-empty" id="phone-empty" hidden></div></div><div class="phone-card"><div class="phone-pair"><span>收货凭证</span><strong>已拍照 1 张</strong></div></div></div><div class="phone-bottom"><button class="phone-submit" id="phone-submit">确认入库</button></div></div></div><p class="preview-note"><strong>这里管理的是具体储存位置，</strong>例如 GC01、DK02；它不替代现有的原料仓、成品仓，也不会把位置变化伪装成正式跨仓移库。</p></aside>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const STORAGE_KEY = 'cretas-storage-location-rule-artifact-v2';
+      const PREVIEW_KEY = 'cretas-global-mobile-preview-open';
+      const symbols = ['❄️', '🧊', '⚡', '📦', '🌡️', '🥬'];
+      const knownInitials = {
+        冷藏: 'LC', 冷藏库: 'LCK', 冻库: 'DK', 冷冻: 'LD', 冷冻库: 'LDK', 普通冻库: 'PTDK',
+        急冻: 'JD', 急冻库: 'JDK', 干仓: 'GC', 干货仓: 'GHC', 常温: 'CW', 常温仓: 'CWC',
+        温区: 'WQ', 保鲜: 'BX', 保鲜库: 'BXK', 原料仓: 'YLC', 成品仓: 'CPC',
+      };
+      const seedLabels = {
+        cold: ['靠门第一排', '中间第二排', '靠墙第三排', '备用位置'],
+        frozen: ['冻库一号架', '冻库二号架', '靠内侧货架', '备用冻位'],
+        flash: ['急冻一号位', '急冻二号位'],
+        dry: ['干货一号架', '包材二号架', '辅料三号架'],
+      };
+      const seedLocations = (zoneId, total) => Array.from({ length: total }, (_, index) => ({
+        id: `${zoneId}-${index + 1}`,
+        number: index + 1,
+        label: seedLabels[zoneId]?.[index] || '',
+        enabled: true,
+      }));
+      const previewLocationStock = {
+        LC01: { materials: 3, batches: 4 },
+        LC02: { materials: 2, batches: 2 },
+        LC03: { materials: 1, batches: 1 },
+        DK01: { materials: 2, batches: 2 },
+        DK02: { materials: 1, batches: 1 },
+        GC01: { materials: 2, batches: 2 },
+        GC02: { materials: 2, batches: 2 },
+        GC03: { materials: 2, batches: 2 },
+      };
+      const initialState = () => ({
+        enabled: true,
+        separator: '',
+        digits: 2,
+        start: 1,
+        selectedZone: 'cold',
+        managedZone: 'cold',
+        selectedLocation: 'LC01',
+        zones: [
+          { id: 'cold', name: '冷藏', prefix: 'LC', enabled: true, icon: '❄️', locations: seedLocations('cold', 4) },
+          { id: 'frozen', name: '普通冻库', prefix: 'DK', enabled: true, icon: '🧊', locations: seedLocations('frozen', 4) },
+          { id: 'flash', name: '急冻', prefix: 'JD', enabled: true, icon: '⚡', locations: seedLocations('flash', 2) },
+          { id: 'dry', name: '干仓', prefix: 'GC', enabled: true, icon: '📦', locations: seedLocations('dry', 3) },
+        ],
+      });
+
+      let state = initialState();
+      let viewMode = 'daily';
+      let setupStep = 1;
+      let previewOpen = false;
+      try {
+        const saved = window.localStorage.getItem(STORAGE_KEY);
+        if (saved) state = { ...initialState(), ...JSON.parse(saved) };
+        previewOpen = window.sessionStorage.getItem(PREVIEW_KEY) === '1';
+      } catch (_) {
+        // file:// 页面禁用 localStorage 时，交互仍使用内存状态正常工作。
+      }
+
+      const $ = (id) => document.getElementById(id);
+      const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[char]);
+      const normalizePrefix = (value) => String(value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 8);
+      const suggestPrefix = (name) => {
+        const normalized = String(name || '').trim();
+        if (knownInitials[normalized]) return knownInitials[normalized];
+        const ascii = normalized.match(/[A-Za-z]+/g);
+        return ascii ? normalizePrefix(ascii.map((part) => part[0]).join('')) : '';
+      };
+      const locationCode = (zone, location) => `${normalizePrefix(zone.prefix)}${state.separator}${String(location.number).padStart(Number(state.digits), '0')}`;
+      const locationsFor = (zone, includeDisabled = false) => (zone.locations || [])
+        .map((location) => ({
+          ...location,
+          code: locationCode(zone, location),
+          displayLabel: location.label || `${zone.name} · ${location.number}号位`,
+        }))
+        .filter((location) => includeDisabled || location.enabled);
+      const enabledZones = () => state.zones.filter((zone) => zone.enabled && normalizePrefix(zone.prefix));
+      const findZone = (zoneId) => state.zones.find((zone) => zone.id === zoneId);
+      const managedZone = () => findZone(state.managedZone);
+
+      function issues() {
+        const active = state.zones.filter((zone) => zone.enabled);
+        if (state.enabled && active.length === 0) return '请至少启用一个储存区域，仓管员才能在入库时选择位置。';
+        for (const zone of active) {
+          if (!zone.name.trim()) return '区域名称不能为空，请填写例如“干仓”或“急冻”。';
+          if (!normalizePrefix(zone.prefix)) return `“${zone.name}”还没有英文前缀，请手动填写，例如 GC。`;
+          const numbers = new Set();
+          for (const location of zone.locations || []) {
+            if (!Number.isInteger(Number(location.number)) || Number(location.number) < 0 || Number(location.number) > 9999) {
+              return `“${zone.name}”存在无效位置编号，请填写 0 到 9999 之间的整数。`;
+            }
+            if (numbers.has(Number(location.number))) {
+              return `“${zone.name}”下面的位置编号 ${location.number} 重复了，请为每个具体位置设置不同编号。`;
+            }
+            numbers.add(Number(location.number));
+          }
+        }
+        const seen = new Set();
+        for (const zone of active) {
+          const prefix = normalizePrefix(zone.prefix);
+          if (seen.has(prefix)) return `英文前缀 ${prefix} 重复了，请给不同区域设置不同的前缀。`;
+          seen.add(prefix);
+        }
+        return '';
+      }
+
+      function syncControls() {
+        $('master-switch').setAttribute('aria-checked', String(state.enabled));
+        $('separator').value = state.separator;
+        $('digits').value = String(state.digits);
+        $('start').value = String(state.start);
+        $('rule-example').textContent = `GC${state.separator}${String(state.start).padStart(state.digits, '0')}`;
+      }
+
+      function zoneMarkup(zone) {
+        const count = locationsFor(zone, true).length;
+        return `<article class="zone-card ${zone.enabled ? '' : 'inactive'} ${state.managedZone === zone.id ? 'active-type' : ''}" data-zone-card="${escapeHtml(zone.id)}"><div class="zone-top"><div class="zone-swatch" aria-hidden="true">${escapeHtml(zone.icon)}</div><div class="zone-field"><label for="name-${escapeHtml(zone.id)}">区域名称</label><input class="input" id="name-${escapeHtml(zone.id)}" data-field="name" data-zone="${escapeHtml(zone.id)}" value="${escapeHtml(zone.name)}" maxlength="20" placeholder="例如干仓" /></div><div class="zone-field"><label for="prefix-${escapeHtml(zone.id)}">英文前缀</label><input class="input prefix-input" id="prefix-${escapeHtml(zone.id)}" data-field="prefix" data-zone="${escapeHtml(zone.id)}" value="${escapeHtml(zone.prefix)}" maxlength="8" placeholder="GC" /></div><button class="switch zone-switch" role="switch" aria-label="启用 ${escapeHtml(zone.name || '储存区域类型')}" aria-checked="${zone.enabled}" data-action="toggle-zone" data-zone="${escapeHtml(zone.id)}"></button><button class="icon-btn" aria-label="删除 ${escapeHtml(zone.name || '储存区域类型')}" data-action="delete-zone" data-zone="${escapeHtml(zone.id)}"><svg class="icon"><use href="#trash" /></svg></button></div><div class="zone-bottom"><span class="type-location-count" data-count="${escapeHtml(zone.id)}">${count} 个位置</span><button class="text-btn" data-action="manage-zone" data-zone="${escapeHtml(zone.id)}">${viewMode === 'setup' ? '配置位置 →' : '管理位置 →'}</button></div></article>`;
+      }
+
+      function renderZones() {
+        $('zones').innerHTML = state.zones.map(zoneMarkup).join('');
+      }
+
+      function positionMarkup(zone, location) {
+        const prefix = `${normalizePrefix(zone.prefix)}${state.separator}`;
+        const stock = previewLocationStock[location.code] || { materials: 0, batches: 0 };
+        return `<article class="position-row ${location.enabled ? '' : 'inactive'} ${stock.batches ? 'occupied' : 'vacant'}" data-location-row="${escapeHtml(location.id)}"><div class="position-card-top"><div class="position-code-editor"><span class="position-prefix">${escapeHtml(prefix)}</span><input class="input position-number" data-position-field="number" data-zone="${escapeHtml(zone.id)}" data-location="${escapeHtml(location.id)}" value="${escapeHtml(String(location.number).padStart(state.digits, '0'))}" inputmode="numeric" maxlength="4" aria-label="${escapeHtml(location.code)} 位置编号" /></div><div class="position-actions"><button class="switch" role="switch" aria-label="启用 ${escapeHtml(location.code)}" aria-checked="${location.enabled}" data-position-action="toggle" data-zone="${escapeHtml(zone.id)}" data-location="${escapeHtml(location.id)}"></button><button class="icon-btn" aria-label="删除 ${escapeHtml(location.code)}" data-position-action="delete" data-zone="${escapeHtml(zone.id)}" data-location="${escapeHtml(location.id)}"><svg class="icon"><use href="#trash" /></svg></button></div></div><div class="position-label-wrap"><input class="input position-label" data-position-field="label" data-zone="${escapeHtml(zone.id)}" data-location="${escapeHtml(location.id)}" value="${escapeHtml(location.label || '')}" placeholder="添加位置备注" aria-label="${escapeHtml(location.code)} 位置名称或备注" /><span class="position-load" data-position-load="${escapeHtml(location.code)}">${stock.materials} 种物料 · ${stock.batches} 个批次</span></div></article>`;
+      }
+
+      function renderPositionManager() {
+        if (!findZone(state.managedZone)) state.managedZone = state.zones[0]?.id || null;
+        const zone = managedZone();
+        $('type-filters').innerHTML = state.zones.map((item) => `<button class="type-filter ${item.id === state.managedZone ? 'active' : ''}" data-manage-zone="${escapeHtml(item.id)}">${escapeHtml(item.name || '未命名类型')}<span>${locationsFor(item, true).length}</span></button>`).join('');
+        const locations = zone ? locationsFor(zone, true) : [];
+        $('position-list').innerHTML = locations.length ? locations.map((location) => positionMarkup(zone, location)).join('') : `<div class="position-empty">${zone ? `“${escapeHtml(zone.name || '未命名类型')}”下面还没有具体位置。<br />请点击下方“添加一个位置”。` : '请先在上方建立一个储存区域类型。'}</div>`;
+        $('add-location').disabled = !zone;
+        $('add-five-locations').disabled = !zone;
+      }
+
+      function renderPhone() {
+        const zones = enabledZones();
+        if (!zones.some((zone) => zone.id === state.selectedZone)) state.selectedZone = zones[0]?.id || null;
+        const zone = zones.find((item) => item.id === state.selectedZone);
+        const locations = zone ? locationsFor(zone) : [];
+        if (!locations.some((location) => location.code === state.selectedLocation)) state.selectedLocation = null;
+
+        $('phone-tabs').innerHTML = state.enabled ? zones.map((item) => `<button class="phone-tab ${item.id === state.selectedZone ? 'selected' : ''}" data-phone-zone="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join('') : '';
+        $('phone-locations').innerHTML = state.enabled ? locations.map((location) => {
+          const stock = previewLocationStock[location.code] || { materials: 0, batches: 0 };
+          return `<button class="phone-location ${location.code === state.selectedLocation ? 'selected' : ''}" data-phone-location="${escapeHtml(location.code)}"><strong>${escapeHtml(location.code)}</strong><span>${stock.materials} 种物料 · ${stock.batches} 批</span></button>`;
+        }).join('') : '';
+
+        const empty = $('phone-empty');
+        if (!state.enabled) {
+          empty.hidden = false;
+          empty.textContent = '位置选择未启用，当前手机入库不要求选择储存位置。';
+        } else if (zones.length === 0 || locations.length === 0) {
+          empty.hidden = false;
+          empty.textContent = '没有可选位置。请联系管理员先配置并启用储存区域。';
+        } else {
+          empty.hidden = true;
+        }
+        $('phone-submit').disabled = state.enabled && !state.selectedLocation;
+        $('phone-submit').textContent = state.enabled && state.selectedLocation ? `确认入库 · ${state.selectedLocation}` : '确认入库';
+      }
+
+      function renderSummary() {
+        const zones = enabledZones();
+        $('zone-total').textContent = String(zones.length);
+        $('location-total').textContent = String(zones.reduce((total, zone) => total + locationsFor(zone).length, 0));
+        $('summary-state').textContent = state.enabled ? '手机入库可选' : '位置选择已关闭';
+        const problem = issues();
+        $('warning').textContent = problem;
+        $('warning').classList.toggle('visible', Boolean(problem));
+        $('save').disabled = Boolean(problem);
+        $('setup-next').disabled = Boolean(problem);
+        $('setup-finish').disabled = Boolean(problem);
+      }
+
+      function renderView() {
+        const daily = viewMode === 'daily';
+        const settings = viewMode === 'types';
+        const wizard = viewMode === 'setup';
+        const firstStep = wizard && setupStep === 1;
+        const secondStep = wizard && setupStep === 2;
+
+        $('phone-preview-panel').hidden = !previewOpen;
+        $('workspace-layout').classList.toggle('preview-open', previewOpen);
+        $('toggle-phone-preview').classList.toggle('active', previewOpen);
+        $('toggle-phone-preview').setAttribute('aria-label', previewOpen ? '关闭全局手机预览' : '打开全局手机预览');
+        $('toggle-phone-preview').innerHTML = `<span class="device-icon" aria-hidden="true">▯</span><span class="global-preview-label">${previewOpen ? '预览中' : '手机预览'}</span>`;
+        $('type-settings-section').hidden = !(settings || firstStep);
+        $('location-manager').hidden = !(daily || secondStep);
+        $('setup-guide').hidden = !wizard;
+        $('wizard-footer').hidden = !wizard;
+        $('open-setup').hidden = !daily;
+        $('open-types').hidden = !daily;
+        $('back-daily').hidden = daily;
+        $('reset').hidden = daily;
+        $('save').hidden = wizard;
+        $('setup-prev').hidden = !secondStep;
+        $('setup-next').hidden = !firstStep;
+        $('setup-finish').hidden = !secondStep;
+        $('side-warehouse').classList.toggle('active', daily);
+        $('side-settings').classList.toggle('active', !daily);
+        $('guide-step-1').classList.toggle('current', firstStep);
+        $('guide-step-1').classList.toggle('done', secondStep);
+        $('guide-step-2').classList.toggle('current', secondStep);
+
+        if (daily) {
+          $('crumb-parent').textContent = '仓储管理';
+          $('crumb-current').textContent = '储存位置';
+          $('page-title').textContent = '储存位置管理';
+          $('page-intro').textContent = '日常只维护实际位置：新增、改名、停用或调整编号。区域类型和编码规则在低频设置中单独维护。';
+          $('panel-title').textContent = '具体储存位置';
+          $('panel-subtitle').textContent = 'F006 · 日常维护';
+          $('mode-note').innerHTML = '<strong>日常维护入口：</strong>仓库新增货架、位置变更或临时停用时，在这里直接处理，不需要重新进入区域规则。';
+          $('locations-section-title').textContent = '储存区域';
+          return;
+        }
+
+        $('crumb-parent').textContent = '系统设置';
+        if (settings) {
+          $('crumb-current').textContent = '储存区域与规则';
+          $('page-title').textContent = '区域类型与编码规则';
+          $('page-intro').textContent = '只有新增温区、调整英文前缀或修改统一编号方式时才需要进入。具体位置继续在仓储管理中维护。';
+          $('panel-title').textContent = '区域类型与统一编码';
+          $('panel-subtitle').textContent = '低频维护 · 工厂管理员';
+          $('mode-note').innerHTML = '<strong>低频设置入口：</strong>这里维护“区域名称 + 英文前缀”这类基础定义，不把具体位置和类型混在一起。';
+          $('types-section-title').textContent = '储存区域类型';
+          return;
+        }
+
+        $('crumb-current').textContent = '首次配置向导';
+        $('page-title').textContent = '首次配置储存位置';
+        $('page-intro').textContent = '工厂首次启用时连续完成两步；配置完成后，系统默认回到高频的具体位置维护页面。';
+        $('panel-title').textContent = firstStep ? '第一步：配置区域类型和编号规则' : '第二步：建立首批具体位置';
+        $('panel-subtitle').textContent = firstStep ? '1 / 2 · 基础定义' : '2 / 2 · 实际位置';
+        $('types-section-title').textContent = '建立储存区域类型';
+        $('locations-section-title').textContent = '为每个区域建立实际位置';
+        $('mode-note').innerHTML = firstStep
+          ? '<strong>先定义类型：</strong>例如“干仓 + GC”“普通冻库 + DK”；这一步只建立类型，不要求填写位置数量。'
+          : '<strong>再建立位置：</strong>切换不同区域，逐个新增现场真实存在的 GC01、GC02、DK01 等位置。';
+        $('wizard-help').textContent = firstStep
+          ? '下一步将按区域类型建立首批实际位置。'
+          : '完成后默认进入具体位置管理，区域规则保留在低频设置中。';
+      }
+
+      function render() {
+        renderView();
+        syncControls();
+        renderZones();
+        renderPositionManager();
+        renderPhone();
+        renderSummary();
+      }
+
+      function showToast(message) {
+        $('toast').textContent = message;
+        $('toast').classList.add('visible');
+        window.clearTimeout(showToast.timeout);
+        showToast.timeout = window.setTimeout(() => $('toast').classList.remove('visible'), 2600);
+      }
+
+      function setPreviewOpen(open) {
+        previewOpen = open;
+        try { window.sessionStorage.setItem(PREVIEW_KEY, open ? '1' : '0'); } catch (_) { /* file preview fallback */ }
+        renderView();
+        renderPhone();
+      }
+      $('toggle-phone-preview').addEventListener('click', () => { setPreviewOpen(!previewOpen); });
+      $('close-phone-preview').addEventListener('click', () => { setPreviewOpen(false); });
+      $('open-types').addEventListener('click', () => { viewMode = 'types'; render(); });
+      $('open-setup').addEventListener('click', () => { viewMode = 'setup'; setupStep = 1; render(); });
+      $('back-daily').addEventListener('click', () => { viewMode = 'daily'; render(); });
+      $('side-warehouse').addEventListener('click', () => { viewMode = 'daily'; render(); });
+      $('side-settings').addEventListener('click', () => { viewMode = 'types'; render(); });
+      $('setup-prev').addEventListener('click', () => { setupStep = 1; render(); });
+      $('setup-next').addEventListener('click', () => {
+        if (issues()) { renderSummary(); return; }
+        setupStep = 2;
+        render();
+      });
+
+      $('master-switch').addEventListener('click', () => { state.enabled = !state.enabled; render(); });
+      for (const key of ['separator', 'digits', 'start']) {
+        $(key).addEventListener('change', (event) => {
+          state[key] = key === 'separator' ? event.target.value : Number(event.target.value);
+          state.selectedLocation = null;
+          render();
+        });
+      }
+
+      $('zones').addEventListener('input', (event) => {
+        const field = event.target.dataset.field;
+        if (!field) return;
+        const zone = findZone(event.target.dataset.zone);
+        if (!zone) return;
+
+        if (field === 'prefix') {
+          const cursor = event.target.selectionStart;
+          zone.prefix = normalizePrefix(event.target.value);
+          event.target.value = zone.prefix;
+          event.target.setSelectionRange(cursor, cursor);
+        } else {
+          const previousSuggestion = suggestPrefix(zone.name);
+          zone.name = event.target.value;
+          if (!zone.prefix || zone.prefix === previousSuggestion) {
+            const next = suggestPrefix(zone.name);
+            if (next) {
+              zone.prefix = next;
+              const prefixInput = $('prefix-' + zone.id);
+              if (prefixInput) prefixInput.value = next;
+            }
+          }
+        }
+        renderPositionManager();
+        renderPhone();
+        renderSummary();
+      });
+
+      $('zones').addEventListener('click', (event) => {
+        const target = event.target.closest('[data-action]');
+        if (!target) return;
+        const zone = findZone(target.dataset.zone);
+        if (!zone) return;
+        switch (target.dataset.action) {
+          case 'toggle-zone': zone.enabled = !zone.enabled; break;
+          case 'delete-zone':
+            if (!window.confirm(`删除“${zone.name || '未命名区域'}”？这只会调整当前预览，不会修改真实库存。`)) return;
+            state.zones = state.zones.filter((item) => item.id !== zone.id);
+            break;
+          case 'manage-zone':
+            state.managedZone = zone.id;
+            if (viewMode === 'setup') setupStep = 2;
+            else viewMode = 'daily';
+            break;
+          default: return;
+        }
+        render();
+      });
+
+      $('add-zone').addEventListener('click', () => {
+        const id = 'custom-' + Date.now();
+        state.zones.push({ id, name: '', prefix: '', enabled: true, icon: symbols[state.zones.length % symbols.length], locations: [] });
+        state.managedZone = id;
+        render();
+        $('name-' + id).focus();
+      });
+
+      $('type-filters').addEventListener('click', (event) => {
+        const target = event.target.closest('[data-manage-zone]');
+        if (!target) return;
+        state.managedZone = target.dataset.manageZone;
+        state.selectedZone = target.dataset.manageZone;
+        state.selectedLocation = null;
+        renderZones();
+        renderPositionManager();
+        renderPhone();
+      });
+
+      function appendLocations(count) {
+        const zone = managedZone();
+        if (!zone) return;
+        let next = zone.locations.length ? Math.max(...zone.locations.map((location) => Number(location.number))) + 1 : Number(state.start);
+        for (let index = 0; index < count; index += 1) {
+          zone.locations.push({ id: `${zone.id}-${Date.now()}-${index}-${next}`, number: next, label: '', enabled: true });
+          next += 1;
+        }
+        state.selectedZone = zone.id;
+        render();
+        const list = $('position-list');
+        list.scrollTop = list.scrollHeight;
+        showToast(`已在“${zone.name || '未命名类型'}”下面新增 ${count} 个具体储存位置。`);
+      }
+
+      $('add-location').addEventListener('click', () => appendLocations(1));
+      $('add-five-locations').addEventListener('click', () => appendLocations(5));
+
+      $('position-list').addEventListener('input', (event) => {
+        const field = event.target.dataset.positionField;
+        if (!field) return;
+        const zone = findZone(event.target.dataset.zone);
+        const location = zone?.locations.find((item) => item.id === event.target.dataset.location);
+        if (!zone || !location) return;
+        if (field === 'number') {
+          const digits = event.target.value.replace(/[^0-9]/g, '').slice(0, 4);
+          event.target.value = digits;
+          location.number = digits === '' ? Number.NaN : Number(digits);
+        } else {
+          location.label = event.target.value;
+        }
+        renderPhone();
+        renderSummary();
+      });
+
+      $('position-list').addEventListener('focusout', (event) => {
+        if (event.target.dataset.positionField !== 'number') return;
+        const zone = findZone(event.target.dataset.zone);
+        const location = zone?.locations.find((item) => item.id === event.target.dataset.location);
+        if (location && Number.isInteger(location.number)) event.target.value = String(location.number).padStart(state.digits, '0');
+      });
+
+      $('position-list').addEventListener('click', (event) => {
+        const target = event.target.closest('[data-position-action]');
+        if (!target) return;
+        const zone = findZone(target.dataset.zone);
+        const location = zone?.locations.find((item) => item.id === target.dataset.location);
+        if (!zone || !location) return;
+        if (target.dataset.positionAction === 'toggle') {
+          location.enabled = !location.enabled;
+        } else if (target.dataset.positionAction === 'delete') {
+          zone.locations = zone.locations.filter((item) => item.id !== location.id);
+        }
+        render();
+      });
+
+      $('phone-tabs').addEventListener('click', (event) => {
+        const target = event.target.closest('[data-phone-zone]');
+        if (!target) return;
+        state.selectedZone = target.dataset.phoneZone;
+        state.selectedLocation = null;
+        renderPhone();
+      });
+
+      $('phone-locations').addEventListener('click', (event) => {
+        const target = event.target.closest('[data-phone-location]');
+        if (!target) return;
+        state.selectedLocation = target.dataset.phoneLocation;
+        renderPhone();
+      });
+
+      $('phone-submit').addEventListener('click', () => {
+        if (state.enabled && !state.selectedLocation) return;
+        showToast(state.enabled ? `演示：精修猪五花将入库到 ${state.selectedLocation}，未提交真实业务数据。` : '演示：当前未启用储存位置选择，未提交真实业务数据。');
+      });
+
+      function savePreview(successMessage) {
+        const problem = issues();
+        if (problem) { renderSummary(); return false; }
+        try {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          showToast(successMessage || '配置已保存在当前浏览器预览中；没有写入服务器、合并或部署。');
+        } catch (_) {
+          showToast('当前预览已更新；浏览器不允许本地持久化，没有写入服务器。');
+        }
+        return true;
+      }
+
+      $('save').addEventListener('click', () => { savePreview(); });
+      $('setup-finish').addEventListener('click', () => {
+        if (!savePreview('首次配置已完成，现在进入日常储存位置管理；仅保存到当前浏览器。')) return;
+        viewMode = 'daily';
+        setupStep = 1;
+        render();
+      });
+
+      $('reset').addEventListener('click', () => {
+        state = initialState();
+        try { window.localStorage.removeItem(STORAGE_KEY); } catch (_) { /* ignore */ }
+        render();
+        showToast('已恢复冷藏、普通冻库、急冻、干仓四个示例区域。');
+      });
+
+      render();
+    })();
+  </script>
+</body>
+</html>

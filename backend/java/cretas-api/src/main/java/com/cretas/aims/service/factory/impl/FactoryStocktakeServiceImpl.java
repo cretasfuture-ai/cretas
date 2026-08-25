@@ -1034,6 +1034,11 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
             stocktake.setWorkflowInstanceId(instance.get().getId());
         } else {
+            if (normalizeAndValidateEvidence(stocktake)) {
+                throw new BusinessException(409, "存在数量差异，必须先配置并发布库存调整审批流程")
+                        .withCode("STOCKTAKE_APPROVAL_WORKFLOW_REQUIRED")
+                        .withHint("请由工厂管理员在审批流程中配置并发布库存调整审批");
+            }
             stocktake.setStatus(FactoryStocktake.Status.APPROVED);
             stocktake.setApprovedBy(userId);
             stocktake.setApprovedAt(LocalDateTime.now());

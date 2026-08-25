@@ -26,6 +26,7 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from 'react-i18next';
 import { WHInboundStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
+import { warehouseLayoutApiClient } from "../../../services/api/warehouseLayoutApiClient";
 import { handleError } from "../../../utils/errorHandler";
 
 /**
@@ -86,6 +87,8 @@ export function WHPutawayScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [batchInfo, setBatchInfo] = useState<BatchInfo | null>(null);
+  const [locationOptions, setLocationOptions] = useState<LocationOption[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
 
   // 加载批次数据
   const loadBatchData = useCallback(async () => {
@@ -95,8 +98,25 @@ export function WHPutawayScreen() {
     }
 
     try {
-      const response = await materialBatchApiClient.getBatchById(batchId) as
-        { data?: MaterialBatch } | MaterialBatch | undefined;
+      const [response, layout] = await Promise.all([
+        materialBatchApiClient.getBatchById(batchId),
+        warehouseLayoutApiClient.getLayout(),
+      ]) as [
+        { data?: MaterialBatch } | MaterialBatch | undefined,
+        Awaited<ReturnType<typeof warehouseLayoutApiClient.getLayout>>
+      ];
+
+      setLocationOptions(layout.locations.map((location) => {
+        const zone = layout.zones.find((candidate) => candidate.id === location.zoneId);
+        return {
+          id: location.code,
+          name: `${location.code} · ${location.name}`,
+          zone: zone?.name ?? '',
+          capacity: 0,
+          used: 0,
+          temperature: zone?.name ?? '',
+        };
+      }));
 
       const batch = (response as { data?: MaterialBatch })?.data ?? (response as MaterialBatch);
 
@@ -123,38 +143,6 @@ export function WHPutawayScreen() {
     loadBatchData();
   }, [loadBatchData]);
 
-  // 推荐库位（TODO: 后续接入库位管理 API）
-  const locationOptions: LocationOption[] = [
-    {
-      id: "1",
-      name: "A区-冷藏库-01",
-      zone: "A区",
-      capacity: 500,
-      used: 350,
-      temperature: "0°C ~ 4°C",
-      recommended: true,
-    },
-    {
-      id: "2",
-      name: "A区-冷藏库-02",
-      zone: "A区",
-      capacity: 500,
-      used: 420,
-      temperature: "0°C ~ 4°C",
-    },
-    {
-      id: "3",
-      name: "A区-冷藏库-03",
-      zone: "A区",
-      capacity: 500,
-      used: 280,
-      temperature: "-2°C ~ 2°C",
-    },
-  ];
-
-  const [selectedLocation, setSelectedLocation] = useState<string | null>(
-    locationOptions.find((l) => l.recommended)?.id ?? null
-  );
   const [actualQuantity, setActualQuantity] = useState("");
   const [remarks, setRemarks] = useState("");
 
@@ -293,6 +281,10 @@ export function WHPutawayScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t('inbound.putaway.selectLocation')}</Text>
 
+          {locationOptions.length === 0 && (
+            <Text style={styles.metaText}>暂无储存位置，请先在网页端配置</Text>
+          )}
+
           {locationOptions.map((location) => (
             <TouchableOpacity
               key={location.id}
@@ -331,7 +323,7 @@ export function WHPutawayScreen() {
                   />
                   <Text style={styles.metaText}>{location.temperature}</Text>
                 </View>
-                <View style={styles.metaItem}>
+                {location.capacity > 0 && <View style={styles.metaItem}>
                   <MaterialCommunityIcons
                     name="package-variant"
                     size={14}
@@ -340,8 +332,8 @@ export function WHPutawayScreen() {
                   <Text style={styles.metaText}>
                     {location.used}/{location.capacity} kg
                   </Text>
-                </View>
-                <View style={styles.capacityBar}>
+                </View>}
+                {location.capacity > 0 && <View style={styles.capacityBar}>
                   <View
                     style={[
                       styles.capacityFill,
@@ -350,7 +342,7 @@ export function WHPutawayScreen() {
                       },
                     ]}
                   />
-                </View>
+                </View>}
               </View>
             </TouchableOpacity>
           ))}

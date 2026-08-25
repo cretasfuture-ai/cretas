@@ -1,5 +1,12 @@
 # Dispatch 完成记录 — 2026-08-25
 
+## `ENH-WAREHOUSE-STORAGE-LAYOUT-SPOTCHECK-20260825` — `review`
+
+- **实现范围**：工厂级储存区域、英文前缀和独立储存位置；复用现有 JSONB 工厂配置持久化楼层、货架、层位和平面图；接入真实视觉模型识别草图，以及原料/成品/包材/辅材现场库存、批次、剩余量和在库时长。Web 仓储入口与 RN 库位、上架和平面图共享同一配置，无 Flyway、Entity、Repository 变更。
+- **权限与审批**：工厂管理员和仓管主管可编辑仓储空间及运行 AI 识别，其他角色只读；仓管人员可直接调整同厂批次位置。盘盈/盘亏未配置库存调整审批时 fail closed，保留既有 OA 禁止自己审批规则；无差异盘点维持原行为。
+- **当前证据**：真实 Vue 浏览器已分别覆盖工厂管理员、仓管主管和只读角色；Web 仓储目标测试 7/7，Web Vue 类型检查通过，RN 全量 TypeScript 检查通过，Java release preflight 已通过。最终 Java 测试、唯一可信 Java/Web 构建、PR/main、生产部署与 OTA 状态以本次独立测试/发布回执为准，不在此预先声明成功。
+- **Base SHA**：`bd755e3c50aff5fca0f94091bf5b11cea9f3ab62`。Scope 已在同一候选提交中归档并释放；生产业务数据写入不属于本任务。
+
 ## `ML-LIUSHANMEN-TRAY-AWARE-HARD-NEGATIVE-20260825` — `review complete`
 
 - **实现**：VisionLab 新增默认关闭的 `training.isolated_missing_repeat`。只对任务级划分后进入 train、人工确认缺一个类别且只有一个互补类别框的单目标裁图重复采样；validation 永不复制，多框邻盘歧义和两类都缺的空框图不加权，声明缺失类别却又存在该类别框时直接失败。旧数字 `0/1` 与新字符串类别格式均受支持；权重策略进入不可变 dataset ID，默认值 `1` 保持既有 ID，代码合入不会自动触发重训。

@@ -1,6 +1,7 @@
 package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.entity.factory.FactoryStocktake;
+import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
@@ -24,7 +25,9 @@ import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -168,6 +171,37 @@ class StocktakeWorkflowIntegrationTest {
 
         assertThat(stocktake.getApprovedBy()).isEqualTo(USER_ID);
         assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPLIED);
+    }
+
+    @Test
+    @DisplayName("数量盘盈未配置审批流程时拒绝自动通过")
+    void submitForApproval_surplusWithoutWorkflow_failsClosed() {
+        assertQuantityDifferenceRequiresWorkflow("12", "10");
+    }
+
+    @Test
+    @DisplayName("数量盘亏未配置审批流程时拒绝自动通过")
+    void submitForApproval_shortageWithoutWorkflow_failsClosed() {
+        assertQuantityDifferenceRequiresWorkflow("8", "10");
+    }
+
+    private void assertQuantityDifferenceRequiresWorkflow(String actual, String system) {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.COUNTING);
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setSystemQty(new BigDecimal(system));
+        item.setActualQty(new BigDecimal(actual));
+        stocktake.setItems(List.of(item));
+        when(stocktakeRepo.findById(STOCKTAKE_ID)).thenReturn(Optional.of(stocktake));
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY_ID), eq("INVENTORY_ADJUSTMENT"),
+                eq(STOCKTAKE_ID), any(), eq(USER_ID))).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.submitForApproval(STOCKTAKE_ID, FACTORY_ID, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(error -> ((BusinessException) error).getErrorCode())
+                .isEqualTo("STOCKTAKE_APPROVAL_WORKFLOW_REQUIRED");
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.COUNTING);
+        verify(stocktakeRepo, never()).save(any());
     }
 
     // -------------------------------------------------------

@@ -10,6 +10,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { Text, Surface, Button, useTheme } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,6 +19,7 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
+import { warehouseLayoutApiClient, WarehouseLayoutConfiguration } from "../../../services/api/warehouseLayoutApiClient";
 import { handleError } from "../../../utils/errorHandler";
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
@@ -53,16 +55,25 @@ export function WHLocationManageScreen() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [totalLocations, setTotalLocations] = useState(0);
   const [usedLocations, setUsedLocations] = useState(0);
+  const [warehouseLayout, setWarehouseLayout] = useState<WarehouseLayoutConfiguration | null>(null);
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapFloorId, setMapFloorId] = useState('');
+  const [mapRackId, setMapRackId] = useState('');
 
   // 从批次数据计算库位信息
   const loadLocationData = useCallback(async () => {
     try {
-      const response = await materialBatchApiClient.getMaterialBatches({
-        status: 'available',
-        size: 200
-      }) as { data?: { content?: MaterialBatch[] } | MaterialBatch[] };
+      const [response, layout] = await Promise.all([
+        materialBatchApiClient.getMaterialBatches({ status: 'available', size: 200 }),
+        warehouseLayoutApiClient.getLayout(),
+      ]) as [
+        { data?: { content?: MaterialBatch[] } | MaterialBatch[] },
+        Awaited<ReturnType<typeof warehouseLayoutApiClient.getLayout>>,
+      ];
 
       const allBatches: MaterialBatch[] = (response.data as { content?: MaterialBatch[] })?.content || response.data as MaterialBatch[] || [];
+      setWarehouseLayout(layout);
+      if (layout.floors[0]) setMapFloorId(layout.floors[0].id);
 
       // 按库位分组批次
       const locationMap = new Map<string, {
@@ -89,62 +100,38 @@ export function WHLocationManageScreen() {
       });
 
       // 生成库位列表
-      const locationList: Location[] = Array.from(locationMap.entries())
-        .filter(([loc]) => loc !== '未分配')
-        .map(([loc, data]) => {
-          // 根据库位名称判断区域
-          const zoneId = loc.startsWith('B') ? 'B' : 'A';
-          const isUsing = data.totalQuantity > 0;
-          const capacity = 500; // 默认容量
-          const temperature = zoneId === 'B' ? -18 : 2; // 冷冻-18°C, 冷藏2°C
+      const locationList: Location[] = layout.locations.map((location) => {
+        const data = locationMap.get(location.code);
+        return {
+          id: location.code,
+          name: location.name === location.code ? location.code : `${location.code} · ${location.name}`,
+          zoneId: location.zoneId,
+          status: data?.batches.length ? 'using' : 'empty',
+          capacity: 0,
+          used: data?.totalQuantity ?? 0,
+          temperature: 0,
+          tempNormal: true,
+          items: data?.materials.size
+            ? `${Array.from(data.materials).slice(0, 2).join('、')}${data.materials.size > 2 ? '等' : ''} · ${data.batches.length}批`
+            : undefined,
+        };
+      });
 
-          return {
-            id: loc,
-            name: loc,
-            zoneId,
-            status: isUsing ? 'using' as const : 'empty' as const,
-            capacity,
-            used: data.totalQuantity,
-            temperature,
-            tempNormal: true,
-            items: data.materials.size > 0
-              ? `${Array.from(data.materials).slice(0, 2).join('、')}${data.materials.size > 2 ? '等' : ''} x${data.batches.length}批`
-              : undefined,
-          };
-        });
-
-      // 计算区域统计
-      const zoneALocs = locationList.filter(l => l.zoneId === 'A');
-      const zoneBLocs = locationList.filter(l => l.zoneId === 'B');
-
-      const zoneStats: Zone[] = [
-        {
-          id: 'A',
-          name: 'A区 - 冷藏库',
-          tempRange: '0°C ~ 4°C',
-          totalLocations: Math.max(zoneALocs.length, 5),
-          usedLocations: zoneALocs.filter(l => l.status === 'using').length,
-          capacity: Math.round(
-            zoneALocs.reduce((sum, l) => sum + (l.used / l.capacity) * 100, 0) /
-            Math.max(zoneALocs.length, 1)
-          ),
-        },
-        {
-          id: 'B',
-          name: 'B区 - 冷冻库',
-          tempRange: '-20°C ~ -15°C',
-          totalLocations: Math.max(zoneBLocs.length, 5),
-          usedLocations: zoneBLocs.filter(l => l.status === 'using').length,
-          capacity: Math.round(
-            zoneBLocs.reduce((sum, l) => sum + (l.used / l.capacity) * 100, 0) /
-            Math.max(zoneBLocs.length, 1)
-          ),
-        },
-      ];
+      const zoneStats: Zone[] = layout.zones.map((zone) => {
+        const zoneLocations = locationList.filter((location) => location.zoneId === zone.id);
+        return {
+          id: zone.id,
+          name: zone.name,
+          tempRange: zone.prefix,
+          totalLocations: zoneLocations.length,
+          usedLocations: zoneLocations.filter((location) => location.status === 'using').length,
+          capacity: zoneLocations.reduce((total, location) => total + (locationMap.get(location.id)?.batches.length ?? 0), 0),
+        };
+      });
 
       setZones(zoneStats);
       setLocations(locationList);
-      setTotalLocations(locationList.length || 10);
+      setTotalLocations(locationList.length);
       setUsedLocations(locationList.filter(l => l.status === 'using').length);
 
     } catch (error) {
@@ -158,13 +145,12 @@ export function WHLocationManageScreen() {
     loadLocationData();
   }, [loadLocationData]);
 
-  // 按区域过滤库位
-  const zoneALocations = locations.filter(l => l.zoneId === 'A');
-  const zoneBLocations = locations.filter(l => l.zoneId === 'B');
-
   const getUsagePercent = (used: number, capacity: number) => {
-    return Math.round((used / capacity) * 100);
+    return capacity > 0 ? Math.round((used / capacity) * 100) : 0;
   };
+
+  const mapFloor = warehouseLayout?.floors.find((floor) => floor.id === mapFloorId);
+  const mapRack = mapFloor?.racks.find((rack) => rack.id === mapRackId);
 
   const getCapacityColor = (percent: number) => {
     if (percent > 100) return "#f44336";
@@ -188,8 +174,8 @@ export function WHLocationManageScreen() {
           <Text style={styles.zoneStatLabel}>使用中</Text>
         </View>
         <View style={styles.zoneStat}>
-          <Text style={styles.zoneStatValue}>{zone.capacity}%</Text>
-          <Text style={styles.zoneStatLabel}>容量</Text>
+          <Text style={styles.zoneStatValue}>{zone.capacity}</Text>
+          <Text style={styles.zoneStatLabel}>批次</Text>
         </View>
       </View>
     </Surface>
@@ -232,12 +218,12 @@ export function WHLocationManageScreen() {
         </View>
 
         <View style={styles.locationContent}>
-          <View style={styles.locationRow}>
+          {location.capacity > 0 && <View style={styles.locationRow}>
             <Text style={styles.locationLabel}>容量</Text>
             <Text style={styles.locationValue}>{location.capacity} kg</Text>
-          </View>
+          </View>}
 
-          {location.status === "using" && (
+          {location.status === "using" && location.capacity > 0 && (
             <View style={styles.locationRow}>
               <Text style={styles.locationLabel}>已用</Text>
               <Text
@@ -251,7 +237,7 @@ export function WHLocationManageScreen() {
             </View>
           )}
 
-          <View style={styles.locationRow}>
+          {location.temperature !== 0 && <View style={styles.locationRow}>
             <Text style={styles.locationLabel}>温度</Text>
             <Text
               style={[
@@ -261,7 +247,7 @@ export function WHLocationManageScreen() {
             >
               {location.temperature}°C {location.tempNormal ? "✓" : "!"}
             </Text>
-          </View>
+          </View>}
 
           {location.items && (
             <View style={styles.locationRow}>
@@ -271,7 +257,7 @@ export function WHLocationManageScreen() {
           )}
         </View>
 
-        {location.status === "using" && (
+        {location.status === "using" && location.capacity > 0 && (
           <View style={styles.capacityBarContainer}>
             <View
               style={[
@@ -338,20 +324,31 @@ export function WHLocationManageScreen() {
           {zones.map(renderZoneCard)}
         </View>
 
-        {/* A区库位列表 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>A区 - 冷藏库</Text>
-          {zoneALocations.map(renderLocationCard)}
-        </View>
+        {zones.map((zone) => (
+          <View key={zone.id} style={styles.section}>
+            <Text style={styles.sectionTitle}>{zone.name} · {zone.tempRange}</Text>
+            {locations.filter((location) => location.zoneId === zone.id).map(renderLocationCard)}
+          </View>
+        ))}
 
-        {/* B区库位列表 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>B区 - 冷冻库</Text>
-          {zoneBLocations.map(renderLocationCard)}
-        </View>
+        {zones.length === 0 && (
+          <View style={styles.section}>
+            <Text style={styles.loadingText}>暂无储存位置，请先在网页端配置</Text>
+          </View>
+        )}
 
         {/* 操作按钮 */}
         <View style={styles.actionButtons}>
+          {warehouseLayout && warehouseLayout.floors.length > 0 && (
+            <Button
+              mode="contained"
+              icon="floor-plan"
+              onPress={() => setMapVisible(true)}
+              style={[styles.actionButton, { marginBottom: 12 }]}
+            >
+              仓库平面图
+            </Button>
+          )}
           <Button
             mode="outlined"
             onPress={() => navigation.navigate("WHTempMonitor")}
@@ -364,6 +361,44 @@ export function WHLocationManageScreen() {
 
         <View style={{ height: 20 }} />
       </ScrollView>
+
+      <Modal visible={mapVisible} animationType="slide" supportedOrientations={["portrait", "landscape"]} onRequestClose={() => setMapVisible(false)}>
+        <SafeAreaView style={styles.mapContainer}>
+          <View style={styles.mapHeader}>
+            <TouchableOpacity onPress={() => setMapVisible(false)}><MaterialCommunityIcons name="arrow-left" size={24} color="#17243a" /></TouchableOpacity>
+            <Text style={styles.mapTitle}>仓库平面图</Text>
+            <View style={{ width: 24 }} />
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.floorTabs}>
+            {warehouseLayout?.floors.map((floor) => (
+              <TouchableOpacity key={floor.id} onPress={() => { setMapFloorId(floor.id); setMapRackId(''); }} style={[styles.floorTab, floor.id === mapFloorId && styles.floorTabActive]}>
+                <Text style={styles.floorTabText}>{floor.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <ScrollView horizontal style={styles.mapCanvasScroll}>
+            <View style={styles.mapCanvas}>
+              {mapFloor?.racks.map((rack) => (
+                <TouchableOpacity key={rack.id} onPress={() => setMapRackId(rack.id)} style={[styles.mapRack, { left: rack.x, top: rack.y, width: rack.width, minHeight: rack.height }, rack.id === mapRackId && styles.mapRackActive]}>
+                  <Text style={styles.mapRackName}>{rack.name}</Text>
+                  <Text style={styles.mapRackMeta}>{warehouseLayout?.zones.find((zone) => zone.id === rack.zoneId)?.prefix} · {rack.levels} 层</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+          {mapRack && (
+            <View style={styles.mapShelfPanel}>
+              <Text style={styles.mapShelfTitle}>{mapRack.name}</Text>
+              {Array.from({ length: mapRack.levels }, (_, index) => mapRack.levels - index).map((level) => (
+                <View key={level} style={styles.mapShelfRow}>
+                  <Text style={styles.mapShelfLevel}>{level}F</Text>
+                  <Text style={styles.mapShelfCodes}>{warehouseLayout?.locations.filter((location) => location.rackId === mapRack.id && location.level === level).map((location) => location.code).join('  ·  ') || '空闲'}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -546,6 +581,24 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderColor: "#4CAF50",
   },
+  mapContainer: { flex: 1, backgroundColor: '#f6f8fb' },
+  mapHeader: { height: 56, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff' },
+  mapTitle: { fontSize: 18, fontWeight: '600', color: '#17243a' },
+  floorTabs: { maxHeight: 58, paddingHorizontal: 14, paddingTop: 10 },
+  floorTab: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 9, marginRight: 9, backgroundColor: '#fff' },
+  floorTabActive: { backgroundColor: '#dbeafe' },
+  floorTabText: { fontSize: 14, color: '#17243a' },
+  mapCanvasScroll: { flex: 1, margin: 14, backgroundColor: '#fff', borderRadius: 12 },
+  mapCanvas: { width: 900, minHeight: 420, position: 'relative' },
+  mapRack: { position: 'absolute', padding: 12, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 10 },
+  mapRackActive: { borderWidth: 2, borderColor: '#2563eb' },
+  mapRackName: { color: '#17243a', fontSize: 14, fontWeight: '600' },
+  mapRackMeta: { color: '#607089', fontSize: 12, marginTop: 5 },
+  mapShelfPanel: { marginHorizontal: 14, marginBottom: 14, padding: 14, backgroundColor: '#fff', borderRadius: 12 },
+  mapShelfTitle: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
+  mapShelfRow: { minHeight: 35, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e5eaf2' },
+  mapShelfLevel: { width: 40, color: '#607089', fontSize: 13 },
+  mapShelfCodes: { color: '#17243a', fontSize: 13 },
 });
 
 export default WHLocationManageScreen;
