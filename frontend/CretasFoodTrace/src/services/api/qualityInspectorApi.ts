@@ -343,22 +343,25 @@ class QualityInspectorApiClient {
     return response.data;
   }
 
-  /**
-   * 生成质检报告
+  /*
+   * APP-CONTRACT-006 (2026-08-25): `generateReport()` 已删除。
+   *
+   * 它打的是 `POST /api/mobile/{factoryId}/reports/quality/generate` ——
+   * 后端**全仓零命中**。ReportController 的类映射是 `/api/mobile/{factoryId}/reports`,
+   * 其下唯一的 @PostMapping 是 `/custom` ⇒ 这个调用必然 404,
+   * 也就是说这个功能**不可能成功过**。
+   *
+   * ⛔ 不要把它改指向 `GET /reports/export/pdf` 或 `/export/excel`:
+   *    那两个端点在 ReportExportServiceImpl 里是**桩**, 返回 HTTP 200 +
+   *    `Content-Disposition: filename=report.pdf`, 而正文是字符串
+   *    "PDF export not yet implemented" ⇒ 用户会下载到一个打不开的 PDF,
+   *    而前端会把它当成功。404 是诚实的失败, 200 + 假 PDF 是无声的失败。
+   *
+   * 唯一的调用方 QIReportScreen 已改成明示「尚未开放」, 详见该文件头部注释。
+   * 后端 export 真正实现之后再加回来 —— 届时需要一并解决:
+   * 日期区间过滤 (quality 分支现在忽略 parameters, 取的是全时段计数) 与
+   * maskPrice (exportReportToPDF 的签名里没有它, dashboard 分支会打印金额)。
    */
-  async generateReport(options: {
-    type: 'daily' | 'weekly' | 'monthly' | 'custom';
-    format: 'pdf' | 'excel';
-    options: string[];
-    startDate?: string;
-    endDate?: string;
-  }): Promise<{ url: string; filename: string }> {
-    const response = await apiClient.post<QIApiResponse<{ url: string; filename: string }>>(
-      `${this.getBasePath()}/reports/quality/generate`,
-      options
-    );
-    return response.data;
-  }
 
   // ============================================
   // 考勤相关 API

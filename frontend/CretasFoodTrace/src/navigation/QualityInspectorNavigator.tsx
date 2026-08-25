@@ -239,7 +239,7 @@ function AnalysisStack() {
       <Stack.Screen
         name="QIReport"
         component={QIReportScreen}
-        options={{ title: '生成报告' }}
+        options={{ title: '报告导出' }}
       />
     </Stack.Navigator>
   );

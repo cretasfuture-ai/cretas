@@ -1,10 +1,12 @@
 /**
  * 「禁止降级处理 —— 不返回假数据, 明确显示错误」(CLAUDE.md 核心原则 1) 的回归闸。
  *
- * 三个缺陷是同一条原则的三次违反, 所以放在同一个文件里:
+ * 四个缺陷是同一条原则的四次违反, 所以放在同一个文件里:
  *   1. QITrendScreen  请求失败时用 Math.random() 编一整屏合格率/评分/等级分布
  *   2. QIFormScreen   打开就是一份预填好的 93 分合格报告, 唯一提交闸是 `if (!batch) return`
  *   3. StocktakingExecuteScreen  账面数渲染在实盘输入框正上方 (盘点被锚定)
+ *   4. QIReportScreen 弹「报告生成成功, 已保存到文件」, 而后端那个端点根本不存在
+ *                     ——「不返回假数据」的另一面是**不要声称一个没发生的结果**
  *
  * ⚠️ 源码断言一律**先剥注释**再扫。
  * 这几个文件的修复注释里逐字写着 `Math.random()`、`18/20/16/19/20`、
@@ -33,6 +35,31 @@ function readCode(relativePath: string): string {
 
 function readRaw(relativePath: string): string {
   return fs.readFileSync(path.join(SCREENS, relativePath), 'utf8');
+}
+
+type Locale = 'zh-CN' | 'en-US';
+
+function rawLocale(locale: Locale): string {
+  return fs.readFileSync(
+    path.resolve(__dirname, `../../../i18n/locales/${locale}/quality.json`),
+    'utf8',
+  );
+}
+
+function readLocale(locale: Locale): Record<string, any> {
+  return JSON.parse(rawLocale(locale));
+}
+
+function readApi(): string {
+  return fs.readFileSync(
+    path.resolve(__dirname, '../../../services/api/qualityInspectorApi.ts'),
+    'utf8',
+  );
+}
+
+/** 按 `a.b.c` 取值; 取不到返回 undefined (不兜底成空串 —— 那会把"缺失"读成"有")。 */
+function resolveKey(obj: Record<string, any>, key: string): unknown {
+  return key.split('.').reduce<any>((acc, part) => (acc == null ? undefined : acc[part]), obj);
 }
 
 // ============================================================
@@ -208,5 +235,107 @@ describe('Stocktaking counting screens do not anchor the counter', () => {
     const systemQtyIndex = list.indexOf('r.systemQuantity');
     const guardIndex = list.indexOf("r.status === 'COMPLETED'");
     expect(systemQtyIndex).toBeGreaterThan(guardIndex);
+  });
+});
+
+// ============================================================
+// 缺陷 4: 报告导出屏 —— 声称一个从未发生的结果
+//
+// 「不返回假数据」的另一面: **不要声称一个没发生的结果**。
+// 这个屏原来弹「报告生成成功, 已保存到文件」, 而
+//   (a)「查看报告」按钮的实现是 console.log;
+//   (b) 它调的 POST /reports/quality/generate 后端全仓零命中 ⇒ 必然 404,
+//       也就是这个成功文案**一次都没有真的出现过的前提**;
+//   (c) 后端那两个 GET /reports/export/* 端点是桩 —— 返回 200 +
+//       filename=report.pdf, 正文是 "PDF export not yet implemented"。
+// 所以这个屏既不能报成功, 也不能改指向 (c) —— 那是把一个诚实的 404
+// 换成一个无声的假 PDF。
+// ============================================================
+describe('QIReportScreen does not claim a result that never happened', () => {
+  const code = readCode('quality-inspector/QIReportScreen.tsx');
+  const api = stripComments(readApi());
+  const zh = readLocale('zh-CN');
+  const en = readLocale('en-US');
+
+  it('has no fake "view report" action — the old one was a console.log', () => {
+    expect(code).not.toContain('console.log');
+    expect(code).not.toContain('Open report');
+  });
+
+  it('does not call an endpoint the backend does not expose', () => {
+    expect(code).not.toContain('generateReport(');
+    expect(api).not.toContain('/reports/quality/generate');
+    // 阳性对照: 剥注释后 api 里仍有真实端点 —— 证明上一条不是"把文件读空了"
+    expect(api).toContain('/processing/quality/trends');
+  });
+
+  it('is not wired to the export stubs — they answer 200 with a fake PDF', () => {
+    // 桩返回 Content-Disposition: filename=report.pdf 而正文是一句英文,
+    // 用户会下载到一个打不开的 PDF 而屏幕报成功。404 是诚实的失败,
+    // 200 + 假 PDF 是无声的失败 —— 后者更糟, 所以这条闸钉死不许接。
+    expect(code).not.toContain('/reports/export/');
+    expect(api).not.toContain('/reports/export/');
+  });
+
+  it('no longer promises a saved file', () => {
+    for (const [name, dict] of [['zh-CN', zh], ['en-US', en]] as const) {
+      expect({ name, generateSuccess: dict.report.generateSuccess }).toEqual({
+        name,
+        generateSuccess: undefined,
+      });
+      expect(dict.report.viewReport).toBeUndefined();
+      expect(dict.report.generateFailed).toBeUndefined();
+    }
+    // 承诺的关键词在整份 locale 里都不许再出现 (不止那一个键)
+    expect(JSON.stringify(zh)).not.toContain('已保存到文件');
+    expect(JSON.stringify(en)).not.toContain('saved to file');
+    // 阴性对照: 取而代之的说明必须存在 —— 否则这只是"删干净了"而不是"换对了"
+    expect(typeof zh.report.unavailableTitle).toBe('string');
+    expect(typeof zh.report.unavailableBody).toBe('string');
+    expect(typeof en.report.unavailableTitle).toBe('string');
+  });
+
+  it('resolves every i18n key it renders — a missing key renders as the key string itself', () => {
+    /*
+     * 这个屏原来的 Alert 标题是 t('clock.clockSuccess') / t('clock.clockFailed')
+     * / t('clock.alert')。quality.json 当时有**两个** "clock" 块, JSON 重复键
+     * 后者胜出, 而这三个键只在**前一个(死的)**块里 ⇒ i18next 回退成打印键名,
+     * 用户看到的标题字面就是 `clock.clockSuccess`。
+     *
+     * 所以这条不守"别用考勤的键"这个字面, 守的是**性质**: 屏幕渲染的每个键
+     * 都必须真的解析得出来。
+     */
+    const keys = [...code.matchAll(/\bt\(\s*'([^']+)'/g)]
+      .map((m) => m[1])
+      .filter((k): k is string => typeof k === 'string');
+    // 仪器自检: 正则必须真的抓到键, 否则下面的循环是空转而这条恒绿
+    expect(keys.length).toBeGreaterThanOrEqual(7);
+
+    for (const key of keys) {
+      expect({ key, zh: typeof resolveKey(zh, key) }).toEqual({ key, zh: 'string' });
+      expect({ key, en: typeof resolveKey(en, key) }).toEqual({ key, en: 'string' });
+    }
+
+    // 阳性对照: 同一个解析器面对不存在的键必须给 undefined, 否则上面全是恒真
+    expect(resolveKey(zh, 'report.noSuchKeyExists')).toBeUndefined();
+    // 当初漏掉的那三个键, 在生效的 clock 块里确实不存在
+    expect(resolveKey(zh, 'clock.clockSuccess')).toBeUndefined();
+  });
+});
+
+// ============================================================
+// 载体闸: 重复的顶层键会让**前一个块整块变成死代码**, 且不报错
+// ============================================================
+describe('quality.json is unambiguous', () => {
+  it('defines each top-level key exactly once — a duplicate silently wins', () => {
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const topKeys = [...rawLocale(locale).matchAll(/^ {2}"([A-Za-z0-9_]+)":/gm)]
+        .map((m) => m[1])
+        .filter((k): k is string => typeof k === 'string');
+      // 仪器自检: 抓不到顶层键就说明正则/缩进假设错了, 而不是"没有重复"
+      expect({ locale, count: topKeys.length > 15 }).toEqual({ locale, count: true });
+      const duplicates = [...new Set(topKeys.filter((k, i) => topKeys.indexOf(k) !== i))];
+      expect({ locale, duplicates }).toEqual({ locale, duplicates: [] });
+    }
   });
 });
