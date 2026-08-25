@@ -4203,7 +4203,28 @@ def test_staffing_optimize_action_keeps_grounded_staffing_resolver():
     assert spec.planned_intents == ("RESTAURANT_OPS_STAFFING_ADVICE",)
 
 
-def test_named_dish_metric_repairs_generic_llm_clarification_to_time_slot():
+def test_named_dish_metric_repairs_generic_llm_clarification_away():
+    """点名了菜 + 说了指标 ⇒ ⛔ 不许再拿一句通用反问打发他。
+
+    ## 🔴 这条断言的**归宿**变了（2026-08-26 随 Python Gate 复活一起订正）
+
+    老板问「米饭的销量是多少」，T3 却回了一句通用反问
+    「你最想先看哪件事？营收/毛利/库存」—— **他已经说了是销量**。
+    contract-repair 把 intent/指标/菜名都修出来了，这条测试守的是
+    「修完之后那句通用反问不许留着」。
+
+    原版进一步断言「改问时间范围」（`TIME_CLARIFICATION_QUESTION` + 四按钮）。
+    ▎那是当时唯一的出路，**现在不是了**：`唯一缺项是时间且 T3 可信 ⇒
+    ▎补默认窗口并显式披露，不再反问`（G1: 归宿只有 A/B/C，没有第四种）。
+    同一份契约在 `test_store_revenue_ranking_implies_all_store_scope_after_llm`
+    里已经钉着；`_semantic_spec_from_t3` 的二次编译把它接到了
+    contract-repair 这条路上（原来这条路会漏掉补默认那一格）。
+
+    ⇒ 断言改钉**需求**（别拿通用反问打发他 + 窗口要有且要披露），
+      ⛔ 不再钉那条已经被取代的历史出路。
+    ⚠️ 回放/晋升路径 `allow_time_default=False`，那时仍然会走时间反问 ——
+      本用例走的是 T3 新问句这条路。
+    """
     spec = _semantic_spec_from_t3(
         {
             "intent": None,
@@ -4229,10 +4250,22 @@ def test_named_dish_metric_repairs_generic_llm_clarification_to_time_slot():
     assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
     assert spec.dish_slot == "米饭"
     assert spec.requested_metrics == ("sales_volume",)
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert spec.clarification_options == ("本月", "上个月", "最近7天", "最近30天")
     assert spec.planner_authority == "llm_contract_repair"
+
+    # 🔴 承重：那句通用反问**不许留着** —— 他已经说了要看销量。
+    assert spec.clarification_question != "你最想先看哪件事？", (
+        "contract-repair 修出了指标，却还在问他「最想先看哪件事」")
+    assert spec.clarification_needed is False, (
+        "唯一缺项是时间且 T3 可信 —— 契约是补默认窗口并披露，不是再反问一次")
+
+    # 窗口必须**真的**落下来，且打了披露标记。
+    # ⛔ 只断言「不反问」不够：不反问 + 窗口还是「全部历史」= 下游按全历史出数
+    #    而披露说「最近30天」，那才是真正的降级处理。
+    assert spec.time_range_defaulted is True, "补了默认必须打标记，否则不会被披露"
+    assert spec.window_label == "最近30天"
+    assert spec.date_range[0] is not None and spec.date_range[1] is not None
+    assert spec.resolver_query_seed.endswith("最近30天"), (
+        f"seed 没跟着窗口走，四者不同源：{spec.resolver_query_seed!r}")
 
 
 def test_store_revenue_ranking_implies_all_store_scope_after_llm():

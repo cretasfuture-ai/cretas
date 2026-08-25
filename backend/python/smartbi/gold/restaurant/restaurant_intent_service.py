@@ -2590,6 +2590,14 @@ async def tiered_answer(
             store_mention=store_mention,
             store_dish=store_dish,
         )
+        # ⛔ 拿返回值做身份比较**只此一处**。下面有两个分支都要问「是不是
+        #    门店范围不符」(歧义消解 / 全店合计按钮), 各写一次 `mismatch ==`
+        #    就是把 `_LAYER_UNCLEAR` 注释里点名批评的坏形态**做大**一倍
+        #    (形态 D: 同一个判断有两份, 措辞一改就漂, 而且没有任何报错)。
+        # ⚠️ 这不是那条纪律的正解 —— 正解是把返回值结构化成
+        #    `(log_reason, user_text)`, 那要一次改 6 个 return, **独立一轮做**。
+        #    在那之前, 收敛成一个布尔量至少让「改措辞」只需要改一处。
+        is_store_scope_mismatch = mismatch == _STORE_SCOPE_MISMATCH
         if mismatch:
             # 🔴 这道闸会把一个用户问题挡成反问, 却**一行日志都不留** ——
             # 2026-08-07 排查 G1 里两条 D(「哪个时段生意最好」/「食材成本占营收
@@ -2618,7 +2626,7 @@ async def tiered_answer(
             #    一整轮的缺陷几乎都是「能力长在另一个载体上」。
             # 📌 与 2026-08-07 那次撤回方向相反且不冲突: 那次撤回的是**压掉**澄清
             #    (拿 5 条 UX 契约换一次点击, 不划算); 这里是把死胡同**换成**澄清。
-            if mismatch == _STORE_SCOPE_MISMATCH and store_mention:
+            if is_store_scope_mismatch and store_mention:
                 ambiguous = await _store_disambiguation(
                     pool, factory_id, store_mention, action_warning, spec)
                 if ambiguous is not None:
@@ -2713,7 +2721,7 @@ async def tiered_answer(
             #    所以「点了会不会兑现」不用猜: 与不点它、直接问全部门店同一条路。
             # ⚠️ 只在真的拼得出完整问句时给 —— 裸范围词点下去会被当成新问题
             #    (2026-07-31 实测回来的是另一句拒答)。
-            if mismatch == _STORE_SCOPE_MISMATCH:
+            if is_store_scope_mismatch:
                 _scope_free_seed = _strip_store_scope(
                     str(getattr(spec, "resolver_query_seed", "") or ""),
                     store_names=[
