@@ -13,6 +13,8 @@ import com.cretas.aims.repository.PieceRateRuleRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WageCalculationRepository;
 import com.cretas.aims.repository.WorkerDailyEfficiencyRepository;
+import lombok.Builder;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +26,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -344,10 +347,288 @@ public class WageCalculationService {
         }
     }
 
+    // ==================== 统一工资算法 (唯一来源) ====================
+
+    /**
+     * 分组键: 没有工序类型的效率行.
+     *
+     * <p>这些行的件数按<b>工厂通用规则</b>计价 —— 收敛前 {@code generatePayroll} 会
+     * 把它们算进去 (findApplicableRule 的第三层兜底), 而 {@code calculateMonthly}
+     * 直接把它们从分组里 filter 掉, 件数计进 totalPieceCount 却一分钱不发。
+     * 用一个哨兵键把这一组单独留出来, 两边行为一致。
+     */
+    private static final String NO_PROCESS_STAGE = " __NO_PROCESS_STAGE__";
+
+    /**
+     * 一次工资计算的全部中间量 —— {@link #generatePayroll} 与 {@link #calculateMonthly}
+     * 的<b>共同产物</b>.
+     *
+     * <p>两个入口不再各自算钱: 都调 {@link #computeWageBreakdown}, 拿到同一个 breakdown,
+     * 各自把它<b>落到自己的载体</b>上 (PayrollRecord 走审批/支付生命周期,
+     * WageCalculation 只是计算明细)。
+     */
+    @Getter
+    @Builder
+    public static class WageBreakdown {
+        /** 解析出的工资模式. */
+        private final WageMode mode;
+        /** 有效率记录的天数 (标准工时 = workDays × 8h). */
+        private final int workDays;
+        /** 有效工作分钟数合计. */
+        private final int totalWorkMinutes;
+        /** 计件数合计 (含无工序类型的行). */
+        private final int totalPieceCount;
+        /** 总工时 (小时). */
+        private final BigDecimal totalHours;
+        /** 常规工时 = totalHours - overtimeHours. */
+        private final BigDecimal regularHours;
+        /** 加班工时. */
+        private final BigDecimal overtimeHours;
+        /** 常规工时工资 (PIECE_RATE 模式恒为 0). */
+        private final BigDecimal hourlyAmount;
+        /** 加班工资. */
+        private final BigDecimal overtimeAmount;
+        /** 计件工资 (逐工序分别套各自规则再求和). */
+        private final BigDecimal pieceRateAmount;
+        /** 平均效率 (件/小时). */
+        private final BigDecimal averageEfficiency;
+        /** 命中的时薪规则 ID. */
+        private final Long hourlyRuleId;
+        /** 命中的第一条计件规则 ID (audit linkno). */
+        private final Long pieceRuleId;
+        /** 缺规则等异常说明; 无异常为 null. */
+        private final String notes;
+
+        /**
+         * 该周期「干活挣到的钱」.
+         *
+         * <p>与 {@link WageCalculation#getTotalAmount()} <b>同一个口径函数</b>
+         * ({@link WageCalculation#totalOf}) —— 不是两份实现。
+         */
+        public BigDecimal getWorkWage() {
+            return WageCalculation.totalOf(mode, hourlyAmount, overtimeAmount, pieceRateAmount);
+        }
+    }
+
+    /**
+     * 统一工资算法: 算一个工人在一段周期内挣到的钱, 拆成各分项.
+     *
+     * <p><b>计件</b>: 按 {@code processStageType} <b>逐工序</b>汇总件数, 每道工序各自
+     * 查 {@link PieceRateRule} 套自己的阶梯, 再求和。
+     * ⛔ 不是「全期总件数 × 出现最多那道工序的单价」—— 工人切三道工序时那个算法是错的。
+     *
+     * <p><b>计时</b>: 常规工时 × {@link HourlyRateRule#getBaseHourlyRate()},
+     * 仅 HOURLY / MIXED 模式。
+     *
+     * <p><b>加班</b>: 加班工时 × 费率 × 倍率。费率优先取 HourlyRateRule,
+     * 取不到时<b>兜底取 {@code User.hourlyRate} × 1.5</b> —— 这是收敛前
+     * {@code generatePayroll} 独有的能力 (计件工人的加班费只有那一侧发得出来),
+     * 收敛时不能丢, 所以三个模式都适用。
+     *
+     * @param factoryId   工厂ID
+     * @param workerId    工人ID
+     * @param periodStart 周期开始 (含)
+     * @param periodEnd   周期结束 (含)
+     * @param worker      工人实体 (可为 null; 仅用于加班费率兜底)
+     * @return 各分项拆开的计算结果
+     */
+    public WageBreakdown computeWageBreakdown(String factoryId, Long workerId,
+            LocalDate periodStart, LocalDate periodEnd, User worker) {
+
+        List<WorkerDailyEfficiency> efficiencies = workerDailyEfficiencyRepository
+                .findByWorkerAndDateRange(factoryId, workerId, periodStart, periodEnd);
+
+        StringBuilder notesBuilder = new StringBuilder();
+
+        // 1. 解析 mode (per-employee policy → factory default → PIECE_RATE 兜底)
+        WageMode mode;
+        if (wagePolicyService != null) {
+            mode = wagePolicyService.resolveModeForEmployee(factoryId, workerId);
+        } else {
+            // WagePolicyService 是 @Autowired(required=false); 生产环境恒注入。
+            // 未注入时等价于「没有配置任何 policy」, 与 resolveModeForEmployee 的兜底同一档。
+            mode = WageMode.PIECE_RATE;
+            log.warn("[computeWageBreakdown] WagePolicyService 未注入, 按 PIECE_RATE 计算: " +
+                    "factoryId={}, workerId={}", factoryId, workerId);
+            notesBuilder.append("WagePolicyService 未注入, 按 PIECE_RATE 计算; ");
+        }
+
+        // 2. 工时 / 件数汇总
+        int totalWorkMinutes = efficiencies.stream()
+                .mapToInt(e -> e.getEffectiveWorkMinutes() != null ? e.getEffectiveWorkMinutes() : 0)
+                .sum();
+        int totalPieceCount = efficiencies.stream()
+                .mapToInt(e -> e.getTotalPieceCount() != null ? e.getTotalPieceCount() : 0)
+                .sum();
+        BigDecimal totalHours = BigDecimal.valueOf(totalWorkMinutes)
+                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
+        int workDays = efficiencies.size();
+        BigDecimal standardHours = STANDARD_WORK_HOURS_PER_DAY.multiply(BigDecimal.valueOf(workDays));
+        BigDecimal overtimeHours = totalHours.compareTo(standardHours) > 0
+                ? totalHours.subtract(standardHours).setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        BigDecimal regularHours = totalHours.subtract(overtimeHours).setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal hourlyAmount = BigDecimal.ZERO;
+        BigDecimal overtimeAmount = BigDecimal.ZERO;
+        BigDecimal pieceRateAmount = BigDecimal.ZERO;
+        Long hourlyRuleId = null;
+        Long pieceRuleId = null;
+
+        boolean needHourly = (mode == WageMode.HOURLY || mode == WageMode.MIXED);
+        boolean needPieceRate = (mode == WageMode.PIECE_RATE || mode == WageMode.MIXED);
+
+        // 3. 加班费率来源: HourlyRateRule 优先, 取不到时兜底 User.hourlyRate
+        BigDecimal overtimeRate = null;
+        BigDecimal overtimeMultiplier = OVERTIME_RATE_MULTIPLIER;
+
+        // 3a. HOURLY / MIXED: 常规工时工资
+        if (needHourly) {
+            Optional<HourlyRateRule> hRuleOpt = wagePolicyService != null
+                    ? wagePolicyService.findEffectiveHourlyRate(factoryId, workerId, periodStart)
+                    : Optional.empty();
+            if (hRuleOpt.isPresent()) {
+                HourlyRateRule hRule = hRuleOpt.get();
+                hourlyRuleId = hRule.getId();
+                hourlyAmount = regularHours.multiply(hRule.getBaseHourlyRate())
+                        .setScale(2, RoundingMode.HALF_UP);
+                overtimeRate = hRule.getBaseHourlyRate();
+                if (hRule.getOvertimeMultiplier() != null) {
+                    overtimeMultiplier = hRule.getOvertimeMultiplier();
+                }
+            } else {
+                log.warn("[computeWageBreakdown] factory={}, worker={}, {}~{}: 缺 HourlyRateRule, " +
+                        "hourlyAmount=0", factoryId, workerId, periodStart, periodEnd);
+                notesBuilder.append("缺 HourlyRateRule(").append(periodStart).append("); ");
+            }
+        }
+
+        // 3b. 加班工资 (三个模式都适用 — 收敛前 generatePayroll 独有能力, 不能丢)
+        if (overtimeRate == null && worker != null && worker.getHourlyRate() != null) {
+            overtimeRate = worker.getHourlyRate();
+            overtimeMultiplier = OVERTIME_RATE_MULTIPLIER;
+        }
+        if (overtimeRate != null && overtimeHours.signum() > 0) {
+            overtimeAmount = overtimeHours.multiply(overtimeRate)
+                    .multiply(overtimeMultiplier)
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
+
+        // 3c. PIECE_RATE / MIXED: 逐工序计件
+        if (needPieceRate && totalPieceCount > 0) {
+            // LinkedHashMap: 保持遍历顺序确定 (pieceRuleId 取第一条命中规则, 不能随 hash 漂)
+            Map<String, Integer> piecesByStage = new LinkedHashMap<>();
+            for (WorkerDailyEfficiency e : efficiencies) {
+                Integer pieces = e.getTotalPieceCount();
+                if (pieces == null || pieces <= 0) {
+                    continue;
+                }
+                String key = e.getProcessStageType() != null ? e.getProcessStageType() : NO_PROCESS_STAGE;
+                piecesByStage.merge(key, pieces, Integer::sum);
+            }
+
+            BigDecimal accumPiece = BigDecimal.ZERO;
+            for (Map.Entry<String, Integer> entry : piecesByStage.entrySet()) {
+                String stage = NO_PROCESS_STAGE.equals(entry.getKey()) ? null : entry.getKey();
+                int pieces = entry.getValue();
+                Optional<PieceRateRule> ruleOpt = findApplicableRule(factoryId, stage, null, periodEnd);
+                if (ruleOpt.isPresent()) {
+                    PieceRateRule rule = ruleOpt.get();
+                    accumPiece = accumPiece.add(rule.calculateWage(pieces));
+                    if (pieceRuleId == null) {
+                        pieceRuleId = rule.getId();
+                    }
+                } else {
+                    log.warn("[computeWageBreakdown] factory={}, worker={}, stage={}: 缺 PieceRateRule, skip",
+                            factoryId, workerId, stage);
+                    notesBuilder.append("缺 PieceRateRule(")
+                            .append(stage != null ? stage : "无工序类型")
+                            .append("); ");
+                }
+            }
+            if (!piecesByStage.isEmpty()) {
+                pieceRateAmount = accumPiece.setScale(2, RoundingMode.HALF_UP);
+            }
+        }
+
+        // 4. 平均效率 (件/小时)
+        BigDecimal averageEfficiency = BigDecimal.ZERO;
+        if (totalWorkMinutes > 0) {
+            averageEfficiency = BigDecimal.valueOf(totalPieceCount * 60.0 / totalWorkMinutes)
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
+
+        return WageBreakdown.builder()
+                .mode(mode)
+                .workDays(workDays)
+                .totalWorkMinutes(totalWorkMinutes)
+                .totalPieceCount(totalPieceCount)
+                .totalHours(totalHours)
+                .regularHours(regularHours)
+                .overtimeHours(overtimeHours)
+                .hourlyAmount(hourlyAmount)
+                .overtimeAmount(overtimeAmount)
+                .pieceRateAmount(pieceRateAmount)
+                .averageEfficiency(averageEfficiency)
+                .hourlyRuleId(hourlyRuleId)
+                .pieceRuleId(pieceRuleId)
+                .notes(notesBuilder.length() > 0 ? notesBuilder.toString().trim() : null)
+                .build();
+    }
+
+    /**
+     * 把 breakdown 落到 PayrollRecord 上 (算法产出 → 审批载体).
+     *
+     * <p>只动<b>算法算出来的</b>那些字段。status / approvedBy / paidAt 等生命周期字段不碰。
+     * baseSalary 是 PayrollRecord 独有的一项 (WageCalculation 没有这个概念), 在这里按天数摊。
+     */
+    private void applyBreakdown(PayrollRecord payroll, User worker, WageBreakdown bd,
+            LocalDate periodStart, LocalDate periodEnd) {
+
+        payroll.setWageMode(bd.getMode());
+        payroll.setTotalPieceCount(bd.getTotalPieceCount());
+        payroll.setPieceRateWage(bd.getPieceRateAmount());
+        payroll.setPieceRuleId(bd.getPieceRuleId());
+        payroll.setHourlyWage(bd.getHourlyAmount());
+        payroll.setHourlyRuleId(bd.getHourlyRuleId());
+        payroll.setOvertimeWage(bd.getOvertimeAmount());
+        payroll.setOvertimeHours(bd.getOvertimeHours());
+        payroll.setBaseSalary(prorateBaseSalary(worker, periodStart, periodEnd));
+        payroll.setAverageEfficiency(bd.getAverageEfficiency());
+        payroll.setTotalWorkHours(bd.getTotalHours());
+        payroll.setEfficiencyRating(determineEfficiencyRating(
+                bd.getAverageEfficiency(), payroll.getFactoryId(), periodStart, periodEnd));
+        payroll.setNotes(bd.getNotes());
+
+        // @PrePersist/@PreUpdate 也会算一次; 这里先算是为了调用方能立刻读到新的 totalWage
+        // (重算要拿它跟旧值比), calculateTotalWage 幂等。
+        payroll.calculateTotalWage();
+    }
+
+    /**
+     * 基本工资按周期天数摊 (PayrollRecord 独有, WageCalculation 无此概念).
+     */
+    private BigDecimal prorateBaseSalary(User worker, LocalDate periodStart, LocalDate periodEnd) {
+        BigDecimal monthlySalary = worker != null ? worker.getMonthlySalary() : null;
+        if (monthlySalary == null) {
+            return BigDecimal.ZERO;
+        }
+        long totalDays = periodEnd.toEpochDay() - periodStart.toEpochDay() + 1;
+        long daysInMonth = periodStart.lengthOfMonth();
+        return monthlySalary.multiply(BigDecimal.valueOf(totalDays))
+                .divide(BigDecimal.valueOf(daysInMonth), 2, RoundingMode.HALF_UP);
+    }
+
     // ==================== 工资单生成 ====================
 
     /**
      * 生成工资单
+     *
+     * <p>算法走 {@link #computeWageBreakdown} (与 {@link #calculateMonthly} 同一套),
+     * 生命周期沿用 PayrollRecord 的 PENDING → APPROVED → PAID。
+     *
+     * <p>⛔ 已存在的记录一律拒绝, <b>不会</b>在这里悄悄重算。要按最新规则重算草稿走
+     * {@link #recalculatePayroll}。
      *
      * @param factoryId 工厂ID
      * @param workerId 工人ID
@@ -365,123 +646,204 @@ public class WageCalculationService {
         // 检查是否已存在工资记录
         if (payrollRecordRepository.existsByFactoryIdAndWorkerIdAndPeriodStartAndPeriodEnd(
                 factoryId, workerId, periodStart, periodEnd)) {
-            throw new RuntimeException("该周期的工资记录已存在");
+            throw new RuntimeException("该周期的工资记录已存在 (需要按最新规则重算请走重算接口, "
+                    + "只有 PENDING 草稿可重算)");
         }
 
         // 1. 获取工人信息
         User worker = userRepository.findById(workerId)
                 .orElseThrow(() -> new RuntimeException("工人不存在: " + workerId));
 
-        // 2. 汇总周期内的所有日效率记录
-        List<WorkerDailyEfficiency> efficiencies = workerDailyEfficiencyRepository
-                .findByWorkerAndDateRange(factoryId, workerId, periodStart, periodEnd);
+        // 2. 统一算法
+        WageBreakdown bd = computeWageBreakdown(factoryId, workerId, periodStart, periodEnd, worker);
 
-        // 3. 计算总计件数
-        int totalPieceCount = efficiencies.stream()
-                .mapToInt(e -> e.getTotalPieceCount() != null ? e.getTotalPieceCount() : 0)
-                .sum();
-
-        // 4. 计算计件工资 (使用周期内最后一天的规则)
-        BigDecimal pieceRateWage = BigDecimal.ZERO;
-        Long pieceRuleId = null;
-
-        if (totalPieceCount > 0) {
-            // 获取主要工序类型 (出现次数最多的工序)
-            String mainProcessStage = efficiencies.stream()
-                    .filter(e -> e.getProcessStageType() != null)
-                    .collect(Collectors.groupingBy(WorkerDailyEfficiency::getProcessStageType, Collectors.counting()))
-                    .entrySet().stream()
-                    .max(Map.Entry.comparingByValue())
-                    .map(Map.Entry::getKey)
-                    .orElse(null);
-
-            Optional<PieceRateRule> ruleOpt = findApplicableRule(factoryId, mainProcessStage, null, periodEnd);
-            if (ruleOpt.isPresent()) {
-                PieceRateRule rule = ruleOpt.get();
-                pieceRateWage = rule.calculateWage(totalPieceCount);
-                pieceRuleId = rule.getId();
-            }
-        }
-
-        // 5. 获取基本工资
-        BigDecimal baseSalary = worker.getMonthlySalary();
-        if (baseSalary != null) {
-            // 按天数比例计算
-            long totalDays = periodEnd.toEpochDay() - periodStart.toEpochDay() + 1;
-            long daysInMonth = periodStart.lengthOfMonth();
-            baseSalary = baseSalary.multiply(BigDecimal.valueOf(totalDays))
-                    .divide(BigDecimal.valueOf(daysInMonth), 2, RoundingMode.HALF_UP);
-        } else {
-            baseSalary = BigDecimal.ZERO;
-        }
-
-        // 6. 计算总工作时长和加班时长
-        int totalWorkMinutes = efficiencies.stream()
-                .mapToInt(e -> e.getEffectiveWorkMinutes() != null ? e.getEffectiveWorkMinutes() : 0)
-                .sum();
-        BigDecimal totalWorkHours = BigDecimal.valueOf(totalWorkMinutes)
-                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-
-        // 计算标准工时 (工作天数 * 8小时)
-        int workDays = efficiencies.size();
-        BigDecimal standardHours = STANDARD_WORK_HOURS_PER_DAY.multiply(BigDecimal.valueOf(workDays));
-
-        // 加班时长
-        BigDecimal overtimeHours = BigDecimal.ZERO;
-        BigDecimal overtimeWage = BigDecimal.ZERO;
-        if (totalWorkHours.compareTo(standardHours) > 0) {
-            overtimeHours = totalWorkHours.subtract(standardHours);
-            // 计算加班工资 (使用小时工资 * 1.5)
-            BigDecimal hourlyRate = worker.getHourlyRate();
-            if (hourlyRate != null) {
-                overtimeWage = hourlyRate.multiply(overtimeHours)
-                        .multiply(OVERTIME_RATE_MULTIPLIER)
-                        .setScale(2, RoundingMode.HALF_UP);
-            }
-        }
-
-        // 7. 计算平均效率
-        BigDecimal averageEfficiency = BigDecimal.ZERO;
-        if (totalWorkMinutes > 0) {
-            averageEfficiency = BigDecimal.valueOf(totalPieceCount * 60.0 / totalWorkMinutes)
-                    .setScale(2, RoundingMode.HALF_UP);
-        }
-
-        // 8. 确定效率评级
-        String efficiencyRating = determineEfficiencyRating(averageEfficiency, factoryId, periodStart, periodEnd);
-
-        // 9. 确定周期类型
-        String periodType = determinePeriodType(periodStart, periodEnd);
-
-        // 10. 创建工资记录
+        // 3. 创建工资记录 (生命周期字段在这里定, 金额字段由 applyBreakdown 落)
         PayrollRecord payroll = PayrollRecord.builder()
                 .factoryId(factoryId)
                 .workerId(workerId)
                 .workerName(worker.getFullName())
                 .periodStart(periodStart)
                 .periodEnd(periodEnd)
-                .periodType(periodType)
-                .totalPieceCount(totalPieceCount)
-                .pieceRateWage(pieceRateWage)
-                .pieceRuleId(pieceRuleId)
-                .baseSalary(baseSalary)
-                .overtimeWage(overtimeWage)
-                .overtimeHours(overtimeHours)
+                .periodType(determinePeriodType(periodStart, periodEnd))
                 .bonusAmount(BigDecimal.ZERO)
                 .deductionAmount(BigDecimal.ZERO)
-                .averageEfficiency(averageEfficiency)
-                .totalWorkHours(totalWorkHours)
-                .efficiencyRating(efficiencyRating)
                 .status(PAYROLL_STATUS_PENDING)
                 .build();
 
-        // totalWage 会在 @PrePersist 中自动计算
+        applyBreakdown(payroll, worker, bd, periodStart, periodEnd);
+
         payroll = payrollRecordRepository.save(payroll);
 
-        log.info("工资单生成完成: id={}, totalWage={}, pieceRateWage={}",
-                payroll.getId(), payroll.getTotalWage(), payroll.getPieceRateWage());
+        log.info("工资单生成完成: id={}, mode={}, totalWage={}, hourlyWage={}, pieceRateWage={}, overtimeWage={}",
+                payroll.getId(), payroll.getWageMode(), payroll.getTotalWage(),
+                payroll.getHourlyWage(), payroll.getPieceRateWage(), payroll.getOvertimeWage());
 
         return payroll;
+    }
+
+    // ==================== 草稿重算 (历史数据处置) ====================
+
+    /**
+     * 重算一张<b>待审核草稿</b>的工资单.
+     *
+     * <p>处置规则 (owner 裁定):
+     * <ul>
+     *   <li>{@code PAID} — 冻结不动。钱已经发了, 倒推是对账事故。</li>
+     *   <li>{@code APPROVED} — 冻结不动。HR 已签字, 不能背着他改。</li>
+     *   <li>{@code PENDING} — 可重算。还没人认过。</li>
+     * </ul>
+     *
+     * <p><b>触发点是显式的</b>: 只有调用这个方法 (对应 POST 重算接口) 才会改草稿金额。
+     * 查询 / 列表 / {@link #generatePayroll} 都不会 —— generatePayroll 撞到已有记录直接抛错。
+     *
+     * <p><b>金额变化 HR 看得见</b>: {@code previousTotalWage} 留变更前,
+     * {@code totalWage} 是变更后, {@code recalcLog} 逐次追加一行人可读记录,
+     * 另有 {@code recalculatedAt} / {@code recalculatedBy} / {@code recalcCount}。
+     *
+     * @param factoryId  工厂ID (租户校验)
+     * @param payrollId  工资单ID
+     * @param operatorId 操作人ID
+     * @return 重算后的工资记录
+     * @throws IllegalStateException 状态不是 PENDING (已审核/已发放冻结)
+     */
+    @Transactional
+    public PayrollRecord recalculatePayroll(String factoryId, Long payrollId, Long operatorId) {
+        PayrollRecord payroll = payrollRecordRepository.findById(payrollId)
+                .orElseThrow(() -> new RuntimeException("工资记录不存在: " + payrollId));
+
+        if (!payroll.getFactoryId().equals(factoryId)) {
+            throw new RuntimeException("工资单不属于该工厂: payrollId=" + payrollId);
+        }
+
+        if (!PAYROLL_STATUS_PENDING.equals(payroll.getStatus())) {
+            throw new IllegalStateException(
+                    "只有待审核(PENDING)草稿可以重算; 当前状态=" + payroll.getStatus()
+                            + " —— 已审核/已发放的工资单冻结, 不倒推历史金额");
+        }
+
+        User worker = userRepository.findById(payroll.getWorkerId())
+                .orElseThrow(() -> new RuntimeException("工人不存在: " + payroll.getWorkerId()));
+
+        BigDecimal before = payroll.getTotalWage() != null ? payroll.getTotalWage() : BigDecimal.ZERO;
+
+        WageBreakdown bd = computeWageBreakdown(factoryId, payroll.getWorkerId(),
+                payroll.getPeriodStart(), payroll.getPeriodEnd(), worker);
+        applyBreakdown(payroll, worker, bd, payroll.getPeriodStart(), payroll.getPeriodEnd());
+
+        BigDecimal after = payroll.getTotalWage() != null ? payroll.getTotalWage() : BigDecimal.ZERO;
+
+        payroll.setPreviousTotalWage(before);
+        payroll.setRecalculatedAt(LocalDateTime.now());
+        payroll.setRecalculatedBy(operatorId);
+        payroll.setRecalcCount((payroll.getRecalcCount() != null ? payroll.getRecalcCount() : 0) + 1);
+        payroll.setRecalcLog(appendRecalcLog(payroll.getRecalcLog(), before, after, operatorId));
+
+        PayrollRecord saved = payrollRecordRepository.save(payroll);
+
+        log.info("工资单重算完成: id={}, operator={}, 总额 {} → {}", payrollId, operatorId, before, after);
+
+        return saved;
+    }
+
+    /**
+     * 批量重算一个周期内的<b>待审核草稿</b>.
+     *
+     * <p>APPROVED / PAID 逐条跳过并计数 —— 跳过多少条要说出来, 不能悄悄少算。
+     *
+     * @return 汇总: recalculatedCount / changedCount / unchangedCount /
+     *         frozenApprovedCount / frozenPaidCount / failedCount / changes / failures
+     */
+    @Transactional
+    public Map<String, Object> recalculatePendingPayrolls(String factoryId,
+            LocalDate periodStart, LocalDate periodEnd, Long operatorId) {
+
+        List<PayrollRecord> records = payrollRecordRepository.findByPeriod(factoryId, periodStart, periodEnd);
+
+        int recalculated = 0;
+        int changed = 0;
+        int unchanged = 0;
+        int frozenApproved = 0;
+        int frozenPaid = 0;
+        int failed = 0;
+        List<Map<String, Object>> changes = new ArrayList<>();
+        List<String> failures = new ArrayList<>();
+
+        for (PayrollRecord record : records) {
+            if (PAYROLL_STATUS_APPROVED.equals(record.getStatus())) {
+                frozenApproved++;
+                continue;
+            }
+            if (PAYROLL_STATUS_PAID.equals(record.getStatus())) {
+                frozenPaid++;
+                continue;
+            }
+            if (!PAYROLL_STATUS_PENDING.equals(record.getStatus())) {
+                // 未知状态一律不动 (宁可不算, 不要猜)
+                failed++;
+                failures.add("payrollId=" + record.getId() + ": 未知状态 " + record.getStatus());
+                continue;
+            }
+
+            BigDecimal before = record.getTotalWage() != null ? record.getTotalWage() : BigDecimal.ZERO;
+            try {
+                PayrollRecord updated = recalculatePayroll(factoryId, record.getId(), operatorId);
+                recalculated++;
+                BigDecimal after = updated.getTotalWage() != null ? updated.getTotalWage() : BigDecimal.ZERO;
+                if (after.compareTo(before) != 0) {
+                    changed++;
+                    Map<String, Object> change = new LinkedHashMap<>();
+                    change.put("payrollId", updated.getId());
+                    change.put("workerId", updated.getWorkerId());
+                    change.put("workerName", updated.getWorkerName());
+                    change.put("previousTotalWage", before);
+                    change.put("totalWage", after);
+                    change.put("delta", after.subtract(before));
+                    changes.add(change);
+                } else {
+                    unchanged++;
+                }
+            } catch (Exception e) {
+                failed++;
+                failures.add("payrollId=" + record.getId() + ": " + e.getMessage());
+                log.error("重算失败: payrollId={}, error={}", record.getId(), e.getMessage());
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("factoryId", factoryId);
+        result.put("periodStart", periodStart);
+        result.put("periodEnd", periodEnd);
+        result.put("totalRecords", records.size());
+        result.put("recalculatedCount", recalculated);
+        result.put("changedCount", changed);
+        result.put("unchangedCount", unchanged);
+        result.put("frozenApprovedCount", frozenApproved);
+        result.put("frozenPaidCount", frozenPaid);
+        result.put("failedCount", failed);
+        result.put("changes", changes);
+        if (!failures.isEmpty()) {
+            result.put("failures", failures);
+        }
+
+        log.info("批量重算完成: factoryId={}, period={}~{}, 重算={}, 金额变化={}, 冻结(已审核)={}, 冻结(已发放)={}",
+                factoryId, periodStart, periodEnd, recalculated, changed, frozenApproved, frozenPaid);
+
+        return result;
+    }
+
+    /**
+     * 追加一行重算审计记录 (append-only).
+     */
+    private String appendRecalcLog(String existing, BigDecimal before, BigDecimal after, Long operatorId) {
+        BigDecimal delta = after.subtract(before);
+        String line = String.format("[重算] %s by user %s: 总额 ¥%s → ¥%s (%s¥%s)",
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                operatorId != null ? operatorId.toString() : "-",
+                before.setScale(2, RoundingMode.HALF_UP).toPlainString(),
+                after.setScale(2, RoundingMode.HALF_UP).toPlainString(),
+                delta.signum() < 0 ? "-" : "+",
+                delta.abs().setScale(2, RoundingMode.HALF_UP).toPlainString());
+        return (existing == null || existing.isBlank()) ? line : existing + "\n" + line;
     }
 
     /**
@@ -846,10 +1208,13 @@ public class WageCalculationService {
     /**
      * Sprint 6 Track W4-B: 按 mode 计算员工月度工资.
      *
+     * <p>算法本身在 {@link #computeWageBreakdown} —— 与 {@link #generatePayroll}
+     * <b>同一个方法</b>。这里只负责把结果落到 WageCalculation 上 (无审批态, 纯计算明细)。
+     *
      * <p>分支逻辑:
      * <ul>
-     *   <li>{@link WageMode#PIECE_RATE}: 沿用 PR #57 E PieceRateRule 阶梯计件 (仅 piece_rate_amount)</li>
-     *   <li>{@link WageMode#HOURLY}: 工时 × baseHourlyRate + 加班工时 × baseHourlyRate × overtimeMultiplier</li>
+     *   <li>{@link WageMode#PIECE_RATE}: 逐工序 PieceRateRule 阶梯计件 (+ 加班费)</li>
+     *   <li>{@link WageMode#HOURLY}: 常规工时 × baseHourlyRate + 加班工时 × baseHourlyRate × overtimeMultiplier</li>
      *   <li>{@link WageMode#MIXED}: HOURLY 全额 (含 OT) + PIECE_RATE 全额 (per spec §W4-B 简化求和)</li>
      * </ul>
      *
@@ -876,104 +1241,17 @@ public class WageCalculationService {
         LocalDate monthStart = month.atDay(1);
         LocalDate monthEnd = month.atEndOfMonth();
 
-        // 1. 解析 mode
-        WageMode mode = wagePolicyService.resolveModeForEmployee(factoryId, employeeId);
-
-        // 2. 员工信息 (用于 employee_name 冗余)
+        // 1. 员工信息 (用于 employee_name 冗余 + 加班费率兜底)
         Optional<User> workerOpt = userRepository.findById(employeeId);
         String employeeName = workerOpt
                 .map(u -> u.getFullName() != null ? u.getFullName() : u.getUsername())
                 .orElse("未知员工");
 
-        // 3. 取月度 efficiencies (一次查, 复用)
-        List<WorkerDailyEfficiency> effs = workerDailyEfficiencyRepository
-                .findByWorkerAndDateRange(factoryId, employeeId, monthStart, monthEnd);
+        // 2. 统一算法 (与 generatePayroll 同一个方法, 不是两份实现)
+        WageBreakdown bd = computeWageBreakdown(factoryId, employeeId, monthStart, monthEnd,
+                workerOpt.orElse(null));
 
-        // 4. 月度汇总: 工时 / 件数
-        int totalWorkMinutes = effs.stream()
-                .mapToInt(e -> e.getEffectiveWorkMinutes() != null ? e.getEffectiveWorkMinutes() : 0)
-                .sum();
-        int totalPieceCount = effs.stream()
-                .mapToInt(e -> e.getTotalPieceCount() != null ? e.getTotalPieceCount() : 0)
-                .sum();
-        BigDecimal totalHours = BigDecimal.valueOf(totalWorkMinutes)
-                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-        int workDays = effs.size();
-        BigDecimal standardHours = STANDARD_WORK_HOURS_PER_DAY.multiply(BigDecimal.valueOf(workDays));
-        BigDecimal overtimeHours = totalHours.compareTo(standardHours) > 0
-                ? totalHours.subtract(standardHours).setScale(2, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-        BigDecimal regularHours = totalHours.subtract(overtimeHours).setScale(2, RoundingMode.HALF_UP);
-
-        // 5. 计算各分项 (按 mode)
-        BigDecimal hourlyAmount = BigDecimal.ZERO;
-        BigDecimal overtimeAmount = BigDecimal.ZERO;
-        BigDecimal pieceRateAmount = BigDecimal.ZERO;
-        Long hourlyRuleId = null;
-        Long pieceRuleId = null;
-        StringBuilder notesBuilder = new StringBuilder();
-
-        boolean needHourly = (mode == WageMode.HOURLY || mode == WageMode.MIXED);
-        boolean needPieceRate = (mode == WageMode.PIECE_RATE || mode == WageMode.MIXED);
-
-        // 5a. HOURLY / MIXED: 时薪 + 加班
-        if (needHourly) {
-            Optional<HourlyRateRule> hRuleOpt = wagePolicyService
-                    .findEffectiveHourlyRate(factoryId, employeeId, monthStart);
-            if (hRuleOpt.isPresent()) {
-                HourlyRateRule hRule = hRuleOpt.get();
-                hourlyRuleId = hRule.getId();
-                hourlyAmount = regularHours.multiply(hRule.getBaseHourlyRate())
-                        .setScale(2, RoundingMode.HALF_UP);
-                BigDecimal otMultiplier = hRule.getOvertimeMultiplier() != null
-                        ? hRule.getOvertimeMultiplier() : OVERTIME_RATE_MULTIPLIER;
-                overtimeAmount = overtimeHours.multiply(hRule.getBaseHourlyRate())
-                        .multiply(otMultiplier)
-                        .setScale(2, RoundingMode.HALF_UP);
-            } else {
-                log.warn("[calculateMonthly] factory={}, employee={}, month={}: 缺 HourlyRateRule, " +
-                        "hourlyAmount=0", factoryId, employeeId, month);
-                notesBuilder.append("缺 HourlyRateRule(").append(monthStart).append("); ");
-            }
-        }
-
-        // 5b. PIECE_RATE / MIXED: 计件 (per process stage)
-        if (needPieceRate && totalPieceCount > 0) {
-            // 聚合按 process stage 分别计算 (per PR #57 generatePayroll 主路径)
-            Map<String, Integer> piecesByStage = effs.stream()
-                    .filter(e -> e.getProcessStageType() != null && e.getTotalPieceCount() != null
-                            && e.getTotalPieceCount() > 0)
-                    .collect(Collectors.groupingBy(
-                            WorkerDailyEfficiency::getProcessStageType,
-                            Collectors.summingInt(e -> e.getTotalPieceCount())));
-
-            if (!piecesByStage.isEmpty()) {
-                BigDecimal accumPiece = BigDecimal.ZERO;
-                Long firstRuleId = null;
-                for (Map.Entry<String, Integer> entry : piecesByStage.entrySet()) {
-                    String stage = entry.getKey();
-                    int pieces = entry.getValue();
-                    Optional<PieceRateRule> ruleOpt = findApplicableRule(
-                            factoryId, stage, null, monthEnd);
-                    if (ruleOpt.isPresent()) {
-                        PieceRateRule rule = ruleOpt.get();
-                        BigDecimal stageWage = rule.calculateWage(pieces);
-                        accumPiece = accumPiece.add(stageWage);
-                        if (firstRuleId == null) {
-                            firstRuleId = rule.getId();
-                        }
-                    } else {
-                        log.warn("[calculateMonthly] factory={}, employee={}, stage={}: " +
-                                "缺 PieceRateRule, skip", factoryId, employeeId, stage);
-                        notesBuilder.append("缺 PieceRateRule(").append(stage).append("); ");
-                    }
-                }
-                pieceRateAmount = accumPiece.setScale(2, RoundingMode.HALF_UP);
-                pieceRuleId = firstRuleId;
-            }
-        }
-
-        // 6. idempotent upsert
+        // 3. idempotent upsert
         WageCalculation calc = wageCalculationRepository
                 .findByFactoryIdAndEmployeeIdAndPeriodMonth(factoryId, employeeId, monthStart)
                 .orElseGet(() -> WageCalculation.builder()
@@ -983,24 +1261,25 @@ public class WageCalculationService {
                         .build());
 
         calc.setEmployeeName(employeeName);
-        calc.setMode(mode);
-        calc.setHourlyAmount(hourlyAmount);
-        calc.setOvertimeAmount(overtimeAmount);
-        calc.setPieceRateAmount(pieceRateAmount);
-        calc.setTotalHours(totalHours);
-        calc.setOvertimeHours(overtimeHours);
-        calc.setTotalPieceCount(totalPieceCount);
-        calc.setHourlyRuleId(hourlyRuleId);
-        calc.setPieceRuleId(pieceRuleId);
-        if (notesBuilder.length() > 0) {
-            calc.setNotes(notesBuilder.toString().trim());
+        calc.setMode(bd.getMode());
+        calc.setHourlyAmount(bd.getHourlyAmount());
+        calc.setOvertimeAmount(bd.getOvertimeAmount());
+        calc.setPieceRateAmount(bd.getPieceRateAmount());
+        calc.setTotalHours(bd.getTotalHours());
+        calc.setOvertimeHours(bd.getOvertimeHours());
+        calc.setTotalPieceCount(bd.getTotalPieceCount());
+        calc.setHourlyRuleId(bd.getHourlyRuleId());
+        calc.setPieceRuleId(bd.getPieceRuleId());
+        if (bd.getNotes() != null) {
+            calc.setNotes(bd.getNotes());
         }
 
         WageCalculation saved = wageCalculationRepository.save(calc);
         log.info("[calculateMonthly] factory={}, employee={}, month={}, mode={}, " +
                         "total={}, hourly={}, ot={}, piece={}",
-                factoryId, employeeId, month, mode,
-                saved.getTotalAmount(), hourlyAmount, overtimeAmount, pieceRateAmount);
+                factoryId, employeeId, month, bd.getMode(),
+                saved.getTotalAmount(), bd.getHourlyAmount(), bd.getOvertimeAmount(),
+                bd.getPieceRateAmount());
         return saved;
     }
 
