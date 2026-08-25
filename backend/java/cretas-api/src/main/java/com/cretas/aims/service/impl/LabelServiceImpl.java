@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.exception.AuthorizationException;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.LabelService;
@@ -56,13 +57,34 @@ public class LabelServiceImpl implements LabelService {
     }
 
     @Override
-    public Optional<Label> getByLabelCode(String labelCode) {
-        return labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode);
+    public Optional<Label> getByLabelCode(String factoryId, String labelCode) {
+        return labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode)
+                .map(label -> requireSameFactory(factoryId, label));
     }
 
     @Override
-    public Optional<Label> getByTraceCode(String traceCode) {
-        return labelRepository.findByTraceCodeAndDeletedAtIsNull(traceCode);
+    public Optional<Label> getByTraceCode(String factoryId, String traceCode) {
+        return labelRepository.findByTraceCodeAndDeletedAtIsNull(traceCode)
+                .map(label -> requireSameFactory(factoryId, label));
+    }
+
+    /**
+     * 租户隔离的唯一落点 —— label_code / trace_code / batch_id 都是**全局**查询键,
+     * 三条读路径共用这一个判定, 不各写各的 (三份一定会漂).
+     *
+     * <p>⛔ 不匹配时抛 403 而不是返回空 —— 把越权伪装成「不存在」会让真实的
+     * 跨租户探测在 404 里消失, 既看不见也告不了警。参见 {@code scanLabel} 步骤 2,
+     * 那里是同一条判据的另一处实例 (它抛 RuntimeException → 400, 保持原状: 那条
+     * 路径 RN 端在用, 改状态码会撞上前端把 403 当「登录失效」的处理).
+     */
+    private Label requireSameFactory(String factoryId, Label label) {
+        if (factoryId == null || !factoryId.equals(label.getFactoryId())) {
+            log.warn("跨工厂标签访问被拒绝: 请求工厂={}, 标签工厂={}, labelId={}",
+                    factoryId, label.getFactoryId(), label.getId());
+            // 措辞不回显对方工厂号 —— 拒绝要可区分, 但没必要把归属也一起告诉调用方
+            throw new AuthorizationException("无权访问该标签: 它不属于当前工厂 " + factoryId);
+        }
+        return label;
     }
 
     @Override
@@ -164,8 +186,10 @@ public class LabelServiceImpl implements LabelService {
     }
 
     @Override
-    public List<Label> getLabelsByBatchId(String batchId) {
-        return labelRepository.findByBatchIdAndDeletedAtIsNull(batchId);
+    public List<Label> getLabelsByBatchId(String factoryId, String batchId) {
+        return labelRepository.findByBatchIdAndDeletedAtIsNull(batchId).stream()
+                .map(label -> requireSameFactory(factoryId, label))
+                .toList();
     }
 
     @Override
