@@ -41,3 +41,10 @@
 - **当前部署后 E2E**：同一 F006 存货计划完成两轮正式报工、S1/S2 各 `1盒`、总监撤销 S2 后合法重结及最终 `COMPLETED / POSTED`。另一计划四项原料各 `2.01kg` 形成 `8.04kg` WIP，包装 `8kg→10盒`，剩余精确 `0.04kg` 由独立二次加工真实开工合法消耗。
 - **超收原子性**：本 runKey 唯一订单生产报产 `10盒`；真实 UI 输入 `11盒` 被 HTTP 409 完整中文拒绝，刷新/API 证明待收 `10`、已收 `0`、SKU 批次 `17`、库存 `209盒`、可用 `154盒`、目标批次/过账流水均不变。随后合法实收 `10盒`，唯一新增成品批次、库存 `209→219`、可用 `154→164`，结单 `POSTED`。
 - **视频、限制与收尾**：runKey `E2E-F006-PROD-GAPS-20260825-082131` 留存 `185` 张逐步真实截图、`37` 条 action、`111.033` 秒部署后生产视频和 `150` 秒明确标注的仓储质检历史视频。原始连续 WebM、Android 真机/OTA、原料成本归集和独立销售经理登录未伪称通过；其他租户写入 `0`。已实际退出生产页面并关闭浏览器；本任务和 scope 锁释放，独立 blocked/queued backlog 完整保留。
+
+## `ENH-F006-CUSTOMER-CREATE-PROGRESSIVE-DISCLOSURE-001` — `merged`
+
+- **裁定结论**：不需要再裁定一次 —— 产品真值仓库里已经有了，且四个面全部一致：① `CreateCustomerRequest` 只有 `name` 带 `@NotBlank`，源码注明来由「T10 / spec P2.1: contact fields are now optional per docx feedback (some customers do not have a designated contact person)」；② Web 新建/编辑表单只有 `name` / `status` 必填，由 `customerFormProgressive.source.spec.ts` 钉住（2026-08-12 按 Steve 要求把联系人/联系电话/收货地址改选填时同步改的）；③ Excel 导入逐行必填校验只有一条「客户名称不能为空」；④ 销售准入**不存在**要求客户资料补齐的门禁。
+- **台账原描述过期**：ACTIVE 里那句「与原五项强制及销售单补全门禁冲突」不是待裁决的冲突，而是**过期描述**（本仓形态 B⁵：描述过期比没有描述更糟，它让下一个人跳过核实）。
+- **新增闸**：`CustomerRequiredFieldsContractTest`（4 条，反射量注解结构而非源码文本），钉住「创建只有 name 必填 / 联系人·电话·地址·邮箱·账单地址·税号·执照号均非必填 / 编辑不强制任何字段」，并带阳性对照（字段确实存在，避免拼错字段名造成恒真式）。要改回必填是可以的，但必须同时改这道闸 —— 那时它是一次显式产品决定，而不是漂移。验收：`mvn -o -Dtest=CustomerRequiredFieldsContractTest test` → `Tests run: 4, Failures: 0`。
+- **生产写入**：`0`，本项全程只读代码与配置，未修改任何生产客户。scope 锁释放。

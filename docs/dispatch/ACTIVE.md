@@ -20,7 +20,6 @@
 
 - `ARCH-F006-DEMAND-DRIVEN-MATERIAL-RECEIPT-001` — `blocked` — Owner: `/root` — 净需求、客户来料、ownership/idempotency 与旧直接收料 fail closed 已有；严格同批 identity/单位/日期/QC/cost 匹配及独立库存 transaction 验收不足。需求仍有效且跨模块，保留 scope，`NOT_DEPLOYED`。
 
-- `ENH-F006-CUSTOMER-CREATE-PROGRESSIVE-DISCLOSURE-001` — `blocked` — Owner: `/root` — Web 渐进表单已存在，但当前后端仅 name 必填，与 ACTIVE 原五项强制及销售单补全门禁冲突。须先由 Owner 裁定产品真值；保留 scope，生产客户零修改。
 
 - `ENH-F006-SUPPLIER-IMPORT-001` — `blocked` — Owner: `/root` — 供应商必填资料、Excel 预览/幂等确认、状态生命周期、采购门禁与详情信息架构尚无本轮完整 tree/test 核销证据；当前无专用 PR。需求和 scope 均保留，恢复时先核对公司 main 的现有实现，严格 `NOT_DEPLOYED`。
 
@@ -32,7 +31,7 @@
 
 - `F006-R2-WORKFLOW-FIRST-BOM-GATE` — `queued` — Owner: `/root` — Workflow 草稿结构、BOM 完整性、激活/发布和生产计划准入的端到端门禁尚未证明完成；与统一 Workflow/BOM 状态机串行，保留 scope、ACTIVE-only 运行契约与历史快照零改写。
 
-- `BUG-F006-PRODUCTION-COST-CLOSURE-001` — `in-progress` — Owner: `claude-code/f006-remaining-closure` — Base SHA `9fc3e5aa1364442a04672be0ac3733528a39f9d4`，worktree `cretas-f006-remaining-closure-20260825` / branch `codex/f006-remaining-closure-20260825`。结单入库在算不出成品单位成本时，报的原因与事实不符：prod 计划 `ef5392c7-a575-42a3-8691-ebca0d8306e1` 提示「没有归集到本计划的原料领用成本」，而同刻读 `/production/batches/{no}/cost-breakdown` 得到 `rawMaterialCost=40.32`（7 行全 COLLECTED）、`knownCostSubtotal=93.12`、`totalCost=null`、`missingCostItems=[LABOR_RATE_OR_TIME:process-2, EQUIPMENT_COST:*, OTHER_COST:*]` —— 原料成本已归集，缺的是人工/设备/其他。验收命令 `mvn -o -Dtest='SettlementCostUnavailableReasonIsTruthfulContractTest,SettlementCostUnavailableIsSaidOutLoudContractTest,MultiOutputCostPolicyContractTest,ProductionWorkflowOutputCostAllocationTest' test`。停止条件：`totalCost` 的 COGS 口径不得松动（已知合计不许顶替），生产实体只读、零写入。
+- `BUG-F006-PRODUCTION-COST-CLOSURE-001` — `in-progress` — Owner: `claude-code/f006-remaining-closure` — Base SHA `f7cdeb2b7c591cd08a6e617e40c3d8b011971958`，worktree `cretas-f006-remaining-closure-r2` / branch `codex/f006-remaining-closure-r2-20260825`。**第一批已 PR #58 合入并部署生产**（active `10020`/`cretas-backend-green`，PID `2220638` 启动 `13:45:17`，JAR mtime `13:44`，运行制品含 4 个新方法标记、旧 `resolvePlanTotalCost` 计数 0）：算不出成本时说出真实原因；「设备/其他成本不强制填写」裁定补到 `costComplete`。部署后只读探针（23 个 F006 生产批次）实测：2 个仅缺设备/其他的批次`totalCost` 由 null 变为 `21.4091` / `41.55`，`calculationStatus` 仍为 `PARTIAL`，「仅缺可选项却仍为 null」计 0 条。**剩余（下一批）**：① `LABOR_RATE_OR_TIME:process-2` 阻断 13/23 个批次；② `PINNED_BOM_SNAPSHOT_MISSING` 阻断 6/23 个批次；③ 形态 D 两条轨 —— `PUT /{planId}/costs` 写 `production_plans.actual_equipment_cost`（喂分析/AI 报表），而成本归集读 `production_batches.equipment_cost`，用户补录也进不了单位成本。停止条件：`totalCost` 的 COGS 口径不得松动，生产实体只读、零业务写入。
 
 ## Scope 锁地图
 
@@ -41,7 +40,6 @@
 
 - `ARCH-F006-DEMAND-DRIVEN-MATERIAL-RECEIPT-001`：销售需求、BOM净需求、采购建议、客户来料、仓储来源任务及对应 Java/Web/测试/dispatch；涉及 Entity/Repository/Flyway 时必须重登记最新 Base 并通过真实 JPA/迁移门禁。不得开启普通手工收料写入口或修改生产数据。
 
-- `ENH-F006-CUSTOMER-CREATE-PROGRESSIVE-DISCLOSURE-001`：客户 Web 共享表单与 Java Customer DTO/Service/Repository/API/import、销售使用门禁、目标测试/dispatch；先裁定联系人/电话/地址是否强制，再实施。不得修改生产客户数据。
 
 - `ENH-F006-SUPPLIER-IMPORT-001`：供应商 Java Entity/DTO/Controller/Service/Repository、采购门禁、共享 Excel 导入与目标测试；Web 供应商列表/详情/新增编辑/导入及 API/types/tests；必须真实 JPA Context（如触及查询），生产业务写入为 0。
 
