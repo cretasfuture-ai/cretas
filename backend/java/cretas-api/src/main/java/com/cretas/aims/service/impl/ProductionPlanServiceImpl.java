@@ -860,16 +860,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             plan.setSelectedBomVersion(null);
             return;
         }
+        // ⛔ 这里【曾经】有一道 `mode == WORKFLOW && activeRecipe.isEmpty()` 的 409
+        //    ("当前产品没有已激活的 BOM" / ACTIVE_BOM_REQUIRED)。它是【到不了的代码】——
+        //    本方法在上面 `if (authority.mode() == WORKFLOW) { ...; return; }` 已经早退,
+        //    走到这一行时 mode 必然【不是】 WORKFLOW, 那个条件恒为 false。
+        //    也就是说: 那道闸从写下来的那天起就【一次都没有执行过】。本仓形态 B: 机制在、没接上。
+        //
+        //    ⚠️ 删掉不是放松准入 —— WORKFLOW 模式的 BOM 准入由 applyWorkflowBomAuthority
+        //    → resolvePinnedBomAuthority 的 ACTIVE_BOM_FAMILY_REQUIRED 唯一负责, 那道是活的。
+        //    留着一道永不执行的闸更糟: 它让人以为这里有保护, 从而跳过核实。
         Optional<BomRecipe> activeRecipe = bomRecipeRepository
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                         plan.getFactoryId(), plan.getProductTypeId(), BomRecipe.Status.ACTIVE);
-        if (authority.mode() == ProductionBatch.WorkflowSelectionMode.WORKFLOW
-                && activeRecipe.isEmpty()) {
-            throw new BusinessException(409, "当前产品没有已激活的 BOM")
-                    .withCode("ACTIVE_BOM_REQUIRED")
-                    .withHint("请先完成并激活 BOM，再创建生产计划")
-                    .withSeverity("warning");
-        }
         activeRecipe.ifPresentOrElse(recipe -> {
             plan.setSelectedBomRecipeId(recipe.getId());
             plan.setSelectedBomVersion(recipe.getVersion());
