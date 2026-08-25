@@ -170,7 +170,7 @@ _BOM_WORKFLOW_SEQUENCE_ANSWER = """\
 5. 若预检为 USER_INPUT_REQUIRED 或 CONFLICT，页面会列出缺失材料、歧义或单位冲突并停止，必须修正后由用户重新发起；不能绕过，也不能猜测映射。
 6. 确认后系统原子完成 BOM 同步、Workflow 发布和启用。若提交期间版本已变化，页面刷新最新状态并停止自动重试；用户确认后再次点击会复用同一幂等请求，不会重复发布。
 
-**验收结果：** 画布明确区分“正在编辑草稿”和当前生效版本；Workflow 显示“已发布并启用”及当前版本，BOM 与 Workflow 都处于 ACTIVE。既有生产计划继续使用创建时快照，新计划才采用新状态；若失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
+**验收结果：** 画布明确区分“正在编辑草稿”和当前生效版本，并分别回读“已发布 vX / 已启用 vX”；BOM 与 Workflow 都处于 ACTIVE。已开工并形成正式报工的生产计划继续使用原版本快照；未开工计划会随当前生效配置安全重新绑定，新计划采用最新状态。若失败，按页面列出的具体缺失项逐项修正，不能绕过门禁。"""
 
 _FACTORY_BOM_CANVAS_COST_ANSWER = """\
 当前 BOM 配置已经并入“生产管理 → 生产配置 → 产品-工序配置”的 Workflow 画布，这是当前唯一写入口。RN 手机端的 BOM 主子表页面和 9 个旧式 AI BOM 写工具已经退役；AI 只能解释路径与门禁，不能绕过画布直接增删改 BOM。历史记录仍可按页面提供的只读入口查看。
@@ -306,13 +306,13 @@ _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER = """\
 
 **仓库确认：**
 1. 页面按计划固定的终端产出集合列出每一行 SKU、批次、报工数量和单位；混合单位保持各自单位，不生成一个伪造的合计数量或合计单位。
-2. 每一行实收数量必须大于 0，并且与该行正式报工数量完全一致。少收、多收、漏行或新增计划外 SKU 都会阻止本次确认，退回生产修正报工事实。
-3. 全部产出行一次性校验、一次性入库；任一行失败时保留原待收状态，不允许部分 SKU 已入库、其余 SKU 仍待收。
-4. 重复点击或网络重试复用同一幂等结果，不重复生成库存批次或库存流水。
+2. 每次请求仍提交完整产出行集合，但每行填写的是本次实收增量；增量必须大于 0，累计实收不得超过该行正式报工数量。漏行、计划外 SKU、批次/单位错误或累计超收会让本次请求整体失败，不回写已经成功的历史入库。
+3. 合法分次入库逐轮累计：未收齐时显示 `PARTIAL` / `PARTIALLY_RECEIVED`，保留剩余待收；全部行累计与正式报工数量完全一致后才显示 `COMPLETED` / `RECEIVED`。同一请求内仍然整组原子过账，不允许本轮部分 SKU 已入库、其它 SKU 本轮失败。
+4. 双击或网络重试必须复用同一幂等键；用户主动开始下一轮收货时生成新的请求键。相同键只返回当前累计结果，不重复生成库存批次或流水，不同合法轮次也不能互相吞掉。
 
-**验收结果：** 仓库回读的产出行集合、每行 SKU、批次、数量和单位与正式报工完全一致；混合单位没有被相加。只有整组确认成功后，所有对应成品批次和生产仓可用库存才一起生效。"""
+**验收结果：** 独立回读每行已收、剩余、批次、单位和库存流水；每一轮只增加本轮实收，全部累计完成后才关闭待收任务。混合单位没有被相加，超收和失败重试的业务写入为 0。"""
 _FACTORY_RN_READONLY_ANSWER = """\
-当前 RN App 的业务入口只面向仓库主管和仓库操作员；其余 11 个业务角色登录后进入“请使用电脑端”指引页，平台管理员与超级管理员仅保留技术支持例外，不能据此把 Web 能力说成手机能力。
+当前 RN App 按已登录角色进入专属导航，不能再把其它岗位统一描述成“请使用电脑端”。仓库主管和仓库操作员使用独立仓储工作台；质量检验员使用专属质检工作台，生产、调度、销售、采购、财务等角色也按实际角色路由与权限进入各自界面。存在导航不等于拥有跨模块写权限。
 
 **仓库手机端：**
 1. 底部固定为“首页 / 入库 / 发货 / 我的”四个入口，登录后先到首页；首页只放两个大号入口，把现场人员带到入库或发货，不重复展示统计或任务列表。“库存”仅从导航隐藏、代码未删除，库存查询、盘点和其它办公室工作使用电脑 Web。“我的”必须保留退出和切换账号。
@@ -322,23 +322,58 @@ _FACTORY_RN_READONLY_ANSWER = """\
 5. 发货进屏即读取服务端 FIFO 推荐并用业务名称显示“从哪一批取多少”。推荐量不足时先说明“还差约多少”并提供“去调拨”；该提示是进屏快照，不硬禁提交，最终仍由服务端权威校验并原样显示业务原因。普通仓管不手工维护内部批次分配，也不能静默少发。
 
 **物料需求单：**
-物料需求单和生产工作台属于电脑 Web。手机端非仓库业务角色只显示电脑端地址、复制地址、退出和切换仓库账号提示，不提供隐藏的写入口。
+物料需求单和需要管理审批的生产工作台仍以电脑 Web 页面及当前权限为准。质量检验员手机端可按专属流程提交质检、保存证据、查看结果和处置申请；它不能替仓库收发货，也不能绕过处置审批自行放行库存。
 """
 _FACTORY_WORKFLOW_AUTOFORK_ANSWER = """\
 当前已启用 Workflow 可以直接进入编辑，但保存不会原地改写生产正在使用的版本。
 
 1. 编辑已启用版本时，按钮显示“保存草稿（自动新版本）”；业务图确有变化且没有现成草稿时，保存自动创建更高版本的 `DRAFT`，原已启用版本继续服务生产。“另存独立版本”只是可选历史快照动作，不是发布前置步骤。
-2. 当前可编辑草稿已被生产计划或生产批次引用时，保存先把原 Workflow 行冻结为 `SNAPSHOT`，再创建更高版本 `DRAFT`。计划和批次继续通过 `selectedWorkflowId` 固定创建时版本，旧 Workflow、Revision 和生产身份都不回写。
-3. 停用前按工厂与活动 Workflow 统计生产计划 `IN_PROGRESS/PAUSED`，以及生产批次 `IN_PROGRESS/PRODUCING/PAUSED`。任一计数非零即返回 409 `WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE`，并提示先完成或取消相关生产后重试；活动 Workflow 身份无法确认时返回 409 `WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN`，失败关闭。
-4. 已完成、已取消和仅待处理的历史/未开工引用不阻止停用；历史预览保持只读，退出预览或恢复到当前草稿后才重新开放编辑入口。
+2. 只有已开工并形成正式报工的计划才锁定历史：当前可编辑草稿已被这类生产引用时，保存先把原 Workflow 行冻结为 `SNAPSHOT`，已开工计划继续通过 `selectedWorkflowId` 固定创建时版本，再创建更高版本 `DRAFT`。未开工计划不应冻结成历史，它会在新配置发布/启用时同步采用当前生效版本；历史报工、批次与成本仍然不回写。
+3. 历史版本预览只读；退出历史或恢复到当前草稿后才可编辑。旧浏览器会话提交与当前发布图完全相同的延迟自动保存时按幂等 no-op 处理；图已不同且 `id` / `version` / `lockVersion` 身份过期时返回 409 冲突，提示刷新当前配置，不能把旧图重新创建为新草稿。
+4. 停用前按工厂与活动 Workflow 统计生产计划 `IN_PROGRESS/PAUSED`，以及生产批次 `IN_PROGRESS/PRODUCING/PAUSED`。任一计数非零即返回 409 `WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE`，并提示先完成或取消相关生产后重试；活动 Workflow 身份无法确认时返回 409 `WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN`，失败关闭。已完成、已取消和仅待处理的未开工引用不阻止停用。
 
-**验收结果：** 保存后回读新的 DRAFT 版本及原版本不变；既有计划/批次仍指向创建时 Workflow；有活动生产时停用写入为 0，页面展示服务端原因和下一步。发布新草稿仍须遵守“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”及 ACTIVE BOM 前置门禁。"""
+**验收结果：** 已开工计划保留历史版本，未开工计划回读当前配置；旧会话同图零写 no-op、不同图返回 409，历史预览保持只读。有活动生产时停用写入为 0。发布新草稿仍须遵守“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”及 ACTIVE BOM 前置门禁。"""
+_FACTORY_INCREMENTAL_RECEIPT_ANSWER = """\
+生产小结、仓库分次入库和销售发运是三个独立动作；不能把小结成功、某轮实收或发运子单混成同一种完成状态。
+
+1. **生产小结：** 在生产计划点击“小结”，填写本轮备注；备注由服务端持久化并可在列表/详情回读。仅结算本轮正式报工增量，重复请求不重复扣料或计成本。审批撤销后合法重新小结的 `DRAFT` 行，只在其结算时间与本计划当前有效小结会话 `postedAt` 精确一致时才视为已结算并允许停产；普通草稿、已撤销会话和伪造时间继续返回 409 `BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE`，不会重放库存。二次加工 WIP 计划仍可进入真实开工/报工操作，开工记录真实操作人。
+2. **成品分次入库：** 仓储从“入库 → 生产成品入库”打开真实待收任务，逐行核对成品 SKU、批次、报工总量、已收量、本次实收、剩余和单位。每轮按完整产出行集合提交，逐行本次增量必须大于 0，累计实收不能超过报工数量，混合单位不合计。
+3. **状态与幂等：** 未收齐时保持 `PARTIAL` / `PARTIALLY_RECEIVED` 并继续待收；累计收齐才进入 `COMPLETED` / `RECEIVED`。同一次点击或网络重试复用同一幂等键，主动开始下一轮生成新键；重复请求零额外库存写入，下一轮不能被上一轮请求键吞掉。
+4. **边界：** 超收、漏产出行、错误 SKU/批次/单位返回明确错误并使本轮整体回滚，已经成功的前轮保持不变。`BY_STOCK` 已在小结中形成可用成品时，不再要求第二次重复确认。
+
+**验收结果：** 小结备注、每行累计/剩余、库存增量、请求幂等键和 PARTIAL → COMPLETED 状态均可独立回读；生产、仓储和销售职责不互相代办。"""
+_FACTORY_QUALITY_DISPOSITION_ANSWER = """\
+质量检验员从 RN 专属质检工作台或对应 Web 页面提交真实抽检；有条件通过和不合格都必须进入独立处置与审批，不能直接冒充放行。
+
+1. **检验与证据：** 按抽样数、评分推导合格数/不合格数，并以实际合格率判定：至少 95% 为 `PASS`，70% 至不足 95% 为 `CONDITIONAL`，不足 70% 为 `FAIL`。上传的普通质检照片以 `QUALITY_CHECK` 附件独立保存，结果页和详情均可回读原图、备注、记录身份与批次。
+2. **有条件通过不是合格：** `CONDITIONAL` 与 `FAIL` 均展示“处理不合格品”入口；不能把有条件通过映射为 PASS，也不能删除处置建议。申请必须绑定同工厂、同批次、同一质检记录，申请人由当前登录身份确定。
+3. **申请与审批：** 需要审批的放行、返工、隔离或报废只先创建 `PENDING_APPROVAL`，重新打开结果/详情后仍回读同一待审批记录并锁定重复操作。质量主管从“质量管理 → 不良品处置”查看待处置和待审批；申请人与审批人必须分离，重复审批、跨厂、错批次和伪造人员失败关闭。
+4. **库存与销售门禁：** 待审批阶段不改变库存、不放行；批准与实际处置在同一事务执行，执行失败则审批整体回滚。销售分配和仓库发货只允许状态为 `AVAILABLE` 的成品批次；隔离、不合格、报废、未知或其它不可售批次均返回 409 `FINISHED_GOODS_BATCH_NOT_SALEABLE`。
+
+**验收结果：** 独立回读抽检结果、照片证据、处置申请/审批人、PENDING 审批锁、批次状态和销售出库拒绝；质检成功、证据成功、审批成功与库存生效分别确认。"""
+_FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER = """\
+成品盘点、原料盘点和成品报废是独立单据；只有审批后的受控动作才改变对应库存，不能混用批次或申请人身份。
+
+1. **按库存范围建单：** 仓储管理 → 盘点管理选择仓库和库存范围。`RAW_MATERIAL` 只盘原料批次，`FINISHED_GOODS` 只盘成品批次；同仓同月可分别存在两种任务，期初建账仍只支持原料。无可盘成品时明确提示，不能用空任务冒充完成。
+2. **成品差异生效：** 每行回读成品批次、产品、单位、盘点时系统量和真实实盘量；暂存/审批不改库存，点击应用差异才过账。计数后实时库存漂移返回 409 `STOCKTAKE_DRIFT`，实盘不能低于已发货数量；缺少成本时保持待补，不能伪造成本或财务金额。
+3. **成品报废：** 质量管理 → 报废处置按真实成品批次申请，展示批次号、产品名称、数量和单位；申请人由登录身份落库并回读，历史确实缺失时明确显示“历史未记录”，不能用当前审批人代替申请人。审批通过后才按实际数量扣减并记录流水；库存归零可显示 `DEPLETED`。
+4. **销售门禁：** 只有 `AVAILABLE` 成品批次可分配或发货；隔离、不合格、报废、`DEPLETED` 和未知状态一律返回 409 `FINISHED_GOODS_BATCH_NOT_SALEABLE`，不会产生销售出库。
+
+**验收结果：** 成品/原料盘点范围、审批前后库存、差异流水、成品报废申请人及批次/数量，以及不可售批次发货拒绝全部独立回读。"""
+_FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER = """\
+采购与销售单据面向业务人员统一填写含税单价，税率单独维护；系统根据税率反算不含税单价并分别展示金额，不能把含税价再次加税。
+
+1. **销售：** 新建销售订单选择真实成品或半成品，输入含税销售单价和 0%–100% 税率；修改任一项后按“不含税单价 = 含税单价 ÷ (1 + 税率)”反算，保存当前价格与税率快照。
+2. **采购：** 采购订单行填写含税采购单价和税率；供应商详情、采购订单与财务回读保持一致。税率缺失或非法时明确阻止，不能默认伪造 0 税。
+3. **采购单位：** 重量、体积和长度均可按同量纲换算。物料基本单位为米时可选米或厘米等已登记长度单位；重量 kg/g、体积 L/mL 同理。箱、卷等包装只有明确配置“包装单位 → 库存基本单位”换算时才可选，长度不能与重量/体积混选。
+
+**验收结果：** 含税价、税率、不含税价和总额在采购/销售/财务页面一致；米、厘米等长度单位合法可选，跨量纲和无换算包装失败关闭。"""
 _FACTORY_SALES_DELIVERY_INVOICE_ANSWER = """\
 当前销售闭环是“全屏建销售母单 → 创建一张或多张子发运单 → 仓库确认实际出库 → 全部发完后系统生成唯一开票待办”，母单、子单、库存和发票分别留痕。
 
 1. 新建订单使用全屏页面。商品行只允许 `FINISHED_PRODUCT` 和 `SEMI_FINISHED`；空分类、未知 ID、原料和包材一律失败关闭。客户自带原料只进入独立 `suppliedMaterials`，不混入商品搜索，也不会由销售侧直接增加库存。每个商品行必须选择服务端允许的来源仓库，后端再次校验。
 2. 销售先建立母发货单，母单永远不能直接扣库存或确认发货。`FULL` 子发运单在订单锁内逐行等于母单全部剩余量；`PARTIAL` 可按明确数量创建多张。每张子单创建前选择配送方式；物流配送必须填写物流公司和运单号。
-3. 子单进入 `PENDING_WAREHOUSE_CONFIRM` 后由仓管核对实际数量、来源仓和 FIFO 批次再确认出库；确认记录真实仓管用户和时间。累计实发不能超过订单量，重试不能重复扣库存，销售与仓储两端都能回读状态、创建/确认人、时间和逐批数量。
+3. 子单进入 `PENDING_WAREHOUSE_CONFIRM` 后由仓管核对实际数量、来源仓和 FIFO 批次再确认出库；只有状态为 `AVAILABLE` 的成品批次可销售或发货，隔离、不合格、报废与未知批次返回 409 `FINISHED_GOODS_BATCH_NOT_SALEABLE`。确认记录真实仓管用户和时间。累计实发不能超过订单量，重试不能重复扣库存，销售与仓储两端都能回读状态、创建/确认人、时间和逐批数量。
 4. 全部子单发完的完成态边沿只生成一个持久化自动开票待办。手工 `/request`、`/request-from-order` 与旧 AI 开票工具固定返回 410，不创建并行发票；系统有界重试，耗尽后只允许财务经理在失败待办工作台显式重试。财务继续审核、驳回或开具系统生成的记录，再独立登记收款并核对应收余额。
 
 **验收结果：** 母单不扣库；每张子单只确认一次；最后一张完成后只出现一条自动开票记录；手工兼容入口业务写入为 0。"""
@@ -998,6 +1033,8 @@ def _needs_factory_workflow_autofork_guard(query: str) -> bool:
         for term in (
             "自动新版本", "自动分叉", "已启用版本", "保存草稿", "另存独立版本",
             "草稿被引用", "计划引用", "批次引用", "snapshot", "selectedworkflowid",
+            "当前配置", "历史版本", "旧会话", "版本过期", "身份过期",
+            "已开工", "未开工", "自动保存", "lockversion",
         )
     )
     mentions_deactivation_gate = any(
@@ -1009,6 +1046,52 @@ def _needs_factory_workflow_autofork_guard(query: str) -> bool:
         )
     )
     return mentions_workflow and (mentions_auto_fork or mentions_deactivation_gate)
+
+
+def _needs_factory_incremental_receipt_guard(query: str) -> bool:
+    """Keep production summaries and cumulative warehouse receipt deterministic."""
+    normalized = (query or "").lower()
+    production_context = any(
+        term in normalized for term in ("生产", "完工", "成品", "小结", "wip")
+    )
+    incremental_context = any(
+        term in normalized
+        for term in ("分次", "拆分", "累计", "本次实收", "小结备注", "重新小结", "重结", "撤销后", "partial", "幂等")
+    )
+    return production_context and incremental_context
+
+
+def _needs_factory_quality_disposition_guard(query: str) -> bool:
+    """Keep conditional inspections, approval and saleability source-isolated."""
+    normalized = (query or "").lower()
+    quality_context = any(term in normalized for term in ("质检", "检验", "质量"))
+    disposition_context = any(
+        term in normalized
+        for term in ("处置", "有条件", "conditional", "不合格", "隔离", "放行")
+    )
+    return quality_context and disposition_context
+
+
+def _needs_factory_finished_goods_stocktake_guard(query: str) -> bool:
+    """Explain finished-goods inventory scopes and audited disposal readback."""
+    normalized = (query or "").lower()
+    stocktake_context = "盘点" in normalized or "报废" in normalized
+    finished_goods_context = any(
+        term in normalized
+        for term in ("成品", "申请人", "已发货", "finished_goods", "stocktake_drift")
+    )
+    return stocktake_context and finished_goods_context
+
+
+def _needs_factory_tax_inclusive_purchase_guard(query: str) -> bool:
+    """Explain tax-inclusive pricing and registered same-dimension purchase units."""
+    normalized = (query or "").lower()
+    commercial_context = "采购" in normalized or "销售" in normalized
+    pricing_or_length_context = any(
+        term in normalized
+        for term in ("含税", "税率", "税点", "不含税", "厘米", "长度单位")
+    )
+    return commercial_context and pricing_or_length_context
 
 
 def _needs_factory_sales_delivery_invoice_guard(query: str) -> bool:
@@ -1987,19 +2070,22 @@ FACTORY_SYSTEM_PROMPT = """\
 - 普通质检照片在质检记录成功创建后逐张登记为 `QUALITY_CHECK` 附件；记录成功与附件上传成功分别报告，详情必须回读可打开原图，单张失败不能冒充证据齐全。
 - 包装标签拍检是另一条独立流程：客户“待我审核”只保留缺标风险、无法判断、未识别到可核查盒子或分析失败；受信任流水线明确识别到盒子且无风险时显示“系统未见风险”并退出客户人工队列，但不能冒充人工真值。进入待审后仍按盒子、白标、彩标三层参考框逐项复核。客户风险复核、平台训练选样、工厂整图审核与单盒精修彼此隔离；平台精修不覆盖工厂真值，AI 提议和系统自动通过都不能直接成为训练真值。训练批准只允许导出，不会自动训练或发布模型。
 - 报工页面按配置单位显示和提交。kg/g 等同量纲可科学换算；盒、袋、只等计数/包装单位按字面量匹配且不得暗中折重。跨量纲成品率必须先补充每单位重量，否则明确不可比，不能输出伪造百分比。
-- RN App 的业务入口只面向仓库主管和仓库操作员；其它 11 个业务角色使用电脑 Web，平台管理员和超级管理员仅有技术支持例外。仓储底部固定为“首页 / 入库 / 发货 / 我的”，登录后先到只含两个大入口的首页；“库存”仅隐藏，库存查询与盘点回到电脑 Web。入库以真实采购收货任务为真值，按“全部 / 待收货 / 部分入库 / 已收货”筛选，卡片显示项数及带单位数量，多单位不合计；读取失败不能伪装空列表。生产结单后的成品仍从“入库 → 生产成品入库”核对实收。旧 AI/空白新建入库与生产侧原料入库已退役，上架只有实际更新并回读 `storageLocation` 后才成功。发货进屏读取 FIFO 推荐，缺口先说明“还差约多少”并给“去调拨”，最终仍以服务端校验为准。
+- RN App 按真实角色进入专属导航：仓库主管/操作员进入仓储工作台，质量检验员进入专属质检工作台；生产、调度、销售、采购、财务等岗位按当前角色路由与权限进入对应界面，不能统一说成“其它 11 个角色只能使用电脑端”。仓储底部固定为“首页 / 入库 / 发货 / 我的”，登录后先到只含两个大入口的首页；“库存”仅隐藏，库存查询与盘点回到电脑 Web。入库以真实采购收货任务为真值，按“全部 / 待收货 / 部分入库 / 已收货”筛选，卡片显示项数及带单位数量，多单位不合计；读取失败不能伪装空列表。生产结单后的成品从“入库 → 生产成品入库”分次核对实收。旧 AI/空白新建入库与生产侧原料入库已退役，上架只有实际更新并回读 `storageLocation` 后才成功。发货进屏读取 FIFO 推荐，缺口先说明“还差约多少”并给“去调拨”，最终仍以服务端校验为准。
 - 生产经理与生产文员是独立角色：生产经理可写生产、排程、工作报工和看板，研发/质量/仓储/库存只读，销售/分析/设备/采购/报表/HR/财务/系统不可用；生产文员可写生产和工作报工、可复核待审批报工，看板/仓储/库存/报表只读，数据分析、排程、销售、采购、质量、研发、HR、设备、财务和系统不可用。菜单可见、模块可写和单据允许动作必须分别判断。
 - F006 财务经理只在财务/OA 范围工作；采购、销售、生产、研发菜单不再开放，工厂侧经营分析入口暂时隐藏。销售/采购依据通过财务页内只读速览或当前 OA 节点回读，不靠跨模块导航。仓库确认收货生成 `AP_INVOICE` 未清应付后，财务从应收应付选择该行付款并核销；旧采购付款申请写入口固定返回 410 `PAYMENT_REQUEST_LEGACY_WRITE_DISABLED`，不能恢复成新付款路径。
 - Workflow 冲突在生产计划选择成品时按终端产出集合解析；完全匹配优先，其次最小超集，同级重叠必须由用户查看工序链预览后选择。
 - BOM 与 Workflow 的兼容验收摘要必须保留“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。当前页面的展开口径是“Workflow 完整草稿 → 画布首次保存 BOM 配置时自动固定该工艺修订 → 生效该草稿 → Workflow 刷新、发布并启用”；普通用户不选择 Workflow 版本，画布只读显示工艺来源，工序由目标 SKU 的工艺链生成并锁定。ACTIVE BOM 是 Workflow 发布启用的前置门禁；禁止回答“两者无依赖”“两者无从属关系”或“先发布 Workflow 再激活 BOM”。
 - 当前 BOM 成本摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。该摘要不是完整产品成本，不能直接与正式报工、结算形成的实际完整成本比较；不可比时成本差异、差异率和状态保持空值。
-- 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，版本竞争时停止自动重试，既有计划快照不回写。
-- 编辑已启用 Workflow 时使用“保存草稿（自动新版本）”，无需先“另存独立版本”；保存自动创建更高版本 DRAFT，生产继续使用原已启用版本。草稿若已被计划/批次引用则先冻结为 SNAPSHOT，再创建新 DRAFT，既有 `selectedWorkflowId` 不变。停用前检查活动计划与批次；命中时 409 `WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE`，身份未知时 409 `WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN`，均失败关闭。
+- 单独激活 BOM 不会发布 Workflow；回到 Workflow 后使用“自动同步并发布”。系统按最后一次保存后的草稿与当前 ACTIVE BOM 实时预检，READY/AUTO_MIGRATABLE 才可继续，USER_INPUT_REQUIRED/CONFLICT 必须停止并列出问题；确认后原子完成 BOM 同步、Workflow 发布和启用，并回读“已发布 vX / 已启用 vX”。已开工正式报工计划保留原快照，未开工计划随新当前配置安全重新绑定。
+- 编辑已启用 Workflow 时使用“保存草稿（自动新版本）”，无需先“另存独立版本”；只有已开工并形成正式报工的计划才冻结原草稿为 SNAPSHOT 并保留 `selectedWorkflowId`，未开工计划随当前生效配置更新。历史预览只读，旧会话同图自动保存幂等零写，不同图且 `id` / `version` / `lockVersion` 过期返回 409。停用前检查活动计划与批次；命中时 409 `WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE`，身份未知时 409 `WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN`，均失败关闭。
 - 当前没有扫码报工。操作员从“分配给我的工序”点开已分配任务，按“投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交”填写；旧扫码页/死端点已移除，草稿只能恢复编辑。保存草稿不扣库存、不形成正式成本，正式报工才按固定 BOM 从生产仓自动分配原料、调料和包材批次。
 - 同一上游物料能否多选批次以计划冻结节点的 `allowMultipleUpstreamSources` 为准；过期库存不可用。中间工序调料沿计划读取终端成品 BOM，BOM 激活拒绝孤儿槽位，结单保留未绑定工序的辅料与包材。上游工序形成的中间 WIP 批次继续携带同一生产计划身份，供下一道工序在同一计划链中领用。
 - 会计期间关账申请只创建 OA；APPROVE 后才 CLOSED 并生成库存台账快照和凭证，REJECT 保持 OPEN。CLOSED/LOCKED 不能靠重复审批重开，只能走专用重开流程。
 - 正式报工撤回的守卫、审批状态、软删/反向流水、库存占用释放、成本回放和 DONE 收尾必须处于同一事务；任一步失败全部回滚，不能留下 APPROVED 但只执行一半。审批人与提交人必须分离；历史 APPROVED 半执行记录再次审批时只恢复执行，不能重写原审批人和时间。
-- 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。多产出仓库确认按终端产出行逐项核对，混合单位不合计；每行实收必须大于 0 且等于该行报工数量，任一行不符则整组不入库。
+- 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。生产小结备注必须持久化回读；审批撤销后合法重新小结的 DRAFT 行，仅在结算时间与当前有效小结会话 postedAt 精确一致时允许停产，普通草稿/撤销会话/伪造时间仍返回 409 BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE，绝不重放库存。多产出仓库每轮按完整终端产出行集合提交本次正数增量，混合单位不合计；累计实收不得超过各行报工数量，未收齐为 PARTIAL，累计收齐为 COMPLETED。同轮重试复用幂等键，下一轮使用新键；失败只回滚本轮。
+- 质检实际合格率至少 95% 为 PASS、70% 至不足 95% 为 CONDITIONAL、不足 70% 为 FAIL；CONDITIONAL 和 FAIL 均进入处置审批并回读 QUALITY_CHECK 照片证据。需要审批的处置先保持 PENDING_APPROVAL，申请人与审批人分离，批准及实际库存动作同事务；仅 AVAILABLE 成品可销售或发货，其它状态返回 409 FINISHED_GOODS_BATCH_NOT_SALEABLE。
+- 原料盘点 RAW_MATERIAL 与成品盘点 FINISHED_GOODS 分别建单；成品盘点仅对同仓成品批次生效，计数后库存漂移返回 409 STOCKTAKE_DRIFT，不得低于已发货数量。成品报废显示批次、产品、数量、单位与真实申请人，历史缺失明确显示“历史未记录”；审批前不扣库存。
+- 采购与销售统一填写含税单价并按税率反算不含税单价；采购量纲支持重量、体积和长度，米/厘米可按同一长度量纲选择，箱/卷仍需已登记的包装换算，跨量纲失败关闭。
 - 副产物先在原料类型字典建立带“副产”标记的 SKU，再在画布的 BOM 副产配置中声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
 - 副产抵扣只按盘点实际数量 × 盘点时人工确认单价，由服务端统一计算；未确认数量或单价时显示“未确认/未抵扣”，不能显示 0，只有人工明确确认单价为 0 时才显示 0.00。
 - 人工成本来自本道实际工时乘全局工时单价；工序主档的高级设置不是本轮成本真值。
@@ -2549,6 +2635,26 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_factory_workflow_autofork_guard(request.question)
     ):
         guard_answer = _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_quality_disposition_guard(request.question)
+    ):
+        guard_answer = _FACTORY_QUALITY_DISPOSITION_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_finished_goods_stocktake_guard(request.question)
+    ):
+        guard_answer = _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_incremental_receipt_guard(request.question)
+    ):
+        guard_answer = _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_tax_inclusive_purchase_guard(request.question)
+    ):
+        guard_answer = _FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER
     elif (
         not is_restaurant_request
         and _needs_factory_bom_canvas_cost_guard(request.question)

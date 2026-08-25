@@ -12,12 +12,16 @@ from food_kb.api.manual_chat import (
     _FACTORY_BATCH_ADJUSTMENT_ANSWER,
     _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
+    _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER,
+    _FACTORY_INCREMENTAL_RECEIPT_ANSWER,
     _FACTORY_PURCHASE_OA_RECEIPT_ANSWER,
+    _FACTORY_QUALITY_DISPOSITION_ANSWER,
     _FACTORY_REPORT_IDEMPOTENCY_REJECTION_ANSWER,
     _FACTORY_REALTIME_WIP_ANSWER,
     _FACTORY_FORM_ASSISTANT_RESULT_ANSWER,
     _FACTORY_MATERIAL_SALES_ANSWER,
     _FACTORY_TRANSFER_PHYSICAL_STOCK_ANSWER,
+    _FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER,
     _FACTORY_WORKFLOW_MAINTENANCE_ANSWER,
     _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
@@ -67,12 +71,16 @@ from food_kb.api.manual_chat import (
     _needs_factory_batch_adjustment_guard,
     _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
+    _needs_factory_finished_goods_stocktake_guard,
+    _needs_factory_incremental_receipt_guard,
     _needs_factory_purchase_oa_receipt_guard,
+    _needs_factory_quality_disposition_guard,
     _needs_factory_report_idempotency_rejection_guard,
     _needs_factory_realtime_wip_guard,
     _needs_factory_form_assistant_result_guard,
     _needs_factory_material_sales_guard,
     _needs_factory_transfer_physical_stock_guard,
+    _needs_factory_tax_inclusive_purchase_guard,
     _needs_factory_workflow_maintenance_guard,
     _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
@@ -144,7 +152,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交" in FACTORY_SYSTEM_PROMPT
     assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in FACTORY_SYSTEM_PROMPT
     assert "使用“自动同步并发布”" in FACTORY_SYSTEM_PROMPT
-    assert "每行实收必须大于 0 且等于该行报工数量" in FACTORY_SYSTEM_PROMPT
+    assert "每轮按完整终端产出行集合提交本次正数增量" in FACTORY_SYSTEM_PROMPT
+    assert "累计实收不得超过各行报工数量" in FACTORY_SYSTEM_PROMPT
     assert "禁止回答“两者无依赖”" in FACTORY_SYSTEM_PROMPT
     assert "原料包装换算在“原料类型字典”" in FACTORY_SYSTEM_PROMPT
     assert "画布中的 BOM 副产配置只声明稳定的副产 SKU 与预计量" in FACTORY_SYSTEM_PROMPT
@@ -166,7 +175,8 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "生效 BOM 为空配方只能说“还没配辅料/包材”" in FACTORY_SYSTEM_PROMPT
     assert "中间 WIP 批次继续携带同一生产计划身份" in FACTORY_SYSTEM_PROMPT
     assert "跨量纲成品率必须先补充每单位重量" in FACTORY_SYSTEM_PROMPT
-    assert "RN App 的业务入口只面向仓库主管和仓库操作员" in FACTORY_SYSTEM_PROMPT
+    assert "RN App 按真实角色进入专属导航" in FACTORY_SYSTEM_PROMPT
+    assert "质量检验员进入专属质检工作台" in FACTORY_SYSTEM_PROMPT
     assert "首页 / 入库 / 发货 / 我的" in FACTORY_SYSTEM_PROMPT
     assert "发货进屏读取 FIFO 推荐" in FACTORY_SYSTEM_PROMPT
     assert "生产经理与生产文员是独立角色" in FACTORY_SYSTEM_PROMPT
@@ -390,7 +400,13 @@ def test_bom_workflow_publication_questions_use_the_deterministic_guard():
     assert "READY" in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "AUTO_MIGRATABLE" in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "USER_INPUT_REQUIRED" in _BOM_WORKFLOW_SEQUENCE_ANSWER
-    assert "既有生产计划继续使用创建时快照" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "已发布 vX / 已启用 vX" in _BOM_WORKFLOW_SEQUENCE_ANSWER
+    assert "已开工并形成正式报工的生产计划继续使用原版本快照" in (
+        _BOM_WORKFLOW_SEQUENCE_ANSWER
+    )
+    assert "未开工计划会随当前生效配置安全重新绑定" in (
+        _BOM_WORKFLOW_SEQUENCE_ANSWER
+    )
     assert "两者无依赖" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "两者无从属关系" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
     assert "先发布 Workflow" not in _BOM_WORKFLOW_SEQUENCE_ANSWER
@@ -561,8 +577,17 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
     assert not _needs_multi_output_warehouse_receipt_guard("单个成品怎么入库？")
     assert "按产出行逐项确认" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     assert "混合单位保持各自单位" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
-    assert "与该行正式报工数量完全一致" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
-    assert "不允许部分 SKU 已入库" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "每行填写的是本次实收增量" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "累计实收不得超过该行正式报工数量" in (
+        _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    )
+    assert "`PARTIAL` / `PARTIALLY_RECEIVED`" in (
+        _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    )
+    assert "`COMPLETED` / `RECEIVED`" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "同一请求内仍然整组原子过账" in (
+        _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    )
 
 
 def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
@@ -577,9 +602,12 @@ def test_factory_rn_readonly_questions_use_current_mobile_boundaries():
     assert "首页只放两个大号入口" in _FACTORY_RN_READONLY_ANSWER
     assert "“库存”仅从导航隐藏" in _FACTORY_RN_READONLY_ANSWER
     assert "库存查询、盘点和其它办公室工作使用电脑 Web" in _FACTORY_RN_READONLY_ANSWER
-    assert "业务入口只面向仓库主管和仓库操作员" in _FACTORY_RN_READONLY_ANSWER
+    assert "按已登录角色进入专属导航" in _FACTORY_RN_READONLY_ANSWER
+    assert "质量检验员使用专属质检工作台" in _FACTORY_RN_READONLY_ANSWER
     assert "物料显示服务端真实品名" in _FACTORY_RN_READONLY_ANSWER
-    assert "物料需求单和生产工作台属于电脑 Web" in _FACTORY_RN_READONLY_ANSWER
+    assert "需要管理审批的生产工作台仍以电脑 Web 页面及当前权限为准" in (
+        _FACTORY_RN_READONLY_ANSWER
+    )
     assert "真实采购收货任务为真值" in _FACTORY_RN_READONLY_ANSWER
     assert "全部 / 待收货 / 部分入库 / 已收货" in _FACTORY_RN_READONLY_ANSWER
     assert "多单位订单不伪造总量" in _FACTORY_RN_READONLY_ANSWER
@@ -596,6 +624,7 @@ def test_factory_workflow_autofork_and_active_reference_gate_are_deterministic()
         "已启用 Workflow 编辑后为什么保存草稿会自动新版本？",
         "Workflow 草稿已被生产计划引用时保存会怎样自动分叉？",
         "正在生产引用 Workflow 时为什么不能停用？",
+        "已发布 Workflow 遇到未开工和已开工计划时，当前配置、历史版本和过期自动保存分别怎样处理？",
     )
     assert all(_needs_factory_workflow_autofork_guard(q) for q in equivalent_questions)
     assert not _needs_factory_workflow_autofork_guard("餐饮 Workflow 怎么配置？")
@@ -603,9 +632,84 @@ def test_factory_workflow_autofork_and_active_reference_gate_are_deterministic()
     assert "原已启用版本继续服务生产" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "先把原 Workflow 行冻结为 `SNAPSHOT`" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "`selectedWorkflowId` 固定创建时版本" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "未开工计划不应冻结成历史" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "`lockVersion` 身份过期时返回 409" in (
+        _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    )
     assert "WORKFLOW_DEACTIVATION_ACTIVE_PRODUCTION_REFERENCE" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "WORKFLOW_DEACTIVATION_REFERENCE_UNKNOWN" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "ACTIVE BOM 前置门禁" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+
+
+def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
+    receipt_questions = (
+        "生产小结备注怎样保存，仓库成品分次入库如何累计、幂等并区分 PARTIAL 和 COMPLETED？",
+        "完工成品拆分入库时本次实收和累计数量怎样防止超收？",
+        "生产成品下一轮收货为什么不能复用上一轮幂等键？",
+        "存货生产审批撤销后重新小结的草稿行什么时候才能停产？",
+    )
+    assert all(_needs_factory_incremental_receipt_guard(q) for q in receipt_questions)
+    assert "备注由服务端持久化" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "`PARTIAL` / `PARTIALLY_RECEIVED`" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "`COMPLETED` / `RECEIVED`" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "主动开始下一轮生成新键" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "当前有效小结会话 `postedAt` 精确一致" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "`BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE`" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+
+    quality_questions = (
+        "质检有条件通过或不合格后，证据、处置审批、库存隔离和销售出库门禁怎样衔接？",
+        "质量检验 CONDITIONAL 为什么还要处置和审批？",
+        "不合格质检批准报废前能不能放行成品销售？",
+    )
+    assert all(_needs_factory_quality_disposition_guard(q) for q in quality_questions)
+    assert "至少 95% 为 `PASS`" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+    assert "70% 至不足 95% 为 `CONDITIONAL`" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+    assert "`PENDING_APPROVAL`" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+    assert "申请人与审批人必须分离" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+    assert "FINISHED_GOODS_BATCH_NOT_SALEABLE" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+
+    stocktake_questions = (
+        "成品盘点与原料盘点怎样分开，成品报废审批如何回读申请人并阻止不合格批次发货？",
+        "成品盘点后库存漂移为什么不能按旧数量生效？",
+        "成品报废记录为什么申请人显示历史未记录？",
+    )
+    assert all(_needs_factory_finished_goods_stocktake_guard(q) for q in stocktake_questions)
+    assert "`RAW_MATERIAL`" in _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER
+    assert "`FINISHED_GOODS`" in _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER
+    assert "`STOCKTAKE_DRIFT`" in _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER
+    assert "历史未记录" in _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER
+
+    pricing_questions = (
+        "采购和销售单据为什么按含税单价填写，米和厘米能否作为采购计量单位？",
+        "采购含税价和税率怎样反算不含税价？",
+        "长度单位厘米用于采购为什么不能和重量混用？",
+    )
+    assert all(_needs_factory_tax_inclusive_purchase_guard(q) for q in pricing_questions)
+    assert "含税单价 ÷ (1 + 税率)" in _FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER
+    assert "米或厘米" in _FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER
+    assert "跨量纲" in _FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER
+
+    restaurant_sources = (
+        PROJECT_ROOT / "docs/manual/restaurant-full-chain-sop.html",
+        PROJECT_ROOT / "docs/plans/restaurant-product-manual.html",
+        PROJECT_ROOT / "docs/plans/restaurant-metrics-glossary.html",
+    )
+    for source_path in restaurant_sources:
+        restaurant_text = source_path.read_text(encoding="utf-8")
+        assert "FINISHED_GOODS_BATCH_NOT_SALEABLE" not in restaurant_text
+        assert "STOCKTAKE_DRIFT" not in restaurant_text
+        assert "PARTIALLY_RECEIVED" not in restaurant_text
+
+    ai_assist = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
+    factory_tab, restaurant_tab = ai_assist.split('<div id="welcome-factory">', 1)[1].split(
+        '<div id="welcome-restaurant"', 1
+    )
+    restaurant_suggestions = restaurant_tab.split(
+        '<div class="suggestions" aria-label="推荐问题">', 1
+    )[1].split("</div>", 1)[0]
+    for factory_topic in ("成品分次入库", "有条件通过或不合格", "成品盘点与原料盘点", "按含税单价填写"):
+        assert factory_topic in factory_tab
+        assert factory_topic not in restaurant_suggestions
 
 
 def test_factory_sales_delivery_and_auto_invoice_chain_is_deterministic():
@@ -622,6 +726,9 @@ def test_factory_sales_delivery_and_auto_invoice_chain_is_deterministic():
     assert "`PENDING_WAREHOUSE_CONFIRM`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "全部子单发完的完成态边沿只生成一个" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "固定返回 410" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "FINISHED_GOODS_BATCH_NOT_SALEABLE" in (
+        _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    )
 
 
 def test_factory_production_manager_and_clerk_keep_distinct_capabilities():
@@ -1892,6 +1999,36 @@ def test_20260818_reviewed_answers_keep_idempotency_and_store_isolation():
             "多产出完工后仓库应该怎样确认入库？",
             "factory",
             _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "生产小结备注怎样保存，仓库成品分次入库如何累计、幂等并区分 PARTIAL 和 COMPLETED？",
+            "factory",
+            _FACTORY_INCREMENTAL_RECEIPT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "存货生产审批撤销后重新小结的草稿行什么时候才能停产？",
+            "factory",
+            _FACTORY_INCREMENTAL_RECEIPT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "质检有条件通过或不合格后，证据、处置审批、库存隔离和销售出库门禁怎样衔接？",
+            "factory",
+            _FACTORY_QUALITY_DISPOSITION_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "成品盘点与原料盘点怎样分开，成品报废审批如何回读申请人并阻止不合格批次发货？",
+            "factory",
+            _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "采购和销售单据为什么按含税单价填写，米和厘米能否作为采购计量单位？",
+            "factory",
+            _FACTORY_TAX_INCLUSIVE_PURCHASE_ANSWER,
             "f006-production-full-chain-sop.md",
         ),
         (
