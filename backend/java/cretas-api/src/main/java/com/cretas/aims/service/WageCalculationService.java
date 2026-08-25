@@ -174,6 +174,22 @@ public class WageCalculationService {
     }
 
     /**
+     * 只读: 查某道工序在某天适用的计件规则 —— 给「我的工资」屏展示单价档位用。
+     *
+     * <p>⛔ 这里<b>只是委托</b>给下面那个 private 的 {@link #findApplicableRule}, 不是第二份实现。
+     * 展示给工人看的单价, 必须和结算时真正套用的规则是<b>同一个来源</b>;
+     * 在 controller 里另写一遍 {@code pieceRateRuleRepository} 查询就会漂 ——
+     * 屏上写着 ¥0.8/件、结算按 ¥0.6 发, 那比不显示单价更糟。
+     *
+     * @see com.cretas.aims.controller.MyWageController
+     */
+    @Transactional(readOnly = true)
+    public Optional<PieceRateRule> findEffectivePieceRateRule(String factoryId,
+            String processStageType, LocalDate date) {
+        return findApplicableRule(factoryId, processStageType, null, date);
+    }
+
+    /**
      * 查找适用的计件规则
      */
     private Optional<PieceRateRule> findApplicableRule(String factoryId,
