@@ -50,6 +50,7 @@ import {
 } from './reviewModel';
 import {
   addObjectLabel,
+  buildObjectReviewDraft,
   findTrayForLabelBox,
   markObjectCorrected,
   rejectObjectLabel,
@@ -135,6 +136,9 @@ const selectedItem = computed<LabelQcReviewDraft | null>(
   () => activeDraft.value?.items.find((item) => item.key === selectedKey.value) ?? null,
 );
 const objectDraft = computed(() => activeDraft.value?.objectReview);
+const displayedObjectDraft = computed(() => (
+  objectDraft.value ?? buildObjectReviewDraft(activePhoto.value)
+));
 const selectedTray = computed<LabelQcTrayObjectDraft | null>(() => (
   objectDraft.value?.trays.find((tray) => tray.key === selectedTrayKey.value)
     ?? objectDraft.value?.trays[0]
@@ -164,9 +168,7 @@ const hasOptionalCoverageWarning = computed(() => (
   ))
 ));
 const visibleItems = computed(() => (
-  activeDraft.value?.items.filter((item) => (
-    Boolean(item.bbox) && !(item.source === 'AI' && item.label === 'NO_DEFECT')
-  )) ?? []
+  activeDraft.value?.items.filter((item) => Boolean(item.bbox)) ?? []
 ));
 const pendingItems = computed(() => (
   activeDraft.value?.items.filter((item) => !item.label) ?? []
@@ -814,8 +816,8 @@ function reopenCurrentPhoto(): void {
   choosePreferredItem();
 }
 
-// ---- 可选标签校正图层 -------------------------------------------------------
-// 日常审核只显示风险框；只有人工主动展开校正时，才显示白标和彩标的定位框。
+// ---- 常显标签对照图层 -------------------------------------------------------
+// 正常白标、彩标与风险框一起显示，便于质检员对照真实照片；只有疑点需要处理。
 // 托盘归属继续保留在 objectDraft，但不要求工厂审核员描画或调整托盘轮廓。
 type ScreenLayer = 'white' | 'color';
 
@@ -866,7 +868,7 @@ const SHORTCUTS = [
   { keys: 'N', text: '整图正常' },
   { keys: 'A', text: '上一张' },
   { keys: 'Backspace', text: '删除当前框' },
-  { keys: 'W / E', text: '技术校正：白标 / 彩标图层' },
+  { keys: 'W / E', text: '显示或隐藏白标 / 彩标框' },
   { keys: 'Esc', text: '取消选中框' },
 ] as const;
 
@@ -972,13 +974,13 @@ function onShortcutKey(event: KeyboardEvent): void {
     }
     case 'w':
     case 'W':
-      if (!showTechnicalObjectReview.value) break;
+      if (!displayedObjectDraft.value.trays.length) break;
       event.preventDefault();
       toggleLayer('white');
       break;
     case 'e':
     case 'E':
-      if (!showTechnicalObjectReview.value) break;
+      if (!displayedObjectDraft.value.trays.length) break;
       event.preventDefault();
       toggleLayer('color');
       break;
@@ -1179,7 +1181,7 @@ onBeforeUnmount(() => {
             <strong>{{ aiReviewStatusText }}</strong>
           </div>
           <div class="viewer-controls">
-            <div v-if="showTechnicalObjectReview" class="layer-toggles" aria-label="标签框图层显示">
+            <div v-if="displayedObjectDraft.trays.length" class="layer-toggles" aria-label="标签框图层显示">
               <button
                 v-for="(meta, layer) in LAYER_META"
                 :key="layer"
@@ -1276,43 +1278,30 @@ onBeforeUnmount(() => {
               @load="handleMainImageLoad"
               @error="handleMainImageError"
             >
-            <!-- 工厂日常审核只显示疑点；显式技术校正时才展开标签框，托盘位置始终留在底层数据。 -->
-            <template v-if="showTechnicalObjectReview">
-              <template v-for="tray in objectDraft?.trays ?? []" :key="tray.key">
-                <div
-                  v-for="label in tray.labels"
-                  v-show="visibleLayers[label.type === 'WHITE_LABEL' ? 'white' : 'color']"
-                  :key="label.key"
-                  class="object-final-box object-label-box"
-                  :class="{ selected: selectedObjectKey === label.key, muted: selectedTray && selectedTray.key !== tray.key }"
-                  :style="objectBoxStyle(label.bbox, objectColor(label.type))"
-                  @pointerdown="startObjectPointer($event, tray, label, 'move')"
-                >
-                  <button
-                    v-if="canReview && selectedObjectKey === label.key"
-                    type="button"
-                    class="resize-handle"
-                    aria-label="缩放标签框"
-                    @pointerdown="startObjectPointer($event, tray, label, 'resize')"
-                  />
-                </div>
-              </template>
-            </template>
-            <template v-else>
+            <!-- 正常白标、彩标与疑点框一起显示；只有显式校正或人工补框时才允许编辑标签。 -->
+            <template v-for="tray in displayedObjectDraft.trays" :key="tray.key">
               <div
-                v-for="entry in addedLabelObjects"
-                :key="entry.label.key"
-                class="object-final-box object-label-box supplemental-label-box"
-                :class="{ selected: selectedObjectKey === entry.label.key }"
-                :style="objectBoxStyle(entry.label.bbox, objectColor(entry.label.type))"
-                @pointerdown="startObjectPointer($event, entry.tray, entry.label, 'move')"
+                v-for="label in tray.labels"
+                v-show="visibleLayers[label.type === 'WHITE_LABEL' ? 'white' : 'color']"
+                :key="label.key"
+                class="object-final-box object-label-box"
+                :class="{
+                  selected: selectedObjectKey === label.key
+                    && (showTechnicalObjectReview || label.decision === 'ADDED'),
+                  muted: showTechnicalObjectReview && selectedTray && selectedTray.key !== tray.key,
+                  'supplemental-label-box': label.decision === 'ADDED',
+                  'reference-label-box': !showTechnicalObjectReview && label.decision !== 'ADDED',
+                }"
+                :style="objectBoxStyle(label.bbox, objectColor(label.type))"
+                @pointerdown="startObjectPointer($event, tray, label, 'move')"
               >
                 <button
-                  v-if="canReview && selectedObjectKey === entry.label.key"
+                  v-if="canReview && selectedObjectKey === label.key
+                    && (showTechnicalObjectReview || label.decision === 'ADDED')"
                   type="button"
                   class="resize-handle"
-                  aria-label="缩放人工补充的标签框"
-                  @pointerdown="startObjectPointer($event, entry.tray, entry.label, 'resize')"
+                  aria-label="缩放标签框"
+                  @pointerdown="startObjectPointer($event, tray, label, 'resize')"
                 />
               </div>
             </template>
@@ -1389,9 +1378,9 @@ onBeforeUnmount(() => {
         <div class="decision-scroll">
           <section v-if="objectDraft && !showTechnicalObjectReview" class="object-review-card object-review-summary">
             <div>
-              <span>只关注模型标出的风险位置</span>
+              <span>正常标签与风险位置同时显示</span>
               <strong>本页只需处理下方 {{ currentAiPendingCount }} 个疑点，不要求逐盒标注</strong>
-              <p>高置信正常盒已自动跳过，托盘无需描框；发现标签重复、漏框或归属错误时再展开校正。</p>
+              <p>白标和彩标框始终作为对照；正常标签无需逐个确认，托盘无需描框。</p>
             </div>
             <button type="button" @click="showTechnicalObjectReview = true">标签校正（可选）</button>
           </section>
@@ -1605,7 +1594,7 @@ onBeforeUnmount(() => {
             <div class="rejected-heading">
               <div>
                 <strong>已拒绝 AI 疑点</strong>
-                <span>这些框不会显示在照片上，可在提交前撤销</span>
+                <span>这些框以绿色正常框显示，可在提交前撤销</span>
               </div>
               <em>{{ rejectedAiItems.length }}</em>
             </div>
@@ -2741,6 +2730,12 @@ button:disabled {
 
 .object-final-box.muted { opacity: .68; }
 .object-final-box.selected { z-index: 3; box-shadow: 0 0 0 3px rgb(255 255 255 / 80%); }
+.object-final-box.reference-label-box {
+  border-width: 2px;
+  opacity: .82;
+  pointer-events: none;
+  cursor: default;
+}
 .supplemental-label-box { z-index: 3; }
 .object-review-card {
   margin-bottom: 12px;
