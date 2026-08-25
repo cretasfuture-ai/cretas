@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LabelQcTaskDetail } from '@/api/labelQc';
+import { setTrayPresence } from './objectReviewModel';
 import {
   appendHumanBox,
   buildReviewDraft,
@@ -87,6 +88,78 @@ describe('label QC review model', () => {
       label: 'NO_DEFECT',
     });
     expect(request.photos[1]?.annotations[0]?.label).toBe('NO_DEFECT');
+  });
+
+  it('does not submit untouched whole-image AI tray guesses as human object annotations', () => {
+    const detail = buildDetail(true);
+    detail.photos[0]!.screeningDetail = JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], hasWhite: false, hasColor: false, labels: [] }],
+    });
+    const drafts = buildReviewDraft(detail);
+
+    drafts[0]!.items[0]!.label = 'NO_DEFECT';
+    expect(markPhotoReviewed(drafts[0]!)).toBeNull();
+    markPhotoNormal(drafts[1]!);
+
+    const request = toReviewRequest(drafts);
+    expect(request.photos[0]?.annotations[0]).toMatchObject({
+      annotationId: 'ai-1',
+      label: 'NO_DEFECT',
+    });
+    expect(request.photos[0]?.objectReview).toBeUndefined();
+  });
+
+  it('persists an explicitly reviewed missing label together with a matching defect conclusion', () => {
+    const detail = buildDetail(true);
+    detail.photos[0]!.screeningDetail = JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], hasWhite: false, labels: [] }],
+    });
+    const drafts = buildReviewDraft(detail);
+    const tray = drafts[0]!.objectReview!.trays[0]!;
+
+    setTrayPresence(tray, 'WHITE_LABEL', 'MISSING');
+    drafts[0]!.items[0]!.label = 'MISSING_WHITE_LABEL';
+    expect(markPhotoReviewed(drafts[0]!)).toBeNull();
+    markPhotoNormal(drafts[1]!);
+
+    expect(toReviewRequest(drafts).photos[0]?.objectReview?.trays[0]).toMatchObject({
+      whitePresence: 'MISSING',
+      colorPresence: 'UNJUDGEABLE',
+    });
+  });
+
+  it('retains an explicit reviewer decision that a suspicious label cannot be judged', () => {
+    const detail = buildDetail(true);
+    detail.photos[0]!.screeningDetail = JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], hasColor: false, labels: [] }],
+    });
+    const drafts = buildReviewDraft(detail);
+
+    setTrayPresence(drafts[0]!.objectReview!.trays[0]!, 'COLOR_LABEL', 'UNJUDGEABLE');
+    drafts[0]!.items[0]!.label = 'UNJUDGEABLE';
+    expect(markPhotoReviewed(drafts[0]!)).toBeNull();
+    markPhotoNormal(drafts[1]!);
+
+    expect(toReviewRequest(drafts).photos[0]?.objectReview?.trays[0]?.colorPresence)
+      .toBe('UNJUDGEABLE');
+  });
+
+  it('rejects contradictory normal-photo and explicitly missing-tray conclusions', () => {
+    const detail = buildDetail(true);
+    detail.photos[0]!.screeningDetail = JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], labels: [] }],
+    });
+    const drafts = buildReviewDraft(detail);
+    setTrayPresence(drafts[0]!.objectReview!.trays[0]!, 'WHITE_LABEL', 'MISSING');
+    drafts[0]!.items[0]!.label = 'NO_DEFECT';
+
+    expect(markPhotoReviewed(drafts[0]!)).toBe(
+      '整图判定无缺标，但盒子 1 被明确标为实物缺标，请先统一审核结论',
+    );
+    expect(() => markPhotoNormal(drafts[0]!)).toThrow(
+      '盒子 1 已明确标为实物缺标，不能同时判定整图正常',
+    );
+    expect(drafts[0]!.reviewed).toBe(false);
   });
 
   it('restores a rejected AI candidate for another explicit decision', () => {

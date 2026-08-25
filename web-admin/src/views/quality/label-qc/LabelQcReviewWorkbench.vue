@@ -504,6 +504,7 @@ function toggleObjectType(item: LabelQcObjectDraftItem): void {
   if (item.type === 'WHITE_LABEL') tray.whitePresence = 'PRESENT';
   else tray.colorPresence = 'PRESENT';
   tray.confirmed = false;
+  tray.humanTouched = true;
   setDirty(true);
 }
 
@@ -513,6 +514,7 @@ function toggleTruncated(item: LabelQcObjectDraftItem): void {
   item.truncated = !item.truncated;
   markObjectCorrected(item);
   tray.confirmed = false;
+  tray.humanTouched = true;
   setDirty(true);
 }
 
@@ -530,6 +532,7 @@ function addObjectTray(): void {
     labels: [],
     rejectedAiObjectKeys: [],
     confirmed: false,
+    humanTouched: true,
   };
   draft.trays.push(tray);
   selectTray(tray);
@@ -693,6 +696,7 @@ function movePointer(event: PointerEvent): void {
       : resizeBox(interaction.startBox, normalizedDeltaX, normalizedDeltaY);
     markObjectCorrected(object);
     tray.confirmed = false;
+    tray.humanTouched = true;
     setDirty(true);
     return;
   }

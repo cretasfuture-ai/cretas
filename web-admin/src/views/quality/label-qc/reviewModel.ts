@@ -8,6 +8,7 @@ import type {
 } from '@/api/labelQc';
 import {
   buildObjectReviewDraft,
+  hasHumanObjectReview,
   LabelQcPhotoObjectDraft,
   toObjectReviewPayload,
   validateTrayObjectDraft,
@@ -112,6 +113,14 @@ export function validatePhotoConclusion(photo: LabelQcPhotoDraft): string | null
   for (const item of photo.items) {
     if (isDefect(item.label) && !item.bbox) return '缺标结论缺少问题框';
   }
+  if (!photo.items.some((item) => isDefect(item.label))) {
+    const missingTray = photo.objectReview?.trays.find((tray) => (
+      tray.whitePresence === 'MISSING' || tray.colorPresence === 'MISSING'
+    ));
+    if (missingTray) {
+      return `整图判定无缺标，但盒子 ${missingTray.trayIndex + 1} 被明确标为实物缺标，请先统一审核结论`;
+    }
+  }
   for (const tray of photo.objectReview?.trays ?? []) {
     const error = validateTrayObjectDraft(tray);
     if (error) return error;
@@ -130,6 +139,12 @@ export function markPhotoNormal(photo: LabelQcPhotoDraft): void {
   const humanItemCount = photo.items.filter((item) => item.source === 'HUMAN').length;
   if (humanItemCount > 0) {
     throw new Error(`还有 ${humanItemCount} 个人工补框，请先逐个删除或确认问题`);
+  }
+  const missingTray = photo.objectReview?.trays.find((tray) => (
+    tray.whitePresence === 'MISSING' || tray.colorPresence === 'MISSING'
+  ));
+  if (missingTray) {
+    throw new Error(`盒子 ${missingTray.trayIndex + 1} 已明确标为实物缺标，不能同时判定整图正常`);
   }
   photo.items = photo.items
     .filter((item) => item.source === 'AI')
@@ -192,7 +207,7 @@ export function toReviewRequest(drafts: LabelQcPhotoDraft[]): { photos: LabelQcP
       return {
         photoId: photo.photoId,
         annotations,
-        objectReview: photo.objectReview
+        objectReview: photo.objectReview && hasHumanObjectReview(photo.objectReview)
           ? toObjectReviewPayload(photo.objectReview)
           : undefined,
       };

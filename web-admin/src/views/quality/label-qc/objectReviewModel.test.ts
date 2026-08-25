@@ -3,6 +3,7 @@ import type { LabelQcPhoto } from '@/api/labelQc';
 import {
   addObjectLabel,
   buildObjectReviewDraft,
+  hasHumanObjectReview,
   setTrayPresence,
   toObjectReviewPayload,
 } from './objectReviewModel';
@@ -40,6 +41,78 @@ describe('label QC object review model', () => {
     });
     expect(draft.trays[0]?.labels.map((label) => label.aiObjectKey))
       .toEqual(['label-0-0', 'label-0-1']);
+    expect(hasHumanObjectReview(draft)).toBe(false);
+  });
+
+  it('keeps detector-negative trays uncertain until a reviewer explicitly confirms missing labels', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], hasWhite: false, hasColor: false, labels: [] }],
+    })));
+
+    expect(draft.trays[0]).toMatchObject({
+      whitePresence: 'UNJUDGEABLE',
+      colorPresence: 'UNJUDGEABLE',
+      humanTouched: false,
+    });
+    expect(hasHumanObjectReview(draft)).toBe(false);
+    expect(toObjectReviewPayload(draft).trays[0]).toMatchObject({
+      whitePresence: 'UNJUDGEABLE',
+      colorPresence: 'UNJUDGEABLE',
+    });
+  });
+
+  it('does not require reviewers to draw boxes merely because detector flags say labels exist', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.9, 0.9], hasWhite: true, hasColor: true, labels: [] }],
+    })));
+
+    expect(draft.trays[0]).toMatchObject({
+      whitePresence: 'UNJUDGEABLE',
+      colorPresence: 'UNJUDGEABLE',
+    });
+    expect(() => toObjectReviewPayload(draft)).not.toThrow();
+  });
+
+  it('keeps an undetected second label uncertain when the first label has a real AI box', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{
+        index: 0,
+        bbox: [0.1, 0.1, 0.9, 0.9],
+        hasWhite: true,
+        hasColor: false,
+        labels: [{ type: 'white', bbox: [0.2, 0.2, 0.4, 0.4] }],
+      }],
+    })));
+
+    expect(draft.trays[0]).toMatchObject({
+      whitePresence: 'PRESENT',
+      colorPresence: 'UNJUDGEABLE',
+    });
+    expect(hasHumanObjectReview(draft)).toBe(false);
+  });
+
+  it('preserves existing explicitly reviewed tray annotations when reopening a task', () => {
+    const savedPhoto = photo(JSON.stringify({ trays: [] }));
+    savedPhoto.objectReview = {
+      version: 1,
+      complete: true,
+      rejectedAiTrayKeys: [],
+      trays: [{
+        trayIndex: 0,
+        bbox: { xMin: 0.1, yMin: 0.1, xMax: 0.9, yMax: 0.9 },
+        decision: 'ADDED',
+        whitePresence: 'UNJUDGEABLE',
+        colorPresence: 'UNJUDGEABLE',
+        labels: [],
+        rejectedAiObjectKeys: [],
+      }],
+    };
+
+    const draft = buildObjectReviewDraft(savedPhoto);
+
+    expect(draft.reviewedByHuman).toBe(true);
+    expect(hasHumanObjectReview(draft)).toBe(true);
+    expect(toObjectReviewPayload(draft)).toEqual(savedPhoto.objectReview);
   });
 
   it('records rejected AI labels when the inspector marks a label missing', () => {
@@ -57,6 +130,8 @@ describe('label QC object review model', () => {
     expect(tray.labels).toHaveLength(0);
     expect(tray.rejectedAiObjectKeys).toEqual(['label-0-0']);
     expect(toObjectReviewPayload(draft).trays[0]?.whitePresence).toBe('MISSING');
+    expect(hasHumanObjectReview(draft)).toBe(true);
+    expect(toObjectReviewPayload(draft).trays[0]).not.toHaveProperty('humanTouched');
   });
 
   it('exports a valid edited tray without requiring a separate confirmation click', () => {
@@ -101,6 +176,7 @@ describe('label QC object review model', () => {
       yMax: 0.41,
     });
     expect(draft.trays[0]?.rejectedAiObjectKeys).toEqual(['label-0-0', 'label-0-2']);
+    expect(hasHumanObjectReview(draft)).toBe(false);
   });
 
   it('removes a cross-tray spill without changing either tray presence conclusion', () => {
