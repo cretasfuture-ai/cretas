@@ -799,6 +799,80 @@ class OrderCostBreakdownServiceTest {
                 .containsExactly("RAW-M09");
     }
 
+    /**
+     * 🔴 2026-08-25 owner 裁定: BOM 里的 {@code itemCost=0} 是<b>没填</b>, 不是「不要钱」。
+     *
+     * <p>实测(生产库)同一批包材, 两处读数完全对不上:
+     * <pre>
+     * 包材      raw_material_types.unit_price  含税价   BOM itemCost
+     * 成品盒                       0.01         0.01      0.0000
+     * 外箱                         0.44         0.50      0.0000
+     * 封膜                         8.85        10.00      0.0000
+     * </pre>
+     * owner: 「包材录入的时候是在我们的物料 SKU 那边录入的, 本来也是要录入成本的」——
+     * 成本真值在物料 SKU, BOM 的 {@code itemCost} 只是一份没同步上的冗余字段。
+     * 按 0 计入 = 把「没填」当成「零成本」, 系统性低估 COGS、虚增毛利。
+     *
+     * <p><b>钉住的行为</b>: {@code itemCost=0} 必须与 {@code itemCost=null} 得到
+     * <b>完全相同</b>的结果 —— 报 MISSING_PRICE、金额留 null、整单判 PARTIAL。
+     * 这条与既有的
+     * {@link #pinnedBomMissingPackagingPrice_marksPartialAndDoesNotPretendZeroOrComplete}
+     * 是同一组读数, 只把外箱的价从 {@code null} 换成 {@code "0"}。
+     */
+    @Test
+    void pinnedBomZeroPackagingPrice_isTreatedExactlyLikeMissingPrice() {
+        stubPinnedF006Audit(pinnedBomSnapshotWithOuterCasePrice("0"));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        // 与 price=null 那条逐字段一致
+        assertThat(dto.isCostComplete())
+                .as("包材价写 0 却判成本完整 —— 那是把「没填」当成「零成本」")
+                .isFalse();
+        assertThat(dto.getCalculationStatus()).isEqualTo("PARTIAL");
+        assertThat(dto.getPackagingCost())
+                .as("0 不该被当成一个可计入的金额")
+                .isEqualByComparingTo("3.00");
+        assertThat(dto.getPackagingDetails()).hasSize(3);
+        OrderCostBreakdownDTO.PackagingDetail outerCase = dto.getPackagingDetails().get(2);
+        assertThat(outerCase.getMaterialName()).isEqualTo("外箱");
+        assertThat(outerCase.getCollectionStatus())
+                .as("价写 0 的那一行必须报 MISSING_PRICE, 而不是 COLLECTED")
+                .isEqualTo("MISSING_PRICE");
+        assertThat(outerCase.getAmount())
+                .as("金额必须留 null —— 填 0 会让下游把它当成一个确定的数")
+                .isNull();
+        assertThat(dto.getMissingCostItems())
+                .as("缺价必须登记, 否则用户不知道这个成本少了一块")
+                .anyMatch(item -> item.startsWith("PACKAGING_PRICE:"));
+    }
+
+    /** 阳性对照: 真有价时照常计入 —— 否则上面那条可能只是「永远判 MISSING」。 */
+    @Test
+    void pinnedBomRealPackagingPrice_isStillCollected() {
+        stubPinnedF006Audit(pinnedBomSnapshotWithOuterCasePrice("0.25"));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        OrderCostBreakdownDTO.PackagingDetail outerCase = dto.getPackagingDetails().get(2);
+        assertThat(outerCase.getCollectionStatus()).isEqualTo("COLLECTED");
+        assertThat(outerCase.getAmount()).isNotNull();
+        assertThat(dto.getMissingCostItems())
+                .noneMatch(item -> item.startsWith("PACKAGING_PRICE:"));
+    }
+
+    /** 与 {@link #pinnedBomSnapshot} 同源, 只让外箱的价可控。 */
+    private Map<String, Object> pinnedBomSnapshotWithOuterCasePrice(String outerCasePrice) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("outputQuantityPerUnit", new BigDecimal("800"));
+        snapshot.put("outputUnit", "g");
+        snapshot.put("items", List.of(
+                packagingItem("PKG-BOX", "成品盒", "1", "box", "0.50"),
+                packagingItem("PKG-FILM", "封膜", "1", "slice", "0.10"),
+                packagingItem("PKG-CASE", "外箱", "0.125", "case", outerCasePrice)));
+        return snapshot;
+    }
+
     private void stubPinnedF006Audit(Map<String, Object> snapshot) {
         ProductionPlan p = plan("PLAN-F006-M11");
         p.setFactoryId(F);
