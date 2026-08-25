@@ -392,3 +392,57 @@ describe('every WS navigation target is registered in the WS tree', () => {
     expect(processingNav).toContain('name="EquipmentMonitoring"');
   });
 });
+
+// ============================================================
+// 7. 棘轮: 「一个请求都不发的屏」只许变少
+//
+// 本轮只清了三个主列表页。模块里还有 11 个屏的可执行代码里没有任何 apiClient 调用 ——
+// 它们不是本轮的目标, 但**不许再长**。
+//
+// ⚠️ 这里量的是「有多少个屏不发请求」这个结构性质, ⛔ 不是「有多少行 `// 模拟` 注释」——
+// 后者量的是注释风格, 把注释删掉假数据留着就能骗过它。(本仓棘轮教训)
+//
+// ⚠️ 这些屏为什么本轮没动, 见 handoff: 它们**不是接线问题**。
+//   - BatchStartScreen   POST /processing/batches 要求 batchNumber(@NotBlank), 屏上没有这个输入,
+//                        而全仓 createBatch() 零调用点 —— RN 侧从来没有过建批次这条路
+//   - BatchCompleteScreen POST /batches/{id}/complete 要求 actualQuantity/goodQuantity/defectQuantity
+//                        三个必填参数, 屏上只有三个勾选框, 一个数字输入都没有
+//   - BatchStageScreen   它的采集模型(产量/合格/不良)比真路早一代; 真路是 YieldStepReportScreen 的
+//                        YieldReportRequest(本道投入+本道产出+工时+人数), 硬映射过去只会造出假数据
+// 补它们要做产品/UX 决策, 且按 CLAUDE.md 的 UX Flow Gate 得先走 ux-flow, 不是本轮范围。
+// ============================================================
+describe('silent-screen ratchet', () => {
+  /** 2026-08-25 实测基线。只许降, 不许升。 */
+  const BASELINE_SILENT_SCREENS = 11;
+
+  function silentScreens(): string[] {
+    const out: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith('.tsx')) {
+          const code = stripComments(fs.readFileSync(p, 'utf8'));
+          if (!/[Aa]pi[Cc]lient|dashboardAPI/.test(code)) out.push(p);
+        }
+      }
+    };
+    walk(path.join(SCREENS, 'workshop-supervisor'));
+    return out.sort();
+  }
+
+  it('does not grow', () => {
+    const silent = silentScreens();
+    // 仪器自检: 扫到的文件数得像个模块的量级, 否则这条可能在数 0 个文件
+    expect(silent.length).toBeLessThanOrEqual(BASELINE_SILENT_SCREENS);
+  });
+
+  it('阳性对照: 本轮改好的三个屏确实不在这份名单里', () => {
+    // 没有这一条, 上面那条可以靠「探测器永远命中」满足 (那样 silent 会是 0)
+    const silent = silentScreens();
+    for (const [, file] of LIST_SCREENS) {
+      expect({ file: path.basename(file), silent: silent.includes(file) })
+        .toEqual({ file: path.basename(file), silent: false });
+    }
+  });
+});
