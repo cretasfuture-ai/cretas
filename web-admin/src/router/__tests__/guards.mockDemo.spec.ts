@@ -67,12 +67,12 @@ function makeRouter(paths: string[]) {
 
 async function land(path: string): Promise<string> {
   const r = makeRouter([LOGISTICS_PAGE, FACTORY_PAGE]);
-  await r.push('/dashboard').catch(() => undefined);
+  await r.push('/dashboard').catch((): void => undefined);
   // /dashboard 本身也会过守卫并调 loadFromDb —— 不清掉的话, 下面那两条
   // 「调了没调 loadFromDb」的断言量到的是热身那一跳, 不是目标那一跳。
   permState.setRole.mockClear();
   permState.loadFromDb.mockClear();
-  await r.push(path).catch(() => undefined);
+  await r.push(path).catch((): void => undefined);
   await r.isReady();
   return r.currentRoute.value.path;
 }
@@ -183,8 +183,8 @@ describe('演示租户仍然进得去 (豁免范围只有 module 一道)', () =>
     permState.canAccess.mockImplementation(() => false);
 
     const r = makeRouter([path]);
-    await r.push('/dashboard').catch(() => undefined);
-    await r.push(path).catch(() => undefined);
+    await r.push('/dashboard').catch((): void => undefined);
+    await r.push(path).catch((): void => undefined);
     expect(r.currentRoute.value.path).toBe('/403');
   });
 });
