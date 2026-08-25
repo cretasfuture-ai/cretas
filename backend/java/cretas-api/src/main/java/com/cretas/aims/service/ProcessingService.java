@@ -84,10 +84,6 @@ public interface ProcessingService {
     List<Map<String, Object>> getBatchTimeline(String factoryId, String batchId);
     // ========== 原材料管理 ==========
      /**
-     * 原材料接收
-      */
-    MaterialBatch createMaterialReceipt(String factoryId, MaterialBatch materialBatch);
-     /**
      * 获取原材料列表
       */
     PageResponse<MaterialBatch> getMaterialReceipts(String factoryId, PageRequest pageRequest);

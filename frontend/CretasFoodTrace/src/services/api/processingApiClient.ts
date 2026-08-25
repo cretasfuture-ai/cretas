@@ -233,11 +233,6 @@ class ProcessingApiClient {
     return await apiClient.get(`${this.getPath(factoryId)}/materials`);
   }
 
-  // 9. 记录原料接收
-  async recordMaterialReceipt(data: { materialTypeId: string; quantity: number; unit?: string; supplierId?: string; receivedDate?: string }, factoryId?: string): Promise<ApiResponse<{ recorded: boolean }>> {
-    return await apiClient.post(`${this.getPath(factoryId)}/material-receipt`, data);
-  }
-
   // ===== 质检 (Phase 3 P1-002: 完整质检流程) =====
 
   // 10. 获取质检记录列表
