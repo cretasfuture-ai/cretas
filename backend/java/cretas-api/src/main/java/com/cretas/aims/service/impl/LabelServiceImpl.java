@@ -261,9 +261,35 @@ public class LabelServiceImpl implements LabelService {
     @Override
     @Transactional(readOnly = true)
     public MaterialBatchLabelScanResponse scanLabel(String factoryId, String labelCode) {
-        // 1. 标签存在
-        Label label = labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode)
-                .orElseThrow(() -> new RuntimeException("标签不存在: labelCode=" + labelCode));
+        // 1. 标签存在 — 先按 labelCode 查, 查不到再按 traceCode 兜底.
+        //
+        // Why (2026-08-25, 往返缺陷): 打印机印进二维码的**不是** labelCode 而是 traceCode —
+        //   WHBatchDetailScreen.tsx:217   qrContent = genRes.data?.traceCode ?? genRes.data?.labelCode
+        //   BatchLabelPrintService.ts:65  const qrText = qrContent ?? batchNumber
+        // 而 generateMaterialBatchLabel (本文件 :252) 恒设 traceCode, 于是 traceCode 恒胜出,
+        // 贴在实物上的二维码里永远是 "TRACE-...". 只查 label_code 会把**每一张已打印的标签**
+        // 都扫成"标签不存在". 兜底能同时接住已经贴出去的旧标签和以后新印的标签.
+        //
+        // ⛔ 兜底只换查询方式, 不换后面的校验 — 跨工厂防护(步骤2)与 VOIDED 检查(步骤3)
+        //    对两条查询路径一视同仁, 走兜底分支不构成任何绕过.
+        //
+        // 撞车风险: 结构上不可能.
+        //   generateLabelCode  → "<2字符>-<factoryId>-<14位>-<4位>"  (prefix = substring(0,2), 如 YL/RL/BC/WL 或 2 位数字)
+        //   generateTraceCode  → "TRACE-<factoryId>-<8位>-<6位>"
+        // 首个 "-" 之前一个恒为 2 字符、另一个恒为 5 字符 ("TRACE"), 两者恒不相等.
+        // 唯一的非生成路径是 createLabel 允许调用方自带 labelCode; 即便有人自带一个长得像
+        // traceCode 的串, 先查 labelCode 也保证精确匹配优先命中, 语义仍然唯一确定.
+        final String scannedCode = labelCode;
+        Label label = labelRepository.findByLabelCodeAndDeletedAtIsNull(scannedCode)
+                .orElseGet(() -> labelRepository.findByTraceCodeAndDeletedAtIsNull(scannedCode)
+                        .map(byTrace -> {
+                            // 留痕: 不打这条日志就没人知道有多少标签实际走的是兜底
+                            log.info("SP4-T5: 扫码经 traceCode 兜底命中 — scannedCode={}, labelCode={}",
+                                    scannedCode, byTrace.getLabelCode());
+                            return byTrace;
+                        })
+                        .orElseThrow(() -> new RuntimeException(
+                                "标签不存在: code=" + scannedCode + " (已按 labelCode 与 traceCode 两种方式查过)")));
 
         // 2. 跨工厂访问防护
         if (!factoryId.equals(label.getFactoryId())) {
