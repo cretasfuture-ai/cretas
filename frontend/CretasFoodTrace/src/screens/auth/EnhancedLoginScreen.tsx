@@ -33,11 +33,18 @@ try {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
+import * as Application from 'expo-application';
 import { useLogin } from '../../hooks/useLogin';
 
 // 登录页底部显示版本标签。注意: 与 app.json 真实 version(1.0.1) 解耦 —
 // runtimeVersion.policy=appVersion, 改真实 version 会令已装 APK 收不到 OTA。
-const APP_VERSION = '1.0.0.1';
+// ⛔ 不要写死版本号 —— 写死的会与真实 APK 漂开, 而这个数字正是运维用来判断
+//    「设备上装的是哪一版」的依据(连点 5 次进 OTA 诊断面板就在它上面)。
+//    2026-08-25 小米真机实测: 登录页显示 v1.0.0.1, 而设备上
+//    dumpsys package 报 versionName=1.0.4 / versionCode=15 —— 两个数字毫无关系。
+//    本仓 OTA 事故的同族形态: 版本号有两份, 必定漂。
+//    读不到时【不显示】, 不要退回一个看起来很确定的假值。
+const APP_VERSION = Application.nativeApplicationVersion;
 import { getPostLoginRoute } from '../../utils/navigationHelper';
 import { useAuthStore } from '../../store/authStore';
 import { useLanguageStore, LANGUAGE_NAMES, type SupportedLanguage } from '../../store/languageStore';
@@ -426,7 +433,8 @@ const LoginFormView: React.FC<LoginFormViewProps> = ({
 
         {/* 版本号 — 连点5次弹出 OTA 诊断面板 */}
         <TouchableOpacity onPress={handleVersionTap} activeOpacity={1}>
-          <Text style={styles.versionText}>v{APP_VERSION}</Text>
+          {/* 读不到真实版本时留空 —— 显示假版本比不显示更糟 */}
+          <Text style={styles.versionText}>{APP_VERSION ? `v${APP_VERSION}` : ''}</Text>
         </TouchableOpacity>
       </ScrollView>
 

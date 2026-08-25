@@ -15,9 +15,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
+import * as Application from 'expo-application';
 
-const APP_VERSION = '1.0.0';
-const BUILD_NUMBER = '20251228';
+// ⛔ 同上(EnhancedLoginScreen): 版本号不许写死。
+//    2026-08-25 小米真机实测, 同一台设备上三个数字互不相干:
+//      真实 APK   versionName=1.0.4  versionCode=15   (dumpsys package)
+//      登录页     v1.0.0.1                            (写死)
+//      本页       1.0.0 (20251228)                    (写死)
+//    本仓形态 D: 同一个东西有三份, 必定漂。读不到就留空, 不要给假值。
+const APP_VERSION = Application.nativeApplicationVersion;
+const BUILD_NUMBER = Application.nativeBuildVersion;
 
 export function AboutScreen() {
   const navigation = useNavigation();
@@ -69,7 +76,9 @@ export function AboutScreen() {
             <Icon source="fish" size={60} color="#667eea" />
           </View>
           <Text style={styles.appName}>{t('about.appName')}</Text>
-          <Text style={styles.version}>{t('about.version')} {APP_VERSION} ({BUILD_NUMBER})</Text>
+          <Text style={styles.version}>
+            {t('about.version')} {APP_VERSION ?? '—'}{BUILD_NUMBER ? ` (${BUILD_NUMBER})` : ''}
+          </Text>
         </View>
 
         {/* 功能介绍 */}
@@ -89,7 +98,7 @@ export function AboutScreen() {
               icon="update"
               title={t('about.checkUpdate')}
               onPress={handleCheckUpdate}
-              rightText={`v${APP_VERSION}`}
+              rightText={APP_VERSION ? `v${APP_VERSION}` : '—'}
             />
             <View style={styles.divider} />
             <MenuItem

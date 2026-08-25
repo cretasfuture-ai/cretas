@@ -113,3 +113,55 @@ describe('原生版本号一致性契约', () => {
     expect(gradleValue('versionCode')).toBe(appConfigVersionCode());
   });
 });
+
+/**
+ * 🔴 2026-08-25 小米真机实测补的一条 —— 上面那四条守的是【构建配置】，
+ * 而用户在屏幕上看到的版本号是另一回事，它们当时全是写死的：
+ *
+ *   真实 APK   versionName=1.0.4  versionCode=15   (dumpsys package)
+ *   登录页     v1.0.0.1                            ← 写死
+ *   关于页     1.0.0 (20251228)                    ← 写死
+ *
+ * 三个数字互不相干。而登录页那个数字正是运维判断「设备上装的是哪一版」的依据
+ * （连点 5 次进 OTA 诊断面板就在它上面）——本仓 OTA 事故的同族形态：
+ * 版本号有几份就会漂几份。
+ *
+ * ⚠️ 这条闸补的是【触发面】：原有四条一条都不会红，因为它们根本不看 src/ 下的 TS。
+ */
+describe('屏幕上显示的版本号不许写死', () => {
+  const SCREEN_FILES = [
+    'src/screens/auth/EnhancedLoginScreen.tsx',
+    'src/screens/factory-admin/profile/AboutScreen.tsx',
+  ];
+
+  const readScreen = (rel: string): string =>
+    fs.readFileSync(path.resolve(RN_ROOT, rel), 'utf8');
+
+  it('阳性对照: 这些文件真的读到了 (否则下面的 not.toMatch 全是恒真)', () => {
+    for (const rel of SCREEN_FILES) {
+      const src = readScreen(rel);
+      expect(src.length).toBeGreaterThan(500);
+      expect(src).toContain('APP_VERSION');
+    }
+  });
+
+  it('APP_VERSION / BUILD_NUMBER 不许是字面量常量', () => {
+    for (const rel of SCREEN_FILES) {
+      const src = readScreen(rel);
+      // 剥掉注释再看 —— 否则会数到解释这件事的注释本身
+      const code = src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      expect(code).not.toMatch(/const\s+APP_VERSION\s*(:[^=]+)?=\s*['"`]/);
+      expect(code).not.toMatch(/const\s+BUILD_NUMBER\s*(:[^=]+)?=\s*['"`]/);
+    }
+  });
+
+  it('必须来自 expo-application 这个唯一真值', () => {
+    for (const rel of SCREEN_FILES) {
+      const src = readScreen(rel);
+      expect(src).toContain("from 'expo-application'");
+      expect(src).toMatch(/Application\.nativeApplicationVersion/);
+    }
+  });
+});
