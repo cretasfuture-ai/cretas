@@ -40,7 +40,6 @@ import {
   moveBox,
   normalizedBox,
   pendingItemCount,
-  pointBox,
   resizeBox,
   restoreRejectedAiCandidate,
   toReviewRequest,
@@ -55,6 +54,7 @@ import {
   markObjectCorrected,
   rejectObjectLabel,
   setTrayPresence,
+  suggestPointLabelBox,
   validateTrayObjectDraft,
   type LabelQcObjectDraftItem,
   type LabelQcTrayObjectDraft,
@@ -75,7 +75,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  submit: [payload: LabelQcReviewRequest];
+  submit: [payload: LabelQcReviewRequest, keyboardConfirmed?: boolean];
   retry: [];
   dirtyChange: [dirty: boolean];
 }>();
@@ -108,7 +108,7 @@ let measureFrame: number | null = null;
 let settleMeasureTimer: number | null = null;
 
 type PointerInteraction = {
-  type: 'pan' | 'move' | 'resize' | 'draw';
+  type: 'pan' | 'move' | 'resize' | 'draw' | 'supplement';
   pointerId: number;
   startX: number;
   startY: number;
@@ -121,6 +121,7 @@ type PointerInteraction = {
 };
 
 const pointerInteraction = ref<PointerInteraction | null>(null);
+const shiftPressed = ref(false);
 const showTechnicalObjectReview = ref(false);
 const supplementalLabelType = ref<LabelQcObjectType | null>(null);
 const proxiedImageUrl = ref<string | null>(null);
@@ -341,6 +342,7 @@ function selectPhoto(index: number): void {
   selectedObjectKey.value = selectedTrayKey.value;
   showTechnicalObjectReview.value = false;
   supplementalLabelType.value = null;
+  if (toolMode.value === 'supplement') toolMode.value = 'select';
   resetView();
   resetMainImageState();
   scheduleViewportMeasurement();
@@ -483,18 +485,18 @@ function changePresence(type: LabelQcObjectType, presence: LabelQcPresence): voi
 
 function beginLabelSupplement(type: LabelQcObjectType): void {
   if (!objectDraft.value || !props.canReview) return;
-  setTool('box');
+  toolMode.value = 'supplement';
   supplementalLabelType.value = type;
   activeLabel.value = null;
   selectedKey.value = null;
-  ElMessage.info(`请直接框住照片中已经存在、但模型漏识别的${objectLabelText(type)}；不用画托盘`);
+  ElMessage.info(`请单击照片中已经存在、但模型漏识别的${objectLabelText(type)}；系统会自动补框，不用画托盘`);
 }
 
-function addSupplementalLabel(bbox: LabelQcBoundingBox): void {
+function addSupplementalLabel(bbox: LabelQcBoundingBox, preferredTray?: LabelQcTrayObjectDraft): void {
   const draft = objectDraft.value;
   const type = supplementalLabelType.value;
   if (!draft || !type || !props.canReview) return;
-  const tray = findTrayForLabelBox(draft, bbox);
+  const tray = preferredTray ?? findTrayForLabelBox(draft, bbox);
   if (!tray) {
     ElMessage.warning('该位置没有可确认的所属盒子，可能是模型漏识别托盘；无需补画托盘，可跳过并继续审核');
     return;
@@ -510,6 +512,22 @@ function addSupplementalLabel(bbox: LabelQcBoundingBox): void {
   selectedObjectKey.value = item.key;
   setDirty(true);
   ElMessage.success(`已补上盒子 ${tray.trayIndex + 1} 的${objectLabelText(type)}，可继续补同类标签`);
+}
+
+function addSupplementalLabelAt(clientX: number, clientY: number): void {
+  const draft = objectDraft.value;
+  const type = supplementalLabelType.value;
+  const rect = planeRef.value?.getBoundingClientRect();
+  if (!draft || !type || !rect || rect.width <= 0 || rect.height <= 0 || !props.canReview) return;
+
+  const x = (clientX - rect.left) / rect.width;
+  const y = (clientY - rect.top) / rect.height;
+  const suggestion = suggestPointLabelBox(draft, type, x, y);
+  if (!suggestion) {
+    ElMessage.warning('该位置没有可确认的所属盒子，可能是模型漏识别托盘；无需补画托盘，可跳过并继续审核');
+    return;
+  }
+  addSupplementalLabel(suggestion.bbox, suggestion.tray);
 }
 
 function deleteSupplementalLabel(tray: LabelQcTrayObjectDraft, item: LabelQcObjectDraftItem): void {
@@ -549,22 +567,6 @@ function toggleTruncated(item: LabelQcObjectDraftItem): void {
   setDirty(true);
 }
 
-function addHumanBoxAt(clientX: number, clientY: number): void {
-  if (!props.canReview || !planeRef.value || !activeDraft.value) return;
-  const rect = planeRef.value.getBoundingClientRect();
-  const x = (clientX - rect.left) / rect.width;
-  const y = (clientY - rect.top) / rect.height;
-  if (x < 0 || x > 1 || y < 0 || y > 1) return;
-  const item = appendHumanBox(
-    activeDraft.value,
-    pointBox(x, y),
-    `human-${activeDraft.value.photoId}-${Date.now()}`,
-  );
-  selectedKey.value = item.key;
-  setDirty(true);
-  ElMessage.success('已补一个人工框，请在右侧选择问题类型');
-}
-
 /** 屏幕坐标 → 图片平面内的像素坐标（已含缩放/平移，因为用的是 plane 的实际 rect） */
 function toPlanePoint(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = planeRef.value?.getBoundingClientRect();
@@ -573,10 +575,21 @@ function toPlanePoint(clientX: number, clientY: number): { x: number; y: number 
 }
 
 function startViewportPointer(event: PointerEvent): void {
-  // 中键始终平移，左键只用于拉框或选择疑点。
-  const wantsPan = event.button === 1 || toolMode.value === 'select';
+  // Shift + 左键 / 中键在任何标注模式下都平移；漏识别标签使用单击自动补框。
+  const wantsPan = event.button === 1 || event.shiftKey || shiftPressed.value || toolMode.value === 'select';
   if (event.button !== 0 && event.button !== 1) return;
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+
+  if (!wantsPan && toolMode.value === 'supplement' && props.canReview) {
+    pointerInteraction.value = {
+      type: 'supplement',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    return;
+  }
 
   if (!wantsPan && props.canReview) {
     const point = toPlanePoint(event.clientX, event.clientY);
@@ -608,6 +621,10 @@ function startBoxPointer(
   type: 'move' | 'resize',
 ): void {
   event.stopPropagation();
+  if (event.shiftKey || shiftPressed.value) {
+    startViewportPointer(event);
+    return;
+  }
   if (!props.canReview || !item.bbox) {
     selectItem(item);
     return;
@@ -632,6 +649,10 @@ function startObjectPointer(
   type: 'move' | 'resize',
 ): void {
   event.stopPropagation();
+  if (event.shiftKey || shiftPressed.value) {
+    startViewportPointer(event);
+    return;
+  }
   selectTray(tray);
   selectedObjectKey.value = object.key;
   if (!props.canReview) return;
@@ -737,8 +758,8 @@ function endPointer(event: PointerEvent): void {
     return;
   }
 
-  if (interaction.type === 'pan' && !interaction.moved && toolMode.value === 'select') {
-    addHumanBoxAt(event.clientX, event.clientY);
+  if (interaction.type === 'supplement' && !interaction.moved) {
+    addSupplementalLabelAt(event.clientX, event.clientY);
   }
 }
 
@@ -822,8 +843,8 @@ function reopenCurrentPhoto(): void {
 type ScreenLayer = 'white' | 'color';
 
 const LAYER_META: Record<ScreenLayer, { key: string; text: string; color: string }> = {
-  white: { key: 'W', text: '白标', color: '#d40000' },
-  color: { key: 'E', text: '彩标', color: '#6f00b8' },
+  white: { key: 'Z', text: '白标', color: '#d40000' },
+  color: { key: 'X', text: '彩标', color: '#6f00b8' },
 };
 
 const visibleLayers = ref<Record<ScreenLayer, boolean>>({
@@ -840,7 +861,7 @@ function toggleLayer(layer: ScreenLayer): void {
 // 画位置，是这类逐张标注界面的标准姿势。
 //
 // 工具与类型都是"粘"的：选一次之后连续画都沿用，不用每画一个框回去点一次。
-type ToolMode = 'select' | 'box';
+type ToolMode = 'select' | 'box' | 'supplement';
 
 const toolMode = ref<ToolMode>('select');
 const activeLabel = ref<LabelQcLabel | null>(null);
@@ -848,34 +869,36 @@ const activeLabel = ref<LabelQcLabel | null>(null);
 /** 正在拖的框只是预览，松手才落成标注。 */
 const draftRect = ref<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
-const TOOLS: { mode: ToolMode; key: string; text: string }[] = [
-  { mode: 'select', key: 'V', text: '选择' },
-  { mode: 'box', key: 'R', text: '拉框' },
+const QUICK_LABELS: { label: LabelQcLabel; key: string; text: string }[] = [
+  { label: 'MISSING_WHITE_LABEL', key: '1', text: '缺白标 · 画框' },
+  { label: 'MISSING_COLOR_LABEL', key: '2', text: '缺彩标 · 画框' },
+  { label: 'NO_DEFECT', key: '3', text: '此框正常' },
+  { label: 'UNJUDGEABLE', key: '4', text: '无法判断' },
 ];
 
-const QUICK_LABELS: { label: LabelQcLabel; key: string; text: string }[] = [
-  { label: 'MISSING_WHITE_LABEL', key: '1', text: '缺白标' },
-  { label: 'MISSING_COLOR_LABEL', key: '2', text: '缺彩标' },
-  { label: 'NO_DEFECT', key: '3', text: '此框正常' },
-  { label: 'UNJUDGEABLE', key: '4', text: '不可判定' },
+const SUPPLEMENT_SHORTCUTS: { type: LabelQcObjectType; key: string; text: string }[] = [
+  { type: 'WHITE_LABEL', key: '5', text: '漏识白标 · 单击' },
+  { type: 'COLOR_LABEL', key: '6', text: '漏识彩标 · 单击' },
 ];
 
 const SHORTCUTS = [
-  { keys: '1 / 2 / 3 / 4', text: '缺白标 / 缺彩标 / 正常 / 不可判定' },
-  { keys: 'V / R', text: '选择 / 拉框' },
-  { keys: '滚轮', text: '放大或缩小原图' },
-  { keys: 'Space / Enter', text: '确认并下一张' },
+  { keys: '1 / 2', text: '缺白标 / 缺彩标：画框' },
+  { keys: '3 / 4', text: '正常 / 无法判断' },
+  { keys: '5 / 6', text: '漏识白标 / 彩标：单击' },
+  { keys: 'Q / W / E / R / T', text: '确认 / 误报 / 缺白 / 缺彩 / 无法判断' },
+  { keys: 'Space / Enter', text: '下一张 / 提交并下一批' },
+  { keys: 'Shift + 拖动', text: '移动照片' },
   { keys: 'N', text: '整图正常' },
   { keys: 'A', text: '上一张' },
   { keys: 'Backspace', text: '删除当前框' },
-  { keys: 'W / E', text: '显示或隐藏白标 / 彩标框' },
+  { keys: 'Z / X', text: '显示或隐藏白标 / 彩标框' },
   { keys: 'Esc', text: '取消选中框' },
 ] as const;
 
-function setTool(mode: ToolMode): void {
-  toolMode.value = mode;
+function selectReviewTool(): void {
+  toolMode.value = 'select';
   supplementalLabelType.value = null;
-  if (mode !== 'select') selectedKey.value = null;
+  activeLabel.value = null;
 }
 
 /**
@@ -885,6 +908,9 @@ function setTool(mode: ToolMode): void {
 function pickLabel(label: LabelQcLabel): void {
   supplementalLabelType.value = null;
   activeLabel.value = label;
+  toolMode.value = label === 'MISSING_WHITE_LABEL' || label === 'MISSING_COLOR_LABEL'
+    ? 'box'
+    : 'select';
   if (selectedItem.value) resolveSelected(label);
 }
 
@@ -902,6 +928,10 @@ function isActionTarget(target: EventTarget | null): boolean {
 }
 
 function confirmAndGoNext(): void {
+  if (allComplete.value) {
+    if (!props.submitting) submitReview(true);
+    return;
+  }
   if (!confirmCurrentObjectBeforeSwitch('照片') || !activeDraft.value) return;
   if (!activeDraft.value.reviewed) {
     const error = markPhotoReviewed(activeDraft.value);
@@ -933,6 +963,10 @@ function deleteSelectedByKeyboard(): void {
 function onShortcutKey(event: KeyboardEvent): void {
   // 输入框内打字、以及带修饰键的组合，一律不拦截
   if (isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.key === 'Shift') {
+    shiftPressed.value = true;
+    return;
+  }
   // 避免 Space / Enter 在已聚焦按钮上同时触发按钮原动作和“下一张”。
   if ((event.key === ' ' || event.key === 'Enter') && isActionTarget(event.target)) return;
   if (!props.canReview) return;
@@ -972,14 +1006,48 @@ function onShortcutKey(event: KeyboardEvent): void {
       }
       break;
     }
+    case '5':
+    case '6': {
+      const supplement = SUPPLEMENT_SHORTCUTS[Number(event.key) - 5];
+      if (supplement && objectDraft.value?.trays.length) {
+        event.preventDefault();
+        beginLabelSupplement(supplement.type);
+      }
+      break;
+    }
+    case 'q':
+    case 'Q':
+      event.preventDefault();
+      confirmAiCandidate();
+      break;
     case 'w':
     case 'W':
+      event.preventDefault();
+      rejectAiCandidate();
+      break;
+    case 'e':
+    case 'E':
+      event.preventDefault();
+      resolveSelected('MISSING_WHITE_LABEL');
+      break;
+    case 'r':
+    case 'R':
+      event.preventDefault();
+      resolveSelected('MISSING_COLOR_LABEL');
+      break;
+    case 't':
+    case 'T':
+      event.preventDefault();
+      resolveSelected('UNJUDGEABLE');
+      break;
+    case 'z':
+    case 'Z':
       if (!displayedObjectDraft.value.trays.length) break;
       event.preventDefault();
       toggleLayer('white');
       break;
-    case 'e':
-    case 'E':
+    case 'x':
+    case 'X':
       if (!displayedObjectDraft.value.trays.length) break;
       event.preventDefault();
       toggleLayer('color');
@@ -987,12 +1055,7 @@ function onShortcutKey(event: KeyboardEvent): void {
     case 'v':
     case 'V':
       event.preventDefault();
-      setTool('select');
-      break;
-    case 'r':
-    case 'R':
-      event.preventDefault();
-      setTool('box');
+      selectReviewTool();
       break;
     case 'Escape':
       if (selectedKey.value) {
@@ -1005,8 +1068,24 @@ function onShortcutKey(event: KeyboardEvent): void {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onShortcutKey));
-onBeforeUnmount(() => window.removeEventListener('keydown', onShortcutKey));
+function onShortcutKeyUp(event: KeyboardEvent): void {
+  if (event.key === 'Shift') shiftPressed.value = false;
+}
+
+function clearShiftShortcut(): void {
+  shiftPressed.value = false;
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onShortcutKey);
+  window.addEventListener('keyup', onShortcutKeyUp);
+  window.addEventListener('blur', clearShiftShortcut);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onShortcutKey);
+  window.removeEventListener('keyup', onShortcutKeyUp);
+  window.removeEventListener('blur', clearShiftShortcut);
+});
 watch(() => activePhoto.value.id, () => { void loadActiveImage(); }, { immediate: true });
 
 function previousPhoto(): void {
@@ -1025,7 +1104,8 @@ function nextPhoto(): void {
   }
 }
 
-function submitReview(): void {
+function submitReview(keyboardConfirmed = false): void {
+  if (props.submitting) return;
   if (!confirmCurrentObjectBeforeSwitch('提交')) return;
   const validation = validateReviewDraft(drafts.value);
   if (validation) {
@@ -1034,7 +1114,7 @@ function submitReview(): void {
     ElMessage.warning(validation);
     return;
   }
-  emit('submit', toReviewRequest(drafts.value));
+  emit('submit', toReviewRequest(drafts.value), keyboardConfirmed);
 }
 
 function updateViewportSize(): void {
@@ -1109,6 +1189,9 @@ watch(
     selectedTrayKey.value = drafts.value[0]?.objectReview?.trays[0]?.key ?? null;
     selectedObjectKey.value = selectedTrayKey.value;
     supplementalLabelType.value = null;
+    toolMode.value = 'select';
+    activeLabel.value = null;
+    shiftPressed.value = false;
     setDirty(false);
     resetView();
     resetMainImageState();
@@ -1208,19 +1291,17 @@ onBeforeUnmount(() => {
         <div v-if="canReview" class="annotate-bar">
           <div class="tool-group" role="group" aria-label="标注工具">
             <button
-              v-for="tool in TOOLS"
-              :key="tool.mode"
               type="button"
               class="tool-btn"
-              :class="{ on: toolMode === tool.mode }"
-              :aria-pressed="toolMode === tool.mode"
-              @click="setTool(tool.mode)"
+              :class="{ on: toolMode === 'select' && activeLabel === null }"
+              :aria-pressed="toolMode === 'select' && activeLabel === null"
+              @click="selectReviewTool"
             >
-              {{ tool.text }}<kbd>{{ tool.key }}</kbd>
+              选择<kbd>V</kbd>
             </button>
           </div>
           <span class="bar-sep" />
-          <div class="tool-group" role="group" aria-label="标注类型">
+          <div class="tool-group review-action-group" role="group" aria-label="数字快捷键标注与补标">
             <button
               v-for="quick in QUICK_LABELS"
               :key="quick.label"
@@ -1235,26 +1316,41 @@ onBeforeUnmount(() => {
             >
               {{ quick.text }}<kbd>{{ quick.key }}</kbd>
             </button>
+            <button
+              v-for="supplement in SUPPLEMENT_SHORTCUTS"
+              :key="supplement.type"
+              type="button"
+              class="tool-btn label-btn supplement-btn"
+              :class="{ on: supplementalLabelType === supplement.type }"
+              :disabled="!objectDraft?.trays.length"
+              :style="supplementalLabelType === supplement.type
+                ? { backgroundColor: objectColor(supplement.type), borderColor: objectColor(supplement.type) }
+                : { borderColor: objectColor(supplement.type) }"
+              :aria-pressed="supplementalLabelType === supplement.type"
+              @click="beginLabelSupplement(supplement.type)"
+            >
+              {{ supplement.text }}<kbd>{{ supplement.key }}</kbd>
+            </button>
           </div>
         </div>
 
         <div class="gesture-hint">
           <Aim />
           <span v-if="supplementalLabelType">
-            <strong>框住已经存在的{{ objectLabelText(supplementalLabelType) }}</strong> · 只补模型漏识别的标签，不画托盘 · 不补也可继续审核
+            <strong>单击已经存在的{{ objectLabelText(supplementalLabelType) }}</strong> · 只补模型漏识别的现有标签 · Shift + 拖动移动照片
           </span>
           <span v-else-if="toolMode === 'box'">
-            <strong>按住左键拖出一个框</strong> · 键盘 1/2/3/4 先选类型，画完即定性 · 中键拖动画面
+            <strong>框出实物确实缺{{ activeLabel === 'MISSING_WHITE_LABEL' ? '白标' : '彩标' }}的位置</strong> · 松手即完成标注 · Shift + 拖动移动照片
           </span>
           <span v-else>
-            <strong>点照片空白处补框</strong> · 拖框移动 · 拖右下角缩放 · 滚轮以鼠标位置为中心放大
+            <strong>点选疑点框后按 Q / W / E / R / T 判定</strong> · 1 / 2 画缺标框 · 5 / 6 单击补漏识标签
           </span>
         </div>
 
         <div
           ref="viewportRef"
           class="image-viewport"
-          :class="[`tool-${toolMode}`, { drawing: !!draftRect }]"
+          :class="[`tool-${toolMode}`, { drawing: !!draftRect, 'shift-panning': shiftPressed }]"
           :aria-busy="imageLoadState === 'loading'"
           @pointerdown="startViewportPointer"
           @pointermove="movePointer"
@@ -1370,12 +1466,77 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div v-if="zoom > 1" class="zoom-indicator">已放大 · 拖动空白处移动画面</div>
+          <div v-if="zoom > 1" class="zoom-indicator">已放大 · 按住 Shift 拖动可移动画面</div>
         </div>
       </main>
 
       <aside class="decision-rail">
         <div class="decision-scroll">
+          <section class="must-act-card" :class="{ resolved: selectedItem?.label }">
+            <div class="must-act-heading">
+              <span>当前模型疑点</span>
+              <em v-if="pendingItems.length">{{ pendingItems.length }} 个待确认</em>
+              <em v-else class="done">框已处理</em>
+            </div>
+
+            <template v-if="selectedItem?.source === 'AI'">
+              <div class="candidate-title">
+                <i :style="{ backgroundColor: itemColor(selectedItem) }">AI</i>
+                <div>
+                  <strong>{{ labelText(selectedItem.aiLabel) }}</strong>
+                  <span>置信度 {{ confidence(selectedItem.aiConfidence) }}</span>
+                </div>
+              </div>
+              <p v-if="selectedItem.aiEvidence" class="evidence">{{ selectedItem.aiEvidence }}</p>
+              <div class="primary-decisions">
+                <button type="button" class="confirm" :disabled="!canReview" @click="confirmAiCandidate">
+                  <Check /> 确认问题：{{ labelText(selectedItem.aiLabel) }} <kbd>Q</kbd>
+                </button>
+                <button type="button" class="reject" :disabled="!canReview" @click="rejectAiCandidate">
+                  <Close /> 误报 / 无问题 <kbd>W</kbd>
+                </button>
+              </div>
+              <div class="correction-row">
+                <button type="button" :disabled="!canReview" @click="resolveSelected('MISSING_WHITE_LABEL')">缺白标 <kbd>E</kbd></button>
+                <button type="button" :disabled="!canReview" @click="resolveSelected('MISSING_COLOR_LABEL')">缺彩标 <kbd>R</kbd></button>
+                <button type="button" :disabled="!canReview" @click="resolveSelected('UNJUDGEABLE')">无法判断 <kbd>T</kbd></button>
+              </div>
+            </template>
+
+            <template v-else-if="selectedItem?.source === 'HUMAN'">
+              <div class="candidate-title human-title">
+                <i>人</i>
+                <div>
+                  <strong>人工补充框</strong>
+                  <span>请选择这个框的问题类型</span>
+                </div>
+              </div>
+              <div class="human-decisions">
+                <button type="button" :disabled="!canReview" @click="setHumanLabel('MISSING_WHITE_LABEL')">缺白标 <kbd>E</kbd></button>
+                <button type="button" :disabled="!canReview" @click="setHumanLabel('MISSING_COLOR_LABEL')">缺彩标 <kbd>R</kbd></button>
+                <button type="button" :disabled="!canReview" @click="setHumanLabel('UNJUDGEABLE')">无法判断 <kbd>T</kbd></button>
+                <button type="button" class="delete" :disabled="!canReview" @click="deleteHumanItem"><Delete />删除框</button>
+              </div>
+            </template>
+
+            <div v-else class="no-selection">
+              <Check v-if="pendingItems.length === 0" />
+              <Aim v-else />
+              <strong>{{ pendingItems.length === 0 ? '本图所有框已处理' : '点击照片中的框开始审核' }}</strong>
+              <span>{{ pendingItems.length === 0 ? '现在请给出整图结论' : '橙色框为 AI 待确认疑点' }}</span>
+            </div>
+
+            <el-input
+              v-if="selectedItem"
+              v-model="selectedItem.notes"
+              class="review-note"
+              :disabled="!canReview"
+              maxlength="200"
+              placeholder="可选：补充判断依据"
+              @update:model-value="touchPhoto"
+            />
+          </section>
+
           <section v-if="objectDraft && !showTechnicalObjectReview" class="object-review-card object-review-summary">
             <div>
               <span>正常标签与风险位置同时显示</span>
@@ -1407,7 +1568,7 @@ onBeforeUnmount(() => {
               </span>
             </div>
             <p v-if="hasOptionalCoverageWarning" class="label-coverage-warning">
-              该图片可能存在模型未标注的白标或彩标，请按实际情况手动补框。
+              该图片可能存在模型未标注的白标或彩标，可按 5 / 6 后单击实际标签位置。
               <template v-if="labelCoverage.possibleMissingTrayCount">
                 本图识别盒数少于同批参考，但无需人工补画托盘。
               </template>
@@ -1415,7 +1576,7 @@ onBeforeUnmount(() => {
                 部分盒子的标签框可能重复，请按需校正。
               </template>
             </p>
-            <p v-else class="label-coverage-note">白标和彩标数量与当前盒数一致，无需额外补框。</p>
+            <p v-else class="label-coverage-note">白标和彩标数量与当前盒数一致，无需额外补标。</p>
             <div class="label-supplement-actions">
               <button
                 v-for="type in OBJECT_TYPES"
@@ -1426,7 +1587,7 @@ onBeforeUnmount(() => {
                 :style="{ '--supplement-color': objectColor(type) }"
                 @click="beginLabelSupplement(type)"
               >
-                补{{ objectLabelText(type) }}框
+                漏识{{ objectLabelText(type) }} · 单击 <kbd>{{ type === 'WHITE_LABEL' ? '5' : '6' }}</kbd>
               </button>
             </div>
             <div v-if="addedLabelObjects.length" class="supplemented-label-list">
@@ -1473,7 +1634,7 @@ onBeforeUnmount(() => {
                 <strong>先看原图，再选动作</strong>
                 <div>
                   <span><b>实物没有标签</b>选“实物缺标”，不要画假框</span>
-                  <span><b>实物有、AI 漏框</b>点“补白标框 / 补彩标框”</span>
+                  <span><b>实物有、AI 漏框</b>按 5 / 6 后直接单击标签</span>
                   <span><b>被挡住看不清</b>选“看不清”，不会当作缺标真值</span>
                 </div>
               </div>
@@ -1523,71 +1684,6 @@ onBeforeUnmount(() => {
 
               <p class="object-auto-confirm-hint">切换盒子或照片会保留当前草稿；提交整单后才写入服务器。图层开关只改变显示，不改变审核结论。</p>
             </template>
-          </section>
-
-          <section class="must-act-card" :class="{ resolved: selectedItem?.label }">
-          <div class="must-act-heading">
-            <span>当前模型疑点</span>
-            <em v-if="pendingItems.length">{{ pendingItems.length }} 个待确认</em>
-            <em v-else class="done">框已处理</em>
-          </div>
-
-          <template v-if="selectedItem?.source === 'AI'">
-            <div class="candidate-title">
-              <i :style="{ backgroundColor: itemColor(selectedItem) }">AI</i>
-              <div>
-                <strong>{{ labelText(selectedItem.aiLabel) }}</strong>
-                <span>置信度 {{ confidence(selectedItem.aiConfidence) }}</span>
-              </div>
-            </div>
-            <p v-if="selectedItem.aiEvidence" class="evidence">{{ selectedItem.aiEvidence }}</p>
-            <div class="primary-decisions">
-              <button type="button" class="confirm" :disabled="!canReview" @click="confirmAiCandidate">
-                <Check /> 确认问题：{{ labelText(selectedItem.aiLabel) }}
-              </button>
-              <button type="button" class="reject" :disabled="!canReview" @click="rejectAiCandidate">
-                <Close /> 误报 / 无问题
-              </button>
-            </div>
-            <div class="correction-row">
-              <button type="button" :disabled="!canReview" @click="resolveSelected('MISSING_WHITE_LABEL')">改为缺白标</button>
-              <button type="button" :disabled="!canReview" @click="resolveSelected('MISSING_COLOR_LABEL')">改为缺彩标</button>
-              <button type="button" :disabled="!canReview" @click="resolveSelected('UNJUDGEABLE')">无法判断</button>
-            </div>
-          </template>
-
-          <template v-else-if="selectedItem?.source === 'HUMAN'">
-            <div class="candidate-title human-title">
-              <i>人</i>
-              <div>
-                <strong>人工补充框</strong>
-                <span>请选择这个框的问题类型</span>
-              </div>
-            </div>
-            <div class="human-decisions">
-              <button type="button" :disabled="!canReview" @click="setHumanLabel('MISSING_WHITE_LABEL')">缺白标</button>
-              <button type="button" :disabled="!canReview" @click="setHumanLabel('MISSING_COLOR_LABEL')">缺彩标</button>
-              <button type="button" :disabled="!canReview" @click="setHumanLabel('UNJUDGEABLE')">无法判断</button>
-              <button type="button" class="delete" :disabled="!canReview" @click="deleteHumanItem"><Delete />删除框</button>
-            </div>
-          </template>
-
-          <div v-else class="no-selection">
-            <Check v-if="pendingItems.length === 0" />
-            <Aim v-else />
-            <strong>{{ pendingItems.length === 0 ? '本图所有框已处理' : '点击照片中的框开始审核' }}</strong>
-            <span>{{ pendingItems.length === 0 ? '现在请给出整图结论' : '橙色框为 AI 待确认疑点' }}</span>
-          </div>
-
-          <el-input
-            v-if="selectedItem"
-            v-model="selectedItem.notes"
-            class="review-note"
-            :disabled="!canReview"
-            maxlength="200"
-            placeholder="可选：补充判断依据"
-            @update:model-value="touchPhoto"
-          />
           </section>
 
           <section v-if="rejectedAiItems.length" class="rejected-history">
@@ -1696,9 +1792,9 @@ onBeforeUnmount(() => {
         type="button"
         class="submit"
         :disabled="!canReview || submitting"
-        @click="submitReview"
+        @click="submitReview()"
       >
-        <Check /> {{ submitting ? '提交中…' : '提交整单人工审核' }}
+        <Check /> {{ submitting ? '提交中…' : '提交并进入下一批' }} <kbd v-if="!submitting">Space / Enter</kbd>
       </button>
     </footer>
   </section>
@@ -2084,6 +2180,7 @@ button {
 }
 
 .tool-group { display: flex; gap: 6px; }
+.review-action-group { flex-wrap: wrap; }
 
 .bar-sep {
   width: 1px;
@@ -2117,9 +2214,15 @@ button {
 .tool-btn.on { background: #2f6fdd; border-color: #2f6fdd; color: #fff; }
 .tool-btn.on kbd { background: rgba(255, 255, 255, .25); }
 .tool-btn.label-btn.on { color: #fff; }
+.tool-btn.supplement-btn { border-style: dashed; }
 
 /* 十字光标明确提示当前正在补问题框。 */
 .image-viewport.tool-box { cursor: crosshair; }
+.image-viewport.tool-select { cursor: default; }
+.image-viewport.tool-supplement { cursor: copy; }
+.image-viewport.shift-panning,
+.image-viewport.shift-panning .annotation-box,
+.image-viewport.shift-panning .object-final-box { cursor: grab; }
 
 /* ---- 落笔预览：一律不接指针事件，否则会截断正在进行的拖拽 ---- */
 .draft-rect {
@@ -2205,6 +2308,7 @@ button {
 }
 
 .must-act-card {
+  margin-bottom: 12px;
   padding: 14px;
   border-top: 4px solid var(--orange);
 }
@@ -2315,6 +2419,18 @@ button {
 .whole-photo-card :deep(svg),
 .human-decisions :deep(svg) {
   width: 15px;
+}
+
+.primary-decisions kbd,
+.correction-row kbd,
+.human-decisions kbd,
+.label-supplement-actions kbd {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font: 700 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: .76;
 }
 
 .primary-decisions .confirm {

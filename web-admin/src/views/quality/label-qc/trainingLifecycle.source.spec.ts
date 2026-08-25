@@ -121,6 +121,49 @@ describe('label QC training lifecycle UI contract', () => {
     expect(workbench).not.toContain('defaultLabelBox(tray)');
   });
 
+  it('draws actual missing-label defects directly and supplements existing missed labels with one click', () => {
+    expect(workbench).not.toContain("{ mode: 'box', key: 'R', text: '拉框' }");
+    expect(workbench).toContain("{ label: 'MISSING_WHITE_LABEL', key: '1', text: '缺白标 · 画框' }");
+    expect(workbench).toContain("{ label: 'MISSING_COLOR_LABEL', key: '2', text: '缺彩标 · 画框' }");
+    expect(workbench).toContain("{ type: 'WHITE_LABEL', key: '5', text: '漏识白标 · 单击' }");
+    expect(workbench).toContain("{ type: 'COLOR_LABEL', key: '6', text: '漏识彩标 · 单击' }");
+    expect(workbench).toContain("type: 'supplement'");
+    expect(workbench).toContain('suggestPointLabelBox(draft, type, x, y)');
+    expect(workbench).toContain('addSupplementalLabelAt(event.clientX, event.clientY)');
+    expect(workbench).toContain('只补模型漏识别');
+  });
+
+  it('puts AI review decisions on adjacent keyboard-row shortcuts without colliding with display layers', () => {
+    expect(workbench.indexOf('<section class="must-act-card"'))
+      .toBeLessThan(workbench.indexOf('class="object-review-card object-review-summary"'));
+    expect(workbench).toContain("{ keys: 'Q / W / E / R / T', text: '确认 / 误报 / 缺白 / 缺彩 / 无法判断' }");
+    expect(workbench).toContain('<Check /> 确认问题：{{ labelText(selectedItem.aiLabel) }} <kbd>Q</kbd>');
+    expect(workbench).toContain('<Close /> 误报 / 无问题 <kbd>W</kbd>');
+    expect(workbench).toContain("resolveSelected('MISSING_WHITE_LABEL')\">缺白标 <kbd>E</kbd>");
+    expect(workbench).toContain("resolveSelected('MISSING_COLOR_LABEL')\">缺彩标 <kbd>R</kbd>");
+    expect(workbench).toContain("resolveSelected('UNJUDGEABLE')\">无法判断 <kbd>T</kbd>");
+    expect(workbench).toContain("white: { key: 'Z', text: '白标'");
+    expect(workbench).toContain("color: { key: 'X', text: '彩标'");
+  });
+
+  it('allows shift-dragging the photo in every review mode, including on top of existing boxes', () => {
+    expect(workbench).toContain("event.button === 1 || event.shiftKey || shiftPressed.value || toolMode.value === 'select'");
+    expect(workbench.match(/if \(event\.shiftKey \|\| shiftPressed\.value\)/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(workbench).toContain("window.addEventListener('keyup', onShortcutKeyUp)");
+    expect(workbench).toContain("window.addEventListener('blur', clearShiftShortcut)");
+    expect(workbench).toContain("'shift-panning': shiftPressed");
+  });
+
+  it('submits a fully reviewed batch from space or enter and automatically opens the next waiting batch', () => {
+    expect(workbench).toContain('if (allComplete.value) {');
+    expect(workbench).toContain('if (!props.submitting) submitReview(true);');
+    expect(workbench).toContain("emit('submit', toReviewRequest(drafts.value), keyboardConfirmed)");
+    expect(workbench).toContain('提交并进入下一批');
+    expect(page).toContain('async function submitReview(payload: LabelQcReviewRequest, keyboardConfirmed = false)');
+    expect(page).toContain('if (!keyboardConfirmed) {');
+    expect(page).toContain('await openReview(next);');
+  });
+
   it('releases the submitting state before queue refresh and keeps timeout retries idempotent', () => {
     expect(page).toContain('prepareLabelQcReviewAttempt(');
     expect(page).toContain('reviewRequestId: attempt.requestId');

@@ -6,6 +6,7 @@ import {
   findTrayForLabelBox,
   hasHumanObjectReview,
   setTrayPresence,
+  suggestPointLabelBox,
   toObjectReviewPayload,
 } from './objectReviewModel';
 
@@ -267,5 +268,50 @@ describe('label QC object review model', () => {
     expect(findTrayForLabelBox(draft, {
       xMin: 0.6, yMin: 0.6, xMax: 0.7, yMax: 0.7,
     })?.trayIndex).toBe(1);
+  });
+
+  it('sizes a clicked missing detector label from the median of existing same-type labels', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [
+        { index: 0, bbox: [0, 0, 0.45, 1], labels: [
+          { type: 'white', bbox: [0.1, 0.1, 0.22, 0.18] },
+          { type: 'white', bbox: [0.1, 0.35, 0.24, 0.45] },
+        ] },
+        { index: 1, bbox: [0.5, 0, 1, 1], labels: [] },
+      ],
+    })));
+
+    const suggestion = suggestPointLabelBox(draft, 'WHITE_LABEL', 0.75, 0.55);
+
+    expect(suggestion?.tray.trayIndex).toBe(1);
+    expect(suggestion?.bbox.xMin).toBeCloseTo(0.685);
+    expect(suggestion?.bbox.xMax).toBeCloseTo(0.815);
+    expect(suggestion?.bbox.yMin).toBeCloseTo(0.505);
+    expect(suggestion?.bbox.yMax).toBeCloseTo(0.595);
+    expect(hasHumanObjectReview(draft)).toBe(false);
+  });
+
+  it('keeps click-generated label boxes inside their existing tray near an edge', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{ index: 0, bbox: [0.4, 0.4, 0.7, 0.8], labels: [] }],
+    })));
+
+    const suggestion = suggestPointLabelBox(draft, 'COLOR_LABEL', 0.695, 0.795);
+
+    expect(suggestion?.bbox.xMax).toBeCloseTo(0.7);
+    expect(suggestion?.bbox.yMax).toBeCloseTo(0.8);
+    expect(suggestion?.bbox.xMin).toBeGreaterThanOrEqual(0.4);
+    expect(suggestion?.bbox.yMin).toBeGreaterThanOrEqual(0.4);
+  });
+
+  it('does not invent a tray when an optional supplementation click falls outside detected trays', () => {
+    const draft = buildObjectReviewDraft(photo(JSON.stringify({
+      trays: [{ index: 0, bbox: [0.1, 0.1, 0.4, 0.4], labels: [] }],
+    })));
+
+    expect(suggestPointLabelBox(draft, 'COLOR_LABEL', 0.8, 0.8)).toBeNull();
+    expect(suggestPointLabelBox(draft, 'COLOR_LABEL', Number.NaN, 0.3)).toBeNull();
+    expect(draft.trays).toHaveLength(1);
+    expect(hasHumanObjectReview(draft)).toBe(false);
   });
 });
