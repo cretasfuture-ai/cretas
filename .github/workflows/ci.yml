@@ -227,9 +227,26 @@ jobs:
       #
       # 这一步补上那个签名。subject 刻意是 JAR 而不是 ZIP: JAR 才是最终装到服务器上
       # 跑的东西, 而 ZIP 只是运输包装, 中途会被东京拆掉。
+      #
+      # ⚠️ 2026-08-25: 这一步在本组织【必然失败】——
+      #   "Failed to persist attestation: Feature not available for the
+      #    cretasfuture-ai organization. To enable this feature, please upgrade
+      #    the billing plan, or make this repository public."
+      #   GitHub 的规则: Free/Pro/Team 三档, artifact attestations 只对【公开仓库】
+      #   可用; 私有仓库必须是 Enterprise Cloud ($21/人/月)。本组织是 Free。
+      #
+      # 而它失败的代价【不止是标红】: 下面 "Ship attestation bundle" 的
+      #   test -n "$BUNDLE_PATH" 会跟着失败 → "Upload exact-commit deploy artifact"
+      #   根本不执行 → 制品从来没上传成功过 → prewarm-main-artifact.sh 每次
+      #   no_main_artifact_listed → 每次发布都回退本地构建(实测 204s vs 命中 25s)。
+      #
+      # 所以把它降级成【可选增强】: 签得上就签, 签不上就照常出制品。
+      # ⛔ 不伪造: 签不上时不产 bundle, ECS 侧 deployable_trust_verified 保持 false ——
+      #    那正是本文件原注释写的设计("这是设计, 不是缺陷")。
       - name: Attest deploy artifact provenance
         id: attest
         if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        continue-on-error: true
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
@@ -243,8 +260,10 @@ jobs:
       #
       # ⚠️ trusted root 绝不能也这么下发。信任根必须走独立通路并钉在 ECS 上, 否则就是
       # 把"验证者"和"被验证者"装进同一个包 —— 犯的正是上面那个 unsigned manifest 的错。
+      # 只有真签上了才有 bundle 可发。签不上时【跳过】而不是失败 —— 见上一步的说明。
       - name: Ship attestation bundle with the artifact
-        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        if: ${{ (github.event_name == 'push' || inputs.package_java_artifact)
+          && steps.attest.outcome == 'success' }}
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
         run: |
@@ -254,6 +273,31 @@ jobs:
             backend/java/cretas-api/target/release-jar.attestation.jsonl
           echo "attestation bundle bytes: $(stat -c %s \
             backend/java/cretas-api/target/release-jar.attestation.jsonl)"
+
+      # 上一步把 if-no-files-found 放宽成 warn 是为了让 attestation 可选,
+      # 但那会【连带】让真正必需的文件缺失也只是 warn。这一步把口子堵回来:
+      # 四个必需文件逐个校验, 缺任何一个都是硬失败。
+      - name: Verify required artifact files exist
+        if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
+        working-directory: backend/java/cretas-api/target
+        run: |
+          missing=0
+          for f in cretas-backend-system-1.0.0.jar \
+                   cretas-backend-system-1.0.0.jar.sha256 \
+                   cretas-backend-system-1.0.0.jar.commit \
+                   release-jar.manifest; do
+            if [ ! -s "$f" ]; then
+              echo "MISSING_REQUIRED_ARTIFACT=$f"
+              missing=1
+            fi
+          done
+          # attestation 是可选的 —— 只报告它在不在, 不影响成败。
+          if [ -s release-jar.attestation.jsonl ]; then
+            echo "ATTESTATION=present"
+          else
+            echo "ATTESTATION=absent (deployable_trust_verified 将保持 false)"
+          fi
+          exit "$missing"
 
       - name: Upload exact-commit deploy artifact
         if: ${{ github.event_name == 'push' || inputs.package_java_artifact }}
@@ -266,7 +310,11 @@ jobs:
             backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
             backend/java/cretas-api/target/release-jar.manifest
             backend/java/cretas-api/target/release-jar.attestation.jsonl
-          if-no-files-found: error
+          # ⚠️ warn 而不是 error: attestation.jsonl 现在是【可选】的(见上面的说明)。
+          #    JAR / sha256 / commit / manifest 四个仍然必须在 —— 它们缺了就是真失败,
+          #    但 upload-artifact 的 if-no-files-found 是【整组】判定, 没法只对某一个
+          #    文件要求存在。所以下一步单独校验那四个必需文件。
+          if-no-files-found: warn
           compression-level: 0
           retention-days: 1
       # 堆该给多少不该靠猜。把 runner 的真实规格打出来, 第一次运行就能确认 4g
