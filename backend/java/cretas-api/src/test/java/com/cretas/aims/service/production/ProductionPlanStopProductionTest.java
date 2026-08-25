@@ -438,6 +438,78 @@ class ProductionPlanStopProductionTest {
     }
 
     @Test
+    @DisplayName("撤销后二次小结已真实过账的 DRAFT 行允许停产，且不重放库存")
+    void stopProduction_afterInterimReversalAndRepost_acceptsRowsStampedByActiveSessions() {
+        ProductionPlan plan = byStockPlan();
+        plan.setPlannedQuantity(new BigDecimal("2"));
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+
+        ProductionInterimSettlement first = interimSettlement("interim-1", 1, "FG-S1", "1");
+        ProductionInterimSettlement reposted = interimSettlement("interim-2-reposted", 2, "FG-S2", "1");
+        FinishedGoodsBatch firstBatch = finishedGoods(
+                "fg-1", "FG-S1", "1", "box", FinishedGoodsBatch.Status.AVAILABLE,
+                InventoryOwnership.COMPANY_OWNED, null);
+        FinishedGoodsBatch secondBatch = finishedGoods(
+                "fg-2", "FG-S2", "1", "box", FinishedGoodsBatch.Status.AVAILABLE,
+                InventoryOwnership.COMPANY_OWNED, null);
+        stubInterimBridge(plan, List.of(first, reposted), firstBatch, secondBatch);
+
+        ProcessSheetRow firstRow = new ProcessSheetRow();
+        firstRow.setBatchId(777L);
+        firstRow.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        firstRow.setInterimSettledAt(first.getPostedAt());
+        ProcessSheetRow repostedRawRow = new ProcessSheetRow();
+        repostedRawRow.setBatchId(778L);
+        repostedRawRow.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        repostedRawRow.setInterimSettledAt(reposted.getPostedAt());
+        ProcessSheetRow repostedFinishedRow = new ProcessSheetRow();
+        repostedFinishedRow.setBatchId(779L);
+        repostedFinishedRow.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        repostedFinishedRow.setInterimSettledAt(reposted.getPostedAt());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(firstRow, repostedRawRow, repostedFinishedRow));
+
+        service.stopProduction(FACTORY_ID, PLAN_ID);
+
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        verify(productionSettlementRepository).save(argThat(settlement ->
+                "POSTED".equals(settlement.getPostingStatus())
+                        && settlement.getFinishedGoodsBatchId() == null
+                        && new BigDecimal("2").compareTo(settlement.getActualFinishedQuantity()) == 0
+                        && new BigDecimal("2").compareTo(settlement.getWarehouseReceivedQuantity()) == 0));
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+        verify(applicationEventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("DRAFT 行时间戳不能伪造：未对应有效小结会话时停产必须拒绝")
+    void stopProduction_draftRowWithoutMatchingActiveInterimSession_rejectedWithoutInventoryWrites() {
+        ProductionPlan plan = byStockPlan();
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+        ProductionInterimSettlement session = interimSettlement("interim-1", 1, "FG-S1", "1");
+        FinishedGoodsBatch batch = finishedGoods(
+                "fg-1", "FG-S1", "1", "box", FinishedGoodsBatch.Status.AVAILABLE,
+                InventoryOwnership.COMPANY_OWNED, null);
+        stubInterimBridge(plan, List.of(session), batch);
+
+        ProcessSheetRow stampedDraft = new ProcessSheetRow();
+        stampedDraft.setBatchId(777L);
+        stampedDraft.setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+        stampedDraft.setInterimSettledAt(session.getPostedAt().minusMinutes(1));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(stampedDraft));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.stopProduction(FACTORY_ID, PLAN_ID));
+
+        assertEquals("BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE", error.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+        verify(finishedGoodsBatchRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("多次小结成品批次单位不一致 → fail-closed 且不写结单")
     void stopProduction_multipleInterimSettlementsWithDifferentUnits_rejected() {
         ProductionPlan plan = byStockPlan();

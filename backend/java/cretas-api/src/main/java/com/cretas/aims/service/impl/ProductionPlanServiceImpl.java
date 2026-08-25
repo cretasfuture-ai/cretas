@@ -6227,18 +6227,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
-        if (isEmpty(rows) || rows.stream().anyMatch(row ->
-                !ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())
-                        || row.getInterimSettledAt() == null)) {
-            throw new BusinessException(409, "存货生产报工尚未全部正式提交并小结, 不能补建仓库确认")
-                    .withCode("BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE")
-                    .withHint("请核对逐道报工和小结状态；系统不会重放库存动作")
-                    .withHintTarget("仓库实收");
+        if (isEmpty(rows) || rows.stream().anyMatch(row -> row == null
+                || row.getInterimSettledAt() == null
+                || (!ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())
+                        && !ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())))) {
+            throw incompleteByStockSettlementRows();
         }
 
         List<ProductionInterimSettlement> sessions = productionInterimSettlementRepository
                 .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(factoryId, planId);
         if (isEmpty(sessions)) {
+            if (rows.stream().anyMatch(row ->
+                    ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus()))) {
+                throw incompleteByStockSettlementRows();
+            }
             throw new BusinessException(409, "该存货生产计划没有可核验的小结会话")
                     .withCode("BY_STOCK_INTERIM_SETTLEMENT_REQUIRED")
                     .withHint("系统不会用报工行猜测库存结果；请先完成小结")
@@ -6252,6 +6254,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withHint("请联系管理员核对小结审计记录；系统未改动任何库存")
                         .withHintTarget("仓库实收");
             }
+        }
+        // 审批撤销会把原正式报工退回 DRAFT；合法重新小结会重新过账并打戳，
+        // 但历史实现不会恢复 submissionStatus。只认与本计划当前有效小结会话
+        // 精确相同的 postedAt，避免把普通草稿、旧撤销会话或伪造时间戳当成已结算。
+        if (rows.stream().anyMatch(row ->
+                ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())
+                        && sessions.stream().noneMatch(session ->
+                                Objects.equals(session.getPostedAt(), row.getInterimSettledAt())))) {
+            throw incompleteByStockSettlementRows();
         }
 
         LinkedHashSet<String> batchNumbers = new LinkedHashSet<>();
@@ -6351,6 +6362,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 factoryId, planId, saved.getId(), sessions.size(), batchNumbers,
                 producedQuantity, quantityUnit);
         return saved;
+    }
+
+    private BusinessException incompleteByStockSettlementRows() {
+        return new BusinessException(409, "存货生产报工尚未全部正式提交并小结, 不能补建仓库确认")
+                .withCode("BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE")
+                .withHint("请核对逐道报工和小结状态；系统不会重放库存动作")
+                .withHintTarget("仓库实收");
     }
 
     private void validateInterimFinishedGoods(ProductionPlan plan, FinishedGoodsBatch finishedGoods,
