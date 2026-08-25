@@ -618,7 +618,11 @@ public class OrderCostBreakdownService {
      * <b>真的不知道</b>, 按 0 计会系统性低估 COGS、虚增毛利。这两项是<b>可以不发生</b>的成本桶。
      */
     private static final java.util.Set<String> OPTIONAL_COST_ITEM_CODES =
-            java.util.Set.of("EQUIPMENT_COST", "OTHER_COST");
+            java.util.Set.of("EQUIPMENT_COST", "OTHER_COST",
+                    // 人工【金额已知】只是缺工时段 —— 金额已经进了 laborCost/总成本,
+                    // 抹掉 totalCost 等于把一个算得出来的数扔掉。⛔ 与 LABOR_COST_UNKNOWN
+                    // (金额真的不知道) 严格区分, 后者照旧阻断。
+                    "LABOR_TIME_DETAIL_MISSING");
 
     /** {@code CODE:detail} → 这个缺项是不是「不强制填写」那一类。 */
     public static boolean isOptionalCostItem(String item) {
@@ -1100,8 +1104,18 @@ public class OrderCostBreakdownService {
         BigDecimal rate = amount != null && hours != null && hours.signum() > 0
                 ? amount.divide(hours, 8, RoundingMode.HALF_UP) : null;
         boolean collected = workers > 0 && duration > 0 && rate != null;
+        // ── 2026-08-25: 「明细不全」不等于「金额未知」 ──────────────────────────
+        //   实测(prod, 批次 PB-PLAN-1787622818112-B3898275-15036):
+        //     proc=2  workers=null  duration=null  rate=null  amount=26.00
+        //   人工【金额是有的】(26.00, 已计入 laborCost 51.57 → knownCostSubtotal 93.12),
+        //   缺的只是「这笔钱对应多少工时」。原来两种情形共用一个码 LABOR_RATE_OR_TIME,
+        //   于是「金额齐了但没工时段」也把整个 totalCost 抹掉 —— 把可审计性问题
+        //   误判成了金额缺口。本仓形态 A: 我量的这个数不是我真正想知道的那个数。
+        //   ⛔ amount 为 null 才是真的不知道 —— 那个照旧阻断。
         if (!collected && auditEligible) {
-            missing.add("LABOR_RATE_OR_TIME:process-" + step.getProcessOrder());
+            missing.add((amount == null
+                    ? "LABOR_COST_UNKNOWN:process-"
+                    : "LABOR_TIME_DETAIL_MISSING:process-") + step.getProcessOrder());
         }
         details.add(LaborDetail.builder()
                 .processOrder(step.getProcessOrder())
@@ -1116,7 +1130,11 @@ public class OrderCostBreakdownService {
                 .rateSource(rate == null ? null : "DERIVED_FROM_PERSISTED_REPORT_LABOR_COST")
                 .amount(amount)
                 .collectionStatus(collected ? "COLLECTED" : "UNCOLLECTED")
-                .missingReason(collected ? null : "缺少可验证工时段或持久化人工成本")
+                // ⛔ 原来这句是「缺少可验证工时段【或】持久化人工成本」——
+                //    两件事糊成一句, 而它们对总成本的后果完全不同。
+                .missingReason(collected ? null
+                        : (amount == null ? "本道人工成本未知(缺费率或工时)"
+                                : "人工成本已知, 但缺可验证工时段(不影响总成本)"))
                 .build());
     }
 

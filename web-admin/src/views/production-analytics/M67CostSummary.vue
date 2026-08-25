@@ -125,6 +125,9 @@ const perSkuUnit = (row: Row) => {
 const MISSING_COST_LABELS: Record<string, string> = {
   EQUIPMENT_COST: '设备成本',
   OTHER_COST: '其他成本',
+  LABOR_COST_UNKNOWN: '人工成本未知',
+  LABOR_TIME_DETAIL_MISSING: '人工工时段(金额已计入)',
+  // 历史码: 2026-08-25 拆成上面两个后不再产出, 保留是为了读旧数据不显示成原始码。
   LABOR_RATE_OR_TIME: '人工工时或费率',
   PINNED_BOM_SNAPSHOT_MISSING: 'BOM 配方快照',
   SEMI_FINISHED_OR_FINISHED_FEED_PRICE: '半成品/成品投料单价',
