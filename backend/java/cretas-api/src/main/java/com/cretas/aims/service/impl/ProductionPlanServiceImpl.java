@@ -5259,7 +5259,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * <p>⛔ 认不出来的码<b>原样输出</b>, 不静默丢掉 —— 一个没翻译的码至少还能搜到,
      * 丢掉就变成「差 N 项但只列出 N-1 项」。
      */
-    static String missingCostItemLabel(String item) {
+    public static String missingCostItemLabel(String item) {
         if (item == null || item.isBlank()) {
             return "未知缺项";
         }
@@ -5277,7 +5277,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 return "生产批次 " + detail + " 未录设备成本";
             case "OTHER_COST":
                 return "生产批次 " + detail + " 未录其他成本";
+            case "LABOR_COST_UNKNOWN":
+                return "工序 " + detail + " 的人工成本未知(缺费率或工时)";
+            case "LABOR_TIME_DETAIL_MISSING":
+                return "工序 " + detail + " 缺可验证工时段(人工金额已计入)";
             case "LABOR_RATE_OR_TIME":
+                // 历史码: 2026-08-25 拆成上面两个后不再产出, 保留是为了读旧数据不丢项。
                 return "工序 " + detail + " 缺工时段或人工成本";
             case "SEMI_FINISHED_OR_FINISHED_FEED_PRICE":
                 return "半成品/成品投料缺单位成本";
