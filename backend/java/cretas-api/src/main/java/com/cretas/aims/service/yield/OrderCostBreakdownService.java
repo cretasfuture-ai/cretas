@@ -1161,19 +1161,12 @@ public class OrderCostBreakdownService {
                     .missingReason(collected ? null : "pinned BOM 缺少可验证 itemCost/标准耗用量")
                     .build());
         }
-        // 整份快照的包材价【全部】不可信 ⇒ 这份快照对包材成本没有参考价值。
-        // 回退 notPinned(): 让上游保留【实际领用】算出来的包材成本(有采购真实单价支撑),
-        // 而不是拿一堆 0 去把真实成本替换掉。
-        // ⛔ 部分可信时不回退: 那时快照仍是权威口径, 没填的那几项照常报 PACKAGING_PRICE 缺项。
-        boolean anyPackagingRow = details.stream()
-                .anyMatch(d -> d != null);
-        boolean allPinnedCostsUnusable = anyPackagingRow
-                && details.stream().allMatch(d -> d.getAmount() == null);
-        if (allPinnedCostsUnusable) {
-            log.info("[M67CostBreakdown] pinned BOM 的包材价全为空/0, 回退实际领用 factory={} plan={}",
-                    factoryId, plan.getId());
-            return PinnedPackagingResult.notPinned();
-        }
+        // ⛔ 【不要】在这里回退 notPinned(): 2026-08-25 实测那样做会丢掉缺项 ——
+        //    回退后包材走实际领用, 而那些批次的实际包材领用行数是 0, 于是
+        //    包材成本 0 且【一条缺项都不报】⇒ costComplete=true / totalCost=0.0,
+        //    从「诚实报缺」变成了「报 0 并说它是完整的」。那比原来更糟。
+        //    保持 pinned: amount=null → collected=false → 照常报 PACKAGING_PRICE,
+        //    整单判 PARTIAL、totalCost 留 null。
         return new PinnedPackagingResult(true, knownCost, details, missing);
     }
 
