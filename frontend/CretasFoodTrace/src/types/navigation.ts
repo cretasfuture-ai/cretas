@@ -687,6 +687,17 @@ export type WHHomeStackParamList = {
   InboundDetail: { batchId: string };
   AlertHandle: { alertId: string };
   TempMonitor: undefined;
+  // 仓库地图 / 库位 —— 2026-08-25 补:
+  // 这个屏原本只挂在 WHInventoryStack 下, 而那个 Tab 被 SIMPLIFIED_WAREHOUSE_NAV
+  // 按 owner 裁定隐藏了(「不让仓管在 App 上查库存」), 结果仓管在手机上根本看不到
+  // Web 端配好的那份仓储空间。地图是**现场找货的参照**, 不是库存查询 ——
+  // 所以单独挂进首页栈; ⛔ 不整体翻 SIMPLIFIED_WAREHOUSE_NAV,
+  // 那会把 18 个库存查询屏一起放出来, 正好违背那条裁定。
+  WHLocationManage: undefined;
+  // WHLocationManageScreen 的「温控监控」按钮 navigate 的是 `WHTempMonitor`
+  // (库存栈里的名字), 而首页栈里同一个屏叫 `TempMonitor` —— 名字对不上就会跳到
+  // 一个不存在的路由。补一个同名注册, 免得「两个各自正确的改动叠出一条死路」。
+  WHTempMonitor: undefined;
   // 调拨（领料审批）
   TransferList: undefined;
   TransferDetail: { transferId: string };

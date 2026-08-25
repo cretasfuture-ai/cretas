@@ -15,6 +15,11 @@ type TabNav = BottomTabNavigationProp<WarehouseManagerTabParamList>;
 export default function WHHomeScreen() {
   const navigation = useNavigation();
 
+  /** 仓库地图在**本栈**内, 不切 Tab —— 它是现场找货的参照, 不是第三条作业主线。 */
+  const openWarehouseMap = useCallback(() => {
+    (navigation as unknown as { navigate: (name: string) => void }).navigate('WHLocationManage');
+  }, [navigation]);
+
   const openTab = useCallback((tab: 'WHInboundTab' | 'WHOutboundTab') => {
     const tabNavigation = navigation.getParent<TabNav>();
     if (!tabNavigation) {
@@ -78,6 +83,26 @@ export default function WHHomeScreen() {
             <MaterialCommunityIcons name="chevron-right" size={30} color="#2E7D32" />
           </Surface>
         </TouchableRipple>
+
+        <TouchableRipple
+          testID="wh-home-warehouse-map"
+          accessibilityRole="button"
+          accessibilityLabel="查看库位与仓库地图"
+          onPress={openWarehouseMap}
+          style={styles.touchable}
+          rippleColor="rgba(109, 76, 176, 0.12)"
+        >
+          <Surface style={[styles.actionCard, styles.mapCard]} elevation={1}>
+            <View style={[styles.iconCircle, styles.mapIcon]}>
+              <MaterialCommunityIcons name="floor-plan" size={44} color="#6D4CB0" />
+            </View>
+            <View style={styles.actionCopy}>
+              <Text style={styles.actionTitle}>仓库地图</Text>
+              <Text style={styles.actionHint}>看库位在哪一层、放了哪些批次</Text>
+            </View>
+            <MaterialCommunityIcons name="chevron-right" size={30} color="#6D4CB0" />
+          </Surface>
+        </TouchableRipple>
       </View>
     </SafeAreaView>
   );
@@ -88,7 +113,7 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#4CAF50', paddingHorizontal: 20, paddingVertical: 22 },
   headerTitle: { color: '#FFFFFF', fontSize: 24, fontWeight: '700' },
   headerSubtitle: { color: 'rgba(255,255,255,0.9)', fontSize: 15, marginTop: 6 },
-  actions: { flex: 1, justifyContent: 'center', paddingHorizontal: 18, gap: 20 },
+  actions: { flex: 1, justifyContent: 'center', paddingHorizontal: 18, gap: 16 },
   touchable: { borderRadius: 18 },
   actionCard: {
     minHeight: 132,
@@ -100,6 +125,7 @@ const styles = StyleSheet.create({
   },
   inboundCard: { backgroundColor: '#F7FBFF', borderColor: '#BBDEFB' },
   outboundCard: { backgroundColor: '#F7FCF7', borderColor: '#C8E6C9' },
+  mapCard: { backgroundColor: '#FAF8FF', borderColor: '#DDD3F2' },
   iconCircle: {
     width: 72,
     height: 72,
@@ -109,6 +135,7 @@ const styles = StyleSheet.create({
   },
   inboundIcon: { backgroundColor: '#E3F2FD' },
   outboundIcon: { backgroundColor: '#E8F5E9' },
+  mapIcon: { backgroundColor: '#EFE9FA' },
   actionCopy: { flex: 1, marginHorizontal: 16 },
   actionTitle: { color: '#1F2937', fontSize: 26, fontWeight: '700' },
   actionHint: { color: '#667085', fontSize: 14, lineHeight: 21, marginTop: 7 },

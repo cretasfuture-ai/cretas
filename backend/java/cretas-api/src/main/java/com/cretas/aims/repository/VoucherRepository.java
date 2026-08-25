@@ -116,8 +116,24 @@ public interface VoucherRepository extends JpaRepository<Voucher, String> {
      * ⛔ 也不要写成 JPQL 加 {@code OR v.deletedAt IS NOT NULL}: {@code @Where} 是
      * {@code AND} 进去的, 加什么 {@code OR} 都绕不开。
      */
-    @Query(value = "SELECT COALESCE(MAX(CAST(SUBSTRING(v.voucher_number, LENGTH(CONCAT('V-', ?2, '-')) + 1) AS integer)), 0) "
-            + "FROM vouchers v WHERE v.factory_id = ?1 AND v.voucher_number LIKE CONCAT('V-', ?2, '-%')",
+    /*
+     * 🔴 2026-08-25 prod 实测: 应用盘点差异时 500「数据服务暂时不可用 (追踪码 7E651E80)」,
+     *    整个过账事务回滚。服务器日志根因:
+     *      ERROR: could not determine data type of parameter $2
+     *
+     *    `CONCAT('V-', ?2, '-')` 里的参数**没有类型上下文** —— PostgreSQL 在 Parse 阶段
+     *    推不出它是什么类型。pgjdbc 默认 prepareThreshold=5: 前几次走 simple 模式(驱动
+     *    带着值和类型一起发), 到第 5 次升级成服务端 prepared statement, Parse 时没有值
+     *    可推 ⇒ 从那一刻起该连接上**每次都炸**。
+     *    这解释了「库里有 17 张凭证(最后一张 8-18), 但今天必失败」这个看起来矛盾的读数。
+     *
+     *    ⇒ 显式 CAST 给参数定类型。已在 prod 库上用 PREPARE 双向验证:
+     *       现状式 → could not determine data type of parameter $2
+     *       CAST 式 → PREPARE 成功, 返回 17, 而真实 max 就是 V-2026-0017 (未删仅 13)。
+     *    ⛔ 返回 17 而不是 13 —— 上面那条软删占号的修复没有被这次改动带回去。
+     */
+    @Query(value = "SELECT COALESCE(MAX(CAST(SUBSTRING(v.voucher_number, LENGTH(CONCAT('V-', CAST(?2 AS text), '-')) + 1) AS integer)), 0) "
+            + "FROM vouchers v WHERE v.factory_id = CAST(?1 AS text) AND v.voucher_number LIKE CONCAT('V-', CAST(?2 AS text), '-%')",
             nativeQuery = true)
     long maxVoucherSequenceByFactoryIdAndYear(String factoryId, String year);
 

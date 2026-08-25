@@ -297,6 +297,10 @@ function openDetail(row: PendingApproval): void {
     PURCHASE_ORDER: `/procurement/orders/${id}`,
     SALES_ORDER: `/sales/orders/${id}`,
     INVENTORY_TRANSFER: `/transfer/${id}`,
+    // 🔴 2026-08-25 prod 实测: 库存调整没接进来, 厂长点「详情」只得到
+    //    「暂未接入单据详情页」—— 而他正被要求批准一次真实的库存数量调整。
+    //    盘点没有单条详情路由, 目标是列表页并带上单号让它自己定位。
+    INVENTORY_ADJUSTMENT: `/warehouse/stocktakes?stocktakeId=${id}`,
   };
   const target = routeByModule[row.moduleCode];
   if (target) {

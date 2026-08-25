@@ -21,7 +21,11 @@ describe('仓管四导航与首页分流', () => {
     expect(nav).toContain('testID="wh-feature-unavailable"');
   });
 
-  it('首页只有两个大业务入口并切到对应底部导航', () => {
+  // 2026-08-25: 首页从两个入口变三个 —— 新增「仓库地图」。
+  // 原标题写的是「只有两个」, 断言并不会因此变红(它没有钉「恰好两个」),
+  // 但描述会骗下一个人, 所以一并订正。地图的可达性由
+  // warehouseMapReachableOnPhone.test.ts 单独钉。
+  it('首页的业务入口切到对应底部导航', () => {
     expect(home).toContain('testID="wh-home-inbound"');
     expect(home).toContain('testID="wh-home-outbound"');
     expect(home).toContain("openTab('WHInboundTab')");
