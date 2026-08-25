@@ -100,8 +100,23 @@ class WarehouseLayoutControllerTest {
         assertThat(recognitionRoles.value()).containsExactlyInAnyOrder("factory_super_admin", "warehouse_manager");
     }
 
+    /** 让 F006 拥有一份配置了 LC01/LC02 的仓储布局。 */
+    private void givenConfiguredLocations(String... codes) {
+        List<Map<String, Object>> locations = java.util.Arrays.stream(codes)
+                .map(code -> Map.<String, Object>of("id", code, "zoneId", "z", "code", code, "name", code))
+                .toList();
+        FactoryFeatureConfig config = new FactoryFeatureConfig();
+        config.setConfig(Map.of(
+                "zones", List.of(Map.of("id", "z", "name", "冷藏区", "prefix", "LC")),
+                "locations", locations,
+                "floors", List.of()));
+        when(repository.findByFactoryIdAndModuleIdAndDeletedAtIsNull("F006", "WAREHOUSE_LAYOUT"))
+                .thenReturn(Optional.of(config));
+    }
+
     @Test
     void warehouseStaffCanRelocateOwnFactoryFinishedGoodsWithoutChangingQuantity() {
+        givenConfiguredLocations("LC01", "LC02");
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
         batch.setId("fg-1");
         batch.setFactoryId("F006");
@@ -114,12 +129,58 @@ class WarehouseLayoutControllerTest {
 
     @Test
     void finishedGoodsRelocationNeverCrossesFactories() {
+        givenConfiguredLocations("LC01", "LC02");
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
         batch.setFactoryId("OTHER");
         when(finishedGoodsRepository.findById("fg-1")).thenReturn(Optional.of(batch));
 
         assertThatThrownBy(() -> controller.moveFinishedGoods("F006", "fg-1", Map.of("storageLocation", "LC02")))
                 .isInstanceOf(BusinessException.class);
+        verify(finishedGoodsRepository, never()).save(any());
+    }
+
+    /**
+     * 2026-08-25 生产实测: 传一个本厂没配置过的位置串, 接口返回 200 并真的写进
+     * storage_location —— 只校验了「非空 + 长度」。这正是 F006 成品批次上躺着
+     * "Workflow terminal output warehouse receipt" 这种来源描述而不是位置编码的
+     * 通道; 后果是位置筛选与「某位置有几批」在生产数据上恒为 0。
+     */
+    @Test
+    void rejectsRelocationToALocationThatIsNotConfiguredForThisFactory() {
+        givenConfiguredLocations("LC01", "LC02");
+
+        assertThatThrownBy(() -> controller.moveFinishedGoods("F006", "fg-1",
+                Map.of("storageLocation", "ZZ99-NOT-CONFIGURED")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不在本厂仓储配置中");
+        // 拒绝必须发生在读批次之前, 且一行都不许写
+        verify(finishedGoodsRepository, never()).findById(anyString());
+        verify(finishedGoodsRepository, never()).save(any());
+    }
+
+    /**
+     * 一个位置都没配的工厂: fail closed。
+     * ⛔ 不能因为「还没配置」就放行任意字符串 —— 那等于把校验退回上线前的状态。
+     */
+    @Test
+    void rejectsRelocationWhenTheFactoryHasNoLayoutConfiguredAtAll() {
+        when(repository.findByFactoryIdAndModuleIdAndDeletedAtIsNull("F006", "WAREHOUSE_LAYOUT"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> controller.moveFinishedGoods("F006", "fg-1", Map.of("storageLocation", "LC01")))
+                .isInstanceOf(BusinessException.class);
+        verify(finishedGoodsRepository, never()).save(any());
+    }
+
+    /** 阴性对照: 空串/超长仍然按原来的「请选择有效的储存位置」拒绝, 且不去读配置。 */
+    @Test
+    void stillRejectsBlankAndOverlongLocationsBeforeLookingAtTheLayout() {
+        assertThatThrownBy(() -> controller.moveFinishedGoods("F006", "fg-1", Map.of("storageLocation", "   ")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("请选择有效的储存位置");
+        assertThatThrownBy(() -> controller.moveFinishedGoods("F006", "fg-1", Map.of("storageLocation", "X".repeat(300))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("请选择有效的储存位置");
         verify(finishedGoodsRepository, never()).save(any());
     }
 }
