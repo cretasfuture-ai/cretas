@@ -1,6 +1,13 @@
 /**
  * Workshop Supervisor 设备管理
  * 包含: 搜索、统计、设备列表（按状态分组）
+ *
+ * 2026-08-25 改造: 数据源从「写死在组件里」换成 GET /equipment。
+ * 删掉的是 5 台恒定显示的假设备 —— 切片机A EQ-001 A区-1号线 OEE 92%、
+ * 解冻设备B EQ-002、冷冻设备E EQ-005 维护中 2 条告警等，
+ * 外加一个只 setTimeout 不发请求的下拉刷新。
+ * 违反 CLAUDE.md 核心原则 1「禁止降级处理 —— 不返回假数据，明确显示错误」。
+ * 回归闸: src/__tests__/unit/screens/workshopSupervisorNoFabricatedDataContract.test.ts
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import {

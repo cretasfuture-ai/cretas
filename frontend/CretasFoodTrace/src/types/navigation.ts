@@ -109,7 +109,7 @@ export type ProcessingStackParamList = {
     initialValues?: Record<string, any>;
   } | undefined;
 
-  // 原材料管理
+  // 原材料管理
   MaterialBatchManagement: undefined;
   MaterialBatchSuccess: {
     batchNumber: string;
@@ -637,8 +637,6 @@ export type WSWorkersStackParamList = {
 export type WSEquipmentStackParamList = {
   WSEquipment: undefined;
   EquipmentDetail: { equipmentId: number };
-  EquipmentAlert: { alertId: string };
-  EquipmentMaintenance: { equipmentId: number };
 };
 
 export type WSProfileStackParamList = {

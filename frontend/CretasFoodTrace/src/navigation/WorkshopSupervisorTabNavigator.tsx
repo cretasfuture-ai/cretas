@@ -91,7 +91,27 @@ export function WorkshopSupervisorTabNavigator() {
       />
       )}
 
-      {/* 设备Tab — 移到快捷操作入口，不在底部Tab显示 */}
+      {/*
+        设备Tab。
+        2026-08-25 重新挂回来：此前它被摘掉，注释说「移到快捷操作入口」，
+        但那个替代入口指向的 EquipmentMonitoring 只注册在 ProcessingStackNavigator 上，
+        而车间主管走的是 WorkshopSupervisorNavigator，根本进不去 —— 那次迁移没做完，
+        留下了两处点了没反应的入口（首页设备卡片的「查看全部」+ 快捷操作里的「设备监控」）。
+        WSEquipmentScreen 现已改读真实接口，重新挂上不会把假页面暴露给用户。
+      */}
+      {isScreenEnabled('EquipmentManagement') && (
+      <Tab.Screen
+        name="WSEquipmentTab"
+        component={WSEquipmentStackNavigator}
+        options={{
+          title: "设备",
+          tabBarButtonTestID: "tab-equipment",
+          tabBarIcon: ({ color, size }) => (
+            <Icon source="cog" size={size} color={color} />
+          ),
+        }}
+      />
+      )}
 
       {/* 我的Tab - 永远显示 */}
       <Tab.Screen

@@ -1,6 +1,13 @@
 /**
  * Workshop Supervisor 批次管理
  * 包含: 搜索、筛选标签、批次列表
+ *
+ * 2026-08-25 改造: 数据源从「写死在组件里」换成 GET /processing/batches。
+ * 删掉的是 6 条恒定显示的假批次 —— PB-20251227-001 带鱼片 65% [急]、
+ * PB-20251227-002 鲈鱼片、PB-20251226-008 已完成「昨日 16:30」等，
+ * 外加写死的标签计数 (11/3/4/4) 和统计数字，以及一个只 setTimeout 不发请求的下拉刷新。
+ * 违反 CLAUDE.md 核心原则 1「禁止降级处理 —— 不返回假数据，明确显示错误」。
+ * 回归闸: src/__tests__/unit/screens/workshopSupervisorNoFabricatedDataContract.test.ts
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import {

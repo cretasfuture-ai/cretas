@@ -1,6 +1,13 @@
 /**
  * Workshop Supervisor 人员管理
  * 包含: 搜索、筛选标签、人员列表（含临时工标识）
+ *
+ * 2026-08-25 改造: 数据源从「写死在组件里」换成 GET /users + GET /timeclock/admin/history。
+ * 删掉的是 6 名恒定显示的假员工 —— 王建国 EMP-001 切片操作员 效率评分 96、
+ * 张伟 TMP-003 临时工、陈志强 EMP-005「请假」等，外加写死的 8/1/1/2 统计和
+ * 一个只 setTimeout 不发请求的下拉刷新。
+ * 违反 CLAUDE.md 核心原则 1「禁止降级处理 —— 不返回假数据，明确显示错误」。
+ * 回归闸: src/__tests__/unit/screens/workshopSupervisorNoFabricatedDataContract.test.ts
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import {

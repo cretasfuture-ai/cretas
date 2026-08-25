@@ -1,6 +1,12 @@
 /**
  * Workshop Supervisor 设备管理 Stack 导航器
- * 包含: 设备列表、设备详情、设备告警、设备维护
+ * 包含: 设备列表、设备详情
+ *
+ * 2026-08-25: 删掉了「设备告警详情」和「设备维护记录」两个屏。
+ * 它们的数据是写死在组件里的（固定的「切片机A / 温度异常 82°C」、四条固定维护记录），
+ * 全仓没有任何 navigate 入口，两个操作按钮也只 setState + Alert，不写任何后端。
+ * 真实能力在别处已经有：维护历史走 EquipmentDetailScreen 的
+ * equipmentApiClient.getEquipmentMaintenanceHistory，告警走 /equipment-alerts 接口。
  */
 
 import React from "react";
@@ -9,8 +15,6 @@ import { WSEquipmentStackParamList } from "../../types/navigation";
 
 // 导入设备相关页面组件
 import WSEquipmentScreen from "../../screens/workshop-supervisor/equipment/WSEquipmentScreen";
-import EquipmentAlertScreen from "../../screens/workshop-supervisor/equipment/EquipmentAlertScreen";
-import EquipmentMaintenanceScreen from "../../screens/workshop-supervisor/equipment/EquipmentMaintenanceScreen";
 
 // 复用现有详情页
 import EquipmentDetailScreen from "../../screens/processing/EquipmentDetailScreen";
@@ -32,20 +36,6 @@ export function WSEquipmentStackNavigator() {
         name="EquipmentDetail"
         component={EquipmentDetailScreen}
         options={{ title: "设备详情" }}
-      />
-
-      {/* 设备告警详情 */}
-      <Stack.Screen
-        name="EquipmentAlert"
-        component={EquipmentAlertScreen}
-        options={{ title: "告警详情" }}
-      />
-
-      {/* 设备维护记录 */}
-      <Stack.Screen
-        name="EquipmentMaintenance"
-        component={EquipmentMaintenanceScreen}
-        options={{ title: "维护记录" }}
       />
     </Stack.Navigator>
   );

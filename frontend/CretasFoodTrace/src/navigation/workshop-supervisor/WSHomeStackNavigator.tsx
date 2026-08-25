@@ -40,6 +40,16 @@ import YieldBatchSelectScreen from "../../screens/processing/YieldBatchSelectScr
 import YieldStepReportScreen from "../../screens/processing/YieldStepReportScreen";
 import ProcessOperationScreen from "../../screens/processing/ProcessOperationScreen";
 
+/*
+ * 生产计划管理。
+ * 2026-08-25 补登记：WSHomeScreen 顶部的业务流程图 (WorkflowVisualizer) 点节点时
+ * navigate('ProductionPlanManagement')，而这个路由只注册在 ProcessingStackNavigator /
+ * FAHomeStackNavigator 上 —— 车间主管在 AppNavigator 里是 early return，到不了那两棵树，
+ * 于是点节点是个静默 no-op（不报错、不跳转）。
+ * 它本来就已经写进 WSHomeStackParamList 了，说明当初就打算给这个角色用，只是漏了注册。
+ */
+import ProductionPlanManagementScreen from "../../screens/processing/ProductionPlanManagementScreen";
+
 const Stack = createNativeStackNavigator<WSHomeStackParamList>();
 
 export function WSHomeStackNavigator() {
@@ -116,6 +126,9 @@ export function WSHomeStackNavigator() {
       <Stack.Screen name="YieldBatchSelect" component={YieldBatchSelectScreen} options={{ title: "逐道报工" }} />
       <Stack.Screen name="YieldStepReport" component={YieldStepReportScreen} options={{ title: "逐道报工" }} />
       <Stack.Screen name="ProcessOperation" component={ProcessOperationScreen} options={{ title: "工序操作" }} />
+
+      {/* 业务流程图节点的下钻目标 */}
+      <Stack.Screen name="ProductionPlanManagement" component={ProductionPlanManagementScreen} options={{ title: "生产计划" }} />
     </Stack.Navigator>
   );
 }
