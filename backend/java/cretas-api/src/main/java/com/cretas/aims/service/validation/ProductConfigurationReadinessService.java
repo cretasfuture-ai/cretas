@@ -187,7 +187,7 @@ public class ProductConfigurationReadinessService {
                     .reduce((left, right) -> left + "；" + right).orElse("BOM 配置不完整");
             throw new BusinessException(409, detail)
                     .withCode("BOM_COMPLETENESS_REQUIRED")
-                    .withHint("请至少配置一项主原料后再激活；工序辅料和包材可按实际需要补充")
+                    .withHint("请配置至少一项主原料；成品还必须配置包材（半成品/原料/来料加工不强制）")
                     .withHintTarget("bomCompleteness")
                     .withSeverity("warning");
         }
@@ -272,20 +272,37 @@ public class ProductConfigurationReadinessService {
         boolean basePackagingRequired = product != null && unitContractService.describe(factoryId, product.getUnit())
                 .map(unit -> unit.dimension() == UnitDimension.PACKAGE || unit.dimension() == UnitDimension.COUNT)
                 .orElse(false);
+        // ── 2026-08-25 owner 裁定: 成品必须有包材 ────────────────────────────────
+        //   原来这里包材只统计数量、complete 恒为 true, 也就是说「包材」这一档
+        //   从来没有参与过完整性判定 —— 提示语却写着「包材可按实际需要补充」。
+        //   owner 裁定: BOM 与工艺画布是一体的, 成品必须有包材; 半成品/原料/来料加工可以没有。
+        //   判据用 product_types.product_category (权威语义字段), 不用单位量纲反推 ——
+        //   实测 F006 有 FINISHED_PRODUCT 配 kg 的散装成品, 按量纲反推会把它们漏掉。
+        boolean finishedGoods = product != null
+                && "FINISHED_PRODUCT".equalsIgnoreCase(product.getProductCategory());
         long baseCount = packagingItems.stream().filter(item -> item.getPackagingSpecId() == null).count();
-        if (basePackagingRequired) {
+        boolean packagingComplete = !finishedGoods || !packagingItems.isEmpty();
+        if (!packagingComplete) {
+            issues.add(issue("BOM_PACKAGING_REQUIRED",
+                    "成品尚未配置任何包材关系", "packagingMaterials"));
+        }
+        if (basePackagingRequired || finishedGoods) {
             packagingStatuses.add(ProductConfigurationCompletenessReport.PackagingLevelStatus.builder()
-                    .packagingSpecId(null).name("基本规格").packageUnit(product.getUnit())
-                    .baseUnit(product.getUnit()).materialCount(baseCount).complete(true).build());
+                    .packagingSpecId(null).name("基本规格")
+                    .packageUnit(product == null ? null : product.getUnit())
+                    .baseUnit(product == null ? null : product.getUnit())
+                    .materialCount(baseCount).complete(packagingComplete).build());
         }
         for (ProductPackagingSpec spec : packagingSpecRepository
                 .findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(factoryId, productTypeId)) {
             long count = packagingItems.stream().filter(item -> spec.getId().equals(item.getPackagingSpecId())).count();
             packagingStatuses.add(ProductConfigurationCompletenessReport.PackagingLevelStatus.builder()
                     .packagingSpecId(spec.getId()).name(spec.getName()).packageUnit(spec.getPackageUnit())
+                    // ⛔ 保持原样(恒 true): owner 裁定的是「成品必须有包材」,
+                    // 不是「每个包装规格都各自必须配」—— 不要顺手扩大范围。
                     .baseUnit(spec.getBaseUnit()).materialCount(count).complete(true).build());
         }
-        return rawCount > 0;
+        return rawCount > 0 && packagingComplete;
     }
 
     private List<WorkflowProcessContext> processContexts(

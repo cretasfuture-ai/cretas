@@ -269,6 +269,99 @@ class ProductConfigurationReadinessServiceTest {
                         || "BOM_BASE_PACKAGING_REQUIRED".equals(issue.getCode())));
     }
 
+    /**
+     * 🔴 2026-08-25 owner 裁定: <b>成品必须有包材</b>。
+     *
+     * <p>改之前包材那一档的 {@code complete} 是硬编码 {@code true}，
+     * 完整性只 {@code return rawCount > 0} —— 包材从来没参与过判定。
+     * 实测 F006 13 个 ACTIVE BOM 全是 {@code FINISHED_PRODUCT}，只有 3 个配了包材。
+     */
+    @Test
+    void finishedGoodsWithoutPackagingIsIncomplete() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of());
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY))
+                .thenReturn(Optional.of(productOfCategory("FINISHED_PRODUCT", "kg")));
+        when(unitContractService.describe(FACTORY, "kg")).thenReturn(Optional.empty());
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        assertFalse(report.isBomComplete(),
+                "成品没配包材却算完整 —— 那正是改之前的行为");
+        assertTrue(report.getIssues().stream()
+                        .anyMatch(issue -> "BOM_PACKAGING_REQUIRED".equals(issue.getCode())),
+                "没有告诉用户差的是包材: " + report.getIssues());
+    }
+
+    /**
+     * 🔴 阴性对照: 只对<b>成品</b>强制 —— 半成品/原料/来料加工不受影响。
+     *
+     * <p>owner 原话: 「除非它生产的是辅料种东西, 它可以不选择包材没问题」。
+     * 没有这条对照, 上面那条断言无法区分「按成品收窄」和「对所有产品一刀切」。
+     */
+    @Test
+    void semiFinishedWithoutPackagingStaysComplete() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of());
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY))
+                .thenReturn(Optional.of(productOfCategory("SEMI_FINISHED", "kg")));
+        when(unitContractService.describe(FACTORY, "kg")).thenReturn(Optional.empty());
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        assertTrue(report.isBomComplete(),
+                "半成品被包材规则误伤了 —— 裁定里明确说这类可以不配包材");
+        assertTrue(report.getIssues().stream()
+                        .noneMatch(issue -> "BOM_PACKAGING_REQUIRED".equals(issue.getCode())),
+                "半成品不该报缺包材: " + report.getIssues());
+    }
+
+    /** 成品配了包材就完整 —— 阳性对照, 否则上面那条 assertFalse 可能只是恒假。 */
+    @Test
+    void finishedGoodsWithPackagingIsComplete() {
+        BomRecipe recipe = pinnedRecipe(BomRecipe.Status.DRAFT, false);
+        PinnedWorkflowGraph graph = graph(List.of("RAW-A"), List.of(), List.of());
+        stubCommon(recipe, List.of());
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipe.getId()))
+                .thenReturn(List.of(rawItem(recipe.getId()), packagingItem(recipe.getId())));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(graph);
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT, FACTORY))
+                .thenReturn(Optional.of(productOfCategory("FINISHED_PRODUCT", "kg")));
+        when(unitContractService.describe(FACTORY, "kg")).thenReturn(Optional.empty());
+
+        ProductConfigurationCompletenessReport report =
+                service.evaluate(FACTORY, PRODUCT, recipe.getId());
+
+        assertTrue(report.isBomComplete(), "成品配了包材仍被判不完整");
+        assertTrue(report.getIssues().stream()
+                .noneMatch(issue -> "BOM_PACKAGING_REQUIRED".equals(issue.getCode())));
+    }
+
+    private ProductType productOfCategory(String productCategory, String unit) {
+        ProductType product = new ProductType();
+        product.setId(PRODUCT);
+        product.setFactoryId(FACTORY);
+        product.setUnit(unit);
+        product.setProductCategory(productCategory);
+        return product;
+    }
+
+    private BomRecipeItem packagingItem(String recipeId) {
+        return BomRecipeItem.builder()
+                .recipeId(recipeId)
+                .factoryId(FACTORY)
+                .materialTypeId("PKG-A")
+                .unit("\u76d2")
+                .materialCategory("PACKAGING")
+                .build();
+    }
+
     private void stubCommon(BomRecipe recipe, List<BomSeasoningItem> bindings) {
         when(recipeRepository.findByFactoryIdAndProductTypeIdOrderByVersionDesc(FACTORY, PRODUCT))
                 .thenReturn(List.of(recipe));
