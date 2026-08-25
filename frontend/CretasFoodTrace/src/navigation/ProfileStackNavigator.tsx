@@ -3,6 +3,9 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ProfileStackParamList } from '../types/navigation';
 import ProfileScreen from '../screens/profile/ProfileScreen';
 
+// 我的工资 (2026-08-25) — 只读本人工资, 所有角色都看得到自己那一份
+import MyWageScreen from '../screens/profile/MyWageScreen';
+
 // Phase 3 P2 - 意见反馈
 import FeedbackScreen from '../screens/profile/FeedbackScreen';
 
@@ -35,6 +38,20 @@ export function ProfileStackNavigator() {
         name="ProfileHome"
         component={ProfileScreen}
         options={{ title: '个人中心' }}
+      />
+
+      {/*
+        我的工资 — 只读本人。
+        ⚠️ 这个 Navigator 是 6 个角色共用的 (operator / MainNavigator / finance /
+        procurement / sales / viewer), 所以注册在这里 = 这 6 类账号都能进。
+        这是**想要的**: 后端端点 self-scoped, 每个人只看得到自己那一份,
+        而每个人都该看得到自己的工资。⛔ 不要在这里按角色藏路由 ——
+        藏了只会让某个岗位「看不到自己工资」, 而看不到的人不会来报 bug。
+      */}
+      <Stack.Screen
+        name="MyWage"
+        component={MyWageScreen}
+        options={{ title: '我的工资' }}
       />
 
       {/* Phase 3 P2 - 意见反馈 */}
