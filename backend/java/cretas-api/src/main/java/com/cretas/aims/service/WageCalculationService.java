@@ -357,7 +357,7 @@ public class WageCalculationService {
      * 直接把它们从分组里 filter 掉, 件数计进 totalPieceCount 却一分钱不发。
      * 用一个哨兵键把这一组单独留出来, 两边行为一致。
      */
-    private static final String NO_PROCESS_STAGE = " __NO_PROCESS_STAGE__";
+    private static final String NO_PROCESS_STAGE = "\0__NO_PROCESS_STAGE__";
 
     /**
      * 一次工资计算的全部中间量 —— {@link #generatePayroll} 与 {@link #calculateMonthly}
