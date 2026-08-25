@@ -5088,7 +5088,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     /**
      * 给末道产出行分摊成本。
      *
-     * @return {@code null} 表示分摊成功; 非 null 是<b>给用户看的原因</b>(为什么没有成本 + 下一步)。
+     * @return {@code null} = 无需多嘴; 非 null 是<b>给用户看的一句话</b> —— 要么是
+     *         「为什么没有成本 + 下一步」, 要么是「成本算出来了但不含哪些未录的桶」。
      *
      * <h3>🔴 为什么要返回原因而不是静默 return (2026-08-18 prod 实测)</h3>
      *
@@ -5116,7 +5117,35 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return reason;
         }
         allocateWorkflowOutputCostsFromTotal(totalCost, lines);
-        return null;
+        // 成本算出来了, 但「不强制填写」的桶如果没录, 仍然要说一声 ——
+        // 否则用户会以为这个单位成本已经含了设备/其他成本。
+        return describeUncollectedOptionalCostNote(breakdown);
+    }
+
+    /**
+     * 成本<b>算出来了</b>, 但设备/其他成本这类「不强制填写」的桶没录 —— 给一句说明。
+     *
+     * <p>🔴 为什么算出来了还要喊: 2026-07-30 裁定这两项不强制填写、缺了按 0 计入,
+     * 于是 {@code totalCost} 是「不含它们」的口径。<b>不说</b>用户就会把这个单位成本
+     * 当成全成本用去定价/算毛利。⛔ 这不是警告, 是口径说明: 它不阻断入库。
+     *
+     * @return {@code null} = 没有未录的可选成本桶, 无需多嘴
+     */
+    public static String describeUncollectedOptionalCostNote(
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
+        if (breakdown == null || breakdown.getMissingCostItems() == null) {
+            return null;
+        }
+        List<String> optional = breakdown.getMissingCostItems().stream()
+                .filter(item -> com.cretas.aims.service.yield.OrderCostBreakdownService
+                        .isOptionalCostItem(item))
+                .toList();
+        if (optional.isEmpty()) {
+            return null;
+        }
+        return "本次成品单位成本【不含】以下未录成本(按 0 计入): "
+                + joinMissingCostLabels(optional)
+                + "。如需含这部分的成本, 请补录后在成本核算处重新核算。";
     }
 
     /**
@@ -5182,17 +5211,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         List<String> missing = breakdown.getMissingCostItems() == null
                 ? List.of() : breakdown.getMissingCostItems();
-        if (missing.isEmpty()) {
+        // ⛔ 只有【会阻断】的那些才是「为什么算不出」。设备/其他成本不强制填写(2026-07-30 裁定),
+        //    它们没录也照样能算 —— 把它们混进原因里会让用户去补一个补了也没用的东西。
+        List<String> blocking = missing.stream()
+                .filter(item -> !com.cretas.aims.service.yield.OrderCostBreakdownService
+                        .isOptionalCostItem(item))
+                .toList();
+        if (blocking.isEmpty()) {
             return COST_UNAVAILABLE_WARNING;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("本次未能算出成品单位成本: 成本还差 ").append(missing.size()).append(" 项没采集齐");
+        sb.append("本次未能算出成品单位成本: 还差 ").append(blocking.size()).append(" 项没采集齐");
         BigDecimal known = breakdown.getKnownCostSubtotal();
         if (known != null) {
             // ⛔ 把【已经归集到的】也说出来: 否则用户会以为一行都没算到 —— 那正是原来那句假话。
             sb.append("(已归集 ¥").append(known.stripTrailingZeros().toPlainString()).append(")");
         }
-        sb.append(": ").append(joinMissingCostLabels(missing)).append("。");
+        sb.append(": ").append(joinMissingCostLabels(blocking)).append("。");
         sb.append("成品已按实收数量入库, 单位成本留空(不填 ¥0, 避免后续按零成本结转)。");
         sb.append("下一步: 请先补录上述缺项, 再到成本核算处重新核对本计划成本。");
         return sb.toString();

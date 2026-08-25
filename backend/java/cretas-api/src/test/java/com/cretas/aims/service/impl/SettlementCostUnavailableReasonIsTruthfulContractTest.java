@@ -97,13 +97,34 @@ class SettlementCostUnavailableReasonIsTruthfulContractTest {
                 .describeCostUnavailableReason(prodShapedBreakdown());
 
         assertTrue(reason.contains("process-2"),
-                "没说是第 2 道工序缺人工: " + reason);
-        assertTrue(reason.contains("设备成本"),
-                "没说缺设备成本: " + reason);
-        assertTrue(reason.contains("其他成本"),
-                "没说缺其他成本: " + reason);
-        assertTrue(reason.contains("3"),
+                "没说是第 2 道工序缺人工 —— 那是唯一真正拦住计算的那一项: " + reason);
+        assertTrue(reason.contains("1"),
                 "没说一共差几项: " + reason);
+
+        // 🔴 阴性对照: 设备/其他成本【不阻断】(2026-07-30「不强制填写」裁定),
+        //    把它们混进「为什么算不出」会让用户去补一个补了也没用的东西。
+        //    它们要出现在另一句口径说明里, 见 describeUncollectedOptionalCostNote。
+        assertFalse(reason.contains("设备成本"),
+                "设备成本不阻断计算, 不该出现在「为什么算不出」里: " + reason);
+        assertFalse(reason.contains("其他成本"),
+                "其他成本不阻断计算, 不该出现在「为什么算不出」里: " + reason);
+    }
+
+    @Test
+    @DisplayName("🔴 两句话合起来才是完整事实: 阻断项说在原因里, 未录的可选项说在口径说明里")
+    void blockingAndOptionalItemsAreBothSurfacedButInTheRightPlace() {
+        OrderCostBreakdownDTO dto = prodShapedBreakdown();
+
+        String reason = ProductionPlanServiceImpl.describeCostUnavailableReason(dto);
+        String note = ProductionPlanServiceImpl.describeUncollectedOptionalCostNote(dto);
+
+        // 阻断项 → 原因
+        assertTrue(reason.contains("process-2"), "阻断项没进原因: " + reason);
+        // 可选项 → 口径说明 (一项都不许被静默吞掉)
+        assertTrue(note != null && note.contains("设备成本"),
+                "未录的设备成本被静默吞掉了: " + note);
+        assertTrue(note.contains("其他成本"),
+                "未录的其他成本被静默吞掉了: " + note);
     }
 
     @Test
