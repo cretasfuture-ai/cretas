@@ -387,7 +387,20 @@ public class OrderCostBreakdownService {
             missingCostItems.add("SEMI_FINISHED_OR_FINISHED_FEED_PRICE");
         }
         missingCostItems = missingCostItems.stream().distinct().collect(Collectors.toCollection(ArrayList::new));
-        boolean costComplete = !semiFeedUnknown && (!auditEligible || missingCostItems.isEmpty());
+        // ── 2026-08-25: 「不强制填写」这条裁定原来只落到了 knownCostSubtotal 上 ──────────────
+        //   2026-07-30 owner 拍板「设备/其他成本不强制填写, 填了就算进去」。当时只让
+        //   knownCostSubtotal 在 costComplete=false 时不被清空, 而 costComplete 自己
+        //   仍然被这两项拉黑 ⇒ totalCost 置 null ⇒ 成品 unit_cost 恒为空。
+        //   实测(2026-08-25 prod): 全生产库 61 个生产批次, equipment_cost 填了 0 个、
+        //   other_cost 填了 1 个 ⇒ 任何有 Workflow/BOM 的计划都永远算不出单位成本。
+        //   「不填就永远算不出」= 事实上强制, 与那条裁定相反。本仓硬约束 8: 同一条裁定
+        //   要么两处都改, 要么显式登记哪处故意不改。
+        //   ⛔ 没有隐藏: 这两项仍然进 missingCostItems, equipmentCostStatus 仍报 UNCOLLECTED,
+        //      calculationStatus 仍是 PARTIAL —— 只是不再把整个 totalCost 拉成 null。
+        List<String> blockingMissingItems = missingCostItems.stream()
+                .filter(item -> !isOptionalCostItem(item))
+                .collect(Collectors.toList());
+        boolean costComplete = !semiFeedUnknown && (!auditEligible || blockingMissingItems.isEmpty());
         BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost)
                 .add(equipment).add(other);
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
@@ -457,7 +470,10 @@ public class OrderCostBreakdownService {
                 .pinnedWorkflowId(auditPlan == null ? null : auditPlan.getSelectedWorkflowId())
                 .pinnedWorkflowVersion(auditPlan == null ? null : auditPlan.getSelectedWorkflowVersion())
                 .calculatedAt(LocalDateTime.now())
-                .calculationStatus(costComplete ? "COMPLETE" : "PARTIAL")
+                // ⛔ 不跟 costComplete 走: 设备/其他未录时 totalCost 现在可用, 但核算口径
+                //    仍然是「不完整」—— 说成 COMPLETE 会让人以为这两项确认为 0。
+                .calculationStatus(costComplete && missingCostItems.isEmpty()
+                        ? "COMPLETE" : "PARTIAL")
                 .outputQuantity(auditOutputQuantity.signum() > 0 ? auditOutputQuantity : null)
                 .outputUnit(normalizedAuditOutputUnit)
                 .netWeightGramsPerUnit(netWeight)
@@ -591,6 +607,28 @@ public class OrderCostBreakdownService {
     }
 
     /** R4 诚实 null: 成本不完整 (未计价 SFI/FG 投料) → 派生成本字段全置 null (料/工/调/包已知分桶保留)。 */
+    /**
+     * 这些缺项<b>不阻断</b>总成本 —— 2026-07-30 owner 裁定「不强制填写, 填了就算进去」。
+     *
+     * <p>⚠️ 它们<b>照常</b>进 {@link OrderCostBreakdownDTO#getMissingCostItems()} 和
+     * {@code equipmentCostStatus/otherCostStatus=UNCOLLECTED}: 用户看得到「这两项没录」,
+     * 只是不再因此把整个 {@code totalCost} 拉成 null。
+     *
+     * <p>⛔ 不要往这个集合里加「缺价」类的项(原料/包材/调料/半成品投料) —— 那些是
+     * <b>真的不知道</b>, 按 0 计会系统性低估 COGS、虚增毛利。这两项是<b>可以不发生</b>的成本桶。
+     */
+    private static final java.util.Set<String> OPTIONAL_COST_ITEM_CODES =
+            java.util.Set.of("EQUIPMENT_COST", "OTHER_COST");
+
+    /** {@code CODE:detail} → 这个缺项是不是「不强制填写」那一类。 */
+    public static boolean isOptionalCostItem(String item) {
+        if (item == null) {
+            return false;
+        }
+        int sep = item.indexOf(':');
+        return OPTIONAL_COST_ITEM_CODES.contains(sep < 0 ? item : item.substring(0, sep));
+    }
+
     private void nullIncompleteCosts(OrderCostBreakdownDTO dto) {
         dto.setSemiFeedCost(null);
         dto.setTotalCost(null);

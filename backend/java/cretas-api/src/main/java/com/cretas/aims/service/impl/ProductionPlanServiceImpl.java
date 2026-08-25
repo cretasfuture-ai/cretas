@@ -5088,7 +5088,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     /**
      * 给末道产出行分摊成本。
      *
-     * @return {@code null} 表示分摊成功; 非 null 是<b>给用户看的原因</b>(为什么没有成本 + 下一步)。
+     * @return {@code null} = 无需多嘴; 非 null 是<b>给用户看的一句话</b> —— 要么是
+     *         「为什么没有成本 + 下一步」, 要么是「成本算出来了但不含哪些未录的桶」。
      *
      * <h3>🔴 为什么要返回原因而不是静默 return (2026-08-18 prod 实测)</h3>
      *
@@ -5106,15 +5107,191 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private String allocateWorkflowOutputCosts(
             String factoryId, String planId, List<ProductionSettlementOutputLine> lines) {
-        BigDecimal totalCost = resolvePlanTotalCost(factoryId, planId);
+        com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown =
+                resolvePlanCostBreakdown(factoryId, planId);
+        BigDecimal totalCost = usableTotalCost(breakdown);
         if (totalCost == null) {
-            log.warn("[结单成本] 算不出本计划权威成本, 成品单位成本留空 factory={} plan={} "
-                    + "(检查 OrderCostBreakdownService.computeByPlan 是否归集到了本计划的原料领用)",
-                    factoryId, planId);
-            return COST_UNAVAILABLE_WARNING;
+            String reason = describeCostUnavailableReason(breakdown);
+            log.warn("[结单成本] 算不出本计划权威成本, 成品单位成本留空 factory={} plan={} reason={}",
+                    factoryId, planId, reason);
+            return reason;
         }
         allocateWorkflowOutputCostsFromTotal(totalCost, lines);
-        return null;
+        // 成本算出来了, 但「不强制填写」的桶如果没录, 仍然要说一声 ——
+        // 否则用户会以为这个单位成本已经含了设备/其他成本。
+        return describeUncollectedOptionalCostNote(breakdown);
+    }
+
+    /**
+     * 成本<b>算出来了</b>, 但设备/其他成本这类「不强制填写」的桶没录 —— 给一句说明。
+     *
+     * <p>🔴 为什么算出来了还要喊: 2026-07-30 裁定这两项不强制填写、缺了按 0 计入,
+     * 于是 {@code totalCost} 是「不含它们」的口径。<b>不说</b>用户就会把这个单位成本
+     * 当成全成本用去定价/算毛利。⛔ 这不是警告, 是口径说明: 它不阻断入库。
+     *
+     * @return {@code null} = 没有未录的可选成本桶, 无需多嘴
+     */
+    public static String describeUncollectedOptionalCostNote(
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
+        if (breakdown == null || breakdown.getMissingCostItems() == null) {
+            return null;
+        }
+        List<String> optional = breakdown.getMissingCostItems().stream()
+                .filter(item -> com.cretas.aims.service.yield.OrderCostBreakdownService
+                        .isOptionalCostItem(item))
+                .toList();
+        if (optional.isEmpty()) {
+            return null;
+        }
+        return "本次成品单位成本【不含】以下未录成本(按 0 计入): "
+                + joinMissingCostLabels(optional)
+                + "。如需含这部分的成本, 请补录后在成本核算处重新核算。";
+    }
+
+    /**
+     * 拿本计划的权威成本分解。读不到就是 {@code null}。
+     *
+     * <p>⛔ 不在这里先折成一个 {@code BigDecimal} —— 「为什么算不出」写在 DTO 的
+     * {@code missingCostItems} 里, 折掉就再也说不出真实原因了 (这正是原来那句假话的成因)。
+     */
+    private com.cretas.aims.dto.yield.OrderCostBreakdownDTO resolvePlanCostBreakdown(
+            String factoryId, String planId) {
+        if (orderCostBreakdownService == null) {
+            return null;
+        }
+        try {
+            return orderCostBreakdownService.computeByPlan(factoryId, planId, false);
+        } catch (RuntimeException ex) {
+            log.warn("Workflow output cost allocation unavailable for factory={}, plan={}: {}",
+                    factoryId, planId, ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 只有【完整】的总成本才能当分摊基数。
+     *
+     * <p>{@code costComplete=false} 时 {@code OrderCostBreakdownService} 会把 {@code totalCost}
+     * 置 null (而 {@code knownCostSubtotal} 保留) —— 那是 2026-07-30 定下的口径:
+     * 不完整的数不得喂 COGS/毛利。⛔ 所以这里【不】拿 {@code knownCostSubtotal} 顶替,
+     * 它只能出现在给人看的提示里。
+     */
+    static BigDecimal usableTotalCost(com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
+        return breakdown != null && breakdown.isHasData()
+                && breakdown.getTotalCost() != null && breakdown.getTotalCost().signum() > 0
+                ? breakdown.getTotalCost() : null;
+    }
+
+    /**
+     * 把【真实的】算不出原因说成一句中文。
+     *
+     * <h3>🔴 为什么不能继续用一句固定文案 (2026-08-25 prod 实测)</h3>
+     *
+     * 计划 {@code ef5392c7-a575-42a3-8691-ebca0d8306e1} 入库时报的是
+     * 「没有归集到本计划的原料领用成本」—— 而同一时刻读真实接口
+     * {@code GET /api/mobile/F006/production/batches/{no}/cost-breakdown} 拿到的是:
+     * <pre>
+     * rawMaterialCost   = 40.32     7 行原料全部 COLLECTED, 单价均非空
+     * knownCostSubtotal = 93.12
+     * totalCost         = null      ← 真正的原因在下面这一行
+     * missingCostItems  = [LABOR_RATE_OR_TIME:process-2,
+     *                      EQUIPMENT_COST:PB-..., OTHER_COST:PB-...]
+     * </pre>
+     * 即原料领用成本<b>已经归集到了</b>, 缺的是人工/设备/其他。那句固定文案把用户指向了一个
+     * <b>不存在的问题</b>(去查归集配置), 而真正要做的是补录第 2 道工序的工时/人工成本。
+     *
+     * <p>本仓形态 A: <b>报一个数的时候, 把这个数是怎么来的一起报</b>。
+     *
+     * @param breakdown 成本分解; {@code null} / {@code hasData=false} = 真的一行都没归集到
+     */
+    public static String describeCostUnavailableReason(
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
+        if (breakdown == null || !breakdown.isHasData()) {
+            return COST_UNAVAILABLE_WARNING;
+        }
+        List<String> missing = breakdown.getMissingCostItems() == null
+                ? List.of() : breakdown.getMissingCostItems();
+        // ⛔ 只有【会阻断】的那些才是「为什么算不出」。设备/其他成本不强制填写(2026-07-30 裁定),
+        //    它们没录也照样能算 —— 把它们混进原因里会让用户去补一个补了也没用的东西。
+        List<String> blocking = missing.stream()
+                .filter(item -> !com.cretas.aims.service.yield.OrderCostBreakdownService
+                        .isOptionalCostItem(item))
+                .toList();
+        if (blocking.isEmpty()) {
+            return COST_UNAVAILABLE_WARNING;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("本次未能算出成品单位成本: 还差 ").append(blocking.size()).append(" 项没采集齐");
+        BigDecimal known = breakdown.getKnownCostSubtotal();
+        if (known != null) {
+            // ⛔ 把【已经归集到的】也说出来: 否则用户会以为一行都没算到 —— 那正是原来那句假话。
+            sb.append("(已归集 ¥").append(known.stripTrailingZeros().toPlainString()).append(")");
+        }
+        sb.append(": ").append(joinMissingCostLabels(blocking)).append("。");
+        sb.append("成品已按实收数量入库, 单位成本留空(不填 ¥0, 避免后续按零成本结转)。");
+        sb.append("下一步: 请先补录上述缺项, 再到成本核算处重新核对本计划成本。");
+        return sb.toString();
+    }
+
+    /** 最多列几项 —— 全部展开会把提示拉成几千字。 */
+    private static final int MAX_LISTED_MISSING_COST_ITEMS = 5;
+
+    static String joinMissingCostLabels(List<String> missing) {
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (String item : missing) {
+            if (shown >= MAX_LISTED_MISSING_COST_ITEMS) {
+                sb.append("; 等共 ").append(missing.size()).append(" 项");
+                break;
+            }
+            if (shown > 0) {
+                sb.append("; ");
+            }
+            sb.append(missingCostItemLabel(item));
+            shown++;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 把 {@code CODE:detail} 形态的缺项码翻成中文。
+     *
+     * <p>⛔ 认不出来的码<b>原样输出</b>, 不静默丢掉 —— 一个没翻译的码至少还能搜到,
+     * 丢掉就变成「差 N 项但只列出 N-1 项」。
+     */
+    static String missingCostItemLabel(String item) {
+        if (item == null || item.isBlank()) {
+            return "未知缺项";
+        }
+        int sep = item.indexOf(':');
+        String code = sep < 0 ? item : item.substring(0, sep);
+        String detail = sep < 0 ? "" : item.substring(sep + 1);
+        switch (code) {
+            case "RAW_MATERIAL_PRICE":
+                return "原料批次 " + detail + " 缺单价";
+            case "PACKAGING_PRICE":
+                return "包材 " + detail + " 缺单价";
+            case "SEASONING_PRICE":
+                return "调料 " + detail + " 缺单价";
+            case "EQUIPMENT_COST":
+                return "生产批次 " + detail + " 未录设备成本";
+            case "OTHER_COST":
+                return "生产批次 " + detail + " 未录其他成本";
+            case "LABOR_RATE_OR_TIME":
+                return "工序 " + detail + " 缺工时段或人工成本";
+            case "SEMI_FINISHED_OR_FINISHED_FEED_PRICE":
+                return "半成品/成品投料缺单位成本";
+            case "PINNED_BOM_SNAPSHOT_UNAVAILABLE":
+                return "计划 " + detail + " 读不到锁定的 BOM 快照";
+            case "PINNED_BOM_SNAPSHOT_MISSING":
+                return "锁定的 BOM 快照不存在: " + detail;
+            case "PINNED_BOM_OUTPUT_BASIS_UNVERIFIABLE":
+                return "锁定 BOM 的产出基准核不出来: " + detail;
+            case "PINNED_BOM_ITEMS_MISSING":
+                return "锁定 BOM 缺物料行: " + detail;
+            default:
+                return item;
+        }
     }
 
     /**
@@ -5244,23 +5421,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         if (allocatedTotal.compareTo(authoritativeTotal) != 0) {
             throw new IllegalStateException("Workflow output cost allocation does not conserve total cost");
-        }
-    }
-
-    private BigDecimal resolvePlanTotalCost(String factoryId, String planId) {
-        if (orderCostBreakdownService == null) {
-            return null;
-        }
-        try {
-            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown =
-                    orderCostBreakdownService.computeByPlan(factoryId, planId, false);
-            return breakdown != null && breakdown.isHasData()
-                    && breakdown.getTotalCost() != null && breakdown.getTotalCost().signum() > 0
-                    ? breakdown.getTotalCost() : null;
-        } catch (RuntimeException ex) {
-            log.warn("Workflow output cost allocation unavailable for factory={}, plan={}: {}",
-                    factoryId, planId, ex.getMessage());
-            return null;
         }
     }
 
