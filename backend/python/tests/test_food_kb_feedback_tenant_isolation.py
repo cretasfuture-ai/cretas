@@ -355,6 +355,61 @@ async def test_empty_string_factory_id_is_also_rejected(conn: FakeConn) -> None:
 
 
 # ==================================================================
+# 接上没有: 换了 handler 签名之后, FastAPI 还认得这四条路由吗
+# ==================================================================
+
+@pytest.mark.asyncio
+async def test_router_still_mounts_all_four_endpoints(conn: FakeConn) -> None:
+    """
+    handler 多了一个 `http_request: Request` 参数 —— 如果 FastAPI 把它当成
+    body/query 参数解析, 路由会在 include_router 时炸或者签名变形。
+    这条断言跑在真的 ASGI 栈上, 而不是直接调函数。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(fb.router, prefix="/api/food-kb")
+    paths = {r.path for r in app.routes}  # type: ignore[attr-defined]
+    assert "/api/food-kb/feedback" in paths
+    assert "/api/food-kb/feedback/stats" in paths
+    assert "/api/food-kb/feedback/log-query" in paths
+    assert "/api/food-kb/feedback/export" in paths
+
+    # 没有 auth_middleware 注入 state ⇒ 没有租户上下文 ⇒ 必须 401,
+    # ⛔ 不能是 200 + 全平台数据, 也不能是 422 (那说明参数被当成了请求字段)。
+    client = TestClient(app, raise_server_exceptions=False)
+    assert client.get("/api/food-kb/feedback/stats").status_code == 401
+    assert client.get("/api/food-kb/feedback/export").status_code == 401
+    assert client.post("/api/food-kb/feedback",
+                       json={"query": "q", "rating": 5}).status_code == 401
+    assert client.post("/api/food-kb/feedback/log-query",
+                       json={"query": "q"}).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_router_scopes_by_jwt_state_over_the_real_asgi_stack(conn: FakeConn) -> None:
+    """阳性对照: 注入租户上下文后, 走真 ASGI 栈也只看得到本租户的行。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(fb.router, prefix="/api/food-kb")
+
+    @app.middleware("http")
+    async def _inject(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.factory_id = FACTORY_A
+        request.state.user_id = 11
+        return await call_next(request)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    body = client.get("/api/food-kb/feedback/stats").json()
+    assert body["success"] is True
+    assert body["total"] == 1
+    assert "TENANT_B_SECRET_QUESTION" not in repr(body)
+
+
+# ==================================================================
 # RLS GUC 接上了没有
 # ==================================================================
 
