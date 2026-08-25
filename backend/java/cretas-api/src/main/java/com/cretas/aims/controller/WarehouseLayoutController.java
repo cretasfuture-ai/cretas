@@ -118,12 +118,50 @@ public class WarehouseLayoutController {
         if (location == null || location.isBlank() || location.length() > 100) {
             throw new BusinessException(400, "请选择有效的储存位置");
         }
+        String trimmed = location.trim();
+        // 2026-08-25 生产实测: 这里原来只校验「非空 + 长度」, 传
+        // `ZZ99-NOT-CONFIGURED` 会返回 200 并真的写进 storage_location。
+        // 结果就是 F006 的成品批次上躺着 "Workflow terminal output warehouse receipt"
+        // 这种来源描述而不是位置编码, 位置筛选与「某位置有几批」在生产数据上恒为 0。
+        // ⇒ 目标位置必须是本厂 WAREHOUSE_LAYOUT 里已配置的编码, 否则 fail closed。
+        if (!configuredLocationCodes(factoryId).contains(trimmed)) {
+            throw new BusinessException(400, "储存位置 " + trimmed + " 不在本厂仓储配置中，请先在仓储空间中创建该位置");
+        }
         var batch = finishedGoodsBatchRepository.findById(batchId)
                 .filter(item -> factoryId.equals(item.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(404, "未找到当前工厂的成品批次"));
-        batch.setStorageLocation(location.trim());
+        batch.setStorageLocation(trimmed);
         finishedGoodsBatchRepository.save(batch);
         return ApiResponse.success(Map.of("id", batchId, "storageLocation", batch.getStorageLocation()));
+    }
+
+    /**
+     * 本厂 WAREHOUSE_LAYOUT 配置里已存在的位置编码集合。
+     *
+     * 配置不存在时返回空集 —— 也就是「一个位置都没配」时任何移位都会被拒绝。
+     * 这是有意的 fail closed: 宁可挡住, 也不要再往 storage_location 里塞
+     * 一个谁也解释不了的字符串。
+     */
+    @SuppressWarnings("unchecked")
+    private Set<String> configuredLocationCodes(String factoryId) {
+        Map<String, Object> config = featureConfigRepository
+                .findByFactoryIdAndModuleIdAndDeletedAtIsNull(factoryId, MODULE_ID)
+                .map(FactoryFeatureConfig::getConfig)
+                .orElse(Map.of());
+        Object locations = config.get("locations");
+        if (!(locations instanceof List<?> locationList)) {
+            return Set.of();
+        }
+        Set<String> codes = new HashSet<>();
+        for (Object entry : locationList) {
+            if (entry instanceof Map<?, ?> map) {
+                Object code = map.get("code");
+                if (code != null && !String.valueOf(code).isBlank()) {
+                    codes.add(String.valueOf(code).trim());
+                }
+            }
+        }
+        return codes;
     }
 
     private void validateLayout(Map<String, Object> layout) {
