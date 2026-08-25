@@ -12,7 +12,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class CreateSupplierRequestRequiredProfileTest {
+class CreateSupplierRequiredProfileContractTest {
     private static ValidatorFactory factory;
     private static Validator validator;
 
