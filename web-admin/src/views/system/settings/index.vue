@@ -4,7 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, put } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Setting, Bell, Lock, Monitor, Coin } from '@element-plus/icons-vue';
+import { Setting, Bell, Lock, Monitor, Coin, Odometer } from '@element-plus/icons-vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -46,6 +46,15 @@ const securitySettings = ref({
 // 成本设置
 const laborHourlyRate = ref<number | null>(null);
 
+// 生产设置 (FactorySettingsDTO.ProductionSettings)
+// ⚠️ 后端 PUT /settings/production 是【整块覆盖】(settings.setProductionSettings(toJsonString(dto))),
+//    不是字段级合并。所以必须先 GET 回整个对象、只改要改的那一项、再整个发回去 ——
+//    只发 { yieldOverReceiptTolerance } 会把 defaultBatchSize / qualityCheckFrequency /
+//    autoApprovalThreshold / auxVarianceThreshold 一起清空。
+const productionSettings = ref<Record<string, unknown>>({});
+// 超收容差: 后端存【小数】(0.30), 这里给用户录【百分比】(30) —— 与毛利红线页同一约定。
+const yieldOverReceiptTolerancePct = ref<number | null>(null);
+
 // 系统状态
 const systemStatus = ref({
   version: '1.0.0',
@@ -58,6 +67,7 @@ onMounted(() => {
   loadSettings();
   loadSystemStatus();
   loadCostSettings();
+  loadProductionSettings();
 });
 
 async function loadSettings() {
@@ -173,6 +183,51 @@ async function loadCostSettings() {
     }
   } catch {
     // Use defaults — cost settings may not be initialized yet
+  }
+}
+
+async function loadProductionSettings() {
+  if (!factoryId.value) return;
+  try {
+    const response = await get(`/${factoryId.value}/settings/production`);
+    if (response.success && response.data) {
+      productionSettings.value = { ...response.data };
+      const rate = response.data.yieldOverReceiptTolerance;
+      // null = 未配置 → 输入框留空, 由后端默认容差兜底。
+      // ⛔ 不要在这里填一个"默认 30"当占位: 那会让"没配过"看起来像"配成了 30",
+      //    而且一旦后端默认变了, 这个占位就是假话。
+      yieldOverReceiptTolerancePct.value =
+        rate == null ? null : Number((Number(rate) * 100).toFixed(4));
+    } else if (response.success === false) {
+      ElMessage.error(response.message || '加载生产设置失败');
+    }
+  } catch {
+    // Production settings may not be initialized yet — leave blank, backend default applies
+  }
+}
+
+async function saveProductionSettings() {
+  if (!factoryId.value) return;
+
+  const pct = yieldOverReceiptTolerancePct.value;
+  saving.value = true;
+  try {
+    const response = await put(`/${factoryId.value}/settings/production`, {
+      // 整块回写: 先铺开已加载的其它字段, 再覆盖本页改的那一项 (见上面的覆盖语义注释)
+      ...productionSettings.value,
+      yieldOverReceiptTolerance: pct == null ? null : Number((pct / 100).toFixed(6)),
+    });
+    if (response.success) {
+      ElMessage.success('生产设置已保存');
+      await loadProductionSettings();
+    } else {
+      ElMessage.error(response.message || '保存失败');
+    }
+  } catch (error) {
+    // Interceptor shows specific toast; dedupe fallback
+    console.error('[失败]', error);
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -406,6 +461,45 @@ async function saveCostSettings() {
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" :loading="saving" @click="saveCostSettings" :disabled="!canWrite">
+                  保存设置
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+        </el-tab-pane>
+
+        <!-- 生产设置 -->
+        <el-tab-pane name="production">
+          <template #label>
+            <span class="tab-label">
+              <el-icon><Odometer /></el-icon>
+              生产设置
+            </span>
+          </template>
+
+          <div class="settings-section">
+            <el-form label-width="180px" style="max-width: 680px">
+              <el-form-item label="出成报工超收容差 (%)">
+                <el-input-number
+                  v-model="yieldOverReceiptTolerancePct"
+                  :min="0"
+                  :max="200"
+                  :step="5"
+                  :precision="2"
+                  :controls="true"
+                  placeholder="留空=用系统默认"
+                  style="width: 200px"
+                  data-testid="yield-over-receipt-tolerance-input"
+                />
+                <div class="form-tip" style="margin-left: 0; margin-top: 6px; display: block">
+                  报工产出的告警上限 = 目标产出 × (1 + 本容差)。目标产出 = 投入量 × 工序的「标准出成率上限」。
+                </div>
+                <div v-if="yieldOverReceiptTolerancePct === null" class="form-tip" style="margin-left: 0; margin-top: 4px; display: block">
+                  未配置时按系统默认容差计算；App 报工界面显示的百分比会跟着这里改。
+                </div>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="saving" @click="saveProductionSettings" :disabled="!canWrite">
                   保存设置
                 </el-button>
               </el-form-item>

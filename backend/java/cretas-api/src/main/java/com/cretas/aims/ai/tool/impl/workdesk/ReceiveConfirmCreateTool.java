@@ -60,8 +60,6 @@ import java.util.Optional;
 @Component
 public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
 
-    /** 允许超收上限 (30% 行业惯例, mirror ReceiveWithLimitTool.OVER_RECEIVE_PCT). */
-    private static final BigDecimal OVER_RECEIVE_PCT = new BigDecimal("0.30");
 
     /** R3 收货状态枚举 (写入 PurchaseReceiveItem.qcResult, 不加新列). */
     private static final List<String> ALLOWED_RECEIVE_STATUSES =
@@ -115,7 +113,7 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> receivedQty = new HashMap<>();
         receivedQty.put("type", "number");
-        receivedQty.put("description", "本次实收数量 (必填, 必须 > 0). 系统校验 30% 超收上限.");
+        receivedQty.put("description", "本次实收数量 (必填, 必须 > 0). 系统校验 " + WorkdeskOverReceivePolicy.pctLabel() + " 超收上限.");
         properties.put("receivedQty", receivedQty);
 
         Map<String, Object> receiveStatus = new HashMap<>();
@@ -198,7 +196,7 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         BigDecimal ordered = nonNull(item.getQuantity());
         BigDecimal alreadyReceived = nonNull(item.getReceivedQuantity());
         BigDecimal pending = ordered.subtract(alreadyReceived);
-        BigDecimal overReceiveLimit = ordered.multiply(OVER_RECEIVE_PCT);
+        BigDecimal overReceiveLimit = ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT);
         BigDecimal remainingCap = pending.add(overReceiveLimit);
 
         // 3. R4 idempotent precheck
@@ -239,11 +237,12 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         if (proposed.compareTo(remainingCap) > 0) {
             result.put("status", "OVER_LIMIT");
             result.put("canDo", false);
-            result.put("warningIfOver", "超 30% 超收上限触发审批");
+            result.put("warningIfOver", "超 " + WorkdeskOverReceivePolicy.pctLabel() + " 超收上限触发审批");
             result.put("message", String.format(
-                    "⛔ 实收 %s%s 超过 30%% 超收上限 (最多 %s%s = 剩余 %s + 超收上限 %s). "
+                    "⛔ 实收 %s%s 超过 %s 超收上限 (最多 %s%s = 剩余 %s + 超收上限 %s). "
                             + "请减少实收数量或联系采购员调整 PO.",
                     stripZeros(proposed), nullToEmpty(item.getUnit()),
+                    WorkdeskOverReceivePolicy.pctLabel(),
                     stripZeros(remainingCap), nullToEmpty(item.getUnit()),
                     stripZeros(pending), stripZeros(overReceiveLimit)));
             return result;
@@ -267,8 +266,9 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         result.put("status", "PREVIEW");
         result.put("canDo", true);
         String overReceivedHint = proposed.compareTo(pending) > 0
-                ? String.format(" (超收 %s%s, 在 30%% 范围内)",
-                        stripZeros(proposed.subtract(pending)), nullToEmpty(item.getUnit()))
+                ? String.format(" (超收 %s%s, 在 %s 范围内)",
+                        stripZeros(proposed.subtract(pending)), nullToEmpty(item.getUnit()),
+                        WorkdeskOverReceivePolicy.pctLabel())
                 : "";
         result.put("message", String.format(
                 "✅ 收货 %s — %s %s%s%s. 收货状态: %s. 确认提交后立即更新库存 + 自动挂应付.",
@@ -314,11 +314,12 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         BigDecimal ordered = nonNull(item.getQuantity());
         BigDecimal alreadyReceived = nonNull(item.getReceivedQuantity());
         BigDecimal pending = ordered.subtract(alreadyReceived);
-        BigDecimal remainingCap = pending.add(ordered.multiply(OVER_RECEIVE_PCT));
+        BigDecimal remainingCap = pending.add(ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT));
         if (proposed.compareTo(remainingCap) > 0) {
             throw new IllegalArgumentException(String.format(
-                    "实收 %s%s 超过 30%% 超收上限 %s%s, 拒绝入库",
+                    "实收 %s%s 超过 %s 超收上限 %s%s, 拒绝入库",
                     stripZeros(proposed), nullToEmpty(item.getUnit()),
+                    WorkdeskOverReceivePolicy.pctLabel(),
                     stripZeros(remainingCap), nullToEmpty(item.getUnit())));
         }
         if (proposed.compareTo(BigDecimal.ZERO) <= 0) {

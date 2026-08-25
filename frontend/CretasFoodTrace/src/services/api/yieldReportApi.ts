@@ -428,16 +428,23 @@ class YieldReportApi {
   }
 
   /** A4: GET /yield/limits — 投入量预检, 返回超收上限信息.
-   *  若 standardYieldMax 未配置, 返回 maxAllowed=null (不触发超收检查). */
+   *  若 standardYieldMax 未配置, 返回 maxAllowed=null (不触发超收检查).
+   *
+   *  `inputQuantity` 可省 (后端 @RequestParam(required=false)): 不传时 targetQuantity /
+   *  maxAllowed / remaining 都是 null, 但 **toleranceRate 照常返回** —— 前端要在操作员
+   *  开始输入之前就知道工厂配的容差是多少, 用的就是这一路。 */
   async getYieldLimits(
     batchId: number,
     workProcessTaskId: number,
-    inputQuantity: number,
+    inputQuantity?: number,
     factoryId?: string,
   ): Promise<ApiResponse<YieldLimitsDTO>> {
     return apiClient.get<ApiResponse<YieldLimitsDTO>>(
       `${this.getBase(batchId, factoryId)}/yield/limits`,
-      { params: { workProcessTaskId, inputQuantity } },
+      {
+        params:
+          inputQuantity != null ? { workProcessTaskId, inputQuantity } : { workProcessTaskId },
+      },
     );
   }
 

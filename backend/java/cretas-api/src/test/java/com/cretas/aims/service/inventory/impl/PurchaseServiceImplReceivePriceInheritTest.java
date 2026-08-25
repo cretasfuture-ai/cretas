@@ -87,7 +87,10 @@ class PurchaseServiceImplReceivePriceInheritTest {
                 materialBatchService);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "warehouseInventoryGuardService", warehouseInventoryGuardService);
-        // @Value 注入字段, 单测手动设 (超收上限 30%, 与 prod 默认一致)
+        // @Value 注入字段, 单测手动设成一个允许超收的夹具值。
+        // ⚠️ 与 prod 默认【不一致】: 主代码是 ${cretas.purchase.over-receive-rate:0.00} 且
+        //    该属性从未在 src/main/resources 里设过 → 生产默认 0%。
+        //    (旧注释写的 "与 prod 默认一致" 是错的, 已订正 2026-08-25。)
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
 
         Supplier supplier = new Supplier();

@@ -25,7 +25,8 @@ import java.util.Set;
  *
  * <p>F006 真场景: 仓管员张师傅早上 8 am 打开 Cretas, 默认问 "今天要收什么货?"
  * 系统聚合今日 + 明日 expected delivery date 的 PO + Requisition pending receiving,
- * 每行带 R1 max 边界 (已订 - 已收 = 剩余 + 30% 超收上限) 直接告诉仓管员 "你要收多少".
+ * 每行带 R1 max 边界 (已订 - 已收 = 剩余 + 超收上限) 直接告诉仓管员 "你要收多少".
+ * <p>超收比例只在 {@link WorkdeskOverReceivePolicy} 定义 —— ⛔ 这里不复述数字.
  *
  * <p>vs HJ 模式: 仓管员点 5 个菜单 (采购订单 / 请购单 / 采购入库 / 到货登记 / 扫码).
  * Cretas Workdesk: 1 屏 30 秒 + 一键扫码任务.
@@ -44,7 +45,6 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
 
     private static final int DEFAULT_DAYS_AHEAD = 1; // today + tomorrow
     private static final int MAX_DAYS_AHEAD = 7;
-    private static final BigDecimal OVER_RECEIVE_PCT = new BigDecimal("0.30"); // 30% 超收
 
     /** PO 状态认为 "可入库 / 在途": 通过审核但未全部到货. */
     private static final Set<PurchaseOrderStatus> RECEIVABLE_STATUSES = Set.of(
@@ -67,7 +67,8 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
     @Override
     public String getDescription() {
         return "查询今日 (+ 明日) 预期到货的采购订单待收清单, 按品名展开行项目, 每行带"
-                + "R1 max 边界 (已订 / 已收 / 还可入 含 30% 超收). LLM 触发场景: 仓管员问 "
+                + "R1 max 边界 (已订 / 已收 / 还可入 含 " + WorkdeskOverReceivePolicy.pctLabel()
+                + " 超收). LLM 触发场景: 仓管员问 "
                 + "'今天要收什么货?' / '今日到货' / '明天到什么货' / '待收货清单' / "
                 + "'今天有几个供应商来送货'. read-only. 防呆原则: 直接告诉仓管员要收多少, "
                 + "不让他算账.";
@@ -148,8 +149,8 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
                 BigDecimal pending = ordered.subtract(received);
                 if (pending.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-                // R1 max: pendingQty + 30% 超收 (基于 ordered 总量)
-                BigDecimal overReceiveLimit = ordered.multiply(OVER_RECEIVE_PCT);
+                // R1 max: pendingQty + 超收上限 (比例见 WorkdeskOverReceivePolicy, 基于 ordered 总量)
+                BigDecimal overReceiveLimit = ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT);
                 BigDecimal remainingCap = pending.add(overReceiveLimit);
 
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -166,15 +167,16 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
                 row.put("orderedQuantity", ordered);
                 row.put("receivedQuantity", received);
                 row.put("pendingQuantity", pending);
-                row.put("remainingCap", remainingCap);    // R1 max with 30% over-receive
+                row.put("remainingCap", remainingCap);    // R1 max = 未收量 + 超收上限
                 row.put("overReceiveLimit", overReceiveLimit);
                 row.put("unit", item.getUnit());
                 // 防呆 R1 提示文案: 直接告诉仓管员要收多少
                 row.put("displayHint", String.format(
-                        "已订 %s%s, 已收 %s%s, 还要收 %s%s (含 30%% 超收上限 = %s%s)",
+                        "已订 %s%s, 已收 %s%s, 还要收 %s%s (含 %s 超收上限 = %s%s)",
                         stripZeros(ordered), nullToEmpty(item.getUnit()),
                         stripZeros(received), nullToEmpty(item.getUnit()),
                         stripZeros(pending), nullToEmpty(item.getUnit()),
+                        WorkdeskOverReceivePolicy.pctLabel(),
                         stripZeros(remainingCap), nullToEmpty(item.getUnit())));
                 receivingRows.add(row);
                 totalLines++;
