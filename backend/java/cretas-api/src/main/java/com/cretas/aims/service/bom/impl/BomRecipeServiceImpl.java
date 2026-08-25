@@ -2662,6 +2662,26 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         item.setTaxRate(material.getTaxRate() == null
                 ? null
                 : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100)));
+        // 🔴 带完价必须【重算】缓存成本 —— 否则 item_cost 与同一行的 unit_price 必然对不上。
+        //
+        //   调用方的顺序是:
+        //       applyDtoToItem(dto, item);            // 末尾 setItemCost(computeItemCost())
+        //       applyMaterialMasterPricing(item, ...) // 【之后】才带真实单价
+        //
+        //   于是 itemCost 是拿 DTO 里那个(通常为空的)单价算的, 而 unitPrice 来自物料主数据
+        //   —— 两个字段各自都"对", 合起来必然不一致。本仓形态 D: 同一个东西两份, 必定漂。
+        //
+        //   实测(2026-08-25 生产库): 8 行可算的 BOM 行里 5 行不一致(62.5%), 其中 3 行是
+        //   item_cost=0 而 unit_price>0:
+        //       成品盒  qty 1.0000  单价 0.0100  存的成本 0.0000  应为 0.0100
+        //       封膜    qty 0.0500  单价 8.8500  存的成本 0.0000  应为 0.4425
+        //       外箱    qty 0.1250  单价 0.4400  存的成本 0.0000  应为 0.0550
+        //   另有原料行 存 23.1250 / 应为 22.5866。
+        //
+        //   ⛔ 不改调用顺序: 那会牵动三个调用点的语义(1515 骨架行没有 standardQuantity)。
+        //      在带价这一步收尾重算, 是最小且必然正确的位置 —— 谁改了价谁负责刷新派生值。
+        item.setActualQuantity(item.calculateActualQuantity());
+        item.setItemCost(item.computeItemCost());
     }
 
     private void applyPriceUnitContract(BomRecipeItem item, String rawPriceUnit) {
