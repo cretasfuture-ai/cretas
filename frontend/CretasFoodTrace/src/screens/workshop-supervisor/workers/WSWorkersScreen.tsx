@@ -30,6 +30,7 @@ import { TutorialOverlay } from '../../../components/common/TutorialOverlay';
 import { TUTORIAL_WORKERS, useTutorialTarget, useTutorial } from '../../../store/tutorialStore';
 import { userApiClient, UserDTO } from '../../../services/api/userApiClient';
 import { timeclockApiClient, ClockRecord } from '../../../services/api/timeclockApiClient';
+import { DutyState, resolveDuty } from './workerDutyState.logic';
 
 type NavigationProp = NativeStackNavigationProp<WSWorkersStackParamList, 'WSWorkers'>;
 
@@ -61,8 +62,6 @@ interface Worker {
   clockInTime?: string;
 }
 
-type DutyState = 'on_duty' | 'clocked_out' | 'not_clocked_in';
-
 const DUTY_META: Record<DutyState, { label: string; color: string }> = {
   on_duty:         { label: '在岗',   color: '#52c41a' },
   clocked_out:     { label: '已下班', color: '#8c8c8c' },
@@ -89,11 +88,6 @@ function todayStr(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function dutyOf(record: ClockRecord | undefined): DutyState {
-  if (!record || !record.clockInTime) return 'not_clocked_in';
-  return record.clockOutTime ? 'clocked_out' : 'on_duty';
-}
-
 function toWorker(u: UserDTO, record: ClockRecord | undefined, attendanceAvailable: boolean): Worker {
   const raw = record as unknown as { workDurationMinutes?: number; workDuration?: number } | undefined;
   const minutes = raw?.workDurationMinutes ?? raw?.workDuration;
@@ -104,7 +98,7 @@ function toWorker(u: UserDTO, record: ClockRecord | undefined, attendanceAvailab
     roleLabel: u.roleDisplayName || u.position || u.departmentDisplayName || undefined,
     isTemporary: u.isTemporaryWorker === true,
     isActive: u.isActive !== false,
-    duty: attendanceAvailable ? dutyOf(record) : undefined,
+    duty: resolveDuty(record, attendanceAvailable),
     workMinutes: typeof minutes === 'number' ? minutes : undefined,
     clockInTime: record?.clockInTime,
   };

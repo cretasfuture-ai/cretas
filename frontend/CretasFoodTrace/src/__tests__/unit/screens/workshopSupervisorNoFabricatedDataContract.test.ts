@@ -21,6 +21,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { resolveDuty } from '../../../screens/workshop-supervisor/workers/workerDutyState.logic';
+
 const SRC = path.resolve(__dirname, '../../..');
 const SCREENS = path.join(SRC, 'screens');
 const NAV = path.join(SRC, 'navigation');
@@ -207,17 +209,42 @@ describe('WS list screens fail loudly instead of degrading', () => {
     expect(code).not.toMatch(/\|\|\s*0\b/);
   });
 
-  it('WSWorkersScreen does not show everyone as off-duty when attendance is unavailable', () => {
+  describe('WSWorkersScreen does not show everyone as off-duty when attendance is unavailable', () => {
     /*
      * 名册和考勤是两个接口。考勤挂掉时把所有人显示成「离岗」= 把「不知道」说成
-     * 一个具体结论。⇒ duty 必须是 undefined, 并且屏上明说考勤不可用。
+     * 一个具体结论。
+     *
+     * ⚠️ 这一组原先是**源码字面断言**(扫 `attendanceAvailable` 这几个词)。
+     * 变异对照当场证明它守的是字面不是行为: 把 `attendanceAvailable ? dutyOf(r) : undefined`
+     * 改成 `dutyOf(r)` 之后, 那几个词一个不少地还在文件里, 闸纹丝不动。(形态 C‴)
+     * ⇒ 判定逻辑抽进 workerDutyState.logic.ts, 这里直接调它、断言返回值。
      */
-    const code = readCode(WORKERS);
-    expect(code).toContain('attendanceAvailable');
-    expect(code).toContain('setAttendanceAvailable(false)');
-    expect(code).toContain('今日考勤数据暂不可用');
-    // 阴性对照: 真拿到了考勤才置 true, 否则上一条可以靠「永远 false」满足
-    expect(code).toContain('available = true');
+    it('returns undefined — not a concrete state — when attendance is unavailable', () => {
+      expect(resolveDuty({ clockInTime: '2026-08-25T08:00:00' }, false)).toBeUndefined();
+      expect(resolveDuty({ clockInTime: '2026-08-25T08:00:00', clockOutTime: '2026-08-25T17:00:00' }, false)).toBeUndefined();
+      expect(resolveDuty(undefined, false)).toBeUndefined();
+    });
+
+    it('阳性对照: 考勤可用时它确实分得出三态 (否则上一条可以靠「永远 undefined」满足)', () => {
+      expect(resolveDuty({ clockInTime: '2026-08-25T08:00:00' }, true)).toBe('on_duty');
+      expect(resolveDuty({ clockInTime: '2026-08-25T08:00:00', clockOutTime: '2026-08-25T17:00:00' }, true)).toBe('clocked_out');
+      expect(resolveDuty(undefined, true)).toBe('not_clocked_in');
+    });
+
+    it('never collapses "no attendance data" into "did not clock in"', () => {
+      // 这两个入参只差 attendanceAvailable 一维, 返回值必须不同 —— 折叠了就是把
+      // 「我不知道」说成了「他没打卡」。
+      expect(resolveDuty(undefined, false)).not.toBe(resolveDuty(undefined, true));
+    });
+
+    it('the screen actually uses that helper, and says so on screen', () => {
+      // 「接上没有」: 纯函数再对, 屏幕不调它也白搭。
+      const code = readCode(WORKERS);
+      expect(code).toContain('resolveDuty(record, attendanceAvailable)');
+      expect(code).toContain('今日考勤数据暂不可用');
+      // 阴性对照: 真拿到了考勤才置 true, 否则「明说不可用」可以靠「永远不可用」满足
+      expect(code).toContain('available = true');
+    });
   });
 });
 
