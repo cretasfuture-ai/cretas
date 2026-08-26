@@ -19,6 +19,11 @@ import path from 'path';
  *    `const formatDate = (d) => formatDate(d)` —— 自我递归、运行时栈溢出,
  *    而带显式 `: string` 返回标注的那 4 个文件 **tsc 一个字都没报**。
  *    ⇒ 判据必须自己扫源码, 不能拿「tsc 绿」当判据。
+ * 🔴 2026-08-26 第二轮: 第一版只走 `.ts`/`.tsx`, **漏掉了 `.js`** ——
+ *    `services/api/audit-api-clients.js` 里还有一处, 而闸看不见它,
+ *    于是「0 处」是个假读数。扩展名过滤自己造出了盲区。
+ *    ⇒ 现在覆盖 ts/tsx/js/jsx/mjs/cjs, 并由下面那条自检钉住:
+ *    **闸必须真的扫到非 .ts 文件**, 否则它随时会被悄悄收窄回去。
  */
 
 const SRC = path.join(__dirname, '..', '..', '..');
@@ -33,7 +38,7 @@ function walk(dir: string, out: string[] = []): string[] {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       walk(path.join(dir, entry.name), out);
-    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) {
+    } else if (/\.(tsx?|jsx?|mjs|cjs)$/.test(entry.name) && !/\.(test|spec)\.(tsx?|jsx?)$/.test(entry.name)) {
       out.push(path.join(dir, entry.name));
     }
   }
@@ -68,6 +73,13 @@ describe('闸: 取本地日历日不许写成 UTC 截断', () => {
     expect(files.length).toBeGreaterThan(200);
     const total = files.reduce((n, f) => n + fs.readFileSync(f, 'utf8').length, 0);
     expect(total).toBeGreaterThan(1_000_000);
+  });
+
+  it('🔴 阳性对照: 闸必须真的扫到非 .ts 文件(扩展名过滤造过一次盲区)', () => {
+    // 第一版只走 ts/tsx, 漏掉了 services/api/audit-api-clients.js 里的一处,
+    // 「0 处」于是是个假读数。这条钉住覆盖面, 防止有人把过滤悄悄收窄回去。
+    const nonTs = files.filter((f) => !/\.tsx?$/.test(f));
+    expect(nonTs.length).toBeGreaterThan(0);
   });
 
   it('阳性对照: 这个正则真的认得出缺陷长相(不是恒不匹配)', () => {

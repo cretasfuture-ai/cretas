@@ -317,7 +317,12 @@ function auditApiClients(options = {}) {
 function generateReport(auditResult) {
   const { stats, issues, eslintCheck } = auditResult;
 
-  const timestamp = new Date().toISOString().split('T')[0];
+  // 本地日历日。⛔ 不用 toISOString(): 它按 UTC 截断, 东八区 08:00 之前
+  //    会把报告日期标成**昨天**。这是 CommonJS 的 Node 脚本, 用不了 RN 的
+  //    ESM `utils/formatters`, 所以就地写 —— 逻辑与 formatDate() 一致。
+  const now = new Date();
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const timestamp = now.getFullYear() + '-' + pad2(now.getMonth() + 1) + '-' + pad2(now.getDate());
 
   let report = `# API Client审计报告\n\n`;
   report += `**生成日期**: ${timestamp}\n`;
