@@ -617,6 +617,29 @@ const isCrossUnit = computed(() => {
   const u = batch.value?.unit;
   return pu != null && pu !== '' && u != null && pu !== u;
 });
+/**
+ * 良品率 —— ⚠️ 只在【良品数量已知】时才显示。
+ *
+ * 🔴 2026-08-26 实测: `batch.yieldRate` 这一列被【两个不同口径】写:
+ *   · ProductionBatch.calculateMetrics(): yieldRate = 良品数 / 实际产量  (良品率)
+ *   · ClerkProcessEntryServiceImpl:754:   yieldRate = 逐道产出 / 投入     (出成率)
+ * 而本页把它标成「良品率」。批次 10823 就是后者写的: 逐道 8kg 投入 → 8kg 产出,
+ * 于是页面显示「良品率 100.0%」—— 而它的 good_quantity 是 NULL, 真实良品率【不知道】。
+ *
+ * 「没人填不良品」已在 V20260826_05/06 从库里清成 NULL, 但派生的这个率还在替它说谎。
+ * 本仓规则原话: 毛利对了不算, 毛利率对了才算 —— 修复要按最不显眼的那个验收。
+ *
+ * ⇒ 良品率的定义就是 良品/实际。良品数未知时它【不可知】, 一律显示 —,
+ *   ⛔ 不拿一个别的口径的数去填这个位置。出成率另有「累计出成率」那张卡片。
+ */
+const goodRateDisplay = computed(() => {
+  const b = batch.value;
+  if (!b || b.goodQuantity == null) return '—';
+  return formatPercent(b.yieldRate);
+});
+/** 良品数未知时不上色 —— 否则「未知」会被涂成绿色, 看起来像达标。 */
+const goodRateKnown = computed(() => batch.value?.goodQuantity != null);
+
 const efficiencyDisplay = computed(() =>
   isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
 const closedLoopCost = computed(() => batchCost.value?.hasData === true ? batchCost.value : null);
@@ -820,11 +843,11 @@ function goToReversalList() {
         <div class="kpi-card">
           <div class="kpi-label">良品率</div>
           <div class="kpi-value" :class="{
-            'text-success': batch.yieldRate >= 95,
-            'text-warning': batch.yieldRate >= 80 && batch.yieldRate < 95,
-            'text-danger': batch.yieldRate > 0 && batch.yieldRate < 80
+            'text-success': goodRateKnown && batch.yieldRate >= 95,
+            'text-warning': goodRateKnown && batch.yieldRate >= 80 && batch.yieldRate < 95,
+            'text-danger': goodRateKnown && batch.yieldRate > 0 && batch.yieldRate < 80
           }">
-            {{ formatPercent(batch.yieldRate) }}
+            {{ goodRateDisplay }}
           </div>
         </div>
         <div class="kpi-card">
@@ -886,11 +909,11 @@ function goToReversalList() {
             </el-descriptions-item>
             <el-descriptions-item label="良品率">
               <span :class="{
-                'text-success': batch.yieldRate >= 95,
-                'text-warning': batch.yieldRate >= 80 && batch.yieldRate < 95,
-                'text-danger': batch.yieldRate > 0 && batch.yieldRate < 80
+                'text-success': goodRateKnown && batch.yieldRate >= 95,
+                'text-warning': goodRateKnown && batch.yieldRate >= 80 && batch.yieldRate < 95,
+                'text-danger': goodRateKnown && batch.yieldRate > 0 && batch.yieldRate < 80
               }">
-                {{ formatPercent(batch.yieldRate) }}
+                {{ goodRateDisplay }}
               </span>
             </el-descriptions-item>
             <el-descriptions-item label="完成效率">{{ efficiencyDisplay }}</el-descriptions-item>
