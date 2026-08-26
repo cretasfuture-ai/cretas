@@ -4,7 +4,6 @@ import com.cretas.aims.dto.material.CreateMaterialBatchRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.MaterialBatchMapper;
@@ -231,7 +230,7 @@ class MaterialBatchServiceImplInboundSourceGuardTest {
     }
 
     @Test
-    @DisplayName("LEGACY_IMPORT with inventory:legacy_import -> allowed and marked as LEGACY_IMPORT")
+    @DisplayName("LEGACY_IMPORT with inventory:legacy_import -> allowed (放行, 与上一条 never().save() 互为对照)")
     void createBatch_legacyImportWithPermission_allowed() {
         when(permissionService.hasPermission(user, "inventory:legacy_import")).thenReturn(true);
         CreateMaterialBatchRequest request = baseRequest();
@@ -241,9 +240,12 @@ class MaterialBatchServiceImplInboundSourceGuardTest {
         assertThatCode(() -> service.createMaterialBatch(FACTORY, request, USER_ID))
                 .doesNotThrowAnyException();
 
-        ArgumentCaptor<MaterialBatch> captor = ArgumentCaptor.forClass(MaterialBatch.class);
-        verify(materialBatchRepository).save(captor.capture());
-        assertThat(captor.getValue().getInboundType()).isEqualTo(InboundType.LEGACY_IMPORT);
+        // ⚠️ 这里刻意【不】断言 batch 上的字段: 本测试的 mapper 是 @Mock, toEntity 由桩产出,
+        //    断言桩写进去的值 = 断言这个桩本身, 不是断言生产代码。
+        //    本用例真正守的行为是【放行】—— 与上一条 never().save() 恰好互为阴阳对照。
+        //    (原先这里断言 batch 被标成 InboundType.LEGACY_IMPORT, 那是服务自己 set 的、
+        //     确实测到了生产代码; 但该字段 2026-08-26 已删除, 那个行为不复存在。)
+        verify(materialBatchRepository).save(any(MaterialBatch.class));
     }
 
     private CreateMaterialBatchRequest baseRequest() {

@@ -6,7 +6,6 @@ import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.SalesOrderSuppliedMaterialRequirementStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -122,7 +121,6 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
         assertThat(batch.getReceiptQuantity()).isEqualByComparingTo("6");
         assertThat(batch.getQuantityUnit()).isEqualTo("kg");
         assertThat(batch.getOwnership()).isEqualTo(InventoryOwnership.CUSTOMER_OWNED);
-        assertThat(batch.getInboundType()).isEqualTo(InboundType.CUSTOMER_SUPPLIED);
         assertThat(batch.getOwnerCustomerId()).isEqualTo("customer-1");
         assertThat(batch.getSourceSalesOrderId()).isEqualTo("order-1");
         assertThat(batch.getSourceSalesOrderItemId()).isEqualTo("726");

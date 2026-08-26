@@ -7,7 +7,6 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.UnorderedInboundReason;
@@ -247,7 +246,6 @@ public class CustomerMaterialArrivalNoticeService {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        batch.setInboundType(customerOwned ? InboundType.CUSTOMER_SUPPLIED : InboundType.OTHER);
         batch.setSourceDocType(SOURCE_TYPE);
         batch.setSourceDocId(noticeId);
         batch.setSourceEventKey(idempotencyKey);
