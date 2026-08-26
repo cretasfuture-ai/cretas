@@ -170,6 +170,22 @@ export default function ManagementScreen() {
         {managementSections.map((section, index) => {
           if (section.items.length === 0) return null;
 
+          /*
+           * ⛔ 整区全锁的, 仍然整区隐藏。
+           *
+           * 置灰的价值来自**对比** —— 旁边有能点的, 灰的那格才传达「这个我有、只是不归我」。
+           * 「生产配置」6 格里 2 格灰, 正是这个形态。
+           *
+           * 而「系统管理」(4/4) 和「工厂配置」(2/2) 对非管理员是 100% adminOnly:
+           * 渲染出来就是一个区标题压着一排全灰的格子, 没有任何对比对象 ——
+           * 传达的信息退化成「这儿有个区, 一格都不归你」, 那只是把一堵墙
+           * 从看不见变成看得见, 还占着屏。
+           *
+           * 判据是算出来的、不是写死区名的 —— 分区构成以后会变, 写死会漂。
+           */
+          const allLocked = section.items.every((item) => Boolean(item.adminOnly)) && !isAdmin;
+          if (allLocked) return null;
+
           return (
             <NeoCard key={index} style={styles.sectionCard} padding="m">
               <View style={styles.sectionHeader}>

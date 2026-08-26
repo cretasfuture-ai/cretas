@@ -65,8 +65,21 @@ const LOCKED_REASON = require('../../../i18n/locales/zh-CN/management.json').loc
 const LOCKED_BADGE = require('../../../i18n/locales/zh-CN/management.json').locked.adminOnlyBadge;
 
 /** `users` 是 adminOnly 的格子; `suppliers` 不是 —— 后者当阴性对照。 */
-const ADMIN_ONLY_TILE = 'users';
+/*
+ * ⚠️ 这个常量原来是 'users'（在「系统管理」区）。改掉不是因为断言写错了，是**需求变了**：
+ *
+ * 置灰的价值来自**对比** —— 旁边有能点的，灰的那格才传达「这个我有、只是不归我」。
+ * 「系统管理」(4/4) 和「工厂配置」(2/2) 对非管理员是 100% adminOnly，
+ * 渲染出来是一个区标题压着一排全灰格子，没有对比对象 ⇒ 那两个区仍然整区隐藏。
+ *
+ * 所以要验「置灰而非隐藏」，必须挑一个**混合区**里的 adminOnly 格子：
+ * 'work-types' 在「生产配置」(6 格 / 2 格 adminOnly)。
+ */
+const ADMIN_ONLY_TILE = 'work-types';
+/** 同一个混合区里【不需要】管理员权限的格子 —— 阴性对照用 */
 const OPEN_TILE = 'suppliers';
+/** 整区全 adminOnly 的区里的格子 —— 用来验「全锁区仍然隐藏」 */
+const FULLY_LOCKED_SECTION_TILE = 'users';
 
 function mockUserRole(role: string, userType: 'factory' | 'platform' = 'factory') {
   (useAuthStore as unknown as jest.Mock).mockReturnValue({
@@ -135,13 +148,46 @@ describe('ManagementScreen —— 无权限的入口置灰而不是隐藏', () =
 
       expect(action.props.disabled).toBeFalsy();
       fireEvent.press(action);
-      expect(mockNavigate).toHaveBeenCalledWith('UserManagement');
+      expect(mockNavigate).toHaveBeenCalledWith('WorkTypeManagement');
     });
 
     it('不会弹「这项不归你」', () => {
       const { getByTestId } = render(<ManagementScreen />);
       fireEvent.press(getByTestId(`management-tile-action-${ADMIN_ONLY_TILE}`));
       expect(Alert.alert).not.toHaveBeenCalled();
+    });
+
+    it('阴性对照: 全锁区对管理员是【看得到】的 —— 隐藏只针对没权限的人', () => {
+      const { getByTestId } = render(<ManagementScreen />);
+      expect(getByTestId(`management-tile-${FULLY_LOCKED_SECTION_TILE}`)).toBeTruthy();
+    });
+  });
+
+  /*
+   * 整区全锁 ⇒ 整区隐藏。
+   *
+   * ⛔ 这不是退回「按权限过滤」—— 混合区里的 adminOnly 格子仍然置灰可见(上面那组断言)。
+   *    收窄的只有「一格都不归你的那个区」: 它没有对比对象, 渲染出来只是把一堵墙
+   *    从看不见变成看得见。
+   */
+  describe('整区全 adminOnly 的区, 对非管理员仍然整区隐藏', () => {
+    beforeEach(() => mockUserRole('operator'));
+
+    it('🔴 「系统管理」整区不渲染 —— 4 格全是 adminOnly', () => {
+      const { queryByTestId } = render(<ManagementScreen />);
+      expect(queryByTestId(`management-tile-${FULLY_LOCKED_SECTION_TILE}`)).toBeNull();
+    });
+
+    it('阴性对照: 混合区里的 adminOnly 格子【没有】被一起隐藏, 仍然置灰可见', () => {
+      // 这一条是本规则的边界 —— 少了它, 「整区隐藏」会退化成「按权限过滤」而无人察觉
+      const { getByTestId } = render(<ManagementScreen />);
+      const action = getByTestId(`management-tile-action-${ADMIN_ONLY_TILE}`);
+      expect(action.props.disabled).toBe(true);
+    });
+
+    it('阴性对照: 混合区里可用的格子照常可点', () => {
+      const { getByTestId } = render(<ManagementScreen />);
+      expect(getByTestId(`management-tile-action-${OPEN_TILE}`).props.disabled).toBeFalsy();
     });
   });
 });
