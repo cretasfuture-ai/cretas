@@ -33,6 +33,7 @@ import { attachmentApi } from '../../services/api/attachmentApi';
 import { labelQcApi } from '../../services/api/labelQcApi';
 import { useAuthStore } from '../../store/authStore';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
+import { evaluateLabelQcCaptureMetadata } from './labelQcCaptureQuality';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type ScrollViewRef = React.ElementRef<typeof ScrollView>;
@@ -84,6 +85,7 @@ export default function QILabelQcCreateScreen() {
   const [productionDate, setProductionDate] = useState(new Date());
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [pendingCaptures, setPendingCaptures] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
@@ -136,6 +138,7 @@ export default function QILabelQcCreateScreen() {
   }, [productKeyword, products]);
 
   const selectedCode = selectedProduct?.code ?? '';
+  const pendingPhoto = pendingCaptures[0];
   const formLocked = Boolean(draftTaskId);
   const isReadyToSubmit = Boolean(
     selectedProduct && batchNumber.trim() && photos.length > 0,
@@ -149,7 +152,8 @@ export default function QILabelQcCreateScreen() {
         : null;
 
   const takePhoto = async () => {
-    if (photos.length >= MAX_PHOTOS) {
+    const availableSlots = MAX_PHOTOS - photos.length - pendingCaptures.length;
+    if (availableSlots <= 0) {
       Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
       return;
     }
@@ -164,7 +168,7 @@ export default function QILabelQcCreateScreen() {
       ? await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           allowsMultipleSelection: true,
-          selectionLimit: MAX_PHOTOS - photos.length,
+          selectionLimit: availableSlots,
           quality: 0.85,
           exif: false,
         })
@@ -175,10 +179,67 @@ export default function QILabelQcCreateScreen() {
         });
     const captured = result.canceled
       ? []
-      : result.assets.slice(0, MAX_PHOTOS - photos.length);
+      : result.assets.slice(0, availableSlots);
     if (captured.length > 0) {
-      setPhotos((current) => [...current, ...captured]);
+      const accepted: ImagePicker.ImagePickerAsset[] = [];
+      const rejectedReasons: string[] = [];
+      captured.forEach((asset) => {
+        const gate = evaluateLabelQcCaptureMetadata(asset);
+        if (gate.accepted) {
+          accepted.push(asset);
+        } else if (gate.reason) {
+          rejectedReasons.push(gate.reason);
+        }
+      });
+      if (accepted.length > 0) {
+        setPendingCaptures((current) => [...current, ...accepted]);
+      }
+      if (rejectedReasons.length > 0) {
+        setTimeout(() => {
+          Alert.alert(
+            '照片太小，不能用于审核',
+            `${rejectedReasons[0]}${rejectedReasons.length > 1 ? `\n另有 ${rejectedReasons.length - 1} 张也未通过。` : ''}`,
+          );
+        }, 100);
+      }
       setSubmitError(null);
+    }
+  };
+
+  const requestPhoto = () => {
+    if (photos.length + pendingCaptures.length >= MAX_PHOTOS) {
+      Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
+      return;
+    }
+    if (Platform.OS === 'web') {
+      void takePhoto();
+      return;
+    }
+    Alert.alert(
+      '拍照前先对准',
+      '靠近托盘、拿稳手机，并换个角度避开顶灯反光。画面里的白标和彩标要能分辨。',
+      [
+        { text: '暂不拍', style: 'cancel' },
+        { text: '已对准，开始拍', onPress: () => void takePhoto() },
+      ],
+    );
+  };
+
+  const keepPendingPhoto = () => {
+    if (!pendingPhoto) return;
+    setPhotos((current) => [...current, pendingPhoto]);
+    setPendingCaptures((current) => current.slice(1));
+    setSubmitError(null);
+  };
+
+  const rejectPendingPhoto = () => {
+    if (!pendingPhoto) return;
+    const hasMorePending = pendingCaptures.length > 1;
+    setPendingCaptures((current) => current.slice(1));
+    if (Platform.OS !== 'web' && !hasMorePending) {
+      setTimeout(() => {
+        requestPhoto();
+      }, 250);
     }
   };
 
@@ -200,6 +261,7 @@ export default function QILabelQcCreateScreen() {
       return `生产日期最多只能选到 ${formatDate(latest)}（今天起 ${PRODUCTION_DATE_LOOKAHEAD_DAYS} 天内）`;
     }
     if (photos.length === 0) return '请至少拍摄 1 张照片';
+    if (pendingCaptures.length > 0) return '请先确认当前照片是否清晰';
     return null;
   };
 
@@ -401,9 +463,9 @@ export default function QILabelQcCreateScreen() {
 
         <View style={styles.guideCard}>
           {[
-            '每盒尽量露出标签所在边缘',
-            '减少堆叠，单张建议拍 8–15 盒',
-            '避开顶灯反光，画面保持清晰',
+            '拍近：单张建议拍 8–15 盒，标签不要太小',
+            '拍稳：白标和彩标要能分辨，文字不必全部读清',
+            '避反光：换个角度，不让顶灯白光挡住标签',
           ].map((text, index) => (
             <View key={text} style={styles.guideRow}>
               <View style={styles.guideNumber}>
@@ -421,6 +483,10 @@ export default function QILabelQcCreateScreen() {
               <View style={styles.photoIndex}>
                 <Text style={styles.photoIndexText}>{index + 1}</Text>
               </View>
+              <View style={styles.qualityPassedBadge}>
+                <Ionicons name="checkmark-circle" size={14} color="#FFFFFF" />
+                <Text style={styles.qualityPassedText}>已确认清晰</Text>
+              </View>
               <TouchableRipple
                 style={styles.removePhoto}
                 onPress={() => removePhoto(index)}
@@ -436,7 +502,7 @@ export default function QILabelQcCreateScreen() {
           {photos.length < MAX_PHOTOS && !formLocked && (
             <TouchableRipple
               style={styles.addPhoto}
-              onPress={takePhoto}
+              onPress={requestPhoto}
               borderless={false}
               accessibilityRole="button"
               accessibilityLabel={Platform.OS === 'web' ? '选择照片' : '拍摄照片'}
@@ -506,6 +572,71 @@ export default function QILabelQcCreateScreen() {
           {draftTaskId && submitError ? '重试提交' : '提交拍检'}
         </Button>
       </View>
+
+      <Modal
+        visible={Boolean(pendingPhoto)}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => undefined}
+        testID="qi-label-qc-capture-quality-modal"
+      >
+        <View style={styles.qualityModalScreen}>
+          <View style={[styles.qualityModalHeader, { paddingTop: insets.top + 10 }]}>
+            <View>
+              <Text style={styles.qualityModalEyebrow}>
+                拍后检查 {pendingCaptures.length > 1 ? `· 还有 ${pendingCaptures.length} 张` : ''}
+              </Text>
+              <Text style={styles.qualityModalTitle}>放大看一下，标签清楚吗？</Text>
+            </View>
+          </View>
+
+          {pendingPhoto && (
+            <Image
+              source={{ uri: pendingPhoto.uri }}
+              style={styles.qualityPreview}
+              resizeMode="contain"
+              accessibilityLabel="待确认清晰度的包装照片"
+              testID="qi-label-qc-capture-quality-preview"
+            />
+          )}
+
+          <View style={[styles.qualityModalFooter, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.qualityChecklist}>
+              {[
+                '本张要检查的盒子都拍全了',
+                '能分辨可见标签是白标还是彩标',
+                '没有模糊或顶灯反光挡住标签',
+              ].map((text) => (
+                <View key={text} style={styles.qualityChecklistRow}>
+                  <Ionicons name="eye-outline" size={20} color="#0D7A5F" />
+                  <Text style={styles.qualityChecklistText}>{text}</Text>
+                </View>
+              ))}
+            </View>
+            <Button
+              mode="contained"
+              onPress={keepPendingPhoto}
+              buttonColor={QI_COLORS.primary}
+              contentStyle={styles.qualityActionContent}
+              labelStyle={styles.qualityPrimaryLabel}
+              testID="qi-label-qc-capture-quality-keep-button"
+            >
+              清晰，保留这张
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={rejectPendingPhoto}
+              textColor={QI_COLORS.danger}
+              style={styles.qualityRejectButton}
+              contentStyle={styles.qualityActionContent}
+              labelStyle={styles.qualitySecondaryLabel}
+              testID="qi-label-qc-capture-quality-reject-button"
+            >
+              {Platform.OS === 'web' ? '不清晰，删除这张' : '不清晰，重新拍'}
+            </Button>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={productModalVisible}
@@ -706,7 +837,7 @@ const styles = StyleSheet.create({
   photoIndex: {
     position: 'absolute',
     left: 6,
-    bottom: 6,
+    top: 6,
     width: 24,
     height: 24,
     borderRadius: 12,
@@ -715,6 +846,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   photoIndexText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  qualityPassedBadge: {
+    position: 'absolute',
+    left: 6,
+    right: 6,
+    bottom: 6,
+    minHeight: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(13, 122, 95, 0.9)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  qualityPassedText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   removePhoto: {
     position: 'absolute',
     top: 4,
@@ -783,6 +928,33 @@ const styles = StyleSheet.create({
   primaryButton: { width: '100%', maxWidth: 620 },
   primaryButtonContent: { minHeight: 50 },
   primaryButtonLabel: { fontSize: 16, fontWeight: '700' },
+  qualityModalScreen: { flex: 1, backgroundColor: '#091712' },
+  qualityModalHeader: {
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+    backgroundColor: '#10261F',
+  },
+  qualityModalEyebrow: { fontSize: 12, fontWeight: '700', color: '#8DD9C2', marginBottom: 4 },
+  qualityModalTitle: { fontSize: 21, fontWeight: '800', color: '#FFFFFF' },
+  qualityPreview: { flex: 1, width: '100%', backgroundColor: '#050A08' },
+  qualityModalFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    backgroundColor: QI_COLORS.card,
+    gap: 10,
+  },
+  qualityChecklist: {
+    borderRadius: 12,
+    backgroundColor: '#EAF8F3',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  qualityChecklistRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center' },
+  qualityChecklistText: { flex: 1, marginLeft: 9, fontSize: 14, lineHeight: 20, color: '#174A3B' },
+  qualityActionContent: { minHeight: 50 },
+  qualityPrimaryLabel: { fontSize: 16, fontWeight: '800' },
+  qualitySecondaryLabel: { fontSize: 15, fontWeight: '700' },
+  qualityRejectButton: { borderColor: '#D55B5B' },
   modalScreen: { flex: 1, backgroundColor: QI_COLORS.background },
   modalHeader: {
     minHeight: 56,
