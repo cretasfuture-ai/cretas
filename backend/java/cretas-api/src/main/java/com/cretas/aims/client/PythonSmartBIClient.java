@@ -2582,14 +2582,21 @@ public class PythonSmartBIClient {
 
     /**
      * 提交食品知识库反馈
+     *
+     * <p>2026-08-25 P0: 必须带 X-Factory-Id —— Python 侧 food_kb feedback 的四个
+     * 端点已改成从 request.state.factory_id 取租户并 fail-closed 401。这个头由
+     * auth_middleware 的 internal 分支读进 state (X-Internal-Secret 由构造函数里的
+     * OkHttp 拦截器自动加)。不带它 = 401, 且此前不带它正是"写进去的行没有租户归属"。
+     * factoryId 来自 URL path, 已由 JwtAuthInterceptor 校验过与 token 一致。
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> submitFoodKBFeedback(Map<String, Object> feedbackRequest) {
-        log.info("提交食品知识库反馈: query={}", feedbackRequest.get("query"));
+    public Map<String, Object> submitFoodKBFeedback(String factoryId, Map<String, Object> feedbackRequest) {
+        log.info("提交食品知识库反馈: factoryId={}, query={}", factoryId, feedbackRequest.get("query"));
         try {
             Request request = new Request.Builder()
                     .url(config.getFoodKbFeedbackSubmitUrl())
                     .post(RequestBody.create(JSON, objectMapper.writeValueAsString(feedbackRequest)))
+                    .header("X-Factory-Id", requireFactoryId(factoryId))
                     .build();
             return executeWithRetry(request, Map.class);
         } catch (IOException | PythonServiceUnavailableException e) {
@@ -2603,14 +2610,17 @@ public class PythonSmartBIClient {
 
     /**
      * 记录食品知识库查询日志
+     *
+     * <p>X-Factory-Id 同 {@link #submitFoodKBFeedback} —— 见那里的说明。
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> logFoodKBQuery(Map<String, Object> logRequest) {
-        log.debug("记录食品知识库查询: query={}", logRequest.get("query"));
+    public Map<String, Object> logFoodKBQuery(String factoryId, Map<String, Object> logRequest) {
+        log.debug("记录食品知识库查询: factoryId={}, query={}", factoryId, logRequest.get("query"));
         try {
             Request request = new Request.Builder()
                     .url(config.getFoodKbFeedbackLogQueryUrl())
                     .post(RequestBody.create(JSON, objectMapper.writeValueAsString(logRequest)))
+                    .header("X-Factory-Id", requireFactoryId(factoryId))
                     .build();
             return executeWithRetry(request, Map.class);
         } catch (IOException | PythonServiceUnavailableException e) {
@@ -2622,15 +2632,19 @@ public class PythonSmartBIClient {
     }
 
     /**
-     * 获取食品知识库反馈统计
+     * 获取食品知识库反馈统计 (仅该工厂)
+     *
+     * <p>X-Factory-Id 同 {@link #submitFoodKBFeedback} —— 不带它, Python 侧
+     * 此前返回的是**全平台**统计, 含所有租户 rating<=2 的用户原话与 AI 回答。
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> getFoodKBFeedbackStats() {
-        log.info("获取食品知识库反馈统计");
+    public Map<String, Object> getFoodKBFeedbackStats(String factoryId) {
+        log.info("获取食品知识库反馈统计: factoryId={}", factoryId);
         try {
             Request request = new Request.Builder()
                     .url(config.getFoodKbFeedbackStatsUrl())
                     .get()
+                    .header("X-Factory-Id", requireFactoryId(factoryId))
                     .build();
             return executeWithRetry(request, Map.class);
         } catch (IOException | PythonServiceUnavailableException e) {
