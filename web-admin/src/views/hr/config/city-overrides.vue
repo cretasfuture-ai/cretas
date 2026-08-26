@@ -201,6 +201,14 @@ function validateForm(): string | null {
   if (!formData.value.effectiveFrom || !/^\d{4}-\d{2}-\d{2}$/.test(formData.value.effectiveFrom)) {
     return 'effectiveFrom 格式必须为 YYYY-MM-DD';
   }
+  // 🔴 后端按 `effective_from <= 当月 1 号` 判定生效 (probe = yearMonth.atDay(1)),
+  //    所以**只有 1 号才在当月生效** —— 填 9-15 会静默推迟到 10 月, 整月社保按旧基数算。
+  //    ⛔ 不靠控件保证: 上面的月选择器已经只产出 1 号, 这里再挡一道 fail-closed,
+  //    控件被换回 type="date" 或被绕过时也进不去。
+  //    ⚠️ 与专项附加扣除**不同**口径: 那条路 probe 用 atEndOfMonth(), 月内任意天当月生效。
+  if (!formData.value.effectiveFrom.endsWith('-01')) {
+    return `生效起始必须是某月 1 号 (当前 ${formData.value.effectiveFrom}); 社保基数按整月生效, 月中日期会推迟到下个月`;
+  }
   for (const r of rateOverrides.value) {
     if (!r.enabled) continue;
     if (isNaN(r.percent) || r.percent < 0 || r.percent > 30) {
@@ -579,16 +587,18 @@ watch(
         <el-divider />
 
         <el-form-item label="生效起始月 *" required>
+          <!-- 月选择器: 后端只认每月 1 号(probe = yearMonth.atDay(1)), 日选择器会让人
+               挑到月中, 那样会静默推迟一个月生效。控件只产出 1 号, 提交处另有 fail-closed 校验。 -->
           <el-date-picker
             v-model="formData.effectiveFrom"
-            type="date"
-            format="YYYY-MM-DD"
+            type="month"
+            format="YYYY-MM"
             value-format="YYYY-MM-DD"
-            placeholder="选择日期"
+            placeholder="选择月份"
             style="width: 200px;"
           />
           <el-text type="info" size="small" style="margin-left: 8px;">
-            建议下个月 1 号
+            从所选月份 1 号起生效
           </el-text>
         </el-form-item>
         <el-form-item label="备注">

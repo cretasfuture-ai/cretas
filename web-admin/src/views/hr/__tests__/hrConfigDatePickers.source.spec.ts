@@ -202,15 +202,48 @@ describe('HR 配置模块的日期字段必须是日历选择器', () => {
         ).toBe(2);
     });
 
-    // ------------------------------------ 4. 「生效起始月」语义未被改成 type="month"
+    // ------------------------------------ 4. 控件类型必须匹配**后端的生效判定口径**
 
-    it('生效起始 3 个字段都是 type="date" —— 后端是 LocalDate, 不许悄悄收窄成月份', () => {
-        // HrInsuranceConfig / HrCityInsuranceOverride 的 effectiveFrom 是 LocalDate,
-        // 注释写「通常 YYYY-MM-01」——是**通常**, 不是**必须**。改成 type="month" 会
-        // 从物理上禁掉 schema 允许的月中生效日, 那是改语义不是改控件。
-        for (const f of FIELDS) {
+    // 🔴 2026-08-26 订正。这一条原来断言「3 个字段都是 type="date"」, 理由写的是
+    //    「注释写『通常 YYYY-MM-01』—— 是**通常**不是**必须**」。
+    //    那是**从一句注释推出行为**, 而没有去看查询本身。实测:
+    //
+    //      HrCityInsuranceOverrideServiceImpl / HrInsuranceConfigServiceImpl
+    //        probe = yearMonth.atDay(1)
+    //      Repository: WHERE effective_from <= :probeDate
+    //      ⇒ 只有 1 号才在当月生效; 填 9-15 会**静默推迟到 10 月**,
+    //        那个月社保按旧基数算, 工资条与申报都要更正。
+    //
+    //      SalarySpecialDeductionServiceImpl
+    //        probe = yearMonth.atEndOfMonth()   ← **另一套口径**
+    //      ⇒ 月内任意一天都在当月生效, validFrom/validTo 保持 type="date" 是对的。
+    //
+    //    ⇒ 断言从「都是 date」抬成「各自匹配自己那套后端口径」。
+    //    ⛔ 不是放宽: 两侧都钉死, 而且下面额外守住写回格式仍是 YYYY-MM-DD。
+
+    const MONTH_SCOPED = FIELDS.filter((f) => f.binding === 'formData.effectiveFrom');
+    const DAY_SCOPED = FIELDS.filter((f) => f.binding !== 'formData.effectiveFrom');
+
+    it('仪器自检: 两类字段都非空(否则下面两条会双双假绿)', () => {
+        expect(MONTH_SCOPED.length).toBe(2);
+        expect(DAY_SCOPED.length).toBe(2);
+    });
+
+    it('按月生效的 2 个字段必须是 type="month", 且写回仍是 YYYY-MM-DD', () => {
+        for (const f of MONTH_SCOPED) {
             const { attrs } = openTagFor(src[f.file], f.binding);
-            expect(attrs, `「${f.label}」被改成了非 date 类型, 语义被动了`).toContain(
+            expect(attrs, `「${f.label}」后端只认每月 1 号, 日选择器会让人挑到月中`).toContain(
+                'type="month"',
+            );
+            // 后端收的是 LocalDate —— 控件换了, 写回格式不许跟着变
+            expect(attrs, `「${f.label}」写回格式被动了`).toContain('value-format="YYYY-MM-DD"');
+        }
+    });
+
+    it('按日生效的 2 个字段必须保持 type="date" —— 那条路 probe 用月末', () => {
+        for (const f of DAY_SCOPED) {
+            const { attrs } = openTagFor(src[f.file], f.binding);
+            expect(attrs, `「${f.label}」被「统一」成月份了, 会丢掉后端真支持的月中生效`).toContain(
                 'type="date"',
             );
         }

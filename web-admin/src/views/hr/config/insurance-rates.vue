@@ -222,6 +222,14 @@ function validateForm(): string | null {
   if (!formData.value.effectiveFrom || !/^\d{4}-\d{2}-\d{2}$/.test(formData.value.effectiveFrom)) {
     return 'effectiveFrom 格式必须为 YYYY-MM-DD';
   }
+  // 🔴 后端按 `effective_from <= 当月 1 号` 判定生效 (probe = yearMonth.atDay(1)),
+  //    所以**只有 1 号才在当月生效** —— 填 9-15 会静默推迟到 10 月, 整月社保按旧基数算。
+  //    ⛔ 不靠控件保证: 上面的月选择器已经只产出 1 号, 这里再挡一道 fail-closed,
+  //    控件被换回 type="date" 或被绕过时也进不去。
+  //    ⚠️ 与专项附加扣除**不同**口径: 那条路 probe 用 atEndOfMonth(), 月内任意天当月生效。
+  if (!formData.value.effectiveFrom.endsWith('-01')) {
+    return `生效起始必须是某月 1 号 (当前 ${formData.value.effectiveFrom}); 社保基数按整月生效, 月中日期会推迟到下个月`;
+  }
   return null;
 }
 
@@ -519,13 +527,14 @@ function formatTs(v?: string | null): string {
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="生效起始">
+            <el-form-item label="生效起始月">
+              <!-- 月选择器: 同 city-overrides —— 后端只认每月 1 号。 -->
               <el-date-picker
                 v-model="formData.effectiveFrom"
-                type="date"
-                format="YYYY-MM-DD"
+                type="month"
+                format="YYYY-MM"
                 value-format="YYYY-MM-DD"
-                placeholder="选择日期"
+                placeholder="选择月份"
                 style="width: 100%;"
               />
             </el-form-item>
