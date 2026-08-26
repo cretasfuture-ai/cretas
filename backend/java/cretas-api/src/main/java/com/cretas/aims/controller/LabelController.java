@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.exception.AuthorizationException;
 import com.cretas.aims.service.LabelService;
 import com.cretas.aims.util.ErrorSanitizer;
 import io.swagger.v3.oas.annotations.Operation;
@@ -154,19 +155,30 @@ public class LabelController {
 
     /**
      * 根据追溯码查询
+     *
+     * 🔴 2026-08-26 修跨租户泄露: 这个方法**收了 factoryId 却一次都没引用** ——
+     *   查询无工厂过滤 + 返回裸 Label 实体 + 方法/类上都没有权限注解,
+     *   任何一个已登录用户都能读到别厂的标签。traceCode 形如
+     *   TRACE-<factoryId>-<yyyyMMdd>-<6位>, 六位来自 Math.random() 而非 CSPRNG, 可枚举。
+     * ⚠️ AuthorizationException 必须**先于** catch(Exception) 重新抛出, 否则越权会被
+     *   下面那个 catch 压成 400 + 脱敏文案, 和「查询失败」混成一团 (见 GlobalExceptionHandler:292 → 403 + WARN)。
      */
+    @RequirePermission({"production:read_write", "production:read",
+                        "warehouse:read_write", "warehouse:read"})
     @GetMapping("/trace/{traceCode}")
     @Operation(summary = "根据追溯码查询", description = "根据追溯码查询标签信息")
     public ResponseEntity<?> getByTraceCode(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "追溯码") String traceCode) {
         try {
-            return labelService.getByTraceCode(traceCode)
+            return labelService.getByTraceCode(factoryId, traceCode)
                     .map(label -> ResponseEntity.ok(Map.of(
                         "success", true,
                         "data", label
                     )))
                     .orElse(ResponseEntity.notFound().build());
+        } catch (AuthorizationException e) {
+            throw e;   // → 403, 不要被下面压成 400
         } catch (Exception e) {
             log.error("根据追溯码查询失败", e);
             return ResponseEntity.badRequest().body(Map.of(
@@ -178,19 +190,26 @@ public class LabelController {
 
     /**
      * 根据标签编码查询
+     *
+     * 🔴 2026-08-26: 与上面 /trace/{traceCode} 是同一个缺陷的第二处 (label_code 同样全局唯一)。
+     *   ⛔ 只修一处就会现场制造一份漂移 —— 「标签查询按工厂隔离」会变成半真半假。
      */
+    @RequirePermission({"production:read_write", "production:read",
+                        "warehouse:read_write", "warehouse:read"})
     @GetMapping("/code/{labelCode}")
     @Operation(summary = "根据标签编码查询", description = "根据标签编码查询标签信息")
     public ResponseEntity<?> getByLabelCode(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "标签编码") String labelCode) {
         try {
-            return labelService.getByLabelCode(labelCode)
+            return labelService.getByLabelCode(factoryId, labelCode)
                     .map(label -> ResponseEntity.ok(Map.of(
                         "success", true,
                         "data", label
                     )))
                     .orElse(ResponseEntity.notFound().build());
+        } catch (AuthorizationException e) {
+            throw e;   // → 403
         } catch (Exception e) {
             log.error("根据标签编码查询失败", e);
             return ResponseEntity.badRequest().body(Map.of(
@@ -202,6 +221,18 @@ public class LabelController {
 
     /**
      * 根据批次查询标签
+     *
+     * 🔴 2026-08-26: 同一缺陷的第三处 —— 之前 getLabelsByBatchId(batchId) 无工厂过滤。
+     * ⚠️ 这一处**故意没有加 @RequirePermission**, 与上面两个不同, 理由记在这里:
+     *   这是三处里**唯一有活调用方**的 (WHBatchDetailScreen.tsx:220, 仓储侧),
+     *   而它是在 generateMaterialBatchLabel 失败的 catch 分支里被调的 —— 也就是说
+     *   一个已经在生成那步被权限拒了的用户, 恰恰会走到这里。给它加同一道闸,
+     *   会把「复用已有标签」这条兜底路径一起掐掉, 打印出没有 traceCode 的标签
+     *   (BatchLabelPrintService.ts:65 会退回 batchNumber), 那是扫不回来的。
+     *   本仓已有多次「给读端点补 read 闸 → 线上 legacy write-only 角色全线 403」的实例
+     *   (PermissionServiceImpl:229-236 / :200-207 / :188-198), 而权威权限来自 DB
+     *   (platform_role_permissions), 本地读不到。⇒ 权限闸留到能对着 prod 角色矩阵验的那一轮,
+     *   本次只补工厂隔离 (工厂隔离对合法调用方零行为变化, 补权限闸不是)。
      */
     @GetMapping("/batch/{batchId}")
     @Operation(summary = "根据批次查询标签", description = "查询指定批次的所有标签")
@@ -209,11 +240,13 @@ public class LabelController {
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "批次ID") String batchId) {
         try {
-            List<Label> labels = labelService.getLabelsByBatchId(batchId);
+            List<Label> labels = labelService.getLabelsByBatchId(factoryId, batchId);
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", labels
             ));
+        } catch (AuthorizationException e) {
+            throw e;   // → 403
         } catch (Exception e) {
             log.error("根据批次查询标签失败", e);
             return ResponseEntity.badRequest().body(Map.of(
