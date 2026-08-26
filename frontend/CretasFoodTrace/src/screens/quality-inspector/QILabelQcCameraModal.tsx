@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   Platform,
+  SafeAreaView,
   StyleSheet,
   Text,
   View,
@@ -9,7 +10,6 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { ActivityIndicator, Button, TouchableRipple } from 'react-native-paper';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Line, Polygon } from 'react-native-svg';
 
 import { QI_COLORS } from '../../types/qualityInspector';
@@ -39,7 +39,6 @@ export default function QILabelQcCameraModal({
   onAccepted,
   checkQuality,
 }: Props) {
-  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [availableLenses, setAvailableLenses] = useState<string[]>([]);
@@ -121,8 +120,8 @@ export default function QILabelQcCameraModal({
               onMountError={() => setErrorMessage('相机启动失败，请关闭后重试')}
             />
 
-            <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-              <View style={[styles.topBar, { paddingTop: insets.top + 4 }]}>
+            <SafeAreaView pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+              <View style={styles.topBar}>
                 <TouchableRipple
                   style={styles.iconButton}
                   onPress={onClose}
@@ -181,7 +180,7 @@ export default function QILabelQcCameraModal({
                 </View>
               )}
 
-              <View style={[styles.controls, { paddingBottom: insets.bottom + 18 }]}>
+              <View style={styles.controls}>
                 <View style={styles.sideSlot}>
                   {!!ultraWide && Platform.OS === 'ios' && (
                     <TouchableRipple
@@ -216,10 +215,10 @@ export default function QILabelQcCameraModal({
                   {checking && <Text style={styles.checkingText}>检查中…</Text>}
                 </View>
               </View>
-            </View>
+            </SafeAreaView>
           </>
         ) : (
-          <View style={[styles.permission, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
+          <SafeAreaView style={styles.permission}>
             <Ionicons name="camera-outline" size={58} color={QI_COLORS.disabled} />
             <Text style={styles.permissionTitle}>需要相机权限</Text>
             <Text style={styles.permissionText}>允许相机后即可对准托盘拍摄</Text>
@@ -229,7 +228,7 @@ export default function QILabelQcCameraModal({
             <Button mode="text" onPress={onClose} contentStyle={styles.permissionAction}>
               返回
             </Button>
-          </View>
+          </SafeAreaView>
         )}
       </View>
     </Modal>
