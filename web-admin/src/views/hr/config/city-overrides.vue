@@ -579,9 +579,12 @@ watch(
         <el-divider />
 
         <el-form-item label="生效起始月 *" required>
-          <el-input
+          <el-date-picker
             v-model="formData.effectiveFrom"
-            placeholder="YYYY-MM-DD"
+            type="date"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            placeholder="选择日期"
             style="width: 200px;"
           />
           <el-text type="info" size="small" style="margin-left: 8px;">
