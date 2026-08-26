@@ -80,6 +80,12 @@ jobs:
           # (含 37 个 @SpringBootTest, 每个都起一次 Spring 上下文) 不够。
           # ⚠️ 是给【surefire fork 出来的那个 VM】加, 不是给 maven 自己 ——
           #    OOM 发生在 fork VM 里, 只加 MAVEN_OPTS 治不到。
+          # 🔴 2026-08-26 撤掉了曾经加过的 `-DforkCount=1 -DreuseForks=true`:
+          #    本意是「降低峰值」, 实际【完全相反】—— 它把 1400+ 个测试类塞进
+          #    同一个 VM, 内存只增不减(37 个 @SpringBootTest 各起一次 Spring
+          #    上下文全堆在一个堆里)。实测后果: 加了 -Xmx3g 仍 OOM, 只是从
+          #    「跑 0 条就崩」变成「跑 2866 条才崩」, 而后者【崩得像成功】。
+          #    ⇒ 用 surefire 默认的 fork 回收, 才是治 OOM 的方向。
           # ⛔ argLine 是【整体覆盖】不是追加: pom.xml:576 原有
           #    `-XX:+EnableDynamicAgentLoading -Xshare:off`(Mockito 内联 mock 需要),
           #    所以下面必须把它们逐字带上, 否则一开闸就是另一片红。
@@ -88,7 +94,6 @@ jobs:
           mvn -B test
           -Dmaven.test.failure.ignore=true
           -Dspring.profiles.active=test
-          -DforkCount=1 -DreuseForks=true
           -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError"
 
       - name: Ratchet — 已知红只许变少
