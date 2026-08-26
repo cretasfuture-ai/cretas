@@ -30,8 +30,9 @@ import java.util.Optional;
  *
  * <p><b>R1 max preview 实现</b>:
  * <ul>
- *   <li>doPreview() 必显: 已订 / 已收 / 还可入 (含 30% 超收上限)</li>
- *   <li>用户输入 receivedQty 超 remainingCap → canDo=false, 提示"超 30% 超收上限触发审批"</li>
+ *   <li>doPreview() 必显: 已订 / 已收 / 还可入 (含超收上限)</li>
+ *   <li>用户输入 receivedQty 超 remainingCap → canDo=false, 提示"超 X% 超收上限触发审批"
+ *       (X 来自 {@link WorkdeskOverReceivePolicy}, ⛔ 此处不复述数字)</li>
  *   <li>未超 → canDo=true, 仓管员确认提交 → 真创建 PurchaseReceiveRecord (DRAFT 状态)</li>
  * </ul>
  *
@@ -47,8 +48,6 @@ import java.util.Optional;
 @Component
 public class ReceiveWithLimitTool extends AbstractBusinessTool {
 
-    /** 允许超收上限 (30% 行业惯例 — 食品行业散装允许 ±2-5%, 卤味毛料松). */
-    private static final BigDecimal OVER_RECEIVE_PCT = new BigDecimal("0.30");
 
     @Autowired
     private PurchaseOrderRepository purchaseOrderRepository;
@@ -68,7 +67,8 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
     public String getDescription() {
         return "仓管员快速入库 (含 R1 max 边界 preview). LLM 触发场景: 用户说 '收货 X' / "
                 + "'入库 PO-Y 50 公斤' / '快速入库' / '入 30 件卤猪蹄' / '签收到货'. "
-                + "WRITE + Preview — preview 必显已订 / 已收 / 还可入 (含 30% 超收上限) "
+                + "WRITE + Preview — preview 必显已订 / 已收 / 还可入 (含 " + WorkdeskOverReceivePolicy.pctLabel()
+                + " 超收上限) "
                 + "+ 超限 disable 提交. 防呆 R1 灵魂 Tool — 直接告诉仓管员要收多少.";
     }
 
@@ -91,7 +91,7 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
 
         Map<String, Object> receivedQty = new HashMap<>();
         receivedQty.put("type", "number");
-        receivedQty.put("description", "本次实收数量 (必填). 系统会校验是否超 30% 超收上限");
+        receivedQty.put("description", "本次实收数量 (必填). 系统会校验是否超 " + WorkdeskOverReceivePolicy.pctLabel() + " 超收上限");
         properties.put("receivedQty", receivedQty);
 
         Map<String, Object> remark = new HashMap<>();
@@ -153,7 +153,7 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
         BigDecimal ordered = nonNull(item.getQuantity());
         BigDecimal alreadyReceived = nonNull(item.getReceivedQuantity());
         BigDecimal pending = ordered.subtract(alreadyReceived);
-        BigDecimal overReceiveLimit = ordered.multiply(OVER_RECEIVE_PCT);
+        BigDecimal overReceiveLimit = ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT);
         BigDecimal remainingCap = pending.add(overReceiveLimit);
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -191,11 +191,12 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
         if (proposed.compareTo(remainingCap) > 0) {
             result.put("status", "OVER_LIMIT");
             result.put("canDo", false);
-            result.put("warningIfOver", "超 30% 超收上限触发审批");
+            result.put("warningIfOver", "超 " + WorkdeskOverReceivePolicy.pctLabel() + " 超收上限触发审批");
             result.put("message", String.format(
-                    "⛔ 实收 %s%s 超过 30%% 超收上限 (最多 %s%s = 剩余 %s + 超收上限 %s). "
+                    "⛔ 实收 %s%s 超过 %s 超收上限 (最多 %s%s = 剩余 %s + 超收上限 %s). "
                             + "请减少实收数量或联系采购员调整 PO.",
                     stripZeros(proposed), nullToEmpty(item.getUnit()),
+                    WorkdeskOverReceivePolicy.pctLabel(),
                     stripZeros(remainingCap), nullToEmpty(item.getUnit()),
                     stripZeros(pending), stripZeros(overReceiveLimit)));
             return result;
@@ -205,8 +206,9 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
         result.put("status", "PREVIEW");
         result.put("canDo", true);
         String overReceivedHint = proposed.compareTo(pending) > 0
-                ? String.format(" (超收 %s%s, 在 30%% 范围内)",
-                        stripZeros(proposed.subtract(pending)), nullToEmpty(item.getUnit()))
+                ? String.format(" (超收 %s%s, 在 %s 范围内)",
+                        stripZeros(proposed.subtract(pending)), nullToEmpty(item.getUnit()),
+                        WorkdeskOverReceivePolicy.pctLabel())
                 : "";
         result.put("message", String.format(
                 "✅ 入库 %s — %s %s%s%s. 创建后行项目累计 %s%s / %s%s. 确认提交?",
@@ -247,11 +249,12 @@ public class ReceiveWithLimitTool extends AbstractBusinessTool {
         BigDecimal ordered = nonNull(item.getQuantity());
         BigDecimal alreadyReceived = nonNull(item.getReceivedQuantity());
         BigDecimal pending = ordered.subtract(alreadyReceived);
-        BigDecimal remainingCap = pending.add(ordered.multiply(OVER_RECEIVE_PCT));
+        BigDecimal remainingCap = pending.add(ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT));
         if (proposed.compareTo(remainingCap) > 0) {
             throw new IllegalArgumentException(String.format(
-                    "实收 %s%s 超过 30%% 超收上限 %s%s, 拒绝入库",
+                    "实收 %s%s 超过 %s 超收上限 %s%s, 拒绝入库",
                     stripZeros(proposed), nullToEmpty(item.getUnit()),
+                    WorkdeskOverReceivePolicy.pctLabel(),
                     stripZeros(remainingCap), nullToEmpty(item.getUnit())));
         }
         if (proposed.compareTo(BigDecimal.ZERO) <= 0) {

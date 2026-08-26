@@ -731,7 +731,9 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             <el-form-item label="标准出成率上限" prop="standardYieldMax">
               <el-input-number v-model="maxPct" :min="0.01" :max="999.99" :step="5" :precision="2"
                 placeholder="如 60 (留空=不校验)" style="width: 100%" />
-              <span class="form-hint">%（超收预检以此为基准 × 投入量 × 1.3 容差）</span>
+              <!-- ⛔ 不要在这里写死容差百分比: 容差是工厂可配的 (系统设置 → 生产设置),
+                   本页拿不到它, 写一个数字就是把「配置值」冒充成「常量」告诉用户。 -->
+              <span class="form-hint">%（超收预检基准 = 本上限 × 投入量，再按「系统设置 → 生产设置」里配置的超收容差放宽）</span>
             </el-form-item>
             <el-form-item label="需录投入量">
               <el-switch v-model="formData.needsInput" />

@@ -21,9 +21,16 @@ interface YieldQuantityInputProps {
   unit?: string | null;
   /** 步进步长, 默认 1 */
   step?: number;
-  /** 软上限 (不硬 clamp, 超过仅黄字提示). 如 plannedQuantity*1.3 */
+  /**
+   * 软上限 (不硬 clamp, 超过仅黄字提示). 由调用方算好后传入。
+   * ⛔ 本组件不知道也不该知道超收容差是多少 —— 容差是工厂可配的, 唯一来源是后端
+   *    YieldLimitsDTO.toleranceRate。这里写一个示例倍数就等于又造了一份会漂的副本。
+   */
   max?: number | null;
-  /** 软上限超限提示文案 (Rule 1 预先显示边界), 如 "计划 998 kg, 可投上限约 1297 (含 30% 超收)" */
+  /**
+   * 软上限超限提示文案 (Rule 1 预先显示边界), 由调用方拼好后传入。
+   * ⛔ 同上: 文案里的百分比也必须由调用方从后端容差插值, 不许在这里举例写死。
+   */
   maxHint?: string | null;
   /** 预填标注 (命门), 如 "← 上道产出 998 kg, 请确认实际投了多少". 橙色高亮显示. */
   prefillNote?: string | null;

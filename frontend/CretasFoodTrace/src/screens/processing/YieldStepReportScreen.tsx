@@ -55,7 +55,21 @@ type YieldStepReportParams = {
 type RouteT = RouteProp<{ YieldStepReport: YieldStepReportParams }, 'YieldStepReport'>;
 type NavT = NativeStackNavigationProp<Record<string, object | undefined>>;
 
-const OVER_RECEIVE_TOLERANCE = 1.3; // A4 软上限: 计划 ×1.3 (含 30% 超收)
+/**
+ * A4 软上限: 超收容差的唯一来源是后端 `YieldLimitsDTO.toleranceRate`
+ * (工厂可配, 见 FactorySettings → 生产设置 → yieldOverReceiptTolerance;
+ *  未配置时后端回落到 YieldReportServiceImpl.DEFAULT_TOLERANCE)。
+ *
+ * ⛔ 前端不许再写死倍数或百分比。写死过一次的长相是: 常量是【乘数】1.3,
+ *    而文案里另写着【比率】30% —— 两处各写各的, 改数据库两处都不动,
+ *    对操作员说的还是旧数。
+ * ⚠️ 比率与乘数不是同一个数 (rate 0.30 ↔ multiplier 1.30), 不许互相顶替。
+ */
+const overReceiveMultiplier = (toleranceRate: number): number => 1 + toleranceRate;
+/** 0.30 → "30%"; 0.125 → "12.5%" (不留尾零, 给操作员看的). */
+const formatTolerancePct = (toleranceRate: number): string =>
+  `${Number((toleranceRate * 100).toFixed(2))}%`;
+
 const MAX_EVIDENCE_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_EVIDENCE_VIDEO_DURATION_MS = 60 * 1000;
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
@@ -595,6 +609,11 @@ const YieldStepReportScreen: React.FC = () => {
   const [inputQty, setInputQty] = useState('');
   // A4: 投入超收预检
   const [yieldLimits, setYieldLimits] = useState<YieldLimitsDTO | null>(null);
+  // A4: 工厂级超收容差【比率】(0.30 = 30%), 唯一来源是后端 YieldLimitsDTO.toleranceRate。
+  // ⚠️ 与 yieldLimits 分开存: 投入量清空时 yieldLimits 会被置 null (它描述的是"这个投入量下的边界"),
+  //    而容差本身与投入量无关, 不该跟着丢。
+  // ⛔ null = 还没从后端拿到 → 不显示任何上限, 不许回落到写死的数。
+  const [toleranceRate, setToleranceRate] = useState<number | null>(null);
   const limitsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A2b: 首道领料批次引用
   const [materialBatchRefs, setMaterialBatchRefs] = useState<MaterialBatchRef[]>([]);
@@ -838,6 +857,28 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask?.id, currentPhase]);
 
+  // A4: 工厂级超收容差预取 —— 进入本道就拉一次 (不带 inputQuantity, 后端该参数 optional)。
+  // 为什么要单独拉一次: 「可投上限约 N (含 X% 超收)」这条提示要在操作员【开始输入之前】
+  // 就出现 (防呆 Rule 1 先显示边界), 而带 inputQuantity 的那次预检要等他先输入才发得出去。
+  // ⛔ 拿不到就不显示上限 —— 不许回落到写死的倍数; 后端提交时仍会校验, 少一条提示不会放行超收。
+  useEffect(() => {
+    if (!currentTask) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id);
+        if (!cancelled && res.success && res.data?.toleranceRate != null) {
+          setToleranceRate(res.data.toleranceRate);
+        }
+      } catch {
+        // 静默忽略: 容差取不到只是少一条边界提示, 不阻断报工
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTask?.id, batchId]);
+
   // A4: 投入量变化后 debounce 500ms 拉超收上限 (仅投入阶段需要)
   useEffect(() => {
     if (limitsDebounceRef.current) clearTimeout(limitsDebounceRef.current);
@@ -851,7 +892,10 @@ const YieldStepReportScreen: React.FC = () => {
       try {
         const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, parsed);
         // P0-3: 保留 limits 即使 maxAllowed==null (诚实显示"未配置标准出成上限"灰条, 不静默空白)
-        if (res.success) setYieldLimits(res.data);
+        if (res.success) {
+          setYieldLimits(res.data);
+          if (res.data?.toleranceRate != null) setToleranceRate(res.data.toleranceRate);
+        }
       } catch {
         // 预检失败不阻断报工, 静默忽略
       }
@@ -869,7 +913,10 @@ const YieldStepReportScreen: React.FC = () => {
     (async () => {
       try {
         const res = await yieldReportApi.getYieldLimits(batchId, currentTask.id, reportedInput);
-        if (res.success) setYieldLimits(res.data);
+        if (res.success) {
+          setYieldLimits(res.data);
+          if (res.data?.toleranceRate != null) setToleranceRate(res.data.toleranceRate);
+        }
       } catch {
         // 静默忽略
       }
@@ -924,7 +971,10 @@ const YieldStepReportScreen: React.FC = () => {
     () => materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0),
     [materialBatchRefs],
   );
-  const plannedMax = planned != null ? planned * OVER_RECEIVE_TOLERANCE : null;
+  // ⛔ 容差未知 (后端还没答/取不到) → plannedMax 为 null, 即"这一刻没有软上限",
+  //    不是"上限是计划量本身", 也不是回落到某个写死的倍数。
+  const plannedMax =
+    planned != null && toleranceRate != null ? planned * overReceiveMultiplier(toleranceRate) : null;
   const inputMax =
     effectiveWipAvailable != null
       ? plannedMax != null
@@ -935,7 +985,9 @@ const YieldStepReportScreen: React.FC = () => {
     effectiveWipAvailable != null
       ? `可领上道半成品余额 ${effectiveWipAvailable} ${wipUnit} (本道最多领这么多)`
       : planned != null
-        ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(planned * OVER_RECEIVE_TOLERANCE)} (含 30% 超收)`
+        ? plannedMax != null && toleranceRate != null
+          ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
+          : `计划 ${planned} ${unit} (超收上限按工厂配置的容差, 正在读取)`
         : null;
   const inputNumeric = parseFloat(inputQty);
   const inputOverLimit =

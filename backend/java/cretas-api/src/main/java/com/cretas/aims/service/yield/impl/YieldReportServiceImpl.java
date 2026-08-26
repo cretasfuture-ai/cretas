@@ -652,8 +652,14 @@ public class YieldReportServiceImpl implements YieldReportService {
     }
 
     /**
-     * A4: 读取工厂级超收容差. 无配置或解析失败时返回默认 30%.
+     * A4: 读取工厂级超收容差. 无配置或解析失败时回落到 {@link #DEFAULT_TOLERANCE}.
      * 使用 {@code findProductionSettingsByFactoryId} 投影查询 (仅读 TEXT 列, 不加载完整实体).
+     *
+     * <p>⛔ 本方法的返回值是【全系统唯一】的出成超收容差来源: 它经
+     * {@code YieldLimitsDTO.toleranceRate} 出到前端, RN 的"可投上限"提示与文案里的
+     * 百分比都从它插值。任何一端再写死 0.30 / 1.3 / "30%" 都会在工厂改配置后变成假话
+     * —— 这正是 2026-08-25 收敛掉的那份漂移。⛔ 文档里也不要复述具体数字, 写常量名。</p>
+     *
      * <p>注意: {@code BusinessException.withCode} 的 errorCode 通过 ApiResponse.errorWithCode 对外暴露,
      * 但 hintTarget 不经该路径传播.</p>
      */
@@ -667,7 +673,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                     ? ps.getYieldOverReceiptTolerance()
                     : DEFAULT_TOLERANCE;
         } catch (Exception e) {
-            log.warn("[A4] 读取容差设置失败, 使用默认 30%", e);
+            log.warn("[A4] 读取容差设置失败, 回落到默认容差 {}", DEFAULT_TOLERANCE, e);
             return DEFAULT_TOLERANCE;
         }
     }

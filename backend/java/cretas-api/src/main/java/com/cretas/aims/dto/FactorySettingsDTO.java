@@ -258,7 +258,15 @@ public class FactorySettingsDTO {
         @Schema(description = "自动审批阈值", example = "95")
         private Integer autoApprovalThreshold;
 
-        @Schema(description = "出成率报工超收容差 (0.30 = 30%), null 时默认 30%", example = "0.30")
+        /**
+         * 出成率报工超收容差【比率】—— 0.30 表示 30%, 上限 = 目标产出 × (1 + 本值)。
+         *
+         * <p>null = 未配置, 由 {@code YieldReportServiceImpl.DEFAULT_TOLERANCE} 兜底。
+         * ⛔ 这里不复述那个默认值的具体数字: 复述一次就多一份会漂的副本, 而它改起来
+         * 没有任何东西会提醒本行也要跟着改。要知道默认是多少就去看那个常量。</p>
+         */
+        @Schema(description = "出成率报工超收容差比率 (0.30 = 30%); null = 用后端默认容差常量 "
+                + "YieldReportServiceImpl.DEFAULT_TOLERANCE", example = "0.30")
         private java.math.BigDecimal yieldOverReceiptTolerance;
 
         @Schema(description = "辅料/投料多投对账预警阈值 (0.05 = 5%), null 时默认 5%", example = "0.05")
