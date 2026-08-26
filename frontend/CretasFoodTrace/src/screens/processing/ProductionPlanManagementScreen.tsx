@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Platform } from 'react-native';
 import {
   Text,
   Appbar,
@@ -15,7 +15,9 @@ import {
   Divider,
   List,
   SegmentedButtons,
+  Dialog,
 } from 'react-native-paper';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useNavigation, useRoute, CommonActions, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Picker } from '@react-native-picker/picker';
@@ -62,6 +64,33 @@ interface ExtendedProductionPlan extends ApiProductionPlan {
 type ProductionPlan = ExtendedProductionPlan;
 type NavigationProp = NativeStackNavigationProp<ProcessingStackParamList>;
 type ProductionPlanManagementRouteProp = RouteProp<ProcessingStackParamList, 'ProductionPlanManagement'>;
+
+// 计划日期 / 预计完成在这条链上的唯一格式是 YYYY-MM-DD
+// (formData 的默认值就是 toISOString().split('T')[0], 后端也按这个收)。
+// 滚轮选完之后必须经过这里再写回 formData, 不要在别处另拼一份。
+const formatYmd = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/**
+ * 把 formData 里的 YYYY-MM-DD 还原成滚轮的初始值。
+ * 解析不出来就落到今天 —— 这两个字段本来就默认今天/明天, 不是编一个假日期:
+ * 滚轮打开时用户看到的就是今天, 他不确认就什么都不会被写回去。
+ */
+const parseYmdOrToday = (s?: string): Date => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const day = Number(m[3]);
+    const d = new Date(y, mo, day);
+    // 2026-02-31 这种会被 Date 悄悄滚到 3 月 —— 回读一遍确认没滚
+    if (d.getFullYear() === y && d.getMonth() === mo && d.getDate() === day) return d;
+  }
+  return new Date();
+};
+
+/** 这一屏有两个日期字段, picker 必须知道当前在选哪一个 */
+type PlanDateField = 'plannedDate' | 'expectedCompletionDate';
 
 /**
  * 生产计划管理页面
@@ -127,6 +156,29 @@ export default function ProductionPlanManagementScreen() {
     estimatedWorkers: '',
     assignedSupervisorId: '',
   });
+
+  // ============================================================
+  // 日期滚轮 (2026-08-26)
+  // 2026-08-26 现场仓管原话:「这个日期改下备, 改成滚轮的, 手写有点费事」
+  // ⇒ 两个日期字段都改成点一下弹滚轮, 不再手打。
+  // 整屏只挂一个 picker 实例, 靠 datePickerField 知道在选哪一个字段。
+  // ============================================================
+  const [datePickerField, setDatePickerField] = useState<PlanDateField | null>(null);
+
+  const pickerInitialDate = useMemo(
+    () => parseYmdOrToday(datePickerField ? formData[datePickerField] : undefined),
+    [datePickerField, formData],
+  );
+
+  // ⛔ 写回一律走 formatYmd —— 后端按 YYYY-MM-DD 收, 这里拼错整单都建不了。
+  const commitPickedDate = useCallback(
+    (date: Date) => {
+      if (!datePickerField) return;
+      const field = datePickerField;
+      setFormData((prev) => ({ ...prev, [field]: formatYmd(date) }));
+    },
+    [datePickerField],
+  );
 
   // 导入loading状态
   const [importLoading, setImportLoading] = useState(false);
@@ -1093,33 +1145,50 @@ export default function ProductionPlanManagementScreen() {
               placeholder="例如: 100"
             />
 
-            {/* Date Fields */}
+            {/* Date Fields —— 2026-08-26 改成滚轮选, 不再手打
+                (editable={false} + 外层 TouchableOpacity + 内层 pointerEvents="none") */}
             <View style={styles.dateRow}>
               <View style={styles.dateField}>
-                <TextInput
-                  label="计划日期"
-                  value={formData.plannedDate}
-                  onChangeText={(text) => setFormData({ ...formData, plannedDate: text })}
-                  mode="outlined"
-                  style={styles.dateInput}
-                  placeholder="YYYY-MM-DD"
-                  right={<TextInput.Icon icon="calendar" />}
-                />
+                <TouchableOpacity
+                  onPress={() => setDatePickerField('plannedDate')}
+                  accessibilityRole="button"
+                  accessibilityLabel="选择计划日期"
+                  testID="plan-planned-date-picker"
+                >
+                  <View pointerEvents="none">
+                    <TextInput
+                      label="计划日期"
+                      value={formData.plannedDate}
+                      mode="outlined"
+                      editable={false}
+                      style={styles.dateInput}
+                      right={<TextInput.Icon icon="calendar" />}
+                    />
+                  </View>
+                </TouchableOpacity>
               </View>
               <View style={styles.dateField}>
-                <TextInput
-                  label="预计完成"
-                  value={formData.expectedCompletionDate}
-                  onChangeText={(text) => setFormData({ ...formData, expectedCompletionDate: text })}
-                  mode="outlined"
-                  style={styles.dateInput}
-                  placeholder="YYYY-MM-DD"
-                  right={<TextInput.Icon icon="calendar-check" />}
-                />
+                <TouchableOpacity
+                  onPress={() => setDatePickerField('expectedCompletionDate')}
+                  accessibilityRole="button"
+                  accessibilityLabel="选择预计完成日期"
+                  testID="plan-expected-completion-date-picker"
+                >
+                  <View pointerEvents="none">
+                    <TextInput
+                      label="预计完成"
+                      value={formData.expectedCompletionDate}
+                      mode="outlined"
+                      editable={false}
+                      style={styles.dateInput}
+                      right={<TextInput.Icon icon="calendar-check" />}
+                    />
+                  </View>
+                </TouchableOpacity>
               </View>
             </View>
             <Text style={styles.dateHint}>
-              💡 预计完成日期默认为计划日期+1天，可手动修改
+              💡 预计完成日期默认为计划日期+1天，点一下可改
             </Text>
 
             {/* Estimated Material Usage */}
@@ -1475,6 +1544,43 @@ export default function ProductionPlanManagementScreen() {
           </Card.Content>
         </Card>
       )}
+
+      {/* 日期滚轮 —— 整屏只有这一个实例, 靠 datePickerField 知道在选哪一个字段。
+          用户要的是滚轮, 所以两端都显式 display="spinner"(Android 默认是日历不是滚轮)。
+          它挂在创建 Modal 的 Portal 之后 —— Portal 按挂载顺序叠, 所以会盖在表单上面。 */}
+      {datePickerField !== null && (Platform.OS === 'ios' ? (
+        <Portal>
+          <Dialog visible onDismiss={() => setDatePickerField(null)}>
+            <Dialog.Title>
+              {datePickerField === 'plannedDate' ? '选择计划日期' : '选择预计完成日期'}
+            </Dialog.Title>
+            <Dialog.Content>
+              <DateTimePicker
+                value={pickerInitialDate}
+                mode="date"
+                display="spinner"
+                onChange={(_event, date) => {
+                  if (date) commitPickedDate(date);
+                }}
+              />
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setDatePickerField(null)}>完成</Button>
+            </Dialog.Actions>
+          </Dialog>
+        </Portal>
+      ) : (
+        <DateTimePicker
+          value={pickerInitialDate}
+          mode="date"
+          display="spinner"
+          onChange={(event, date) => {
+            // Android 是模态: 无论确定还是取消都要收起, 否则下次点不开
+            setDatePickerField(null);
+            if (event.type === 'set' && date) commitPickedDate(date);
+          }}
+        />
+      ))}
     </View>
   );
 }
