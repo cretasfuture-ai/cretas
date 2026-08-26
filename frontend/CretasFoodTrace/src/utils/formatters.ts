@@ -94,6 +94,37 @@ export function formatDate(input: Date | string | number | null | undefined): st
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/**
+ * 把 "YYYY-MM-DD" 还原成 Date；解析不出来就落到今天。
+ *
+ * 用在日期滚轮/日历选择器打开时决定初始值：字段本来就默认今天，
+ * 解析失败时给今天不是编数据，用户不确认也不会写回任何东西。
+ *
+ * ⚠️ 必须回读一遍：`new Date(2026, 1, 31)` 会被 Date 悄悄滚到 3 月 3 日，
+ *    直接返回等于把一个用户没选过的日期塞给他。
+ *
+ * 🔴 2026-08-26: 这条规则一度在 6 个屏里各写了一份（配日期滚轮时复制粘贴的）。
+ *    收敛到这里。同文件的 formatDate() 是它的反向操作，两者必须成对使用 ——
+ *    ⛔ 不要再在屏幕文件里写私有副本（本仓 orderDate.ts 的注释就记着上一次同样的事）。
+ */
+export function parseYmdOrToday(value: string | null | undefined, now: Date = new Date()): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? '');
+  if (m) {
+    const year = Number(m[1]);
+    const monthIndex = Number(m[2]) - 1;
+    const day = Number(m[3]);
+    const parsed = new Date(year, monthIndex, day);
+    if (
+      parsed.getFullYear() === year
+      && parsed.getMonth() === monthIndex
+      && parsed.getDate() === day
+    ) {
+      return parsed;
+    }
+  }
+  return now;
+}
+
 /** "2026/02/09" */
 export function formatDateSlash(input: Date | string | number | null | undefined): string {
   const d = toDate(input);

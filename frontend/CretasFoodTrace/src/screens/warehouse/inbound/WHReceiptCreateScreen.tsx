@@ -76,6 +76,7 @@ import {
 } from '../../../services/api/materialPackagingApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
+import { formatDate, parseYmdOrToday } from '../../../utils/formatters';
 
 type Nav = NativeStackNavigationProp<WHInboundStackParamList, 'WHReceiptCreate'>;
 type RouteProps = RouteProp<WHInboundStackParamList, 'WHReceiptCreate'>;
@@ -99,28 +100,7 @@ interface PendingPhoto {
 
 // 商品日期在整条链上的唯一格式是 YYYY-MM-DD (提交前有正则校验, 后端也按这个收)。
 // 滚轮选完之后必须经过这里再写回 row, 不要在别处另拼一份。
-const formatYmd = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-const todayStr = (): string => formatYmd(new Date());
-
-/**
- * 把 row 里的 YYYY-MM-DD 还原成滚轮的初始值。
- * 解析不出来就落到今天 —— 这个字段的默认值本来就是今天(见 prefill), 不是编一个假日期:
- * 滚轮打开时用户看到的就是今天, 他不确认就什么都不会被写回去。
- */
-const parseYmdOrToday = (s?: string): Date => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
-  if (m) {
-    const y = Number(m[1]);
-    const mo = Number(m[2]) - 1;
-    const day = Number(m[3]);
-    const d = new Date(y, mo, day);
-    // 2026-02-31 这种会被 Date 悄悄滚到 3 月 —— 回读一遍确认没滚
-    if (d.getFullYear() === y && d.getMonth() === mo && d.getDate() === day) return d;
-  }
-  return new Date();
-};
+const todayStr = (): string => formatDate(new Date());
 
 export default function WHReceiptCreateScreen() {
   const navigation = useNavigation<Nav>();
@@ -264,7 +244,7 @@ export default function WHReceiptCreateScreen() {
   const commitPickedDate = useCallback(
     (date: Date) => {
       if (!datePickerRowId) return;
-      updateRow(datePickerRowId, { productionDate: formatYmd(date) });
+      updateRow(datePickerRowId, { productionDate: formatDate(date) });
     },
     [datePickerRowId],
   );

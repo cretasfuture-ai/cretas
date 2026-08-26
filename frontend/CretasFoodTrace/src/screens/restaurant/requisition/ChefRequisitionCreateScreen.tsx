@@ -13,6 +13,7 @@ import {
 } from '../../../services/api/purchaseRequisitionApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
+import { formatDate, parseYmdOrToday } from '../../../utils/formatters';
 
 const STALL_OPTIONS = [
   { value: 'SEAFOOD', label: '海鲜档' },
@@ -35,27 +36,6 @@ interface LineDraft {
 // 希望到货日在这条链上的唯一格式是 YYYY-MM-DD
 // (默认值就是 toISOString().slice(0, 10), 后端也按这个收)。
 // 滚轮选完之后必须经过这里再写回, 不要在别处另拼一份。
-const formatYmd = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-/**
- * 把当前值还原成滚轮的初始值。
- * 解析不出来就落到今天 —— 这个字段本来就默认今天, 不是编一个假日期:
- * 滚轮打开时用户看到的就是今天, 他不确认就什么都不会被写回去。
- */
-const parseYmdOrToday = (s?: string): Date => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
-  if (m) {
-    const y = Number(m[1]);
-    const mo = Number(m[2]) - 1;
-    const day = Number(m[3]);
-    const d = new Date(y, mo, day);
-    // 2026-02-31 这种会被 Date 悄悄滚到 3 月 —— 回读一遍确认没滚
-    if (d.getFullYear() === y && d.getMonth() === mo && d.getDate() === day) return d;
-  }
-  return new Date();
-};
-
 export function ChefRequisitionCreateScreen() {
   const navigation = useNavigation();
   const { user } = useAuthStore();
@@ -63,7 +43,9 @@ export function ChefRequisitionCreateScreen() {
 
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [stallCode, setStallCode] = useState('HOT_DISH');
-  const [expectedDate, setExpectedDate] = useState(new Date().toISOString().slice(0, 10));
+  // 默认今天(本地日历日)。⛔ 不用 toISOString(): 它按 UTC 截断,
+  //    东八区 08:00 之前会默认成「昨天」—— 早班报货正好撞上。
+  const [expectedDate, setExpectedDate] = useState(formatDate(new Date()));
   const [reason, setReason] = useState('');
   const [remark, setRemark] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
@@ -79,7 +61,7 @@ export function ChefRequisitionCreateScreen() {
   const pickerInitialDate = useMemo(() => parseYmdOrToday(expectedDate), [expectedDate]);
   // 写回一律走 formatYmd —— validate() 要求这个字段非空, 后端按 YYYY-MM-DD 收。
   const commitPickedDate = useCallback((date: Date) => {
-    setExpectedDate(formatYmd(date));
+    setExpectedDate(formatDate(date));
   }, []);
 
   useEffect(() => {
