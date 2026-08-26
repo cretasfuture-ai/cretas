@@ -23,6 +23,7 @@ import {
 import { useCapability } from '@/composables/useCapability';
 import CapabilityGate from '@/components/CapabilityGate.vue';
 import UnlockMoreCTA from '@/components/UnlockMoreCTA.vue';
+import { toDateString } from '@/utils/dateFormat';
 
 const { fetchCapability } = useCapability();
 
@@ -148,7 +149,7 @@ watch(trendSecondMetric, (v) => {
 });
 
 function _periodToDateRange(period: string): [string, string] {
-  const iso = (d: Date): string => d.toISOString().slice(0, 10);
+  const iso = (d: Date): string => toDateString(d);
   if (period === 'y2025') return ['2025-01-01', '2025-12-31'];
   if (period === 'y2024') return ['2024-01-01', '2024-12-31'];
   const end = new Date();
@@ -351,7 +352,7 @@ function aggregatePoints(points: TrendPoint[]): { points: TrendPoint[]; granular
       const day = d.getDay() || 7; // Sunday = 7
       const monday = new Date(d);
       monday.setDate(d.getDate() - day + 1);
-      key = monday.toISOString().slice(0, 10);
+      key = toDateString(monday);
     } else {
       key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     }
@@ -386,7 +387,7 @@ async function loadGoldTrend() {
   // P1-14 perf: cache last-found non-empty range per factory in localStorage
   // so subsequent visits skip the serial empty-range fallback ladder (~700ms).
   // Primary range is still tried first; cached fallback used only when primary empty.
-  const iso = (d: Date): string => d.toISOString().slice(0, 10);
+  const iso = (d: Date): string => toDateString(d);
   const y = new Date().getFullYear();
   const primary = await _resolvePrimaryRange(selectedPeriod.value);
   const cacheKey = `goldTrend.lastRange.${factoryId.value}`;

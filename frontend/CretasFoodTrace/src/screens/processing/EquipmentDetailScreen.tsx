@@ -26,6 +26,7 @@ import { Alert } from 'react-native';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { useTranslation } from 'react-i18next';
+import { formatDate } from '../../utils/formatters';
 
 // Create EquipmentDetail context logger
 const equipmentDetailLogger = logger.createContextLogger('EquipmentDetail');
@@ -123,8 +124,8 @@ export default function EquipmentDetailScreen() {
       equipmentDetailLogger.debug('Fetching equipment detail', { factoryId, equipmentId });
 
       // Calculate date range for performance metrics (last 30 days)
-      const endDate = new Date().toISOString().split('T')[0];
-      const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const endDate = formatDate(new Date());
+      const startDate = formatDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
 
       const [
         eq,

@@ -10,6 +10,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { Money, TrendCharts, Coin, Document } from '@element-plus/icons-vue';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -81,7 +82,7 @@ async function loadFinanceData() {
     // Default date range: first day of current month to today
     const now = new Date();
     const startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const endDate = now.toISOString().split('T')[0];
+    const endDate = toDateString(now);
 
     const response = await get<Record<string, unknown>>(
       `/${factoryId.value}/smart-bi/analysis/finance`,

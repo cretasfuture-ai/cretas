@@ -581,6 +581,7 @@ import { shouldDefaultToGold, pickDefaultBatchIndex } from './analysisGoldMode';
 import { buildChartInsight } from './components/chartInsight';
 import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 import ChartInsight from './components/ChartInsight.vue';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -719,7 +720,7 @@ const loadFusedTimeseries = async () => {
     const end = new Date();
     const start = new Date();
     start.setFullYear(start.getFullYear() - 1);
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const fmt = (d: Date) => toDateString(d);
     const res = await getFactoryProductionFused({
       factoryId: fid,
       start: fmt(start),
@@ -3528,7 +3529,7 @@ const handleChartExport = (command: string, sheetIndex: number, chartIdx: number
   const instance = echarts.getInstanceByDom(dom);
   if (!instance) return;
 
-  const fileName = `${chartTitle || '图表'}-${new Date().toISOString().slice(0, 10)}`;
+  const fileName = `${chartTitle || '图表'}-${toDateString(new Date())}`;
 
   try {
     if (command === 'png') {
@@ -3598,7 +3599,7 @@ const handleExportExcel = async (sheet: SheetResult) => {
       XLSX.utils.book_append_sheet(wb, aiWs, 'AI分析');
     }
 
-    const fileName = `${sheet.sheetName || '分析报告'}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const fileName = `${sheet.sheetName || '分析报告'}-${toDateString(new Date())}.xlsx`;
     XLSX.writeFile(wb, fileName);
     ElMessage.success(`已导出 Excel: ${fileName}`);
   } catch (error) {
@@ -3650,7 +3651,7 @@ const handleExportPDF = async (sheet: SheetResult) => {
     yOffset += 10;
 
     doc.setFontSize(10);
-    doc.text(new Date().toISOString().slice(0, 10), pageWidth / 2, yOffset, { align: 'center' });
+    doc.text(toDateString(new Date()), pageWidth / 2, yOffset, { align: 'center' });
     yOffset += 10;
 
     // KPI section
@@ -3731,7 +3732,7 @@ const handleExportPDF = async (sheet: SheetResult) => {
       doc.setTextColor(0);
     }
 
-    const fileName = `${sheet.sheetName || 'SmartBI'}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const fileName = `${sheet.sheetName || 'SmartBI'}-${toDateString(new Date())}.pdf`;
     doc.save(fileName);
     ElMessage.success(`已导出 PDF: ${fileName}`);
   } catch (error) {

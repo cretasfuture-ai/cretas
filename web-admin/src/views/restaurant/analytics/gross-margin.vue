@@ -14,6 +14,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Download, DataAnalysis, TrendCharts, Money } from '@element-plus/icons-vue';
 import { pythonFetch } from '@/api/smartbi/common';
 import echarts from '@/utils/echarts';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -183,7 +184,7 @@ function exportCsv() {
   const blob = new Blob(['﻿' + header + '\n' + rows], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `毛利分析-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `毛利分析-${toDateString(new Date())}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }

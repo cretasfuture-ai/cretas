@@ -14,7 +14,7 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuthStore } from '../../store/authStore';
 import { getProductionDashboard, type KPIItem, type ProductionDashboard } from '../../services/api/productionAnalyticsApiClient';
 import { getFactoryId } from '../../types/auth';
-import { formatNumberWithCommas } from '../../utils/formatters';
+import { formatNumberWithCommas, formatDate } from '../../utils/formatters';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -25,7 +25,7 @@ function getDateRange(key: DateRangeKey): { startDate: string; endDate: string }
   const start = new Date();
   if (key === '7d') start.setDate(end.getDate() - 6);
   else if (key === '30d') start.setDate(end.getDate() - 29);
-  const fmt = (d: Date) => d.toISOString().split('T')[0] ?? '';
+  const fmt = (d: Date) => formatDate(d) ?? '';
   return { startDate: fmt(start), endDate: fmt(end) };
 }
 

@@ -32,6 +32,7 @@
  */
 import { adminGet, adminPost } from '../request';
 import { PYTHON_SMARTBI_URL } from './common';
+import { toDateString } from '@/utils/dateFormat';
 
 const BASE = `${PYTHON_SMARTBI_URL}/api/smartbi/flywheel`;
 
@@ -263,7 +264,7 @@ function buildMockQuality(domain: string): FlywheelQuality {
     const total = 52;
     const passed = Math.round(total * (0.82 + rnd() * 0.15));
     return {
-      date: new Date(Date.now() - (13 - i) * 86400000).toISOString().slice(0, 10),
+      date: toDateString(new Date(Date.now() - (13 - i) * 86400000)),
       total,
       passed,
       failed: total - passed,

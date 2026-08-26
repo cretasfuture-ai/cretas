@@ -16,6 +16,7 @@ import {
   QIApiResponse,
   QIPagedResponse,
 } from '../../types/qualityInspector';
+import { formatDate } from '../../utils/formatters';
 
 type QINotificationWire = Omit<QINotification, 'id' | 'type' | 'read'> & {
   id: string | number;
@@ -269,7 +270,7 @@ class QualityInspectorApiClient {
     // APP-CONTRACT-004 (2026-08-02): 首页展示的是"今日摘要", 之前却查最近 30 天,
     // 而且把后端的扁平响应当成嵌套的 today/week/month 直接返回 → 三个数字恒为 "—"。
     // 现在按"今天"查, 并在这里显式把后端形态映射成页面模型。
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
     const response = await apiClient.get<QIApiResponse<QualityStatisticsResponse>>(
       `${this.getBasePath()}/processing/quality/statistics`,
       { params: { startDate: today, endDate: today } }

@@ -882,7 +882,7 @@ watch(() => dashboardData.value?.charts, (newCharts) => {
 async function tryFallbackRanges(): Promise<boolean> {
   if (!factoryId.value) return false;
   const y = new Date().getFullYear();
-  const iso = (d: Date): string => d.toISOString().slice(0, 10);
+  const iso = (d: Date): string => toDateString(d);
   const cacheKey = savedFallbackKey(factoryId.value);
   const cached = (() => {
     try { return JSON.parse(localStorage.getItem(cacheKey) || 'null') as { s: string; e: string; label: string } | null; }
@@ -1707,6 +1707,7 @@ function handleRefresh() {
 // ==================== 生命周期清理 ====================
 
 import { onUnmounted } from 'vue';
+import { toDateString } from '@/utils/dateFormat';
 onUnmounted(() => {
   // Cancel any pending API requests (prevents console errors after navigation)
   if (abortController) abortController.abort();

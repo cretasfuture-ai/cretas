@@ -4,8 +4,26 @@ import { resolveAllHistoryRange, wideFallbackRange, isoDate } from '../analysisD
 const NOW = new Date('2026-06-02T12:00:00Z');
 
 describe('analysisDefaults — 全部历史默认窗 (WS4 Task 1 / #10/#11/#12)', () => {
-  it('isoDate → YYYY-MM-DD', () => {
-    expect(isoDate(new Date('2026-06-02T23:59:00Z'))).toBe('2026-06-02');
+  it('isoDate → 本地日历日 YYYY-MM-DD (⛔ 不是 UTC 日)', () => {
+    // 2026-08-26: 这条原来断言 '2026-06-02' —— 守的是 `toISOString().slice(0,10)`
+    // 那个**旧行为**(UTC 日), 而不是需求。isoDate 的产出是发给后端当
+    // LocalDate 用的业务日历日, 后端全线 GMT+8 ⇒ 必须是**本地**日。
+    // 23:59Z 在东八区已经是次日 07:59, 正是这条缺陷的边界。
+    const utcLateEvening = new Date('2026-06-02T23:59:00Z');
+    const p = (n: number) => String(n).padStart(2, '0');
+    const localDay =
+      utcLateEvening.getFullYear() + '-' +
+      p(utcLateEvening.getMonth() + 1) + '-' +
+      p(utcLateEvening.getDate());
+    expect(isoDate(utcLateEvening)).toBe(localDay);
+
+    // 阴性对照: 在非 UTC 时区上, 它**必须**与 UTC 截断给出不同的答案 ——
+    // 否则这条断言在本机就是恒真式, 什么都没守住。
+    if (utcLateEvening.getTimezoneOffset() !== 0) {
+      expect(isoDate(utcLateEvening)).not.toBe(
+        utcLateEvening.toISOString().slice(0, 10),
+      );
+    }
   });
 
   it('真实数据窗 → 原样返回 [minDate, maxDate] (全部历史)', () => {

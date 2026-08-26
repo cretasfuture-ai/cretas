@@ -28,6 +28,7 @@ import {
   type ReturnOrder,
   type ReturnType,
 } from '@/api/returnOrder';
+import { toDateString } from '@/utils/dateFormat';
 
 interface ReturnSourceItem {
   /** Stable id for v-for key. */
@@ -95,7 +96,7 @@ const form = ref<{
   remark: string;
   items: DialogRow[];
 }>({
-  returnDate: new Date().toISOString().slice(0, 10),
+  returnDate: toDateString(new Date()),
   withGoods: true, // default 实物退货 per customer's primary case
   reasonCategory: '',
   reason: '',
@@ -175,7 +176,7 @@ watch(
     if (open) {
       // Reset form on open; populate items from props.
       form.value = {
-        returnDate: new Date().toISOString().slice(0, 10),
+        returnDate: toDateString(new Date()),
         withGoods: true,
         reasonCategory: '',
         reason: '',

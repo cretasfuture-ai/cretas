@@ -28,6 +28,7 @@ import { useTranslation } from 'react-i18next';
 import { smartBIApiClient } from '../../services/api/smartbi';
 import { useAuthStore } from '../../store/authStore';
 import type { SmartBIStackParamList } from '../../types/smartbi';
+import { formatDate } from '../../utils/formatters';
 
 type MaterialCommunityIconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
@@ -260,8 +261,8 @@ export function CashFlowScreen() {
     const start = new Date();
     start.setDate(start.getDate() - 30);
     return {
-      startDate: start.toISOString().split('T')[0] ?? '',
-      endDate: end.toISOString().split('T')[0] ?? '',
+      startDate: formatDate(start) ?? '',
+      endDate: formatDate(end) ?? '',
     };
   });
 
@@ -304,8 +305,8 @@ export function CashFlowScreen() {
     const start = new Date();
     start.setDate(start.getDate() - days);
     setDateRange({
-      startDate: start.toISOString().split('T')[0] ?? '',
-      endDate: end.toISOString().split('T')[0] ?? '',
+      startDate: formatDate(start) ?? '',
+      endDate: formatDate(end) ?? '',
     });
     setShowDatePicker(false);
   };

@@ -17,6 +17,7 @@ import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
 import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseInboundLifecycle';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const route = useRoute();
@@ -302,7 +303,7 @@ const formData = reactive({
   batchNumber: '',
   materialTypeId: '',
   supplierId: '',
-  receiptDate: new Date().toISOString().slice(0, 10),
+  receiptDate: toDateString(new Date()),
   receiptQuantity: null as number | null,
   quantityUnit: 'kg',
   boxCount: null as number | null,
@@ -403,7 +404,7 @@ function handleCreate() {
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
   selectedMaterialUnit.value = null;
-  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: new Date().toISOString().slice(0, 10), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '', factoryNumber: '', originPlace: '' });
+  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: toDateString(new Date()), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '', factoryNumber: '', originPlace: '' });
   formDialogVisible.value = true;
 }
 
@@ -416,7 +417,7 @@ function handleEdit(row: TableRow) {
     batchNumber: row.batchNumber || '',
     materialTypeId: row.materialTypeId || '',
     supplierId: row.supplierId || '',
-    receiptDate: row.receiptDate || row.inboundDate || new Date().toISOString().slice(0, 10),
+    receiptDate: row.receiptDate || row.inboundDate || toDateString(new Date()),
     receiptQuantity: row.receiptQuantity ?? row.quantity ?? row.currentQuantity ?? null,
     quantityUnit: row.quantityUnit || row.unit || 'kg',
     boxCount: row.boxCount ?? null,
@@ -501,7 +502,7 @@ const correctDateBatchId = ref<string | null>(null);
 const correctDateBatchNumber = ref('');
 const correctDateOriginal = ref('');
 const correctDateForm = reactive({ receiptDate: '', reason: '' });
-const todayIso = new Date().toISOString().slice(0, 10);
+const todayIso = toDateString(new Date());
 /** 货不可能在将来收到 —— 与后端那道 400 同判据, 在用户填之前就把边界摆出来 (防呆 Rule 1)。 */
 const disableFutureDate = (d: Date) => d.getTime() > Date.now();
 

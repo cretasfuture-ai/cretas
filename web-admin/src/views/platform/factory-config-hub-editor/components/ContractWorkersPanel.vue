@@ -78,6 +78,7 @@ import {
   updateTempWorker,
   type TempWorker,
 } from '@/api/factoryConfigHub'
+import { toDateString } from '@/utils/dateFormat'
 
 interface Props {
   factoryId: string
@@ -108,7 +109,7 @@ async function loadData() {
 
 function openCreate() {
   createForm.workerId = undefined
-  createForm.hireDate = new Date().toISOString().slice(0, 10)
+  createForm.hireDate = toDateString(new Date())
   createForm.expectedEndDate = undefined
   createForm.initialSkillLevel = 1
   createOpen.value = true
@@ -145,7 +146,7 @@ async function onConvert(row: TempWorker) {
     if (!confirmed) return
     if (!row.id) return
     try {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = toDateString(new Date())
       await updateTempWorker(props.factoryId, row.id, {
         version: row.version,
         convertedToPermanent: true,

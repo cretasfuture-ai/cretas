@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next';
 import { platformAPI, FactoryDTO } from '../../../services/api/platformApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { logger } from '../../../utils/logger';
+import { formatDate } from '../../../utils/formatters';
 
 // Types
 interface Factory {
@@ -126,7 +127,7 @@ export default function FactoryListScreen() {
 
       if (response.success && response.data) {
         const mappedFactories: Factory[] = response.data.map((factory: FactoryDTO, index: number) => {
-          const createdAtStr = factory.createdAt ?? new Date().toISOString().split('T')[0]!;
+          const createdAtStr = factory.createdAt ?? formatDate(new Date())!;
           return {
             id: factory.id,
             name: factory.name || factory.factoryName || t('factory.unknown'),

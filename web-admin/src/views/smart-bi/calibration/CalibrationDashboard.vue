@@ -29,6 +29,7 @@ import MetricCard from '@/components/calibration/MetricCard.vue';
 import MetricsTrendChart from '@/components/calibration/MetricsTrendChart.vue';
 import ToolReliabilityTable from '@/components/calibration/ToolReliabilityTable.vue';
 import ToolCallsTable from '@/components/calibration/ToolCallsTable.vue';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 
@@ -131,8 +132,8 @@ async function loadTrendData() {
     startDate.setDate(startDate.getDate() - 14); // 默认 14 天
 
     const response = await getMetricsTrend({
-      startDate: startDate.toISOString().split('T')[0],
-      endDate: endDate.toISOString().split('T')[0],
+      startDate: toDateString(startDate),
+      endDate: toDateString(endDate),
       granularity: timeGranularity.value,
       factoryId: currentFactoryId.value
     });

@@ -18,6 +18,7 @@ import {
   type InquiryQuote,
   type InquiryQuoteStatus,
 } from '@/api/inquiryQuote';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -36,7 +37,7 @@ const createForm = ref({
   specification: '',
   quantity: 0 as number,
   unit: 'kg',
-  inquiryDate: new Date().toISOString().slice(0, 10),
+  inquiryDate: toDateString(new Date()),
   requiredDate: '',
   remark: '',
 });
@@ -91,7 +92,7 @@ function openCreate() {
     specification: '',
     quantity: 0,
     unit: 'kg',
-    inquiryDate: new Date().toISOString().slice(0, 10),
+    inquiryDate: toDateString(new Date()),
     requiredDate: '',
     remark: '',
   };

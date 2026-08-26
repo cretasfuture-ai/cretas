@@ -20,6 +20,7 @@ import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { STOCKTAKING_CONFIG } from '@/components/ai-entry/types';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -340,7 +341,7 @@ async function handleExport() {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `库存批次报告_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.download = `库存批次报告_${toDateString(new Date())}.xlsx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

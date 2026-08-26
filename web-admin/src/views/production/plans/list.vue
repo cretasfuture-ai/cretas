@@ -124,6 +124,7 @@ import {
   type PlanEditScope,
 } from './productionMoreActions';
 import { classifySettlementFailure, isNotSettledPayload } from './settlementStatusFailure';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const route = useRoute();
@@ -806,14 +807,14 @@ const hasResolvedWorkflowCandidate = computed(() => !!resolvedWorkflowCandidate.
 
 // A5: today helper
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return toDateString(new Date());
 }
 
 // T135: tomorrow helper (计划生产日默认 = 今天 + 1)
 function tomorrowStr(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  return toDateString(d);
 }
 const selectableSalesOrders = ref<TableRow[]>([]);
 const salesOrdersLoading = ref(false);
@@ -3772,7 +3773,7 @@ async function handleExport() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `生产计划_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.download = `生产计划_${toDateString(new Date())}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
     ElMessage.success('导出成功');

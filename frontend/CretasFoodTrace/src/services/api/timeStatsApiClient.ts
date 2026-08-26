@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import { formatDate } from '../../utils/formatters';
 
 /**
  * 时间统计管理API客户端
@@ -489,27 +490,27 @@ class TimeStatsApiClient {
     }
 
     const now = new Date();
-    const end = now.toISOString().split('T')[0] ?? '';
+    const end = formatDate(now) ?? '';
     let start: string;
 
     switch (period) {
       case 'week':
-        start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] ?? '';
+        start = formatDate(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)) ?? '';
         break;
       case 'month':
-        start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0] ?? '';
+        start = formatDate(new Date(now.getFullYear(), now.getMonth(), 1)) ?? '';
         break;
       case 'quarter': {
         const quarter = Math.floor(now.getMonth() / 3);
-        start = new Date(now.getFullYear(), quarter * 3, 1).toISOString().split('T')[0] ?? '';
+        start = formatDate(new Date(now.getFullYear(), quarter * 3, 1)) ?? '';
         break;
       }
       case 'year':
-        start = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0] ?? '';
+        start = formatDate(new Date(now.getFullYear(), 0, 1)) ?? '';
         break;
       default:
         // 默认本月
-        start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0] ?? '';
+        start = formatDate(new Date(now.getFullYear(), now.getMonth(), 1)) ?? '';
     }
 
     return { startDate: start, endDate: end };

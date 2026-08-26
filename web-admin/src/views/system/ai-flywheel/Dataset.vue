@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus';
 import FlywheelHeader from './components/FlywheelHeader.vue';
 import { useFlywheelDomain } from './composables/useFlywheelDomain';
 import { flywheelApi, type DatasetExportResult } from '@/api/smartbi/ai-flywheel';
+import { toDateString } from '@/utils/dateFormat';
 
 const { domain } = useFlywheelDomain();
 
@@ -52,7 +53,7 @@ function downloadJsonl() {
   const blob = new Blob([result.value.jsonl], { type: 'application/jsonl;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = toDateString(new Date());
   a.href = url;
   a.download = `flywheel-dataset-${domain.value}-${stamp}.jsonl`;
   document.body.appendChild(a);

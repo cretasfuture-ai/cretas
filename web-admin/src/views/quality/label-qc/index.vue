@@ -38,6 +38,7 @@ import {
   prepareLabelQcReviewAttempt,
   type LabelQcReviewAttempt,
 } from './reviewSubmission';
+import { toDateString } from '@/utils/dateFormat';
 
 const STATUS_LABELS: Record<LabelQcTaskStatus, string> = {
   DRAFT: '草稿',
@@ -506,7 +507,7 @@ async function exportTrainingData() {
   if (!response.success) return;
   downloadJson(
     response.data,
-    `label-qc-training-approved-${to.toISOString().slice(0, 10)}.json`,
+    `label-qc-training-approved-${toDateString(to)}.json`,
   );
   ElMessage.success(`已导出 ${response.data.length} 张已批准训练照片`);
 }

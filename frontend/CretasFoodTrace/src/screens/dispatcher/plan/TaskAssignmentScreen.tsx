@@ -28,6 +28,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { formatDate } from '../../../utils/formatters';
 
 // 调度员主题色
 const DISPATCHER_THEME = {
@@ -116,7 +117,7 @@ export default function TaskAssignmentScreen() {
         // Dashboard doesn't have todaySchedules - need to fetch plans separately
         // For now, try to get plans list
         try {
-          const todayDate = new Date().toISOString().split('T')[0];
+          const todayDate = formatDate(new Date());
           const plansResponse = await schedulingApiClient.getPlans({
             startDate: todayDate,
             endDate: todayDate,

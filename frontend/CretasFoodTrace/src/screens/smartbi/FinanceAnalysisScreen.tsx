@@ -35,7 +35,7 @@ import { useTranslation } from 'react-i18next';
 import { smartBIApiClient } from '../../services/api/smartbi';
 import { useAuthStore } from '../../store/authStore';
 import { SmartBIStackParamList } from '../../types/smartbi';
-import { formatNumberWithCommas } from '../../utils/formatters';
+import { formatNumberWithCommas, formatDate } from '../../utils/formatters';
 
 // Type for MaterialCommunityIcons names
 type MaterialCommunityIconName = keyof typeof MaterialCommunityIcons.glyphMap;
@@ -326,8 +326,8 @@ export function FinanceAnalysisScreen() {
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - 30);
-    const startDateStr = start.toISOString().split('T')[0] ?? '';
-    const endDateStr = end.toISOString().split('T')[0] ?? '';
+    const startDateStr = formatDate(start) ?? '';
+    const endDateStr = formatDate(end) ?? '';
     return {
       startDate: startDateStr,
       endDate: endDateStr,
@@ -398,8 +398,8 @@ export function FinanceAnalysisScreen() {
     const start = new Date();
     start.setDate(start.getDate() - days);
     setDateRange({
-      startDate: start.toISOString().split('T')[0] ?? '',
-      endDate: end.toISOString().split('T')[0] ?? '',
+      startDate: formatDate(start) ?? '',
+      endDate: formatDate(end) ?? '',
     });
     setShowDatePicker(false);
   };

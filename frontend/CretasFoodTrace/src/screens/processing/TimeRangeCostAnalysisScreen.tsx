@@ -16,6 +16,7 @@ import { aiService } from '../../services/ai';
 import { AIModeIndicator } from '../../components/ai';
 import type { AnalysisMode } from '../../services/ai/types';
 import { MarkdownRenderer } from '../../components/common/MarkdownRenderer';
+import { formatDate as formatLocalYmd } from '../../utils/formatters';
 
 // 创建TimeRangeCostAnalysis专用logger
 const timeRangeLogger = logger.createContextLogger('TimeRangeCostAnalysis');
@@ -220,15 +221,15 @@ export default function TimeRangeCostAnalysisScreen() {
 
       timeRangeLogger.debug('开始AI时间范围分析', {
         factoryId,
-        startDate: dateRange.startDate.toISOString().split('T')[0],
-        endDate: dateRange.endDate.toISOString().split('T')[0],
+        startDate: formatLocalYmd(dateRange.startDate),
+        endDate: formatLocalYmd(dateRange.endDate),
         hasQuestion: !!question,
         enableThinking,
       });
 
       // 使用集中式 AI 服务进行成本分析
-      const startDateStr = dateRange.startDate.toISOString().split('T')[0] ?? '';
-      const endDateStr = dateRange.endDate.toISOString().split('T')[0] ?? '';
+      const startDateStr = formatLocalYmd(dateRange.startDate) ?? '';
+      const endDateStr = formatLocalYmd(dateRange.endDate) ?? '';
       const result = await aiService.analyzeCost({
         startDate: startDateStr,
         endDate: endDateStr,

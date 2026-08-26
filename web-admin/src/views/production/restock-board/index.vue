@@ -7,6 +7,7 @@ import { getRestockHorizon, type RestockHorizonProductRow, type RestockHorizonDa
 import { post } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
+import { toDateString } from '@/utils/dateFormat'
 
 const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
@@ -99,7 +100,7 @@ function hasWipEstimate(row: RestockHorizonProductRow) {
 
 async function createPlan(row: RestockHorizonProductRow) {
   if (!row.endingShortfallQty || row.endingShortfallQty <= 0 || !factoryId.value) return
-  const today = new Date().toISOString().slice(0, 10)
+  const today = toDateString(new Date())
   try {
     await ElMessageBox.confirm(
       `产品: ${row.productName}\n建议补产: ${fmt(row.endingShortfallQty)} ${row.unit}\n覆盖区间: ${startDate.value} 至 ${endDate.value}\n计划生产日: ${today}`,

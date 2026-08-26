@@ -10,6 +10,7 @@ import type { TableRow } from '@/types/api';
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -78,7 +79,7 @@ async function loadData() {
     const [start, end] = dateRange.value;
     const fmt = (d: Date | string) => {
       if (typeof d === 'string') return d.split('T')[0];
-      return d.toISOString().split('T')[0];
+      return toDateString(d);
     };
     const res = await getEfficiencyDashboard({ startDate: fmt(start), endDate: fmt(end) });
     if (res.success && res.data) {

@@ -53,6 +53,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Microphone, VideoPause } from '@element-plus/icons-vue';
 import { get, post } from '@/api/request';
 import { handleCatchError } from '@/utils/errorToast';
+import { toDateString } from '@/utils/dateFormat';
 
 interface VoiceSlot {
   ingredientName: string | null;
@@ -79,7 +80,7 @@ let mediaRecorder: MediaRecorder | null = null;
 let chunks: BlobPart[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
 
-const today = computed(() => new Date().toISOString().slice(0, 10));
+const today = computed(() => toDateString(new Date()));
 
 onMounted(async () => {
   try {
