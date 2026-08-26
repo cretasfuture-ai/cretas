@@ -84,8 +84,8 @@ def validate_modern_annotator(module: ModuleType, script: Path) -> None:
             "label annotator lacks opaque high-contrast class rendering"
         )
     guide_markers = (
-        "目标托盘（只标这一盘）", "renderTargetGuide", "target_box",
-        "boxOverlapsTarget", "box does not overlap target tray", "疑似其他盘",
+        "目标盘定位点（按整只托盘标）", "renderTargetGuide", "target_box",
+        "双格/多格仍是一只托盘",
     )
     if any(marker not in page for marker in guide_markers):
         raise RuntimeError("label annotator lacks read-only target-tray guidance")
