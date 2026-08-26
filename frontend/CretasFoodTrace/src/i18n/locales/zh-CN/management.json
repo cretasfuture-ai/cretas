@@ -92,6 +92,10 @@
     "configFirst": "产品类型和原料类型需先配置，才能设置转换率",
     "adminOnly": "部分功能需要管理员权限"
   },
+  "locked": {
+    "adminOnlyBadge": "仅管理员可进",
+    "adminOnlyReason": "这项归管理员，你能看到它在这里，但要请管理员来操作。"
+  },
   "common": {
     "adminOnly": "仅限管理员访问",
     "loading": "加载中...",
