@@ -6,6 +6,15 @@ import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, View, Edit, Check, Close } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+// 盲盘录入契约 —— 账面数/差异只能经这几个出口露出来, 模板里不要直接读 row.systemQty
+import {
+  commitRowFromServer,
+  countUncountedRows,
+  isRowLocked,
+  revealedDifference,
+  revealedSystemQty,
+  type BlindCountRow,
+} from '../stocktakes/stocktakeCount';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 半成品盘点 (Semi-finished stock-take) — SP7 式 + 审批
@@ -149,9 +158,22 @@ async function loadDiffPreview(stocktakeId: string) {
 // ────────────────────────────────────────────────────────────────────────────
 const countDialogVisible = ref(false);
 const countLoading = ref(false);
-const countItems = ref<Array<{ id: string; batchNo: string; productTypeId: string; unit: string; systemQty: number; actualQty: number | null; notes: string }>>([]);
+// 盲盘录入契约与原料盘点共用一份实现 (../stocktakes/stocktakeCount)，
+// ⛔ 不在这里复制第二份 —— 同一条纪律有两份, 它一定会漂。
+interface SemiFinishedCountRow extends BlindCountRow {
+  id: string;
+  batchNo: string;
+  productTypeId: string;
+  unit: string;
+  notes: string;
+}
+const countItems = ref<SemiFinishedCountRow[]>([]);
 const countStocktakeId = ref('');
 const countStocktakeNo = ref('');
+/** 本次会话里已提交过至少一行 —— 决定关闭时要不要刷新列表 */
+const countCommittedAny = ref(false);
+/** 正在提交的行 id, 只转这一行的 loading */
+const countSubmittingRowId = ref('');
 // 撤销小结告警点 (盘点期间被撤销过小结的半成品/成品批次, 提示核实实物)
 const countWarnings = ref<Array<{ batchNo: string; message: string }>>([]);
 
@@ -174,6 +196,10 @@ async function openCountDialog(row: TableRow) {
         systemQty: Number(item.systemQty ?? 0),
         actualQty: item.actualQty != null ? Number(item.actualQty) : null,
         notes: String(item.notes || ''),
+        // 服务端已有实盘数 = 这行上一轮就提交过 ⇒ 已锁定, 账面/差异可见
+        committed: item.actualQty != null,
+        differenceQty: item.differenceQty != null ? Number(item.differenceQty) : null,
+        differenceType: item.differenceType != null ? String(item.differenceType) : null,
       }));
     }
   } catch (e) {
@@ -183,37 +209,66 @@ async function openCountDialog(row: TableRow) {
   }
 }
 
-async function saveCountItems() {
-  // backend PUT /items expects a raw array of { itemId, actualQty, notes }.
-  // actualQty is @NotNull server-side and validated across the WHOLE array —
-  // only send rows the user has actually filled in (partial PUT is supported
-  // and idempotent, per controller doc "可多次调用，幂等更新"), otherwise
-  // every un-filled row among e.g. 199 rows triggers "实盘数量不能为空" ×197.
-  const updates = countItems.value
-    .filter((item) => item.actualQty != null)
-    .map((item) => ({
-      itemId: item.id,
-      actualQty: item.actualQty,
-      notes: item.notes,
-    }));
-  if (updates.length === 0) {
-    ElMessage({ message: '请至少填写一项实盘数量后再保存', type: 'warning', duration: 3000 });
+const countUncounted = computed(() => countUncountedRows(countItems.value));
+
+/**
+ * 盲盘: **逐行提交**。提交 = 落库 + 锁定 + 揭示账面/差异, 三件事同时发生。
+ *
+ * ⛔ 不做批量「保存暂存」—— 一次提交多行等于让人先把整张表填完再一起看差异,
+ *    中途任何一行的差异都会污染后面几行的判断。逐行提交才保住行与行的独立性。
+ *
+ * backend PUT /items 收的是 { itemId, actualQty, notes } 的数组, actualQty
+ * 服务端 @NotNull 且对**整个数组**校验, 所以这里只发这一行。
+ */
+async function submitCountRow(row: SemiFinishedCountRow) {
+  if (isRowLocked(row)) return;
+  if (row.actualQty == null) {
+    ElMessage({ message: '请先填写本行实盘数量再提交', type: 'warning', duration: 3000 });
     return;
   }
-  countLoading.value = true;
+  countSubmittingRowId.value = row.id;
   try {
-    const res = await put(`/${factoryId.value}/semi-finished-stocktakes/${countStocktakeId.value}/items`, updates);
-    if (res.success) {
-      ElMessage({ message: '实盘数量已保存（暂存，批准后生效）', type: 'success', duration: 3000 });
-      countDialogVisible.value = false;
-      loadData();
-    } else {
-      ElMessage({ message: res.message || '保存失败', type: 'error', duration: 0, showClose: true });
+    const res = await put(
+      `/${factoryId.value}/semi-finished-stocktakes/${countStocktakeId.value}/items`,
+      [{ itemId: row.id, actualQty: row.actualQty, notes: row.notes }],
+    );
+    if (!res.success) {
+      ElMessage({ message: res.message || '提交失败', type: 'error', duration: 0, showClose: true });
+      return;
     }
+    // 差异回读服务端算的那一份 (SemiFinishedStocktakeItem.differenceQty)。
+    // ⛔ 不在前端做 actualQty - systemQty。
+    const detail = await get(`/${factoryId.value}/semi-finished-stocktakes/${countStocktakeId.value}`);
+    const serverItem = ((detail.success && detail.data?.items) || [])
+      .find((it: TableRow) => String(it.id) === row.id);
+    if (!serverItem) {
+      ElMessage({
+        message: '已提交，但没能读回服务端算的差异；请关闭后重新打开录入核对。',
+        type: 'warning', duration: 0, showClose: true,
+      });
+      return;
+    }
+    const index = countItems.value.findIndex((it) => it.id === row.id);
+    if (index >= 0) {
+      countItems.value[index] = commitRowFromServer(countItems.value[index], {
+        actualQty: serverItem.actualQty != null ? Number(serverItem.actualQty) : null,
+        differenceQty: serverItem.differenceQty != null ? Number(serverItem.differenceQty) : null,
+        differenceType: serverItem.differenceType != null ? String(serverItem.differenceType) : null,
+      });
+    }
+    countCommittedAny.value = true;
   } catch (e) {
-    ElMessage({ message: String((e as Error).message || '保存失败'), type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: String((e as Error).message || '提交失败'), type: 'error', duration: 0, showClose: true });
   } finally {
-    countLoading.value = false;
+    countSubmittingRowId.value = '';
+  }
+}
+
+function closeCountDialog() {
+  countDialogVisible.value = false;
+  if (countCommittedAny.value) {
+    countCommittedAny.value = false;
+    loadData();
   }
 }
 
@@ -573,14 +628,23 @@ onMounted(() => loadData());
         type="info"
         show-icon
         :closable="false"
-        title="录入后为暂存状态，提交审批并批准后才把半成品可用量校准为实盘数。"
+        title="盲盘：先数实物、填数量、点“提交”，提交后才显示账面数量和差异，且该行不可再改。提交后仍为暂存，审批并批准后才把半成品可用量校准为实盘数。"
         style="margin-bottom: 16px"
       />
+      <div style="margin-bottom: 12px">
+        <el-text :type="countUncounted > 0 ? 'warning' : 'success'">
+          {{ countUncounted > 0 ? `尚有${countUncounted}行未提交` : '全部行已提交' }}
+        </el-text>
+      </div>
       <el-table v-loading="countLoading" :data="countItems" size="small" border>
         <el-table-column label="工序批次号" prop="batchNo" min-width="150" />
         <el-table-column label="产品类型" prop="productTypeId" min-width="100" />
-        <el-table-column label="系统库存" width="120" align="right">
-          <template #default="{ row }">{{ row.systemQty }} {{ row.unit }}</template>
+        <!-- 账面数量: 本行提交之后才露出来 (盲盘)。⛔ 不要改回直接读 row.systemQty -->
+        <el-table-column label="账面数量" width="120" align="right">
+          <template #default="{ row }">
+            <span v-if="revealedSystemQty(row) !== null">{{ revealedSystemQty(row) }} {{ row.unit }}</span>
+            <span v-else style="color: #c0c4cc">提交后显示</span>
+          </template>
         </el-table-column>
         <el-table-column label="实盘数量" width="140">
           <template #default="{ row }">
@@ -591,28 +655,45 @@ onMounted(() => loadData());
               size="small"
               style="width: 120px"
               placeholder="实盘数量"
+              :disabled="isRowLocked(row)"
             />
           </template>
         </el-table-column>
-        <el-table-column label="差异" width="90" align="right">
+        <!-- 差异: 取服务端算好的 differenceQty; 前端不再做 actualQty - systemQty -->
+        <el-table-column label="差异" width="110" align="right">
           <template #default="{ row }">
-            <span v-if="row.actualQty != null">
-              <span :style="{ color: row.actualQty - row.systemQty < 0 ? '#f56c6c' : row.actualQty - row.systemQty > 0 ? '#67c23a' : '' }">
-                {{ row.actualQty - row.systemQty > 0 ? '+' : '' }}{{ (row.actualQty - row.systemQty).toFixed(2) }}
+            <span v-if="revealedDifference(row) !== null">
+              <span :style="{ color: Number(revealedDifference(row)) < 0 ? '#f56c6c' : Number(revealedDifference(row)) > 0 ? '#67c23a' : '' }">
+                {{ Number(revealedDifference(row)) > 0 ? '+' : '' }}{{ revealedDifference(row) }}
               </span>
             </span>
-            <span v-else style="color: #c0c4cc">—</span>
+            <span v-else style="color: #c0c4cc">提交后显示</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="提交" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="isRowLocked(row)" type="success" size="small" disable-transitions>已提交锁定</el-tag>
+            <el-button
+              v-else
+              size="small"
+              type="primary"
+              :loading="countSubmittingRowId === row.id"
+              :disabled="row.actualQty == null"
+              :aria-label="`提交 ${row.batchNo} 的实盘数量`"
+              @click="submitCountRow(row)"
+            >提交</el-button>
           </template>
         </el-table-column>
         <el-table-column label="备注" min-width="150">
           <template #default="{ row }">
-            <el-input v-model="row.notes" size="small" placeholder="可选备注" />
+            <!-- 备注与实盘数一起提交, 所以锁定后同样不可改 -->
+            <el-input v-model="row.notes" size="small" placeholder="可选备注" :disabled="isRowLocked(row)" />
           </template>
         </el-table-column>
       </el-table>
       <template #footer>
-        <el-button @click="countDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="countLoading" @click="saveCountItems">保存暂存</el-button>
+        <!-- 逐行提交, 没有批量保存 —— 关闭只是关闭, 不会再落任何数据 -->
+        <el-button type="primary" @click="closeCountDialog">关闭</el-button>
       </template>
     </el-dialog>
 

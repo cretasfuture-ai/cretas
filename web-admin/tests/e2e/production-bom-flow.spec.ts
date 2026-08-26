@@ -866,12 +866,56 @@ test.describe.serial('Production + BOM full-link E2E headed audit', () => {
           await page.waitForTimeout(1000);
           r.screenshots.push(await screenshot(page, '05A-06-stocktake-count-or-detail-dialog'));
           await captureUiSignals(page, r, 'stocktake-count-detail');
+          // ── 盲盘 (Steve 2026-08-25) ────────────────────────────────────
+          // 这条断言原来是「账面数量必须可见」。那不是恒真式、也不是变异没生效 ——
+          // 它好好地守着一个**现在被判定为缺陷**的行为(账面数锚定实盘数)。
+          // 需求变了就改断言, 但改法是把守的东西从「字面」抬到「性质」并补阴性对照,
+          // ⛔ 不是把断言删掉。
+          //
+          // 新守的性质:
+          //   ① 录入区仍然是个能用的录入区(实盘输入 + 提交 + 暂存/审批边界可见)
+          //   ② **提交之前**账面数量与差异不出现在录入区 —— 阴性对照
+          //   ③ 提交之后才出现(反馈闭环没被顺手砍掉)
           const countText = await bodyText(page);
-          const hasCountFields = /账面数量|盘点数量|实际数量|差异|暂存|批准后/.test(countText);
-          r.evidence.push(`stocktake count/detail fields=${hasCountFields}`);
-          if (!hasCountFields) {
+          const dialog = page.locator('.el-dialog:visible').last();
+          const dialogText = await dialog.innerText().catch(() => countText);
+
+          // ① 阳性对照: 先证明我们确实站在录入弹窗里, 否则下面的 not-visible 全是恒真的
+          const hasEntryAffordances = /实盘数量/.test(dialogText) && /暂存|批准后|审批/.test(dialogText);
+          r.evidence.push(`stocktake count entry affordances=${hasEntryAffordances}`);
+          if (!hasEntryAffordances) {
             r.status = 'FAIL';
-            r.bugs.push('盘点录入/详情弹窗未展示账面数量、盘点数量、差异预览或暂存审批边界。');
+            r.bugs.push('盘点录入弹窗未展示实盘数量录入或暂存/审批边界 —— 录入区本身不可用。');
+          }
+
+          // ② 阴性对照: 未提交的行必须显示占位, 且不许有一键按账面数填充的入口
+          const blindPlaceholders = await dialog.getByText('提交后显示').count().catch(() => 0);
+          const oneClickFill = await dialog
+            .locator('button, .el-button')
+            .filter({ hasText: /按账面数量填入|覆盖全部|账实一致/ })
+            .count()
+            .catch(() => 0);
+          r.evidence.push(`blind placeholders=${blindPlaceholders}, one-click fill buttons=${oneClickFill}`);
+          if (hasEntryAffordances && blindPlaceholders === 0) {
+            r.status = 'FAIL';
+            r.bugs.push('盲盘失效：录入弹窗里未提交的行没有“提交后显示”占位，账面数量/差异可能提交前就暴露了。');
+          }
+          if (oneClickFill > 0) {
+            r.status = 'FAIL';
+            r.bugs.push(`盲盘失效：录入弹窗仍有 ${oneClickFill} 个按账面数量一键填充的按钮，一键就能把盘点表变成系统数的副本。`);
+          }
+
+          // ③ 反馈闭环: 逐行提交按钮必须在(提交后才揭示账面/差异, 闭环靠它闭合)
+          const perRowSubmit = await dialog
+            .locator('button, .el-button')
+            .filter({ hasText: /^提交$/ })
+            .count()
+            .catch(() => 0);
+          const lockedTags = await dialog.getByText('已提交锁定').count().catch(() => 0);
+          r.evidence.push(`per-row submit buttons=${perRowSubmit}, locked rows=${lockedTags}`);
+          if (hasEntryAffordances && perRowSubmit === 0 && lockedTags === 0) {
+            r.status = 'FAIL';
+            r.bugs.push('盲盘反馈闭环缺失：录入弹窗既没有逐行“提交”按钮，也没有“已提交锁定”行 —— 仓管填完无法得到确认。');
           }
           await page.keyboard.press('Escape').catch(() => null);
           await page.waitForTimeout(500);

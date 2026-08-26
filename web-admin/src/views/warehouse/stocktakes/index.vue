@@ -13,12 +13,15 @@ import { BIG_CATEGORY_OPTIONS, filterOptionsByBigCategory, type BigCategory } fr
 import { buildStocktakeItemUpdates } from './stocktakeItemUpdates';
 // 副产抵扣只做展示格式化 —— 金额由后端 ByproductCreditService 算, 前端不重算 (见 byproductCredit.ts)
 import { creditStatus, formatCredit, formatCreditUnitPrice } from './byproductCredit';
+// 盲盘录入契约 —— 账面数/差异只能经这几个出口露出来, 模板里不要直接读 row.systemQty
 import {
+  commitRowFromServer,
   countDisplayUnit,
   countUncountedRows,
-  fillSystemQuantities,
-  fillSystemQuantity,
+  isRowLocked,
   nextCountInputIndex,
+  revealedDifference,
+  revealedSystemQty,
   type StocktakeCountRow,
 } from './stocktakeCount';
 
@@ -813,6 +816,10 @@ async function openCountDialog(row: TableRow): Promise<boolean> {
         systemQty: Number(item.systemQty ?? 0),
         actualQty: item.actualQty != null ? Number(item.actualQty) : null,
         notes: String(item.notes || ''),
+        // 服务端已有实盘数 = 这行上一轮就提交过 ⇒ 已锁定, 账面/差异可见
+        committed: item.actualQty != null,
+        differenceQty: item.differenceQty != null ? Number(item.differenceQty) : null,
+        differenceType: item.differenceType != null ? String(item.differenceType) : null,
       }));
       return true;
     }
@@ -824,40 +831,10 @@ async function openCountDialog(row: TableRow): Promise<boolean> {
   return false;
 }
 
-function fillAllCountRows(overwrite = false) {
-  countItems.value = fillSystemQuantities(countItems.value, overwrite);
-}
-
-async function requestFillAllCountRows() {
-  if (countItems.value.some((row) => row.actualQty != null)) {
-    try {
-      await ElMessageBox.confirm(
-        '只填充尚未盘点的空白行；已手工录入的差异行会保留。是否继续？',
-        '按账面数量快捷填充',
-        {
-          confirmButtonText: '只填空白行',
-          cancelButtonText: '取消',
-          distinguishCancelAndClose: true,
-          type: 'info',
-        },
-      );
-    } catch { return; }
-  }
-  fillAllCountRows(false);
-}
-
-async function requestOverwriteAllCountRows() {
-  await ElMessageBox.confirm(
-    '这会覆盖已手工填写的差异数量。确认将全部行改为账实一致？',
-    '覆盖全部实盘数量',
-    { confirmButtonText: '确认覆盖全部', cancelButtonText: '取消', type: 'warning' },
-  ).catch(() => { throw new Error('cancel'); });
-  fillAllCountRows(true);
-}
-
-function fillOneCountRow(row: StocktakeCountRow) {
-  Object.assign(row, fillSystemQuantity(row));
-}
+// ⛔ 这里曾有「全部按账面数量填入」/「覆盖全部为账实一致」/ 每行「账实一致」三个
+//    快捷填充。它们比"显示账面数"更彻底 —— 一键就能把整张盘点表变成系统数的副本,
+//    盘点本身归零。盲盘下不能存在这种入口, 已整体删除, 不要再加回来。
+//    (守它的断言在 __tests__/stocktakeCount.spec.ts)
 
 async function focusNextCountInput(index: number) {
   const nextIndex = nextCountInputIndex(index, countItems.value.length);
@@ -872,28 +849,64 @@ function handleCountTab(event: KeyboardEvent, index: number) {
   void focusNextCountInput(index);
 }
 
-async function saveCountItems() {
-  countLoading.value = true;
+/** 本次会话里已提交过至少一行 —— 决定关闭对话框时要不要刷新列表 */
+const countCommittedAny = ref(false);
+/** 正在提交的行 id, 用来只转这一行的 loading */
+const countSubmittingRowId = ref('');
+
+/**
+ * 盲盘: **逐行提交**。提交 = 落库 + 锁定 + 揭示账面/差异, 三件事同时发生。
+ *
+ * ⛔ 不做批量「保存暂存」—— 一次提交多行就等于让人先把整张表填完再一起看差异,
+ *    而中途任何一行的差异都会污染后面几行的判断。逐行提交才保住行与行之间的独立性。
+ */
+async function submitCountRow(row: StocktakeCountRow) {
+  if (isRowLocked(row)) return;
+  if (row.actualQty == null) {
+    ElMessage({ message: '请先填写本行实盘数量再提交', type: 'warning', duration: 3000 });
+    return;
+  }
+  countSubmittingRowId.value = row.id;
   try {
-    const updates = buildStocktakeItemUpdates(countItems.value);
-    if (updates.length === 0) {
-      ElMessage({ message: '请至少录入一条实盘数量', type: 'warning', duration: 3000 });
+    const updates = buildStocktakeItemUpdates([row]);
+    const res = await put(`/${factoryId.value}/stocktakes/${countStocktakeId.value}/items`, updates);
+    if (!res.success) {
+      ElMessage({ message: res.message || '提交失败', type: 'error', duration: 0, showClose: true });
       return;
     }
-    // Backend PUT /items accepts a raw DTO array. Uncounted rows must be omitted
-    // because actualQty is required for every DTO that is submitted.
-    const res = await put(`/${factoryId.value}/stocktakes/${countStocktakeId.value}/items`, updates);
-    if (res.success) {
-      ElMessage({ message: '盘点数量已保存（暂存，批准后生效）', type: 'success', duration: 3000 });
-      countDialogVisible.value = false;
-      loadData();
-    } else {
-      ElMessage({ message: res.message || '保存失败', type: 'error', duration: 0, showClose: true });
+    // 差异一律回读服务端算的那一份 (FactoryStocktakeItem.differenceQty)。
+    // ⛔ 不在前端做 actualQty - systemQty —— 那是本仓「同一件事两套实现」的老毛病。
+    const detail = await get(`/${factoryId.value}/stocktakes/${countStocktakeId.value}`);
+    const serverItem = ((detail.success && detail.data?.items) || [])
+      .find((it: TableRow) => String(it.id) === row.id);
+    if (!serverItem) {
+      ElMessage({
+        message: '已提交，但没能读回服务端算的差异；请关闭后重新打开录入核对。',
+        type: 'warning', duration: 0, showClose: true,
+      });
+      return;
     }
+    const index = countItems.value.findIndex((it) => it.id === row.id);
+    if (index >= 0) {
+      countItems.value[index] = commitRowFromServer(countItems.value[index], {
+        actualQty: serverItem.actualQty != null ? Number(serverItem.actualQty) : null,
+        differenceQty: serverItem.differenceQty != null ? Number(serverItem.differenceQty) : null,
+        differenceType: serverItem.differenceType != null ? String(serverItem.differenceType) : null,
+      });
+    }
+    countCommittedAny.value = true;
   } catch (e) {
-    ElMessage({ message: String((e as Error).message || '保存失败'), type: 'error', duration: 0, showClose: true });
+    ElMessage({ message: String((e as Error).message || '提交失败'), type: 'error', duration: 0, showClose: true });
   } finally {
-    countLoading.value = false;
+    countSubmittingRowId.value = '';
+  }
+}
+
+function closeCountDialog() {
+  countDialogVisible.value = false;
+  if (countCommittedAny.value) {
+    countCommittedAny.value = false;
+    loadData();
   }
 }
 
@@ -1669,18 +1682,12 @@ onMounted(async () => {
         type="info"
         show-icon
         :closable="false"
-        title="账实一致可使用快捷填充；按 Tab/Enter 跳到下一行。空白表示未盘点。保存后仍为暂存，审批并应用后才完成。"
+        title="盲盘：先数实物、填数量、点“提交”，提交后才显示账面数量和差异，且该行不可再改。按 Tab/Enter 跳到下一行。提交后仍为暂存，审批并应用后才完成。"
         style="margin-bottom: 16px"
       />
       <div class="count-toolbar">
-        <el-button type="primary" plain aria-label="全部按账面数量填入" @click="requestFillAllCountRows">
-          全部按账面数量填入
-        </el-button>
-        <el-button plain aria-label="覆盖全部为账实一致" @click="requestOverwriteAllCountRows">
-          覆盖全部
-        </el-button>
         <el-text :type="countUncounted > 0 ? 'warning' : 'success'">
-          {{ countUncounted > 0 ? `尚有${countUncounted}行未盘点` : '全部行已盘点' }}
+          {{ countUncounted > 0 ? `尚有${countUncounted}行未提交` : '全部行已提交' }}
         </el-text>
       </div>
       <el-table v-loading="countLoading" :data="countItems" size="small" border>
@@ -1696,8 +1703,14 @@ onMounted(async () => {
             <div class="identity-secondary">{{ row.materialCode }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="系统库存" width="120" align="right">
-          <template #default="{ row }">{{ row.systemQty }}{{ countDisplayUnit(row.unit) }}</template>
+        <!-- 账面数量: 本行提交之后才露出来 (盲盘)。⛔ 不要改回直接读 row.systemQty -->
+        <el-table-column label="账面数量" width="120" align="right">
+          <template #default="{ row }">
+            <span v-if="revealedSystemQty(row) !== null">
+              {{ revealedSystemQty(row) }}{{ countDisplayUnit(row.unit) }}
+            </span>
+            <span v-else style="color: #c0c4cc">提交后显示</span>
+          </template>
         </el-table-column>
         <el-table-column label="实盘数量" width="190">
           <template #default="{ row, $index }">
@@ -1710,30 +1723,44 @@ onMounted(async () => {
                 size="small"
                 style="width: 126px"
                 placeholder="未盘点"
+                :disabled="isRowLocked(row)"
                 :aria-label="`${row.materialName} 实盘数量，单位${countDisplayUnit(row.unit)}`"
                 @keydown.enter.prevent="focusNextCountInput($index)"
                 @keydown.tab="handleCountTab($event, $index)"
               />
               <span class="unit-suffix">{{ countDisplayUnit(row.unit) }}</span>
             </div>
-            <el-button link type="primary" size="small" :aria-label="`${row.materialName}账实一致`" @click="fillOneCountRow(row)">
-              账实一致
-            </el-button>
           </template>
         </el-table-column>
+        <!-- 差异: 取服务端算好的 differenceQty; 前端不再做 actualQty - systemQty -->
         <el-table-column label="差异" width="110" align="right">
           <template #default="{ row }">
-            <span v-if="row.actualQty != null">
-              <span :style="{ color: row.actualQty - row.systemQty < 0 ? '#f56c6c' : row.actualQty - row.systemQty > 0 ? '#67c23a' : '' }">
-                {{ row.actualQty - row.systemQty > 0 ? '+' : '' }}{{ (row.actualQty - row.systemQty).toFixed(3) }}{{ countDisplayUnit(row.unit) }}
+            <span v-if="revealedDifference(row) !== null">
+              <span :style="{ color: Number(revealedDifference(row)) < 0 ? '#f56c6c' : Number(revealedDifference(row)) > 0 ? '#67c23a' : '' }">
+                {{ Number(revealedDifference(row)) > 0 ? '+' : '' }}{{ revealedDifference(row) }}{{ countDisplayUnit(row.unit) }}
               </span>
             </span>
-            <span v-else style="color: #c0c4cc">—</span>
+            <span v-else style="color: #c0c4cc">提交后显示</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="提交" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="isRowLocked(row)" type="success" size="small" disable-transitions>已提交锁定</el-tag>
+            <el-button
+              v-else
+              size="small"
+              type="primary"
+              :loading="countSubmittingRowId === row.id"
+              :disabled="row.actualQty == null"
+              :aria-label="`提交 ${row.materialName} 的实盘数量`"
+              @click="submitCountRow(row)"
+            >提交</el-button>
           </template>
         </el-table-column>
         <el-table-column label="备注" min-width="150">
           <template #default="{ row }">
-            <el-input v-model="row.notes" size="small" placeholder="可选备注" />
+            <!-- 备注与实盘数一起提交, 所以锁定后同样不可改 -->
+            <el-input v-model="row.notes" size="small" placeholder="可选备注" :disabled="isRowLocked(row)" />
           </template>
         </el-table-column>
       </el-table>
@@ -1808,8 +1835,8 @@ onMounted(async () => {
         </el-table>
       </div>
       <template #footer>
-        <el-button @click="countDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="countLoading" @click="saveCountItems">保存暂存</el-button>
+        <!-- 逐行提交, 没有批量保存 —— 关闭只是关闭, 不会再落任何数据 -->
+        <el-button type="primary" @click="closeCountDialog">关闭</el-button>
       </template>
     </el-dialog>
 

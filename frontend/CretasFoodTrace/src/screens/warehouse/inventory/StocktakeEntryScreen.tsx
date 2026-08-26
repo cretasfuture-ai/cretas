@@ -1,12 +1,21 @@
 /**
- * 盘点录入屏 (SP7 R-C)
+ * 盘点录入屏 (SP7 R-C) —— 盲盘 (blind stocktake)
  *
- * UX Flow F4 设计回应: 单品一屏
+ * UX Flow F4 设计回应: 单品一屏, **盲盘 + 提交后揭示**
  *   上 = 品名 + 编码大字
- *   中 = 账面数量（创建时可见）
- *   下 = 实际数量大键盘 (≥24px)
- *   差异提交后才显
- *   全部录完 → 提交 → "待财务审批"
+ *   中 = 实际数量大键盘 (≥24px) —— ⛔ 提交前不出现任何账面数字
+ *   下 = [提交本品]
+ *   点提交 → 立刻显示 账面 / 实盘 / 差异（红绿）→ **该品锁定, 不可再改**
+ *   → 下一品 → …… → 全部录完 → 差异汇总 → 提交 → "待财务审批"
+ *
+ * 为什么中间那一栏原来是「账面数量（创建时可见）」:
+ *   §7 用户画像是客户原话 ——「做仓管的他年纪都比较大文化素质很低」, 摩擦点 F4
+ *   因此要求账面数回显 + 实时红绿差异。那个理由是真的, ⛔ 不能简单删掉反馈了事。
+ *   盲盘只是把这个闭环从**填之前**挪到**填之后**: 填完立刻知道对不对,
+ *   但那一品的独立性保住了。锁定是必须的 —— 看到差异再回头改, 等于没盲。
+ *
+ * ⚠️ 藏起来的只是界面。后端返回的是裸 JPA 实体, systemQty 仍在 HTTP 响应体里 ——
+ *    **前端藏起来是 UX 纪律, 不是防舞弊。**
  *
  * UX 强制项：TouchableRipple / ≥44pt / 数字 ≥24px / 唯一大按钮 / 错误双句+保数据+重试
  */
@@ -40,6 +49,14 @@ import {
   StocktakeItemDTO,
   StocktakeItemUpdateDTO,
 } from '../../../services/api/stocktakeApiClient';
+// 盲盘契约: 账面数/差异只能经这几个出口露出来, JSX 里不要直接读 item.systemQty
+import {
+  canSubmitRow,
+  isRowLocked,
+  revealedDifference,
+  revealedSystemQty,
+  summarizeBlindCount,
+} from './blindStocktake';
 
 type NavProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 type RouteType = RouteProp<WHInventoryStackParamList, 'StocktakeEntry'>;
@@ -68,9 +85,40 @@ interface ItemEntry {
   inputText: string;
   /** 解析后的数值，null = 未填 */
   actualQty: number | null;
-  /** 是否已保存到后端 */
-  saved: boolean;
+  /**
+   * 已提交到后端 = 已锁定 = 账面/差异可见。三件事同一个标志, 不可分开。
+   * （旧字段名是 `saved`，只表达"存过了"；盲盘下它同时是"锁了"和"可以看了"。）
+   */
+  committed: boolean;
+  /** 账面数量 —— ⛔ 只经 revealedSystemQty() 读，不要直接渲染 */
+  systemQty: number;
+  /** 服务端算好的差异；null = 未提交或服务端没给 */
+  differenceQty: number | null;
+  differenceType: string | null;
   saving: boolean;
+}
+
+/**
+ * 服务端 item → 屏幕行。
+ * 服务端已有 actualQty ⇒ 这一品上一轮就提交过 ⇒ 已锁定, 账面/差异可见。
+ */
+function toEntry(item: StocktakeItemDTO): ItemEntry {
+  const raw = item.actualQty;
+  const actualQty = raw !== undefined && raw !== null && Number.isFinite(Number(raw))
+    ? Number(raw)
+    : null;
+  const diff = item.differenceQty;
+  return {
+    item,
+    inputText: actualQty !== null ? String(actualQty) : '',
+    actualQty,
+    committed: actualQty !== null,
+    systemQty: Number(item.systemQty ?? 0),
+    // ⛔ 不用 `?? 0` 兜底 —— 那会把「服务端没算」报成「没有差异」
+    differenceQty: diff !== undefined && diff !== null ? Number(diff) : null,
+    differenceType: item.differenceType ?? null,
+    saving: false,
+  };
 }
 
 export function StocktakeEntryScreen(): React.JSX.Element {
@@ -96,18 +144,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       const res = await stocktakeApiClient.getDetail(stocktakeId);
       if (!res.success || !res.data) throw new Error('加载失败');
       setStocktake(res.data);
-      const initialEntries: ItemEntry[] = (res.data.items ?? []).map((item) => {
-        const hasActual = item.actualQty !== undefined && item.actualQty !== null;
-        const actualQty = hasActual ? Number(item.actualQty) : null;
-        return {
-          item,
-          inputText: actualQty !== null && Number.isFinite(actualQty) ? String(actualQty) : '',
-          actualQty: actualQty !== null && Number.isFinite(actualQty) ? actualQty : null,
-          saved: actualQty !== null && Number.isFinite(actualQty),
-          saving: false,
-        };
-      });
-      setEntries(initialEntries);
+      setEntries((res.data.items ?? []).map(toEntry));
     } catch (err) {
       const e = err as { response?: { data?: { message?: string } } };
       appAlert(
@@ -134,8 +171,8 @@ export function StocktakeEntryScreen(): React.JSX.Element {
   // ── 当前品项 ──────────────────────────────────
   const currentEntry = entries[currentIndex] as ItemEntry | undefined;
   const totalCount = entries.length;
-  const filledCount = entries.filter((e) => e.actualQty !== null).length;
-  const allFilled = filledCount === totalCount && totalCount > 0;
+  /** 进度按【已提交】算, 不按【输入框里有字】算 —— 没提交的不算数 */
+  const committedCount = entries.filter((e) => e.committed).length;
 
   // ── 更新输入 ──────────────────────────────────
   const handleInputChange = useCallback((text: string) => {
@@ -143,6 +180,8 @@ export function StocktakeEntryScreen(): React.JSX.Element {
       const copy = [...prev];
       const cur = copy[currentIndex];
       if (!cur) return prev;
+      // 已提交的行锁死 —— 看到差异再回头改, 等于没盲
+      if (isRowLocked(cur)) return prev;
       const trimmed = text.trim();
       const parsed = trimmed ? Number(trimmed) : null;
       copy[currentIndex] = {
@@ -154,61 +193,75 @@ export function StocktakeEntryScreen(): React.JSX.Element {
     });
   }, [currentIndex]);
 
-  // ── 保存当前品项到后端（PUT /items 幂等） ──────
-  const saveCurrentItem = useCallback(async (): Promise<boolean> => {
+  // ── 提交当前品项（PUT /items 幂等）→ 回读服务端差异 → 锁定并揭示 ──
+  const submitCurrentItem = useCallback(async (): Promise<boolean> => {
     const entry = entries[currentIndex] as ItemEntry | undefined;
     if (!entry || entry.actualQty === null || !stocktake) return false;
+    if (isRowLocked(entry)) return false;
     const updates: StocktakeItemUpdateDTO[] = [{
       itemId: entry.item.id,
       actualQty: entry.actualQty,
     }];
-    setEntries((prev) => {
+    const setSaving = (saving: boolean) => setEntries((prev) => {
       const copy = [...prev];
       const cur = copy[currentIndex];
       if (!cur) return prev;
-      copy[currentIndex] = { ...cur, saving: true };
+      copy[currentIndex] = { ...cur, saving };
       return copy;
     });
+    setSaving(true);
     try {
       await stocktakeApiClient.updateItems(stocktake.id, updates);
+      // PUT 只回 { success, data: null }, 差异要回读详情。
+      // ⛔ 不在前端做 actualQty - systemQty —— 差异只认服务端算的那一份。
+      const fresh = await stocktakeApiClient.getDetail(stocktake.id);
+      const serverItem = fresh.success
+        ? (fresh.data?.items ?? []).find((it) => it.id === entry.item.id)
+        : undefined;
+      if (!serverItem) {
+        setSaving(false);
+        appAlert(
+          '已提交，但没读到差异',
+          '实盘数量已保存，但没能读回服务端算的差异。请退出后重新进入本盘点任务核对。',
+        );
+        return false;
+      }
       setEntries((prev) => {
         const copy = [...prev];
         const cur = copy[currentIndex];
         if (!cur) return prev;
-        copy[currentIndex] = { ...cur, saving: false, saved: true };
+        copy[currentIndex] = { ...toEntry(serverItem), saving: false };
         return copy;
       });
       return true;
     } catch (err) {
       const e = err as { response?: { data?: { message?: string } } };
-      setEntries((prev) => {
-        const copy = [...prev];
-        const cur = copy[currentIndex];
-        if (!cur) return prev;
-        copy[currentIndex] = { ...cur, saving: false };
-        return copy;
-      });
-      appAlert('保存失败，数据已保留', e.response?.data?.message ?? '请检查网络后重试，您的数据不会丢失');
+      setSaving(false);
+      appAlert('提交失败，数据已保留', e.response?.data?.message ?? '请检查网络后重试，您的数据不会丢失');
       return false;
     }
   }, [currentIndex, entries, stocktake]);
 
-  // ── 下一品 ────────────────────────────────────
-  const handleNext = useCallback(async () => {
+  // ── 提交本品 ──────────────────────────────────
+  const handleSubmitItem = useCallback(async () => {
     if (!currentEntry) return;
     if (currentEntry.actualQty === null) {
-      appAlert('请填写实盘数量', '请先填写本品的实盘数量，再进行下一品');
+      appAlert('请填写实盘数量', '请先填写本品的实盘数量，再点提交');
       return;
     }
-    const ok = await saveCurrentItem();
-    if (!ok) return;
+    // 提交后停在本品, 让仓管看到 账面/实盘/差异 —— 反馈闭环在这里闭合。
+    // ⛔ 不要顺手跳到下一品: 那就把刚揭示的差异一闪而过地吞掉了。
+    await submitCurrentItem();
+  }, [currentEntry, submitCurrentItem]);
+
+  // ── 下一品 ────────────────────────────────────
+  const handleNext = useCallback(() => {
     if (currentIndex < totalCount - 1) {
       setCurrentIndex((i) => i + 1);
     } else {
-      // 全部完成 → 显示差异汇总
       setDiffVisible(true);
     }
-  }, [currentEntry, currentIndex, saveCurrentItem, totalCount]);
+  }, [currentIndex, totalCount]);
 
   // ── 上一品 ────────────────────────────────────
   const handlePrev = useCallback(() => {
@@ -218,14 +271,16 @@ export function StocktakeEntryScreen(): React.JSX.Element {
   // ── 提交盘点 ──────────────────────────────────
   const handleSubmit = useCallback(async () => {
     if (!stocktake) return;
-    const pending = entries.filter((e) => e.actualQty === null);
+    const pending = entries.filter((e) => !e.committed);
     if (pending.length > 0) {
-      appAlert('还有未录品项', `${pending.length} 个品项未填写实盘数量，请先完成所有录入`);
+      appAlert('还有未提交品项', `${pending.length} 个品项还没提交，请先逐品填写并提交`);
       return;
     }
-    const diffItems = entries.filter((e) => e.actualQty !== null && e.actualQty !== e.item.systemQty);
-    const diffDesc = diffItems.length > 0
-      ? `${diffItems.length} 件存在差异，将报给财务审批`
+    // 差异统计一律基于服务端算好的 differenceQty
+    const summary = summarizeBlindCount(entries);
+    const diffCount = summary.shortage + summary.surplus;
+    const diffDesc = diffCount > 0
+      ? `${diffCount} 件存在差异，将报给财务审批`
       : '所有品项账实相符';
     appAlert(
       '确认提交盘点？',
@@ -299,9 +354,16 @@ export function StocktakeEntryScreen(): React.JSX.Element {
 
   // ── 差异汇总视图（全部录完后） ───────────────
   if (diffVisible) {
-    const diffEntries = entries.filter((e) => e.actualQty !== null && e.actualQty !== e.item.systemQty);
-    const surplusEntries = entries.filter((e) => e.actualQty !== null && e.actualQty > e.item.systemQty);
-    const shortageEntries = entries.filter((e) => e.actualQty !== null && e.actualQty < e.item.systemQty);
+    // 全部基于服务端 differenceQty; ⛔ 前端不做 actualQty - systemQty
+    const summary = summarizeBlindCount(entries);
+    const diffEntries = entries.filter((e) => {
+      const d = revealedDifference(e);
+      return d !== null && d !== 0;
+    });
+    const shortageEntries = entries.filter((e) => {
+      const d = revealedDifference(e);
+      return d !== null && d < 0;
+    });
 
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -324,18 +386,24 @@ export function StocktakeEntryScreen(): React.JSX.Element {
                 <Text style={styles.summaryLabel}>总品项</Text>
               </View>
               <View style={styles.summaryItem}>
-                <Text style={[styles.summaryNum, { color: GREEN }]}>{totalCount - diffEntries.length}</Text>
+                <Text style={[styles.summaryNum, { color: GREEN }]}>{summary.matched}</Text>
                 <Text style={styles.summaryLabel}>账实相符</Text>
               </View>
               <View style={styles.summaryItem}>
-                <Text style={[styles.summaryNum, { color: RED }]}>{shortageEntries.length}</Text>
+                <Text style={[styles.summaryNum, { color: RED }]}>{summary.shortage}</Text>
                 <Text style={styles.summaryLabel}>盘亏</Text>
               </View>
               <View style={styles.summaryItem}>
-                <Text style={[styles.summaryNum, { color: AMBER }]}>{surplusEntries.length}</Text>
+                <Text style={[styles.summaryNum, { color: AMBER }]}>{summary.surplus}</Text>
                 <Text style={styles.summaryLabel}>盘盈</Text>
               </View>
             </View>
+            {/* 「服务端没给差异」单独一栏 —— ⛔ 不许并进「账实相符」, 那等于把"不知道"报成"没问题" */}
+            {summary.unknown > 0 && (
+              <Text style={[styles.warningNote, { color: AMBER, marginTop: 10 }]} testID="stocktake-entry-diff-unknown">
+                注：{summary.unknown} 项未取到服务端算的差异，请退出后重新进入核对，不要当成账实相符。
+              </Text>
+            )}
           </NeoCard>
 
           {diffEntries.length > 0 && (
@@ -347,13 +415,15 @@ export function StocktakeEntryScreen(): React.JSX.Element {
                 </Text>
               )}
               {diffEntries.map((e) => {
-                const diff = (e.actualQty ?? 0) - (e.item.systemQty ?? 0);
+                // 这里的行已经过滤成 revealedDifference !== null, 但仍然显式取一次,
+                // ⛔ 不用 `?? 0` 兜底 —— 0 是"账实相符"的真实读数, 不是"读不到"。
+                const diff = revealedDifference(e) as number;
                 const isShort = diff < 0;
                 return (
                   <View key={e.item.id} style={styles.diffRow} testID={`stocktake-entry-diff-row-${e.item.id}`}>
                     <View style={styles.diffLeft}>
                       <Text style={styles.diffName}>{e.item.materialBatchId ?? '—'}</Text>
-                      <Text style={styles.diffBatch}>账面 {e.item.systemQty} → 实盘 {e.actualQty}</Text>
+                      <Text style={styles.diffBatch}>账面 {revealedSystemQty(e)} → 实盘 {e.actualQty}</Text>
                     </View>
                     <Text style={[styles.diffQty, { color: isShort ? RED : AMBER }]}>
                       {diff > 0 ? '+' : ''}{diff.toFixed(2)}
@@ -375,13 +445,15 @@ export function StocktakeEntryScreen(): React.JSX.Element {
         </ScrollView>
 
         <View style={styles.bottomBar}>
+          {/* 「返回修改」已改成「返回查看」—— 每一品提交时就锁定了, 这里没有可改的东西。
+              留一个说"修改"的按钮会让人以为盘完还能回去调, 那正是盲盘要堵的口子。 */}
           <NeoButton
             variant="outline"
             onPress={() => setDiffVisible(false)}
             style={{ flex: 1 }}
             testID="stocktake-entry-diff-back"
           >
-            返回修改
+            返回查看
           </NeoButton>
           <NeoButton
             variant="primary"
@@ -402,10 +474,11 @@ export function StocktakeEntryScreen(): React.JSX.Element {
   const entry = entries[currentIndex] as ItemEntry | undefined;
   // Guard: entries may be empty during load transition
   if (!entry) return <SafeAreaView style={styles.container} edges={['top']}><AppDialogHost /></SafeAreaView>;
-  const systemQty = entry.item.systemQty ?? 0;
-  const actualQty = entry.actualQty;
-  const hasDiff = actualQty !== null && actualQty !== systemQty;
-  const canGoNext = actualQty !== null;
+  const locked = isRowLocked(entry);
+  const revealedQty = revealedSystemQty(entry);
+  const revealedDiff = revealedDifference(entry);
+  const canSubmit = canSubmitRow(entry);
+  const isLastItem = currentIndex >= totalCount - 1;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -424,7 +497,7 @@ export function StocktakeEntryScreen(): React.JSX.Element {
 
       {/* 进度条 */}
       <View style={styles.progressContainer}>
-        <View style={[styles.progressFill, { width: `${(filledCount / totalCount) * 100}%` as unknown as number }]} />
+        <View style={[styles.progressFill, { width: `${(committedCount / totalCount) * 100}%` as unknown as number }]} />
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
@@ -440,44 +513,83 @@ export function StocktakeEntryScreen(): React.JSX.Element {
             )}
           </NeoCard>
 
-          {/* 账面数量 */}
-          <NeoCard style={styles.systemQtyCard}>
-            <Text style={styles.systemQtyLabel}>账面数量</Text>
-            <Text style={styles.systemQtyValue}>{systemQty}</Text>
-          </NeoCard>
+          {/* ⛔ 这里曾经有一张「账面数量」大字卡片, 提交前就把账面数摆在输入框上方。
+              盲盘下它整块删掉了 —— 账面数改到【提交之后】的揭示卡里显示。
+              不要因为「老仓管需要参照」把它加回来: 那个需求由下面的揭示卡满足。 */}
 
           {/* 实际数量大键盘 */}
           <NeoCard style={styles.inputCard}>
-            <Text style={styles.inputLabel}>实盘数量（填写实际在库数量）</Text>
+            <Text style={styles.inputLabel}>
+              {locked ? '实盘数量（已提交，不可修改）' : '实盘数量（填写实际在库数量）'}
+            </Text>
             <RNTextInput
               testID="stocktake-entry-actual-qty-input"
               ref={inputRef}
-              style={[
-                styles.bigInput,
-                hasDiff && { color: actualQty! > systemQty ? AMBER : RED },
-              ]}
+              /* ⛔ 不要按「与账面是否偏离」给输入框上色 —— 那是个隐蔽的泄露:
+                 就算标签删了, 变色照样把账面数透露出去（试几个数就能二分出来）。
+                 上色只发生在提交之后的揭示卡里。 */
+              style={[styles.bigInput, locked && styles.bigInputLocked]}
               value={entry.inputText}
               onChangeText={handleInputChange}
+              editable={!locked}
               keyboardType="numeric"
               placeholder="请输入实际数量"
               placeholderTextColor="#bbb"
               returnKeyType="done"
-              onSubmitEditing={handleNext}
+              onSubmitEditing={handleSubmitItem}
             />
-            {/* 差异提交后才显 — 此处在录入时不显示差异 */}
             {entry.saving && (
               <View style={styles.savingRow}>
                 <ActivityIndicator size="small" color={PRIMARY} />
-                <Text style={styles.savingText}>保存中...</Text>
-              </View>
-            )}
-            {entry.saved && (
-              <View style={styles.savingRow}>
-                <MaterialCommunityIcons name="check" size={16} color={GREEN} />
-                <Text style={[styles.savingText, { color: GREEN }]}>已保存</Text>
+                <Text style={styles.savingText}>提交中...</Text>
               </View>
             )}
           </NeoCard>
+
+          {/* 提交后的揭示卡: 账面 / 实盘 / 差异 一次给全 —— 反馈闭环在这里闭合 */}
+          {locked && (
+            <NeoCard style={styles.revealCard} testID="stocktake-entry-reveal">
+              <View style={styles.revealHeaderRow}>
+                <MaterialCommunityIcons name="lock-check" size={18} color={GREEN} />
+                <Text style={styles.revealHeaderText}>本品已提交并锁定</Text>
+              </View>
+              <Divider style={{ marginVertical: 10 }} />
+              <View style={styles.revealRow}>
+                <Text style={styles.revealLabel}>账面</Text>
+                <Text style={styles.revealValue} testID="stocktake-entry-reveal-system">
+                  {revealedQty !== null ? revealedQty : '—'}
+                </Text>
+              </View>
+              <View style={styles.revealRow}>
+                <Text style={styles.revealLabel}>实盘</Text>
+                <Text style={styles.revealValue}>{entry.actualQty !== null ? entry.actualQty : '—'}</Text>
+              </View>
+              <View style={styles.revealRow}>
+                <Text style={styles.revealLabel}>差异</Text>
+                {revealedDiff !== null ? (
+                  <Text
+                    testID="stocktake-entry-reveal-diff"
+                    style={[
+                      styles.revealValue,
+                      { color: revealedDiff === 0 ? GREEN : revealedDiff < 0 ? RED : AMBER },
+                    ]}
+                  >
+                    {revealedDiff > 0 ? '+' : ''}{revealedDiff}
+                  </Text>
+                ) : (
+                  /* ⛔ 读不到就显示"—", 不要拿 0 顶替 —— 0 是"账实相符"的真实读数 */
+                  <Text style={[styles.revealValue, { color: AMBER }]} testID="stocktake-entry-reveal-diff">
+                    未取到
+                  </Text>
+                )}
+              </View>
+              {revealedDiff !== null && revealedDiff < 0 && (
+                <Text style={[styles.warningNote, { color: RED, marginTop: 8 }]}>
+                  注：盘亏将记录您的工号作为责任方
+                </Text>
+              )}
+            </NeoCard>
+          )}
 
         </ScrollView>
       </KeyboardAvoidingView>
@@ -497,16 +609,30 @@ export function StocktakeEntryScreen(): React.JSX.Element {
           </View>
         </TouchableRipple>
 
-        <NeoButton
-          variant="primary"
-          onPress={handleNext}
-          disabled={!canGoNext || entry.saving}
-          style={styles.nextBtn}
-          size="large"
-          testID="stocktake-entry-next"
-        >
-          {currentIndex < totalCount - 1 ? '下一品' : '完成录入'}
-        </NeoButton>
+        {/* 唯一大按钮: 未提交 = 提交本品; 已提交 = 下一品 / 完成录入。
+            两个动作绝不合并 —— 合并就等于差异一闪而过, 揭示等于没发生。 */}
+        {!locked ? (
+          <NeoButton
+            variant="primary"
+            onPress={handleSubmitItem}
+            disabled={!canSubmit || entry.saving}
+            style={styles.nextBtn}
+            size="large"
+            testID="stocktake-entry-submit-item"
+          >
+            {entry.saving ? '提交中...' : '提交本品'}
+          </NeoButton>
+        ) : (
+          <NeoButton
+            variant="primary"
+            onPress={handleNext}
+            style={styles.nextBtn}
+            size="large"
+            testID="stocktake-entry-next"
+          >
+            {isLastItem ? '完成录入' : '下一品'}
+          </NeoButton>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -555,16 +681,22 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontWeight: '500',
   },
-  systemQtyCard: {
+  // 提交后的揭示卡 —— 账面/实盘/差异只在这里出现
+  revealCard: {
     marginHorizontal: 16,
     marginBottom: 8,
     padding: 16,
+  },
+  revealHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  revealHeaderText: { fontSize: 15, fontWeight: '700', color: GREEN },
+  revealRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingVertical: 6,
   },
-  systemQtyLabel: { fontSize: 16, color: '#555', fontWeight: '500' },
-  systemQtyValue: { fontSize: 28, fontWeight: '800', color: '#333' },
+  revealLabel: { fontSize: 16, color: '#555', fontWeight: '500' },
+  revealValue: { fontSize: 28, fontWeight: '800', color: '#333' },
   inputCard: {
     marginHorizontal: 16,
     marginBottom: 8,
@@ -580,6 +712,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     textAlign: 'center',
     minHeight: 60,
+  },
+  // 锁定后的输入框: 灰底 + 灰边, 与"账实是否偏离"无关
+  bigInputLocked: {
+    color: '#888',
+    backgroundColor: '#f5f5f5',
+    borderBottomColor: '#d9d9d9',
   },
   savingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 },
   savingText: { fontSize: 13, color: '#999' },

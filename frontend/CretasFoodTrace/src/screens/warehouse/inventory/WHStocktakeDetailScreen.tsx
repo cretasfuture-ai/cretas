@@ -23,6 +23,7 @@ import { AppDialogHost, appAlert } from '../../../components/ui/AppDialog';
 import {
   stocktakeApiClient,
   StocktakeDTO,
+  StocktakeItemDTO,
 } from '../../../services/api/stocktakeApiClient';
 
 type NavProp = NativeStackNavigationProp<WHInventoryStackParamList>;
@@ -96,7 +97,15 @@ export function WHStocktakeDetailScreen(): React.JSX.Element {
   }
 
   const items = stocktake.items ?? [];
-  const diffItems = items.filter((it) => (it.actualQty ?? it.systemQty) !== it.systemQty);
+  // 差异一律取服务端算好的 differenceQty (FactoryStocktakeItem)。
+  // ⛔ 不做 actualQty - systemQty, 也不用 `?? 0` 兜底 —— 服务端没给就是"未知",
+  //    把未知算成 0 等于把"没算"报成"账实相符"。
+  const serverDiff = (it: StocktakeItemDTO): number | null =>
+    it.differenceQty !== undefined && it.differenceQty !== null ? Number(it.differenceQty) : null;
+  const diffItems = items.filter((it) => {
+    const d = serverDiff(it);
+    return d !== null && d !== 0;
+  });
   const statusColor =
     stocktake.status === 'REJECTED' ? RED :
     stocktake.status === 'PENDING_APPROVAL' ? AMBER :
@@ -141,7 +150,7 @@ export function WHStocktakeDetailScreen(): React.JSX.Element {
           )}
           {items.map((it) => {
             const actual = it.actualQty ?? null;
-            const diff = actual !== null ? actual - it.systemQty : null;
+            const diff = serverDiff(it);
             const isDiff = diff !== null && diff !== 0;
             return (
               <View key={it.id} style={styles.itemRow} testID={`stocktake-detail-item-${it.id}`}>
