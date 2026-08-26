@@ -22,6 +22,7 @@ import { getFactoryId } from '../../types/auth';
 import { handleError , getErrorMsg} from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { ReportStackParamList } from '../../types/navigation';
+import { formatDate } from '../../utils/formatters';
 
 // 创建EfficiencyReport专用logger
 const efficiencyReportLogger = logger.createContextLogger('EfficiencyReport');
@@ -147,8 +148,8 @@ export default function EfficiencyReportScreen() {
     }
 
     return {
-      startDate: startDate.toISOString().split('T')[0] ?? '',
-      endDate: endDate.toISOString().split('T')[0] ?? '',
+      startDate: formatDate(startDate) ?? '',
+      endDate: formatDate(endDate) ?? '',
     };
   };
 

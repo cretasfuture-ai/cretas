@@ -28,6 +28,7 @@ import {
 } from '../../../services/api/formTemplateApiClient';
 import DynamicForm from '../../../formily/core/DynamicForm';
 import type { FormSchema } from '../../../formily';
+import { formatDate } from '../../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<FAManagementStackParamList, 'FormTemplateDetail'>;
 type RouteProps = RouteProp<FAManagementStackParamList, 'FormTemplateDetail'>;
@@ -67,7 +68,7 @@ function generateSampleData(schema: FormSchema): Record<string, unknown> {
         data[key] = enumValues[0];
       }
     } else if (component === 'DatePicker') {
-      data[key] = new Date().toISOString().split('T')[0];
+      data[key] = formatDate(new Date());
     } else if (component === 'Switch') {
       data[key] = true;
     } else if (component === 'NumberPicker' || fieldType === 'number') {

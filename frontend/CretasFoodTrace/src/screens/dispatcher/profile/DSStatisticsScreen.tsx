@@ -31,6 +31,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { DISPATCHER_THEME } from '../../../types/dispatcher';
 import { dashboardAPI } from '../../../services/api/dashboardApiClient';
 import { timeclockApiClient } from '../../../services/api/timeclockApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -128,7 +129,6 @@ export default function DSStatisticsScreen() {
   // Helper: Get date range based on selection
   const getDateRange = useCallback((range: DateRangeType): { startDate: string; endDate: string } => {
     const now = new Date();
-    const formatDate = (date: Date): string => date.toISOString().split('T')[0] ?? '';
 
     const today = formatDate(now);
 

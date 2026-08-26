@@ -20,6 +20,7 @@ import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { dashboardAPI, ProductionStatisticsData } from '../../../services/api/dashboardApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'TodayProduction'>;
 
@@ -36,8 +37,8 @@ export function TodayProductionScreen() {
     try {
       setError(null);
       const response = await dashboardAPI.getProductionStatistics({
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date().toISOString().split('T')[0],
+        startDate: formatDate(new Date()),
+        endDate: formatDate(new Date()),
       });
       if (response.success && response.data) {
         setData(response.data);

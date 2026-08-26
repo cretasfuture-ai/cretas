@@ -12,6 +12,7 @@ import { handleError } from '../../utils/errorHandler';
 import { NeoCard, NeoButton, ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 import { stripLockedMaterialBatchFields } from '../../constants/materialBatchLockedFields';
+import { formatDate } from '../../utils/formatters';
 
 // CreateBatch 路由已下线, 本屏只经 EditBatch 进入。
 type EditBatchScreenProps = ProcessingScreenProps<'EditBatch'>;
@@ -121,7 +122,7 @@ export default function CreateBatchScreen() {
         // 兑现了: 保留硬编码的话, 编辑任何字段都会必现 403。编辑态干脆不发这个屏没采集的字段。
         // ⚠️ 本屏**没有日期控件**, 所以不给"去哪改"的入口 —— 入库日期的正路在管理端
         // 「更正入库日期」(原因必填 + 留痕), 且**不是盘点**(盘点只改数量, 改不了日期)。
-        batchData.receiptDate = new Date().toISOString().split('T')[0];
+        batchData.receiptDate = formatDate(new Date());
       }
 
       if (isAccountFieldsLocked) {

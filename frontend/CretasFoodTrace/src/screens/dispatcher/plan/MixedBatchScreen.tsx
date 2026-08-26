@@ -30,6 +30,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MixedBatchGroup, MixedBatchOrder, MixedBatchType } from '../../../types/dispatcher';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { isAxiosError } from 'axios';
+import { formatDate } from '../../../utils/formatters';
 
 // 主题色
 const DISPATCHER_THEME = {
@@ -91,8 +92,8 @@ export default function MixedBatchScreen() {
   const detectMixedBatch = async () => {
     try {
       setDetectLoading(true);
-      const startDate = new Date().toISOString().split('T')[0];
-      const endDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const startDate = formatDate(new Date());
+      const endDate = formatDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
       const response = await schedulingApiClient.detectMixedBatch({
         startDate,
         endDate,

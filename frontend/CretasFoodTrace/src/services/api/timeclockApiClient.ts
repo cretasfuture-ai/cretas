@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import { formatDate } from '../../utils/formatters';
 
 /**
  * 考勤打卡管理API客户端
@@ -319,7 +320,7 @@ class TimeClockApiClient {
     factoryId?: string;
   }): Promise<ApiResponse<DepartmentAttendance>> {
     const { factoryId, department = 'all', ...query } = params || {};
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
     return await apiClient.get(`${this.getPath(factoryId)}/department/${department}`, {
       params: { date: today, ...query },
     });

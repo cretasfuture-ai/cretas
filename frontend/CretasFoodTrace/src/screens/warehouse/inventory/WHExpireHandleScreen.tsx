@@ -20,6 +20,7 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { WHInventoryStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { handleError } from "../../../utils/errorHandler";
+import { formatDate } from '../../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 
@@ -155,7 +156,7 @@ export function WHExpireHandleScreen() {
           setProcessing(true);
           try {
             // 调用转冻品API
-            const today = new Date().toISOString().split('T')[0] || '';
+            const today = formatDate(new Date()) || '';
             await materialBatchApiClient.convertToFrozen(batch.id, {
               convertedBy: 1, // 默认操作人
               convertedDate: today,
@@ -178,7 +179,7 @@ export function WHExpireHandleScreen() {
     setProcessing(true);
     try {
       await materialBatchApiClient.updateBatch(batch.id, {
-        notes: `优先出库标记 ${new Date().toISOString().split('T')[0]}`,
+        notes: `优先出库标记 ${formatDate(new Date())}`,
       });
       Alert.alert("成功", `已将批次 ${batch.batchNumber} 标记为优先出库`);
     } catch (error) {

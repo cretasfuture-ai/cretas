@@ -67,7 +67,7 @@ type NavigationProp = NativeStackNavigationProp<ProcessingStackParamList>;
 type ProductionPlanManagementRouteProp = RouteProp<ProcessingStackParamList, 'ProductionPlanManagement'>;
 
 // 计划日期 / 预计完成在这条链上的唯一格式是 YYYY-MM-DD
-// (formData 的默认值就是 toISOString().split('T')[0], 后端也按这个收)。
+// (formData 的默认值走 formatDate(new Date()) —— 本地日历日, 后端按 LocalDate 收)。
 // 滚轮选完之后必须经过这里再写回 formData, 不要在别处另拼一份。
 /** 这一屏有两个日期字段, picker 必须知道当前在选哪一个 */
 type PlanDateField = 'plannedDate' | 'expectedCompletionDate';

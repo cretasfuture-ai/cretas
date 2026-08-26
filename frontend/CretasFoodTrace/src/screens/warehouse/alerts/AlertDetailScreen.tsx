@@ -24,6 +24,7 @@ import { materialBatchApiClient, MaterialBatch, ConvertToFrozenRequest } from ".
 import { handleError } from "../../../utils/errorHandler";
 import { useAuthStore } from "../../../store/authStore";
 import { formatNumberWithCommas } from "../../../utils/formatters";
+import { formatDate } from '../../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<WHInventoryStackParamList>;
 
@@ -270,7 +271,7 @@ export function AlertDetailScreen() {
                 // 转冻品处理
                 const request: ConvertToFrozenRequest = {
                   convertedBy: user?.id || 1,
-                  convertedDate: new Date().toISOString().split("T")[0] || "",
+                  convertedDate: formatDate(new Date()) || "",
                   storageLocation: targetLocation,
                   notes: remarks || "预警处理：转冻品延长保质期",
                 };
@@ -284,7 +285,7 @@ export function AlertDetailScreen() {
                 // 报损处理
                 await materialBatchApiClient.updateBatch(alertId, {
                   status: "depleted",
-                  notes: `报损处理: ${remarks || "过期处理"} ${new Date().toISOString().split("T")[0]}`,
+                  notes: `报损处理: ${remarks || "过期处理"} ${formatDate(new Date())}`,
                 });
                 Alert.alert("成功", "报损处理已提交", [
                   { text: "确定", onPress: () => navigation.goBack() },
@@ -294,7 +295,7 @@ export function AlertDetailScreen() {
               case "fifo": {
                 // 优先出库标记
                 await materialBatchApiClient.updateBatch(alertId, {
-                  notes: `FIFO优先出库标记 ${new Date().toISOString().split("T")[0]} ${remarks}`,
+                  notes: `FIFO优先出库标记 ${formatDate(new Date())} ${remarks}`,
                 });
                 Alert.alert("成功", "已标记为优先出库批次", [
                   { text: "确定", onPress: () => navigation.goBack() },
@@ -586,7 +587,7 @@ export function AlertDetailScreen() {
               <View style={styles.infoBoxList}>
                 <Text style={styles.infoBoxItem}>* 转冻后保质期延长30天</Text>
                 <Text style={styles.infoBoxItem}>
-                  * 新到期日期: {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]}
+                  * 新到期日期: {formatDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))}
                 </Text>
                 <Text style={styles.infoBoxItem}>* 需要2小时冷冻处理</Text>
               </View>

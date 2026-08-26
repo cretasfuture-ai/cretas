@@ -34,6 +34,7 @@ import { hrApiClient } from '../../../services/api/hrApiClient';
 import { isAxiosError } from 'axios';
 import { useAuthStore } from '../../../store/authStore';
 import type { DispatcherEmployee } from '../../../types/dispatcher';
+import { formatDate } from '../../../utils/formatters';
 
 // 调度员主题色
 const DISPATCHER_THEME = {
@@ -244,7 +245,7 @@ export default function PersonnelDetailScreen() {
           status,
           workshop: empData.workshopName || empData.departmentName || '未分配',
           position: empData.position || '员工',
-          hireDate: empData.hireDate ?? new Date().toISOString().substring(0, 10),
+          hireDate: empData.hireDate ?? formatDate(new Date()),
           tenure: calculateTenure(empData.hireDate || new Date().toISOString()),
           contractType,
           phone: empData.phone ? empData.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : '未设置',

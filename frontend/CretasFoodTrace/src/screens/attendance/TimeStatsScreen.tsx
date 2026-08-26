@@ -18,6 +18,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { formatDate } from '../../utils/formatters';
 
 // 创建TimeStats专用logger
 const timeStatsLogger = logger.createContextLogger('TimeStats');
@@ -57,14 +58,14 @@ export default function TimeStatsScreen() {
    */
   const getDateParams = (): { today: string; weekStart: string; year: number; month: number } => {
     const now = new Date();
-    const today = now.toISOString().split('T')[0] as string; // YYYY-MM-DD
+    const today = formatDate(now) as string; // YYYY-MM-DD
 
     // 获取本周一
     const dayOfWeek = now.getDay();
     const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // 周日特殊处理
     const monday = new Date(now);
     monday.setDate(now.getDate() + diff);
-    const weekStart = monday.toISOString().split('T')[0] as string;
+    const weekStart = formatDate(monday) as string;
 
     // 获取当前年月
     const year = now.getFullYear();

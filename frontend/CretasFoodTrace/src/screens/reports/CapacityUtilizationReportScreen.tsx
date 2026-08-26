@@ -25,6 +25,7 @@ import { reportApiClient } from '../../services/api/reportApiClient';
 import { getFactoryId } from '../../types/auth';
 import { getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { formatDate } from '../../utils/formatters';
 
 // 创建CapacityUtilizationReport专用logger
 const capacityReportLogger = logger.createContextLogger('CapacityUtilizationReport');
@@ -92,8 +93,8 @@ export default function CapacityUtilizationReportScreen() {
     }
 
     return {
-      startDate: startDate.toISOString().split('T')[0] as string,
-      endDate: endDate.toISOString().split('T')[0] as string,
+      startDate: formatDate(startDate) as string,
+      endDate: formatDate(endDate) as string,
     };
   }, [timeRange]);
 

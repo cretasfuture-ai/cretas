@@ -43,6 +43,7 @@ import formAssistantApiClient, {
 } from '../../../services/api/formAssistantApiClient';
 import { DynamicForm, FormSchema } from '../../../formily/core/DynamicForm';
 import { aiService } from '../../../services/ai';
+import { formatDate } from '../../../utils/formatters';
 
 // 实体类型代码列表（用于映射翻译key）
 const ENTITY_TYPE_CODES: EntityType[] = [
@@ -465,7 +466,7 @@ export function SchemaConfigScreen() {
       // 根据组件类型生成示例数据
       switch (component) {
         case 'DatePicker':
-          data[key] = new Date().toISOString().split('T')[0];
+          data[key] = formatDate(new Date());
           break;
         case 'NumberInput':
         case 'InputNumber':

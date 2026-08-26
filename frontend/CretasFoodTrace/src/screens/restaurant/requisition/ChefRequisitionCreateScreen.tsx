@@ -34,7 +34,7 @@ interface LineDraft {
 }
 
 // 希望到货日在这条链上的唯一格式是 YYYY-MM-DD
-// (默认值就是 toISOString().slice(0, 10), 后端也按这个收)。
+// (默认值走 formatDate(new Date()) —— 本地日历日, 后端按 LocalDate 收)。
 // 滚轮选完之后必须经过这里再写回, 不要在别处另拼一份。
 export function ChefRequisitionCreateScreen() {
   const navigation = useNavigation();

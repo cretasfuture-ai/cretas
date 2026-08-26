@@ -19,6 +19,7 @@ import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { processingApiClient, ProcessingBatch } from '../../../services/api/processingApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'TodayBatches'>;
 
@@ -40,7 +41,7 @@ export function TodayBatchesScreen() {
       });
       if (response.success && response.data) {
         // Filter for today's batches client-side
-        const today = new Date().toISOString().split('T')[0];
+        const today = formatDate(new Date());
         const todayBatches = (response.data.content || []).filter((batch) => {
           const batchDate = batch.createdAt?.split('T')[0];
           return batchDate === today;
