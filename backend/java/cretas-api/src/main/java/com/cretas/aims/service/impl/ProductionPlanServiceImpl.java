@@ -4393,7 +4393,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             String unit = trimToNull(r.getOutputUnit());
-            String key = sku + " " + batchNumber + " " + (unit == null ? "" : unit);
+            String key = sku + "\u0000" + batchNumber + "\u0000" + (unit == null ? "" : unit);
             ProductionSettlementRequest.OutputLine line = byLine.get(key);
             if (line == null) {
                 byLine.put(key, ProductionSettlementRequest.OutputLine.builder()
@@ -5997,8 +5997,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                 && item.getWorkflowInputPortId() != null
                                 && item.getWorkflowEdgeId() != null
                                 && exactInputSlots.contains(item.getWorkflowMaterialNodeId()
-                                + " " + item.getWorkflowInputPortId()
-                                + " " + item.getWorkflowEdgeId());
+                                + "\u0000" + item.getWorkflowInputPortId()
+                                + "\u0000" + item.getWorkflowEdgeId());
                     })
                     .toList();
         }
