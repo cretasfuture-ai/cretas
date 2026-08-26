@@ -21,7 +21,6 @@ import StaffDetailScreen from '../../screens/hr/staff/StaffDetailScreen';
 
 // 复用现有Profile页面
 import FeedbackScreen from '../../screens/profile/FeedbackScreen';
-import MembershipScreen from '../../screens/profile/MembershipScreen';
 
 import type { HRProfileStackParamList } from '../../types/hrNavigation';
 
@@ -49,7 +48,6 @@ export default function HRProfileStackNavigator() {
       <Stack.Screen name="WorkSchedule" component={WorkScheduleScreen} />
       <Stack.Screen name="StaffDetail" component={StaffDetailScreen} />
       <Stack.Screen name="Feedback" component={FeedbackScreen} />
-      <Stack.Screen name="Membership" component={MembershipScreen} />
     </Stack.Navigator>
   );
 }
