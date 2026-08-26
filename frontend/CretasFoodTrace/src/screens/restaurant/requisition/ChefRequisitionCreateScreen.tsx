@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
-import { Button, Card, Chip, Text, TextInput } from 'react-native-paper';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Button, Card, Chip, Dialog, Portal, Text, TextInput } from 'react-native-paper';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
@@ -12,6 +13,7 @@ import {
 } from '../../../services/api/purchaseRequisitionApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
+import { formatDate, parseYmdOrToday } from '../../../utils/formatters';
 
 const STALL_OPTIONS = [
   { value: 'SEAFOOD', label: '海鲜档' },
@@ -31,6 +33,9 @@ interface LineDraft {
   remark: string;
 }
 
+// 希望到货日在这条链上的唯一格式是 YYYY-MM-DD
+// (默认值走 formatDate(new Date()) —— 本地日历日, 后端按 LocalDate 收)。
+// 滚轮选完之后必须经过这里再写回, 不要在别处另拼一份。
 export function ChefRequisitionCreateScreen() {
   const navigation = useNavigation();
   const { user } = useAuthStore();
@@ -38,13 +43,26 @@ export function ChefRequisitionCreateScreen() {
 
   const [materials, setMaterials] = useState<MaterialType[]>([]);
   const [stallCode, setStallCode] = useState('HOT_DISH');
-  const [expectedDate, setExpectedDate] = useState(new Date().toISOString().slice(0, 10));
+  // 默认今天(本地日历日)。⛔ 不用 toISOString(): 它按 UTC 截断,
+  //    东八区 08:00 之前会默认成「昨天」—— 早班报货正好撞上。
+  const [expectedDate, setExpectedDate] = useState(formatDate(new Date()));
   const [reason, setReason] = useState('');
   const [remark, setRemark] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([newLine()]);
   const [recentRequisitions, setRecentRequisitions] = useState<PurchaseRequisition[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+
+  // ============================================================
+  // 希望到货日滚轮 (2026-08-26)
+  // 现场原话:「这个日期改下备, 改成滚轮的, 手写有点费事」
+  // ============================================================
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const pickerInitialDate = useMemo(() => parseYmdOrToday(expectedDate), [expectedDate]);
+  // 写回一律走 formatYmd —— validate() 要求这个字段非空, 后端按 YYYY-MM-DD 收。
+  const commitPickedDate = useCallback((date: Date) => {
+    setExpectedDate(formatDate(date));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -207,7 +225,26 @@ export function ChefRequisitionCreateScreen() {
         </View>
 
         <Text style={styles.label}>希望到货日 *</Text>
-        <TextInput mode="outlined" value={expectedDate} onChangeText={setExpectedDate} placeholder="YYYY-MM-DD" style={styles.input} />
+        {/* 2026-08-26 改成滚轮选, 不再手打
+            (editable={false} + 外层 TouchableOpacity + 内层 pointerEvents="none") */}
+        <TouchableOpacity
+          onPress={() => setDatePickerVisible(true)}
+          disabled={submitting}
+          accessibilityRole="button"
+          accessibilityLabel="选择希望到货日"
+          testID="chef-requisition-expected-date-picker"
+        >
+          <View pointerEvents="none">
+            <TextInput
+              mode="outlined"
+              value={expectedDate}
+              editable={false}
+              disabled={submitting}
+              right={<TextInput.Icon icon="calendar" />}
+              style={styles.input}
+            />
+          </View>
+        </TouchableOpacity>
 
         <Text style={styles.label}>报货原因</Text>
         <TextInput mode="outlined" value={reason} onChangeText={setReason} placeholder="明日备货 / 厨房急用" style={styles.input} />
@@ -316,6 +353,40 @@ export function ChefRequisitionCreateScreen() {
           </Button>
         </View>
       </ScrollView>
+
+      {/* 希望到货日滚轮 —— 整屏只有这一个实例。
+          用户要的是滚轮, 所以两端都显式 display="spinner"(Android 默认是日历不是滚轮)。 */}
+      {datePickerVisible && (Platform.OS === 'ios' ? (
+        <Portal>
+          <Dialog visible onDismiss={() => setDatePickerVisible(false)}>
+            <Dialog.Title>选择希望到货日</Dialog.Title>
+            <Dialog.Content>
+              <DateTimePicker
+                value={pickerInitialDate}
+                mode="date"
+                display="spinner"
+                onChange={(_event, date) => {
+                  if (date) commitPickedDate(date);
+                }}
+              />
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setDatePickerVisible(false)}>完成</Button>
+            </Dialog.Actions>
+          </Dialog>
+        </Portal>
+      ) : (
+        <DateTimePicker
+          value={pickerInitialDate}
+          mode="date"
+          display="spinner"
+          onChange={(event, date) => {
+            // Android 是模态: 无论确定还是取消都要收起, 否则下次点不开
+            setDatePickerVisible(false);
+            if (event.type === 'set' && date) commitPickedDate(date);
+          }}
+        />
+      ))}
     </SafeAreaView>
   );
 }

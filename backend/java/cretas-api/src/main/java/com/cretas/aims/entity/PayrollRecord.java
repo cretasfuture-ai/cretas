@@ -121,6 +121,33 @@ public class PayrollRecord extends BaseEntity {
     @Column(name = "piece_rule_id")
     private Long pieceRuleId;
 
+    // ==================== 工时工资字段 (引擎收敛后新增) ====================
+
+    /**
+     * 本次计算采用的 WageMode.
+     *
+     * <p>收敛前 (两套引擎并存时) 生成的历史行为 NULL —— 那些行只可能是计件口径。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "wage_mode", length = 20)
+    private com.cretas.aims.entity.enums.WageMode wageMode;
+
+    /**
+     * 工时工资 (常规工时 × 时薪).
+     *
+     * <p>PIECE_RATE 模式恒为 0。收敛前没有这一列, HOURLY / MIXED 工人的工时工资
+     * 在 PayrollRecord 里没有落脚点 —— 补上它才能让 total_wage 与
+     * WageCalculation.getTotalAmount() 对得上。
+     */
+    @Column(name = "hourly_wage", precision = 12, scale = 2)
+    private BigDecimal hourlyWage;
+
+    /**
+     * 使用的时薪规则ID (audit linkno).
+     */
+    @Column(name = "hourly_rule_id")
+    private Long hourlyRuleId;
+
     // ==================== 其他工资字段 ====================
 
     /**
@@ -213,17 +240,58 @@ public class PayrollRecord extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    // ==================== 重算审计字段 (草稿重算必须 HR 看得见) ====================
+
+    /**
+     * 最近一次重算之前的 total_wage.
+     *
+     * <p>与 {@link #totalWage} 并排看就是「变更前 / 变更后」。从未重算过为 NULL。
+     */
+    @Column(name = "previous_total_wage", precision = 12, scale = 2)
+    private BigDecimal previousTotalWage;
+
+    /**
+     * 最近一次重算时间.
+     */
+    @Column(name = "recalculated_at")
+    private LocalDateTime recalculatedAt;
+
+    /**
+     * 最近一次重算的操作人ID.
+     */
+    @Column(name = "recalculated_by")
+    private Long recalculatedBy;
+
+    /**
+     * 累计重算次数.
+     */
+    @Column(name = "recalc_count", nullable = false)
+    @Builder.Default
+    private Integer recalcCount = 0;
+
+    /**
+     * 重算审计日志 (append-only, 每次重算追加一行人可读记录).
+     */
+    @Column(name = "recalc_log", columnDefinition = "TEXT")
+    private String recalcLog;
+
     // ==================== 辅助方法 ====================
 
     /**
      * 计算并设置总工资
-     * 总工资 = 基本工资 + 计件工资 + 加班工资 + 奖金 - 扣款
+     * 总工资 = 基本工资 + 工时工资 + 计件工资 + 加班工资 + 奖金 - 扣款
+     *
+     * <p>{@code hourlyWage} 是引擎收敛时新增的一项: 收敛前 PayrollRecord 没有工时工资口径,
+     * 存量行该列为 NULL → 按 0 参与求和, 历史金额不受影响。
      */
     public void calculateTotalWage() {
         BigDecimal total = BigDecimal.ZERO;
 
         if (baseSalary != null) {
             total = total.add(baseSalary);
+        }
+        if (hourlyWage != null) {
+            total = total.add(hourlyWage);
         }
         if (pieceRateWage != null) {
             total = total.add(pieceRateWage);

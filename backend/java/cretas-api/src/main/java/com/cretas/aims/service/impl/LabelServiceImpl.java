@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.exception.AuthorizationException;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.LabelService;
@@ -56,13 +57,34 @@ public class LabelServiceImpl implements LabelService {
     }
 
     @Override
-    public Optional<Label> getByLabelCode(String labelCode) {
-        return labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode);
+    public Optional<Label> getByLabelCode(String factoryId, String labelCode) {
+        return labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode)
+                .map(label -> requireSameFactory(factoryId, label));
     }
 
     @Override
-    public Optional<Label> getByTraceCode(String traceCode) {
-        return labelRepository.findByTraceCodeAndDeletedAtIsNull(traceCode);
+    public Optional<Label> getByTraceCode(String factoryId, String traceCode) {
+        return labelRepository.findByTraceCodeAndDeletedAtIsNull(traceCode)
+                .map(label -> requireSameFactory(factoryId, label));
+    }
+
+    /**
+     * 租户隔离的唯一落点 —— label_code / trace_code / batch_id 都是**全局**查询键,
+     * 三条读路径共用这一个判定, 不各写各的 (三份一定会漂).
+     *
+     * <p>⛔ 不匹配时抛 403 而不是返回空 —— 把越权伪装成「不存在」会让真实的
+     * 跨租户探测在 404 里消失, 既看不见也告不了警。参见 {@code scanLabel} 步骤 2,
+     * 那里是同一条判据的另一处实例 (它抛 RuntimeException → 400, 保持原状: 那条
+     * 路径 RN 端在用, 改状态码会撞上前端把 403 当「登录失效」的处理).
+     */
+    private Label requireSameFactory(String factoryId, Label label) {
+        if (factoryId == null || !factoryId.equals(label.getFactoryId())) {
+            log.warn("跨工厂标签访问被拒绝: 请求工厂={}, 标签工厂={}, labelId={}",
+                    factoryId, label.getFactoryId(), label.getId());
+            // 措辞不回显对方工厂号 —— 拒绝要可区分, 但没必要把归属也一起告诉调用方
+            throw new AuthorizationException("无权访问该标签: 它不属于当前工厂 " + factoryId);
+        }
+        return label;
     }
 
     @Override
@@ -164,8 +186,10 @@ public class LabelServiceImpl implements LabelService {
     }
 
     @Override
-    public List<Label> getLabelsByBatchId(String batchId) {
-        return labelRepository.findByBatchIdAndDeletedAtIsNull(batchId);
+    public List<Label> getLabelsByBatchId(String factoryId, String batchId) {
+        return labelRepository.findByBatchIdAndDeletedAtIsNull(batchId).stream()
+                .map(label -> requireSameFactory(factoryId, label))
+                .toList();
     }
 
     @Override
@@ -261,9 +285,35 @@ public class LabelServiceImpl implements LabelService {
     @Override
     @Transactional(readOnly = true)
     public MaterialBatchLabelScanResponse scanLabel(String factoryId, String labelCode) {
-        // 1. 标签存在
-        Label label = labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode)
-                .orElseThrow(() -> new RuntimeException("标签不存在: labelCode=" + labelCode));
+        // 1. 标签存在 — 先按 labelCode 查, 查不到再按 traceCode 兜底.
+        //
+        // Why (2026-08-25, 往返缺陷): 打印机印进二维码的**不是** labelCode 而是 traceCode —
+        //   WHBatchDetailScreen.tsx:217   qrContent = genRes.data?.traceCode ?? genRes.data?.labelCode
+        //   BatchLabelPrintService.ts:65  const qrText = qrContent ?? batchNumber
+        // 而 generateMaterialBatchLabel (本文件 :252) 恒设 traceCode, 于是 traceCode 恒胜出,
+        // 贴在实物上的二维码里永远是 "TRACE-...". 只查 label_code 会把**每一张已打印的标签**
+        // 都扫成"标签不存在". 兜底能同时接住已经贴出去的旧标签和以后新印的标签.
+        //
+        // ⛔ 兜底只换查询方式, 不换后面的校验 — 跨工厂防护(步骤2)与 VOIDED 检查(步骤3)
+        //    对两条查询路径一视同仁, 走兜底分支不构成任何绕过.
+        //
+        // 撞车风险: 结构上不可能.
+        //   generateLabelCode  → "<2字符>-<factoryId>-<14位>-<4位>"  (prefix = substring(0,2), 如 YL/RL/BC/WL 或 2 位数字)
+        //   generateTraceCode  → "TRACE-<factoryId>-<8位>-<6位>"
+        // 首个 "-" 之前一个恒为 2 字符、另一个恒为 5 字符 ("TRACE"), 两者恒不相等.
+        // 唯一的非生成路径是 createLabel 允许调用方自带 labelCode; 即便有人自带一个长得像
+        // traceCode 的串, 先查 labelCode 也保证精确匹配优先命中, 语义仍然唯一确定.
+        final String scannedCode = labelCode;
+        Label label = labelRepository.findByLabelCodeAndDeletedAtIsNull(scannedCode)
+                .orElseGet(() -> labelRepository.findByTraceCodeAndDeletedAtIsNull(scannedCode)
+                        .map(byTrace -> {
+                            // 留痕: 不打这条日志就没人知道有多少标签实际走的是兜底
+                            log.info("SP4-T5: 扫码经 traceCode 兜底命中 — scannedCode={}, labelCode={}",
+                                    scannedCode, byTrace.getLabelCode());
+                            return byTrace;
+                        })
+                        .orElseThrow(() -> new RuntimeException(
+                                "标签不存在: code=" + scannedCode + " (已按 labelCode 与 traceCode 两种方式查过)")));
 
         // 2. 跨工厂访问防护
         if (!factoryId.equals(label.getFactoryId())) {

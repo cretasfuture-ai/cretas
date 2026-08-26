@@ -33,6 +33,7 @@ import { useNavigation } from '@react-navigation/native';
 import { DISPATCHER_THEME, ProductionPlan, LineSchedule } from '../../../types/dispatcher';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 // 班次类型
 type ShiftType = 'day' | 'night' | 'full_day';
@@ -68,7 +69,7 @@ export default function AIScheduleGenerateScreen() {
   const [scheduleDate, setScheduleDate] = useState<string>(() => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split('T')[0] ?? '';
+    return formatDate(tomorrow) ?? '';
   });
   const [shiftType, setShiftType] = useState<ShiftType>('day');
   const [autoAssignWorkers, setAutoAssignWorkers] = useState(true);

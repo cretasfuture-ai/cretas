@@ -154,20 +154,42 @@
 
     <!-- 完成盘点对话框 -->
     <el-dialog v-model="completeDialogVisible" title="完成盘点" width="500px" :close-on-click-modal="false" destroy-on-close>
-      <el-form ref="completeFormRef" :model="completeForm" :rules="completeFormRules" label-width="100px">
-        <el-form-item label="账面库存">
-          <span>{{ completeForm.systemQuantity }} {{ completeForm.unit }}</span>
-        </el-form-item>
+      <!-- 盲盘录入: 提交前只有实盘输入框, ⛔ 不显示账面库存, 也不预填实盘数 -->
+      <el-form v-if="!completeResult" ref="completeFormRef" :model="completeForm" :rules="completeFormRules" label-width="100px">
+        <el-alert
+          type="info"
+          show-icon
+          :closable="false"
+          title="盲盘：请按实物填写实盘数量。提交后才显示账面库存和差异，且不可再改。"
+          style="margin-bottom: 12px"
+        />
         <el-form-item label="实盘数量" prop="actualQuantity">
-          <el-input-number v-model="completeForm.actualQuantity" :precision="4" :step="0.5" :min="0" />
+          <el-input-number v-model="completeForm.actualQuantity" :precision="4" :step="0.5" :min="0" placeholder="请填写实盘数量" />
+          <span style="margin-left: 8px">{{ completeForm.unit }}</span>
         </el-form-item>
         <el-form-item label="差异原因">
           <el-input v-model="completeForm.adjustmentReason" type="textarea" :rows="2" placeholder="如有差异请说明原因" />
         </el-form-item>
       </el-form>
+      <!-- 提交后的反馈闭环: 账面 / 实盘 / 差异 一次给全, 该单已锁定 -->
+      <el-descriptions v-else :column="1" border>
+        <el-descriptions-item label="账面库存">{{ completeResult.systemQuantity }} {{ completeResult.unit }}</el-descriptions-item>
+        <el-descriptions-item label="实盘数量">{{ completeResult.actualQuantity ?? '-' }} {{ completeResult.unit }}</el-descriptions-item>
+        <el-descriptions-item label="差异">
+          <span :style="{ color: diffColor(completeResult.differenceType) }">
+            {{ completeResult.differenceQuantity ?? '-' }} {{ completeResult.unit }}
+            <el-tag :type="diffTagType(completeResult.differenceType)" size="small" disable-transitions style="margin-left: 6px">
+              {{ diffText(completeResult.differenceType) || '-' }}
+            </el-tag>
+          </span>
+        </el-descriptions-item>
+      </el-descriptions>
       <template #footer>
-        <el-button :disabled="submitting" @click="completeDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitComplete">确认完成</el-button>
+        <template v-if="!completeResult">
+          <el-button :disabled="submitting" @click="completeDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="submitting" @click="submitComplete">确认完成</el-button>
+        </template>
+        <el-button v-else type="primary" @click="completeDialogVisible = false">知道了</el-button>
       </template>
     </el-dialog>
 
@@ -199,7 +221,7 @@ import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
 import { getStocktakingRecords, getStocktakingRecord, getStocktakingSummary, createStocktakingRecord, completeStocktaking, cancelStocktaking, getRawMaterialTypes } from '@/api/restaurant';
 import { emptyCell, formatDateCell, exportTableToExcel } from '@/utils/tableFormatters';
-import { formatDate } from '@/utils/dateFormat';
+import { formatDate, toDateString } from '@/utils/dateFormat';
 import type { StocktakingRecord } from '@/types/restaurant';
 import AnalyticsStrip from '../components/AnalyticsStrip.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
@@ -260,14 +282,26 @@ const detailData = ref<StocktakingRecord | null>(null);
 
 // 后端 StocktakingRecord 必填字段: rawMaterialTypeId, stocktakingDate（@NotNull）
 // 若前端不传 stocktakingDate, JPA @Valid 会直接返回 400, 而不会进入 controller 的"默认为今天"分支
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => toDateString(new Date());
 const dialogForm = ref({ rawMaterialTypeId: '', stocktakingDate: today(), unit: 'kg', notes: '' });
 const createFormRef = ref<FormInstance>();
 const createFormRules = {
   rawMaterialTypeId: [{ required: true, message: '请选择食材', trigger: 'change' }],
   stocktakingDate: [{ required: true, message: '请选择盘点日期', trigger: 'change' }],
 };
-const completeForm = ref({ id: '', systemQuantity: 0, unit: '', actualQuantity: 0, adjustmentReason: '' });
+/**
+ * 盲盘 (Steve 2026-08-25): 录入时**看不到**账面库存, 实盘数量也不预填 ——
+ * 预填账面数等于把答案先写进输入框, 盘点就退化成"点一下确认"。
+ * 提交成功后才用服务端返回的记录揭示 账面/实盘/差异, 并锁定该单。
+ */
+const completeForm = ref<{
+  id: string;
+  unit: string;
+  actualQuantity: number | null;
+  adjustmentReason: string;
+}>({ id: '', unit: '', actualQuantity: null, adjustmentReason: '' });
+/** 提交后由服务端回填的结果; null = 尚未提交, 此时界面上不许出现任何账面数字 */
+const completeResult = ref<StocktakingRecord | null>(null);
 const completeFormRef = ref<FormInstance>();
 const completeFormRules = {
   actualQuantity: [{ required: true, message: '请输入实盘数量', trigger: 'blur' }],
@@ -348,13 +382,20 @@ async function submitCreateForm() {
 }
 
 function handleComplete(row: StocktakingRecord) {
-  completeForm.value = { id: row.id, systemQuantity: row.systemQuantity, unit: row.unit, actualQuantity: row.systemQuantity, adjustmentReason: '' };
+  // ⛔ 不要把 row.systemQuantity 带进 completeForm —— 它一进表单就会被渲染出来,
+  //    而且预填 actualQuantity 会把账面数直接当成答案。
+  completeForm.value = { id: row.id, unit: row.unit, actualQuantity: null, adjustmentReason: '' };
+  completeResult.value = null;
   completeDialogVisible.value = true;
 }
 
 async function submitComplete() {
   if (completeFormRef.value) {
     try { await completeFormRef.value.validate(); } catch { return; }
+  }
+  if (completeForm.value.actualQuantity == null) {
+    ElMessage.warning('请先填写实盘数量');
+    return;
   }
   submitting.value = true;
   try {
@@ -364,7 +405,14 @@ async function submitComplete() {
     });
     if (res.success) {
       ElMessage.success('盘点已完成');
-      completeDialogVisible.value = false;
+      // 反馈闭环: 提交后立刻揭示 账面/实盘/差异 —— 差异取服务端
+      // StocktakingRecord.calculateDifference() 算好的那一份, 前端不重算。
+      // 拿不到记录就不揭示, ⛔ 不用本地缓存的账面数顶替(那不是这次落库的值)。
+      completeResult.value = (res.data as StocktakingRecord | undefined) ?? null;
+      if (!completeResult.value) {
+        ElMessage.warning('已完成，但没能读回服务端算的差异；请在详情里核对。');
+        completeDialogVisible.value = false;
+      }
       loadData();
     } else {
       ElMessage.error(res.message || '完成盘点失败');

@@ -1,4 +1,5 @@
 import { formatDate as _formatDate, formatDateTime as _formatDateTime } from './dateFormat'
+import { toDateString } from '@/utils/dateFormat'
 
 /**
  * 日期格式化 — el-table-column :formatter — "YYYY-MM-DD"
@@ -83,5 +84,5 @@ export async function exportTableToExcel(
   })
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
-  XLSX.writeFile(wb, `${filename}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  XLSX.writeFile(wb, `${filename}_${toDateString(new Date())}.xlsx`)
 }

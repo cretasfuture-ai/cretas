@@ -182,9 +182,17 @@ const targetFieldOptions = computed(() => {
   }));
 });
 
+// 价格权限过滤 —— 判据是 badge 的**结构位** `isPriceColumn`, 不是它的显示文本.
+//
+// 2026-08-25 事故: 这里原本写 `getColumnTypeBadge(header).label !== '¥'`, 而那个
+// '¥' 在某次 GBK 往返中被吃成了 '楼' (UTF-8 的 ¥ = C2 A5, 正好是 GBK 的「楼」).
+// `'楼' !== '¥'` 恒为真 ⇒ 整个 `||` 恒为真 ⇒ 过滤器一列都没滤掉过.
+// 拿**显示文本**当权限判据本身就是错的: label 会被改措辞、被翻译、被编码往返吃掉,
+// 而且坏的方向是**恒真**(`!==` 比不上就放行), 静默失效.
+// ⇒ 结构位由 FIELD_TYPE_BADGES 与 label 在**同一处**声明, 不可能单独漂移.
 const visiblePreviewHeaders = computed(() =>
-  parseResult.value.headers.filter((header) =>
-    canViewPrice.value || getColumnTypeBadge(header).label !== '楼',
+  parseResult.value.headers.filter(
+    (header) => canViewPrice.value || !isPriceHeader(header),
   ),
 );
 
@@ -765,18 +773,50 @@ function handleDownloadTemplate() {
   ElMessage.info('模板下载功能开发中...');
 }
 
+interface ColumnTypeBadge {
+  /** 只用于显示 —— ⛔ 任何权限/可见性判断都不许读它 (会被改措辞/翻译/编码往返吃掉). */
+  label: string;
+  type: 'info' | 'success' | 'warning' | 'danger' | '';
+  /** 结构位: 这个字段类型是否携带金额语义. 权限判断读这一位. */
+  isPriceColumn: boolean;
+}
+
+/**
+ * 字段类型 → 角标. label 与 isPriceColumn 在**同一处**声明, 所以显示文本怎么改
+ * 都不会让权限判断跟着漂 (`Record<FieldTypeName, …>` 还保证新增类型必须表态).
+ */
+const FIELD_TYPE_BADGES: Record<FieldTypeName, ColumnTypeBadge> = {
+  '文本': { label: 'Aa', type: 'info', isPriceColumn: false },
+  '数字': { label: '#', type: 'success', isPriceColumn: false },
+  '日期': { label: 'D', type: 'warning', isPriceColumn: false },
+  '百分比': { label: '%', type: '', isPriceColumn: false },
+  '金额': { label: '¥', type: 'danger', isPriceColumn: true }
+};
+
+const UNKNOWN_COLUMN_BADGE: ColumnTypeBadge = { label: '', type: 'info', isPriceColumn: false };
+
 /** Column type label mapping for preview table header badges */
-function getColumnTypeBadge(header: string): { label: string; type: 'info' | 'success' | 'warning' | 'danger' | '' } {
+function getColumnTypeBadge(header: string): ColumnTypeBadge {
   const conf = fieldTypeConfirmations.value.find(f => f.fieldName === header);
-  if (!conf) return { label: '', type: 'info' };
-  const typeMap: Record<FieldTypeName, { label: string; type: 'info' | 'success' | 'warning' | 'danger' | '' }> = {
-    '文本': { label: 'Aa', type: 'info' },
-    '数字': { label: '#', type: 'success' },
-    '日期': { label: 'D', type: 'warning' },
-    '百分比': { label: '%', type: '' },
-    '金额': { label: '¥', type: 'danger' }
-  };
-  return typeMap[conf.confirmedType] || { label: '', type: 'info' };
+  if (!conf) return UNKNOWN_COLUMN_BADGE;
+  return FIELD_TYPE_BADGES[conf.confirmedType] || UNKNOWN_COLUMN_BADGE;
+}
+
+/**
+ * 这一列是否携带金额语义.
+ *
+ * detected 与 confirmed **任一**为金额即算 —— 「确认类型」下拉是用户可改的,
+ * 只看 confirmedType 的话, 无价格权限的人把金额列改成「文本」就能把它变回可见,
+ * 一道点一下就能绕过的闸等于没有闸. 对有价格权限的人这条不产生任何差别.
+ */
+function isPriceField(conf: FieldTypeConfirmation | undefined | null): boolean {
+  if (!conf) return false;
+  return (FIELD_TYPE_BADGES[conf.detectedType]?.isPriceColumn ?? false)
+    || (FIELD_TYPE_BADGES[conf.confirmedType]?.isPriceColumn ?? false);
+}
+
+function isPriceHeader(header: string): boolean {
+  return isPriceField(fieldTypeConfirmations.value.find(f => f.fieldName === header));
 }
 </script>
 
@@ -936,18 +976,27 @@ function getColumnTypeBadge(header: string): { label: string; type: 'info' | 'su
               </el-table-column>
               <el-table-column label="样本值" min-width="200">
                 <template #default="{ row }">
+                  <!--
+                    无价格权限时金额字段的样本值也要遮掉 —— 否则预览表把金额列
+                    藏了, 这里照样把前 3 个金额原值印出来, 等于闸只挡了一半.
+                  -->
                   <div class="sample-values-cell">
-                    <el-tag
-                      v-for="(val, i) in row.sampleValues"
-                      :key="i"
-                      size="small"
-                      type="info"
-                      effect="plain"
-                      class="sample-tag"
-                    >
-                      {{ val }}
-                    </el-tag>
-                    <span v-if="row.sampleValues.length === 0" class="no-sample">--</span>
+                    <span v-if="!canViewPrice && isPriceField(row)" class="sample-masked">
+                      ***（无价格查看权限）
+                    </span>
+                    <template v-else>
+                      <el-tag
+                        v-for="(val, i) in row.sampleValues"
+                        :key="i"
+                        size="small"
+                        type="info"
+                        effect="plain"
+                        class="sample-tag"
+                      >
+                        {{ val }}
+                      </el-tag>
+                      <span v-if="row.sampleValues.length === 0" class="no-sample">--</span>
+                    </template>
                   </div>
                 </template>
               </el-table-column>
@@ -1518,6 +1567,11 @@ function getColumnTypeBadge(header: string): { label: string; type: 'info' | 'su
     }
 
     .no-sample {
+      color: var(--el-text-color-placeholder, #c0c4cc);
+      font-size: 13px;
+    }
+
+    .sample-masked {
       color: var(--el-text-color-placeholder, #c0c4cc);
       font-size: 13px;
     }

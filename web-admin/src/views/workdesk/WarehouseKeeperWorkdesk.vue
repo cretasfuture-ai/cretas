@@ -3,7 +3,12 @@
 
   F006 真场景: 仓管员张师傅早上 8 am 打开 Cretas, 默认问 "今天要收什么货?"
   系统聚合今日 + 明日 expected delivery date 的 PO + Requisition pending receiving,
-  每行带 R1 max 边界 (已订 - 已收 = 剩余 + 30% 超收上限).
+  每行带 R1 max 边界 (已订 - 已收 = 剩余 + 超收上限), 上限值 remainingCap 由后端算好下发.
+
+  ⛔ 本页不写死超收百分比. 采购超收率来自后端 WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT
+     (见该常量的 javadoc — 它与 confirmReceive 真正执行的
+     PurchaseServiceImpl.overReceiveRate 目前【不一致】, 已挂为待裁定项).
+     前端复述一个百分比只会让这份不一致多一个出口.
 
   vs HJ 模式: 仓管员要点 5 个菜单 (采购订单 / 请购单 / 采购入库 / 到货登记 / 扫码).
   Cretas: 1 屏 30 秒 + AI 智能输出 + 一键扫码任务.
@@ -299,7 +304,7 @@
             <el-text size="small">
               还要收 <b>{{ formatQty(receiveDialog.row?.pendingQuantity) }}</b>
               {{ receiveDialog.row?.unit }}
-              · 30% 超收上限 = {{ formatQty(receiveDialog.row?.remainingCap) }}{{ receiveDialog.row?.unit }}
+              · 含超收上限最多可入 {{ formatQty(receiveDialog.row?.remainingCap) }}{{ receiveDialog.row?.unit }}
             </el-text>
           </div>
         </el-form-item>
@@ -382,7 +387,7 @@
             <el-text size="small">
               还要收 <b>{{ formatQty(confirmReceiveDialog.row?.pendingQuantity) }}</b>
               {{ confirmReceiveDialog.row?.unit }}
-              · 30% 超收上限 = {{ formatQty(confirmReceiveDialog.row?.remainingCap) }}{{ confirmReceiveDialog.row?.unit }}
+              · 含超收上限最多可入 {{ formatQty(confirmReceiveDialog.row?.remainingCap) }}{{ confirmReceiveDialog.row?.unit }}
             </el-text>
           </div>
         </el-form-item>

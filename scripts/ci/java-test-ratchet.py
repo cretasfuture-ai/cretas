@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -98,6 +99,24 @@ def read_baseline(path: str) -> set[str]:
     return out
 
 
+#: 从基线头部那句「本次共跑 N 个测试」把 N 读回来。
+#: 🔴 这个数是【样本量下限】的依据 —— 见 main() 里那段注释。读不到就返回 0(不设限)。
+_BASELINE_TOTAL_RE = re.compile(r"本次共跑\s*(\d+)\s*个测试")
+
+
+def read_baseline_total(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            if not line.lstrip().startswith("#"):
+                break
+            m = _BASELINE_TOTAL_RE.search(line)
+            if m:
+                return int(m.group(1))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reports", required=True, help="surefire-reports 目录")
@@ -106,6 +125,9 @@ def main() -> int:
                     help="用本次结果覆盖基线（⛔ 只在确认新增红已修完后手工跑）")
     ap.add_argument("--min-tests", type=int, default=100,
                     help="低于这个数就判定「没量到」（rc=2）")
+    ap.add_argument("--min-ratio", type=float, default=0.9,
+                    help="本次跑的测试数低于「基线记录总数 × 该比例」就判「没量到」"
+                         "（rc=2）。防 fork VM 中途崩掉后拿残缺报告当有效读数。")
     args = ap.parse_args()
 
     failing, total = collect(args.reports)
@@ -115,6 +137,32 @@ def main() -> int:
         print(f"JAVA_RATCHET INSTRUMENT_DEAD —— 只解析到 {total} 个测试"
               f"（下限 {args.min_tests}）。编译失败 / 报告目录为空 / 解析不出结果。")
         print("⚠️ 本次读数【作废】，⛔ 不代表没有新增红。")
+        return RC_NOT_MEASURED
+
+    # ── rc=2：跑了，但【只跑了一部分】────────────────────────────────
+    #
+    # 🔴 2026-08-26 实测, 这是本脚本此前最危险的一个洞:
+    #    CI 上 surefire fork VM 在跑到第 2866 个测试时 OOM 崩掉, maven 报错退出,
+    #    但**已经写出来的 2866 份报告仍在**。绝对下限是 100, 于是 2866 轻松过关,
+    #    本脚本把它当成一次有效读数, 并且报出:
+    #        「共跑 2866 个测试 · 红 29 · 基线 143」
+    #        「✅ 已修好 124 条（可以从基线里删掉）」
+    #    那 124 条**不是修好了, 是根本没跑**。若有人照这句话去删基线,
+    #    124 条债就被静默勾销 —— 比首跑那次「笼统报个 job failure」危险得多,
+    #    因为它**崩得像成功**。
+    #
+    # ⇒ 判据不能是一个魔法常数, 要跟【基线自己记下的那个总数】比。
+    #    基线头部写着「本次共跑 N 个测试」, 少于 N 的 min_ratio 就是没量到。
+    # ⛔ 不要因为「这次多跑/少跑几个测试很正常」就把比例调松:
+    #    测试数正常波动是几十条, 而这个洞的量级是【少了 76%】。
+    baseline_total = read_baseline_total(args.baseline)
+    if baseline_total and total < baseline_total * args.min_ratio:
+        print(f"JAVA_RATCHET INSTRUMENT_DEAD —— 只跑了 {total} 个测试, "
+              f"而基线记录的是 {baseline_total} 个"
+              f"（下限 {args.min_ratio:.0%} = {int(baseline_total * args.min_ratio)}）。")
+        print("   多半是 fork VM 中途崩了(OOM 等), 报告只写出了一部分。")
+        print("⚠️ 本次读数【作废】，⛔ 不代表没有新增红，"
+              "⛔ 更不代表少掉的那些「修好了」。")
         return RC_NOT_MEASURED
 
     baseline_exists = os.path.exists(args.baseline)

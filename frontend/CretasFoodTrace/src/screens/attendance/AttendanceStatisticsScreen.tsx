@@ -17,6 +17,7 @@ import { timeStatsApiClient, DailyStats, MonthlyStats, EmployeeTimeStats } from 
 import { useAuthStore } from '../../store/authStore';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { formatDate } from '../../utils/formatters';
 
 // 创建AttendanceStatistics专用logger
 const attendanceStatsLogger = logger.createContextLogger('AttendanceStatistics');
@@ -102,8 +103,8 @@ export default function AttendanceStatisticsScreen() {
     }
 
     return {
-      startDate: startDate.toISOString().split('T')[0] as string, // YYYY-MM-DD格式
-      endDate: endDate.toISOString().split('T')[0] as string,
+      startDate: formatDate(startDate) as string, // YYYY-MM-DD格式
+      endDate: formatDate(endDate) as string,
     };
   };
 
@@ -255,7 +256,7 @@ export default function AttendanceStatisticsScreen() {
         );
       } else {
         response = await timeStatsApiClient.getDailyStats(
-          new Date().toISOString().split('T')[0] as string,
+          formatDate(new Date()) as string,
           user?.factoryId
         );
       }

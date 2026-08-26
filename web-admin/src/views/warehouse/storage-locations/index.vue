@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Box, Delete, Grid, Location, Plus, Search, Upload } from '@element-plus/icons-vue';
@@ -14,7 +14,7 @@ import {
   type RecognizedWarehouseLayout, type WarehouseFloor, type WarehouseLayout, type WarehouseLocation, type WarehouseRack, type WarehouseZone,
 } from '@/api/warehouseLayout';
 import { bigCategoryOf } from '@/utils/materialCategory';
-import { daysInStorage, formatQuantity, maxDaysInStorage, nextLocationCode, normalizeWarehouseLayout } from './warehouseLayoutModel';
+import { createTrailingDebouncer, daysInStorage, formatQuantity, maxDaysInStorage, nextLocationCode, normalizeWarehouseLayout } from './warehouseLayoutModel';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 
@@ -69,7 +69,10 @@ const recognizePreview = ref<RecognizedWarehouseLayout | null>(null);
 const recognizePreviewImage = ref('');
 const recognizeDialogVisible = ref(false);
 const recognizeDialogKey = ref(0);
-let rackPersistTimer: ReturnType<typeof setTimeout> | undefined;
+// 拖拽货架的保存调度器。抽成 createTrailingDebouncer 是为了能用假定时器**确定性验证**
+// 「连续微调只发一次」—— 浏览器自动化驱动不了 Vue Flow 的拖拽(合成 PointerEvent 打不进
+// d3-drag), 在浏览器里怎么试都是「节点没动」, 那不是防抖没生效, 是仪器够不着。
+const rackPersistDebouncer = createTrailingDebouncer(600);
 const zoneForm = reactive({ name: '', prefix: '' });
 const locationForm = reactive({ code: '', name: '', notes: '' });
 const moveLocation = ref('');
@@ -272,8 +275,7 @@ function onRackDrag(event: NodeDragEvent) {
   rack.y = Math.max(0, Math.round(event.node.position.y));
   // persist() PUT 的是**整份** layout, 包含楼层的 base64 底图。每拖停一次就整份重传
   // 一遍, 底图几 MB 时连续微调会打出一串大请求。合并成 600ms 一次。
-  if (rackPersistTimer) clearTimeout(rackPersistTimer);
-  rackPersistTimer = setTimeout(() => { void persist(false); }, 600);
+  rackPersistDebouncer.schedule(() => { void persist(false); });
 }
 
 async function bindLocation(location: WarehouseLocation, level: number) {
@@ -478,6 +480,8 @@ watch(searchTerm, (keyword) => {
   }, 250);
 });
 onMounted(loadWorkspace);
+// 离开页面时把还没落地的那次保存取消掉 —— 否则用户已经走了, 还会再打一次整份 PUT。
+onUnmounted(() => { rackPersistDebouncer.cancel(); });
 </script>
 
 <template>

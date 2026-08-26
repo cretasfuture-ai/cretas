@@ -252,6 +252,37 @@ export default function ProfileScreen() {
             </View>
         </NeoCard>
 
+        {/*
+          我的工资 —— 独立成卡, 不塞进「更多功能」列表。
+          对车间工人来说这是个人中心里最该被找到的东西 (竞品把它当成"减少月底跟财务扯皮"
+          的主打功能), 埋在设置项里等于没做。
+          ⛔ 不按角色隐藏: 后端 /wage/me/* 是 self-scoped 的, 每个人只看得到自己那一份,
+             而每个人都该看得到自己的工资。
+        */}
+        <NeoCard style={styles.card} padding="m">
+            <TouchableOpacity
+                testID="profile-my-wage-entry"
+                style={styles.settingItem}
+                accessibilityRole="button"
+                accessibilityLabel="我的工资"
+                onPress={() => {
+                    profileLogger.info('打开我的工资');
+                    (navigation as any).navigate('MyWage');
+                }}
+            >
+                <View style={styles.settingLeft}>
+                    <List.Icon icon="cash-multiple" color="#137A4B" />
+                    <View>
+                        <Text style={[styles.settingText, { fontSize: 18, fontWeight: '700' }]}>我的工资</Text>
+                        <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 2 }}>
+                            这个月做了多少件、发了多少钱
+                        </Text>
+                    </View>
+                </View>
+                <List.Icon icon="chevron-right" color={theme.colors.textTertiary} />
+            </TouchableOpacity>
+        </NeoCard>
+
         {/* Settings */}
         <NeoCard style={styles.card} padding="m">
             <Text style={styles.sectionTitle}>更多功能</Text>

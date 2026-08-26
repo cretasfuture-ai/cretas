@@ -10,6 +10,7 @@ import { logger } from '../../utils/logger';
 import { isAxiosError } from 'axios';
 import { aiService, detectAnalysisMode, type AIResult, type CostAnalysisResponse, type AnalysisMode } from '../../services/ai';
 import { AIModeIndicator } from '../../components/ai';
+import { formatDate } from '../../utils/formatters';
 
 // 创建AIAnalysis专用logger
 const aiAnalysisLogger = logger.createContextLogger('AIAnalysis');
@@ -341,7 +342,7 @@ export default function AIAnalysisScreen() {
       await exportAnalysisToPdf(
         'AI成本分析报告',
         analysisResponse.data?.analysis || analysisResponse.data?.message || '',
-        { batchId, date: new Date().toISOString().split('T')[0] }
+        { batchId, date: formatDate(new Date()) }
       );
     } catch (error) {
       console.error('PDF export failed:', error);

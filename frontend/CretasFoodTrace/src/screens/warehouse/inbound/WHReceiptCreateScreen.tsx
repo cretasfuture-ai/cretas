@@ -48,6 +48,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { WHInboundStackParamList } from '../../../types/navigation';
 import {
@@ -75,6 +76,7 @@ import {
 } from '../../../services/api/materialPackagingApiClient';
 import { handleError } from '../../../utils/errorHandler';
 import { useAuthStore } from '../../../store/authStore';
+import { formatDate, parseYmdOrToday } from '../../../utils/formatters';
 
 type Nav = NativeStackNavigationProp<WHInboundStackParamList, 'WHReceiptCreate'>;
 type RouteProps = RouteProp<WHInboundStackParamList, 'WHReceiptCreate'>;
@@ -96,10 +98,9 @@ interface PendingPhoto {
   size: number;
 }
 
-const todayStr = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+// 商品日期在整条链上的唯一格式是 YYYY-MM-DD (提交前有正则校验, 后端也按这个收)。
+// 滚轮选完之后必须经过这里再写回 row, 不要在别处另拼一份。
+const todayStr = (): string => formatDate(new Date());
 
 export default function WHReceiptCreateScreen() {
   const navigation = useNavigation<Nav>();
@@ -112,6 +113,9 @@ export default function WHReceiptCreateScreen() {
   const [materialsById, setMaterialsById] = useState<Record<string, MaterialType>>({});
   const [packagingByMaterial, setPackagingByMaterial] = useState<Record<string, MaterialPackagingHierarchy | null>>({});
   const [packagingMenuItemId, setPackagingMenuItemId] = useState<string | null>(null);
+  // 2026-08-26 仓管原话:「这个日期改下备, 改成滚轮的, 手写有点费事」
+  // 这一屏是多行 map 渲染的, 所以只挂【一个】picker 实例, 用这个 state 记住当前在选哪一行。
+  const [datePickerRowId, setDatePickerRowId] = useState<string | null>(null);
   const [rows, setRows] = useState<Record<string, RowDraft>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -226,6 +230,24 @@ export default function WHReceiptCreateScreen() {
       },
     }));
   };
+
+  // ============================================================
+  // 商品日期滚轮 (2026-08-26)
+  // ============================================================
+  const pickerInitialDate = useMemo(
+    () => parseYmdOrToday(datePickerRowId ? rows[datePickerRowId]?.productionDate : undefined),
+    [datePickerRowId, rows],
+  );
+
+  // ⛔ 写回一律走 formatYmd —— 提交前的 /^\d{4}-\d{2}-\d{2}$/ 校验拦的就是这个格式,
+  //    这里拼错整单都提交不了。
+  const commitPickedDate = useCallback(
+    (date: Date) => {
+      if (!datePickerRowId) return;
+      updateRow(datePickerRowId, { productionDate: formatDate(date) });
+    },
+    [datePickerRowId],
+  );
 
   // ============================================================
   // Issue #794: 拍照附件
@@ -846,15 +868,28 @@ export default function WHReceiptCreateScreen() {
                         placeholder={abaca ? '入库以实际称重为准' : ''}
                         disabled={submitting}
                       />
-                      <TextInput
-                        label="商品日期 *"
-                        value={row.productionDate}
-                        onChangeText={(t) => updateRow(it.id, { productionDate: t })}
-                        mode="outlined"
-                        placeholder="YYYY-MM-DD"
-                        style={[styles.field, styles.flex1]}
+                      {/* 2026-08-26 仓管原话:「这个日期改下备, 改成滚轮的, 手写有点费事」
+                          ⇒ 点一下弹滚轮, 不再手打(editable={false} + 外层 TouchableOpacity)。 */}
+                      <TouchableOpacity
+                        style={styles.flex1}
+                        onPress={() => setDatePickerRowId(it.id)}
                         disabled={submitting}
-                      />
+                        accessibilityRole="button"
+                        accessibilityLabel="选择商品日期"
+                        testID={`receipt-date-picker-${it.id}`}
+                      >
+                        <View pointerEvents="none">
+                          <TextInput
+                            label="商品日期 *"
+                            value={row.productionDate}
+                            mode="outlined"
+                            editable={false}
+                            right={<TextInput.Icon icon="calendar" />}
+                            style={styles.field}
+                            disabled={submitting}
+                          />
+                        </View>
+                      </TouchableOpacity>
                     </View>
                   )}
                   {!abaca && !rowFullyReceived && (
@@ -995,6 +1030,40 @@ export default function WHReceiptCreateScreen() {
             </Button>
           )}
         </View>
+
+        {/* 商品日期滚轮 —— 整屏只有这一个实例, 靠 datePickerRowId 知道在选哪一行。
+            用户要的是滚轮, 所以两端都显式 display="spinner"(Android 默认是日历不是滚轮)。 */}
+        {datePickerRowId !== null && (Platform.OS === 'ios' ? (
+          <Portal>
+            <Dialog visible onDismiss={() => setDatePickerRowId(null)}>
+              <Dialog.Title>选择商品日期</Dialog.Title>
+              <Dialog.Content>
+                <DateTimePicker
+                  value={pickerInitialDate}
+                  mode="date"
+                  display="spinner"
+                  onChange={(_event, date) => {
+                    if (date) commitPickedDate(date);
+                  }}
+                />
+              </Dialog.Content>
+              <Dialog.Actions>
+                <Button onPress={() => setDatePickerRowId(null)}>完成</Button>
+              </Dialog.Actions>
+            </Dialog>
+          </Portal>
+        ) : (
+          <DateTimePicker
+            value={pickerInitialDate}
+            mode="date"
+            display="spinner"
+            onChange={(event, date) => {
+              // Android 是模态: 无论确定还是取消都要收起, 否则下次点不开
+              setDatePickerRowId(null);
+              if (event.type === 'set' && date) commitPickedDate(date);
+            }}
+          />
+        ))}
 
         <Portal>
           <Dialog visible={closeDialogVisible} onDismiss={() => setCloseDialogVisible(false)}>

@@ -27,8 +27,6 @@ export { AttendanceHistoryScreen } from './workers/AttendanceHistoryScreen';
 
 // Equipment screens
 export { WSEquipmentScreen } from './equipment/WSEquipmentScreen';
-export { EquipmentAlertScreen } from './equipment/EquipmentAlertScreen';
-export { EquipmentMaintenanceScreen } from './equipment/EquipmentMaintenanceScreen';
 
 // Profile screens
 export { WSProfileScreen } from './profile/WSProfileScreen';

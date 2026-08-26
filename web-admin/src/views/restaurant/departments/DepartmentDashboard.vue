@@ -19,6 +19,7 @@ import { DEPARTMENTS, DEPARTMENT_ORDER, pickPath, type DeptKey } from './departm
 import DeptTrendChart from './DeptTrendChart.vue';
 import type { TrendPoint } from './trendTakeaway';
 import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
+import { toDateString } from '@/utils/dateFormat';
 
 const props = defineProps<{ dept: DeptKey }>();
 
@@ -71,7 +72,7 @@ const periodSummary = computed(() => {
 function windowRange(days: number): { start: string; end: string } {
   const end = new Date();
   const start = new Date(end.getTime() - (days - 1) * 86400000);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const iso = (d: Date) => toDateString(d);
   return { start: iso(start), end: iso(end) };
 }
 

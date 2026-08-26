@@ -31,6 +31,7 @@ import { HR_THEME } from '../../../types/hrNavigation';
 import { StickyFooterSummary } from '../../../components/list';
 import { useListSummary } from '../../../hooks/useListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
+import { formatDate } from '../../../utils/formatters';
 
 type ViewMode = 'today' | 'history';
 
@@ -79,7 +80,7 @@ export default function AttendanceManageScreen() {
             clockOutTime: r.clockOutTime,
             workMinutes: r.workDuration,
             status: r.clockOutTime ? 'normal' : (r.clockInTime ? 'working' : 'absent'),
-            date: new Date().toISOString().split('T')[0] ?? '',
+            date: formatDate(new Date()) ?? '',
           }));
           setRecords(mappedRecords);
         }

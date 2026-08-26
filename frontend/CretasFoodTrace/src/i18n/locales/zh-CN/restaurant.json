@@ -110,6 +110,10 @@
     "execute": {
       "title": "执行盘点",
       "systemQty": "系统库存",
+      "unit": "单位",
+      "actualQty": "实盘数量",
+      "difference": "差异",
+      "blindHint": "盘点时不显示账面库存：请按实际数出来的数量填写。提交后系统会立即显示账面数与差异。",
       "inputActual": "输入实盘数量",
       "reason": "差异原因",
       "complete": "完成盘点",

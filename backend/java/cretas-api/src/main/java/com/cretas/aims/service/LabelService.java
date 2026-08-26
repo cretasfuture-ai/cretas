@@ -39,14 +39,38 @@ public interface LabelService {
     Optional<Label> getLabelById(String factoryId, String id);
 
     /**
-     * 根据标签编码查询
+     * 根据标签编码查询 (按工厂隔离).
+     *
+     * <p>⛔ 2026-08-26 之前这个方法**不收 factoryId** —— label_code 是全局唯一的,
+     * 于是任何一个已登录用户都能读到别的工厂的标签实体。加 factoryId 参数而不是
+     * 在 repository 上加 {@code AndFactoryId} 派生查询, 是为了让**越权和不存在
+     * 保持可区分**: 见 {@link #getByTraceCode} 的说明。
+     *
+     * @return 命中且属于本工厂 → 该标签; 库里没有这个码 → {@code Optional.empty()}
+     * @throws com.cretas.aims.exception.AuthorizationException 码存在但属于别的工厂
      */
-    Optional<Label> getByLabelCode(String labelCode);
+    Optional<Label> getByLabelCode(String factoryId, String labelCode);
 
     /**
-     * 根据追溯码查询
+     * 根据追溯码查询 (按工厂隔离).
+     *
+     * <p>⛔ 2026-08-26 修复跨租户泄露: 原签名不收 factoryId, 而
+     * {@code GET /api/mobile/{factoryId}/labels/trace/{traceCode}} 把路径上的
+     * factoryId 收下之后**一次都没用过** —— 查询无工厂过滤, 返回的还是裸 Label
+     * 实体。traceCode 的形状是 {@code TRACE-<factoryId>-<yyyyMMdd>-<6位>}, 六位随机
+     * 数来自 {@code Math.random()} 而不是 CSPRNG, 可枚举。
+     *
+     * <p>⚠️ 越权**不能**被伪装成「不存在」: 那会把真实的跨租户探测埋进 404 里,
+     * 日志上看不出来, 也无法告警。所以这里先取再比 factoryId, 不匹配抛
+     * {@link com.cretas.aims.exception.AuthorizationException} (→ 403 + WARN 日志),
+     * 与 {@code scanLabel} 步骤 2 的做法一致。
+     * <p>代价: 保留了一个「这个码存在但不归你」的存在性 oracle。这是有意的取舍 ——
+     * 掩盖越权的代价更大, 且 403 会留下可审计的 WARN, 枚举行为反而变得可见。
+     *
+     * @return 命中且属于本工厂 → 该标签; 库里没有这个码 → {@code Optional.empty()}
+     * @throws com.cretas.aims.exception.AuthorizationException 码存在但属于别的工厂
      */
-    Optional<Label> getByTraceCode(String traceCode);
+    Optional<Label> getByTraceCode(String factoryId, String traceCode);
 
     /**
      * 创建标签
@@ -84,9 +108,17 @@ public interface LabelService {
     void deleteLabel(String id);
 
     /**
-     * 查询批次关联的标签
+     * 查询批次关联的标签 (按工厂隔离).
+     *
+     * <p>⛔ 2026-08-26 同批修复: 原签名不收 factoryId, batchId 又是可猜的
+     * (物料批次号带日期+序号), 于是能读到别厂批次的全部标签。
+     *
+     * <p>⚠️ 命中别厂标签时**抛异常而不是过滤成空列表** —— 过滤会让越权长得和
+     * 「这个批次没有标签」一模一样, 正是上面 {@link #getByTraceCode} 要避免的那件事。
+     *
+     * @throws com.cretas.aims.exception.AuthorizationException 批次的标签属于别的工厂
      */
-    List<Label> getLabelsByBatchId(String batchId);
+    List<Label> getLabelsByBatchId(String factoryId, String batchId);
 
     /**
      * 查询生产批次关联的标签

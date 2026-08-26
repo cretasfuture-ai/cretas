@@ -1,223 +1,101 @@
 /**
- * 报告生成页面
- * Quality Inspector - Report Generation Screen
+ * 质检报告导出 —— 明示不可用
+ * Quality Inspector - Report Export (not available yet)
+ *
+ * APP-CONTRACT-006 (2026-08-25): 这个屏原来是一个**从来没有成功过**的表单。
+ * 三层缺陷互相掩护:
+ *
+ *   1. 表层  成功文案写「报告生成成功, 已保存到文件」, 而「查看报告」按钮的实现是
+ *            `console.log('Open report:', result)`。后端返回的 {url, filename}
+ *            没有任何消费者 —— 不下载、不打开、不分享。
+ *            另外 Alert 标题用的是 `clock.clockSuccess` / `clock.clockFailed` /
+ *            `clock.alert`, 而 quality.json 里有**两个** "clock" 块 (206 行 / 486 行),
+ *            JSON 重复键后者胜出, 这三个键在生效的那一块里根本不存在 ⇒ i18next
+ *            回退成打印键名本身, 用户看到的标题字面就是 `clock.clockSuccess`。
+ *
+ *   2. 中层  它调的 `POST /api/mobile/{factoryId}/reports/quality/generate`
+ *            后端全仓零命中。ReportController 的类映射是 `.../reports`, 其下唯一的
+ *            @PostMapping 是 `/custom` ⇒ 点「生成报告」必然 404。
+ *
+ *   3. 底层  ReportController 确实有 GET /export/pdf 和 /export/excel, 但
+ *            ReportExportServiceImpl 里那两个流式方法是**桩**: 返回 HTTP 200 +
+ *            `filename=report.pdf`, 内容是 "PDF export not yet implemented"。
+ *            把这个屏指过去 = 用户下载到一个打不开的 PDF, 而屏幕报成功。
+ *            ⛔ 404 是诚实的失败; 200 + 假 PDF 是无声的失败。所以没有那样接。
+ *
+ * 为什么不直接把后端桩换成真实现 (同文件 :104 的 exportReportToPDF 是真的, iText):
+ *   - `generateQualityPdfContent` 完全忽略 parameters, 用的是 countByFactoryId
+ *     (**全时段**计数) ⇒「日报」里会是开厂至今的总数, 换一种假数据而已;
+ *   - `exportReportToPDF` 的签名里**没有** maskPrice, 而 default/dashboard 分支
+ *     会打印「总价值 … 元」⇒ 接上等于给仓管角色新开一个金额泄漏口;
+ *     BinaryExportRbacTest 正钉着「桩返回 placeholder, 今天不漏」这个前提。
+ *   - 屏幕原有的 6 个内容选项 (等级分布/分类评分/问题分析/趋势/批次明细) 没有
+ *     任何一个后端分支实现 ⇒ 勾选了也不会出现在报告里。
+ *
+ * ⇒ 在后端真能出文件之前, 这个屏**不提供表单**, 只如实说明状态, 并把用户指向
+ *   两个有真实数据的屏。表单本身也是一种承诺: 让人选格式、选内容、看预览,
+ *   等于告诉他这些选择会体现在产物里。
  */
 
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-
-type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
-import { QI_COLORS } from '../../types/qualityInspector';
-import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
-import { useAuthStore } from '../../store/authStore';
+import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 
-type ReportType = 'daily' | 'weekly' | 'monthly' | 'custom';
-type ReportFormat = 'pdf' | 'excel';
-
-interface ReportOption {
-  id: string;
-  label: string;
-  checked: boolean;
-}
+type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 
 export default function QIReportScreen() {
   const { t } = useTranslation('quality');
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
-  const { user } = useAuthStore();
-  const factoryId = user?.factoryId;
-
-  const [reportType, setReportType] = useState<ReportType>('daily');
-  const [reportFormat, setReportFormat] = useState<ReportFormat>('pdf');
-  const [generating, setGenerating] = useState(false);
-  const [options, setOptions] = useState<ReportOption[]>([
-    { id: 'summary', label: t('report.summary'), checked: true },
-    { id: 'gradeDistribution', label: t('report.gradeDistribution'), checked: true },
-    { id: 'categoryScores', label: t('report.categoryScores'), checked: true },
-    { id: 'issueAnalysis', label: t('report.issueAnalysis'), checked: true },
-    { id: 'trendChart', label: t('report.trendChart'), checked: false },
-    { id: 'batchList', label: t('report.batchList'), checked: false },
-  ]);
-
-  const toggleOption = (id: string) => {
-    setOptions((prev) =>
-      prev.map((opt) =>
-        opt.id === id ? { ...opt, checked: !opt.checked } : opt
-      )
-    );
-  };
-
-  const handleGenerate = async () => {
-    const selectedOptions = options.filter((opt) => opt.checked);
-    if (selectedOptions.length === 0) {
-      Alert.alert(t('clock.alert'), t('report.selectAtLeastOne'));
-      return;
-    }
-
-    try {
-      setGenerating(true);
-
-      // 调用 API 生成报告
-      const result = await qualityInspectorApi.generateReport({
-        type: reportType,
-        format: reportFormat,
-        options: selectedOptions.map((opt) => opt.id),
-      });
-
-      Alert.alert(t('clock.clockSuccess'), t('report.generateSuccess'), [
-        { text: t('report.viewReport'), onPress: () => console.log('Open report:', result) },
-        { text: t('camera.cancel'), style: 'cancel' },
-      ]);
-    } catch (error) {
-      console.error('生成报告失败:', error);
-      Alert.alert(t('clock.clockFailed'), t('report.generateFailed'));
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const renderReportTypeOption = (type: ReportType, label: string, desc: string) => (
-    <TouchableOpacity
-      style={[styles.typeOption, reportType === type && styles.typeOptionActive]}
-      onPress={() => setReportType(type)}
-    >
-      <View style={styles.typeRadio}>
-        {reportType === type && <View style={styles.typeRadioInner} />}
-      </View>
-      <View style={styles.typeInfo}>
-        <Text style={[styles.typeLabel, reportType === type && styles.typeLabelActive]}>
-          {label}
-        </Text>
-        <Text style={styles.typeDesc}>{desc}</Text>
-      </View>
-    </TouchableOpacity>
-  );
-
-  const renderFormatOption = (format: ReportFormat, icon: IoniconsName, label: string) => (
-    <TouchableOpacity
-      style={[styles.formatOption, reportFormat === format && styles.formatOptionActive]}
-      onPress={() => setReportFormat(format)}
-    >
-      <Ionicons
-        name={icon}
-        size={24}
-        color={reportFormat === format ? QI_COLORS.primary : QI_COLORS.textSecondary}
-      />
-      <Text style={[styles.formatLabel, reportFormat === format && styles.formatLabelActive]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
 
   return (
     <View style={styles.container}>
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
       >
-        {/* 报告类型 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('report.reportType')}</Text>
-          <View style={styles.typeCard}>
-            {renderReportTypeOption('daily', t('report.daily'), t('report.dailyDesc'))}
-            {renderReportTypeOption('weekly', t('report.weekly'), t('report.weeklyDesc'))}
-            {renderReportTypeOption('monthly', t('report.monthly'), t('report.monthlyDesc'))}
-            {renderReportTypeOption('custom', t('report.custom'), t('report.customDesc'))}
-          </View>
+        {/* 状态说明 —— 不提供任何"生成"入口 */}
+        <View style={styles.noticeCard}>
+          <Ionicons name="construct-outline" size={44} color={QI_COLORS.warning} />
+          <Text style={styles.noticeTitle}>{t('report.unavailableTitle')}</Text>
+          <Text style={styles.noticeBody}>{t('report.unavailableBody')}</Text>
         </View>
 
-        {/* 报告格式 */}
+        {/* 指向真实有数据的地方 */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('report.exportFormat')}</Text>
-          <View style={styles.formatRow}>
-            {renderFormatOption('pdf', 'document-text', t('report.pdfDocument'))}
-            {renderFormatOption('excel', 'grid', t('report.excelSheet'))}
-          </View>
-        </View>
+          <Text style={styles.sectionTitle}>{t('report.alternativeTitle')}</Text>
 
-        {/* 报告内容 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('report.reportContent')}</Text>
-          <View style={styles.optionsCard}>
-            {options.map((option) => (
-              <TouchableOpacity
-                key={option.id}
-                style={styles.optionItem}
-                onPress={() => toggleOption(option.id)}
-              >
-                <View style={[styles.checkbox, option.checked && styles.checkboxChecked]}>
-                  {option.checked && (
-                    <Ionicons name="checkmark" size={16} color="#fff" />
-                  )}
-                </View>
-                <Text style={styles.optionLabel}>{option.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* 预览 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('report.preview')}</Text>
-          <View style={styles.previewCard}>
-            <View style={styles.previewHeader}>
-              <Ionicons name="document-text" size={40} color={QI_COLORS.primary} />
-              <View style={styles.previewInfo}>
-                <Text style={styles.previewTitle}>
-                  {t('report.title')} - {reportType === 'daily' ? t('report.daily') : reportType === 'weekly' ? t('report.weekly') : reportType === 'monthly' ? t('report.monthly') : t('report.custom')}
-                </Text>
-                <Text style={styles.previewDate}>
-                  {new Date().toLocaleDateString('zh-CN')}
-                </Text>
-              </View>
+          <TouchableOpacity
+            style={styles.linkCard}
+            onPress={() => navigation.navigate('QIAnalysis')}
+          >
+            <Ionicons name="stats-chart" size={22} color={QI_COLORS.primary} />
+            <View style={styles.linkInfo}>
+              <Text style={styles.linkLabel}>{t('report.alternativeAnalysis')}</Text>
+              <Text style={styles.linkDesc}>{t('report.alternativeAnalysisDesc')}</Text>
             </View>
-            <View style={styles.previewContent}>
-              {options
-                .filter((opt) => opt.checked)
-                .map((opt) => (
-                  <View key={opt.id} style={styles.previewItem}>
-                    <Ionicons name="checkmark-circle" size={16} color={QI_COLORS.success} />
-                    <Text style={styles.previewItemText}>{opt.label}</Text>
-                  </View>
-                ))}
+            <Ionicons name="chevron-forward" size={18} color={QI_COLORS.disabled} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.linkCard}
+            onPress={() => navigation.navigate('QITrend')}
+          >
+            <Ionicons name="trending-up" size={22} color={QI_COLORS.primary} />
+            <View style={styles.linkInfo}>
+              <Text style={styles.linkLabel}>{t('report.alternativeTrend')}</Text>
+              <Text style={styles.linkDesc}>{t('report.alternativeTrendDesc')}</Text>
             </View>
-            <Text style={styles.previewFormat}>
-              {t('report.format')}: {reportFormat === 'pdf' ? t('report.pdfDocument') : t('report.excelSheet')}
-            </Text>
-          </View>
+            <Ionicons name="chevron-forward" size={18} color={QI_COLORS.disabled} />
+          </TouchableOpacity>
         </View>
       </ScrollView>
-
-      {/* 生成按钮 */}
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity
-          style={[styles.generateBtn, generating && styles.generateBtnDisabled]}
-          onPress={handleGenerate}
-          disabled={generating}
-        >
-          {generating ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Ionicons name="download-outline" size={20} color="#fff" />
-          )}
-          <Text style={styles.generateBtnText}>
-            {generating ? t('report.generating') : t('report.generate')}
-          </Text>
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
@@ -234,7 +112,30 @@ const styles = StyleSheet.create({
     padding: 16,
   },
 
-  // 区块
+  // 状态说明卡
+  noticeCard: {
+    backgroundColor: QI_COLORS.card,
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  noticeTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: QI_COLORS.text,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  noticeBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: QI_COLORS.textSecondary,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+
+  // 替代入口
   section: {
     marginBottom: 24,
   },
@@ -244,189 +145,26 @@ const styles = StyleSheet.create({
     color: QI_COLORS.text,
     marginBottom: 12,
   },
-
-  // 报告类型
-  typeCard: {
+  linkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: QI_COLORS.card,
     borderRadius: 12,
-    overflow: 'hidden',
-  },
-  typeOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: QI_COLORS.border,
-  },
-  typeOptionActive: {
-    backgroundColor: '#E8F5E9',
-  },
-  typeRadio: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: QI_COLORS.disabled,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  typeRadioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: QI_COLORS.primary,
-  },
-  typeInfo: {
-    flex: 1,
-  },
-  typeLabel: {
-    fontSize: 15,
-    color: QI_COLORS.text,
-    fontWeight: '500',
-  },
-  typeLabelActive: {
-    color: QI_COLORS.primary,
-  },
-  typeDesc: {
-    fontSize: 13,
-    color: QI_COLORS.textSecondary,
-    marginTop: 2,
-  },
-
-  // 导出格式
-  formatRow: {
-    flexDirection: 'row',
+    marginBottom: 12,
     gap: 12,
   },
-  formatOption: {
+  linkInfo: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: QI_COLORS.card,
-    borderRadius: 12,
-    paddingVertical: 16,
-    gap: 8,
-    borderWidth: 2,
-    borderColor: 'transparent',
   },
-  formatOptionActive: {
-    borderColor: QI_COLORS.primary,
-    backgroundColor: '#E8F5E9',
-  },
-  formatLabel: {
-    fontSize: 14,
-    color: QI_COLORS.textSecondary,
-  },
-  formatLabelActive: {
-    color: QI_COLORS.primary,
-    fontWeight: '500',
-  },
-
-  // 报告内容选项
-  optionsCard: {
-    backgroundColor: QI_COLORS.card,
-    borderRadius: 12,
-    padding: 4,
-  },
-  optionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: QI_COLORS.disabled,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  checkboxChecked: {
-    backgroundColor: QI_COLORS.primary,
-    borderColor: QI_COLORS.primary,
-  },
-  optionLabel: {
+  linkLabel: {
     fontSize: 15,
+    fontWeight: '500',
     color: QI_COLORS.text,
   },
-
-  // 预览
-  previewCard: {
-    backgroundColor: QI_COLORS.card,
-    borderRadius: 12,
-    padding: 16,
-  },
-  previewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: QI_COLORS.border,
-  },
-  previewInfo: {
-    marginLeft: 12,
-  },
-  previewTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: QI_COLORS.text,
-  },
-  previewDate: {
+  linkDesc: {
     fontSize: 13,
     color: QI_COLORS.textSecondary,
     marginTop: 2,
-  },
-  previewContent: {
-    marginBottom: 12,
-  },
-  previewItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  previewItemText: {
-    fontSize: 14,
-    color: QI_COLORS.text,
-  },
-  previewFormat: {
-    fontSize: 13,
-    color: QI_COLORS.textSecondary,
-    textAlign: 'right',
-  },
-
-  // 底部栏
-  bottomBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: QI_COLORS.card,
-    borderTopWidth: 1,
-    borderTopColor: QI_COLORS.border,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  generateBtn: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: QI_COLORS.primary,
-    borderRadius: 12,
-    paddingVertical: 16,
-    gap: 8,
-  },
-  generateBtnDisabled: {
-    opacity: 0.7,
-  },
-  generateBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
   },
 });

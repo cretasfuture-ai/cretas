@@ -4,6 +4,7 @@
  */
 import { get, post, put, del } from './request';
 import type { ApiResponse } from '@/types/api';
+import { toDateString } from '@/utils/dateFormat';
 
 // ==================== 类型定义 ====================
 
@@ -140,7 +141,7 @@ export function isDemoSchedulingFactory(factoryId?: string): boolean {
 }
 
 function todayDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return toDateString(new Date());
 }
 
 function atTime(hour: number, minute = 0): string {

@@ -37,6 +37,7 @@ import {
   DepartmentAttendance
 } from '../../../services/api/timeclockApiClient';
 import { useAuthStore } from '../../../store/authStore';
+import { formatDate } from '../../../utils/formatters';
 
 // Types
 type AttendanceStatus = 'normal' | 'late' | 'early' | 'absent' | 'overtime';
@@ -100,7 +101,6 @@ export default function PersonnelAttendanceScreen() {
   // 计算日期范围
   const getDateRange = useCallback((range: DateRangeType): { startDate: string; endDate: string } => {
     const now = new Date();
-    const formatDate = (date: Date): string => date.toISOString().split('T')[0] ?? '';
 
     const today = formatDate(now);
 
@@ -183,7 +183,7 @@ export default function PersonnelAttendanceScreen() {
       employeeName: `员工${record.userId}`,
       employeeCode: String(record.userId).padStart(3, '0'),
       department: '生产部门',
-      date: clockIn ? (clockIn.toISOString().split('T')[0] ?? '') : (new Date().toISOString().split('T')[0] ?? ''),
+      date: clockIn ? (formatDate(clockIn) ?? '') : (formatDate(new Date()) ?? ''),
       clockInTime: clockIn ? `${String(clockIn.getHours()).padStart(2, '0')}:${String(clockIn.getMinutes()).padStart(2, '0')}` : undefined,
       clockOutTime: clockOut ? `${String(clockOut.getHours()).padStart(2, '0')}:${String(clockOut.getMinutes()).padStart(2, '0')}` : undefined,
       workHours,

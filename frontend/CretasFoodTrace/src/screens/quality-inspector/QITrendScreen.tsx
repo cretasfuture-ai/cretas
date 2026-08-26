@@ -22,28 +22,83 @@ import { useTranslation } from 'react-i18next';
 
 import {
   QI_COLORS,
-  GRADE_COLORS,
 } from '../../types/qualityInspector';
-import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
+import {
+  qualityInspectorApi,
+  QITrendPointWire,
+} from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CHART_WIDTH = SCREEN_WIDTH - 64;
 
-interface TrendData {
-  dates: string[];
-  passRates: number[];
-  avgScores: number[];
-  inspectionCounts: number[];
-  gradesTrend: {
-    A: number[];
-    B: number[];
-    C: number[];
-    D: number[];
-  };
+/**
+ * 页面模型。
+ *
+ * APP-CONTRACT-005 (2026-08-25): 这个页面此前有两个互相掩盖的缺陷 ——
+ *
+ *  (1) 它声明的 dates / passRates / avgScores / inspectionCounts / gradesTrend
+ *      在后端全仓**零命中**。它打的 `/reports/dashboard/trends` 返回的是
+ *      productionTrend / qualityTrend / costTrend / materialTrend / equipmentTrend。
+ *      也就是说请求**成功**时 getMetricData() 拿到 undefined, 下一行 values.length
+ *      直接崩 —— 没有任何一条路径能显示真实数据。
+ *  (2) catch 分支用 `Math.random()` 现编合格率 / 平均分 / A-D 等级分布, 而且不带
+ *      任何"演示数据"标记。于是 (1) 的崩溃被 (2) 掩盖成"页面看起来正常", 用户看到的
+ *      是一屏随机数。
+ *
+ * 现在: 换到后端真实存在的质检趋势端点
+ *   GET /processing/quality/trends?days=N -> [{ date, passRate, inspectionCount }]
+ * (ProcessingServiceImpl#getQualityTrends, 数据源是 quality_inspections 表)。
+ *
+ * 后端**没有数据源**的两个指标一律不画:
+ *   - 综合评分 avgScore  : quality_inspections 表里没有综合评分字段
+ *                          (同一结论已写在 QIAnalysisScreen 的 APP-CONTRACT-004 里)
+ *   - 逐日等级分布 A/B/C/D: 该端点只逐日返回合格率与检验数, 不返回等级
+ * 它们显示"该指标暂无数据源 + 原因", **不编数字**。
+ *
+ * 空日的处理: 后端对没有质检记录的日期 put 的是 passRate=0 / inspectionCount=0。
+ * `0%` 与"当天没人做质检"在图上长得一模一样, 所以这里用 inspectionCount === 0
+ * 把它还原成 null(无读数), 图上留空, 统计摘要也不把它算进平均 —— 检验数(count)
+ * 例外, 计数的 0 是合法读数。
+ */
+interface TrendPoint {
+  /** 后端原样返回的 YYYY-MM-DD */
+  date: string;
+  /** X 轴短标签 M/D */
+  label: string;
+  /** null = 当天没有质检记录, 不是"合格率 0%" */
+  passRate: number | null;
+  inspectionCount: number;
 }
 
 type MetricType = 'passRate' | 'avgScore' | 'count';
+
+/** 每个指标在**当前后端**有没有数据源。null 的那个不画图, 显示原因。 */
+const METRIC_HAS_SOURCE: Record<MetricType, boolean> = {
+  passRate: true,
+  avgScore: false,
+  count: true,
+};
+
+/** 把后端逐日项转成页面模型; 形状不对就抛, 不做"猜一个默认值"式的兜底。 */
+function adaptTrendPoints(raw: unknown): TrendPoint[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('TREND_SHAPE_UNEXPECTED');
+  }
+  return (raw as QITrendPointWire[]).map((item) => {
+    const date = String(item?.date ?? '');
+    const inspectionCount = Number(item?.inspectionCount ?? 0);
+    const rawRate = Number(item?.passRate);
+    const [, month, day] = date.split('-');
+    return {
+      date,
+      label: month && day ? `${Number(month)}/${Number(day)}` : date,
+      // 没有质检记录的那天后端给的是 0 —— 那不是一个读数, 还原成 null
+      passRate: inspectionCount > 0 && Number.isFinite(rawRate) ? rawRate : null,
+      inspectionCount: Number.isFinite(inspectionCount) ? inspectionCount : 0,
+    };
+  });
+}
 
 export default function QITrendScreen() {
   const { t } = useTranslation('quality');
@@ -53,7 +108,8 @@ export default function QITrendScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [data, setData] = useState<TrendData | null>(null);
+  const [points, setPoints] = useState<TrendPoint[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<'7d' | '30d' | '90d'>('7d');
   const [metric, setMetric] = useState<MetricType>('passRate');
 
@@ -61,36 +117,28 @@ export default function QITrendScreen() {
     if (factoryId) {
       qualityInspectorApi.setFactoryId(factoryId);
       loadData();
+    } else {
+      setLoading(false);
+      setError(t('analysis.noFactory'));
     }
   }, [factoryId, period]);
 
   const loadData = async () => {
     try {
       setLoading(true);
+      setError(null);
       const result = await qualityInspectorApi.getTrendData(period);
-      setData(result);
-    } catch (error) {
-      console.error(t('trend.loading'), error);
-      // 使用模拟数据
-      const days = period === '7d' ? 7 : period === '30d' ? 30 : 90;
-      const dates = Array.from({ length: Math.min(days, 7) }, (_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - (Math.min(days, 7) - 1 - i));
-        return `${d.getMonth() + 1}/${d.getDate()}`;
-      });
-
-      setData({
-        dates,
-        passRates: dates.map(() => 85 + Math.random() * 12),
-        avgScores: dates.map(() => 80 + Math.random() * 15),
-        inspectionCounts: dates.map(() => Math.floor(15 + Math.random() * 10)),
-        gradesTrend: {
-          A: dates.map(() => Math.floor(8 + Math.random() * 5)),
-          B: dates.map(() => Math.floor(6 + Math.random() * 4)),
-          C: dates.map(() => Math.floor(2 + Math.random() * 3)),
-          D: dates.map(() => Math.floor(Math.random() * 2)),
-        },
-      });
+      setPoints(adaptTrendPoints(result));
+    } catch (err) {
+      // ⛔ 这里以前用 Math.random() 编了一整屏数据。质检是溯源链上的责任环节,
+      //    编出来的合格率会被当成真的看 —— 失败就明确说失败。
+      console.error('[QITrendScreen] load trend failed:', err);
+      setPoints(null);
+      setError(
+        (err as Error)?.message === 'TREND_SHAPE_UNEXPECTED'
+          ? t('analysis.dataFormatError')
+          : t('analysis.loadError')
+      );
     } finally {
       setLoading(false);
     }
@@ -102,19 +150,25 @@ export default function QITrendScreen() {
     setRefreshing(false);
   }, [period]);
 
-  const getMetricData = (): number[] => {
-    if (!data) return [];
+  /**
+   * 当前指标的逐日读数。null = 那天没有读数(不是 0)。
+   * 没有数据源的指标返回空数组, 由调用方走"暂无数据源"分支。
+   */
+  const getMetricSeries = (): (number | null)[] => {
+    if (!points || !METRIC_HAS_SOURCE[metric]) return [];
     switch (metric) {
       case 'passRate':
-        return data.passRates;
-      case 'avgScore':
-        return data.avgScores;
+        return points.map((p) => p.passRate);
       case 'count':
-        return data.inspectionCounts;
+        return points.map((p) => p.inspectionCount);
       default:
         return [];
     }
   };
+
+  /** 有读数的那些值, 用于 max/min/avg —— 空日不参与。 */
+  const getMetricValues = (): number[] =>
+    getMetricSeries().filter((v): v is number => v !== null);
 
   const getMetricLabel = (): string => {
     switch (metric) {
@@ -142,15 +196,36 @@ export default function QITrendScreen() {
     }
   };
 
-  // 简单折线图渲染
+  /** 后端没有这个指标的数据源时显示的卡片 —— 说清"为什么没有", 不画空图。 */
+  const renderNoSource = (reason: string) => (
+    <View style={styles.noSourceBox}>
+      <Ionicons name="information-circle-outline" size={28} color={QI_COLORS.textSecondary} />
+      <Text style={styles.noSourceTitle}>{t('trend.noMetricSource')}</Text>
+      <Text style={styles.noSourceReason}>{reason}</Text>
+    </View>
+  );
+
+  // 简单折线图渲染。series 里的 null = 那天没有质检记录, 图上留空, 不画成 0。
   const renderLineChart = () => {
-    const values = getMetricData();
-    if (values.length === 0) return null;
+    if (!METRIC_HAS_SOURCE[metric]) {
+      return renderNoSource(t('trend.avgScoreNoSource'));
+    }
+
+    const series = getMetricSeries();
+    const values = getMetricValues();
+    if (series.length === 0 || values.length === 0) {
+      return (
+        <View style={styles.noSourceBox}>
+          <Ionicons name="bar-chart-outline" size={28} color={QI_COLORS.textSecondary} />
+          <Text style={styles.noSourceTitle}>{t('trend.noDataInRange')}</Text>
+        </View>
+      );
+    }
 
     const maxValue = Math.max(...values);
     const minValue = Math.min(...values);
     const range = maxValue - minValue || 1;
-    const chartHeight = 160;
+    const digits = metric === 'count' ? 0 : 1;
 
     return (
       <View style={styles.chartContainer}>
@@ -158,11 +233,11 @@ export default function QITrendScreen() {
         <View style={styles.chart}>
           {/* Y轴刻度 */}
           <View style={styles.yAxis}>
-            <Text style={styles.yAxisLabel}>{maxValue.toFixed(metric === 'count' ? 0 : 1)}</Text>
+            <Text style={styles.yAxisLabel}>{maxValue.toFixed(digits)}</Text>
             <Text style={styles.yAxisLabel}>
-              {((maxValue + minValue) / 2).toFixed(metric === 'count' ? 0 : 1)}
+              {((maxValue + minValue) / 2).toFixed(digits)}
             </Text>
-            <Text style={styles.yAxisLabel}>{minValue.toFixed(metric === 'count' ? 0 : 1)}</Text>
+            <Text style={styles.yAxisLabel}>{minValue.toFixed(digits)}</Text>
           </View>
 
           {/* 图表区域 */}
@@ -174,10 +249,11 @@ export default function QITrendScreen() {
               <View style={styles.gridLine} />
             </View>
 
-            {/* 数据点和线 */}
+            {/* 数据点。x 位置按**完整序列**的下标算, 空日就是一个缺口 */}
             <View style={styles.dataPoints}>
-              {values.map((value, index) => {
-                const x = (index / (values.length - 1)) * 100;
+              {series.map((value, index) => {
+                if (value === null) return null; // 无读数 → 不画点
+                const x = series.length > 1 ? (index / (series.length - 1)) * 100 : 50;
                 const y = ((maxValue - value) / range) * 100;
                 return (
                   <View
@@ -195,68 +271,44 @@ export default function QITrendScreen() {
               })}
             </View>
 
-            {/* X轴标签 */}
+            {/* X轴标签: 点多的时候只标首/中/尾, 否则挤成一团 */}
             <View style={styles.xAxis}>
-              {data?.dates.map((date, index) => (
-                <Text key={index} style={styles.xAxisLabel}>
-                  {date}
-                </Text>
-              ))}
+              {(points ?? [])
+                .filter((_, i, arr) =>
+                  arr.length <= 10 ||
+                  i === 0 ||
+                  i === arr.length - 1 ||
+                  i === Math.floor((arr.length - 1) / 2)
+                )
+                .map((p) => (
+                  <Text key={p.date} style={styles.xAxisLabel}>
+                    {p.label}
+                  </Text>
+                ))}
             </View>
           </View>
         </View>
+        {series.some((v) => v === null) && (
+          <Text style={styles.chartFootnote}>{t('trend.emptyDaysNote')}</Text>
+        )}
       </View>
     );
   };
 
-  // 等级趋势堆叠条形图
-  const renderGradesTrend = () => {
-    if (!data || !data.gradesTrend) return null;
-
-    const { A = [], B = [], C = [], D = [] } = data.gradesTrend;
-    const totals = data.dates.map((_, i) =>
-      (A[i] ?? 0) + (B[i] ?? 0) + (C[i] ?? 0) + (D[i] ?? 0)
-    );
-    const maxTotal = Math.max(...totals, 1); // Avoid division by zero
-
-    return (
-      <View style={styles.gradesTrendContainer}>
-        <Text style={styles.sectionTitle}>{t('trend.gradeTrend')}</Text>
-        <View style={styles.gradesTrendChart}>
-          {data.dates.map((date, i) => {
-            const total = totals[i] ?? 1;
-            const height = (total / maxTotal) * 120;
-            const aH = ((A[i] ?? 0) / total) * height;
-            const bH = ((B[i] ?? 0) / total) * height;
-            const cH = ((C[i] ?? 0) / total) * height;
-            const dH = ((D[i] ?? 0) / total) * height;
-
-            return (
-              <View key={i} style={styles.stackedBar}>
-                <View style={styles.stackedBarInner}>
-                  <View style={[styles.stackedSegment, { height: dH, backgroundColor: GRADE_COLORS.D }]} />
-                  <View style={[styles.stackedSegment, { height: cH, backgroundColor: GRADE_COLORS.C }]} />
-                  <View style={[styles.stackedSegment, { height: bH, backgroundColor: GRADE_COLORS.B }]} />
-                  <View style={[styles.stackedSegment, { height: aH, backgroundColor: GRADE_COLORS.A }]} />
-                </View>
-                <Text style={styles.stackedBarLabel}>{date}</Text>
-              </View>
-            );
-          })}
-        </View>
-
-        {/* 图例 */}
-        <View style={styles.legend}>
-          {(['A', 'B', 'C', 'D'] as const).map((grade) => (
-            <View key={grade} style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: GRADE_COLORS[grade] }]} />
-              <Text style={styles.legendText}>{grade}级</Text>
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  };
+  /**
+   * 等级趋势。
+   *
+   * 这里原来画的是 A/B/C/D 逐日堆叠柱 —— 数据来自 catch 分支的 Math.random()。
+   * `/processing/quality/trends` 逐日只返回 { date, passRate, inspectionCount },
+   * **不返回等级**, 所以这个图没有数据源: 说明原因, 不画。
+   * (整月的等级分布在 QIAnalysisScreen 上有真数据, 走 /reports/dashboard/quality。)
+   */
+  const renderGradesTrend = () => (
+    <View style={styles.gradesTrendContainer}>
+      <Text style={styles.sectionTitle}>{t('trend.gradeTrend')}</Text>
+      {renderNoSource(t('trend.gradeTrendNoSource'))}
+    </View>
+  );
 
   const renderPeriodTab = (p: '7d' | '30d' | '90d', label: string) => (
     <TouchableOpacity
@@ -294,6 +346,36 @@ export default function QITrendScreen() {
     );
   }
 
+  // 取不到数据就明确说取不到 (照 QIAnalysisScreen 的三种错误态), ⛔ 不编数据顶上。
+  if (error && !points) {
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.bottom + 20, alignItems: 'center', justifyContent: 'center', flex: 1 },
+        ]}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[QI_COLORS.primary]} />
+        }
+      >
+        <Ionicons name="alert-circle-outline" size={48} color="#999" />
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={loadData}>
+          <Text style={styles.retryButtonText}>{t('analysis.retry', '重试')}</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    );
+  }
+
+  const metricValues = getMetricValues();
+  const hasSource = METRIC_HAS_SOURCE[metric];
+  const digits = metric === 'count' ? 0 : 1;
+  const daysWithData = points ? points.filter((p) => p.inspectionCount > 0).length : 0;
+  /** 摘要格子: 没有数据源 / 没有读数 一律显示 "—", 不显示 Infinity 或 NaN */
+  const summaryValue = (compute: (vals: number[]) => number): string =>
+    hasSource && metricValues.length > 0 ? compute(metricValues).toFixed(digits) : '—';
+
   return (
     <ScrollView
       style={styles.container}
@@ -325,28 +407,26 @@ export default function QITrendScreen() {
         {renderLineChart()}
       </View>
 
-      {/* 统计摘要 */}
+      {/* 统计摘要 —— 只统计**有质检记录**的那些天; 没有读数显示 "—" 而不是 0 */}
       <View style={styles.summaryCard}>
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>{t('trend.maxValue')}</Text>
           <Text style={styles.summaryValue}>
-            {Math.max(...getMetricData()).toFixed(metric === 'count' ? 0 : 1)}
+            {summaryValue((vals) => Math.max(...vals))}
           </Text>
         </View>
         <View style={styles.summaryDivider} />
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>{t('trend.minValue')}</Text>
           <Text style={styles.summaryValue}>
-            {Math.min(...getMetricData()).toFixed(metric === 'count' ? 0 : 1)}
+            {summaryValue((vals) => Math.min(...vals))}
           </Text>
         </View>
         <View style={styles.summaryDivider} />
         <View style={styles.summaryItem}>
           <Text style={styles.summaryLabel}>{t('trend.avgValue')}</Text>
           <Text style={styles.summaryValue}>
-            {(
-              getMetricData().reduce((a, b) => a + b, 0) / getMetricData().length
-            ).toFixed(metric === 'count' ? 0 : 1)}
+            {summaryValue((vals) => vals.reduce((a, b) => a + b, 0) / vals.length)}
           </Text>
         </View>
       </View>
@@ -356,17 +436,34 @@ export default function QITrendScreen() {
         {renderGradesTrend()}
       </View>
 
-      {/* 分析说明 */}
+      {/*
+        分析说明。
+
+        原来这里写死三句结论 ("合格率整体保持稳定，建议关注波动较大的时段…"),
+        与实际数据无关 —— 数据再差也照打"保持稳定"。那是"结论标签硬编码"的形态,
+        和 Math.random() 属于同一类问题。现在只陈述从读数算出来的事实。
+      */}
       <View style={styles.insightCard}>
         <View style={styles.insightHeader}>
           <Ionicons name="bulb-outline" size={20} color={QI_COLORS.warning} />
           <Text style={styles.insightTitle}>{t('trend.trendAnalysis')}</Text>
         </View>
         <Text style={styles.insightText}>
-          {metric === 'passRate' && t('trend.passRateInsight')}
-          {metric === 'avgScore' && t('trend.avgScoreInsight')}
-          {metric === 'count' && t('trend.countInsight')}
+          {t('trend.coverageNote', {
+            total: points?.length ?? 0,
+            withData: daysWithData,
+          })}
+          {hasSource && metricValues.length >= 2
+            ? ` ${t('trend.changeNote', {
+                first: metricValues[0]?.toFixed(digits) ?? '—',
+                last: metricValues[metricValues.length - 1]?.toFixed(digits) ?? '—',
+                delta: (
+                  (metricValues[metricValues.length - 1] ?? 0) - (metricValues[0] ?? 0)
+                ).toFixed(digits),
+              })}`
+            : ''}
         </Text>
+        <Text style={styles.insightSource}>{t('trend.dataSourceNote')}</Text>
       </View>
     </ScrollView>
   );
@@ -390,6 +487,47 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: QI_COLORS.textSecondary,
     fontSize: 14,
+  },
+
+  // 错误态
+  errorText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    backgroundColor: QI_COLORS.primary,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 14,
+  },
+
+  // "该指标暂无数据源"
+  noSourceBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 12,
+  },
+  noSourceTitle: {
+    marginTop: 8,
+    fontSize: 14,
+    fontWeight: '500',
+    color: QI_COLORS.text,
+    textAlign: 'center',
+  },
+  noSourceReason: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
+    color: QI_COLORS.textSecondary,
+    textAlign: 'center',
   },
 
   // 时间周期
@@ -521,6 +659,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: QI_COLORS.textSecondary,
   },
+  chartFootnote: {
+    marginTop: 10,
+    fontSize: 11,
+    color: QI_COLORS.textSecondary,
+  },
 
   // 统计摘要
   summaryCard: {
@@ -628,5 +771,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: QI_COLORS.textSecondary,
     lineHeight: 20,
+  },
+  insightSource: {
+    marginTop: 6,
+    fontSize: 11,
+    color: QI_COLORS.textSecondary,
+    opacity: 0.8,
   },
 });

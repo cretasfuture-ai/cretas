@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Image, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import {
   ActivityIndicator,
@@ -7,11 +7,14 @@ import {
   Button,
   Card,
   Chip,
+  Dialog,
   HelperText,
   IconButton,
+  Portal,
   Text,
   TextInput,
 } from 'react-native-paper';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -23,6 +26,7 @@ import { materialTypeApiClient, MaterialType } from '../../../services/api/mater
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
 import { roleCanViewPrice } from '../../../config/rowActionsConfig';
+import { formatDate, parseYmdOrToday } from '../../../utils/formatters';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList, 'SupplierDeliveryCreate'>;
 
@@ -39,6 +43,9 @@ interface DraftLine {
   showManualMaterialId: boolean;
 }
 
+// 送货日期在这条链上的唯一格式是 YYYY-MM-DD
+// (validate() 里有 /^\d{4}-\d{2}-\d{2}$/ 校验, 拼错整单提交不了)。
+// 滚轮选完之后必须经过这里再写回, 不要在别处另拼一份。
 const newLine = (): DraftLine => ({
   key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   ingredientName: '',
@@ -74,12 +81,25 @@ export function SupplierDeliveryCreateScreen() {
   const [supplierSearch, setSupplierSearch] = useState('');
   const [showManualSupplierId, setShowManualSupplierId] = useState(false);
 
-  const [deliveryDate, setDeliveryDate] = useState(new Date().toISOString().slice(0, 10));
+  // 默认今天(本地日历日)。⛔ 不用 toISOString(): 它按 UTC 截断,
+  //    东八区 08:00 之前会默认成「昨天」—— 早班收货正好撞上。
+  const [deliveryDate, setDeliveryDate] = useState(formatDate(new Date()));
   const [noteNumber, setNoteNumber] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
   const [submitting, setSubmitting] = useState(false);
   const [ocrSubmitting, setOcrSubmitting] = useState(false);
   const [ocrPhotoUri, setOcrPhotoUri] = useState<string | null>(null);
+
+  // ============================================================
+  // 送货日期滚轮 (2026-08-26)
+  // 现场原话:「这个日期改下备, 改成滚轮的, 手写有点费事」
+  // ============================================================
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const pickerInitialDate = useMemo(() => parseYmdOrToday(deliveryDate), [deliveryDate]);
+  // 写回一律走 formatYmd —— validate() 里那道 /^\d{4}-\d{2}-\d{2}$/ 拦的就是这个格式。
+  const commitPickedDate = useCallback((date: Date) => {
+    setDeliveryDate(formatDate(date));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -359,14 +379,28 @@ export function SupplierDeliveryCreateScreen() {
               />
             ) : null}
             <View style={styles.row}>
-              <TextInput
-                label="送货日期"
-                mode="outlined"
-                value={deliveryDate}
-                onChangeText={setDeliveryDate}
-                placeholder="YYYY-MM-DD"
-                style={[styles.field, styles.flex]}
-              />
+              {/* 2026-08-26 改成滚轮选, 不再手打
+                  (editable={false} + 外层 TouchableOpacity + 内层 pointerEvents="none") */}
+              <TouchableOpacity
+                style={styles.flex}
+                onPress={() => setDatePickerVisible(true)}
+                disabled={submitting}
+                accessibilityRole="button"
+                accessibilityLabel="选择送货日期"
+                testID="supplier-delivery-date-picker"
+              >
+                <View pointerEvents="none">
+                  <TextInput
+                    label="送货日期"
+                    mode="outlined"
+                    value={deliveryDate}
+                    editable={false}
+                    disabled={submitting}
+                    right={<TextInput.Icon icon="calendar" />}
+                    style={styles.field}
+                  />
+                </View>
+              </TouchableOpacity>
               <TextInput
                 label="送货单号"
                 mode="outlined"
@@ -509,6 +543,40 @@ export function SupplierDeliveryCreateScreen() {
           保存为待验收草稿
         </Button>
       </View>
+
+      {/* 送货日期滚轮 —— 整屏只有这一个实例。
+          用户要的是滚轮, 所以两端都显式 display="spinner"(Android 默认是日历不是滚轮)。 */}
+      {datePickerVisible && (Platform.OS === 'ios' ? (
+        <Portal>
+          <Dialog visible onDismiss={() => setDatePickerVisible(false)}>
+            <Dialog.Title>选择送货日期</Dialog.Title>
+            <Dialog.Content>
+              <DateTimePicker
+                value={pickerInitialDate}
+                mode="date"
+                display="spinner"
+                onChange={(_event, date) => {
+                  if (date) commitPickedDate(date);
+                }}
+              />
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setDatePickerVisible(false)}>完成</Button>
+            </Dialog.Actions>
+          </Dialog>
+        </Portal>
+      ) : (
+        <DateTimePicker
+          value={pickerInitialDate}
+          mode="date"
+          display="spinner"
+          onChange={(event, date) => {
+            // Android 是模态: 无论确定还是取消都要收起, 否则下次点不开
+            setDatePickerVisible(false);
+            if (event.type === 'set' && date) commitPickedDate(date);
+          }}
+        />
+      ))}
     </SafeAreaView>
   );
 }

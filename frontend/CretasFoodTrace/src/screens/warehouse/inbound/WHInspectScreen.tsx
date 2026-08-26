@@ -30,6 +30,7 @@ import { materialBatchApiClient, MaterialBatch } from "../../../services/api/mat
 import { qualityInspectionApiClient, InspectionResult } from "../../../services/api/qualityInspectionApiClient";
 import { useAuthStore } from "../../../store/authStore";
 import { handleError } from "../../../utils/errorHandler";
+import { formatDate } from '../../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<WHInboundStackParamList>;
 type RouteType = RouteProp<WHInboundStackParamList, "WHInspect">;
@@ -151,7 +152,7 @@ export function WHInspectScreen() {
     setSubmitting(true);
     try {
       const sampleSizeNum = parseFloat(sampleWeight) || 0;
-      const today = new Date().toISOString().split('T')[0] as string; // YYYY-MM-DD
+      const today = formatDate(new Date()) as string; // YYYY-MM-DD
 
       await qualityInspectionApiClient.submitInspection(productionBatchId, {
         inspectorId: userId,

@@ -21,6 +21,7 @@ import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { WaterfallChart, WaterfallDataItem } from '../../components/charts';
 import { theme } from '../../theme';
+import { formatDate } from '../../utils/formatters';
 
 // 创建 CostVarianceReport 专用 logger
 const costVarianceLogger = logger.createContextLogger('CostVarianceReport');
@@ -60,8 +61,8 @@ export default function CostVarianceReportScreen() {
     }
 
     return {
-      startDate: startDate.toISOString().split('T')[0] as string,
-      endDate: endDate.toISOString().split('T')[0] as string,
+      startDate: formatDate(startDate) as string,
+      endDate: formatDate(endDate) as string,
     };
   }, [timeRange]);
 

@@ -104,6 +104,7 @@ import {
 } from '@/api/restaurant/supplierDeliveryNote';
 import { handleCatchError } from '@/utils/errorToast';
 import { isAxiosError } from 'axios';
+import { toDateString } from '@/utils/dateFormat';
 
 const props = defineProps<{ modelValue: boolean; factoryId: string }>();
 const emit = defineEmits<{
@@ -114,7 +115,7 @@ const emit = defineEmits<{
 const router = useRouter();
 const uploadRef = ref<UploadInstance>();
 const supplierId = ref<string>('');
-const deliveryDate = ref<string>(new Date().toISOString().slice(0, 10));
+const deliveryDate = ref<string>(toDateString(new Date()));
 const selectedFile = ref<File | null>(null);
 const submitting = ref(false);
 const limits = ref<NoteLimits | null>(null);

@@ -29,6 +29,7 @@ import { getFactoryId } from '../../types/auth';
 import { getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { GaugeChart } from '../../components/charts';
+import { formatDate } from '../../utils/formatters';
 
 // Create OTIF Report specific logger
 const otifReportLogger = logger.createContextLogger('OtifReport');
@@ -74,8 +75,8 @@ export default function OnTimeDeliveryReportScreen() {
     }
 
     return {
-      startDate: startDate.toISOString().split('T')[0] as string,
-      endDate: endDate.toISOString().split('T')[0] as string,
+      startDate: formatDate(startDate) as string,
+      endDate: formatDate(endDate) as string,
     };
   }, [timeRange]);
 

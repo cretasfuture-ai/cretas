@@ -26,6 +26,7 @@ import { APP_CONFIG, API_BASE_URL } from '../../constants/config';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { getUserPermissions, hasPermission } from '../../types/auth';
+import { formatDate } from '../../utils/formatters';
 
 // 创建MaterialBatchManagement专用logger
 const materialBatchLogger = logger.createContextLogger('MaterialBatchManagement');
@@ -314,7 +315,7 @@ export default function MaterialBatchManagementScreen() {
       materialBatchLogger.info('转为冻品', { batchId: batch.id });
 
       // 获取当前日期
-      const today = new Date().toISOString().split('T')[0] as string;
+      const today = formatDate(new Date()) as string;
 
       // 调用API
       await materialBatchApiClient.convertToFrozen(

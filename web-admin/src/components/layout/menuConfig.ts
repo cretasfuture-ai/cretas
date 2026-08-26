@@ -115,6 +115,25 @@ const rawMenuConfig: MenuItem[] = [
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production', groupLabel: '生产过程' },
+      // 🔴 2026-08-26: B8 生产进度数字大屏 —— 客户 2026-04 原话点名要的东西
+      //   (ProductionProgressDashboardController:19 「可以做一个数字打屏嘛…看到当天所有商品
+      //   工序生产的一个进度」), 2026-04-08 就做完了(后端 203 行零硬编码 + 162 行单测,
+      //   前端深色大屏版式 + 30 秒自动刷新), 而 menuConfig 里一直**零命中** ⇒ 用户点不到。
+      //   ⚠️ routedPagesAreReachable 曾把它豁免掉, 理由写的是「从首页卡片进入」——
+      //      实测全 web-admin 零处引用, 那个理由是假的; 豁免已同步撤掉。
+      //
+      // ⛔ module 必须是 'production', **不能**是 'analytics':
+      //   · 后端 @RequireModule("production_plan") → ProductionModuleRegistry:20 映射
+      //     permissionModule = 'production' → UserModuleAccessServiceImpl.roleDefaultAllows
+      //     查 production:read / :write / :read_write。
+      //   · workshop_supervisor 的 analytics 是 '-'(permission.ts:311), production 是 'r'。
+      //   ⇒ 挂 analytics 车间主管一辈子打不开 —— 而他正是这块墙的受众。
+      //   ▎菜单闸判的模块与后端闸判的模块在这里是**同一个**, 这是刻意对齐, 别改。
+      //
+      // ⛔ 不加 roles 白名单。/dashboard/ai-value 那条加 roles 是因为它 module:'dashboard'
+      //   而 dashboard:read 人人都有(菜单宽、页面窄 ⇒ 看得见点不开); 这里 module 本身就是
+      //   后端要的那个, 再叠 roles 只会把车间主管挡在外面 —— 那是把问题反着修一遍。
+      { path: '/dashboard/production-progress', title: '生产进度大屏', icon: '', module: 'production' },
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
       { path: '/production/pending-queue', title: '未完成计划队列', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },

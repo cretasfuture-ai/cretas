@@ -29,6 +29,7 @@ import { useNavigation } from '@react-navigation/native';
 import { DISPATCHER_THEME, LineSchedule } from '../../../types/dispatcher';
 import { schedulingApiClient, ProductionLine } from '../../../services/api/schedulingApiClient';
 import { isAxiosError } from 'axios';
+import { formatDate } from '../../../utils/formatters';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HOUR_WIDTH = 60; // 每小时的宽度
@@ -247,7 +248,7 @@ export default function PlanGanttScreen() {
   const changeDate = (delta: number) => {
     const date = new Date(currentDate);
     date.setDate(date.getDate() + delta);
-    const newDate = date.toISOString().substring(0, 10); // YYYY-MM-DD format
+    const newDate = formatDate(date); // YYYY-MM-DD format
     setCurrentDate(newDate);
     // loadData will be called automatically via useEffect dependency
   };

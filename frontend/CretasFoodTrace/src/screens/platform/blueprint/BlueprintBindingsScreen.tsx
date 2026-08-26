@@ -40,6 +40,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { isAxiosError } from 'axios';
 import { blueprintVersionApiClient, FactoryBinding as ApiFactoryBinding } from '../../../services/api/blueprintVersionApiClient';
 import platformAPI from '../../../services/api/platformApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 // Types
 interface BoundFactory {
@@ -72,7 +73,7 @@ interface SyncHistory {
 // Transform API data to screen interface
 const transformBindingData = (apiBindings: ApiFactoryBinding[]): BoundFactory[] => {
   return apiBindings.map((binding): BoundFactory => {
-    const defaultDate = new Date().toISOString().split('T')[0] || '';
+    const defaultDate = formatDate(new Date()) || '';
     const appliedDate = binding.lastAppliedAt?.split('T')[0];
     const boundDate: string = appliedDate ?? defaultDate;
     const status: 'synced' | 'pending' | 'failed' = binding.needsUpgrade ? 'pending' :

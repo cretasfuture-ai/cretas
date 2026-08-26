@@ -135,7 +135,7 @@ public interface PurchaseService {
      * （比如 1200kg 先收 200，再收 300，再收 700）。
      * 只允许 DRAFT 状态；按 purchaseOrderItemId/materialTypeId 定位既有行，不新增/删除行；
      * 复用 {@code validateOverReceiveCap} 校验，语义与创建时一致（已确认量 + 本次修改后数量
-     * 不得超过下单量 × (1+抄收上限)）。
+     * 不得超过下单量 × (1+超收上限)；未配置上限时不限制，见 {@link OverReceiveLimit}）。
      */
     PurchaseReceiveRecord updateReceiveRecordItems(
             String factoryId, String receiveId, UpdateReceiveRecordItemsRequest request, Long userId);

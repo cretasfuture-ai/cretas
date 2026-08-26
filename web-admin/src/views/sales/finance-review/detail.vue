@@ -30,6 +30,7 @@ import {
   type LaborEfficiencyOrderAggregateDTO,
 } from '@/api/laborEfficiency';
 import ThreePriceCostBreakdown from '@/components/ThreePriceCostBreakdown.vue';
+import { toDateString } from '@/utils/dateFormat';
 
 const route = useRoute();
 const router = useRouter();
@@ -146,7 +147,7 @@ async function loadOrderAggregate(orderDate: string) {
     start.setDate(start.getDate() - 30);
     const end = new Date(d);
     end.setDate(end.getDate() + 90);
-    const fmt = (dt: Date) => dt.toISOString().slice(0, 10);
+    const fmt = (dt: Date) => toDateString(dt);
 
     const res = await getLaborCostOrderAggregate(factoryId.value, fmt(start), fmt(end));
     if (res.success && Array.isArray(res.data) && res.data.length > 0) {

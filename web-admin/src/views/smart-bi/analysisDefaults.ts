@@ -10,9 +10,17 @@
  * 这层是纯函数 (无 IO), 方便单测; IO (getGoldDataRange) 由调用方注入。
  */
 
-/** ISO YYYY-MM-DD for a Date. */
+import { toDateString } from '@/utils/dateFormat';
+
+/**
+ * 本地日历日 YYYY-MM-DD。
+ *
+ * 🔴 2026-08-26: 原本是 `d.toISOString().slice(0, 10)` —— 按 **UTC** 截断,
+ *    东八区 00:00~07:59 会给出**昨天**, 于是「全部历史」的右端点少一天。
+ *    委派给 utils/dateFormat 的 toDateString(), ⛔ 不再自己拼一份。
+ */
 export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return toDateString(d);
 }
 
 /**

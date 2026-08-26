@@ -407,14 +407,23 @@ class WageCalculationModeTest {
     @DisplayName("WageCalculation.getTotalAmount() derived getter — mode 分支")
     class DerivedGetter {
         @Test
-        void pieceRateMode_totalAmount_equalsPieceRateOnly() {
+        @DisplayName("PIECE_RATE: 排除常规工时工资, 但含加班费 (引擎收敛后计件工人的加班费必须进总额)")
+        void pieceRateMode_totalAmount_excludesHourlyButIncludesOvertime() {
             WageCalculation c = WageCalculation.builder()
                     .mode(WageMode.PIECE_RATE)
                     .hourlyAmount(new BigDecimal("100"))
                     .overtimeAmount(new BigDecimal("50"))
                     .pieceRateAmount(new BigDecimal("500"))
                     .build();
-            assertEquals(0, new BigDecimal("500").compareTo(c.getTotalAmount()));
+            // 收敛前这里是 500 —— 那条断言守的是「计件模式下 overtimeAmount 永远是 0」这段历史,
+            // 不是需求。收敛后加班费由统一算法算出 (费率兜底取 User.hourlyRate),
+            // 算出来了却不进总额 = 少发钱。
+            assertEquals(0, new BigDecimal("550").compareTo(c.getTotalAmount()),
+                    "计件 ¥500 + 加班 ¥50 = ¥550");
+            // 阴性对照: 常规工时工资仍然不进 PIECE_RATE 总额 (否则就成 MIXED 了)
+            assertEquals(0, new BigDecimal("650").compareTo(
+                            c.getTotalAmount().add(new BigDecimal("100"))),
+                    "hourlyAmount ¥100 不在总额里 —— 加上它才等于 ¥650");
         }
 
         @Test

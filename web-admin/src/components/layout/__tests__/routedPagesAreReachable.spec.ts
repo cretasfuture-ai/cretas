@@ -49,7 +49,14 @@ function locateRouterFile(): string {
 /** 天然不该进菜单的路由。**加白名单要写理由**，否则这道闸会被逐条豁免掉。 */
 const NOT_IN_MENU_BY_DESIGN = new Set<string>([
   'dashboard',                      // 首页, menuConfig 里是 '/dashboard'
-  'dashboard/production-progress',  // 从首页卡片进入, 非独立菜单项
+  // 🔴 2026-08-26 撤销 `dashboard/production-progress` 的豁免。
+  // 原来的理由写的是「从首页卡片进入, 非独立菜单项」——**那个理由是假的**:
+  // 全 web-admin 除 router/index.ts 的路由声明和页面自己的 fetch 之外,
+  // 对 `production-progress` / `ProductionProgressDashboard` **零处引用**
+  // (唯一的第三处命中是 production/plans/list.vue:5050 的一句注释)。
+  // 没有任何首页卡片、按钮或 router.push 指向它 ⇒ 客户 2026-04 点名要的那块打屏,
+  // 从 2026-04-08 做完起就**没有任何人点得到**。
+  // ▎豁免自己也会过期 —— 一条写着理由的白名单, 不等于那条理由今天还成立。
   // 组件是 `widget-demo.vue` —— 开发用演示页, 刻意不给客户入口。
   // ⚠️ 我第一版把这条写成了组件名 `dashboard/widget-demo`, 而路由路径是
   //    `dashboard/widgets` —— 白名单没生效, 闸照样红。**白名单要按路由路径写。**

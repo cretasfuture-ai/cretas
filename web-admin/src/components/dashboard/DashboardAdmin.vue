@@ -26,6 +26,54 @@ const equipmentStats = ref<EquipmentStats | null>(null);
 
 const factoryId = computed(() => authStore.factoryId);
 
+/**
+ * 🔴 「还没问到」「问了读不到」「真的是 0」三种状态, 在这一屏上曾经是同一个长相。
+ *
+ * 旧实现每张卡都写 `overview.value?.todayOutput ?? 0`, 而 `overview` 在请求失败时
+ * 保持 `null` ⇒ 四张卡照常印
+ *   「今日产量 0 kg / 完成批次 0 个 / 设备运行 0 台 / 设备告警 0 条」,
+ * 配色/单位/字号与真实读数**完全一致**。用户读到的是「今天一炉都没开」,
+ * 真相是「一条都没查到」—— 两件事对厂长的含义完全相反。
+ *
+ * ⚠️ 同一个 `?? 0` 还得过另一种病: 端点**成功**但字段没投影上来
+ *    (2026-08-19 F006 客户截图, 见 ProcessingServiceImpl 顶层投影那段注释),
+ *    那时卡片同样恒为 0 且与数据无关。换成 `?? null` 之后, 那一类缺陷
+ *    从「安静地印 0」变成「显式地印 —」, 下次会被看见。
+ *
+ * ⛔ 0 是**合法读数**, 不许一并改成 —— :
+ *    端点成功且返回 0 时(今天确实没产量 / 确实零告警)必须照印 0。
+ *    「设备告警 0 条」是厂长最想听到的一句话, 不能由一个失败的请求替我们说出来,
+ *    但也不能因为怕说错就不说。
+ */
+type Reading = number | null;
+
+/** 每个端点各自的成败 —— 一个挂了不许把别的卡一起打成失败。 */
+const sourceFailed = ref({
+  overview: false,
+  production: false,
+  quality: false,
+  equipment: false,
+});
+/** 是否已经跑完一轮加载。⛔ 没跑完时任何数字都不是读数。 */
+const dashboardLoaded = ref(false);
+
+/**
+ * 把「兜底 0」换成「没有读数」。
+ *
+ * ⚠️ `raw ?? null` 只吃 null/undefined —— `0` 会原样通过, 这正是我们要的:
+ *    真读数 0 必须活下来, 假读数 0 必须消失。
+ */
+function readingOf(failed: boolean, raw: number | null | undefined): Reading {
+  if (!dashboardLoaded.value) return null; // 还没问到
+  if (failed) return null;                 // 问了读不到
+  return raw ?? null;                      // 真读数 (0 合法)
+}
+
+/** 告警数由 overview / equipment 两个端点任一供给 ⇒ **两个都挂**才算读不到。 */
+const alertsUnavailable = computed(
+  () => sourceFailed.value.overview && sourceFailed.value.equipment,
+);
+
 // SmartBI Gold KPI 条 — 来自经营驾驶舱 executive 端点 (month 聚合), 展示真实经营数据。
 // 对 demo 工厂等无今日运营数据的租户提供有意义的首屏内容。
 const goldKpiCards = ref<KPICard[]>([]);
@@ -41,15 +89,28 @@ const hasGoldKpi = computed(() =>
 // 与今日 KPI 信号并列, 任一命中即视为"已有数据"不再显示引导。
 const hasProductData = ref(false);
 const hasProductDataChecked = ref(false);
+/**
+ * 🔴 这个检查**失败**时, `hasProductData` 会停在初值 `false` ——
+ * 而 `false` 在下面的判定里读作「这个工厂没有产品档案」, 也就是把
+ * 「我没问到」翻译成了「答案是没有」。与四张卡的 `?? 0` 是同一个病。
+ * ⇒ 单独记一个失败标志, 让「读不到」不再冒充「没有」。
+ */
+const hasProductDataFailed = ref(false);
 async function checkHasProductData() {
   if (!factoryId.value) { hasProductDataChecked.value = true; return; }
   try {
     const res = await get<{ totalElements?: number }>(`/${factoryId.value}/product-types`, {
       params: { page: 1, size: 1 },
     });
-    hasProductData.value = res.success ? (res.data?.totalElements ?? 0) > 0 : false;
+    if (res.success) {
+      hasProductData.value = (res.data?.totalElements ?? 0) > 0;
+    } else {
+      hasProductDataFailed.value = true;
+    }
   } catch {
-    // 静默失败: 查询本身出错不代表"无数据", 维持既有 KPI 信号判定, 不误导用户
+    // 静默失败(不弹 toast): 这一格挂了不该盖住主加载的错误提示。
+    // ⛔ 但**不许**继续把它当成「无数据」—— 见 hasProductDataFailed 注释。
+    hasProductDataFailed.value = true;
   } finally {
     hasProductDataChecked.value = true;
   }
@@ -57,19 +118,24 @@ async function checkHasProductData() {
 
 // UX Round 5: 新工厂 onboarding — 所有 KPI 都为 0 且无 gold 数据且无真实产品数据时才显示快速开始引导
 const isNewFactory = computed(() => {
-  const todayOutput = overview.value?.todayOutput ?? 0;
-  const completedBatches = overview.value?.completedBatches ?? 0;
-  const running = equipmentStats.value?.running ?? 0;
-  const activeAlerts = equipmentStats.value?.activeAlerts ?? 0;
-  return !loading.value
-    && !goldKpiLoading.value
-    && hasProductDataChecked.value
-    && !hasProductData.value
-    && todayOutput === 0
-    && completedBatches === 0
-    && running === 0
-    && activeAlerts === 0
-    && !hasGoldKpi.value;
+  if (loading.value || goldKpiLoading.value) return false;
+  if (!hasProductDataChecked.value) return false;
+  // ⛔ 产品档案数没问到时不下判断 —— 「读不到」不是「没有产品」。
+  if (hasProductDataFailed.value || hasProductData.value) return false;
+  if (hasGoldKpi.value) return false;
+
+  // 🔴 这里曾经是本页第二处、也是更糟的一处「失败当 0」:
+  //    四个端点全挂 ⇒ 四个 `?? 0` 全部为 0 ⇒ 判定成立 ⇒
+  //    一个有 296 个产品的老工厂被请去做「快速开始 4 步, 当前工厂暂无数据」。
+  // ⇒ 任何一项**没有读数**就不下判断; 只有四项都是**真读数且都为 0** 才算新工厂。
+  const readings: Reading[] = [
+    readingOf(sourceFailed.value.overview, overview.value?.todayOutput),
+    readingOf(sourceFailed.value.overview, overview.value?.completedBatches),
+    readingOf(sourceFailed.value.equipment, equipmentStats.value?.running),
+    readingOf(alertsUnavailable.value, equipmentStats.value?.activeAlerts),
+  ];
+  if (readings.some((v) => v === null)) return false;
+  return readings.every((v) => v === 0);
 });
 const shouldShowOnboarding = computed(() => isNewFactory.value && !authStore.isLiushanmenFactory);
 
@@ -81,10 +147,14 @@ const onboardingSteps = [
 ];
 
 // 统计卡片 - 管理员看全部
+//
+// 每张卡三态: value === null 时印 '—'(并按 unavailable 决定要不要说明「读取失败」),
+// value 是数字时照印 —— 包括 0。见上方 readingOf 注释。
 const statCards = computed(() => [
   {
     title: '今日产量',
-    value: overview.value?.todayOutput ?? 0,
+    value: readingOf(sourceFailed.value.overview, overview.value?.todayOutput),
+    unavailable: dashboardLoaded.value && sourceFailed.value.overview,
     unit: 'kg',
     icon: TrendCharts,
     color: '#2D8B57',
@@ -92,7 +162,8 @@ const statCards = computed(() => [
   },
   {
     title: '完成批次',
-    value: overview.value?.completedBatches ?? 0,
+    value: readingOf(sourceFailed.value.overview, overview.value?.completedBatches),
+    unavailable: dashboardLoaded.value && sourceFailed.value.overview,
     unit: '个',
     icon: DataLine,
     color: '#36B37E',
@@ -100,7 +171,8 @@ const statCards = computed(() => [
   },
   {
     title: '设备运行',
-    value: equipmentStats.value?.running ?? 0,
+    value: readingOf(sourceFailed.value.equipment, equipmentStats.value?.running),
+    unavailable: dashboardLoaded.value && sourceFailed.value.equipment,
     unit: '台',
     icon: Timer,
     color: '#FFAB00',
@@ -111,10 +183,16 @@ const statCards = computed(() => [
     // R42 BUG-14 + R76: dashboard/equipment doesn't have activeAlerts field;
     // dashboard/overview returns it nested at summary.activeAlerts.
     // 类型已升级到 DashboardOverview.summary?.activeAlerts (R76), 不再需要 `as any`.
-    value: overview.value?.summary?.activeAlerts
-      ?? overview.value?.alerts?.active
-      ?? equipmentStats.value?.activeAlerts
-      ?? 0,
+    //
+    // ⚠️ 这一格由**两个端点**任一供给, 所以它的「读不到」判据是两个都挂,
+    //    ⛔ 不是任一挂 —— 否则 overview 挂了会把 equipment 已经读到的真实告警数抹掉。
+    value: readingOf(
+      alertsUnavailable.value,
+      overview.value?.summary?.activeAlerts
+        ?? overview.value?.alerts?.active
+        ?? equipmentStats.value?.activeAlerts,
+    ),
+    unavailable: dashboardLoaded.value && alertsUnavailable.value,
     unit: '条',
     icon: Warning,
     color: '#FF5630',
@@ -174,29 +252,42 @@ async function loadDashboardData() {
 
     if (overviewRes.status === 'fulfilled' && overviewRes.value.success) {
       overview.value = overviewRes.value.data;
+      sourceFailed.value.overview = false;
     } else {
       failed.push('概览');
+      // ⛔ 失败时把上一轮的数据清掉: 留着旧值会让「读不到」冒充「刚读到的」。
+      overview.value = null;
+      sourceFailed.value.overview = true;
       console.error('[DashboardAdmin] overview API failed',
         overviewRes.status === 'rejected' ? overviewRes.reason : overviewRes.value);
     }
     if (productionRes.status === 'fulfilled' && productionRes.value.success) {
       productionStats.value = productionRes.value.data;
+      sourceFailed.value.production = false;
     } else {
       failed.push('生产');
+      productionStats.value = null;
+      sourceFailed.value.production = true;
       console.error('[DashboardAdmin] production API failed',
         productionRes.status === 'rejected' ? productionRes.reason : productionRes.value);
     }
     if (qualityRes.status === 'fulfilled' && qualityRes.value.success) {
       qualityStats.value = qualityRes.value.data;
+      sourceFailed.value.quality = false;
     } else {
       failed.push('质量');
+      qualityStats.value = null;
+      sourceFailed.value.quality = true;
       console.error('[DashboardAdmin] quality API failed',
         qualityRes.status === 'rejected' ? qualityRes.reason : qualityRes.value);
     }
     if (equipmentRes.status === 'fulfilled' && equipmentRes.value.success) {
       equipmentStats.value = equipmentRes.value.data;
+      sourceFailed.value.equipment = false;
     } else {
       failed.push('设备');
+      equipmentStats.value = null;
+      sourceFailed.value.equipment = true;
       console.error('[DashboardAdmin] equipment API failed',
         equipmentRes.status === 'rejected' ? equipmentRes.reason : equipmentRes.value);
     }
@@ -207,10 +298,18 @@ async function loadDashboardData() {
       ElMessage.warning(`部分数据加载失败: ${failed.join('、')}`);
     }
   } catch (error) {
+    // 兜底: allSettled 之外的意外(例如 factoryId 变更导致的同步抛错)。
+    // ⛔ 同样不许让卡片停在「0」—— 四个来源一律标记为读不到。
+    overview.value = null;
+    productionStats.value = null;
+    qualityStats.value = null;
+    equipmentStats.value = null;
+    sourceFailed.value = { overview: true, production: true, quality: true, equipment: true };
     console.error('[DashboardAdmin] Failed to load dashboard data:', error);
     ElMessage.error('加载 Dashboard 失败');
   } finally {
     loading.value = false;
+    dashboardLoaded.value = true;
   }
 }
 
@@ -302,14 +401,27 @@ function navigateTo(route: string) {
     <!-- 统计卡片 -->
     <el-row :gutter="20" class="stat-cards">
       <el-col v-for="card in statCards" :key="card.title" :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card" shadow="hover" @click="navigateTo(card.route)">
+        <el-card
+          class="stat-card"
+          :class="{ 'is-unavailable': card.unavailable }"
+          :data-stat="card.title"
+          shadow="hover"
+          @click="navigateTo(card.route)"
+        >
           <div class="stat-content">
             <div class="stat-info">
               <span class="stat-title">{{ card.title }}</span>
-              <span class="stat-value" :style="{ color: card.color }">
-                {{ card.value }}
-                <small>{{ card.unit }}</small>
+              <!-- 🔴 没有读数时印 '—' 而不是 0, 且连单位一起收掉:
+                   「— kg」读起来仍像一个产量, 而我们并没有产量可说。 -->
+              <span
+                class="stat-value"
+                :style="{ color: card.value === null ? '#C0C4CC' : card.color }"
+              >
+                {{ card.value === null ? '—' : card.value }}
+                <small v-if="card.value !== null">{{ card.unit }}</small>
               </span>
+              <!-- 失败态与「还没问到」分开: 只有真的问过并且读不到才说这句。 -->
+              <span v-if="card.unavailable" class="stat-unavailable">读取失败</span>
             </div>
             <el-icon class="stat-icon" :style="{ backgroundColor: card.color + '20', color: card.color }">
               <component :is="card.icon" />
@@ -413,6 +525,19 @@ function navigateTo(route: string) {
 
 .dashboard-admin {
   min-height: calc(100vh - 144px);
+}
+
+/* 读不到的卡片: 视觉上必须与「读到 0」区分开, 否则三态在界面上又并回两态。 */
+.stat-card.is-unavailable {
+  border-style: dashed;
+  border-color: #dcdfe6;
+}
+
+.stat-unavailable {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .overview-section {

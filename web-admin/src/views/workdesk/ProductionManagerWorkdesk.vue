@@ -250,6 +250,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import { toDateString } from '@/utils/dateFormat';
 
 interface ProductDemand {
   productTypeId: string;
@@ -472,7 +473,7 @@ const dialogTitle = computed(() =>
 
 function tomorrow(): string {
   const t = new Date(Date.now() + 86400000);
-  return t.toISOString().split('T')[0];
+  return toDateString(t);
 }
 
 function openCreateBatchDialog(d: ProductDemand) {

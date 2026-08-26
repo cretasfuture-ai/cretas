@@ -63,6 +63,7 @@ import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 import AdvancedTrafficPersonaCard from './components/chat/cards/AdvancedTrafficPersonaCard.vue';
 import { resolveAdvancedTrafficPersona } from './advancedTrafficPersonaDemo';
 import { RESTAURANT_AGENT_PRICE_VIEW_ROLES } from '@/types/restaurant-agent-run';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -323,12 +324,12 @@ function showAnalysisError(rawMsg: string) {
 // ── Gold KPI strip (v1.1 cutover) ──────────────────
 // 独立于 V2 compute 的实时 KPI, 读 /gold/finance-summary (agg_daily). 页面打开即可见.
 function _todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return toDateString(new Date());
 }
 function _monthStartIso(offsetMonths = 0): string {
   const d = new Date();
   d.setMonth(d.getMonth() + offsetMonths, 1);
-  return d.toISOString().slice(0, 10);
+  return toDateString(d);
 }
 const goldKpiRange = ref<[string, string]>([_monthStartIso(), _todayIso()]);
 const restaurantAgentEligible = computed(() => (
@@ -400,7 +401,7 @@ async function loadGoldKpi() {
     } else {
       // Fallback chain: 近 90 天 → 上一年全年 → 再前一年, 避免用户看到空 KPI.
       const y = new Date().getFullYear();
-      const iso = (d: Date): string => d.toISOString().slice(0, 10);
+      const iso = (d: Date): string => toDateString(d);
       const chain: Array<[string, string, string]> = [
         (() => { const e2 = new Date(); const s2 = new Date(); s2.setDate(s2.getDate() - 89); return [iso(s2), iso(e2), '近90天'] as [string, string, string]; })(),
         [`${y - 1}-01-01`, `${y - 1}-12-31`, `${y - 1}全年`],

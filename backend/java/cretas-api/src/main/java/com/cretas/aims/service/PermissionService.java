@@ -18,6 +18,26 @@ import java.util.Set;
 public interface PermissionService {
 
     /**
+     * 「只读本人工资」权限码 (2026-08-25, RN「我的工资」屏)。
+     *
+     * <p>⚠️ <b>三段式, 不是 {@code module:action}</b> —— 与 {@code procurement:price:view} /
+     * {@code procurement:finance_review:view} 同族, 在 {@code hasPermission} 里
+     * <b>split(":") 之前</b>被单独分支处理, 不走 role×module 矩阵。
+     *
+     * <p><b>为什么必须是独立码而不是 {@code hr:read}</b>:
+     * {@code hr:read} 是「读人事模块」= 读<b>全厂</b>工资 (WageController 的
+     * {@code /wage/payroll} 列表、{@code /wage/efficiency/daily/{workerId}} 都吃这个码,
+     * 且 workerId 是<b>路径参数</b>)。给车间工人挂 {@code hr:read} 等于让任何工人读任何人的工资。
+     * 本码只挂在 {@link com.cretas.aims.controller.MyWageController} 上, 而那个 controller
+     * <b>不接受任何 workerId 入参</b>——身份只从 token 推导。所以「有这个码」的最大能力就是
+     * 「读自己的」。
+     *
+     * <p>持有者: 任何已激活的工厂账号 (见 {@code PermissionServiceImpl.hasPermission} 的分支)。
+     * 每个人都该看得到<b>自己</b>的工资, 这不是分级信息。
+     */
+    String SELF_WAGE_VIEW_PERMISSION = "hr:self_wage:view";
+
+    /**
      * 检查用户是否拥有指定权限
      *
      * @param user 用户对象

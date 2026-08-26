@@ -22,6 +22,7 @@ import { getFactoryId } from '../../types/auth';
 import { ReportStackParamList } from '../../types/navigation';
 import { handleError , getErrorMsg} from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { formatDate } from '../../utils/formatters';
 
 // 创建CostReport专用logger
 const costReportLogger = logger.createContextLogger('CostReport');
@@ -177,7 +178,6 @@ export default function CostReportScreen() {
         startDate.setMonth(endDate.getMonth() - 1);
       }
 
-      const formatDate = (date: Date): string => date.toISOString().split('T')[0] ?? '';
 
       const response = await reportApiClient.getCostVarianceReport({
         factoryId,

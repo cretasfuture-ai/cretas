@@ -41,6 +41,13 @@ describe('温控监控只在真的有设备时才显示读数', () => {
     expect(screen).toContain('testID="wh-temp-monitor-empty"');
   });
 
+  it('⛔ 没有温区时不许出现「导出报表 / 设置阈值」—— 它们只有一句 Alert, 没有实现', () => {
+    // 2026-08-26: 上一批只把读数改成空态, 这两个按钮还留着, 于是同一屏
+    // 上面写「温控设备未接入」、下面点「导出报表」弹「成功·温度报表已导出」。
+    // 修一半比不修更容易骗到人。
+    expect(screen).toMatch(/zones\.length\s*>\s*0\s*&&[\s\S]{0,400}导出报表/);
+  });
+
   it('阴性对照: 真实的设备告警接口没有被顺手删掉', () => {
     // 这一屏只有温度是编的, 告警记录本来就是真的 —— 修假数据不许连真数据一起砍。
     expect(screen).toContain('alertApiClient.getEquipmentAlerts');

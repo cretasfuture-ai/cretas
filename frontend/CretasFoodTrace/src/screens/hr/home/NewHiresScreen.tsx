@@ -28,6 +28,7 @@ import { useTranslation } from 'react-i18next';
 
 import { userApiClient } from '../../../services/api/userApiClient';
 import { HR_THEME, STAFF_STATUS_CONFIG, type StaffListItem } from '../../../types/hrNavigation';
+import { formatDate } from '../../../utils/formatters';
 
 export default function NewHiresScreen() {
   const navigation = useNavigation();
@@ -52,7 +53,7 @@ export default function NewHiresScreen() {
       // API 直接返回 PageResponse，不需要 .success 和 .data 包装
       // 过滤本月入职的员工
       if (res?.content) {
-        const startDateStr = startOfMonth.toISOString().split('T')[0] ?? '';
+        const startDateStr = formatDate(startOfMonth) ?? '';
         const filtered = res.content.filter((u) => {
           const joinDate = u.hireDate || u.createdAt?.split('T')[0];
           return joinDate && joinDate >= startDateStr;

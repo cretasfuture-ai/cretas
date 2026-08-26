@@ -183,7 +183,14 @@ export function WSHomeScreen() {
         navigation.navigate('TeamBatchReport');
         return;
       case 'EquipmentMonitoring':
-        navigation.navigate('EquipmentMonitoring');
+        /*
+         * ⛔ 不能 navigate('EquipmentMonitoring') —— 那个路由只注册在
+         * ProcessingStackNavigator 上，而车间主管走的是 WorkshopSupervisorNavigator
+         * (AppNavigator 里对这个角色是 early return，压根到不了 MainNavigator)。
+         * 这一行原来是个静默 no-op：点了没反应，也不报错。
+         * 车间主管的设备入口是本角色自己的 WSEquipmentTab。
+         */
+        navigation.getParent()?.navigate('WSEquipmentTab');
         return;
       default:
         return;

@@ -87,7 +87,9 @@ class PurchaseServiceImplReceivePriceInheritTest {
                 materialBatchService);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "warehouseInventoryGuardService", warehouseInventoryGuardService);
-        // @Value 注入字段, 单测手动设 (超收上限 30%, 与 prod 默认一致)
+        // @Value 注入字段, 单测手动设成 30% 只是为了让本用例的数量落在上限内。
+        // ⚠️ 「与 prod 默认一致」是错的: prod 默认是 null = 不限制超收 (owner 2026-08-25 裁定);
+        //    在此之前的默认是 0.00 = 一件都不许多收 —— 从来都不是 30%。
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
 
         Supplier supplier = new Supplier();

@@ -13,6 +13,7 @@ import {
   type CommissionRule,
 } from '@/api/salesTarget';
 import { useAuthStore } from '@/store/modules/auth';
+import { toDateString } from '@/utils/dateFormat';
 
 const auth = useAuthStore();
 const currentUserId = computed<number | null>(() =>
@@ -28,7 +29,7 @@ const form = ref({
   salesId: null as number | null,
   customerType: '' as string,
   percentage: 5,
-  effectiveFrom: new Date().toISOString().slice(0, 10),
+  effectiveFrom: toDateString(new Date()),
   effectiveTo: '' as string,
   active: true,
 });
@@ -50,7 +51,7 @@ function openCreate(): void {
     salesId: null,
     customerType: '',
     percentage: 5,
-    effectiveFrom: new Date().toISOString().slice(0, 10),
+    effectiveFrom: toDateString(new Date()),
     effectiveTo: '',
     active: true,
   };

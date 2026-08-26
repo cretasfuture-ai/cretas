@@ -21,7 +21,7 @@ import {
   type NetContentUnit,
 } from '@/utils/productSpecification';
 import { displayUnit } from '@/utils/unitPricing';
-import { formatDateTime } from '@/utils/dateFormat';
+import { formatDateTime, toDateString } from '@/utils/dateFormat';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
@@ -1242,7 +1242,7 @@ function handleExport() {
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = `产品列表_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = `产品列表_${toDateString(new Date())}.csv`;
   link.click();
   URL.revokeObjectURL(link.href);
   ElMessage.success('导出成功');

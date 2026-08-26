@@ -431,6 +431,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import { toDateString } from '@/utils/dateFormat';
 
 interface LowStockRow {
   materialTypeId: string;
@@ -734,7 +735,7 @@ function openRequisitionDialog(row: LowStockRow) {
   // Default 期望到货日 = 7 天后 (常见 lead time)
   const d = new Date();
   d.setDate(d.getDate() + 7);
-  requisitionDialog.form.expectedDeliveryDate = d.toISOString().slice(0, 10);
+  requisitionDialog.form.expectedDeliveryDate = toDateString(d);
   requisitionDialog.form.supplierId = row.preferredSupplier?.id || '';
   requisitionDialog.form.notes = '低库存补货 — Workdesk 一键创建';
   requisitionDialog.preview = null;
