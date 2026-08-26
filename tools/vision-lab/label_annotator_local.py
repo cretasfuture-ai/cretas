@@ -60,8 +60,13 @@ def validate_modern_annotator(module: ModuleType, script: Path) -> None:
         raise RuntimeError("legacy label annotator is forbidden")
     if getattr(module, "ALLOW_MISSING_CLASS", False) is not True:
         raise RuntimeError("label annotator did not enable explicit missing-class review")
+    if getattr(module, "ALLOW_INCOMPLETE_TRAY", False) is not True:
+        raise RuntimeError("label annotator lacks incomplete-tray requeue support")
     page = getattr(module, "PAGE", "")
-    required = ("missing_confirmed", "确认这是真的被拔掉了")
+    required = (
+        "missing_confirmed", "确认这是真的被拔掉了",
+        "托盘不完整 I", "incomplete_tray", "toggleIncomplete",
+    )
     if not isinstance(page, str) or any(marker not in page for marker in required):
         raise RuntimeError("label annotator lacks the audited missing-class confirmation flow")
     if "new Set(classes).size<2" in page:

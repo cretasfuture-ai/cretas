@@ -134,6 +134,14 @@ B:\anaconda3\python.exe tools\vision-lab\build_pending_label_review_queue.py `
 人工审核完成后仍必须先审计 `reviewed=true, source=human`、模糊/outlier 隔离和保护集排除，再决定
 是否存在可训练增量；“待审核照片被重放为 CLEAR”本身不是训练真值，也不得用于放宽门禁。
 
+审核页顶部的“托盘不完整 I”是多轮回流状态，不等于“看不清”或真实缺标。操作员可以先保留当前
+可见白标/彩标框，再按 `I` 并保存；sidecar 固定写入 `incomplete_tray=true`、
+`review_round_action=REQUEUE_AFTER_TRAY_REDETECTION`、`training_eligible=false` 和
+`training_exclusion_reason=incomplete_tray_requeue`。第一轮完整托盘可继续进入 reviewed-only 数据，
+不完整托盘单独用原图坐标重新执行 tray detection/扩裁；下一轮必须把已有标签框变换到新裁图后再由
+人工复核。只有后续轮次确认托盘完整，才允许清除该回流状态并进入标签训练；不得把第一轮局部框或
+未显示区域解释为缺白标/缺彩标真值。
+
 ### 历史标签训练裁图完整性审计
 
 复用任何既有 label 数据集前，必须把数据集中的每个 `derived_rows[kind=label]` 重新绑定到源队列、
