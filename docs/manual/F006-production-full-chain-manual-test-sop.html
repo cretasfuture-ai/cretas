@@ -357,7 +357,7 @@
         <div class="callout warning"><strong>关键交接链</strong>销售需求 → 财审 → 调度/生产经理下发计划 → 车间安排 → 操作员从已分配工序直接报工（不扫码）→ 生产文员/生产经理/车间主管按权限复核 → QC 检查 → 仓储入库/发货 → 财务核销；缺料支线为采购 → QC → 仓储，付款支线为仓储收货生成未清应付 → 财务选择指定未清项付款核销。任何岗位都不能用老板账号代做来“证明链路通过”。</div>
         <div class="callout blue"><strong>AI 表单入口只生成待确认草稿</strong>当前支持按表单类型解析产品、生产计划、采购单、销售单、盘点、仓库入库和工序任务等字段；必须登录并具备目标页面权限。自然语言只用于回填当前表单，用户仍要逐字段核对并手动提交，助手不会代替审批、报工或库存入账。</div>
         <div class="callout blue"><strong>RN 仓储页与 Web 生产页不要混说</strong>采购等来源从待收货列表进入；入库首页以真实采购收货任务为真值，筛选固定为“全部 / 待收货 / 部分入库 / 已收货”，同状态内交期更早者优先；卡片显示“共 N 项”及带单位数量，多单位不合计。旧“AI 智能入库”、空白“新建入库”和生产看板“原料入库”已退役。生产结单成品从“入库 → 生产成品入库”逐行实收；物料显示服务端真实品名，上架只有实际更新并回读库位后才成功。发货进屏读取 FIFO 推荐并显示取货批次，推荐不足时先说清缺多少并提供“去调拨”，最终仍由服务端权威校验。手机当前没有库存/盘点导航，库存、盘点、物料需求单和生产工作台在电脑 Web 完成。</div>
-        <div class="callout blue"><strong>普通质检照片、客户风险队列与训练选样分开</strong>普通质检记录成功后，手机照片逐张登记为 <code>QUALITY_CHECK</code> 附件，详情必须能回读原图；单张上传失败与质检记录成功分别报告。标签客户队列只保留风险/无法判断/无盒/失败；受信任流水线明确无风险时显示“系统未见风险”，但不是人工真值。工厂整图审核、平台训练选样和单盒精修保持隔离，AI 提议或自动通过不能直接成为训练真值。</div>
+        <div class="callout blue"><strong>普通质检照片、客户风险队列与训练选样分开</strong>普通质检记录成功后，手机照片逐张登记为 <code>QUALITY_CHECK</code> 附件，详情必须能回读原图；单张上传失败与质检记录成功分别报告。标签客户队列只保留风险/无法判断/无盒/失败；日常复核默认只显示风险框，不要求描画托盘。未触碰的 AI 盒子与“系统未见风险”都不是人工真值；人工可直接补画漏识别标签，明确缺标与整图正常冲突时必须先统一结论。工厂整图审核、平台训练选样和单盒精修保持隔离。</div>
       </section>
 
       <section id="map">
@@ -501,13 +501,13 @@
       <section id="bom">
         <div class="section-head"><span class="section-no">05</span><div class="section-title"><h3>在 Workflow 画布配置并激活 BOM / 配方</h3><p>辅料、包材和副产是画布派生的配置叠层，不是新的 Workflow 拓扑节点</p></div></div>
         <div class="path">生产管理 <b>›</b> 生产配置 <b>›</b> 产品-工序配置 <b>›</b> 选择目标 SKU</div>
-        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。生产批次只允许 <code>WORKFLOW</code> 路线；旧 <code>LEGACY</code> 选择模式、模板兜底和历史“自动两点报工”口径已经退役，不得作为新计划的替代路径。电脑 Web 的“产品-工序配置”Workflow 画布是 BOM 唯一写入口；RN 手机端 BOM 主子表页面和 9 个旧式 AI BOM 写工具已经退役，AI 只能解释路径与门禁，不能直接改 BOM。画布从目标 SKU、工序与当前 BOM 派生辅料、包材和副产配置格，普通用户不选择 Workflow 版本。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料，辅料、包材和副产按真实业务需要补充，没有可选包材或副产不阻止激活。</div>
+        <div class="callout warning"><strong>先有完整 Workflow 草稿，再在同一画布配置 BOM</strong>问答与验收统一摘要为“Workflow 完整草稿 → BOM 绑定工序辅料并激活 → Workflow 刷新、发布并启用”。生产批次只允许 <code>WORKFLOW</code> 路线；旧 <code>LEGACY</code> 选择模式、模板兜底和历史“自动两点报工”口径已经退役。电脑 Web 的“产品-工序配置”Workflow 画布是 BOM 唯一写入口；RN 手机端 BOM 主子表页面和 9 个旧式 AI BOM 写工具已经退役。没有 BOM 时首次保存配置会创建首版草稿；至少配置一项主原料；<strong>成品还必须配置至少一项包材</strong>，半成品/原料/来料加工不强制；辅料和副产始终按真实业务选填。</div>
         <div class="callout blue"><strong>当前画布维护行为</strong>单位显示用户可读中文标签，例如 <code>1盒=200g</code>，保存和提交仍使用规范单位码，不能显示成 <code>1box</code>；没有辅料时辅料 Cell 可折叠成窄条，需要新增或编辑时再展开。没有 ACTIVE BOM 基线时，首版草稿按当前画布的唯一终端产出投影创建，不要求修复不存在的版本状态。旧投入已不在新画布时，页面逐行列出并让用户确认移除；确认后由服务端删除对应旧投入行及数量/成本绑定并重试，取消则保持原样，不能静默删除。</div>
         <div class="table-wrap"><table><thead><tr><th>区域</th><th>配置对象</th><th>手工输入</th><th>系统继承/计算</th></tr></thead><tbody>
           <tr><td>工艺来源</td><td>当前画布中目标 SKU 的 Workflow 草稿修订</td><td>无；画布只读展示</td><td>自动固定精确修订和快照；按目标终端反向回溯并锁定工序顺序</td></tr>
           <tr><td>配方头</td><td>当前成品 SKU 的版本</td><td>版本备注</td><td>产品、产出单位、标准克重来自 SKU；出成率来自正式报工历史</td></tr>
           <tr><td>原料 RAW</td><td>主要投入物料</td><td>选择原料；必要时备注/高级可选规则</td><td>单位与参考价来自物料主档；当前页面不强迫填写固定出成数量</td></tr>
-          <tr><td>包材 PACKAGING（可选）</td><td>真实使用的盒、袋、膜、外箱等</td><td>每成品用量/每产品用量、备注</td><td>单位来自物料主档；按成品基本单位推算需求；无包材时留空</td></tr>
+          <tr><td>包材 PACKAGING（成品必填）</td><td>真实使用的盒、袋、膜、外箱等</td><td>每成品用量/每产品用量、备注</td><td>单位来自物料主档；成品至少一项，半成品/原料/来料加工可留空</td></tr>
           <tr><td>辅料 AUXILIARY（可选）</td><td>画布对应工序旁的调料/添加剂配置格</td><td>按对应产出 SKU 原始单位填写投入量、锅序比例、是否计成本</td><td>只在工艺明确支持时可新增；不支持或未知时说明原因，已有历史行仍可查看</td></tr>
           <tr><td>成本摘要</td><td>当前 BOM 配置的有限预览</td><td>不填写人工或制造费用</td><td>当前只汇总包材；辅料独立维护、主原料无固定数量，不能与实际完整成本直接比较</td></tr>
           <tr><td>版本</td><td>DRAFT / ACTIVE / 历史版本</td><td>克隆后的修改内容</td><td>同一 SKU 仅一个生效版本；ACTIVE 与历史版本只读，新版本不回写旧计划</td></tr>
@@ -515,7 +515,7 @@
         <div class="steps">
 <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-1"><span></span></span><span><h4>B01 · 先保存完整 Workflow 草稿</h4><p>选择目标 SKU，完成 Cell、工序与连线并保存。此时不要先发布。每个工序至少保留一个产出 Cell；要替换唯一产出时先新增“产出 Cell（分流）”。</p><span class="expect">删除最后一个产出或对应连线会被拦截；画布无悬空线，所有 Cell 绑定有效 SKU；顶部“本图产出”按终端生产节点列出真实产出，不以存放位置判断。</span></span></label>
 <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-2"><span></span></span><span><h4>B02 · 从派生配置格建立首版草稿</h4><p>点击工序旁的辅料、包材或副产配置格；没有 BOM 时首次保存自动创建首版草稿。至少配置一项主原料。</p><span class="expect">顶部版本状态按产品区分 Workflow 草稿/已启用版本与 BOM 生效/草稿版本；生效 BOM 明细为空只显示“还没配辅料/包材”，不误报成没有生效 BOM；工艺来源只读，配置格不改变 Workflow 节点或连线。</span></span></label>
-<label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-3"><span></span></span><span><h4>B03 · 按真实需要补辅料、包材与副产</h4><p>辅料只在工艺明确支持的格中新增；不支持或未知时按页面原因处理。无包材或副产时保持空白，不为凑完整度造行。</p><span class="expect">辅料跟随对应工序；包材 Cell 位于成品上方并连向所属成品；副产标记贴在真实产出旁。已有历史行仍可查看；空的可选包材/副产不阻止激活。</span></span></label>
+<label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-3"><span></span></span><span><h4>B03 · 成品补包材，辅料与副产按真实需要</h4><p>成品至少添加一项真实包材；半成品、原料和来料加工不强制包材。辅料只在工艺明确支持的格中新增，副产没有时保持空白。</p><span class="expect">成品无包材返回 <code>BOM_PACKAGING_REQUIRED</code>；辅料缺失只提示、不阻断。包材 Cell 位于成品上方并连向所属成品，副产贴在真实产出旁。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-4"><span></span></span><span><h4>B04 · 核对有限成本摘要</h4><p>当前摘要只汇总包材；辅料独立维护，主原料没有固定数量，人工与制造费用不在 BOM 中配置。</p><span class="expect">不得把该摘要标成完整产品成本；成本差异、差异率和状态不可比时保持空值。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-5"><span></span></span><span><h4>B05 · 生效该草稿</h4><p>确认主原料和实际需要的配置后点击“生效该草稿”。</p><span class="expect">同一 SKU 只有一个 ACTIVE；旧计划继续使用原快照。</span></span></label>
 <label class="step"><span class="check"><input type="checkbox" data-key="bom-canvas-6"><span></span></span><span><h4>B06 · 刷新、自动同步并发布</h4><p>刷新 Workflow，执行“自动同步并发布”；按 READY、可自动迁移或需用户处理的预检结果继续。</p><span class="expect">ACTIVE BOM 门禁通过后，BOM 同步、Workflow 发布和启用原子完成；已有启用版本也能在同一事务切换，旧版本不能把重发布自身误拦。冲突或单位歧义必须停止并列明原因。</span></span></label>
@@ -525,6 +525,7 @@
         <div class="table-wrap" data-min-depth="medium"><table><thead><tr><th>触发</th><th>预期</th></tr></thead><tbody>
           <tr><td>未选 SKU / SKU 缺标准克重</td><td><code>BOM_PRODUCT_MISSING</code>：阻止创建配方头并给出返回 SKU 管理的明确入口</td></tr>
           <tr><td>没有任何主原料就创建或激活 BOM</td><td><code>BOM_ITEM_MISSING</code>：提示至少配置一项主原料；不能把辅料或包材当作主原料兜底</td></tr>
+          <tr><td>成品没有任何包材关系</td><td><code>BOM_PACKAGING_REQUIRED</code>：阻止激活并指向包材配置；半成品/原料/来料加工不触发</td></tr>
           <tr><td>物料未关联、包材用量≤0、单位不兼容</td><td>指出具体行；不能创建或激活</td></tr>
           <tr><td>辅料没有移动平均价</td><td>表单保留，阻止保存并提供“去配置价格/重新读取价格”</td></tr>
           <tr><td>生效版本直接编辑</td><td>只读；必须克隆为新版本</td></tr>
@@ -554,7 +555,7 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-1"><span></span></span><span><h4>建立 Cell 链路</h4><p>添加 4 个原料 Cell A/B/C/D → 原料处理工序 → 处理后半成品 Cell → 定量包装工序 → 成品 Cell。每个原料只能在一张 Workflow 中选择一次；重复项应从选择器中消失。</p><span class="expect">无重复原料、无悬空线、每个 Cell 的 SKU 已绑定。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-2"><span></span></span><span><h4>核对原料投入自动理解</h4><p>只需把 A/B/C/D 的来源 Cell 连接到“原料处理”工序，不再配置替代组或投入关系。系统自动研判为“批次自由选择（至少1个）”。</p><span class="expect">报工时至少选 1 个原料；之后可由用户选择 1 个、多个或全部，不显示主投入/追加投入。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="wf-3"><span></span></span><span><h4>核对单位与真实产出集合</h4><p>原料和处理后半成品均为 kg，最终成品单位为盒。所有 Workflow 都以画布上的终端生产节点作为真实产出集合，存放位置只作目录索引。</p><span class="expect">不出现 1袋=1盒 或 1kg=1盒；生产计划匹配看终端集合，不被 Workflow 名称、存放位置或归属类型误导。</span></span></label>
-          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存完整草稿、激活 BOM，再自动同步并发布</h4><p>先点“自动布局”并保存结构完整的 Workflow 草稿，此时不要发布。回到 BOM 选择目标 SKU，确认系统自动固定本修订并生成工序配置骨架；至少配置一项主原料，辅料和包材按实际需要补充，然后激活 BOM。再回本页刷新并点“自动同步并发布”：系统以最后一次保存后的草稿和当前 ACTIVE BOM 做实时预检，READY 可直接继续，AUTO_MIGRATABLE 会创建或复用同步草稿；USER_INPUT_REQUIRED / CONFLICT 会列出缺失、歧义或单位冲突并停止。</p><span class="expect">确认后 BOM 同步、Workflow 发布和启用原子完成，顶部显示“已发布并启用”及当前版本；版本竞争时停止自动重试，用户修正后重试复用幂等请求。已开工计划保留原 SNAPSHOT，未开工计划随当前生效配置重新绑定；分别回读“已发布 vX / 已启用 vX”。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="wf-4"><span></span></span><span><h4>保存完整草稿、激活 BOM，再自动同步并发布</h4><p>先保存结构完整的 Workflow 草稿。回到 BOM 选择目标 SKU，至少配置一项主原料；成品再补至少一项包材，辅料与副产按实际需要选填，然后激活 BOM。再回本页刷新并点“自动同步并发布”，按 READY / AUTO_MIGRATABLE / USER_INPUT_REQUIRED / CONFLICT 继续。</p><span class="expect">ACTIVE BOM 门禁通过后，BOM 同步、Workflow 发布和启用原子完成；成品无包材明确阻止，辅料未配只提示。已开工计划保留原 SNAPSHOT，未开工计划随当前配置重新绑定。</span></span></label>
 <label class="step" data-min-depth="medium"><span class="check"><input type="checkbox" data-key="wf-auto-fork"><span></span></span><span><h4>区分未开工跟随、已开工历史与旧会话冲突</h4><p>在已启用版本上修改业务图并保存新草稿；分别核对未开工计划、已开工且已有正式报工计划，以及第二个仍停留旧版本的浏览器会话。对旧会话分别提交相同图与不同图。</p><span class="expect">已开工计划保留原 SNAPSHOT，未开工计划采用当前生效配置；历史预览只读。同图延迟保存零写 no-op，不同图且版本身份过期返回 409，不生成旧图草稿。发布后分别回读“已发布 vX / 已启用 vX”。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="wf-active-reference"><span></span></span><span><h4>用活动生产引用验证停用门禁</h4><p>对被进行中/暂停计划或进行中/生产中/暂停批次引用的活动 Workflow 尝试停用，再对已完成、已取消或仅待处理引用复核。</p><span class="expect">活动引用返回 409 与计划/批次数、完成或取消后重试提示；身份未知失败关闭。历史/未开工引用不阻止停用，任何失败都不改生产数据。</span></span></label>
         </div>
@@ -858,11 +859,12 @@
           <tr><td>原料材料</td><td>实际投入批次 × 批次成本</td><td>沿投入谱系归入对应工序；多产出按本次实际数量或本次明确比例分摊</td><td>显示 — / 未归集，不得当 0</td></tr>
           <tr><td>辅料/包材</td><td>BOM 与实际工序领用</td><td>归入使用它们的工序和产出</td><td>提示缺 BOM/领用</td></tr>
           <tr><td>人工</td><td>全局工时单价 × 每道工序实际人工工时</td><td>先按工序归集；多产出按产出分摊基础分开</td><td>未配置时明确采用系统默认 ¥26/工时</td></tr>
-          <tr><td>设备/其他</td><td>报工或成本配置</td><td>若当前版本仅支持批次汇总，页面必须明确“未按本道分摊”</td><td>不可伪装成逐道成本</td></tr>
+          <tr><td>设备/其他</td><td>报工或成本配置</td><td>未发生可以不填；缺失按 0 计入但必须披露“本次成本不含该项”</td><td>不阻断总成本，不得伪装已经归集</td></tr>
           <tr><td>副产抵扣</td><td>盘点实际数量 × 盘点时人工确认单价</td><td>冲减其所属产出的主产品成本</td><td>未确认保持“未抵扣”，人工确认 0 才显示 0.00</td></tr>
         </tbody></table></div>
         <div class="steps" style="margin-top:12px">
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-1"><span></span></span><span><h4>核对逐工序实际成本</h4><p>打开生产批次详情，逐道核对投入、产出、人数、工时、人工成本、材料成本和小计；再与逐道报工原始行对照。</p><span class="expect">人工成本按全局工时单价乘本道实际工时形成；材料价格缺失显示“—”，不是 ¥0；全局工时单价未配置时明确标识使用默认 ¥26/工时。</span></span></label>
+          <label class="step"><span class="check"><input type="checkbox" data-key="cost-truth"><span></span></span><span><h4>区分成本未知、明细不全与可选桶未录</h4><p>分别核对 BOM 单价为 0、人工金额未知、人工金额已知但缺工时段，以及设备/其他未录。</p><span class="expect">BOM <code>itemCost=0</code> 按“未填价”报缺；人工金额未知阻断总成本，金额已知但缺工时段不抹掉已算金额；设备/其他未录不阻断，但答案明确本次成本不含这些项目。已完工批次各桶全 0 时仍判“没归集”。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-2"><span></span></span><span><h4>验证多产出成本分摊落账</h4><p>打开 R05 的联产报工，核对每个实际产出保存的本次分摊基础、实际数量或比例和物化成本；未发生的候选没有成本行，相加后与本道总投入成本一致。</p><span class="expect">单产出为 100%；同量纲多产出按统一数量，量纲不可统一时按本次合计 100% 的比例。允许舍入差但不能重复或漏分，正式成品和半成品分别可追溯。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-3"><span></span></span><span><h4>核对盘点确认后的副产抵扣</h4><p>先在生产仓盘点中核对副产实物并由有权限人员确认单价，再到“成品出厂核算”查看抵扣明细、总成本、净成本和单盒净成本。</p><span class="expect">抵扣额=Σ(盘点实际数量×确认单价)，净成本=总成本−已确认抵扣；单价或实盘数量未确认时显示“未抵扣”而不是 0，前端不得自行重算。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-4"><span></span></span><span><h4>核对成品出厂核算六桶</h4><p>按销售订单/生产批次选择本轮数据，核对 traced 原料、工序辅料、包材、人工、设备、其他和最终盒数。</p><span class="expect">闭环总成本可由各桶相加解释；单盒成本=净总成本÷真实入库盒数。若页面提示某成本未按本道分摊，记录为当前口径而非强行拆分。</span></span></label>
@@ -892,7 +894,8 @@
 
       <section id="stocktake">
         <div class="section-head"><span class="section-no">10</span><div class="section-title"><h3>库存查询与盘点闭环</h3><p>先记录系统账，再实盘、审批并应用差异</p></div></div>
-        <div class="path">仓储管理 <b>›</b> 分仓库存查询 / 库存批次查询 <b>›</b> 盘点与期初库存</div>
+        <div class="path">仓储管理 <b>›</b> 仓储空间与现场盘点 / 分仓库存查询 / 库存批次查询 / 盘点与期初库存</div>
+        <div class="callout blue"><strong>仓储空间与审批证据</strong>电脑 Web 的“仓储空间与现场盘点”维护区域、货架、位置和现场盘点；AI 识别平面图只生成预览，人工确认后才保存。库存调整 OA 待办必须显示盘点单号、仓库和月份，详情深链定位对应盘点单；数量差异不是金额，不能显示假 0 元。调入方新建批次必须保留 <code>TRANSFER_IN</code> 与调拨单号；无来源的第二个原料入库端点已退役。</div>
         <div class="steps">
           <label class="step"><span class="check"><input type="checkbox" data-key="count-1"><span></span></span><span><h4>记录生产后的系统库存</h4><p>搜索 A/B/C/D、处理后半成品、成品 800g，记录仓库、批次、系统数量和单位。半成品若启用独立盘点模块，按“半成品盘点”处理。</p><span class="expect">原料扣减、成品增加与实际报工和小结/结单可计算吻合。</span></span></label>
 <label class="step"><span class="check"><input type="checkbox" data-key="count-adjust"><span></span></span><span><h4>需要直接调整批次时先核对调后数量</h4><p>Web 弹窗里的“调整数量”是增减量：正数增加、负数减少；页面同时展示“当前数量”和“调整后数量”。服务端实际接收的是调整后应剩多少的绝对值，旧 <code>adjustmentType</code> 增减方向参数已拒绝。</p><span class="expect">调后数量不得为负；原因必填，具体备注并入审计且不截断。调整历史的类型、增减量、调前、调后、原因和操作人互相一致。</span></span></label>
