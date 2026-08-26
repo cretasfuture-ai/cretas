@@ -17,9 +17,42 @@ const isRestaurant = computed(() => authStore.factoryType === 'RESTAURANT');
 
 const loading = ref(false);
 
+/**
+ * 🔴 「还没问到」「问了读不到」「真的是 0」三种状态在这一页上是同一个长相。
+ *
+ * 所有初值都是 0, 而两条加载路径的 catch 都只 console.error / 弹个 toast,
+ * **从不重置数据、从不置失败标志** ⇒ 模板继续渲染那批初始 0。
+ * 后端全挂时页面照印「领料 0 单 / 损耗 ¥0 / 今日产量 0 / 合格率 0.0%」,
+ * 配色单位字号与真实读数完全一致 —— 用户读到的是「这个月什么都没干」。
+ *
+ * ⛔ 0 是**合法读数**: 端点成功且返回 0 时必须照印 0
+ *    (「损耗 ¥0」「低库存 0」是好消息, 不许被改成 —— )。
+ *    要消灭的只有**假读数 0**。
+ *
+ * 判据统一成: 有没有读数 → 没有就印 '—'; 有就照印, 包括 0。
+ */
+type Reading = number | null;
+
+/** `raw ?? null` 只吃 null/undefined ⇒ 真读数 0 原样通过, 这正是要的。 */
+function readingOf(loaded: boolean, failed: boolean, raw: number | null | undefined): Reading {
+  if (!loaded) return null; // 还没问到
+  if (failed) return null;  // 问了读不到
+  return raw ?? null;       // 真读数 (0 合法)
+}
+
+/** 没有读数时印 '—'; 有读数才走 formatNumber。⛔ 失败绝不落成 '0'。 */
+function readingText(v: Reading, digits = 0, prefix = ''): string {
+  if (v === null) return '—';
+  return prefix + formatNumber(v, digits);
+}
+
 // Restaurant-specific Gold ops summary data
 const restaurantOps = ref({
   loading: false,
+  /** 已经跑完一轮加载 —— 在此之前任何数字都不是读数。 */
+  loaded: false,
+  /** 问了但读不到(抛错 / success:false)。 */
+  failed: false,
   requisitionCount: 0,
   requisitionQty: 0,
   requisitionCost: 0,
@@ -82,15 +115,41 @@ async function loadRestaurantOps() {
       restaurantOps.value.marginRate = margin.avgMarginRate || 0;
       restaurantOps.value.dishesWithCost = margin.dishCountWithCost || 0;
       restaurantOps.value.totalDishes = margin.totalDishCount || 0;
+      restaurantOps.value.failed = false;
+    } else {
+      // ⛔ success:false 也是读不到 —— 旧实现在这里直接落到 finally,
+      //    把整批初始 0 留在界面上当成读数。
+      restaurantOps.value.failed = true;
     }
   } catch (e) {
+    // 🔴 这条 catch 原本连 toast 都没有, 只 console.error ⇒ 用户看到的
+    //    是一整屏静悄悄的 0, 连"出事了"这个信号都没有。
+    restaurantOps.value.failed = true;
     console.error('[analytics/overview] restaurant ops load failed:', e);
   } finally {
     restaurantOps.value.loading = false;
+    restaurantOps.value.loaded = true;
+    // 抛错和 success:false 都从这里出一次 toast —— 恰好一次。
+    if (restaurantOps.value.failed) {
+      ElMessage.error('餐饮运营数据加载失败, 下方指标已置为「—」(不是 0), 请刷新重试');
+    }
   }
 }
 
+/** 餐饮各卡的读数入口 —— 失败/未加载统一收敛成 null。 */
+function opsReading(raw: number | null | undefined): Reading {
+  return readingOf(restaurantOps.value.loaded, restaurantOps.value.failed, raw);
+}
+
 // 概览数据
+//
+// ⚠️ `sales` / `finance` 这两组**没有任何赋值点** —— 全文搜 `overviewData.value.sales`
+//    / `.finance` 只出现在模板里。loadOverviewData 只打四个端点
+//    (production / quality / overview / equipment), 后端 overview 的返回里
+//    也没有出货/成本字段(见 ProcessingServiceImpl 的 overview 构造)。
+//    ⇒ 「出货记录 0 / 待发货 0 / 今日成本 0 / 平均 0」是**永久**的初值,
+//      与任何数据无关, 也与加载成败无关 —— 属于三态里的「从未加载」。
+//    ⇒ 下面用 factorySourceless 把这两张卡钉成「无数据来源」, ⛔ 不再印 0。
 const overviewData = ref({
   production: { todayOutput: 0, completedBatches: 0, inProgressBatches: 0, efficiency: 0 },
   quality: { totalInspections: 0, passRate: 0, pendingCount: 0 },
@@ -100,7 +159,29 @@ const overviewData = ref({
   finance: { todayCost: 0, averageCost: 0 }
 });
 
+/** 工厂侧: 已经跑完一轮加载。 */
+const factoryLoaded = ref(false);
+/** 工厂侧: 每个端点各自的成败 —— 一个挂了不许把别的卡一起打成失败。 */
+const factoryFailed = ref({
+  production: false,
+  quality: false,
+  warehouse: false,
+  equipment: false,
+});
+
+/** 工厂侧各卡的读数入口。 */
+function factoryReading(source: keyof typeof factoryFailed.value, raw: number | null | undefined): Reading {
+  return readingOf(factoryLoaded.value, factoryFailed.value[source], raw);
+}
+
 // 趋势数据
+//
+// ⚠️ 2026-08-26 核查: `trendData` **在模板里一次都没有被渲染**(全文只有这里的
+//    声明和 loadTrendData 里的赋值两处)。所以它不属于「失败却照样印 0」——
+//    它根本没有印任何东西。loadTrendData 目前的净效果是: 发一个请求、
+//    失败时弹个 toast、把结果存进一个没人读的 ref。
+//    ⇒ 这一轮**不给它加三态 UI**(没有 UI 可加); 只在此登记, 由后续单独决定
+//      是接上图表还是把这条请求删掉。⛔ 不要凭「同族」给它编一个修复。
 const trendData = ref({
   productionTrend: [] as { date: string; value: number }[],
   qualityTrend: [] as { date: string; value: number }[],
@@ -136,35 +217,48 @@ async function loadOverviewData() {
         ...overviewData.value.production,
         ...prodRes.value.data
       };
-    } else { failed.push('生产'); }
+      factoryFailed.value.production = false;
+    } else { failed.push('生产'); factoryFailed.value.production = true; }
     if (qualRes.status === 'fulfilled' && qualRes.value.success) {
       overviewData.value.quality = {
         ...overviewData.value.quality,
         ...qualRes.value.data
       };
-    } else { failed.push('质量'); }
+      factoryFailed.value.quality = false;
+    } else { failed.push('质量'); factoryFailed.value.quality = true; }
     if (warehouseRes.status === 'fulfilled' && warehouseRes.value.success) {
       const data = warehouseRes.value.data || {};
+      // ⚠️ 这里保留 `|| 0`: 端点**成功**时字段缺失按 0 记是既有契约,
+      //    与「端点失败」是两件事 —— 后者已经由 factoryFailed 接管。
       overviewData.value.warehouse.totalMaterialBatches = data.materialBatches || 0;
       overviewData.value.warehouse.lowStockCount = data.lowStockMaterials || 0;
-    } else { failed.push('仓储'); }
+      factoryFailed.value.warehouse = false;
+    } else { failed.push('仓储'); factoryFailed.value.warehouse = true; }
     if (equipRes.status === 'fulfilled' && equipRes.value.success) {
       overviewData.value.equipment = {
         ...overviewData.value.equipment,
         ...equipRes.value.data
       };
-    } else { failed.push('设备'); }
+      factoryFailed.value.equipment = false;
+    } else { failed.push('设备'); factoryFailed.value.equipment = true; }
     // R18-ext #282 fix: when some/all endpoints fail, surface the failure
     // instead of silently showing zeros (prev behavior made zeros look like
     // real data).
+    //
+    // ⚠️ 那一版只加了 toast, 卡片仍然印 0 —— 于是提示说「可能为占位 0」,
+    //    而用户没法从界面上分辨哪一张是占位。现在失败的卡片直接印 '—',
+    //    措辞也跟着改: 不再说「可能为占位 0」。
     if (failed.length > 0) {
-      ElMessage.warning(`概览数据部分加载失败: ${failed.join('、')}. 相关指标可能为占位 0, 请刷新重试`);
+      ElMessage.warning(`概览数据部分加载失败: ${failed.join('、')}. 对应指标已置为「—」, 请刷新重试`);
     }
   } catch (error) {
+    // ⛔ 兜底路径同样不许让卡片停在 0。
+    factoryFailed.value = { production: true, quality: true, warehouse: true, equipment: true };
     console.error('加载概览数据失败:', error);
     ElMessage.error('加载概览数据失败，请稍后重试');
   } finally {
     loading.value = false;
+    factoryLoaded.value = true;
   }
 }
 
@@ -190,8 +284,12 @@ async function loadTrendData() {
 // R18-ext #284 fix: backend passRate is already a percentage value
 // (e.g. 68.33 for 68.33%), not a decimal (0.6833). Multiplying by 100
 // produced "6833.0%" in the UI.
-function formatPercent(num: number): string {
-  if (num == null || isNaN(num)) return '0.0%';
+//
+// ⚠️ 这个函数原本 `num == null` 时返回 '0.0%' —— 同一个病的第三处:
+//    「没有合格率可报」被翻译成「合格率是 0.0%」, 而 0% 合格率是灾难级读数。
+//    现在没有读数就印 '—'; 真读数 0 仍然印 '0.0%'(端点成功且确实是 0)。
+function formatPercent(num: Reading): string {
+  if (num === null || isNaN(Number(num))) return '—';
   return Number(num).toFixed(1) + '%';
 }
 </script>
@@ -208,45 +306,61 @@ function formatPercent(num: number): string {
 
     <!-- Restaurant tenant: Gold ops dashboard (Plan C Phase 1-5) -->
     <template v-if="isRestaurant">
+      <!-- 🔴 读取失败时的显式横幅 —— toast 会自己消失, 而卡片上的 '—' 需要一句解释。 -->
+      <el-alert
+        v-if="restaurantOps.failed"
+        class="ops-failed-alert"
+        type="error"
+        :closable="false"
+        show-icon
+        title="餐饮运营数据读取失败"
+      >
+        <div style="font-size:13px">
+          下面的指标显示为「—」表示<b>本次没有查到</b>, ⛔ 不代表这些数是 0。请刷新重试或联系管理员。
+        </div>
+      </el-alert>
+
       <el-row :gutter="16" class="overview-cards" v-loading="restaurantOps.loading">
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card production" shadow="hover">
+          <el-card class="stat-card production" data-stat="领料" shadow="hover">
             <div class="card-header"><el-icon class="module-icon"><KnifeFork /></el-icon><span>领料</span></div>
-            <div class="stat-value">{{ formatNumber(restaurantOps.requisitionCount) }}</div>
+            <div class="stat-value">{{ readingText(opsReading(restaurantOps.requisitionCount)) }}</div>
             <div class="stat-label">近30天领料单</div>
-            <div class="stat-footer"><span>{{ formatNumber(restaurantOps.requisitionQty, 1) }} 单位</span></div>
+            <div class="stat-footer"><span>{{ readingText(opsReading(restaurantOps.requisitionQty), 1) }} 单位</span></div>
           </el-card>
         </el-col>
         <el-col v-if="canViewPrice" :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card quality" shadow="hover">
+          <el-card class="stat-card quality" data-stat="损耗" shadow="hover">
             <div class="card-header"><el-icon class="module-icon"><Sunny /></el-icon><span>损耗</span></div>
-            <div class="stat-value">¥{{ formatNumber(restaurantOps.wastageCost, 0) }}</div>
+            <!-- ⚠️ 没有读数时连 ¥ 一起收掉: 「¥—」读起来仍像一个金额。 -->
+            <div class="stat-value">{{ readingText(opsReading(restaurantOps.wastageCost), 0, '¥') }}</div>
             <div class="stat-label">近30天损耗金额</div>
-            <div class="stat-footer"><span>{{ restaurantOps.wastageCount }} 次记录</span></div>
+            <div class="stat-footer"><span>{{ readingText(opsReading(restaurantOps.wastageCount)) }} 次记录</span></div>
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card warehouse" shadow="hover">
+          <el-card class="stat-card warehouse" data-stat="盘点" shadow="hover">
             <div class="card-header"><el-icon class="module-icon"><Box /></el-icon><span>盘点</span></div>
-            <div class="stat-value">{{ formatNumber(restaurantOps.shortage, 1) }}</div>
+            <div class="stat-value">{{ readingText(opsReading(restaurantOps.shortage), 1) }}</div>
             <div class="stat-label">近30天盘亏量</div>
-            <div class="stat-footer"><span>{{ restaurantOps.stocktakingCount }} 次盘点</span></div>
+            <div class="stat-footer"><span>{{ readingText(opsReading(restaurantOps.stocktakingCount)) }} 次盘点</span></div>
           </el-card>
         </el-col>
         <el-col v-if="canViewPrice" :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card sales" shadow="hover">
+          <el-card class="stat-card sales" data-stat="食材成本" shadow="hover">
             <div class="card-header"><el-icon class="module-icon"><Money /></el-icon><span>食材成本</span></div>
-            <div class="stat-value">¥{{ formatNumber(restaurantOps.requisitionCost, 0) }}</div>
+            <div class="stat-value">{{ readingText(opsReading(restaurantOps.requisitionCost), 0, '¥') }}</div>
             <div class="stat-label">近30天估算</div>
-            <div class="stat-footer"><span>{{ restaurantOps.activeDays }} 天有活动</span></div>
+            <div class="stat-footer"><span>{{ readingText(opsReading(restaurantOps.activeDays)) }} 天有活动</span></div>
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card finance" shadow="hover">
+          <el-card class="stat-card finance" data-stat="Top 食材" shadow="hover">
             <div class="card-header"><el-icon class="module-icon"><Histogram /></el-icon><span>Top 食材</span></div>
             <div class="stat-value" style="font-size:18px">{{ restaurantOps.top5Ingredients[0]?.name || '—' }}</div>
             <div class="stat-label">消耗最多</div>
-            <div class="stat-footer"><span>¥{{ formatNumber(restaurantOps.top5Ingredients[0]?.cost || 0, 0) }}</span></div>
+            <!-- ⛔ 原来是 `cost || 0` ⇒ 读不到时印「¥0」, 把「不知道」说成「零成本」。 -->
+            <div class="stat-footer"><span>{{ readingText(opsReading(restaurantOps.top5Ingredients[0]?.cost), 0, '¥') }}</span></div>
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
@@ -333,95 +447,124 @@ function formatPercent(num: number): string {
     <el-row v-else :gutter="16" class="overview-cards" v-loading="loading">
       <!-- 生产模块 -->
       <el-col :xs="24" :sm="12" :md="8" :lg="4">
-        <el-card class="stat-card production" shadow="hover">
+        <el-card
+          class="stat-card production"
+          :class="{ 'is-unavailable': factoryLoaded && factoryFailed.production }"
+          data-stat="生产"
+          shadow="hover"
+        >
           <div class="card-header">
             <el-icon class="module-icon"><TrendCharts /></el-icon>
             <span>生产</span>
           </div>
-          <div class="stat-value">{{ formatNumber(overviewData.production.todayOutput) }}</div>
+          <div class="stat-value">{{ readingText(factoryReading('production', overviewData.production.todayOutput)) }}</div>
           <div class="stat-label">今日产量</div>
           <div class="stat-footer">
-            <span>完成批次: {{ overviewData.production.completedBatches }}</span>
+            <span>完成批次: {{ readingText(factoryReading('production', overviewData.production.completedBatches)) }}</span>
           </div>
+          <div v-if="factoryLoaded && factoryFailed.production" class="stat-unavailable">读取失败</div>
         </el-card>
       </el-col>
 
       <!-- 质量模块 -->
       <el-col :xs="24" :sm="12" :md="8" :lg="4">
-        <el-card class="stat-card quality" shadow="hover">
+        <el-card
+          class="stat-card quality"
+          :class="{ 'is-unavailable': factoryLoaded && factoryFailed.quality }"
+          data-stat="质量"
+          shadow="hover"
+        >
           <div class="card-header">
             <el-icon class="module-icon"><Sunny /></el-icon>
             <span>质量</span>
           </div>
-          <div class="stat-value">{{ formatPercent(overviewData.quality.passRate) }}</div>
+          <div class="stat-value">{{ formatPercent(factoryReading('quality', overviewData.quality.passRate)) }}</div>
           <div class="stat-label">合格率</div>
           <div class="stat-footer">
-            <span>待检: {{ overviewData.quality.pendingCount }}</span>
+            <span>待检: {{ readingText(factoryReading('quality', overviewData.quality.pendingCount)) }}</span>
           </div>
+          <div v-if="factoryLoaded && factoryFailed.quality" class="stat-unavailable">读取失败</div>
         </el-card>
       </el-col>
 
       <!-- 仓储模块 -->
       <el-col :xs="24" :sm="12" :md="8" :lg="4">
-        <el-card class="stat-card warehouse" shadow="hover">
+        <el-card
+          class="stat-card warehouse"
+          :class="{ 'is-unavailable': factoryLoaded && factoryFailed.warehouse }"
+          data-stat="仓储"
+          shadow="hover"
+        >
           <div class="card-header">
             <el-icon class="module-icon"><Histogram /></el-icon>
             <span>仓储</span>
           </div>
-          <div class="stat-value">{{ formatNumber(overviewData.warehouse.totalMaterialBatches) }}</div>
+          <div class="stat-value">{{ readingText(factoryReading('warehouse', overviewData.warehouse.totalMaterialBatches)) }}</div>
           <div class="stat-label">原料批次</div>
           <div class="stat-footer">
-            <span :class="{ 'text-warning': overviewData.warehouse.lowStockCount > 0 }">
-              低库存: {{ overviewData.warehouse.lowStockCount }}
+            <!-- ⚠️ 告警底色只在**有读数且 > 0** 时点亮 —— 读不到不是「不缺货」。 -->
+            <span :class="{ 'text-warning': !factoryFailed.warehouse && overviewData.warehouse.lowStockCount > 0 }">
+              低库存: {{ readingText(factoryReading('warehouse', overviewData.warehouse.lowStockCount)) }}
             </span>
           </div>
+          <div v-if="factoryLoaded && factoryFailed.warehouse" class="stat-unavailable">读取失败</div>
         </el-card>
       </el-col>
 
       <!-- 设备模块 -->
       <el-col :xs="24" :sm="12" :md="8" :lg="4">
-        <el-card class="stat-card equipment" shadow="hover">
+        <el-card
+          class="stat-card equipment"
+          :class="{ 'is-unavailable': factoryLoaded && factoryFailed.equipment }"
+          data-stat="设备"
+          shadow="hover"
+        >
           <div class="card-header">
             <el-icon class="module-icon"><Timer /></el-icon>
             <span>设备</span>
           </div>
-          <div class="stat-value">{{ overviewData.equipment.totalEquipments }}</div>
+          <div class="stat-value">{{ readingText(factoryReading('equipment', overviewData.equipment.totalEquipments)) }}</div>
           <div class="stat-label">设备总数</div>
           <div class="stat-footer">
-            <span :class="{ 'text-danger': overviewData.equipment.alertCount > 0 }">
-              告警: {{ overviewData.equipment.alertCount }}
+            <span :class="{ 'text-danger': !factoryFailed.equipment && overviewData.equipment.alertCount > 0 }">
+              告警: {{ readingText(factoryReading('equipment', overviewData.equipment.alertCount)) }}
             </span>
           </div>
+          <div v-if="factoryLoaded && factoryFailed.equipment" class="stat-unavailable">读取失败</div>
         </el-card>
       </el-col>
 
-      <!-- 销售模块 -->
+      <!-- 销售模块 —— ⚠️ 这张卡**没有数据来源**(见 overviewData 上方注释):
+           `overviewData.sales` 全文没有任何赋值点, 它印的永远是初值。
+           ⛔ 所以它不许印 0; 印 '—' 并说明「未接入」。 -->
       <el-col :xs="24" :sm="12" :md="8" :lg="4">
-        <el-card class="stat-card sales" shadow="hover">
+        <el-card class="stat-card sales is-sourceless" data-stat="销售" shadow="hover">
           <div class="card-header">
             <el-icon class="module-icon"><PieChart /></el-icon>
             <span>销售</span>
           </div>
-          <div class="stat-value">{{ formatNumber(overviewData.sales.totalShipments) }}</div>
+          <div class="stat-value">—</div>
           <div class="stat-label">出货记录</div>
           <div class="stat-footer">
-            <span>待发货: {{ overviewData.sales.pendingShipments }}</span>
+            <span>待发货: —</span>
           </div>
+          <div class="stat-unavailable">本页尚未接入销售数据源</div>
         </el-card>
       </el-col>
 
-      <!-- 财务模块 -->
+      <!-- 财务模块 —— 同上, `overviewData.finance` 同样没有赋值点。 -->
       <el-col :xs="24" :sm="12" :md="8" :lg="4">
-        <el-card class="stat-card finance" shadow="hover">
+        <el-card class="stat-card finance is-sourceless" data-stat="成本" shadow="hover">
           <div class="card-header">
             <el-icon class="module-icon"><DataAnalysis /></el-icon>
             <span>成本</span>
           </div>
-          <div class="stat-value">{{ formatNumber(overviewData.finance.todayCost) }}</div>
+          <div class="stat-value">—</div>
           <div class="stat-label">今日成本</div>
           <div class="stat-footer">
-            <span>平均: {{ formatNumber(overviewData.finance.averageCost) }}</span>
+            <span>平均: —</span>
           </div>
+          <div class="stat-unavailable">本页尚未接入成本数据源</div>
         </el-card>
       </el-col>
     </el-row>
@@ -477,6 +620,26 @@ function formatPercent(num: number): string {
 
 .overview-cards {
   margin-bottom: 24px;
+}
+
+.ops-failed-alert {
+  margin-bottom: 16px;
+}
+
+/* 「读不到」和「读到 0」在视觉上必须分得开, 否则三态在界面上又并回两态。 */
+.stat-card.is-unavailable,
+.stat-card.is-sourceless {
+  border-style: dashed;
+
+  .stat-value {
+    color: #c0c4cc !important;
+  }
+}
+
+.stat-unavailable {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .stat-card {
