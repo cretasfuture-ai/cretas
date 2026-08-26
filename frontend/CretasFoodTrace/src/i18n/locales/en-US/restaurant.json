@@ -110,6 +110,10 @@
     "execute": {
       "title": "Execute Stocktaking",
       "systemQty": "System Qty",
+      "unit": "Unit",
+      "actualQty": "Counted Qty",
+      "difference": "Variance",
+      "blindHint": "The system quantity is hidden while counting: enter what you actually counted. The system quantity and the variance are shown immediately after you submit.",
       "inputActual": "Enter actual quantity",
       "reason": "Reason",
       "complete": "Complete",

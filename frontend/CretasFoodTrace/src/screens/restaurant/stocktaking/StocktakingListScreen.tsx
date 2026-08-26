@@ -139,10 +139,20 @@ export function StocktakingListScreen() {
                           t('common.materialNameUnavailable'),
                         )}</Text>
                       </View>
-                      <View style={styles.infoRow}>
-                        <Text style={styles.infoLabel}>{t('stocktaking.list.systemQty')}</Text>
-                        <Text style={styles.infoValue}>{r.systemQuantity} {r.unit}</Text>
-                      </View>
+                      {/*
+                        账面数只在**盘完之后**显示。
+
+                        这张卡片是「执行盘点」的入口(点它就跳 StocktakingExecute),
+                        所以在未完成的记录上显示账面数, 与直接把它印在录入框上方是
+                        同一件事 —— 只把执行屏改掉、留着这里, 盘的人照样在跳转前
+                        一秒看见那个数, 改动等于没做。
+                      */}
+                      {r.status === 'COMPLETED' && (
+                        <View style={styles.infoRow}>
+                          <Text style={styles.infoLabel}>{t('stocktaking.list.systemQty')}</Text>
+                          <Text style={styles.infoValue}>{r.systemQuantity} {r.unit}</Text>
+                        </View>
+                      )}
                       {r.actualQuantity != null && (
                         <View style={styles.infoRow}>
                           <Text style={styles.infoLabel}>{t('stocktaking.list.actualQty')}</Text>
