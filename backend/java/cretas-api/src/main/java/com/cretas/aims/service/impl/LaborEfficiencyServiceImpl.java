@@ -666,7 +666,14 @@ public class LaborEfficiencyServiceImpl implements LaborEfficiencyService {
         boolean anyQuoted = false;
 
         for (ProductionBatch b : groupBatches) {
-            BigDecimal goodQty = b.getGoodQuantity() != null ? b.getGoodQuantity() : b.getActualQuantity();
+            // ⛔ 不再用 actualQuantity 顶替缺失的 goodQuantity。
+            //    「没人填不良品」不等于「零不良」—— 顶替一次, 下游的人效/单位成本
+            //    就拿到一个偏乐观的分母, 而且看不出它是编出来的。
+            // 🔴 这里是那个谎的【第二个家】: 写侧(WorkReportingServiceImpl)已停止
+            //    把 good 填成 actual, 若这里还顶替, 等于换个地方继续编。
+            // ⚠️ 下面 `if (goodQty != null)` 原本就在, 所以留 null 只是让这批数据
+            //    不参与统计(诚实少算), 而不是崩。
+            BigDecimal goodQty = b.getGoodQuantity();
             if (goodQty != null) {
                 totalGoodQty = totalGoodQty.add(goodQty);
                 anyGoodQty = true;
