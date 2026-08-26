@@ -45,3 +45,16 @@ def test_target_guide_rejects_crop_that_does_not_contain_detection():
         assert "does not contain" in str(error)
     else:
         raise AssertionError("expected target guide containment failure")
+
+
+def test_pre_guide_review_is_carried_only_as_untrusted_proposal(tmp_path):
+    carried = MODULE.carry_for_target_guide_reconfirmation(
+        {"reviewed": True, "training_eligible": True, "boxes": [{"c": 1, "b": [0, 0, 1, 1]}]},
+        tmp_path,
+        "a" * 64,
+    )
+    assert carried["reviewed"] is False
+    assert carried["training_eligible"] is False
+    assert carried["boxes"] == [{"c": 1, "b": [0, 0, 1, 1]}]
+    assert carried["review_round_action"] == "RECONFIRM_WITH_TARGET_GUIDE"
+    assert carried["training_exclusion_reason"] == "awaiting_target_tray_guide_reconfirmation"

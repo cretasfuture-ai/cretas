@@ -125,6 +125,23 @@ def target_guide_in_crop(
     return [round(value, 6) for value in guide]
 
 
+def carry_for_target_guide_reconfirmation(
+    annotation: dict[str, Any], source_queue: Path, source_sha256: str,
+) -> dict[str, Any]:
+    """Keep human work as a proposal without trusting a pre-guide review."""
+    carried = dict(annotation)
+    carried.update({
+        "reviewed": False,
+        "source": "carried_human_proposal_requires_target_guide_reconfirmation",
+        "training_eligible": False,
+        "training_exclusion_reason": "awaiting_target_tray_guide_reconfirmation",
+        "review_round_action": "RECONFIRM_WITH_TARGET_GUIDE",
+        "carried_from_queue": str(source_queue.resolve()),
+        "carried_reviewed_annotation_sha256": source_sha256,
+    })
+    return carried
+
+
 def build(
     source_queue: Path, output: Path, review_round: int, annotator_url: str,
     carry_reviewed_from: Path | None = None,
@@ -208,8 +225,10 @@ def build(
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         carried_annotation = carried_reviewed.get(crop_id)
         if carried_annotation is not None:
-            carried_annotation = dict(carried_annotation)
-            carried_annotation["carried_from_queue"] = str(carry_reviewed_from.resolve())
+            source_annotation_path = carry_reviewed_from / "annotations-human" / f"{crop_id}.json"
+            carried_annotation = carry_for_target_guide_reconfirmation(
+                carried_annotation, carry_reviewed_from, sha256_file(source_annotation_path),
+            )
             (output / "annotations-human" / f"{crop_id}.json").write_text(
                 json.dumps(carried_annotation, ensure_ascii=False, indent=1) + "\n",
                 encoding="utf-8",
@@ -261,7 +280,7 @@ def build(
         "incomplete_tray_can_requeue_again": True,
         "target_tray_guides_are_read_only": True,
         "target_tray_guides_are_not_ground_truth": True,
-        "reviewed_annotations_carried": len(carried_reviewed),
+        "reviewed_annotations_carried_for_reconfirmation": len(carried_reviewed),
         "evaluation_or_production_use_allowed": False,
         "production_writes": 0,
         "originals_modified": 0,
@@ -289,7 +308,9 @@ def main() -> None:
         "queue": str(args.output.resolve()),
         "count": manifest["queue_count"],
         "review_round": manifest["review_round"],
-        "reviewed_annotations_carried": manifest["reviewed_annotations_carried"],
+        "reviewed_annotations_carried_for_reconfirmation": manifest[
+            "reviewed_annotations_carried_for_reconfirmation"
+        ],
         "annotator_url": manifest["annotator_url"],
         "production_writes": 0,
         "originals_modified": 0,
