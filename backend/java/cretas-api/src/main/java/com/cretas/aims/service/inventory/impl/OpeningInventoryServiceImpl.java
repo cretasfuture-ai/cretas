@@ -8,7 +8,6 @@ import com.cretas.aims.dto.material.OpeningInventoryRequest;
 import com.cretas.aims.dto.material.OpeningInventoryResult;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.ArApTransaction;
@@ -261,7 +260,6 @@ public class OpeningInventoryServiceImpl implements OpeningInventoryService {
         batch.setQuantityUnit(resolveUnit(item, materialType));
         batch.setUnitPrice(item.getUnitPrice());   // 诚实-null: 可为空
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        batch.setInboundType(InboundType.LEGACY_IMPORT);   // 期初=历史/迁移导入语义
         batch.setSourceDocType(OPENING_SOURCE_DOC_TYPE);
         batch.setSourceDocId(batchKey);
         batch.setCreatedBy(userId);

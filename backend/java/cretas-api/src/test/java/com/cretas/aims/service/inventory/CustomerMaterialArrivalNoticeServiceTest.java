@@ -7,7 +7,6 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.UnorderedInboundReason;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
@@ -369,7 +368,6 @@ class CustomerMaterialArrivalNoticeServiceTest {
         verify(materialBatchRepository).saveAndFlush(batchCaptor.capture());
         MaterialBatch saved = batchCaptor.getValue();
         assertEquals(InventoryOwnership.COMPANY_OWNED, saved.getOwnership());
-        assertEquals(InboundType.OTHER, saved.getInboundType());
         assertNull(saved.getOwnerCustomerId());
         assertEquals("NOTICE-GIFT", saved.getSourceDocId());
     }

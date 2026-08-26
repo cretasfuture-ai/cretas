@@ -9,7 +9,6 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.InventoryOwnership;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.enums.SalesOrderSuppliedMaterialRequirementStatus;
@@ -383,7 +382,6 @@ public class SalesOrderSuppliedMaterialRequirementService {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        batch.setInboundType(InboundType.CUSTOMER_SUPPLIED);
         batch.setSourceDocType(sourceType);
         batch.setSourceDocId(taskId);
         batch.setSourceEventKey(request.getIdempotencyKey());

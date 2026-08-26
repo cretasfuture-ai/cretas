@@ -1,6 +1,5 @@
 package com.cretas.aims.entity;
 
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -176,11 +175,6 @@ public class MaterialBatch extends BaseEntity {
      */
     @Column(name = "supplier_batch_number", length = 100)
     private String supplierBatchNumber;
-
-    /** 入库类型 */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "inbound_type", length = 30)
-    private InboundType inboundType;
 
     /** 发起单类型 (P0-17): PURCHASE_RECEIVE / MATERIAL_REQUISITION_RETURN / SALES_RETURN / MANUAL_ADJUST / BYPRODUCT */
     @Column(name = "source_doc_type", length = 32)

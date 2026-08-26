@@ -39,14 +39,16 @@ public class WarehouseInventoryGuardService {
      * <p>例: WIP 仓只允许 inboundCategory=SEMI_FINISHED；RAW/SALTED 仓只允许 inboundCategory=RAW。
      *
      * <p>⚠️ 这里说的是本方法的 {@code inboundCategory} 形参 (字符串 RAW/SEMI_FINISHED/FINISHED),
-     * <b>不是</b> {@link com.cretas.aims.entity.enums.InboundType} —— 那个枚举里根本没有
-     * {@code SEMI_FINISHED} / {@code RAW} 这两个值 (它的值域是
-     * PURCHASE_ORDER / CUSTOMER_SUPPLIED / INVENTORY_COUNT / SUPPLIER_RETURN /
-     * FACTORY_RETURN / LEGACY_IMPORT / OTHER)。本注释此前写成 {@code inboundType},
-     * 是全仓<b>唯一</b>暗示 {@code InboundType} 参与仓库准入的地方, 而它并不参与:
-     * 2026-08-25 实测 {@code InboundType} 在 Java/web-admin/RN/Python 四侧
-     * <b>零个生产读取点</b>, 只有 4 个写入点和 3 处测试断言 (详见
-     * ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001 的核查结论)。
+     * <b>不是</b>「入库来源单据类型」({@code MaterialBatch.sourceDocType})。两者语义不同:
+     * 前者是<b>物料大类</b>, 决定能不能进这个仓; 后者是<b>来源单据</b>, 用来追溯批次从哪来。
+     *
+     * <p>📌 曾经还有第三个东西叫 {@code InboundType} 枚举, <b>已于 2026-08-26 删除</b>:
+     * 实测它在 Java/web-admin/RN/Python 四侧<b>零个生产读取点</b>, 只有 4 个写入点和
+     * 3 处「断言自己刚写进去的值」的测试; 生产库 177 个批次里仅 10 个有值, 而其中唯一
+     * 有业务含义的 {@code CUSTOMER_SUPPLIED} <b>一行都没有</b>。它的职责已由
+     * {@code sourceDocType} 承担 (那个字段真的驱动分支, 见 MaterialBatchServiceImpl)。
+     * ⚠️ 列 {@code material_batches.inbound_type} <b>保留未删</b> (那 10 行历史数据还在),
+     * 只是不再有实体字段映射它。
      *
      * @param warehouseId 目标仓库 ID
      * @param factoryId   工厂 ID
