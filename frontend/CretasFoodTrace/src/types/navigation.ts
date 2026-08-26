@@ -258,6 +258,12 @@ export type ManagementStackParamList = {
 export type ProfileStackParamList = {
   ProfileHome: undefined;
 
+  // 我的工资 (2026-08-25) — 只读本人工资
+  // ⚠️ 无参数是**有意的**: 后端 /wage/me/* 不接受任何 workerId 入参, 身份只从 token 推导。
+  //    ⛔ 想加 { workerId } 来「顺便让班组长看组员」→ 那要另开路由 + 另一道
+  //    「他是不是我的组员」的闸, 不要在这条路由上加参数。
+  MyWage: undefined;
+
   // Phase 3 P2: 意见反馈
   Feedback: undefined;
 

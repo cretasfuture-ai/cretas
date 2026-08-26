@@ -451,6 +451,21 @@ public class PermissionServiceImpl implements PermissionService {
             return FINANCE_REVIEW_VIEW_ROLES.contains(role);
         }
 
+        // hr:self_wage:view — 只读**本人**工资 (RN「我的工资」屏, 2026-08-25).
+        //
+        // ⛔ 这里故意**不设角色白名单**: 车间工人 / 仓库员 / 质检员 都可能是计件或计时工资,
+        //    每个人都该看得到自己那一份。白名单只会漏掉角色, 漏掉的症状是「某个岗位看不到自己工资」,
+        //    而看不到的人不会来报 bug, 他只会继续去财务那里扯皮 —— 正是这个功能要消灭的东西。
+        //
+        // 不越权的保证**不在这个码上**, 在消费它的 controller 上:
+        // MyWageController 的每个端点都从 token 推导 workerId, 不接受任何 workerId 入参。
+        // 见 MyWageControllerSelfScopeTest —— 那条测试才是防越权的判据。
+        //
+        // ⚠️ 上面已经 return 掉 role == null / unactivated, 所以到这里的一定是已激活账号。
+        if (SELF_WAGE_VIEW_PERMISSION.equals(permissionCode)) {
+            return true;
+        }
+
         // 解析权限代码 (格式: module:action)
         String[] parts = permissionCode.split(":");
         if (parts.length != 2) {
