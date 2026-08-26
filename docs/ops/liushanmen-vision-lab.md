@@ -115,19 +115,54 @@ B:\anaconda3\python.exe tools\vision-lab\replay_pending_label_photos.py `
   --output D:\CretasVisionLab\receipts\liushanmen-pending-replay-<timestamp>.json
 ```
 
-只有重放后仍为缺标或 `UNJUDGEABLE` 的目标托盘进入最小队列。队列裁剪对浅托盘向下扩展上下文，
-确保托盘本体完整；预标注故意为空，人工只补中央目标托盘自己的白标/彩标，不补托盘框：
+只有重放后仍为缺标或 `UNJUDGEABLE` 的目标托盘进入最小队列。浅托盘按宽高比识别，并按托盘宽度
+推算实体高度向下扩展，禁止使用随原图分辨率漂移的固定像素高度判断；预标注故意为空，人工只补
+中央目标托盘自己的白标/彩标，不补托盘框。更正裁剪时用 `--carry-reviewed-from` 把已完成的人框经
+原图坐标转换带入新队列，不能要求操作员重做。每行必须保存 `review_crop_geometry`；若原图边界导致
+上下文仍达不到门槛，该行保持 `training_eligible=false`，页面明确要求选“看不清”，不得靠人工猜测
+或修改阈值放行：
 
 ```powershell
 B:\anaconda3\python.exe tools\vision-lab\build_pending_label_review_queue.py `
   --pending-manifest <pending-manifest> `
   --replay <pending-replay-receipt> `
   --output D:\CretasVisionLab\queues\label-pending-<timestamp> `
+  --carry-reviewed-from <superseded-review-queue> `
   --annotator-url http://127.0.0.1:<port>/
 ```
 
 人工审核完成后仍必须先审计 `reviewed=true, source=human`、模糊/outlier 隔离和保护集排除，再决定
 是否存在可训练增量；“待审核照片被重放为 CLEAR”本身不是训练真值，也不得用于放宽门禁。
+
+### 历史标签训练裁图完整性审计
+
+复用任何既有 label 数据集前，必须把数据集中的每个 `derived_rows[kind=label]` 重新绑定到源队列、
+整图人工 sidecar、父托盘、裁图和 YOLO 标签。审计会去重历史重建版本，验证 sidecar/裁图/标签 SHA、
+图片尺寸、类别状态、实例数、父托盘和人工标签是否都在裁图内，并单列“缺标负样本但物理上下文不足”。
+旧 sidecar 已被改写、标签越界或状态矛盾都属于不可复现材料，禁止静默复用：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\audit_label_training_crop_integrity.py `
+  --dataset-root D:\CretasVisionLab\datasets `
+  --production-manifest <本次候选实际复用的数据集 manifest> `
+  --output D:\CretasVisionLab\audits\label-training-crop-integrity-<timestamp>\receipt.json `
+  --require-production-reuse-pass
+```
+
+`--require-production-reuse-pass` 在写完证据回执后以非零退出阻断训练。不得删除风险项来伪造通过；
+正样本裁图截断但整图人工框完整时，应从绑定真值重新生成裁图；缺白标/彩标负样本若上下文存在歧义，
+先生成无预框、固定 `training_eligible=false` 的最小复核队列：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_historical_negative_review_queue.py `
+  --audit <failed-audit-receipt> `
+  --output D:\CretasVisionLab\queues\label-historical-negative-context-<timestamp> `
+  --annotator-url http://127.0.0.1:<port>/
+```
+
+只有新人工结果与重建裁图形成新的不可变数据集、再次完整审计通过后，候选训练才可开始。现有生产模型
+不因历史审计失败自动替换或回滚；是否提升仍由 protected holdout、production-equivalent replay、
+白标/彩标关键召回与误报全门禁决定。
 
 人工确认的缺标样本可通过 `training.isolated_missing_repeat`（整数 `1..10`，默认 `1`）增加训练权重。
 该策略只重复任务级划分后进入 train 的样本，validation 永不复制；并且只接受“明确声明缺一个类别、
