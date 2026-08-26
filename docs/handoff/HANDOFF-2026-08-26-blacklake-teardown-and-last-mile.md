@@ -51,6 +51,71 @@ grep 推送    → 0 命中     真名 NotifySender / NotifyChannel / PushNotifi
 
 ---
 
+## 一·补、🔴 先看这组数字，它改变本文件里的优先级排序
+
+**2026-08-26 在 `cretas_prod_db` 上实测（只读，带阳性对照）：**
+
+```
+production_reports           72 行
+production_batches           61
+production_plans             43
+labels                       15
+──────────────────────────────────
+payroll_records               0
+piece_rate_rules              0
+wage_calculation              0
+wage_policy                   0
+worker_daily_efficiency       0
+restaurant_piecework_configs  0
+aps_efficiency_history        0
+```
+
+### 结论一：整个工资子系统从来没在生产上用过
+
+7 张表全 0 行。`piece_rate_rules = 0` 意味着**没有任何一个工序配过计件单价**。
+
+⛔ **本文件此前把「『我的工资』屏」列为「全场 ROI 最高」—— 那句是错的。**
+理由曾是「引擎已有 18 个端点，只缺一个只读视图」。
+**引擎在代码里有，但从未被配置、从未被使用。**
+⇒ 把那个屏做出来，工人打开看到的是**一个空屏**（诚实的空态，但没有任何内容）。
+
+**真正的前置不是写代码，是运营动作**：有人去配计件单价、跑一次工资单。
+在那之前，#85（我的工资屏）和 #99（工资引擎收敛）修的都是**一条从未跑过的路径**。
+⇒ 这两个 PR 不该排在前面。
+
+### 结论二：`vflag` 那条待裁定可以关掉
+
+`payroll_records` 0 行 ⇒ **不存在 `PENDING + vflag=CREATED` 的记录**，
+#99 的重算端点今天不可能改坏任何凭证。
+⇒ 降级为「**加断言钉住，不阻塞合并**」。代码路径仍然可达，所以断言要加。
+
+### 结论三：工厂侧整体使用量很小
+
+`labels` 15 行、`production_reports` 72 行。
+⇒ **排优先级时要问一句「这条路径一天跑几次」** ——
+修一个每天跑几千次的路径和修一个总共 72 行数据的路径，价值差很远。
+
+⚠️ **只量了 `cretas_prod_db`。餐饮那套在 `smartbi_prod_db`，未量。**
+所以「使用量小」这个判断**只对工厂侧成立**，不要外推到餐饮。
+
+### 怎么复现这组读数
+
+```bash
+ssh root@47.100.235.168
+UNIT=cretas-backend-green.service          # ⚠️ 不是 cretas-backend, 蓝绿部署下名字不同
+PID=$(systemctl show -p MainPID --value $UNIT)
+eval "$(tr '\0' '\n' < /proc/$PID/environ | grep -E '^DB_PASSWORD=' | sed 's/^DB_PASSWORD=/export PGPASSWORD=/')"
+psql -h 127.0.0.1 -U cretas_user -d cretas_prod_db -c "<你的只读 SQL>"
+```
+
+⛔ 三个坑，都实测踩过：
+1. **库名是 `cretas_prod_db` 不是 `cretas_db`**（配置里的默认值是后者）
+2. **`.env.prod` 里没有独立的 `POSTGRES_DB`/`POSTGRES_USER`** ——
+   `grep 'POSTGRES_DB='` 会匹配到 `FOOD_KB_POSTGRES_DB=` 的尾巴，给出假读数。凭证要从**活进程 environ** 读
+3. **`ss -lntp | grep :10010` 返回空** —— 按端口反查 PID 在这台机器上不成立，要走 systemd unit 名
+
+---
+
 ## 二、十条「最后一公里」的具体形状
 
 本轮触到的每一条都长同一个样：**造好了，差最后一段**。
@@ -99,7 +164,7 @@ grep 推送    → 0 命中     真名 NotifySender / NotifyChannel / PushNotifi
 
 | # | 事 | 为什么急 |
 |---|---|---|
-| 1 | **生产上存不存在 `PENDING` + `vflag=CREATED` 的工资单** | 存在 ⇒ 重算会改一张**已生成会计凭证**的单子，账对不上。`VoucherServiceImpl.listUncreatedBusinessIds()` 的 `PAYROLL_RECORD` 分支**没有 status 过滤**（同 switch 里 `WASTAGE_RECORD` 有、`SALES_ORDER` 有），代码上可达。**先在库上数一次。** |
+| ~~1~~ | ~~**生产上存不存在 `PENDING` + `vflag=CREATED` 的工资单**~~ | ✅ **已量，关掉**：`payroll_records` **0 行**（见「一·补」）⇒ 今天不可能发生。但 `VoucherServiceImpl.listUncreatedBusinessIds()` 的 `PAYROLL_RECORD` 分支**确实没有 status 过滤**（同 switch 里 `WASTAGE_RECORD` 有、`SALES_ORDER` 有），代码路径可达 ⇒ **加断言钉住，不阻塞合并** |
 | 2 | **`tracked-secret-scan` 离永久变红只有 3 秒** | `timeout-minutes: 5`，而光 `actions/checkout@v4` 就 5m02s。它是**唯一所有 PR 都跑的闸**，一变红大家就开始忽略红色 |
 | 3 | **8 个物流 GET 端点零权限注解** | `LogisticsResourceController`(4) + `LogisticsOrderImportController`(4)。#101 补了路由闸，**绕过路由直接打接口照样通** |
 | 4 | **`good = actual` 兜底**（`WorkReportingServiceImpl.java:428-435, 462-464`） | 把「没人填不良品」写成「零不良」，**已进库不可追溯**。这是车间大屏刻意不放不良品率的原因 |
