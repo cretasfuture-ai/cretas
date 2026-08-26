@@ -50,7 +50,9 @@
     "batch": {
       "output": "{{current}}kg / {{target}}kg",
       "estimated": "Est. {{time}}"
-    }
+    },
+    "draftBanner": "{{count}} work report(s) failed to submit and were saved as drafts",
+    "draftBannerAction": "Review"
   },
   "notifications": {
     "title": "Notifications",

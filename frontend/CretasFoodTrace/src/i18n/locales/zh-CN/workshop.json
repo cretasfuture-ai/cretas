@@ -50,7 +50,9 @@
     "batch": {
       "output": "{{current}}kg / {{target}}kg",
       "estimated": "预计 {{time}}"
-    }
+    },
+    "draftBanner": "{{count}} 份报工没提交成功，已存为草稿",
+    "draftBannerAction": "去处理"
   },
   "notifications": {
     "title": "通知",

@@ -13,6 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useDraftReportStore, DraftReport } from '../../store/draftReportStore';
+import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 import { processingApiClient } from '../../services/api/processingApiClient';
 import { handleError } from '../../utils/errorHandler';
 import type { WSHomeStackParamList } from '../../types/navigation';
@@ -22,7 +23,19 @@ type NavProp = NativeStackNavigationProp<WSHomeStackParamList>;
 const DraftReportsScreen: React.FC = () => {
   const navigation = useNavigation<NavProp>();
   const insets = useSafeAreaInsets();
-  const { drafts, removeDraft, clearDrafts } = useDraftReportStore();
+  // ⚠️ 草稿是跨工厂持久化的(store 里存着所有工厂的)。此前本屏没有入口, 所以
+  //    「列出全部工厂的草稿」一直没被人看见; 一旦接上入口它就成了跨工厂串数据。
+  //    这里按当前工厂过滤, 清空也只清当前工厂 —— clearDrafts 会连别的工厂一起清掉。
+  const factoryId = React.useMemo(() => {
+    try { return getCurrentFactoryId(); } catch { return ''; }
+  }, []);
+  const allDrafts = useDraftReportStore(s => s.drafts);
+  const removeDraft = useDraftReportStore(s => s.removeDraft);
+  const clearDraftsByFactory = useDraftReportStore(s => s.clearDraftsByFactory);
+  const drafts = React.useMemo(
+    () => allDrafts.filter(d => d.factoryId === factoryId),
+    [allDrafts, factoryId],
+  );
 
   const handleRestore = (draft: DraftReport) => {
     const draftType = draft.draftType || 'PROGRESS';
@@ -63,7 +76,7 @@ const DraftReportsScreen: React.FC = () => {
     if (drafts.length === 0) return;
     Alert.alert('清空所有草稿', `确定删除全部 ${drafts.length} 条草稿？`, [
       { text: '取消', style: 'cancel' },
-      { text: '清空', style: 'destructive', onPress: clearDrafts },
+      { text: '清空', style: 'destructive', onPress: () => clearDraftsByFactory(factoryId) },
     ]);
   };
 

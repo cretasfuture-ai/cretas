@@ -28,6 +28,7 @@ import { TutorialOverlay } from '../../../components/common/TutorialOverlay';
 import { WORKSHOP_SUP_ACTIONS } from '../../../store/quickActionsStore';
 import { useTutorialStore, TUTORIAL_HOME, TUTORIAL_ENABLED, useTutorialTarget, registerTutorialTarget } from '../../../store/tutorialStore';
 import { useDraftReportStore } from '../../../store/draftReportStore';
+import { getCurrentFactoryId } from '../../../utils/factoryIdHelper';
 import { WorkflowVisualizer } from '../../../components/workflow';
 import { getBucketPrimaryStatus } from '../../../types/workflow';
 import type { WorkflowModule } from '../../../types/workflow';
@@ -94,7 +95,13 @@ export function WSHomeScreen() {
   const { isScreenEnabled, getBenchmarks } = useFactoryFeatureStore();
   const { t } = useTranslation('workshop');
   const insets = useSafeAreaInsets();
-  const draftCount = useDraftReportStore(s => s.drafts.length);
+  const wsDraftFactoryId = React.useMemo(() => {
+    try { return getCurrentFactoryId(); } catch { return ''; }
+  }, []);
+  // 按当前工厂计数 —— store 里存的是所有工厂的草稿(与 OfflineIndicator 同口径)。
+  const draftCount = useDraftReportStore(
+    s => s.drafts.filter(d => d.factoryId === wsDraftFactoryId).length,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -446,6 +453,24 @@ export function WSHomeScreen() {
       >
         {/* 离线状态指示器 */}
         <OfflineIndicator />
+
+        {/* 未提交的报工草稿 —— 提交失败时会存草稿, 此前【没有任何入口能打开它】,
+            用户的工作静默累积且无法恢复。DraftReportsScreen 早已注册在本 Stack 里,
+            缺的只是这个入口。只在有草稿时出现, 没草稿时完全不占位。 */}
+        {draftCount > 0 && (
+          <TouchableOpacity
+            testID="draft-reports-entry"
+            style={styles.draftBanner}
+            onPress={() => navigation.navigate('DraftReports')}
+          >
+            <MaterialCommunityIcons name="file-clock-outline" size={20} color="#B45309" />
+            <Text style={styles.draftBannerText}>
+              {t('home.draftBanner', { count: draftCount })}
+            </Text>
+            <Text style={styles.draftBannerAction}>{t('home.draftBannerAction')}</Text>
+            <MaterialCommunityIcons name="chevron-right" size={18} color="#B45309" />
+          </TouchableOpacity>
+        )}
 
         {/* 头部欢迎区 */}
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
@@ -838,6 +863,30 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: '500',
   },
+  draftBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  draftBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#92400E',
+  },
+  draftBannerAction: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+
   draftBadge: {
     position: 'absolute',
     top: -4,
