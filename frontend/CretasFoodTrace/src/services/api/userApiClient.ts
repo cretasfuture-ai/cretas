@@ -27,6 +27,13 @@ export interface UserDTO {
   position?: string;
   isActive: boolean;
   hireDate?: string;
+  /** 工号 (后端 UserDTO.employeeCode, "001-999") */
+  employeeCode?: string;
+  /** 用工类型 (后端 UserDTO.hireType / hireTypeDisplayName) */
+  hireType?: string;
+  hireTypeDisplayName?: string;
+  /** 是否临时工 (后端 UserDTO.isTemporaryWorker) */
+  isTemporaryWorker?: boolean;
   createdAt: string;
   updatedAt?: string;
 }
