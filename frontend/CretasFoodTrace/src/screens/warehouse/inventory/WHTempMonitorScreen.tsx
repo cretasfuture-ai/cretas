@@ -366,7 +366,12 @@ export function WHTempMonitorScreen() {
         </View>
         )}
 
-        {/* 操作按钮 */}
+        {/* 操作按钮 —— 只在真的有温区时出现。
+            🔴 2026-08-26: 上一批把温区读数改成诚实空态之后, 这两个按钮还留在原地,
+            于是同一屏上面写「温控设备未接入」, 下面「导出报表」点一下弹「成功·温度报表已导出」——
+            自相矛盾, 而且那句「成功」本身就是假的: handleExport / handleSetThreshold
+            都只有一句 Alert, 没有任何实现。修一半比不修更容易骗到人。 */}
+        {zones.length > 0 && (
         <View style={styles.actionButtons}>
           <Button
             mode="outlined"
@@ -385,6 +390,7 @@ export function WHTempMonitorScreen() {
             设置阈值
           </Button>
         </View>
+        )}
 
         <View style={{ height: 20 }} />
       </ScrollView>
