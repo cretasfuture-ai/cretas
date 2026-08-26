@@ -34,7 +34,7 @@ import { describe, expect, it } from 'vitest';
  *
  * ## 🔴 建闸过程中这把尺子自己错了三次（留给下一个人）
  *
- * 孤儿数读出过 **62 → 83 → 84 → 92** 四个值，**同一份代码**。每次都是仪器的问题，
+ * 孤儿数读出过 **62 → 83 → 84 → 92 → 91** 五个值，**同一份代码**。每次都是仪器的问题，
  * 不是代码变了。记在这里是因为三个成因彼此独立，而且都**不报错、只给一个偏小的数**：
  *
  * | 读数 | 成因 |
@@ -42,7 +42,8 @@ import { describe, expect, it } from 'vitest';
  * | 62 | 早期脚本的扫描范围与此处不同（已废弃，未追查）——⚠️ 它是四个数里唯一没被解释掉的 |
  * | 83 | 排除 `router/index.ts` 写的是 `endswith('router/index.ts')`，而 **Windows 上路径是反斜杠**，该条件恒不成立 ⇒ 路由表自己进了「引用池」，它当然"引用"了每一个路径 |
  * | 84 | 归一化分隔符后的正确值 —— 但只扫了 `router/index.ts` |
- * | **92** | `index.ts` 还 **import 了 `router/modules/*.ts`**（smartbi 21 / production-analytics 7 / ops 5 / crm 1），漏掉 34 条路由、其中 8 条是孤儿 |
+ * | 92 | `index.ts` 还 **import 了 `router/modules/*.ts`**（smartbi 21 / production-analytics 7 / ops 5 / crm 1），漏掉 34 条路由、其中 8 条是孤儿 |
+ * | **91** | 没剥注释 ⇒ 一条**被注释掉的**路由（`/system/role-permissions`，组件目录都不存在）被数进了存量 |
  *
  * ⇒ 两条可复用的判据：
  *   1. **跨平台路径比较一律先归一化分隔符**，否则 `endswith` 会静默恒假。
@@ -75,8 +76,20 @@ const ROUTER_FILES = [
 ];
 const MENU = readFileSync(join(SRC, 'components/layout/menuConfig.ts'), 'utf8');
 
+/**
+ * ⛔ 先剥注释再解析 —— 否则**被注释掉的路由**照样被数成孤儿。
+ *
+ * 实测：`/system/role-permissions` 在 `index.ts:1326` 是 `// path: 'role-permissions',`，
+ * 它的组件目录 `views/system/role-permissions/` **根本不存在**。第一版把它算进了存量，
+ * 于是预算虚高 1 条。本仓已多次栽在「闸把注释当成被测对象」上，这是同一形状。
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
 /** 路由表里父子嵌套的相对段要拼成完整路径，否则 `/workflow/acted` 会被读成 `/acted`。 */
-function collectRoutePaths(src: string): Set<string> {
+function collectRoutePaths(rawSrc: string): Set<string> {
+  const src = stripComments(rawSrc);
   const out = new Set<string>();
   const stack: Array<{ depth: number; seg: string }> = [];
   let depth = 0;
@@ -149,7 +162,7 @@ const ORPHANS = Array.from(ROUTE_PATHS)
   .sort();
 
 /**
- * 建闸当天的存量：**92 条**。
+ * 建闸当天的存量：**91 条**。
  *
  * ⛔ 这个数只许变小。往上抬 = 又上线了一个用户找不到的页面，
  *    那正是本闸要拦的那件事。修好一个（加菜单项或加跳转入口）就把它调小。
@@ -159,7 +172,7 @@ const ORPHANS = Array.from(ROUTE_PATHS)
  *    年度汇算）、整套凭证（导出/列表/模板）、调拨、半成品仓、研发报价、导入导出中心
  *    都在里面。**做完了，没人找得到。**
  */
-const ORPHAN_BUDGET = 92;
+const ORPHAN_BUDGET = 91;
 
 describe('路由可达性（棘轮：上线即不可达的页面只许变少）', () => {
   it('阳性对照：仪器确实读到了路由表与菜单', () => {
@@ -167,6 +180,13 @@ describe('路由可达性（棘轮：上线即不可达的页面只许变少）'
     expect(ROUTE_PATHS.size).toBeGreaterThan(200);
     expect(MENU_PATHS.size).toBeGreaterThan(100);
     expect(OTHER_SOURCE.length).toBeGreaterThan(100000);
+  });
+
+  it('被注释掉的路由不算数（剥注释）', () => {
+    // /system/role-permissions 在 index.ts 里是 `// path: 'role-permissions',`,
+    // 且 views/system/role-permissions/ 目录不存在。它既不该算路由, 也不该算孤儿。
+    expect(ROUTE_PATHS).not.toContain('/system/role-permissions');
+    expect(ORPHANS).not.toContain('/system/role-permissions');
   });
 
   it('阴性对照：菜单里登记过的路径不会被判成孤儿', () => {
