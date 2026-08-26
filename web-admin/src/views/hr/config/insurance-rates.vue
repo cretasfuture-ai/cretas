@@ -520,7 +520,14 @@ function formatTs(v?: string | null): string {
           </el-col>
           <el-col :span="8">
             <el-form-item label="生效起始">
-              <el-input v-model="formData.effectiveFrom" placeholder="YYYY-MM-DD" />
+              <el-date-picker
+                v-model="formData.effectiveFrom"
+                type="date"
+                format="YYYY-MM-DD"
+                value-format="YYYY-MM-DD"
+                placeholder="选择日期"
+                style="width: 100%;"
+              />
             </el-form-item>
           </el-col>
         </el-row>

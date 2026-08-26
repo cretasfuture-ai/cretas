@@ -485,20 +485,29 @@ async function handleDelete(row: SalarySpecialDeduction) {
         </el-form-item>
 
         <el-form-item label="生效起始日" required>
-          <el-input
+          <el-date-picker
             v-model="formData.validFrom"
-            placeholder="YYYY-MM-DD"
+            type="date"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            placeholder="选择日期"
             :disabled="dialogMode === 'edit'"
             style="width: 200px;"
           />
         </el-form-item>
 
         <el-form-item label="失效日">
-          <el-input
+          <!-- value-on-clear="" : 清空后回落到空字符串 (而非默认的 null),
+               与 formData.validTo 的 string 类型和「空字符串 = 长期有效」契约一致. -->
+          <el-date-picker
             v-model="formData.validTo"
-            placeholder="YYYY-MM-DD (留空 = 长期有效)"
+            type="date"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            placeholder="留空 = 长期有效"
             style="width: 240px;"
             clearable
+            value-on-clear=""
           />
         </el-form-item>
 
