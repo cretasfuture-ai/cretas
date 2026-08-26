@@ -35,6 +35,7 @@ import { MaterialBatchSelector, SelectedBatch, AvailableBatch } from '../../comp
 import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { formatDate, parseYmdOrToday } from '../../utils/formatters';
 import {
   canCompleteProductionPlan,
   canCreateProductionPlan,
@@ -68,27 +69,6 @@ type ProductionPlanManagementRouteProp = RouteProp<ProcessingStackParamList, 'Pr
 // 计划日期 / 预计完成在这条链上的唯一格式是 YYYY-MM-DD
 // (formData 的默认值就是 toISOString().split('T')[0], 后端也按这个收)。
 // 滚轮选完之后必须经过这里再写回 formData, 不要在别处另拼一份。
-const formatYmd = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-/**
- * 把 formData 里的 YYYY-MM-DD 还原成滚轮的初始值。
- * 解析不出来就落到今天 —— 这两个字段本来就默认今天/明天, 不是编一个假日期:
- * 滚轮打开时用户看到的就是今天, 他不确认就什么都不会被写回去。
- */
-const parseYmdOrToday = (s?: string): Date => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
-  if (m) {
-    const y = Number(m[1]);
-    const mo = Number(m[2]) - 1;
-    const day = Number(m[3]);
-    const d = new Date(y, mo, day);
-    // 2026-02-31 这种会被 Date 悄悄滚到 3 月 —— 回读一遍确认没滚
-    if (d.getFullYear() === y && d.getMonth() === mo && d.getDate() === day) return d;
-  }
-  return new Date();
-};
-
 /** 这一屏有两个日期字段, picker 必须知道当前在选哪一个 */
 type PlanDateField = 'plannedDate' | 'expectedCompletionDate';
 
@@ -136,7 +116,9 @@ export default function ProductionPlanManagementScreen() {
   const getDefaultCompletionDate = () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split('T')[0]; // 格式: YYYY-MM-DD
+    // 2026-08-26: 原来是 toISOString().split('T')[0] —— 按 UTC 截断, 东八区当天
+    // 08:00 之前会把「明天」算成「今天」。默认完成日是**本地日历日**, 必须本地取。
+    return formatDate(tomorrow);
   };
 
   const [formData, setFormData] = useState({
@@ -148,7 +130,7 @@ export default function ProductionPlanManagementScreen() {
     customerName: '',
     inventoryOwnership: 'COMPANY_OWNED' as 'COMPANY_OWNED' | 'CUSTOMER_OWNED',
     plannedQuantity: '',
-    plannedDate: new Date().toISOString().split('T')[0], // 今天
+    plannedDate: formatDate(new Date()), // 今天(本地日历日; ⛔ 不用 toISOString, 它按 UTC 截断)
     expectedCompletionDate: getDefaultCompletionDate(),   // 明天 (默认+1天)
     notes: '',
     // AI建议的新字段
@@ -175,7 +157,7 @@ export default function ProductionPlanManagementScreen() {
     (date: Date) => {
       if (!datePickerField) return;
       const field = datePickerField;
-      setFormData((prev) => ({ ...prev, [field]: formatYmd(date) }));
+      setFormData((prev) => ({ ...prev, [field]: formatDate(date) }));
     },
     [datePickerField],
   );
@@ -480,7 +462,7 @@ export default function ProductionPlanManagementScreen() {
       customerName: '',
       inventoryOwnership: 'COMPANY_OWNED',
       plannedQuantity: '',
-      plannedDate: new Date().toISOString().split('T')[0],
+      plannedDate: formatDate(new Date()),
       expectedCompletionDate: getDefaultCompletionDate(),
       notes: '',
       suggestedProductionLineId: '',

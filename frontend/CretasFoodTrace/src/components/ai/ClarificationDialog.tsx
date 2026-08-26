@@ -29,30 +29,10 @@ import { IconButton } from 'react-native-paper';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MissingParameter } from '../../types/intent';
+import { formatDate, parseYmdOrToday } from '../../utils/formatters';
 
 // DATE 型参数在这条链上的唯一格式是 YYYY-MM-DD (原来那个文本框的 placeholder 就是它)。
 // 滚轮选完之后必须经过这里再写回 answers, 不要在别处另拼一份。
-const formatYmd = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-/**
- * 把当前答案还原成滚轮的初始值。
- * 解析不出来就落到今天 —— 这个参数打开时本来就是空的, 不是编一个假日期:
- * 滚轮显示今天, 用户不确认就什么都不会被写回去。
- */
-const parseYmdOrToday = (s?: string): Date => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
-  if (m) {
-    const y = Number(m[1]);
-    const mo = Number(m[2]) - 1;
-    const day = Number(m[3]);
-    const d = new Date(y, mo, day);
-    // 2026-02-31 这种会被 Date 悄悄滚到 3 月 —— 回读一遍确认没滚
-    if (d.getFullYear() === y && d.getMonth() === mo && d.getDate() === day) return d;
-  }
-  return new Date();
-};
-
 export interface ClarificationDialogProps {
   /** 是否可见 */
   visible: boolean;
@@ -95,7 +75,7 @@ function DateParameterInput({
 
   // 写回一律走 formatYmd —— 原来那个文本框承诺的就是 YYYY-MM-DD, 格式不能变。
   const commitPickedDate = (date: Date) => {
-    onChange(formatYmd(date));
+    onChange(formatDate(date));
   };
 
   return (

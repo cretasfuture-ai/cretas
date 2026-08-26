@@ -112,26 +112,31 @@ describe('闸: 商品日期改成滚轮选, 不许手打', () => {
   // ============================================================
   // ③ 写回的值仍是 YYYY-MM-DD
   // ============================================================
-  it('🔴 存在唯一一处 YYYY-MM-DD 格式化逻辑(年-月补零-日补零)', () => {
-    const decl = code.match(/const formatYmd\s*=\s*\(d: Date\)[\s\S]{0,260}?;/);
-    expect(decl).not.toBeNull();
-    const body = decl![0];
-    expect(body).toContain('getFullYear()');
-    expect(body).toContain("getMonth() + 1");
-    expect(body).toContain('getDate()');
-    expect(body.split("padStart(2, '0')").length - 1).toBe(2);   // 月、日各补一次零
-    expect(body).toContain('-');
-    // 只许有一处定义, 别再拼第二份(同一个格式两份实现必然漂)
-    expect(code.split('const formatYmd').length - 1).toBe(1);
+  it('🔴 本屏不再自带日期 helper, 一律从 utils/formatters import', () => {
+    // 2026-08-26: 原本钉的是「本屏有且只有一份私有 formatYmd」。后来这条规则被复制到
+    // 6 个屏, 而 utils/formatters.ts 里**本来就有** formatDate() 做同一件事
+    // (orderDate.ts 的注释还记着上一次同样的收敛) ⇒ 副本已全部删除。
+    // 不变量从「本屏一份」抬成「零份 + 从共享处 import」。⛔ 不是删断言, 是抬高它守的东西。
+    expect(code).not.toMatch(/const formatYmd\s*=/);
+    expect(code).not.toMatch(/const parseYmdOrToday\s*=/);
+    // 用字符串包含判断而不是正则: 这行要匹配花括号+斜杠+单引号,
+    // 而这条断言自己就被吃掉过一层转义( 变成了退格符, 正则永远匹配不上)。
+    const importLine = code
+      .split(String.fromCharCode(10))
+      .find((l) => l.includes("utils/formatters'") && l.startsWith('import '));
+    expect(importLine).toBeDefined();
+    expect(importLine).toContain('formatDate');
+    expect(importLine).toContain('parseYmdOrToday');
   });
 
-  it('🔴 选完之后写回 row 的值是 formatYmd(...) 的产物', () => {
-    expect(code).toMatch(/productionDate:\s*formatYmd\(/);
+  it('🔴 选完之后写回 row 的值是共享 formatDate(...) 的产物', () => {
+    expect(code).toMatch(/productionDate:\s*formatDate\(/);
   });
 
-  it('解析不出来就落到今天, 不塞假日期', () => {
-    expect(code).toContain('const parseYmdOrToday');
-    expect(code).toMatch(/parseYmdOrToday[\s\S]{0,600}?return new Date\(\);/);
+  it('⛔ 阴性对照: 不许绕开共享 helper 就地拼日期串', () => {
+    expect(code).not.toContain('toLocaleDateString');
+    expect(code).not.toContain('toISOString');
+    expect(code).not.toMatch(/getMonth\(\)\s*\+\s*1[\s\S]{0,80}padStart/);
   });
 
   // ============================================================
