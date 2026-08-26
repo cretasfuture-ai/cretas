@@ -30,6 +30,11 @@ class LabelQcControllerTrainingPermissionTest {
     }
 
     @Test
+    void captureQualityRequiresQualityWritePermission() {
+        assertPermissions("captureQuality", Set.of("quality:read_write"));
+    }
+
+    @Test
     void trayCropRefinementRequiresPlatformRoleAndSystemWritePermission() {
         Set<String> platformRoles = Set.of(
                 "platform_admin", "super_admin", "developer", "platform_super_admin");

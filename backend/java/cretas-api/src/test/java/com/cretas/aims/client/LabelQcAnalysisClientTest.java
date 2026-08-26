@@ -26,6 +26,50 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class LabelQcAnalysisClientTest {
 
     @Test
+    void postsCaptureBytesAndMapsQualityGateContract() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        LabelQcAnalysisClient client = new LabelQcAnalysisClient(
+                restTemplate,
+                "http://python.test",
+                "internal-secret",
+                new ObjectMapper(),
+                false);
+
+        server.expect(requestTo("http://python.test/api/label-qc/capture-quality"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("X-Internal-Secret", "internal-secret"))
+                .andExpect(header("X-Factory-Id", "LIUSHANMEN"))
+                .andRespond(withSuccess("""
+                        {
+                          "success": true,
+                          "data": {
+                            "accepted": false,
+                            "reasonCode": "TRAY_CROPPED_AT_SIDE",
+                            "message": "左右下角托盘没有拍全，请后退一点或切换广角重拍",
+                            "imageWidth": 3072,
+                            "imageHeight": 4096,
+                            "trayCount": 18,
+                            "sharpness": 880.4,
+                            "leftMarginRatio": 0.04,
+                            "rightMarginRatio": 0.002
+                          }
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        var result = client.analyzeCaptureQuality(
+                new byte[]{1, 2, 3},
+                "capture.jpg",
+                "LIUSHANMEN");
+
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.reasonCode()).isEqualTo("TRAY_CROPPED_AT_SIDE");
+        assertThat(result.trayCount()).isEqualTo(18);
+        assertThat(result.rightMarginRatio()).isEqualTo(0.002);
+        server.verify();
+    }
+
+    @Test
     void downloadsPhotoAndMapsPythonCandidateContract() {
         RestTemplate restTemplate = new RestTemplate();
         MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
