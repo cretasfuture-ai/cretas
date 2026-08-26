@@ -29,3 +29,19 @@ def test_carried_boxes_preserve_source_coordinates():
     assert carried[0]["class_id"] == 1
     assert carried[0]["bbox_normalized_xyxy"] == [0.375, 0.3, 0.625, 0.5]
     assert carried[0]["is_ground_truth"] is False
+
+
+def test_target_guide_maps_source_detection_into_review_crop():
+    guide = MODULE.target_guide_in_crop(
+        [0.25, 0.2, 0.75, 0.6], 1000, 500, [100, 50, 900, 450],
+    )
+    assert guide == [0.1875, 0.125, 0.8125, 0.625]
+
+
+def test_target_guide_rejects_crop_that_does_not_contain_detection():
+    try:
+        MODULE.target_guide_in_crop([0.1, 0.1, 0.5, 0.5], 1000, 1000, [200, 200, 800, 800])
+    except RuntimeError as error:
+        assert "does not contain" in str(error)
+    else:
+        raise AssertionError("expected target guide containment failure")

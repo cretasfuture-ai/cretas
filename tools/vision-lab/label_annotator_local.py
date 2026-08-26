@@ -83,6 +83,9 @@ def validate_modern_annotator(module: ModuleType, script: Path) -> None:
         raise RuntimeError(
             "label annotator lacks opaque high-contrast class rendering"
         )
+    guide_markers = ("目标托盘（只标这一盘）", "renderTargetGuide", "target_box")
+    if any(marker not in page for marker in guide_markers):
+        raise RuntimeError("label annotator lacks read-only target-tray guidance")
     if getattr(module, "WIREGUARD_HOST", None) != "":
         raise RuntimeError("local label annotator must be loopback-only")
 

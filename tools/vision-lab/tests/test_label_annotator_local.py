@@ -50,7 +50,8 @@ class LabelAnnotatorLocalTests(unittest.TestCase):
                 "missing_confirmed 确认这是真的被拔掉了 "
                 "OPAQUE_CLASS_RENDERING=true function renderBox "
                 "fillRect(tagX,tagY,tagW,tagH) "
-                "托盘不完整 I incomplete_tray toggleIncomplete"
+                "托盘不完整 I incomplete_tray toggleIncomplete "
+                "目标托盘（只标这一盘） renderTargetGuide target_box"
             ),
         )
         module.validate_modern_annotator(modern, Path("label_hard_negative_annotator.py"))
@@ -77,7 +78,8 @@ class LabelAnnotatorLocalTests(unittest.TestCase):
             WIREGUARD_HOST="",
             PAGE=(
                 "missing_confirmed 确认这是真的被拔掉了 "
-                "托盘不完整 I incomplete_tray toggleIncomplete"
+                "托盘不完整 I incomplete_tray toggleIncomplete "
+                "目标托盘（只标这一盘） renderTargetGuide target_box"
             ),
         )
         with self.assertRaisesRegex(RuntimeError, "opaque high-contrast"):
