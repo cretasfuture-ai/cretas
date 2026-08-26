@@ -58,3 +58,39 @@ export function maxDaysInStorage(dates: Array<string | undefined>, now = Date.no
   const known = dates.map((date) => daysInStorage(date, now)).filter((age): age is number => age !== null);
   return known.length ? Math.max(...known) : null;
 }
+
+/**
+ * 尾沿防抖调度器 —— 把一串连续调用合并成最后一次之后执行一次。
+ *
+ * 用在拖拽货架上: `persist()` PUT 的是**整份** layout(含楼层的 base64 底图),
+ * 每拖停一次就整份重传一遍; 底图几 MB 时连续微调会打出一串大请求。
+ *
+ * 🔴 为什么抽出来: 2026-08-26 想验「600ms 内连续微调只发一次」时发现,
+ * 浏览器自动化**驱动不了** Vue Flow 的拖拽(它吃 d3-drag 的内部 pointer 处理,
+ * 合成 PointerEvent 打不进去), 试了三次, 节点纹丝不动 —— 那不是「防抖没生效」,
+ * 是**仪器够不着被测行为**。与其继续在浏览器里试, 不如把这段逻辑变成
+ * 可以用假定时器确定性验证的纯函数。
+ *
+ * ⚠️ 它验的是「调度行为」, 不是「Vue Flow 拖拽会调用它」——
+ * 后者由 index.vue 里 onRackDrag 的源码闸钉住。两层各管一段, 不要混为一谈。
+ */
+export function createTrailingDebouncer(waitMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    schedule(run: () => void) {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = undefined;
+        run();
+      }, waitMs);
+    },
+    /** 组件卸载时调用, 免得已经离开页面还打一次请求。 */
+    cancel() {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    },
+    get pending() {
+      return timer !== undefined;
+    },
+  };
+}
