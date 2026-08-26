@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `SOP-RAG-SYNC-20260826` — `in-progress` — Owner: `codex/automation-sop` — Base SHA: `0cb15151da900cae6315ab8005dd88e38a6b601a` — 核对 `afdd6d431431dad0c04c533819009ac5ffec09ff..0cb15151da900cae6315ab8005dd88e38a6b601a` 的 36 个合入 commit、当前三页与生产运行时。独立判定：工厂已上线成本真实性、成品包材必填/辅料选填、标签人工复核、仓储空间/盘点审批与来源可追溯等用户可见语义，需同步工厂 SOP/KB/AI Assist factory tab；餐饮仅内部判断收敛与测试夹具/断言修正，无新增用户口径，保持 no-op。验收：目标回答合同、`py_compile`、HTML/内联 JS、`git diff --check`，合入后仅从 clean exact main 原子发布 changed 页面/source、migration dry-run、双线真实回答与 ERP 业务写入 0；严格 `NOT_DEPLOYED` 直到 main 合入。
+
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 已有代码进入公司迁移树，但正式 audit 仍因 `trayal_0e5a259f_030` unjudgeable fail closed。计划任务 `Cretas-Liushanmen-VisionLab` 已迁到 clean exact-main 工作树并取得 LastResult=0；剩余阻塞仅为该 ROI 人工裁决。保留视觉 scope；LocateAnything hardening 与其串行，模型、人工真值、原图和生产不改。
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: `/root` — DeepSeek 接线、七槽、悬崖模拟、每日健康与复审 cron 已进入迁移树并在线运行；剩余仅 2026-09-13 aistore 续期换 key、2026-09-04/11-15 运营复审等外部动作。旧 `llm_router.py` 代码锁已释放；不得把供应商控制台动作扩大为代码改动。
 
@@ -46,6 +48,8 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+
+- `SOP-RAG-SYNC-20260826`：仅 `web-admin/public/aiassist.html` 工厂 tab、`docs/manual/F006-production-full-chain-manual-test-sop.html`、`backend/python/food_kb/data/f006_production_sop.md`、`backend/python/food_kb/api/manual_chat.py`、`backend/python/tests/test_food_kb_manual_chat_sop_contract.py`、`docs/dispatch/ACTIVE.md` 与 `docs/dispatch/archive/2026-08-26-active-history.md`。餐饮 tab、`docs/manual/restaurant-full-chain-sop.html`、`docs/plans/restaurant-*.html` 与餐饮 registered source 严格只读/no-op；不得修改 Java/RN/Web 业务实现、Entity/Repository/Flyway、生产 ERP 数据或 `.env`。验收：工厂 changed 至少 3 个等价真实问题且仅引用 `f006-production-full-chain-sop.md`；餐饮固定毛利与导览 canary 仅引用三个 registered restaurant source；三页/source 哈希、正式块与 `.NEW=0` 一致。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 

@@ -32,6 +32,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_SALES_DELIVERY_INVOICE_ANSWER,
     _FACTORY_WORKFLOW_AUTOFORK_ANSWER,
     _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER,
+    _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER,
     _MATERIAL_PACKAGING_ANSWER,
     _LABEL_QC_REVIEW_ANSWER,
     _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER,
@@ -91,6 +92,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_sales_delivery_invoice_guard,
     _needs_factory_workflow_autofork_guard,
     _needs_factory_workflow_output_directory_guard,
+    _needs_factory_warehouse_governance_guard,
     _needs_material_packaging_guard,
     _needs_label_qc_review_guard,
     _needs_multi_output_label_qc_guard,
@@ -159,7 +161,7 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "画布中的 BOM 副产配置只声明稳定的副产 SKU 与预计量" in FACTORY_SYSTEM_PROMPT
     assert "副产抵扣只按盘点实际数量 × 盘点时人工确认单价" in FACTORY_SYSTEM_PROMPT
     assert "BOM 至少需要一项主原料" in FACTORY_SYSTEM_PROMPT
-    assert "没有辅料或包材本身不阻止激活" in FACTORY_SYSTEM_PROMPT
+    assert "成品还必须至少配置一项包材" in FACTORY_SYSTEM_PROMPT
     assert "当前 BOM 成本摘要只汇总包材" in FACTORY_SYSTEM_PROMPT
     assert "客户“待我审核”只保留缺标风险" in FACTORY_SYSTEM_PROMPT
     assert "系统自动通过都不能直接成为训练真值" in FACTORY_SYSTEM_PROMPT
@@ -425,21 +427,36 @@ def test_factory_bom_canvas_and_cost_boundary_is_deterministic():
     assert "产品-工序配置" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "不是新的拓扑节点" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "首次保存会创建首版草稿" in _FACTORY_BOM_CANVAS_COST_ANSWER
-    assert "没有包材或副产本身不阻止激活" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "BOM_PACKAGING_REQUIRED" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "辅料缺失只提示、不阻断" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "itemCost=0" in _FACTORY_BOM_CANVAS_COST_ANSWER
+    assert "人工金额未知继续阻断" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "只汇总包材" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "包材 Cell 位于成品上方并连向所属成品" in (
         _FACTORY_BOM_CANVAS_COST_ANSWER
     )
-    assert "有生效 BOM 但明细为空只能说“还没配辅料/包材”" in (
-        _FACTORY_BOM_CANVAS_COST_ANSWER
-    )
+    assert "半成品、原料和来料加工不强制包材" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "旧启用版本不能把重发布自身误拦" in (
         _FACTORY_BOM_CANVAS_COST_ANSWER
     )
     assert "人工与制造费用也不在 BOM 中配置" in _FACTORY_BOM_CANVAS_COST_ANSWER
     assert "不能直接与正式报工、结算形成的实际完整成本比较" in (
-        _FACTORY_BOM_CANVAS_COST_ANSWER
+        FACTORY_SYSTEM_PROMPT
     )
+
+
+def test_20260826_factory_warehouse_governance_is_deterministic_and_isolated():
+    questions = (
+        "仓储空间与现场盘点从哪里进入，AI 仓库地图会直接保存吗？",
+        "库存调整 OA 待办为什么要显示盘点单号和仓库？",
+        "调入批次怎样从来源单据追溯，温控设备未接入时显示什么？",
+    )
+    assert all(_needs_factory_warehouse_governance_guard(q) for q in questions)
+    assert not _needs_factory_warehouse_governance_guard("餐饮单菜毛利怎么计算？")
+    assert "仓储管理 → 仓储空间与现场盘点" in _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER
+    assert "审批通过仍不等于库存已改" in _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER
+    assert "TRANSFER_IN" in _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER
+    assert "温控设备未接入" in _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER
 
 
 def test_factory_workflow_storage_and_output_directory_is_deterministic():
@@ -561,7 +578,7 @@ def test_workflow_actual_io_questions_use_the_reviewed_factory_contract():
     assert "未发生项留空" in _WORKFLOW_ACTUAL_IO_ANSWER
     assert "共享投入成本 100% 归该产出" in _WORKFLOW_ACTUAL_IO_ANSWER
     assert "合计必须为 100%" in _WORKFLOW_ACTUAL_IO_ANSWER
-    assert "没有辅料或包材本身不阻止激活" in _WORKFLOW_ACTUAL_IO_ANSWER
+    assert "成品还必须至少配置一项包材" in _WORKFLOW_ACTUAL_IO_ANSWER
 
 
 def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
@@ -1384,11 +1401,13 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "多产出完工入库逐行合同" in current_sop
     assert "BOM“副产”页签只声明可回收副产 SKU 与预计量" in current_sop
     assert "不进投入成本池" in current_sop
-    assert "没有辅料或包材本身不是阻塞" in current_sop
+    assert "BOM_PACKAGING_REQUIRED" in current_sop
+    assert "辅料仍为选填，缺失只提示" in current_sop
     assert "只在本次报工表单要求填写各实际产出的分摊比例" in current_sop
     assert "客户“待我审核”只接收缺标风险" in current_sop
     assert "不能把系统自动通过当成人工结论" in current_sop
-    assert "盒子、白标和彩标三层参考框" in current_sop
+    assert "日常只显示风险框" in current_sop
+    assert "未触碰的 AI 盒子不能随提交变成人工对象真值" in current_sop
     assert "`QUALITY_CHECK` 附件" in current_sop
     assert "切换盒子或照片时自动校验并保存" in current_sop
     assert "平台训练选样" in current_sop
@@ -1455,7 +1474,8 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "原料多包装与基本单位库存" in html
     assert "Workflow 只声明可能投入/产出，本次事实留到报工" in html
     assert "至少配置一项主原料" in html
-    assert "没有可选包材或副产不阻止激活" in html
+    assert "成品还必须配置至少一项包材" in html
+    assert "辅料缺失只提示、不阻断" in html
     assert "自动同步并发布" in html
     assert "多产出逐行确认" in html
     assert "客户“待我审核”只接收缺标风险" in html
