@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../../store/authStore';
 import { isAxiosError } from 'axios';
 import { ruleConfigApiClient, StateMachineConfig } from '../../../services/api/ruleConfigApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 // State Machine mock data
 interface StateMachineState {
@@ -64,7 +65,7 @@ const mapApiToStateMachine = (config: StateMachineConfig): StateMachine => ({
   stateCount: config.states?.length || 0,
   transitionCount: config.transitions?.length || 0,
   status: config.enabled ? 'running' : 'draft',
-  lastModified: config.updatedAt?.split('T')[0] ?? new Date().toISOString().split('T')[0] ?? '',
+  lastModified: config.updatedAt?.split('T')[0] ?? formatDate(new Date()) ?? '',
   borderColor: ENTITY_BORDER_COLORS[config.entityType] || '#8c8c8c',
   states: (config.states || []).slice(0, 4).map((s, idx) => ({
     id: `s${idx + 1}`,

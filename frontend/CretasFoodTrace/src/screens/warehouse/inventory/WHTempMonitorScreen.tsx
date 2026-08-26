@@ -60,36 +60,21 @@ export function WHTempMonitorScreen() {
   const [lastUpdate, setLastUpdate] = useState("");
   const [alertRecords, setAlertRecords] = useState<AlertRecord[]>([]);
 
-  // 温区配置（静态数据，后续可从设备配置API获取）
-  const zones: TempZone[] = [
-    {
-      id: "A",
-      name: "A区 - 冷藏库",
-      currentTemp: 2.5,
-      targetMin: 0,
-      targetMax: 4,
-      status: "normal",
-      maxTemp24h: 3.2,
-      minTemp24h: 1.8,
-      avgTemp24h: 2.4,
-    },
-    {
-      id: "B",
-      name: "B区 - 冷冻库",
-      currentTemp: -18.2,
-      targetMin: -20,
-      targetMax: -15,
-      status: "normal",
-      maxTemp24h: -16.5,
-      minTemp24h: -19.2,
-      avgTemp24h: -18.0,
-    },
-  ];
-
-  const thresholds: ThresholdConfig[] = [
-    { zone: "A区 - 冷藏库", upperLimit: "4°C", lowerLimit: "-2°C" },
-    { zone: "B区 - 冷冻库", upperLimit: "-15°C", lowerLimit: "-22°C" },
-  ];
+  /**
+   * 🔴 2026-08-26 真机实测: 这里原来写死了两组温度读数
+   * (A区 2.5°C / B区 -18.2°C, 含 24h 最高/最低/平均), 而本屏**没有任何温度 API 调用** ——
+   * 也就是把一组编造的数字, 配上绿色「正常」徽章和一个实时刷新的「最后更新」时间戳,
+   * 当成真实冷链读数展示给仓管。违反「禁止降级处理 - 不返回假数据, 明确显示错误」。
+   *
+   * ⚠️ 它此前藏在被 SIMPLIFIED_WAREHOUSE_NAV 隐藏的库存 Tab 后面(仓管够不着);
+   * 2026-08-26 接通「仓库地图」后, 本屏的入口变得可达 —— 一个潜伏缺陷被新入口激活。
+   *
+   * ⇒ 在真的接上温控设备 API 之前, 这里保持空: 空态说「未接入」是真的,
+   *   假读数会让人以为冷链在被监控。下方**告警记录**走的是真实
+   *   alertApiClient.getEquipmentAlerts, 保留不动。
+   */
+  const zones: TempZone[] = [];
+  const thresholds: ThresholdConfig[] = [];
 
   // 加载告警记录
   const loadAlertData = useCallback(async () => {
@@ -329,15 +314,29 @@ export function WHTempMonitorScreen() {
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* 系统状态 */}
-        <View style={styles.monitorStatus}>
-          <View style={styles.statusIndicator} />
-          <Text style={styles.statusTextOnline}>系统在线</Text>
-          <Text style={styles.statusTime}>最后更新: {lastUpdate}</Text>
-        </View>
+        {/* 系统状态 —— ⛔ 没有温控设备时不许说「系统在线」, 那句话本身就是个假读数 */}
+        {zones.length > 0 && (
+          <View style={styles.monitorStatus}>
+            <View style={styles.statusIndicator} />
+            <Text style={styles.statusTextOnline}>系统在线</Text>
+            <Text style={styles.statusTime}>最后更新: {lastUpdate}</Text>
+          </View>
+        )}
 
         {/* 温区详情 */}
-        {zones.map(renderZoneCard)}
+        {zones.length > 0 ? (
+          zones.map(renderZoneCard)
+        ) : (
+          <View style={styles.section} testID="wh-temp-monitor-empty">
+            <Text style={styles.sectionTitle}>温控设备未接入</Text>
+            <Text style={styles.emptyHint}>
+              本工厂还没有接入温控设备，这里不显示温度读数。
+            </Text>
+            <Text style={styles.emptyHint}>
+              下方的告警记录来自真实设备告警接口，可正常查看。
+            </Text>
+          </View>
+        )}
 
         {/* 告警记录 */}
         <View style={styles.section}>
@@ -345,7 +344,8 @@ export function WHTempMonitorScreen() {
           {alertRecords.map(renderAlertRecord)}
         </View>
 
-        {/* 告警阈值设置 */}
+        {/* 告警阈值设置 —— 没有温区就没有阈值可谈, 不显示空壳 */}
+        {thresholds.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>告警阈值设置</Text>
           <View style={styles.thresholdList}>
@@ -364,8 +364,14 @@ export function WHTempMonitorScreen() {
             ))}
           </View>
         </View>
+        )}
 
-        {/* 操作按钮 */}
+        {/* 操作按钮 —— 只在真的有温区时出现。
+            🔴 2026-08-26: 上一批把温区读数改成诚实空态之后, 这两个按钮还留在原地,
+            于是同一屏上面写「温控设备未接入」, 下面「导出报表」点一下弹「成功·温度报表已导出」——
+            自相矛盾, 而且那句「成功」本身就是假的: handleExport / handleSetThreshold
+            都只有一句 Alert, 没有任何实现。修一半比不修更容易骗到人。 */}
+        {zones.length > 0 && (
         <View style={styles.actionButtons}>
           <Button
             mode="outlined"
@@ -384,6 +390,7 @@ export function WHTempMonitorScreen() {
             设置阈值
           </Button>
         </View>
+        )}
 
         <View style={{ height: 20 }} />
       </ScrollView>
@@ -469,6 +476,12 @@ const styles = StyleSheet.create({
     marginTop: 12,
     borderRadius: 12,
     padding: 16,
+  },
+  emptyHint: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#667085',
   },
   sectionTitle: {
     fontSize: 14,

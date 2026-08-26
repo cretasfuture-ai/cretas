@@ -33,6 +33,7 @@ import {
   type WorkScheduleItem,
   type ShiftType,
 } from '../../../types/hrNavigation';
+import { formatDate as formatLocalYmd } from '../../../utils/formatters';
 
 export default function WorkScheduleScreen() {
   const navigation = useNavigation();
@@ -44,7 +45,7 @@ export default function WorkScheduleScreen() {
 
   const loadData = useCallback(async () => {
     try {
-      const dateStr = selectedDate.toISOString().split('T')[0];
+      const dateStr = formatLocalYmd(selectedDate);
       // getWorkSchedules takes { startDate, endDate?, ... } and returns { content, totalElements, totalPages } directly
       const res = await schedulingApiClient.getWorkSchedules({ startDate: dateStr, endDate: dateStr });
 

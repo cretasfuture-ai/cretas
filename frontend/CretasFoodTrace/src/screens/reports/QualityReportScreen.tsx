@@ -24,6 +24,7 @@ import { getFactoryId } from '../../types/auth';
 import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { ReportStackParamList } from '../../types/navigation';
+import { formatDate } from '../../utils/formatters';
 
 // 创建QualityReport专用logger
 const qualityReportLogger = logger.createContextLogger('QualityReport');
@@ -182,7 +183,6 @@ export default function QualityReportScreen() {
         startDate.setMonth(startDate.getMonth() - 1);
       }
 
-      const formatDate = (date: Date) => date.toISOString().split('T')[0];
 
       qualityReportLogger.debug('加载异常检测数据', {
         factoryId,

@@ -26,6 +26,7 @@ const SCREEN_TO_MODULE: Record<string, string> = {
   // Workshop Supervisor tabs + home sections
   BatchManagement: 'production',
   WorkerManagement: 'production',
+  EquipmentManagement: 'equipment',
   EquipmentMonitoring: 'equipment',
   ScheduleManagement: 'scheduling',
   // Warehouse tabs + home sections

@@ -106,7 +106,7 @@ class PurchaseServiceWorkflowIntegrationTest {
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
         ReflectionTestUtils.setField(service, "approvalWorkflowService", approvalWorkflowService);
 
-        // Default overReceiveRate (from @Value default) — set explicitly.
+        // ⚠️ 不是 "@Value default" —— 生产默认是 null(不限制超收)。这里设 30% 只是本夹具自选值。
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
 
         // Repos default behavior

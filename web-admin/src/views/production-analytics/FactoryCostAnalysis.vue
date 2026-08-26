@@ -30,6 +30,7 @@ import {
   type YieldTrendData,
   type ProductCostCompareData,
 } from '@/api/smartbi/factoryGold';
+import { toDateString } from '@/utils/dateFormat';
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ const shortcuts = [
 
 function fmtDate(d: Date | string): string {
   if (typeof d === 'string') return d.split('T')[0];
-  return d.toISOString().split('T')[0];
+  return toDateString(d);
 }
 
 function getQueryDates() {

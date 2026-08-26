@@ -26,6 +26,7 @@ import { getFactoryId } from '../../types/auth';
 import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { ReportStackParamList } from '../../types/navigation';
+import { formatDate } from '../../utils/formatters';
 
 // 创建ProductionReport专用logger
 const productionReportLogger = logger.createContextLogger('ProductionReport');
@@ -175,9 +176,6 @@ export default function ProductionReportScreen() {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - 7);
 
-      const formatDate = (date: Date): string => {
-        return date.toISOString().split('T')[0] ?? '';
-      };
 
       productionReportLogger.debug('加载产能利用数据', {
         factoryId,

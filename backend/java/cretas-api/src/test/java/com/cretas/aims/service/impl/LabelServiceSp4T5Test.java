@@ -253,4 +253,124 @@ class LabelServiceSp4T5Test {
                         ex.getMessage().contains("权限") || ex.getMessage().contains("access"),
                 "Exception should indicate factory mismatch: " + ex.getMessage());
     }
+
+    // ──────────────── 往返 (print → scan) ────────────────
+    //
+    // 既有的 4 个 scanLabel 用例喂的都是 labelCode (或字面量 "UNKNOWN-CODE") —— 它们按
+    // **被测代码想要的形状**构造输入。而打印机印进二维码的不是 labelCode:
+    //   WHBatchDetailScreen.tsx:217   qrContent = genRes.data?.traceCode ?? genRes.data?.labelCode
+    //   BatchLabelPrintService.ts:65  const qrText = qrContent ?? batchNumber
+    // generateMaterialBatchLabel 恒设 traceCode (LabelServiceImpl:252), 所以 traceCode 恒胜出,
+    // 贴在实物上的二维码里是 "TRACE-...". 下面这条测试按**打印机实际产出的形状**喂输入.
+
+    /** 复刻 ②③ 两处前端逻辑: 二维码里真正印的那个串. */
+    private static String codeActuallyPrinted(Label label) {
+        return label.getTraceCode() != null ? label.getTraceCode() : label.getLabelCode();
+    }
+
+    /** 让 batch 带上可生成前缀的 materialType (category=null 时 getMaterialCategoryPrefix 按设计抛异常). */
+    private void givenBatchWithMaterialType() {
+        RawMaterialType materialType = new RawMaterialType();
+        materialType.setName("鲈鱼");
+        materialType.setCategory("原料");
+        batch.setMaterialType(materialType);
+    }
+
+    @Test
+    @DisplayName("T5-RT1: 往返 — 打印机印进二维码的那个码 (traceCode ?? labelCode) 必须能扫回来")
+    void printedCode_roundTrips_throughScanLabel() {
+        givenBatchWithMaterialType();
+        when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(labelRepository.findByBatchIdAndDeletedAtIsNull(BATCH_ID))
+                .thenReturn(java.util.List.of());
+        when(labelRepository.save(any(Label.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Label generated = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
+        String printed = codeActuallyPrinted(generated);
+
+        // 前提断言: 确认这条测试真的在测 traceCode 那条路 (否则它就是恒真式)
+        assertTrue(printed.startsWith("TRACE-"),
+                "前提不成立 — 打印机印的应该是 traceCode, 实际印的是: " + printed);
+        assertNotEquals(generated.getLabelCode(), printed,
+                "前提不成立 — 印出来的码与 labelCode 相同, 那就没有往返问题可测了");
+
+        // 按真库会给出的答案打桩: label_code 列里没有 "TRACE-..." 这个值, trace_code 列里有.
+        when(labelRepository.findByLabelCodeAndDeletedAtIsNull(printed))
+                .thenReturn(Optional.empty());
+        lenient().when(labelRepository.findByTraceCodeAndDeletedAtIsNull(printed))
+                .thenReturn(Optional.of(generated));
+
+        MaterialBatchLabelScanResponse resp = labelService.scanLabel(FACTORY_ID, printed);
+
+        assertNotNull(resp, "扫打印出来的码应该能查到标签");
+        assertEquals(generated.getLabelCode(), resp.getLabelCode());
+        assertEquals(printed, resp.getTraceCode());
+        assertEquals(BATCH_ID, resp.getBatchId());
+    }
+
+    @Test
+    @DisplayName("T5-RT2: 阴性对照 — 既不是 labelCode 也不是 traceCode 的串, 仍然抛「标签不存在」")
+    void unknownCode_matchesNeitherColumn_stillThrows() {
+        String garbage = "NOT-A-REAL-CODE-XYZ";
+        when(labelRepository.findByLabelCodeAndDeletedAtIsNull(garbage))
+                .thenReturn(Optional.empty());
+        when(labelRepository.findByTraceCodeAndDeletedAtIsNull(garbage))
+                .thenReturn(Optional.empty());
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> labelService.scanLabel(FACTORY_ID, garbage));
+        assertTrue(ex.getMessage().contains("标签不存在"),
+                "兜底不该变成「什么都能查到」, 应仍报标签不存在: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("T5-RT3: 跨工厂防护对兜底分支同样生效 — 用 A 厂身份扫 B 厂标签的 traceCode 必须被拒")
+    void crossFactory_viaTraceCodeFallback_stillDenied() {
+        String otherFactoryTraceCode = "TRACE-F999-20260825-000001";
+        Label otherFactoryLabel = new Label();
+        otherFactoryLabel.setId("label-id-f999");
+        otherFactoryLabel.setFactoryId("F999");                  // 属于别的工厂
+        otherFactoryLabel.setLabelCode("YL-F999-20260825120000-0001");
+        otherFactoryLabel.setTraceCode(otherFactoryTraceCode);
+        otherFactoryLabel.setStatus("ACTIVE");
+        otherFactoryLabel.setBatchId(BATCH_ID);
+
+        // 只有 traceCode 命中 → 强制走兜底分支
+        when(labelRepository.findByLabelCodeAndDeletedAtIsNull(otherFactoryTraceCode))
+                .thenReturn(Optional.empty());
+        when(labelRepository.findByTraceCodeAndDeletedAtIsNull(otherFactoryTraceCode))
+                .thenReturn(Optional.of(otherFactoryLabel));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> labelService.scanLabel(FACTORY_ID, otherFactoryTraceCode));
+        assertTrue(ex.getMessage().contains("工厂") || ex.getMessage().contains("factory"),
+                "走兜底分支不该绕过跨工厂防护: " + ex.getMessage());
+        // 阴性对照: 别把跨工厂拒绝误报成「标签不存在」—— 那会掩盖真正的越权
+        assertFalse(ex.getMessage().contains("标签不存在"),
+                "应报跨工厂越权而非标签不存在: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("T5-RT4: VOIDED 检查对兜底分支同样生效 — 扫已作废标签的 traceCode 必须被拒")
+    void voidedLabel_viaTraceCodeFallback_stillDenied() {
+        String voidedTraceCode = "TRACE-F006-20260825-000002";
+        Label voided = new Label();
+        voided.setId("label-id-voided");
+        voided.setFactoryId(FACTORY_ID);
+        voided.setLabelCode("YL-F006-20260825120000-0002");
+        voided.setTraceCode(voidedTraceCode);
+        voided.setStatus("VOIDED");
+        voided.setBatchId(BATCH_ID);
+
+        when(labelRepository.findByLabelCodeAndDeletedAtIsNull(voidedTraceCode))
+                .thenReturn(Optional.empty());
+        when(labelRepository.findByTraceCodeAndDeletedAtIsNull(voidedTraceCode))
+                .thenReturn(Optional.of(voided));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> labelService.scanLabel(FACTORY_ID, voidedTraceCode));
+        assertTrue(ex.getMessage().contains("VOIDED") || ex.getMessage().contains("作废"),
+                "走兜底分支不该绕过 VOIDED 检查: " + ex.getMessage());
+    }
 }

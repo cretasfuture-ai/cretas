@@ -9,6 +9,7 @@ import { aiApiClient, type AICostAnalysisResponse } from '../../services/api/aiA
 import { useAuthStore } from '../../store/authStore';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { formatDate } from '../../utils/formatters';
 
 // 创建DeepSeekAnalysis专用logger
 const deepSeekLogger = logger.createContextLogger('DeepSeekAnalysis');
@@ -335,7 +336,7 @@ export default function DeepSeekAnalysisScreen() {
       await exportAnalysisToPdf(
         'DeepSeek AI分析报告',
         analysisResponse.analysis || '',
-        { batchId, date: new Date().toISOString().split('T')[0] }
+        { batchId, date: formatDate(new Date()) }
       );
     } catch (error) {
       console.error('PDF export failed:', error);

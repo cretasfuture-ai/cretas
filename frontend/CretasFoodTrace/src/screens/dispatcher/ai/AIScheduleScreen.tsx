@@ -41,6 +41,7 @@ import {
   AISchedulingResult,
 } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient, ProductionPlan } from '../../../services/api/productionPlanApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 // 排产模式类型
 type ScheduleMode = 'batch' | 'plan';
@@ -72,8 +73,8 @@ export default function AIScheduleScreen() {
   const [optimizeByLinUCB, setOptimizeByLinUCB] = useState(true);
 
   // Date state - default to today
-  const [startDate, setStartDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(() => formatDate(new Date()));
+  const [endDate, setEndDate] = useState(() => formatDate(new Date()));
 
   // Batch selection state (按批次模式)
   const [pendingBatches, setPendingBatches] = useState<ProductionPlanDTO[]>([]);

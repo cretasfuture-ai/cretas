@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { formatDate } from '../utils/formatters';
 
 const KEYS = {
   lastProduct: '@cretas/lastProduct',
@@ -16,7 +17,7 @@ export const smartDefaults = {
   },
 
   getDefaultDate(): string {
-    return new Date().toISOString().split('T')[0] as string;
+    return formatDate(new Date()) as string;
   },
 
   getMostLikelyAction(): string {

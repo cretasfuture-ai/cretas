@@ -10,6 +10,7 @@ import { TableFooter } from '@/components/list';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -195,7 +196,7 @@ function handleExport() {
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = `考勤记录_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = `考勤记录_${toDateString(new Date())}.csv`;
   link.click();
   URL.revokeObjectURL(link.href);
   ElMessage.success('导出成功');

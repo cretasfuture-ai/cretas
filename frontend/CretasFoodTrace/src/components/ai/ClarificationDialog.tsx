@@ -26,9 +26,13 @@ import {
   Platform,
 } from 'react-native';
 import { IconButton } from 'react-native-paper';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MissingParameter } from '../../types/intent';
+import { formatDate, parseYmdOrToday } from '../../utils/formatters';
 
+// DATE 型参数在这条链上的唯一格式是 YYYY-MM-DD (原来那个文本框的 placeholder 就是它)。
+// 滚轮选完之后必须经过这里再写回 answers, 不要在别处另拼一份。
 export interface ClarificationDialogProps {
   /** 是否可见 */
   visible: boolean;
@@ -40,6 +44,96 @@ export interface ClarificationDialogProps {
   onSubmit: (answers: Record<string, any>) => void;
   /** 取消回调 */
   onCancel: () => void;
+}
+
+/**
+ * DATE 型参数的输入 —— 点一下弹滚轮, 不许手打。
+ *
+ * ⚠️ 这个组件挂在 RN 的 <Modal> 里面, 所以 iOS 不能用 react-native-paper 的 Portal:
+ *    Portal 渲染在 PaperProvider 的根上, 而 RN Modal 在 iOS 是另一层原生窗口,
+ *    盖在它上面 —— Portal 里的东西会被压在底下看不见。
+ *    ⇒ iOS 的 spinner 就地内联渲染, 配一个「完成」收起; Android 的本来就是原生模态。
+ *
+ * 每个 DATE 参数都是一个独立的组件实例, open 状态是它自己的 ——
+ * 多个日期参数并存时不会串到别人身上。
+ */
+function DateParameterInput({
+  parameter,
+  value,
+  onChange,
+  error,
+}: {
+  parameter: MissingParameter;
+  value: any;
+  onChange: (value: any) => void;
+  error?: string;
+}) {
+  const { displayName, description, required } = parameter;
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const current = value?.toString() ?? '';
+  const pickerInitialDate = parseYmdOrToday(current);
+
+  // 写回一律走 formatYmd —— 原来那个文本框承诺的就是 YYYY-MM-DD, 格式不能变。
+  const commitPickedDate = (date: Date) => {
+    onChange(formatDate(date));
+  };
+
+  return (
+    <View style={styles.inputGroup}>
+      <View style={styles.inputLabelRow}>
+        <Text style={styles.inputLabel}>{displayName}</Text>
+        {required && <Text style={styles.requiredMark}>*</Text>}
+      </View>
+      {description && (
+        <Text style={styles.inputDescription}>{description}</Text>
+      )}
+      <TouchableOpacity
+        onPress={() => setPickerOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={`选择${displayName}`}
+        testID={`clarification-date-picker-${parameter.parameterName}`}
+      >
+        <View pointerEvents="none">
+          <TextInput
+            style={[styles.textInput, error && styles.textInputError]}
+            value={current}
+            editable={false}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor="#999"
+          />
+        </View>
+      </TouchableOpacity>
+      {pickerOpen && (
+        <DateTimePicker
+          value={pickerInitialDate}
+          mode="date"
+          display="spinner"
+          onChange={(event, date) => {
+            if (Platform.OS === 'android') {
+              // Android 是模态: 无论确定还是取消都要收起, 否则下次点不开
+              setPickerOpen(false);
+              if (event.type === 'set' && date) commitPickedDate(date);
+              return;
+            }
+            // iOS 的 spinner 是内联控件: 一 onChange 就关会导致滚一格就消失
+            if (date) commitPickedDate(date);
+          }}
+        />
+      )}
+      {pickerOpen && Platform.OS === 'ios' && (
+        <TouchableOpacity
+          style={styles.datePickerDone}
+          onPress={() => setPickerOpen(false)}
+          accessibilityRole="button"
+          accessibilityLabel={`完成选择${displayName}`}
+          testID={`clarification-date-done-${parameter.parameterName}`}
+        >
+          <Text style={styles.datePickerDoneText}>完成</Text>
+        </TouchableOpacity>
+      )}
+      {error && <Text style={styles.errorText}>{error}</Text>}
+    </View>
+  );
 }
 
 /**
@@ -176,26 +270,16 @@ function ParameterInput({
     );
   }
 
-  // DATE 类型 - 文本输入（简化版，实际项目可用日期选择器）
+  // DATE 类型 - 滚轮选 (2026-08-26)
+  // 现场原话:「这个日期改下备, 改成滚轮的, 手写有点费事」
   if (parameterType === 'DATE') {
     return (
-      <View style={styles.inputGroup}>
-        <View style={styles.inputLabelRow}>
-          <Text style={styles.inputLabel}>{displayName}</Text>
-          {required && <Text style={styles.requiredMark}>*</Text>}
-        </View>
-        {description && (
-          <Text style={styles.inputDescription}>{description}</Text>
-        )}
-        <TextInput
-          style={[styles.textInput, error && styles.textInputError]}
-          value={value?.toString() ?? ''}
-          onChangeText={onChange}
-          placeholder="YYYY-MM-DD"
-          placeholderTextColor="#999"
-        />
-        {error && <Text style={styles.errorText}>{error}</Text>}
-      </View>
+      <DateParameterInput
+        parameter={parameter}
+        value={value}
+        onChange={onChange}
+        error={error}
+      />
     );
   }
 
@@ -533,6 +617,16 @@ const styles = StyleSheet.create({
   },
   textInputError: {
     borderColor: '#ff4d4f',
+  },
+  datePickerDone: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  datePickerDoneText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1B65A8',
   },
   booleanButtons: {
     flexDirection: 'row',

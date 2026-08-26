@@ -37,6 +37,7 @@ import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
 import { attachmentApi } from '../../services/api/attachmentApi';
 import {
+  checkQualityInspectionSubmission,
   deriveQualityInspectionCounts,
   deriveQualityInspectionResult,
   getQualityInspectionSubmitErrorMessage,
@@ -51,6 +52,18 @@ interface CheckItem {
   maxScore: number;
   options: string[];
   color: string;
+}
+
+/**
+ * 表单里的评分草稿。
+ *
+ * 与 `ScoreItem` 的区别只有一个, 但很关键: `score` 可以是 `null` = **还没评**。
+ * `ScoreItem.score` 是 `number`, 用它当草稿类型就必须先塞一个数字进去,
+ * 而任何一个塞进去的数字都会被下游当成检验员的判断读。
+ */
+interface DraftScoreItem {
+  score: number | null;
+  notes: string[];
 }
 
 export default function QIFormScreen() {
@@ -106,14 +119,19 @@ export default function QIFormScreen() {
   const [remarks, setRemarks] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // 评分数据
-  const [scores, setScores] = useState<Record<string, ScoreItem>>({
-    appearance: { score: 18, notes: ['色泽正常', '形态完整'] },
-    smell: { score: 20, notes: ['正常'] },
-    specification: { score: 16, notes: ['符合标准尺寸'] },
-    weight: { score: 19, notes: ['符合标准'] },
-    packaging: { score: 20, notes: ['包装完整', '标签清晰'] },
-  });
+  /**
+   * 评分数据 —— **空开局**。
+   *
+   * 此前这里预填了 18/20/16/19/20 = 93 分, 连备注都预填好了
+   * ("色泽正常"/"形态完整"/"正常"/"符合标准尺寸"/"符合标准"/"包装完整"/"标签清晰"),
+   * 而唯一的提交闸是 `if (!batch) return`。也就是说: 打开屏幕 → 直接点提交,
+   * 就落库一份 93 分 A 级的合格报告, **没有任何一项是人做出的判断**。
+   * 在食品溯源系统里这是责任问题, 不是体验问题。
+   *
+   * 现在: 未评分的项**不在这个 Map 里**(或 score 为 null), 与"评了 0 分"严格区分 ——
+   * `?? 0` 式的兜底会把"我还没看"翻译成"我看了, 是 0 分", 那是两件完全不同的事。
+   */
+  const [scores, setScores] = useState<Record<string, DraftScoreItem>>({});
 
   // 照片
   const [photos, setPhotos] = useState<string[]>([]);
@@ -144,19 +162,29 @@ export default function QIFormScreen() {
     }
   };
 
-  const updateScore = (itemId: string, score: number) => {
+  /**
+   * 写入某项分数。空输入 (`null`) = 清回"未评分", **不是 0 分**。
+   * 上限用 `item.maxScore` 而不是写死的 20 —— 写死的常量在改配置时不会跟着变。
+   */
+  const updateScore = (itemId: string, score: number | null) => {
+    const maxScore = CHECK_ITEMS.find((i) => i.id === itemId)?.maxScore ?? 20;
     setScores(prev => {
-      const current = prev[itemId] ?? { score: 0, notes: [] };
+      const current = prev[itemId] ?? { score: null, notes: [] };
       return {
         ...prev,
-        [itemId]: { ...current, score: Math.min(20, Math.max(0, score)) },
+        [itemId]: {
+          ...current,
+          score: score === null ? null : Math.min(maxScore, Math.max(0, score)),
+        },
       };
     });
   };
 
   const toggleNote = (itemId: string, note: string) => {
     setScores(prev => {
-      const current = prev[itemId] ?? { score: 0, notes: [] };
+      // ⚠️ 勾一个备注**不算**评分 —— 这里保持 score: null, 否则勾选会把
+      //    "未评分"悄悄变成"0 分", 提交闸就放行了。
+      const current = prev[itemId] ?? { score: null, notes: [] };
       const notes = current.notes.includes(note)
         ? current.notes.filter(n => n !== note)
         : [...current.notes, note];
@@ -167,23 +195,42 @@ export default function QIFormScreen() {
     });
   };
 
-  const totalScore = calculateTotalScore({
-    appearance: scores.appearance,
-    smell: scores.smell,
-    specification: scores.specification,
-    weight: scores.weight,
-    packaging: scores.packaging,
-  });
+  const sampleSizeNum = parseInt(sampleSize, 10);
+  // 判定走 qualityInspectionSubmission.logic 里那个纯函数 —— 屏幕和单测
+  // 跑的是**同一个**判定, 不是两份各自实现的 if (那样会漂)。
+  const { unscoredItemIds, sampleSizeValid } = checkQualityInspectionSubmission(
+    CHECK_ITEMS.map((item) => item.id),
+    scores,
+    sampleSizeNum,
+  );
+  /** 还没评分的检验项。非空 = 不能提交, 汇总区也不能显示总分。 */
+  const unscoredItems = CHECK_ITEMS.filter((item) => unscoredItemIds.includes(item.id));
+  const allScored = unscoredItemIds.length === 0;
 
-  const grade = calculateGrade(totalScore);
-  const sampleSizeNum = parseInt(sampleSize, 10) || 10;
-  const {
-    passCount: computedPassCount,
-    failCount: computedFailCount,
-    passRate: computedPassRate,
-  } = deriveQualityInspectionCounts(sampleSizeNum, totalScore);
-  const inspectionResult = deriveQualityInspectionResult(computedPassRate);
+  /**
+   * 汇总量。**只有全部评完才存在** —— 否则是 null。
+   *
+   * 以前这里无条件算: 未评项按 0 分计入总分, 于是"评了 1 项"和"5 项全 0 分"
+   * 在屏幕上是同一个数, 而合格率/等级照样一本正经地显示出来。
+   */
+  const totalScore = allScored
+    ? calculateTotalScore({
+        appearance: scores.appearance as ScoreItem,
+        smell: scores.smell as ScoreItem,
+        specification: scores.specification as ScoreItem,
+        weight: scores.weight as ScoreItem,
+        packaging: scores.packaging as ScoreItem,
+      })
+    : null;
+
+  const grade = totalScore === null ? null : calculateGrade(totalScore);
+  const derived =
+    totalScore === null || !sampleSizeValid
+      ? null
+      : deriveQualityInspectionCounts(sampleSizeNum, totalScore);
+  const inspectionResult = derived ? deriveQualityInspectionResult(derived.passRate) : null;
   const passed = inspectionResult === 'PASS';
+  const canSubmit = allScored && sampleSizeValid && !!batch;
 
   const handleVoicePress = () => {
     navigation.navigate('QIVoice', { batchId, batchNumber });
@@ -193,27 +240,55 @@ export default function QIFormScreen() {
     navigation.navigate('QICamera', { batchId, batchNumber });
   };
 
+  /**
+   * 提交前校验。
+   *
+   * 此前唯一的闸是 `if (!batch) return` —— 零业务必填, 而且 `return` 是**静默**的:
+   * 点了提交什么都没发生, 检验员不知道为什么。现在逐条说清缺什么。
+   */
+  const validateBeforeSubmit = (): string | null => {
+    if (!batch) return t('form.cannotLoadBatch');
+    if (!sampleSizeValid) return t('form.invalidSampleSize');
+    if (unscoredItems.length > 0) {
+      return t('form.unscoredItems', {
+        count: unscoredItems.length,
+        items: unscoredItems.map((i) => i.name).join('、'),
+      });
+    }
+    return null;
+  };
+
   const handleSubmit = async () => {
-    if (!batch) return;
+    const validationError = validateBeforeSubmit();
+    if (validationError) {
+      setSubmitError(validationError);
+      Alert.alert(t('form.cannotSubmit'), validationError);
+      return;
+    }
+    // validate 已经保证了这几个非空; 断言只是让类型收窄, 不是兜底。
+    if (!batch || totalScore === null || grade === null || !derived || !inspectionResult) return;
 
     try {
       setSubmitting(true);
       setSubmitError(null);
 
-      const defaultScore: ScoreItem = { score: 0, notes: [] };
+      const scoreOf = (id: string): ScoreItem => ({
+        score: scores[id]?.score as number,
+        notes: scores[id]?.notes ?? [],
+      });
       // Backend expects passCount/failCount — derive from HACCP score
       const formData = {
         batchId: batch.id,
         sampleSize: sampleSizeNum,
-        passCount: computedPassCount,
-        failCount: computedFailCount,
+        passCount: derived.passCount,
+        failCount: derived.failCount,
         result: inspectionResult,
         notes: remarks || '',
-        appearance: scores.appearance ?? defaultScore,
-        smell: scores.smell ?? defaultScore,
-        specification: scores.specification ?? defaultScore,
-        weight: scores.weight ?? defaultScore,
-        packaging: scores.packaging ?? defaultScore,
+        appearance: scoreOf('appearance'),
+        smell: scoreOf('smell'),
+        specification: scoreOf('specification'),
+        weight: scoreOf('weight'),
+        packaging: scoreOf('packaging'),
         totalScore,
         grade,
         passed,
@@ -222,11 +297,11 @@ export default function QIFormScreen() {
         inspectedAt: new Date().toISOString(),
         customFields: {
           haccpScores: {
-            appearance: scores.appearance ?? defaultScore,
-            smell: scores.smell ?? defaultScore,
-            specification: scores.specification ?? defaultScore,
-            weight: scores.weight ?? defaultScore,
-            packaging: scores.packaging ?? defaultScore,
+            appearance: scoreOf('appearance'),
+            smell: scoreOf('smell'),
+            specification: scoreOf('specification'),
+            weight: scoreOf('weight'),
+            packaging: scoreOf('packaging'),
           },
           totalScore,
           grade,
@@ -376,15 +451,29 @@ export default function QIFormScreen() {
                 ))}
               </View>
 
-              {/* 评分 */}
+              {/* 评分。未评分 = 空输入框 + 占位提示, ⛔ 不预填任何数字 */}
               <View style={styles.scoreRow}>
                 <Text style={styles.scoreLabel}>{t('form.score')}:</Text>
                 <TextInput
-                  style={styles.scoreInput}
-                  value={String(scores[item.id]?.score ?? 0)}
-                  onChangeText={(text) => updateScore(item.id, parseInt(text, 10) || 0)}
+                  style={[
+                    styles.scoreInput,
+                    scores[item.id]?.score == null && styles.scoreInputUnscored,
+                  ]}
+                  value={scores[item.id]?.score == null ? '' : String(scores[item.id]?.score)}
+                  onChangeText={(text) => {
+                    const trimmed = text.trim();
+                    // 清空 = 回到"未评分", 而不是 0 分
+                    if (trimmed === '') {
+                      updateScore(item.id, null);
+                      return;
+                    }
+                    const parsed = parseInt(trimmed, 10);
+                    updateScore(item.id, Number.isFinite(parsed) ? parsed : null);
+                  }}
+                  placeholder={t('form.notScored')}
+                  placeholderTextColor={QI_COLORS.danger}
                   keyboardType="number-pad"
-                  maxLength={2}
+                  maxLength={3}
                 />
                 <Text style={styles.scoreMax}>/ {item.maxScore}</Text>
                 {(item.id === 'appearance' || item.id === 'packaging') && (
@@ -407,28 +496,43 @@ export default function QIFormScreen() {
             <Ionicons name="bar-chart" size={18} color={QI_COLORS.primary} />
             <Text style={styles.summaryTitle}>{t('form.inspectionSummary')}</Text>
           </View>
+          {/* 还没评完就别报一个"总分/合格率/等级" —— 那些数会被当成结论读 */}
+          {!allScored && (
+            <Text style={styles.summaryPending} accessibilityRole="alert">
+              {t('form.unscoredItems', {
+                count: unscoredItems.length,
+                items: unscoredItems.map((i) => i.name).join('、'),
+              })}
+            </Text>
+          )}
           <View style={styles.summaryGrid}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.totalScore')}</Text>
-              <Text style={styles.summaryValue}>{totalScore}/100</Text>
+              <Text style={styles.summaryValue}>
+                {totalScore === null ? '—' : `${totalScore}/100`}
+              </Text>
             </View>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.passedCount')}</Text>
               <Text style={[styles.summaryValue, { color: QI_COLORS.success }]}>
-                {computedPassCount}/{sampleSize}{t('form.sampleUnit')}
+                {derived ? `${derived.passCount}/${sampleSizeNum}${t('form.sampleUnit')}` : '—'}
               </Text>
             </View>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.passRate')}</Text>
               <Text style={[styles.summaryValue, { color: QI_COLORS.success }]}>
-                {Math.round(computedPassRate)}%
+                {derived ? `${Math.round(derived.passRate)}%` : '—'}
               </Text>
             </View>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.suggestedGrade')}</Text>
-              <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[grade] }]}>
-                <Text style={styles.gradeBadgeText}>{grade}</Text>
-              </View>
+              {grade === null ? (
+                <Text style={styles.summaryValue}>—</Text>
+              ) : (
+                <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[grade] }]}>
+                  <Text style={styles.gradeBadgeText}>{grade}</Text>
+                </View>
+              )}
             </View>
           </View>
         </View>
@@ -456,8 +560,12 @@ export default function QIFormScreen() {
             <Text style={styles.submitErrorText}>提交失败：{submitError}</Text>
           </View>
         ) : null}
+        {/*
+          ⚠️ 按钮**不 disable**: disabled 的按钮点下去没有反馈, 检验员不知道
+          缺什么。保持可点, 点了由 validateBeforeSubmit 明确说出缺哪一项。
+        */}
         <TouchableOpacity
-          style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
+          style={[styles.submitBtn, (submitting || !canSubmit) && styles.submitBtnDisabled]}
           onPress={handleSubmit}
           disabled={submitting}
         >
@@ -690,6 +798,12 @@ const styles = StyleSheet.create({
     color: QI_COLORS.text,
     backgroundColor: QI_COLORS.background,
   },
+  /** 未评分: 描红边, 让"还没做判断"在一屏里看得见 */
+  scoreInputUnscored: {
+    width: 72,
+    borderColor: QI_COLORS.danger,
+    fontSize: 12,
+  },
   scoreMax: {
     fontSize: 14,
     color: QI_COLORS.textSecondary,
@@ -735,6 +849,12 @@ const styles = StyleSheet.create({
   summaryItem: {
     width: '50%',
     marginBottom: 16,
+  },
+  summaryPending: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: QI_COLORS.danger,
+    marginBottom: 10,
   },
   summaryLabel: {
     fontSize: 13,

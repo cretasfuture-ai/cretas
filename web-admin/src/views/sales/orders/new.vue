@@ -26,6 +26,7 @@ import {
   untaxedUnitPrice,
   type SalesOrderPackagingSpec,
 } from './salesOrderNewLineContract';
+import { toDateString } from '@/utils/dateFormat';
 
 type Warehouse = TableRow & { id: string; code: string; name: string; type?: string; isActive?: boolean };
 type Customer = TableRow & { id: string; name: string };
@@ -291,7 +292,7 @@ async function submit(): Promise<void> {
   try {
     const response = await post(`/${factoryId.value}/sales/orders`, {
       customerId: form.value.customerId,
-      orderDate: new Date().toISOString().slice(0, 10),
+      orderDate: toDateString(new Date()),
       requiredDeliveryDate: form.value.requiredDeliveryDate || undefined,
       deliveryAddress: form.value.deliveryAddress || undefined,
       salesperson: form.value.salesperson || undefined,

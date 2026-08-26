@@ -93,7 +93,7 @@ export default function DynamicReportScreen() {
 
   const isProgress = reportType === 'PROGRESS';
   const title = isProgress ? '实时生产进度上报' : '生产工时上报';
-  const today = new Date().toISOString().split('T')[0] ?? '';
+  const today = formatDate(new Date()) ?? '';
 
   // Feature 1: Load dropdown options on mount
   useEffect(() => {

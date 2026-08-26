@@ -36,6 +36,7 @@ import {
   WhatIfRequest,
 } from '../../../services/api/schedulingOptimizationApiClient';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 // 图标名称类型
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
@@ -103,7 +104,7 @@ export default function AIRescheduleScreen() {
   const loadPlans = useCallback(async () => {
     try {
       setError(null);
-      const today = new Date().toISOString().split('T')[0];
+      const today = formatDate(new Date());
       const response = await schedulingApiClient.getPlans({
         startDate: today,
         status: 'confirmed,in_progress',

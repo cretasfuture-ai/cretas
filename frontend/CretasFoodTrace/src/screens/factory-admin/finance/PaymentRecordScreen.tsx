@@ -19,6 +19,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { apiClient } from '../../../services/api/apiClient';
 import { getCurrentFactoryId } from '../../../utils/factoryIdHelper';
+import { formatDate } from '../../../utils/formatters';
 
 type PaymentMethod = 'BANK_TRANSFER' | 'CASH' | 'WECHAT' | 'ALIPAY';
 
@@ -57,7 +58,7 @@ export default function PaymentRecordScreen() {
         salesOrderId: salesOrderId.trim(),
         amount: amountNum,
         paymentMethod,
-        paymentDate: new Date().toISOString().split('T')[0],
+        paymentDate: formatDate(new Date()),
         paymentReference: paymentReference.trim() || undefined,
         remark: remark.trim() || undefined,
       });

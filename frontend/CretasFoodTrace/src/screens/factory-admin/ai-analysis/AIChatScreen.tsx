@@ -46,6 +46,7 @@ import {
 } from '../../../types/restaurantAgentRun';
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
 import { isRestaurant } from '../../../utils/factoryType';
+import { formatDate } from '../../../utils/formatters';
 
 // 建议操作类型
 interface SuggestedAction {
@@ -79,7 +80,7 @@ function isRealIsoDate(value: string): boolean {
 
 function currentShanghaiIsoDate(): string {
   const shanghaiOffsetMs = 8 * 60 * 60 * 1000;
-  return new Date(Date.now() + shanghaiOffsetMs).toISOString().slice(0, 10);
+  return formatDate(new Date(Date.now() + shanghaiOffsetMs));
 }
 
 function parseRestaurantAgentLaunch(

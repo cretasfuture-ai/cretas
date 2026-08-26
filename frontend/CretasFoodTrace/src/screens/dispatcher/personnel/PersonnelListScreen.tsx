@@ -34,6 +34,7 @@ import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { personnelApiClient } from '../../../services/api/personnelApiClient';
 import { isAxiosError } from 'axios';
 import { useAuthStore } from '../../../store/authStore';
+import { formatDate } from '../../../utils/formatters';
 
 // Local types for this screen
 interface PersonnelSkill {
@@ -251,8 +252,8 @@ export default function PersonnelListScreen() {
       // Try to get personnel statistics from dedicated API
       try {
         const today = new Date();
-        const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-        const endDate = today.toISOString().split('T')[0];
+        const startDate = formatDate(new Date(today.getFullYear(), today.getMonth(), 1));
+        const endDate = formatDate(today);
 
         const statsRes = await personnelApiClient.getPersonnelStatistics(factoryId ?? '', startDate, endDate);
         if (statsRes.success && statsRes.data) {

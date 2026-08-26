@@ -4,7 +4,7 @@
  */
 import type { Router } from 'vue-router';
 import type { ModuleName } from '@/store/modules/permission';
-import { resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
+import { isDemoFactoryId, resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
 
 // 白名单路由 - 不需要登录
 const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
@@ -101,6 +101,22 @@ export function setupRouterGuards(router: Router) {
       return;
     }
 
+    // 🔴 2026-08-25 安全修复: `meta.mockDemo` 曾经在这里 early-return, 位置在**所有**
+    // 权限闸之前, 于是 12 条 scheduling 路由的 ROLE_PATH_WHITELIST / module /
+    // modulesAll / hideForFactoryTypes / restaurantRoles / roles 全部成了死代码 ——
+    // 任何已登录用户手输 URL 就能进, 而且它是**静态 route meta**, 没有任何 env /
+    // query / localStorage 开关, 生产构建里恒定生效。
+    //
+    // 原注释给的理由是「演示页为纯前端 mock、无真实数据」—— 这条**已经过期**:
+    // 11 个页面全部 onMounted 打真后端 (@/api/scheduling 与 @/api/logistics),
+    // 其中 useLogisticsScheduling.ts 明确写着「API 失败不静默回退 mock」。
+    //
+    // ⇒ 不是删掉这个演示开关, 而是把它收窄到它**真正需要**的那一项:
+    //    注释里点名的问题是 `canAccess('scheduling')` 把演示看板误判成无权限,
+    //    那就只豁免 module 那一道闸, 且只对演示租户 (DEMO_* factoryId) 豁免。
+    //    其余每一道闸对所有人照跑, 包括演示租户。
+    const demoModuleExempt = !!to.meta.mockDemo && isDemoFactoryId(authStore.factoryId);
+
     // 同步角色、工厂ID、工厂类型到权限 store
     const permissionStore = usePermissionStore();
     permissionStore.setRole(
@@ -108,9 +124,12 @@ export function setupRouterGuards(router: Router) {
       authStore.factoryId,
       authStore.factoryType,
       authStore.user?.id,
-      { skipDbLoad: !!to.meta.mockDemo },
+      { skipDbLoad: demoModuleExempt },
     );
-    if (!to.meta.mockDemo) {
+    if (!demoModuleExempt) {
+      // 非演示租户进这些页面时必须有真实权限数据 —— 之前跟着 mockDemo 一起跳过,
+      // 等于拿 hardcoded 矩阵去判一条本来就没在判的路。loadFromDb 内部吞异常,
+      // 失败只会把 dbPermissions 置空回落 hardcoded, 不会让导航挂掉。
       await permissionStore.loadFromDb();
     }
 
@@ -121,14 +140,6 @@ export function setupRouterGuards(router: Router) {
       authStore.clearAuth();
       // 跳转到 Mobile 专属提示页面
       next({ path: '/mobile-only', query: { role: authStore.currentRole } });
-      return;
-    }
-
-    // mockDemo 路由 = 公开演示页：已登录即放行，跳过模块/工厂类型/角色权限门。
-    // 演示页为纯前端 mock、无真实数据；scheduling 模块对演示租户默认 '-'，
-    // 否则 canAccess('scheduling') 会把演示看板误判成无权限 → /403。
-    if (to.meta.mockDemo) {
-      next();
       return;
     }
 
@@ -143,8 +154,9 @@ export function setupRouterGuards(router: Router) {
     }
 
     // 检查模块权限
+    // demoModuleExempt: 演示租户进演示页时豁免这一道 (且**只有**这一道) —— 见上方说明。
     const module = to.meta.module as ModuleName | undefined;
-    if (module) {
+    if (module && !demoModuleExempt) {
       if (!permissionStore.canAccess(module)) {
         next('/403');
         return;

@@ -29,6 +29,7 @@ import {
 } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
+import { formatDate } from '../../utils/formatters';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 
@@ -61,8 +62,8 @@ export default function QIRecordsScreen() {
     switch (filter) {
       case 'today':
         return {
-          startDate: now.toISOString().split('T')[0],
-          endDate: now.toISOString().split('T')[0],
+          startDate: formatDate(now),
+          endDate: formatDate(now),
         };
       case 'passed':
         return { grade: 'A,B,C' };

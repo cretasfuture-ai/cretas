@@ -30,6 +30,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { schedulingApiClient, CompletionProbabilityResponse } from '../../../services/api/schedulingApiClient';
+import { formatDate } from '../../../utils/formatters';
 
 // 主题颜色
 const DISPATCHER_THEME = {
@@ -165,7 +166,7 @@ export default function AICompletionProbScreen() {
   // 获取今天的日期
   const getToday = () => {
     const now = new Date();
-    return now.toISOString().split('T')[0];
+    return formatDate(now);
   };
 
   // 加载数据

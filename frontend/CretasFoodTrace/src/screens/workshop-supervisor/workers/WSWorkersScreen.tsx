@@ -1,8 +1,15 @@
 /**
  * Workshop Supervisor 人员管理
  * 包含: 搜索、筛选标签、人员列表（含临时工标识）
+ *
+ * 2026-08-25 改造: 数据源从「写死在组件里」换成 GET /users + GET /timeclock/admin/history。
+ * 删掉的是 6 名恒定显示的假员工 —— 王建国 EMP-001 切片操作员 效率评分 96、
+ * 张伟 TMP-003 临时工、陈志强 EMP-005「请假」等，外加写死的 8/1/1/2 统计和
+ * 一个只 setTimeout 不发请求的下拉刷新。
+ * 违反 CLAUDE.md 核心原则 1「禁止降级处理 —— 不返回假数据，明确显示错误」。
+ * 回归闸: src/__tests__/unit/screens/workshopSupervisorNoFabricatedDataContract.test.ts
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,38 +18,98 @@ import {
   TouchableOpacity,
   TextInput,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { WSWorkersStackParamList } from '../../../types/navigation';
 import { TutorialOverlay } from '../../../components/common/TutorialOverlay';
 import { TUTORIAL_WORKERS, useTutorialTarget, useTutorial } from '../../../store/tutorialStore';
+import { userApiClient, UserDTO } from '../../../services/api/userApiClient';
+import { timeclockApiClient, ClockRecord } from '../../../services/api/timeclockApiClient';
+import { DutyState, resolveDuty } from './workerDutyState.logic';
 
 type NavigationProp = NativeStackNavigationProp<WSWorkersStackParamList, 'WSWorkers'>;
 
-// 员工数据类型
+/**
+ * 员工卡片展示模型。
+ *
+ * 名册来自 GET /api/mobile/{factoryId}/users，在岗状态来自
+ * GET /api/mobile/{factoryId}/timeclock/admin/history（今天这一天），两者按 userId 关联。
+ *
+ * ⛔ 以下三样后端没有对应数据，所以卡片上**不显示**，而不是本地编一个：
+ *   - 效率评分 A/B/C/D  用户接口不返回效率；真要有得接 /time-stats/workers
+ *   - 当前任务          用户接口不返回；批次维度在 /processing/batches/{id}/workers
+ *   - 请假 / 缺勤        考勤表上「没打卡」既可能是请假也可能是缺勤 ——
+ *                      数据里不存在这个区分，写代码造不出来（只报「未打卡」）
+ */
 interface Worker {
   id: number;
   name: string;
-  employeeId: string;
-  role: string;
-  status: 'on_duty' | 'off_duty' | 'on_leave' | 'absent';
-  todayHours: number;
-  efficiency: number;
+  /** 后端 employeeCode（工号）；没有就退回 username，⛔ 不编一个 EMP-00X */
+  employeeLabel: string;
+  /** roleDisplayName / position / departmentDisplayName 里第一个有值的 */
+  roleLabel?: string;
   isTemporary: boolean;
-  currentTask?: string;
+  isActive: boolean;
+  /** 考勤接口不可用时为 undefined —— 与「今天没打卡」是两回事 */
+  duty?: DutyState;
+  /** 后端 workDurationMinutes；没有就 undefined */
+  workMinutes?: number;
+  clockInTime?: string;
 }
 
-// 筛选标签 - labels will be replaced by i18n
-const FILTER_TABS = [
-  { key: 'all', count: 10 },
-  { key: 'on_duty', count: 8 },
-  { key: 'on_leave', count: 1 },
-  { key: 'temporary', count: 2 },
+const DUTY_META: Record<DutyState, { label: string; color: string }> = {
+  on_duty:         { label: '在岗',   color: '#52c41a' },
+  clocked_out:     { label: '已下班', color: '#8c8c8c' },
+  not_clocked_in:  { label: '未打卡', color: '#faad14' },
+};
+
+/**
+ * 筛选标签。
+ * ⛔ 原来的「请假」档已删 —— 后端没有请假数据源，那一档只能靠编。
+ * count 由实际拉到的名册算出，不写死。
+ */
+const FILTER_TABS: { key: 'all' | 'on_duty' | 'temporary'; labelKey: string }[] = [
+  { key: 'all', labelKey: 'all' },
+  { key: 'on_duty', labelKey: 'onDuty' },
+  { key: 'temporary', labelKey: 'temporary' },
 ];
+
+const PAGE_SIZE = 200;
+
+/** 今日日期，YYYY-MM-DD */
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function toWorker(u: UserDTO, record: ClockRecord | undefined, attendanceAvailable: boolean): Worker {
+  const raw = record as unknown as { workDurationMinutes?: number; workDuration?: number } | undefined;
+  const minutes = raw?.workDurationMinutes ?? raw?.workDuration;
+  return {
+    id: u.id,
+    name: u.fullName || u.realName || u.username,
+    employeeLabel: u.employeeCode || u.username,
+    roleLabel: u.roleDisplayName || u.position || u.departmentDisplayName || undefined,
+    isTemporary: u.isTemporaryWorker === true,
+    isActive: u.isActive !== false,
+    duty: resolveDuty(record, attendanceAvailable),
+    workMinutes: typeof minutes === 'number' ? minutes : undefined,
+    clockInTime: record?.clockInTime,
+  };
+}
+
+function formatClock(iso?: string): string | undefined {
+  if (!iso) return undefined;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
 
 export function WSWorkersScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -59,112 +126,95 @@ export function WSWorkersScreen() {
     tgtFilter.measure(); tgtList.measure();
   });
 
-  // 模拟员工数据
-  const [workers] = useState<Worker[]>([
-    {
-      id: 1,
-      name: '王建国',
-      employeeId: 'EMP-001',
-      role: '切片操作员',
-      status: 'on_duty',
-      todayHours: 4.0,
-      efficiency: 96,
-      isTemporary: false,
-      currentTask: 'PB-20251227-001 切片',
-    },
-    {
-      id: 2,
-      name: '李明辉',
-      employeeId: 'EMP-002',
-      role: '包装操作员',
-      status: 'on_duty',
-      todayHours: 3.5,
-      efficiency: 92,
-      isTemporary: false,
-      currentTask: 'PB-20251227-001 包装',
-    },
-    {
-      id: 3,
-      name: '张伟',
-      employeeId: 'TMP-003',
-      role: '清洗操作员',
-      status: 'on_duty',
-      todayHours: 2.0,
-      efficiency: 85,
-      isTemporary: true,
-    },
-    {
-      id: 4,
-      name: '赵丽华',
-      employeeId: 'EMP-004',
-      role: '质检员',
-      status: 'on_duty',
-      todayHours: 3.0,
-      efficiency: 98,
-      isTemporary: false,
-    },
-    {
-      id: 5,
-      name: '陈志强',
-      employeeId: 'EMP-005',
-      role: '设备操作员',
-      status: 'on_leave',
-      todayHours: 0,
-      efficiency: 90,
-      isTemporary: false,
-    },
-    {
-      id: 6,
-      name: '周婷',
-      employeeId: 'TMP-006',
-      role: '清洗操作员',
-      status: 'on_duty',
-      todayHours: 2.5,
-      efficiency: 82,
-      isTemporary: true,
-    },
-  ]);
+  // 员工名册 + 今日考勤 —— 全部来自后端
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
+  /** 考勤接口是否拿到了数据。false 时不显示在岗状态, ⛔ 不把「不知道」显示成「离岗」 */
+  const [attendanceAvailable, setAttendanceAvailable] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      setError(null);
+
+      // 名册是硬依赖：拿不到就整屏报错
+      const rosterPage = await userApiClient.getUsers({ page: 1, size: PAGE_SIZE });
+      if (!rosterPage || !Array.isArray(rosterPage.content)) {
+        throw new Error('用户接口返回的分页结构不符合预期');
+      }
+
+      // 考勤是软依赖：拿不到就不显示在岗状态（而不是把所有人显示成离岗）
+      let byUser = new Map<number, ClockRecord>();
+      let available = false;
+      try {
+        const day = todayStr();
+        const res = await timeclockApiClient.getHistoryRecords({
+          startDate: day,
+          endDate: day,
+          page: 1,
+          size: 500,
+        });
+        const records = res?.data?.content;
+        if (res?.success && Array.isArray(records)) {
+          byUser = new Map(records.map(r => [r.userId, r]));
+          available = true;
+        }
+      } catch (attErr) {
+        console.warn('[WSWorkers] 今日考勤加载失败，在岗状态显示为未知:', attErr);
+      }
+
+      setAttendanceAvailable(available);
+      setWorkers(rosterPage.content.map(u => toWorker(u, byUser.get(u.id), available)));
+      setTotal(typeof rosterPage.totalElements === 'number' ? rosterPage.totalElements : null);
+    } catch (err) {
+      console.error('[WSWorkers] 加载员工列表失败:', err);
+      setWorkers([]);
+      setTotal(null);
+      setAttendanceAvailable(false);
+      setError(err instanceof Error ? err.message : '加载失败');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   // 筛选员工
   const filteredWorkers = workers.filter(worker => {
     if (activeFilter === 'temporary' && !worker.isTemporary) return false;
-    if (activeFilter === 'on_duty' && worker.status !== 'on_duty') return false;
-    if (activeFilter === 'on_leave' && worker.status !== 'on_leave') return false;
-    if (searchQuery && !worker.name.includes(searchQuery) && !worker.employeeId.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (activeFilter === 'on_duty' && worker.duty !== 'on_duty') return false;
+    if (searchQuery && !worker.name.includes(searchQuery) && !worker.employeeLabel.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
 
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 500);
-  }, []);
-
-  // 获取状态样式
-  const getStatusStyle = (status: string) => {
-    const colorMap = {
-      on_duty: '#52c41a',
-      off_duty: '#8c8c8c',
-      on_leave: '#faad14',
-      absent: '#ff4d4f',
-    };
-    const keyMap = {
-      on_duty: 'onDuty',
-      off_duty: 'offDuty',
-      on_leave: 'onLeave',
-      absent: 'absent',
-    };
-    return {
-      bg: colorMap[status as keyof typeof colorMap] || '#8c8c8c',
-      text: t(`workers.status.${keyMap[status as keyof typeof keyMap] || 'unknown'}`)
-    };
+  // 标签计数 —— 从实际名册算，不写死
+  const tabCount = (key: string): number | null => {
+    if (key === 'all') return total ?? workers.length;
+    if (key === 'temporary') return workers.filter(w => w.isTemporary).length;
+    if (key === 'on_duty') return attendanceAvailable ? workers.filter(w => w.duty === 'on_duty').length : null;
+    return null;
   };
 
-  // 获取效率等级
-  const getEfficiencyGrade = (efficiency: number) => {
-    if (efficiency >= 95) return { grade: 'A', color: '#52c41a' };
-    if (efficiency >= 85) return { grade: 'B', color: '#1890ff' };
-    if (efficiency >= 75) return { grade: 'C', color: '#faad14' };
-    return { grade: 'D', color: '#ff4d4f' };
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadData();
+  }, [loadData]);
+
+  // 获取在岗状态样式；考勤不可用时明说「未知」
+  const getStatusStyle = (duty?: DutyState) => {
+    if (!duty) return { bg: '#bfbfbf', text: t('workers.status.unknown') };
+    const meta = DUTY_META[duty];
+    return { bg: meta.color, text: meta.label };
   };
 
   return (
@@ -198,7 +248,7 @@ export function WSWorkersScreen() {
       <View ref={tgtFilter.ref} onLayout={tgtFilter.onLayout} style={styles.filterContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {FILTER_TABS.map(tab => {
-            const labelKey = tab.key === 'on_duty' ? 'onDuty' : tab.key === 'on_leave' ? 'onLeave' : tab.key;
+            const count = tabCount(tab.key);
             return (
               <TouchableOpacity
                 key={tab.key}
@@ -206,7 +256,9 @@ export function WSWorkersScreen() {
                 onPress={() => setActiveFilter(tab.key)}
               >
                 <Text style={[styles.filterTabText, activeFilter === tab.key && styles.filterTabTextActive]}>
-                  {t(`workers.filters.${labelKey}`)} ({tab.count})
+                  {count === null
+                    ? t(`workers.filters.${tab.labelKey}`)
+                    : `${t(`workers.filters.${tab.labelKey}`)} (${count})`}
                 </Text>
               </TouchableOpacity>
             );
@@ -214,23 +266,34 @@ export function WSWorkersScreen() {
         </ScrollView>
       </View>
 
-      {/* 人员统计 */}
+      {/*
+        人员统计。
+        ⛔ 原来的「请假 / 缺勤」两档已删 —— 考勤表上「今天没打卡」既可能是请假也可能是
+        缺勤，后端没有能区分这两件事的字段，所以只报得出「未打卡」。
+        考勤接口不可用时前两档显示 "—"，⛔ 不显示 0（0 会被读成「没人在岗」）。
+      */}
       <View style={styles.statsRow}>
         <View style={[styles.statItem, { backgroundColor: '#f6ffed' }]}>
-          <Text style={[styles.statValue, { color: '#52c41a' }]}>8</Text>
+          <Text style={[styles.statValue, { color: '#52c41a' }]}>
+            {attendanceAvailable ? workers.filter(w => w.duty === 'on_duty').length : '—'}
+          </Text>
           <Text style={styles.statLabel}>{t('workers.stats.onDuty')}</Text>
         </View>
         <View style={[styles.statItem, { backgroundColor: '#fff7e6' }]}>
-          <Text style={[styles.statValue, { color: '#faad14' }]}>1</Text>
-          <Text style={styles.statLabel}>{t('workers.stats.onLeave')}</Text>
-        </View>
-        <View style={[styles.statItem, { backgroundColor: '#fff1f0' }]}>
-          <Text style={[styles.statValue, { color: '#ff4d4f' }]}>1</Text>
-          <Text style={styles.statLabel}>{t('workers.stats.absent')}</Text>
+          <Text style={[styles.statValue, { color: '#faad14' }]}>
+            {attendanceAvailable ? workers.filter(w => w.duty === 'not_clocked_in').length : '—'}
+          </Text>
+          <Text style={styles.statLabel}>未打卡</Text>
         </View>
         <View style={[styles.statItem, { backgroundColor: '#e6f7ff' }]}>
-          <Text style={[styles.statValue, { color: '#1890ff' }]}>2</Text>
+          <Text style={[styles.statValue, { color: '#1890ff' }]}>
+            {workers.filter(w => w.isTemporary).length}
+          </Text>
           <Text style={styles.statLabel}>{t('workers.stats.temporary')}</Text>
+        </View>
+        <View style={[styles.statItem, { backgroundColor: '#f5f5f5' }]}>
+          <Text style={[styles.statValue, { color: '#666' }]}>{total ?? '—'}</Text>
+          <Text style={styles.statLabel}>总人数</Text>
         </View>
       </View>
 
@@ -242,9 +305,43 @@ export function WSWorkersScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#667eea']} />
         }
       >
-        {filteredWorkers.map(worker => {
-          const statusStyle = getStatusStyle(worker.status);
-          const efficiencyGrade = getEfficiencyGrade(worker.efficiency);
+        {loading && (
+          <View style={styles.stateBox}>
+            <ActivityIndicator size="large" color="#667eea" />
+            <Text style={styles.stateText}>{t('common.loading')}</Text>
+          </View>
+        )}
+
+        {/* 加载失败 —— 明确报错, ⛔ 不退回任何本地数据 */}
+        {!loading && error && (
+          <View style={styles.stateBox}>
+            <Icon source="cloud-off-outline" size={44} color="#C0C4CC" />
+            <Text style={styles.stateText}>人员加载失败：{error}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+              <Text style={styles.retryBtnText}>{t('common.retry')}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* 名册拿到了但考勤没拿到 —— 说清楚哪一半是缺的, 不假装在岗状态已知 */}
+        {!loading && !error && !attendanceAvailable && workers.length > 0 && (
+          <View style={styles.noticeBox}>
+            <Icon source="information-outline" size={16} color="#faad14" />
+            <Text style={styles.noticeText}>今日考勤数据暂不可用，在岗状态显示为未知</Text>
+          </View>
+        )}
+
+        {!loading && !error && filteredWorkers.length === 0 && (
+          <View style={styles.stateBox}>
+            <Icon source="tray" size={44} color="#C0C4CC" />
+            <Text style={styles.stateText}>{t('common.noData')}</Text>
+          </View>
+        )}
+
+        {!loading && !error && filteredWorkers.map(worker => {
+          const statusStyle = getStatusStyle(worker.duty);
+          const clockIn = formatClock(worker.clockInTime);
+          const metaLine = [worker.employeeLabel, worker.roleLabel].filter(Boolean).join(' | ');
 
           return (
             <TouchableOpacity
@@ -266,21 +363,22 @@ export function WSWorkersScreen() {
                     </View>
                   )}
                 </View>
-                <Text style={styles.workerMeta}>
-                  {worker.employeeId} | {worker.role}
-                </Text>
-                {worker.currentTask && (
-                  <Text style={styles.workerTask}>{t('workers.currentTask', { task: worker.currentTask })}</Text>
+                <Text style={styles.workerMeta}>{metaLine}</Text>
+                {clockIn && (
+                  <Text style={styles.workerTask}>{t('workers.clockIn.clockTime', { time: clockIn })}</Text>
                 )}
               </View>
 
               <View style={styles.workerRight}>
-                <View style={styles.efficiencyBadge}>
-                  <Text style={[styles.efficiencyText, { color: efficiencyGrade.color }]}>
-                    {efficiencyGrade.grade}
-                  </Text>
+                <View style={[styles.statusBadge, { backgroundColor: `${statusStyle.bg}20` }]}>
+                  <Text style={[styles.statusBadgeText, { color: statusStyle.bg }]}>{statusStyle.text}</Text>
                 </View>
-                <Text style={styles.hoursText}>{t('workers.hours', { hours: worker.todayHours })}</Text>
+                {/* 工时只有后端给了 workDurationMinutes 才显示, ⛔ 缺失不显示 0h */}
+                {worker.workMinutes !== undefined && (
+                  <Text style={styles.hoursText}>
+                    {t('workers.hours', { hours: (worker.workMinutes / 60).toFixed(1) })}
+                  </Text>
+                )}
               </View>
             </TouchableOpacity>
           );
@@ -476,22 +574,58 @@ const styles = StyleSheet.create({
   workerRight: {
     alignItems: 'center',
   },
-  efficiencyBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f0f5ff',
-    justifyContent: 'center',
-    alignItems: 'center',
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
     marginBottom: 4,
   },
-  efficiencyText: {
-    fontSize: 14,
-    fontWeight: 'bold',
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '500',
   },
   hoursText: {
     fontSize: 12,
     color: '#999',
+  },
+  stateBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+  },
+  stateText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#606266',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  retryBtn: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: '#667eea',
+    borderRadius: 6,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  noticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fffbe6',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#8c6d1f',
   },
 });
 

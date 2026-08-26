@@ -75,6 +75,7 @@ import { ElMessage } from 'element-plus';
 import { getWastageAccountability } from '@/api/restaurant';
 import type { WastageAccountability } from '@/types/restaurant';
 import { handleCatchError } from '@/utils/errorToast';
+import { toDateString } from '@/utils/dateFormat';
 
 const props = defineProps<{ modelValue: boolean; factoryId: string }>();
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>();
@@ -86,7 +87,7 @@ const data = ref<WastageAccountability>({ startDate: '', endDate: '', totalCost:
 function defaultRange(): [string, string] {
   const now = new Date();
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const iso = (d: Date) => toDateString(d);
   return [iso(first), iso(now)];
 }
 const dateRange = ref<[string, string]>(defaultRange());

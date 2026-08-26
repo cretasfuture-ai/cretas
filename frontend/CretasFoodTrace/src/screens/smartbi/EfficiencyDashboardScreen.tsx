@@ -32,7 +32,7 @@ import type { RouteProp } from '@react-navigation/native';
 
 import { smartBIApi } from '../../services/api/smartbi';
 import { useAuthStore } from '../../store/authStore';
-import { formatNumberWithCommas } from '../../utils/formatters';
+import { formatNumberWithCommas, formatDate } from '../../utils/formatters';
 
 import type {
   SmartBIStackParamList,
@@ -192,7 +192,7 @@ export default function EfficiencyDashboardScreen(): React.ReactElement {
       const factoryId = getFactoryId();
 
       // Load summary and ranking in parallel
-      const today = new Date().toISOString().split('T')[0] ?? new Date().toISOString().substring(0, 10);
+      const today = formatDate(new Date()) ?? formatDate(new Date());
       const [summaryRes, rankingRes] = await Promise.all([
         smartBIApi.getEfficiencySummary(period, factoryId || undefined),
         smartBIApi.getEfficiencyRanking(

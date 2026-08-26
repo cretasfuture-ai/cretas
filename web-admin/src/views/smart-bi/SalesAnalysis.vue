@@ -9,7 +9,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { formatNumber, formatCount, formatAxisValue } from '@/utils/format-number';
-import { toApiDateString } from '@/utils/dateFormat';
+import { toApiDateString, toDateString } from '@/utils/dateFormat';
 import { ElMessage } from 'element-plus';
 import {
   Refresh,
@@ -1511,7 +1511,7 @@ async function handleExport() {
       XLSX.utils.book_append_sheet(wb, insightWs, 'AI洞察');
     }
 
-    const fileName = `销售分析报告-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const fileName = `销售分析报告-${toDateString(new Date())}.xlsx`;
     XLSX.writeFile(wb, fileName);
     ElMessage.success(`已导出: ${fileName}`);
   } catch (error) {

@@ -29,7 +29,17 @@ jest.mock('../../../store/fieldVisibilityStore', () => ({
 
 // Mock formatters
 jest.mock('../../../utils/formatters', () => ({
-  formatDate: jest.fn((input: string) => input || '2026-02-13'),
+  // ⚠️ 桩的形状必须是真实那一侧**真的会给出**的形状。
+  //    原来写的是 `(input: string) => input || '2026-02-13'` —— 喂它一个 Date
+  //    会把 **Date 对象**原样返回, 而真的 formatDate 永远返回 string。
+  //    这一屏改用 formatDate(new Date()) 取今天之后, 那个桩当场让整屏崩掉。
+  formatDate: jest.fn((input: Date | string | null | undefined) => {
+    if (input instanceof Date) {
+      const p = (n: number) => String(n).padStart(2, '0');
+      return input.getFullYear() + '-' + p(input.getMonth() + 1) + '-' + p(input.getDate());
+    }
+    return input || '2026-02-13';
+  }),
   formatDateTime: jest.fn(() => '2026-02-13 10:00'),
   formatNumberWithCommas: jest.fn((v: number) => String(v)),
 }));

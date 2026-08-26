@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import java.time.LocalDateTime;
@@ -288,6 +289,28 @@ public class FactorySettingsDTO {
 
         @Schema(description = "自动补货点", example = "200")
         private Integer autoReorderPoint;
+
+        /**
+         * 采购收货【超收上限】比率 —— 0.30 表示最多多收 30%，
+         * 累计可收上限 = 下单量 × (1 + 本值)。
+         *
+         * <p><b>null = 本工厂没配 = 不限制超收</b>（owner 2026-08-25 裁定的默认）。
+         * ⚠️ {@code 0} 与 null <b>不是</b>同一件事：{@code 0} 是"一件都不许多收"这条
+         * 明确的限制，null 是"不设限"。过去执行侧用 {@code 0.00} 当"没配"的默认值，
+         * 于是生产上把每一次正常的多送都拦成 409，而界面还在说"可以多收 30%"。
+         *
+         * <p>⛔ 不要与 {@code ProductionSettings.yieldOverReceiptTolerance} 共用 ——
+         * 那是出成报工的产出容差，和"供应商多送了收不收"是两条业务规则。
+         *
+         * <p>⚠️ {@code PUT /settings/inventory} <b>整块覆盖</b>本 JSON，不做字段合并：
+         * 前端必须 load → merge → save，只发一个字段会把本项连同同级项一起清掉。
+         *
+         * @see com.cretas.aims.service.inventory.OverReceiveLimit
+         */
+        @DecimalMin(value = "0.0", message = "采购超收上限不能为负；不设限请留空(null)，不要填负数")
+        @Schema(description = "采购收货超收上限比率 (0.30 = 最多多收 30%); null = 不限制超收 (默认)",
+                example = "0.30")
+        private java.math.BigDecimal purchaseOverReceiveRate;
     }
 
     /**

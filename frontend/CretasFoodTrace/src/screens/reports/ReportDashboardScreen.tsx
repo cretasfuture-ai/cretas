@@ -23,7 +23,7 @@ import { wageApiClient } from '../../services/api/wageApiClient';
 import type { LaborCostAnalysis } from '../../services/api/wageApiClient';
 import { getFactoryId } from '../../types/auth';
 import { logger } from '../../utils/logger';
-import { formatNumberWithCommas } from '../../utils/formatters';
+import { formatNumberWithCommas, formatDate } from '../../utils/formatters';
 
 const reportDashboardLogger = logger.createContextLogger('ReportDashboard');
 
@@ -89,9 +89,6 @@ export default function ReportDashboardScreen() {
     const startDate = new Date();
     startDate.setDate(endDate.getDate() - 7);
 
-    const formatDate = (date: Date): string => {
-      return date.toISOString().split('T')[0] ?? '';
-    };
 
     const startDateStr = formatDate(startDate);
     const endDateStr = formatDate(endDate);

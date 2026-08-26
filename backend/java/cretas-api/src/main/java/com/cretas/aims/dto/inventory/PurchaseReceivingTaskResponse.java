@@ -52,6 +52,24 @@ public class PurchaseReceivingTaskResponse {
     private int activeReceiptCount;
     private boolean receiptConflict;
 
+    /**
+     * 本工厂<b>实际生效</b>的采购超收上限比率（{@code 0.30} = 最多多收 30%）；
+     * {@code null} = 不限制超收。
+     *
+     * <p>⚠️ 这是后端执行侧 {@code PurchaseServiceImpl.resolveOverReceiveLimit} 用的同一个值。
+     * ⛔ 前端不要再写死百分比，也不要拿 {@code remainingReceivableQuantity} 当"最多能收多少"
+     * —— 那个字段是<b>还差多少收齐</b>，不含超收余量。
+     *
+     * @see com.cretas.aims.service.inventory.OverReceiveLimit
+     */
+    private BigDecimal overReceiveLimitRate;
+
+    /** 面向仓管员的措辞：{@code "不限制"} / {@code "30%"}。直接显示，不要自己格式化。 */
+    private String overReceiveLimitLabel;
+
+    /** 这个上限从哪来（{@code unconfigured} / {@code property:...} / {@code factory-settings:...}）。排查用。 */
+    private String overReceiveLimitSource;
+
     @Builder.Default
     private List<Item> items = new ArrayList<>();
 
@@ -67,7 +85,18 @@ public class PurchaseReceivingTaskResponse {
         private BigDecimal orderedQuantity;
         private BigDecimal receivedQuantity;
         private BigDecimal activeDraftAllocatedQuantity;
+        /** 还差多少<b>收齐</b> = 下单 − 已收 − 草稿占用（不含任何超收余量）。 */
         private BigDecimal remainingReceivableQuantity;
+        /**
+         * 本次<b>最多还能收多少</b> = 下单×(1+超收上限) − 已收 − 草稿占用。
+         *
+         * <p>{@code null} = 不限制超收。⛔ 前端读到 null 不许兜底成
+         * {@link #remainingReceivableQuantity} —— 那正是"界面把货挡在门口"的写法。
+         *
+         * <p>⚠️ 它与 {@code remainingReceivableQuantity} 是两个问题的答案：
+         * 一个是"还差多少算收齐"，一个是"最多还能往里收多少"。未配置上限时后者没有答案。
+         */
+        private BigDecimal maxReceivableQuantity;
         private String unit;
         private String specification;
         /**

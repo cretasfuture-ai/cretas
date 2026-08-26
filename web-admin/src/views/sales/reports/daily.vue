@@ -2,10 +2,11 @@
 import { ref, onMounted } from 'vue';
 import { handleCatchError } from '@/utils/errorToast';
 import { fetchDailyReport, type DailyReport } from '@/api/salesPreset';
+import { toDateString } from '@/utils/dateFormat';
 
 const data = ref<DailyReport | null>(null);
 const loading = ref(false);
-const selectedDate = ref<string>(new Date().toISOString().slice(0, 10));
+const selectedDate = ref<string>(toDateString(new Date()));
 
 function money(value: number | null | undefined): string {
   return `¥ ${Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

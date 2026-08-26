@@ -12,6 +12,7 @@
  */
 import type { SalaryItem } from '@/api/salary';
 import type { SalarySpecialDeduction, DeductionType } from '@/api/specialDeduction';
+import { toDateString } from '@/utils/dateFormat';
 
 // ============= Chinese Font Loading =============
 // SimHei subset is served from /fonts/simhei-subset.ttf (existing asset, also
@@ -244,7 +245,7 @@ export async function exportPayslipPDF(input: PayslipExportInput): Promise<strin
     // Center: page number
     doc.text(`第 ${p}/${totalPages} 页`, pageWidth / 2, 285, { align: 'center' });
     // Right: generated timestamp short
-    doc.text(`生成 ${new Date().toISOString().slice(0, 10)}`, pageWidth - 15, 285, { align: 'right' });
+    doc.text(`生成 ${toDateString(new Date())}`, pageWidth - 15, 285, { align: 'right' });
     doc.setTextColor(0);
   }
 

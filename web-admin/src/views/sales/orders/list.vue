@@ -85,6 +85,7 @@ import {
   type SalesOrderPaymentState,
   type SalesOrderShipmentState,
 } from './salesOrderListUx';
+import { toDateString } from '@/utils/dateFormat';
 
 // Quick action dialogs
 const deliveryDialogVisible = ref(false);
@@ -887,7 +888,7 @@ const goldSummaryRangeLabel = ref<string>('');
 async function loadGoldSummary() {
   if (!factoryId.value) return;
   const year = new Date().getFullYear();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toDateString(new Date());
   const ranges: Array<{ start: string; end: string; label: string }> = [
     { start: `${year}-01-01`, end: today, label: `${year} YTD` },
     { start: `${year - 1}-01-01`, end: `${year - 1}-12-31`, label: `${year - 1} 全年` },
@@ -2048,7 +2049,7 @@ function handleAiFill(params: TableRow) {
 }
 
 async function handleQuickDelivery(row: TableRow) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toDateString(new Date());
   // Build items from order items (each with productTypeId, deliveredQuantity, unit)
   let items: TableRow[] = [];
   if (row.items && row.items.length > 0) {

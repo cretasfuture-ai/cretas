@@ -20,6 +20,7 @@ import {
   Delete
 } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -31,7 +32,7 @@ const productionLines = ref<TableRow[]>([]);
 
 // 表单数据
 const form = ref({
-  planDate: new Date().toISOString().split('T')[0],
+  planDate: toDateString(new Date()),
   selectedBatchIds: [] as number[],
   autoAssignWorkers: true,
   notes: ''

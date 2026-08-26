@@ -81,7 +81,7 @@ public class FoodKBFeedbackController {
                 pythonRequest.put("intent_code", request.getIntentCode());
             }
 
-            Map<String, Object> result = pythonClient.submitFoodKBFeedback(pythonRequest);
+            Map<String, Object> result = pythonClient.submitFoodKBFeedback(factoryId, pythonRequest);
             return ResponseEntity.ok(ApiResponse.success("反馈已提交", result));
 
         } catch (BusinessException be) {
@@ -118,7 +118,7 @@ public class FoodKBFeedbackController {
                 pythonRequest.put("session_id", request.getSessionId());
             }
 
-            Map<String, Object> result = pythonClient.logFoodKBQuery(pythonRequest);
+            Map<String, Object> result = pythonClient.logFoodKBQuery(factoryId, pythonRequest);
             return ResponseEntity.ok(ApiResponse.success("查询日志已记录", result));
 
         } catch (BusinessException be) {
@@ -137,7 +137,7 @@ public class FoodKBFeedbackController {
         log.info("获取食品知识库反馈统计: factoryId={}", factoryId);
 
         try {
-            Map<String, Object> stats = pythonClient.getFoodKBFeedbackStats();
+            Map<String, Object> stats = pythonClient.getFoodKBFeedbackStats(factoryId);
             return ResponseEntity.ok(ApiResponse.success(stats));
 
         } catch (BusinessException be) {

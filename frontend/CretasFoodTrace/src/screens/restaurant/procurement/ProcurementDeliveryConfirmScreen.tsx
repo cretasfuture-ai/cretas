@@ -19,6 +19,7 @@ import {
   getProcurementDeliverySubmitBlocker,
   resolveRequisitionMaterialName,
 } from './procurementDeliveryForm';
+import { formatDate } from '../../../utils/formatters';
 
 interface LineDraft {
   key: string;
@@ -48,7 +49,7 @@ export function ProcurementDeliveryConfirmScreen() {
   const [selectedReqId, setSelectedReqId] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [supplierName, setSupplierName] = useState('');
-  const [deliveryDate, setDeliveryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [deliveryDate, setDeliveryDate] = useState(formatDate(new Date()));
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
   const [supplierContactNote, setSupplierContactNote] = useState('');
   const [voiceTranscriptText, setVoiceTranscriptText] = useState('');

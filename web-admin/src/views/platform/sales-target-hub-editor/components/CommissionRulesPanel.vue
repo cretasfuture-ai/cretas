@@ -227,6 +227,7 @@ import {
   type CommissionTier,
   type PeriodType,
 } from '@/api/salesTargetHub'
+import { toDateString } from '@/utils/dateFormat'
 
 interface Props {
   factoryId: string
@@ -323,7 +324,7 @@ function resetForm() {
   form.periodType = 'MONTHLY'
   form.salesId = undefined
   form.customerType = ''
-  form.effectiveFrom = new Date().toISOString().slice(0, 10)
+  form.effectiveFrom = toDateString(new Date())
   form.effectiveTo = undefined
   form.active = true
   form.leaderboardFormula = ''

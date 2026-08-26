@@ -21,6 +21,7 @@ import type {
   UrgentInsertImpactAnalysis,
   UrgentInsertStatistics,
 } from '../../types/dispatcher';
+import { formatDate } from '../../utils/formatters';
 
 /**
  * 调度管理API客户端
@@ -375,7 +376,7 @@ class SchedulingApiClient {
   ): Promise<ApiResponse<AISchedulingResult>> {
     // 构建后端所需的请求参数
     const requestData = {
-      planDate: data.planDate || data.startDate || new Date().toISOString().split('T')[0],
+      planDate: data.planDate || data.startDate || formatDate(new Date()),
       shiftType: data.shiftType,
       productionPlanIds: data.productionPlanIds || data.planIds,
       batchIds: data.batchIds,

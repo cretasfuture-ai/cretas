@@ -17,6 +17,7 @@ import { useProductionGold } from '@/composables/useProductionGold';
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
+import { toDateString } from '@/utils/dateFormat';
 
 // ==================== 状态 ====================
 
@@ -40,7 +41,7 @@ const shortcuts = [
 
 function fmtDate(d: Date | string): string {
   if (typeof d === 'string') return d.split('T')[0];
-  return d.toISOString().split('T')[0];
+  return toDateString(d);
 }
 
 function getQueryDates() {

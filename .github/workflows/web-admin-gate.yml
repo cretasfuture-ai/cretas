@@ -28,6 +28,13 @@ on:
       # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
       # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
+      # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
+      # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
+      # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:
+      # 只触发 web-admin/** 时, 一个**只改 Java** 的 PR 恰好是它看不见的那类改动 ——
+      # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
   pull_request:
     paths:
       - 'web-admin/**'
@@ -38,6 +45,13 @@ on:
       # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
       # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
+      # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
+      # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
+      # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:
+      # 只触发 web-admin/** 时, 一个**只改 Java** 的 PR 恰好是它看不见的那类改动 ——
+      # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
 
 concurrency:
   group: web-admin-gate-${{ github.ref }}

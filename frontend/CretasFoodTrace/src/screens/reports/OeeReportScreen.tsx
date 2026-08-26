@@ -29,6 +29,7 @@ import { getFactoryId } from '../../types/auth';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { GaugeChart } from '../../components/charts';
+import { formatDate } from '../../utils/formatters';
 
 // 创建OeeReport专用logger
 const oeeReportLogger = logger.createContextLogger('OeeReport');
@@ -72,8 +73,8 @@ export default function OeeReportScreen() {
     }
 
     return {
-      startDate: startDate.toISOString().split('T')[0] as string,
-      endDate: endDate.toISOString().split('T')[0] as string,
+      startDate: formatDate(startDate) as string,
+      endDate: formatDate(endDate) as string,
     };
   }, [timeRange]);
 
