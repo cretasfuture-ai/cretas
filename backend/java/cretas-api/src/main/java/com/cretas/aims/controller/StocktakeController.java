@@ -66,6 +66,30 @@ public class StocktakeController {
         return ApiResponse.success("盘点任务已发起", result);
     }
 
+    /**
+     * 盘点补录待办：结单时<b>没有回答</b>「这批有没有不良品」的计划。
+     *
+     * <p>为什么挂在盘点这条路上：2026-08-26 实测生产 <b>72 张报工单零填写</b>不良品数，
+     * 而结单时「不填也能提交」。光加提示不改变任何激励 —— 72 张零填写就说明
+     * <b>下游没有任何人因为这个空值受阻</b>。盘点是那个天然的卡点：
+     * 盘点时人本来就在数东西，此时问「有几个坏的」是自然的。</p>
+     *
+     * <p>返回里区分两种「没回答」，⛔ 不许合并：</p>
+     * <ul>
+     *   <li>{@code NEVER_ASKED} —— 2026-08-27 之前的存量结单，那时流程里没有这一问</li>
+     *   <li>{@code NOT_COUNTED} —— 人主动答了「没清点」</li>
+     * </ul>
+     *
+     * <p>⛔ 已清点确认零（{@code NONE_CONFIRMED}）<b>不在</b>待办里 —— 那是真实读数。</p>
+     */
+    @GetMapping("/pending-defect-counts")
+    @Operation(summary = "盘点补录待办: 结单时没回答不良品的计划",
+               description = "区分「从没被问过」与「人答了没清点」; 已清点确认零不在待办里")
+    public ApiResponse<List<Map<String, Object>>> pendingDefectCounts(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId) {
+        return ApiResponse.success(stocktakeService.listPendingDefectCounts(factoryId));
+    }
+
     @GetMapping("/initiate-constraint")
     @Operation(summary = "查询发起盘点的月底约束展示态",
                description = "fool-proof Rule 1: 边界必须在用户填表前展示, 供前端弹窗打开时立即展示" +

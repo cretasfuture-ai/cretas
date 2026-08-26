@@ -51,6 +51,26 @@ const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 // List state
 // ────────────────────────────────────────────────────────────────────────────
 const loading = ref(false);
+
+/**
+ * 结单时没回答「这批有没有不良品」的计划 —— 盘点时的补录待办。
+ *
+ * 为什么放在盘点页: 2026-08-26 实测生产 72 张报工单【零填写】不良品数, 而结单时
+ * 「不填也能提交」。光加提示不改变任何激励 —— 零填写本身就说明下游没有任何人因为
+ * 这个空值受阻。盘点是那个天然的卡点: 人本来就在数东西, 此时问「有几个坏的」是自然的。
+ */
+const pendingDefectCounts = ref<Array<Record<string, unknown>>>([]);
+async function loadPendingDefectCounts() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/stocktakes/pending-defect-counts`);
+    pendingDefectCounts.value = Array.isArray(res?.data) ? res.data : [];
+  } catch {
+    // ⛔ 拿不到就【不显示】, 不显示成 0 条 —— 「接口挂了」和「确实没有待办」
+    //    长得一模一样, 而后者会让人以为账已经清完了。
+    pendingDefectCounts.value = [];
+  }
+}
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const statusFilter = ref('');
@@ -1105,6 +1125,7 @@ async function applyDiff(row: TableRow) {
 // Init
 // ────────────────────────────────────────────────────────────────────────────
 onMounted(async () => {
+  loadPendingDefectCounts();
   await loadWarehouses();
   await loadData();
   // Dashboard onboarding 引导「期初建账」深链 (?openEntry=1) — 直接弹出期初建账对话框,
@@ -1164,6 +1185,36 @@ onMounted(async () => {
       :closable="false"
       style="margin-bottom: 16px"
     />
+
+    <!-- 结单未清点不良品 —— 补录待办 -->
+    <el-alert
+      v-if="pendingDefectCounts.length > 0"
+      type="warning"
+      show-icon
+      :closable="false"
+      style="margin-bottom: 16px"
+    >
+      <template #title>
+        有 {{ pendingDefectCounts.length }} 个已结单的计划没填不良品数，盘点时需要补录
+      </template>
+      <div style="margin-top: 8px">
+        <el-table :data="pendingDefectCounts" size="small" border max-height="260">
+          <el-table-column prop="planNumber" label="计划单号" min-width="220" />
+          <el-table-column prop="actualFinishedQuantity" label="实际产量" width="110" />
+          <el-table-column prop="quantityUnit" label="单位" width="80" />
+          <el-table-column label="原因" width="180">
+            <template #default="{ row }">
+              <!-- 两种「没回答」不合并: 存量是流程当时没这一问, NOT_COUNTED 是人主动选的 -->
+              <el-tag v-if="row.reason === 'NEVER_ASKED'" type="info" size="small">
+                结单时流程未问
+              </el-tag>
+              <el-tag v-else type="warning" size="small">已选「未清点」</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="settledAt" label="结单时间" min-width="170" />
+        </el-table>
+      </div>
+    </el-alert>
 
     <!-- 暂存提示 -->
     <el-alert
