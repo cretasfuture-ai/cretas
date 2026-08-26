@@ -1125,6 +1125,24 @@ public class OrderCostBreakdownService {
                     + ":v" + plan.getSelectedBomVersion());
             return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
         }
+        // ⚠️ version 在【走了 recipe 兜底】时仍然是 null —— 上面 snapshot==null 那个分支
+        //    只救回了 snapshot, 没有救回 version 对象。2026-08-26 生产实测: 兜底【成功】时
+        //    这里 version.getVersionNumber() 直接 NPE ⇒ /cost-breakdown 500,
+        //    界面上是「系统处理异常, 请稍后重试」。
+        //    也就是说 8-25 加的这条恢复路径, 把「诚实报 SNAPSHOT_MISSING」变成了崩溃,
+        //    而且【只在它成功的时候崩】。
+        //
+        //    版本号本身是知道的: pinnedBomSnapshotFromRecipe 只在
+        //    recipe.version == plan.selectedBomVersion 时才返回非 null(见 1034 行),
+        //    所以兜底路径的版本号就是 plan.getSelectedBomVersion()。
+        //    ⛔ 但价格【来源】不能混为一谈: 来自快照和来自当前配方是两回事,
+        //       前者是冻结的历史, 后者是「现在的配方恰好还是那个版本」。分别标注。
+        Integer pinnedVersionNumber = version != null
+                ? version.getVersionNumber()
+                : plan.getSelectedBomVersion();
+        String pinnedPriceSource = (version != null
+                ? "PINNED_BOM_ITEM_COST:v"
+                : "RECIPE_FALLBACK_ITEM_COST:v") + pinnedVersionNumber;
         List<PackagingDetail> details = new ArrayList<>();
         BigDecimal knownCost = BigDecimal.ZERO;
         for (Object rawItem : items) {
@@ -1172,7 +1190,7 @@ public class OrderCostBreakdownService {
                     .quantity(quantity)
                     .unit(stringValue(item.get("unit")))
                     .unitPrice(effectiveUnitPrice)
-                    .priceSource("PINNED_BOM_ITEM_COST:v" + version.getVersionNumber())
+                    .priceSource(pinnedPriceSource)
                     .amount(amount)
                     .collectionStatus(collected ? "COLLECTED" : "MISSING_PRICE")
                     .missingReason(collected ? null : "pinned BOM 缺少可验证 itemCost/标准耗用量")
