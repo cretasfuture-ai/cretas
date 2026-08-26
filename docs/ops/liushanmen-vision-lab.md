@@ -142,6 +142,21 @@ B:\anaconda3\python.exe tools\vision-lab\build_pending_label_review_queue.py `
 人工复核。只有后续轮次确认托盘完整，才允许清除该回流状态并进入标签训练；不得把第一轮局部框或
 未显示区域解释为缺白标/缺彩标真值。
 
+上一轮全部完成后，用不可覆盖的新目录只生成 `incomplete_tray=true` 项的下一轮队列。构建器重新
+验证上一轮 manifest、人工 sidecar、原图和 SHA，按轮次逐步扩大以目标为中心的裁图；已画标签框经
+“旧裁图归一化坐标 → 原图像素坐标 → 新裁图归一化坐标”带入，但继续作为需完整复核的 proposal：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_incomplete_tray_requeue.py `
+  --source-queue D:\CretasVisionLab\queues\label-pending-<round-n> `
+  --output D:\CretasVisionLab\queues\label-pending-<round-n-plus-1> `
+  --round <2-or-later> `
+  --annotator-url http://127.0.0.1:<port>/
+```
+
+第二轮仍按 `I` 的行可以再进入第三轮，扩裁半径会继续增加并记录是否触及原图边界；不得覆盖或删除
+上一轮证据。没有 `training_eligible=true` 的最终人工 sidecar 前，这些行始终不进入 label dataset。
+
 ### 历史标签训练裁图完整性审计
 
 复用任何既有 label 数据集前，必须把数据集中的每个 `derived_rows[kind=label]` 重新绑定到源队列、
