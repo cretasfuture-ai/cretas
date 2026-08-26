@@ -50,6 +50,15 @@ interface YieldQuantityInputProps {
    * per-product-type flag on ProductType when needed.
    */
   defaultTrayWeighing?: boolean;
+  /**
+   * 必填标记 —— 标签后面加一颗红星。
+   *
+   * 🔴 2026-08-26 走查: 报工屏上唯一的红星在「领料批次」上, 而真正会把提交挡回来的
+   *    投入量 / 产出量**一颗星都没有** —— 工人是提交之后被弹窗事后告知的。
+   *    ⇒ 红星要落在「空着就提交不了」的字段上, 由调用方按它自己的校验规则传。
+   * ⛔ 选填字段(留样/半成品产出量)不许传 true: 星到处都是等于没有星。
+   */
+  required?: boolean;
   testID?: string;
 }
 
@@ -94,6 +103,7 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
   disabled = false,
   calculatorMode = false,
   defaultTrayWeighing = false,
+  required = false,
   testID,
 }) => {
   const numeric = parseFloat(value);
@@ -272,7 +282,17 @@ export const YieldQuantityInput: React.FC<YieldQuantityInputProps> = ({
       </Modal>
 
       <View style={styles.labelRow}>
-        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.label}>
+          {label}
+          {required ? (
+            <Text
+              style={styles.requiredMark}
+              testID={testID ? `${testID}-required-mark` : undefined}
+            >
+              {' *'}
+            </Text>
+          ) : null}
+        </Text>
       </View>
 
       <View style={styles.row}>
@@ -426,6 +446,7 @@ const styles = StyleSheet.create({
   wrap: { marginBottom: 16 },
   labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   label: { fontSize: 16, fontWeight: '600', color: '#303133' },
+  requiredMark: { color: '#F56C6C', fontWeight: '700' },
   // B4: full-width outlined toggle below the quantity row
   calcToggleFull: {
     marginTop: 10, height: 44, borderRadius: 8, borderWidth: 1.5,
