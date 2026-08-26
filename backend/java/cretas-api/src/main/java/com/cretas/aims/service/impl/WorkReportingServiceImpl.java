@@ -428,10 +428,22 @@ public class WorkReportingServiceImpl {
         if (batch.getActualQuantity().compareTo(batch.getPlannedQuantity()) >= 0) {
             batch.setStatus(ProductionBatchStatus.COMPLETED);
             batch.setEndTime(LocalDateTime.now());
-            // 如果 goodQuantity 未设置，默认等于 actualQuantity
-            if (batch.getGoodQuantity() == null) {
-                batch.setGoodQuantity(batch.getActualQuantity());
-            }
+            // ⛔ 这里原本写着「goodQuantity 未设置就默认等于 actualQuantity」——
+            //    那是把「**没人填不良品**」写成「**零不良**」, 而且一旦落库就
+            //    再也分不开: NULL 与「真的零不良」在表里长得一模一样。
+            //
+            // 🔴 2026-08-26 生产实测 (cretas_prod_db, 只读):
+            //      61 个批次 / 8 个 COMPLETED
+            //      good_quantity = actual_quantity : 8 个  (100%)
+            //      good_quantity < actual_quantity : 0 个  ← 从来没有一条记录过不良品
+            //      时间窗 2026-08-17 → 2026-08-25, 仍在产生
+            //    ⇒ 不是「我们的良品率恰好 100%」, 是这行代码替所有人填了 100%。
+            //    这也是车间大屏刻意不放不良品率的原因 —— 那个数没有意义。
+            //
+            // ⇒ 不知道就留 null。与本方法上面那条「planned = 0 是『未知』的编码,
+            //   读不到就不替用户收口」是同一条纪律。
+            // ⚠️ 消费方本来就得处理 null (全仓 35 处读取点多数已是
+            //   `!= null ? … : ZERO`), 留 null 不会把它们打崩。
             productionBatchRepository.save(batch);
             log.info("报工触发批次自动完成: batchId={}, actual={}, planned={}",
                     batch.getId(), batch.getActualQuantity(), batch.getPlannedQuantity());
@@ -460,9 +472,9 @@ public class WorkReportingServiceImpl {
 
         batch.setStatus(ProductionBatchStatus.COMPLETED);
         batch.setEndTime(LocalDateTime.now());
-        if (batch.getGoodQuantity() == null) {
-            batch.setGoodQuantity(batch.getActualQuantity() != null ? batch.getActualQuantity() : BigDecimal.ZERO);
-        }
+        // ⛔ 同上: 不替用户填不良品。原来这里比自动完成那处更糟 —— 它连
+        //    actualQuantity 都没有时还会兜底成 ZERO, 等于断言「一件良品都没有」。
+        //    见自动完成分支里的生产实测数据。
         productionBatchRepository.save(batch);
         log.info("手动完成批次: batchId={}, actual={}", batch.getId(), batch.getActualQuantity());
 

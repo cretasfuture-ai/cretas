@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code src/main/resources} 下从未设置过 —— 生产上真正允许的超收是 <b>0%</b>，
  * 与本 policy 展示的 30% 不一致。对齐是业务裁定，不在本闸范围内。
  */
-class WorkdeskOverReceivePolicySingleSourceTest {
+class WorkdeskOverReceivePolicySingleSourceContractTest {
 
     private static final Path TOOL_DIR =
             Path.of("src/main/java/com/cretas/aims/ai/tool/impl/workdesk");

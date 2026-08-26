@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>⚠️ 这道闸只拦**字面量**。变量传入的值拦不住 —— 真正的兜底是
  * {@code WarehouseLayoutController#moveFinishedGoods} 里的存在性校验(fail closed)。
  */
-class StorageLocationIsNeverAHardcodedDescriptionTest {
+class StorageLocationIsNeverAHardcodedDescriptionContractTest {
 
     private static final Path MAIN = Path.of("src/main/java/com/cretas/aims");
 
