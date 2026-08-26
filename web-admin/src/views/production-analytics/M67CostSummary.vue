@@ -79,6 +79,7 @@ import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
+import { toDateString } from '@/utils/dateFormat';
 
 interface Row {
   orderId: string; orderNumber?: string; orderDate?: string; productTypeId?: string; productName?: string; skuCode?: string;
@@ -99,7 +100,7 @@ const masked = ref(false);
 function defaultRange(): [string, string] {
   const end = new Date();
   const start = new Date(end.getTime() - 30 * 86400000);
-  const f = (d: Date) => d.toISOString().slice(0, 10);
+  const f = (d: Date) => toDateString(d);
   return [f(start), f(end)];
 }
 const range = ref<[string, string]>(defaultRange());

@@ -33,6 +33,7 @@ import {
   type HourlyRateRule,
   type WageCalculation,
 } from '@/api/wagePolicy';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId || '');
@@ -64,7 +65,7 @@ const hourlyDialog = ref({
     employeeId: null as number | null,
     baseHourlyRate: 30 as number,
     overtimeMultiplier: 1.5 as number,
-    effectiveFrom: new Date().toISOString().slice(0, 10),
+    effectiveFrom: toDateString(new Date()),
     effectiveTo: '' as string,
     isActive: true,
     notes: '',
@@ -186,7 +187,7 @@ function openHourlyDialog(item: HourlyRateRule | null) {
       employeeId: null,
       baseHourlyRate: 30,
       overtimeMultiplier: 1.5,
-      effectiveFrom: new Date().toISOString().slice(0, 10),
+      effectiveFrom: toDateString(new Date()),
       effectiveTo: '',
       isActive: true,
       notes: '',

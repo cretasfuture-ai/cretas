@@ -199,7 +199,7 @@ import { useFactoryId } from '@/composables/useFactoryId';
 import { usePermissionStore } from '@/store/modules/permission';
 import { getStocktakingRecords, getStocktakingRecord, getStocktakingSummary, createStocktakingRecord, completeStocktaking, cancelStocktaking, getRawMaterialTypes } from '@/api/restaurant';
 import { emptyCell, formatDateCell, exportTableToExcel } from '@/utils/tableFormatters';
-import { formatDate } from '@/utils/dateFormat';
+import { formatDate, toDateString } from '@/utils/dateFormat';
 import type { StocktakingRecord } from '@/types/restaurant';
 import AnalyticsStrip from '../components/AnalyticsStrip.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
@@ -260,7 +260,7 @@ const detailData = ref<StocktakingRecord | null>(null);
 
 // 后端 StocktakingRecord 必填字段: rawMaterialTypeId, stocktakingDate（@NotNull）
 // 若前端不传 stocktakingDate, JPA @Valid 会直接返回 400, 而不会进入 controller 的"默认为今天"分支
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => toDateString(new Date());
 const dialogForm = ref({ rawMaterialTypeId: '', stocktakingDate: today(), unit: 'kg', notes: '' });
 const createFormRef = ref<FormInstance>();
 const createFormRules = {

@@ -26,7 +26,12 @@ describe('SKU editor dialog UX', () => {
   });
 
   it('shows the authoritative creation timestamp returned by the SKU list API', () => {
-    expect(source).toContain("import { formatDateTime } from '@/utils/dateFormat';");
+    // 守的是「formatDateTime 来自共享的 @/utils/dateFormat」这件事,
+    // ⛔ 不是那一行 import 的字面量 —— 同一条 import 里再并进别的名字
+    // (2026-08-26 并进了 toDateString)是正常演进, 不该让这条闸变红。
+    expect(source).toMatch(
+      /import\s*\{[^}]*\bformatDateTime\b[^}]*\}\s*from\s*'@\/utils\/dateFormat'/,
+    );
     expect(source).toContain('prop="createdAt" label="创建时间"');
     expect(source).toContain('{{ formatDateTime(row.createdAt) }}');
   });

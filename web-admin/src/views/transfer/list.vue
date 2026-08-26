@@ -34,6 +34,7 @@ import {
   type TransferSelectableItem,
   type TransferType,
 } from './transferCreate';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const route = useRoute();
@@ -93,7 +94,7 @@ interface FactoryNetworkEntry { factoryId: string; factoryName: string }
 const submitting = ref(false);
 const submittingTransferId = ref('');
 const formRef = ref();
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => toDateString(new Date());
 const form = ref({
   transferType: 'BRANCH_TO_HQ' as TransferType,
   targetFactoryId: '',

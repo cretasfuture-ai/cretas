@@ -394,6 +394,7 @@ import {
   type SupplierDeliveryNoteDto, type SupplierDeliveryNoteLineDto,
 } from '@/api/restaurant/supplierDeliveryNote';
 import { handleCatchError } from '@/utils/errorToast';
+import { toDateString } from '@/utils/dateFormat';
 
 const route = useRoute();
 const router = useRouter();
@@ -421,7 +422,7 @@ const form = reactive<{
   deliveryDate: string;
   noteNumber: string;
   lines: SupplierDeliveryNoteLineDto[];
-}>({ supplierId: '', deliveryDate: new Date().toISOString().slice(0, 10), noteNumber: '', lines: [] });
+}>({ supplierId: '', deliveryDate: toDateString(new Date()), noteNumber: '', lines: [] });
 
 const rejectVisible = ref(false);
 const rejectForm = reactive({ code: '', note: '' });
@@ -608,7 +609,7 @@ async function loadDetail() {
   if (isManual.value) {
     // 手动录入预填 query
     form.supplierId = (route.query.supplierId as string) || '';
-    form.deliveryDate = (route.query.deliveryDate as string) || new Date().toISOString().slice(0, 10);
+    form.deliveryDate = (route.query.deliveryDate as string) || toDateString(new Date());
     if (form.lines.length === 0) addLine();
     return;
   }

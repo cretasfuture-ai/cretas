@@ -1,4 +1,5 @@
 import type { TableRow } from '@/types/api'
+import { toDateString } from '@/utils/dateFormat'
 
 type OrderEntityType = 'PURCHASE_ORDER' | 'SALES_ORDER' | string
 
@@ -16,7 +17,7 @@ function dateParts(date: Date, timeZone: string): { year: number; month: number;
 function formatLocalDate(date: Date, timeZone: string, plusDays = 0): string {
   const { year, month, day } = dateParts(date, timeZone)
   const shifted = new Date(Date.UTC(year, month - 1, day + plusDays))
-  return shifted.toISOString().slice(0, 10)
+  return toDateString(shifted)
 }
 
 // 2026-07-28: buildAiTemporalContext 已删 —— 「工厂当前日期」现在由后端

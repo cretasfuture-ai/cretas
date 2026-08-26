@@ -7,6 +7,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, PriceTag } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import type { TableRow } from '@/types/api';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 
@@ -241,12 +242,12 @@ async function fetchR14Suggestions() {
 const trackingDialogVisible = ref(false);
 const trackingSampleId = ref('');
 const trackingRecords = ref<{ date: string; content: string; attachment: string; recorder: string }[]>([]);
-const newTracking = ref({ date: new Date().toISOString().slice(0, 10), content: '', attachment: '', recorder: '' });
+const newTracking = ref({ date: toDateString(new Date()), content: '', attachment: '', recorder: '' });
 
 async function openTrackingDialog(row: TableRow) {
   trackingSampleId.value = String(row.id);
   trackingRecords.value = [];
-  newTracking.value = { date: new Date().toISOString().slice(0, 10), content: '', attachment: '', recorder: String(currentUser.value) };
+  newTracking.value = { date: toDateString(new Date()), content: '', attachment: '', recorder: String(currentUser.value) };
   trackingDialogVisible.value = true;
 
   // P1-8: 优先从新 tracking_records 表读取
@@ -288,7 +289,7 @@ async function addTrackingRecord() {
     if (res.success) {
       ElMessage.success('追踪记录已添加');
       trackingRecords.value.push({ ...newTracking.value });
-      newTracking.value = { date: new Date().toISOString().slice(0, 10), content: '', attachment: '', recorder: String(currentUser.value) };
+      newTracking.value = { date: toDateString(new Date()), content: '', attachment: '', recorder: String(currentUser.value) };
       loadData();
     } else { ElMessage.error(res.message || '添加失败'); }
   } catch { /* axios interceptor already displayed error toast */ }

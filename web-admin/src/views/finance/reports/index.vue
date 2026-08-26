@@ -5,6 +5,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Money, TrendCharts, Coin, Download } from '@element-plus/icons-vue';
+import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -251,7 +252,7 @@ function mapResponses(
 
 function formatDate(date: Date | null | undefined) {
   if (!date) return '';
-  return date.toISOString().split('T')[0];
+  return toDateString(date);
 }
 
 function handleDateChange() {

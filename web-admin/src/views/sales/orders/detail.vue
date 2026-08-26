@@ -46,6 +46,7 @@ import {
   warehouseReceivingRoute,
   type CustomerSuppliedMaterialRequirement,
 } from './salesOrderSupplyContract';
+import { toDateString } from '@/utils/dateFormat';
 
 const route = useRoute();
 const router = useRouter();
@@ -158,7 +159,7 @@ const shipmentDialogVisible = ref(false);
 const shipmentParent = ref<TableRow | null>(null);
 const shipmentForm = ref({
   idempotencyKey: '',
-  plannedShipmentDate: new Date().toISOString().slice(0, 10),
+  plannedShipmentDate: toDateString(new Date()),
   deliveryMethod: 'LOGISTICS',
   logisticsCompany: '',
   trackingNumber: '',
@@ -224,7 +225,7 @@ type ReturnDialogItem = {
 //   true  = 有货退回 → 入成品仓不良品区 (status=DEFECTIVE, 不计入可售库存) → AR冲减 at completion
 //   false = 无食物退货 → 直接退款, 无库存动作 → AR冲减 immediate on approve
 const returnForm = ref<{ returnDate: string; reasonCategory: string; reason: string; remark: string; withGoods: boolean; items: ReturnDialogItem[] }>({
-  returnDate: new Date().toISOString().slice(0, 10),
+  returnDate: toDateString(new Date()),
   reasonCategory: '',
   reason: '',
   remark: '',
@@ -876,7 +877,7 @@ function openReturnDialog() {
     return;
   }
   returnForm.value = {
-    returnDate: new Date().toISOString().slice(0, 10),
+    returnDate: toDateString(new Date()),
     reasonCategory: '',
     reason: '',
     remark: '',
@@ -973,7 +974,7 @@ async function handleCreateDelivery() {
       idempotencyKey: deliveryIdempotencyKey.value,
       salesOrderId: orderId.value,
       customerId: order.value?.customerId || '',
-      deliveryDate: new Date().toISOString().slice(0, 10),
+      deliveryDate: toDateString(new Date()),
       deliveryAddress: deliveryForm.value.deliveryAddress,
       logisticsCompany: deliveryForm.value.logisticsCompany,
       items: filteredItems,
@@ -996,7 +997,7 @@ async function handleCreateDelivery() {
         if (master?.id && childItems.length === filteredItems.length) {
           await post(`/${factoryId.value}/sales/deliveries/${master.id}/shipments`, {
             idempotencyKey: `web-full-shipment-${master.id}`,
-            plannedShipmentDate: new Date().toISOString().slice(0, 10),
+            plannedShipmentDate: toDateString(new Date()),
             deliveryMethod: deliveryForm.value.deliveryMethod,
             logisticsCompany: deliveryForm.value.logisticsCompany,
             trackingNumber: deliveryForm.value.trackingNumber,
@@ -1050,7 +1051,7 @@ function openShipmentDialog(parent: TableRow) {
   shipmentParent.value = parent;
   shipmentForm.value = {
     idempotencyKey: `web-shipment-${parent.id}-${Date.now()}`,
-    plannedShipmentDate: new Date().toISOString().slice(0, 10),
+    plannedShipmentDate: toDateString(new Date()),
     deliveryMethod: 'LOGISTICS',
     logisticsCompany: '',
     trackingNumber: '',
@@ -1379,7 +1380,7 @@ function openPaymentDialog() {
   paymentForm.value = {
     amount: remaining > 0 ? remaining : 0,
     paymentMethod: 'BANK_TRANSFER',
-    paymentDate: new Date().toISOString().slice(0, 10),
+    paymentDate: toDateString(new Date()),
     paymentReference: '',
     remark: '',
     receiptUrl: '',

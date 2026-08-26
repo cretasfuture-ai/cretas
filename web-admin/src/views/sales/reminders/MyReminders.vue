@@ -9,6 +9,7 @@ import {
   type Reminder,
   type ReminderStatus,
 } from '@/api/reminder';
+import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
 const reminders = ref<Reminder[]>([]);
@@ -68,7 +69,7 @@ async function handleSnooze(r: Reminder): Promise<void> {
 function defaultSnoozeDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 3);
-  return d.toISOString().slice(0, 10);
+  return toDateString(d);
 }
 
 async function handleDismiss(r: Reminder): Promise<void> {
