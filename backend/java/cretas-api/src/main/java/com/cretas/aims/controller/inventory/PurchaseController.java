@@ -589,7 +589,14 @@ public class PurchaseController {
      * <p>之前前端 '累计已收' 列在 RCV list 页 FE-only 聚合 current page rows — 跨 page 不准.
      * 现在前端改用此 endpoint, 后端按 PO items 直接读 receivedQuantity (confirmReceive 时累加).
      *
-     * <p>Response: {@code {poId, orderNumber, plannedTotal, cumulativeReceived, lines: [...] }}
+     * <p>Response: {@code {poId, orderNumber, plannedTotal, cumulativeReceived,
+     *   overReceiveLimitRate, overReceiveLimitLabel, overReceiveLimitSource, maxReceivableTotal,
+     *   lines: [{..., maxReceivableQty}] }}
+     *
+     * <p><b>超收上限从这里读</b>：{@code overReceiveLimitRate} 是执行侧
+     * ({@code PurchaseServiceImpl.resolveOverReceiveLimit}) 真正会用的那个值，
+     * {@code null} 表示不限制超收。⛔ 前端不要再写死百分比 —— 展示写死 30% 而执行侧
+     * 因为属性没配按 0% 拦，就是 2026-08-25 那个"货堵在门口"的缺陷。
      */
     @GetMapping("/orders/{orderId}/cumulative-received")
     @Operation(summary = "采购订单累计已收汇总 (Issue #787)",
