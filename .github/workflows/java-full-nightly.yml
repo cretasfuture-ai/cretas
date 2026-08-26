@@ -65,10 +65,37 @@ jobs:
         # ⚠️ failure.ignore=true 是【故意的】: 我们要拿到【全部】测试的结果,
         #    让棘轮来决定红不红。让 surefire 中途停会让名单不完整,
         #    而不完整的名单会把「没跑到」误报成「修好了」。
-        run: mvn -B test -Dmaven.test.failure.ignore=true -Dspring.profiles.active=test
+        #
+        # 🔴 continue-on-error 不是「容忍失败」, 是【让三态判定有机会跑到】。
+        #    2026-08-26 首次真实运行实测: runner OOM (java.lang.OutOfMemoryError:
+        #    Java heap space) -> surefire fork VM 崩 -> mvn 非零退出 -> 本步 failure
+        #    -> 下面整条链(棘轮 / rc=2 告警)全被 skip。
+        #    结果就是: 那套专门用来把「没量到」从「没问题」里拆出来的三态机制,
+        #    在它最该开火的那一次**一次都没轮到**, 只报了一个笼统的 job failure。
+        #    ⇒ 这一步的成败必须交给棘轮判, 而不是让它自己把工作流打断。
+        #    ⛔ 别据此以为红被吞了: 编译失败/报告为空一律落到 rc=2, 那一步照样 exit 1。
+        continue-on-error: true
+        env:
+          # runner 是 7GB 内存的 ubuntu-latest。默认堆对这套 1400+ 测试类
+          # (含 37 个 @SpringBootTest, 每个都起一次 Spring 上下文) 不够。
+          # ⚠️ 是给【surefire fork 出来的那个 VM】加, 不是给 maven 自己 ——
+          #    OOM 发生在 fork VM 里, 只加 MAVEN_OPTS 治不到。
+          # ⛔ argLine 是【整体覆盖】不是追加: pom.xml:576 原有
+          #    `-XX:+EnableDynamicAgentLoading -Xshare:off`(Mockito 内联 mock 需要),
+          #    所以下面必须把它们逐字带上, 否则一开闸就是另一片红。
+          MAVEN_OPTS: -Xmx2g
+        run: >-
+          mvn -B test
+          -Dmaven.test.failure.ignore=true
+          -Dspring.profiles.active=test
+          -DforkCount=1 -DreuseForks=true
+          -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError"
 
       - name: Ratchet — 已知红只许变少
         id: ratchet
+        # always(): 上一步 continue-on-error 之后仍可能是 failure 状态,
+        # 而【正是那种时候】最需要棘轮把它判成 rc=2「没量到」。
+        if: always()
         run: |
           set +e
           python scripts/ci/java-test-ratchet.py \
