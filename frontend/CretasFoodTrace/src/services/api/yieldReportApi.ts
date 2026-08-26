@@ -51,8 +51,19 @@ export interface WorkProcessTask {
   standardYieldMin?: number | null; // Task 0 透出: A7 标准出成率下限 (null=未配)
   standardYieldMax?: number | null; // Task 0 透出: A7 标准出成率上限 (null=未配)
   outputUnit?: string | null;       // P0-2: 工序产出单位 (kg→份/盒, join 透出; null=沿用投入单位)
-  plannedStartAt?: string | null;
-  plannedEndAt?: string | null;
+  plannedStartAt?: string | null;  // 后端 @JsonFormat "yyyy-MM-dd HH:mm:ss" — 已是本地日历时间, ⛔ 不要再当 ISO 去转时区
+  plannedEndAt?: string | null;    // 同上
+  /**
+   * 这道工序超期没有 —— **三态**, 不是布尔 (mirror WorkProcessTaskDTO.overdue)。
+   *
+   *   true      还没干完, 而计划完成日已经过去了
+   *   false     判过了, 不在「还欠着的超期活」清单里 (含终态: 活已结束)
+   *   null/缺   **判不了** —— 这道工序没设 plannedEndAt
+   *
+   * ⛔ 消费方不许 `?? false`: 「主管还没排期」和「排了且没拖」是两件不同的事,
+   *    把前者说成后者会把一屏「没排期」画成一屏「一切正常」。
+   */
+  overdue?: boolean | null;
   actualStartAt?: string | null;
   actualEndAt?: string | null;
   actualMinutes?: number | null;

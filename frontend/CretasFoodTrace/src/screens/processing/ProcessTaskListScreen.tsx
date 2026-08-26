@@ -28,6 +28,28 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   SUPPLEMENTING: { label: '补报中', color: '#e6a23c' },
 };
 
+/**
+ * 计划时间的展示串。
+ *
+ * 后端 `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")` 送来的是
+ * `"2026-08-26 08:00:00"` —— **已经是本地日历时间**(后端全线 GMT+8)。
+ *
+ * ⛔ 所以这里【不许】`new Date(raw)` 再格式化:
+ *   1. 那会把一个不带时区的串按各平台自己的规则解释(iOS / Android / Hermes 不一致),
+ *      再按设备时区挪一次 —— 挪出来可能差一天。这与本仓刚清完 184 处的
+ *      `toISOString()` UTC 截断是同一族缺陷: 都是给一个已经定好的日历日再换一次算。
+ *   2. 要显示的东西**已经在串里**, 纯切串不需要经过 Date。
+ *
+ * 认不出的形状原样返回 —— ⛔ 不猜、不兜底成今天。
+ */
+export function formatPlannedAt(raw: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(raw);
+  if (!m) return raw;
+  const [, , month, day, hh, mm] = m;
+  const date = `${month}/${day}`;
+  return hh && mm ? `${date} ${hh}:${mm}` : date;
+}
+
 export default function ProcessTaskListScreen() {
   const navigation = useNavigation<Props['navigation']>();
   const canGoBack = useNavigationState(state => state.routes.length > 1);
@@ -149,8 +171,16 @@ export default function ProcessTaskListScreen() {
               ) : null}
             </View>
             <View style={{ flexDirection: 'row', gap: 6 }}>
-              {(item as any).overdue && (
-                <View style={[styles.statusBadge, { backgroundColor: '#f5636420' }]}>
+              {/* 三态: 只有【明确 true】才挂徽章。
+                  `undefined`(后端判不了 = 没设计划完成日) 与 `false` 一样不挂,
+                  但它俩在下面「计划完成」那一栏是分得开的 —— 「未排期」vs 具体日期。
+                  ⛔ 不要写成 `item.overdue &&`: 那对 undefined 也一样不挂, 但会让人
+                     以为这里判的是布尔, 下一个人就会顺手去加 `?? false`。 */}
+              {item.overdue === true && (
+                <View
+                  testID={`process-task-overdue-badge-${item.id}`}
+                  style={[styles.statusBadge, { backgroundColor: '#f5636420' }]}
+                >
                   <Text style={[styles.statusText, { color: '#f56364' }]}>超期</Text>
                 </View>
               )}
@@ -171,6 +201,48 @@ export default function ProcessTaskListScreen() {
                 <Text style={styles.value}>{item.unit || 'kg'}</Text>
               </View>
             </View>
+
+            <View style={styles.row}>
+              <View style={styles.col}>
+                <Text style={styles.label}>计划完成</Text>
+                {item.plannedEndAt ? (
+                  <Text
+                    testID={`process-task-planned-end-${item.id}`}
+                    style={[styles.value, item.overdue === true ? styles.valueOverdue : null]}
+                  >
+                    {formatPlannedAt(item.plannedEndAt)}
+                  </Text>
+                ) : (
+                  <Text
+                    testID={`process-task-planned-end-unset-${item.id}`}
+                    style={[styles.value, styles.valueUnset]}
+                  >
+                    未排期
+                  </Text>
+                )}
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>责任人</Text>
+                {item.assignedToName ? (
+                  <Text testID={`process-task-assignee-${item.id}`} style={styles.value}>
+                    {item.assignedToName}
+                  </Text>
+                ) : (
+                  <Text
+                    testID={`process-task-assignee-unset-${item.id}`}
+                    style={[styles.value, styles.valueUnset]}
+                  >
+                    未分配
+                  </Text>
+                )}
+              </View>
+            </View>
+
+            {item.plannedStartAt ? (
+              <Text testID={`process-task-planned-start-${item.id}`} style={styles.plannedStart}>
+                计划开始 {formatPlannedAt(item.plannedStartAt)}
+              </Text>
+            ) : null}
 
             <View style={styles.quantityRow}>
               <View style={styles.col}>
@@ -348,6 +420,9 @@ const styles = StyleSheet.create({
   value: { color: theme.colors.text, fontWeight: '600', fontSize: 18 },
   // 「未设置」不是一个数值, 视觉上也不该长得像数值 —— 弱化 + 缩小, 避免被当成读数
   valueUnset: { color: theme.colors.textTertiary, fontWeight: '500', fontSize: 15 },
+  // 超期时把「计划完成」染红 —— 徽章和这个日期说的是同一件事, 视觉上要连起来
+  valueOverdue: { color: '#f56364' },
+  plannedStart: { color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 },
   highlight: { color: theme.colors.primary, fontWeight: '700' },
   progressContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   progressTrack: {
