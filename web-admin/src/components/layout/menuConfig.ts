@@ -297,6 +297,14 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/purchase-invoices', title: '采购收票', icon: '', module: 'finance',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'] },
       { path: '/finance/payments', title: '收款管理', icon: '', module: 'finance' },
+      // 会计凭证 —— 2026-08-27 补入口。此前这三个页面【菜单零登记、App 也没有】,
+      //   只能手打 URL 才进得去; 而生产库里已有 凭证 18 张 / 分录 46 条 /
+      //   导出记录 106 条 / 模板 7 个 ⇒ 凭证在生成、有人在导, 却没有任何界面能看。
+      //   (可达性闸: web-admin/src/router/__tests__/routeReachability.spec.ts)
+      { path: '/finance/voucher-list', title: '会计凭证', icon: '', module: 'finance', groupLabel: '会计凭证' },
+      { path: '/finance/voucher-export', title: '凭证导出', icon: '', module: 'finance', groupLabel: '会计凭证' },
+      { path: '/finance/voucher-template', title: '凭证模板', icon: '', module: 'finance', groupLabel: '会计凭证',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'] },
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
       { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' }
     ]
