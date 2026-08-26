@@ -98,4 +98,59 @@ class DefectCountResolverContractTest {
             DefectCountResolver.resolve(DefectCountOutcome.NOT_COUNTED, null);
         }).doesNotThrowAnyException();
     }
+
+    // ==================== 回填到批次的决策 ====================
+    //
+    // 一个计划可能对多个批次。生产实测(2026-08-27): 30 个计划里 24 个只有 1 个正式批次;
+    // 已结单的 15 个里 13 个只有 1 个(87%)。⇒ 唯一时回填, 多于一个时不猜。
+
+    @Test
+    @DisplayName("唯一批次 + 已清点 → 回填")
+    void backfillsWhenExactlyOneBatch() {
+        var r = DefectCountResolver.resolve(DefectCountOutcome.COUNTED, new BigDecimal("2"));
+        var d = DefectCountResolver.decideBatchBackfill(r, 1);
+        assertThat(d.write()).isTrue();
+        assertThat(d.quantity()).isEqualByComparingTo("2");
+        assertThat(d.skipReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("唯一批次 + 确认零不良 → 回填 0 (这个 0 是真实读数)")
+    void backfillsRealZero() {
+        var r = DefectCountResolver.resolve(DefectCountOutcome.NONE_CONFIRMED, null);
+        var d = DefectCountResolver.decideBatchBackfill(r, 1);
+        assertThat(d.write()).isTrue();
+        assertThat(d.quantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("🔴 多个批次 → 不猜, 且必须说明原因")
+    void refusesToGuessAcrossMultipleBatches() {
+        var r = DefectCountResolver.resolve(DefectCountOutcome.COUNTED, new BigDecimal("5"));
+        var d = DefectCountResolver.decideBatchBackfill(r, 3);
+        assertThat(d.write()).as("摊到哪个批次是业务判断, 猜一个就是在编数据").isFalse();
+        assertThat(d.skipReason())
+                .as("⛔ 不许静默跳过 —— 否则「没回填」和「回填了但值为空」不可分")
+                .isNotNull()
+                .startsWith("AMBIGUOUS");
+    }
+
+    @Test
+    @DisplayName("没清点 / 没回答 → 批次上保持 NULL, ⛔ 不写 0")
+    void neverWritesZeroForUnknown() {
+        for (var r : new DefectCountResolver.Resolved[]{
+                DefectCountResolver.resolve(DefectCountOutcome.NOT_COUNTED, null),
+                DefectCountResolver.resolve(null, null)}) {
+            var d = DefectCountResolver.decideBatchBackfill(r, 1);
+            assertThat(d.write()).isFalse();
+            assertThat(d.quantity()).isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("零个批次也不回填 (阴性对照: 不许 index out of bounds)")
+    void handlesZeroBatches() {
+        var r = DefectCountResolver.resolve(DefectCountOutcome.COUNTED, new BigDecimal("1"));
+        assertThat(DefectCountResolver.decideBatchBackfill(r, 0).write()).isFalse();
+    }
 }

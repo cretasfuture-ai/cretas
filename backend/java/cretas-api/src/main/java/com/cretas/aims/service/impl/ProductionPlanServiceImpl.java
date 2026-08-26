@@ -3056,6 +3056,42 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 request.getDefectCountOutcome(), request.getDefectQuantity());
         settlement.setDefectCountOutcome(resolved.outcome());
         settlement.setDefectQuantity(resolved.quantity());
+        backfillDefectCountToBatch(settlement.getFactoryId(),
+                settlement.getProductionPlanId(), resolved);
+    }
+
+    /**
+     * 把结单的不良品结论回填到批次上 —— <b>只在能唯一确定的时候</b>。
+     *
+     * <p>下游(良品率/损耗/人效/AI 产能工具)读的是 {@code production_batches.defect_quantity},
+     * 所以结论只落在结算记录上还不够。但一个计划可能对多个正式批次,
+     * 生产实测 87% 的已结单计划只有 1 个 —— 唯一时回填, 多于一个时<b>不猜</b>。</p>
+     *
+     * <p>⛔ 跳过时<b>记 WARN 并写明原因</b>, 不静默 —— 静默跳过会让「没回填」和
+     * 「回填了但值是空」变得不可分, 那正是这条链路已经踩过两次的坑。</p>
+     */
+    private void backfillDefectCountToBatch(String factoryId, String planId,
+                                            DefectCountResolver.Resolved resolved) {
+        if (productionBatchRepository == null || factoryId == null || planId == null) {
+            return;
+        }
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        DefectCountResolver.BackfillDecision decision =
+                DefectCountResolver.decideBatchBackfill(resolved, batches.size());
+        if (!decision.write()) {
+            if (decision.skipReason() != null && decision.skipReason().startsWith("AMBIGUOUS")) {
+                log.warn("结单不良品数未回填批次: 计划 {} 有 {} 个正式批次, 无法确定该记到哪一个; "
+                                + "结算记录上的结论仍然保留, 盘点时据此补录。reason={}",
+                        planId, batches.size(), decision.skipReason());
+            }
+            return;
+        }
+        ProductionBatch batch = batches.get(0);
+        batch.setDefectQuantity(decision.quantity());
+        productionBatchRepository.save(batch);
+        log.info("结单不良品数已回填批次: plan={} batch={} defectQuantity={}",
+                planId, batch.getId(), decision.quantity());
     }
 
     @Override
