@@ -86,6 +86,49 @@ B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
 框体使用可透视内容的深青蓝半透明填充，选中时改为更深的黄色；边线保持细线，拖拽热区保留但
 不绘制方块手柄。
 
+### 待审核生产照片的隔离重放
+
+`NEEDS_REVIEW` 任务尚无人工真值，禁止写入常规 `vision.db` 的 reviewed-only `photos` 表或直接
+进入训练。先用隔离采集器按任务创建时间只读查询 `NEEDS_REVIEW + ANALYZED`，下载 content-addressed
+本地副本并生成固定 `training_eligible=false` 的 manifest：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\collect_pending_label_photos.py `
+  --config D:\CretasVisionLab\config.json `
+  --after-task-created-at <exclusive-watermark> `
+  --expected-count <audited-count> `
+  --output D:\CretasVisionLab\pending\liushanmen-pending-<timestamp>.json
+```
+
+随后用冻结生产 bundle 和参数执行离线重放。工具要求持久化旧结果与当前结果的托盘数量、索引及
+框 IoU（至少 `0.99`）一致，防止把 tray detection 漂移误报成标签 ownership 改善；保护集重叠、
+模型/参数/SHA 漂移都 fail closed。该回执没有人工真值，因此只能缩小审核队列，不能评价召回、
+授权训练或发布：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\replay_pending_label_photos.py `
+  --repo-root <clean-exact-main-worktree> `
+  --pending-manifest D:\CretasVisionLab\pending\liushanmen-pending-<timestamp>.json `
+  --production-bundle D:\CretasVisionLab\deployment-bundles\liushanmen-v8-20260822 `
+  --protected-manifest D:\CretasVisionLab\evaluation\protected-holdout.json `
+  --expected-photos <audited-count> `
+  --output D:\CretasVisionLab\receipts\liushanmen-pending-replay-<timestamp>.json
+```
+
+只有重放后仍为缺标或 `UNJUDGEABLE` 的目标托盘进入最小队列。队列裁剪对浅托盘向下扩展上下文，
+确保托盘本体完整；预标注故意为空，人工只补中央目标托盘自己的白标/彩标，不补托盘框：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_pending_label_review_queue.py `
+  --pending-manifest <pending-manifest> `
+  --replay <pending-replay-receipt> `
+  --output D:\CretasVisionLab\queues\label-pending-<timestamp> `
+  --annotator-url http://127.0.0.1:<port>/
+```
+
+人工审核完成后仍必须先审计 `reviewed=true, source=human`、模糊/outlier 隔离和保护集排除，再决定
+是否存在可训练增量；“待审核照片被重放为 CLEAR”本身不是训练真值，也不得用于放宽门禁。
+
 人工确认的缺标样本可通过 `training.isolated_missing_repeat`（整数 `1..10`，默认 `1`）增加训练权重。
 该策略只重复任务级划分后进入 train 的样本，validation 永不复制；并且只接受“明确声明缺一个类别、
 缺失类别没有框、互补类别恰好一个框”的单目标裁图。多框画面可能包含相邻托盘，只作为普通检测样本，
