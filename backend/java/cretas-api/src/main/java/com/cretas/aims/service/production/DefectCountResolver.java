@@ -30,6 +30,37 @@ public final class DefectCountResolver {
     }
 
     /**
+     * 结单的不良品结论要不要回填到批次上、回填什么。
+     *
+     * <p>一个生产计划可能对多个批次。生产实测（2026-08-27）：30 个计划里 <b>24 个</b>
+     * 只有 1 个成品批次；已结单的 15 个里 <b>13 个</b>只有 1 个（87%）。
+     * ⇒ 唯一时直接回填；多于一个时<b>不猜</b> —— 摊到哪个批次是业务判断，
+     * 猜一个就是在编数据，而这条链路刚因为编数据被清过两轮。</p>
+     *
+     * @param regularBatchCount 该计划的<b>正式</b>批次数（不含 CLERK_WIP 中间工件）
+     */
+    public static BackfillDecision decideBatchBackfill(Resolved resolved, int regularBatchCount) {
+        if (resolved.outcome() == null || resolved.outcome() == DefectCountOutcome.NOT_COUNTED) {
+            // 没清点 / 没回答 —— 批次上保持 NULL。⛔ 不写 0。
+            return new BackfillDecision(false, null, "NOT_COUNTED_OR_UNANSWERED");
+        }
+        if (regularBatchCount != 1) {
+            // ⛔ 不猜。结算记录上的结论仍然保留, 盘点那一步据此提示补录。
+            return new BackfillDecision(false, null,
+                    "AMBIGUOUS_BATCH_COUNT:" + regularBatchCount);
+        }
+        return new BackfillDecision(true, resolved.quantity(), null);
+    }
+
+    /**
+     * @param write      是否回填到批次
+     * @param quantity   回填的值（{@code NONE_CONFIRMED} 时是 0，那个 0 是真实读数）
+     * @param skipReason 不回填的原因；回填时为 {@code null}。⛔ 不许静默跳过。
+     */
+    public record BackfillDecision(boolean write, BigDecimal quantity, String skipReason) {
+    }
+
+    /**
      * 校验结论与数量自洽，并归一化成落库值。
      *
      * @throws BusinessException 400 —— 结论与数量矛盾时。⛔ 不做静默纠正：
