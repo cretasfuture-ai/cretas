@@ -308,4 +308,48 @@ describe('draftReportStore', () => {
       expect(useDraftReportStore.getState().drafts).toHaveLength(0);
     });
   });
+
+  // ========== clearDraftsByFactory ==========
+  //
+  // 背景: 草稿是【跨工厂】持久化的(store 里存着所有工厂的)。在 2026-08-26 之前
+  // 「草稿管理」屏没有任何导航入口, 所以「它列出全部工厂的草稿、清空会连别的工厂
+  // 一起清掉」这件事一直没被人看见。接上入口的同一个 PR 里必须先把口径收住,
+  // 否则等于把一个跨工厂串数据的屏推到用户面前。
+  describe('clearDraftsByFactory (跨工厂隔离)', () => {
+    it('只清当前工厂的草稿, 别的工厂原样保留', () => {
+      const store = () => useDraftReportStore.getState();
+      store().addDraft({ outputQuantity: 1, factoryId: FACTORY_F001 } as never);
+      store().addDraft({ outputQuantity: 2, factoryId: FACTORY_F001 } as never);
+      store().addDraft({ outputQuantity: 3, factoryId: FACTORY_F002 } as never);
+      expect(store().drafts).toHaveLength(3);
+
+      store().clearDraftsByFactory(FACTORY_F001);
+
+      const left = store().drafts;
+      expect(left).toHaveLength(1);
+      expect(left[0]?.factoryId).toBe(FACTORY_F002);
+    });
+
+    it('阴性对照: clearDrafts 会连别的工厂一起清掉 —— 所以屏上不许再用它', () => {
+      // 这条不是在鼓励用 clearDrafts, 而是把「为什么必须换成按工厂清」钉下来:
+      // 若哪天有人把屏改回 clearDrafts, 上面那条会红, 而这条说明红的原因。
+      const store = () => useDraftReportStore.getState();
+      store().addDraft({ outputQuantity: 1, factoryId: FACTORY_F001 } as never);
+      store().addDraft({ outputQuantity: 3, factoryId: FACTORY_F002 } as never);
+
+      store().clearDrafts();
+
+      expect(store().drafts).toHaveLength(0);
+    });
+
+    it('getDraftsByFactory 只返回该工厂的草稿', () => {
+      const store = () => useDraftReportStore.getState();
+      store().addDraft({ outputQuantity: 1, factoryId: FACTORY_F001 } as never);
+      store().addDraft({ outputQuantity: 3, factoryId: FACTORY_F002 } as never);
+
+      expect(store().getDraftsByFactory(FACTORY_F001)).toHaveLength(1);
+      expect(store().getDraftsByFactory(FACTORY_F002)).toHaveLength(1);
+      expect(store().getDraftsByFactory('F999')).toHaveLength(0);
+    });
+  });
 });
