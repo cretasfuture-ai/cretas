@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.client.LabelQcAnalysisClient;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
@@ -23,7 +24,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -37,6 +40,38 @@ public class LabelQcController {
 
     private final LabelQcService labelQcService;
     private final LabelQcImageProxyService imageProxyService;
+    private final LabelQcAnalysisClient analysisClient;
+
+    @PostMapping(value = "/capture-quality", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @RequirePermission({"quality:read_write"})
+    public ApiResponse<LabelQcAnalysisClient.CaptureQualityResult> captureQuality(
+            @PathVariable String factoryId,
+            @RequestPart("image") MultipartFile image,
+            HttpServletRequest servletRequest) {
+        trustedUser(factoryId, servletRequest);
+        if (image.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "照片内容为空，请重新拍摄");
+        }
+        if (image.getSize() > 10L * 1024L * 1024L) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "照片超过 10 MB，请重新拍摄");
+        }
+        try {
+            return ApiResponse.success(
+                    "拍摄质量检查完成",
+                    analysisClient.analyzeCaptureQuality(
+                            image.getBytes(), image.getOriginalFilename(), factoryId));
+        } catch (IOException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "照片读取失败，请重新拍摄",
+                    ex);
+        } catch (LabelQcAnalysisClient.LabelQcClientException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "拍摄质量检查暂时不可用，请重试",
+                    ex);
+        }
+    }
 
     @PostMapping("/tasks")
     @RequirePermission({"quality:read_write"})

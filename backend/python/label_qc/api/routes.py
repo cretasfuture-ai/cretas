@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from label_qc.services.analyzer import LabelQcAnalyzer, MAX_IMAGE_BYTES
+from label_qc.services.capture_quality import analyze_capture_quality
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -54,6 +55,28 @@ async def analyze_label_photo(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "data": result}
+
+
+@router.post("/capture-quality")
+async def capture_quality(
+    image: UploadFile = File(...),
+) -> Dict[str, Any]:
+    """Fast pre-upload gate used by the factory camera screen."""
+    image_bytes = await image.read(MAX_IMAGE_BYTES + 1)
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 10 MB limit")
+    models = getattr(analyzer, "_models", None)
+    params = getattr(analyzer, "_params", None)
+    if models is None or not bool(getattr(models, "available", False)):
+        raise HTTPException(status_code=503, detail="Tray detector unavailable")
+    tray_confidence = float(getattr(params, "tray_conf", 0.60))
+    try:
+        result = await analyze_capture_quality(image_bytes, models, tray_confidence)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"success": True, "data": result.as_dict()}
 
 
 @router.get("/screening-status")

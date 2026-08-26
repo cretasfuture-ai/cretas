@@ -49,6 +49,33 @@ describe('labelQcApi mobile review contract', () => {
     });
   });
 
+  it('uploads a capture to the automatic quality gate and unwraps its result', async () => {
+    const quality = {
+      accepted: false,
+      reasonCode: 'TRAY_CROPPED_AT_SIDE',
+      message: '左右下角托盘没有拍全，请后退一点或切换广角重拍',
+      imageWidth: 3024,
+      imageHeight: 4032,
+      trayCount: 18,
+      sharpness: 900,
+      leftMarginRatio: 0.04,
+      rightMarginRatio: 0.002,
+    };
+    mock.onPost(`${BASE}/capture-quality`).reply(200, {
+      success: true,
+      data: quality,
+      message: '拍摄质量检查完成',
+    });
+
+    await expect(labelQcApi.checkCaptureQuality({
+      uri: 'file://capture.jpg',
+      name: 'capture.jpg',
+      type: 'image/jpeg',
+    }, FACTORY_ID)).resolves.toEqual(quality);
+
+    expect(mock.history.post[0]!.data).toBeInstanceOf(FormData);
+  });
+
   it('submits AI decisions and human additions to the existing review endpoint', async () => {
     const request: LabelQcReviewTaskRequest = {
       expectedVersion: 3,

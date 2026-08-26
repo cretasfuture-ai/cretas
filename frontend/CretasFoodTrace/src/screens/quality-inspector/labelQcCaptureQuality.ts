@@ -6,6 +6,13 @@ export interface CaptureDimensions {
   height: number;
 }
 
+export interface LabelQcCaptureAsset extends CaptureDimensions {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string;
+  fileSize?: number;
+}
+
 export interface CaptureMetadataGate {
   accepted: boolean;
   reason: string | null;
