@@ -1290,8 +1290,27 @@ public class BomWorkflowRevisionService {
                     ++order));
         }
         if (slots.isEmpty()) {
-            throw invalid(409, "目标 SKU 路径没有可配置的原料投入槽",
-                    "BOM_WORKFLOW_INPUT_SLOT_REQUIRED");
+            // 🔴 2026-08-26: 这条原来<b>只有 message、没有 actionHint</b>, 结果是用户
+            // 什么都看不到 —— 不是「看到了一条读不懂的话」, 是<b>整条被吞掉</b>:
+            //
+            //   web-admin/src/api/request.ts
+            //     const isVanillaOptimisticLock = status === 409
+            //         && !rich.actionHint && !rich.hintTarget;      // ← 双空即判乐观锁
+            //     if (!_silent && !isVanillaOptimisticLock && ...) showRichError(...)
+            //
+            // 而 hintTarget 就算填了也到不了前端: ApiResponse.errorWithCode(...) 没有
+            // hintTarget 形参(见 dto/common/ApiResponse.java), 凡是带 errorCode 的异常
+            // 一律把它丢掉。⇒ 判据落在 actionHint 一个字段上, 它空 = 这条报错不可见。
+            // 发布链路更彻底: ProductProcessWorkflowEditor 的 isWorkflowBomSyncRace
+            // 按 `BOM_WORKFLOW_` 前缀匹配后 return 且不补 toast, 两头同时静默。
+            //
+            // ⚠️ 措辞同时要改。原文「目标 SKU 路径没有可配置的原料投入槽」三个词全是黑话
+            // (目标 SKU 路径 / 可配置 / 投入槽), 判据是「用户能不能照着这句话做对下一步」,
+            // 所以说清**缺什么**(工艺图上一根原料都没接) 和 **去哪补**(回工艺图连到工序投入口)。
+            throw invalid(409, "这个产品的工艺图里没有接入任何原料，配料表建不起来",
+                    "BOM_WORKFLOW_INPUT_SLOT_REQUIRED")
+                    .withHint("请打开该产品的工艺图，把要用的原料拖进来、连到工序的投入口上，保存后再回到 BOM")
+                    .withHintTarget("workflow");
         }
         return List.copyOf(slots);
     }
