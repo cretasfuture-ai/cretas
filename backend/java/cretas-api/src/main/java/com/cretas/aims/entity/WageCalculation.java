@@ -141,17 +141,29 @@ public class WageCalculation extends BaseEntity {
     // ============ derived getter ============
 
     /**
-     * 计算总金额. 按 mode 分支:
+     * 「一段周期干活挣到的钱」的<b>唯一口径</b>. 按 mode 分支:
      * <ul>
-     *   <li>PIECE_RATE: pieceRateAmount</li>
+     *   <li>PIECE_RATE: pieceRateAmount + overtimeAmount</li>
      *   <li>HOURLY: hourlyAmount + overtimeAmount</li>
      *   <li>MIXED: hourlyAmount + overtimeAmount + pieceRateAmount</li>
      * </ul>
      *
-     * <p>@Transient — 不持久化, 每次 getter 调用动态算 (保 source 唯一).
+     * <p><b>为什么 PIECE_RATE 也含加班费</b>: 引擎收敛前, 计件工人的加班费只在
+     * {@code generatePayroll} 那一侧发得出来 (取 {@code User.hourlyRate} × 1.5),
+     * 这一侧恒为 0 —— 于是同一个人两边差一笔加班费。收敛后加班费由统一算法算出,
+     * 这里必须把它计入, 否则「算出来了却不进总额」= 少发钱。
+     *
+     * <p>静态方法而非实例方法: {@code WageCalculationService.WageBreakdown} 也要用同一口径,
+     * 两边调同一个 {@link #totalOf} 才不会漂 (同一个东西有两份, 它一定会漂)。
+     *
+     * @param mode            工资模式; null → 0
+     * @param hourlyAmount    常规工时工资
+     * @param overtimeAmount  加班工资
+     * @param pieceRateAmount 计件工资
+     * @return 该模式下的应得金额
      */
-    @Transient
-    public BigDecimal getTotalAmount() {
+    public static BigDecimal totalOf(WageMode mode, BigDecimal hourlyAmount,
+                                     BigDecimal overtimeAmount, BigDecimal pieceRateAmount) {
         if (mode == null) {
             return BigDecimal.ZERO;
         }
@@ -159,9 +171,19 @@ public class WageCalculation extends BaseEntity {
         BigDecimal ot = overtimeAmount != null ? overtimeAmount : BigDecimal.ZERO;
         BigDecimal p = pieceRateAmount != null ? pieceRateAmount : BigDecimal.ZERO;
         return switch (mode) {
-            case PIECE_RATE -> p;
+            case PIECE_RATE -> p.add(ot);
             case HOURLY -> h.add(ot);
             case MIXED -> h.add(ot).add(p);
         };
+    }
+
+    /**
+     * 计算总金额, 见 {@link #totalOf}.
+     *
+     * <p>@Transient — 不持久化, 每次 getter 调用动态算 (保 source 唯一).
+     */
+    @Transient
+    public BigDecimal getTotalAmount() {
+        return totalOf(mode, hourlyAmount, overtimeAmount, pieceRateAmount);
     }
 }

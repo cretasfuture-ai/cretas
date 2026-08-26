@@ -393,6 +393,77 @@ public class WageController {
     }
 
     /**
+     * 重算工资单草稿 (单张)
+     *
+     * <p>⛔ 显式触发, 只有 POST 这个接口才会改草稿金额 —— 查询/列表不会。
+     * PAID / APPROVED 冻结, 命中直接报错。
+     */
+    @PostMapping("/payroll/{payrollId}/recalculate")
+    @Operation(summary = "重算工资单草稿",
+            description = "按最新规则重算待审核(PENDING)工资单; 已审核/已发放的冻结不允许重算。"
+                    + "金额变化留痕: previousTotalWage / recalcLog / recalculatedAt / recalculatedBy")
+    @RequirePermission("hr:read_write")
+    public ApiResponse<PayrollRecord> recalculatePayroll(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @PathVariable @Parameter(description = "工资单ID", example = "1") Long payrollId,
+            HttpServletRequest httpRequest) {
+        log.info("重算工资单: factoryId={}, payrollId={}", factoryId, payrollId);
+
+        Long operatorId = resolveOperatorId(httpRequest);
+        if (operatorId == null) {
+            throw new RuntimeException("无法获取操作人信息");
+        }
+
+        PayrollRecord recalculated = wageCalculationService.recalculatePayroll(
+                factoryId, payrollId, operatorId);
+
+        return ApiResponse.success(recalculated);
+    }
+
+    /**
+     * 批量重算工资单草稿 (按周期)
+     */
+    @PostMapping("/payroll/recalculate-batch")
+    @Operation(summary = "批量重算工资单草稿",
+            description = "重算指定周期内所有待审核(PENDING)工资单; 已审核/已发放逐条跳过并计数。"
+                    + "返回值含 changes 列表 (逐条 变更前 → 变更后)")
+    @RequirePermission("hr:read_write")
+    public ApiResponse<Map<String, Object>> recalculateBatchPayroll(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @RequestBody @Valid @Parameter(description = "重算周期") PayrollPeriodRequest request,
+            HttpServletRequest httpRequest) {
+        log.info("批量重算工资单: factoryId={}, period={} to {}",
+                factoryId, request.getPeriodStart(), request.getPeriodEnd());
+
+        Long operatorId = resolveOperatorId(httpRequest);
+        if (operatorId == null) {
+            throw new RuntimeException("无法获取操作人信息");
+        }
+
+        Map<String, Object> result = wageCalculationService.recalculatePendingPayrolls(
+                factoryId, request.getPeriodStart(), request.getPeriodEnd(), operatorId);
+
+        return ApiResponse.success(result);
+    }
+
+    /**
+     * 从 Authorization header 解析操作人ID (与审批接口同一套取法).
+     */
+    private Long resolveOperatorId(HttpServletRequest httpRequest) {
+        String authorization = httpRequest.getHeader("Authorization");
+        if (authorization == null) {
+            return null;
+        }
+        try {
+            String token = TokenUtils.extractToken(authorization);
+            return mobileService.getUserFromToken(token).getId();
+        } catch (Exception e) {
+            log.warn("无法从token获取用户信息: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 获取工资单列表
      */
     @GetMapping("/payroll")
