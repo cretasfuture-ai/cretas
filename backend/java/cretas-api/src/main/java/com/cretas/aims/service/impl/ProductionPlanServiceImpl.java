@@ -1,5 +1,7 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.service.production.DefectCountResolver;
+import com.cretas.aims.entity.enums.DefectCountOutcome;
 import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -3040,6 +3042,22 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return toDTOWithConversionInfo(plan);
     }
 
+    /**
+     * 把结单时的「这批有没有不良品」三态结论落到结算记录上, 并校验结论与数量自洽。
+     *
+     * <p>⛔ 核心约束: <b>「没回答」不许被翻译成「零不良」</b>。
+     * 2026-08-26 实测生产 72 张报工单零填写, 而旧代码兜底填 0, 于是 8 个已完工批次
+     * 全部声称 100% 良品 —— 其中 4 个的质检明确记了不合格。V20260826_05/06 已清掉那批假数,
+     * 这里保证它不会从结单这条路再长回来。</p>
+     */
+    private void applyDefectCountOutcome(ProductionSettlement settlement,
+                                         ProductionSettlementRequest request) {
+        DefectCountResolver.Resolved resolved = DefectCountResolver.resolve(
+                request.getDefectCountOutcome(), request.getDefectQuantity());
+        settlement.setDefectCountOutcome(resolved.outcome());
+        settlement.setDefectQuantity(resolved.quantity());
+    }
+
     @Override
     @Transactional
     public ProductionSettlementResponse settleProduction(String factoryId, String planId,
@@ -3122,6 +3140,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setMaterialVarianceReason(trimToNull(effectiveRequest.getMaterialVarianceReason()));
         settlement.setMaterialVarianceNote(trimToNull(effectiveRequest.getMaterialVarianceNote()));
         settlement.setLaborDeferredReason(trimToNull(effectiveRequest.getLaborDeferredReason()));
+        applyDefectCountOutcome(settlement, effectiveRequest);
         settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
         settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
         settlement.setPostingMessage("已完成结单和实际领用扣减; 等待仓库确认实收后才生成成品库存, 差异进入中转挂账");
