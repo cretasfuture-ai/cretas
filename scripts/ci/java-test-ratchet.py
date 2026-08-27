@@ -56,16 +56,23 @@ import xml.etree.ElementTree as ET
 RC_OK, RC_NEW_FAILURES, RC_NOT_MEASURED = 0, 1, 2
 
 
-def collect(reports_dir: str) -> tuple[set[str], int]:
-    """返回 (失败的 Class.method 集合, 总共跑了多少个测试)。
+def collect(reports_dir: str) -> tuple[set[str], int, set[str]]:
+    """返回 (失败的 Class.method 集合, 总共跑了多少个测试, **跑过的** Class.method 全集)。
+
+    🔴 第三个返回值是 2026-08-27 加的, 为了把这两件事分开:
+         「不再失败」 —— 真的修好了(它跑了, 而且通过)
+         「不再存在」 —— 被改名 / 删掉 / 禁用了(它压根没跑)
+    此前两者都落进 `baseline - failing`, 一律报「✅ 已修好」——
+    **那等于告诉人「删掉一个红的测试就算修好了」**。
 
     ⚠️ 读 surefire 的 XML，⛔ 不解析 mvn 的控制台输出 ——
     控制台会被编码问题弄成乱码（本仓实测过 GBK 日志），XML 是结构化的。
     """
     failing: set[str] = set()
+    executed: set[str] = set()
     total = 0
     if not os.path.isdir(reports_dir):
-        return failing, 0
+        return failing, 0, executed
     for name in sorted(os.listdir(reports_dir)):
         if not (name.startswith("TEST-") and name.endswith(".xml")):
             continue
@@ -76,15 +83,18 @@ def collect(reports_dir: str) -> tuple[set[str], int]:
             continue
         total += int(root.get("tests") or 0)
         for case in root.iter("testcase"):
-            if case.find("failure") is None and case.find("error") is None:
-                continue
             cls = case.get("classname") or ""
             method = case.get("name") or ""
             # 参数化测试的 name 带 [1] 之类的下标 —— 去掉，否则加一条用例就"新增红"
             method = method.split("[", 1)[0].strip()
-            if cls and method:
-                failing.add(f"{cls}.{method}")
-    return failing, total
+            if not (cls and method):
+                continue
+            # ⚠️ executed 要在「是否失败」判断【之前】收 —— 它记的是「跑过」不是「跑挂了」
+            executed.add(f"{cls}.{method}")
+            if case.find("failure") is None and case.find("error") is None:
+                continue
+            failing.add(f"{cls}.{method}")
+    return failing, total, executed
 
 
 def read_baseline(path: str) -> set[str]:
@@ -130,7 +140,7 @@ def main() -> int:
                          "（rc=2）。防 fork VM 中途崩掉后拿残缺报告当有效读数。")
     args = ap.parse_args()
 
-    failing, total = collect(args.reports)
+    failing, total, executed = collect(args.reports)
 
     # ── rc=2：这次没量到 ────────────────────────────────────────────
     if total < args.min_tests:
@@ -197,13 +207,33 @@ def main() -> int:
         return RC_OK
 
     new = sorted(failing - baseline)
-    fixed = sorted(baseline - failing)
+
+    # 🔴 2026-08-27: 把「不再失败」拆成两件事。
+    #
+    # 此前这里是 `fixed = baseline - failing`, 于是**一个被删掉的红测试也算「已修好」**
+    # —— 那等于告诉人「删掉它就行了」。实测在基线里逮到一条:
+    #   MaterialConsumptionNotesAndPlanRefTest.useWritesNoConsumptionRowWithoutAPlan
+    # 那个类已被改名成 MaterialConsumptionTraceContractTest, 条目成了永远匹配不上的幽灵。
+    #
+    # ⚠️ 这个拆分之所以安全, 是因为上面那道**样本量下限**(total < baseline_total × min_ratio
+    #    ⇒ rc=2)已经把「窄选择器 / fork 半途崩了」挡在前面 ——
+    #    走到这里时这一轮是基本完整的, 所以「没跑到」才等价于「不存在了」。
+    fixed = sorted((baseline & executed) - failing)
+    vanished = sorted(baseline - executed)
 
     print(f"JAVA_RATCHET 共跑 {total} 个测试 · 红 {len(failing)} · 基线 {len(baseline)}")
     if fixed:
-        print(f"\n✅ 已修好 {len(fixed)} 条（可以从基线里删掉）：")
+        print(f"\n✅ 已修好 {len(fixed)} 条（跑了而且通过，可以从基线里删掉）：")
         for n in fixed:
             print(f"   {n}")
+    if vanished:
+        # ⛔ 措辞必须与「已修好」不同 —— 这两件事的下一步动作是相反的:
+        #    修好了 → 删基线条目; 不存在了 → 先确认它是改名还是**被删掉了**。
+        print(f"\n⚠️ 基线里有 {len(vanished)} 条**这次根本没跑到**（不是「修好了」）：")
+        for n in vanished:
+            print(f"   {n}")
+        print("   可能是改名 / 移动 / 被 @Disabled / **被删掉**。")
+        print("   ⛔ 删掉一个红的测试不是修好它。先确认是哪一种，再决定基线怎么改。")
     if new:
         print(f"\n🔴 新增 {len(new)} 条基线里没有的红：")
         for n in new:
