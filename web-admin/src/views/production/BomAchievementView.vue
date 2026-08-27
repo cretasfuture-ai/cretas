@@ -78,6 +78,13 @@ const kpi = computed(() => {
 
   return {
     total,
+    // 🔴 2026-08-28 部署后**逐屏视觉验收**抓到的: 上一轮只修了「不再编 100%」,
+    //   而卡片上「总批次数 8」紧挨着「平均达成率 100%」——那个 100% **只来自 1 个批次**
+    //   (另外 7 个没有计划数据, 达成率是「—」)。用户读到的是「8 个批次平均 100%」。
+    //
+    // ▎不编数字只是第一步; **不说分母仍然会误导**。
+    // ⇒ 把「这几个数是基于几个批次算的」一起报出来(本仓「报数时同时报口径」)。
+    ratedCount: rowsWithRate.length,
     avgRate: avg != null ? Math.round(avg * 10) / 10 : null,
     overConsumptionCount: overCount,
     minRate: minRate != null ? Math.round(minRate * 10) / 10 : null,
@@ -174,6 +181,21 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
       : undefined,
   };
 }
+
+/**
+ * 三张派生 KPI 的口径说明 —— 「这几个数是基于几个批次算的」。
+ *
+ * 🔴 2026-08-28 部署后逐屏验收抓到: 只把「没有计划 ⇒ 达成率 —」修掉还不够。
+ * 屏上「总批次数 8」和「平均达成率 100%」并排, 而那个 100% 只来自 **1** 个批次
+ * (另外 7 个没有计划数据)。⇒ 报数时同时报口径。
+ */
+const kpiCaliber = computed(() => {
+  const k = kpi.value;
+  if (k.total === 0) return '';
+  if (k.ratedCount === 0) return '无批次有计划数据, 算不出达成率';
+  if (k.ratedCount === k.total) return `基于全部 ${k.total} 个批次`;
+  return `仅基于 ${k.ratedCount}/${k.total} 个有计划数据的批次`;
+});
 
 // ---------- expand row ----------
 async function handleExpandChange(row: BatchRow, expandedRows: BatchRow[]) {
@@ -304,16 +326,22 @@ function handleSizeChange(size: number) {
             {{ kpi.avgRate != null ? kpi.avgRate + '%' : '—' }}
           </div>
           <div class="kpi-label">平均达成率</div>
+          <!-- ⚠️ 分母必须写出来: 上一轮修完「不再编 100%」之后, 卡片上仍然是
+               「总批次数 8」紧挨着「平均达成率 100%」, 而那个 100% 只来自 1 个批次。
+               不编数字只是第一步, **不说分母仍然会误导**。 -->
+          <div class="kpi-caliber">{{ kpiCaliber }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
           <div class="kpi-value" style="color: #F56C6C">{{ kpi.overConsumptionCount }}</div>
           <div class="kpi-label">用量偏差批次数 (偏离计划 &gt;5%)</div>
+          <div class="kpi-caliber">{{ kpiCaliber }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
           <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : '#909399' }">
             {{ kpi.minRate != null ? kpi.minRate + '%' : '—' }}
           </div>
           <div class="kpi-label">最低达成率</div>
+          <div class="kpi-caliber">{{ kpiCaliber }}</div>
         </el-card>
       </div>
 
@@ -539,5 +567,12 @@ function handleSizeChange(size: number) {
   .kpi-row {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+.kpi-caliber {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.3;
 }
 </style>
