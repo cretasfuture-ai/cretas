@@ -33,3 +33,19 @@ def test_reconstruction_area_ratio_requires_material_expansion():
 def test_partial_detector_can_be_retained_as_locator_without_becoming_truth():
     locator = MODULE.box_in_crop([400, 300, 600, 400], [150, 50, 850, 650])
     assert locator == [0.357143, 0.416667, 0.642857, 0.583333]
+
+
+def test_reconstruction_rejects_center_drift_across_adjacent_trays():
+    target = [100, 100, 300, 200]
+    adjacent_union = [100, 100, 550, 200]
+    assert MODULE.center_shift_ratio(adjacent_union, target) == 0.625
+    assert (
+        MODULE.center_shift_ratio(adjacent_union, target)
+        > MODULE.MAX_RECONSTRUCTION_CENTER_SHIFT_RATIO
+    )
+
+
+def test_center_stable_reconstruction_remains_eligible_for_review_crop():
+    target = [100, 100, 300, 200]
+    expanded = [80, 90, 320, 210]
+    assert MODULE.center_shift_ratio(expanded, target) == 0

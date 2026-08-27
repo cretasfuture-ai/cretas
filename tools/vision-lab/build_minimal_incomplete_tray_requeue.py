@@ -22,6 +22,7 @@ from audit_pending_tray_reconstruction import reconstruct_full_tray
 VERSION = "liushanmen-incomplete-tray-requeue-v3"
 SOURCE_VERSION = "liushanmen-minimal-active-label-review-v1"
 MIN_RECONSTRUCTION_AREA_RATIO = 1.20
+MAX_RECONSTRUCTION_CENTER_SHIFT_RATIO = 0.25
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -43,6 +44,27 @@ def area(box: Sequence[float]) -> float:
     return max(0.0, float(box[2]) - float(box[0])) * max(
         0.0, float(box[3]) - float(box[1])
     )
+
+
+def center_shift_ratio(candidate: Sequence[float], target: Sequence[float]) -> float:
+    target_scale = max(
+        float(target[2]) - float(target[0]),
+        float(target[3]) - float(target[1]),
+    )
+    if target_scale <= 0:
+        raise RuntimeError("invalid target tray box")
+    candidate_center = (
+        (float(candidate[0]) + float(candidate[2])) / 2,
+        (float(candidate[1]) + float(candidate[3])) / 2,
+    )
+    target_center = (
+        (float(target[0]) + float(target[2])) / 2,
+        (float(target[1]) + float(target[3])) / 2,
+    )
+    return max(
+        abs(candidate_center[0] - target_center[0]),
+        abs(candidate_center[1] - target_center[1]),
+    ) / target_scale
 
 
 def wide_review_crop(box: Sequence[float], width: int, height: int) -> list[int]:
@@ -154,7 +176,12 @@ def build(
                 })
         reconstructed, selected_indices = reconstruct_full_tray(target, proposals)
         ratio = area(reconstructed) / max(1.0, area(target))
-        crop_basis = reconstructed if ratio >= MIN_RECONSTRUCTION_AREA_RATIO else target
+        shift_ratio = center_shift_ratio(reconstructed, target)
+        reconstruction_accepted = (
+            ratio >= MIN_RECONSTRUCTION_AREA_RATIO
+            and shift_ratio <= MAX_RECONSTRUCTION_CENTER_SHIFT_RATIO
+        )
+        crop_basis = reconstructed if reconstruction_accepted else target
         crop = wide_review_crop(crop_basis, image.width, image.height)
         crop_id = f"{row['crop_id']}_full_r02"
         derivative = output / "images" / f"{crop_id}.jpg"
@@ -166,9 +193,8 @@ def build(
         # the human target tray field or admitted as ground truth.
         guide = box_in_crop(target, crop)
         guide_source = "partial_detector_locator_only_human_t_key_required"
-        if ratio >= MIN_RECONSTRUCTION_AREA_RATIO:
-            guide = box_in_crop(reconstructed, crop)
-            guide_source = "supplemental_reconstruction_candidate_requires_human_confirmation"
+        if reconstruction_accepted:
+            guide_source = "original_target_locator_with_center_stable_supplemental_reconstruction"
             reconstructed_count += 1
         else:
             human_target_required_count += 1
@@ -201,6 +227,8 @@ def build(
                 "policy_version": "full-source-supplemental-reconstruction-v1",
                 "source_frame_limited": any((crop[0] == 0, crop[1] == 0, crop[2] == image.width, crop[3] == image.height)),
                 "reconstruction_area_ratio": round(ratio, 6),
+                "reconstruction_center_shift_ratio": round(shift_ratio, 6),
+                "reconstruction_accepted": reconstruction_accepted,
                 "raw_proposal_count": len(proposals),
                 "selected_proposal_indices": selected_indices,
             },
