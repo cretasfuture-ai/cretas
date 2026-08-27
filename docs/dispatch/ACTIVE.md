@@ -13,8 +13,10 @@
   ⛔ **剩下 5 条各自的下一步已写进 `known-failing-tests.txt` 的注释**，两条都别顺手做：(a) 加 `@Disabled`/`assumeTrue` 会让它在**真有 PG 的那条路上**也一起沉默 —— 先决定夜间跑批要不要有 PG；(b) 「真回归」和「轮询窗口不够」的下一步动作相反，别先入为主。
 
   ⚠️ **下一棒第一件事**：看 2026-08-27 18:00Z（北京 8-28 02:00）那次 **`schedule` 事件有没有真的发生** —— 这个工作流至今**全部运行都是 `workflow_dispatch`**，cron 直到 #178（今天 05:00Z）才被从 `disabled_manually` 打开。靠人记得手工触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
-- `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `in-progress` — Owner: `claude-code/java-gate-widen` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。
-  **2026-08-27 认领并落方案**：PR 闸从窄选择器换成**全量 + 复用夜间那把棘轮**（`workflow_call`，判断只有一份，⛔ 不复制那 60 行）。分支 `codex/claude-java-gate-widen-20260827`。
+- `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `merged` — Owner: `claude-code/java-gate-widen` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。
+  **已合入 `05f1a5aec5`（PR #242）**：PR 闸从窄选择器换成**全量 + 复用夜间那把棘轮**（`workflow_call`，判断只有一份，⛔ 不复制那 60 行）。PR 上执行的测试 **1128 → 12012**，覆盖类 **229 → 1435**，耗时 ~2min → **6m17s**（实测）。
+  **收尾判据（在 origin/main 的实际文件里找标记，不看 exit code）**：`java-gate-pr.yml` 含 `uses: ./.github/workflows/java-full-nightly.yml`、**不再含任何 `runs-on`**；阴性对照 —— 旧的 `-Dtest=` 窄选择器 **0 次命中**（是换掉不是并存）；被调用方 `workflow_call` + 新闸 3 处命中。**「找到标记 ≠ 它能跑」**：#242 自己那次 `java-full-gate / full-suite` 绿，读数 `共跑 12012 · 红 5 · 基线 5 · 没有新增红`，且 `12009 → 12012` 的 +3 精确对上 #235 新增的 3 个 `@Test`。
+  **新闸做过变异**：塞 `*ContractTest` 红 / 塞 `*RepositoryQueryValidationTest` 红 / 塞普通测试仍绿 ⇒ 不是恒真也不是恒假。
   ⚠️ **订正一句口径**：原文写「1206 个跑不到」——准确说是「**PR 上**拦不住」。夜间全量确实执行它们（12009 个测试），所以缺口是**反馈时机**，不是从不执行。当天的 8 条新增红正是这个形状：PR 全绿合入，红在 main 上挂了半天。
   **上闸前先量了三件事**（⛔ 拿一次绿上闸就是形态 E）：① 耗时 窄闸 ~2min/1128 个测试 → 全量 **6:21~6:31**/12009；② 稳定性 —— 同一 commit 连跑两遍 + 另一 commit 一遍，三次读数**逐字相同**（`红 5 · 基线 5 · 没有新增红`，即红集恰好等于基线）；③ 换棘轮语义**不放松**原来那四类 —— 基线 5 条无一落在窄选择器里，且**另加一道闸钉住这个论据**（它是快照，会过期）。
   ✅ 顺带修一个既存缺陷：`java-gate-pr.yml` **不在** `switch_ci_runner.py` 的 `WORKFLOWS` 里而自己硬写 `runs-on: [self-hosted, cretas]` ⇒ 9/1 切回托管时切不过去。改后它没有 `runs-on`，归被调用方（在清单里）统一管。
