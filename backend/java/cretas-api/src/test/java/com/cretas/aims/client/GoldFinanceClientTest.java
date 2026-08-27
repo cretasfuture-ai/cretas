@@ -249,11 +249,21 @@ class GoldFinanceClientTest {
                 (PythonSmartBIConfig) ReflectionTestUtils.getField(client, "config");
         assertNotNull(config);
 
+        // 2026-08-12 二次调整 (owner: 「前期不考虑这个, 后面再优化」): floor 从
+        // 30s 提到 60s, 与 nginx 默认 upstream 超时对齐 (见
+        // GoldFinanceClient.MIN_TIERED_ANSWER_TIMEOUT_MS 的注释)。
+        // 30_000 是这条常量的旧值 —— 断言必须跟着常量一起更新, 不能钉在历史上。
         config.setRestaurantTieredAnswerTimeout(6_000);
-        assertEquals(30_000L, client.tieredAnswerTimeoutMs());
+        assertEquals(60_000L, client.tieredAnswerTimeoutMs());
 
+        // 45s 曾经高于旧 floor(30s) 因此原样透传；现在低于新 floor(60s)，
+        // 同样被拉到地板值 —— 地板线本身上移了，不是这个配置值变了。
         config.setRestaurantTieredAnswerTimeout(45_000);
-        assertEquals(45_000L, client.tieredAnswerTimeoutMs());
+        assertEquals(60_000L, client.tieredAnswerTimeoutMs());
+
+        // 阴性对照: 高于新 floor 的配置值仍然原样透传，证明这不是恒等于 60_000 的常量。
+        config.setRestaurantTieredAnswerTimeout(90_000);
+        assertEquals(90_000L, client.tieredAnswerTimeoutMs());
     }
 
     @Test

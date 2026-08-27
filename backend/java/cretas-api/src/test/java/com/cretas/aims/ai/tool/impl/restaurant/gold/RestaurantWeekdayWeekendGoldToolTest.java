@@ -204,17 +204,19 @@ class RestaurantWeekdayWeekendGoldToolTest {
         assertThat(result).containsKey("周中");
         assertThat(result).containsKey("结论");
         assertThat(result).containsKey("decisionBridge");
-        assertThat(result).containsKey("suggestedFollowups");
 
         @SuppressWarnings("unchecked")
         Map<String, Object> bridge = (Map<String, Object>) result.get("decisionBridge");
         assertThat(bridge).containsEntry("answerMode", "report_with_owner_action");
         assertThat(bridge).containsEntry("ownerActionScenario", "package");
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> followups = (List<Map<String, Object>>) result.get("suggestedFollowups");
-        assertThat(followups).isNotEmpty();
-        assertThat(followups.get(0)).containsEntry("ownerActionScenario", "package");
+        // 2026-08-14 owner 裁定 (见 GoldBackedRestaurantTool#ensureActionableMessage
+        // 附近注释): 删掉了 decisionFollowups() 那三个硬编码问句 —— 内容相关的追问
+        // 现在只由 tryDelegateToTieredIntent() 从 Python 的 suggested_followups 里
+        // 产出。这条用例走的是本地 Gold 查询路径 (userInput 为空, 不触发 tiered
+        // delegate), 不应该凭空合出一份 suggestedFollowups —— 阴性对照防止硬编码
+        // 追问被悄悄加回来。
+        assertThat(result).doesNotContainKey("suggestedFollowups");
     }
 
     // -------------------------------------------------------------------------

@@ -25,8 +25,9 @@ import static org.mockito.Mockito.when;
 class RestaurantOpsGoldAnalysisToolTest {
 
     @Test
-    @DisplayName("restaurant ops report response carries owner decision bridge followups")
-    void opsReportCarriesOwnerDecisionBridgeFollowups() throws Exception {
+    @DisplayName("restaurant ops report response carries owner decision bridge, "
+            + "but no longer a hardcoded suggestedFollowups list")
+    void opsReportCarriesOwnerDecisionBridge() throws Exception {
         GoldFinanceClient gold = mock(GoldFinanceClient.class);
         when(gold.fetchRestaurantOpsAnalysis(
                 eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"), any()))
@@ -48,7 +49,6 @@ class RestaurantOpsGoldAnalysisToolTest {
 
         assertThat(result).containsEntry("source", "restaurant_ops_gold");
         assertThat(result).containsKey("decisionBridge");
-        assertThat(result).containsKey("suggestedFollowups");
 
         @SuppressWarnings("unchecked")
         Map<String, Object> bridge = (Map<String, Object>) result.get("decisionBridge");
@@ -58,10 +58,13 @@ class RestaurantOpsGoldAnalysisToolTest {
                 .contains("沿用本会话最近的经营主题和时间范围")
                 .contains("新话题");
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> followups = (List<Map<String, Object>>) result.get("suggestedFollowups");
-        assertThat(followups).isNotEmpty();
-        assertThat(followups.get(0)).containsEntry("ownerActionScenario", "cost_margin");
+        // 2026-08-14 owner 裁定 (见 RestaurantOpsGoldAnalysisTool 内注释): 删掉了
+        // decisionFollowups() 那三个硬编码问句 —— 它们换哪个报表都是同样的话,
+        // 不指向正文里的任何东西。内容相关的追问现在只由 Python 侧的
+        // suggested_followups 产出 (走 GoldBackedRestaurantTool 的 tiered-intent
+        // delegate 路径), 这条 Gold 直连路径没有 tiered delegate 时不应该再凭空
+        // 合出一份 suggestedFollowups —— 阴性对照防止硬编码追问被悄悄加回来。
+        assertThat(result).doesNotContainKey("suggestedFollowups");
         verify(gold).fetchRestaurantOpsAnalysis(
                 eq("DEMO_REST"), any(), any(), eq("RESTAURANT_OPS_WASTAGE_TOP"), any());
     }

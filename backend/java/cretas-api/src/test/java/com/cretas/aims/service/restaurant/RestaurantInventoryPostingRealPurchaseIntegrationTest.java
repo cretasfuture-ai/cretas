@@ -57,6 +57,7 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
     @Mock private WarehouseResolver warehouseResolver;
+    @Mock private com.cretas.aims.repository.AttachmentRepository attachmentRepository;
 
     private static final String FACTORY = "RES_3101_009";
     private static final String NOTE_ID = "SDN-QHJ-001";
@@ -78,6 +79,10 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
                 applicationEventPublisher,
                 materialBatchService);
         ReflectionTestUtils.setField(purchaseService, "warehouseResolver", warehouseResolver);
+        // 收货凭证门禁 (confirmReceive 里新加的 @Autowired(required=false) 校验): field-injected
+        // 依赖, 构造函数没带, new PurchaseServiceImpl(...) 出来时默认是 null，会在
+        // confirmReceive() 里直接 503。这里模拟「送货单已经附了收货凭证」的正常路径。
+        ReflectionTestUtils.setField(purchaseService, "attachmentRepository", attachmentRepository);
 
         RestaurantInventoryPostingServiceImpl postingService = new RestaurantInventoryPostingServiceImpl(
                 noteRepository,
@@ -105,6 +110,10 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
         rawMaterial.setId(MATERIAL_ID);
         rawMaterial.setFactoryId(FACTORY);
         rawMaterial.setName("pork");
+        // 库存基本单位是真实物料档案的必填字段 (canonicalUnit 对空值 fail-fast，
+        // 见 PurchaseServiceImpl.resolveMaterialPackagingSelection) —— 这个 mock
+        // 之前没配置它，不是产品代码的缺陷，是 test double 没有完整代表一条真实记录。
+        rawMaterial.setUnit("kg");
         when(rawMaterialTypeRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(rawMaterial));
 
         AtomicReference<PurchaseReceiveRecord> receiveRef = new AtomicReference<>();
@@ -116,8 +125,16 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
             receiveRef.set(record);
             return record;
         });
-        when(receiveRecordRepository.findById("RCV-QHJ-REAL"))
+        // confirmReceive() 读的是带悲观锁的 findByIdAndFactoryIdForUpdate(), 不是
+        // findById() —— 原来的 stub 打错了方法, Mockito 默认 Optional 返回值走
+        // ReturnsEmptyValues (Optional.empty()), 于是 confirmReceive 里的
+        // orElseThrow 必炸「入库单不存在或不属于当前组织」, 与 unit 字段那处修复
+        // 无关, 是两个独立的 test-double 配置缺口。
+        when(receiveRecordRepository.findByIdAndFactoryIdForUpdate("RCV-QHJ-REAL", FACTORY))
                 .thenAnswer(inv -> Optional.ofNullable(receiveRef.get()));
+        when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                FACTORY, com.cretas.aims.entity.Attachment.EntityType.PURCHASE_RECEIPT, "RCV-QHJ-REAL"))
+                .thenReturn(1L);
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> {
             MaterialBatch batch = inv.getArgument(0);
             batch.setId("BATCH-QHJ-REAL");
@@ -142,8 +159,14 @@ class RestaurantInventoryPostingRealPurchaseIntegrationTest {
         assertEquals("WH-COLD-01", batchCaptor.getValue().getWarehouseId());
         assertEquals(MATERIAL_ID, batchCaptor.getValue().getMaterialTypeId());
         assertEquals(new BigDecimal("6.0000"), batchCaptor.getValue().getReceiptQuantity());
+        // createMaterialBatchFromReceiveItem 把行单价(每包装单位)除以
+        // packageToBaseFactorSnapshot 折算成每库存基本单位的单价, 固定 scale=12 —— 即使
+        // factor=1(本例包装单位==库存基本单位, 无需真实折算)也一样走这条 divide(...,12,HALF_UP),
+        // 结果自然是 18.500000000000 而不是原样的 18.50。BigDecimal#equals() 连 scale 一起比较
+        // (18.50.compareTo(18.500000000000)==0 但 .equals()==false), 断言要跟着这个真实产出走,
+        // 不能钉在折算前的字面量上。
         verify(materialBatchService).recalculateMovingAvgPrice(
-                MATERIAL_ID, new BigDecimal("6.0000"), new BigDecimal("18.50"), "BATCH-QHJ-REAL");
+                MATERIAL_ID, new BigDecimal("6.0000"), new BigDecimal("18.500000000000"), "BATCH-QHJ-REAL");
     }
 
     private SupplierDeliveryNote draftNote() {
