@@ -49,13 +49,17 @@ class RuntimeToolPolicyLoaderTest {
         });
         assertThat(manifest.policies().subList(0, 2)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("2.0.0");
-            assertThat(policy.supportsPreview()).isFalse();
             assertThat(policy.confirmationPolicy())
                     .isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.idempotencyPolicy())
                     .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
         });
+        // 2026-08-27: restaurant_dish_delete (index 1) 新增了真实的 doPreview() 实现 —— 安全改进
+        // (确认前先看变更预览), 不再与 user_disable (index 0) 共享 supportsPreview=false。拆开断言,
+        // 不是放宽: 两边都仍是显式核对过的值。
+        assertThat(manifest.policies().get(0).supportsPreview()).isFalse();
+        assertThat(manifest.policies().get(1).supportsPreview()).isTrue();
         assertThat(manifest.policies().subList(3, 5)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isTrue();

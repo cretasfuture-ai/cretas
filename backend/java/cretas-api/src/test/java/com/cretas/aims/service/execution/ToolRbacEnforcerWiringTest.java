@@ -53,6 +53,13 @@ class ToolRbacEnforcerWiringTest {
     private static final String FACTORY = "F006";
     private static final long OPERATOR_UID = 9001L;
 
+    // 2026-08-27: WriteGuardService#isConfirmed only trusts the process-local
+    // SERVER_CONFIRMATION_KEY marker now (raw confirmed=true from a caller-supplied map is
+    // explicitly documented as never being confirmation authority — see
+    // IntentExecutionOrchestrator#confirm(), the sole legitimate injection point). Use the real
+    // API to build a "properly confirmed" context so these tests keep isolating the W9 RBAC layer.
+    private static final WriteGuardService WRITE_GUARD = new WriteGuardService();
+
     /** Real enforcer wired with a guard whose PermissionService denies (operator越权). */
     private ToolRbacEnforcer denyingEnforcer() {
         UserRepository userRepo = mock(UserRepository.class);
@@ -85,8 +92,8 @@ class ToolRbacEnforcerWiringTest {
         c.put("factoryId", FACTORY);
         c.put("userId", OPERATOR_UID);
         c.put("userRole", "operator");
-        c.put("confirmed", true); // already confirmed → only RBAC can block (isolate the W9 layer)
-        return c;
+        // already confirmed via the trusted marker → only RBAC can block (isolate the W9 layer)
+        return WRITE_GUARD.withServerConfirmation(c);
     }
 
     // ===================== SITE E: ToolRouterServiceImpl =====================
@@ -135,8 +142,8 @@ class ToolRbacEnforcerWiringTest {
                 .userId(String.valueOf(OPERATOR_UID))
                 .build();
 
-        Map<String, Object> params = new HashMap<>();
-        params.put("confirmed", true); // confirmed → isolate W9 RBAC layer
+        // confirmed via the trusted marker → isolate W9 RBAC layer
+        Map<String, Object> params = WRITE_GUARD.withServerConfirmation(new HashMap<>());
 
         Method m = SkillExecutorImpl.class.getDeclaredMethod(
                 "executeSingleTool", String.class, Map.class, SkillContext.class);

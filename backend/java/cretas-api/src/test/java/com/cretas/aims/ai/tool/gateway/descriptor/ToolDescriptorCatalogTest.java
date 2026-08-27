@@ -23,48 +23,65 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(579);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(584);
         assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(569);
-        assertThat(statistics.total()).isEqualTo(579);
+        assertThat(statistics.total()).isEqualTo(584);
         assertThat(statistics.legacy()).isEqualTo(569);
+        // 2026-08-27: 579 → 584 (+5, legacy 计数不变 — 全部落在 EXPLICIT 一侧)。
+        // 这是一个**复合**delta, 至少叠加了两类已分别 merge 的改动:
+        //   (a) 新增 EXPLICIT/REVIEW_REQUIRED 工具, 已逐个查过源码 getAccessMode() 与清册一致
+        //       (READ/LOW/无需权限): unsupported_capability(#141/#185)、order_today、
+        //       system_ai_value_summary、system_finding_action_plan、workdesk_role_capabilities
+        //   (b) #185: 解析器盲区(方法签名限定返回类型读不到)曾把 3 个 WRITE/HIGH/需权限的工具
+        //       误读成 READ/LOW/免权限, 修复后这 3 个工具的分类和风险等级同时改变
+        //   restaurant_peak_hours_gold 的 getAccessMode() 缺失已由 #186 修复(改的是
+        //   GoldBackedRestaurantTool.java 基类声明, 不改 YAML), 与本次计数变化无关。
+        // ⚠️ 不逐工具手工拆分 (a)/(b) 对每个桶的贡献 —— 下面这组数字取自
+        //   ToolDescriptorInventoryDriftTest(逐字段比对源码 584 个工具与清册, 该闸独立通过)
+        //   跑出的真实统计, 不是手推算出来的, 避免编造一个自洽但不准的归因。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                // 2026-08-14: 9 个老式 BOM 写入工具退役, 逐项核对过与清册里的 actionType 分布
-                // **完全吻合**(READ 5 + WRITE 3 + UPDATE 1 = 9), 所以是「少了那 9 个」而不是把闸改松:
-                //   READ   447 → 442  (−5)
-                //   WRITE   62 →  59  (−3)
-                //   UPDATE  27 →  26  (−1)
-                ToolExecutor.ActionType.READ, 442L,
-                ToolExecutor.ActionType.WRITE, 59L,
+                ToolExecutor.ActionType.READ, 444L,
+                ToolExecutor.ActionType.WRITE, 61L,
                 ToolExecutor.ActionType.UPDATE, 26L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
-                ToolExecutor.ActionType.GENERATE, 15L,
+                ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                // 同上, 逐项核对过与那 9 个工具的 riskLevel 分布吻合(LOW 5 + MEDIUM 4 = 9):
-                //   LOW    511 → 506  (−5)
-                //   MEDIUM  72 →  68  (−4)
-                ToolExecutor.RiskLevel.LOW, 506L,
-                ToolExecutor.RiskLevel.MEDIUM, 68L,
-                ToolExecutor.RiskLevel.HIGH, 5L,
+                ToolExecutor.RiskLevel.LOW, 509L,
+                ToolExecutor.RiskLevel.MEDIUM, 67L,
+                ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
-        // 退役那 9 个工具后的逐项核对(每个数都对得上, 不是把闸调松):
-        //   previewSupported   38 → 36  (9 个里 supportsPreview=true 的恰好 2 个)
-        //   requiresPermission 42 → 41  (requiresPermission=true 的恰好 1 个)
-        assertThat(statistics.previewSupported()).isEqualTo(36);
-        assertThat(statistics.requiresPermission()).isEqualTo(41);
-        // governanceStatus 分布: REVIEW_REQUIRED 7 + REVIEW_REQUIRED_P0 1 + APPROVED 1 = 9
+        // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
+        // (高风险软删除工具现在支持"确认前先看变更预览"), 不是退化。见 ApprovedToolSourceMetadataTest
+        // / RuntimeToolPolicyLoaderTest 同步更新。requiresPermission 41 → 44 (+3): 同上 (b) 的重新分类。
+        assertThat(statistics.previewSupported()).isEqualTo(37);
+        assertThat(statistics.requiresPermission()).isEqualTo(44);
+        // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5, 新工具落 REVIEW_REQUIRED);
+        //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 553L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 558L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 17L,
                 ToolGovernanceStatus.APPROVED, 9L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
+        // 2026-08-27 (#185 修复解析器盲区后浮现): 这 3 个 LEGACY_INFERRED 的 HIGH 风险 WRITE
+        // 财务工具, 源码里其实一直声明着 getRequiredPermissions() —— 此前被"限定返回类型读不到"
+        // 的解析器盲区误读成"没有权限"。#185 已按判据"闸报出记录比源码更严时先怀疑尺子"修好了
+        // 解析器, 不能靠删空这条断言把刚恢复的正确数据又含糊过去。⇒ 显式登记这 3 个已知例外
+        // (而不是把 requiredPermissions().isEmpty() 整条撤掉), 这样以后再有 LEGACY_INFERRED
+        // 工具悄悄长出未登记的权限仍然会被这道闸抓到。
+        Set<String> legacyToolsWithKnownRequiredPermissions = Set.of(
+                "sales_create_invoice", "finance_invoice_request", "finance_invoice_request_from_order");
         assertThat(catalog.inventory().descriptors())
                 .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
                     assertThat(entry.version()).isEqualTo("1.0.0");
-                    assertThat(entry.requiredPermissions()).isEmpty();
+                    if (legacyToolsWithKnownRequiredPermissions.contains(entry.toolName())) {
+                        assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
+                    } else {
+                        assertThat(entry.requiredPermissions()).isEmpty();
+                    }
                     assertThat(entry.governanceStatus()).isIn(
                             ToolGovernanceStatus.REVIEW_REQUIRED,
                             ToolGovernanceStatus.REVIEW_REQUIRED_P0);

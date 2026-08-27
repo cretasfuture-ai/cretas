@@ -103,7 +103,11 @@ class ApprovedToolSourceMetadataTest {
         assertThat(tool.getDomainTags())
                 .isEqualTo(Set.of("restaurant", "menu", "product-master"));
         assertThat(tool.getVersion()).isEqualTo("2.0.0");
-        assertThat(tool.supportsPreview()).isFalse();
+        // 2026-08-27: 该工具新增了真实的 doPreview() 实现(展示下架前后对比、影响提示) ——
+        // 这是安全改进(高风险软删除工具现在支持"确认前先看变更预览"), 不是回退。
+        // 断言从 isFalse 改为 isTrue 是跟着行为走, 不是放松审计: RuntimeToolPolicyLoaderTest /
+        // ToolDescriptorCatalogTest 的 previewSupported 计数同步核过。
+        assertThat(tool.supportsPreview()).isTrue();
         assertThat(tool.requiresPermission()).isTrue();
         assertThat(tool.hasPermission("factory_super_admin")).isFalse();
     }
