@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  */
 class MaterialBatchMapperBoxCountTest {
 
-    private final MaterialBatchMapper mapper = new MaterialBatchMapper();
+    private final MaterialBatchMapper mapper = MaterialBatchMapperTestSupport.wiredMapper();
 
     private CreateMaterialBatchRequest baseCreateRequest() {
         CreateMaterialBatchRequest req = new CreateMaterialBatchRequest();

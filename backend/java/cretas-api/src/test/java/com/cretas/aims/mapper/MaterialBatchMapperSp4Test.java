@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class MaterialBatchMapperSp4Test {
 
-    private final MaterialBatchMapper mapper = new MaterialBatchMapper();
+    private final MaterialBatchMapper mapper = MaterialBatchMapperTestSupport.wiredMapper();
 
     private CreateMaterialBatchRequest baseCreateRequest() {
         CreateMaterialBatchRequest req = new CreateMaterialBatchRequest();

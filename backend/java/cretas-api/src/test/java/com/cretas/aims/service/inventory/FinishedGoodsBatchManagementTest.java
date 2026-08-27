@@ -11,6 +11,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.impl.SalesServiceImpl;
+import com.cretas.aims.service.warehouse.WarehouseLocationCatalog;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -51,6 +52,10 @@ class FinishedGoodsBatchManagementTest {
     @Mock ProductTypeRepository productTypeRepository;
     @Mock ApplicationEventPublisher applicationEventPublisher;
     @Mock WarehouseResolver warehouseResolver;
+    /** 储存位置受控词表 —— 编辑成品批次是它的第二条写路, 见 SalesServiceImpl 该调用点的注释。
+     *  这里用 mock 只为让协作者不为 null; 「哪些编码算数」的判据由 WarehouseLocationCatalog
+     *  自己的测试守, ⛔ 不在这里再写一份(那就是同一个判据两份)。 */
+    @Mock WarehouseLocationCatalog locationCatalog;
 
     SalesServiceImpl salesService;
 
@@ -74,6 +79,7 @@ class FinishedGoodsBatchManagementTest {
         ReflectionTestUtils.setField(salesService, "finishedGoodsAdjustmentLogRepository",
                 finishedGoodsAdjustmentLogRepository);
         ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
+        ReflectionTestUtils.setField(salesService, "locationCatalog", locationCatalog);
     }
 
     // ========== helpers ==========
@@ -125,6 +131,8 @@ class FinishedGoodsBatchManagementTest {
             when(finishedGoodsBatchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
             when(finishedGoodsBatchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
+            when(locationCatalog.requireConfiguredLocation(FACTORY_ID, "A仓-01")).thenReturn("A仓-01");
+
             EditFinishedGoodsRequest req = new EditFinishedGoodsRequest(
                     "新备注", "A仓-01", LocalDate.of(2027, 1, 1), new BigDecimal("5.50"));
 
@@ -132,6 +140,9 @@ class FinishedGoodsBatchManagementTest {
 
             assertThat(result.getRemark()).isEqualTo("新备注");
             assertThat(result.getStorageLocation()).isEqualTo("A仓-01");
+            // 位置写进去之前必须过受控词表 —— 上面那条 isEqualTo 单独看是恒真的
+            // (桩就是原样返回), 是这一句让它守住「这条写路没绕过词表」。
+            verify(locationCatalog).requireConfiguredLocation(FACTORY_ID, "A仓-01");
             assertThat(result.getExpireDate()).isEqualTo(LocalDate.of(2027, 1, 1));
             assertThat(result.getUnitPrice()).isEqualByComparingTo("5.50");
             // producedQuantity and unit must NOT change
