@@ -583,6 +583,22 @@ label 训练 crop。普通难例采样器会把规则版本写入 screening fing
 `BOTH_MISSING/MISSING_WHITE_LABEL/MISSING_COLOR_LABEL` 明确模型分歧，排除纯 `UNJUDGEABLE`，并按
 判定类型与 SKU 双重轮转、每张照片最多一只托盘、限制单任务和单 SKU 数量。它会再次执行 0.5% 源图
 边缘门禁和图片 SHA 校验；输出仍是训练禁用状态，只有新的人工 sidecar 才能进入准入流程。
+`admit_reviewed_full_trays.py` 同时接受该 minimal contract，但仍逐张要求人工完整托盘框、训练资格和
+边缘门禁；不能用 manifest 声明替代人工 sidecar。
+
+如果 minimal 审核把项目标为 `incomplete_tray=true`，不要继续放大旧 crop。应从只读原始整图运行
+补充托盘检测并生成宽视野第二轮队列：补充检测只有在托盘面积至少扩大 20% 时才作为黄色候选引导，
+否则不预填错误托盘框并强制操作员按 `T` 框完整物理托盘。所有候选引导都不是 ground truth，第二轮
+仍须完整人工复核，原始图片和上一轮 sidecar 不修改：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_minimal_incomplete_tray_requeue.py `
+  --source-queue D:\CretasVisionLab\queues\<reviewed-minimal-queue> `
+  --database D:\CretasVisionLab\state\vision.db `
+  --bundle D:\CretasVisionLab\deployment-bundles\liushanmen-v8-20260822 `
+  --repo-root <clean-worktree> `
+  --output D:\CretasVisionLab\queues\<immutable-full-source-requeue>
+```
 
 ## 操作员只需要关注什么
 

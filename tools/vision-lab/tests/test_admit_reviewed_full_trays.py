@@ -17,7 +17,10 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def make_queue(tmp_path: Path, annotations: list[dict]) -> Path:
+def make_queue(
+    tmp_path: Path, annotations: list[dict],
+    version: str = MODULE.SUPPORTED_SOURCE_VERSION,
+) -> Path:
     queue = tmp_path / "source"
     rows = []
     for index, annotation in enumerate(annotations):
@@ -33,10 +36,15 @@ def make_queue(tmp_path: Path, annotations: list[dict]) -> Path:
             "training_eligible": False,
         })
         write_json(queue / "annotations-human" / f"{crop_id}.json", annotation)
-    write_json(queue / "manifest.json", {
-        "version": MODULE.SUPPORTED_SOURCE_VERSION,
-        "rows": rows,
-    })
+    manifest = {"version": version, "rows": rows}
+    if version == MODULE.MINIMAL_SOURCE_VERSION:
+        manifest.update({
+            "preannotations_are_not_ground_truth": True,
+            "evaluation_or_production_use_allowed": False,
+            "review_scope": "single_complete_target_tray_labels_only",
+            "selection": {"source_edge_margin_ratio": 0.005},
+        })
+    write_json(queue / "manifest.json", manifest)
     return queue
 
 
@@ -90,4 +98,23 @@ def test_rejects_image_drift(tmp_path):
     source = make_queue(tmp_path, [complete_annotation()])
     (source / "images" / "crop-0.jpg").write_bytes(b"drift")
     with pytest.raises(RuntimeError, match="review image drift"):
+        MODULE.admit(source, tmp_path / "admitted")
+
+
+def test_admits_minimal_edge_safe_queue_under_same_human_gate(tmp_path):
+    source = make_queue(
+        tmp_path, [complete_annotation()], MODULE.MINIMAL_SOURCE_VERSION,
+    )
+    result = MODULE.admit(source, tmp_path / "admitted")
+    assert result["admitted_count"] == 1
+
+
+def test_rejects_minimal_queue_without_edge_safe_contract(tmp_path):
+    source = make_queue(
+        tmp_path, [complete_annotation()], MODULE.MINIMAL_SOURCE_VERSION,
+    )
+    manifest = MODULE.load_json(source / "manifest.json")
+    manifest["selection"]["source_edge_margin_ratio"] = 0.0
+    write_json(source / "manifest.json", manifest)
+    with pytest.raises(RuntimeError, match="contract is incomplete"):
         MODULE.admit(source, tmp_path / "admitted")

@@ -12,6 +12,8 @@ from typing import Any, Sequence
 
 VERSION = "liushanmen-reviewed-full-tray-admission-v1"
 SUPPORTED_SOURCE_VERSION = "liushanmen-incomplete-tray-requeue-v3"
+MINIMAL_SOURCE_VERSION = "liushanmen-minimal-active-label-review-v1"
+SUPPORTED_SOURCE_VERSIONS = {SUPPORTED_SOURCE_VERSION, MINIMAL_SOURCE_VERSION}
 DEFAULT_EDGE_MARGIN = 0.005
 
 
@@ -71,8 +73,18 @@ def admit(source_queue: Path, output: Path, edge_margin: float = DEFAULT_EDGE_MA
 
     manifest_path = source_queue / "manifest.json"
     manifest = load_json(manifest_path)
-    if manifest.get("version") != SUPPORTED_SOURCE_VERSION:
-        raise RuntimeError("source queue is not a reviewed round-three tray queue")
+    source_version = str(manifest.get("version") or "")
+    if source_version not in SUPPORTED_SOURCE_VERSIONS:
+        raise RuntimeError("source queue does not implement a supported full-tray review contract")
+    if source_version == MINIMAL_SOURCE_VERSION:
+        selection = manifest.get("selection") or {}
+        if (
+            manifest.get("preannotations_are_not_ground_truth") is not True
+            or manifest.get("evaluation_or_production_use_allowed") is not False
+            or manifest.get("review_scope") != "single_complete_target_tray_labels_only"
+            or float(selection.get("source_edge_margin_ratio", -1)) != DEFAULT_EDGE_MARGIN
+        ):
+            raise RuntimeError("minimal source queue full-tray contract is incomplete")
 
     planned: list[tuple[dict[str, Any], Path, dict[str, Any], str]] = []
     excluded: dict[str, int] = {}
