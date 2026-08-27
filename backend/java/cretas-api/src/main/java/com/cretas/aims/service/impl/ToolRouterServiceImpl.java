@@ -586,18 +586,33 @@ public class ToolRouterServiceImpl implements ToolRouterService {
             throw new IllegalStateException(toolRbacEnforcer.denyMessage(executor, context));
         }
 
+        // 🔴 2026-08-27: 与 ToolDispatchService 的 SITE B 对齐 —— W0 与 RBAC 查完之后
+        // **立刻剥掉**进程内确认标记, 不要序列化、也不要转发给工具。
+        //
+        // 此前 SITE E 少了这一步: 上面两道闸看完之后, 带标记的 context 被原样
+        // writeValueAsString 进 ToolCall.arguments, 并原样传给 executor.execute()。
+        //
+        // ⚠️ 定性: 这是**卫生问题, 不是鉴权漏洞**。SERVER_CONFIRMATION_MARKER 是个裸
+        //    `new Object()`, isConfirmed 用 `==` 比对象身份 ⇒ 跨序列化边界不可伪造,
+        //    replay 回来的是另一个对象, `==` 必假。
+        //    真正的问题是: ① 内部 key 会漏进 arguments(进而进日志/存储/上游响应);
+        //    ② 同一条不变式有两个出口, 一个剥一个不剥 —— 那是必漂的形状,
+        //       下一个人只会看到其中一个然后以为那就是全部。
+        Map<String, Object> sanitizedContext =
+                com.cretas.aims.ai.tool.WriteGuardService.withoutServerConfirmationMarker(context);
+
         // 构建 ToolCall (简化版，实际参数需要从上下文提取)
         ToolCall toolCall = ToolCall.builder()
             .id(UUID.randomUUID().toString())
             .type("function")
             .function(ToolCall.FunctionCall.builder()
                 .name(toolName)
-                .arguments(objectMapper.writeValueAsString(context))
+                .arguments(objectMapper.writeValueAsString(sanitizedContext))
                 .build())
             .build();
 
         long startTime = System.currentTimeMillis();
-        String result = executor.execute(toolCall, context);
+        String result = executor.execute(toolCall, sanitizedContext);
         long duration = System.currentTimeMillis() - startTime;
 
         // 更新执行时间统计
