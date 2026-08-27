@@ -186,6 +186,35 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             @Param("factoryId") String factoryId,
             @Param("type") CounterpartyType type);
 
+    /**
+     * 指定日期区间内的流水条数 —— 「本月交易笔数」。
+     *
+     * <p>🔴 2026-08-28 逐屏走查: 「财务概览」屏顶部写着「本月交易笔数 <b>0</b>」,
+     * 而正下方的交易记录列表是「共 <b>32</b> 条」且全在本月。真因是前端读
+     * {@code overview.monthlyTransactionCount} 而后端**从不产出**这个字段 ——
+     * {@code undefined || 0} ⇒ 渲染成 0。</p>
+     *
+     * <p>⚠️ 同一个方法里已经有一段注释记着**完全同一形态的上一次**
+     * ({@code payableCount}/{@code receivableCount} "silently showed 0 regardless of real data")。
+     * 那次修了两个, 这三个漏了。</p>
+     */
+    @Query("SELECT COUNT(t) FROM ArApTransaction t WHERE t.factoryId = :factoryId " +
+            "AND t.transactionDate >= :from AND t.transactionDate <= :to")
+    long countByFactoryIdAndTransactionDateBetween(
+            @Param("factoryId") String factoryId,
+            @Param("from") java.time.LocalDate from,
+            @Param("to") java.time.LocalDate to);
+
+    /** 指定日期区间内有交易往来的对手方数(去重) —— 「客户 N / 供应商 M」。 */
+    @Query("SELECT COUNT(DISTINCT t.counterpartyId) FROM ArApTransaction t " +
+            "WHERE t.factoryId = :factoryId AND t.counterpartyType = :type " +
+            "AND t.transactionDate >= :from AND t.transactionDate <= :to")
+    long countDistinctCounterpartiesInPeriod(
+            @Param("factoryId") String factoryId,
+            @Param("type") CounterpartyType type,
+            @Param("from") java.time.LocalDate from,
+            @Param("to") java.time.LocalDate to);
+
     /** 查找期初余额快照（startDate之前最后一笔交易的balanceAfter） */
     @Query("SELECT t.balanceAfter FROM ArApTransaction t " +
             "WHERE t.factoryId = :factoryId " +

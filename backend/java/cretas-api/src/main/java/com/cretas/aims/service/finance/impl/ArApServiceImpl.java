@@ -1060,6 +1060,23 @@ public class ArApServiceImpl implements ArApService {
         overview.put("payableCount", payableCounterpartyCount);
         overview.put("receivableCount", receivableCounterpartyCount);
 
+        // 🔴 2026-08-28 逐屏走查: 屏上「本月交易笔数 0 / 客户 0 / 供应商 0」, 而正下方
+        //   「交易记录 共 32 条」全在本月 —— **同屏自相矛盾**。
+        //
+        //   真因与上面那段注释记的 payableCount/receivableCount 是**同一形态**:
+        //   前端读 `overview.monthlyTransactionCount || 0`, 而这里从不 put 这个 key
+        //   ⇒ `undefined || 0` ⇒ 渲染成 0。那次修了两个, 这三个漏了。
+        //
+        // ▎`|| 0` 把「这个字段不存在」翻译成了「本月一笔交易都没有」。
+        LocalDate monthStart = LocalDate.now().withDayOfMonth(1);
+        LocalDate monthEnd = monthStart.plusMonths(1).minusDays(1);
+        overview.put("monthlyTransactionCount",
+                transactionRepository.countByFactoryIdAndTransactionDateBetween(factoryId, monthStart, monthEnd));
+        overview.put("customerCount", transactionRepository.countDistinctCounterpartiesInPeriod(
+                factoryId, CounterpartyType.CUSTOMER, monthStart, monthEnd));
+        overview.put("supplierCount", transactionRepository.countDistinctCounterpartiesInPeriod(
+                factoryId, CounterpartyType.SUPPLIER, monthStart, monthEnd));
+
         // 按类型统计
         List<Object[]> stats = transactionRepository.statisticsByType(factoryId);
         List<Map<String, Object>> typeStats = new ArrayList<>();
