@@ -217,6 +217,7 @@ frontend/CretasFoodTrace/src/
 - `database-entity-sync.md` - 数据库同步
 - `field-naming-convention.md` - 字段命名
 - `concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
+- `ci-runner-routing.md` - **CI runner 路由**：默认托管，额度耗尽时 `gh variable set CI_RUNNER --org cretasfuture-ai --body '["self-hosted","cretas"]'` 切到加拿大 Mac mini；恢复就 `gh variable delete`。⛔ 任何时候都不要改 workflow 的 `runs-on`。本文件与 `.claude/rules/` 同名文件**必须逐字相同**（`scripts/ci/check_shared_agent_rules.py` 钉着，PR 上跑）
 
 ### Superpowers 禁用规则（强制）
 

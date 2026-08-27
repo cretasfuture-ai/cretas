@@ -60,6 +60,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署
 - `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量
 - `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上
+- `ci-runner-routing.md` - CI 默认走托管, 额度耗尽切自建(加拿大 Mac mini); ⛔ 别改 workflow 的 runs-on, 设/删组织变量 `CI_RUNNER` 即可。与 `.codex/rules/` 同名文件**逐字相同**, 有闸钉着
 
 **按路径加载**（`paths:` frontmatter，涉及对应文件时自动加载）：
 - `ai-intent-tool-skill-architecture.md` - AI Tool-Skill 架构（backend/java）

@@ -65,6 +65,16 @@ jobs:
     #    裸标签会被任意机器接走, 具名标签不会。
     # 实测资源(vitest 3300+ 用例): 4分41秒 / 峰值内存 1.2G / CPU 350%。
     # 服务侧已加 Nice=10 CPUWeight=50 MemoryMax=3G, 让它抢不过业务进程。
+    # CI runner 路由: **默认走托管**(快 1~2 倍、干净机器), 额度耗尽时切到自建。
+    #   切换: `python scripts/ci/switch_ci_runner.py self-hosted` (或 hosted) 然后提交。
+    #   ⛔ 别用组织变量 `${{ vars.X }}` —— 实测在 `runs-on` 里读到的是空。
+    #   详见 .claude/rules/ci-runner-routing.md (= .codex/rules/ 同名文件)
+    # ⚠️ 这里**不能**用 `${{ vars.X }}` 做路由 —— 实测 job 被派成 labels=ubuntu-latest,
+    #    即 vars 在 `runs-on` 求值时读到的是空(它在 job 编排阶段求值, 上下文比步骤里窄)。
+    #    配置本身没问题: 变量 visibility=all、组织变量对本仓可见、创建早于 run。
+    # ⇒ 改用**分支/文件**级切换: 平时保持 ubuntu-latest;
+    #    额度耗尽时执行 `python scripts/ci/switch_ci_runner.py self-hosted` 并提交,
+    #    额度恢复时 `... hosted`。一条命令改三个文件, 有闸钉着三处一致。
     runs-on: [self-hosted, cretas]
     defaults:
       run:
