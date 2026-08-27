@@ -1,0 +1,80 @@
+# 调度器 canary —— 它存在的唯一理由是回答一个问题：
+#
+#   **GitHub 的 `schedule` 触发，对这个组织到底工不工作？**
+#
+# ## 为什么需要它（2026-08-27 实测）
+#
+# `java-full-nightly` 的 cron 是 `0 18 * * *`（北京次日 02:00）。到 18:42Z 为止：
+#
+# ```
+# gh run list --workflow java-full-nightly.yml --json event --jq '[.[].event]|unique'
+# -> ["workflow_dispatch"]                      # 一次 schedule 都没有
+# gh api 'repos/cretasfuture-ai/cretas/actions/runs?event=schedule' --jq .total_count
+# -> 0                                          # 建仓以来 0 次
+# gh api 'repos/cretasfuture-ai/cretas-factory-assembly/.../runs?event=schedule'
+# -> 0                                          # 另一个仓同样 0 次
+# ```
+#
+# 已经排除的：workflow state 是 `active`（#178 打开的）／`schedule:` 块还在文件里／
+# 仓不是 fork（fork 上定时工作流默认不跑）／默认分支就是 `main`／没归档没禁用／
+# repo 与 org 的 Actions permissions 都是 enabled。
+#
+# ## ⛔ 为什么不直接写「是账单挡的」
+#
+# 有一条自洽的推理：托管 runner 的 job 会 **2 秒失败**，注解是
+# "recent account payments have failed or your spending limit needs to be increased"，
+# 而 GitHub 在账单异常时确实会停掉定时触发 —— 一个原因解释两个症状，听起来就是它。
+#
+# **但两个仓里带 `schedule` 的工作流只有一个**（就是 java-full-nightly），
+# 所以【没有独立对照】：分不清是「组织级调度器停了」还是「那一个工作流的定时没生效」。
+# 本仓的规矩是：一个原因解释 N 个症状时，逐个验证机制对每个症状都成立；
+# **自洽的推理链不是证据。**
+#
+# ⇒ 这个文件就是那个缺失的对照。它跑在自建 runner 上、10 秒内结束、零成本。
+#
+# ## 怎么读它
+#
+# ```bash
+# gh api 'repos/cretasfuture-ai/cretas/actions/runs?event=schedule' --jq .total_count
+# ```
+#
+# | 读数 | 结论 | 下一步 |
+# |---|---|---|
+# | > 0，且里面有 scheduler-canary | **调度器是好的** | 那就是 `java-full-nightly` 自己的定时有问题，回去查它 |
+# | 仍然 0（canary 也从没自动跑过） | **组织级调度器没在工作** | 多半就是账单；需要 owner 去 GitHub Billing 处理，⛔ 不是代码能修的 |
+#
+# ⚠️ **在拿到读数之前，别把夜间跑批当成「每天都在跑」** —— 它至今一次都没自动跑过，
+#    全靠人手工 dispatch。靠人记得触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
+#
+# 📌 问题一旦有了答案，把 cron 放宽到每天一次（或删掉本文件）—— 它不需要长期每小时跑。
+
+name: Scheduler canary
+
+on:
+  schedule:
+    # 每小时一次 —— 只为尽快拿到「调度器活着吗」这个读数。
+    - cron: '0 * * * *'
+  # ⚠️ 手动入口只用来证明「这个工作流本身跑得起来」。
+  #    ⛔ 手动能跑【不能】说明定时能跑 —— 那正是本 canary 要区分的两件事。
+  workflow_dispatch:
+
+concurrency:
+  group: scheduler-canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 5
+    steps:
+      - name: 报出这次是被什么触发的
+        run: |
+          echo "SCHEDULER_CANARY event=${{ github.event_name }} at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "✅ 调度器活着 —— GitHub 的 schedule 触发对本组织有效。"
+          else
+            echo "⚠️ 这次是 ${{ github.event_name }}，不是 schedule。⛔ 它证明不了调度器活着。"
+          fi
