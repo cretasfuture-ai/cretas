@@ -265,7 +265,11 @@ public class LabelServiceImpl implements LabelService {
 
         // A3: 数字前缀复用 SP8 primaryCode (RawMaterialType.primaryCode 前三位), 避免双编码体系。
         // 修 (2026-06-12, Codex Gate2 靶6): 无 primaryCode 时不再硬编码 "MA"(失真), 改用 SP4 类别业务前缀
-        // (原料→YL/肉类→RL/包材→BC/其他→WL), 与编码生成规则同源 (RawMaterialTypeServiceImpl 同包 static).
+        // (原料/主材→YL, 肉类→RL, 包材→BC, 辅料/调料等→WL), 与编码生成规则同源
+        // (RawMaterialTypeServiceImpl 同包 static)。
+        // ⚠️ 2026-08-09 (20202d7758) 起 getMaterialCategoryPrefix 对 null/未知类别一律抛
+        // BusinessException, 不再兜底 WL —— 本方法因此继承了同一条闸: materialType 或其
+        // category 缺失时, 生成标签会显式失败, 而不是打印一张类别猜测出来的标签。
         String sp8Prefix = (batch.getMaterialType() != null
                 && batch.getMaterialType().getPrimaryCode() != null
                 && !batch.getMaterialType().getPrimaryCode().isBlank())

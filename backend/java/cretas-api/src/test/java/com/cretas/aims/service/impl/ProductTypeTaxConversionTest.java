@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -107,6 +108,7 @@ class ProductTypeTaxConversionTest {
                 .name("猪蹄")
                 .unit("盒")
                 .code("PT001")
+                .productCategory(ProductCategory.FINISHED_PRODUCT)
                 .taxRate(TaxRate.TAX_9)
                 .taxIncludedUnitPrice(new BigDecimal("109"))
                 .createdBy(1L)
@@ -133,6 +135,7 @@ class ProductTypeTaxConversionTest {
                 .name("猪舌")
                 .unit("kg")
                 .code("PT002")
+                .productCategory(ProductCategory.FINISHED_PRODUCT)
                 .taxRate(TaxRate.TAX_13)
                 .taxIncludedUnitPrice(new BigDecimal("113"))
                 .createdBy(1L)
@@ -155,6 +158,7 @@ class ProductTypeTaxConversionTest {
                 .name("卤猪手")
                 .unit("kg")
                 .code("PT003")
+                .productCategory(ProductCategory.FINISHED_PRODUCT)
                 .taxRate(TaxRate.TAX_9)
                 .unitPrice(new BigDecimal("100"))
                 .createdBy(1L)
@@ -177,6 +181,7 @@ class ProductTypeTaxConversionTest {
                 .name("调味品")
                 .unit("包")
                 .code("PT004")
+                .productCategory(ProductCategory.SEASONING)
                 .taxRate(null)
                 .taxIncludedUnitPrice(new BigDecimal("200"))
                 .unitPrice(new BigDecimal("180"))
@@ -200,6 +205,7 @@ class ProductTypeTaxConversionTest {
                 .name("样品")
                 .unit("个")
                 .code("PT005")
+                .productCategory(ProductCategory.FINISHED_PRODUCT)
                 .taxRate(TaxRate.TAX_9)
                 .taxIncludedUnitPrice(BigDecimal.ZERO)
                 .createdBy(1L)
