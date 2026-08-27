@@ -1,52 +1,39 @@
 # Java 全量测试的已知红名单（棘轮：只许变少）
 # ⛔ 不要手工往里加。修好一个就从这里删一行。
-# 本次共跑 11891 个测试，其中 143 个红。
-com.cretas.aims.service.bom.BomSeasoningBindingIntegrityContractTest.bindingLookupsAreScopedToRecipeProcessMaterialAndBindingId
-com.cretas.aims.service.bom.BomSeasoningBindingIntegrityContractTest.migrationBackfillsBindingRatioAndDefinesNullablePartialUniqueKey
-com.cretas.aims.service.bom.BomSeasoningBindingIntegrityContractTest.revisionClaimRequiresMatchingFactoryDraftStatusAndExpectedRevision
-com.cretas.aims.service.bom.BomSeasoningBindingIntegrityContractTest.sameMaterialMayBeBoundToDifferentProcessesButNotTwiceToSameProcess
+# 本次共跑 12007 个测试。
+#   （这个数是【样本量下限】的依据 —— java-test-ratchet.py 拿它 × 0.9 判 rc=2「没量到」，
+#     防 fork VM 中途崩掉之后拿残缺报告当有效读数。⛔ 不要在没量过的时候改它。）
+#
+# ── 2026-08-27 夜间跑批（run 33081570292，on 9d26e655）：49 → 5 ─────────────────
+#
+# #197（ddl-auto 从 create-drop 改成 create）的 H2 schema 毒源诊断**成立**：
+# 基线 49 条里 **44 条转绿**（棘轮报的是「跑了而且通过」，不是「没跑到」——
+# 两者自 #223 起分开报，所以这 44 条不是被删/改名糊掉的）。
+#
+# ⛔ 剩下这 5 条**不是**那个根因。交接件写的「49 条全部是同一个根因」，对它们不成立 ——
+#    它们只是恰好也满足「本机绿 / CI 红」，而那是**两条不同的路通向同一个长相**。
+#
+# ── (a) FactoryConfigServiceImplReorderIT · 4 条 · 仪器缺一味环境，不是产品缺陷 ──
+#
+# CI 实测报错：`Connection to localhost:5432 refused`（不是 H2 的 Table not found）。
+# 它是 @DataJpaTest + Replace.NONE，类注释写明要 localhost:5432 上的 cretas_r10_it_test 库，
+# 由 ci.yml 的 java-build-test job 用 pgvector 服务容器提供。
+# 而 java-full-nightly **没有 services:**（自建 macOS runner 也起不了服务容器）
+# ⇒ 它在夜间跑批里必然红，本机因为有 PG 所以必然绿。
+#
+# ⛔ 不要为了让它变绿加 @Disabled / assumeTrue —— 那会让它在**真有 PG 的那条路上**
+#    也一起沉默（把「没量到」折叠进「没问题」，硬约束 4）。
+#    要修得先决定：夜间跑批到底要不要有 PG。
+#
+# ── (b) SalesOrderFinanceApprovedFanOutIntegrationTest · 1 条 · 待查 ────────────
+#
+# CI 实测：第一条断言（shortage report 落库）**通过**，第二条（production_plans 有行）
+# 轮询到超时才失败，单条耗时 10.17s。@SpringBootTest + @Async 默认执行器。
+# 待查：是 CI 上真的没落库（那就是 2026-08-01 doomed-tx 的回归），
+#       还是轮询窗口在这台 runner 上不够。⚠️ 两者的下一步动作相反，别先入为主。
+#
 com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_repositoryReadPathReturnsNewOrder
 com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_unknownFieldCodes_ignoredGracefully
 com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_updatesCanvasDynamicFieldSortOrder
 com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_versionMismatch_throws
-com.cretas.aims.service.processentry.ClerkProcessEntryIntegrationTest.testDiamondNoCostDoubleCount
-com.cretas.aims.service.processentry.ClerkProcessEntryIntegrationTest.testSeasoningLandsInSeasoningBucket
-com.cretas.aims.service.processentry.ProcessSheetInventoryTest.getInventory_depletedWhenFullyConsumed
-com.cretas.aims.service.processentry.ProcessSheetInventoryTest.getInventory_derivesProducedUsedRemaining
-com.cretas.aims.service.processentry.ProcessSheetInventoryTest.getInventory_scopedToPlan_excludesOtherPlans
-com.cretas.aims.service.processentry.ProcessSheetInventoryTest.getInventory_skipsDraftRows
-com.cretas.aims.service.processentry.ProcessSheetRowsTest.getRows_emptyWhenNoneForProcess
-com.cretas.aims.service.processentry.ProcessSheetRowsTest.getRows_factoryScoped_excludesOtherFactory
-com.cretas.aims.service.processentry.ProcessSheetRowsTest.getRows_returnsSavedRowsWithPayload
-com.cretas.aims.service.processentry.ProcessSheetServiceConcurrencyTest.concurrentInsert_sameUkTuple_exactlyOneRowPersists
-com.cretas.aims.service.processentry.ProcessSheetServiceConcurrencyTest.sequentialResave_routesToResaveRow_noOrphan
-com.cretas.aims.service.processentry.ProcessSheetServiceConcurrencyTest.ukConstraint_duplicateInsert_throwsDataIntegrityViolation
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.deleteInjectionRow_reversesSfiOutput
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.deleteRow_draftRow_removesRowOnly
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.deleteRow_materializedNoDownstream_softDeletesAll
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.deleteRow_notFound_throws404
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.deleteRow_withDownstreamConsumed_throws409
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.deleteRow_writesDeleteChangeLog
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.injectionMidChain_downstreamCanReferenceOutput_chainNotBlocked
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.pinnedBomPackagingRequirementsScaleInNativeUnits
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resaveInjectionRow_reversesThenReposts
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resaveRow_update_writesUpdateChangeLogWithChangedField
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resave_draftThenMaterialize
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resave_draftToPureSfi_savesToSfiNoWip
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resave_materializedToZero_reversesToDraft
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resave_noDownstream_updatesInPlacePreservingIds
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.resave_withDownstreamConsumed_throws409
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_create_writesCreateChangeLog
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_crossTenantPlan_throws403
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_finishedSfiOnly_materializesWithNoConsumption
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_nonFinishedSfiOnly_savesToSfiNoWip
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_outputZero_savesDraftNoMaterialize
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_rawPlusSfiFeed_onlyRawConsumptionWritten
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_sfiNonexistent_throws409AtSave
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_shuzhi_mixedPots_writesSemiEdgesAndSeasoning
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_singleUpstreamGunrou_sfiOnly_savesToSfiNoWip
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_unknownUpstreamBatch_throws409
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.saveRow_xiuyou_writesRawConsumptionAndWipBatch
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.submitRow_declaredUpstreamWithZeroFeed_rejectedBeforeWrites
-com.cretas.aims.service.processentry.ProcessSheetServiceImplTest.submitRow_inPlanWip_consumesExactBatchAndIsIdempotent
 com.cretas.aims.service.shortage.SalesOrderFinanceApprovedFanOutIntegrationTest.bomExpansionFailureDoesNotSilentlyDiscardShortageReportOrProductionPlan
