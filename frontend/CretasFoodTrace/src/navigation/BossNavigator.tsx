@@ -11,6 +11,7 @@ import PurchaseOrderListScreen from '../screens/factory-admin/inventory/Purchase
 import PurchaseOrderDetailScreen from '../screens/factory-admin/inventory/PurchaseOrderDetailScreen';
 import FinishedGoodsListScreen from '../screens/factory-admin/inventory/FinishedGoodsListScreen';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
+import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
 
@@ -34,6 +35,7 @@ function BossOverviewStack() {
 export default function BossNavigator() {
   const insets = useSafeAreaInsets();
   const smartBiEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('SmartBI'));
+  const reportsEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('Reports'));
 
   return (
     <Tab.Navigator
@@ -68,6 +70,36 @@ export default function BossNavigator() {
         OA 待办中心当前定位: **财务/出纳专用**(MainNavigator / FinanceNavigator 已按角色守住)。
         采购审批走 web-admin 或 OA 审批中心 (POST /workflow/instances/{id}/actions)。
       */}
+      {/*
+        🔴 2026-08-27 接入「报表」—— 此前工厂用户**一个报表都走不到**。
+
+        这套东西两端都建好了，只是挂错了地方：`FAReportsStackNavigator`(18 个屏)
+        原本唯一的挂载点是 `FactoryAdminTabNavigator` 的 `FAReportsTab`，
+        条件写着 `isScreenEnabled('Reports') && !isRestaurantMode`；而那棵子树
+        只在 `isRestaurant(user)` 为真时挂载（AppNavigator:92）⇒ **恒为假**。
+        PR #209 删掉了那个恒假的注册，本 PR 把它接到工厂用户真正走的这棵树上。
+
+        接之前逐条量过（⛔ 不是「看起来有就接」）：
+
+          · 后端 `ReportController` 27 个端点。拿 f006_admin 在服务器本机实打 22 个只读 GET：
+            **21 个返回真数据**，坏的 1 个是 `/inventory`（已由 PR #221 修）——
+            而本 Tab 的 18 个屏**没有一个调它**。
+          · 16 个可达屏里 **14 个真取数**；`TrendReport` / `ForecastReport` 是静态说明页，
+            但落地页 `ReportDashboard` 不链它们（只链 11 个），用户点不到。
+            ⚠️ `DataExport` 曾被我数成「0 次取数」——那是仪器错：它手拼 URL 打
+            `/reports/export/*`，不走 apiClient。它是真的。
+          · `isScreenEnabled('Reports')` 映射到 `production` 模块，而该函数在模块
+            **未配置时默认 true**（只有显式 enabled=false 才关）。生产实测 F006 的
+            `factory_module_configs` 只有 `sales_order` 一行 ⇒ 这里为真，
+            ⛔ 不会重蹈「加了个恒假守卫」的覆辙。
+      */}
+      {reportsEnabled && (
+        <Tab.Screen
+          name="BossReportsTab"
+          component={FAReportsStackNavigator}
+          options={{ title: '报表', tabBarIcon: ({ color, size }) => <Icon source="file-chart-outline" color={color} size={size} /> }}
+        />
+      )}
       {smartBiEnabled && (
         <Tab.Screen
           name="BossAnalysisTab"
