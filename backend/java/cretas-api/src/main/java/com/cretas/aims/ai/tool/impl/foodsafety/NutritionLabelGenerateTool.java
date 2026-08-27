@@ -410,9 +410,23 @@ public class NutritionLabelGenerateTool extends AbstractBusinessTool {
             }
 
             outcome.matchedCount++;
-            BigDecimal qty = item.getActualQuantity() != null
-                    ? item.getActualQuantity()
-                    : item.getStandardQuantity();
+            // 🔴 2026-08-27: 这里要的是**折算后的实际用量**(含出成率), 用 calculateActualQuantity()。
+            //
+            // 原来读的是 getActualQuantity() —— 那是 Lombok 给**持久化列**生成的 getter,
+            // 与 calculateActualQuantity()(@Transient, 按 standardQuantity / (yieldRate/100) 折算)
+            // **不是同一个东西**。计算方法当初改名时旧名字仍然存在, 所以改名
+            // **没有破坏编译, 只是把这里的含义从「算值」悄悄换成了「存值」**。
+            //
+            // 生产实测(2026-08-27): bom_recipe_items **73 行里 55 行 actual_quantity 是 NULL**,
+            // 所以这里几乎总是落到下面那个 standardQuantity 兜底 —— 而那是**未折算**的量。
+            //
+            // ⚠️ 今天两者等价: 目前**没有任何物料设了出成率**(yield_rate 全为 null 或 100),
+            //    calculateActualQuantity() 在那种情况下也返回 standardQuantity。
+            //    但**一旦有人设了出成率**(例如 58%), 营养标签就会按未折算的量去算 ——
+            //    原料低估最多 40%, 而标签是**对外的合规产物**。
+            //
+            // ⇒ 改成读算值: 今天行为不变, 明天才不会错。⛔ 不要改回字段 getter。
+            BigDecimal qty = item.calculateActualQuantity();
             if (qty == null) continue;
 
             // factor = qty(g) / 100 * scaling
