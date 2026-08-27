@@ -1037,7 +1037,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * <p>校验逻辑:
      * <ol>
      *   <li>拉取 BOM items (按 productTypeId)</li>
-     *   <li>对每个 BOM item 计算需求量: bomItem.getActualQuantity() (已含出成率) × plan.plannedQuantity</li>
+     *   <li>对每个 BOM item 计算需求量: bomItem.calculateActualQuantity() (已含出成率) × plan.plannedQuantity</li>
      *   <li>查询该 materialType 在该 factory 的可用库存合计 (AVAILABLE 状态, receipt - used - reserved)</li>
      *   <li>若任一原料 available &lt; required → 抛 BusinessException 列出所有缺口</li>
      * </ol>

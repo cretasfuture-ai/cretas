@@ -332,7 +332,10 @@ class BomSeasoningWorkspaceServiceTest {
         BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
 
         var process = response.getProcesses().get(0);
-        assertEquals("box", process.getStandardBasisUnit());
+        // 2026-08-14 定案 (UnitContractServiceImpl#systemUnits): 计数/包装单位的规范码
+        // 就是中文字本身, 英文单词 (box/bag/pcs...) 降级为别名。归一之后一律得到中文码。
+        // 期望值曾是 "box" (英文码年代的规范表), 现在的规范码是 "盒"。
+        assertEquals("盒", process.getStandardBasisUnit());
         assertTrue(process.isStandardUsageSupported());
     }
 
@@ -357,10 +360,15 @@ class BomSeasoningWorkspaceServiceTest {
         // 英文码一会儿是中文, 取决于那张表恰好收没收 —— 而这正是客户 2026-07-31 撞到的那类错。
         // 改成走权威表后全部是规范码, 与上一个用例的 "box" 一致。
         //
+        // 2026-08-14 定案 (第二次迁移, UnitContractServiceImpl#systemUnits): 计数/包装单位
+        // 的规范码改成中文字本身 (见该方法注释: 英文码让 件/个/只、框/筐 这类"一个码对应多个
+        // 中文单位"的场景只能靠 storageUnit 规则打补丁保字面)。"bag" 因此降级为别名,
+        // 归一后的规范码是「袋」——与本用例的输入字面重合只是巧合 (输入恰好就是中文)。
+        //
         // ⚠️ 不是把中文单位换成英文给用户看: 前端 businessUnitLabel → displayUnit →
-        // UNIT_LABELS['bag'] = 「袋」, 界面显示不变。这个字段同时还喂端口单位冲突检测,
+        // UNIT_LABELS['袋'] = 「袋」, 界面显示不变。这个字段同时还喂端口单位冲突检测,
         // 那里必须是规范码, 否则「袋」和「bag」会被数成两种单位。
-        assertEquals("bag", process.getStandardBasisUnit());
+        assertEquals("袋", process.getStandardBasisUnit());
         assertTrue(process.isStandardUsageSupported());
     }
 
@@ -607,7 +615,9 @@ class BomSeasoningWorkspaceServiceTest {
 
         var process = response.getProcesses().get(0);
         assertTrue(process.isStandardUsageSupported(), "副产不该让整道工序失去辅料基准");
-        assertEquals("box", process.getStandardBasisUnit(), "基准应取主产出单位, 不受副产 kg 影响");
+        // 输入 port/baseUnit 字面是英文别名 "box" (模拟存量/历史数据), 归一后的规范码
+        // 是「盒」(2026-08-14 定案, 见上一个用例的详细注释)。
+        assertEquals("盒", process.getStandardBasisUnit(), "基准应取主产出单位, 不受副产 kg 影响");
     }
 
     /**
@@ -636,7 +646,8 @@ class BomSeasoningWorkspaceServiceTest {
         var process = response.getProcesses().get(0);
         assertTrue(process.isStandardUsageSupported(),
                 "副产节点不在切片里时也不该毁掉基准(prod 就是这个形态)");
-        assertEquals("box", process.getStandardBasisUnit());
+        // 同上: 输入是英文别名 "box", 规范码是「盒」。
+        assertEquals("盒", process.getStandardBasisUnit());
     }
 
     /** 端口指向副产, 但副产节点**不在** graph.nodes() 里 —— 与 prod 的目标切片一致。 */
