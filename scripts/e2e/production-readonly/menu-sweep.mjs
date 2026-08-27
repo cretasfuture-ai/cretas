@@ -65,6 +65,7 @@ function parseArgs(argv) {
     else if (a === '--base-url') options.baseUrl = argv[++i];
     else if (a === '--evidence-dir') options.evidenceDir = argv[++i];
     else if (a === '--limit') options.limit = Number(argv[++i]);
+    else if (a === '--offset') options.offset = Number(argv[++i]);
     else if (a === '--only') options.only = String(argv[++i] || '');
     else throw new Error(`Unknown argument: ${a}`);
   }
@@ -121,7 +122,12 @@ function classify(entry) {
     return { verdict: 'WRITE_ON_LOAD', reason: `加载时尝试写入 ${entry.blockedMutations.length} 次` };
   }
   if (entry.finalPath.startsWith('/login')) return { verdict: 'KICKED_TO_LOGIN', reason: '被踢回登录页' };
-  if (!entry.appMounted) return { verdict: 'NOT_MOUNTED', reason: `${entry.appMountMs}ms 内应用没挂载` };
+  // ⚠️ NOT_MOUNTED 报出来之前【逐条单独重跑一次再信】。
+  //    2026-08-28 实测: 某一轮连续 5 条生产模块路由全部卡满 30s 报 NOT_MOUNTED,
+  //    而单独打开 /production/plans 【2.2 秒】就挂载完了 —— 是那一轮的浏览器上下文
+  //    在那一段卡住了, 不是产品缺陷。⇒ 同一轮里**连续多条** NOT_MOUNTED 尤其可疑。
+  //    ⛔ 别照单往缺陷清单里抄, 那会一次塞进 5 条幽灵。
+  if (!entry.appMounted) return { verdict: 'NOT_MOUNTED', reason: `${entry.appMountMs}ms 内应用没挂载（⚠️ 单独重跑确认后再当缺陷）` };
   // 🔴 403 必须与「空白」分开。2026-08-27 实测: 首轮把 46 屏报成 BLANK, 逐张看截图才发现
   //    它们是**规规矩矩的 403「访问被拒绝」页** —— f006_admin(factory_super_admin) 访问
   //    平台管理员 / 餐饮租户的路由, 本来就该拒。403 页正文只有 36 字符, 低于长度阈值,
@@ -162,6 +168,9 @@ async function main() {
     return;
   }
   if (args.only) routes = routes.filter((r) => r.path.includes(args.only) || r.title.includes(args.only));
+  // ⚠️ offset 在 limit 【之前】切 —— 分段跑时两段必须不重叠也不留缝。
+  //    全量约 18 分钟, 而后台任务 10 分钟被杀 ⇒ 需要能分段。
+  if (args.offset) routes = routes.slice(args.offset);
   if (args.limit) routes = routes.slice(0, args.limit);
   // 🔴 过滤之后【也】要拦 0 —— 2026-08-27 实测本工具自己踩过:
   //    `--only /workdesk` 在 Git Bash 下被 MSYS 路径转换吃成了 Windows 路径, 匹配到 0 条,
