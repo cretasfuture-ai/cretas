@@ -1062,8 +1062,53 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 factoryId, "INVENTORY_ADJUSTMENT", stocktakeId,
                 buildStocktakeWorkflowContext(stocktake, hasDifference), userId);
         if (instance.isPresent()) {
-            stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
             stocktake.setWorkflowInstanceId(instance.get().getId());
+            // 🔴 2026-08-28: 此前这里**无条件**设 PENDING_APPROVAL, 从不看实例是不是**已经结束了**。
+            //
+            // 审批流允许 start -> condition -> end 这种走法(例如「零差异直接通过」),
+            // 那样实例在**创建的那一刻**就已经是 APPROVED —— 之后**永远不会有人来 transition**。
+            // 而把盘点单同步成 APPROVED 的代码只长在 transitionNode 的处理里,
+            // 于是单据被钉死在 PENDING_APPROVAL: 审不了(OA 没有可操作节点)、
+            // 驳不了(直接驳回接口返 410, 只许走 OA)、也应用不了(需 APPROVED)。
+            //
+            // 生产实测(2026-08-28, F006 ST-202608-6B907387): 55 行零差异,
+            // 实例 APPROVED/currentNodeIds=[], 而盘点单 PENDING_APPROVAL/approvedBy=null,
+            // **没有任何前进路径**。
+            //
+            // ⇒ 实例已进终态就照抄它的结论, ⛔ 不要假设「有实例 == 还要等人审」。
+            ApprovalWorkflowInstance started = instance.get();
+            // ⚠️ status 用 @Builder.Default 给了 RUNNING, 但 Lombok 会把初始化器**搬进 builder
+            //    并从字段上移除** —— 走 `new ApprovalWorkflowInstance()` 时它是 **null**。
+            //    所以下面必须按「只有明确的终态才特殊处理」来写, ⛔ 不能用穷举 else 兜底,
+            //    否则 null 会掉进配置错误那一支, 把一批与本改动无关的用例打红。
+            ApprovalWorkflowInstance.InstanceStatus started_ = started.getStatus();
+            if (started_ == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
+                stocktake.setStatus(FactoryStocktake.Status.APPROVED);
+                stocktake.setApprovedBy(userId);
+                stocktake.setApprovedAt(LocalDateTime.now());
+                // 没有任何人复核过 —— 与「未配审批流直接通过」是同一种性质, 如实记下来。
+                stocktake.setSelfConfirmedZeroDifference(!hasDifference);
+                if (hasDifference) {
+                    // 配置者让有差异的单子免审是他的选择, 但这绕开了双人复核, 必须留下信号。
+                    log.warn("SP12: 盘点存在差异却被审批流在创建时直接通过 —— 该工厂的 "
+                            + "INVENTORY_ADJUSTMENT 流程把有差异的单子也路由到了 end/APPROVED. "
+                            + "stocktakeId={} factoryId={} instanceId={}",
+                            stocktakeId, factoryId, started.getId());
+                }
+            } else if (started_ == ApprovalWorkflowInstance.InstanceStatus.REJECTED) {
+                stocktake.setStatus(FactoryStocktake.Status.REJECTED);
+            } else if (started_ == ApprovalWorkflowInstance.InstanceStatus.CANCELLED
+                    || started_ == ApprovalWorkflowInstance.InstanceStatus.TIMEOUT) {
+                // 在**创建的那一刻**就取消/超时, 只可能是流程配错了。
+                // ⛔ 不要落到 PENDING_APPROVAL —— 那正是本次修复要消灭的那种卡死。
+                throw new BusinessException(409, "库存调整审批流程配置有问题：实例刚创建就进入了 "
+                        + started_ + " 态，盘点无法提交")
+                        .withCode("STOCKTAKE_WORKFLOW_TERMINAL_ON_START")
+                        .withHint("请检查该工厂的库存调整审批流程定义，确认入口路径不会直接走到取消/超时");
+            } else {
+                // RUNNING, 或 status 为 null(见上面 Lombok 那条) —— 都按「还要等人审」处理。
+                stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
+            }
         } else {
             if (hasDifference) {
                 throw new BusinessException(409, "存在数量差异，必须先配置并发布库存调整审批流程")
