@@ -20,10 +20,12 @@ from label_qc.services.v8_pipeline import (
     LabelQcV8Models,
     _GenericLabelTypeDetector,
     _MissingClassFallbackDetector,
+    _ProductionPreservingSupplementDetector,
     _apply_fail_closed_policies,
     _apply_shallow_extended_ownership,
     _label_fallback_input_size,
     _label_fallback_onnx_threads,
+    _label_supplement_classes,
     _validate_label_fallback_input_shape,
 )
 
@@ -248,6 +250,64 @@ def test_fallback_detector_keeps_both_present_labels_on_fast_path() -> None:
     assert {label.class_id for label in labels} == {0, 1}
     assert fallback.calls == 0
     assert detector.stats()["fallbackCalls"] == 0
+
+
+def test_production_preserving_supplement_admits_only_best_owned_missing_class() -> None:
+    from label_qc.services.yolo_detector import Detection
+
+    class _Detector:
+        def __init__(self, rows):
+            self.rows = rows
+            self.calls = 0
+
+        def detect(self, _image, _conf):
+            self.calls += 1
+            return list(self.rows)
+
+    primary = _Detector([
+        Detection(20, 20, 50, 50, 0.8, 0),
+    ])
+    supplement = _Detector([
+        Detection(30, 30, 60, 60, 0.70, 1),
+        Detection(35, 35, 65, 65, 0.90, 1),
+        Detection(0, 0, 10, 10, 0.99, 1),
+        Detection(40, 40, 70, 70, 0.99, 0),
+    ])
+    detector = _ProductionPreservingSupplementDetector(primary, supplement)
+
+    rows = detector.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.20)
+
+    assert [(row.class_id, row.confidence) for row in rows] == [(0, 0.8), (1, 0.90)]
+    assert detector.stats()["admitted"] == {"whiteLabel": 0, "colorLabel": 1}
+
+
+def test_production_preserving_supplement_skips_when_owned_classes_exist() -> None:
+    rows = [SimpleNamespace(class_id=0, x0=20, y0=20, x1=40, y1=40),
+            SimpleNamespace(class_id=1, x0=50, y0=50, x1=70, y1=70)]
+    primary = SimpleNamespace(detect=lambda _image, _conf: rows)
+    supplement = SimpleNamespace(detect=lambda *_args: pytest.fail("must not run"))
+    detector = _ProductionPreservingSupplementDetector(primary, supplement)
+
+    assert detector.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.20) == rows
+
+
+def test_color_only_supplement_requires_production_white_evidence() -> None:
+    supplement = SimpleNamespace(detect=lambda *_args: pytest.fail("must not run"))
+    detector = _ProductionPreservingSupplementDetector(
+        SimpleNamespace(detect=lambda *_args: []), supplement, allowed_classes=(1,),
+    )
+
+    assert detector.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.20) == []
+
+
+def test_bundle_binds_explicit_supplement_classes() -> None:
+    assert _label_supplement_classes({"labelSupplementClasses": [1]}) == frozenset({1})
+
+
+@pytest.mark.parametrize("value", [None, [], [2], [1, 1], [True], "1"])
+def test_invalid_supplement_classes_fail_closed(value: object) -> None:
+    with pytest.raises(RuntimeError, match="invalid v8 label supplement classes"):
+        _label_supplement_classes({"labelSupplementClasses": value})
 
 
 def test_legacy_bundle_keeps_existing_fallback_resolution() -> None:

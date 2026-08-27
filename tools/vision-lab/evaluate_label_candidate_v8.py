@@ -85,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--max-p95-ms", type=float, default=8000.0)
     parser.add_argument("--max-latency-regression", type=float, default=0.15)
+    parser.add_argument(
+        "--production-preserving-supplement", action="store_true",
+        help="Keep production label.onnx authoritative and bind the candidate as a missing-class-only supplement.",
+    )
     return parser
 
 
@@ -122,10 +126,19 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="label-qc-v8-label-candidate-") as temporary:
         candidate_bundle = Path(temporary) / "bundle"
         shutil.copytree(runtime_bundle, candidate_bundle)
-        shutil.copy2(candidate_artifact, candidate_bundle / "label.onnx")
         candidate_manifest = copy.deepcopy(runtime_manifest_payload)
         candidate_manifest["modelId"] = str(candidate_receipt["model_id"])
-        candidate_manifest["models"]["production_label"]["sha256"] = diagnostics.sha256_file(candidate_artifact)
+        if args.production_preserving_supplement:
+            shutil.copy2(candidate_artifact, candidate_bundle / "label-supplement.onnx")
+            candidate_manifest["models"]["label_supplement"] = {
+                "file": "label-supplement.onnx",
+                "sha256": diagnostics.sha256_file(candidate_artifact),
+            }
+            candidate_manifest["labelSupplementConfidence"] = 0.30
+            candidate_manifest["labelSupplementClasses"] = [1]
+        else:
+            shutil.copy2(candidate_artifact, candidate_bundle / "label.onnx")
+            candidate_manifest["models"]["production_label"]["sha256"] = diagnostics.sha256_file(candidate_artifact)
         write_json(candidate_bundle / v8_pipeline.MANIFEST_FILE, candidate_manifest)
 
         production_runtime = v8_pipeline.LabelQcV8Models(runtime_bundle)
@@ -169,6 +182,10 @@ def main() -> None:
             "runtime_bundle": str(runtime_bundle),
             "runtime_manifest_sha256": diagnostics.sha256_file(runtime_manifest),
             "records_before_truth_adjudication": records_before_truth,
+            "candidate_strategy": (
+                "production-preserving-missing-class-supplement-v1"
+                if args.production_preserving_supplement else "full-label-replacement"
+            ),
         },
         "human_audit": human_audit,
         "baseline": baseline,
