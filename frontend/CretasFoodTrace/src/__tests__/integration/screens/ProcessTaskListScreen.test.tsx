@@ -24,6 +24,9 @@ jest.mock('../../../services/api/processTaskApiClient', () => ({
   processTaskApiClient: {
     getActiveTasks: jest.fn(),
     getTasks: jest.fn(),
+    // 筛选档计数。⚠️ 桩里漏掉它, 屏幕调到的是 undefined —— 与上面 processCheckin
+    // 那条注释同一个坑。计数的三态由 processTaskListCounts.test.tsx 专门守。
+    getTaskCounts: jest.fn(),
     getTaskById: jest.fn(),
     getTaskSummary: jest.fn(),
     getRunOverview: jest.fn(),
@@ -468,6 +471,111 @@ describe('ProcessTaskListScreen', () => {
       expect(screen.getByTestId('process-task-progress-task-noplan')).toBeTruthy();
       expect(screen.getByText('25%')).toBeTruthy();
       expect(screen.queryByTestId('process-task-planned-unset-task-noplan')).toBeNull();
+    });
+  });
+
+  // ========== RN-SCR-13: 计划日期 / 责任人 / 超期 —— 必须【渲染到屏上】 ==========
+  //
+  // 背景: 这三样后端 DTO 一直都有, 而 RN 映射层把它们整个丢掉了(投影丢失)。
+  // 「超期」徽章更彻底: 屏幕代码写着 `(item as any).overdue`, 而这个字段
+  //  后端 DTO / 传输类型 / 视图类型 / 映射 四层都不存在 ⇒ 从来没渲染过一次。
+  //  那个 `as any` 正是它能编译通过却永不生效的原因。
+  //
+  // ⇒ 验收判据是【屏上有】, 不是「映射里有这个字段」。断言全部钉在元素上。
+  describe('RN-SCR-13: 计划日期 / 责任人 / 超期徽章渲染', () => {
+    const baseTask = {
+      id: 'task-plan',
+      factoryId: 'F001',
+      productTypeId: 'PT-009',
+      productTypeName: '卤猪蹄',
+      workProcessId: 'WP-009',
+      processName: '卤制',
+      processCategory: '热加工',
+      unit: 'kg',
+      plannedQuantity: 200,
+      completedQuantity: 50,
+      pendingQuantity: 0,
+      status: 'IN_PROGRESS' as const,
+    };
+
+    const renderWith = async (extra: Record<string, unknown>) => {
+      mockedProcessTaskApi.getActiveTasks.mockResolvedValue({
+        success: true,
+        data: [{ ...baseTask, ...extra }] as never,
+      });
+      render(<ProcessTaskListScreen />);
+      await waitFor(() => {
+        expect(screen.getByText('卤制')).toBeTruthy();
+      });
+    };
+
+    it('计划完成日渲染出来 (车间主管靠它答「今天要做什么」)', async () => {
+      await renderWith({ plannedEndAt: '2026-08-26 17:30:00' });
+
+      const el = screen.getByTestId('process-task-planned-end-task-plan');
+      expect(el).toBeTruthy();
+      // 内容也要对 —— 「元素在」不等于「显示的是那个日期」
+      expect(el.props.children).toBe('08/26 17:30');
+      expect(screen.queryByTestId('process-task-planned-end-unset-task-plan')).toBeNull();
+    });
+
+    it('计划开始时间渲染出来', async () => {
+      await renderWith({ plannedStartAt: '2026-08-26 08:00:00' });
+
+      expect(screen.getByTestId('process-task-planned-start-task-plan')).toBeTruthy();
+      expect(screen.getByText('计划开始 08/26 08:00')).toBeTruthy();
+    });
+
+    it('阴性对照: 没设计划日期时显示「未排期」, ⛔ 不编一个日期出来', async () => {
+      await renderWith({});
+
+      expect(screen.getByTestId('process-task-planned-end-unset-task-plan')).toBeTruthy();
+      expect(screen.getByText('未排期')).toBeTruthy();
+      // 那一格【根本不该渲染日期节点】—— 阴性对照钉在同一个锚点上
+      expect(screen.queryByTestId('process-task-planned-end-task-plan')).toBeNull();
+      expect(screen.queryByTestId('process-task-planned-start-task-plan')).toBeNull();
+    });
+
+    it('责任人姓名渲染出来', async () => {
+      await renderWith({ assignedToName: '徐师傅' });
+
+      expect(screen.getByTestId('process-task-assignee-task-plan')).toBeTruthy();
+      expect(screen.getByText('徐师傅')).toBeTruthy();
+      expect(screen.queryByTestId('process-task-assignee-unset-task-plan')).toBeNull();
+    });
+
+    it('阴性对照: 未分配时显示「未分配」', async () => {
+      await renderWith({});
+
+      expect(screen.getByTestId('process-task-assignee-unset-task-plan')).toBeTruthy();
+      expect(screen.getByText('未分配')).toBeTruthy();
+      expect(screen.queryByTestId('process-task-assignee-task-plan')).toBeNull();
+    });
+
+    it('🔴 overdue=true ⇒ 超期徽章渲染出来 (它此前一次都没出现过)', async () => {
+      await renderWith({ plannedEndAt: '2026-08-20 17:30:00', overdue: true });
+
+      expect(screen.getByTestId('process-task-overdue-badge-task-plan')).toBeTruthy();
+      expect(screen.getByText('超期')).toBeTruthy();
+    });
+
+    it('阴性对照: overdue=false ⇒ 没有徽章', async () => {
+      await renderWith({ plannedEndAt: '2026-09-30 17:30:00', overdue: false });
+
+      expect(screen.queryByTestId('process-task-overdue-badge-task-plan')).toBeNull();
+      expect(screen.queryByText('超期')).toBeNull();
+      // 但计划完成日照常显示 —— 证明这条阴性对照不是「整张卡都没渲染」造出来的
+      expect(screen.getByTestId('process-task-planned-end-task-plan')).toBeTruthy();
+    });
+
+    it('🔴 三态: overdue 缺失(后端判不了) ⇒ 没有徽章, 且那一栏说「未排期」而不是一个日期', async () => {
+      await renderWith({});
+
+      expect(screen.queryByTestId('process-task-overdue-badge-task-plan')).toBeNull();
+      // 「判不了」和「不超期」在屏上是分得开的: 前者那一栏是「未排期」。
+      // 如果哪天有人在映射层加了 `?? false`, 徽章这条断言不会红(false 本来就不挂徽章),
+      // 是上面 processTaskApiClient.taskProjection 那条会红 —— 两条一起才守得住三态。
+      expect(screen.getByTestId('process-task-planned-end-unset-task-plan')).toBeTruthy();
     });
   });
 

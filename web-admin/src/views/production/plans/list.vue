@@ -1804,6 +1804,9 @@ interface SettlementWipConsumptionForm {
 
 interface SettlementCompleteForm {
   actualQuantity: number;
+  /** 不良品清点结论三态: COUNTED / NONE_CONFIRMED / NOT_COUNTED。空串=尚未回答。 */
+  defectCountOutcome: '' | 'COUNTED' | 'NONE_CONFIRMED' | 'NOT_COUNTED';
+  defectQuantity: number;
   semiFinishedOutputQuantity: number;
   rawMaterialConsumptions: SettlementRawConsumptionForm[];
   semiFinishedConsumptions: SettlementWipConsumptionForm[];
@@ -2002,6 +2005,8 @@ function goConfigBomFromSettlement() {
 }
 const completeForm = ref<SettlementCompleteForm>({
   actualQuantity: 0,
+  defectCountOutcome: '',
+  defectQuantity: 0,
   semiFinishedOutputQuantity: 0,
   rawMaterialConsumptions: [],
   semiFinishedConsumptions: [],
@@ -2409,6 +2414,10 @@ async function handleComplete(row: TableRow) {
   // 默认填充计划数量, 便于一键提交; 用户可改
   completeForm.value = {
     actualQuantity: Number(row.plannedQuantity || 0),
+    // ⛔ 默认【空】而不是 NOT_COUNTED —— 空表示「还没被问」, 选 NOT_COUNTED 是人主动
+    //    答的「没清点」。两者在台账上是不同的责任, 不许由默认值代答。
+    defectCountOutcome: '',
+    defectQuantity: 0,
     semiFinishedOutputQuantity: 0,
     rawMaterialConsumptions: [],
     semiFinishedConsumptions: [],
@@ -2471,6 +2480,10 @@ async function submitComplete() {
           idempotencyKey: settlementIdempotencyKey.value,
           confirm: false,
           actualFinishedQuantity: completeActualQuantity.value,
+          defectCountOutcome: completeForm.value.defectCountOutcome || null,
+          defectQuantity: completeForm.value.defectCountOutcome === 'COUNTED'
+            ? Number(completeForm.value.defectQuantity || 0)
+            : null,
           actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
           quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
           quantityVarianceReason: completeForm.value.varianceReason === '其他'
@@ -5427,6 +5440,29 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             :rows="2"
             placeholder="请说明实际产量超过计划的现场原因"
           />
+        </el-form-item>
+        <!-- 不良品清点 —— 三态, 不是一个可以留空也可以填 0 的数字。
+             2026-08-26 实测: 72 张报工单零填写, 旧代码兜底填 0,
+             于是 8 个已完工批次全部声称 100% 良品, 而其中 4 个的质检明确记了不合格。
+             「已清点确认零」和「没清点」必须分开, 否则那个 0 又会被当成真实读数。 -->
+        <el-form-item label="不良品">
+          <el-radio-group v-model="completeForm.defectCountOutcome">
+            <el-radio label="COUNTED">有不良品</el-radio>
+            <el-radio label="NONE_CONFIRMED">已清点，无不良品</el-radio>
+            <el-radio label="NOT_COUNTED">未清点</el-radio>
+          </el-radio-group>
+          <el-input-number
+            v-if="completeForm.defectCountOutcome === 'COUNTED'"
+            v-model="completeForm.defectQuantity"
+            :min="0"
+            :precision="2"
+            style="width: 100%; margin-top: 8px"
+            placeholder="不良品数量"
+          />
+          <div class="settlement-help">
+            留空不影响提交，但这批会被标记为「未清点不良品」，盘点时需要补录。
+            ⛔ 请不要用「已清点，无不良品」代替「未清点」—— 前者会被当成真实读数计入良品率。
+          </div>
         </el-form-item>
         <el-form-item label="半成品产量">
           <el-input-number

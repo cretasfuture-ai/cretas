@@ -156,6 +156,106 @@ class WorkProcessTaskServiceImplTest {
         assertNull(dto.getStandardYieldMax());
     }
 
+    // ==================== overdue 三态透传测试 ====================
+    //
+    // 这三条跑在【产品真实入口】(service.getById) 上, 不是直接调纯函数。
+    // 纯函数的判据在 WorkProcessTaskOverdueTest 里守; 这里守的是【接上没有】——
+    // 判据写得再对, toDTO 不填这个字段, 屏幕上照样什么都没有。
+
+    @Test
+    @DisplayName("getById: 计划完成日已过且活没干完 → DTO.overdue = true")
+    void getById_exposesOverdueTrue() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID)
+                .factoryId(FACTORY_ID)
+                .workProcessId(WP_ID)
+                .status(WorkProcessTask.Status.IN_PROGRESS)
+                // 钉在一个铁定的过去 —— 与「今天」是哪天无关, 不靠跑测试的时刻碰运气
+                .plannedEndAt(java.time.LocalDateTime.of(2020, 1, 1, 0, 0))
+                .build();
+
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+                .thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                .thenReturn(Optional.empty());
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertEquals(Boolean.TRUE, dto.getOverdue());
+        // 同时确认计划日期本身也透出来了 —— 它俩在卡片上是一起用的
+        assertEquals(java.time.LocalDateTime.of(2020, 1, 1, 0, 0), dto.getPlannedEndAt());
+    }
+
+    @Test
+    @DisplayName("🔴 getById: 没设 plannedEndAt → DTO.overdue = null(判不了), ⛔ 不是 false")
+    void getById_overdueIsNullWhenNoPlannedEnd() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID)
+                .factoryId(FACTORY_ID)
+                .workProcessId(WP_ID)
+                .status(WorkProcessTask.Status.PENDING)
+                .build();  // plannedEndAt 不设 —— 后端真实那侧允许 NULL
+
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+                .thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                .thenReturn(Optional.empty());
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertNull(dto.getOverdue(), "没排期被答成了一个确定的判断");
+        assertNotEquals(Boolean.FALSE, dto.getOverdue());
+        assertNull(dto.getPlannedEndAt());
+    }
+
+    @Test
+    @DisplayName("getById: 将来到期 → DTO.overdue = false (阴性对照, 证明上一条不是恒 null)")
+    void getById_overdueIsFalseForFutureDeadline() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID)
+                .factoryId(FACTORY_ID)
+                .workProcessId(WP_ID)
+                .status(WorkProcessTask.Status.PENDING)
+                .plannedEndAt(java.time.LocalDateTime.of(2099, 12, 31, 23, 59))
+                .build();
+
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+                .thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                .thenReturn(Optional.empty());
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertEquals(Boolean.FALSE, dto.getOverdue());
+    }
+
+    @Test
+    @DisplayName("getById: 责任人姓名与计划开始时间也透出 (本次一起补的投影)")
+    void getById_exposesAssigneeAndPlannedStart() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID)
+                .factoryId(FACTORY_ID)
+                .workProcessId(WP_ID)
+                .status(WorkProcessTask.Status.PENDING)
+                .assignedTo(42L)
+                .plannedStartAt(java.time.LocalDateTime.of(2026, 8, 26, 8, 0))
+                .build();
+
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID))
+                .thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID))
+                .thenReturn(Optional.empty());
+        User assignee = new User();
+        assignee.setId(42L);
+        assignee.setFullName("徐师傅");
+        when(userRepository.findByIdIn(List.of(42L))).thenReturn(List.of(assignee));
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertEquals("徐师傅", dto.getAssignedToName());
+        assertEquals(java.time.LocalDateTime.of(2026, 8, 26, 8, 0), dto.getPlannedStartAt());
+    }
+
     // ==================== expectedByproducts 透传测试 ====================
 
     @Test

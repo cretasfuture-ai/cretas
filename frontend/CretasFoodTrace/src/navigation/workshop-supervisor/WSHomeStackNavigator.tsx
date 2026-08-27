@@ -49,13 +49,40 @@ import ProcessOperationScreen from "../../screens/processing/ProcessOperationScr
  * 它本来就已经写进 WSHomeStackParamList 了，说明当初就打算给这个角色用，只是漏了注册。
  */
 import ProductionPlanManagementScreen from "../../screens/processing/ProductionPlanManagementScreen";
+/*
+ * 2026-08-26 补登记：审批屏本身是完整的（通过 / 驳回 / 批量 / 五个驳回原因），
+ * 但此前**只注册在 FAManagementStackNavigator（工厂管理员树）**上。
+ * 车间主管在 AppNavigator 里是 early return，到不了那棵树 ——
+ * 于是 ProcessTaskListScreen 顶栏那个审批图标点了**没有任何反应**。
+ * 审批本来就是主管的日常动作（后端 approve 端点要 production:read_write，
+ * 而 permissionHelper 里 workshop_supervisor 正是 read_write）。
+ */
+import ProcessTaskApprovalScreen from "../../screens/processing/ProcessTaskApprovalScreen";
 
 const Stack = createNativeStackNavigator<WSHomeStackParamList>();
 
 export function WSHomeStackNavigator() {
   return (
     <Stack.Navigator
-      initialRouteName="ProcessTaskList"
+      /*
+       * 2026-08-26：落地屏从 ProcessTaskList 换成 WSHome。
+       *
+       * 原来车间主管打开 App 直接落在「工序任务」—— 一个**答不了他问题**的屏：
+       * 卡片没有日期、筛选只有三个状态、第一个弹窗写的还是给工人看的
+       * 「提交后等待主管审批」（而看的人就是主管）。
+       *
+       * WSHome 一直存在（1107 行、调真接口、15 个导航目标全部可达），
+       * 只是**从来不是初始路由** ⇒ 它连带的通知收件箱、快捷操作宫格、
+       * AI 对话、新手引导**全部到不了**；WSProfileScreen 那个写着「去首页」的按钮
+       * 跳 WSHomeTab 之后，也是被这一行送回工序任务。
+       *
+       * ⚠️ 这一行的来历查不到 —— 它来自 4f8f09c051「Initial company baseline」
+       * (2026-08-23 仓库压平重建)，原始意图连同历史一起没了。
+       * 仓管角色已经做过同样的收敛并用测试钉住 (warehouseNavSimplification.test.ts)。
+       *
+       * ProcessTaskList 仍在本栈注册，WSHome 上有入口，主管照样一步到达。
+       */
+      initialRouteName="WSHome"
       screenOptions={{
         headerShown: false,
       }}
@@ -121,6 +148,7 @@ export function WSHomeStackNavigator() {
       <Stack.Screen name="NfcCheckin" component={NfcCheckinScreen} options={{ title: "扫码签到" }} />
       <Stack.Screen name="MyWorkReports" component={MyWorkReportsScreen} options={{ title: "我的报工" }} />
       <Stack.Screen name="ProcessTaskList" component={ProcessTaskListScreen} options={{ title: "工序任务" }} />
+      <Stack.Screen name="ProcessTaskApproval" component={ProcessTaskApprovalScreen} options={{ title: "报工审批" }} />
       <Stack.Screen name="ProcessTaskDetail" component={ProcessTaskDetailScreen} options={{ title: "任务详情" }} />
       <Stack.Screen name="ProcessRunOverview" component={ProcessRunOverviewScreen} options={{ title: "生产单总览" }} />
       <Stack.Screen name="YieldBatchSelect" component={YieldBatchSelectScreen} options={{ title: "逐道报工" }} />

@@ -132,7 +132,9 @@ class ProductionPlanSalesBatchDateTest {
         assertThat(captured.get().getSourceDisplayUnit()).isEqualTo("box");
         assertThat(result.getBatchDate()).isEqualTo(BATCH_DATE);
         assertThat(result.getPlannedDate()).isEqualTo(PLANNED_DATE);
-        assertThat(result.getSourceDisplayUnit()).isEqualTo("box");
+        // The request above still carries the canonical code (asserted a few lines up);
+        // the DTO is the user-facing exit and shows the Chinese name for it.
+        assertThat(result.getSourceDisplayUnit()).isEqualTo("盒");
         assertPins(result);
     }
 

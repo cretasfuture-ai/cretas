@@ -1,5 +1,6 @@
 package com.cretas.aims.service.factory.impl;
 
+import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
@@ -90,6 +91,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
      * 未小结的报工消耗 (报工写未结 MaterialConsumption 但不扣 usedQuantity, 小结才扣)。
      */
     private final MaterialConsumptionRepository materialConsumptionRepo;
+    /** 盘点补录待办要读结单时的三态结论 (2026-08-27)。 */
+    private final ProductionSettlementRepository productionSettlementRepository;
 
     @Autowired(required = false)
     private UserRepository userRepository;
@@ -279,6 +282,27 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     }
 
     @Override
+    public List<Map<String, Object>> listPendingDefectCounts(String factoryId) {
+        return productionSettlementRepository.findPendingDefectCounts(factoryId).stream()
+                .map(st -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("settlementId", st.getId());
+                    row.put("productionPlanId", st.getProductionPlanId());
+                    row.put("planNumber", st.getPlanNumber());
+                    row.put("settledAt", st.getSettledAt());
+                    row.put("actualFinishedQuantity", st.getActualFinishedQuantity());
+                    row.put("quantityUnit", st.getQuantityUnit());
+                    // ⛔ 两种「没回答」必须分得开: 存量从没被问过 vs 人主动答了没清点。
+                    //    合并会让「流程当时没有这一问」和「有人选择不清点」变得不可分,
+                    //    而后者是可以追责的, 前者不是。
+                    row.put("reason", st.getDefectCountOutcome() == null
+                            ? "NEVER_ASKED" : "NOT_COUNTED");
+                    return row;
+                })
+                .toList();
+    }
+
+    
     public Map<String, Object> getInitiateConstraint() {
         LocalDate today = LocalDate.now();
         boolean canInitiateToday = today.getDayOfMonth() >= monthEndThreshold;

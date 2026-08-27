@@ -44,6 +44,26 @@ public class WorkProcessTaskDTO {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime plannedEndAt;
 
+    /**
+     * 这道工序超期没有 —— <b>三态</b>，不是布尔。
+     *
+     * <table border="1">
+     *   <caption>三个值各自的意思</caption>
+     *   <tr><th>值</th><th>含义</th></tr>
+     *   <tr><td>{@code true}</td><td>还没干完，而计划完成日已经过去了</td></tr>
+     *   <tr><td>{@code false}</td><td>判过了，没超期（含已完成/已跳过/已取消 —— 活结束了）</td></tr>
+     *   <tr><td>{@code null}</td><td><b>判不了</b>：这道工序没设 {@code plannedEndAt}</td></tr>
+     * </table>
+     *
+     * <p>⛔ {@code null} 不许在任何一层兜底成 {@code false}。「没设计划完成日」
+     * 和「按期」是两件完全不同的事：前者是主管<b>还没排产</b>，后者是<b>排了且没拖</b>。
+     * 兜底会把一屏「没排期」的工序画成一屏「一切正常」，那不是显示错误，是编了一个结论。
+     *
+     * <p>判据来自 {@link com.cretas.aims.enums.DeliveryWarnLevel}，与 AI 的交货预警
+     * （「哪些订单要超期了」）是<b>同一份</b>，⛔ 不是这里重新判的。
+     */
+    private Boolean overdue;
+
     private Integer estimatedMinutes;
 
     private BigDecimal actualQuantity;

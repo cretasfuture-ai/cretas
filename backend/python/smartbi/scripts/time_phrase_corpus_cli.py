@@ -43,7 +43,7 @@ def format_counts_line(domain: str, counts: Dict[str, int]) -> str:
     """`--counts` 的输出契约。
 
     🔴 裁定 B(形态 D): `scripts/cron/time-phrase-backlog-daily.sh` 用
-    `grep -oP 'total=\\K[0-9]+'` / `grep -oP 'unpromoted=\\K[0-9]+'` 解析
+    `grep -o 'total=[0-9][0-9]*' | cut -d= -f2`(unpromoted 同形)解析
     这一行的输出。改这里的格式(哪怕只是 `total=` 改成 `total:`)必须同时
     改那两条 grep 模式 —— `tests/test_time_phrase_backlog_gate.py` 直接从
     `.sh` 文件里读出这两条模式来解析这个函数的输出, 一份断言钉两边,

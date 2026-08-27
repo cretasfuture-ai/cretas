@@ -21,8 +21,12 @@ import { disposalRecordApiClient, DisposalRecord, CreateDisposalRequest } from '
 import { useAuthStore } from '../../store/authStore';
 import { getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { PermissionGatedAction } from '../../components/permission/PermissionGatedAction';
 
 const disposalLogger = logger.createContextLogger('DisposalManagement');
+
+/** 「这项归谁」——⛔ 不要退回「无权限」, 那没告诉用户任何事。 */
+export const DISPOSAL_APPROVE_REASON = '报废审批归工厂超管，你可以填写和提交，审批要请超管来做。';
 
 /**
  * 报废记录管理页面
@@ -371,6 +375,7 @@ export default function DisposalRecordManagementScreen() {
                   {!disposal.isApproved && (
                     <>
                       <Button
+                        testID={`disposal-edit-btn-${disposal.id}`}
                         mode="outlined"
                         icon="pencil"
                         onPress={() => handleEdit(disposal)}
@@ -379,17 +384,24 @@ export default function DisposalRecordManagementScreen() {
                       >
                         编辑
                       </Button>
-                      {canApprove && (
+                      {/* 无审批权时置灰而不是隐藏 —— 部门管理员能进这个屏、能编辑,
+                          唯独审批不归他。隐藏会让他以为「这单没有审批这一步」。 */}
+                      <PermissionGatedAction
+                        granted={canApprove}
+                        reason={DISPOSAL_APPROVE_REASON}
+                        style={styles.actionButton}
+                        testID={`disposal-approve-gate-${disposal.id}`}
+                      >
                         <Button
+                          testID={`disposal-approve-btn-${disposal.id}`}
                           mode="contained"
                           icon="check"
                           onPress={() => handleApprove(disposal.id)}
-                          style={styles.actionButton}
                           compact
                         >
                           审批
                         </Button>
-                      )}
+                      </PermissionGatedAction>
                       <Button
                         mode="outlined"
                         icon="delete"

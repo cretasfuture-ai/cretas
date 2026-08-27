@@ -1,5 +1,6 @@
 package com.cretas.aims.entity;
 
+import com.cretas.aims.entity.enums.DefectCountOutcome;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -78,6 +79,21 @@ public class ProductionSettlement extends BaseEntity {
 
     @Column(name = "material_variance_note", columnDefinition = "TEXT")
     private String materialVarianceNote;
+
+    /**
+     * 不良品清点结论（三态）。<b>NULL = 存量行 / 旧客户端</b>，等同 NOT_COUNTED，
+     * ⛔ 不回填成 0 —— 那些结单确实没有被问过这个问题。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "defect_count_outcome", length = 24)
+    private DefectCountOutcome defectCountOutcome;
+
+    /**
+     * 不良品数量。仅 {@link DefectCountOutcome#COUNTED} 时 &gt; 0；
+     * {@code NONE_CONFIRMED} 时为 0；{@code NOT_COUNTED} / NULL 时必须为 {@code null}。
+     */
+    @Column(name = "defect_quantity", precision = 12, scale = 2)
+    private BigDecimal defectQuantity;
 
     @Column(name = "labor_deferred_reason", length = 64)
     private String laborDeferredReason;

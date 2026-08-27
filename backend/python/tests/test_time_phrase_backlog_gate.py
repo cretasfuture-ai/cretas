@@ -206,46 +206,52 @@ def test_help_contains_the_required_disclaimer():
 # 由同一条断言钉住 —— 不许两边各写各的期待值。
 # ══════════════════════════════════════════════════════════════════
 
-def _apply_k_pattern(pcre_pattern: str, text: str) -> str:
-    """`grep -oP 'PREFIX\\K[0-9]+'` 的等价物 —— 这个仓库里对应的写法只有
-    这一种形状(`\\K` 之前是字面前缀, 之后是要取的数字类), 所以不做通用 PCRE
+def _apply_grep_o_then_cut(bre_pattern: str, text: str) -> str:
+    """`grep -o 'PREFIX=[0-9][0-9]*' | cut -d= -f2` 的等价物 —— 这个仓库里
+    对应的写法只有这一种形状(字面前缀 + `=` + 数字类), 所以不做通用 BRE
     翻译器, 只覆盖这一种。
 
     ⚠️ 2026-08-16 实测: `subprocess.run(["grep", "-oP", ...])` 在这台 Windows
     开发机上通过 argv 列表(非 shell)调用时, PCRE 模式**静默不匹配**
-    (rc=1, 无报错) —— 同一个模式经 `shell=True`/在 git-bash 里直接跑却正常;
-    这是 MSYS grep.exe 在原生 Win32 匿名管道下的已知怪癖, 不是本仓代码的
-    问题。⇒ 改用纯 Python 翻译, 两个平台(Windows 开发机 / Linux CI)行为
-    一致, 且仍然**从 .sh 源码里读出模式**, 不在测试里另写一份数字契约。
+    (rc=1, 无报错)。⇒ 改用纯 Python 翻译, 且仍然**从 .sh 源码里读出模式**,
+    不在测试里另写一份数字契约。
+
+    🔴 2026-08-27 第二次同族: `.sh` 那两条从 `grep -oP ... \\K` 换成了
+    `grep -o ... | cut -d= -f2` —— **BSD grep 不支持 -P**, 而自建 CI runner
+    是 macOS, 脚本整段跑不起来(`grep: invalid option -- P` -> exit 2)。
+    ⇒ 本 helper 跟着换形状, 契约仍然只有一份(从 .sh 读)。
     """
-    assert r"\K" in pcre_pattern, f"仅支持含 \\K 的模式: {pcre_pattern!r}"
-    prefix, tail = pcre_pattern.split(r"\K", 1)
-    match = re.search(f"(?<={re.escape(prefix)}){tail}", text)
-    return match.group(0) if match else ""
+    assert "=" in bre_pattern, f"预期 `PREFIX=数字类` 形状: {bre_pattern!r}"
+    # BRE 的 `[0-9][0-9]*` 与 Python 的 `[0-9]+` 等价; 其余部分是字面前缀。
+    py_pattern = bre_pattern.replace("[0-9][0-9]*", "[0-9]+")
+    match = re.search(py_pattern, text)
+    if not match:
+        return ""
+    return match.group(0).split("=", 1)[1]      # ← `cut -d= -f2`
 
 
 def test_counts_output_is_parseable_by_the_cron_scripts_own_grep_patterns():
     """M3 变异靶子: 把 `format_counts_line` 的 `total=` 改成 `total:`
-    ⇒ 本测试预期红(模式解不出数字, `_apply_k_pattern(...)` 返回空串)。
+    ⇒ 本测试预期红(模式解不出数字, `_apply_grep_o_then_cut(...)` 返回空串)。
 
     模式**从 `.sh` 源码里读出来**, ⛔ 不在测试里另写一份 'total=(\\d+)' —— 那样
     脚本改了 grep 写法, 这条测试完全不会跟着变, 起不到钉住契约的作用。
     """
     sh_text = CRON_SCRIPT.read_text(encoding="utf-8")
-    patterns = re.findall(r"grep -oP '([^']+)'", sh_text)
-    assert len(patterns) == 2, f"预期两条 grep -oP 模式(total / unpromoted): {patterns}"
+    patterns = re.findall(r"grep -o '([^']+)'", sh_text)
+    assert len(patterns) == 2, f"预期两条 grep -o 模式(total / unpromoted): {patterns}"
     total_pattern, unpromoted_pattern = patterns
     assert "total" in total_pattern and "unpromoted" in unpromoted_pattern, patterns
 
     line = format_counts_line("restaurant", {"total": 7, "unpromoted": 3})
 
-    assert _apply_k_pattern(total_pattern, line) == "7", line
-    assert _apply_k_pattern(unpromoted_pattern, line) == "3", line
+    assert _apply_grep_o_then_cut(total_pattern, line) == "7", line
+    assert _apply_grep_o_then_cut(unpromoted_pattern, line) == "3", line
 
     # 阴性对照: 换一组不同的数字, 解出来也要跟着变 —— 防止巧合命中恒真。
     line2 = format_counts_line("restaurant", {"total": 105, "unpromoted": 0})
-    assert _apply_k_pattern(total_pattern, line2) == "105", line2
-    assert _apply_k_pattern(unpromoted_pattern, line2) == "0", line2
+    assert _apply_grep_o_then_cut(total_pattern, line2) == "105", line2
+    assert _apply_grep_o_then_cut(unpromoted_pattern, line2) == "0", line2
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -276,7 +282,7 @@ def main():
     unpromoted = os.environ.get("STUB_UNPROMOTED", "0")
     if os.environ.get("STUB_MULTILINE_TOTAL"):
         # M2 变异靶子: 往 stderr 里塞一条**也含** `total=` 的诊断行。跑批脚本
-        # 用 `OUT=$(... 2>&1)` 合并 stdout/stderr, 于是 grep -oP 会命中两行,
+        # 用 `OUT=$(... 2>&1)` 合并 stdout/stderr, 于是 grep -o 会命中两行,
         # `$total` 变成一个内嵌换行的多行字符串, 不是空串。
         print("retry-log: total=999 (stale, ignored)", file=sys.stderr)
     print(f"domain=restaurant total={total} unpromoted={unpromoted}")
@@ -374,7 +380,7 @@ def test_state_instrument_dead_on_unparseable_output(tmp_path):
 
 def test_state_instrument_dead_on_multiline_total(tmp_path):
     """态③没量到, M2 的场景: `OUT=$(... 2>&1)` 把 stdout/stderr 合并, 任何一行
-    stderr 诊断文本只要含 `total=` 子串, `grep -oP 'total=\\K[0-9]+'` 就会
+    stderr 诊断文本只要含 `total=` 子串, `grep -o 'total=[0-9][0-9]*'` 就会
     命中两行, `$total` 变成一个内嵌换行的多行字符串 —— 既不是空串(旧版
     `-z` 判据放过它), 也不是纯数字。
 

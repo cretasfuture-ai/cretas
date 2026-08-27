@@ -27,12 +27,19 @@ if [ "$rc" -ne 0 ]; then
     exit 2
 fi
 
-total=$(echo "$OUT" | grep -oP 'total=\K[0-9]+')
-unpromoted=$(echo "$OUT" | grep -oP 'unpromoted=\K[0-9]+')
+# ⚠️ 2026-08-27: 原本写的是 `grep -oP 'total=\K[0-9]+'`。**BSD grep 不支持 -P**
+#    —— macOS 上直接 `grep: invalid option -- P`, 脚本整段跑不起来并 exit 2。
+#    自建 CI runner 就是 macOS(加拿大 Mac mini), 实测 8 条契约测试当场红。
+#    GNU 与 BSD 都支持的只有 `-o`, 所以用「整段匹配 prefix=数字, 再 cut 掉 prefix」
+#    替代 PCRE 的 \K。
+#    ⛔ 语义与原来完全一致: 同样是子串匹配(`subtotal=5` 照样会被 `total=` 命中),
+#       同样「多命中就产出多行」—— 下面那道纯数字锚定的守卫照常拦得住。
+total=$(echo "$OUT" | grep -o 'total=[0-9][0-9]*' | cut -d= -f2)
+unpromoted=$(echo "$OUT" | grep -o 'unpromoted=[0-9][0-9]*' | cut -d= -f2)
 
 # ⚠️ 解析不出数字也是「没量到」, ⛔ 不是 0
 # 🔴 用 -z 只能拦住「空串」, 拦不住「多行」: OUT 用 2>&1 合并了 stdout/stderr,
-#    任何一行 stderr 诊断文本只要含 `total=` 子串, grep -oP 就会命中两行,
+#    任何一行 stderr 诊断文本只要含 `total=` 子串, grep -o 就会命中两行,
 #    $total 变成一个内嵌换行的多行字符串 —— 非空, 但也不是一个合法整数,
 #    随后的 -eq / -gt 会报错、被 if 读成 false, 一路滑到 exit 0 (假绿)。
 #    改用整体锚定的纯数字正则, 多行/非数字都能拦住。
