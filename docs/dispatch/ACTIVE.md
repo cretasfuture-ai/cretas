@@ -10,7 +10,9 @@
 
   🔴 **上一棒有一句是错的**：「剩下的 49 条全部是同一个根因」——对 5 条不成立。`FactoryConfigServiceImplReorderIT` 4 条的真实报错是 `Connection to localhost:5432 refused`（要真 PostgreSQL，由 `ci.yml` 的 pgvector 服务容器提供，而 `java-full-nightly` 没有 `services:`，自建 macOS runner 也起不了）；`SalesOrderFinanceApprovedFanOutIntegrationTest` 1 条是异步 fan-out 轮询到超时（第一条断言**是通过的**）。**H2 毒源和「缺 PG」两条不同的路通向同一个长相（本机绿 / CI 红）** ⇒ 症状分布集中不等于根因只有一个。
 
-  ⛔ **剩下 5 条各自的下一步已写进 `known-failing-tests.txt` 的注释**，两条都别顺手做：(a) 加 `@Disabled`/`assumeTrue` 会让它在**真有 PG 的那条路上**也一起沉默 —— 先决定夜间跑批要不要有 PG；(b) 「真回归」和「轮询窗口不够」的下一步动作相反，别先入为主。
+  **第二轮：5 → 4。** (b) 那条（`SalesOrderFinanceApprovedFanOutIntegrationTest`）查清了，**「真回归」和「轮询窗口不够」两个猜测都不对** —— 夹具建了 operator 却把拿到的 id 扔掉、发事件时写死 `1L`，而 `production_plans.created_by` 有外键指向 `users(id)` ⇒ 是否通过取决于「此刻库里有没有 id=1 的用户」（CI 上自增列早被推进：`@Transactional` 测试插入后回滚，行没了而自增列不退）。**#241** 已修，run `33090976753` 报 `已修好 1 条（跑了而且通过）`、`没有新增红`。⚠️ 值得记的是**两次复现尝试都失败且各自都能骗人**：本机单跑照样绿（会读成「CI 环境问题」），`jdbcTemplate` 硬删占位用户没生效（会读成「假设被证伪」）—— 靠把中间量打出来（`usersWithId1=1`）才知道是仪器没生效，最后用变异（换成 `999_999L`）拿到与 CI **逐字同源**的失败签名。
+
+  🔴 **剩下 4 条 = 一个需要 owner 拍板的二选一，不是一个测试的修法**。`FactoryConfigServiceImplReorderIT` 要真 PostgreSQL，2026-08-27 逐条实测它**当前在任何自动路径上都跑不了也不可能绿**：PR 闸窄选择器按类名后缀选（`...IT` 不在四类里）／`ci.yml` 的 `java-build-test` 是唯一提供 pgvector 服务容器的地方但 `if: inputs.full_audit` 且 `runs-on: ubuntu-latest`，而**托管侧当前被账单挡着**（job 2 秒失败，注解 `recent account payments have failed or your spending limit needs to be increased`）／`java-full-nightly` 会跑它但自建 macOS runner 上 `docker: command not found`（`switch_ci_runner.py` 里记着 ci.yml「试过并撤回」就是这个原因），且那台机器**没有原生 PostgreSQL**（实测 `psql not found`）。⇒ **(A)** 给自建 runner 装原生 PG + nightly 加 bootstrap，或 **(B)** 维持现状等托管额度恢复。⛔ 拍板前不要加 `@Disabled`/`assumeTrue` —— 那会让它在真有 PG 的那条路上也一起沉默。
 
   ⚠️ **下一棒第一件事**：看 2026-08-27 18:00Z（北京 8-28 02:00）那次 **`schedule` 事件有没有真的发生** —— 这个工作流至今**全部运行都是 `workflow_dispatch`**，cron 直到 #178（今天 05:00Z）才被从 `disabled_manually` 打开。靠人记得手工触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
 - `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `in-progress` — Owner: `claude-code/java-gate-widen` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。
