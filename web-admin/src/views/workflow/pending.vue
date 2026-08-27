@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { MODULE_LABELS } from './moduleLabels';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { get, post } from '@/api/request';
@@ -22,12 +23,6 @@ import { enumLabel } from '@/utils/enumDisplay';
  * 这份表历史上只覆盖了权威表的 4 个, 另外 20 多个码全部渲染成「未知状态（X）」,
  * 客户截图里的「未知状态（BUDGET）」就是这么来的。加在这里只会再漂一次。
  */
-const MODULE_LABELS: Record<string, string> = {
-  PURCHASE_ORDER: '采购订单',
-  SALES_ORDER: '销售订单',
-  INVENTORY_TRANSFER: '库存调拨',
-  INVENTORY_ADJUSTMENT: '库存盘点',
-};
 import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
 
