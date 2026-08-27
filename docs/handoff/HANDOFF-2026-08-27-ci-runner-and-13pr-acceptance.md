@@ -19,30 +19,34 @@
 
 ⚠️ 这批 PR 落后 main **29~32 个 commit**。动手前一律 `git rev-list --count HEAD..origin/main`。
 
-### ② CI 接回来了 —— #143 与 #159 都已合入，main 上是绿的
+### ② 那 13 个 PR **全部落地了**，CI 也接回来了
 
 ```
-d9f9682914  fix(rn): 「上海今天」…每天 16:00 之后返回明天 (#159)
-1246604531  ci: 三个 PR 闸改用自建 runner (#143)
+#116 #117 #118 #123 #126 #141 #142 #146 #150 #153 #154 #156   MERGED
+#119                                                          CLOSED（被 #155 顶替）
 ```
 
-`d9f9682914` 上 main 的两道闸实测：**RN Gate ✅ success / Secret regression gate ✅ success**
-（跑在 `canada-mac-mini` 上，有真实时长，不是 2~4 秒的空转）。
+main 上合并后的闸**连续全绿**（跑在 `canada-mac-mini` 上，有真实时长，不是 2~4 秒空转）。
 
-⚠️ **只有 3 个工作流切了过去，还有 12 个起不来**：
+**自建 runner 上现在有 6 道闸**：
 
 ```
-已切自建   rn-gate.yml  secret-regression.yml  web-admin-gate.yml
-仍托管     ci.yml  daily-integration.yml  e2e-post-deploy.yml  e2e-pr.yml
-           java-full-nightly.yml  jpa-gate-main.yml  kb-drift-check.yml
-           python-gate.yml  threshold-parity-check.yml  tool-inventory-gate.yml
-           tool-isolation-audit.yml  web-dist.yml
+已切自建（6）  secret-regression  web-admin-gate  rn-gate  python-gate
+               jpa-gate-main      java-artifact
+仍托管（9）    ci.yml  daily-integration  e2e-post-deploy  e2e-pr
+               java-full-nightly  kb-drift-check  threshold-parity-check
+               tool-inventory-gate  tool-isolation-audit  web-dist
 ```
 
-那 12 个在托管额度用尽下 ⇒ **job 2~4 秒、0 个 step、无日志**地失败。
+那 9 个在托管额度用尽下 ⇒ **job 2~4 秒、0 个 step、无日志**地失败。
 
 ▎**判据是时长**：2~4 秒 = job 根本没启动；有真实时长 = 跑了、失败在内容。
 ▎ 别把「没启动」读成「测试红了」——`gh pr checks` 两者都显示 fail。
+
+⚠️ 那 9 个里有 3 个（`java-full-nightly` / `tool-inventory-gate` / `web-dist`）
+在 GitHub 上还是 **`disabled_manually`** —— cron 一次都没触发过，接之前得先在设置里打开。
+另外几个（`daily-integration` 会开 PR、`e2e-*` 会碰环境）一 dispatch 就有副作用，
+**验不了就不该接**——那正是下面「六关」的判据。
 
 ### ③ 🔴 runner 不在 139，在一台加拿大的 Mac mini
 
@@ -160,9 +164,26 @@ return formatDate(new Date(Date.now() + 8 * 60 * 60 * 1000));
 | (b) 非管理员本该进得来 | 修可达性，两个分支自然变成活的 | 回到 36（判定变 LIVE） |
 | (c) 暂不拍 | 棘轮抬到 37，并**显式登记理由**（硬约束 8 的「故意不改」要留痕） | 37 |
 
-⚠️ 另外 #146 那条阳性对照断言的是**字面**「恒为真」，属于形态 C‴（守着旧行为）。
-按本仓规矩应当**从守字面抬到守性质**（「这个分支是空转的」）+ 补阴性对照，
-而不是简单把「恒为真」改成「恒为假」。
+### 🔴 落地时走的是 (c) —— 这是一笔**挂账**，不是修好了
+
+合 #146 时在真实合并树上复现了预测的红（`37 条（预算 36）` + 阳性对照失败），
+然后做了两处改动（**都不是「把闸调绿」**）：
+
+1. **`VACUOUS_BUDGET` 36 → 37**，理由整段写进常量上方：为什么不是 #123 的缺陷、
+   底下压着哪条产品决策、三条出路各自会把棘轮带回什么数。
+   ⚠️ 并写明「抬到 37 是为了不卡住整批 PR，**不是**认可这两条空转；
+   决策一拍就该回 36，⛔ 别让 37 变成新的『正常值』」。
+2. **阳性对照从守字面抬到守性质**：它原来断言字面「恒为真」，而 #123 之后方向
+   **合法地**翻成「恒为假」——这是形态 C‴（守着已不想要的行为），症状是
+   「红得理直气壮」，最容易被读成「我改错了」然后把改动回退掉。
+   改成守「这个分支对能走到这屏的所有角色都不起作用」，并补阴性对照
+   （必须是恒真/恒假**之一**，⛔ 不许退化成「detail 非空」；且不许出现 `LIVE`）。
+   原有的 `found.length > 0` 保留 —— 它挡住「循环零次迭代」那种恒真式。
+
+验证：闸 12 passed（改前 2 failed）、全量裸 `jest` **187 suites / 2072 tests 全绿**、
+`tsc --noEmit` 0 error。
+
+▎**所以 §3A 那条决策仍然挂在 owner 手上**，只是不再挡着合并。
 
 ---
 
@@ -354,12 +375,38 @@ TypeError: groups.filter is not a function   → React 树整个卸载, document
    ⚠️ 保留本分支实现的唯一理由：**main 那版有修复但没有任何测试会在它退化时变红**
    （实测：换回缺陷版，`AIChatScreenRestaurantAgent` 20 条在上海 03:xx 仍全绿）。
 
-3. **⛔ 把三个 yml 里关于「139(4 核/7G) / systemd Nice=10 CPUWeight=50 MemoryMax=3G /
-   实测 vitest 4分41秒」的那 15 行改掉** —— 见 §0③，它们描述的是一台没在跑这些 job
-   的机器，而且**已经随 #143 合进 main 了**。
-4. **把剩下 12 个工作流也切过去**（或按 owner 的计划换本地 runner）——
-   在那之前，那 12 个的 fail 都要按「没启动」读，⛔ 不要读成「测试红了」。
-5. **拍 §2 那条决策**（#123 的 `locked` / ManagementScreen 可达性）——
-   它是 13 个 PR 里唯一的红。
-6. **确认 §3 里 #153 事实上替 owner 拍掉的那条报错口径**。
-7. 剩下的按上一轮交接件 §3 / §6。
+3. ~~13 个 PR 逐个合~~ ✅ 全部落地（见 §0②）。#126 在 #118 落地后才与 main 冲突，
+   按「两边都留」解（`formatPlannedAt` vs `TaskCounts/NO_COUNTS/tabLabel`，纯相邻新增），
+   解完三道闸真跑全绿才合。
+4. ~~接更多工作流~~ ✅ 部分完成：`python-gate` / `jpa-gate-main`（#169）、
+   `java-artifact`（#175，把制品构建从 `ci.yml` 拆出来绕开服务容器）。
+   接入清单扩成**六关**（#173），见 `ci-runner-routing.md`。
+
+---
+
+### 还挂着的（按「谁能动」分）
+
+**要 owner 拍的：**
+
+- 🔴 **§2 那条决策**（#123 的 `locked` / ManagementScreen 可达性）——
+  棘轮现在挂在 **37**，是一笔登记在案的账，不是修好了。
+- **§3 里 #153 事实上替 owner 拍掉的那条报错口径** —— 确认它落的是想要的那条。
+- 上一轮交接件 §3 的另外两条（包装推算退役 / 6 个只读角色的客户屏）。
+
+**要动机器/设置的（助手动不了）：**
+
+- `java-full-nightly` / `tool-inventory-gate` / `web-dist` 在 GitHub 上是
+  **`disabled_manually`**，cron 一次都没触发过 —— 要在设置里打开。
+- `known-failing-tests.txt` **CI 早就生成好了**（run 32932028221 的 artifact，未过期，
+  `BASELINE_WRITTEN 29 条 / 共 2866 个测试`），缺的只是取出来提交进仓库。
+  ⚠️ 但先读 §5：那份基线只覆盖约 27% 的套件。
+- 给自建 runner 装 Docker / PostgreSQL，才能把 `ci.yml` 的 `full_audit` 那条路
+  和那 8 条 PG 契约测试接过去。
+
+**不用等任何人的：**
+
+- 🔴 **#142 那 44 条修好的 BOM 测试，main 的闸一条都没跑过** ——
+  jpa-gate 的 paths 只匹配 `*RepositoryQueryValidationTest`，而 #142 改的是别的类。
+  它的证据只有本地 A/B（修 44 / 新增 0）。**这就是「push 选择器只覆盖 2.9%」那个缺口本身。**
+- 上一轮交接件 §6 那几条小的（`hintTarget` 被丢、两处过期描述）。
+- 剩下 10 个孤儿屏的落点（上一轮 §3D）。
