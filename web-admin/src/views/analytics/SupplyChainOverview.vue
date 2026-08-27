@@ -1,4 +1,11 @@
 <script setup lang="ts">
+import {
+  enumLabel,
+  MATERIAL_BATCH_STATUS_LABELS,
+  PRODUCTION_BATCH_STATUS_LABELS,
+  PURCHASE_ORDER_STATUS_LABELS,
+  SALES_ORDER_STATUS_LABELS,
+} from '@/utils/enumDisplay';
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -302,22 +309,35 @@ function getStatusType(status: string): string {
   return map[status?.toUpperCase()] || 'info';
 }
 
-function getStatusText(status: string): string {
-  // chart audit P2-1: backend may emit raw enums for partial-flow states
-  // (PARTIAL_RECEIVED / FINANCE_APPROVED / etc.). 还有批次状态 (AVAILABLE
-  // / RESERVED / 等), 真窗 verify 揭示后补.
-  const map: Record<string, string> = {
-    PLANNED: '待处理', PENDING: '待处理', DRAFT: '草稿',
-    IN_PROGRESS: '进行中', PROCESSING: '处理中', APPROVED: '已审批',
-    PARTIAL_RECEIVED: '部分到货', PARTIAL_DELIVERED: '部分发货',
-    FINANCE_APPROVED: '财务已审', PENDING_FINANCE_REVIEW: '财务审核中',
-    // 批次状态翻译 (入库记录 tab)
-    AVAILABLE: '可用', RESERVED: '已预留', DEPLETED: '已用尽',
-    EXPIRED: '已过期', QUARANTINE: '隔离中',
-    COMPLETED: '已完成', DELIVERED: '已交付', RECEIVED: '已收货',
-    CANCELLED: '已取消', REJECTED: '已拒绝',
-  };
-  return map[status?.toUpperCase()] || status || '-';
+// 🔴 2026-08-28 逐屏走查: 采购订单 tab 的状态列里 `CLOSED` **原样显示成英文**,
+//   而同一列其他行是「已取消」「已完成」「财务已审」。
+//
+// 原实现是这个文件自己的一份本地表, 它的注释写着:
+//
+//     backend may emit raw enums for partial-flow states … **真窗 verify 揭示后补**
+//
+// ▎「揭示一个补一个」正是保证它永远不全的机制, 而 `|| status` 兜底把没登记的码
+// ▎原样吐给用户。`utils/enumDisplay.ts` 的头部注释记着同一个客户投诉:
+// ▎「单据追踪抽屉里出现『未知状态（IN_PROGRESS）』—— 根因不是漏了一个码,
+// ▎  而是兜底会把**任何**没登记的码原样吐出去」。这里是同一件事的第二现场。
+//
+// ⚠️ 而且这**一个**函数被四个 tab 共用, 按 enumDisplay.ts 自己的分层规则,
+//   那在结构上就不可能都对: `FINANCE_APPROVED` 销售单是「财务已批准」、
+//   采购单是「财务已审核」; `REJECTED` 采购收货是「已退回」、别处是「已驳回」。
+//   ⇒ 拆成**四个按域取表**的函数, 各自接权威分域表。
+//
+// ⛔ 不要把码加回本地表 —— 那正是让它漂的动作。
+function purchaseStatusText(status: unknown): string {
+  return enumLabel(status, PURCHASE_ORDER_STATUS_LABELS);
+}
+function materialBatchStatusText(status: unknown): string {
+  return enumLabel(status, MATERIAL_BATCH_STATUS_LABELS);
+}
+function productionBatchStatusText(status: unknown): string {
+  return enumLabel(status, PRODUCTION_BATCH_STATUS_LABELS);
+}
+function salesStatusText(status: unknown): string {
+  return enumLabel(status, SALES_ORDER_STATUS_LABELS);
 }
 </script>
 
@@ -429,7 +449,7 @@ function getStatusText(status: string): string {
               <el-table-column label="状态" width="100" align="center">
                 <template #default="{ row }">
                   <el-tag :type="getStatusType(row.status)" size="small">
-                    {{ getStatusText(row.status) }}
+                    {{ purchaseStatusText(row.status) }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -457,7 +477,7 @@ function getStatusText(status: string): string {
               <el-table-column label="状态" width="100" align="center">
                 <template #default="{ row }">
                   <el-tag :type="getStatusType(row.status)" size="small">
-                    {{ getStatusText(row.status) }}
+                    {{ materialBatchStatusText(row.status) }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -490,7 +510,7 @@ function getStatusText(status: string): string {
               <el-table-column label="状态" width="100" align="center">
                 <template #default="{ row }">
                   <el-tag :type="getStatusType(row.status)" size="small">
-                    {{ getStatusText(row.status) }}
+                    {{ productionBatchStatusText(row.status) }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -518,7 +538,7 @@ function getStatusText(status: string): string {
               <el-table-column label="状态" width="100" align="center">
                 <template #default="{ row }">
                   <el-tag :type="getStatusType(row.status)" size="small">
-                    {{ getStatusText(row.status) }}
+                    {{ salesStatusText(row.status) }}
                   </el-tag>
                 </template>
               </el-table-column>
