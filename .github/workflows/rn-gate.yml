@@ -55,7 +55,12 @@ jobs:
     #    裸标签会被任意机器接走, 具名标签不会。
     # 实测资源(vitest 3300+ 用例): 4分41秒 / 峰值内存 1.2G / CPU 350%。
     # 服务侧已加 Nice=10 CPUWeight=50 MemoryMax=3G, 让它抢不过业务进程。
-    runs-on: [self-hosted, cretas]
+    # CI runner 路由: **默认走托管**(快 1~2 倍、干净机器), 额度耗尽时切到自建。
+    #   切换方式: 设/删**组织变量** CI_RUNNER, ⛔ 不用改任何工作流。
+    #     额度耗尽 -> gh variable set CI_RUNNER --org cretasfuture-ai --body '["self-hosted","cretas"]'
+    #     额度恢复 -> gh variable delete CI_RUNNER --org cretasfuture-ai
+    #   详见 .claude/rules/ci-runner-routing.md (= .codex/rules/ 同名文件)
+    runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: frontend/CretasFoodTrace
