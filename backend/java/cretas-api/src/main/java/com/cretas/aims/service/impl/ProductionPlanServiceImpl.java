@@ -7613,6 +7613,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         consumption.setTotalCost(quantity.multiply(unitPrice));
         consumption.setConsumptionTime(LocalDateTime.now());
         consumption.setRecordedBy(recordedBy);
+        // 🔴 2026-08-27: 此前**从不设 sourceType** ⇒ VoucherConsumptionSourcePolicy 对 null 返回 false
+        //    ⇒ 这条领用不进财务凭证, 成本悄悄少算(静默, 无信号)。
+        //
+        // 这里恒为 PRODUCTION_ISSUE 而不是 :1665 那种三元判据: 本方法一进来就按 planId 取了
+        // plan 并校验工厂归属, 上面 setProductionPlanId(planId) 用的就是它 —— **不存在无计划的分支**。
+        consumption.setSourceType("PRODUCTION_ISSUE");
         materialConsumptionRepository.save(consumption);
 
         // 更新批次库存

@@ -2040,6 +2040,16 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         consumption.setTotalCost(quantity.multiply(consumeUnitPrice));
         consumption.setRecordedBy(operatorId);
         consumption.setConsumptionTime(LocalDateTime.now());
+        // 🔴 2026-08-27: 与上面 useBatchMaterial 那半对称 —— 此前这里**从不设 sourceType**。
+        //
+        // 后果不是 500, 是财务侧的静默错误: VoucherConsumptionSourcePolicy 对 null 返回 false
+        //   ⇒ 这条领用**不进凭证**, 成本悄悄少算, 而且不会有任何人收到信号。
+        //
+        // ⚠️ 「生产库当前 0 行 NULL」不是保证 —— 本方法挂在 MaterialBatchController 的活端点上,
+        //    还额外挂着 AI 工具 MaterialBatchConsumeTool, 两条路都能写出 NULL 来。
+        //
+        // ⛔ 不要改成裸 "PRODUCTION_ISSUE": 无计划时它就是手工出库, 与 :1665 用同一个三元判据。
+        consumption.setSourceType(productionPlanId != null ? "PRODUCTION_ISSUE" : "MANUAL_ISSUE");
         // 2026-08-13: 同 useBatchMaterial —— ConsumeMaterialBatchRequest.notes 此前无处可去。
         consumption.setNotes(notes);
         materialConsumptionRepository.save(consumption);
