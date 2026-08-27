@@ -50,7 +50,7 @@ function addWidget(kind: WidgetKind): void {
   const reg = widgetRegistry.get(kind);
   if (!reg) return;
   if (reg.comingSoon) {
-    ElMessage.info(`${reg.defaultTitle} 将在 Sprint 5 上线`);
+    ElMessage.info(`${reg.defaultTitle} 尚未开放`);
     return;
   }
   widgets.value = [...widgets.value, newWidget(kind, widgetRegistry)];
@@ -90,7 +90,7 @@ function widgetSpanStyle(w: DashboardWidget): Record<string, string> {
             @click="addWidget(reg.kind)"
           >
             <span>{{ reg.defaultTitle }}</span>
-            <el-tag v-if="reg.comingSoon" size="small" type="info">Sprint 5</el-tag>
+            <el-tag v-if="reg.comingSoon" size="small" type="info">尚未开放</el-tag>
           </button>
         </div>
       </el-popover>

@@ -122,7 +122,7 @@ const TAB_DEFS: TabDef[] = [
     status: '暂未对接呼叫中心', workaround: '当前请用「跟踪记录」tab 手工补录',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
   { key: 'sms', label: '短信记录',
-    status: 'Sprint 5+ 上线', workaround: '当前请用「跟踪记录」tab 手工补录',
+    status: '尚未开放', workaround: '当前请用「跟踪记录」tab 手工补录',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
   // Sprint 6 W2-C-2 (2026-05-20): 通话记录 + 录音 backend wired (CallRecord entity + OSS + Whisper async).
   { key: 'audio', label: '谈话录音',
@@ -140,10 +140,10 @@ const TAB_DEFS: TabDef[] = [
     component: defineAsyncComponent(() => import('./detail/tabs/ProductsTab.vue')) },
   // 11-12 — defer (R5 → tracking, CRM modules pending)
   { key: 'campaign', label: '活动管理',
-    status: 'Sprint 5+ (CRM 模块) 上线', workaround: '当前请在「跟踪记录」记录活动',
+    status: 'CRM 模块尚未开放', workaround: '当前请在「跟踪记录」记录活动',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
   { key: 'opportunity', label: '商机管理',
-    status: 'Sprint 5+ 上线', workaround: '当前请在「跟踪记录」记录商机',
+    status: '尚未开放', workaround: '当前请在「跟踪记录」记录商机',
     actionText: '去跟踪记录', actionTabKey: 'tracking' },
   // 13-14 — real
   { key: 'itemStats', label: '商品统计',
@@ -159,7 +159,7 @@ const TAB_DEFS: TabDef[] = [
     component: defineAsyncComponent(() => import('./detail/tabs/ReturnsTab.vue')) },
   // 18 — defer (R5 → returns)
   { key: 'aftersales', label: '售后',
-    status: 'Sprint 6+ 上线', workaround: '当前请用「退货」tab 处理售后退货',
+    status: '尚未开放', workaround: '当前请用「退货」tab 处理售后退货',
     actionText: '去退货', actionTabKey: 'returns' },
   // 19 — integration fallback (Chat B S-PRICE-1 pending; internal placeholder)
   { key: 'priceMemory', label: '价格记忆',

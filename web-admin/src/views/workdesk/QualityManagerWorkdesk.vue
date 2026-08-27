@@ -21,7 +21,7 @@
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">质量主管工作台</span>
-        <el-tag size="small" type="danger">Sprint 8 P3 (2026-05-20)</el-tag>
+        
       </div>
       <div class="header-actions">
         <el-button type="danger" :icon="Warning" @click="openRecallStartDialog">

@@ -19,7 +19,7 @@
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">财务主管工作台</span>
-        <el-tag size="small" type="info">Sprint 8 P2 (2026-05-20)</el-tag>
+        
       </div>
       <div class="header-actions">
         <el-button :loading="loading" :icon="Refresh" @click="triggerMonthlyClose">
@@ -127,7 +127,7 @@
       <template #header>
         <div class="card-header">
  <span> 三大报表 (点击跳转)</span>
-          <span class="header-hint">Sprint 7 T3 ship · 期末快照 + 期间累计</span>
+          <span class="header-hint">期末快照 + 期间累计</span>
         </div>
       </template>
       <div class="reports-grid">
@@ -207,7 +207,7 @@
     <el-card class="approval-card" shadow="never" data-testid="approval-loop-panel">
       <template #header>
         <div class="card-header">
- <span> 待我审批 (Loop 4 AI 闭环)</span>
+ <span> 待我审批</span>
           <div>
             <el-tag :type="approvalPendingCount > 0 ? 'warning' : 'info'" size="small">
               {{ approvalPendingCount }} 项待审

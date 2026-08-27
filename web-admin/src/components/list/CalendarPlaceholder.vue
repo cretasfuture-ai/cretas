@@ -7,7 +7,7 @@ import { Calendar } from '@element-plus/icons-vue';
 </script>
 
 <template>
-  <el-empty description="日历视图将在 Sprint 5 上线" :image-size="120">
+  <el-empty description="日历视图尚未开放" :image-size="120">
     <template #image>
       <el-icon :size="64" color="var(--el-text-color-placeholder)">
         <Calendar />

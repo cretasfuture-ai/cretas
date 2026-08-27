@@ -15,8 +15,8 @@
       </template>
       <template #default>
         <span class="mock-detail">
-          数据由 Sprint 11 D2 生成器 ({{ '`scripts/mock/generate-f006-indicator-data.py`' }})
-          落库。Sprint 12 切回 prod F006 真数据后 UI 业务逻辑不变。
+          数据由生成脚本 ({{ '`scripts/mock/generate-f006-indicator-data.py`' }})
+          落库。切回真实工厂数据后 UI 业务逻辑不变。
         </span>
       </template>
     </el-alert>

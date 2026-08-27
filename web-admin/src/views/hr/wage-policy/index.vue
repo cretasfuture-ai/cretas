@@ -313,7 +313,7 @@ function modeTagType(m: WageMode): '' | 'success' | 'warning' | 'info' {
     <el-card>
       <template #header>
         <div class="header">
-          <span>工资策略配置 (Sprint 6 W4-B)</span>
+          <span>工资策略配置</span>
           <el-button :icon="Refresh" @click="refreshAll" :loading="loading">刷新</el-button>
         </div>
       </template>

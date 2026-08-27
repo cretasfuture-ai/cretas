@@ -67,7 +67,7 @@
         <PlaceholderTab
           v-if="subTab === 'sample'"
           title="留样追踪 — 敬请期待"
-          subtitle="留样制度强制 48 小时, 每批次 ≥ 100g. 实体在 Sprint 9 分支已实现, 待合并至 main."
+          subtitle="留样制度强制 48 小时, 每批次 ≥ 100g."
           regulation="GB 31654-2021 餐饮服务通用卫生规范 §6.1"
           branch="sprint9/p2a-sample-retention-gb31654"
         />
@@ -77,7 +77,7 @@
         <PlaceholderTab
           v-if="subTab === 'nutrition'"
           title="营养标签合规 — 敬请期待"
-          subtitle="预包装食品强制标注 1+4 (能量 + 4 大营养素). 实体在 Sprint 9 分支已实现, 待合并至 main."
+          subtitle="预包装食品强制标注 1+4 (能量 + 4 大营养素)."
           regulation="GB 28050-2011 预包装食品营养标签通则"
           branch="sprint9/p2b-nutrition-label-gb28050"
         />
@@ -87,7 +87,7 @@
         <PlaceholderTab
           v-if="subTab === 'sprint9'"
           title="供应商食品资质 / 冷链温控 / SSOP — 敬请期待"
-          subtitle="3 大食品安全模块 (SC证+HACCP+营业执照 / 冷链 GB 14881 / SSOP 清洁消毒). 实体在 Sprint 9 分支已实现, 待合并至 main."
+          subtitle="3 大食品安全模块 (SC证+HACCP+营业执照 / 冷链 GB 14881 / SSOP 清洁消毒)."
           regulation="食品安全法 + GB 14881-2013 + SSOP 八项作业程序"
           branch="sprint9/p2c, sprint9/p2d, sprint9/p2e"
         />
