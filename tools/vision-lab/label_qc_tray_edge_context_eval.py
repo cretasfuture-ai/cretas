@@ -20,6 +20,7 @@ import label_qc_oracle_diagnostics as diagnostics
 
 
 TARGET_PHOTO_ID = "locked-test-real_9827ccc7-7b30-48eb-bff2-c2493be09660"
+DEFAULT_SOURCE_EDGE_MARGIN_RATIO = 0.01
 
 
 def edge_regions(
@@ -49,21 +50,50 @@ def belongs_to_outer_band(
     return horizontal and center_y >= minimum_y_center
 
 
+def clears_physical_source_edges(
+    box: Sequence[float], width: int, height: int,
+    margin_ratio: float = DEFAULT_SOURCE_EDGE_MARGIN_RATIO,
+) -> bool:
+    """Require an edge-rescued tray to be visibly contained in the source photo.
+
+    Edge-window inference can turn a cut-off physical tray into a confident box.
+    A one-percent source margin is a resolution-relative localization guard, not
+    a protected-sample coordinate: at 3072x4096 it is about 31x41 pixels.
+    Full-frame detections are deliberately unaffected by this rescue-only gate.
+    """
+    if not 0 <= margin_ratio < 0.5:
+        raise ValueError("source edge margin ratio must be in [0, 0.5)")
+    left, top, right, bottom = (float(value) for value in box)
+    margin_x = width * margin_ratio
+    margin_y = height * margin_ratio
+    return (
+        left > margin_x
+        and top > margin_y
+        and right < width - margin_x
+        and bottom < height - margin_y
+    )
+
+
 class EdgeContextTrayModels:
     def __init__(
         self,
         base: Any,
         detection_type: type,
+        edge_base: Any | None = None,
         edge_confidence: float = 0.30,
         width_fraction: float = 0.50,
         height_fraction: float = 0.60,
         maximum_left_center: float = 0.40,
         minimum_right_center: float = 0.60,
         minimum_y_center: float = 0.55,
+        source_edge_margin_ratio: float = DEFAULT_SOURCE_EDGE_MARGIN_RATIO,
+        skip_full_layout_count: int = 8,
+        production_overlap_ios: float = 0.60,
         iou_threshold: float = 0.50,
         ios_threshold: float = 0.80,
     ) -> None:
         self.base = base
+        self.edge_base = edge_base or base
         self.detection_type = detection_type
         self.edge_confidence = edge_confidence
         self.width_fraction = width_fraction
@@ -71,6 +101,9 @@ class EdgeContextTrayModels:
         self.maximum_left_center = maximum_left_center
         self.minimum_right_center = minimum_right_center
         self.minimum_y_center = minimum_y_center
+        self.source_edge_margin_ratio = source_edge_margin_ratio
+        self.skip_full_layout_count = skip_full_layout_count
+        self.production_overlap_ios = production_overlap_ios
         self.iou_threshold = iou_threshold
         self.ios_threshold = ios_threshold
         self.last_stats: dict[str, Any] = {}
@@ -81,12 +114,27 @@ class EdgeContextTrayModels:
         full = list(self.base.detect_trays(image, conf))
         all_detections = list(full)
         raw_rows = [diagnostics._detection_dict(row, "full") for row in full]
+        if len(full) >= self.skip_full_layout_count:
+            self.last_raw_detections = raw_rows
+            self.last_stats = {
+                "mode": "production_full_layout_edge_windows_skipped",
+                "tiles": 0,
+                "full_frame_detections": len(full),
+                "edge_windows_skipped_full_layout": True,
+                "skip_full_layout_count": self.skip_full_layout_count,
+                "raw_detections": len(full),
+                "kept_detections": len(full),
+                "duplicates_removed": 0,
+                "tile_edge_detections": 0,
+            }
+            return full
         edge_raw = edge_accepted = edge_rejected = internal_edge_rejected = 0
+        source_edge_rejected = production_overlap_rejected = 0
         for name, x0, y0, x1, y1 in edge_regions(
             width, height, self.width_fraction, self.height_fraction,
         ):
             tile = image[y0:y1, x0:x1]
-            for detection in self.base.detect_trays(tile, self.edge_confidence):
+            for detection in self.edge_base.detect_trays(tile, self.edge_confidence):
                 edge_raw += 1
                 touches_internal_edge = (
                     (x0 > 0 and float(detection.x0) <= 2)
@@ -110,6 +158,20 @@ class EdgeContextTrayModels:
                 ):
                     edge_rejected += 1
                     continue
+                if not clears_physical_source_edges(
+                    mapped.as_xyxy(), width, height, self.source_edge_margin_ratio,
+                ):
+                    source_edge_rejected += 1
+                    continue
+                if any(
+                    int(mapped.class_id) == int(reference.class_id)
+                    and diagnostics.intersection_over_smaller(
+                        mapped.as_xyxy(), reference.as_xyxy(),
+                    ) >= self.production_overlap_ios
+                    for reference in full
+                ):
+                    production_overlap_rejected += 1
+                    continue
                 all_detections.append(mapped)
                 raw_rows.append(diagnostics._detection_dict(mapped, name))
                 edge_accepted += 1
@@ -125,6 +187,11 @@ class EdgeContextTrayModels:
             "edge_accepted_before_dedup": edge_accepted,
             "edge_outer_band_rejected": edge_rejected,
             "edge_internal_border_rejected": internal_edge_rejected,
+            "edge_physical_source_border_rejected": source_edge_rejected,
+            "edge_production_overlap_rejected": production_overlap_rejected,
+            "source_edge_margin_ratio": self.source_edge_margin_ratio,
+            "production_overlap_ios": self.production_overlap_ios,
+            "skip_full_layout_count": self.skip_full_layout_count,
             "raw_detections": len(all_detections),
             "kept_detections": len(kept),
             "duplicates_removed": len(all_detections) - len(kept),
@@ -134,6 +201,48 @@ class EdgeContextTrayModels:
 
     def detect_labels(self, crop, conf: float) -> list[Any]:
         return self.base.detect_labels(crop, conf)
+
+
+class RuntimeEdgeContextModels:
+    """Inject the bounded tray rescue while preserving all V8 runtime policies."""
+
+    def __init__(self, runtime: Any, edge_models: EdgeContextTrayModels, v8: Any) -> None:
+        self.runtime = runtime
+        self.edge_models = edge_models
+        self.v8 = v8
+        self.inner = runtime._require_models()
+        self.inner.detect_trays = self._detect_trays
+        self.last_stats: dict[str, Any] = {}
+        self.last_raw_detections: list[dict[str, Any]] = []
+
+    def _detect_trays(self, image, conf: float) -> list[Any]:
+        kept = self.edge_models.detect_trays(image, conf)
+        source_by_box = {
+            self.v8._box_key(row["box"]): str(row["source"])
+            for row in self.edge_models.last_raw_detections
+        }
+        runtime_rows = []
+        for detection in kept:
+            source = source_by_box.get(self.v8._box_key(detection.as_xyxy()), "full")
+            runtime_rows.append(self.v8._detection_row(
+                detection,
+                "production_full" if source == "full" else "candidate_lower_band",
+            ))
+        self.inner.last_raw_detections = runtime_rows
+        self.inner.last_stats = {
+            **self.edge_models.last_stats,
+            "runtime_mode": "production_preserving_two_lower_edge_windows",
+        }
+        self.inner._set_label_routes(image, kept)
+        self.last_stats = dict(self.inner.last_stats)
+        self.last_raw_detections = list(runtime_rows)
+        return kept
+
+    def screen_image(self, image, params: Any) -> Any:
+        result = self.runtime.screen_image(image, params)
+        self.last_stats = dict(self.inner.last_stats)
+        self.last_raw_detections = list(self.inner.last_raw_detections)
+        return result
 
 
 def load_and_verify(path: Path, expected_hash: str | None = None) -> dict[str, Any]:
@@ -147,9 +256,37 @@ def load_and_verify(path: Path, expected_hash: str | None = None) -> dict[str, A
     return payload
 
 
+def load_independent_normal_records(
+    manifest_paths: Sequence[Path], protected_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    records: list[dict[str, Any]] = []
+    inputs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for manifest_path in manifest_paths:
+        resolved = manifest_path.resolve()
+        loaded = diagnostics.load_records(resolved)
+        selected = [row for row in loaded if row["human_label"] not in diagnostics.DEFECT_LABELS]
+        for row in selected:
+            photo_id = row["photo_id"]
+            if photo_id in protected_ids:
+                raise RuntimeError(f"independent normal overlaps protected photo: {photo_id}")
+            if photo_id in seen:
+                raise RuntimeError(f"duplicate independent normal photo: {photo_id}")
+            seen.add(photo_id)
+            records.append(row)
+        inputs.append({
+            "path": str(resolved),
+            "sha256": diagnostics.sha256_file(resolved),
+            "records": len(loaded),
+            "normal_records_selected": len(selected),
+        })
+    return records, inputs
+
+
 def corrected_gate(
     baseline: dict[str, Any], candidate: dict[str, Any], occlusion_audit: dict[str, Any],
     parity_mismatches: int, production_parity_mismatches: int,
+    independent_normal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     baseline_rows = {row["photo_id"]: row for row in baseline["details"]}
     candidate_rows = {row["photo_id"]: row for row in candidate["details"]}
@@ -200,6 +337,8 @@ def corrected_gate(
         errors.append("CPU p95 latency exceeded 1.50x production")
     if parity_mismatches > production_parity_mismatches or parity_mismatches > 1:
         errors.append("PT/ONNX parity does not meet strict promotion gate")
+    if independent_normal is not None and int(independent_normal["false_flags"]) > 0:
+        errors.append("independent normal replay added false flags")
     return {
         "scope_corrected": True,
         "judgeable_targets": target_results,
@@ -212,6 +351,12 @@ def corrected_gate(
         "candidate_p95_latency_ms": candidate["p95_latency_ms"],
         "onnx_parity_mismatches": parity_mismatches,
         "production_onnx_parity_mismatches": production_parity_mismatches,
+        "independent_normal_records": (
+            int(independent_normal["records"]) if independent_normal is not None else 0
+        ),
+        "independent_normal_false_flags": (
+            int(independent_normal["false_flags"]) if independent_normal is not None else None
+        ),
         "offline_development_passed": not errors,
         "promotion_allowed": False,
         "deployment_allowed": False,
@@ -226,15 +371,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate-receipt", required=True, type=Path)
     parser.add_argument("--dataset-manifest", required=True, type=Path)
     parser.add_argument("--occlusion-audit", required=True, type=Path)
+    parser.add_argument(
+        "--truth-adjudication", type=Path,
+        help="append-only reviewed sidecar applied without modifying the protected manifest",
+    )
+    parser.add_argument(
+        "--runtime-bundle", type=Path,
+        help="hash-bound V8 deployment bundle; enables production-equivalent fail-closed replay",
+    )
+    parser.add_argument(
+        "--independent-normal-manifest", action="append", type=Path, default=[],
+        help="reviewed manifest; only non-defect rows are replayed as reject-only false-positive gates",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--edge-confidence", type=float, default=0.30)
     parser.add_argument("--edge-width-fraction", type=float, default=0.50)
     parser.add_argument("--edge-height-fraction", type=float, default=0.60)
+    parser.add_argument(
+        "--source-edge-margin-ratio", type=float,
+        default=DEFAULT_SOURCE_EDGE_MARGIN_RATIO,
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.runtime_bundle and not args.truth_adjudication:
+        raise RuntimeError("production-equivalent replay requires reviewed truth adjudication")
     output = args.output.resolve()
     if output.exists():
         raise FileExistsError(f"refusing to overwrite edge evaluation: {output}")
@@ -259,13 +422,27 @@ def main() -> None:
         if not path.is_file() or diagnostics.sha256_file(path) != expected:
             raise RuntimeError(f"bound input drift: {path}")
     records = diagnostics.load_records(manifest)
+    records_before_truth_adjudication = len(records)
+    truth_adjudication = None
+    if args.truth_adjudication:
+        from evaluate_tray_candidate import apply_truth_adjudication
+
+        records, truth_adjudication = apply_truth_adjudication(
+            records, args.truth_adjudication.resolve(), [manifest.resolve()],
+        )
+    independent_records, independent_inputs = load_independent_normal_records(
+        args.independent_normal_manifest,
+        {row["photo_id"] for row in records},
+    )
     human_manifest = Path(str(baseline_receipt["inputs"]["human_audit"]["manifest"]))
     audits, human_audit = diagnostics.load_human_audits(human_manifest)
     sys.path.insert(0, str((args.repo_root.resolve() / "backend" / "python").resolve()))
     from label_qc.services import screening
+    from label_qc.services import v8_pipeline
     from label_qc.services import yolo_detector as yolo
 
     params = screening.ScreeningParams(tray_conf=0.60, label_conf=0.20)
+    runtime_input = None
     with tempfile.TemporaryDirectory(prefix="label-qc-edge-context-") as temporary:
         root = Path(temporary)
         production_dir, candidate_dir = root / "production", root / "candidate"
@@ -279,14 +456,40 @@ def main() -> None:
         candidate_base = yolo.LabelQcYoloModels(model_dir=candidate_dir)
         if not production_base.available or not candidate_base.available:
             raise RuntimeError(production_base.load_error or candidate_base.load_error or "model unavailable")
-        production_models = diagnostics.FullFrameModels(production_base)
-        candidate_models = EdgeContextTrayModels(
-            candidate_base,
+        edge_models = EdgeContextTrayModels(
+            production_base,
             yolo.Detection,
+            edge_base=candidate_base,
             edge_confidence=args.edge_confidence,
             width_fraction=args.edge_width_fraction,
             height_fraction=args.edge_height_fraction,
+            source_edge_margin_ratio=args.source_edge_margin_ratio,
         )
+        if args.runtime_bundle:
+            runtime_bundle = args.runtime_bundle.resolve()
+            production_runtime = v8_pipeline.LabelQcV8Models(runtime_bundle)
+            candidate_runtime = v8_pipeline.LabelQcV8Models(runtime_bundle)
+            if not production_runtime.available or not candidate_runtime.available:
+                raise RuntimeError(
+                    production_runtime.load_error or candidate_runtime.load_error
+                    or "V8 runtime bundle unavailable"
+                )
+            production_models = production_runtime
+            candidate_models = RuntimeEdgeContextModels(
+                candidate_runtime, edge_models, v8_pipeline,
+            )
+            params = production_runtime.recommended_params()
+            runtime_manifest = runtime_bundle / v8_pipeline.MANIFEST_FILE
+            runtime_input = {
+                "bundle": str(runtime_bundle),
+                "manifest": str(runtime_manifest),
+                "manifest_sha256": diagnostics.sha256_file(runtime_manifest),
+                "model_id": production_runtime.model_id,
+                "production_equivalent_fail_closed": True,
+            }
+        else:
+            production_models = diagnostics.FullFrameModels(production_base)
+            candidate_models = edge_models
         oracles = diagnostics.build_truth_oracles(
             records, production_base, screening, yolo, params, audits,
         )
@@ -297,15 +500,23 @@ def main() -> None:
             "candidate_full_plus_two_lower_edge_windows",
             records, candidate_models, screening, params, oracles,
         )
+        independent_normal = (
+            diagnostics.evaluate_variant(
+                "candidate_independent_normal_replay",
+                independent_records, candidate_models, screening, params, {},
+            )
+            if independent_records else None
+        )
     gate = corrected_gate(
         baseline,
         candidate,
         occlusion_audit,
         int(candidate_receipt.get("onnx_parity_mismatches", -1)),
         int(candidate_receipt.get("production_onnx_parity_mismatches", -1)),
+        independent_normal,
     )
     payload = {
-        "version": "label-qc-tray-edge-context-eval-v1",
+        "version": "label-qc-tray-edge-context-eval-v2",
         "created_at": diagnostics.utc_now(),
         "purpose": "bounded lower-edge zoom A/B after full-image candidate missed one judgeable tray",
         "inputs": {
@@ -319,15 +530,21 @@ def main() -> None:
             "occlusion_audit_sha256": diagnostics.sha256_file(args.occlusion_audit),
             "protected_manifest": str(manifest),
             "protected_manifest_sha256": diagnostics.sha256_file(manifest),
+            "records_before_truth_adjudication": records_before_truth_adjudication,
+            "truth_adjudication": truth_adjudication,
             "edge_confidence": args.edge_confidence,
             "edge_width_fraction": args.edge_width_fraction,
             "edge_height_fraction": args.edge_height_fraction,
+            "source_edge_margin_ratio": args.source_edge_margin_ratio,
             "fixed_windows": "lower_left_and_lower_right",
             "target_location_used_at_runtime": False,
+            "independent_normal_manifests": independent_inputs,
+            "runtime": runtime_input,
         },
         "human_audit": human_audit,
         "baseline": baseline,
         "candidate": candidate,
+        "independent_normal": independent_normal,
         "comparison": diagnostics.compare_variants(baseline, candidate),
         "gate": gate,
         "training_started": False,

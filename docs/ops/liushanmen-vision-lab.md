@@ -607,6 +607,36 @@ B:\anaconda3\python.exe tools\vision-lab\build_minimal_incomplete_tray_requeue.p
 若操作员已经完成其他项目，追加 `--carry-reviewed-from <previous-requeue>`；只有源 minimal manifest 哈希、
 新旧衍生图片 SHA 和 crop ID 全部一致时才逐字节携带已审核 sidecar，并在新 manifest 记录携带数量。
 
+## 托盘边缘候选必须按 V8 当前真值评估
+
+托盘候选不能只用基础 `screen_image` 或旧 `protected-holdout.json` 判定。生产 V8 还包含托盘补充、
+标签级联、标签归属冲突降级和 `UNJUDGEABLE` 保护；人工裁决 sidecar 又会排除无效旧真值、替换
+已确认的 normal→缺标，并补入前瞻人工缺陷。缺少任一层都会把生产已覆盖的缺陷误报成漏检。
+
+边缘补检只允许生产保留式合并：全图框继续使用生产托盘模型；全图已检测到 8 盘时跳过补检；
+候选只运行两个下方边缘窗口；贴原图 1% 物理边界的框拒绝；与生产框 intersection-over-smaller
+达到 0.60 的框按重复拒绝。评估入口必须同时绑定 V8 bundle 与人工裁决：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\label_qc_tray_edge_context_eval.py `
+  --repo-root <clean-worktree> `
+  --baseline-receipt D:\CretasVisionLab\evaluation\label-oracle-sliced-20260815T164135Z\receipt.json `
+  --candidate-receipt <tray-candidate-training-receipt.json> `
+  --dataset-manifest <tray-candidate-dataset-manifest.json> `
+  --occlusion-audit D:\CretasVisionLab\evaluation\label-occlusion-scope-audit-20260816T074500Z\receipt.json `
+  --truth-adjudication D:\CretasVisionLab\evaluation\label-qc-protected-truth-adjudication-20260816T073100Z.json `
+  --runtime-bundle D:\CretasVisionLab\deployment-bundles\liushanmen-v8-20260822 `
+  --output D:\CretasVisionLab\evaluation\<new-immutable-output>
+```
+
+2026-08-27 R4 复核中，最近采集回执收到新照片 0、生产读 1/写 0。旧基础筛查曾把
+`locked-test-real_9827...` 误判为生产漏检；当前真值 + V8 回放证明生产基线有效缺陷 `7/7`、
+托盘覆盖 `7/7`、正常误报 `0`。生产保留式边缘候选为 `6/7`，回退该样本，P95
+`6258.938ms→6522.686ms`，因此拒绝且生产不变。权威回执为
+`D:\CretasVisionLab\evaluation\tray-production-preserving-edge-context-v8-current-truth-20260827T1550Z\receipt.json`。
+在有效保护缺陷已全命中且没有新上传照片时，不得继续用保护集调阈值或启动 960/1280 训练；等待
+新的任务隔离、人工确认非保护难例后再开始下一候选。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。

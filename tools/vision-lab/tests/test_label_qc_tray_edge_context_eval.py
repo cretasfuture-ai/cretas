@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +16,33 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
+
+
+@dataclass(frozen=True)
+class _Detection:
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    confidence: float
+    class_id: int = 0
+
+    def as_xyxy(self):
+        return [self.x0, self.y0, self.x1, self.y1]
+
+
+class _StaticModels:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def detect_trays(self, image, conf):
+        response = self.responses[min(self.calls, len(self.responses) - 1)]
+        self.calls += 1
+        return list(response)
+
+    def detect_labels(self, crop, conf):
+        return []
 
 
 def test_edge_regions_are_fixed_symmetric_lower_windows():
@@ -37,6 +67,63 @@ def test_outer_band_filter_keeps_only_corresponding_lower_corner_centres():
     assert module.belongs_to_outer_band(
         [20, 100, 320, 300], "lower_left", 1000, 800, 0.4, 0.6, 0.55,
     ) is False
+
+
+def test_physical_source_edge_gate_rejects_cut_off_rescues_only():
+    width, height = 3072, 4096
+
+    assert module.clears_physical_source_edges(
+        [2005.931, 3002.792, 3072.0, 4096.0], width, height,
+    ) is False
+    assert module.clears_physical_source_edges(
+        [2070.64, 3265.273, 3040.037, 4063.058], width, height,
+    ) is False
+    assert module.clears_physical_source_edges(
+        [208.559, 2723.698, 889.615, 3453.052], width, height,
+    ) is True
+
+
+def test_physical_source_edge_gate_validates_margin_ratio():
+    try:
+        module.clears_physical_source_edges([10, 10, 20, 20], 100, 100, 0.5)
+    except ValueError as error:
+        assert "source edge margin ratio" in str(error)
+    else:
+        raise AssertionError("invalid source edge margin must fail closed")
+
+
+def test_full_layout_preserves_production_and_skips_edge_model():
+    full = [_Detection(index * 10, 100, index * 10 + 8, 120, 0.9) for index in range(8)]
+    production = _StaticModels([full])
+    edge = _StaticModels([[_Detection(10, 10, 20, 20, 0.8)]])
+    wrapper = module.EdgeContextTrayModels(
+        production, _Detection, edge_base=edge, skip_full_layout_count=8,
+    )
+
+    result = wrapper.detect_trays(np.zeros((800, 1000, 3), dtype=np.uint8), 0.6)
+
+    assert result == full
+    assert production.calls == 1
+    assert edge.calls == 0
+    assert wrapper.last_stats["edge_windows_skipped_full_layout"] is True
+
+
+def test_edge_candidate_overlapping_production_is_rejected_before_merge():
+    production_detection = _Detection(100, 500, 400, 700, 0.9)
+    production = _StaticModels([[production_detection]])
+    edge = _StaticModels([
+        [_Detection(110, 180, 410, 380, 0.5)],
+        [],
+    ])
+    wrapper = module.EdgeContextTrayModels(
+        production, _Detection, edge_base=edge,
+        production_overlap_ios=0.60,
+    )
+
+    result = wrapper.detect_trays(np.zeros((800, 1000, 3), dtype=np.uint8), 0.6)
+
+    assert result == [production_detection]
+    assert wrapper.last_stats["edge_production_overlap_rejected"] == 1
 
 
 def test_corrected_gate_ignores_invalid_legacy_targets_but_requires_judgeable_target():
@@ -69,3 +156,34 @@ def test_corrected_gate_ignores_invalid_legacy_targets_but_requires_judgeable_ta
         {"photo_id": "invalid", "status": "OCCLUDED_OR_INVALID_LEGACY_TARGET_IGNORE"},
     ]
     assert gate["promotion_allowed"] is False
+
+
+def test_corrected_gate_rejects_independent_normal_false_flags():
+    baseline = {
+        "false_flags": 0, "p95_latency_ms": 100,
+        "details": [{
+            "photo_id": "target", "kind": "defect", "hit": False,
+            "tray_target_covered": False,
+        }],
+    }
+    candidate = {
+        "false_flags": 0, "p95_latency_ms": 110,
+        "details": [{
+            "photo_id": "target", "kind": "defect", "hit": True,
+            "tray_target_covered": True,
+        }],
+    }
+    audit = {"rows": [{
+        "photo_id": "target", "status": "JUDGEABLE_HUMAN_TRAY_MATCH",
+        "counted_as_tray_detector_miss": True,
+    }]}
+
+    gate = module.corrected_gate(
+        baseline, candidate, audit, 0, 0,
+        {"records": 277, "false_flags": 1},
+    )
+
+    assert gate["offline_development_passed"] is False
+    assert gate["independent_normal_records"] == 277
+    assert gate["independent_normal_false_flags"] == 1
+    assert "independent normal replay added false flags" in gate["errors"]

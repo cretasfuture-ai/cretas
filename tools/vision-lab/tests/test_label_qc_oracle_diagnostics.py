@@ -169,3 +169,43 @@ def test_comparison_rejects_normal_photo_regression():
 
     assert comparison["normal_flags_increased"] == ["n1"]
     assert comparison["development_continue_signal"] is False
+
+
+def test_evaluator_prefers_runtime_screen_image_when_available(tmp_path, monkeypatch):
+    image = tmp_path / "normal.png"
+    from PIL import Image
+
+    Image.new("RGB", (16, 16), "white").save(image)
+
+    class _Result:
+        trays = []
+        suspects = []
+
+    class _Runtime:
+        last_stats = {}
+        last_raw_detections = []
+
+        def __init__(self):
+            self.calls = 0
+
+        def screen_image(self, frame, params):
+            self.calls += 1
+            return _Result()
+
+    class _Screening:
+        @staticmethod
+        def screen_image(frame, models, params):
+            raise AssertionError("base screening must not bypass runtime policies")
+
+    monkeypatch.setattr(module, "serialize_screening", lambda result: {})
+    runtime = _Runtime()
+    result = module.evaluate_variant(
+        "runtime", [{
+            "image": image, "image_sha256": module.sha256_file(image),
+            "photo_id": "normal", "task_id": "task", "group": "normal",
+            "human_label": "NO_DEFECT",
+        }], runtime, _Screening(), object(), {},
+    )
+
+    assert runtime.calls == 1
+    assert result["false_flags"] == 0
