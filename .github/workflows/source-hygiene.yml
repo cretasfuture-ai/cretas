@@ -1,0 +1,78 @@
+name: Source Hygiene
+
+# ⛔ **本 workflow 故意不带 `paths:`** —— 这不是遗漏。
+#
+# 它跑的是**扫全仓**的检查。一道扫全仓的闸，触发面也必须是全仓；
+# 把它收窄到任何一个目录，等于把它的覆盖面收窄到那个目录的改动。
+#
+# ## 它从哪来（2026-08-27）
+#
+# 原来这个检查是 `backend/java/.../NoLiteralNulByteInSourceContractTest`。
+# 它扫的是**全仓**（后缀含 `.ts` `.tsx` `.vue` `.py` `.sql`），
+# 但作为一个 JUnit 测试，只有 `backend/java/cretas-api/**` 变化时才会跑
+# （`java-gate-pr.yml` 的 paths）。
+#
+# ⇒ **一个只改 `.ts` / `.vue` / `.py` 的 PR，它一次都不会执行。**
+#
+# 当天实测：一个新写的 RN 闸文件带着 2 个字面 `0x00` 进了 PR，
+# `git` 报 `Bin 0 -> 8343 bytes` —— 是人看 `git show --stat` 发现的，
+# 不是闸发现的，因为那道闸根本没被触发。
+#
+# ⛔ 反过来把 `java-gate-pr.yml` 的 `paths:` 撑成整个仓是错的：
+#    那会让每个 PR 都跑 5 分钟 Java，为的只是一个几秒钟的字节扫描。
+#
+# ## 为什么这件事没有别的信号
+#
+# 字面 NUL 不会让编译失败、不会让测试变红、IDE 正常显示、
+# `git diff` 也多半看不出（git 只探前 8000 字节判二进制）。
+# 唯一的症状是「某道源码闸的读数偏小」——
+# 而**偏小的读数长得和「没有问题」一模一样**。
+#
+# 本仓大量依赖源码级扫描闸（黑话闸 / 单位契约闸 / UTC 截断闸 / 变异可达性闸…），
+# 一个 NUL 就能让它们对整份文件失明。
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: source-hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  no-literal-nul-bytes:
+    runs-on: [self-hosted, cretas]
+    steps:
+      - uses: actions/checkout@v7
+
+      # ⚠️ 用 setup-python 而不是裸调 `python3` —— 与 kb-drift-check / ci.yml 同一个惯例。
+      #    自建 runner 上解释器叫什么、在不在 PATH 上都不该由这道闸来赌：
+      #    一道因为「解释器不叫这个名字」而红的闸，红的是错误的原因。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 三态（本仓硬约束 4）：0 干净 / 1 找到了 / 2 这次没量到。
+      # ⚠️ rc=2 **必须**与 rc=1 用不同措辞 —— 否则「没量到」会被折叠进「没问题」，
+      #    一个跑在空目录里的检查会安静地天天绿，而它一个文件都没看过。
+      - name: 扫描字面 NUL 字节
+        id: scan
+        run: |
+          set +e
+          python scripts/ci/check_no_nul_bytes.py --repo . | tee /tmp/nul.log
+          echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 判定 —— rc=2 这次没量到
+        if: steps.scan.outputs.rc == '2'
+        run: |
+          echo "::error title=NUL 扫描没量到::扫到的源文件数低于下界。本次读数作废，⛔ 不代表没有 NUL。"
+          exit 1
+
+      - name: 判定 —— rc=1 有文件对 grep 闸隐形
+        if: steps.scan.outputs.rc == '1'
+        run: |
+          echo "::error title=源码里有字面 NUL 字节::这些文件会被 grep 整份跳过, 所有源码级闸对它们失明。见上方清单。"
+          exit 1
