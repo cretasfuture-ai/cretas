@@ -1,0 +1,14 @@
+name: tmp probe vars
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 5
+    steps:
+      - name: 变量到底读不读得到
+        run: |
+          echo "vars.CI_RUNNER = [${{ vars.CI_RUNNER }}]"
+          echo "runner.name    = ${{ runner.name }}"
+          echo "runner.os      = ${{ runner.os }}"
+          echo "runner.environment = ${{ runner.environment }}"
