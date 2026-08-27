@@ -61,6 +61,9 @@ WORKFLOWS = [
     "java-full-nightly.yml",
     "tool-inventory-gate.yml",
     "web-dist.yml",
+    # 调度器 canary —— 只有一步 echo, 但它带 runs-on, 所以必须在这张清单里,
+    # 否则切回托管时它切不动(载体没登记, 与 java-gate-pr.yml 当初那次同形)。
+    "scheduler-canary.yml",
 ]
 
 HOSTED = "    runs-on: ubuntu-latest"
