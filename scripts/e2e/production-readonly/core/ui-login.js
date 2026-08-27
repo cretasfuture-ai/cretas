@@ -2,6 +2,7 @@
 
 const { redactText, sanitizeUrl } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
+const { waitForAppMount } = require('./app-mount');
 
 // 已知会串到别人会话里的租户标记。无 g 标志: 带 g 的正则跨次 test() 会保留 lastIndex。
 const STALE_TENANT_MARKER = /liushanmen_admin/i;
@@ -81,6 +82,12 @@ async function performUiLogin(page, options) {
       return {};
     }
   });
+  // 🔴 落地页也必须等应用挂载完再取样 —— 这是同一个缺陷的第二处, 而且更阴:
+  //    闪屏阶段的 body 只有二十来个字符, 于是下面
+  //      · 工厂名比对必然失败 -> 整个 suite 在 bootstrap 就 TOOL_ERROR
+  //      · 「跨租户残留」那条 canary 变成恒真式(闪屏里永远不会出现别的租户名)
+  //    判据见 core/app-mount.js。
+  const landingMount = await waitForAppMount(page, options.appMountTimeoutMs);
   const pageText = await page.locator('body').innerText().catch(() => '');
   const actualUsername = stored.username || login.username;
   const actualFactoryId = stored.factoryId || login.factoryId;
@@ -113,6 +120,9 @@ async function performUiLogin(page, options) {
     role: actualRole || null,
     landingPath: pathnameOf(page.url()),
     staleTenantDetected,
+    // ⚠️ 记下来, 否则「落地页没挂载」和「落地页缺东西」在证据里长得一样。
+    landingAppMounted: landingMount.appMounted,
+    landingAppMountMs: landingMount.appMountMs,
   };
 }
 

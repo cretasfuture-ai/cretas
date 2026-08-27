@@ -2,6 +2,7 @@
 
 const { createScenarioResult, assertScenarioResult } = require('../core/result-schema');
 const { pathnameOf, resolveUrl } = require('../core/url-utils');
+const { waitForAppMount } = require('../core/app-mount');
 
 function arrayDelta(after, beforeLength) {
   return (after || []).slice(beforeLength);
@@ -20,6 +21,13 @@ async function runReadOnlyPageScenario(ctx, definition) {
       waitUntil: 'domcontentloaded',
       timeout: definition.timeoutMs || 45_000,
     });
+    // 🔴 取样必须发生在应用挂载【之后】—— 判据与理由见 core/app-mount.js。
+    //    少了这一步, goto 的 domcontentloaded 在闪屏阶段就满足, 2026-08-27 生产实测
+    //    16 个场景里 13 个因此报 UNVERIFIED/tool。
+    const { appMounted, appMountMs } = await waitForAppMount(
+      ctx.page,
+      definition.appMountTimeoutMs,
+    );
     await ctx.page.waitForLoadState('networkidle', { timeout: 6_000 }).catch(() => {});
     result.url = ctx.page.url();
     const body = await ctx.page.locator('body').innerText().catch(() => '');
@@ -29,6 +37,8 @@ async function runReadOnlyPageScenario(ctx, definition) {
       matchedLandmarks: matched,
       bodyTextLength: body.trim().length,
       finalPath: pathnameOf(result.url),
+      appMounted,
+      appMountMs,
     });
     let assessment = null;
     if (definition.inspect) {
@@ -41,10 +51,18 @@ async function runReadOnlyPageScenario(ctx, definition) {
       }
     }
     if (definition.screenshot) result.screenshots.push(await ctx.screenshot(definition.id));
-    result.result = matched.length === (definition.landmarks || []).length && body.trim().length > 40
-      ? 'PASS'
-      : 'UNVERIFIED';
-    result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool';
+    // ⚠️ 「应用压根没挂载」与「挂载了但缺 landmark」必须分开报 —— 下一步动作相反:
+    //    前者去查前端加载(构建/资源/首屏), 后者去查这条场景的期望或页面本身。
+    //    ⛔ 都折叠成 UNVERIFIED/tool 就是把「没量到」塞进了「判不了」。
+    if (!appMounted) {
+      result.result = 'UNVERIFIED';
+      result.rootCauseClass = 'frontend';
+    } else {
+      result.result = matched.length === (definition.landmarks || []).length && body.trim().length > 40
+        ? 'PASS'
+        : 'UNVERIFIED';
+      result.rootCauseClass = result.result === 'PASS' ? 'none' : 'tool';
+    }
     if (result.result === 'PASS' && assessment) {
       result.result = assessment.result;
       result.rootCauseClass = assessment.rootCauseClass;

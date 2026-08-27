@@ -67,7 +67,37 @@ function pageHtml(pathname) {
           </script>
         </main>`
         : '<main><h1>工作台</h1><p>f006_admin 六膳门食品科技 F006</p></main>';
-  return `<!doctype html><html><body>${content}</body></html>`;
+  return wrapWithBootSplash(pathname, content);
+}
+
+/**
+ * 复刻 web-admin/index.html 的启动闪屏。
+ *
+ * 🔴 2026-08-27 实测: 这个夹具此前【直接吐渲染好的 HTML，从来没有闪屏】——
+ *    而生产上恰恰是先渲染 `#app-loader`、SPA 挂载后才由 CSS
+ *    `#app:not(:empty) + #app-loader { display: none; }` 把它藏掉。
+ *    ⇒ 夹具缺的正是生产上会坏的那一环, 所以「16 个场景里 13 个 UNVERIFIED」
+ *      这个仪器缺陷在本地一次都复现不出来。
+ *
+ * ⛔ `/login` 与 `/sales/orders` 保持原样: 它们的内联 <script> 必须在解析期执行,
+ *    而 innerHTML 注入进去的 <script> 不会运行。这两条是【显式登记的例外】,
+ *    不是漏改 —— 其余路径都会走一遍真实的「先闪屏、后挂载」。
+ */
+function wrapWithBootSplash(pathname, content, delayMs = 250) {
+  if (pathname === '/login' || pathname === '/sales/orders') {
+    return `<!doctype html><html><body>${content}</body></html>`;
+  }
+  return `<!doctype html><html><head><style>
+    #app:not(:empty) + #app-loader { display: none; }
+  </style></head><body>
+    <div id="app"></div>
+    <div id="app-loader"><div class="logo">白垩纪 AI Agent</div><div class="sub">正在加载应用…</div></div>
+    <script>
+      setTimeout(function () {
+        document.getElementById('app').innerHTML = ${JSON.stringify(content)};
+      }, ${delayMs});
+    </script>
+  </body></html>`;
 }
 
 test.describe('production read-only harness local fixture', () => {
@@ -160,6 +190,43 @@ test.describe('production read-only harness local fixture', () => {
     const persisted = require('node:fs').readFileSync(path.join(evidenceDir, 'report.json'), 'utf8');
     expect(persisted).not.toContain('f006_admin');
     expect(persisted).not.toContain('fixture-only');
+  });
+
+  test('waits for the SPA to mount past the boot splash before sampling the page', async ({ page }) => {
+    const evidenceDir = path.resolve('test-results', 'production-readonly-boot-splash');
+    const report = await runSuiteWithPage(page, {
+      baseUrl,
+      evidenceDir,
+      scenarios: ['tenant-isolation', 'bom-readonly', 'label-qc-readonly'],
+      username: 'f006_admin',
+      password: 'fixture-only',
+      expectedUsername: 'f006_admin',
+      expectedFactoryId: 'F006',
+      productionReadonly: true,
+    });
+
+    // 🔴 这条测试守的是「取样发生在应用挂载【之后】」。
+    //    没有这道等待时, goto 的 domcontentloaded 在闪屏阶段就满足, body 只有
+    //    「白垩纪 AI Agent / 正在加载应用…」二十来个字符 ⇒ landmark 全不命中
+    //    ⇒ 每条都掉进 UNVERIFIED。生产上实测 16 个场景里 13 个是这么来的。
+    const navigated = report.scenarios.filter((result) => result.scenario !== 'tenant-isolation');
+    expect(navigated.map((result) => result.result)).toEqual(['PASS', 'PASS']);
+
+    for (const result of navigated) {
+      const mountEvidence = result.pageEvidence.find((entry) => 'appMounted' in entry);
+      // ⚠️ 「等了多久」必须每次都记下来 —— 否则下一个人分不清
+      //    「应用没挂载」和「挂载了但页面缺东西」, 而那两件事的下一步动作相反。
+      expect(mountEvidence, `${result.scenario} 缺少 appMounted 读数`).toBeTruthy();
+      expect(mountEvidence.appMounted).toBe(true);
+      // 夹具的闪屏延迟是 250ms; 若取样早于挂载, 这个数会明显偏小。
+      expect(mountEvidence.appMountMs).toBeGreaterThanOrEqual(200);
+      // 阳性对照: 正文必须是【挂载后】的内容, 不是闪屏那二十来个字符。
+      const landmarkEvidence = result.pageEvidence.find((entry) => 'bodyTextLength' in entry);
+      expect(landmarkEvidence.bodyTextLength).toBeGreaterThan(40);
+      expect(landmarkEvidence.matchedLandmarks.length)
+        .toBe(landmarkEvidence.expectedLandmarks.length);
+    }
+    expect(report.actualBusinessWrites).toBe(0);
   });
 
   test('verifies the sales order lifecycle workspace without business writes', async ({ page }) => {
