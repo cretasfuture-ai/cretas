@@ -48,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 而不是物理上不可能。</p>
  */
 @DisplayName("D3: 单位换算只有一份 —— orchestrator 只许委派, 不许自己算")
-class ProductionWorkflowOrchestratorUnitConversionTest {
+class ProductionWorkflowOrchestratorUnitConversionContractTest {
 
     private static final Path ORCHESTRATOR = Paths.get(
             "src/main/java/com/cretas/aims/service/orchestration/ProductionWorkflowOrchestrator.java");
