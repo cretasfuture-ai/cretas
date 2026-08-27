@@ -160,7 +160,11 @@ export function WHExpireHandleScreen() {
             await materialBatchApiClient.convertToFrozen(batch.id, {
               convertedBy: 1, // 默认操作人
               convertedDate: today,
-              storageLocation: batch.location || 'B区-冷冻库',
+              // 🔴 2026-08-27: 原来是 `batch.location || 'B区-冷冻库'` —— 与
+              // MaterialBatchManagementScreen 同一个形状的第二处。位置是受控词表,
+              // 「B区-冷冻库」不是编码, 写进去会让那条批次从位置统计里消失。
+              // ⇒ 有位置就带上, 没有就不传(后端按不改动处理)。
+              ...(batch.location ? { storageLocation: batch.location } : {}),
             });
             Alert.alert("成功", "已转为冻品，保质期延长30天");
             loadExpireBatches(); // 刷新列表

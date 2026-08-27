@@ -38,7 +38,13 @@ class WarehouseLayoutControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new WarehouseLayoutController(repository, finishedGoodsRepository, visionClient, new ObjectMapper());
+        // ⚠️ 2026-08-27: 位置判据抽成了 WarehouseLocationCatalog(受控词表, Owner 裁定)。
+        //    这里传**真实实现**而不是 mock —— 它读的正是本测试已经在打桩的同一个
+        //    repository, 所以既不用另写一套桩, 也不会把判据本身桩成恒真。
+        controller = new WarehouseLayoutController(
+                repository, finishedGoodsRepository,
+                new com.cretas.aims.service.warehouse.WarehouseLocationCatalog(repository),
+                visionClient, new ObjectMapper());
     }
 
     @Test

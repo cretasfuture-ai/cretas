@@ -160,7 +160,9 @@ export function WHBatchDetailScreen() {
           productionDate: batch.createdAt?.split('T')[0] ?? '',
           shelfLife: getShelfLifeDesc(batch.storageType),
           expiryDate: batch.expiryDate?.split('T')[0] ?? '',
-          location: batch.storageLocation || 'A区-冷藏库',
+          // 🔴 2026-08-27: 原来兜底成 'A区-冷藏库' —— 批次**没有位置**时编一个看起来
+          //    像真的位置给用户看。位置是受控词表, 那个串在本厂配置里不存在 ⇒ 是谎报。
+          location: batch.storageLocation || '未分配',
           temperature: tempInfo.temp,
           tempStatus: tempInfo.status,
           qualityGrade: 'A级',

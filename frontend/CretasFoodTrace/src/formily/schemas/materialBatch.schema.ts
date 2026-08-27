@@ -23,7 +23,8 @@ export interface MaterialBatchFormData {
 
   // 储存信息
   storageType: 'fresh' | 'frozen';
-  storageLocation: string;
+  /** 位置编码(受控词表); 可空 = 未分配。见本文件下方 schema 里的说明。 */
+  storageLocation?: string;
   freezeTemperature?: number; // 仅冻货
   shelfLife: number;
   expiryDate?: string; // 自动计算
@@ -223,21 +224,30 @@ export const materialBatchSchema: FormSchema = {
       ],
     },
 
+    // 🔴 2026-08-27 (Owner 裁定: 储存位置是受控词表, 必须是有编号的具体位置)
+    //
+    // 原来这里是 `x-component: 'Input'` + `required: true` + placeholder
+    // 「例如：冷库A区-货架3」—— 一个**必填的自由文本框**。那正是逼着人往
+    // storage_location 里打字的形状: 后端现在会 400 拒掉任何不在本厂
+    // WAREHOUSE_LAYOUT 配置里的值(见 WarehouseLocationCatalog)。
+    //
+    // ⚠️ 本 schema 目前**零个屏在渲染**(实测: 仅两处 JSDoc 注释提到它)。
+    // 所以这里不去发明一个数据源, 只做到一件事: **让它不可能再发出自由文本**。
+    // Select + 空 enum 是有意的 fail closed —— 谁把它接上而忘了灌
+    // 本厂已配置的位置编码, 会看到一个空下拉(显式失败), 而不是静默收下脏值。
+    //
+    // ⇒ 接它之前必须把 enum 灌成本厂 `GET /warehouse/layout` 返回的 locations[].code。
     storageLocation: {
       type: 'string',
       title: '储存位置',
-      required: true,
+      // 不再必填: null = 未分配, 是合法状态(实测 F006 的 139 条原料批次全是 NULL)。
+      required: false,
       'x-decorator': 'FormItem',
-      'x-component': 'Input',
+      'x-component': 'Select',
       'x-component-props': {
-        placeholder: '例如：冷库A区-货架3',
+        placeholder: '从本厂仓储配置中选择位置编码',
       },
-      'x-validator': [
-        {
-          required: true,
-          message: '请输入储存位置',
-        },
-      ],
+      enum: [],
     },
 
     shelfLife: {

@@ -79,6 +79,12 @@ public class SalesServiceImpl implements SalesService {
     private static final Logger log = LoggerFactory.getLogger(SalesServiceImpl.class);
 
     private final SalesOrderRepository salesOrderRepository;
+
+    /** 储存位置是受控词表 —— 判据只有一份, 见 WarehouseLocationCatalog。
+     *  ⚠️ 用字段注入而不是构造器注入: 本类有两个显式构造器, 且测试里被直接 new 30 处,
+     *  改签名会一次打断全部, 与本次改动无关。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
     private final SalesOrderItemRepository salesOrderItemRepository;
     private final SalesDeliveryRecordRepository deliveryRecordRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
@@ -3637,7 +3643,11 @@ public class SalesServiceImpl implements SalesService {
             batch.setRemark(request.remark());
         }
         if (request.storageLocation() != null) {
-            batch.setStorageLocation(request.storageLocation());
+            // 受控词表 —— 判据见 WarehouseLocationCatalog。
+            // ⚠️ 这是成品的**第二条**写路: /warehouse/layout/finished-goods/ 那条早就 fail closed,
+            //    而这条(销售侧编辑批次)一直没校验 ⇒ 同一个字段两套规则。
+            batch.setStorageLocation(
+                    locationCatalog.requireConfiguredLocation(factoryId, request.storageLocation()));
         }
         if (request.expireDate() != null) {
             batch.setExpireDate(request.expireDate());
