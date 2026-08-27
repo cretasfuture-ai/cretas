@@ -591,6 +591,50 @@ class VisionLabTests(unittest.TestCase):
                 {"operator clarified blur severity": 1},
             )
 
+    def test_pending_review_crop_must_prove_physical_context_before_training(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "pending-review"
+            (queue / "images").mkdir(parents=True)
+            (queue / "annotations-human").mkdir()
+            image = queue / "images" / "pending.jpg"
+            image.write_bytes(b"pending")
+            source = {
+                "crop_id": "pending-1", "image": str(image),
+                "image_sha256": vision_lab.sha256_file(image), "source_task_id": "task-1",
+                "training_eligible": True,
+                "review_crop_geometry": {
+                    "policy_version": "shallow-aspect-width-context-v1",
+                    "shallow_by_aspect_ratio": True,
+                    "crop_height_to_tray_width": 0.40,
+                },
+            }
+            (queue / "manifest.json").write_text(json.dumps({
+                "version": "liushanmen-pending-target-tray-review-v1",
+                "review_crop_policy_version": "shallow-aspect-width-context-v1",
+                "rows": [source],
+            }), encoding="utf-8")
+            (queue / "annotations-human" / "pending-1.json").write_text(json.dumps({
+                "reviewed": True, "unjudgeable": False,
+                "boxes": [{"c": 0, "b": [0.1, 0.1, 0.4, 0.4]}],
+            }), encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["queue_roots"] = [str(queue)]
+            with self.assertRaisesRegex(RuntimeError, "physical-context policy"):
+                vision_lab.build_dataset(cfg)
+
+            source["review_crop_geometry"] = {
+                "policy_version": "shallow-aspect-width-context-v2",
+                "shallow_by_aspect_ratio": True,
+                "crop_height_to_tray_width": 0.40,
+            }
+            manifest = json.loads((queue / "manifest.json").read_text(encoding="utf-8"))
+            manifest["review_crop_policy_version"] = "shallow-aspect-width-context-v2"
+            manifest["rows"] = [source]
+            (queue / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "incomplete physical context"):
+                vision_lab.build_dataset(cfg)
+
     def test_dataset_repeats_only_isolated_confirmed_missing_train_samples(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
