@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
+import static com.cretas.aims.mapper.MaterialBatchMapperTestFixtures.mapperWithRealLocationCatalog;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -24,7 +25,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class MaterialBatchMapperSp4Test {
 
-    private final MaterialBatchMapper mapper = new MaterialBatchMapper();
+    // 装配见 MaterialBatchMapperTestFixtures —— 真 WarehouseLocationCatalog + 空仓储配置。
+    private final MaterialBatchMapper mapper = mapperWithRealLocationCatalog();
 
     private CreateMaterialBatchRequest baseCreateRequest() {
         CreateMaterialBatchRequest req = new CreateMaterialBatchRequest();
