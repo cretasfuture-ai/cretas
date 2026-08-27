@@ -41,7 +41,7 @@ import static org.mockito.Mockito.when;
  * 所以「接通」和「校验」必须同时做, 否则只是把静默丢弃换成 FK 500。
  */
 @DisplayName("消耗记录的 notes 落库与计划引用校验")
-class MaterialConsumptionNotesAndPlanRefTest {
+class MaterialConsumptionTraceContractTest {
 
     private MaterialBatchRepository batchRepository;
     private MaterialConsumptionRepository consumptionRepository;
@@ -158,17 +158,65 @@ class MaterialConsumptionNotesAndPlanRefTest {
         verify(batchRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // 🔴 2026-08-27: 这一组替换了原来那条「现状钉住: 不带计划就不写消耗记录」。
+    //
+    // 原断言是 `verify(consumptionRepository, never()).save(any())`, 它守的理由是
+    // 「不带计划的领料很可能已由 FactoryMaterialRequisition 记过账, 补写会重复计成本」。
+    // 那条理由**查证后不成立**: 领料链路写的那行 sourceType 是 MATERIAL_RETURN(退料),
+    // 与手工出库不是同一个事件。
+    //
+    // 而现状已被判定为缺陷并修掉了 —— 生产实测(批次 a5e3740e…, 出库 0.01kg):
+    // material_consumptions 零新增、operation_logs 零行, 变的只有 usedQuantity 和
+    // lastUsedAt(单个可变字段, 下次出库就被覆盖) ⇒ **连是谁出的都没记**。
+    //
+    // ⚠️ 这是规则里的形态 C‴: 断言好好的, 是**需求变了**。症状是「红得理直气壮」,
+    //    最容易被读成「我改错了」然后把改动回退掉。
+    // ⛔ 改断言不许滑成删断言 ⇒ 把守的东西从「不写行」抬到「留痕的性质」, 并配阴性对照。
+    //
+    // ⚠️ 而且这条断言**红了很久没人看见** —— 它当时不在任何 CI 选择器里
+    //    (类名不以 *ContractTest / *StartupGuardTest 结尾)。本次连同改名一起解决。
+    // ══════════════════════════════════════════════════════════════════
+
     @Test
-    @DisplayName("现状钉住: useBatchMaterial 只在【给了计划ID】时才写消耗记录")
-    void useWritesNoConsumptionRowWithoutAPlan() {
+    @DisplayName("🔴 不带计划的手工出库也必须留痕 —— 而且标成 MANUAL_ISSUE")
+    void manualIssueWithoutPlanStillLeavesATrace() {
         batch();
 
         service.useBatchMaterial("F006", "B-1", new BigDecimal("10"), null, 42L, "无计划领料");
 
-        // 这是既有行为(实现里写着「记录消耗（如果提供了生产计划ID）」), 本次**不改**:
-        // 真实的领料出库(RN WHOutboundIssueScreen)就走这条不带计划的路, 而它很可能
-        // 已由 FactoryMaterialRequisition 那条链路记过账 —— 在这里补写一行会重复计成本。
-        // 钉住它是为了让将来任何人改动这个语义时必须显式面对这条断言。
+        MaterialConsumption saved = savedConsumption();
+        assertNull(saved.getProductionPlanId(), "不带计划就是不带, 不许凭空塞一个");
+        // 单独标来源, 别和报工领用混在一起 —— 下游要分得清哪些是手工出库
+        assertEquals("MANUAL_ISSUE", saved.getSourceType());
+        assertEquals(42L, saved.getRecordedBy(), "记不下「是谁」的出库不许静默通过");
+        assertEquals("无计划领料", saved.getNotes());
+    }
+
+    @Test
+    @DisplayName("阴性对照: 带计划时来源是 PRODUCTION_ISSUE, 不是 MANUAL_ISSUE")
+    void plannedIssueIsTaggedDifferently() {
+        batch();
+        when(planRepository.existsById("P-1")).thenReturn(true);
+
+        service.useBatchMaterial("F006", "B-1", new BigDecimal("10"), "P-1", 42L, "报工领用");
+
+        MaterialConsumption saved = savedConsumption();
+        // 没有这一条, 上面那句 MANUAL_ISSUE 可能只是「来源字段恒为 MANUAL_ISSUE」
+        assertEquals("PRODUCTION_ISSUE", saved.getSourceType());
+        assertEquals("P-1", saved.getProductionPlanId());
+    }
+
+    @Test
+    @DisplayName("🔴 认不出操作人的出库必须被拒 —— 留痕的前提是知道是谁")
+    void issueWithoutOperatorIsRejected() {
+        batch();
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.useBatchMaterial("F006", "B-1", new BigDecimal("10"), null, null, "匿名领料"));
+
+        assertEquals(401, e.getCode());
+        // ⛔ 拒了就不许留下半条记录
         verify(consumptionRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
