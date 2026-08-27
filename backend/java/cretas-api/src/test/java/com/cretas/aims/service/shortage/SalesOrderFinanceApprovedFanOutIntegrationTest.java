@@ -116,6 +116,28 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
     private String productTypeId;
     private String salesOrderId;
 
+    /**
+     * 本次 seed 出来的审核人 id —— ⛔ 不要在下面的事件里写死一个字面量。
+     *
+     * <p>2026-08-27 夜间棘轮实测：这里原来发的是 {@code 1L}。
+     * {@code SupplyChainOrchestrator.createProductionPlanFromSO} 把它写进
+     * {@code production_plans.created_by}，而那一列有外键指向 {@code users(id)} ——
+     * 于是这个测试**是否通过取决于「此刻库里有没有 id=1 的用户」**：</p>
+     *
+     * <ul>
+     *   <li>单独跑 / 本机全量：这里 seed 的 operator 恰好就是第一条 user，拿到 id=1，字面量蒙对</li>
+     *   <li>CI 全量：跑到它时自增列早已推进（大量 {@code @Transactional} 测试插入后回滚，
+     *       行没了而自增列不退），operator 拿到的 id ≠ 1，而 {@code users(1)} 不存在
+     *       ⇒ <code>Referential integrity constraint violation:
+     *       production_plans FOREIGN KEY(created_by) REFERENCES users(id) (CAST(1 AS BIGINT))</code>
+     *       ⇒ PP 永远落不了库 ⇒ 下面第二条断言轮询到超时</li>
+     * </ul>
+     *
+     * <p>⚠️ 它长得像「异步没落库」或「轮询窗口不够」，而两者的下一步动作完全不同。
+     * 判据是 CI 日志里那条外键报错，⛔ 不是断言的超时本身。</p>
+     */
+    private Long approverId;
+
     @BeforeEach
     void seedOrderWithNoActiveBomAndNoStock() {
         Factory factory = new Factory();
@@ -130,6 +152,7 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
         operator.setFullName("Fan-out IT Operator");
         operator.setIsActive(true);
         Long createdBy = userRepository.saveAndFlush(operator).getId();
+        approverId = createdBy;
 
         Customer customer = new Customer();
         customer.setFactoryId(FACTORY_ID);
@@ -182,7 +205,7 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
     @Test
     void bomExpansionFailureDoesNotSilentlyDiscardShortageReportOrProductionPlan() throws InterruptedException {
         eventPublisher.publishEvent(
-                new SalesOrderFinanceApprovedEvent(this, FACTORY_ID, salesOrderId, 1L));
+                new SalesOrderFinanceApprovedEvent(this, FACTORY_ID, salesOrderId, approverId));
 
         // 两个监听器都是 @Async(默认 SimpleAsyncTaskExecutor) — 轮询等落库, 不用固定 sleep.
         // 断言走原生 JDBC 而非 JPA repository: sales_order_shortage_report/production_plans
