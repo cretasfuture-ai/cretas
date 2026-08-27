@@ -64,7 +64,34 @@ const RESULT = analyze();
  *    看清单 —— 数变小可能是**分析器读不懂了**（条目掉进「判不了」），不是修好了。
  *    所以下面同时钉了「判不了」的上限。
  */
-const VACUOUS_BUDGET = 36;
+const VACUOUS_BUDGET = 37;
+
+/**
+ * 🔴 2026-08-27：36 -> 37，**这是一次「故意不改」的登记，不是修好了**（硬约束 8）。
+ *
+ * 成因是 #123 落地：ManagementScreen 从「没权限就隐藏」改成「置灰可见」。
+ * 那一处判断由 1 条变成 2 条，净 +1：
+ *
+ *   #123 前  L167  `!item.adminOnly || isAdmin`                        恒为真   1 条
+ *   #123 后  L198  `item.adminOnly && !isAdmin`                        恒为假
+ *            L186  `section.items.every(i => i.adminOnly) && !isAdmin` 恒为假   2 条
+ *
+ * ⛔ 这**不是 #123 的缺陷**。读它的实现，两个分支的设计都是对的（不按权限过滤、
+ * 整区全锁才隐藏，理由写在它自己的注释里）。它们之所以恒假，**只因为
+ * ManagementScreen 目前只有 `permission_admin` / `platform_admin` 走得到** ——
+ * 而这两个都是 admin，于是 `!isAdmin` 恒假，置灰态在这屏上永远渲染不出来。
+ *
+ * 🔴 **底下压着一个还没拍的产品决策**（上一轮交接件 §3A 后半段）：
+ *   权限表说有 6 个只读角色能看客户/供应商，而它们各自的导航树里一个都没注册 ——
+ *   **是权限表写多了，还是菜单漏了？** 两边必有一个错。
+ *
+ *   (a) 这屏就是管理员专用  -> 摘掉 `locked` / `allLocked`（成了死代码），棘轮回 36
+ *   (b) 非管理员本该进得来  -> 修可达性，两个分支自然变成活的，棘轮回 36
+ *   (c) 暂不拍              -> 就是现在这一档，抬到 37 并留下这段理由
+ *
+ * ⚠️ 抬到 37 是为了不让这道闸卡住整批 PR，**不是**认可这两条空转。
+ *    决策一拍就该回到 36，⛔ 别让 37 变成新的「正常值」。
+ */
 
 /**
  * 「判不了」的上限（建闸当天 11 条）。
@@ -194,14 +221,30 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     expect(entry?.[1]).toEqual(['permission_admin', 'platform_admin']);
   });
 
-  it('真实用例：ManagementScreen 的 isAdmin 分支判定为空转（恒真）', () => {
+  it('真实用例：ManagementScreen 的 isAdmin 分支判定为空转', () => {
+    // 🔴 2026-08-27：原来这里断言的是**字面**「恒为真」。#123 落地后
+    //    那一处从 `!item.adminOnly || isAdmin`（恒真）变成 `item.adminOnly && !isAdmin`
+    //    （恒假）—— **方向合法地翻了**，而断言跟着红了。
+    //
+    //    这属于形态 C‴「断言守着一个我们已经不想要的行为」：它不是恒真式、
+    //    也不是变异没生效，是**需求变了**。症状是「红得理直气壮」，最容易被
+    //    读成「我改错了」然后把改动回退掉。
+    //
+    // ⇒ 按本仓规矩把守的东西**从字面抬到性质**：这道闸要证明的从来是
+    //   「这个分支对能走到这屏的所有角色都不起作用」，⛔ 不是「它恒真」。
+    //   恒真/恒假只是同一个性质的两个方向。
     const found = RESULT.findings.filter(
       (f) => f.relFile.endsWith('management/ManagementScreen.tsx') && f.key.includes('permission_admin'),
     );
     expect(found.length).toBeGreaterThan(0);
     for (const f of found) {
       expect(f.verdict).toBe('VACUOUS');
-      expect(f.detail).toContain('恒为真');
+      // 守性质：恒真或恒假都算空转，但**必须是这两者之一** ——
+      // ⛔ 不能退化成「detail 非空」那种什么都不守的写法。
+      expect(/恒为真|恒为假/.test(f.detail)).toBe(true);
+      // 阴性对照：一条真正在起作用的分支不会被判成 VACUOUS，
+      // 所以 detail 里不许出现「这道判断在起作用」那一类措辞。
+      expect(f.detail).not.toContain('LIVE');
     }
   });
 
