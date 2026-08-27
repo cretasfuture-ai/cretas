@@ -80,10 +80,16 @@ class PinnedPackagingVersionNullSafeContractTest {
     @DisplayName("版本号必须经过 null 判断, 且兜底来源单独标注")
     void versionNumberMustBeNullGuardedAndSourceLabelled() throws IOException {
         String src = strippedSource();
+        // ⚠️ 2026-08-27 更新: 退路变了, 不是断言失效。
+        //    原来「version 为 null 时退回 plan.getSelectedBomVersion()」——
+        //    现在成本改读【批次】创建时钉下的绑定(BatchBomBinding), 计划只是批次没钉时的兜底。
+        //    守的行为没变(版本号必须有来处、不许裸解引用), 变的是来处本身。
         assertThat(src)
-                .as("version 为 null 时要退回 plan.getSelectedBomVersion()")
-                .contains("version != null")
-                .contains("plan.getSelectedBomVersion()");
+                .as("version 为 null 时必须有明确退路, 不许裸用")
+                .contains("version != null");
+        assertThat(src)
+                .as("成本必须走批次绑定 —— 批次的账按它创建时绑的那一版算")
+                .contains("BatchBomBinding.resolve");
         // ⛔ 来源不能混为一谈: 冻结快照 vs「当前配方恰好还是那个版本」是两回事,
         //    混掉会让历史成本的可追溯性悄悄丢失。
         assertThat(src)
