@@ -1,0 +1,71 @@
+# 跨语言契约闸 —— 前端读的字段名, 后端得真的产出。
+#
+# ## 为什么单独一个 workflow, 而不是塞进 web-admin-gate
+#
+# 这道闸把**整个 Java + Python 后端**当标识符语料。要让它在「后端删掉一个前端在读的
+# 字段」时开火, 触发面就得覆盖 `backend/java/**` 与 `backend/python/**`。
+#
+# 🔴 2026-08-28 实测: 把这两条宽 glob 加进 `web-admin-gate.yml` 之后,
+#    `gateTriggerSurfaceCoversWhatItReads` 的**阴性对照当场红了** ——
+#    那条对照断言「某个没被引用的 Java 文件**不**在 paths 覆盖里」, 用来证明
+#    glob 匹配器不是见谁都说覆盖。加了 `src/main/java/**` 之后它变成恒真式。
+#    ⇒ **为了给自己的闸补触发面, 把另一道闸的自检能力毁掉了。**
+#    ⛔ 正确方向不是去改那条阴性对照(那是削弱别人的闸来迁就自己),
+#       而是承认「跨语言契约」本来就不属于 web-admin 这一棵树 ⇒ 自己一个 workflow。
+#
+# ## 它守什么
+#
+# 2026-08-28 一晚同一形态三次:
+#   质检标准   statistics.enabledItems          后端 0 处 → 卡片显示「已启用 0」
+#   财务概览   overview.monthlyTransactionCount 后端 0 处 → 「本月交易笔数 0」
+#   采购单详情 order.unpaidAmount / paymentDueDate  实体上没有这些列
+# 机制都一样: 前端读一个后端从不产出的字段 → undefined → `|| 0` 兜底 → 一个很有说服力的 0。
+# ⚠️ 接口层/类型检查/单测全抓不到 —— TS 那侧是 any/TableRow, Java 那侧是 Map<String,Object>,
+#    **两边都没有类型约束跨过那条线**。是逐屏走查(视觉验收)才发现的。
+#
+# ⛔ 这个 job 只跑那一个 spec。整套 vitest 仍归 web-admin-gate ——
+#    在这里再跑一遍整套, 就是让后端 PR 白等 1.5 分钟。
+
+name: Cross-language Contract Gate
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'web-admin/src/**'
+      - 'backend/java/cretas-api/src/main/java/**'
+      - 'backend/python/**'
+      - '.github/workflows/crosslang-contract-gate.yml'
+  pull_request:
+    paths:
+      - 'web-admin/src/**'
+      - 'backend/java/cretas-api/src/main/java/**'
+      - 'backend/python/**'
+      - '.github/workflows/crosslang-contract-gate.yml'
+
+concurrency:
+  group: crosslang-contract-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  field-names:
+    # 与 web-admin-gate 同一台 runner。runner 路由见 .claude/rules/ci-runner-routing.md,
+    # ⛔ 别用 `${{ vars.X }}` —— 实测在 runs-on 里求值为空。
+    runs-on: [self-hosted, cretas]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web-admin/package-lock.json
+      - name: Install web-admin deps
+        working-directory: web-admin
+        run: npm ci --legacy-peer-deps
+      - name: 跨语言字段名棘轮
+        working-directory: web-admin
+        run: npx vitest run src/__tests__/gates/frontendFieldsExistInBackend.source.spec.ts
