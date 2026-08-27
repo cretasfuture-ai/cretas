@@ -6,6 +6,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../../store/authStore';
 import { NeoCard, NeoButton, ScreenWrapper, StatusBadge } from '../../components/ui';
+import { PermissionGatedAction } from '../../components/permission/PermissionGatedAction';
 import { theme } from '../../theme';
 
 type ManagementNavigationProp = NativeStackNavigationProp<any>;
@@ -163,9 +164,27 @@ export default function ManagementScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* ⚠️ 这里【不再按权限过滤】。原来是 items.filter(item => !item.adminOnly || isAdmin),
+            非管理员看到的是一张少了几格(甚至整张消失)的卡 —— 那让人以为「系统没有这个功能」。
+            改成全部渲染, 不归自己的那几格置灰 + 上锁图标 + 点了说清归谁。 */}
         {managementSections.map((section, index) => {
-          const visibleItems = section.items.filter(item => !item.adminOnly || isAdmin);
-          if (visibleItems.length === 0) return null;
+          if (section.items.length === 0) return null;
+
+          /*
+           * ⛔ 整区全锁的, 仍然整区隐藏。
+           *
+           * 置灰的价值来自**对比** —— 旁边有能点的, 灰的那格才传达「这个我有、只是不归我」。
+           * 「生产配置」6 格里 2 格灰, 正是这个形态。
+           *
+           * 而「系统管理」(4/4) 和「工厂配置」(2/2) 对非管理员是 100% adminOnly:
+           * 渲染出来就是一个区标题压着一排全灰的格子, 没有任何对比对象 ——
+           * 传达的信息退化成「这儿有个区, 一格都不归你」, 那只是把一堵墙
+           * 从看不见变成看得见, 还占着屏。
+           *
+           * 判据是算出来的、不是写死区名的 —— 分区构成以后会变, 写死会漂。
+           */
+          const allLocked = section.items.every((item) => Boolean(item.adminOnly)) && !isAdmin;
+          if (allLocked) return null;
 
           return (
             <NeoCard key={index} style={styles.sectionCard} padding="m">
@@ -173,17 +192,39 @@ export default function ManagementScreen() {
                 <Avatar.Icon size={32} icon={section.icon} style={styles.sectionIcon} color={theme.colors.primary} />
                 <Text style={styles.sectionTitle}>{section.title}</Text>
               </View>
-              
+
               <View style={styles.grid}>
-                  {visibleItems.map((item) => (
-                      <TouchableOpacity key={item.id} style={styles.gridItem} onPress={() => handleNavigate(item.route)}>
-                          <View style={styles.itemIconContainer}>
-                              <Avatar.Icon size={40} icon={item.icon} style={styles.itemIcon} color={theme.colors.primary} />
-                          </View>
-                          <Text style={styles.itemTitle}>{item.title}</Text>
-                          <Text style={styles.itemDesc} numberOfLines={1}>{item.desc}</Text>
-                      </TouchableOpacity>
-                  ))}
+                  {section.items.map((item) => {
+                      const locked = Boolean(item.adminOnly) && !isAdmin;
+                      return (
+                        <PermissionGatedAction
+                          key={item.id}
+                          granted={!locked}
+                          reason={t('locked.adminOnlyReason')}
+                          style={styles.gridItem}
+                          testID={`management-tile-${item.id}`}
+                        >
+                          <TouchableOpacity
+                            testID={`management-tile-action-${item.id}`}
+                            style={styles.gridItemInner}
+                            onPress={() => handleNavigate(item.route)}
+                          >
+                              <View style={styles.itemIconContainer}>
+                                  <Avatar.Icon
+                                    size={40}
+                                    icon={locked ? 'lock-outline' : item.icon}
+                                    style={styles.itemIcon}
+                                    color={locked ? theme.colors.textTertiary : theme.colors.primary}
+                                  />
+                              </View>
+                              <Text style={[styles.itemTitle, locked && styles.itemTitleLocked]}>{item.title}</Text>
+                              <Text style={styles.itemDesc} numberOfLines={1}>
+                                {locked ? t('locked.adminOnlyBadge') : item.desc}
+                              </Text>
+                          </TouchableOpacity>
+                        </PermissionGatedAction>
+                      );
+                  })}
               </View>
             </NeoCard>
           );
@@ -276,6 +317,16 @@ const styles = StyleSheet.create({
       marginBottom: 4,
       textAlign: 'center',
       color: theme.colors.text,
+  },
+  // gridItem 的 alignItems:'center' 原来直接管着图标/标题/描述; 现在中间多了
+  // PermissionGatedAction 两层容器, 居中要在这一层重新声明, 否则图标会偏左。
+  gridItemInner: {
+      alignSelf: 'stretch',
+      alignItems: 'center',
+  },
+  // 置灰格子的标题 —— 与 PermissionGatedAction 的 opacity 叠加, 保证一眼看出「不归我」
+  itemTitleLocked: {
+      color: theme.colors.textTertiary,
   },
   itemDesc: {
       fontSize: 12,
