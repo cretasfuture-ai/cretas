@@ -111,12 +111,19 @@ class MaterialConsumptionSourceTypeSetContractTest {
      * <p>🔴 不剔就是假闸 —— 本仓已有先例：三处新写的说明性注释里逐字引用了
      * {@code setSourceType} 与来源名，不剔的话闸会把<b>自己要求写的那句注释</b>
      * 当成被测代码数进去，于是漏设的地方照样绿。</p>
+     *
+     * <p>⚠️ 注释行<b>置空而不是删掉</b> —— 必须保持行号与原文件一一对应。
+     * 建闸时第一版是 {@code continue}(整行丢弃)，变异对照当场把后果照出来了：
+     * 闸报的是 {@code ProductionPlanServiceImpl.java:6354}，而真实位置是
+     * <b>7607</b>，差了一千两百多行。文件名对、行号错，
+     * 照着去看的人会打开一段毫不相干的代码。</p>
      */
     private static String stripped(Path p) throws IOException {
         StringBuilder out = new StringBuilder();
         for (String line : Files.readString(p, StandardCharsets.UTF_8).split("\n", -1)) {
             String t = line.trim();
             if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) {
+                out.append('\n');   // ⛔ 不要改成 continue: 行号会整体前移, 报出来的位置就是错的
                 continue;
             }
             int slash = line.indexOf("//");
