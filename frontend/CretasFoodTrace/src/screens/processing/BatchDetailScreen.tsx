@@ -183,11 +183,19 @@ export default function BatchDetailScreen() {
     );
   };
 
-  const getAchievementColor = (rate: number): string => {
+  // ⚠️ null = **没有计划数据, 算不出来**, 不是「达成率很低」。
+  //   原签名是 `rate: number`, 传 null 会掉进最后那个 return 被涂成红色 ——
+  //   把「不知道」画成「很糟」, 和把它显示成 100% 是同一种谎, 只是方向相反。
+  const getAchievementColor = (rate: number | null): string => {
+    if (rate == null) return '#9E9E9E';
     if (rate >= 95) return '#4CAF50';
     if (rate >= 85) return '#FF9800';
     return '#F44336';
   };
+
+  // 达成率的唯一渲染入口 —— ⛔ 不要在别处再写一遍 `.toFixed(1) + '%'`。
+  const formatAchievementRate = (rate: number | null): string =>
+    rate == null ? '—' : `${rate.toFixed(1)}%`;
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -305,7 +313,7 @@ export default function BatchDetailScreen() {
                         { color: getAchievementColor(consumptionSummary.overallAchievementRate) },
                       ]}
                     >
-                      {consumptionSummary.overallAchievementRate.toFixed(1)}%
+                      {formatAchievementRate(consumptionSummary.overallAchievementRate)}
                     </Text>
                   </View>
                 </View>
@@ -341,7 +349,7 @@ export default function BatchDetailScreen() {
                               { color: getAchievementColor(material.achievementRate) },
                             ]}
                           >
-                            {material.achievementRate.toFixed(1)}%
+                            {formatAchievementRate(material.achievementRate)}
                           </Text>
                         </View>
                         <View style={styles.bomMaterialDetails}>

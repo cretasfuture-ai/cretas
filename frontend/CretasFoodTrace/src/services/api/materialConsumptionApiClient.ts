@@ -72,7 +72,8 @@ export interface MaterialConsumptionSummaryItem {
   plannedQuantity: number;
   actualQuantity: number;
   variance: number;
-  achievementRate: number;
+  /** 没有计划量时为 null —— **不是 0**。渲染成「—」，⛔ 不要 `?? 0`。 */
+  achievementRate: number | null;
 }
 
 // 后端原始返回格式
@@ -90,11 +91,22 @@ interface RawBatchConsumptionSummary {
   items: RawSummaryItem[];
   totalPlannedCost: number;
   totalActualCost: number;
-  overallAchievementRate: number;
+  /** 后端在没有计划成本时下发 null（2026-08-28 起）——⛔ 不再兜底成 100。 */
+  overallAchievementRate: number | null;
 }
 
 export interface BatchConsumptionSummary {
-  overallAchievementRate: number;
+  /**
+   * 没有计划数据时为 null —— **不是 0，也不是 100**。
+   *
+   * 🔴 2026-08-28 逐屏走查: 后端原本在「没有计划成本」时返回 **100**，
+   * 于是 web-admin 的「BOM达成率分析」把 8 个批次里 7 个**没有计划数据**的
+   * 显示成「达成率 100%」，顶部四张 KPI 卡也全由这些 100 推出来
+   * ——「8 个批次执行完美、零超耗」。已改为下发 null。
+   *
+   * ⛔ 这一侧不要再兜底：`|| 0` 只是把「满分」的谎换成「零分」的谎。
+   */
+  overallAchievementRate: number | null;
   totalPlannedQuantity: number;
   totalActualQuantity: number;
   materials: MaterialConsumptionSummaryItem[];
@@ -106,12 +118,13 @@ function transformSummary(raw: RawBatchConsumptionSummary): BatchConsumptionSumm
     plannedQuantity: item.plannedQty || 0,
     actualQuantity: item.actualQty || 0,
     variance: (item.actualQty || 0) - (item.plannedQty || 0),
-    achievementRate: item.plannedQty > 0 ? (item.actualQty / item.plannedQty) * 100 : 0,
+    // 没有计划量 ⇒ 达成率没有定义。⛔ 不是 0 —— 0 会被读成「一点都没做到」。
+    achievementRate: item.plannedQty > 0 ? (item.actualQty / item.plannedQty) * 100 : null,
   }));
   const totalPlanned = materials.reduce((sum, m) => sum + m.plannedQuantity, 0);
   const totalActual = materials.reduce((sum, m) => sum + m.actualQuantity, 0);
   return {
-    overallAchievementRate: raw.overallAchievementRate || 0,
+    overallAchievementRate: raw.overallAchievementRate ?? null,
     totalPlannedQuantity: totalPlanned,
     totalActualQuantity: totalActual,
     materials,
@@ -172,7 +185,9 @@ class MaterialConsumptionApiClient {
     if (raw.success && raw.data) {
       return { ...raw, data: transformSummary(raw.data) };
     }
-    return { ...raw, data: { overallAchievementRate: 0, totalPlannedQuantity: 0, totalActualQuantity: 0, materials: [] } };
+    // ⚠️ 请求失败时 **不要**返回 0：那会让「查不到」和「达成率 0%」变成同一个读数,
+    //   而这两件事对看屏的人完全不同。null ⇒ 屏上渲染「—」。
+    return { ...raw, data: { overallAchievementRate: null, totalPlannedQuantity: 0, totalActualQuantity: 0, materials: [] } };
   }
 }
 

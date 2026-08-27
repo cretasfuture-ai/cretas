@@ -352,12 +352,15 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                         .findFirst()
                         .orElse(BigDecimal.ZERO);
 
+            // ⚠️ 同一方法里的第二处「算不出来就给个数」: 没有计划量时偏差**没有定义**,
+            //   而 0% 会被读成「正好按计划」—— 恰恰是最让人放心的那个值。
+            //   ⇒ null。消费端目前只有 RN 的可选类型声明, 没有渲染点(已数)。
             BigDecimal variancePercent = plannedQty.compareTo(BigDecimal.ZERO) > 0
                     ? actualQty.subtract(plannedQty)
                         .divide(plannedQty, 4, RoundingMode.HALF_UP)
                         .multiply(BigDecimal.valueOf(100))
                         .setScale(1, RoundingMode.HALF_UP)
-                    : BigDecimal.ZERO;
+                    : null;
 
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("materialTypeId", typeId);
@@ -374,7 +377,19 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
             totalActualCost = totalActualCost.add(cost);
         }
 
-        BigDecimal achievementRate;
+        // 🔴 2026-08-28 逐屏走查: 这里原本在 totalPlannedCost == 0 时返回 100。
+        //
+        // 实拍(f006 →「生产管理 / BOM达成率分析」): 8 个批次里 **7 个**「计划总量 0 /
+        // 实际总量 19.75~152.13」, 达成率一律显示 **100%**, 而顶部四张 KPI 卡
+        // (平均达成率 100% / 超耗批次数 0 / 最低达成率 100%)**全部由这些 100 推出来** ——
+        // 用户读到的是「8 个批次执行完美、零超耗」, 真相是 7 个批次**根本没有计划数据**。
+        //
+        // ▎没有计划成本时, 达成率**不是 100%, 是没有定义**。
+        // ▎兜底成 100 把「我不知道」翻译成了「满分」, 比翻译成 0 更糟 —— 0 至少会引人去查。
+        //
+        // ⇒ 返回 null。消费端(web-admin / RN)一律渲染成「—」并说明原因,
+        //   参照同仓 SKU毛利率分析那屏的做法:「为避免误导, 明细暂不展示估算数据」。
+        BigDecimal achievementRate = null;
         if (totalPlannedCost.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal deviation = totalActualCost.subtract(totalPlannedCost).abs()
                     .divide(totalPlannedCost, 4, RoundingMode.HALF_UP);
@@ -382,8 +397,6 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     .max(BigDecimal.ZERO)
                     .multiply(BigDecimal.valueOf(100))
                     .setScale(1, RoundingMode.HALF_UP);
-        } else {
-            achievementRate = BigDecimal.valueOf(100);
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
