@@ -392,10 +392,10 @@ onMounted(loadRoleUserCounts);
         <!-- Tab 2: 数据权限 (Sprint 5 Track G stub — backend live, frontend Sprint 6 sweep) -->
         <el-tab-pane label="数据权限" name="data">
           <el-alert
-            title="Sprint 5 Track G — RBAC 数据权限维度 MVP"
+            title="数据权限维度"
             type="info"
             :closable="false"
-            description="后端 framework 已上线 (5 级 scope: ALL/DEPT_AND_BELOW/SELF_AND_BELOW/SELF/CUSTOM). 当前角色 default scope 见下表; 自定义编辑功能 Sprint 6 上线 (跟 §G 全 sweep 同步)."
+            description="后端 framework 已上线 (5 级 scope: ALL/DEPT_AND_BELOW/SELF_AND_BELOW/SELF/CUSTOM). 当前角色的默认范围见下表; 自定义编辑功能尚未开放."
             style="margin-bottom: 16px"
           />
           <el-form label-width="100px" disabled>
@@ -405,13 +405,13 @@ onMounted(loadRoleUserCounts);
                 <el-radio value="DEPT_AND_BELOW">本部门 + 下属部门</el-radio>
                 <el-radio value="SELF_AND_BELOW">自己 + 下属</el-radio>
                 <el-radio value="SELF">仅自己创建</el-radio>
-                <el-radio value="CUSTOM">自定义 (Sprint 6)</el-radio>
+                <el-radio value="CUSTOM">自定义 (尚未开放)</el-radio>
               </el-radio-group>
             </el-form-item>
             <el-form-item label="生效说明">
               <el-text type="info" size="small">
                 销售单 list 已实施 POC (SELF scope 仅看自己创建的订单).
-                Sprint 6 sweep 时扩 customer/PO/invoice/delivery 等 10+ 接口.
+                
               </el-text>
             </el-form-item>
           </el-form>

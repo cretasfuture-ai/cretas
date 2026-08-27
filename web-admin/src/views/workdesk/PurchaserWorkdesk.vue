@@ -25,7 +25,7 @@
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">采购员工作台</span>
-        <el-tag size="small" type="info">Sprint 8 P4b (2026-05-20)</el-tag>
+        
       </div>
       <div class="header-actions">
         <el-button :loading="loading" :icon="Refresh" @click="triggerWeeklyPlan">
@@ -903,7 +903,7 @@ async function openProcurementDialog(row: LowStockRow) {
   procurementDialog.form.quantity = row.recommendedReplenishQty || row.gap || null;
   procurementDialog.form.supplierId = row.preferredSupplier?.id || '';
   procurementDialog.form.expectedDeliveryDate = '';
-  procurementDialog.form.remark = '低库存补货 — Loop 3 一键采购下单';
+  procurementDialog.form.remark = '低库存补货 — 一键采购下单';
   procurementDialog.form.testRun = false;
   procurementDialog.preview = null;
   procurementDialog.canSubmit = false;

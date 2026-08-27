@@ -30,7 +30,7 @@
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">生产经理工作台</span>
-        <el-tag size="small" type="info">Sprint 10 Loop 5 (2026-05-21)</el-tag>
+        
       </div>
       <div class="header-actions">
         <el-button :loading="loading" :icon="Refresh" @click="triggerDemandQuery">

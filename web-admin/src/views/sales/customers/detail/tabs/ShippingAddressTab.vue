@@ -32,7 +32,7 @@
       type="info"
       :closable="false"
       style="margin-top: 16px"
-      title="地址变更历史功能尚未实现 (Sprint 5+) — 当前仅显示最新单值. 修改地址请前往客户主编辑页."
+      title="地址变更历史功能尚未开放 — 当前仅显示最新单值. 修改地址请前往客户主编辑页."
     />
   </div>
 </template>

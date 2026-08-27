@@ -17,7 +17,7 @@
         </el-tag>
       </span>
       <el-button :icon="Message" type="primary" disabled @click="onSendAttempt">
-        发邮件 (Sprint 6+ 上线)
+        发邮件 (尚未开放)
       </el-button>
     </div>
 
@@ -29,7 +29,7 @@
       class="banner"
     >
       <p>
-        邮件列表功能 Sprint 6 上线 — 届时将支持:
+        邮件列表功能尚未开放 — 开放后将支持:
       </p>
       <ul>
         <li>IMAP/Exchange 邮箱接入 (按客户邮箱自动归集)</li>
@@ -64,7 +64,7 @@ const route = useRoute();
 function onSendAttempt() {
   // 4 位一体: sticky + 后端 message 风格 + next action
   ElMessage({
-    message: '邮件发送功能 Sprint 6 上线 (需 IMAP 配置). 当前请用「跟踪记录」选「邮件」类型手工补录.',
+    message: '邮件发送功能尚未开放. 当前请用「跟踪记录」选「邮件」类型手工补录.',
     type: 'warning',
     duration: 0,
     showClose: true,

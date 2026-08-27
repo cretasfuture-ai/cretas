@@ -345,7 +345,7 @@ onMounted(() => {
       <template #header>
         <div class="header">
           <span>工程变更通知 (ECN)</span>
-          <el-tag size="small" type="success">Sprint 6 W4-C 分页+影响报告</el-tag>
+          
         </div>
       </template>
 

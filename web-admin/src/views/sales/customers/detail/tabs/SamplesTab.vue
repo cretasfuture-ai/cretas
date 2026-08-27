@@ -14,7 +14,7 @@
         <p class="title">「样品单」当前未关联到此客户档案</p>
         <p class="hint">
           ProductSample 数据模型目前通过 RD 需求单关联客户, 不直接挂客户档案.
-          客户级别的样品筛选预计 Sprint 5+ 上线 (扩展 RDRequest.customerId 反向关联).
+          客户级别的样品筛选尚未开放.
         </p>
         <p class="hint">当前查阅样品请前往研发样品列表页面.</p>
       </template>

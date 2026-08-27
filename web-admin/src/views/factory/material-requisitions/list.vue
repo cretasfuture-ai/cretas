@@ -7,6 +7,10 @@ import { Plus, Refresh, View, Tickets } from '@element-plus/icons-vue';
 import { get, post, put } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
+import {
+  RAW_WORKFLOW_OWNER_ANCHOR_LABEL,
+  isRawWorkflowOwnerAnchorName,
+} from '@/constants/rawWorkflowOwnerAnchor';
 import { handleCatchError } from '@/utils/errorToast';
 import { listWarehouses } from '@/api/factoryWarehouse';
 
@@ -186,7 +190,15 @@ function planLabel(planId?: string | null): string {
   if (!planId) return '-';
   const cached = planCache.value[planId];
   if (cached) {
-    const parts = [cached.planNumber, cached.productName].filter(Boolean);
+    // 2026-08-28 实拍(f006 真实客户): 这一列曾显示成
+    //   PLAN-1787108510261-C307CE6E · __RAW_WORKFLOW_OWNER__RMT_b25ab8b6-…
+    // 那不是产品名, 是后端为「多产出计划」建的 inactive 内部锚点(见常量文件的说明)。
+    // 后端那段代码的注释写着「前端产品目录会过滤 RAW_MATERIAL」—— 产品目录确实过滤了,
+    // 这一处没有。⇒ 机制在, 这个消费端没接上。
+    const productLabel = isRawWorkflowOwnerAnchorName(cached.productName)
+      ? RAW_WORKFLOW_OWNER_ANCHOR_LABEL
+      : cached.productName;
+    const parts = [cached.planNumber, productLabel].filter(Boolean);
     if (parts.length > 0) return parts.join(' · ');
   }
   return '原计划已删除/归档';

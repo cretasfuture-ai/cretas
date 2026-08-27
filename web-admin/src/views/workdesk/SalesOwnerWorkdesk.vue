@@ -19,7 +19,7 @@
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">销售老板工作台</span>
-        <el-tag size="small" type="info">Sprint 8 P1 (2026-05-20)</el-tag>
+        
       </div>
       <div class="header-actions">
         <el-button :loading="loading" :icon="Refresh" @click="triggerFollowupQuery">
@@ -229,7 +229,7 @@
               @click="loadTodayPendingShipments">
               刷新待发
             </el-button>
-            <span class="header-hint" style="margin-left: 8px;">Sprint 10 Loop 1 — AI 闭环发货</span>
+            
           </div>
         </div>
       </template>

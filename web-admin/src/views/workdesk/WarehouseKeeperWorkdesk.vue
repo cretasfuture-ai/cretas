@@ -31,7 +31,7 @@
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">仓管员工作台</span>
-        <el-tag size="small" type="info">Sprint 8 P4a (2026-05-20)</el-tag>
+        
       </div>
       <div class="header-actions">
         <el-button :loading="loading" :icon="Refresh" @click="triggerTodayQuery">
@@ -1155,7 +1155,7 @@ async function executeConfirmReceive() {
     // Playwright 通过 window.__SPRINT10_TEST_RUN__ = true 触发 testRun 标记
     const testRun = typeof window !== 'undefined'
       && (window as unknown as { __SPRINT10_TEST_RUN__?: boolean }).__SPRINT10_TEST_RUN__ === true;
-    const response = await callIntentExecute('确认收货 (Sprint 10 Loop 2)', 'RECEIVE_CONFIRM_CREATE', {
+    const response = await callIntentExecute('确认收货', 'RECEIVE_CONFIRM_CREATE', {
       poId: confirmReceiveDialog.row.poId,
       lineId: confirmReceiveDialog.row.lineId,
       receivedQty: confirmReceiveDialog.form.receivedQty,

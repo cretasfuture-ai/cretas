@@ -42,7 +42,7 @@ async function open(card: Card): Promise<void> {
   // 给用户当前可用替代 + 一键跳转.
   try {
     await ElMessageBox.confirm(
-      `${card.title} 留 Sprint 5 实现。当前 5 个可用报表: 销售额日报/月报/年报 + 客户/产品销售排行 top 20。是否查看销售报表概览?`,
+      `${card.title} 尚未开放。当前 5 个可用报表: 销售额日报/月报/年报 + 客户/产品销售排行 top 20。是否查看销售报表概览?`,
       '功能待上线',
       { confirmButtonText: '查看可用报表', cancelButtonText: '关闭', type: 'info' },
     );
@@ -57,7 +57,7 @@ async function open(card: Card): Promise<void> {
   <div class="sales-reports-dashboard">
     <div class="header">
       <h2>销售报表</h2>
-      <p class="subtitle">14 预置销售报表 — 5 可用, 9 待 Sprint 5</p>
+      <p class="subtitle">14 张预置销售报表 — 5 张可用, 9 张尚未开放</p>
     </div>
 
     <div class="card-grid">
@@ -72,7 +72,7 @@ async function open(card: Card): Promise<void> {
           <div class="icon">{{ card.icon }}</div>
           <div class="title">{{ card.title }}</div>
           <div class="desc">{{ card.desc }}</div>
-          <el-tag v-if="!card.active" size="small" type="info">Sprint 5</el-tag>
+          <el-tag v-if="!card.active" size="small" type="info">尚未开放</el-tag>
           <el-tag v-else size="small" type="success">可用</el-tag>
         </div>
       </el-card>

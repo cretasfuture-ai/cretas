@@ -193,7 +193,7 @@ onMounted(() => {
         show-icon
       >
         <p>跨 module / initiator / role 展示 factory 内所有 RUNNING 工作流. 用于排查卡住流程、跨部门协调.</p>
-        <p>Bulk 操作 (force-cancel / delegate) 将于 Sprint 6 W4+ 上线.</p>
+        <p>批量操作 (强制取消 / 委派审批人) 尚未开放.</p>
       </el-alert>
 
       <el-table
