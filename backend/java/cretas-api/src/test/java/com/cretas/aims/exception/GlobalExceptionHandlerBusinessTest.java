@@ -102,6 +102,53 @@ class GlobalExceptionHandlerBusinessTest {
         assertNull(body.getHintTarget());
     }
 
+    /**
+     * 🔴 2026-08-27: 缺陷所在的那一支此前**一条测试都没有**。
+     *
+     * 上面 {@code businessException_with_hint_body_contains_all_hint_fields} 看起来
+     * 已经守住了 hintTarget —— 但它**没调 withCode**，走的是 {@code errorWithHint} 那支。
+     * 缺陷在 {@code errorCode != null} 的另一支：它调的 5 参重载不带 hintTarget，
+     * 于是同时设了两者的 <b>380 条</b> throw 语句，hintTarget 被静默丢掉。
+     *
+     * <p>用户看到的不是「没提示」，是 web-admin 弹一个带「去处理」按钮、
+     * <b>点了没反应</b>的通知（{@code request.ts:99} 的 onClick 里
+     * {@code if (opts.hintTarget)} 不成立）。</p>
+     */
+    @Test
+    void businessException_with_errorCode_must_still_carry_hintTarget() {
+        BusinessException ex = new BusinessException(400, "未配置原料仓库")
+                .withCode("PRODUCTION_RAW_WAREHOUSE_NOT_CONFIGURED")
+                .withHint("前往工厂设置配置原料仓库")
+                .withHintTarget("factory-settings/warehouse");
+
+        ResponseEntity<ApiResponse<?>> resp = handler.handleBusinessException(ex);
+        ApiResponse<?> body = resp.getBody();
+
+        assertNotNull(body);
+        assertEquals("PRODUCTION_RAW_WAREHOUSE_NOT_CONFIGURED", body.getErrorCode());
+        assertEquals("前往工厂设置配置原料仓库", body.getActionHint());
+        // ⛔ 这一条就是修复前红的那一条：errorCode 那支把 hintTarget 丢了
+        assertEquals("factory-settings/warehouse", body.getHintTarget(),
+                "设了 errorCode 就不该丢 hintTarget —— 丢了前端那个「去处理」按钮点了没反应");
+    }
+
+    /**
+     * 阴性对照：errorCode 那支在**没有** hintTarget 时不许凭空造一个。
+     * ⛔ 没有这条，上面那条可以用「无条件塞一个非 null」来通过。
+     */
+    @Test
+    void businessException_with_errorCode_but_no_hintTarget_stays_null() {
+        BusinessException ex = new BusinessException(400, "普通带码错误")
+                .withCode("VALIDATION");
+
+        ResponseEntity<ApiResponse<?>> resp = handler.handleBusinessException(ex);
+        ApiResponse<?> body = resp.getBody();
+
+        assertNotNull(body);
+        assertEquals("VALIDATION", body.getErrorCode());
+        assertNull(body.getHintTarget(), "没设 hintTarget 时必须还是 null");
+    }
+
     @Test
     void mediaTypeNotSupported_maps_to_415_with_hint() {
         org.springframework.http.MediaType actual = org.springframework.http.MediaType.TEXT_PLAIN;

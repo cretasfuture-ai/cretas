@@ -143,10 +143,32 @@ public class ApiResponse<T> implements Serializable {
     /**
      * Phase 4a (2026-05-19): error response with semantic errorCode for FE branching.
      * Use when FE needs to differentiate error category (e.g. RULE_VIOLATION vs generic 400).
+     *
+     * <p>⚠️ 这个 5 参重载**不带 hintTarget**，保留只为不动 100+ 个既有调用点。
+     * 需要 hintTarget 的走下面那个 6 参重载。</p>
      */
     public static <T> ApiResponse<T> errorWithCode(Integer code, String errorCode,
                                                    String message, String actionHint,
                                                    String severity) {
+        return errorWithCode(code, errorCode, message, actionHint, severity, null);
+    }
+
+    /**
+     * 同上，外加 hintTarget。
+     *
+     * <p>🔴 2026-08-27：加这个重载是因为 {@code GlobalExceptionHandler} 的
+     * {@code errorCode != null} 那一支只能调 5 参版，于是**同时**设了 errorCode 和
+     * hintTarget 的 <b>380 条</b> throw 语句，hintTarget 被静默丢掉。</p>
+     *
+     * <p>后果不是「没提示」，是更糟的一种：actionHint 照常透传 ⇒ web-admin
+     * ({@code src/api/request.ts:90-105}) 弹出带按钮的富通知，而
+     * {@code onClick} 里 {@code if (opts.hintTarget)} 不成立 ⇒ <b>点了没反应</b>，
+     * 那句「立刻 pulse 让用户看到去哪」也不会触发。</p>
+     */
+    public static <T> ApiResponse<T> errorWithCode(Integer code, String errorCode,
+                                                   String message, String actionHint,
+                                                   String severity,
+                                                   String hintTarget) {
         ApiResponse<T> response = new ApiResponse<>();
         response.setCode(code);
         response.setErrorCode(errorCode);
@@ -156,6 +178,7 @@ public class ApiResponse<T> implements Serializable {
         response.setSuccess(false);
         response.setActionHint(actionHint);
         response.setSeverity(severity);
+        response.setHintTarget(hintTarget);
         return response;
     }
 
