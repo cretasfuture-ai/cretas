@@ -82,6 +82,23 @@ const NAV_FILES = walk(NAV_DIR);
  */
 const NAV_MARKER = path.sep + 'navigation' + path.sep;
 
+/**
+ * ⛔ 整个 `__tests__/gates/` 都要排除出引用池，不是只排除本文件。
+ *
+ * 原来写的是 `f !== __filename`，只挡住了本闸自己。但这个目录正在长出**别的**闸
+ * （#146 在加 `roleReachability.test.ts` + `lib/roleReachability.ts`），
+ * 而闸天然会大量引用屏名。任何一个闸只要写一句 `expect(...).toContain('SalesFunnel')`，
+ * `SalesFunnel` 就**从此算「可达」**——存量凭空变小，而没有任何用户能多走到一个屏。
+ *
+ * ⚠️ 这不是假想：本闸自己就是这么栽过的（它的阴性对照里写着 'DSHome' / 'Loading'，
+ *    早期没排除自己时少算了一个）。同一个形状，只是这次的载体是**隔壁文件**。
+ *
+ * 🔴 改之前先量过（硬约束 8）：当前 `__tests__/gates/` 下 10 个文件里，
+ *    剥掉注释后**一个存量屏名都没有被引号引起来**⇒ 这次改动对今天的读数是 no-op
+ *    （29 → 29）。它买的是「以后不会被隔壁文件悄悄放水」。
+ */
+const GATES_MARKER = path.sep + '__tests__' + path.sep + 'gates' + path.sep;
+
 const declared = new Map<string, string>(); // screen name -> navigator file
 const landing = new Set<string>();          // 落地页(显式 + 隐式)
 
@@ -131,7 +148,7 @@ const REFERENCES = walk(SRC)
   // ⛔ 排除本闸自己 —— 它的阴性对照里写着 'DSHome' / 'Loading' 这些屏名,
   //    若把自己算进引用池, 闸提到谁谁就「可达」。实测: 少算 1 个(Loading), 35 -> 34。
   //    本仓反复栽在「闸把自己的文字当成被测对象」上, 这是同一形状的又一例。
-  .filter((f) => !f.includes(NAV_MARKER) && f !== __filename)
+  .filter((f) => !f.includes(NAV_MARKER) && !f.includes(GATES_MARKER))
   .map((f) => stripComments(fs.readFileSync(f, 'utf8')))
   .join('\n');
 
@@ -141,16 +158,64 @@ const ORPHANS = [...declared.keys()]
   .sort();
 
 /**
- * 建闸当天的存量：**35 个**。
+ * 建闸当天的存量 **35 个**；2026-08-26 逐个分类后退役 6 个 ⇒ **29 个**。
  *
  * ⛔ 只许变小。往上抬 = 又上线了一个用户走不到的屏，那正是本闸要拦的那件事。
  *
- * ⚠️ 存量里都是真屏，不是空壳 —— 抽验能定位到组件的 6 个合计 **4226 行**，
- *    其中 5 个是 SmartBI 看板（`SalesFunnel` 893 / `ProcurementDashboard` 845 /
- *    `InventoryDashboard` 790 / `ProductionDashboard` 752 / `QualityDashboard` 683）。
- *    另 29 个用简易 import 解析没定位到组件，**真实行数只会更多**。
+ * ## 🔴 订正：上一版这里写的「存量里都是真屏，不是空壳」是**错的**
+ *
+ * 上一版拿**行数**当「是不是真屏」的证据，还特意点名了 5 个 SmartBI 看板
+ * （893 / 845 / 790 / 752 / 683 行）当作「体量很大所以是真的」。
+ * 逐个打开之后：**那 5 个恰恰全是空壳**。它们的 `loadData()` 里，
+ * 唯一那句 API 调用是**被注释掉的**，紧接着无条件
+ * `setError('该功能数据接口尚未实现')`：
+ *
+ *     // const response = await smartBIApiClient.getProductionDashboard({...});
+ *     setError(t('errors.notImplemented', { defaultValue: '该功能数据接口尚未实现…' }));
+ *
+ * 而且 `smartBIApiClient` 里**根本没有**这几个方法（`services/api/smartbi.ts` 里
+ * grep 不到 `getProductionDashboard` / `getInventoryDashboard` / `getSalesFunnel` /
+ * `getQualityDashboard` / `getProcurementDashboard`）。每个文件顶部还各有一个
+ * `generateMockData()`，声明了但**一次都没被调用**。
+ *
+ * ⇒ **行数量的是「写了多少字」，不是「它做不做事」。** 这两个数没有关系：
+ *   893 行的 `SalesFunnel` 打开就是一句错误提示。
+ *   ⛔ 别再用体量给存量背书 —— 要判就打开看 `loadData` 里那句 await 在不在。
+ *
+ * ## 2026-08-26 退役的 6 个（都是**重复注册**，不是删功能）
+ *
+ * 五个组件一个都没删，只是各自从两个注册名收敛回一个：
+ *
+ *   OutboundDetail  ⇒ 留 WHOutboundDetail  (WHOutboundListScreen 跳它)
+ *   InboundDetail   ⇒ 留 WHInboundDetail
+ *   AlertHandle     ⇒ 留 WHAlertHandle     (WHAlertListScreen 跳它)
+ *   TempMonitor     ⇒ 留 WHTempMonitor     (WHLocationManageScreen 跳它)
+ *   TraceDetail     ⇒ 留 TraceabilityDetail(TraceabilityScreen 跳它)
+ *                     整个 TraceStackNavigator.tsx 删除：它零 importer，
+ *                     四条路由是 ProcessingStackNavigator 那一段的逐字复制。
+ *   Membership      ⇒ 直接退役，无孪生。它是**另一个产品**的会员页
+ *                     （卡面写死 `POMELOX MEMBER`，整屏英文，
+ *                     `rewards.next_tier_progress` 这个 i18n key 当正文渲染出去，
+ *                     四个 TouchableOpacity 全都没有 onPress，
+ *                     `route` 指的 PointsMall/PointsHistory/MyCoupons/Referral
+ *                     四个名字在全仓不存在，后端也没有任何会员/积分/券的域）。
+ *                     曾在 5 个角色的 Profile 栈里各注册一次。
+ *
+ * ## 剩下 29 个的分类（逐条结论见 PR）
+ *
+ *   A 真功能只是漏入口   15   ⚠️ 其中 2 个连**所在的 navigator 都没被挂载**
+ *   C 半成品/空壳         13   ⛔ 不许接 —— 接一个内部是假数据的屏比藏着更糟
+ *   D 闸自己的假阳性       1   `Loading`（见上面「已知盲区」，⛔ 仍不开白名单）
+ *
+ * ⚠️ 两个「navigator 自己没挂载」的：`AIScheduleGenerate`(DSAIStack) /
+ *    `PersonnelAttendance`(DSPersonnelStack) —— 这两个 Stack 在
+ *    `DispatcherTabNavigator` 里 **import 了但没有对应的 `Tab.Screen`**
+ *    （文件头注释说有 6 个 Tab，实际只渲染 3 个）。
+ *    对它们**加一句 navigate 能让本闸变绿，而用户照样走不到** ——
+ *    这是本闸的第 5 个已知盲区：它只问「屏在不在某个 navigator 里」，
+ *    ⛔ 不问「那个 navigator 有没有被挂上去」。
  */
-const ORPHAN_BUDGET = 35;
+const ORPHAN_BUDGET = 29;
 
 describe('屏幕可达性（棘轮：上线即走不到的屏只许变少）', () => {
   it('阳性对照：仪器确实读到了 navigator 与源码', () => {
