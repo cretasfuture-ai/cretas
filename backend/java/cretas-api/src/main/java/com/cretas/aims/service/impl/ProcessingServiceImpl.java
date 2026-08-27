@@ -832,6 +832,14 @@ public class ProcessingServiceImpl implements ProcessingService {
                 (productionBatch.getSupervisorId() != null ? productionBatch.getSupervisorId() :
                  productionBatch.getCreatedBy());
             consumptionRecord.setRecordedBy(recordedBy);
+            // 🔴 2026-08-27: 此前**从不设 sourceType** ⇒ VoucherConsumptionSourcePolicy 对 null
+            //    返回 false ⇒ 这条领用不进财务凭证, 成本悄悄少算(静默, 无信号)。
+            //
+            // ⛔ 这里**不能**照 :1665 那样「无 planId 就记 MANUAL_ISSUE」: 那个三元判据的前提是
+            //    「没有计划 ⇒ 没有可归集的产出」, 而本方法**始终**挂在一个 productionBatch 上 ——
+            //    产出是这个批次, 归集得上。记成 MANUAL_ISSUE 会把它错误地排除出凭证。
+            //    (planId 可空只是因为批次不一定挂计划, 与「是不是生产领用」无关。)
+            consumptionRecord.setSourceType("PRODUCTION_ISSUE");
             // 🔒 全局兜底: 增加 usedQuantity 后断言 used+reserved≤receipt, 防超扣 (误伤-proof 后置校验)
             materialBatch.assertConsumptionInvariant();
             materialBatchRepository.save(materialBatch);
