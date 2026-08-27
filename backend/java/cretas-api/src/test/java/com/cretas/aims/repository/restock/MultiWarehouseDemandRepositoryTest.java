@@ -53,7 +53,7 @@ class MultiWarehouseDemandRepositoryTest {
     @Autowired private SalesOrderItemRepository salesOrderItemRepository;
 
     private static final String FID  = "F-TEST";
-    private static final Long   UID  = 1L;
+    private static final Long   UID  = 900001L;   // matches restock-fixtures.sql
     private static final String CID  = "CUST-TEST";
     private static final LocalDate D = LocalDate.of(2026, 9, 15);
 

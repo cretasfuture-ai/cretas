@@ -26,10 +26,17 @@ class ProductionPlanSourceDisplayMapperTest {
         ProductionPlan entity = mapper.toEntity(request, "F006", 1L);
         ProductionPlanDTO dto = mapper.toDTO(entity);
 
+        // Storage side keeps the canonical code the request carried.
+        assertThat(entity.getPlannedUnit()).isEqualTo("piece");
+        assertThat(entity.getSourceDisplayUnit()).isEqualTo("box");
+
+        // DTO side is the user-facing exit: since 2026-08-18 every *Unit field goes
+        // through UnitDisplayNames.display, so a code never reaches the user.
         assertThat(dto.getPlannedQuantity()).isEqualByComparingTo("500");
-        assertThat(dto.getPlannedUnit()).isEqualTo("piece");
+        assertThat(dto.getPlannedUnit()).isEqualTo("件");
         assertThat(dto.getSourceDisplayQuantity()).isEqualByComparingTo("10");
-        assertThat(dto.getSourceDisplayUnit()).isEqualTo("box");
+        assertThat(dto.getSourceDisplayUnit()).isEqualTo("盒");
+        // Scientific measurement symbols are deliberately NOT translated.
         assertThat(dto.getWorkflowOutputUnit()).isEqualTo("g");
     }
 }

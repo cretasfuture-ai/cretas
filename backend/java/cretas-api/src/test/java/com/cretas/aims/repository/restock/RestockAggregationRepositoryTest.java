@@ -66,7 +66,7 @@ class RestockAggregationRepositoryTest {
     @Autowired private ProductionPlanRepository productionPlanRepository;
 
     private static final String FID = "F-TEST";       // matches fixtures
-    private static final Long UID = 1L;               // matches fixtures
+    private static final Long UID = 900001L;          // matches fixtures
     private static final String CID = "CUST-TEST";   // matches fixtures
     private static final LocalDate D = LocalDate.of(2026, 6, 3);
     private static final AtomicInteger SEQ = new AtomicInteger(100);
