@@ -74,7 +74,8 @@ class R6V3MaterialConsumptionRbacTest {
                         "getBatchConsumptionCost", String.class, Long.class,
                         String.class /* Authorization */),
                 MaterialConsumptionController.class.getDeclaredMethod(
-                        "getBatchConsumptionSummary", String.class, Long.class)
+                        "getBatchConsumptionSummary", String.class, Long.class,
+                        String.class /* Authorization */)
         );
 
         for (Method m : leakingMethods) {

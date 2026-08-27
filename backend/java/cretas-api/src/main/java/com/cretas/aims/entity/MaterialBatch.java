@@ -196,17 +196,27 @@ public class MaterialBatch extends BaseEntity {
      * <p>🔴 null = 未确认，不参与抵扣、展示为「未抵扣」。<b>不要在报工时写这个字段</b> ——
      * 那时候没人知道这批副产值多少，写任何值都是臆造。确认为 0 是另一回事，那是真实的确认结果。</p>
      */
+    @PriceSensitive
     @Column(name = "byproduct_unit_price", precision = 15, scale = 4)
     private java.math.BigDecimal byproductUnitPrice;
 
     /**
      * 副产单价确认时间。与单价<b>一起</b>判定是否已确认 ——
      * 有价无时间 = BOM 带过来的参考价，还没人拍板，不算确认。
+     *
+     * <p>@PriceSensitive: 与单价一起隐去 —— 单独暴露"何时确认过价"仍然是
+     * 价格协商链的一部分，客户原话不让仓管员参与"价格类"的任何信息。</p>
      */
+    @PriceSensitive
     @Column(name = "byproduct_price_confirmed_at")
     private java.time.LocalDateTime byproductPriceConfirmedAt;
 
-    /** 确认副产单价的用户 ID。 */
+    /**
+     * 确认副产单价的用户 ID。
+     *
+     * <p>@PriceSensitive: 同上 —— 谁拍的板也是价格决策链信息，与单价一并隐去。</p>
+     */
+    @PriceSensitive
     @Column(name = "byproduct_price_confirmed_by")
     private Long byproductPriceConfirmedBy;
 
