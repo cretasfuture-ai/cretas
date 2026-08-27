@@ -47,21 +47,37 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # ⚠️ 用 setup-python 而不是裸调 `python3` —— 与 kb-drift-check / ci.yml 同一个惯例。
-      #    自建 runner 上解释器叫什么、在不在 PATH 上都不该由这道闸来赌：
-      #    一道因为「解释器不叫这个名字」而红的闸，红的是错误的原因。
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
+      # ⛔ 这里**不用** `actions/setup-python` —— 它在这台自建 macOS runner 上**必失败**：
+      #    它的 macOS 安装脚本把 `/Users/runner` 写死（托管 runner 的用户名就叫 runner），
+      #    而本机 `/Users` 不可写 ⇒ `mkdir: /Users/runner: Permission denied`。
+      #    `python-gate.yml` / `secret-regression.yml` 里已经记过这件事，
+      #    它们的做法是 `if: runner.environment == 'github-hosted'` 把它跳过。
+      #    🔴 本闸第一次 run 就是栽在这上面 —— 我按「谁用了 setup-python」grep 出惯例，
+      #       却没读它紧挨着的守卫条件。
+      #
+      #    本脚本**纯标准库、不装任何包**，所以连 python-gate 那套 venv 都不需要，
+      #    有个解释器就够。⇒ 直接找一个，并**把用的是哪个打出来**：
+      #    「这一轮的读数是在哪个解释器上量的」必须能从日志里读出来。
+      #
       # 三态（本仓硬约束 4）：0 干净 / 1 找到了 / 2 这次没量到。
       # ⚠️ rc=2 **必须**与 rc=1 用不同措辞 —— 否则「没量到」会被折叠进「没问题」，
       #    一个跑在空目录里的检查会安静地天天绿，而它一个文件都没看过。
       - name: 扫描字面 NUL 字节
         id: scan
         run: |
+          set -e
+          PY=""
+          for c in python3 python python3.12 python3.11 python3.10; do
+            if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+          done
+          if [ -z "$PY" ]; then
+            echo "✗ 这台 runner 上一个 python 都找不到 —— 本次没量到"
+            echo "rc=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "PYTHON_USED=$PY ($("$PY" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])'))"
           set +e
-          python scripts/ci/check_no_nul_bytes.py --repo . | tee /tmp/nul.log
+          "$PY" scripts/ci/check_no_nul_bytes.py --repo . | tee /tmp/nul.log
           echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           exit 0
 
