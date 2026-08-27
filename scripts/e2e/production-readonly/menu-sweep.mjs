@@ -82,14 +82,27 @@ function readMenuRoutes(repoRoot) {
   const file = path.join(repoRoot, MENU_CONFIG);
   const source = fs.readFileSync(file, 'utf8');
   const seen = new Map();
-  const re = /path:\s*'([^']+)'\s*,\s*title:\s*'([^']+)'/g;
-  let m;
-  while ((m = re.exec(source))) {
+  // 🔴 2026-08-28 订正: 原来只抽 path/title, 于是【菜单分组节点】和【叶子页面】被一视同仁。
+  //    实测把 `/workdesk`(router 里根本没有这条路由, 是纯分组节点, 点父级只会展开子项)
+  //    和 `/ops`(配着 hideForFactoryTypes:['FACTORY'], 对 F006 根本不在侧边栏里)
+  //    报成了 NOT_FOUND 缺陷 —— **两条都是误报**。
+  //
+  // ⛔ 但也不能一刀切跳过分组节点: 16 个分组节点里另外 14 个当前是 OK
+  //    (它们有 index 或重定向), 跳过等于放弃 14 条覆盖。
+  // ⇒ 改成【分类】: 分组节点上的 404 记成「没有 index 页」(用户点不到, 通常无害),
+  //    叶子路由上的 404 才是缺陷。误报会烧掉这份报告的信任, 而信任是它唯一的本钱。
+  //
+  // 判据: 从这条 path 到下一条 path 之间出现 `children:` ⇒ 它是分组节点。
+  const blocks = source.split(/(?=path:\s*')/);
+  for (const block of blocks) {
+    const m = /^path:\s*'([^']+)'\s*,\s*title:\s*'([^']+)'/.exec(block);
+    if (!m) continue;
     const [, routePath, title] = m;
     if (!routePath.startsWith('/')) continue;
-    if (!seen.has(routePath)) seen.set(routePath, title);
+    if (seen.has(routePath)) continue;
+    seen.set(routePath, { path: routePath, title, isGroup: block.includes('children:') });
   }
-  return [...seen.entries()].map(([routePath, title]) => ({ path: routePath, title }));
+  return [...seen.values()];
 }
 
 async function loadChromium() {
@@ -118,6 +131,11 @@ function classify(entry) {
   // ⚠️ 同一个教训第二次: 404 页正文也只有 40 字符, 也会被长度阈值判成「空白」。
   //    「菜单里配了这条路由, 打开却是 404」是一类**独立**的问题(多为父级路由没有 index),
   //    与「页面渲染不出东西」下一步动作不同 ⇒ 单独成档。
+  if (entry.notFound && entry.isGroup) {
+    // 菜单分组节点没有 index 页 —— 用户点父级只会展开子项，走不到这里。
+    // ⚠️ 仍然报出来（可能是重定向坏了），但**不算失败**，⛔ 别让它污染缺陷清单。
+    return { verdict: 'GROUP_NO_INDEX', reason: '分组节点没有 index 页（用户点父级只展开子项，通常无害）' };
+  }
   if (entry.notFound) return { verdict: 'NOT_FOUND', reason: '404 页面不存在（菜单配了这条路由，但它没有页面）' };
   if (entry.bodyTextLength <= 40) return { verdict: 'BLANK', reason: `正文只有 ${entry.bodyTextLength} 字符` };
   if (entry.httpErrors.length) return { verdict: 'HTTP_ERROR', reason: `${entry.httpErrors.length} 个 >=400 响应` };
@@ -189,7 +207,7 @@ async function main() {
       const beforeNet = network.snapshot();
       const beforeConsole = consoleRecorder.snapshot();
       const beforeGuard = mutationGuard.snapshot();
-      const entry = { path: route.path, title: route.title };
+      const entry = { path: route.path, title: route.title, isGroup: Boolean(route.isGroup) };
       const startedAt = Date.now();
       try {
         await page.goto(new URL(route.path, baseUrl).toString(), { waitUntil: 'domcontentloaded', timeout: 45_000 });
@@ -252,7 +270,8 @@ async function main() {
 
     // ⚠️ 只要有一屏不是 OK 就非零退出 —— ⛔ 不把「有问题」和「没问题」折叠成同一个退出码。
     // ⚠️ FORBIDDEN 不算失败 —— 它是 RBAC 在正常工作的读数。
-    if (totalWrites > 0 || results.some((r) => !['OK', 'FORBIDDEN'].includes(r.verdict))) process.exitCode = 1;
+    // ⚠️ FORBIDDEN(RBAC 正常) 与 GROUP_NO_INDEX(分组节点无 index) 都不算失败。
+    if (totalWrites > 0 || results.some((r) => !['OK', 'FORBIDDEN', 'GROUP_NO_INDEX'].includes(r.verdict))) process.exitCode = 1;
   } finally {
     await context.close();
     await browser.close();
