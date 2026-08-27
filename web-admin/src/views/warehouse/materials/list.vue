@@ -17,6 +17,7 @@ import type { TableRow } from '@/types/api';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
 import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseInboundLifecycle';
+import { autoTotalWeightKg, autoWeightSkippedHint } from './autoWeight';
 import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
@@ -365,6 +366,8 @@ const formRules = {
 // T158 fix: auto-sync quantityUnit to the material's master unit when user selects/changes
 // a material in add mode, preventing kg/个 mismatch (防呆 Rule 2 — unit anchored to master).
 let w02HintShown = false;
+/** 「单位不是重量单位所以没自动填」的提示，每次开弹窗只说一遍。 */
+let weightHintShown = false;
 function autoCalcWeightAndValue() {
   const qty = formData.receiptQuantity;
   const mat = materialTypes.value.find((m: TableRow) => m.id === formData.materialTypeId) as TableRow | undefined;
@@ -382,8 +385,23 @@ function autoCalcWeightAndValue() {
 
   if (!formData.materialTypeId || qty == null || qty <= 0) return;
   if (!mat) return;
-  // totalWeight = quantity (unit is typically kg; use quantity directly as weight)
-  formData.totalWeight = Number((qty).toFixed(3));
+  // 🔴 2026-08-27: 这里原来是 `formData.totalWeight = Number(qty.toFixed(3))` ——
+  //    **不看单位**，注释写着「unit is typically kg」。而单位是跟着所选原料走的
+  //    （上面几行的 `formData.quantityUnit = String(mat.unit)`），
+  //    后端 totalWeight 的契约又写死是公斤(@Schema "入库总重量(kg)")。
+  //    ⇒ 选「箱」录 3 → 总重量被填成 3 kg；选「g」录 500 → 填成 500 kg（1000×）。
+  //    生产实测 484 个原料类型里 102 个不是 kg（含 3 个 g）。详见 ./autoWeight.ts。
+  const autoWeight = autoTotalWeightKg(qty, formData.quantityUnit);
+  if (autoWeight !== null) {
+    formData.totalWeight = autoWeight;
+  } else {
+    // ⛔ 不回退成 qty —— 那正是被修的那个毛病。留空 + 说明为什么，让用户自己录。
+    formData.totalWeight = null;
+    if (!weightHintShown) {
+      ElMessage.info({ message: autoWeightSkippedHint(formData.quantityUnit), duration: 5000 });
+      weightHintShown = true;
+    }
+  }
   // totalValue = quantity * unitPrice
   const unitPrice = Number(mat.unitPrice || mat.movingAvgPrice || 0);
   if (unitPrice > 0) {
@@ -403,6 +421,7 @@ function handleCreate() {
   editingId.value = null;
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
+  weightHintShown = false;
   selectedMaterialUnit.value = null;
   Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: toDateString(new Date()), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '', factoryNumber: '', originPlace: '' });
   formDialogVisible.value = true;
@@ -412,6 +431,7 @@ function handleEdit(row: TableRow) {
   editingId.value = String(row.id || '');
   formDialogTitle.value = '编辑批次';
   w02HintShown = false;
+  weightHintShown = false;
   selectedMaterialUnit.value = null;
   Object.assign(formData, {
     batchNumber: row.batchNumber || '',
