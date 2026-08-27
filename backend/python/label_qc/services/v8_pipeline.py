@@ -97,6 +97,15 @@ def _label_fallback_onnx_threads(manifest: dict[str, Any]) -> int | None:
     return value
 
 
+def _label_supplement_classes(manifest: dict[str, Any]) -> frozenset[int]:
+    value = manifest.get("labelSupplementClasses")
+    if not isinstance(value, list) or not value or any(
+        type(class_id) is not int or class_id not in (0, 1) for class_id in value
+    ) or len(set(value)) != len(value):
+        raise RuntimeError(f"invalid v8 label supplement classes: {value!r}")
+    return frozenset(value)
+
+
 def _box_iou(first: Sequence[float], second: Sequence[float]) -> float:
     x0 = max(float(first[0]), float(second[0]))
     y0 = max(float(first[1]), float(second[1]))
@@ -418,11 +427,15 @@ class _ProductionPreservingSupplementDetector:
     def __init__(
         self, primary: Any, supplement: Any, confidence_floor: float = 0.0,
         ownership_margin: float = PAD_RATIO / (1.0 + 2.0 * PAD_RATIO),
+        allowed_classes: Iterable[int] = (0, 1),
     ) -> None:
         self.primary = primary
         self.supplement = supplement
         self.confidence_floor = float(confidence_floor)
         self.ownership_margin = float(ownership_margin)
+        self.allowed_classes = frozenset(int(class_id) for class_id in allowed_classes)
+        if not self.allowed_classes or not self.allowed_classes.issubset({0, 1}):
+            raise ValueError("supplement allowed classes must be a non-empty subset of {0, 1}")
         self.reset_stats()
 
     def reset_stats(self) -> None:
@@ -447,7 +460,10 @@ class _ProductionPreservingSupplementDetector:
         present = {
             int(row.class_id) for row in primary if self._owned(row, width, height)
         }
-        missing = {class_id for class_id in (0, 1) if class_id not in present}
+        missing = {
+            class_id for class_id in self.allowed_classes
+            if class_id not in present and present == ({0, 1} - {class_id})
+        }
         if not missing:
             return primary
         self.supplement_calls += 1
@@ -969,9 +985,10 @@ class LabelQcV8Models:
                     _validate_label_fallback_input_shape(supplement_detector, 640)
                     production_label = _ProductionPreservingSupplementDetector(
                         production_label,
-                        supplement_detector,
-                        supplement_confidence,
-                    )
+                    supplement_detector,
+                    supplement_confidence,
+                    allowed_classes=_label_supplement_classes(self._manifest),
+                )
                 self._models = _V8CascadeModels(
                     production=production,
                     tray_supplement=_YoloxOnnxDetector(

@@ -25,6 +25,7 @@ from label_qc.services.v8_pipeline import (
     _apply_shallow_extended_ownership,
     _label_fallback_input_size,
     _label_fallback_onnx_threads,
+    _label_supplement_classes,
     _validate_label_fallback_input_shape,
 )
 
@@ -288,6 +289,25 @@ def test_production_preserving_supplement_skips_when_owned_classes_exist() -> No
     detector = _ProductionPreservingSupplementDetector(primary, supplement)
 
     assert detector.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.20) == rows
+
+
+def test_color_only_supplement_requires_production_white_evidence() -> None:
+    supplement = SimpleNamespace(detect=lambda *_args: pytest.fail("must not run"))
+    detector = _ProductionPreservingSupplementDetector(
+        SimpleNamespace(detect=lambda *_args: []), supplement, allowed_classes=(1,),
+    )
+
+    assert detector.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.20) == []
+
+
+def test_bundle_binds_explicit_supplement_classes() -> None:
+    assert _label_supplement_classes({"labelSupplementClasses": [1]}) == frozenset({1})
+
+
+@pytest.mark.parametrize("value", [None, [], [2], [1, 1], [True], "1"])
+def test_invalid_supplement_classes_fail_closed(value: object) -> None:
+    with pytest.raises(RuntimeError, match="invalid v8 label supplement classes"):
+        _label_supplement_classes({"labelSupplementClasses": value})
 
 
 def test_legacy_bundle_keeps_existing_fallback_resolution() -> None:

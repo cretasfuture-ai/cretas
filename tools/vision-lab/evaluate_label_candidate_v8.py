@@ -135,6 +135,7 @@ def main() -> None:
                 "sha256": diagnostics.sha256_file(candidate_artifact),
             }
             candidate_manifest["labelSupplementConfidence"] = 0.30
+            candidate_manifest["labelSupplementClasses"] = [1]
         else:
             shutil.copy2(candidate_artifact, candidate_bundle / "label.onnx")
             candidate_manifest["models"]["production_label"]["sha256"] = diagnostics.sha256_file(candidate_artifact)
