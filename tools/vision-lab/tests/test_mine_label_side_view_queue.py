@@ -94,6 +94,25 @@ class LabelSideViewQueueTests(unittest.TestCase):
         self.assertAlmostEqual(result["white_confidence_delta"], 0.09)
         self.assertGreater(result["matched_white_iou"], 0.9)
 
+    def test_production_preservation_finds_candidate_lost_classes(self):
+        production = SimpleNamespace(
+            has_white=True, has_color=True, verdict="CLEAR",
+            labels=[self._label(0, 0.81, [1, 1, 2, 2]), self._label(1, 0.73, [2, 2, 3, 3])],
+        )
+        candidate = SimpleNamespace(
+            has_white=True, has_color=False, verdict="MISSING_COLOR_LABEL", labels=[],
+        )
+        result = module.production_preservation_features(production, candidate)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["tags"], ["candidate_lost_color"])
+        self.assertEqual(result["lost_classes"], [1])
+
+    def test_production_preservation_ignores_equal_presence(self):
+        production = SimpleNamespace(has_white=True, has_color=True, verdict="CLEAR", labels=[])
+        candidate = SimpleNamespace(has_white=True, has_color=True, verdict="CLEAR", labels=[])
+        self.assertIsNone(module.production_preservation_features(production, candidate))
+
     def test_white_confuser_ranks_new_unmatched_white_box(self):
         production = SimpleNamespace(labels=[self._label(0, 0.80, [80, 80, 100, 100])])
         candidate = SimpleNamespace(labels=[self._label(0, 0.55, [10, 10, 30, 30])])

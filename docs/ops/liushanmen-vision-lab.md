@@ -637,6 +637,25 @@ B:\anaconda3\python.exe tools\vision-lab\label_qc_tray_edge_context_eval.py `
 在有效保护缺陷已全命中且没有新上传照片时，不得继续用保护集调阈值或启动 960/1280 训练；等待
 新的任务隔离、人工确认非保护难例后再开始下一候选。
 
+标签候选不能使用 `evaluate_candidate.py` 的 `legacy_two_model` 回执作为发布证据。必须用
+`evaluate_label_candidate_v8.py` 在临时 hash-bound bundle 中只替换候选 `label.onnx`，生产 bundle
+保持只读，并完整回放托盘补充、标签级联、归属冲突和 fail-closed 规则：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\evaluate_label_candidate_v8.py `
+  --repo-root <clean-worktree> `
+  --baseline-receipt <current-truth-v8-receipt> `
+  --candidate-receipt <label-training-receipt> `
+  --truth-adjudication D:\CretasVisionLab\evaluation\label-qc-protected-truth-adjudication-20260816T073100Z.json `
+  --runtime-bundle D:\CretasVisionLab\deployment-bundles\liushanmen-v8-20260822 `
+  --output D:\CretasVisionLab\evaluation\<immutable-label-v8-output>\receipt.json
+```
+
+若候选在 V8 回放中回退，不得依据保护样本调参。可用
+`mine_label_side_view_queue.py plan --selection-mode production-preservation-disagreement` 在非保护照片中
+挖掘“生产模型保留、拒绝候选丢失”的标签托盘；候选只负责排序，人工审核仍是唯一真值。扫描为空时
+不得制造审核项或重复训练同类参数，应等待新的独立照片域。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
