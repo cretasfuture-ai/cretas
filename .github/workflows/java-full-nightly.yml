@@ -86,6 +86,43 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      # 🔴 FactoryConfigServiceImplReorderIT 那 4 条要【真 PostgreSQL】
+      #    (@DataJpaTest + Replace.NONE + profile r10-it, 连 localhost:5432)。
+      #    2026-08-27 之前它们在【任何自动路径上都跑不了也不可能绿】, 一直挂在
+      #    known-failing-tests.txt 里 —— 唯一提供 pgvector 服务容器的
+      #    ci.yml/java-build-test 是 `if: inputs.full_audit` + `runs-on: ubuntu-latest`,
+      #    而托管侧当时被账单挡着(job 2 秒失败)。
+      #    ⛔ 服务容器这条路在这台机器上走不通: 实测 `docker: command not found`
+      #    (scripts/ci/switch_ci_runner.py 里记着 ci.yml「试过并撤回」正是这个原因)。
+      #    ⇒ 改成在 runner 上装【原生】PG 17 (Homebrew LaunchAgent, 与两个 runner agent
+      #      同一套 ~/Library/LaunchAgents + RunAtLoad 生命周期 —— runner 起得来它就起得来)。
+      #
+      # ⚠️ 一个 runner 一个库, ⛔ 不是共用一个。这台机器上跑着【两个】runner agent,
+      #    而本工作流的 concurrency 组按 ref 分(java-full-suite-<ref> / nightly),
+      #    两条 PR 的全量跑批可以同时落在同一台机器上; 而 r10-it 的 schema 由
+      #    spring.sql.init 每次 DROP+CREATE 重建 ⇒ 共用一个库 = 互相 drop 对方的表。
+      #    那与 #197 那个 H2 schema 毒源【同一个形状】, 只是换成了 PostgreSQL。
+      #
+      # ⚠️ 找不到 psql 时【只警告不失败】: 这一步的缺席不该把整轮跑批打断 ——
+      #    那 4 条会红, 而棘轮会照常把它判成红并说清楚。⛔ 但也不许静默:
+      #    「没量到」必须说出来(硬约束 4), 否则切回托管那天没人知道少了什么。
+      - name: Bootstrap the r10-it PostgreSQL database (per-runner)
+        run: |
+          set -uo pipefail
+          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "::warning title=r10-it 缺 PostgreSQL::这台 runner 上找不到 psql —— FactoryConfigServiceImplReorderIT 那 4 条这一轮会红。⛔ 这不是产品缺陷, 是仪器缺一味环境。"
+            exit 0
+          fi
+          DB="cretas_r10_it_$(printf '%s' "${RUNNER_NAME:-unknown}" | tr -c 'a-zA-Z0-9' '_')"
+          existing=$(psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'")
+          if [ "$existing" != "1" ]; then
+            createdb -O cretas_user "$DB"
+            echo "created database $DB"
+          fi
+          echo "R10_IT_DB=$DB" >> "$GITHUB_ENV"
+          echo "R10_IT_DB=$DB (runner=${RUNNER_NAME:-unknown})"
+
       - name: Run the full Java suite
         working-directory: backend/java/cretas-api
         # ⚠️ failure.ignore=true 是【故意的】: 我们要拿到【全部】测试的结果,
