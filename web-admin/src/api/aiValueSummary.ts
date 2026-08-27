@@ -40,5 +40,15 @@ export function fetchAiValueSummary(
   factoryId: string,
   days?: number
 ): Promise<ApiResponse<AiValueSummary>> {
-  return get(`/api/mobile/${factoryId}/ai/value-summary`, days == null ? {} : { days });
+  // ⛔ 路径里不许再写 `/api/mobile` —— axios 实例的 baseURL 已经是它
+  //    (`request.ts:141` `baseURL: VITE_API_BASE_URL || '/api/mobile'`)。
+  //
+  // 🔴 2026-08-28 全量走查抓到: 这里原本写成 `/api/mobile/${factoryId}/...`,
+  //    实际发出去的是 **`/api/mobile/api/mobile/F006/ai/value-summary`** ⇒ 403。
+  //    而页面显示的是「**权限不足** …… 请检查是否访问了错误的工厂,
+  //    或切换到有权限的账号重试」——**让用户去换账号, 而真因是 URL 拼错了**。
+  //    换多少个账号都不会好。
+  //    ⚠️ 全 web-admin 只有这一处这么写, 其余 API 文件都是 `get(\`/${factoryId}/...\`)`。
+  //    已由 __tests__/noDoubleApiPrefix.source.spec.ts 钉住。
+  return get(`/${factoryId}/ai/value-summary`, days == null ? {} : { days });
 }
