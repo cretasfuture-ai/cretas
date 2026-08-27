@@ -187,10 +187,26 @@ jobs:
         # 排除清单在 `ci-gate-excludes.txt`, 每条带原因, 清一条删一条。
         # 放文件而不是堆在这里, 是为了让「还欠多少」一眼可数 (当前 29 个文件),
         # 而不是变成 YAML 里一长串没人读的 --ignore。
+        env:
+          RUNNER_ENV: ${{ runner.environment }}
         run: |
           EXCLUDES=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.txt \
             | sed 's/[[:space:]]*#.*$//' | sed 's/^/--ignore=/' | tr '\n' ' ')
           echo "排除 $(echo "$EXCLUDES" | wc -w) 个文件 (见 ci-gate-excludes.txt)"
+
+          # 🔴 自建 runner 上再叠一份**机器缺件**清单。
+          #    ⚠️ 与上面那份是两回事: 上面是欠账(测试/代码欠着东西, 两个 runner 上都欠),
+          #    这份是这台机器缺件(托管上是绿的)。⛔ 两份不许混, 混了就分不清谁欠的账。
+          #    2026-08-27 实测那 12 条: 8 条要真 PostgreSQL, 4 条撞 BSD grep 没有 -P。
+          # ⚠️ 少跑了多少条**必须打进日志** —— 「自建模式的绿」和「托管模式的绿」
+          #    不是同一个读数, 不写出来就会被当成同一个。
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then
+            SH=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.self-hosted.txt \
+              | sed 's/[[:space:]]*#.*$//' | sed 's/^/--ignore=/' | tr '\n' ' ')
+            echo "⚠️ 自建 runner: 额外排除 $(echo "$SH" | wc -w) 个文件 (见 ci-gate-excludes.self-hosted.txt)"
+            echo "   ⇒ 本次读数**不等于**托管上的读数。额度恢复切回托管后这份清单不生效。"
+            EXCLUDES="$EXCLUDES $SH"
+          fi
           pytest \
             tests/ \
             ota/tests \
