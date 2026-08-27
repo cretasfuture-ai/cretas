@@ -476,7 +476,7 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
 
     private static String composeRemark(String receiveStatus, Boolean signatureConfirmed,
                                         String remark) {
-        StringBuilder sb = new StringBuilder("AI Workdesk Sprint 10 Loop 2 一键收货");
+        StringBuilder sb = new StringBuilder("仓管员工作台一键收货");
         if (receiveStatus != null && !receiveStatus.isBlank()) {
             sb.append(" | 状态: ").append(receiveStatus);
         }

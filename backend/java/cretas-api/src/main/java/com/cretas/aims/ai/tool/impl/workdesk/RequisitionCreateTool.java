@@ -271,7 +271,7 @@ public class RequisitionCreateTool extends AbstractBusinessTool {
         CreatePurchaseRequisitionRequest req = new CreatePurchaseRequisitionRequest();
         req.setExpectedDate(expectedDate);
         req.setReason(notes != null && !notes.isBlank() ? notes : "AI Workdesk 一键请购");
-        req.setRemark("Sprint 8 P4b 采购员 Workdesk 创建");
+        req.setRemark("采购员工作台创建");
 
         // requestedItems: 1 行
         Map<String, Object> line = new LinkedHashMap<>();

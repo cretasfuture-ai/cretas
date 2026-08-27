@@ -392,7 +392,7 @@ public class ProcurementOrderCreateTool extends AbstractBusinessTool {
         req.setExpectedDeliveryDate(expectedDate);
         req.setRemark(remark != null && !remark.isBlank()
                 ? remark
-                : "Sprint 10 Loop 3 — AI Workdesk 一键采购下单");
+                : "采购员工作台一键下单");
 
         CreatePurchaseOrderRequest.PurchaseOrderItemDTO line =
                 new CreatePurchaseOrderRequest.PurchaseOrderItemDTO();
