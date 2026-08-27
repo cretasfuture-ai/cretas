@@ -310,36 +310,70 @@ describe('userApiClient', () => {
     });
   });
 
+  // 🔴 2026-08-27: 这一组的桩此前是**裸数组** `{ data: [...] }` ——
+  //    照抄的是**前端的错误假设**, 不是后端的真实契约。
+  //    后端 `UserController:320` 返回 `ApiResponse<PageResponse<UserDTO>>`,
+  //    `data` 是分页对象。于是这组测试一直绿, 而线上 UserManagementScreen
+  //    搜索一次就 `users.filter is not a function` 整屏崩。
+  // ⇒ 判据(本仓既有): **桩的形状必须从真实契约抄**, ⛔ 不能从调用方的期望抄 ——
+  //    后者会让测试和缺陷犯同一个错, 然后互相背书。
   describe('searchUsers', () => {
-    it('应该成功搜索用户', async () => {
-      const mockResponse = [
+    /** 与后端 PageResponse<UserDTO> 同形。 */
+    const asPage = (content: unknown[]) => ({
+      content,
+      page: 1,
+      size: content.length,
+      total: content.length,
+      totalPages: 1,
+    });
+
+    it('应该成功搜索用户（后端返回的是分页结构）', async () => {
+      const rows = [
         mockUser({ username: 'user1', realName: '张三' }),
         mockUser({ username: 'user2', realName: '张四' }),
       ];
 
       mock.onGet(/\/api\/mobile\/.*\/users\/search/).reply((config) => {
         expect(config.params).toHaveProperty('keyword', '张');
-        return [200, { data: mockResponse }];
+        return [200, { data: asPage(rows) }];
       });
 
       const result = await userApiClient.searchUsers({ keyword: '张' });
 
+      expect(Array.isArray(result)).toBe(true);
       expect(result).toHaveLength(2);
       expect(result[0]?.realName).toContain('张');
     });
 
     it('应该支持按角色筛选', async () => {
-      const mockResponse = [mockUser({ role: 'admin' })];
-
       mock.onGet(/\/api\/mobile\/.*\/users\/search/).reply((config) => {
         expect(config.params).toHaveProperty('role', 'admin');
-        return [200, { data: mockResponse }];
+        return [200, { data: asPage([mockUser({ role: 'admin' })]) }];
       });
 
       const result = await userApiClient.searchUsers({ keyword: 'admin', role: 'admin' });
 
       expect(result).toHaveLength(1);
       expect(result[0]?.role).toBe('admin');
+    });
+
+    it('搜不到时是空数组，⛔ 不是抛错', async () => {
+      // 「搜到 0 个」是正常结果, 与「契约不对」必须分得开。
+      mock.onGet(/\/api\/mobile\/.*\/users\/search/).reply(200, { data: asPage([]) });
+
+      await expect(userApiClient.searchUsers({ keyword: '不存在' })).resolves.toEqual([]);
+    });
+
+    // 阴性对照: 退回旧的裸数组形状必须**当场抛**, ⛔ 不许静默返回 []。
+    // 兜底成 [] 会把「后端契约变了」显示成「搜到 0 个用户」—— 那是在编一个读数,
+    // 而且正是它掩盖了这次的崩溃(results.length 只是 undefined, 日志里看不出来)。
+    it('🔴 后端若退回裸数组（旧的错误形状）必须抛错，不许静默返回空', async () => {
+      mock.onGet(/\/api\/mobile\/.*\/users\/search/).reply(200, {
+        data: [mockUser({ username: 'user1' })],
+      });
+
+      await expect(userApiClient.searchUsers({ keyword: '张' }))
+        .rejects.toThrow(/不是分页结构/);
     });
   });
 
