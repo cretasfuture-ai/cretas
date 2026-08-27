@@ -539,7 +539,12 @@ def evaluate_variant(
         with Image.open(row["image"]) as opened:
             frame = np.array(ImageOps.exif_transpose(opened).convert("RGB"))
         started = time.perf_counter()
-        result = screening.screen_image(frame, models, params)
+        model_screen = getattr(models, "screen_image", None)
+        result = (
+            model_screen(frame, params)
+            if callable(model_screen)
+            else screening.screen_image(frame, models, params)
+        )
         latency_ms = (time.perf_counter() - started) * 1000
         latencies.append(latency_ms)
         tray_stats = dict(getattr(models, "last_stats", {}))
