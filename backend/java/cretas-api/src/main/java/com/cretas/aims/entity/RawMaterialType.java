@@ -342,11 +342,18 @@ public class RawMaterialType extends BaseEntity {
      *   <li>外箱 "每箱20盒成品" → {@code packQtyPerProduct = 0.050000} (1/20)</li>
      * </ul>
      *
-     * <p>BOM 自动推算:
-     * {@code standardQuantity = packQtyPerProduct}
-     * (无需再乘 outputQuantityPerUnit — 因为 BOM standardQuantity 已经是"每成品单位"口径).
+     * <p><b>BOM 自动推算</b>: 建 PACKAGING 行时若用户既没给 {@code naturalQuantity}
+     * 也没给 {@code standardQuantity}，则取本字段作为 <b>naturalQuantity</b>
+     * (见 {@code BomRecipeServiceImpl.applyPackagingLevel})。手填优先。
      *
-     * <p>null = 未配置规格, 需手填 BOM standardQuantity.
+     * <p>⚠️ 2026-08-27 订正: 这里原来写的是
+     * 「{@code standardQuantity = packQtyPerProduct}」—— <b>已经不对了</b>。
+     * 2026-08-03 (P7) 把包材契约换成「包装层级 + 自然用量」之后，
+     * {@code standardQuantity} 变成<b>推导值</b>
+     * ({@code naturalQuantity ÷ 包装规格换算系数})，喂它会被覆盖或双重换算。
+     * 两者语义相同(都是「每成品单位需要多少个包材，自然单位」)，所以接的是 naturalQuantity。
+     *
+     * <p>null = 未配置规格, 需手填 BOM 用量.
      *
      * <p>DB: pack_qty_per_product NUMERIC(15,6) NULL
      */

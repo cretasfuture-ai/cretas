@@ -2582,8 +2582,33 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 要来回试三次才凑齐, 而且第 2 条(不能另选单位)与第 3 条组合起来还反直觉 ——
         // 「不能另选」≠「可以不填」。三条本身都合理, 问题只在<b>一次只说一条</b>。
         String materialUnit = canonicalUnitOrThrow(factoryId, material.getUnit(), "unit");
+        // 🔴 2026-08-27: 第三层兜底 —— 物料档案上的「每产品单位用量」(packQtyPerProduct)。
+        //
+        // 那个字段由 #759 (feat(bom): 包材规格参与BOM配比自动推算) 引入, 连同 Flyway DDL、
+        // DTO、web-admin 输入框和 8 个单测。它当时喂的是 `BomRecipeServiceImpl
+        // .applyPackagingSpecAutoInfer()` → dto.standardQuantity。
+        // 本方法 (2026-08-03 P7) 把包材契约换成「包装层级 + 自然用量」之后,
+        // standardQuantity 变成**推导值** (naturalQuantity ÷ 换算系数, 见下方),
+        // 那个方法随之消失 —— 而**字段、DDL、输入框、Javadoc 承诺全留着**。
+        //
+        // ⇒ 用户在物料档案里配好了「每产品用量」, 建 BOM 行时仍被这里的三条必填
+        //   拒绝, 要求他手填**同一个数**。生产实测: 484 个原料类型里 7 个填了这个字段。
+        //
+        // ⚠️ 接的是 naturalQuantity 而**不是** standardQuantity: 两者语义相同
+        //   (都是「每成品单位需要多少个包材, 自然单位」), 而 standardQuantity 在下面会被
+        //   naturalQuantity ÷ conversionFactor 覆盖 —— 塞那一层会双重换算。
+        //
+        // ⛔ 手填优先不变: 只有 naturalQuantity 和 standardQuantity **都**为空才取档案值。
+        //
+        // ⚠️ 它是怎么藏了这么久的: 那 8 个单测确实红着, 但红的原因是另一道后加的闸
+        //   (assertPinnedDraft「BOM 草稿尚未自动关联已保存的 Workflow 修订」),
+        //   一条都没跑到被测行为; 而这 8 条已登记进 known-failing-tests.txt。
+        //   「机制没了」被「测试早就红着且已挂账」完全掩盖。
         BigDecimal naturalQuantity = dto.getNaturalQuantity() != null
-                ? dto.getNaturalQuantity() : dto.getStandardQuantity();
+                ? dto.getNaturalQuantity()
+                : dto.getStandardQuantity() != null
+                        ? dto.getStandardQuantity()
+                        : material.getPackQtyPerProduct();
 
         List<String> packagingIssues = new ArrayList<>();
         List<String> packagingHints = new ArrayList<>();

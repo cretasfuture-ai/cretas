@@ -1301,6 +1301,13 @@ public class BomWorkflowRevisionService {
             // 而 hintTarget 就算填了也到不了前端: ApiResponse.errorWithCode(...) 没有
             // hintTarget 形参(见 dto/common/ApiResponse.java), 凡是带 errorCode 的异常
             // 一律把它丢掉。⇒ 判据落在 actionHint 一个字段上, 它空 = 这条报错不可见。
+            //
+            // ✅ 2026-08-27 订正: 上面这段**已经不成立了** —— PR #194 给
+            //    ApiResponse.errorWithCode 加了 6 参重载并让 GlobalExceptionHandler
+            //    透传 e.getHintTarget()。当时全仓有 380 条 throw 同时设了 errorCode 和
+            //    hintTarget, 那个 hintTarget 全被丢掉, 用户看到的是一个点了没反应的
+            //    「去处理」按钮。现在 hintTarget 到得了前端了。
+            //    ⚠️ 保留原文是为了留痕(它准确描述了写它那天的事实), 但**别再照它下结论**。
             // 发布链路更彻底: ProductProcessWorkflowEditor 的 isWorkflowBomSyncRace
             // 按 `BOM_WORKFLOW_` 前缀匹配后 return 且不补 toast, 两头同时静默。
             //
