@@ -35,6 +35,19 @@ on:
       # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
+      # 🔴 2026-08-27: 下面这些是 enumDisplayCoverage / salesStatusLabelsMatchBackend /
+      # bomContractsSurvivingPageDeletion / seasoningProcessCategory 这几个 spec 用
+      # readJava(...) **真读**的后端源码。建元判据闸当天实测: 24 个文件被读着,
+      # 而触发面里一个都没有 —— 改它们不会触发本闸, 本闸只在「顺带被别的改动带起来」时才跑。
+      # ⚠️ 以后新增 readJava(...) 必须同步加到这里, 否则
+      #    web-admin/src/router/__tests__/gateTriggerSurfaceCoversWhatItReads.spec.ts 会红。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/constant/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/BomServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/bom/impl/BomRecipeServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/production/ProductionDocumentTraceService.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
   pull_request:
     paths:
       - 'web-admin/**'
@@ -52,6 +65,19 @@ on:
       # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
+      # 🔴 2026-08-27: 下面这些是 enumDisplayCoverage / salesStatusLabelsMatchBackend /
+      # bomContractsSurvivingPageDeletion / seasoningProcessCategory 这几个 spec 用
+      # readJava(...) **真读**的后端源码。建元判据闸当天实测: 24 个文件被读着,
+      # 而触发面里一个都没有 —— 改它们不会触发本闸, 本闸只在「顺带被别的改动带起来」时才跑。
+      # ⚠️ 以后新增 readJava(...) 必须同步加到这里, 否则
+      #    web-admin/src/router/__tests__/gateTriggerSurfaceCoversWhatItReads.spec.ts 会红。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/constant/**'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/BomServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/bom/impl/BomRecipeServiceImpl.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/production/ProductionDocumentTraceService.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
 
 concurrency:
   group: web-admin-gate-${{ github.ref }}
