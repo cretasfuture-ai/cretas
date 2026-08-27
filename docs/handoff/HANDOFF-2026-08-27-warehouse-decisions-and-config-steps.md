@@ -10,9 +10,42 @@
 | | |
 |---|---|
 | 裁定 ④ | **PR #235**（已开）—— 3 个活端点补 `sourceType` + 变异验证过的闸 |
-| 裁定 ③ | 本 PR —— 收窄超管自审例外 |
-| 裁定 ① | ⏳ 待执行的 F006 生产配置，步骤见 §4 |
+| 裁定 ③ | **本 PR**（代码）+ **F006 调拨审批流已配好并发布**（见 §4b） |
+| 裁定 ① | ✅ **已执行**（2026-08-27 23:41，F006 盘点流 v2 已发布）见 §4 |
 | 裁定 ② | ⏳ 待 Owner 执行的 LIUSHANMEN 配置，步骤见 §5 |
+
+### ✅ 已完成的生产写入（2026-08-27 23:40~23:42，Owner 当轮授权）
+
+租户证明：实时登录响应 `factoryId=F006` / `userId=1309` / `role=factory_super_admin`。
+
+| 写入 | 结果 |
+|---|---|
+| ③ 新建 `INVENTORY_TRANSFER_APPROVAL` | `351b925a-13ac-4717-b134-2038ea7122a6`，v1 published，授权 **`finance_manager`** |
+| ① 盘点流加 condition 节点 | clone-draft → `b4c8c82a-f0d5-4136-830e-6ae52f0c79da`，**v2 published**；v1 被自动置 `enabled=f` |
+
+**写前写后计数**（`approval_workflows`，`deleted_at is null`）：
+
+```
+                     BEFORE   AFTER
+f006_all               11  ->   13     (+2, 符合预期)
+f006_adjustment         1  ->    2
+f006_transfer           0  ->    1
+LIUSHANMEN(阴性对照)    14  ->   14     一字未动
+```
+
+**内容回读**：v2 `has_condition_node=t`、自动边条件 `#hasDifference == false`；
+调拨流 `approverRoles[0] = finance_manager`。
+
+⚠️ **两个 v 都是 `published`，区分它们的是 `enabled` 而不是 `publish_status`。**
+执行器查的是 `published AND enabled = true ORDER BY priority DESC, version DESC`
+（`ApprovalWorkflowRepository.findActiveByDecisionType`）——
+v1 `enabled=f` 被排除，v2 唯一命中。
+⛔ 以后核对「哪一版在生效」**不要只看 `publish_status`**，那一列会显示两行 published。
+
+### ⛔ 尚未做的：行为侧两侧验证
+
+配置已就位并结构性核对过，但**没有**提交真实盘点单/调拨单去跑通两条路 ——
+那是另一类业务写入，不在本轮授权范围内。判据见 §4 末与 §5 末，需要时单独授权。
 
 ---
 
@@ -275,7 +308,16 @@ where deleted_at is null
 
 ## 7. 留给下一棒
 
-- **①②** 两项生产配置待执行（步骤见 §4/§5），都需要 Owner 授权与写前写后计数
-- **③ 配好之后要复验**：F006 配上一个 `approverRoles` 含活跃他人角色的调拨流，
-  再由 1309 发起并尝试自审 —— 期望**被拒**。⚠️ 这一步之前，收窄对 F006 **不产生任何可观测变化**
+- **② LIUSHANMEN 盘点审批流**待 Owner 执行（步骤见 §5），需写前写后计数
+- **③ 的行为侧复验**：#237 合并并部署后，由 1309 发起一张 F006 调拨并尝试自审 ——
+  期望**被拒**（现在节点授权给 `finance_manager`，而 F006 有一个活跃的 `finance_manager`，
+  所以「本厂还有别人够格」成立，超管例外不再放行）。
+  ⚠️ **在 #237 部署之前，配置已经生效但收窄还没生效** —— 此刻 1309 仍能自审，
+  因为线上跑的还是无条件放行那版。⛔ 别把这个中间态读成「配置没起作用」。
+- **① 的行为侧复验**：提交一张零差异盘点（应直接 APPROVED）+ 一张有差异盘点
+  （应停在 PENDING，且发起人自审 409）。两侧都要验，只验第一条分不清
+  「全都自动通过了」和「零差异自动通过了」。
 - `WorkflowEngineServiceImpl.canTransition` 的超管无条件放行**仍在**（§3 末）
+- ⚠️ **F006 调拨从此需要财务经理复核**。这是 ③ 的本意，但它改变了 F006 的日常流程 ——
+  之前调拨是提交即可自批，现在会停在 `PENDING`。若挡到测试节奏，
+  把那条流 `enabled=false` 即可回退（⛔ 不要删，留痕）。
