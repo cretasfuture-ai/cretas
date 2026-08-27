@@ -15,6 +15,7 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Department;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.service.finance.VoucherConsumptionSourcePolicy;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.Supplier;
@@ -911,7 +912,26 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             ));
         }
 
+        // 🔴 2026-08-27 (Owner 裁定: 消耗行不进凭证, 只有生产领用进)。
+        //
+        // 此前这里不按来源过滤, 窗口内**每一行**都记成「原料发出」。实测后果:
+        // TRANSFER_OUT 23 行 1969.00 元 —— 那是仓库之间移库, 货还在厂里, 却被记成消耗。
+        //
+        // ⚠️ 判据只有一份: VoucherConsumptionSourcePolicy。⛔ 不要在这里写 if 列举来源。
+        // ⚠️ 未知来源**不静默**: 既不计入(会凭空造成本), 也不假装没发生 —— 计数并打日志。
+        int excludedKnown = 0;
+        java.util.Map<String, Integer> excludedUnknown = new java.util.TreeMap<>();
         for (MaterialConsumption consumption : materialConsumptionRepo.findByTimeRange(factoryId, startTime, endTime)) {
+            String sourceType = consumption.getSourceType();
+            if (!VoucherConsumptionSourcePolicy.isProductionConsumption(sourceType)) {
+                if (VoucherConsumptionSourcePolicy.isKnownExclusion(sourceType)) {
+                    excludedKnown++;
+                } else {
+                    // 没见过的来源(含 null) —— 这是需要有人看一眼的信号, 不是常态
+                    excludedUnknown.merge(String.valueOf(sourceType), 1, Integer::sum);
+                }
+                continue;
+            }
             LocalDate date = consumption.getConsumptionTime() == null ? null : consumption.getConsumptionTime().toLocalDate();
             BigDecimal quantity = nvl(consumption.getQuantity());
             BigDecimal amount = nvl(consumption.getTotalCost());
@@ -925,6 +945,18 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     unitPrice,
                     amount
             ));
+        }
+
+        if (excludedKnown > 0 || !excludedUnknown.isEmpty()) {
+            log.info("凭证导出: 消耗行按来源过滤 factoryId={} 已知排除={} 未知来源={}",
+                    factoryId, excludedKnown, excludedUnknown);
+        }
+        if (!excludedUnknown.isEmpty()) {
+            // ⚠️ 不抛异常(月结不该被一行怪数据卡住), 但必须喊出来 ——
+            //    静默排除会让成本悄悄少算, 而少算比多算更难被发现。
+            log.warn("凭证导出: 出现未登记的消耗来源 factoryId={} {} —— "
+                            + "请在 VoucherConsumptionSourcePolicy 里裁定它进不进凭证",
+                    factoryId, excludedUnknown);
         }
 
         // 半成品(WIP)收发存: 金额已按单位成本 unitCost (非售价), 无 Bug 7 的售价问题。

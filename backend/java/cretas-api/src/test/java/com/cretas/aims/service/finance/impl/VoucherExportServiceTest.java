@@ -214,6 +214,11 @@ class VoucherExportServiceTest {
         consumption.setUnitPrice(new BigDecimal(unitPrice));
         consumption.setTotalCost(new BigDecimal(totalCost));
         consumption.setNotes("生产领用");
+        // ⚠️ 2026-08-27: 补上来源。此前夹具不设 sourceType, 而凭证导出当时也不按来源过滤,
+        //    所以它照样进台账 —— 那正是本轮修掉的问题(TRANSFER_OUT 移库被记成「原料发出」)。
+        //    这条夹具的 notes 写的就是「生产领用」, 如实标成 RAW_MATERIAL。
+        //    ⛔ 不要把它留空来「让测试过」: 留空在新口径下是「来源不明」, 本就不该进凭证。
+        consumption.setSourceType("RAW_MATERIAL");
         consumption.setRecordedBy(USER_ID);
         return consumption;
     }
