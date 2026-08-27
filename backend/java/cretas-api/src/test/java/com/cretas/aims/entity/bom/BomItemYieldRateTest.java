@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *
  * 客户场景: 成品 200g + 出成率 58% → 自动算原料 344.83g
  */
-@DisplayName("D2: BomRecipeItem.getActualQuantity (yieldRate 自动换算)")
+@DisplayName("D2: BomRecipeItem.calculateActualQuantity (yieldRate 自动换算)")
 class BomItemYieldRateTest {
 
     @Test
@@ -24,10 +24,10 @@ class BomItemYieldRateTest {
         item.setStandardQuantity(new BigDecimal("200"));
         item.setYieldRate(new BigDecimal("58"));
 
-        BigDecimal actual = item.getActualQuantity();
+        BigDecimal actual = item.calculateActualQuantity();
 
         // 200 / (58 / 100) = 200 / 0.58 = 344.827586...
-        // 精度按 BomRecipeItem.getActualQuantity 实现的 6 位小数 HALF_UP
+        // 精度按 BomRecipeItem.calculateActualQuantity 实现的 6 位小数 HALF_UP
         assertEquals(0, actual.compareTo(new BigDecimal("344.827586")),
                 "200g 成品 / 58% 出成率 ≈ 344.83g 原料");
     }
@@ -39,7 +39,7 @@ class BomItemYieldRateTest {
         item.setStandardQuantity(new BigDecimal("100"));
         item.setYieldRate(new BigDecimal("100"));
 
-        BigDecimal actual = item.getActualQuantity();
+        BigDecimal actual = item.calculateActualQuantity();
 
         assertEquals(0, actual.compareTo(new BigDecimal("100")),
                 "出成率 100% 时, 原料用量 = 标准用量");
@@ -52,7 +52,7 @@ class BomItemYieldRateTest {
         item.setStandardQuantity(new BigDecimal("100"));
         item.setYieldRate(BigDecimal.ZERO);
 
-        BigDecimal actual = item.getActualQuantity();
+        BigDecimal actual = item.calculateActualQuantity();
 
         assertEquals(0, actual.compareTo(new BigDecimal("100")),
                 "yieldRate=0 应回退到 standardQuantity 避免除零");
@@ -65,7 +65,7 @@ class BomItemYieldRateTest {
         item.setStandardQuantity(new BigDecimal("100"));
         item.setYieldRate(null);
 
-        BigDecimal actual = item.getActualQuantity();
+        BigDecimal actual = item.calculateActualQuantity();
 
         assertEquals(0, actual.compareTo(new BigDecimal("100")),
                 "yieldRate=null 应回退到 standardQuantity");
