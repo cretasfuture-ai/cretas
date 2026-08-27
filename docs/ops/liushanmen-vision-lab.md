@@ -682,6 +682,18 @@ B:\anaconda3\python.exe tools\vision-lab\vision_lab.py `
 `reviewed=true, source=human` 才能进入后续 label 训练。不得因此覆盖 tray MARK、旧 label MARK、
 生产模型或原图。
 
+若 preflight 使用的历史 manifest 只覆盖部分审核轮次，还必须先用 `refine` 将候选绑定到当前不可变
+dataset manifest，按 `source_photo_id` 前 8 位和 `tray_index` 做目标级去重，再执行 `build`。该步骤会
+校验源计划 digest、要求 dataset 明确 `protected_holdout_included=false`，记录两侧 SHA-256，并重算
+queue/task/SKU 数量与候选 digest；不得手工删除 JSON 行后沿用旧 digest：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\mine_label_side_view_queue.py refine `
+  --plan D:\CretasVisionLab\prospective-blind\<preflight>.json `
+  --dataset-manifest D:\CretasVisionLab\datasets\<dataset-id>\manifest.json `
+  --output D:\CretasVisionLab\prospective-blind\<refined>.json
+```
+
 当新侧视正样本使白色纸张、包装边缘等非标签物体的 `white_label` 置信度上升时，不得继续机械追加
 同类缺标正样本。改用 `--selection-mode white-confuser-disagreement`，并用
 `--candidate-label/--candidate-label-sha256` 将已拒绝候选绑定为只读分歧排序器。该模式只选择候选新增或

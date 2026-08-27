@@ -212,6 +212,76 @@ def manifest_source_ids(paths: Iterable[Path]) -> set[str]:
     return result
 
 
+def dataset_target_keys(paths: Iterable[Path]) -> set[tuple[str, int]]:
+    """Return source-prefix/tray pairs already present in immutable datasets.
+
+    Historical dataset rows do not consistently retain ``source_photo_id`` or
+    ``tray_index``.  Their stable crop IDs do retain both as
+    ``..._<photo-prefix>_tNN_...``; use that only for target-level queue
+    deduplication, never as human truth.
+    """
+    result: set[tuple[str, int]] = set()
+    for path in paths:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        payload = load_json(path)
+        if payload.get("protected_holdout_included") is not False:
+            raise RuntimeError(f"dataset manifest protection contract drift: {path}")
+        for row in payload.get("rows", []):
+            source_photo_id = str(row.get("source_photo_id") or "")
+            tray_index = row.get("tray_index")
+            if source_photo_id and tray_index is not None:
+                result.add((source_photo_id[:8].lower(), int(tray_index)))
+                continue
+            parts = str(row.get("crop_id") or "").split("_")
+            for index, part in enumerate(parts[:-1]):
+                next_part = parts[index + 1]
+                if (
+                    len(part) == 8
+                    and all(character in "0123456789abcdefABCDEF" for character in part)
+                    and len(next_part) >= 2
+                    and next_part[0] == "t"
+                    and next_part[1:].isdigit()
+                ):
+                    result.add((part.lower(), int(next_part[1:])))
+                    break
+    return result
+
+
+def refine_plan(args: argparse.Namespace) -> dict[str, Any]:
+    plan = load_json(args.plan)
+    rows = plan.get("rows") or []
+    if plan.get("version") != "vision-lab-label-side-view-preflight-v1" or plan.get("status") != "ready":
+        raise RuntimeError("label-side-view preflight is not ready")
+    if stable_digest(plan_identity(rows)) != plan.get("candidate_digest"):
+        raise RuntimeError("label-side-view preflight candidate digest drift")
+    existing_targets = dataset_target_keys(args.dataset_manifest)
+    kept = [
+        row for row in rows
+        if (str(row["source_photo_id"])[:8].lower(), int(row["tray_index"])) not in existing_targets
+    ]
+    refined = dict(plan)
+    refined.update({
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "refined_from": str(args.plan.resolve()),
+        "refined_from_sha256": sha256_file(args.plan),
+        "existing_dataset_manifests": [
+            {"path": str(path.resolve()), "sha256": sha256_file(path)}
+            for path in args.dataset_manifest
+        ],
+        "excluded_existing_dataset_targets": len(rows) - len(kept),
+        "queue_count": len(kept),
+        "candidate_photo_count": len({row["source_photo_id"] for row in kept}),
+        "candidate_task_count": len({row["source_task_id"] for row in kept}),
+        "sku_counts": dict(Counter(row["sku_code"] for row in kept)),
+        "candidate_digest": stable_digest(plan_identity(kept)),
+        "rows": kept,
+        "queue_created": False,
+    })
+    write_json(args.output, refined)
+    return refined
+
+
 def protected_records(path: Path) -> tuple[set[str], set[str], list[str]]:
     payload = load_json(path)
     records = payload.get("records") or []
@@ -714,6 +784,10 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--minimum-label-iou", type=float, default=0.30)
     plan.add_argument("--minimum-candidate-white-confidence", type=float, default=0.35)
     plan.add_argument("--minimum-white-confidence-delta", type=float, default=0.05)
+    refine = subparsers.add_parser("refine")
+    refine.add_argument("--plan", required=True, type=Path)
+    refine.add_argument("--dataset-manifest", action="append", required=True, type=Path)
+    refine.add_argument("--output", required=True, type=Path)
     build = subparsers.add_parser("build")
     build.add_argument("--plan", required=True, type=Path)
     build.add_argument("--output-root", required=True, type=Path)
@@ -725,7 +799,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    result = scan_plan(args) if args.command == "plan" else build_queue(args)
+    if args.command == "plan":
+        result = scan_plan(args)
+    elif args.command == "refine":
+        result = refine_plan(args)
+    else:
+        result = build_queue(args)
     summary = {
         "status": result.get("status", result.get("stage")),
         "queue_count": result.get("queue_count", 0),
