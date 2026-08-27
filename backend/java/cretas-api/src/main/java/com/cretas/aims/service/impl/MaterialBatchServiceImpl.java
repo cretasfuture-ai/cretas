@@ -17,7 +17,6 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlanBatchUsage;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
-import com.cretas.aims.entity.enums.InboundType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -304,10 +303,6 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         MaterialBatch batch = materialBatchMapper.toEntity(request, factoryId, userId.longValue());
         // 生成UUID作为ID
         batch.setId(java.util.UUID.randomUUID().toString());
-        if (LEGACY_IMPORT_SOURCE_DOC_TYPE.equals(request.getSourceDocType())) {
-            batch.setInboundType(InboundType.LEGACY_IMPORT);
-        }
-
         // D1 双仓流转 (PR #310 §5.5): 入库默认 WH-LOG (物流仓). DTO 显式传则用 DTO 值.
         if (batch.getWarehouseId() == null) {
             batch.setWarehouseId(warehouseResolver.resolveLogisticsId(factoryId));

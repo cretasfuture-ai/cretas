@@ -1,5 +1,6 @@
 package com.cretas.aims.config;
 
+import com.cretas.aims.ai.capability.UnsupportedCapabilityRegistry;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -979,12 +980,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("设备利用率", "REPORT_EFFICIENCY");
 
         // v12.8: 关联分析类查询映射
-        phraseToIntentMapping.put("关联分析报告", "CORRELATION_ANALYSIS");
-        phraseToIntentMapping.put("的关联分析", "CORRELATION_ANALYSIS");
-        phraseToIntentMapping.put("有没有关联", "CORRELATION_ANALYSIS");
-        phraseToIntentMapping.put("相关性分析", "CORRELATION_ANALYSIS");
-        phraseToIntentMapping.put("因果分析", "CORRELATION_ANALYSIS");
-        phraseToIntentMapping.put("影响因素", "CORRELATION_ANALYSIS");
+        // 2026-08-26: 原先指向 CORRELATION_ANALYSIS —— 那个意图码在整个仓库里只存在于
+        // 本文件的这 6 行，没有 Tool、没有 flyway seed、没有 Python 实现，也没有 DB 行，
+        // 所以实际会 fall through 到 LLM 兜底由模型自由发挥。
+        // Python 侧恰恰相反，是明确拒绝因果归因的
+        // (smartbi/agent/runtime/bounded_runtime.py: CAUSAL_ATTRIBUTION_UNSUPPORTED_BY_READ_CONTRACTS)。
+        // 改指 UNSUPPORTED_CAPABILITY，让两边口径一致：明说算不了 + 给替代。
+        phraseToIntentMapping.put("关联分析报告", UnsupportedCapabilityRegistry.INTENT_CODE);
+        phraseToIntentMapping.put("的关联分析", UnsupportedCapabilityRegistry.INTENT_CODE);
+        phraseToIntentMapping.put("有没有关联", UnsupportedCapabilityRegistry.INTENT_CODE);
+        phraseToIntentMapping.put("相关性分析", UnsupportedCapabilityRegistry.INTENT_CODE);
+        phraseToIntentMapping.put("因果分析", UnsupportedCapabilityRegistry.INTENT_CODE);
+        phraseToIntentMapping.put("影响因素", UnsupportedCapabilityRegistry.INTENT_CODE);
         phraseToIntentMapping.put("综合报告材料", "REPORT_EFFICIENCY");
 
         // v12.9: 失败案例修复短语映射
@@ -2768,7 +2775,10 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("OEE数据", "EQUIPMENT_STATS");
         phraseToIntentMapping.put("PLC数据", "EQUIPMENT_STATS");
         phraseToIntentMapping.put("AGV状态", "EQUIPMENT_STATS");
-        phraseToIntentMapping.put("SPC图表", "QUALITY_STATS");
+        // 2026-08-26: SPC图表 原先指向 QUALITY_STATS。QUALITY_STATS 有真实绑定
+        // (tool_name='quality_stats_query')，所以用户问 SPC 会拿到一份看起来像回事的
+        // 质检合格率统计 —— 不是拒答，是假答。全仓 controlChart/Cpk/统计过程控制 命中 0。
+        phraseToIntentMapping.put("SPC图表", UnsupportedCapabilityRegistry.INTENT_CODE);
         phraseToIntentMapping.put("WIP查询", "PROCESSING_BATCH_LIST");
         phraseToIntentMapping.put("QC结果", "QUALITY_CHECK_QUERY");
         // === v5.2新增：C类术语扩展 ===
@@ -2886,7 +2896,8 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("质检结果统计", "QUALITY_STATS");
         phraseToIntentMapping.put("质量趋势分析", "QUALITY_STATS");
         phraseToIntentMapping.put("品质OK", "QUALITY_STATS");
-        phraseToIntentMapping.put("SPC图表", "QUALITY_STATS");
+        // 2026-08-26: 同上，SPC 不是质量统计的别名。见 UnsupportedCapabilityRegistry。
+        phraseToIntentMapping.put("SPC图表", UnsupportedCapabilityRegistry.INTENT_CODE);
 
         // 设备维护补充
         phraseToIntentMapping.put("设备运维管理", "EQUIPMENT_MAINTENANCE");

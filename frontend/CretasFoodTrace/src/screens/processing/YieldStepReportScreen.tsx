@@ -242,6 +242,26 @@ function minutesToHHMM(minutes: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+/**
+ * 本段工时的默认起止 —— **当前时刻**, 对齐到滑轨自己的 15 分钟步长。
+ *
+ * 🔴 2026-08-26 走查前这里硬编码 `07:00` / `15:00`, 与打开屏幕的时间毫无关系。
+ *    它确实省掉了打字, 但省下来的代价是**往库里记一个假的班次** ——
+ *    工人不动它直接提交, 系统就当他 07:00 到 15:00 干了 8 小时,
+ *    而工时和人工成本都是按这个数算的。
+ *
+ * ⚠️ 排班数据拿不到 (仓里的 scheduling API 是调度员给「人员排班日历」用的,
+ *    没有「当前这个工人在这道工序上的班次」这条口子), 所以取当前时刻:
+ *    **起止都取现在 ⇒ 时长为 0 ⇒ 提交会被挡回来**, 工人必须自己说清是几点到几点。
+ *    ⛔ 不许给它一个「看起来合理」的时长 —— 那只是把假数字换个写法。
+ */
+export function currentClockHHMM(now: Date = new Date()): string {
+  const step = 15;
+  const snapped = Math.round((now.getHours() * 60 + now.getMinutes()) / step) * step;
+  const clamped = Math.min(snapped, 24 * 60 - step);
+  return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`;
+}
+
 function hhmmToMinutes(hhmm: string): number {
   const parts = hhmm.split(':');
   if (parts.length !== 2) return 0;
@@ -345,6 +365,12 @@ const TimeRangeSlider: React.FC<TimeRangeSliderProps> = ({
         <Text style={sliderStyles.timeLabel}>{endTime}</Text>
       </View>
 
+      {durationMin <= 0 ? (
+        <Text style={sliderStyles.zeroDurationHint} testID="time-range-zero-hint">
+          默认是当前时刻，请拖动两个圆点选出本段实际的起止时间
+        </Text>
+      ) : null}
+
       {/* Track + handles */}
       <View style={[sliderStyles.trackWrap, { width: SLIDER_WIDTH + HANDLE_SIZE }]}>
         {/* Tick marks */}
@@ -399,6 +425,7 @@ const sliderStyles = StyleSheet.create({
   timeLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   timeLabel: { fontSize: 20, fontWeight: '700', color: '#1A1A1A', minWidth: 64, textAlign: 'center' },
   durationLabel: { fontSize: 14, color: '#909399' },
+  zeroDurationHint: { fontSize: 13, color: '#E8732E', fontWeight: '600', marginBottom: 8, textAlign: 'center' },
   trackWrap: { height: 60, position: 'relative', alignSelf: 'center' },
   track: {
     position: 'absolute', top: 24, height: 6, borderRadius: 3, backgroundColor: '#DCDFE6',
@@ -636,8 +663,9 @@ const YieldStepReportScreen: React.FC = () => {
 
   // 生产阶段 — 单段工时报工块 (一次提交一段, 累加; 张权 多段开工/收工)
   // 低输入重设计: 时间用滑动控件(HH:MM 字符串), 人数用大步进器(number)
-  const [segStart, setSegStart] = useState('07:00');
-  const [segEnd, setSegEnd] = useState('15:00');
+  // 默认 = 当前时刻(起止相同, 时长 0) —— 见 currentClockHHMM 头注释, ⛔ 不要改回固定班次
+  const [segStart, setSegStart] = useState(currentClockHHMM);
+  const [segEnd, setSegEnd] = useState(currentClockHHMM);
   const [segHeadcount, setSegHeadcount] = useState(1);  // number (HeadcountStepper)
   const [segNote, setSegNote] = useState('');
   // 已移除: segProcessedQty, segStageOutputQty, segWasteQty (防呆: 损耗=投入−产出 auto-computed)
@@ -829,8 +857,8 @@ const YieldStepReportScreen: React.FC = () => {
     setByproducts([]);
     setWasteQty('');
     setSampleRetainQty('');
-    setSegStart('07:00');
-    setSegEnd('15:00');
+    setSegStart(currentClockHHMM());
+    setSegEnd(currentClockHHMM());
     setSegHeadcount(1);
     setSegNote('');
     setSegByproducts([]);
@@ -1389,6 +1417,16 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请填写本段工时', '开始时间 / 结束时间 / 人数都要填 (人数 > 0)');
       return;
     }
+    // 起止默认都是当前时刻(时长 0) —— 必须由工人自己拖出真实区间才能提交。
+    // ⛔ 不要用「默认 8 小时」绕开这一步: 那正是原来 07:00~15:00 在做的事。
+    if (hhmmToMinutes(segEnd) <= hhmmToMinutes(segStart)) {
+      appAlert(
+        '请选出本段的起止时间',
+        '现在起止是同一个时刻 (时长 0)。拖动滑块选出你实际干了几点到几点，' +
+          '或点上方的班次快捷键。',
+      );
+      return;
+    }
     const validSegByproducts = segByproducts
       .filter((bp) => bp.name.trim() || bp.quantity.trim())
       .map((bp) => ({
@@ -1452,8 +1490,8 @@ const YieldStepReportScreen: React.FC = () => {
       }
       await refetchYield();
       // 留在生产阶段, 清空本段输入可再加一段
-      setSegStart('07:00');
-      setSegEnd('15:00');
+      setSegStart(currentClockHHMM());
+      setSegEnd(currentClockHHMM());
       setSegHeadcount(1);
       setSegNote('');
       setSegByproducts([]);
@@ -1502,6 +1540,13 @@ const YieldStepReportScreen: React.FC = () => {
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
+      // 🔴 成功不能是唯一静默的分支 —— 与 handleSubmitSegment 2026-08-18 踩的是同一个形态
+      //    (校验不过 / 提交失败 / 网络异常每条路都弹, 唯独成功什么都不说)。
+      //    ⛔ 不要把这句去掉。
+      appAlert(
+        '已按超收提交',
+        `${req.outputQuantity} ${req.outputUnit ?? outUnit} 已记为本道产出 (超过了告警上限, 已按你的确认记账)。`,
+      );
     } catch (forceError) {
       handleError(forceError, { showAlert: false, logError: true });
       const fe = forceError as { response?: { data?: { message?: string } } };
@@ -1509,7 +1554,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [batchId, refetchYield]);
+  }, [batchId, refetchYield, outUnit]);
 
   // 同单未完结续报: markComplete 控制本次 OUTPUT 是否完工 (true=标记完工锁出成率; false=保存留单继续产出)。
   const doSubmitOutput = useCallback(async (markComplete: boolean) => {
@@ -1582,6 +1627,16 @@ const YieldStepReportScreen: React.FC = () => {
       } else if (hasSemiQty && hasSemiOption) {
         // SP1: 半成品产出成功提示
         appAlert('完工出成已提交', `已入半成品库 ${semiNum} ${outUnit}`);
+      } else {
+        // 🔴 成功不能是唯一静默的分支 —— 与 handleSubmitSegment 2026-08-18 踩的是同一个形态
+        //    (校验不过 / 提交失败 / 网络异常每条路都弹, 唯独成功什么都不说)。
+        //    ⛔ 不要把这句去掉。
+        const cumText = cumulative != null ? `本道累计产出 ${cumulative} ${outUnit}。` : '';
+        appAlert(
+          '本道已完工',
+          `${output} ${outUnit} 已记为本道产出。${cumText}出成率已锁定, 本道不能再报产出。\n` +
+            (isLastStep ? '这是末道, 可去看整批汇总。' : '可去下一道工序。'),
+        );
       }
     } catch (error) {
       // A4: OVER_RECEIPT (HTTP 409) → 弹超收确认框 (优先于通用错误处理)
@@ -1751,6 +1806,66 @@ const YieldStepReportScreen: React.FC = () => {
     navigation.goBack();
   }, [autoAssigned, navigation]);
 
+  /**
+   * 离开本屏会丢掉的**还没提交**的录入 —— 没有就返回 null。
+   *
+   * ⚠️ 只算「本屏 state 里、后端还不知道」的东西。已经提交过的(已报时段、已提交投入)
+   *    都在后端, 离开不会丢。
+   * ⚠️ 时段那一项判据是 `segStart !== segEnd`: 默认值起止相同(当前时刻),
+   *    两者不同就说明工人真的拖过滑块。
+   */
+  const unsavedEntrySummary = useCallback((): string | null => {
+    const bits: string[] = [];
+    if (evidencePhotos.length > 0) bits.push(`${evidencePhotos.length} 张还没提交的照片/视频`);
+    if (currentPhase === 'AWAITING_INPUT') {
+      // ⚠️ 与**预填值**比, 不是与空串比 —— 非首道的投入量一进屏就被 resetStepInputs
+      //    预填成上道产出 (prefillNote 那一句), 拿它当「工人填过东西」会让这个提示
+      //    在最常见的路径上每次都误报。一个会误报的提示比没有提示更糟。
+      const prefilledInput = prevOutput != null ? String(prevOutput) : '';
+      if (inputQty.trim() !== '' && inputQty !== prefilledInput) bits.push('已填的投入量');
+      if (materialBatchRefs.length > 0) bits.push('已选的领料批次');
+      if (selectedWipItem != null || wipPickQty.trim() !== '') bits.push('已选的半成品领用');
+    } else if (currentPhase === 'IN_PRODUCTION') {
+      if (productionStepMode === 'SEGMENT') {
+        if (segStart !== segEnd) bits.push('已拖好的工作时段');
+        if (segNote.trim() !== '') bits.push('本段备注');
+        if (segByproducts.length > 0) bits.push('本段副产物');
+      } else {
+        if (outputQty.trim() !== '') bits.push('已填的产出量');
+        if (semiOutputQty.trim() !== '') bits.push('已填的半成品产出量');
+        if (byproducts.length > 0) bits.push('副产物');
+        if (wasteQty.trim() !== '' || sampleRetainQty.trim() !== '') bits.push('损耗/留样');
+      }
+    }
+    return bits.length > 0 ? bits.join('、') : null;
+  }, [evidencePhotos.length, currentPhase, inputQty, prevOutput, materialBatchRefs.length, selectedWipItem,
+      wipPickQty, productionStepMode, segStart, segEnd, segNote, segByproducts.length,
+      outputQty, semiOutputQty, byproducts.length, wasteQty, sampleRetainQty]);
+
+  /**
+   * 投入阶段 / 生产阶段的**退出口**。
+   *
+   * 🔴 2026-08-26 走查: 这两段屏上一个 goBack 元素都没有 (完成屏、done 卡、哨兵屏都有) ——
+   *    工人进去之后只能杀 App。
+   * ⚠️ 切道本来就会清空这些 state(loadAll 的重置块), 所以离开 = 丢。
+   *    ⛔ 不静默丢弃: 有没提交的录入就先问一句。
+   */
+  const leaveReportScreen = useCallback(() => {
+    const unsaved = unsavedEntrySummary();
+    if (unsaved == null) {
+      returnOrRefreshAssignedTask();
+      return;
+    }
+    appAlert(
+      '还没提交就要离开?',
+      `${unsaved} 会丢掉 —— 本屏填的东西只有点了提交才进系统。`,
+      [
+        { text: '继续填写', style: 'cancel' },
+        { text: '丢弃并离开', style: 'destructive', onPress: returnOrRefreshAssignedTask },
+      ],
+    );
+  }, [unsavedEntrySummary, returnOrRefreshAssignedTask]);
+
   // ========================= 两点报工: 哨兵屏提交 =========================
   // 领料报工: 使用 submitReport(reportKind=INPUT) 以支持 evidenceImages
   const handleSentinelMaterialSubmit = useCallback(async () => {
@@ -1859,6 +1974,10 @@ const YieldStepReportScreen: React.FC = () => {
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
+      // 🔴 成功不能是唯一静默的分支 —— 与 handleSubmitSegment 2026-08-18 踩的是同一个形态
+      //    (校验不过 / 提交失败 / 网络异常每条路都弹, 唯独成功什么都不说)。
+      //    ⛔ 不要把这句去掉。
+      appAlert('产出已提交', `${outVal} ${outUnit} 已记为本批产出, 本批报工到此结束。`);
     } catch (error) {
       handleError(error, { showAlert: false, logError: true });
       const { title, msg } = friendlySubmitError(error);
@@ -2165,6 +2284,7 @@ const YieldStepReportScreen: React.FC = () => {
                 disabled={submitting}
                 calculatorMode
                 defaultTrayWeighing={false}
+                required
                 testID="sentinel-output-qty"
               />
 
@@ -2535,6 +2655,7 @@ const YieldStepReportScreen: React.FC = () => {
                         disabled={submitting}
                         calculatorMode
                         defaultTrayWeighing={false}
+                        required
                         testID="sp3-wip-pick-qty"
                       />
                       {wipPickOverLimit ? (
@@ -2625,6 +2746,7 @@ const YieldStepReportScreen: React.FC = () => {
                   disabled={submitting}
                   calculatorMode
                   defaultTrayWeighing={false}
+                  required
                   testID="yield-input-qty"
                 />
               )}
@@ -2660,6 +2782,17 @@ const YieldStepReportScreen: React.FC = () => {
               testID="yield-submit-input-btn"
             >
               提交投入  ▶
+            </NeoButton>
+
+            <NeoButton
+              variant="outline"
+              size="large"
+              onPress={leaveReportScreen}
+              disabled={submitting}
+              style={styles.fullBtn}
+              testID="yield-leave-input-btn"
+            >
+              {autoAssigned ? '返回我的任务' : '返回选批次'}
             </NeoButton>
           </>
         ) : null}
@@ -2848,6 +2981,7 @@ const YieldStepReportScreen: React.FC = () => {
                 }
                 disabled={submitting}
                 calculatorMode
+                required
                 testID="yield-output-qty"
               />
 
@@ -3048,6 +3182,17 @@ const YieldStepReportScreen: React.FC = () => {
             </NeoButton>
               </>
             ) : null}
+
+            <NeoButton
+              variant="outline"
+              size="large"
+              onPress={leaveReportScreen}
+              disabled={submitting}
+              style={styles.fullBtn}
+              testID="yield-leave-production-btn"
+            >
+              {autoAssigned ? '返回我的任务' : '返回选批次'}
+            </NeoButton>
           </>
         ) : null}
 

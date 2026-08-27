@@ -33,6 +33,11 @@ import { attachmentApi } from '../../services/api/attachmentApi';
 import { labelQcApi } from '../../services/api/labelQcApi';
 import { useAuthStore } from '../../store/authStore';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
+import QILabelQcCameraModal from './QILabelQcCameraModal';
+import {
+  evaluateLabelQcCaptureMetadata,
+  LabelQcCaptureAsset,
+} from './labelQcCaptureQuality';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 type ScrollViewRef = React.ElementRef<typeof ScrollView>;
@@ -83,7 +88,8 @@ export default function QILabelQcCreateScreen() {
   const [batchNumber, setBatchNumber] = useState('');
   const [productionDate, setProductionDate] = useState(new Date());
   const [datePickerVisible, setDatePickerVisible] = useState(false);
-  const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [photos, setPhotos] = useState<LabelQcCaptureAsset[]>([]);
+  const [cameraVisible, setCameraVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
@@ -148,38 +154,79 @@ export default function QILabelQcCreateScreen() {
         ? `再${Platform.OS === 'web' ? '选择' : '拍摄'}至少 1 张照片`
         : null;
 
-  const takePhoto = async () => {
+  const checkCaptureQuality = async (asset: LabelQcCaptureAsset) => labelQcApi.checkCaptureQuality(
+    {
+      uri: asset.uri,
+      name: asset.fileName || `label-qc-capture-${Date.now()}.jpg`,
+      type: asset.mimeType || 'image/jpeg',
+    },
+    factoryId,
+  );
+
+  const selectWebPhotos = async () => {
+    const availableSlots = MAX_PHOTOS - photos.length;
+    if (availableSlots <= 0) {
+      Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: availableSlots,
+      quality: 1,
+      exif: false,
+    });
+    const captured = result.canceled
+      ? []
+      : result.assets.slice(0, availableSlots);
+    if (captured.length > 0) {
+      const accepted: LabelQcCaptureAsset[] = [];
+      const rejectedReasons: string[] = [];
+      for (const asset of captured) {
+        const gate = evaluateLabelQcCaptureMetadata(asset);
+        if (!gate.accepted) {
+          if (gate.reason) rejectedReasons.push(gate.reason);
+          continue;
+        }
+        try {
+          const quality = await checkCaptureQuality(asset);
+          if (quality.accepted) accepted.push(asset);
+          else rejectedReasons.push(quality.message);
+        } catch {
+          rejectedReasons.push('照片检查没有完成，请保持网络连接后重试');
+        }
+      }
+      if (accepted.length > 0) {
+        setPhotos((current) => [...current, ...accepted]);
+      }
+      if (rejectedReasons.length > 0) {
+        setTimeout(() => {
+          Alert.alert(
+            '部分照片需要重拍',
+            `${rejectedReasons[0]}${rejectedReasons.length > 1 ? `\n另有 ${rejectedReasons.length - 1} 张也未通过。` : ''}`,
+          );
+        }, 100);
+      }
+      setSubmitError(null);
+    }
+  };
+
+  const requestPhoto = () => {
     if (photos.length >= MAX_PHOTOS) {
       Alert.alert('照片已满', `每个拍检任务最多 ${MAX_PHOTOS} 张照片`);
       return;
     }
-    if (Platform.OS !== 'web') {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('需要相机权限', '请在系统设置中允许相机权限后重试');
-        return;
-      }
+    if (Platform.OS === 'web') {
+      void selectWebPhotos();
+    } else {
+      setCameraVisible(true);
     }
-    const result = Platform.OS === 'web'
-      ? await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsMultipleSelection: true,
-          selectionLimit: MAX_PHOTOS - photos.length,
-          quality: 0.85,
-          exif: false,
-        })
-      : await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.85,
-          exif: false,
-        });
-    const captured = result.canceled
-      ? []
-      : result.assets.slice(0, MAX_PHOTOS - photos.length);
-    if (captured.length > 0) {
-      setPhotos((current) => [...current, ...captured]);
-      setSubmitError(null);
-    }
+  };
+
+  const acceptCameraPhoto = (asset: LabelQcCaptureAsset) => {
+    setPhotos((current) => [...current, asset].slice(0, MAX_PHOTOS));
+    setCameraVisible(false);
+    setSubmitError(null);
   };
 
   const removePhoto = (index: number) => {
@@ -203,7 +250,7 @@ export default function QILabelQcCreateScreen() {
     return null;
   };
 
-  const fileSize = async (asset: ImagePicker.ImagePickerAsset): Promise<number> => {
+  const fileSize = async (asset: LabelQcCaptureAsset): Promise<number> => {
     if (asset.fileSize && asset.fileSize > 0) return asset.fileSize;
     const info = await FileSystem.getInfoAsync(asset.uri);
     const size = (info as { size?: number }).size;
@@ -399,27 +446,16 @@ export default function QILabelQcCreateScreen() {
           <Text style={styles.photoCounter}>{photos.length}/{MAX_PHOTOS}</Text>
         </View>
 
-        <View style={styles.guideCard}>
-          {[
-            '每盒尽量露出标签所在边缘',
-            '减少堆叠，单张建议拍 8–15 盒',
-            '避开顶灯反光，画面保持清晰',
-          ].map((text, index) => (
-            <View key={text} style={styles.guideRow}>
-              <View style={styles.guideNumber}>
-                <Text style={styles.guideNumberText}>{index + 1}</Text>
-              </View>
-              <Text style={styles.guideText}>{text}</Text>
-            </View>
-          ))}
-        </View>
-
         <View style={styles.photoGrid}>
           {photos.map((photo, index) => (
             <View key={`${photo.uri}-${index}`} style={styles.photoCard}>
               <Image source={{ uri: photo.uri }} style={styles.photoImage} />
               <View style={styles.photoIndex}>
                 <Text style={styles.photoIndexText}>{index + 1}</Text>
+              </View>
+              <View style={styles.qualityPassedBadge}>
+                <Ionicons name="checkmark-circle" size={14} color="#FFFFFF" />
+                <Text style={styles.qualityPassedText}>已自动检查</Text>
               </View>
               <TouchableRipple
                 style={styles.removePhoto}
@@ -436,7 +472,7 @@ export default function QILabelQcCreateScreen() {
           {photos.length < MAX_PHOTOS && !formLocked && (
             <TouchableRipple
               style={styles.addPhoto}
-              onPress={takePhoto}
+              onPress={requestPhoto}
               borderless={false}
               accessibilityRole="button"
               accessibilityLabel={Platform.OS === 'web' ? '选择照片' : '拍摄照片'}
@@ -506,6 +542,17 @@ export default function QILabelQcCreateScreen() {
           {draftTaskId && submitError ? '重试提交' : '提交拍检'}
         </Button>
       </View>
+
+      <QILabelQcCameraModal
+        visible={cameraVisible}
+        contextLabel={[
+          selectedCode,
+          batchNumber.trim(),
+        ].filter(Boolean).join(' · ') || '六扇门标签拍检'}
+        onClose={() => setCameraVisible(false)}
+        onAccepted={acceptCameraPhoto}
+        checkQuality={checkCaptureQuality}
+      />
 
       <Modal
         visible={productModalVisible}
@@ -676,24 +723,6 @@ const styles = StyleSheet.create({
   disabledControl: { opacity: 0.65 },
   input: { backgroundColor: QI_COLORS.card, marginBottom: 16 },
   photoCounter: { fontSize: 14, fontWeight: '700', color: QI_COLORS.primary, marginBottom: 12 },
-  guideCard: {
-    backgroundColor: '#FFF8E8',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-  },
-  guideRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 5 },
-  guideNumber: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#FFD884',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  guideNumberText: { fontSize: 12, fontWeight: '800', color: '#7A4B00' },
-  guideText: { flex: 1, fontSize: 14, color: '#654A1D', lineHeight: 20 },
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   photoCard: {
     width: '30.5%',
@@ -706,7 +735,7 @@ const styles = StyleSheet.create({
   photoIndex: {
     position: 'absolute',
     left: 6,
-    bottom: 6,
+    top: 6,
     width: 24,
     height: 24,
     borderRadius: 12,
@@ -715,6 +744,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   photoIndexText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  qualityPassedBadge: {
+    position: 'absolute',
+    left: 6,
+    right: 6,
+    bottom: 6,
+    minHeight: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(13, 122, 95, 0.9)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  qualityPassedText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   removePhoto: {
     position: 'absolute',
     top: 4,

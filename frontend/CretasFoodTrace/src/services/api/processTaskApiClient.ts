@@ -60,6 +60,33 @@ export interface ProcessTaskItem {
   pendingQuantity: number;
   inputQuantity?: number;
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED' | 'SUPPLEMENTING' | string;
+  /**
+   * 计划起止 —— 车间主管靠这两个答「今天要做什么」。
+   *
+   * 后端 `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")`, 所以拿到的是
+   * `"2026-08-26 08:00:00"` 这种**本地日历时间字符串**, 不是 ISO。
+   * ⛔ 不要 `new Date(s)` 再 `toISOString()` 截断 —— 那会按 UTC 挪一天,
+   *    而这个串本来就已经是业务日历日了 (后端全线 GMT+8)。
+   *
+   * `undefined` = 没设。⛔ 不许兜底成今天/某个默认日期。
+   */
+  plannedStartAt?: string;
+  plannedEndAt?: string;
+  /** 责任人姓名 (后端 join 透出)。`undefined` = 未分配, 或用户已删除。 */
+  assignedToName?: string;
+  /**
+   * 这道工序超期没有 —— **三态**: `true` / `false` / `undefined`(判不了)。
+   *
+   * `undefined` 的唯一含义是「后端没给出判断」——今天只有一个成因:
+   * 这道工序没设 `plannedEndAt`。
+   *
+   * ⛔ 这里【曾经】根本不存在: 屏幕上的「超期」徽章读 `(item as any).overdue`,
+   * 而这个字段四层都没有 ⇒ 那个徽章从来没渲染过一次。`as any` 正是它能编译
+   * 通过却永不生效的原因 —— 类型系统本来会当场指出「这个字段不存在」。
+   *
+   * ⛔ 不要 `?? false`: 那会把「没问到」说成「不超期」。
+   */
+  overdue?: boolean;
   assignedWorkerIds?: string;
   workflowVersionId?: string;
   previousTerminalStatus?: string;
@@ -256,6 +283,15 @@ class ProcessTaskApiClient {
       completedQuantity: task.actualQuantity ?? 0,
       pendingQuantity: 0,
       status: task.status,
+      // ⛔ 这四个【曾经】在这里被整个丢掉 —— 后端 DTO 有、传输类型有,
+      //    映射层不投影, 于是屏幕上永远看不到计划日期/责任人/超期。
+      //    那不是缺功能, 是投影丢失: 数据一路送到了消费端前面一层才被扔。
+      plannedStartAt: task.plannedStartAt ?? undefined,
+      plannedEndAt: task.plannedEndAt ?? undefined,
+      assignedToName: task.assignedToName ?? undefined,
+      // 三态: true / false / undefined。⛔ 不要写 `?? false` —— `undefined` 是
+      // 「后端没给出判断」(这道工序没设 plannedEndAt), 与「不超期」不是一回事。
+      overdue: task.overdue == null ? undefined : task.overdue,
       createdAt: task.createdAt ?? undefined,
       updatedAt: task.updatedAt ?? undefined,
     };

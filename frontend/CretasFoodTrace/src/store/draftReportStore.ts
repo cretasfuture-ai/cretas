@@ -37,6 +37,8 @@ interface DraftReportState {
   addDraft: (draft: Omit<DraftReport, 'id' | 'createdAt'>) => void;
   removeDraft: (id: string) => void;
   clearDrafts: () => void;
+  /** 只清当前工厂的草稿 —— clearDrafts 会连别的工厂一起清掉。 */
+  clearDraftsByFactory: (factoryId: string) => void;
   getDraftsByFactory: (factoryId: string) => DraftReport[];
 }
 
@@ -59,6 +61,9 @@ export const useDraftReportStore = create<DraftReportState>()(
       },
 
       clearDrafts: () => set({ drafts: [] }),
+
+      clearDraftsByFactory: (factoryId) =>
+        set({ drafts: get().drafts.filter(d => d.factoryId !== factoryId) }),
 
       getDraftsByFactory: (factoryId) => {
         return get().drafts.filter(d => d.factoryId === factoryId);

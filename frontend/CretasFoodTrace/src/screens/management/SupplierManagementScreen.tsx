@@ -23,9 +23,13 @@ import { useAuthStore } from '../../store/authStore';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { hasModulePermission } from '../../utils/permissionHelper';
+import { PermissionGatedAction } from '../../components/permission/PermissionGatedAction';
 
 // 创建SupplierManagement专用logger
 const supplierLogger = logger.createContextLogger('SupplierManagement');
+
+/** 「这项归谁」——与 canWrite 口径逐字对应(procurement:read_write / finance:read_write)。 */
+export const SUPPLIER_WRITE_REASON = '供应商资料的新增和修改归采购或财务，你的角色只能查看。';
 
 /**
  * 供应商管理页面
@@ -394,40 +398,45 @@ export default function SupplierManagementScreen() {
                   )}
                 </View>
 
-                {/* Actions */}
-                {/* Actions — 只读角色不渲染任何 mutation 入口 */}
-                {canWrite && (
-                  <View style={styles.actionRow}>
-                    <Button
-                      mode="outlined"
-                      icon="pencil"
-                      onPress={() => handleEdit(supplier)}
-                      style={styles.actionButton}
-                      compact
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      mode="outlined"
-                      icon={supplier.isActive ? 'pause' : 'play'}
-                      onPress={() => handleToggleStatus(supplier.id, supplier.isActive)}
-                      style={styles.actionButton}
-                      compact
-                    >
-                      {supplier.isActive ? '停用' : '启用'}
-                    </Button>
-                    <Button
-                      mode="outlined"
-                      icon="delete"
-                      onPress={() => handleDelete(supplier.id, supplier.name)}
-                      style={styles.actionButton}
-                      compact
-                      textColor="#C62828"
-                    >
-                      删除
-                    </Button>
-                  </View>
-                )}
+                {/* Actions — 只读角色【置灰但可见】, 见 CustomerManagementScreen 同款注释 */}
+                <PermissionGatedAction
+                  granted={canWrite}
+                  reason={SUPPLIER_WRITE_REASON}
+                  contentStyle={styles.actionRow}
+                  testID={`supplier-actions-gate-${supplier.id}`}
+                >
+                  <Button
+                    testID={`supplier-edit-btn-${supplier.id}`}
+                    mode="outlined"
+                    icon="pencil"
+                    onPress={() => handleEdit(supplier)}
+                    style={styles.actionButton}
+                    compact
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    testID={`supplier-toggle-btn-${supplier.id}`}
+                    mode="outlined"
+                    icon={supplier.isActive ? 'pause' : 'play'}
+                    onPress={() => handleToggleStatus(supplier.id, supplier.isActive)}
+                    style={styles.actionButton}
+                    compact
+                  >
+                    {supplier.isActive ? '停用' : '启用'}
+                  </Button>
+                  <Button
+                    testID={`supplier-delete-btn-${supplier.id}`}
+                    mode="outlined"
+                    icon="delete"
+                    onPress={() => handleDelete(supplier.id, supplier.name)}
+                    style={styles.actionButton}
+                    compact
+                    textColor="#C62828"
+                  >
+                    删除
+                  </Button>
+                </PermissionGatedAction>
               </Card.Content>
             </Card>
           ))
@@ -546,15 +555,20 @@ export default function SupplierManagementScreen() {
         </Modal>
       </Portal>
 
-      {/* FAB */}
-      {canWrite && (
+      {/* FAB — 无写权时置灰但仍在原位 */}
+      <PermissionGatedAction
+        granted={canWrite}
+        reason={SUPPLIER_WRITE_REASON}
+        style={styles.fab}
+        testID="supplier-create-gate"
+      >
         <FAB
+          testID="supplier-create-fab"
           icon="plus"
-          style={styles.fab}
           onPress={handleAdd}
           label="创建供应商"
         />
-      )}
+      </PermissionGatedAction>
     </SafeAreaView>
   );
 }

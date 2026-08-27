@@ -174,9 +174,20 @@ export default function DSHomeScreen() {
           <View style={styles.headerTop}>
             <View style={{ width: 24 }} />
             <Text style={styles.headerTitle}>调度工作台</Text>
+            {/*
+              * 这枚徽章上的数是 `alerts.unresolved`（未处理**告警**数），
+              * 而它原来跳的是 `NotificationList`（**通知**列表）—— 数说的是一件事,
+              * 点下去到的是另一件事, 而真正能处理告警的 `AlertList` 就注册在根栈上
+              * (`DispatcherNavigator.tsx:132`), 全仓没有任何地方 navigate 过去。
+              *
+              * ⇒ 落点改成 `AlertList`: 徽章说有几条要处理, 点进去就是处理它们的地方。
+              */}
             <TouchableOpacity
               style={styles.notificationBtn}
-              onPress={() => navigation.navigate('NotificationList')}
+              onPress={() => navigation.navigate('AlertList')}
+              testID="ds-home-alert-entry"
+              accessibilityRole="button"
+              accessibilityLabel="未处理告警"
             >
               <MaterialCommunityIcons name="bell-outline" size={24} color="white" />
               {(dashboard?.alerts?.unresolved ?? 0) > 0 && (

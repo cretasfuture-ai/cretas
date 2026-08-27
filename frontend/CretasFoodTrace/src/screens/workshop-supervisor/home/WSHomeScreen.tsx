@@ -28,6 +28,7 @@ import { TutorialOverlay } from '../../../components/common/TutorialOverlay';
 import { WORKSHOP_SUP_ACTIONS } from '../../../store/quickActionsStore';
 import { useTutorialStore, TUTORIAL_HOME, TUTORIAL_ENABLED, useTutorialTarget, registerTutorialTarget } from '../../../store/tutorialStore';
 import { useDraftReportStore } from '../../../store/draftReportStore';
+import { getCurrentFactoryId } from '../../../utils/factoryIdHelper';
 import { WorkflowVisualizer } from '../../../components/workflow';
 import { getBucketPrimaryStatus } from '../../../types/workflow';
 import type { WorkflowModule } from '../../../types/workflow';
@@ -72,20 +73,49 @@ interface InProgressBatch {
   estimatedTime: string;
 }
 
+/*
+ * 三态读数：`null` = 没问到（未加载 / 请求失败 / 后端根本不提供这一项），
+ *          数字 = 真读数（`0` 是合法读数，照印）。
+ *
+ * ⛔ 这几个字段以前是 `number`，读不到时兜底成 `0`。那会把「我不知道」印成「是 0」——
+ *    而「待维修 0 台」「请假 0 人」恰好都是**好消息**的长相，主管会据此认为没事。
+ *    同族缺陷 2026-08-26 刚在 web-admin 首页修过（PR #109），这里照同一套三态。
+ */
+type Reading = number | null;
+
 // 人员状态
 interface PersonnelStatus {
-  onDuty: number;
-  onLeave: number;
-  absent: number;
-  total: number;
+  onDuty: Reading;
+  onLeave: Reading;
+  absent: Reading;
+  total: Reading;
 }
 
 // 设备状态
 interface EquipmentStatus {
-  running: number;
-  idle: number;
-  needMaintenance: number;
-  total: number;
+  running: Reading;
+  idle: Reading;
+  needMaintenance: Reading;
+  total: Reading;
+}
+
+/** 两个操作数都读到才算得出差值；任一没读到，差值也是「不知道」。 */
+function diffOrUnknown(total: Reading, part: Reading): Reading {
+  if (total === null || part === null) return null;
+  return total - part;
+}
+
+/**
+ * 读数格：读到就照印（含 `0`），没读到印 `—` 并退成灰色。
+ * ⛔ 不许让「没读到」沿用告警配色 —— 那正是它冒充真读数的方式。
+ */
+function StatusValue({ value, color }: { value: Reading; color: string }) {
+  const unknown = value === null;
+  return (
+    <Text style={[styles.statusValue, { color: unknown ? '#bfbfbf' : color }]}>
+      {unknown ? '—' : value}
+    </Text>
+  );
 }
 
 export function WSHomeScreen() {
@@ -94,7 +124,13 @@ export function WSHomeScreen() {
   const { isScreenEnabled, getBenchmarks } = useFactoryFeatureStore();
   const { t } = useTranslation('workshop');
   const insets = useSafeAreaInsets();
-  const draftCount = useDraftReportStore(s => s.drafts.length);
+  const wsDraftFactoryId = React.useMemo(() => {
+    try { return getCurrentFactoryId(); } catch { return ''; }
+  }, []);
+  // 按当前工厂计数 —— store 里存的是所有工厂的草稿(与 OfflineIndicator 同口径)。
+  const draftCount = useDraftReportStore(
+    s => s.drafts.filter(d => d.factoryId === wsDraftFactoryId).length,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -242,17 +278,18 @@ export function WSHomeScreen() {
     completed: 0,
   });
   const [inProgressBatches, setInProgressBatches] = useState<InProgressBatch[]>([]);
+  // 初值一律 null —— 还没问过，不是「是 0」。
   const [personnelStatus, setPersonnelStatus] = useState<PersonnelStatus>({
-    onDuty: 0,
-    onLeave: 0,
-    absent: 0,
-    total: 0,
+    onDuty: null,
+    onLeave: null,
+    absent: null,
+    total: null,
   });
   const [equipmentStatus, setEquipmentStatus] = useState<EquipmentStatus>({
-    running: 0,
-    idle: 0,
-    needMaintenance: 0,
-    total: 0,
+    running: null,
+    idle: null,
+    needMaintenance: null,
+    total: null,
   });
   const [scheduleTasks, setScheduleTasks] = useState<SupervisorTaskDTO[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -286,19 +323,26 @@ export function WSHomeScreen() {
         });
 
         // 更新人员状态
+        // ⚠️ 用 `??` 不用 `||` —— 后者会把后端返回的真实 `0` 也当成缺失而滑到下一个候选。
+        const onDuty = summary?.onDutyWorkers ?? todayStats?.activeWorkers ?? null;
+        const totalWorkers = summary?.totalWorkers ?? todayStats?.totalWorkers ?? null;
         setPersonnelStatus({
-          onDuty: summary?.onDutyWorkers || todayStats?.activeWorkers || 0,
-          onLeave: 0, // TODO: P2 - Backend needs to provide leave count
-          absent: (summary?.totalWorkers || 0) - (summary?.onDutyWorkers || 0),
-          total: summary?.totalWorkers || todayStats?.totalWorkers || 0,
+          onDuty,
+          // 后端至今不提供请假数（无任何字段承载它）。⛔ 不是 0，是不知道。
+          onLeave: null,
+          absent: diffOrUnknown(totalWorkers, onDuty),
+          total: totalWorkers,
         });
 
         // 更新设备状态
+        const running = todayStats?.activeEquipment ?? null;
+        const totalEquipment = todayStats?.totalEquipment ?? null;
         setEquipmentStatus({
-          running: todayStats?.activeEquipment || 0,
-          idle: (todayStats?.totalEquipment || 0) - (todayStats?.activeEquipment || 0),
-          needMaintenance: 0, // TODO: P2 - Backend needs to provide maintenance count
-          total: todayStats?.totalEquipment || 0,
+          running,
+          idle: diffOrUnknown(totalEquipment, running),
+          // 后端至今不提供待维修数。⛔ 「0 台待维修」是好消息的长相，不能由缺失冒充。
+          needMaintenance: null,
+          total: totalEquipment,
         });
       }
 
@@ -368,6 +412,10 @@ export function WSHomeScreen() {
     } catch (err) {
       console.error('加载车间主管首页数据失败:', err);
       setError('加载失败');
+      // ⛔ 失败时必须把读数清成 null。留着上一次的值会让「读不到」冒充「刚读到」——
+      //    而屏上没有任何东西能区分这两者。
+      setPersonnelStatus({ onDuty: null, onLeave: null, absent: null, total: null });
+      setEquipmentStatus({ running: null, idle: null, needMaintenance: null, total: null });
       if (isAxiosError(err)) {
         if (err.response?.status === 401) {
           // TODO: Handle auth expired
@@ -446,6 +494,24 @@ export function WSHomeScreen() {
       >
         {/* 离线状态指示器 */}
         <OfflineIndicator />
+
+        {/* 未提交的报工草稿 —— 提交失败时会存草稿, 此前【没有任何入口能打开它】,
+            用户的工作静默累积且无法恢复。DraftReportsScreen 早已注册在本 Stack 里,
+            缺的只是这个入口。只在有草稿时出现, 没草稿时完全不占位。 */}
+        {draftCount > 0 && (
+          <TouchableOpacity
+            testID="draft-reports-entry"
+            style={styles.draftBanner}
+            onPress={() => navigation.navigate('DraftReports')}
+          >
+            <MaterialCommunityIcons name="file-clock-outline" size={20} color="#B45309" />
+            <Text style={styles.draftBannerText}>
+              {t('home.draftBanner', { count: draftCount })}
+            </Text>
+            <Text style={styles.draftBannerAction}>{t('home.draftBannerAction')}</Text>
+            <MaterialCommunityIcons name="chevron-right" size={18} color="#B45309" />
+          </TouchableOpacity>
+        )}
 
         {/* 头部欢迎区 */}
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
@@ -682,15 +748,15 @@ export function WSHomeScreen() {
           <View style={styles.statusCard}>
             <View style={styles.statusRow}>
               <View style={[styles.statusItem, { backgroundColor: '#f6ffed' }]}>
-                <Text style={[styles.statusValue, { color: '#52c41a' }]}>{personnelStatus.onDuty}</Text>
+                <StatusValue value={personnelStatus.onDuty} color="#52c41a" />
                 <Text style={styles.statusLabel}>{t('home.personnel.onDuty')}</Text>
               </View>
               <View style={[styles.statusItem, { backgroundColor: '#fff7e6' }]}>
-                <Text style={[styles.statusValue, { color: '#fa8c16' }]}>{personnelStatus.onLeave}</Text>
+                <StatusValue value={personnelStatus.onLeave} color="#fa8c16" />
                 <Text style={styles.statusLabel}>{t('home.personnel.onLeave')}</Text>
               </View>
               <View style={[styles.statusItem, { backgroundColor: '#fff1f0' }]}>
-                <Text style={[styles.statusValue, { color: '#ff4d4f' }]}>{personnelStatus.absent}</Text>
+                <StatusValue value={personnelStatus.absent} color="#ff4d4f" />
                 <Text style={styles.statusLabel}>{t('home.personnel.absent')}</Text>
               </View>
             </View>
@@ -710,15 +776,15 @@ export function WSHomeScreen() {
           <View style={styles.statusCard}>
             <View style={styles.statusRow}>
               <View style={[styles.statusItem, { backgroundColor: '#f6ffed' }]}>
-                <Text style={[styles.statusValue, { color: '#52c41a' }]}>{equipmentStatus.running}</Text>
+                <StatusValue value={equipmentStatus.running} color="#52c41a" />
                 <Text style={styles.statusLabel}>{t('home.equipment.running')}</Text>
               </View>
               <View style={[styles.statusItem, { backgroundColor: '#f0f5ff' }]}>
-                <Text style={[styles.statusValue, { color: '#1890ff' }]}>{equipmentStatus.idle}</Text>
+                <StatusValue value={equipmentStatus.idle} color="#1890ff" />
                 <Text style={styles.statusLabel}>{t('home.equipment.idle')}</Text>
               </View>
               <View style={[styles.statusItem, { backgroundColor: '#fff1f0' }]}>
-                <Text style={[styles.statusValue, { color: '#ff4d4f' }]}>{equipmentStatus.needMaintenance}</Text>
+                <StatusValue value={equipmentStatus.needMaintenance} color="#ff4d4f" />
                 <Text style={styles.statusLabel}>{t('home.equipment.needMaintenance')}</Text>
               </View>
             </View>
@@ -838,6 +904,30 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: '500',
   },
+  draftBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  draftBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#92400E',
+  },
+  draftBannerAction: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+
   draftBadge: {
     position: 'absolute',
     top: -4,

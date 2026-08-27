@@ -54,6 +54,13 @@ public interface FactoryStocktakeService {
      * @return {@code monthEndThreshold}(int) / {@code canInitiateToday}(boolean) /
      *         {@code today}(LocalDate) / {@code nextAllowedDate}(LocalDate)
      */
+    /**
+     * 盘点补录待办: 结单时没回答「这批有没有不良品」的计划。
+     * 区分 NEVER_ASKED(存量, 从没被问过) 与 NOT_COUNTED(人答了没清点);
+     * ⛔ 已清点确认零不在待办里 —— 那是真实读数。
+     */
+    List<Map<String, Object>> listPendingDefectCounts(String factoryId);
+
     Map<String, Object> getInitiateConstraint();
 
     /**

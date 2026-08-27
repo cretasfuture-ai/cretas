@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import { Platform } from 'react-native';
 import {
   LabelQcReviewTaskRequest,
   LabelQcTaskDetail,
@@ -12,6 +13,18 @@ interface ApiEnvelope<T> {
   code: number;
   message: string;
   data: T;
+}
+
+export interface LabelQcCaptureQualityResult {
+  accepted: boolean;
+  reasonCode: 'RESOLUTION_TOO_LOW' | 'PHOTO_BLURRY' | 'TRAYS_NOT_FOUND' | 'TRAY_CROPPED_AT_SIDE' | null;
+  message: string;
+  imageWidth: number;
+  imageHeight: number;
+  trayCount: number;
+  sharpness: number;
+  leftMarginRatio: number | null;
+  rightMarginRatio: number | null;
 }
 
 class LabelQcApi {
@@ -33,6 +46,29 @@ class LabelQcApi {
     const response = await apiClient.post<ApiEnvelope<LabelQcTaskDetail>>(
       `${this.base(factoryId)}/tasks`,
       request,
+    );
+    return response.data;
+  }
+
+  async checkCaptureQuality(
+    file: { uri: string; name: string; type: string },
+    factoryId?: string,
+  ): Promise<LabelQcCaptureQualityResult> {
+    const formData = new FormData();
+    if (Platform.OS === 'web') {
+      const blob = await (await fetch(file.uri)).blob();
+      formData.append('image', blob, file.name);
+    } else {
+      formData.append('image', {
+        uri: file.uri,
+        name: file.name,
+        type: file.type,
+      } as unknown as Blob);
+    }
+    const response = await apiClient.post<ApiEnvelope<LabelQcCaptureQualityResult>>(
+      `${this.base(factoryId)}/capture-quality`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
     );
     return response.data;
   }

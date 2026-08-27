@@ -15,7 +15,11 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.bom.NestedBomCostService;
+import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.uom.MaterialUomConverter;
 import com.cretas.aims.service.unit.TestUnitContractFactory;
 import com.cretas.aims.service.unit.UnitContractService;
@@ -90,6 +94,14 @@ class BomRecipeServiceImplAddItemTest {
     @Mock
     NestedBomCostService nestedBomCostService;
 
+    /** Every DRAFT write path runs assertPinnedDraft, which resolves the pinned graph. */
+    @Mock
+    BomWorkflowRevisionService bomWorkflowRevisionService;
+
+    /** addItem/updateItem replace substitute relations; cloneRecipe copies them. */
+    @Mock
+    BomItemSubstituteService substituteService;
+
     @InjectMocks
     BomRecipeServiceImpl service;
 
@@ -104,6 +116,17 @@ class BomRecipeServiceImplAddItemTest {
         recipe.setId("RECIPE-ORPHAN-TEST");
         recipe.setFactoryId("F006");
         recipe.setStatus(BomRecipe.Status.DRAFT);
+        // A BOM is writable / activatable / clonable only once it is pinned to a saved
+        // Workflow revision (BomRecipeServiceImpl#assertPinnedDraft).
+        recipe.setWorkflowRevisionId(9301L);
+        recipe.setWorkflowRevisionHash("revision-additem-hash");
+        // A pinned BOM always carries its role in the family; activation reconciles the
+        // family and requires a MAIN output.
+        recipe.setOutputRole(BomRecipe.OutputRole.MAIN);
+        recipe.setCostAllocationRatio(new BigDecimal("100"));
+        recipe.setTargetTerminalNodeId("terminal");
+        // A single-output BOM is its own family anchor: the shared recipe is itself.
+        recipe.setSharedRecipeId(recipe.getId());
 
         existingItem = new BomRecipeItem();
         existingItem.setId(1L);
@@ -156,61 +179,77 @@ class BomRecipeServiceImplAddItemTest {
         when(unitContractService.normalize(anyString(), anyString()))
                 .thenAnswer(invocation -> canonicalUnits.normalize(
                         invocation.getArgument(0), invocation.getArgument(1)));
+        when(unitContractService.areEquivalent(anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.areEquivalent(
+                        invocation.getArgument(0), invocation.getArgument(1),
+                        invocation.getArgument(2)));
+        // resolvePinnedGraph throws or returns a graph — it never returns null.
+        when(bomWorkflowRevisionService.resolvePinnedGraph(anyString(), any(BomRecipe.class)))
+                .thenReturn(pinnedGraph());
+        // Likewise the terminal outputs: a pinned revision always has at least the MAIN one,
+        // and activation reconciles the family against them.
+        when(bomWorkflowRevisionService.resolvePinnedTerminalOutputs(
+                        anyString(), any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    BomRecipe member = invocation.getArgument(1);
+                    return List.of(new BomWorkflowRevisionService.TerminalOutput(
+                            "terminal", member.getProductTypeId(), "process", "output",
+                            BomRecipe.OutputRole.MAIN, new BigDecimal("100"),
+                            member.getOutputUnit(),
+                            BomWorkflowRevisionService.CostAllocationBasis.DECLARED));
+                });
     }
 
-    @Test
-    @DisplayName("激活新版本时旧 ACTIVE 版本必须同时归档并取消 current")
-    void activateArchivesEveryCompetingActiveVersion() {
-        recipe.setProductTypeId("SKU-001");
-        recipe.setIsCurrent(false);
-
-        BomRecipe oldCurrent = new BomRecipe();
-        oldCurrent.setId("RECIPE-V2");
-        oldCurrent.setFactoryId("F006");
-        oldCurrent.setProductTypeId("SKU-001");
-        oldCurrent.setStatus(BomRecipe.Status.ACTIVE);
-        oldCurrent.setIsCurrent(true);
-
-        BomRecipe staleActive = new BomRecipe();
-        staleActive.setId("RECIPE-V1");
-        staleActive.setFactoryId("F006");
-        staleActive.setProductTypeId("SKU-001");
-        staleActive.setStatus(BomRecipe.Status.ACTIVE);
-        staleActive.setIsCurrent(false);
-
-        when(recipeRepo.findById(recipe.getId())).thenReturn(Optional.of(recipe));
-        when(recipeRepo.findCompetingVersionsForActivation(
-                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
-                .thenReturn(List.of(oldCurrent, staleActive));
-        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 7L);
-
-        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
-        assertThat(activated.getIsCurrent()).isTrue();
-        assertThat(oldCurrent.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
-        assertThat(oldCurrent.getIsCurrent()).isFalse();
-        assertThat(staleActive.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
-        assertThat(staleActive.getIsCurrent()).isFalse();
-        verify(recipeRepo).flush();
-    }
-
-    @Test
-    @DisplayName("历史 BOM 可以重新激活，且不创建新版本")
-    void archivedVersionCanBeReactivated() {
-        recipe.setProductTypeId("SKU-001");
-        recipe.setStatus(BomRecipe.Status.ARCHIVED);
-        recipe.setIsCurrent(false);
-        when(recipeRepo.findCompetingVersionsForActivation(
-                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
-                .thenReturn(List.of());
-
-        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 8L);
-
-        assertThat(activated.getId()).isEqualTo("RECIPE-ORPHAN-TEST");
-        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
-        assertThat(activated.getIsCurrent()).isTrue();
-        verify(recipeRepo, never()).findMaxVersion(anyString(), anyString());
+    /** Minimal pinned Workflow graph owning one RAW input slot per fixture material. */
+    private PinnedWorkflowGraph pinnedGraph() {
+        List<ProductProcessWorkflowDTO.Node> nodes = new ArrayList<>();
+        List<ProductProcessWorkflowDTO.Edge> edges = new ArrayList<>();
+        List<java.util.Map<String, Object>> ports = new ArrayList<>();
+        // Only RAW materials occupy Workflow input slots, and every slot material must
+        // resolve against materialTypeRepo when the skeleton is rebuilt on activation.
+        // MT-002/MT-BOX/MT-CASE are packaging and MT-MASS is auxiliary — none of them
+        // are workflow inputs.
+        java.util.Map<String, String> slotUnits = new java.util.LinkedHashMap<>();
+        slotUnits.put("MT-001", "kg");
+        List<String> materials = List.copyOf(slotUnits.keySet());
+        double x = 0D;
+        for (String materialTypeId : materials) {
+            java.util.Map<String, Object> rawData = new java.util.LinkedHashMap<>();
+            rawData.put("skuId", materialTypeId);
+            nodes.add(new ProductProcessWorkflowDTO.Node(
+                    "raw-" + materialTypeId, "RAW_MATERIAL",
+                    new ProductProcessWorkflowDTO.Position(x, 0D), rawData));
+            edges.add(new ProductProcessWorkflowDTO.Edge(
+                    "edge-" + materialTypeId, "raw-" + materialTypeId, "output",
+                    "process", "in-" + materialTypeId));
+            ports.add(java.util.Map.of("id", "in-" + materialTypeId, "direction", "INPUT",
+                    "materialNodeId", "raw-" + materialTypeId,
+                    "materialKind", "RAW_MATERIAL", "ordinal", ports.size(),
+                    "unit", slotUnits.get(materialTypeId)));
+            x += 100D;
+        }
+        List<java.util.Map<String, Object>> allPorts = new ArrayList<>(ports);
+        allPorts.add(java.util.Map.of("id", "output", "direction", "OUTPUT",
+                "materialNodeId", "terminal", "materialKind", "FINISHED_GOOD",
+                "ordinal", 0, "outputRole", "MAIN",
+                "costAllocationRatio", new BigDecimal("100")));
+        java.util.Map<String, Object> processData = new java.util.LinkedHashMap<>();
+        processData.put("workProcessId", "WP-ADDITEM");
+        processData.put("ports", allPorts);
+        nodes.add(new ProductProcessWorkflowDTO.Node(
+                "process", "PROCESS", new ProductProcessWorkflowDTO.Position(600D, 0D), processData));
+        java.util.Map<String, Object> terminalData = new java.util.LinkedHashMap<>();
+        terminalData.put("skuId", "SKU-001");
+        nodes.add(new ProductProcessWorkflowDTO.Node(
+                "terminal", "FINISHED_GOOD",
+                new ProductProcessWorkflowDTO.Position(700D, 0D), terminalData));
+        edges.add(new ProductProcessWorkflowDTO.Edge(
+                "edge-output", "process", "output", "terminal", "input"));
+        return new PinnedWorkflowGraph(
+                9301L, 10L, 1, "revision-additem-hash", "SKU-001", "terminal",
+                materials,
+                List.of(new PinnedWorkflowGraph.ProcessStep("process", "WP-ADDITEM", 1)),
+                List.copyOf(nodes), List.copyOf(edges));
     }
 
     @Test
@@ -343,37 +382,24 @@ class BomRecipeServiceImplAddItemTest {
 
         assertThatThrownBy(() -> service.ensureDraft("F006", "SKU-BAD"))
                 .isInstanceOfSatisfying(BusinessException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_SKU_GRAMS_PER_UNIT_REQUIRED"));
+                        // gramsPerUnit generalised into netContentQuantity + netContentUnit;
+                        // same guard, new code.
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_SKU_NET_CONTENT_REQUIRED"));
         verify(recipeRepo, never()).save(argThat(candidate -> "SKU-BAD".equals(candidate.getProductTypeId())));
     }
 
-    @Test
-    @DisplayName("activation rejects an empty draft with an actionable error")
-    void activationRejectsEmptyDraft() {
-        recipe.setProductTypeId("SKU-001");
-        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of());
-
-        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
-                .isInstanceOfSatisfying(BusinessException.class, ex -> {
-                    assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_ITEMS_REQUIRED");
-                    assertThat(ex.getActionHint()).contains("至少添加一条");
-                });
-        verify(recipeRepo, never()).findCompetingVersionsForActivation(
-                anyString(), anyString(), anyString(), any());
-    }
-
-    @Test
-    @DisplayName("activation rejects packaging without a positive quantity")
-    void activationRejectsPackagingWithoutQuantity() {
-        recipe.setProductTypeId("SKU-001");
-        existingItem.setMaterialCategory("PACKAGING");
-        existingItem.setStandardQuantity(null);
-        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
-
-        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_QUANTITY_REQUIRED"));
-    }
+    // ⛔ 激活相关的四条断言不在本类 —— 它们在
+    //    BomRecipeDraftLifecycleJpaTest (真 H2 + 真画布夹具):
+    //      · activationArchivesEveryCompetingActiveVersion
+    //      · archivedVersionIsReactivatedByCloningItIntoADraft  (原 archivedVersionCanBeReactivated)
+    //      · emptyDraftIsRebuiltFromTheCanvasInsteadOfRefused   (原 activationRejectsEmptyDraft)
+    //      · canvasWithoutAnyRawInputTellsTheUserWhatToDo
+    //    以及原有的 activationRejectsPackagingWithoutFixedQuantity
+    //      (原 activationRejectsPackagingWithoutQuantity, 那边一直是绿的)。
+    //
+    //    本类是**纯 Mockito**, 而 activateRecipe 要 bomWorkflowRevisionService /
+    //    readinessService / workflowActivationRepo 三个协作者。在这里补 mock 等于把
+    //    那份画布夹具再抄一份, 同一个东西两份、必漂 —— 所以搬走而不是就地修。
 
     @Test
     @DisplayName("addItem: collection reference stays the same instance after call (no setItems replacement)")
@@ -456,7 +482,9 @@ class BomRecipeServiceImplAddItemTest {
 
         assertThat(saved.getStandardQuantity()).isNull();
         assertThat(saved.getActualQuantity()).isNull();
-        assertThat(saved.getItemCost()).isEqualByComparingTo(BigDecimal.ZERO);
+        // 「没填用量」的成本是 unknown, ⛔ 不是 0 —— 报 0 会把「我不知道」当成一个真实读数
+        // 往成本汇总里传。
+        assertThat(saved.getItemCost()).isNull();
     }
 
     @Test
@@ -464,9 +492,13 @@ class BomRecipeServiceImplAddItemTest {
     void addPackagingItem_standardQuantityRequired() {
         BomRecipeItemDTO dto = buildDto("MT-002", null, "g", "PACKAGING");
 
+        // Still required — P7 moved the check into applyPackagingLevel, so it now surfaces
+        // as a coded BusinessException instead of a bare IllegalArgumentException.
         assertThatThrownBy(() -> service.addItem("F006", "RECIPE-ORPHAN-TEST", dto))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("每成品用量");
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getErrorCode()).isEqualTo("BOM_PACKAGING_QUANTITY_REQUIRED");
+                    assertThat(ex.getMessage()).contains("用量");
+                });
     }
 
     @Test
@@ -480,8 +512,10 @@ class BomRecipeServiceImplAddItemTest {
         BomRecipeItem saved = service.addItem("F006", recipe.getId(),
                 buildDto("MT-BOX", new BigDecimal("1"), "盒", "PACKAGING"));
 
-        assertThat(saved.getUnit()).isEqualTo("box");
-        assertThat(saved.getPriceUnit()).isEqualTo("box");
+        // V20261029_32__unit_codes_to_chinese.sql moved the canonical literal to Chinese.
+        // The property is unchanged: master value "box" and UI label 「盒」 converge on one unit.
+        assertThat(saved.getUnit()).isEqualTo("盒");
+        assertThat(saved.getPriceUnit()).isEqualTo("盒");
         assertThat(saved.getStandardQuantity()).isEqualByComparingTo("1");
     }
 
@@ -496,8 +530,8 @@ class BomRecipeServiceImplAddItemTest {
         BomRecipeItem saved = service.addItem("F006", recipe.getId(),
                 buildDto("MT-CASE", new BigDecimal("0.125"), "箱", "PACKAGING"));
 
-        assertThat(saved.getUnit()).isEqualTo("case");
-        assertThat(saved.getPriceUnit()).isEqualTo("case");
+        assertThat(saved.getUnit()).isEqualTo("箱");
+        assertThat(saved.getPriceUnit()).isEqualTo("箱");
         assertThat(saved.getStandardQuantity()).isEqualByComparingTo("0.125");
     }
 
@@ -521,7 +555,10 @@ class BomRecipeServiceImplAddItemTest {
     @Test
     @DisplayName("未知单位返回明确 400 业务校验而不是进入数据库")
     void addItem_unknownUnitReturnsBusinessValidation() {
-        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.ONE, "unknown-unit", "PACKAGING");
+        // ⚠️ Not PACKAGING: since P7 a packaging line inherits its unit from the material
+        // master, so an unrecognised unit is reported as BOM_PACKAGING_UNIT_MISMATCH and
+        // never reaches the unit-catalogue guard. That guard lives on this path.
+        BomRecipeItemDTO dto = buildDto("MT-002", BigDecimal.ONE, "unknown-unit", "AUXILIARY");
 
         assertThatThrownBy(() -> service.addItem("F006", recipe.getId(), dto))
                 .isInstanceOfSatisfying(BusinessException.class, ex -> {
@@ -585,6 +622,10 @@ class BomRecipeServiceImplAddItemTest {
     @Test
     @DisplayName("deleteItem: collection reference stays the same instance after soft-delete")
     void deleteItem_keepsOriginalCollectionInstance() {
+        // A line that is the sole occupant of a required Workflow input slot cannot be
+        // deleted at all. This test is about collection identity, so it deletes a
+        // PACKAGING line — assertNotRequiredWorkflowInputByMaterial exempts those.
+        existingItem.setMaterialCategory("PACKAGING");
         when(itemRepo.findById(1L)).thenReturn(Optional.of(existingItem));
         when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(existingItem);
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
@@ -606,6 +647,12 @@ class BomRecipeServiceImplAddItemTest {
         ReflectionTestUtils.setField(dto, "standardQuantity", qty);
         ReflectionTestUtils.setField(dto, "unit", unit);
         ReflectionTestUtils.setField(dto, "materialCategory", category);
+        if ("PACKAGING".equalsIgnoreCase(category)) {
+            // P7 (2026-08-03): a packaging line must say which packaging level it plays.
+            // This is what the web client sends; without it every PACKAGING case dies on
+            // BOM_PACKAGING_ROLE_REQUIRED before reaching its own subject.
+            ReflectionTestUtils.setField(dto, "packagingRole", "PRIMARY_CONTAINER");
+        }
         return dto;
     }
 

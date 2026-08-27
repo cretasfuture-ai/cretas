@@ -246,9 +246,15 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   });
 
   it('groups finance into review, accounting, analysis, and configuration sections', () => {
+    // 2026-08-27: 新增「会计凭证」分组 —— 那三个页面此前【菜单零登记、App 也没有】,
+    //   而生产库已有 凭证 18 张 / 分录 46 条 / 导出记录 106 条 ⇒ 凭证在生成、有人在导,
+    //   却没有任何界面能看。补入口同时把可达性棘轮从 91 调到 88。
     expect(childGroupLabels('/finance')).toEqual([
       '审核队列',
       '财务核算',
+      '会计凭证',
+      '会计凭证',
+      '会计凭证',
       '财务分析',
       '财务配置',
     ]);
@@ -261,6 +267,9 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/finance/invoices',
       '/finance/purchase-invoices',
       '/finance/payments',
+      '/finance/voucher-list',
+      '/finance/voucher-export',
+      '/finance/voucher-template',
       '/finance/sku-margin',
       '/finance/gross-margin-redline',
     ]);

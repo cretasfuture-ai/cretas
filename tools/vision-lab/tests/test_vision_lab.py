@@ -129,6 +129,7 @@ class VisionLabTests(unittest.TestCase):
                 "lrf": 0.1,
                 "weight_decay": 0.0005,
                 "warmup_epochs": 1.0,
+                "warmup_bias_lr": 0.00002,
                 "freeze": 10,
                 "mosaic": 0.1,
                 "hsv_s": 0.15,
@@ -152,16 +153,36 @@ class VisionLabTests(unittest.TestCase):
         options = FakeYolo.train_calls[-1]
         self.assertEqual(options["optimizer"], "AdamW")
         self.assertEqual(options["lr0"], 0.00002)
+        self.assertEqual(options["warmup_bias_lr"], 0.00002)
         self.assertEqual(options["freeze"], 10)
         self.assertEqual(options["imgsz"], 960)
         self.assertEqual(options["mosaic"], 0.1)
         self.assertEqual(options["hsv_s"], 0.15)
         self.assertEqual(result["training"]["warmup_epochs"], 1.0)
+        self.assertEqual(result["training"]["warmup_bias_lr"], 0.00002)
         self.assertEqual(parity.call_args.args[-1], 960)
         self.assertEqual(presence.call_count, 2)
         self.assertEqual(presence.call_args_list[0].args[-1], vision_lab.DEFAULT_TRAY_PAD_RATIO)
         self.assertEqual(presence.call_args_list[1].args[-1], vision_lab.DEFAULT_TRAY_PAD_RATIO)
         self.assertEqual(result["label_presence_validation"]["baseline"]["exact_matches"], 9)
+
+    def test_train_candidate_rejects_unsafe_bias_warmup_before_training(self):
+        for bias_lr in (0.1, -0.000001):
+            with self.subTest(warmup_bias_lr=bias_lr), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base = root / "accepted-v8-fallback.pt"
+                base.write_bytes(b"base")
+                cfg = config(root)
+                cfg["training"] |= {
+                    "base_model": str(base), "lr0": 0.00002, "warmup_bias_lr": bias_lr,
+                }
+                fake_yolo = mock.Mock()
+                with mock.patch.dict(sys.modules, {"ultralytics": SimpleNamespace(YOLO=fake_yolo)}):
+                    with self.assertRaisesRegex(ValueError, "warmup_bias_lr"):
+                        vision_lab.train_candidate(
+                            cfg, {"dataset_id": "guarded", "data_yaml": str(root / "data.yaml")}
+                        )
+                fake_yolo.assert_not_called()
 
     def test_label_presence_keeps_human_truth_and_drops_absent_class_border_prediction(self):
         class FakeTensor:
@@ -989,6 +1010,73 @@ class VisionLabTests(unittest.TestCase):
             cfg["queue_roots"] = [str(evaluation)]
 
             with self.assertRaisesRegex(RuntimeError, "no annotation rows"):
+                vision_lab.discover_queue_roots(cfg)
+
+    def test_quarantine_receipt_excludes_queue_and_same_task_rows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            safe_queue = root / "queues" / "safe"
+            blurry_queue = root / "queues" / "blurry"
+            for queue in (safe_queue, blurry_queue):
+                (queue / "images").mkdir(parents=True)
+                (queue / "annotations-human").mkdir()
+
+            safe_rows = []
+            for index, task_id in enumerate(("task-a", "task-d", "quarantined-task")):
+                image = safe_queue / "images" / f"safe-{index}.jpg"
+                image.write_bytes(f"safe-image-{index}".encode())
+                safe_rows.append({
+                    "crop_id": f"safe-{index}", "image": str(image),
+                    "image_sha256": vision_lab.sha256_file(image), "source_task_id": task_id,
+                })
+                (safe_queue / "annotations-human" / f"safe-{index}.json").write_text(
+                    json.dumps({"reviewed": True, "unjudgeable": False, "boxes": [
+                        {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
+                        {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
+                    ]}), encoding="utf-8",
+                )
+            (safe_queue / "manifest.json").write_text(json.dumps({"rows": safe_rows}), encoding="utf-8")
+            (blurry_queue / "manifest.json").write_text(json.dumps({"rows": [
+                {"crop_id": "blurry-1", "source_task_id": "quarantined-task"},
+            ]}), encoding="utf-8")
+            receipt = root / "quarantine.json"
+            receipt.write_text(json.dumps({
+                "excluded_blurry_queue": str(blurry_queue),
+                "excluded_blurry_queue_crop_count": 1,
+                "excluded_blurry_queue_task_count": 1,
+                "quarantined_rows_by_reason": {"labels_exist_but_crop_too_blurry": 1},
+                "production_writes": 0,
+            }), encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["queue_globs"] = [str(root / "queues" / "*")]
+            cfg["training_quarantine_receipts"] = [str(receipt)]
+
+            dataset = vision_lab.build_dataset(cfg)
+
+            self.assertEqual(vision_lab.discover_queue_roots(cfg), [safe_queue.resolve()])
+            self.assertEqual({row["task_id"] for row in dataset["rows"]}, {"task-a", "task-d"})
+            self.assertEqual(dataset["training_exclusions"]["reasons"], {
+                "labels_exist_but_crop_too_blurry": 2,
+            })
+
+    def test_quarantine_receipt_inventory_drift_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "queue"
+            queue.mkdir()
+            (queue / "manifest.json").write_text(json.dumps({"rows": [
+                {"crop_id": "c1", "source_task_id": "task-a"},
+            ]}), encoding="utf-8")
+            receipt = root / "quarantine.json"
+            receipt.write_text(json.dumps({
+                "excluded_blurry_queue": str(queue),
+                "excluded_blurry_queue_crop_count": 2,
+                "excluded_blurry_queue_task_count": 1,
+                "production_writes": 0,
+            }), encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["training_quarantine_receipts"] = [str(receipt)]
+            with self.assertRaisesRegex(RuntimeError, "no longer matches its queue"):
                 vision_lab.discover_queue_roots(cfg)
 
     def test_cloud_vl_cannot_be_enabled_without_budget(self):

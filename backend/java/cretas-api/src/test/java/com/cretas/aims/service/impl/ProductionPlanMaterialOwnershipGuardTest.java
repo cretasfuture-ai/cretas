@@ -53,16 +53,52 @@ class ProductionPlanMaterialOwnershipGuardTest {
                 .assertMaterialBatchOwnershipMatchesPlan(factoryPlan, batch, "原料领用"));
     }
 
+    /**
+     * Lineage for a customer-supplied plan is the <b>owning customer</b>, not the sales order.
+     *
+     * <p>Per {@code docs/specs/customer-owned-stock-production.md}: 「归属客户仅在客户专属库存时必填」,
+     * so a plan with no sourceOrderId is 库存生产, a supported mode — not incomplete lineage.
+     */
     @Test
-    void customerSuppliedPlanFailsClosedWithoutLineage() {
+    void customerSuppliedPlanFailsClosedWithoutAnOwningCustomer() {
         ProductionPlan plan = customerSuppliedPlan();
-        plan.setSourceOrderId(null);
+        plan.setCustomerId(null);
 
         BusinessException error = assertThrows(BusinessException.class, () ->
                 ProductionPlanServiceImpl.assertMaterialBatchOwnershipMatchesPlan(
                         plan, customerBatch("CUSTOMER-1", "SO-1", "101"), "原料领用"));
 
         assertEquals("CUSTOMER_SUPPLIED_PLAN_LINEAGE_INCOMPLETE", error.getErrorCode());
+    }
+
+    /**
+     * 客户专属库存生产 (no sales order): only that customer's stock that is not yet bound
+     * to a sales order may be consumed.
+     */
+    @Test
+    void customerSuppliedInventoryProductionTakesOnlyUnboundStockOfTheSameCustomer() {
+        ProductionPlan plan = customerSuppliedPlan();
+        plan.setSourceOrderId(null);
+        plan.setSourceOrderItemId(null);
+
+        // 正向: same customer, stock not committed to any sales order
+        assertDoesNotThrow(() -> ProductionPlanServiceImpl
+                .assertMaterialBatchOwnershipMatchesPlan(
+                        plan, customerBatch("CUSTOMER-1", null, null), "原料领用"));
+
+        // 阴性对照: same customer, but the stock is already reserved by a sales order
+        assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH",
+                assertThrows(BusinessException.class, () -> ProductionPlanServiceImpl
+                        .assertMaterialBatchOwnershipMatchesPlan(
+                                plan, customerBatch("CUSTOMER-1", "SO-1", "101"), "原料领用"))
+                        .getErrorCode());
+
+        // 阴性对照: unbound stock, but a different customer
+        assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH",
+                assertThrows(BusinessException.class, () -> ProductionPlanServiceImpl
+                        .assertMaterialBatchOwnershipMatchesPlan(
+                                plan, customerBatch("CUSTOMER-2", null, null), "原料领用"))
+                        .getErrorCode());
     }
 
     private ProductionPlan customerSuppliedPlan() {

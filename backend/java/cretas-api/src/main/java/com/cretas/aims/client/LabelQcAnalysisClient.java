@@ -100,6 +100,54 @@ public class LabelQcAnalysisClient {
         }
     }
 
+    public CaptureQualityResult analyzeCaptureQuality(
+            byte[] imageBytes,
+            String fileName,
+            String factoryId) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new LabelQcClientException("照片内容为空");
+        }
+        if (imageBytes.length > MAX_IMAGE_BYTES) {
+            throw new LabelQcClientException("图片超过 10 MB 上限");
+        }
+        try {
+            HttpHeaders imageHeaders = new HttpHeaders();
+            imageHeaders.setContentType(MediaType.IMAGE_JPEG);
+            ByteArrayResource image = new ByteArrayResource(imageBytes) {
+                @Override
+                public String getFilename() {
+                    return fileName == null || fileName.isBlank()
+                            ? "label-qc-capture.jpg"
+                            : fileName;
+                }
+            };
+
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("image", new HttpEntity<>(image, imageHeaders));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+            if (internalSecret != null && !internalSecret.isBlank()) {
+                headers.add("X-Internal-Secret", internalSecret);
+            }
+            headers.add("X-Factory-Id", factoryId);
+
+            ResponseEntity<String> response = exchangeCaptureQuality(body, headers, fileName);
+            if (!response.getStatusCode().is2xxSuccessful()
+                    || response.getBody() == null
+                    || response.getBody().isBlank()) {
+                throw new LabelQcClientException("拍摄质量检查返回空结果");
+            }
+            return parseCaptureQuality(response.getBody());
+        } catch (LabelQcClientException ex) {
+            throw ex;
+        } catch (RestClientException ex) {
+            throw new LabelQcClientException("拍摄质量检查暂时不可用", ex);
+        } catch (Exception ex) {
+            throw new LabelQcClientException("拍摄质量检查结果解析失败", ex);
+        }
+    }
+
     /**
      * The analysis endpoint is read-only, so one bounded retry is safe for a
      * stale pooled connection or a transient server-side failure. Client
@@ -129,6 +177,31 @@ public class LabelQcAnalysisClient {
             }
         }
         throw new IllegalStateException("Unreachable label QC retry state");
+    }
+
+    private ResponseEntity<String> exchangeCaptureQuality(
+            MultiValueMap<String, Object> body,
+            HttpHeaders headers,
+            String fileName) {
+        HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                return restTemplate.exchange(
+                        baseUrl + "/api/label-qc/capture-quality",
+                        HttpMethod.POST,
+                        request,
+                        String.class);
+            } catch (RestClientException ex) {
+                if (attempt == 2 || !isRetryableAnalysisFailure(ex)) {
+                    throw ex;
+                }
+                log.warn("Label QC capture-quality transient failure; retrying once: fileName={}, failureType={}",
+                        fileName,
+                        ex.getClass().getSimpleName());
+                waitBeforeAnalysisRetry();
+            }
+        }
+        throw new IllegalStateException("Unreachable capture-quality retry state");
     }
 
     private boolean isRetryableAnalysisFailure(RestClientException ex) {
@@ -243,6 +316,29 @@ public class LabelQcAnalysisClient {
                 screeningDetail);
     }
 
+    private CaptureQualityResult parseCaptureQuality(String responseBody) throws Exception {
+        JsonNode root = objectMapper.readTree(responseBody);
+        JsonNode data = root.path("data");
+        if (!root.path("success").asBoolean(false) || data.isMissingNode()) {
+            throw new LabelQcClientException("拍摄质量检查返回失败");
+        }
+        JsonNode reason = data.path("reasonCode");
+        return new CaptureQualityResult(
+                data.path("accepted").asBoolean(false),
+                reason.isMissingNode() || reason.isNull() ? null : reason.asText(),
+                data.path("message").asText("拍摄质量检查失败，请重新拍摄"),
+                data.path("imageWidth").asInt(0),
+                data.path("imageHeight").asInt(0),
+                data.path("trayCount").asInt(0),
+                data.path("sharpness").asDouble(0),
+                data.path("leftMarginRatio").isNumber()
+                        ? data.path("leftMarginRatio").asDouble()
+                        : null,
+                data.path("rightMarginRatio").isNumber()
+                        ? data.path("rightMarginRatio").asDouble()
+                        : null);
+    }
+
     private List<Candidate> parseCandidates(JsonNode values) {
         List<Candidate> candidates = new ArrayList<>();
         for (JsonNode item : values) {
@@ -314,6 +410,18 @@ public class LabelQcAnalysisClient {
     }
 
     public record BoundingBox(Double xMin, Double yMin, Double xMax, Double yMax) {}
+
+    public record CaptureQualityResult(
+            boolean accepted,
+            String reasonCode,
+            String message,
+            int imageWidth,
+            int imageHeight,
+            int trayCount,
+            double sharpness,
+            Double leftMarginRatio,
+            Double rightMarginRatio
+    ) {}
 
     public static class LabelQcClientException extends RuntimeException {
         public LabelQcClientException(String message) {

@@ -16,6 +16,7 @@ MIGRATIONS = PYTHON_ROOT / "smartbi" / "database" / "migrations"
 DEFAULT_LOCAL_TEST_DSN = (
     "postgresql://smartbi_user:smartbi_pass@localhost:5432/smartbi_db"
 )
+from .pg_absence import is_local_postgres_absent
 
 
 def _local_test_dsn() -> str:
@@ -27,22 +28,6 @@ def _local_test_dsn() -> str:
     if database != "smartbi_db" and "test" not in database:
         pytest.fail("migration integration test refuses non-test databases")
     return dsn
-
-
-def _is_local_postgres_absent(exc: BaseException) -> bool:
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, ConnectionRefusedError):
-            return True
-        if isinstance(current, OSError) and (
-            getattr(current, "winerror", None) == 10061
-            or getattr(current, "errno", None) in {61, 111}
-        ):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
 
 
 async def _apply_in_transaction(conn: asyncpg.Connection, sql: str) -> None:
@@ -75,7 +60,7 @@ async def test_chat_session_identity_migration_executes_and_is_idempotent():
     try:
         conn = await asyncpg.connect(dsn)
     except Exception as exc:
-        if _is_local_postgres_absent(exc):
+        if is_local_postgres_absent(exc):
             pytest.skip(
                 f"Local PostgreSQL is not accepting connections: {type(exc).__name__}"
             )

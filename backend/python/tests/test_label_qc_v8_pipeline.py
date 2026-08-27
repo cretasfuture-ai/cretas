@@ -21,6 +21,7 @@ from label_qc.services.v8_pipeline import (
     _GenericLabelTypeDetector,
     _MissingClassFallbackDetector,
     _apply_fail_closed_policies,
+    _apply_shallow_extended_ownership,
     _label_fallback_input_size,
     _label_fallback_onnx_threads,
     _validate_label_fallback_input_shape,
@@ -96,6 +97,88 @@ def test_complete_production_missing_claim_is_preserved() -> None:
     assert events == []
 
 
+class _ExtendedOwnershipDetector:
+    def __init__(self, class_ids: list[int]) -> None:
+        self.class_ids = class_ids
+
+    def detect(self, _image, _conf):
+        from label_qc.services.yolo_detector import Detection
+
+        return [
+            Detection(
+                x0=180.0, y0=70.0 + index * 150.0,
+                x1=260.0, y1=130.0 + index * 150.0,
+                confidence=0.9, class_id=class_id,
+            )
+            for index, class_id in enumerate(self.class_ids)
+        ]
+
+
+@pytest.mark.parametrize(
+    "class_ids,expected",
+    [([1], "MISSING_WHITE_LABEL"), ([0, 1], "CLEAR")],
+)
+def test_reviewed_shallow_tray_rechecks_extended_lower_compartment(
+    class_ids: list[int], expected: str,
+) -> None:
+    tray = TrayResult(
+        index=0, box=[100.0, 20.0, 300.0, 100.0], confidence=0.8,
+        has_white=False, has_color=True, verdict="UNJUDGEABLE",
+    )
+    result = _result(tray)
+    models = SimpleNamespace(
+        production_label=_ExtendedOwnershipDetector(class_ids),
+    )
+
+    events = _apply_shallow_extended_ownership(
+        result,
+        np.zeros((240, 400, 3), dtype=np.uint8),
+        models,
+        [{
+            "trayIndex": 0, "reason": "sub120_extreme_wide_production_tray",
+            "finalVerdict": "UNJUDGEABLE",
+        }],
+    )
+
+    assert tray.verdict == expected
+    assert tray.own_label_count == len(class_ids)
+    assert events[0]["finalVerdict"] == expected
+
+
+def test_extended_ownership_does_not_reopen_non_shallow_unjudgeable() -> None:
+    tray = TrayResult(
+        index=0, box=[100.0, 20.0, 300.0, 180.0], confidence=0.8,
+        has_white=False, has_color=True, verdict="UNJUDGEABLE",
+    )
+    events = _apply_shallow_extended_ownership(
+        _result(tray), np.zeros((240, 400, 3), dtype=np.uint8),
+        SimpleNamespace(production_label=_ExtendedOwnershipDetector([0, 1])),
+        [{
+            "trayIndex": 0, "reason": "portrait_geometry_incomplete_tray",
+            "finalVerdict": "UNJUDGEABLE",
+        }],
+    )
+
+    assert tray.verdict == "UNJUDGEABLE"
+    assert events == []
+
+
+def test_shallow_crop_below_minimum_can_use_extended_ownership() -> None:
+    tray = TrayResult(
+        index=0, box=[100.0, 20.0, 300.0, 80.0], confidence=0.8,
+        has_white=False, has_color=False, verdict="UNJUDGEABLE",
+    )
+
+    events = _apply_shallow_extended_ownership(
+        _result(tray), np.zeros((240, 400, 3), dtype=np.uint8),
+        SimpleNamespace(production_label=_ExtendedOwnershipDetector([1])),
+        [],
+    )
+
+    assert tray.verdict == "MISSING_WHITE_LABEL"
+    assert events[0]["sourceFailClosedReason"] == (
+        "crop_below_minimum_or_preexisting_unjudgeable"
+    )
 def test_classifier_blob_matches_frozen_shape_and_normalization() -> None:
     image = np.full((100, 200, 3), 255, dtype=np.uint8)
 

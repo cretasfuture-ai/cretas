@@ -46,7 +46,7 @@ import {
 } from '../../../types/restaurantAgentRun';
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
 import { isRestaurant } from '../../../utils/factoryType';
-import { formatDate } from '../../../utils/formatters';
+import { currentShanghaiIsoDate } from '../../../utils/shanghaiDate';
 
 // 建议操作类型
 interface SuggestedAction {
@@ -76,11 +76,6 @@ function isRealIsoDate(value: string): boolean {
   return parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
     && parsed.getUTCDate() === day;
-}
-
-function currentShanghaiIsoDate(): string {
-  const shanghaiOffsetMs = 8 * 60 * 60 * 1000;
-  return formatDate(new Date(Date.now() + shanghaiOffsetMs));
 }
 
 function parseRestaurantAgentLaunch(

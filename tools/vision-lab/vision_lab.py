@@ -456,6 +456,60 @@ def scan_queues(
     }
 
 
+def training_quarantines(config: dict[str, Any]) -> list[dict[str, Any]]:
+    configured = config.get("training_quarantine_receipts", [])
+    if not isinstance(configured, list):
+        raise ValueError("training_quarantine_receipts must be a list")
+
+    quarantines: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in configured:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("training quarantine receipt paths must be non-empty strings")
+        receipt_path = Path(os.path.expandvars(value)).resolve()
+        if not receipt_path.is_file():
+            raise RuntimeError(f"training quarantine receipt is missing: {receipt_path}")
+        receipt = load_json(receipt_path)
+        if not isinstance(receipt, dict) or receipt.get("production_writes") != 0:
+            raise RuntimeError(f"training quarantine receipt failed its safety contract: {receipt_path}")
+        queue_value = receipt.get("excluded_blurry_queue")
+        if not isinstance(queue_value, str) or not queue_value.strip():
+            raise RuntimeError(f"training quarantine receipt has no excluded queue: {receipt_path}")
+        queue_root = Path(os.path.expandvars(queue_value)).resolve()
+        queue_key = str(queue_root).lower()
+        if queue_key in seen:
+            raise RuntimeError(f"training quarantine queue is duplicated: {queue_root}")
+        manifest_path = queue_root / "manifest.json"
+        if not manifest_path.is_file():
+            raise RuntimeError(f"training quarantine queue manifest is missing: {manifest_path}")
+        manifest = load_json(manifest_path)
+        queue_rows = manifest.get("rows") if isinstance(manifest, dict) else None
+        if not isinstance(queue_rows, list) or not queue_rows:
+            raise RuntimeError(f"training quarantine queue has no annotation rows: {queue_root}")
+        tasks: set[str] = set()
+        for row in queue_rows:
+            if not isinstance(row, dict) or not row.get("source_task_id"):
+                raise RuntimeError(f"training quarantine row has no source task: {queue_root}")
+            tasks.add(str(row["source_task_id"]))
+        if (
+            receipt.get("excluded_blurry_queue_crop_count") != len(queue_rows)
+            or receipt.get("excluded_blurry_queue_task_count") != len(tasks)
+        ):
+            raise RuntimeError(f"training quarantine receipt no longer matches its queue: {receipt_path}")
+        reasons = receipt.get("quarantined_rows_by_reason")
+        reason = next(iter(reasons)) if isinstance(reasons, dict) and len(reasons) == 1 else "quarantined_source_task"
+        quarantines.append({
+            "receipt": receipt_path,
+            "root": queue_root,
+            "manifest": manifest_path,
+            "rows": queue_rows,
+            "tasks": tasks,
+            "reason": str(reason),
+        })
+        seen.add(queue_key)
+    return quarantines
+
+
 def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
     def is_annotation_queue(path: Path) -> bool:
         manifest_path = path / "manifest.json"
@@ -469,9 +523,15 @@ def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
             raise ValueError(f"queue rows must be a list: {path}")
         return bool(rows)
 
+    quarantined = {
+        str(item["root"]).lower(): item
+        for item in training_quarantines(config)
+    }
     found: dict[str, Path] = {}
     for value in config.get("queue_roots", []):
         path = Path(os.path.expandvars(value)).resolve()
+        if str(path).lower() in quarantined:
+            raise RuntimeError(f"explicit queue root is quarantined from training: {path}")
         if not is_annotation_queue(path):
             raise RuntimeError(f"explicit queue root has no annotation rows: {path}")
         found[str(path).lower()] = path
@@ -482,7 +542,7 @@ def discover_queue_roots(config: dict[str, Any]) -> list[Path]:
         if parent.is_dir():
             for path in parent.glob(pattern):
                 resolved = path.resolve()
-                if is_annotation_queue(resolved):
+                if str(resolved).lower() not in quarantined and is_annotation_queue(resolved):
                     found[str(resolved).lower()] = resolved
     return [found[key] for key in sorted(found)]
 
@@ -606,16 +666,31 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
     manifest_hashes: list[str] = []
     identity_rows: list[dict[str, str]] = []
     training_exclusions: dict[str, int] = {}
+    quarantined_tasks: dict[str, str] = {}
+    for quarantine in training_quarantines(config):
+        reason = str(quarantine["reason"])
+        training_exclusions[reason] = training_exclusions.get(reason, 0) + len(quarantine["rows"])
+        for task_id in quarantine["tasks"]:
+            quarantined_tasks[str(task_id)] = reason
     for queue_root in discover_queue_roots(config):
         manifest_path = queue_root / "manifest.json"
         manifest = load_json(manifest_path)
         manifest_hashes.append(sha256_file(manifest_path))
+        authoritative_photo_verdict = manifest.get(
+            "photo_level_human_verdict_authoritative",
+            str(manifest.get("version", "")).startswith("liushanmen-clear-active-learning-"),
+        )
         for source in manifest["rows"]:
             annotation_path = queue_root / "annotations-human" / f"{source['crop_id']}.json"
             if not annotation_path.is_file():
                 continue
             annotation = load_json(annotation_path)
             if not annotation.get("reviewed") or annotation.get("unjudgeable"):
+                continue
+            source_task_id = str(source.get("source_task_id") or source.get("task_id") or "")
+            if source_task_id in quarantined_tasks:
+                reason = quarantined_tasks[source_task_id]
+                training_exclusions[reason] = training_exclusions.get(reason, 0) + 1
                 continue
             if (
                 annotation.get("training_eligible") is False
@@ -626,6 +701,14 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
                     or source.get("training_exclusion_reason")
                     or "explicitly_ineligible"
                 )
+                training_exclusions[reason] = training_exclusions.get(reason, 0) + 1
+                continue
+            if (
+                authoritative_photo_verdict
+                and annotation.get("missing_confirmed_by_human") is True
+                and source.get("human_qc_verdict") == "NO_DEFECT"
+            ):
+                reason = "crop_missing_conflicts_with_human_verified_full_photo_normal"
                 training_exclusions[reason] = training_exclusions.get(reason, 0) + 1
                 continue
             image = Path(source["image"])
@@ -789,6 +872,7 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
         "lrf": float,
         "weight_decay": float,
         "warmup_epochs": float,
+        "warmup_bias_lr": float,
         "freeze": int,
         "close_mosaic": int,
         "mosaic": float,
@@ -814,6 +898,17 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
             if converter is bool and not isinstance(value, bool):
                 raise ValueError(f"training option {key} must be a boolean")
             train_options[key] = converter(value)
+    if "lr0" in train_options:
+        bias_lr = train_options.get("warmup_bias_lr", train_options["lr0"])
+        if bias_lr < 0:
+            raise ValueError("training option warmup_bias_lr must be non-negative")
+        if bias_lr > train_options["lr0"]:
+            raise ValueError(
+                "training option warmup_bias_lr must not exceed lr0 during incremental fine-tuning"
+            )
+        train_options["warmup_bias_lr"] = bias_lr
+    elif "warmup_bias_lr" in train_options:
+        raise ValueError("training option warmup_bias_lr requires an explicit lr0")
     model = YOLO(str(base_model))
     model.train(**train_options)
     best = root / "runs" / run_id / "weights" / "best.pt"
@@ -878,7 +973,7 @@ def train_candidate(config: dict[str, Any], dataset: dict[str, Any]) -> dict[str
             key: train_options[key]
             for key in (
                 "epochs", "imgsz", "batch", "device", "workers", "seed", "patience",
-                "optimizer", "lr0", "lrf", "weight_decay", "warmup_epochs", "freeze",
+                "optimizer", "lr0", "lrf", "weight_decay", "warmup_epochs", "warmup_bias_lr", "freeze",
                 "close_mosaic", "mosaic", "mixup", "copy_paste", "degrees", "translate",
                 "scale", "shear", "perspective", "fliplr", "flipud", "hsv_h", "hsv_s",
                 "hsv_v", "cache", "save_period", "plots",
@@ -1162,8 +1257,10 @@ def mine_next_queue(config: dict[str, Any], state: State) -> dict[str, Any]:
         "--max-per-sku", str(int(mining.get("max_per_sku", 30))),
         "--max-per-photo", str(int(mining.get("max_per_photo", 2))),
     ]
-    for queue_root in discover_queue_roots(config):
-        command.extend(["--existing-manifest", str(queue_root / "manifest.json")])
+    manifests = [queue_root / "manifest.json" for queue_root in discover_queue_roots(config)]
+    manifests.extend(quarantine["manifest"] for quarantine in training_quarantines(config))
+    for manifest in manifests:
+        command.extend(["--existing-manifest", str(manifest)])
     result = subprocess.run(
         command, text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=28800,

@@ -197,6 +197,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
       { path: '/warehouse/inventory', title: '库存批次查询', icon: '', module: 'warehouse' },
       { path: '/warehouse/stocktakes', title: '盘点与期初库存', icon: '', module: 'warehouse' },
+      // 半成品库存 / 半成品盘点 —— 2026-08-27 补入口。此前菜单零登记, 只能手打 URL,
+      //   而生产上一直在写: 半成品盘点单 29 / 盘点明细 4916 / 半成品库存 8,
+      //   最近写入 2026-08-25。⇒ 数据在流, 界面看不到 (与会计凭证、标签识别诊断同形)。
+      { path: '/warehouse/semi-finished', title: '半成品库存', icon: '', module: 'warehouse' },
+      { path: '/warehouse/semi-finished-stocktakes', title: '半成品盘点', icon: '', module: 'warehouse' },
       // 2026-08-25: PR#76 上线了 /warehouse/storage-locations 但从未登记进本菜单,
       // 结果全生产 0 个租户配置过仓储空间 —— 没有入口就没人找得到。
       { path: '/warehouse/storage-locations', title: '仓储空间与现场盘点', icon: '', module: 'warehouse', groupLabel: '仓储配置' },
@@ -297,6 +302,14 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/purchase-invoices', title: '采购收票', icon: '', module: 'finance',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'] },
       { path: '/finance/payments', title: '收款管理', icon: '', module: 'finance' },
+      // 会计凭证 —— 2026-08-27 补入口。此前这三个页面【菜单零登记、App 也没有】,
+      //   只能手打 URL 才进得去; 而生产库里已有 凭证 18 张 / 分录 46 条 /
+      //   导出记录 106 条 / 模板 7 个 ⇒ 凭证在生成、有人在导, 却没有任何界面能看。
+      //   (可达性闸: web-admin/src/router/__tests__/routeReachability.spec.ts)
+      { path: '/finance/voucher-list', title: '会计凭证', icon: '', module: 'finance', groupLabel: '会计凭证' },
+      { path: '/finance/voucher-export', title: '凭证导出', icon: '', module: 'finance', groupLabel: '会计凭证' },
+      { path: '/finance/voucher-template', title: '凭证模板', icon: '', module: 'finance', groupLabel: '会计凭证',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'] },
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
       { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' }
     ]
@@ -319,11 +332,21 @@ const rawMenuConfig: MenuItem[] = [
       // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
       { path: '/unit-dictionary', title: '计量单位字典', icon: '', module: 'system',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
+      // 操作日志 —— 2026-08-27 补入口。审计用途, 生产已有 758 条且 2026-08-25 仍在写,
+      //   而此前【没有任何界面能查】。审计记录查不到, 等于没有审计。
+      { path: '/system/operation-log', title: '操作日志', icon: '', module: 'system' },
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY, groupLabel: '平台治理' },
       { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 5 个子页, 单一菜单入口跳总览, 页内 tab 切换其余 4 页.
       { path: '/system/ai-flywheel', title: 'AI 飞轮运营台', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      // 标签识别诊断 / 单盒标签精修 —— 2026-08-27 补入口。
+      //   这两个平台侧排障页此前【菜单零登记】, 只能手打 URL; 而它们服务的子系统
+      //   是生产上数据量最大的之一: 托盘裁图 11409 / 标注 9583 / 照片 5850 / 任务 1495。
+      //   操作侧的「包装标签拍检」(/quality/label-qc) 一直在菜单里, 唯独【排障的人打不开】。
+      //   ⇒ 不是冗余页面, 是重度使用子系统的诊断工具。
+      { path: '/system/label-qc-platform-diagnostics', title: '标签识别诊断', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/label-qc-tray-crops', title: '单盒标签精修', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/encoding-rules', title: '编码规则字典', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/ai-quota', title: 'AI 配额规则', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/pos', title: 'POS集成', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },

@@ -40,6 +40,29 @@ type DialogState = {
   choose?: ChooseState;
 };
 
+/** 排队用的条目 —— `key` 只用来判断「当前这条换人了」(重置输入框), 不参与渲染。 */
+type QueuedDialog = DialogState & { key: number };
+
+let _seq = 0;
+
+/**
+ * 同一条提示是否已经在队里排着 —— **只对纯提示框去重**。
+ *
+ * ⚠️ prompt / choose 不许去重: 它们各自带一个 `onSubmit` / `onPick` 回调,
+ *    丢掉第二条 = 第二个回调永远不触发, 调用方会静默地等一个不会来的值。
+ *
+ * 去重存在的理由是排队带来的**唯一**行为回退: 原来后一个盖掉前一个, 所以
+ * 「同一个按钮手抖点两下」只会弹一个框; 排队之后会弹两个, 而工人很可能两个都确认 ——
+ * 本仓已经因为「同一段工时报了两遍」踩过账 (见 YieldStepReportScreen handleSubmitSegment)。
+ */
+function isDedupable(s: DialogState): boolean {
+  return s.prompt == null && s.choose == null;
+}
+function dialogSignature(s: DialogState): string {
+  // JSON.stringify 而不是裸拼接: 拼接会让 ("a b", "") 和 ("a", "b") 撞成同一个签名。
+  return JSON.stringify([s.title, s.message ?? '']);
+}
+
 let _show: ((s: DialogState) => void) | null = null;
 
 export function appAlert(title: string, message?: string, buttons?: AppDialogButton[]): void {
@@ -129,20 +152,61 @@ export function appChoose(
   }
 }
 
+/**
+ * 弹窗宿主 —— **队列**, 不是单槽。
+ *
+ * <h3>🔴 为什么是队列 (2026-08-26)</h3>
+ * 原来这里只持有一个 DialogState, 后一次 `appAlert` 直接把前一个 setState 掉。
+ * 而 `YieldStepReportScreen` 的投入提交成功路径在**同一个 tick 里连调三次**:
+ *
+ * ```
+ * maybeShowBalanceWarning(...)      // ⚠️ 物料平衡偏差
+ * maybeShowSemiOutputGap(...)       // 产出没进半成品库
+ * appAlert('投入已提交', ...)        // ← 这一个把上面两个都盖掉了
+ * ```
+ *
+ * 前两条恰恰是**只在出问题时才出现**的那两条 —— 也就是说它们从来没被人看见过。
+ * 而 `maybeShowSemiOutputGap` 头上的注释写的正是「前端零消费端就等于没加」,
+ * 它自己就是那个被盖掉的消费端。
+ *
+ * ⚠️ 排队会改变所有调用点的行为(原来后盖前, 现在依次弹)。全仓 149 处 appAlert
+ *    已逐处扫过, 没有任何一处**依赖**「后一个盖掉前一个」—— 其余同函数里的多次
+ *    appAlert 都在互斥分支上。唯一的回退是「手抖点两下同一个按钮」会弹两个框,
+ *    由上面的 `isDedupable` / `dialogSignature` 去重挡掉。
+ */
 export const AppDialogHost: React.FC = () => {
-  const [state, setState] = useState<DialogState | null>(null);
+  const [queue, setQueue] = useState<QueuedDialog[]>([]);
   const [inputValue, setInputValue] = useState('');
   useEffect(() => {
     _show = (s) => {
-      setInputValue(s.prompt?.defaultValue ?? '');
-      setState(s);
+      setQueue((prev) => {
+        if (isDedupable(s)) {
+          const sig = dialogSignature(s);
+          // 已经排着一条一模一样的提示 → 不再排第二条 (见 isDedupable 头注释)
+          if (prev.some((q) => isDedupable(q) && dialogSignature(q) === sig)) return prev;
+        }
+        _seq += 1;
+        return [...prev, { ...s, key: _seq }];
+      });
     };
     return () => {
       _show = null;
     };
   }, []);
+
+  const state: QueuedDialog | null = queue[0] ?? null;
+  const currentKey = state?.key ?? null;
+
+  // 输入框的初值跟着**当前这一条**走, 不是跟着「入队那一刻」走 ——
+  // 排队之后这两个时刻不再是同一个时刻 (前面还有别的框在挡着)。
+  useEffect(() => {
+    setInputValue(state?.prompt?.defaultValue ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentKey]);
+
   if (!state) return null;
-  const close = () => setState(null);
+  /** 关掉**当前这一条**, 让队里下一条顶上来 (队空则整个宿主收起)。 */
+  const close = () => setQueue((prev) => prev.slice(1));
 
   if (state.choose) {
     const c = state.choose;
