@@ -69,7 +69,7 @@ if manifest.get("pipelineId") != expected_pipeline:
 model_id = str(manifest.get("modelId", ""))
 if not model_id or not re.fullmatch(r"[A-Za-z0-9._-]+", model_id):
     raise SystemExit("unsafe or missing modelId")
-expected = {
+required = {
     "production_tray": "tray.onnx",
     "production_label": "label.onnx",
     "tray_supplement": "tray-supplement.onnx",
@@ -77,11 +77,31 @@ expected = {
     "proposal_classifier": "proposal-classifier.onnx",
     "label_fallback": "label-fallback.onnx",
 }
+optional = {"label_supplement": "label-supplement.onnx"}
 models = manifest.get("models")
-if not isinstance(models, dict) or set(models) != set(expected):
+if not isinstance(models, dict) or not set(required) <= set(models) or not set(models) <= set(required) | set(optional):
     raise SystemExit("model binding set mismatch")
-for key, filename in expected.items():
+has_label_supplement = "label_supplement" in models
+if has_label_supplement:
+    classes = manifest.get("labelSupplementClasses")
+    if (
+        not isinstance(classes, list)
+        or not classes
+        or any(type(class_id) is not int or class_id not in (0, 1) for class_id in classes)
+        or len(set(classes)) != len(classes)
+    ):
+        raise SystemExit("invalid labelSupplementClasses")
+    confidence = manifest.get("labelSupplementConfidence", 0.20)
+    if type(confidence) not in (int, float) or not 0.20 <= float(confidence) <= 1.0:
+        raise SystemExit("invalid labelSupplementConfidence")
+elif "labelSupplementClasses" in manifest or "labelSupplementConfidence" in manifest:
+    raise SystemExit("orphan label supplement configuration")
+for key, filename in {**required, **optional}.items():
+    if key not in models:
+        continue
     binding = models[key]
+    if not isinstance(binding, dict):
+        raise SystemExit(f"invalid model binding for {key}")
     if binding.get("file") != filename:
         raise SystemExit(f"filename mismatch for {key}")
     path = (root / filename).resolve()
@@ -165,7 +185,39 @@ if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected_sha:
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 if manifest.get("pipelineId") != expected_pipeline:
     raise SystemExit("remote pipeline mismatch")
-for binding in manifest["models"].values():
+required = {
+    "production_tray": "tray.onnx",
+    "production_label": "label.onnx",
+    "tray_supplement": "tray-supplement.onnx",
+    "generic_label": "generic-label.onnx",
+    "proposal_classifier": "proposal-classifier.onnx",
+    "label_fallback": "label-fallback.onnx",
+}
+optional = {"label_supplement": "label-supplement.onnx"}
+models = manifest.get("models")
+if not isinstance(models, dict) or not set(required) <= set(models) or not set(models) <= set(required) | set(optional):
+    raise SystemExit("remote model binding set mismatch")
+has_label_supplement = "label_supplement" in models
+if has_label_supplement:
+    classes = manifest.get("labelSupplementClasses")
+    if (
+        not isinstance(classes, list)
+        or not classes
+        or any(type(class_id) is not int or class_id not in (0, 1) for class_id in classes)
+        or len(set(classes)) != len(classes)
+    ):
+        raise SystemExit("remote invalid labelSupplementClasses")
+    confidence = manifest.get("labelSupplementConfidence", 0.20)
+    if type(confidence) not in (int, float) or not 0.20 <= float(confidence) <= 1.0:
+        raise SystemExit("remote invalid labelSupplementConfidence")
+elif "labelSupplementClasses" in manifest or "labelSupplementConfidence" in manifest:
+    raise SystemExit("remote orphan label supplement configuration")
+for key, filename in {**required, **optional}.items():
+    if key not in models:
+        continue
+    binding = models[key]
+    if not isinstance(binding, dict) or binding.get("file") != filename:
+        raise SystemExit(f"remote filename mismatch for {key}")
     path = (root / binding["file"]).resolve()
     if path.parent != root or hashlib.sha256(path.read_bytes()).hexdigest() != binding["sha256"]:
         raise SystemExit(f"remote model binding mismatch: {binding['file']}")
