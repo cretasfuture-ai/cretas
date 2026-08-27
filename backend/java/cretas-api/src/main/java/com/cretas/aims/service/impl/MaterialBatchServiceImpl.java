@@ -150,6 +150,12 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private final MaterialBatchAdjustmentRepository materialBatchAdjustmentRepository;
     private final RawMaterialTypeRepository materialTypeRepository;
     private final MaterialBatchMapper materialBatchMapper;
+    /** 储存位置是受控词表 —— 判据只有一份, 见 WarehouseLocationCatalog。
+     *  ⚠️ 用字段注入而不是构造器注入: 这几个类在测试里被直接 new 42 处,
+     *  改构造器签名会一次打断全部, 与本次改动无关。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
+
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     private final ExcelUtil excelUtil;
@@ -2172,7 +2178,17 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // 5. 更新批次状态和存储位置
         batch.setStatus(MaterialBatchStatus.FROZEN);
-        batch.setStorageLocation(request.getStorageLocation());
+        // 受控词表 —— 判据见 WarehouseLocationCatalog。转冻品要落到具体冻位,
+        // 不能是「冷冻库」这种描述(2026-08-27 实测 RN 侧就在传这个字面量)。
+        //
+        // ⚠️ null = **不改动**, ⛔ 不是「清空」: 原写法是无条件 setStorageLocation(...),
+        //    调用方不传位置时会把批次已有的位置**抹掉**。转冻品是改状态, 不该顺手
+        //    删掉「它在哪」这个信息 —— 原位置只在 notes 里留了一行文本, 抹掉就找不回来了。
+        String frozenLocation =
+                locationCatalog.requireConfiguredLocation(batch.getFactoryId(), request.getStorageLocation());
+        if (frozenLocation != null) {
+            batch.setStorageLocation(frozenLocation);
+        }
 
         // 6. 在notes中记录转换信息（包括原始存储位置）
         String existingNotes = batch.getNotes() != null ? batch.getNotes() : "";
@@ -2254,7 +2270,11 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             targetStorageLocation = extractOriginalStorageLocation(notes);
         }
         if (targetStorageLocation != null && !targetStorageLocation.equals("未知")) {
-            batch.setStorageLocation(targetStorageLocation);
+            // 受控词表 —— 判据见 WarehouseLocationCatalog。
+            // ⚠️ 这条是「解冻回滚」从 notes 里恢复旧位置: 旧值可能是历史脏值,
+            //    恢复不出来就留 null(未分配), ⛔ 不把一个不是位置的字符串写回去。
+            batch.setStorageLocation(
+                    locationCatalog.requireConfiguredLocation(batch.getFactoryId(), targetStorageLocation));
             log.info("恢复存储位置: {}", targetStorageLocation);
         }
 

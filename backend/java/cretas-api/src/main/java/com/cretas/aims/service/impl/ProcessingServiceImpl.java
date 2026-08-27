@@ -52,6 +52,12 @@ import java.util.stream.Collectors;
 public class ProcessingServiceImpl implements ProcessingService {
     private static final Logger log = LoggerFactory.getLogger(ProcessingServiceImpl.class);
 
+    /** 储存位置是受控词表 —— 判据只有一份, 见 WarehouseLocationCatalog。
+     *  ⚠️ 用字段注入而不是构造器注入: 这几个类在测试里被直接 new 42 处,
+     *  改构造器签名会一次打断全部, 与本次改动无关。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
+
     private final ProductionBatchRepository productionBatchRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -751,7 +757,9 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
         // 更新允许修改的字段
         if (updates.getStorageLocation() != null) {
-            batch.setStorageLocation(updates.getStorageLocation());
+            // 受控词表 —— 判据见 WarehouseLocationCatalog。
+            batch.setStorageLocation(
+                    locationCatalog.requireConfiguredLocation(factoryId, updates.getStorageLocation()));
         }
         if (updates.getQualityCertificate() != null) {
             batch.setQualityCertificate(updates.getQualityCertificate());

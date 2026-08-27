@@ -323,7 +323,13 @@ export default function MaterialBatchManagementScreen() {
         {
           convertedBy: user?.id ?? 0,
           convertedDate: today,
-          storageLocation: batch.storageLocation || '冷冻库',
+          // 🔴 2026-08-27: 这里原来是 `batch.storageLocation || '冷冻库'`。
+          // 「冷冻库」不是位置编码 —— 实测它在全库任何工厂的仓储配置里都不存在(0 命中),
+          // 而位置字段唯一的消费方按**精确字符串相等**统计「某位置有几批」,
+          // 写进去那条批次就从所有位置的计数里消失, 卡片显示「空闲」而货在那儿。
+          // ⇒ 有位置就原样带上(它来自库里, 已是合法编码), 没有就**不传**(后端按不改动处理)。
+          // ⛔ 不要为了凑一个非空值再编一个字符串。
+          ...(batch.storageLocation ? { storageLocation: batch.storageLocation } : {}),
           notes: `批次 ${batch.batchNumber} 转为冻品`,
         },
         user?.factoryId ?? ''

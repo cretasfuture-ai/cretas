@@ -23,6 +23,12 @@ import java.time.temporal.ChronoUnit;
 @Slf4j
 @Component
 public class MaterialBatchMapper {
+
+    /** 储存位置是受控词表 —— 判据只有一份, 见 WarehouseLocationCatalog。
+     *  ⚠️ 用字段注入而不是构造器注入: 这几个类在测试里被直接 new 42 处,
+     *  改构造器签名会一次打断全部, 与本次改动无关。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
     /**
      * Entity 转 DTO
      */
@@ -168,7 +174,9 @@ public class MaterialBatchMapper {
         batch.setUnitPrice(calculatedUnitPrice);
         // 注意: totalPrice 现在是计算属性 (unitPrice × receiptQuantity)，不再需要手动设置
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        batch.setStorageLocation(request.getStorageLocation());
+        // 受控词表: 填了就必须是本厂已配置的位置编码; null/空 = 未分配(合法)。
+        batch.setStorageLocation(
+                locationCatalog.requireConfiguredLocation(factoryId, request.getStorageLocation()));
         batch.setQualityCertificate(request.getQualityCertificate());
         // notes已在上面的验证逻辑中设置（如果有警告的话）
         // 如果没有警告，使用原始notes
@@ -283,7 +291,10 @@ public class MaterialBatchMapper {
             batch.setUnitPrice(request.getUnitPrice());
         }
         if (request.getStorageLocation() != null) {
-            batch.setStorageLocation(request.getStorageLocation());
+            // 受控词表 —— 判据见 WarehouseLocationCatalog。工厂取自实体本身,
+            // 因为 updateEntity 这条路上没有单独的 factoryId 形参。
+            batch.setStorageLocation(locationCatalog.requireConfiguredLocation(
+                    batch.getFactoryId(), request.getStorageLocation()));
         }
         if (request.getQualityCertificate() != null) {
             batch.setQualityCertificate(request.getQualityCertificate());

@@ -134,7 +134,8 @@ export function WHInventoryDetailScreen() {
           batchNumber: b.batchNumber || `MB-${b.id}`,
           quantity: b.remainingQuantity ?? 0,
           inboundDate: b.createdAt?.split('T')[0] ?? '',
-          location: b.storageLocation || 'A区-冷藏库',
+          // 🔴 2026-08-27: 原来兜底成 'A区-冷藏库'(编出来的位置) ⇒ 改成如实说未分配。
+          location: b.storageLocation || '未分配',
           expiryDays: calculateExpiryDays(b.expiryDate),
           isFifo: idx === 0, // 第一个批次标记为FIFO优先消耗
           isNew: calculateExpiryDays(b.expiryDate) >= 7,
@@ -143,7 +144,11 @@ export function WHInventoryDetailScreen() {
         // 构建库位分布
         const locationMap = new Map<string, number>();
         batchList.forEach(b => {
-          const loc = b.storageLocation || 'A区-冷藏库';
+          // 🔴 这一处比下面那处更糟: 它在建**库位分布图**。没有位置的批次被兜进一个
+          //    编出来的 'A区-冷藏库', 图上就出现一根「那里有货」的柱子。
+          //    实测 F006 的 139 条原料批次位置全是 NULL ⇒ 整张分布图会是一根假柱子。
+          //    ⇒ 归到「未分配」: 如实说「这些货还没登记位置」, 而不是说错地方。
+          const loc = b.storageLocation || '未分配';
           locationMap.set(loc, (locationMap.get(loc) ?? 0) + (b.remainingQuantity ?? 0));
         });
         const locationDistribution = Array.from(locationMap.entries()).map(([name, quantity]) => ({

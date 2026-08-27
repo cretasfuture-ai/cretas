@@ -57,7 +57,11 @@ import static org.mockito.Mockito.when;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import({SalesOrderSuppliedMaterialRequirementService.class, MaterialBatchMapper.class})
+// ⚠️ 2026-08-27: MaterialBatchMapper 现在依赖 WarehouseLocationCatalog
+//    (储存位置是受控词表, Owner 裁定)。@DataJpaTest 切片不会自动扫到它,
+//    所以显式 Import —— 它只依赖 FactoryFeatureConfigRepository, 切片里有。
+@Import({SalesOrderSuppliedMaterialRequirementService.class, MaterialBatchMapper.class,
+        com.cretas.aims.service.warehouse.WarehouseLocationCatalog.class})
 class SalesOrderSuppliedMaterialRequirementRepositoryQueryValidationTest {
 
     @Autowired EntityManager entityManager;

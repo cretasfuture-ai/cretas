@@ -72,7 +72,14 @@ export interface MaterialBatch {
 export interface ConvertToFrozenRequest {
   convertedBy: number;
   convertedDate: string;
-  storageLocation: string;
+  /**
+   * 目标冻位编码 —— **必须是本厂仓储配置里已存在的编码**(受控词表, Owner 2026-08-27 裁定)。
+   *
+   * ⚠️ 改成可选是有意的: 此前这里是必填, 于是调用方为了凑一个值传了字面量 `'冷冻库'`,
+   * 而它在全库任何工厂都不是合法编码(实测 0 命中) —— 后端现在会 400 拒掉。
+   * 不传 = 不改动位置; ⛔ 不要为了满足类型再编一个字符串出来。
+   */
+  storageLocation?: string;
   notes?: string;
 }
 
