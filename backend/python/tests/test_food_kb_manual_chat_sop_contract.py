@@ -12,6 +12,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_BATCH_ADJUSTMENT_ANSWER,
     _FACTORY_BOM_CANVAS_COST_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
+    _FACTORY_DEFECT_COUNT_TRUTH_ANSWER,
     _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER,
     _FACTORY_INCREMENTAL_RECEIPT_ANSWER,
     _FACTORY_PURCHASE_OA_RECEIPT_ANSWER,
@@ -72,6 +73,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_batch_adjustment_guard,
     _needs_factory_bom_canvas_cost_guard,
     _needs_factory_current_gates_guard,
+    _needs_factory_defect_count_truth_guard,
     _needs_factory_finished_goods_stocktake_guard,
     _needs_factory_incremental_receipt_guard,
     _needs_factory_purchase_oa_receipt_guard,
@@ -459,6 +461,37 @@ def test_20260826_factory_warehouse_governance_is_deterministic_and_isolated():
     assert "温控设备未接入" in _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER
 
 
+def test_20260827_factory_defect_count_truth_is_deterministic_and_isolated():
+    questions = (
+        "生产结单时如果没人填写不良品数量，系统会不会自动当作 0？后来怎样补录？",
+        "结单必须回答这批有没有不良品吗？良品数未知时页面还能不能显示良品率？",
+        "历史已结单计划的不良品还是未知，盘点补录待办要怎样处理？",
+        "一个计划有多个批次时，结单不良品数为什么不能随便回填一批？",
+    )
+    assert all(_needs_factory_defect_count_truth_guard(q) for q in questions)
+    assert not _needs_factory_defect_count_truth_guard("餐饮单菜毛利怎么计算？")
+    assert "有不良品 / 已清点无不良品 / 未清点" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "不能伪造成零不良" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "多批不猜" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "不是“质量管理 → 报废处置”" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "当前页面只提供待办清单" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "良品率”显示 `—`" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "不能拿逐道投入/产出的出成率冒充良品率" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+
+
+def test_20260827_label_capture_quality_gate_is_in_review_contract():
+    questions = (
+        "标签拍照很模糊时怎样重拍？",
+        "托盘左右边缘没有拍全还能提交标签质检吗？",
+        "标签照片分辨率不够或托盘不足时会怎样？",
+    )
+    assert all(_needs_label_qc_review_guard(q) for q in questions)
+    assert "短边至少 960、长边至少 1280" in _LABEL_QC_REVIEW_ANSWER
+    assert "至少 3 个托盘" in _LABEL_QC_REVIEW_ANSWER
+    assert "照片不计入列表" in _LABEL_QC_REVIEW_ANSWER
+    assert "通过只说明照片可用，不代表白标/彩标合格" in _LABEL_QC_REVIEW_ANSWER
+
+
 def test_factory_workflow_storage_and_output_directory_is_deterministic():
     equivalent_questions = (
         "Workflow 的存放位置为什么和本图产出不一样？",
@@ -724,7 +757,10 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
     restaurant_suggestions = restaurant_tab.split(
         '<div class="suggestions" aria-label="推荐问题">', 1
     )[1].split("</div>", 1)[0]
-    for factory_topic in ("成品分次入库", "有条件通过或不合格", "成品盘点与原料盘点", "按含税单价填写"):
+    for factory_topic in (
+        "成品分次入库", "有条件通过或不合格", "成品盘点与原料盘点",
+        "按含税单价填写", "不良品三态、批次回填与盘点补录", "标签拍摄质量门禁与重拍",
+    ):
         assert factory_topic in factory_tab
         assert factory_topic not in restaurant_suggestions
 
@@ -1412,6 +1448,12 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "切换盒子或照片时自动校验并保存" in current_sop
     assert "平台训练选样" in current_sop
     assert "不能回写或覆盖工厂整图盒子真值" in current_sop
+    assert "短边至少 960、长边至少 1280 像素" in current_sop
+    assert "服务端再检查明显模糊、至少 3 个托盘" in current_sop
+    assert "有不良品 / 已清点无不良品 / 未清点" in current_sop
+    assert "不能把没回答翻译成零不良" in current_sop
+    assert "页面顶部列出已结单但不良品结论仍缺失的计划" in current_sop
+    assert "良品率”显示 `—`" in current_sop
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
@@ -1455,6 +1497,12 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     html_path = Path(PROJECT_ROOT) / "docs/manual/F006-production-full-chain-manual-test-sop.html"
     html = html_path.read_text(encoding="utf-8")
     assert required_sequence in html
+    assert "有不良品、已清点无不良品或未清点" in html
+    assert "一个计划只有一个正式批次时回填该批次" in html
+    assert "当前页面只列待办" in html
+    assert "良品率显示“—”且不上绿色" in html
+    assert "短边至少 960、长边至少 1280 像素" in html
+    assert "至少 3 个托盘" in html
     assert "SOP sync 2026-08-24" in html
     assert "Workflow 画布是 BOM 唯一写入口" in html
     assert "批次领用与消耗审计" in html
@@ -2025,6 +2073,18 @@ def test_20260818_reviewed_answers_keep_idempotency_and_store_isolation():
             "生产小结备注怎样保存，仓库成品分次入库如何累计、幂等并区分 PARTIAL 和 COMPLETED？",
             "factory",
             _FACTORY_INCREMENTAL_RECEIPT_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "生产结单没人填写不良品数会不会当成 0，盘点补录待办怎样处理？",
+            "factory",
+            _FACTORY_DEFECT_COUNT_TRUTH_ANSWER,
+            "f006-production-full-chain-sop.md",
+        ),
+        (
+            "良品数未知时良品率还能不能显示，多个批次怎样回填不良品数？",
+            "factory",
+            _FACTORY_DEFECT_COUNT_TRUTH_ANSWER,
             "f006-production-full-chain-sop.md",
         ),
         (
