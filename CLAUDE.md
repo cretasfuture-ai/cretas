@@ -56,6 +56,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 ## 规则（`.claude/rules/`）
 
 **常驻**（每 session 加载）：
+- `standing-authorization-and-visual-acceptance.md` - 🔴 **默认直接做完，不设人肉闸门**。Owner 给了方向就是授权（含生产写入、非-F006 租户、删除、合并、部署），⛔ 不要再问「要不要 / 可不可以」；不可逆动作**宣告而非请示**。「不问」≠「不验」——判据一条不省，且能用界面跑一遍证明的就用视觉验收（截图 + 阴性对照）
 - `concurrent-edit-safety.md` - 并发编辑安全（共享文件修改前必读）
 - `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署
 - `CREDENTIAL-MANAGEMENT.md` - 凭证与环境变量
