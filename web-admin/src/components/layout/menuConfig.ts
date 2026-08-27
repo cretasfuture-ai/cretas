@@ -197,6 +197,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
       { path: '/warehouse/inventory', title: '库存批次查询', icon: '', module: 'warehouse' },
       { path: '/warehouse/stocktakes', title: '盘点与期初库存', icon: '', module: 'warehouse' },
+      // 半成品库存 / 半成品盘点 —— 2026-08-27 补入口。此前菜单零登记, 只能手打 URL,
+      //   而生产上一直在写: 半成品盘点单 29 / 盘点明细 4916 / 半成品库存 8,
+      //   最近写入 2026-08-25。⇒ 数据在流, 界面看不到 (与会计凭证、标签识别诊断同形)。
+      { path: '/warehouse/semi-finished', title: '半成品库存', icon: '', module: 'warehouse' },
+      { path: '/warehouse/semi-finished-stocktakes', title: '半成品盘点', icon: '', module: 'warehouse' },
       // 2026-08-25: PR#76 上线了 /warehouse/storage-locations 但从未登记进本菜单,
       // 结果全生产 0 个租户配置过仓储空间 —— 没有入口就没人找得到。
       { path: '/warehouse/storage-locations', title: '仓储空间与现场盘点', icon: '', module: 'warehouse', groupLabel: '仓储配置' },
@@ -327,6 +332,9 @@ const rawMenuConfig: MenuItem[] = [
       // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
       { path: '/unit-dictionary', title: '计量单位字典', icon: '', module: 'system',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
+      // 操作日志 —— 2026-08-27 补入口。审计用途, 生产已有 758 条且 2026-08-25 仍在写,
+      //   而此前【没有任何界面能查】。审计记录查不到, 等于没有审计。
+      { path: '/system/operation-log', title: '操作日志', icon: '', module: 'system' },
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY, groupLabel: '平台治理' },
       { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
