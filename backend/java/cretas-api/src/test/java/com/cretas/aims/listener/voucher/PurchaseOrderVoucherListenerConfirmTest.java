@@ -52,6 +52,12 @@ class PurchaseOrderVoucherListenerConfirmTest {
         po.setId(PO_ID);
         po.setVflag(VoucherFlag.UNCREATED);
         when(purchaseOrderRepo.findById(PO_ID)).thenReturn(Optional.of(po));
+        // handleVoucherGeneration reassigns `po = purchaseOrderRepo.save(po)` after flipping to
+        // PENDING (JPA merge() returns a NEW managed instance; the pre-save `po` stays detached —
+        // see the method's own "🔴 必须接住返回值" comment). Must stub save() to return the same
+        // instance, otherwise `po` becomes null (unstubbed mock) and the later
+        // `po.setVflag(CREATED)` never reaches the object this test asserts on.
+        when(purchaseOrderRepo.save(any(PurchaseOrder.class))).thenAnswer(inv -> inv.getArgument(0));
         when(voucherService.createFromBusiness(FACTORY_ID, "PURCHASE_ORDER", PO_ID))
                 .thenReturn(Voucher.builder().voucherNumber("V-2026-0001").build());
 

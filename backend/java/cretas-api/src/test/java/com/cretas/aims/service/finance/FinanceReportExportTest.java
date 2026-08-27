@@ -4,6 +4,7 @@ import com.cretas.aims.dto.finance.SubjectAggregateRow;
 import com.cretas.aims.dto.finance.report.CashFlowDTO;
 import com.cretas.aims.entity.enums.AccountBalanceType;
 import com.cretas.aims.entity.enums.AccountCategory;
+import com.cretas.aims.entity.enums.VoucherStatus;
 import com.cretas.aims.entity.finance.Account;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.finance.Voucher;
@@ -229,6 +230,11 @@ class FinanceReportExportTest {
         counterEntry.setCredit(new BigDecimal("1000.005"));
 
         Voucher voucher = new Voucher();
+        // CashFlowService.generate() 按 POSTED-only 口径过滤 (排 VOID/DRAFT, 见 F006 财务审计
+        // Bug 6 follow-up 注释)。new Voucher() 落地 status=DRAFT (Voucher.status 字段初始值),
+        // 不显式置 POSTED 会被现金流量表悄悄过滤掉, 5001 那一行永远不会出现 —— 这正是本测试
+        // 此前失败的原因 (断言 "5001 activity row must be present" 拿到 false)。
+        voucher.setStatus(VoucherStatus.POSTED);
         voucher.setEntries(List.of(cashEntry, counterEntry));
 
         when(voucherRepo.findByFactoryIdAndDateRange(eq(FACTORY), any(LocalDate.class), any(LocalDate.class)))

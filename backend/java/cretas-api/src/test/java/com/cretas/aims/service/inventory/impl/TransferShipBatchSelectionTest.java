@@ -17,6 +17,7 @@ import com.cretas.aims.repository.inventory.InternalTransferItemRepository;
 import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,11 @@ class TransferShipBatchSelectionTest {
     @Mock private MaterialBatchService materialBatchService;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
+    // @Autowired(required=false) — only stubbed (and only matters) in the one test that calls
+    // requestTransfer(); without a non-null workflowEngine that method fail-fasts with
+    // BusinessException(503, "审批运行时暂不可用") (OA_RUNTIME_UNAVAILABLE), a real guard added
+    // alongside the OA-workflow integration, not something to bypass.
+    @Mock private WorkflowEngineService workflowEngine;
 
     private TransferServiceImpl service;
 
@@ -79,6 +85,7 @@ class TransferShipBatchSelectionTest {
                 materialBatchService,
                 rawMaterialTypeRepository);
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
+        ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
     }
 
     // ===== helpers =====
@@ -343,9 +350,9 @@ class TransferShipBatchSelectionTest {
         request.setTargetWarehouseId("WH-FINISHED");
         request.setTransferDate(LocalDate.now());
         request.setItems(List.of(line));
+        // findRecentDuplicates 的 stub 已随「5min 重复调拨拦截」一并移除 —— createTransfer 不再调它
+        // (同 createFinishedGoods_withMaterialIdentityOnly_rejectedBeforeDraft 测试注释)。
 
-        when(transferRepository.findRecentDuplicates(eq("F006"), eq("F006"), eq(99L), any(), any()))
-                .thenReturn(List.of());
         when(finishedGoodsBatchRepository.findAvailableBatchesByWarehouse(
                 "F006", "CPF0060015", "WH-PRODUCTION"))
                 .thenReturn(List.of(source));
@@ -375,15 +382,19 @@ class TransferShipBatchSelectionTest {
             assertThat(item.getUnit()).isEqualTo("box");
         });
 
+        // MES↔ERP Fix #4 + OA-workflow integration: this transfer is intra-factory
+        // (WH-PRODUCTION → WH-FINISHED, both F006) so it follows "申请 → OA 批准(自动通过,
+        // 未配置流程) → 确认调拨" — ship/receive are cross-factory-only steps and
+        // assertCrossFactoryShipment now 409s on them for same-factory transfers.
+        // workflowEngine.startWorkflowIfConfigured is unstubbed → Mockito default
+        // Optional.empty() → requestTransfer takes the "no OA configured" branch and sets
+        // the transfer straight to APPROVED itself, so approveTransfer is not called here.
         service.requestTransfer("F006", transfer.getId(), 99L);
-        service.approveTransfer("F006", transfer.getId(), 99L);
-        service.shipTransfer("F006", transfer.getId(), 99L);
+        service.confirmTransfer("F006", transfer.getId(), 99L);
         assertThat(source.getProducedQuantity()).isEqualByComparingTo("0");
         assertThat(source.getShippedQuantity()).isEqualByComparingTo("0");
         assertThat(source.getStatus()).isEqualTo("DEPLETED");
 
-        service.receiveTransfer("F006", transfer.getId(), 99L);
-        service.confirmTransfer("F006", transfer.getId(), 99L);
         FinishedGoodsBatch target = savedBatches.stream()
                 .filter(batch -> batch != source)
                 .findFirst()
@@ -461,16 +472,15 @@ class TransferShipBatchSelectionTest {
         when(transferRepository.save(any(InternalTransfer.class))).thenAnswer(i -> i.getArgument(0));
         when(transferItemRepository.saveAll(any())).thenAnswer(i -> i.getArgument(0));
 
-        // SHIP (扣源) → RECEIVE → CONFIRM (建目标)
-        service.shipTransfer("F001", "T_FIX4_001", 99L);
+        // 同厂调拨不走 ship/receive (assertCrossFactoryShipment 对同厂调拨恒 409, 见
+        // TransferServiceImpl 注释「同厂调拨流程为：申请 → OA 批准 → 确认调拨」) ——
+        // CONFIRM 原子完成"扣源 + 建目标" (confirmTransfer 的 intraFactory 分支)。
+        service.confirmTransfer("F001", "T_FIX4_001", 99L);
 
         // 源: shippedQuantity 未动 (不虚增销售); producedQuantity 减 10
         assertThat(src.getShippedQuantity()).isEqualByComparingTo("0");
         assertThat(src.getProducedQuantity()).isEqualByComparingTo("90");
         assertThat(item.getSourceBatchId()).isEqualTo("FG_SRC");
-
-        service.receiveTransfer("F001", "T_FIX4_001", 99L);
-        service.confirmTransfer("F001", "T_FIX4_001", 99L);
 
         // 目标批次: 继承源 unitCost (成本血缘不断), producedQuantity=10
         FinishedGoodsBatch target = saved.stream()
