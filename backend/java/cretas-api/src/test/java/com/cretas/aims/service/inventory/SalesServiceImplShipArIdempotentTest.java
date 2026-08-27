@@ -25,6 +25,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Optional;
@@ -105,6 +106,9 @@ class SalesServiceImplShipArIdempotentTest {
         d.setFactoryId(FACTORY_ID);
         d.setSalesOrderId(ORDER_ID);
         d.setStatus(SalesDeliveryStatus.DRAFT);
+        // fool-proof-design required-field guard (SHIPMENT_DATE_REQUIRED): shipDelivery now
+        // 400s with "确认发货前必须填写实际发运日期" when deliveryDate is unset.
+        d.setDeliveryDate(LocalDate.now());
         d.setItems(new ArrayList<>()); // empty — batchAllocationService null-guard skips check
         return d;
     }
@@ -123,15 +127,33 @@ class SalesServiceImplShipArIdempotentTest {
     /**
      * Shared repository stubs required by {@code shipDelivery} regardless of AR guard outcome:
      * <ul>
-     *   <li>{@code deliveryRecordRepository.findById} — load delivery</li>
-     *   <li>{@code salesOrderRepository.findById} — called twice: updateOrderDeliveryStatus + AR block</li>
+     *   <li>{@code deliveryRecordRepository.findById} — load delivery (used by
+     *       {@code getDeliveryRecordById} snapshot read)</li>
+     *   <li>{@code deliveryRecordRepository.findByIdAndFactoryIdForUpdate} — row-locked load used
+     *       by {@code lockDeliveryForMutation}. Mockito's default answer for an unstubbed
+     *       {@code Optional}-returning method is {@code Optional.empty()} (NOT null — the
+     *       {@code lockDeliveryForMutation} null-fallback comment about "historical constructor
+     *       tests" does not apply here), so leaving this unstubbed makes the very first
+     *       {@code orElseThrow()} fire with "发货单不存在或不属于当前组织" before the test ever
+     *       reaches the AR guard under test.</li>
+     *   <li>{@code salesOrderRepository.findByIdAndFactoryIdForUpdate} — row-locked load used by
+     *       both {@code lockSalesOrderForDelivery} (start-of-shipDelivery tenant/lock guard) and
+     *       {@code updateOrderDeliveryStatus}. Added alongside the AR-idempotency guard itself
+     *       (PESSIMISTIC_WRITE on the sales order row to serialize concurrent shipDelivery calls
+     *       and prevent the exact double-AR race this test class covers) — production calls this,
+     *       not plain {@code findById}, so the mock must stub it too.</li>
+     *   <li>{@code salesOrderRepository.findById} — still called separately by the AR block itself
+     *       (unlocked read, after the record is already locked/saved)</li>
      *   <li>{@code salesOrderItemRepository.findBySalesOrderId} — called inside updateOrderDeliveryStatus</li>
      *   <li>{@code deliveryRecordRepository.save} / {@code salesOrderRepository.save} — persist results</li>
      * </ul>
      */
     private void stubCommonDeliveryDeps(SalesDeliveryRecord delivery, SalesOrder order) {
         when(deliveryRecordRepository.findById(DELIVERY_ID)).thenReturn(Optional.of(delivery));
+        when(deliveryRecordRepository.findByIdAndFactoryIdForUpdate(DELIVERY_ID, FACTORY_ID))
+                .thenReturn(Optional.of(delivery));
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID)).thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(Collections.emptyList());
         when(deliveryRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(salesOrderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
