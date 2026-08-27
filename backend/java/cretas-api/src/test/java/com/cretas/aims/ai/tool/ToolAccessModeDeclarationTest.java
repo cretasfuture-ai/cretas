@@ -262,7 +262,7 @@ class ToolAccessModeDeclarationTest {
     /**
      * {@code revenue_report_generate} 是全仓库<b>唯一</b>一条"声明 READ 而名称启发式判 WRITE"的例外
      * (它的名字含 {@code _GENERATE} 后缀)。它之所以合法, 是因为 {@link WriteGuardService}
-     * 的 {@code NON_DESTRUCTIVE_GENERATE_NAMES} 里有一条<b>显式写下的、有意为之的</b>豁免 ——
+     * 的 {@code NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS} 里有一条<b>显式写下的、有意为之的</b>豁免 ——
      * 不是启发式猜出来的, 也不是回填时"拿不准"留下的。
      *
      * <p>本用例把两侧钉在一起: 任何一侧被改动而另一侧没跟上, 构建就红。没有这道锁, 这条 READ
@@ -274,9 +274,9 @@ class ToolAccessModeDeclarationTest {
         WriteGuardService guard = new WriteGuardService();
         final String tool = "revenue_report_generate";
 
-        // 1) WriteGuard 侧: 豁免必须还在 —— 若被移出 NON_DESTRUCTIVE_GENERATE_NAMES, 这里先红
+        // 1) WriteGuard 侧: 豁免必须还在 —— 若被移出 NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS, 这里先红
         assertThat(guard.hasWriteSuffix(tool))
-                .as("WriteGuardService.NON_DESTRUCTIVE_GENERATE_NAMES 里的 '%s' 豁免不见了。"
+                .as("WriteGuardService.NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS 里的 '%s' 豁免不见了。"
                     + "豁免既然撤销, 声明侧也必须同步改成 WRITE (见 ToolAccessModeSeed)。", tool)
                 .isFalse();
 
@@ -301,7 +301,7 @@ class ToolAccessModeDeclarationTest {
                 .containsExactly(tool);
     }
 
-    /** 与 {@code WriteGuardService.NON_DESTRUCTIVE_GENERATE_NAMES} 一一对应的登记簿。 */
+    /** 与 {@code WriteGuardService.NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS} 一一对应的登记簿。 */
     private static final List<String> NON_DESTRUCTIVE_EXEMPTIONS = List.of("revenue_report_generate");
 
     @Test
