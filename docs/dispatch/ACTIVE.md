@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827` — `review` — Owner: `codex/wh-approval-integrate-20260827` — Base SHA `04f0ecbb90f38400b78b4ee1969cd2ee3c6af558`。旧分支三个提交中，Java/Web/SQL 修复与温控假数据修复已补丁等价进入 main；最新 main 移植实测只剩 RN 首页栈缺失 `WHLocationManage` / `WHTempMonitor` 注册。仓位硬编码棘轮已由 main 上的 `StorageLocationIsNeverAHardcodedDescriptionContractTest` 覆盖。最近生产 Java 回执 commit `dcc846b08bf3651810cb37078e9c2ed0c8fe9add` 与当前 main 的 `backend/java/cretas-api/src/main` 和 `web-admin/src` 完全一致，因此本批只需 RN OTA。验收：`StorageLocationIsNeverAHardcodedDescriptionContractTest`，RN 仓库导航目标 Jest，`nativeVersionConsistencyContract.test.ts`，`tsc --noEmit`；PR 合入后从 clean exact `origin/main` 以 runtimeVersion `1.0.4` 执行自托管 OTA 并验证 manifest/CDN/admin，不重启 Java/Web。
+
 - `QA-JAVA-NIGHTLY-RATCHET-20260827` — `merged` — Owner: `claude-code/nightly-burndown` — **夜间棘轮的第一次真实读数：基线 49 → 5，并抓到它建成以来的第一批新增红（8 条）**。判据来自 run `33081570292`（`java-full-nightly` on `9d26e655`，自建 runner）：`共跑 12007 个测试 · 红 13 · 基线 49`，`已修好 44` / `没跑到 0` / `新增 8`；`mvn` 侧 `Tests run: 12007, Failures: 2, Errors: 11` 对得上，且 `12007 > 11891 × 0.9` 未触发 rc=2 ⇒ 这一轮完整。**#197（`ddl-auto` `create-drop` → `create`）的 H2 schema 毒源诊断成立**（44/49）。落地 **#233**（修 8 条新增红）+ **#234**（削基线 49 → 5）。交接件 `HANDOFF-2026-08-27-nightly-ratchet-first-real-catch.md`。**收尾判据**：合并后又跑一次（run `33085335136` on `04f0ecbb`）得 `共跑 12009 个测试 · 红 5 · 基线 5 · 没有新增红`，rc=0，两个失败分支均 `skipped`；且总数 12007 → **12009 正好 +2**（= #233 新增的两条阴性对照）⇒ 那次跑批跑的确实是合并后的代码。
 
   🔴 **上一棒有一句是错的**：「剩下的 49 条全部是同一个根因」——对 5 条不成立。`FactoryConfigServiceImplReorderIT` 4 条的真实报错是 `Connection to localhost:5432 refused`（要真 PostgreSQL，由 `ci.yml` 的 pgvector 服务容器提供，而 `java-full-nightly` 没有 `services:`，自建 macOS runner 也起不了）；`SalesOrderFinanceApprovedFanOutIntegrationTest` 1 条是异步 fan-out 轮询到超时（第一条断言**是通过的**）。**H2 毒源和「缺 PG」两条不同的路通向同一个长相（本机绿 / CI 红）** ⇒ 症状分布集中不等于根因只有一个。
@@ -12,7 +14,6 @@
   ⛔ **剩下 5 条各自的下一步已写进 `known-failing-tests.txt` 的注释**，两条都别顺手做：(a) 加 `@Disabled`/`assumeTrue` 会让它在**真有 PG 的那条路上**也一起沉默 —— 先决定夜间跑批要不要有 PG；(b) 「真回归」和「轮询窗口不够」的下一步动作相反，别先入为主。
 
   ⚠️ **下一棒第一件事**：看 2026-08-27 18:00Z（北京 8-28 02:00）那次 **`schedule` 事件有没有真的发生** —— 这个工作流至今**全部运行都是 `workflow_dispatch`**，cron 直到 #178（今天 05:00Z）才被从 `disabled_manually` 打开。靠人记得手工触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
-
 - `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `queued` — Owner: `未分配` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
 
   **⚠️ 这不是理论问题 —— 2026-08-27 一天之内因它栽了两次**：① `MaterialConsumptionNotesAndPlanRefTest`（一条「现状钉住」型断言）**在 main 上红了很久没人看见**，它设计出来就是为了拦住那种改动，结果拦了个寂寞（本次 CI 日志 grep 该类名 0 命中）；② 我新写的两道闸类名不合规，**只会被编译不会被执行**，靠 `GateSelectorCoverageContractTest` 这道元闸才抓住。
@@ -120,6 +121,8 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+
+- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827`：仅 `frontend/CretasFoodTrace/src/navigation/warehouse/WHHomeStackNavigator.tsx`、`docs/dispatch/ACTIVE.md` 与当日归档；仓位硬编码棘轮复用 main 上现有的 `StorageLocationIsNeverAHardcodedDescriptionContractTest`。不改 Java/Web 生产代码、Entity/Repository/Flyway/Security，不覆盖 `cretas-wh-voucher-20260827` 未提交改动，不重启 Java/Web，不在本轮执行 F006 业务写入。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
