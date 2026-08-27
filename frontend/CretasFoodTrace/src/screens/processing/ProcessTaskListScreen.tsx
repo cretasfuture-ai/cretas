@@ -28,6 +28,42 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   SUPPLEMENTING: { label: '补报中', color: '#e6a23c' },
 };
 
+/** 三个筛选档各自的真实总数; `null` = 那一档没问到。 */
+type TaskCounts = { active: number | null; completed: number | null; all: number | null };
+
+/** 「三个档都没问到」。⛔ 注意不是 `{active: 0, ...}` —— 那是一个完全不同的断言。 */
+const NO_COUNTS: TaskCounts = { active: null, completed: null, all: null };
+
+/**
+ * 筛选档标签: 问到了就带上计数(**含 0**), 没问到就只印裸标签。
+ * ⛔ 不许 `?? 0` —— 「进行中 (0)」是「现在没有在做的活」, 而没问到时我们不知道。
+ */
+function tabLabel(text: string, count: number | null): string {
+  return count === null ? text : `${text} (${count})`;
+}
+
+/**
+ * 计划时间的展示串。
+ *
+ * 后端 `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")` 送来的是
+ * `"2026-08-26 08:00:00"` —— **已经是本地日历时间**(后端全线 GMT+8)。
+ *
+ * ⛔ 所以这里【不许】`new Date(raw)` 再格式化:
+ *   1. 那会把一个不带时区的串按各平台自己的规则解释(iOS / Android / Hermes 不一致),
+ *      再按设备时区挪一次 —— 挪出来可能差一天。这与本仓刚清完 184 处的
+ *      `toISOString()` UTC 截断是同一族缺陷: 都是给一个已经定好的日历日再换一次算。
+ *   2. 要显示的东西**已经在串里**, 纯切串不需要经过 Date。
+ *
+ * 认不出的形状原样返回 —— ⛔ 不猜、不兜底成今天。
+ */
+export function formatPlannedAt(raw: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(raw);
+  if (!m) return raw;
+  const [, , month, day, hh, mm] = m;
+  const date = `${month}/${day}`;
+  return hh && mm ? `${date} ${hh}:${mm}` : date;
+}
+
 export default function ProcessTaskListScreen() {
   const navigation = useNavigation<Props['navigation']>();
   const canGoBack = useNavigationState(state => state.routes.length > 1);
@@ -40,6 +76,11 @@ export default function ProcessTaskListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * 三个筛选档各自的真实总数。`null` = 那一档没问到 ⇒ 渲染成不带括号的裸标签,
+   * ⛔ 不许兜 0 —— 筛选器上的 `0` 是「这一档没有」, 与「没问到」含义相反。
+   */
+  const [counts, setCounts] = useState<TaskCounts>(NO_COUNTS);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -67,10 +108,28 @@ export default function ProcessTaskListScreen() {
     }
   }, [selectedStatus]);
 
+  /**
+   * 计数与列表分开取: 列表只有当前档, 而三个档的数要一次全拿到 ——
+   * 「选之前就知道每一档有多少条」正是这排按钮的意义。
+   * ⛔ 计数失败不影响列表: `getTaskCounts` 内部逐档吞错并返回 null, 不会 reject。
+   */
+  const fetchCounts = useCallback(async () => {
+    try {
+      const next = await processTaskApiClient.getTaskCounts();
+      // 拿不到一个像样的结果 = 没问到, 三档回到 null(裸标签)。
+      setCounts(next ?? NO_COUNTS);
+    } catch {
+      // ⛔ 不兜 0 —— 「问不到」不是「这一档一条都没有」。
+      // 计数问不到也不许拖垮列表: 列表有它自己的 error 状态。
+      setCounts(NO_COUNTS);
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       fetchTasks();
-    }, [fetchTasks])
+      fetchCounts();
+    }, [fetchTasks, fetchCounts])
   );
 
   // 首次使用引导
@@ -88,7 +147,7 @@ export default function ProcessTaskListScreen() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchTasks();
+    await Promise.all([fetchTasks(), fetchCounts()]);
     setRefreshing(false);
   };
 
@@ -110,6 +169,28 @@ export default function ProcessTaskListScreen() {
     () => buildReportableTaskIds(orderedTasks),
     [orderedTasks]
   );
+
+  /** 当前档的总数 —— 计数与列表用的是同一个档。 */
+  const totalForTab: number | null =
+    selectedStatus === 'active'
+      ? counts.active
+      : selectedStatus === 'COMPLETED'
+        ? counts.completed
+        : counts.all;
+
+  /**
+   * 「共 N 条, 当前显示 M 条」。
+   *
+   * 只在**确实有差额**时出现: 总数没问到(null)时不编, 搜索中不显示
+   * (那时 M 是搜索结果, 与 N 不是一回事, 并排放会造出第三个对不上的数)。
+   */
+  const truncationNotice: string | null = (() => {
+    if (totalForTab === null) return null;
+    if (searchQuery) return null;
+    const visible = orderedTasks.length;
+    if (visible >= totalForTab) return null;
+    return `共 ${totalForTab} 条, 当前显示前 ${visible} 条`;
+  })();
 
   /**
    * 进度百分比。**没有计划量就没有进度可言** —— 返回 null, 让调用方不画进度条。
@@ -149,8 +230,16 @@ export default function ProcessTaskListScreen() {
               ) : null}
             </View>
             <View style={{ flexDirection: 'row', gap: 6 }}>
-              {(item as any).overdue && (
-                <View style={[styles.statusBadge, { backgroundColor: '#f5636420' }]}>
+              {/* 三态: 只有【明确 true】才挂徽章。
+                  `undefined`(后端判不了 = 没设计划完成日) 与 `false` 一样不挂,
+                  但它俩在下面「计划完成」那一栏是分得开的 —— 「未排期」vs 具体日期。
+                  ⛔ 不要写成 `item.overdue &&`: 那对 undefined 也一样不挂, 但会让人
+                     以为这里判的是布尔, 下一个人就会顺手去加 `?? false`。 */}
+              {item.overdue === true && (
+                <View
+                  testID={`process-task-overdue-badge-${item.id}`}
+                  style={[styles.statusBadge, { backgroundColor: '#f5636420' }]}
+                >
                   <Text style={[styles.statusText, { color: '#f56364' }]}>超期</Text>
                 </View>
               )}
@@ -171,6 +260,48 @@ export default function ProcessTaskListScreen() {
                 <Text style={styles.value}>{item.unit || 'kg'}</Text>
               </View>
             </View>
+
+            <View style={styles.row}>
+              <View style={styles.col}>
+                <Text style={styles.label}>计划完成</Text>
+                {item.plannedEndAt ? (
+                  <Text
+                    testID={`process-task-planned-end-${item.id}`}
+                    style={[styles.value, item.overdue === true ? styles.valueOverdue : null]}
+                  >
+                    {formatPlannedAt(item.plannedEndAt)}
+                  </Text>
+                ) : (
+                  <Text
+                    testID={`process-task-planned-end-unset-${item.id}`}
+                    style={[styles.value, styles.valueUnset]}
+                  >
+                    未排期
+                  </Text>
+                )}
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>责任人</Text>
+                {item.assignedToName ? (
+                  <Text testID={`process-task-assignee-${item.id}`} style={styles.value}>
+                    {item.assignedToName}
+                  </Text>
+                ) : (
+                  <Text
+                    testID={`process-task-assignee-unset-${item.id}`}
+                    style={[styles.value, styles.valueUnset]}
+                  >
+                    未分配
+                  </Text>
+                )}
+              </View>
+            </View>
+
+            {item.plannedStartAt ? (
+              <Text testID={`process-task-planned-start-${item.id}`} style={styles.plannedStart}>
+                计划开始 {formatPlannedAt(item.plannedStartAt)}
+              </Text>
+            ) : null}
 
             <View style={styles.quantityRow}>
               <View style={styles.col}>
@@ -276,14 +407,28 @@ export default function ProcessTaskListScreen() {
           value={selectedStatus}
           onValueChange={setSelectedStatus}
           buttons={[
-            { value: 'active', label: '进行中' },
-            { value: 'COMPLETED', label: '已完成' },
-            { value: 'all', label: '全部' },
+            { value: 'active', label: tabLabel('进行中', counts.active) },
+            { value: 'COMPLETED', label: tabLabel('已完成', counts.completed) },
+            { value: 'all', label: tabLabel('全部', counts.all) },
           ]}
           style={styles.segmentedButtons}
           density="small"
         />
       </View>
+
+      {/*
+        🔴 计数是「这一档**有多少条**」(服务端总数), 列表只取了前一页。
+        两者不等时必须**说出来** —— 否则用户读到「全部 (348)」再往下翻只找到 50 条,
+        会以为数据丢了。⛔ 沉默的截断比没有计数更糟。
+        `visibleCount < totalForTab` 才显示: 相等时没有差额, 不必打扰。
+      */}
+      {truncationNotice ? (
+        <View style={styles.truncationRow}>
+          <Text testID="process-task-truncation" style={styles.truncationText}>
+            {truncationNotice}
+          </Text>
+        </View>
+      ) : null}
 
       <FlatList
         testID="process-task-flatlist"
@@ -325,6 +470,8 @@ const styles = StyleSheet.create({
   },
   searchInput: { minHeight: 0 },
   segmentedButtons: { margin: 16, marginTop: 0 },
+  truncationRow: { paddingHorizontal: 16, paddingBottom: 8, marginTop: -8 },
+  truncationText: { fontSize: 12, color: theme.colors.textSecondary },
   listContent: { padding: 16, paddingTop: 0 },
   card: { marginBottom: 12 },
   cardHeader: {
@@ -348,6 +495,9 @@ const styles = StyleSheet.create({
   value: { color: theme.colors.text, fontWeight: '600', fontSize: 18 },
   // 「未设置」不是一个数值, 视觉上也不该长得像数值 —— 弱化 + 缩小, 避免被当成读数
   valueUnset: { color: theme.colors.textTertiary, fontWeight: '500', fontSize: 15 },
+  // 超期时把「计划完成」染红 —— 徽章和这个日期说的是同一件事, 视觉上要连起来
+  valueOverdue: { color: '#f56364' },
+  plannedStart: { color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 },
   highlight: { color: theme.colors.primary, fontWeight: '700' },
   progressContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   progressTrack: {

@@ -11,6 +11,7 @@ import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.UpdatePlanScheduleMetaRequest;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
+import com.cretas.aims.enums.DeliveryWarnLevel;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementBomEligibilityResponse;
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
@@ -2374,16 +2375,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private DeliveryWarnDTO classifyDeliveryWarn(ProductionPlan plan, LocalDate today) {
         long days = ChronoUnit.DAYS.between(today, plan.getExpectedCompletionDate());
-        String level;
-        if (days < 0) {
-            level = "OVERDUE";
-        } else if (days < 3) {
-            level = "URGENT";
-        } else if (days < 7) {
-            level = "WARN";
-        } else {
-            level = "NORMAL";
-        }
+        // 判据本体搬去 DeliveryWarnLevel —— 工序任务卡片的「超期」徽章读的是同一份。
+        // ⛔ 不要在这里把四档再写一遍: 两份口径一定会漂, 而且漂了不报错。
+        String level = DeliveryWarnLevel.ofDaysUntilDeadline(days).name();
         String productTypeName = null;
         try {
             if (plan.getProductType() != null) {

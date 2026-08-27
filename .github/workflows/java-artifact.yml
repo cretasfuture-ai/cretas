@@ -1,0 +1,250 @@
+name: Java deploy artifact
+
+# 打包 exact-commit 的 Java 部署制品。
+#
+# ## 为什么从 ci.yml 拆出来（2026-08-27）
+#
+# 这些步骤原本在 `ci.yml` 的 `java-build-test` job 里。那个 job 在**job 级**声明了
+# `services: postgres`（给 `full_audit` 的 IT 用），而**服务容器只在 Linux runner 上
+# 支持** —— 于是托管额度耗尽后它整个跑不起来，`runs-on` 也没法切到自建。
+#
+# 实测代价：额度耗尽期间每次 Java 合并都不产制品，`prewarm-main-artifact.sh` 拿到
+# `no_main_artifact_listed`，发布只能回退本地 Maven（**204s vs 命中 25s**）。
+#
+# ⇒ 拆开之后：本文件不需要任何服务容器（push 路径上那些 IT 本来就不跑），
+#   可以由 `switch_ci_runner.py` 统一切到自建；`ci.yml` 退回成纯手动全量审计。
+#
+# ⛔ 打包逻辑只有这一份 —— ci.yml 里对应的步骤已删除，不是留一份副本。
+#
+# ## 制品怎么被消费
+#
+# `release-ci-artifact.sh` 按 **artifact 名字 + 分支**找（`cretas-java-<sha>` /
+# `head_branch == "main"`），**不按工作流名字** —— 所以从 ci.yml 搬到这里对
+# 部署脚本完全透明，实测确认过。
+#
+# ⚠️ paths 必须覆盖【整个】 RELEASE_BACKEND_PATH (= backend/java/cretas-api)，
+# 因为消费端认制品靠的是 `git rev-parse <sha>:backend/java/cretas-api` 这棵树。
+# 需要成立的不变量是：**那棵树变了 ⟺ 本工作流被触发**。
+# (原 ci.yml 只列 src/main + pom + lib 时，实测最近 120 个 main commit 里有 3 个
+#  纯测试改动命中了这个洞 —— 那些 commit 上永远取不到匹配的制品。)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/java/cretas-api/**'
+  # 🔴 自限定的 PR 触发: 只在改到**这个工作流自己**或它依赖的脚本时跑。
+  #    理由是「谁保证它被调用」—— push 触发只在 main 上, 意味着任何对本文件的
+  #    改动都是**合进 main 之后才第一次执行**。那正是本仓反复踩的形态:
+  #    改了闸, 而闸本身没被任何东西验过。
+  #    ⚠️ 代价可控: 它只在这两个文件变化时触发, 平常的后端 PR 一次都不跑。
+  pull_request:
+    paths:
+      - '.github/workflows/java-artifact.yml'
+      - 'scripts/ci/resolve-maven.sh'
+  workflow_dispatch:
+    inputs:
+      target_tests:
+        description: >-
+          Maven test selector the packaged artifact must pass (e.g.
+          ProductionStockAllocationServiceTest). Empty means the artifact
+          carries NO test evidence and cannot be trusted for deployment.
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package exact-commit deploy artifact
+    # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
+    #    统一切换(一次改全部已接入的工作流并断言各处一致)。
+    #    见 `.claude/rules/ci-runner-routing.md`。
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 45
+
+    # attestations/id-token 是签制品 provenance 所必需的; 其余保持最小。
+    # 显式声明会【替换】掉仓库默认权限, 所以这里列全。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚠️ 发行版用 temurin 而不是 ci.yml 原来的 zulu: temurin 21 已实测能在这台
+      #    自建 macOS ARM runner 上装起来(jpa-gate-main.yml 同款, 且工具缓存已热)。
+      #    manifest 里的 `jdk_vendor` 会跟着变成 Adoptium —— 实测全仓无消费方
+      #    (被消费的只有 target_tests 与 maven_command)，且它记录的本来就是
+      #    「实际是谁构建的」，如实变更比钉住一个假值好。
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: backend/java/cretas-api/pom.xml
+
+      # 自建 runner 上没有系统 mvn, 只有仓库自带的 ./mvnw。解析逻辑收在一处,
+      # jpa-gate-main.yml 用的是同一个脚本。
+      - name: Resolve maven command
+        working-directory: backend/java/cretas-api
+        run: |
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          echo "MVN=$MVN" >> "$GITHUB_ENV"
+          echo "MVN_USED=$MVN"
+
+      # 🔴 2026-08-12: selector 从只有 '*RepositoryQueryValidationTest' 扩到四项。
+      # 那天 prod 部署失败(OssServiceImpl 上的 @ConditionalOnBean 依赖 jar 条目物理
+      # 存在), 而当时的选择器一条都没碰到那条路径。
+      # 实测代价: 选择器从 54 条 → 358 条测试, 本地 wall 129s(热编译), 远低于本步上限。
+      #
+      # ⚠️ TARGET_TESTS 在**这里求值一次**, 然后经 $GITHUB_ENV 传给写 manifest 的
+      # 那一步 —— manifest 里的 target_tests 是预热覆盖检查(requested ⊆ ci_ran)的判据,
+      # 两边必须是同一个值。原版在两个步骤各写一份同样的表达式并靠注释要求「逐字相同」,
+      # 那是形态 D；现在只有一份, 漂不起来。
+      # target_tests 经环境变量传入, 绝不插值进 shell:
+      # selector 是操作者提供的文本, `${{ }}` 写在 run: 里就是命令注入点。
+      - name: Package exact-commit deploy artifact
+        working-directory: backend/java/cretas-api
+        timeout-minutes: 30
+        env:
+          TARGET_TESTS: ${{ inputs.target_tests || (github.event_name != 'workflow_dispatch' && '*RepositoryQueryValidationTest,*StartupGuardTest,FlywayVersionUniquenessTest,*ContractTest' || '') }}
+        run: |
+          started=$(date +%s)
+          if [ -n "$TARGET_TESTS" ]; then
+            # 测试跑在制品存在【之前】, 所以选择器失败意味着没有制品,
+            # 而不是一个没人验过的制品。
+            "$MVN" -B package -Dtest="$TARGET_TESTS" \
+              -Dsurefire.failIfNoSpecifiedTests=false -pl .
+            maven_command="$MVN -B package -Dtest=$TARGET_TESTS -pl ."
+          else
+            "$MVN" -B package -Dmaven.test.skip=true -pl .
+            maven_command="$MVN -B package -Dmaven.test.skip=true -pl ."
+          fi
+          {
+            echo "MAVEN_WALL_SECONDS=$(( $(date +%s) - started ))"
+            echo "MAVEN_COMMAND=$maven_command"
+            # 传给下一步写 manifest —— 唯一一份, 不在两处各求值一次。
+            echo "TARGET_TESTS=$TARGET_TESTS"
+          } >> "$GITHUB_ENV"
+
+      # 产出与 release-jar-manifest.sh 本地版逐字段同形的 manifest, 让 ECS 侧
+      # 判 deployable_trust_verified 时, CI 制品与本地构建走同一套判据。
+      #
+      # ⚠️ 2026-08-27 可移植性: 原版用了 `sha256sum` 和 `stat -c %s`,
+      #    **两个都是 GNU 专有** —— macOS 上 `sha256sum` 根本不存在,
+      #    `stat -c` 是 BSD stat 的非法选项。自建 runner 是 macOS ⇒ 都换成
+      #    两边都成立的写法。`wc -c <` 取字节数比 `stat` 分支更简单, 且无平台差异。
+      - name: Prepare exact-commit deploy artifact
+        working-directory: backend/java/cretas-api/target
+        # ⚠️ TARGET_TESTS 不在这里重新求值 —— 它由上一步写进 $GITHUB_ENV。
+        #    原版在两个步骤里各写一份同样的表达式, 并靠注释要求「必须逐字相同」;
+        #    那是形态 D。现在只有一份, 漂不起来。
+        run: |
+          JAR=cretas-backend-system-1.0.0.jar
+          test -f "$JAR"
+          # sha256sum(GNU) 与 shasum -a 256(macOS 自带) 输出格式相同: "<hash>  <file>"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$JAR" > "$JAR.sha256"
+          else
+            shasum -a 256 "$JAR" > "$JAR.sha256"
+          fi
+          printf '%s\n' "$GITHUB_SHA" > "$JAR.commit"
+          backend_tree=$(git -C "$GITHUB_WORKSPACE" rev-parse "HEAD:backend/java/cretas-api")
+          {
+            echo "format=cretas-release-jar-manifest-v1"
+            echo "success=true"
+            echo "build_commit=$GITHUB_SHA"
+            echo "backend_tree=$backend_tree"
+            echo "jar_sha256=$(cut -d ' ' -f 1 < "$JAR.sha256")"
+            echo "jar_path=$JAR"
+            echo "jdk_vendor=$(java -XshowSettings:properties -version 2>&1 |
+              sed -n 's/.*java.vendor = //p' | head -1)"
+            echo "jdk_version=$(java -XshowSettings:properties -version 2>&1 |
+              sed -n 's/.*java.version = //p' | head -1)"
+            echo "maven_command=$MAVEN_COMMAND"
+            echo "target_tests=$TARGET_TESTS"
+            echo "maven_wall_seconds=$MAVEN_WALL_SECONDS"
+            echo "jar_size_bytes=$(wc -c < "$JAR" | tr -d ' ')"
+            echo "built_by=github-actions"
+          } > release-jar.manifest
+          echo "--- manifest ---"
+          cat release-jar.manifest
+
+      # ---- provenance ----
+      # 上面那份 manifest 能证明【内部自洽】, 但证明不了【出处】: 它和 JAR 装在同一
+      # 个 ZIP 里, 任何能造出这个 ZIP 的人都能自己写一份"测试通过了"。所以 ECS 侧的
+      # deployable_trust_verified 在拿到可信签名之前一直是 false —— 这是设计, 不是缺陷。
+      #
+      # ⚠️ 2026-08-25 实测: 这一步在本组织【必然失败】——
+      #   "Feature not available for the cretasfuture-ai organization."
+      #   GitHub 规则: artifact attestations 只对【公开仓库】可用; 私有仓库要
+      #   Enterprise Cloud。本组织实测 plan=free / visibility=private ⇒ 签不上。
+      # ⇒ 保持 continue-on-error: 签得上就签, 签不上照常出制品。
+      # ⛔ 不伪造: 签不上时不产 bundle, ECS 侧 deployable_trust_verified 保持 false。
+      - name: Attest deploy artifact provenance
+        id: attest
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
+
+      # 把签名 bundle 放进制品 ZIP 一起下发 —— bundle 已被签过, 中途改一个字节验签
+      # 就挂, 所以可以走任何不可信通路(包括东京中继)。
+      # ⚠️ trusted root 绝不能这么下发: 那等于把"验证者"和"被验证者"装进同一个包。
+      - name: Ship attestation bundle with the artifact
+        if: ${{ steps.attest.outcome == 'success' }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          test -n "$BUNDLE_PATH"
+          test -s "$BUNDLE_PATH"
+          cp -- "$BUNDLE_PATH" \
+            backend/java/cretas-api/target/release-jar.attestation.jsonl
+          echo "attestation bundle bytes: $(wc -c < \
+            backend/java/cretas-api/target/release-jar.attestation.jsonl | tr -d ' ')"
+
+      # upload 那步把 if-no-files-found 放宽成 warn 是为了让 attestation 可选,
+      # 但那会【连带】让真正必需的文件缺失也只是 warn。这一步把口子堵回来:
+      # 四个必需文件逐个校验, 缺任何一个都是硬失败。
+      - name: Verify required artifact files exist
+        working-directory: backend/java/cretas-api/target
+        run: |
+          missing=0
+          for f in cretas-backend-system-1.0.0.jar \
+                   cretas-backend-system-1.0.0.jar.sha256 \
+                   cretas-backend-system-1.0.0.jar.commit \
+                   release-jar.manifest; do
+            if [ ! -s "$f" ]; then
+              echo "MISSING_REQUIRED_ARTIFACT=$f"
+              missing=1
+            fi
+          done
+          # attestation 是可选的 —— 只报告它在不在, 不影响成败。
+          if [ -s release-jar.attestation.jsonl ]; then
+            echo "ATTESTATION=present"
+          else
+            echo "ATTESTATION=absent (deployable_trust_verified 将保持 false)"
+          fi
+          exit "$missing"
+
+      - name: Upload exact-commit deploy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cretas-java-${{ github.sha }}
+          path: |
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.sha256
+            backend/java/cretas-api/target/cretas-backend-system-1.0.0.jar.commit
+            backend/java/cretas-api/target/release-jar.manifest
+            backend/java/cretas-api/target/release-jar.attestation.jsonl
+          # ⚠️ warn 而不是 error: attestation.jsonl 是【可选】的(见上面的说明)。
+          #    JAR / sha256 / commit / manifest 四个仍然必须在 —— 由上一步单独硬校验。
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 1

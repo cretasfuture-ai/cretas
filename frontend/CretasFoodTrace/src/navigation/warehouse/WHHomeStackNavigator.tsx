@@ -1,6 +1,9 @@
 /**
  * Warehouse 首页 Stack 导航器
- * 包含: 首页Dashboard、发货详情、入库详情、预警处理、温控监测
+ * 包含: 首页Dashboard、仓库地图/库位、温控监测、领料调拨
+ *
+ * ⚠️ 「发货详情 / 入库详情 / 预警处理」曾经也注册在这里, 2026-08-26 退役 ——
+ *    见下方那段退役留痕。它们仍然存在, 只是各自只剩一个 WH 前缀的注册名。
  */
 
 import React from "react";
@@ -10,10 +13,6 @@ import { WHHomeStackParamList } from "../../types/navigation";
 // 导入首页相关页面组件
 import WHHomeScreen from "../../screens/warehouse/home/WHHomeScreen";
 
-// 详情页 (先用占位符，后续实现)
-import WHOutboundDetailScreen from "../../screens/warehouse/outbound/WHOutboundDetailScreen";
-import WHInboundDetailScreen from "../../screens/warehouse/inbound/WHInboundDetailScreen";
-import WHAlertHandleScreen from "../../screens/warehouse/shared/WHAlertHandleScreen";
 import WHTempMonitorScreen from "../../screens/warehouse/inventory/WHTempMonitorScreen";
 import WHLocationManageScreen from "../../screens/warehouse/inventory/WHLocationManageScreen";
 import TransferListScreen from "../../screens/factory-admin/inventory/TransferListScreen";
@@ -31,33 +30,27 @@ export function WHHomeStackNavigator() {
       {/* 首页Dashboard */}
       <Stack.Screen name="WHHome" component={WHHomeScreen} />
 
-      {/* 发货详情 */}
-      <Stack.Screen
-        name="OutboundDetail"
-        component={WHOutboundDetailScreen}
-        options={{ title: "发货详情" }}
-      />
+      {/* ⛔ 2026-08-26 退役: 本栈原有四条**无 WH 前缀**的重复注册
+          (`OutboundDetail` / `InboundDetail` / `AlertHandle` / `TempMonitor`)。
+          四条各自都有一个**同组件、有人跳**的 WH 前缀孪生注册, 没有任何地方跳这四个名字:
 
-      {/* 入库详情 */}
-      <Stack.Screen
-        name="InboundDetail"
-        component={WHInboundDetailScreen}
-        options={{ title: "入库详情" }}
-      />
+            OutboundDetail -> WHOutboundDetail (WHOutboundStackNavigator)
+                              WHOutboundListScreen 跳它 (三处)
+            InboundDetail  -> WHInboundDetail  (WHInboundStackNavigator)
+            AlertHandle    -> WHAlertHandle    (WHProfileStackNavigator)
+                              WHAlertListScreen 跳它 (两处)
+            TempMonitor    -> WHTempMonitor    (本文件下方)
+                              WHLocationManageScreen 跳它
 
-      {/* 预警处理 */}
-      <Stack.Screen
-        name="AlertHandle"
-        component={WHAlertHandleScreen}
-        options={{ title: "预警处理" }}
-      />
+          这正是「同一个东西有两份, 它一定会漂」—— 下方 `WHTempMonitor` 那条注释
+          就是漂出来的产物: 有人发现名字对不上, 于是**又加了一个注册名**而不是收敛成一个。
+          ⚠️ 退役的是**注册名**, 不是屏 —— 四个组件一个都没删, 都还挂在各自的 WH 名字下。
 
-      {/* 温控监测 */}
-      <Stack.Screen
-        name="TempMonitor"
-        component={WHTempMonitorScreen}
-        options={{ title: "温控监测" }}
-      />
+          ⚠️ 留痕: `InboundDetail` 的孪生 `WHInboundDetail` **自己也没人跳**
+          (WHInboundListScreen 的卡片点击跳的是 WHReceiptCreate)。所以入库详情屏
+          在两个名字下都走不到 —— 这一条不是本次退役造成的, 退役前后同样走不到。
+          可达性闸看不见它, 是因为屏自己那行 `RouteProp<…, "WHInboundDetail">`
+          里的字符串被算成了「有人引用」。已在 PR 描述里单列。*/}
 
       {/* 仓库地图 / 库位 —— 2026-08-25 补。
           原本只挂在 WHInventoryStack 下, 而那个 Tab 被 SIMPLIFIED_WAREHOUSE_NAV

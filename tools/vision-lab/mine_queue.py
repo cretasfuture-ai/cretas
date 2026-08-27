@@ -22,7 +22,8 @@ from PIL import Image, ImageOps
 
 DEFECTS = {"MISSING_WHITE_LABEL", "MISSING_COLOR_LABEL", "BOTH_MISSING"}
 MINING_SCAN_CACHE_SCHEMA = "liushanmen-mining-clean-v2"
-MINING_REVIEW_POLICY = "all-review-candidates-v1"
+MINING_REVIEW_POLICY = "complete-source-tray-review-candidates-v2"
+SOURCE_EDGE_MARGIN_RATIO = 0.005
 
 
 def sha256_file(path: Path) -> str:
@@ -162,6 +163,29 @@ def crop_can_be_reviewed(crop: np.ndarray) -> bool:
     return crop.ndim >= 2 and crop.shape[0] > 0 and crop.shape[1] > 0
 
 
+def tray_touches_source_edge(
+    box: list[float], image_width: int, image_height: int,
+    margin_ratio: float = SOURCE_EDGE_MARGIN_RATIO,
+) -> bool:
+    """Reject trays whose visible extent is clipped by the source photo.
+
+    Padding may legitimately touch the image boundary; the detected tray itself
+    may not.  A target tray at the source edge cannot prove a complete physical
+    tray and must never become label-training supervision.
+    """
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError("image dimensions must be positive")
+    if not 0.0 <= margin_ratio <= 0.5:
+        raise ValueError("margin_ratio must be between 0 and 0.5")
+    x0, y0, x1, y1 = (float(value) for value in box)
+    margin_x = image_width * margin_ratio
+    margin_y = image_height * margin_ratio
+    return (
+        x0 <= margin_x or y0 <= margin_y
+        or x1 >= image_width - margin_x or y1 >= image_height - margin_y
+    )
+
+
 def box_to_crop(box: list[float], crop_rect: tuple[float, float, float, float]) -> list[float]:
     x0, y0, x1, y1 = box
     cx0, cy0, cx1, cy1 = crop_rect
@@ -225,6 +249,7 @@ def main() -> None:
             hashes: list[imagehash.ImageHash] = []
             per_sku: Counter[str] = Counter()
             clean_cache_writes = 0
+            edge_touching_trays_excluded = 0
             for record in candidates:
                 if len(selected) >= args.max_queue:
                     break
@@ -234,7 +259,15 @@ def main() -> None:
                 frame = np.array(frame_pil)
                 screening = screen_image(frame, models, params)
                 review_candidates = trays_requiring_review(screening)
-                if not review_candidates:
+                safe_review_candidates = []
+                for tray in review_candidates:
+                    if tray_touches_source_edge(
+                        tray.box, screening.image_width, screening.image_height,
+                    ):
+                        edge_touching_trays_excluded += 1
+                        continue
+                    safe_review_candidates.append(tray)
+                if not safe_review_candidates:
                     record_clean_scan(
                         connection,
                         str(record["photo_id"]),
@@ -243,7 +276,7 @@ def main() -> None:
                     )
                     clean_cache_writes += 1
                 photo_count = 0
-                for tray in sorted(review_candidates, key=lambda item: -item.confidence):
+                for tray in sorted(safe_review_candidates, key=lambda item: -item.confidence):
                     sku = str(record.get("sku_code") or "UNKNOWN")
                     if per_sku[sku] >= args.max_per_sku or photo_count >= args.max_per_photo:
                         continue
@@ -261,6 +294,9 @@ def main() -> None:
                     selected.append({
                         "record": record, "tray": tray, "crop": crop, "crop_rect": crop_rect,
                         "phash": str(phash), "sku": sku,
+                        "source_image_size": [
+                            int(screening.image_width), int(screening.image_height),
+                        ],
                     })
                     per_sku[sku] += 1
                     photo_count += 1
@@ -273,6 +309,7 @@ def main() -> None:
         print(json.dumps({
             "created": False, "photos_scanned": len(candidates), "queued": 0,
             "clean_cache_hits": cache_hits, "clean_cache_writes": clean_cache_writes,
+            "edge_touching_trays_excluded": edge_touching_trays_excluded,
             "screening_fingerprint": fingerprint,
         }, ensure_ascii=False))
         return
@@ -302,6 +339,9 @@ def main() -> None:
             "image_sha256": sha256_file(image_path), "perceptual_hash": item["phash"],
             "source_photo_id": str(record["photo_id"]), "source_task_id": str(record["task_id"]),
             "sku_code": item["sku"], "angle": "unclassified",
+            "target_tray_box_source_xyxy": [round(float(value), 6) for value in tray.box],
+            "source_image_size": item["source_image_size"],
+            "crop_rect_source_xyxy": [round(float(value), 6) for value in crop_rect],
             "label_v1_verdict": tray.verdict, "human_qc_verdict": "NO_DEFECT",
             "prelabel_boxes": len(boxes), "train_only": True,
         })
@@ -313,6 +353,8 @@ def main() -> None:
         "train_only": True, "evaluation_or_production_use_allowed": False,
         "photos_scanned": len(candidates), "queue_count": len(rows),
         "clean_cache_hits": cache_hits, "clean_cache_writes": clean_cache_writes,
+        "edge_touching_trays_excluded": edge_touching_trays_excluded,
+        "source_edge_margin_ratio": SOURCE_EDGE_MARGIN_RATIO,
         "screening_fingerprint": fingerprint,
         "sku_counts": dict(per_sku), "rows": rows,
     }
@@ -321,6 +363,7 @@ def main() -> None:
         "created": True, "queue": str(output), "photos_scanned": len(candidates),
         "queued": len(rows), "clean_cache_hits": cache_hits,
         "clean_cache_writes": clean_cache_writes,
+        "edge_touching_trays_excluded": edge_touching_trays_excluded,
         "screening_fingerprint": fingerprint,
     }, ensure_ascii=False, indent=2))
 

@@ -49,10 +49,15 @@ class PinnedBomFallsBackToRecipeWhenSnapshotMissingContractTest {
 
     /** 只测回退这一段, 用反射直接调私有方法 —— 它的输入输出都是纯数据。 */
     @SuppressWarnings("unchecked")
+    // ⚠️ 2026-08-27: 被测方法签名从 (factoryId, plan) 改成 (factoryId, recipeId, version) ——
+    //    主路径已改读【批次】创建时钉下的绑定, 兜底若仍读计划的, 两边会用不同的配方。
+    //    这里仍从 plan 取值传入, 是为了保持本测试原有的用例语义(它验的是「版本号对不对得上」),
+    //    ⛔ 不是说生产上还读计划 —— 生产上由 BatchBomBinding 决定读谁。
     private static Map<String, Object> invokeFallback(
             OrderCostBreakdownService service, ProductionPlan plan) {
         return (Map<String, Object>) ReflectionTestUtils.invokeMethod(
-                service, "pinnedBomSnapshotFromRecipe", F, plan);
+                service, "pinnedBomSnapshotFromRecipe", F,
+                plan.getSelectedBomRecipeId(), plan.getSelectedBomVersion());
     }
 
     private static OrderCostBreakdownService serviceWith(BomRecipe recipe, List<BomRecipeItem> items) {

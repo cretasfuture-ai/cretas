@@ -73,7 +73,10 @@ concurrency:
 jobs:
   jpa-gate:
     name: JPA repository query startup gate
-    runs-on: ubuntu-latest
+    # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
+    #    统一切换(一次改全部已接入的工作流并断言各处一致)。
+    #    见 `.claude/rules/ci-runner-routing.md`。
+    runs-on: [self-hosted, cretas]
     timeout-minutes: 20
 
     # 不起 Postgres 服务容器: 这些 *RepositoryQueryValidationTest 全部标注
@@ -94,19 +97,44 @@ jobs:
           cache: 'maven'
           cache-dependency-path: backend/java/cretas-api/pom.xml
 
+      # ⚠️ 2026-08-27: 原来这里是 `nproc` + `free -h` —— **两个都是 Linux 专有**,
+      #    在自建的 macOS runner 上直接 command not found, 整个 job 挂在
+      #    一个只负责打印的步骤上。接自建 runner 时这类命令是第一个绊子。
+      # ⇒ 改成两边都能跑的写法, 并且**不让它有能力弄红 job**(它只是报资源)。
       - name: Report runner resources
+        continue-on-error: true
         run: |
-          echo "CPU cores: $(nproc)"
-          free -h | head -2
+          if command -v nproc >/dev/null 2>&1; then
+            echo "CPU cores: $(nproc)"
+          else
+            echo "CPU cores: $(sysctl -n hw.ncpu 2>/dev/null || echo unknown)"
+          fi
+          if command -v free >/dev/null 2>&1; then
+            free -h | head -2
+          else
+            echo "Memory: $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024 / 1024 )) MB"
+          fi
 
       - name: JPA repository query startup gate
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
-        run: >-
-          mvn -B test
-          -Dspring.profiles.active=test
-          -Dtest='*RepositoryQueryValidationTest'
-          -Dsurefire.failIfNoSpecifiedTests=false
+        # ⚠️ 2026-08-27: `actions/setup-java` 只装 **JDK**, 不装 Maven。
+        #    托管的 ubuntu 镜像自带 mvn, 自建的 Mac 没有 ->
+        #    实测 `mvn: command not found` exit 127(JAVA_HOME 是对的, 只是没有 mvn)。
+        # ⇒ 有 mvn 就用 mvn(托管上行为逐字不变), 没有就落到仓里自带的
+        #    `./mvnw`(mode 755, 钉 Maven 3.9.6)。
+        # ⛔ 不无条件改用 ./mvnw —— 那会连托管上用的 Maven 版本一起换掉,
+        #    是一次没必要的行为改动。
+        run: |
+          set -e
+          # 解析逻辑收在 scripts/ci/resolve-maven.sh 一处 —— java-artifact.yml
+          # 用的是同一个脚本。⛔ 不在两个 workflow 里各写一份(形态 D)。
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          echo "MVN_USED=$MVN"
+          "$MVN" -B test \
+            -Dspring.profiles.active=test \
+            -Dtest='*RepositoryQueryValidationTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false
 
       - name: Upload surefire reports on failure
         if: failure()

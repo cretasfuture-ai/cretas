@@ -873,6 +873,233 @@ class BomRecipeDraftLifecycleJpaTest {
                 .hasValueSatisfying(saved -> assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.DRAFT));
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // 激活闸 —— 从 BomRecipeServiceImplAddItemTest 迁来的四条。
+    //
+    // 那四条挂在一个**纯 Mockito** 类上, 而 activateRecipe 需要
+    // bomWorkflowRevisionService / readinessService / workflowActivationRepo
+    // 三个协作者, 那个类一个都没 mock ⇒ 四条全都在
+    //   NullPointerException: ...BomWorkflowRevisionService.findNewerCompatibleDraft(...)
+    //                        because "this.bomWorkflowRevisionService" is null
+    // 上当场炸掉, **一次都没走到它们各自要断言的那道闸**。
+    //
+    // ⛔ 不在原地补 mock: 那要把本类这份画布夹具(workflowBinding)再抄一份进去,
+    //    同一个东西两份、必漂(本仓形态 D)。本类已经有真画布 + 真 H2, 断言搬过来
+    //    就跑在**产品真实入口**上, 而不是跑在一份手工模拟的图上。
+    // ──────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("激活新版本时每个仍挂着 ACTIVE 的旧版本都要归档并取消 current")
+    void activationArchivesEveryCompetingActiveVersion() {
+        ProductType product = saveProduct("COMPETING", "袋", new BigDecimal("500"));
+        BomRecipe v1 = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(v1);
+        BomRecipe activeV1 = service.activateRecipe(product.getFactoryId(), v1.getId(), 1309L);
+
+        // 历史脏数据: status=ACTIVE 而 isCurrent=false —— 闸要收口的正是这一种,
+        // 只清 current 标记会在库里留下两个「已生效」版本 (见 findCompetingVersionsForActivation)。
+        BomRecipe stale = recipeRepository.findById(activeV1.getId()).orElseThrow();
+        stale.setIsCurrent(false);
+        recipeRepository.saveAndFlush(stale);
+
+        BomRecipe v2 = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(v2);
+        BomRecipe activeV2 = service.activateRecipe(product.getFactoryId(), v2.getId(), 1309L);
+
+        assertThat(activeV2.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activeV2.getIsCurrent()).isTrue();
+        assertThat(recipeRepository.findById(activeV1.getId()))
+                .as("status=ACTIVE 但 isCurrent=false 的旧版本同样要被收口, 否则库里留下两个「已生效」")
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+                    assertThat(saved.getIsCurrent()).isFalse();
+                });
+        assertThat(recipeRepository.findByFactoryIdAndProductTypeIdOrderByVersionDesc(
+                        product.getFactoryId(), product.getId()))
+                .as("同一 SKU 任何时刻最多一个 ACTIVE")
+                .filteredOn(saved -> saved.getStatus() == BomRecipe.Status.ACTIVE)
+                .extracting(BomRecipe::getId)
+                .containsExactly(activeV2.getId());
+    }
+
+    /**
+     * 原断言是 {@code archivedVersionCanBeReactivated}: 直接 {@code activateRecipe(归档版)}
+     * 就能把它切回生效, 且不新建版本。
+     *
+     * <p><b>产品已经不是这个行为了。</b>{@code activationFamily} 现在要求被激活的这一份
+     * 必须是它所属 Family 的 <b>DRAFT</b> 成员, 否则 409 {@code BOM_FAMILY_DRAFT_REQUIRED}。
+     * 这是对的: 联合生产下一个 Family 有多个终端产出, 单独把其中一个成员切回旧版会留下
+     * 一个自相矛盾的 Family。
+     *
+     * <p>⚠️ 原断言之所以一直「通过」, 是因为它跑在一个 <b>{@code bomFamilyId == null}</b> 的
+     * 假配方上 —— 而 {@code ensureDraft} <b>给每一份 BOM 都发 Family id</b>(本类
+     * {@code bomOnlyCloneKeepsExactWorkflowSnapshot...} 就在断言两次克隆的 familyId 不同)。
+     * 也就是说那个桩的形状<b>真实产品从来不会产出</b>, 断言守的是一条到不了的分支。
+     *
+     * <p>⇒ 抬到守性质:「回到历史版本」这件事仍然做得到, 只是路径变成
+     * <b>克隆归档版 → 得到草稿 → 激活草稿</b>; 直接激活归档版必须被拒, 且那句拒绝
+     * 要能让用户找到上面那条路。
+     */
+    @Test
+    @DisplayName("归档版不能直接重新激活，要先克隆成草稿；两条路都要成立")
+    void archivedVersionIsReactivatedByCloningItIntoADraft() {
+        ProductType product = saveProduct("REACTIVATE", "袋", new BigDecimal("500"));
+        BomRecipe v1 = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(v1);
+        service.activateRecipe(product.getFactoryId(), v1.getId(), 1309L);
+        BomRecipe v2 = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(v2);
+        service.activateRecipe(product.getFactoryId(), v2.getId(), 1309L);
+        assertThat(recipeRepository.findById(v1.getId()))
+                .as("阳性对照: v1 必须真的是 ARCHIVED, 否则下面两条断言什么都没证明")
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+                    assertThat(saved.getBomFamilyId())
+                            .as("⛔ 真实 BOM 一定有 Family id —— 没有 id 的桩会绕开整道闸")
+                            .isNotNull();
+                });
+
+        // ① 直接激活归档版: 拒, 并且那句拒绝要指向可走的下一步
+        assertThatThrownBy(() -> service.activateRecipe(product.getFactoryId(), v1.getId(), 1310L))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getErrorCode()).isEqualTo("BOM_FAMILY_DRAFT_REQUIRED");
+                    assertThat(error.getActionHint())
+                            .as("actionHint 为空的 409 会被 web-admin 当乐观锁冲突整条吞掉")
+                            .isNotBlank()
+                            .contains("克隆");
+                });
+        assertThat(recipeRepository.findById(v2.getId()))
+                .as("被拒之后当前生效版本一个字都不许动")
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+                    assertThat(saved.getIsCurrent()).isTrue();
+                });
+
+        // ② 克隆归档版 → 草稿 → 激活: 通
+        BomRecipe restored = service.cloneRecipe(product.getFactoryId(), v1.getId());
+        assertThat(restored.getStatus()).isEqualTo(BomRecipe.Status.DRAFT);
+        BomRecipe activated = service.activateRecipe(
+                product.getFactoryId(), restored.getId(), 1310L);
+
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(activated.getIsCurrent()).isTrue();
+        assertThat(recipeRepository.findById(v2.getId()))
+                .hasValueSatisfying(saved -> {
+                    assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
+                    assertThat(saved.getIsCurrent()).isFalse();
+                });
+        assertThat(recipeRepository.findByFactoryIdAndProductTypeIdOrderByVersionDesc(
+                        product.getFactoryId(), product.getId()))
+                .filteredOn(saved -> saved.getStatus() == BomRecipe.Status.ACTIVE)
+                .extracting(BomRecipe::getId)
+                .containsExactly(activated.getId());
+    }
+
+    /**
+     * 原断言是 {@code activationRejectsEmptyDraft}: 空草稿 → {@code BOM_ACTIVATION_ITEMS_REQUIRED}
+     * 「BOM 还没有任何原辅料或包材，不能激活」。
+     *
+     * <p><b>产品已经不是这个行为了, 而且不是因为「哪条报错先抛」。</b>实测(本类探针,
+     * 把草稿的明细行全删干净再激活): <b>没有任何报错, 直接激活成功</b>。
+     * 成因是 {@code activateRecipe} 在所有校验之前先跑
+     * {@code reconcileUpgradedInputSkeletons} —— 它照画布把每个缺行的投入槽<b>补一条骨架行</b>,
+     * 于是「空」这个状态在任何一道闸看见它之前就已经不存在了。
+     *
+     * <p>这条路是对的, 不该改回去: Canvas-is-BOM 之后<b>画布才是投入的真值</b>,
+     * 明细行少一条是可修复的不一致, 不是用户填错。另一头也堵死了 —— 实测用户根本删不掉
+     * 这些行: {@code deleteItem} 直接 409 {@code BOM_WORKFLOW_REQUIRED_INPUT_DELETE_FORBIDDEN}
+     * 「Workflow 必需投入槽不能从 BOM 中删除」。
+     *
+     * <p>⇒ 断言从<b>守字面</b>(某个 errorCode)抬到<b>守性质</b>: 空草稿要按画布补齐、
+     * 补出来的行必须真的绑在画布槽上, 并且 ⛔ 不许拿一个编出来的用量冒充用户意图。
+     */
+    @Test
+    @DisplayName("空草稿按画布补齐后激活，⛔ 不是当作用户填错拒掉")
+    void emptyDraftIsRebuiltFromTheCanvasInsteadOfRefused() {
+        ProductType product = saveProduct("EMPTY-REBUILD", "袋", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        itemRepository.deleteAll(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()));
+        itemRepository.flush();
+        assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()))
+                .as("阳性对照: 激活之前它必须真的是空的, 否则下面「补齐」什么都没证明")
+                .isEmpty();
+
+        BomRecipe activated = service.activateRecipe(product.getFactoryId(), draft.getId(), 1309L);
+
+        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
+        assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(draft.getId()))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.getMaterialTypeId())
+                            .as("补出来的行必须是画布上那个原料, ⛔ 不是随便找一个顶上")
+                            .isEqualTo("RAW-WF-" + product.getId());
+                    assertThat(row.getWorkflowMaterialNodeId()).isEqualTo("raw-input");
+                    assertThat(row.getWorkflowInputPortId()).isEqualTo("input");
+                    assertThat(row.getWorkflowEdgeId()).isEqualTo("edge-input");
+                    assertThat(row.getStandardQuantity())
+                            .as("⛔ 用量留空 —— 编一个数出来就是把「我不知道」当成用户意图往成本里传")
+                            .isNull();
+                });
+    }
+
+    /**
+     * 「BOM 里什么都没有」这件事<b>唯一</b>还会被拒的形态: 画布上一根原料都没接。
+     *
+     * <p>此前这条报错<b>用户根本看不见</b> —— 它是 409 且 {@code actionHint} 为空,
+     * 而 web-admin 的拦截器把「409 且 actionHint/hintTarget 双空」判成乐观锁冲突整条吞掉
+     * ({@code request.ts} 的 {@code isVanillaOptimisticLock});
+     * 发布链路那边 {@code isWorkflowBomSyncRace} 按 {@code BOM_WORKFLOW_} 前缀匹配后
+     * 也不补 toast。两头同时静默。
+     *
+     * <p>所以这条测试守两件事, 缺一不可:
+     * <ol>
+     *   <li><b>看得见</b> —— actionHint 非空(这正是拦截器的判据本身);</li>
+     *   <li><b>看得懂</b> —— 阴性对照钉住黑话不许回来。</li>
+     * </ol>
+     */
+    @Test
+    @DisplayName("画布上没接原料时，报错要说清缺什么、去哪补，而且必须带 actionHint 才看得见")
+    void canvasWithoutAnyRawInputTellsTheUserWhatToDo() {
+        ProductType product = saveProduct("NO-RAW-INPUT", "袋", new BigDecimal("500"));
+        BomRecipe draft = service.ensureDraft(product.getFactoryId(), product.getId());
+        completeWorkflowSkeleton(draft);
+        when(bomWorkflowRevisionService.resolvePinnedGraph(
+                        anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenAnswer(invocation -> {
+                    PinnedWorkflowGraph base = workflowBinding(invocation.getArgument(1)).graph();
+                    return new PinnedWorkflowGraph(
+                            base.workflowRevisionId(), base.workflowId(), base.definitionVersion(),
+                            base.revisionHash(), base.targetProductTypeId(), base.terminalNodeId(),
+                            List.of(), base.processes(),
+                            base.nodes().stream()
+                                    .filter(node -> !"RAW_MATERIAL".equals(node.getKind())).toList(),
+                            base.edges().stream()
+                                    .filter(edge -> !"raw-input".equals(edge.getSource())).toList());
+                });
+
+        assertThatThrownBy(() -> service.activateRecipe(product.getFactoryId(), draft.getId(), 1309L))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getErrorCode()).isEqualTo("BOM_WORKFLOW_INPUT_SLOT_REQUIRED");
+                    // ① 看得见 —— 空 actionHint 会被前端拦截器当乐观锁冲突整条吞掉
+                    assertThat(error.getActionHint())
+                            .as("actionHint 为空 = 这条报错在 web-admin 上一个字都不显示")
+                            .isNotBlank();
+                    // ② 看得懂 —— 缺什么 / 去哪补
+                    assertThat(error.getMessage()).contains("原料");
+                    assertThat(error.getActionHint()).contains("工艺图");
+                    // ③ 阴性对照: 黑话不许回来。给厂长的话里出现这些词等于没说。
+                    assertThat(error.getMessage() + error.getActionHint())
+                            .as("面向用户的报错不许带黑话")
+                            .doesNotContain("投入槽")
+                            .doesNotContain("目标 SKU 路径")
+                            .doesNotContain("SKU 路径");
+                });
+        assertThat(recipeRepository.findById(draft.getId()))
+                .as("拒绝之后草稿仍然是草稿 —— ⛔ 不许半激活")
+                .hasValueSatisfying(saved ->
+                        assertThat(saved.getStatus()).isEqualTo(BomRecipe.Status.DRAFT));
+    }
+
     private ProductType saveProduct(String suffix, String unit, BigDecimal gramsPerUnit) {
         ProductType product = newProduct(suffix, unit);
         product.setGramsPerUnit(gramsPerUnit);

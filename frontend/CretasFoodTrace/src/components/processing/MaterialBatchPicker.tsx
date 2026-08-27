@@ -449,7 +449,24 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     });
   }, [forceIndependentQuantity, rows, singleBatchQty, rowOverLimit]);
 
-  const selectedCount = value.length;
+  /**
+   * 「已选几批」的唯一口径 = **组件自己的行选择**。
+   *
+   * ⛔ 不能用父层的 `value.length` (P6, 2026-08-26 用单测复现):
+   * 单批次模式下 refs 只在【用量有效】时才 emit —— 见 :184 那个 effect。
+   * 于是「自动选中了、但屏幕上的投入量还没填」这段时间里父层是空的，
+   * header 徽标、摘要行、「确定选择」按钮、单批次提示**四样一起消失**，
+   * 屏上和「根本没选上」长得一模一样，而唯一还在的东西是那颗红星。
+   *
+   * 反过来这个口径还更稳: queryKey 变化时 `setRows([])` 与 emit `[]` 是同一轮，
+   * 两边不会各说各话。
+   */
+  const selectedCount = selectedRows.length;
+
+  // 已选各批的用量 (单批次取屏幕投入量, 多批次取各自输入)。null = 还没填。
+  const selectedQuantities = selectedRows.map((r) => rowQuantity(r, selectedRows.length === 1));
+  const hasPendingQty = selectedQuantities.some((q) => q == null);
+  const selectedTotal = selectedQuantities.reduce((s: number, q) => s + (q ?? 0), 0);
 
   // F2 厂号筛选: 收集本批次列表里出现的不同厂号 (含 "未标厂号" 哨兵).
   // 同一品名出现 ≥2 个厂号时才展示筛选 chips —— 不同厂号 = 不同批次, 仓管易选错.
@@ -472,18 +489,20 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     });
 
   // Q3: 折叠摘要文案 (已确认后显示)
+  // ⛔ 用量还没填时不许印 0 —— 「还不知道」和「是 0」对操作工是两件事
+  //    (本仓形态 A¹⁰: 兜底的默认值会把「我不知道」翻译成「是 0」)。
   const collapsedSummary = (() => {
     if (selectedCount === 0) return null;
-    const isSingle = selectedCount === 1;
-    const firstRef = value[0];
-    if (isSingle && firstRef) {
-      const row = rows.find((r) => r.batch.id === firstRef.materialBatchId);
-      const name = row?.batch.materialName ?? row?.batch.batchNumber ?? '—';
-      const qty = firstRef.quantity;
-      return `已选 ${name} · 用量 ${qty} ${unit}`;
+    if (selectedCount === 1) {
+      const row = selectedRows[0] as RowState;
+      const name = row.batch.materialName ?? row.batch.batchNumber;
+      const qty = selectedQuantities[0];
+      return qty != null
+        ? `已选 ${name} · 用量 ${qty} ${unit}`
+        : `已选 ${name} · 用量待填 (在下方填投入量)`;
     }
-    const total = value.reduce((s, r) => s + r.quantity, 0);
-    return `已选 ${selectedCount} 批次 · 合计 ${total.toFixed(2)} ${unit}`;
+    if (hasPendingQty) return `已选 ${selectedCount} 批次 · 用量待填`;
+    return `已选 ${selectedCount} 批次 · 合计 ${selectedTotal.toFixed(2)} ${unit}`;
   })();
 
   return (
@@ -504,9 +523,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           {/* F1 双领: 标明"原料"区, 与屏幕上方"领用半成品库存"卡片配对成 原料/半成品 两区 */}
           {'领料批次 (原料)'}
           {selectedCount > 0 ? (
-            <Text style={styles.badge}> · 已选 {selectedCount} 批</Text>
+            <Text style={styles.badge} testID="material-batch-header-badge"> · 已选 {selectedCount} 批</Text>
           ) : required ? (
-            <Text style={styles.requiredMark}> *</Text>
+            <Text style={styles.requiredMark} testID="material-batch-required-mark"> *</Text>
           ) : (
             <Text style={styles.optional}> (可选)</Text>
           )}
@@ -517,7 +536,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       {/* Q2 + Q3: 已确认折叠后显示摘要行 + 「修改」按钮 */}
       {!expanded && confirmed && collapsedSummary ? (
         <View style={styles.summaryRow}>
-          <Text style={styles.summaryText} numberOfLines={1}>{collapsedSummary}</Text>
+          <Text style={styles.summaryText} numberOfLines={1} testID="material-batch-collapsed-summary">
+            {collapsedSummary}
+          </Text>
           <TouchableOpacity
             onPress={() => {
               setExpanded(true);
@@ -724,7 +745,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
             <View style={styles.selectedHint}>
               <Text style={styles.selectedHintText}>
                 已选 {selectedCount} 批次 · 合计领料{' '}
-                {value.reduce((s: number, r: MaterialBatchRef) => s + r.quantity, 0).toFixed(2)} {unit}
+                {hasPendingQty ? '用量待填' : `${selectedTotal.toFixed(2)} ${unit}`}
               </Text>
             </View>
           ) : null}

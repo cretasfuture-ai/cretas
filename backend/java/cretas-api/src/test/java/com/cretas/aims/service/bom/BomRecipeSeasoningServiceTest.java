@@ -16,6 +16,10 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
+import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.service.bom.BomItemSubstituteService;
+import com.cretas.aims.service.bom.BomWorkflowRevisionService;
+import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.bom.impl.BomRecipeServiceImpl;
 import com.cretas.aims.service.uom.MaterialUomConverter;
@@ -55,6 +59,10 @@ class BomRecipeSeasoningServiceTest {
     @Mock ProductWorkProcessRepository productWorkProcessRepo;
     @Mock MaterialUomConverter materialUomConverter;
     @Mock NestedBomCostService nestedBomCostService;
+    /** assertPinnedDraft resolves the pinned graph on every DRAFT write path. */
+    @Mock BomWorkflowRevisionService bomWorkflowRevisionService;
+    /** cloneRecipe copies substitute relations. */
+    @Mock BomItemSubstituteService substituteService;
     @Mock ProductWorkflowResolutionService workflowResolutionService;
 
     @InjectMocks BomRecipeServiceImpl service;
@@ -68,10 +76,52 @@ class BomRecipeSeasoningServiceTest {
 
     @BeforeEach
     void allowConfiguredProductProcessesByDefault() {
+        // resolvePinnedGraph throws or returns a graph — it never returns null.
+        lenient().when(bomWorkflowRevisionService.resolvePinnedGraph(
+                        anyString(), org.mockito.ArgumentMatchers.any(BomRecipe.class)))
+                .thenReturn(pinnedGraph());
         lenient().when(workflowResolutionService.resolveProcessPath(anyString(), anyString()))
                 .thenReturn(Optional.empty());
         lenient().when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
                 anyString(), anyString(), anyString())).thenReturn(true);
+    }
+
+    /** Minimal pinned Workflow graph: one process, one raw input, one terminal output. */
+    private PinnedWorkflowGraph pinnedGraph() {
+        java.util.Map<String, Object> rawData = new java.util.LinkedHashMap<>();
+        rawData.put("skuId", SALT_ID);
+        ProductProcessWorkflowDTO.Node raw = new ProductProcessWorkflowDTO.Node(
+                "raw-input", "RAW_MATERIAL", new ProductProcessWorkflowDTO.Position(0D, 0D), rawData);
+        java.util.Map<String, Object> processData = new java.util.LinkedHashMap<>();
+        processData.put("workProcessId", "wp-injection");
+        processData.put("ports", List.of(
+                java.util.Map.of("id", "input", "direction", "INPUT",
+                        "materialNodeId", "raw-input", "materialKind", "RAW_MATERIAL", "ordinal", 0),
+                java.util.Map.of("id", "output", "direction", "OUTPUT",
+                        "materialNodeId", "terminal", "materialKind", "FINISHED_GOOD",
+                        "ordinal", 0, "outputRole", "MAIN",
+                        "costAllocationRatio", new BigDecimal("100"))));
+        ProductProcessWorkflowDTO.Node process = new ProductProcessWorkflowDTO.Node(
+                "process", "PROCESS", new ProductProcessWorkflowDTO.Position(100D, 0D), processData);
+        java.util.Map<String, Object> cookingData = new java.util.LinkedHashMap<>();
+        cookingData.put("workProcessId", "wp-cooking");
+        cookingData.put("ports", List.of(
+                java.util.Map.of("id", "input", "direction", "INPUT",
+                        "materialNodeId", "raw-input", "materialKind", "RAW_MATERIAL", "ordinal", 0)));
+        ProductProcessWorkflowDTO.Node cooking = new ProductProcessWorkflowDTO.Node(
+                "process-cooking", "PROCESS", new ProductProcessWorkflowDTO.Position(150D, 0D), cookingData);
+        java.util.Map<String, Object> terminalData = new java.util.LinkedHashMap<>();
+        terminalData.put("skuId", PRODUCT);
+        ProductProcessWorkflowDTO.Node terminal = new ProductProcessWorkflowDTO.Node(
+                "terminal", "FINISHED_GOOD", new ProductProcessWorkflowDTO.Position(200D, 0D), terminalData);
+        return new PinnedWorkflowGraph(
+                9201L, 10L, 1, "revision-seasoning-hash", PRODUCT, "terminal",
+                List.of(SALT_ID),
+                List.of(new PinnedWorkflowGraph.ProcessStep("process", "wp-injection", 1),
+                        new PinnedWorkflowGraph.ProcessStep("process-cooking", "wp-cooking", 2)),
+                List.of(raw, process, cooking, terminal),
+                List.of(new ProductProcessWorkflowDTO.Edge("edge-input", "raw-input", "output", "process", "input"),
+                        new ProductProcessWorkflowDTO.Edge("edge-output", "process", "output", "terminal", "input")));
     }
 
     /** 工厂匹配的 DRAFT BOM. */
@@ -82,6 +132,9 @@ class BomRecipeSeasoningServiceTest {
         r.setProductTypeId(PRODUCT);
         r.setProductName("卤猪蹄");
         r.setStatus(BomRecipe.Status.DRAFT);
+        // A BOM is writable/clonable only once it is pinned to a saved Workflow revision.
+        r.setWorkflowRevisionId(9201L);
+        r.setWorkflowRevisionHash("revision-seasoning-hash");
         return r;
     }
 
@@ -263,7 +316,10 @@ class BomRecipeSeasoningServiceTest {
     @Test
     @DisplayName("getSeasoningByProduct: 产品无当前 BOM → Optional.empty()")
     void getSeasoningByProduct_noBom_returnsEmpty() {
-        when(recipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY, PRODUCT))
+        // ⚠️ The lookup carries a status now. Stubbing the old signature left the stub dead
+        // and the assertion vacuous — an unstubbed mock returns Optional.empty() anyway.
+        when(recipeRepo.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                FACTORY, PRODUCT, BomRecipe.Status.ACTIVE))
                 .thenReturn(Optional.empty());
 
         Optional<BomSeasoningResponse> result = service.getSeasoningByProduct(FACTORY, PRODUCT);
@@ -397,11 +453,13 @@ class BomRecipeSeasoningServiceTest {
     @DisplayName("saveSeasoning: 非该 SKU 工序时明确拒绝")
     void saveSeasoning_workProcessNotAssignedToProduct_throwsBusinessException() {
         when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
-        when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
-                FACTORY, PRODUCT, "wp-injection")).thenReturn(false);
+        // The SKU's fixed 工艺 is the pinned Workflow graph, which owns wp-injection and
+        // wp-cooking only — so a row on any other process must be rejected.
+        BomSeasoningSaveRequest offProcess = requestWithOnlySalt();
+        offProcess.getSeasoningItems().get(0).setWorkProcessId("wp-not-on-product");
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.saveSeasoning(FACTORY, RECIPE_ID, requestWithOnlySalt()));
+                () -> service.saveSeasoning(FACTORY, RECIPE_ID, offProcess));
 
         assertTrue(ex.getMessage().contains("有效工序"));
     }
@@ -410,8 +468,7 @@ class BomRecipeSeasoningServiceTest {
     @DisplayName("saveSeasoning: 注射配置引用非该 SKU 工序时明确拒绝")
     void saveSeasoning_injectionConfigWorkProcessNotAssignedToProduct_throwsBusinessException() {
         when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(draftRecipe()));
-        when(productWorkProcessRepo.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
-                FACTORY, PRODUCT, "wp-not-on-product")).thenReturn(false);
+        // wp-not-on-product is absent from the pinned graph, which is the authority now.
         BomSeasoningSaveRequest req = new BomSeasoningSaveRequest();
         ProcessInjectionConfigDTO config = new ProcessInjectionConfigDTO();
         config.setWorkProcessId("wp-not-on-product");

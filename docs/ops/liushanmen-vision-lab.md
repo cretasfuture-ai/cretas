@@ -86,6 +86,123 @@ B:\anaconda3\python.exe tools\vision-lab\label_annotator_local.py `
 框体使用可透视内容的深青蓝半透明填充，选中时改为更深的黄色；边线保持细线，拖拽热区保留但
 不绘制方块手柄。
 
+### 待审核生产照片的隔离重放
+
+`NEEDS_REVIEW` 任务尚无人工真值，禁止写入常规 `vision.db` 的 reviewed-only `photos` 表或直接
+进入训练。先用隔离采集器按任务创建时间只读查询 `NEEDS_REVIEW + ANALYZED`，下载 content-addressed
+本地副本并生成固定 `training_eligible=false` 的 manifest：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\collect_pending_label_photos.py `
+  --config D:\CretasVisionLab\config.json `
+  --after-task-created-at <exclusive-watermark> `
+  --expected-count <audited-count> `
+  --output D:\CretasVisionLab\pending\liushanmen-pending-<timestamp>.json
+```
+
+随后用冻结生产 bundle 和参数执行离线重放。工具要求持久化旧结果与当前结果的托盘数量、索引及
+框 IoU（至少 `0.99`）一致，防止把 tray detection 漂移误报成标签 ownership 改善；保护集重叠、
+模型/参数/SHA 漂移都 fail closed。该回执没有人工真值，因此只能缩小审核队列，不能评价召回、
+授权训练或发布：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\replay_pending_label_photos.py `
+  --repo-root <clean-exact-main-worktree> `
+  --pending-manifest D:\CretasVisionLab\pending\liushanmen-pending-<timestamp>.json `
+  --production-bundle D:\CretasVisionLab\deployment-bundles\liushanmen-v8-20260822 `
+  --protected-manifest D:\CretasVisionLab\evaluation\protected-holdout.json `
+  --expected-photos <audited-count> `
+  --output D:\CretasVisionLab\receipts\liushanmen-pending-replay-<timestamp>.json
+```
+
+只有重放后仍为缺标或 `UNJUDGEABLE` 的目标托盘进入最小队列。浅托盘按宽高比识别，并按托盘宽度
+推算实体高度向下扩展，禁止使用随原图分辨率漂移的固定像素高度判断；预标注故意为空，人工只补
+中央目标托盘自己的白标/彩标，不补托盘框。更正裁剪时用 `--carry-reviewed-from` 把已完成的人框经
+原图坐标转换带入新队列，不能要求操作员重做。每行必须保存 `review_crop_geometry`；若原图边界导致
+上下文仍达不到门槛，该行保持 `training_eligible=false`，页面明确要求选“看不清”，不得靠人工猜测
+或修改阈值放行：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_pending_label_review_queue.py `
+  --pending-manifest <pending-manifest> `
+  --replay <pending-replay-receipt> `
+  --output D:\CretasVisionLab\queues\label-pending-<timestamp> `
+  --carry-reviewed-from <superseded-review-queue> `
+  --annotator-url http://127.0.0.1:<port>/
+```
+
+人工审核完成后仍必须先审计 `reviewed=true, source=human`、模糊/outlier 隔离和保护集排除，再决定
+是否存在可训练增量；“待审核照片被重放为 CLEAR”本身不是训练真值，也不得用于放宽门禁。
+
+审核页顶部的“托盘不完整 I”是多轮回流状态，不等于“看不清”或真实缺标。操作员可以先保留当前
+可见白标/彩标框，再按 `I` 并保存；sidecar 固定写入 `incomplete_tray=true`、
+`review_round_action=REQUEUE_AFTER_TRAY_REDETECTION`、`training_eligible=false` 和
+`training_exclusion_reason=incomplete_tray_requeue`。第一轮完整托盘可继续进入 reviewed-only 数据，
+不完整托盘单独用原图坐标重新执行 tray detection/扩裁；下一轮必须把已有标签框变换到新裁图后再由
+人工复核。只有后续轮次确认托盘完整，才允许清除该回流状态并进入标签训练；不得把第一轮局部框或
+未显示区域解释为缺白标/缺彩标真值。
+
+扩大裁图可能同时出现多个托盘，因此后续轮次先显示由上一轮检测框中心映射出的黄色定位十字。平台
+审核员必须按 `T` 沿定位点所在的完整物理托盘外沿重画一个黄色框，才能保存本轮标签结果；双格/多格
+包装仍是一只物理托盘，周围独立托盘才忽略。人工托盘框单独写入 `target_tray_box`，来源固定为
+`human`，不会混入白标/彩标 `boxes`；它可用于重建下一轮裁图和后续托盘模型数据，但必须继续遵守
+保护集门禁。若整只物理托盘外沿不可见，继续按 `I` 回流，禁止猜框。禁止用旧检测框与标签框是否
+相交来判断归属，因为局部托盘检测会制造错误拒绝。
+
+人工托盘框任一边距离裁图边缘不超过 `0.5%` 时，客户端与服务端都必须拒绝“完整托盘”保存并要求
+按 `I` 回流；贴边框不能证明外沿完整。该规则对已有审核结果同样 fail-closed：保留人工标签与框的
+原始回执，但将其隔离为不可训练并进入更大裁图轮次。
+
+上一轮全部完成后，用不可覆盖的新目录只生成 `incomplete_tray=true` 项的下一轮队列。构建器重新
+验证上一轮 manifest、人工 sidecar、原图和 SHA，按轮次逐步扩大以目标为中心的裁图；已画标签框经
+“旧裁图归一化坐标 → 原图像素坐标 → 新裁图归一化坐标”带入，但继续作为需完整复核的 proposal：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_incomplete_tray_requeue.py `
+  --source-queue D:\CretasVisionLab\queues\label-pending-<round-n> `
+  --output D:\CretasVisionLab\queues\label-pending-<round-n-plus-1> `
+  --round <2-or-later> `
+  --carry-reviewed-from <superseded-same-round-queue> `
+  --annotator-url http://127.0.0.1:<port>/
+```
+
+只有同一来源队列 manifest SHA 和相同轮次的已审核 sidecar 才允许迁移；迁移时保留人工框作为 proposal，
+但固定退回 `reviewed=false`、`training_eligible=false`，要求在目标盘引导下重新确认。这样替换审核 UI 时
+既不丢人工画框，又不会把引导出现前可能跨盘的结果误搬为训练真值；跨轮或跨来源迁移直接拒绝。
+
+第二轮仍按 `I` 的行可以再进入第三轮，扩裁半径会继续增加并记录是否触及原图边界；不得覆盖或删除
+上一轮证据。没有 `training_eligible=true` 的最终人工 sidecar 前，这些行始终不进入 label dataset。
+
+### 历史标签训练裁图完整性审计
+
+复用任何既有 label 数据集前，必须把数据集中的每个 `derived_rows[kind=label]` 重新绑定到源队列、
+整图人工 sidecar、父托盘、裁图和 YOLO 标签。审计会去重历史重建版本，验证 sidecar/裁图/标签 SHA、
+图片尺寸、类别状态、实例数、父托盘和人工标签是否都在裁图内，并单列“缺标负样本但物理上下文不足”。
+旧 sidecar 已被改写、标签越界或状态矛盾都属于不可复现材料，禁止静默复用：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\audit_label_training_crop_integrity.py `
+  --dataset-root D:\CretasVisionLab\datasets `
+  --production-manifest <本次候选实际复用的数据集 manifest> `
+  --output D:\CretasVisionLab\audits\label-training-crop-integrity-<timestamp>\receipt.json `
+  --require-production-reuse-pass
+```
+
+`--require-production-reuse-pass` 在写完证据回执后以非零退出阻断训练。不得删除风险项来伪造通过；
+正样本裁图截断但整图人工框完整时，应从绑定真值重新生成裁图；缺白标/彩标负样本若上下文存在歧义，
+先生成无预框、固定 `training_eligible=false` 的最小复核队列：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_historical_negative_review_queue.py `
+  --audit <failed-audit-receipt> `
+  --output D:\CretasVisionLab\queues\label-historical-negative-context-<timestamp> `
+  --annotator-url http://127.0.0.1:<port>/
+```
+
+只有新人工结果与重建裁图形成新的不可变数据集、再次完整审计通过后，候选训练才可开始。现有生产模型
+不因历史审计失败自动替换或回滚；是否提升仍由 protected holdout、production-equivalent replay、
+白标/彩标关键召回与误报全门禁决定。
+
 人工确认的缺标样本可通过 `training.isolated_missing_repeat`（整数 `1..10`，默认 `1`）增加训练权重。
 该策略只重复任务级划分后进入 train 的样本，validation 永不复制；并且只接受“明确声明缺一个类别、
 缺失类别没有框、互补类别恰好一个框”的单目标裁图。多框画面可能包含相邻托盘，只作为普通检测样本，
@@ -443,6 +560,53 @@ YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺�
 `df1f6029-389d-45b5-995e-be19b2f5b943` 必须单列身份、tray 覆盖和命中结果；它不再冒充台内主告警，
 但也不得相对生产结果回退。任一项失败都只写淘汰回执，不修改生产模型。
 
+完整托盘的多轮人工复核结果进入训练前，必须生成不可变准入副本；不要改写原审核清单来
+解除待审核时的 `training_eligible` 来源锁。准入入口会重新校验图片 SHA-256、人工完整托盘框、
+0.5% 裁切边缘门禁和标签框几何，并在衍生 annotation 中记录原 annotation SHA-256：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\admit_reviewed_full_trays.py `
+  --source-queue D:\CretasVisionLab\queues\<reviewed-round3-queue> `
+  --output D:\CretasVisionLab\queues\<immutable-admitted-queue>
+```
+
+不完整、看不清或托盘框贴裁切边缘的项目保持排除；即使其中标签框已经标完，也不得进入训练。
+
+主动学习采样本身也必须在生成队列前执行同一类源图边缘门禁。`mine_queue.py` 与
+`mine_label_side_view_queue.py` 会拒绝检测框任一边距离**原始照片**边缘不超过 `0.5%` 的托盘；
+padding 被原图边界截断不等于托盘不完整，但目标托盘框本身贴边时无法证明物理托盘完整，不能生成
+label 训练 crop。普通难例采样器会把规则版本写入 screening fingerprint，升级规则后必须重新扫描，
+不得复用旧 clean cache；新 manifest 还必须保留源图尺寸、原图托盘框和 crop rect，供历史审计重建。
+旧队列不自动改写或删除，应以新指纹隔离重放并报告 `edge_touching_trays_excluded`。
+
+重放队列仍然过大时，用 `build_minimal_active_label_review_queue.py` 生成不可变的小队列。该入口只保留
+`BOTH_MISSING/MISSING_WHITE_LABEL/MISSING_COLOR_LABEL` 明确模型分歧，排除纯 `UNJUDGEABLE`，并按
+判定类型与 SKU 双重轮转、每张照片最多一只托盘、限制单任务和单 SKU 数量。它会再次执行 0.5% 源图
+边缘门禁和图片 SHA 校验；输出仍是训练禁用状态，只有新的人工 sidecar 才能进入准入流程。
+`admit_reviewed_full_trays.py` 同时接受该 minimal contract，但仍逐张要求人工完整托盘框、训练资格和
+边缘门禁；不能用 manifest 声明替代人工 sidecar。
+
+如果 minimal 审核把项目标为 `incomplete_tray=true`，不要继续放大旧 crop。应从只读原始整图运行
+补充托盘检测并生成宽视野第二轮队列：补充检测只有在托盘面积至少扩大 20%、且重建中心相对原目标
+最大边漂移不超过 25% 时才允许影响裁图；中心漂移过大通常表示错误合并了相邻托盘，必须拒绝。
+黄色定位十字始终使用原目标检测中心，补充重建不得把 ownership 移到相邻托盘。所有候选引导都不是 ground truth，第二轮
+仍须完整人工复核，原始图片和上一轮 sidecar 不修改：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\build_minimal_incomplete_tray_requeue.py `
+  --source-queue D:\CretasVisionLab\queues\<reviewed-minimal-queue> `
+  --database D:\CretasVisionLab\state\vision.db `
+  --bundle D:\CretasVisionLab\deployment-bundles\liushanmen-v8-20260822 `
+  --repo-root <clean-worktree> `
+  --output D:\CretasVisionLab\queues\<immutable-full-source-requeue>
+```
+
+若人工审计证明原始定位框本身横跨多个物理托盘，使用重复的
+`--exclude-ambiguous-crop-id <crop-id>` 生成新的不可变队列。构建器要求每个 ID 都精确命中本轮已审核的
+`incomplete_tray` 项，并在 manifest 中记录排除 ID、数量和固定原因；禁止改写旧队列或让操作员猜目标。
+若操作员已经完成其他项目，追加 `--carry-reviewed-from <previous-requeue>`；只有源 minimal manifest 哈希、
+新旧衍生图片 SHA 和 crop ID 全部一致时才逐字节携带已审核 sidecar，并在新 manifest 记录携带数量。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
@@ -479,7 +643,8 @@ B:\anaconda3\python.exe tools\vision-lab\vision_lab.py `
 `mine_label_side_view_queue.py plan`。计划阶段只读本地 VisionLab 数据库，候选必须来自人工确认的
 `NO_DEFECT` 新来源；240+83+57 已完成来源、旧 29 张队列、保护集 exact ID/SHA 与 pHash 距离
 不大于 10 的近重复全部排除，队列内部 pHash 距离不大于 4 的 crop 也排除。先检查 preflight
-回执中的数量、来源、去重距离和 `cloud_calls=0, production_writes=0`，再用 `build` 生成队列。
+回执中的数量、来源、去重距离、`exclusions.target_tray_touches_source_edge` 和
+`cloud_calls=0, production_writes=0`，再用 `build` 生成队列。
 
 `build` 会以 preflight 的候选 digest、源图 SHA、crop 像素 SHA 和感知哈希重新验证内容，生成
 `label-side-view-active-<timestamp>`、独立的 `MARK-NEEDS-LABEL-SIDE-VIEW-ANNOTATION.json` 和

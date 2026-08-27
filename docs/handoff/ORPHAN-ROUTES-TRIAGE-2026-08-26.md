@@ -355,3 +355,36 @@ import 的通用 helper），于是「被完全覆盖」这个读数**近乎恒�
 | `/warehouse/semi-finished-stocktakes` | 0 | `views/warehouse/semi-finished-stocktakes/index.vue` |
 | `/workflow/admin-running` | 0 | `views/workflow/admin-running.vue` |
 | `/workflow/rules` | 0 | `views/workflow/rules.vue` |
+
+---
+
+## 2026-08-27 追记：B 类**不能**批量删除
+
+上一节把「端点 100% 被可达页面覆盖」的一批标成「删除风险最低」。
+按这个结论去执行时，逐条查了生产数据，**结论是反的**：
+
+| 路由 | 背后生产数据 |
+|---|---|
+| `/system/label-qc-platform-diagnostics` / `-tray-crops` | 托盘裁图 **11409** / 标注 **9583** / 照片 **5850** / 任务 **1495** |
+| `/approval-workflow-editor` | 审批流 25 / 历史 104 / 实例 44 |
+| `/sales/customer-tracking` | 客户价格历史 **260** |
+| `/requisitions` | 领料申请 10 |
+| `/inquiry-quotes` | 询价单 3 |
+
+**label-qc 那一对最说明问题**：操作侧的「包装标签拍检」(`/quality/label-qc`) 一直在菜单里、走得到；
+而**平台侧的两个诊断页走不到**。它们不是冗余，是**这个重度使用子系统的排障工具，
+而排障的人打不开它**。⇒ 该补入口，不是该删。（已补，棘轮 88 → 86。）
+
+### 判据为什么不够
+
+两个判据都被否掉了：
+
+1. **端点覆盖** —— 判不出「能力是否重复」。一个看板和一个列表页共用接口，
+   不代表看板多余。`/smart-bi/restaurant-v2`（2446 行）就是这样被误判的。
+2. **同区有可达兄弟页** —— 更差。它把餐饮看板判成可删，只因为菜单里有个
+   不相干的 `/smart-bi/mapping-review`（同属 `/smart-bi/` 前缀而已）。
+
+⇒ **静态分析判不出「这个页面还有没有用」。** 能给的最强旁证是「背后有没有生产数据」，
+而那只能否定（有数据⇒别删），不能肯定（没数据也可能是刚上线的功能）。
+
+**剩下的必须由懂产品的人看名字判断。** 19 个名字，5 分钟能扫完，比任何静态判据都准。

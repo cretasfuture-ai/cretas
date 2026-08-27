@@ -22,6 +22,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
+import com.cretas.aims.util.WorkProcessTaskOverdue;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -416,6 +417,9 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                 .plannedUnit(task.getPlannedUnit())
                 .plannedStartAt(task.getPlannedStartAt())
                 .plannedEndAt(task.getPlannedEndAt())
+                // 与 WorkProcessTaskServiceImpl 那处 builder 读【同一份】判据。
+                // 这里留 null 才是撒谎: plannedEndAt 就在手边, 答得出来。
+                .overdue(WorkProcessTaskOverdue.of(task))
                 .estimatedMinutes(task.getEstimatedMinutes())
                 .actualQuantity(task.getActualQuantity())
                 .actualStartAt(task.getActualStartAt())

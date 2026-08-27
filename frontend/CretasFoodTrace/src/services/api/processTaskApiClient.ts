@@ -60,6 +60,33 @@ export interface ProcessTaskItem {
   pendingQuantity: number;
   inputQuantity?: number;
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED' | 'SUPPLEMENTING' | string;
+  /**
+   * 计划起止 —— 车间主管靠这两个答「今天要做什么」。
+   *
+   * 后端 `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")`, 所以拿到的是
+   * `"2026-08-26 08:00:00"` 这种**本地日历时间字符串**, 不是 ISO。
+   * ⛔ 不要 `new Date(s)` 再 `toISOString()` 截断 —— 那会按 UTC 挪一天,
+   *    而这个串本来就已经是业务日历日了 (后端全线 GMT+8)。
+   *
+   * `undefined` = 没设。⛔ 不许兜底成今天/某个默认日期。
+   */
+  plannedStartAt?: string;
+  plannedEndAt?: string;
+  /** 责任人姓名 (后端 join 透出)。`undefined` = 未分配, 或用户已删除。 */
+  assignedToName?: string;
+  /**
+   * 这道工序超期没有 —— **三态**: `true` / `false` / `undefined`(判不了)。
+   *
+   * `undefined` 的唯一含义是「后端没给出判断」——今天只有一个成因:
+   * 这道工序没设 `plannedEndAt`。
+   *
+   * ⛔ 这里【曾经】根本不存在: 屏幕上的「超期」徽章读 `(item as any).overdue`,
+   * 而这个字段四层都没有 ⇒ 那个徽章从来没渲染过一次。`as any` 正是它能编译
+   * 通过却永不生效的原因 —— 类型系统本来会当场指出「这个字段不存在」。
+   *
+   * ⛔ 不要 `?? false`: 那会把「没问到」说成「不超期」。
+   */
+  overdue?: boolean;
   assignedWorkerIds?: string;
   workflowVersionId?: string;
   previousTerminalStatus?: string;
@@ -256,6 +283,15 @@ class ProcessTaskApiClient {
       completedQuantity: task.actualQuantity ?? 0,
       pendingQuantity: 0,
       status: task.status,
+      // ⛔ 这四个【曾经】在这里被整个丢掉 —— 后端 DTO 有、传输类型有,
+      //    映射层不投影, 于是屏幕上永远看不到计划日期/责任人/超期。
+      //    那不是缺功能, 是投影丢失: 数据一路送到了消费端前面一层才被扔。
+      plannedStartAt: task.plannedStartAt ?? undefined,
+      plannedEndAt: task.plannedEndAt ?? undefined,
+      assignedToName: task.assignedToName ?? undefined,
+      // 三态: true / false / undefined。⛔ 不要写 `?? false` —— `undefined` 是
+      // 「后端没给出判断」(这道工序没设 plannedEndAt), 与「不超期」不是一回事。
+      overdue: task.overdue == null ? undefined : task.overdue,
       createdAt: task.createdAt ?? undefined,
       updatedAt: task.updatedAt ?? undefined,
     };
@@ -293,6 +329,64 @@ class ProcessTaskApiClient {
       .filter(task => task.status === 'PENDING' || task.status === 'IN_PROGRESS')
       .map(task => this.toProcessTaskItem(task));
     return { ...response, data: tasks };
+  }
+
+  /**
+   * 工序任务列表屏三个筛选档各自的**真实总数**。
+   *
+   * 🔴 这个方法存在的全部理由是**口径统一**。屏上三个档原本由两条口径不同的路供数:
+   *   - `进行中` 走 `getActiveTasks`: page1 **size 1000** 拉回来, 在**客户端**筛
+   *     PENDING|IN_PROGRESS, 返回一个裸数组 —— 没有 totalElements, 且天然被 1000 截断。
+   *   - `已完成` / `全部` 走 `getTasks`: **服务端** status 过滤, 有 totalElements。
+   *   直接拿两边的长度并排显示, 就会给出一组**互相对不上**的数
+   *   (「进行中 900 / 全部 348」这种)。⛔ 一个和「全部」对不上的计数比没有计数更糟。
+   *
+   * ⇒ 三个档一律改由**服务端 totalElements** 供数, 只用一把尺子:
+   *   - `active`    = totalElements(PENDING) + totalElements(IN_PROGRESS)
+   *                   (一条任务只有一个状态, 两者不重叠, 相加即为并集)
+   *   - `completed` = totalElements(COMPLETED)
+   *   - `all`       = totalElements(不带 status)
+   *
+   * ⚠️ 这是「**有多少条**」, 不是「屏幕上显示了多少条」—— 列表本身仍是取前一页。
+   *   两者的差额由调用方显式说明, ⛔ 不许让用户以为列表是全的。
+   *
+   * 任一档问不到就是 `null`, ⛔ 不兜 0 ——「没问到」和「这一档一条都没有」
+   * 在筛选器上长得一模一样, 含义却相反。各档独立取数, 一档失败不连坐其它档。
+   */
+  async getTaskCounts(factoryId?: string): Promise<{
+    active: number | null;
+    completed: number | null;
+    all: number | null;
+  }> {
+    const base = this.getBase(factoryId);
+    /** 只为拿 totalElements ⇒ size=1, 不搬运用不到的行。读不到返回 null。 */
+    const totalFor = async (status?: string): Promise<number | null> => {
+      try {
+        const res = await apiClient.get<ApiEnvelope<PageResponse<WorkProcessTask>>>(
+          `${base}/work-process-tasks`,
+          { params: { ...(status ? { status } : {}), page: 1, size: 1 } },
+        );
+        if (res.success === false) return null;
+        const total = res.data?.totalElements;
+        return typeof total === 'number' ? total : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const [pending, inProgress, completed, all] = await Promise.all([
+      totalFor('PENDING'),
+      totalFor('IN_PROGRESS'),
+      totalFor('COMPLETED'),
+      totalFor(undefined),
+    ]);
+
+    return {
+      // 两条腿缺任何一条, 和就没有意义 ⇒ null, ⛔ 不许拿单条腿的数冒充并集
+      active: pending === null || inProgress === null ? null : pending + inProgress,
+      completed,
+      all,
+    };
   }
 
   async getTasks(

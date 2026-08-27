@@ -92,6 +92,10 @@
     "configFirst": "Product types and material types need to be configured before setting conversion rates",
     "adminOnly": "Some features require administrator privileges"
   },
+  "locked": {
+    "adminOnlyBadge": "Administrators only",
+    "adminOnlyReason": "This one belongs to an administrator. You can see it here, but ask an administrator to do it."
+  },
   "common": {
     "adminOnly": "Administrators only",
     "loading": "Loading...",

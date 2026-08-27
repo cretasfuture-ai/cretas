@@ -583,6 +583,8 @@ export type WSHomeStackParamList = {
   DynamicReport: { reportType: 'PROGRESS' | 'HOURS' };
   NfcCheckin: undefined;
   ProcessTaskList: undefined;
+  // 审批是主管的日常动作；此前只挂在工厂管理员树上，主管点了没反应 (2026-08-26 补)
+  ProcessTaskApproval: undefined;
   ProcessTaskDetail: { taskId: string };
   ProcessRunOverview: { productionRunId: string };
   YieldBatchSelect: undefined;

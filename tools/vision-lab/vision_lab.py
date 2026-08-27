@@ -703,6 +703,24 @@ def build_dataset(config: dict[str, Any]) -> dict[str, Any]:
                 )
                 training_exclusions[reason] = training_exclusions.get(reason, 0) + 1
                 continue
+            if manifest.get("version") == "liushanmen-pending-target-tray-review-v1":
+                expected_policy = "shallow-aspect-width-context-v2"
+                geometry = source.get("review_crop_geometry") or {}
+                if (
+                    manifest.get("review_crop_policy_version") != expected_policy
+                    or geometry.get("policy_version") != expected_policy
+                ):
+                    raise RuntimeError(
+                        "pending review crop cannot enter training without the resolution-independent "
+                        "physical-context policy"
+                    )
+                if (
+                    geometry.get("shallow_by_aspect_ratio") is True
+                    and float(geometry.get("crop_height_to_tray_width") or 0.0) < 0.90
+                ):
+                    raise RuntimeError(
+                        "pending shallow review crop cannot enter training with incomplete physical context"
+                    )
             if (
                 authoritative_photo_verdict
                 and annotation.get("missing_confirmed_by_human") is True

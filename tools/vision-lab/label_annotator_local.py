@@ -60,8 +60,15 @@ def validate_modern_annotator(module: ModuleType, script: Path) -> None:
         raise RuntimeError("legacy label annotator is forbidden")
     if getattr(module, "ALLOW_MISSING_CLASS", False) is not True:
         raise RuntimeError("label annotator did not enable explicit missing-class review")
+    if getattr(module, "ALLOW_INCOMPLETE_TRAY", False) is not True:
+        raise RuntimeError("label annotator lacks incomplete-tray requeue support")
+    if getattr(module, "TARGET_TRAY_EDGE_MARGIN", None) != 0.005:
+        raise RuntimeError("label annotator lacks fail-closed tray edge margin")
     page = getattr(module, "PAGE", "")
-    required = ("missing_confirmed", "确认这是真的被拔掉了")
+    required = (
+        "missing_confirmed", "确认这是真的被拔掉了",
+        "托盘不完整 I", "incomplete_tray", "toggleIncomplete",
+    )
     if not isinstance(page, str) or any(marker not in page for marker in required):
         raise RuntimeError("label annotator lacks the audited missing-class confirmation flow")
     if "new Set(classes).size<2" in page:
@@ -78,6 +85,18 @@ def validate_modern_annotator(module: ModuleType, script: Path) -> None:
         raise RuntimeError(
             "label annotator lacks opaque high-contrast class rendering"
         )
+    guide_markers = (
+        "T 框完整托盘", "完整物理托盘（人工）", "renderTargetGuide", "target_box",
+        "target_tray_box", "请先按 T 框出完整物理托盘", "双格/多格仍是一只托盘",
+        "targetTouchesCropEdge",
+        "黄色托盘框碰到画面边缘，请点“托盘不完整 I”回流",
+    )
+    if any(marker not in page for marker in guide_markers):
+        raise RuntimeError("label annotator lacks read-only target-tray guidance")
+    if script.is_file() and "target tray touches crop edge; mark incomplete" not in script.read_text(
+        encoding="utf-8"
+    ):
+        raise RuntimeError("label annotator lacks server-side tray edge rejection")
     if getattr(module, "WIREGUARD_HOST", None) != "":
         raise RuntimeError("local label annotator must be loopback-only")
 

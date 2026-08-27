@@ -27,6 +27,7 @@ WHITE_MISSING_VERDICTS = {"MISSING_WHITE_LABEL", "BOTH_MISSING"}
 CLASS_WHITE_LABEL = 0
 SIDE_VIEW_MISSING = "side-view-missing"
 WHITE_CONFUSER_DISAGREEMENT = "white-confuser-disagreement"
+SOURCE_EDGE_MARGIN_RATIO = 0.005
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -71,6 +72,23 @@ def normal_truth(raw: str) -> bool:
 
 def box_area(box: Sequence[float]) -> float:
     return max(0.0, float(box[2]) - float(box[0])) * max(0.0, float(box[3]) - float(box[1]))
+
+
+def tray_touches_source_edge(
+    box: Sequence[float], image_width: int, image_height: int,
+    margin_ratio: float = SOURCE_EDGE_MARGIN_RATIO,
+) -> bool:
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError("image dimensions must be positive")
+    if not 0.0 <= margin_ratio <= 0.5:
+        raise ValueError("margin_ratio must be between 0 and 0.5")
+    x0, y0, x1, y1 = (float(value) for value in box)
+    margin_x = image_width * margin_ratio
+    margin_y = image_height * margin_ratio
+    return (
+        x0 <= margin_x or y0 <= margin_y
+        or x1 >= image_width - margin_x or y1 >= image_height - margin_y
+    )
 
 
 def overlap_fraction(left: Sequence[float], right: Sequence[float]) -> float:
@@ -381,6 +399,11 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
             for tray, selection_tags, selection_score, features in ranked_trays:
                 sku = str(record.get("sku_code") or "UNKNOWN")
                 if per_sku[sku] >= args.max_per_sku or photo_count >= args.max_per_photo:
+                    continue
+                if tray_touches_source_edge(
+                    tray.box, screening.image_width, screening.image_height,
+                ):
+                    exclusions["target_tray_touches_source_edge"] += 1
                     continue
                 crop_array, crop_rect = crop_with_padding(frame, tray.box, params.pad_ratio)
                 if crop_array.shape[0] < params.min_crop_px or crop_array.shape[1] < params.min_crop_px:
