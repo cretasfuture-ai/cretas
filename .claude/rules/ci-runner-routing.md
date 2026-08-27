@@ -29,17 +29,30 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 
 ---
 
-## 新接一个工作流：要过三关，⛔ 光加文件名不算接进来
+## 新接一个工作流：要过六关，⛔ 光加文件名不算接进来
 
-2026-08-27 接 `python-gate` / `jpa-gate-main` 时逐条踩过：
+2026-08-27 接 `python-gate` / `jpa-gate-main`（以及试过又撤回的 `ci.yml`）时逐条**实测**踩出来的：
 
 | # | 关卡 | 长什么样 |
 |---|---|---|
 | 1 | **缩进** | 脚本按**字面量**匹配 `    runs-on: ubuntu-latest`（4 空格）。缩进不同 → 静默不命中 |
-| 2 | **`actions/setup-python`** | 自建 macOS 上**必失败**（安装脚本把 `/Users/runner` 写死）⇒ 按 `secret-regression.yml` 的写法条件化 |
-| 3 | **Linux 专有命令** | `nproc` / `free` / `apt-get` 在 macOS 上直接不存在。`jpa-gate` 就有一步 `nproc` + `free -h`，**只负责打印却能弄红整个 job** |
+| 2 | **`actions/setup-python`** | 自建 macOS 上**必失败**（安装脚本把 `/Users/runner` 写死）⇒ 条件化 + 建 venv（homebrew 的 3.11+ 带 PEP 668，直接装会被拒） |
+| 3 | **Linux 专有命令** | `nproc` / `free` / `apt-get` / `stat -c` 在 macOS 上不存在。`jpa-gate` 就有一步 `nproc` + `free -h`，**只负责打印却能弄红整个 job** |
+| 4 | **缺工具** | `setup-java` 只装 JDK **不装 Maven** → `mvn: command not found`；homebrew 只给 `pip3`，**没有裸 `pip`** ⇒ 探测 + 兜底（`./mvnw` / `python -m pip`） |
+| 5 | **平台专用 wheel** | `torch==2.4.1+cpu` 的 `+cpu` 是 **Linux 专用**本地版本标识，macOS arm64 没有这个变体 |
+| 6 | 🔴 **`services:` / 容器** | 这台自建 runner **没有 Docker**。实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`，job 在 **Set up job 阶段**死，**一个 step 都执行不到**（run 33037689686，9 秒） |
 
-⛔ 三关不过就把文件名加进来，换来的是「从跑不起来」变成「跑起来就红」。
+⛔ 六关不逐条过就把文件名加进来，换来的是「从跑不起来」变成「跑起来就红」。
+
+### 📌 `ci.yml` 试过并撤回了 —— 卡在第 6 关
+
+它是**发布链 `--prefer-ci-artifact` 那个制品的产出方**，额度耗尽期间它死掉是有生产影响的，
+所以值得试。它有 **4 个 job**（脚本因此从「恰好 1 处」改成「N 处全换」），
+但 `java-build-test` 依赖 `pgvector/pgvector:pg17` 服务容器 + `psql` ——
+**没有 Docker 就无解，与 YAML 怎么写无关。**
+
+⇒ 这是**机器侧**的事（给 runner 装 Docker，或换一台 Linux self-hosted），
+⛔ 不是这个脚本能解决的。在那之前 `ci.yml` 保持写死 `ubuntu-latest`。
 
 ### `--adopt`：一致性闸曾经把接入路径堵死
 

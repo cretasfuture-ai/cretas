@@ -24,13 +24,28 @@ import pathlib
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-# ⚠️ 往这里加一个工作流之前, 先过三关(2026-08-27 接 python-gate / jpa-gate 时逐条踩过):
-#   1. `runs-on` 那一行必须**正好**是 4 个空格缩进 —— 下面是字面量匹配, 缩进不同会静默不命中。
-#   2. 有没有 `actions/setup-python`? 自建 macOS runner 上它必失败
-#      (安装脚本把 `/Users/runner` 写死), 要按 secret-regression.yml 的写法条件化。
-#   3. 有没有 **Linux 专有命令**? `nproc` / `free` / `apt-get` 在 macOS 上直接不存在。
+# ⚠️ 往这里加一个工作流之前, 先过六关。
+#    2026-08-27 接 python-gate / jpa-gate / (试过 ci.yml) 时逐条**实测**踩出来的:
+#
+#   1. **缩进**: `runs-on` 那一行必须正好 4 个空格 —— 下面是字面量匹配, 不同会静默不命中。
+#   2. **actions/setup-python**: 自建 macOS 上必失败(安装脚本把 `/Users/runner` 写死),
+#      要按 secret-regression.yml 的写法条件化 + 建 venv(homebrew 的 3.11+ 带 PEP 668)。
+#   3. **Linux 专有命令**: `nproc` / `free` / `apt-get` / `stat -c` 在 macOS 上不存在。
 #      jpa-gate 就有一步 `nproc` + `free -h`, 只负责打印却能弄红整个 job。
-# ⛔ 只把文件名加进来、不做这三关, 换来的是「从跑不起来」变成「跑起来就红」。
+#   4. **缺工具**: `setup-java` 只装 JDK 不装 Maven -> `mvn: command not found`;
+#      homebrew 只给 `pip3`, 没有裸 `pip`。⇒ 探测 + 兜底(`./mvnw` / `python -m pip`)。
+#   5. **平台专用 wheel**: `torch==2.4.1+cpu` 的 `+cpu` 是 Linux 专用本地版本标识。
+#   6. 🔴 **`services:` / 容器**: 这台自建 runner **没有 Docker** ——
+#      实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`,
+#      job 在 **Set up job 阶段**就死, 一个 step 都执行不到(run 33037689686, 9 秒)。
+#      ⇒ 带 `services:` 的工作流**在这台机器上接不进来**, 与 YAML 怎么写无关。
+#
+# ⛔ 只把文件名加进来、不逐条过这六关, 换来的是「从跑不起来」变成「跑起来就红」。
+#
+# 📌 `ci.yml` 试过并**撤回**了: 它有 4 个 job(所以下面改成「N 处全换」), 但它的
+#    java-build-test 依赖 pgvector 服务容器 + psql ⇒ 卡在第 6 关。它仍写死
+#    ubuntu-latest, 额度耗尽期间产不出制品 —— 那是**机器侧**的事(给 runner 装 Docker,
+#    或换一台 Linux self-hosted), 不是这个脚本能解决的。
 WORKFLOWS = [
     "secret-regression.yml",
     "web-admin-gate.yml",
@@ -48,9 +63,19 @@ def read(p):
 
 
 def current(text):
-    if SELF in text:
+    """一个文件当前落在哪一侧。
+
+    ⚠️ 2026-08-27: 原来是 `if SELF in text: return "self-hosted"` 先判 SELF ——
+    一个**半转换**的文件(两种都有)会被报成 self-hosted, 正好把
+    「共享结构只改一处」那种坏法**藏起来**。而多 job 的文件正是最容易半转换的
+    (ci.yml 有 4 个 job)。⇒ 两种都数, 同时存在就是显式的坏状态 `mixed`。
+    """
+    n_self, n_hosted = text.count(SELF), text.count(HOSTED)
+    if n_self and n_hosted:
+        return "mixed"
+    if n_self:
         return "self-hosted"
-    if HOSTED in text:
+    if n_hosted:
         return "hosted"
     return "unknown"
 
@@ -110,6 +135,13 @@ def main() -> int:
 
     if check_only:
         now = distinct.pop() if len(distinct) == 1 else "unknown"
+        if any(v == "mixed" for v in states.values()):
+            print("ci-runner: FAIL — 有文件处于 **mixed**(同一文件里两种 runs-on 并存),")
+            print("  那是「多 job 文件只改了一半」的长相:")
+            for k, v in states.items():
+                if v == "mixed":
+                    print("  %-26s %s" % (k, v))
+            return 1
         print("ci-runner: 当前 = %s (%d 个工作流一致)" % (now, len(WORKFLOWS)))
         _remind_if_quota_reset(now)
         return 0 if now != "unknown" else 1
@@ -128,16 +160,22 @@ def main() -> int:
             # ⛔ 不能让「没改」和「改了」在输出里长得一样。
             print("  %-26s 已经是 %s, 跳过" % (name, target))
             continue
-        # 只许命中一处 —— 多了少了都是意外。
+        # ⚠️ 2026-08-27: 原来这里断言「恰好 1 处」—— 而 `ci.yml` 有 **4 个 job**,
+        #    每个都有自己的 runs-on。那条断言把多 job 的工作流**从物理上排除**在
+        #    这套路由之外, 而 ci.yml 恰恰是发布链 `--prefer-ci-artifact` 要用的
+        #    那个制品的产出方, 额度耗尽时它死掉是有生产影响的。
+        # ⇒ 改成「至少 1 处, 全部替换」, 并把**每个文件改了几处**打出来 ——
+        #   数目是这里唯一能自证「没有只改一半」的东西。
         # ⛔ 不用 assert: `python -O` 会把它整条剥掉, 那样这道防线在某些跑法下不存在。
-        if s.count(frm) != 1:
-            print("ci-runner: FAIL — %s 里 `%s` 命中 %d 处, 预期 1"
-                  % (name, frm.strip(), s.count(frm)))
+        n = s.count(frm)
+        if n < 1:
+            print("ci-runner: FAIL — %s 里一处 `%s` 都没有(当前状态 %s)"
+                  % (name, frm.strip(), states[name]))
             print("  (已改动 %d 个文件, 工作树现在是**半途状态**, 用 git 看一眼再决定)" % changed)
             return 1
         io.open(p, "w", encoding="utf-8", newline="").write(s.replace(frm, to))
         changed += 1
-        print("  %-26s -> %s" % (name, target))
+        print("  %-26s -> %s  (%d 处)" % (name, target, n))
 
     print("")
     print("ci-runner: 改动 %d 个文件, 跳过 %d 个。" % (changed, len(WORKFLOWS) - changed))
