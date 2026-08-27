@@ -535,7 +535,13 @@ export default function CostAnalysisDashboard() {
                   {batch.actualQuantity} 件
                 </Text>
               </View>
-              {batch.goodQuantity !== undefined && (
+              {/* ⛔ 不能用 `!== undefined` —— `null !== undefined` 为真, 后端把「不知道」
+                  发成 JSON null, 于是这一行会渲染成「null 件」。
+                  🔴 2026-08-28 生产实测: good_quantity 全库 46 个批次【全部为 NULL】
+                  (V20260826_05 把编出来的「零不良」清掉之后再没人录过) ⇒ 这一行今天
+                  就在给用户看「null 件」。
+                  ⇒ 用 typeof === 'number': null / undefined / 非数字一律不渲染。 */}
+              {typeof batch.goodQuantity === 'number' && (
                 <View style={styles.detailRow}>
                   <Text variant="bodyMedium">良品数量：</Text>
                   <Text variant="titleMedium" style={[styles.detailValue, { color: '#388E3C' }]}>
@@ -543,7 +549,11 @@ export default function CostAnalysisDashboard() {
                   </Text>
                 </View>
               )}
-              {batch.defectQuantity !== undefined && batch.defectQuantity > 0 && (
+              {/* ⚠️ 这一处此前是【侥幸】安全: `null !== undefined` 为真, 但 `null > 0` 为假
+                  ⇒ 恰好不渲染。靠的是后面那个 `> 0`, 不是那个守卫。
+                  谁把 `> 0` 去掉(比如想让「0 次品」也显示出来), 它立刻开始渲染 `null 件`。
+                  ⇒ 改成与邻居一致的 typeof, 让安全来自设计而不是巧合。 */}
+              {typeof batch.defectQuantity === 'number' && batch.defectQuantity > 0 && (
                 <View style={styles.detailRow}>
                   <Text variant="bodyMedium">次品数量：</Text>
                   <Text variant="titleMedium" style={[styles.detailValue, { color: '#D32F2F' }]}>
@@ -551,7 +561,14 @@ export default function CostAnalysisDashboard() {
                   </Text>
                 </View>
               )}
-              {batch.yieldRate !== undefined && (
+              {/* 🔴 同上, 而且这一处是 #246 当场引入的回归:
+                  #246 把「派生自编造良品数」的 yield_rate 清成 NULL(那是对的),
+                  于是这里从「假的 100%(完美)」变成了「假的 0.0%(全废)」——
+                  `null !== undefined` 为真 ⇒ 进渲染分支 ⇒ (null * 100).toFixed(1) === "0.0"。
+                  0% 良品率是一个【灾难性的真实读数】, 与「还没算出来」含义相反。
+                  ⚠️ web-admin 的批次详情页早就守对了(按 goodQuantity == null 判, 显示「—」),
+                     手机这一侧漏了。 */}
+              {typeof batch.yieldRate === 'number' && (
                 <View style={styles.detailRow}>
                   <Text variant="bodyMedium">良品率：</Text>
                   <Text variant="bodyMedium" style={styles.detailValue}>
