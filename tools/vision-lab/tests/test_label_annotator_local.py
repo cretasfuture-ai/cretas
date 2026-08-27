@@ -44,6 +44,7 @@ class LabelAnnotatorLocalTests(unittest.TestCase):
         modern = SimpleNamespace(
             ALLOW_MISSING_CLASS=True,
             ALLOW_INCOMPLETE_TRAY=True,
+            TARGET_TRAY_EDGE_MARGIN=0.005,
             OPAQUE_CLASS_LABELS=True,
             WIREGUARD_HOST="",
             PAGE=(
@@ -52,13 +53,16 @@ class LabelAnnotatorLocalTests(unittest.TestCase):
                 "fillRect(tagX,tagY,tagW,tagH) "
                 "托盘不完整 I incomplete_tray toggleIncomplete "
                 "T 框完整托盘 完整物理托盘（人工） renderTargetGuide target_box "
-                "target_tray_box 请先按 T 框出完整物理托盘 双格/多格仍是一只托盘"
+                "target_tray_box 请先按 T 框出完整物理托盘 双格/多格仍是一只托盘 "
+                "targetTouchesCropEdge "
+                "黄色托盘框碰到画面边缘，请点“托盘不完整 I”回流"
             ),
         )
         module.validate_modern_annotator(modern, Path("label_hard_negative_annotator.py"))
         legacy = SimpleNamespace(
             ALLOW_MISSING_CLASS=True,
             ALLOW_INCOMPLETE_TRAY=True,
+            TARGET_TRAY_EDGE_MARGIN=0.005,
             OPAQUE_CLASS_LABELS=True,
             WIREGUARD_HOST="",
             PAGE=(
@@ -76,12 +80,15 @@ class LabelAnnotatorLocalTests(unittest.TestCase):
         thin_outline = SimpleNamespace(
             ALLOW_MISSING_CLASS=True,
             ALLOW_INCOMPLETE_TRAY=True,
+            TARGET_TRAY_EDGE_MARGIN=0.005,
             WIREGUARD_HOST="",
             PAGE=(
                 "missing_confirmed 确认这是真的被拔掉了 "
                 "托盘不完整 I incomplete_tray toggleIncomplete "
                 "T 框完整托盘 完整物理托盘（人工） renderTargetGuide target_box "
-                "target_tray_box 请先按 T 框出完整物理托盘 双格/多格仍是一只托盘"
+                "target_tray_box 请先按 T 框出完整物理托盘 双格/多格仍是一只托盘 "
+                "targetTouchesCropEdge "
+                "黄色托盘框碰到画面边缘，请点“托盘不完整 I”回流"
             ),
         )
         with self.assertRaisesRegex(RuntimeError, "opaque high-contrast"):

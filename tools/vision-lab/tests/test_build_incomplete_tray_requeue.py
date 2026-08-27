@@ -58,3 +58,9 @@ def test_pre_guide_review_is_carried_only_as_untrusted_proposal(tmp_path):
     assert carried["boxes"] == [{"c": 1, "b": [0, 0, 1, 1]}]
     assert carried["review_round_action"] == "RECONFIRM_WITH_TARGET_GUIDE"
     assert carried["training_exclusion_reason"] == "awaiting_target_tray_guide_reconfirmation"
+
+
+def test_recursive_requeue_versions_are_supported():
+    assert "liushanmen-pending-target-tray-review-v1" in MODULE.SUPPORTED_SOURCE_VERSIONS
+    assert "liushanmen-incomplete-tray-requeue-v2" in MODULE.SUPPORTED_SOURCE_VERSIONS
+    assert MODULE.VERSION in MODULE.SUPPORTED_SOURCE_VERSIONS

@@ -11,7 +11,12 @@ from typing import Any, Sequence
 from PIL import Image, ImageOps
 
 
-VERSION = "liushanmen-incomplete-tray-requeue-v2"
+VERSION = "liushanmen-incomplete-tray-requeue-v3"
+SUPPORTED_SOURCE_VERSIONS = {
+    "liushanmen-pending-target-tray-review-v1",
+    "liushanmen-incomplete-tray-requeue-v2",
+    VERSION,
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -149,8 +154,13 @@ def build(
     manifest_path = source_queue / "manifest.json"
     manifest = load_json(manifest_path)
     pending_path_value = manifest.get("source_pending_manifest")
-    if manifest.get("version") != "liushanmen-pending-target-tray-review-v1" or not pending_path_value:
+    if manifest.get("version") not in SUPPORTED_SOURCE_VERSIONS or not pending_path_value:
         raise RuntimeError("source queue is not a pending target-tray review queue")
+    source_round = int(manifest.get("review_round", 1))
+    if review_round != source_round + 1:
+        raise RuntimeError(
+            f"review round must advance exactly once: {source_round} -> {review_round}"
+        )
     pending_path = Path(str(pending_path_value)).resolve()
     pending = load_json(pending_path)
     pending_rows = {str(row["photo_id"]): row for row in pending.get("rows") or []}
