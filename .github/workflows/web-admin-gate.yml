@@ -48,6 +48,8 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/bom/impl/BomRecipeServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/production/ProductionDocumentTraceService.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
+      # statisticsFieldNamesMatchBackend.source.spec.ts 读它, 断言前端 KPI 字段名 == 后端 stats.put 的键
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/QualityCheckItemServiceImpl.java'
   pull_request:
     paths:
       - 'web-admin/**'
@@ -78,6 +80,8 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/bom/impl/BomRecipeServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/production/ProductionDocumentTraceService.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
+      # statisticsFieldNamesMatchBackend.source.spec.ts 读它, 断言前端 KPI 字段名 == 后端 stats.put 的键
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/QualityCheckItemServiceImpl.java'
 
 concurrency:
   group: web-admin-gate-${{ github.ref }}

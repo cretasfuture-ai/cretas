@@ -83,9 +83,22 @@ public interface QualityCheckItemRepository extends JpaRepository<QualityCheckIt
     // ==================== 统计查询 ====================
 
     /**
-     * 统计工厂的质检项数量
+     * 统计工厂【已启用】的质检项数量。
+     *
+     * <p>⚠️ 方法名里的 {@code EnabledTrue} 是判据的一部分 —— 它<b>不是</b>「总数」。
+     * 此前 {@code getStatistics} 把它的结果放进了名为 {@code "total"} 的键，
+     * 而前端那张卡的标题是「质检项总数」⇒ 名字与含义对不上。见下面那个方法。</p>
      */
     long countByFactoryIdAndEnabledTrueAndDeletedAtIsNull(String factoryId);
+
+    /**
+     * 统计工厂的质检项【总数】—— 含已禁用的，只排除软删。
+     *
+     * <p>2026-08-28 新增：此前后端<b>根本不产出</b>这个概念，而页面上有一张
+     * 「质检项总数」卡片，它靠前端 {@code || tableData.length} 兜底 ——
+     * 那是<b>当前页</b>的行数，超过一页就少报。</p>
+     */
+    long countByFactoryIdAndDeletedAtIsNull(String factoryId);
 
     /**
      * 按类别统计
