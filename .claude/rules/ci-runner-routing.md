@@ -9,28 +9,47 @@
 
 ## 一句话
 
-**默认走托管 runner。额度耗尽时，设一个组织变量切到加拿大 Mac mini；额度恢复，删掉它。**
-⛔ 任何时候都**不要**去改 workflow 的 `runs-on`。
+**默认走托管 runner。额度耗尽时，一条命令切到加拿大 Mac mini；额度恢复，切回来。**
 
 ```bash
-# 额度耗尽 → 切到自建
-gh variable set CI_RUNNER --org cretasfuture-ai --body '["self-hosted","cretas"]'
-
-# 额度恢复(每月 1 号) → 切回托管
-gh variable delete CI_RUNNER --org cretasfuture-ai
-
-# 当前走哪条
-gh variable list --org cretasfuture-ai | grep CI_RUNNER || echo "未设置 = 走托管"
+python scripts/ci/switch_ci_runner.py --check        # 当前走哪条
+python scripts/ci/switch_ci_runner.py self-hosted    # 额度耗尽 -> 自建
+python scripts/ci/switch_ci_runner.py hosted         # 额度恢复(每月 1 号) -> 托管
 ```
 
-工作流里长这样，三个闸一致：
+⚠️ 它改的是**工作流文件**，所以要 `git commit && git push` 才生效。
+脚本一次改全三个闸，并断言三处一致 —— ⛔ 不要手工改单个 `runs-on`
+（「共享结构只改一处」是本仓反复踩的坑）。
+
+已接入：`secret-regression.yml` / `web-admin-gate.yml` / `rn-gate.yml`。
+其余 12 个工作流写死 `ubuntu-latest`；要接就把文件名加进脚本的 `WORKFLOWS`。
+
+---
+
+## ⛔ 别用组织变量做路由（实测不生效，别再试第二遍）
+
+第一版写的是这个，看起来最优雅 —— **切换不用碰任何工作流文件**：
 
 ```yaml
 runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
 ```
 
-已接入：`secret-regression.yml` / `web-admin-gate.yml` / `rn-gate.yml`。
-其余 12 个工作流仍写死 `ubuntu-latest`，要接就照抄这一行。
+**它不工作。** job 实际被派成 `labels=ubuntu-latest`，即 `vars.CI_RUNNER`
+在 `runs-on` 求值时读到的是**空**。
+
+逐条排除过，配置侧没有任何问题：
+
+| 怀疑 | 实测 |
+|---|---|
+| PR 来自 fork（fork 读不到组织变量）| `isCrossRepository=false` |
+| 变量可见性没覆盖本仓 | `visibility=all` |
+| 组织变量没授权给这个仓 | `repos/.../actions/organization-variables` 列得到 `CI_RUNNER` |
+| 建变量晚于 run（时序竞争）| 变量 `01:43:43Z` < run `01:48:34Z` |
+
+⇒ 成因是 **`runs-on` 在 job 编排阶段求值**，那时可用的上下文比步骤里窄，
+`vars` 够不着。这不是配错了，是**能力边界**。
+
+▎判据：`runs-on` 里只放字面量。要动态就改文件。
 
 ---
 
@@ -121,7 +140,7 @@ runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
 
 ## 判据
 
-- 切换后**不看 `gh variable list`，看 job 实际落在哪**：
+- 切换后**不看脚本说了什么，看 job 实际落在哪**：
   `gh api repos/cretasfuture-ai/cretas/actions/jobs/<id> --jq .runner_name`
 - 自建 runner 在线：`gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+" "+.status'`
 - ⚠️ `status=offline` 但 `busy=true` 是**正常的中间态**（正在重连），不要据此判定它挂了
