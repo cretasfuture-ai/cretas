@@ -107,12 +107,45 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
         report.put("statusDistribution", statusDistribution);
         // 按材料类型统计
+        //
+        // 🔴 2026-08-27: 这里原来是 `typeDistribution.put((String) row[0], …)` 直接塞。
+        //    `sumQuantityByMaterialType` 按 `m.materialTypeId` 分组，而**半成品/WIP 批次
+        //    的 materialTypeId 是 null**（它们用 productTypeId），于是这张 map 里出现一个
+        //    null 键，整个接口在**序列化那一步**炸：
+        //
+        //      HttpMessageNotWritableException:
+        //        Could not write JSON: Null key for a Map not allowed in JSON
+        //
+        //    生产实测（2026-08-27，`cretas_prod_db` 只读）：
+        //      F006  AVAILABLE 批次 64 条，其中 14 条 materialTypeId 为 null —— 14 条**全部**
+        //            有 productTypeId，即全是 WIP
+        //      MOCK_REST / LIUSHANMEN  0 条
+        //    ⇒ `GET /api/mobile/{factoryId}/reports/inventory` 恰好**只对真客户租户 F006
+        //      返回 500**，其余租户看起来一切正常。实测拿 f006_admin 打这 22 个报表端点，
+        //      21 个返回真数据，坏的就这一个。
+        //
+        // ⚠️ 同一张 map 还被 `ReportInventoryTool` / `ReportMrpCalculationTool`
+        //    原样透传（`result.put("data", inventoryData)`），所以它们的产出一旦被
+        //    序列化成 JSON 会撞同一处。
+        //
+        // ⛔ 修法不是「把 null 那行跳过就完了」—— 那会让 14 条批次的数量**静默消失**，
+        //    报表加起来对不上。本方法的口径写着「按**原材料**类型统计」，WIP 本来就不属于
+        //    这张表；但它的量必须**显式**记在另一个字段里，而不是被吞掉。
         List<Object[]> inventoryByType = materialBatchRepository.sumQuantityByMaterialType(factoryId);
         Map<String, BigDecimal> typeDistribution = new HashMap<>();
+        BigDecimal quantityWithoutMaterialType = BigDecimal.ZERO;
         for (Object[] row : inventoryByType) {
-            typeDistribution.put((String) row[0], (BigDecimal) row[1]);
+            String materialTypeId = (String) row[0];
+            BigDecimal quantity = row[1] == null ? BigDecimal.ZERO : (BigDecimal) row[1];
+            if (materialTypeId == null) {
+                // 半成品/WIP：没有原材料类型。⛔ 不塞 null 键（会炸），也⛔ 不丢掉这个量。
+                quantityWithoutMaterialType = quantityWithoutMaterialType.add(quantity);
+                continue;
+            }
+            typeDistribution.put(materialTypeId, quantity);
         }
         report.put("typeDistribution", typeDistribution);
+        report.put("quantityWithoutMaterialType", quantityWithoutMaterialType);
         // 库存预警
         List<MaterialBatch> expiringBatches = materialBatchRepository.findExpiringBatches(
                 factoryId, date.plusDays(7));
