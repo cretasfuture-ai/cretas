@@ -19,17 +19,27 @@
 
 ⚠️ 这批 PR 落后 main **29~32 个 commit**。动手前一律 `git rev-list --count HEAD..origin/main`。
 
-### ② CI 不再是「全仓跑不了」
+### ② CI 接回来了 —— #143 与 #159 都已合入，main 上是绿的
 
-`#143` 把三道 PR 闸切到自建 runner，**已经在跑**。本轮结束时：
+```
+d9f9682914  fix(rn): 「上海今天」…每天 16:00 之后返回明天 (#159)
+1246604531  ci: 三个 PR 闸改用自建 runner (#143)
+```
 
-| 闸 | 状态 |
-|---|---|
-| Secret regression gate | ✅ success |
-| Web Admin Gate | ✅ success |
-| RN Gate | ❌ 1 failed suite / 10 failed / 1910 passed —— **要 #159 才能绿** |
+`d9f9682914` 上 main 的两道闸实测：**RN Gate ✅ success / Secret regression gate ✅ success**
+（跑在 `canada-mac-mini` 上，有真实时长，不是 2~4 秒的空转）。
 
-⚠️ 其余约 12 个工作流仍走 `ubuntu-latest`，托管额度用尽 ⇒ **job 2~4 秒、0 个 step、无日志**地失败。
+⚠️ **只有 3 个工作流切了过去，还有 12 个起不来**：
+
+```
+已切自建   rn-gate.yml  secret-regression.yml  web-admin-gate.yml
+仍托管     ci.yml  daily-integration.yml  e2e-post-deploy.yml  e2e-pr.yml
+           java-full-nightly.yml  jpa-gate-main.yml  kb-drift-check.yml
+           python-gate.yml  threshold-parity-check.yml  tool-inventory-gate.yml
+           tool-isolation-audit.yml  web-dist.yml
+```
+
+那 12 个在托管额度用尽下 ⇒ **job 2~4 秒、0 个 step、无日志**地失败。
 
 ▎**判据是时长**：2~4 秒 = job 根本没启动；有真实时长 = 跑了、失败在内容。
 ▎ 别把「没启动」读成「测试红了」——`gh pr checks` 两者都显示 fail。
@@ -334,11 +344,22 @@ TypeError: groups.filter is not a function   → React 树整个卸载, document
 
 ## 9. 建议的下一步
 
-1. **合 #143** —— 它一合，#159 重跑就落到自建 runner 上
-   （`pull_request` 用的是 base+head 的 merge ref，base 带上自建 runner 即生效）。
-   顺手把三个 yml 里关于 139 的那 15 行描述改成实际 runner。
-2. **合 #159** —— 之后 #143 的 RN Gate 转绿，整批 PR 的 RN 侧就全绿了。
-3. **拍 §2 那条决策**（#123 的 `locked` / ManagementScreen 可达性）——
+1. ~~合 #143~~ ✅ 已合（`1246604531`）。
+2. ~~合 #159~~ ✅ 已合（`d9f9682914`）。合之前与 #143 撞了同一个文件 ——
+   两边修的是同一个缺陷，取的是**并集**：
+   保留抽出的 `utils/shanghaiDate.ts`（读 UTC 分量）⇒ 被禁的截断写法从代码里消失 ⇒
+   **`noUtcDayTruncation` 闸那条具名豁免也随之摘掉**，回到零豁免；
+   并给「豁免清单不许过期」那条测试补了 `ALLOWLIST.length === 0` ——
+   否则清单为空时 `for` 循环零次迭代，是个恒真式（形态 B′）。
+   ⚠️ 保留本分支实现的唯一理由：**main 那版有修复但没有任何测试会在它退化时变红**
+   （实测：换回缺陷版，`AIChatScreenRestaurantAgent` 20 条在上海 03:xx 仍全绿）。
+
+3. **⛔ 把三个 yml 里关于「139(4 核/7G) / systemd Nice=10 CPUWeight=50 MemoryMax=3G /
+   实测 vitest 4分41秒」的那 15 行改掉** —— 见 §0③，它们描述的是一台没在跑这些 job
+   的机器，而且**已经随 #143 合进 main 了**。
+4. **把剩下 12 个工作流也切过去**（或按 owner 的计划换本地 runner）——
+   在那之前，那 12 个的 fail 都要按「没启动」读，⛔ 不要读成「测试红了」。
+5. **拍 §2 那条决策**（#123 的 `locked` / ManagementScreen 可达性）——
    它是 13 个 PR 里唯一的红。
-4. **确认 §3 里 #153 事实上替 owner 拍掉的那条报错口径**。
-5. 剩下的按上一轮交接件 §3 / §6。
+6. **确认 §3 里 #153 事实上替 owner 拍掉的那条报错口径**。
+7. 剩下的按上一轮交接件 §3 / §6。
