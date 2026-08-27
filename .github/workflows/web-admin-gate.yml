@@ -28,6 +28,14 @@ on:
       # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
       # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
+      # 🔴 2026-08-28: rawWorkflowOwnerAnchorMatchesBackend.source.spec.ts 读**这个** Java
+      # 文件里的 anchor.setName("__RAW_WORKFLOW_OWNER__"…) 字面量, 钉住前端那份不漂。
+      # Java 单方面改前缀而闸不跑 ⇒ 前端安静地不再过滤, 客户重新看到
+      # 「PLAN-… · __RAW_WORKFLOW_OWNER__RMT_…」当成产品名(2026-08-28 f006 实拍)。
+      # ⚠️ 只加**这一个确切文件**, ⛔ 不用 backend/**/*.java 之类的宽 glob ——
+      #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
+      #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
       # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
       # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
       # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:
@@ -60,6 +68,14 @@ on:
       # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
       # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
+      # 🔴 2026-08-28: rawWorkflowOwnerAnchorMatchesBackend.source.spec.ts 读**这个** Java
+      # 文件里的 anchor.setName("__RAW_WORKFLOW_OWNER__"…) 字面量, 钉住前端那份不漂。
+      # Java 单方面改前缀而闸不跑 ⇒ 前端安静地不再过滤, 客户重新看到
+      # 「PLAN-… · __RAW_WORKFLOW_OWNER__RMT_…」当成产品名(2026-08-28 f006 实拍)。
+      # ⚠️ 只加**这一个确切文件**, ⛔ 不用 backend/**/*.java 之类的宽 glob ——
+      #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
+      #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
       # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
       # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
       # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:

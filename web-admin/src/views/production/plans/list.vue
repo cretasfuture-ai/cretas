@@ -457,13 +457,30 @@ interface RowWorkflowPreviewState {
 
 const rowWorkflowPreviews = ref<Record<string, RowWorkflowPreviewState>>({});
 
+// ⚠️ 硬约束「改共享结构前先数」的登记项 —— 本文件里「回落成裸 ID」有**两种**形状:
+//
+//   ① `targetFinishedGoodNames` / 候选产出标签: 直接 `name || id`, **零个名字字段兜底**
+//      → 生产上实际打出了裸 UUID(2026-08-28 实拍, 20 条计划里 8 条) ⇒ **本 PR 已修 3 处**
+//
+//   ② `productTypeName || productName || productTypeId` 三段式: **先试两个名字字段**,
+//      只有后端两个都没下发才会到 ID。⇒ 生产上未观测到, 且这 11 处散在对话框标题 /
+//      确认框文案 / 归档卡片, 各自上下文不同, 统一改需要逐处判断「空值该显示什么」。
+//      ⇒ **登记, 本 PR 不改** (⛔ 不是漏了)。当前 11 处:
+//         2029 / 2636 / 2697 / 2916 / 3063 / 3232 / 3279 / 3394 / 4433 / 4666 / 6226
+//      再看到裸 UUID 的实拍时, 从这份清单里找。
 function planFinishedProductNames(row: TableRow): string[] {
   const targetIds = Array.isArray(row.targetFinishedGoodIds)
     ? row.targetFinishedGoodIds.map(String)
     : [];
   const names = targetFinishedGoodNames(targetIds).filter(Boolean);
   if (names.length > 0) return names;
-  return [String(row.productTypeName || row.productName || row.productTypeId || '-')];
+  // ⚠️ 与上面同一条路径: targetFinishedGoodIds 为空时走这里, 原来同样会打出裸 UUID。
+  // productTypeId 本身为空是合法的(没指定成品), 那种情况给 '-' 才诚实, 不要说「未识别 SKU」。
+  return [String(
+    row.productTypeName
+    || row.productName
+    || (row.productTypeId ? resolveOutputProductLabel(row.productTypeId) : '-'),
+  )];
 }
 
 function planFinishedGoodIds(row: TableRow): string[] {
@@ -1230,7 +1247,7 @@ function candidateExtraOutputNames(candidate: WorkflowResolutionCandidate): stri
   ));
   return (candidate.terminalOutputs || [])
     .filter((output) => extraIds.has(output.productTypeId))
-    .map((output) => output.productName || output.productTypeId);
+    .map((output) => output.productName || resolveOutputProductLabel(output.productTypeId));
 }
 
 async function confirmWorkflowCandidateSelection() {
@@ -3648,12 +3665,28 @@ function formatPlanDisplayQuantity(row: TableRow | null | undefined): string {
 
 // raw-centric 多SKU (2026-07-13): 计划的 targetFinishedGoodIds → 产品名 (列表/详情共用)。
 // 查不到 (产品已删除) 时兜底显示 id + 「已删除」提示, 不静默丢字段。
+// 2026-08-28 逐屏走查: 这个函数把**表格列**「生产成品」渲染成了裸 UUID。
+//
+// 实拍 (f006 真实客户, 20 条计划里 8 条): `eb0aa47b-a5dd-49dc-a…` —— 列宽 240 截断之后
+// 连 `（已删除）` 三个字都看不到, 用户在生产计划列表上**看不出这是什么产品**。
+//
+// 🔴 两个缺陷, 而修法就在 10 行之外:
+//
+//   ① 回落成 UUID。下面 `resolveOutputProductLabel` 的注释里写着
+//      「两个对话框此前直接把 UUID 打给用户 (实拍截图: eb0aa47b-a5dd-49dc-af20-…)」——
+//      **同一个 UUID**。那两个对话框修好了, 这个表格列没修。形态 D: 同一件事两份实现,
+//      一份修好了另一份没有, 而修好的那份的注释就摆在旁边。
+//
+//   ② `（已删除）` 是**错误的诊断**。副产是原料, 落在 `raw_material_types` 而不是
+//      `product_types` —— 它没被删, 只是不在这张表里。告诉用户「已删除」比不说更糟,
+//      它会让人去找一个根本没发生的删除操作。
+//
+// ⇒ 直接复用 `resolveOutputProductLabel`(两张表都查, 查不到给明确中文), 不再各写一份。
+//   ⚠️ 它依赖 `rawMaterialTypesForNames`, 而那个 ref 在 `onMounted` 就加载
+//   (与 loadData 同批), 表格渲染时可用 —— 不是「机制在、没接上」。
 function targetFinishedGoodNames(ids: unknown): string[] {
   if (!Array.isArray(ids)) return [];
-  return ids.map((id) => {
-    const pt = productTypes.value.find((p: TableRow) => String(p.id) === String(id));
-    return pt ? String(pt.name) : `${id}（已删除）`;
-  });
+  return ids.map((id) => resolveOutputProductLabel(id));
 }
 
 // 「核对结单」终端产出 / 「仓库确认入库」产出行的 productTypeId → 品名。
@@ -5221,7 +5254,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :type="workflowCandidateExtraOutputs(candidate, planForm.targetFinishedGoodIds).includes(output.productTypeId)
                 ? 'warning' : 'success'"
             >
-              {{ output.productName || output.productTypeId }}
+              {{ output.productName || resolveOutputProductLabel(output.productTypeId) }}
             </el-tag>
           </div>
 
