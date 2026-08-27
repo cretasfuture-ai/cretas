@@ -33,7 +33,12 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 #   3. **Linux 专有命令**: `nproc` / `free` / `apt-get` / `stat -c` 在 macOS 上不存在。
 #      jpa-gate 就有一步 `nproc` + `free -h`, 只负责打印却能弄红整个 job。
 #   4. **缺工具**: `setup-java` 只装 JDK 不装 Maven -> `mvn: command not found`;
-#      homebrew 只给 `pip3`, 没有裸 `pip`。⇒ 探测 + 兜底(`./mvnw` / `python -m pip`)。
+#      homebrew 只给 `pip3` / `python3`, **没有裸 `pip` 也没有裸 `python`**。
+#      ⇒ 探测 + 兜底(`./mvnw` / `python3` / venv 里的 `python`)。
+#      🔴 2026-08-27 实测(run 33041333971): `java-full-nightly` 的棘轮那一步调裸 `python`,
+#         rc=127; 而它的判定只列了 0/1/2 ⇒ **两条判定全被 skip, job 报 success,
+#         artifact 只有 146 字节**。⇒ 扫的时候**不能只看 `uses:`**, run 步骤里的
+#         裸解释器/裸工具同样要查。
 #   5. **平台专用 wheel**: `torch==2.4.1+cpu` 的 `+cpu` 是 Linux 专用本地版本标识。
 #   6. 🔴 **`services:` / 容器**: 这台自建 runner **没有 Docker** ——
 #      实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`,

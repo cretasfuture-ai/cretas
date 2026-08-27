@@ -107,15 +107,23 @@ jobs:
         # always(): 上一步 continue-on-error 之后仍可能是 failure 状态,
         # 而【正是那种时候】最需要棘轮把它判成 rc=2「没量到」。
         if: always()
+        # 🔴 2026-08-27 实测(run 33041333971): 这一步原来调的是**裸 `python`** ——
+        #    自建 macOS runner 上**没有裸 `python`**(只有 python3), 于是
+        #    `python: command not found` / rc=127。
+        #    而 127 既不是 1 也不是 2 ⇒ 下面两条判定**全被 skip** ⇒
+        #    job 报 success、artifact 只有 146 字节、`known-failing-tests.txt` 压根没产出。
+        #    **这正是本文件头警告的「崩得像成功」, 只是这次发生在棘轮自己身上。**
+        # ⇒ 用 python3（托管 ubuntu 与 macOS 都有它, 裸 python 只有前者有）。
         run: |
           set +e
-          python scripts/ci/java-test-ratchet.py \
+          python3 scripts/ci/java-test-ratchet.py \
             --reports backend/java/cretas-api/target/surefire-reports \
             --baseline backend/java/cretas-api/known-failing-tests.txt \
             ${{ inputs.write_baseline && '--write-baseline' || '' }} \
             | tee /tmp/ratchet.log
           rc=${PIPESTATUS[0]}
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "RATCHET_RC=$rc"
           exit 0
 
       - name: 上传本次的失败名单（便于重新落基线）
@@ -128,12 +136,18 @@ jobs:
             backend/java/cretas-api/known-failing-tests.txt
           if-no-files-found: warn
 
+      # 🔴 2026-08-27 补的洞: 三态判定**只列了 0/1/2**, 于是任何**第四种**退出码
+      #    (实测那次是 127 = command not found) 两条判定都不命中 ⇒ 静默落进「绿」。
+      #    ⚠️ 这与三态机制想解决的问题**是同一个** —— 它把「没量到」从「没问题」里
+      #    拆出来, 却给自己留了一条「没量到但看起来像没问题」的缝。
+      # ⇒ 判据反过来写: **不是 0 也不是 1, 一律当成「没量到」**, 不枚举。
+      #    ⛔ 别再写成「rc == 2」—— 那是在枚举一个开放集合。
       # ⚠️ 两种失败【必须】用不同措辞 —— 否则「没量到」会被折叠进「没问题」，
       #    一个连编译都过不去的跑批会安静地天天绿，而它一个测试都没看过。
-      - name: 判定 —— rc=2 没量到
-        if: steps.ratchet.outputs.rc == '2'
+      - name: 判定 —— 不是 0 也不是 1，一律「没量到」
+        if: ${{ steps.ratchet.outputs.rc != '0' && steps.ratchet.outputs.rc != '1' }}
         run: |
-          echo "::error title=Java 全量跑批没量到::编译失败 / surefire 报告为空 / 解析不出结果。本次读数作废，⛔ 不代表没有新增红。"
+          echo "::error title=Java 全量跑批没量到::棘轮退出码 = '${{ steps.ratchet.outputs.rc }}'。可能是编译失败 / surefire 报告为空 / 解析不出结果 / 解释器不存在(127)。本次读数作废，⛔ 不代表没有新增红。"
           exit 1
 
       - name: 判定 —— rc=1 有新增红
