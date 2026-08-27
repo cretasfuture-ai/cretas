@@ -66,7 +66,13 @@ class RBACWarehouseManagerIsolationTest {
             // 是否价格敏感 entity-level boolean 标志, PR #423 之前/之后都不是钱
             "priceSensitive",
             // Sales-order warning messages only surface rule text; numeric price fields stay separately masked.
-            "priceWarnings"
+            "priceWarnings",
+            // 计量单位代码 (kg/g/箱), 不是货币值 —— PurchaseOrderItem/PurchaseReceiveItem
+            // 均有此字段, 仓管员核对收货数量必须能看到单位, 掩掉会破坏收货流程而不增加隔离效果。
+            "priceUnit",
+            // unit↔priceUnit 换算因子快照 (比率, 不是钱), 用于让历史订单总额不受后续
+            // 主数据换算率变更影响 —— 单独暴露换算比率不泄露单价数值。
+            "quantityToPriceFactor"
     );
 
     /**

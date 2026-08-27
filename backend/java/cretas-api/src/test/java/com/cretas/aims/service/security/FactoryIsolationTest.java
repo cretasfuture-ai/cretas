@@ -147,10 +147,12 @@ class FactoryIsolationTest {
     @Test
     @DisplayName("requestInvoiceFromOrder: F001 用户尝试给 F002 的订单开票 → 抛异常")
     void requestInvoiceFromOrder_crossFactory_throws() {
-        SalesOrder otherFactoryOrder = new SalesOrder();
-        otherFactoryOrder.setId("so-999");
-        otherFactoryOrder.setFactoryId(FACTORY_B);  // 属于工厂 B
-        when(salesOrderRepository.findById(eq("so-999"))).thenReturn(Optional.of(otherFactoryOrder));
+        // 生产侧已收紧: requestInvoiceFromOrder 不再 findById 后手动比对 factoryId,
+        // 改为 findByIdAndFactoryIdForUpdate (悲观锁 + 查询层直接过滤 factoryId,
+        // 见 InvoiceServiceImpl.java:181)。跨工厂订单在查询层直接查不到 —— 隔离
+        // 由「查不到」实现，而不是「查到了再判断」，比原来更严。
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(eq("so-999"), eq(FACTORY_A)))
+                .thenReturn(Optional.empty());
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> invoiceService.requestInvoiceFromOrder(FACTORY_A, "so-999", "NORMAL", 1L, "test"));

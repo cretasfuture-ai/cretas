@@ -123,6 +123,11 @@ class ProductTypeSmartFillTest {
     void create_manualCode_raceOnInsert_translatesTo409() {
         ProductTypeDTO dto = baseDto();
         dto.setCode("CP-MANUAL-002");
+        // 生产侧已收紧 (requireProductCategory, ProductTypeServiceImpl.java:501-512):
+        // 创建时 SKU 大类必填, 缺了在 buildProductTypeEntity 阶段就 400, 根本到不了
+        // save() 的撞约束分支。这条用例要验证的是「撞约束 → 409 翻译」, 需要先让它
+        // 越过大类必填这道更早的门, 同 A1/A2 一样显式给出分类。
+        dto.setProductCategory("FINISHED_PRODUCT");
 
         when(productTypeRepository.existsByFactoryIdAndCode("F001", "CP-MANUAL-002")).thenReturn(false);
         when(productTypeRepository.save(any(ProductType.class)))
