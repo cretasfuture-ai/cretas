@@ -574,6 +574,34 @@
                 <version>3.2.5</version>
                 <configuration>
                     <argLine>-XX:+EnableDynamicAgentLoading -Xshare:off</argLine>
+                    <!--
+                      🔴 2026-08-27: 一个挂死的测试会让 CI job 被 GitHub 直接杀掉,
+                      而那样三态判定**一步都执行不到**。
+
+                      实测: IntentParityTest (@SpringBootTest) 在本机卡在上下文启动,
+                      **17 分钟零输出**, 整轮跑批停在 61%。
+
+                      在此之前 surefire **没有任何超时配置**, 而 java-full-nightly.yml
+                      有 `timeout-minutes: 120`。链条是这样断的:
+                        挂死 → 120 分钟后 GitHub 杀掉 job
+                             → `continue-on-error: true` **只兜得住「失败」, 兜不住「job 被杀」**
+                             → 「Ratchet 已知红只许变少」那一步整个 skip
+                             → 既拿不到 rc=1 也拿不到 rc=2, 只有一个笼统的超时
+                      ⇒ 那套专门用来把「没量到」从「没问题」里拆出来的三态机制,
+                        在它最该开火的那一次**一次都轮不到** —— 与 2026-08-26 那次 OOM 同形。
+
+                      取值: 全量约 50 分钟, job 上限 120 分钟 ⇒ 取中间的 90 分钟。
+                      · 高于全量耗时 ⇒ 正常跑批**不会**被它误杀
+                      · 低于 job 上限 ⇒ 挂死时**由 surefire 先失败**, maven 非零退出,
+                        `continue-on-error` 接住 → 棘轮跑得到 → 落 **rc=2「没量到」**
+                      ⛔ 不要调到 120 以上 —— 那等于把这道保险拆掉。
+
+                      ⚠️ 本仓 forkCount/reuseForks 用的是默认(1 / true), 即**一个 fork 跑全部测试**,
+                        所以这个值约束的是**整轮**而不是单个测试。要做单测级超时得用
+                        junit-platform.properties 的 `junit.jupiter.execution.timeout.*`,
+                        但那个**盖不住 Spring 上下文启动**(挂死正是发生在那里), 所以先上这一道。
+                    -->
+                    <forkedProcessTimeoutInSeconds>5400</forkedProcessTimeoutInSeconds>
                     <!-- Enable @Nested test discovery -->
                     <includes>
                         <include>**/*Test.java</include>
