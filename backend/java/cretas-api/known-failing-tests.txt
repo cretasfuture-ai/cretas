@@ -4,50 +4,35 @@
 #   （这个数是【样本量下限】的依据 —— java-test-ratchet.py 拿它 × 0.9 判 rc=2「没量到」，
 #     防 fork VM 中途崩掉之后拿残缺报告当有效读数。⛔ 不要在没量过的时候改它。）
 #
-# ── 2026-08-27 夜：49 → 5 → 4 ────────────────────────────────────────────────
+# ══ 2026-08-27 夜：143 → 49 → 5 → 4 → 0 ═══════════════════════════════════════
 #
-# 49 → 5：#197（ddl-auto 从 create-drop 改成 create）的 H2 schema 毒源诊断成立，
-#         run 33081570292 报「已修好 44 条（跑了而且通过）· 没跑到 0 条」。
-#  5 → 4：#241 修掉 fan-out 那条，run 33090976753 报「已修好 1 条（跑了而且通过）」。
+# **这份名单现在是空的。** 空 ≠ 停用 —— 它现在守的是「一条新增红都不许有」：
+# 任何红都会落进棘轮的「🔴 新增 N 条基线里没有的红」并让跑批 rc=1。
 #
-# ⛔ 剩下这 4 条**不是**上面任何一个根因。⚠️ 交接件曾写「剩下 49 条全部是同一个根因」，
-#    那句话在这里不成立 —— **「本机绿 / CI 红」是长相，不是根因**：H2 毒源、缺 PostgreSQL、
-#    夹具写死用户 id，三条不同的路通向同一个长相。归因只能逐条读真实报错。
+# 走到这里花了四步，每一步的判据都是**棘轮自己报的「跑了而且通过」**
+# （`fixed = (baseline ∩ executed) − failing`，⛔ 不是「不再失败」——
+#  「没跑到」会落进另一个措辞不同的 `vanished` 段，见 #223）：
 #
-# ── 已经不在名单里的那条，写在这里免得下一个人重走弯路 ────────────────────────
+#   143 → 49   多个 PR 修好 + 三次削基线（#186/#189/#191/#200/#210/#213…）
+#    49 →  5   #197（ddl-auto create-drop → create）的 H2 schema 毒源
+#               run 33081570292：`已修好 44 条 · 没跑到 0 条`
+#     5 →  4   #241 fan-out 夹具把审核人 id 写死成 1L，外键炸在 production_plans.created_by
+#               run 33090976753：`已修好 1 条`
+#     4 →  0   给自建 runner 装原生 PostgreSQL 17（本 PR）
+#               run 33093132951：`共跑 12012 个测试 · 红 0 · 基线 4`，`已修好 4 条`
 #
-# SalesOrderFinanceApprovedFanOutIntegrationTest（#241 已修）：
-#   它长得像「异步没落库」或「轮询窗口不够」，**两个都不是**。夹具建了 operator 却把
-#   拿到的 id 扔掉、发事件时写死 1L，而 production_plans.created_by 有外键指向 users(id)
-#   ⇒ 是否通过取决于「此刻库里有没有 id=1 的用户」。CI 上自增列早被推进（大量
-#   @Transactional 测试插入后回滚，行没了而自增列不退）⇒ 外键炸 ⇒ PP 永远落不了库。
-#   判据是 CI 日志里那条 `Referential integrity constraint violation`，⛔ 不是断言的超时本身。
+# ⚠️ **「本机绿 / CI 红」是长相，不是根因。** 上面四步里有三步都长这个样，成因却完全不同
+#    （H2 毒源 / 夹具写死用户 id / 缺 PostgreSQL）。归因只能逐条读真实报错，
+#    ⛔ 不能靠「症状分布高度集中」。这一条已经让上一棒写出过一句错话
+#    （「剩下 49 条全部是同一个根因」）。
 #
-# ── FactoryConfigServiceImplReorderIT · 4 条 · 仪器缺一味环境，不是产品缺陷 ────
+# ── 🔴 这份名单是【跟着 runner 走】的，不是跟着代码走的 ────────────────────────
 #
-# CI 实测报错：`Connection to localhost:5432 refused`（⛔ 不是 H2 的 Table not found）。
-# 它是 @DataJpaTest + Replace.NONE，类注释写明要 localhost:5432 上的 cretas_r10_it_test 库。
+# 上面最后一步就是证据：同一个 commit，装 PG 之前 4 条红、之后 4 条绿。
+# ⇒ 切换 runner（`scripts/ci/switch_ci_runner.py hosted` / `self-hosted`）之后
+#   **必须当场重量一次**，⛔ 不要假设这份名单跨 runner 还成立 ——
+#   那是「同一个数换了口径」。
 #
-# 🔴 当前它在【任何自动路径上都跑不了，也不可能绿】—— 2026-08-27 逐条实测：
-#   · PR 闸（java-gate-pr.yml）：窄选择器按类名后缀选，`...IT` 不在四类里 ⇒ 跑不到
-#   · ci.yml 的 java-build-test：唯一提供 pgvector 服务容器的地方，但
-#       (1) `if: inputs.full_audit` ⇒ 只有手动全量审计才跑
-#       (2) `runs-on: ubuntu-latest` ⇒ 托管侧当前被账单挡着（job 2 秒失败，注解是
-#           "recent account payments have failed or your spending limit needs to be increased"）
-#   · java-full-nightly：会跑它，但没有 `services:`，而自建 macOS runner 上
-#       `docker: command not found`（scripts/ci/switch_ci_runner.py 里记着 ci.yml
-#       「试过并撤回」就是这个原因）⇒ 服务容器在这台机器上起不来
-#   · 那台 runner 上也没有原生 PostgreSQL（实测 `psql not found` / 无 brew 包）
-#
-# ⇒ 这不是一个测试的修法，是个**基础设施决定**，需要 owner 拍板二选一：
-#     (A) 在自建 runner 上装原生 PostgreSQL + 在 nightly 里加 bootstrap 步骤
-#         （不需要服务容器；代价是给那台机器装一个常驻服务）
-#     (B) 维持现状：这 4 条留在基线里，等托管额度恢复后由 full_audit 覆盖
-#
-# ⛔ 在拍板之前不要加 @Disabled / assumeTrue 让它变绿 —— 那会让它在**真有 PG 的那条路上**
-#    也一起沉默，把「没量到」折叠进「没问题」（硬约束 4）。
-#
-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_repositoryReadPathReturnsNewOrder
-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_unknownFieldCodes_ignoredGracefully
-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_updatesCanvasDynamicFieldSortOrder
-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.reorderFields_versionMismatch_throws
+# ⚠️ 影响面自 #242 起变大：PR 闸也跑全量 + 同一份名单
+#   （`java-gate-pr.yml` 经 `workflow_call` 调 `java-full-nightly.yml`），
+#   名单不准 = **所有 Java PR 一起红或一起假绿**，不再只是夜里一封告警。

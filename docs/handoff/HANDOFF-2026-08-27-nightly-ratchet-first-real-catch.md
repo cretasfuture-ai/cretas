@@ -1,4 +1,4 @@
-# 交接：夜间棘轮的第一次真实读数 —— 49 → 4，外加它抓到的第一批新增红（2026-08-27 夜）
+# 交接：夜间棘轮的第一次真实读数 —— 存量红 49 → 0，外加它抓到的第一批新增红（2026-08-27 夜）
 
 > 上一棒：`HANDOFF-2026-08-27-night-gates-and-red-burndown.md`（判据）
 > ＋ `HANDOFF-2026-08-27-java-red-burndown.md`（分类表）。
@@ -27,19 +27,44 @@ gh run list -R cretasfuture-ai/cretas --workflow java-full-nightly.yml -L 10 \
 ⚠️ 这不是形式检查：整套三态机制的价值全在「**每天自动跑一次**」上。
 靠人记得手工触发的棘轮，和没有棘轮的区别只是多了一个可以指责的对象。
 
-## 🔴 接手第二件事：一个需要 owner 拍板的二选一（不是一个测试的修法）
+## ✅ 第三轮：4 → 0（owner 拍板选了 (A)：给自建 runner 装原生 PG）
 
-基线剩下的 4 条全是 `FactoryConfigServiceImplReorderIT`，它要**真 PostgreSQL**。
-2026-08-27 逐条实测：**它当前在任何自动路径上都跑不了，也不可能绿**（详见
-`known-failing-tests.txt` 的注释）。⇒ 二选一：
+最后 4 条全是 `FactoryConfigServiceImplReorderIT`，要**真 PostgreSQL**。
+装完之后 run `33093132951` 报 **`共跑 12012 个测试 · 红 0 · 基线 4`** ＋
+`✅ 已修好 4 条（跑了而且通过）` ⇒ 基线削到 **0**。
 
-| | 做法 | 代价 |
-|---|---|---|
-| **(A)** | 在自建 runner 上装原生 PostgreSQL + 在 nightly 里加 bootstrap 步骤 | 给那台 Mac mini 装一个常驻服务（不需要服务容器，Docker 那条路已实测堵死） |
-| **(B)** | 维持现状：4 条留在基线里，等托管额度恢复后由 `full_audit` 覆盖 | 这 4 条在此期间**没有任何东西在守** |
+**装了什么**（Mac-mini-01，两个 runner agent 在同一台机器上）：
 
-⛔ **在拍板之前不要加 `@Disabled` / `assumeTrue` 让它变绿** —— 那会让它在
-**真有 PG 的那条路上**也一起沉默（硬约束 4：把「没量到」折叠进「没问题」）。
+```
+brew install postgresql@17            # 17.11, /opt/homebrew
+brew services start postgresql@17     # LaunchAgent, 与两个 runner agent 同一套
+                                      # ~/Library/LaunchAgents + RunAtLoad 生命周期
+psql -d postgres -c "CREATE ROLE cretas_user LOGIN PASSWORD 'cretas_pass';"
+createdb -O cretas_user cretas_r10_it_test
+```
+
+⛔ **服务容器那条路在这台机器上走不通**：实测 `docker: command not found`
+（`switch_ci_runner.py` 里记着 `ci.yml`「试过并撤回」正是这个原因）。
+不需要 pgvector —— `r10-it` profile 的 schema 由 `spring.sql.init` 从
+`r10-it-schema.sql` 建，`ddl-auto=none`、Flyway off。
+
+### 🔴 顺手差点在新载体上重演 #197
+
+这台机器上跑着**两个** runner agent，而 `java-full-nightly` 的 concurrency 组
+**按 ref 分**（`java-full-suite-<ref>` / `nightly`）⇒ 两条 PR 的全量跑批**可以同时**
+落在同一台机器上。而 `r10-it` 的 schema 每次 `DROP TABLE IF EXISTS` + `CREATE TABLE` 重建
+⇒ 共用一个库就是**两个跑批互相 drop 掉对方的表**。
+
+**那与 #197 那个 H2 schema 毒源是同一个形状**（共享库 + 谁关谁 drop），只是换成了
+PostgreSQL —— 刚为它烧掉一整轮，差一点在 PG 上原样再来一次。
+
+⇒ 改成**一个 runner 一个库**：`application-r10-it.properties` 的 URL 里
+`${R10_IT_DB:cretas_r10_it_test}`（默认值保住本机开发的老行为），
+workflow 里按 `RUNNER_NAME` 派生库名并按需 `createdb`。
+
+⚠️ 这个覆盖是**验过的**，不是「加了就算」：本机用 `R10_IT_DB=zz_no_such_db` 跑，
+拿到 `PSQLException: ... "zz_no_such_db" ...`（证明占位符真的被读到），
+再用默认值跑 4/4 绿。
 
 ---
 
@@ -59,8 +84,8 @@ JAVA_RATCHET 共跑 12007 个测试 · 红 13 · 基线 49
 - **5 条仍红，而且不是那个根因**（其中 1 条本轮已查清并修掉，见「第二轮」；剩 **4** 条）
 - **8 条新增红** —— 棘轮建成以来抓到的**第一批真·回归**
 
-已落地：**#233**（修 8 条新增红）、**#234**（削基线 49 → 5）、**#241**（fan-out 夹具）
-＋本 PR（削基线 5 → 4）。
+已落地：**#233**（修 8 条新增红）、**#234**（49 → 5）、**#241**（fan-out 夹具）、
+**#244**（5 → 4）、**本轮最后一条 PR**（给自建 runner 装 PG，4 → **0**）。
 
 ### 收尾判据：合并后又跑了一次，rc=0
 
@@ -85,7 +110,7 @@ JAVA_RATCHET 共跑 12009 个测试 · 红 5 · 基线 5
 
 | 条数 | 类 | 真实报错 | 定性 |
 |---:|---|---|---|
-| 4 | `FactoryConfigServiceImplReorderIT` | `Connection to localhost:5432 refused` | 它要**真 PostgreSQL**（`cretas_r10_it_test`，由 `ci.yml` 的 pgvector 服务容器提供）。而 `java-full-nightly` 没有 `services:`，自建 macOS runner 也起不了服务容器 ⇒ **仪器缺一味环境**，不是产品缺陷 |
+| 4 | `FactoryConfigServiceImplReorderIT` | `Connection to localhost:5432 refused` | 它要**真 PostgreSQL** ⇒ **仪器缺一味环境**，不是产品缺陷。✅ **已解决（第三轮）** —— 给自建 runner 装了原生 PG 17，4 条全绿 |
 | 1 | `SalesOrderFinanceApprovedFanOutIntegrationTest` | 断言 `:215`，轮询到超时，单条 10.17s | ✅ **已查清并修掉（#241）** —— 夹具把审核人 id 写死成 `1L`，外键炸在 `production_plans.created_by`。详见下面「第二轮」 |
 
 🔴 **两条不同的路通向同一个长相**：H2 毒源和「缺 PG」都表现为「本机绿 / CI 红」。
