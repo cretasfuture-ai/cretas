@@ -1,0 +1,31 @@
+{
+  /*
+   * 只给 `src/__tests__/gates/**` 用的类型检查工程。
+   *
+   * ## 为什么需要单独一份
+   *
+   * `tsconfig.app.json` 的 `exclude` 里有 `src/**\/__tests__/**` ——
+   * 也就是说 **`vue-tsc -b` 一个 gates 文件都不检查**。
+   * 实测（注入探针）：往 `lib/branchReachability.ts` 里塞一个必错的类型，
+   * `npx vue-tsc -b` 的退出码**仍然是 0**。
+   *
+   * ⇒ 「跑了 vue-tsc -b 且是绿的」**不构成**「本 PR 的代码类型正确」。
+   *   本仓已经栽过一次同族的（`vue-tsc --noEmit` 检查 0 个文件），所以这里
+   *   显式补一份，并且用同样的注入探针证明它**确实在查**这两个文件（rc 0 → 2）。
+   *
+   * ## 跑法
+   *
+   *   npx vue-tsc -p tsconfig.gates.json
+   *
+   * ⚠️ 它**没有**被 `tsconfig.json` 的 references 引用 —— 故意的：
+   *    本仓同时有十几个 PR 在飞，不动既有配置文件把冲突面压到最小。
+   *    CI 上也不跑（账单），这是本地判据。
+   */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.gates.tsbuildinfo",
+    "types": ["vite/client", "node", "vitest/globals"]
+  },
+  "include": ["src/__tests__/gates/**/*.ts"],
+  "exclude": []
+}
