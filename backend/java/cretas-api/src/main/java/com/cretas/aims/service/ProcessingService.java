@@ -111,6 +111,12 @@ public interface ProcessingService {
      * 获取质检记录
       */
     PageResponse<Map<String, Object>> getInspections(String factoryId, String batchId, PageRequest pageRequest);
+
+    /**
+     * 同上, 额外按检测结果过滤。{@code results} 为 null / 空表示不过滤。
+     */
+    PageResponse<Map<String, Object>> getInspections(
+            String factoryId, String batchId, java.util.List<String> results, PageRequest pageRequest);
      /**
      * 获取质检详情
       */

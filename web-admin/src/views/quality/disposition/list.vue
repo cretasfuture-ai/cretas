@@ -77,17 +77,21 @@ async function loadPendingInspections() {
   if (!factoryId.value) return;
   inspectionLoading.value = true;
   try {
-    const [failRes, condRes] = await Promise.all([
-      get(`/${factoryId.value}/processing/quality/inspections`, {
-        params: { page: 1, size: 100, result: 'FAIL' },
-      }),
-      get(`/${factoryId.value}/processing/quality/inspections`, {
-        params: { page: 1, size: 100, result: 'CONDITIONAL' },
-      }),
-    ]);
-    const failList: TableRow[] = failRes.success && failRes.data ? (failRes.data.content || []) : [];
-    const condList: TableRow[] = condRes.success && condRes.data ? (condRes.data.content || []) : [];
-    inspectionRows.value = [...failList, ...condList].sort((a, b) =>
+    // 🔴 2026-08-28 逐屏走查: 这里原本发**两次**请求(result=FAIL / result=CONDITIONAL)
+    //   再把两份结果拼起来。而后端 `getInspections` **根本没有声明 result 这个参数** ——
+    //   Spring 对未声明的请求参数**静默忽略**, 于是两次调用完全相同, 各自拿到一份
+    //   **全量**质检记录, 拼接后**每条渲染两遍**, 而且 PASS / PENDING 的行也混了进来
+    //   (这个屏叫「待处置质检」, 本该只有不合格和有条件放行)。
+    //
+    // ▎证据就在屏上: 只请求了 FAIL+CONDITIONAL, 却渲染出了 PASS 的行。
+    //
+    // ⇒ 后端已支持逗号分隔的 `result`; 这里改成**一次**调用, 由数据源过滤。
+    //   ⛔ 不在前端本地过滤: 那样仍要拉全量, 且分页会失真。
+    const res = await get(`/${factoryId.value}/processing/quality/inspections`, {
+      params: { page: 1, size: 100, result: 'FAIL,CONDITIONAL' },
+    });
+    const list: TableRow[] = res.success && res.data ? (res.data.content || []) : [];
+    inspectionRows.value = [...list].sort((a, b) =>
       String(b.inspectionDate || '').localeCompare(String(a.inspectionDate || ''))
     );
   } catch (error) {

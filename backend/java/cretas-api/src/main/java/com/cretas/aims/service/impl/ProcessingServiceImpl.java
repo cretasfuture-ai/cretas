@@ -988,16 +988,38 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     public PageResponse<Map<String, Object>> getInspections(String factoryId, String batchId, PageRequest pageRequest) {
+        return getInspections(factoryId, batchId, null, pageRequest);
+    }
+
+    /**
+     * 🔴 2026-08-28: 加 {@code results} 过滤。
+     *
+     * <p>此前「不良品处置」屏在传 {@code result=FAIL} / {@code result=CONDITIONAL},
+     * 而 controller **没声明**这个参数 —— Spring 静默忽略 ⇒ 两次调用返回同一份全量,
+     * 前端 {@code [...failList, ...condList]} 拼接后<b>每条渲染两遍</b>,
+     * 且本不该出现的 PASS 行也混了进来。质检主管看到的「待处置」数量因此严重偏大。</p>
+     *
+     * <p>⛔ 不在前端本地过滤: 那样仍要把全量拉过来, 而且分页会失真
+     * (后端按全量分页, 前端过滤后每页条数不定)。</p>
+     */
+    public PageResponse<Map<String, Object>> getInspections(
+            String factoryId, String batchId, java.util.List<String> results, PageRequest pageRequest) {
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1,
                 pageRequest.getSize(),
                 Sort.by(Sort.Direction.DESC, "inspectionDate")
         );
+        boolean filtered = results != null && !results.isEmpty();
         Page<QualityInspection> page;
         if (batchId != null) {
-            page = qualityInspectionRepository.findByFactoryIdAndProductionBatchId(factoryId, parseBatchId(batchId), pageable);
+            page = filtered
+                    ? qualityInspectionRepository.findByFactoryIdAndProductionBatchIdAndResultIn(
+                            factoryId, parseBatchId(batchId), results, pageable)
+                    : qualityInspectionRepository.findByFactoryIdAndProductionBatchId(factoryId, parseBatchId(batchId), pageable);
         } else {
-            page = qualityInspectionRepository.findByFactoryId(factoryId, pageable);
+            page = filtered
+                    ? qualityInspectionRepository.findByFactoryIdAndResultIn(factoryId, results, pageable)
+                    : qualityInspectionRepository.findByFactoryId(factoryId, pageable);
         }
         Map<Long, ProductionBatch> batchesById = productionBatchRepository.findAllById(
                         page.getContent().stream()

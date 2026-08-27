@@ -406,13 +406,24 @@ public class ProcessingController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestParam(required = false) @Parameter(description = "批次ID", example = "123") String batchId,
             @RequestParam(defaultValue = "1") @Parameter(description = "页码", example = "1") Integer page,
-            @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size) {
-        log.info("获取质检记录: factoryId={}, batchId={}", factoryId, batchId);
+            @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size,
+            @RequestParam(required = false)
+            @Parameter(description = "检测结果过滤, 逗号分隔 (PASS / FAIL / CONDITIONAL / PENDING)", example = "FAIL,CONDITIONAL")
+            String result) {
+        // 🔴 2026-08-28: `result` 此前**没有声明**, 而前端「不良品处置」屏一直在传它。
+        //   Spring 静默忽略未声明的请求参数 ⇒ 那个屏的两次调用(FAIL / CONDITIONAL)完全相同,
+        //   拿到同一份全量列表并拼接 ⇒ 每条渲染两遍, 且 PASS 的行也混了进来。
+        //   ⚠️ 「前端传了一个后端没声明的参数」不报错、不警告, 只是**安静地不过滤**。
+        java.util.List<String> results = (result == null || result.isBlank())
+                ? null
+                : java.util.Arrays.stream(result.split(","))
+                        .map(String::trim).filter(s -> !s.isEmpty()).toList();
+        log.info("获取质检记录: factoryId={}, batchId={}, results={}", factoryId, batchId, results);
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
-        PageResponse<Map<String, Object>> result = processingService.getInspections(factoryId, batchId, pageRequest);
-        return ApiResponse.success(result);
+        PageResponse<Map<String, Object>> body = processingService.getInspections(factoryId, batchId, results, pageRequest);
+        return ApiResponse.success(body);
     }
 
     /**
