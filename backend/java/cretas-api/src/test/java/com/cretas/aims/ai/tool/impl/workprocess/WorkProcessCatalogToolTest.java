@@ -119,7 +119,11 @@ class WorkProcessCatalogToolTest {
         assertTrue(dto.getNeedsInput());
         assertNull(dto.getOutputUnit(), "工序主数据不再维护产出单位");
         assertEquals(0, new BigDecimal("25.00").compareTo(dto.getStandardHourlyRate()));
-        assertEquals(7, dto.getSortOrder());
+        // sortOrder 不是 create/update 契约的一部分: WorkProcessServiceImpl.create()
+        // 把它硬编码成 0, update() 完全不碰它 —— 排序只能通过专门的批量接口
+        // updateSortOrder(List<SortOrderUpdate>) 调整 (拖拽排序场景)。与 unit/outputUnit
+        // 同一模式: 传进来的 legacy/越界字段必须被忽略, 不能被误映射进创建请求。
+        assertNull(dto.getSortOrder(), "工序创建/更新不维护排序位，需走 updateSortOrder 批量接口");
         assertTrue(result.get("message").toString().contains("已创建工序"));
     }
 

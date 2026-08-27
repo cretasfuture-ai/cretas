@@ -127,8 +127,16 @@ class RestaurantAgentActionWorkflowProvisioningIntegrationTest {
         assertThat(started.getWorkflowId()).isEqualTo(configured.getId());
         assertThat(started.getStatus()).isEqualTo(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
         assertThat(started.getCurrentNodeIds()).containsExactly("human_review");
+        // 键名漂移: WorkflowEngineServiceImpl 早已把新实例的绑定摘要迁到 v2 key
+        // (STABLE_DEFINITION_DIGEST_CONTEXT_KEY = "..._v2_sha256")，旧 key
+        // ("..._sha256"，BOUND_DEFINITION_DIGEST_CONTEXT_KEY) 现在只在
+        // startWorkflowWithResolvedDefinition 里被显式 remove，没有任何真实
+        // 调用路径(startWorkflow / startWorkflowIfConfigured /
+        // startWorkflowWithDefinition，三处都传 stableDigest=true)还会写它 ——
+        // 只为兼容迁移前的旧实例保留读取。断言应该跟着当前写入路径走
+        // (与 WorkflowEngineServiceImplTest 对新实例的断言一致)。
         assertThat(started.getContextJson()
-                .get("_cretas_bound_workflow_definition_sha256"))
+                .get("_cretas_bound_workflow_definition_v2_sha256"))
                 .isInstanceOf(String.class)
                 .asString()
                 .matches("^[0-9a-f]{64}$");
