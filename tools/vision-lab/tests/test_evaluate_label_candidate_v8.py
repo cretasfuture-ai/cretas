@@ -13,6 +13,16 @@ SPEC.loader.exec_module(module)
 
 
 class V8LabelCandidateGateTests(unittest.TestCase):
+    def test_parser_accepts_production_preserving_supplement(self):
+        parser = module.build_parser()
+        args = parser.parse_args([
+            "--repo-root", ".", "--baseline-receipt", "base.json",
+            "--candidate-receipt", "candidate.json", "--truth-adjudication", "truth.json",
+            "--runtime-bundle", "bundle", "--output", "result.json",
+            "--production-preserving-supplement",
+        ])
+        self.assertTrue(args.production_preserving_supplement)
+
     def _metrics(self):
         return {
             "defect_total": 7,

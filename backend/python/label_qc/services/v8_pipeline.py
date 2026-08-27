@@ -38,6 +38,9 @@ REQUIRED_MODELS = {
     "proposal_classifier": "proposal-classifier.onnx",
     "label_fallback": "label-fallback.onnx",
 }
+OPTIONAL_MODELS = {
+    "label_supplement": "label-supplement.onnx",
+}
 
 PRODUCTION_TRAY_CONFIDENCE = 0.60
 CANDIDATE_TRAY_CONFIDENCE = 0.30
@@ -400,6 +403,77 @@ class _MissingClassFallbackDetector:
                 "colorLabel": self.fallback_reasons[1],
             },
             "primary": self.primary.stats(),
+        }
+
+
+class _ProductionPreservingSupplementDetector:
+    """Add only a class the production detector misses inside the tray core.
+
+    Padded tray crops often contain labels from neighbouring trays.  The
+    supplement is therefore forbidden from returning non-missing classes or
+    detections whose centres fall outside the ownership window.  At most one
+    supplemental detection is admitted for each missing class.
+    """
+
+    def __init__(
+        self, primary: Any, supplement: Any, confidence_floor: float = 0.0,
+        ownership_margin: float = PAD_RATIO / (1.0 + 2.0 * PAD_RATIO),
+    ) -> None:
+        self.primary = primary
+        self.supplement = supplement
+        self.confidence_floor = float(confidence_floor)
+        self.ownership_margin = float(ownership_margin)
+        self.reset_stats()
+
+    def reset_stats(self) -> None:
+        self.calls = 0
+        self.supplement_calls = 0
+        self.admitted = {0: 0, 1: 0}
+        if hasattr(self.primary, "reset_stats"):
+            self.primary.reset_stats()
+        if hasattr(self.supplement, "reset_stats"):
+            self.supplement.reset_stats()
+
+    def _owned(self, row: Detection, width: int, height: int) -> bool:
+        center_x = (float(row.x0) + float(row.x1)) / 2.0 / max(width, 1)
+        center_y = (float(row.y0) + float(row.y1)) / 2.0 / max(height, 1)
+        low, high = self.ownership_margin, 1.0 - self.ownership_margin
+        return low <= center_x <= high and low <= center_y <= high
+
+    def detect(self, image: np.ndarray, conf: float) -> list[Detection]:
+        self.calls += 1
+        height, width = image.shape[:2]
+        primary = list(self.primary.detect(image, conf))
+        present = {
+            int(row.class_id) for row in primary if self._owned(row, width, height)
+        }
+        missing = {class_id for class_id in (0, 1) if class_id not in present}
+        if not missing:
+            return primary
+        self.supplement_calls += 1
+        rows = self.supplement.detect(
+            image, max(float(conf), self.confidence_floor),
+        )
+        best: dict[int, Detection] = {}
+        for row in rows:
+            class_id = int(row.class_id)
+            if class_id not in missing or not self._owned(row, width, height):
+                continue
+            if class_id not in best or float(row.confidence) > float(best[class_id].confidence):
+                best[class_id] = row
+        for class_id in sorted(best):
+            self.admitted[class_id] += 1
+            primary.append(best[class_id])
+        return primary
+
+    def stats(self) -> dict[str, Any]:
+        return {
+            "calls": self.calls,
+            "supplementCalls": self.supplement_calls,
+            "admitted": {
+                "whiteLabel": self.admitted[0],
+                "colorLabel": self.admitted[1],
+            },
         }
 
 
@@ -831,6 +905,17 @@ class LabelQcV8Models:
             if not path.is_file() or _sha256_file(path) != expected:
                 raise RuntimeError(f"v8 model binding drift: {name}")
             bindings[name] = _BundleBinding(path, expected)
+        for name, filename in OPTIONAL_MODELS.items():
+            if name not in models:
+                continue
+            item = models.get(name) or {}
+            if item.get("file") != filename:
+                raise RuntimeError(f"v8 manifest filename drift: {name}")
+            path = (self._model_dir / filename).resolve()
+            expected = str(item.get("sha256") or "").lower()
+            if not path.is_file() or _sha256_file(path) != expected:
+                raise RuntimeError(f"v8 model binding drift: {name}")
+            bindings[name] = _BundleBinding(path, expected)
         self._manifest = payload
         return bindings
 
@@ -869,14 +954,30 @@ class LabelQcV8Models:
                     fallback_detector,
                     fallback_confidence,
                 )
+                production_label: Any = _OnnxDetector(
+                    bindings["production_label"].path, imgsz=640
+                )
+                if "label_supplement" in bindings:
+                    supplement_confidence = float(
+                        self._manifest.get("labelSupplementConfidence", LABEL_CONFIDENCE)
+                    )
+                    if not LABEL_CONFIDENCE <= supplement_confidence <= 1.0:
+                        raise RuntimeError("invalid v8 label supplement confidence")
+                    supplement_detector = _OnnxDetector(
+                        bindings["label_supplement"].path, imgsz=640
+                    )
+                    _validate_label_fallback_input_shape(supplement_detector, 640)
+                    production_label = _ProductionPreservingSupplementDetector(
+                        production_label,
+                        supplement_detector,
+                        supplement_confidence,
+                    )
                 self._models = _V8CascadeModels(
                     production=production,
                     tray_supplement=_YoloxOnnxDetector(
                         bindings["tray_supplement"].path, imgsz=960
                     ),
-                    production_label=_OnnxDetector(
-                        bindings["production_label"].path, imgsz=640
-                    ),
+                    production_label=production_label,
                     candidate_label=candidate_label,
                 )
                 logger.info("Label QC v8 bundle loaded from %s", self._model_dir)
