@@ -59,7 +59,13 @@ concurrency:
 
 jobs:
   vitest:
-    runs-on: ubuntu-latest
+    # 2026-08-26: 组织 Actions 免费额度(2000 分钟/月)用尽后, 托管 runner 起不来
+    #   —— job 2~4 秒、0 个 step、无日志地失败。改用自建 runner(139, 4 核/7G)。
+    # ⚠️ 用具体标签 `cretas` 而不是裸 `self-hosted`: 将来多一台 runner 时
+    #    裸标签会被任意机器接走, 具名标签不会。
+    # 实测资源(vitest 3300+ 用例): 4分41秒 / 峰值内存 1.2G / CPU 350%。
+    # 服务侧已加 Nice=10 CPUWeight=50 MemoryMax=3G, 让它抢不过业务进程。
+    runs-on: [self-hosted, cretas]
     defaults:
       run:
         working-directory: web-admin

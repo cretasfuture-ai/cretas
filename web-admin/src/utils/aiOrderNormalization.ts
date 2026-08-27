@@ -1,5 +1,4 @@
 import type { TableRow } from '@/types/api'
-import { toDateString } from '@/utils/dateFormat'
 
 type OrderEntityType = 'PURCHASE_ORDER' | 'SALES_ORDER' | string
 
@@ -16,8 +15,16 @@ function dateParts(date: Date, timeZone: string): { year: number; month: number;
 
 function formatLocalDate(date: Date, timeZone: string, plusDays = 0): string {
   const { year, month, day } = dateParts(date, timeZone)
+  // 🔴 2026-08-27: 这里**不能**用 toDateString(shifted)。
+  //    PR#111 全仓把 `toISOString().slice(0,10)` 换成本地日历日, 这一处是误伤 ——
+  //    shifted 是用 Date.UTC() 刻意构造的 **UTC 零点**, 本来就该用 UTC 读回:
+  //      东八区: UTC 零点 -> 本地 08:00 -> 同一天  (所以本机测不出来)
+  //      西七区: UTC 零点 -> 本地前一天 17:00 -> **差一天**
+  //    实测: 加拿大 runner(PDT) 上 2 条断言差整一天, 东八区全绿。
+  // ⇒ 日期分量已经由 Intl(带 timeZone) 算好了, 直接拼串, 不再绕 Date 对象。
   const shifted = new Date(Date.UTC(year, month - 1, day + plusDays))
-  return toDateString(shifted)
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  return `${shifted.getUTCFullYear()}-${p2(shifted.getUTCMonth() + 1)}-${p2(shifted.getUTCDate())}`
 }
 
 // 2026-07-28: buildAiTemporalContext 已删 —— 「工厂当前日期」现在由后端
