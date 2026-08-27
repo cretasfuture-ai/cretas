@@ -73,7 +73,10 @@ concurrency:
 jobs:
   jpa-gate:
     name: JPA repository query startup gate
-    runs-on: ubuntu-latest
+    # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
+    #    统一切换(一次改全部已接入的工作流并断言各处一致)。
+    #    见 `.claude/rules/ci-runner-routing.md`。
+    runs-on: [self-hosted, cretas]
     timeout-minutes: 20
 
     # 不起 Postgres 服务容器: 这些 *RepositoryQueryValidationTest 全部标注
@@ -94,10 +97,23 @@ jobs:
           cache: 'maven'
           cache-dependency-path: backend/java/cretas-api/pom.xml
 
+      # ⚠️ 2026-08-27: 原来这里是 `nproc` + `free -h` —— **两个都是 Linux 专有**,
+      #    在自建的 macOS runner 上直接 command not found, 整个 job 挂在
+      #    一个只负责打印的步骤上。接自建 runner 时这类命令是第一个绊子。
+      # ⇒ 改成两边都能跑的写法, 并且**不让它有能力弄红 job**(它只是报资源)。
       - name: Report runner resources
+        continue-on-error: true
         run: |
-          echo "CPU cores: $(nproc)"
-          free -h | head -2
+          if command -v nproc >/dev/null 2>&1; then
+            echo "CPU cores: $(nproc)"
+          else
+            echo "CPU cores: $(sysctl -n hw.ncpu 2>/dev/null || echo unknown)"
+          fi
+          if command -v free >/dev/null 2>&1; then
+            free -h | head -2
+          else
+            echo "Memory: $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024 / 1024 )) MB"
+          fi
 
       - name: JPA repository query startup gate
         working-directory: backend/java/cretas-api

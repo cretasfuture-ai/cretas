@@ -15,14 +15,48 @@
 python scripts/ci/switch_ci_runner.py --check        # 当前走哪条
 python scripts/ci/switch_ci_runner.py self-hosted    # 额度耗尽 -> 自建
 python scripts/ci/switch_ci_runner.py hosted         # 额度恢复(每月 1 号) -> 托管
+python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一个工作流时用, 见下
 ```
 
 ⚠️ 它改的是**工作流文件**，所以要 `git commit && git push` 才生效。
-脚本一次改全三个闸，并断言三处一致 —— ⛔ 不要手工改单个 `runs-on`
+脚本一次改全部已接入的闸，并断言各处一致 —— ⛔ 不要手工改单个 `runs-on`
 （「共享结构只改一处」是本仓反复踩的坑）。
 
-已接入：`secret-regression.yml` / `web-admin-gate.yml` / `rn-gate.yml`。
-其余 12 个工作流写死 `ubuntu-latest`；要接就把文件名加进脚本的 `WORKFLOWS`。
+已接入（5 个）：`secret-regression.yml` / `web-admin-gate.yml` / `rn-gate.yml`
+/ `python-gate.yml` / `jpa-gate-main.yml`。
+其余 10 个工作流写死 `ubuntu-latest` —— 在自建模式下它们**完全跑不起来**
+（`2~4 秒 / 0 个 step / 无 runner`），不是「暂时没覆盖」而是「没有信号」。
+
+---
+
+## 新接一个工作流：要过三关，⛔ 光加文件名不算接进来
+
+2026-08-27 接 `python-gate` / `jpa-gate-main` 时逐条踩过：
+
+| # | 关卡 | 长什么样 |
+|---|---|---|
+| 1 | **缩进** | 脚本按**字面量**匹配 `    runs-on: ubuntu-latest`（4 空格）。缩进不同 → 静默不命中 |
+| 2 | **`actions/setup-python`** | 自建 macOS 上**必失败**（安装脚本把 `/Users/runner` 写死）⇒ 按 `secret-regression.yml` 的写法条件化 |
+| 3 | **Linux 专有命令** | `nproc` / `free` / `apt-get` 在 macOS 上直接不存在。`jpa-gate` 就有一步 `nproc` + `free -h`，**只负责打印却能弄红整个 job** |
+
+⛔ 三关不过就把文件名加进来，换来的是「从跑不起来」变成「跑起来就红」。
+
+### `--adopt`：一致性闸曾经把接入路径堵死
+
+加一个新工作流的那一刻，状态必然不一致（新的还是 `hosted`）⇒ 脚本拒绝切；
+而唯一的出路「手改单个 `runs-on`」正是上面明令禁止的。**这道闸把自己设计的
+接入路径堵死了。** `--adopt` 是那个显式的收敛口：
+
+⚠️ 它**不是** `--force` —— 它只做「全部拉齐到 target」，并把每个文件是
+「改了」还是「已经是、跳过」**逐行打出来**，⛔ 不允许静默拉齐。
+
+### ⚠️ `python-gate` 落到自建时，跑的**不是 3.10**
+
+托管上钉的是 `python-version: '3.10'`；自建上只能用系统 Python（3.11+）。
+该文件顶部那句「本机 py3.11 跑绿 ≠ CI py3.10 跑绿」在这里反向成立 ——
+**自建模式下这道闸测的是另一个小版本**。所以那一步会把
+`PYTHON_USED=<解释器> (<版本>)` 打进日志，并只断言下限 `>=3.10`
+（⛔ 不允许静默用更老的版本跑）。读它的绿时要连版本一起读。
 
 ---
 

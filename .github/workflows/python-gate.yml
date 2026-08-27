@@ -94,17 +94,55 @@ concurrency:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
+    #    统一切换(一次改全部已接入的工作流并断言各处一致)。
+    #    见 `.claude/rules/ci-runner-routing.md`。
+    runs-on: [self-hosted, cretas]
     defaults:
       run:
         working-directory: backend/python
     steps:
       - uses: actions/checkout@v4
+
+      # setup-python 只在**托管** runner 上跑。自建 macOS runner 上它必失败:
+      # 它的 macOS 安装脚本把 `/Users/runner` 写死(托管 runner 的用户名就叫 runner),
+      # 而本机用户是 rex 且 /Users 不可写 -> `mkdir: /Users/runner: Permission denied`。
+      # (与 secret-regression.yml 里同一处理, 那边已实测过预置工具缓存不管用。)
       - uses: actions/setup-python@v5
+        if: runner.environment == 'github-hosted'
         with:
           python-version: '3.10'
           cache: 'pip'
           cache-dependency-path: backend/python/requirements.txt
+
+      # 🔴 自建 runner 上跑的**不是 3.10** —— 本文件顶部那句
+      #    「本机 py3.11 跑绿 ≠ CI py3.10 跑绿」在这里同样成立, 方向相反:
+      #    落到自建时这道闸测的是另一个小版本。
+      # ⇒ 所以这一步**把版本打出来**, 并只断言下限(≥3.10)。
+      #    ⛔ 不允许静默用一个更老的版本跑 —— 那样绿了也不算数。
+      # ⚠️ 自建只是额度耗尽时的兜底; 额度恢复切回托管, 版本就回到 3.10。
+      #    「这一轮的读数是在哪个解释器上量的」必须能从日志里读出来。
+      - name: Use system Python (self-hosted)
+        if: runner.environment != 'github-hosted'
+        run: |
+          set -e
+          for c in python3.10 python3.11 python3.12 python3; do
+            if command -v $c >/dev/null 2>&1; then
+              V=$($c -c 'import sys;print("%d.%d"%sys.version_info[:2])')
+              case "$V" in
+                3.1[0-9]|3.[2-9]*)
+                  echo "PYTHON_USED=$c ($V)  ⚠️ 托管上是 3.10"
+                  echo "$(dirname $(command -v $c))" >> $GITHUB_PATH
+                  ln -sf $(command -v $c) /tmp/python
+                  ln -sf $(command -v $c) /tmp/pip3 2>/dev/null || true
+                  echo "/tmp" >> $GITHUB_PATH
+                  exit 0
+                  ;;
+              esac
+            fi
+          done
+          echo "✗ 找不到 >=3.10 的 python —— 本闸不能在一个更老的解释器上假装绿"
+          exit 1
       - name: Install dependencies
         run: |
           pip install --upgrade pip
