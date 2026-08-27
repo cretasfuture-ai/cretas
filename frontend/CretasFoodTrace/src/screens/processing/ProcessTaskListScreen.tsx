@@ -28,6 +28,20 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   SUPPLEMENTING: { label: '补报中', color: '#e6a23c' },
 };
 
+/** 三个筛选档各自的真实总数; `null` = 那一档没问到。 */
+type TaskCounts = { active: number | null; completed: number | null; all: number | null };
+
+/** 「三个档都没问到」。⛔ 注意不是 `{active: 0, ...}` —— 那是一个完全不同的断言。 */
+const NO_COUNTS: TaskCounts = { active: null, completed: null, all: null };
+
+/**
+ * 筛选档标签: 问到了就带上计数(**含 0**), 没问到就只印裸标签。
+ * ⛔ 不许 `?? 0` —— 「进行中 (0)」是「现在没有在做的活」, 而没问到时我们不知道。
+ */
+function tabLabel(text: string, count: number | null): string {
+  return count === null ? text : `${text} (${count})`;
+}
+
 /**
  * 计划时间的展示串。
  *
@@ -62,6 +76,11 @@ export default function ProcessTaskListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * 三个筛选档各自的真实总数。`null` = 那一档没问到 ⇒ 渲染成不带括号的裸标签,
+   * ⛔ 不许兜 0 —— 筛选器上的 `0` 是「这一档没有」, 与「没问到」含义相反。
+   */
+  const [counts, setCounts] = useState<TaskCounts>(NO_COUNTS);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -89,10 +108,28 @@ export default function ProcessTaskListScreen() {
     }
   }, [selectedStatus]);
 
+  /**
+   * 计数与列表分开取: 列表只有当前档, 而三个档的数要一次全拿到 ——
+   * 「选之前就知道每一档有多少条」正是这排按钮的意义。
+   * ⛔ 计数失败不影响列表: `getTaskCounts` 内部逐档吞错并返回 null, 不会 reject。
+   */
+  const fetchCounts = useCallback(async () => {
+    try {
+      const next = await processTaskApiClient.getTaskCounts();
+      // 拿不到一个像样的结果 = 没问到, 三档回到 null(裸标签)。
+      setCounts(next ?? NO_COUNTS);
+    } catch {
+      // ⛔ 不兜 0 —— 「问不到」不是「这一档一条都没有」。
+      // 计数问不到也不许拖垮列表: 列表有它自己的 error 状态。
+      setCounts(NO_COUNTS);
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       fetchTasks();
-    }, [fetchTasks])
+      fetchCounts();
+    }, [fetchTasks, fetchCounts])
   );
 
   // 首次使用引导
@@ -110,7 +147,7 @@ export default function ProcessTaskListScreen() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchTasks();
+    await Promise.all([fetchTasks(), fetchCounts()]);
     setRefreshing(false);
   };
 
@@ -132,6 +169,28 @@ export default function ProcessTaskListScreen() {
     () => buildReportableTaskIds(orderedTasks),
     [orderedTasks]
   );
+
+  /** 当前档的总数 —— 计数与列表用的是同一个档。 */
+  const totalForTab: number | null =
+    selectedStatus === 'active'
+      ? counts.active
+      : selectedStatus === 'COMPLETED'
+        ? counts.completed
+        : counts.all;
+
+  /**
+   * 「共 N 条, 当前显示 M 条」。
+   *
+   * 只在**确实有差额**时出现: 总数没问到(null)时不编, 搜索中不显示
+   * (那时 M 是搜索结果, 与 N 不是一回事, 并排放会造出第三个对不上的数)。
+   */
+  const truncationNotice: string | null = (() => {
+    if (totalForTab === null) return null;
+    if (searchQuery) return null;
+    const visible = orderedTasks.length;
+    if (visible >= totalForTab) return null;
+    return `共 ${totalForTab} 条, 当前显示前 ${visible} 条`;
+  })();
 
   /**
    * 进度百分比。**没有计划量就没有进度可言** —— 返回 null, 让调用方不画进度条。
@@ -348,14 +407,28 @@ export default function ProcessTaskListScreen() {
           value={selectedStatus}
           onValueChange={setSelectedStatus}
           buttons={[
-            { value: 'active', label: '进行中' },
-            { value: 'COMPLETED', label: '已完成' },
-            { value: 'all', label: '全部' },
+            { value: 'active', label: tabLabel('进行中', counts.active) },
+            { value: 'COMPLETED', label: tabLabel('已完成', counts.completed) },
+            { value: 'all', label: tabLabel('全部', counts.all) },
           ]}
           style={styles.segmentedButtons}
           density="small"
         />
       </View>
+
+      {/*
+        🔴 计数是「这一档**有多少条**」(服务端总数), 列表只取了前一页。
+        两者不等时必须**说出来** —— 否则用户读到「全部 (348)」再往下翻只找到 50 条,
+        会以为数据丢了。⛔ 沉默的截断比没有计数更糟。
+        `visibleCount < totalForTab` 才显示: 相等时没有差额, 不必打扰。
+      */}
+      {truncationNotice ? (
+        <View style={styles.truncationRow}>
+          <Text testID="process-task-truncation" style={styles.truncationText}>
+            {truncationNotice}
+          </Text>
+        </View>
+      ) : null}
 
       <FlatList
         testID="process-task-flatlist"
@@ -397,6 +470,8 @@ const styles = StyleSheet.create({
   },
   searchInput: { minHeight: 0 },
   segmentedButtons: { margin: 16, marginTop: 0 },
+  truncationRow: { paddingHorizontal: 16, paddingBottom: 8, marginTop: -8 },
+  truncationText: { fontSize: 12, color: theme.colors.textSecondary },
   listContent: { padding: 16, paddingTop: 0 },
   card: { marginBottom: 12 },
   cardHeader: {

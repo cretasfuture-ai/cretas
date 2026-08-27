@@ -24,6 +24,9 @@ jest.mock('../../../services/api/processTaskApiClient', () => ({
   processTaskApiClient: {
     getActiveTasks: jest.fn(),
     getTasks: jest.fn(),
+    // 筛选档计数。⚠️ 桩里漏掉它, 屏幕调到的是 undefined —— 与上面 processCheckin
+    // 那条注释同一个坑。计数的三态由 processTaskListCounts.test.tsx 专门守。
+    getTaskCounts: jest.fn(),
     getTaskById: jest.fn(),
     getTaskSummary: jest.fn(),
     getRunOverview: jest.fn(),

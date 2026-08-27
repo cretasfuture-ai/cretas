@@ -25,10 +25,30 @@ const loading = ref(false);
 const planRows = ref<TableRow[]>([]);
 const lastRefreshedAt = ref<string>('');
 
+/**
+ * 两路请求各自的「问到了没有」。
+ *
+ * ⛔ 不能用 `planRows.length` 反推 —— 请求失败时 planRows 也是空数组,
+ * 那样「一条都没查到」会被印成「确实是 0 条」, 而 0 在筛选胶囊上恰好是
+ * 「这一类没有」的样子。两件事含义相反, 界面上必须分得开。
+ */
+const pendingLoaded = ref(false);
+const inProgressLoaded = ref(false);
+
 // ==================== Filter ====================
 const keyword = ref('');
 
-const filteredRows = computed(() => {
+/** 状态胶囊的选中项。OVERDUE 是「紧迫度」维度, 与前两个状态正交, 这里作为单选视图并列。 */
+type QueueFilterKey = 'ALL' | 'PENDING' | 'IN_PROGRESS' | 'OVERDUE';
+const statusFilter = ref<QueueFilterKey>('ALL');
+
+/**
+ * 只经过关键词过滤的行 —— **胶囊计数的口径基准**。
+ *
+ * 计数必须与「点下去之后会看到多少条」完全一致, 所以计数算在关键词过滤【之后】、
+ * 状态过滤【之前】。否则搜索框一输入, 胶囊上的数就和表格里的行数对不上。
+ */
+const keywordRows = computed(() => {
   const kw = keyword.value.trim().toLowerCase();
   if (!kw) return planRows.value;
   return planRows.value.filter((row) => {
@@ -47,7 +67,11 @@ async function loadData() {
   try {
     // Fetch PENDING and IN_PROGRESS in parallel using the existing list endpoint
     // Each call uses sortBy=plannedDate ASC so results come pre-sorted per group
-    const [pendingRes, inProgressRes] = await Promise.all([
+    //
+    // ⛔ 这里【曾经】是 `Promise.all` —— 它在任一路 reject 时整体 reject,
+    // 于是 catch 把**另一路已经读到的真实条数**一起抹成「没问到」。
+    // 两路是两个独立读数, 一路挂了不该让另一路的有效读数陪葬 ⇒ allSettled。
+    const [pendingSettled, inProgressSettled] = await Promise.allSettled([
       get(`/${factoryId.value}/production-plans`, {
         params: {
           page: 1,
@@ -68,17 +92,29 @@ async function loadData() {
       }),
     ]);
 
-    const pendingList: TableRow[] =
-      pendingRes.success && pendingRes.data
-        ? pendingRes.data.content || []
-        : [];
-    const inProgressList: TableRow[] =
-      inProgressRes.success && inProgressRes.data
-        ? inProgressRes.data.content || []
-        : [];
+    /**
+     * 一路的结果 → `TableRow[] | null`。
+     * `null` = 没问到(reject / success:false / 没有 data), ⛔ 与「问到了但是 0 条」严格分开。
+     */
+    function rowsOf(
+      settled: PromiseSettledResult<{ success?: boolean; data?: { content?: TableRow[] } }>
+    ): TableRow[] | null {
+      if (settled.status !== 'fulfilled') {
+        console.error('[未完成队列] 一路请求失败', settled.reason);
+        return null;
+      }
+      const res = settled.value;
+      if (res?.success !== true || !res.data) return null;
+      return res.data.content || [];
+    }
+
+    const pendingList = rowsOf(pendingSettled);
+    const inProgressList = rowsOf(inProgressSettled);
+    pendingLoaded.value = pendingList !== null;
+    inProgressLoaded.value = inProgressList !== null;
 
     // Merge then sort by plannedDate ascending (nulls last)
-    const merged = [...pendingList, ...inProgressList];
+    const merged = [...(pendingList ?? []), ...(inProgressList ?? [])];
     merged.sort((a, b) => {
       const da = String(a.plannedDate || '');
       const db = String(b.plannedDate || '');
@@ -93,8 +129,15 @@ async function loadData() {
       hour: '2-digit',
       minute: '2-digit',
     });
+
+    if (pendingList === null || inProgressList === null) {
+      ElMessage({ message: '部分计划数据加载失败', type: 'error', duration: 0, showClose: true });
+    }
   } catch (e) {
     console.error('[未完成队列] 加载失败', e);
+    pendingLoaded.value = false;
+    inProgressLoaded.value = false;
+    planRows.value = [];
     ElMessage({ message: '加载未完成计划失败', type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
@@ -200,17 +243,88 @@ function hasMaterialRisk(row: TableRow): boolean {
 }
 
 // ==================== Counts ====================
-const pendingCount = computed(
-  () => planRows.value.filter((r) => String(r.status).toUpperCase() === 'PENDING').length
+/**
+ * 计数三态: 问到了就印(**含 0**), 没问到印 `—`。
+ *
+ * `null` 专门表示「这一路没问到」, ⛔ 不许 `?? 0` 兜底 —— 那会把
+ * 「接口挂了」翻译成「这一类一条都没有」, 而后者正是用户点进去之前想知道的事。
+ */
+function rowIsPending(r: TableRow): boolean {
+  return String(r.status).toUpperCase() === 'PENDING';
+}
+function rowIsInProgress(r: TableRow): boolean {
+  return String(r.status).toUpperCase() === 'IN_PROGRESS';
+}
+
+/** 待执行只由 PENDING 那一路供给 ⇒ 只看它问到没有。 */
+const pendingCount = computed<number | null>(() =>
+  pendingLoaded.value ? keywordRows.value.filter(rowIsPending).length : null
 );
-const inProgressCount = computed(
-  () =>
-    planRows.value.filter((r) => String(r.status).toUpperCase() === 'IN_PROGRESS').length
+const inProgressCount = computed<number | null>(() =>
+  inProgressLoaded.value ? keywordRows.value.filter(rowIsInProgress).length : null
 );
-const overdueCount = computed(
-  () =>
-    planRows.value.filter((r) => getDateUrgency(r.plannedDate) === 'overdue').length
+/** 「全部」和「已超期」横跨两路 ⇒ 任一路没问到就都不算数。 */
+const bothLoaded = computed(() => pendingLoaded.value && inProgressLoaded.value);
+const allCount = computed<number | null>(() =>
+  bothLoaded.value ? keywordRows.value.length : null
 );
+const overdueCount = computed<number | null>(() =>
+  bothLoaded.value
+    ? keywordRows.value.filter((r) => getDateUrgency(r.plannedDate) === 'overdue').length
+    : null
+);
+
+/** 读到就印(含 0), 读不到印 `—`。 */
+function formatCount(n: number | null): string {
+  return n === null ? '—' : String(n);
+}
+
+// ==================== Status filter ====================
+/**
+ * 表格实际渲染的行 = 关键词过滤 ∩ 状态胶囊。
+ * 胶囊的计数正是在 `keywordRows` 上算的, 所以「点之前看到的数」==「点之后的行数」。
+ */
+const filteredRows = computed(() => {
+  const rows = keywordRows.value;
+  switch (statusFilter.value) {
+    case 'PENDING':
+      return rows.filter(rowIsPending);
+    case 'IN_PROGRESS':
+      return rows.filter(rowIsInProgress);
+    case 'OVERDUE':
+      return rows.filter((r) => getDateUrgency(r.plannedDate) === 'overdue');
+    default:
+      return rows;
+  }
+});
+
+/** 再点一次已选中的胶囊 = 取消筛选, 回到「全部」。 */
+function selectStatus(key: QueueFilterKey): void {
+  statusFilter.value = statusFilter.value === key && key !== 'ALL' ? 'ALL' : key;
+}
+
+const CAPSULE_LABEL: Record<QueueFilterKey, string> = {
+  ALL: '全部',
+  PENDING: '待执行',
+  IN_PROGRESS: '进行中',
+  OVERDUE: '已超期',
+};
+
+/**
+ * 空表的说法必须跟着**为什么空**走 —— 三种「空」含义完全不同:
+ *   ① 没问到          → 我们什么都不知道
+ *   ② 筛掉了          → 队列里有计划, 只是这一类没有(⚠️「已超期 0」是好消息)
+ *   ③ 队列真的是空的  → 没有未完成计划
+ * ⛔ 一律说「暂无未完成计划」会把 ② 说成 ③: 用户筛「已超期」看到「暂无未完成计划」,
+ * 会以为整个队列空了。
+ */
+const emptyDescription = computed(() => {
+  if (!bothLoaded.value) return '数据未加载完整 — 请点刷新重试';
+  if (statusFilter.value !== 'ALL') {
+    return `当前筛选「${CAPSULE_LABEL[statusFilter.value]}」下没有计划`;
+  }
+  return keyword.value.trim() ? '没有匹配的计划' : '暂无未完成计划';
+});
 
 // ==================== Navigation ====================
 function goToPlanList() {
@@ -232,17 +346,52 @@ function goToPlanList() {
       </div>
     </div>
 
-    <!-- Summary badges -->
+    <!-- Summary badges — 同时是筛选入口: 数就是「点下去会看到多少条」 -->
     <div class="summary-row">
-      <el-tag type="info" size="large" effect="plain">
-        待执行 <strong>{{ pendingCount }}</strong>
-      </el-tag>
-      <el-tag type="warning" size="large" effect="plain">
-        进行中 <strong>{{ inProgressCount }}</strong>
-      </el-tag>
-      <el-tag v-if="overdueCount > 0" type="danger" size="large" effect="dark">
-        ⚠ 已超期 {{ overdueCount }}
-      </el-tag>
+      <button
+        type="button"
+        class="status-capsule capsule-all"
+        :class="{ 'capsule-active': statusFilter === 'ALL' }"
+        data-capsule="ALL"
+        :aria-pressed="statusFilter === 'ALL'"
+        @click="selectStatus('ALL')"
+      >
+        全部 <strong class="capsule-count">{{ formatCount(allCount) }}</strong>
+      </button>
+      <button
+        type="button"
+        class="status-capsule capsule-pending"
+        :class="{ 'capsule-active': statusFilter === 'PENDING' }"
+        data-capsule="PENDING"
+        :aria-pressed="statusFilter === 'PENDING'"
+        @click="selectStatus('PENDING')"
+      >
+        待执行 <strong class="capsule-count">{{ formatCount(pendingCount) }}</strong>
+      </button>
+      <button
+        type="button"
+        class="status-capsule capsule-progress"
+        :class="{ 'capsule-active': statusFilter === 'IN_PROGRESS' }"
+        data-capsule="IN_PROGRESS"
+        :aria-pressed="statusFilter === 'IN_PROGRESS'"
+        @click="selectStatus('IN_PROGRESS')"
+      >
+        进行中 <strong class="capsule-count">{{ formatCount(inProgressCount) }}</strong>
+      </button>
+      <!--
+        ⛔ 不加 `v-if="overdueCount > 0"`: 胶囊消失时「0 条超期」和「没问到」
+        长得一模一样, 而「今天一条都没超期」正是文员最想确认的好消息。
+      -->
+      <button
+        type="button"
+        class="status-capsule capsule-overdue"
+        :class="{ 'capsule-active': statusFilter === 'OVERDUE' }"
+        data-capsule="OVERDUE"
+        :aria-pressed="statusFilter === 'OVERDUE'"
+        @click="selectStatus('OVERDUE')"
+      >
+        ⚠ 已超期 <strong class="capsule-count">{{ formatCount(overdueCount) }}</strong>
+      </button>
       <span v-if="lastRefreshedAt" class="refresh-time">上次刷新 {{ lastRefreshedAt }}</span>
     </div>
 
@@ -264,7 +413,7 @@ function goToPlanList() {
     <el-table
       :data="filteredRows"
       v-loading="loading"
-      empty-text="暂无未完成计划"
+      :empty-text="emptyDescription"
       stripe
       border
       style="width: 100%"
@@ -410,7 +559,8 @@ function goToPlanList() {
 
     <!-- Empty hint -->
     <div v-if="!loading && filteredRows.length === 0" class="empty-hint">
-      <el-empty description="暂无未完成计划" :image-size="80">
+      <el-empty :description="emptyDescription" :image-size="80">
+        <el-button v-if="statusFilter !== 'ALL'" @click="selectStatus('ALL')">清除筛选</el-button>
         <el-button type="primary" @click="goToPlanList">去查看完整计划列表</el-button>
       </el-empty>
     </div>
@@ -459,6 +609,59 @@ function goToPlanList() {
   gap: 12px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+
+// 状态胶囊 — 用 <button> 而不是 el-tag: 它本来就是一个筛选入口,
+// 键盘可达 / aria-pressed 表达选中态, 都是 <button> 自带的。
+.status-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 14px;
+  line-height: 1.4;
+  border-radius: 16px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  background: var(--el-fill-color-blank, #fff);
+  color: var(--el-text-color-regular, #606266);
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s, color 0.2s;
+}
+
+.status-capsule:hover {
+  border-color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, #409eff);
+}
+
+.status-capsule:focus-visible {
+  outline: 2px solid var(--el-color-primary, #409eff);
+  outline-offset: 2px;
+}
+
+.status-capsule .capsule-count {
+  font-weight: 600;
+}
+
+.status-capsule.capsule-active {
+  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary, #409eff);
+  color: #fff;
+}
+
+.status-capsule.capsule-overdue {
+  color: var(--el-color-danger, #f56c6c);
+  border-color: var(--el-color-danger-light-5, #fab6b6);
+}
+
+.status-capsule.capsule-overdue:hover {
+  border-color: var(--el-color-danger, #f56c6c);
+  color: var(--el-color-danger, #f56c6c);
+}
+
+.status-capsule.capsule-overdue.capsule-active {
+  background: var(--el-color-danger, #f56c6c);
+  border-color: var(--el-color-danger, #f56c6c);
+  color: #fff;
 }
 
 .refresh-time {

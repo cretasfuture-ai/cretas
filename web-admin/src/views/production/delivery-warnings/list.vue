@@ -19,10 +19,49 @@ const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const windowDays = ref(7);
 
-const overdueCount = computed(() => tableData.value.filter(r => r.warnLevel === 'OVERDUE').length);
-const urgentCount = computed(() => tableData.value.filter(r => r.warnLevel === 'URGENT').length);
-const warnCount = computed(() => tableData.value.filter(r => r.warnLevel === 'WARN').length);
-const normalCount = computed(() => tableData.value.filter(r => r.warnLevel === 'NORMAL').length);
+/**
+ * 这一窗口的数据「问到了没有」。
+ *
+ * ⛔ 不能用 `tableData.length` 反推 —— 请求失败时它同样是空数组, 于是
+ * 「一条都没查到」会被四张卡印成整齐的 0/0/0/0, 而那正好是「窗口内无预警」
+ * 的样子。⚠️ 这两件事的含义完全相反: 一个是好消息, 一个是我们什么都不知道。
+ */
+const loaded = ref(false);
+
+/** 预警等级 = 筛选维度。ALL 是不筛。 */
+type WarnFilterKey = 'ALL' | 'OVERDUE' | 'URGENT' | 'WARN' | 'NORMAL';
+const activeLevel = ref<WarnFilterKey>('ALL');
+
+/** 计数三态: 问到了就印(含 0), 没问到印 `—`。⛔ 不许 `?? 0`。 */
+function countOf(level: WarnFilterKey): number | null {
+  if (!loaded.value) return null;
+  if (level === 'ALL') return tableData.value.length;
+  return tableData.value.filter(r => r.warnLevel === level).length;
+}
+function formatCount(n: number | null): string {
+  return n === null ? '—' : String(n);
+}
+
+const overdueCount = computed(() => countOf('OVERDUE'));
+const urgentCount = computed(() => countOf('URGENT'));
+const warnCount = computed(() => countOf('WARN'));
+const normalCount = computed(() => countOf('NORMAL'));
+const allCount = computed(() => countOf('ALL'));
+
+/**
+ * 卡片就是筛选入口, 所以卡上的数必须等于点下去之后表格里的行数 ——
+ * 两者都从同一个 `tableData` 上算, 不存在第二个口径。
+ */
+const displayRows = computed(() =>
+  activeLevel.value === 'ALL'
+    ? tableData.value
+    : tableData.value.filter(r => r.warnLevel === activeLevel.value)
+);
+
+/** 再点一次已选中的卡 = 取消筛选。 */
+function selectLevel(level: WarnFilterKey): void {
+  activeLevel.value = activeLevel.value === level && level !== 'ALL' ? 'ALL' : level;
+}
 
 onMounted(() => {
   loadData();
@@ -35,13 +74,20 @@ async function loadData() {
     const response = await get(`/${factoryId.value}/production-plans/delivery-warnings`, {
       params: { windowDays: windowDays.value }
     });
-    if (response.success && response.data) {
-      tableData.value = Array.isArray(response.data) ? response.data : [];
-    } else if (response.success === false) {
+    if (response.success && Array.isArray(response.data)) {
+      tableData.value = response.data;
+      loaded.value = true;
+    } else {
+      // ⛔ 失败时不留着上一窗口的数据 —— 那会把过期读数冒充成当前窗口的。
+      tableData.value = [];
+      loaded.value = false;
       ElMessage.error(response.message || '加载交货预警失败');
     }
   } catch (error) {
     console.error('加载交货预警失败:', error);
+    tableData.value = [];
+    loaded.value = false;
+    ElMessage.error('加载交货预警失败');
   } finally {
     loading.value = false;
   }
@@ -103,39 +149,84 @@ function formatDaysCell(days: number | null | undefined): string {
       </div>
     </div>
 
+    <!--
+      四张卡同时是筛选入口: 卡上的数 == 点下去之后表格里的行数。
+      用 <button> 而不是纯 div —— 键盘可达, aria-pressed 表达选中态。
+    -->
     <el-row :gutter="16" class="summary-cards">
-      <el-col :span="6">
-        <el-card shadow="hover" class="card-danger">
-          <div class="card-label">已超期</div>
-          <div class="card-value">{{ overdueCount }}</div>
-        </el-card>
+      <el-col :span="4">
+        <button
+          type="button"
+          class="summary-card card-all"
+          :class="{ 'card-active': activeLevel === 'ALL' }"
+          data-warn-card="ALL"
+          :aria-pressed="activeLevel === 'ALL'"
+          @click="selectLevel('ALL')"
+        >
+          <span class="card-label">全部</span>
+          <span class="card-value">{{ formatCount(allCount) }}</span>
+        </button>
       </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="card-urgent">
-          <div class="card-label">紧急 (&lt;3d)</div>
-          <div class="card-value">{{ urgentCount }}</div>
-        </el-card>
+      <el-col :span="5">
+        <button
+          type="button"
+          class="summary-card card-danger"
+          :class="{ 'card-active': activeLevel === 'OVERDUE' }"
+          data-warn-card="OVERDUE"
+          :aria-pressed="activeLevel === 'OVERDUE'"
+          @click="selectLevel('OVERDUE')"
+        >
+          <span class="card-label">已超期</span>
+          <span class="card-value">{{ formatCount(overdueCount) }}</span>
+        </button>
       </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="card-warn">
-          <div class="card-label">预警 (3-7d)</div>
-          <div class="card-value">{{ warnCount }}</div>
-        </el-card>
+      <el-col :span="5">
+        <button
+          type="button"
+          class="summary-card card-urgent"
+          :class="{ 'card-active': activeLevel === 'URGENT' }"
+          data-warn-card="URGENT"
+          :aria-pressed="activeLevel === 'URGENT'"
+          @click="selectLevel('URGENT')"
+        >
+          <span class="card-label">紧急 (&lt;3d)</span>
+          <span class="card-value">{{ formatCount(urgentCount) }}</span>
+        </button>
       </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="card-normal">
-          <div class="card-label">正常 (≥7d)</div>
-          <div class="card-value">{{ normalCount }}</div>
-        </el-card>
+      <el-col :span="5">
+        <button
+          type="button"
+          class="summary-card card-warn"
+          :class="{ 'card-active': activeLevel === 'WARN' }"
+          data-warn-card="WARN"
+          :aria-pressed="activeLevel === 'WARN'"
+          @click="selectLevel('WARN')"
+        >
+          <span class="card-label">预警 (3-7d)</span>
+          <span class="card-value">{{ formatCount(warnCount) }}</span>
+        </button>
+      </el-col>
+      <el-col :span="5">
+        <button
+          type="button"
+          class="summary-card card-normal"
+          :class="{ 'card-active': activeLevel === 'NORMAL' }"
+          data-warn-card="NORMAL"
+          :aria-pressed="activeLevel === 'NORMAL'"
+          @click="selectLevel('NORMAL')"
+        >
+          <span class="card-label">正常 (≥7d)</span>
+          <span class="card-value">{{ formatCount(normalCount) }}</span>
+        </button>
       </el-col>
     </el-row>
 
     <el-table
       v-loading="loading"
-      :data="tableData"
+      :data="displayRows"
       stripe
       border
-      empty-text="窗口内无交货预警"
+      :empty-text="loaded ? '窗口内无交货预警' : '数据未加载 — 请点刷新重试'"
       class="warn-table"
     >
       <el-table-column label="预警等级" width="120">
@@ -198,6 +289,35 @@ function formatDaysCell(days: number | null | undefined): string {
   margin-bottom: 16px;
 }
 
+/* 卡片即筛选入口 —— <button> 自带键盘可达与按下语义 */
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid var(--el-border-color-light, #e4e7ed);
+  border-radius: 4px;
+  background: var(--el-fill-color-blank, #fff);
+  cursor: pointer;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.summary-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+}
+
+.summary-card:focus-visible {
+  outline: 2px solid var(--el-color-primary, #409eff);
+  outline-offset: 2px;
+}
+
+.summary-card.card-active {
+  border-color: var(--el-color-primary, #409eff);
+  box-shadow: 0 0 0 1px var(--el-color-primary, #409eff) inset;
+}
+
 .summary-cards .card-label {
   font-size: 14px;
   color: #909399;
@@ -207,8 +327,10 @@ function formatDaysCell(days: number | null | undefined): string {
 .summary-cards .card-value {
   font-size: 28px;
   font-weight: 600;
+  line-height: 1.2;
 }
 
+.summary-cards .card-all .card-value { color: #303133; }
 .summary-cards .card-danger .card-value { color: #f56c6c; }
 .summary-cards .card-urgent .card-value { color: #e6a23c; }
 .summary-cards .card-warn .card-value { color: #e6a23c; }
