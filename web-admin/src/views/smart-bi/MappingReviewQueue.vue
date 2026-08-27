@@ -17,6 +17,28 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get, post } from '@/api/request';
+
+/**
+ * 🔴 2026-08-28 生产实测：这三个接口在 **Python 服务**上
+ * （`backend/python/smartbi_compat/api/mapping_review.py`，
+ *  `_BASE = "/api/mobile/{factory_id}/smart-bi/mapping-review"`），
+ * 而本页原本用 `get()` 的默认 baseURL `/api/mobile` 去打 ⇒ 请求落到 **Java**，
+ * Java 没有这条路由 ⇒ **404「请求的资源不存在」，整页永远拿不到数据。**
+ *
+ * 同一个 token 实测对照：
+ * <pre>
+ *   /api/mobile/F006/smart-bi/mapping-review/pending              -> 404 请求的资源不存在
+ *   /smartbi-api/api/mobile/F006/smart-bi/mapping-review/pending  -> 200 {"success":true,"data":[]}
+ * </pre>
+ *
+ * ⚠️ ⛔ 别用未认证的 401 去判「端点在不在」——网关对未认证请求一律 401，
+ * 两个前缀都会返 401，那个读数分不出真假（本仓记过这个仪器自坑）。
+ *
+ * ⇒ 按仓里既有约定走 Python：路径带 `/smartbi-api` 前缀 + `baseURL: ''` 绕开 `/api/mobile`
+ * （与 `api/smartbi/upload.ts` 一致）。
+ */
+const MAPPING_REVIEW_BASE = '/smartbi-api/api/mobile';
+const PYTHON_DIRECT = { baseURL: '' } as const;
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Check, InfoFilled } from '@element-plus/icons-vue';
 
@@ -110,7 +132,8 @@ async function fetchPending() {
   loadingItems.value = true;
   try {
     const res = await get<PendingItem[]>(
-      `/${factoryId.value}/smart-bi/mapping-review/pending?limit=200`
+      `${MAPPING_REVIEW_BASE}/${factoryId.value}/smart-bi/mapping-review/pending?limit=200`,
+      PYTHON_DIRECT
     );
     // interceptor unwraps { success, data, message } → data (or throws on HTTP err)
     // For business success=false the interceptor may not throw, handle both shapes:
@@ -136,7 +159,8 @@ async function fetchCanonicalFields() {
   loadingFields.value = true;
   try {
     const res = await get<CanonicalFieldsData>(
-      `/${factoryId.value}/smart-bi/mapping-review/canonical-fields`
+      `${MAPPING_REVIEW_BASE}/${factoryId.value}/smart-bi/mapping-review/canonical-fields`,
+      PYTHON_DIRECT
     );
     canonicalFields.value = Array.isArray(res) ? null : (res as any)?.data ?? res as any;
   } catch (err: unknown) {
@@ -204,14 +228,15 @@ async function confirmSelected() {
     const uploadId = Number(uploadIdStr);
     try {
       const res = await post(
-        `/${factoryId.value}/smart-bi/mapping-review/${uploadId}/confirm`,
+        `${MAPPING_REVIEW_BASE}/${factoryId.value}/smart-bi/mapping-review/${uploadId}/confirm`,
         {
           items: items.map((it) => ({
             column_name: it.column_name,
             confirmed_standard: it._confirmed_standard,
             should_pin: true,
           })),
-        }
+        },
+        PYTHON_DIRECT
       );
       const confirmed: number = (res as any)?.data?.confirmed ?? (res as any)?.confirmed ?? 0;
       totalConfirmed += confirmed;
