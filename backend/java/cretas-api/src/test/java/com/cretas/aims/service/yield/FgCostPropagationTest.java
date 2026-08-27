@@ -66,7 +66,14 @@ import static org.mockito.Mockito.when;
  *         (ClerkProcessEntryServiceImpl.materializeBatch 逐边累加, setScale(2,HALF_UP), 见 :283/:305/:522)
  *       ⚠️ SFI/FG 投料成本 *不* 在 totalCost 内 (投料边不写 MaterialConsumption) → 下面单独补。
  *   stockFeedCost = Σ (semiFinished/finishedGoods 上游: feedKg × 输入库存.unitCost)
- *   FG入库量 = productWeight(优先, >0) 否则 outputQuantity  (与库存计量口径一致)
+ *   FG入库量 = outputQuantity (SKU 计数单位, 如"盒"); productWeight 只是核对用重量,
+ *              不参与库存量/成本分母 —— 与 {@link InterimSettleServiceTest}
+ *              {@code multipleSameProductRowsIgnoreWeightForInventoryQuantity} /
+ *              {@code finishedSampleIsExcludedFromInventoryButNotProductionWeight}
+ *              两条既有测试固化的口径一致 (标题即"productWeight 不得改变库存口径")。
+ *              🔴 本类曾错误假设"productWeight 优先", 与上述两条测试矛盾且被
+ *              InterimSettleServiceImpl.computeOutputUnitCost 的调用方实证推翻
+ *              (producedQty 恒取 getOutputQuantity(), 见该文件 ~L411) — 2026-08-27 订正。
  * </pre>
  *
  * <h3>副产 (byproduct) 模型 — 本测验证的裁定</h3>
@@ -175,7 +182,7 @@ class FgCostPropagationTest {
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("全桶精确: pb.totalCost=原料300+调料120+人工80=500, + SFI feed 40×5=200 → FG.unitCost=(700)/productWeight10=70.0000; 分母是入库量(productWeight)非outputQuantity")
+    @DisplayName("全桶精确: pb.totalCost=原料300+调料120+人工80=500, + SFI feed 40×5=200 → FG.unitCost=(700)/outputQuantity50=14.0000; 分母是SKU入库量(outputQuantity)非productWeight")
     void allBucketsRawSeasoningLaborFeedPropagateExactlyToFgUnitCost() {
         // 物化成品道 (batchId != null): pb.totalCost 已含 原料+调料+人工 (materializeBatch 折进),
         //   这里显式把三桶写出来相加 = 500, 固化"三桶都进 totalCost"。SFI 投料 40kg @ 5 = 200 单独补。
@@ -185,8 +192,8 @@ class FgCostPropagationTest {
         final BigDecimal pbTotal = raw.add(seasoning).add(labor); // = 500.00 (= ProductionBatch.totalCost)
 
         ProcessSheetRow rFg = materializedFinishedRow(200L, "CLK-B-ALL",
-                new BigDecimal("50"),          // outputQuantity 50 (盒) — 故意 ≠ 分母, 验证分母用 productWeight
-                new BigDecimal("10"),          // productWeight 10kg = FG 入库量 = 分母
+                new BigDecimal("50"),          // outputQuantity 50 (盒) = FG 入库量 = 分母 (SKU 计数口径)
+                new BigDecimal("10"),          // productWeight 10kg — 仅核对用, 不参与库存量/成本分母
                 upstreamSemi("SFI-COSTED", "40"));
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rFg));
         stubBatch(200L, pbTotal);
@@ -195,15 +202,16 @@ class FgCostPropagationTest {
         service.interimSettle(FACTORY, PLAN_ID, 7L);
 
         FinishedGoodsBatch fg = captureSavedFg();
-        // 入库量 = productWeight 10 (不是 outputQuantity 50)
-        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("10");
-        assertThat(fg.getUnit()).isEqualTo("kg");
+        // 入库量 = outputQuantity 50 (不是 productWeight 10) — 与 InterimSettleServiceTest
+        // 的"productWeight 不得改变库存口径"固化行为一致。
+        assertThat(fg.getProducedQuantity()).isEqualByComparingTo("50");
+        assertThat(fg.getUnit()).isEqualTo("盒");
         assertThat(fg.getWarehouseId()).isEqualTo("WH-FG");
-        // FG.unitCost = (原料300 + 调料120 + 人工80 + feed 40×5=200) / 10 = 700/10 = 70.0000
+        // FG.unitCost = (原料300 + 调料120 + 人工80 + feed 40×5=200) / 50 = 700/50 = 14.0000
         assertThat(fg.getUnitCost()).isNotNull();
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("70");
-        // 反证: 若误用 outputQuantity(50) 作分母 → 14; 断言排除
-        assertThat(fg.getUnitCost()).isNotEqualByComparingTo("14");
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("14");
+        // 反证: 若误用 productWeight(10) 作分母 → 70; 断言排除
+        assertThat(fg.getUnitCost()).isNotEqualByComparingTo("70");
     }
 
     @Test
@@ -228,7 +236,7 @@ class FgCostPropagationTest {
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("副产模型裁定: 成品道带副产(8单位×¥3=¥24回收) → FG.unitCost 仍是 gross(pb.totalCost500/10=50), 副产 NOT netted 进 FG 批 (只在订单级 OrderCostBreakdown.netTotalCost 冲减)")
+    @DisplayName("副产模型裁定: 成品道带副产(8单位×¥3=¥24回收) → FG.unitCost 仍是 gross(pb.totalCost500/outputQuantity40=12.5), 副产 NOT netted 进 FG 批 (只在订单级 OrderCostBreakdown.netTotalCost 冲减)")
     void byproductDoesNotReduceFgBatchUnitCost() {
         ProcessSheetRow rFg = materializedFinishedRow(202L, "CLK-B-BP",
                 new BigDecimal("40"), new BigDecimal("10"), null);
@@ -243,10 +251,10 @@ class FgCostPropagationTest {
         service.interimSettle(FACTORY, PLAN_ID, 7L);
 
         FinishedGoodsBatch fg = captureSavedFg();
-        // 🔴 裁定: FG 批库存成本 = gross = 500/10 = 50.0000 (副产 ¥24 *不* 冲减 FG.unitCost)
-        //   若副产被误 net 进 FG → (500−24)/10 = 47.6; 断言排除, 证明副产不 double-count 也不进 FG 批。
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("50");
-        assertThat(fg.getUnitCost()).isNotEqualByComparingTo("47.6");
+        // 🔴 裁定: FG 批库存成本 = gross = 500/outputQuantity40 = 12.5000 (副产 ¥24 *不* 冲减 FG.unitCost)
+        //   若副产被误 net 进 FG → (500−24)/40 = 11.9; 断言排除, 证明副产不 double-count 也不进 FG 批。
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("12.5");
+        assertThat(fg.getUnitCost()).isNotEqualByComparingTo("11.9");
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -306,7 +314,7 @@ class FgCostPropagationTest {
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("SFI feed 继承: 成品道部分吃 costed SFI(unitCost 8) feed 30 + pb.totalCost200 → FG.unitCost=(200+30×8=440)/8=55.0000; 且 SFI 严格出库 30")
+    @DisplayName("SFI feed 继承: 成品道部分吃 costed SFI(unitCost 8) feed 30 + pb.totalCost200 → FG.unitCost=(200+30×8=440)/outputQuantity40=11.0000; 且 SFI 严格出库 30")
     void sfiFeedInheritanceAddsFeedCostToFg() {
         ProcessSheetRow rFg = materializedFinishedRow(206L, "CLK-B-SFIFEED",
                 new BigDecimal("40"), new BigDecimal("8"), upstreamSemi("SFI-STOCK", "30"));
@@ -320,12 +328,12 @@ class FgCostPropagationTest {
         verify(wipInventoryService, times(1))
                 .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-STOCK"), eq(new BigDecimal("30")));
         FinishedGoodsBatch fg = captureSavedFg();
-        // (pb 200 + feed 30×8=240) / 入库量 8 = 440/8 = 55.0000
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("55");
+        // (pb 200 + feed 30×8=240) / 入库量(outputQuantity) 40 = 440/40 = 11.0000
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("11");
     }
 
     @Test
-    @DisplayName("FG feed 继承(①c): 成品道部分吃 costed FG(unitCost 12) feed 20 + pb.totalCost160 → FG.unitCost=(160+20×12=400)/8=50.0000")
+    @DisplayName("FG feed 继承(①c): 成品道部分吃 costed FG(unitCost 12) feed 20 + pb.totalCost160 → FG.unitCost=(160+20×12=400)/outputQuantity40=10.0000")
     void fgFeedInheritanceAddsFeedCostToFg() {
         ProcessSheetRow rFg = materializedFinishedRow(207L, "CLK-B-FGFEED",
                 new BigDecimal("40"), new BigDecimal("8"), upstreamFg("FG-STOCK", "20"));
@@ -338,12 +346,12 @@ class FgCostPropagationTest {
         verify(finishedGoodsFeedService, times(1))
                 .consumeForFeedStrict(eq(FACTORY), eq("FG-STOCK"), eq(new BigDecimal("20")), eq("kg"));
         FinishedGoodsBatch fg = captureSavedFg();
-        // (pb 160 + feed 20×12=240) / 8 = 400/8 = 50.0000
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("50");
+        // (pb 160 + feed 20×12=240) / 入库量(outputQuantity) 40 = 400/40 = 10.0000
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("10");
     }
 
     @Test
-    @DisplayName("双 feed 桶叠加: SFI feed(2×10) + FG feed(3×20) + pb.totalCost 100 → FG.unitCost=(100+20+60=180)/4=45.0000 (两外部库存桶不漏不重)")
+    @DisplayName("双 feed 桶叠加: SFI feed(2×10) + FG feed(3×20) + pb.totalCost 100 → FG.unitCost=(100+20+60=180)/outputQuantity40=4.5000 (两外部库存桶不漏不重)")
     void bothSfiAndFgFeedBucketsSumIntoFgCost() {
         UpstreamRef sfi = new UpstreamRef();
         sfi.setSourceBatchNumber("SFI-D");
@@ -364,8 +372,8 @@ class FgCostPropagationTest {
         service.interimSettle(FACTORY, PLAN_ID, 7L);
 
         FinishedGoodsBatch fg = captureSavedFg();
-        // (100 + 2×10=20 + 3×20=60) / 4 = 180/4 = 45.0000
-        assertThat(fg.getUnitCost()).isEqualByComparingTo("45");
+        // (100 + 2×10=20 + 3×20=60) / 入库量(outputQuantity) 40 = 180/40 = 4.5000
+        assertThat(fg.getUnitCost()).isEqualByComparingTo("4.5");
     }
 
     // ─────────────────────────────────────────────────────────────

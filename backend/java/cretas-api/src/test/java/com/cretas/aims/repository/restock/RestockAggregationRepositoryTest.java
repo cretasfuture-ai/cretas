@@ -104,6 +104,7 @@ class RestockAggregationRepositoryTest {
         p.setFactoryId(FID);
         p.setProductTypeId(productTypeId);
         p.setPlannedQuantity(new BigDecimal(qty));
+        p.setPlannedUnit("kg"); // NOT NULL (planned_unit) — 测试助手此前漏设, 撞 H2/PG 约束
         p.setStatus(status);
         p.setPlanNumber("PLAN-" + SEQ.getAndIncrement()); // NOT NULL + unique
         p.setCreatedBy(UID);
@@ -210,6 +211,7 @@ class RestockAggregationRepositoryTest {
         softDeleted.setFactoryId(FID);
         softDeleted.setProductTypeId("PT-ZS");
         softDeleted.setPlannedQuantity(new BigDecimal("555"));
+        softDeleted.setPlannedUnit("kg"); // NOT NULL (planned_unit)
         softDeleted.setStatus(ProductionPlanStatus.PLANNED);
         softDeleted.setPlanNumber("PLAN-DELETED-" + SEQ.getAndIncrement());
         softDeleted.setCreatedBy(UID);
