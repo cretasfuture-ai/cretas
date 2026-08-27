@@ -332,6 +332,13 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 5 个子页, 单一菜单入口跳总览, 页内 tab 切换其余 4 页.
       { path: '/system/ai-flywheel', title: 'AI 飞轮运营台', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      // 标签识别诊断 / 单盒标签精修 —— 2026-08-27 补入口。
+      //   这两个平台侧排障页此前【菜单零登记】, 只能手打 URL; 而它们服务的子系统
+      //   是生产上数据量最大的之一: 托盘裁图 11409 / 标注 9583 / 照片 5850 / 任务 1495。
+      //   操作侧的「包装标签拍检」(/quality/label-qc) 一直在菜单里, 唯独【排障的人打不开】。
+      //   ⇒ 不是冗余页面, 是重度使用子系统的诊断工具。
+      { path: '/system/label-qc-platform-diagnostics', title: '标签识别诊断', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
+      { path: '/system/label-qc-tray-crops', title: '单盒标签精修', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/encoding-rules', title: '编码规则字典', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/ai-quota', title: 'AI 配额规则', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/pos', title: 'POS集成', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
