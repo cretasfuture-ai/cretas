@@ -56,6 +56,11 @@ class SalesFinanceApproveVoucherListenerTest {
     void onFinanceApproved_autoGeneratesVoucher_setsFlagCreated() {
         SalesOrder order = stubOrder(VoucherFlag.UNCREATED);
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        // 2026-08-19 修复后, 生产代码把 save() 的返回值重新赋回 order (见监听器注释:
+        // @Async 线程无绑定 EntityManager, save() 走 merge() 返回新的托管实例)。
+        // 真实 JpaRepository.save() 从不返回 null, 这里必须打桩让 mock 同样返回原对象,
+        // 否则 order 被 save() 的默认 null 桩顶掉, 下一行 setVflag 就是在 null 上调用。
+        when(salesOrderRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         Voucher voucher = Voucher.builder()
                 .voucherNumber("V-2026-0001")
                 .totalDebit(new BigDecimal("113.00"))
@@ -82,6 +87,7 @@ class SalesFinanceApproveVoucherListenerTest {
     void onFinanceApproved_voucherFails_failSoft_setsFlagFailed() {
         SalesOrder order = stubOrder(VoucherFlag.UNCREATED);
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(voucherService.createFromBusiness(eq(FACTORY_ID), eq("SALES_ORDER"), eq(ORDER_ID)))
                 .thenThrow(new IllegalStateException("借贷不平衡 (模拟)"));
 
@@ -129,6 +135,7 @@ class SalesFinanceApproveVoucherListenerTest {
     void finance_approved_event_replay_generates_voucher_only_once() {
         SalesOrder order = stubOrder(VoucherFlag.UNCREATED);
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(voucherService.createFromBusiness(FACTORY_ID, "SALES_ORDER", ORDER_ID))
                 .thenReturn(Voucher.builder().voucherNumber("V-2026-ONCE").build());
         SalesOrderFinanceApprovedEvent event = new SalesOrderFinanceApprovedEvent(
