@@ -1,5 +1,6 @@
 package com.cretas.aims.service.yield;
 
+import com.cretas.aims.service.yield.bom.BatchBomBinding;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost;
@@ -175,6 +176,11 @@ public class OrderCostBreakdownService {
         boolean equipmentComplete = true;
         boolean otherComplete = true;
         List<String> missingCostItems = new ArrayList<>();
+        // 同一产品的多个批次, 各自绑的 BOM 版本 —— 用来发现「期间改过配方」。
+        // 不一致时这几批的成本/毛利【不可横向比较】: 「这批毛利低」会被读成生产问题,
+        // 而实际是换了配方。⇒ 必须提示, 不能让人默默地比。
+        Map<String, java.util.Set<Integer>> bomVersionsByProduct = new java.util.LinkedHashMap<>();
+        Map<String, String> productNameById = new java.util.LinkedHashMap<>();
         List<RawMaterialDetail> rawMaterialDetails = new ArrayList<>();
         List<PackagingDetail> packagingDetails = new ArrayList<>();
         List<LaborDetail> laborDetails = new ArrayList<>();
@@ -274,8 +280,16 @@ public class OrderCostBreakdownService {
                     }
                 }
 
+                BatchBomBinding.Resolved bomBinding = BatchBomBinding.resolve(b, plan);
+                if (bomBinding.pinned() && b.getProductTypeId() != null) {
+                    bomVersionsByProduct
+                            .computeIfAbsent(b.getProductTypeId(), k -> new java.util.TreeSet<>())
+                            .add(bomBinding.version());
+                    productNameById.putIfAbsent(b.getProductTypeId(),
+                            b.getProductName() != null ? b.getProductName() : b.getProductTypeId());
+                }
                 PinnedPackagingResult pinnedPackaging = resolvePinnedPackaging(
-                        factoryId, plan, output, y.getLastStepOutputUnit());
+                        factoryId, plan, b, output, y.getLastStepOutputUnit());
                 if (!hasActualPackaging && pinnedPackaging.pinned()) {
                     anyAuthoritativePackaging = true;
                     BigDecimal reportedContribution = packaging.subtract(reportedPackagingBefore);
@@ -553,6 +567,18 @@ public class OrderCostBreakdownService {
         }
         if (maskPrice) {
             maskCosts(dto);
+        }
+
+        // 同产品跨批次 BOM 版本不一致 ⇒ 这几批不可横向比较。
+        // ⚠️ 这是【提示】不是阻断: 成本本身仍然算得出, 只是可比性没了。
+        for (Map.Entry<String, java.util.Set<Integer>> e : bomVersionsByProduct.entrySet()) {
+            List<Integer> mixed = BatchBomBinding.mixedVersions(e.getValue());
+            if (!mixed.isEmpty()) {
+                missingCostItems.add("BOM_VERSION_MIXED:"
+                        + productNameById.getOrDefault(e.getKey(), e.getKey())
+                        + ":v" + mixed.stream().map(String::valueOf)
+                                .collect(java.util.stream.Collectors.joining(",v")));
+            }
         }
         return dto;
     }
@@ -1016,22 +1042,26 @@ public class OrderCostBreakdownService {
      *
      * @return {@code null} 表示回退不可用(仓储缺失 / recipe 不存在 / <b>版本号对不上</b>)
      */
-    private Map<String, Object> pinnedBomSnapshotFromRecipe(String factoryId, ProductionPlan plan) {
+    // ⚠️ 2026-08-27: 参数从 plan 换成 (recipeId, version) —— 主路径已改读【批次】绑定,
+    //    兜底若仍读计划的, 两边会用不同的配方。同源才有意义。
+    private Map<String, Object> pinnedBomSnapshotFromRecipe(String factoryId,
+                                                            String pinnedRecipeId,
+                                                            Integer pinnedBomVersion) {
         if (bomRecipeFallbackRepository == null || bomRecipeItemFallbackRepository == null) {
             return null;
         }
         com.cretas.aims.entity.bom.BomRecipe recipe;
         try {
-            recipe = bomRecipeFallbackRepository.findById(plan.getSelectedBomRecipeId())
+            recipe = bomRecipeFallbackRepository.findById(pinnedRecipeId)
                     .filter(r -> factoryId.equals(r.getFactoryId()))
                     .orElse(null);
         } catch (RuntimeException ex) {
             log.warn("[M67CostBreakdown] BOM 回退读取失败 factory={} recipe={}: {}",
-                    factoryId, plan.getSelectedBomRecipeId(), ex.getMessage());
+                    factoryId, pinnedRecipeId, ex.getMessage());
             return null;
         }
         // 🔴 版本号必须对得上 —— 否则就是拿新版本的料冒充旧版本, 历史成本会悄悄变化。
-        if (recipe == null || !Objects.equals(recipe.getVersion(), plan.getSelectedBomVersion())) {
+        if (recipe == null || !Objects.equals(recipe.getVersion(), pinnedBomVersion)) {
             return null;
         }
         List<com.cretas.aims.entity.bom.BomRecipeItem> items;
@@ -1071,19 +1101,26 @@ public class OrderCostBreakdownService {
     }
 
     private PinnedPackagingResult resolvePinnedPackaging(String factoryId, ProductionPlan plan,
+                                                          ProductionBatch batch,
                                                           BigDecimal outputQuantity, String outputUnit) {
-        if (plan == null || plan.getSelectedBomRecipeId() == null || plan.getSelectedBomVersion() == null) {
+        // 🔴 2026-08-27: 优先读【批次】创建时钉下的绑定, 而不是计划的。
+        //    业务口径: 批次的账按它创建时绑定的那一版走 —— 9 月改配方不该让 8 月的账变。
+        //    实测覆盖率: 批次侧 61/61 全填; 计划侧 43 个里只有 36 个有绑定。
+        BatchBomBinding.Resolved binding = BatchBomBinding.resolve(batch, plan);
+        if (!binding.pinned()) {
             return PinnedPackagingResult.notPinned();
         }
+        final String pinnedRecipeId = binding.recipeId();
+        final Integer pinnedBomVersion = binding.version();
         List<String> missing = new ArrayList<>();
         if (bomVersionRepository == null) {
             missing.add("PINNED_BOM_SNAPSHOT_UNAVAILABLE:" + plan.getId());
             return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
         }
         BomVersion version = bomVersionRepository
-                .findByFactoryIdAndBomRecipeIdOrderByVersionNumberDesc(factoryId, plan.getSelectedBomRecipeId())
+                .findByFactoryIdAndBomRecipeIdOrderByVersionNumberDesc(factoryId, pinnedRecipeId)
                 .stream()
-                .filter(item -> Objects.equals(item.getVersionNumber(), plan.getSelectedBomVersion()))
+                .filter(item -> Objects.equals(item.getVersionNumber(), pinnedBomVersion))
                 .findFirst()
                 .orElse(null);
         Map<String, Object> snapshot = version == null ? null : version.getSnapshotJson();
@@ -1100,11 +1137,11 @@ public class OrderCostBreakdownService {
             //      保证 bom_recipe_items 里躺着的就是那个版本的内容。对不上说明 recipe 已经
             //      往前走了、那个版本的内容确实丢了 —— 那时仍然诚实报 SNAPSHOT_MISSING,
             //      不拿新版本的料去冒充旧版本(那会让历史成本悄悄变化)。
-            snapshot = pinnedBomSnapshotFromRecipe(factoryId, plan);
+            snapshot = pinnedBomSnapshotFromRecipe(factoryId, pinnedRecipeId, pinnedBomVersion);
         }
         if (snapshot == null) {
-            missing.add("PINNED_BOM_SNAPSHOT_MISSING:" + plan.getSelectedBomRecipeId()
-                    + ":v" + plan.getSelectedBomVersion());
+            missing.add("PINNED_BOM_SNAPSHOT_MISSING:" + pinnedRecipeId
+                    + ":v" + pinnedBomVersion);
             return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
         }
         BigDecimal recipeOutput = toBigDecimal(snapshot.get("outputQuantityPerUnit"));
@@ -1114,15 +1151,15 @@ public class OrderCostBreakdownService {
                 outputQuantity, outputUnit, recipeOutputUnit, plan);
         if (outputInRecipeUnit == null || outputInRecipeUnit.signum() <= 0 || recipeOutput == null
                 || recipeOutput.signum() <= 0) {
-            missing.add("PINNED_BOM_OUTPUT_BASIS_UNVERIFIABLE:" + plan.getSelectedBomRecipeId()
-                    + ":v" + plan.getSelectedBomVersion());
+            missing.add("PINNED_BOM_OUTPUT_BASIS_UNVERIFIABLE:" + pinnedRecipeId
+                    + ":v" + pinnedBomVersion);
             return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
         }
         BigDecimal scale = outputInRecipeUnit.divide(recipeOutput, 12, RoundingMode.HALF_UP);
         Object rawItems = snapshot.get("items");
         if (!(rawItems instanceof List<?> items)) {
-            missing.add("PINNED_BOM_ITEMS_MISSING:" + plan.getSelectedBomRecipeId()
-                    + ":v" + plan.getSelectedBomVersion());
+            missing.add("PINNED_BOM_ITEMS_MISSING:" + pinnedRecipeId
+                    + ":v" + pinnedBomVersion);
             return new PinnedPackagingResult(true, BigDecimal.ZERO, List.of(), missing);
         }
         // ⚠️ version 在【走了 recipe 兜底】时仍然是 null —— 上面 snapshot==null 那个分支
@@ -1134,12 +1171,12 @@ public class OrderCostBreakdownService {
         //
         //    版本号本身是知道的: pinnedBomSnapshotFromRecipe 只在
         //    recipe.version == plan.selectedBomVersion 时才返回非 null(见 1034 行),
-        //    所以兜底路径的版本号就是 plan.getSelectedBomVersion()。
+        //    所以兜底路径的版本号就是 pinnedBomVersion。
         //    ⛔ 但价格【来源】不能混为一谈: 来自快照和来自当前配方是两回事,
         //       前者是冻结的历史, 后者是「现在的配方恰好还是那个版本」。分别标注。
         Integer pinnedVersionNumber = version != null
                 ? version.getVersionNumber()
-                : plan.getSelectedBomVersion();
+                : pinnedBomVersion;
         String pinnedPriceSource = (version != null
                 ? "PINNED_BOM_ITEM_COST:v"
                 : "RECIPE_FALLBACK_ITEM_COST:v") + pinnedVersionNumber;
