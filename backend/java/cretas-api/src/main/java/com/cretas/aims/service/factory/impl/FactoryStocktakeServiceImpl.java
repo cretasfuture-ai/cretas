@@ -1049,16 +1049,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
+
+        // ⚠️ 2026-08-27: 这一句原本只在下面的 else 分支里(没配审批流时)调。提到这里有两个理由:
+        //   ① 它把 differenceQty / differenceType 归一化好 —— 下面构造流程上下文要读它们,
+        //      读未归一化的值会把一个**过期的**差异发给审批人。
+        //   ② 它顺带守着「明细不完整」与「差异漂移」两条。配了审批流的那条路上,
+        //      这两条守卫此前要到 approve/apply 才触发(applyWorkflowAction 也调它) ——
+        //      提前到提交时失败, 拒绝的还是同一批东西, 只是不再白白惊动审批人。
+        boolean hasDifference = normalizeAndValidateEvidence(stocktake);
+
         Optional<ApprovalWorkflowInstance> instance = workflowEngine.startWorkflowIfConfigured(
                 factoryId, "INVENTORY_ADJUSTMENT", stocktakeId,
-                Map.of("stocktakeNo", stocktake.getStocktakeNo(),
-                       "periodMonth", stocktake.getPeriodMonth(),
-                       "warehouseId", stocktake.getWarehouseId()), userId);
+                buildStocktakeWorkflowContext(stocktake, hasDifference), userId);
         if (instance.isPresent()) {
             stocktake.setStatus(FactoryStocktake.Status.PENDING_APPROVAL);
             stocktake.setWorkflowInstanceId(instance.get().getId());
         } else {
-            if (normalizeAndValidateEvidence(stocktake)) {
+            if (hasDifference) {
                 throw new BusinessException(409, "存在数量差异，必须先配置并发布库存调整审批流程")
                         .withCode("STOCKTAKE_APPROVAL_WORKFLOW_REQUIRED")
                         .withHint("请由工厂管理员在审批流程中配置并发布库存调整审批");
@@ -1290,6 +1297,71 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     }
 
     /** Recomputes evidence under the stocktake row lock; never trusts a UI summary. */
+    /**
+     * 提交进 OA 时随流程一起带过去的上下文 —— 条件节点(SpEL)判的就是这些变量。
+     *
+     * <h4>为什么要有它</h4>
+     *
+     * <p>2026-08-27 实测: 采购与调拨各有一个 {@code buildXxxWorkflowContext},
+     * 里面带 {@code amount} —— 它们的条件节点靠这个做金额分级(采购 ¥30000 / 销售 ¥5000)。
+     * 而盘点这里原本是手写的 {@code Map.of} 三个字段(单号/期间/仓库),
+     * <b>一个可判的量都没有</b>。⇒ 盘点的阈值分级不是「没人配」, 是<b>配了也没得判</b>。</p>
+     *
+     * <h4>⛔ 为什么没有 amount</h4>
+     *
+     * <p>盘点明细上<b>没有金额</b>: {@code FactoryStocktakeItem} 只有数量, 差异预览 DTO 也只有条数。
+     * 要算差异金额得去 join 批次单价 —— 那是在造第二份「这批货值多少」的口径,
+     * 而本仓对成本口径(移动加权/成本卡)已经有主。⇒ 这里只发<b>已经存在且精确</b>的量。
+     * 真要按金额分级, 应当先决定用哪一份成本口径, 那是单独一件事。</p>
+     *
+     * <h4>⚠️ 数量按单位分开发, 不跨单位求和</h4>
+     *
+     * <p>1kg + 1件 = 2 没有意义。所以盘盈/盘亏用 {@code Map<单位, 数量>},
+     * 与 {@code buildApprovalEvidence} 里既有的 {@code surplusQuantityByUnit} 同一形状。
+     * SpEL 判得了: {@code #shortageQuantityByUnit['kg'] > 100}。</p>
+     *
+     * <p>⚠️ 必须在 {@link #normalizeAndValidateEvidence} <b>之后</b>调 ——
+     * 它依赖已归一化的 {@code differenceQty} / {@code differenceType}。</p>
+     */
+    private Map<String, Object> buildStocktakeWorkflowContext(FactoryStocktake stocktake,
+                                                              boolean hasDifference) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("stocktakeNo", stocktake.getStocktakeNo());
+        context.put("periodMonth", stocktake.getPeriodMonth());
+        context.put("warehouseId", stocktake.getWarehouseId());
+        context.put("inventoryScope", stocktake.getInventoryScope() == null
+                ? null : stocktake.getInventoryScope().name());
+
+        Map<String, BigDecimal> surplusByUnit = new LinkedHashMap<>();
+        Map<String, BigDecimal> shortageByUnit = new LinkedHashMap<>();
+        int surplus = 0, shortage = 0, match = 0;
+        for (FactoryStocktakeItem item : stocktake.getItems()) {
+            BigDecimal diff = item.getDifferenceQty();
+            if (diff == null) {
+                continue;
+            }
+            String unit = item.getQuantityUnit() == null ? "-" : item.getQuantityUnit();
+            if (diff.signum() > 0) {
+                surplus++;
+                surplusByUnit.merge(unit, diff, BigDecimal::add);
+            } else if (diff.signum() < 0) {
+                shortage++;
+                shortageByUnit.merge(unit, diff.abs(), BigDecimal::add);
+            } else {
+                match++;
+            }
+        }
+        context.put("totalCount", stocktake.getItems().size());
+        context.put("matchCount", match);
+        context.put("surplusCount", surplus);
+        context.put("shortageCount", shortage);
+        context.put("differenceCount", surplus + shortage);
+        context.put("hasDifference", hasDifference);
+        context.put("surplusQuantityByUnit", surplusByUnit);
+        context.put("shortageQuantityByUnit", shortageByUnit);
+        return context;
+    }
+
     private boolean normalizeAndValidateEvidence(FactoryStocktake stocktake) {
         assertAllItemsCounted(stocktake);
         boolean hasDifference = false;
