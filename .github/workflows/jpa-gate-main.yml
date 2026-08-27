@@ -127,14 +127,9 @@ jobs:
         #    是一次没必要的行为改动。
         run: |
           set -e
-          if command -v mvn >/dev/null 2>&1; then
-            MVN=mvn
-          elif [ -x ./mvnw ]; then
-            MVN=./mvnw
-          else
-            echo "✗ 既没有 mvn 也没有可执行的 ./mvnw"
-            exit 1
-          fi
+          # 解析逻辑收在 scripts/ci/resolve-maven.sh 一处 —— java-artifact.yml
+          # 用的是同一个脚本。⛔ 不在两个 workflow 里各写一份(形态 D)。
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           echo "MVN_USED=$MVN"
           "$MVN" -B test \
             -Dspring.profiles.active=test \

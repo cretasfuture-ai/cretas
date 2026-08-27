@@ -52,6 +52,7 @@ WORKFLOWS = [
     "rn-gate.yml",
     "python-gate.yml",
     "jpa-gate-main.yml",
+    "java-artifact.yml",
 ]
 
 HOSTED = "    runs-on: ubuntu-latest"
