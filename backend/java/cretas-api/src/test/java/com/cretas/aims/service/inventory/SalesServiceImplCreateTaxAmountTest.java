@@ -122,6 +122,10 @@ class SalesServiceImplCreateTaxAmountTest {
 
         when(productTypeRepository.findById(PRODUCT_TYPE_ID))
                 .thenReturn(Optional.of(stubProductType("叮咚卤猪舌")));
+        // 生产代码的准入闸走 findByIdAndFactoryId(pid, factoryId)（工厂隔离），
+        // 之后读名称/类别/克重时才走 findById ——⛔ 两个都要桩，不是替换。
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(stubProductType("叮咚卤猪舌")));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -189,6 +193,10 @@ class SalesServiceImplCreateTaxAmountTest {
         when(customerRepository.findByIdAndFactoryId(CUSTOMER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(stubCustomer(new BigDecimal("13.00"))));
         when(productTypeRepository.findById("PT-002"))
+                .thenReturn(Optional.of(stubProductType2("叮咚牛腱")));
+        // 生产代码的准入闸走 findByIdAndFactoryId(pid, factoryId)（工厂隔离），
+        // 之后读名称/类别/克重时才走 findById ——⛔ 两个都要桩，不是替换。
+        when(productTypeRepository.findByIdAndFactoryId("PT-002", FACTORY_ID))
                 .thenReturn(Optional.of(stubProductType2("叮咚牛腱")));
 
         CreateSalesOrderRequest req = new CreateSalesOrderRequest();
@@ -300,6 +308,9 @@ class SalesServiceImplCreateTaxAmountTest {
         pt.setId(PRODUCT_TYPE_ID);
         pt.setFactoryId(FACTORY_ID);
         pt.setName(name);
+        // 销售订单准入闸 (SalesServiceImpl: isSalesOrderSellable) 白名单只有
+        // FINISHED_PRODUCT / SEMI_FINISHED, **空分类失败关闭** —— 桩预置于这条规则之前。
+        pt.setProductCategory("FINISHED_PRODUCT");
         pt.setUnit("kg");
         pt.setIsActive(true);
         pt.setCreatedBy(1L);
@@ -311,6 +322,9 @@ class SalesServiceImplCreateTaxAmountTest {
         pt.setId("PT-002");
         pt.setFactoryId(FACTORY_ID);
         pt.setName(name);
+        // 销售订单准入闸 (SalesServiceImpl: isSalesOrderSellable) 白名单只有
+        // FINISHED_PRODUCT / SEMI_FINISHED, **空分类失败关闭** —— 桩预置于这条规则之前。
+        pt.setProductCategory("FINISHED_PRODUCT");
         pt.setUnit("kg");
         pt.setIsActive(true);
         pt.setCreatedBy(1L);

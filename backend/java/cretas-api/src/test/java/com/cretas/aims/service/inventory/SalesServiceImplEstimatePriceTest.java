@@ -130,6 +130,10 @@ class SalesServiceImplEstimatePriceTest {
 
         when(productTypeRepository.findById(PRODUCT_TYPE_ID))
                 .thenReturn(Optional.of(stubProductType("猪舌")));
+        // 生产代码的准入闸走 findByIdAndFactoryId(pid, factoryId)（工厂隔离），
+        // 之后读名称/类别/克重时才走 findById ——⛔ 两个都要桩，不是替换。
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(stubProductType("猪舌")));
     }
 
     // =========================================================================
@@ -266,6 +270,9 @@ class SalesServiceImplEstimatePriceTest {
         pt.setId(PRODUCT_TYPE_ID);
         pt.setFactoryId(FACTORY_ID);
         pt.setName(name);
+        // 销售订单准入闸 (SalesServiceImpl: isSalesOrderSellable) 白名单只有
+        // FINISHED_PRODUCT / SEMI_FINISHED, **空分类失败关闭** —— 桩预置于这条规则之前。
+        pt.setProductCategory("FINISHED_PRODUCT");
         pt.setUnit("kg");
         pt.setIsActive(true);
         pt.setCreatedBy(1L);
