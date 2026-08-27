@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   full-suite:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cretas]
     timeout-minutes: 120
 
     steps:
@@ -90,11 +90,17 @@ jobs:
           #    `-XX:+EnableDynamicAgentLoading -Xshare:off`(Mockito 内联 mock 需要),
           #    所以下面必须把它们逐字带上, 否则一开闸就是另一片红。
           MAVEN_OPTS: -Xmx2g
-        run: >-
-          mvn -B test
-          -Dmaven.test.failure.ignore=true
-          -Dspring.profiles.active=test
-          -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError"
+        # ⚠️ setup-java 只装 JDK 不装 Maven —— 自建 macOS runner 上没有系统 mvn,
+        #    只有仓库自带的 ./mvnw。解析逻辑收在 scripts/ci/resolve-maven.sh 一处
+        #    (第二个工作流复制一份就是形态 D)。
+        run: |
+          set -uo pipefail
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          echo "MVN_USED=$MVN"
+          "$MVN" -B test \
+            -Dmaven.test.failure.ignore=true \
+            -Dspring.profiles.active=test \
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g -XX:+HeapDumpOnOutOfMemoryError"
 
       - name: Ratchet — 已知红只许变少
         id: ratchet
