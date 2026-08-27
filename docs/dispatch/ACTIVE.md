@@ -5,8 +5,6 @@
 
 ## 在飞任务
 
-- `ML-LIUSHANMEN-LABEL-SUPPLEMENT-R6-20260827` — `review` — Owner: `/root` — Base SHA: `4dc5599afc0e100ae0a0f7f4f574d51632d6da68` — Scope lock: `backend/python/label_qc/services/v8_pipeline.py`、对应 Python 目标测试、`tools/vision-lab/evaluate_label_candidate_v8.py` 与对应 VisionLab 测试、`docs/dispatch/ACTIVE.md` 和当日归档；外部只允许新增 SHA 绑定的离线候选/评估回执。生产 `label.onnx` 保持主判，R5 候选仅在生产白标已存在而彩标缺失时，以 confidence≥0.30 补 1 个归属区内彩标，不得补白标、不得处理双缺失、不得带入相邻托盘或覆盖生产检测。融合 alpha 0.10/0.20/0.30 在正式 115 张非保护验证集均为 109/115，与基线相同，已拒绝且未进入保护集；窄补充器将运行时归属口径 exact 81→93、彩标 TP 87→99、两类 FP=0，候选调用 54→18、累计候选推理 12.5s→4.15s。冻结候选完整 V8 protected replay 回执 `D:/CretasVisionLab/evaluation/label-r6-color-only-supplement-v8-20260827T2043Z/receipt.json`：缺陷 7/7、normal FP 0、无 protected regression、parity 0、baseline/candidate P95=7029/7301ms，绝对 8000ms 与相对 +15% 门禁均通过，promotion/deployment allowed。目标测试 53 passed + 4 subtests，py_compile 与 diff-check 通过；Draft PR #212 待最新主线复核、CI 和合并，合并前仍严格 `NOT_DEPLOYED`。
-
 - `QA-WAREHOUSE-P0-ISOLATION-20260827` — `merged` — Owner: `claude-code/wh-p0-isolation` — 交接件 `HANDOFF-2026-08-25-warehouse-storage-layout-stocktake-book.md` §6 的 **P0 逐条收尾**。**已合入并部署 prod**（2026-08-27 16:44；jar mtime 16:43:56 早于进程启动 16:44:25；运行中的 jar 里三个标记逐个命中，阴性对照 `ZZ_NOT_A_REAL_MARKER`=0；`/api/mobile/health`=200；近 40 行日志 0 条 ERROR；⚠️ 部署前基线那三个标记**一个都不在**）。
 
   **P0.2 跨工厂隔离 — 不是缺陷**。`GET /warehouse/layout` 确实没有方法级 `@RequireRole`（交接件说对了），但 `JwtAuthInterceptor.validateFactoryAccess` 在拦截器层强制 `urlFactoryId.equals(tokenFactoryId)`。prod 实测四组：F006 token → F006 **200**（2223B 真数据）／→ LIUSHANMEN **403**／→ MOCK_REST **403**／无 token → **401**。403 的措辞正是 `sendForbiddenResponse` 那句 ⇒ **拦住它的确实是那道闸**。⚠️ 探针有意义的前提：`factory_super_admin` **不在** `PLATFORM_ADMIN_ROLES`（只有 super_admin/platform_admin/developer）。
