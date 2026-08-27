@@ -63,6 +63,39 @@ import java.util.regex.Pattern;
 public abstract class GoldBackedRestaurantTool extends AbstractBusinessTool {
 
     /**
+     * 这一族<b>全部是只读的</b> —— 四个抽象钩子 {@code queryGold} / {@code format} /
+     * {@code isEmpty} / {@code emptyMessage} 只查 Gold 层并格式化，没有任何写入。
+     *
+     * <h2>为什么声明在基类而不是逐个子类</h2>
+     *
+     * <p>2026-08-27 实测：{@code RestaurantPeakHoursGoldTool}
+     * （{@code tool=restaurant_peak_hours_gold}）<b>两边都没有</b> ——
+     * 类里没覆写 {@code getAccessMode()}，也不在
+     * {@code ToolAccessModeSeed.PENDING_IN_CLASS_BACKFILL} 里。
+     * 于是它落到 fail-closed 默认值 {@code WRITE}，
+     * <b>在生产上被咨询 tab 拦掉</b>：店长问「高峰时段是什么时候」会被拒。</p>
+     *
+     * <p>同族另外 12 个之所以没事，只是因为它们<b>逐条</b>登记在那张种子表里 ——
+     * 而那张表叫 {@code PENDING_IN_CLASS_BACKFILL}，本来就是个待清空的暂存区。
+     * 靠「加新工具时记得同步补一行」是记不住的，这次就没记住。</p>
+     *
+     * <p>⇒ 声明在基类：{@code ToolAccessModeDeclarationTest} 判「类内声明」用的是
+     * {@code getMethod(...).getDeclaringClass() != ToolExecutor.class}，
+     * <b>继承来的覆写同样算数</b>，所以一次覆盖全部 13 个子类，
+     * 并且<b>下一个 gold 工具天然被覆盖</b>，不再依赖谁记得。</p>
+     *
+     * <p>⚠️ 行为等价、不放宽权限：种子表里这一族<b>全部是 {@code READ}</b>（已逐条核对），
+     * 所以基类声明 READ 与现状一致，只是把「靠登记」换成「靠结构」。</p>
+     *
+     * <p>⛔ 若将来有子类真的要写数据，它<b>必须自己覆写回 {@code WRITE}</b> ——
+     * 而那时该问的是「一个写操作为什么长在 Gold 只读分析这一族里」。</p>
+     */
+    @Override
+    public AccessMode getAccessMode() {
+        return AccessMode.READ;
+    }
+
+    /**
      * Absolute "YYYY年M月" / "YYYY-MM" / "YYYY/M月" found ANYWHERE in the NL query.
      * Copied from RestaurantEconomicsAnalysisTool (NL_ABSOLUTE_MONTH).
      * Month is constrained to 1-12 to avoid matching unrelated digit runs.
