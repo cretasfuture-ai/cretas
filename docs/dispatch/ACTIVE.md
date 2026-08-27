@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827` — `review` — Owner: `codex/wh-approval-integrate-20260827` — Base SHA `04f0ecbb90f38400b78b4ee1969cd2ee3c6af558`。旧分支三个提交中，Java/Web/SQL 修复与温控假数据修复已补丁等价进入 main；最新 main 移植实测只剩 RN 首页栈缺失 `WHLocationManage` / `WHTempMonitor` 注册，以及尚未入库的 `StorageLocationIsNeverAHardcodedDescriptionTest` 棘轮闸。最近生产 Java 回执 commit `dcc846b08bf3651810cb37078e9c2ed0c8fe9add` 与当前 main 的 `backend/java/cretas-api/src/main` 和 `web-admin/src` 完全一致，因此本批只需 RN OTA。验收：`StorageLocationIsNeverAHardcodedDescriptionTest`，RN 仓库导航目标 Jest，`nativeVersionConsistencyContract.test.ts`，`tsc --noEmit`；PR 合入后从 clean exact `origin/main` 以 runtimeVersion `1.0.4` 执行自托管 OTA 并验证 manifest/CDN/admin，不重启 Java/Web。
+- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827` — `review` — Owner: `codex/wh-approval-integrate-20260827` — Base SHA `04f0ecbb90f38400b78b4ee1969cd2ee3c6af558`。旧分支三个提交中，Java/Web/SQL 修复与温控假数据修复已补丁等价进入 main；最新 main 移植实测只剩 RN 首页栈缺失 `WHLocationManage` / `WHTempMonitor` 注册。仓位硬编码棘轮已由 main 上的 `StorageLocationIsNeverAHardcodedDescriptionContractTest` 覆盖。最近生产 Java 回执 commit `dcc846b08bf3651810cb37078e9c2ed0c8fe9add` 与当前 main 的 `backend/java/cretas-api/src/main` 和 `web-admin/src` 完全一致，因此本批只需 RN OTA。验收：`StorageLocationIsNeverAHardcodedDescriptionContractTest`，RN 仓库导航目标 Jest，`nativeVersionConsistencyContract.test.ts`，`tsc --noEmit`；PR 合入后从 clean exact `origin/main` 以 runtimeVersion `1.0.4` 执行自托管 OTA 并验证 manifest/CDN/admin，不重启 Java/Web。
 
 - `QA-JAVA-NIGHTLY-RATCHET-20260827` — `merged` — Owner: `claude-code/nightly-burndown` — **夜间棘轮的第一次真实读数：基线 49 → 5，并抓到它建成以来的第一批新增红（8 条）**。判据来自 run `33081570292`（`java-full-nightly` on `9d26e655`，自建 runner）：`共跑 12007 个测试 · 红 13 · 基线 49`，`已修好 44` / `没跑到 0` / `新增 8`；`mvn` 侧 `Tests run: 12007, Failures: 2, Errors: 11` 对得上，且 `12007 > 11891 × 0.9` 未触发 rc=2 ⇒ 这一轮完整。**#197（`ddl-auto` `create-drop` → `create`）的 H2 schema 毒源诊断成立**（44/49）。落地 **#233**（修 8 条新增红）+ **#234**（削基线 49 → 5）。交接件 `HANDOFF-2026-08-27-nightly-ratchet-first-real-catch.md`。**收尾判据**：合并后又跑一次（run `33085335136` on `04f0ecbb`）得 `共跑 12009 个测试 · 红 5 · 基线 5 · 没有新增红`，rc=0，两个失败分支均 `skipped`；且总数 12007 → **12009 正好 +2**（= #233 新增的两条阴性对照）⇒ 那次跑批跑的确实是合并后的代码。
 
@@ -122,7 +122,7 @@
 
 ## Scope 锁地图
 
-- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827`：仅 `frontend/CretasFoodTrace/src/navigation/warehouse/WHHomeStackNavigator.tsx`、`backend/java/cretas-api/src/test/java/com/cretas/aims/service/StorageLocationIsNeverAHardcodedDescriptionTest.java`、`docs/dispatch/ACTIVE.md` 与当日归档。不改 Java/Web 生产代码、Entity/Repository/Flyway/Security，不覆盖 `cretas-wh-voucher-20260827` 未提交改动，不重启 Java/Web，不在本轮执行 F006 业务写入。
+- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827`：仅 `frontend/CretasFoodTrace/src/navigation/warehouse/WHHomeStackNavigator.tsx`、`docs/dispatch/ACTIVE.md` 与当日归档；仓位硬编码棘轮复用 main 上现有的 `StorageLocationIsNeverAHardcodedDescriptionContractTest`。不改 Java/Web 生产代码、Entity/Repository/Flyway/Security，不覆盖 `cretas-wh-voucher-20260827` 未提交改动，不重启 Java/Web，不在本轮执行 F006 业务写入。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
