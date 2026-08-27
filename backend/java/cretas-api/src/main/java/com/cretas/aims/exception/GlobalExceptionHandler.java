@@ -212,8 +212,14 @@ public class GlobalExceptionHandler {
         ApiResponse<?> body;
         if (e.getErrorCode() != null) {
             // A4 / Phase 4a: semantic errorCode for frontend branching (e.g. OVER_RECEIPT)
+            //
+            // 🔴 2026-08-27: 这一支原来调的是不带 hintTarget 的 5 参重载, 于是**同时**设了
+            //    errorCode 和 hintTarget 的 380 条 throw 语句, hintTarget 被静默丢掉。
+            //    后果不是「没提示」而是更糟的一种 —— actionHint 照常透传 ⇒ web-admin
+            //    弹出带「去处理」的富通知, 而 onClick 里 `if (opts.hintTarget)` 不成立
+            //    ⇒ 点了没反应。详见 ApiResponse.errorWithCode 的 6 参重载。
             body = ApiResponse.errorWithCode(e.getCode(), e.getErrorCode(), message,
-                    e.getActionHint(), effectiveSeverity);
+                    e.getActionHint(), effectiveSeverity, e.getHintTarget());
         } else if (e.getActionHint() != null || effectiveSeverity != null || e.getHintTarget() != null) {
             body = ApiResponse.errorWithHint(e.getCode(), message,
                     e.getActionHint(), effectiveSeverity, e.getHintTarget());
