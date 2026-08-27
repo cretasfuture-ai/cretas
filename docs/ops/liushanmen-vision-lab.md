@@ -572,6 +572,18 @@ B:\anaconda3\python.exe tools\vision-lab\admit_reviewed_full_trays.py `
 
 不完整、看不清或托盘框贴裁切边缘的项目保持排除；即使其中标签框已经标完，也不得进入训练。
 
+主动学习采样本身也必须在生成队列前执行同一类源图边缘门禁。`mine_queue.py` 与
+`mine_label_side_view_queue.py` 会拒绝检测框任一边距离**原始照片**边缘不超过 `0.5%` 的托盘；
+padding 被原图边界截断不等于托盘不完整，但目标托盘框本身贴边时无法证明物理托盘完整，不能生成
+label 训练 crop。普通难例采样器会把规则版本写入 screening fingerprint，升级规则后必须重新扫描，
+不得复用旧 clean cache；新 manifest 还必须保留源图尺寸、原图托盘框和 crop rect，供历史审计重建。
+旧队列不自动改写或删除，应以新指纹隔离重放并报告 `edge_touching_trays_excluded`。
+
+重放队列仍然过大时，用 `build_minimal_active_label_review_queue.py` 生成不可变的小队列。该入口只保留
+`BOTH_MISSING/MISSING_WHITE_LABEL/MISSING_COLOR_LABEL` 明确模型分歧，排除纯 `UNJUDGEABLE`，并按
+判定类型与 SKU 双重轮转、每张照片最多一只托盘、限制单任务和单 SKU 数量。它会再次执行 0.5% 源图
+边缘门禁和图片 SHA 校验；输出仍是训练禁用状态，只有新的人工 sidecar 才能进入准入流程。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
@@ -608,7 +620,8 @@ B:\anaconda3\python.exe tools\vision-lab\vision_lab.py `
 `mine_label_side_view_queue.py plan`。计划阶段只读本地 VisionLab 数据库，候选必须来自人工确认的
 `NO_DEFECT` 新来源；240+83+57 已完成来源、旧 29 张队列、保护集 exact ID/SHA 与 pHash 距离
 不大于 10 的近重复全部排除，队列内部 pHash 距离不大于 4 的 crop 也排除。先检查 preflight
-回执中的数量、来源、去重距离和 `cloud_calls=0, production_writes=0`，再用 `build` 生成队列。
+回执中的数量、来源、去重距离、`exclusions.target_tray_touches_source_edge` 和
+`cloud_calls=0, production_writes=0`，再用 `build` 生成队列。
 
 `build` 会以 preflight 的候选 digest、源图 SHA、crop 像素 SHA 和感知哈希重新验证内容，生成
 `label-side-view-active-<timestamp>`、独立的 `MARK-NEEDS-LABEL-SIDE-VIEW-ANNOTATION.json` 和

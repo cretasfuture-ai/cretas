@@ -206,6 +206,13 @@ class MineQueueTests(unittest.TestCase):
         self.assertTrue(module.crop_can_be_reviewed(np.zeros((12, 9, 3), dtype=np.uint8)))
         self.assertFalse(module.crop_can_be_reviewed(np.zeros((0, 9, 3), dtype=np.uint8)))
 
+    def test_source_edge_trays_are_rejected_but_clipped_padding_is_allowed(self):
+        self.assertTrue(module.tray_touches_source_edge([0, 20, 80, 90], 200, 100))
+        self.assertTrue(module.tray_touches_source_edge([20, 20, 199.5, 90], 200, 100))
+        self.assertFalse(module.tray_touches_source_edge([20, 10, 180, 90], 200, 100))
+        with self.assertRaisesRegex(ValueError, "dimensions"):
+            module.tray_touches_source_edge([1, 1, 2, 2], 0, 100)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,6 +83,11 @@ class LabelSideViewQueueTests(unittest.TestCase):
         unmatched, _ = module.match_tray(target, [far], 0.90)
         self.assertIsNone(unmatched)
 
+    def test_source_edge_trays_are_not_side_view_training_candidates(self):
+        self.assertTrue(module.tray_touches_source_edge([0, 10, 100, 90], 200, 100))
+        self.assertTrue(module.tray_touches_source_edge([20, 10, 199.5, 90], 200, 100))
+        self.assertFalse(module.tray_touches_source_edge([20, 10, 180, 90], 200, 100))
+
     def _plan(self, root: Path) -> tuple[Path, Path]:
         source = root / "source.png"
         Image.new("RGB", (120, 80), "white").save(source)
