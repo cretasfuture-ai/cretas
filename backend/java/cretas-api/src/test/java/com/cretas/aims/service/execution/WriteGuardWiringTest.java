@@ -186,16 +186,22 @@ class WriteGuardWiringTest {
     // ================= (b) confirmed=true → not blocked =================
 
     @Test
-    @DisplayName("(b) same write intent WITH confirmed=true in context → NOT blocked; dispatch proceeds")
+    @DisplayName("(b) same write intent WITH a server-issued confirmation marker → NOT blocked; dispatch proceeds")
     void writeIntent_withConfirmed_isNotBlocked_andDispatches() {
         AIIntentConfig intent = writeIntent("material_batch_delete");
         stubIntent(intent);
         stubDispatchReturns();
 
+        // 2026-08-27: WriteGuardService#isConfirmed now only trusts the process-local
+        // SERVER_CONFIRMATION_KEY marker (see IntentExecutionOrchestrator#confirm(), the sole
+        // legitimate injection point) — a raw confirmed=true in a caller-supplied context map is
+        // explicitly documented as "never confirmation authority". This closes a request-forgery
+        // gap where a client could just set confirmed=true to skip the write confirmation step.
+        // Simulate the same trusted marker here via the real API instead of the raw boolean.
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .intentCode(intent.getIntentCode())
                 .forceExecute(true)
-                .context(Map.of("confirmed", true))   // user already confirmed
+                .context(writeGuard.withServerConfirmation(Map.of()))
                 .build();
 
         IntentExecuteResponse response =
@@ -324,7 +330,7 @@ class WriteGuardWiringTest {
     }
 
     @Test
-    @DisplayName("Site B: confirmed=true lets the write tool through the guard")
+    @DisplayName("Site B: a server-issued confirmation marker lets the write tool through the guard")
     void siteB_toolDispatch_confirmedAllowsWriteTool() throws Exception {
         ToolRegistry registry = mock(ToolRegistry.class);
         when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
@@ -349,10 +355,12 @@ class WriteGuardWiringTest {
         when(writeTool.execute(any(), any())).thenReturn("{\"success\":true,\"message\":\"已删除\"}");
 
         AIIntentConfig intent = writeIntent("material_batch_delete");
+        // See writeIntent_withConfirmed_isNotBlocked_andDispatches above: raw confirmed=true is no
+        // longer trusted anywhere in the W0 chain (including Site B) — only the server-issued marker is.
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .intentCode(intent.getIntentCode())
                 .userInput("删除批次 B001")
-                .context(Map.of("confirmed", true))
+                .context(writeGuard.withServerConfirmation(Map.of()))
                 .build();
 
         IntentExecuteResponse response = dispatch.executeWithTool(
