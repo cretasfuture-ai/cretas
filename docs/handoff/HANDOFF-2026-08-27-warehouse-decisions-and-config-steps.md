@@ -12,7 +12,7 @@
 | 裁定 ④ | **PR #235**（已开）—— 3 个活端点补 `sourceType` + 变异验证过的闸 |
 | 裁定 ③ | **本 PR**（代码）+ **F006 调拨审批流已配好并发布**（见 §4b） |
 | 裁定 ① | ✅ **已执行**（2026-08-27 23:41，F006 盘点流 v2 已发布）见 §4 |
-| 裁定 ② | ⏳ 待 Owner 执行的 LIUSHANMEN 配置，步骤见 §5 |
+| 裁定 ② | ✅ **已执行**（2026-08-28，LIUSHANMEN 盘点流 v1 已发布）见 §5b |
 
 ### ✅ 已完成的生产写入（2026-08-27 23:40~23:42，Owner 当轮授权）
 
@@ -277,6 +277,64 @@ where deleted_at is null
 ⛔ 不要只看 `count(*)` —— `publish_status` 仍是 `draft` 时那一行**存在但不生效**，
 两者在计数上长得一模一样（就是 v2 草稿那个坑）。
 **阴性对照**：同一查询换成 `F006` 应返回既有那 1 行，证明查询本身找得到东西。
+
+---
+
+## 5b. ② 已执行（2026-08-28，Owner 点名授权非-F006 写入）
+
+租户证明：实时登录响应 `factoryId=LIUSHANMEN` / `userId=1638` / `factory_super_admin`。
+
+| | |
+|---|---|
+| workflow id | `b49b6d52-8b04-4c84-a63c-026eb1830496` |
+| 版本/状态 | v1 `published` / `enabled=t` |
+| 授权角色 | **`["finance_manager", "factory_super_admin"]`** |
+
+```
+                       BEFORE   AFTER
+lsm_all                  14  ->   15
+lsm_adjustment            0  ->    1
+F006(阴性对照)            13  ->   13     一字未动
+MOCK_REST(阴性对照)        0  ->    0     一字未动
+执行器口径 active 行数     -       1      (published AND enabled=true)
+```
+
+内容回读：`has_condition_node=t`、自动边条件 `#hasDifference == false`、
+`approverRoles = ["finance_manager","factory_super_admin"]`。
+
+### ⚠️ 与 §5 原步骤的两处偏离，都是有意的
+
+**① 加了条件节点，不是配一个朴素的单级审批流。**
+原步骤直接照抄 F006 v1（无条件节点）。那样会造成**回归**：
+
+| | 配之前（无流程） | 配朴素流程 | 配本次这版 |
+|---|---|---|---|
+| 零差异盘点 | 直接 `APPROVED` | **变成 PENDING** ⬅ 回归 | 直接 `APPROVED` ✅ |
+| 有差异盘点 | **409 走不完** | `PENDING` ✅ | `PENDING` ✅ |
+
+⇒ 只解锁被卡住的那条路，**不动今天已经能走通的那条**。
+
+**② 授权两个角色而不是只给 `factory_super_admin`。**
+六膳门实测 5 次审批**全部**是 1638 自己批自己。若只授权超管，而盘点的自审禁令
+（`STOCKTAKE_SELF_APPROVAL_FORBIDDEN`，⛔ **没有**超管例外）会拦住他 ——
+1638 发起的有差异盘点就**没人能审**，等于把一条死路换成另一条死路。
+加上 `finance_manager`（1647 `lsm009` 活跃）才真的有第二个人。
+
+### 失败方向是安全的
+
+`e_cond_appr` **不带 condition**、`priority=1` 兜底。所以：
+
+- `hasDifference == false` → 命中 priority 0 → 自动通过
+- `hasDifference == true` → 不命中 → 落到 priority 1 → 送审
+- **表达式求值失败/取不到值** → 不命中 → 同样落到送审
+
+⇒ 最坏情况是**多送一次审**，⛔ 不会卡在条件节点上。
+
+### ⛔ 尚未做的：行为侧验证
+
+结构核对完了，但**没有提交真实盘点单**去跑通两条路 —— 那是另一类业务写入。
+判据：零差异单应直达 `APPROVED`；有差异单应停 `PENDING`，且 1638 自审得到
+409 `STOCKTAKE_SELF_APPROVAL_FORBIDDEN`、由 1647 `lsm009` 审才过。
 
 ---
 
