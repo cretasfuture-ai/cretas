@@ -253,61 +253,6 @@ class BomRecipeServiceImplAddItemTest {
     }
 
     @Test
-    @DisplayName("激活新版本时旧 ACTIVE 版本必须同时归档并取消 current")
-    void activateArchivesEveryCompetingActiveVersion() {
-        recipe.setProductTypeId("SKU-001");
-        recipe.setIsCurrent(false);
-
-        BomRecipe oldCurrent = new BomRecipe();
-        oldCurrent.setId("RECIPE-V2");
-        oldCurrent.setFactoryId("F006");
-        oldCurrent.setProductTypeId("SKU-001");
-        oldCurrent.setStatus(BomRecipe.Status.ACTIVE);
-        oldCurrent.setIsCurrent(true);
-
-        BomRecipe staleActive = new BomRecipe();
-        staleActive.setId("RECIPE-V1");
-        staleActive.setFactoryId("F006");
-        staleActive.setProductTypeId("SKU-001");
-        staleActive.setStatus(BomRecipe.Status.ACTIVE);
-        staleActive.setIsCurrent(false);
-
-        when(recipeRepo.findById(recipe.getId())).thenReturn(Optional.of(recipe));
-        when(recipeRepo.findCompetingVersionsForActivation(
-                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
-                .thenReturn(List.of(oldCurrent, staleActive));
-        when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 7L);
-
-        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
-        assertThat(activated.getIsCurrent()).isTrue();
-        assertThat(oldCurrent.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
-        assertThat(oldCurrent.getIsCurrent()).isFalse();
-        assertThat(staleActive.getStatus()).isEqualTo(BomRecipe.Status.ARCHIVED);
-        assertThat(staleActive.getIsCurrent()).isFalse();
-        verify(recipeRepo).flush();
-    }
-
-    @Test
-    @DisplayName("历史 BOM 可以重新激活，且不创建新版本")
-    void archivedVersionCanBeReactivated() {
-        recipe.setProductTypeId("SKU-001");
-        recipe.setStatus(BomRecipe.Status.ARCHIVED);
-        recipe.setIsCurrent(false);
-        when(recipeRepo.findCompetingVersionsForActivation(
-                "F006", "SKU-001", recipe.getId(), BomRecipe.Status.ACTIVE))
-                .thenReturn(List.of());
-
-        BomRecipe activated = service.activateRecipe("F006", recipe.getId(), 8L);
-
-        assertThat(activated.getId()).isEqualTo("RECIPE-ORPHAN-TEST");
-        assertThat(activated.getStatus()).isEqualTo(BomRecipe.Status.ACTIVE);
-        assertThat(activated.getIsCurrent()).isTrue();
-        verify(recipeRepo, never()).findMaxVersion(anyString(), anyString());
-    }
-
-    @Test
     @DisplayName("历史 BOM 可删除，当前生效 BOM 不可删除")
     void deleteAllowsHistoryButRejectsActive() {
         recipe.setStatus(BomRecipe.Status.ARCHIVED);
@@ -443,33 +388,18 @@ class BomRecipeServiceImplAddItemTest {
         verify(recipeRepo, never()).save(argThat(candidate -> "SKU-BAD".equals(candidate.getProductTypeId())));
     }
 
-    @Test
-    @DisplayName("activation rejects an empty draft with an actionable error")
-    void activationRejectsEmptyDraft() {
-        recipe.setProductTypeId("SKU-001");
-        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of());
-
-        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
-                .isInstanceOfSatisfying(BusinessException.class, ex -> {
-                    assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_ITEMS_REQUIRED");
-                    assertThat(ex.getActionHint()).contains("至少添加一条");
-                });
-        verify(recipeRepo, never()).findCompetingVersionsForActivation(
-                anyString(), anyString(), anyString(), any());
-    }
-
-    @Test
-    @DisplayName("activation rejects packaging without a positive quantity")
-    void activationRejectsPackagingWithoutQuantity() {
-        recipe.setProductTypeId("SKU-001");
-        existingItem.setMaterialCategory("PACKAGING");
-        existingItem.setStandardQuantity(null);
-        when(itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId())).thenReturn(List.of(existingItem));
-
-        assertThatThrownBy(() -> service.activateRecipe("F006", recipe.getId(), 1L))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo("BOM_ACTIVATION_QUANTITY_REQUIRED"));
-    }
+    // ⛔ 激活相关的四条断言不在本类 —— 它们在
+    //    BomRecipeDraftLifecycleJpaTest (真 H2 + 真画布夹具):
+    //      · activationArchivesEveryCompetingActiveVersion
+    //      · archivedVersionIsReactivatedByCloningItIntoADraft  (原 archivedVersionCanBeReactivated)
+    //      · emptyDraftIsRebuiltFromTheCanvasInsteadOfRefused   (原 activationRejectsEmptyDraft)
+    //      · canvasWithoutAnyRawInputTellsTheUserWhatToDo
+    //    以及原有的 activationRejectsPackagingWithoutFixedQuantity
+    //      (原 activationRejectsPackagingWithoutQuantity, 那边一直是绿的)。
+    //
+    //    本类是**纯 Mockito**, 而 activateRecipe 要 bomWorkflowRevisionService /
+    //    readinessService / workflowActivationRepo 三个协作者。在这里补 mock 等于把
+    //    那份画布夹具再抄一份, 同一个东西两份、必漂 —— 所以搬走而不是就地修。
 
     @Test
     @DisplayName("addItem: collection reference stays the same instance after call (no setItems replacement)")
