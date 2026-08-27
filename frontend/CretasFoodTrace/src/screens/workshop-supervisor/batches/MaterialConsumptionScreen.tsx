@@ -102,11 +102,18 @@ export function MaterialConsumptionScreen() {
   };
 
   // Achievement rate color
-  const getColor = (rate: number) => rate >= 95 ? '#52c41a' : rate >= 85 ? '#faad14' : '#ff4d4f';
+  // null = 没有计划数据, 算不出来 ⇒ 中性灰。⛔ 不要让它掉进红色那一档
+  //   ——「不知道」画成「很糟」和显示成 100% 是同一种谎, 只是方向相反。
+  const getColor = (rate: number | null) =>
+    rate == null ? '#8c8c8c' : rate >= 95 ? '#52c41a' : rate >= 85 ? '#faad14' : '#ff4d4f';
+  const fmtRate = (rate: number | null) => (rate == null ? '—' : `${rate.toFixed(1)}%`);
 
   const renderMaterial = ({ item }: { item: MaterialConsumptionSummaryItem }) => {
     const hasActual = item.actualQuantity > 0;
-    const rate = item.plannedQuantity > 0 ? (item.actualQuantity / item.plannedQuantity) * 100 : 0;
+    // ⛔ 不再本地重算: `transformSummary` 已经算过, 而且它带着「没有计划量 ⇒ null」
+    //   这个语义。本地再算一遍就是同一件事的第二份, 一定会漂 —— 本地这份把
+    //   「没有计划」算成 0, 与 API 那份相反。
+    const rate = item.achievementRate;
 
     return (
       <View style={s.card}>
@@ -116,7 +123,7 @@ export function MaterialConsumptionScreen() {
           </View>
           {hasActual ? (
             <View style={[s.badge, { backgroundColor: getColor(rate) + '18' }]}>
-              <Text style={[s.badgeText, { color: getColor(rate) }]}>{rate.toFixed(1)}%</Text>
+              <Text style={[s.badgeText, { color: getColor(rate) }]}>{fmtRate(rate)}</Text>
             </View>
           ) : (
             <View style={[s.badge, { backgroundColor: '#fff7e6' }]}>
@@ -176,7 +183,9 @@ export function MaterialConsumptionScreen() {
   }
 
   const materials = summary?.materials || [];
-  const overallRate = summary?.overallAchievementRate || 0;
+  // ⛔ 不要 `|| 0`: 「接口没返回」和「达成率 0%」是两件事, 折成同一个数之后
+  //   看屏的人无法区分「这批料一点没按计划做」和「这批料根本没有计划」。
+  const overallRate: number | null = summary?.overallAchievementRate ?? null;
 
   return (
     <View style={s.container}>
@@ -197,13 +206,11 @@ export function MaterialConsumptionScreen() {
           <Text style={s.batchNumber}>{batchInfo?.batchNumber || batchId}</Text>
           <Text style={s.batchProduct}>{batchInfo?.productName || '-'}</Text>
         </View>
-        {overallRate > 0 && (
-          <View style={[s.rateBadge, { backgroundColor: getColor(overallRate) + '30' }]}>
-            <Text style={[s.rateText, { color: getColor(overallRate) }]}>
-              达成率 {overallRate.toFixed(1)}%
-            </Text>
-          </View>
-        )}
+        <View style={[s.rateBadge, { backgroundColor: getColor(overallRate) + '30' }]}>
+          <Text style={[s.rateText, { color: getColor(overallRate) }]}>
+            达成率 {fmtRate(overallRate)}
+          </Text>
+        </View>
       </View>
 
       {/* Stats */}

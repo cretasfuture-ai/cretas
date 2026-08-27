@@ -117,19 +117,53 @@ describe('materialConsumptionApiClient', () => {
       expect(result.data.materials[0].achievementRate).toBe(80);
     });
 
-    it('returns 0 achievementRate when planned is 0', async () => {
+    // ⚠️ 2026-08-28: 这条原本叫「returns 0 achievementRate when planned is 0」并断言 `toBe(0)`
+    //   —— 它守的是**历史行为**, 而那个行为已被判定为缺陷:
+    //   没有计划量时达成率**没有定义**, 报 0 会被读成「一点都没做到」。
+    //   ⇒ 断言改写而非删除, 并补一条阴性对照钉住「不是 0」。
+    it('没有计划量时 achievementRate 为 null —— 不是 0', async () => {
       const rawData = {
         items: [
           { materialTypeName: 'Salt', plannedQty: 0, actualQty: 5 },
         ],
         totalPlannedCost: 0,
         totalActualCost: 25,
-        overallAchievementRate: 0,
+        // 后端在 totalPlannedCost == 0 时下发 null(2026-08-28 起, 此前固定返回 100)
+        overallAchievementRate: null,
       };
       mock.onGet(`${BASE}/batch/B1/summary`).reply(200, { success: true, data: rawData });
 
       const result = await materialConsumptionApiClient.getBatchConsumptionSummary('B1');
-      expect(result.data.materials[0].achievementRate).toBe(0);
+      // ⚠️ RN 这一侧是 **jest**(web-admin 是 vitest), `expect` 不接第二个参数当消息 ——
+      //   写了会报 "Expect takes at most one argument"。理由写注释里。
+      expect(result.data.materials[0].achievementRate).toBeNull();
+      // ⛔ 0 会被读成「一点都没做到」, 与「没有计划量」是两件事
+      expect(result.data.materials[0].achievementRate).not.toBe(0);
+      expect(result.data.overallAchievementRate).toBeNull();
+    });
+
+    it('后端若仍下发 100(旧版本), 客户端原样透传 —— ⛔ 不在这一侧二次兜底', async () => {
+      // 阴性对照: 证明上面那个 null 来自「后端说 null」, 不是客户端把什么都变成 null。
+      const rawData = {
+        items: [{ materialTypeName: 'Salt', plannedQty: 10, actualQty: 10 }],
+        totalPlannedCost: 100,
+        totalActualCost: 100,
+        overallAchievementRate: 100,
+      };
+      mock.onGet(`${BASE}/batch/B2/summary`).reply(200, { success: true, data: rawData });
+
+      const result = await materialConsumptionApiClient.getBatchConsumptionSummary('B2');
+      expect(result.data.overallAchievementRate).toBe(100);
+      expect(result.data.materials[0].achievementRate).toBe(100);
+    });
+
+    it('请求失败时 overallAchievementRate 为 null —— ⛔ 不是 0', async () => {
+      // 「查不到」和「达成率 0%」是两件事。折成同一个数之后, 看屏的人无法区分
+      // 「这批料一点没按计划做」和「这批料根本没查到数据」。
+      mock.onGet(`${BASE}/batch/B3/summary`).reply(200, { success: false, message: 'boom' });
+
+      const result = await materialConsumptionApiClient.getBatchConsumptionSummary('B3');
+      expect(result.data.overallAchievementRate).toBeNull();
     });
 
     it('preserves totalPlannedQuantity, totalActualQuantity and overallAchievementRate', async () => {

@@ -63,8 +63,17 @@ const kpi = computed(() => {
   const rates = rowsWithRate.map(r => r.achievementRate as number);
 
   const avg = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
-  // Only count as over-consumption rows with actual data showing < 95%
-  const overCount = rows.filter(r => r.achievementRate != null && r.achievementRate < 95).length;
+  // ⚠️ 2026-08-28 订正: 这个计数原来写的是 `< 95`, 而卡片标签是「超耗批次数」。
+  //   `< 95` 在**成本偏差得分**口径下(后端那个 `1 - |dev|`)确实等于「偏离 >5%」,
+  //   两个方向都算 —— 标签和阈值是照那个口径设计的。
+  //   但这一列渲染的是**数量比** `actual / planned`, 在这个口径下
+  //   `< 95%` 是**用得比计划少**(欠耗), 超耗是 `> 105%` ⇒ **标签的方向是反的**。
+  //
+  // ⇒ 把设计意图(「偏离计划超过 5% 的批次」)如实译到数量比口径: 两个方向都数,
+  //   卡片标签同步改成「用量偏差批次数 (偏离计划 >5%)」——**说清数的是什么**。
+  const overCount = rows.filter(
+    r => r.achievementRate != null && (r.achievementRate < 95 || r.achievementRate > 105),
+  ).length;
   const minRate = rates.length > 0 ? Math.min(...rates) : null;
 
   return {
@@ -126,15 +135,29 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
       const planned = items.reduce((s: number, r) => s + (Number(r.plannedQty ?? r.plannedQuantity ?? 0)), 0);
       const actual = items.reduce((s: number, r) => s + (Number(r.actualQty ?? r.actualQuantity ?? 0)), 0);
       if (items.length > 0) {
-        // If planned > 0 we can compute from items; otherwise use backend overallAchievementRate if present.
-        // Never fall back to 100 — null means no data.
+        // 🔴 2026-08-28: 上面这句「Never fall back to 100 — null means no data」原本就写在
+        //   把 100 放进去的那两行**正上方**:
+        //
+        //     const computedRate = planned > 0 ? … : null;      ← 守卫算出 null
+        //     achievementRate: computedRate ?? backendRate …    ← 下一行把守卫扔了
+        //
+        //   `planned === 0` 时 computedRate 是 null, `?? backendRate` 立刻用后端那个数,
+        //   而后端在 totalPlannedCost == 0 时**固定返回 100**。
+        //   实拍(f006): 8 个批次里 7 个「计划总量 0」显示成「达成率 100%」。
+        //
+        // ⚠️ 而且两侧是**两个口径**: 这里是数量比 `actual/planned`, 后端是成本偏差
+        //   `1 - |actualCost - plannedCost| / plannedCost`。`??` 把两个语义不同的数
+        //   混进同一列, 列名都叫「达成率」—— 一行是比值(超耗 >100%), 另一行是
+        //   偏差得分(超耗和欠耗都往下掉)。
+        //
+        // ⇒ 后端已改为在没有计划成本时下发 null; 这里只留**一个口径**(数量比),
+        //   算不出来就是 undefined → 表格与 KPI 都渲染「—」。
         const computedRate = planned > 0 ? Math.round((actual / planned) * 1000) / 10 : null;
-        const backendRate = res.data.overallAchievementRate != null ? Number(res.data.overallAchievementRate) : null;
         return {
           ...batch,
           plannedTotal: Math.round(planned * 100) / 100,
           actualTotal: Math.round(actual * 100) / 100,
-          achievementRate: computedRate ?? backendRate ?? undefined,
+          achievementRate: computedRate ?? undefined,
         };
       }
     }
@@ -284,7 +307,7 @@ function handleSizeChange(size: number) {
         </el-card>
         <el-card shadow="hover" class="kpi-card">
           <div class="kpi-value" style="color: #F56C6C">{{ kpi.overConsumptionCount }}</div>
-          <div class="kpi-label">超耗批次数 (&lt;95%)</div>
+          <div class="kpi-label">用量偏差批次数 (偏离计划 &gt;5%)</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
           <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : '#909399' }">
