@@ -52,7 +52,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 不会知道有这条规则</b>。文件级判据足以让那个人当场变红。</p>
  */
 @DisplayName("储存位置必须是受控词表 —— 每个写入点都要过同一道判据")
-class StorageLocationIsAControlledVocabularyTest {
+class StorageLocationControlledVocabularyContractTest {
 
     private static final Path MAIN_ROOT = Paths.get("src/main/java");
 

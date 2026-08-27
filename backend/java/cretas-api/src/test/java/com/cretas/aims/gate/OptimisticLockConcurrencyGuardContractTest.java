@@ -55,7 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ul>
  */
 @DisplayName("@Version 是并发保护的唯一来源 —— 不许被摘掉")
-class OptimisticLockIsTheOnlyConcurrencyGuardTest {
+class OptimisticLockConcurrencyGuardContractTest {
 
     private static final Path ENTITY_ROOT = Paths.get("src/main/java/com/cretas/aims/entity");
 
