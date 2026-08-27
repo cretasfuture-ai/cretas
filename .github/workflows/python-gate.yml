@@ -154,9 +154,27 @@ jobs:
         #    2026-08-27 实测 `pip: command not found`, exit 127, 整个闸挂在装依赖这一步。
         #    `python -m pip` 用的就是上一步选中的那个解释器, 两边都成立, 也不会
         #    出现「pip 属于 A 解释器而代码跑在 B 解释器上」。
+        #
+        # 🔴 `torch==2.4.1+cpu` 的 `+cpu` 是 **Linux 专用**的本地版本标识, macOS arm64
+        #    上没有这个变体 —— 实测 `No matching distribution found for torch==2.4.1+cpu`,
+        #    而同一次报错列出的可用版本里 **plain 2.4.1 是有的**。
+        # ⇒ 自建上把 `+cpu` 剥掉: **torch 版本不变**(仍是 2.4.1), 只是换成该平台的 build。
+        #    ⛔ 不跳过 torch —— 闸覆盖的目录里 `smartbi/services/intent_classifier.py`
+        #      真的 import 它, 跳过等于悄悄缩小这道闸的覆盖面。
+        #    ⚠️ 剥掉哪几行会打进日志, 不做静默改写。
+        env:
+          RUNNER_ENV: ${{ runner.environment }}
         run: |
+          set -e
+          REQ=requirements.txt
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then
+            echo "自建 runner: 剥掉 +cpu 本地版本标识, 涉及这些行:"
+            grep -n '+cpu' requirements.txt || echo "  (没有 +cpu 的行)"
+            REQ="$RUNNER_TEMP/requirements.selfhosted.txt"
+            sed 's/+cpu//g' requirements.txt > "$REQ"
+          fi
           python -m pip install --upgrade pip
-          python -m pip install --use-deprecated=legacy-resolver -r requirements.txt || python -m pip install -r requirements.txt
+          python -m pip install --use-deprecated=legacy-resolver -r "$REQ" || python -m pip install -r "$REQ"
           # ⚠️ flake8 是 `tests/test_no_undefined_names.py` 那道 **F821 窄闸**
           #    需要的。⛔ 这里**不跑**全量 flake8(见本文件顶部: 299 条存量债),
           #    只让那道闸能开火 —— 它 `--select=F821`, 全仓 0 条。
