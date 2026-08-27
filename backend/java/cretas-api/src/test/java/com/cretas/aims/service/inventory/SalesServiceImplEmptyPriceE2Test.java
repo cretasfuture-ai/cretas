@@ -330,9 +330,70 @@ class SalesServiceImplEmptyPriceE2Test {
                 });
     }
 
+    /**
+     * 价格齐全时提审的**两侧**，都要覆盖。
+     *
+     * <h3>🔴 这条测试原来钉错了东西（2026-08-27 修）</h3>
+     *
+     * <p>它的 {@code @DisplayName} 写的是「服务层守卫放行」—— 它是价格守卫的**正例**
+     * （上面三条兄弟测试都断言守卫**拦住**）。但它的断言钉的是
+     * {@code PENDING_FINANCE_REVIEW}，而那个终态**根本不是价格守卫决定的**：</p>
+     *
+     * <pre>
+     *   routeSalesOrderByWorkflow:
+     *     startWorkflowIfConfigured(...) 返回 empty   ⇒ 无 OA 审批流 ⇒ 直通 FINANCE_APPROVED
+     *     返回 RUNNING 实例                           ⇒ PENDING_FINANCE_REVIEW
+     * </pre>
+     *
+     * <p>生产代码后来加了「免审/阈值未触发时自动通过」这条路（见
+     * {@code approveFinanceForOrder} 的注释：低额订单此前全卡死在 DRAFT）。
+     * 于是这条测试红了 —— <b>它守的是历史，不是需求</b>。</p>
+     *
+     * <p>⛔ 把期望值改成 {@code FINANCE_APPROVED} 是错的：那只是把断言调成现状，
+     * 而且会让「配了审批流却被自动通过」这个<b>真正危险的回归</b>无人看守 ——
+     * 这条路上跑的是钱。</p>
+     *
+     * <p>⇒ 拆成两条，各守一侧。两条共用同一个价格齐全的夹具，
+     * 所以「价格守卫放行」这个原意也没有丢。</p>
+     */
     @Test
-    @DisplayName("E2-07: 所有行有正数单价提审 → 成功（服务层守卫放行）")
-    void submitForFinanceReview_allPricesPositive_succeeds() {
+    @DisplayName("E2-07a: 单价齐全 + 未配 OA 审批流 → 守卫放行, 直通财务通过")
+    void submitForFinanceReview_allPricesPositive_noWorkflowConfigured_autoApproves() {
+        stubPricedOrderForReview();
+
+        // workflowEngine 未打桩 ⇒ Mockito 对 Optional 返回值默认给 Optional.empty()
+        // ⇒ 走「无需审批, 系统直接通过」那条路。
+        SalesOrder result = salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L);
+
+        assertThat(result.getStatus())
+                .as("未配审批流时低额订单该直通 —— 此前它们全卡死在 DRAFT")
+                .isEqualTo(SalesOrderStatus.FINANCE_APPROVED);
+    }
+
+    @Test
+    @DisplayName("E2-07b: 单价齐全 + 配了 OA 审批流 → 必须停在待财务审核, ⛔ 不许被自动通过")
+    void submitForFinanceReview_workflowConfigured_staysPendingReview() {
+        stubPricedOrderForReview();
+
+        ApprovalWorkflowInstance running = new ApprovalWorkflowInstance();
+        running.setStatus(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY_ID), eq("SALES_ORDER"), eq(ORDER_ID), any(), eq(901L)))
+                .thenReturn(Optional.of(running));
+
+        SalesOrder result = salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L);
+
+        // 🔴 这一条才是钱路径上真正要守的: 配了审批流就**不许**绕过它。
+        assertThat(result.getStatus())
+                .as("配了 OA 审批流却被自动通过 —— 审批被绕过了")
+                .isEqualTo(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+        assertThat(result.getFinanceReviewedBy())
+                .as("还没人审就写了审核人 —— 那是把「待审」伪装成「已审」")
+                .isNull();
+    }
+
+    /** 两条 E2-07 共用: 一张 CONFIRMED、单价齐全的订单。 */
+    private void stubPricedOrderForReview() {
         SalesOrder order = stubConfirmedOrder("SO-E2-004", new BigDecimal("5000"));
 
         when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID))
@@ -348,10 +409,6 @@ class SalesServiceImplEmptyPriceE2Test {
 
         when(salesOrderRepository.save(any(SalesOrder.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
-
-        SalesOrder result = salesService.submitForFinanceReview(FACTORY_ID, ORDER_ID, 901L);
-
-        assertThat(result.getStatus()).isEqualTo(SalesOrderStatus.PENDING_FINANCE_REVIEW);
     }
 
     @Test
