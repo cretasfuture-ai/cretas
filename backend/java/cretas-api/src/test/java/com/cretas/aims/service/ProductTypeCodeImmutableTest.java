@@ -163,7 +163,8 @@ class ProductTypeCodeImmutableTest {
         ProductTypeDTO dto = new ProductTypeDTO();
         dto.setCode(null); // 触发自动生成
         dto.setName("掌中宝");
-        dto.setCategory("FINISHED_PRODUCT");
+        dto.setCategory("FINISHED_PRODUCT"); // 驱动自动编号前缀 (category, 与准入闸字段不同)
+        dto.setProductCategory("FINISHED_PRODUCT"); // SKU 大类必填 (2026-08-03 起, requireProductCategory)
 
         // 不应抛异常
         ProductTypeDTO result = service.createProductType(FACTORY_ID, dto);

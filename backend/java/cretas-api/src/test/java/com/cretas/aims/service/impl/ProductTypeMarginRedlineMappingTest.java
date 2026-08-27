@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,6 +47,7 @@ class ProductTypeMarginRedlineMappingTest {
                 .name("Margin product")
                 .unit("box")
                 .code("PT-MARGIN")
+                .productCategory(ProductCategory.FINISHED_PRODUCT)
                 .standardCost(new BigDecimal("12.3456"))
                 .targetGrossMargin(new BigDecimal("0.2500"))
                 .createdBy(1L)

@@ -4,6 +4,7 @@ import com.cretas.aims.dto.label.MaterialBatchLabelScanResponse;
 import com.cretas.aims.entity.Label;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +58,15 @@ class LabelServiceSp4T5Test {
     @Test
     @DisplayName("T5-G1: 正常生成 — 批次存在, 无已有标签 → 创建并返回 ACTIVE 标签")
     void generateLabel_happyPath() {
+        // 修 (2026-08-27): getMaterialCategoryPrefix 自 20202d7758 (2026-08-09) 起
+        // 对空/未知类别一律抛 BusinessException, 不再猜测默认前缀 (与本文件
+        // generateLabel_noMaterialType_throwsWithoutCategory 是同一条闸的两面)。
+        // 这条测的是「正常生成」这个行为本身, 所以给 batch 一个显式合法类别,
+        // 不测这道闸(闸有它自己的用例)。
+        RawMaterialType materialType = new RawMaterialType();
+        materialType.setCategory("原料");
+        batch.setMaterialType(materialType);
+
         when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
                 .thenReturn(Optional.of(batch));
         when(labelRepository.findByBatchIdAndDeletedAtIsNull(BATCH_ID))
@@ -215,22 +225,27 @@ class LabelServiceSp4T5Test {
     }
 
     @Test
-    @DisplayName("T5-A3-3: materialType=null → fallback 前缀 'WL' (其他/未知类别, 非旧 MA)")
-    void generateLabel_noMaterialType_fallsBackToWL() {
-        // batch has no materialType set (null) → 类别未知 → WL
+    @DisplayName("T5-A3-3: materialType=null → 拒绝生成 (系统不再猜测默认前缀, 需先选物料基本类型)")
+    void generateLabel_noMaterialType_throwsWithoutCategory() {
+        // 修 (2026-08-27): 这条原来断言「materialType=null → fallback 前缀 WL」——
+        // 那是 9204f82b38 (2026-06-11) 写下时的行为。之后 20202d7758 (2026-08-09,
+        // "系统不会猜测默认前缀") 把 getMaterialCategoryPrefix(null) 从「返回 WL」
+        // 改成了「抛 BusinessException」, 这条断言的前提就不再成立(生产代码收紧了规则,
+        // 这份夹具是老的)。改断言守「类别缺失必须显式拒绝, 不能悄悄退化成某个前缀」
+        // 这条性质, 而不是继续守字面上的 "WL"。
         batch.setMaterialType(null);
 
         when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
                 .thenReturn(Optional.of(batch));
         when(labelRepository.findByBatchIdAndDeletedAtIsNull(BATCH_ID))
                 .thenReturn(java.util.List.of());
-        when(labelRepository.save(any(Label.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        Label result = labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L);
-
-        assertNotNull(result.getLabelCode());
-        assertTrue(result.getLabelCode().startsWith("WL"),
-                "label code should start with 'WL' (fallback when materialType null), got: " + result.getLabelCode());
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> labelService.generateMaterialBatchLabel(FACTORY_ID, BATCH_ID, 1L));
+        assertTrue(ex.getMessage().contains("请先选择物料基本类型"),
+                "materialType 缺失应显式拒绝生成标签, 而不是静默猜测前缀: " + ex.getMessage());
+        // 阴性对照: 拒绝生成时不应该悄悄存下一张退化标签
+        verify(labelRepository, never()).save(any(Label.class));
     }
 
     @Test
