@@ -387,6 +387,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
 
 interface ExecuteResponse {
   intentRecognized?: boolean;
@@ -551,13 +552,22 @@ async function sendQuery(forceMonthlyClose = false) {
     const response = await callIntentExecute(userInput.value, intentCode);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
+    // 🔴 2026-08-28 生产实测: 这里原本不看 status, 于是后端的
+    //    WRITE_CONFIRM_REQUIRED 回执被挂在「月度经营摘要」标题下当摘要显示 ——
+    //    这个工作台的主区块从来没出过摘要。判据见 utils/intentResponseStatus.ts。
+    // ⚠️ 正文照旧显示(用户需要知道发生了什么), 变的是【标题不再谎称这是摘要】。
+    const nonAnswerLabel = intentNonAnswerLabel(response.status);
     // Sprint 13 #304: title reflects the answered intent for user queries.
-    resultTitle.value = forceMonthlyClose
-        ? DEFAULT_RESULT_TITLE
-        : (response.intentName || '查询结果');
+    resultTitle.value = nonAnswerLabel
+        ? nonAnswerLabel
+        : (forceMonthlyClose ? DEFAULT_RESULT_TITLE : (response.intentName || '查询结果'));
 
-    const resultData = response.resultData || {};
-    extractKeyMetrics(resultData);
+    // ⛔ 非答案时不要去抽指标 —— resultData 是空的, 抽出来只会把上一轮的数清成 0,
+    //    让用户以为「本月营收 0」。
+    if (!nonAnswerLabel) {
+      const resultData = response.resultData || {};
+      extractKeyMetrics(resultData);
+    }
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
