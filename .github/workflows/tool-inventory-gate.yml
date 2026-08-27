@@ -50,7 +50,7 @@ concurrency:
 jobs:
   tool-inventory-gate:
     name: Tool descriptor inventory drift gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, cretas]
     timeout-minutes: 20
 
     # 不起任何服务容器: 这道闸【不构造也不启动任何 Spring tool bean】, 它把 .java 当文本
@@ -68,10 +68,15 @@ jobs:
       - name: Tool descriptor inventory drift gate
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
-        run: >-
-          mvn -B test
-          -Dtest='ToolDescriptorInventoryDriftTest'
-          -Dsurefire.failIfNoSpecifiedTests=false
+        # ⚠️ setup-java 只装 JDK 不装 Maven —— 自建 macOS runner 上没有系统 mvn,
+        #    只有仓库自带的 ./mvnw。解析逻辑收在 scripts/ci/resolve-maven.sh 一处。
+        run: |
+          set -uo pipefail
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          echo "MVN_USED=$MVN"
+          "$MVN" -B test \
+            -Dtest='ToolDescriptorInventoryDriftTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false
 
       - name: Upload surefire reports on failure
         if: failure()
