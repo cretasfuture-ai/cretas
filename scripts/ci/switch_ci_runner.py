@@ -42,6 +42,25 @@ def current(text):
     return "unknown"
 
 
+def _remind_if_quota_reset(now: str) -> None:
+    """托管额度每月 1 号重置。停在自建上不会报错, 只是白白丢掉
+    「干净机器 + 第三方执行」的独立性 —— 而**没有任何东西会提醒你切回去**。
+
+    ⚠️ 这里**只提醒不失败**: 一道会把 PR 弄红的提醒最终会被关掉(形态 E)。
+    用 GitHub 的 `::warning::` 注解, 它出现在 PR 摘要页而不是只躺在日志里。
+    """
+    if now != "self-hosted":
+        return
+    import datetime
+    day = datetime.date.today().day
+    if day > 7:
+        return
+    msg = ("托管 Actions 额度每月 1 号重置, 而 CI 仍停在自建 runner 上。"
+           "确认额度已恢复后执行: python scripts/ci/switch_ci_runner.py hosted")
+    print("::warning title=CI 可以切回托管了::%s" % msg)
+    print("  ⚠ %s" % msg)
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     check_only = "--check" in sys.argv
@@ -70,6 +89,7 @@ def main() -> int:
     now = distinct.pop()
     if check_only:
         print("ci-runner: 当前 = %s (%d 个工作流一致)" % (now, len(WORKFLOWS)))
+        _remind_if_quota_reset(now)
         return 0 if now != "unknown" else 1
 
     if now == target:
