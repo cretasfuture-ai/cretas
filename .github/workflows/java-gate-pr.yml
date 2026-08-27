@@ -1,0 +1,104 @@
+name: Java Gate
+
+# ## 为什么需要它
+#
+# 2026-08-27 实测的缺口：**没有任何 PR workflow 触发在 `backend/java` 上。**
+#
+#   · `ci.yml` 只有 `on.push`（打 Java 制品用），PR 上不跑
+#   · `jpa-gate-main.yml` 只有 `on.push: [main]`，且 paths 收窄到
+#     `repository/**` / `entity/**` / `db/**` / `*RepositoryQueryValidationTest.java`
+#   · `tool-inventory-gate.yml` 收窄到 `ai/tool/**`
+#
+# 于是一个改 `service/**` 的 Java PR，**合并前和合并后都没有任何 Java 测试跑过**。
+# 实测样本：#174（`service/yield/**`，新增 `BatchBomBinding` + 成本口径改动）
+# 的 checks 里**只有 `tracked-secret-scan: pass`** —— 一个 Java 测试都没执行。
+#
+# ⇒ 「PR 是绿的」在本仓的 Java 侧此前**等于「密钥扫描通过」**，仅此而已。
+#
+# ## 为什么是窄选择器而不是全量
+#
+# 全量（8000+ 用例，约 12 分钟且吃内存）此前正是 `java-full-nightly.yml` 被
+# `disabled_manually` 的原因。上闸的前提是**它在目标环境已经是绿的**，
+# 否则是把「不可信的绿」换成「挡所有人的红」（web-admin-gate.yml 里有同样的措辞）。
+#
+# 这里选的四类是「坏了就一定坏在生产上」的那部分：
+#   · `*ContractTest`                    —— 跨模块契约/源码扫描型闸（本仓最大的一类）
+#   · `*RepositoryQueryValidationTest`   —— JPQL 启动期就会炸的那类
+#   · `FlywayVersionUniquenessTest`      —— 迁移撞号，git 一个字都不报，到启动才炸
+#   · `*StartupGuardTest`                —— 启动守卫
+#
+# ## 元判据（本仓 2026-08-27 新增，见 gateTriggerSurfaceCoversWhatItReads.spec.ts）
+#
+# **一道闸扫的东西，必须在它自己的触发面里。**
+# 这四类测试读的是 `backend/java/cretas-api/` 下的 main + test + resources，
+# 而 `paths:` 写的就是 `backend/java/cretas-api/**` —— 覆盖。
+# 另加本文件自身：改闸本身也要跑一次闸。
+
+on:
+  pull_request:
+    paths:
+      - 'backend/java/cretas-api/**'
+      - '.github/workflows/java-gate-pr.yml'
+
+concurrency:
+  group: java-gate-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  java-narrow-gate:
+    # 与 web-admin-gate / java-artifact 同一台自建 runner。
+    # ⚠️ 用具名标签 `cretas` 而不是裸 `self-hosted`：将来多一台 runner 时
+    #    裸标签会被任意机器接走。
+    runs-on: [self-hosted, cretas]
+    defaults:
+      run:
+        working-directory: backend/java/cretas-api
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Run narrow Java gate
+        run: |
+          set -e
+          # 用仓里自带的 maven wrapper（git 模式 100755，pin 了 Maven 3.9.6）。
+          #
+          # ⚠️ 这里**不**调 `scripts/ci/resolve-maven.sh`（#175 正在引入的共享脚本），
+          #    理由是依赖它会让本闸在 #175 合入前**根本跑不起来** ——
+          #    于是它的第一次 run 什么都验证不到，而「闸的第一次 run 就是它的验证」
+          #    正是本闸唯一的真实证据。
+          # ⛔ 这不构成形态 D：wrapper 是**直接调用**，没有任何解析逻辑被复制一份。
+          #    #175 那个脚本解决的是「mvn 还是 ./mvnw」的 if/else，本闸没有那个分支。
+          # ⇒ 若将来团队统一走 resolve-maven.sh，这里换成它是一行的事。
+          ./mvnw -B test \
+            -Dspring.profiles.active=test \
+            -Dtest='*ContractTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest' \
+            -DfailIfNoSpecifiedTests=false
+
+      # 🔴 阳性对照：确认这一轮**真的跑了测试**。
+      #    没有这一步，一个「选择器一个类都没匹配上」的 run 会安静地全绿 ——
+      #    那正是本仓反复吃亏的「读数是 0 还是根本没量」。
+      #    `-DfailIfNoSpecifiedTests=false` 让「零匹配」不报错，所以必须自己数。
+      - name: 阳性对照 —— 确认真的跑了测试而不是零匹配
+        if: always()
+        run: |
+          set -e
+          if [ ! -d target/surefire-reports ]; then
+            echo "✗ 没有 surefire-reports —— 这一轮一个测试都没跑，绿是假的"
+            exit 1
+          fi
+          # ⛔ 不用 `bc` 求和 —— 它不是每台机器都有（本机 Git Bash 上就没有）。
+          #    一道因为「求和工具不存在」而红的闸，红的是错误的原因。awk 到处都有。
+          RUN=$(grep -ho 'tests="[0-9]*"' target/surefire-reports/*.xml \
+                | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}')
+          echo "TESTS_RUN=$RUN"
+          # 建闸当天在 origin/main 上实测的量级；显著低于它说明选择器匹配面塌了。
+          if [ "${RUN:-0}" -lt 500 ]; then
+            echo "✗ 只跑了 ${RUN:-0} 个测试（建闸当天量级是 1000+）——"
+            echo "  选择器多半没匹配到东西，这次的绿不作数。"
+            exit 1
+          fi
