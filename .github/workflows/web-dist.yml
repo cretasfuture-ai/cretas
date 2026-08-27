@@ -123,8 +123,21 @@ jobs:
       # workflow 定义」, 传输路径上没有一方能伪造。
       #
       # subject 是 tar.gz 而不是 dist 目录: tar.gz 才是最终被搬运和校验的那个字节序列。
+      #
+      # 🔴 2026-08-27 实测: 这一步在本仓**签不上** ——
+      #   `Failed to persist attestation: Feature not available for the
+      #    cretasfuture-ai organization. To enable this feature, please upgrade
+      #    the billing plan, or make [the repository public]`
+      #   制品签名对**免费套餐的私有仓**不开放(与分支保护 403 同一族限制)。
+      #
+      # ⇒ 与 java-artifact.yml 同一处理: continue-on-error + 下一步按 outcome 判。
+      #   ⛔ 不伪造: 签不上就不产 bundle, 取回方的 trust_verified 保持 false。
+      #   ⚠️ 判据用 `outcome` 不是 `conclusion` —— continue-on-error 会把
+      #      conclusion 改写成 success, 只有 outcome 还留着真实结果。
+      #      (java-artifact 那次「success」的运行里, Ship 那步正是因此被 skip 的。)
       - name: Attest dist archive provenance
         id: attest
+        continue-on-error: true
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: web-admin/release-web-dist.tar.gz
@@ -132,6 +145,7 @@ jobs:
       # bundle 已签名, 可安全走任何不可信通路 —— 放进制品一起下发, 取回方就不必额外访问 GitHub。
       # ⚠️ trusted root 绝不随制品下发(那是把验证者和被验证者装同一个包)。
       - name: Ship attestation bundle with the artifact
+        if: ${{ steps.attest.outcome == 'success' }}
         working-directory: web-admin
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
@@ -143,6 +157,26 @@ jobs:
           # ⚠️ `stat -c` 是 GNU 写法, BSD(macOS) 上是非法选项。
           #    `wc -c <` 取字节数两边都成立, 且比 stat 分支更简单。
           echo "attestation bundle bytes: $(wc -c < release-web-dist.attestation.jsonl | tr -d ' ')"
+
+      # ⚠️ 签不上时**要说出来**, ⛔ 不能让「没签」和「签了」在日志里长得一样 ——
+      #    否则取回方会以为拿到的是一个有 provenance 的包。
+      - name: 说明 provenance 缺席
+        if: ${{ steps.attest.outcome != 'success' }}
+        run: |
+          echo "::warning title=制品未签名::attest-build-provenance 在本仓不可用(免费套餐的私有仓)。"
+          echo "本次产出的 dist **没有 provenance bundle**, 取回方的 trust_verified 应保持 false。"
+
+      # ⚠️ 上面 upload 的 `if-no-files-found: error` **只在一个文件都没匹配到时才响** ——
+      #    attestation bundle 缺席(签不上)时它一声不吭, 而那正是常态。
+      #    ⇒ 把「真正必需」的两个显式钉住, 让「可选的缺了」与「必需的缺了」分开。
+      #    (与 java-artifact.yml 的 "Verify required artifact files exist" 同一处理。)
+      - name: 必需文件必须在
+        working-directory: web-admin
+        run: |
+          set -euo pipefail
+          test -s release-web-dist.tar.gz
+          test -s release-web.manifest
+          echo "必需文件齐; attestation bundle: $(test -s release-web-dist.attestation.jsonl && echo 有 || echo '无(签不上, 见上方 warning)')"
 
       - name: Upload web dist artifact
         uses: actions/upload-artifact@v7
