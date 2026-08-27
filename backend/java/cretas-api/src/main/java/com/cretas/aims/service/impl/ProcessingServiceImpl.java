@@ -2694,7 +2694,17 @@ public class ProcessingServiceImpl implements ProcessingService {
 
                     // 生产指标
                     batchCostSummary.put("actualQuantity", batch.getActualQuantity() != null ? batch.getActualQuantity() : BigDecimal.ZERO);
-                    batchCostSummary.put("yieldRate", batch.getYieldRate() != null ? batch.getYieldRate() : BigDecimal.ZERO);
+                    // ⛔ 良品率不兜底成 0 —— 0% 良品率是一个【灾难性的真实读数】,
+                    //    与「还没算出来」含义完全相反。原样透传 null, 让前端说「—」。
+                    //
+                    // 🔴 不改这一处, 本轮的数据清洗会让事情更糟: 那 40 个批次会从
+                    //    「假的 100%(完美)」变成「假的 0%(全废)」。
+                    //
+                    // ⚠️ 同一块里 efficiency / actualQuantity / 各项成本还有同形的 ZERO 兜底,
+                    //    【本次故意不改】: 它们与本次改动无因果, 且各自需要自己的生产实测
+                    //    (efficiency 当前 38 个批次为 NULL ⇒ 这个接口现在就在把它们报成 0% 效率)。
+                    //    已在 PR 描述里单独登记, ⛔ 不在这里顺手改。
+                    batchCostSummary.put("yieldRate", batch.getYieldRate());
                     batchCostSummary.put("efficiency", batch.getEfficiency() != null ? batch.getEfficiency() : BigDecimal.ZERO);
 
                     return batchCostSummary;
