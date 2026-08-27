@@ -39,6 +39,28 @@ const READONLY_POST_WHITELIST = [
     rationale: 'Query-only list summary for internal transfer rows.',
   },
   {
+    // 2026-08-28 菜单巡检抓到: /hr/attendance 一加载就发这个 POST, 被写入护栏拦下,
+    // 报成 WRITE_ON_LOAD。查下来它是**读性质**的 —— 后端 DemoReadOnlyInterceptor 把
+    // `/list-summary/` 整个前缀标注为「列表底部合计/一表一分析上下文 (读性质 POST)」,
+    // 与上面四条同一个 ListSummaryController。⇒ 缺的是白名单条目, 不是产品缺陷。
+    // ⛔ 仍然逐个实体登记, 不写成 `list-summary/.*` 通配 —— 通配会让将来某个
+    //    写形态的 entityType 悄悄溜进只读跑批。
+    id: 'attendance-list-summary',
+    method: 'POST',
+    path: /^\/api\/mobile\/[^/]+\/list-summary\/attendance\/?$/,
+    rationale: 'Query-only list summary for attendance rows.',
+  },
+  {
+    // 2026-08-28 菜单巡检抓到: /smart-bi/data-completeness 一加载就发这个 POST。
+    // 逐行看过实现 (backend/python/client_requirement/completeness_calculator.py:333):
+    // 它只 compute 并返回, **整个文件 0 处 INSERT/UPDATE/DELETE/commit**。
+    // 用 POST 只是因为要带 entity_types 列表, 不是因为它写数据。
+    id: 'client-requirement-completeness-compute',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/client-requirement\/completeness\/compute\/?$/,
+    rationale: 'Query-only completeness computation; the handler performs no writes.',
+  },
+  {
     id: 'inventory-list-summary',
     method: 'POST',
     path: /^\/api\/mobile\/[^/]+\/list-summary\/inventory\/?$/,
