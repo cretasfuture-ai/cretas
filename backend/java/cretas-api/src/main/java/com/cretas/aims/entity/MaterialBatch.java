@@ -417,11 +417,34 @@ public class MaterialBatch extends BaseEntity {
     /**
      * 获取总重量
      * 计算公式: weightPerUnit × receiptQuantity
+     *
+     * <p>🔴 2026-08-27: 算不出来时返回 <b>null</b>，⛔ 不返回 {@code BigDecimal.ZERO}。</p>
+     *
+     * <p>原来那个 ZERO 把「这批多重我不知道」翻译成了「这批重 0 公斤」，而这两件事
+     * 对下游完全不同。0 是一个**合法的重量读数**，所以消费方无从分辨。</p>
+     *
+     * <p><b>它已经炸过一次</b> —— 见 {@code MaterialBatchServiceImpl} 里移动加权平均那段的注释：
+     * 「早期实现用 getTotalWeight() = weightPerUnit × receiptQuantity, 但 weightPerUnit
+     * 是可选字段, 大部分批次未填, 退化成 0 → 加权公式失效成"最新单价覆盖"」。
+     * 那次是就地换成 {@code getCurrentQuantity} 绕开的，根上的 ZERO 一直留着。</p>
+     *
+     * <p><b>生产实测（2026-08-27，{@code cretas_prod_db} 只读）</b>：
+     * {@code material_batches} 共 177 行（8-09 ~ 8-25），{@code weight_per_unit}
+     * <b>非空 0 行</b> —— 因为线上批次来自采购收货 / 期初 / 调拨 / 客供料 / 车间领料 等
+     * <b>7 条不走 {@code MaterialBatchMapper} 的创建路径</b>，那些路径手上就没有重量
+     * （{@code PurchaseServiceImpl} 建批次时只有 数量 / 单位 / 包装换算系数）。
+     * ⇒ 线上每一个批次的「总重量」都是这个兜底出来的 0。</p>
+     *
+     * <p>⚠️ 两个调用方都已经是 null 安全的：{@code MaterialBatchMapper} 的
+     * {@code effectiveTotalWeight != null && > 0} 守卫（此前恒不为 null，是条死守卫，现在它活了），
+     * 以及 {@code MaterialBatchServiceImpl.numericEquals}（null 双侧都判）。</p>
+     *
+     * @return 重量；{@code weightPerUnit} 或 {@code receiptQuantity} 缺失时返回 {@code null}（未知）
      */
     @Transient
     public BigDecimal getTotalWeight() {
         if (weightPerUnit == null || receiptQuantity == null) {
-            return BigDecimal.ZERO;
+            return null;
         }
         return weightPerUnit.multiply(receiptQuantity);
     }
