@@ -17,12 +17,22 @@ describe('analysisDefaults — 全部历史默认窗 (WS4 Task 1 / #10/#11/#12)'
       p(utcLateEvening.getDate());
     expect(isoDate(utcLateEvening)).toBe(localDay);
 
-    // 阴性对照: 在非 UTC 时区上, 它**必须**与 UTC 截断给出不同的答案 ——
-    // 否则这条断言在本机就是恒真式, 什么都没守住。
-    if (utcLateEvening.getTimezoneOffset() !== 0) {
-      expect(isoDate(utcLateEvening)).not.toBe(
-        utcLateEvening.toISOString().slice(0, 10),
-      );
+    // 阴性对照: 必须存在一个时刻, 让「本地日」与「UTC 截断」给出**不同**的答案 ——
+    // 否则这条断言就是恒真式, 什么都没守住。
+    //
+    // 🔴 2026-08-27 订正: 原来写死用 23:59Z 且只用 `getTimezoneOffset() !== 0` 放行,
+    //    在**东**半球(UTC+8)成立(23:59Z = 次日 07:59), 但在**西**半球(PDT, UTC-7)
+    //    23:59Z 仍是同一天 -> 两者相同 -> 阴性对照必然失败。
+    //    实测: 加拿大的自建 runner 上这条红了, 而东八区本机全绿。
+    // ⇒ 不放宽守卫(那样西半球等于没对照), 而是**按时区挑一个真能跨日的时刻**。
+    const offsetMin = new Date('2026-06-02T12:00:00Z').getTimezoneOffset();
+    if (offsetMin !== 0) {
+      // offset > 0 = 西半球(如 PDT 420): 取当日 00:30Z, 本地仍是前一天
+      // offset < 0 = 东半球(如 CST -480): 取当日 23:30Z, 本地已是次日
+      const crossing = offsetMin > 0
+        ? new Date('2026-06-02T00:30:00Z')
+        : new Date('2026-06-02T23:30:00Z');
+      expect(isoDate(crossing)).not.toBe(crossing.toISOString().slice(0, 10));
     }
   });
 

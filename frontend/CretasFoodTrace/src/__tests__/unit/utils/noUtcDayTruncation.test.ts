@@ -53,12 +53,31 @@ function walk(dir: string, out: string[] = []): string[] {
  * ⛔ 不做完整的块注释解析: 行首 `//` 和 `*`(块注释续行) 覆盖了本仓的实际写法,
  *    再复杂只会做出一个更难懂、误报更多的东西(形态 E)。
  */
-function offendingLines(code: string): string[] {
+/**
+ * 具名豁免: 这些地方**必须**用 UTC 读回, 不是缺陷。
+ *
+ * ⛔ 加豁免的门槛: 那个 Date 是**刻意构造的 UTC 时刻**(不是「此刻」),
+ *    用本地 getter 读回反而会叠上设备时区偏移 —— 也就是说,
+ *    在这些地方本闸的规则是**反的**。
+ * ⚠️ 豁免必须具名到「文件 + 那一行的特征串」, ⛔ 不许整文件放行。
+ *
+ * 🔴 2026-08-27: **当前为空 —— 一条豁免都不需要。**
+ *    唯一那条(`AIChatScreen.tsx` 的 `shanghaiOffsetMs`)已经随
+ *    `utils/shanghaiDate.ts` 抽出而消失: 那个 helper 改成「推 8 小时后读 **UTC 分量**」,
+ *    根本不用截断 ISO 串, 于是本闸的规则在那儿也不再是「反的」。
+ *    ⇒ 机制留着(下次真需要时不用重建), 但**清单空着才是好状态**。
+ *    ⛔ 往这里加条目前先问一句: 换个写法能不能让它压根不命中本闸?
+ */
+const ALLOWLIST: ReadonlyArray<{ file: string; contains: string; why: string }> = [];
+
+function offendingLines(code: string, rel: string): string[] {
+  const allowed = ALLOWLIST.filter((a) => rel === a.file);
   return code
     .split(String.fromCharCode(10))
     .map((line, i) => ({ line: line.trim(), no: i + 1 }))
     .filter(({ line }) => !line.startsWith('//') && !line.startsWith('*') && !line.startsWith('/*'))
     .filter(({ line }) => TRUNCATION.test(line))
+    .filter(({ line }) => !allowed.some((a) => line.includes(a.contains)))
     .map(({ line, no }) => no + ': ' + line.slice(0, 110));
 }
 
@@ -90,10 +109,38 @@ describe('闸: 取本地日历日不许写成 UTC 截断', () => {
     expect(TRUNCATION.test('createdAt: new Date().toISOString()')).toBe(false);
   });
 
+  it('🔴 豁免清单不许过期 —— 每条都必须仍能对上一处真实代码', () => {
+    // 豁免最容易的坏法是**留在那儿放行别的东西**: 被豁免的代码删了/改了,
+    // 清单却没跟着删, 于是它开始默默放行一个本该被拦的新写法。
+    // ⇒ 每条豁免都要能指到一处**当前确实存在**的命中。
+    //
+    // ⚠️ 清单为空时这条 for 循环零次迭代 —— 那样它就是个**恒真式**(形态 B′),
+    //    绿得毫无信息。所以先把「有几条」显式断言出来: 读这份报告的人
+    //    看到的是「当前 0 条豁免」这个事实, 而不是一个什么都没查的绿。
+    expect({ 当前豁免条数: ALLOWLIST.length })
+      .toEqual({ 当前豁免条数: 0 });
+
+    for (const a of ALLOWLIST) {
+      const full = path.join(SRC, a.file);
+      // ⚠️ jest 的 expect **不支持**第二个 message 参数(那是 vitest 的写法),
+      //    写了会 TS2554 编译失败 -> `Tests: 0 total`(没跑, 不是绿)。
+      //    ⇒ 把上下文放进被断言的对象里。
+      expect({ 豁免文件: a.file, 存在: fs.existsSync(full) })
+        .toEqual({ 豁免文件: a.file, 存在: true });
+      const code = fs.readFileSync(full, 'utf8');
+      const still = code
+        .split(String.fromCharCode(10))
+        .some((l) => l.includes(a.contains) && TRUNCATION.test(l));
+      expect({ 豁免: a.file + ' / ' + a.contains, 仍然命中本闸: still })
+        .toEqual({ 豁免: a.file + ' / ' + a.contains, 仍然命中本闸: true });
+    }
+  });
+
   it('🔴 一处都不许有 —— 用 formatDate() 取本地日历日', () => {
     const offenders: Record<string, string[]> = {};
     for (const f of files) {
-      const hits = offendingLines(fs.readFileSync(f, 'utf8'));
+      const rel = path.relative(SRC, f).split(path.sep).join('/');
+      const hits = offendingLines(fs.readFileSync(f, 'utf8'), rel);
       if (hits.length) offenders[path.relative(SRC, f).split(path.sep).join('/')] = hits;
     }
     expect(offenders).toEqual({});

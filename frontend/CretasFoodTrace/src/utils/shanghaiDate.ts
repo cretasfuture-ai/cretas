@@ -27,6 +27,15 @@ const pad = (n: number): string => String(n).padStart(2, '0');
  *    整张毛利归因运行卡静默不渲染(不报错、不提示)。其余日子则是 `endDate > today`
  *    这道防未来日期的闸被放松一天。
  *
+ * 引入点是 **PR#111 的全仓清扫**: 那一轮把 `toISOString().slice(0,10)` 换成
+ * 「本地日历日」是对的, 但这一行是**误伤** —— `Date.now() + 8h` 是把 UTC 轴平移
+ * 来假装上海时区, 这个技巧成立的前提就是**用 UTC 读回**; 再套一层本地 getter
+ * 等于又叠一次设备偏移。
+ *
+ * 另一侧的实测(#143, 同一台 Mac 只换 TZ, 跑 `AIChatScreenRestaurantAgent`):
+ *   `TZ=Asia/Shanghai` 20 passed  ／  `TZ=America/Los_Angeles` 10 failed。
+ * ⚠️ 但那是个**依赖当时钟点**的信号 —— 本文件的单测才是钉住 16:00 边界的那个。
+ *
  * ✅ 正确做法: 把瞬时推 8 小时之后读 **UTC** 分量。
  * ⚠️ 手写分量而不是截断 ISO 串, 有两个理由: `noUtcDayTruncation` 那道闸禁掉了
  *    截断写法(它守的是上面第 1 种语义不许写成第 2 种), 而且截断写法会让下一个人

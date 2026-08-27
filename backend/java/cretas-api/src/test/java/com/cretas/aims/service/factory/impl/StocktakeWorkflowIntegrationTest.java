@@ -71,9 +71,12 @@ class StocktakeWorkflowIntegrationTest {
     private static final Long USER_ID = 42L;
     private static final String INSTANCE_ID = "wf-instance-001";
 
+    /** 2026-08-27 新增依赖: 盘点补录待办要读结单三态。本测试不调该方法, 但构造器需要它。 */
+    @Mock private com.cretas.aims.repository.ProductionSettlementRepository productionSettlementRepository;
+
     @BeforeEach
     void setUp() {
-        // Use @RequiredArgsConstructor-compatible constructor (6 final fields)
+        // Use @RequiredArgsConstructor-compatible constructor (按字段声明顺序)
         service = new FactoryStocktakeServiceImpl(
                 stocktakeRepo,
                 stocktakeItemRepo,
@@ -83,7 +86,8 @@ class StocktakeWorkflowIntegrationTest {
                 finishedGoodsAdjustmentLogRepo,
                 rawMaterialTypeRepo,
                 productTypeRepo,
-                materialConsumptionRepo);
+                materialConsumptionRepo,
+                productionSettlementRepository);
         // Inject optional workflowEngine via ReflectionTestUtils
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
         lenient().when(stocktakeRepo.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY_ID)))
