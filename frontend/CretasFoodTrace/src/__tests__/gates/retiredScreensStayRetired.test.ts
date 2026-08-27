@@ -142,3 +142,79 @@ describe('空壳看板不许被接上入口（棘轮的第二种降法要拦住�
     }
   });
 });
+
+/**
+ * 第三类：**在册待启用（parked）** —— 屏留着，入口暂时不接。
+ *
+ * ## 为什么需要这一条（2026-08-27）
+ *
+ * PR #209 删掉了 `FAManagementStackNavigator` 里那块从没渲染过的注册（34 条）。
+ * 依据是逐个对过的生产数据：IoT / 摄像头 / 扫码秤 / NFC / 标签识别相关的表
+ * （`iot_devices` / `isapi_devices` / `dahua_devices` / `label_recognition_*` /
+ * `device_registrations`）在 `cretas_prod_db` 上**全是 0 行**，web-admin 也没有对应页面
+ * —— 这套功能从没启用过。
+ *
+ * ⛔ **屏文件当时一个都没删**，因为 owner 明确说过这套将来会启用。
+ * 但那个决定此前**只存在于对话里**：删掉注册之后这些文件对整棵导航树零引用
+ * （13 个里 7 个是彻底零引用，其余只被同簇兄弟屏引用 —— 一个对外不可达的闭环），
+ * 下一个人做死代码清理时很容易把它们当垃圾删掉。
+ *
+ * ⇒ 本清单把那个决定**写进仓库并配一道闸**。
+ *
+ * ## 解冻条件（⛔ 写死，不靠记得）
+ *
+ * 上面那几张表**任意一张出现非空**，就说明这套功能真的在上线了。那时：
+ *   1. 把对应条目从本清单移走
+ *   2. 在合适的 navigator 里注册 + 接入口
+ * 下面「暂时仍无注册」那条断言会因此变红 —— **那是设计好的**：
+ * 启用必须是一次有意识的动作，顺带更新这张登记表，⛔ 不是悄悄接上。
+ *
+ * ## ⚠️ 谁**没有**进这张表（留痕，不是遗漏）
+ *
+ *   · `EquipmentManagement` / `EquipmentAnalysis`  —— web-admin `/equipment/list` 已有；
+ *     且 `FAManagementScreen` 里 2026-06-04 的注释写着 `/equipment/analysis/*` 后端未实现(404)
+ *   · `QualityCheckItemConfig` / `QualityCheckItemDetail` —— web-admin `/quality/standards` 已有
+ *   · `WorkReportApproval` —— web-admin `/production/approval` 已有，且
+ *     `legacyWorkReportingRatchet` 写明「第 5 步整屏删掉」
+ *
+ * 这几个走不到是**可以接受的**（桌面端有正路），所以不进「待启用」。
+ */
+const PARKED_UNTIL_IOT_LAUNCH: Array<[string, string]> = [
+  ['UnifiedDeviceManagement', 'screens/factory-admin/device/UnifiedDeviceManagementScreen.tsx'],
+  ['SmartDeviceAdd', 'screens/factory-admin/device/SmartDeviceAddScreen.tsx'],
+  ['CameraAddMethod', 'screens/factory-admin/device/CameraAddMethodScreen.tsx'],
+  ['AIDeviceInput', 'screens/factory-admin/device/AIDeviceInputScreen.tsx'],
+  ['IotDeviceList', 'screens/factory-admin/iot/IotDeviceListScreen.tsx'],
+  ['IotDeviceDetail', 'screens/factory-admin/iot/IotDeviceDetailScreen.tsx'],
+  ['IotDeviceCreate', 'screens/factory-admin/iot/IotDeviceCreateScreen.tsx'],
+  ['ScaleTest', 'screens/factory-admin/iot/ScaleTestScreen.tsx'],
+  ['UnifiedDeviceDiscovery', 'screens/factory-admin/camera/UnifiedDeviceDiscoveryScreen.tsx'],
+  ['IsapiDeviceDiscovery', 'screens/factory-admin/camera/UnifiedDeviceDiscoveryScreen.tsx'],
+  ['DeviceSetupWizard', 'screens/factory-admin/isapi/DeviceSetupWizardScreen.tsx'],
+  ['LabelRecognitionMonitor', 'screens/production/LabelRecognitionMonitorScreen.tsx'],
+  ['NfcTagManagement', 'screens/processing/NfcTagManagementScreen.tsx'],
+];
+
+describe('在册待启用的屏：文件必须还在，入口暂时不许接', () => {
+  it('阳性对照：registered() 两个方向都判得对', () => {
+    // 🔴 没有这一条，下面每条 `registered(...) === false` 都可能是恒真式
+    //    （比如 NAV_SOURCE 读空了 —— 那时什么名字都「没注册」）。
+    expect(registered('WHHome')).toBe(true);
+    expect(registered('__NoSuchRouteEverRegistered__')).toBe(false);
+  });
+
+  it.each(PARKED_UNTIL_IOT_LAUNCH)('%s 的屏文件还在，且没被掏空', (_route, rel) => {
+    const full = path.join(SRC, rel);
+    // ⛔ 这一条是本节的要害：它拦的是「有人把没人引用的文件当死代码删掉」。
+    expect(fs.existsSync(full)).toBe(true);
+    const body = stripComments(fs.readFileSync(full, 'utf8'));
+    // 还得是个真屏 —— 被替换成一句占位也算丢了。最小的那个 4.2KB，取 2000 留余量。
+    expect(body.length).toBeGreaterThan(2_000);
+  });
+
+  it.each(PARKED_UNTIL_IOT_LAUNCH)('%s 暂时仍无 navigator 注册', (route) => {
+    // 红了不是坏事：说明有人在接入口。那时把它从 PARKED_UNTIL_IOT_LAUNCH 里移走，
+    // ⛔ 不是把这条断言删掉。解冻条件见本节开头。
+    expect(registered(route)).toBe(false);
+  });
+});
