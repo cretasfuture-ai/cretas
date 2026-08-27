@@ -39,6 +39,7 @@ import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -505,6 +506,77 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
         return null;
     }
 
+    /**
+     * 这张盘点单上有没有盘盈/盘亏。
+     *
+     * <p>{@code differenceQty} 是<b>服务端</b>在录入时按 {@code 实盘 − 账面} 算好的
+     * （见 {@code updateItems}），⛔ 不是前端传来的值，所以可以直接拿来判。</p>
+     *
+     * <p>⚠️ 与原料盘点的 {@code normalizeAndValidateEvidence} 是两份实现 ——
+     * 两个实体类型没有共同父类，抽不成一份。⇒ 用
+     * {@code BothStocktakeTypesFailClosedContractTest} 钉住两边行为一致，
+     * 而不是靠人记得同步改。</p>
+     */
+    private boolean hasAnyDifference(SemiFinishedStocktake stocktake) {
+        for (SemiFinishedStocktakeItem item : stocktake.getItems()) {
+            BigDecimal diff = item.getDifferenceQty();
+            if (diff != null && diff.signum() != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 提交进 OA 时随流程带过去的上下文 —— 条件节点(SpEL)判的就是这些变量。
+     *
+     * <p>与原料盘点的 {@code buildStocktakeWorkflowContext} 同形状、同键名，
+     * 因为两者用的是<b>同一个</b> decision_type（{@code INVENTORY_ADJUSTMENT}）——
+     * 一条审批流会同时接到这两种单子，键名不一致会让同一个条件表达式对其中一种失效。</p>
+     *
+     * <p>⚠️ 数量按单位分开发，⛔ 不跨单位求和（1kg + 1件 = 2 没有意义）。</p>
+     *
+     * <p>⛔ 没有 amount：明细上没有金额。半成品的估值靠 {@code unitCost}，
+     * 而它在 {@code apply} 时可能为 null（那些行会被排除出凭证并计入 {@code uncostedCount}）——
+     * 一个「有时候算得出」的金额不该被拿去当审批阈值。</p>
+     */
+    private Map<String, Object> buildWorkflowContext(SemiFinishedStocktake stocktake,
+                                                     boolean hasDifference) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("stocktakeNo", stocktake.getStocktakeNo());
+        context.put("periodMonth", stocktake.getPeriodMonth());
+        context.put("type", "SEMI_FINISHED_STOCKTAKE");
+
+        Map<String, BigDecimal> surplusByUnit = new LinkedHashMap<>();
+        Map<String, BigDecimal> shortageByUnit = new LinkedHashMap<>();
+        int surplus = 0, shortage = 0, match = 0;
+        for (SemiFinishedStocktakeItem item : stocktake.getItems()) {
+            BigDecimal diff = item.getDifferenceQty();
+            if (diff == null) {
+                continue;
+            }
+            String unit = item.getUnit() == null ? "-" : item.getUnit();
+            if (diff.signum() > 0) {
+                surplus++;
+                surplusByUnit.merge(unit, diff, BigDecimal::add);
+            } else if (diff.signum() < 0) {
+                shortage++;
+                shortageByUnit.merge(unit, diff.abs(), BigDecimal::add);
+            } else {
+                match++;
+            }
+        }
+        context.put("totalCount", stocktake.getItems().size());
+        context.put("matchCount", match);
+        context.put("surplusCount", surplus);
+        context.put("shortageCount", shortage);
+        context.put("differenceCount", surplus + shortage);
+        context.put("hasDifference", hasDifference);
+        context.put("surplusQuantityByUnit", surplusByUnit);
+        context.put("shortageQuantityByUnit", shortageByUnit);
+        return context;
+    }
+
     @Override
     @Transactional
     public String submitForApproval(String stocktakeId, String factoryId, Long userId) {
@@ -527,18 +599,36 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             throw new BusinessException(503, "审批运行时暂不可用")
                     .withCode("OA_RUNTIME_UNAVAILABLE");
         }
+        boolean hasDifference = hasAnyDifference(stocktake);
+
         Optional<ApprovalWorkflowInstance> instance = workflowEngine.startWorkflowIfConfigured(
                 factoryId,
                 WORKFLOW_MODULE_CODE,
                 stocktakeId,
-                Map.of("stocktakeNo", stocktake.getStocktakeNo(),
-                       "periodMonth", stocktake.getPeriodMonth(),
-                       "type", "SEMI_FINISHED_STOCKTAKE"),
+                buildWorkflowContext(stocktake, hasDifference),
                 userId);
         if (instance.isPresent()) {
             stocktake.setStatus(SemiFinishedStocktake.Status.PENDING_APPROVAL);
             stocktake.setWorkflowInstanceId(instance.get().getId());
         } else {
+            // 🔴 2026-08-27: 这里原本是**无条件** APPROVED —— 没配审批流时,
+            //    盘出差异也自己批自己直接过账。而 apply() 不只调库存, 还过财务凭证
+            //    (盘盈进收入侧 / 盘亏进损耗侧) ⇒ 等于无人审批就动账。
+            //
+            //    对照: 原料盘点(FactoryStocktakeServiceImpl)在同样处境下是
+            //    409 STOCKTAKE_APPROVAL_WORKFLOW_REQUIRED。同一类操作两套规则,
+            //    而半成品这边还多一步财务凭证 —— 要有区别也该是它**更**严, 不是更松。
+            //
+            //    ⚠️ 生产实测(2026-08-27): F006 的 8 张半成品盘点全部在
+            //    INVENTORY_ADJUSTMENT_APPROVAL 发布(2026-08-25 23:15)之前过账,
+            //    workflow_instance_id 全为 null, 其中 7 张 approved_by == submitted_by。
+            //
+            //    ⛔ 零差异仍然放行 —— 没有差异就没有东西要批, 拦住是刁难(与原料同口径)。
+            if (hasDifference) {
+                throw new BusinessException(409, "存在数量差异，必须先配置并发布库存调整审批流程")
+                        .withCode("STOCKTAKE_APPROVAL_WORKFLOW_REQUIRED")
+                        .withHint("请由工厂管理员在审批流程中配置并发布库存调整审批");
+            }
             stocktake.setStatus(SemiFinishedStocktake.Status.APPROVED);
             stocktake.setApprovedBy(userId);
             stocktake.setApprovedAt(LocalDateTime.now());
