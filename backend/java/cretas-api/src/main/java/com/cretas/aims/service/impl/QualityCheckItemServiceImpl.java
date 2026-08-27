@@ -212,9 +212,20 @@ public class QualityCheckItemServiceImpl implements QualityCheckItemService {
     public Map<String, Object> getStatistics(String factoryId) {
         Map<String, Object> stats = new HashMap<>();
 
-        // 总数
-        long total = qualityCheckItemRepository.countByFactoryIdAndEnabledTrueAndDeletedAtIsNull(factoryId);
-        stats.put("total", total);
+        // 🔴 2026-08-28 视觉验收抓到: 这四个键【没有一个】被前端读到。
+        //    前端读的是 totalItems / enabledItems / requiredItems / criticalItems,
+        //    后端产出的是 total / requiredCount / criticalCount ⇒ 四张 KPI 卡全是 undefined,
+        //    经 `|| 0` 兜底后一律显示 0。
+        //    之所以没人发现: 其中三个真值恰好就是 0, 第四个有 `|| tableData.length` 回退。
+        //    生产实测(F006): 质检项 1 条且 enabled=true, 而页面「已启用」显示 0。
+        //
+        // ⚠️ 顺带订正一个名实不符: 原来那个 "total" 装的是
+        //    countBy...【EnabledTrue】... —— 它是「已启用数」不是「总数」,
+        //    而前端那张卡的标题是「质检项总数」。⇒ 两个概念分开产出, 各自用准确的名字。
+        // ⛔ 旧键 "total" 直接去掉不留兼容: 全仓只有一个消费方(quality/standards/list.vue),
+        //    而它读的是 "totalItems" ⇒ "total" 实际上【没有任何人在读】。
+        stats.put("totalCount", qualityCheckItemRepository.countByFactoryIdAndDeletedAtIsNull(factoryId));
+        stats.put("enabledCount", qualityCheckItemRepository.countByFactoryIdAndEnabledTrueAndDeletedAtIsNull(factoryId));
 
         // 按类别统计
         stats.put("byCategory", countByCategory(factoryId));

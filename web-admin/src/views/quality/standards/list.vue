@@ -20,12 +20,21 @@ const searchForm = ref({
   keyword: ''
 });
 
-// 统计数据
-const statistics = ref({
-  totalItems: 0,
-  enabledItems: 0,
-  requiredItems: 0,
-  criticalItems: 0
+// 统计数据 —— 字段名必须与后端 QualityCheckItemServiceImpl.getStatistics() 逐字一致,
+// 有闸钉着 (statisticsFieldNamesMatchBackend.source.spec.ts)。
+// ⛔ 初始值用 null 不用 0: 加载完成前显示「—」, 而不是一个看起来很真的 0。
+//    这四个字段 2026-08-28 之前分别叫 totalItems/enabledItems/requiredItems/criticalItems,
+//    与后端【一个都对不上】, 而 `|| 0` 把这件事伪装成了「真值就是 0」。
+const statistics = ref<{
+  totalCount: number | null;
+  enabledCount: number | null;
+  requiredCount: number | null;
+  criticalCount: number | null;
+}>({
+  totalCount: null,
+  enabledCount: null,
+  requiredCount: null,
+  criticalCount: null
 });
 const categoryStats = ref<Record<string, number>>({});
 
@@ -320,27 +329,34 @@ const filteredData = computed(() => {
   <div class="page-wrapper">
     <!-- 统计卡片 -->
     <div class="statistics-row">
+      <!-- 🔴 2026-08-28 视觉验收抓到: 这四个字段名【没有一个】与后端对得上。
+           前端读 totalItems / enabledItems / requiredItems / criticalItems,
+           后端产出 total / requiredCount / criticalCount（且没有「已启用」这个概念）
+           ⇒ 四张卡全是 undefined, 经 `|| 0` 兜底一律显示 0。
+           生产实测(F006): 质检项 1 条且 enabled=true, 而「已启用」卡显示 0。
+           之所以没人发现: 三个真值恰好是 0, 第一张有 `|| tableData.length` 回退。
+           ⛔ 那个回退还是错的 —— tableData 是【当前页】, 超过一页就少报总数。 -->
       <el-card class="stat-card" shadow="hover">
         <div class="stat-content">
-          <div class="stat-value">{{ statistics.totalItems || tableData.length }}</div>
+          <div class="stat-value">{{ statistics.totalCount ?? '—' }}</div>
           <div class="stat-label">质检项总数</div>
         </div>
       </el-card>
       <el-card class="stat-card success" shadow="hover">
         <div class="stat-content">
-          <div class="stat-value">{{ statistics.enabledItems || 0 }}</div>
+          <div class="stat-value">{{ statistics.enabledCount ?? '—' }}</div>
           <div class="stat-label">已启用</div>
         </div>
       </el-card>
       <el-card class="stat-card warning" shadow="hover">
         <div class="stat-content">
-          <div class="stat-value">{{ statistics.requiredItems || 0 }}</div>
+          <div class="stat-value">{{ statistics.requiredCount ?? '—' }}</div>
           <div class="stat-label">必检项</div>
         </div>
       </el-card>
       <el-card class="stat-card danger" shadow="hover">
         <div class="stat-content">
-          <div class="stat-value">{{ statistics.criticalItems || 0 }}</div>
+          <div class="stat-value">{{ statistics.criticalCount ?? '—' }}</div>
           <div class="stat-label">严重级别</div>
         </div>
       </el-card>
