@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.impl.production;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.production.DeliveryWarnDTO;
+import com.cretas.aims.enums.DeliveryWarnLevel;
 import com.cretas.aims.service.ProductionPlanService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,8 +39,12 @@ import java.util.Set;
 @Component
 public class ProductionPlanDeliveryWarnTool extends AbstractBusinessTool {
 
-    private static final List<String> VALID_WARN_LEVELS =
-            List.of("OVERDUE", "URGENT", "WARN", "NORMAL");
+    /**
+     * 等级清单读 {@link DeliveryWarnLevel} —— ⛔ 不再手抄一份字符串。
+     *
+     * <p>顺序即分组展示顺序（OVERDUE→URGENT→WARN→NORMAL），由枚举声明顺序保证。
+     */
+    private static final List<String> VALID_WARN_LEVELS = DeliveryWarnLevel.names();
 
     @Autowired
     private ProductionPlanService productionPlanService;
@@ -129,7 +134,10 @@ public class ProductionPlanDeliveryWarnTool extends AbstractBusinessTool {
             grouped.put(level, new ArrayList<>());
         }
         for (DeliveryWarnDTO w : warnings) {
-            String level = w.getWarnLevel() != null ? w.getWarnLevel() : "NORMAL";
+            // ⚠️ 这个兜底是【既有行为】, 本次只把字面量换成枚举常量, 不动语义。
+            //    它把「等级算不出来」说成「正常」—— 与本仓「⛔ 不要把『我不知道』
+            //    翻译成一个确定读数」是同一个形状。要改得单独一轮, 因为它会改 AI 的输出。
+            String level = w.getWarnLevel() != null ? w.getWarnLevel() : DeliveryWarnLevel.NORMAL.name();
             grouped.computeIfAbsent(level, k -> new ArrayList<>()).add(toRow(w));
         }
 
@@ -159,10 +167,12 @@ public class ProductionPlanDeliveryWarnTool extends AbstractBusinessTool {
             msg.append(", 等级=").append(warnLevelFilter);
         }
         msg.append(")");
-        int overdue = counts.getOrDefault("OVERDUE", 0);
-        int urgent = counts.getOrDefault("URGENT", 0);
-        int warn = counts.getOrDefault("WARN", 0);
-        int normal = counts.getOrDefault("NORMAL", 0);
+        // key 也读枚举 —— ⛔ 不写字面量。counts 是用 DeliveryWarnLevel.names() 建的,
+        // 谁改了枚举常量名, 字面量这边【不报错】, getOrDefault 静默返回 0。
+        int overdue = counts.getOrDefault(DeliveryWarnLevel.OVERDUE.name(), 0);
+        int urgent = counts.getOrDefault(DeliveryWarnLevel.URGENT.name(), 0);
+        int warn = counts.getOrDefault(DeliveryWarnLevel.WARN.name(), 0);
+        int normal = counts.getOrDefault(DeliveryWarnLevel.NORMAL.name(), 0);
         if (warnLevelFilter == null && (overdue + urgent + warn + normal) > 0) {
             msg.append(": 超期 ").append(overdue)
                     .append(" / 紧急 ").append(urgent)

@@ -20,14 +20,12 @@ import SchedulingSettingsScreen from '../../screens/settings/SchedulingSettingsS
 
 // 复用现有Profile页面
 import FeedbackScreen from '../../screens/profile/FeedbackScreen';
-import MembershipScreen from '../../screens/profile/MembershipScreen';
 
 type DSProfileStackParamList = {
   DSProfile: undefined;
   DSStatistics: undefined;
   SchedulingSettings: undefined;
   Feedback: undefined;
-  Membership: undefined;
 };
 
 const Stack = createStackNavigator<DSProfileStackParamList>();
@@ -43,7 +41,6 @@ export function DSProfileStackNavigator() {
       <Stack.Screen name="DSStatistics" component={DSStatisticsScreen} />
       <Stack.Screen name="SchedulingSettings" component={SchedulingSettingsScreen} />
       <Stack.Screen name="Feedback" component={FeedbackScreen} />
-      <Stack.Screen name="Membership" component={MembershipScreen} />
     </Stack.Navigator>
   );
 }

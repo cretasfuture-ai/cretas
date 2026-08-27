@@ -11,7 +11,7 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  RefreshControl, ActivityIndicator, Alert,
+  RefreshControl, ActivityIndicator, Alert, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -24,6 +24,43 @@ import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
 import { useListSummary } from '../../../hooks/useListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
+
+/**
+ * 排产工具四项。
+ *
+ * 这四个屏 2026-08-27 之前【一次都没被打开过】—— 它们注册在
+ * `DSPlanStackNavigator.tsx:59-62`，可全仓没有任何 `navigate` 指向它们
+ * （可达性棘轮闸 `screenReachability.test.ts` 把它们记在 35 个孤儿里）。
+ *
+ * ⛔ `desc` 写「用户能用它做什么」，不是功能名的同义反复。
+ *    「甘特图 —— 甘特图视图」等于没说；对着排产的人要说「谁跟谁撞了」。
+ */
+const PLAN_TOOLS = [
+  {
+    route: 'PlanGantt',
+    icon: 'chart-timeline',
+    label: '排程时间轴',
+    desc: '看哪几个计划挤在同一天、谁跟谁撞了',
+  },
+  {
+    route: 'UrgentInsert',
+    icon: 'flash',
+    label: '紧急插单',
+    desc: '临时插一单，先看它会挤掉谁',
+  },
+  {
+    route: 'MixedBatch',
+    icon: 'call-merge',
+    label: '合并同类批次',
+    desc: '同一产品的几个计划并成一批做',
+  },
+  {
+    route: 'ResourceOverview',
+    icon: 'factory',
+    label: '产线与设备',
+    desc: '现在哪条线空着、哪台设备停着',
+  },
+] as const;
 
 interface PlanItem {
   id: string;
@@ -68,6 +105,17 @@ export default function PlanListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [search, setSearch] = useState('');
+  /*
+   * 排产工具面板。
+   *
+   * ⛔ 这四个屏【本来就注册在同一个 Stack 里】(DSPlanStackNavigator:59-62)，
+   *    走不到只是因为没有任何地方 navigate 过去 —— 不是缺功能，是缺入口。
+   *
+   * ⛔ 为什么不在顶栏并排放四个按钮: 顶栏已经有「返回 / 标题 / 新建」，
+   *    再加四个就挤成一排图标, 而这四件事都不是每天都做的。
+   *    收进一个「排产工具」入口 ⇒ 顶栏只多一个, 展开才见四项, 每项带一句人话说明。
+   */
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [selectedPlan, setSelectedPlan] = useState<PlanItem | null>(null);
@@ -250,6 +298,15 @@ export default function PlanListScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>生产计划</Text>
         <TouchableOpacity
+          style={styles.toolsBtn}
+          onPress={() => setToolsOpen(true)}
+          testID="plan-tools-entry"
+          accessibilityRole="button"
+          accessibilityLabel="排产工具"
+        >
+          <MaterialCommunityIcons name="tune-variant" size={20} color={DISPATCHER_THEME.primary} />
+        </TouchableOpacity>
+        <TouchableOpacity
           style={styles.newBtn}
           onPress={() => navigation.navigate('PlanCreate')}
         >
@@ -257,6 +314,49 @@ export default function PlanListScreen() {
           <Text style={styles.newBtnText}>新建</Text>
         </TouchableOpacity>
       </View>
+
+      {/* 排产工具 —— 四个屏各自带一句人话说明, ⛔ 不用功能名当说明 */}
+      <Modal
+        visible={toolsOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setToolsOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.toolsBackdrop}
+          activeOpacity={1}
+          onPress={() => setToolsOpen(false)}
+          testID="plan-tools-backdrop"
+        >
+          <View style={styles.toolsSheet}>
+            <Text style={styles.toolsTitle}>排产工具</Text>
+            {PLAN_TOOLS.map((tool) => (
+              <TouchableOpacity
+                key={tool.route}
+                style={styles.toolRow}
+                testID={`plan-tool-${tool.route}`}
+                accessibilityRole="button"
+                onPress={() => {
+                  setToolsOpen(false);
+                  navigation.navigate(tool.route as never);
+                }}
+              >
+                <MaterialCommunityIcons
+                  name={tool.icon as never}
+                  size={22}
+                  color={DISPATCHER_THEME.primary}
+                  style={styles.toolIcon}
+                />
+                <View style={styles.toolTextWrap}>
+                  <Text style={styles.toolLabel}>{tool.label}</Text>
+                  <Text style={styles.toolDesc}>{tool.desc}</Text>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={20} color="#bbb" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Search */}
       <View style={styles.searchWrap}>
@@ -362,6 +462,28 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#333' },
   newBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: DISPATCHER_THEME.primary },
   newBtnText: { fontSize: 14, fontWeight: '600', color: DISPATCHER_THEME.primary },
+
+  // 排产工具 —— 顶栏只多一个图标, 展开才见四项
+  toolsBtn: {
+    width: 34, height: 34, borderRadius: 17, marginRight: 8,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#e0e0e0',
+  },
+  toolsBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  toolsSheet: {
+    backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16,
+    paddingTop: 16, paddingBottom: 28, paddingHorizontal: 16,
+  },
+  toolsTitle: { fontSize: 16, fontWeight: '700', color: '#222', marginBottom: 8, paddingHorizontal: 4 },
+  toolRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14, paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee',
+  },
+  toolIcon: { width: 32 },
+  toolTextWrap: { flex: 1 },
+  toolLabel: { fontSize: 15, fontWeight: '600', color: '#222' },
+  toolDesc: { fontSize: 12.5, color: '#888', marginTop: 2 },
 
   // Search
   searchWrap: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, backgroundColor: '#fff' },

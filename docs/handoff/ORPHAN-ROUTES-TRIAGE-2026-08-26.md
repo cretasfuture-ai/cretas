@@ -197,3 +197,194 @@ git 历史 **2026-08-23 才重建**（"Initial company baseline"，全仓仅 115
 | 89 | `/warehouse/transit-ledger` | 中转挂账对账 | 页面 | `views/warehouse/transit-ledger/list.vue` | 391 | `api/productionPlan` | |
 | 90 | `/workflow/admin-running` | 工作流处理 | 页面 | `views/workflow/admin-running.vue` | 325 | `api/request` | |
 | 91 | `/workflow/rules` | 流转规则设置 | 页面 | `views/workflow/rules.vue` | 560 | `api/request` | |
+
+
+---
+
+# 91 条走不到的路由 —— 带证据的分类（2026-08-27 补充）
+
+配套闸：`web-admin/src/router/__tests__/routeReachability.spec.ts`（已从 91 收到 **88**）
+
+## 结论先说
+
+**大部分不是「没人用」，是「用的是 App」。** RN 侧实测：盘点 15 个屏、调拨 15 个、
+领料 10 个、退货 11 个。这些 web 页面是**同一能力的第二份实现，而且是走不到的那份**。
+
+⇒ 所以对多数条目，**该考虑的是删，不是补** —— 但删不可逆，需逐条圈。
+
+生产数据佐证（这些能力确实在被使用，只是入口在别处）：
+凭证导出记录 106、半成品盘点明细 4916、退货单 31、调拨单 12、领料申请 10；
+而 `salary_items` / `payroll_records` 都是 **0** —— 薪资是唯一真的没人用过的。
+
+## 唯一已执行的动作：补了会计凭证入口
+
+| 证据 | 值 |
+|---|---|
+| `vouchers` | **18** |
+| `voucher_entries` | **46** |
+| `voucher_export_records` | **106** |
+| `voucher_templates` / `subject_mappings` | 7 / 6 |
+| RN 有没有凭证屏 | **没有**（中文命中全是「付款凭证号」这类词） |
+| web 菜单登记 | **零** |
+
+⇒ 凭证在生成、有人在导，**却没有任何界面能看**。已补 3 个入口，棘轮 91→88。
+
+## 分类方法，以及它的盲区
+
+判据是「这个页面调的后端端点，有没有被**用户走得到的**页面也调」。
+
+⚠️ 第一版是错的：直接抽页面里的字符串，多数页面只抽到 `api/request`（一个几乎人人
+import 的通用 helper），于是「被完全覆盖」这个读数**近乎恒真**。修法是往下走一跳，
+解析它 import 的 `@/api/*` 模块里真正声明的端点。
+阳性对照：159 个 api 模块 / 479 个可达组件 / 480 个端点。
+
+⚠️ 仍有盲区：端点相同不等于能力相同（同一个列表接口可能服务不同视角）。
+所以 B 类是「删除风险最低」，不是「一定可删」。
+
+---
+
+## A. 端点完全独有（23 条）—— 这些页面是某能力的**唯一**入口
+
+删掉即失去该能力。
+
+| 路由 | 独有端点数 | 组件 |
+|---|---|---|
+| `/admin/etl-status` | 3 | `views/restaurant/admin/etl-status.vue` |
+| `/analytics/role-kpi` | 1 | `views/restaurant/analytics/role-kpi-dashboard.vue` |
+| `/analytics/stores` | 2 | `views/restaurant/analytics/store-comparison.vue` |
+| `/audit/cell` | 1 | `views/system/data-fabric/cell-audit.vue` |
+| `/cost-attribution` | 1 | `views/restaurant/cost-attribution/index.vue` |
+| `/data-completeness` | 1 | `views/restaurant/data-completeness.vue` |
+| `/hr/annual-settlement` | 6 | `views/hr/salaries/annual-settlement.vue` |
+| `/hr/config/city-overrides` | 6 | `views/hr/config/city-overrides.vue` |
+| `/hr/config/insurance-rates` | 4 | `views/hr/config/insurance-rates.vue` |
+| `/hr/salaries` | 13 | `views/hr/salaries/list.vue` |
+| `/hr/shift-calendar` | 4 | `views/hr/attendance/shift-calendar.vue` |
+| `/hr/special-deductions` | 4 | `views/hr/special-deductions/list.vue` |
+| `/hr/wage-policy` | 1 | `views/hr/wage-policy/index.vue` |
+| `/price-anomaly` | 4 | `views/restaurant/price-anomaly/index.vue` |
+| `/print-template-editor` | 3 | `views/platform/print-template-editor/index.vue` |
+| `/returns` | 4 | `views/quality/returns/list.vue` |
+| `/smart-bi/upload-status` | 1 | `views/smart-bi/UploadStatusDashboard.vue` |
+| `/system/cost-variance` | 2 | `views/system/cost-variance/index.vue` |
+| `/system/data-fabric/cell-audit` | 1 | `views/system/data-fabric/cell-audit.vue` |
+| `/system/data-fabric/provenance-config` | 1 | `views/system/data-fabric/provenance-config.vue` |
+| `/system/export-center` | 14 | `views/system/export-center/index.vue` |
+| `/system/import-center` | 14 | `views/system/import-center/index.vue` |
+| `/system/operation-log` | 14 | `views/system/operation-log/index.vue` |
+
+## B. 端点被可达页面完全覆盖（21 条）—— 能力另有入口，删除风险最低
+
+| 路由 | 端点数 | 组件 |
+|---|---|---|
+| `/analytics/targets` | 1 | `views/restaurant/analytics/target-hierarchy.vue` |
+| `/approval-workflow-editor` | 3 | `views/platform/approval-workflow-editor/index.vue` |
+| `/crm/opportunity` | 1 | `views/crm/opportunity/SalesOpportunityList.vue` |
+| `/crm/opportunity/kanban` | 1 | `views/crm/opportunity/SalesOpportunityKanban.vue` |
+| `/finance/voucher-list` | 14 | `views/finance/voucher/list.vue` |
+| `/finance/voucher-template` | 14 | `views/finance/voucher-template/index.vue` |
+| `/inquiry-quotes` | 6 | `views/procurement/inquiry-quotes/list.vue` |
+| `/production-analytics/cost` | 4 | `views/production-analytics/FactoryCostAnalysis.vue` |
+| `/requisitions` | 6 | `views/procurement/requisitions/list.vue` |
+| `/requisitions/my` | 6 | `views/procurement/requisitions/my-list.vue` |
+| `/requisitions/pending-approval` | 6 | `views/procurement/requisitions/pending-approval.vue` |
+| `/sales/customer-tracking` | 1 | `views/sales/customer-tracking/list.vue` |
+| `/sales/finance-review` | 7 | `views/sales/finance-review/list.vue` |
+| `/sales/needs` | 1 | `views/sales/needs/list.vue` |
+| `/smart-bi/restaurant-v2` | 25 | `views/smart-bi/RestaurantV2Dashboard.vue` |
+| `/supplier-delivery` | 1 | `views/restaurant/supplier-delivery/SupplierDeliveryNoteList.vue` |
+| `/system/label-qc-platform-diagnostics` | 12 | `views/platform/label-qc-diagnostics/index.vue` |
+| `/system/label-qc-tray-crops` | 12 | `views/platform/label-qc-crops/index.vue` |
+| `/system/smartbi-config/chart-templates` | 11 | `views/smartbi-config/ChartTemplateView.vue` |
+| `/system/smartbi-config/data-sources` | 11 | `views/smartbi-config/DataSourceConfigView.vue` |
+| `/warehouse/transit-ledger` | 24 | `views/warehouse/transit-ledger/list.vue` |
+
+## C. 部分覆盖（2 条）
+
+| 路由 | 端点数 | 组件 |
+|---|---|---|
+| `/admin/name-resolution` | 2 | `views/restaurant/admin/name-resolution.vue` |
+| `/supplier-reconciliation` | 2 | `views/restaurant/supplier-reconciliation/list.vue` |
+
+## D. 抽不到端点（45 条）—— 父级路由 / 重定向 / 纯前端
+
+| 路由 | — | 组件 |
+|---|---|---|
+| `/analytics/ai-reports` | 0 | — |
+| `/analytics/dianping` | 0 | — |
+| `/analytics/dishes` | 0 | `views/restaurant/analytics/dishes.vue` |
+| `/analytics/gross-margin` | 0 | — |
+| `/analytics/menu` | 0 | — |
+| `/analytics/platform` | 0 | `views/restaurant/analytics/platform.vue` |
+| `/approval-rules` | 0 | `views/procurement/approval-rules/list.vue` |
+| `/dashboard/widgets` | 0 | `views/dashboard/widget-demo.vue` |
+| `/exceptions` | 0 | `views/procurement/exceptions/list.vue` |
+| `/finance/inventory-ledger` | 0 | `views/finance/inventory-ledger/index.vue` |
+| `/finance/voucher-export` | 0 | `views/finance/voucher-export/index.vue` |
+| `/hr/attendance-exceptions` | 0 | `views/hr/attendance/exceptions.vue` |
+| `/hr/comptime-balance` | 0 | `views/hr/attendance/comptime-balance.vue` |
+| `/hr/expense-requests` | 0 | `views/hr/expense-requests/list.vue` |
+| `/hr/leave-balances` | 0 | `views/hr/leave-balances/list.vue` |
+| `/hr/leave-requests` | 0 | `views/hr/leave-requests/list.vue` |
+| `/hr/overtime-requests` | 0 | `views/hr/overtime-requests/list.vue` |
+| `/indicator-center` | 0 | — |
+| `/inventory` | 0 | `views/warehouse/inventory/index.vue` |
+| `/invoices` | 0 | `views/procurement/invoices/list.vue` |
+| `/operations/customer-material-arrivals` | 0 | — |
+| `/ops/agent-ops` | 0 | `views/platform/agent-ops/AgentOpsShell.vue` |
+| `/payment-requests` | 0 | `views/procurement/payment-requests/list.vue` |
+| `/production/bom/tree` | 0 | — |
+| `/production/bom/versions` | 0 | — |
+| `/production/labor-efficiency/dashboard` | 0 | `views/dashboard/index.vue` |
+| `/production-analytics` | 0 | — |
+| `/production-analytics/three-price-comparison` | 0 | `views/production-analytics/ThreePriceComparison.vue` |
+| `/rd` | 0 | — |
+| `/rd/converted` | 0 | `views/rd/converted/list.vue` |
+| `/rd/quotations/three-price` | 0 | — |
+| `/sales/reports` | 0 | `views/sales/reports/dashboard.vue` |
+| `/scheduling/logistics-demo` | 0 | — |
+| `/smart-bi/gold-preview` | 0 | — |
+| `/smart-bi/whatif` | 0 | — |
+| `/supplier-delivery/price-anomaly/pending` | 0 | `views/workflow/pending.vue` |
+| `/system/data-fabric/capability-audit` | 0 | `views/system/data-fabric/capability-audit.vue` |
+| `/transfer` | 0 | — |
+| `/transfer/new` | 0 | `views/transfer/list.vue` |
+| `/warehouse/reusable-containers` | 0 | `views/warehouse/reusable-containers/list.vue` |
+| `/warehouse/salted-deductions` | 0 | `views/warehouse/salted-deductions/index.vue` |
+| `/warehouse/semi-finished` | 0 | `views/warehouse/semi-finished/list.vue` |
+| `/warehouse/semi-finished-stocktakes` | 0 | `views/warehouse/semi-finished-stocktakes/index.vue` |
+| `/workflow/admin-running` | 0 | `views/workflow/admin-running.vue` |
+| `/workflow/rules` | 0 | `views/workflow/rules.vue` |
+
+---
+
+## 2026-08-27 追记：B 类**不能**批量删除
+
+上一节把「端点 100% 被可达页面覆盖」的一批标成「删除风险最低」。
+按这个结论去执行时，逐条查了生产数据，**结论是反的**：
+
+| 路由 | 背后生产数据 |
+|---|---|
+| `/system/label-qc-platform-diagnostics` / `-tray-crops` | 托盘裁图 **11409** / 标注 **9583** / 照片 **5850** / 任务 **1495** |
+| `/approval-workflow-editor` | 审批流 25 / 历史 104 / 实例 44 |
+| `/sales/customer-tracking` | 客户价格历史 **260** |
+| `/requisitions` | 领料申请 10 |
+| `/inquiry-quotes` | 询价单 3 |
+
+**label-qc 那一对最说明问题**：操作侧的「包装标签拍检」(`/quality/label-qc`) 一直在菜单里、走得到；
+而**平台侧的两个诊断页走不到**。它们不是冗余，是**这个重度使用子系统的排障工具，
+而排障的人打不开它**。⇒ 该补入口，不是该删。（已补，棘轮 88 → 86。）
+
+### 判据为什么不够
+
+两个判据都被否掉了：
+
+1. **端点覆盖** —— 判不出「能力是否重复」。一个看板和一个列表页共用接口，
+   不代表看板多余。`/smart-bi/restaurant-v2`（2446 行）就是这样被误判的。
+2. **同区有可达兄弟页** —— 更差。它把餐饮看板判成可删，只因为菜单里有个
+   不相干的 `/smart-bi/mapping-review`（同属 `/smart-bi/` 前缀而已）。
+
+⇒ **静态分析判不出「这个页面还有没有用」。** 能给的最强旁证是「背后有没有生产数据」，
+而那只能否定（有数据⇒别删），不能肯定（没数据也可能是刚上线的功能）。
+
+**剩下的必须由懂产品的人看名字判断。** 19 个名字，5 分钟能扫完，比任何静态判据都准。

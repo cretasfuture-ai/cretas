@@ -1,5 +1,7 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.service.production.DefectCountResolver;
+import com.cretas.aims.entity.enums.DefectCountOutcome;
 import com.cretas.aims.dto.common.ImportResult;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -9,6 +11,7 @@ import com.cretas.aims.dto.production.DeliveryWarnDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.production.UpdatePlanScheduleMetaRequest;
 import com.cretas.aims.dto.production.ProductionPlanImportDTO;
+import com.cretas.aims.enums.DeliveryWarnLevel;
 import com.cretas.aims.dto.production.ProductionPlanMaterialAdvisoryDTO;
 import com.cretas.aims.dto.production.ProductionSettlementBomEligibilityResponse;
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
@@ -2372,16 +2375,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private DeliveryWarnDTO classifyDeliveryWarn(ProductionPlan plan, LocalDate today) {
         long days = ChronoUnit.DAYS.between(today, plan.getExpectedCompletionDate());
-        String level;
-        if (days < 0) {
-            level = "OVERDUE";
-        } else if (days < 3) {
-            level = "URGENT";
-        } else if (days < 7) {
-            level = "WARN";
-        } else {
-            level = "NORMAL";
-        }
+        // 判据本体搬去 DeliveryWarnLevel —— 工序任务卡片的「超期」徽章读的是同一份。
+        // ⛔ 不要在这里把四档再写一遍: 两份口径一定会漂, 而且漂了不报错。
+        String level = DeliveryWarnLevel.ofDaysUntilDeadline(days).name();
         String productTypeName = null;
         try {
             if (plan.getProductType() != null) {
@@ -3040,6 +3036,58 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return toDTOWithConversionInfo(plan);
     }
 
+    /**
+     * 把结单时的「这批有没有不良品」三态结论落到结算记录上, 并校验结论与数量自洽。
+     *
+     * <p>⛔ 核心约束: <b>「没回答」不许被翻译成「零不良」</b>。
+     * 2026-08-26 实测生产 72 张报工单零填写, 而旧代码兜底填 0, 于是 8 个已完工批次
+     * 全部声称 100% 良品 —— 其中 4 个的质检明确记了不合格。V20260826_05/06 已清掉那批假数,
+     * 这里保证它不会从结单这条路再长回来。</p>
+     */
+    private void applyDefectCountOutcome(ProductionSettlement settlement,
+                                         ProductionSettlementRequest request) {
+        DefectCountResolver.Resolved resolved = DefectCountResolver.resolve(
+                request.getDefectCountOutcome(), request.getDefectQuantity());
+        settlement.setDefectCountOutcome(resolved.outcome());
+        settlement.setDefectQuantity(resolved.quantity());
+        backfillDefectCountToBatch(settlement.getFactoryId(),
+                settlement.getProductionPlanId(), resolved);
+    }
+
+    /**
+     * 把结单的不良品结论回填到批次上 —— <b>只在能唯一确定的时候</b>。
+     *
+     * <p>下游(良品率/损耗/人效/AI 产能工具)读的是 {@code production_batches.defect_quantity},
+     * 所以结论只落在结算记录上还不够。但一个计划可能对多个正式批次,
+     * 生产实测 87% 的已结单计划只有 1 个 —— 唯一时回填, 多于一个时<b>不猜</b>。</p>
+     *
+     * <p>⛔ 跳过时<b>记 WARN 并写明原因</b>, 不静默 —— 静默跳过会让「没回填」和
+     * 「回填了但值是空」变得不可分, 那正是这条链路已经踩过两次的坑。</p>
+     */
+    private void backfillDefectCountToBatch(String factoryId, String planId,
+                                            DefectCountResolver.Resolved resolved) {
+        if (productionBatchRepository == null || factoryId == null || planId == null) {
+            return;
+        }
+        List<ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        DefectCountResolver.BackfillDecision decision =
+                DefectCountResolver.decideBatchBackfill(resolved, batches.size());
+        if (!decision.write()) {
+            if (decision.skipReason() != null && decision.skipReason().startsWith("AMBIGUOUS")) {
+                log.warn("结单不良品数未回填批次: 计划 {} 有 {} 个正式批次, 无法确定该记到哪一个; "
+                                + "结算记录上的结论仍然保留, 盘点时据此补录。reason={}",
+                        planId, batches.size(), decision.skipReason());
+            }
+            return;
+        }
+        ProductionBatch batch = batches.get(0);
+        batch.setDefectQuantity(decision.quantity());
+        productionBatchRepository.save(batch);
+        log.info("结单不良品数已回填批次: plan={} batch={} defectQuantity={}",
+                planId, batch.getId(), decision.quantity());
+    }
+
     @Override
     @Transactional
     public ProductionSettlementResponse settleProduction(String factoryId, String planId,
@@ -3122,6 +3170,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setMaterialVarianceReason(trimToNull(effectiveRequest.getMaterialVarianceReason()));
         settlement.setMaterialVarianceNote(trimToNull(effectiveRequest.getMaterialVarianceNote()));
         settlement.setLaborDeferredReason(trimToNull(effectiveRequest.getLaborDeferredReason()));
+        applyDefectCountOutcome(settlement, effectiveRequest);
         settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
         settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
         settlement.setPostingMessage("已完成结单和实际领用扣减; 等待仓库确认实收后才生成成品库存, 差异进入中转挂账");
@@ -4393,7 +4442,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             String unit = trimToNull(r.getOutputUnit());
-            String key = sku + " " + batchNumber + " " + (unit == null ? "" : unit);
+            String key = sku + "\0" + batchNumber + "\0" + (unit == null ? "" : unit);
             ProductionSettlementRequest.OutputLine line = byLine.get(key);
             if (line == null) {
                 byLine.put(key, ProductionSettlementRequest.OutputLine.builder()
@@ -5997,8 +6046,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                 && item.getWorkflowInputPortId() != null
                                 && item.getWorkflowEdgeId() != null
                                 && exactInputSlots.contains(item.getWorkflowMaterialNodeId()
-                                + " " + item.getWorkflowInputPortId()
-                                + " " + item.getWorkflowEdgeId());
+                                + "\0" + item.getWorkflowInputPortId()
+                                + "\0" + item.getWorkflowEdgeId());
                     })
                     .toList();
         }

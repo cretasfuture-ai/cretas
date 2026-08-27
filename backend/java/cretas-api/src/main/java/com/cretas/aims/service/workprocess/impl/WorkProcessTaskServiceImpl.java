@@ -15,6 +15,7 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
+import com.cretas.aims.util.WorkProcessTaskOverdue;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -604,6 +605,9 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 .plannedUnit(task.getPlannedUnit())
                 .plannedStartAt(task.getPlannedStartAt())
                 .plannedEndAt(task.getPlannedEndAt())
+                // 三态: true / false / null(没设 plannedEndAt = 判不了)。
+                // ⛔ 不许在任何一层兜底成 false —— 「没排期」不是「按期」。
+                .overdue(WorkProcessTaskOverdue.of(task))
                 .estimatedMinutes(task.getEstimatedMinutes())
                 .actualQuantity(task.getActualQuantity())
                 .actualStartAt(task.getActualStartAt())

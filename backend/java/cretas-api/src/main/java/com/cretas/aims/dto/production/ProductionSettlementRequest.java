@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.production;
 
+import com.cretas.aims.entity.enums.DefectCountOutcome;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -43,6 +44,22 @@ public class ProductionSettlementRequest {
     private String quantityVarianceNote;
     private String materialVarianceReason;
     private String materialVarianceNote;
+    /**
+     * 不良品清点结论（三态）。
+     *
+     * <p>⚠️ 允许为 {@code null}（旧客户端 / 尚未升级的入口）—— 那时按 NOT_COUNTED 处理，
+     * <b>落库仍写 null 而不是 0</b>。⛔ 不许把「没回答」翻译成「零不良」，那正是
+     * V20260826_05/06 刚清掉的东西。</p>
+     */
+    private DefectCountOutcome defectCountOutcome;
+
+    /**
+     * 不良品数量。语义由 {@link #defectCountOutcome} 决定，服务端会校验二者一致：
+     * COUNTED 要求 &gt; 0；NONE_CONFIRMED 要求为空或 0；NOT_COUNTED 要求为空。
+     */
+    @PositiveOrZero(message = "不良品数量不能为负数")
+    private BigDecimal defectQuantity;
+
     private String laborDeferredReason;
 
     @Valid

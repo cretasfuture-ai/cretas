@@ -1,0 +1,9 @@
+# 2026-08-27 Active History
+
+- `SOP-RAG-SYNC-20260827` — `merged`（工厂 changed 已发布并验收；餐饮 no-op 已验收）— Owner: `codex/automation-sop` — Base SHA `d6cf27fbcac268d9d7adf610af236672d96b08eb`。审计区间采用 memory 最后可解析基线 `afdd6d431431dad0c04c533819009ac5ffec09ff` 至本轮 main；PR #162 以 squash commit `a302635adfa7b665fe8025dbf3127f966ae30d95` 合入，发布时相关 surface 与最新 main 保持一致。工厂同步结单不良品“有不良品 / 已清点无不良品 / 未清点”三态、唯一/多批次回填、盘点补录待办、良品率未知展示，以及标签拍摄 960×1280、清晰度、至少 3 托盘、左右边缘完整与 fail-closed 重拍门禁；更新共享 AI Assist 工厂 tab、在线 SOP、单一 F006 KB source 与确定性回答合同。餐饮 tab、三份 registered source 与 `/cysop/` 均未修改。
+
+  验证：目标合同 143 passed；Python 完整 gate 9560 passed，Windows 缺 Git Bash/grep 的 16 项在精确工具路径下 16/16 补跑通过；Web Vitest 3652 passed / 5 skipped，`vue-tsc -b --force`、tracked-secret scan、`py_compile`、HTML/内联 JS、`git diff --check` 均通过。GitHub 三个 job 因账户付款/Actions spending limit 在 0 step 阶段失败，已在 PR 留存平台注释与同 commit 本地等价证据后管理员合并。
+
+  生产：从 clean exact main 运行 release-preflight；SmartBI migration dry-run `would-apply=0 / skipped=142`，Python 标准发布成功，`cretas-python`/Embedding/PostgreSQL active、NRestarts=0、8083/9090/5432 正常、健康检查 PostgreSQL connected。`/aiassist.html` 与 `/lsmsop/` 经 incoming SHA 校验、备份和原子替换，回滚点分别为 `/www/wwwroot/web-admin/aiassist.html.bak.sop-20260827_093930`、`/www/wwwroot/lsmsop/index.html.bak.sop-20260827_093930`；`/cysop/` 未重写。三页 repo/public SHA-256 依次为 `3b7e3603dd71dc9a62053e4e0dee089ab52e35f0d3cbf8907f2ba7b4cc20e46f`、`364c202e409193760462eaab3c7aeca21dca54756891fbbba0908d324d69f4ad`、`e9e970dda61a87a85701ae9b14ef216b4e2c3e3a44e5b9f92d549e8e37488acd`。
+
+  RAG 仅原子重建 `f006-production-full-chain-sop.md`：74 sections / 80 chunks，创建时间 2026-08-27 09:41:20–09:41:28，`.NEW=0`；餐饮正式块保持 87 / 176 / 250 且创建时间仍为 2026-08-21。真实回答：工厂固定 BOM 基准、三种变化等价问法和拍摄门禁 5/5 通过且只引用 F006 source；餐饮固定毛利与导览 2/2 通过且只引用 registered restaurant source。生产 ERP 业务写入 0；允许的生产状态变更仅为两份静态页面替换、Python 发布/重启和 F006 RAG 原子交换。

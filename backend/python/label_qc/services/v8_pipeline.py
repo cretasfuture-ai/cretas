@@ -53,6 +53,9 @@ PROPOSAL_CLASSIFIER_THRESHOLD = 0.50
 SUPPLEMENT_HEIGHT_FRACTION = 0.60
 SUPPLEMENT_SKIP_TRAY_COUNT = 8
 NESTED_IOS_THRESHOLD = 0.90
+SHALLOW_EXTENDED_OWNERSHIP_BOTTOM_RATIO = 0.75
+SHALLOW_EXTENDED_OWNERSHIP_MAX_HEIGHT = 120.0
+SHALLOW_EXTENDED_OWNERSHIP_MIN_ASPECT = 2.0
 
 MISSING_VERDICTS = frozenset(
     {"MISSING_WHITE_LABEL", "MISSING_COLOR_LABEL", "BOTH_MISSING"}
@@ -673,6 +676,107 @@ def _apply_fail_closed_policies(
     return events
 
 
+def _apply_shallow_extended_ownership(
+    result: Any,
+    image: np.ndarray,
+    models: _V8CascadeModels,
+    fail_closed_events: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-check only the reviewed two-compartment shallow-tray geometry.
+
+    The production tray detector can bound only the upper compartment.  The
+    ordinary ownership rule then drops a white label centred in the lower
+    compartment.  A protected replay established that extending the physical
+    ownership box downward by 0.75 of the detected height recovers those labels
+    without adding an unreviewed normal-photo flag.  Every other geometry stays
+    on the existing fail-closed path.
+    """
+    from label_qc.services.screening import DetectedLabel, _verdict_for, resize_crop
+
+    fail_closed_reasons = {
+        int(event["trayIndex"]): str(event.get("reason") or "unknown")
+        for event in fail_closed_events
+        if event.get("finalVerdict") == "UNJUDGEABLE"
+    }
+    events: list[dict[str, Any]] = []
+    image_height, image_width = image.shape[:2]
+    for tray in result.trays:
+        if str(tray.verdict) != "UNJUDGEABLE":
+            continue
+        x0, y0, x1, y1 = (float(value) for value in tray.box)
+        width, height = max(0.0, x1 - x0), max(0.0, y1 - y0)
+        aspect = width / height if height > 0 else 0.0
+        if not (
+            0.0 < height < SHALLOW_EXTENDED_OWNERSHIP_MAX_HEIGHT
+            and aspect > SHALLOW_EXTENDED_OWNERSHIP_MIN_ASPECT
+        ):
+            continue
+        physical_y1 = min(
+            float(image_height),
+            y1 + height * SHALLOW_EXTENDED_OWNERSHIP_BOTTOM_RATIO,
+        )
+        top_pad = (physical_y1 - y0) * 0.08
+        crop_rect = [
+            max(0.0, x0 - width * PAD_RATIO),
+            max(0.0, y0 - top_pad),
+            min(float(image_width), x1 + width * PAD_RATIO),
+            physical_y1,
+        ]
+        crop = image[
+            int(crop_rect[1]):int(crop_rect[3]),
+            int(crop_rect[0]):int(crop_rect[2]),
+        ]
+        if crop.size == 0:
+            continue
+        resized = resize_crop(crop, 640)
+        detections = models.production_label.detect(resized, float(result.params.label_conf))
+        scale_x = (crop_rect[2] - crop_rect[0]) / max(1, resized.shape[1])
+        scale_y = (crop_rect[3] - crop_rect[1]) / max(1, resized.shape[0])
+        owned: list[DetectedLabel] = []
+        for detection in detections:
+            source_box = [
+                crop_rect[0] + float(detection.x0) * scale_x,
+                crop_rect[1] + float(detection.y0) * scale_y,
+                crop_rect[0] + float(detection.x1) * scale_x,
+                crop_rect[1] + float(detection.y1) * scale_y,
+            ]
+            center_x = (source_box[0] + source_box[2]) / 2.0
+            center_y = (source_box[1] + source_box[3]) / 2.0
+            if x0 <= center_x <= x1 and y0 <= center_y <= physical_y1:
+                owned.append(DetectedLabel(
+                    class_id=int(detection.class_id),
+                    confidence=float(detection.confidence),
+                    box=source_box,
+                ))
+        classes = {int(label.class_id) for label in owned}
+        if not classes:
+            continue
+        has_white, has_color = 0 in classes, 1 in classes
+        final_verdict = _verdict_for(has_white, has_color)
+        tray.has_white = has_white
+        tray.has_color = has_color
+        tray.verdict = final_verdict
+        tray.own_label_count = len(owned)
+        tray.label_confidences = [round(float(label.confidence), 4) for label in owned]
+        tray.labels = owned
+        events.append({
+            "trayIndex": int(tray.index),
+            "reason": "reviewed_shallow_two_compartment_extended_ownership",
+            "sourceFailClosedReason": fail_closed_reasons.get(
+                int(tray.index), "crop_below_minimum_or_preexisting_unjudgeable"
+            ),
+            "previousVerdict": "UNJUDGEABLE",
+            "finalVerdict": final_verdict,
+            "bottomExtensionRatio": SHALLOW_EXTENDED_OWNERSHIP_BOTTOM_RATIO,
+            "ownedClasses": sorted(classes),
+            "box": [round(float(value), 3) for value in tray.box],
+            "extendedOwnershipBox": [
+                round(x0, 3), round(y0, 3), round(x1, 3), round(physical_y1, 3),
+            ],
+        })
+    return events
+
+
 @dataclass(frozen=True)
 class _BundleBinding:
     path: Path
@@ -820,6 +924,9 @@ class LabelQcV8Models:
         models.reset_label_stats()
         result = screening.screen_image(image, models, params)
         events = _apply_fail_closed_policies(result, image, models)
+        extended_ownership_events = _apply_shallow_extended_ownership(
+            result, image, models, events,
+        )
         audit = {
             "pipelineId": PIPELINE_ID,
             "modelId": self.model_id,
@@ -828,6 +935,7 @@ class LabelQcV8Models:
             "tray": dict(models.last_stats),
             "label": models.label_stats(),
             "failClosedEvents": events,
+            "extendedOwnershipEvents": extended_ownership_events,
         }
         result.runtime_audit = audit
         self._runtime_audit = audit

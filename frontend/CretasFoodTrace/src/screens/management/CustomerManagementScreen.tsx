@@ -24,9 +24,16 @@ import { useAuthStore } from '../../store/authStore';
 import { hasModulePermission } from '../../utils/permissionHelper';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { PermissionGatedAction } from '../../components/permission/PermissionGatedAction';
 
 // 创建CustomerManagement专用logger
 const customerLogger = logger.createContextLogger('CustomerManagement');
+
+/**
+ * 「这项归谁」——与下面 canWrite 的口径逐字对应(sales:read_write / finance:read_write)。
+ * ⛔ 不要退回「无权限」: 那让用户既不知道能不能改, 也不知道该找谁。
+ */
+export const CUSTOMER_WRITE_REASON = '客户资料的新增和修改归销售或财务，你的角色只能查看。';
 
 /**
  * 客户管理页面
@@ -464,39 +471,46 @@ export default function CustomerManagementScreen() {
                   )}
                 </View>
 
-                {/* Actions — 只读角色不渲染任何 mutation 入口 */}
-                {canWrite && (
-                  <View style={styles.actionRow}>
-                    <Button
-                      mode="outlined"
-                      icon="pencil"
-                      onPress={() => handleEdit(customer)}
-                      style={styles.actionButton}
-                      compact
-                    >
-                      {t('common.edit')}
-                    </Button>
-                    <Button
-                      mode="outlined"
-                      icon={customer.isActive ? 'pause' : 'play'}
-                      onPress={() => handleToggleStatus(customer.id, customer.isActive)}
-                      style={styles.actionButton}
-                      compact
-                    >
-                      {customer.isActive ? t('common.disable') : t('common.enable')}
-                    </Button>
-                    <Button
-                      mode="outlined"
-                      icon="delete"
-                      onPress={() => handleDelete(customer.id, customer.name)}
-                      style={styles.actionButton}
-                      compact
-                      textColor="#C62828"
-                    >
-                      {t('common.delete')}
-                    </Button>
-                  </View>
-                )}
+                {/* Actions — 只读角色【置灰但可见】: 让他知道「有这些操作, 但不归我」,
+                    而不是以为客户资料根本改不了。⛔ 后端那道闸不变, 这里只改展示。 */}
+                <PermissionGatedAction
+                  granted={canWrite}
+                  reason={CUSTOMER_WRITE_REASON}
+                  contentStyle={styles.actionRow}
+                  testID={`customer-actions-gate-${customer.id}`}
+                >
+                  <Button
+                    testID={`customer-edit-btn-${customer.id}`}
+                    mode="outlined"
+                    icon="pencil"
+                    onPress={() => handleEdit(customer)}
+                    style={styles.actionButton}
+                    compact
+                  >
+                    {t('common.edit')}
+                  </Button>
+                  <Button
+                    testID={`customer-toggle-btn-${customer.id}`}
+                    mode="outlined"
+                    icon={customer.isActive ? 'pause' : 'play'}
+                    onPress={() => handleToggleStatus(customer.id, customer.isActive)}
+                    style={styles.actionButton}
+                    compact
+                  >
+                    {customer.isActive ? t('common.disable') : t('common.enable')}
+                  </Button>
+                  <Button
+                    testID={`customer-delete-btn-${customer.id}`}
+                    mode="outlined"
+                    icon="delete"
+                    onPress={() => handleDelete(customer.id, customer.name)}
+                    style={styles.actionButton}
+                    compact
+                    textColor="#C62828"
+                  >
+                    {t('common.delete')}
+                  </Button>
+                </PermissionGatedAction>
               </Card.Content>
             </Card>
           ))
@@ -676,15 +690,20 @@ export default function CustomerManagementScreen() {
         </Modal>
       </Portal>
 
-      {/* FAB */}
-      {canWrite && (
+      {/* FAB — 无写权时置灰但仍在原位, 让人看得到「有新增这件事」 */}
+      <PermissionGatedAction
+        granted={canWrite}
+        reason={CUSTOMER_WRITE_REASON}
+        style={styles.fab}
+        testID="customer-create-gate"
+      >
         <FAB
+          testID="customer-create-fab"
           icon="plus"
-          style={styles.fab}
           onPress={handleAdd}
           label={t('customerManagement.createCustomer')}
         />
-      )}
+      </PermissionGatedAction>
     </SafeAreaView>
   );
 }

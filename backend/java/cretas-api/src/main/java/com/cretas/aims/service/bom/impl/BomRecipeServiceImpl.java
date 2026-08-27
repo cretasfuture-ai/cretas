@@ -1673,7 +1673,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 只针对<b>带槽</b>的行 —— 包材/辅料槽为 NULL 是正确模型 (reconcileUpgradedInputSkeletons
         // 显式把 PACKAGING 排除在槽认领之外), 不在此列。
         Set<String> validSlotKeys = slots.stream()
-                .map(slot -> slot.materialNodeId() + " " + slot.inputPortId() + " " + slot.edgeId())
+                .map(slot -> slot.materialNodeId() + "\0" + slot.inputPortId() + "\0" + slot.edgeId())
                 .collect(java.util.stream.Collectors.toSet());
         for (BomRecipeItem item : available) {
             boolean slotBound = item.getWorkflowMaterialNodeId() != null
@@ -1682,8 +1682,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             if (!slotBound) {
                 continue;   // 包材/辅料等不挂槽的成本行, 合法
             }
-            String key = item.getWorkflowMaterialNodeId() + " "
-                    + item.getWorkflowInputPortId() + " " + item.getWorkflowEdgeId();
+            String key = item.getWorkflowMaterialNodeId() + "\0"
+                    + item.getWorkflowInputPortId() + "\0" + item.getWorkflowEdgeId();
             if (!validSlotKeys.contains(key)) {
                 throw bomError(409,
                         "配方项「" + item.getMaterialName() + "」绑定的 Workflow 投入槽在当前工艺版本中已不存在"

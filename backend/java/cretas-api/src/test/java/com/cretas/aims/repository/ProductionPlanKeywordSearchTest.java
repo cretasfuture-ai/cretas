@@ -51,7 +51,7 @@ class ProductionPlanKeywordSearchTest {
     private ProductionPlanRepository repo;
 
     private static final String FID = "F-TEST";
-    private static final Long UID = 1L;
+    private static final Long UID = 900001L;   // matches restock-fixtures.sql
 
     private ProductionPlan plan(String id, String planNumber, String productTypeId,
                                  ProductionPlanStatus status) {
