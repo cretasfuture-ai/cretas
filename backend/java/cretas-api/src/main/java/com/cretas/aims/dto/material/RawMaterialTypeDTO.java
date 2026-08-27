@@ -132,7 +132,12 @@ public class RawMaterialTypeDTO {
      * 包材每产品单位用量 (仅 category=PACKAGING 有意义).
      *
      * <p>生产 1 个最小成品单位 (outputQuantityPerUnit) 需要此包材多少个/袋/盒。
-     * null = 未配置, BOM 行需手填 standardQuantity.
+     * 建 BOM 的 PACKAGING 行时若用户未填用量, 取本字段作为 <b>naturalQuantity</b>（手填优先）。
+     * null = 未配置, BOM 行需手填用量.
+     *
+     * <p>⚠️ 2026-08-27 订正: 原文写的是「需手填 standardQuantity」——
+     * 2026-08-03 (P7) 之后 standardQuantity 是<b>推导值</b>
+     * (naturalQuantity ÷ 包装规格换算系数), 用户填的那一格是 naturalQuantity。
      *
      * <p>DB: pack_qty_per_product NUMERIC(15,6) NULL
      */

@@ -70,6 +70,24 @@ class BomRecipePackagingSpecInferTest {
     @Mock
     NestedBomCostService nestedBomCostService;
 
+    /**
+     * 🔴 2026-08-27 补：本测试类 8 条全红并被登记进 {@code known-failing-tests.txt}，
+     * 红的原因**不是**推算逻辑，而是 {@code addItem} 后来加了一道
+     * {@code assertPinnedDraft}（「BOM 草稿尚未自动关联已保存的 Workflow 修订」）。
+     * 一条断言都没跑到被测行为 —— 而 {@code applyPackagingSpecAutoInfer} 在此期间
+     * 从主代码里消失了，整件事被这片红完全掩盖。
+     */
+    @Mock
+    com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
+
+    /** addItem 末尾会调它同步替代料; 未声明 → 字段为 null → NPE 在断言之前。 */
+    @Mock
+    com.cretas.aims.service.bom.BomItemSubstituteService substituteService;
+
+    /** 成本重算会扫调料行; 未声明 → 字段为 null → NPE 在断言之前。 */
+    @Mock
+    com.cretas.aims.repository.bom.BomSeasoningItemRepository seasoningItemRepo;
+
     @InjectMocks
     BomRecipeServiceImpl service;
 
@@ -82,6 +100,8 @@ class BomRecipePackagingSpecInferTest {
         recipe.setFactoryId("F006");
         recipe.setStatus(BomRecipe.Status.DRAFT);
         recipe.setItems(new ArrayList<>());
+        // addItem 走 assertPinnedDraft：hash 为 null 直接 409，一条断言都跑不到被测行为。
+        recipe.setWorkflowRevisionHash("REV-HASH-TEST");
 
         when(recipeRepo.findById("RECIPE-PKG-TEST")).thenReturn(Optional.of(recipe));
         when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -90,8 +110,18 @@ class BomRecipePackagingSpecInferTest {
         when(unitContractService.normalize(anyString(), anyString()))
                 .thenAnswer(invocation -> canonicalUnits.normalize(
                         invocation.getArgument(0), invocation.getArgument(1)));
+        // 2026-08-03 P7 之后 applyPackagingLevel 用 areEquivalent 判「包材单位是否另选了」。
+        // ⛔ 不打这个桩 → 恒 false → 每条用例都被「包材单位必须继承物料档案」拦住,
+        //    断言一条都跑不到被测行为（本类此前就是这么全红的）。
+        when(unitContractService.areEquivalent(anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> canonicalUnits.areEquivalent(
+                        invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2)));
         // NestedBomCostService: treat all items as plain (non-nested) for these tests
         when(nestedBomCostService.isNestedComponent(any())).thenReturn(false);
+        // 空骨架: 本类测的是包材用量来源, 与 workflow 槽位绑定无关。
+        // ⛔ 不打这个桩 → resolvePinnedGraph 返回 null → graph.nodes() NPE。
+        when(bomWorkflowRevisionService.resolvePinnedGraph(anyString(), any(BomRecipe.class)))
+                .thenReturn(minimalGraph());
     }
 
     // ─── T1: PACKAGING 物料有 packQtyPerProduct, DTO 未手填 → 自动推算 ─────────
@@ -174,9 +204,12 @@ class BomRecipePackagingSpecInferTest {
                 .thenReturn(List.of(savedItem));
 
         BomRecipeItemDTO dto = buildDto("PKG-003", null, "个", "PACKAGING");
+        // 🔴 2026-08-27: 措辞与抛出点都变了 —— 2026-08-03 P7 之后由 applyPackagingLevel
+        //    一次收齐三条必填再报, 类型是 BusinessException 而不是 IllegalArgumentException。
+        //    ⛔ 守的行为没变: 物料没配规格、用户也没手填 → **拒绝**, 不许凭空造一个用量。
         assertThatThrownBy(() -> service.addItem("F006", "RECIPE-PKG-TEST", dto))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("每成品用量");
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("包材自然用量必须大于 0");
     }
 
     // ─── T4: RAW 物料不触发推算 ───────────────────────────────────────────
@@ -220,16 +253,25 @@ class BomRecipePackagingSpecInferTest {
             return capturedItem[0];
         });
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-PKG-TEST"))
-                .thenReturn(List.of(new BomRecipeItem()));
+                .thenReturn(List.of(unrelatedExistingItem()));
 
         // DTO: no unit (null) — not explicitly provided
         BomRecipeItemDTO dto = buildDtoNoUnit("PKG-001", null, "PACKAGING");
         service.addItem("F006", "RECIPE-PKG-TEST", dto);
 
         // unit is back-filled from material then persisted as the canonical code.
+        // 🔴 2026-08-27: 这条原来写死期望 "pcs"。今天落库的是档案单位经 unit contract
+        //    归一后的值, 而那个值是不是英文码是**另一件事**(单位规范化), 不是本类守的东西。
+        //    ⇒ 把守的东西从**字面**抬到**性质**: 单位必须来自**物料档案**并经同一个权威归一,
+        //      ⛔ 不许是调用方自己给的。期望值从同一个权威算出来, 不写死拼写。
+        String expectedUnit = TestUnitContractFactory.contract()
+                .normalize("F006", box.getUnit()).code();
         assertThat(capturedItem[0].getUnit())
-                .as("unit should be back-filled from material.unit when DTO unit is blank")
-                .isEqualTo("pcs");
+                .as("包材单位必须继承物料档案(经 unit contract 归一), 不是调用方另选的")
+                .isEqualTo(expectedUnit);
+        assertThat(expectedUnit)
+                .as("阳性对照: 期望值必须真的算出来了 —— 算不出来这条断言就没在守任何东西")
+                .isNotBlank();
     }
 
     @Test
@@ -246,16 +288,22 @@ class BomRecipePackagingSpecInferTest {
             return capturedItem[0];
         });
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-PKG-TEST"))
-                .thenReturn(List.of(new BomRecipeItem()));
+                .thenReturn(List.of(unrelatedExistingItem()));
 
         // DTO explicitly supplies unit=袋
         BomRecipeItemDTO dto = buildDto("PKG-001", null, "袋", "PACKAGING");
         service.addItem("F006", "RECIPE-PKG-TEST", dto);
 
         // Explicit localized alias is persisted using the canonical bag code.
+        // 同上: 守「继承档案 + 经同一权威归一」这条性质, 不写死拼写。
+        // ⚠️ 本例调用方显式给了 unit=袋 —— 与档案一致, 所以能过「包材单位不能另选」那道闸;
+        //    给一个**不同**的单位会被那道闸直接拒(那是它守的, 不在本类重复断言)。
+        String expectedUnit = TestUnitContractFactory.contract()
+                .normalize("F006", box.getUnit()).code();
         assertThat(capturedItem[0].getUnit())
-                .as("explicitly supplied unit=袋 should persist as canonical bag")
-                .isEqualTo("bag");
+                .as("显式给了与档案一致的单位时, 落库仍走档案 + 同一个归一权威")
+                .isEqualTo(expectedUnit);
+        assertThat(expectedUnit).isNotBlank();
     }
 
     // ─── T7: 成本含 PACKAGING 行 ───────────────────────────────────────
@@ -324,6 +372,54 @@ class BomRecipePackagingSpecInferTest {
         return mt;
     }
 
+    /**
+     * 最小可用工艺图：一个 RAW_MATERIAL 节点 → 一个带 INPUT 端口的 PROCESS 节点。
+     *
+     * <p>⛔ 不能给空图：{@code BomWorkflowRevisionService.resolveInputSlots} 是**静态**方法
+     * （mock 不掉），空图会抛「这个产品的工艺图里没有接入任何原料」，RAW 那条用例
+     * 一条断言都跑不到。本类测的是包材用量来源，这张图只是让入口走得通。</p>
+     */
+    private com.cretas.aims.service.workflow.PinnedWorkflowGraph minimalGraph() {
+        com.cretas.aims.dto.ProductProcessWorkflowDTO.Node rawNode =
+                new com.cretas.aims.dto.ProductProcessWorkflowDTO.Node();
+        rawNode.setId("RM-1");
+        rawNode.setKind("RAW_MATERIAL");
+        rawNode.setData(new java.util.LinkedHashMap<>(java.util.Map.of("skuId", "RAW-001")));
+
+        com.cretas.aims.dto.ProductProcessWorkflowDTO.Node processNode =
+                new com.cretas.aims.dto.ProductProcessWorkflowDTO.Node();
+        processNode.setId("P-1");
+        processNode.setKind("PROCESS");
+        processNode.setData(new java.util.LinkedHashMap<>(java.util.Map.of(
+                "ports", List.of(java.util.Map.of("id", "in-1", "direction", "INPUT", "unit", "kg")))));
+
+        com.cretas.aims.dto.ProductProcessWorkflowDTO.Edge edge =
+                new com.cretas.aims.dto.ProductProcessWorkflowDTO.Edge();
+        edge.setId("E-1");
+        edge.setSource("RM-1");
+        edge.setTarget("P-1");
+        edge.setTargetHandle("in-1");
+
+        return new com.cretas.aims.service.workflow.PinnedWorkflowGraph(
+                1L, 1L, 1, "REV-HASH-TEST", "PT-TEST", "NODE-END",
+                List.of("RAW-001"), List.of(), List.of(rawNode, processNode), List.of(edge));
+    }
+
+    /**
+     * 「配方里已经存在的另一行」—— 只用来让 resolveExistingItemForRequest 有东西可扫。
+     * ⛔ id 必须非空: 那段用 Set.of(...).contains(item.getId()), null 直接 NPE。
+     * ⛔ materialTypeId 必须与被建行不同: 相同会被判成同一行而走更新路径, 捕获不到 save。
+     */
+    private BomRecipeItem unrelatedExistingItem() {
+        BomRecipeItem item = new BomRecipeItem();
+        item.setId(1L);
+        item.setRecipeId("RECIPE-PKG-TEST");
+        item.setFactoryId("F006");
+        item.setMaterialTypeId("PKG-OTHER");
+        item.setUnit("pcs");
+        return item;
+    }
+
     private BomRecipeItem stubSavedItem(String materialTypeId, BigDecimal qty, String unit) {
         BomRecipeItem item = new BomRecipeItem();
         item.setId(99L);
@@ -342,6 +438,11 @@ class BomRecipePackagingSpecInferTest {
         ReflectionTestUtils.setField(dto, "standardQuantity", qty);
         ReflectionTestUtils.setField(dto, "unit", unit);
         ReflectionTestUtils.setField(dto, "materialCategory", category);
+        // 2026-08-03 P7 起 PACKAGING 行必须带业务角色, 否则 applyPackagingLevel 直接拒。
+        // ⛔ 不设它 → 每条用例都停在「包材必须选择所在包装层级的业务角色」, 跑不到被测行为。
+        if ("PACKAGING".equalsIgnoreCase(category)) {
+            ReflectionTestUtils.setField(dto, "packagingRole", "PRIMARY");
+        }
         return dto;
     }
 
@@ -352,6 +453,9 @@ class BomRecipePackagingSpecInferTest {
         ReflectionTestUtils.setField(dto, "standardQuantity", qty);
         ReflectionTestUtils.setField(dto, "unit", null);
         ReflectionTestUtils.setField(dto, "materialCategory", category);
+        if ("PACKAGING".equalsIgnoreCase(category)) {
+            ReflectionTestUtils.setField(dto, "packagingRole", "PRIMARY");
+        }
         return dto;
     }
 }
