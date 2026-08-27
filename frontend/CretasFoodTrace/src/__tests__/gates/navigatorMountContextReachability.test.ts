@@ -69,7 +69,35 @@ import {
 import type { Expr, ScopeKey } from './lib/roleReachability';
 
 /**
- * 死注册预算（棘轮，只许调小）。存量 **35**，两类：
+ * 死注册预算（棘轮，只许调小）。
+ *
+ * ## 🔴 2026-08-27 第二次：35 → 1
+ *
+ * 下面记的那 34 条已经**删掉了**（不是豁免）：
+ *
+ *   · `FAManagementStackNavigator` 里 `{!isRestaurantMode && (…)}` 整块 33 条注册（203 行）
+ *   · `FactoryAdminTabNavigator` 的 `FAReportsTab` 1 条
+ *   · 连带 `FAManagementScreen` 里三个同样恒假的入口（设备中心 / 生产报工 / 工序任务）
+ *
+ * ⛔ **屏文件一个都没删** —— 将来真启用 IoT 时代码还在。删的只是那些永不渲染的注册与入口。
+ *
+ * 依据是逐个对过的生产数据与 web 端入口：
+ *   设备台账 2 屏 → web-admin `/equipment/list` 已有（`factory_equipment` 8 行）
+ *   IoT/摄像头/发现/配网/秤/NFC/标签识别 13 屏 → 相关表**生产全 0 行**，web 端也没有
+ *   质检项 2 屏 → web-admin `/quality/standards` 已有
+ *   报工审批 1 屏 → web-admin `/production/approval` 已有，且 `legacyWorkReportingRatchet`
+ *                   写明「第 5 步整屏删掉」
+ *
+ * ⚠️ 删 `FAReportsTab` 顺带让**整套报表（17 屏 + 2 分析屏）显形为无人可达** ——
+ *    它是 `FAReportsStackNavigator` 的唯一挂载点，而那个挂载点恒假。
+ *    ⛔ 那 19 个屏不是被这次删掉的，是本来就走不到，此前被 `roleReachability` 的盲区盖着。
+ *    详见该闸下调下限处的记录。**报表要不要给工厂用户，是没解决的产品问题。**
+ *
+ * ---
+ *
+ * 以下是首次建闸（存量 35）时的记录，留作口径参照：
+ *
+ * 存量 **35**，两类：
  *
  * ### 34 条 —— `isRestaurant(user)` 恒真的子树里写着 `!isRestaurantMode`
  *
@@ -97,7 +125,7 @@ import type { Expr, ScopeKey } from './lib/roleReachability';
  *
  * 接好一批就把这个数调小。⛔ 不许调大 —— 调大等于又把一批屏藏起来。
  */
-const DEAD_BUDGET = 35;
+const DEAD_BUDGET = 1;
 
 /** 仪器活着的地板值。⛔ 不是判据，是「必发生」读数（硬约束 9）。 */
 const MIN_REGISTRATIONS = 200;

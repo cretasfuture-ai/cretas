@@ -60,32 +60,14 @@ export function FAManagementScreen() {
               color="#667eea"
               onPress={() => navigation.navigate('EmployeeList')}
             />
-            {!isRestaurantMode && (
-            <GridItem
-              icon="devices"
-              title={t('management.deviceCenter', '设备中心')}
-              color="#52c41a"
-              onPress={() => navigation.navigate('UnifiedDeviceManagement')}
-            />
-            )}
             {/* 设备分析已移除 (2026-06-04): /equipment/analysis/* 后端未实现 (404) */}
-            {!isRestaurantMode && (
-            <GridItem
-              icon="clipboard-check"
-              title={t('management.workReport', '生产报工')}
-              color="#ff7043"
-              onPress={() => navigation.navigate('WorkReportApproval')}
-            />
-            )}
-            {!isRestaurantMode && useFactoryFeatureStore.getState().isProcessMode() && (
-            <GridItem
-              icon="format-list-checks"
-              title="工序任务"
-              color="#0891B2"
-              testID="fa-process-task-btn"
-              onPress={() => navigation.navigate('ProcessTaskList' as never)}
-            />
-            )}
+            {/* 🔴 2026-08-27: 这里原来有三个 `{!isRestaurantMode && …}` 入口
+                （设备中心 / 生产报工 / 工序任务）。本屏只在 FAManagementStackNavigator 里注册，
+                而那棵子树只在 isRestaurant(user) 为真时挂载 ⇒ 这三个入口**从没显示过**，
+                它们指向的路由也在同一个恒假分支里注册（已一并删除）。
+                ⛔ 不要加回来：条件恒假，加回来只是又藏起三个走不到的入口。
+                去处：设备台账 web-admin /equipment/list；报工审批 /production/approval；
+                工序任务在 ProcessingStackNavigator / WS 栈里本来就可达。 */}
             <GridItem
               icon="domain"
               title={t('management.departmentManagement')}

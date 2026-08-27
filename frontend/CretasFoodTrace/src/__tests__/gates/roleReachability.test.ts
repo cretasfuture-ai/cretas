@@ -127,8 +127,34 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     // 静默变小，看起来像修好了。实测——把 AppNavigator 里 hr_admin 那条分流删掉，
     // 可达屏 398→376、空转 36→35，两个预算全绿而分析器已经瞎了一块。
     // ⇒ 覆盖面变小也要红。变小是真的删屏了？确认后把下面三个数一起调小。
-    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(390);
-    expect(s.screensExamined).toBeGreaterThanOrEqual(425);
+    // 🔴 2026-08-27 下调 —— 这道闸**正确地红了一次**，按它自己写的「确认后再调小」办的。
+    //
+    //   reachableScreenFiles  397 → 364   (下限 390 → 357，探针在同一棵树上前后各跑一次)
+    //   screensExamined            → 395  (下限 425 → 387)
+    //   branchesExamined           → 73   (下限 68 不动 —— 它没跌破，⛔ 不跟着一起调)
+    //
+    // ⚠️ 后两个只记了改动后的值 —— 改动前那两个数我没量，⛔ 就不写一个编出来的。
+    //    下限按「实测值留 ~2% 余量」定，与建闸当天同一条惯例。
+    //
+    // 少掉的 33 个屏文件逐条对过（探针 diff 出来的，不是估的），两拨：
+    //
+    //   16 个  删掉 FAManagementStackNavigator 里那块 `{!isRestaurantMode && …}` 带走的
+    //          （设备/IoT/摄像头/秤/NFC/标签识别/质检项/报工审批）
+    //   17+2   删掉 FactoryAdminTabNavigator 的 FAReportsTab 带走的
+    //          （screens/reports/* 全套 + 2 个 analytics）—— 它是 FAReportsStackNavigator
+    //          的**唯一**挂载点
+    //
+    // ⚠️ 这 33 个**本来就走不到**：两处的条件都是 `!isRestaurantMode`，而这两棵子树
+    //    只在 `isRestaurant(user)` 为真时挂载（AppNavigator:92）⇒ 恒为假。
+    //    本闸此前把它们算成可达，是因为 `isRestaurant` 不在 BOOL_HELPERS 里（守卫求成 U）
+    //    且 `parseRoleDispatch` 显式把三元两支都算可达（它自己写明的盲区 1）。
+    //
+    // ⇒ **这不是覆盖面变小，是口径变准了。** 397 与 364 不可比 ——
+    //   报数时口径要一起报（否则会被读成「删了 33 个屏」）。
+    //   那 33 个屏文件一个都没删，只是不再被算成有人走得到。
+    //   守新口径的闸：navigatorMountContextReachability.test.ts
+    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(357);
+    expect(s.screensExamined).toBeGreaterThanOrEqual(387);
     expect(s.branchesExamined).toBeGreaterThanOrEqual(68);
     // 三态都得有人 —— 全落进一态说明分类器退化了。
     expect(RESULT.vacuous.length).toBeGreaterThan(0);
