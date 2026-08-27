@@ -50,7 +50,34 @@ public class WriteGuardService {
             // starts with SPLIT_ among all getToolName() literals — no read-style over-match.
             "SPLIT_");
 
-    private static final Set<String> NON_DESTRUCTIVE_GENERATE_NAMES = Set.of("REVENUE_REPORT_GENERATE");
+    /**
+     * 后缀启发式的**具名例外** —— 名字里带写动词、实际只读的那些。
+     *
+     * <p>⛔ 登记例外，不是放松后缀表。后缀表宁可过度拦截（安全方向），
+     * 而每一条例外都必须能拿出「它确实只读」的证据，并且有闸守着它不过期
+     * （见 {@code MonthlyFinancialCloseReadOnlyContractTest}）。</p>
+     *
+     * <ul>
+     *   <li>{@code REVENUE_REPORT_GENERATE} —— 生成报表，不落业务数据。</li>
+     *   <li>{@code MONTHLY_FINANCIAL_CLOSE} —— 🔴 2026-08-28 生产实测抓到：
+     *       名字里的 CLOSE 是「月度<b>复盘</b>」，不是「执行结账」。它 {@code tool_name=NULL}、
+     *       走 {@code monthly-financial-close} Skill，串起 <b>8 个 actionType=READ 的 Tool</b>
+     *       （period_status_query / balance_sheet_query / income_statement_query /
+     *       cashflow_statement_query / wage_cost_summary / opportunity_funnel_stats /
+     *       commission_pending_total / accounts_receivable_aging），
+     *       DB 里 {@code sensitivity_level='LOW'}。
+     *       <p>被误判成写之后的实际后果：财务主管工作台的主区块「月度经营摘要」
+     *       <b>永远显示「『月度财务复盘』是写入/修改操作，执行前需要确认。」</b>，
+     *       从来没出过摘要；而且 {@code IntentKnowledgeBase} 把「本月营收」「今日营收」
+     *       「本月业绩如何」等<b>纯查询短语</b>也短路到这个意图，
+     *       ⇒ 任何人问这些话都拿不到数。</p>
+     *       <p>⚠️ 短语短路会绕过 {@code NegationTwinPolicy} 的
+     *       「读形态问句命中写意图就把读的提上来」那道保护 —— 那道网在这里接不住。</p></li>
+     * </ul>
+     */
+    private static final Set<String> NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS = Set.of(
+            "REVENUE_REPORT_GENERATE",
+            "MONTHLY_FINANCIAL_CLOSE");
 
     public boolean isWriteAction(ToolExecutor.ActionType t) {
         return t == ToolExecutor.ActionType.WRITE
@@ -87,7 +114,7 @@ public class WriteGuardService {
     public boolean hasWriteSuffix(String intentCode) {
         if (intentCode == null) return false;
         String upper = intentCode.toUpperCase();
-        if (NON_DESTRUCTIVE_GENERATE_NAMES.contains(upper)) return false;
+        if (NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS.contains(upper)) return false;
         if (upper.contains("CLOCK_IN") || upper.contains("CLOCK_OUT")) return true;
         for (String suffix : WRITE_SUFFIXES) {
             if (upper.contains(suffix)) return true;
