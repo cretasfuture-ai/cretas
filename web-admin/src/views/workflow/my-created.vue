@@ -17,6 +17,8 @@
  * @since 2026-05-19 (Sprint 5 Track A)
  */
 import { ref, onMounted, computed } from 'vue';
+import { enumLabel } from '@/utils/enumDisplay';
+import { MODULE_LABELS } from './moduleLabels';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
@@ -25,6 +27,8 @@ import { ElMessage } from 'element-plus';
 interface WorkflowInstanceRow {
   instanceId: string;
   moduleCode: string;
+  /** 后端 DecisionTypeMetadataRegistry 下发的权威中文名; 渲染时优先用它。 */
+  moduleLabel?: string;
   businessEntityId: string;
   businessSummary: string;
   currentNodeId: string | null;
@@ -112,18 +116,6 @@ function formatTime(iso: string | null): string {
   }
 }
 
-function moduleLabel(moduleCode: string): string {
-  const map: Record<string, string> = {
-    PURCHASE_ORDER: '采购订单',
-    SALES_ORDER: '销售订单',
-    DISPOSAL: '废弃处置',
-    TRANSFER: '调拨单',
-    INVENTORY_TRANSFER: '库存调拨',
-    VOUCHER: '凭证',
-    ECN: '工程变更',
-  };
-  return map[moduleCode] || moduleCode;
-}
 
 onMounted(() => {
   load();
@@ -158,7 +150,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="模块" width="120">
           <template #default="{ row }">
-            <el-tag size="small">{{ moduleLabel(row.moduleCode) }}</el-tag>
+            <el-tag size="small">{{ row.moduleLabel || enumLabel(row.moduleCode, MODULE_LABELS) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="当前节点" width="140">

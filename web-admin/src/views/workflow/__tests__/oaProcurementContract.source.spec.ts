@@ -45,8 +45,23 @@ describe('procurement unified OA contract', () => {
     // 在后端 executeDomainAction 接上 BUDGET 分支之前放进白名单, 只会让用户点了撞 422。
     expect(actionable, 'BUDGET 关账尚未接入, 放进白名单会让待办点了就撞 422')
       .not.toContain('BUDGET');
-    // 筛选下拉改为 v-for MODULE_LABELS: 下拉与表格列共用同一份中文名
-    expect(pending).toContain("SALES_ORDER: '销售订单'");
+    // 筛选下拉改为 v-for MODULE_LABELS: 下拉与表格列共用同一份中文名。
+    //
+    // ⚠️ 2026-08-28 这条断言原本写的是 `expect(pending).toContain("SALES_ORDER: '销售订单'")`
+    //    —— 它锁的是**那张表长在 pending.vue 里**这个实现位置, 而注释说的性质是
+    //    「下拉与表格列共用同一份」。当天把这张表收敛到 `./moduleLabels.ts`
+    //    (六个 OA 页面共用, 此前它们各写各的、三种不同内容)之后, 这条断言红了 ——
+    //    **性质更成立了, 而断言在拦它**。⇒ 把它从「字面位置」抬到「性质」:
+    //      ① pending.vue 用的是那份共享表(不是自己又写一份)
+    //      ② 下拉确实 v-for 那份表(下拉与表格同源)
+    //      ③ 那份表里确实有这个中文名(原断言真正关心的东西没丢)
+    // ⛔ 不是把断言删掉。
+    expect(pending, 'pending.vue 应引用共享的 MODULE_LABELS, 而不是自己再写一份')
+      .toMatch(/import\s*\{\s*MODULE_LABELS\s*\}\s*from\s*'\.\/moduleLabels'/);
+    expect(pending, '筛选下拉与表格列必须同源 —— 下拉 v-for 的就是那份表')
+      .toMatch(/v-for="\(label, code\) in MODULE_LABELS"/);
+    expect(source('src/views/workflow/moduleLabels.ts'), '共享表里应有销售订单的中文名')
+      .toContain("SALES_ORDER: '销售订单'");
     expect(pending).toContain('v-for="(label, code) in MODULE_LABELS"');
   });
 });
