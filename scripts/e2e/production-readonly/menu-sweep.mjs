@@ -115,6 +115,10 @@ function classify(entry) {
   //    于是被我自己的分类器判成了「空白」。
   //    ⇒ 差一点把「RBAC 正常工作」报成「46 屏坏了」。它是**正向证据**, 不是缺陷。
   if (entry.forbidden) return { verdict: 'FORBIDDEN', reason: '403 访问被拒绝（本租户/角色越权，预期行为）' };
+  // ⚠️ 同一个教训第二次: 404 页正文也只有 40 字符, 也会被长度阈值判成「空白」。
+  //    「菜单里配了这条路由, 打开却是 404」是一类**独立**的问题(多为父级路由没有 index),
+  //    与「页面渲染不出东西」下一步动作不同 ⇒ 单独成档。
+  if (entry.notFound) return { verdict: 'NOT_FOUND', reason: '404 页面不存在（菜单配了这条路由，但它没有页面）' };
   if (entry.bodyTextLength <= 40) return { verdict: 'BLANK', reason: `正文只有 ${entry.bodyTextLength} 字符` };
   if (entry.httpErrors.length) return { verdict: 'HTTP_ERROR', reason: `${entry.httpErrors.length} 个 >=400 响应` };
   if (entry.consoleErrors.length) return { verdict: 'CONSOLE_ERROR', reason: `${entry.consoleErrors.length} 条 console 错误` };
@@ -141,6 +145,16 @@ async function main() {
   }
   if (args.only) routes = routes.filter((r) => r.path.includes(args.only) || r.title.includes(args.only));
   if (args.limit) routes = routes.slice(0, args.limit);
+  // 🔴 过滤之后【也】要拦 0 —— 2026-08-27 实测本工具自己踩过:
+  //    `--only /workdesk` 在 Git Bash 下被 MSYS 路径转换吃成了 Windows 路径, 匹配到 0 条,
+  //    于是巡检【一个样本都没跑, 退出码却是 0】。那正是本仓反复记过的
+  //    「没量到被折叠进没问题」。⛔ 上面那道 0 检查在过滤【之前】, 拦不住这一种。
+  //    ⚠️ Git Bash 下传以 `/` 开头的过滤词要加 MSYS_NO_PATHCONV=1。
+  if (!routes.length) {
+    console.error(`[menu-sweep] 过滤之后一条路由都不剩（--only=${args.only ?? ''} --limit=${args.limit ?? ''}）—— 本次没有量到任何东西。`);
+    process.exitCode = 2;
+    return;
+  }
 
   const runId = new Date().toISOString().replace(/[:.]/g, '-');
   const evidenceDir = path.resolve(args.evidenceDir || path.join('.playwright-mcp', 'menu-sweep', runId));
@@ -187,6 +201,7 @@ async function main() {
         entry.bodyTextLength = body.trim().length;
         // ⚠️ 判 403 用页面自己的文案, ⛔ 不用正文长度 —— 长度只是它的一个副作用。
         entry.forbidden = /访问被拒绝|403/.test(body);
+        entry.notFound = !entry.forbidden && /页面不存在|404/.test(body);
         entry.finalPath = new URL(page.url()).pathname;
         entry.screenshot = await screenshot(route.path);
       } catch (error) {
