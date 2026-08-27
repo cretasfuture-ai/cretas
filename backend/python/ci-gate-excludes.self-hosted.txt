@@ -21,20 +21,25 @@
 #   ⇒ 这也是把粒度收细(改成 -k / --deselect 到方法级)的理由, 但那要先确认
 #     那 34 条不依赖同文件的 fixture —— 单独一件事, 不在本次范围内。
 
-# ── ① 需要一个真的 PostgreSQL (8 条) ────────────────────────────────
-# 实测: OSError: Connect call failed ('::1', 5432) / ('127.0.0.1', 5432)
-# 那台 Mac 上没有 postgres, 也没有 docker 起服务容器的前提。
-# ⇒ 要清掉这一条, 得在 runner 上装一个 postgres 并让它开机自启 —— 那是机器侧的活,
-#   不是这份 YAML 能解决的。
-tests/test_chat_session_service.py               # 全类 7 条, asyncpg 连 5432
-tests/test_chat_session_user_identity_postgres.py  # 1 条, 迁移幂等性, 同样要真库
-
-# ── ② 用了 GNU 专有的命令行选项 (4 条) ──────────────────────────────
-# 实测: grep: invalid option -- P
-# 被测脚本 `scripts/cron/time-phrase-backlog-daily.sh` 里用了 `grep -P`(PCRE),
-# BSD grep(macOS 自带) 没有这个选项。
-# ⛔ 刻意**不去改那个脚本**: 它是跑在 Linux 服务器上的 cron, 在它的目标环境里
-#   `grep -P` 是对的。为了 CI 可移植去动一个生产脚本, 是按猜测改线上行为。
-#   要清掉这一条, 正确做法是给 runner 装 GNU grep(`brew install grep`, 提供 ggrep)
-#   并让脚本按可用性挑 —— 同样是机器侧 + 脚本侧的活, 单独一件事。
-tests/test_time_phrase_backlog_gate.py           # 4 条, 全是同一个 grep -P
+# ── 当前清单: 空 ─────────────────────────────────
+#
+# 2026-08-27 首次版本里有三个文件(12 条红), 它们已经被 **#172 修好**,
+# 所以从这里拿掉了 —— 不是“讲和”, 是当时的定性不对:
+#
+#   ① 8 条 postgres: 当时写的是「要在 runner 上装一个 postgres」。
+#      实际上这些用例**本来就设计成没库时 skip** ——
+#      `_is_local_postgres_absent()` + `pytest.skip(...)` 那条路一直在。
+#      它在 macOS 上没走通, 是因为判别式认不出双栈聚合的 OSError
+#      (errno 为 None, cause/context 为空, 子异常只在消息里)。
+#      ⇒ 屏蔽的不是「机器缺件」, 是一道**坏掉的 skip 守卫**。不需要装库。
+#
+#   ② 4 条 grep -P: 当时写的是「不去改生产脚本, 为 CI 可移植性改线上是按猜测」。
+#      这个顾虑本身是对的, 所以 #172 没有按猜测改, 而是在 **GNU grep 上逐例证明了等价**
+#      (8/8 相同, 含下游守卫真正依赖的两种边界: 子串命中与多命中产出多行)。
+#      ⇒ 生产(Linux + GNU grep)行为逐字节不变。
+#
+# ⚠️ 文件粒度排除的代价就是上面那段算过的 46 条 ——
+#    修好之后少跑 **0** 条(8 条如实 skip, 其余全跑)。
+#
+# ⛔ 保留本文件本身(哪怕现在是空的): 「机器缺件」与「欠账」分两份这个机制是对的,
+#    将来一定还会有真的机器缺件(比如 jpa-gate 要 JDK)。

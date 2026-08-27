@@ -28,6 +28,7 @@ from smartbi.services.chat_session_service import (
     sanitize_for_storage,
     truncate_summary,
 )
+from .pg_absence import is_local_postgres_absent
 
 
 # ---------- Pure-python tests (no DB) ----------
@@ -525,22 +526,6 @@ def _assert_safe_local_test_dsn(dsn: str) -> None:
         pytest.fail("chat session DB tests require an explicitly test database")
 
 
-def _is_local_postgres_absent(exc: BaseException) -> bool:
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, ConnectionRefusedError):
-            return True
-        if isinstance(current, OSError) and (
-            getattr(current, "winerror", None) == 10061
-            or getattr(current, "errno", None) in {61, 111}
-        ):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
-
 @pytest_asyncio.fixture
 async def pool():
     import asyncpg
@@ -569,7 +554,7 @@ async def pool():
             server_settings={"search_path": f"{schema},public"},
         )
     except Exception as exc:
-        if _is_local_postgres_absent(exc):
+        if is_local_postgres_absent(exc):
             if admin is not None:
                 await admin.close()
             pytest.skip(
