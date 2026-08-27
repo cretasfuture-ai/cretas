@@ -1,0 +1,196 @@
+/**
+ * 闸: 调度员的五个排产工具屏, 必须有人走得到。
+ *
+ * ## 背景
+ *
+ * 这五个屏各自都是**真功能**(调真接口、无写死数据、合计 5530 行),
+ * 而 2026-08-27 之前**一次都没被打开过** —— 它们规规矩矩注册在
+ * `DSPlanStackNavigator` / `DispatcherNavigator` 上, 只是**全仓没有任何
+ * `navigate` 指向它们**。可达性棘轮闸把它们记在 35 个孤儿里。
+ *
+ * ⇒ 不是缺功能, 是缺入口。
+ *
+ * ## 为什么入口是这个形状
+ *
+ * ⛔ **没有在顶栏并排放四个按钮** —— 顶栏已有「返回 / 标题 / 新建」,
+ *    再加四个会挤成一排看不懂的图标, 而这四件事都不是每天都做的。
+ *    收进一个「排产工具」入口: 顶栏只多一个, 展开才见四项, 每项带一句人话。
+ *
+ * ⛔ **也没有给它们各加一个菜单项** —— web-admin 已经 188 个菜单条目 / 30 个顶级项,
+ *    「让用户碰到」如果靠加菜单解决, 就是拿简洁换可达。
+ *
+ * ## 告警那一处是顺带修的真缺陷
+ *
+ * `DSHomeScreen` 的铃铛徽章印的是 `alerts.unresolved`(未处理**告警**数),
+ * 而它原来跳 `NotificationList`(**通知**列表) —— **数说的是一件事, 点下去到的是另一件**。
+ * 而真能处理告警的 `AlertList` 就注册在根栈上, 没有任何地方跳过去。
+ *
+ * ## ⛔ 第六个屏 `AIScheduleGenerate` 故意不接
+ *
+ * 它所在的那块被 `{false && ...}` 关掉, 注释写明「scheduling API 未完成」。
+ * **它不是缺入口, 是后端没做完。** 给一个内部跑不通的屏加入口, 比它藏着更糟 ——
+ * 本仓 2026-08 已有多例(数据请求被注释掉的看板、丢掉工人填写内容却说"已上报"的上报页)。
+ * 这条**显式登记为「故意不接」**, ⛔ 登记是留痕不是豁免。
+ */
+import fs from 'fs';
+import path from 'path';
+
+const SRC = path.resolve(__dirname, '../..');
+const PLAN_LIST = path.join(SRC, 'screens/dispatcher/plan/PlanListScreen.tsx');
+const DS_HOME = path.join(SRC, 'screens/dispatcher/home/DSHomeScreen.tsx');
+const PLAN_STACK = path.join(SRC, 'navigation/dispatcher/DSPlanStackNavigator.tsx');
+const ROOT_NAV = path.join(SRC, 'navigation/DispatcherNavigator.tsx');
+
+/** 剥注释 —— 本闸的被测文件里就写着这些路由名(在解释为什么接/不接)。 */
+function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+const read = (p: string) => stripComments(fs.readFileSync(p, 'utf8'));
+
+/** 挂在「排产工具」面板里的四个 —— 它们注册在 DSPlanStack 上。 */
+const TOOLS = ['PlanGantt', 'UrgentInsert', 'MixedBatch', 'ResourceOverview'];
+
+// ============================================================
+// 0. 仪器自检
+// ============================================================
+describe('gate instrument self-check', () => {
+  it('剥注释真的在发生', () => {
+    /*
+     * ⛔ 用【构造的】输入验, 不要假设真实文件的注释里恰好含某个词 ——
+     *    第一版就是那么写的: 断言「注释里提到过 PlanGantt」, 而我的注释写的是行号,
+     *    于是自检红了, 而剥注释其实一直好好的。**阳性对照假设了一件没验过的事。**
+     */
+    const probe = [
+      'const a = 1; // PlanGantt 在行注释里',
+      '/* PlanGantt 在块注释里 */',
+      'const keep = "PlanGantt";',
+    ].join(String.fromCharCode(10));
+    const hits = (s: string) => (s.match(/PlanGantt/g) ?? []).length;
+    expect(hits(probe)).toBe(3);
+    /*
+     * 🔴 剩 2 不是 1 —— 探针抓出了剥注释函数的真实局限:
+     *    `^\s*\/\/` 只剥【行首】的行注释, **行尾的 `// …` 剥不掉**。
+     *
+     * ⛔ 不把这条断言改软去迁就实现 —— 那就是「照着代码现在的样子写断言」。
+     *    如实钉住它当前能做到什么, 并在下面单独钉住那个局限。
+     *
+     * 为什么这个局限在本闸可以接受: 被测的两个文件里, 提到路由名的说明文字
+     * 全部写在块注释 `/* … *\/` 或行首 `//` 里(本文件顶部那几段就是),
+     * 没有一处是跟在代码后面的行尾注释。⚠️ 哪天有了, 下面那条会提醒。
+     */
+    expect(hits(stripComments(probe))).toBe(2);
+  });
+
+  it('已知局限: 行尾的 // 注释剥不掉 —— 若哪天需要它, 这条会提醒改剥注释函数', () => {
+    const trailing = 'const a = 1; // PlanGantt';
+    expect(stripComments(trailing)).toContain('PlanGantt');
+    // 阴性对照: 行首的和块的确实剥得掉, 局限只在行尾这一种
+    expect(stripComments('  // PlanGantt')).not.toContain('PlanGantt');
+    expect(stripComments('/* PlanGantt */')).not.toContain('PlanGantt');
+  });
+
+  it('剥注释不吃掉真代码', () => {
+    const code = read(PLAN_LIST);
+    expect(code).toContain('PLAN_TOOLS');
+    expect(code).toContain('setToolsOpen');
+  });
+
+  it('读到的是成规模的源码, 不是空串', () => {
+    for (const f of [PLAN_LIST, DS_HOME, PLAN_STACK, ROOT_NAV]) {
+      expect(read(f).length).toBeGreaterThan(500);
+    }
+  });
+});
+
+// ============================================================
+// 1. 四个排产工具: 注册了, 而且有人跳
+// ============================================================
+describe('排产工具四个屏, 用户走得到', () => {
+  const list = read(PLAN_LIST);
+  const stack = read(PLAN_STACK);
+
+  it('四个都仍然注册在 DSPlanStack 上', () => {
+    // ⛔ 逐条收集再一次性断言, 不在第一个失败处停
+    const missing = TOOLS.filter((t) => !new RegExp(`name="${t}"`).test(stack));
+    expect(missing).toEqual([]);
+  });
+
+  it('四个都出现在排产工具面板的清单里', () => {
+    const missing = TOOLS.filter((t) => !new RegExp(`route:\\s*'${t}'`).test(list));
+    expect(missing).toEqual([]);
+  });
+
+  it('面板确实被渲染出来, 而不是只定义了常量', () => {
+    expect(list).toMatch(/PLAN_TOOLS\.map/);
+    expect(list).toMatch(/navigation\.navigate\(tool\.route/);
+  });
+
+  it('顶栏有打开它的入口', () => {
+    expect(list).toMatch(/testID="plan-tools-entry"/);
+    expect(list).toMatch(/setToolsOpen\(true\)/);
+  });
+
+  it('⛔ 顶栏没有为这四个各加一个按钮 —— 那是拿简洁换可达', () => {
+    // 阴性对照: 四个路由名都不许直接出现在 onPress 里(它们只能经由 tool.route)
+    const direct = TOOLS.filter((t) =>
+      new RegExp(`navigate\\(\\s*['"]${t}['"]`).test(list),
+    );
+    expect(direct).toEqual([]);
+  });
+
+  it('每一项都带一句人话说明, 不是功能名的同义反复', () => {
+    const descs = [...list.matchAll(/desc:\s*'([^']+)'/g)].map((m) => m[1] ?? '');
+    expect(descs).toHaveLength(TOOLS.length);
+    // 说明里不许原样重复 label —— 「甘特图 —— 甘特图视图」等于没说
+    const labels = [...list.matchAll(/label:\s*'([^']+)'/g)].map((m) => m[1] ?? '');
+    const tautological = descs.filter((d, i) => d.includes(labels[i] ?? ' '));
+    expect(tautological).toEqual([]);
+    // 每句都得有点长度, 否则「见名知义」四个字也能过
+    const tooShort = descs.filter((d) => d.length < 8);
+    expect(tooShort).toEqual([]);
+  });
+});
+
+// ============================================================
+// 2. 告警: 徽章说的和点下去到的, 是同一件事
+// ============================================================
+describe('铃铛徽章与它的落点一致', () => {
+  const home = read(DS_HOME);
+
+  it('徽章印的是未处理告警数', () => {
+    expect(home).toMatch(/alerts\?\.unresolved/);
+  });
+
+  it('🔴 点它进的是告警处理页, 不是通知列表', () => {
+    expect(home).toMatch(/navigate\(\s*'AlertList'\s*\)/);
+  });
+
+  it('阴性对照: 旧的错误落点不许回来', () => {
+    // 徽章那个按钮上不能再跳 NotificationList
+    const btn = home.slice(
+      Math.max(0, home.indexOf('bell-outline') - 400),
+      home.indexOf('bell-outline'),
+    );
+    expect(btn).not.toMatch(/navigate\(\s*'NotificationList'\s*\)/);
+  });
+
+  it('AlertList 确实注册着 —— 否则上面那条跳过去会崩', () => {
+    expect(read(ROOT_NAV)).toMatch(/name="AlertList"/);
+  });
+});
+
+// ============================================================
+// 3. 故意不接的那个, 保持不接
+// ============================================================
+describe('AIScheduleGenerate 故意不接 —— 后端未完成', () => {
+  it('没有给它加入口', () => {
+    for (const f of [PLAN_LIST, DS_HOME]) {
+      expect(read(f)).not.toMatch(/navigate\(\s*'AIScheduleGenerate'/);
+    }
+  });
+
+  it('它所在的那块仍然是关着的 —— 若哪天打开了, 这条会红, 提醒重新评估', () => {
+    const home = fs.readFileSync(DS_HOME, 'utf8');
+    expect(home).toMatch(/\{false && isScreenEnabled\('AISchedule'\)/);
+  });
+});
