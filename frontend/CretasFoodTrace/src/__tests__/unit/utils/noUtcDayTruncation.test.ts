@@ -53,12 +53,31 @@ function walk(dir: string, out: string[] = []): string[] {
  * ⛔ 不做完整的块注释解析: 行首 `//` 和 `*`(块注释续行) 覆盖了本仓的实际写法,
  *    再复杂只会做出一个更难懂、误报更多的东西(形态 E)。
  */
-function offendingLines(code: string): string[] {
+/**
+ * 具名豁免: 这些地方**必须**用 UTC 读回, 不是缺陷。
+ *
+ * ⛔ 加豁免的门槛: 那个 Date 是**刻意构造的 UTC 时刻**(不是「此刻」),
+ *    用本地 getter 读回反而会叠上设备时区偏移 —— 也就是说,
+ *    在这些地方本闸的规则是**反的**。
+ * ⚠️ 豁免必须具名到「文件 + 那一行的特征串」, ⛔ 不许整文件放行。
+ */
+const ALLOWLIST: ReadonlyArray<{ file: string; contains: string; why: string }> = [
+  {
+    file: 'screens/factory-admin/ai-analysis/AIChatScreen.tsx',
+    contains: 'shanghaiOffsetMs',
+    why: '`Date.now() + 8h` 平移 UTC 轴来假装上海时区, 前提就是 UTC 读回。'
+       + '改成本地 getter 会再叠一次设备偏移: 东八区每天 16:00 后返回明天, 西七区直接差一天。',
+  },
+];
+
+function offendingLines(code: string, rel: string): string[] {
+  const allowed = ALLOWLIST.filter((a) => rel === a.file);
   return code
     .split(String.fromCharCode(10))
     .map((line, i) => ({ line: line.trim(), no: i + 1 }))
     .filter(({ line }) => !line.startsWith('//') && !line.startsWith('*') && !line.startsWith('/*'))
     .filter(({ line }) => TRUNCATION.test(line))
+    .filter(({ line }) => !allowed.some((a) => line.includes(a.contains)))
     .map(({ line, no }) => no + ': ' + line.slice(0, 110));
 }
 
@@ -90,10 +109,31 @@ describe('闸: 取本地日历日不许写成 UTC 截断', () => {
     expect(TRUNCATION.test('createdAt: new Date().toISOString()')).toBe(false);
   });
 
+  it('🔴 豁免清单不许过期 —— 每条都必须仍能对上一处真实代码', () => {
+    // 豁免最容易的坏法是**留在那儿放行别的东西**: 被豁免的代码删了/改了,
+    // 清单却没跟着删, 于是它开始默默放行一个本该被拦的新写法。
+    // ⇒ 每条豁免都要能指到一处**当前确实存在**的命中。
+    for (const a of ALLOWLIST) {
+      const full = path.join(SRC, a.file);
+      // ⚠️ jest 的 expect **不支持**第二个 message 参数(那是 vitest 的写法),
+      //    写了会 TS2554 编译失败 -> `Tests: 0 total`(没跑, 不是绿)。
+      //    ⇒ 把上下文放进被断言的对象里。
+      expect({ 豁免文件: a.file, 存在: fs.existsSync(full) })
+        .toEqual({ 豁免文件: a.file, 存在: true });
+      const code = fs.readFileSync(full, 'utf8');
+      const still = code
+        .split(String.fromCharCode(10))
+        .some((l) => l.includes(a.contains) && TRUNCATION.test(l));
+      expect({ 豁免: a.file + ' / ' + a.contains, 仍然命中本闸: still })
+        .toEqual({ 豁免: a.file + ' / ' + a.contains, 仍然命中本闸: true });
+    }
+  });
+
   it('🔴 一处都不许有 —— 用 formatDate() 取本地日历日', () => {
     const offenders: Record<string, string[]> = {};
     for (const f of files) {
-      const hits = offendingLines(fs.readFileSync(f, 'utf8'));
+      const rel = path.relative(SRC, f).split(path.sep).join('/');
+      const hits = offendingLines(fs.readFileSync(f, 'utf8'), rel);
       if (hits.length) offenders[path.relative(SRC, f).split(path.sep).join('/')] = hits;
     }
     expect(offenders).toEqual({});
