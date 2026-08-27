@@ -220,11 +220,32 @@ class UserApiClient {
     isActive?: boolean;
   }): Promise<UserDTO[]> {
     const { factoryId, ...queryParams } = params;
-    const response = await apiClient.get<{ code: number; data: UserDTO[]; message: string; success: boolean; }>(
+    // 🔴 2026-08-27: 这里原来标注成 `data: UserDTO[]` 并 `return response.data || []`。
+    //    而后端 `UserController:320` 返回的是 `ApiResponse<PageResponse<UserDTO>>` ——
+    //    `data` 是**分页对象**不是数组。后果不是「搜不到」, 是**整屏崩**:
+    //      UserManagementScreen:139  setUsers(results)      <- 存进一个非数组
+    //      UserManagementScreen:336  users.filter(...)      <- TypeError
+    //    而 `results.length` 在崩之前只是 undefined, 日志里看不出问题。
+    //    这屏用户走得到(员工列表, 从 FAManagementScreen 进), 搜索一次就崩。
+    const response = await apiClient.get<{
+      code: number;
+      data: PageResponse<UserDTO>;
+      message: string;
+      success: boolean;
+    }>(
       `${this.getFactoryPath(factoryId)}/users/search`,
       { params: queryParams }
     );
-    return response.data || [];
+    const page = response.data;
+    // ⛔ 不兜底成 `[]` —— 那会把「后端契约变了 / 请求没成功」显示成「搜到 0 个用户」,
+    //    是在编一个读数。搜不到的正常情况是 `content: []`, 与这里的失败完全不同。
+    if (!page || !Array.isArray(page.content)) {
+      throw new Error(
+        '用户搜索返回的不是分页结构（期望 data.content 为数组）: '
+          + JSON.stringify(page)?.slice(0, 200)
+      );
+    }
+    return page.content;
   }
 
   /**
