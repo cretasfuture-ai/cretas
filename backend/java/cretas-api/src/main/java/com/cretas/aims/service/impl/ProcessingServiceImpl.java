@@ -728,7 +728,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         if (batch.getEndTime() != null) {
             Map<String, Object> ended = new HashMap<>();
             ended.put("time", batch.getEndTime());
-            ended.put("event", "COMPLETED".equals(batch.getStatus()) ? "生产完成" : "生产取消");
+            // 🔴 2026-08-28 视觉验收抓到: 这里原本是 `"COMPLETED".equals(batch.getStatus())`,
+            //    而 status 是 @Enumerated 的 ProductionBatchStatus【枚举】, 不是 String
+            //    ⇒ String.equals(Enum) 【恒为 false】⇒ **每一个批次的时间线最后一条都写「生产取消」**,
+            //      包括已完成的。生产实测: 批次 10823 状态 COMPLETED, 页面时间线写着「生产取消」。
+            //    ⚠️ javac 不报警 —— equals(Object) 收任何类型, 所以它能活到今天。
+            ended.put("event", ProductionBatchStatus.COMPLETED == batch.getStatus() ? "生产完成" : "生产取消");
             ended.put("status", batch.getStatus());
             timeline.add(ended);
         }

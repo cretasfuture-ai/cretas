@@ -700,9 +700,15 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
 
             double efficiencyScore = 0.0;
             if (!userBatches.isEmpty()) {
+                // 🔴 2026-08-28: 这里原本是两道「双保险」, 而【两道都坏】——
+                //      "COMPLETED".equals(batch.getStatus())                     → String.equals(Enum) 恒 false
+                //      ProductionBatchStatus.COMPLETED.name().equals(getStatus()) → .name() 是 String, 同样 equals(Enum) 恒 false
+                //    status 是 @Enumerated 的 ProductionBatchStatus 枚举, 不是 String。
+                //    ⇒ completedCount 【恒为 0】⇒ 人效评分里的「效率分」对所有有批次的人恒为 0。
+                //    ⚠️ 加第二道保险的人和写第一道的人犯了同一个错 —— 保险不是「多写一条」,
+                //       是「换一种会失败的方式」。⛔ 别再往这里加第三个 String 比较。
                 long completedCount = userBatches.stream()
-                        .filter(batch -> "COMPLETED".equals(batch.getStatus())
-                                || ProductionBatchStatus.COMPLETED.name().equals(batch.getStatus()))
+                        .filter(batch -> ProductionBatchStatus.COMPLETED == batch.getStatus())
                         .count();
                 efficiencyScore = ((double) completedCount / userBatches.size()) * 100;
             } else {
