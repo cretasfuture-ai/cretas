@@ -70,17 +70,9 @@ const BASELINE: ReadonlySet<string> = new Set([
   'views/calibration/CalibrationDetailView.vue :: session.targetMetrics',
   'views/calibration/CalibrationListView.vue :: statistics.averageImprovement',
   // 🔎 2026-08-28 视觉验收当场抓到的：KPI 显示「本月交易笔数 0」而列表里本月交易一大把
-  'views/finance/costs/index.vue :: overview.monthlyTransactionCount',
   // 📌 已登记挂账：详见该文件里那段注释（后端实体上没有这些列，等后端下发）
   'views/procurement/orders/detail.vue :: order.paymentDueDate',
   'views/procurement/orders/detail.vue :: order.unpaidAmount',
-  'views/restaurant/analytics/target-hierarchy.vue :: decomposeResult.monthTarget',
-  'views/restaurant/analytics/target-hierarchy.vue :: marginForecast.costDataSufficient',
-  'views/restaurant/analytics/target-hierarchy.vue :: marginPace.costDataSufficient',
-  'views/restaurant/analytics/target-hierarchy.vue :: marginPace.marginAmount',
-  'views/restaurant/analytics/target-hierarchy.vue :: marginPace.targetMargin',
-  'views/restaurant/analytics/target-hierarchy.vue :: paceAlert.dataMissing',
-  'views/restaurant/analytics/target-hierarchy.vue :: paceAlert.elapsedPct',
   'views/scheduling/index.vue :: dashboard.todaySchedules',
   'views/scheduling/realtime/index.vue :: dashboard.lineStats',
   'views/scheduling/realtime/index.vue :: dashboard.todaySchedules',
@@ -119,7 +111,20 @@ function backendIdentifiers(): { words: Set<string>; fileCount: number } {
   for (const [root, ext] of CORPORA) {
     for (const f of walk(root, ext)) {
       fileCount++;
-      for (const m of readFileSync(f, 'utf8').matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) words.add(m[0]);
+      for (const m of readFileSync(f, 'utf8').matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+        words.add(m[0]);
+        // 🔴 2026-08-28: Python 侧用 snake_case, 前端读的是 camelCase ——
+        //   `total_balance` 与 `totalBalance` 在这把尺子眼里是两个词, 于是
+        //   **7 条误报**全出在同一个 Python 后端的屏上(target-hierarchy.vue):
+        //   monthTarget / costDataSufficient / marginAmount / targetMargin /
+        //   dataMissing / elapsedPct / (costDataSufficient 两处)。
+        //   逐条核对过后端确实有对应的 snake_case 字段。
+        // ⇒ 把 snake_case 也归一成 camelCase 加进语料。基线因此 17 → 10。
+        if (m[0].includes('_')) {
+          const parts = m[0].split('_');
+          words.add(parts[0] + parts.slice(1).map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(''));
+        }
+      }
     }
   }
   return { words, fileCount };

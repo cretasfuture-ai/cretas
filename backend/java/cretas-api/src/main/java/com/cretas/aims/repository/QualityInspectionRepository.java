@@ -24,6 +24,19 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      * 根据工厂ID分页查找
      */
     Page<QualityInspection> findByFactoryId(String factoryId, Pageable pageable);
+
+    /**
+     * 按检测结果过滤 —— 「不良品处置」屏只要 FAIL / CONDITIONAL。
+     *
+     * <p>🔴 2026-08-28 逐屏走查: 那个屏本来就在传 {@code result=FAIL} 和
+     * {@code result=CONDITIONAL} 两次然后把结果拼起来, 而 controller **根本没声明**
+     * 这个参数 —— Spring 静默忽略未声明的请求参数 ⇒ 两次调用完全相同,
+     * 拿到同一份**全量**列表, 拼接后<b>每条出现两遍</b>, 且 PASS 的行也混了进来。</p>
+     */
+    Page<QualityInspection> findByFactoryIdAndResultIn(String factoryId, java.util.Collection<String> results, Pageable pageable);
+
+    Page<QualityInspection> findByFactoryIdAndProductionBatchIdAndResultIn(
+            String factoryId, Long productionBatchId, java.util.Collection<String> results, Pageable pageable);
      /**
      * 根据工厂ID和生产批次ID分页查找
       */

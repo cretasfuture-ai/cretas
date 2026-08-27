@@ -36,6 +36,11 @@ on:
       #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
       #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
+      # 🔴 2026-08-28: dispositionFiltersAtTheSource.source.spec.ts 读**这个** controller 的
+      # `getInspections` 签名, 钉住「前端传的 result, 后端得真的声明」——
+      # Spring 对未声明的请求参数静默忽略, 于是「待处置质检」屏显示全部质检记录且每条两遍。
+      # 后端单方面删掉那个 @RequestParam 而闸不跑 ⇒ 缺陷原样回来。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessingController.java'
       # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
       # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
       # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:
@@ -76,6 +81,11 @@ on:
       #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
       #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
+      # 🔴 2026-08-28: dispositionFiltersAtTheSource.source.spec.ts 读**这个** controller 的
+      # `getInspections` 签名, 钉住「前端传的 result, 后端得真的声明」——
+      # Spring 对未声明的请求参数静默忽略, 于是「待处置质检」屏显示全部质检记录且每条两遍。
+      # 后端单方面删掉那个 @RequestParam 而闸不跑 ⇒ 缺陷原样回来。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessingController.java'
       # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
       # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
       # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:

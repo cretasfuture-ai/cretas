@@ -453,7 +453,7 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
 
     private String buildNotes(ValidationContext vc, String userNotes) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Sprint 10 Loop 5 AI 1-click 创建. ");
+        sb.append("AI 一键创建. ");
         if (vc.salesOrderNumber != null) {
             sb.append("关联 SO=").append(vc.salesOrderNumber).append(". ");
         }

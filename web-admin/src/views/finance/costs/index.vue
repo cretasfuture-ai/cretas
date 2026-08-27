@@ -159,8 +159,12 @@ function getTransactionTypeTag(type: string) {
       </div>
       <div class="kpi-card count">
         <div class="kpi-label">本月交易笔数</div>
-        <div class="kpi-value">{{ overview.monthlyTransactionCount || 0 }}</div>
-        <div class="kpi-sub">客户: {{ overview.customerCount || 0 }} / 供应商: {{ overview.supplierCount || 0 }}</div>
+        <!-- ⛔ 不要 `|| 0`: 「后端没下发这个字段」和「本月一笔交易都没有」是两件事,
+             而 `undefined || 0` 把前者翻译成了后者。2026-08-28 实拍: 这里写着
+             「本月交易笔数 0」而正下方「交易记录 共 32 条」全在本月。
+             后端已补上这三个字段; 万一仍然缺, 显示「—」让人看得出是缺数据。 -->
+        <div class="kpi-value">{{ overview.monthlyTransactionCount ?? '—' }}</div>
+        <div class="kpi-sub">客户: {{ overview.customerCount ?? '—' }} / 供应商: {{ overview.supplierCount ?? '—' }}</div>
       </div>
     </div>
 
