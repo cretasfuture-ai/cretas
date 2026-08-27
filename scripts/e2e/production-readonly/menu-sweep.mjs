@@ -218,8 +218,15 @@ async function main() {
         const body = await page.locator('body').innerText().catch(() => '');
         entry.bodyTextLength = body.trim().length;
         // ⚠️ 判 403 用页面自己的文案, ⛔ 不用正文长度 —— 长度只是它的一个副作用。
-        entry.forbidden = /访问被拒绝|403/.test(body);
-        entry.notFound = !entry.forbidden && /页面不存在|404/.test(body);
+        // 🔴 2026-08-28 第三次同根因订正: 原来写成 /访问被拒绝|403/ 和 /页面不存在|404/,
+        //    裸的 "403"/"404" 会命中页面里【任何】数据 —— UUID、单号、金额都可能含这三个字符。
+        //    实测把 /sales/returns 误报成 NOT_FOUND, 而那一页好好的(7 单真实退货数据)。
+        // ⇒ 判据 = 【那个错误页专属的中文短语】 且 【正文短】(403/404 页只有 36~40 字符)。
+        //    ⛔ 不再匹配裸数字 —— 前两次(把 403/404 判成 BLANK)也是同一个毛病的变体:
+        //    拿宽松的 token 去匹配任意页面文本。
+        const looksLikeErrorPage = entry.bodyTextLength <= 80;
+        entry.forbidden = looksLikeErrorPage && /访问被拒绝/.test(body);
+        entry.notFound = looksLikeErrorPage && !entry.forbidden && /页面不存在/.test(body);
         entry.finalPath = new URL(page.url()).pathname;
         entry.screenshot = await screenshot(route.path);
       } catch (error) {
