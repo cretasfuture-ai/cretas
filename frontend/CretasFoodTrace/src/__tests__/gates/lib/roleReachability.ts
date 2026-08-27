@@ -679,7 +679,7 @@ function isUserArg(a: ts.Node): boolean {
   return !!p && USER_IDENTIFIERS.has(head) && !isShadowed(a, head);
 }
 
-interface FileCtx {
+export interface FileCtx {
   file: string;
   /** 文件内第一个同名 const/let 的初始化表达式（盲区 5）。 */
   consts: Map<string, ts.Expression>;
@@ -889,13 +889,13 @@ export interface ScreenRegistration {
   componentRef: ts.Expression | null;
 }
 
-interface ScopeKey {
+export interface ScopeKey {
   file: string;
   scope: string;
 }
 
 /** 找到文件里名为 `scope` 的组件函数体（函数声明或 const 箭头）。 */
-function findScopeBody(sf: ts.SourceFile, scope: string): ts.Node | null {
+export function findScopeBody(sf: ts.SourceFile, scope: string): ts.Node | null {
   let found: ts.Node | null = null;
   const visit = (n: ts.Node): void => {
     if (found) return;
@@ -917,7 +917,7 @@ function findScopeBody(sf: ts.SourceFile, scope: string): ts.Node | null {
 }
 
 /** 从 JSX 节点往上走，收集 `{cond && …}` / `{cond ? … : …}` 的守卫。 */
-function guardsAbove(node: ts.Node, stopAt: ts.Node, ctx: FileCtx): Expr {
+export function guardsAbove(node: ts.Node, stopAt: ts.Node, ctx: FileCtx): Expr {
   let acc: Expr | null = null;
   let child: ts.Node = node;
   let parent: ts.Node | undefined = node.parent;
