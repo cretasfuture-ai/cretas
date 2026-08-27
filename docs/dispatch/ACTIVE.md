@@ -5,6 +5,8 @@
 
 ## 在飞任务
 
+- `ML-LIUSHANMEN-LABEL-SUPPLEMENT-BUNDLE-R6-20260827` — `in-progress` — Owner: `/root` — Base SHA `73fb92087ab25ea14f69be7d4f8ef5d62d4afb03`，worktree `C:\Users\Steve\cretas-liushanmen-r6-release-20260827` / branch `codex/liushanmen-r6-model-bundle-deploy-20260827`。PR #212 已通过 CI 并合入，但发布前 check-only 发现 `deploy-label-qc-model.sh` 将模型绑定集合写死为旧 6 项，会拒绝已由 Python V8 runtime 严格验证的可选 `label_supplement`。本批只修正本地/远端 bundle 校验与负向测试，保持旧 6 项 bundle 兼容；未经新 PR、CI、exact-main 保护集回放不得部署，生产当前 bundle 不变。
+
 - `QA-WAREHOUSE-P0-ISOLATION-20260827` — `merged` — Owner: `claude-code/wh-p0-isolation` — 交接件 `HANDOFF-2026-08-25-warehouse-storage-layout-stocktake-book.md` §6 的 **P0 逐条收尾**。**已合入并部署 prod**（2026-08-27 16:44；jar mtime 16:43:56 早于进程启动 16:44:25；运行中的 jar 里三个标记逐个命中，阴性对照 `ZZ_NOT_A_REAL_MARKER`=0；`/api/mobile/health`=200；近 40 行日志 0 条 ERROR；⚠️ 部署前基线那三个标记**一个都不在**）。
 
   **P0.2 跨工厂隔离 — 不是缺陷**。`GET /warehouse/layout` 确实没有方法级 `@RequireRole`（交接件说对了），但 `JwtAuthInterceptor.validateFactoryAccess` 在拦截器层强制 `urlFactoryId.equals(tokenFactoryId)`。prod 实测四组：F006 token → F006 **200**（2223B 真数据）／→ LIUSHANMEN **403**／→ MOCK_REST **403**／无 token → **401**。403 的措辞正是 `sendForbiddenResponse` 那句 ⇒ **拦住它的确实是那道闸**。⚠️ 探针有意义的前提：`factory_super_admin` **不在** `PLATFORM_ADMIN_ROLES`（只有 super_admin/platform_admin/developer）。
@@ -84,6 +86,8 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+
+- `ML-LIUSHANMEN-LABEL-SUPPLEMENT-BUNDLE-R6-20260827`：仅 `scripts/deploy/deploy-label-qc-model.sh`、`scripts/tests/test-deploy-label-qc-model-*.sh`、`docs/dispatch/ACTIVE.md` 与当日归档。必须同时验证旧 6 项 bundle 通过、受约束的可选 `label_supplement` 通过，以及任意额外绑定、错误文件名、缺少/越界 `labelSupplementClasses`、错误 SHA 全部 fail closed；不得改 Python runtime、人工真值、保护集、原图、现有模型或生产。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
