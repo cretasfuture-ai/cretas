@@ -190,7 +190,7 @@ const businessRoutes: RouteRecordRaw[] = [
           module: 'procurement'
         }
       },
-      // Sprint 8 P4c — 质量主管工作台 (QualityChiefWorkdesk)
+      // 质检主管工作台 (QualityChiefWorkdesk)
       // 5 Tool: quality_check_summary + haccp_status_query + additive_compliance_check_quality
       // + customer_quality_standard + release_decision (WRITE + Preview 灵魂 Tool)
       // 质量主管李工程师场景 (F006): "这批卤猪蹄能放行吗?" — 1 页面综合判断 vs HJ 4 菜单
@@ -200,7 +200,7 @@ const businessRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
         meta: {
           requiresAuth: true,
-          title: '质量主管工作台',
+          title: '质检主管工作台',
           icon: 'Aim',
           module: 'quality'
         }
@@ -920,7 +920,7 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'crm',
         name: 'CRM',
         redirect: '/crm/opportunity',
-        meta: { requiresAuth: true, title: 'CRM 商机', icon: 'Aim', module: 'sales' },
+        meta: { requiresAuth: true, title: '会员与营销', icon: 'Aim', module: 'sales' },
         children: [
           {
             path: 'opportunity',
@@ -1144,7 +1144,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'invoices',
             name: 'FinanceInvoices',
             component: () => import('@/views/finance/invoices/list.vue'),
-            meta: { requiresAuth: true, title: '开票管理', module: 'finance' }
+            meta: { requiresAuth: true, title: '销售开票', module: 'finance' }
           },
           {
             path: 'purchase-invoices',
@@ -1505,7 +1505,7 @@ const businessRoutes: RouteRecordRaw[] = [
             // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
             //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
             //   GET /product-process-workflows 要 production。是路由声明错了。
-            meta: { requiresAuth: true, title: '产品信息管理', module: 'production' }
+            meta: { requiresAuth: true, title: 'SKU 管理', module: 'production' }
           },
           {
             path: 'features',

@@ -24,7 +24,7 @@
     <div class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
-        <span class="title-text">质检组长工作台</span>
+        <span class="title-text">质检主管工作台</span>
         
       </div>
       <div class="header-actions">
