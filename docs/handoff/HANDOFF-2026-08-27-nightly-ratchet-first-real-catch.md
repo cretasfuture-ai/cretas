@@ -1,4 +1,4 @@
-# 交接：夜间棘轮的第一次真实读数 —— 49 → 5，外加它抓到的第一批新增红（2026-08-27 夜）
+# 交接：夜间棘轮的第一次真实读数 —— 49 → 4，外加它抓到的第一批新增红（2026-08-27 夜）
 
 > 上一棒：`HANDOFF-2026-08-27-night-gates-and-red-burndown.md`（判据）
 > ＋ `HANDOFF-2026-08-27-java-red-burndown.md`（分类表）。
@@ -27,6 +27,20 @@ gh run list -R cretasfuture-ai/cretas --workflow java-full-nightly.yml -L 10 \
 ⚠️ 这不是形式检查：整套三态机制的价值全在「**每天自动跑一次**」上。
 靠人记得手工触发的棘轮，和没有棘轮的区别只是多了一个可以指责的对象。
 
+## 🔴 接手第二件事：一个需要 owner 拍板的二选一（不是一个测试的修法）
+
+基线剩下的 4 条全是 `FactoryConfigServiceImplReorderIT`，它要**真 PostgreSQL**。
+2026-08-27 逐条实测：**它当前在任何自动路径上都跑不了，也不可能绿**（详见
+`known-failing-tests.txt` 的注释）。⇒ 二选一：
+
+| | 做法 | 代价 |
+|---|---|---|
+| **(A)** | 在自建 runner 上装原生 PostgreSQL + 在 nightly 里加 bootstrap 步骤 | 给那台 Mac mini 装一个常驻服务（不需要服务容器，Docker 那条路已实测堵死） |
+| **(B)** | 维持现状：4 条留在基线里，等托管额度恢复后由 `full_audit` 覆盖 | 这 4 条在此期间**没有任何东西在守** |
+
+⛔ **在拍板之前不要加 `@Disabled` / `assumeTrue` 让它变绿** —— 那会让它在
+**真有 PG 的那条路上**也一起沉默（硬约束 4：把「没量到」折叠进「没问题」）。
+
 ---
 
 ## 上一棒那条判据的答案
@@ -42,10 +56,11 @@ JAVA_RATCHET 共跑 12007 个测试 · 红 13 · 基线 49
 ```
 
 - **44/49 转绿** ⇒ #197（`ddl-auto` `create-drop` → `create`）的 H2 schema 毒源诊断**成立**
-- **5 条仍红，而且不是那个根因**
+- **5 条仍红，而且不是那个根因**（其中 1 条本轮已查清并修掉，见「第二轮」；剩 **4** 条）
 - **8 条新增红** —— 棘轮建成以来抓到的**第一批真·回归**
 
-已落地：**#233**（修 8 条新增红）、**#234**（削基线 49 → 5）。
+已落地：**#233**（修 8 条新增红）、**#234**（削基线 49 → 5）、**#241**（fan-out 夹具）
+＋本 PR（削基线 5 → 4）。
 
 ### 收尾判据：合并后又跑了一次，rc=0
 
@@ -71,7 +86,7 @@ JAVA_RATCHET 共跑 12009 个测试 · 红 5 · 基线 5
 | 条数 | 类 | 真实报错 | 定性 |
 |---:|---|---|---|
 | 4 | `FactoryConfigServiceImplReorderIT` | `Connection to localhost:5432 refused` | 它要**真 PostgreSQL**（`cretas_r10_it_test`，由 `ci.yml` 的 pgvector 服务容器提供）。而 `java-full-nightly` 没有 `services:`，自建 macOS runner 也起不了服务容器 ⇒ **仪器缺一味环境**，不是产品缺陷 |
-| 1 | `SalesOrderFinanceApprovedFanOutIntegrationTest` | 断言 `:215`，轮询到超时，单条 10.17s | 第一条断言（shortage report 落库）**是通过的**，只有第二条（`production_plans` 有行）没等到。**待查** |
+| 1 | `SalesOrderFinanceApprovedFanOutIntegrationTest` | 断言 `:215`，轮询到超时，单条 10.17s | ✅ **已查清并修掉（#241）** —— 夹具把审核人 id 写死成 `1L`，外键炸在 `production_plans.created_by`。详见下面「第二轮」 |
 
 🔴 **两条不同的路通向同一个长相**：H2 毒源和「缺 PG」都表现为「本机绿 / CI 红」。
 上一棒把这个**长相**当成了根因的证据。
@@ -125,24 +140,43 @@ JAVA_RATCHET 共跑 12009 个测试 · 红 5 · 基线 5
 
 ---
 
-## ⛔ 剩下的 5 条：两个都别顺手做
+## 第二轮：5 → 4，(b) 那条查清了 —— 两个猜测都不对
 
-**(a) `FactoryConfigServiceImplReorderIT` ×4 —— 先决定「夜间跑批要不要有 PG」**
+`SalesOrderFinanceApprovedFanOutIntegrationTest` 上一段里被我挂成
+「真回归 还是 轮询窗口不够」。**两个都不是**（#241 已修，run `33090976753` 报
+「已修好 1 条（跑了而且通过）」）。
 
-⛔ **不要为了变绿加 `@Disabled` / `assumeTrue`。** 那会让它在**真有 PG 的那条路上**
-也一起沉默 —— 把「没量到」折叠进「没问题」（硬约束 4 的原话）。
-这是个**基础设施决定**，不是一个测试的修法：自建 macOS runner 起不了服务容器，
-要么给它装一个本机 PG，要么让夜间跑批显式排除需要 PG 的那一类并**把排除了什么打出来**。
+CI 日志里那条真实报错：
 
-**(b) `SalesOrderFinanceApprovedFanOutIntegrationTest` ×1 —— 先分清是哪一种**
+```
+Referential integrity constraint violation: "fksdgf6ekee4yaptmucrps183qt:
+  public.production_plans FOREIGN KEY(created_by) REFERENCES public.users(id) (CAST(1 AS BIGINT))"
+  at SupplyChainOrchestrator.createProductionPlanFromSO(SupplyChainOrchestrator.java:532)
+```
 
-它是 2026-08-01 doomed-tx incident 的回归测试。两种可能的下一步动作**相反**：
+夹具建了 operator 并拿到了它的 id（`customer`/`productType`/`salesOrder` 三处都用了），
+**唯独发事件时写死 `1L`**。而 `approvedBy` 会被写进 `production_plans.created_by`，
+那一列有外键指向 `users(id)` ⇒ **这个测试是否通过，取决于「此刻库里有没有 id=1 的用户」**：
+单独跑时 operator 自己就是第一条 user、恰好 id=1，蒙对；CI 全量跑到它时自增列早被推进
+（大量 `@Transactional` 测试插入后回滚，**行没了而自增列不退**），`users(1)` 不存在 ⇒ 外键炸
+⇒ PP 永远落不了库 ⇒ 第二条断言轮询满 10s 超时。
 
-- CI 上真的没落库 ⇒ 那是**真回归**，要查 `@Async` 联动事务
-- 只是轮询窗口在这台 runner 上不够 ⇒ 那是**仪器**问题
+### 🔴 这一条最值得记的是「我两次尝试都失败了，而失败方式各自都能骗人」
 
-⚠️ 别先入为主：第一条断言（shortage report 落库）**是通过的**，
-说明 fan-out 至少走到了一半。
+| # | 我做了什么 | 结果 | 如果不追下去会怎样 |
+|---|---|---|---|
+| 1 | 本机单独跑这个类想复现 | **绿的** | 会得出「本机复现不了 ⇒ 是 CI 环境问题」——方向反了 |
+| 2 | 用 `jdbcTemplate` 硬删占位用户，造 `users(1)` 缺席 | 打印出 `usersWithId1=1`，**删除根本没生效**（另开连接看不到未提交的行） | 会得出「造不出这个状态 ⇒ 假设不成立」 |
+| 3 | **变异**：把字面量换成必然不存在的 `999_999L` | 失败签名与 CI **逐字同源**（同一外键名 / 同一调用点 / 同一断言行号 / 同样是第一条过第二条超时） | ✅ |
+
+⇒ **「复现不出来」不等于「假设不对」**，尤其当复现动作本身可能失败时。
+第 2 次我是靠**把中间量打出来**（`usersWithId1=1`）才知道删除没生效 ——
+没有那个打印，它会长成「假设被证伪」。
+
+### 同族普查
+
+`grep -rn "new SalesOrderFinanceApprovedEvent("` 全仓 17 处：生产侧 1 处传真 `reviewerId`；
+测试侧 16 处里除本类外**全部是 Mockito 单测**（无真库 ⇒ 无外键）⇒ **真实风险面就是这 1 处**。
 
 ---
 
