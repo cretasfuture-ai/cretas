@@ -27,6 +27,7 @@ WHITE_MISSING_VERDICTS = {"MISSING_WHITE_LABEL", "BOTH_MISSING"}
 CLASS_WHITE_LABEL = 0
 SIDE_VIEW_MISSING = "side-view-missing"
 WHITE_CONFUSER_DISAGREEMENT = "white-confuser-disagreement"
+PRODUCTION_PRESERVATION_DISAGREEMENT = "production-preservation-disagreement"
 SOURCE_EDGE_MARGIN_RATIO = 0.005
 
 
@@ -152,6 +153,39 @@ def white_confuser_features(
     }
 
 
+def production_preservation_features(
+    production_tray: Any, candidate_tray: Any,
+) -> dict[str, Any] | None:
+    lost_classes: list[int] = []
+    if production_tray.has_white and not candidate_tray.has_white:
+        lost_classes.append(0)
+    if production_tray.has_color and not candidate_tray.has_color:
+        lost_classes.append(1)
+    if not lost_classes:
+        return None
+    confidences = {
+        class_id: max(
+            float(label.confidence)
+            for label in production_tray.labels
+            if int(label.class_id) == class_id
+        )
+        for class_id in lost_classes
+    }
+    return {
+        "tags": [
+            "candidate_lost_white" if class_id == 0 else "candidate_lost_color"
+            for class_id in lost_classes
+        ],
+        "score": round(sum(confidences.values()) * 10.0 + len(lost_classes), 6),
+        "lost_classes": lost_classes,
+        "production_confidence_by_class": {
+            str(class_id): round(confidence, 6) for class_id, confidence in confidences.items()
+        },
+        "production_verdict": production_tray.verdict,
+        "candidate_verdict": candidate_tray.verdict,
+    }
+
+
 def side_risk_features(tray: Any, trays: Sequence[Any], image_width: int, image_height: int) -> dict[str, Any]:
     width = max(1.0, tray.box[2] - tray.box[0])
     height = max(1.0, tray.box[3] - tray.box[1])
@@ -210,6 +244,76 @@ def manifest_source_ids(paths: Iterable[Path]) -> set[str]:
             if value:
                 result.add(str(value))
     return result
+
+
+def dataset_target_keys(paths: Iterable[Path]) -> set[tuple[str, int]]:
+    """Return source-prefix/tray pairs already present in immutable datasets.
+
+    Historical dataset rows do not consistently retain ``source_photo_id`` or
+    ``tray_index``.  Their stable crop IDs do retain both as
+    ``..._<photo-prefix>_tNN_...``; use that only for target-level queue
+    deduplication, never as human truth.
+    """
+    result: set[tuple[str, int]] = set()
+    for path in paths:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        payload = load_json(path)
+        if payload.get("protected_holdout_included") is not False:
+            raise RuntimeError(f"dataset manifest protection contract drift: {path}")
+        for row in payload.get("rows", []):
+            source_photo_id = str(row.get("source_photo_id") or "")
+            tray_index = row.get("tray_index")
+            if source_photo_id and tray_index is not None:
+                result.add((source_photo_id[:8].lower(), int(tray_index)))
+                continue
+            parts = str(row.get("crop_id") or "").split("_")
+            for index, part in enumerate(parts[:-1]):
+                next_part = parts[index + 1]
+                if (
+                    len(part) == 8
+                    and all(character in "0123456789abcdefABCDEF" for character in part)
+                    and len(next_part) >= 2
+                    and next_part[0] == "t"
+                    and next_part[1:].isdigit()
+                ):
+                    result.add((part.lower(), int(next_part[1:])))
+                    break
+    return result
+
+
+def refine_plan(args: argparse.Namespace) -> dict[str, Any]:
+    plan = load_json(args.plan)
+    rows = plan.get("rows") or []
+    if plan.get("version") != "vision-lab-label-side-view-preflight-v1" or plan.get("status") != "ready":
+        raise RuntimeError("label-side-view preflight is not ready")
+    if stable_digest(plan_identity(rows)) != plan.get("candidate_digest"):
+        raise RuntimeError("label-side-view preflight candidate digest drift")
+    existing_targets = dataset_target_keys(args.dataset_manifest)
+    kept = [
+        row for row in rows
+        if (str(row["source_photo_id"])[:8].lower(), int(row["tray_index"])) not in existing_targets
+    ]
+    refined = dict(plan)
+    refined.update({
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "refined_from": str(args.plan.resolve()),
+        "refined_from_sha256": sha256_file(args.plan),
+        "existing_dataset_manifests": [
+            {"path": str(path.resolve()), "sha256": sha256_file(path)}
+            for path in args.dataset_manifest
+        ],
+        "excluded_existing_dataset_targets": len(rows) - len(kept),
+        "queue_count": len(kept),
+        "candidate_photo_count": len({row["source_photo_id"] for row in kept}),
+        "candidate_task_count": len({row["source_task_id"] for row in kept}),
+        "sku_counts": dict(Counter(row["sku_code"] for row in kept)),
+        "candidate_digest": stable_digest(plan_identity(kept)),
+        "rows": kept,
+        "queue_created": False,
+    })
+    write_json(args.output, refined)
+    return refined
 
 
 def protected_records(path: Path) -> tuple[set[str], set[str], list[str]]:
@@ -289,9 +393,11 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("production tray model hash drift")
     if sha256_file(args.label).lower() != args.label_sha256.lower():
         raise RuntimeError("production label model hash drift")
-    if args.selection_mode == WHITE_CONFUSER_DISAGREEMENT:
+    if args.selection_mode in {
+        WHITE_CONFUSER_DISAGREEMENT, PRODUCTION_PRESERVATION_DISAGREEMENT,
+    }:
         if args.candidate_label is None or not args.candidate_label_sha256:
-            raise RuntimeError("white-confuser disagreement requires a hash-bound candidate label")
+            raise RuntimeError("candidate disagreement requires a hash-bound candidate label")
         if sha256_file(args.candidate_label).lower() != args.candidate_label_sha256.lower():
             raise RuntimeError("candidate label model hash drift")
     holdout_ids, holdout_hashes, holdout_phashes = protected_records(args.protected_holdout)
@@ -317,7 +423,9 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
         if not models.available:
             raise RuntimeError(models.load_error or "production models unavailable")
         candidate_models = None
-        if args.selection_mode == WHITE_CONFUSER_DISAGREEMENT:
+        if args.selection_mode in {
+            WHITE_CONFUSER_DISAGREEMENT, PRODUCTION_PRESERVATION_DISAGREEMENT,
+        }:
             candidate_dir = model_dir / "candidate"
             candidate_dir.mkdir()
             shutil.copy2(args.tray, candidate_dir / "tray.onnx")
@@ -369,7 +477,7 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
                         exclusions["not_side_risk"] += 1
                         continue
                     ranked_trays.append((tray, features["tags"], features["score"], features))
-            else:
+            elif args.selection_mode == WHITE_CONFUSER_DISAGREEMENT:
                 assert candidate_models is not None
                 candidate_screening = screen_image(frame, candidate_models, params)
                 for candidate_tray in candidate_screening.trays:
@@ -394,6 +502,24 @@ def scan_plan(args: argparse.Namespace) -> dict[str, Any]:
                     features["candidate_verdict"] = candidate_tray.verdict
                     ranked_trays.append((
                         candidate_tray, features["tags"], features["score"], features
+                    ))
+            else:
+                assert candidate_models is not None
+                candidate_screening = screen_image(frame, candidate_models, params)
+                for production_tray in screening.trays:
+                    candidate_tray, tray_iou = match_tray(
+                        production_tray, candidate_screening.trays, args.minimum_tray_iou
+                    )
+                    if candidate_tray is None:
+                        exclusions["candidate_tray_unmatched"] += 1
+                        continue
+                    features = production_preservation_features(production_tray, candidate_tray)
+                    if features is None:
+                        exclusions["candidate_preserved_production_labels"] += 1
+                        continue
+                    features["tray_match_iou"] = round(tray_iou, 6)
+                    ranked_trays.append((
+                        production_tray, features["tags"], features["score"], features
                     ))
             photo_count = 0
             for tray, selection_tags, selection_score, features in ranked_trays:
@@ -568,7 +694,10 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
     if plan.get("protected_holdout_included") or plan.get("existing_label_sources_included"):
         raise RuntimeError("label-side-view preflight protection flags are unsafe")
     selection_mode = plan.get("selection_mode") or SIDE_VIEW_MISSING
-    if selection_mode not in {SIDE_VIEW_MISSING, WHITE_CONFUSER_DISAGREEMENT}:
+    if selection_mode not in {
+        SIDE_VIEW_MISSING, WHITE_CONFUSER_DISAGREEMENT,
+        PRODUCTION_PRESERVATION_DISAGREEMENT,
+    }:
         raise RuntimeError(f"unsupported label queue selection mode: {selection_mode}")
     stamp = dt.datetime.fromisoformat(plan["created_at"]).strftime("%Y%m%dT%H%M%SZ")
     queue = args.output_root / f"label-side-view-active-{stamp}"
@@ -605,7 +734,12 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
             "source_task_id": source["source_task_id"],
             "source_sha256": source["source_sha256"],
             "sku_code": source["sku_code"],
-            "angle": "white_confuser_risk" if selection_mode == WHITE_CONFUSER_DISAGREEMENT else "side_view_or_stacked_risk",
+            "angle": (
+                "white_confuser_risk" if selection_mode == WHITE_CONFUSER_DISAGREEMENT
+                else "production_preservation_risk"
+                if selection_mode == PRODUCTION_PRESERVATION_DISAGREEMENT
+                else "side_view_or_stacked_risk"
+            ),
             "selection_mode": selection_mode,
             "selection_tags": source["selection_tags"],
             "selection_score": source["selection_score"],
@@ -624,6 +758,8 @@ def build_queue(args: argparse.Namespace) -> dict[str, Any]:
         "purpose": (
             "human review of white-like confusers amplified by a rejected ranking candidate"
             if selection_mode == WHITE_CONFUSER_DISAGREEMENT
+            else "human review of nonprotected labels lost by a rejected ranking candidate"
+            if selection_mode == PRODUCTION_PRESERVATION_DISAGREEMENT
             else "human review of fresh side-view, oblique, or stacked white-label detector misses"
         ),
         "selection_mode": selection_mode,
@@ -696,7 +832,10 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--label-sha256", required=True)
     plan.add_argument(
         "--selection-mode",
-        choices=(SIDE_VIEW_MISSING, WHITE_CONFUSER_DISAGREEMENT),
+        choices=(
+            SIDE_VIEW_MISSING, WHITE_CONFUSER_DISAGREEMENT,
+            PRODUCTION_PRESERVATION_DISAGREEMENT,
+        ),
         default=SIDE_VIEW_MISSING,
     )
     plan.add_argument("--candidate-label", type=Path)
@@ -714,6 +853,10 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--minimum-label-iou", type=float, default=0.30)
     plan.add_argument("--minimum-candidate-white-confidence", type=float, default=0.35)
     plan.add_argument("--minimum-white-confidence-delta", type=float, default=0.05)
+    refine = subparsers.add_parser("refine")
+    refine.add_argument("--plan", required=True, type=Path)
+    refine.add_argument("--dataset-manifest", action="append", required=True, type=Path)
+    refine.add_argument("--output", required=True, type=Path)
     build = subparsers.add_parser("build")
     build.add_argument("--plan", required=True, type=Path)
     build.add_argument("--output-root", required=True, type=Path)
@@ -725,7 +868,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    result = scan_plan(args) if args.command == "plan" else build_queue(args)
+    if args.command == "plan":
+        result = scan_plan(args)
+    elif args.command == "refine":
+        result = refine_plan(args)
+    else:
+        result = build_queue(args)
     summary = {
         "status": result.get("status", result.get("stage")),
         "queue_count": result.get("queue_count", 0),

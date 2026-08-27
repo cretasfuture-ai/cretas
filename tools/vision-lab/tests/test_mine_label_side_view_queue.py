@@ -49,6 +49,41 @@ class LabelSideViewQueueTests(unittest.TestCase):
             second.write_text(json.dumps({"rows": [{"source_photo_id": "p2"}]}), encoding="utf-8")
             self.assertEqual(module.manifest_source_ids([first, second]), {"p1", "p2"})
 
+    def test_refine_plan_excludes_only_existing_dataset_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan, _ = self._plan(root)
+            payload = module.load_json(plan)
+            payload["rows"][0]["source_photo_id"] = "abcdef12-source"
+            second = dict(payload["rows"][0])
+            second.update({"source_photo_id": "deadbeef-source", "source_task_id": "task-other", "tray_index": 4})
+            payload["rows"].append(second)
+            payload["candidate_digest"] = module.stable_digest(module.plan_identity(payload["rows"]))
+            module.write_json(plan, payload)
+            dataset = root / "dataset.json"
+            module.write_json(dataset, {
+                "protected_holdout_included": False,
+                "rows": [{"crop_id": "al_abcdef12_t02_001"}],
+            })
+            output = root / "refined.json"
+            refined = module.refine_plan(argparse.Namespace(
+                plan=plan, dataset_manifest=[dataset], output=output,
+            ))
+            self.assertEqual(refined["queue_count"], 1)
+            self.assertEqual(refined["rows"][0]["source_photo_id"], "deadbeef-source")
+            self.assertEqual(refined["excluded_existing_dataset_targets"], 1)
+            self.assertEqual(
+                refined["candidate_digest"],
+                module.stable_digest(module.plan_identity(refined["rows"])),
+            )
+
+    def test_dataset_target_keys_rejects_protected_or_unbound_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = Path(temporary) / "unsafe.json"
+            module.write_json(manifest, {"rows": []})
+            with self.assertRaisesRegex(RuntimeError, "protection contract drift"):
+                module.dataset_target_keys([manifest])
+
     def test_white_confuser_ranks_amplified_matched_white_box(self):
         production = SimpleNamespace(labels=[self._label(0, 0.72, [10, 10, 40, 40])])
         candidate = SimpleNamespace(labels=[self._label(0, 0.81, [11, 10, 41, 40])])
@@ -58,6 +93,25 @@ class LabelSideViewQueueTests(unittest.TestCase):
         self.assertEqual(result["tags"], ["candidate_white_amplified"])
         self.assertAlmostEqual(result["white_confidence_delta"], 0.09)
         self.assertGreater(result["matched_white_iou"], 0.9)
+
+    def test_production_preservation_finds_candidate_lost_classes(self):
+        production = SimpleNamespace(
+            has_white=True, has_color=True, verdict="CLEAR",
+            labels=[self._label(0, 0.81, [1, 1, 2, 2]), self._label(1, 0.73, [2, 2, 3, 3])],
+        )
+        candidate = SimpleNamespace(
+            has_white=True, has_color=False, verdict="MISSING_COLOR_LABEL", labels=[],
+        )
+        result = module.production_preservation_features(production, candidate)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["tags"], ["candidate_lost_color"])
+        self.assertEqual(result["lost_classes"], [1])
+
+    def test_production_preservation_ignores_equal_presence(self):
+        production = SimpleNamespace(has_white=True, has_color=True, verdict="CLEAR", labels=[])
+        candidate = SimpleNamespace(has_white=True, has_color=True, verdict="CLEAR", labels=[])
+        self.assertIsNone(module.production_preservation_features(production, candidate))
 
     def test_white_confuser_ranks_new_unmatched_white_box(self):
         production = SimpleNamespace(labels=[self._label(0, 0.80, [80, 80, 100, 100])])
