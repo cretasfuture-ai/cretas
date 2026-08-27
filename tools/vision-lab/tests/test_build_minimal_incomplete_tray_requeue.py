@@ -28,3 +28,8 @@ def test_reconstruction_area_ratio_requires_material_expansion():
     target = [0, 0, 100, 100]
     assert MODULE.area([0, 0, 119, 100]) / MODULE.area(target) < MODULE.MIN_RECONSTRUCTION_AREA_RATIO
     assert MODULE.area([0, 0, 120, 100]) / MODULE.area(target) >= MODULE.MIN_RECONSTRUCTION_AREA_RATIO
+
+
+def test_partial_detector_can_be_retained_as_locator_without_becoming_truth():
+    locator = MODULE.box_in_crop([400, 300, 600, 400], [150, 50, 850, 650])
+    assert locator == [0.357143, 0.416667, 0.642857, 0.583333]

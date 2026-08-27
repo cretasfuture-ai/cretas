@@ -160,8 +160,12 @@ def build(
         derivative = output / "images" / f"{crop_id}.jpg"
         image.crop(tuple(crop)).save(derivative, "JPEG", quality=95, subsampling=0)
 
-        guide = None
-        guide_source = "human_t_key_required_detector_could_not_reconstruct_complete_tray"
+        # The annotator renders an unconfirmed manifest guide only as a centre
+        # crosshair.  Keep the partial detector box for ownership/location even
+        # when it is unsafe as a full-tray reconstruction; it is never copied to
+        # the human target tray field or admitted as ground truth.
+        guide = box_in_crop(target, crop)
+        guide_source = "partial_detector_locator_only_human_t_key_required"
         if ratio >= MIN_RECONSTRUCTION_AREA_RATIO:
             guide = box_in_crop(reconstructed, crop)
             guide_source = "supplemental_reconstruction_candidate_requires_human_confirmation"
