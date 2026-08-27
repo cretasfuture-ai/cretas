@@ -165,6 +165,51 @@ public boolean allowsSelfApproval(String factoryId,
 - 销售单 / 调拨单：**从无到有**（原本无条件禁止）
 - 六膳门 `SO-20260801-0001` 因 ① 和 ② 同时成立而立即可自审
 
+---
+
+#### 🔴 2026-08-27 修订：条件 ② 收窄（上面那段代码已过期）
+
+上面 ② 写的是 `FACTORY_SUPER_ADMIN.equals(actorRole)` —— **无条件**。
+本节 §5 风险表当时就登记过它「削弱该角色单据的双人复核」。**那个风险兑现了。**
+
+**生产实测（2026-08-27）**：
+
+```
+F006       调拨 9 单(存活), 已批准 6 单, 6/6 是 f006_admin(1309) 自己批自己
+LIUSHANMEN 调拨 1 单, 同样自审 (1638 -> 1638)
+```
+
+⚠️ LIUSHANMEN 那一单是**阳性对照**：它**配了并发布了** `INVENTORY_TRANSFER_APPROVAL`，
+**照样自审** ⇒ 「没配审批流」不是成因，光配置也改变不了任何行为。
+成因就是条件 ② 的无条件性。
+
+**收窄后**：
+
+```java
+return isExplicitCurrentNodeApprover(factoryId, instance, actorId)      // ① 不变
+    || isSoleEligibleFactorySuperAdmin(factoryId, instance,             // ② 加了前提
+                                       actorId, actorRole);
+```
+
+② 现在要求：actor 是超管 **且** 本厂再没有第二个活跃账号的角色落在当前节点的
+`approverRoles` 里。
+
+- 「够格」复用**审批引擎自己那条判据**（`WorkflowEngineServiceImpl#canTransition` 第 4 条），
+  ⛔ 没有另写一套 —— 两份判据一定会漂。
+- **读不到节点角色时一律放行**（沿用收窄前行为）。绝大多数工厂没配审批流，
+  在那里改成拒绝就会重现本节记的那个事故：
+  「某工厂一个多月没走通过一次调拨审批，调拨单全部卡在草稿」。
+  ⇒ 收窄**只在配了审批流的工厂上生效**。
+
+**⚠️ 配置者必读**：只把节点配成 `approverRoles=[factory_super_admin]`
+**不足以**实现职责分离 —— 若本厂只有一个活跃超管（F006 实测：9 个里只有 1309 是活的），
+够格的人就是发起人自己，例外照样成立。要真正分离，节点必须授权给
+**本厂另有活跃账号**的角色。
+
+**⚠️ 另有一处超管无条件放行未动**：`WorkflowEngineServiceImpl#canTransition` 第 1 条。
+它回答「这个人能不能操作」，与「发起人能不能审自己」不是同一个问题，本次有意不碰。
+📌 登记于此，免得以为超管特权已经收干净了。
+
 ### B. 待办展示（后端 DTO + 前端）
 
 **后端**
