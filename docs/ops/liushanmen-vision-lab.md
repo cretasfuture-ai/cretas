@@ -601,6 +601,12 @@ B:\anaconda3\python.exe tools\vision-lab\build_minimal_incomplete_tray_requeue.p
   --output D:\CretasVisionLab\queues\<immutable-full-source-requeue>
 ```
 
+若人工审计证明原始定位框本身横跨多个物理托盘，使用重复的
+`--exclude-ambiguous-crop-id <crop-id>` 生成新的不可变队列。构建器要求每个 ID 都精确命中本轮已审核的
+`incomplete_tray` 项，并在 manifest 中记录排除 ID、数量和固定原因；禁止改写旧队列或让操作员猜目标。
+若操作员已经完成其他项目，追加 `--carry-reviewed-from <previous-requeue>`；只有源 minimal manifest 哈希、
+新旧衍生图片 SHA 和 crop ID 全部一致时才逐字节携带已审核 sidecar，并在新 manifest 记录携带数量。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。

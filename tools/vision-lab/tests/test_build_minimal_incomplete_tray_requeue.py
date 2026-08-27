@@ -49,3 +49,16 @@ def test_center_stable_reconstruction_remains_eligible_for_review_crop():
     target = [100, 100, 300, 200]
     expanded = [80, 90, 320, 210]
     assert MODULE.center_shift_ratio(expanded, target) == 0
+
+
+def test_ambiguous_locator_exclusions_must_match_reviewed_incomplete_rows():
+    try:
+        MODULE.validate_requested_exclusions({"crop-a", "crop-b"}, {"crop-a"})
+    except RuntimeError as error:
+        assert "crop-b" in str(error)
+    else:
+        raise AssertionError("expected unmatched ambiguous locator exclusion failure")
+
+
+def test_all_matched_ambiguous_locator_exclusions_are_accepted():
+    MODULE.validate_requested_exclusions({"crop-a"}, {"crop-a"})

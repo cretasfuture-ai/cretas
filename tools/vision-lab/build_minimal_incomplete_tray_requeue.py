@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -95,9 +96,20 @@ def box_in_crop(box: Sequence[float], crop: Sequence[int]) -> list[float]:
     return [round(value, 6) for value in values]
 
 
+def validate_requested_exclusions(requested: set[str], matched: set[str]) -> None:
+    unmatched = requested - matched
+    if unmatched:
+        raise RuntimeError(
+            "ambiguous locator exclusions did not match reviewed incomplete crops: "
+            + ", ".join(sorted(unmatched))
+        )
+
+
 def build(
     source_queue: Path, database: Path, bundle: Path, repo_root: Path,
     output: Path, annotator_url: str, threshold: float = 0.15,
+    exclude_ambiguous_crop_ids: Sequence[str] = (),
+    carry_reviewed_from: Path | None = None,
 ) -> dict[str, Any]:
     if output.exists():
         raise FileExistsError(f"refusing to overwrite requeue: {output}")
@@ -108,6 +120,8 @@ def build(
     if manifest.get("preannotations_are_not_ground_truth") is not True:
         raise RuntimeError("source queue preannotation contract is missing")
 
+    requested_exclusions = {str(value) for value in exclude_ambiguous_crop_ids}
+    matched_exclusions: set[str] = set()
     selected: list[tuple[dict[str, Any], Path]] = []
     for row in manifest.get("rows") or []:
         annotation_path = source_queue / "annotations-human" / f"{row['crop_id']}.json"
@@ -122,9 +136,29 @@ def build(
                 or annotation.get("review_round_action") != "REQUEUE_AFTER_TRAY_REDETECTION"
             ):
                 raise RuntimeError(f"incomplete-tray safety fields drifted: {row['crop_id']}")
+            if str(row["crop_id"]) in requested_exclusions:
+                matched_exclusions.add(str(row["crop_id"]))
+                continue
             selected.append((row, annotation_path))
+    validate_requested_exclusions(requested_exclusions, matched_exclusions)
     if not selected:
         raise RuntimeError("source queue has no incomplete trays to requeue")
+
+    carried_reviewed: dict[str, tuple[Path, dict[str, Any]]] = {}
+    if carry_reviewed_from is not None:
+        carry_manifest = load_json(carry_reviewed_from / "manifest.json")
+        if carry_manifest.get("source_queue_manifest_sha256") != sha256_file(manifest_path):
+            raise RuntimeError("review carry queue does not match source minimal queue")
+        carry_rows = {
+            str(row["crop_id"]): row for row in carry_manifest.get("rows") or []
+        }
+        for crop_id, carry_row in carry_rows.items():
+            annotation_path = carry_reviewed_from / "annotations-human" / f"{crop_id}.json"
+            if not annotation_path.is_file():
+                continue
+            annotation = load_json(annotation_path)
+            if annotation.get("reviewed") is True:
+                carried_reviewed[crop_id] = (annotation_path, carry_row)
 
     sys.path.insert(0, str((repo_root / "backend" / "python").resolve()))
     from label_qc.services.v8_pipeline import LabelQcV8Models
@@ -186,6 +220,7 @@ def build(
         crop_id = f"{row['crop_id']}_full_r02"
         derivative = output / "images" / f"{crop_id}.jpg"
         image.crop(tuple(crop)).save(derivative, "JPEG", quality=95, subsampling=0)
+        derivative_sha = sha256_file(derivative)
 
         # The annotator renders an unconfirmed manifest guide only as a centre
         # crosshair.  Keep the partial detector box for ownership/location even
@@ -204,10 +239,19 @@ def build(
             "is_ground_truth": False,
             "boxes": [],
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        carried = carried_reviewed.get(crop_id)
+        if carried is not None:
+            annotation_path, carry_row = carried
+            if str(carry_row.get("image_sha256") or "") != derivative_sha:
+                raise RuntimeError(f"review carry image drift: {crop_id}")
+            shutil.copy2(
+                annotation_path,
+                output / "annotations-human" / f"{crop_id}.json",
+            )
         output_rows.append({
             "crop_id": crop_id,
             "image": str(derivative.resolve()),
-            "image_sha256": sha256_file(derivative),
+            "image_sha256": derivative_sha,
             "source_photo_id": photo_id,
             "source_task_id": str(row["source_task_id"]),
             "source_image_sha256": source_info[1],
@@ -256,6 +300,18 @@ def build(
         "evaluation_or_production_use_allowed": False,
         "supplemental_reconstruction_count": reconstructed_count,
         "human_target_box_required_count": human_target_required_count,
+        "operator_ambiguous_locator_exclusions": sorted(matched_exclusions),
+        "operator_ambiguous_locator_exclusion_count": len(matched_exclusions),
+        "operator_ambiguous_locator_exclusion_reason": (
+            "original_target_detection_spans_multiple_physical_trays"
+        ),
+        "reviewed_annotations_carried_from": (
+            str(carry_reviewed_from.resolve()) if carry_reviewed_from else None
+        ),
+        "reviewed_annotations_carried": sum(
+            1 for row in output_rows if str(row["crop_id"]) in carried_reviewed
+        ),
+        "carried_annotations_bytes_preserved": True,
         "production_writes": 0,
         "originals_modified": 0,
         "rows": output_rows,
@@ -275,16 +331,24 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--annotator-url", default="http://127.0.0.1:8789/")
     parser.add_argument("--threshold", type=float, default=0.15)
+    parser.add_argument("--exclude-ambiguous-crop-id", action="append", default=[])
+    parser.add_argument("--carry-reviewed-from", type=Path)
     args = parser.parse_args()
     receipt = build(
         args.source_queue.resolve(), args.database.resolve(), args.bundle.resolve(),
         args.repo_root.resolve(), args.output.resolve(), args.annotator_url, args.threshold,
+        args.exclude_ambiguous_crop_id,
+        args.carry_reviewed_from.resolve() if args.carry_reviewed_from else None,
     )
     print(json.dumps({
         "queue": str(args.output.resolve()),
         "count": receipt["queue_count"],
         "supplemental_reconstruction_count": receipt["supplemental_reconstruction_count"],
         "human_target_box_required_count": receipt["human_target_box_required_count"],
+        "operator_ambiguous_locator_exclusion_count": receipt[
+            "operator_ambiguous_locator_exclusion_count"
+        ],
+        "reviewed_annotations_carried": receipt["reviewed_annotations_carried"],
         "annotator_url": receipt["annotator_url"],
         "production_writes": 0,
         "originals_modified": 0,
