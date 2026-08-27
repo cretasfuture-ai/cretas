@@ -66,6 +66,17 @@ export default function BossNavigator() {
         配了采购审批链的两家 (F006 / LIUSHANMEN) **从来没有过任何采购单**(含软删除计 0),
         而有采购单的三家一条链都没配。所以就算把角色加进 ROLE_TYPES, 这个 tab 依然是空的。
 
+        🔴 2026-08-27 订正: **上面那段「0 行」已经过期了** —— 同一条查询今天读到
+           approval_workflow_instances **44 行**(43 APPROVED / 1 REJECTED)、
+           approval_history **104 行**。审批链现在真的在跑。
+           ⚠️ 但**摘掉这个 tab 的决定不变**, 因为第一条理由还站着:
+           `MyTodoAggregatorServiceImpl.ROLE_TYPES` 至今**仍然只有**
+           finance_manager / cashier 两个 key(2026-08-27 复查), factory_super_admin
+           拿到的依旧是空集 ⇒ 对这个角色这个 tab 照样是空的。
+           ⇒ 要恢复它, 得先把角色加进 ROLE_TYPES **并**确认那个角色真有待办,
+             ⛔ 不是看到「审批有实例了」就接回来。
+           📌 本仓已有一条同形教训: 「某功能零实例」**有保质期**, 引用前当场重测那个 count。
+
         ⇒ 留一个永远空的入口比没有入口更糟, 先摘掉。
         OA 待办中心当前定位: **财务/出纳专用**(MainNavigator / FinanceNavigator 已按角色守住)。
         采购审批走 web-admin 或 OA 审批中心 (POST /workflow/instances/{id}/actions)。
