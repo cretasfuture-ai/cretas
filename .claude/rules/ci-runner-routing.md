@@ -22,10 +22,17 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 脚本一次改全部已接入的闸，并断言各处一致 —— ⛔ 不要手工改单个 `runs-on`
 （「共享结构只改一处」是本仓反复踩的坑）。
 
-已接入（5 个）：`secret-regression.yml` / `web-admin-gate.yml` / `rn-gate.yml`
-/ `python-gate.yml` / `jpa-gate-main.yml`。
-其余 10 个工作流写死 `ubuntu-latest` —— 在自建模式下它们**完全跑不起来**
-（`2~4 秒 / 0 个 step / 无 runner`），不是「暂时没覆盖」而是「没有信号」。
+已接入（9 个）：`secret-regression` / `web-admin-gate` / `rn-gate` / `python-gate`
+/ `jpa-gate-main` / `java-artifact` / `java-full-nightly` / `tool-inventory-gate` / `web-dist`。
+
+其余 6 个写死 `ubuntu-latest` —— 在自建模式下它们**完全跑不起来**
+（`2~4 秒 / 0 个 step / 无 runner`），不是「暂时没覆盖」而是「没有信号」：
+
+- `ci.yml` —— 卡在第 6 关（服务容器），见下。
+- `e2e-post-deploy` / `e2e-pr` / `tool-isolation-audit` —— 在 GitHub 上仍是
+  `disabled_manually`。⛔ 前两个会碰部署环境，**一 dispatch 就有副作用，验不了就不该接**。
+- `daily-integration` / `kb-drift-check` / `threshold-parity-check` —— 手动触发，
+  同样是「dispatch 一次就有副作用（开 PR 等）」，未接。
 
 ---
 
@@ -38,7 +45,7 @@ python scripts/ci/switch_ci_runner.py <目标> --adopt # 只在**新接入**一�
 | 1 | **缩进** | 脚本按**字面量**匹配 `    runs-on: ubuntu-latest`（4 空格）。缩进不同 → 静默不命中 |
 | 2 | **`actions/setup-python`** | 自建 macOS 上**必失败**（安装脚本把 `/Users/runner` 写死）⇒ 条件化 + 建 venv（homebrew 的 3.11+ 带 PEP 668，直接装会被拒） |
 | 3 | **Linux 专有命令** | `nproc` / `free` / `apt-get` / `stat -c` 在 macOS 上不存在。`jpa-gate` 就有一步 `nproc` + `free -h`，**只负责打印却能弄红整个 job** |
-| 4 | **缺工具** | `setup-java` 只装 JDK **不装 Maven** → `mvn: command not found`；homebrew 只给 `pip3`，**没有裸 `pip`** ⇒ 探测 + 兜底（`./mvnw` / `python -m pip`） |
+| 4 | **缺工具** | `setup-java` 只装 JDK **不装 Maven** → `mvn: command not found`；homebrew 只给 `pip3` / `python3`，**没有裸 `pip`、也没有裸 `python`** ⇒ 探测 + 兜底（`./mvnw` / `python3` / venv 里的 `python`）。⚠️ 扫的时候**不能只看 `uses:`** —— run 步骤里的裸解释器同样要查 |
 | 5 | **平台专用 wheel** | `torch==2.4.1+cpu` 的 `+cpu` 是 **Linux 专用**本地版本标识，macOS arm64 没有这个变体 |
 | 6 | 🔴 **`services:` / 容器** | 这台自建 runner **没有 Docker**。实测 `ci.yml` 一 dispatch 就 `##[error]docker: command not found`，job 在 **Set up job 阶段**死，**一个 step 都执行不到**（run 33037689686，9 秒） |
 
@@ -193,3 +200,32 @@ runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
 - ⚠️ `status=offline` 但 `busy=true` 是**正常的中间态**（正在重连），不要据此判定它挂了
 
 关联：`worktree-and-main-only-deploy.md`（部署只从 main）、`concurrent-edit-safety.md`（commit 范围保护）。
+
+---
+
+## 🔴 「跑批报 success 却什么都没产出」—— 三态判定的开放集合陷阱
+
+2026-08-27 实测（run 33041333971，`java-full-nightly` 第一次真跑）：
+
+```
+Run the full Java suite = success      ← 全量套件确实跑了（34 万行日志）
+Ratchet                 = success      ← 但它里面是 python: command not found, rc=127
+判定 rc=2 / 判定 rc=1    = skipped      ← 127 既不是 1 也不是 2
+job                     = success
+artifact                = 146 字节，known-failing-tests.txt 压根没产出
+```
+
+成因两层，**第二层才是要害**：
+
+1. 棘轮那一步调**裸 `python`**，macOS 上不存在（见第 4 关）。
+2. 🔴 判定**枚举**了 `rc == 2` 和 `rc == 1`，而退出码是个**开放集合** ——
+   任何第四种值都两条都不命中，静默落进「绿」。
+   ⚠️ 这跟三态机制想解决的问题**是同一个**：它把「没量到」从「没问题」里拆出来，
+   却给自己留了一条「没量到但看起来像没问题」的缝。
+
+▎**判据反过来写：不是 0 也不是 1，一律当成「没量到」。⛔ 不要枚举失败码。**
+
+⚠️ 抓住它的**不是那个绿**，是「artifact 只有 146 字节」——
+一个**设计上必然会变**的读数。这正是硬约束 9：
+验证「X 没发生」时必须同时有一个「Y 一定会发生」的读数。
+⛔ 只看 job 是不是绿，这次会得出「nightly 跑通了」这个完全相反的结论。
