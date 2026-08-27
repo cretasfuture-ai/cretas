@@ -13,7 +13,12 @@
   ⛔ **剩下 5 条各自的下一步已写进 `known-failing-tests.txt` 的注释**，两条都别顺手做：(a) 加 `@Disabled`/`assumeTrue` 会让它在**真有 PG 的那条路上**也一起沉默 —— 先决定夜间跑批要不要有 PG；(b) 「真回归」和「轮询窗口不够」的下一步动作相反，别先入为主。
 
   ⚠️ **下一棒第一件事**：看 2026-08-27 18:00Z（北京 8-28 02:00）那次 **`schedule` 事件有没有真的发生** —— 这个工作流至今**全部运行都是 `workflow_dispatch`**，cron 直到 #178（今天 05:00Z）才被从 `disabled_manually` 打开。靠人记得手工触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
-- `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `queued` — Owner: `未分配` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
+- `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `in-progress` — Owner: `claude-code/java-gate-widen` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。
+  **2026-08-27 认领并落方案**：PR 闸从窄选择器换成**全量 + 复用夜间那把棘轮**（`workflow_call`，判断只有一份，⛔ 不复制那 60 行）。分支 `codex/claude-java-gate-widen-20260827`。
+  ⚠️ **订正一句口径**：原文写「1206 个跑不到」——准确说是「**PR 上**拦不住」。夜间全量确实执行它们（12009 个测试），所以缺口是**反馈时机**，不是从不执行。当天的 8 条新增红正是这个形状：PR 全绿合入，红在 main 上挂了半天。
+  **上闸前先量了三件事**（⛔ 拿一次绿上闸就是形态 E）：① 耗时 窄闸 ~2min/1128 个测试 → 全量 **6:21~6:31**/12009；② 稳定性 —— 同一 commit 连跑两遍 + 另一 commit 一遍，三次读数**逐字相同**（`红 5 · 基线 5 · 没有新增红`，即红集恰好等于基线）；③ 换棘轮语义**不放松**原来那四类 —— 基线 5 条无一落在窄选择器里，且**另加一道闸钉住这个论据**（它是快照，会过期）。
+  ✅ 顺带修一个既存缺陷：`java-gate-pr.yml` **不在** `switch_ci_runner.py` 的 `WORKFLOWS` 里而自己硬写 `runs-on: [self-hosted, cretas]` ⇒ 9/1 切回托管时切不过去。改后它没有 `runs-on`，归被调用方（在清单里）统一管。
+  ⚠️ **9/1 切回托管时基线要重量**：那 4 条 `FactoryConfigServiceImplReorderIT` 要真 PostgreSQL，托管侧 `ci.yml` 有 pgvector 服务容器而自建 macOS runner 没有 ⇒ 失败集必然不同，⛔ 不能假设这份基线还成立。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
 
   **⚠️ 这不是理论问题 —— 2026-08-27 一天之内因它栽了两次**：① `MaterialConsumptionNotesAndPlanRefTest`（一条「现状钉住」型断言）**在 main 上红了很久没人看见**，它设计出来就是为了拦住那种改动，结果拦了个寂寞（本次 CI 日志 grep 该类名 0 命中）；② 我新写的两道闸类名不合规，**只会被编译不会被执行**，靠 `GateSelectorCoverageContractTest` 这道元闸才抓住。
 

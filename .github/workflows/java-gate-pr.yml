@@ -15,90 +15,59 @@ name: Java Gate
 #
 # ⇒ 「PR 是绿的」在本仓的 Java 侧此前**等于「密钥扫描通过」**，仅此而已。
 #
-# ## 为什么是窄选择器而不是全量
+# ## 2026-08-27：从窄选择器换成全量 + 棘轮
 #
-# 全量（8000+ 用例，约 12 分钟且吃内存）此前正是 `java-full-nightly.yml` 被
-# `disabled_manually` 的原因。上闸的前提是**它在目标环境已经是绿的**，
-# 否则是把「不可信的绿」换成「挡所有人的红」（web-admin-gate.yml 里有同样的措辞）。
+# 此前这里跑的是四类后缀（`*ContractTest` / `*RepositoryQueryValidationTest` /
+# `FlywayVersionUniquenessTest` / `*StartupGuardTest`），共 **229 个类 / 1128 个测试**。
+# 当天实测：测试类总数 **1435**，⇒ **1206 个类（84%）在 PR 上一次都不会被执行**。
 #
-# 这里选的四类是「坏了就一定坏在生产上」的那部分：
-#   · `*ContractTest`                    —— 跨模块契约/源码扫描型闸（本仓最大的一类）
-#   · `*RepositoryQueryValidationTest`   —— JPQL 启动期就会炸的那类
-#   · `FlywayVersionUniquenessTest`      —— 迁移撞号，git 一个字都不报，到启动才炸
-#   · `*StartupGuardTest`                —— 启动守卫
+# 🔴 这个缺口当天就开火了：#184 / #185 引入 8 条红，那 4 个被改坏的类
+# 一个都不在选择器里 ⇒ PR 全绿合入，红在 main 上挂了半天，靠夜间跑批才发现。
+#
+# ⛔ 修法不是「再往选择器里加几个后缀」—— 用类名兼任 CI 选择器本身就脆，
+#    名字是给人读的。⇒ 直接跑全量，用夜间那把棘轮判「有没有【新增】的红」。
+#
+# 当初不上全量的两条理由，当天实测都已不成立：
+#   · 「约 12 分钟且吃内存」   → 自建 runner 上 **6 分 31 秒**（12007 个测试）
+#   · 「前提是目标环境已经绿」 → 存量红 143 → **5**，且 5 条全在基线里
+# ⇒ 代价 ~2 分钟 → ~6.5 分钟；覆盖 1128 → 12007 个测试。
+#
+# ⚠️ 换成棘轮语义（只拦【新增】红）不放松原来那四类：当天实测基线里那 5 条
+#    **没有一条**落在窄选择器里。而这个论据是个快照，所以在被调用的工作流里
+#    配了一步闸钉着它（「基线不许吞掉窄闸原本覆盖的类」）。
+#
+# ⛔ 判断只有一份：本文件只负责【触发】，跑批与棘轮全在 java-full-nightly.yml，
+#    经 `workflow_call` 复用。把那 60 行 MAVEN_OPTS / argLine / 三态 rc 抄一份过来
+#    就是「同一个东西两份，它一定会漂」。
 #
 # ## 元判据（本仓 2026-08-27 新增，见 gateTriggerSurfaceCoversWhatItReads.spec.ts）
 #
 # **一道闸扫的东西，必须在它自己的触发面里。**
-# 这四类测试读的是 `backend/java/cretas-api/` 下的 main + test + resources，
+# 全量测试读的是 `backend/java/cretas-api/` 下的 main + test + resources，
 # 而 `paths:` 写的就是 `backend/java/cretas-api/**` —— 覆盖。
-# 另加本文件自身：改闸本身也要跑一次闸。
+# 另加本文件自身与被调用的 `java-full-nightly.yml`：改闸本身也要跑一次闸
+# （⚠️ 少了后者，改跑批逻辑的 PR 就跑不到这道闸 —— 那正是元判据要拦的形态）。
 
 on:
   pull_request:
     paths:
       - 'backend/java/cretas-api/**'
       - '.github/workflows/java-gate-pr.yml'
+      - '.github/workflows/java-full-nightly.yml'
+      - 'scripts/ci/java-test-ratchet.py'
 
-concurrency:
-  group: java-gate-pr-${{ github.ref }}
-  cancel-in-progress: true
+# ⚠️ 取消策略收在被调用的工作流里（它按 event 分组）。
+#    这里再套一层同名 group 只会让同一次 PR 被两套规则管，⛔ 去掉。
 
 jobs:
-  java-narrow-gate:
-    # 与 web-admin-gate / java-artifact 同一台自建 runner。
-    # ⚠️ 用具名标签 `cretas` 而不是裸 `self-hosted`：将来多一台 runner 时
-    #    裸标签会被任意机器接走。
-    runs-on: [self-hosted, cretas]
-    defaults:
-      run:
-        working-directory: backend/java/cretas-api
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'maven'
-
-      - name: Run narrow Java gate
-        run: |
-          set -e
-          # 用仓里自带的 maven wrapper（git 模式 100755，pin 了 Maven 3.9.6）。
-          #
-          # ⚠️ 这里**不**调 `scripts/ci/resolve-maven.sh`（#175 正在引入的共享脚本），
-          #    理由是依赖它会让本闸在 #175 合入前**根本跑不起来** ——
-          #    于是它的第一次 run 什么都验证不到，而「闸的第一次 run 就是它的验证」
-          #    正是本闸唯一的真实证据。
-          # ⛔ 这不构成形态 D：wrapper 是**直接调用**，没有任何解析逻辑被复制一份。
-          #    #175 那个脚本解决的是「mvn 还是 ./mvnw」的 if/else，本闸没有那个分支。
-          # ⇒ 若将来团队统一走 resolve-maven.sh，这里换成它是一行的事。
-          ./mvnw -B test \
-            -Dspring.profiles.active=test \
-            -Dtest='*ContractTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest' \
-            -DfailIfNoSpecifiedTests=false
-
-      # 🔴 阳性对照：确认这一轮**真的跑了测试**。
-      #    没有这一步，一个「选择器一个类都没匹配上」的 run 会安静地全绿 ——
-      #    那正是本仓反复吃亏的「读数是 0 还是根本没量」。
-      #    `-DfailIfNoSpecifiedTests=false` 让「零匹配」不报错，所以必须自己数。
-      - name: 阳性对照 —— 确认真的跑了测试而不是零匹配
-        if: always()
-        run: |
-          set -e
-          if [ ! -d target/surefire-reports ]; then
-            echo "✗ 没有 surefire-reports —— 这一轮一个测试都没跑，绿是假的"
-            exit 1
-          fi
-          # ⛔ 不用 `bc` 求和 —— 它不是每台机器都有（本机 Git Bash 上就没有）。
-          #    一道因为「求和工具不存在」而红的闸，红的是错误的原因。awk 到处都有。
-          RUN=$(grep -ho 'tests="[0-9]*"' target/surefire-reports/*.xml \
-                | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}')
-          echo "TESTS_RUN=$RUN"
-          # 建闸当天在 origin/main 上实测的量级；显著低于它说明选择器匹配面塌了。
-          if [ "${RUN:-0}" -lt 500 ]; then
-            echo "✗ 只跑了 ${RUN:-0} 个测试（建闸当天量级是 1000+）——"
-            echo "  选择器多半没匹配到东西，这次的绿不作数。"
-            exit 1
-          fi
+  # ⛔ 本文件只负责【触发】。跑批 + 棘轮的全部判断在 java-full-nightly.yml,
+  #    经 workflow_call 复用 —— 一份基线、一段判断、两个触发。
+  #
+  # ⚠️ check 名会显示成 `java-full-gate / full-suite`（不再是 java-narrow-gate）。
+  #    本仓当前套餐拿不到分支保护 / 必需检查（API 返 403），
+  #    所以改名不会卡住任何人合并 —— 2026-08-27 实测确认过才改的。
+  java-full-gate:
+    uses: ./.github/workflows/java-full-nightly.yml
+    # ⛔ 不传 write_baseline —— PR 永远不许写基线。
+    #    被调用方另有一道按 event 的硬否决，两道是【故意】重复的:
+    #    只靠「调用方不传」的保护, 换个调用方就没了。

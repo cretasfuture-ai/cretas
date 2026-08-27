@@ -13,8 +13,25 @@
 #
 #   ⇒ PR 上那个绿 = 编译并打包成功，⛔ 不是测试通过。
 #
-# ⛔ 它【不】拦 PR。它每晚跑一次，只回答一个问题：
-#    「今天有没有【新增】的红？」—— 已知的那些冻结在名单里，只许变少。
+# 它只回答一个问题：「有没有【新增】的红？」—— 已知的那些冻结在名单里，只许变少。
+#
+# 🔴 2026-08-27 起它【也】拦 PR（此前这里写的是「⛔ 它不拦 PR」）
+#
+#   改的理由是当天实测出来的：#184 / #185 引入的 8 条红从合并那天起就红在 main 上，
+#   而 PR 上没有任何东西会执行它们 —— 窄闸只跑 `*ContractTest` / `*StartupGuardTest` /
+#   `*RepositoryQueryValidationTest` ＋逐字列出的 `FlywayVersionUniquenessTest`，
+#   那 4 个被改坏的类**一个都不在里面**。夜间跑批抓到了，但那已经是半天之后。
+#
+#   当初不拦 PR 的理由是「全量 8000+ 用例、约 12 分钟且吃内存」，而
+#   「上闸的前提是它在目标环境已经是绿的」。**这两条现在都不成立了**：
+#     · 自建 runner 上实测 **6 分 31 秒**（run 33085335136，12007 个测试）
+#     · 存量红从 143 削到 **5**，且这 5 条全部在基线里
+#   ⇒ 代价从 ~2 分钟（窄闸）涨到 ~6.5 分钟，覆盖从 1128 个测试涨到 12007 个。
+#
+#   ⚠️ PR 与夜间共用**同一份**基线和**同一段**判断（`workflow_call`），
+#      ⛔ 不是各自复制一份 —— 那就是「同一个东西两份，它一定会漂」。
+#
+# ⛔ PR 触发的调用永远不许写基线，见下面 ratchet 那一步的双保险。
 #
 # 三态（与本仓硬约束 4 同源）
 #   rc=0  没有新增红（或基线尚未落地）
@@ -37,10 +54,19 @@ on:
         description: '用本次结果覆盖已知红名单（⛔ 只在确认新增红已修完后用）'
         type: boolean
         default: false
+  # PR 闸从这里调用（java-gate-pr.yml），⇒ 判断只有一份。
+  workflow_call:
+    inputs:
+      write_baseline:
+        type: boolean
+        default: false
 
+# ⚠️ PR 与夜间必须分组，⛔ 不能共用一个 group：
+#    共用会让所有 Java PR 和夜间跑批**全局串行**（2 台 runner 也只能跑 1 条）。
+#    PR 侧还要 cancel-in-progress —— 同一分支连推两次时，旧的那次结果已经没用了。
 concurrency:
-  group: java-full-nightly
-  cancel-in-progress: false
+  group: java-full-suite-${{ github.event_name == 'pull_request' && github.ref || 'nightly' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -116,10 +142,13 @@ jobs:
         # ⇒ 用 python3（托管 ubuntu 与 macOS 都有它, 裸 python 只有前者有）。
         run: |
           set +e
+          # ⛔ 双保险: PR 触发时永远不写基线。
+          #    第一道是调用方不传这个 input(默认 false), 第二道是这里按 event 硬否决 ——
+          #    一道「只靠调用方不传」的保护, 换个调用方就没了。
           python3 scripts/ci/java-test-ratchet.py \
             --reports backend/java/cretas-api/target/surefire-reports \
             --baseline backend/java/cretas-api/known-failing-tests.txt \
-            ${{ inputs.write_baseline && '--write-baseline' || '' }} \
+            ${{ (github.event_name != 'pull_request' && inputs.write_baseline) && '--write-baseline' || '' }} \
             | tee /tmp/ratchet.log
           rc=${PIPESTATUS[0]}
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
@@ -144,6 +173,38 @@ jobs:
       #    ⛔ 别再写成「rc == 2」—— 那是在枚举一个开放集合。
       # ⚠️ 两种失败【必须】用不同措辞 —— 否则「没量到」会被折叠进「没问题」，
       #    一个连编译都过不去的跑批会安静地天天绿，而它一个测试都没看过。
+      # 🔴 这一步守的是「本次改动为什么安全」那个论据本身。
+      #
+      #    2026-08-27 把 PR 闸从「窄选择器 + 任何失败都红」换成「全量 + 棘轮」时，
+      #    安全性的全部依据是一句实测：**当时基线里那 5 条，没有一条落在窄选择器里**
+      #    ⇒ 换成棘轮语义不放松任何一道原来拦得住的东西。
+      #
+      #    但那是一个**快照**。哪天有人把一个 `*ContractTest` 写进基线，
+      #    那句依据就悄悄失效了，而没有任何东西会喊 —— 窄闸原本会红的那一类，
+      #    从此被基线吞掉。⛔ 依据不能只写在 PR 描述里，要有东西钉着它。
+      - name: 基线不许吞掉窄闸原本覆盖的类
+        if: always()
+        run: |
+          set -e
+          BASELINE=backend/java/cretas-api/known-failing-tests.txt
+          if [ ! -f "$BASELINE" ]; then
+            echo "基线文件不存在 —— 跳过（首次落基线时是正常的）"; exit 0
+          fi
+          # 取每条 `pkg.Class[$Nested].method` 里的类名（剥掉 $Nested）
+          CLASSES=$(grep '^com\.' "$BASELINE" \
+                    | sed 's/.*\.\([A-Za-z0-9_$]*\)\.[A-Za-z0-9_]*$/\1/' \
+                    | sed 's/\$.*//' | sort -u)
+          BAD=$(echo "$CLASSES" | grep -E '(ContractTest|RepositoryQueryValidationTest|StartupGuardTest)$|^FlywayVersionUniquenessTest$' || true)
+          # 阳性对照: 这把尺子确实能认出窄选择器覆盖的类名, 否则「没命中」是假的
+          echo "AnythingContractTest" | grep -qE '(ContractTest|RepositoryQueryValidationTest|StartupGuardTest)$|^FlywayVersionUniquenessTest$' \
+            || { echo "✗ 阳性对照没过 —— 这一步的判据是坏的，本次读数作废"; exit 1; }
+          echo "基线里的类数: $(echo "$CLASSES" | grep -c . || true)"
+          if [ -n "$BAD" ]; then
+            echo "::error title=基线吞掉了窄闸原本覆盖的类::$BAD —— 这一类「坏了就一定坏在生产上」，⛔ 不许进基线，要修。"
+            exit 1
+          fi
+          echo "✓ 基线里没有窄选择器覆盖的类"
+
       - name: 判定 —— 不是 0 也不是 1，一律「没量到」
         if: ${{ steps.ratchet.outputs.rc != '0' && steps.ratchet.outputs.rc != '1' }}
         run: |
