@@ -153,8 +153,17 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     //   报数时口径要一起报（否则会被读成「删了 33 个屏」）。
     //   那 33 个屏文件一个都没删，只是不再被算成有人走得到。
     //   守新口径的闸：navigatorMountContextReachability.test.ts
-    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(357);
-    expect(s.screensExamined).toBeGreaterThanOrEqual(387);
+    // ✅ 2026-08-27 收紧回去 —— 报表接进 BossNavigator 之后覆盖面涨回来了：
+    //
+    //   reachableScreenFiles  364 → 381   (下限 357 → 373)
+    //   screensExamined       395 → 412   (下限 387 → 404)
+    //   branchesExamined      73  → 73    (下限 68 不动)
+    //
+    // 涨的 17 个正是 `screens/reports/*` 那一套 —— 上面记的那 33 个里
+    // 「17+2 来自 FAReportsTab」那一拨，它们现在从 BossNavigator 真的走得到了。
+    // ⛔ 下限只许往严了调；上一轮调低是因为口径变准，这一轮调高是因为覆盖面真的回来了。
+    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(373);
+    expect(s.screensExamined).toBeGreaterThanOrEqual(404);
     expect(s.branchesExamined).toBeGreaterThanOrEqual(68);
     // 三态都得有人 —— 全落进一态说明分类器退化了。
     expect(RESULT.vacuous.length).toBeGreaterThan(0);
