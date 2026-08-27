@@ -1,0 +1,40 @@
+# python-gate.yml 的**自建 runner 专用**排除清单。
+#
+# ⚠️ 与 `ci-gate-excludes.txt` 的区别: 那份是**欠账台账**(测试/代码真的欠着东西),
+#    这份是**机器缺件台账** —— 这些测试在托管 ubuntu 上是绿的, 只有落到自建
+#    macOS runner 时才跑不了。⛔ 两份不要混, 混了就分不清「谁欠的账」。
+#
+# 🔴 判据: 往这里加一条之前, 必须能说出**这台机器缺什么**。
+#    说不出来的, 它就属于另一份文件(或者根本不该被排除)。
+#
+# 只在 `runner.environment != 'github-hosted'` 时生效。额度恢复切回托管之后,
+# 这份清单一条都不起作用, 那 12 条会重新被跑到。
+#
+# 2026-08-27 首次接自建时实测(run 33033945972, python3.11, macOS arm64):
+#   9555 passed / 5 failed / 165 skipped / 7 errors
+#   12 条红全部是下面这两类, 没有一条是产品问题。
+#
+# 🔴 这份清单的**真实代价不是 12 条, 是 46 条** —— 排除是按**文件**粒度的:
+#   加上它之后 run 33034357584 是 `9509 passed`, 9555 - 9509 = 46。
+#   也就是说为了屏蔽 12 条红, 连带少跑了 34 条本来是绿的。
+#   ⚠️ 「排除了 12 条」是个会骗人的说法, 所以这里把两个数都写出来。
+#   ⇒ 这也是把粒度收细(改成 -k / --deselect 到方法级)的理由, 但那要先确认
+#     那 34 条不依赖同文件的 fixture —— 单独一件事, 不在本次范围内。
+
+# ── ① 需要一个真的 PostgreSQL (8 条) ────────────────────────────────
+# 实测: OSError: Connect call failed ('::1', 5432) / ('127.0.0.1', 5432)
+# 那台 Mac 上没有 postgres, 也没有 docker 起服务容器的前提。
+# ⇒ 要清掉这一条, 得在 runner 上装一个 postgres 并让它开机自启 —— 那是机器侧的活,
+#   不是这份 YAML 能解决的。
+tests/test_chat_session_service.py               # 全类 7 条, asyncpg 连 5432
+tests/test_chat_session_user_identity_postgres.py  # 1 条, 迁移幂等性, 同样要真库
+
+# ── ② 用了 GNU 专有的命令行选项 (4 条) ──────────────────────────────
+# 实测: grep: invalid option -- P
+# 被测脚本 `scripts/cron/time-phrase-backlog-daily.sh` 里用了 `grep -P`(PCRE),
+# BSD grep(macOS 自带) 没有这个选项。
+# ⛔ 刻意**不去改那个脚本**: 它是跑在 Linux 服务器上的 cron, 在它的目标环境里
+#   `grep -P` 是对的。为了 CI 可移植去动一个生产脚本, 是按猜测改线上行为。
+#   要清掉这一条, 正确做法是给 runner 装 GNU grep(`brew install grep`, 提供 ggrep)
+#   并让脚本按可用性挑 —— 同样是机器侧 + 脚本侧的活, 单独一件事。
+tests/test_time_phrase_backlog_gate.py           # 4 条, 全是同一个 grep -P

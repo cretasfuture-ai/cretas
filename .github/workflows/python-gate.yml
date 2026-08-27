@@ -94,37 +94,119 @@ concurrency:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
+    #    统一切换(一次改全部已接入的工作流并断言各处一致)。
+    #    见 `.claude/rules/ci-runner-routing.md`。
+    runs-on: [self-hosted, cretas]
     defaults:
       run:
         working-directory: backend/python
     steps:
       - uses: actions/checkout@v4
+
+      # setup-python 只在**托管** runner 上跑。自建 macOS runner 上它必失败:
+      # 它的 macOS 安装脚本把 `/Users/runner` 写死(托管 runner 的用户名就叫 runner),
+      # 而本机用户是 rex 且 /Users 不可写 -> `mkdir: /Users/runner: Permission denied`。
+      # (与 secret-regression.yml 里同一处理, 那边已实测过预置工具缓存不管用。)
       - uses: actions/setup-python@v5
+        if: runner.environment == 'github-hosted'
         with:
           python-version: '3.10'
           cache: 'pip'
           cache-dependency-path: backend/python/requirements.txt
-      - name: Install dependencies
+
+      # 🔴 自建 runner 上跑的**不是 3.10** —— 本文件顶部那句
+      #    「本机 py3.11 跑绿 ≠ CI py3.10 跑绿」在这里同样成立, 方向相反:
+      #    落到自建时这道闸测的是另一个小版本。
+      # ⇒ 所以这一步**把版本打出来**, 并只断言下限(≥3.10)。
+      #    ⛔ 不允许静默用一个更老的版本跑 —— 那样绿了也不算数。
+      # ⚠️ 自建只是额度耗尽时的兜底; 额度恢复切回托管, 版本就回到 3.10。
+      #    「这一轮的读数是在哪个解释器上量的」必须能从日志里读出来。
+      - name: Use system Python in a venv (self-hosted)
+        if: runner.environment != 'github-hosted'
+        # ⛔ 不往系统 Python 里装包, 而是**建 venv**, 两个理由:
+        #   1. homebrew 的 Python 3.11+ 带 PEP 668 标记, 直接 `pip install` 会被
+        #      拒成 `externally-managed-environment`。
+        #   2. 这台自建 runner 是**长期在跑的真机**, 往它的系统 Python 里装
+        #      一整份 requirements.txt 是在污染别人的机器。
+        # venv 建在 $RUNNER_TEMP 下, job 结束即随临时目录消失。
         run: |
-          pip install --upgrade pip
-          pip install --use-deprecated=legacy-resolver -r requirements.txt || pip install -r requirements.txt
+          set -e
+          for c in python3.10 python3.11 python3.12 python3; do
+            if command -v "$c" >/dev/null 2>&1; then
+              V=$("$c" -c 'import sys;print("%d.%d"%sys.version_info[:2])')
+              case "$V" in
+                3.1[0-9]|3.[2-9]*)
+                  echo "PYTHON_USED=$c ($V)  ⚠️ 托管上是 3.10"
+                  "$c" -m venv "$RUNNER_TEMP/venv"
+                  echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+                  exit 0
+                  ;;
+              esac
+            fi
+          done
+          echo "✗ 找不到 >=3.10 的 python —— 本闸不能在一个更老的解释器上假装绿"
+          exit 1
+      - name: Install dependencies
+        # ⚠️ 一律用 `python -m pip`, ⛔ 不要用裸 `pip`。
+        #    托管镜像里 setup-python 会同时放一个 `pip` 到 PATH 上, 自建的 macOS 上
+        #    homebrew 只给 `pip3.11` / `pip3`, **没有裸 `pip`** ——
+        #    2026-08-27 实测 `pip: command not found`, exit 127, 整个闸挂在装依赖这一步。
+        #    `python -m pip` 用的就是上一步选中的那个解释器, 两边都成立, 也不会
+        #    出现「pip 属于 A 解释器而代码跑在 B 解释器上」。
+        #
+        # 🔴 `torch==2.4.1+cpu` 的 `+cpu` 是 **Linux 专用**的本地版本标识, macOS arm64
+        #    上没有这个变体 —— 实测 `No matching distribution found for torch==2.4.1+cpu`,
+        #    而同一次报错列出的可用版本里 **plain 2.4.1 是有的**。
+        # ⇒ 自建上把 `+cpu` 剥掉: **torch 版本不变**(仍是 2.4.1), 只是换成该平台的 build。
+        #    ⛔ 不跳过 torch —— 闸覆盖的目录里 `smartbi/services/intent_classifier.py`
+        #      真的 import 它, 跳过等于悄悄缩小这道闸的覆盖面。
+        #    ⚠️ 剥掉哪几行会打进日志, 不做静默改写。
+        env:
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -e
+          REQ=requirements.txt
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then
+            echo "自建 runner: 剥掉 +cpu 本地版本标识, 涉及这些行:"
+            grep -n '+cpu' requirements.txt || echo "  (没有 +cpu 的行)"
+            REQ="$RUNNER_TEMP/requirements.selfhosted.txt"
+            sed 's/+cpu//g' requirements.txt > "$REQ"
+          fi
+          python -m pip install --upgrade pip
+          python -m pip install --use-deprecated=legacy-resolver -r "$REQ" || python -m pip install -r "$REQ"
           # ⚠️ flake8 是 `tests/test_no_undefined_names.py` 那道 **F821 窄闸**
           #    需要的。⛔ 这里**不跑**全量 flake8(见本文件顶部: 299 条存量债),
           #    只让那道闸能开火 —— 它 `--select=F821`, 全仓 0 条。
           # 🔴 不装的后果实测过: 闸的「新增违规」那条会 skip(长得像绿),
           #    只有阳性对照会红。**闸不跑 = 没有闸。**
-          pip install pytest pytest-asyncio pytest-timeout flake8
+          python -m pip install pytest pytest-asyncio pytest-timeout flake8
       - name: Run pytest
         # 没有 `|| true` —— 红就是红, 这是本 workflow 的全部意义。
         #
         # 排除清单在 `ci-gate-excludes.txt`, 每条带原因, 清一条删一条。
         # 放文件而不是堆在这里, 是为了让「还欠多少」一眼可数 (当前 29 个文件),
         # 而不是变成 YAML 里一长串没人读的 --ignore。
+        env:
+          RUNNER_ENV: ${{ runner.environment }}
         run: |
           EXCLUDES=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.txt \
             | sed 's/[[:space:]]*#.*$//' | sed 's/^/--ignore=/' | tr '\n' ' ')
           echo "排除 $(echo "$EXCLUDES" | wc -w) 个文件 (见 ci-gate-excludes.txt)"
+
+          # 🔴 自建 runner 上再叠一份**机器缺件**清单。
+          #    ⚠️ 与上面那份是两回事: 上面是欠账(测试/代码欠着东西, 两个 runner 上都欠),
+          #    这份是这台机器缺件(托管上是绿的)。⛔ 两份不许混, 混了就分不清谁欠的账。
+          #    2026-08-27 实测那 12 条: 8 条要真 PostgreSQL, 4 条撞 BSD grep 没有 -P。
+          # ⚠️ 少跑了多少条**必须打进日志** —— 「自建模式的绿」和「托管模式的绿」
+          #    不是同一个读数, 不写出来就会被当成同一个。
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then
+            SH=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.self-hosted.txt \
+              | sed 's/[[:space:]]*#.*$//' | sed 's/^/--ignore=/' | tr '\n' ' ')
+            echo "⚠️ 自建 runner: 额外排除 $(echo "$SH" | wc -w) 个文件 (见 ci-gate-excludes.self-hosted.txt)"
+            echo "   ⇒ 本次读数**不等于**托管上的读数。额度恢复切回托管后这份清单不生效。"
+            EXCLUDES="$EXCLUDES $SH"
+          fi
           pytest \
             tests/ \
             ota/tests \
