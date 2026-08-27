@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827` — `in-progress` — Owner: `codex/wh-approval-integrate-20260827` — Base SHA `04f0ecbb90f38400b78b4ee1969cd2ee3c6af558`。从旧分支只移植尚未进入 main 的仓储审批闭环修复 commit `b5f7093c12576cd1ede2f082e973c3e7a475eb6f`；`ef4023aff3bade63d605d46ff0883a62ed50bc0e` 已补丁等价进入 main，不重复移植；旧 dispatch commit `27736033b0210b876074cb6390d1e1da8762ce60` 不移植，由本条以当前真值取代。验收：真实 JPA Context `VoucherSequenceRepositoryQueryValidationTest`，源码闸 `VoucherSequenceSqlCastContractTest,StorageLocationIsNeverAHardcodedDescriptionTest`，仓储/审批 Java 目标测试，Web Vitest + `vue-tsc -b`，RN Jest + `tsc --noEmit`，PR 合入后仅从 clean exact `origin/main` 使用统一发布入口。
+- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827` — `review` — Owner: `codex/wh-approval-integrate-20260827` — Base SHA `04f0ecbb90f38400b78b4ee1969cd2ee3c6af558`。旧分支三个提交中，Java/Web/SQL 修复与温控假数据修复已补丁等价进入 main；最新 main 移植实测只剩 RN 首页栈缺失 `WHLocationManage` / `WHTempMonitor` 注册，以及尚未入库的 `StorageLocationIsNeverAHardcodedDescriptionTest` 棘轮闸。最近生产 Java 回执 commit `dcc846b08bf3651810cb37078e9c2ed0c8fe9add` 与当前 main 的 `backend/java/cretas-api/src/main` 和 `web-admin/src` 完全一致，因此本批只需 RN OTA。验收：`StorageLocationIsNeverAHardcodedDescriptionTest`，RN 仓库导航目标 Jest，`nativeVersionConsistencyContract.test.ts`，`tsc --noEmit`；PR 合入后从 clean exact `origin/main` 以 runtimeVersion `1.0.4` 执行自托管 OTA 并验证 manifest/CDN/admin，不重启 Java/Web。
 
 - `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `queued` — Owner: `未分配` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
 
@@ -113,7 +113,7 @@
 
 ## Scope 锁地图
 
-- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827`：仅 `WorkflowInstanceController.java`、`VoucherRepository.java`、`ProductionPlanServiceImpl.java`、`SupplyChainOrchestrator.java`、`InterimSettleServiceImpl.java`、对应 3 个 Java 目标测试；RN 仓库地图导航/首页/类型及 2 个导航测试；Web 盘点页、待办页及审批可读性测试；`docs/dispatch/ACTIVE.md` 与当日归档。不改 Entity/Flyway/Security，不覆盖 `cretas-wh-voucher-20260827` 未提交改动，不从 feature 分支部署，不在本轮执行 F006 业务写入。
+- `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827`：仅 `frontend/CretasFoodTrace/src/navigation/warehouse/WHHomeStackNavigator.tsx`、`backend/java/cretas-api/src/test/java/com/cretas/aims/service/StorageLocationIsNeverAHardcodedDescriptionTest.java`、`docs/dispatch/ACTIVE.md` 与当日归档。不改 Java/Web 生产代码、Entity/Repository/Flyway/Security，不覆盖 `cretas-wh-voucher-20260827` 未提交改动，不重启 Java/Web，不在本轮执行 F006 业务写入。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
 
