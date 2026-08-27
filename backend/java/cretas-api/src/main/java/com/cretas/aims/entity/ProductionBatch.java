@@ -440,6 +440,19 @@ public class ProductionBatch extends BaseEntity {
         if (goodQuantity != null && actualQuantity != null && actualQuantity.compareTo(BigDecimal.ZERO) > 0) {
             yieldRate = goodQuantity.multiply(BigDecimal.valueOf(100))
                     .divide(actualQuantity, 2, RoundingMode.HALF_UP);
+        } else {
+            // ⛔ 算不出就说不知道, 不保留上一次算出来的值。
+            //
+            // 🔴 2026-08-28 生产实测: 40 个批次 good_quantity 为 NULL 而 yield_rate 有值,
+            //    其中 39 个恰好 100.00。成因是 V20260826_05/_06 把编出来的 good_quantity
+            //    (= actual, 声称零不良) 清成了 NULL, 而【派生的百分比列没跟着清】——
+            //    上面那个 if 从此永远进不去, 旧值就冻在那里, 而且是永久冻结。
+            //    可证伪的两条: 批次 10766 计划80/实际75 ⇒ 按定义 93.75%, 字段写 100.00;
+            //                  批次 10786 计划5/实际4  ⇒ 按定义 80.00%,  字段写 100.00。
+            //
+            // ⚠️ 同一个方法里的邻居 efficiency 在跨单位时就是这么写的(置 null),
+            //    ClerkProcessEntryServiceImpl:757 那条写路也是。本处此前是唯一的例外。
+            yieldRate = null;
         }
 
         // 计算效率 — actual(产出单位) / planned(原单位), 跨单位时无意义 → 留空
