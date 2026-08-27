@@ -560,6 +560,18 @@ YOLO、导出 ONNX，并用真实生产 label 模型回放受保护的 7 张缺�
 `df1f6029-389d-45b5-995e-be19b2f5b943` 必须单列身份、tray 覆盖和命中结果；它不再冒充台内主告警，
 但也不得相对生产结果回退。任一项失败都只写淘汰回执，不修改生产模型。
 
+完整托盘的多轮人工复核结果进入训练前，必须生成不可变准入副本；不要改写原审核清单来
+解除待审核时的 `training_eligible` 来源锁。准入入口会重新校验图片 SHA-256、人工完整托盘框、
+0.5% 裁切边缘门禁和标签框几何，并在衍生 annotation 中记录原 annotation SHA-256：
+
+```powershell
+B:\anaconda3\python.exe tools\vision-lab\admit_reviewed_full_trays.py `
+  --source-queue D:\CretasVisionLab\queues\<reviewed-round3-queue> `
+  --output D:\CretasVisionLab\queues\<immutable-admitted-queue>
+```
+
+不完整、看不清或托盘框贴裁切边缘的项目保持排除；即使其中标签框已经标完，也不得进入训练。
+
 ## 操作员只需要关注什么
 
 - 存在 `D:\CretasVisionLab\attention\MARK-NEEDS-ANNOTATION.json`：打开 `http://127.0.0.1:8792` 完成图片确认。
