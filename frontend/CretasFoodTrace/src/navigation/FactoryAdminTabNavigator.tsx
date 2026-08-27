@@ -9,12 +9,10 @@ import { Icon } from "react-native-paper";
 import { FactoryAdminTabParamList } from "../types/navigation";
 import { useFactoryFeatureStore } from "../store/factoryFeatureStore";
 import { useAuthStore } from "../store/authStore";
-import { isRestaurant } from "../utils/factoryType";
 
 // 导入6个Stack导航器
 import FAHomeStackNavigator from "./factory-admin/FAHomeStackNavigator";
 import FAAIStackNavigator from "./factory-admin/FAAIStackNavigator";
-import FAReportsStackNavigator from "./factory-admin/FAReportsStackNavigator";
 import SmartBIStackNavigator from "./SmartBIStackNavigator";
 import FAManagementStackNavigator from "./factory-admin/FAManagementStackNavigator";
 import FAProfileStackNavigator from "./factory-admin/FAProfileStackNavigator";
@@ -30,7 +28,6 @@ const TAB_COLORS = {
 export function FactoryAdminTabNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
   const user = useAuthStore(state => state.user);
-  const isRestaurantMode = isRestaurant(user);
 
   return (
     <Tab.Navigator
@@ -78,19 +75,12 @@ export function FactoryAdminTabNavigator() {
       />
       )}
 
-      {/* 报表Tab - 餐饮场景隐藏（无生产报表） */}
-      {isScreenEnabled('Reports') && !isRestaurantMode && (
-      <Tab.Screen
-        name="FAReportsTab"
-        component={FAReportsStackNavigator}
-        options={{
-          title: "报表",
-          tabBarIcon: ({ color, size }) => (
-            <Icon source="file-chart" size={size} color={color} />
-          ),
-        }}
-      />
-      )}
+      {/* 🔴 2026-08-27: 报表 Tab 删除。原条件是
+          `isScreenEnabled('Reports') && !isRestaurantMode` —— 而本 navigator 只在
+          isRestaurant(user) 为真时挂载（AppNavigator:92），所以它**从没渲染过**。
+          ⛔ 不要加回来：条件恒假。餐饮场景本来就没有生产报表，
+          工厂用户走的是 BossNavigator，不经过这里。
+          守它的闸：__tests__/gates/navigatorMountContextReachability.test.ts */}
 
       {/* 智能分析Tab (SmartBI) */}
       {isScreenEnabled('SmartBI') && (

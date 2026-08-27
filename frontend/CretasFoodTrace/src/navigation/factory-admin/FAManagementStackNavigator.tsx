@@ -20,11 +20,7 @@ import MaterialTypeManagementScreen from "../../screens/management/MaterialTypeM
 import SupplierManagementScreen from "../../screens/management/SupplierManagementScreen";
 import CustomerManagementScreen from "../../screens/management/CustomerManagementScreen";
 import ShipmentManagementScreen from "../../screens/management/ShipmentManagementScreen";
-import ConversionRateScreen from "../../screens/management/ConversionRateScreen";
-import MaterialConversionDetailScreen from "../../screens/management/MaterialConversionDetailScreen";
 import DisposalRecordManagementScreen from "../../screens/management/DisposalRecordManagementScreen";
-import EquipmentManagementScreen from "../../screens/processing/EquipmentManagementScreen";
-import EquipmentDetailScreen from "../../screens/processing/EquipmentDetailScreen";
 import SchemaConfigScreen from "../../screens/factory-admin/config/SchemaConfigScreen";
 import { FormTemplateListScreen } from "../../screens/factory-admin/config/FormTemplateListScreen";
 import { FormTemplateDetailScreen } from "../../screens/factory-admin/config/FormTemplateDetailScreen";
@@ -33,54 +29,28 @@ import RuleConfigurationScreen from "../../screens/management/RuleConfigurationS
 import AIBusinessInitScreen from "../../screens/factory-admin/config/AIBusinessInitScreen";
 import EncodingRuleConfigScreen from "../../screens/factory-admin/config/EncodingRuleConfigScreen";
 import { CodeRuleDetailScreen } from "../../screens/factory-admin/config/CodeRuleDetailScreen";
-import QualityCheckItemConfigScreen from "../../screens/factory-admin/config/QualityCheckItemConfigScreen";
-import QualityCheckItemDetailScreen from "../../screens/factory-admin/management/QualityCheckItemDetailScreen";
-import SopConfigScreen from "../../screens/management/SopConfigScreen";
 import { FAIntentViewScreen } from "../../screens/factory-admin/management/FAIntentViewScreen";
 import { IntentConfigDetailScreen } from "../../screens/factory-admin/management/IntentConfigDetailScreen";
 
 // IoT 电子秤设备管理
-import { IotDeviceListScreen } from "../../screens/factory-admin/iot/IotDeviceListScreen";
-import { IotDeviceDetailScreen } from "../../screens/factory-admin/iot/IotDeviceDetailScreen";
-import { IotDeviceCreateScreen } from "../../screens/factory-admin/iot/IotDeviceCreateScreen";
-import { ScaleTestScreen } from "../../screens/factory-admin/iot/ScaleTestScreen";
 
 // ISAPI 海康威视摄像头设备管理
-import { IsapiDeviceListScreen } from "../../screens/factory-admin/isapi/IsapiDeviceListScreen";
-import { IsapiDeviceDetailScreen } from "../../screens/factory-admin/isapi/IsapiDeviceDetailScreen";
-import { IsapiDeviceCreateScreen } from "../../screens/factory-admin/isapi/IsapiDeviceCreateScreen";
 // IsapiDeviceDiscoveryScreen removed - now using UnifiedDeviceDiscoveryScreen
-import { IsapiSmartConfigScreen } from "../../screens/factory-admin/isapi/IsapiSmartConfigScreen";
-import { DeviceSetupWizardScreen } from "../../screens/factory-admin/isapi/DeviceSetupWizardScreen";
 
 // 智能设备添加
-import { SmartDeviceAddScreen } from "../../screens/factory-admin/device/SmartDeviceAddScreen";
-import { CameraAddMethodScreen } from "../../screens/factory-admin/device/CameraAddMethodScreen";
-import { AIDeviceInputScreen } from "../../screens/factory-admin/device/AIDeviceInputScreen";
 
 // 统一设备管理中心
-import { UnifiedDeviceManagementScreen } from "../../screens/factory-admin/device/UnifiedDeviceManagementScreen";
 
 // 标签自动识别监控
-import { LabelRecognitionMonitorScreen } from "../../screens/production/LabelRecognitionMonitorScreen";
 
 // 设备智能分析
-import { EquipmentAnalysisScreen } from "../../screens/factory-admin/equipment/EquipmentAnalysisScreen";
 
 // 统一多品牌设备发现
 import { UnifiedDeviceDiscoveryScreen } from "../../screens/factory-admin/camera/UnifiedDeviceDiscoveryScreen";
 
 // NFC 标签管理
-import NfcTagManagementScreen from "../../screens/processing/NfcTagManagementScreen";
 
 // 工序制生产页面
-import ProcessTaskListScreen from "../../screens/processing/ProcessTaskListScreen";
-import ProcessTaskDetailScreen from "../../screens/processing/ProcessTaskDetailScreen";
-import ProcessTaskHistoryScreen from "../../screens/processing/ProcessTaskHistoryScreen";
-import ProcessRunOverviewScreen from "../../screens/processing/ProcessRunOverviewScreen";
-import ProcessTaskApprovalScreen from "../../screens/processing/ProcessTaskApprovalScreen";
-import YieldBatchSelectScreen from "../../screens/processing/YieldBatchSelectScreen";
-import YieldStepReportScreen from "../../screens/processing/YieldStepReportScreen";
 
 // 进销存管理
 import PurchaseOrderListScreen from "../../screens/factory-admin/inventory/PurchaseOrderListScreen";
@@ -100,7 +70,6 @@ import RdRequestCreateScreen from "../../screens/factory-admin/rd/RdRequestCreat
 import PriceListScreen from "../../screens/factory-admin/inventory/PriceListScreen";
 import ReturnOrderListScreen from "../../screens/factory-admin/inventory/ReturnOrderListScreen";
 import ReturnOrderDetailScreen from "../../screens/factory-admin/inventory/ReturnOrderDetailScreen";
-import WorkReportApprovalScreen from "../../screens/factory-admin/management/WorkReportApprovalScreen";
 
 // 餐饮模块页面
 import RecipeListScreen from "../../screens/restaurant/recipes/RecipeListScreen";
@@ -156,210 +125,26 @@ export function FAManagementStackNavigator() {
         options={{ title: "员工详情" }}
       />
 
-      {/* 工厂专属路由 - 餐饮版不注册，防止路由泄露 */}
-      {!isRestaurantMode && (
-        <>
-          {/* 设备管理 (复用现有) */}
-          <Stack.Screen
-            name="EquipmentList"
-            component={EquipmentManagementScreen}
-            options={{ title: "设备管理" }}
-          />
+      {/* 🔴 2026-08-27: 这里原来是一整块 `{!isRestaurantMode && (…)}`，33 条注册，
+          注释写着「工厂专属路由 - 餐饮版不注册，防止路由泄露」。
 
-          {/* 设备智能分析 */}
-          <Stack.Screen
-            name="EquipmentAnalysis"
-            component={EquipmentAnalysisScreen}
-            options={{ title: "设备智能分析" }}
-          />
+          它**一次都没渲染过** —— 本 navigator 的唯一挂载路径是
+            AppNavigator:92  isRestaurant(user) ? <FactoryAdminNavigator /> : <BossNavigator />
+          进到这棵子树里 isRestaurant(user) 已被钉成 true，所以 !isRestaurantMode 恒为假。
 
-          {/* 设备详情 (复用现有) */}
-          <Stack.Screen
-            name="EquipmentDetail"
-            component={EquipmentDetailScreen}
-            options={{ title: "设备详情" }}
-          />
+          删掉的依据（逐个对过生产数据与 web 端入口，不是凭感觉）：
+            · 设备台账 2 屏      —— web-admin /equipment/list 已有（factory_equipment 8 行）
+            · IoT/摄像头/发现/配网/秤/NFC/标签识别 13 屏
+                                 —— iot_devices / isapi_devices / dahua_devices /
+                                    label_recognition_* / device_registrations **生产全 0 行**，
+                                    web 端也没有 ⇒ 功能从没启用过
+            · 质检项配置 2 屏    —— web-admin /quality/standards 已有（4 项 / 1 绑定）
+            · 报工审批 1 屏      —— web-admin /production/approval 已有，且
+                                    legacyWorkReportingRatchet 写明「第 5 步整屏删掉」
 
-          {/* 统一设备管理中心 */}
-          <Stack.Screen
-            name="UnifiedDeviceManagement"
-            component={UnifiedDeviceManagementScreen}
-            options={{ title: "设备中心" }}
-          />
-
-          {/* IoT 电子秤设备管理 */}
-          <Stack.Screen
-            name="IotDeviceList"
-            component={IotDeviceListScreen}
-            options={{ title: "IoT 设备管理" }}
-          />
-          <Stack.Screen
-            name="IotDeviceDetail"
-            component={IotDeviceDetailScreen}
-            options={{ title: "设备详情" }}
-          />
-          <Stack.Screen
-            name="IotDeviceCreate"
-            component={IotDeviceCreateScreen}
-            options={{ title: "添加设备" }}
-          />
-          <Stack.Screen
-            name="ScaleTest"
-            component={ScaleTestScreen}
-            options={{ title: "秤数据测试" }}
-          />
-
-          {/* ISAPI 海康威视摄像头设备管理 */}
-          <Stack.Screen
-            name="IsapiDeviceList"
-            component={IsapiDeviceListScreen}
-            options={{ title: "摄像头管理" }}
-          />
-          <Stack.Screen
-            name="IsapiDeviceDetail"
-            component={IsapiDeviceDetailScreen}
-            options={{ title: "摄像头详情" }}
-          />
-          <Stack.Screen
-            name="IsapiDeviceCreate"
-            component={IsapiDeviceCreateScreen}
-            options={{ title: "添加摄像头" }}
-          />
-          {/* 旧路由重定向到统一发现页面，保持兼容性 */}
-          <Stack.Screen
-            name="IsapiDeviceDiscovery"
-            component={UnifiedDeviceDiscoveryScreen}
-            options={{ title: "设备发现" }}
-          />
-          <Stack.Screen
-            name="IsapiSmartConfig"
-            component={IsapiSmartConfigScreen}
-            options={{ title: "智能分析配置" }}
-          />
-          <Stack.Screen
-            name="DeviceSetupWizard"
-            component={DeviceSetupWizardScreen}
-            options={{ title: "设备配置向导" }}
-          />
-
-          {/* 智能设备添加 */}
-          <Stack.Screen
-            name="SmartDeviceAdd"
-            component={SmartDeviceAddScreen}
-            options={{ title: "添加设备" }}
-          />
-          <Stack.Screen
-            name="CameraAddMethod"
-            component={CameraAddMethodScreen}
-            options={{ title: "添加摄像头" }}
-          />
-          <Stack.Screen
-            name="AIDeviceInput"
-            component={AIDeviceInputScreen}
-            options={{ title: "AI识别添加" }}
-          />
-
-          {/* 标签自动识别监控 */}
-          <Stack.Screen
-            name="LabelRecognitionMonitor"
-            component={LabelRecognitionMonitorScreen}
-            options={{ title: "标签识别监控" }}
-          />
-
-          {/* 统一多品牌设备发现 */}
-          <Stack.Screen
-            name="UnifiedDeviceDiscovery"
-            component={UnifiedDeviceDiscoveryScreen}
-            options={{ title: "设备发现" }}
-          />
-
-          {/* NFC 标签管理 */}
-          <Stack.Screen
-            name="NfcTagManagement"
-            component={NfcTagManagementScreen}
-            options={{ title: "NFC标签管理" }}
-          />
-
-          {/* 转换率管理 (工厂专属) */}
-          <Stack.Screen
-            name="ConversionRate"
-            component={ConversionRateScreen}
-            options={{ title: "转换率配置" }}
-          />
-
-          {/* 单原料换算配置详情 (工厂专属) — FA 栈此前漏注册, 点原料打不开, 2026-06-04 补 */}
-          <Stack.Screen
-            name="MaterialConversionDetail"
-            component={MaterialConversionDetailScreen}
-            options={{ title: "换算配置" }}
-          />
-
-          {/* 质检项配置 (工厂专属) */}
-          <Stack.Screen
-            name="QualityCheckItemConfig"
-            component={QualityCheckItemConfigScreen}
-            options={{ title: "质检项配置" }}
-          />
-
-          {/* 质检项详情 (工厂专属) */}
-          <Stack.Screen
-            name="QualityCheckItemDetail"
-            component={QualityCheckItemDetailScreen}
-            options={{ title: "质检项详情" }}
-          />
-
-          {/* SOP 流程配置 (工厂专属) */}
-          <Stack.Screen
-            name="SopConfig"
-            component={SopConfigScreen}
-            options={{ title: "SOP配置" }}
-          />
-
-          {/* 报工审批 (工厂专属) */}
-          <Stack.Screen
-            name="WorkReportApproval"
-            component={WorkReportApprovalScreen}
-            options={{ title: "报工审批" }}
-          />
-
-          {/* 工序制生产 */}
-          <Stack.Screen
-            name="ProcessTaskList"
-            component={ProcessTaskListScreen}
-            options={{ title: "工序任务" }}
-          />
-          <Stack.Screen
-            name="ProcessTaskDetail"
-            component={ProcessTaskDetailScreen}
-            options={{ title: "任务详情" }}
-          />
-          <Stack.Screen
-            name="ProcessTaskHistory"
-            component={ProcessTaskHistoryScreen}
-            options={{ title: "任务历史" }}
-          />
-          <Stack.Screen
-            name="ProcessTaskApproval"
-            component={ProcessTaskApprovalScreen}
-            options={{ title: "报工审批" }}
-          />
-          <Stack.Screen
-            name="ProcessRunOverview"
-            component={ProcessRunOverviewScreen}
-            options={{ title: "生产运行概览" }}
-          />
-          <Stack.Screen
-            name="YieldBatchSelect"
-            component={YieldBatchSelectScreen}
-            options={{ title: "逐道报工" }}
-          />
-          <Stack.Screen
-            name="YieldStepReport"
-            component={YieldStepReportScreen}
-            options={{ title: "逐道报工" }}
-          />
-        </>
-      )}
+          ⛔ 屏文件本身保留：将来真启用 IoT 时代码还在。
+          ⛔ 不要把这块加回来 —— 加回来它照样不渲染（条件恒假），只是又藏起 1.4 万行。
+          守它的闸：__tests__/gates/navigatorMountContextReachability.test.ts */}
 
       {/* 产品类型管理 (复用现有) */}
       <Stack.Screen
