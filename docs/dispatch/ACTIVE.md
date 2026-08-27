@@ -7,6 +7,13 @@
 
 - `QA-WAREHOUSE-APPROVAL-CLOSEOUT-INTEGRATION-20260827` — `review` — Owner: `codex/wh-approval-integrate-20260827` — Base SHA `04f0ecbb90f38400b78b4ee1969cd2ee3c6af558`。旧分支三个提交中，Java/Web/SQL 修复与温控假数据修复已补丁等价进入 main；最新 main 移植实测只剩 RN 首页栈缺失 `WHLocationManage` / `WHTempMonitor` 注册，以及尚未入库的 `StorageLocationIsNeverAHardcodedDescriptionTest` 棘轮闸。最近生产 Java 回执 commit `dcc846b08bf3651810cb37078e9c2ed0c8fe9add` 与当前 main 的 `backend/java/cretas-api/src/main` 和 `web-admin/src` 完全一致，因此本批只需 RN OTA。验收：`StorageLocationIsNeverAHardcodedDescriptionTest`，RN 仓库导航目标 Jest，`nativeVersionConsistencyContract.test.ts`，`tsc --noEmit`；PR 合入后从 clean exact `origin/main` 以 runtimeVersion `1.0.4` 执行自托管 OTA 并验证 manifest/CDN/admin，不重启 Java/Web。
 
+- `QA-JAVA-NIGHTLY-RATCHET-20260827` — `merged` — Owner: `claude-code/nightly-burndown` — **夜间棘轮的第一次真实读数：基线 49 → 5，并抓到它建成以来的第一批新增红（8 条）**。判据来自 run `33081570292`（`java-full-nightly` on `9d26e655`，自建 runner）：`共跑 12007 个测试 · 红 13 · 基线 49`，`已修好 44` / `没跑到 0` / `新增 8`；`mvn` 侧 `Tests run: 12007, Failures: 2, Errors: 11` 对得上，且 `12007 > 11891 × 0.9` 未触发 rc=2 ⇒ 这一轮完整。**#197（`ddl-auto` `create-drop` → `create`）的 H2 schema 毒源诊断成立**（44/49）。落地 **#233**（修 8 条新增红）+ **#234**（削基线 49 → 5）。交接件 `HANDOFF-2026-08-27-nightly-ratchet-first-real-catch.md`。**收尾判据**：合并后又跑一次（run `33085335136` on `04f0ecbb`）得 `共跑 12009 个测试 · 红 5 · 基线 5 · 没有新增红`，rc=0，两个失败分支均 `skipped`；且总数 12007 → **12009 正好 +2**（= #233 新增的两条阴性对照）⇒ 那次跑批跑的确实是合并后的代码。
+
+  🔴 **上一棒有一句是错的**：「剩下的 49 条全部是同一个根因」——对 5 条不成立。`FactoryConfigServiceImplReorderIT` 4 条的真实报错是 `Connection to localhost:5432 refused`（要真 PostgreSQL，由 `ci.yml` 的 pgvector 服务容器提供，而 `java-full-nightly` 没有 `services:`，自建 macOS runner 也起不了）；`SalesOrderFinanceApprovedFanOutIntegrationTest` 1 条是异步 fan-out 轮询到超时（第一条断言**是通过的**）。**H2 毒源和「缺 PG」两条不同的路通向同一个长相（本机绿 / CI 红）** ⇒ 症状分布集中不等于根因只有一个。
+
+  ⛔ **剩下 5 条各自的下一步已写进 `known-failing-tests.txt` 的注释**，两条都别顺手做：(a) 加 `@Disabled`/`assumeTrue` 会让它在**真有 PG 的那条路上**也一起沉默 —— 先决定夜间跑批要不要有 PG；(b) 「真回归」和「轮询窗口不够」的下一步动作相反，别先入为主。
+
+  ⚠️ **下一棒第一件事**：看 2026-08-27 18:00Z（北京 8-28 02:00）那次 **`schedule` 事件有没有真的发生** —— 这个工作流至今**全部运行都是 `workflow_dispatch`**，cron 直到 #178（今天 05:00Z）才被从 `disabled_manually` 打开。靠人记得手工触发的棘轮，与没有棘轮的区别只是多了一个可以指责的对象。
 - `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `queued` — Owner: `未分配` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
 
   **⚠️ 这不是理论问题 —— 2026-08-27 一天之内因它栽了两次**：① `MaterialConsumptionNotesAndPlanRefTest`（一条「现状钉住」型断言）**在 main 上红了很久没人看见**，它设计出来就是为了拦住那种改动，结果拦了个寂寞（本次 CI 日志 grep 该类名 0 命中）；② 我新写的两道闸类名不合规，**只会被编译不会被执行**，靠 `GateSelectorCoverageContractTest` 这道元闸才抓住。
@@ -16,6 +23,8 @@
   **⛔ 不要靠一个个改类名去补** —— 用类名兼任 CI 选择器本身就脆（名字是给人读的）。方向应当是扩大选择器，或按改动路径选测试。⚠️ 一次性放开会暴露未知数量的存量红，需要先量再定节奏。**本条只登记读数，不带方案。**
 
   实测口径：`find src/test/java -name '*Test.java'` = 1435；四类后缀合计 229。同类历史读数见 memory `feedback_i_swapped_one_never_executed_gate_for_another`（当时是「1277 个类 push 上只跑 37 个」）。
+
+  **⚠️ 2026-08-27 夜新增第三个实例（`QA-JAVA-NIGHTLY-RATCHET-20260827`）**：#184 给 `MaterialBatchMapper` / `SalesServiceImpl` 加了一个 `@Autowired` 协作者，**7 个手工装配的测试当场 NPE 并在 main 上红了半天没人看见** —— 那四个类（`MaterialBatchMapperBoxCountTest` / `MaterialBatchMapperSp4Test` / `FinishedGoodsBatchManagementTest` / `InvoiceRequestRegistryReachabilityTest`）**一个都不在窄选择器里**，而 #184 自己新加的 `*ContractTest` 在选择器里、是绿的。⇒ **「PR 全绿」在这个仓里当前只覆盖 15% 的测试类**，这条观测的代价现在有价钱了：一次回归在 main 上活了半天，靠夜间棘轮才捡回来。
 
 - `FIN-VOUCHER-CONSUMPTION-SOURCE-20260827` — `merged` — Owner: `claude-code/voucher-source` — **凭证只收生产领用**（Owner 2026-08-27 裁定：「消耗行不进凭证，只有生产领用进」）。**已部署 prod**（21:49，jar mtime 21:49:08 早于进程启动 21:49:40；运行中的 jar 含 `VoucherConsumptionSourcePolicy`，**部署前基线 0**；导出里 `isProductionConsumption` 命中 1；阴性对照 `ZZ_NOT_A_REAL_CLASS`=0；`:10020 /api/mobile/health`=200；nginx 上游已自动同步到 10020；近 40 行日志 0 ERROR）。
 
