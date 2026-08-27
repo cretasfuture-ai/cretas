@@ -51,8 +51,8 @@ class ToolDescriptorInventoryDriftTest {
                         },
                         LinkedHashMap::new));
 
-        assertThat(sourceTools).hasSize(583);
-        assertThat(inventory.expectedToolCount()).isEqualTo(583);
+        assertThat(sourceTools).hasSize(584);
+        assertThat(inventory.expectedToolCount()).isEqualTo(584);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -61,37 +61,51 @@ class ToolDescriptorInventoryDriftTest {
                 .extracting(ToolDescriptorInventoryEntry::toolName)
                 .doesNotHaveDuplicates();
 
+        // 🔴 2026-08-27: 原来每个字段直接 assertThat —— **第一条不一致就抛**,
+        //    于是「还漂了多少」要靠一次次重跑才知道（每次一条，本轮实测跑了 5 次
+        //    才走到第 4 条）。这道闸停摆了几个月，积压的是**一批**而不是一条。
+        // ⇒ 收集全部不一致再一次性报出来。⛔ 判据本身一个字没放松：
+        //    仍然是逐字段全等，只是把「第一条就停」换成「一次说完」。
+        List<String> mismatches = new ArrayList<>();
         for (SourceTool source : sourceTools.values()) {
             ToolDescriptorInventoryEntry entry = inventoryByClass.get(source.implementationClass());
             assertThat(entry).as(source.sourcePath().toString()).isNotNull();
-            assertThat(entry.toolName())
-                    .as("toolName of " + source.toolName())
-                    .isEqualTo(source.toolName());
-            assertThat(entry.actionType())
-                    .as("actionType of " + source.toolName())
-                    .isEqualTo(source.actionType());
-            assertThat(entry.riskLevel())
-                    .as("riskLevel of " + source.toolName())
-                    .isEqualTo(source.riskLevel());
-            assertThat(entry.supportsPreview())
-                    .as("supportsPreview of " + source.toolName())
-                    .isEqualTo(source.supportsPreview());
-            assertThat(entry.requiresPermission())
-                    .as("requiresPermission of " + source.toolName())
-                    .isEqualTo(source.requiresPermission());
-            assertThat(entry.requiredPermissions())
-                    .as("requiredPermissions of " + source.toolName())
-                    .isEqualTo(source.requiredPermissions());
-            assertThat(entry.version())
-                    .as("version of " + source.toolName())
-                    .isEqualTo(source.version());
-            assertThat(entry.domainTags())
-                    .as("domainTags of " + source.toolName())
-                    .isEqualTo(source.domainTags());
-            assertThat(entry.overrideFlags())
-                    .as("overrideFlags of " + source.toolName())
-                    .isEqualTo(source.overrideFlags());
+            compare(mismatches, source.toolName(), "toolName",
+                    entry.toolName(), source.toolName());
+            compare(mismatches, source.toolName(), "actionType",
+                    entry.actionType(), source.actionType());
+            compare(mismatches, source.toolName(), "riskLevel",
+                    entry.riskLevel(), source.riskLevel());
+            compare(mismatches, source.toolName(), "supportsPreview",
+                    entry.supportsPreview(), source.supportsPreview());
+            compare(mismatches, source.toolName(), "requiresPermission",
+                    entry.requiresPermission(), source.requiresPermission());
+            compare(mismatches, source.toolName(), "requiredPermissions",
+                    entry.requiredPermissions(), source.requiredPermissions());
+            compare(mismatches, source.toolName(), "version",
+                    entry.version(), source.version());
+            compare(mismatches, source.toolName(), "domainTags",
+                    entry.domainTags(), source.domainTags());
+            compare(mismatches, source.toolName(), "overrideFlags",
+                    entry.overrideFlags(), source.overrideFlags());
         }
+        if (!mismatches.isEmpty()) {
+            throw new AssertionError("清册与源码逐字段比对: " + mismatches.size() + " 处不一致\n\n"
+                    + String.join("\n", mismatches)
+                    + "\n\n⚠️ 清册记的是**源码派生的审计事实**。改之前先回源码看一眼是哪一侧过期 ——"
+                    + "\n   本轮实测两种都出现过: 有一条是**尺子读不到**(全限定返回类型),"
+                    + "\n   对齐它会删掉一条正确的审计记录。");
+        }
+    }
+
+    /** 一处不一致只记一行, ⛔ 不抛 —— 让调用方一次看全。 */
+    private static void compare(List<String> sink, String toolName, String field,
+                                Object inInventory, Object inSource) {
+        if (java.util.Objects.equals(inInventory, inSource)) {
+            return;
+        }
+        sink.add(String.format("  %-34s %-20s 清册=%s  源码=%s",
+                toolName, field, inInventory, inSource));
     }
 
     @Test
@@ -147,33 +161,48 @@ class ToolDescriptorInventoryDriftTest {
                 .filter(tool -> !tool.literalToolName())
                 .toList();
 
-        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(582);
+        assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(583);
         assertThat(constantNames).singleElement().satisfies(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
             assertThat(tool.toolName()).isEqualTo("canvas_product_process_workflow_config");
         });
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(58);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(41);
+        // ⚠️ 把当前实测值打进日志 —— 下面这一串是**冻结的基线**, 改动它们时
+        //    需要知道「现在到底是多少」。原来只能靠一次次重跑, 每次让一条断言
+        //    告诉你一个数(本轮实测因此多跑了好几遍 maven)。
+        System.out.println("[TOOL_INVENTORY_COUNTS] override"
+                + " actionType=" + countOverride(tools, flags -> flags.actionType())
+                + " riskLevel=" + countOverride(tools, flags -> flags.riskLevel())
+                + " supportsPreview=" + countOverride(tools, flags -> flags.supportsPreview())
+                + " requiresPermission=" + countOverride(tools, flags -> flags.requiresPermission())
+                + " hasPermission=" + countOverride(tools, flags -> flags.hasPermission())
+                + " requiredPermissions=" + countOverride(tools, flags -> flags.requiredPermissions())
+                + " version=" + countOverride(tools, flags -> flags.version())
+                + " domainTags=" + countOverride(tools, flags -> flags.domainTags()));
+        System.out.println("[TOOL_INVENTORY_COUNTS] actions=" + countActions(tools));
+        System.out.println("[TOOL_INVENTORY_COUNTS] risks=" + countRisks(tools));
+
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(61);
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(44);
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(42);
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(49);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(52);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(9);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(12);
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(9);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 445L,
-                ToolExecutor.ActionType.WRITE, 59L,
+                ToolExecutor.ActionType.READ, 444L,
+                ToolExecutor.ActionType.WRITE, 61L,
                 ToolExecutor.ActionType.UPDATE, 26L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 19L,
                 ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 510L,
-                ToolExecutor.RiskLevel.MEDIUM, 68L,
-                ToolExecutor.RiskLevel.HIGH, 5L,
+                ToolExecutor.RiskLevel.LOW, 509L,
+                ToolExecutor.RiskLevel.MEDIUM, 67L,
+                ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }
 
@@ -414,8 +443,21 @@ class ToolDescriptorInventoryDriftTest {
         }
 
         private static String methodBody(String source, String returnType, String methodName) {
+            // 🔴 2026-08-27: 返回类型允许**全限定前缀**。
+            //
+            // 原来只匹配裸类型名（如 `Set<String>`）。而 InvoiceRequestFromOrderTool 写的是
+            // `public java.util.Set<String> getRequiredPermissions()` —— 正则不命中 ⇒
+            // methodBody 返回 null ⇒ 被解析成「没声明任何权限」。
+            //
+            // ⛔ 这个漏读的方向是**危险的那一边**：它让本闸报出
+            //    「清册记着 finance:read_write，而源码不要求权限」，
+            //    从而推着人去**删掉一条正确的审计记录** —— 而那是个 HIGH 风险的
+            //    WRITE 财务工具。源码里那行一直好好的，是尺子读不到。
+            //
+            // ⚠️ 判据：闸报出「审计记录比源码更严」时，**先怀疑尺子**，再怀疑代码。
+            //    对齐审计记录是不可逆的信息损失，而解析器的盲区是可修的。
             Pattern signature = Pattern.compile(
-                    "(?m)\\bpublic\\s+" + returnType + "\\s+" + Pattern.quote(methodName)
+                    "(?m)\\bpublic\\s+(?:[\\w.]+\\.)?" + returnType + "\\s+" + Pattern.quote(methodName)
                             + "\\s*\\([^)]*\\)(?:\\s*throws\\s+[^\\{]+)?\\s*\\{");
             Matcher matcher = signature.matcher(source);
             if (!matcher.find()) {

@@ -2,9 +2,30 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 583
+expectedToolCount: 584
 expectedLegacyCount: 569
 descriptors:
+  - toolName: "unsupported_capability"
+    implementationClass: "com.cretas.aims.ai.tool.impl.system.UnsupportedCapabilityTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["unsupported"]
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
   - toolName: "restaurant_calibration_history"
     implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
     provenance: LEGACY_INFERRED
@@ -5059,13 +5080,13 @@ descriptors:
     requiresPermission: true
     requiredPermissions: ["finance:read_write"]
     version: "1.0.0"
-    domainTags: ["finance"]
+    domainTags: ["sales"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: false
       requiresPermission: true
-      hasPermission: true
+      hasPermission: false
       requiredPermissions: true
       version: false
       domainTags: false
@@ -10630,7 +10651,7 @@ descriptors:
       riskLevel: true
       supportsPreview: false
       requiresPermission: true
-      hasPermission: true
+      hasPermission: false
       requiredPermissions: true
       version: false
       domainTags: false
@@ -10650,7 +10671,7 @@ descriptors:
       riskLevel: true
       supportsPreview: false
       requiresPermission: true
-      hasPermission: true
+      hasPermission: false
       requiredPermissions: true
       version: false
       domainTags: false
