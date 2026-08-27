@@ -60,15 +60,15 @@ function walk(dir: string, out: string[] = []): string[] {
  *    用本地 getter 读回反而会叠上设备时区偏移 —— 也就是说,
  *    在这些地方本闸的规则是**反的**。
  * ⚠️ 豁免必须具名到「文件 + 那一行的特征串」, ⛔ 不许整文件放行。
+ *
+ * 🔴 2026-08-27: **当前为空 —— 一条豁免都不需要。**
+ *    唯一那条(`AIChatScreen.tsx` 的 `shanghaiOffsetMs`)已经随
+ *    `utils/shanghaiDate.ts` 抽出而消失: 那个 helper 改成「推 8 小时后读 **UTC 分量**」,
+ *    根本不用截断 ISO 串, 于是本闸的规则在那儿也不再是「反的」。
+ *    ⇒ 机制留着(下次真需要时不用重建), 但**清单空着才是好状态**。
+ *    ⛔ 往这里加条目前先问一句: 换个写法能不能让它压根不命中本闸?
  */
-const ALLOWLIST: ReadonlyArray<{ file: string; contains: string; why: string }> = [
-  {
-    file: 'screens/factory-admin/ai-analysis/AIChatScreen.tsx',
-    contains: 'shanghaiOffsetMs',
-    why: '`Date.now() + 8h` 平移 UTC 轴来假装上海时区, 前提就是 UTC 读回。'
-       + '改成本地 getter 会再叠一次设备偏移: 东八区每天 16:00 后返回明天, 西七区直接差一天。',
-  },
-];
+const ALLOWLIST: ReadonlyArray<{ file: string; contains: string; why: string }> = [];
 
 function offendingLines(code: string, rel: string): string[] {
   const allowed = ALLOWLIST.filter((a) => rel === a.file);
@@ -113,6 +113,13 @@ describe('闸: 取本地日历日不许写成 UTC 截断', () => {
     // 豁免最容易的坏法是**留在那儿放行别的东西**: 被豁免的代码删了/改了,
     // 清单却没跟着删, 于是它开始默默放行一个本该被拦的新写法。
     // ⇒ 每条豁免都要能指到一处**当前确实存在**的命中。
+    //
+    // ⚠️ 清单为空时这条 for 循环零次迭代 —— 那样它就是个**恒真式**(形态 B′),
+    //    绿得毫无信息。所以先把「有几条」显式断言出来: 读这份报告的人
+    //    看到的是「当前 0 条豁免」这个事实, 而不是一个什么都没查的绿。
+    expect({ 当前豁免条数: ALLOWLIST.length })
+      .toEqual({ 当前豁免条数: 0 });
+
     for (const a of ALLOWLIST) {
       const full = path.join(SRC, a.file);
       // ⚠️ jest 的 expect **不支持**第二个 message 参数(那是 vitest 的写法),

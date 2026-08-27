@@ -46,6 +46,7 @@ import {
 } from '../../../types/restaurantAgentRun';
 import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
 import { isRestaurant } from '../../../utils/factoryType';
+import { currentShanghaiIsoDate } from '../../../utils/shanghaiDate';
 
 // 建议操作类型
 interface SuggestedAction {
@@ -75,20 +76,6 @@ function isRealIsoDate(value: string): boolean {
   return parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
     && parsed.getUTCDate() === day;
-}
-
-function currentShanghaiIsoDate(): string {
-  const shanghaiOffsetMs = 8 * 60 * 60 * 1000;
-  // 🔴 2026-08-27: 这里**必须**用 UTC 读回, 不能用 formatDate(本地日历日)。
-  //    `Date.now() + 8h` 是把 UTC 时间轴平移 8 小时来「假装」上海时区,
-  //    这个技巧成立的前提就是**用 UTC getter 读回**。再套一层本地 getter =
-  //    又加了一次设备时区偏移:
-  //      设备在东八区: +8 +8 = +16h -> 多数时候仍是同一天(所以一直没被发现)
-  //                     但每天 16:00 之后就跨天 -> 返回**明天**
-  //      设备在西七区: +8 -7 = +1h  -> 直接差一天
-  //    PR#111 全仓清扫时把这一行换成了 formatDate, 是误伤。
-  //    实测: 同一台 Mac, TZ=Asia/Shanghai 20 passed / TZ=America/LA 10 failed。
-  return new Date(Date.now() + shanghaiOffsetMs).toISOString().slice(0, 10);
 }
 
 function parseRestaurantAgentLaunch(
