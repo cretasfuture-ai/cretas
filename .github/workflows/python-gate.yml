@@ -190,7 +190,11 @@ jobs:
         env:
           RUNNER_ENV: ${{ runner.environment }}
         run: |
-          EXCLUDES=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.txt \
+          # ⚠️ `|| true`: 清单**全是注释**时 grep 返回 1。当前 GHA 默认 shell 是
+          #    `bash -e`(无 pipefail), 管道退出码取自 `tr` 所以侥幸没事 ——
+          #    但文档里的 `shell: bash` 是 `-eo pipefail`, 谁哪天写上这一步就死。
+          #    实测: 空清单 + `bash -eo pipefail` -> rc=1。⇒ 不靠侥幸。
+          EXCLUDES=$({ grep -vE '^\s*#|^\s*$' ci-gate-excludes.txt || true; } \
             | sed 's/[[:space:]]*#.*$//' | sed 's/^/--ignore=/' | tr '\n' ' ')
           echo "排除 $(echo "$EXCLUDES" | wc -w) 个文件 (见 ci-gate-excludes.txt)"
 
@@ -201,7 +205,7 @@ jobs:
           # ⚠️ 少跑了多少条**必须打进日志** —— 「自建模式的绿」和「托管模式的绿」
           #    不是同一个读数, 不写出来就会被当成同一个。
           if [ "$RUNNER_ENV" != "github-hosted" ]; then
-            SH=$(grep -vE '^\s*#|^\s*$' ci-gate-excludes.self-hosted.txt \
+            SH=$({ grep -vE '^\s*#|^\s*$' ci-gate-excludes.self-hosted.txt || true; } \
               | sed 's/[[:space:]]*#.*$//' | sed 's/^/--ignore=/' | tr '\n' ' ')
             echo "⚠️ 自建 runner: 额外排除 $(echo "$SH" | wc -w) 个文件 (见 ci-gate-excludes.self-hosted.txt)"
             echo "   ⇒ 本次读数**不等于**托管上的读数。额度恢复切回托管后这份清单不生效。"
