@@ -5,6 +5,32 @@
 
 ## 在飞任务
 
+- `OBS-JAVA-TEST-SELECTOR-COVERAGE-20260827` — `queued` — Owner: `未分配` — **1435 个 Java 测试类里只有 229 个在 CI 窄选择器内，1206 个（85%）跑不到**。选择器是**按类名后缀**匹配的（`*ContractTest` / `*StartupGuardTest` / `*RepositoryQueryValidationTest` + 逐字列出的 `FlywayVersionUniquenessTest`），与 `.github/workflows/ci.yml` 的 `TARGET_TESTS` 逐字对应。
+
+  **⚠️ 这不是理论问题 —— 2026-08-27 一天之内因它栽了两次**：① `MaterialConsumptionNotesAndPlanRefTest`（一条「现状钉住」型断言）**在 main 上红了很久没人看见**，它设计出来就是为了拦住那种改动，结果拦了个寂寞（本次 CI 日志 grep 该类名 0 命中）；② 我新写的两道闸类名不合规，**只会被编译不会被执行**，靠 `GateSelectorCoverageContractTest` 这道元闸才抓住。
+
+  **⚠️ 元闸的覆盖面要说清楚**：`GateSelectorCoverageContractTest` 只管「**读 src/main 源码的闸**」进不进选择器，**不管普通行为测试**。所以它绿 ≠ 那 1206 个跑过。
+
+  **⛔ 不要靠一个个改类名去补** —— 用类名兼任 CI 选择器本身就脆（名字是给人读的）。方向应当是扩大选择器，或按改动路径选测试。⚠️ 一次性放开会暴露未知数量的存量红，需要先量再定节奏。**本条只登记读数，不带方案。**
+
+  实测口径：`find src/test/java -name '*Test.java'` = 1435；四类后缀合计 229。同类历史读数见 memory `feedback_i_swapped_one_never_executed_gate_for_another`（当时是「1277 个类 push 上只跑 37 个」）。
+
+- `FIN-VOUCHER-CONSUMPTION-SOURCE-20260827` — `merged` — Owner: `claude-code/voucher-source` — **凭证只收生产领用**（Owner 2026-08-27 裁定：「消耗行不进凭证，只有生产领用进」）。**已部署 prod**（21:49，jar mtime 21:49:08 早于进程启动 21:49:40；运行中的 jar 含 `VoucherConsumptionSourcePolicy`，**部署前基线 0**；导出里 `isProductionConsumption` 命中 1；阴性对照 `ZZ_NOT_A_REAL_CLASS`=0；`:10020 /api/mobile/health`=200；nginx 上游已自动同步到 10020；近 40 行日志 0 ERROR）。
+
+  **此前**：`VoucherExportServiceImpl` 是 `for (c : findByTimeRange(factoryId, start, end))`，**不按来源过滤**，窗口内每一行都记成「原料发出」。生产实测（全库 `material_consumptions`）：`RAW_MATERIAL` 83 行 5538.36 / `PACKAGING` 52 行 26.11 / `SEASONING` 46 行 167.52 / `MATERIAL_RETURN` 23 行 **−631.40** / **`TRANSFER_OUT` 23 行 1969.00** / `SEMI_FINISHED` 17 行 777.87 / `MANUAL_ISSUE` 1 行 0.00。🔴 `TRANSFER_OUT` 是仓库之间移库，**货还在厂里**，却被记成消耗。
+
+  **⚠️ 实现时必须偏离字面一处**：`MATERIAL_RETURN` **留在凭证里** —— 它金额是负的，是生产领用的**冲减**，不是另一件事；领用进而退料不进，成本会虚高（实测 −631.40）。「生产领用」在这里是个**会计科目**，不是一个动作名。
+
+  判据收敛成 `VoucherConsumptionSourcePolicy` 一份（`IN_VOUCHER` / `EXCLUDED` 两张表，每条排除写理由），⛔ 不在导出里写 if 列举来源。未知来源**两手都不静默**：运行时不计入但计数 + 打 warn 日志（⛔ 不抛异常，月结不该被一行怪数据卡住）；CI 侧 `VoucherConsumptionSourceCoverageContractTest` 让**新增一种来源在 CI 上就红**。
+
+  🔴 **闸第一版瞄错了对象，被它自己的阳性对照抓住**：扫「全 `src/main` 的 `setSourceType("字面量")`」，当场扫出 `SALES_ORDER` / `PRODUCTION_BATCH` —— 那是**提醒**和别的实体的字段，与消耗行无关；同时**漏掉**真正的写入点（`MANUAL_ISSUE` / `TRANSFER_OUT` 写在三元表达式和常量里）。⇒ 改成与既有 `MaterialBatchSourceDocContractTest` 同形状：扫 `new MaterialConsumption()` 的**构造点**。剩下的常量/变量实参盲区由 `OBSERVED_IN_PRODUCTION`（生产实测值）兜住。
+
+  🔴 **一处夹具订正，且我没把它当既有失败放过**：`VoucherExportServiceTest` 的消耗夹具**不设 `sourceType`** 而 notes 写着「生产领用」⇒ 新口径下成了「来源不明」被排除，台账少一行，断言红。查清是**我造成的**，给夹具如实标成 `RAW_MATERIAL`。⛔ 没留空「让测试过」—— 留空在新口径下本就不该进凭证。⚠️ 这顺带证实源码里那 **4 个不设 `sourceType` 的写入点是真隐患**（`MaterialBatchServiceImpl:2034` / `ProcessingServiceImpl:812` / `ProductionPlanServiceImpl:7607` / `OrderCostBreakdownService` 透传），生产库当前 0 行 NULL 只是巧合。
+
+  **判据**：闸 6/6 + 变异对照（把 `TRANSFER_OUT` 从裁定表删掉 → 先证明行为真变了 → 精确点名 `["TRANSFER_OUT"]` 红 → 恢复 6/6 绿）；凭证族全量 **211/211**。
+
+  **⚠️ 部署路上两件**：① 第一次发布 `DEPLOY_EXIT=1` 且 **`RELEASE_FINAL_STATUS` 一次都没出现**（按判据这本身就是失败信号）。读发布报告查出真因：`java.build=success` 但 `java.deploy=not-selected` —— `ensure_exact_main_after_artifacts` 在制品建完后复查发现 `HEAD ≠ origin/main`。**本地构建 191 秒，期间别的 session 合了 2 个 PR**。闸拒得对；根因是**东京中继 `10.66.66.1:22` 不通导致预热失败，每次都得本地构建**，那近 4 分钟的窗口很容易被撞上。② 蓝绿这次切到 **10020**（上一次是 10010），我按上次的端口查健康得到 000，差点误判成故障 —— ⛔ **判健康前先从 cmdline 确认这个进程监听哪个端口**，不要沿用上次的。
+
 - `QA-WAREHOUSE-P0-ISOLATION-20260827` — `merged` — Owner: `claude-code/wh-p0-isolation` — 交接件 `HANDOFF-2026-08-25-warehouse-storage-layout-stocktake-book.md` §6 的 **P0 逐条收尾**。**已合入并部署 prod**（2026-08-27 16:44；jar mtime 16:43:56 早于进程启动 16:44:25；运行中的 jar 里三个标记逐个命中，阴性对照 `ZZ_NOT_A_REAL_MARKER`=0；`/api/mobile/health`=200；近 40 行日志 0 条 ERROR；⚠️ 部署前基线那三个标记**一个都不在**）。
 
   **P0.2 跨工厂隔离 — 不是缺陷**。`GET /warehouse/layout` 确实没有方法级 `@RequireRole`（交接件说对了），但 `JwtAuthInterceptor.validateFactoryAccess` 在拦截器层强制 `urlFactoryId.equals(tokenFactoryId)`。prod 实测四组：F006 token → F006 **200**（2223B 真数据）／→ LIUSHANMEN **403**／→ MOCK_REST **403**／无 token → **401**。403 的措辞正是 `sendForbiddenResponse` 那句 ⇒ **拦住它的确实是那道闸**。⚠️ 探针有意义的前提：`factory_super_admin` **不在** `PLATFORM_ADMIN_ROLES`（只有 super_admin/platform_admin/developer）。
