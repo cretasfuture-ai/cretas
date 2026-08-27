@@ -3,109 +3,96 @@ package com.cretas.aims.service.orchestration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Method;
-import java.math.BigDecimal;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * D3 (2026-05-10 客户对接会议) 单位换算 — g ↔ kg 1:1000 后台自动换算
+ * D3（2026-05-10 客户对接会议）单位换算 —— BOM 层用 g，仓库/调拨层用 kg，系统自动换算。
  *
- * 验证 ProductionWorkflowOrchestrator.convertUnit() helper:
- * - BOM 配方层用 g, 仓库 / 调拨层用 kg
- * - 系统在 buildTransferRequest 阶段后台自动按 1:1000 换算
- * - 不支持的换算返 null (沿用原 1:1 透传逻辑保持向后兼容)
+ * <h2>🔴 这个文件为什么被重写（2026-08-27）</h2>
+ *
+ * <p>原来的 8 条用例反射调用 {@code private convertUnit(...)}，并用<b>全 null 依赖</b>
+ * 构造 orchestrator，注释写着「只调 convertUnit 不会触碰它们」。
+ * 那个假设<b>已经不成立</b>：换算逻辑后来被收敛进了 {@code UnitConversionService}，
+ * {@code convertUnit} 现在只剩一行委派，于是 8 条全部 NPE
+ * （{@code Cannot invoke "UnitConversionService.convert(...)"}），
+ * 长期躺在夜间棘轮的存量红名单里。</p>
+ *
+ * <p><b>收敛本身是对的</b> —— 本仓在单位口径上栽过（后端把「件/个/只」拆成三个单位而
+ * 前端仍折成一个，用户无法满足）。换算只该有一份。</p>
+ *
+ * <h2>为什么不是「把桩补上」</h2>
+ *
+ * <p>⛔ 因为那样会写出一条<b>恒真式</b>：orchestrator 这一层拿不到真实换算表，
+ * 只能 mock {@code UnitContractService}。而把它打桩成「返回 1000 倍」再断言 1000 倍，
+ * 是拿自己的桩验证自己 —— 变异改产品代码它<b>不会红</b>。</p>
+ *
+ * <p>换算数学已经由 {@code service/unit/UnitContractServiceTest} 守着，
+ * 并且是<b>绿的</b>（{@code kg.baseCode == "g"}、{@code factorToBase == 1000}、
+ * {@code convert(kg → g)}、以及不支持的组合返回失败态）。
+ * 在这里再写一份就是「同一个东西有两份，它一定会漂」。</p>
+ *
+ * <h2>⇒ 所以这里改成守<b>性质</b>：orchestrator 不许自己长出换算数学</h2>
+ *
+ * <p>这条判据抓的正是「收敛完成之后又被人加回去」那个动作 ——
+ * 那是让两份重新分叉的唯一入口，也是本文件唯一还有价值的断言。</p>
+ *
+ * <p>⚠️ 代理性写明：这是<b>源码级</b>判据，它判不出运行时行为。
+ * 换个写法（先把因子赋给变量、或从配置读）本闸看不出来。
+ * 它的作用是<b>让「把换算搬回 orchestrator」这个动作必须显式地绕过一道写着理由的闸</b>，
+ * 而不是物理上不可能。</p>
  */
-@DisplayName("D3: ProductionWorkflowOrchestrator.convertUnit (g↔kg 1:1000)")
+@DisplayName("D3: 单位换算只有一份 —— orchestrator 只许委派, 不许自己算")
 class ProductionWorkflowOrchestratorUnitConversionTest {
 
-    /** 通过反射调用 private convertUnit, 隔离单位换算逻辑测试. */
-    private BigDecimal callConvertUnit(BigDecimal value, String from, String to) throws Exception {
-        // 构造空实例只为调 method 不需要完整 DI
-        ProductionWorkflowOrchestrator orch = newOrchestrator();
-        Method m = ProductionWorkflowOrchestrator.class.getDeclaredMethod(
-                "convertUnit", BigDecimal.class, String.class, String.class);
-        m.setAccessible(true);
-        return (BigDecimal) m.invoke(orch, value, from, to);
+    private static final Path ORCHESTRATOR = Paths.get(
+            "src/main/java/com/cretas/aims/service/orchestration/ProductionWorkflowOrchestrator.java");
+
+    private static String source() throws IOException {
+        return Files.readString(ORCHESTRATOR, StandardCharsets.UTF_8);
     }
 
-    private ProductionWorkflowOrchestrator newOrchestrator() throws Exception {
-        java.lang.reflect.Constructor<ProductionWorkflowOrchestrator> ctor =
-                ProductionWorkflowOrchestrator.class.getDeclaredConstructors().length == 1
-                        ? (java.lang.reflect.Constructor<ProductionWorkflowOrchestrator>)
-                            ProductionWorkflowOrchestrator.class.getDeclaredConstructors()[0]
-                        : null;
-        if (ctor == null) throw new IllegalStateException("Constructor lookup failed");
-        ctor.setAccessible(true);
-        // 用 null 填充全部 final dependencies — 只调 convertUnit 不会触碰它们
-        Object[] args = new Object[ctor.getParameterCount()];
-        return ctor.newInstance(args);
+    /** 去掉注释，免得闸把自己的说明文字当成被测对象（本仓多次栽在这上面）。 */
+    private static String stripComments(String src) {
+        return src.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)//.*$", "");
     }
 
     @Test
-    @DisplayName("g → kg: 344.83g → 0.34483kg (BOM 一份成品的换算示例)")
-    void gToKg_oneServing() throws Exception {
-        BigDecimal result = callConvertUnit(new BigDecimal("344.83"), "g", "kg");
-        // 344.83 / 1000 = 0.34483
-        assertEquals(0, result.compareTo(new BigDecimal("0.344830")),
-                "344.83g → 0.34483kg");
+    @DisplayName("阳性对照：文件读得到且确实有 convertUnit（仪器活着）")
+    void scannerActuallyReadsTheOrchestrator() throws IOException {
+        String src = source();
+        // 若哪天文件被改名/拆分，这两条会红，提醒来改本闸 ——
+        // 否则 stripComments 之后扫到空字符串，下面两条会静默恒绿。
+        assertThat(src).as("读不到 ProductionWorkflowOrchestrator.java").isNotEmpty();
+        assertThat(src).as("convertUnit 不在了 —— 本闸失去被测对象，请来改它").contains("convertUnit");
     }
 
     @Test
-    @DisplayName("g → kg: 34483g → 34.483kg (100 份成品计划的总量换算)")
-    void gToKg_hundredServings() throws Exception {
-        BigDecimal result = callConvertUnit(new BigDecimal("34483"), "g", "kg");
-        // 34483 / 1000 = 34.483
-        assertEquals(0, result.compareTo(new BigDecimal("34.483000")),
-                "34483g → 34.483kg (调拨单一行)");
+    @DisplayName("convertUnit 必须委派给统一的 UnitConversionService")
+    void convertUnitDelegatesToTheSharedService() throws IOException {
+        String src = stripComments(source());
+        assertThat(src)
+                .as("convertUnit 不再委派给 UnitConversionService —— 换算又变成两份了。"
+                        + "单位口径本仓栽过（后端拆三个单位而前端折成一个，用户无法满足），只该有一份。")
+                .contains("unitConversionService.convert(");
     }
 
     @Test
-    @DisplayName("kg → g: 1.5kg → 1500g (反向换算)")
-    void kgToG() throws Exception {
-        BigDecimal result = callConvertUnit(new BigDecimal("1.5"), "kg", "g");
-        // 1.5 * 1000 = 1500
-        assertEquals(0, result.compareTo(new BigDecimal("1500")),
-                "1.5kg → 1500g");
-    }
-
-    @Test
-    @DisplayName("同单位透传 (kg → kg)")
-    void sameUnitPassThrough() throws Exception {
-        BigDecimal result = callConvertUnit(new BigDecimal("100"), "kg", "kg");
-        assertEquals(0, result.compareTo(new BigDecimal("100")));
-    }
-
-    @Test
-    @DisplayName("大小写不敏感 (KG / Kg / kg 均能识别)")
-    void caseInsensitive() throws Exception {
-        BigDecimal r1 = callConvertUnit(new BigDecimal("1000"), "G", "KG");
-        BigDecimal r2 = callConvertUnit(new BigDecimal("1000"), "g", "Kg");
-        assertEquals(0, r1.compareTo(new BigDecimal("1.000000")));
-        assertEquals(0, r2.compareTo(new BigDecimal("1.000000")));
-    }
-
-    @Test
-    @DisplayName("ml → L 1:1000 换算 (volume parallel to weight)")
-    void mlToL() throws Exception {
-        BigDecimal result = callConvertUnit(new BigDecimal("2500"), "ml", "L");
-        assertEquals(0, result.compareTo(new BigDecimal("2.500000")),
-                "2500mL → 2.5L");
-    }
-
-    @Test
-    @DisplayName("不支持的换算 (g → L) 返 null, 沿用原 1:1 透传 (向后兼容)")
-    void unsupportedConversionReturnsNull() throws Exception {
-        BigDecimal result = callConvertUnit(new BigDecimal("100"), "g", "L");
-        assertNull(result, "g→L 非法换算应返 null, caller 沿用原 quantity");
-    }
-
-    @Test
-    @DisplayName("null 输入: 任一参数 null → 返 null")
-    void nullInputReturnsNull() throws Exception {
-        assertNull(callConvertUnit(null, "g", "kg"));
-        assertNull(callConvertUnit(new BigDecimal("100"), null, "kg"));
-        assertNull(callConvertUnit(new BigDecimal("100"), "g", null));
+    @DisplayName("orchestrator 里不许出现换算因子字面量")
+    void orchestratorCarriesNoConversionFactorOfItsOwn() throws IOException {
+        String src = stripComments(source());
+        // 1000 是 g↔kg，也是这类漂移最常见的复发形状。
+        assertThat(src)
+                .as("orchestrator 里出现了换算因子字面量 —— 换算数学正在被搬回来。"
+                        + "请改用 unitConversionService；换算表由 UnitContractService 唯一定义。")
+                .doesNotContain("BigDecimal(\"1000\")")
+                .doesNotContain("valueOf(1000)")
+                .doesNotContain("divide(THOUSAND")
+                .doesNotContain("multiply(THOUSAND");
     }
 }
