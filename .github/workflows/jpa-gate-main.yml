@@ -118,11 +118,28 @@ jobs:
       - name: JPA repository query startup gate
         working-directory: backend/java/cretas-api
         timeout-minutes: 15
-        run: >-
-          mvn -B test
-          -Dspring.profiles.active=test
-          -Dtest='*RepositoryQueryValidationTest'
-          -Dsurefire.failIfNoSpecifiedTests=false
+        # ⚠️ 2026-08-27: `actions/setup-java` 只装 **JDK**, 不装 Maven。
+        #    托管的 ubuntu 镜像自带 mvn, 自建的 Mac 没有 ->
+        #    实测 `mvn: command not found` exit 127(JAVA_HOME 是对的, 只是没有 mvn)。
+        # ⇒ 有 mvn 就用 mvn(托管上行为逐字不变), 没有就落到仓里自带的
+        #    `./mvnw`(mode 755, 钉 Maven 3.9.6)。
+        # ⛔ 不无条件改用 ./mvnw —— 那会连托管上用的 Maven 版本一起换掉,
+        #    是一次没必要的行为改动。
+        run: |
+          set -e
+          if command -v mvn >/dev/null 2>&1; then
+            MVN=mvn
+          elif [ -x ./mvnw ]; then
+            MVN=./mvnw
+          else
+            echo "✗ 既没有 mvn 也没有可执行的 ./mvnw"
+            exit 1
+          fi
+          echo "MVN_USED=$MVN"
+          "$MVN" -B test \
+            -Dspring.profiles.active=test \
+            -Dtest='*RepositoryQueryValidationTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false
 
       - name: Upload surefire reports on failure
         if: failure()

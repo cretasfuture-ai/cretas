@@ -122,20 +122,24 @@ jobs:
       #    ⛔ 不允许静默用一个更老的版本跑 —— 那样绿了也不算数。
       # ⚠️ 自建只是额度耗尽时的兜底; 额度恢复切回托管, 版本就回到 3.10。
       #    「这一轮的读数是在哪个解释器上量的」必须能从日志里读出来。
-      - name: Use system Python (self-hosted)
+      - name: Use system Python in a venv (self-hosted)
         if: runner.environment != 'github-hosted'
+        # ⛔ 不往系统 Python 里装包, 而是**建 venv**, 两个理由:
+        #   1. homebrew 的 Python 3.11+ 带 PEP 668 标记, 直接 `pip install` 会被
+        #      拒成 `externally-managed-environment`。
+        #   2. 这台自建 runner 是**长期在跑的真机**, 往它的系统 Python 里装
+        #      一整份 requirements.txt 是在污染别人的机器。
+        # venv 建在 $RUNNER_TEMP 下, job 结束即随临时目录消失。
         run: |
           set -e
           for c in python3.10 python3.11 python3.12 python3; do
-            if command -v $c >/dev/null 2>&1; then
-              V=$($c -c 'import sys;print("%d.%d"%sys.version_info[:2])')
+            if command -v "$c" >/dev/null 2>&1; then
+              V=$("$c" -c 'import sys;print("%d.%d"%sys.version_info[:2])')
               case "$V" in
                 3.1[0-9]|3.[2-9]*)
                   echo "PYTHON_USED=$c ($V)  ⚠️ 托管上是 3.10"
-                  echo "$(dirname $(command -v $c))" >> $GITHUB_PATH
-                  ln -sf $(command -v $c) /tmp/python
-                  ln -sf $(command -v $c) /tmp/pip3 2>/dev/null || true
-                  echo "/tmp" >> $GITHUB_PATH
+                  "$c" -m venv "$RUNNER_TEMP/venv"
+                  echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
                   exit 0
                   ;;
               esac
@@ -144,15 +148,21 @@ jobs:
           echo "✗ 找不到 >=3.10 的 python —— 本闸不能在一个更老的解释器上假装绿"
           exit 1
       - name: Install dependencies
+        # ⚠️ 一律用 `python -m pip`, ⛔ 不要用裸 `pip`。
+        #    托管镜像里 setup-python 会同时放一个 `pip` 到 PATH 上, 自建的 macOS 上
+        #    homebrew 只给 `pip3.11` / `pip3`, **没有裸 `pip`** ——
+        #    2026-08-27 实测 `pip: command not found`, exit 127, 整个闸挂在装依赖这一步。
+        #    `python -m pip` 用的就是上一步选中的那个解释器, 两边都成立, 也不会
+        #    出现「pip 属于 A 解释器而代码跑在 B 解释器上」。
         run: |
-          pip install --upgrade pip
-          pip install --use-deprecated=legacy-resolver -r requirements.txt || pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install --use-deprecated=legacy-resolver -r requirements.txt || python -m pip install -r requirements.txt
           # ⚠️ flake8 是 `tests/test_no_undefined_names.py` 那道 **F821 窄闸**
           #    需要的。⛔ 这里**不跑**全量 flake8(见本文件顶部: 299 条存量债),
           #    只让那道闸能开火 —— 它 `--select=F821`, 全仓 0 条。
           # 🔴 不装的后果实测过: 闸的「新增违规」那条会 skip(长得像绿),
           #    只有阳性对照会红。**闸不跑 = 没有闸。**
-          pip install pytest pytest-asyncio pytest-timeout flake8
+          python -m pip install pytest pytest-asyncio pytest-timeout flake8
       - name: Run pytest
         # 没有 `|| true` —— 红就是红, 这是本 workflow 的全部意义。
         #
