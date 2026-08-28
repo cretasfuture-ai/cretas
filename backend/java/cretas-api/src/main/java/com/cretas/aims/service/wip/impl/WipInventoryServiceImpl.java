@@ -13,7 +13,9 @@ import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.inventory.FeedUnitConverter;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -65,6 +67,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final WorkProcessTaskRepository taskRepo;
     private final WorkProcessRepository workProcessRepo;
     private final ProductTypeRepository productTypeRepo;
+    /** 回料 SKU → 发布工艺 owner，用 owner 成品档案上的纯度等级判定。 */
+    @Autowired
+    private ProductProcessWorkflowRepository productProcessWorkflowRepo;
     /** SP1-T4 Wave2 — Workflow(画布)任务的产出结构来源 (画布不写 WorkProcess.semiFinishedOutputCode)。 */
     private final ProductionWorkflowInstanceRepository workflowInstanceRepo;
     private final WorkflowTaskPortRepository workflowTaskPortRepo;
@@ -1735,6 +1740,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 3) 回料纯度闸要拿目标产品自己的等级/开关, 所以它也得进这一次批量查询 ——
         //    ⛔ 不要为它单开一次 findById (那是本方法一直在避免的 N+1 的开头)。
         Set<String> ptLookupIds = new HashSet<>(ptIds);
+        // 生产回料行的 productTypeId 是画布里的独立回料 SKU（如 PTSEMI-LSM-0005），
+        // 纯度等级则按业务配置在该发布工艺的 owner 成品（如 熟肉饼 CPLIUSHANMEN0020）上。
+        // 因此先从发布工艺恢复「回料 SKU → 来源成品」；直接拿回料 SKU 查等级会恒为 NULL，
+        // 把本应拦截的格子错误标成 UNCONFIGURED 并放行。
+        Map<String, String> reworkSourceProductIds = filterFamily
+                ? resolveReworkSourceProductIds(factoryId, ptIds) : Map.of();
+        ptLookupIds.addAll(reworkSourceProductIds.values());
         if (filterFamily) {
             ptLookupIds.add(productTypeId);
         }
@@ -1767,8 +1779,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                         if (!Boolean.TRUE.equals(w.getIsRework())) {
                             return true;
                         }
-                        ProductType source = w.getProductTypeId() == null
-                                ? null : ptById.get(w.getProductTypeId());
+                        String sourceProductTypeId = w.getProductTypeId() == null ? null
+                                : reworkSourceProductIds.getOrDefault(w.getProductTypeId(), w.getProductTypeId());
+                        ProductType source = sourceProductTypeId == null ? null : ptById.get(sourceProductTypeId);
                         ReworkPurityGuard.Verdict verdict = ReworkPurityGuard.evaluate(
                                 source == null ? null : source.getReworkPurityLevel(),
                                 targetProduct == null ? null : targetProduct.getReworkPurityLevel(),
@@ -1813,6 +1826,36 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .reworkPurityStatus(reworkPurityStatusOf(reworkVerdicts.get(w.getIntermediateBatchNo())))
                 .build()
         ).collect(Collectors.toList());
+    }
+
+    private Map<String, String> resolveReworkSourceProductIds(String factoryId, Set<String> candidateProductTypeIds) {
+        if (candidateProductTypeIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> result = new HashMap<>();
+        Set<String> ambiguous = new HashSet<>();
+        for (ProductProcessWorkflow workflow
+                : productProcessWorkflowRepo.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(factoryId)) {
+            if (workflow.getStatus() != ProductProcessWorkflow.Status.PUBLISHED) {
+                continue;
+            }
+            for (String reworkProductTypeId : WorkflowReworkNodes.reworkProductTypeIds(workflow.getNodesJson())) {
+                if (!candidateProductTypeIds.contains(reworkProductTypeId)) {
+                    continue;
+                }
+                String existing = result.putIfAbsent(reworkProductTypeId, workflow.getProductTypeId());
+                if (existing != null && !existing.equals(workflow.getProductTypeId())) {
+                    ambiguous.add(reworkProductTypeId);
+                }
+            }
+        }
+        // 同一回料 SKU 若被多个已发布工艺声明，来源无法诚实判定：退回未配置口径并留日志，
+        // 不可按遍历顺序随缘选一个 owner。
+        ambiguous.forEach(result::remove);
+        if (!ambiguous.isEmpty()) {
+            log.warn("Ambiguous published rework SKU owners factoryId={} skuIds={}", factoryId, ambiguous);
+        }
+        return result;
     }
 
     /**

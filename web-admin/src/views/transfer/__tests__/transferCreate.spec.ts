@@ -121,18 +121,17 @@ describe('M08 手动调拨选择器契约', () => {
     });
   });
 
-  it('调拨基本类型沿用建品保存值，辅材不再被吞进原料且包材仍映射 materialTypeId', () => {
+  it('调拨基本类型固定展示三大类，辅料不再被拆成小类且包材仍映射 materialTypeId', () => {
     const materialOptions = aggregateMaterialInventoryOptions([
-      { materialTypeId: 'RAW-A', materialName: '原料 A', materialCategory: '主材', quantityUnit: 'kg', currentQuantity: 5, status: 'AVAILABLE' },
-      { materialTypeId: 'AUX-A', materialName: '辅料 A', materialCategory: '辅材', quantityUnit: 'kg', currentQuantity: 3, status: 'AVAILABLE' },
-      { materialTypeId: 'PACK-BOX', materialName: '成品盒', materialCategory: '包材', quantityUnit: 'box', currentQuantity: 5, status: 'AVAILABLE' },
+      { materialTypeId: 'RAW-A', materialName: '原料 A', materialCategory: '主材', materialMainCategory: '原料', quantityUnit: 'kg', currentQuantity: 5, status: 'AVAILABLE' },
+      { materialTypeId: 'AUX-A', materialName: '辅料 A', materialCategory: '添加剂', materialMainCategory: '辅料', quantityUnit: 'kg', currentQuantity: 3, status: 'AVAILABLE' },
+      { materialTypeId: 'PACK-BOX', materialName: '成品盒', materialCategory: '纸箱', materialMainCategory: '包材', quantityUnit: 'box', currentQuantity: 5, status: 'AVAILABLE' },
     ]);
     const categories = buildTransferCategoryOptions(materialOptions, []);
-    expect(categories.map((option) => option.label)).toEqual(expect.arrayContaining(['主材', '辅材', '包材']));
-    expect(categories.map((option) => option.label)).not.toContain('原料/食材');
+    expect(categories.map((option) => option.label)).toEqual(['原料', '辅料', '包材']);
 
     const auxiliaryRow = row('RAW_MATERIAL');
-    applyTransferCategory(auxiliaryRow, categories.find((option) => option.label === '辅材')!);
+    applyTransferCategory(auxiliaryRow, categories.find((option) => option.label === '辅料')!);
     expect(optionsForTransferCategory(auxiliaryRow, materialOptions, []).map((option) => option.id)).toEqual(['AUX-A']);
     expect(toTransferItemPayload({ ...auxiliaryRow, quantity: 1, selectedItemId: 'AUX-A', materialTypeId: 'AUX-A' }))
       .toMatchObject({ itemType: 'RAW_MATERIAL', materialTypeId: 'AUX-A' });
@@ -151,10 +150,10 @@ describe('M08 手动调拨选择器契约', () => {
 
   it('历史无分类物料不隐藏，成品仅在所选仓库实际有库存时出现', () => {
     const materials = aggregateMaterialInventoryOptions([
-      { materialTypeId: 'LEGACY-A', materialName: '历史物料', materialCategory: '', quantityUnit: 'kg', currentQuantity: 2, status: 'AVAILABLE' },
+      { materialTypeId: 'LEGACY-A', materialName: '历史物料', materialCategory: '', materialMainCategory: '', quantityUnit: 'kg', currentQuantity: 2, status: 'AVAILABLE' },
     ]);
     const withoutProduct = buildTransferCategoryOptions(materials, []);
-    expect(withoutProduct.map((option) => option.label)).toEqual(['未分类原料（历史）']);
+    expect(withoutProduct.map((option) => option.label)).toEqual(['原料', '辅料', '包材', '未分类原料（历史）']);
 
     const products = aggregateFinishedGoodsOptions([
       { productTypeId: 'FG-A', productName: '成品 A', unit: 'box', status: 'AVAILABLE', availableQuantity: 1 },

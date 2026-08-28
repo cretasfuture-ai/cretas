@@ -6,16 +6,19 @@ import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.dto.producttype.ProductTypeOptionDTO;
 import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.service.ProductTypeService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.unit.ProductSpecificationConversionSyncService;
 import com.cretas.aims.service.workflow.WorkflowUnitReviewService;
+import com.cretas.aims.service.workflow.WorkflowReworkNodes;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,6 +42,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.stream.Collectors;
 
 /**
@@ -90,6 +95,13 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     private final WorkflowUnitReviewService workflowUnitReviewService;
     private final ProductSpecificationConversionSyncService specificationConversionSyncService;
     private final ProductPackagingSpecService productPackagingSpecService;
+
+    /**
+     * 销售商品目录排除回料 SKU 时读取已发布画布。字段注入保持既有隔离测试构造器不变；
+     * Spring 生产环境必须注入，缺失时直接失败，不能把回料静默放回销售下拉。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductProcessWorkflowRepository productProcessWorkflowRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -747,8 +759,20 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     public List<ProductTypeDTO> getSellableProductTypes(String factoryId) {
         log.info("获取可销售的产品类型: factoryId={}", factoryId);
 
+        if (productProcessWorkflowRepository == null) {
+            throw new IllegalStateException("ProductProcessWorkflowRepository 未注入，无法核验回料 SKU 销售边界");
+        }
+        Set<String> reworkProductTypeIds = productProcessWorkflowRepository
+                .findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(factoryId).stream()
+                .filter(workflow -> workflow.getStatus() == ProductProcessWorkflow.Status.PUBLISHED)
+                .map(ProductProcessWorkflow::getNodesJson)
+                .map(WorkflowReworkNodes::reworkProductTypeIds)
+                .flatMap(Set::stream)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
         return productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId).stream()
                 .filter(p -> ProductCategory.isSalesOrderSellable(p.getProductCategory()))
+                .filter(p -> !reworkProductTypeIds.contains(p.getId()))
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
     }

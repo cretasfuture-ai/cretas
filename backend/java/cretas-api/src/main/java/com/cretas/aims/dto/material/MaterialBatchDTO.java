@@ -49,6 +49,9 @@ public class MaterialBatchDTO {
     @Schema(description = "原材料类别")
     private String materialCategory;
 
+    @Schema(description = "物料大类（原料/辅料/包材）")
+    private String materialMainCategory;
+
     @Schema(description = "存储类型(来自原材料类型): fresh/frozen/dry")
     private String storageType;
 

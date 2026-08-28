@@ -76,4 +76,39 @@ public final class WorkflowReworkNodes {
             return Collections.emptySet();
         }
     }
+
+    /**
+     * 从冻结/已发布画布中取回料端口绑定的 SKU id。
+     *
+     * <p>销售商品目录必须排除这些 SKU：它们是金检/X 光剔出的不良品回投身份，
+     * 不是可直接卖给客户的普通半成品。判据仍只认画布 {@code data.isRework}，
+     * 不按名称包含“回料”或 {@code PTSEMI} 前缀猜测。</p>
+     */
+    public static Set<String> reworkProductTypeIds(String nodesJson) {
+        if (nodesJson == null || nodesJson.isBlank()) {
+            return Collections.emptySet();
+        }
+        try {
+            JsonNode nodes = MAPPER.readTree(nodesJson);
+            if (!nodes.isArray()) {
+                return Collections.emptySet();
+            }
+            Set<String> marked = new LinkedHashSet<>();
+            for (JsonNode node : nodes) {
+                JsonNode data = node.path("data");
+                JsonNode flag = data.path("isRework");
+                if (flag.isMissingNode() || flag.isNull()
+                        || !isReworkFlag(flag.isBoolean() ? flag.asBoolean() : flag.asText())) {
+                    continue;
+                }
+                String skuId = data.path("skuId").asText(null);
+                if (skuId != null && !skuId.isBlank()) {
+                    marked.add(skuId);
+                }
+            }
+            return marked;
+        } catch (Exception ignored) {
+            return Collections.emptySet();
+        }
+    }
 }

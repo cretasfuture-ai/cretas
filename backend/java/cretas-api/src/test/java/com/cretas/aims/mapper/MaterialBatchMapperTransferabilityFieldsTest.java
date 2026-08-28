@@ -2,6 +2,7 @@ package com.cretas.aims.mapper;
 
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import org.junit.jupiter.api.DisplayName;
@@ -76,5 +77,23 @@ class MaterialBatchMapperTransferabilityFieldsTest {
 
         assertThat(dto.getOwnership()).isEqualTo(InventoryOwnership.COMPANY_OWNED);
         assertThat(dto.getSourceDocType()).isEqualTo("PURCHASE_RECEIVE");
+    }
+
+    @Test
+    @DisplayName("物料三大类必须随库存批次透给调拨消费端")
+    void exposesMaterialMainCategory() {
+        MaterialBatch entity = batch(InventoryOwnership.COMPANY_OWNED, "PURCHASE_RECEIVE");
+        RawMaterialType materialType = new RawMaterialType();
+        materialType.setName("小苏打");
+        materialType.setCode("003-TEST");
+        materialType.setCategory("添加剂");
+        materialType.setMainCategory("辅料");
+        materialType.setUnit("kg");
+        entity.setMaterialType(materialType);
+
+        MaterialBatchDTO dto = MaterialBatchMapperTestFixtures.mapperWithRealLocationCatalog().toDTO(entity);
+
+        assertThat(dto.getMaterialCategory()).isEqualTo("添加剂");
+        assertThat(dto.getMaterialMainCategory()).isEqualTo("辅料");
     }
 }
