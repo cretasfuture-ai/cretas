@@ -31,3 +31,6 @@ src/**/*.js
 indicator-center-snapshot.yml
 *.snapshot.yml
 .playwright-mcp/
+
+# Playwright 走查产物 (人工工具, 不入库)
+tests/e2e/test-results-vshot/

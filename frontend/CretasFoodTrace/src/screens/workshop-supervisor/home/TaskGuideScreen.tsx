@@ -43,6 +43,21 @@ const STEPS = [
   { num: 3, label: '召集人员' },
 ];
 
+/**
+ * 车间「任务执行」三步引导接上真实数据、并且按钮真的能驱动生产之后，把它翻成 true。
+ *
+ * ⛔ 在那之前不要翻 —— 这三屏**一个接口都没调**（2026-08-28 逐屏走查实测）。
+ * 本屏（1/3 前往工位）的问题：车间 / 生产线 / 工位 / 设备四项全是写死的（A区车间 · 1号生产线 · 切片工位 · 切片机A EQ-001）。
+ *
+ * 三屏共同的两点：
+ *   · 批次号写着 {batchNumber || 'PB-20251227-001'} —— 没传参时**编一个批次号**出来
+ *   · 品名与目标写死成「带鱼片 / 80」，而 F006 做的是黄油鸡
+ *
+ * 车间主管拿这条流程决定去哪个工位、开哪台机器、叫哪几个人。
+ * 编出来的工位和人员不是「界面占位」，是会把人指到错的地方。
+ */
+const TASK_GUIDE_WIRED_UP = false;
+
 export function TaskGuideScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProps>();
@@ -62,6 +77,36 @@ export function TaskGuideScreen() {
   const handleNext = () => {
     navigation.navigate('TaskGuideStep2', { batchId, batchNumber });
   };
+
+  if (!TASK_GUIDE_WIRED_UP) {
+    return (
+      <View style={styles.container}>
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Icon source="arrow-left" size={22} color="rgba(255,255,255,0.9)" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>任务执行</Text>
+          <View style={styles.stepBadge}>
+            <Text style={styles.stepBadgeText}>1/3</Text>
+          </View>
+        </View>
+
+        <View style={taskGuideNotWired.box} testID="task-guide-not-wired">
+          <Icon source="database-off-outline" size={44} color="#bbb" />
+          <Text style={taskGuideNotWired.title}>任务执行引导尚未接入</Text>
+          <Text style={taskGuideNotWired.body}>
+            这一步的工位、设备与人员还没有连上真实数据，⛔ 不能照着它去安排生产。
+          </Text>
+          {batchNumber ? (
+            <Text style={taskGuideNotWired.body}>当前批次：{batchNumber}</Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -445,3 +490,14 @@ const styles = StyleSheet.create({
 });
 
 export default TaskGuideScreen;
+
+const taskGuideNotWired = StyleSheet.create({
+  box: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  title: { color: '#616161', fontSize: 16, fontWeight: '600', marginTop: 12 },
+  body: { color: '#9e9e9e', fontSize: 13, lineHeight: 20, marginTop: 8, textAlign: 'center' },
+});

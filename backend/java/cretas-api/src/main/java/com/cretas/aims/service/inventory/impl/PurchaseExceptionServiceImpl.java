@@ -6,10 +6,12 @@ import com.cretas.aims.entity.enums.ReceiveExceptionType;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.inventory.PurchaseException;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseExceptionRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.inventory.PurchaseExceptionService;
 import com.cretas.aims.service.inventory.ReturnOrderService;
 import com.cretas.aims.service.notification.NotificationService;
@@ -25,6 +27,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.Objects;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -58,6 +63,9 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
 
     /** D-BUG3: 查源采购单行项目, 取退货单价 (PurchaseException 无 unitPrice 字段)。 */
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
+
+    /** 读时补齐可读单号与供应商名 —— 异常表里只有两个 UUID。 */
+    private final PurchaseOrderRepository purchaseOrderRepository;
 
     /** 可选通知服务：未配置时静默跳过（不影响主流程） */
     @Autowired(required = false)
@@ -348,10 +356,64 @@ public class PurchaseExceptionServiceImpl implements PurchaseExceptionService {
 
     @Override
     public List<PurchaseException> listExceptions(String factoryId, String status) {
-        if (status == null || status.isBlank()) {
-            return exceptionRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId);
+        List<PurchaseException> rows = (status == null || status.isBlank())
+                ? exceptionRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId)
+                : exceptionRepository.findByFactoryIdAndStatus(factoryId, status);
+        enrichForDisplay(rows);
+        return rows;
+    }
+
+    /**
+     * 把只有 UUID 的三项补成人能读的：采购单号、供应商名、物料名。
+     *
+     * <h3>为什么在读时补</h3>
+     *
+     * <p>2026-08-28 逐屏走查实测，这个接口对 F006 返回 31 条，每条都是：
+     * {@code purchaseOrderNumber=null / materialName=null / supplierName=null}，
+     * 只有 {@code purchaseOrderId} / {@code materialTypeId} / {@code supplierId} 三个 UUID。
+     * 屏上于是显示「采购单: 39603589-739e-4094-ac50-ab745e977077」、物料名一列全是「—」、
+     * 供应商从不显示。⛔ 这三样前端都造不出来。
+     *
+     * <p>{@code materialName} 是<b>快照列</b>，存量 31 行全是 null —— 只改写入侧不会修好它们，
+     * 而补历史要写迁移。读时按源采购单查一次，<b>存量与新增一起修好</b>。
+     *
+     * <p>⚠️ 按 {@code purchaseOrderId} 批量取，⛔ 不在循环里逐条查（31 条会变成 31 次往返）。
+     */
+    private void enrichForDisplay(List<PurchaseException> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
         }
-        return exceptionRepository.findByFactoryIdAndStatus(factoryId, status);
+        List<String> poIds = rows.stream()
+                .map(PurchaseException::getPurchaseOrderId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (poIds.isEmpty()) {
+            return;
+        }
+
+        Map<String, PurchaseOrder> poById = purchaseOrderRepository.findAllById(poIds).stream()
+                .collect(Collectors.toMap(PurchaseOrder::getId, po -> po, (a, b) -> a));
+
+        // (采购单, 物料类型) -> 行项目上的物料名快照
+        Map<String, String> materialNameByKey = purchaseOrderItemRepository.findByPurchaseOrderIdIn(poIds).stream()
+                .filter(it -> it.getMaterialTypeId() != null && it.getMaterialName() != null)
+                .collect(Collectors.toMap(
+                        it -> it.getPurchaseOrderId() + "|" + it.getMaterialTypeId(),
+                        PurchaseOrderItem::getMaterialName,
+                        (a, b) -> a));
+
+        for (PurchaseException pe : rows) {
+            PurchaseOrder po = poById.get(pe.getPurchaseOrderId());
+            if (po != null) {
+                pe.setPurchaseOrderNumber(po.getOrderNumber());
+                pe.setSupplierName(po.getSupplierName());
+            }
+            if (pe.getMaterialName() == null && pe.getMaterialTypeId() != null) {
+                pe.setMaterialName(
+                        materialNameByKey.get(pe.getPurchaseOrderId() + "|" + pe.getMaterialTypeId()));
+            }
+        }
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────

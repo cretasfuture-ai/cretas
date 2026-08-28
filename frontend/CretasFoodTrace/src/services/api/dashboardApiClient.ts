@@ -142,7 +142,19 @@ export interface QualityDashboardData {
     defectRate: number;
     notes: string;
   }>;
-  monthlyStatistics: Record<string, unknown>;
+  monthlyStatistics: {
+    /**
+     * 后端 getQualityStatistics 专门加的语义明确分档。
+     *
+     * ⚠️ 与顶层的 passedInspections / failedInspections **不是同一口径**：
+     * 那两个是「PASS」与「非 PASS」，把 CONDITIONAL 和待检都算进了不合格；
+     * 顶层的 passRate 又是 averagePassRate（样本级），三者混着用会得出
+     * 「合格 6 / 不合格 7 / 合格率 68.8%」这种自相矛盾的一张卡（2026-08-28 实测）。
+     * 老键的语义为兼容 web-admin 冻结，⇒ **新代码一律读 breakdown**。
+     */
+    breakdown?: { pass: number; fail: number; conditional: number; pending: number };
+    [k: string]: unknown;
+  };
   trends: Array<{
     date: string;
     inspections: number;
