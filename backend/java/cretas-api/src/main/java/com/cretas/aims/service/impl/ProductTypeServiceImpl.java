@@ -243,6 +243,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         productType.setTemperatureZone(dto.getTemperatureZone());
         applyNetContentContract(productType, dto, false);
         productType.setWipToFgYield(dto.getWipToFgYield());
+        productType.setReworkPurityLevel(dto.getReworkPurityLevel());
+        productType.setAcceptsRework(dto.getAcceptsRework());
         productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         productType.setStandardCost(dto.getStandardCost());
         productType.setTargetGrossMargin(dto.getTargetGrossMargin());
@@ -375,6 +377,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
             applyNetContentContract(productType, dto, true);
         }
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
+        if (dto.getReworkPurityLevel() != null) productType.setReworkPurityLevel(dto.getReworkPurityLevel());
+        if (dto.getAcceptsRework() != null) productType.setAcceptsRework(dto.getAcceptsRework());
         if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         if (dto.isStandardCostPresent()) productType.setStandardCost(dto.getStandardCost());
         if (dto.isTargetGrossMarginPresent()) productType.setTargetGrossMargin(dto.getTargetGrossMargin());
@@ -1202,6 +1206,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .netContentQuantity(productType.getNetContentQuantity())
                 .netContentUnit(productType.getNetContentUnit())
                 .wipToFgYield(productType.getWipToFgYield())
+                .reworkPurityLevel(productType.getReworkPurityLevel())
+                .acceptsRework(productType.getAcceptsRework())
                 .quotedLaborCostPerKg(productType.getQuotedLaborCostPerKg()) // SP9-M1
                 .standardCost(productType.getStandardCost())
                 .targetGrossMargin(productType.getTargetGrossMargin())

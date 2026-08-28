@@ -489,6 +489,102 @@ class BomSeasoningWorkspaceServiceTest {
         verify(seasoningItemRepository, never()).save(any());
     }
 
+    // ==================== 物料大类闸 (2026-08-28) ====================
+
+    /**
+     * 只改物料的类目, 其余路径全部走真实实现 —— 断言跑在产品真实入口
+     * {@code createBinding} 上, 不是直接戳 validateMaterial。
+     */
+    private RawMaterialType materialOfCategory(String category) {
+        RawMaterialType material = material("salt");
+        material.setPrimaryCode(null);   // 把 "003" 那条旁路让开, 否则大类判据量不到
+        material.setCategory(category);  // setCategory 顺带推出 mainCategory
+        return material;
+    }
+
+    private BusinessException bindWithCategory(String category) {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "p1");
+        when(materialTypeRepository.findById("salt"))
+                .thenReturn(Optional.of(materialOfCategory(category)));
+        // lenient: 拒绝路径上这四个桩根本不会被用到 —— 而那正是「大类闸在 save 之前就拦住了」
+        // 的侧面证据 (第一版写成 when(...) 时 Mockito 就是用 UnnecessaryStubbing 报出来的)。
+        lenient().when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+                RECIPE, "node-p1", "salt")).thenReturn(Optional.empty());
+        lenient().when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(RECIPE, "node-p1"))
+                .thenReturn(List.of());
+        lenient().when(recipeRepository.claimSeasoningRevision(RECIPE, FACTORY, 4L)).thenReturn(1);
+        lenient().when(seasoningItemRepository.save(any())).thenAnswer(inv -> {
+            BomSeasoningItem saved = inv.getArgument(0);
+            saved.setId(77L);
+            return saved;
+        });
+        try {
+            service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1"));
+            return null;   // 放行
+        } catch (BusinessException e) {
+            return e;      // 拒绝
+        }
+    }
+
+    @Test
+    void additiveCategoryCanBeBoundBecauseItsMainCategoryIsAuxiliary() {
+        // 六膳门 9 个「添加剂」物料 (保水剂T22 / 复合磷酸盐 / 小苏打 / 无磷保水剂 …)
+        // 以前全部被「只能选辅料或调料物料」挡住 —— 而它们是肉制品核心辅料。
+        reset(materialTypeRepository, seasoningItemRepository, recipeRepository,
+                bomWorkflowRevisionService, substituteService);
+        assertNull(bindWithCategory("添加剂"), "category=添加剂 应该能绑成调料");
+        verify(seasoningItemRepository).save(any());
+    }
+
+    @Test
+    void auxiliarySubCategoriesAreAllAcceptedThroughTheMainCategory() {
+        // 辅料大类下的每个小类都该放行 —— 以后再加小类不用改代码。
+        for (String category : List.of("辅料", "调料", "调味料", "添加剂")) {
+            reset(materialTypeRepository, seasoningItemRepository, recipeRepository,
+                    bomWorkflowRevisionService, substituteService);
+            assertNull(bindWithCategory(category), "category=" + category + " 应该放行");
+        }
+    }
+
+    @Test
+    void packagingAndRawCategoriesAreStillRejected() {
+        // 阴性对照: 不是「什么都放行」。包材 = 包材大类; 主材/蔬菜/肉类 = 原料大类。
+        for (String category : List.of("包材", "主材", "原料", "蔬菜", "肉类")) {
+            reset(materialTypeRepository, seasoningItemRepository, recipeRepository,
+                    bomWorkflowRevisionService, substituteService);
+            BusinessException ex = bindWithCategory(category);
+            assertNotNull(ex, "category=" + category + " 应该被拒");
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("只能选择辅料物料"), ex.getMessage());
+            verify(seasoningItemRepository, never()).save(any());
+        }
+    }
+
+    @Test
+    void primaryCode003BypassIsUntouched() {
+        // 这条旁路本次不动: 料号前缀 003 认辅料, 与大类是两条独立判据。
+        reset(materialTypeRepository, seasoningItemRepository, recipeRepository,
+                bomWorkflowRevisionService, substituteService);
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "p1");
+        RawMaterialType material = materialOfCategory("包材");   // 大类是包材, 本该被拒
+        material.setPrimaryCode("003");                          // 但料号前缀说它是辅料
+        when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+                RECIPE, "node-p1", "salt")).thenReturn(Optional.empty());
+        when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(RECIPE, "node-p1"))
+                .thenReturn(List.of());
+        when(recipeRepository.claimSeasoningRevision(RECIPE, FACTORY, 4L)).thenReturn(1);
+        when(seasoningItemRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1"));
+
+        verify(seasoningItemRepository).save(any());
+    }
+
     private BomRecipe recipe(BomRecipe.Status status, long revision) {
         return BomRecipe.builder().id(RECIPE).factoryId(FACTORY).recipeCode("BOM-1")
                 .productTypeId("product-1").productName("产品").outputQuantityPerUnit(BigDecimal.ONE)

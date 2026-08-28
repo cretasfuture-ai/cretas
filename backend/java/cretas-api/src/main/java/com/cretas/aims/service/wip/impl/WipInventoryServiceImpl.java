@@ -27,6 +27,7 @@ import com.cretas.aims.service.workflow.WorkflowByproductNodes;
 import com.cretas.aims.service.workflow.WorkflowReworkNodes;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
+import com.cretas.aims.service.wip.ReworkPurityGuard;
 import com.cretas.aims.service.wip.WipCostAllocation;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.wip.WipLedgerEntries;
@@ -46,6 +47,7 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1715,14 +1717,56 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .map(SemiFinishedInventory::getProductTypeId)
                 .filter(id -> id != null && !id.isBlank())
                 .collect(Collectors.toSet());
+        // 3) 回料纯度闸要拿目标产品自己的等级/开关, 所以它也得进这一次批量查询 ——
+        //    ⛔ 不要为它单开一次 findById (那是本方法一直在避免的 N+1 的开头)。
+        Set<String> ptLookupIds = new HashSet<>(ptIds);
+        if (filterFamily) {
+            ptLookupIds.add(productTypeId);
+        }
         Map<String, String> ptNameMap = new HashMap<>();
         // 盒⇄kg 折算依据: 每盒克重 (计数单位半成品作 kg 道投料来源时前端换算用)。诚实 null: 未配 → null。
         Map<String, BigDecimal> ptGramsMap = new HashMap<>();
-        if (!ptIds.isEmpty()) {
-            productTypeRepo.findByIdIn(ptIds).forEach(pt -> {
+        Map<String, ProductType> ptById = new HashMap<>();
+        if (!ptLookupIds.isEmpty()) {
+            productTypeRepo.findByIdIn(ptLookupIds).forEach(pt -> {
+                ptById.put(pt.getId(), pt);
                 ptNameMap.put(pt.getId(), pt.getName());
                 ptGramsMap.put(pt.getId(), pt.getGramsPerUnit());
             });
+        }
+
+        // 3) 回料纯度过滤 —— 「哪些回料能投进这个产品」。⚠️ 只作用于 isRework 行:
+        //    良品半成品的可选性由上面的阶段/同族两道闸决定, 与纯度无关, ⛔ 不要顺手一起收窄。
+        //
+        //    🔴 在此之前四层都不守 (2026-08 逐层实测): 画布连线 (方案丙已移除接线) /
+        //       同族过滤 (粒度只有牛肉 vs 猪蹄, 且 planFamily 为 null 时整段跳过) /
+        //       阶段过滤 (它管的是回锅, 与纯度无关, 且本来就对回料放行) / RN 下拉 (列全部)
+        //       ⇒ 操作员能把熟肉饼的回料领给美式汉堡饼, 系统不拦。
+        //
+        //    判定本身在 ReworkPurityGuard (纯函数, 无 IO) —— 这里只负责把两侧的产品档案喂给它。
+        final ProductType targetProduct = filterFamily ? ptById.get(productTypeId) : null;
+        final Map<String, ReworkPurityGuard.Verdict> reworkVerdicts = new HashMap<>();
+        if (filterFamily) {
+            rows = rows.stream()
+                    .filter(w -> {
+                        if (!Boolean.TRUE.equals(w.getIsRework())) {
+                            return true;
+                        }
+                        ProductType source = w.getProductTypeId() == null
+                                ? null : ptById.get(w.getProductTypeId());
+                        ReworkPurityGuard.Verdict verdict = ReworkPurityGuard.evaluate(
+                                source == null ? null : source.getReworkPurityLevel(),
+                                targetProduct == null ? null : targetProduct.getReworkPurityLevel(),
+                                targetProduct == null ? null : targetProduct.getAcceptsRework());
+                        if (verdict.allowed() && w.getIntermediateBatchNo() != null) {
+                            reworkVerdicts.put(w.getIntermediateBatchNo(), verdict);
+                        }
+                        return verdict.allowed();
+                    })
+                    .collect(Collectors.toList());
+            if (rows.isEmpty()) {
+                return List.of();
+            }
         }
 
         // ② 批次下拉补 生产日期 / 成本: 仅逐道 SFI 投料下拉 (picker context = 带 productTypeId 过滤) 填充,
@@ -1747,8 +1791,30 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .unitCost(pickerContext ? w.getUnitCost() : null)
                 // ② picker-only: 每盒克重 (盒装半成品作 kg 道投料来源时前端 kg⇄盒 折算; 诚实 null)
                 .gramsPerUnit(pickerContext ? ptGramsMap.get(w.getProductTypeId()) : null)
+                // 回料标记 —— 无参快照也给, 它不是成本信息, 看板同样需要区分回料池和良品。
+                .isRework(w.getIsRework())
+                // 纯度判定标记: 只有 picker 上下文 (有目标产品) 才谈得上判定; 非回料行恒 null。
+                // 🔴 UNCONFIGURED 说的是「没判」而不是「判过了没问题」—— 见 WipRowDTO 的说明。
+                .reworkPurityStatus(reworkPurityStatusOf(reworkVerdicts.get(w.getIntermediateBatchNo())))
                 .build()
         ).collect(Collectors.toList());
+    }
+
+    /**
+     * 把纯度判定档位翻成给前端的标记。⛔ 只有两个值 —— 被拦下的行根本不在结果里, 没有 BLOCKED 档。
+     *
+     * @param verdict 非回料行 / 非 picker 上下文传 null → 返回 null (诚实: 这一行没有纯度判定这回事)
+     */
+    private static String reworkPurityStatusOf(ReworkPurityGuard.Verdict verdict) {
+        if (verdict == null) {
+            return null;
+        }
+        return switch (verdict) {
+            case ALLOWED -> "ENFORCED";
+            case ALLOWED_PURITY_UNCONFIGURED -> "UNCONFIGURED";
+            // 被拦下的行不会走到这里 (上面过滤掉了)。留着让新增档位漏接时编译不过, 而不是静默落 null。
+            case BLOCKED_TARGET_REJECTS_REWORK, BLOCKED_SOURCE_DIRTIER_THAN_TARGET -> null;
+        };
     }
 
     // ========== SP1 T4 — Output options endpoint ==========

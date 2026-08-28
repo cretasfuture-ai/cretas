@@ -82,6 +82,13 @@ public class ProductTypeDTO {
     @Schema(description = "SP9-M1 研发预估人工成本(元/kg成品); null=未填, 前端显示'-'; @PriceSensitive")
     private BigDecimal quotedLaborCostPerKg;
 
+    @Schema(description = "回料纯度等级: 数越小辅料越少越“干净”(美式汉堡饼=1/小吃吧=2/熟肉饼=3)。"
+            + "回料可投入 ⟺ 来源.level <= 目标.level。null=未配置, 不参与判定(放行并标记)")
+    private Integer reworkPurityLevel;
+
+    @Schema(description = "这个产品收不收回料。false(汉堡排)=任何来源的回料都不可投入, 与等级是否配置无关; null/true=收")
+    private Boolean acceptsRework;
+
     @PriceSensitive
     @Schema(description = "SP5 standard unit cost; null means margin redline check is skipped")
     private BigDecimal standardCost;
