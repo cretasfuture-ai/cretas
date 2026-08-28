@@ -94,7 +94,9 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
     // 真正的提交按钮在**进到一条单据之后**(实测仓储 5 屏 35 次点击, 0 个非 GET)。
     const drill = process.env.VSHOT_DRILL;
     if (drill) {
-      const target = page.getByText(drill, { exact: false }).first();
+      // ⛔ 不要点文字节点 —— RN Web 的 Pressable 接不住(实测钻入后屏还停在列表)。
+      //    点它外层的 [role=button]。
+      const target = page.locator('[role="button"], button').filter({ hasText: drill }).first();
       if ((await target.count()) > 0) {
         await target.click({ timeout: 8000 }).catch(() => {});
         await page.waitForTimeout(3500);
@@ -197,8 +199,12 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       //    被报红，而它们是纯 `navigation.navigate`，不发请求本来就是对的。
       //    ▎一道会误报的闸最终会被人忽略（本仓形态 E：宁可窄而可信）。
       //    ⇒ 只认**真正表示写入**的动词，⛔ 不认出现在导航标签里的业务名词。
-      const isSubmitLike = /^(提交|确认|保存|创建|发起|新增|确定|完成|应用|同步)/.test(b.text)
-        || /(提交|保存|确认)$/.test(b.text);
+      // ⚠️ 按钮文字常以**图标字形**开头(如 ` 提交入库 (1 行)`), 直接加 `^` 锚点会漏掉 ——
+      //    实测「提交入库 (1 行)」因此没被报红, 是一次**静默假阴性**。
+      //    ⇒ 先剥掉开头的私有区字形和空白, 再判。
+      const label = b.text.replace(/^[-\s]+/, '');
+      const isSubmitLike = /^(提交|确认|保存|创建|发起|新增|确定|完成|应用|同步)/.test(label)
+        || /(提交|保存|确认)$/.test(label);
       // ⛔ 不再用「屏上有没有成功字样」当判据。实测它把筛选 tab 的「已完成/历史(20)」
       //    当成了成功提示 —— 而在 web 上 Alert 又是空函数, 这一侧本来就读不全。
       //    ▎一个既漏又误报的判据, 比没有判据更糟。
@@ -221,7 +227,7 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       await navigateTo(page, path);
       await page.waitForTimeout(1600);
       if (drill) {
-        const t = page.getByText(drill, { exact: false }).first();
+        const t = page.locator('[role="button"], button').filter({ hasText: drill }).first();
         if ((await t.count()) > 0) {
           await t.click({ timeout: 6000 }).catch(() => {});
           await page.waitForTimeout(2600);
