@@ -873,7 +873,7 @@
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-7"><span></span></span><span><h4>核对工序投入产出与损耗率</h4><p>逐道查看投入、合格产出、留样、损耗、副产和下一工序接收量，计算转化率与差异。</p><span class="expect">各工序数量能沿批次谱系衔接；跨单位仅按已有科学换算，不用假 1:1 补齐。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-8"><span></span></span><span><h4>核对三价、交期预警与补货队列</h4><p>对同一成品回看标准/计划/实际成本口径，并检查订单交期预警、缺料补货队列和实时生产报表。</p><span class="expect">三种价格有明确来源和时间点；预警与实际计划、采购和库存状态同步，不用历史快照伪装实时。</span></span></label>
         </div>
-        <div class="callout warning"><strong>未知值与未支持分析必须诚实显示</strong>批次总重量只有在单件重量与入库数量都存在时才可计算；任一输入缺失时保持“—/未知”，不能把未知批次说成 0 kg。良品率只在真实良品数量与实际产量齐备时计算；缺少分子时清空旧派生值，不显示 100% 或 0%。SPC 与因果分析当前没有系统内直接入口，AI 必须明确说明“不支持”，不能生成假图、假结论或把基础质检说成统计过程控制；如需分析，只能导出当前真实质检/报工数据交由外部工具处理。</div>
+        <div class="callout warning"><strong>未知值、加载失败与未支持分析必须诚实显示</strong>批次总重量只有在单件重量与入库数量都存在时才可计算；任一输入缺失时保持“—/未知”，不能把未知批次说成 0 kg。良品率只在真实良品数量与实际产量齐备时计算；缺少分子时清空旧派生值，不显示 100% 或 0%。设备维护天数缺失时显示“未排期”，不能显示“0 天后”或 <code>undefined 天后</code>；字段映射复核接口失败时必须显示“无法判断是否有待复核项”并提供重试，不能显示绿色“暂无待办”。员工工牌默认厂名取当前登录租户，可在打印前改为分厂名，不能硬编码或沿用其他租户名称。SPC 与因果分析当前没有系统内直接入口，AI 必须明确说明“不支持”，不能生成假图、假结论或把基础质检说成统计过程控制；如需分析，只能导出当前真实质检/报工数据交由外部工具处理。</div>
       </section>
 
       <section id="sales-close" class="sales-only">
