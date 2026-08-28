@@ -31,7 +31,12 @@ const badgesGenerated = ref(false);
 const qrCanvasRefs = ref<Record<number, HTMLCanvasElement>>({});
 
 // Factory name used on the badge (editable)
-const factoryName = ref('白垩纪食品');
+// 🔴 2026-08-28 逐屏走查: 这里硬编码成「白垩纪食品」, 而当前租户是「六膳门食品科技」
+//   (左上角、员工名、面包屑都是六膳门) ⇒ **工牌会印错工厂名**。
+//   `authStore.factoryName` 是权威来源(顶栏品牌名就是它渲染的)。
+//   ⚠️ 仍用 ref 而不是 computed: 这个值是**可编辑输入框**绑定的,
+//   用户可以改成分厂名再打印; 只是**默认值**必须来自当前租户。
+const factoryName = ref(authStore.factoryName || '');
 
 // ---------- role map ----------
 const roleMap: Record<string, string> = {

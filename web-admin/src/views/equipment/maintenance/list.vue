@@ -214,13 +214,27 @@ function handleView(row: MaintenanceEquipment) {
   viewDialogVisible.value = true;
 }
 
-function getUrgencyType(days: number) {
+// 🔴 2026-08-28 逐屏走查: 「紧急程度」列实拍显示 **`undefined 天后`**。
+//
+// 真因: 模板读 `row.daysUntilMaintenance`, 而后端**从不产出这个字段**
+// (Java + Python 全库 grep, 驼峰和 snake 都没有) ⇒ `undefined`
+// 进了模板字符串 → `` `${undefined} 天后` `` → 屏上那五个英文字母。
+//
+// ▎JS 的模板字符串**不会**因为值是 undefined 就报错, 它会老老实实把
+// ▎「undefined」这个词打给用户。⛔ 参数类型写 `number` 挡不住 —— 运行时没有类型。
+//
+// ⇒ 签名改成 `number | null | undefined`, 算不出来就说算不出来。
+function getUrgencyType(days: number | null | undefined) {
+  if (days == null) return 'info';
   if (days < 0) return 'danger';
   if (days <= 7) return 'warning';
   return 'info';
 }
 
-function getUrgencyText(days: number) {
+function getUrgencyText(days: number | null | undefined) {
+  // ⛔ 不要回落成「0 天后」或空串: 「今天就要维护」和「不知道哪天维护」
+  //   对设备主管是两件完全不同的事。
+  if (days == null) return '未排期';
   if (days < 0) return `已逾期 ${Math.abs(days)} 天`;
   if (days === 0) return '今日需维护';
   return `${days} 天后`;
