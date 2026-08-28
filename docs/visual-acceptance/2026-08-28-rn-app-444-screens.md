@@ -1188,3 +1188,77 @@ page: 0    6 处   ← shipments ×3 · material-requisitions · sample-requests
 
 ⚠️ 顺带：T7「已审批的盘点单 0 个品项」**仍未核实** —— 这一轮只查清了分页，
 没查明细为什么是空的。别把这两件事混成一件。
+
+
+---
+
+# 第三轮追加：**真机**上跑了一次（这是前两轮唯一系统性偏乐观的那一类）
+
+设备：小米 M2102K1AC / Android 14，已装 `com.cretas.foodtrace`
+`versionName 1.0.4 · versionCode 15`（与 OTA 的 `runtimeVersion 1.0.4` 对得上）。
+做法：`adb logcat -c` → 强停 → 冷启动 → 读 logcat。**只读，没有装任何东西。**
+
+## D1 🔴 推送在**真机上**也从来没注册过 —— 而代码注释把它写成「只是 Web 不行」
+
+冷启动 logcat：
+
+```
+E/ReactNativeJS: [PushNotification] 未找到 EAS Project ID
+W/ReactNativeJS: [usePushNotifications] 无法获取 Push Token，跳过设备注册
+```
+
+`pushNotificationService.ts:194` 读的是 `Constants.expoConfig?.extra?.eas?.projectId`，
+而 `app.json` 里 `extra` 只有 `{"router": {}}` —— **没有 `eas.projectId`**。
+所以它在**任何平台**上都取不到，不只是 Web。
+
+⚠️ 而同一个文件 `:108-111` 的注释把这件事框成了 Web 专属：
+
+> APP-WEB-007 (2026-08-02): Expo 的原生推送在 **Web 上**不可用 —— 没有 EAS projectId 概念，
+> 于是 12 个角色每次登录都会走完…稳定产出「未找到 EAS Project ID」…
+
+▎照这段注释读，下一个人会以为**真机是好的**。真机日志说不是。
+▎`AppNavigator` 里 `autoRegisterOnLogin: true`，仓里还有三份推送文档 ——
+▎这是一个**打算要用**的功能，而它在生产包上一次都没注册成功过。
+
+⇒ 与「描述过期比没有描述更糟」同族：注释描述的是写它那天的**意图**，不是今天的行为。
+**只有真机能产出这条读数** —— Web 上这两条同样会打，但会被那段注释解释成「意料之中」。
+
+## D2 ✅ 顺带把 OTA 的「已送达」往前推了一格（但仍**没有**证到底）
+
+同一次冷启动：
+
+```
+Updates state change: StartStartup  → EndStartup   (isUpdateAvailable=false)
+Updates state change: Check         → CheckCompleteUnavailable
+```
+
+⇒ 设备**确实联到了 OTA 服务器**并被告知「没有更新」。而服务器上最新的一份就是我推的
+`ts=1787898056914` ⇒ 一致的读法是**这台设备已经拿到了它**（它在我推送后 13 分钟轮询过）。
+
+⚠️ 但**我没有证到「正在跑的就是那一份」**：
+- 想用「屏上有没有我的修复」来证 —— 点 `成品库存` 那一下没跳转，`uiautomator dump`
+  在 MIUI 上产出空文件，两条路都断了，**没有继续硬试**
+- app 私有目录读不到（release 包不能 `run-as`）
+
+⇒ 记成「**联到了、被告知没有更新**」，⛔ 不写成「已确认设备跑的是新 bundle」。
+
+## D3 ✅ 运行中的 JS 解析到的是生产地址
+
+```
+I/ReactNativeJS: '[DEBUG-CONFIG] REACT_APP_API_URL from @env:', '"https://www.cretaceousfuture.com"'
+```
+
+值得单独记，因为 `.env.production` 顶部专门写过一条事故：
+`ENVFILE` 对不上时 `@env` 会全空、`API_BASE_URL` 兜底到 `http://10.0.2.2:10010`（模拟器回环），
+真机上就是一句英文 Network Error。**这次真机上没有踩到**。
+
+⚠️ 并且我核过我推的那份 OTA bundle：`www.cretaceousfuture.com` 出现 1 次、
+`10.0.2.2:10010` 出现 1 次（那是 `config.ts` 里的兜底常量），
+与**上一份已知可用的 bundle 形状完全一致** ⇒ 我没有推出一个地址被清空的包。
+
+## ⚠️ 真机这一轮**没有**做到的
+
+那三个「web 只警告、真机会抛」的屏（`KPIReport` / `PurchaseOrderCreate` / `WHSettings`）
+**一个都没打开** —— 驱动 UI 那条路断在 uiautomator 上，我没有继续硬试。
+⇒ 「冷启动没看到 `Text strings must be rendered`」**不能**读成「那三屏没问题」，
+   它只说明**启动路径上**没有。这一条仍然挂账。
