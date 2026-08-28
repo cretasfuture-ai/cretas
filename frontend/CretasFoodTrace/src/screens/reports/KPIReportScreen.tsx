@@ -229,25 +229,39 @@ export default function KPIReportScreen() {
   const renderOverallScoreCard = () => {
     const grade = kpiData?.scoreGrade || 'N/A';
     const gradeColor = GRADE_COLORS[grade] || '#757575';
-    const periodChange = kpiData?.periodChange || 0;
-    const changeText = periodChange >= 0 ? `+${periodChange.toFixed(1)}%` : `${periodChange.toFixed(1)}%`;
-    const changeColor = periodChange >= 0 ? '#4CAF50' : '#F44336';
+    // ⛔ 不要 `|| 0`：没有环比数据时它会显示成绿色的「+0.0%」，读起来是
+    //    「与上期持平」—— 而真相是我们根本没有上期可比。0 在这里是合法值。
+    const periodChange = kpiData?.periodChange ?? null;
+    const hasChange = periodChange !== null && periodChange !== undefined;
+    const changeText = hasChange
+      ? (periodChange >= 0 ? `+${periodChange.toFixed(1)}%` : `${periodChange.toFixed(1)}%`)
+      : '--';
+    const changeColor = hasChange ? (periodChange >= 0 ? '#4CAF50' : '#F44336') : '#9E9E9E';
 
     return (
       <Surface style={styles.overallCard} elevation={2}>
         <Text style={styles.cardTitle}>综合评分</Text>
         <View style={styles.overallContent}>
           <View style={styles.gaugeWrapper}>
-            <GaugeChart
-              value={kpiData?.overallScore ?? 0}
-              maxValue={100}
-              title=""
-              unit="分"
-              size={GAUGE_SIZE_LARGE}
-              thresholds={{ warning: 60, danger: 80 }}
-              showTicks={true}
-              showLabels={true}
-            />
+            {kpiData?.overallScore === null || kpiData?.overallScore === undefined ? (
+              // 一个输入都没有时后端返 null。⛔ 不要兜成 0 分 —— 那会画出一个满格红的
+              // 「0 分」，把「还没有数据」说成「表现极差」。
+              <View style={styles.emptyGauge} testID="kpi-empty-overall-score">
+                <Text style={styles.emptyGaugeDash}>--</Text>
+                <Text style={styles.emptyGaugeHint}>暂无足够数据评分</Text>
+              </View>
+            ) : (
+              <GaugeChart
+                value={kpiData.overallScore}
+                maxValue={100}
+                title=""
+                unit="分"
+                size={GAUGE_SIZE_LARGE}
+                thresholds={{ warning: 60, danger: 80 }}
+                showTicks={true}
+                showLabels={true}
+              />
+            )}
           </View>
           <View style={styles.gradeInfo}>
             <Text style={styles.gradeLabel}>评级</Text>
@@ -270,25 +284,28 @@ export default function KPIReportScreen() {
       {
         key: 'oee',
         title: 'OEE',
-        value: kpiData?.oee ?? 0,
+        // ⛔ 不要 `?? 0`：后端算不出来时返 null，兜成 0 会画出一个指向 0% 的红色表盘，
+        //    读起来是「OEE 是 0%」—— 与原来后端兜底成 85 是同一类假话，只是换了个数。
+        //    null 走下面的「暂无数据」分支。
+        value: kpiData?.oee ?? null,
         thresholds: { warning: 60, danger: 85 }
       },
       {
         key: 'fpy',
         title: 'FPY',
-        value: kpiData?.fpy ?? 0,
+        value: kpiData?.fpy ?? null,
         thresholds: { warning: 80, danger: 95 }
       },
       {
         key: 'otif',
         title: 'OTIF',
-        value: kpiData?.otif ?? 0,
+        value: kpiData?.otif ?? null,
         thresholds: { warning: 85, danger: 95 }
       },
       {
         key: 'capacityUtilization',
         title: '产能利用率',
-        value: kpiData?.capacityUtilization ?? 0,
+        value: kpiData?.capacityUtilization ?? null,
         thresholds: { warning: 60, danger: 85 }
       },
     ];
@@ -300,16 +317,24 @@ export default function KPIReportScreen() {
         <View style={styles.gaugeGrid}>
           {coreKpis.map((kpi) => (
             <View key={kpi.key} style={styles.gaugeCell}>
-              <GaugeChart
-                value={kpi.value}
-                maxValue={100}
-                title={kpi.title}
-                unit="%"
-                size={GAUGE_SIZE_SMALL}
-                thresholds={kpi.thresholds}
-                showTicks={false}
-                showLabels={false}
-              />
+              {kpi.value === null || kpi.value === undefined ? (
+                <View style={styles.emptyGauge} testID={`kpi-empty-${kpi.key}`}>
+                  <Text style={styles.emptyGaugeTitle}>{kpi.title}</Text>
+                  <Text style={styles.emptyGaugeDash}>--</Text>
+                  <Text style={styles.emptyGaugeHint}>暂无数据</Text>
+                </View>
+              ) : (
+                <GaugeChart
+                  value={kpi.value}
+                  maxValue={100}
+                  title={kpi.title}
+                  unit="%"
+                  size={GAUGE_SIZE_SMALL}
+                  thresholds={kpi.thresholds}
+                  showTicks={false}
+                  showLabels={false}
+                />
+              )}
             </View>
           ))}
         </View>
@@ -775,6 +800,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginVertical: 8,
     width: '48%',
+  },
+
+  // 「算不出来」的占位：与表盘同尺寸，⛔ 不画任何数值，也不用红色 —— 
+  // 没有数据不是一个坏成绩。
+  emptyGauge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 96,
+    paddingVertical: 12,
+  },
+  emptyGaugeTitle: {
+    color: '#616161',
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  emptyGaugeDash: {
+    color: '#9E9E9E',
+    fontSize: 28,
+    fontWeight: '600',
+  },
+  emptyGaugeHint: {
+    color: '#9E9E9E',
+    fontSize: 12,
+    marginTop: 2,
   },
 
   // Categories card
