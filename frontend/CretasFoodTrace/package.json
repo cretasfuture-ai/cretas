@@ -20,7 +20,8 @@
     "build:ios": "expo build:ios",
     "test": "jest",
     "web:local": "env-cmd -f .env.local expo start --web --port 3010",
-    "web:test": "env-cmd -f .env.test expo start --web --port 3010"
+    "web:test": "env-cmd -f .env.test expo start --web --port 3010",
+    "vshot": "playwright test --config=tests/vshot/vshot.config.ts"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",
@@ -95,6 +96,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@playwright/test": "^1.58.2",
     "@react-native/eslint-config": "^0.83.1",
     "@testing-library/react-native": "^13.2.2",
     "@types/jest": "^29.5.14",
