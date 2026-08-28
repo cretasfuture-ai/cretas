@@ -1266,7 +1266,28 @@ Expected: PASS + 零类型错误。⚠️ 必须用 `vue-tsc -b`——`--noEmit`
 
 在 F006 建一个工序图：某道工序两个半成品产出，其中一个 `data.isRework: true`。启动一个生产批次，在报工屏上给两个产出各填一个数（良品 950 / 回料 50）。
 
+- [ ] **Step 2b: 🔴 先断言接口真的下发了 `isRework`（Task 2 唯一的守卫）**
+
+`WipInventoryServiceImpl` 里 `.isRework(reworkNodeIds.contains(port.getMaterialNodeId()))`
+那一行是 Task 2 的核心改动，而它**没有任何单测经过**（`workflowOutputOptions` 是私有方法且依赖
+3 个 repository，为它搭桩的代价高于收益 —— 见 Ruling F3/R5）。**这条判据就是它唯一的守卫。**
+
+```bash
+# 测试机地址见 Step 1；TOKEN 用 f006_admin 登录取
+curl -sS "http://100.85.234.108:10010/api/mobile/F006/processing/batches/<批次id>/output-options" \
+     -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+判据（两条都要）：
+- 回料那一项的 `isRework` 为 **`true`**
+- 良品那一项的 `isRework` 为 **`false`**（不是缺失、不是 null）——只看到 true 那条不算，
+  **两侧都要对，否则分不清「标对了」和「全都标成 true」**
+
 - [ ] **Step 3: 三条判据，缺一不可**
+
+⚠️ **连数据库**：测试机的 PostgreSQL 只监听 localhost，且 **`psql` 不在 PATH**。
+实测可用路径：`/opt/homebrew/Cellar/postgresql@17/17.11/bin/psql`
+（`/opt/homebrew/opt/postgresql@17/bin/` 是它的软链目录）。SSH 别名 `canada-mini`，用户 `rex`。
 
 ```bash
 # ① 两笔 IN 都进了台账 (不是一笔)
