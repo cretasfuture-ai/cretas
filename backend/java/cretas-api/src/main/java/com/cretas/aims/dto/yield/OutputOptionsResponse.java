@@ -54,5 +54,17 @@ public class OutputOptionsResponse {
 
         /** Process order (1-based), for display ordering in the dropdown. */
         private Integer processOrder;
+
+        /**
+         * 这一项是不是回料 (金检/X光 剔出的不良品去处)。
+         *
+         * <p>{@code true} 时报工屏把这一栏显示成「不良品数量」而不是「半成品产出量」,
+         * 并把填的数同时回填 {@code ProductionReport.defectQuantity} (质量账)。
+         *
+         * <p>判据唯一来源 {@link com.cretas.aims.service.workflow.WorkflowReworkNodes}。
+         * 旧版 App 不认这个字段, 会把回料当普通半成品产出项渲染 —— 物料账仍然对,
+         * 只是少了「不良品」这个措辞。这是刻意的向后兼容, 不是缺陷。
+         */
+        private Boolean isRework;
     }
 }
