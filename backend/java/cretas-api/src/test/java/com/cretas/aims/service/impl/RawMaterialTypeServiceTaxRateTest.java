@@ -351,6 +351,8 @@ class RawMaterialTypeServiceTaxRateTest {
         dto.setName("测试原料");
         dto.setUnit("kg");
         dto.setCategory("原料");
+        // 2026-08-28: 非包材创建必须带储存类型(与 web/RN 两端一致), 夹具补齐
+        dto.setStorageType("常温");
         dto.setCreatedBy(1L);
         dto.setClassificationId(L3_CODE);
         dto.setTaxRate(taxRate);

@@ -115,6 +115,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                     .withHintTarget("category");
         }
 
+
         // The segment dictionary remains useful as an optional taxonomy. It is never a code mode
         // switch and it never participates in generating or overwriting the short business code.
         MaterialSegmentChain segmentChain = null;
@@ -202,6 +203,27 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setPackQtyPerProduct(dto.getPackQtyPerProduct());
         // P8: 包材关联客户 (nullable, 非包材物料传 null 即留空)
         materialType.setAssociatedCustomerId(dto.getAssociatedCustomerId());
+
+        // 🔴 2026-08-28: 储存类型「前端必填、后端不管」, 两套规则。
+        //
+        //   web-admin  list.vue:1067  if (!isPackagingMaterial && !storageType) 拦下
+        //   RN App     rawMaterialType.schema.ts  required:true + x-validator
+        //   后端       RawMaterialTypeDTO.storageType  **一个校验注解都没有**
+        //
+        //   ⇒ 绕开这两个界面的批量路径可以写进空值。prod 实测: 2026-08-28 15:18:31
+        //   同一秒内并行创建 21 条(六膳门真实物料), storageType 全空, 而两个界面都认为
+        //   这种数据不可能存在。
+        //
+        // ⛔ 只在 create 上拦, **不碰 update** —— 本文件下方 316 行记着同形教训:
+        //   对存量无条件加必填, 后果是「存量包材连一个字段都改不了」(63 个里 59 个没参考价)。
+        //   已经进来的 21 条空值要能继续编辑, 由客户自己补上正确的储存类型。
+        if (!isPackagingCategory(materialCategory)
+                && (dto.getStorageType() == null || dto.getStorageType().trim().isEmpty())) {
+            throw new BusinessException(400, "请选择储存类型")
+                    .withHint("非包材物料必须指定储存类型(新鲜/冻货/干货/常温等); "
+                            + "包材不需要。批量导入请在数据里补上这一列")
+                    .withHintTarget("storageType");
+        }
 
         materialType = materialTypeRepository.save(materialType);
 

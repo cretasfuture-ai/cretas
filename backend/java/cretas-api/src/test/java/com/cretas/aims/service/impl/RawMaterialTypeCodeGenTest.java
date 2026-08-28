@@ -315,6 +315,7 @@ class RawMaterialTypeCodeGenTest {
                     .code(null)           // intentionally null — triggers auto-gen
                     .unit("kg")
                     .category("原料")
+                .storageType("常温")   // 2026-08-28: 非包材创建必须带储存类型
                     .build();
 
             RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);
@@ -353,6 +354,7 @@ class RawMaterialTypeCodeGenTest {
                     .code("  ")         // blank — triggers auto-gen
                     .unit("kg")
                     .category("肉类")
+                .storageType("常温")   // 2026-08-28: 非包材创建必须带储存类型
                     .build();
 
             RawMaterialTypeDTO result = service.createMaterialType(FACTORY_ID, dto);

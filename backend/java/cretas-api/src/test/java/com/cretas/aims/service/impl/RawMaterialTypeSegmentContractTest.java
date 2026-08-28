@@ -193,6 +193,7 @@ class RawMaterialTypeSegmentContractTest {
                 .name("牛肉")
                 .category("原料")
                 .unit("kg")
+                .storageType("常温")   // 2026-08-28: 非包材创建必须带储存类型
                 .taxTreatment(TaxTreatment.EXEMPT)
                 .taxExemptionReason("自产免税")
                 .taxIncludedUnitPrice(BigDecimal.ONE)
