@@ -31,10 +31,34 @@ import {
 } from './vshot-lib';
 
 const APP = process.env.VSHOT_APP ?? 'http://localhost:3021';
+// F006 生产库里**真实存在且 is_active** 的角色账号, 逐个走一遍。
+//
+// 🔴 第一版这个清单是我凭印象写的 10 个, 其中 `f006_operator` **根本不存在**
+//    (线上 401), 而漏掉了 cashier / department_admin / dispatcher /
+//    equipment_admin / quality_manager / viewer / warehouse_worker 七个角色。
+//    ▎「我扫过了」和「我扫全了」是两回事 —— 名单本身也要有出处。
+//    出处: SELECT role_code, username FROM users WHERE factory_id='F006' AND is_active;
+//
+// ⚠️ yield_operator 在 F006 **一个活账号都没有** ⇒ 走不了, 这里显式登记,
+//    ⛔ 不要因为它不在清单里就以为它被覆盖了。
 const USERS = (process.env.VSHOT_USERS ?? [
-  'f006_admin', 'f006_operator', 'f006_warehouse_mgr', 'f006_workshop', 'f006_quality_insp',
-  'f006_production_mgr', 'f006_procurement_mgr', 'f006_sales_mgr', 'f006_finance_mgr',
-  'f006_hr_admin',
+  'f006_admin',            // factory_super_admin
+  'f006_operator1',        // operator (⚠️ 不是 f006_operator)
+  'f006_warehouse_mgr',    // warehouse_manager
+  'f006_warehouse_worker', // warehouse_worker
+  'f006_workshop',         // workshop_supervisor
+  'f006_quality_insp',     // quality_inspector
+  'f006_quality_mgr',      // quality_manager
+  'f006_production_mgr',   // production_manager
+  'f006_procurement_mgr',  // procurement_manager
+  'f006_sales_mgr',        // sales_manager
+  'f006_finance_mgr',      // finance_manager
+  'f006_cashier',          // cashier
+  'f006_hr_admin',         // hr_admin
+  'f006_dept_admin',       // department_admin
+  'f006_dispatcher',       // dispatcher
+  'f006_equipment_admin',  // equipment_admin
+  'f006_viewer',           // viewer
 ].join(',')).split(',').map((u: string) => u.trim()).filter(Boolean);
 
 type Crash = { user: string; route: string; err: string };
