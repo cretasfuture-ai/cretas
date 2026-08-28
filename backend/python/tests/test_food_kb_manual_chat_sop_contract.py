@@ -11,6 +11,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_BYPRODUCT_LIFECYCLE_ANSWER,
     _FACTORY_BATCH_ADJUSTMENT_ANSWER,
     _FACTORY_BOM_CANVAS_COST_ANSWER,
+    _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_DEFECT_COUNT_TRUTH_ANSWER,
     _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER,
@@ -72,6 +73,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_byproduct_lifecycle_guard,
     _needs_factory_batch_adjustment_guard,
     _needs_factory_bom_canvas_cost_guard,
+    _needs_factory_batch_unknown_metrics_guard,
     _needs_factory_current_gates_guard,
     _needs_factory_defect_count_truth_guard,
     _needs_factory_finished_goods_stocktake_guard,
@@ -477,6 +479,21 @@ def test_20260827_factory_defect_count_truth_is_deterministic_and_isolated():
     assert "当前页面只提供待办清单" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
     assert "良品率”显示 `—`" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
     assert "不能拿逐道投入/产出的出成率冒充良品率" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+
+
+def test_20260828_factory_batch_unknown_metrics_are_complete_and_preempt_defect_route():
+    questions = (
+        "批次总重量缺少单件重量时为什么不能显示 0 kg？",
+        "没有计划量或计划成本时 BOM 达成率应该显示什么？",
+        "批次总重量、良品率或 BOM 达成率缺少可信输入时，页面应该显示什么？",
+    )
+    assert all(_needs_factory_batch_unknown_metrics_guard(q) for q in questions)
+    assert not _needs_factory_batch_unknown_metrics_guard("结单不良品数未清点时良品率怎样显示？")
+    assert "不能解释成 0 kg" in _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER
+    assert "不能沿用历史 100% 或改成 0%" in _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER
+    assert "没有计划量或计划成本时显示 `—`" in _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER
+    assert "不能把该批次计入平均或最低达成率" in _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER
+    assert "批次创建时固定的 BOM 版本" in _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER
 
 
 def test_20260827_label_capture_quality_gate_is_in_review_contract():
