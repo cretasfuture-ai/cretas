@@ -577,6 +577,45 @@ public class RuleController {
         return ApiResponse.success(transitions);
     }
 
+    /**
+     * 获取状态机版本历史
+     *
+     * <p>🔴 2026-08-28 生产实测补的。{@code StateMachineService.getVersionHistory} 一直
+     * 实现着，但<b>没有任何 controller 暴露它</b> —— 工作流设计器点「版本历史」必 404。
+     * 典型的「机制在、没接上」：service 层的单测能绿，而生产上没有一条路径到得了它。
+     */
+    @GetMapping("/state-machines/{entityType}/versions")
+    @Operation(summary = "获取状态机版本历史", description = "按版本倒序返回该实体类型的全部状态机配置")
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<List<StateMachineConfig>> getStateMachineVersions(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @PathVariable @Parameter(description = "实体类型", example = "PROCESSING_BATCH") String entityType
+    ) {
+        List<StateMachineConfig> versions = stateMachineService.getVersionHistory(factoryId, entityType);
+        return ApiResponse.success(versions);
+    }
+
+    /**
+     * 发布状态机草稿
+     *
+     * <p>⚠️ {@code draftId} 是 <b>String</b>（{@code StateMachine.id} 为 {@code varchar(50)}），
+     * ⛔ 不要写成 {@code Long} —— 前端原本把它标成 {@code number}，那是个类型谎言。
+     */
+    @RequirePermission({"system:read_write"})
+    @PostMapping("/state-machines/{entityType}/publish/{draftId}")
+    @Operation(summary = "发布状态机草稿", description = "把草稿置为生效版本，并归档原生效版本")
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<StateMachineConfig> publishStateMachineDraft(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @PathVariable @Parameter(description = "实体类型", example = "PROCESSING_BATCH") String entityType,
+            @PathVariable @Parameter(description = "草稿ID") String draftId,
+            @RequestAttribute("userId") Long userId
+    ) {
+        log.info("发布状态机草稿 - factoryId={}, entityType={}, draftId={}", factoryId, entityType, draftId);
+        StateMachineConfig published = stateMachineService.publishDraft(factoryId, entityType, draftId, userId);
+        return ApiResponse.success("工作流已发布", published);
+    }
+
     // ==================== 私有方法 ====================
 
     private String getFileExtension(String filename) {
