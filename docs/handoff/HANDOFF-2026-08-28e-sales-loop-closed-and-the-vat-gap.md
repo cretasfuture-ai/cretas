@@ -250,20 +250,63 @@ if (MOBILE_ONLY_ROLES.includes(authStore.currentRole)) {
 
 ---
 
-## 🟡 P2：quality_manager 菜单里有 4 项，点进去必 403
+## 🟡 P2：25 处「菜单里有、点进去 403」，分布在 5 个角色 / 12 条路由
 
-逐角色巡检（只走该角色**侧边栏里真的有的**那 33 条路由）：
+### 逐角色巡检结果（7 个角色全跑完）
 
-| 路由 | 菜单标题 | 403 的接口 |
-|---|---|---|
-| `/production/approval` | 报工审批 | `process-work-reporting/pending-approval` |
-| `/production/reversals` | 撤回审批 | `reversals` |
-| `/production/material-returns` | 退料记录 | `production-material-returns` |
-| `/system/product-processes` | 产品-工序配置 | `material-segments/tree` ×2 |
+⚠️ **本轮没有直接用 `scripts/e2e/production-readonly/menu-sweep.mjs`** ——
+它拿 `menuConfig.ts` 的全部路由**敲 URL**走，与登录账号无关，
+所以对「这个角色的菜单里根本没有这一项」是**盲的**（本仓记过：5 条孤儿路由 E2E 全绿，
+而没有任何用户走得到）。28d 写的「menu-sweep 按登录账号看到的菜单走」**不准确**。
 
-`quality_manager` 在 DB 里是 `production=r`，而这四个端点要的更多。
-**菜单给了入口，接口不放行** —— 与本仓记过的
-「只有 finance / 只有 rd 的角色看得见入口，点进去必 403」同族。
+⇒ 改成：先读该角色**实际渲染出来的侧边栏**，再只走那些项。
+脚本在 `scratchpad/drive/23-role-sweep.mjs`，判据与 menu-sweep 同一组。
+
+| 角色 | 落地页 | 可巡检路由 | OK | HTTP_ERROR |
+|---|---|---:|---:|---:|
+| `f006_cashier` | **`/403`** | **0** | — | ⛔ 登录即被挡，一屏都进不去 |
+| `f006_warehouse_worker` | **`/mobile-only`** | **0** | — | 移动端专属（设计如此） |
+| `f006_equipment_admin` | `/dashboard` | 8 | 8 | 0 ✅ |
+| `f006_quality_mgr` | `/dashboard` | 33 | 29 | 4 |
+| `f006_dispatcher` | `/dashboard` | 91 | 86 | 5 |
+| `f006_dept_admin` | `/dashboard` | 91 | 86 | 5 |
+| `f006_viewer` | `/dashboard` | 83 | 72 | 11 |
+
+**没有一屏是 BLANK / NOT_MOUNTED / 崩溃**，全部 25 条都是同一形态：
+**侧边栏给了入口，页面渲染正常，它发的接口 403。**
+
+### 12 条路由（去重，标出命中哪些角色）
+
+| 路由 | 菜单标题 | 命中角色 | 403 的接口 |
+|---|---|---|---|
+| `/production/approval` | 报工审批 | quality_mgr, dispatcher, dept_admin, viewer | `process-work-reporting/pending-approval` |
+| `/finance/invoices` | 销售开票 | dispatcher, dept_admin, viewer | `finance/invoice-todos/failed` |
+| `/finance/gross-margin-redline` | 毛利红线配置 | dispatcher, dept_admin, viewer | `pricing/gross-margin-configs` |
+| `/hr/whitelist` | 账号邀请 | dispatcher, dept_admin, viewer | `whitelist`, `whitelist/stats` |
+| `/production/reversals` | 撤回审批 | quality_mgr, viewer | `reversals` |
+| `/production/material-returns` | 退料记录 | quality_mgr, viewer | `production-material-returns` |
+| `/system/product-processes` | 产品-工序配置 | quality_mgr, viewer | `material-segments/tree` |
+| `/system/workflow-designer` | 工作流设计器 | dispatcher, dept_admin | `rules/state-machines/PRODUCTION_WORKFLOW` |
+| `/procurement/price-lists` | 价格表管理 | viewer | `price-lists` |
+| `/finance/payments` | 收款管理 | viewer | `finance/payments` |
+| `/warehouse/material-types` | 原料类型字典 | viewer | `material-segments/tree` |
+| `/warehouse/material-segments` | 物料分类字典 | viewer | `material-segments/tree` |
+
+⚠️ **`/system/workflow-designer` 这一条别和 28d 那条混了。**
+28d 说它是 **404**（F006 没配 `PRODUCTION_WORKFLOW` 状态机，前端 `_silent:true` 有意吞掉，
+「是数据不存在，不是缺陷」）—— 那是 **super admin 视角**。
+本轮 dispatcher / dept_admin 拿到的是 **403**，成因不同（权限），
+同一条路由在不同角色下是两个问题。
+
+### 最集中的两条
+
+- **`material-segments/tree`** 一个接口撑着 **3 个不同菜单项**
+  （产品-工序配置 / 原料类型字典 / 物料分类字典）⇒ 放开它一次修 3 处。
+- **`/production/approval` 命中 4 个角色** —— 包括 `quality_manager`
+  （DB 里是 `production=r`，而报工审批要更高权限）。
+
+⛔ 我一条都没改 —— 每一条都是「该不该给这个角色」的产品判断，不是代码 bug。
+但**这 25 条现在有精确的路由/角色/接口清单**，逐条裁定的成本很低。
 
 ---
 
@@ -289,6 +332,51 @@ f006_viewer      → ["view:*"]     ← case viewer: return "view"
 ⚠️ 两条值得 owner 单独看：
 - `department_admin` 是 `@Deprecated` 角色，却拿着和调度一样宽的写权限
 - `viewer`（「查看者/只读访问」）在 DB 里有 `finance=r hr=r` ⇒ 看得到财务和人事数据
+
+---
+
+## ✅ 28d 那条「库存口径不一致」的开放问题 —— 查清了，算式精确对上
+
+28d 记着但没验证：
+
+```
+销售订单产品选择器   可用 210 盒
+调拨单物料选择器     可用 134 盒
+当时的猜测: 「可能是全仓 vs 成品仓口径差异」
+```
+
+**猜错了。真因是：销售选品把【半成品在制量】算进了「可用库存」，调拨只看成品。**
+
+`SalesController.productInventorySummary`（`/sales/product-inventory-summary`）：
+
+```java
+for (FinishedGoodsStockItem row : finishedGoodsFeedService.listAvailableForFeed(...))  // 成品
+for (WipRowDTO row : wipInventoryService.listWipByFactory(...))                        // ＋ 半成品在制
+    mergeProductInventory(...);   // 单位相同就相加
+```
+
+本轮实测（黄油鸡成品800g，两个接口同一分钟内各调一次）：
+
+| 口径 | 数量 | 来源 |
+|---|---:|---|
+| 成品可用（AVAILABLE 批次，`产量−已发−预留`） | **124** | `finished_goods_batches` |
+| 半成品在制（stage 2，单位「盒」，1 + 75） | **76** | `/semi-finished/inventory` |
+| **销售选品报的「可用库存」** | **200** | `/sales/product-inventory-summary` ✅ 124+76 |
+| 调拨选料报的 | 124 | 只数成品 |
+
+28d 的 210/134 是**我发货之前**的同一组数：`134 + 76 = 210`。**两个数都精确解释掉了。**
+
+### 这是不是缺陷 —— 需要 owner 定
+
+风险是**实的**：出库只能从成品批次扣（我这一单就是 FIFO 从 `finished_goods_batches` 扣的），
+所以销售照着 200 卖，有 76 盒**当天发不出去**，要等生产做完。
+
+但「把在制量算进可承诺量」也可能是**有意的 ATP 口径**（能接单 ≠ 今天能发）。
+⇒ 判据不是改哪个数，而是：**同一个产品在两个选品框里显示两个「可用库存」，
+且都不标口径** —— 至少要把标签写清楚（「可发 124 / 含在制 200」），
+否则销售和仓管在拿两个数说话。
+
+⛔ 我没有改任何一侧。
 
 ---
 
@@ -371,11 +459,25 @@ SO-20260828-0003      COMPLETED / FULLY_INVOICED / 已收款
   ⚠️ 采购侧多半有**对称的问题**：应付挂账用的是含税还是未税？
   `recordPayable` 的调用点值得先 grep 一眼再动手。
 - **异常路径一条没试**（库存不足、超发少发、退货冲销、审批驳回、并发下单）。
-- **`dispatcher` / `dept_admin` / `viewer` 的逐屏巡检**本轮跑到一半，
-  见 `out/23-role-sweep/report.json`。
+- **7 个角色的逐屏巡检本轮全部跑完**（见上面 P2 那节），但**只覆盖 web-admin**。
+  仓库员/操作员/质检员是 `MOBILE_ONLY_ROLES`，他们的屏在 App 上，**一屏都没验过**。
+- **`operator` / `quality_inspector` 两个角色没跑** —— 它们同属 mobile-only，
+  在 web 上必然落 `/mobile-only`，跑了也只会得到和仓库员一样的读数。
 
 ### 一条本轮新发现的、28d 里没有的
 
-`sales_orders` 表上有 **30 多个 `cf_conflict_test_*` / `cf_e2e_*` 列**
-（`cf_conflict_test_1775841401654` 这种），是历次 E2E 建自定义字段留下的真实 DDL。
-它们是**生产表上的真列**，不是软数据。清理需要 migration，本轮没动。
+`sales_orders` 表被历次 E2E 建自定义字段留下的真实列污染了：
+
+```
+表           | E2E 残留列 | cf_* 总列 | 表总列数
+sales_orders |    27      |    31     |   84       ← 32% 的列是测试垃圾
+```
+
+27 条 = 21 个 `cf_conflict_test_<epoch>` + 6 个 `cf_e2e_*`，
+**全库 84 列里占 32%**，且 `IS NOT NULL` 的行数为 **0**（一条数据都没存过）。
+
+✅ 好消息：全库**只有这一张表**被污染（按 `^cf_(conflict_test|e2e)_` 扫全部表，
+其它表 0 条）⇒ 是销售订单自定义字段那个 E2E 用例的局部问题，不是系统性的。
+
+清理需要 migration（`ALTER TABLE ... DROP COLUMN`），本轮没动。
+⚠️ 顺带值得问一句：**E2E 用例能在生产库上跑 DDL** 本身是不是该收口。
