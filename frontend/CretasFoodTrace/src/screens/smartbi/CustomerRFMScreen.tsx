@@ -163,7 +163,7 @@ const SegmentCard: React.FC<SegmentCardProps> = ({ segment, onPress, isSelected 
         <MaterialCommunityIcons name={segment.icon} size={20} color={segment.color} />
       </View>
       <Text style={[styles.segmentName, { color: segment.color }]}>{segment.name}</Text>
-      <Text style={styles.segmentCount}>{segment.count}{t('units.people', { ns: 'common', defaultValue: '人' })}</Text>
+      <Text style={styles.segmentCount}>{segment.count}{t('common:units.people', { ns: 'common', defaultValue: '人' })}</Text>
       <View style={styles.segmentPctRow}>
         <View style={[styles.segmentPctBar, { backgroundColor: SMARTBI_THEME.border }]}>
           <View style={[styles.segmentPctFill, { width: `${segment.percentage}%`, backgroundColor: segment.color }]} />
@@ -406,7 +406,7 @@ export function CustomerRFMScreen() {
                 >
                   <View style={[styles.strategyDot, { backgroundColor: seg.color }]} />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.strategyName}>{seg.name}  <Text style={styles.strategyCount}>({seg.count}{t('units.people', { ns: 'common', defaultValue: '人' })})</Text></Text>
+                    <Text style={styles.strategyName}>{seg.name}  <Text style={styles.strategyCount}>({seg.count}{t('common:units.people', { ns: 'common', defaultValue: '人' })})</Text></Text>
                     <Text style={styles.strategyText} numberOfLines={1}>{seg.suggestion}</Text>
                   </View>
                   <MaterialCommunityIcons name="chevron-right" size={18} color={SMARTBI_THEME.textMuted} />

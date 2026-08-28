@@ -562,7 +562,7 @@ export default function EntityDataExportScreen() {
             </ScrollView>
           </Dialog.ScrollArea>
           <Dialog.Actions>
-            <Button onPress={() => setShowResultDialog(false)}>{t('common.close')}</Button>
+            <Button onPress={() => setShowResultDialog(false)}>{t('home:common.close')}</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

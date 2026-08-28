@@ -243,7 +243,7 @@ export default function CustomerManagementScreen() {
         isEdit: !!editingCustomer,
         customerCode: formData.customerCode,
       });
-      Alert.alert(t('common.error'), getErrorMsg(error) || t('common.operationFailed'));
+      Alert.alert(t('common.error'), getErrorMsg(error) || t('restaurant:common.operationFailed'));
     }
   };
 
@@ -297,7 +297,7 @@ export default function CustomerManagementScreen() {
         customerId,
         currentStatus,
       });
-      Alert.alert(t('common.error'), getErrorMsg(error) || t('common.operationFailed'));
+      Alert.alert(t('common.error'), getErrorMsg(error) || t('restaurant:common.operationFailed'));
     }
   };
 

@@ -309,7 +309,7 @@ export function FAHomeScreen() {
             style={styles.retryBtn}
             onPress={() => loadDashboardData()}
           >
-            <Text style={styles.retryBtnText}>{t('common.retry', 'Retry')}</Text>
+            <Text style={styles.retryBtnText}>{t('dispatcher-complete:common.retry', 'Retry')}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>

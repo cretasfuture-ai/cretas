@@ -266,7 +266,7 @@ export default function ProductionPlanManagementScreen() {
       }
     } catch (error) {
       productionPlanLogger.error('加载生产计划失败', error, { filterStatus });
-      Alert.alert(t('common.error', { defaultValue: '错误' }), getErrorMsg(error) || t('productionPlan.messages.loadFailed'));
+      Alert.alert(t('common:error', { defaultValue: '错误' }), getErrorMsg(error) || t('productionPlan.messages.loadFailed'));
       setPlans([]);
       setMaterialAdvisories({});
     } finally {

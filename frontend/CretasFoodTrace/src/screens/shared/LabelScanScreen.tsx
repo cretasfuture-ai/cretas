@@ -107,7 +107,7 @@ export default function LabelScanScreen() {
         console.error('拍照失败:', error);
         Alert.alert(
           t('error.general', { defaultValue: '操作失败' }),
-          t('camera.captureFailed', { defaultValue: '拍照失败，请重试', ns: 'quality' })
+          t('quality:camera.captureFailed', { defaultValue: '拍照失败，请重试', ns: 'quality' })
         );
       }
     }

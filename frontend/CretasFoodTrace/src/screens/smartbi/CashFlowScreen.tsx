@@ -484,7 +484,7 @@ export function CashFlowScreen() {
       <Modal visible={showDatePicker} transparent animationType="slide" onRequestClose={() => setShowDatePicker(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowDatePicker(false)}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>{t('dateRange.selectRange', { ns: 'common', defaultValue: '选择日期范围' })}</Text>
+            <Text style={styles.modalTitle}>{t('common:dateRange.selectRange', { ns: 'common', defaultValue: '选择日期范围' })}</Text>
             {DATE_RANGE_OPTIONS.map((opt) => (
               <TouchableOpacity key={opt.days} style={styles.modalOption} onPress={() => handleDateSelect(opt.days)}>
                 <Text style={styles.modalOptionText}>{t(opt.labelKey, { ns: 'common', defaultValue: opt.labelKey })}</Text>
