@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,15 @@ class EfficiencyRepository:
             logger.warning("PostgreSQL password not set, skipping database connection")
             return None
 
-        return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+        # ⛔ 密码必须 percent-encode 后再拼进 URL。生产密码里含 `/`，裸拼会让 `/`
+        #    在 `@` 之前就截断 netloc → 驱动把「密码首段」当端口去 int() → 当场炸，
+        #    且异常文本里裹着凭证。(2026-08-28 在 completeness_calculator 上实测)
+        #    ⚠️ 这里走 SQLAlchemy，必须是 URL 串，所以只能 quote；能分参数传的地方
+        #    一律分参数传（见 client_requirement/completeness_calculator._pool_kwargs）。
+        return (
+            f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}"
+            f"@{host}:{port}/{db}"
+        )
 
     def _init_tables(self):
         """Create tables if they don't exist."""
