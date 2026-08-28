@@ -344,6 +344,11 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .productTypeId(t.getProductTypeId())
                 .inputQuantity(effInput).inputUnit(effInputUnit)
                 .outputQuantity(effOutput).outputUnit(effOutputUnit)
+                // 不良品数 (质量账)。null 原样传 null —— ⛔ 不兜底成 0。
+                .defectQuantity(req.getDefectQuantity())
+                // 良品数 = 本道产出。outputQuantity 口径已是良品, 这里只是把它显式化,
+                // 让「良品 + 不良品」两个数在同一行上可比 —— 报表侧不用再去别处推。
+                .goodQuantity(effOutput)
                 .totalWorkMinutes(effectiveWorkMinutes)   // 适配单元3: 多段=Σ段时长, 单段=effReqWorkMinutes
                 .totalWorkers(effectiveWorkers)           // 适配单元3: 多段=MAX headcount (修 M2), 单段=effReqWorkerCount
                 .laborCost(laborCost)                 // A.4: 本道人工成本 (null=缺输入); 三阶段: 仅 SEGMENT/legacy
