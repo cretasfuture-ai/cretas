@@ -519,6 +519,10 @@ Expected: PASS
                 .goodQuantity(effOutput)
 ```
 
+⚠️ **本任务只落 `defectQuantity` / `goodQuantity` 这两个既有字段。**
+`semiOutputs` 的落库放在 Task 4 —— 承载它的 entity 字段和迁移都在那个任务里建，
+在这里写会引用一个还不存在的字段，编译不过。（开工前扫描发现的顺序问题，已按此裁定。）
+
 - [ ] **Step 6: 跑现有 yield 测试确认没打破别的**
 
 ```bash
@@ -543,14 +547,23 @@ Expected: 全绿。若有红，逐条看是不是本改动引入的——⛔ 不
 **Files:**
 - Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java`（方法 `postApprovedOutput` / `postSemiOutputLedger`）
 - Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/entity/ProductionReport.java`（加 `semiOutputs` jsonb 字段承载多产出）
-- Create: `backend/java/cretas-api/src/main/resources/db/migration/V20261101_01__production_reports_semi_outputs.sql`
+- Create: `backend/java/cretas-api/src/main/resources/db/flyway/V20261101_01__production_reports_semi_outputs.sql`
+- Create: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/WipSemiOutputPlan.java`
+- Modify: `backend/java/cretas-api/src/main/java/com/cretas/aims/service/yield/impl/YieldReportServiceImpl.java`（Step 8b：把请求体的多产出落库）
 - Test: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/wip/MultiSemiOutputPostingTest.java`
+- Test: `backend/java/cretas-api/src/test/java/com/cretas/aims/service/yield/SemiOutputPersistenceTest.java`
 
 **Interfaces:**
 - Consumes: `YieldReportRequest.SemiOutput`（Task 3）
 - Produces: `postApprovedOutput` 对每个 `semiOutputs` 条目各入一笔 `SemiFinishedInventoryTransaction(IN)`
 
 - [ ] **Step 1: 写迁移**
+
+🔴 **放在 `db/flyway/`，不是 `db/migration/`。** 生效目录由
+`application-pg.properties` / `application-pg-prod.properties` 的
+`spring.flyway.locations=classpath:db/flyway` 决定；`db/migration/`(256 个文件) 是**死目录**，
+写在那里的迁移**永远不会执行**，而且不报错。开工前扫描实测：`db/flyway` 最高号 `V20261031_04`，
+`V20261101_01` 未被占用。
 
 ```sql
 -- V20261101_01__production_reports_semi_outputs.sql
@@ -773,6 +786,101 @@ Expected: PASS，3 个测试全绿
                         && semiCode.equals(t.getSourceRef()));
 ```
 
+- [ ] **Step 8b: 把 semiOutputs 落库（🔴 不做这一步，Step 8 读到的永远是 null）**
+
+请求体侧是 `List<YieldReportRequest.SemiOutput>`（POJO），entity 侧是
+`List<Map<String, Object>>`（jsonb）。在 `YieldReportServiceImpl` 构建 `ProductionReport`
+的 builder 链里（Task 3 加的 `.goodQuantity(effOutput)` 之后）加：
+
+```java
+                .semiOutputs(toSemiOutputMaps(request.getSemiOutputs()))
+```
+
+并在同一个类里加转换方法：
+
+```java
+    /**
+     * 多产出填报值 POJO → jsonb。null/空 原样返回 null ——
+     * ⛔ 不要返回空 List: 空 List 与 null 在 {@code WipSemiOutputPlan.postableEntries} 里
+     * 行为相同, 但落库后前者是 {@code []} 后者是 {@code NULL}, 而「旧式报工」的判据是 NULL。
+     * 写成 [] 会让存量报表分不清「旧式单产出」和「多产出但一条都没填」。
+     */
+    private static List<Map<String, Object>> toSemiOutputMaps(
+            List<YieldReportRequest.SemiOutput> outputs) {
+        if (outputs == null || outputs.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> maps = new ArrayList<>(outputs.size());
+        for (YieldReportRequest.SemiOutput o : outputs) {
+            if (o == null || o.getSemiCode() == null || o.getSemiCode().isBlank()) continue;
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("semiCode", o.getSemiCode().trim());
+            m.put("quantity", o.getQuantity());          // 可能是 null, 原样落 —— 由 postableEntries 判可入账
+            m.put("isRework", Boolean.TRUE.equals(o.getIsRework()));
+            maps.add(m);
+        }
+        return maps.isEmpty() ? null : maps;
+    }
+```
+
+- [ ] **Step 8c: 证明这一步真的接上了**
+
+⚠️ 「产出端有了 ≠ 消费端收得到」是本仓反复踩的形态。加一条断言钉住这根线：
+
+```java
+package com.cretas.aims.service.yield;
+
+import com.cretas.aims.dto.yield.YieldReportRequest;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class SemiOutputPersistenceTest {
+
+    @Test
+    void 请求体的多产出会变成可入账的条目() throws Exception {
+        YieldReportRequest.SemiOutput o = new YieldReportRequest.SemiOutput();
+        o.setSemiCode(" PTSEMI-LSM-0003 ");
+        o.setQuantity(new BigDecimal("50"));
+        o.setIsRework(Boolean.TRUE);
+
+        var m = java.util.Arrays.stream(
+                        Class.forName("com.cretas.aims.service.yield.impl.YieldReportServiceImpl")
+                                .getDeclaredMethods())
+                .filter(x -> x.getName().equals("toSemiOutputMaps"))
+                .findFirst().orElseThrow();
+        m.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> maps = (List<Map<String, Object>>) m.invoke(null, List.of(o));
+
+        assertThat(maps).hasSize(1);
+        assertThat(maps.get(0)).containsEntry("semiCode", "PTSEMI-LSM-0003");   // 去了空格
+        assertThat(maps.get(0)).containsEntry("isRework", true);
+        // 🔴 这条是关键: 转出来的东西必须真的能被过账端认下来
+        assertThat(com.cretas.aims.service.wip.WipSemiOutputPlan.postableEntries(maps)).hasSize(1);
+    }
+
+    @Test
+    void 空列表落成null而不是空数组() throws Exception {
+        var m = java.util.Arrays.stream(
+                        Class.forName("com.cretas.aims.service.yield.impl.YieldReportServiceImpl")
+                                .getDeclaredMethods())
+                .filter(x -> x.getName().equals("toSemiOutputMaps"))
+                .findFirst().orElseThrow();
+        m.setAccessible(true);
+        assertThat(m.invoke(null, (Object) null)).isNull();
+        assertThat(m.invoke(null, List.of())).isNull();
+    }
+}
+```
+
+Run: `mvn -o test -Dtest='SemiOutputPersistenceTest'` → 预期 PASS。
+
 - [ ] **Step 9: 跑全套 WIP 测试**
 
 ```bash
@@ -784,13 +892,23 @@ Expected: 全绿。**重点看幂等相关的既有测试**——若红，多半
 - [ ] **Step 10: 提交**
 
 ```bash
+git add backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/WipSemiOutputPlan.java \
+        backend/java/cretas-api/src/main/resources/db/flyway/V20261101_01__production_reports_semi_outputs.sql \
+        backend/java/cretas-api/src/test/java/com/cretas/aims/service/wip/MultiSemiOutputPostingTest.java \
+        backend/java/cretas-api/src/test/java/com/cretas/aims/service/yield/SemiOutputPersistenceTest.java
 ./scripts/safe-commit.sh "feat(wip): 半成品过账支持一道工序多个产出 (回料链路)" \
   backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/WipSemiOutputPlan.java \
   backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java \
+  backend/java/cretas-api/src/main/java/com/cretas/aims/service/yield/impl/YieldReportServiceImpl.java \
   backend/java/cretas-api/src/main/java/com/cretas/aims/entity/ProductionReport.java \
-  backend/java/cretas-api/src/main/resources/db/migration/V20261101_01__production_reports_semi_outputs.sql \
-  backend/java/cretas-api/src/test/java/com/cretas/aims/service/wip/MultiSemiOutputPostingTest.java
+  backend/java/cretas-api/src/main/resources/db/flyway/V20261101_01__production_reports_semi_outputs.sql \
+  backend/java/cretas-api/src/test/java/com/cretas/aims/service/wip/MultiSemiOutputPostingTest.java \
+  backend/java/cretas-api/src/test/java/com/cretas/aims/service/yield/SemiOutputPersistenceTest.java
 ```
+
+⚠️ **新文件必须先 `git add`** —— `safe-commit.sh` 底层是 `git commit -- <paths>`，
+对**未跟踪**的文件会报 `pathspec did not match any file(s)`。本计划提交计划文档时实测踩过。
+这条对每个建了新文件的任务都适用。
 
 ---
 
