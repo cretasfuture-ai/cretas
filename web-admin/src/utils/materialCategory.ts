@@ -33,6 +33,24 @@
  */
 export const MATERIAL_CATEGORY_ENUM_VALUES = ['主材', '辅材', '调味料', '包材', '添加剂'] as const;
 
+/**
+ * `system_enums.MATERIAL_STORAGE_TYPE` 的规范取值 (V20260506_01 seed)。
+ *
+ * 🔴 2026-08-28 生产事故: `system_enums` 在 prod 上**整表 0 行**(seed 于 2026-05-08
+ * 成功执行过, 行后来不知去向, 任何 backup schema 里都没有), 于是
+ * `/system-config/enums/MATERIAL_STORAGE_TYPE` 恒返回 `[]` ——
+ * 「新建原料类型」的储存类型下拉显示「无数据」, 而该字段是**必填**
+ * ⇒ **全部工厂都建不了原料类型**。
+ *
+ * ⚠️ 而且没有任何界面能补这张表: `platform/enum-dictionary-editor` 没挂路由,
+ * 且它编辑的是 canvas 用的 `enum_dictionary`, 不是 `system_enums`。
+ * ⇒ 下拉**不能**把一张「只能靠 Flyway 填、且没人能修」的表当唯一数据源。
+ *
+ * 与 MATERIAL_CATEGORY_ENUM_VALUES 同源同形: 那次(2026-08-07)是六膳门没有分段字典
+ * 就建不了物料, 修法也是给下拉一个不依赖外部数据的兜底来源。
+ */
+export const MATERIAL_STORAGE_TYPE_ENUM_VALUES = ['新鲜', '冻货', '干货', '常温'] as const;
+
 export type BigCategory = '原料' | '辅料' | '调料' | '包材' | '其他';
 
 export const BIG_CATEGORY_OPTIONS: { label: string; value: BigCategory | '' }[] = [

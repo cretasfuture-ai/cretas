@@ -36,7 +36,8 @@ import { listSystemUnits, type SystemUnit } from '@/api/systemUnits';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh, Lock, View } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
-import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES } from '@/utils/materialCategory';
+import { bigCategoryOf, MATERIAL_CATEGORY_ENUM_VALUES, MATERIAL_STORAGE_TYPE_ENUM_VALUES } from '@/utils/materialCategory';
+import { getWarehouseLayout } from '@/api/warehouseLayout';
 import { displayUnit, sameUnit } from '@/utils/unitPricing';
 import { purchaseUnitSelectionReason, resolvePurchaseUnits } from '@/utils/purchaseUnitContract';
 import { handleCatchError } from '@/utils/errorToast';
@@ -108,16 +109,55 @@ async function loadDictionaries() {
     const storageRes = await get<DictItem[]>(`/${factoryId.value}/system-config/enums/MATERIAL_STORAGE_TYPE`);
     storageTypeOptions.value = (storageRes.data || []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
   } catch (e) {
-    console.warn('字典加载失败, 用空选项', e);
+    // ⛔ 不再静默吞掉: 字典挂了和字典为空以前长得一模一样(都是空下拉),
+    // 2026-08-28 就是这么让「必填字段没有可选项」在生产上活了下来。
+    console.warn('储存类型字典加载失败, 回落到平台内置值 + 本厂储存区域', e);
+  }
+  try {
+    const layout = await getWarehouseLayout(factoryId.value);
+    storageZoneNames.value = (layout.data?.zones || [])
+      .map((z) => (z?.name || '').trim())
+      .filter((n) => n !== '');
+  } catch (e) {
+    console.warn('仓库储存区域加载失败, 储存类型下拉将不含本厂区域', e);
   }
 }
 
+/**
+ * 储存类型下拉 = 平台内置值 ∪ 系统字典 ∪ **本厂储存区域** ∪ 存量值。
+ *
+ * 🔴 2026-08-28 客户反馈:「储存区域/储存类型都建好了, 原料类型里却看不到」。
+ * 他们能配「储存类型」的地方**只有**仓储位置管理里的储存区域(冷冻库/冷藏库/急冻库/
+ * 常温库/缓化库/研发库), 而这个下拉当时只读 `system_enums` —— 两个来源从来没接上,
+ * 加上那张表在 prod 上是空的, 下拉显示「无数据」。
+ *
+ * ⚠️ `raw_material_types.storage_type` 是 varchar(20) 自由文本, 后端没有任何按具体值
+ * 分支的逻辑(只有一个按值查询的接口), 所以并入区域名是安全的; 超长的区域名会被跳过。
+ */
+const STORAGE_TYPE_MAX_LEN = 20;
+const storageZoneNames = ref<string[]>([]);
+
+function storageTypeChoices(current?: string): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = [];
+  const seen = new Set<string>();
+  const push = (name: string, suffix = '') => {
+    const v = (name || '').trim();
+    if (!v || seen.has(v) || v.length > STORAGE_TYPE_MAX_LEN) return;
+    seen.add(v);
+    out.push({ value: v, label: suffix ? `${v} ${suffix}` : v });
+  };
+  storageTypeOptions.value.forEach((c) => push(c.enumLabel));
+  MATERIAL_STORAGE_TYPE_ENUM_VALUES.forEach((v) => push(v));
+  storageZoneNames.value.forEach((n) => push(n, '(本厂储存区域)'));
+  seenStorageTypes.value.forEach((v) => push(v));
+  const cur = (current || '').trim();
+  if (cur && !seen.has(cur)) out.unshift({ value: cur, label: `${cur} (历史)` });
+  return out;
+}
+
+// 兼容旧调用名 —— 模板与既有源码闸都引用它。
 function mergeHistoricStorage(current?: string): { value: string; label: string }[] {
-  const opts = storageTypeOptions.value.map((c) => ({ value: c.enumLabel, label: c.enumLabel }));
-  if (current && current.trim() !== '' && !opts.find((o) => o.value === current)) {
-    return [{ value: current, label: `${current} (历史)` }, ...opts];
-  }
-  return opts;
+  return storageTypeChoices(current);
 }
 
 async function loadData() {
@@ -351,10 +391,14 @@ const hasSegmentDictionary = computed(() => segmentL1Options.value.length > 0);
  * 把上一页见过的取值又弄丢。fool-proof-design Rule 5: 宁缺勿藏。
  */
 const seenCategories = ref<string[]>([]);
-function rememberCategories(rows: { category?: string | null }[]) {
+/** 同理: 储存类型的存量取值也要留住(六膳门 316 条物料里全是「新鲜」这种历史值)。 */
+const seenStorageTypes = ref<string[]>([]);
+function rememberCategories(rows: { category?: string | null; storageType?: string | null }[]) {
   for (const row of rows) {
     const c = (row.category || '').trim();
     if (c && !seenCategories.value.includes(c)) seenCategories.value.push(c);
+    const s = (row.storageType || '').trim();
+    if (s && !seenStorageTypes.value.includes(s)) seenStorageTypes.value.push(s);
   }
 }
 
@@ -727,7 +771,7 @@ function clearCascadeFields() {
   try {
     if (!unitManuallyEdited.value) form.value.unit = 'kg';
     if (!categoryManuallyEdited.value) form.value.category = '';
-    if (!storageTypeManuallyEdited.value) form.value.storageType = storageTypeOptions.value[0]?.enumLabel || '';
+    if (!storageTypeManuallyEdited.value) form.value.storageType = storageTypeChoices()[0]?.value || '';
     if (!shelfLifeManuallyEdited.value) form.value.shelfLifeDays = null;
     if (!packagingManuallyEdited.value) {
       packagingRules.value = [blankPackagingRule()];
@@ -877,7 +921,7 @@ function openCreate() {
     category: '',
     isByproduct: false,
     unit: 'kg',
-    storageType: storageTypeOptions.value[0]?.enumLabel || '',
+    storageType: storageTypeChoices()[0]?.value || '',
     shelfLifeDays: null,
     notes: '',
     taxTreatment: 'TAXABLE',
