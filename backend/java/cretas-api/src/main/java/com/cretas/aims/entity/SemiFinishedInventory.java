@@ -97,6 +97,28 @@ public class SemiFinishedInventory {
     @Column(name = "product_type_id", length = 100)
     private String productTypeId;
 
+    /**
+     * 这一行装的是不是<b>回料</b> (金检/X光剔出的不良品, 要回到下一批靠前的工序重新投入)。
+     *
+     * <p><b>为什么必须落成一列</b>: 回料对下一批而言是「期初就在库里的料」, 它必须能穿过
+     * {@code listWipByFactory} 的<b>阶段过滤</b> ({@code processOrder < maxProcessOrder}, 防同批内回锅)。
+     * 而阶段过滤跑在工厂级行集上, 拿不到画布 —— 判据必须在<b>行上</b>可读。
+     *
+     * <p><b>⛔ 不用把 {@code processOrder} 改成 0 来表达这件事</b>: 那一列还被
+     * {@code ProcessSheetServiceImpl.getInventoryYieldCard} 用来<b>排序并串起出成率链</b>
+     * (上一行的 produced = 下一行的投入)。回料行排到最前面, 良品那道的出成率会被算成
+     * 950/50 = 1900%; 而且 {@code resolveSourceWipNo} 按 {@code processOrder == 本道-1} 找源,
+     * 0 会让它对不上任何一道。回料的 processOrder 仍诚实记<b>产出它的那道</b>。
+     *
+     * <p><b>判据来源唯一</b>: 建行/入账时由 {@code WorkflowReworkNodes} (画布 {@code data.isRework})
+     * + {@code workflow_task_ports} 反查得出, ⛔ 不信客户端在 {@code semi_outputs} 里带上来的
+     * {@code isRework} (那是给 RN 算 {@code defectQuantity} 用的展示值, 未经服务端校验)。
+     * 一旦为 true 不再翻回 false (同一个回料产品的行跨批次复用)。
+     */
+    @Column(name = "is_rework", nullable = false)
+    @Builder.Default
+    private Boolean isRework = Boolean.FALSE;
+
     /** 该道总产出 (= Σ该 task 的 output, 跨天多次报工累加) */
     @Column(name = "produced_quantity", precision = 12, scale = 2)
     private BigDecimal producedQuantity;

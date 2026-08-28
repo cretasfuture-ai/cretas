@@ -4230,4 +4230,106 @@ class YieldReportServiceImplTest {
                 });
         verify(taskRepo, never()).findByFactoryIdAndId(anyString(), any());
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // I-1 (2026-08-28 整分支终审): goodQuantity 不许把「没清点」写成「这批全是良品」
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * 🔴 良品数只有在<b>有人清点过不良品</b>时才是真读数。没清点就是「不知道」。
+     *
+     * <p>本仓 2026-08-26 刚做过这件事的收尾: {@code V20260826_05/06} 把
+     * {@code production_batches} 里编出来的 good/defect 清成 NULL, 理由原文 ——
+     * 「每一个非空的 good_quantity 都是代码填的, 没有一条代表某个人说了这批零不良」;
+     * {@code GoodQuantityIsNotFabricatedContractTest} 钉住写侧不许再编。
+     *
+     * <p>这次在<b>另一个实体</b> ({@code ProductionReport}) 上差点把同一个动作又做一遍:
+     * 无条件 {@code .goodQuantity(effOutput)}。F006 现在 43 张报工单一张都没填过不良品,
+     * 合并后每张 OUTPUT 报工都会带 {@code good_quantity = output_quantity},
+     * {@code ProductionReportSyncServiceImpl} 把它汇进人效导出的「合格数量」列
+     * ⇒ 每个工人每天「合格数量 = 产出数量、不良率 0.00%」, 而<b>没有任何一个人清点过</b>。
+     * 比原来那一列的 0 更危险 —— 0 看得出不对, 这个数看起来权威。
+     */
+    @Test
+    void submitReport_goodQuantityIsNullWhenNobodyCountedDefects() {
+        WorkProcessTask t = task(10L, 4, "WP-JJ");
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-JJ")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("1000")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("950")); req.setOutputUnit("kg");
+        // ⛔ 不传 defectQuantity —— 没人清点
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getDefectQuantity())
+                .as("没填就是 null, ⛔ 不兜底成 0")
+                .isNull();
+        assertThat(cap.getValue().getGoodQuantity())
+                .as("没人清点不良品时良品数是「不知道」—— ⛔ 不许用产出量顶替 "
+                        + "(见 V20260826_05/06 与 GoodQuantityIsNotFabricatedContractTest)")
+                .isNull();
+    }
+
+    /** 有人清点过 (哪怕填的是 0) → 良品数才是真读数, 等于本道产出量。 */
+    @Test
+    void submitReport_goodQuantityEqualsOutputOnlyWhenDefectsWereCounted() {
+        WorkProcessTask t = task(10L, 4, "WP-JJ");
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-JJ")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("1000")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("950")); req.setOutputUnit("kg");
+        req.setDefectQuantity(new BigDecimal("50"));   // 有人清点了
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getDefectQuantity()).isEqualByComparingTo("50");
+        assertThat(cap.getValue().getGoodQuantity())
+                .as("清点过了 ⇒ 良品数 = 本道产出量 (outputQuantity 口径本来就是良品)")
+                .isEqualByComparingTo("950");
+    }
+
+    /**
+     * 阴性对照: 明确填 0 也算「清点过」—— 「没清点」和「确认零不良」是两件事,
+     * 前者 null 后者有数, ⛔ 不许合并。
+     */
+    @Test
+    void submitReport_defectExplicitlyZeroStillCountsAsCounted() {
+        WorkProcessTask t = task(10L, 4, "WP-JJ");
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-JJ")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("1000")); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("1000")); req.setOutputUnit("kg");
+        req.setDefectQuantity(BigDecimal.ZERO);   // 明确填 0 = 确认零不良
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getGoodQuantity()).isEqualByComparingTo("1000");
+    }
 }

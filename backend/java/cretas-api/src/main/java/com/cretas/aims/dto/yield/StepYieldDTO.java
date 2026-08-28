@@ -101,6 +101,21 @@ public class StepYieldDTO {
     private BigDecimal semiOutputQuantity;
     /** 半成品产出单位; semiOutputQuantity 为 null 时此字段也为 null */
     private String semiOutputUnit;
-    /** 半成品编号/批次号 (对应 SemiFinishedInventory.intermediateBatchNo); null=未指定 */
+    /** 半成品编号/批次号 (对应 SemiFinishedInventory.intermediateBatchNo); null=未指定.
+     *  ⚠️ 本道产出<b>多个</b>码时此字段为 null —— 挑哪一个当代表都是编的, 逐码明细见 {@link #semiOutputs}. */
     private String semiCode;
+
+    /**
+     * 画布 1 进 N 出: 本道<b>逐码</b>的半成品产出明细, 每项 {@code {semiCode, quantity}} (按首次出现顺序)。
+     *
+     * <p>{@code null} = 本道没有 {@code semiOutputs} 形态的报工 (旧式单产出走
+     * {@link #semiCode}/{@link #semiOutputQuantity})。
+     *
+     * <p>I-2 (2026-08-28 整分支终审): RN 改用 {@code semiOutputs} 之后, 旧的
+     * {@code semiOutputQuantity}/{@code semiCode} 两个字段恒为 null ⇒ web-admin 批次详情页
+     * 「产出类型 双产出 / 半成品产出 —」, 数据进库了但页面看不到。
+     * ⛔ 修法不是在写侧把第一条镜像回 {@code semiCode}/{@code semiOutputQuantity} —— 那是造第二份,
+     * 一定会漂; 汇聚只在读侧 ({@code YieldCalculationServiceImpl}) 做一次。
+     */
+    private List<Map<String, Object>> semiOutputs;
 }

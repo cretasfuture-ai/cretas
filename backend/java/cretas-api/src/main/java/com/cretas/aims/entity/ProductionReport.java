@@ -288,6 +288,15 @@ public class ProductionReport {
     private String semiCode;
 
     /**
+     * 多半成品产出 (画布 1 进 N 出) 的填报值。
+     * 格式: [{"semiCode":"PTSEMI-LSM-0003","quantity":50.00,"isRework":true}, ...]
+     * null = 旧式单产出报工, 过账走 semiCode/semiOutputQuantity 老字段。
+     */
+    @Type(JsonType.class)
+    @Column(name = "semi_outputs", columnDefinition = "jsonb")
+    private List<Map<String, Object>> semiOutputs;
+
+    /**
      * 客户端提交幂等键。
      *
      * <p>2026-08-17 生产实测：提交两次<b>完全相同</b>的领用报工（间隔 37ms），

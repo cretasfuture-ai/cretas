@@ -99,11 +99,19 @@
             data-testid="add-byproduct-inline"
             @click.stop="emit('addByproduct')"
           >+ 副产</el-button>
+          <el-button
+            text
+            size="small"
+            class="nodrag rework-add"
+            data-testid="add-rework-inline"
+            @click.stop="emit('addRework')"
+          >+ 回料</el-button>
         </span>
       </div>
       <div class="actual-io-help">
         这里不配置产出关系、主副角色或固定比例；每次报工填写本次实际产出的 SKU 和数量。
         副产同理——只在这里指定它是哪个 SKU，产出多少在报工时填。
+        回料同理——标记为回料的产出会保留在报工选项里，供操作员登记退回复投的数量。
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="output-entry">
         <div class="port-row output-row">
@@ -204,6 +212,8 @@ const emit = defineEmits<{
   addOutput: [];
   /** 副产走 addOutput 的同一条路径, 只是 data 上多一个 isByproduct 标记(见编辑器 addOutputToProcess)。 */
   addByproduct: [];
+  /** 回料走 addOutput 的同一条路径, 只是 data 上多一个 isRework 标记(见编辑器 addOutputToProcess)。 */
+  addRework: [];
   selectOutput: [portId: string, skuId: string];
   delete: [];
   editProcess: [];

@@ -3,6 +3,7 @@ package com.cretas.aims.service.yield.impl;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.service.wip.WipSemiOutputPlan;
 import com.cretas.aims.service.yield.YieldCalculationService;
 import org.springframework.stereotype.Service;
 
@@ -101,6 +102,8 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             BigDecimal stepSemiOutputQuantity = null;
             String stepSemiOutputUnit = null;
             String stepSemiCode = null;
+            /** I-2: 画布 1 进 N 出的逐码产出明细 (LinkedHashMap = 保持首次出现顺序, 页面读数稳定)。 */
+            java.util.LinkedHashMap<String, BigDecimal> stepSemiByCode = new java.util.LinkedHashMap<>();
             // 三阶段 phase 推断信号: 是否有 INPUT 报工 / 有 OUTPUT 报工 (或 legacy: 有投入 / 有产出)
             boolean hasInputSignal = false;
             boolean hasOutputSignal = false;
@@ -227,6 +230,17 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (stepSemiCode == null && r.getSemiCode() != null) {
                     stepSemiCode = r.getSemiCode();
                 }
+                // I-2 (2026-08-28 终审): 画布 1 进 N 出的产出记在 semiOutputs 上, 旧的
+                // semiOutputQuantity/semiCode 恒为 null ⇒ 批次详情页「半成品产出 —」。这里逐码汇进来。
+                // ⛔ 不在这里另写一份解析 —— 与过账侧共用 WipSemiOutputPlan.postableEntries,
+                //    否则「入了多少账」和「页面显示多少」两个口径会漂。
+                for (Map<String, Object> entry : WipSemiOutputPlan.postableEntries(r.getSemiOutputs())) {
+                    String code = WipSemiOutputPlan.semiCodeOf(entry);
+                    BigDecimal qty = WipSemiOutputPlan.quantityOf(entry);
+                    stepSemiByCode.merge(code, qty, BigDecimal::add);
+                    stepSemiOutputQuantity = (stepSemiOutputQuantity == null ? BigDecimal.ZERO : stepSemiOutputQuantity)
+                            .add(qty);
+                }
             }
             stepWorkers = stepWorkersMax;
             // 本道总成本 = labor + material (两者全 null → null; 任一非 null → 该项视为 0 参与求和)
@@ -239,6 +253,24 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .filter(u -> u != null).findFirst().orElse(null);
             String outUnit = group.stream().map(ProductionReport::getOutputUnit)
                     .filter(u -> u != null).findFirst().orElse(null);
+            // I-2: 多产出的派生字段 —— 只在本道确有 semiOutputs 时生效, 旧式单产出三个字段一字不变。
+            List<Map<String, Object>> stepSemiOutputs = null;
+            if (!stepSemiByCode.isEmpty()) {
+                stepSemiOutputs = new ArrayList<>();
+                for (Map.Entry<String, BigDecimal> semi : stepSemiByCode.entrySet()) {
+                    stepSemiOutputs.add(Map.of("semiCode", semi.getKey(), "quantity", semi.getValue()));
+                }
+                // 只有一个码时仍填 semiCode —— 页面那个小字副标题不用改就能显示。
+                // ⛔ 多个码时留 null: 挑哪一个当代表都是编的, 逐码明细在 semiOutputs 里。
+                if (stepSemiCode == null && stepSemiByCode.size() == 1) {
+                    stepSemiCode = stepSemiByCode.keySet().iterator().next();
+                }
+                // RN 多产出不发 semiOutputUnit ⇒ 退回本道产出单位。
+                // 与过账侧 (WipInventoryServiceImpl: semiOutputUnit → outputUnit → plannedUnit) 同一条 fallback 链。
+                if (stepSemiOutputUnit == null) {
+                    stepSemiOutputUnit = outUnit;
+                }
+            }
             boolean comparable = inUnit != null && inUnit.equals(outUnit);
             BigDecimal yieldRate = null;
             if (comparable && totalInput.compareTo(BigDecimal.ZERO) > 0) {
@@ -294,6 +326,7 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                     .semiOutputQuantity(stepSemiOutputQuantity)
                     .semiOutputUnit(stepSemiOutputUnit)
                     .semiCode(stepSemiCode)
+                    .semiOutputs(stepSemiOutputs)
                     .build());
             prevOutput = totalOutput;
         }

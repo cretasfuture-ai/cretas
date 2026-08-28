@@ -88,6 +88,26 @@ public class YieldReportRequest {
      */
     private String semiCode;
 
+    /**
+     * 本道不良品数量 (金检/X光 剔出的量)。
+     *
+     * <p>⚠️ 口径: {@code outputQuantity} 已经是<b>良品</b>产出量, 本字段是<b>额外</b>剔出的量,
+     * ⛔ 不是从 outputQuantity 里再扣一次。投入 = outputQuantity + defectQuantity + 损耗。
+     *
+     * <p>{@code null} = 旧版 App / 本道不分流不良品, 过账走原路径零回归。
+     * ⛔ {@code null} 不许回填成 0 —— 「没清点」和「确认零不良」是两件事
+     * (见 {@code DefectCountOutcome} 的类注释, 那是 2026-08-26 事故的产物)。
+     */
+    private BigDecimal defectQuantity;
+
+    /**
+     * 本道的多个半成品产出 (画布 1 进 N 出)。
+     *
+     * <p>与旧的单个 {@code semiCode}/{@code semiOutputQuantity} <b>并存</b>:
+     * 本字段非空时以本字段为准, 为空时走旧字段 —— 旧版 App 零回归。
+     */
+    private List<SemiOutput> semiOutputs;
+
     // ==================== 传统报工适配 (适配单元1 地基; 算法在后续任务) ====================
 
     /** 图片证据 URL 列表 (前端先传 OSS 拿 URL, 存入 ProductionReport.photos) */
@@ -169,5 +189,23 @@ public class YieldReportRequest {
         private String name;
         private BigDecimal quantity;
         private String unit;
+    }
+
+    /** 画布一道工序的一个半成品产出端口的填报值。 */
+    @Data
+    public static class SemiOutput {
+        /** 半成品编码 (= ProductType.code, 由 output-options 接口下发; ⛔ 不许前端自由输入) */
+        private String semiCode;
+        /** 本次该产出的数量 */
+        private BigDecimal quantity;
+        /**
+         * 这一项是不是回料 (来自 output-options 的 isRework)。
+         *
+         * <p>⚠️ true 时该产出的数量应同时体现在质量账 {@code defectQuantity} 里——
+         * 但这个汇总是 <b>App 端</b>做的 (由前端把回料项的 quantity 一并塞进请求体的
+         * {@code defectQuantity} 字段), Java 侧本身不做任何 isRework→defectQuantity
+         * 的自动求和; {@link YieldReportRequest#defectQuantity} 收到什么就存什么。
+         */
+        private Boolean isRework;
     }
 }
