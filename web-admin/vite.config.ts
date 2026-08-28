@@ -16,6 +16,19 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       host: '127.0.0.1',  // Bind to IPv4 to fix connection issues on Windows
       proxy: {
+        // 必须排在 '/api' 前面 —— 生产 nginx 用
+        // snippets/smart-bi-routing.conf 把这几条子路径分流给 Python(8083),
+        // 而 dev 这边原本把 /api/* 全给了 Java, 于是本地/测试环境 404 而生产
+        // 正常。2026-08-28 F006 全路由验收因此误判过一轮「生产缺陷」。
+        //
+        // ⛔ 不要放宽成 smart-bi/analysis/ 通配: analysis/dynamic 与
+        //    analysis/dynamic/kpis 由 **Java** 提供(SmartBIDashboardController)。
+        // ⚠️ 生产那条规则还带租户 allow-list; dev 不复现它 —— Python 服务端
+        //    自己强制跨租户隔离(越权返回 403), allow-list 不是安全边界。
+        '^/api/mobile/[A-Za-z0-9_-]+/smart-bi/(analysis/(finance|sales|kitchen-cost|department|region|inventory|procurement)|mapping-review)': {
+          target: env.VITE_PYTHON_URL || 'http://localhost:8083',
+          changeOrigin: true,
+        },
         '/api': {
           target: env.VITE_BACKEND_URL || 'http://localhost:10010',
           changeOrigin: true,

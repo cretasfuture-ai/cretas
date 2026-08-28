@@ -11,16 +11,14 @@
  *      `/api/mobile/{factory_id}/smart-bi/analysis/finance`
  *   4. 所以只能靠 **nginx 按路径把它分流给 8083**
  *
- * 而当前生效的两个 vhost（web-admin.conf / admin.cretaceousfuture.com.conf）里
- * **那条分流规则不在了** —— 只有 2026-05-15 的 .bak 里还留着：
+ * 生产 nginx 确实有这条分流规则 —— 在**被 3 个 vhost 共享 include 的** snippet 里
+ * (`/www/server/nginx/conf/snippets/smart-bi-routing.conf`)，`F00[1-46]` 含 F006，
+ * 一直在工作。⚠️ 我一开始 grep vhost 文件里的 `location` 判定「规则丢了」——
+ * **grep 看不进 include**，差一步就去改生产 nginx。
  *
- *     location ~ ^/api/mobile/(F00[1-46]|…)/smart-bi/analysis/(finance|sales|
- *                 department|region|inventory|procurement)(/.*)?$ {
- *         proxy_pass http://cretas_python;
- *     }
- *
- * ⇒ 这些页面在生产上也是 404。规则丢了，**而没有任何东西会告诉你它丢了** ——
- *   路由活在基础设施里，仓库里的任何测试都看不见它。
+ * 404 只发生在本地/测试环境：vite dev 代理把 `/api/*` 全给了 Java，没复现那条分流
+ * (已在 vite.config.ts 修)。⛔ 判上游不要看响应体形状 —— `smartbi_compat` 就是在
+ * 模仿 Java 的信封；要看**时间戳小数位**(Python 6 位 / Java 9 位)。
  *
  * 这道闸不能验 nginx（它不在仓库里）。它做的是把那个隐形依赖**变成显式登记**：
  * 前端打的每一条 `/smart-bi/...`，要么 Java 服务它，要么必须登记在
