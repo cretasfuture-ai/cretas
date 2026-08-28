@@ -28,6 +28,7 @@ import { WHInboundStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { warehouseLayoutApiClient } from "../../../services/api/warehouseLayoutApiClient";
 import { handleError } from "../../../utils/errorHandler";
+import { MissingRouteParams } from '../../../components/common/MissingRouteParams';
 
 /**
  * 获取材料类型显示名称
@@ -81,7 +82,11 @@ export function WHPutawayScreen() {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
-  const { batchId } = route.params;
+  // ⛔ 原来是 `= route.params;` —— 没有 params 时直接抛
+  //    `Cannot destructure property 'batchId' of 'route.params' as it is undefined`。
+  //    2026-08-28 表单走查实测这一屏当场崩, 由 AppErrorBoundary 接住。
+  //    正常入口都传了参数, 所以是潜伏的 —— 但崩溃和「说清缺什么」代价差得很远。
+  const { batchId } = route.params ?? ({} as { batchId?: string });
 
   // 状态管理
   const [loading, setLoading] = useState(true);
@@ -193,6 +198,11 @@ export function WHPutawayScreen() {
   };
 
   // 加载状态
+  // 没有上架对象就没法继续 —— 说清该从哪进来, ⛔ 不要崩。
+  if (!batchId) {
+    return <MissingRouteParams title="上架" hint="这一页要从「入库任务」列表里点某一个待上架批次进来。" onBack={() => navigation.goBack()} />;
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
