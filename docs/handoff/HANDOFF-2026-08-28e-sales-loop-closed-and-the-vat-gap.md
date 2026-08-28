@@ -862,6 +862,49 @@ testMultiTurnToolCalling  → FAILED
 （memory 里 `project_local_agent_stack_and_llm_pool_dead` 可能同源）。
 ⛔ 我没去改 runner 配置 —— 那需要机器上的凭证，不该猜。
 
+### 🔴 追到底了：runner 上**三个 LLM 供应商 key 全是空的**
+
+SSH 上 `canada-mac-mini-2` 实测（不是推断）：
+
+```
+GET  /health                → 200          ← 所以 isAvailable() 恒 true, 用例不跳过
+POST /api/llm/tool-call     → 500 INTERNAL_ERROR
+POST /api/llm/chat          → 500          ← 不是 tool-call 专属, 整条 LLM 路都断
+```
+
+服务日志 `/Users/rex/testenv-logs/python.err`：
+
+```
+RuntimeError: [llm_router] All providers exhausted for chat:
+  aistore: empty_api_key; deepseek: empty_api_key; zhipu: empty_api_key
+```
+
+**两条独立确认**（⛔ 不从错误信息推断）：
+
+1. 进程环境里**一个 LLM 相关变量都没有**
+   （`lsof -iTCP:8083` 反查 pid，⛔ 没用 `pgrep -f 关键词`）
+2. 服务工作目录 `/Users/rex/cretas-testenv-new/backend/python` 下**根本没有 `.env`**
+
+⇒ **不是「.env 在但没加载」，是 key 从来没在这台机器上配过。**
+⛔ 我没有往那台机器放 key —— 凭证决定，不该猜着搬。**眼下的解法就是给它配上 key。**
+
+### 🟡 顺带一条产品级的（建议，我没有动手，并说明为什么）
+
+`/health` 在三个供应商 key 全空时仍返回 `200 healthy`，
+于是 `PythonLLMClient.isAvailable()`（javadoc 写着「检查 Python LLM 服务是否可用」）
+拿到 true，而实际一次调用都做不了。**又是同一个形态：量的不是想知道的那个数。**
+
+⚠️ **但不能简单把 `/health` 改成非 200** ——
+`scripts/deploy/deploy-smartbi-python.sh` 的 `wait_for_health_via_ssh` 拿它当部署就绪探针，
+改状态码会让**任何没配 LLM key 的环境部署失败**。
+
+⇒ 安全做法：`/health` **响应体里加供应商就绪字段**（状态码不变），`isAvailable()` 改读它。
+
+⛔ 没实现，两个理由：(1) 跨 Python/Java 两侧，要过 Cross-language Contract Gate；
+(2) `isAvailable()` 在**生产代码路径**上当守卫（`DashScopeVisionClient` 等也用），
+改语义可能让线上 AI 功能在解析异常时被误判不可用 —— 值得单独 PR 认真验，
+⛔ 不该顺手塞进财务 PR。
+
 ### 🔴 为什么这条值得单独修
 
 `known-failing-tests.txt` 目前是**空的**（0 条）⇒ 这道闸期望零失败，
