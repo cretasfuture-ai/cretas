@@ -299,9 +299,27 @@ otif                 = totalShipments   > 0 ? 实算 : new BigDecimal("95");
 ▎这一轮有了**前后对照**：推送前同一台机器同样的冷启动读到的是 `CheckCompleteUnavailable`。
 ▎两次之间唯一变化是「我推了一份」⇒ 送达是**测**出来的，不是推断的。
 
-⚠️ 仍没证到的那一格：`isUpdatePending=true` = **下次重启才生效**，
-所以「设备此刻正在跑的就是这一份」尚未观测到。⛔ 不要写成「已生效」。
-第四轮开头再冷启一次即可闭掉（成本 1 分钟）。
+✅ **那一格当场闭掉了**：再冷启一次，`StartStartup` 的 `isUpdatePending` 从 true 变回
+**false**（pending 被消费 ⇒ 这次启动加载了它），而服务器上只有我这一份却回答
+`CheckCompleteUnavailable` ⇒ **设备正在跑的就是它**。
+⚠️ `CheckCompleteUnavailable` 自己不是判据 —— 推送前也是这个值。判据是三次之间的
+**转移**：Unavailable → Available/pending=true → Unavailable/pending=false。
+
+## 🔴 第三轮的另一半：Java 合了但没上线，我差点按 OTA 的回执收工
+
+`prod jar mtime = 16:11`，而 PR #293 合并于 `18:10` —— **销售单缺料那个后端修复根本没上 prod**。
+OTA 的每一项判据都只覆盖 RN 侧，所以它们**全绿，且对这半边完全失明**。
+
+已补做（详情见台账「第三轮的另一半」节）：
+
+- 部署第 1 次被并发推送拦下（`deploy_mode=none` / `DEPLOY_EXIT=1`）；
+  第 2 次脚本自动前进到新 main 重跑，`DEPLOY_EXIT=0` + `RELEASE_FINAL_STATUS` 恰好 1 次 +
+  `BACKEND_HEALTH=pass`；jar mtime `18:40:14` < 进程 `lstart 18:40:42`。
+- **行为验证（该改动无字符串标记可 grep）**：13 张 `COMPLETED` 订单 `shortageQty` 全 0
+  （含 `SO-20260828-0003`，上线前报 10）；**阳性对照**：38 行真的没着落的照旧报缺，
+  `SO-20260828-0013` 部分发货报 **2**（`4-2-0`）—— 排除「一律返回 0」。
+- ⚠️ 这次部署捎带上线了别的 session 已合未部署的三个后端 commit。那是 `prod = main` 的
+  定义而不是 scope creep，但**必须写下来**，否则出问题时会去查错的 commit。
 
 ⚠️ **合并时 `java-full-gate` 是红的**，理由写在 PR #293 的三条评论 + 台账「部署记录」节：
 红不是这个 PR 的（无关分支同一条测试同样形状红；我最后两次推送是纯文档而红从 1 涨到 2）、

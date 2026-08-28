@@ -1348,3 +1348,68 @@ manifest 取回: 指向新 ts=1787911909437, 不含上一份 1787898056914
 所以「设备正在跑的就是这一份」目前仍未观测到 —— ⛔ 不写成「已生效」。
 
 **回滚**：`./scripts/ota/rollback.sh 1.0.4 production 1787911909437`
+
+### 补：第三次冷启动 —— **pending 被消费掉了，设备现在跑的就是这一份**
+
+上一节留了一格没证到（`isUpdatePending=true` = 下次重启才生效）。**再冷启一次就闭掉了**：
+
+| 冷启动 | `dev.expo.updates` 状态序列 | `isUpdatePending` |
+|---|---|---|
+| ① 推送**前** | `Check → CheckCompleteUnavailable` | false |
+| ② 推送**后**第一次 | `Check → CheckCompleteAvailable → Download → **DownloadComplete**` | **true** |
+| ③ 再冷启一次（本次） | `StartStartup → EndStartup → Check → **CheckCompleteUnavailable**` | **false** |
+
+▎③ 的 `isUpdatePending` 从 true 回到 **false** ⇒ 那份下载好的更新**在这次启动时被加载了**；
+▎而服务器上现在只有我推的这一份，却回答「没有更新」⇒ **设备正在跑的就是它**。
+
+⚠️ **`CheckCompleteUnavailable` 自己不是判据** —— ① 也是这个值（那时跑的是旧的）。
+判据是**三次之间的转移**：Unavailable → Available/Downloaded(pending=true) → Unavailable(pending=false)。
+② 同时是这套读数的**阳性对照**：同一台机器、同一个服务器，在两边不同的时候确实会说 Available。
+
+⇒ 第二轮那句「**已发布 ≠ 已送达**」到这一轮闭合成：**已发布 → 已送达 → 已生效**，三格都有实测。
+
+---
+
+# 🔴 第三轮的另一半：**Java 那一半合了但没上线**
+
+OTA 只发 RN。PR #293 里的**后端**改动（销售单缺料口径）合进 main 之后**还在原地**：
+
+```
+prod jar mtime = 08-28 16:11        PR #293 合并 = 08-28 18:10
+⇒ 跑在 prod 上的 jar 比这次改动还老两个钟头
+```
+
+▎**「合并了」和「在屏上看得到」之间，这一轮实际隔着一次部署** ——
+▎而如果只按 OTA 的回执收工，这半边会被漏掉，且**每一项判据都会是绿的**
+▎（OTA 判据全部只覆盖 RN 侧）。
+
+## 部署（第一次被闸拦下，第二次成）
+
+| | 结果 |
+|---|---|
+| 预热 | `PREWARM=skipped reason=artifact_transport_unreachable host=10.66.66.1:22` ⇒ 走本地构建 |
+| 第 1 次 | 构建 225s 全绿（含我那 10 条测试 `Tests run: 10, Failures: 0`），随后 **`deploy_mode=none` / 两个组件都 `not-selected`**，`DEPLOY_EXIT=1` |
+| 第 2 次 | `origin/main 在 artifact validation 期间前进 aa9e30c1 → eac3cc7a`，脚本**自动前进并重跑**（第 1/2 次），制品 tree 未变 ⇒ 复用缓存 |
+| 判据 | `DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` **恰好 1 次**、`BACKEND_HEALTH=pass`、`WEB_HTTP=200` |
+| 硬约束 2 | jar mtime `18:40:14` → 进程 `lstart 18:40:42` ⇒ **跑的是这次的制品** |
+
+⚠️ 第一次失败的直接成因就是**并发 session 正在推 main**（一小时内 6 个 commit）。
+这不是脚本坏了，是「prod = main」在高频推送下的正常摩擦。
+
+⚠️ **这次部署捎带上线了别的 session 已合但未部署的后端改动**
+（`370a25bfbd` 销售报表 SQL、`aa9e30c12e` / `eac3cc7a67` LLM 与测试守卫）。
+这是 `prod = main` 的**定义**，不是 scope creep —— 但要写下来，
+否则出问题时会去查错的 commit。
+
+## ✅ 上线后的行为验证（生产数据，两侧都有对照）
+
+⛔ 这个改动**没有字符串标记可 grep**（改的是一次减法），所以判据只能是行为：
+
+| 侧 | 读数 |
+|---|---|
+| 修好的那一侧 | 13 张 `COMPLETED` 订单，`shortageQty` **全部 = 0**。含台账里点名的 `SO-20260828-0003`（`quantity=10 / delivered=10 / reserved=0`），**上线前它报 10** |
+| **阳性对照** | 38 行「确实还没有着落」的（`quantity - delivered - reserved > 0`）**照旧报缺**，且数值逐行等于新公式 |
+| 其中最能说明问题的 | `SO-20260828-0013` `PARTIAL_DELIVERED`：`4 - 2 - 0` ⇒ **报 2**（不是 4，也不是 0） |
+
+▎两侧都要看：只看第一行，「`shortageQty` 一律返回 0」也能得到同样的读数。
+▎38 行仍在报缺、且**部分发货那一行报的是差额**，才排除掉这个解释。
