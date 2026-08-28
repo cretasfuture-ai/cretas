@@ -1298,8 +1298,21 @@ psql ... -c "select semi_finished_id, txn_type, quantity, source_ref, unit_cost_
 
 # ② 回料库存行建起来了且可领
 psql ... -c "select intermediate_batch_no, produced_quantity, available_quantity, unit_cost
-             from semi_finished_inventory where factory_id='F006' and intermediate_batch_no='<回料码>'"
-# 预期: produced=50, available=50, unit_cost 非空
+             from semi_finished_inventory where factory_id='F006' and intermediate_batch_no in ('<良品码>','<回料码>')"
+# 预期: 回料 produced=50, available=50, unit_cost 非空
+
+# 🔴 ②b 单价必须同量级 —— 「unit_cost 非空」挡不住成本分摊错误
+psql ... -c "select t.source_ref, t.quantity, t.unit_cost_at_txn
+             from semi_finished_inventory_transactions t
+             where t.report_id = <本次报工id> and t.txn_type='IN' order by t.id"
+# 判据: 两条的 unit_cost_at_txn **应当相等**(同一锅料按量分摊, 各条单价 = totalCost/Σqty)。
+# ⛔ 若回料单价是良品的十几倍, 就是终审 C-1 那个成本分摊缺陷 ——
+#    而只看「unit_cost 非空」时它会带着满屏绿灯通过。判据要能红才算判据。
+
+# 🔴 ②c 成本不许被记两遍
+psql ... -c "select intermediate_batch_no, accumulated_cost from semi_finished_inventory
+             where factory_id='F006' and intermediate_batch_no in ('<良品码>','<回料码>')"
+# 判据: 两行 accumulated_cost 的**增量之和** == 本道 totalCost (不是 2×)
 
 # ③ 不良品数落进了质量账
 psql ... -c "select id, output_quantity, good_quantity, defect_quantity, semi_outputs
@@ -1322,6 +1335,11 @@ Expected: 判据 ① 从 2 行变成 1 行 → **变红**。
 在 F006 挑一个**没有多产出**的既有工序，照常报一次工。
 
 Expected: `semi_outputs` 为 null，过账行为与改动前一致（1 笔 IN，走 `semiCode`/`semiOutputQuantity` 老字段）。
+
+🔴 **必须挑一道 legacy（「工序管理」）工序，不是画布工序**，额外确认两件事：
+
+1. **半成品产出输入框还在。** `taskOptions` 新加的工序过滤（`taskId === currentTask?.id`）**改变了 legacy 路径的既有行为**——改动前操作员在任意一道工序都能看到 `outputOptions[0]`（那一项可能属于别的工序）并填数，改动后只在该产出所属的工序才出现。这是修正，但**对 F006 现有操作员是可见的行为变化**：习惯在末道一次性填半成品的人会发现输入框不见了。
+2. ⚠️ **判据 Step 2b 的「良品项 `isRework` 为 false」只在画布批次成立。** legacy 分支组装 `OutputOptionItem` 时**根本不设** `isRework` ⇒ 那些项的 JSON 是 `"isRework": null`。**在 legacy 批次上跑 Step 2b 会假红**。做 Step 2b 时必须确认自己打的是**画布批次**。
 
 - [ ] **Step 6: 写验收记录并提交**
 
@@ -1350,3 +1368,42 @@ Expected: `semi_outputs` 为 null，过账行为与改动前一致（1 笔 IN，
 | 汉堡排不良品去向 | 业务未定：报废 / 降级 / 回熟肉饼 |
 | 金检 vs X光 剔出物是否可回料 | 食品安全问题：真检出金属的不该回料。本计划让去向可配，不预设 |
 | 4 张汉堡工序图 | 主数据活，等包材补齐后配置即可，无需代码 |
+
+---
+
+## 合并与部署前的三条闸（整分支终审提出，⛔ 不能省）
+
+### 1. 🔴 merge 之后、prewarm 之前，对着 **merge 结果**重跑迁移撞号闸
+
+```bash
+mvn -o test -Dtest='FlywayVersionUniquenessTest'
+# 并确认 prod 的 flyway_schema_history 里 max version < 20261101.01
+```
+
+**为什么**：本仓的 Flyway 版本号是**序号不是日期**，并发 session 各自去取「下一个号」。
+配置是 `out-of-order=false` + `validate-on-migrate=false` —— 如果另一条线先合并并占了
+`V20261101_01` 或更高的号，我们这条迁移会被**静默跳过且不报错** ⇒ `semi_outputs` 列不存在
+⇒ **每一次逐工序报工提交都 500**。
+
+⚠️ 在**分支基底**上跑过不算数，必须对着 merge 结果跑。
+
+### 2. 🔴 部署顺序：**后端先，OTA 后**
+
+Spring Boot 默认不开 `FAIL_ON_UNKNOWN_PROPERTIES`（全仓只有 `CacheConfig` 显式关过一次，
+HTTP 侧走默认）⇒ 「新 App + 旧后端」**不会报错**：请求 200 成功，然后把 `semiOutputs` 和
+`defectQuantity` **整个丢掉**。操作员填了不良品，屏幕弹「已记不良品 50 kg」，而库里什么都没有。
+
+这正是本仓 2026-08-17 那次「OTA 九天零送达而每次推送四步验收全绿」的形状。
+
+⇒ 先部后端，**并在运行中的 jar 里 grep 到本次改动的标记**，再推 OTA。
+⛔ `DEPLOY_EXIT=0` / `RELEASE_FINAL_STATUS=deployed` 都不是判据。
+
+### 3. 存量数据前置检查（幂等键收窄的前提）
+
+```sql
+select count(*) from semi_finished_inventory_transactions where txn_type='IN' and source_ref is null;
+```
+
+**预期 0**。非 0 ⇒ 存量里有 `sourceRef` 为空的 IN 行，收窄后的幂等键认不出它们，
+那些报工重新过账会**双计**。
+（仓库 2026-08-23 压平重建过，`git log -S` 追不到历史，只能查数据。）
