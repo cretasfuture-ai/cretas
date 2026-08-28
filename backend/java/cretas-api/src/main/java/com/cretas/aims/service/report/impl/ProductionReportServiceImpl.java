@@ -386,7 +386,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("totalRevenue", totalRevenue != null ? totalRevenue : BigDecimal.ZERO);
         BigDecimal averageOrderValue = shipmentRecordRepository.calculateAverageOrderValue(factoryId, startDate, endDate);
         report.put("averageOrderValue", averageOrderValue != null ? averageOrderValue : BigDecimal.ZERO);
-        double conversionRate = 100.0;
+        // 🔴 原来是 `double conversionRate = 100.0;` —— 一张订单都没有时报「转化率 100%」。
+        //    与准时交付率那三个 100 同一族。⇒ 没有分母就算不出来。
+        Double conversionRate = null;
         if (totalOrders > 0) {
             long shippedOrders = shipmentRecordRepository.countByFactoryIdAndStatus(factoryId, "shipped");
             long deliveredOrders = shipmentRecordRepository.countByFactoryIdAndStatus(factoryId, "delivered");
@@ -616,28 +618,32 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         Map<String, Object> production = new HashMap<>();
         production.put("oee", oee);
         production.put("yield", fpy);              // 良品率 ≈ 首检合格率
-        production.put("cycleTime", 0);            // 暂无真实数据源 → 诚实 0
+        // 🔴 这一组原来写 0, 注释叫它「诚实 0」—— 而**没有数据源时 0 不是诚实, 是编的**:
+        //    屏上「返工率 0% / 废品率 0% / 订单满足率 0%」看起来是业绩, 不是「没有数据」。
+        //    web-admin 的 KPI 看板已经把这些字段声明成 `number | null` 并初始化为 null,
+        //    接得住 —— 是后端在发假的 0。(2026-08-29 走查)
+        production.put("cycleTime", null);          // 无数据源
         production.put("throughput", output);
         kpi.put("production", production);
 
         Map<String, Object> quality = new HashMap<>();
         quality.put("fpy", fpy);
         quality.put("defectRate", defectRate);
-        quality.put("reworkRate", 0);              // 暂无真实数据源
-        quality.put("scrapRate", 0);
+        quality.put("reworkRate", null);
+        quality.put("scrapRate", null);
         kpi.put("quality", quality);
 
         Map<String, Object> delivery = new HashMap<>();
         delivery.put("onTimeRate", onTimeRate);
-        delivery.put("leadTime", 0);               // 暂无真实数据源
-        delivery.put("fillRate", 0);
+        delivery.put("leadTime", null);
+        delivery.put("fillRate", null);
         kpi.put("delivery", delivery);
 
         Map<String, Object> cost = new HashMap<>();
         cost.put("unitCost", unitCost);
-        cost.put("materialCost", 0);               // 占比拆分暂无真实数据源
-        cost.put("laborCost", 0);
-        cost.put("overheadCost", 0);
+        cost.put("materialCost", null);            // 占比拆分无数据源
+        cost.put("laborCost", null);
+        cost.put("overheadCost", null);
         kpi.put("cost", cost);
 
         // 扁平 key (向后兼容旧调用方, 同样真实值)
@@ -1642,15 +1648,14 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             orderDetails.add(orderData);
         }
 
-        BigDecimal onTimeRate = totalOrders > 0 ?
-                new BigDecimal(onTimeOrders).divide(new BigDecimal(totalOrders), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("100");
-        BigDecimal inFullRate = totalOrders > 0 ?
-                new BigDecimal(inFullOrders).divide(new BigDecimal(totalOrders), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("100");
-        BigDecimal otifRate = totalOrders > 0 ?
-                new BigDecimal(otifOrders).divide(new BigDecimal(totalOrders), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("100");
+        // 🔴 这三个原来在 totalOrders == 0 时返回 **100** —— 一张订单都没有的期间
+        //    被报成「准时交付率 100%」。实测 F006 2026-08-01~08-29:
+        //    totalOrders=0 而 onTimeRate=100.0。
+        //    ⇒ 没有分母就算不出来, 返回 null; 屏上说「没有订单」, ⛔ 不报满分。
+        //    (报 0 同样是编的 —— 0% 在这里是「全部延误」这个合法读数。)
+        BigDecimal onTimeRate = rateOrNull(onTimeOrders, totalOrders);
+        BigDecimal inFullRate = rateOrNull(inFullOrders, totalOrders);
+        BigDecimal otifRate = rateOrNull(otifOrders, totalOrders);
 
         List<Map<String, Object>> dailyTrend = new ArrayList<>();
         Map<LocalDate, List<ShipmentRecord>> dailyShipments = shipments.stream()
@@ -1669,10 +1674,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
 
             dayData.put("totalOrders", dayTotal);
             dayData.put("onTimeOrders", dayOnTime);
-            dayData.put("otifRate", dayTotal > 0 ?
-                    new BigDecimal(dayOnTime).divide(new BigDecimal(dayTotal), 4, RoundingMode.HALF_UP)
-                            .multiply(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP) :
-                    new BigDecimal("100"));
+            // 同上: 没有发货的那一天不是「100% 准时」, 是**算不出来**。
+            // 原来那份写法会让趋势图上每个空白日都长出一根满分柱子。
+            dayData.put("otifRate", rateOrNull(dayOnTime, dayTotal));
 
             dailyTrend.add(dayData);
         }
@@ -1681,9 +1685,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("onTimeOrders", onTimeOrders);
         report.put("inFullOrders", inFullOrders);
         report.put("otifOrders", otifOrders);
-        report.put("onTimeRate", onTimeRate.setScale(2, RoundingMode.HALF_UP));
-        report.put("inFullRate", inFullRate.setScale(2, RoundingMode.HALF_UP));
-        report.put("otifRate", otifRate.setScale(2, RoundingMode.HALF_UP));
+        report.put("onTimeRate", onTimeRate);
+        report.put("inFullRate", inFullRate);
+        report.put("otifRate", otifRate);
         // ⛔ 原来写死 95 —— 与产能利用率那个写死的 80 同一族: 库里没有目标值的来源。
         report.put("target", null);
         report.put("dailyTrend", dailyTrend);
@@ -1698,6 +1702,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
      * 「我不知道」和「确实是 0」。前端 {@code MetricItem} 对 null 已经有 "--" 分支,
      * 对 0 则会画出一个红色的 0.0%。
      */
+    /**
+     * 比率 = 分子 / 分母 x 100; <b>分母为 0 时返回 null</b>。
+     *
+     * <p>⛔ 不要在这里兜 0 或 100 —— 两者在比率语境里都是**合法读数**
+     * (0% = 全部延误; 100% = 全部准时), 下游分不清它们和「我不知道」。
+     * 2026-08-29 实测: 原来分母为 0 时返回 100, 于是没有订单的期间报「准时率 100%」。
+     */
+    private static BigDecimal rateOrNull(long numerator, long denominator) {
+        if (denominator <= 0) {
+            return null;
+        }
+        return new BigDecimal(numerator)
+                .divide(new BigDecimal(denominator), 4, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"))
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
     private static BigDecimal scaleOrNull(BigDecimal value) {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
