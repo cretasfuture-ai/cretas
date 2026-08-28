@@ -135,6 +135,31 @@ public class FactoryThreshold extends BaseEntity {
     @Column(name = "version", nullable = false)
     private Long version;
 
+    /**
+     * <b>非持久化</b>标记：这一行是从全局 {@value #GLOBAL_FALLBACK_FACTORY_ID} 继承来的，
+     * 该工厂自己还没有 override。
+     *
+     * <h3>为什么需要它 (2026-08-29 实测)</h3>
+     * 列表接口原来严格按 {@code factory_id} 过滤 ⇒ 全局行在任何工厂的配置页上都<b>看不见</b>。
+     * 后果是「阈值可配置」这件事对没有 per-factory 行的工厂根本不成立：
+     * <ul>
+     *   <li>新加的 {@code sales.delivery.over_ship_rate} 只 seed 了全局行 ⇒ 所有工厂都配不了它</li>
+     *   <li>生产实测: {@code LIUSHANMEN}(真实客户) 与 {@code MOCK_REST} 各有 <b>0 行</b> ⇒
+     *       他们的管理员打开配置页, 15 个分类<b>全是空的</b>, 而解析器一直在用全局默认值跑</li>
+     * </ul>
+     *
+     * <p>⇒ 列表接口改为按<b>解析梯子</b>返回「有效配置」：per-factory 优先，缺失时带出全局行
+     * 并把本字段置 {@code true}。
+     *
+     * <h3>⚠️ 前端必须据此改写保存动作</h3>
+     * {@code inherited=true} 的行, 它的 {@code id} 属于全局那一行。
+     * <b>对它 PUT 会改掉全局默认值, 影响所有工厂</b> —— 必须改为 POST 建一条 per-factory override。
+     *
+     * <p>{@code @Transient} ⇒ 不落库、不参与 JPA 脏检查; Jackson 照常序列化给前端。
+     */
+    @jakarta.persistence.Transient
+    private Boolean inherited;
+
     // ==================== 类型转换便利方法 ====================
 
     /**
