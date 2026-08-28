@@ -74,6 +74,43 @@ def _parse_slot(slot_str: str) -> SLOT:
     return s
 
 
+# 供应商实际支持的 tool_choice 取值。
+# 🔴 2026-08-28 生产实测: aistore/DeepSeek-V4-Flash-A 只认 none/auto ——
+#   tool_choice="auto"                -> HTTP 200, 正常返回 tool_calls
+#   tool_choice="get_inventory_stats" -> 上游 400
+#     InvalidParameter: tool_choice is one of the strings that should be ["none","auto"]
+#   而 call_chain 兜底链走完之后对外抛出去, FastAPI 兜成
+#   `500 {"code":"INTERNAL_ERROR","message":"Internal server error"}` ——
+#   调用方完全看不出「是我传错了参数」还是「服务挂了」。
+#
+# ⛔ 不做降级: 不把具名工具悄悄改写成 "auto"。那会让调用方以为强制生效了,
+#    而模型其实可以自由选择别的工具或干脆不调 —— 正是本仓「禁止降级处理」那条。
+# ⇒ 在入口显式拒绝, 把「不支持」说清楚。供应商日后支持了, 放开这里即可。
+_SUPPORTED_TOOL_CHOICES = {"none", "auto"}
+
+
+def _validate_tool_choice(tool_choice: Optional[Union[str, Dict[str, Any]]]) -> None:
+    """具名 tool_choice 当前供应商不支持 —— 明确 400, 不要让它烂成 500。"""
+    if tool_choice is None:
+        return
+    if isinstance(tool_choice, str) and tool_choice in _SUPPORTED_TOOL_CHOICES:
+        return
+    if isinstance(tool_choice, str):
+        got = repr(tool_choice)
+    else:
+        got = f"object {json.dumps(tool_choice, ensure_ascii=False)[:120]}"
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"tool_choice {got} is not supported by the current providers. "
+            f"Only {sorted(_SUPPORTED_TOOL_CHOICES)} are accepted. "
+            "Forcing a specific tool by name is an OpenAI-style capability that the "
+            "configured upstream models reject with 400; use \"auto\" and check the "
+            "returned tool_calls instead."
+        ),
+    )
+
+
 def _build_payload(req: LLMRequest) -> Dict[str, Any]:
     """Build the payload dict, omitting fields that are None."""
     payload: Dict[str, Any] = {"messages": req.messages}
@@ -101,6 +138,7 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 async def chat(req: LLMRequest) -> Dict[str, Any]:
     """Synchronous chat passthrough — returns complete call_chain response."""
     slot = _parse_slot(req.slot)
+    _validate_tool_choice(req.tool_choice)
     payload = _build_payload(req)
     with llm_caller_context(req.caller or "llm_api.chat"):
         return await call_chain(slot, payload)
@@ -136,6 +174,7 @@ async def chat_stream(req: LLMRequest) -> StreamingResponse:
 async def tool_call(req: LLMRequest) -> Dict[str, Any]:
     """Function-calling passthrough — transparently forwards tools / tool_choice."""
     slot = _parse_slot(req.slot)
+    _validate_tool_choice(req.tool_choice)
     payload = _build_payload(req)
     with llm_caller_context(req.caller or "llm_api.tool_call"):
         return await call_chain(slot, payload)
