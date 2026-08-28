@@ -99,8 +99,21 @@ describe('BOM 配方内容页签', () => {
       expect(matchBomCategory({ materialCategory: '副产' }, 'BYPRODUCT')).toBe(false);
     });
 
+    /**
+     * 🔴 2026-08-29: 回料行 (SEMI_FINISHED) 开始可以存进 BOM 了。
+     * 它还没有自己的页签 (需要半成品选择器, 本次未建), 所以先归 RAW。
+     * 这一条守的是「它不能落到**零个**页签」—— 那样保存成功的行会在界面上凭空消失,
+     * 而后端、接口、类型检查全部是绿的。
+     */
+    it('回料行 (SEMI_FINISHED) 归到原料页签, 不允许落到零个页签', () => {
+      const semi = { materialCategory: 'SEMI_FINISHED' };
+      expect(normalizeRecipeMaterialCategory('SEMI_FINISHED')).toBe('RAW');
+      expect(matchBomCategory(semi, 'RAW')).toBe(true);
+      expect(BOM_CATEGORY_TABS.filter((tab) => matchBomCategory(semi, tab))).toHaveLength(1);
+    });
+
     it('每一行有且只有一个归属页签 (不重不漏)', () => {
-      for (const row of [raw, aux, pkg, byp, legacyBlank]) {
+      for (const row of [raw, aux, pkg, byp, legacyBlank, { materialCategory: 'SEMI_FINISHED' }]) {
         const hits = BOM_CATEGORY_TABS.filter((tab) => matchBomCategory(row, tab));
         expect(hits, `${row.materialCategory || '(空)'} 的归属页签`).toHaveLength(1);
       }

@@ -72,7 +72,10 @@ export function validateBomActivation(
 
   for (const [index, item] of items.entries()) {
     const name = item.materialName?.trim() || `第 ${index + 1} 行`;
-    if (!item.materialTypeId?.trim()) return `${name} 尚未关联物料，请重新选择物料。`;
+    // 回料(半成品)行的身份是 semiFinishedRefCode 而不是 materialTypeId —— 对它要求
+    // 「关联物料」等于要求它去原料仓建一个假档案。后端 validateActivatableItems 是同一条判据。
+    const hasIdentity = !!item.materialTypeId?.trim() || !!item.semiFinishedRefCode?.trim();
+    if (!hasIdentity) return `${name} 尚未关联物料，请重新选择物料。`;
     const rawMaterial = !item.materialCategory || item.materialCategory.toUpperCase() === 'RAW';
     const hasInvalidQuantity = item.standardQuantity != null
       && (!Number.isFinite(Number(item.standardQuantity)) || Number(item.standardQuantity) <= 0);

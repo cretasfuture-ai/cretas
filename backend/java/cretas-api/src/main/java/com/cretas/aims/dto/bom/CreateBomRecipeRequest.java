@@ -14,8 +14,13 @@ import java.util.List;
  *
  * <p>主子表创建一次完成: 主表元数据 + N 个子表项 (1+).
  *
- * <p>禁手写物料名称: {@code BomRecipeItemDTO.materialTypeId} {@code @NotBlank}
- * 强制从 raw_material_types 字典选择 (客户原话 May10 line 217-222).
+ * <p>禁手写物料名称 (客户原话 May10 line 217-222): 每一条配方项都必须指向一个**字典条目**,
+ * 而不是一段自由文本。2026-08-29 起这条约束由
+ * {@link BomRecipeItemDTO#isExactlyOneMaterialIdentity()} 承担, 而不再是
+ * {@code materialTypeId} 上的 {@code @NotBlank} —— 因为身份来源变成了两个:
+ * 普通投入行选 {@code raw_material_types}, 回料(半成品)行选
+ * {@code semi_finished_inventory} (写 {@code semiFinishedRefCode})。
+ * 二者<b>恰有一个</b>非空, 与 DB 约束 {@code chk_bri_material_ref_xor} 同一条判据。
  *
  * @author Cretas Team / Track D1
  * @since 2026-05-14
@@ -63,8 +68,12 @@ public class CreateBomRecipeRequest {
     @Schema(description = "配方项 (主子表的子)")
     public static class BomRecipeItemDTO {
 
-        @Schema(description = "原料类型ID (硬外键 raw_material_types, 不允许手写)", required = true)
-        @NotBlank(message = "原料类型ID不能为空, 必须从字典选择")
+        /**
+         * 原料档案 id。<b>普通投入行必填, 半成品(回料)行必须留空</b> ——
+         * 二者恰有一个非空, 见 {@link #isExactlyOneMaterialIdentity()} 与
+         * DB 约束 {@code chk_bri_material_ref_xor}。
+         */
+        @Schema(description = "原料类型ID (外键 raw_material_types, 不允许手写); 半成品(回料)行留空并改填 semiFinishedRefCode")
         @Size(max = 191)
         private String materialTypeId;
 
@@ -87,9 +96,9 @@ public class CreateBomRecipeRequest {
         @PositiveOrZero
         private BigDecimal taxRate;
 
-        @Schema(description = "物料分类: RAW/AUXILIARY/PACKAGING 为投入, BYPRODUCT 为产出声明; 默认 RAW")
-        @Pattern(regexp = "^(RAW|AUXILIARY|PACKAGING|BYPRODUCT)$",
-                 message = "物料分类必须是 RAW/AUXILIARY/PACKAGING/BYPRODUCT 之一")
+        @Schema(description = "物料分类: RAW/AUXILIARY/PACKAGING/SEMI_FINISHED 为投入, BYPRODUCT 为产出声明; 默认 RAW")
+        @Pattern(regexp = "^(RAW|AUXILIARY|PACKAGING|BYPRODUCT|SEMI_FINISHED)$",
+                 message = "物料分类必须是 RAW/AUXILIARY/PACKAGING/SEMI_FINISHED/BYPRODUCT 之一")
         private String materialCategory;
 
         @Schema(description = "排序", defaultValue = "0")
@@ -128,9 +137,25 @@ public class CreateBomRecipeRequest {
         @Schema(description = "是否按份计量 (true = 每份用量, false = 按批次总量), 默认 false")
         private Boolean perPortion;
 
-        @Schema(description = "半成品引用编码, 追踪原料→半成品→成品链路 (可选)")
+        @Schema(description = "半成品(回料)引用编码 = semi_finished_inventory.intermediate_batch_no; 非空即代表本行是半成品行, 此时 materialTypeId 必须留空")
         @Size(max = 100, message = "半成品引用编码长度不能超过100个字符")
         private String semiFinishedRefCode;
+
+        /**
+         * 物料身份恰有一个 —— 原料档案 或 半成品引用编码, 不能都填也不能都不填。
+         *
+         * <p>与 DB 约束 {@code chk_bri_material_ref_xor} 同一条判据。写在 DTO 上是为了
+         * 让用户拿到 400 + 明确措辞, 而不是 500 + 一句 PSQLException;
+         * ⛔ 但它<b>不是</b>唯一守卫 —— 绕过 DTO 的写路径由 DB 约束兜底。
+         */
+        @AssertTrue(message = "配方项必须且只能有一个物料身份: 普通投入行填 materialTypeId, 半成品(回料)行填 semiFinishedRefCode")
+        @Schema(hidden = true)
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public boolean isExactlyOneMaterialIdentity() {
+            boolean hasMaterial = materialTypeId != null && !materialTypeId.isBlank();
+            boolean hasSemiRef = semiFinishedRefCode != null && !semiFinishedRefCode.isBlank();
+            return hasMaterial ^ hasSemiRef;
+        }
 
         // ========== SP1: 嵌套 BOM — 子产品引用 ==========
 
