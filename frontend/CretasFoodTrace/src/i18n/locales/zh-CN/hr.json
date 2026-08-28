@@ -31,7 +31,8 @@
         "pending": "待入职",
         "active": "已入职",
         "cancelled": "已取消"
-      }
+      },
+      "missingHireDate": "有 {{count}} 名员工没有填入职日期，所以他们不会出现在这里。可在「员工档案」里补上入职日期。"
     }
   },
   "staff": {

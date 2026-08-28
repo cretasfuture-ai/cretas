@@ -31,7 +31,8 @@
         "pending": "Pending",
         "active": "Active",
         "cancelled": "Cancelled"
-      }
+      },
+      "missingHireDate": "{{count}} employees have no hire date on file, so they cannot appear here. Add it in the employee record."
     }
   },
   "staff": {
