@@ -1,0 +1,50 @@
+-- V20261031_05: 出纳 (cashier) 补 dashboard 模块权限 —— 否则登录后 100% 落 /403
+--
+-- ## 症状 (2026-08-28 生产实测, F006)
+--   POST /api/mobile/auth/unified-login  f006_cashier → 200, role=cashier, perms=["finance:*"]
+--   浏览器落地 → /403「访问被拒绝」(正文 36 字符)
+--   逐角色巡检: 可巡检路由 = 0  ⇒ **出纳在 web-admin 上一屏都进不去。**
+--
+-- ## 根因
+--   登录后默认落 /dashboard, 路由守卫走 permissionStore.canAccess('dashboard'):
+--     web-admin/src/router/guards.ts  →  module 权限判定
+--   而 platform_role_permissions 里 cashier **只有 3 行**:
+--
+--     role_code       | rows | modules
+--     cashier         |    3 | finance, procurement, sales          ← 没有 dashboard
+--     quality_manager |   17 | analytics, dashboard, equipment, ...
+--     (其余 6 个具名角色均为 17 行, 都含 dashboard)
+--
+--   ⇒ canAccess('dashboard') 为 false → next('/403')。
+--
+-- ## ⚠️ 为什么前端那道「修复」救不了
+--   web-admin/src/store/modules/permission.ts:224 的 hardcoded fallback 里
+--   **已经写着** `cashier: { dashboard: 'r', ... }`, 注释还专门说明它是为了
+--   「DB 异步加载未完成的窗口里 cashier 不被打成 unactivated 全 403」。
+--
+--   但 canAccess 的取数是 `isDbLoaded && dbPermissions ? DB : hardcoded`
+--   ⇒ **DB 一加载成功, fallback 就失效, 403 照旧。**
+--   那次修复瞄的是竞态, 没瞄真因(DB 里缺行)。真因只能由本迁移补。
+--
+-- ## 为什么是 'r' 而不是 'rw'
+--   与前端 fallback 声明的值一致 ('dashboard': 'r'), 也与其余角色一致
+--   (17 行的那些角色 dashboard 多为 'r', 仅 department_admin/dispatcher 为 'rw')。
+--   出纳只需要能进首页, ⛔ 不给写权限 —— 最小放行。
+--
+-- ## 范围 (⚠️ 这张表是平台级的)
+--   platform_role_permissions **不带 factory_id**, 改它影响所有租户。
+--   ⇒ 本迁移只加 **1 行** (cashier / dashboard / r), 不动任何既有行,
+--     不给 cashier 补别的模块 —— 前端 fallback 里 cashier 的其余模块都是 '-'
+--     (无权限), 「没有行」正好表达这个语义, 不需要显式写入。
+--
+-- ## 幂等
+--   ON CONFLICT (role_code, module_code) —— uk_role_module 是唯一索引。
+--   重跑空跑; 若有人已手工补过这一行, 本迁移不覆盖它的 permission_level。
+--   created_at / updated_at 有 DEFAULT now(), 但显式写出以免依赖默认值。
+--
+-- ## 数据缺席安全
+--   不做「影响行数 = 1」断言: 全新库(表为空)与已补过的库都要能跑过。
+
+INSERT INTO platform_role_permissions (role_code, module_code, permission_level, created_at, updated_at)
+VALUES ('cashier', 'dashboard', 'r', NOW(), NOW())
+ON CONFLICT (role_code, module_code) DO NOTHING;

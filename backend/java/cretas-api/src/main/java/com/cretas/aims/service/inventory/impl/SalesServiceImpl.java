@@ -3133,10 +3133,34 @@ public class SalesServiceImpl implements SalesService {
                     if (arExists) {
                         log.info("应收自动挂账跳过: salesOrderId={} 已存在 AR_INVOICE", order.getId());
                     } else {
-                        arApService.recordReceivable(factoryId, order.getCustomerId(), order.getId(),
-                            order.getTotalAmount(), LocalDate.now().plusDays(30), userId,
-                            "销售发货自动挂账-" + record.getDeliveryNumber());
-                    log.info("自动创建应收: orderId={}, amount={}", order.getId(), order.getTotalAmount());
+                        // 🔴 2026-08-28 口径修复: 挂账金额必须是【价税合计】, 不是未税额。
+                        //
+                        // 旧实现传 order.getTotalAmount() —— 那是**未税**总额 (详情页抬头就叫
+                        // 「未税总额」), 于是每张单的应收都少记一个税额。生产实测 F006 7/7 全中,
+                        // 命中率 100%, 少记合计 ¥1,692.15。
+                        //
+                        // 症状是系统自己跟自己矛盾: 同一次发货同时生成的销项发票是**含税**的
+                        // (invoice_records.total_amount = amount + tax_amount), 于是
+                        //   发票说客户欠 250.00 / 应收台账说客户欠 221.24。
+                        // 客户付掉未税金额后 AR 净额归零 ⇒ 账龄表显示「无欠款」, 而一张
+                        // 250.00 的销项发票已经开出去了, 那 28.76 再也看不到。
+                        //
+                        // getPayableAmount() = totalAmount - discountAmount + taxAmount,
+                        // 是本实体上既有的「客户实际应付」口径 (SalesOrder:445), 与发票一致,
+                        // 且顺带把折扣也算对 —— ⛔ 不要在这里手写 add(taxAmount), 那会漏掉折扣。
+                        BigDecimal receivableAmount = order.getPayableAmount();
+                        if (receivableAmount == null) {
+                            // getPayableAmount 在 totalAmount 为 null 时返回 null (价格脱敏路径)。
+                            // 上面的 if 已经保证 totalAmount != null, 这里是防御性兜底: 宁可跳过
+                            // 也不挂一个错的数。⛔ 不回落到 totalAmount —— 那正是本次要修的缺陷。
+                            log.error("应收自动挂账跳过: orderId={} 无法计算价税合计 (payableAmount=null)", order.getId());
+                        } else {
+                            arApService.recordReceivable(factoryId, order.getCustomerId(), order.getId(),
+                                receivableAmount, LocalDate.now().plusDays(30), userId,
+                                "销售发货自动挂账-" + record.getDeliveryNumber());
+                            log.info("自动创建应收: orderId={}, 价税合计={} (未税={} 税额={})",
+                                    order.getId(), receivableAmount, order.getTotalAmount(), order.getTaxAmount());
+                        }
                     }
                 }
             } catch (BusinessException e) {
