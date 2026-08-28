@@ -462,7 +462,11 @@ export default function TodoDetailScreen() {
           resp = await todoApprovalApiClient.priceAnomalyApprove(refId);
           break;
         case 'STOCKTAKE_APPROVAL':
-          resp = await todoApprovalApiClient.stocktakeApprove(refId);
+          if (!instanceId || !expectedNodeId) {
+            appAlert('无法审批', '这条盘点待办缺少 OA 审批实例信息，请返回列表下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(instanceId, 'APPROVE', expectedNodeId);
           break;
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceApprove(refId);
@@ -525,7 +529,11 @@ export default function TodoDetailScreen() {
           resp = await todoApprovalApiClient.priceAnomalyReject(refId, reason);
           break;
         case 'STOCKTAKE_APPROVAL':
-          resp = await todoApprovalApiClient.stocktakeReject(refId, reason);
+          if (!instanceId || !expectedNodeId) {
+            appAlert('无法驳回', '这条盘点待办缺少 OA 审批实例信息，请返回列表下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(instanceId, 'REJECT', expectedNodeId, reason);
           break;
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceReject(refId, reason);

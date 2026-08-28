@@ -100,20 +100,6 @@ describe('todoApprovalApiClient', () => {
       { notes: 'price mismatch' },
     ],
     [
-      'stocktake approve',
-      () => todoApprovalApiClient.stocktakeApprove('ST-1', 'F123'),
-      'post',
-      '/api/mobile/F123/stocktakes/ST-1/approve',
-      undefined,
-    ],
-    [
-      'stocktake reject',
-      () => todoApprovalApiClient.stocktakeReject('ST-1', 'count mismatch', 'F123'),
-      'post',
-      '/api/mobile/F123/stocktakes/ST-1/reject',
-      { notes: 'count mismatch' },
-    ],
-    [
       'wastage approve',
       () => todoApprovalApiClient.wastageApprove('WR-1', 'F123'),
       'post',
