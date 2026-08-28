@@ -778,7 +778,17 @@ export default function ProductionPlanManagementScreen() {
             <Card.Content style={styles.emptyContent}>
               <List.Icon icon="clipboard-text-outline" color="#999" />
               <Text style={styles.emptyText}>{t('productionPlan.empty.noPlans')}</Text>
-              <Text style={styles.emptyHint}>{t('productionPlan.empty.hint')}</Text>
+              {/*
+                ⚠️ 2026-08-29 逐屏走查：这一句原来**无条件**显示「点击右下角「+」按钮创建」，
+                而那个 FAB 是按 `canCreatePlan` 隐藏的 —— 没权限的角色看到的是
+                「点击一个不存在的按钮」，而且与上面横幅「创建/调整/结单请使用 PC」直接打架。
+                同一屏两句话互相矛盾，还都指不到能做的事。
+              */}
+              <Text style={styles.emptyHint}>
+                {canCreatePlan
+                  ? t('productionPlan.empty.hint')
+                  : t('productionPlan.empty.hintNoPermission')}
+              </Text>
             </Card.Content>
           </Card>
         ) : (

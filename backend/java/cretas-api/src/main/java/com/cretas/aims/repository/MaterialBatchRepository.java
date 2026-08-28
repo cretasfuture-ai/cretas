@@ -743,6 +743,32 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<Object> findLowStockMaterials(@Param("factoryId") String factoryId);
 
     /**
+     * 低库存原材料，<b>带上人看得懂的那几项</b>：名称、当前可用量、安全库存、单位。
+     *
+     * <h3>为什么单独加一个方法</h3>
+     *
+     * {@link #findLowStockMaterials} 只返回 {@code materialTypeId}，而告警面板拿它拼出来的是
+     * 三条一模一样的「原材料库存低」——{@code data} 字段里躺着 {@code mrmt_1f41b247166d8e01}
+     * 这样的 id，屏上却没有任何东西告诉仓管**是哪一种料、还剩多少、低于多少**
+     * （2026-08-29 逐屏走查在 MOCK_REST 上实测三条告警完全无法区分）。
+     *
+     * <p>⛔ 没有改原方法：另外 3 个调用点只需要「有几种」这个计数，改签名会牵动它们。
+     * 与 {@code getAlertsDashboard} 里紧挨着的过期预警口径对齐 ——
+     * 那一条本来就会写「原材料即将过期: 批次号」，把主体说出来。
+     *
+     * @return 每行 {@code [materialTypeId, name, availableQty, minStock, unit]}
+     */
+    @Query("SELECT m.materialTypeId, mt.name, " +
+           "SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), mt.minStock, mt.unit " +
+           "FROM MaterialBatch m, RawMaterialType mt " +
+           "WHERE mt.id = m.materialTypeId " +
+           "AND m.factoryId = :factoryId " +
+           "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+           "GROUP BY m.materialTypeId, mt.name, mt.minStock, mt.unit " +
+           "HAVING SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity) < mt.minStock")
+    List<Object[]> findLowStockMaterialsDetailed(@Param("factoryId") String factoryId);
+
+    /**
      * 检查批次号是否存在
      */
     boolean existsByBatchNumber(String batchNumber);

@@ -19,6 +19,8 @@ import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { materialBatchApiClient } from '../../../services/api/materialBatchApiClient';
+import { statusKey } from '../../../utils/statusKey';
+import { formatQuantity } from '../../../utils/packagingUnitConversion';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'MaterialBatch'>;
 
@@ -81,24 +83,54 @@ export function MaterialBatchScreen() {
     loadData();
   }, [loadData]);
 
+  /**
+   * 后端发的是**大写**枚举（生产实测：AVAILABLE 106 / DEPLETED 60 / USED_UP 15），
+   * 而下面两张表原来用的是**小写**键 —— `colors[status]` / `labels[status]` 全部落空。
+   *
+   * 后果（2026-08-29 逐屏走查实测）：
+   *   · 状态文字兜底到 `|| status`，屏上直接显示英文 `AVAILABLE`
+   *   · 颜色兜底到灰色 —— **181 个批次的状态徽章全是灰的**，这个徽章从来没工作过
+   *   · `USED_UP`（15 条）在表里**根本没有**，即使大小写对上也无法翻译
+   *
+   * ⇒ 统一按小写查，并补上 usedUp。
+   * ⛔ 不要只把键改成大写 —— 那样接口哪天改回小写又会全部落空。
+   */
   const getStatusColor = (status: string): string => {
     const colors: Record<string, string> = {
       available: '#48bb78',
+      inStock: '#48bb78',
+      fresh: '#48bb78',
+      frozen: '#4299e1',
       reserved: '#ed8936',
+      producingReserved: '#ed8936',
+      inspecting: '#805ad5',
+      defective: '#e53e3e',
       depleted: '#a0aec0',
+      usedUp: '#a0aec0',
+      scrapped: '#a0aec0',
       expired: '#e53e3e',
     };
-    return colors[status] || '#a0aec0';
+    return colors[statusKey(status)] || '#a0aec0';
   };
 
   const getStatusLabel = (status: string): string => {
     const labels: Record<string, string> = {
       available: t('materialBatch.status.available'),
+      inStock: t('materialBatch.status.inStock'),
+      fresh: t('materialBatch.status.fresh'),
+      frozen: t('materialBatch.status.frozen'),
       reserved: t('materialBatch.status.reserved'),
+      producingReserved: t('materialBatch.status.producingReserved'),
+      inspecting: t('materialBatch.status.inspecting'),
+      defective: t('materialBatch.status.defective'),
       depleted: t('materialBatch.status.depleted'),
+      usedUp: t('materialBatch.status.usedUp'),
+      scrapped: t('materialBatch.status.scrapped'),
       expired: t('materialBatch.status.expired'),
     };
-    return labels[status] || status;
+    // 兜底仍然回落到原始串 —— 那是「我们没见过这个状态」的诚实表现，
+    // ⛔ 但它不该是常态。真出现说明后端又加了新枚举, 要补进上面。
+    return labels[statusKey(status)] || status;
   };
 
   const renderBatchItem = ({ item }: { item: MaterialBatch }) => (
@@ -119,7 +151,14 @@ export function MaterialBatchScreen() {
       <View style={styles.batchFooter}>
         <View style={styles.infoItem}>
           <Icon source="scale" size={16} color="#666" />
-          <Text style={styles.infoText}>{item.quantity} {item.unit || 'kg'}</Text>
+          {/*
+            走查实测屏上是「456.4519 kg」—— 0.1 克精度, 对仓管是噪声。
+            复用仓里已有的 formatQuantity(去小数尾巴、保留 3 位), ⛔ 不另造一份格式化。
+            3 位是必要的: 生产库里 material_batches 数量跨 0.04 ~ 109999, 有 12 条小于 1。
+          */}
+          <Text style={styles.infoText}>
+            {formatQuantity(Number(item.quantity))} {item.unit || 'kg'}
+          </Text>
         </View>
         {item.supplierName && (
           <View style={styles.infoItem}>

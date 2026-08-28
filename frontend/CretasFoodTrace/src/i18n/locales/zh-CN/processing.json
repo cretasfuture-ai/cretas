@@ -17,7 +17,9 @@
     "close": "关闭"
   },
   "batchStatus": {
+    "planned": "已计划",
     "planning": "计划中",
+    "producing": "生产中",
     "inProgress": "进行中",
     "paused": "已暂停",
     "qualityCheck": "质检中",
@@ -619,7 +621,8 @@
     },
     "empty": {
       "noPlans": "暂无生产计划",
-      "hint": "点击右下角「+」按钮创建生产计划"
+      "hint": "点击右下角「+」按钮创建生产计划",
+      "hintNoPermission": "你的角色不能在 App 里创建生产计划。创建、调整与结单请在 PC 端操作；现场报工在各自任务里录入。"
     },
     "dialog": {
       "confirmStart": "确认开始生产",

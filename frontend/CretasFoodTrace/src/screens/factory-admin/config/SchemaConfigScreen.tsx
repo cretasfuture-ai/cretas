@@ -114,25 +114,21 @@ function FieldPreview({ field, onRemove }: FieldPreviewProps) {
   );
 }
 
-// 获取实体类型翻译key
-const getEntityTypeKey = (entityType: EntityType): string => {
-  const keys: Record<EntityType, string> = {
-    QUALITY_CHECK: 'schemaConfig.entityTypes.qualityCheck',
-    MATERIAL_BATCH: 'schemaConfig.entityTypes.materialBatch',
-    PROCESSING_BATCH: 'schemaConfig.entityTypes.processingBatch',
-    SHIPMENT: 'schemaConfig.entityTypes.shipment',
-    EQUIPMENT: 'schemaConfig.entityTypes.equipment',
-    DISPOSAL_RECORD: 'schemaConfig.entityTypes.disposalRecord',
-    PRODUCT_TYPE: 'schemaConfig.entityTypes.productType',
-    PRODUCTION_PLAN: 'schemaConfig.entityTypes.productionPlan',
-    SCALE_DEVICE: 'schemaConfig.entityTypes.scaleDevice',
-    SCALE_PROTOCOL: 'schemaConfig.entityTypes.scaleProtocol',
-    ISAPI_DEVICE: 'schemaConfig.entityTypes.isapiDevice',
-    RAW_MATERIAL_TYPE: 'schemaConfig.entityTypes.rawMaterialType',
-    PURCHASE_ORDER: 'schemaConfig.entityTypes.purchaseOrder',
-  };
-  return keys[entityType] || 'schemaConfig.entityTypes.unknown';
-};
+/**
+ * 实体类型 → 译文 key。
+ *
+ * 🔴 2026-08-29 逐屏走查：这里原来手工维护一张 UPPER_SNAKE → camelCase 的对照表
+ * （`QUALITY_CHECK: 'schemaConfig.entityTypes.qualityCheck'`），
+ * 而 zh-CN 里 `schemaConfig.entityTypes` 的键**本来就是 UPPER_SNAKE**
+ * （`"QUALITY_CHECK": "质检表单"`）⇒ **每一个都取不到**，屏上直接显示
+ * `schemaConfig.entityTypes.rawMaterialType` 这样的原始 key。
+ *
+ * ⚠️ 走查只渲染到其中 2 个，实际 13 个全中 ——「屏上只看见 2 个」不等于「只坏了 2 个」。
+ *
+ * ⇒ 译文键就用 entityType 本身，这张手工对照表连同它的漂移一起去掉。
+ */
+const getEntityTypeKey = (entityType: EntityType): string =>
+  `schemaConfig.entityTypes.${entityType}`;
 
 export function SchemaConfigScreen() {
   const navigation = useNavigation();

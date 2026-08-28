@@ -2,12 +2,27 @@ import React from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import { Chip, Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
+import { statusKey } from '../../utils/statusKey';
 
+/**
+ * 归一化后的批次状态（camelCase）。
+ *
+ * 🔴 2026-08-29 逐屏走查：这里原来是 snake_case（`'in_progress'`），而后端
+ * `ProductionBatchStatus` 发的是 **UPPER_SNAKE**（`IN_PROGRESS`）。
+ * `switch` 于是**每一条都掉进 default** → 显示「未知」。
+ * 生产库实测 `production_batches` 65 条（IN_PROGRESS 57 / COMPLETED 8）**全部**显示未知，
+ * 而同一批次在列表页显示「生产中」—— 同一个东西两个屏两个答案。
+ *
+ * ⚠️ 后端枚举 7 个值：PLANNED / PLANNING / IN_PROGRESS / PRODUCING / PAUSED / COMPLETED / CANCELLED。
+ * 原来这里缺 `planned` 与 `producing` 两个 —— 今天数据里没有，不等于代码里覆盖了。
+ */
 export type BatchStatus =
+  | 'planned'
   | 'planning'
-  | 'in_progress'
+  | 'inProgress'
+  | 'producing'
   | 'paused'
-  | 'quality_check'
+  | 'qualityCheck'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -28,7 +43,15 @@ export const BatchStatusBadge: React.FC<BatchStatusBadgeProps> = ({
   const { t } = useTranslation('processing');
 
   const getStatusConfig = () => {
-    switch (status) {
+    // ⛔ 不要直接 switch(status)：后端发大写下划线，这里的分支是 camelCase。
+    switch (statusKey(status)) {
+      case 'planned':
+        return {
+          label: t('batchStatus.planned'),
+          color: '#2196F3',
+          backgroundColor: '#E3F2FD',
+          icon: 'calendar-clock',
+        };
       case 'planning':
         return {
           label: t('batchStatus.planning'),
@@ -36,12 +59,19 @@ export const BatchStatusBadge: React.FC<BatchStatusBadgeProps> = ({
           backgroundColor: '#E3F2FD',
           icon: 'clock-outline',
         };
-      case 'in_progress':
+      case 'inProgress':
         return {
           label: t('batchStatus.inProgress'),
           color: '#FF9800',
           backgroundColor: '#FFF3E0',
           icon: 'play-circle',
+        };
+      case 'producing':
+        return {
+          label: t('batchStatus.producing'),
+          color: '#FF9800',
+          backgroundColor: '#FFF3E0',
+          icon: 'factory',
         };
       case 'paused':
         return {
@@ -50,7 +80,7 @@ export const BatchStatusBadge: React.FC<BatchStatusBadgeProps> = ({
           backgroundColor: '#FFEBEE',
           icon: 'pause-circle',
         };
-      case 'quality_check':
+      case 'qualityCheck':
         return {
           label: t('batchStatus.qualityCheck'),
           color: '#FFC107',

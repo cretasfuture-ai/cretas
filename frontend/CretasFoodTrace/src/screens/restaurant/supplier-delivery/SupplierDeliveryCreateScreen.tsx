@@ -40,7 +40,6 @@ interface DraftLine {
   unitPrice: string;
   qcResult: 'PASS' | 'FAIL' | 'PENDING';
   remark: string;
-  showManualMaterialId: boolean;
 }
 
 // 送货日期在这条链上的唯一格式是 YYYY-MM-DD
@@ -56,7 +55,6 @@ const newLine = (): DraftLine => ({
   unitPrice: '',
   qcResult: 'PASS',
   remark: '',
-  showManualMaterialId: false,
 });
 
 const QC_OPTIONS: Array<{ value: DraftLine['qcResult']; label: string }> = [
@@ -79,7 +77,7 @@ export function SupplierDeliveryCreateScreen() {
   const [supplierId, setSupplierId] = useState('');
   const [supplierName, setSupplierName] = useState('');
   const [supplierSearch, setSupplierSearch] = useState('');
-  const [showManualSupplierId, setShowManualSupplierId] = useState(false);
+
 
   // 默认今天(本地日历日)。⛔ 不用 toISOString(): 它按 UTC 截断,
   //    东八区 08:00 之前会默认成「昨天」—— 早班收货正好撞上。
@@ -174,7 +172,6 @@ export function SupplierDeliveryCreateScreen() {
     setSupplierId(supplier.id);
     setSupplierName(supplier.name);
     setSupplierSearch(`${supplier.name}${supplier.supplierCode ? ` (${supplier.supplierCode})` : ''}`);
-    setShowManualSupplierId(false);
   };
 
   const selectMaterial = (line: DraftLine, material: MaterialType) => {
@@ -184,7 +181,6 @@ export function SupplierDeliveryCreateScreen() {
       materialSearch: `${material.name}${material.code ? ` (${material.code})` : ''}`,
       unit: line.unit || material.unit || 'kg',
       unitPrice: canViewAmounts ? line.unitPrice || (material.unitPrice == null ? '' : String(material.unitPrice)) : '',
-      showManualMaterialId: false,
     });
   };
 
@@ -228,7 +224,7 @@ export function SupplierDeliveryCreateScreen() {
 
   const validate = (): string | null => {
     if (!supplierId.trim()) {
-      return '请选择供应商。找不到供应商时，再展开手动填写供应商 ID。';
+      return '请从上面的列表里选择供应商。';
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
       return '送货日期请填写为 YYYY-MM-DD，例如 2026-06-05。';
@@ -360,24 +356,34 @@ export function SupplierDeliveryCreateScreen() {
                   </View>
                 </TouchableOpacity>
               ))}
+              {/*
+                ⚠️ 2026-08-29 逐屏走查：这里原来无论哪种「空」都显示同一句
+                「没有找到供应商。先确认主数据，必要时手动填写 ID。」+ 一个
+                「手动填写供应商 ID」按钮 —— 而供应商 ID 是 UUID
+                （形如 844d8c69-ed89-4a7f-b850-1749456d0777）。
+                ⛔ 仓管不可能记得住、也没地方抄；把它当成补救办法等于没有补救办法。
+
+                两种「空」的处置完全不同，必须分开说：
+                  · 主数据里一个供应商都没有 → 要去维护主数据（这一步不在这一屏）
+                  · 只是这次搜索没匹配上     → 换个关键词就行
+              */}
               {filteredSuppliers.length === 0 ? (
                 <View style={styles.emptyOption}>
-                  <Text style={styles.emptyOptionText}>没有找到供应商。先确认主数据，必要时手动填写 ID。</Text>
-                  <Button compact mode="outlined" onPress={() => setShowManualSupplierId(true)}>
-                    手动填写供应商 ID
-                  </Button>
+                  {suppliers.length === 0 ? (
+                    <Text style={styles.emptyOptionText} testID="supplier-master-data-empty">
+                      供应商主数据里还没有任何供应商，这一页选不出来。
+                      请先让管理员在「供应商」里维护，再回来录送货单。
+                    </Text>
+                  ) : (
+                    <Text style={styles.emptyOptionText} testID="supplier-search-no-match">
+                      没有匹配「{supplierSearch.trim()}」的供应商（共 {suppliers.length} 家）。
+                      换个关键词试试，或清空搜索框看全部。
+                    </Text>
+                  )}
                 </View>
               ) : null}
             </View>
-            {showManualSupplierId ? (
-              <TextInput
-                label="供应商 ID（兜底）"
-                mode="outlined"
-                value={supplierId}
-                onChangeText={setSupplierId}
-                style={styles.field}
-              />
-            ) : null}
+            {/* 「手动填写供应商 ID」已删除 —— 见上面空态处的说明。 */}
             <View style={styles.row}>
               {/* 2026-08-26 改成滚轮选, 不再手打
                   (editable={false} + 外层 TouchableOpacity + 内层 pointerEvents="none") */}
@@ -453,24 +459,17 @@ export function SupplierDeliveryCreateScreen() {
                     </View>
                   </TouchableOpacity>
                 ))}
+                {/* 与供应商同一处理：⛔ 不让仓管手输食材主数据 ID（那也是 UUID）。 */}
                 {filteredMaterials(line).length === 0 ? (
                   <View style={styles.emptyOption}>
-                    <Text style={styles.emptyOptionText}>没有匹配食材。建议先维护食材主数据；紧急验收可手动填写 ID。</Text>
-                    <Button compact mode="outlined" onPress={() => updateLine(line.key, { showManualMaterialId: true })}>
-                      手动填写食材 ID
-                    </Button>
+                    <Text style={styles.emptyOptionText} testID="material-search-no-match">
+                      没有匹配的食材。换个关键词试试；如果确实还没建过这个食材，
+                      请先让管理员在「食材主数据」里维护 —— ⛔ 这一页不能凭 ID 硬录。
+                    </Text>
                   </View>
                 ) : null}
               </View>
-              {line.showManualMaterialId ? (
-                <TextInput
-                  label="食材主数据 ID（兜底）"
-                  mode="outlined"
-                  value={line.rawMaterialTypeId}
-                  onChangeText={(value) => updateLine(line.key, { rawMaterialTypeId: value })}
-                  style={styles.field}
-                />
-              ) : null}
+              {/* 「手动填写食材 ID」已删除 —— 同上。 */}
 
               <View style={styles.row}>
                 <TextInput

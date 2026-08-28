@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { processingApiClient, ProcessingBatch } from '../../../services/api/processingApiClient';
 import { formatDate } from '../../../utils/formatters';
+import { statusKey } from '../../../utils/statusKey';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'TodayBatches'>;
 
@@ -73,7 +74,7 @@ export function TodayBatchesScreen() {
       completed: '#48bb78',
       cancelled: '#a0aec0',
     };
-    return colors[status] || '#a0aec0';
+    return colors[statusKey(status)] || '#a0aec0';
   };
 
   const getStatusLabel = (status: string): string => {
@@ -83,7 +84,7 @@ export function TodayBatchesScreen() {
       completed: t('todayBatches.status.completed'),
       cancelled: t('todayBatches.status.cancelled'),
     };
-    return labels[status] || status;
+    return labels[statusKey(status)] || status;
   };
 
   const renderBatchItem = ({ item }: { item: ProcessingBatch }) => (

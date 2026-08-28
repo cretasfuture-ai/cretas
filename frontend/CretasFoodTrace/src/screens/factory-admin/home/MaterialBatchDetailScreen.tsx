@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { materialBatchApiClient, MaterialBatch } from '../../../services/api/materialBatchApiClient';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
+import { statusKey } from '../../../utils/statusKey';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'MaterialBatchDetail'>;
 type RoutePropType = RouteProp<FAHomeStackParamList, 'MaterialBatchDetail'>;
@@ -64,25 +65,37 @@ export function MaterialBatchDetailScreen() {
   const getStatusColor = (status: string): string => {
     const colors: Record<string, string> = {
       available: '#48bb78',
+      inStock: '#48bb78',
       fresh: '#48bb78',
-      reserved: '#ed8936',
-      depleted: '#a0aec0',
-      expired: '#e53e3e',
       frozen: '#4299e1',
+      reserved: '#ed8936',
+      producingReserved: '#ed8936',
+      inspecting: '#805ad5',
+      defective: '#e53e3e',
+      depleted: '#a0aec0',
+      usedUp: '#a0aec0',
+      scrapped: '#a0aec0',
+      expired: '#e53e3e',
     };
-    return colors[status] || '#a0aec0';
+    return colors[statusKey(status)] || '#a0aec0';
   };
 
   const getStatusLabel = (status: string): string => {
     const labels: Record<string, string> = {
       available: t('materialBatchDetail.status.available'),
+      inStock: t('materialBatchDetail.status.inStock'),
       fresh: t('materialBatchDetail.status.fresh'),
-      reserved: t('materialBatchDetail.status.reserved'),
-      depleted: t('materialBatchDetail.status.depleted'),
-      expired: t('materialBatchDetail.status.expired'),
       frozen: t('materialBatchDetail.status.frozen'),
+      reserved: t('materialBatchDetail.status.reserved'),
+      producingReserved: t('materialBatchDetail.status.producingReserved'),
+      inspecting: t('materialBatchDetail.status.inspecting'),
+      defective: t('materialBatchDetail.status.defective'),
+      depleted: t('materialBatchDetail.status.depleted'),
+      usedUp: t('materialBatchDetail.status.usedUp'),
+      scrapped: t('materialBatchDetail.status.scrapped'),
+      expired: t('materialBatchDetail.status.expired'),
     };
-    return labels[status] || status;
+    return labels[statusKey(status)] || status;
   };
 
   const formatDate = (dateStr?: string): string => {

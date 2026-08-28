@@ -28,6 +28,13 @@ interface FAQItem {
   answerKey: string;
 }
 
+/**
+ * 这 6 条问答的**内容**写出来之后，把它翻成 true。
+ * ⛔ 在那之前不要翻 —— zh-CN 与 en-US 两个包里都没有这些键，
+ *   翻成 true 只会让屏上重新出现 6 行 `helpCenter.faq.xxx.question`。
+ */
+const FAQ_CONTENT_AUTHORED = false;
+
 const faqKeys: FAQItem[] = [
   { id: '1', questionKey: 'helpCenter.faq.createBatch.question', answerKey: 'helpCenter.faq.createBatch.answer' },
   { id: '2', questionKey: 'helpCenter.faq.viewProgress.question', answerKey: 'helpCenter.faq.viewProgress.answer' },
@@ -81,9 +88,33 @@ export function HelpCenterScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* 常见问题 */}
+        {/*
+          🔴 2026-08-29 逐屏走查：这一段原来把 6 条 FAQ **的键**直接打在屏上 ——
+          `helpCenter.faq.createBatch.question` 这样一行行列出来，没有一句人话。
+
+          成因：`helpCenter.faq` 在译文里是个**字符串**（"常见问题"），
+          而代码当对象去取 `.createBatch.question`，永远解析不出来；
+          英文包里同样没有这些内容 ⇒ **这 6 条问答从来没被写过**。
+          （`t('helpCenter.faqTitle')` 也是个不存在的键，正确的是 `helpCenter.faq`。）
+
+          ⛔ 我不替产品编帮助文案 —— 帮助内容写错了比没有更糟，用户是照着它去操作的。
+          在有人真的写出这 6 条之前，这里说清楚「还没有」，并把人导向下面已经能用的联系客服。
+        */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('helpCenter.faqTitle')}</Text>
+          <Text style={styles.sectionTitle}>{t('helpCenter.faq')}</Text>
+          <View style={styles.faqList}>
+            <View style={styles.faqItem} testID="help-faq-not-authored">
+              <Text style={styles.faqQuestion}>常见问题还没有整理</Text>
+              <Text style={styles.faqAnswer}>
+                这一栏的内容尚未编写。遇到问题请用上面的「联系客服」，或查看「使用指南」。
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {FAQ_CONTENT_AUTHORED && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t('helpCenter.faq')}</Text>
           <View style={styles.faqList}>
             {faqKeys.map((item) => (
               <TouchableOpacity
@@ -107,6 +138,7 @@ export function HelpCenterScreen() {
             ))}
           </View>
         </View>
+        )}
 
         {/* 联系方式 */}
         <View style={styles.section}>

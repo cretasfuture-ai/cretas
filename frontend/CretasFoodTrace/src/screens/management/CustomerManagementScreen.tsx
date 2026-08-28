@@ -399,7 +399,7 @@ export default function CustomerManagementScreen() {
           <Card style={styles.emptyCard}>
             <Card.Content style={styles.emptyContent}>
               <List.Icon icon="account-group-outline" color="#999" />
-              <Text style={styles.emptyText}>{t('customerManagement.empty.title')}</Text>
+              <Text style={styles.emptyText}>{t('customerManagement.empty.noCustomers')}</Text>
               <Text style={styles.emptyHint}>{t('customerManagement.empty.hint')}</Text>
             </Card.Content>
           </Card>
