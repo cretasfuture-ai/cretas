@@ -311,16 +311,27 @@ public class SalesOrderItem extends BaseEntity {
     }
 
     /**
-     * 缺料数量 = quantity - reservedQty (clamp ≥0). Sprint3-G S-LOCK-1.
+     * 缺料数量 = quantity - deliveredQuantity - reservedQty (clamp ≥0). Sprint3-G S-LOCK-1.
      *
      * <p>非 @Column — Jackson 序列化走 getter, 客户端拿 shortageQty 直接显示红色 chip.
      * 不加 @JsonIgnore (Jackson 默认序列化 @Transient 公有 getter).
+     *
+     * <p><b>2026-08-28 修正</b>：原来是 {@code quantity - reservedQty}，<b>不减已发货</b>。
+     * 发货完成后预留会被释放（{@code reservedQty} 归 0），于是一张全部发完的单子
+     * 算出来的缺料 = 全量，红色 chip 常驻。实测 F006 <b>12 张 COMPLETED 订单 12 张都在报缺</b>
+     * （例：SO-20260828-0003，quantity 10 / delivered 10 / pending 0 / 缺 10），
+     * 而这个 chip 的用途按原注释是「销售员一眼判断催生产 / 紧急采购」——
+     * 于是它一直在催已经发完的货。
+     *
+     * <p>正确口径是「<b>还需要、但既没发出去也没预留</b>的量」。同一个文件里
+     * {@link #getPendingQuantity()} 已经在用 {@code quantity - delivered}，两者现在同源。
      */
     @Transient
     public BigDecimal getShortageQty() {
         BigDecimal demand = this.quantity != null ? this.quantity : BigDecimal.ZERO;
+        BigDecimal delivered = this.deliveredQuantity != null ? this.deliveredQuantity : BigDecimal.ZERO;
         BigDecimal reserved = this.reservedQty != null ? this.reservedQty : BigDecimal.ZERO;
-        BigDecimal shortage = demand.subtract(reserved);
+        BigDecimal shortage = demand.subtract(delivered).subtract(reserved);
         return shortage.signum() < 0 ? BigDecimal.ZERO : shortage;
     }
 }

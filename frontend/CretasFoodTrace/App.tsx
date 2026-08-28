@@ -9,6 +9,7 @@ import {
 import { scheduleBackgroundOtaCheck } from './src/services/otaUpdateService';
 import UpdateOverlay from './src/components/common/UpdateOverlay';
 import MandatoryUpdateGate from './src/components/common/MandatoryUpdateGate';
+import AppErrorBoundary from './src/components/common/AppErrorBoundary';
 
 // 初始化 i18n（必须在 App 组件之前导入）
 import './src/i18n';
@@ -60,7 +61,13 @@ export default function App() {
 
   return (
     <>
-      <AppNavigator />
+      {/* ⚠️ 边界包住 AppNavigator，不要包住 Toast ——
+          兜底 UI 出现时仍然要能弹提示；而 Toast 本身不该把边界拖下水。
+          2026-08-28 之前这里没有任何错误边界: 任何一屏的渲染异常都会卸载整棵树,
+          用户看到的是一片白, 车间里只能杀进程重开。 */}
+      <AppErrorBoundary>
+        <AppNavigator />
+      </AppErrorBoundary>
       <UpdateOverlay />
       <Toast />
     </>

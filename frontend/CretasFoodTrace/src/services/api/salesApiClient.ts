@@ -44,14 +44,21 @@ export interface SalesOrder {
 export interface SalesOrderItem {
   id: string;
   productTypeId: string;
+  /** 产品名。后端**实际发的是这个**（实测 'SOP-20260817-01-黄油鸡-成品800g'）。 */
+  productName?: string | null;
+  /** ⚠️ 后端在这个响应里不发它（恒 undefined）。保留只为兼容旧调用，⛔ 不要拿它当唯一来源。 */
   productTypeName?: string;
   quantity: number;
   deliveredQuantity: number;
+  /** 未发货量 = quantity - deliveredQuantity（后端 @Transient getter）。 */
+  pendingQuantity?: number;
   unitPrice: number;
   unit: string;
   totalPrice: number;
   // Sprint3-G S-LOCK-1: 行级 lockedQty / reservedQty 来自 sales_order_items 列;
-  // shortageQty 后端 @Transient getter (quantity - reservedQty, clamp ≥0).
+  // shortageQty 后端 @Transient getter
+  // (2026-08-28 起 = quantity - deliveredQuantity - reservedQty, clamp ≥0;
+  //  在那之前漏减已发货, 于是发完的单子恒报「缺 = 全量」)。
   lockedQty?: number;
   reservedQty?: number;
   shortageQty?: number;
@@ -75,6 +82,9 @@ export interface SalesDeliveryRecord {
 export interface SalesDeliveryItem {
   id: string;
   productTypeId: string;
+  /** 产品名。后端**实际发的是这个**（实测 deliveries/by-order 返回 'SOP-20260817-01-黄油鸡-成品800g'）。 */
+  productName?: string | null;
+  /** ⚠️ 后端不发它（实测恒 null）。⛔ 不要拿它当唯一来源，否则退化成 productTypeId 那串 UUID。 */
   productTypeName?: string;
   deliveredQuantity: number;
   unit: string;

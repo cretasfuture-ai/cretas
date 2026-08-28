@@ -37,6 +37,8 @@ export default function NewHiresScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [newHires, setNewHires] = useState<StaffListItem[]>([]);
+  /** 没有填入职日期的员工数 —— 空列表时要说清是「没人入职」还是「没人填过入职日期」。 */
+  const [missingHireDateCount, setMissingHireDateCount] = useState(0);
 
   const loadData = useCallback(async () => {
     try {
@@ -51,13 +53,20 @@ export default function NewHiresScreen() {
       });
 
       // API 直接返回 PageResponse，不需要 .success 和 .data 包装
-      // 过滤本月入职的员工
+      //
+      // ⚠️ 2026-08-28 修正：原来这里是 `u.hireDate || u.createdAt`。
+      // `hireDate` 在本租户**每个员工都是 null**，于是筛选和展示用的都是
+      // **账号创建时间**，却挂着「入职日期」的标签 —— 屏上写「本月入职 1 人 ·
+      // 入职日期: 2026-08-19」，而那一天是有人给他开了账号，不是他来上班的日子。
+      // 同一个员工在「员工详情」里入职日期显示 `-`（那一屏是对的）。
+      //
+      // ⛔ 不要再拿 createdAt 顶替：账号创建时间和入职日期是两件事，
+      //    拿它当入职日期会让「本月入职」这个数在**没有任何入职数据**时照样有值。
       if (res?.content) {
         const startDateStr = formatDate(startOfMonth) ?? '';
-        const filtered = res.content.filter((u) => {
-          const joinDate = u.hireDate || u.createdAt?.split('T')[0];
-          return joinDate && joinDate >= startDateStr;
-        });
+        const withHireDate = res.content.filter((u) => !!u.hireDate);
+        setMissingHireDateCount(res.content.length - withHireDate.length);
+        const filtered = withHireDate.filter((u) => (u.hireDate as string).split('T')[0]! >= startDateStr);
         // Map UserDTO to StaffListItem, add status field
         const mappedHires: StaffListItem[] = filtered.map((u) => ({
           id: u.id,
@@ -68,7 +77,7 @@ export default function NewHiresScreen() {
           phone: u.phone || '',
           avatarUrl: undefined, // UserDTO doesn't have avatar
           status: 'active' as const, // Default to active for new hires
-          hireDate: u.hireDate || u.createdAt?.split('T')[0],
+          hireDate: u.hireDate,
           roleCode: u.roleCode,
           roleName: u.roleDisplayName,
         }));
@@ -193,7 +202,14 @@ export default function NewHiresScreen() {
               size={64}
               color={HR_THEME.textMuted}
             />
+            {/* 「本月没有人入职」和「没有人填过入职日期」是两件事, 空列表长得一样。
+                ⇒ 后者要说出来, 并且说清去哪儿补。 */}
             <Text style={styles.emptyText}>{t('home.newHires.empty')}</Text>
+            {missingHireDateCount > 0 && (
+              <Text style={styles.emptyHint}>
+                {t('home.newHires.missingHireDate', { count: missingHireDateCount })}
+              </Text>
+            )}
           </View>
         }
       />
@@ -296,6 +312,14 @@ const styles = StyleSheet.create({
   emptyContainer: {
     alignItems: 'center',
     paddingVertical: 60,
+  },
+  emptyHint: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 20,
+    color: HR_THEME.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: 24,
   },
   emptyText: {
     marginTop: 16,

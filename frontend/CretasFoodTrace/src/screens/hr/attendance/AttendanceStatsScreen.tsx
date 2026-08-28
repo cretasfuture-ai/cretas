@@ -142,7 +142,12 @@ export default function AttendanceStatsScreen() {
           </Card>
         )}
 
-        {/* 核心指标 */}
+        {/* 核心指标
+            ⚠️ 失败时必须整块藏掉。只加一个红框、下面照旧渲染
+            「0% 平均出勤率 / 0 在岗人数 / 0 迟到 / 0 早退 / 0 缺勤」，
+            等于在「拿不到数据」的横幅底下继续给一排读数 —— 那还是编。
+            2026-08-28 实测: 上一版就是这么半修的, 是把接口打成 404 才看出来的。*/}
+        {!loadError && (
         <View style={styles.statsGrid}>
           <Card style={styles.statCard}>
             <Card.Content style={styles.statContent}>
@@ -184,8 +189,10 @@ export default function AttendanceStatsScreen() {
             </Card.Content>
           </Card>
         </View>
+        )}
 
         {/* 异常统计 */}
+        {!loadError && (
         <Card style={styles.sectionCard}>
           <Card.Content>
             <Text style={styles.sectionTitle}>{t('attendance.stats.anomalyStats')}</Text>
@@ -214,8 +221,10 @@ export default function AttendanceStatsScreen() {
             </View>
           </Card.Content>
         </Card>
+        )}
 
         {/* 部门排行 */}
+        {!loadError && (
         <Card style={styles.sectionCard}>
           <Card.Content>
             <Text style={styles.sectionTitle}>{t('attendance.stats.departmentRanking')}</Text>
@@ -241,6 +250,7 @@ export default function AttendanceStatsScreen() {
             ))}
           </Card.Content>
         </Card>
+        )}
 
         <View style={styles.bottomSpacer} />
       </ScrollView>

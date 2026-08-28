@@ -150,7 +150,15 @@ export default function QIRecordsScreen() {
       <View style={styles.recordDetails}>
         <View style={styles.detailItem}>
           <Ionicons name="star" size={14} color={QI_COLORS.warning} />
-          <Text style={styles.detailText}>{item.totalScore}分</Text>
+          {/* ⚠️ 历史记录没有分类评分时, mapper 把 totalScore 兜底成 0
+              (`Number(customFields.totalScore ?? 0)`), 于是列表上出现过
+              「等级 A · 0 分 · 合格」这种自相矛盾的行。
+              记录详情屏对同一条数据的处理是对的 ——
+              「该历史记录未保存分类评分；页面不会用 0 分伪造明细」。
+              ⇒ 列表跟它一致: 没存过就显示「—」, ⛔ 不要用 0 冒充一个分数。 */}
+          <Text style={styles.detailText}>
+            {item.scoreDetailsRecorded ? `${item.totalScore}分` : '—'}
+          </Text>
         </View>
         <View style={styles.detailItem}>
           <Ionicons name="layers" size={14} color={QI_COLORS.textSecondary} />
