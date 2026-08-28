@@ -1,6 +1,6 @@
 package com.cretas.aims.controller;
 
-import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.canvas.FactoryThreshold;
 import com.cretas.aims.entity.canvas.ThresholdCategory;
@@ -34,6 +34,31 @@ import java.util.UUID;
  * <p>4-in-1 UX (per fool-proof Rule + qa-prompt v2.4): all error responses include
  * actionHint + severity + hintTarget when applicable.
  *
+ * <h2>门禁 (2026-08-29 换掉硬编码角色白名单)</h2>
+ * 读 {@code system:read} / 写 {@code system:read_write}，与
+ * {@link FactorySettingsController} 的「工厂设置」写端点<b>同一个模型</b>。
+ *
+ * <p><b>换掉的是什么</b>: 原来是
+ * {@code @RequireRole({"factory_super_admin","permission_admin","factory_admin"})} ——
+ * 一份<b>手写的角色名清单</b>，它是权限矩阵的第二份副本，而副本一定会漂：
+ * <ul>
+ *   <li>{@code factory_admin} <b>根本不是</b> {@code FactoryUserRole} 的枚举值
+ *       (2026-08-29 实测枚举 30 个值里没有它) ⇒ 那一项从写下那天起就是死条目</li>
+ *   <li>餐饮租户老板 {@code restaurant_owner} 不在清单里 ⇒ <b>他配不了任何阈值</b>，
+ *       尽管 L1 权限表 (V20261029_62) 明确给了他 {@code system='rw'}。
+ *       新加一个角色要记得来改这里 —— 而没有任何东西会提醒你</li>
+ * </ul>
+ *
+ * <p>⚠️ <b>三种注解不是一回事</b>，本次只换其中一种：
+ * <ul>
+ *   <li>{@code @RequirePermission("module:action")} —— 走 RBAC 权限矩阵
+ *       (L2 工厂覆盖 → L1 平台默认 → 代码里的 fallback 矩阵)。<b>本类用它</b></li>
+ *   <li>{@code @RequireModule("x")} —— 问的是<b>这家工厂启没启用这个模块</b>
+ *       (租户功能开关)，与「这个人有没有权限」正交。阈值中心不是可关闭的业务模块，
+ *       ⛔ 不加</li>
+ *   <li>{@code @RequireRole({...})} —— 角色名白名单，就是本次换掉的那个</li>
+ * </ul>
+ *
  * @since Canvas Phase A (2026-05-21)
  */
 @Slf4j
@@ -56,7 +81,7 @@ public class CanvasThresholdsController {
 
     @GetMapping
     @Operation(summary = "列出工厂的所有阈值 (可按 category 过滤)")
-    @RequireRole({"factory_super_admin", "permission_admin", "factory_admin"})
+    @RequirePermission("system:read")
     public ApiResponse<List<FactoryThreshold>> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String category) {
@@ -96,6 +121,28 @@ public class CanvasThresholdsController {
                         FactoryThreshold.GLOBAL_FALLBACK_FACTORY_ID, cat)
                 : repository.findByFactoryIdOrderByCategoryAscThresholdKeyAsc(
                         FactoryThreshold.GLOBAL_FALLBACK_FACTORY_ID);
+        return overlay(factoryId, own, globals);
+    }
+
+    /**
+     * 叠加梯子<b>本体</b> —— per-factory 优先，缺失的 key 带出全局那一行并标 {@code inherited=true}。
+     *
+     * <p>⚠️ 这是<b>唯一</b>一份叠加实现。{@link #list} 和 {@link #getByKey} 都走它，
+     * 各自只负责「拿哪些行来叠」（整类 / 单个 key）。
+     * ⛔ 不要在任何一条路径上再写一遍这个梯子 —— 两份一定会漂，而漂的症状是
+     * 「列表里看得见、点进去 404」这种<b>自相矛盾但都不报错</b>的样子
+     * （2026-08-29 之前 {@code getByKey} 就正是这样：{@code list()} 已经叠加了，
+     * 它还在做精确匹配 ⇒ 继承场景下点开就是 404）。
+     *
+     * @param factoryId 等于 {@value FactoryThreshold#GLOBAL_FALLBACK_FACTORY_ID} 时表示正在
+     *                  直接管理全局行，此时<b>不</b>叠加（否则自己叠自己）
+     */
+    private List<FactoryThreshold> overlay(String factoryId,
+            List<FactoryThreshold> own, List<FactoryThreshold> globals) {
+        if (FactoryThreshold.GLOBAL_FALLBACK_FACTORY_ID.equals(factoryId)) {
+            // 管理全局路径本身: own 就是全局行, 它是本体不是继承来的。
+            return new java.util.ArrayList<>(own);
+        }
 
         java.util.Set<String> overridden = own.stream()
                 .map(FactoryThreshold::getThresholdKey)
@@ -115,25 +162,54 @@ public class CanvasThresholdsController {
         return merged;
     }
 
+    /**
+     * 查询单个阈值 —— 与 {@link #list} <b>同一条梯子</b>: per-factory 优先，缺失时回落全局。
+     *
+     * <h3>它修的是什么 (2026-08-29)</h3>
+     * #315 把 {@code list()} 改成返回「有效配置」之后，本端点仍是
+     * {@code findByFactoryIdAndThresholdKey(factoryId, key)} 的<b>精确</b>查询。
+     * 于是同一个 key 在同一个工厂下有两个互相矛盾的答案：
+     * 列表里带着 {@code inherited=true} <b>显示出来了</b>，点进去 <b>404「阈值不存在」</b>。
+     *
+     * <p>⚠️ 两处都不报错，两处各自看都"对"—— 只有把它们并排放才看得出来。
+     *
+     * <p>⛔ 修法是让它<b>复用</b> {@link #overlay}，不是在这里再抄一份回落逻辑。
+     *
+     * <p>⚠️ 与 {@code list()} 同样的前端约定: 返回 {@code inherited=true} 时，
+     * 那个 {@code id} 属于全局行，保存必须走 POST 建 override，⛔ 不能 PUT。
+     *
+     * <p>真 404 的判据也随之收紧: <b>per-factory 和全局都没有</b>才是 404。
+     */
     @GetMapping("/{key}")
-    @Operation(summary = "查询单个阈值 (按 thresholdKey)")
-    @RequireRole({"factory_super_admin", "permission_admin", "factory_admin"})
+    @Operation(summary = "查询单个阈值 (按 thresholdKey; per-factory 缺失时回落全局默认)")
+    @RequirePermission("system:read")
     public ApiResponse<FactoryThreshold> getByKey(
             @PathVariable String factoryId,
             @PathVariable String key) {
-        FactoryThreshold t = repository.findByFactoryIdAndThresholdKey(factoryId, key)
-                .orElseThrow(() -> new BusinessException(404, "阈值不存在: " + key)
-                        .withHint("请先创建该阈值, 或确认 key 拼写正确")
-                        .withSeverity("warning")
-                        .withHintTarget("thresholdKey"));
-        return ApiResponse.success("查询成功", t);
+        List<FactoryThreshold> own = asList(repository.findByFactoryIdAndThresholdKey(factoryId, key));
+        List<FactoryThreshold> globals = asList(repository.findByFactoryIdAndThresholdKey(
+                FactoryThreshold.GLOBAL_FALLBACK_FACTORY_ID, key));
+
+        List<FactoryThreshold> merged = overlay(factoryId, own, globals);
+        if (merged.isEmpty()) {
+            throw new BusinessException(404, "阈值不存在: " + key)
+                    .withHint("该 key 在本工厂和全局默认里都没有 —— 请先创建, 或确认 key 拼写正确")
+                    .withSeverity("warning")
+                    .withHintTarget("thresholdKey");
+        }
+        return ApiResponse.success("查询成功", merged.get(0));
+    }
+
+    /** {@code Optional} → 0/1 元素的 List，让单 key 路径能喂给同一个 {@link #overlay}。 */
+    private static List<FactoryThreshold> asList(Optional<FactoryThreshold> opt) {
+        return opt.map(List::of).orElseGet(List::of);
     }
 
     // ==================== Create ====================
 
     @PostMapping
     @Operation(summary = "创建阈值 (新增 per-factory 配置)")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequirePermission("system:read_write")
     @Transactional
     public ApiResponse<FactoryThreshold> create(
             @PathVariable String factoryId,
@@ -184,7 +260,7 @@ public class CanvasThresholdsController {
 
     @PutMapping("/{id}")
     @Operation(summary = "修改阈值 (partial PATCH, Map body)")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequirePermission("system:read_write")
     @Transactional
     public ApiResponse<FactoryThreshold> update(
             @PathVariable String factoryId,
@@ -272,7 +348,7 @@ public class CanvasThresholdsController {
 
     @DeleteMapping("/{id}")
     @Operation(summary = "软删除阈值")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequirePermission("system:read_write")
     @Transactional
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
@@ -294,7 +370,7 @@ public class CanvasThresholdsController {
 
     @PostMapping("/reset-to-default")
     @Operation(summary = "按类别批量重置阈值到默认值")
-    @RequireRole({"factory_super_admin", "permission_admin"})
+    @RequirePermission("system:read_write")
     @Transactional
     public ApiResponse<Integer> resetCategoryToDefault(
             @PathVariable String factoryId,

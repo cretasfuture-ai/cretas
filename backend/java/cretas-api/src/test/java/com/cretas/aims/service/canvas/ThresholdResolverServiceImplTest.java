@@ -9,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -43,13 +42,21 @@ class ThresholdResolverServiceImplTest {
     @Mock
     private FactoryThresholdRepository repository;
 
-    @InjectMocks
     private ThresholdResolverServiceImpl resolver;
 
+    /**
+     * ⚠️ 2026-08-29 从 {@code @InjectMocks} 改成显式 new。
+     *
+     * <p>解析器多了一个「测试用 {@code Ticker}」构造器（两档 TTL 的行为要靠推进时钟才观测得到，
+     * 见 {@code ThresholdResolverGatingCacheTest}）。Mockito 的构造器注入会挑
+     * <b>参数最多</b>的那个并给填不上的参数塞 {@code null} ——
+     * {@code Caffeine.ticker(null)} 当场 NPE。
+     * ⛔ 这类"注入器替我挑构造器"的隐式行为不要留着，写死用哪一个。
+     */
     @BeforeEach
-    void clearCache() {
+    void newResolverPerTest() {
         // Each test starts with a fresh cache to isolate behavior.
-        resolver.invalidateAll();
+        resolver = new ThresholdResolverServiceImpl(repository);
     }
 
     private static FactoryThreshold makeRow(String factoryId, String key,
