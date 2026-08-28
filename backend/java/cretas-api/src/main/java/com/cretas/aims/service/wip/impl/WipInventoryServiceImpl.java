@@ -24,6 +24,7 @@ import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowByproductNodes;
+import com.cretas.aims.service.workflow.WorkflowReworkNodes;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
@@ -1548,6 +1549,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         Set<String> byproductNodeIds =
                 WorkflowByproductNodes.byproductMaterialNodeIds(instance.getNodesJson());
+        // 回料端口必须出现在选项里 (与副产相反 —— 副产是被过滤掉的)。判据唯一来源 WorkflowReworkNodes。
+        Set<String> reworkNodeIds =
+                WorkflowReworkNodes.reworkMaterialNodeIds(instance.getNodesJson());
 
         Map<Long, WorkProcessTask> tasksById = tasks.stream()
                 .collect(Collectors.toMap(WorkProcessTask::getId, t -> t, (a, b) -> a));
@@ -1597,6 +1601,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .processName(wp != null ? wp.getProcessName() : productType.getName())
                     .semiCode(productType.getCode())
                     .processOrder(task.getProcessOrder())
+                    .isRework(reworkNodeIds.contains(port.getMaterialNodeId()))
                     .build());
         }
         return items;
