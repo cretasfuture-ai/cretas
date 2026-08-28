@@ -40,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 代理判据的已知盲区：改用别的写法（比如换个包装方法名、或改成注入一个新的 helper bean）
  * 它就看不见了。⇒ 它拦的是「直接调回去」这一种最可能的退化，不是全部。
  */
-class SupplyChainOrchestratorIsolationTest {
+class SupplyChainOrchestratorIsolationContractTest {
 
     private static final Path ORCHESTRATOR = Path.of(
             "src/main/java/com/cretas/aims/service/orchestration/SupplyChainOrchestrator.java");
