@@ -609,7 +609,8 @@ public class SalesServiceImpl implements SalesService {
                         // resolvedUnitPrice made item.unitPrice = qty × price and
                         // order.totalAmount = qty × (qty × price) = qty² × price
                         // (e.g. 276 × ¥50 was stored as unitPrice ¥13,800, total ¥3,808,800).
-                        // Convert back to per-unit: perUnit = finalPrice / quantity (HALF_UP, scale 2).
+                        // Convert back to per-unit: perUnit = finalPrice / quantity (HALF_UP, scale 4 —
+                        // matches numeric(15,4); scale 2 silently rewrote the posted price).
                         BigDecimal finalPerUnit = lineTotalToUnitPrice(
                                 pricingResult.getFinalPrice(), itemDTO.getQuantity(), resolvedUnitPrice);
                         log.info("Canvas-Pricing Phase 4b: 应用策略 — SO={}, productId={}, "
@@ -3831,8 +3832,25 @@ public class SalesServiceImpl implements SalesService {
      * quantity before {@code setUnitPrice}. Skipping this (the 2026-05-30 bug, surfaced by the F006
      * UI E2E) stored {@code unitPrice = qty × price} and {@code totalAmount = qty² × price}.
      *
-     * @return {@code lineTotal / quantity} (HALF_UP, scale 2), or {@code fallbackUnitPrice} when
-     *         {@code lineTotal} is null / negative or {@code quantity} is null / non-positive.
+     * <p><b>Scale is 4, not 2 (2026-08-28 fix).</b> {@code sales_order_items.unit_price} is
+     * {@code numeric(15,4)} and the web client posts a 4-decimal ex-tax price derived from the
+     * tax-inclusive price the user typed. Rounding to 2 here silently rewrote that price even when
+     * the engine applied <em>no</em> strategy at all, and the entity then re-derived the line
+     * amount from the truncated price — discarding the engine's own (correct) line total.
+     *
+     * <p>Production repro (SO-20260828-0001, F006): user entered 含税单价 ¥25.00 × 10 盒 @13%.
+     * <pre>
+     *   engine log: origUnitPrice=22.1239  lineTotal(orig=221.2390, final=221.2390)
+     *               finalUnitPrice=22.12   appliedStrategies=0     ← nothing was applied
+     *   persisted : unit_price 22.1200 → lineAmount 221.20 → lineAmountWithTax 249.96
+     *   billed    : ¥249.96 instead of the ¥250.00 the user entered
+     * </pre>
+     * The error is per-unit and scales with quantity. 采购侧没有这个问题 —— 它以「含税金额 =
+     * 单价 × 数量」为准，未税额由总额换算；销售侧反过来以取整后的未税单价为准。
+     *
+     * @return {@code lineTotal / quantity} (HALF_UP, scale 4 — matching the DB column), or
+     *         {@code fallbackUnitPrice} when {@code lineTotal} is null / negative or
+     *         {@code quantity} is null / non-positive.
      */
     public static BigDecimal lineTotalToUnitPrice(BigDecimal lineTotal, BigDecimal quantity,
                                                   BigDecimal fallbackUnitPrice) {
@@ -3842,7 +3860,7 @@ public class SalesServiceImpl implements SalesService {
         if (lineTotal == null || lineTotal.signum() < 0 || quantity == null || quantity.signum() <= 0) {
             return fallbackUnitPrice;
         }
-        return lineTotal.divide(quantity, 2, java.math.RoundingMode.HALF_UP);
+        return lineTotal.divide(quantity, 4, java.math.RoundingMode.HALF_UP);
     }
 
     private void runConfiguredValidation(String factoryId, String operation, Map<String, Object> context) {
