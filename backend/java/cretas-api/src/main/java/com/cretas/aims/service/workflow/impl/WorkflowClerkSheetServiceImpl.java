@@ -29,6 +29,7 @@ import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowByproductNodes;
 import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
+import com.cretas.aims.service.workflow.WorkflowReworkNodes;
 import com.cretas.aims.service.workflow.WorkflowReportingUnitResolver;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
 import lombok.RequiredArgsConstructor;
@@ -243,10 +244,13 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
         // 靠 materialNodeId join 回 nodes_json 才能把角色带过来。
         Set<String> byproductNodeIds =
                 WorkflowByproductNodes.byproductMaterialNodeIds(instanceNodesJson);
+        Set<String> reworkNodeIds =
+                WorkflowReworkNodes.reworkMaterialNodeIds(instanceNodesJson);
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputDescriptors =
                 outputs.stream()
                         .map(port -> toPortDescriptor(
-                                factoryId, port, projectReportingUnits, Map.of(), byproductNodeIds))
+                                factoryId, port, projectReportingUnits, Map.of(),
+                                byproductNodeIds, reworkNodeIds))
                         .toList();
         if (outputDescriptors.isEmpty()) {
             throw new BusinessException(409, "Workflow 工序缺少产出端口")
@@ -329,7 +333,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
             WorkflowTaskPort port,
             boolean projectReportingUnit,
             Map<String, List<String>> allowedSkuIdsByPort) {
-        return toPortDescriptor(factoryId, port, projectReportingUnit, allowedSkuIdsByPort, Set.of());
+        return toPortDescriptor(
+                factoryId, port, projectReportingUnit, allowedSkuIdsByPort, Set.of(), Set.of());
     }
 
     private WorkflowClerkSheetConfigDTO.PortDescriptor toPortDescriptor(
@@ -337,7 +342,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
             WorkflowTaskPort port,
             boolean projectReportingUnit,
             Map<String, List<String>> allowedSkuIdsByPort,
-            Set<String> byproductNodeIds) {
+            Set<String> byproductNodeIds,
+            Set<String> reworkNodeIds) {
         List<String> allowedSkuIds = allowedSkuIdsByPort.getOrDefault(
                 port.getWorkflowPortId(),
                 port.getSkuId() == null ? List.of() : List.of(port.getSkuId()));
@@ -378,6 +384,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .finished(FINISHED_GOOD.equals(port.getMaterialKind()))
                 .byproduct(port.getMaterialNodeId() != null
                         && byproductNodeIds.contains(port.getMaterialNodeId()))
+                .rework(port.getMaterialNodeId() != null
+                        && reworkNodeIds.contains(port.getMaterialNodeId()))
                 .build();
     }
 

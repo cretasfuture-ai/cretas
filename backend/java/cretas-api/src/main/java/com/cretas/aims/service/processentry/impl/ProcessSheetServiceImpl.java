@@ -1094,6 +1094,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (req.getMaterialNodeId() == null) {
             req.setMaterialNodeId(out.getMaterialNodeId());
         }
+        req.setRework(Boolean.TRUE.equals(out.getRework()));
         String processName = desc.getProcessName() != null ? desc.getProcessName() : "";
         String outputName = out.getMaterialName() != null ? out.getMaterialName() : "";
 
@@ -1656,6 +1657,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setMultiOutputBaseRowId(base.getClientRowId());
         one.setWorkflowPortId(o.getWorkflowPortId());
         one.setMaterialNodeId(o.getMaterialNodeId());
+        one.setRework(Boolean.TRUE.equals(o.getRework()));
         one.setSampleRetainQuantity(o.getSampleRetainQuantity());
         one.setInputLineageRawMaterialInputs(base.getRawMaterialInputs());
         one.setInputLineageUpstreamSources(base.getUpstreamSources());
@@ -1849,7 +1851,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 wipInventoryService.postClerkOutput(
                         factoryId, item.outcome().sfiAnchor(), item.output().getProductTypeId(),
                         qty, item.request().getUnit(), unitPrice(allocated, qty),
-                        null, item.request().getProcessOrder());
+                        null, item.request().getProcessOrder(),
+                        Boolean.TRUE.equals(item.request().getRework()));
             }
 
             // 把后端裁定的比例/金额写回每个合成行 JSON，形成不依赖前端的审计快照。
@@ -2176,6 +2179,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withHint("请按 Workflow 配置的单位录入产出");
             }
             o.setUnit(expectUnit);
+            // 客户端值不可信：回料角色只取冻结 Workflow 快照的服务端投影。
+            o.setRework(Boolean.TRUE.equals(port.getRework()));
             applyAuthoritativeFinishedWeight(o, port);
         }
         // WorkProcessTask.actualQuantity 只记录主产出数量。禁止把不同单位的多产出直接求和
@@ -3724,6 +3729,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (req.getMaterialNodeId() == null) {
             req.setMaterialNodeId(selectedOutput.getMaterialNodeId());
         }
+        req.setRework(Boolean.TRUE.equals(selectedOutput.getRework()));
         String outputUnit = requireWorkflowPortUnit(selectedOutput.getUnit(), "产出");
 
         // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
@@ -4349,7 +4355,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // postClerkOutput: inQty≤0 → no-op (saveRow 上游 gate 已保证 output>0)。
         wipInventoryService.postClerkOutput(factoryId, anchor, req.getProductTypeId(),
                 outQty, req.getUnit() != null ? req.getUnit() : "kg",
-                outUnitCost, null, req.getProcessOrder());
+                outUnitCost, null, req.getProcessOrder(), Boolean.TRUE.equals(req.getRework()));
         return anchor;
     }
 

@@ -473,6 +473,27 @@ class ProcessSheetWorkflowRowValidationTest {
     }
 
     @Test
+    @DisplayName("多产出回料角色只信 Workflow 投影并覆盖客户端值")
+    void multiOutputReworkRole_overridesClientValueFromWorkflow() throws Throwable {
+        PortDescriptor output = ungroupedOutput("out-rework", "PT-REWORK");
+        output.setRework(Boolean.TRUE);
+        PortDescriptor input = groupedPort("in-optional", "RAW-A", "OPTIONAL", 0, 1, false);
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(8)
+                .inputs(List.of(input))
+                .output(output)
+                .outputs(List.of(output))
+                .build();
+        ProcessSheetRowRequest.OutputLine line = outputLine("out-rework", "PT-REWORK");
+        line.setRework(Boolean.FALSE);
+        ProcessSheetRowRequest request = multiRequest(8, line);
+
+        invokeMulti(newImpl(workflowService(descriptor)), request);
+
+        assertTrue(line.getRework(), "服务端冻结 Workflow 标记必须覆盖客户端 false");
+    }
+
+    @Test
     @DisplayName("OPTIONAL 多产出正式报工只统计正数量已选端口")
     void optionalMultiOutput_onlyPositiveSelectionCounts() throws Throwable {
         PortDescriptor input = groupedPort("in-a", "RAW-A", "OPTIONAL", 0, 1, false);

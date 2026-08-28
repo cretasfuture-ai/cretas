@@ -652,6 +652,16 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     public void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
                                 BigDecimal inQty, String unit, BigDecimal inUnitCost,
                                 List<Map<String, Object>> materialBatchRefs, Integer processOrder) {
+        postClerkOutput(factoryId, intermediateBatchNo, productTypeId, inQty, unit, inUnitCost,
+                materialBatchRefs, processOrder, false);
+    }
+
+    @Override
+    @Transactional
+    public void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
+                                BigDecimal inQty, String unit, BigDecimal inUnitCost,
+                                List<Map<String, Object>> materialBatchRefs, Integer processOrder,
+                                boolean rework) {
         if (inQty == null || inQty.signum() <= 0) {
             return;
         }
@@ -663,6 +673,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .productTypeId(productTypeId)
                     .unit(unit)
                     .processOrder(processOrder)
+                    .isRework(rework)
                     .producedQuantity(BigDecimal.ZERO)
                     .consumedQuantity(BigDecimal.ZERO)
                     .availableQuantity(BigDecimal.ZERO)
@@ -685,6 +696,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         SemiFinishedInventory sfi = wipRepo
                 .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
                 .orElseThrow(() -> new IllegalStateException("SFI row missing after create: " + intermediateBatchNo));
+        // 回料角色 sticky true：同一锚后续普通入账不能把已确认回料翻回普通半成品。
+        if (rework && !Boolean.TRUE.equals(sfi.getIsRework())) {
+            sfi.setIsRework(Boolean.TRUE);
+        }
         // 锚跨多次小结可被不同 processOrder 的道喂 → 取 MIN (最早道)。picker 阶段过滤
         // (listWipByFactory: processOrder != null && < maxProcessOrder) 严格排除 null, 故必须落值;
         // 取最早道 → 新产 SFI 在尽可能靠后的复用道 (maxProcessOrder 大) 仍可见 (宁缺勿藏)。

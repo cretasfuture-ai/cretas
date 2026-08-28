@@ -100,6 +100,40 @@ class WipClerkOutputTest {
         verify(wipRepo, never()).save(any());
     }
 
+    @Test
+    @DisplayName("postClerkOutput: Workflow 裁定回料后既有行补标，且后续普通入账不能翻回 false")
+    void postClerkOutputReworkFlagIsSticky() {
+        SemiFinishedInventory row = freshRow();
+        row.setIsRework(Boolean.FALSE);
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        service.postClerkOutput(
+                FACTORY, ANCHOR, "PT1", BigDecimal.ONE, "kg", BigDecimal.ONE,
+                null, 8, true);
+        assertThat(row.getIsRework()).isTrue();
+
+        service.postClerkOutput(
+                FACTORY, ANCHOR, "PT1", BigDecimal.ONE, "kg", BigDecimal.ONE,
+                null, 8);
+        assertThat(row.getIsRework()).isTrue();
+    }
+
+    @Test
+    @DisplayName("postClerkOutput: 普通半成品沿用旧重载，不会被误标成回料")
+    void postClerkOutputNormalSemiRemainsNotRework() {
+        SemiFinishedInventory row = freshRow();
+        row.setIsRework(Boolean.FALSE);
+        when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
+                .thenReturn(Optional.of(row));
+
+        service.postClerkOutput(
+                FACTORY, ANCHOR, "PT1", BigDecimal.ONE, "kg", BigDecimal.ONE,
+                null, 8);
+
+        assertThat(row.getIsRework()).isFalse();
+    }
+
     // ── Bug 2 investigation (fix/process-entry-cache-and-blend-cost, F006 headed test):
     //    熟制(卤制) 混锅(多来源, 全部 SFI/FG) 保存后 SFI 锚 unitCost 变 null, accumulatedCost
     //    (186.88 类) 不变。verdict: 与 ProcessSheetInjectionCostTest 已证实的调味道保存时
