@@ -130,6 +130,13 @@ public class MaterialBatchDTO {
     @Schema(description = "库存归属客户ID（仅客户自有）")
     private String ownerCustomerId;
 
+    /**
+     * 来源单据类型。`PRODUCTION_BATCH` = 在制半成品工件 (materialTypeId 是原料血缘,
+     * warehouseId=WH-WKS), **不是真实原料库存** —— 调拨侧 FEFO 明确排除它。
+     * 前端调拨页要按同一口径过滤, 所以必须透出来 (2026-08-28: 不透出就只能在前端硬猜)。
+     */
+    private String sourceDocType;
+
     @Schema(description = "来源销售订单ID快照")
     private String sourceSalesOrderId;
 
