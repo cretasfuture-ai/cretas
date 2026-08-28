@@ -17,7 +17,9 @@
     "close": "关闭"
   },
   "batchStatus": {
+    "planned": "已计划",
     "planning": "计划中",
+    "producing": "生产中",
     "inProgress": "进行中",
     "paused": "已暂停",
     "qualityCheck": "质检中",

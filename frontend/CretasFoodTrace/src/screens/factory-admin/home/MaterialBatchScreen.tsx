@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { materialBatchApiClient } from '../../../services/api/materialBatchApiClient';
 import { statusKey } from '../../../utils/statusKey';
+import { formatQuantity } from '../../../utils/packagingUnitConversion';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'MaterialBatch'>;
 
@@ -150,7 +151,14 @@ export function MaterialBatchScreen() {
       <View style={styles.batchFooter}>
         <View style={styles.infoItem}>
           <Icon source="scale" size={16} color="#666" />
-          <Text style={styles.infoText}>{item.quantity} {item.unit || 'kg'}</Text>
+          {/*
+            走查实测屏上是「456.4519 kg」—— 0.1 克精度, 对仓管是噪声。
+            复用仓里已有的 formatQuantity(去小数尾巴、保留 3 位), ⛔ 不另造一份格式化。
+            3 位是必要的: 生产库里 material_batches 数量跨 0.04 ~ 109999, 有 12 条小于 1。
+          */}
+          <Text style={styles.infoText}>
+            {formatQuantity(Number(item.quantity))} {item.unit || 'kg'}
+          </Text>
         </View>
         {item.supplierName && (
           <View style={styles.infoItem}>
