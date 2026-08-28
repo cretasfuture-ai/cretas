@@ -31,6 +31,15 @@ interface Solution {
   description: string[];
 }
 
+/**
+ * 这一屏接上真实预警数据、并且真的能提交处理方案之后，把它翻成 true。
+ *
+ * ⛔ 在那之前不要翻 —— 下面整套表单用的是写死的「带鱼(鲜品) 85kg / 舟山渔业合作社 /
+ * 建议采购 150kg」，而且提交按钮原来无论如何都弹「成功 · 处理方案已提交」，
+ * 实际什么都没提交。假的成功回执比没有功能危险得多。
+ */
+const ALERT_HANDLE_WIRED_UP = false;
+
 export function WHAlertHandleScreen() {
   const theme = useTheme();
   const navigation = useNavigation<NavigationProp>();
@@ -113,10 +122,13 @@ export function WHAlertHandleScreen() {
     return formatNumberWithCommas(qty * price);
   };
 
+  // ⛔ 原来无论如何都弹「成功 · 处理方案已提交」—— 而它不发任何请求。
   const handleSubmit = () => {
-    Alert.alert("成功", "处理方案已提交", [
-      { text: "确定", onPress: () => navigation.goBack() },
-    ]);
+    Alert.alert(
+      "尚未接入",
+      "处理方案没有被提交。这一页还没有连上后端，请走对应的采购单／库存调整流程。",
+      [{ text: "知道了" }],
+    );
   };
 
   const renderSolutionCard = (solution: Solution) => {
@@ -178,6 +190,53 @@ export function WHAlertHandleScreen() {
     );
   };
 
+  // 🔴 这一屏**没有接任何接口，也收不到任何参数**。
+  //
+  // 预警列表是这样跳过来的：`CommonActions.navigate("WHAlertHandle")` —— 不带 params。
+  // 所以无论点的是哪一条预警，打开的都是同一份写死的内容：
+  // 「带鱼(鲜品) MB-20251223-001 / 当前库存 85 / 安全库存 200 / 缺口 115 /
+  //  过期 2025-12-29(3天后) / 推荐供应商 舟山渔业合作社 / 建议采购 150kg」。
+  // F006 做的是黄油鸡，日期停在八个月前。
+  //
+  // ⛔ 更严重的是下面那个提交按钮：它弹「成功 · 处理方案已提交」然后返回，
+  //    而**什么都没有提交**。仓管会以为紧急采购已经发起了。
+  //    假的成功回执比没有功能危险得多。
+  //
+  // 在这一屏能拿到 alertId、并且真的能提交之前，只显示「尚未接入」。
+  // 下面整套表单代码保留在文件里，接上接口时把这个早返回去掉即可。
+  if (!ALERT_HANDLE_WIRED_UP) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>预警处理</Text>
+            <Text style={styles.headerSubtitle}>处理库存预警</Text>
+          </View>
+          <View style={styles.headerRight} />
+        </View>
+
+        <View style={styles.notWired} testID="wh-alert-handle-not-wired">
+          <MaterialCommunityIcons name="database-off-outline" size={48} color="#bbb" />
+          <Text style={styles.notWiredTitle}>预警处理尚未接入</Text>
+          <Text style={styles.notWiredBody}>
+            这一页还没有连上预警数据，也无法提交处理方案。
+          </Text>
+          <Text style={styles.notWiredBody}>
+            需要紧急采购、转冻品或报损，请走对应的采购单／库存调整流程。
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // 以下为接上接口后恢复的原表单（把上面的常量翻成 true 即可）。
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       {/* Header */}
@@ -388,6 +447,26 @@ export function WHAlertHandleScreen() {
 }
 
 const styles = StyleSheet.create({
+  notWired: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 32,
+  },
+  notWiredTitle: {
+    color: "#616161",
+    fontSize: 16,
+    fontWeight: "600",
+    marginTop: 12,
+  },
+  notWiredBody: {
+    color: "#9e9e9e",
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 8,
+    textAlign: "center",
+  },
+
   container: {
     flex: 1,
     backgroundColor: "#f5f5f5",

@@ -59,6 +59,18 @@ interface AIInsight {
   content: string;
 }
 
+/**
+ * 接上真实的投入产出数据之后，把它翻成 true。
+ *
+ * ⛔ 在那之前不要翻 —— 这一屏**一个接口都没调**，下面所有数字都是写死的：
+ * 「本月整体转换率 92.3%（AI分析）↑1.2% 较上月 / 行业平均 91% /
+ *  带鱼片 94.5% / 虾仁 88.5%」，还有一条「若采纳全部优化建议…每月可节约
+ *  原材料成本约 ¥12,000」的 AI 建议。F006 做的是黄油鸡，不是带鱼和虾仁。
+ *
+ * 转换率是拿来判断产线好坏、决定要不要动工艺的数 —— 编一个出来比不显示更糟。
+ */
+const CONVERSION_ANALYSIS_WIRED_UP = false;
+
 export function WHConversionAnalysisScreen() {
   const theme = useTheme();
   const navigation = useNavigation();
@@ -324,6 +336,35 @@ export function WHConversionAnalysisScreen() {
     </View>
   );
 
+  if (!CONVERSION_ANALYSIS_WIRED_UP) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>转换率分析</Text>
+            <Text style={styles.headerSubtitle}>尚未接入</Text>
+          </View>
+          <View style={styles.headerRight} />
+        </View>
+
+        <View style={styles.notWired} testID="wh-conversion-not-wired">
+          <MaterialCommunityIcons name="database-off-outline" size={48} color="#bbb" />
+          <Text style={styles.notWiredTitle}>转换率分析尚未接入</Text>
+          <Text style={styles.notWiredBody}>
+            这一页还没有连上生产与投入产出数据，⛔ 不能据此判断转换率高低。
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // 以下为接上数据后恢复的原页面（把上面的常量翻成 true 即可）。
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       {/* Header */}
@@ -582,6 +623,29 @@ export function WHConversionAnalysisScreen() {
 }
 
 const styles = StyleSheet.create({
+  headerRight: {
+    width: 40,
+  },
+  notWired: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 32,
+  },
+  notWiredTitle: {
+    color: "#616161",
+    fontSize: 16,
+    fontWeight: "600",
+    marginTop: 12,
+  },
+  notWiredBody: {
+    color: "#9e9e9e",
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 8,
+    textAlign: "center",
+  },
+
   container: {
     flex: 1,
     backgroundColor: "#f5f5f5",
