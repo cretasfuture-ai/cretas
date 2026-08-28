@@ -79,6 +79,44 @@ export interface MaterialInventoryBatch {
   currentQuantity?: number | string | null;
   status?: string | null;
   unitPrice?: number | string | null;
+  /** 归属: CUSTOMER_OWNED = 客供料(来料加工), 手动调拨不可动 —— 见 NON_TRANSFERABLE 注释。 */
+  ownership?: string | null;
+  /** 来源单据类型: PRODUCTION_BATCH = 在制半成品工件, 不是真实原料库存。 */
+  sourceDocType?: string | null;
+}
+
+/**
+ * 🔴 2026-08-28 六膳门生产实测: 手动新建调拨单选「汉堡排原料 YL068」, 页面
+ * 「现有库存 100,000 kg」, 提交却被后端拒绝「可用 0 kg, 请减少调拨数量或选择有库存的调出仓库」。
+ *
+ * 成因是**同一屏两套规则**:
+ *   现有库存/物料下拉 ← `/inventory/by-warehouse` → `findByFactoryIdAndWarehouseId`(无任何归属过滤)
+ *   提交闸           ← `findAvailableBatchesFEFOByWarehouse` → SQL 里排除了
+ *                       `ownership <> COMPANY_OWNED` 与 `sourceDocType = 'PRODUCTION_BATCH'`
+ *
+ * ⛔ 后端那两条排除是**对的, 不要去掉**:
+ *   - 客供料受 `ProductionInventoryOwnershipGuard` 的 fail-closed 归属契约约束, 只能由
+ *     customer/销售单/行都对得上的生产计划经「按生产计划生成领料单」搬运
+ *     (`FactoryMaterialRequisitionServiceImpl#relocatePickedMaterialToWorkshop`)。
+ *     手动调拨没有这些上下文, 而调拨建目的批次时**根本不搬运 ownership**
+ *     (TransferServiceImpl 里 ownership 出现 0 次) ⇒ 放开就等于把客供料洗成自有库存。
+ *   - PRODUCTION_BATCH 是在制半成品工件, 误拣会把半成品当原料吃掉 (labor 双计 → 负库存)。
+ *
+ * ⇒ 该修的是**消费端**: 不可调拨的批次不该出现在调拨下拉/现有库存里。
+ *
+ * 生产实测受影响面 (2026-08-28): 主仓 1 条客供料 / 生产仓 **16 条** PRODUCTION_BATCH。
+ * 只修客供料会留下 16 条一模一样的坑, 所以两类一起排除。
+ */
+const NON_TRANSFERABLE_OWNERSHIP = 'CUSTOMER_OWNED';
+const NON_TRANSFERABLE_SOURCE_DOC_TYPE = 'PRODUCTION_BATCH';
+
+/** 这个批次能不能被**手动调拨**动 —— 口径必须与后端 findAvailableBatchesFEFOByWarehouse 一致。 */
+export function isManuallyTransferableBatch(batch: MaterialInventoryBatch): boolean {
+  const ownership = String(batch.ownership ?? '').toUpperCase();
+  const sourceDocType = String(batch.sourceDocType ?? '').toUpperCase();
+  if (ownership === NON_TRANSFERABLE_OWNERSHIP) return false;
+  if (sourceDocType === NON_TRANSFERABLE_SOURCE_DOC_TYPE) return false;
+  return true;
 }
 
 function finiteNumber(value: unknown): number {
@@ -139,6 +177,10 @@ export function aggregateMaterialInventoryOptions(
     const available = finiteNumber(batch.currentQuantity);
     const status = String(batch.status ?? '').toUpperCase();
     if (!materialTypeId || !unit || available <= 0 || ['USED_UP', 'DEPLETED', 'EXPIRED', 'SCRAPPED'].includes(status)) {
+      continue;
+    }
+    // 不可手动调拨的批次不进下拉, 也不计入「现有库存」—— 否则用户看到有货、选了必被拒。
+    if (!isManuallyTransferableBatch(batch)) {
       continue;
     }
     const existing = grouped.get(materialTypeId);

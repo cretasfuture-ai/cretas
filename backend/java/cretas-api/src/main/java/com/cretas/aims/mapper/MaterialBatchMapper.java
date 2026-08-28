@@ -60,6 +60,7 @@ public class MaterialBatchMapper {
                 .warehouseId(batch.getWarehouseId())
                 .ownership(batch.getOwnership())
                 .ownerCustomerId(batch.getOwnerCustomerId())
+                .sourceDocType(batch.getSourceDocType())
                 .sourceSalesOrderId(batch.getSourceSalesOrderId())
                 .sourceSalesOrderItemId(batch.getSourceSalesOrderItemId())
                 .storageLocation(batch.getStorageLocation())
