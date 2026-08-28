@@ -318,7 +318,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                 log.debug("DataScope {} for return orders: chain size={}", scope, chain.size());
                 Page<ReturnOrder> result = returnOrderRepository.findByFactoryIdAndFiltersAndCreatedByIn(
                         factoryId, returnType, status, chain, pageRequest);
-                return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+                List<ReturnOrder> scoped = result.getContent();
+                enrichForDisplay(scoped);
+                return PageResponse.of(scoped, page, size, result.getTotalElements());
             }
         }
 
@@ -336,7 +338,107 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             result = returnOrderRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageRequest);
         }
 
-        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+        List<ReturnOrder> rows = result.getContent();
+        enrichForDisplay(rows);
+        return PageResponse.of(rows, page, size, result.getTotalElements());
+    }
+
+    /**
+     * 列表页的展示字段 enrich（对方名称 / 源销售单号 / 审批人姓名）。
+     *
+     * <h4>🔴 为什么需要它（2026-08-28 生产实测）</h4>
+     *
+     * 「销售退货」列表把**客户**和**源订单**两列渲染成裸 UUID：
+     * <pre>
+     *   客户      3e8cc819-0d5b-4e4c-b327-c1fe50fd4c9e
+     *   源订单    89967b19-e5a6-447c-bf88-5b2c073a545c
+     * </pre>
+     *
+     * 前端**没写错** —— 它写的是 {@code counterpartyName || customerName || counterpartyId}，
+     * 只是后端把 {@code counterpartyName} / {@code sourceOrderNumber} 返成了 {@code null}，
+     * 回退链只好落到 ID。
+     *
+     * 成因是「机制在、没接上」：{@code getReturnOrderDetail} 早就会 enrich 这三个字段
+     * （见它上面那段 Bug 4 fix 注释），而**列表这条路从来不调它** ——
+     * 详情页看得到名字，列表页看不到。
+     *
+     * <h4>⚠️ 必须批量，⛔ 不能逐行 findById</h4>
+     *
+     * 详情页一次只处理一单，逐个 {@code findById} 无所谓；列表一页 200 行就是 600 次查询。
+     * 这里按 id 去重后一次 {@code findAllById}，每类最多一次查询。
+     *
+     * <h4>fail-soft</h4>
+     *
+     * 与详情页同一纪律：任一 enrich 失败只 log，⛔ 不阻断列表加载 ——
+     * 名称展示不是退货单状态机的关键路径。
+     */
+    private void enrichForDisplay(List<ReturnOrder> orders) {
+        if (orders == null || orders.isEmpty()) return;
+
+        try {
+            java.util.Set<String> customerIds = new java.util.HashSet<>();
+            java.util.Set<String> supplierIds = new java.util.HashSet<>();
+            for (ReturnOrder o : orders) {
+                if (o.getCounterpartyId() == null) continue;
+                if (o.getReturnType() == ReturnType.SALES_RETURN) customerIds.add(o.getCounterpartyId());
+                else if (o.getReturnType() == ReturnType.PURCHASE_RETURN) supplierIds.add(o.getCounterpartyId());
+            }
+            java.util.Map<String, String> nameById = new java.util.HashMap<>();
+            if (!customerIds.isEmpty() && customerRepository != null) {
+                customerRepository.findAllById(customerIds)
+                        .forEach(c -> nameById.put(c.getId(), c.getName()));
+            }
+            if (!supplierIds.isEmpty() && supplierRepository != null) {
+                supplierRepository.findAllById(supplierIds)
+                        .forEach(s -> nameById.put(s.getId(), s.getName()));
+            }
+            for (ReturnOrder o : orders) {
+                if (o.getCounterpartyId() != null) {
+                    o.setCounterpartyName(nameById.get(o.getCounterpartyId()));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("退货单列表 enrich 对方名称失败 (不阻断列表加载): count={}", orders.size(), e);
+        }
+
+        try {
+            java.util.Set<String> sourceOrderIds = new java.util.HashSet<>();
+            for (ReturnOrder o : orders) {
+                if (o.getSourceOrderId() != null) sourceOrderIds.add(o.getSourceOrderId());
+            }
+            if (!sourceOrderIds.isEmpty() && salesOrderRepository != null) {
+                java.util.Map<String, String> numberById = new java.util.HashMap<>();
+                salesOrderRepository.findAllById(sourceOrderIds)
+                        .forEach(so -> numberById.put(so.getId(), so.getOrderNumber()));
+                for (ReturnOrder o : orders) {
+                    if (o.getSourceOrderId() != null) {
+                        o.setSourceOrderNumber(numberById.get(o.getSourceOrderId()));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("退货单列表 enrich 源订单号失败 (不阻断列表加载): count={}", orders.size(), e);
+        }
+
+        try {
+            java.util.Set<Long> approverIds = new java.util.HashSet<>();
+            for (ReturnOrder o : orders) {
+                if (o.getApprovedBy() != null) approverIds.add(o.getApprovedBy());
+            }
+            if (!approverIds.isEmpty() && userRepository != null) {
+                java.util.Map<Long, String> approverById = new java.util.HashMap<>();
+                userRepository.findAllById(approverIds).forEach(u -> approverById.put(
+                        u.getId(),
+                        u.getFullName() != null && !u.getFullName().isBlank() ? u.getFullName() : u.getUsername()));
+                for (ReturnOrder o : orders) {
+                    if (o.getApprovedBy() != null) {
+                        o.setApprovedByName(approverById.get(o.getApprovedBy()));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("退货单列表 enrich 审批人姓名失败 (不阻断列表加载): count={}", orders.size(), e);
+        }
     }
 
     @Override
