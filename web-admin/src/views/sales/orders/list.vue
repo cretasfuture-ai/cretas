@@ -2807,7 +2807,7 @@ function handleMergePurchase() {
               title="这里只登记客户预计送来的原料；确认订单后由仓储统一页面执行实收，不会在销售侧直接增加库存。"
             />
             <el-table :data="form.suppliedMaterials" border empty-text="请添加客户自带原料需求">
-              <el-table-column label="原料" min-width="220">
+              <el-table-column label="原料 *" min-width="220">
                 <template #default="{ row }">
                   <el-select v-model="row.materialTypeId" filterable placeholder="选择原料" style="width: 100%" @change="onSuppliedMaterialSelect(row)">
                     <el-option
@@ -2819,16 +2819,16 @@ function handleMergePurchase() {
                   </el-select>
                 </template>
               </el-table-column>
-              <el-table-column label="预计数量" width="180">
+              <el-table-column label="预计数量 *" width="180">
                 <template #default="{ row }">
                   <el-input-number v-model="row.expectedQuantity" :min="0.0001" :precision="4" :controls="false" style="width: 112px" />
                   <span class="supplied-unit">{{ displayUnit(row.unit) || '未配置' }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="预计到货" width="220">
+              <el-table-column label="预计到货 *" width="220">
                 <template #default="{ row }"><el-date-picker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" format="YYYY-MM-DD HH:mm" style="width: 190px" /></template>
               </el-table-column>
-              <el-table-column label="目标仓库" min-width="190">
+              <el-table-column label="目标仓库 *" min-width="190">
                 <template #default="{ row }">
                   <el-select v-model="row.targetWarehouseId" filterable placeholder="选择仓库" style="width: 100%">
                     <el-option v-for="warehouse in warehouseList" :key="warehouse.id" :label="`${warehouse.name} (${warehouse.code})`" :value="String(warehouse.id)" />
