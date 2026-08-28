@@ -511,6 +511,7 @@ import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import QrCodeDisplay from '@/components/common/QrCodeDisplay.vue';
+import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
 
 interface ReceivingRow {
   poId: string;
@@ -743,6 +744,9 @@ async function sendQuery(autoTrigger = false) {
     }
     const response = await callIntentExecute(userInput.value, intentCode,
         undefined, false, context);
+    // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
+    //    不是答案。判据见 utils/intentResponseStatus.ts。
+    const nonAnswerLabel = intentNonAnswerLabel(response.status);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
     // Sprint 13 #304: title reflects the answered intent for user queries; auto-trigger
@@ -750,6 +754,8 @@ async function sendQuery(autoTrigger = false) {
     resultTitle.value = autoTrigger
         ? DEFAULT_RESULT_TITLE
         : (response.intentName || '查询结果');
+    // ⚠️ 正文照旧显示(用户需要知道发生了什么), 变的是【标题不再谎称这是结果】。
+    if (nonAnswerLabel) resultTitle.value = nonAnswerLabel;
 
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     extractReceivingRows(resultData);
