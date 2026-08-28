@@ -59,6 +59,10 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
     @Autowired
     private PurchaseOrderItemRepository purchaseOrderItemRepository;
 
+    /** 超收上限取值入口 —— 与执行侧 confirmReceive 同一个梯子。 */
+    @Autowired
+    private WorkdeskOverReceivePolicy overReceivePolicy;
+
     @Override
     public String getToolName() {
         return "material_today_receiving_query";
@@ -66,9 +70,12 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
+        // ⛔ 这里【不能】写具体百分比: getDescription() 在工具注册时调用一次, 拿不到 factoryId,
+        //    而超收上限是【按工厂】配置的。写死一个数 = 对配了别的值的工厂说谎。
+        //    具体数字只在逐行结果的 displayHint 里出现, 那里才知道是哪个工厂。
         return "查询今日 (+ 明日) 预期到货的采购订单待收清单, 按品名展开行项目, 每行带"
-                + "R1 max 边界 (已订 / 已收 / 还可入 含 " + WorkdeskOverReceivePolicy.pctLabel()
-                + " 超收). LLM 触发场景: 仓管员问 "
+                + "R1 max 边界 (已订 / 已收 / 还可入 含本厂配置的超收上限)"
+                + ". LLM 触发场景: 仓管员问 "
                 + "'今天要收什么货?' / '今日到货' / '明天到什么货' / '待收货清单' / "
                 + "'今天有几个供应商来送货'. read-only. 防呆原则: 直接告诉仓管员要收多少, "
                 + "不让他算账.";
@@ -119,6 +126,10 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
         log.info("material_today_receiving_query — factory={} today={} end={} includeOverdue={}",
                 factoryId, today, end, includeOverdue);
 
+        // ⚠️ 循环外解析一次 —— 逐行解析会逐行打 DB, 且同一次查询里可能读出两个不同的值
+        final com.cretas.aims.service.inventory.OverReceiveLimit overReceiveLimitForFactory =
+                overReceivePolicy.limitFor(factoryId);
+
         // 拉 factory 全部 PO (Page first, 后续过滤). 仓管员单 factory 待收 PO 量小.
         List<PurchaseOrder> allPOs = new ArrayList<>();
         var page = purchaseOrderRepository.findByFactoryIdOrderByCreatedAtDesc(
@@ -149,9 +160,12 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
                 BigDecimal pending = ordered.subtract(received);
                 if (pending.compareTo(BigDecimal.ZERO) <= 0) continue;
 
-                // R1 max: pendingQty + 超收上限 (比例见 WorkdeskOverReceivePolicy, 基于 ordered 总量)
-                BigDecimal overReceiveLimit = ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT);
-                BigDecimal remainingCap = pending.add(overReceiveLimit);
+                // R1 max: pendingQty + 超收上限。比例来自【执行侧同一个梯子】(见 limitFor 的解析),
+                // ⛔ 不再用 Workdesk 自己那份 0.30 —— 那份与执行侧漂过两次, 两次方向还相反。
+                // ⚠️ 不限制时两者都是 null, 下面必须显式处理, ⛔ 不许兜底成 0。
+                BigDecimal overReceiveLimit = WorkdeskOverReceivePolicy.capFor(overReceiveLimitForFactory, ordered);
+                BigDecimal remainingCap =
+                        WorkdeskOverReceivePolicy.remainingCapFor(overReceiveLimitForFactory, ordered, pending);
 
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("poId", po.getId());
@@ -171,13 +185,18 @@ public class MaterialTodayReceivingQueryTool extends AbstractBusinessTool {
                 row.put("overReceiveLimit", overReceiveLimit);
                 row.put("unit", item.getUnit());
                 // 防呆 R1 提示文案: 直接告诉仓管员要收多少
+                // ⚠️ 不限制时 remainingCap 为 null —— 必须换一句话说, ⛔ 不能打印「含 不限制 超收上限 = null」
+                String capPhrase = remainingCap == null
+                        ? "本厂未设超收上限"
+                        : String.format("含 %s 超收上限 = %s%s",
+                                WorkdeskOverReceivePolicy.labelFor(overReceiveLimitForFactory),
+                                stripZeros(remainingCap), nullToEmpty(item.getUnit()));
                 row.put("displayHint", String.format(
-                        "已订 %s%s, 已收 %s%s, 还要收 %s%s (含 %s 超收上限 = %s%s)",
+                        "已订 %s%s, 已收 %s%s, 还要收 %s%s (%s)",
                         stripZeros(ordered), nullToEmpty(item.getUnit()),
                         stripZeros(received), nullToEmpty(item.getUnit()),
                         stripZeros(pending), nullToEmpty(item.getUnit()),
-                        WorkdeskOverReceivePolicy.pctLabel(),
-                        stripZeros(remainingCap), nullToEmpty(item.getUnit())));
+                        capPhrase));
                 receivingRows.add(row);
                 totalLines++;
                 poHasPending = true;

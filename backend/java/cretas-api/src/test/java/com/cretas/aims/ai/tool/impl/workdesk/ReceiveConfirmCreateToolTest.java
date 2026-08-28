@@ -59,6 +59,22 @@ class ReceiveConfirmCreateToolTest {
     @BeforeEach
     void setUp() throws Exception {
         injectField(tool, "objectMapper", objectMapper);
+        injectField(tool, "overReceivePolicy", stubbedWorkdeskPolicy());
+    }
+
+    /**
+     * 2026-08-29: 工具不再持有自己的 0.30，改为向执行侧要。
+     * ⛔ 注入真的 {@code WorkdeskOverReceivePolicy}（只桩它包的执行侧），不是 mock 它本身。
+     * ⚠️ 用 {@code any()} 而不是 {@code anyString()}：null 实参下后者不匹配，桩会静默失效。
+     */
+    private static WorkdeskOverReceivePolicy stubbedWorkdeskPolicy() {
+        var execPolicy = org.mockito.Mockito.mock(
+                com.cretas.aims.service.inventory.PurchaseOverReceivePolicy.class);
+        org.mockito.Mockito.lenient()
+                .when(execPolicy.effectiveLimit(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(com.cretas.aims.service.inventory.OverReceiveLimit.of(
+                        new java.math.BigDecimal("0.30"), "test-stub"));
+        return new WorkdeskOverReceivePolicy(execPolicy);
     }
 
     // ── metadata ──────────────────────────────────────────────────────────
