@@ -1,6 +1,7 @@
 package com.cretas.aims.scheduler;
 
 import com.cretas.aims.service.asyncops.AsyncTaskFailureLedger;
+import com.cretas.aims.service.notification.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -57,6 +58,16 @@ public class AsyncTaskFailureBacklogScheduler {
 
     private final AsyncTaskFailureLedger ledger;
 
+    /**
+     * 站内通知 —— 与「缺料告警」走同一条路 (SalesOrderShortageReportListener)。
+     *
+     * <p>🔴 2026-08-28: 在此之前这套东西<b>只有一条 WARN 日志</b>, 没有界面、没有通知。
+     * 实测: 2026-08-24 的三条失败, 告警每天 09:05 照响, <b>连响 5 天没有人看</b> ——
+     * 期间六膳门(真实客户)两张 ¥92,260 的单没有生产计划, 而他们那边接口返回的是 200。
+     * ⇒ 一个只写进日志的告警, 在产品里等于不存在。
+     */
+    private final NotificationService notificationService;
+
     @Value("${cretas.async-failure-backlog.enabled:true}")
     private boolean enabled;
 
@@ -112,7 +123,53 @@ public class AsyncTaskFailureBacklogScheduler {
                         + "处理完请调 PUT /api/mobile/{{factoryId}}/async-failures/{{id}}/resolve 让它闭嘴。",
                 openCount, openCount, breakdown);
         log.info("ASYNC_FAILURE_BACKLOG_SWEEP outcome=BACKLOG open={}", openCount);
+
+        // 把结论送到人眼前。⚠️ 通知失败不许改变本次的三态结论 ——
+        // 「告警发不出去」是另一个问题, 不能让它把「有积压」这个已经成立的读数吃掉。
+        try {
+            notifyFactoryAdmins();
+        } catch (Exception notifyFailure) {
+            log.error("[AsyncFailureBacklog] 站内通知发送失败(不影响本次判定 BACKLOG)", notifyFailure);
+        }
         return SweepOutcome.BACKLOG;
+    }
+
+    /** 通知目标角色 —— 与缺料告警一致, 工厂管理员能在站内看到。 */
+    private static final String NOTIFY_ROLE = "FACTORY_ADMIN";
+
+    /**
+     * 按工厂把积压发成站内通知。
+     *
+     * <p>⛔ {@code factory_id} 为 NULL 的行<b>没有人能被通知到</b> —— 单独打一条 WARN 说出来,
+     * 不许静默跳过。否则「通知发了」会被读成「所有积压都有人知道了」。
+     */
+    private void notifyFactoryAdmins() {
+        List<Map<String, Object>> byFactory = ledger.openBreakdownByFactory();
+        if (byFactory == null || byFactory.isEmpty()) {
+            log.warn("[AsyncFailureBacklog] 总数 > 0 但按工厂分组为空, 读数自相矛盾, 本次不发通知");
+            return;
+        }
+        int notified = 0;
+        long orphanRows = 0;
+        for (Map<String, Object> row : byFactory) {
+            Object factoryId = row.get("factory_id");
+            long rowsOpen = row.get("rows_open") == null ? 0L : ((Number) row.get("rows_open")).longValue();
+            if (factoryId == null || factoryId.toString().isBlank()) {
+                orphanRows += rowsOpen;
+                continue;
+            }
+            String title = "有 " + rowsOpen + " 条后台任务失败没人处理";
+            String body = "这些失败在用户侧是无感的(接口当时返回了 200), 但业务动作没有真的完成。"
+                    + " 最近一次: " + row.get("latest")
+                    + "。请到异步失败台账逐条核对, 处理完标记完成。";
+            notificationService.notifyRole(factoryId.toString(), NOTIFY_ROLE, title, body);
+            notified++;
+        }
+        log.info("ASYNC_FAILURE_BACKLOG_NOTIFIED factories={} orphanRows={}", notified, orphanRows);
+        if (orphanRows > 0) {
+            log.warn("[AsyncFailureBacklog] 有 {} 条未处理失败取不到 factory_id, "
+                    + "站内通知发不出去 —— 这些只能靠日志/台账接口发现", orphanRows);
+        }
     }
 
     /** 把按方法归类的行渲染成一行人话。 */
