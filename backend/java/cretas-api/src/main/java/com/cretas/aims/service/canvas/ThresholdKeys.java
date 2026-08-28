@@ -175,7 +175,7 @@ public final class ThresholdKeys {
      *   <li>{@code 0.10} → 实发最多是计划的 110%</li>
      * </ul>
      *
-     * <p>全局默认见迁移 {@code V20261101_02__sales_over_ship_threshold.sql}。
+     * <p>全局默认见迁移 {@code V20261101_03__sales_over_ship_threshold.sql}。
      * 执行侧唯一入口：{@code SalesServiceImpl.resolveOverShipLimit}。
      *
      * @since 2026-08-28
