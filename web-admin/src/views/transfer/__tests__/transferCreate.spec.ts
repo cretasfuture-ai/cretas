@@ -296,3 +296,27 @@ describe('详情页缺货判定按物料合计 (存量重复行单据)', () => {
     expect(detailSource).toContain("transfer.status === 'APPROVED' && isOutbound && hasStockShortage");
   });
 });
+
+/**
+ * 🔴 2026-08-28 客户反馈「数量单位折合的问题」。
+ * 调拨包装选「kg(基本单位)」时包装系数为 1，页面却仍打出
+ * 「50000.000 kg」→「折合 50,000 kg」——同一个数说两遍，而「折合」暗示发生了换算。
+ */
+describe('折合行只在真的发生换算时出现', () => {
+  const listSource = readFileSync(
+    resolve(process.cwd(), 'src/views/transfer/list.vue'),
+    'utf8',
+  );
+
+  it('折合行被包装系数守卫', () => {
+    expect(listSource).toContain('row.quantity && hasPackagingConversion(row)');
+  });
+
+  it('判据用系数而不是单位字符串 —— kg 与 公斤 写法不同但系数仍是 1', () => {
+    expect(listSource).toContain("return Number(row._packageFactor || 1) !== 1;");
+  });
+
+  it('⛔ 阴性对照: 不再是「只要填了数量就显示」', () => {
+    expect(listSource).not.toContain('v-if="row.selectedItemId && row.quantity" class="base-quantity-preview"');
+  });
+});
