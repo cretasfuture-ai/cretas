@@ -1119,3 +1119,35 @@ SalesOrderShortageQtyContractTest 10/10；变异后 4 条红
 ⚠️ 判据自己的一条错也记下来：第一版断言「边界接住之后 `navAlive()` 仍为 true」——
 **红的是判据不是行为**。边界一旦接住，`NavigationContainer` 就在被替换掉的那棵子树里，
 `isReady()` 本来就该是 false。要证明的是「**能回来**」，不是「导航还在」。
+
+
+---
+
+## 第三轮追加：一条**只在真机上才会炸**的，已确认症状但**没定位到源码**
+
+走查捕到的 console 里有 6 次同一条：
+
+```
+Unexpected text node: . A text node cannot be a child of a <View>.
+```
+
+命中三个屏：`BossReportsTab/KPIReport` · `PMPurchaseTab/PurchaseOrderCreate` ·
+`WHProfileTab/WHSettings`（那个文本节点的内容是**一个空格**）。
+
+▎**web 上这只是一条 console error；真机上 RN 会抛**
+▎`Text strings must be rendered within a <Text> component`。
+⇒ 这三屏在真机上可能是直接崩的，而这两轮走查跑在 web 上，对这一类**系统性偏乐观**。
+
+### 试过但没定位到的（写下来，免得下一个人重走）
+
+| 做法 | 结果 |
+|---|---|
+| 读 console 消息本身 | **不带组件栈**，只有那一句 |
+| 在 DOM 里找「直接文本子节点只有空白」的 `View` | **0 个** —— RN Web 渲染时把它剥掉了，只留一条警告，DOM 里查不到 |
+| 源码 grep `}` 与 `{` 同行、`{' '}` | 三个文件里没有匹配；`PurchaseOrderCreate` 那处 `{' '}` 在 `<Text>` 里面，是合法的 |
+
+⇒ **可靠的做法是把这三屏在真机/模拟器上打开一次，读 redbox**。
+本机有 Android SDK + AVD `Medium_Phone` + Maestro（`~/.maestro/bin`），留给下一轮。
+
+⚠️ 记成「已确认症状 / 未定位成因」，⛔ 不要写成「已修」或「不影响」——
+第一轮交接件里那条「已定位是 X」其实只是推断，本仓吃过这个亏。
