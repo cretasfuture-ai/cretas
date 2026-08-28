@@ -12,7 +12,7 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
-import com.cretas.aims.entity.enums.ArApTransactionType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.ProductCategory;
@@ -122,9 +122,21 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.FgReservationLedgerService reservationLedgerService;
 
-    /** Sales shipment auto-AR idempotency guard. Optional for legacy unit tests. */
+    /**
+     * 自动应收挂账的存量切换缝检测。Optional for legacy unit tests。
+     *
+     * <p>2026-08-28 起挂账幂等由 {@code ArApService#recordReceivableIfAbsent} 按
+     * (SALES_DELIVERY, deliveryId) 负责; 这里只用来认出「升级前挂过整单应收」的在飞订单,
+     * 对它们保持旧行为以免双重计费。
+     */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ArApTransactionRepository arApTransactionRepository;
+
+    /**
+     * 自动应收挂账的幂等来源类型 —— 与 DB 唯一键 {@code uk_aat_ar_invoice_per_shipment}
+     * (V20261031_06) 的 {@code source_type} 取值一致。对应采购侧的 {@code "PURCHASE_RECEIVE"}。
+     */
+    private static final String SOURCE_DOC_TYPE_SALES_DELIVERY = "SALES_DELIVERY";
 
     /** Canvas Config — 可选注入，模块未部署时不影响现有逻辑 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -3126,17 +3138,57 @@ public class SalesServiceImpl implements SalesService {
         if (record.getSalesOrderId() != null) {
             try {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
-                if (order != null && order.getCustomerId() != null && order.getTotalAmount() != null) {
-                    boolean arExists = arApTransactionRepository != null
-                            && arApTransactionRepository.existsByFactoryIdAndSalesOrderIdAndTransactionType(
-                                    factoryId, order.getId(), ArApTransactionType.AR_INVOICE);
-                    if (arExists) {
-                        log.info("应收自动挂账跳过: salesOrderId={} 已存在 AR_INVOICE", order.getId());
+                if (order != null && order.getCustomerId() != null) {
+                    // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
+                    //
+                    // 仓管在「确认发货」时可以覆盖实际发货数量 (warehouseConfirmDelivery,
+                    // 客户原话「车装不下 / 现场少装」)。覆盖后重算的是**发货单** totalAmount,
+                    // 而这里旧实现取的是**订单** totalAmount —— 两个数从此分家。prod 实测:
+                    //   SO-20260828-0012 订 2 盒 → 仓管填 5 → 库存真扣 5, 发运单 110.62,
+                    //                    应收只挂 44.25, 订单 COMPLETED ⇒ 3 盒没人收钱 (无条件错)
+                    //   SO-20260828-0013 订 4 盒 → 仓管填 2 → 发运单 44.25,
+                    //                    应收挂 88.50 ⇒ 客户被多收
+                    //
+                    // ⛔ 本修复只管会计正确性, **不表态**「超发允不允许、允许多少」——
+                    //   采购侧有 overReceiveRate + purchase_exceptions 的先例, 销售侧两样都没有,
+                    //   要不要照抄是产品决定, 不是这里能定的。无论策略怎么定,「应收 = 实发」都成立。
+                    //
+                    // 幂等键从「每 SO」改成「每子发运单」(SALES_DELIVERY, deliveryId):
+                    //   · 同一发运单重复确认 → 幂等命中, 不重复挂账 (原防双击语义保持)
+                    //   · 分批发货的不同发运单 → 各挂各的实发额, 累计 = 实发总额
+                    //     (旧实现在这里 `arExists` 直接 skip, 第二批永远不挂账 → 少收)
+                    // DB 侧唯一键同步换成 uk_aat_ar_invoice_per_shipment (V20261031_06) ——
+                    // ⚠️ 采购侧 2026-07-02 只改代码没改约束, 那次修复从未生效, 直到 8/03 分批
+                    //   到货第二批入不了库才被发现。这里代码与约束在同一个 PR 里改。
+                    //
+                    // ⚠️ 只有子发运单会走到这: shipDelivery 对 record_role='MASTER' 直接抛 409,
+                    //   所以母单不会重复挂一笔。
+                    //
+                    // ⛔ 金额缺失时 recordReceivableIfAbsent 诚实跳过(返回 null), 不回落到
+                    //   order.getTotalAmount() —— 那个回落正是本次要修的缺陷。
+                    //
+                    // 【切换缝】存量「整单挂账」的在飞订单保持旧行为, 否则客户被双重计费:
+                    //   改动前一张 SO 只挂一笔全额 AR_INVOICE (source_id 为 NULL)。若这样一张
+                    //   还有未发量的订单在升级后再发一批, 新逻辑会在整单应收之上**再挂一笔**。
+                    //   prod 实测 SO-20260828-0013 正是此形: PARTIAL_DELIVERED, 已挂 88.50 整单额,
+                    //   还剩 2 盒 —— 不设这道缝, 那 2 盒发货会再挂 44.25, 合计 132.75。
+                    // ⇒ 存量订单的账不追溯改写(它们的错账另行人工调整), 新订单走正确口径。
+                    boolean legacyWholeOrderAr = arApTransactionRepository != null
+                            && arApTransactionRepository.existsLegacyArInvoiceWithoutSource(factoryId, order.getId());
+                    if (legacyWholeOrderAr) {
+                        log.info("应收自动挂账跳过(存量整单挂账, 保持旧行为避免双重计费): salesOrderId={}, deliveryId={}",
+                                order.getId(), record.getId());
                     } else {
-                        arApService.recordReceivable(factoryId, order.getCustomerId(), order.getId(),
-                            order.getTotalAmount(), LocalDate.now().plusDays(30), userId,
-                            "销售发货自动挂账-" + record.getDeliveryNumber());
-                    log.info("自动创建应收: orderId={}, amount={}", order.getId(), order.getTotalAmount());
+                        BigDecimal shippedValue = record.getTotalAmount();
+                        ArApTransaction ar = arApService.recordReceivableIfAbsent(
+                                factoryId, order.getCustomerId(), order.getId(),
+                                SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId(),
+                                shippedValue, LocalDate.now().plusDays(30), userId,
+                                "销售发货自动挂账-" + record.getDeliveryNumber());
+                        if (ar != null) {
+                            log.info("自动创建应收(实发值): orderId={}, deliveryId={}, 实发额={}, 订单额={}, transactionId={}",
+                                    order.getId(), record.getId(), shippedValue, order.getTotalAmount(), ar.getId());
+                        }
                     }
                 }
             } catch (BusinessException e) {

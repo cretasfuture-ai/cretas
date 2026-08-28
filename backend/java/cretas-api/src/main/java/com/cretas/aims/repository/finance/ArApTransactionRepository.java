@@ -228,6 +228,27 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             @Param("startDate") LocalDate startDate);
 
     /** 检查销售订单是否已挂账 */
+    /**
+     * 存量「整单挂账」检测 —— 2026-08-28 应收改按实发分笔挂账的<b>切换缝</b>。
+     *
+     * <p>改动前每个 SO 只挂一笔 AR_INVOICE, 金额 = 订单全额, 且 {@code source_id} 为 NULL。
+     * 改动后按子发运单分笔挂账 ({@code source_id} = 发运单 ID)。若一张<b>在飞</b>的订单
+     * (已挂过整单应收、还有未发的量) 在升级后再发一批, 新逻辑会在整单应收之上<b>再挂一笔</b>
+     * → 客户被双重计费。
+     *
+     * <p>prod 实测这不是假想: {@code SO-20260828-0013} 正是 PARTIAL_DELIVERED,
+     * 已挂 88.50 整单应收, 还剩 2 盒未发 —— 升级后那 2 盒发货会再挂 44.25, 合计 132.75。
+     *
+     * <p>⇒ 本方法找出「有 source_id 为 NULL 的 AR_INVOICE」的订单, 调用方对它们
+     * <b>保持旧行为</b>(不再挂账)。存量订单的账不被追溯改写, 新订单走正确口径。
+     */
+    @Query("SELECT COUNT(t) > 0 FROM ArApTransaction t WHERE t.factoryId = :factoryId " +
+            "AND t.salesOrderId = :salesOrderId " +
+            "AND t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE " +
+            "AND t.deletedAt IS NULL AND t.sourceId IS NULL")
+    boolean existsLegacyArInvoiceWithoutSource(@Param("factoryId") String factoryId,
+                                               @Param("salesOrderId") String salesOrderId);
+
     boolean existsByFactoryIdAndSalesOrderIdAndTransactionType(
             String factoryId, String salesOrderId, ArApTransactionType transactionType);
 
