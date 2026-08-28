@@ -136,10 +136,16 @@ export function setupRouterGuards(router: Router) {
     // 检查是否是 Mobile 专属角色 (一线员工: 操作员、质检员、仓库工人)
     // 这些角色只能使用移动端 App，不能登录 Web 管理后台
     if (MOBILE_ONLY_ROLES.includes(authStore.currentRole)) {
+      // 先把角色取出来再清登录态 —— clearAuth() 之后 currentRole 恒为
+      // 'unactivated' (auth.ts: `if (!u) return 'unactivated'`), 而
+      // mobile-only.vue 的「移动端支持的功能」整张清单是按 query.role 分支的,
+      // 拿不到真实角色就只剩两条无条件项, 等于告诉一线工人「请用 App」却漏掉
+      // 他的本职工作。守卫见 guards.mobileOnlyRole.spec.ts。
+      const blockedRole = authStore.currentRole;
       // 清除登录状态
       authStore.clearAuth();
       // 跳转到 Mobile 专属提示页面
-      next({ path: '/mobile-only', query: { role: authStore.currentRole } });
+      next({ path: '/mobile-only', query: { role: blockedRole } });
       return;
     }
 
