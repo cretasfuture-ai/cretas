@@ -2,8 +2,10 @@ package com.cretas.aims.service.wip;
 
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -12,6 +14,7 @@ import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -20,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -62,8 +66,14 @@ class WipInventoryReworkPurityWiringTest {
     @Mock private WorkProcessTaskRepository taskRepo;
     @Mock private WorkProcessRepository workProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private ProductProcessWorkflowRepository productProcessWorkflowRepo;
     @Mock private ProductFamilyResolver productFamilyResolver;
     @Mock private ApplicationEventPublisher eventPublisher;
+
+    @BeforeEach
+    void injectWorkflowRepositoryField() {
+        ReflectionTestUtils.setField(service, "productProcessWorkflowRepo", productProcessWorkflowRepo);
+    }
 
     // ==================== Helpers ====================
 
@@ -108,6 +118,18 @@ class WipInventoryReworkPurityWiringTest {
         when(wipRepo.findByFactoryIdForWeightView(FACTORY)).thenReturn(new ArrayList<>(rows));
         when(productTypeRepo.findByIdIn(anyCollection())).thenReturn(products);
         when(productFamilyResolver.resolveFamilies(anyString(), any())).thenReturn(Map.of());
+        when(productProcessWorkflowRepo.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(FACTORY))
+                .thenReturn(List.of());
+    }
+
+    private ProductProcessWorkflow publishedWorkflow(String ownerProductTypeId, String reworkProductTypeId) {
+        ProductProcessWorkflow workflow = new ProductProcessWorkflow();
+        workflow.setFactoryId(FACTORY);
+        workflow.setProductTypeId(ownerProductTypeId);
+        workflow.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
+        workflow.setNodesJson("[{\"id\":\"rw\",\"data\":{\"skuId\":\"" + reworkProductTypeId
+                + "\",\"isRework\":true}}]");
+        return workflow;
     }
 
     private List<String> batchNosFor(String targetProductTypeId) {
@@ -152,6 +174,27 @@ class WipInventoryReworkPurityWiringTest {
 
         stub(rows, products);
         assertThat(batchNosFor(COOKED)).containsExactlyInAnyOrder("RW-US", "RW-SNACK", "RW-COOKED");
+    }
+
+    @Test
+    @DisplayName("生产形态: 库存挂独立回料 SKU 时，纯度取发布工艺 owner 成品档案而不是回料 SKU")
+    void pickerResolvesPurityFromPublishedWorkflowOwner() {
+        String cookedReworkSku = "pt-rework-cooked";
+        stub(List.of(reworkRow("RW-COOKED-SKU", cookedReworkSku)),
+                List.of(product(cookedReworkSku, null, true), product(COOKED, 3, true),
+                        product(US, 1, true), product(PATTY, 4, false)));
+        when(productProcessWorkflowRepo.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(FACTORY))
+                .thenReturn(List.of(publishedWorkflow(COOKED, cookedReworkSku)));
+
+        assertThat(batchNosFor(US)).doesNotContain("RW-COOKED-SKU");
+
+        // 同一生产形态下的阳性对照：熟肉饼收自己的回料，且必须是已执行配置的 ENFORCED。
+        List<WipRowDTO> cookedOptions = service.listWipByFactory(FACTORY, COOKED, null);
+        assertThat(cookedOptions).filteredOn(r -> "RW-COOKED-SKU".equals(r.getIntermediateBatchNo()))
+                .singleElement()
+                .satisfies(r -> assertThat(r.getReworkPurityStatus()).isEqualTo("ENFORCED"));
+
+        assertThat(batchNosFor(PATTY)).doesNotContain("RW-COOKED-SKU");
     }
 
     @Test

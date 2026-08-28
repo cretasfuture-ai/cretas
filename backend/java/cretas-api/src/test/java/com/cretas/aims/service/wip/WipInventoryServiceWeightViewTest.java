@@ -4,6 +4,7 @@ import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
@@ -12,6 +13,7 @@ import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -63,8 +66,16 @@ class WipInventoryServiceWeightViewTest {
     @Mock private WorkProcessTaskRepository taskRepo;
     @Mock private WorkProcessRepository workProcessRepo;
     @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private ProductProcessWorkflowRepository productProcessWorkflowRepo;
     @Mock private ProductFamilyResolver productFamilyResolver;
     @Mock private ApplicationEventPublisher eventPublisher;
+
+    @BeforeEach
+    void injectWorkflowRepositoryField() {
+        ReflectionTestUtils.setField(service, "productProcessWorkflowRepo", productProcessWorkflowRepo);
+        when(productProcessWorkflowRepo.findByFactoryIdOrderByProductTypeIdAscDefinitionVersionDesc(FACTORY_ID))
+                .thenReturn(List.of());
+    }
 
     // ==================== Helpers ====================
 

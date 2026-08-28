@@ -81,6 +81,7 @@ public class MaterialBatchMapper {
             dto.setMaterialName(batch.getMaterialType().getName());
             dto.setMaterialCode(batch.getMaterialType().getCode());
             dto.setMaterialCategory(batch.getMaterialType().getCategory());
+            dto.setMaterialMainCategory(batch.getMaterialType().getMainCategory());
             dto.setUnit(batch.getMaterialType().getUnit());
             dto.setStorageType(batch.getMaterialType().getStorageType());
         }

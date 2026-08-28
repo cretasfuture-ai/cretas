@@ -1,6 +1,4 @@
 import { canonicalUnitCode, canonicalUnitCodeKeepingCount } from '@/utils/unitPricing';
-import { bigCategoryOf } from '@/utils/materialCategory';
-
 export type TransferItemType = 'RAW_MATERIAL' | 'FINISHED_GOODS' | 'PACKAGING_MATERIAL';
 export type TransferType = 'HQ_TO_BRANCH' | 'BRANCH_TO_BRANCH' | 'BRANCH_TO_HQ' | 'WAREHOUSE_TO_WAREHOUSE';
 
@@ -45,6 +43,7 @@ export interface TransferSelectableItem {
   currentStock: number;
   unitPrice?: number;
   category?: string;
+  mainCategory?: string;
 }
 
 export interface TransferCategoryOption {
@@ -74,6 +73,7 @@ export interface MaterialInventoryBatch {
   materialName?: string | null;
   materialCode?: string | null;
   materialCategory?: string | null;
+  materialMainCategory?: string | null;
   quantityUnit?: string | null;
   unit?: string | null;
   currentQuantity?: number | string | null;
@@ -197,43 +197,29 @@ export function aggregateMaterialInventoryOptions(
       currentStock: available,
       unitPrice: unitPrice > 0 ? unitPrice : undefined,
       category: String(batch.materialCategory || ''),
+      mainCategory: String(batch.materialMainCategory || ''),
     });
   }
   return Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
 }
 
 /**
- * 调拨页展示的基本类型来自所选仓库真实在库物料的 category。
- * 后端 TransferItemType 只负责区分 materialTypeId / productTypeId，不能再冒充用户分类。
+ * 调拨页展示的基本类型固定使用主数据三大类，而不是把 category 小类原样铺开。
+ * 三大类即使当前仓没有库存也展示，避免同一页面随库存偶然变成“原料/主材”两项；
+ * 选中后物料下拉只列该大类的真实可调库存。
  */
 export function buildTransferCategoryOptions(
   materialOptions: TransferSelectableItem[],
   finishedGoodsOptions: TransferSelectableItem[],
 ): TransferCategoryOption[] {
-  const categories = new Set<string>();
-  let hasUnclassifiedMaterial = false;
-  for (const option of materialOptions) {
-    const category = String(option.category || '').trim();
-    if (category) categories.add(category);
-    else hasUnclassifiedMaterial = true;
-  }
+  const result: TransferCategoryOption[] = materialOptions.length > 0 ? [
+    { value: 'MATERIAL:原料', label: '原料', itemType: 'RAW_MATERIAL', materialCategory: '原料' },
+    { value: 'MATERIAL:辅料', label: '辅料', itemType: 'RAW_MATERIAL', materialCategory: '辅料' },
+    { value: 'MATERIAL:包材', label: '包材', itemType: 'PACKAGING_MATERIAL', materialCategory: '包材' },
+  ] : [];
 
-  const result = Array.from(categories)
-    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-    .map((category): TransferCategoryOption => ({
-      value: `MATERIAL:${encodeURIComponent(category)}`,
-      label: category,
-      itemType: bigCategoryOf(category) === '包材' ? 'PACKAGING_MATERIAL' : 'RAW_MATERIAL',
-      materialCategory: category,
-    }));
-
-  if (hasUnclassifiedMaterial) {
-    result.push({
-      value: UNCLASSIFIED_MATERIAL_CATEGORY,
-      label: '未分类原料（历史）',
-      itemType: 'RAW_MATERIAL',
-      materialCategory: null,
-    });
+  if (materialOptions.some((option) => !String(option.mainCategory || '').trim())) {
+    result.push({ value: UNCLASSIFIED_MATERIAL_CATEGORY, label: '未分类原料（历史）', itemType: 'RAW_MATERIAL', materialCategory: null });
   }
   if (finishedGoodsOptions.length > 0) {
     result.push({
@@ -266,7 +252,7 @@ export function optionsForTransferCategory(
   }
   if (row.materialCategoryFilter === undefined) return [];
   return materialOptions.filter(
-    (option) => String(option.category || '').trim() === row.materialCategoryFilter,
+    (option) => String(option.mainCategory || '').trim() === row.materialCategoryFilter,
   );
 }
 

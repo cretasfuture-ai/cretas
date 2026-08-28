@@ -32,11 +32,27 @@ class WorkflowReworkNodesTest {
     }
 
     @Test
+    void 从同一权威标记取回料SKU而不按名称猜() {
+        String nodesJson = """
+            [
+              {"id":"good","data":{"name":"名字里也有回料字样但未标记","skuId":"GOOD"}},
+              {"id":"rework","data":{"name":"任意名称","skuId":"REWORK-1","isRework":true}},
+              {"id":"legacy","data":{"skuId":"REWORK-2","isRework":"TRUE"}},
+              {"id":"unbound","data":{"isRework":true}}
+            ]
+            """;
+
+        assertThat(WorkflowReworkNodes.reworkProductTypeIds(nodesJson))
+                .containsExactlyInAnyOrder("REWORK-1", "REWORK-2");
+    }
+
+    @Test
     void 解析失败返回空集合而不是抛异常() {
         // 一个 JSON 解析问题不该让整张报工单打不开 —— 与 WorkflowByproductNodes 同口径。
         assertThat(WorkflowReworkNodes.reworkMaterialNodeIds("{ not json")).isEmpty();
         assertThat(WorkflowReworkNodes.reworkMaterialNodeIds(null)).isEmpty();
         assertThat(WorkflowReworkNodes.reworkMaterialNodeIds("")).isEmpty();
         assertThat(WorkflowReworkNodes.reworkMaterialNodeIds("{\"a\":1}")).isEmpty();
+        assertThat(WorkflowReworkNodes.reworkProductTypeIds("{ not json")).isEmpty();
     }
 }
