@@ -569,7 +569,7 @@ public class SupplyChainOrchestrator {
                 // createdBy 与上面建计划用的是同一个人(事件自带的 approvedBy) ——
                 // purchase_orders.created_by 也是 NOT NULL + 外键指向 users,
                 // 它原来写死 0L(SYSTEM_USER_ID), 而 users 表里没有 id=0, 撞了 13 次。
-                procurementSuggestionService.generateSuggestions(
+                generateSuggestionsIsolated(
                         factoryId, saved.getId(), materialResult.getShortfalls(), createdBy);
                 log.info("原辅料不足，已生成采购建议: PP={}, 缺口种类={}",
                         saved.getPlanNumber(), materialResult.getShortfalls().size());
@@ -577,6 +577,51 @@ public class SupplyChainOrchestrator {
         } catch (Exception e) {
             log.error("BOM展开/采购建议生成失败(不影响PP创建): PP={}", saved.getPlanNumber(), e);
         }
+    }
+
+    /**
+     * doomed-tx 隔离 · 采购建议 (2026-08-24 incident)。
+     *
+     * <h2>为什么 2026-08-01 那次隔离没兜住这一次</h2>
+     *
+     * <p>{@link #expandBomAndCheckMaterialIsolated} 的文档写着「<b>刻意保持隔离范围小</b>,
+     * 只包住纯读+计算的 expandBOM/checkMaterialAvailability, 后续对 {@code saved} 的写入
+     * (isFullyMatched / generateSuggestions 关联 planId) 仍留在调用方的联动事务里」。
+     * 对 {@code isFullyMatched} 这个理由成立(它写的就是联动事务里那行未提交的 PP);
+     * 但对 {@code generateSuggestions} <b>不成立</b> —— 它只把 planId 拼进 remark 文本,
+     * {@code purchase_orders} 里既<b>没有</b> plan 列也<b>没有</b>指向 production_plans 的外键
+     * (prod 实测: 该表只有 fk_po_created_by / fk_po_factory / fk_po_supplier 三条外键)。
+     *
+     * <h2>2026-08-24 prod 实测的因果链</h2>
+     *
+     * <pre>
+     * 13:38:31.397  自动创建生产计划: PP=PP-AUTO-20260824-0001      &lt;- PP 建成了
+     * 13:38:31.446  insert into purchase_orders 撞 fk_po_supplier   &lt;- 占位 supplier_id="PENDING"
+     * 13:38:31.452  日志: "BOM展开/采购建议生成失败(不影响PP创建)"   &lt;- 这句话是假的
+     * 13:38:31.470  UnexpectedRollbackException                     &lt;- 整个联动事务回滚, PP 一起没了
+     * </pre>
+     *
+     * <p>⚠️ 关键点: {@code catch} <b>吞得掉异常, 抹不掉 rollback-only 标记</b>。
+     * 子事务在自己的 AOP 边界上把共享事务标记成 rollback-only 之后, 调用方即使正常返回,
+     * 提交时仍会抛 {@code UnexpectedRollbackException}。⇒ 「catch 住了」≠「不影响」。
+     *
+     * <p>后果不只是丢一张 PP: 六膳门(真实客户)8-24 两张单
+     * (SO-20260824-0001 ¥33,500 / SO-20260824-0002 ¥58,760)财审通过后既没生产计划也没库存预留,
+     * 而接口<b>返回 200</b> —— 用户侧完全无感, 之后就再没用过 ERP 侧功能。
+     *
+     * <p>⇒ 把 generateSuggestions 也放进独立物理事务: 它失败时只回滚自己,
+     * 上面已 save 的 PP + BusinessLink 能正常提交, 那句「不影响PP创建」才成立。
+     */
+    private void generateSuggestionsIsolated(String factoryId, String productionPlanId,
+                                             List<MaterialShortfall> shortfalls, Long createdBy) {
+        org.springframework.transaction.support.TransactionTemplate isolated =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        isolated.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        isolated.setName("SupplyChainOrchestrator.generateSuggestionsIsolated");
+        isolated.executeWithoutResult(status ->
+                procurementSuggestionService.generateSuggestions(
+                        factoryId, productionPlanId, shortfalls, createdBy));
     }
 
     /**
