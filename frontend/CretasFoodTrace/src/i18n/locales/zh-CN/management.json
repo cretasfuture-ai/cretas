@@ -1412,7 +1412,12 @@
       "EQUIPMENT": "设备信息",
       "DISPOSAL_RECORD": "报废记录",
       "PRODUCT_TYPE": "产品类型",
-      "PRODUCTION_PLAN": "生产计划"
+      "PRODUCTION_PLAN": "生产计划",
+        "SCALE_DEVICE": "称重设备",
+        "SCALE_PROTOCOL": "称重协议",
+        "ISAPI_DEVICE": "ISAPI 设备",
+        "RAW_MATERIAL_TYPE": "原料类型",
+        "PURCHASE_ORDER": "采购单"
     },
     "actions": {
       "preview": "预览",
