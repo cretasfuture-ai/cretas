@@ -2,6 +2,7 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.CustomerRepository;
@@ -35,7 +36,7 @@ import static org.mockito.Mockito.*;
  *
  * <p>Two mandatory cases per brief:
  * <ol>
- *   <li>DRAFT status → {@code salesOrderRepository.delete(order)} called exactly once.</li>
+ *   <li>DRAFT status → parent, product lines and supplied-material tasks are soft-deleted.</li>
  *   <li>Non-DRAFT status (e.g. CONFIRMED) → {@link BusinessException} with status 409; delete NOT called.</li>
  * </ol>
  * Additionally:
@@ -61,6 +62,7 @@ class SalesServiceImplDeleteDraftTest {
     @Mock ArApTransactionRepository     arApTransactionRepository;
     @Mock WarehouseResolver             warehouseResolver;
     @Mock UserRepository                userRepository;
+    @Mock SalesOrderSuppliedMaterialRequirementService suppliedMaterialRequirementService;
 
     SalesServiceImpl salesService;
 
@@ -82,6 +84,8 @@ class SalesServiceImplDeleteDraftTest {
         ReflectionTestUtils.setField(salesService, "arApTransactionRepository", arApTransactionRepository);
         ReflectionTestUtils.setField(salesService, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(salesService, "userRepository", userRepository);
+        ReflectionTestUtils.setField(salesService, "suppliedMaterialRequirementService",
+                suppliedMaterialRequirementService);
     }
 
     // ---------------------------------------------------------------------------
@@ -102,15 +106,32 @@ class SalesServiceImplDeleteDraftTest {
     // ---------------------------------------------------------------------------
 
     @Test
-    @DisplayName("DRAFT 草稿删除 → repository.delete 被调用一次")
-    void deleteDraft_draftStatus_callsRepositoryDelete() {
+    @DisplayName("DRAFT 草稿删除 → 父单显式软删，客供任务先同步软删")
+    void deleteDraft_draftStatus_softDeletesOrderAndSuppliedTasks() {
         SalesOrder order = makeOrder(FACTORY_ID, SalesOrderStatus.DRAFT);
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        // delete() is void — no stub needed; default behavior is no-op for void methods
 
         salesService.deleteDraft(FACTORY_ID, ORDER_ID, USER_ID);
 
-        verify(salesOrderRepository, times(1)).delete(order);
+        verify(suppliedMaterialRequirementService).softDeleteForDraftOrder(order);
+        verify(salesOrderRepository).save(order);
+        verify(salesOrderRepository, never()).delete(any());
+        org.assertj.core.api.Assertions.assertThat(order.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("DRAFT 草稿删除 → 产品行同步软删，不留下活跃孤儿行")
+    void deleteDraft_softDeletesOrderItems() {
+        SalesOrder order = makeOrder(FACTORY_ID, SalesOrderStatus.DRAFT);
+        SalesOrderItem item = new SalesOrderItem();
+        item.setId(825L);
+        order.setItems(new java.util.ArrayList<>(java.util.List.of(item)));
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+
+        salesService.deleteDraft(FACTORY_ID, ORDER_ID, USER_ID);
+
+        verify(salesOrderItemRepository).saveAll(order.getItems());
+        org.assertj.core.api.Assertions.assertThat(item.getDeletedAt()).isNotNull();
     }
 
     @Test
@@ -128,6 +149,7 @@ class SalesServiceImplDeleteDraftTest {
                 });
 
         verify(salesOrderRepository, never()).delete(any());
+        verify(salesOrderRepository, never()).save(any());
     }
 
     @Test
@@ -144,6 +166,7 @@ class SalesServiceImplDeleteDraftTest {
                 });
 
         verify(salesOrderRepository, never()).delete(any());
+        verify(salesOrderRepository, never()).save(any());
     }
 
     @Test
@@ -160,6 +183,7 @@ class SalesServiceImplDeleteDraftTest {
                 });
 
         verify(salesOrderRepository, never()).delete(any());
+        verify(salesOrderRepository, never()).save(any());
     }
 
     @Test
@@ -171,5 +195,6 @@ class SalesServiceImplDeleteDraftTest {
                 .isInstanceOf(ResourceNotFoundException.class);
 
         verify(salesOrderRepository, never()).delete(any());
+        verify(salesOrderRepository, never()).save(any());
     }
 }

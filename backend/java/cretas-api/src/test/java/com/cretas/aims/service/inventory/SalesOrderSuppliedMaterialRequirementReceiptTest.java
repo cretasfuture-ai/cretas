@@ -35,6 +35,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -279,6 +280,38 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
                 .isEqualTo("CUSTOMER_SUPPLIED_RECEIPT_EXCEEDS_REMAINING");
         verify(materialBatchRepository, never()).saveAndFlush(any());
         verify(requirementRepository, never()).save(any());
+    }
+
+    @Test
+    void softDeletesUnreceivedRequirementsForDraftOrder() {
+        SalesOrder order = approvedOrder();
+        order.setStatus(SalesOrderStatus.DRAFT);
+        SalesOrderSuppliedMaterialRequirement first = requirement("0");
+        SalesOrderSuppliedMaterialRequirement second = requirement("0");
+        second.setId("task-2");
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc("order-1"))
+                .thenReturn(List.of(first, second));
+
+        service.softDeleteForDraftOrder(order);
+
+        assertThat(first.getDeletedAt()).isNotNull();
+        assertThat(second.getDeletedAt()).isNotNull();
+        verify(requirementRepository).saveAll(List.of(first, second));
+    }
+
+    @Test
+    void refusesDraftRequirementCleanupAfterAnyReceiptFact() {
+        SalesOrder order = approvedOrder();
+        order.setStatus(SalesOrderStatus.DRAFT);
+        SalesOrderSuppliedMaterialRequirement received = requirement("1");
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc("order-1"))
+                .thenReturn(List.of(received));
+
+        assertThatThrownBy(() -> service.softDeleteForDraftOrder(order))
+                .isInstanceOf(BusinessException.class)
+                .extracting(error -> ((BusinessException) error).getErrorCode())
+                .isEqualTo("CUSTOMER_SUPPLIED_REQUIREMENT_RECEIVED_IMMUTABLE");
+        verify(requirementRepository, never()).saveAll(any());
     }
 
     private static CustomerSuppliedMaterialReceiptRequest request(String key, String quantity) {
