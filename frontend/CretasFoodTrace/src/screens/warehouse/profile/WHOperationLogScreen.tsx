@@ -22,6 +22,7 @@ import { WHProfileStackParamList } from "../../../types/navigation";
 import { materialBatchApiClient, MaterialBatch } from "../../../services/api/materialBatchApiClient";
 import { shipmentApiClient, ShipmentRecord } from "../../../services/api/shipmentApiClient";
 import { handleError } from "../../../utils/errorHandler";
+import { formatQuantity } from '../../../utils/packagingUnitConversion';
 
 type NavigationProp = NativeStackNavigationProp<WHProfileStackParamList>;
 
@@ -91,7 +92,21 @@ export function WHOperationLogScreen() {
       id: `batch-${batch.id || index}`,
       type: "inbound",
       title: "确认入库",
-      description: `${batch.batchNumber} ${batch.materialName || ''} ${batch.remainingQuantity || batchAny.initialQuantity || 0}${batchAny.unit || 'kg'}`,
+      // 🔴 2026-08-29 逐屏走查(台账 T9)：这一行原来写的是
+      //   `${batch.remainingQuantity || batchAny.initialQuantity || 0}${batchAny.unit || 'kg'}`
+      // 三处都错：
+      //
+      //   ① 入库日志显示的是**剩余量**。批次一旦用完 remainingQuantity 就是 0，
+      //      于是屏上出现「确认入库 · 0kg · 成功」——
+      //      实测 WIP-CLK-W-20260825-48433 入库其实是 0.8kg（USED_UP）。
+      //      日志是用来复原「当时发生了什么」的，写成剩余量等于把历史改掉了。
+      //   ② `||` 用在数字上：0 是 falsy，所以「真的是 0」和「没有值」走同一条路
+      //      （本仓 measurement-and-wiring 形态 A¹⁰）。
+      //   ③ `unit` 是**原料类型的默认单位**，不是这一批的 —— DTO 注释里写明了
+      //      权威字段是 `quantityUnit`，并且写着「⛔ 显示这一批时不要用它」。
+      description: `${batch.batchNumber} ${batch.materialName || ''} ${formatQuantity(
+        Number(batch.inboundQuantity ?? 0),
+      )}${batch.quantityUnit || batchAny.unit || 'kg'}`,
       time,
       location: batch.storageLocation || "待分配",
       status: "success",
