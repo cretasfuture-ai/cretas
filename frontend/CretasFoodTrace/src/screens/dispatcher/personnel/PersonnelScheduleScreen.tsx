@@ -234,7 +234,7 @@ export default function PersonnelScheduleScreen() {
       if (isAxiosError(error)) {
         const status = error.response?.status;
         if (status === 401) {
-          Alert.alert(t('common.error'), t('common.sessionExpired'));
+          Alert.alert(t('common.error'), t('platform:common.sessionExpired'));
           navigation.goBack();
           return;
         }

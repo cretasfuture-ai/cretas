@@ -182,10 +182,10 @@ export default function TimeStatsScreen() {
    * 格式化工时
    */
   const formatHours = (hours: number): string => {
-    if (!hours) return `0${t('common.units.hour')}`;
+    if (!hours) return `0${t('common:units.hour')}`;
     const h = Math.floor(hours);
     const m = Math.round((hours - h) * 60);
-    return m > 0 ? `${h}${t('common.units.hour')}${m}${t('common.units.minute')}` : `${h}${t('common.units.hour')}`;
+    return m > 0 ? `${h}${t('common:units.hour')}${m}${t('common:units.minute')}` : `${h}${t('common:units.hour')}`;
   };
 
   /**
@@ -329,10 +329,10 @@ export default function TimeStatsScreen() {
             <Card.Content>
               <DataTable>
                 <DataTable.Header>
-                  <DataTable.Title>{t('common.table.rank')}</DataTable.Title>
-                  <DataTable.Title>{t('common.table.employee')}</DataTable.Title>
-                  <DataTable.Title numeric>{t('common.table.workHours')}</DataTable.Title>
-                  <DataTable.Title numeric>{t('common.table.efficiency')}</DataTable.Title>
+                  <DataTable.Title>{t('common:table.rank')}</DataTable.Title>
+                  <DataTable.Title>{t('common:table.employee')}</DataTable.Title>
+                  <DataTable.Title numeric>{t('common:table.workHours')}</DataTable.Title>
+                  <DataTable.Title numeric>{t('common:table.efficiency')}</DataTable.Title>
                 </DataTable.Header>
                 {topPerformers.slice(0, 10).map((performer, index) => (
                   <DataTable.Row key={performer.employeeId || index}>
@@ -347,7 +347,7 @@ export default function TimeStatsScreen() {
                         {index + 1}
                       </Chip>
                     </DataTable.Cell>
-                    <DataTable.Cell>{performer.employeeName || `${t('common.employee')}${performer.employeeId}`}</DataTable.Cell>
+                    <DataTable.Cell>{performer.employeeName || `${t('common:employee')}${performer.employeeId}`}</DataTable.Cell>
                     <DataTable.Cell numeric>{formatHours(performer.totalHours)}</DataTable.Cell>
                     <DataTable.Cell numeric>
                       {performer.efficiency ? `${(performer.efficiency * 100).toFixed(0)}%` : 'N/A'}

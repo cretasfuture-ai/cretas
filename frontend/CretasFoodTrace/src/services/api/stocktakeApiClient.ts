@@ -23,6 +23,13 @@ export interface StocktakeItemDTO {
 }
 
 export interface StocktakeDTO {
+  /**
+   * 盘点人自我确认「账实一致」。为 true 时**按设计不含品项明细**，
+   * 走条件节点直达 APPROVED（PR #250）。
+   *
+   * ⚠️ 屏上必须把这一种空和「数据没落」区分开 —— 两者在 items.length === 0 上长得一样。
+   */
+  selfConfirmedZeroDifference?: boolean;
   id: string;
   factoryId: string;
   stocktakeNo: string;

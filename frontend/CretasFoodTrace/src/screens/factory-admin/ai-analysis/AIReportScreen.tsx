@@ -108,7 +108,7 @@ export function AIReportScreen() {
           <Text
             style={[styles.filterTabText, filterType === type && styles.filterTabTextActive]}
           >
-            {type === 'all' ? t('common.all') : getReportTypeLabel(type)}
+            {type === 'all' ? t('common:all') : getReportTypeLabel(type)}
           </Text>
         </TouchableOpacity>
       ))}

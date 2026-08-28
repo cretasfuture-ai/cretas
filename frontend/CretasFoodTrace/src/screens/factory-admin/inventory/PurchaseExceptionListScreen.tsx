@@ -222,7 +222,7 @@ export default function PurchaseExceptionListScreen() {
               物料: {decideTarget.materialName || '—'}
             </Text>
             <Text variant="bodySmall" style={styles.contextRow}>
-              采购单: {decideTarget.purchaseOrderNumber || decideTarget.purchaseOrderId}
+              采购单: {decideTarget.purchaseOrderNumber || '未能关联到采购单号'}
             </Text>
             <Text variant="bodySmall" style={styles.contextRow}>
               异常: {EXCEPTION_TYPE_LABEL[decideTarget.exceptionType] || decideTarget.exceptionType}
@@ -303,14 +303,20 @@ export default function PurchaseExceptionListScreen() {
             {item.materialName || '—'}
           </Text>
 
+          {/*
+            ⛔ 不要 `|| item.purchaseOrderId` —— 那是个 UUID，屏上显示成
+            「采购单: 39603589-739e-4094-ac50-ab745e977077」，而同一个 App 的采购单列表
+            用的是可读的 PO-20260828-0001。UUID 对使用者不是信息，是噪声，
+            而且会让人以为「这就是单号」。后端已在读时补 purchaseOrderNumber（2026-08-28）；
+            万一仍然拿不到，就明说拿不到。
+          */}
           <Text variant="bodySmall" style={styles.subInfo}>
-            采购单: {item.purchaseOrderNumber || item.purchaseOrderId}
+            采购单: {item.purchaseOrderNumber || '未能关联到采购单号'}
           </Text>
-          {item.supplierName && (
-            <Text variant="bodySmall" style={styles.subInfo}>
-              供应商: {item.supplierName}
-            </Text>
-          )}
+          {/* 原来 supplierName 为空时整行不渲染 —— 屏上分不清「没有供应商」和「没查到」。 */}
+          <Text variant="bodySmall" style={styles.subInfo}>
+            供应商: {item.supplierName || '—'}
+          </Text>
 
           {item.varianceQuantity != null && (
             <Text variant="bodySmall" style={[styles.subInfo, { color: typeColor }]}>
@@ -459,7 +465,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   dateText: { color: '#999' },
-  decideButton: { backgroundColor: '#C62828', borderRadius: 6 },
+  // ⚠️ 原来是危险红 #C62828。这个按钮只是打开一个决策弹窗（分诊），
+  // 本身不做任何不可逆的事 —— 用危险色会把「需要你看一眼」渲染成「危险操作」，
+  // 与第一轮 V45「收货用红色危险按钮」同一个颜色与风险倒置。
+  decideButton: { backgroundColor: '#1976D2', borderRadius: 6 },
   decideButtonLabel: { fontSize: 12 },
   resolvedChip: { backgroundColor: '#E8F5E9' },
   resolvedText: { color: '#2E7D32', fontSize: 11 },

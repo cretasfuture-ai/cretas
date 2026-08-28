@@ -406,7 +406,7 @@ const QualityCheckItemDetailScreen: React.FC = () => {
           <Icon source="alert-circle" size={48} color="#e53e3e" />
           <Text style={styles.errorText}>{error || t('qualityCheckItemDetail.notFound', '质检项不存在')}</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={loadItem}>
-            <Text style={styles.retryText}>{t('common.retry', '重试')}</Text>
+            <Text style={styles.retryText}>{t('dispatcher-complete:common.retry', '重试')}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -669,7 +669,7 @@ const QualityCheckItemDetailScreen: React.FC = () => {
                       )}
                       {!binding.enabled && (
                         <Chip compact style={styles.disabledChip}>
-                          {t('common.disabled', '已禁用')}
+                          {t('common:disabled', '已禁用')}
                         </Chip>
                       )}
                     </View>
@@ -853,7 +853,7 @@ const QualityCheckItemDetailScreen: React.FC = () => {
             style={[styles.statusChip, { backgroundColor: item.enabled ? '#E8F5E9' : '#FFEBEE' }]}
             textStyle={{ color: item.enabled ? '#2E7D32' : '#C62828', fontSize: 11 }}
           >
-            {item.enabled ? t('common.enabled', '启用') : t('common.disabled', '禁用')}
+            {item.enabled ? t('common:enabled', '启用') : t('common:disabled', '禁用')}
           </Chip>
         </View>
       </View>
