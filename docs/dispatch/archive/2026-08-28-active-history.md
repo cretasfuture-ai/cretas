@@ -1,0 +1,3 @@
+# Dispatch archive — 2026-08-28
+
+- `SOP-DAILY-SYNC-20260828` — `merged` — Owner: `codex/automation-sop` — Base SHA `5cd873600bf9dc0025bf6aecddf089b31ef834a1` → release SHA `0f3c571126a2047e527e22a51869cfbfecb084ae`. 工厂与餐饮独立完成 AI Assist、在线 SOP、canonical RAG 与真实回答同步：PR #274/#276 更新双线 SOP/KB，PR #278 修复餐饮高峰只读等价问法，PR #279 修复工厂未知批次指标等价问法。目标合同 144 passed；生产 migration dry-run `would-apply: 0`；三页 exact-main 原子替换并保留 `bak.sop-20260828-0940`；只重建 `f006-production-full-chain-sop.md`（81 块）与 `restaurant-full-chain-sop.html`（88 块），未变化餐饮来源保持 250/176 块，`.NEW=0`。Python 已从 clean exact-main 发布，服务健康；工厂与餐饮真实 HTTP 等价问题、固定基准及 source 隔离均通过；生产 ERP 业务写入 0。范围锁已释放，worktree/分支按规则保留。
