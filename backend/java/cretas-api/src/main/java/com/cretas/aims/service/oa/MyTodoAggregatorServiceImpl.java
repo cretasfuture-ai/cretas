@@ -398,7 +398,7 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             submittedAt = stocktake.getCreatedAt();
         }
 
-        return TodoItemDTO.builder()
+        TodoItemDTO dto = TodoItemDTO.builder()
                 .type(TodoType.STOCKTAKE_APPROVAL)
                 .refId(stocktake.getId())
                 .refNumber(stocktake.getStocktakeNo())
@@ -409,6 +409,17 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                 .needDetail(true)  // 盘点无金额 → 保守 true
                 .detailPath("TodoDetail/stocktake/" + stocktake.getId())
                 .build();
+
+        String instanceId = stocktake.getWorkflowInstanceId();
+        dto.setInstanceId(instanceId);
+        if (instanceId != null && workflowEngineService != null) {
+            workflowEngineService.getInstance(stocktake.getFactoryId(), instanceId)
+                    .map(ApprovalWorkflowInstance::getCurrentNodeIds)
+                    .filter(nodes -> !nodes.isEmpty())
+                    .map(nodes -> nodes.get(0))
+                    .ifPresent(dto::setExpectedNodeId);
+        }
+        return dto;
     }
 
     // ── 付款（出纳） ──────────────────────────────────────────────────────

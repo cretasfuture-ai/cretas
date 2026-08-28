@@ -17,6 +17,7 @@ import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
 import com.cretas.aims.entity.inventory.SalesPriceAdjustmentRecord;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
@@ -40,6 +41,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -436,6 +438,30 @@ class MyTodoAggregatorServiceTest {
                     .orElseThrow();
             assertThat(item.getCounterparty()).isEqualTo("成品仓");
             assertThat(item.getCounterparty()).isNotEqualTo("WH-001");
+        }
+
+        @Test
+        @DisplayName("盘点审批: 待办带 OA 实例和当前节点, RN 才能调用统一动作入口")
+        void stocktakeTodo_exposesOaActionContext() {
+            FactoryStocktake stocktake = fakeStocktake("st-oa", "ST-202606-OA");
+            stocktake.setWorkflowInstanceId("inst-stocktake-oa");
+            when(stocktakeRepository.findByFactoryIdAndOptionalStatus(
+                    eq(FACTORY_ID), eq(FactoryStocktake.Status.PENDING_APPROVAL), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(stocktake)));
+            when(workflowEngineService.getInstance(FACTORY_ID, "inst-stocktake-oa"))
+                    .thenReturn(Optional.of(ApprovalWorkflowInstance.builder()
+                            .id("inst-stocktake-oa")
+                            .factoryId(FACTORY_ID)
+                            .currentNodeIds(new ArrayList<>(List.of("approval_finance")))
+                            .build()));
+
+            TodoItemDTO item = service.listTodos(FACTORY_ID, "finance_manager").stream()
+                    .filter(t -> t.getType() == TodoType.STOCKTAKE_APPROVAL)
+                    .findFirst()
+                    .orElseThrow();
+
+            assertThat(item.getInstanceId()).isEqualTo("inst-stocktake-oa");
+            assertThat(item.getExpectedNodeId()).isEqualTo("approval_finance");
         }
 
         @Test
