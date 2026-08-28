@@ -846,4 +846,104 @@ class YieldCalculationServiceImplTest {
         assertThat(scalding.getYieldRate()).isEqualByComparingTo("0.8889");
         assertThat(scalding.getCumulativeYieldRate()).isEqualByComparingTo("0.8000");
     }
+
+    // I-2 (2026-08-28 整分支终审): semiOutputs 也要汇进本道的半成品产出
+    //
+    // RN 改用 semiOutputs 之后, 旧的 semiOutputQuantity / semiCode 两个字段恒为 null
+    // ⇒ web-admin 批次详情页「产出类型 双产出 / 半成品产出 —」: 数据进库了, 页面看不到。
+    // ⛔ 修法不是在 YieldReportServiceImpl 里把第一条镜像回 semiCode/semiOutputQuantity ——
+    //    那是造第二份, 一定会漂。汇聚只在读侧做一次。
+
+    private ProductionReport multiSemiRpt(long taskId, int order, String out,
+                                          java.util.List<Map<String, Object>> semiOutputs) {
+        return ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(taskId).processOrder(order)
+                .inputQuantity(new BigDecimal("1000")).inputUnit("kg")
+                .outputQuantity(new BigDecimal(out)).outputUnit("kg")
+                .outputKind("BOTH")
+                .semiOutputs(semiOutputs)
+                .build();
+    }
+
+    @Test
+    void semiOutputs_areAggregatedIntoStepSemiOutput() {
+        // 金检: 良品 950 进良品半成品, 回料 50 进回料半成品 (RN 只发 semiOutputs, 不发 semiCode)
+        List<ProductionReport> reports = List.of(multiSemiRpt(1, 1, "950", List.of(
+                Map.of("semiCode", "PTSEMI-LSM-0010", "quantity", new BigDecimal("950.00")),
+                Map.of("semiCode", "PTSEMI-LSM-0003", "quantity", new BigDecimal("50.00")))));
+
+        StepYieldDTO step = svc.calculateBatchYield(reports, null).getSteps().get(0);
+
+        assertThat(step.getSemiOutputQuantity())
+                .as("Σ 本道半成品产出量 —— 修复前恒 null, 页面显示「—」")
+                .isEqualByComparingTo("1000.00");
+        assertThat(step.getSemiOutputUnit())
+                .as("RN 多产出不发 semiOutputUnit ⇒ 退回本道产出单位 (与过账侧同一条 fallback 链)")
+                .isEqualTo("kg");
+        assertThat(step.getSemiCode())
+                .as("两个码时不许挑一个当代表 —— 挑哪个都是编的, 逐码明细在 semiOutputs 里")
+                .isNull();
+        assertThat(step.getSemiOutputs())
+                .as("逐码明细: 页面要能看到「哪个码各多少」")
+                .containsExactly(
+                        Map.of("semiCode", "PTSEMI-LSM-0010", "quantity", new BigDecimal("950.00")),
+                        Map.of("semiCode", "PTSEMI-LSM-0003", "quantity", new BigDecimal("50.00")));
+    }
+
+    @Test
+    void semiOutputs_singleCode_stillFillsSemiCodeForTheExistingCell() {
+        // 只有一个产出码时, semiCode 仍然填上 —— 页面那个小字副标题不用改就能显示
+        List<ProductionReport> reports = List.of(multiSemiRpt(1, 1, "950", List.of(
+                Map.of("semiCode", "PTSEMI-LSM-0010", "quantity", new BigDecimal("950.00")))));
+
+        StepYieldDTO step = svc.calculateBatchYield(reports, null).getSteps().get(0);
+
+        assertThat(step.getSemiOutputQuantity()).isEqualByComparingTo("950.00");
+        assertThat(step.getSemiCode()).isEqualTo("PTSEMI-LSM-0010");
+    }
+
+    @Test
+    void semiOutputs_multipleReportsOnSameStep_sumPerCode() {
+        // 同一道分两次报工 (留单继续) → 逐码累加, 不是后一次覆盖前一次
+        List<ProductionReport> reports = List.of(
+                multiSemiRpt(1, 1, "500", List.of(
+                        Map.of("semiCode", "PTSEMI-LSM-0010", "quantity", new BigDecimal("450")),
+                        Map.of("semiCode", "PTSEMI-LSM-0003", "quantity", new BigDecimal("50")))),
+                multiSemiRpt(1, 1, "450", List.of(
+                        Map.of("semiCode", "PTSEMI-LSM-0010", "quantity", new BigDecimal("430")),
+                        Map.of("semiCode", "PTSEMI-LSM-0003", "quantity", new BigDecimal("20")))));
+
+        StepYieldDTO step = svc.calculateBatchYield(reports, null).getSteps().get(0);
+
+        assertThat(step.getSemiOutputQuantity()).isEqualByComparingTo("950");
+        assertThat(step.getSemiOutputs()).containsExactly(
+                Map.of("semiCode", "PTSEMI-LSM-0010", "quantity", new BigDecimal("880")),
+                Map.of("semiCode", "PTSEMI-LSM-0003", "quantity", new BigDecimal("70")));
+    }
+
+    /**
+     * 零回归: 旧式单产出 (semiCode + semiOutputQuantity, semiOutputs 为空) 的三个字段一字不变,
+     * 且不长出 semiOutputs 明细 (⛔ 不给旧数据造一份新的第二份)。
+     */
+    @Test
+    void legacySemiFields_unchanged_whenSemiOutputsAbsent() {
+        List<ProductionReport> reports = List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(1L).processOrder(1)
+                .inputQuantity(new BigDecimal("1000")).inputUnit("kg")
+                .outputQuantity(new BigDecimal("950")).outputUnit("kg")
+                .outputKind("SEMI")
+                .semiCode("SEMI-LEGACY").semiOutputQuantity(new BigDecimal("950")).semiOutputUnit("g")
+                .build());
+
+        StepYieldDTO step = svc.calculateBatchYield(reports, null).getSteps().get(0);
+
+        assertThat(step.getSemiOutputQuantity()).isEqualByComparingTo("950");
+        assertThat(step.getSemiCode()).isEqualTo("SEMI-LEGACY");
+        assertThat(step.getSemiOutputUnit())
+                .as("旧路径的单位原样取报工上的值, ⛔ 不被 outputUnit 顶掉")
+                .isEqualTo("g");
+        assertThat(step.getSemiOutputs()).isNull();
+    }
 }

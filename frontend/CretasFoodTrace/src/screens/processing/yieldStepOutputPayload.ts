@@ -21,11 +21,17 @@ export interface OutputPayloadResult {
  * ⚠️ 契约(调用方职责, 2026-08-28 评审 Critical 补): `options` **必须已经按当前工序过滤过**
  *    (`getOutputOptions(batchId)` 返回的是整个批次所有工序的产出项, 这个函数不知道"当前工序"
  *    是谁, 也不做过滤 —— 过滤是调用点的职责, 见 `YieldStepReportScreen.tsx` 里的 `taskOptions`)。
- *    并且**同一次调用里最多应有一个 `isRework: true` 的项**(一道工序至多一个回料端口)。
- *    若违反后一条(调用方传入了两个及以上 isRework 项), 本函数的行为是明确但非直觉的:
- *    `semiOutputs` 里两条都会保留, 但 `defectQuantity` 只取**最后一条**(循环内后写覆盖前写)——
- *    不做去重/报错。这不是推荐用法, 只是把行为钉死, 不要在这层加过滤逻辑
- *    (纯函数不该知道"当前工序"是谁)。
+ *
+ * 🔴 `defectQuantity` = 本次调用里**所有** `isRework` 项之和 (「本道不良品总数」)。
+ *    2026-08-28 整分支终审 I-4 前这里是 last-write-wins(后写覆盖前写), 靠一句 Javadoc 声明
+ *    「同一次调用里最多应有一个 isRework 项」—— 而**没有任何一层保证这个前提**: 画布的
+ *    `addOutputToProcess(processId, { rework: true })` 可以对同一工序点两次, 后端也不校验。
+ *    于是「一道工序配两个回料去向(金属异物 / 非金属异物分开回收)」这个合法配置下, 操作员两栏
+ *    各填 30 / 20 ⇒ `semiOutputs` 两条都正确入库, 而 `defectQuantity` 只有 20, 质量账少记 60%
+ *    且无任何提示。求和才是这个字段的口径。
+ *
+ * ⛔ 求和不许把「都填了 0」折成「没填」: 一个 isRework 项都没填 → `undefined`;
+ *    填了(哪怕都是 0) → 求和结果(可能是 0)。那正是 2026-08-26 事故要分开的两件事。
  */
 export function buildSemiOutputsPayload(
   options: OutputOptionItem[],
@@ -43,7 +49,8 @@ export function buildSemiOutputsPayload(
     if (raw === undefined || raw.trim() === '') continue;   // 没填 → 跳过, 不产生 0
     const n = Number.parseFloat(raw);
     if (Number.isNaN(n) || n < 0) continue;
-    if (opt.isRework) defectQuantity = n;                    // 填了就记, 包括 0
+    // 填了就记, 包括 0。多个回料项求和 —— ⛔ 不是后写覆盖前写(那会静默漏记, 见函数注释 I-4)。
+    if (opt.isRework) defectQuantity = (defectQuantity ?? 0) + n;
     if (n > 0) semiOutputs.push({ semiCode: code, quantity: n, isRework: !!opt.isRework });
   }
 

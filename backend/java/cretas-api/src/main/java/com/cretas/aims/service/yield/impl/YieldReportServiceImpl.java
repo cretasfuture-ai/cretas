@@ -346,9 +346,17 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .outputQuantity(effOutput).outputUnit(effOutputUnit)
                 // 不良品数 (质量账)。null 原样传 null —— ⛔ 不兜底成 0。
                 .defectQuantity(req.getDefectQuantity())
-                // 良品数 = 本道产出。outputQuantity 口径已是良品, 这里只是把它显式化,
-                // 让「良品 + 不良品」两个数在同一行上可比 —— 报表侧不用再去别处推。
-                .goodQuantity(effOutput)
+                // 良品数只有在<b>有人清点过不良品</b>时才是真读数。没清点就是不知道 —— ⛔ 不许用产出量顶替。
+                //
+                // 见 V20260826_05/06 与 GoodQuantityIsNotFabricatedContractTest:
+                //   「每一个非空的 good_quantity 都是代码填的, 没有一条代表某个人说了这批零不良」。
+                // 无条件 .goodQuantity(effOutput) 就是在另一个实体 (ProductionReport) 上把同一个动作
+                //   再做一遍: F006 现在 43 张报工单一张都没填过不良品, 那样每张 OUTPUT 报工都会带
+                //   good_quantity = output_quantity, 汇进人效导出的「合格数量」列
+                //   ⇒ 每个工人每天「合格数量 = 产出数量、不良率 0.00%」, 而没有任何一个人清点过。
+                //   比原来那一列的 0 更危险 —— 0 看得出不对, 这个数看起来权威。
+                // ⚠️ defectQuantity 明确填 0 也算清点过 (「没清点」≠「确认零不良」), 所以判据是 != null。
+                .goodQuantity(req.getDefectQuantity() != null ? effOutput : null)
                 .totalWorkMinutes(effectiveWorkMinutes)   // 适配单元3: 多段=Σ段时长, 单段=effReqWorkMinutes
                 .totalWorkers(effectiveWorkers)           // 适配单元3: 多段=MAX headcount (修 M2), 单段=effReqWorkerCount
                 .laborCost(laborCost)                 // A.4: 本道人工成本 (null=缺输入); 三阶段: 仅 SEGMENT/legacy

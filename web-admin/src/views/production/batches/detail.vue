@@ -1187,7 +1187,14 @@ function goToReversalList() {
               <template #default="{ row }">
                 <template v-if="row.semiOutputQuantity != null">
                   <span>{{ formatNum(row.semiOutputQuantity) }} {{ row.semiOutputUnit || '' }}</span>
-                  <div v-if="row.semiCode" class="semi-code-text">{{ row.semiCode }}</div>
+                  <!-- 画布 1 进 N 出: 逐码明细 (良品 / 回料各多少)。多个码时后端不给 semiCode
+                       —— 挑哪一个当代表都是编的, 所以这里逐条列。 -->
+                  <div v-if="row.semiOutputs?.length" class="semi-code-text">
+                    <div v-for="s in row.semiOutputs" :key="s.semiCode">
+                      {{ s.semiCode }} {{ formatNum(s.quantity) }}
+                    </div>
+                  </div>
+                  <div v-else-if="row.semiCode" class="semi-code-text">{{ row.semiCode }}</div>
                 </template>
                 <span v-else>—</span>
               </template>
