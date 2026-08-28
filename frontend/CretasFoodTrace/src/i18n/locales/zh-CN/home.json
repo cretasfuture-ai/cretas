@@ -699,6 +699,13 @@
       "reserved": "已预留",
       "depleted": "已用完",
       "usedUp": "已耗尽",
+      "inStock": "库存中",
+      "fresh": "鲜品",
+      "frozen": "冻品",
+      "producingReserved": "生产预留",
+      "scrapped": "已报废",
+      "inspecting": "质检中",
+      "defective": "不良品",
       "expired": "已过期"
     }
   },
@@ -964,6 +971,13 @@
       "reserved": "已预留",
       "depleted": "已用完",
       "usedUp": "已耗尽",
+      "inStock": "库存中",
+      "fresh": "鲜品",
+      "frozen": "冻品",
+      "producingReserved": "生产预留",
+      "scrapped": "已报废",
+      "inspecting": "质检中",
+      "defective": "不良品",
       "expired": "已过期",
       "frozen": "冷冻中"
     }

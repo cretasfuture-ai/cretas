@@ -97,9 +97,16 @@ export function MaterialBatchScreen() {
   const getStatusColor = (status: string): string => {
     const colors: Record<string, string> = {
       available: '#48bb78',
+      inStock: '#48bb78',
+      fresh: '#48bb78',
+      frozen: '#4299e1',
       reserved: '#ed8936',
+      producingReserved: '#ed8936',
+      inspecting: '#805ad5',
+      defective: '#e53e3e',
       depleted: '#a0aec0',
       usedUp: '#a0aec0',
+      scrapped: '#a0aec0',
       expired: '#e53e3e',
     };
     return colors[statusKey(status)] || '#a0aec0';
@@ -108,9 +115,16 @@ export function MaterialBatchScreen() {
   const getStatusLabel = (status: string): string => {
     const labels: Record<string, string> = {
       available: t('materialBatch.status.available'),
+      inStock: t('materialBatch.status.inStock'),
+      fresh: t('materialBatch.status.fresh'),
+      frozen: t('materialBatch.status.frozen'),
       reserved: t('materialBatch.status.reserved'),
+      producingReserved: t('materialBatch.status.producingReserved'),
+      inspecting: t('materialBatch.status.inspecting'),
+      defective: t('materialBatch.status.defective'),
       depleted: t('materialBatch.status.depleted'),
       usedUp: t('materialBatch.status.usedUp'),
+      scrapped: t('materialBatch.status.scrapped'),
       expired: t('materialBatch.status.expired'),
     };
     // 兜底仍然回落到原始串 —— 那是「我们没见过这个状态」的诚实表现，
