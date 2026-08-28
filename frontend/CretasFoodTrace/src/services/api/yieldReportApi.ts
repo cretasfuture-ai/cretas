@@ -147,6 +147,8 @@ export interface OutputOptionItem {
   processName: string;
   semiCode: string;       // 半成品编码; 非空时前端显示"剩余转半成品"栏
   processOrder: number;
+  /** 这一项是不是回料 (金检/X光 剔出的不良品去处); 旧后端不下发此字段 → undefined，按普通半成品渲染 */
+  isRework?: boolean;
 }
 export interface OutputOptionsResponse {
   items: OutputOptionItem[];
@@ -267,6 +269,12 @@ export interface YieldReportRequest {
   semiOutputQuantity?: number;
   /** SP1 半成品编码 (来自 output-options 接口返回; 不许前端自由输入, F7 防呆) */
   semiCode?: string;
+
+  // ==================== 不良品→回料链路 (SP1→多产出) ====================
+  /** 本道不良品数 (质量账); undefined=没清点, 0=确认零不良 —— 两者不可合并 */
+  defectQuantity?: number;
+  /** 多半成品产出 (画布 1 进 N 出); 为空时后端走旧的单产出字段 */
+  semiOutputs?: { semiCode: string; quantity: number; isRework: boolean }[];
 
   /** CALC-003 成本类别 RAW_MATERIAL/SEASONING/AUXILIARY/PACKAGING/OTHER; null=按工序顺序启发式分类 (通常由工序配置派生, 不由操作员手填) */
   costCategory?: 'RAW_MATERIAL' | 'SEASONING' | 'AUXILIARY' | 'PACKAGING' | 'OTHER';
