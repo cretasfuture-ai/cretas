@@ -27,6 +27,10 @@ public class ProductUpdateTool extends AbstractBusinessTool {
     @Autowired
     private ProductTypeRepository productTypeRepository;
 
+    /** 下架前查在飞销售订单; required=false 只为让隔离测试能不装它, ⛔ null 不等于放行。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.product.ProductRetirementGuard productRetirementGuard;
+
     @Override
     public String getToolName() {
         return "product_update";
@@ -207,6 +211,15 @@ public class ProductUpdateTool extends AbstractBusinessTool {
         if (shelfLife != null) { product.setShelfLifeDays(shelfLife); updatedFields.put("shelfLife", shelfLife); }
         if (status != null) {
             boolean active = "ACTIVE".equalsIgnoreCase(status) || "DEVELOPING".equalsIgnoreCase(status);
+            // 下架闸必须在 setIsActive 之前 —— 它读实体里的旧状态判方向。
+            // 闸没注入时拒绝下架, ⛔ 不是跳过 (安全闸静默 no-op 正是本仓踩过的形态)。
+            if (!active && Boolean.TRUE.equals(product.getIsActive())) {
+                if (productRetirementGuard == null) {
+                    throw new IllegalStateException(
+                            "ProductRetirementGuard 未注入 —— 下架闸不可用, 拒绝下架 productTypeId=" + productTypeId);
+                }
+                productRetirementGuard.assertRetirable(product, Boolean.FALSE);
+            }
             product.setIsActive(active);
             updatedFields.put("status", status);
         }
