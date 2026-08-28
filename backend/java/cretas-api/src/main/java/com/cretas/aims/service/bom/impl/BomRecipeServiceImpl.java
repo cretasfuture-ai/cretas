@@ -1382,6 +1382,11 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         Map<String, BomRecipeItem> recovered = new HashMap<>();
         for (BomRecipeItem item : activeItems) {
             if ("PACKAGING".equalsIgnoreCase(item.getMaterialCategory())
+                    // 回料行不来自 Workflow 投入槽, 没有「被删掉的前身」可认领;
+                    // 而它的 material_type_id 是 NULL, 下面那句 `material_type_id = :materialTypeId`
+                    // 会绑 NULL —— SQL 里 `= NULL` 恒不成立, 于是这次查询必然空手而归。
+                    // 明写这一条不是为了改结果, 是为了让「它不参与」是**声明的**而不是碰巧的。
+                    || BomRecipeItem.isSemiFinishedRow(item)
                     || hasText(item.getWorkflowMaterialNodeId())
                     || hasText(item.getWorkflowInputPortId())
                     || hasText(item.getWorkflowEdgeId())) {
@@ -1847,7 +1852,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
                     "bomItems");
         }
         for (BomRecipeItem item : items) {
-            if (item.getMaterialTypeId() == null || item.getMaterialTypeId().isBlank()) {
+            // 半成品(回料)行的身份是 semiFinishedRefCode 而不是 materialTypeId ——
+            // 对它要求「关联物料」等于要求它去原料仓建一个假档案, 那正是被否掉的方案。
+            // 两列恰有一个非空由 DB 约束 chk_bri_material_ref_xor 钉死, 这里只挑该看的那一列。
+            boolean semiFinished = BomRecipeItem.isSemiFinishedRow(item);
+            if (!semiFinished
+                    && (item.getMaterialTypeId() == null || item.getMaterialTypeId().isBlank())) {
                 throw bomError(409,
                         "BOM 明细存在未关联物料的行，不能激活",
                         "BOM_ACTIVATION_MATERIAL_REQUIRED",
@@ -1884,8 +1894,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     }
 
     private String displayItemName(BomRecipeItem item) {
-        return item.getMaterialName() == null || item.getMaterialName().isBlank()
-                ? item.getMaterialTypeId() : item.getMaterialName();
+        if (item.getMaterialName() != null && !item.getMaterialName().isBlank()) {
+            return item.getMaterialName();
+        }
+        // 回料行没有 materialTypeId, 兜到它的身份列; ⛔ 不返回 "null" 字面量。
+        return item.getMaterialTypeId() != null
+                ? item.getMaterialTypeId() : item.getSemiFinishedRefCode();
     }
 
     private BusinessException bomError(int status, String message, String code, String hint, String target) {
@@ -2404,6 +2418,13 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BomRecipe recipe,
             BomRecipeItemDTO dto,
             Set<Long> claimed) {
+        // 回料行不来自 Workflow 投入槽 —— 这整个方法在做的事(把请求认领到一条骨架行上)
+        // 对它没有意义。⛔ 更要紧的是下面那句 Objects.equals(item.getMaterialTypeId(),
+        // dto.getMaterialTypeId()) 在两边都是 null 时**恒真**: 让回料行走进去,
+        // 等于给「null == null」开了一扇门, 迟早认领到别的行上。明写这一条把门关上。
+        if (isSemiFinishedDto(dto)) {
+            return null;
+        }
         List<BomRecipeItem> existingItems =
                 itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
         int identityCount = stableFieldCount(dto);
@@ -2458,6 +2479,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             BomRecipe recipe,
             BomRecipeItem item,
             BomRecipeItemDTO dto) {
+        if (isSemiFinishedDto(dto)) {
+            return applySemiFinishedItem(factoryId, item, dto);
+        }
         RawMaterialType material = materialTypeRepo.findById(dto.getMaterialTypeId())
                 .filter(candidate -> candidate.getDeletedAt() == null)
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -2483,11 +2507,73 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         return item;
     }
 
+    /**
+     * 这一条 DTO 是不是「半成品(回料)行」。
+     *
+     * <p>判据是 {@code semiFinishedRefCode} 非空 —— 与实体侧
+     * {@link BomRecipeItem#isSemiFinishedRow} 和 DB 约束
+     * {@code chk_bri_material_ref_xor} 同一条。⛔ 不按 {@code materialCategory}
+     * 字符串判: 那是可以被写错的展示字段, 身份列才是权威。
+     */
+    private static boolean isSemiFinishedDto(BomRecipeItemDTO dto) {
+        return dto != null && dto.getSemiFinishedRefCode() != null
+                && !dto.getSemiFinishedRefCode().isBlank();
+    }
+
+    /**
+     * 写一条半成品(回料)行 —— 不良品在下一批当回料重投, 需要在标准配方里占一行。
+     *
+     * <p>与原料行的三点不同, 都是<b>因为回料不在原料仓</b>:
+     * <ol>
+     *   <li>没有 {@code materialTypeId} (原料档案外键), 身份是 {@code semiFinishedRefCode}
+     *       = {@code semi_finished_inventory.intermediate_batch_no};</li>
+     *   <li>不做 {@code RawMaterialType} 查档 / 跨厂校验 / 单位维度校验 / 包装层级推导 ——
+     *       没有档案可查, 强行套用只会拿到 404;</li>
+     *   <li>不做 {@code applyMaterialMasterPricing}: 回料的成本来自 WIP 移动均价
+     *       ({@link com.cretas.aims.service.bom.NestedBomCostService} 的「先做后用」),
+     *       ⛔ 不从原料档案继承单价。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>不校验该编码当前存不存在于 WIP</b>: 标准配方是在半成品被生产出来<b>之前</b>
+     * 就要写好的, 要求先有批次等于永远配不上。取不到 WIP 时成本诚实返 null
+     * (见 NestedBomCostService), ⛔ 不伪造 0。
+     */
+    private BomRecipeItem applySemiFinishedItem(
+            String factoryId, BomRecipeItem item, BomRecipeItemDTO dto) {
+        // 单位空/不可识别由 normalizeItemUnit 统一拦 —— ⛔ 不在这里再写一份判据 (形态 D)。
+        normalizeItemUnit(factoryId, dto);
+        item.setMaterialTypeId(null);
+        item.setSemiFinishedRefCode(dto.getSemiFinishedRefCode().trim());
+        item.setMaterialName(dto.getSemiFinishedRefCode().trim());
+        // 包装层级只对包材有意义; 回料行一律清空, 免得从别的分支带进残值。
+        item.setPackagingSpecId(null);
+        item.setPackagingSpecNameSnapshot(null);
+        item.setPackagingRole(null);
+        item.setNaturalQuantity(null);
+        item.setNaturalUnit(null);
+        item.setPackagingPackageUnitSnapshot(null);
+        item.setPackagingBaseUnitSnapshot(null);
+        item.setPackagingConversionFactorSnapshot(null);
+        item.setPrimaryCode(null);
+        item.setPrimaryCodeRef(null);
+        validateItemQuantity(dto);
+        applyDtoToItem(dto, item);
+        // applyDtoToItem 默认 RAW —— 回料行必须落到自己的类别, 否则下游 (领料分类、
+        // 替代物料闸) 会把它当原料处理。
+        item.setMaterialCategory(BomRecipeItem.CATEGORY_SEMI_FINISHED);
+        item.setPriceUnit(item.getUnit());
+        item.setQuantityToPriceFactor(BigDecimal.ONE);
+        return item;
+    }
+
     /** Build new item from DTO with material_name + default unit rehydrated from raw_material_types. */
     private BomRecipeItem buildItem(String factoryId, BomRecipe recipe, BomRecipeItemDTO dto) {
         BomRecipeItem item = new BomRecipeItem();
         item.setRecipeId(recipe.getId());
         item.setFactoryId(factoryId);
+        if (isSemiFinishedDto(dto)) {
+            return applySemiFinishedItem(factoryId, item, dto);
+        }
         item.setMaterialTypeId(dto.getMaterialTypeId());
 
         // Pre-check material_type_id exists in dictionary (better UX than FK violation).

@@ -15,8 +15,14 @@ import java.math.RoundingMode;
 /**
  * M-BOM-1 BOM 配方项 (子表).
  *
- * <p>硬外键 {@code material_type_id → raw_material_types(id)} ON DELETE RESTRICT —
+ * <p>外键 {@code material_type_id → raw_material_types(id)} ON DELETE RESTRICT —
  * 禁手写物料名称 (客户原话 May10 line 217-222 "物料名称是要手写吗? — 应该是 SELECT").
+ *
+ * <p>⚠️ 2026-08-29 起 {@code material_type_id} <b>可空</b>: 回料(半成品)行不指向原料档案,
+ * 它的身份是 {@link #semiFinishedRefCode}。DB 侧 {@code chk_bri_material_ref_xor} 保证
+ * 这两列<b>恰有一个</b>非空 —— 也就是说「禁手写」这条没有放松, 只是身份来源多了一个:
+ * 原料从 {@code raw_material_types} 选, 回料从 {@code semi_finished_inventory} 选。
+ * 见 V20261101_10。
  *
  * <p>{@link #calculateActualQuantity()} 实现出成率折算公式 (spec SCHEMA_DESIGN line 1340):
  * <pre>{@code
@@ -51,8 +57,15 @@ public class BomRecipeItem extends BaseEntity {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
-    /** 硬外键 raw_material_types.id (DB-level enforced, ON DELETE RESTRICT). */
-    @Column(name = "material_type_id", nullable = false, length = 191)
+    /**
+     * 外键 raw_material_types.id (DB-level enforced, ON DELETE RESTRICT).
+     *
+     * <p>⚠️ 2026-08-29 起<b>可空</b>: 半成品(回料)行不指向原料档案, 身份由
+     * {@link #semiFinishedRefCode} 承担。DB 侧 {@code chk_bri_material_ref_xor}
+     * 保证这两列<b>恰有一个</b>非空 —— 所以读这个字段前必须判空,
+     * 或者先用 {@link #isSemiFinishedRow(BomRecipeItem)} 排除半成品行。
+     */
+    @Column(name = "material_type_id", length = 191)
     private String materialTypeId;
 
     /** Denormalized name for display. Service rehydrates from raw_material_types if needed. */
@@ -110,6 +123,37 @@ public class BomRecipeItem extends BaseEntity {
     /** 判定这一行是不是副产声明 (产出), 而非投入。 */
     public static boolean isByproductCategory(String materialCategory) {
         return CATEGORY_BYPRODUCT.equalsIgnoreCase(materialCategory);
+    }
+
+    /**
+     * 半成品(回料)投入行的类别值 —— 与 RAW / AUXILIARY / PACKAGING 并列的第五类投入。
+     *
+     * <p>它记的是「这个产品用了多少上一批的回料」。回料<b>不在原料仓</b>,
+     * 在半成品库 ({@code semi_finished_inventory}), 所以这类行的
+     * {@link #materialTypeId} 为 null, 身份由 {@link #semiFinishedRefCode} 承担。
+     *
+     * <p>唯一入口, ⛔ 不要在别处写字面量 "SEMI_FINISHED"。DB 侧白名单见 V20261101_10。
+     */
+    public static final String CATEGORY_SEMI_FINISHED = "SEMI_FINISHED";
+
+    /** 判定这一行是不是半成品(回料)投入声明。 */
+    public static boolean isSemiFinishedCategory(String materialCategory) {
+        return CATEGORY_SEMI_FINISHED.equalsIgnoreCase(materialCategory);
+    }
+
+    /**
+     * 判定这一行是不是半成品(回料)行 —— <b>按身份列判, 不按分类字符串判</b>。
+     *
+     * <p>⚠️ 判据是 {@code semiFinishedRefCode} 非空, 不是
+     * {@code materialCategory == "SEMI_FINISHED"}: 前者由 DB 约束
+     * {@code chk_bri_material_ref_xor} 钉死 (它与 material_type_id 恰有一个非空),
+     * 后者只是一个可以被写错的字符串。同一条判据在
+     * {@code FactoryMaterialRequisitionServiceImpl} 里已经这么写了 (N5),
+     * 这里是把它抽成唯一定义, ⛔ 不再开第三处。
+     */
+    public static boolean isSemiFinishedRow(BomRecipeItem item) {
+        return item != null && item.getSemiFinishedRefCode() != null
+                && !item.getSemiFinishedRefCode().isBlank();
     }
 
     /** RAW / AUXILIARY / PACKAGING = 投入; BYPRODUCT = 产出的副产声明 (见 CATEGORY_BYPRODUCT). */

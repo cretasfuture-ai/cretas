@@ -195,11 +195,23 @@ public class RecursiveBomExpansionService {
                     : BigDecimal.ZERO;
             String childUnit = item.getUnit();
             BigDecimal childWastage = deriveWastageFromYield(item.getYieldRate());
-            String childName = item.getMaterialName() != null ? item.getMaterialName() : item.getMaterialTypeId();
+            // 回料(半成品)行没有 material_type_id, 它的展开锚点是 sub_product_type_id。
+            // ⛔ 不能直接传 null: expandNode 拿 null 查不到任何 BOM → 落到 buildLeaf →
+            //    库存查询也用 null → available 恒 0 → 这一行**静默**变成一个「缺料的叶子」。
+            //    那不是「没有数据」, 那是把一条真实存在的半成品链路读成了别的东西。
+            String childTypeId = item.getMaterialTypeId() != null
+                    ? item.getMaterialTypeId() : item.getSubProductTypeId();
+            String childName = item.getMaterialName() != null ? item.getMaterialName() : childTypeId;
+            if (childTypeId == null) {
+                // 回料行既没绑子产品又没有原料档案 —— 展不开就明说, 不编一个 0 库存的叶子出来。
+                log.warn("[M-MATTREE-1] BOM 行无可展开身份, 跳过: itemId={} semiFinishedRefCode={}",
+                        item.getId(), item.getSemiFinishedRefCode());
+                continue;
+            }
 
             BomTreeNode child = expandNode(
                     factoryId,
-                    item.getMaterialTypeId(),
+                    childTypeId,
                     childName,
                     childRequired,
                     level + 1,

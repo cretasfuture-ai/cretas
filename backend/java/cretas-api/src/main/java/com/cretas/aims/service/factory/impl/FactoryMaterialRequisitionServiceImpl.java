@@ -227,6 +227,21 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
 
         BigDecimal plannedQty = plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : BigDecimal.ZERO;
         for (BomRecipeItem bom : bomItems) {
+            // 🔴 2026-08-29: 回料(半成品)行**不进原料领料单**。
+            //
+            // 这张单据从头到尾是原料仓形状的: material_type_id 是 NOT NULL、挑批次走
+            // MaterialBatch 的 FEFO、调拨走 原料仓→车间仓。回料不在原料仓, 它在
+            // semi_finished_inventory —— 把它塞进来只有两种结局: 要么 NOT NULL 违约 500,
+            // 要么在原料仓里凭空要一个不存在的物料, 让仓管去找一个找不到的东西。
+            //
+            // ⛔ 这里是**跳过**不是「当它不存在」: 打 WARN 把行身份留痕, 因为
+            //    「这批要用多少回料」这条信息现在只落在 BOM 上, 出库单据是另一条链路,
+            //    本次没有建。见 PR 说明「没验到 / 未做」一节。
+            if (BomRecipeItem.isSemiFinishedRow(bom)) {
+                log.warn("领料单跳过回料行 (原料仓无此物料, 半成品出库是另一条链路): plan={} bomItemId={} semiFinishedRefCode={}",
+                        productionPlanId, bom.getId(), bom.getSemiFinishedRefCode());
+                continue;
+            }
             FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
             item.setRequisition(mr);
             item.setMaterialTypeId(bom.getMaterialTypeId());

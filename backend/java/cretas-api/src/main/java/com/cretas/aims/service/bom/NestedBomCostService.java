@@ -64,7 +64,10 @@ public class NestedBomCostService {
      */
     @Transactional(readOnly = true)
     public BigDecimal resolveItemCost(String factoryId, BomRecipeItem item) {
-        if (item.getSubProductTypeId() == null || item.getSubProductTypeId().isBlank()) {
+        boolean hasSubProduct = item.getSubProductTypeId() != null
+                && !item.getSubProductTypeId().isBlank();
+        boolean hasSemiRef = BomRecipeItem.isSemiFinishedRow(item);
+        if (!hasSubProduct && !hasSemiRef) {
             // 普通原材料行 — 走现有逻辑
             return item.computeItemCost();
         }
@@ -75,7 +78,14 @@ public class NestedBomCostService {
         }
 
         // 1. "先做后用"优先: 若有 semiFinishedRefCode, 尝试从 WIP 取移动均价
-        if (item.getSemiFinishedRefCode() != null && !item.getSemiFinishedRefCode().isBlank()) {
+        //
+        // 🔴 2026-08-29: 这一段以前**够不到** —— 方法开头是
+        //     if (subProductTypeId == null) return item.computeItemCost();
+        //    也就是说只填了 semiFinishedRefCode 的行(回料行的正常长相)一进来就被弹回
+        //    computeItemCost(), 而那条路算的是 actualQuantity × unitPrice, 回料行没有
+        //    原料档案也就没有 unitPrice ⇒ 恒 null ⇒ 整个 family 成本被判「不完整」。
+        //    机制在、注释在、单测在, 只是生产上没人能走到 (形态 B)。
+        if (hasSemiRef) {
             Optional<SemiFinishedInventory> wip = sfiRepository
                     .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
                             factoryId, item.getSemiFinishedRefCode());
@@ -88,6 +98,15 @@ public class NestedBomCostService {
             // WIP unitCost null or WIP not found → 降级到子 BOM 设计成本
             log.debug("SP1 先做后用降级: semiFinishedRefCode={} WIP unitCost 为 null 或 WIP 不存在, 降级到子 BOM 设计成本",
                     item.getSemiFinishedRefCode());
+        }
+
+        if (!hasSubProduct) {
+            // 回料行没有绑子产品 ⇒ 没有第二条成本来源。诚实返 null (⛔ 不伪造 0):
+            // 「不知道多少钱」和「不要钱」对下游完全不同 —— 后者会让标准成本看起来完整。
+            log.warn("半成品(回料)行成本未知: factoryId={}, itemId={}, semiFinishedRefCode={} "
+                            + "(WIP 无移动均价, 且未绑 subProductTypeId 可回退子 BOM 设计成本)",
+                    factoryId, item.getId(), item.getSemiFinishedRefCode());
+            return null;
         }
 
         // 2. 递归子 BOM 设计成本
@@ -167,12 +186,19 @@ public class NestedBomCostService {
     }
 
     /**
-     * 判断某 BOM 行是否为嵌套子产品行 (即需要递归成本聚合)。
+     * 判断某 BOM 行是否需要走 {@link #resolveItemCost} (而不是 {@code item.computeItemCost()})。
+     *
+     * <p>🔴 2026-08-29 修正: 以前只认 {@code subProductTypeId}, 于是**只填
+     * {@code semiFinishedRefCode} 的回料行**在两个调用点
+     * ({@code BomRecipeServiceImpl.recomputeFamilyCosts} / {@code sumItemCosts})
+     * 都被判成「普通行」→ 走 {@code actualQuantity × unitPrice} → 回料行没有原料档案
+     * 也就没有 unitPrice → 恒 null。「先做后用」那段代码因此一次都没被生产调用过。
      *
      * @param item BOM 配方行
-     * @return true 当且仅当 {@code subProductTypeId} 非 null/blank
+     * @return true 当且仅当 {@code subProductTypeId} 或 {@code semiFinishedRefCode} 非 null/blank
      */
     public boolean isNestedComponent(BomRecipeItem item) {
-        return item.getSubProductTypeId() != null && !item.getSubProductTypeId().isBlank();
+        return (item.getSubProductTypeId() != null && !item.getSubProductTypeId().isBlank())
+                || BomRecipeItem.isSemiFinishedRow(item);
     }
 }

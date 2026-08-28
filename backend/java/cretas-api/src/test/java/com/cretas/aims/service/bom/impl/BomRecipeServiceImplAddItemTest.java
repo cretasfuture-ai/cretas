@@ -639,6 +639,107 @@ class BomRecipeServiceImplAddItemTest {
         assertThat(recipe.getItems()).isEmpty();
     }
 
+    // ─── 回料(半成品)行: material_type_id 为空, 身份在 semi_finished_ref_code 上 ───
+
+    /**
+     * 新路径: 加一条回料行成功, 且落库的是「没有原料档案 / 有 WIP 引用 / 类别 SEMI_FINISHED」。
+     *
+     * <p>回料在半成品库, 不在原料仓 —— 所以这条路径<b>一次都不能去查 raw_material_types</b>,
+     * 否则就等于回到了被否掉的那个方案 (给回料建一份假原料档案)。
+     */
+    @Test
+    @DisplayName("addItem: 回料行 (semiFinishedRefCode) 落库, 且不碰原料档案")
+    void addItem_semiFinishedRow_persistsWithoutMaterialMaster() {
+        clearInvocations(materialTypeRepo);
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(inv -> {
+            BomRecipeItem saved = inv.getArgument(0);
+            saved.setId(42L);
+            return saved;
+        });
+
+        BomRecipeItemDTO dto = new BomRecipeItemDTO();
+        ReflectionTestUtils.setField(dto, "semiFinishedRefCode", "WIP-F006-REWORK-20260829");
+        ReflectionTestUtils.setField(dto, "standardQuantity", new BigDecimal("0.1951"));
+        ReflectionTestUtils.setField(dto, "unit", "kg");
+        ReflectionTestUtils.setField(dto, "materialCategory", "SEMI_FINISHED");
+
+        BomRecipeItem saved = service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        assertThat(saved.getMaterialTypeId())
+                .as("回料行不指向原料档案 —— 非空就说明它又被塞回原料仓了")
+                .isNull();
+        assertThat(saved.getSemiFinishedRefCode()).isEqualTo("WIP-F006-REWORK-20260829");
+        assertThat(saved.getMaterialCategory())
+                .isEqualTo(BomRecipeItem.CATEGORY_SEMI_FINISHED);
+        assertThat(saved.getStandardQuantity()).isEqualByComparingTo("0.1951");
+        assertThat(saved.getUnit()).isEqualTo("kg");
+        verify(materialTypeRepo, never()).findById(anyString());
+    }
+
+    /**
+     * 存量兼容的<b>阴性对照</b>: 同一个入口, 普通原料行仍然要查档案并写 materialTypeId。
+     * 少了它, 上面那条「不碰原料档案」可能只是因为这条路整个坏掉了。
+     */
+    @Test
+    @DisplayName("阴性对照: 普通原料行仍然查档案、仍然写 materialTypeId")
+    void addItem_plainMaterialRow_stillResolvesMaterialMaster() {
+        clearInvocations(materialTypeRepo);
+        when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(inv -> {
+            BomRecipeItem saved = inv.getArgument(0);
+            saved.setId(43L);
+            return saved;
+        });
+
+        BomRecipeItem saved = service.addItem("F006", "RECIPE-ORPHAN-TEST",
+                buildDto("MT-001", new BigDecimal("800"), "kg", "RAW"));
+
+        assertThat(saved.getMaterialTypeId()).isEqualTo("MT-001");
+        assertThat(saved.getSemiFinishedRefCode()).isNull();
+        verify(materialTypeRepo, atLeastOnce()).findById("MT-001");
+    }
+
+    /**
+     * 接线断言 (形态 B): 在<b>产品真实入口</b> {@code addItem} 上, 用
+     * {@link NestedBomCostService#isNestedComponent} 的<b>真实实现</b>做路由判定,
+     * 证明回料行确实走到了 {@code resolveItemCost}。
+     *
+     * <p>⚠️ 这一条不能用「isNestedComponent 返 true」代替 —— 那测的是谓词, 不是接线。
+     * 缺陷正是「谓词判对了、而生产那两个调用点没有把它接上」这种形状。
+     */
+    @Test
+    @DisplayName("接线: addItem 之后的成本重算把回料行交给 NestedBomCostService.resolveItemCost")
+    void addItem_semiFinishedRow_reachesNestedCostResolver() {
+        NestedBomCostService realPredicate = new NestedBomCostService(null, null);
+        when(nestedBomCostService.isNestedComponent(any(BomRecipeItem.class)))
+                .thenAnswer(inv -> realPredicate.isNestedComponent(inv.getArgument(0)));
+        when(nestedBomCostService.resolveItemCost(anyString(), any(BomRecipeItem.class)))
+                .thenReturn(new BigDecimal("46.0000"));
+
+        BomRecipeItem semiRow = new BomRecipeItem();
+        semiRow.setId(44L);
+        semiRow.setRecipeId("RECIPE-ORPHAN-TEST");
+        semiRow.setFactoryId("F006");
+        semiRow.setMaterialTypeId(null);
+        semiRow.setSemiFinishedRefCode("WIP-F006-REWORK-20260829");
+        semiRow.setMaterialCategory(BomRecipeItem.CATEGORY_SEMI_FINISHED);
+        semiRow.setStandardQuantity(new BigDecimal("2.5"));
+        semiRow.setUnit("kg");
+
+        when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(semiRow);
+        when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
+                .thenReturn(List.of(semiRow));
+
+        BomRecipeItemDTO dto = new BomRecipeItemDTO();
+        ReflectionTestUtils.setField(dto, "semiFinishedRefCode", "WIP-F006-REWORK-20260829");
+        ReflectionTestUtils.setField(dto, "standardQuantity", new BigDecimal("2.5"));
+        ReflectionTestUtils.setField(dto, "unit", "kg");
+        ReflectionTestUtils.setField(dto, "materialCategory", "SEMI_FINISHED");
+
+        service.addItem("F006", "RECIPE-ORPHAN-TEST", dto);
+
+        verify(nestedBomCostService, atLeastOnce()).resolveItemCost(eq("F006"), same(semiRow));
+    }
+
     // ─── helpers ───────────────────────────────────────────────────────────
 
     private BomRecipeItemDTO buildDto(String materialTypeId, BigDecimal qty, String unit, String category) {

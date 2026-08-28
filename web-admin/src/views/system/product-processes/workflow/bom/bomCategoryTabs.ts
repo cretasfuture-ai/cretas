@@ -39,6 +39,11 @@ export function normalizeRecipeMaterialCategory(value: unknown): BomCategoryTab 
   if (category === 'BYPRODUCT') return 'BYPRODUCT';
   if (category === 'PACKAGING' || rawText === '包材') return 'PACKAGING';
   if (category === 'AUXILIARY' || rawText === '辅料' || rawText === '调味料') return 'AUXILIARY';
+  // SEMI_FINISHED (回料/半成品投入, 2026-08-29 起后端可写) 暂归 RAW —— 它是**投入**,
+  // 而 RAW 是本文件声明的兜底档。⚠️ 这不是最终形态: 回料该有自己的页签 + 半成品选择器
+  // (它在 semi_finished_inventory 里, 不在 raw_material_types 里, 现有下拉查不到它)。
+  // 在那之前也**绝不能让它落到零个页签** —— 那样保存成功的行在界面上会凭空消失,
+  // 正是本文件顶部注释在防的那个形状 (与 fool-proof Rule 5「宁缺勿藏」同一条)。
   return 'RAW';
 }
 
@@ -54,9 +59,12 @@ export function matchBomCategory(
   if (tab === 'AUXILIARY') {
     return code === 'AUXILIARY' || rawText === '辅料' || rawText === '调味料';
   }
-  // RAW 兜底: 历史空类别 / "其他" 仍算原料 (与 normalizeRecipeMaterialCategory 默认一致)。
+  // RAW 兜底: 历史空类别 / "其他" / 回料(SEMI_FINISHED) 仍落原料档
+  // (与 normalizeRecipeMaterialCategory 默认一致 —— 两处必须同口径, 否则一行会
+  //  「归一到 RAW 却在 RAW 页签里筛不出来」, 那就是不重不漏里的「漏」)。
   // 🔴 兜底只能挂在 RAW 上 —— 挂在最后一个页签上就会把所有未归类行倒进副产页签。
-  return code === 'RAW' || rawText === '原材料' || rawText === '' || rawText === '其他';
+  return code === 'RAW' || code === 'SEMI_FINISHED'
+      || rawText === '原材料' || rawText === '' || rawText === '其他';
 }
 
 /**
