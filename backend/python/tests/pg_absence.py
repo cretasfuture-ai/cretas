@@ -93,6 +93,23 @@ def is_local_postgres_absent(exc: BaseException) -> bool:
             if _looks_like_multi_address_refusal(current):
                 return True
 
+        # 🔴 2026-08-28: 第三种缺席形态 —— **服务器在，库不在**。
+        #
+        # 自建 runner 那台机器 2026-08-27 装了原生 PostgreSQL(为修 jpa-gate 的
+        # 4 条红)。装之前这些用例走「连不上 -> skip」那条路; 装之后 TCP 握手
+        # 成功、认证通过, 而 `smartbi_db` 不存在 ⇒ asyncpg 抛
+        # `InvalidCatalogNameError`, 判别式认不出, 8 条用例由 skip 变 ERROR。
+        # 与 #172 修的是同一个形状: **skip 守卫认不出一种新的缺席形态**,
+        # ⛔ 不是「机器缺件」, 所以不进 ci-gate-excludes.self-hosted.txt。
+        #
+        # ⚠️ 这没有违反本模块「不判『连上了但出错』」那条原则:
+        #    `InvalidCatalogNameError` 只在 **connect 阶段** 抛 —— 目标库不存在,
+        #    连接压根没建成。迁移写错 / 权限不对 / schema 冲突这些「真实故障」
+        #    全都发生在**连上之后**, 一条都不会被这里吞掉。
+        #    判据: 它不可能在一个已建立的连接上出现。
+        if type(current).__name__ == "InvalidCatalogNameError":
+            return True
+
         # `ExceptionGroup`(3.11+) 把子异常挂在 `.exceptions` 上, 不在 cause/context 里。
         for sub in getattr(current, "exceptions", ()) or ():
             pending.append(sub)

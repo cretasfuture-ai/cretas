@@ -119,3 +119,60 @@ def test_cycle_in_exception_chain_terminates():
     a.__cause__ = b
     b.__cause__ = a
     assert not is_local_postgres_absent(a)
+
+
+# ── 第三种缺席形态: 服务器在, 库不在 (2026-08-28) ──────────────────
+
+
+class _FakeInvalidCatalogName(Exception):
+    """伪造 asyncpg 的 InvalidCatalogNameError —— 判别式按类名认, 不 import asyncpg。
+
+    ⚠️ 按类名认是**故意**的: 这个模块被 conftest 之外的地方 import,
+    不该为了一条分支强制拖进 asyncpg 依赖。代价是类名撞车的风险,
+    而 `InvalidCatalogNameError` 这个名字在 Python 生态里只有 asyncpg 用。
+    """
+
+    pass
+
+
+_FakeInvalidCatalogName.__name__ = "InvalidCatalogNameError"
+
+
+def test_database_does_not_exist_is_absence():
+    """PG 在跑但目标库不存在 —— 对这些用例而言同样是「没有本地测试环境」。
+
+    2026-08-27 那台自建 runner 装了原生 PostgreSQL 之后出现的新形态:
+    握手成功、认证通过, 而 smartbi_db 不存在 ⇒ 8 条用例由 skip 变 ERROR。
+    """
+    assert is_local_postgres_absent(
+        _FakeInvalidCatalogName('database "smartbi_db" does not exist')
+    )
+
+
+def test_it_is_reachable_through_a_cause_chain():
+    outer = RuntimeError("wrapped")
+    outer.__cause__ = _FakeInvalidCatalogName('database "smartbi_db" does not exist')
+    assert is_local_postgres_absent(outer)
+
+
+def test_post_connect_errors_are_NOT_absence():
+    """🔴 阴性对照 —— 这条才是这次改动的边界。
+
+    连上之后才可能出现的错误一律不许被吞成 skip: 表不存在 / 权限不对 /
+    迁移写错, 那些都是**必须让它红**的真实故障。本次只放行 connect 阶段
+    那一种(目标库不存在), 因为它不可能在一个已建立的连接上出现。
+    """
+
+    class _FakeUndefinedTable(Exception):
+        pass
+
+    _FakeUndefinedTable.__name__ = "UndefinedTableError"
+
+    class _FakeInsufficientPrivilege(Exception):
+        pass
+
+    _FakeInsufficientPrivilege.__name__ = "InsufficientPrivilegeError"
+
+    assert not is_local_postgres_absent(_FakeUndefinedTable('relation "x" does not exist'))
+    assert not is_local_postgres_absent(_FakeInsufficientPrivilege("permission denied"))
+    # 「does not exist」这句话本身不构成理由 —— 上面两个也含它。
