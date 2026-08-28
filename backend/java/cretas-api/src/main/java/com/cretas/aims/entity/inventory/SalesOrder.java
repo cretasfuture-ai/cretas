@@ -492,9 +492,17 @@ public class SalesOrder extends BaseEntity {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+    /**
+     * 订单级缺料 = 各行缺料之和；<b>已取消的单子恒为 0</b>。
+     *
+     * <p>2026-08-28：取消掉的订单不再需要任何东西，对它报「缺」会让销售员去催一张
+     * 已经作废的单。行级 getter 看不到订单状态，所以这一层拦。
+     * ⛔ DRAFT 不在此列 —— 草稿是尚未预留的真实需求，报缺是对的。
+     */
     @Transient
     @JsonProperty("shortageQty")
     public BigDecimal getTotalShortageQty() {
+        if (status == SalesOrderStatus.CANCELLED) return BigDecimal.ZERO;
         if (items == null || items.isEmpty()) return BigDecimal.ZERO;
         return items.stream()
                 .map(SalesOrderItem::getShortageQty)

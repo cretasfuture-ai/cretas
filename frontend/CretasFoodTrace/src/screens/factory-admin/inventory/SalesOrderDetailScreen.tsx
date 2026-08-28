@@ -120,7 +120,10 @@ export default function SalesOrderDetailScreen() {
               </DataTable.Header>
               {(order.items || []).map((item, idx) => (
                 <DataTable.Row key={idx}>
-                  <DataTable.Cell>{item.productTypeName || item.productTypeId}</DataTable.Cell>
+                  {/* ⚠️ 后端在这个响应里发的是 productName（实测 'SOP-20260817-01-黄油鸡-成品800g'），
+                      productTypeName 恒为 undefined ⇒ 原来这一格显示的是 productTypeId 那串 UUID。
+                      与成品库存屏同一个字段错位, 同一个 UUID(eb0aa47b-…)。 */}
+                  <DataTable.Cell>{item.productName || item.productTypeName || item.productTypeId}</DataTable.Cell>
                   <DataTable.Cell numeric>{item.quantity} {item.unit}</DataTable.Cell>
                   <DataTable.Cell numeric>{item.deliveredQuantity}</DataTable.Cell>
                   <DataTable.Cell numeric>¥{formatNumberWithCommas(item.unitPrice)}</DataTable.Cell>
@@ -142,7 +145,7 @@ export default function SalesOrderDetailScreen() {
                   </View>
                   {(rec.items || []).map((di, j) => (
                     <Text key={j} style={styles.recordDetail}>
-                      {di.productTypeName || di.productTypeId}: {di.deliveredQuantity} {di.unit}
+                      {di.productName || di.productTypeName || di.productTypeId}: {di.deliveredQuantity} {di.unit}
                     </Text>
                   ))}
                 </View>
