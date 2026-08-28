@@ -216,22 +216,22 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         if (totalSampleSize == null) totalSampleSize = BigDecimal.ZERO;
         if (passCount == null) passCount = BigDecimal.ZERO;
         if (failCount == null) failCount = BigDecimal.ZERO;
-        double qualityRate = 98.0;
-        if (totalSampleSize.compareTo(BigDecimal.ZERO) > 0) {
-            qualityRate = passCount.divide(totalSampleSize, 4, RoundingMode.HALF_UP)
-                    .multiply(BigDecimal.valueOf(100)).doubleValue();
-        }
+        // ⛔ 没有质检样本时这三个率**算不出来** —— 原来分别兜底成 98.0 / 2.0 / 96.0,
+        //    那是编出来的数, 而它们会被 AI 报表工具原样喂给模型、也进 /reports/export。
+        //    (2026-08-29 逐屏走查; 与本文件另外 13 个编造常量同一族。)
+        boolean hasSamples = totalSampleSize.compareTo(BigDecimal.ZERO) > 0;
+        Double qualityRate = !hasSamples ? null
+                : passCount.divide(totalSampleSize, 4, RoundingMode.HALF_UP)
+                        .multiply(BigDecimal.valueOf(100)).doubleValue();
         Double firstPassRate = qualityInspectionRepository.calculateFirstPassRate(factoryId, startDate, endDate);
-        double reworkRate = 2.0;
-        if (totalSampleSize.compareTo(BigDecimal.ZERO) > 0) {
-            reworkRate = failCount.divide(totalSampleSize, 4, RoundingMode.HALF_UP)
-                    .multiply(BigDecimal.valueOf(100)).doubleValue();
-        }
+        Double reworkRate = !hasSamples ? null
+                : failCount.divide(totalSampleSize, 4, RoundingMode.HALF_UP)
+                        .multiply(BigDecimal.valueOf(100)).doubleValue();
         report.put("totalProduction", totalSampleSize);
         report.put("qualifiedProduction", passCount);
         report.put("defectiveProduction", failCount);
         report.put("qualityRate", qualityRate);
-        report.put("firstPassRate", firstPassRate != null ? firstPassRate : 96.0);
+        report.put("firstPassRate", firstPassRate);   // ⛔ 原来是 `: 96.0`
         report.put("reworkRate", reworkRate);
         return report;
     }
@@ -252,10 +252,15 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("operatingCost", operatingCost != null ? operatingCost : BigDecimal.ZERO);
         Double avgRunningHours = equipmentRepository.calculateAverageRunningHours(factoryId);
         report.put("averageRunningHours", avgRunningHours != null ? avgRunningHours : 0.0);
-        report.put("availability", 90.0);
-        report.put("performance", 85.0);
-        report.put("quality", 98.0);
-        report.put("oee", 75.0);
+        // 🔴 这四个原来是**写死的常量**(90 / 85 / 98 / 75) —— 整份 OEE 是编出来的。
+        //    OEE = 时间开动率 x 性能开动率 x 良品率, 三者都需要设备级的
+        //    计划工时 / 理论节拍 / 良品数, 这些数据本系统当前**没有采集**。
+        //    ⇒ 算不出来就是 null, 屏上说没有。⛔ 不拿一组看起来合理的数顶上。
+        //    (可达: /reports/custom 与 /reports/export 的 reportType=equipment)
+        report.put("availability", null);
+        report.put("performance", null);
+        report.put("quality", null);
+        report.put("oee", null);
         return report;
     }
 
@@ -274,7 +279,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
         report.put("departmentDistribution", departmentDistribution);
         // 出勤率
-        double attendanceRate = 95.0;
+        Double attendanceRate = null;   // ⛔ 原来是 95.0
         if (totalEmployees > 0) {
             LocalDateTime start = startDate.atStartOfDay();
             LocalDateTime end = endDate.plusDays(1).atStartOfDay();
@@ -285,7 +290,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
         report.put("attendanceRate", attendanceRate);
         // 生产效率
-        double productivity = 88.0;
+        Double productivity = null;   // ⛔ 原来是 88.0
         List<ProductionBatch> batches = productionBatchRepository.findByFactoryIdAndCreatedAtBetween(
                 factoryId, startDate.atStartOfDay(), endDate.plusDays(1).atStartOfDay());
         if (!batches.isEmpty()) {
@@ -307,7 +312,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
         report.put("productivity", productivity);
         // 满意度
-        double satisfaction = 4.2;
+        Double satisfaction = null;   // ⛔ 原来是 4.2
         try {
             BigDecimal totalSamples = qualityInspectionRepository.calculateTotalSampleSize(factoryId, startDate, endDate);
             BigDecimal passCount = qualityInspectionRepository.calculateTotalPassCount(factoryId, startDate, endDate);
@@ -1034,7 +1039,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             Map<String, Object> forecast = new HashMap<>();
             forecast.put("date", today.plusDays(i).toString());
             forecast.put("value", dailyAverage);
-            forecast.put("confidence", 75);
+            // ⛔ 原来固定写 75 —— 一个**每个预测点都一样**的「置信度」不是置信度。
+            //    没有区间估计就别报置信度。
+            forecast.put("confidence", null);
             forecastData.add(forecast);
         }
 
@@ -1677,7 +1684,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("onTimeRate", onTimeRate.setScale(2, RoundingMode.HALF_UP));
         report.put("inFullRate", inFullRate.setScale(2, RoundingMode.HALF_UP));
         report.put("otifRate", otifRate.setScale(2, RoundingMode.HALF_UP));
-        report.put("target", new BigDecimal("95"));
+        // ⛔ 原来写死 95 —— 与产能利用率那个写死的 80 同一族: 库里没有目标值的来源。
+        report.put("target", null);
         report.put("dailyTrend", dailyTrend);
         report.put("orderDetails", orderDetails.subList(0, Math.min(20, orderDetails.size())));
         return report;

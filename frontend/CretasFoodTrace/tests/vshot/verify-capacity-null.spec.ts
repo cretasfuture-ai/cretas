@@ -33,11 +33,19 @@ const ROUTE = ['Main', 'BossReportsTab', 'CapacityUtilizationReport'];
 
 /** 把 capacity-utilization 的响应改写成 `body -> body`，其余接口原样放行。 */
 async function stubCapacity(page: import('@playwright/test').Page, mutate: (d: any) => any) {
-  await page.route('**/reports/capacity-utilization*', async (route) => {
+  await page.route('**/capacity-utilization*', async (route) => {
     const res = await route.fetch();
     const json = await res.json().catch(() => null);
+    console.log(`[stub] 命中 ${route.request().url()} json=${json ? 'ok' : 'NULL'}`);
     if (!json) return route.fulfill({ response: res });
-    json.data = mutate(json.data ?? {});
+    console.log(`[stub] 原始 data keys=${Object.keys(json.data ?? json).join(',')}`);
+    if (json.data === undefined) {
+      // 有些接口直接返回裸对象, 没有 {code,data} 外壳 —— 两种形状都要盖住,
+      // ⛔ 否则「桩没生效」会长成「屏没改对」。
+      await route.fulfill({ response: res, body: JSON.stringify(mutate(json)) });
+      return;
+    }
+    json.data = mutate(json.data);
     await route.fulfill({ response: res, body: JSON.stringify(json) });
   });
 }
