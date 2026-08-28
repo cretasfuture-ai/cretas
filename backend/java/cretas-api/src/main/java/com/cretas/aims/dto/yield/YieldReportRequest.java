@@ -198,7 +198,14 @@ public class YieldReportRequest {
         private String semiCode;
         /** 本次该产出的数量 */
         private BigDecimal quantity;
-        /** 这一项是不是回料 (来自 output-options 的 isRework); true 时其 quantity 同时落 defectQuantity */
+        /**
+         * 这一项是不是回料 (来自 output-options 的 isRework)。
+         *
+         * <p>⚠️ true 时该产出的数量应同时体现在质量账 {@code defectQuantity} 里——
+         * 但这个汇总是 <b>App 端</b>做的 (由前端把回料项的 quantity 一并塞进请求体的
+         * {@code defectQuantity} 字段), Java 侧本身不做任何 isRework→defectQuantity
+         * 的自动求和; {@link YieldReportRequest#defectQuantity} 收到什么就存什么。
+         */
         private Boolean isRework;
     }
 }

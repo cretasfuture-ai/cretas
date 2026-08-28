@@ -379,6 +379,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .semiOutputQuantity(req.getSemiOutputQuantity())
                 .semiOutputUnit(req.getSemiOutputUnit())
                 .semiCode(req.getSemiCode())
+                // 画布 1 进 N 出: 与旧的单个 semiCode/semiOutputQuantity 并存, 非空时以本字段为准
+                .semiOutputs(toSemiOutputMaps(req.getSemiOutputs()))
                 .status(ProductionReport.Status.SUBMITTED)
                 .build();
 
@@ -1052,6 +1054,29 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (b.getUnit() != null) m.put("unit", b.getUnit());
             return m;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 多产出填报值 POJO → jsonb。null/空 原样返回 null ——
+     * ⛔ 不要返回空 List: 空 List 与 null 在 {@code WipSemiOutputPlan.postableEntries} 里
+     * 行为相同, 但落库后前者是 {@code []} 后者是 {@code NULL}, 而「旧式报工」的判据是 NULL。
+     * 写成 [] 会让存量报表分不清「旧式单产出」和「多产出但一条都没填」。
+     */
+    private static List<Map<String, Object>> toSemiOutputMaps(
+            List<YieldReportRequest.SemiOutput> outputs) {
+        if (outputs == null || outputs.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> maps = new ArrayList<>(outputs.size());
+        for (YieldReportRequest.SemiOutput o : outputs) {
+            if (o == null || o.getSemiCode() == null || o.getSemiCode().isBlank()) continue;
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("semiCode", o.getSemiCode().trim());
+            m.put("quantity", o.getQuantity());          // 可能是 null, 原样落 —— 由 postableEntries 判可入账
+            m.put("isRework", Boolean.TRUE.equals(o.getIsRework()));
+            maps.add(m);
+        }
+        return maps.isEmpty() ? null : maps;
     }
 
     /**
