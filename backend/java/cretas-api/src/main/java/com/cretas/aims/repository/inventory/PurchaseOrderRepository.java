@@ -30,12 +30,22 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
      * 而 {@code uk_po_factory_order UNIQUE (factory_id, order_number)} 是真实存在的约束。
      * ⇒ <b>同一天第二张有缺料的生产计划, 生成建议时必然撞唯一键。</b>
      *
+     * <p>🔴 <b>必须用 nativeQuery</b>: {@code PurchaseOrder} 带
+     * {@code @Where(deleted_at IS NULL)}, 而唯一索引
+     * {@code uk_po_factory_order UNIQUE (factory_id, order_number)} <b>不是部分索引</b> ——
+     * 软删掉的行仍然占着那个编号。走 JPQL 会漏数软删行, 于是下一次重新用 -1,
+     * 直接撞上一个"看不见但还在"的行。⛔ 不要改回 JPQL。
+     *
+     * <p>⚠️ 这一条是清理测试数据时才发现的: 我本来准备软删自己建的
+     * PO-AUTO-20260828-1/2/3, 那正好会触发它。
+     *
      * <p>⚠️ 这个坑此前一直被另一个坑挡着: supplier_id 写死占位值 "PENDING" 会先撞
      * {@code fk_po_supplier}, 所以这张表里 {@code PO-AUTO%} 一行都没有(prod 实测 0 行),
      * 撞号自然也从没发生过。修好 supplier 之后它才变得<b>可达</b> —— 一个缺陷被另一个缺陷遮住了。
      */
-    @Query("SELECT COUNT(p) FROM PurchaseOrder p WHERE p.factoryId = :factoryId "
-            + "AND p.orderNumber LIKE CONCAT('PO-AUTO-', :dateStr, '-%')")
+    @Query(value = "SELECT COUNT(*) FROM purchase_orders WHERE factory_id = :factoryId "
+            + "AND order_number LIKE CONCAT('PO-AUTO-', :dateStr, '-%')",
+            nativeQuery = true)
     long countAutoSuggestionsOn(@Param("factoryId") String factoryId,
                                 @Param("dateStr") String dateStr);
 
