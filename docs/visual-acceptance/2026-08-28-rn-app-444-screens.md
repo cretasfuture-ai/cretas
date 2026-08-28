@@ -945,11 +945,21 @@ manifest 按设备的请求头取回来，`launchAsset` 指向新 ts；`createdA
 其中有真实 Android 客户端（`okhttp/4.9.2`，Expo updates 的 Android 端），最近一次 **13:59**。
 ⇒ 这条通道是活的，不是「推上去没人取」。
 
-但截至写这段时，**我的推送(14:23)之后还没有观察到任何 okhttp 轮询**
-（`app.json` 里 `checkAutomatically: NEVER`，由 JS 壳在启动/回前台时主动查）。
+**推送后 13 分钟（14:36:30）观察到一台真实设备取回 manifest**：
 
-▎所以准确的说法是：**新 bundle 已发布并正在被 manifest 端点下发，通道活着，
-▎会在设备下次回前台时送达 —— 但我还没有观察到某台设备取走这一份。**
+```
+121.228.99.40 - - [28/Aug/2026:14:36:30 +0800] "GET /api/ota/manifest HTTP/2.0" 200 4708 "-" "okhttp/4.9.2"
+```
+
+⚠️ 日志里的 4708 字节**不能**用来判断新旧：okhttp 默认带 `Accept-Encoding: gzip`，
+nginx 记的是压缩后的长度（我用 curl 不压缩取到的是 13873），而 manifest 的字段全是定长的
+（13 位时间戳、定长 UUID、内容寻址的资产 hash），新旧本来就差不多大。
+⇒ 判据换成**端点本身**：该端点对 (rv, channel) 只发最新那一份，无按设备钉版；
+我在 14:23 之后两次取回的 manifest 都指向 `ts=1787898056914`、且不含旧的 `1787844438192`。
+
+▎所以准确的说法是：**这台设备在 14:36 拿到的是新 manifest。
+▎但它有没有把 bundle 下下来并生效，我没有观察到** —— `.hbc` 在 CDN 上（`dl.cretaceousfuture.com`），
+▎不走这台网关，本地日志里看不到。
 （本仓有过「OTA 九天零送达而每次推送四步验收全绿」的先例，所以这句话不能含糊。）
 
 **回滚**：`./scripts/ota/rollback.sh 1.0.4 production 1787898056914`
