@@ -44,6 +44,8 @@ const permissions = usePermissionStore();
 const router = useRouter();
 const factoryId = computed(() => auth.factoryId);
 const canEditLayout = computed(() => ['factory_super_admin', 'warehouse_manager'].includes(auth.currentRole));
+const mapFullscreenLabel = computed(() => canEditLayout.value ? '全屏编辑' : '全屏查看');
+const mapFullscreenAriaLabel = computed(() => `${mapFullscreenLabel.value}平面图`);
 const canMoveInventory = computed(() => permissions.canWrite('warehouse'));
 const loading = ref(false);
 const saving = ref(false);
@@ -740,7 +742,7 @@ onUnmounted(() => {
           <el-button v-if="canEditLayout" :icon="Grid" @click="addRack">添加货架</el-button>
           <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">AI 识别底图</el-button>
           <input ref="fileInput" type="file" accept="image/*" hidden @change="handleImageUpload">
-          <el-button v-if="!mapFullscreen" type="primary" :icon="FullScreen" @click="openMapFullscreen">全屏编辑</el-button>
+          <el-button v-if="!mapFullscreen" type="primary" :icon="FullScreen" @click="openMapFullscreen">{{ mapFullscreenLabel }}</el-button>
           <el-button v-else :icon="Close" @click="closeMapFullscreen">退出全屏</el-button>
         </div>
       </div>
@@ -795,8 +797,8 @@ onUnmounted(() => {
             <Controls position="bottom-left" />
           </VueFlow>
           <el-empty v-else description="暂无楼层" :image-size="100" />
-          <button v-if="!mapFullscreen && activeFloor" type="button" class="canvas-expand" aria-label="全屏编辑平面图" title="全屏编辑平面图" @click="openMapFullscreen">
-            <el-icon><FullScreen /></el-icon><span>全屏编辑</span>
+          <button v-if="!mapFullscreen && activeFloor" type="button" class="canvas-expand" :aria-label="mapFullscreenAriaLabel" :title="mapFullscreenAriaLabel" @click="openMapFullscreen">
+            <el-icon><FullScreen /></el-icon><span>{{ mapFullscreenLabel }}</span>
           </button>
         </div>
 
