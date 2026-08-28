@@ -52,67 +52,51 @@ export function WHRecallManageScreen() {
 
   const [selectedTab, setSelectedTab] = useState("active");
 
+  // 🔴 召回记录：**这一屏没有接任何接口**，下面两组原来是写死的假记录。
+  //
+  // 原来屏上显示的是：「进行中(1) RC-20251226-001 · 紧急 · 执行中 /
+  // 召回原因 供应商质检问题 / 涉及 200kg / 发起时间 2025-12-26 09:00 /
+  // 追溯范围：库存在库 50kg 已冻结、已发货 100kg → 3家客户 通知中」，
+  // 外加一张把「冻结库存」「通知客户」标成**已完成**的流程图。
+  //
+  // ⛔ 这是整套走查里最危险的一屏：它在告诉仓管「有一次紧急召回正在执行、
+  //    客户已经在通知了」。看到它的人可能因此**不去发起真正需要的召回**，
+  //    也可能拿它当已经处置过的凭据。食品追溯产品里这不是「界面占位」问题。
+  //
+  // 在召回真的落库之前，这两组必须是空的，且空态要说清是「还没接入」，
+  // ⛔ 不是「没有召回」—— 后者是一句我们此刻答不上来的话。
+  const activeRecalls: RecallItem[] = [];
+  const completedRecalls: RecallItem[] = [];
+
+  // ⚠️ 这两个数原来是写死的 "(1)" 和 "(3)" —— 跟着上面那三条假记录一起编的。
+  //    删了记录还留着计数，屏上就会出现「进行中(1)」配一句「尚未接入」。
+  //    ⇒ 计数一律由列表长度算出来，⛔ 不写字面量。
   const tabs = [
-    { key: "active", label: "进行中(1)" },
-    { key: "completed", label: "已完成(3)" },
+    { key: "active", label: `进行中(${activeRecalls.length})` },
+    { key: "completed", label: `已完成(${completedRecalls.length})` },
     { key: "create", label: "新建召回" },
   ];
 
-  const activeRecalls: RecallItem[] = [
-    {
-      id: "1",
-      number: "RC-20251226-001",
-      level: "urgent",
-      status: "processing",
-      reason: "供应商质检问题",
-      batch: "MB-20251220-005",
-      quantity: 200,
-      startTime: "2025-12-26 09:00",
-      progress: 0.6,
-      scope: [
-        { icon: "1", label: "库存在库", value: "50 kg", status: "success" },
-        { icon: "2", label: "已发货", value: "100 kg → 3家客户", status: "warning" },
-        { icon: "3", label: "已消耗", value: "50 kg → 2个生产批次", status: "warning" },
-      ],
-    },
-  ];
 
-  const completedRecalls: RecallItem[] = [
-    {
-      id: "2",
-      number: "RC-20251210-001",
-      level: "normal",
-      status: "completed",
-      reason: "温控异常",
-      batch: "",
-      quantity: 80,
-      startTime: "",
-      completeTime: "2025-12-15",
-    },
-    {
-      id: "3",
-      number: "RC-20251128-002",
-      level: "normal",
-      status: "completed",
-      reason: "客户投诉",
-      batch: "",
-      quantity: 30,
-      startTime: "",
-      completeTime: "2025-12-02",
-    },
-  ];
-
+  // 这是一张**流程说明**（召回该怎么走），⛔ 不是某一次召回的进度。
+  // 原来第 1、2 步被标成 completed、第 3 步 active，于是它读起来像
+  // 「这次召回已经冻结库存并通知了客户」。全部改成 pending（中性）。
   const flowSteps: FlowStep[] = [
-    { number: 1, title: "冻结库存", description: "锁定问题批次", status: "completed" },
-    { number: 2, title: "通知客户", description: "发送召回通知", status: "completed" },
-    { number: 3, title: "回收产品", description: "客户退货处理", status: "active" },
+    { number: 1, title: "冻结库存", description: "锁定问题批次", status: "pending" },
+    { number: 2, title: "通知客户", description: "发送召回通知", status: "pending" },
+    { number: 3, title: "回收产品", description: "客户退货处理", status: "pending" },
     { number: 4, title: "处置记录", description: "销毁/处理", status: "pending" },
     { number: 5, title: "原因分析", description: "根因分析报告", status: "pending" },
     { number: 6, title: "关闭召回", description: "完成闭环", status: "pending" },
   ];
 
+  // ⛔ 这个按钮原来弹一句「选择需要召回的批次」就没有下文了 —— 它不发起任何东西。
+  //    在召回真的能落库之前，说清楚它做不到，比让人以为自己已经发起了召回安全得多。
   const handleCreateRecall = () => {
-    Alert.alert("发起召回", "选择需要召回的批次");
+    Alert.alert(
+      "召回功能尚未接入",
+      "这一页还不能发起召回。需要召回请走线下流程并联系质量负责人，⛔ 不要以为在这里点过就已经发起了。",
+    );
   };
 
   const getStepStyle = (status: FlowStep["status"]) => {
@@ -364,7 +348,18 @@ export function WHRecallManageScreen() {
               <Text style={[styles.sectionTitle, styles.sectionTitleDanger]}>
                 进行中的召回
               </Text>
-              {activeRecalls.map(renderActiveRecall)}
+              {activeRecalls.length > 0 ? (
+                activeRecalls.map(renderActiveRecall)
+              ) : (
+                <View style={styles.notWired} testID="wh-recall-not-wired">
+                  <MaterialCommunityIcons name="database-off-outline" size={40} color="#bbb" />
+                  <Text style={styles.notWiredTitle}>召回记录尚未接入</Text>
+                  <Text style={styles.notWiredBody}>
+                    这一页还没有连上召回数据，⛔ 不能据此判断「当前没有召回」。
+                    需要确认是否有正在进行的召回，请走线下流程或联系质量负责人。
+                  </Text>
+                </View>
+              )}
             </View>
 
             {/* 召回流程说明 */}
@@ -380,7 +375,17 @@ export function WHRecallManageScreen() {
         {selectedTab === "completed" && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>历史召回记录</Text>
-            {completedRecalls.map(renderCompletedRecall)}
+            {completedRecalls.length > 0 ? (
+              completedRecalls.map(renderCompletedRecall)
+            ) : (
+              <View style={styles.notWired} testID="wh-recall-history-not-wired">
+                <MaterialCommunityIcons name="database-off-outline" size={40} color="#bbb" />
+                <Text style={styles.notWiredTitle}>召回记录尚未接入</Text>
+                <Text style={styles.notWiredBody}>
+                  历史召回同样没有连上数据源，这里的空白不代表历史上没有发生过召回。
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -404,6 +409,31 @@ export function WHRecallManageScreen() {
 }
 
 const styles = StyleSheet.create({
+  // 「尚未接入」的占位：中性配色，⛔ 不要用告警红 —— 没接上不是一次告警。
+  notWired: {
+    alignItems: "center",
+    backgroundColor: "#fafafa",
+    borderColor: "#e0e0e0",
+    borderRadius: 8,
+    borderStyle: "dashed",
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 24,
+  },
+  notWiredTitle: {
+    color: "#616161",
+    fontSize: 15,
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  notWiredBody: {
+    color: "#9e9e9e",
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 6,
+    textAlign: "center",
+  },
+
   container: {
     flex: 1,
     backgroundColor: "#f5f5f5",

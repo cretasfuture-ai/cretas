@@ -58,7 +58,8 @@ export function WHAlertListScreen() {
 
   // 状态管理
   const [loading, setLoading] = useState(true);
-  const [alertType, setAlertType] = useState<"ai" | "standard">("ai");
+  // 默认落在**真实**告警那一页 —— AI 那一页现在没有数据源。
+  const [alertType, setAlertType] = useState<"ai" | "standard">("standard");
   const [urgentAlerts, setUrgentAlerts] = useState<StandardAlert[]>([]);
   const [warningAlerts, setWarningAlerts] = useState<StandardAlert[]>([]);
   const [alertStats, setAlertStats] = useState<AlertStats>({
@@ -69,48 +70,17 @@ export function WHAlertListScreen() {
     resolved: 0,
   });
 
-  // AI智能告警 (示例数据，后续可接入AI分析服务)
-  const aiAlerts: AIAlert[] = [
-    {
-      id: "1",
-      title: "过期风险预警 - 带鱼批次",
-      content:
-        "批次 MB-20251220-001 (带鱼 85kg) 将在3天后过期，按当前消耗速率(28kg/天)，预计无法在过期前消耗完毕。",
-      priority: "high",
-      suggestions: [
-        "优先安排该批次出库，调整FIFO顺序",
-        "联系鲜食超市加急订单，可消化50kg",
-        "考虑转冻品加工，保值约60%",
-      ],
-      time: "5分钟前",
-    },
-    {
-      id: "2",
-      title: "供应商质量波动预警",
-      content:
-        'AI检测到近2周来自"海洋水产"的带鱼批次质检合格率从98%下降至92%，存在质量下滑趋势。',
-      priority: "medium",
-      suggestions: [
-        "加强该供应商来料检验力度",
-        "下次采购时向供应商反馈问题",
-        '评估备选供应商"渔港直采"的供货能力',
-      ],
-      time: "30分钟前",
-    },
-    {
-      id: "3",
-      title: "转换率优化建议",
-      content:
-        "AI发现虾仁加工生产线转换率(88.5%)低于行业平均水平(91%)，主要损耗发生在去壳环节。",
-      priority: "low",
-      suggestions: [
-        "检查去壳设备刀片磨损情况",
-        "对比其他班组操作方法",
-        "预计优化后可提升产能3-5%",
-      ],
-      time: "2小时前",
-    },
-  ];
+  // AI 智能告警：**尚未接入**。
+  //
+  // ⚠️ 这里原来是三条写死的「示例数据」，而它们和上面三个真接口拿回来的告警
+  //    并排显示在同一个「共 N 条预警」下面 —— 真的那一路当时返回 0，假的返回 3。
+  //    内容是带鱼批次 MB-20251220-001、供应商「海洋水产」、建议联系「鲜食超市」
+  //    加急订单消化 50kg。F006 做的是黄油鸡，日期停在 2025-12。
+  //
+  // ⛔ 不要为了「屏上好看」再放回示例数据。仓管看到的每一条预警都会被当成
+  //    真实库存状况去处置。接入真实 AI 分析服务之前，这里就该是空的，
+  //    并且空态要说清是「还没接入」而不是「AI 看过了，没问题」。
+  const aiAlerts: AIAlert[] = [];
 
   // 将 AlertDTO 转换为 StandardAlert 格式
   const alertToStandardAlert = (alert: AlertDTO): StandardAlert => {
@@ -480,9 +450,12 @@ export function WHAlertListScreen() {
             {aiAlerts.length > 0 ? (
               aiAlerts.map(renderAIAlert)
             ) : (
-              <View style={styles.emptyState}>
+              <View style={styles.emptyState} testID="wh-ai-alerts-not-wired">
                 <MaterialCommunityIcons name="robot-outline" size={48} color="#ccc" />
-                <Text style={styles.emptyStateText}>暂无AI智能告警</Text>
+                <Text style={styles.emptyStateText}>AI 智能分析尚未接入</Text>
+                <Text style={styles.emptyStateText}>
+                  这一页目前不会产生告警。请以「常规告警」为准。
+                </Text>
               </View>
             )}
           </View>
