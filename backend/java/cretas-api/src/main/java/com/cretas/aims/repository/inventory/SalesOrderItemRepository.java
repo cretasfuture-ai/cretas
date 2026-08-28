@@ -19,6 +19,31 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
     List<SalesOrderItem> findByProductTypeId(String productTypeId);
 
     /**
+     * 某产品还挂着哪些「在飞」销售订单 —— 下架闸用。
+     *
+     * <p>见 {@link com.cretas.aims.service.product.ProductRetirementGuard}: 下架一个成品 SKU
+     * 会让这些单永远发不出货, 且系统不通知任何人 (2026-08-28 F006 实测)。
+     *
+     * <p>返回订单号而不是行 id —— 异常消息要能直接告诉用户「去看哪几张单」。
+     * {@code statuses} 由调用方从 {@link com.cretas.aims.domain.OrderUsageWhitelists} 取,
+     * ⛔ 不在这里写死。软删行由 {@code SalesOrderItem}/{@code SalesOrder} 上的
+     * {@code @Where(deleted_at IS NULL)} 自动排除。
+     */
+    @Query("""
+            SELECT DISTINCT so.orderNumber
+              FROM SalesOrderItem soi
+              JOIN soi.salesOrder so
+             WHERE so.factoryId = :factoryId
+               AND soi.productTypeId = :productTypeId
+               AND so.status IN :statuses
+             ORDER BY so.orderNumber
+            """)
+    List<String> findInFlightOrderNumbersByProduct(@Param("factoryId") String factoryId,
+                                                   @Param("productTypeId") String productTypeId,
+                                                   @Param("statuses")
+                                                   Collection<SalesOrderStatus> statuses);
+
+    /**
      * 历史均价聚合 — Sprint 4 Wave 2 S-PROFIT-DETAIL-1.
      *
      * <p>Returns rows of [productTypeId, avgUnitPrice] for the given products

@@ -26,6 +26,10 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
     @Autowired
     private ProductTypeRepository productTypeRepository;
 
+    /** 下架前查在飞销售订单; required=false 只为让隔离测试能不装它, ⛔ null 不等于放行。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.product.ProductRetirementGuard productRetirementGuard;
+
     @Override
     public String getToolName() {
         return "restaurant_dish_delete";
@@ -165,6 +169,18 @@ public class RestaurantDishDeleteTool extends AbstractBusinessTool {
         if (!Boolean.TRUE.equals(dish.getIsActive())) {
             return buildSimpleResult(
                     String.format("菜品「%s」已处于下架状态，无需重复操作。", dish.getName()), null);
+        }
+
+        // 下架闸必须在 setIsActive 之前 —— 它读实体里的旧状态判方向。
+        // 菜品与成品共用 product_types 表, 同一行也可能被工厂侧销售订单引用, 所以这条路一样要走闸。
+        // 方向判据引用 guard 里的唯一定义, ⛔ 不在这里重写一份。
+        // 闸没注入时拒绝下架, ⛔ 不是跳过。
+        if (com.cretas.aims.service.product.ProductRetirementGuard.isRetirement(dish, Boolean.FALSE)) {
+            if (productRetirementGuard == null) {
+                throw new IllegalStateException(
+                        "ProductRetirementGuard 未注入 —— 下架闸不可用, 拒绝下架 productTypeId=" + dish.getId());
+            }
+            productRetirementGuard.assertRetirable(dish, Boolean.FALSE);
         }
 
         dish.setIsActive(false);

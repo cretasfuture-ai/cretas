@@ -108,28 +108,70 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
+    /**
+     * 下架闸 —— 见 {@link com.cretas.aims.service.product.ProductRetirementGuard}。
+     *
+     * <p>可以为 null(既有隔离测试用短构造器装配)。⛔ 但 null <b>不等于放行</b>:
+     * {@link #assertRetirable} 在闸缺失时直接抛 {@link IllegalStateException}。
+     * 一道安全闸没接上时静默跳过, 正是本仓「机制在、没接上」那一类事故的形态 ——
+     * 宁可失败得刺眼, 也不要悄悄放过一次下架。
+     */
+    private final com.cretas.aims.service.product.ProductRetirementGuard productRetirementGuard;
+
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     @org.springframework.beans.factory.annotation.Autowired
     public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
                                   CustomerRepository customerRepository,
                                   WorkflowUnitReviewService workflowUnitReviewService,
                                   ProductSpecificationConversionSyncService specificationConversionSyncService,
-                                  ProductPackagingSpecService productPackagingSpecService) {
+                                  ProductPackagingSpecService productPackagingSpecService,
+                                  com.cretas.aims.service.product.ProductRetirementGuard productRetirementGuard) {
         this.productTypeRepository = productTypeRepository;
         this.objectMapper = objectMapper;
         this.customerRepository = customerRepository;
         this.workflowUnitReviewService = workflowUnitReviewService;
         this.specificationConversionSyncService = specificationConversionSyncService;
         this.productPackagingSpecService = productPackagingSpecService;
+        this.productRetirementGuard = productRetirementGuard;
     }
 
-    /** Legacy isolated-test constructor. Spring production wiring uses the six-argument constructor. */
+    /** Legacy isolated-test constructor. Spring production wiring uses the seven-argument constructor. */
+    public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
+                                  CustomerRepository customerRepository,
+                                  WorkflowUnitReviewService workflowUnitReviewService,
+                                  ProductSpecificationConversionSyncService specificationConversionSyncService,
+                                  ProductPackagingSpecService productPackagingSpecService) {
+        this(productTypeRepository, objectMapper, customerRepository, workflowUnitReviewService,
+                specificationConversionSyncService, productPackagingSpecService, null);
+    }
+
+    /** Legacy isolated-test constructor. Spring production wiring uses the seven-argument constructor. */
     public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
                                   CustomerRepository customerRepository,
                                   WorkflowUnitReviewService workflowUnitReviewService,
                                   ProductSpecificationConversionSyncService specificationConversionSyncService) {
         this(productTypeRepository, objectMapper, customerRepository, workflowUnitReviewService,
-                specificationConversionSyncService, null);
+                specificationConversionSyncService, null, null);
+    }
+
+    /**
+     * 下架前查在飞销售订单。闸没注入时**拒绝下架**, ⛔ 不是跳过。
+     *
+     * @param product     当前(未修改的)实体, isActive 必须还是库里的旧值
+     * @param newIsActive 即将写入的新值
+     */
+    private void assertRetirable(ProductType product, Boolean newIsActive) {
+        // 方向判据引用 guard 里的唯一定义, ⛔ 不在这里重写一份 (重写会让闸里那份坏掉时
+        // 入口侧的阴性对照仍然是绿的 —— 变异对照实测过)。
+        // 只有 true → false 才需要闸; 其余方向连闸都不用在场。
+        if (!com.cretas.aims.service.product.ProductRetirementGuard.isRetirement(product, newIsActive)) {
+            return;
+        }
+        if (productRetirementGuard == null) {
+            throw new IllegalStateException(
+                    "ProductRetirementGuard 未注入 —— 下架闸不可用, 拒绝下架 productTypeId=" + product.getId());
+        }
+        productRetirementGuard.assertRetirable(product, newIsActive);
     }
 
     /** T149 Part A: 自动生成编号撞 UNIQUE 约束时的重试次数 (并发/竞态防御). */
@@ -363,6 +405,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getSinglePotCapacity() != null) productType.setSinglePotCapacity(dto.getSinglePotCapacity());
         if (dto.getPackageSpec() != null) productType.setPackageSpec(dto.getPackageSpec());
         if (dto.getNotes() != null) productType.setNotes(dto.getNotes());
+        // 下架闸必须在 setIsActive 之前 —— 它读的是实体里的**旧**状态来判方向。
+        assertRetirable(productType, dto.getIsActive());
         if (dto.getIsActive() != null) productType.setIsActive(dto.getIsActive());
         if (dto.getSpecification() != null) productType.setSpecification(dto.getSpecification());
         if (dto.getRelatedCustomer() != null) productType.setRelatedCustomer(dto.getRelatedCustomer());
@@ -765,6 +809,9 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                         .withHint("批量操作中包含其他工厂的产品类型, 请重新选择");
             }
 
+            // 下架闸必须在 setIsActive 之前。批量里只要有一条被拦, 整批回滚 (@Transactional) ——
+            // 让用户拿到「哪个产品、哪几张单」而不是一个部分成功的半吊子状态。
+            assertRetirable(productType, isActive);
             productType.setIsActive(isActive);
             productType.setUpdatedAt(LocalDateTime.now());
             productTypeRepository.save(productType);
