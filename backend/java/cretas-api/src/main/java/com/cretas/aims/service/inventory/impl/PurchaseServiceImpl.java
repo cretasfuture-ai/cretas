@@ -2267,16 +2267,23 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (record.getPurchaseOrderId() != null) {
             try {
                 PurchaseOrder order = purchaseOrderRepository.findById(record.getPurchaseOrderId()).orElse(null);
-                // 实收金额: 入库单 totalAmount (Σ 实收数量 × 单价)。为 0/缺价时 recordPayableIfAbsent 诚实跳过 (不伪造应付)。
-                BigDecimal receivedValue = record.getTotalAmount();
+                // 🔴 2026-08-28 口径修复: 应付挂账金额必须是【价税合计】, 不是未税额。
+                //   record.getTotalAmount() 是 Σ 实收数量 × 单价 —— **未税**。旧实现直接拿它挂账,
+                //   于是供应商开来含税发票时对不上。生产实测 18 条 AP_INVOICE 里 13 条是未税口径,
+                //   少记合计 ¥249,988.54; 本轮实操 PO-20260828-0001 亦复现 (挂 1834.86 / 实欠 2000.00)。
+                //   ⚠️ 采购侧比销售侧更隐蔽: 采购收票是人工上传, 且 reconcile() 的 MATCHED 是人填的,
+                //     代码里没有任何金额比对 ⇒ 没有任何一道闸会发现这个差。
+                // ⛔ 仍然按【本次入库单实收】算 (保留 2026-07-03 那次修复的语义: 超收要挂实收值),
+                //   只是逐行乘上该 PO 行的税率。
+                BigDecimal receivedValue = taxInclusiveReceivedValue(order, record);
                 if (order != null && order.getSupplierId() != null) {
                     ArApTransaction ap = arApService.recordPayableIfAbsent(factoryId, order.getSupplierId(), order.getId(),
                             SOURCE_DOC_TYPE_PURCHASE_RECEIVE, record.getId(),
                             receivedValue, LocalDate.now().plusDays(30), userId,
                             "采购入库自动挂账-" + record.getReceiveNumber());
                     if (ap != null) {
-                        log.info("自动应付挂账(实收值): orderId={}, receiveId={}, receivedValue={}, transactionId={}",
-                                order.getId(), record.getId(), receivedValue, ap.getId());
+                        log.info("自动应付挂账(实收价税合计): orderId={}, receiveId={}, 价税合计={}, 未税={}, transactionId={}",
+                                order.getId(), record.getId(), receivedValue, record.getTotalAmount(), ap.getId());
                     }
                 }
             } catch (Exception e) {
@@ -2286,6 +2293,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
 
         // 发布物料收货事件 → 触发供应链联动（检查PP原料到齐状态）
+        // NOTE: taxInclusiveReceivedValue 的定义在本类末尾。
         for (PurchaseReceiveItem item : record.getItems()) {
             try {
                 BigDecimal qty = item.getInventoryQuantitySnapshot() != null
@@ -3942,5 +3950,60 @@ public class PurchaseServiceImpl implements PurchaseService {
         item.setUntaxedAmountSnapshot(untaxed);
         item.setTaxInclusiveAmountSnapshot(taxInclusive);
         item.setTaxAmountSnapshot(untaxed == null || taxInclusive == null ? null : taxInclusive.subtract(untaxed));
+    }
+
+    /**
+     * 本次入库单的【价税合计】实收金额 —— 应付挂账口径。
+     *
+     * <p>🔴 2026-08-28: 修 {@code record.getTotalAmount()} 是未税额、直接拿去挂应付的缺陷。
+     * 生产实测 18 条 AP_INVOICE 里 13 条是未税口径, 少记税额合计 ¥249,988.54。
+     *
+     * <h3>为什么不能直接用 PO 行的 {@code getLineAmountWithTax()}</h3>
+     * 那个 getter 按 <b>PO 计划数量</b> 算。应付必须按 <b>本次实收数量</b> 算 ——
+     * 2026-07-03 那次修复的全部意义就在这里 (六膳门超收 130kg 时按计划 100kg 挂账会漏 600)。
+     * 所以这里逐行用 <b>入库单的实收量 × 单价</b>, 只借 PO 行的 <b>税率</b>。
+     *
+     * <h3>诚实的降级</h3>
+     * <ul>
+     *   <li>行无单价 → 该行贡献 0 (与旧 totalAmount 的口径一致, 不伪造金额)</li>
+     *   <li>行找不到对应 PO 行 / 税率为空 → <b>按 0 税率</b>计, 即只算未税额。
+     *       ⛔ 不猜一个税率 —— 宁可少算也不凭空造税。</li>
+     * </ul>
+     * 全部行都算不出来时返回 {@code record.getTotalAmount()}(可能为 0),
+     * {@code recordPayableIfAbsent} 对 0 会诚实跳过, 不挂假应付。
+     *
+     * <p>取整与 {@link PurchaseOrderItem#getLineAmountWithTax()} 保持一致:
+     * 行级 setScale(2, HALF_UP), 税率除法 6 位 HALF_UP。
+     */
+    private BigDecimal taxInclusiveReceivedValue(PurchaseOrder order, PurchaseReceiveRecord record) {
+        if (record == null || record.getItems() == null || record.getItems().isEmpty()) {
+            return record != null ? record.getTotalAmount() : BigDecimal.ZERO;
+        }
+        java.util.Map<Long, BigDecimal> taxRateByPoItemId = new java.util.HashMap<>();
+        if (order != null && order.getItems() != null) {
+            for (PurchaseOrderItem poItem : order.getItems()) {
+                if (poItem.getId() != null) {
+                    taxRateByPoItemId.put(poItem.getId(), poItem.getTaxRate());
+                }
+            }
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (PurchaseReceiveItem item : record.getItems()) {
+            if (item.getUnitPrice() == null || item.getReceivedQuantity() == null) {
+                continue;   // 与旧 totalAmount 同口径: 缺价的行不计
+            }
+            BigDecimal net = item.getReceivedQuantity().multiply(item.getUnitPrice())
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+            BigDecimal rate = item.getPurchaseOrderItemId() != null
+                    ? taxRateByPoItemId.get(item.getPurchaseOrderItemId()) : null;
+            if (rate == null || rate.compareTo(BigDecimal.ZERO) == 0) {
+                total = total.add(net);
+                continue;
+            }
+            BigDecimal multiplier = BigDecimal.ONE.add(
+                    rate.divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP));
+            total = total.add(net.multiply(multiplier).setScale(2, java.math.RoundingMode.HALF_UP));
+        }
+        return total;
     }
 }
