@@ -703,6 +703,20 @@ const YieldStepReportScreen: React.FC = () => {
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
 
+  /**
+   * 多产出: `getOutputOptions(batchId)` 返回的是**整个批次所有工序**的产出项 (Critical 返工修复,
+   * 2026-08-28 评审)。渲染和提交必须限定在**当前工序**, 否则:
+   * (a) 金检/X光两道工序各有一个 isRework 产出项, 不过滤会同时把两道的量都摆给操作员,
+   *     `buildSemiOutputsPayload` 按"至多一个 isRework 项"的假设只留最后一条, 另一条静默消失;
+   * (b) 操作员报"金检"这道工时, 会被推到"X光"那道的产出行, 提交后挂错工序。
+   * ⛔ 过滤只做一次、只在这里做 —— 渲染 (L~3130) 和提交 (doSubmitOutput) 必须共用这同一份列表,
+   *    各写一遍口径会漂 (同一个东西有两份, 它一定会漂)。
+   */
+  const taskOptions = useMemo(
+    () => outputOptions.filter((o) => !!o.semiCode && o.taskId === currentTask?.id),
+    [outputOptions, currentTask?.id],
+  );
+
   // 两点报工: 哨兵 task 检测 (workProcessId 为特殊常量时走简化屏)
   const isSentinelMaterial = currentTask?.workProcessId === SENTINEL_MATERIAL_INPUT;
   const isSentinelOutput = currentTask?.workProcessId === SENTINEL_FINAL_OUTPUT;
@@ -1570,10 +1584,11 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     // 多产出: 每个产出端口各取各的数; 回料那一项的数同时作为 defectQuantity (质量账)
-    const outputPayload = buildSemiOutputsPayload(outputOptions, semiQtyByCode);
+    // ⛔ 传 taskOptions (已按当前工序过滤), 不传 outputOptions (整批次) —— 见 taskOptions 定义处注释
+    const outputPayload = buildSemiOutputsPayload(taskOptions, semiQtyByCode);
     const hasAnySemi = (outputPayload.semiOutputs?.length ?? 0) > 0;
     const outputKind: YieldReportRequest['outputKind'] =
-      outputOptions.some((o) => !!o.semiCode)
+      taskOptions.length > 0
         ? (hasAnySemi ? 'BOTH' : 'FINISHED')
         : undefined;
     const validByproducts = byproducts
@@ -1622,11 +1637,22 @@ const YieldStepReportScreen: React.FC = () => {
         const cumText = cumulative != null ? `已累计产出 ${cumulative} ${outUnit}。` : '';
         appAlert('产出已保存 (未完工)', `${cumText}本道仍可继续产出, 完成后点"标记完工"锁定出成率。`);
       } else if (hasAnySemi) {
-        // 多产出: 半成品/回料产出成功提示 (逐项列出, 而不是只报第一项)
-        const semiText = (outputPayload.semiOutputs ?? [])
+        // 多产出: 半成品/回料分开措辞 —— 不良品不能说"入半成品库" (与栏位 hint "该数量入回料库存"
+        // 打架, 会让操作员以为不良品被当正常半成品入库; 2026-08-28 评审 Important)。
+        const semiOutputsList = outputPayload.semiOutputs ?? [];
+        const finishedText = semiOutputsList
+          .filter((s) => !s.isRework)
           .map((s) => `${s.quantity} ${outUnit}`)
           .join('、');
-        appAlert('完工出成已提交', `已入半成品库 ${semiText}`);
+        const reworkText = semiOutputsList
+          .filter((s) => s.isRework)
+          .map((s) => `${s.quantity} ${outUnit}`)
+          .join('、');
+        const msgParts = [
+          ...(finishedText ? [`已入半成品库 ${finishedText}`] : []),
+          ...(reworkText ? [`已记不良品 ${reworkText}`] : []),
+        ];
+        appAlert('完工出成已提交', msgParts.join('；'));
       } else {
         // 🔴 成功不能是唯一静默的分支 —— 与 handleSubmitSegment 2026-08-18 踩的是同一个形态
         //    (校验不过 / 提交失败 / 网络异常每条路都弹, 唯独成功什么都不说)。
@@ -1667,7 +1693,7 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
-      outputOptions, semiQtyByCode, buildPhotoAnnotations]);
+      taskOptions, semiQtyByCode, buildPhotoAnnotations]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {
@@ -3112,7 +3138,7 @@ const YieldStepReportScreen: React.FC = () => {
                   <Text style={styles.semiOutputLoadingText}>查询半成品产出选项…</Text>
                 </View>
               ) : null}
-              {!outputOptionsLoading && outputOptions.filter((o) => !!o.semiCode).map((opt) => (
+              {!outputOptionsLoading && taskOptions.map((opt) => (
                 <View key={opt.semiCode} style={styles.semiOutputSection} testID={`semi-output-section-${opt.semiCode}`}>
                   <View style={styles.divider} />
                   <Text style={styles.semiOutputTitle}>

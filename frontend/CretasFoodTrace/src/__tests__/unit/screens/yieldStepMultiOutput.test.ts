@@ -30,4 +30,29 @@ describe('多产出提交载荷', () => {
     expect(r.semiOutputs).toBeUndefined();
     expect(r.defectQuantity).toBeUndefined();
   });
+
+  // 2026-08-28 评审 Critical 返工: 金检/X光两道工序各自都有一个 isRework 产出项。
+  // 调用方(屏幕层)有责任只传入"当前工序"的选项 —— 这个函数不做工序过滤, 也不知道
+  // "当前工序"是谁。这条测试钉住"调用方违反契约、传入 2 个 isRework 项"时的行为:
+  // 明确(last-write-wins), 不是静默丢数据的黑盒。
+  it('传入两个 isRework 项(违反"至多一个"契约)且都填了数 → 两条都进 semiOutputs, defectQuantity 取最后一条(明确的 last-write-wins, 不是随机丢弃)', () => {
+    const twoReworkOptions = [
+      { taskId: 1, processName: '金检', semiCode: 'PTSEMI-JJ-REWORK', processOrder: 9, isRework: true },
+      { taskId: 2, processName: 'X光', semiCode: 'PTSEMI-XG-REWORK', processOrder: 10, isRework: true },
+    ];
+    const r = buildSemiOutputsPayload(twoReworkOptions, {
+      'PTSEMI-JJ-REWORK': '30',
+      'PTSEMI-XG-REWORK': '20',
+    });
+    // 两条产出都保留 (不会被静默吞掉)
+    expect(r.semiOutputs).toHaveLength(2);
+    expect(r.semiOutputs).toEqual(
+      expect.arrayContaining([
+        { semiCode: 'PTSEMI-JJ-REWORK', quantity: 30, isRework: true },
+        { semiCode: 'PTSEMI-XG-REWORK', quantity: 20, isRework: true },
+      ]),
+    );
+    // defectQuantity 只能有一个值, 契约是"取最后一条" —— 明确, 不是未定义行为
+    expect(r.defectQuantity).toBe(20);
+  });
 });
