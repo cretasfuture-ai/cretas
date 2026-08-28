@@ -123,7 +123,7 @@ export default function AIAnalysisDetailScreen() {
 
       const factoryId = user?.factoryUser?.factoryId;
       if (!factoryId) {
-        Alert.alert(t('common.error') || 'Error', t('aiAnalysisDetail.userInfoIncomplete'));
+        Alert.alert(t('common:error') || 'Error', t('aiAnalysisDetail.userInfoIncomplete'));
         return;
       }
 
@@ -373,7 +373,7 @@ ${report.expiresAt ? t('aiAnalysisDetail.shareTemplate.expiresAt', { time: new D
                       }
                     } catch (error) {
                       aiAnalysisLogger.error('复制AI分析内容失败', error as Error, { reportId });
-                      Alert.alert(t('common.error') || 'Error', t('aiAnalysisDetail.copyFailed'));
+                      Alert.alert(t('common:error') || 'Error', t('aiAnalysisDetail.copyFailed'));
                     }
                   }}
                 />

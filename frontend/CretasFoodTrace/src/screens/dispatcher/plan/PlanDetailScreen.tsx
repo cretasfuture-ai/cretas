@@ -277,7 +277,7 @@ export default function PlanDetailScreen() {
           Alert.alert(t('errors.notFound'), t('plan.notFound'));
           navigation.goBack();
         } else {
-          Alert.alert(t('errors.loadFailed'), error.response?.data?.message || t('plan.loadError'));
+          Alert.alert(t('platform:errors.loadFailed'), error.response?.data?.message || t('plan.loadError'));
         }
       } else if (error instanceof Error) {
         Alert.alert(t('errors.error'), error.message);

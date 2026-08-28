@@ -79,6 +79,23 @@ public class PurchaseException extends BaseEntity {
     @Column(name = "material_name", length = 200)
     private String materialName;
 
+    /**
+     * 读时补齐的可读单号 —— 表里只有 {@code purchaseOrderId}（UUID）。
+     *
+     * <p>2026-08-28 逐屏走查：采购异常屏把那个 UUID 直接当成「采购单」显示
+     * （{@code 采购单: 39603589-739e-4094-ac50-ab745e977077}），而同一个 App 的采购单列表
+     * 用的是可读的 {@code PO-20260828-0001}。⛔ 前端造不出这个号，只能后端给。
+     *
+     * <p>⚠️ 不落库：这是快照表，补历史行要写迁移；读时按 PO 查一次即可，
+     * 而且<b>存量行也一起修好</b>。
+     */
+    @Transient
+    private String purchaseOrderNumber;
+
+    /** 读时补齐的供应商名 —— 表里只有 {@code supplierId}，前端从来显示不出供应商。 */
+    @Transient
+    private String supplierName;
+
     @NotNull
     @Enumerated(EnumType.STRING)
     @Column(name = "exception_type", nullable = false, length = 32)

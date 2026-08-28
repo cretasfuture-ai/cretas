@@ -152,7 +152,7 @@ export default function ConversionRateScreen() {
       });
     } catch (error: unknown) {
       conversionLogger.error('加载转换率数据失败', error);
-      const errorMessage = error instanceof Error ? error.message : t('common.loadFailed');
+      const errorMessage = error instanceof Error ? error.message : t('home:common.loadFailed');
       Alert.alert(t('common.error'), errorMessage);
       setMaterials([]);
     } finally {

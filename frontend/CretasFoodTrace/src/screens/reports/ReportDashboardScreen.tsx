@@ -52,7 +52,12 @@ export default function ReportDashboardScreen() {
     totalInspected: number;
     passed: number;
     failed: number;
-    passRate: number;
+    conditional: number;
+    pending: number;
+    /** 批次级合格率 = 判定为 PASS 的批次 / 总批次。与「质检统计」屏同一口径。 */
+    batchPassRate: number | null;
+    /** 后端的 passRate 是**平均样本合格率**（每条记录 passCount/total 再取均值），与上面不是一个量。 */
+    avgSamplePassRate: number | null;
   } | null>(null);
 
   const [efficiencyData, setEfficiencyData] = useState<{
@@ -169,12 +174,29 @@ export default function ReportDashboardScreen() {
       }
 
       // 处理质量数据
+      //
+      // 🔴 2026-08-28 逐屏走查：这张卡原来显示「检验数 13 · 合格 6 · 不合格 7 · 合格率 68.8%」
+      //    —— 6/13 = 46.2%，和 68.8% 对不上。两个数根本不是一个量：
+      //      · passedInspections / failedInspections 是**批次计数**，
+      //        而 failedInspections 是「非 PASS」，把 CONDITIONAL 和**待检**都算进了不合格
+      //        （后端 getQualityStatistics 的注释写明了这一点，且该键语义为兼容 web-admin 冻结）
+      //      · passRate 是 **averagePassRate** —— 每条记录 passCount/总数 再取均值，样本级
+      //    隔壁「质检统计」屏用的是后端专门加的 breakdown，显示 46.2%，那个是对的。
+      //
+      //  ⇒ 改成读 breakdown（同一口径），并把两个率**分开命名**，⛔ 不再让它们共用「合格率」。
       if (qualityRes) {
+        const bd = qualityRes.monthlyStatistics?.breakdown;
+        const total = qualityRes.totalInspections ?? 0;
+        const passed = bd?.pass ?? qualityRes.passedInspections ?? 0;
         setQualityData({
-          totalInspected: qualityRes.totalInspections ?? 0,
-          passed: qualityRes.passedInspections ?? 0,
-          failed: qualityRes.failedInspections ?? 0,
-          passRate: qualityRes.passRate ?? 0,
+          totalInspected: total,
+          passed,
+          failed: bd?.fail ?? qualityRes.failedInspections ?? 0,
+          conditional: bd?.conditional ?? 0,
+          pending: bd?.pending ?? 0,
+          // 没有批次就算不出来 —— ⛔ 不要兜成 0（0% 合格率是一个合法读数）
+          batchPassRate: total > 0 ? (passed / total) * 100 : null,
+          avgSamplePassRate: qualityRes.passRate ?? null,
         });
       }
 
@@ -363,18 +385,38 @@ export default function ReportDashboardScreen() {
                           <Text style={[styles.metricValueSmall, { color: '#F44336' }]}>{qualityData.failed}</Text>
                           <Text style={styles.metricLabelSmall}>不合格</Text>
                         </View>
+                        <View style={styles.metricItemSmall}>
+                          <Text style={[styles.metricValueSmall, { color: '#FF9800' }]}>{qualityData.pending}</Text>
+                          <Text style={styles.metricLabelSmall}>待检</Text>
+                        </View>
                       </View>
+                      {qualityData.conditional > 0 && (
+                        <Text style={styles.qualityFootnote}>
+                          另有 {qualityData.conditional} 条「有条件通过」，未计入合格
+                        </Text>
+                      )}
                       <View style={styles.progressRow}>
-                        <Text style={styles.progressLabel}>合格率</Text>
-                        <Text style={[styles.progressValue, { color: getStatusColor(qualityData.passRate, 95) }]}>
-                          {Number(qualityData.passRate ?? 0).toFixed(1)}%
+                        <Text style={styles.progressLabel}>合格率（按批次）</Text>
+                        <Text
+                          style={[
+                            styles.progressValue,
+                            { color: qualityData.batchPassRate === null ? '#9E9E9E' : getStatusColor(qualityData.batchPassRate, 95) },
+                          ]}
+                        >
+                          {qualityData.batchPassRate === null ? '--' : `${qualityData.batchPassRate.toFixed(1)}%`}
                         </Text>
                       </View>
                       <ProgressBar
-                        progress={Number(qualityData.passRate ?? 0) / 100}
-                        color={getStatusColor(qualityData.passRate, 95)}
+                        progress={(qualityData.batchPassRate ?? 0) / 100}
+                        color={qualityData.batchPassRate === null ? '#BDBDBD' : getStatusColor(qualityData.batchPassRate, 95)}
                         style={styles.progressBar}
                       />
+                      {qualityData.avgSamplePassRate !== null && (
+                        <Text style={styles.qualityFootnote}>
+                          平均样本合格率 {qualityData.avgSamplePassRate.toFixed(1)}%
+                          （每条记录内部的抽样合格比例，与上面按批次的口径不同）
+                        </Text>
+                      )}
                     </>
                   ) : (
                     <Text style={styles.noDataText}>暂无质量数据</Text>
@@ -623,6 +665,13 @@ export default function ReportDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  qualityFootnote: {
+    color: '#9E9E9E',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 6,
+  },
+
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',

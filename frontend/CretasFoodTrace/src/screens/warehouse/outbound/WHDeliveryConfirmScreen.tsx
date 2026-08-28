@@ -26,6 +26,7 @@ import { handleError } from '../../../utils/errorHandler';
 import { validateQty, canSubmitRows, buildActualQuantities, shortfallOf } from './warehouseDeliveryConfirm.logic';
 import { salesDeliveryBatchAllocationApiClient } from '../../../services/api/salesDeliveryBatchAllocationApiClient';
 import { isConfirmableDeliveryStatus } from '../warehouseList.logic';
+import { MissingRouteParams } from '../../../components/common/MissingRouteParams';
 
 type NavigationProp = NativeStackNavigationProp<WHOutboundStackParamList, 'WHDeliveryConfirm'>;
 type ScreenRoute = RouteProp<WHOutboundStackParamList, 'WHDeliveryConfirm'>;
@@ -62,7 +63,11 @@ function itemDisplayName(it: WarehouseDeliveryItem): string {
 export function WHDeliveryConfirmScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ScreenRoute>();
-  const { deliveryId, deliveryNumber } = route.params;
+  // ⛔ 原来是 `= route.params;` —— 没有 params 时直接抛
+  //    `Cannot destructure property 'deliveryId' of 'route.params' as it is undefined`。
+  //    2026-08-28 表单走查实测这一屏当场崩, 由 AppErrorBoundary 接住。
+  //    正常入口都传了参数, 所以是潜伏的 —— 但崩溃和「说清缺什么」代价差得很远。
+  const { deliveryId, deliveryNumber } = route.params ?? ({} as { deliveryId?: string; deliveryNumber?: string });
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -221,6 +226,11 @@ export function WHDeliveryConfirmScreen() {
       setSubmitting(false);
     }
   };
+
+  // 没有发货确认对象就没法继续 —— 说清该从哪进来, ⛔ 不要崩。
+  if (!deliveryId) {
+    return <MissingRouteParams title="发货确认" hint="这一页要从「待发货」列表里点某一张发货单进来。" onBack={() => navigation.goBack()} />;
+  }
 
   if (loading) {
     return (

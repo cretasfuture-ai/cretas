@@ -48,7 +48,19 @@ const SRC = path.join(__dirname, '../..');
 const LOCALE_DIR = path.join(SRC, 'i18n/locales/zh-CN');
 
 /** 2026-08-28 建闸时的实测值。⛔ 只许降，不许升。 */
-const MISSING_KEY_BUDGET = 519;
+// 2026-08-28 收紧：519 -> 486。
+//
+// ⚠️ 两个数**不是同一把尺子**量的，必须连口径一起报（否则会被读成只降了 33）：
+//   · 同一把旧尺子：519 -> 482  —— 这 37 个是真的修好了
+//     (25 处把 `t('ns.key')` 改成 i18next 的跨 namespace 写法 `t('ns:key')`,
+//      18 处的键其实在另一个 namespace 里)
+//   · 换成新尺子后：482 -> 486  —— 涨的 4 个不是退步, 是闸原来**看不见**冒号写法,
+//     现在能查了, 于是查出 4 处目标确实不存在的跨 ns 调用。
+//
+// ⛔ 剩下的 486 里绝大多数(platform 128 / home 114 / management 86)在**走查从没到过的树**里。
+// 它们需要的是「照着屏上写文案」, 不是凭空造 400 条中文 —— 那正是这一轮在清的东西。
+// ⇒ 下一步应当先走那三棵树, 边走边写, ⛔ 不要批量填。
+const MISSING_KEY_BUDGET = 486;
 
 function walk(dir: string, acc: string[] = []): string[] {
   for (const name of fs.readdirSync(dir)) {
@@ -71,6 +83,17 @@ function loadBundles(): Record<string, unknown> {
 }
 
 function lookup(bundles: Record<string, unknown>, ns: string, key: string): string | null {
+  // i18next 跨 namespace 写法 `t('other:some.key')` —— 冒号是默认 nsSeparator,
+  // 与 useTranslation() 声明的 ns 无关。
+  //
+  // ⚠️ 2026-08-28: 闸原来既不匹配也不解析冒号, 这类调用**对它完全不可见**。
+  // 把一批 t('common.yes')(在 ns=home 的文件里实际解析成 home.common.yes, 取不到)
+  // 改成正确的 t('common:yes') 之后, 闸把改好的那些直接跳过了 ——
+  // 一道看不见正确写法的闸, 既不会因为修好而变绿, 也不会因为写错而变红。
+  const sep = key.indexOf(':');
+  if (sep > 0) {
+    return lookup(bundles, key.slice(0, sep), key.slice(sep + 1));
+  }
   let cur: unknown = bundles[ns];
   for (const part of key.split('.')) {
     if (cur && typeof cur === 'object' && part in (cur as Record<string, unknown>)) {
@@ -83,7 +106,7 @@ function lookup(bundles: Record<string, unknown>, ns: string, key: string): stri
 }
 
 const NS_RE = /useTranslation\(\s*(?:\[\s*)?['"]([\w-]+)['"]/g;
-const T_RE = /\bt\(\s*['"]([A-Za-z][\w.-]*)['"]\s*(,|\))/g;
+const T_RE = /\bt\(\s*['"]([A-Za-z][\w.:-]*)['"]\s*(,|\))/g;
 
 type Scan = {
   filesChecked: number;
@@ -110,7 +133,7 @@ function scan(): Scan {
 
     for (const m of txt.matchAll(T_RE)) {
       const key = m[1]!;
-      if (!key.includes('.')) continue; // 裸词多半是变量, 不是 key path
+      if (!key.includes('.') && !key.includes(':')) continue; // 裸词多半是变量, 不是 key path
       if (m[2] === ',') {
         // 带 defaultValue 的调用: 取不到 key 时屏上是兜底文案, 不是 key
         const window = txt.slice(m.index! + m[0].length, m.index! + m[0].length + 200);

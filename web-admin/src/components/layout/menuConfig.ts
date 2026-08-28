@@ -320,6 +320,10 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/system/logs', title: '操作日志', icon: '', module: 'system', groupLabel: '系统运维' },
       { path: '/system/settings', title: '系统设置', icon: '', module: 'system', groupLabel: '工厂配置' },
+      // 2026-08-28: 阈值参数中心工厂侧入口 —— owner 原话「得有一个模块专门去设置这个东西」。
+      // ⚠️ groupLabel 只标记组的第一条 (见 childGroupLabels 测试), 沿用上一条 '工厂配置'
+      //    这个组, 不重复声明 groupLabel, 否则会被判定成"多开了一个同名组".
+      { path: '/system/business-thresholds', title: '业务阈值配置', icon: '', module: 'system' },
       { path: '/system/approval-chains', title: '审批链配置', icon: '', module: 'system' },
       { path: '/system/workflow-designer', title: '工作流设计器', icon: '', module: 'system' },
       { path: '/system/features', title: '功能模块配置', icon: '', module: 'system' },

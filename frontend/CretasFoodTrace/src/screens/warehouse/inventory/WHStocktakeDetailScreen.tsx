@@ -146,7 +146,21 @@ export function WHStocktakeDetailScreen(): React.JSX.Element {
             品项明细（共 {items.length} 项，差异 {diffItems.length} 项）
           </Text>
           {items.length === 0 && (
-            <Text style={styles.emptyText}>暂无品项数据</Text>
+            // 🔴 2026-08-28 逐屏走查：ST-202608-2A4C1F02「已审批 · 共 0 项 · 暂无品项数据」
+            //    看起来像盘点数据丢了。查生产库后发现**不是缺陷**：那张单
+            //    `selfConfirmedZeroDifference = true` —— 盘点人自我确认「零差异」，
+            //    按设计就不含品项明细，走条件节点直达 APPROVED。
+            //
+            //    ⚠️ 但屏上没有任何东西说明这一点 ⇒ 使用者分不清
+            //    「合法的零差异确认」和「数据没落」。这才是要修的：
+            //    **空是一种合法状态时，得把它是哪一种说出来。**
+            stocktake?.selfConfirmedZeroDifference ? (
+              <Text style={styles.emptyText} testID="stocktake-self-confirmed-zero">
+                本单为「零差异自我确认」：盘点人确认账实一致，按设计不产生品项明细。
+              </Text>
+            ) : (
+              <Text style={styles.emptyText}>暂无品项数据</Text>
+            )
           )}
           {items.map((it) => {
             const actual = it.actualQty ?? null;

@@ -13,8 +13,14 @@ import { get, post, put, del } from './request';
 
 // ==================== Types ====================
 
-/** 阈值分类 — 6 大类对应 6 个 service 类的 hard-coded 常量. */
-export type ThresholdCategory = 'INVENTORY' | 'IOT' | 'CREDIT' | 'BOM' | 'SHORTAGE' | 'AI';
+/**
+ * 阈值分类 — 2026-08-28 由 6 类扩到 15 类, 对应各 service 类的 hard-coded 常量.
+ * 后 9 个 (SALES..EFFICIENCY) 与后端 ThresholdCategory 枚举扩容同步 (backend PR 并行进行中)。
+ */
+export type ThresholdCategory =
+  | 'INVENTORY' | 'IOT' | 'CREDIT' | 'BOM' | 'SHORTAGE' | 'AI'
+  | 'SALES' | 'PURCHASE' | 'PRICING' | 'PRODUCTION' | 'PROCUREMENT'
+  | 'QUALITY' | 'FINANCE' | 'PROCESSING' | 'EFFICIENCY';
 
 /** Display labels for category — used by sub-tabs / breadcrumbs. */
 export const ThresholdCategoryLabels: Record<ThresholdCategory, string> = {
@@ -24,6 +30,15 @@ export const ThresholdCategoryLabels: Record<ThresholdCategory, string> = {
   BOM: 'BOM 递归',
   SHORTAGE: '缺料分析',
   AI: 'AI 路由',
+  SALES: '销售',
+  PURCHASE: '采购',
+  PRICING: '定价',
+  PRODUCTION: '生产',
+  PROCUREMENT: '采购分析',
+  QUALITY: '质量',
+  FINANCE: '财务',
+  PROCESSING: '加工',
+  EFFICIENCY: '人效',
 };
 
 /** 阈值值类型 — 决定 thresholdValue 字符串如何被运行时解析. */

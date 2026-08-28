@@ -105,7 +105,16 @@ const todayStr = (): string => formatDate(new Date());
 export default function WHReceiptCreateScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<RouteProps>();
-  const { purchaseOrderId, orderNumber } = route.params;
+  // ⛔ 原来是 `= route.params;` —— 没有 params 时直接抛
+  //    `Cannot destructure property 'purchaseOrderId' of 'route.params' as it is undefined`。
+  //
+  // 2026-08-28 表单走查实测：深链到这一屏（不带参数）当场崩，
+  // 由第三轮加的 AppErrorBoundary 接住，屏上显示「这一页打不开」+ 那句英文异常。
+  //
+  // ⚠️ 产品里两个入口（入库列表卡片 / 采购收货列表卡片）**都传了参数**，
+  //    所以今天用户碰不到。但「崩掉」和「说清缺什么」的代价差得很远，
+  //    而这一行的写法保证了任何一次漏传都只能以崩溃的形式出现。
+  const { purchaseOrderId, orderNumber } = route.params ?? ({} as RouteProps['params']);
   const { user } = useAuthStore();
   const factoryId = user?.factoryId;
 
@@ -639,6 +648,24 @@ export default function WHReceiptCreateScreen() {
       setClosing(false);
     }
   }, [closeReason, closeNotes, purchaseOrderId, orderNumber, navigation]);
+
+  // 没有采购单参数就没法收货 —— 说清楚缺什么, ⛔ 不要崩, 也不要停在「加载中」转圈。
+  if (!purchaseOrderId) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <Appbar.Header>
+          <Appbar.BackAction onPress={() => navigation.goBack()} />
+          <Appbar.Content title="收货" />
+        </Appbar.Header>
+        <View style={{ alignItems: 'center', flex: 1, justifyContent: 'center', paddingHorizontal: 32 }}>
+          <Text style={{ color: '#616161', fontSize: 15, fontWeight: '600' }}>没有指定采购单</Text>
+          <Text style={{ color: '#9e9e9e', fontSize: 13, lineHeight: 20, marginTop: 8, textAlign: 'center' }}>
+            这一页要从「入库任务」或「采购收货」列表里点某一张采购单进来。
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (loading) {
     return (

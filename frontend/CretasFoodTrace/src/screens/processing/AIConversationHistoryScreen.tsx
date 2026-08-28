@@ -60,7 +60,7 @@ export default function AIConversationHistoryScreen() {
     if (sessionId) {
       fetchConversationHistory();
     } else {
-      Alert.alert(t('common.error') || 'Error', t('aiConversationHistory.missingSessionId'));
+      Alert.alert(t('common:error') || 'Error', t('aiConversationHistory.missingSessionId'));
       navigation.goBack();
     }
   }, [sessionId]);
@@ -74,7 +74,7 @@ export default function AIConversationHistoryScreen() {
 
       const factoryId = user?.factoryUser?.factoryId;
       if (!factoryId || !sessionId) {
-        Alert.alert(t('common.error') || 'Error', t('aiConversationHistory.userInfoIncomplete'));
+        Alert.alert(t('common:error') || 'Error', t('aiConversationHistory.userInfoIncomplete'));
         return;
       }
 
@@ -140,7 +140,7 @@ export default function AIConversationHistoryScreen() {
 
               await aiApiClient.closeConversation(sessionId, factoryId);
               conversationLogger.info('AI会话已关闭', { sessionId, factoryId });
-              Alert.alert(t('common.success') || 'Success', t('aiConversationHistory.closeSuccess'), [
+              Alert.alert(t('dispatcher-complete:common.success') || 'Success', t('aiConversationHistory.closeSuccess'), [
                 { text: t('common.ok') || 'OK', onPress: () => navigation.goBack() },
               ]);
             },

@@ -72,8 +72,8 @@ export default function QIProfileScreen() {
     // Rule 2: 弹窗带账号上下文
     const displayName = user?.fullName || user?.username || '';
     const accountLabel = displayName
-      ? `${displayName}（${t('profile.role')}）`
-      : `@${user?.username ?? ''}（${t('profile.role')}）`;
+      ? `${displayName}（${t('hr:profile.role')}）`
+      : `@${user?.username ?? ''}（${t('hr:profile.role')}）`;
     const confirmMessage = `确定退出 ${accountLabel} 吗？`;
 
     if (Platform.OS === 'web') {

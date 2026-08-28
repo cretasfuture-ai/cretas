@@ -291,7 +291,9 @@ interface KpiMetricsResponse {
 const pct = (v: number | undefined | null): number | null =>
   v === null || v === undefined ? null : v / 100;
 
-/** 进度条宽度需要一个数；没有数据时给 0 宽度，但**文字**仍然显示「—」。 */
+/** 进度条宽度需要一个数；没有数据时给 0 宽度。
+ *  ⚠️ 光把下面的「当前:」改成「—」不够 —— el-progress **自己**还会在右端打一个
+ *  「0%」，紧挨着那个「—」。看截图才发现的。⇒ 值为 null 时一并 `:show-text="false"`。 */
 const barPct = (v: number | null): number => (v ?? 0) * 100;
 
 async function loadKPIData() {
@@ -640,6 +642,7 @@ function formatMeasure(value: number | null | undefined, unit = '', digits?: num
           <div class="kpi-label">设备综合效率 (OEE)</div>
           <el-progress
             :percentage="barPct(kpiData.production.oee)"
+            :show-text="kpiData.production.oee !== null"
             :status="getProgressStatus(kpiData.production.oee === null ? null : kpiData.production.oee * 100, targets.oee)"
             :stroke-width="12"
           />
@@ -653,6 +656,7 @@ function formatMeasure(value: number | null | undefined, unit = '', digits?: num
           <div class="kpi-label">良品率</div>
           <el-progress
             :percentage="barPct(kpiData.production.yield)"
+            :show-text="kpiData.production.yield !== null"
             :status="getProgressStatus(kpiData.production.yield === null ? null : kpiData.production.yield * 100, targets.yield)"
             :stroke-width="12"
           />
@@ -687,6 +691,7 @@ function formatMeasure(value: number | null | undefined, unit = '', digits?: num
           <div class="kpi-label">一次合格率 (FPY)</div>
           <el-progress
             :percentage="barPct(kpiData.quality.fpy)"
+            :show-text="kpiData.quality.fpy !== null"
             :status="getProgressStatus(kpiData.quality.fpy === null ? null : kpiData.quality.fpy * 100, targets.fpy)"
             :stroke-width="12"
           />
@@ -725,6 +730,7 @@ function formatMeasure(value: number | null | undefined, unit = '', digits?: num
           <div class="kpi-label">准时交付率</div>
           <el-progress
             :percentage="barPct(kpiData.delivery.onTimeRate)"
+            :show-text="kpiData.delivery.onTimeRate !== null"
             :status="getProgressStatus(kpiData.delivery.onTimeRate === null ? null : kpiData.delivery.onTimeRate * 100, targets.onTimeRate)"
             :stroke-width="12"
           />

@@ -53,6 +53,7 @@ import com.cretas.aims.service.product.ProductPackagingSpecService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
+import com.cretas.aims.service.inventory.OverReceiveLimit;
 import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.service.workflow.ApprovalWorkflowExecutor;
 import com.cretas.aims.service.workflow.SelfApprovalPolicy;
@@ -109,6 +110,60 @@ public class SalesServiceImpl implements SalesService {
     /** P0-13 批次分配校验（可选注入，避免破坏现有构造器）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService batchAllocationService;
+
+    // ==================== 超发上限 (2026-08-28) ====================
+
+    /**
+     * 全局超发上限（ops 兜底，全工厂生效）。<b>留空 = 本层不表态</b>，交给阈值中心。
+     *
+     * <p>⚠️ 默认必须是 {@code null} 而不是 {@code 0.00}：采购侧用 {@code :0.00} 当默认值时，
+     * 「没人配过」和「限制 0%」不可区分，生产上按 0% 把货堵在了门口。
+     * 见 {@link OverReceiveLimit} 的类注释。
+     */
+    @org.springframework.beans.factory.annotation.Value("${cretas.sales.over-ship-rate:#{null}}")
+    private BigDecimal salesOverShipRateProperty;
+
+    /**
+     * 阈值中心读取器（可选注入）。
+     *
+     * <p>{@code null}（单元测试直接 {@code new SalesServiceImpl(...)}，无 Spring 上下文）时
+     * 行为等价于「阈值中心里没有这一行」，<b>不是</b>「限制 0%」。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.canvas.ThresholdResolverService thresholdResolverService;
+
+    /**
+     * 解析本次发货实际生效的超发上限。<b>销售链唯一的取值入口。</b>
+     *
+     * <p>梯子：阈值中心 {@code sales.delivery.over_ship_rate} &gt; 全局属性 &gt; 不限制。
+     * 阈值中心自己内部还有一层 per-factory → 全局 {@code '*'} 的解析，本方法不重复实现它。
+     *
+     * <p>⚠️ 每次确认只调一次（在逐行循环<b>外</b>），避免逐行打 DB / 打缓存。
+     *
+     * <p>⛔ 不要在别处再写一遍这个梯子 —— 同一个梯子有两份，它一定会漂。
+     */
+    private OverReceiveLimit resolveOverShipLimit(String factoryId) {
+        if (thresholdResolverService != null) {
+            // 传 null 当 fallback: 读不到就是读不到, ⛔ 不要兜底成 0
+            //（那会把「没配置」翻译成「一件都不许超发」，正是采购侧踩过的那个坑）
+            BigDecimal configured = thresholdResolverService.getBigDecimal(
+                    factoryId, com.cretas.aims.service.canvas.ThresholdKeys.SALES_DELIVERY_OVER_SHIP_RATE, null);
+            if (configured != null) {
+                if (configured.signum() < 0) {
+                    // 负数是坏配置，不是「不限制」。放行而不是抛，避免一条坏配置把发货全堵死；
+                    // 但必须留痕，否则没人知道这条配置是废的。
+                    log.warn("SALES_OVER_SHIP_RATE_INVALID: factoryId={}, 配置值为负 ({}), 本次按【不限制】处理",
+                            factoryId, configured.toPlainString());
+                } else {
+                    return OverReceiveLimit.of(configured, OverReceiveLimit.SOURCE_SALES_THRESHOLD_HUB);
+                }
+            }
+        }
+        if (salesOverShipRateProperty != null && salesOverShipRateProperty.signum() >= 0) {
+            return OverReceiveLimit.of(salesOverShipRateProperty, OverReceiveLimit.SOURCE_SALES_PROPERTY);
+        }
+        return OverReceiveLimit.unlimited(OverReceiveLimit.SOURCE_SALES_UNCONFIGURED);
+    }
 
     /** HACCP 放行闸（可选注入，见 assertHaccpReleaseAllowed）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -3453,6 +3508,8 @@ public class SalesServiceImpl implements SalesService {
         // 走"重新分配批次"的 explicit flow. 后续 follow-up: confirm UI 同时支持调整分配.
         boolean qtyOverridden = false;
         if (actualQuantities != null && !actualQuantities.isEmpty()) {
+            // ⚠️ 循环外解析一次 —— 逐行解析会逐行打 DB/缓存, 且同一次确认里上限可能读出两个值
+            final OverReceiveLimit overShipLimit = resolveOverShipLimit(factoryId);
             for (SalesDeliveryItem item : record.getItems()) {
                 String itemIdKey = item.getId() == null ? null : String.valueOf(item.getId());
                 if (itemIdKey == null) continue;
@@ -3462,6 +3519,9 @@ public class SalesServiceImpl implements SalesService {
                         throw new BusinessException(400, "发货行 " + itemIdKey + " 的实际发货数量不能为负")
                                 .withHint("请检查输入");
                     }
+                    // ⚠️ 校验在【写入之前】—— 失败要 fail-fast, 不要先改内存再抛,
+                    //    那会留下一个已经被改脏的实体等着事务回滚(doomed-tx)。
+                    assertWithinOverShipCap(item, itemIdKey, actual, overShipLimit);
                     if (item.getDeliveredQuantity() != null
                             && actual.compareTo(item.getDeliveredQuantity()) != 0) {
                         log.info("仓库 confirm 调整数量: deliveryId={}, itemId={}, plannedQty={} → actualQty={}",
@@ -3488,6 +3548,62 @@ public class SalesServiceImpl implements SalesService {
 
         // 复用 shipDelivery 逻辑 — 含批次分配校验 + 扣库存 + 自动 AR
         return shipDelivery(factoryId, deliveryId, userId);
+    }
+
+    /**
+     * 【超发上限】校验 —— 仓管把实发数量改大时，不许无上限地多发。
+     *
+     * <h2>这道闸在补哪个洞</h2>
+     * 2026-08-28 生产实测：创建发货单时有一道 0% 硬闸
+     * （{@code 发货数量超过订单行剩余可安排数量} → 409），但仓管在本方法所在的
+     * {@code warehouseConfirmDelivery} 里覆盖实发数量时<b>只挡负数、没有任何上限</b>。
+     * 于是「订 2 发 5」可以走完：<b>库存真扣 5 件，货真的出门了</b>。
+     * 采购侧早有 {@code overReceiveRate} + 异常单两样，销售侧两样都没有。
+     *
+     * <h2>判据为什么是「实发 ≤ 计划 × (1+上限)」而不是「累计实发 ≤ 订单量 × (1+上限)」</h2>
+     * 后者要重新推一遍跨发货单的累计账（主单/子单、已取消/已退回、拆单后谁算谁），
+     * 而那本账<b>创建期已经算过了</b>：创建闸保证 {@code Σ计划 ≤ 订单量}。
+     * 两道一叠即得 {@code Σ实发 ≤ Σ计划 × (1+上限) ≤ 订单量 × (1+上限)} —— 有界，且可证明。
+     *
+     * <p>⇒ 本闸<b>刻意窄</b>：只守「仓管这一步能把数量放大多少」。
+     * ⛔ 它<b>不</b>守下面这些，别把它读成守了：
+     * <ul>
+     *   <li>创建期绕过（那道闸另在 {@code createDelivery}，是 0%）</li>
+     *   <li>直接改库的越权写入</li>
+     *   <li>{@code planned == null} 的行 —— 没有计划量就没有基准，本闸跳过；
+     *       但那种行原有逻辑<b>本来也不会应用覆盖值</b>，所以不构成新的口子</li>
+     * </ul>
+     *
+     * @param limit 本次确认生效的上限（{@link #resolveOverShipLimit} 解析，非 null；
+     *              {@code isUnlimited()} 时直接放行）
+     */
+    private void assertWithinOverShipCap(SalesDeliveryItem item, String itemIdKey,
+            BigDecimal actual, OverReceiveLimit limit) {
+        if (limit == null || limit.isUnlimited()) {
+            return;
+        }
+        BigDecimal planned = item.getDeliveredQuantity();
+        if (planned == null) {
+            // 没有计划量 = 没有基准。⛔ 不要兜底成 0 —— 那会把「不知道」判成「一件都不许发」。
+            return;
+        }
+        BigDecimal maxAllowed = limit.maxAllowed(planned);
+        if (maxAllowed == null || actual.compareTo(maxAllowed) <= 0) {
+            return;
+        }
+        String unit = UnitDisplayNames.display(item.getUnit());
+        throw new BusinessException(409, String.format(
+                "实发数量超出超发上限: 发货行 %s 计划 %s%s, 本次实发 %s%s, 最大可发 %s%s (含 %s 超发)",
+                itemIdKey,
+                planned.stripTrailingZeros().toPlainString(), unit,
+                actual.stripTrailingZeros().toPlainString(), unit,
+                maxAllowed.stripTrailingZeros().toPlainString(), unit,
+                limit.percentLabel()))
+                .withCode("DELIVERY_QUANTITY_EXCEEDS_OVER_SHIP_CAP")
+                .withHint("多出的部分本系统不会替你发出去 —— 请按实际装车量填写,"
+                        + " 或联系业务员追加订单量后再发。"
+                        + " 若本厂应当允许发更多, 在「系统设置 → 业务阈值配置 → 销售」调高发货超发上限。")
+                .withHintTarget("actualQuantities");
     }
 
     /**

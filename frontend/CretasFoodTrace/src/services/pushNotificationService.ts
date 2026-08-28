@@ -105,15 +105,42 @@ export interface PushNotificationService {
 }
 
 /**
- * APP-WEB-007 (2026-08-02): Expo 的原生推送在 Web 上不可用 —— 没有 EAS projectId 概念,
- * 也不支持 push token listener。此前只用 `Device.isDevice` 判断, 而浏览器**就是**真机,
- * 于是 12 个角色每次登录都会走完"请求权限 → 读 projectId → 注册原生监听"整条链路,
- * 稳定产出「未找到 EAS Project ID」「推送通知权限被拒绝」两条 error。
- * 这里在服务最外层对 Web 明确 no-op: 不请求权限、不读 token、不注册监听、不报 error。
+ * APP-WEB-007 (2026-08-02): Expo 的原生推送在 Web 上不可用 —— 不支持 push token listener。
+ * 此前只用 `Device.isDevice` 判断, 而浏览器**就是**真机, 于是 12 个角色每次登录都会走完
+ * "请求权限 → 读 projectId → 注册原生监听"整条链路。这里在最外层对 Web 明确 no-op。
  * 若将来要支持 Web Push, 必须走独立的 service worker/VAPID 实现, 不能复用这条原生链路。
+ *
+ * ⚠️ **订正 (2026-08-28)**: 上面这段原文写着「Web 上……没有 EAS projectId 概念」,
+ * 读起来像是「缺 projectId 是 Web 专属问题、真机是好的」。**真机也没有。**
+ *
+ * 真机实测 (小米 M2102K1AC / Android 14, 生产包 1.0.4)：
+ *   E/ReactNativeJS: [PushNotification] 未找到 EAS Project ID
+ *   W/ReactNativeJS: [usePushNotifications] 无法获取 Push Token，跳过设备注册
+ *
+ * 成因: {@link PUSH_PROJECT_ID} 读的是 `Constants.expoConfig.extra.eas.projectId`,
+ * 而 app.json 的 `extra` 只有 `{"router": {}}` —— 这个值**在任何平台都取不到**。
+ * 本项目用的是**自建 OTA**(`updates.url` 指向 ota.cretaceousfuture.com), 从来没有过
+ * EAS 项目, 所以推送注册**自上线起一次都没成功过**, 而 AppNavigator 里
+ * `autoRegisterOnLogin: true`, 仓里还有三份推送文档 —— 这是个打算要用的功能。
+ *
+ * ⛔ 要真正启用, 需要 owner 在 Expo 侧建一个项目并把 projectId 写进 app.json 的
+ * `extra.eas.projectId`（或换掉 Expo Push, 自己接 FCM）。那是账号级动作, 代码里补不出来。
+ * 在那之前, 下面把它降级成一条**明确的未配置**信号, ⛔ 不再每次登录报一条像是偶发失败的 error。
  */
 export const isPushSupported = Platform.OS !== 'web';
 const PUSH_SUPPORTED = isPushSupported;
+
+/**
+ * EAS projectId —— 没有配置时为 undefined。
+ *
+ * 单独抽出来是为了让「有没有配」这件事**可被观测**, 而不是埋在 getToken 里
+ * 每次登录抛一条 error。
+ */
+export const PUSH_PROJECT_ID: string | undefined =
+  (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId;
+
+/** 推送是否**已配置**。未配置 ≠ 失败：它是一个我们知道的、静态的事实。 */
+export const isPushConfigured = PUSH_SUPPORTED && !!PUSH_PROJECT_ID;
 
 class PushNotificationServiceImpl implements PushNotificationService {
   private notificationListener?: NotificationsNS.Subscription;
@@ -191,9 +218,14 @@ class PushNotificationServiceImpl implements PushNotificationService {
     }
 
     try {
-      const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+      const projectId = PUSH_PROJECT_ID;
       if (!projectId) {
-        pushLogger.error('未找到 EAS Project ID');
+        // ⛔ 原来这里是 error。它每次登录都触发, 而成因是**静态的没配置**,
+        //    不是一次可以重试的失败 —— 报成 error 会让人以为是偶发问题去查网络。
+        pushLogger.warn(
+          '推送未配置: app.json 的 extra.eas.projectId 缺失, 所有平台都拿不到 Push Token。' +
+            '这不是偶发失败, 需要先在配置里补上 projectId。',
+        );
         return null;
       }
 

@@ -75,15 +75,15 @@ export function CreatePlanScreen() {
 
   const validateForm = (): boolean => {
     if (!selectedProductId) {
-      Alert.alert(t('common.tip'), t('createPlan.selectProductType'));
+      Alert.alert(t('common:tip'), t('createPlan.selectProductType'));
       return false;
     }
     if (!plannedQuantity || parseFloat(plannedQuantity) <= 0) {
-      Alert.alert(t('common.tip'), t('createPlan.enterValidQuantity'));
+      Alert.alert(t('common:tip'), t('createPlan.enterValidQuantity'));
       return false;
     }
     if (!plannedDate) {
-      Alert.alert(t('common.tip'), t('createPlan.selectPlanDate'));
+      Alert.alert(t('common:tip'), t('createPlan.selectPlanDate'));
       return false;
     }
     return true;

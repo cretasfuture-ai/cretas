@@ -91,8 +91,8 @@ export default function TimeClockScreen() {
   };
 
   const handleClockIn = async () => {
-    if (lastClockIn && lastClockIn.clockInTime && !lastClockIn.clockOutTime) return Alert.alert(t('common.tip'), t('attendance.timeClock.alerts.clockOutFirst'));
-    if (!gpsLocation) return Alert.alert(t('common.tip'), t('attendance.timeClock.alerts.locatingWait'));
+    if (lastClockIn && lastClockIn.clockInTime && !lastClockIn.clockOutTime) return Alert.alert(t('common:tip'), t('attendance.timeClock.alerts.clockOutFirst'));
+    if (!gpsLocation) return Alert.alert(t('common:tip'), t('attendance.timeClock.alerts.locatingWait'));
 
     Alert.alert(t('attendance.timeClock.alerts.confirmClockIn'), `${t('attendance.timeClock.alerts.currentTime')}${formatTime(currentTime)}`, [
       { text: t('common.cancel'), style: 'cancel' },
@@ -129,8 +129,8 @@ export default function TimeClockScreen() {
 
   const handleClockOut = async () => {
     const hasClockIn = lastClockIn && lastClockIn.clockInTime && !lastClockIn.clockOutTime;
-    if (!hasClockIn) return Alert.alert(t('common.tip'), t('attendance.timeClock.alerts.notClockedIn'));
-    if (!gpsLocation) return Alert.alert(t('common.tip'), t('attendance.timeClock.alerts.locatingWait'));
+    if (!hasClockIn) return Alert.alert(t('common:tip'), t('attendance.timeClock.alerts.notClockedIn'));
+    if (!gpsLocation) return Alert.alert(t('common:tip'), t('attendance.timeClock.alerts.locatingWait'));
 
     Alert.alert(t('attendance.timeClock.alerts.confirmClockOut'), `${t('attendance.timeClock.alerts.currentTime')}${formatTime(currentTime)}`, [
       { text: t('common.cancel'), style: 'cancel' },
