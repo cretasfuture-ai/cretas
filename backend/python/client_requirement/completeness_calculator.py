@@ -118,18 +118,42 @@ POS_ENTITY_FIELD_MAP = {
 POS_ENTITY_TYPES = list(POS_ENTITY_FIELD_MAP.keys())
 
 
+def _pool_kwargs() -> Dict[str, Any]:
+    """连接参数 —— **分参数传**，⛔ 不拼 DSN 字符串。
+
+    🔴 2026-08-28 生产实测：原来这里拼
+    ``f"postgresql://{user}:{password}@{host}:{port}/{db}"``，而生产密码里含 ``/``。
+    ``/`` 会把 netloc 在 ``@`` **之前**就截断::
+
+        postgresql://cretas_user:AbC/xxxx@host:5432/db
+                     └─ netloc 只到第一个 / ─┘   @host:5432 掉进了 path
+
+    asyncpg 于是解析出 ``host=cretas_user`` / ``port="AbC"``，``int(port)`` 抛
+    ``invalid literal for int() with base 10: 'AbC'``。
+    ⇒ 这条路 **100% 起不来**（不是偶发），而且报错把**数据库密码的首段**
+    一路回显给了调用方。
+
+    ⚠️ 修法不是「补一个 ``quote()``」——那只是把同一个决定复制成第 4 份。
+    分参数传之后，「哪个字符要转义」这个问题从物理上不存在。
+    （本仓 rule: 拼 DSN 前先想密码里有没有特殊字符 ⇒ 一律分参数传。）
+    """
+    return {
+        "host": os.getenv("FOOD_KB_POSTGRES_HOST", "localhost"),
+        "port": int(os.getenv("FOOD_KB_POSTGRES_PORT", "5432")),
+        "database": os.getenv("FOOD_KB_POSTGRES_DB", "cretas_db"),
+        "user": os.getenv("FOOD_KB_POSTGRES_USER", "cretas_user"),
+        "password": os.getenv("FOOD_KB_POSTGRES_PASSWORD", ""),
+    }
+
+
 async def _get_db_pool():
     """Get asyncpg connection pool using cretas database config.
     Reuses the FOOD_KB_POSTGRES_* env vars (same DB, set in systemd)."""
     db_url = os.getenv("COMPLETENESS_DB_URL")
-    if not db_url:
-        host = os.getenv("FOOD_KB_POSTGRES_HOST", "localhost")
-        port = os.getenv("FOOD_KB_POSTGRES_PORT", "5432")
-        db = os.getenv("FOOD_KB_POSTGRES_DB", "cretas_db")
-        user = os.getenv("FOOD_KB_POSTGRES_USER", "cretas_user")
-        password = os.getenv("FOOD_KB_POSTGRES_PASSWORD", "")
-        db_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
-    return await asyncpg.create_pool(db_url, min_size=1, max_size=3)
+    if db_url:
+        # 显式给了整条 DSN 就照用 —— 那是运维自己拼的，责任在配置侧。
+        return await asyncpg.create_pool(db_url, min_size=1, max_size=3)
+    return await asyncpg.create_pool(min_size=1, max_size=3, **_pool_kwargs())
 
 
 async def _compute_pos_entity(
@@ -338,7 +362,11 @@ async def api_compute_completeness(req: CompletenessRequest):
         return {"success": True, "data": [r.dict() for r in results]}
     except Exception as e:
         logger.error(f"Completeness computation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        # ⛔ 不把原始异常文本回给客户端。这不是洁癖：本次生产 500 的 message 就是
+        #    `invalid literal for int() with base 10: '<数据库密码的首段>'`
+        #    —— 异常文本里裹着凭证，被原样返给了任何已认证调用方。
+        #    详情留在服务端日志（上面这行 exc_info=True 已经记全）。
+        raise HTTPException(status_code=500, detail="数据完整度计算失败，详见服务端日志")
 
 
 @router.get("/completeness/trend")

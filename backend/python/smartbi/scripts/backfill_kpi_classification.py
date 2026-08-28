@@ -51,6 +51,7 @@ from collections import defaultdict
 from typing import Optional
 
 import asyncpg
+from urllib.parse import quote
 
 # Direct module load (bypass smartbi package __init__ which has unrelated import errors)
 import importlib.util
@@ -77,7 +78,8 @@ def _db_url() -> str:
     host = os.environ.get("POSTGRES_HOST", "localhost")
     port = os.environ.get("POSTGRES_PORT", "5432")
     db = os.environ.get("POSTGRES_DB", "smartbi_db")
-    return f"postgresql://{user}:{pwd}@{host}:{port}/{db}"
+    # 密码要 percent-encode: 生产密码含 `/`, 裸拼会截断 netloc (见 repository.py 注释)
+    return f"postgresql://{quote(user, safe='')}:{quote(pwd, safe='')}@{host}:{port}/{db}"
 
 
 async def fetch_rows(conn: asyncpg.Connection, upload_id_filter: Optional[int]):
