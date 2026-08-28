@@ -4,6 +4,7 @@ import com.cretas.aims.entity.PayrollRecord;
 import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.voucher.VoucherSubjectResolver;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
 
@@ -58,13 +59,25 @@ public class WageVoucherGenerator extends AbstractVoucherGenerator<PayrollRecord
 
     @Override
     public List<VoucherEntry> buildEntries(PayrollRecord r) {
+        return buildEntries(r.getFactoryId(), r);
+    }
+
+    /** 应付职工薪酬同时是辅助核算匹配键 —— 与分录一起解析。 */
+    private VoucherSubjectResolver.Subject payableSubject(String factoryId) {
+        return subject(factoryId, "DEBIT", "2211", "应付职工薪酬");
+    }
+
+    @Override
+    protected List<VoucherEntry> buildEntries(String factoryId, PayrollRecord r) {
+        VoucherSubjectResolver.Subject payable = payableSubject(factoryId);
+        VoucherSubjectResolver.Subject bank = subject(factoryId, "CREDIT", "1002", "银行存款");
         BigDecimal amount = nullToZero(r.getTotalWage());
         String workerId = r.getWorkerId() != null ? r.getWorkerId().toString() : null;
         return List.of(
                 // 应付职工薪酬按职员分账 (R-HJ Round 11 §G.1 职员工资明细账)
-                debitEntryWithAuxiliary(1, "2211", "应付职工薪酬", amount, "支付 " + r.getWorkerName(),
+                debitEntryWithAuxiliary(1, payable.code(), payable.name(), amount, "支付 " + r.getWorkerName(),
                         workerId != null ? AuxiliaryType.EMPLOYEE : null, workerId),
-                creditEntry(2, "1002", "银行存款", amount, "工资银行划款")
+                creditEntry(2, bank.code(), bank.name(), amount, "工资银行划款")
         );
     }
 
@@ -75,7 +88,7 @@ public class WageVoucherGenerator extends AbstractVoucherGenerator<PayrollRecord
     @Override
     protected void applyAuxiliary(List<VoucherEntry> entries, PayrollRecord r) {
         String workerId = r.getWorkerId() != null ? r.getWorkerId().toString() : null;
-        attachAuxiliary(entries, EntrySide.DEBIT, "2211",
+        attachAuxiliary(entries, EntrySide.DEBIT, payableSubject(r.getFactoryId()).code(),
                 workerId != null ? AuxiliaryType.EMPLOYEE : null, workerId);
     }
 }

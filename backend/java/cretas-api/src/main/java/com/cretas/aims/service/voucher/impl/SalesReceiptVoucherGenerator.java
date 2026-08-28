@@ -3,6 +3,7 @@ package com.cretas.aims.service.voucher.impl;
 import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.voucher.VoucherSubjectResolver;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
@@ -77,6 +78,15 @@ public class SalesReceiptVoucherGenerator extends AbstractVoucherGenerator<Sales
 
     @Override
     public List<VoucherEntry> buildEntries(SalesOrder order) {
+        return buildEntries(order.getFactoryId(), order);
+    }
+
+    @Override
+    protected List<VoucherEntry> buildEntries(String factoryId, SalesOrder order) {
+        VoucherSubjectResolver.Subject ar = subject(factoryId, "DEBIT", "1122", "应收账款");
+        VoucherSubjectResolver.Subject rev = subject(factoryId, "CREDIT", "6001", "主营业务收入");
+        VoucherSubjectResolver.Subject vat = subject(factoryId, "TAX_OUTPUT",
+                OUTPUT_VAT_CODE, OUTPUT_VAT_NAME);
         // SP11: total_amount = 未税净额, tax_amount = 销项税额 (单列)
         BigDecimal netAmount = nullToZero(order.getTotalAmount());       // 未税净额
         BigDecimal taxAmount = nullToZero(order.getTaxAmount());         // 销项税额
@@ -86,13 +96,13 @@ public class SalesReceiptVoucherGenerator extends AbstractVoucherGenerator<Sales
 
         List<VoucherEntry> entries = new ArrayList<>(3);
         // 应收账款按客户分账 (R-HJ Round 11 §G.1 客户应收明细账); 含税
-        entries.add(debitEntryWithAuxiliary(1, "1122", "应收账款", receivableAmount, "销售收入挂账",
+        entries.add(debitEntryWithAuxiliary(1, ar.code(), ar.name(), receivableAmount, "销售收入挂账",
                 customerId != null ? AuxiliaryType.CUSTOMER : null, customerId));
         // 主营业务收入: 未税净额
-        entries.add(creditEntry(2, "6001", "主营业务收入", netAmount, "销售订单 " + order.getOrderNumber()));
+        entries.add(creditEntry(2, rev.code(), rev.name(), netAmount, "销售订单 " + order.getOrderNumber()));
         // 销项税额单列 (仅含税订单, 零税退化两行向后兼容)
         if (taxAmount.signum() > 0) {
-            entries.add(creditEntry(3, OUTPUT_VAT_CODE, OUTPUT_VAT_NAME, taxAmount,
+            entries.add(creditEntry(3, vat.code(), vat.name(), taxAmount,
                     "销项税额 " + order.getOrderNumber()));
         }
         return entries;
@@ -105,7 +115,10 @@ public class SalesReceiptVoucherGenerator extends AbstractVoucherGenerator<Sales
     @Override
     protected void applyAuxiliary(List<VoucherEntry> entries, SalesOrder order) {
         String customerId = order.getCustomerId();
-        attachAuxiliary(entries, EntrySide.DEBIT, "1122",
+        // ⚠️ 必须与 buildEntries 里同一个角色解析出的科目一致 ——
+        //    只改分录不改这里, 配了覆盖之后客户辅助核算会**静默丢失**。
+        attachAuxiliary(entries, EntrySide.DEBIT,
+                subject(order.getFactoryId(), "DEBIT", "1122", "应收账款").code(),
                 customerId != null ? AuxiliaryType.CUSTOMER : null, customerId);
     }
 }

@@ -4,6 +4,7 @@ import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.voucher.VoucherSubjectResolver;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
@@ -75,6 +76,23 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
 
     @Override
     public List<VoucherEntry> buildEntries(ReturnOrder r) {
+        return buildEntries(r.getFactoryId(), r);
+    }
+
+    /** 应付/应收同时是辅助核算匹配键 —— 与分录一起解析。 */
+    private VoucherSubjectResolver.Subject payableSubject(String factoryId) {
+        return subject(factoryId, "PURCHASE_RETURN_DEBIT", "2202", "应付账款");
+    }
+
+    private VoucherSubjectResolver.Subject receivableSubject(String factoryId) {
+        return subject(factoryId, "SALES_RETURN_CREDIT", "1122", "应收账款");
+    }
+
+    @Override
+    protected List<VoucherEntry> buildEntries(String factoryId, ReturnOrder r) {
+        VoucherSubjectResolver.Subject ap = payableSubject(factoryId);
+        VoucherSubjectResolver.Subject ar = receivableSubject(factoryId);
+        VoucherSubjectResolver.Subject rev = subject(factoryId, "SALES_RETURN_DEBIT", "6001", "主营业务收入");
         BigDecimal amount = nullToZero(r.getTotalAmount());
         String counterpartyId = r.getCounterpartyId();  // Sprint 6 W4-A: 客户/供应商辅助核算
         ReturnType returnType = r.getReturnType();
@@ -90,16 +108,16 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
             String[] subject = resolvePurchaseReturnInventorySubject(r);
             return List.of(
                     // 应付账款按供应商分账 (R-HJ Round 11 §G.1 供应商应付明细账冲销)
-                    debitEntryWithAuxiliary(1, "2202", "应付账款", amount, "采购退货冲减应付 " + r.getReturnNumber(),
+                    debitEntryWithAuxiliary(1, ap.code(), ap.name(), amount, "采购退货冲减应付 " + r.getReturnNumber(),
                             counterpartyId != null ? AuxiliaryType.SUPPLIER : null, counterpartyId),
                     creditEntry(2, subject[0], subject[1], amount, "退货库存减少")
             );
         }
         // SALES_RETURN (默认 / 老数据无 type)
         return List.of(
-                debitEntry(1, "6001", "主营业务收入", amount, "退货冲减收入 " + r.getReturnNumber()),
+                debitEntry(1, rev.code(), rev.name(), amount, "退货冲减收入 " + r.getReturnNumber()),
                 // 应收账款按客户分账 (R-HJ Round 11 §G.1 客户应收明细账冲销)
-                creditEntryWithAuxiliary(2, "1122", "应收账款", amount, "客户应收冲减",
+                creditEntryWithAuxiliary(2, ar.code(), ar.name(), amount, "客户应收冲减",
                         counterpartyId != null ? AuxiliaryType.CUSTOMER : null, counterpartyId)
         );
     }
@@ -151,9 +169,11 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
             return; // honest-null
         }
         if (r.getReturnType() == ReturnType.PURCHASE_RETURN) {
-            attachAuxiliary(entries, EntrySide.DEBIT, "2202", AuxiliaryType.SUPPLIER, counterpartyId);
+            attachAuxiliary(entries, EntrySide.DEBIT,
+                    payableSubject(r.getFactoryId()).code(), AuxiliaryType.SUPPLIER, counterpartyId);
         } else {
-            attachAuxiliary(entries, EntrySide.CREDIT, "1122", AuxiliaryType.CUSTOMER, counterpartyId);
+            attachAuxiliary(entries, EntrySide.CREDIT,
+                    receivableSubject(r.getFactoryId()).code(), AuxiliaryType.CUSTOMER, counterpartyId);
         }
     }
 }

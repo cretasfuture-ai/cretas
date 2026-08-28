@@ -37,6 +37,36 @@ public abstract class AbstractVoucherGenerator<T> implements VoucherGenerator<T>
     @Autowired(required = false)
     protected VoucherTemplateService voucherTemplateService;
 
+    /**
+     * 会计科目覆盖解析 (2026-08-28)。可选注入 —— 与上面的模板服务同一个惯例:
+     * 单测直接 new generator 时它是 null, 一律走硬编码默认值, 行为与改动前逐字一致。
+     *
+     * <p>🔴 背景: 8 个生成器里 7 个把会计科目写死在代码里, 客户的金蝶账套科目对不上就只能改代码。
+     * ⛔ 而**不能**复用 {@code voucher_subject_mappings} —— 那张表的键是
+     * {@code (settlement_type, business_type)}, 而 {@code SettlementType} 是采购专用枚举,
+     * 没有中性值; 调拨/工资/折旧的科目与结算方式无关。
+     * ⇒ 见 {@link VoucherSubjectResolver} 与 {@code voucher_type_subject_overrides}。
+     */
+    @Autowired(required = false)
+    protected VoucherSubjectResolver voucherSubjectResolver;
+
+    /**
+     * 取某个角色该用的科目: 有工厂级覆盖就用覆盖, 否则用传进来的默认值。
+     *
+     * <p>fail-open —— resolver 没注入 / 表里没配 / 查询失败, 一律回落 {@code defaultCode}。
+     * ⛔ 不做「没配就拒绝开凭证」: 配错科目是数字记错地方, 开不出凭证是业务停摆。
+     *
+     * @param subjectRole 该凭证类型内部的角色名, 是契约的一部分, 改名等于改配置键
+     */
+    protected VoucherSubjectResolver.Subject subject(String factoryId, String subjectRole,
+                                                     String defaultCode, String defaultName) {
+        if (voucherSubjectResolver == null) {
+            return new VoucherSubjectResolver.Subject(defaultCode, defaultName);
+        }
+        return voucherSubjectResolver.resolve(
+                factoryId, getType().name(), subjectRole, defaultCode, defaultName);
+    }
+
     @Override
     public Voucher generate(String factoryId, T businessEntity) {
         // C-VOUCHER-TPL-1: template-first. 找 active template → 用 SpEL 渲染; 否则 fall back
