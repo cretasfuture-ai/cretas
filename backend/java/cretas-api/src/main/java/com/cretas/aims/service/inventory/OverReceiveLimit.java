@@ -5,7 +5,28 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * 采购收货【超收上限】的取值 —— 执行侧与展示侧共用的唯一表示。
+ * 数量【溢出上限】的取值 —— 执行侧与展示侧共用的唯一表示。
+ *
+ * <h2>⚠️ 它现在被两条链共用（类名还叫 OverReceive，是有意不改的）</h2>
+ * <table border="1">
+ *   <tr><th>链</th><th>含义</th><th>梯子在哪</th></tr>
+ *   <tr><td>采购收货</td><td>累计可收 = 下单量 × (1 + rate)</td>
+ *       <td>{@link #resolve}（工厂设置 &gt; 全局属性 &gt; 不限制）</td></tr>
+ *   <tr><td>销售发货 <i>(2026-08-28 加入)</i></td><td>实发 ≤ 计划发货量 × (1 + rate)</td>
+ *       <td>{@code SalesServiceImpl.resolveOverShipLimit}（阈值中心 &gt; 全局属性 &gt; 不限制）</td></tr>
+ * </table>
+ *
+ * <p><b>为什么共用而不是各写一个</b>：会漂的不是算术，是那条
+ * 「{@code null} = 不限制 / {@code 0} = 一件都不许多」的语义 ——
+ * 采购侧正是被这一条咬过一次（默认 {@code 0.00} 把货堵在门口）。
+ * 克隆一份，下一个人只会修好其中一份。
+ *
+ * <p><b>为什么不改名</b>：改名要动 {@code PurchaseServiceImpl} 这条在跑的金额路径，
+ * 而当前有多条并行 session 在动同一批文件。收益（名字更准）小于风险（撞车 + PR 变脏）。
+ * ⇒ <b>显式登记为「故意不改」</b>，不是漏了。若日后有人整理这一块，正确的名字是
+ * {@code QuantityOverageLimit}。
+ *
+ * <p>下文表述里的「超收」对销售链请读作「超发」，两者是同一个算术。
  *
  * <p>它只有两种形态，没有第三种：
  * <ul>
@@ -48,6 +69,21 @@ public record OverReceiveLimit(BigDecimal rate, String source) {
     /** 工厂级 {@code inventorySettings.purchaseOverReceiveRate}（优先级最高）。 */
     public static final String SOURCE_FACTORY_SETTINGS =
             "factory-settings:inventorySettings.purchaseOverReceiveRate";
+
+    // ── 销售发货链的来源标记 (2026-08-28) ──────────────────────────────
+    // ⛔ 不要复用上面采购的三个常量: source 存在的全部意义就是「这个值是从哪来的」,
+    //    让销售链打出 "factory-settings:inventorySettings.purchaseOverReceiveRate"
+    //    就是让它说谎, 而排查时正是靠这一行判断读数可不可信。
+
+    /** 销售链: 阈值中心 {@code factory_thresholds} 的 {@code sales.delivery.over_ship_rate} 行。 */
+    public static final String SOURCE_SALES_THRESHOLD_HUB =
+            "threshold-hub:sales.delivery.over_ship_rate";
+
+    /** 销售链: 全局属性 {@code cretas.sales.over-ship-rate}（ops 兜底，全工厂生效）。 */
+    public static final String SOURCE_SALES_PROPERTY = "property:cretas.sales.over-ship-rate";
+
+    /** 销售链: 谁也没配过 / 阈值中心读不到 → 不限制。 */
+    public static final String SOURCE_SALES_UNCONFIGURED = "sales-unconfigured";
 
     public OverReceiveLimit {
         if (rate != null && rate.signum() < 0) {

@@ -161,6 +161,27 @@ public final class ThresholdKeys {
     /** 销售增长率黄色预警阈值 (%). Hard-coded default = -5. */
     public static final String SALES_GROWTH_YELLOW = "sales.growth.yellow";
 
+    /**
+     * 发货【超发上限比率】—— 仓管确认实发数量时，实发相对计划发货量的最大溢出。
+     *
+     * <p>值是<b>小数比率</b>（{@code 0.10} = 10%），与采购侧
+     * {@code cretas.purchase.over-receive-rate} 同一约定。⛔ 不是百分数。
+     *
+     * <p>语义（与 {@link com.cretas.aims.service.inventory.OverReceiveLimit} 一致，
+     * 这两个值必须读成同一套语义，否则同一个 {@code 0} 在两条链上会有相反含义）：
+     * <ul>
+     *   <li><b>没有这一行 / {@code enabled=false}</b> → 不限制（不做上限校验）</li>
+     *   <li>{@code 0} → 一件都不许超发（<b>这是一个真实的限制，不是"没配"</b>）</li>
+     *   <li>{@code 0.10} → 实发最多是计划的 110%</li>
+     * </ul>
+     *
+     * <p>全局默认见迁移 {@code V20261101_02__sales_over_ship_threshold.sql}。
+     * 执行侧唯一入口：{@code SalesServiceImpl.resolveOverShipLimit}。
+     *
+     * @since 2026-08-28
+     */
+    public static final String SALES_DELIVERY_OVER_SHIP_RATE = "sales.delivery.over_ship_rate";
+
     // ==================== 财务分析 (FINANCE) ====================
 
     /** 账龄 90+ 天占比红色预警阈值 (%). Hard-coded default = 20. */
