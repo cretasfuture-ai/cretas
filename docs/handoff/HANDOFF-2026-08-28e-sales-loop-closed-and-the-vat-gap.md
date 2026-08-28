@@ -765,6 +765,46 @@ PR #292 把应收从 `order.getTotalAmount()` 改成 `order.getPayableAmount()` 
 
 ---
 
+## 🟡 `Java Gate` 现在对**所有 PR** 都是红的 —— 一条依赖外部 LLM 的测试挂住了整道闸
+
+开 PR #292 时发现的，与本轮业务缺陷无关，但会挡住所有人。
+
+```
+java-full-gate / full-suite → 1 failure / 12,068 tests
+ToolExecutionTest.testBasicToolCalling:87  LLM 调用不应该有错误 ==> expected: <false> but was: <true>
+```
+
+### 量出来的基线（不是猜的）
+
+| 分支 | Tests run | Failures | 失败的那条 |
+|---|---:|---:|---|
+| `codex/claude-vat-caliber-fix`（我的 Java 改动） | 12068 | 1 | `ToolExecutionTest.testBasicToolCalling:87` |
+| `codex/claude-rn-visual-acceptance-r3-20260828`（**RN 视觉验收，与 Java 无关**） | 12069 | 1 | **同一条，同一行** |
+
+⇒ **分支无关的存量红。** 而且 `--failed` 重跑一次仍是同一条 ⇒ **不是 flake，是稳定红。**
+
+### 为什么
+
+那条测试打的是**真实通义千问 API**（`dashScopeClient.chatWithTools(...)`），
+CI runner 上调用出错就红。它上面**本来有一个 skip 分支**，但这次没生效
+（说明 key 存在、只是调用失败）。
+
+### 🔴 为什么这条值得单独修
+
+`known-failing-tests.txt` 目前是**空的**（0 条）⇒ 这道闸期望零失败，
+而它实际上对**每个 PR** 都红。
+
+▎**一道对所有人都红的闸，等于没有闸** —— 它已经无法区分
+▎「这个 PR 引入了失败」和「本来就红」。本仓记过这个形态（形态 E：
+▎闸的完备性与存活是矛盾的，天天误报的闸最终会被忽略）。
+
+⇒ 二选一：把那条 live-LLM 测试改成**有 key 且服务可用才跑**（skip 分支修好），
+或者登记进 `known-failing-tests.txt` 并写明原因。
+⛔ 别就这么放着 —— 现在每个人都得手工判断「这条红是不是我的」，
+而我这次判断它花了三次读取（首跑 / 重跑 / 找无关分支做基线）。
+
+---
+
 ## 🟡 P2：25 处「菜单里有、点进去 403」，分布在 5 个角色 / 12 条路由
 
 ### 逐角色巡检结果（7 个角色全跑完）
