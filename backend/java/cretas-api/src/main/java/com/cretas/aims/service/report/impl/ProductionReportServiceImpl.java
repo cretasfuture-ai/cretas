@@ -16,6 +16,8 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.ProductionLineRepository;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.report.ProductionReportService;
@@ -33,6 +35,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import com.cretas.aims.entity.FactorySettings;
+import com.cretas.aims.entity.ProductionLine;
+import java.util.Objects;
 
 /**
  * 生产报表服务实现
@@ -61,6 +66,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final TimeClockRecordRepository timeClockRecordRepository;
     private final ReworkRecordRepository reworkRecordRepository;
     private final SalesOrderRepository salesOrderRepository;
+    private final ProductionLineRepository productionLineRepository;
+    private final FactorySettingsRepository factorySettingsRepository;
 
     // ==================== 基础报表 ====================
 
@@ -1044,9 +1051,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
 
     // ==================== Dashboard 委托 (ProcessingService) ====================
 
+    /**
+     * ⚠️ {@code period} 当前被<b>丢弃</b> —— 下游的
+     * {@code processingService.getDashboardOverview(factoryId)} 根本没有这个参数，
+     * 返回的永远是<b>当日</b>口径（响应里 {@code period} 恒为 {@code "today"}）。
+     *
+     * <p>2026-08-29 逐屏走查实测 F006：传 {@code today} / {@code week} / {@code month}
+     * 三次返回的 {@code summary} <b>完全相同</b>。而 App 端当时传的是
+     * {@code week}，屏上还写着「统计周期: 近7天」—— 一句给六张卡背书的假标签。
+     *
+     * <p>⬛ 保留参数是为了不改对外契约；要真支持时间窗口得改
+     * {@code ProcessingServiceImpl} 里那一整组查询，<b>那需要它自己的一轮验证</b>，
+     * —— 不搭在走查修复里。（登记是留痕，不是豁免。）
+     */
     @Override
     public Map<String, Object> getDashboardOverview(String factoryId, String period) {
-        log.info("获取生产概览Dashboard (委托ProcessingService): factoryId={}, period={}", factoryId, period);
+        log.info("获取生产概览Dashboard (委托ProcessingService, period 暂不生效): factoryId={}, period={}",
+                factoryId, period);
         return processingService.getDashboardOverview(factoryId);
     }
 
@@ -1479,6 +1500,29 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         List<FactoryEquipment> equipments = equipmentRepository.findByFactoryId(factoryId);
         int totalEquipment = equipments.size();
 
+        // 「产能利用率」的分母必须是**这家工厂真实配置的产能**。
+        //
+        // 🔴 2026-08-29 逐屏走查实测: 这里原来写死 `new BigDecimal("1000")`,
+        //    于是屏上那个「产能利用率」是 `当日产量 ÷ 1000`, 与这家工厂无关。
+        //    F006 的真实值是 产线小时产能 50 × 工厂工时 10 = **500** —— 差一倍,
+        //    线上读数 2026-08-24 output=21 报 2.1%, 真值是 4.2%。
+        //
+        // ⛔ 两个来源缺任何一个就返回 null(屏上说「算不出」),
+        //    ⛔ 不许用 8 小时 / 1000 这类看起来合理的数顶上 —— 那正是这次要修的东西。
+        Integer workingHours = factorySettingsRepository.findByFactoryId(factoryId)
+                .map(FactorySettings::getWorkingHours)
+                .filter(h -> h > 0)
+                .orElse(null);
+        BigDecimal hourlyCapacity = productionLineRepository.findActiveLinesByFactory(factoryId).stream()
+                .map(ProductionLine::getHourlyCapacity)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (hourlyCapacity.compareTo(BigDecimal.ZERO) <= 0) {
+            hourlyCapacity = null;
+        }
+        BigDecimal dailyCapacity = (workingHours == null || hourlyCapacity == null) ? null
+                : hourlyCapacity.multiply(new BigDecimal(workingHours));
+
         List<Map<String, Object>> dailyUtilization = new ArrayList<>();
         long totalDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
 
@@ -1491,23 +1535,29 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                     factoryId, dayStart, dayEnd);
             if (dayOutput == null) dayOutput = BigDecimal.ZERO;
 
-            BigDecimal maxCapacity = new BigDecimal("1000");
-            BigDecimal utilization = dayOutput.divide(maxCapacity, 4, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
+            // ⛔ 没有真实日产能就**算不出**利用率 —— 不是 0, 也不是拿 1000 顶上。
+            BigDecimal utilization = dailyCapacity == null ? null
+                    : dayOutput.divide(dailyCapacity, 4, RoundingMode.HALF_UP)
+                            .multiply(new BigDecimal("100"))
+                            .min(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP);
 
             Map<String, Object> dayData = new HashMap<>();
             dayData.put("date", date.toString());
             dayData.put("dayOfWeek", date.getDayOfWeek().getValue());
             dayData.put("weekOfYear", date.get(java.time.temporal.WeekFields.ISO.weekOfYear()));
             dayData.put("output", dayOutput);
-            dayData.put("utilization", utilization.min(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP));
+            dayData.put("utilization", utilization);
             dailyUtilization.add(dayData);
         }
 
-        BigDecimal avgUtilization = dailyUtilization.stream()
+        // 算不出来的天不参与平均; 一天都算不出就是 null, ⛔ 不是 0。
+        List<BigDecimal> measuredDays = dailyUtilization.stream()
                 .map(d -> (BigDecimal) d.get("utilization"))
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(new BigDecimal(dailyUtilization.size()), 2, RoundingMode.HALF_UP);
+                .filter(Objects::nonNull)
+                .toList();
+        BigDecimal avgUtilization = measuredDays.isEmpty() ? null
+                : measuredDays.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
+                        .divide(new BigDecimal(measuredDays.size()), 2, RoundingMode.HALF_UP);
 
         List<Map<String, Object>> equipmentUtilization = new ArrayList<>();
         for (FactoryEquipment eq : equipments) {
@@ -1515,12 +1565,15 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             eqData.put("equipmentId", eq.getId());
             eqData.put("equipmentName", eq.getEquipmentName());
             eqData.put("status", eq.getStatus());
-            long runningHours = eq.getTotalRunningHours() != null ? eq.getTotalRunningHours() : 0;
-            long plannedHours = totalDays * 8;
-            BigDecimal eqUtilization = plannedHours > 0 ?
-                    new BigDecimal(runningHours).divide(new BigDecimal(plannedHours), 4, RoundingMode.HALF_UP)
-                            .multiply(new BigDecimal("100")) : BigDecimal.ZERO;
-            eqData.put("utilization", eqUtilization.min(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP));
+            // ⛔ 原来写的是 `totalDays * 8` —— 又一个编出来的工作日长度。
+            //    用工厂真实配置的工时; 没配就算不出来(null), 不拿 8 顶。
+            Integer runningHours = eq.getTotalRunningHours();
+            Long plannedHours = workingHours == null ? null : Long.valueOf(totalDays * workingHours);
+            BigDecimal eqUtilization = (runningHours == null || plannedHours == null || plannedHours <= 0) ? null
+                    : new BigDecimal(runningHours).divide(new BigDecimal(plannedHours), 4, RoundingMode.HALF_UP)
+                            .multiply(new BigDecimal("100"))
+                            .min(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP);
+            eqData.put("utilization", eqUtilization);
             equipmentUtilization.add(eqData);
         }
 
@@ -1528,7 +1581,14 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("averageUtilization", avgUtilization);
         report.put("dailyUtilization", dailyUtilization);
         report.put("equipmentUtilization", equipmentUtilization);
-        report.put("utilizationTarget", new BigDecimal("80"));
+        // ⛔ 80% 这个「目标」在库里**没有任何来源** —— 它是被编出来的。
+        //    发 null, 让屏上不画这条目标线, 而不是画一条假的。
+        report.put("utilizationTarget", null);
+        // 把分母的来源一起发下去 —— 读数要自己说清它是怎么算出来的。
+        report.put("dailyCapacity", dailyCapacity);
+        report.put("capacityBasis", dailyCapacity == null
+                ? "未配置产能: 需要产线小时产能 + 工厂工时, 缺一不可"
+                : String.format("产线小时产能合计 %s × 工厂工时 %d 小时", hourlyCapacity.toPlainString(), workingHours));
         return report;
     }
 

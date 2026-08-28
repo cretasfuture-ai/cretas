@@ -30,8 +30,9 @@ import { formatDate } from '../../utils/formatters';
 // 创建CapacityUtilizationReport专用logger
 const capacityReportLogger = logger.createContextLogger('CapacityUtilizationReport');
 
-// 目标利用率
-const TARGET_UTILIZATION = 80;
+// ⛔ 原来这里有 `const TARGET_UTILIZATION = 80;` —— 一个**前端自己编的**目标值,
+//    它和后端那个写死的 80 是同一个东西的两份(形态 D), 而两边都没有来源。
+//    现在: 后端不给目标就**不画目标线**, ⛔ 不拿常量顶上。
 
 // 实际API响应类型 (基于用户提供的结构)
 interface CapacityUtilizationReportDTO {
@@ -39,17 +40,23 @@ interface CapacityUtilizationReportDTO {
   startDate: string;
   endDate: string;
   totalEquipment: number;
-  averageUtilization: number;
-  utilizationTarget: number;
+  /** 没有真实产能时后端发 null —— ⛔ 不要 `?? 0`, 0 会被读成一个真实读数。 */
+  averageUtilization: number | null;
+  /** 库里没有目标值的来源, 后端现在发 null。 */
+  utilizationTarget: number | null;
+  /** 日产能; null = 算不出来。 */
+  dailyCapacity?: number | null;
+  /** 这个分母是怎么来的 —— 读数要自己说清出处。 */
+  capacityBasis?: string;
   equipmentUtilization: Array<{
     equipmentId: number;
     equipmentName: string;
-    utilization: number;
+    utilization: number | null;
     status: string; // running, maintenance, idle, inactive
   }>;
   dailyUtilization: Array<{
     date: string;
-    utilization: number;
+    utilization: number | null;
     output: number;
     dayOfWeek: number;
     weekOfYear: number;
@@ -167,8 +174,10 @@ export default function CapacityUtilizationReportScreen() {
   /**
    * 获取利用率状态颜色
    */
-  const getUtilizationColor = (value: number): string => {
-    const target = reportData?.utilizationTarget || TARGET_UTILIZATION;
+  const getUtilizationColor = (value: number | null): string => {
+    const target = reportData?.utilizationTarget;
+    // 没有目标就没有「达标 / 待改善」这回事 —— 一律中性色, ⛔ 不要用编出来的 80 判红绿。
+    if (value == null || target == null) return '#9e9e9e';
     if (value >= target) return '#4CAF50';
     if (value >= target * 0.7) return '#FF9800';
     return '#F44336';
@@ -177,8 +186,10 @@ export default function CapacityUtilizationReportScreen() {
   /**
    * 获取利用率状态标签
    */
-  const getUtilizationLabel = (value: number): string => {
-    const target = reportData?.utilizationTarget || TARGET_UTILIZATION;
+  const getUtilizationLabel = (value: number | null): string => {
+    const target = reportData?.utilizationTarget;
+    if (value == null) return '算不出';
+    if (target == null) return '无目标值';
     if (value >= target) return '达标';
     if (value >= target * 0.7) return '接近';
     return '待改善';
@@ -297,14 +308,18 @@ export default function CapacityUtilizationReportScreen() {
                       { color: getUtilizationColor(reportData.averageUtilization ?? 0) },
                     ]}
                   >
-                    {Number(reportData.averageUtilization ?? 0).toFixed(1)}%
+                    {reportData.averageUtilization == null
+                      ? '算不出'
+                      : `${Number(reportData.averageUtilization).toFixed(1)}%`}
                   </Text>
                   <Text style={styles.statLabel}>平均利用率</Text>
                 </View>
                 <View style={styles.statDivider} />
                 <View style={styles.statItem}>
                   <Text style={styles.statValue}>
-                    {reportData.utilizationTarget || TARGET_UTILIZATION}%
+                    {reportData.utilizationTarget == null
+                      ? '未设定'
+                      : `${reportData.utilizationTarget}%`}
                   </Text>
                   <Text style={styles.statLabel}>目标利用率</Text>
                 </View>
@@ -328,29 +343,39 @@ export default function CapacityUtilizationReportScreen() {
                     {getUtilizationLabel(reportData.averageUtilization ?? 0)}
                   </Chip>
                 </View>
-                <ProgressBar
-                  progress={Number(reportData.averageUtilization ?? 0) / 100}
-                  color={getUtilizationColor(reportData.averageUtilization ?? 0)}
-                  style={styles.mainProgressBar}
-                />
-                <View style={styles.progressMarkers}>
-                  <Text style={styles.markerText}>0%</Text>
-                  <Text style={styles.markerText}>
-                    目标: {reportData.utilizationTarget || TARGET_UTILIZATION}%
+                {/* ⛔ 算不出来时不画进度条 —— 一条 0% 的进度条看起来像「利用率很低」, 那是假的。 */}
+                {reportData.averageUtilization == null ? (
+                  <Text style={styles.noCapacityText}>
+                    {reportData.capacityBasis ?? '未配置产能, 算不出利用率'}
                   </Text>
-                  <Text style={styles.markerText}>100%</Text>
-                </View>
+                ) : (
+                  <>
+                    <ProgressBar
+                      progress={Number(reportData.averageUtilization) / 100}
+                      color={getUtilizationColor(reportData.averageUtilization)}
+                      style={styles.mainProgressBar}
+                    />
+                    <View style={styles.progressMarkers}>
+                      <Text style={styles.markerText}>0%</Text>
+                      {reportData.utilizationTarget == null ? null : (
+                        <Text style={styles.markerText}>目标: {reportData.utilizationTarget}%</Text>
+                      )}
+                      <Text style={styles.markerText}>100%</Text>
+                    </View>
+                    {reportData.capacityBasis ? (
+                      <Text style={styles.capacityBasisText}>分母: {reportData.capacityBasis}</Text>
+                    ) : null}
+                  </>
+                )}
               </View>
 
-              {/* 达标/差距提示 */}
-              {(reportData.averageUtilization ?? 0) >= (reportData.utilizationTarget || TARGET_UTILIZATION) ? (
+              {/* 达标/差距提示 —— ⛔ 利用率或目标缺任何一个就不说「差多少」 */}
+              {reportData.averageUtilization == null || reportData.utilizationTarget == null ? null
+                : reportData.averageUtilization >= reportData.utilizationTarget ? (
                 <View style={styles.achievementBadge}>
                   <Text style={styles.achievementText}>
                     已达成目标 (+
-                    {(
-                      Number(reportData.averageUtilization ?? 0) -
-                      Number(reportData.utilizationTarget || TARGET_UTILIZATION)
-                    ).toFixed(1)}
+                    {(reportData.averageUtilization - reportData.utilizationTarget).toFixed(1)}
                     %)
                   </Text>
                 </View>
@@ -358,10 +383,7 @@ export default function CapacityUtilizationReportScreen() {
                 <View style={styles.gapBadge}>
                   <Text style={styles.gapText}>
                     距目标差{' '}
-                    {(
-                      Number(reportData.utilizationTarget || TARGET_UTILIZATION) -
-                      Number(reportData.averageUtilization ?? 0)
-                    ).toFixed(1)}
+                    {(reportData.utilizationTarget - reportData.averageUtilization).toFixed(1)}
                     %
                   </Text>
                 </View>
@@ -397,7 +419,7 @@ export default function CapacityUtilizationReportScreen() {
                       <View style={styles.equipmentProgressRow}>
                         <ProgressBar
                           progress={Number(equipment.utilization ?? 0) / 100}
-                          color={getUtilizationColor(equipment.utilization ?? 0)}
+                          color={getUtilizationColor(equipment.utilization)}
                           style={styles.equipmentProgressBar}
                         />
                         <Text
@@ -406,7 +428,9 @@ export default function CapacityUtilizationReportScreen() {
                             { color: getUtilizationColor(equipment.utilization ?? 0) },
                           ]}
                         >
-                          {Number(equipment.utilization ?? 0).toFixed(1)}%
+                          {equipment.utilization == null
+                            ? '—'
+                            : `${Number(equipment.utilization).toFixed(1)}%`}
                         </Text>
                       </View>
                     </View>
@@ -433,7 +457,7 @@ export default function CapacityUtilizationReportScreen() {
                     </View>
                     <View style={styles.dailyMiddle}>
                       <ProgressBar
-                        progress={day.utilization / 100}
+                        progress={Number(day.utilization ?? 0) / 100}
                         color={getUtilizationColor(day.utilization)}
                         style={styles.dailyProgressBar}
                       />
@@ -445,7 +469,7 @@ export default function CapacityUtilizationReportScreen() {
                           { color: getUtilizationColor(day.utilization ?? 0) },
                         ]}
                       >
-                        {Number(day.utilization ?? 0).toFixed(1)}%
+                        {day.utilization == null ? '—' : `${Number(day.utilization).toFixed(1)}%`}
                       </Text>
                       <Text style={styles.dailyOutput}>产出: {day.output}</Text>
                     </View>
@@ -612,6 +636,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 4,
+  },
+  capacityBasisText: {
+    color: '#9e9e9e',
+    fontSize: 11,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  noCapacityText: {
+    color: '#9e9e9e',
+    fontSize: 13,
+    paddingVertical: 12,
+    textAlign: 'center',
   },
   markerText: {
     fontSize: 10,
