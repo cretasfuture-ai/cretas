@@ -65,6 +65,12 @@ public class ArApServiceImpl implements ArApService {
                 && com.cretas.aims.domain.OrderUsageWhitelists.PO_INVOICEABLE.contains(po.getStatus());
     }
 
+    /** Non-throwing counterpart of {@link #validateReceivableStatus} for the idempotent auto-post path. */
+    private boolean isReceivableStatusValid(com.cretas.aims.entity.inventory.SalesOrder so) {
+        return so != null && so.getStatus() != null
+                && com.cretas.aims.domain.OrderUsageWhitelists.SO_INVOICEABLE.contains(so.getStatus());
+    }
+
     /** R21 audit C1: recordReceivable was unprotected. Mirror of validatePayableStatus. */
     private void validateReceivableStatus(String salesOrderId, String factoryId) {
         com.cretas.aims.entity.inventory.SalesOrder so = salesOrderRepository.findById(salesOrderId)
@@ -137,6 +143,77 @@ public class ArApServiceImpl implements ArApService {
             validateReceivableStatus(salesOrderId, factoryId);
         }
 
+        return persistReceivable(factoryId, customer, customerId, salesOrderId, null, null,
+                amount, dueDate, operatedBy, remark);
+    }
+
+    /**
+     * 🔒 应收按【实发】挂账 (2026-08-28): 销售发货 {@code shipDelivery} 的自动挂账。
+     *
+     * <p>旧实现传 {@code order.getTotalAmount()}（订单金额）, 而仓管在确认发货时可以覆盖
+     * 【实际发货数量】—— 覆盖后重算的是发货单 totalAmount, 应收取的却是订单金额, 两个数分家。
+     * prod 实测超发 SO-20260828-0012 少收 3 盒的钱、少发 SO-20260828-0013 多收客户 2 盒的钱。
+     * 现按<b>每张子发运单的实发额</b>分笔挂账, 幂等键 = {@code (SALES_DELIVERY, deliveryId)},
+     * 累计 = 实发总额, 超发/少发都据实反映。
+     *
+     * <p>与 {@link #recordPayableIfAbsent} 同一形状, 也是同一个理由: 共享事务内绝不抛异常
+     * （doomed-tx 会让<b>货发不出去</b>）。详见 {@link ArApService#recordReceivableIfAbsent} javadoc。
+     */
+    @Override
+    @Transactional
+    public ArApTransaction recordReceivableIfAbsent(String factoryId, String customerId,
+                                                    String salesOrderId, String sourceType, String sourceId,
+                                                    BigDecimal amount,
+                                                    LocalDate dueDate, Long operatedBy, String remark) {
+        // 所有跳过条件都是 READ / 校验，绝不写库、绝不抛 —— 保证共享事务不被 doom。
+
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            // 诚实不挂: 发运单无单价 / 实发额为 0 时不伪造应收，也不回落到订单金额。
+            log.warn("自动应收挂账跳过(金额缺失或非正): factoryId={}, salesOrderId={}, sourceId={}, amount={}",
+                    factoryId, salesOrderId, sourceId, amount);
+            return null;
+        }
+
+        // 幂等: 该发运单 (sourceType, sourceId) 已挂账 → 返回既有记录, 不重复挂账 (防双击/重复确认)。
+        if (sourceType != null && sourceId != null) {
+            Optional<ArApTransaction> existing =
+                    transactionRepository.findFirstByFactoryIdAndSourceTypeAndSourceIdAndTransactionTypeAndDeletedAtIsNull(
+                            factoryId, sourceType, sourceId, ArApTransactionType.AR_INVOICE);
+            if (existing.isPresent()) {
+                log.info("自动应收挂账幂等命中(该发运单已挂账, 跳过): factoryId={}, sourceType={}, sourceId={}, transactionId={}",
+                        factoryId, sourceType, sourceId, existing.get().getId());
+                return existing.get();
+            }
+        }
+
+        Optional<Customer> customerOpt = customerRepository.findByIdAndFactoryId(customerId, factoryId);
+        if (customerOpt.isEmpty()) {
+            log.warn("自动应收挂账跳过(客户不存在): factoryId={}, customerId={}, salesOrderId={}",
+                    factoryId, customerId, salesOrderId);
+            return null;
+        }
+
+        // SO 状态不允许挂账 → 跳过(不抛), 发货不能被应收侧前置条件阻塞。
+        if (salesOrderId != null) {
+            com.cretas.aims.entity.inventory.SalesOrder so = salesOrderRepository.findById(salesOrderId)
+                    .filter(s -> factoryId.equals(s.getFactoryId()))
+                    .orElse(null);
+            if (!isReceivableStatusValid(so)) {
+                log.warn("自动应收挂账跳过(销售订单状态不允许挂账): factoryId={}, salesOrderId={}, status={}",
+                        factoryId, salesOrderId, so != null && so.getStatus() != null ? so.getStatus().name() : "null");
+                return null;
+            }
+        }
+
+        return persistReceivable(factoryId, customerOpt.get(), customerId, salesOrderId,
+                sourceType, sourceId, amount, dueDate, operatedBy, remark);
+    }
+
+    /** 应收挂账写库尾段: 更新客户余额 + 建交易记录 + 持久化。recordReceivable / recordReceivableIfAbsent 共用。 */
+    private ArApTransaction persistReceivable(String factoryId, Customer customer, String customerId,
+                                              String salesOrderId, String sourceType, String sourceId,
+                                              BigDecimal amount,
+                                              LocalDate dueDate, Long operatedBy, String remark) {
         // 更新客户余额
         BigDecimal newBalance = (customer.getCurrentBalance() != null ? customer.getCurrentBalance() : BigDecimal.ZERO)
                 .add(amount);
@@ -149,9 +226,12 @@ public class ArApServiceImpl implements ArApService {
                 CounterpartyType.CUSTOMER, customerId, customer.getName(),
                 amount, newBalance, dueDate, operatedBy, remark);
         transaction.setSalesOrderId(salesOrderId);
+        // per-shipment 幂等键 (可空: recordReceivable 手工挂账无 source, 走 SO 级 409 防重复)。
+        if (sourceType != null) transaction.setSourceType(sourceType);
+        if (sourceId != null) transaction.setSourceId(sourceId);
 
-        log.info("应收挂账: factoryId={}, customerId={}, amount={}, balance={}",
-                factoryId, customerId, amount, newBalance);
+        log.info("应收挂账: factoryId={}, customerId={}, sourceId={}, amount={}, balance={}",
+                factoryId, customerId, sourceId, amount, newBalance);
         return transactionRepository.save(transaction);
     }
 

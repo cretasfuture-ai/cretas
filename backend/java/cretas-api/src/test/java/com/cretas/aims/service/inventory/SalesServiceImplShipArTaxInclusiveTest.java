@@ -79,6 +79,9 @@ class SalesServiceImplShipArTaxInclusiveTest {
     private static final String DELIVERY_ID = "DLV-F006-TAX-0001";
     private static final Long   USER_ID     = 1L;
 
+    /** 本类只钉接线: 让 helper 对空行原样返回这个数, 再断言它被传给了挂账。 */
+    private BigDecimal shippedValueForWiring;
+
     @BeforeEach
     void setUp() {
         salesService = new SalesServiceImpl(
@@ -98,7 +101,13 @@ class SalesServiceImplShipArTaxInclusiveTest {
         d.setSalesOrderId(ORDER_ID);
         d.setStatus(SalesDeliveryStatus.DRAFT);
         d.setDeliveryDate(LocalDate.now());
+        // ⚠️ 保持【空行】: 空行让 shipDelivery 跳过成品库存扣减, 这是本类原本的夹具设计。
+        //   合并口径下 taxInclusiveShippedValue 对空行直接返回 record.getTotalAmount(),
+        //   所以本类现在钉的是【接线】: 调用点有没有把 helper 的结果传给挂账。
+        //   ⛔ 税额/实发量的算法本身不在这里钉 —— 那在 SalesServiceImplShipArMergedCaliberTest,
+        //      它覆盖「含税 且 实发≠订单」这一格 (本类与 #302 的共同盲区)。
         d.setItems(new ArrayList<>());
+        d.setTotalAmount(shippedValueForWiring);
         return d;
     }
 
@@ -124,15 +133,20 @@ class SalesServiceImplShipArTaxInclusiveTest {
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(Collections.emptyList());
         when(deliveryRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(salesOrderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(arApTransactionRepository.existsByFactoryIdAndSalesOrderIdAndTransactionType(
-                eq(FACTORY_ID), eq(ORDER_ID), eq(ArApTransactionType.AR_INVOICE))).thenReturn(false);
+        // lenient: 合并口径后幂等键换成了 (SALES_DELIVERY, deliveryId), 走
+        // existsLegacyArInvoiceWithoutSource, 不再调这个按订单的存在性检查。
+        // 保留桩是为了让本类在两种实现下都能起来, ⛔ 但不能让它变成 UnnecessaryStubbing。
+        org.mockito.Mockito.lenient().when(
+                arApTransactionRepository.existsByFactoryIdAndSalesOrderIdAndTransactionType(
+                        eq(FACTORY_ID), eq(ORDER_ID), eq(ArApTransactionType.AR_INVOICE))).thenReturn(false);
     }
 
     private BigDecimal capturedReceivable() {
         ArgumentCaptor<BigDecimal> amount = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(arApService, times(1)).recordReceivable(
+        // 合并后走 recordReceivableIfAbsent (每张子发运单一条幂等键), 不再是 recordReceivable
+        verify(arApService, times(1)).recordReceivableIfAbsent(
                 eq(FACTORY_ID), eq("CUST-TAX-001"), eq(ORDER_ID),
-                amount.capture(), any(), eq(USER_ID), any());
+                any(), any(), amount.capture(), any(), eq(USER_ID), any());
         return amount.getValue();
     }
 
@@ -143,6 +157,7 @@ class SalesServiceImplShipArTaxInclusiveTest {
     @Test
     @DisplayName("发货挂应收: 未税 221.24 + 税 28.76 → 应收必须是 250.00 (价税合计), 不是 221.24")
     void shipDelivery_recordsReceivableAtTaxInclusiveAmount() {
+        shippedValueForWiring = new BigDecimal("250.00");   // 实发价税合计
         SalesDeliveryRecord delivery = makeDelivery();
         SalesOrder order = makeOrder("221.24", "28.76", null);
         stubCommon(delivery, order);
@@ -162,6 +177,7 @@ class SalesServiceImplShipArTaxInclusiveTest {
     @Test
     @DisplayName("发货挂应收: 有折扣时按 未税-折扣+税 = 1017.00, 手写 add(tax) 会算成 1117.00")
     void shipDelivery_receivableAccountsForDiscount() {
+        shippedValueForWiring = new BigDecimal("1017.00");
         SalesDeliveryRecord delivery = makeDelivery();
         SalesOrder order = makeOrder("1000.00", "117.00", "100.00");
         stubCommon(delivery, order);
@@ -177,6 +193,7 @@ class SalesServiceImplShipArTaxInclusiveTest {
     @Test
     @DisplayName("发货挂应收: 零税率订单仍按原额挂账 (不因本次改动漂移)")
     void shipDelivery_zeroTaxUnchanged() {
+        shippedValueForWiring = new BigDecimal("9900.00");
         SalesDeliveryRecord delivery = makeDelivery();
         SalesOrder order = makeOrder("9900.00", "0.00", null);
         stubCommon(delivery, order);

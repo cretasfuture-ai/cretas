@@ -19,6 +19,55 @@ public interface ArApService {
                                       String salesOrderId, BigDecimal amount,
                                       LocalDate dueDate, Long operatedBy, String remark);
 
+    /**
+     * 幂等、不抛异常的销售发货应收挂账 —— 供与调用方共享事务的自动化调用方使用
+     * （{@code shipDelivery} 对同一 SO 多次分批发货的自动挂账）。
+     *
+     * <p><b>金额口径 (🔴🔒 2026-08-28 修复)</b>: {@code amount} 必须传<b>本次子发运单的实发金额</b>
+     * （Σ 实际发货数量 × 单价, 即 {@code SalesDeliveryRecord.totalAmount}）, <b>不是</b> SO 的
+     * 订单金额。旧实现按订单金额挂账, 而仓管在确认发货时可以覆盖【实际发货数量】
+     * （{@code warehouseConfirmDelivery}, 客户原话「车装不下 / 现场少装」）—— 覆盖后重算的是
+     * 发货单的 totalAmount, 应收取的却是订单金额, 两个数就此分家。prod 实测:
+     * <ul>
+     *   <li>超发 {@code SO-20260828-0012}: 订 2 盒 → 仓管填 5 → 库存真扣 5, 发运单 110.62,
+     *       <b>应收只有 44.25</b>, 订单 COMPLETED ⇒ 3 盒没人收钱（<b>无条件错</b>）</li>
+     *   <li>少发 {@code SO-20260828-0013}: 订 4 盒 → 仓管填 2 → 发运单 44.25,
+     *       <b>应收 88.50</b> ⇒ 客户被多收（剩余永不发货时成为真多收）</li>
+     * </ul>
+     *
+     * <p><b>幂等键 = (sourceType, sourceId) = 每张子发运单</b>（旧实现按 SO 幂等 → 分批发货只挂
+     * 首笔订单全额）。同一发运单重复确认返回既有记录, 不重复挂账; 不同发运单各挂各的实发额,
+     * 累计 = 实发总额。DB 侧由 {@code uk_aat_ar_invoice_per_shipment} 兜底
+     * （V20261031_06 把「每 SO 一条」换成「每发运单一条」）。
+     *
+     * <p>⚠️ 只有子发运单会走到这里: {@code shipDelivery} 对 {@code record_role='MASTER'} 直接抛
+     * 409「母发货单不能直接确认发货」, 所以母单不会重复挂一笔。
+     *
+     * <p>与 {@link #recordReceivable} 不同, 本方法对「预期的跳过条件」<b>绝不抛异常</b>:
+     * 在共享 {@code @Transactional} 内抛异常会把事务标记为 rollback-only, 调用方外层 commit
+     * 会抛 {@code UnexpectedRollbackException}（doomed-tx, 客户看到误导性 409, 且<b>货发不出去</b>）。
+     * 这正是采购侧 2026-07-02 修过的同一个坑。因此本方法:
+     * <ul>
+     *   <li>该 (sourceType, sourceId) 已有 AR_INVOICE → 返回<b>既有记录</b>（幂等, 防双击）;</li>
+     *   <li>金额缺失/非正（发运单无单价、实发为 0）、客户不存在、或 SO 状态不允许挂账
+     *       → 返回 {@code null}（跳过）。发货不能被应收侧前置条件阻塞, 且金额缺失时
+     *       <b>诚实不挂</b>（不伪造 0 应收, 也不回落到订单金额 —— 那正是本次要修的缺陷）;</li>
+     *   <li>否则创建并返回新的 AR_INVOICE, 同时写入 {@code salesOrderId}（SO 溯源）
+     *       与 {@code sourceType/sourceId}（幂等键）。</li>
+     * </ul>
+     *
+     * <p>手工挂账入口（{@code ArApController /receivable}）仍用 {@link #recordReceivable},
+     * 保留 409 防重复的防呆提示; 本方法仅用于发货自动挂账这类「不得阻塞主流程」的共享事务场景。
+     *
+     * @param amount     本次子发运单实发金额（Σ 实发数量 × 单价）, 非 SO 订单金额
+     * @param sourceType 幂等来源类型, 发货挂账固定传 {@code "SALES_DELIVERY"}
+     * @param sourceId   幂等来源 ID, 传子发运单 ID（{@code SalesDeliveryRecord.id}）
+     */
+    ArApTransaction recordReceivableIfAbsent(String factoryId, String customerId,
+                                             String salesOrderId, String sourceType, String sourceId,
+                                             BigDecimal amount,
+                                             LocalDate dueDate, Long operatedBy, String remark);
+
     /** 采购入库 → 产生应付（AP_INVOICE） */
     ArApTransaction recordPayable(String factoryId, String supplierId,
                                    String purchaseOrderId, BigDecimal amount,
