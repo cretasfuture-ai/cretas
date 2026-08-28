@@ -1532,3 +1532,183 @@ CDN 发的是 **gzip**（`1f 8b 08`），我在 grep 压缩字节。
 - **三个「web 只警告、真机会抛」的文本节点屏**（`KPIReport` / `PurchaseOrderCreate` / `WHSettings`）
 - **表单提交路径** —— 四轮都只到「打开表单」为止
 - T7（已审批盘点 0 条明细）/ T8（批次详情状态未知）/ T9（0kg 入库成功）仍未验证
+
+---
+
+# 第五轮（2026-08-28 深夜）：把「记账了没改」的挂账清完
+
+⚠️ **这一轮最重要的产出不是修了什么，是订正了三条我自己先前写下的错误结论。**
+台账是给下一个人用的，错的结论比没有结论更贵。
+
+## 🔴 三条订正
+
+### ① 平台侧其实进得去 —— G1 的真实规模是餐饮侧 11 屏，不是「约 270 条」
+
+`PlatformStackNavigator` 挂在 `MainNavigator` 里，而 `platform_admin`（生产库 1 个账号）
+命中 `MainNavigator` 分支。之前把平台侧和餐饮侧一起算成「约 270 条注册路由无人可达」是**错的**。
+
+生产库 `users.role_code` 实测分布对照 `AppNavigator` 的分派，真正没有分支的是三个：
+
+```
+restaurant_owner      1 个账号
+restaurant_manager    1 个账号
+restaurant_purchaser  1 个账号
+```
+
+三个人登录后一律落到 `RestrictedRoleNavigator`（锁定页）；而 `navigation/restaurant/`
+下四棵 stack（菜谱 3 / 领用 3 / 盘点 3 / 损耗 2，共 **11 屏**）只在自己的 `index.ts` 里
+互相导出，**没有任何地方 import 过** —— 建好了没接上。
+
+⚠️ 生产库里也**没有** `super_admin` 这个角色。之前记的那条是错的。
+
+⇒ 新增 `RestaurantNavigator`：把已建好的四棵 stack 装成 4 个 tab，⛔ 没有新造任何业务屏。
+⇒ 新增闸 `everyBackendRoleHasANavigator`。**变异对照**：拿掉 `restaurant_owner` 那条判断，闸当场红。
+
+### ② 「三屏里有裸文本节点」是错的
+
+前两轮在 web 上看到 `Text strings must be rendered within a <Text>`，台账记成
+「`KPIReport` / `PurchaseOrderCreate` / `WHSettings` 三屏里有裸文本」，**三次定位都没找到**。
+
+这一轮换 **AST**（⛔ 不用正则数字符串）：先用阳性对照证明尺子能读出 5 种形态
+（裸文本 / `{' '}` / 模板串 / `&&` 短路字符串 / 字符串字面量），再扫全仓 **617 个 tsx**：
+
+```
+命中 0 —— 那三屏自己一个都没有；放宽到「裸标识符」仍然是 0
+```
+
+⇒ 真正来源只能是**子组件或三方组件**，而那条 console 消息不带组件栈。**仍然挂账。**
+⇒ 但尺子做成了闸 `noStrayTextNodeInContainers`（**零容忍**，不是棘轮 —— 今天存量就是 0）。
+
+### ③ T7 不是缺陷，是合法的空
+
+`ST-202608-2A4C1F02`「已审批 · 共 0 项」查生产库后：`selfConfirmedZeroDifference = true`
+—— 盘点人自我确认零差异，按设计不含品项明细，走条件节点直达 APPROVED
+（另一条线验收 PR #250 留下的）。
+
+⚠️ 但屏上没有任何东西说明这一点 ⇒ 使用者分不清「合法的零差异确认」和「数据没落」。
+▎**空是一种合法状态时，得把它是哪一种说出来。** 这才是修掉的东西。
+
+## 修掉的
+
+| # | 位置 | 原来在说什么 |
+|---|---|---|
+| **R8** | `ReportDashboard` 质量卡 | 「检验数 13 · 合格 6 · **不合格 7** · 合格率 **68.8%**」—— 6/13 = 46.2%。两个数不是一个量：计数是「非 PASS」（把 CONDITIONAL 和**待检**算进不合格），`passRate` 是**样本级**平均。⇒ 改读后端已有的 `breakdown` |
+| **P1′** | 采购异常屏 | 实测 31 条里 `purchaseOrderNumber` **0/31**、`supplierName` **0/31**、`materialName` **24/31 有值**（🔴 我一开始写成「三项全部 null」——只看了第 0 行就推广，见下方订正④）⇒ 屏上显示「采购单: 39603589-739e-…」。后端**读时补齐**（批量取、不落库）；「处理异常」从危险红改蓝 |
+| **W1′** | 车间三步引导 | 零接口；工位/设备/人员全写死；「启动设备」是 `setTimeout(1500)`；「开始生产」也不调接口 |
+| **D1** | 推送注册 | 自上线起**一次都没成功过**（`extra.eas.projectId` 缺失，任何平台都取不到），而注释把它框成 Web 专属 |
+| **F1** | 三个仓储表单屏 | 不带参数打开**当场崩**（`Cannot destructure property 'xxxId' of 'route.params'`） |
+
+## ✅ 错误边界第一次在真实缺陷上开火
+
+三个表单屏崩的时候，第三轮加的 `AppErrorBoundary` **接住了** ——
+屏上是「这一页打不开」而不是整个 App 白掉。这是它上线以来第一次派上用场。
+
+## ⛔ 两件**没有**做的，写清楚
+
+**① 486 个缺失译文键里绝大多数没动。** 修掉的 43 处是不需要写文案的
+（25 处 `t('ns.key')` → `t('ns:key')`，18 处键在别的 namespace）。
+剩下的 platform 128 / home 114 / management 86 **在走查从没到过的树里** ——
+它们要的是「照着屏上写文案」，不是凭空造 400 条中文。
+
+报数带口径（**两个数不是同一把尺子量的**）：
+
+```
+同一把旧尺子  519 -> 482   这 37 个是真修好了
+换新尺子后    482 -> 486   涨的 4 个不是退步, 是闸原来看不见冒号写法, 现在查出 4 处目标确实不存在
+```
+
+⚠️ 改完才发现**闸自己读不懂新写法**（正则不匹配冒号、`lookup` 也不拆冒号），
+于是把改对的直接跳过。▎**一道看不见正确写法的闸，既不会因为修好而变绿，也不会因为写错而变红。**
+
+**② 68 处 `route.params` 无保护解构没有建闸。**
+正常入口都传了参数，所以大多是潜伏的；建闸会变成每个新详情屏的税，
+而错误边界已经把影响面限制在「这一页」。⇒ 只修实测崩过的三屏，其余记账。
+
+## 本轮踩到的仪器问题（两个，都是自己造的）
+
+**① `navigate.ok=true` 不是「我到了那一屏」。**
+第一版表单探针用 `f006_admin` + `Main/FAHomeTab/...`，三屏都 `ok=true`、0 条非 GET 请求
+—— 看起来像「表单都不提交任何东西」这种惊人发现。实际是两处都错：
+`f006_admin` 走 `BossNavigator`（那棵树**按设计就没有表单**，屏上原话
+「查看与决策，不替岗位录入」），而 `PurchaseOrderCreate` 注册在 `FAManagementStackNavigator` 里。
+⇒ 幸好探针同时打了屏上文字。**判据必须是「屏上是不是那一屏」。**
+
+**② 一屏崩了之后，后面每一屏都读到同一张错误页。**
+`AppErrorBoundary` 顶在那里，#2 #3 的 `navigate` 全部 `ok=false`。
+修之前这会把 **1 个缺陷读成 3 个**。⇒ 探针每屏开始前先点「再试一次」恢复。
+
+### ④ 我自己在 PR 里报错了一个数
+
+PR #309 的描述和 commit 都写着「实测 31 条**全部** `purchaseOrderNumber/materialName/supplierName = null`」。
+**`materialName` 那一项是错的**，拿同一份响应重新逐行数：
+
+```
+purchaseOrderNumber  非空  0/31
+supplierName         非空  0/31
+materialName         非空 24/31   <- 我写成了 0/31
+```
+
+成因：只打印了 `rows[0]` 就推广到全部，而第 0 行恰好三项都是 null ——
+正是形态 A⁴「我看到的是全部吗」。已在 PR #309 上公开订正。
+
+改动本身不受影响，只是收益比我说的小：单号和供应商确实是净新增，
+物料名补的是剩下的 **7/31**。⛔ 不是 31 条。
+
+## 上线与判据（三条通道各自核）
+
+| 通道 | 结果 | 判据 |
+|---|---|---|
+| **RN** | OTA `ts=1787931706156` | 制品对照 + 真机 |
+| **Java** | 已在生产（并发 session 从 main 部署时带上） | 行为对照 |
+| **web-admin** | 单独发（整条流水线的锁被别的 session 占了三次） | 四向 hash + 屏上 |
+
+**制品对照（新旧两份 OTA bundle 各 grep）**：
+
+| marker | 第四轮 | 第五轮 |
+|---|---:|---:|
+| `RestaurantRecipeTab` | 0 | **1** |
+| `missing-route-params` | 0 | **1** |
+| `stocktake-self-confirmed-zero` | 0 | **1** |
+| `task-guide-not-wired` | 0 | **1** |
+| `app-error-boundary`（对照） | 2 | 2 |
+| `wh-recall-not-wired`（对照） | 1 | 1 |
+
+**真机**：`CheckCompleteAvailable → Download → DownloadComplete(pending=true)`，
+再冷启 `pending=false` + `CheckCompleteUnavailable` ⇒ 设备跑的就是这一份。
+
+**行为对照（生产实测 `GET /purchase-exceptions`）**：
+
+```
+上线前  purchaseOrderNumber 0/31   supplierName 0/31   materialName 24/31
+上线后  purchaseOrderNumber 7/31   supplierName 7/31   materialName 26/31
+样例   EX-F006-20260820-0029 | PO-20260820-0007 | 北京飞熊 | 2015胸肉   (原来是一串 UUID)
+```
+
+### 🔴 补齐率只有 7/31 —— 这本身是个新发现
+
+剩下 24 条拿不到单号，去库里问了一次：
+
+```sql
+select count(*) filter (where po.id is null)          as 查不到,
+       count(*) filter (where po.deleted_at is not null) as 软删,
+       count(*)                                        as 合计
+from purchase_exceptions pe
+left join purchase_orders po on po.id = pe.purchase_order_id
+where pe.factory_id='F006';
+-- 24 | 0 | 31
+```
+
+**24/31 的 `purchase_order_id` 在 `purchase_orders` 里根本不存在**，而且**不是软删**（软删计数 0）。
+⇒ 这些异常单指向的采购单已经没有了。这是一条**新的数据完整性挂账**（记作 **P2**）。
+
+▎顺带说明这个改动的价值：屏上从「一串看起来像单号的 UUID」变成了
+▎「未能关联到采购单号」—— **把一个无法关联的事实说出来，而不是拿噪声填上**。
+
+## 又一次「红的是尺子不是页面」
+
+web-admin 那条验收在页面**已经修好之后**仍然红，因为我写的是
+`expect(body).not.toContain('0%')` —— 它匹配到了「目标: **9`0%`**」的尾巴。
+
+⇒ 改成带边界的 `/(?<![\d.])0(\.0+)?%/`，并给这把尺子自己配了阳性对照
+（`'当前: 0%'` 必须命中、`'目标: 90%'` 必须不命中）。
+▎**子串计数量的是文本，不是结构** —— 与形态 C⁸ 同源，今晚第二次。
