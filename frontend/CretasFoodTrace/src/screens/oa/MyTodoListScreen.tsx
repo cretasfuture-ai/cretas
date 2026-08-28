@@ -315,7 +315,12 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
           resp = await todoApprovalApiClient.priceAnomalyApprove(item.refId);
           break;
         case 'STOCKTAKE_APPROVAL':
-          resp = await todoApprovalApiClient.stocktakeApprove(item.refId);
+          if (!item.instanceId || !item.expectedNodeId) {
+            appAlert('无法审批', '这条盘点待办缺少 OA 审批实例信息，请下拉刷新后重试');
+            setApproving(false);
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(item.instanceId, 'APPROVE', item.expectedNodeId);
           break;
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceApprove(item.refId);
@@ -377,7 +382,11 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
           resp = await todoApprovalApiClient.priceAnomalyReject(item.refId, reason);
           break;
         case 'STOCKTAKE_APPROVAL':
-          resp = await todoApprovalApiClient.stocktakeReject(item.refId, reason);
+          if (!item.instanceId || !item.expectedNodeId) {
+            appAlert('无法驳回', '这条盘点待办缺少 OA 审批实例信息，请下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(item.instanceId, 'REJECT', item.expectedNodeId, reason);
           break;
         case 'RETURN_FINANCE_REVIEW':
           resp = await todoApprovalApiClient.returnFinanceReject(item.refId, reason);

@@ -187,30 +187,6 @@ class TodoApprovalApiClient {
     );
   }
 
-  // ─── 盘点审批 ───────────────────────────────────────────────────────────────
-
-  /** 盘点任务审批通过 */
-  async stocktakeApprove(
-    stocktakeId: string,
-    factoryId?: string,
-  ): Promise<{ success: boolean; data: unknown; message?: string }> {
-    return apiClient.post(
-      `/api/mobile/${this.fid(factoryId)}/stocktakes/${stocktakeId}/approve`,
-    );
-  }
-
-  /** 盘点任务驳回 */
-  async stocktakeReject(
-    stocktakeId: string,
-    notes: string,
-    factoryId?: string,
-  ): Promise<{ success: boolean; data: unknown; message?: string }> {
-    return apiClient.post(
-      `/api/mobile/${this.fid(factoryId)}/stocktakes/${stocktakeId}/reject`,
-      { notes },
-    );
-  }
-
   /** 报损单审批通过 */
   async wastageApprove(
     reportId: string,

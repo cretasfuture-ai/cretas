@@ -56,6 +56,25 @@ describe('闸: OA 待办审批走活着的端点', () => {
     expect(code).toContain('idempotencyKey');
   });
 
+  it('盘点待办的通过和驳回也只走 OA 统一动作入口', () => {
+    for (const rel of SCREENS) {
+      const code = readCode(rel);
+
+      // 阳性控制：确实读到了盘点分支和统一动作调用。
+      expect(code).toContain('STOCKTAKE_APPROVAL');
+      expect(code).toContain('oaAction');
+      expect(code).toContain('expectedNodeId');
+
+      // 后端这两条资源端点已固定返回 410；不得再从 UI 调用。
+      expect(code).not.toContain('stocktakeApprove');
+      expect(code).not.toContain('stocktakeReject');
+    }
+
+    const client = readCode('services/api/myTodoApiClient.ts');
+    expect(client).toMatch(/workflow\/instances\/\$\{instanceId\}\/actions/);
+    expect(client).not.toMatch(/stocktakes\/\$\{stocktakeId\}\/(approve|reject)/);
+  });
+
   /*
    * 2026-08-16 加固。上面守的是「那两个屏不调它」，而当时仍有**第二条**同样的死路：
    * `PurchaseOrderFinanceReviewScreen` 也在打 410 的 `/finance-approve`。它双重不可达
