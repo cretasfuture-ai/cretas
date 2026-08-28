@@ -73,9 +73,22 @@ test('KPI 页：后端 null 时显示「—」，不是 0.0%', async ({ page }) 
   expect(body, '算不出来时应显示「—」').toContain('—');
   // ⛔ 阴性对照：不许把「没有数据」画成 0
   // '0%' 是 el-progress 自己打的 —— 看截图才发现它紧挨着「当前: —」。
-  for (const bad of ['0.0%', '0.00%', '0%']) {
-    expect(body, `屏上不该出现 ${bad}`).not.toContain(bad);
+  // ⛔ 不要用 `toContain('0%')` —— 它会匹配到「目标: 9**0%**」的尾巴。
+  //    2026-08-29 实测：页面其实已经修好了（每个指标都是「当前: —」、进度条不再打百分比），
+  //    而这条断言仍然红 —— **红的是尺子，不是页面**。
+  //    与本仓 formeasurement 形态 C⁸ 同源：子串计数量的是文本，不是结构。
+  // ⇒ 用「前面不是数字或小数点的 0」做边界。
+  const ZERO_PCT = /(?<![\d.])0(\.0+)?%/;
+  const m = body.match(ZERO_PCT);
+  if (m) {
+    const at = body.indexOf(m[0]);
+    console.log('=== 命中的上下文: ...' + body.slice(Math.max(0, at - 120), at + 40) + '...');
   }
+  expect(body).not.toMatch(ZERO_PCT);
+
+  // 阳性对照：这把尺子必须能读出真正的 0% —— 否则上面那条不可判定
+  expect('当前: 0%').toMatch(ZERO_PCT);
+  expect('目标: 90%').not.toMatch(ZERO_PCT);
 });
 
 test('阴性对照：接口有数时照常显示百分比（⛔ 防「一律显示 —」也能过）', async ({ page }) => {
