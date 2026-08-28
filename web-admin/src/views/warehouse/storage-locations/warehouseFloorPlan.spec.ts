@@ -13,10 +13,27 @@ import {
   annotationFromPolyline, annotationPathData, appendFreehandPoint, boundsOfPoints, clampRect,
   defaultZoneShapeFor, floorAnnotations, floorZoneShapes, handleAnchor, MAX_FREEHAND_POINTS,
   MIN_SHAPE_SIZE, minSizeForKind, moveRect, normalizeAnnotation, normalizeAnnotations,
-  normalizeWarehouseLayout, normalizeZoneShapes, parseMapSelection, rectFromDrag, resizeRect,
+  normalizeWarehouseLayout, normalizeZoneShapes, parseMapSelection, rectFromDrag, resizeAnnotation, resizeRect,
   screenToFlowPoint, thinPoints, toPointPairs, upsertZoneShape, zoneShapeFromPercent, zoneShapeOf,
   zonesMissingShapeOnFloor,
 } from './warehouseLayoutModel';
+
+describe('文字标注缩放算术', () => {
+  it('四角放大两倍时框与字号一起两倍，普通矩形不凭空长 fontSize', () => {
+    const text: WarehouseAnnotation = {
+      id: 'text-1', kind: 'text', x: 20, y: 30, width: 168, height: 40,
+      text: '原料仓入口', fontSize: 16,
+    };
+    expect(resizeAnnotation(text, 'se', 168, 40)).toMatchObject({
+      x: 20, y: 30, width: 336, height: 80, fontSize: 32,
+    });
+
+    const rect: WarehouseAnnotation = { id: 'rect-1', kind: 'rect', x: 0, y: 0, width: 40, height: 40 };
+    expect(resizeAnnotation(rect, 'se', 40, 40)).toEqual({
+      id: 'rect-1', kind: 'rect', x: 0, y: 0, width: 80, height: 80,
+    });
+  });
+});
 
 describe('结构层与标注层是两份数据，⛔ 不许互相渗透', () => {
   it('normalizeZoneShapes 丢掉没有 zoneId 的东西 —— 自由图形进不了结构层', () => {

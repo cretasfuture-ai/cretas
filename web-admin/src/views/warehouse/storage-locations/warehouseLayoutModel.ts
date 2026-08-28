@@ -53,6 +53,7 @@ export type MapTool = 'select' | 'zone' | 'rect' | 'ellipse' | 'polygon' | 'free
 
 export type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 export const RESIZE_HANDLES: readonly ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+export const TEXT_RESIZE_HANDLES: readonly ResizeHandle[] = ['nw', 'ne', 'se', 'sw'];
 export interface FlowPoint { x: number; y: number }
 export interface ViewportTransform { x: number; y: number; zoom: number }
 
@@ -127,6 +128,25 @@ export function resizeRect<T extends WarehouseRectGeometry>(rect: T, handle: Res
     height = Math.max(min, height + dy);
   }
   return { ...rect, x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
+}
+
+/**
+ * 文字标注用四角等比缩放：框和字号一起变，避免只拉大框却留下固定字号。
+ * 取宽高缩放比中较小者，保证文字仍能放进用户画出的框里。
+ */
+export function resizeAnnotation(
+  annotation: WarehouseAnnotation,
+  handle: ResizeHandle,
+  dx: number,
+  dy: number,
+): WarehouseAnnotation {
+  const resized = resizeRect(annotation, handle, dx, dy, minSizeForKind(annotation.kind));
+  if (annotation.kind !== 'text') return resized;
+  const scale = Math.min(resized.width / annotation.width, resized.height / annotation.height);
+  return {
+    ...resized,
+    fontSize: Math.max(1, Math.round((annotation.fontSize || 16) * scale)),
+  };
 }
 
 /** 八个缩放控制点的锚点坐标（画布坐标）。 */

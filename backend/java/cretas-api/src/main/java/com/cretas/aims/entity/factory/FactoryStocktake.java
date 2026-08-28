@@ -38,8 +38,17 @@ import java.util.UUID;
 @Where(clause = "deleted_at IS NULL")
 public class FactoryStocktake extends BaseEntity {
 
+    @Getter
+    @RequiredArgsConstructor
     public enum Status {
-        INITIATED, COUNTING, PENDING_APPROVAL, APPROVED, APPLIED, REJECTED
+        INITIATED("已发起 · 未录入"),
+        COUNTING("盘点中 · 未提交"),
+        PENDING_APPROVAL("待审批"),
+        APPROVED("已审批"),
+        APPLIED("已生效"),
+        REJECTED("已驳回");
+
+        private final String displayLabel;
     }
 
     public enum InventoryScope {

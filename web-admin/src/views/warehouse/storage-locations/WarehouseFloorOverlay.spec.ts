@@ -245,6 +245,29 @@ describe('标注可以拖动，并且能被藏起来', () => {
   });
 });
 
+describe('文字标注的框和字号一起缩放', () => {
+  const textFloor = () => floorWith({
+    annotations: [{
+      id: 'text-1', kind: 'text', x: 20, y: 30, width: 168, height: 40,
+      text: '原料仓入口', color: '#17243a', fontSize: 16,
+    }],
+  });
+
+  it('选中文字后只有四角缩放把手，拖到两倍时字号也精确变成两倍', async () => {
+    const wrapper = mountOverlay({ floor: textFloor(), selection: 'annotation:text-1' });
+    expect(wrapper.find('[data-annotation-handle="text-1:se"]').exists()).toBe(true);
+    expect(wrapper.find('[data-annotation-handle="text-1:e"]').exists()).toBe(false);
+
+    await pointerDown(wrapper, '[data-annotation-handle="text-1:se"]', 188, 70);
+    pointerMove(356, 110);
+    pointerUp();
+
+    expect(wrapper.emitted('annotation-change')!.at(-1)![0]).toMatchObject({
+      id: 'text-1', width: 336, height: 80, fontSize: 32,
+    });
+  });
+});
+
 describe('区域被删掉之后遗留的孤块要说实话', () => {
   it('几何指向一个不存在的区域时，标签写「已删除的区域」而不是留白', () => {
     const wrapper = mountOverlay({

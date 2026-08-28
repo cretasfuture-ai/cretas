@@ -16,6 +16,9 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -43,5 +46,44 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
         assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("inventoryScope")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(FactoryStocktakeItem.class).getAttribute("finishedGoodsBatchId")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(SalesDeliveryItem.class).getAttribute("salesOrderItemId")).isNotNull();
+    }
+
+    @Test
+    @DisplayName("active stocktake finder returns the blocking document and excludes ended or other-scope rows")
+    void activeStocktakeFinderMatchesDuplicateGateContract() {
+        LocalDateTime now = LocalDateTime.now();
+        persistStocktake("ST-OLD", FactoryStocktake.Status.COUNTING,
+                FactoryStocktake.InventoryScope.RAW_MATERIAL, now.minusMinutes(2));
+        persistStocktake("ST-BLOCKING", FactoryStocktake.Status.APPROVED,
+                FactoryStocktake.InventoryScope.RAW_MATERIAL, now.minusMinutes(1));
+        persistStocktake("ST-ENDED", FactoryStocktake.Status.APPLIED,
+                FactoryStocktake.InventoryScope.RAW_MATERIAL, now);
+        persistStocktake("ST-OTHER-SCOPE", FactoryStocktake.Status.PENDING_APPROVAL,
+                FactoryStocktake.InventoryScope.FINISHED_GOODS, now.plusMinutes(1));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<FactoryStocktake> active = stocktakeRepository.findActiveStocktakesForWarehouseAndMonth(
+                "F006", "WH-RAW", "2026-08");
+
+        assertThat(active).extracting(FactoryStocktake::getStocktakeNo)
+                .containsExactly("ST-BLOCKING", "ST-OLD")
+                .doesNotContain("ST-ENDED", "ST-OTHER-SCOPE");
+    }
+
+    private void persistStocktake(String stocktakeNo, FactoryStocktake.Status status,
+            FactoryStocktake.InventoryScope scope, LocalDateTime createdAt) {
+        FactoryStocktake stocktake = new FactoryStocktake();
+        stocktake.setFactoryId("F006");
+        stocktake.setStocktakeNo(stocktakeNo);
+        stocktake.setWarehouseId("WH-RAW");
+        stocktake.setInventoryScope(scope);
+        stocktake.setPeriodMonth("2026-08");
+        stocktake.setStatus(status);
+        stocktake.setInitiatedBy(1L);
+        stocktake.setInitiatedAt(createdAt);
+        stocktake.setCreatedAt(createdAt);
+        stocktake.setUpdatedAt(createdAt);
+        entityManager.persist(stocktake);
     }
 }

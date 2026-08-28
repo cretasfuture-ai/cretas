@@ -36,6 +36,7 @@ export interface StocktakeDTO {
   warehouseId: string;
   periodMonth: string;
   status: 'INITIATED' | 'COUNTING' | 'PENDING_APPROVAL' | 'APPROVED' | 'APPLIED' | 'REJECTED';
+  statusLabel: string;
   initiatedBy?: number;
   initiatedAt?: string;
   submittedBy?: number;
