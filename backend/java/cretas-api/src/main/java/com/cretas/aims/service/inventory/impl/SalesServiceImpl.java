@@ -2590,9 +2590,16 @@ public class SalesServiceImpl implements SalesService {
                     "仅 DRAFT 草稿状态可删除 (当前状态: " + order.getStatus().getDisplayName() + ")")
                     .withHint("如需取消已确认的订单, 请使用取消操作");
         }
-        // MVP: 有 sales:read_write 权限的工厂内管理员均可删除草稿 (无 creator-only 限制)
-        // 软删除 via BaseEntity @SQLDelete (UPDATE deleted_at = NOW())
-        salesOrderRepository.delete(order);
+        // 有 sales:read_write 权限的工厂内管理员均可删除草稿 (无 creator-only 限制)。
+        // BaseEntity 上的 @SQLDelete 不会可靠地传播到实体；repository.delete(order)
+        // 会物理删除父行，并被客供需求 FK 正确拦截。显式软删父子行，保留追溯。
+        requireSuppliedMaterialRequirementService().softDeleteForDraftOrder(order);
+        if (order.getItems() != null && !order.getItems().isEmpty()) {
+            order.getItems().forEach(SalesOrderItem::softDelete);
+            salesOrderItemRepository.saveAll(order.getItems());
+        }
+        order.softDelete();
+        salesOrderRepository.save(order);
         log.info("删除销售订单草稿: orderId={}, orderNumber={}, operatorId={}",
                 orderId, order.getOrderNumber(), userId);
     }

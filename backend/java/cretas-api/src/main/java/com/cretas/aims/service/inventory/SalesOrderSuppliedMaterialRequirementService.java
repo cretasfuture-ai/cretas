@@ -88,6 +88,28 @@ public class SalesOrderSuppliedMaterialRequirementService {
         return persistNewRequirements(order, requests);
     }
 
+    /**
+     * Soft-deletes the still-unreceived warehouse tasks owned by a draft order.
+     *
+     * <p>The requirement table deliberately keeps a restrictive FK to the sales order.
+     * Draft deletion therefore has to retire these task identities before hiding the
+     * parent order; deleting the parent row physically would both violate that FK and
+     * destroy the audit lineage.
+     */
+    @Transactional
+    public void softDeleteForDraftOrder(SalesOrder order) {
+        assertOrderIdentity(order);
+        List<SalesOrderSuppliedMaterialRequirement> existing =
+                requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(
+                        order.getId());
+        if (existing.stream().anyMatch(this::hasReceiptFact)) {
+            throw new BusinessException(409, "已有客供料收货事实，不能删除销售草稿")
+                    .withCode("CUSTOMER_SUPPLIED_REQUIREMENT_RECEIVED_IMMUTABLE")
+                    .withHint("请保留原订单与收货追溯；如需终止履约，请使用取消流程");
+        }
+        softDelete(existing);
+    }
+
     @Transactional
     public List<SalesOrderSuppliedMaterialRequirement> updateForOrder(
             SalesOrder order,
