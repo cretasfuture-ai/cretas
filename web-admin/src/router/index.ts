@@ -1335,6 +1335,14 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '系统设置', module: 'system' }
           },
           {
+            // 2026-08-28: 把已有的阈值参数中心 (CanvasThresholdsController) 在工厂侧
+            // 暴露成独立入口 — 此前只内嵌在 canvas-editor 页里, 没有独立路由/菜单入口。
+            path: 'business-thresholds',
+            name: 'SystemBusinessThresholds',
+            component: () => import('@/views/system/business-thresholds/index.vue'),
+            meta: { requiresAuth: true, title: '业务阈值配置', module: 'system' }
+          },
+          {
             path: 'ai-intents',
             name: 'SystemAIIntents',
             component: () => import('@/views/system/ai-intents/index.vue'),

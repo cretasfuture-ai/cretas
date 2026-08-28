@@ -172,7 +172,11 @@ const props = defineProps<{
   factoryId: string;
 }>();
 
-const CATEGORY_ORDER: ThresholdCategory[] = ['INVENTORY', 'IOT', 'CREDIT', 'BOM', 'SHORTAGE', 'AI'];
+const CATEGORY_ORDER: ThresholdCategory[] = [
+  'INVENTORY', 'IOT', 'CREDIT', 'BOM', 'SHORTAGE', 'AI',
+  'SALES', 'PURCHASE', 'PRICING', 'PRODUCTION', 'PROCUREMENT',
+  'QUALITY', 'FINANCE', 'PROCESSING', 'EFFICIENCY',
+];
 const activeCategory = ref<ThresholdCategory>('INVENTORY');
 const rows = ref<FactoryThreshold[]>([]);
 const loading = ref(false);
