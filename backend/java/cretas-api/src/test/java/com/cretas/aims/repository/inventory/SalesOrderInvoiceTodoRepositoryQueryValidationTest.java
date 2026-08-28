@@ -93,6 +93,21 @@ class SalesOrderInvoiceTodoRepositoryQueryValidationTest {
     }
 
     @Test
+    void maxOrderNumberIncludesSoftDeletedHistoryThatStillOccupiesUniqueKey() {
+        SalesOrder deletedHistory = newOrder("SO-JPA-DELETED-HISTORY", SalesOrderStatus.DRAFT);
+        deletedHistory.setOrderNumber("SO-20991231-0007");
+        salesOrderRepository.saveAndFlush(deletedHistory);
+        entityManager.createNativeQuery("UPDATE sales_orders SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id")
+                .setParameter("id", deletedHistory.getId())
+                .executeUpdate();
+        entityManager.clear();
+
+        assertThat(salesOrderRepository.findById(deletedHistory.getId())).isEmpty();
+        assertThat(salesOrderRepository.findMaxOrderNumberByPrefix("F006", "SO-20991231-%"))
+                .isEqualTo("SO-20991231-0007");
+    }
+
+    @Test
     void completionTransitionCreatesTodoAndHistoricalCompletedUpdateDoesNotBackfill() {
         SalesOrder draft = newOrder("SO-JPA-COMPLETION", SalesOrderStatus.DRAFT);
         salesOrderRepository.saveAndFlush(draft);
