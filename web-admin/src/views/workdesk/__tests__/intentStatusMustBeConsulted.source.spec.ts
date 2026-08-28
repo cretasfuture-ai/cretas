@@ -34,13 +34,16 @@ import { describe, expect, it } from 'vitest';
  * 「grep 到的是『提到』，不是『调用』」是本仓反复记过的形态。
  * ⇒ 判据改成：**剥掉 import 与注释之后**，仍存在 `xxx(` 形式的调用。
  *
- * ## 为什么是棘轮而不是硬红
+ * ## 棘轮已经归零 —— 现在它是一道硬红
  *
- * 建闸当天存量 **6** 处（财务那屏已在同一个 PR 里修掉）。
- * 一上来硬红就是一道当天被关掉的闸（形态 E）⇒ 只禁增长。
+ * 建闸当天存量 **6** 处（财务那屏在建闸的同一个 PR 里修掉）。
+ * 一上来硬红就是一道当天被关掉的闸（形态 E），所以先做成只禁增长。
  *
- * ⛔ 想让这个数变小，是去改那些屏；**不是**往 `KNOWN` 里加名字。
- * 每改好一屏，从 `KNOWN` 里删掉它。
+ * **2026-08-28：剩下 6 屏全部改完，`KNOWN` 清空。**
+ * ⇒ 从此任何新增「渲染 AI 回执却不看 status」的工作台**当场红**。
+ *
+ * ⛔ 想让它变绿，是去改那一屏；**不是**往 `KNOWN` 里加名字 ——
+ * 那等于把这道闸退回棘轮，而棘轮已经不需要了。
  */
 
 const WORKDESK_DIR = resolve(__dirname, '..');
@@ -65,14 +68,7 @@ function withoutImportsAndComments(source: string): string {
 /**
  * 建闸当天的存量。⚠️ 是**清单**不是计数 —— 计数会掩盖「修好一个、同时弄坏一个」。
  */
-const KNOWN_NOT_CONSULTING_STATUS = [
-  'ProductionManagerWorkdesk.vue',
-  'PurchaserWorkdesk.vue',
-  'QualityChiefWorkdesk.vue',
-  'QualityManagerWorkdesk.vue',
-  'SalesOwnerWorkdesk.vue',
-  'WarehouseKeeperWorkdesk.vue',
-];
+const KNOWN_NOT_CONSULTING_STATUS: string[] = [];
 
 function workdeskFiles(): string[] {
   return readdirSync(WORKDESK_DIR).filter((name) => name.endsWith('.vue'));

@@ -515,6 +515,7 @@ import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import B2BRealDataSection from '@/views/indicator-center/B2BRealDataSection.vue';
+import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
 
 interface CustomerItem {
   customerId: string;
@@ -711,6 +712,9 @@ async function sendQuery(forceFollowup = false) {
       context = { month };
     }
     const response = await callIntentExecute(userInput.value, intentCode, context);
+    // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
+    //    不是答案。判据见 utils/intentResponseStatus.ts。
+    const nonAnswerLabel = intentNonAnswerLabel(response.status);
     formattedText.value = response.formattedText || response.message
         || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
@@ -719,6 +723,8 @@ async function sendQuery(forceFollowup = false) {
     resultTitle.value = forceFollowup
         ? DEFAULT_RESULT_TITLE
         : (response.intentName || '查询结果');
+    // ⚠️ 正文照旧显示(用户需要知道发生了什么), 变的是【标题不再谎称这是结果】。
+    if (nonAnswerLabel) resultTitle.value = nonAnswerLabel;
 
     // 解析 resultData (Skill aggregate 后的多 Tool 结果)
     const resultData = response.resultData || {};

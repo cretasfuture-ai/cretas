@@ -266,6 +266,7 @@ import {
 } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
 
 interface ExecuteResponse {
   intentRecognized?: boolean;
@@ -400,6 +401,9 @@ async function sendQuery(forcePending = false) {
       userInput.value,
       forcePending ? 'QUALITY_CHIEF_WORKDESK' : undefined,
     );
+    // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
+    //    不是答案。判据见 utils/intentResponseStatus.ts。
+    const nonAnswerLabel = intentNonAnswerLabel(response.status);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
     // Sprint 13 #304: title reflects the answered intent. triggerPendingQuery resets
@@ -408,6 +412,8 @@ async function sendQuery(forcePending = false) {
     resultTitle.value = userInput.value === '今天哪些批次待放行?'
         ? DEFAULT_RESULT_TITLE
         : (response.intentName || DEFAULT_RESULT_TITLE);
+    // ⚠️ 正文照旧显示(用户需要知道发生了什么), 变的是【标题不再谎称这是结果】。
+    if (nonAnswerLabel) resultTitle.value = nonAnswerLabel;
     extractBatchesFromResult(response.resultData || {});
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);

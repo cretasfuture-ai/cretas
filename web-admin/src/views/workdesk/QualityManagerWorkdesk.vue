@@ -515,6 +515,7 @@ import {
 } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
+import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
 
 interface ExecuteResponse {
   intentRecognized?: boolean;
@@ -702,6 +703,9 @@ async function sendQuery() {
 
   try {
     const response = await callIntentExecute(userInput.value);
+    // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
+    //    不是答案。判据见 utils/intentResponseStatus.ts。
+    const nonAnswerLabel = intentNonAnswerLabel(response.status);
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
     // Sprint 13 #304: title reflects the answered intent. triggerHaccpQuery resets
@@ -710,7 +714,11 @@ async function sendQuery() {
     resultTitle.value = userInput.value === '今天 HACCP 监控全通过吗?'
         ? DEFAULT_RESULT_TITLE
         : (response.intentName || DEFAULT_RESULT_TITLE);
-    extractRecallDataFromResult(response.resultData || {});
+    // ⚠️ 正文照旧显示(用户需要知道发生了什么), 变的是【标题不再谎称这是结果】。
+    if (nonAnswerLabel) resultTitle.value = nonAnswerLabel;
+    // ⛔ 非答案时不要去抽数据 —— resultData 是空的, 抽出来会把上一轮的读数清成 0,
+    //    让用户以为「本次召回涉及 0 个批次」。
+    extractRecallDataFromResult(nonAnswerLabel ? {} : (response.resultData || {}));
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
@@ -861,11 +869,22 @@ async function startRecallAnalysis() {
         complaintDescription: recallStartDialog.form.complaintDescription,
       },
     );
+    // 🔴 这一处此前【无条件】宣布「召回分析完成」——
+    //    后端返回 WRITE_CONFIRM_REQUIRED / PERMISSION_DENIED 这类非答案时,
+    //    用户被告知分析完成了, 而下面显示的是一句拒答。
+    //    ⚠️ 「谎报成功」比「标题不对」更严重: 召回是食安动作, 用户会据此停手。
+    const recallNonAnswer = intentNonAnswerLabel(response.status);
     formattedText.value = response.formattedText || response.message || '(召回分析无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
-    extractRecallDataFromResult(response.resultData || {});
+    // ⛔ 非答案时不抽数据 —— 否则会把上一轮的召回读数清成 0。
+    extractRecallDataFromResult(recallNonAnswer ? {} : (response.resultData || {}));
     recallStartDialog.visible = false;
-    ElMessage.success('召回分析完成, 请查看下方结果并执行后续行动');
+    if (recallNonAnswer) {
+      resultTitle.value = recallNonAnswer;
+      ElMessage.warning(`召回分析未完成: ${recallNonAnswer}`);
+    } else {
+      ElMessage.success('召回分析完成, 请查看下方结果并执行后续行动');
+    }
   } catch (err: unknown) {
     const msg = extractErrorMessage(err);
     ElMessage({
