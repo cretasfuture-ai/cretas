@@ -3,6 +3,7 @@ package com.cretas.aims.service.voucher.impl;
 import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.voucher.VoucherSubjectResolver;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
 
@@ -79,6 +80,19 @@ public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<S
 
     @Override
     public List<VoucherEntry> buildEntries(Map<String, Object> input) {
+        // ⚠️ 折旧的输入是一个 Map, 里面没有 factoryId。走无工厂路径 = 一律用默认科目,
+        //    与改动前逐字一致; 有工厂的调用会命中下面那个重载。
+        return buildEntries(stringOrNull(input.get("factoryId")), input);
+    }
+
+    /** 费用科目在分录与辅助核算匹配键上是同一个 —— 一处解析, 两处引用。 */
+    private String depreciationExpenseCode(Map<String, Object> input) {
+        return subject(stringOrNull(input.get("factoryId")), "DEBIT", "6602.02", "管理费用-折旧").code();
+    }
+
+    @Override
+    protected List<VoucherEntry> buildEntries(String factoryId, Map<String, Object> input) {
+        VoucherSubjectResolver.Subject expense = subject(factoryId, "DEBIT", "6602.02", "管理费用-折旧");
         BigDecimal amount = toBigDecimal(input.get("amount"));
         String description = extractDescription(input);
 
@@ -97,7 +111,7 @@ public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<S
 
         return List.of(
                 // 管理费用按部门/项目归集 (R-HJ Round 11 §G.1 部门费用账 / 项目核算账)
-                debitEntryWithAuxiliary(1, "6602.02", "管理费用-折旧", amount, description, auxType, auxId),
+                debitEntryWithAuxiliary(1, expense.code(), expense.name(), amount, description, auxType, auxId),
                 creditEntry(2, "1602", "累计折旧", amount, "累计折旧增加")
         );
     }
@@ -111,9 +125,11 @@ public class DepreciationVoucherGenerator extends AbstractVoucherGenerator<Map<S
         String deptId = stringOrNull(input.get("deptId"));
         String projectId = stringOrNull(input.get("projectId"));
         if (deptId != null) {
-            attachAuxiliary(entries, EntrySide.DEBIT, "6602", AuxiliaryType.DEPT, deptId);
+            attachAuxiliary(entries, EntrySide.DEBIT, depreciationExpenseCode(input),
+                    AuxiliaryType.DEPT, deptId);
         } else if (projectId != null) {
-            attachAuxiliary(entries, EntrySide.DEBIT, "6602", AuxiliaryType.PROJECT, projectId);
+            attachAuxiliary(entries, EntrySide.DEBIT, depreciationExpenseCode(input),
+                    AuxiliaryType.PROJECT, projectId);
         }
     }
 

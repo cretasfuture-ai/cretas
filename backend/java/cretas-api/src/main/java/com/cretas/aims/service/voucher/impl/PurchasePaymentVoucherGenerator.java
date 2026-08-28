@@ -187,6 +187,9 @@ public class PurchasePaymentVoucherGenerator extends AbstractVoucherGenerator<Pu
     @Override
     protected void applyAuxiliary(List<VoucherEntry> entries, PurchaseOrder order) {
         String supplierId = order.getSupplierId();
+        // ⚠️ 这一侧的科目可能被 settlement 映射覆盖(预付->1002/现结->1001)。
+        //    匹配键写死 "2202" 时, 那两种结算方式下供应商辅助核算本来就挂不上 ——
+        //    ⛔ 这是本次**没有**扩大范围去动的既有行为, 单独登记在 PR 里。
         attachAuxiliary(entries, EntrySide.CREDIT, "2202",
                 supplierId != null ? AuxiliaryType.SUPPLIER : null, supplierId);
     }

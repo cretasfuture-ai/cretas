@@ -82,8 +82,19 @@ class VoucherTemplateDescriptionIsUserReadableContractTest {
     /** ` mirror XxxGenerator` / ` mirror Sprint 3 E XxxGenerator` 这一族实现备注。 */
     private static final Pattern IMPL_NOTE = Pattern.compile("\\smirror\\s+\\S");
 
-    /** 单引号里的字符串字面量（SQL 用 '' 转义单引号，这里够用）。 */
-    private static final Pattern SQL_STRING = Pattern.compile("'((?:[^']|'')*)'");
+    /**
+     * 单引号里的字符串字面量（SQL 用 '' 转义单引号）。
+     *
+     * <p>🔴 2026-08-28: 原来写的是 {@code '((?:[^']|'')*)'} —— 交替 + 星号的嵌套量词，
+     * Java 的 Pattern 对它按<b>递归</b>实现，被一段长文本喂进来就
+     * {@code StackOverflowError}。实测: 新增一个注释块较长的迁移
+     * （V20261031_07，引号成对、SQL 完全合法）就能把这道闸<b>整个打崩</b>。
+     *
+     * <p>⚠️ 一道会被合法输入打崩的闸比没有闸更糟：它红得像「你的迁移有问题」，
+     * 而真正有问题的是尺子。改成 SQL 字符串字面量的标准线性写法
+     * {@code '([^']*(?:''[^']*)*)'} —— 同一个语义，无嵌套回溯。
+     */
+    private static final Pattern SQL_STRING = Pattern.compile("'([^']*(?:''[^']*)*)'");
 
     private static final Pattern CJK = Pattern.compile("[\\u4e00-\\u9fff]");
 

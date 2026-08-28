@@ -3,6 +3,7 @@ package com.cretas.aims.service.voucher.impl;
 import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.voucher.VoucherSubjectResolver;
 import com.cretas.aims.entity.restaurant.WastageRecord;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
@@ -61,15 +62,27 @@ public class ExpenseVoucherGenerator extends AbstractVoucherGenerator<WastageRec
 
     @Override
     public List<VoucherEntry> buildEntries(WastageRecord w) {
+        return buildEntries(w.getFactoryId(), w);
+    }
+
+    /** 库存科目在分录与辅助核算匹配键上是**同一个**, 必须一起解析 —— 只改一处会让辅助核算静默失效。 */
+    private VoucherSubjectResolver.Subject inventorySubject(String factoryId) {
+        return subject(factoryId, "CREDIT_INVENTORY", "1405", "库存商品");
+    }
+
+    @Override
+    protected List<VoucherEntry> buildEntries(String factoryId, WastageRecord w) {
+        VoucherSubjectResolver.Subject expense = subject(factoryId, "DEBIT", "6602.01", "管理费用-损耗");
+        VoucherSubjectResolver.Subject inv = inventorySubject(factoryId);
         BigDecimal amount = nullToZero(w.getEstimatedCost());
         // Sprint 6 W4-A: 库存维度优先 materialBatchId (批次粒度) → rawMaterialTypeId (SKU 粒度) → null
         String inventoryRef = w.getMaterialBatchId() != null && !w.getMaterialBatchId().isBlank()
                 ? w.getMaterialBatchId()
                 : w.getRawMaterialTypeId();
         return List.of(
-                debitEntry(1, "6602.01", "管理费用-损耗", amount, "损耗 " + w.getWastageNumber()),
+                debitEntry(1, expense.code(), expense.name(), amount, "损耗 " + w.getWastageNumber()),
                 // 库存科目按批次/SKU 分账 (R-HJ Round 11 §G.1 库存明细账)
-                creditEntryWithAuxiliary(2, "1405", "库存商品", amount, "库存减少 (" + w.getType() + ")",
+                creditEntryWithAuxiliary(2, inv.code(), inv.name(), amount, "库存减少 (" + w.getType() + ")",
                         inventoryRef != null && !inventoryRef.isBlank() ? AuxiliaryType.INVENTORY : null,
                         inventoryRef != null && !inventoryRef.isBlank() ? inventoryRef : null)
         );
@@ -85,7 +98,7 @@ public class ExpenseVoucherGenerator extends AbstractVoucherGenerator<WastageRec
                 ? w.getMaterialBatchId()
                 : w.getRawMaterialTypeId();
         boolean present = inventoryRef != null && !inventoryRef.isBlank();
-        attachAuxiliary(entries, EntrySide.CREDIT, "1405",
+        attachAuxiliary(entries, EntrySide.CREDIT, inventorySubject(w.getFactoryId()).code(),
                 present ? AuxiliaryType.INVENTORY : null, present ? inventoryRef : null);
     }
 }

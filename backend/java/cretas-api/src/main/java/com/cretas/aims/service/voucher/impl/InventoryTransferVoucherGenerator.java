@@ -3,6 +3,7 @@ package com.cretas.aims.service.voucher.impl;
 import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
+import com.cretas.aims.service.voucher.VoucherSubjectResolver;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
@@ -64,13 +65,26 @@ public class InventoryTransferVoucherGenerator extends AbstractVoucherGenerator<
 
     @Override
     public List<VoucherEntry> buildEntries(InternalTransfer t) {
+        // ⚠️ 调拨是跨工厂的, 没有单一 factoryId。凭证归属**调出方**, 与下面 cost_center
+        //    里「调出」那一侧同源 —— 科目覆盖也按调出方工厂查。
+        return buildEntries(t.getSourceFactoryId(), t);
+    }
+
+    /** 调拨借贷同科目, 且它同时是辅助核算的匹配键 —— 一处解析, 三处引用。 */
+    private VoucherSubjectResolver.Subject inventorySubject(String factoryId) {
+        return subject(factoryId, "INVENTORY", "1405", "库存商品");
+    }
+
+    @Override
+    protected List<VoucherEntry> buildEntries(String factoryId, InternalTransfer t) {
+        VoucherSubjectResolver.Subject inv = inventorySubject(factoryId);
         BigDecimal amount = nullToZero(t.getTotalAmount());
         // Sprint 6 W4-A: 单一品类调拨时挂 INVENTORY 辅助核算; 多品类则 null (避免误导)
         String singleItemId = detectSingleItemId(t);
 
-        VoucherEntry debit = debitEntryWithAuxiliary(1, "1405", "库存商品", amount, "调入: " + t.getTransferNumber(),
+        VoucherEntry debit = debitEntryWithAuxiliary(1, inv.code(), inv.name(), amount, "调入: " + t.getTransferNumber(),
                 singleItemId != null ? AuxiliaryType.INVENTORY : null, singleItemId);
-        VoucherEntry credit = creditEntryWithAuxiliary(2, "1405", "库存商品", amount, "调出: " + t.getTransferNumber(),
+        VoucherEntry credit = creditEntryWithAuxiliary(2, inv.code(), inv.name(), amount, "调出: " + t.getTransferNumber(),
                 singleItemId != null ? AuxiliaryType.INVENTORY : null, singleItemId);
         // cost_center 仍区分调入/调出方 (仓库维度)
         debit.setCostCenter(buildCostCenter(t.getTargetFactoryId(), t.getTargetWarehouseId(), "调入"));
@@ -88,8 +102,8 @@ public class InventoryTransferVoucherGenerator extends AbstractVoucherGenerator<
         String singleItemId = detectSingleItemId(t);
         AuxiliaryType auxType = singleItemId != null ? AuxiliaryType.INVENTORY : null;
         // 借贷两侧库存商品行都挂 INVENTORY (同一 SKU 调入调出)
-        attachAuxiliary(entries, EntrySide.DEBIT, "1405", auxType, singleItemId);
-        attachAuxiliary(entries, EntrySide.CREDIT, "1405", auxType, singleItemId);
+        attachAuxiliary(entries, EntrySide.DEBIT, inventorySubject(t.getSourceFactoryId()).code(), auxType, singleItemId);
+        attachAuxiliary(entries, EntrySide.CREDIT, inventorySubject(t.getSourceFactoryId()).code(), auxType, singleItemId);
         // cost_center 仓库维度 (与 buildEntries 一致): 借方=调入 target, 贷方=调出 source
         for (VoucherEntry e : entries) {
             boolean isDebit = e.getDebit() != null && e.getDebit().signum() > 0;
