@@ -138,6 +138,9 @@ public class ProcurementSuggestionService {
 
         List<PurchaseOrder> suggestions = new ArrayList<>();
         String dateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        // 接着当天已有的编号往下排, ⛔ 不从 1 开始 —— uk_po_factory_order 是真实约束,
+        // 同一天第二次生成建议会撞唯一键(见 countAutoSuggestionsOn 的文档)。
+        long alreadyToday = purchaseOrderRepository.countAutoSuggestionsOn(factoryId, dateStr);
 
         for (int i = 0; i < shortfalls.size(); i++) {
             MaterialShortfall sf = shortfalls.get(i);
@@ -145,7 +148,7 @@ public class ProcurementSuggestionService {
             // ── 1. 构建采购订单主体 ──────────────────────────────────────────
             PurchaseOrder po = new PurchaseOrder();
             po.setFactoryId(factoryId);
-            po.setOrderNumber("PO-AUTO-" + dateStr + "-" + (i + 1));
+            po.setOrderNumber("PO-AUTO-" + dateStr + "-" + (alreadyToday + i + 1));
             po.setOrderDate(LocalDate.now());
             po.setStatus(PurchaseOrderStatus.DRAFT);
             po.setPurchaseType(PurchaseType.DIRECT);

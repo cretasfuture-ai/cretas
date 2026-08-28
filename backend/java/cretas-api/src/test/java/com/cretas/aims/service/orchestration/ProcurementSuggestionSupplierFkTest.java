@@ -48,6 +48,32 @@ class ProcurementSuggestionSupplierFkTest {
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
     @InjectMocks private ProcurementSuggestionService service;
 
+    @Test
+    @DisplayName("🔴 同一天第二次生成建议要接着编号, ⛔ 不许从 1 重来(会撞 uk_po_factory_order)")
+    void numbersContinueAfterExistingSameDaySuggestions() {
+        PurchaseOrder savedOrder = new PurchaseOrder();
+        savedOrder.setId("PO-1");
+        when(purchaseOrderRepository.save(any(PurchaseOrder.class))).thenReturn(savedOrder);
+        // 当天已经有 3 张 PO-AUTO
+        when(purchaseOrderRepository.countAutoSuggestionsOn(any(), any())).thenReturn(3L);
+
+        RawMaterialType material = new RawMaterialType();
+        material.setName("鸡肉");
+        material.setUnit("kg");
+        when(rawMaterialTypeRepository.findById("MAT-1")).thenReturn(Optional.of(material));
+
+        service.generateSuggestions("F006", "PP-2",
+                List.of(new MaterialShortfall("MAT-1", "鸡肉",
+                        new BigDecimal("100"), new BigDecimal("20"), new BigDecimal("80"))), 1309L);
+
+        ArgumentCaptor<PurchaseOrder> captor = ArgumentCaptor.forClass(PurchaseOrder.class);
+        verify(purchaseOrderRepository).save(captor.capture());
+        assertThat(captor.getValue().getOrderNumber())
+                .as("当天已有 3 张就该从 4 开始; 从 1 开始会撞 UNIQUE (factory_id, order_number) —— "
+                        + "这个坑此前被 supplier_id 那个坑挡着, 修好之后才变得可达")
+                .endsWith("-4");
+    }
+
     private PurchaseOrder captureGeneratedOrder() {
         PurchaseOrder savedOrder = new PurchaseOrder();
         savedOrder.setId("PO-1");

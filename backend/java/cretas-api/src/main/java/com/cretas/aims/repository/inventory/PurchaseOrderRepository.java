@@ -24,6 +24,22 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
     Page<PurchaseOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
     /**
+     * 某工厂某天已经存在多少张自动采购建议单 —— 用来接着编号, ⛔ 不要每次从 1 开始。
+     *
+     * <p>🔴 2026-08-28: 编号原来是「本次调用内的下标」, 每次调用都从 1 开始,
+     * 而 {@code uk_po_factory_order UNIQUE (factory_id, order_number)} 是真实存在的约束。
+     * ⇒ <b>同一天第二张有缺料的生产计划, 生成建议时必然撞唯一键。</b>
+     *
+     * <p>⚠️ 这个坑此前一直被另一个坑挡着: supplier_id 写死占位值 "PENDING" 会先撞
+     * {@code fk_po_supplier}, 所以这张表里 {@code PO-AUTO%} 一行都没有(prod 实测 0 行),
+     * 撞号自然也从没发生过。修好 supplier 之后它才变得<b>可达</b> —— 一个缺陷被另一个缺陷遮住了。
+     */
+    @Query("SELECT COUNT(p) FROM PurchaseOrder p WHERE p.factoryId = :factoryId "
+            + "AND p.orderNumber LIKE CONCAT('PO-AUTO-', :dateStr, '-%')")
+    long countAutoSuggestionsOn(@Param("factoryId") String factoryId,
+                                @Param("dateStr") String dateStr);
+
+    /**
      * Sprint 6 W2-B (RBAC DataScope SELF) — 仅查当前用户创建的采购单.
      * Used by {@link com.cretas.aims.service.inventory.PurchaseService#getPurchaseOrders} when
      * {@link com.cretas.aims.security.DataScopeContext#current()} scope is SELF.
