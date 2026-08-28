@@ -41,20 +41,21 @@ public interface FactoryStocktakeRepository extends JpaRepository<FactoryStockta
 
     Optional<FactoryStocktake> findByFactoryIdAndStocktakeNo(String factoryId, String stocktakeNo);
 
-    /** 查询同仓库同月份未完成的盘点（防重复发起）*/
-    @Query("SELECT COUNT(s) FROM FactoryStocktake s WHERE s.factoryId = :factoryId " +
+    /** 查询同仓库同月份未完成的盘点（防重复发起，并为冲突提示返回真实单据）。*/
+    @Query("SELECT s FROM FactoryStocktake s WHERE s.factoryId = :factoryId " +
            "AND s.warehouseId = :warehouseId AND s.periodMonth = :periodMonth " +
            "AND s.inventoryScope = :inventoryScope " +
-           "AND s.status NOT IN ('APPLIED', 'REJECTED')")
-    long countActiveStocktakeForWarehouseAndMonth(
+           "AND s.status NOT IN ('APPLIED', 'REJECTED') " +
+           "ORDER BY s.createdAt DESC")
+    List<FactoryStocktake> findActiveStocktakesForWarehouseAndMonth(
             @Param("factoryId") String factoryId,
             @Param("warehouseId") String warehouseId,
             @Param("periodMonth") String periodMonth,
             @Param("inventoryScope") FactoryStocktake.InventoryScope inventoryScope);
 
-    default long countActiveStocktakeForWarehouseAndMonth(
+    default List<FactoryStocktake> findActiveStocktakesForWarehouseAndMonth(
             String factoryId, String warehouseId, String periodMonth) {
-        return countActiveStocktakeForWarehouseAndMonth(
+        return findActiveStocktakesForWarehouseAndMonth(
                 factoryId, warehouseId, periodMonth, FactoryStocktake.InventoryScope.RAW_MATERIAL);
     }
 }

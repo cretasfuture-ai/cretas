@@ -188,8 +188,11 @@ describe('区域几何是可逆的，并且删它的时候要说清删的是什�
 });
 
 describe('新增的按钮都有可访问名（BUG-10 同口径）', () => {
-  it('缩略图上的全屏入口不是一个没有名字的图标按钮', () => {
-    expect(PAGE).toContain('aria-label="全屏编辑平面图"');
+  it('缩略图全屏入口有可访问名，并按权限说编辑或查看', () => {
+    expect(PAGE).toContain("const mapFullscreenLabel = computed(() => canEditLayout.value ? '全屏编辑' : '全屏查看')");
+    expect(PAGE).toContain('const mapFullscreenAriaLabel = computed(() => `${mapFullscreenLabel.value}平面图`)');
+    expect(PAGE).toContain(':aria-label="mapFullscreenAriaLabel"');
+    expect(PAGE).not.toContain('aria-label="全屏编辑平面图"');
   });
 
   it('颜色色块有名字', () => {

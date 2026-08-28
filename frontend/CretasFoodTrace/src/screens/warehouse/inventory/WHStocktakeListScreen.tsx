@@ -47,13 +47,13 @@ const GREY = '#8C8C8C';
 /** 未完成状态 —— 点击应回到录入屏续录，而非只读详情 */
 const UNFINISHED_STATUSES: StocktakeDTO['status'][] = ['INITIATED', 'COUNTING'];
 
-const STATUS_META: Record<StocktakeDTO['status'], { label: string; color: string; bg: string }> = {
-  INITIATED: { label: '已发起 · 未录入', color: PRIMARY, bg: '#E6F7FF' },
-  COUNTING: { label: '盘点中 · 未提交', color: PRIMARY, bg: '#E6F7FF' },
-  PENDING_APPROVAL: { label: '待审批', color: AMBER, bg: '#FFF7E6' },
-  APPROVED: { label: '已审批', color: GREEN, bg: '#F6FFED' },
-  APPLIED: { label: '已生效', color: GREEN, bg: '#F6FFED' },
-  REJECTED: { label: '已驳回', color: RED, bg: '#FFF1F0' },
+const STATUS_META: Record<StocktakeDTO['status'], { color: string; bg: string }> = {
+  INITIATED: { color: PRIMARY, bg: '#E6F7FF' },
+  COUNTING: { color: PRIMARY, bg: '#E6F7FF' },
+  PENDING_APPROVAL: { color: AMBER, bg: '#FFF7E6' },
+  APPROVED: { color: GREEN, bg: '#F6FFED' },
+  APPLIED: { color: GREEN, bg: '#F6FFED' },
+  REJECTED: { color: RED, bg: '#FFF1F0' },
 };
 
 export function WHStocktakeListScreen(): React.JSX.Element {
@@ -181,7 +181,7 @@ export function WHStocktakeListScreen(): React.JSX.Element {
         contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
         renderItem={({ item }) => {
-          const meta = STATUS_META[item.status] ?? { label: item.status, color: GREY, bg: '#f5f5f5' };
+          const meta = STATUS_META[item.status] ?? { color: GREY, bg: '#f5f5f5' };
           const wh = warehouseMap[item.warehouseId];
           const unfinished = UNFINISHED_STATUSES.includes(item.status);
           return (
@@ -203,7 +203,7 @@ export function WHStocktakeListScreen(): React.JSX.Element {
                   )}
                 </View>
                 <View style={[styles.statusBadge, { backgroundColor: meta.bg }]}>
-                  <Text style={[styles.statusText, { color: meta.color }]}>{meta.label}</Text>
+                  <Text style={[styles.statusText, { color: meta.color }]}>{item.statusLabel}</Text>
                 </View>
               </View>
               {unfinished && (

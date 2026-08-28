@@ -29,6 +29,7 @@ public class StocktakeDTO {
     private String reconciliationPreset;
     private Long version;
     private String status;
+    private String statusLabel;
     private Long initiatedBy;
     private String initiatedByDisplay;
     private LocalDateTime initiatedAt;
@@ -125,6 +126,7 @@ public class StocktakeDTO {
         dto.setReconciliationPreset(stocktake.getReconciliationPreset());
         dto.setVersion(stocktake.getVersion());
         dto.setStatus(stocktake.getStatus() != null ? stocktake.getStatus().name() : null);
+        dto.setStatusLabel(stocktake.getStatus() != null ? stocktake.getStatus().getDisplayLabel() : null);
         dto.setInitiatedBy(stocktake.getInitiatedBy());
         dto.setInitiatedAt(stocktake.getInitiatedAt());
         dto.setSubmittedBy(stocktake.getSubmittedBy());

@@ -129,8 +129,8 @@ class FactoryStocktakeServiceImplTest {
         int todayDay = LocalDateTime.now().getDayOfMonth();
         if (todayDay >= 29) {
             // Guard passes today; verify no exception is thrown instead
-            when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any()))
-                    .thenReturn(0L);
+            when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                    .thenReturn(List.of());
             when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any()))
                     .thenReturn(Collections.emptyList());
             when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -161,8 +161,8 @@ class FactoryStocktakeServiceImplTest {
         req.setWarehouseId(WAREHOUSE_ID);
         req.setPeriodMonth("2026-06");
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any()))
-                .thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any()))
                 .thenReturn(Collections.emptyList());
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -192,8 +192,8 @@ class FactoryStocktakeServiceImplTest {
         req.setWarehouseId(WAREHOUSE_ID);
         req.setPeriodMonth("2026-06");
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any()))
-                .thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any()))
                 .thenReturn(Collections.emptyList());
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -215,12 +215,19 @@ class FactoryStocktakeServiceImplTest {
         req.setWarehouseId(WAREHOUSE_ID);
         req.setPeriodMonth("2026-06");
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(eq(FACTORY_ID), eq(WAREHOUSE_ID), any()))
-                .thenReturn(1L);
+        FactoryStocktake blocking = new FactoryStocktake();
+        blocking.setStocktakeNo("ST-202608-6B907387");
+        blocking.setStatus(FactoryStocktake.Status.APPROVED);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(eq(FACTORY_ID), eq(WAREHOUSE_ID), any()))
+                .thenReturn(List.of(blocking));
 
         assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("已有进行中");
+                .hasMessage("盘点单 ST-202608-6B907387 当前状态为「已审批」。已审批待生效，生效后才能发起新的盘点")
+                .satisfies(ex -> {
+                    assertThat(ex.getMessage()).doesNotContain("进行中");
+                    assertThat(ex.getMessage()).doesNotContain("请完成或拒绝");
+                });
     }
 
     // -------------------------------------------------------
@@ -536,7 +543,7 @@ class FactoryStocktakeServiceImplTest {
         batch.setUsedQuantity(new BigDecimal("30.00"));       // 已领用 30 → 可用量 = 70
         batch.setReservedQuantity(BigDecimal.ZERO);
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
                 .thenReturn(List.of(batch));
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -677,7 +684,7 @@ class FactoryStocktakeServiceImplTest {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(new BigDecimal("30.00")); // 预留 30 — 货物物理仍在货架
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
                 .thenReturn(List.of(batch));
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -820,7 +827,7 @@ class FactoryStocktakeServiceImplTest {
         wks.setUsedQuantity(BigDecimal.ZERO);          // physical = 10, 但 6 已报工投产 (未小结)
         wks.setReservedQuantity(BigDecimal.ZERO);
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID)).thenReturn(List.of(wks));
         when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
                 .thenReturn(Collections.<Object[]>singletonList(new Object[]{"BATCH-WKS", new BigDecimal("6.00")}));
@@ -950,7 +957,7 @@ class FactoryStocktakeServiceImplTest {
         raw.setUsedQuantity(new BigDecimal("40.00")); // 领料即时扣减, 无未结消耗
         raw.setReservedQuantity(BigDecimal.ZERO);
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID)).thenReturn(List.of(raw));
         when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
                 .thenReturn(Collections.emptyList()); // 无未结消耗行
@@ -1164,7 +1171,7 @@ class FactoryStocktakeServiceImplTest {
         req.setPeriodMonth("2026-07");
 
         // 核心断言：OPENING 无论今天几号都跳过月底约束 → 创建成功
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any())).thenReturn(Collections.emptyList());
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -1247,7 +1254,7 @@ class FactoryStocktakeServiceImplTest {
         product.setCode("PTF006-WIP-1");
         product.setName("处理后半成品");
 
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(any(), any(), any())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
                 .thenReturn(List.of(batch));
         when(materialBatchRepo.findAllById(List.of("WIP-BATCH-1"))).thenReturn(List.of(batch));
@@ -1309,9 +1316,9 @@ class FactoryStocktakeServiceImplTest {
         req.setWarehouseId(WAREHOUSE_ID);
         req.setInventoryScope(FactoryStocktake.InventoryScope.FINISHED_GOODS);
         FinishedGoodsBatch batch = finishedBatch("FG-1", "10", "0");
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(
                 FACTORY_ID, WAREHOUSE_ID, java.time.YearMonth.now().toString(),
-                FactoryStocktake.InventoryScope.FINISHED_GOODS)).thenReturn(0L);
+                FactoryStocktake.InventoryScope.FINISHED_GOODS)).thenReturn(List.of());
         when(finishedGoodsBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
                 .thenReturn(List.of(batch));
         when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));

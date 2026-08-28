@@ -65,7 +65,7 @@ class FactoryStocktakeM12ContractTest {
         request.setWarehouseId("WH-LOG");
         request.setPeriodMonth("1999-01");
         request.setReconciliationPreset("LAST_7_DAYS");
-        when(stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(anyString(), anyString(), anyString())).thenReturn(0L);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(anyString(), anyString(), anyString())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId("F006", "WH-LOG")).thenReturn(List.of());
         when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 

@@ -50,6 +50,12 @@ function mountOverlay(props: Partial<Record<string, unknown>> = {}) {
   });
 }
 
+it('在运行制品中保留文字缩放版本标记', () => {
+  const wrapper = mountOverlay();
+  expect(wrapper.get('[data-testid="floor-overlay-top"]').attributes('data-text-resize-behavior'))
+    .toBe('warehouse-text-resize-v1');
+});
+
 /**
  * 按下指针。
  *
@@ -242,6 +248,29 @@ describe('标注可以拖动，并且能被藏起来', () => {
     expect(wrapper.find('[data-annotation="a1"]').exists()).toBe(true);
     await wrapper.setProps({ showAnnotations: false });
     expect(wrapper.find('[data-annotation="a1"]').exists()).toBe(false);
+  });
+});
+
+describe('文字标注的框和字号一起缩放', () => {
+  const textFloor = () => floorWith({
+    annotations: [{
+      id: 'text-1', kind: 'text', x: 20, y: 30, width: 168, height: 40,
+      text: '原料仓入口', color: '#17243a', fontSize: 16,
+    }],
+  });
+
+  it('选中文字后只有四角缩放把手，拖到两倍时字号也精确变成两倍', async () => {
+    const wrapper = mountOverlay({ floor: textFloor(), selection: 'annotation:text-1' });
+    expect(wrapper.find('[data-annotation-handle="text-1:se"]').exists()).toBe(true);
+    expect(wrapper.find('[data-annotation-handle="text-1:e"]').exists()).toBe(false);
+
+    await pointerDown(wrapper, '[data-annotation-handle="text-1:se"]', 188, 70);
+    pointerMove(356, 110);
+    pointerUp();
+
+    expect(wrapper.emitted('annotation-change')!.at(-1)![0]).toMatchObject({
+      id: 'text-1', width: 336, height: 80, fontSize: 32,
+    });
   });
 });
 

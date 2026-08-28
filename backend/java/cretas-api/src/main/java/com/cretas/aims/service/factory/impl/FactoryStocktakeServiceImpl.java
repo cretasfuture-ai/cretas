@@ -182,14 +182,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             throw new BusinessException(400, "期初建账当前仅支持原料库存")
                     .withCode("STOCKTAKE_OPENING_SCOPE_INVALID");
         }
-        long existing = inventoryScope == FactoryStocktake.InventoryScope.RAW_MATERIAL
-                ? stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
+        List<FactoryStocktake> activeStocktakes = inventoryScope == FactoryStocktake.InventoryScope.RAW_MATERIAL
+                ? stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(
                         factoryId, req.getWarehouseId(), periodMonth)
-                : stocktakeRepo.countActiveStocktakeForWarehouseAndMonth(
+                : stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(
                         factoryId, req.getWarehouseId(), periodMonth, inventoryScope);
-        if (existing > 0) {
+        if (!activeStocktakes.isEmpty()) {
+            FactoryStocktake blocking = activeStocktakes.get(0);
             throw new BusinessException(409,
-                    "该仓库本月已有进行中的盘点任务，请完成或拒绝后再发起")
+                    "盘点单 " + blocking.getStocktakeNo() + " 当前状态为「" +
+                            blocking.getStatus().getDisplayLabel() + "」。" +
+                            duplicateStocktakeNextAction(blocking.getStatus()))
                     .withCode("DUPLICATE_STOCKTAKE");
         }
 
@@ -1019,6 +1022,15 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     public StocktakeDTO getDetail(String stocktakeId, String factoryId) {
         FactoryStocktake stocktake = findAndValidate(stocktakeId, factoryId);
         return toDetailedDTO(stocktake, factoryId);
+    }
+
+    private String duplicateStocktakeNextAction(FactoryStocktake.Status status) {
+        return switch (status) {
+            case INITIATED, COUNTING -> "请先完成录入并提交，或联系有权限的人驳回该盘点单";
+            case PENDING_APPROVAL -> "正在等待审批，请联系审批人处理";
+            case APPROVED -> "已审批待生效，生效后才能发起新的盘点";
+            case APPLIED, REJECTED -> throw new IllegalArgumentException("盘点单已结束，不应阻止新盘点: " + status);
+        };
     }
 
     @Override

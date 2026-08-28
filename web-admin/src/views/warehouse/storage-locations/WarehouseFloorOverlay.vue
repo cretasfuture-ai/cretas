@@ -29,7 +29,7 @@ import type {
 import {
   annotationFromPolyline, annotationPathData, appendFreehandPoint, floorAnnotations, floorZoneShapes,
   handleAnchor, minSizeForKind, moveRect, rectFromDrag, RESIZE_HANDLES, resizeRect, screenToFlowPoint,
-  type FlowPoint, type MapTool, type ResizeHandle,
+  resizeAnnotation, TEXT_RESIZE_HANDLES, type FlowPoint, type MapTool, type ResizeHandle,
 } from './warehouseLayoutModel';
 
 defineOptions({ inheritAttrs: false });
@@ -227,9 +227,8 @@ function onWindowPointerMove(event: PointerEvent) {
       break;
     }
     case 'annotation-resize': {
-      emit('annotation-change', resizeRect(
+      emit('annotation-change', resizeAnnotation(
         current.origin, current.handle, point.x - current.from.x, point.y - current.from.y,
-        minSizeForKind(current.origin.kind),
       ));
       break;
     }
@@ -331,6 +330,10 @@ function annotationHitPath(annotation: WarehouseAnnotation): string {
   return annotationPathData(annotation);
 }
 
+function annotationResizeHandles(annotation: WarehouseAnnotation): readonly ResizeHandle[] {
+  return annotation.kind === 'text' ? TEXT_RESIZE_HANDLES : RESIZE_HANDLES;
+}
+
 defineExpose({ finishPolygon, cancelDraft, hasPolygonDraft: () => polygonPoints.value.length > 0 });
 </script>
 
@@ -355,6 +358,7 @@ defineExpose({ finishPolygon, cancelDraft, hasPolygonDraft: () => polygonPoints.
     ref="surface" class="vue-flow__container floor-overlay floor-overlay--top"
     :style="{ pointerEvents: captureHit, cursor: isDrawingTool ? 'crosshair' : 'default' }"
     data-testid="floor-overlay-top"
+    data-text-resize-behavior="warehouse-text-resize-v1"
     @pointerdown="onSurfacePointerDown" @pointermove="onSurfacePointerMove" @dblclick="onSurfaceDoubleClick"
   >
     <g :transform="paneTransform">
@@ -435,8 +439,8 @@ defineExpose({ finishPolygon, cancelDraft, hasPolygonDraft: () => polygonPoints.
             class="annotation-outline"
           />
           <rect
-            v-for="handle in RESIZE_HANDLES"
-            v-show="isSelected(`annotation:${annotation.id}`) && interactive && tool === 'select' && annotation.kind !== 'text'"
+            v-for="handle in annotationResizeHandles(annotation)"
+            v-show="isSelected(`annotation:${annotation.id}`) && interactive && tool === 'select'"
             :key="`ah-${annotation.id}-${handle}`" class="shape-handle"
             :x="handleAnchor(annotation, handle).x - handleSize / 2" :y="handleAnchor(annotation, handle).y - handleSize / 2"
             :width="handleSize" :height="handleSize" fill="#2563eb" stroke="#ffffff" vector-effect="non-scaling-stroke"
