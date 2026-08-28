@@ -834,6 +834,34 @@ ToolExecutionTest.testBasicToolCalling:87  LLM 调用不应该有错误 ==> expe
 CI runner 上调用出错就红。它上面**本来有一个 skip 分支**，但这次没生效
 （说明 key 存在、只是调用失败）。
 
+### ⚠️ 订正（rebase 到含 #294 的 main 之后重测）：闸**仍然红，但红得对了**
+
+上面那半句「测量方式的问题」已经被 #294 修掉。**剩下的是真故障**：
+
+```
+testForcedToolChoice      → skipped (#294 标了 @Disabled: 供应商只支持 tool_choice=none/auto)
+testBasicToolCalling      → FAILED
+testMultiTurnToolCalling  → FAILED
+  Python LLM tool-call 失败: HTTP 500: {"code":"INTERNAL_ERROR"}
+```
+
+按 #294 自己的判据（**消息里有 HTTP 三位状态码 ⇒ 对端答了 ⇒ 真故障**），这个分类是**对的**。
+
+**同一份代码，两台机器，两个结果**：
+
+| 机器 | 结果 |
+|---|---|
+| 我本机 | `Tests run: 6, Failures: 0, Skipped: 1` ✅ |
+| `canada-mac-mini-2`（CI runner） | `Tests run: 6, Failures: 2, Skipped: 1` ❌ HTTP 500 |
+
+⇒ **差异在机器，不在代码**：`canada-mac-mini-2` 上的 Python LLM 服务
+`/health` 通（所以不跳过），但 `/api/llm/*` 的 tool-call 返回 500。
+
+▎**在那台 runner 的 Python LLM 服务恢复之前，任何 PR 的 Java Gate 都过不了。**
+建议先看那台机器 8083 的日志 / LLM 供应商 key 与额度
+（memory 里 `project_local_agent_stack_and_llm_pool_dead` 可能同源）。
+⛔ 我没去改 runner 配置 —— 那需要机器上的凭证，不该猜。
+
 ### 🔴 为什么这条值得单独修
 
 `known-failing-tests.txt` 目前是**空的**（0 条）⇒ 这道闸期望零失败，
