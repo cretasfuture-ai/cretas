@@ -110,7 +110,8 @@ import ScaleBrandModelListScreen from '../screens/platform/scale/ScaleBrandModel
 import { IsapiDeviceListScreen } from '../screens/factory-admin/isapi/IsapiDeviceListScreen';
 import { IsapiDeviceDetailScreen } from '../screens/factory-admin/isapi/IsapiDeviceDetailScreen';
 import { IsapiDeviceCreateScreen } from '../screens/factory-admin/isapi/IsapiDeviceCreateScreen';
-import { IsapiSmartConfigScreen } from '../screens/factory-admin/isapi/IsapiSmartConfigScreen';
+import { IsapiSmartConfigScreen } from '../screens/factory-admin/isapi/IsapiSmartConfigScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 export type PlatformStackParamList = {
   // Dashboard
@@ -219,7 +220,7 @@ const Stack = createNativeStackNavigator<PlatformStackParamList>();
  */
 export function PlatformStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="PlatformDashboard"
       screenOptions={{
         headerShown: false,

@@ -22,13 +22,14 @@ import StaffDetailScreen from '../../screens/hr/staff/StaffDetailScreen';
 // 复用现有Profile页面
 import FeedbackScreen from '../../screens/profile/FeedbackScreen';
 
-import type { HRProfileStackParamList } from '../../types/hrNavigation';
+import type { HRProfileStackParamList } from '../../types/hrNavigation';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<HRProfileStackParamList>();
 
 export default function HRProfileStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         animation: 'slide_from_right',

@@ -383,14 +383,36 @@ describe('P5b 时段默认值必须来自真实时钟, 不许是硬编码班次'
   });
 
   it('过程报工屏打开时起止是同一个时刻 (时长 0), 并提示要自己拖', async () => {
-    stubApis('IN_PRODUCTION');
-    render(<YieldStepReportScreen />);
-    await waitFor(() => expect(screen.getByTestId('time-range-slider')).toBeTruthy());
+    // 🔴 必须钉死时钟。这条断言的阴性对照是「假班次的两端 07:00 / 15:00 不许出现」，
+    //    而默认值现在**来自真实时钟**并向下取整到 15 分钟 —— 当跑批时刻恰好落在
+    //    07:00~07:14 或 15:00~15:14，真实默认值**就是**那个串，起止两处都显示它，
+    //    `queryByText` 于是抛「Found multiple elements」。
+    //    ⇒ 这条阴性对照原本**每天有两个 15 分钟的窗口必红**。
+    //    2026-08-28 22:00:33Z 实测在 main 上红了（自建 runner 本地时间 15:00:33）。
+    //    ⚠️ 只 fake Date：整套 timer 都 fake 掉会让 waitFor 挂死。
+    jest.useFakeTimers({
+      now: new Date(2026, 7, 26, 10, 7),
+      doNotFake: [
+        'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate',
+        'clearImmediate', 'nextTick', 'queueMicrotask', 'performance',
+        'requestAnimationFrame', 'cancelAnimationFrame',
+      ],
+    });
+    try {
+      stubApis('IN_PRODUCTION');
+      render(<YieldStepReportScreen />);
+      await waitFor(() => expect(screen.getByTestId('time-range-slider')).toBeTruthy());
 
-    expect(screen.getByTestId('time-range-zero-hint')).toBeTruthy();
-    // 阴性对照: 那个假班次的两端不许再作为默认值出现
-    expect(screen.queryByText('07:00')).toBeNull();
-    expect(screen.queryByText('15:00')).toBeNull();
+      expect(screen.getByTestId('time-range-zero-hint')).toBeTruthy();
+      // 阳性对照: 钉死的那个时刻**确实**被当成了默认值 —— 否则下面两条
+      // 「07:00 / 15:00 不出现」在任何实现下都成立（包括压根不显示时间）。
+      expect(screen.getAllByText('10:00').length).toBeGreaterThan(0);
+      // 阴性对照: 那个假班次的两端不许再作为默认值出现
+      expect(screen.queryByText('07:00')).toBeNull();
+      expect(screen.queryByText('15:00')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('时长为 0 时提交被挡回来, 而不是记一段 0 分钟的工时', async () => {

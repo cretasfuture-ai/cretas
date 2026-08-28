@@ -16,6 +16,7 @@ import WSBatchesStackNavigator from "./workshop-supervisor/WSBatchesStackNavigat
 import WSWorkersStackNavigator from "./workshop-supervisor/WSWorkersStackNavigator";
 import WSEquipmentStackNavigator from "./workshop-supervisor/WSEquipmentStackNavigator";
 import WSProfileStackNavigator from "./workshop-supervisor/WSProfileStackNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<WorkshopSupervisorTabParamList>();
 
@@ -29,7 +30,7 @@ export function WorkshopSupervisorTabNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: TAB_COLORS.active,

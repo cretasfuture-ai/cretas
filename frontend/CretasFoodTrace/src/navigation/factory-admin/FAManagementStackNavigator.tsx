@@ -95,6 +95,7 @@ import PriceAnomalyApprovalScreen from "../../screens/restaurant/supplier-delive
 import WorkProcessListScreen from "../../screens/factory/workprocess/WorkProcessListScreen";
 import WorkProcessCreateScreen from "../../screens/factory/workprocess/WorkProcessCreateScreen";
 import ProductWorkProcessConfigScreen from "../../screens/factory/workprocess/ProductWorkProcessConfigScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<FAManagementStackParamList>();
 
@@ -103,7 +104,7 @@ export function FAManagementStackNavigator() {
   const isRestaurantMode = isRestaurant(user);
 
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

@@ -30,6 +30,7 @@ import SupplierManagementScreen from "../screens/management/SupplierManagementSc
 
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<any>();
 const PurchaseStack = createNativeStackNavigator<any>();
@@ -42,7 +43,7 @@ const TAB_COLORS = {
 
 function PurchaseStackNavigator() {
   return (
-    <PurchaseStack.Navigator screenOptions={{ headerShown: false }}>
+    <PurchaseStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <PurchaseStack.Screen name="PurchaseOrderList" component={PurchaseOrderListScreen} />
       <PurchaseStack.Screen name="PurchaseOrderCreate" component={PurchaseOrderCreateScreen} />
       <PurchaseStack.Screen name="PurchaseOrderDetail" component={PurchaseOrderDetailScreen} />
@@ -60,7 +61,7 @@ function PurchaseStackNavigator() {
 
 function SupplierStackNavigator() {
   return (
-    <SupplierStack.Navigator screenOptions={{ headerShown: false }}>
+    <SupplierStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <SupplierStack.Screen name="SupplierManagement" component={SupplierManagementScreen} />
     </SupplierStack.Navigator>
   );
@@ -68,7 +69,7 @@ function SupplierStackNavigator() {
 
 export function ProcurementManagerNavigator() {
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: TAB_COLORS.active,

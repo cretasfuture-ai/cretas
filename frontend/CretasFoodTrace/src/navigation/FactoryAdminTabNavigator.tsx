@@ -16,6 +16,7 @@ import FAAIStackNavigator from "./factory-admin/FAAIStackNavigator";
 import SmartBIStackNavigator from "./SmartBIStackNavigator";
 import FAManagementStackNavigator from "./factory-admin/FAManagementStackNavigator";
 import FAProfileStackNavigator from "./factory-admin/FAProfileStackNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<FactoryAdminTabParamList>();
 
@@ -30,7 +31,7 @@ export function FactoryAdminTabNavigator() {
   const user = useAuthStore(state => state.user);
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: TAB_COLORS.active,

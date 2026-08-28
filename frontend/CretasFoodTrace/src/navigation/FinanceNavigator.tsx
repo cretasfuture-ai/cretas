@@ -10,13 +10,14 @@ import ProfileStackNavigator from "./ProfileStackNavigator";
 import { useAuthStore } from "../store/authStore";
 import { getUserRole } from "../types/auth";
 import { useMyTodoCount } from "../hooks/useMyTodos";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<any>();
 const PaymentStack = createNativeStackNavigator<any>();
 
 function CashierPaymentStackNavigator() {
   return (
-    <PaymentStack.Navigator screenOptions={{ headerShown: false }}>
+    <PaymentStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <PaymentStack.Screen name="CashierPaymentList" component={CashierPaymentListScreen} />
     </PaymentStack.Navigator>
   );
@@ -29,7 +30,7 @@ export default function FinanceNavigator() {
   const isCashier = role === "cashier";
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: "#1B65A8",

@@ -12,13 +12,14 @@ import DepartmentAddScreen from '../../screens/hr/department/DepartmentAddScreen
 import DepartmentDetailScreen from '../../screens/hr/department/DepartmentDetailScreen';
 import StaffDetailScreen from '../../screens/hr/staff/StaffDetailScreen';
 
-import type { HRWhitelistStackParamList } from '../../types/hrNavigation';
+import type { HRWhitelistStackParamList } from '../../types/hrNavigation';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<HRWhitelistStackParamList>();
 
 export default function HRWhitelistStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         animation: 'slide_from_right',

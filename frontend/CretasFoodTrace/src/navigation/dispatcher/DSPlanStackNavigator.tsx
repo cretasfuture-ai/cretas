@@ -28,6 +28,7 @@ import UrgentInsertScreen from '../../screens/dispatcher/plan/UrgentInsertScreen
 import MixedBatchScreen from '../../screens/dispatcher/plan/MixedBatchScreen';
 import ResourceOverviewScreen from '../../screens/dispatcher/plan/ResourceOverviewScreen';
 import ApprovalListScreen from '../../screens/dispatcher/plan/ApprovalListScreen';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 type DSPlanStackParamList = {
   PlanList: undefined;
@@ -46,7 +47,7 @@ const Stack = createStackNavigator<DSPlanStackParamList>();
 
 export function DSPlanStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

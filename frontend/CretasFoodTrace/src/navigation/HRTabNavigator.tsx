@@ -18,7 +18,8 @@ import HRProfileStackNavigator from './hr/HRProfileStackNavigator';
 import { HR_THEME, type HRTabParamList } from '../types/hrNavigation';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
 import { useAuthStore } from '../store/authStore';
-import { canAccessWhitelist } from '../utils/permissionHelper';
+import { canAccessWhitelist } from '../utils/permissionHelper';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<HRTabParamList>();
 
@@ -27,7 +28,7 @@ export default function HRTabNavigator() {
   const { user } = useAuthStore();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: HR_THEME.primary,

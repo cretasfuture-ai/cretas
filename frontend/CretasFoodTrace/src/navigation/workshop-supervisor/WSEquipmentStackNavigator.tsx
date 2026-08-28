@@ -18,12 +18,13 @@ import WSEquipmentScreen from "../../screens/workshop-supervisor/equipment/WSEqu
 
 // 复用现有详情页
 import EquipmentDetailScreen from "../../screens/processing/EquipmentDetailScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WSEquipmentStackParamList>();
 
 export function WSEquipmentStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

@@ -32,6 +32,7 @@ import FinishedGoodsListScreen from "../screens/factory-admin/inventory/Finished
 
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<any>();
 const SalesViewStack = createNativeStackNavigator<any>();
@@ -44,7 +45,7 @@ const TAB_COLORS = {
 
 function SalesViewStackNavigator() {
   return (
-    <SalesViewStack.Navigator screenOptions={{ headerShown: false }}>
+    <SalesViewStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <SalesViewStack.Screen name="SalesOrderList" component={SalesOrderListScreen} />
       <SalesViewStack.Screen name="SalesOrderDetail" component={SalesOrderDetailScreen} />
       <SalesViewStack.Screen name="SalesOrderShortageReview" component={SalesOrderShortageReviewScreen} />
@@ -56,7 +57,7 @@ function SalesViewStackNavigator() {
 
 function PurchaseViewStackNavigator() {
   return (
-    <PurchaseViewStack.Navigator screenOptions={{ headerShown: false }}>
+    <PurchaseViewStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <PurchaseViewStack.Screen name="PurchaseOrderList" component={PurchaseOrderListScreen} />
       <PurchaseViewStack.Screen name="PurchaseOrderDetail" component={PurchaseOrderDetailScreen} />
       <PurchaseViewStack.Screen name="FinishedGoodsList" component={FinishedGoodsListScreen} />
@@ -66,7 +67,7 @@ function PurchaseViewStackNavigator() {
 
 export function ViewerNavigator() {
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: TAB_COLORS.active,

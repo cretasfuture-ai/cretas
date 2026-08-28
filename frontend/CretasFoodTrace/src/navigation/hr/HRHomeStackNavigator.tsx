@@ -16,13 +16,14 @@ import StaffDetailScreen from '../../screens/hr/staff/StaffDetailScreen';
 import StaffAIAnalysisScreen from '../../screens/hr/staff/StaffAIAnalysisScreen';
 import AttendanceAnomalyScreen from '../../screens/hr/attendance/AttendanceAnomalyScreen';
 
-import type { HRHomeStackParamList } from '../../types/hrNavigation';
+import type { HRHomeStackParamList } from '../../types/hrNavigation';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<HRHomeStackParamList>();
 
 export default function HRHomeStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         animation: 'slide_from_right',

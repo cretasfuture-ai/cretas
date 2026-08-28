@@ -4,6 +4,7 @@ import { Icon } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ProductionPlanManagementScreen from '../screens/processing/ProductionPlanManagementScreen';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator();
 
@@ -15,7 +16,7 @@ export default function ProductionManagerNavigator() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="ProductionOverviewTab"
       screenOptions={{
         headerShown: false,

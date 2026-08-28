@@ -28,12 +28,13 @@ import OeeReportScreen from "../../screens/reports/OeeReportScreen";
 import CostVarianceReportScreen from "../../screens/reports/CostVarianceReportScreen";
 import CapacityUtilizationReportScreen from "../../screens/reports/CapacityUtilizationReportScreen";
 import OnTimeDeliveryReportScreen from "../../screens/reports/OnTimeDeliveryReportScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<ReportStackParamList>();
 
 export function FAReportsStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

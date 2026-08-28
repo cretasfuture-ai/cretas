@@ -12,13 +12,14 @@ import PurchaseOrderListScreen from '../screens/factory-admin/inventory/Purchase
 import PurchaseOrderDetailScreen from '../screens/factory-admin/inventory/PurchaseOrderDetailScreen';
 import FinishedGoodsListScreen from '../screens/factory-admin/inventory/FinishedGoodsListScreen';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator();
 const BusinessStack = createNativeStackNavigator();
 
 function OperationsBusinessStack() {
   return (
-    <BusinessStack.Navigator screenOptions={{ headerShown: false }}>
+    <BusinessStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <BusinessStack.Screen name="OperationsBusinessOverview" component={OperationsBusinessOverviewScreen} />
       <BusinessStack.Screen name="OperationsProductionPlans" component={ProductionPlanManagementScreen} />
       <BusinessStack.Screen name="OperationsSalesOrders" component={SalesOrderListScreen} />
@@ -34,7 +35,7 @@ export default function OperationsNavigator() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="OperationsBusinessTab"
       screenOptions={{
         headerShown: false,

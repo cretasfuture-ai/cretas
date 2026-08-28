@@ -7,6 +7,7 @@ import WHOutboundStackNavigator from './warehouse/WHOutboundStackNavigator';
 import WHInventoryStackNavigator from './warehouse/WHInventoryStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator();
 
@@ -16,7 +17,7 @@ export default function WarehouseWorkerNavigator() {
   const { isScreenEnabled } = useFactoryFeatureStore();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#2E7D32',

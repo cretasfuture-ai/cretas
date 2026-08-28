@@ -25,6 +25,7 @@ import ProfileStackNavigator from './ProfileStackNavigator'; // Phase 3 P2 - 使
 import LogisticsStackNavigator from './LogisticsStackNavigator';
 import OATodoStackNavigator from './OATodoStackNavigator';
 import { useMyTodoCount } from '../hooks/useMyTodos';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -167,7 +168,7 @@ export function MainNavigator() {
   */
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#2196F3',

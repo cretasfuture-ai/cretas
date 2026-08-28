@@ -13,6 +13,7 @@ import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import DSHomeScreen from '../../screens/dispatcher/home/DSHomeScreen';
 import WorkshopStatusScreen from '../../screens/dispatcher/home/WorkshopStatusScreen';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 type DSHomeStackParamList = {
   DSHome: undefined;
@@ -23,7 +24,7 @@ const Stack = createStackNavigator<DSHomeStackParamList>();
 
 export function DSHomeStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

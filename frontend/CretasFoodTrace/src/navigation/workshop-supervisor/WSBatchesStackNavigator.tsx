@@ -33,6 +33,7 @@ import ProcessTaskHistoryScreen from "../../screens/processing/ProcessTaskHistor
 import ProcessRunOverviewScreen from "../../screens/processing/ProcessRunOverviewScreen";
 import YieldBatchSelectScreen from "../../screens/processing/YieldBatchSelectScreen";
 import YieldStepReportScreen from "../../screens/processing/YieldStepReportScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 // 质检相关 - 已迁移至 QualityInspectorNavigator
 // import CreateQualityRecordScreen from "../../screens/processing/CreateQualityRecordScreen";
@@ -42,7 +43,7 @@ const Stack = createNativeStackNavigator<WSBatchesStackParamList>();
 
 export function WSBatchesStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

@@ -26,6 +26,7 @@ import DSAIStackNavigator from './dispatcher/DSAIStackNavigator';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
 import DSPersonnelStackNavigator from './dispatcher/DSPersonnelStackNavigator';
 import DSProfileStackNavigator from './dispatcher/DSProfileStackNavigator';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<DispatcherTabParamList>();
 
@@ -36,7 +37,7 @@ export function DispatcherTabNavigator() {
   const smartbiOn = isScreenEnabled('SmartBI');
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: DISPATCHER_THEME.primary,

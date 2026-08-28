@@ -7,6 +7,7 @@ import {
   AttendanceHistoryScreen,
   DepartmentAttendanceScreen,
 } from '../screens/attendance';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<AttendanceStackParamList>();  // ✅ 使用新类型
 
@@ -17,7 +18,7 @@ const Stack = createNativeStackNavigator<AttendanceStackParamList>();  // ✅ �
  */
 export function AttendanceStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

@@ -38,12 +38,13 @@ import CustomerRFMScreen from '../screens/smartbi/CustomerRFMScreen';
 // 屏幕组件 - 财务深度分析
 import CashFlowScreen from '../screens/smartbi/CashFlowScreen';
 import FinancialRatiosScreen from '../screens/smartbi/FinancialRatiosScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<SmartBIStackParamList>();
 
 export function SmartBIStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: true,
         headerBackTitle: '返回',

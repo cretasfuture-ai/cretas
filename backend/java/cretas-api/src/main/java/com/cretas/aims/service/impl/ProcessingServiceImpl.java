@@ -21,6 +21,7 @@ import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
 import com.cretas.aims.dto.processing.ProcessingStageRecordDTO;
 import com.cretas.aims.event.BatchCompletedEvent;
+import com.cretas.aims.util.QuantityFormat;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -2300,9 +2301,6 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     /** 去掉尾随的 0：库存量给人看，⛔ 不要打出 3.200000。 */
-    private static String stripZeros(BigDecimal v) {
-        return v == null ? "-" : v.stripTrailingZeros().toPlainString();
-    }
     public Map<String, Object> getAlertsDashboard(String factoryId) {
         Map<String, Object> result = new HashMap<>();
         List<Map<String, Object>> alertList = new ArrayList<>();
@@ -2334,7 +2332,7 @@ public class ProcessingServiceImpl implements ProcessingService {
             String subject = (name != null && !name.isBlank()) ? name : String.valueOf(materialTypeId);
             alert.put("message", available != null && minStock != null
                     ? String.format("%s 可用 %s%s，低于安全库存 %s%s",
-                            subject, stripZeros(available), unit, stripZeros(minStock), unit)
+                            subject, QuantityFormat.orDash(available), unit, QuantityFormat.orDash(minStock), unit)
                     : subject + " 库存低于安全水平");
             alert.put("materialTypeId", materialTypeId);
             alert.put("materialName", name);

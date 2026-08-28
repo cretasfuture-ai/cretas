@@ -34,8 +34,10 @@ import { formatDate } from '../../utils/formatters';
 // Create OTIF Report specific logger
 const otifReportLogger = logger.createContextLogger('OtifReport');
 
-// Default target OTIF value
-const DEFAULT_TARGET_OTIF = 95;
+// ⛔ 这里原来是 `const DEFAULT_TARGET_OTIF = 95;` —— 前端自己编的目标值,
+//    和后端那个写死的 `report.put("target", new BigDecimal("95"))` 是同一个东西两份
+//    (形态 D), 而**两边都没有来源**: 库里没有任何地方配过 OTIF 目标。
+//    2026-08-29 走查一并清掉 —— 没有目标就不画目标线、不判「优秀/待改善」。
 
 /**
  * On-Time Delivery (OTIF) Report Screen
@@ -150,7 +152,9 @@ export default function OnTimeDeliveryReportScreen() {
   /**
    * Get status color based on OTIF value
    */
-  const getOtifStatusColor = (value: number, target: number = DEFAULT_TARGET_OTIF): string => {
+  const getOtifStatusColor = (value: number, target: number | null): string => {
+    // 没有目标就没有「达标」这回事 —— 一律中性色，⛔ 不拿编出来的 95 判红绿。
+    if (target == null) return '#9e9e9e';
     if (value >= target) return '#4CAF50';
     if (value >= target - 10) return '#FF9800';
     return '#F44336';
@@ -159,7 +163,8 @@ export default function OnTimeDeliveryReportScreen() {
   /**
    * Get status label based on OTIF value
    */
-  const getOtifStatusLabel = (value: number, target: number = DEFAULT_TARGET_OTIF): string => {
+  const getOtifStatusLabel = (value: number, target: number | null): string => {
+    if (target == null) return '无目标值';
     if (value >= target) return '优秀';
     if (value >= target - 10) return '良好';
     if (value >= target - 20) return '一般';
@@ -256,7 +261,8 @@ export default function OnTimeDeliveryReportScreen() {
       }
     : null;
 
-  const targetOtif = otifData?.target || DEFAULT_TARGET_OTIF;
+  // ⛔ 不要 `|| 常量` —— 后端说「没有目标」时就是没有。
+  const targetOtif: number | null = otifData?.target ?? null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -308,14 +314,16 @@ export default function OnTimeDeliveryReportScreen() {
                   title="OTIF"
                   unit="%"
                   size={200}
-                  thresholds={{ warning: targetOtif - 10, danger: targetOtif }}
+                  thresholds={targetOtif == null ? undefined : { warning: targetOtif - 10, danger: targetOtif }}
                   showTicks={true}
                   showLabels={true}
                 />
               </View>
 
               <View style={styles.targetRow}>
-                <Text style={styles.targetLabel}>目标: {targetOtif}%</Text>
+                {targetOtif == null ? null : (
+                  <Text style={styles.targetLabel}>目标: {targetOtif}%</Text>
+                )}
                 <Chip
                   mode="flat"
                   style={[
@@ -328,7 +336,7 @@ export default function OnTimeDeliveryReportScreen() {
                 </Chip>
               </View>
 
-              {(otifData.otifRate ?? 0) >= targetOtif ? (
+              {targetOtif == null ? null : (otifData.otifRate ?? 0) >= targetOtif ? (
                 <View style={styles.achievementBadge}>
                   <Text style={styles.achievementText}>
                     已达成目标 (+{(Number(otifData.otifRate ?? 0) - targetOtif).toFixed(1)}%)
@@ -559,7 +567,9 @@ export default function OnTimeDeliveryReportScreen() {
                   </View>
                   <View style={styles.targetLine}>
                     <View style={styles.targetDash} />
-                    <Text style={styles.legendText}>目标线 ({targetOtif}%)</Text>
+                    <Text style={styles.legendText}>
+                      {targetOtif == null ? '目标线 (未设定)' : `目标线 (${targetOtif}%)`}
+                    </Text>
                   </View>
                 </View>
               </Surface>

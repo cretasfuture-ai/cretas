@@ -19,6 +19,7 @@ import AIScheduleGenerateScreen from '../../screens/dispatcher/ai/AIScheduleGene
 import AIScheduleAnalysisScreen from '../../screens/dispatcher/ai/AIScheduleAnalysisScreen';
 import AICompletionProbScreen from '../../screens/dispatcher/ai/AICompletionProbScreen';
 import AIWorkerOptimizeScreen from '../../screens/dispatcher/ai/AIWorkerOptimizeScreen';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 type DSAIStackParamList = {
   AISchedule: undefined;
@@ -32,7 +33,7 @@ const Stack = createStackNavigator<DSAIStackParamList>();
 
 export function DSAIStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

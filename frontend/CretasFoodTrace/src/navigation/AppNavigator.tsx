@@ -42,6 +42,7 @@ import RestaurantNavigator from "./RestaurantNavigator";
 import BossNavigator from "./BossNavigator";
 import { isRestaurant } from "../utils/factoryType";
 import WarehouseWorkerNavigator from "./WarehouseWorkerNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator();
 
@@ -222,7 +223,7 @@ export function AppNavigator() {
   return (
     <PaperProvider theme={theme}>
       <NavigationContainer ref={navigationRef}>
-        <Stack.Navigator
+        <Stack.Navigator screenLayout={screenErrorBoundary}
           screenOptions={{
             headerShown: false,
           }}

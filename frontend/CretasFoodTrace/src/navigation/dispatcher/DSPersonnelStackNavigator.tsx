@@ -20,6 +20,7 @@ import PersonnelDetailScreen from '../../screens/dispatcher/personnel/PersonnelD
 import PersonnelTransferScreen from '../../screens/dispatcher/personnel/PersonnelTransferScreen';
 import PersonnelScheduleScreen from '../../screens/dispatcher/personnel/PersonnelScheduleScreen';
 import PersonnelAttendanceScreen from '../../screens/dispatcher/personnel/PersonnelAttendanceScreen';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 type DSPersonnelStackParamList = {
   PersonnelList: undefined;
@@ -33,7 +34,7 @@ const Stack = createStackNavigator<DSPersonnelStackParamList>();
 
 export function DSPersonnelStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

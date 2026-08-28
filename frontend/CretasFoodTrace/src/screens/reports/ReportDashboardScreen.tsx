@@ -111,13 +111,20 @@ export default function ReportDashboardScreen() {
         laborCostRes,
       ] = await Promise.all([
         // 生产概览数据 (使用 dashboardAPI)
-        dashboardAPI.getDashboardOverview('week', factoryId)
+        // ⚠️ 后端把 period 收下了、日志里还打出来, 但**没传下去**:
+        //   ProductionReportServiceImpl.getDashboardOverview(factoryId, period)
+        //     -> processingService.getDashboardOverview(factoryId)   // period 在这里丢掉
+        //   实测 F006: today/week/month 三次返回**完全相同**, 响应里 period 恒为 "today"。
+        //   ⬛ 传 'week' 会让下一个人以为它生效了 —— 先传真实行为, 后端支持了再改回来。
+        dashboardAPI.getDashboardOverview('today', factoryId)
           .then(res => res.success ? res.data : null)
           .catch((err) => {
             reportDashboardLogger.warn('获取生产概览失败', err);
             return null;
           }),
         // 质量数据 (使用 dashboardAPI)
+        // ⚠️ 同上: 这个接口的后端签名根本没有 period 参数
+        //   (ReportController.getQualityDashboard 只收 factoryId), 传什么都被丢掉。
         dashboardAPI.getQualityDashboard('month', factoryId)
           .then(res => res.success ? res.data : null)
           .catch((err) => {
@@ -297,7 +304,7 @@ export default function ReportDashboardScreen() {
         <Surface style={styles.timeRangeCard} elevation={1}>
           <View style={styles.timeRangeRow}>
             <Icon source="calendar-range" size={20} color="#2196F3" />
-            <Text style={styles.timeRangeText}>统计周期: 近7天</Text>
+            <Text style={styles.timeRangeText}>各卡片统计口径不同，见卡片副标题</Text>
           </View>
         </Surface>
 
@@ -317,6 +324,8 @@ export default function ReportDashboardScreen() {
               >
                 <Card.Title
                   title="生产概览"
+                  subtitle="统计口径: 当日（接口不接受时间范围）"
+                  subtitleStyle={styles.cardCaliber}
                   titleVariant="titleMedium"
                   left={(props) => <Icon {...props} source="factory" color="#2196F3" />}
                   right={() => <Icon source="chevron-right" size={24} color="#999" />}
@@ -365,6 +374,8 @@ export default function ReportDashboardScreen() {
               >
                 <Card.Title
                   title="质量概览"
+                  subtitle="统计口径: 全部（接口不接受时间范围）"
+                  subtitleStyle={styles.cardCaliber}
                   titleVariant="titleMedium"
                   left={(props) => <Icon {...props} source="check-circle" color="#4CAF50" />}
                   right={() => <Icon source="chevron-right" size={24} color="#999" />}
@@ -434,6 +445,8 @@ export default function ReportDashboardScreen() {
               >
                 <Card.Title
                   title="效率概览"
+                  subtitle="统计口径: 近 7 天；设备利用率为当前值"
+                  subtitleStyle={styles.cardCaliber}
                   titleVariant="titleMedium"
                   left={(props) => <Icon {...props} source="speedometer" color="#9C27B0" />}
                   right={() => <Icon source="chevron-right" size={24} color="#999" />}
@@ -491,6 +504,8 @@ export default function ReportDashboardScreen() {
               >
                 <Card.Title
                   title="成本概览"
+                  subtitle="统计口径: 近 7 天"
+                  subtitleStyle={styles.cardCaliber}
                   titleVariant="titleMedium"
                   left={(props) => <Icon {...props} source="currency-usd" color="#FF9800" />}
                   right={() => <Icon source="chevron-right" size={24} color="#999" />}
@@ -539,6 +554,8 @@ export default function ReportDashboardScreen() {
               >
                 <Card.Title
                   title="人效概览"
+                  subtitle="统计口径: 近 7 天"
+                  subtitleStyle={styles.cardCaliber}
                   titleVariant="titleMedium"
                   left={(props) => <Icon {...props} source="account-group" color="#795548" />}
                   right={() => <Icon source="chevron-right" size={24} color="#999" />}
@@ -689,6 +706,10 @@ const styles = StyleSheet.create({
   timeRangeRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  cardCaliber: {
+    color: '#9e9e9e',
+    fontSize: 11,
   },
   timeRangeText: {
     marginLeft: 8,

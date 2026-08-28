@@ -11,13 +11,14 @@ import AttendanceAnomalyScreen from '../../screens/hr/attendance/AttendanceAnoma
 import MyAttendanceScreen from '../../screens/hr/attendance/MyAttendanceScreen';
 import StaffDetailScreen from '../../screens/hr/staff/StaffDetailScreen';
 
-import type { HRAttendanceStackParamList } from '../../types/hrNavigation';
+import type { HRAttendanceStackParamList } from '../../types/hrNavigation';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<HRAttendanceStackParamList>();
 
 export default function HRAttendanceStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         animation: 'slide_from_right',
