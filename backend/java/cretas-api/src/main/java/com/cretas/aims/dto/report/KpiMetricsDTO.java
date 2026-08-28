@@ -309,13 +309,21 @@ public class KpiMetricsDTO {
             weight += 10;
         }
 
-        // 人均产出比 (权重 10) - 需要基准数据，暂用 80% 为满分
-        if (kpi.getOutputPerWorker() != null) {
-            score += 80 * 0.1;
-            weight += 10;
-        }
+        // ⛔ 人均产出比【不计入评分】。
+        //
+        // 原来是: outputPerWorker 非空就无条件加 80 分(权重 10) —— 与那个数是多少无关。
+        // 那不是「暂用一个保守值」, 是把一个<b>常量</b>混进了评分: 人均产出再差也拿 80 分,
+        // 再好也只拿 80 分。它唯一的作用是把总分往 80 拉。
+        //
+        // 没有行业基准就<b>没法评分</b>, 正确做法是把这一维排除在加权之外(weight 不增),
+        // 而不是给它编一个分数。等有了基准数据再按真实值计分。
+        // 2026-08-28 实测: 一家一条数据都没有的工厂靠这一项 + 「差异 0%」拿到 92 分。
 
-        if (weight == 0) return BigDecimal.ZERO;
+        // 一个输入都没有 ⇒ 综合评分【没有定义】。
+        // ⛔ 原来返回 ZERO, 而 calculateGrade(0) = "D" —— 一家一条数据都没有的工厂
+        //    会在屏上拿到「综合评分 0 分 / 评级 D」, 那是一个编出来的差评。
+        //    返回 null 时 calculateGrade(null) 已经会给 "N/A"。
+        if (weight == 0) return null;
         return BigDecimal.valueOf(score * 100 / weight).setScale(2, BigDecimal.ROUND_HALF_UP);
     }
 

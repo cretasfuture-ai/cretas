@@ -1171,20 +1171,25 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         // (设备实跑 >8h/天 → availability>100; 超产 actual>planned → performance>100),
         // 不封顶会让 OEE = a*p*q/10000 算出 >100% 的不可能值, 且 *Loss 字段变负数. 一律 clamp 到 100.
         BigDecimal hundred = new BigDecimal("100");
+        // 没有排产工时 / 没有计划量 / 没有产出时, 这三个因子【算不出来】。
+        // 返回 null(诚实空)而不是一个好看的常量 —— 常量会被前端当成真实读数画进仪表盘,
+        // 而 null 会走到 MetricItem 的 "--" 分支。⛔ 也不能返 0: 0% 在比率语境里是合法读数。
         BigDecimal availability = plannedHours > 0 ?
                 new BigDecimal(totalRunningHours).divide(new BigDecimal(plannedHours), 4, RoundingMode.HALF_UP)
-                        .multiply(hundred).min(hundred) : new BigDecimal("80");
+                        .multiply(hundred).min(hundred) : null;
 
         BigDecimal performance = totalPlannedQuantity.compareTo(BigDecimal.ZERO) > 0 ?
                 totalActualQuantity.divide(totalPlannedQuantity, 4, RoundingMode.HALF_UP)
-                        .multiply(hundred).min(hundred) : new BigDecimal("85");
+                        .multiply(hundred).min(hundred) : null;
 
         BigDecimal quality = totalActualQuantity.compareTo(BigDecimal.ZERO) > 0 ?
                 totalGoodQuantity.divide(totalActualQuantity, 4, RoundingMode.HALF_UP)
-                        .multiply(hundred).min(hundred) : new BigDecimal("95");
+                        .multiply(hundred).min(hundred) : null;
 
-        BigDecimal oee = availability.multiply(performance).multiply(quality)
-                .divide(new BigDecimal("10000"), 2, RoundingMode.HALF_UP);
+        // 三因子缺任意一个, OEE 就没有定义 —— 用剩下两个乘出来的数没有意义。
+        BigDecimal oee = (availability != null && performance != null && quality != null) ?
+                availability.multiply(performance).multiply(quality)
+                        .divide(new BigDecimal("10000"), 2, RoundingMode.HALF_UP) : null;
 
         return OeeReportDTO.builder()
                 .factoryId(factoryId)
@@ -1192,9 +1197,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .endDate(endDate)
                 .oeeValue(oee)
                 .oeeGrade(OeeReportDTO.calculateGrade(oee))
-                .availability(availability.setScale(2, RoundingMode.HALF_UP))
-                .performance(performance.setScale(2, RoundingMode.HALF_UP))
-                .quality(quality.setScale(2, RoundingMode.HALF_UP))
+                .availability(scaleOrNull(availability))
+                .performance(scaleOrNull(performance))
+                .quality(scaleOrNull(quality))
                 .plannedProductionTime(plannedHours * 60)
                 .actualRunTime(totalRunningHours * 60)
                 // 防负: 设备实跑 >8h/天 时 totalRunningHours 可超 plannedHours → 停机为负 (物理不可能)。
@@ -1203,9 +1208,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .totalOutput(totalActualQuantity)
                 .goodOutput(totalGoodQuantity.setScale(2, RoundingMode.HALF_UP))
                 .defectOutput(totalActualQuantity.subtract(totalGoodQuantity).setScale(2, RoundingMode.HALF_UP))
-                .availabilityLoss(new BigDecimal("100").subtract(availability).setScale(2, RoundingMode.HALF_UP))
-                .performanceLoss(new BigDecimal("100").subtract(performance).setScale(2, RoundingMode.HALF_UP))
-                .qualityLoss(new BigDecimal("100").subtract(quality).setScale(2, RoundingMode.HALF_UP))
+                .availabilityLoss(lossOrNull(availability))
+                .performanceLoss(lossOrNull(performance))
+                .qualityLoss(lossOrNull(quality))
                 .build();
     }
 
@@ -1240,9 +1245,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
 
         BigDecimal totalVariance = totalActualCost.subtract(totalBomCost);
+        // ⚠️ 没有 BOM 成本(没有批次)时, 差异率【算不出来】——⛔ 不是「差异 0%」。
+        //    原来返 ZERO, 而 calculateOverallScore 把「差异 0」当成满分成本控制,
+        //    于是一家一条批次都没有的工厂能靠这一项白拿 15 分。
         BigDecimal varianceRate = totalBomCost.compareTo(BigDecimal.ZERO) > 0 ?
                 totalVariance.divide(totalBomCost, 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : BigDecimal.ZERO;
+                        .multiply(new BigDecimal("100")) : null;
 
         List<CostVarianceReportDTO.ProductCostVariance> productVariances = new ArrayList<>();
         for (Map.Entry<String, List<ProductionBatch>> entry : productBatches.entrySet()) {
@@ -1297,13 +1305,16 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .totalBomCost(totalBomCost.setScale(2, RoundingMode.HALF_UP))
                 .totalActualCost(totalActualCost.setScale(2, RoundingMode.HALF_UP))
                 .totalVariance(totalVariance.setScale(2, RoundingMode.HALF_UP))
-                .totalVarianceRate(varianceRate.setScale(2, RoundingMode.HALF_UP))
+                .totalVarianceRate(scaleOrNull(varianceRate))
                 .varianceStatus(CostVarianceReportDTO.calculateStatus(varianceRate))
                 .productCount(productBatches.size())
                 .batchCount(batchCount)
-                .materialCostRatio(new BigDecimal("60"))
-                .laborCostRatio(new BigDecimal("25"))
-                .overheadCostRatio(new BigDecimal("15"))
+                // ⛔ 原来是三个无条件写死的常量(60/25/15, 恰好合计 100)。它们看起来像一次
+                //    成本结构分析的结论, 实际与 batches / totalActualCost 都没有关系。
+                //    在成本按要素分摊落库之前, 一律为 null。
+                .materialCostRatio(null)
+                .laborCostRatio(null)
+                .overheadCostRatio(null)
                 .productVariances(productVariances)
                 .anomalyProducts(anomalyProducts)
                 .build();
@@ -1348,18 +1359,27 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         long activeUsers = userRepository.countActiveUsers(factoryId);
 
         BigDecimal safeOutput = totalOutput != null ? totalOutput : BigDecimal.ZERO;
+        // 下面四个比率在没有对应事实时【算不出来】, 一律返 null(诚实空)。
+        //
+        // ⚠️ 这里原来分别兜底成 85 / 96 / 95 / 85 / 95, 于是一家一条数据都没有的工厂
+        //    会读到「产出完成率 85% / 一次合格率 96% / 准时交付 95%」, 并且这些数还进了
+        //    calculateOverallScore ⇒ 连「综合评分」都有一部分是拿编出来的输入算的。
+        //    2026-08-28 逐屏走查在 F006 上实测到: 同一个 tab 里 KPIReport 说 OTIF 95%,
+        //    而 OnTimeDeliveryReport 说「暂无OTIF数据」—— 说没有数据的那个才是对的。
+        //
+        // ⛔ 也不要兜底成 0: 0% 合格率是一个合法读数, 会被下游当成真值(见 measurement-and-wiring 形态 A¹⁰)。
         BigDecimal outputCompletionRate = plannedOutput != null && plannedOutput.compareTo(BigDecimal.ZERO) > 0
                 && safeOutput.compareTo(BigDecimal.ZERO) > 0 ?
                 safeOutput.divide(plannedOutput, 4, RoundingMode.HALF_UP).multiply(new BigDecimal("100")) :
-                new BigDecimal("85");
+                null;
 
         BigDecimal fpy = totalInspections > 0 ?
                 new BigDecimal(passedInspections).divide(new BigDecimal(totalInspections), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("96");
+                        .multiply(new BigDecimal("100")) : null;
 
         BigDecimal otif = totalShipments > 0 ?
                 new BigDecimal(onTimeShipments).divide(new BigDecimal(totalShipments), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("95");
+                        .multiply(new BigDecimal("100")) : null;
 
         // 单位成本 = 期间实际生产成本 / 期间产出. 无产出(如纯零售租户)或无成本数据时返 0 (诚实空, 不造假).
         BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
@@ -1368,11 +1388,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
 
         BigDecimal equipmentAvailability = equipments.size() > 0 ?
                 new BigDecimal(runningEquipment).divide(new BigDecimal(equipments.size()), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("85");
+                        .multiply(new BigDecimal("100")) : null;
 
         BigDecimal attendanceRate = totalUsers > 0 ?
                 new BigDecimal(activeUsers).divide(new BigDecimal(totalUsers), 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : new BigDecimal("95");
+                        .multiply(new BigDecimal("100")) : null;
 
         // ===== KPI 补充指标 (真实计算, 无数据返 0 诚实空, 不造假) =====
         // 平均生产周期(分钟): 已完成批次 end_time - start_time 均值
@@ -1411,12 +1431,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .reportDate(date)
                 .updatedAt(LocalDateTime.now())
                 .oee(oeeReport.getOeeValue())
-                .outputCompletionRate(outputCompletionRate.setScale(2, RoundingMode.HALF_UP))
+                .outputCompletionRate(scaleOrNull(outputCompletionRate))
                 .capacityUtilization(oeeReport.getAvailability())
                 .throughput(totalOutput != null ? totalOutput.divide(new BigDecimal("30"), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO)
-                .fpy(fpy.setScale(2, RoundingMode.HALF_UP))
+                .fpy(scaleOrNull(fpy))
                 .overallQualityRate(oeeReport.getQuality())
-                .scrapRate(new BigDecimal("100").subtract(oeeReport.getQuality()).setScale(2, RoundingMode.HALF_UP))
+                .scrapRate(lossOrNull(oeeReport.getQuality()))
                 .bomVarianceRate(costReport.getTotalVarianceRate())
                 .materialCostRatio(costReport.getMaterialCostRatio())
                 .laborCostRatio(costReport.getLaborCostRatio())
@@ -1426,14 +1446,18 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .avgLeadTime(avgLeadTime)
                 .reworkRate(reworkRate)
                 .orderFulfillmentRate(orderFulfillmentRate)
-                .otif(otif.setScale(2, RoundingMode.HALF_UP))
-                .onTimeDeliveryRate(otif.setScale(2, RoundingMode.HALF_UP))
-                .equipmentAvailability(equipmentAvailability.setScale(2, RoundingMode.HALF_UP))
-                .mtbf(new BigDecimal("168"))
-                .mttr(new BigDecimal("2"))
+                .otif(scaleOrNull(otif))
+                .onTimeDeliveryRate(scaleOrNull(otif))
+                .equipmentAvailability(scaleOrNull(equipmentAvailability))
+                // ⛔ MTBF/MTTR 原来是两个写死的字面量(168 小时 / 2 小时), 与设备表、
+                //    故障记录都没有任何关系 —— 那不是兜底, 是无条件编造。
+                //    在有故障与维修工时的事实表之前, 这两项一律为 null(前端显示 "--")。
+                .mtbf(null)
+                .mttr(null)
+                // 没有在岗人数 / 没有产出时人均产出算不出来 —— ⛔ 不是「人均 0」。
                 .outputPerWorker(activeUsers > 0 && totalOutput != null ?
-                        totalOutput.divide(new BigDecimal(activeUsers), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO)
-                .attendanceRate(attendanceRate.setScale(2, RoundingMode.HALF_UP))
+                        totalOutput.divide(new BigDecimal(activeUsers), 2, RoundingMode.HALF_UP) : null)
+                .attendanceRate(scaleOrNull(attendanceRate))
                 .build();
 
         kpi.setOverallScore(KpiMetricsDTO.calculateOverallScore(kpi));
@@ -1597,5 +1621,21 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("dailyTrend", dailyTrend);
         report.put("orderDetails", orderDetails.subList(0, Math.min(20, orderDetails.size())));
         return report;
+    }
+
+    /**
+     * 比率类读数「算不出来」时的统一出口: 保持 null, ⛔ 不要变成 0。
+     *
+     * <p>0 在比率语境里是一个<b>合法读数</b>(0% 合格率 = 全部不合格), 下游分不清
+     * 「我不知道」和「确实是 0」。前端 {@code MetricItem} 对 null 已经有 "--" 分支,
+     * 对 0 则会画出一个红色的 0.0%。
+     */
+    private static BigDecimal scaleOrNull(BigDecimal value) {
+        return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** 损失率 = 100 - 该因子; 因子算不出来时损失率同样没有定义。 */
+    private static BigDecimal lossOrNull(BigDecimal rate) {
+        return rate == null ? null : new BigDecimal("100").subtract(rate).setScale(2, RoundingMode.HALF_UP);
     }
 }

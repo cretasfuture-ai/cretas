@@ -207,29 +207,35 @@ async function loadRestaurantKpi() {
 }
 
 // KPI 数据
-const kpiData = ref({
+// 初值一律 null（= 还没有读到数），⛔ 不是 0 —— 加载前后都不该出现一个假的 0%。
+const kpiData = ref<{
+  production: { oee: number | null; yield: number | null; cycleTime: number | null; throughput: number | null };
+  quality: { fpy: number | null; defectRate: number | null; reworkRate: number | null; scrapRate: number | null };
+  delivery: { onTimeRate: number | null; leadTime: number | null; fillRate: number | null };
+  cost: { unitCost: number | null; materialCost: number | null; laborCost: number | null; overheadCost: number | null };
+}>({
   production: {
-    oee: 0,           // Overall Equipment Effectiveness
-    yield: 0,         // 良品率
-    cycleTime: 0,     // 周期时间
-    throughput: 0     // 产出量
+    oee: null,           // Overall Equipment Effectiveness
+    yield: null,         // 良品率
+    cycleTime: null,     // 周期时间
+    throughput: null     // 产出量
   },
   quality: {
-    fpy: 0,           // First Pass Yield
-    defectRate: 0,    // 缺陷率
-    reworkRate: 0,    // 返工率
-    scrapRate: 0      // 报废率
+    fpy: null,           // First Pass Yield
+    defectRate: null,    // 缺陷率
+    reworkRate: null,    // 返工率
+    scrapRate: null      // 报废率
   },
   delivery: {
-    onTimeRate: 0,    // 准时交付率
-    leadTime: 0,      // 交期
-    fillRate: 0       // 订单满足率
+    onTimeRate: null,    // 准时交付率
+    leadTime: null,      // 交期
+    fillRate: null       // 订单满足率
   },
   cost: {
-    unitCost: 0,      // 单位成本
-    materialCost: 0,  // 原料成本占比
-    laborCost: 0,     // 人工成本占比
-    overheadCost: 0   // 间接成本占比
+    unitCost: null,      // 单位成本
+    materialCost: null,  // 原料成本占比
+    laborCost: null,     // 人工成本占比
+    overheadCost: null   // 间接成本占比
   }
 });
 
@@ -277,7 +283,16 @@ interface KpiMetricsResponse {
 }
 
 // plain-% (0–100) → 0–1 fraction (template multiplies back by 100 for display)
-const pct = (v: number | undefined | null): number => (v ?? 0) / 100;
+//
+// ⛔ 原来是 `(v ?? 0) / 100`。后端在算不出来时返 null（2026-08-28 起不再兜底成
+// 85/96/95），这里再兜成 0 就等于把「还没有数据」显示成「0%」—— 一个看起来
+// 非常糟糕的具体读数。0% 在比率语境里是合法值，前端分不清它和「没有」。
+// ⇒ null 一路传到显示层，由 formatPercent 打成「—」。
+const pct = (v: number | undefined | null): number | null =>
+  v === null || v === undefined ? null : v / 100;
+
+/** 进度条宽度需要一个数；没有数据时给 0 宽度，但**文字**仍然显示「—」。 */
+const barPct = (v: number | null): number => (v ?? 0) * 100;
 
 async function loadKPIData() {
   if (!factoryId.value) return;
@@ -291,23 +306,23 @@ async function loadKPIData() {
           // oee is a plain % (0–100, e.g. 91.05) like every sibling field → /100 fraction
           oee: pct(d.oee),
           yield: pct(d.overallQualityRate),
-          cycleTime: d.avgCycleTime ?? 0,
-          throughput: d.throughput ?? 0,
+          cycleTime: d.avgCycleTime ?? null,
+          throughput: d.throughput ?? null,
         },
         quality: {
           fpy: pct(d.fpy),
           // no direct defectRate field — first-pass failure rate is an honest proxy
-          defectRate: pct(d.fpy != null ? 100 - d.fpy : 0),
+          defectRate: pct(d.fpy != null ? 100 - d.fpy : null),
           reworkRate: pct(d.reworkRate),
           scrapRate: pct(d.scrapRate),
         },
         delivery: {
           onTimeRate: pct(d.onTimeDeliveryRate ?? d.otif),
-          leadTime: d.avgLeadTime ?? 0,
+          leadTime: d.avgLeadTime ?? null,
           fillRate: pct(d.inFullDeliveryRate ?? d.orderFulfillmentRate),
         },
         cost: {
-          unitCost: d.unitCost ?? 0,
+          unitCost: d.unitCost ?? null,
           materialCost: pct(d.materialCostRatio),
           laborCost: pct(d.laborCostRatio),
           overheadCost: pct(d.overheadCostRatio),
@@ -324,7 +339,9 @@ async function loadKPIData() {
   }
 }
 
-function getProgressStatus(value: number, target: number) {
+function getProgressStatus(value: number | null, target: number) {
+  // 没有数据不是一个坏成绩 —— 不要给它标红。
+  if (value === null || value === undefined) return undefined;
   if (target === 0) return 'exception';
   const ratio = value / target;
   if (ratio >= 1) return 'success';
@@ -332,8 +349,16 @@ function getProgressStatus(value: number, target: number) {
   return 'exception';
 }
 
-function formatPercent(value: number) {
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined) return '—';
   return (value * 100).toFixed(1) + '%';
+}
+
+/** 带单位的裸数值：没有数据时显示「—」而不是「0min」「0天」「¥0.00」。
+ *  ⚠️ 叫 formatMeasure 而不是 formatNumber —— 本文件已从 @/utils/format-number 导入后者。 */
+function formatMeasure(value: number | null | undefined, unit = '', digits?: number) {
+  if (value === null || value === undefined) return '—';
+  return (digits === undefined ? String(value) : value.toFixed(digits)) + unit;
 }
 </script>
 
@@ -614,8 +639,8 @@ function formatPercent(value: number) {
         <div class="kpi-item">
           <div class="kpi-label">设备综合效率 (OEE)</div>
           <el-progress
-            :percentage="kpiData.production.oee * 100"
-            :status="getProgressStatus(kpiData.production.oee * 100, targets.oee)"
+            :percentage="barPct(kpiData.production.oee)"
+            :status="getProgressStatus(kpiData.production.oee === null ? null : kpiData.production.oee * 100, targets.oee)"
             :stroke-width="12"
           />
           <div class="kpi-meta">
@@ -627,8 +652,8 @@ function formatPercent(value: number) {
         <div class="kpi-item">
           <div class="kpi-label">良品率</div>
           <el-progress
-            :percentage="kpiData.production.yield * 100"
-            :status="getProgressStatus(kpiData.production.yield * 100, targets.yield)"
+            :percentage="barPct(kpiData.production.yield)"
+            :status="getProgressStatus(kpiData.production.yield === null ? null : kpiData.production.yield * 100, targets.yield)"
             :stroke-width="12"
           />
           <div class="kpi-meta">
@@ -639,11 +664,11 @@ function formatPercent(value: number) {
 
         <div class="kpi-stats">
           <div class="stat">
-            <div class="stat-value">{{ kpiData.production.throughput }}</div>
+            <div class="stat-value">{{ formatMeasure(kpiData.production.throughput) }}</div>
             <div class="stat-label">日产出</div>
           </div>
           <div class="stat">
-            <div class="stat-value">{{ kpiData.production.cycleTime }}min</div>
+            <div class="stat-value">{{ formatMeasure(kpiData.production.cycleTime, 'min') }}</div>
             <div class="stat-label">周期时间</div>
           </div>
         </div>
@@ -661,8 +686,8 @@ function formatPercent(value: number) {
         <div class="kpi-item">
           <div class="kpi-label">一次合格率 (FPY)</div>
           <el-progress
-            :percentage="kpiData.quality.fpy * 100"
-            :status="getProgressStatus(kpiData.quality.fpy * 100, targets.fpy)"
+            :percentage="barPct(kpiData.quality.fpy)"
+            :status="getProgressStatus(kpiData.quality.fpy === null ? null : kpiData.quality.fpy * 100, targets.fpy)"
             :stroke-width="12"
           />
           <div class="kpi-meta">
@@ -699,8 +724,8 @@ function formatPercent(value: number) {
         <div class="kpi-item">
           <div class="kpi-label">准时交付率</div>
           <el-progress
-            :percentage="kpiData.delivery.onTimeRate * 100"
-            :status="getProgressStatus(kpiData.delivery.onTimeRate * 100, targets.onTimeRate)"
+            :percentage="barPct(kpiData.delivery.onTimeRate)"
+            :status="getProgressStatus(kpiData.delivery.onTimeRate === null ? null : kpiData.delivery.onTimeRate * 100, targets.onTimeRate)"
             :stroke-width="12"
           />
           <div class="kpi-meta">
@@ -711,7 +736,7 @@ function formatPercent(value: number) {
 
         <div class="kpi-stats">
           <div class="stat">
-            <div class="stat-value">{{ kpiData.delivery.leadTime }}天</div>
+            <div class="stat-value">{{ formatMeasure(kpiData.delivery.leadTime, '天') }}</div>
             <div class="stat-label">平均交期</div>
           </div>
           <div class="stat">
@@ -733,22 +758,22 @@ function formatPercent(value: number) {
         <div class="cost-breakdown">
           <div class="cost-item">
             <div class="cost-label">单位成本</div>
-            <div class="cost-value">¥{{ kpiData.cost.unitCost.toFixed(2) }}</div>
+            <div class="cost-value">{{ kpiData.cost.unitCost === null ? '—' : '¥' + kpiData.cost.unitCost.toFixed(2) }}</div>
           </div>
 
           <el-divider />
 
           <div class="cost-pie">
             <div class="pie-item material">
-              <div class="pie-bar" :style="{ width: kpiData.cost.materialCost * 100 + '%' }"></div>
+              <div class="pie-bar" :style="{ width: barPct(kpiData.cost.materialCost) + '%' }"></div>
               <span class="pie-label">原料 {{ formatPercent(kpiData.cost.materialCost) }}</span>
             </div>
             <div class="pie-item labor">
-              <div class="pie-bar" :style="{ width: kpiData.cost.laborCost * 100 + '%' }"></div>
+              <div class="pie-bar" :style="{ width: barPct(kpiData.cost.laborCost) + '%' }"></div>
               <span class="pie-label">人工 {{ formatPercent(kpiData.cost.laborCost) }}</span>
             </div>
             <div class="pie-item overhead">
-              <div class="pie-bar" :style="{ width: kpiData.cost.overheadCost * 100 + '%' }"></div>
+              <div class="pie-bar" :style="{ width: barPct(kpiData.cost.overheadCost) + '%' }"></div>
               <span class="pie-label">间接 {{ formatPercent(kpiData.cost.overheadCost) }}</span>
             </div>
           </div>
