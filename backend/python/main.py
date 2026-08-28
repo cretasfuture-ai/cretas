@@ -1796,11 +1796,33 @@ async def health_check():
         except Exception:
             postgres_status = "error"
 
+    # 🔴 2026-08-28: 「进程活着」不等于「LLM 能用」。
+    # CI 自建 runner 上出现过这一格: 服务在、三家 provider key 全空 ⇒ 本端点 200
+    # ⇒ Java 侧 PythonLLMClient.isAvailable() 判「可用」⇒ 联网用例不跳过 ⇒ 每次调用
+    # 拿到 All providers exhausted: empty_api_key ⇒ 整道 Java Gate 对所有 PR 变红。
+    #
+    # ⛔ 不把 status 改成非 healthy / 不改 HTTP 状态码 ——
+    #   scripts/deploy/deploy-smartbi-python.sh 的 wait_for_health_via_ssh 拿本端点
+    #   当**部署就绪探针**, 改状态码会让任何没配 LLM key 的环境部署失败。
+    #   ⇒ 只在响应体里多一个字段, 由**关心 LLM 的那个调用方**自己去读。
+    #
+    # 三态, 不是布尔: None = 判不出来, 调用方必须 fail-open。
+    # ⛔ 不要把「不知道」当成「不可用」—— 那会让线上 AI 功能在一次偶发异常里被整体关掉。
+    llm_ready = None      # Optional[bool]; 不加 typing import, 少动一处顶层结构
+    if _llm_available:
+        try:
+            from common.llm_router import providers_ready
+            llm_ready = providers_ready()
+        except Exception:
+            llm_ready = None
+
     return JSONResponse(
         content={
             "status": "healthy",
             "service": "python-services",
             "version": "2.0.0",
+            # true=至少一家 provider 有 key / false=一家都没有 / null=判不出来(调用方 fail-open)
+            "llmProvidersReady": llm_ready,
             "timestamp": datetime.now().isoformat(),
             "modules": [
                 "smartbi",

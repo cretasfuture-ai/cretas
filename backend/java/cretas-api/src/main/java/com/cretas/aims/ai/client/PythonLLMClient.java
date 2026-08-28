@@ -422,7 +422,31 @@ public class PythonLLMClient {
     }
 
     /**
-     * 检查 Python LLM 服务是否可用（GET /health）。
+     * 检查 Python LLM 服务是否<b>能真的做一次 LLM 调用</b>（GET /health）。
+     *
+     * <h3>🔴 2026-08-28: 原来它量的不是它名字说的那件事</h3>
+     * 旧实现只判 {@code response.isSuccessful()} —— 那证明「这个 HTTP 进程活着」,
+     * <b>不证明背后有可用的 LLM 供应商</b>。CI 自建 runner (canada-mac-mini-2)
+     * 上就出现了这一格: 服务在、三家 provider 的 key 全是空的 ⇒
+     * {@code /health} 200 ⇒ 本方法返回 true ⇒ 联网用例不跳过 ⇒ 每次调用拿到
+     * {@code All providers exhausted: aistore/deepseek/zhipu: empty_api_key}
+     * ⇒ <b>整道 Java Gate 对所有 PR 变红</b>。
+     *
+     * <p>⇒ 改成读 {@code /health} 响应体里的 {@code llmProvidersReady} 字段。
+     * ⛔ 没有改 {@code /health} 的 HTTP 状态码 ——
+     * {@code deploy-smartbi-python.sh} 的 {@code wait_for_health_via_ssh} 拿它当
+     * <b>部署就绪探针</b>, 改状态码会让任何没配 LLM key 的环境部署失败。
+     *
+     * <h3>⚠️ 三态, 且必须 fail-open</h3>
+     * <ul>
+     *   <li>{@code false} → 确定没有任何 provider 有 key ⇒ 不可用</li>
+     *   <li>{@code true} → 至少一家有 key ⇒ 可用</li>
+     *   <li><b>字段缺失 / null / 解析失败 → 当作可用</b>（旧版 Python 没有这个字段）</li>
+     * </ul>
+     * ⛔ 「不知道」绝不能当成「不可用」: 本方法是<b>生产代码路径</b>上的守卫
+     * ({@code DashScopeVisionClient} 等也在用), 把未知判成不可用会在一次偶发
+     * 解析异常里<b>整体关掉线上 AI 功能</b>。滚动发布期间 Java 新 / Python 旧
+     * 也走这一条, 行为与改动前完全一致。
      */
     public boolean isAvailable() {
         try {
@@ -431,7 +455,31 @@ public class PythonLLMClient {
                     .get()
                     .build();
             try (Response response = httpClient.newCall(request).execute()) {
-                return response.isSuccessful();
+                if (!response.isSuccessful()) {
+                    return false;
+                }
+                // ⚠️ 解析必须**单独** try —— 若让它掉进外层 catch, 一个非 JSON 的
+                //    /health 响应就会被判成「不可用」, 那正是本方法要避免的事
+                //    (未知 ≠ 不可用)。⛔ 这一条是被 PythonLLMClientAvailabilityTest
+                //    的 unparseableBodyFailsOpen 抓出来的, 第一版就写错了。
+                Boolean ready;
+                try {
+                    ResponseBody body = response.body();
+                    var node = body == null
+                            ? null
+                            : objectMapper.readTree(body.string()).get("llmProvidersReady");
+                    ready = (node == null || node.isNull()) ? null : node.asBoolean(true);
+                } catch (Exception parseFailure) {
+                    log.debug("PythonLLMClient: /health 响应体读不动, 按可用处理(fail-open): {}",
+                            parseFailure.getMessage());
+                    return true;
+                }
+                if (Boolean.FALSE.equals(ready)) {
+                    log.debug("PythonLLMClient: /health 报 llmProvidersReady=false "
+                            + "(该服务没有任何 provider 配了 key) ⇒ 判定 LLM 不可用");
+                    return false;
+                }
+                return true;                           // true 或 null(旧版 Python) 都按可用
             }
         } catch (Exception e) {
             log.debug("PythonLLMClient isAvailable 检查失败: {}", e.getMessage());
