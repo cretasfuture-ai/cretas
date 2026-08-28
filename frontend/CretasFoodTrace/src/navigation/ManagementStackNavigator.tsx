@@ -31,6 +31,7 @@ import FactorySettingsScreen from '../screens/management/FactorySettingsScreen';
 import WorkProcessListScreen from '../screens/factory/workprocess/WorkProcessListScreen';
 import WorkProcessCreateScreen from '../screens/factory/workprocess/WorkProcessCreateScreen';
 import ProductWorkProcessConfigScreen from '../screens/factory/workprocess/ProductWorkProcessConfigScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 // Phase 4启用：规格配置管理
 // import MaterialSpecManagementScreen from '../screens/management/MaterialSpecManagementScreen';
@@ -42,7 +43,7 @@ const Stack = createNativeStackNavigator<ManagementStackParamList>();
  */
 export function ManagementStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

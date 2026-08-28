@@ -20,12 +20,13 @@ import IntentSuggestionDetailScreen from "../../screens/factory-admin/ai-analysi
 import AIAnalysisDetailScreen from "../../screens/processing/AIAnalysisDetailScreen";
 // 使用新的独立AI对话屏幕
 import AIChatScreen from "../../screens/factory-admin/ai-analysis/AIChatScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<FAAIStackParamList>();
 
 export function FAAIStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: true,
         headerBackTitle: '返回',

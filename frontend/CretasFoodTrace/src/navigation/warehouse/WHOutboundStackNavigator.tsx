@@ -19,12 +19,13 @@ import WHScanOperationScreen from "../../screens/warehouse/shared/WHScanOperatio
 // 调拨 —— 2026-08-21 从 WHHomeStack 迁来 (首页 tab 收敛), 见下方 Screen 处说明。
 import TransferListScreen from "../../screens/factory-admin/inventory/TransferListScreen";
 import TransferDetailScreen from "../../screens/factory-admin/inventory/TransferDetailScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WHOutboundStackParamList>();
 
 export function WHOutboundStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="WHDeliveryConfirmList"
       screenOptions={{
         headerShown: false,

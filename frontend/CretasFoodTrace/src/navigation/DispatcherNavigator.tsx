@@ -52,6 +52,7 @@ import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
 
 // 工序任务 (从计划详情跳入)
 import ProcessRunOverviewScreen from '../screens/processing/ProcessRunOverviewScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 /**
  * 调度员导航参数类型 (仅已实现的屏幕)
@@ -100,7 +101,7 @@ const Stack = createStackNavigator<DispatcherStackParamList>();
 
 export function DispatcherNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

@@ -27,13 +27,14 @@ import PerformanceScreen from '../screens/hr/analytics/PerformanceScreen';
 import BatchAssignmentScreen from '../screens/hr/production/BatchAssignmentScreen';
 import NewHiresScreen from '../screens/hr/home/NewHiresScreen';
 
-import type { HRStackParamList } from '../types/hrNavigation';
+import type { HRStackParamList } from '../types/hrNavigation';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<HRStackParamList>();
 
 export default function HRNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         animation: 'slide_from_right',

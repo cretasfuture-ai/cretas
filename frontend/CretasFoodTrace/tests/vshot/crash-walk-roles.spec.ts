@@ -61,7 +61,9 @@ const USERS = (process.env.VSHOT_USERS ?? [
   'f006_viewer',           // viewer
 ].join(',')).split(',').map((u: string) => u.trim()).filter(Boolean);
 
-type Crash = { user: string; route: string; err: string };
+/** 出错的**爆炸半径**：掀掉整棵导航树 vs 只有这一屏。两者必须分开数。 */
+type Blast = 'tree' | 'screen';
+type Crash = { user: string; route: string; err: string; blast: Blast };
 
 test('逐角色: 不带参数进屏会不会打崩整个 App', async ({ page }) => {
   test.setTimeout(90 * 60_000);
@@ -140,19 +142,49 @@ test('逐角色: 不带参数进屏会不会打崩整个 App', async ({ page }) 
       await navigateTo(page, t).catch(() => {});
       await page.waitForTimeout(1000);
       const dead = (await rootState(page)) === null;
-      const boundary = await page.getByTestId('app-error-boundary-retry').count();
-      if (dead || boundary > 0) {
+      const appBoundary = await page.getByTestId('app-error-boundary-retry').count();
+      // ⚠️ 屏级边界接住之后导航树是**活的** —— 只看 app 级边界的话，
+      //    这一整类会从读数里消失，「89 → 0」看起来像修好了，其实只是被兜住了。
+      //
+      // 🔴 必须只数**当前可见**的那一个。React Navigation 在 web 上把已挂载的屏
+      //    留在 DOM 里，`getByTestId(...).count()` 会把**上一屏**那个边界一起数上：
+      //    实测 operator1 因此从「2 条出错」虚涨成「9 条」，而多出来的 7 条
+      //    全是它后面走的屏。—— 与第二轮 `innerText` 串屏是同一个坑。
+      // ⛔ `:visible` 不够：react-navigation 把上一屏留在 DOM 里，
+      //    它有尺寸、没有 display:none，Playwright 认为它 visible。
+      //    用按钮走查里验证过的那套判据：**视口相交 + 祖先没有 aria-hidden**。
+      const screenBoundary = await page.evaluate(() => {
+        const vh = window.innerHeight;
+        const vw = window.innerWidth;
+        return Array.from(
+          document.querySelectorAll<HTMLElement>('[data-testid="screen-error-boundary"]'),
+        ).filter((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width < 8 || r.height < 8) return false;
+          if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return false;
+          for (let a: HTMLElement | null = el; a; a = a.parentElement) {
+            const st = getComputedStyle(a);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            if (a.getAttribute('aria-hidden') === 'true') return false;
+          }
+          return true;
+        }).length;
+      });
+      if (dead || appBoundary > 0 || screenBoundary > 0) {
+        const blast: Blast = dead || appBoundary > 0 ? 'tree' : 'screen';
         const e = (errs.slice(mark).find((x) => /TypeError|Cannot|is not a function|undefined is not/.test(x))
           ?? errs.slice(mark)[0] ?? '(没抓到 console error)').replace(/\s+/g, ' ').slice(0, 200);
-        crashed.push({ user, route: key, err: e });
-        console.log(`  ☠️ ${key}\n     ${e}`);
+        crashed.push({ user, route: key, err: e, blast });
+        console.log(`  ${blast === 'tree' ? '☠️ 整树' : '▫️ 单屏'} ${key}\n     ${e}`);
         await recover();
       } else {
         okRoutes.push(key);
         queue.push(...(await harvest()));
       }
     }
-    console.log(`  ${user}: 走过 ${n} | 正常 ${okRoutes.length} | 崩 ${crashed.length}`);
+    const treeN = crashed.filter((c) => c.blast === 'tree').length;
+    console.log(`  ${user}: 走过 ${n} | 正常 ${okRoutes.length} | 出错 ${crashed.length}`
+      + ` (整树 ${treeN} / 单屏 ${crashed.length - treeN})`);
     perUser.push({ user, walked: n, ok: okRoutes.length, crashed: crashed.length });
     allCrashes.push(...crashed);
   }
@@ -165,6 +197,11 @@ test('逐角色: 不带参数进屏会不会打崩整个 App', async ({ page }) 
       : `  ${r.user.padEnd(22)} 走过 ${String(r.walked).padStart(3)} | 崩 ${r.crashed}`);
   });
   const walkedTotal = perUser.reduce((a, b) => a + b.walked, 0);
-  console.log(`\n合计走过 ${walkedTotal} 条 | 崩 ${allCrashes.length} 条`);
-  allCrashes.forEach((c, i) => console.log(`${String(i + 1).padStart(2)}. [${c.user}] ${c.route}\n    ${c.err}`));
+  const tree = allCrashes.filter((c) => c.blast === 'tree');
+  const screenOnly = allCrashes.filter((c) => c.blast === 'screen');
+  console.log(`\n合计走过 ${walkedTotal} 条 | 出错 ${allCrashes.length} 条`);
+  console.log(`  ☠️ 掀掉整棵导航树 ${tree.length} 条 | ▫️ 被屏级边界兜住 ${screenOnly.length} 条`);
+  console.log('⚠️ 「被兜住」不等于「修好了」—— 那一屏仍然打不开，只是不再连累别的屏。');
+  allCrashes.forEach((c, i) => console.log(
+    `${String(i + 1).padStart(2)}. [${c.blast === 'tree' ? '整树' : '单屏'}][${c.user}] ${c.route}\n    ${c.err}`));
 });

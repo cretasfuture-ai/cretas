@@ -14,13 +14,14 @@ import SmartBIStackNavigator from './SmartBIStackNavigator';
 import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator();
 const OverviewStack = createNativeStackNavigator();
 
 function BossOverviewStack() {
   return (
-    <OverviewStack.Navigator screenOptions={{ headerShown: false }}>
+    <OverviewStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <OverviewStack.Screen name="BossOverview" component={BossOverviewScreen} />
       <OverviewStack.Screen name="BossProductionPlans" component={ProductionPlanManagementScreen} />
       <OverviewStack.Screen name="BossSalesOrders" component={SalesOrderListScreen} />
@@ -38,7 +39,7 @@ export default function BossNavigator() {
   const reportsEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('Reports'));
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="BossOverviewTab"
       screenOptions={{
         headerShown: false,

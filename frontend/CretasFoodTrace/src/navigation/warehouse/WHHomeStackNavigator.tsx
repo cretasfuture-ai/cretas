@@ -17,12 +17,13 @@ import WHTempMonitorScreen from "../../screens/warehouse/inventory/WHTempMonitor
 import WHLocationManageScreen from "../../screens/warehouse/inventory/WHLocationManageScreen";
 import TransferListScreen from "../../screens/factory-admin/inventory/TransferListScreen";
 import TransferDetailScreen from "../../screens/factory-admin/inventory/TransferDetailScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WHHomeStackParamList>();
 
 export function WHHomeStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

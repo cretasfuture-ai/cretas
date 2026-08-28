@@ -8,6 +8,7 @@ import ProfileStackNavigator from './ProfileStackNavigator';
 import OperatorAssignedProcessScreen from '../screens/processing/OperatorAssignedProcessScreen';
 import YieldStepReportScreen from '../screens/processing/YieldStepReportScreen';
 import ShortageAlertDetailScreen from '../screens/processing/ShortageAlertDetailScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<any>();
 const ReportStack = createNativeStackNavigator<any>();
@@ -19,7 +20,7 @@ const ReportStack = createNativeStackNavigator<any>();
  */
 function OperatorReportStackNavigator() {
   return (
-    <ReportStack.Navigator initialRouteName="OperatorAssignedProcess" screenOptions={{ headerShown: false }}>
+    <ReportStack.Navigator screenLayout={screenErrorBoundary} initialRouteName="OperatorAssignedProcess" screenOptions={{ headerShown: false }}>
       <ReportStack.Screen name="OperatorAssignedProcess" component={OperatorAssignedProcessScreen} />
       <ReportStack.Screen name="YieldStepReport" component={YieldStepReportScreen} />
       {/* N1b: 缺料预警明细屏 (从任务列表的 ⚠缺料 badge 跳入) */}
@@ -38,7 +39,7 @@ export function OperatorNavigator() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="OperatorReportTab"
       screenOptions={{
         headerShown: false,

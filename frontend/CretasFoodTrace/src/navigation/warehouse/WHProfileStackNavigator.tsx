@@ -27,12 +27,13 @@ import StocktakeEntryScreen from "../../screens/warehouse/inventory/StocktakeEnt
 
 // 复用现有Profile页面
 import FeedbackScreen from "../../screens/profile/FeedbackScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WHProfileStackParamList>();
 
 export function WHProfileStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

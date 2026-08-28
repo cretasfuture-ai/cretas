@@ -90,7 +90,8 @@ import {
   TraceabilityScreen,
   TraceabilityDetailScreen,
   PublicTraceScreen,
-} from '../screens/traceability';
+} from '../screens/traceability';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 // AI语音质检 - Phase 4 (已迁移至 QualityInspectorNavigator)
 // import { VoiceInspectionScreen } from '../screens/processing/VoiceInspectionScreen';
@@ -103,7 +104,7 @@ const Stack = createNativeStackNavigator<ProcessingStackParamList>();
  */
 export function ProcessingStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false, // 使用自定义Appbar
       }}

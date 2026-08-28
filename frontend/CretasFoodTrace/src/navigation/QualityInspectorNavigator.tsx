@@ -46,6 +46,7 @@ import QIProfileScreen from '../screens/quality-inspector/QIProfileScreen';
 import QISettingsScreen from '../screens/quality-inspector/QISettingsScreen';
 import QIClockInScreen from '../screens/quality-inspector/QIClockInScreen';
 import QINotificationsScreen from '../screens/quality-inspector/QINotificationsScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator<QualityInspectorStackParamList>();
@@ -91,7 +92,7 @@ const TabIcon = ({
  */
 function HomeStack() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerStyle: { backgroundColor: QI_COLORS.primary },
         headerTintColor: '#fff',
@@ -117,7 +118,7 @@ function HomeStack() {
  */
 function InspectStack() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerStyle: { backgroundColor: QI_COLORS.primary },
         headerTintColor: '#fff',
@@ -193,7 +194,7 @@ function InspectStack() {
  */
 function RecordsStack() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerStyle: { backgroundColor: QI_COLORS.primary },
         headerTintColor: '#fff',
@@ -219,7 +220,7 @@ function RecordsStack() {
  */
 function AnalysisStack() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerStyle: { backgroundColor: QI_COLORS.primary },
         headerTintColor: '#fff',
@@ -250,7 +251,7 @@ function AnalysisStack() {
  */
 function ProfileStack() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerStyle: { backgroundColor: QI_COLORS.primary },
         headerTintColor: '#fff',
@@ -289,7 +290,7 @@ export default function QualityInspectorNavigator() {
   const bottomInset = Math.max(insets.bottom, 6);
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarIcon: ({ focused, color, size }) => (

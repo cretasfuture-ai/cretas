@@ -16,12 +16,13 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import MyTodoListScreen from '../screens/oa/MyTodoListScreen';
 import TodoDetailScreen from '../screens/oa/TodoDetailScreen';
 import type { OATodoStackParamList } from '../types/navigation';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<OATodoStackParamList>();
 
 export default function OATodoStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,  // Appbar.Header from react-native-paper 自管理
       }}

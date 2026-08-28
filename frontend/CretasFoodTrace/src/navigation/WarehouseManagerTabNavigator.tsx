@@ -36,6 +36,7 @@ import WHInboundStackNavigator from "./warehouse/WHInboundStackNavigator";
 import WHOutboundStackNavigator from "./warehouse/WHOutboundStackNavigator";
 import WHInventoryStackNavigator from "./warehouse/WHInventoryStackNavigator";
 import WHProfileStackNavigator from "./warehouse/WHProfileStackNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<WarehouseManagerTabParamList>();
 
@@ -78,7 +79,7 @@ export function WarehouseManagerTabNavigator() {
   const outboundEnabled = isScreenEnabled('OutboundManagement');
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       initialRouteName="WHHomeTab"
       screenOptions={{
         headerShown: false,

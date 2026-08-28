@@ -21,12 +21,13 @@ import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-deli
 import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
 import PriceAnomalyApprovalScreen from "../../screens/restaurant/supplier-delivery/PriceAnomalyApprovalScreen";
 import WHTransitLedgerScreen from "../../screens/warehouse/inventory/WHTransitLedgerScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WHInboundStackParamList>();
 
 export function WHInboundStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

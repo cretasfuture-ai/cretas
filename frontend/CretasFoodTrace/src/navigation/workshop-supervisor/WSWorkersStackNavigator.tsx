@@ -13,12 +13,13 @@ import WorkerDetailScreen from "../../screens/workshop-supervisor/workers/Worker
 import WorkerAssignScreen from "../../screens/workshop-supervisor/workers/WorkerAssignScreen";
 import ClockInScreen from "../../screens/workshop-supervisor/workers/ClockInScreen";
 import AttendanceHistoryScreen from "../../screens/workshop-supervisor/workers/AttendanceHistoryScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WSWorkersStackParamList>();
 
 export function WSWorkersStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

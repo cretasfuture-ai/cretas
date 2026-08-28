@@ -9,12 +9,13 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import WarehouseManagerTabNavigator from './WarehouseManagerTabNavigator';
 // AI 对话 (U-NAV-1 跨角色复用 FA 端 AIChatScreen, Sprint 2 Track G Day 9)
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator();
 
 export function WarehouseManagerNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="WarehouseManagerMain" component={WarehouseManagerTabNavigator} />
       {/* AI 对话 (U-NAV-1 Sprint 2 Track G Day 9) */}
       <Stack.Screen name="AIChat" component={AIChatScreen} options={{ headerShown: true, title: 'AI 对话' }} />

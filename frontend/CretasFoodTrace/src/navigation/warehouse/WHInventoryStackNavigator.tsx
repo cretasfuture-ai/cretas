@@ -29,12 +29,13 @@ import TransferReceiveScreen from "../../screens/warehouse/inventory/TransferRec
 // 2026-07-30 客户反馈修复: 盘点记录列表 + 只读详情
 import WHStocktakeListScreen from "../../screens/warehouse/inventory/WHStocktakeListScreen";
 import WHStocktakeDetailScreen from "../../screens/warehouse/inventory/WHStocktakeDetailScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WHInventoryStackParamList>();
 
 export function WHInventoryStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

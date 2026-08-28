@@ -12,12 +12,13 @@ import WSProfileScreen from "../../screens/workshop-supervisor/profile/WSProfile
 
 // 复用现有Profile页面
 import FeedbackScreen from "../../screens/profile/FeedbackScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WSProfileStackParamList>();
 
 export function WSProfileStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

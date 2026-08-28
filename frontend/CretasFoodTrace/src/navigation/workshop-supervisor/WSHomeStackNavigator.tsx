@@ -58,12 +58,13 @@ import ProductionPlanManagementScreen from "../../screens/processing/ProductionP
  * 而 permissionHelper 里 workshop_supervisor 正是 read_write）。
  */
 import ProcessTaskApprovalScreen from "../../screens/processing/ProcessTaskApprovalScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WSHomeStackParamList>();
 
 export function WSHomeStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       /*
        * 2026-08-26：落地屏从 ProcessTaskList 换成 WSHome。
        *

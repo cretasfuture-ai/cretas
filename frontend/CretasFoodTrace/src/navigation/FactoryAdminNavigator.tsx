@@ -6,12 +6,13 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import FactoryAdminTabNavigator from './FactoryAdminTabNavigator';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator();
 
 export function FactoryAdminNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="FactoryAdminMain" component={FactoryAdminTabNavigator} />
     </Stack.Navigator>
   );

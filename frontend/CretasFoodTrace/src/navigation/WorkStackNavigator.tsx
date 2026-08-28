@@ -2,6 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 // import { WorkStackParamList } from '../types/navigation';
 import { WorkTypeListScreen, WorkTypeFormScreen } from '../screens/work';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<any>();
 
@@ -11,7 +12,7 @@ const Stack = createNativeStackNavigator<any>();
  */
 export function WorkStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: true,
         headerStyle: {

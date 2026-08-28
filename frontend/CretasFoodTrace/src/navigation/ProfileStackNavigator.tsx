@@ -20,6 +20,7 @@ import IntentExecutionTestScreen from '../screens/test/IntentExecutionTestScreen
 
 // S4-4 通知中心 - 所有角色可访问
 import NotificationCenterScreen from '../screens/common/NotificationCenterScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
 
@@ -29,7 +30,7 @@ const Stack = createNativeStackNavigator<ProfileStackParamList>();
  */
 export function ProfileStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

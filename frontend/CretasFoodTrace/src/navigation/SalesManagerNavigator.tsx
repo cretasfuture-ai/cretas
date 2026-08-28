@@ -27,6 +27,7 @@ import CustomerManagementScreen from "../screens/management/CustomerManagementSc
 
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator<any>();
 const SalesStack = createNativeStackNavigator<any>();
@@ -39,7 +40,7 @@ const TAB_COLORS = {
 
 function SalesStackNavigator() {
   return (
-    <SalesStack.Navigator screenOptions={{ headerShown: false }}>
+    <SalesStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <SalesStack.Screen name="SalesOrderList" component={SalesOrderListScreen} />
       <SalesStack.Screen name="SalesOrderCreate" component={SalesOrderCreateScreen} />
       <SalesStack.Screen name="SalesOrderDetail" component={SalesOrderDetailScreen} />
@@ -54,7 +55,7 @@ function SalesStackNavigator() {
 
 function CustomerStackNavigator() {
   return (
-    <CustomerStack.Navigator screenOptions={{ headerShown: false }}>
+    <CustomerStack.Navigator screenLayout={screenErrorBoundary} screenOptions={{ headerShown: false }}>
       <CustomerStack.Screen name="CustomerManagement" component={CustomerManagementScreen} />
     </CustomerStack.Navigator>
   );
@@ -62,7 +63,7 @@ function CustomerStackNavigator() {
 
 export function SalesManagerNavigator() {
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: TAB_COLORS.active,

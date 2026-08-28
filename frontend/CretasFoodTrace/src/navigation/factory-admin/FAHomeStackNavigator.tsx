@@ -30,12 +30,13 @@ import { FormilyDemoScreen } from "../../screens/demo";
 
 // 首页布局编辑器
 import HomeLayoutEditorScreen from "../../screens/factory-admin/home/HomeLayoutEditorScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<FAHomeStackParamList>();
 
 export function FAHomeStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

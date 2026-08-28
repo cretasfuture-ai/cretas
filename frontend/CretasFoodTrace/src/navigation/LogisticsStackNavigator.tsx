@@ -2,7 +2,8 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { LogisticsStackParamList } from '../types/navigation';
 import LogisticsDashboardScreen from '../screens/logistics/LogisticsDashboardScreen';
-import ShipmentManagementScreen from '../screens/management/ShipmentManagementScreen';
+import ShipmentManagementScreen from '../screens/management/ShipmentManagementScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<LogisticsStackParamList>();
 
@@ -12,7 +13,7 @@ const Stack = createNativeStackNavigator<LogisticsStackParamList>();
  */
 export function LogisticsStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

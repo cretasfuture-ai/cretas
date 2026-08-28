@@ -20,6 +20,7 @@ import SchedulingSettingsScreen from '../../screens/settings/SchedulingSettingsS
 
 // 复用现有Profile页面
 import FeedbackScreen from '../../screens/profile/FeedbackScreen';
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 type DSProfileStackParamList = {
   DSProfile: undefined;
@@ -32,7 +33,7 @@ const Stack = createStackNavigator<DSProfileStackParamList>();
 
 export function DSProfileStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}

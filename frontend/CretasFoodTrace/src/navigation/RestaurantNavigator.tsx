@@ -9,6 +9,7 @@ import {
   RWastageStackNavigator,
 } from './restaurant';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
+import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Tab = createBottomTabNavigator();
 
@@ -40,7 +41,7 @@ export default function RestaurantNavigator() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Tab.Navigator
+    <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#C2185B',

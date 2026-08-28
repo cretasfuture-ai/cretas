@@ -19,12 +19,13 @@ import AboutScreen from "../../screens/factory-admin/profile/AboutScreen";
 // 复用现有Profile页面
 import FeedbackScreen from "../../screens/profile/FeedbackScreen";
 import DataExportScreen from "../../screens/reports/DataExportScreen";
+import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<FAProfileStackParamList>();
 
 export function FAProfileStackNavigator() {
   return (
-    <Stack.Navigator
+    <Stack.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
       }}
