@@ -183,6 +183,15 @@ public interface WipInventoryService {
                          List<java.util.Map<String, Object>> materialBatchRefs, Integer processOrder);
 
     /**
+     * 逐道录入半成品入库；回料角色必须由服务端冻结 Workflow 快照裁定。
+     * 既有调用走上面的普通半成品重载，行为保持不变。
+     */
+    void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
+                         BigDecimal inQty, String unit, BigDecimal inUnitCost,
+                         List<java.util.Map<String, Object>> materialBatchRefs, Integer processOrder,
+                         boolean rework);
+
+    /**
      * G3 小结半成品出库 (SFI OUT) — task-free，{@link #postClerkOutput} 的逆向。
      *
      * <p>当某次小结的某道消耗了 <b>前序小结已入库的</b>半成品 (跨小结 in/out 闭环) 时调用:

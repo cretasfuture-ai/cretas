@@ -163,6 +163,42 @@ class WorkflowClerkSheetServiceTest {
     }
 
     @Test
+    void projectsReworkRoleOnlyFromFrozenWorkflowMaterialNode() {
+        ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        ProductionWorkflowInstance instance = ProductionWorkflowInstance.create(
+                "F006", 901L, "PT-PIG", 44L, 3,
+                "[{\"id\":\"material-normal\",\"data\":{}},"
+                        + "{\"id\":\"material-rework\",\"data\":{\"isRework\":true}}]",
+                "[]", LocalDateTime.of(2026, 8, 29, 12, 0));
+        instance.setId(501L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId("F006", "PLAN-1"))
+                .thenReturn(List.of(workflowBatch));
+        when(instanceRepository.findByFactoryIdAndProductionBatchId("F006", 901L))
+                .thenReturn(Optional.of(instance));
+
+        WorkProcessTask task = task(801L, 501L, "inspect", "INSPECT", 8, "kg");
+        when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc("F006", 501L))
+                .thenReturn(List.of(task));
+        WorkflowTaskPort normal = port(801L, "out-normal", WorkflowTaskPort.Direction.OUTPUT,
+                0, "SEMI_FINISHED", "PT-NORMAL", "kg", true);
+        normal.setMaterialNodeId("material-normal");
+        WorkflowTaskPort rework = port(801L, "out-rework", WorkflowTaskPort.Direction.OUTPUT,
+                1, "SEMI_FINISHED", "PT-REWORK", "kg", true);
+        rework.setMaterialNodeId("material-rework");
+        when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
+                .thenReturn(List.of(normal, rework));
+        when(productTypeRepository.findByIdAndFactoryId("PT-NORMAL", "F006"))
+                .thenReturn(Optional.of(productType("PT-NORMAL", "F006", "良品", "kg")));
+        when(productTypeRepository.findByIdAndFactoryId("PT-REWORK", "F006"))
+                .thenReturn(Optional.of(productType("PT-REWORK", "F006", "回料", "kg")));
+
+        WorkflowClerkSheetConfigDTO result = service.getWorkflowSheetConfig("F006", "PLAN-1");
+
+        assertFalse(result.getProcesses().getFirst().getOutputs().get(0).getRework());
+        assertTrue(result.getProcesses().getFirst().getOutputs().get(1).getRework());
+    }
+
+    @Test
     void projectsOrderedDescriptorsWithResolvedNamesAndSingleOutput() {
         ProductionBatch workflowBatch = batch(901L, ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         ProductionWorkflowInstance instance = instance(501L);

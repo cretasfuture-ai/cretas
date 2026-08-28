@@ -1,5 +1,6 @@
 package com.cretas.aims.dto.processentry;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -146,6 +147,9 @@ public class ProcessSheetRowRequest {
     private String workflowPortId;
     /** 2B.2 本行产出对应的 workflow 产出物料 Cell (节点) id。 */
     private String materialNodeId;
+    /** 服务端内部裁定：该产出端口是否为回料。客户端值会被 Workflow 快照覆盖。 */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private Boolean rework;
 
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
@@ -200,6 +204,9 @@ public class ProcessSheetRowRequest {
         private boolean finished;
         /** 对应 workflow 产出物料 Cell (节点) id (端口身份的另一半, 区分同 SKU 多端口)。 */
         private String materialNodeId;
+        /** 服务端内部裁定：冻结 Workflow 物料节点是否标记为回料。 */
+        @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+        private Boolean rework;
         /** 可选成品重(kg): 若设则 FG 按 kg 入库 (同顶层 productWeight 语义); 多数多产出场景留空按 quantity 入库。 */
         private BigDecimal productWeight;
         /** Retained samples for this output SKU; inventory equals quantity minus this value. */

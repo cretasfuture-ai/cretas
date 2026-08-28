@@ -94,5 +94,7 @@ public class WorkflowClerkSheetConfigDTO {
          * 于是画布上标成副产的物料到了报工单上变成「半成品」并独立成行。
          */
         private Boolean byproduct;
+        /** 仅 output 端口有意义：冻结 Workflow 物料节点 data.isRework 的服务端投影。 */
+        private Boolean rework;
     }
 }
