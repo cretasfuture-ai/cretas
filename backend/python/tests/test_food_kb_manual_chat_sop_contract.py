@@ -1458,6 +1458,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "没有计划量/计划成本时显示“—”" in current_sop
     assert "不能把未知解释成 0 kg" in current_sop
     assert "SPC 与因果分析当前没有系统内直接入口" in current_sop
+    assert "设备维护天数缺失时显示“未排期”" in current_sop
+    assert "无法判断是否有待复核项" in current_sop
+    assert "员工工牌默认厂名必须取当前登录租户" in current_sop
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
@@ -1768,6 +1771,7 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "日结菜品表与异常成本动作" in ai_assist
     assert "季度、追问时间窗与输出否定" in ai_assist
     assert "未知数值与未支持分析边界" in ai_assist
+    assert "页面未知、失败与租户名称边界" in ai_assist
     assert "高峰时段只读查询边界" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
