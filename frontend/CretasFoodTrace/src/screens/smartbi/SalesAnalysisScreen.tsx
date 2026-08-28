@@ -353,6 +353,19 @@ export function SalesAnalysisScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [salesData, setSalesData] = useState<SalesAnalysisData | null>(null);
 
+  /**
+   * 后端在「这段时间没有销售数据」时会把原因写在 overview.aiInsights 里
+   * (实测: "当前时间范围内暂无销售数据")。它说得比我们兜底的文案准, 有就用它的。
+   * ⛔ 用 unknown 逐层取, 不要往 SalesAnalysisData 上加不属于契约的字段。
+   */
+  const backendNotice = ((): string | null => {
+    const overview = (salesData as unknown as { overview?: unknown } | null)?.overview;
+    const insights = (overview as { aiInsights?: unknown } | undefined)?.aiInsights;
+    if (!Array.isArray(insights)) return null;
+    const first = insights[0] as { message?: unknown } | undefined;
+    return typeof first?.message === 'string' ? first.message : null;
+  })();
+
   const DIMENSIONS: DimensionOption[] = [
     { key: 'person', label: t('dimensions.person', { defaultValue: '按人员' }), icon: 'account' },
     { key: 'product', label: t('dimensions.product', { defaultValue: '按产品' }), icon: 'cube' },
@@ -553,7 +566,7 @@ export function SalesAnalysisScreen() {
         )}
 
         {/* KPI Cards */}
-        {salesData && (
+        {salesData?.kpi && (
           <View style={styles.kpiGrid}>
             <SalesKPICard
               title={t('kpi.totalSales', { defaultValue: '销售额' })}
@@ -587,7 +600,7 @@ export function SalesAnalysisScreen() {
         )}
 
         {/* Sales Ranking */}
-        {salesData && (
+        {salesData?.ranking?.length ? (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>
@@ -613,10 +626,10 @@ export function SalesAnalysisScreen() {
               ))}
             </Card>
           </View>
-        )}
+        ) : null}
 
         {/* Sales Trend */}
-        {salesData && (
+        {salesData?.trends?.length ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>
               {t('sales.trend', { defaultValue: '销售趋势' })}
@@ -627,10 +640,10 @@ export function SalesAnalysisScreen() {
               </Card.Content>
             </Card>
           </View>
-        )}
+        ) : null}
 
         {/* Product Distribution */}
-        {salesData && (
+        {salesData?.distribution?.length ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>
               {t('sales.distribution', { defaultValue: '产品占比' })}
@@ -638,6 +651,27 @@ export function SalesAnalysisScreen() {
             <Card style={styles.chartCard}>
               <Card.Content>
                 <SimpleDistributionChart data={salesData.distribution} />
+              </Card.Content>
+            </Card>
+          </View>
+        ) : null}
+
+        {/* 后端会在没有销售数据时正常返回 200 + 一段说明。以前这里只判 `salesData` 非空,
+            下一行就读 `salesData.kpi.totalSales` —— 守的是外层对象, 读的是里面一层,
+            于是「暂无数据」变成一次 TypeError, 而 App 没有顶层 ErrorBoundary, 整屏白掉。 */}
+        {salesData && !salesData.kpi && !salesData.ranking?.length && (
+          <View style={styles.section}>
+            <Card style={styles.chartCard}>
+              <Card.Content>
+                <Text style={styles.emptyStateTitle}>
+                  {t('sales.empty.title', { defaultValue: '这段时间没有销售数据' })}
+                </Text>
+                <Text style={styles.emptyStateBody}>
+                  {backendNotice ??
+                    t('sales.empty.body', {
+                      defaultValue: '换一个时间范围再看，或先把销售数据导入系统。',
+                    })}
+                </Text>
               </Card.Content>
             </Card>
           </View>
@@ -781,6 +815,17 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 16,
     gap: 8,
+  },
+  emptyStateTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: SMARTBI_THEME.textPrimary,
+    marginBottom: 6,
+  },
+  emptyStateBody: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: SMARTBI_THEME.textSecondary,
   },
   errorText: {
     flex: 1,
