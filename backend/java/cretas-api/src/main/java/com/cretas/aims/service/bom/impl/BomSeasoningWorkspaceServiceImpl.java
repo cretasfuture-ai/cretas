@@ -8,6 +8,7 @@ import com.cretas.aims.dto.workflow.WorkflowRevisionCandidateDTO;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.material.MaterialMainCategory;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
@@ -47,8 +48,18 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceService {
 
-    private static final Set<String> AUXILIARY_CATEGORIES = Set.of(
-            "AUXILIARY", "SEASONING", "辅料", "调料", "调味料");
+    /**
+     * 🔴 2026-08-28: 原来这里是一张<b>小类</b>字面值白名单
+     * {@code {AUXILIARY, SEASONING, 辅料, 调料, 调味料}}, 「添加剂」不在里面 ⇒ 六膳门 9 个
+     * 添加剂类物料 (保水剂T22 / 复合磷酸盐(闻达) / 小苏打 / 无磷保水剂 …) 全部绑不上,
+     * 而保水剂和复合磷酸盐是肉制品核心辅料, 按 g/kg 投入计量, 与调料同一口径。
+     *
+     * <p>⛔ 修法<b>不是</b>往白名单里再加一个字符串 —— 那只是把下次要漏的那个换个名字
+     * (生产上这一列有 12 个平级取值, 「角色」和「品类」混在同一列)。改成查<b>大类</b>:
+     * 辅料下面无论加多少小类 (添加剂 / 调味料 / 未来的任何一个), 这里一个字都不用改。
+     * 见 {@link MaterialMainCategory}。
+     */
+    private static final String AUXILIARY_MAIN_CATEGORY = MaterialMainCategory.AUXILIARY;
 
     private final BomRecipeRepository recipeRepository;
     private final BomSeasoningItemRepository seasoningItemRepository;
@@ -692,12 +703,17 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (!Boolean.TRUE.equals(material.getIsActive())) {
             throw new BusinessException(400, "调料物料已停用: " + material.getName());
         }
-        String category = material.getCategory() == null ? "" : material.getCategory().trim();
-        boolean auxiliary = AUXILIARY_CATEGORIES.contains(category)
-                || AUXILIARY_CATEGORIES.contains(category.toUpperCase(Locale.ROOT))
+        // 判据是【大类】。存量行的 main_category 由 V20261101_04 从 category 回填 (NOT NULL + CHECK),
+        // 新建/编辑时由 RawMaterialType#setCategory 推出 —— 两条路同一张映射表。
+        // ⚠️ "003" 料号前缀那条旁路保留不动: 它是按料号 (而不是按分类) 认辅料的另一条既有判据,
+        //    动它是另一件事, 这次不碰。
+        String mainCategory = material.getMainCategory() == null ? "" : material.getMainCategory().trim();
+        boolean auxiliary = AUXILIARY_MAIN_CATEGORY.equals(mainCategory)
                 || "003".equals(material.getPrimaryCode());
         if (!auxiliary) {
-            throw new BusinessException(400, "只能选择辅料或调料物料: " + material.getName());
+            throw new BusinessException(400, "只能选择辅料物料: " + material.getName())
+                    .withHint("物料大类需为「辅料」(调料 / 调味料 / 添加剂 等小类都归辅料)")
+                    .withHintTarget("materialTypeId");
         }
         resolvePrice(material);
         return material;

@@ -327,6 +327,30 @@ public class ProductType extends BaseEntity {
 
     // ==================== End SP5 毛利红线字段 ====================
 
+    // ==================== 回料纯度 (哪些回料能投进这个产品) ====================
+
+    /**
+     * 回料纯度等级 —— <b>数越小辅料越少越"干净"</b> (美式汉堡饼=1 / 小吃吧汉堡饼=2 / 熟肉饼=3)。
+     *
+     * <p>回料可投入的判据是「回料的辅料集合 ⊆ 目标产品的辅料集合」, 在这条产线上这个包含关系
+     * 是一个<b>全序</b>, 所以落成一个整数: 可投入 ⟺ {@code 来源.level <= 目标.level}。
+     * 判定见 {@link com.cretas.aims.service.wip.ReworkPurityGuard}。
+     *
+     * <p>🔴 <b>null = 未配置, 不参与这道闸</b> (放行并在返回项上带标记), 不是「等级为 0」。
+     * 存量所有产品都是 null —— 这道闸只在租户显式配了等级之后才对那两个产品生效。
+     */
+    @Column(name = "rework_purity_level")
+    private Integer reworkPurityLevel;
+
+    /**
+     * 这个产品收不收回料。{@code false} (汉堡排) = <b>任何</b>来源的回料都不可投入,
+     * 与来源是谁、来源配没配等级<b>无关</b>。DB 侧默认 TRUE = 维持现状。
+     */
+    @Column(name = "accepts_rework")
+    private Boolean acceptsRework;
+
+    // ==================== End 回料纯度 ====================
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
     @Column(name = "notes", columnDefinition = "TEXT")

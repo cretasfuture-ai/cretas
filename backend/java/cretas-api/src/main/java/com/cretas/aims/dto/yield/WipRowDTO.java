@@ -113,4 +113,27 @@ public class WipRowDTO {
      * <b>仅</b>逐道投料下拉 (带 productTypeId 过滤 = pickerContext) 填充; 无参快照留 null (C3 口径不变)。
      */
     private BigDecimal gramsPerUnit;
+
+    // ── 回料 (不良品回投) ──────────────────────────────────────────────────
+
+    /**
+     * 这一行装的是不是回料 (镜像 {@code SemiFinishedInventory.isRework})。
+     * 回料行在下拉里与良品半成品长得一模一样, 而它们的可选性规则不同 ——
+     * 前端靠这一栏区分, 不要再拿工序号去猜。
+     */
+    private Boolean isRework;
+
+    /**
+     * 回料行的纯度判定标记。<b>非回料行 / 无目标产品的快照 → null</b>。
+     *
+     * <ul>
+     *   <li>{@code ENFORCED} —— 两侧都配了纯度等级, 这道闸真的判过它且放行了</li>
+     *   <li>{@code UNCONFIGURED} —— 至少一侧没配纯度等级 ⇒ <b>未经纯度判定</b>就放行了</li>
+     * </ul>
+     * 被拦下的行不会出现在结果里, 所以这里没有 BLOCKED 档。
+     *
+     * <p>🔴 {@code UNCONFIGURED} 是诚实标记而不是占位符: 它说的是「我没判」,
+     * 不是「我判过了没问题」。两者对操作员完全不同 —— 前者该提醒去配纯度等级。
+     */
+    private String reworkPurityStatus;
 }

@@ -152,12 +152,43 @@ public class RawMaterialType extends BaseEntity {
     private String name;
 
     /**
-     * 原材料类别
+     * 原材料<b>小类</b>
      * <p>用于分类管理原材料</p>
-     * <p>示例：海水鱼、淡水鱼、虾类、贝类、肉类、蔬菜</p>
+     * <p>示例：海水鱼、淡水鱼、虾类、贝类、肉类、蔬菜、添加剂、调味料</p>
+     *
+     * <p>🔴 <b>不要拿它做「这是不是辅料」这种判断</b> —— 这一列里同时躺着「角色」(原料/辅料/包材)
+     * 和「品类」(蔬菜/肉类/水产)，生产上有 12 个平级取值，按字面值列白名单一定会漏
+     * (「添加剂」就是这么漏掉的)。角色判断查 {@link #mainCategory}。</p>
      */
     @Column(name = "category", length = 50)
     private String category;
+
+    /**
+     * 原材料<b>大类</b> —— 恰好三种: 原料 / 辅料 / 包材 (DB 侧 {@code chk_raw_material_main_category} 钉死)。
+     *
+     * <p>由 {@link #category} 推导, 见 {@link com.cretas.aims.entity.material.MaterialMainCategory}。
+     * 业务判定 (能不能当辅料绑到工序上 / BOM 归哪个页签 / 料号前缀) 应该查这一列。</p>
+     *
+     * <p>⚠️ 赋值时机: {@link #setCategory(String)} 会顺带推出这一列, 所以<b>先</b> setMainCategory
+     * 再 setCategory 会被覆盖。要显式改大类就在 setCategory 之后调。</p>
+     */
+    @Column(name = "main_category", length = 20)
+    private String mainCategory;
+
+    /**
+     * 设小类的同时推出大类 —— 让「两列不一致」这件事在写入路径上没有发生的余地。
+     *
+     * <p>⛔ 认不出来的小类不兜底成任何一个大类, 留 null 让 NOT NULL 列拒绝写入
+     * (见 {@link com.cretas.aims.entity.material.MaterialMainCategory#of(String)} 的说明)。
+     * 面向用户的那句话由 service 层的 {@code MaterialMainCategory.require} 给出。</p>
+     *
+     * <p>Hibernate 走字段访问 (@Id 标在字段上), 因此从库里加载行<b>不</b>经过本 setter,
+     * 存量行的 main_category 以库里的值为准, 不会被这里的推导覆盖。</p>
+     */
+    public void setCategory(String category) {
+        this.category = category;
+        this.mainCategory = com.cretas.aims.entity.material.MaterialMainCategory.of(category);
+    }
 
     /**
      * 是否副产：生产产出物而非采购物。

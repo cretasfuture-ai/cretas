@@ -114,6 +114,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
             throw new BusinessException(400, "请选择物料基本类型")
                     .withHintTarget("category");
         }
+        // 大类 (原料/辅料/包材) 由小类推出, 认不出来当场 400 —— 实际赋值发生在
+        // RawMaterialType#setCategory 里 (同一张映射表), 这里只负责把错误说成人话。
+        com.cretas.aims.entity.material.MaterialMainCategory.require(materialCategory);
 
 
         // The segment dictionary remains useful as an optional taxonomy. It is never a code mode
@@ -272,6 +275,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         if (materialCategory == null || materialCategory.isEmpty()) {
             throw new BusinessException(400, "请选择物料基本类型").withHintTarget("category");
         }
+        com.cretas.aims.entity.material.MaterialMainCategory.require(materialCategory);
         materialType.setCategory(materialCategory);
 
         Long requestedClassificationId = dto.getClassificationId();
