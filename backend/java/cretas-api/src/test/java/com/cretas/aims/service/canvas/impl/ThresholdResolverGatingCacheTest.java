@@ -87,7 +87,10 @@ class ThresholdResolverGatingCacheTest {
     @BeforeEach
     void setUp() {
         ticker = new MutableTicker();
-        resolver = new ThresholdResolverServiceImpl(repository, ticker);
+        resolver = new ThresholdResolverServiceImpl(repository);
+        // ⚠️ 用 seam 换时钟, ⛔ 不是加第二个构造器 —— 后者会让 Mockito 的 @InjectMocks
+        //    挑到它并塞 null Ticker, 把【别的类】的测试整片打红 (2026-08-29 实测)。
+        resolver.useTickerForTest(ticker);
     }
 
     private static FactoryThreshold row(String factoryId, String key, String value) {

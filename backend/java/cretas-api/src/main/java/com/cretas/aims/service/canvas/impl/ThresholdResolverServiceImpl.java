@@ -8,7 +8,6 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -86,7 +85,7 @@ public class ThresholdResolverServiceImpl implements ThresholdResolverService {
      * separately so a per-factory miss followed by a global hit doesn't traverse DB twice
      * on subsequent hits.
      */
-    private final Cache<String, FactoryThreshold> cache;
+    private Cache<String, FactoryThreshold> cache;
 
     /**
      * 闸门类 key 的缓存 —— 同样的结构, 只是 TTL 短得多。
@@ -94,22 +93,18 @@ public class ThresholdResolverServiceImpl implements ThresholdResolverService {
      * <p>{@code maximumSize} 小得多是因为闸门类 key 按定义就是少数几个
      * ({@link ThresholdKeys#GATING_KEYS}), 乘以工厂数也远到不了 5000。
      */
-    private final Cache<String, FactoryThreshold> gatingCache;
+    private Cache<String, FactoryThreshold> gatingCache;
 
-    @Autowired
     public ThresholdResolverServiceImpl(FactoryThresholdRepository repository) {
-        this(repository, Ticker.systemTicker());
+        this.repository = repository;
+        buildCaches(Ticker.systemTicker());
     }
 
     /**
-     * 测试用构造器 —— 传一个可推进的 {@link Ticker} 才能<b>在不 sleep 的前提下</b>
-     * 真正观测到两档 TTL 的行为差异。
-     *
-     * <p>⚠️ 没有它的话, 「闸门类走短 TTL」这件事只能靠断言两个 Cache 对象不同来"证明",
-     * 而那种断言守的是实现细节, 不是行为。
+     * 两档缓存的<b>唯一</b>构建处 —— 生产和测试建的是同一段代码，
+     * 所以测试量到的 TTL 就是生产在用的那两个常量。
      */
-    ThresholdResolverServiceImpl(FactoryThresholdRepository repository, Ticker ticker) {
-        this.repository = repository;
+    private void buildCaches(Ticker ticker) {
         this.cache = Caffeine.newBuilder()
                 .expireAfterWrite(Duration.ofMinutes(STANDARD_CACHE_TTL_MINUTES))
                 .maximumSize(5000)
@@ -120,6 +115,22 @@ public class ThresholdResolverServiceImpl implements ThresholdResolverService {
                 .maximumSize(500)
                 .ticker(ticker)
                 .build();
+    }
+
+    /**
+     * 【测试专用】换一个可手动推进的 {@link Ticker} 并重建两档缓存。
+     *
+     * <p><b>为什么需要它</b>: 「两档 TTL」是与时间有关的行为。不推进时钟就只能断言
+     * 「有两个不同的 Cache 对象」—— 那守的是实现细节，把 TTL 改回 5 分钟它照样绿。
+     *
+     * <p>⛔ <b>为什么不做成第二个构造器</b> (2026-08-29 实测的代价): 加了
+     * {@code (repository, Ticker)} 构造器之后，Mockito 的 {@code @InjectMocks} 会挑
+     * <b>参数最多</b>的那个并给填不上的参数塞 {@code null} ⇒ {@code Caffeine.ticker(null)}
+     * 当场 NPE。<b>本类之外</b>的 {@code InventoryHealthThresholdOverlayTest} 因此整类挂掉 ——
+     * 「我只改了这一处」而红在别人家里。⇒ 保持<b>单构造器</b>，注入器就没得挑。
+     */
+    void useTickerForTest(Ticker ticker) {
+        buildCaches(ticker);
     }
 
     // ==================== Typed getters ====================
