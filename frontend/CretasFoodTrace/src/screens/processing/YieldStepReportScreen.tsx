@@ -45,6 +45,7 @@ import {
   type StepTaskLike,
 } from './yieldStepResolution';
 import { buildSemiOutputsPayload } from './yieldStepOutputPayload';
+import { formatQtyHint } from './yieldHintFormat';
 
 type YieldStepReportParams = {
   batchId: number;
@@ -1029,7 +1030,7 @@ const YieldStepReportScreen: React.FC = () => {
       ? `可领上道半成品余额 ${effectiveWipAvailable} ${wipUnit} (本道最多领这么多)`
       : planned != null
         ? plannedMax != null && toleranceRate != null
-          ? `计划 ${planned} ${unit}, 可投上限约 ${Math.round(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
+          ? `计划 ${planned} ${unit}, 可投上限约 ${formatQtyHint(plannedMax)} (含 ${formatTolerancePct(toleranceRate)} 超收)`
           : `计划 ${planned} ${unit} (超收上限按工厂配置的容差, 正在读取)`
         : null;
   const inputNumeric = parseFloat(inputQty);
