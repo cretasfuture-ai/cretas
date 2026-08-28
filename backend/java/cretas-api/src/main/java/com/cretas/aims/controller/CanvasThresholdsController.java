@@ -1,6 +1,6 @@
 package com.cretas.aims.controller;
 
-import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.canvas.FactoryThreshold;
 import com.cretas.aims.entity.canvas.ThresholdCategory;
@@ -34,30 +34,50 @@ import java.util.UUID;
  * <p>4-in-1 UX (per fool-proof Rule + qa-prompt v2.4): all error responses include
  * actionHint + severity + hintTarget when applicable.
  *
- * <h2>门禁 (2026-08-29 换掉硬编码角色白名单)</h2>
- * 读 {@code system:read} / 写 {@code system:read_write}，与
- * {@link FactorySettingsController} 的「工厂设置」写端点<b>同一个模型</b>。
+ * <h2>门禁 (2026-08-29)</h2>
+ * 保留 {@code @RequireRole} 白名单，<b>只把餐饮角色加进去</b>：
+ * 读 = {@code factory_super_admin / permission_admin / restaurant_owner / restaurant_manager}，
+ * 写 = 前三个（{@code restaurant_manager} 只读）。
  *
- * <p><b>换掉的是什么</b>: 原来是
- * {@code @RequireRole({"factory_super_admin","permission_admin","factory_admin"})} ——
- * 一份<b>手写的角色名清单</b>，它是权限矩阵的第二份副本，而副本一定会漂：
+ * <p><b>修的是什么</b>: 原白名单没有 {@code restaurant_owner}
+ * ⇒ <b>餐饮租户老板配不了任何阈值</b>，尽管 L1 权限表 (V20261029_62) 给了他 {@code system='rw'}。
+ * 同时移除了 {@code factory_admin} —— 它<b>根本不是</b> {@code FactoryUserRole} 的枚举值，
+ * 从写下那天起就是一条永远不匹配的死条目。
+ *
+ * <h3>🔴 为什么<b>不</b>换成 {@code @RequirePermission("system:*")}</h3>
+ * 那是最初的方案，<b>生产实测后撤回</b>。按角色查生产账号：
  * <ul>
- *   <li>{@code factory_admin} <b>根本不是</b> {@code FactoryUserRole} 的枚举值
- *       (2026-08-29 实测枚举 30 个值里没有它) ⇒ 那一项从写下那天起就是死条目</li>
- *   <li>餐饮租户老板 {@code restaurant_owner} 不在清单里 ⇒ <b>他配不了任何阈值</b>，
- *       尽管 L1 权限表 (V20261029_62) 明确给了他 {@code system='rw'}。
- *       新加一个角色要记得来改这里 —— 而没有任何东西会提醒你</li>
+ *   <li>{@code permission_admin} → <b>{@code lsm001} @ LIUSHANMEN（真实客户），活跃</b>。
+ *       L1 {@code V20260422_01:394} 给它 {@code system='-'}
+ *       ⇒ 换成权限码后<b>它会失去访问</b></li>
+ *   <li>{@code restaurant_owner} → 只有 {@code mock_owner} @ MOCK_REST（<b>模拟</b>租户）</li>
+ *   <li>平台管理员 ({@code super_admin} / {@code developer} / {@code platform_super_admin})
+ *       → {@code RequireRoleInterceptor:73} 有 {@code PLATFORM_ADMIN_ROLES} 放行，
+ *       而 {@code PermissionInterceptor} <b>没有</b>，且它按 {@code userRepository.findById}
+ *       解析用户 —— 平台管理员在<b>独立的 {@code platform_admins} 表</b>里，
+ *       那次查找要么落空 (401)，要么解析到<b>同 id 的另一个工厂用户</b></li>
+ *   <li>{@code dispatcher} / {@code department_admin} (3 个活跃账号) 会<b>新获得只读</b></li>
  * </ul>
  *
- * <p>⚠️ <b>三种注解不是一回事</b>，本次只换其中一种：
+ * ⇒ 那笔交易是「<b>为了让一个模拟租户的账号能配，代价是真实客户的账号配不了</b>」。不划算。
+ *
+ * <p>⚠️ <b>三种注解不是一回事</b>：
  * <ul>
- *   <li>{@code @RequirePermission("module:action")} —— 走 RBAC 权限矩阵
- *       (L2 工厂覆盖 → L1 平台默认 → 代码里的 fallback 矩阵)。<b>本类用它</b></li>
+ *   <li>{@code @RequireRole({...})} —— 角色名白名单，<b>本类用它</b>，自带平台管理员放行</li>
+ *   <li>{@code @RequirePermission("module:action")} —— 走 RBAC 矩阵
+ *       (L2 工厂覆盖 → L1 平台默认 → 代码 fallback)。⛔ 本类<b>不</b>用，理由见上</li>
  *   <li>{@code @RequireModule("x")} —— 问的是<b>这家工厂启没启用这个模块</b>
- *       (租户功能开关)，与「这个人有没有权限」正交。阈值中心不是可关闭的业务模块，
- *       ⛔ 不加</li>
- *   <li>{@code @RequireRole({...})} —— 角色名白名单，就是本次换掉的那个</li>
+ *       (租户功能开关)，与「这个人有没有权限」正交。阈值中心不是可关闭的业务模块，⛔ 不加</li>
  * </ul>
+ *
+ * <p>⚠️ 三者是 <b>AND</b>（拦截器 order 3/4/5 依次执行）⇒ 同时挂两种会静默收紧，
+ * 而读代码的人通常只会看到其中一个。
+ *
+ * <p>⛔ <b>白名单确实是权限矩阵的第二份副本，会漂</b>（{@code factory_admin} 就是漂出来的）。
+ * 本次没有消除这份副本，只是把它改对 —— 消除它要求先修好
+ * {@code PermissionInterceptor} 缺失的平台管理员放行、以及 L1 里
+ * {@code permission_admin.system='-'} 这两件事，那是独立的一件工作。
+ * {@code CanvasThresholdsControllerPermissionTest} 钉住白名单不再漂。
  *
  * @since Canvas Phase A (2026-05-21)
  */
@@ -81,7 +101,7 @@ public class CanvasThresholdsController {
 
     @GetMapping
     @Operation(summary = "列出工厂的所有阈值 (可按 category 过滤)")
-    @RequirePermission("system:read")
+    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner", "restaurant_manager"})
     public ApiResponse<List<FactoryThreshold>> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String category) {
@@ -182,7 +202,7 @@ public class CanvasThresholdsController {
      */
     @GetMapping("/{key}")
     @Operation(summary = "查询单个阈值 (按 thresholdKey; per-factory 缺失时回落全局默认)")
-    @RequirePermission("system:read")
+    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner", "restaurant_manager"})
     public ApiResponse<FactoryThreshold> getByKey(
             @PathVariable String factoryId,
             @PathVariable String key) {
@@ -209,7 +229,7 @@ public class CanvasThresholdsController {
 
     @PostMapping
     @Operation(summary = "创建阈值 (新增 per-factory 配置)")
-    @RequirePermission("system:read_write")
+    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
     @Transactional
     public ApiResponse<FactoryThreshold> create(
             @PathVariable String factoryId,
@@ -260,7 +280,7 @@ public class CanvasThresholdsController {
 
     @PutMapping("/{id}")
     @Operation(summary = "修改阈值 (partial PATCH, Map body)")
-    @RequirePermission("system:read_write")
+    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
     @Transactional
     public ApiResponse<FactoryThreshold> update(
             @PathVariable String factoryId,
@@ -348,7 +368,7 @@ public class CanvasThresholdsController {
 
     @DeleteMapping("/{id}")
     @Operation(summary = "软删除阈值")
-    @RequirePermission("system:read_write")
+    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
     @Transactional
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
@@ -370,7 +390,7 @@ public class CanvasThresholdsController {
 
     @PostMapping("/reset-to-default")
     @Operation(summary = "按类别批量重置阈值到默认值")
-    @RequirePermission("system:read_write")
+    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
     @Transactional
     public ApiResponse<Integer> resetCategoryToDefault(
             @PathVariable String factoryId,
