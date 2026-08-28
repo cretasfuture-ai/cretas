@@ -57,6 +57,27 @@ public class ProductRetirementGuard {
     private final SalesOrderItemRepository salesOrderItemRepository;
 
     /**
+     * 「这次写入是不是一次下架」—— {@code isActive: true → false}。
+     *
+     * <p>🔴 <b>这是本项判据的唯一定义</b>, 调用方一律引用它, ⛔ 不许各自手写一份
+     * {@code isActive != null && !isActive && 旧值为 true}。调用方需要它是因为
+     * 「闸没注入时要不要拒绝」只在下架方向上才成立 —— 但那不构成再写一份的理由。
+     *
+     * <p>写第一版时确实写成了两份(闸里一份、三个调用点各一份), 变异对照当场抓到:
+     * 把闸里那份改坏, <b>入口侧的方向阴性对照纹丝不动</b> —— 因为调用点自己那份先短路了。
+     * 两份判据里坏掉一份, 另一份会替它遮住。收成一份之后, 同一个变异在两层同时变红。
+     *
+     * @param product     当前(未修改的)产品实体, {@code getIsActive()} 必须还是库里的旧值
+     * @param newIsActive 即将写入的新值; null 表示「这次不改状态」
+     */
+    public static boolean isRetirement(ProductType product, Boolean newIsActive) {
+        return product != null
+                && Boolean.TRUE.equals(product.getIsActive())   // 旧值必须是「在售」
+                && newIsActive != null                          // null = 不动状态字段
+                && !Boolean.TRUE.equals(newIsActive);           // 新值必须是「下架」
+    }
+
+    /**
      * 在把 {@code isActive} 写进实体<b>之前</b>调用。
      *
      * @param product      当前(未修改的)产品实体, {@code getIsActive()} 必须还是库里的旧值
@@ -64,13 +85,8 @@ public class ProductRetirementGuard {
      * @throws BusinessException 409 + {@link #ERROR_CODE}, 消息里带受影响的订单号
      */
     public void assertRetirable(ProductType product, Boolean newIsActive) {
-        if (product == null) return;
-
-        boolean currentlyActive = Boolean.TRUE.equals(product.getIsActive());
-        boolean nextActive = Boolean.TRUE.equals(newIsActive);
-
         // 只拦 true → false。上架 / 重复写 false / 不改状态 全部放行。
-        if (!currentlyActive || newIsActive == null || nextActive) return;
+        if (!isRetirement(product, newIsActive)) return;
 
         List<String> orderNumbers = salesOrderItemRepository.findInFlightOrderNumbersByProduct(
                 product.getFactoryId(), product.getId(), OrderUsageWhitelists.SO_PLANNABLE);

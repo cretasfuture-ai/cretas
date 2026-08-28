@@ -161,9 +161,10 @@ public class ProductTypeServiceImpl implements ProductTypeService {
      * @param newIsActive 即将写入的新值
      */
     private void assertRetirable(ProductType product, Boolean newIsActive) {
+        // 方向判据引用 guard 里的唯一定义, ⛔ 不在这里重写一份 (重写会让闸里那份坏掉时
+        // 入口侧的阴性对照仍然是绿的 —— 变异对照实测过)。
         // 只有 true → false 才需要闸; 其余方向连闸都不用在场。
-        if (product == null || !Boolean.TRUE.equals(product.getIsActive())
-                || newIsActive == null || Boolean.TRUE.equals(newIsActive)) {
+        if (!com.cretas.aims.service.product.ProductRetirementGuard.isRetirement(product, newIsActive)) {
             return;
         }
         if (productRetirementGuard == null) {
