@@ -358,6 +358,7 @@ defineExpose({ finishPolygon, cancelDraft, hasPolygonDraft: () => polygonPoints.
     ref="surface" class="vue-flow__container floor-overlay floor-overlay--top"
     :style="{ pointerEvents: captureHit, cursor: isDrawingTool ? 'crosshair' : 'default' }"
     data-testid="floor-overlay-top"
+    data-text-resize-behavior="warehouse-text-resize-v1"
     @pointerdown="onSurfacePointerDown" @pointermove="onSurfacePointerMove" @dblclick="onSurfaceDoubleClick"
   >
     <g :transform="paneTransform">

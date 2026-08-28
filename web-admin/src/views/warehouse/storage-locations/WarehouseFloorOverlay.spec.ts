@@ -50,6 +50,12 @@ function mountOverlay(props: Partial<Record<string, unknown>> = {}) {
   });
 }
 
+it('在运行制品中保留文字缩放版本标记', () => {
+  const wrapper = mountOverlay();
+  expect(wrapper.get('[data-testid="floor-overlay-top"]').attributes('data-text-resize-behavior'))
+    .toBe('warehouse-text-resize-v1');
+});
+
 /**
  * 按下指针。
  *
