@@ -48,6 +48,12 @@ on:
       # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
+      # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
+      # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
+      # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。
+      # ⛔ 逐个文件列, 不用宽 glob: `src/main/java/**` 会把另一道元闸
+      # 「证明自己不过宽」的阴性对照变成恒真式(2026-08-28 实测踩过)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/WarehouseLayoutController.java'
       # 🔴 2026-08-27: 下面这些是 enumDisplayCoverage / salesStatusLabelsMatchBackend /
       # bomContractsSurvivingPageDeletion / seasoningProcessCategory 这几个 spec 用
       # readJava(...) **真读**的后端源码。建元判据闸当天实测: 24 个文件被读着,
@@ -93,6 +99,12 @@ on:
       # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
+      # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
+      # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
+      # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。
+      # ⛔ 逐个文件列, 不用宽 glob: `src/main/java/**` 会把另一道元闸
+      # 「证明自己不过宽」的阴性对照变成恒真式(2026-08-28 实测踩过)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/WarehouseLayoutController.java'
       # 🔴 2026-08-27: 下面这些是 enumDisplayCoverage / salesStatusLabelsMatchBackend /
       # bomContractsSurvivingPageDeletion / seasoningProcessCategory 这几个 spec 用
       # readJava(...) **真读**的后端源码。建元判据闸当天实测: 24 个文件被读着,
