@@ -31,6 +31,12 @@ module.exports = {
   ],
   testPathIgnorePatterns: [
     '/node_modules/',
+    // tests/vshot/ 是 Playwright 的逐屏视觉走查, 不是 jest 能跑的东西
+    // (它 import '@playwright/test', 而那个包**刻意不在 devDependencies 里** ——
+    //  见 tests/vshot/vshot.config.ts 顶部)。
+    // ⚠️ 与下面那条「摘掉 integration/screens」的债**不是**一回事: 那批是 jest 测试
+    // 被排除掉导致「红了看不见」; 这批 jest 从来就跑不了, 留着只会让 CI 恒红。
+    '/tests/vshot/',
     '/src/test/' // 忽略现有的测试目录
     // 2026-08-16: 摘掉 '/__tests__/integration/screens/'。
     //

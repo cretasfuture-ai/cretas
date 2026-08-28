@@ -49,11 +49,24 @@ export default function QIProfileScreen() {
     setLanguage(newLang);
   };
 
-  const [todayStats, setTodayStats] = useState({
-    inspected: 12,
-    passed: 11,
-    workHours: '7.5',
+  /**
+   * 今日统计。
+   *
+   * ⛔ 这里原本写死成 `{ inspected: 12, passed: 11, workHours: '7.5' }`,
+   * 而本文件一次接口都不调 —— `setTodayStats` 永远不会被触发。
+   * 于是屏上常年写着「今日检验 12」, 而同一租户**整个月**只有 13 条质检记录、
+   * 考勤页显示「暂无打卡记录」。
+   *
+   * 在接上真实数据源之前, 一律显示「—」: 不知道就说不知道, ⛔ 不要编一个数。
+   * TODO(接数据源): 今日检验/合格可由质检记录接口按 inspector + 当天过滤得到;
+   *                 工作时长要等考勤打卡真正启用。
+   */
+  const [todayStats] = useState<{ inspected: number | null; passed: number | null; workHours: string | null }>({
+    inspected: null,
+    passed: null,
+    workHours: null,
   });
+  const show = (v: number | string | null) => (v === null ? '—' : String(v));
 
   const handleLogout = () => {
     // Rule 2: 弹窗带账号上下文
@@ -187,17 +200,17 @@ export default function QIProfileScreen() {
       {/* 今日统计 */}
       <View style={styles.statsCard}>
         <View style={styles.statsItem}>
-          <Text style={styles.statsValue}>{todayStats.inspected}</Text>
+          <Text style={styles.statsValue}>{show(todayStats.inspected)}</Text>
           <Text style={styles.statsLabel}>{t('profile.todayInspected')}</Text>
         </View>
         <View style={styles.statsDivider} />
         <View style={styles.statsItem}>
-          <Text style={styles.statsValue}>{todayStats.passed}</Text>
+          <Text style={styles.statsValue}>{show(todayStats.passed)}</Text>
           <Text style={styles.statsLabel}>{t('profile.todayPassed')}</Text>
         </View>
         <View style={styles.statsDivider} />
         <View style={styles.statsItem}>
-          <Text style={styles.statsValue}>{todayStats.workHours}</Text>
+          <Text style={styles.statsValue}>{show(todayStats.workHours)}</Text>
           <Text style={styles.statsLabel}>{t('profile.workHours')}</Text>
         </View>
       </View>

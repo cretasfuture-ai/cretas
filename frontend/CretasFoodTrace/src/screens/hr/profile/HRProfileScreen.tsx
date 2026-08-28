@@ -165,21 +165,26 @@ export default function HRProfileScreen() {
           </Card.Content>
         </Card>
 
-        {/* 快捷统计 */}
+        {/* 快捷统计
+            ⛔ 这三个数以前是写死的 JSX 字面量: 45 在职员工 / 5 部门数量 / 96% 本月出勤。
+            实际租户是 22 人、0 个部门、出勤率 0.0% —— 而同一个角色的首页就显示着真值,
+            两屏对不上。在接上真实数据源之前显示「—」, ⛔ 不要编一个数。
+            TODO(接数据源): 首页用的 /personnel/statistics 就有 totalEmployees 与
+                            avgAttendanceRate; 部门数需要部门接口。 */}
         <Card style={styles.statsCard}>
           <Card.Content style={styles.statsContent}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>45</Text>
+              <Text style={styles.statValue}>—</Text>
               <Text style={styles.statLabel}>{t('profile.stats.activeStaff')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>5</Text>
+              <Text style={styles.statValue}>—</Text>
               <Text style={styles.statLabel}>{t('profile.stats.departmentCount')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>96%</Text>
+              <Text style={styles.statValue}>—</Text>
               <Text style={styles.statLabel}>{t('profile.stats.monthlyAttendance')}</Text>
             </View>
           </Card.Content>

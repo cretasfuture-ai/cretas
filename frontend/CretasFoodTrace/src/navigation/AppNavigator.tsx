@@ -4,7 +4,7 @@
  */
 import React, { useCallback, useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
-import { NavigationContainer } from "@react-navigation/native";
+import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Provider as PaperProvider } from "react-native-paper";
 import * as Notifications from "expo-notifications";
@@ -43,6 +43,21 @@ import { isRestaurant } from "../utils/factoryType";
 import WarehouseWorkerNavigator from "./WarehouseWorkerNavigator";
 
 const Stack = createNativeStackNavigator();
+
+/**
+ * 全局导航 ref。
+ *
+ * 用途一：从 React 树之外触发导航（推送通知点击、深链）——目前那条路径只打日志。
+ * 用途二：开发期把导航树暴露给自动化，逐屏截图走查需要跳转到任意已注册路由。
+ *
+ * ⚠️ 只在 __DEV__ 下挂到全局。生产包里这个 ref 仍然存在（供通知导航用），
+ * 但不对外暴露。
+ */
+export const navigationRef = createNavigationContainerRef();
+
+if (__DEV__ && typeof globalThis !== "undefined") {
+  (globalThis as Record<string, unknown>).__CRETAS_NAV__ = navigationRef;
+}
 
 /**
  * 根据用户角色选择导航器
@@ -194,7 +209,7 @@ export function AppNavigator() {
 
   return (
     <PaperProvider theme={theme}>
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator
           screenOptions={{
             headerShown: false,

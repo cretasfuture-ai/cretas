@@ -71,7 +71,10 @@
       "warning": "Warning",
       "good_above": "Good (above benchmark)",
       "caution_near": "Caution (near benchmark)",
-      "warning_below": "Warning (below benchmark)"
+      "warning_below": "Warning (below benchmark)",
+      "danger": "Critical",
+      "danger_below": "Critical (far below benchmark)",
+      "warning_near": "Warning (near the lower bound)"
     },
     "categories": {
       "profitability": "Profitability",
