@@ -1454,6 +1454,10 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "不能把没回答翻译成零不良" in current_sop
     assert "页面顶部列出已结单但不良品结论仍缺失的计划" in current_sop
     assert "良品率”显示 `—`" in current_sop
+    assert "每个生产批次按创建时固定的 BOM 版本核算材料成本" in current_sop
+    assert "没有计划量/计划成本时显示“—”" in current_sop
+    assert "不能把未知解释成 0 kg" in current_sop
+    assert "SPC 与因果分析当前没有系统内直接入口" in current_sop
     assert "kg/g 等质量单位只在同量纲内科学换算" in current_sop
     assert "每单位成品重量" in current_sop
     assert "当前 OA 节点明确只授权 `factory_super_admin`" in current_sop
@@ -1654,6 +1658,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
             "预测排班：门店、时段与未来范围",
             "盘点只认已完成",
             "今日营运台主动发现、峰值时段与行动建议",
+            "统一属于 <code>READ</code> 只读咨询",
+            "高峰时段查询可在咨询 tab 直接执行",
             "五部门驾驶舱",
             "AI 工作台",
             "营销员提成",
@@ -1761,6 +1767,8 @@ def test_restaurant_registered_sources_match_current_product_contract():
     assert "供应关系与 OA 当前节点" in ai_assist
     assert "日结菜品表与异常成本动作" in ai_assist
     assert "季度、追问时间窗与输出否定" in ai_assist
+    assert "未知数值与未支持分析边界" in ai_assist
+    assert "高峰时段只读查询边界" in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
     assert "指标口径与菜单目录裁决" in ai_assist
     assert "默认全店与当前限制" in ai_assist
