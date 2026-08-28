@@ -698,6 +698,7 @@
       "available": "可用",
       "reserved": "已预留",
       "depleted": "已用完",
+      "usedUp": "已耗尽",
       "expired": "已过期"
     }
   },
@@ -962,6 +963,7 @@
       "fresh": "新鲜",
       "reserved": "已预留",
       "depleted": "已用完",
+      "usedUp": "已耗尽",
       "expired": "已过期",
       "frozen": "冷冻中"
     }

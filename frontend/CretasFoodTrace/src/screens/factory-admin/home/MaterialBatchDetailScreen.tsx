@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { materialBatchApiClient, MaterialBatch } from '../../../services/api/materialBatchApiClient';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
+import { statusKey } from '../../../utils/statusKey';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'MaterialBatchDetail'>;
 type RoutePropType = RouteProp<FAHomeStackParamList, 'MaterialBatchDetail'>;
@@ -67,10 +68,11 @@ export function MaterialBatchDetailScreen() {
       fresh: '#48bb78',
       reserved: '#ed8936',
       depleted: '#a0aec0',
+      usedUp: '#a0aec0',
       expired: '#e53e3e',
       frozen: '#4299e1',
     };
-    return colors[status] || '#a0aec0';
+    return colors[statusKey(status)] || '#a0aec0';
   };
 
   const getStatusLabel = (status: string): string => {
@@ -79,10 +81,11 @@ export function MaterialBatchDetailScreen() {
       fresh: t('materialBatchDetail.status.fresh'),
       reserved: t('materialBatchDetail.status.reserved'),
       depleted: t('materialBatchDetail.status.depleted'),
+      usedUp: t('materialBatchDetail.status.usedUp'),
       expired: t('materialBatchDetail.status.expired'),
       frozen: t('materialBatchDetail.status.frozen'),
     };
-    return labels[status] || status;
+    return labels[statusKey(status)] || status;
   };
 
   const formatDate = (dateStr?: string): string => {

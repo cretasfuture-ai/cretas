@@ -19,6 +19,7 @@ import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAHomeStackParamList } from '../../../types/navigation';
 import { materialBatchApiClient } from '../../../services/api/materialBatchApiClient';
+import { statusKey } from '../../../utils/statusKey';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'MaterialBatch'>;
 
@@ -81,14 +82,27 @@ export function MaterialBatchScreen() {
     loadData();
   }, [loadData]);
 
+  /**
+   * 后端发的是**大写**枚举（生产实测：AVAILABLE 106 / DEPLETED 60 / USED_UP 15），
+   * 而下面两张表原来用的是**小写**键 —— `colors[status]` / `labels[status]` 全部落空。
+   *
+   * 后果（2026-08-29 逐屏走查实测）：
+   *   · 状态文字兜底到 `|| status`，屏上直接显示英文 `AVAILABLE`
+   *   · 颜色兜底到灰色 —— **181 个批次的状态徽章全是灰的**，这个徽章从来没工作过
+   *   · `USED_UP`（15 条）在表里**根本没有**，即使大小写对上也无法翻译
+   *
+   * ⇒ 统一按小写查，并补上 usedUp。
+   * ⛔ 不要只把键改成大写 —— 那样接口哪天改回小写又会全部落空。
+   */
   const getStatusColor = (status: string): string => {
     const colors: Record<string, string> = {
       available: '#48bb78',
       reserved: '#ed8936',
       depleted: '#a0aec0',
+      usedUp: '#a0aec0',
       expired: '#e53e3e',
     };
-    return colors[status] || '#a0aec0';
+    return colors[statusKey(status)] || '#a0aec0';
   };
 
   const getStatusLabel = (status: string): string => {
@@ -96,9 +110,12 @@ export function MaterialBatchScreen() {
       available: t('materialBatch.status.available'),
       reserved: t('materialBatch.status.reserved'),
       depleted: t('materialBatch.status.depleted'),
+      usedUp: t('materialBatch.status.usedUp'),
       expired: t('materialBatch.status.expired'),
     };
-    return labels[status] || status;
+    // 兜底仍然回落到原始串 —— 那是「我们没见过这个状态」的诚实表现，
+    // ⛔ 但它不该是常态。真出现说明后端又加了新枚举, 要补进上面。
+    return labels[statusKey(status)] || status;
   };
 
   const renderBatchItem = ({ item }: { item: MaterialBatch }) => (
