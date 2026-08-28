@@ -869,10 +869,11 @@
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-3"><span></span></span><span><h4>核对盘点确认后的副产抵扣</h4><p>先在生产仓盘点中核对副产实物并由有权限人员确认单价，再到“成品出厂核算”查看抵扣明细、总成本、净成本和单盒净成本。</p><span class="expect">抵扣额=Σ(盘点实际数量×确认单价)，净成本=总成本−已确认抵扣；单价或实盘数量未确认时显示“未抵扣”而不是 0，前端不得自行重算。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-4"><span></span></span><span><h4>核对成品出厂核算六桶</h4><p>按销售订单/生产批次选择本轮数据，核对 traced 原料、工序辅料、包材、人工、设备、其他和最终盒数。</p><span class="expect">闭环总成本可由各桶相加解释；单盒成本=净总成本÷真实入库盒数。若页面提示某成本未按本道分摊，记录为当前口径而非强行拆分。</span></span></label>
           <label class="step"><span class="check"><input type="checkbox" data-key="cost-5"><span></span></span><span><h4>核对成本汇总与权限</h4><p>进入“成本汇总”，按订单日期范围查询；把本销售订单的产量、出成率、材料/人工/设备/其他、总成本和单盒成本与明细页对齐。</p><span class="expect">一张订单一行，明细与汇总一致；无价格查看权限的角色显示脱敏“—”，不会泄露或显示假 0。</span></span></label>
-          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-6"><span></span></span><span><h4>核对 BOM 达成率</h4><p>按计划、批次和工序比较 BOM 理论投入与正式报工实际投入，查看数量差异、比例和原因。</p><span class="expect">理论口径来自计划固定的 BOM 版本；替代原料按替代组归类但保留真实 SKU，不把差异静默归零。</span></span></label>
+          <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-6"><span></span></span><span><h4>核对 BOM 达成率</h4><p>按计划、批次和工序比较计划固定 BOM 的理论投入与正式报工实际投入，查看数量差异、比例和原因。</p><span class="expect">理论口径只来自该批次创建时固定的 BOM 版本；同一产品不同批次固定版本不一致时必须提示并分别核算。没有计划量或计划成本时达成率没有定义，显示“—”并说明缺少计划数据，不能显示 100%、0% 或“零超耗”。替代原料按替代组归类但保留真实 SKU，不把差异静默归零。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-7"><span></span></span><span><h4>核对工序投入产出与损耗率</h4><p>逐道查看投入、合格产出、留样、损耗、副产和下一工序接收量，计算转化率与差异。</p><span class="expect">各工序数量能沿批次谱系衔接；跨单位仅按已有科学换算，不用假 1:1 补齐。</span></span></label>
           <label class="step" data-min-depth="full"><span class="check"><input type="checkbox" data-key="cost-8"><span></span></span><span><h4>核对三价、交期预警与补货队列</h4><p>对同一成品回看标准/计划/实际成本口径，并检查订单交期预警、缺料补货队列和实时生产报表。</p><span class="expect">三种价格有明确来源和时间点；预警与实际计划、采购和库存状态同步，不用历史快照伪装实时。</span></span></label>
         </div>
+        <div class="callout warning"><strong>未知值与未支持分析必须诚实显示</strong>批次总重量只有在单件重量与入库数量都存在时才可计算；任一输入缺失时保持“—/未知”，不能把未知批次说成 0 kg。良品率只在真实良品数量与实际产量齐备时计算；缺少分子时清空旧派生值，不显示 100% 或 0%。SPC 与因果分析当前没有系统内直接入口，AI 必须明确说明“不支持”，不能生成假图、假结论或把基础质检说成统计过程控制；如需分析，只能导出当前真实质检/报工数据交由外部工具处理。</div>
       </section>
 
       <section id="sales-close" class="sales-only">
