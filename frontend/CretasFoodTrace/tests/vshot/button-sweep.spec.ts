@@ -25,7 +25,9 @@
  *   · 每一条非 GET 都逐条打印，⛔ 不做汇总
  */
 import { test, expect } from '@playwright/test';
-import { waitForApp, navRefReady, login, navigateTo, screenText } from './vshot-lib';
+import {
+  waitForApp, navRefReady, login, navigateTo, screenText, rootState, collectRouteNames,
+} from './vshot-lib';
 
 const APP = process.env.VSHOT_APP ?? 'http://localhost:3021';
 const USER = process.env.VSHOT_USER ?? 'f006_admin';
@@ -42,8 +44,11 @@ const SHORT = 14;
 type Fired = { method: string; url: string; status?: number };
 
 test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page }) => {
+  // 路由来源两种：显式传 VSHOT_ROUTES，或留空让它自己把整棵树走一遍。
+  // ⚠️ 手写清单永远只覆盖「我想到的那些屏」——而目标是「所有的按钮」，
+  //    所以默认走自动发现（与 walkthrough 用的是同一套 collectRouteNames）。
   const routes = (process.env.VSHOT_ROUTES ?? '').split(';').filter(Boolean);
-  expect(routes.length, '要走的路由由 VSHOT_ROUTES 传入（分号分隔，斜杠分层）').toBeGreaterThan(0);
+  const SKIP = (process.env.VSHOT_SKIP ?? '').split(';').filter(Boolean);
 
   const fired: Fired[] = [];
   page.on('request', (r) => {
@@ -72,6 +77,44 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
   await waitForApp(page);
   await login(page, USER, '123456');
   await navRefReady(page);
+  await page.waitForTimeout(4000);
+
+  if (routes.length === 0) {
+    // 逐步 BFS: 每走一步重新采一次。
+    // ⚠️ 不能按「轮」采 —— 崩溃恢复要整页 reload, 而 reload 会把已挂载的 tab 全清空,
+    //    第一版因此只发现 12 条就收敛了, 看起来像「这棵树就这么大」。
+    const seen = new Set<string>();
+    const collect = async (): Promise<string[][]> => {
+      const m = collectRouteNames(await rootState(page));
+      const fresh: string[][] = [];
+      for (const [prefix, names] of m) {
+        for (const n of names as string[]) {
+          const p2 = [...prefix.split('/').filter(Boolean), n];
+          const k = p2.join('/');
+          if (!seen.has(k)) { seen.add(k); fresh.push(p2); }
+        }
+      }
+      return fresh;
+    };
+    const queue = await collect();
+    const leaves: string[] = [];
+    const containers = new Set<string>();
+    while (queue.length) {
+      const t = queue.shift() as string[];
+      await navigateTo(page, t).catch(() => {});
+      await page.waitForTimeout(900);
+      const fresh = await collect();
+      if (fresh.length) { containers.add(t.join('/')); queue.push(...fresh); }
+      leaves.push(t.join('/'));
+    }
+    let discovered = leaves.filter((r: string) => !containers.has(r) && r.includes('/'));
+    if (SKIP.length) {
+      discovered = discovered.filter((r: string) => !SKIP.some((sk: string) => r.includes(sk)));
+    }
+    routes.push(...discovered);
+    console.log(`自动发现 ${routes.length} 条叶子路由（容器 ${containers.size} 条已折叠）`);
+  }
+  expect(routes.length, '一条路由都没发现 —— 仪器坏了，读数作废').toBeGreaterThan(0);
 
   for (const route of routes) {
     const path = route.split('/');

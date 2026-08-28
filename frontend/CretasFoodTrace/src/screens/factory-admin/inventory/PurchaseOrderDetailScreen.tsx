@@ -9,6 +9,7 @@ import { formatNumberWithCommas } from '../../../utils/formatters';
 import { todayIso } from '../../../utils/orderDate';
 import { AttachmentList, AttachmentUploadButton } from '../../../components/attachment';
 import { useAuthStore } from '../../../store/authStore';
+import { MissingRouteParams } from '../../../components/common/MissingRouteParams';
 import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 import { AppDialogHost, appAlert, appPrompt } from '../../../components/ui';
 import { resolvePurchaseOrderStatus } from '../../../utils/purchaseOrderStatus';
@@ -23,13 +24,25 @@ export default function PurchaseOrderDetailScreen() {
   const user = useAuthStore((state) => state.user);
   const isOperationsReadOnly = isMobileBusinessObserver(user);
   const route = useRoute<RouteProp<FAManagementStackParamList, 'PurchaseOrderDetail'>>();
-  const { orderId } = route.params;
+  // ⚠️ 见 SalesOrderDetailScreen 同处注释: 裸解构会把整棵导航树打崩, 不只是这一屏。
+  const { orderId } = (route.params ?? {}) as { orderId?: string };
 
   const [order, setOrder] = useState<PurchaseOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [attachmentRefreshKey, setAttachmentRefreshKey] = useState(0);
 
-  useEffect(() => { loadOrder(); }, [orderId]);
+  useEffect(() => { if (orderId) loadOrder(); }, [orderId]);
+
+  // ⛔ 必须在所有 hook 之后。
+  if (!orderId) {
+    return (
+      <MissingRouteParams
+        title="采购单详情"
+        hint="请从采购单列表点开一张单子进入。"
+        onBack={() => navigation.goBack()}
+      />
+    );
+  }
 
   const loadOrder = async () => {
     try {

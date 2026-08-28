@@ -7,6 +7,7 @@ import { FAManagementStackParamList } from '../../../types/navigation';
 import { salesApiClient, SalesOrder } from '../../../services/api/salesApiClient';
 import { formatNumberWithCommas } from '../../../utils/formatters';
 import { useAuthStore } from '../../../store/authStore';
+import { MissingRouteParams } from '../../../components/common/MissingRouteParams';
 import { isMobileBusinessObserver } from '../../../utils/mobileRoleBoundaries';
 
 type Nav = NativeStackNavigationProp<FAManagementStackParamList>;
@@ -28,12 +29,26 @@ export default function SalesOrderDetailScreen() {
   const user = useAuthStore((state) => state.user);
   const isOperationsReadOnly = isMobileBusinessObserver(user);
   const route = useRoute<RouteProp<FAManagementStackParamList, 'SalesOrderDetail'>>();
-  const { orderId } = route.params;
+  // ⚠️ 不能写成 `const { orderId } = route.params` —— 没有 params 时它**直接抛**，
+  //    而 AppErrorBoundary 接住的是整棵导航树: 一屏崩掉, 整个 App 白屏只能重来。
+  //    (2026-08-29 全树走查实测: 43 条路由里就这一屏和采购单详情是这个形状。)
+  const { orderId } = (route.params ?? {}) as { orderId?: string };
 
   const [order, setOrder] = useState<SalesOrder | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { loadOrder(); }, [orderId]);
+  useEffect(() => { if (orderId) loadOrder(); }, [orderId]);
+
+  // ⛔ 这个 early return 必须在**所有 hook 之后** —— 提到 hook 中间就违反 hooks 规则。
+  if (!orderId) {
+    return (
+      <MissingRouteParams
+        title="销售单详情"
+        hint="请从销售单列表点开一张单子进入。"
+        onBack={() => navigation.goBack()}
+      />
+    );
+  }
 
   const loadOrder = async () => {
     try {
