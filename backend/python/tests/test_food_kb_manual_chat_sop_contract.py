@@ -1304,6 +1304,8 @@ def test_restaurant_proactive_findings_keep_three_states_and_grounded_actions():
         "店长不提问能看到什么，餐饮现在有几个部门？",
         "今日营运台的主动发现和行动建议怎么理解？",
         "谜题菜、损耗提示、几点最忙分别怎么理解？",
+        "查询高峰时段会不会修改订单、排班或门店数据？",
+        "高峰时段查询为什么是只读咨询，不需要写确认？",
     )
     assert all(
         _needs_restaurant_proactive_findings_guard(q) for q in equivalent_questions
@@ -1313,6 +1315,8 @@ def test_restaurant_proactive_findings_keep_three_states_and_grounded_actions():
     assert "数据不足或不可比属于“跳过”" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
     assert "规则查询失败属于“失败”" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
     assert "高单位贡献毛利、低销量" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "统一属于 `READ` 只读咨询" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
+    assert "不会修改订单、排班或门店数据" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
     assert "不能生成事实中没有的" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
     assert "每条已渲染事实彼此独立" in _RESTAURANT_PROACTIVE_FINDINGS_ANSWER
     assert "不能把谜题菜和损耗等无关发现揉成一件事" in (
