@@ -308,6 +308,7 @@
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
               @add-byproduct="addOutputToProcess(slotProps.id, { byproduct: true })"
+              @add-rework="addOutputToProcess(slotProps.id, { rework: true })"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
               @edit-process="openQuickEditProcess(slotProps.id)"
               @delete="removeNode(slotProps.id)"
@@ -4107,7 +4108,7 @@ function createRawInputCell(
 }
 
 /**
- * 工序「产出分流」—— 主产出与副产走**同一条路径**, 只差 data 上的一个标记。
+ * 工序「产出分流」—— 主产出/副产/回料走**同一条路径**, 只差 data 上的一个标记。
  *
  * 2026-08-07 阶段 2: 副产从 BOM 浮层(`bom-overlay:byp:*`)改成真实产出节点。
  * 设计定稿要求「复用已有的『＋ 产出 Cell（分流）』入口, 不新造入口」——
@@ -4117,11 +4118,19 @@ function createRawInputCell(
  *
  * 为什么不是 `kind: 'BYPRODUCT'`: 见 MaterialNodeData.isByproduct 的注释 ——
  * 副产是与材质分类正交的标记, 不是第 5 种 kind。
+ *
+ * 2026-08-28: 回料(isRework)照同一形状加了第三个 flag —— 同样不新造入口/函数。
+ * ⛔ 回料与副产刻意分开两个键, 不合并: 副产端口会被后端 getOutputOptions 过滤掉
+ * (不出现在报工屏), 回料端口必须留在选项里让操作员填数, 合并会让回料要么进不了
+ * 报工屏、要么丢掉成本。
  */
-function addOutputToProcess(processId: string, options: { byproduct?: boolean } = {}): void {
+function addOutputToProcess(processId: string, options: { byproduct?: boolean } & { rework?: boolean } = {}): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   const isByproduct = options.byproduct === true;
+  // 回料 = 金检/X光 剔出的不良品去处。与副产刻意分开:
+  // 副产端口会被后端 getOutputOptions 过滤掉, 回料端口必须留在选项里让操作员填数。
+  const isRework = options.rework === true;
   // 建了副产 cell 才去拉副产档案 —— 不建就不请求。⚠️ 不 await: 建节点必须立即可见,
   // 档案回来后下拉自然填充; 真空列表的解释文案由节点自己给(见 WorkflowMaterialNode)。
   if (isByproduct) void ensureByproductMaterialOptions();
@@ -4130,6 +4139,9 @@ function addOutputToProcess(processId: string, options: { byproduct?: boolean } 
     const outputCount = data.ports.filter((port) => port.direction === 'OUTPUT').length;
     const byproductCount = flowNodes.value.filter(
       (node) => node.type === 'material' && (node.data as MaterialNodeData)?.isByproduct === true,
+    ).length;
+    const reworkCount = flowNodes.value.filter(
+      (node) => node.type === 'material' && (node.data as MaterialNodeData)?.isRework === true,
     ).length;
     const timestamp = nextGraphIdSeed();
     const materialId = `material:output:${timestamp}`;
@@ -4140,12 +4152,13 @@ function addOutputToProcess(processId: string, options: { byproduct?: boolean } 
       position: snapPosition({ x: process.position.x + 480, y: process.position.y + outputCount * 160 }),
       data: {
         kind: 'SEMI_FINISHED',
-        name: isByproduct ? `副产 ${byproductCount + 1}` : `产出半成品 ${outputCount + 1}`,
+        name: isByproduct ? `副产 ${byproductCount + 1}` : isRework ? `回料 ${reworkCount + 1}` : `产出半成品 ${outputCount + 1}`,
         skuId: '',
         skuCode: '待选择或现场创建 SKU',
         bound: false,
         baseUnit: 'kg',
         ...(isByproduct ? { isByproduct: true } : {}),
+        ...(isRework ? { isRework: true } : {}),
       },
     });
     data.ports = [
