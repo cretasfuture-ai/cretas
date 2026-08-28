@@ -24,7 +24,9 @@ import java.util.List;
  *       {@code data.isByproduct} on the canvas (see {@code WorkflowByproductNodes}); a single
  *       task can legitimately contribute more than one item (2B.2 multi-output). {@code semiCode}
  *       is the resolved {@code ProductType.code} (e.g. {@code PTSEMI-F006-2001}), not the raw
- *       {@code skuId} UUID.</li>
+ *       {@code skuId} UUID. 回料端口 (画布 {@code data.isRework} 标记, 见 {@code WorkflowReworkNodes})
+ *       与副产恰好相反 —— 刻意<b>保留</b>并在 {@link OutputOptionItem#getIsRework()} 上打标记, 不过滤掉:
+ *       金检/X光剔出的不良品仍要能选成产出目标, 回料链路才走得通。</li>
  * </ul>
  */
 @Data

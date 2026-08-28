@@ -29,6 +29,7 @@ import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.wip.WipLedgerEntries;
+import com.cretas.aims.service.wip.WipSemiOutputPlan;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -129,7 +130,17 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         boolean isSemi = "SEMI".equals(outputKind) || "BOTH".equals(outputKind);
         boolean isFinished = outputKind == null || "FINISHED".equals(outputKind) || "BOTH".equals(outputKind);
 
-        if (isSemi) {
+        // 多产出优先: semiOutputs 非空时逐条入账 (画布 1 进 N 出)。
+        // ⛔ 为空时必须走原来的单产出路径 —— 旧版 App 与存量报工零回归。
+        List<Map<String, Object>> multiOutputs = WipSemiOutputPlan.postableEntries(report.getSemiOutputs());
+        if (!multiOutputs.isEmpty()) {
+            for (Map<String, Object> entry : multiOutputs) {
+                // ⛔ 不在这里另写一份解析 —— 与 postableEntries 用同一份, 否则「能不能入账」
+                //    和「入多少」两个判断会漂到不一致。
+                postSemiOutputLedgerFor(factoryId, report, task, operatorId,
+                        WipSemiOutputPlan.semiCodeOf(entry), WipSemiOutputPlan.quantityOf(entry));
+            }
+        } else if (isSemi) {
             postSemiOutputLedger(factoryId, report, task, operatorId);
         }
 
@@ -180,22 +191,36 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      */
     private void postSemiOutputLedger(String factoryId, ProductionReport report,
                                        WorkProcessTask task, Long operatorId) {
-        String semiCode = report.getSemiCode();
-        BigDecimal inQty = report.getSemiOutputQuantity();
+        postSemiOutputLedgerFor(factoryId, report, task, operatorId,
+                report.getSemiCode(), report.getSemiOutputQuantity());
+    }
+
+    /**
+     * Task 4 Step 8: 单产出路径抽出的通用入账体 —— 多产出 ({@code semiOutputs} 非空) 时
+     * 由 {@link #postApprovedOutput} 对每个条目各调一次; 单产出路径由 {@link #postSemiOutputLedger}
+     * 委派 {@code report.getSemiCode()}/{@code report.getSemiOutputQuantity()} 调这里, 行为零回归。
+     */
+    private void postSemiOutputLedgerFor(String factoryId, ProductionReport report,
+                                          WorkProcessTask task, Long operatorId,
+                                          String semiCode, BigDecimal inQty) {
         // R4: backward-compat — skip if fields absent
         if (semiCode == null || semiCode.isBlank() || inQty == null || inQty.compareTo(BigDecimal.ZERO) <= 0) {
             log.debug("[SP1-semi] skip postSemiOutputLedger for report {}: semiCode={} qty={}", report.getId(), semiCode, inQty);
             return;
         }
 
-        // Fool-Proof Rule 4 — idempotency guard: 以 report_id 为幂等键 (同一份报工不重复入账)。
-        // ⚠️ BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP: 旧实现用 (factoryId, semiCode, IN), 但 IN txn 的
-        //   sourceRef 也是 semiCode → 同一半成品码的合法第二批生产被误判"已存在"跳过, 移动均价不累加。
-        //   改用 report_id (每份报工唯一) → 第二批(不同 report)正常入账累加, 重复提交同一 report 仍幂等。
+        // Fool-Proof Rule 4 — idempotency guard: (report_id, sourceRef=semiCode, IN) 为幂等键。
+        // ⚠️ BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP: 更早的实现用过 (factoryId, semiCode, IN) 判重, 但那会让
+        //   同一半成品码的合法第二批生产被误判"已存在"跳过, 移动均价不累加 —— 因此改成 report_id 为主键。
+        // Task 4 Step 8: 多产出 (画布 1 进 N 出) 下同一份报工要入 N 笔 IN, 只按 report_id 判重会把
+        //   第二个产出误判成"已入账"跳过 —— 回料就永远进不了库, 且不报错。补上 sourceRef=semiCode 这一条件,
+        //   使幂等键实际是 (factoryId, reportId, semiCode, IN)。单产出路径 sourceRef 本来就等于 semiCode
+        //   (见下方 txn.builder().sourceRef(semiCode))，这条件对旧路径是恒真式, 不改变旧行为。
         boolean alreadyPosted = txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
-                .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType()));
+                .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType())
+                        && semiCode.equals(t.getSourceRef()));
         if (alreadyPosted) {
-            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists for this report", report.getId(), semiCode);
+            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists for this report+semiCode", report.getId(), semiCode);
             return;
         }
 
@@ -1534,6 +1559,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      *   <li>副产 (画布 {@code data.isByproduct} 标记) 排除 —— 与 PR #2846 把副产接到报工端时
      *       "不再显示成半成品也不再独立成行"的语义保持一致, 不把副产误当"半成品产出选项"提供。
      *       唯一判据收敛在 {@link WorkflowByproductNodes}, 不在此处另写一份。</li>
+     *   <li>回料 (画布 {@code data.isRework} 标记) 与副产相反 —— 刻意<b>保留</b>在选项里, 只是打上
+     *       {@code isRework=true} 标记, 不排除: 金检/X光剔出的不良品要能被选成产出目标, 回料才有落库
+     *       的地方(见 Task 4 {@code postApprovedOutput} 对 {@code semiOutputs} 逐条入账)。唯一判据收敛
+     *       在 {@link WorkflowReworkNodes}, 不在此处另写一份。</li>
      *   <li>一个工序任务在画布上可以有多个 SEMI_FINISHED 产出端口(2B.2 多产出), 因此一个 taskId
      *       可能对应多条 item —— 与 legacy 单产出假设不同, 调用方(RN 报工屏)目前只消费
      *       {@code items[0]}, 多产出的选择 UI 是已知的后续缺口, 不在本次修复范围内。</li>

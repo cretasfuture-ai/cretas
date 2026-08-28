@@ -803,9 +803,13 @@ class WipInventoryServiceImplTest {
                 .build();
 
         // THIS report (602) already has an IN txn → idempotent skip (re-approval / retry of same report)
+        // Task 4 Step 8: 幂等键补了 sourceRef=semiCode 这一条件 (多产出下按条目区分) —— 真实生产的 IN txn
+        // 一律经 postSemiOutputLedgerFor 的 txn.builder().sourceRef(semiCode) 写入, 不可能是 null,
+        // 这条 mock 之前没设 sourceRef 是失真的桩 (旧断言只按 txnType 判重时不受影响, 现在会被漏判)。
         when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, 602L))
                 .thenReturn(List.of(SemiFinishedInventoryTransaction.builder()
                         .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                        .sourceRef("SEMI-BATCH-003")
                         .build()));
 
         service.postApprovedOutput(FACTORY_ID, report, task, 20L);
