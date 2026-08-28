@@ -1262,3 +1262,89 @@ I/ReactNativeJS: '[DEBUG-CONFIG] REACT_APP_API_URL from @env:', '"https://www.cr
 **一个都没打开** —— 驱动 UI 那条路断在 uiautomator 上，我没有继续硬试。
 ⇒ 「冷启动没看到 `Text strings must be rendered`」**不能**读成「那三屏没问题」，
    它只说明**启动路径上**没有。这一条仍然挂账。
+
+---
+
+## 附：那道红**不是**用户侧故障 —— 实测生产上的 AI 会话是好的
+
+`java-full-gate` 红在 `ToolExecutionTest`（Java → Python `chatWithTools` 那条路，HTTP 500）。
+为了判断「用户是不是也用不了 AI」，直接打了一次**App 侧**的入口：
+
+```
+POST /api/mobile/F006/conversation/start   {"userInput":"查一下成品库存"}
+→ HTTP 200
+→ "您想查询的成品库存是指哪方面的信息？请选择：
+   A. 查询成品（菜品）的食材库存情况 …"
+   candidates: RESTAURANT_INGREDIENT_STOCK(0.4) / RESTAURANT_DISH_COST_QUERY …
+```
+
+⇒ **生产上的 AI 会话正常**，会做澄清、会给候选意图。
+那条 CI 红是**另一条路径**（或自建 runner 上的另一个 Python 实例），
+⛔ 不能读成「线上 AI 挂了」。
+
+⚠️ **仪器自己又错了一次（本轮第 6 次，同一族第 3 次）**：
+第一次打这个接口拿到 `400 请求格式不正确` —— 不是接口的问题，
+是我在 shell 里内联中文 JSON，body 的编码被吃掉了。
+换成「先用 Python 以 UTF-8 落盘、再 `curl --data-binary @file`」立刻 200。
+
+▎同一族的另外两次：`document.body.innerText` 串屏（第二轮）、
+▎commit message 里的反引号被 shell 当成命令替换吃掉（第三轮两次）。
+▎**共同形状：内容要经过 shell 或某一层解释器时，先落盘，别内联。**
+（本仓 `measurement-and-wiring` 硬约束 6 说的就是这件事，我照犯了。）
+
+
+---
+
+# 第三轮部署记录（合并 + OTA + **真机送达**）
+
+## 合并
+
+PR **#293** 合入 main `ba1817a8f1`。合并前 RN 子树 hash 与我的分支完全相同（`40dba656…`）。
+
+⚠️ **是在 `java-full-gate` 红的情况下合的**，理由逐条写在 PR 的三条评论里，摘要：
+
+1. **红不是这个 PR 的** —— 对照：无关分支 `codex/claude-vat-caliber-fix` 在**同一条测试**上
+   同样形状红；我最后两次推送是**纯文档**，红仍在且从 1 条涨到 2 条。
+2. **不是用户侧故障** —— 实测生产 App 侧 AI 入口 HTTP 200 且给出正常澄清（见上一节）。
+3. **这道闸已经在挡真活** —— #294 作者自己写着它「连挡了四个 PR」。
+4. ⛔ **没有动基线** —— 闸对别人依然有效；这里只留一次有据可查的越过。
+
+## OTA
+
+```
+./scripts/ota/push-bundle.sh production android     PUSH_EXIT=0
+✓ bundle live: rv=1.0.4 channel=production ts=1787911909437
+manifest 取回: 指向新 ts=1787911909437, 不含上一份 1787898056914
+```
+
+**判据：新旧两份 bundle 各 grep 一次**（Hermes 不以 UTF-8 存中文，所以标记取 ASCII）：
+
+| marker | 第二轮(旧) | **第三轮(正在下发)** |
+|---|---:|---:|
+| `app-error-boundary` | 0 | **2** |
+| `missingHireDate` | 0 | **1** |
+| `scoreDetailsRecorded` | 1 | 1 |
+| `deliveredQuantity` | 1 | 1 |
+| `UNDER_RECEIVE` | 1 | 1 |
+
+前两个是这一轮新增的，**旧的里面一个都没有**；后三个是既有的，两侧相同
+⇒ 标记确实能区分，⛔ 不是「两边都长这样」。
+
+## 🔴 真机送达 —— 这一次是**测**出来的，不是推断
+
+同一台小米真机（`com.cretas.foodtrace 1.0.4 / versionCode 15`），冷启动 logcat：
+
+| | 推送**之前**那次冷启动 | 推送**之后**这次冷启动 |
+|---|---|---|
+| updates 状态 | `Check → **CheckCompleteUnavailable**` | `Check → **CheckCompleteAvailable** (isUpdateAvailable=true)` |
+| 签名 | — | `Manifest code signing signature verified successfully` |
+| 下载 | — | `Download → **DownloadComplete**`，`isUpdatePending=true` |
+| 日志里出现我的 ts | — | `1787911909437` **×4** |
+
+▎前后两次的差别只有「我推了一份」这一件事 ⇒ 这是一个**带对照的送达读数**，
+▎不是「manifest 指向新的所以应该送到了」那种推断。
+
+⚠️ 仍然没有证到的那一格：`isUpdatePending=true` 意味着**下次重启才生效**，
+所以「设备正在跑的就是这一份」目前仍未观测到 —— ⛔ 不写成「已生效」。
+
+**回滚**：`./scripts/ota/rollback.sh 1.0.4 production 1787911909437`

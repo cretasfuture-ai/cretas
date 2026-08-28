@@ -283,3 +283,29 @@ otif                 = totalShipments   > 0 ? 实算 : new BigDecimal("95");
 4. **G1 两整棵树没有账号进得去** —— 需要先定「谁进哪棵树」。
 5. **剩余 519 个缺失译文键** —— 棘轮已建（`i18nKeysResolve`），可以按屏逐块降。
 6. **表单的提交路径** —— 两轮都只到「打开表单」为止，校验/提交/审批动作全没走。
+
+---
+
+## 第三轮收尾：合并 / OTA / **真机送达**（2026-08-28 夜）
+
+| 步骤 | 结果 |
+|---|---|
+| PR **#293** | 合入 main `ba1817a8f1`（合并前 RN 子树 hash 与分支一致 `40dba656…`） |
+| OTA | `✓ bundle live: rv=1.0.4 channel=production ts=1787911909437`，manifest 只含新 ts |
+| 制品判据 | 新旧两份 bundle 各 grep：`app-error-boundary` **0→2**、`missingHireDate` **0→1**；`scoreDetailsRecorded`/`deliveredQuantity`/`UNDER_RECEIVE` 两侧都是 1（既有的，正确地不区分） |
+| **真机** | 冷启动：`CheckCompleteAvailable(isUpdateAvailable=true)` → `Download` → `DownloadComplete`，`isUpdatePending=true`，日志里我的 ts ×4 |
+
+▎**这一格是第二轮欠的账**。第二轮只能说「已发布 ≠ 已送达」；
+▎这一轮有了**前后对照**：推送前同一台机器同样的冷启动读到的是 `CheckCompleteUnavailable`。
+▎两次之间唯一变化是「我推了一份」⇒ 送达是**测**出来的，不是推断的。
+
+⚠️ 仍没证到的那一格：`isUpdatePending=true` = **下次重启才生效**，
+所以「设备此刻正在跑的就是这一份」尚未观测到。⛔ 不要写成「已生效」。
+第四轮开头再冷启一次即可闭掉（成本 1 分钟）。
+
+⚠️ **合并时 `java-full-gate` 是红的**，理由写在 PR #293 的三条评论 + 台账「部署记录」节：
+红不是这个 PR 的（无关分支同一条测试同样形状红；我最后两次推送是纯文档而红从 1 涨到 2）、
+不是用户侧故障（生产 App 侧 AI 入口实测 HTTP 200）、⛔ 没有动基线。
+**下一轮开工前先看这道闸有没有人修** —— 它当时已在挡至少四个 PR。
+
+**回滚**：`./scripts/ota/rollback.sh 1.0.4 production 1787911909437`
