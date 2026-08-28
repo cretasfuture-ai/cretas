@@ -144,6 +144,21 @@ public class AsyncTaskFailureLedger {
                         + "GROUP BY method_signature ORDER BY occurrences DESC");
     }
 
+    /**
+     * 按工厂归类的未处理条目 —— 站内通知要发给<b>那个工厂的</b>管理员, 所以得按工厂分。
+     *
+     * <p>⚠️ {@code factory_id} 可能为 NULL(异步方法的参数里提取不到工厂)。这些行
+     * <b>没有人能被通知到</b>, 调用方必须把它们单独说出来, ⛔ 不许静默丢掉 ——
+     * 「通知发不出去」和「没有失败」是两件事。
+     */
+    public List<Map<String, Object>> openBreakdownByFactory() {
+        return jdbcTemplate.queryForList(
+                "SELECT factory_id, count(*) AS rows_open, "
+                        + "       sum(occurrence_count) AS occurrences, max(last_seen_at) AS latest "
+                        + "FROM async_task_failures WHERE status = 'OPEN' "
+                        + "GROUP BY factory_id ORDER BY occurrences DESC");
+    }
+
     /** 运维查明细。{@code factoryId} 为 null 时跨工厂查 (含提取不到工厂的行)。 */
     public List<Map<String, Object>> list(String factoryId, String status, int limit) {
         String effectiveStatus = (status == null || status.isBlank()) ? null : status;
