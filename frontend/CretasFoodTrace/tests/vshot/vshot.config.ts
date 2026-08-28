@@ -3,6 +3,12 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Standalone config for the RN visual walkthrough.
  *
+ * 安装（⛔ 刻意不写进 package.json）：
+ *   npm i -D --no-save @playwright/test@^1.58.2
+ * 这套走查是人工跑的工具，不是 CI 的一部分。把 @playwright/test 记进 devDependencies
+ * 会让 jest 那条 workflow 的 `npm ci` 每次都多装一份 playwright 并触发浏览器下载，
+ * 而它一个测试都不跑。⇒ 用完即走，别拖累 CI。
+ *
  * ⚠️ 跑之前必读：改了 App 源码之后**必须重启 metro**（`expo start --web --clear`）。
  * 这套走查用 `CI=1` 起 metro，CI 模式关掉了文件监听 —— 改完源码直接重跑，
  * 拿到的还是**改之前的 bundle**，而屏幕上看起来就是「修了但没生效」。
