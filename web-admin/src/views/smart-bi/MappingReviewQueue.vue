@@ -83,6 +83,25 @@ const loadingFields = ref(false);
 const confirming = ref(false);
 
 const pendingItems = ref<PendingItem[]>([]);
+
+/**
+ * 🔴 三态, 不是两态。
+ *
+ * 2026-08-28 逐屏走查实拍: 两条接口都 404(顶部两条红横幅写着
+ * 「请求的接口不存在 (GET …/mapping-review/pending)」), 而正文显示的是
+ * **绿色对勾「✅ 暂无待复核列映射 / 所有上传列均已成功映射到受控字典」**。
+ *
+ * ▎「接口失败导致列表为空」和「真的没有待办」走了同一个 `length === 0` 分支,
+ * ▎于是把**没能做决定**渲染成了**决定不喊**。
+ *
+ * ⚠️ 顶部那两条红横幅确实在, 但它们挤在页头(一条还跑进了 tab 栏),
+ *   而用户真正会读的是正文那个绿色对勾。
+ *
+ * ⇒ 空列表要分两种: `loadFailed = true` ⇒ 明说加载失败 + 给重试;
+ *   `loadFailed = false` ⇒ 才是真的「暂无待复核」。
+ *   (同屏的「数据完整度」页就是这么做的: 「加载完整度数据时发生错误」+ 重试按钮。)
+ */
+const loadFailed = ref(false);
 const canonicalFields = ref<CanonicalFieldsData | null>(null);
 
 // 选中的行 ids (批量确认)
@@ -144,11 +163,15 @@ async function fetchPending() {
       _selected: false,
     }));
     selectedIds.value.clear();
+    loadFailed.value = false;
   } catch (err: unknown) {
     // HTTP errors: interceptor already showed sticky toast; nothing more needed.
     // Business-level errors surface as thrown ApiError with message.
     const msg = (err as any)?.message ?? '加载待复核队列失败';
     ElMessage.error(msg);
+    // ⛔ 不要只弹 toast 就算了 —— 正文还会把空列表渲染成「一切正常」的绿勾。
+    loadFailed.value = true;
+    pendingItems.value = [];
   } finally {
     loadingItems.value = false;
   }
@@ -324,10 +347,21 @@ function confidenceType(conf: number | null): 'success' | 'warning' | 'danger' |
       <el-skeleton :rows="4" animated />
     </div>
 
+    <!-- 加载失败 —— 必须排在空态**前面**: 两者都是「列表为空」, 但含义相反 -->
+    <el-empty v-else-if="loadFailed" :image-size="120">
+      <template #description>
+        <p class="empty-desc load-failed">加载待复核队列失败</p>
+        <p class="empty-sub">
+          没能取到数据，<b>因此无法判断是否有待复核的列映射</b>。
+          ⛔ 这不等于「没有待办」。
+        </p>
+      </template>
+      <el-button type="primary" @click="fetchPending">重试</el-button>
+    </el-empty>
+
     <!-- 空状态 (Rule 5) -->
     <el-empty
       v-else-if="pendingItems.length === 0"
-      description="✅ 暂无待复核列映射"
       :image-size="120"
     >
       <template #description>
@@ -637,4 +671,6 @@ function confidenceType(conf: number | null): 'success' | 'warning' | 'danger' |
   z-index: 100;
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
 }
+
+.load-failed { color: var(--el-color-danger); font-weight: 600; }
 </style>
