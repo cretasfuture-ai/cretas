@@ -121,7 +121,8 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
      * is based on actual DB state, not by business orderDate which may be past/future.
      * Mirrors PurchaseOrderRepository pattern to avoid duplicate-key collisions.
      */
-    @Query("SELECT MAX(so.orderNumber) FROM SalesOrder so WHERE so.factoryId = :factoryId AND so.orderNumber LIKE :prefix")
+    @Query(value = "SELECT MAX(order_number) FROM sales_orders " +
+            "WHERE factory_id = :factoryId AND order_number LIKE :prefix", nativeQuery = true)
     String findMaxOrderNumberByPrefix(@Param("factoryId") String factoryId, @Param("prefix") String prefix);
 
     /**
