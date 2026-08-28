@@ -5,6 +5,7 @@ import com.cretas.aims.ai.dto.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -165,6 +166,7 @@ class ToolExecutionTest {
      * 测试基础 Tool Calling
      */
     @Test
+    @Tag("live-llm")   // 打到真实上游, 默认不进跑批, 见 pom surefire.excludedGroups
     void testBasicToolCalling() {
         requireLlmReachable();
 
@@ -196,6 +198,7 @@ class ToolExecutionTest {
      * 测试多轮对话 Tool Calling
      */
     @Test
+    @Tag("live-llm")   // 打到真实上游, 默认不进跑批, 见 pom surefire.excludedGroups
     void testMultiTurnToolCalling() throws Exception {
         requireLlmReachable();
 
@@ -274,6 +277,7 @@ class ToolExecutionTest {
      * 一条生产缺陷被一个恒绿的断言盖住了。
      */
     @Test
+    @Tag("live-llm")   // 打到真实上游, 默认不进跑批, 见 pom surefire.excludedGroups
     @Disabled("生产实测: 供应商只支持 tool_choice=none/auto, 具名工具返回 400 → 对外 500。"
             + " 见方法 javadoc; 供应商支持后或路由改出明确错误后再打开")
     void testForcedToolChoice() {

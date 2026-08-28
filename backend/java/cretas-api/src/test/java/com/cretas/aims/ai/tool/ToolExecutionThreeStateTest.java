@@ -1,6 +1,13 @@
 package com.cretas.aims.ai.tool;
 
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.opentest4j.AssertionFailedError;
@@ -117,5 +124,73 @@ class ToolExecutionThreeStateTest {
     void failsOnNullResponse() {
         assertThatThrownBy(() -> ToolExecutionTest.judgeLlmResponse(null, "基础 Tool Calling"))
                 .isInstanceOf(AssertionFailedError.class);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // 登记闸: 打真实上游的用例必须带 @Tag("live-llm")
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * ⚠️ 不加这道闸的话, 下一个人往 {@code ToolExecutionTest} 里加第四个联网用例、
+     * 忘了打 tag, 就又回到「同一个 commit 的红绿取决于哪台 runner 接了活」。
+     *
+     * <p>判据: 方法体里用到 {@code dashScopeClient.} 的 {@code @Test} 方法,
+     * 必须带 {@code @Tag("live-llm")}。
+     */
+    /**
+     * 真正会打到上游的客户端方法。
+     *
+     * <p>⚠️ 这是**代理判据, 明确标出来**: 它按方法名匹配, 不是真的做调用图分析。
+     * 第一版用的是「方法体里出现过 dashScopeClient.」—— 当场误伤
+     * {@code testToolCallHelperMethods}, 而那个用例只调
+     * {@code hasToolCalls / getFirstToolCall / getAllToolCalls} 三个**纯函数**
+     * (作用在本地构造的 response 上, 零网络)。
+     * 误报正是让人把闸关掉的那个东西, 所以收窄成显式名单。
+     *
+     * <p>⛔ 新增会联网的客户端方法时要往这里加一条 —— 名单漏了它就是漏报。
+     */
+    private static final List<String> NETWORK_CALLS = List.of(
+            "dashScopeClient.chatWithTools(",
+            "dashScopeClient.chatCompletionWithTools(",
+            "dashScopeClient.chatCompletion(",
+            "dashScopeClient.chat(",
+            "dashScopeClient.isAvailable(");
+
+    @Test
+    @DisplayName("登记闸 · 打真实上游的用例必须带 @Tag(\"live-llm\")")
+    void everyLiveTestIsTagged() throws IOException {
+        Path source = Path.of("src/test/java/com/cretas/aims/ai/tool/ToolExecutionTest.java");
+        assertThat(source).as("找不到被扫描的源码, 这道闸就没在守任何东西").exists();
+        String text = Files.readString(source, StandardCharsets.UTF_8);
+
+        // 按 @Test 切块, 每块 = 一个用例的注解 + 方法体(到下一个 @Test 为止)
+        String[] blocks = text.split("(?m)^\s*@Test\s*$");
+        List<String> untagged = new ArrayList<>();
+        for (int i = 1; i < blocks.length; i++) {
+            String block = blocks[i];
+            if (NETWORK_CALLS.stream().noneMatch(block::contains)) {
+                continue;   // 离线用例, 不该被 tag 拖出跑批
+            }
+            if (!block.contains("@Tag(\"live-llm\")")) {
+                int brace = block.indexOf('(');
+                untagged.add(block.substring(0, Math.max(0, Math.min(brace, 120))).trim());
+            }
+        }
+        assertThat(untagged)
+                .as("这些用例会打到真实上游却没带 @Tag(\"live-llm\") —— "
+                        + "它们会让跑批的红绿取决于 runner 环境")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("登记闸 · pom 默认排除 live-llm, 且留着显式打开的入口")
+    void pomExcludesLiveLlmByDefault() throws IOException {
+        String pom = Files.readString(Path.of("pom.xml"), StandardCharsets.UTF_8);
+        assertThat(pom)
+                .as("默认排除没了, 联网用例会重新进跑批")
+                .contains("<surefire.excludedGroups>live-llm</surefire.excludedGroups>");
+        assertThat(pom)
+                .as("排除必须走属性 —— 写死就没法用 -Dsurefire.excludedGroups= 打开")
+                .contains("<excludedGroups>${surefire.excludedGroups}</excludedGroups>");
     }
 }

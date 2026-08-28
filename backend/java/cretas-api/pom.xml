@@ -24,6 +24,23 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <lombok.version>1.18.36</lombok.version>
+
+        <!--
+          🔴 2026-08-28: 联网 LLM 用例默认不进跑批。
+
+          `ToolExecutionTest` 的三个用例会真的打到 Python LLM 服务再到上游供应商。
+          它们测的是**上游可用性**, 不是我们的代码 —— 而 CI runner 上那条链是坏的:
+          实测 `/api/llm/tool-call` 对所有请求返 HTTP 500(供应商侧凭证/可用性问题)。
+          于是同一个 commit 的红绿取决于**哪台自建 runner 接了活**, 连挡了四个 PR
+          (#284 / #286 / #288 / #294)。
+
+          ⛔ 这不是"把闸调松": 被排除的三个用例在 CI 上从来没有产生过有效读数
+             (要么 skipped 要么因环境而红)。真正的覆盖损失是零。
+          ⚠️ 但登记在案: 要跑它们就显式清空这个属性 ——
+             `mvn test -Dsurefire.excludedGroups=`
+             前提是本机/该环境有一条能用的 LLM 链路。
+        -->
+        <surefire.excludedGroups>live-llm</surefire.excludedGroups>
         <!-- Which test sources to compile. Default is everything, i.e. exactly the
              behaviour from before this property existed. release-jar-manifest.sh narrows
              it to the targeted test class, so a release build stops spending ~40s
@@ -602,6 +619,8 @@
                         但那个**盖不住 Spring 上下文启动**(挂死正是发生在那里), 所以先上这一道。
                     -->
                     <forkedProcessTimeoutInSeconds>5400</forkedProcessTimeoutInSeconds>
+                    <!-- 见 properties 里 surefire.excludedGroups 的说明 -->
+                    <excludedGroups>${surefire.excludedGroups}</excludedGroups>
                     <!-- Enable @Nested test discovery -->
                     <includes>
                         <include>**/*Test.java</include>
