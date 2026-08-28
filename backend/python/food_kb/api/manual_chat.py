@@ -192,6 +192,16 @@ _FACTORY_DEFECT_COUNT_TRUTH_ANSWER = """\
 
 **验收结果：** 分别回读结算记录的三态与数量、唯一批次回填或多批不猜、盘点待办原因，以及批次详情的良品率 `—`。未知、已确认零和确有不良品必须始终可区分。"""
 
+_FACTORY_BATCH_UNKNOWN_METRICS_ANSWER = """\
+批次总重量、良品率和 BOM 达成率都只能在各自可信输入齐备时计算；缺项时必须显示 `—/未知`，不能用 0、100% 或旧派生值伪装已知。
+
+1. **批次总重量：** 只有单件重量与入库数量都存在时才计算。任一输入缺失就显示 `—/未知`，不能解释成 0 kg。
+2. **良品率：** 只有真实良品数量与实际产量齐备时才计算。缺少良品数量时清空旧派生值并显示 `—`，不能沿用历史 100% 或改成 0%。结单时“已清点无不良品”的 0 与“未清点”的未知仍要保持可区分。
+3. **BOM 达成率：** 只在该计划固定 BOM 提供有效理论投入或计划成本时定义。没有计划量或计划成本时显示 `—` 并说明缺少计划数据，不能显示 100%、0% 或“零超耗”，也不能把该批次计入平均或最低达成率。
+4. **版本口径：** 材料成本使用批次创建时固定的 BOM 版本；同一产品跨批次版本不同就分别展示并提示，不能用当前 BOM 覆盖历史批次。
+
+**验收结果：** 页面能分别说明三个指标缺少哪项输入；未知值不上绿色、不参与汇总，历史批次继续使用自身固定 BOM。"""
+
 _FACTORY_WORKFLOW_OUTPUT_DIRECTORY_ANSWER = """\
 Workflow 顶部的“归属对象”现在只表示工艺图的存放位置；“本图产出”才是画布计算出的真实产出，两者可以不同。
 
@@ -1105,6 +1115,20 @@ def _needs_factory_defect_count_truth_guard(query: str) -> bool:
         )
     )
     return defect_context and lifecycle_context
+
+
+def _needs_factory_batch_unknown_metrics_guard(query: str) -> bool:
+    """Keep batch weight, yield and BOM achievement unknowns honest."""
+    normalized = (query or "").lower()
+    mentions_specific_metric = any(
+        term in normalized
+        for term in ("批次总重量", "总重量", "bom 达成率", "bom达成率", "达成率")
+    )
+    mentions_unknown_contract = any(
+        term in normalized
+        for term in ("缺少", "缺失", "未知", "显示", "可信输入", "0 kg", "100%", "零超耗")
+    )
+    return mentions_specific_metric and mentions_unknown_contract
 
 
 def _needs_factory_incremental_receipt_guard(query: str) -> bool:
@@ -2694,6 +2718,13 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         # Keep retrieval for source evidence, but do not let model variance invert
         # or omit the mandatory Workflow → BOM → Workflow sequence.
         guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_batch_unknown_metrics_guard(request.question)
+    ):
+        # This combined metric question is more specific than the older
+        # defect-count guard, which also sees “良品率 + 未知 + 显示”.
+        guard_answer = _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER
     elif (
         not is_restaurant_request
         and _needs_factory_defect_count_truth_guard(request.question)
