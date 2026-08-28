@@ -783,7 +783,7 @@ class WipInventoryServiceImplTest {
     }
 
     @Test
-    @DisplayName("SP1-SEMI: idempotency guard skips when THIS report already posted (keyed on report_id, not semiCode)")
+    @DisplayName("SP1-SEMI: idempotency guard skips when THIS report already posted this semiCode (keyed on (report_id, semiCode))")
     void postApprovedOutput_semiOutputKind_idempotentSkip() {
         WorkProcessTask task = WorkProcessTask.builder()
                 .id(8003L)
