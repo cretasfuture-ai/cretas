@@ -32,12 +32,15 @@
 
 | # | 位置 | 症状 | commit |
 |---|---|---|---|
-| 1 | `web-admin/src/api/aiValueSummary.ts:43` | `/api/mobile` 前缀拼两遍 → 403，AI 价值面板**从上线起没加载过** | `927abf3b60` |
+| 1 | `web-admin/src/api/aiValueSummary.ts:43` | `/api/mobile` 前缀拼两遍 → 403，AI 价值面板**从上线起没加载过** | ⚠️ **不是我修的** —— 同日另一条线已在 main 上修掉 (#255 `7695a46781`)，本分支已丢弃重复 commit。他们的闸 `noDoubleApiPrefix.source.spec.ts` 比我写的那道覆盖更全（扫 `.ts`+`.vue`、先剥注释、带正反对照），保留他们的 |
 | 2 | `backend/python/smartbi/api/sales_preset.py` ×3 处 | `# noqa: E501` 写进 SQL 字符串 → `PostgresSyntaxError`，两个销售报表端点**每次调用都 500** | `3e60d5883d` |
 
-两个都配了**变异验证过的闸**，且都做了**行为验证**（不是只看测试绿）：
-- #1：浏览器实测 403→200，页面出数「最近 30 天 AI 被调用 161 次」
-- #2：端点实测 500→200，`product-rank` 返回「黄油鸡成品 616 盒 / ¥30,506」
+#2 配了变异验证过的闸，并做了**行为验证**（不是只看测试绿）：
+端点实测 500→200，`product-rank` 返回「黄油鸡成品 616 盒 / ¥30,506」。
+
+⚠️ #1 我独立查到并修了一遍，**推之前才发现 main 上已经有了**（同日 #255）。
+教训在 memory `feedback_zero_open_prs_expires_in_minutes_so_recheck_before_writing_code`
+里写过 —— 开工前查过一次不够，动手写代码前要再查一次远端。这次没查。
 
 ---
 
