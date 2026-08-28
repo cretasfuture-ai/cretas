@@ -47,6 +47,7 @@ import {
   type CustomerSuppliedMaterialRequirement,
 } from './salesOrderSupplyContract';
 import { toDateString } from '@/utils/dateFormat';
+import { formatUnitPrice, salesOrderDisplayMoney, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
 
 const route = useRoute();
 const router = useRouter();
@@ -430,7 +431,7 @@ async function loadProductsForEdit() {
 
 // 2026-07-02 fix (LIUSHANMEN "同仓库多名字"): 来源仓库列必须显示真实 DB name,
 // 不能一律硬编码"总仓/线边仓" — 客户可在仓库配置里重命名 WH-LOG/WH-WKS。
-const warehouses = ref<WarehouseCodeNameLike[]>([]);
+const warehouses = ref<(WarehouseCodeNameLike & WarehouseIdNameLike)[]>([]);
 
 async function loadWarehouses() {
   if (!factoryId.value) return;
@@ -443,6 +444,15 @@ async function loadWarehouses() {
 function sourceWarehouseLabel(code: string | null | undefined): string {
   return warehouseNameByCode(warehouses.value, code);
 }
+
+function targetWarehouseLabel(row: CustomerSuppliedMaterialRequirement): string {
+  return String(row.targetWarehouseName || '').trim()
+    || warehouseNameById(warehouses.value, row.targetWarehouseId);
+}
+
+const displayOrderMoney = computed(() => salesOrderDisplayMoney(
+  Array.isArray(order.value?.items) ? order.value.items as TableRow[] : [],
+));
 
 function openEditItems() {
   const existing = Array.isArray((order.value as any)?.items) ? (order.value as any).items : [];
@@ -612,6 +622,10 @@ function taxIncludedUnitPrice(row: TableRow): number | null {
 function formatTaxIncludedUnitPrice(row: TableRow): string {
   const amount = taxIncludedUnitPrice(row);
   return amount == null ? '—' : formatAmount(amount);
+}
+
+function displayLineMoney(row: TableRow) {
+  return salesOrderDisplayMoney([row]);
 }
 
 async function loadDeliveries() {
@@ -1872,10 +1886,10 @@ async function handleQuickPayFull() {
                   <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
                 </el-table-column>
                 <el-table-column label="预计到货" width="125">
-                  <template #default="{ row }">{{ row.expectedArrivalAt || '未维护' }}</template>
+                  <template #default="{ row }">{{ formatBusinessDateTime(row.expectedArrivalAt) }}</template>
                 </el-table-column>
                 <el-table-column label="目标仓库" min-width="160" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.targetWarehouseName || row.targetWarehouseId || '未维护' }}</template>
+                  <template #default="{ row }">{{ targetWarehouseLabel(row) }}</template>
                 </el-table-column>
                 <el-table-column label="收货进度" min-width="260">
                   <template #default="{ row }">{{ customerMaterialProgress(row) }}</template>
@@ -1911,7 +1925,7 @@ async function handleQuickPayFull() {
                 <template #default="{ row }">{{ row.boxQuantity || '-' }}</template>
               </el-table-column>
               <el-table-column v-if="canViewPrice" prop="unitPrice" label="未税单价" width="120" align="right">
-                <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
+                <template #default="{ row }">{{ formatUnitPrice(row.unitPrice) }}</template>
               </el-table-column>
               <el-table-column v-if="canViewPrice" label="含税单价" width="120" align="right">
                 <template #default="{ row }">
@@ -1951,16 +1965,12 @@ async function handleQuickPayFull() {
               </el-table-column>
               <el-table-column v-if="canViewPrice" label="含税小计" width="140" align="right">
                 <template #default="{ row }">
-                  <template v-if="row.lineAmountWithTax != null">
-                    <span style="font-weight: 600; color: #303133">{{ formatAmount(row.lineAmountWithTax) }}</span>
+                  <template v-if="row.unitPrice != null">
+                    <span style="font-weight: 600; color: #303133">{{ formatAmount(displayLineMoney(row).taxIncluded) }}</span>
                     <div v-if="row.taxRate && Number(row.taxRate) > 0" style="font-size: 11px; color: #909399; margin-top: 2px">
-                      税额 {{ formatAmount(row.lineAmountWithTax - (row.lineAmount ?? row.quantity * row.unitPrice)) }}
+                      税额 {{ formatAmount(displayLineMoney(row).tax) }}
                     </div>
                   </template>
-                  <span v-else-if="row.unitPrice != null">
-                    <!-- 无 taxRate 时未税=含税 -->
-                    {{ formatAmount(row.quantity * row.unitPrice) }}
-                  </span>
                   <span v-else>—</span>
                 </template>
               </el-table-column>
@@ -1972,25 +1982,21 @@ async function handleQuickPayFull() {
                 <span class="tax-summary-item">
                   <span class="tax-summary-label">未税总额</span>
                   <span class="tax-summary-value">
-                    {{ formatAmount(order.items.reduce((s: number, item: TableRow) => s + (item.lineAmount ?? (item.unitPrice != null ? item.quantity * item.unitPrice : 0)), 0)) }}
+                    {{ formatAmount(displayOrderMoney.untaxed) }}
                   </span>
                 </span>
                 <span class="tax-summary-sep">+</span>
                 <span class="tax-summary-item">
                   <span class="tax-summary-label">税额合计</span>
                   <span class="tax-summary-value tax-value">
-                    {{ formatAmount(order.items.reduce((s: number, item: TableRow) => {
-                      const exTax = item.lineAmount ?? (item.unitPrice != null ? item.quantity * item.unitPrice : 0);
-                      const withTax = item.lineAmountWithTax ?? exTax;
-                      return s + (withTax - exTax);
-                    }, 0)) }}
+                    {{ formatAmount(displayOrderMoney.tax) }}
                   </span>
                 </span>
                 <span class="tax-summary-sep">=</span>
                 <span class="tax-summary-item">
                   <span class="tax-summary-label">含税总额</span>
                   <span class="tax-summary-value tax-total">
-                    {{ formatAmount(order.items.reduce((s: number, item: TableRow) => s + (item.lineAmountWithTax ?? (item.lineAmount ?? (item.unitPrice != null ? item.quantity * item.unitPrice : 0))), 0)) }}
+                    {{ formatAmount(displayOrderMoney.taxIncluded) }}
                   </span>
                 </span>
               </template>

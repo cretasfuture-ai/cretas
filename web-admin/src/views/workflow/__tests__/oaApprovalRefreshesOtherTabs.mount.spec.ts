@@ -157,6 +157,7 @@ describe('在个人 OA 点一次「通过」', () => {
       '/F006/workflow/instances/inst-1/actions',
       expect.objectContaining({ action: 'APPROVE' }),
     );
+    expect(harness.confirm.mock.invocationCallOrder[0]).toBeLessThan(harness.post.mock.invocationCallOrder[0]);
 
     expect(store.cacheKeyFor('/finance/costs')).not.toBe(financeBefore);
     expect(store.cacheKeyFor('/warehouse/materials')).not.toBe(warehouseBefore);
