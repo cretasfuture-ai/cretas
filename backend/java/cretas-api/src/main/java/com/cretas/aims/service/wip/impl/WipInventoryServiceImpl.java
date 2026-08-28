@@ -24,10 +24,13 @@ import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowByproductNodes;
+import com.cretas.aims.service.workflow.WorkflowReworkNodes;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
+import com.cretas.aims.service.wip.WipCostAllocation;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.wip.WipLedgerEntries;
+import com.cretas.aims.service.wip.WipSemiOutputPlan;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -128,11 +131,46 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         boolean isSemi = "SEMI".equals(outputKind) || "BOTH".equals(outputKind);
         boolean isFinished = outputKind == null || "FINISHED".equals(outputKind) || "BOTH".equals(outputKind);
 
-        if (isSemi) {
+        // 多产出优先: semiOutputs 非空时逐条入账 (画布 1 进 N 出)。
+        // ⛔ 为空时必须走原来的单产出路径 —— 旧版 App 与存量报工零回归。
+        List<Map<String, Object>> multiOutputs = WipSemiOutputPlan.postableEntries(report.getSemiOutputs());
+        boolean finishedPosts = isFinished && report.getOutputQuantity() != null
+                && report.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0;
+
+        // ═══ Critical 2 (2026-08-28 对抗性审计) ═══
+        // RN 报工屏在有任何半成品产出时发的是 outputKind='BOTH' (YieldStepReportScreen.tsx:1590),
+        // 同时照发 outputQuantity (:1608) ⇒ isSemi 与 isFinished 【同时】为真, 两个分支都跑。
+        //
+        // 两个分支同时跑本身【不是】缺陷 —— BOTH 的契约 (ProductionReport.outputKind javadoc) 就是
+        // 「双产出」: outputQuantity 与 semiOutputs 是两个不同的量, 各入各的行。
+        // 缺陷是【成本被两个分支各 claim 一次全额】: SEMI 侧按量分摊完 ¥100, FINISHED 侧又拿
+        // reportTotalCost 算一次全额 ¥100 ⇒ 一份 ¥100 的报工入账 ¥200; 且回料那条的分母只有它自己
+        // (50) ⇒ 单价 ¥2.00/kg 是良品的 19 倍 —— 正是 C-1 修掉的形状在两个分支之间原样保留。
+        // 第三重后果: 两个分支各发一次 ProductionCostUpdatedEvent, 而消费方是 @Async +
+        // 「costUnitPrice == null 才写」⇒ 哪条先到哪条赢。
+        //
+        // ⇒ 分摊的分母是【这份报工实际入账的全部量】: N 条 semi + (跑了的话) FINISHED 那条。
+        //   FINISHED 排在最后一槽 ⇒ 尾数归它, N+1 份之和恰好等于一份报工的成本。
+        // ⛔ semiOutputs 为空时 alloc 保持 null → 两条单产出路径逐字节不变。
+        WipCostAllocation alloc = null;
+        BigDecimal reportCost = null;
+        boolean postedAnySemi = false;
+        if (!multiOutputs.isEmpty()) {
+            reportCost = reportTotalCost(factoryId, report, task);
+            List<BigDecimal> slotQuantities = new ArrayList<>(multiOutputs.size() + 1);
+            for (Map<String, Object> entry : multiOutputs) {
+                slotQuantities.add(WipSemiOutputPlan.quantityOf(entry));
+            }
+            if (finishedPosts) {
+                slotQuantities.add(report.getOutputQuantity());
+            }
+            alloc = WipCostAllocation.byQuantity(reportCost, slotQuantities);
+            postedAnySemi = postMultiSemiOutputs(factoryId, report, task, operatorId, multiOutputs, alloc);
+        } else if (isSemi) {
             postSemiOutputLedger(factoryId, report, task, operatorId);
         }
 
-        if (isFinished && report.getOutputQuantity() != null && report.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0) {
+        if (finishedPosts) {
             BigDecimal rollLabor = report.getLaborCost();
             BigDecimal rollMaterial = report.getMaterialCost();
             if ("OUTPUT".equals(report.getReportKind())) {
@@ -140,13 +178,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 rollLabor = rollup.laborCost();
                 rollMaterial = rollup.materialCost();
             }
+            // 多产出在场时这条只拿它那一槽 (最后一槽); alloc == null = 单产出路径, 自算全额 (零回归)。
+            AllocatedCost finishedAllocated = alloc == null
+                    ? null
+                    : new AllocatedCost(alloc.costAt(multiOutputs.size()), alloc.unitCost());
             SemiFinishedInventory producedWip = upsertProducedWip(factoryId, report, task, rollLabor, rollMaterial,
-                    operatorId);
+                    operatorId, finishedAllocated);
             // W4 成本链修复: FINISHED/legacy 路径也发 SP3 成本事件 → 回填 SalesOrderItem.costUnitPrice.
             // 此前仅 SEMI 路径 (postSemiOutputLedger) 发事件, 导致整合/旧式报工 (output_kind=null,
             // F006 实际数据全走此路径) 即使算出 WIP unitCost 也永不回填 costUnitPrice → 财审 actualCost 永远 null。
             // 诚实 null 传播: unitCost 为 null (无工价/无料价) 时不发事件 (无成本可回填)。
-            if (producedWip != null && producedWip.getUnitCost() != null
+            // ⛔ 多产出在场时这里不发 —— 一份报工一次事件, 统一在下面发。
+            if (alloc == null && producedWip != null && producedWip.getUnitCost() != null
                     && task.getProductionBatchId() != null) {
                 eventPublisher.publishEvent(new ProductionCostUpdatedEvent(
                         this,
@@ -157,6 +200,22 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                         producedWip.getAccumulatedCost()
                 ));
             }
+            postedAnySemi |= producedWip != null;
+        }
+
+        // SP3: 一份报工 = 一次成本事件 (多产出路径)。带的是分摊后的单价 —— 各槽相同 ⇒ 与顺序无关, 确定性。
+        // ⛔ 不发某一条 SFI 行的移动均价: 那取决于挑哪一行以及那行跟本次报工无关的历史批次,
+        //    在 @Async 消费端就是非确定性的。
+        // 一条都没真入账 (全被幂等跳过) 时不发 —— 与单产出路径「跳过就不发」一致。
+        if (alloc != null && postedAnySemi && task.getProductionBatchId() != null) {
+            eventPublisher.publishEvent(new ProductionCostUpdatedEvent(
+                    this,
+                    factoryId,
+                    task.getProductionBatchId(),
+                    task.getProductTypeId(),
+                    alloc.unitCost(),
+                    reportCost
+            ));
         }
         markWipPosted(report);
     }
@@ -179,29 +238,125 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      */
     private void postSemiOutputLedger(String factoryId, ProductionReport report,
                                        WorkProcessTask task, Long operatorId) {
-        String semiCode = report.getSemiCode();
-        BigDecimal inQty = report.getSemiOutputQuantity();
-        // R4: backward-compat — skip if fields absent
-        if (semiCode == null || semiCode.isBlank() || inQty == null || inQty.compareTo(BigDecimal.ZERO) <= 0) {
-            log.debug("[SP1-semi] skip postSemiOutputLedger for report {}: semiCode={} qty={}", report.getId(), semiCode, inQty);
-            return;
+        // allocated == null ⇒ 单产出路径: 自算全额 + 自己发事件, 逐字节零回归 (见 postSemiOutputLedgerFor)。
+        // reworkProductTypeId == null: 单产出是旧版工序管理那条路 (semiCode 来自
+        // WorkProcess.semiFinishedOutputCode, 不是画布端口), 本来就没有回料概念。
+        postSemiOutputLedgerFor(factoryId, report, task, operatorId,
+                report.getSemiCode(), report.getSemiOutputQuantity(), null, null);
+    }
+
+    /**
+     * 画布 1 进 N 出: 把<b>一份</b>报工的成本按量分摊到 N 条产出上, 逐条入账, 事件只发一次。
+     *
+     * <h2>C-1 修复 (2026-08-28 整分支终审)</h2>
+     *
+     * <p>修复前是 for 循环对每条各调一次 {@link #postSemiOutputLedgerFor}, 而它内部算出的
+     * {@code totalCost} <b>与条目无关</b> —— 每条都重算成同一个<b>全额</b>值。金检报工
+     * (良品 950 / 回料 50, 本道成本 ¥10,000) 于是变成:
+     * <pre>
+     *   良品 950 kg  unit_cost_at_txn = 10.53   accumulated_cost += 10,000
+     *   回料  50 kg  unit_cost_at_txn = 200.00  accumulated_cost += 10,000   ← 再来一份全额
+     * </pre>
+     * (1) ¥10,000 记成 ¥20,000; (2) 回料单价是良品的 19 倍, 而回料按配方要占下一批的 5%~19.5%,
+     * 按移动加权领进去下一批材料成本翻数倍; (3) 每条各发一次 {@link ProductionCostUpdatedEvent},
+     * 而 {@code OrderCostBackfillListener} 是 {@code @Async} + 「{@code costUnitPrice == null} 才写」
+     * ⇒ 哪条先到哪条赢, 销售订单行的成本单价非确定性 (回料那条先到就是 ¥200/kg)。
+     *
+     * <h2>口径</h2>
+     *
+     * <p>按量分摊: {@code thisEntryCost = totalCost × thisQty / Σqty} ⇒ 各条
+     * {@code inUnitCost = totalCost / Σqty} <b>相同</b>。这正符合业务事实 —— 回料是几乎全价的肉,
+     * 它和良品是同一锅料出来的。
+     *
+     * <p>尾数归<b>最后一条</b>: 前 n-1 条按 scale-2 (= {@code accumulated_cost} 的列精度) HALF_UP 分摊,
+     * 最后一条拿 {@code totalCost − Σ已分摊}, 保证 N 条之和<b>恰好</b>等于 totalCost, 一分不多一分不少。
+     * ⛔ 顺带保证单条 (N=1) 时唯一那条拿到全额、无舍入损失 ⇒ 与单产出路径逐字节一致。
+     *
+     * <p>事件只发一次, 带的是<b>分摊后的单价</b>: 各条相同 ⇒ 与条目顺序无关, 确定性。
+     * ⛔ 不发某一条 SFI 行的移动均价 —— 那取决于挑哪一行、以及那行跟本次报工无关的历史批次,
+     * 在 {@code @Async} 消费端就是非确定性的 (这正是本次要修的第三重后果)。
+     *
+     * <p>诚实 null: {@code totalCost} 读不出来时逐条 {@code entryCost}/{@code unitCost} 一律 null,
+     * ⛔ 不摊成 0 —— 一个假的 0 会顺着移动加权把整条链的单价摊薄, 而且不报错。
+     */
+    private boolean postMultiSemiOutputs(String factoryId, ProductionReport report, WorkProcessTask task,
+                                         Long operatorId, List<Map<String, Object>> multiOutputs,
+                                         WipCostAllocation alloc) {
+        // 「这一条是不是回料」——判据是画布 (WorkflowReworkNodes), 不是请求体里那个同名字段。
+        // 整份报工算一次 (循环外), ⛔ 不要逐条各查一次库。
+        Map<String, String> reworkCodeToProductType = reworkSemiCodes(factoryId, task);
+
+        boolean postedAny = false;
+        for (int i = 0; i < multiOutputs.size(); i++) {
+            Map<String, Object> entry = multiOutputs.get(i);
+            String semiCode = WipSemiOutputPlan.semiCodeOf(entry);
+            postedAny |= postSemiOutputLedgerFor(factoryId, report, task, operatorId,
+                    semiCode, WipSemiOutputPlan.quantityOf(entry),
+                    new AllocatedCost(alloc.costAt(i), alloc.unitCost()),
+                    semiCode == null ? null : reworkCodeToProductType.get(semiCode));
         }
+        // ⛔ 事件不在这里发 —— 一份报工一次, 由 postApprovedOutput 在 SEMI/FINISHED 两个分支都跑完之后统一发。
+        //   (Critical 2: 在这里发会与 FINISHED 分支各发一次, @Async 消费端就是哪条先到哪条赢)
+        return postedAny;
+    }
 
-        // Fool-Proof Rule 4 — idempotency guard: 以 report_id 为幂等键 (同一份报工不重复入账)。
-        // ⚠️ BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP: 旧实现用 (factoryId, semiCode, IN), 但 IN txn 的
-        //   sourceRef 也是 semiCode → 同一半成品码的合法第二批生产被误判"已存在"跳过, 移动均价不累加。
-        //   改用 report_id (每份报工唯一) → 第二批(不同 report)正常入账累加, 重复提交同一 report 仍幂等。
-        boolean alreadyPosted = txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
-                .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType()));
-        if (alreadyPosted) {
-            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists for this report", report.getId(), semiCode);
-            return;
+    /**
+     * 本任务的画布产出端口里, 被标记为<b>回料</b>的那些半成品:
+     * {@code ProductType.code} (= {@code semiCode}) → {@code ProductType.id}。
+     *
+     * <p><b>判据来源唯一</b>: 画布 {@code nodes_json} 的 {@code data.isRework}
+     * ({@link WorkflowReworkNodes}) 经 {@code workflow_task_ports.material_node_id} 反查。
+     * ⛔ <b>不读</b> {@code semi_outputs} 条目里客户端带上来的同名字段 —— 那是给 RN 算
+     * {@code defectQuantity} 用的展示值, 未经服务端校验; 拿它当判据等于让客户端自行决定
+     * 哪些料可以绕过投料下拉的防回锅闸。
+     *
+     * <p>值 (ProductType.id) 是给回料行的 {@code productTypeId} 用的 —— 回料行记的是<b>回料自己</b>
+     * 的产品, 不是批次的成品 (见 {@link #postSemiOutputLedgerFor} 里的说明)。顺手带出来,
+     * ⛔ 不再按 code 反查第二次。
+     *
+     * <p>画布之外的路径 (旧版工序管理 / 无 workflow 实例) 返回空 Map —— 那些路径本来就没有回料概念,
+     * 也不多花一次查询 (只在 {@code semiOutputs} 非空即画布多产出路径上被调用)。
+     */
+    private Map<String, String> reworkSemiCodes(String factoryId, WorkProcessTask task) {
+        if (task.getProductionBatchId() == null) {
+            return Map.of();
         }
+        ProductionWorkflowInstance instance = workflowInstanceRepo
+                .findByFactoryIdAndProductionBatchId(factoryId, task.getProductionBatchId())
+                .orElse(null);
+        if (instance == null) {
+            return Map.of();
+        }
+        Set<String> reworkNodeIds = WorkflowReworkNodes.reworkMaterialNodeIds(instance.getNodesJson());
+        if (reworkNodeIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> reworkSkuIds = workflowTaskPortRepo
+                .findByFactoryIdAndWorkflowInstanceId(factoryId, instance.getId()).stream()
+                .filter(p -> WorkflowTaskPort.Direction.OUTPUT.equals(p.getDirection()))
+                .filter(p -> WORKFLOW_MATERIAL_KIND_SEMI_FINISHED.equals(p.getMaterialKind()))
+                .filter(p -> task.getId() != null && task.getId().equals(p.getTaskId()))
+                .filter(p -> reworkNodeIds.contains(p.getMaterialNodeId()))
+                .map(WorkflowTaskPort::getSkuId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+        if (reworkSkuIds.isEmpty()) {
+            return Map.of();
+        }
+        // semiCode 就是 ProductType.code —— 与 workflowOutputOptions 发给 RN 的那个值同源。
+        return productTypeRepo.findByFactoryIdAndIdIn(factoryId, reworkSkuIds).stream()
+                .filter(pt -> pt.getCode() != null && !pt.getCode().isBlank())
+                .collect(Collectors.toMap(ProductType::getCode, ProductType::getId, (a, b) -> a));
+    }
 
-        String outputUnit = firstNonBlank(report.getSemiOutputUnit(),
-                firstNonBlank(report.getOutputUnit(), task.getPlannedUnit()));
-
-        // Compute in-unit cost from this report's cost roll-up
+    /**
+     * 这份报工的本道成本 (人工 + 材料)。OUTPUT 阶段走 batch 级 rollup (料记在 INPUT 报工上)。
+     *
+     * <p>C-1 修复时抽出 —— 此前 {@link #postApprovedOutput} 与 {@link #postSemiOutputLedgerFor} 各写一份,
+     * 同一个口径两处实现一定会漂。
+     */
+    private BigDecimal reportTotalCost(String factoryId, ProductionReport report, WorkProcessTask task) {
         BigDecimal rollLabor = report.getLaborCost();
         BigDecimal rollMaterial = report.getMaterialCost();
         if ("OUTPUT".equals(report.getReportKind())) {
@@ -209,10 +364,70 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             rollLabor = rollup.laborCost();
             rollMaterial = rollup.materialCost();
         }
-        BigDecimal totalCost = nullSafeAdd(null, rollLabor, rollMaterial);
-        BigDecimal inUnitCost = null;
-        if (totalCost != null && inQty.signum() > 0) {
-            inUnitCost = totalCost.divide(inQty, 4, RoundingMode.HALF_UP);
+        return nullSafeAdd(null, rollLabor, rollMaterial);
+    }
+
+    /**
+     * 多产出下这条产出<b>分到</b>的成本 + 分摊后的单价 (各条相同)。
+     *
+     * <p>{@code null} 传给 {@link #postSemiOutputLedgerFor} = <b>单产出路径</b>:
+     * 自算全额成本、自己发事件 —— 逐字节零回归。
+     */
+    private record AllocatedCost(BigDecimal totalCost, BigDecimal unitCost) {}
+
+    /**
+     * Task 4 Step 8: 单产出路径抽出的通用入账体 —— 多产出 ({@code semiOutputs} 非空) 时
+     * 由 {@link #postMultiSemiOutputs} 对每个条目各调一次 (带分摊后的成本);
+     * 单产出路径由 {@link #postSemiOutputLedger} 委派
+     * {@code report.getSemiCode()}/{@code report.getSemiOutputQuantity()} 调这里, 行为零回归。
+     *
+     * @param allocated 多产出下这条分到的成本; {@code null} = 单产出路径 (自算全额 + 自己发事件)
+     * @param reworkProductTypeId 这条是回料时 = 回料自己的 {@code ProductType.id} (判据见
+     *        {@link #reworkSemiCodes}); {@code null} = 不是回料 (单产出路径恒传 null)
+     * @return 是否真的入了一笔账 (false = 字段缺失或幂等跳过) —— 调用方据此决定发不发成本事件
+     */
+    private boolean postSemiOutputLedgerFor(String factoryId, ProductionReport report,
+                                          WorkProcessTask task, Long operatorId,
+                                          String semiCode, BigDecimal inQty, AllocatedCost allocated,
+                                          String reworkProductTypeId) {
+        // R4: backward-compat — skip if fields absent
+        if (semiCode == null || semiCode.isBlank() || inQty == null || inQty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.debug("[SP1-semi] skip postSemiOutputLedger for report {}: semiCode={} qty={}", report.getId(), semiCode, inQty);
+            return false;
+        }
+
+        // Fool-Proof Rule 4 — idempotency guard: (report_id, sourceRef=semiCode, IN) 为幂等键。
+        // ⚠️ BUG-GOLD-RERUN-WEIGHTED-AVG-SKIP: 更早的实现用过 (factoryId, semiCode, IN) 判重, 但那会让
+        //   同一半成品码的合法第二批生产被误判"已存在"跳过, 移动均价不累加 —— 因此改成 report_id 为主键。
+        // Task 4 Step 8: 多产出 (画布 1 进 N 出) 下同一份报工要入 N 笔 IN, 只按 report_id 判重会把
+        //   第二个产出误判成"已入账"跳过 —— 回料就永远进不了库, 且不报错。补上 sourceRef=semiCode 这一条件,
+        //   使幂等键实际是 (factoryId, reportId, semiCode, IN)。单产出路径 sourceRef 本来就等于 semiCode
+        //   (见下方 txn.builder().sourceRef(semiCode))，这条件对旧路径是恒真式, 不改变旧行为。
+        boolean alreadyPosted = txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
+                .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType())
+                        && semiCode.equals(t.getSourceRef()));
+        if (alreadyPosted) {
+            log.info("[SP1-semi] idempotent skip for report {} semiCode={}: IN txn already exists for this report+semiCode", report.getId(), semiCode);
+            return false;
+        }
+
+        String outputUnit = firstNonBlank(report.getSemiOutputUnit(),
+                firstNonBlank(report.getOutputUnit(), task.getPlannedUnit()));
+
+        // 多产出: 成本已由 postMultiSemiOutputs 按量分摊好 (各条单价相同), 这里直接用。
+        // 单产出 (allocated == null): 自算这份报工的全额成本, 分母就是本条的量 —— 与分摊口径
+        //   在 Σqty == inQty 时完全一致, 行为逐字节不变。
+        BigDecimal totalCost;
+        BigDecimal inUnitCost;
+        if (allocated != null) {
+            totalCost = allocated.totalCost();
+            inUnitCost = allocated.unitCost();
+        } else {
+            totalCost = reportTotalCost(factoryId, report, task);
+            inUnitCost = null;
+            if (totalCost != null && inQty.signum() > 0) {
+                inUnitCost = totalCost.divide(inQty, 4, RoundingMode.HALF_UP);
+            }
         }
 
         // R1 + W8 BUG-SP1-NEW-ROW 修复 — ensure-row-then-lock:
@@ -233,11 +448,22 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
                 .orElse(null);
         if (sfi == null) {
-            ensureRowExists(factoryId, semiCode, task, outputUnit);
+            // 回料行的 productTypeId 记【回料自己】的产品, 不是批次的成品 (Critical-B):
+            //   web-admin 投料下拉按上游端口的 skuId 白名单过滤 (sfiMatchesUpstreamPort), 记成品
+            //   就永远筛不中 —— 阶段过滤放行了也照样到不了操作员眼前; 显示名/每盒克重也会印成成品的。
+            // ⛔ 只对回料这么记: 普通半成品行「productTypeId = 批次成品」是存量语义, 备货看板
+            //   (RestockBoardService.sumAvailableByProduct) 按成品汇总在制半成品量依赖它, 本次不动。
+            ensureRowExists(factoryId, semiCode, task, outputUnit,
+                    reworkProductTypeId != null ? reworkProductTypeId : task.getProductTypeId(),
+                    reworkProductTypeId != null);
             sfi = wipRepo
                     .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
                     .orElseThrow(() -> new IllegalStateException(
                             "[SP1-semi] row missing after ensureRowExists, semiCode=" + semiCode));
+        }
+        // 既有行 (跨批次复用同一个回料产品的那一行) 也要补标 —— 一旦为 true 不再翻回 false。
+        if (reworkProductTypeId != null && !Boolean.TRUE.equals(sfi.getIsRework())) {
+            sfi.setIsRework(Boolean.TRUE);
         }
         // 统一 moving-average 累加路径 (新建占位行 oldQty=0 → 累加结果与原全量新行字节一致; 既有行直接累加)
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, outputUnit, report.getMaterialBatchRefs());
@@ -263,8 +489,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         log.info("[SP1-semi] posted IN txn for report {} semiCode={} qty={} unitCost={} balanceAfter={}",
                 report.getId(), semiCode, inQty, inUnitCost, balanceAfter);
 
-        // SP3: 发布成本更新事件 → 异步回填 costUnitPrice + 超支预警
-        if (task.getProductionBatchId() != null) {
+        // SP3: 发布成本更新事件 → 异步回填 costUnitPrice + 超支预警。
+        // ⛔ 仅单产出路径在这里发 —— 多产出由 postMultiSemiOutputs 在 N 条全部入完后统一发一次
+        //    (每条各发一次会让 @Async 的 OrderCostBackfillListener 变成「哪条先到哪条赢」)。
+        if (allocated == null && task.getProductionBatchId() != null) {
             eventPublisher.publishEvent(new ProductionCostUpdatedEvent(
                     this,
                     factoryId,
@@ -274,6 +502,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     sfi.getAccumulatedCost()
             ));
         }
+        return true;
     }
 
     /**
@@ -351,14 +580,29 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * SEMI ledger ({@code semiCode}) 与 FINISHED 产出 ({@code wipNo}) 两条路径, 占位行键由调用方传入,
      * 保持与后续 {@code findForUpdate} 的键一致。
      */
-    private void ensureRowExists(String factoryId, String intermediateBatchNo, WorkProcessTask task, String outputUnit) {
+    private void ensureRowExists(String factoryId, String intermediateBatchNo, WorkProcessTask task,
+                                 String outputUnit) {
+        ensureRowExists(factoryId, intermediateBatchNo, task, outputUnit, task.getProductTypeId(), false);
+    }
+
+    /**
+     * @param productTypeId 这一行装的东西的产品 id —— 回料行记<b>回料自己</b>的产品,
+     *        其余一律沿用 {@code task.getProductTypeId()} (批次成品, 存量语义)
+     * @param isRework 这一行装的是不是回料。⛔ {@code process_order} 仍诚实记<b>产出它的那道</b>,
+     *        不为了穿过投料下拉的阶段过滤把它改成 0 —— 那一列还被出成率卡片用来排序并串成本链
+     *        (上一行的 produced = 下一行的投入), 回料排最前会把良品那道的出成率算成 1900%;
+     *        {@code resolveSourceWipNo} 也按 {@code processOrder == 本道-1} 找源, 0 对不上任何一道。
+     */
+    private void ensureRowExists(String factoryId, String intermediateBatchNo, WorkProcessTask task,
+                                 String outputUnit, String productTypeId, boolean isRework) {
         SemiFinishedInventory placeholder = SemiFinishedInventory.builder()
                 .factoryId(factoryId)
                 .batchId(task.getProductionBatchId())
                 .intermediateBatchNo(intermediateBatchNo)
                 .sourceWorkProcessTaskId(task.getId())
                 .processOrder(task.getProcessOrder())
-                .productTypeId(task.getProductTypeId())
+                .productTypeId(productTypeId)
+                .isRework(isRework)
                 .producedQuantity(BigDecimal.ZERO)
                 .consumedQuantity(BigDecimal.ZERO)
                 .availableQuantity(BigDecimal.ZERO)
@@ -920,9 +1164,14 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
     }
 
+    /**
+     * @param allocated 多产出在场时这条 FINISHED 产出分到的成本 (Critical 2: 一份报工的成本要在
+     *        semiOutputs 的 N 条与本条之间<b>一起</b>分摊, 各拿各的份额);
+     *        {@code null} = 单产出路径, 自算 {@code rollLabor + rollMaterial} 全额 (逐字节零回归)
+     */
     private SemiFinishedInventory upsertProducedWip(String factoryId, ProductionReport report, WorkProcessTask task,
                                    BigDecimal rollLaborCost, BigDecimal rollMaterialCost,
-                                   Long operatorId) {
+                                   Long operatorId, AllocatedCost allocated) {
         String wipNo = generateBatchNo(task);
         BigDecimal out = nz(report.getOutputQuantity());
         String outputUnit = firstNonBlank(report.getOutputUnit(), task.getPlannedUnit());
@@ -969,11 +1218,17 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         //   - 历史已被毒化: 既有行 producedQuantity>0 但 unitCost 为 null (此前某次"有量无成本"已置 null) —
         //     既然历史段成本未知, 累加后仍无法诚实摊。
         //   仅当两者皆"成本已知/不毒化"时才计算 accumulatedCost/produced 加权 (与历史字节一致)。
+        //
+        // 多产出在场时 (allocated != null) 本次贡献是【分摊后】的那一份, 不是全额 rollup ——
+        // 判「本次成本未知」也必须跟着换成分摊值是不是 null (Critical 2)。
+        BigDecimal thisRollup = allocated != null
+                ? allocated.totalCost()
+                : nullSafeAdd(null, rollLaborCost, rollMaterialCost);
         BigDecimal priorProduced = nz(wipPriorProduced);
         boolean priorPoisoned = priorProduced.signum() > 0 && wipPriorUnitCost == null;
-        boolean inCostUnknown = out.signum() > 0 && rollLaborCost == null && rollMaterialCost == null;
+        boolean inCostUnknown = out.signum() > 0 && thisRollup == null;
 
-        wip.setAccumulatedCost(nullSafeAdd(wip.getAccumulatedCost(), rollLaborCost, rollMaterialCost));
+        wip.setAccumulatedCost(nullSafeAdd(wip.getAccumulatedCost(), thisRollup));
         if (!priorPoisoned && !inCostUnknown
                 && wip.getAccumulatedCost() != null && produced.signum() > 0) {
             wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
@@ -991,10 +1246,12 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         //
         //    幂等: 同一份报工在同一条库存行上只允许有一条 IN。撤回是【逐 IN 行】写冲销的,
         //    多写一条 IN 就会被冲销两次 —— 所以这里不能只靠外层 wipPosted 标记。
-        BigDecimal thisRollup = nullSafeAdd(null, rollLaborCost, rollMaterialCost);
-        BigDecimal inUnitCost = (thisRollup != null && out.signum() > 0)
-                ? thisRollup.divide(out, 4, RoundingMode.HALF_UP)
-                : null;   // 诚实 null: 无工价无料价 → 成本未知, ⛔ 不摊成 ¥0
+        // 多产出在场时用分摊后的共享单价 (各槽相同 ⇒ 回料与良品同一个单价, 与 SEMI 侧口径一致)。
+        BigDecimal inUnitCost = allocated != null
+                ? allocated.unitCost()
+                : ((thisRollup != null && out.signum() > 0)
+                        ? thisRollup.divide(out, 4, RoundingMode.HALF_UP)
+                        : null);   // 诚实 null: 无工价无料价 → 成本未知, ⛔ 不摊成 ¥0
         boolean inAlreadyLedgered = report.getId() != null
                 && txnRepo.findByFactoryIdAndReportId(factoryId, report.getId()).stream()
                         .anyMatch(t -> SemiFinishedInventoryTransaction.TxnType.IN.equals(t.getTxnType())
@@ -1409,9 +1666,19 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         final boolean filterStage = maxProcessOrder != null;
 
         // 1) 阶段过滤 (先做, 无 repo, 且缩小待识别族的产品集)。null processOrder 严格排除 (防回锅, 不变)。
+        //
+        // 🔴 回料放行 (2026-08-28 对抗性审计 Critical 1): 这道闸的本意是防半成品在同一批内回流,
+        //    而回料 (金检/X光剔出的不良品) 的业务目的【恰恰是】跨批次回到靠前的工序 —— 它是合法的回锅。
+        //    金检 (processOrder=5) 产出的回料, 下一批在绞肉 (maxProcessOrder=1) 开下拉时 5 < 1 为假
+        //    ⇒ 回料行不出现, 操作员领不到, 界面上没有任何解释 ⇒「不良品变成下一批领得到的回料」是假的。
+        //    ⛔ 修法不是把回料行的 processOrder 改成 0 (那会把出成率链的第一段算成 1900%, 见
+        //       SemiFinishedInventory.isRework 的说明), 而是让这道闸认识回料。
+        //    ⚠️ 回料行是【工厂级、按 semiCode 跨批次累加】的一行 (与所有半成品行同构), 天然不区分
+        //       「哪一批产的」—— 它就是一个工厂级的回料料池, 放行给靠前的工序正是它该有的语义。
         if (filterStage) {
             rows = rows.stream()
-                    .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() < maxProcessOrder)
+                    .filter(w -> w.getProcessOrder() != null
+                            && (w.getProcessOrder() < maxProcessOrder || Boolean.TRUE.equals(w.getIsRework())))
                     .collect(Collectors.toList());
             if (rows.isEmpty()) {
                 return List.of();
@@ -1533,6 +1800,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      *   <li>副产 (画布 {@code data.isByproduct} 标记) 排除 —— 与 PR #2846 把副产接到报工端时
      *       "不再显示成半成品也不再独立成行"的语义保持一致, 不把副产误当"半成品产出选项"提供。
      *       唯一判据收敛在 {@link WorkflowByproductNodes}, 不在此处另写一份。</li>
+     *   <li>回料 (画布 {@code data.isRework} 标记) 与副产相反 —— 刻意<b>保留</b>在选项里, 只是打上
+     *       {@code isRework=true} 标记, 不排除: 金检/X光剔出的不良品要能被选成产出目标, 回料才有落库
+     *       的地方(见 Task 4 {@code postApprovedOutput} 对 {@code semiOutputs} 逐条入账)。唯一判据收敛
+     *       在 {@link WorkflowReworkNodes}, 不在此处另写一份。</li>
      *   <li>一个工序任务在画布上可以有多个 SEMI_FINISHED 产出端口(2B.2 多产出), 因此一个 taskId
      *       可能对应多条 item —— 与 legacy 单产出假设不同, 调用方(RN 报工屏)目前只消费
      *       {@code items[0]}, 多产出的选择 UI 是已知的后续缺口, 不在本次修复范围内。</li>
@@ -1548,6 +1819,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         Set<String> byproductNodeIds =
                 WorkflowByproductNodes.byproductMaterialNodeIds(instance.getNodesJson());
+        // 回料端口必须出现在选项里 (与副产相反 —— 副产是被过滤掉的)。判据唯一来源 WorkflowReworkNodes。
+        Set<String> reworkNodeIds =
+                WorkflowReworkNodes.reworkMaterialNodeIds(instance.getNodesJson());
 
         Map<Long, WorkProcessTask> tasksById = tasks.stream()
                 .collect(Collectors.toMap(WorkProcessTask::getId, t -> t, (a, b) -> a));
@@ -1597,6 +1871,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .processName(wp != null ? wp.getProcessName() : productType.getName())
                     .semiCode(productType.getCode())
                     .processOrder(task.getProcessOrder())
+                    .isRework(reworkNodeIds.contains(port.getMaterialNodeId()))
                     .build());
         }
         return items;

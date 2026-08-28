@@ -1920,6 +1920,40 @@ def _note_empty_key(tag: str, account: str, errors: list) -> None:
         )
     errors.append(f"{account}: empty_api_key")
 
+def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
+    """这条链上**有没有一家 provider 配了非空 key**。
+
+    <h3>为什么需要它 (2026-08-28)</h3>
+    ``/health`` 原来只证明「这个进程活着」, 不证明「LLM 能用」。于是 CI 自建 runner
+    (canada-mac-mini-2) 上出现了这一格: 服务在、三家 key 全空 ⇒
+    ``/health`` 200 ⇒ Java 侧 ``PythonLLMClient.isAvailable()`` 判定「可用」⇒
+    联网用例不跳过 ⇒ 每次调用拿到
+    ``All providers exhausted: aistore/deepseek/zhipu: empty_api_key`` ⇒
+    **整道 Java Gate 对所有 PR 变红**。
+
+    形态: **量的不是想知道的那个数** —— 想知道「LLM 能不能用」,
+    实际量的是「HTTP 服务应不应答」。
+
+    ⛔ 不重新列一遍 key 的环境变量名 —— 那会变成第二份真相, 与
+    :func:`_provider_config` 漂移。这里复用它。
+
+    :returns:
+        ``True``  至少一家有 key
+        ``False`` 一家都没有 (LLM 确定不可用)
+        ``None``  判不出来 —— **调用方必须 fail-open**, ⛔ 不要把「不知道」
+                  当成「不可用」: 那会让线上 AI 功能在一次偶发异常里被整体关掉。
+    """
+    try:
+        for account, _model in _build_chain(slot):
+            _base_url, api_key = _provider_config(account)
+            if api_key:
+                return True
+        return False
+    except Exception as exc:                      # noqa: BLE001 - 判不出来就说不知道
+        logger.warning(f"[llm_router] providers_ready 判定失败, 返回 None(未知): {exc}")
+        return None
+
+
 async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],

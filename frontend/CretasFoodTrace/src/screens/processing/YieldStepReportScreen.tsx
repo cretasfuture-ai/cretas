@@ -44,6 +44,7 @@ import {
   type StepPhase,
   type StepTaskLike,
 } from './yieldStepResolution';
+import { buildSemiOutputsPayload } from './yieldStepOutputPayload';
 
 type YieldStepReportParams = {
   batchId: number;
@@ -681,8 +682,8 @@ const YieldStepReportScreen: React.FC = () => {
   // 切到 OUTPUT 阶段时从 output-options 加载; items 为空或无 semiCode → 只显成品栏
   const [outputOptions, setOutputOptions] = useState<OutputOptionItem[]>([]);
   const [outputOptionsLoading, setOutputOptionsLoading] = useState(false);
-  // 选中的半成品产出量 (操作工填写)
-  const [semiOutputQty, setSemiOutputQty] = useState('');
+  // SP1→多产出: 每个产出端口一个输入框, 按 semiCode 索引
+  const [semiQtyByCode, setSemiQtyByCode] = useState<Record<string, string>>({});
 
   // ── SP3 二次加工领半成品 ──
   // 批次类型 (SEMI_FINISHED → 首道领厂内半成品库存而非原料)
@@ -701,6 +702,20 @@ const YieldStepReportScreen: React.FC = () => {
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
+
+  /**
+   * 多产出: `getOutputOptions(batchId)` 返回的是**整个批次所有工序**的产出项 (Critical 返工修复,
+   * 2026-08-28 评审)。渲染和提交必须限定在**当前工序**, 否则:
+   * (a) 金检/X光两道工序各有一个 isRework 产出项, 不过滤会同时把两道的量都摆给操作员,
+   *     `buildSemiOutputsPayload` 按"至多一个 isRework 项"的假设只留最后一条, 另一条静默消失;
+   * (b) 操作员报"金检"这道工时, 会被推到"X光"那道的产出行, 提交后挂错工序。
+   * ⛔ 过滤只做一次、只在这里做 —— 渲染 (L~3130) 和提交 (doSubmitOutput) 必须共用这同一份列表,
+   *    各写一遍口径会漂 (同一个东西有两份, 它一定会漂)。
+   */
+  const taskOptions = useMemo(
+    () => outputOptions.filter((o) => !!o.semiCode && o.taskId === currentTask?.id),
+    [outputOptions, currentTask?.id],
+  );
 
   // 两点报工: 哨兵 task 检测 (workProcessId 为特殊常量时走简化屏)
   const isSentinelMaterial = currentTask?.workProcessId === SENTINEL_MATERIAL_INPUT;
@@ -865,7 +880,7 @@ const YieldStepReportScreen: React.FC = () => {
     setProductionStepMode('SEGMENT');
     // SP1: 切道时清空半成品产出状态和 options (下道独立加载)
     setOutputOptions([]);
-    setSemiOutputQty('');
+    setSemiQtyByCode({});
     // SP3: 切道时清空半成品领用状态
     setSelectedWipItem(null);
     setWipPickQty('');
@@ -1197,7 +1212,7 @@ const YieldStepReportScreen: React.FC = () => {
       // SP1: 切到 OUTPUT 阶段时拉 output-options (判断是否有半成品产出选项)
       if (nextMode === 'OUTPUT') {
         setOutputOptionsLoading(true);
-        setSemiOutputQty('');
+        setSemiQtyByCode({});
         setOutputOptions([]);
         try {
           const res = await yieldReportApi.getOutputOptions(batchId);
@@ -1568,17 +1583,14 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请填写本道产出量', '产出量必须大于 0');
       return;
     }
-    // SP1: 半成品产出选项 — 只有本道有 semiCode 时才有效 (F7: 只能是 API 返回的唯一 code)
-    const semiOption = outputOptions.length > 0 ? outputOptions[0] : null;
-    const hasSemiOption = semiOption != null && !!semiOption.semiCode;
-    const semiNum = hasSemiOption ? parseFloat(semiOutputQty) : NaN;
-    const hasSemiQty = !Number.isNaN(semiNum) && semiNum > 0;
-    // SP1: 确定 outputKind
-    const outputKind: YieldReportRequest['outputKind'] = hasSemiOption
-      ? hasSemiQty
-        ? 'BOTH'   // 成品 + 半成品
-        : 'FINISHED' // 只成品 (半成品量为空/0 则忽略)
-      : undefined; // 旧路径 (无半成品选项)
+    // 多产出: 每个产出端口各取各的数; 回料那一项的数同时作为 defectQuantity (质量账)
+    // ⛔ 传 taskOptions (已按当前工序过滤), 不传 outputOptions (整批次) —— 见 taskOptions 定义处注释
+    const outputPayload = buildSemiOutputsPayload(taskOptions, semiQtyByCode);
+    const hasAnySemi = (outputPayload.semiOutputs?.length ?? 0) > 0;
+    const outputKind: YieldReportRequest['outputKind'] =
+      taskOptions.length > 0
+        ? (hasAnySemi ? 'BOTH' : 'FINISHED')
+        : undefined;
     const validByproducts = byproducts
       .filter((b) => b.name.trim() && parseFloat(b.quantity) > 0)
       .map((b) => ({
@@ -1595,10 +1607,10 @@ const YieldStepReportScreen: React.FC = () => {
       inputQuantity: 0,  // 后端按 reportKind=OUTPUT 强制忽略 input
       outputQuantity: output,
       outputUnit: outUnit,
-      // SP1 双产出字段 (无 semiCode 时全部 undefined → 旧路径兼容)
+      // 多产出字段 (无 semiCode 选项时全部 undefined → 旧路径兼容)
       ...(outputKind ? { outputKind } : {}),
-      ...(hasSemiOption && hasSemiQty ? { semiOutputQuantity: semiNum } : {}),
-      ...(hasSemiOption && semiOption.semiCode ? { semiCode: semiOption.semiCode } : {}),
+      ...(outputPayload.semiOutputs ? { semiOutputs: outputPayload.semiOutputs } : {}),
+      ...(outputPayload.defectQuantity !== undefined ? { defectQuantity: outputPayload.defectQuantity } : {}),
       ...(validByproducts.length > 0 ? { byproducts: validByproducts } : {}),
       ...(Number.isNaN(wasteNum) || wasteNum < 0 ? {} : { wasteQuantity: wasteNum }),
       ...(Number.isNaN(sampleNum) || sampleNum <= 0 ? {} : { sampleRetainQuantity: sampleNum }),
@@ -1624,9 +1636,23 @@ const YieldStepReportScreen: React.FC = () => {
         setOutputQty('');
         const cumText = cumulative != null ? `已累计产出 ${cumulative} ${outUnit}。` : '';
         appAlert('产出已保存 (未完工)', `${cumText}本道仍可继续产出, 完成后点"标记完工"锁定出成率。`);
-      } else if (hasSemiQty && hasSemiOption) {
-        // SP1: 半成品产出成功提示
-        appAlert('完工出成已提交', `已入半成品库 ${semiNum} ${outUnit}`);
+      } else if (hasAnySemi) {
+        // 多产出: 半成品/回料分开措辞 —— 不良品不能说"入半成品库" (与栏位 hint "该数量入回料库存"
+        // 打架, 会让操作员以为不良品被当正常半成品入库; 2026-08-28 评审 Important)。
+        const semiOutputsList = outputPayload.semiOutputs ?? [];
+        const finishedText = semiOutputsList
+          .filter((s) => !s.isRework)
+          .map((s) => `${s.quantity} ${outUnit}`)
+          .join('、');
+        const reworkText = semiOutputsList
+          .filter((s) => s.isRework)
+          .map((s) => `${s.quantity} ${outUnit}`)
+          .join('、');
+        const msgParts = [
+          ...(finishedText ? [`已入半成品库 ${finishedText}`] : []),
+          ...(reworkText ? [`已记不良品 ${reworkText}`] : []),
+        ];
+        appAlert('完工出成已提交', msgParts.join('；'));
       } else {
         // 🔴 成功不能是唯一静默的分支 —— 与 handleSubmitSegment 2026-08-18 踩的是同一个形态
         //    (校验不过 / 提交失败 / 网络异常每条路都弹, 唯独成功什么都不说)。
@@ -1667,7 +1693,7 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
-      outputOptions, semiOutputQty, buildPhotoAnnotations]);
+      taskOptions, semiQtyByCode, buildPhotoAnnotations]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {
@@ -1832,7 +1858,7 @@ const YieldStepReportScreen: React.FC = () => {
         if (segByproducts.length > 0) bits.push('本段副产物');
       } else {
         if (outputQty.trim() !== '') bits.push('已填的产出量');
-        if (semiOutputQty.trim() !== '') bits.push('已填的半成品产出量');
+        if (Object.values(semiQtyByCode).some((v) => v.trim() !== '')) bits.push('已填的半成品产出量');
         if (byproducts.length > 0) bits.push('副产物');
         if (wasteQty.trim() !== '' || sampleRetainQty.trim() !== '') bits.push('损耗/留样');
       }
@@ -1840,7 +1866,7 @@ const YieldStepReportScreen: React.FC = () => {
     return bits.length > 0 ? bits.join('、') : null;
   }, [evidencePhotos.length, currentPhase, inputQty, prevOutput, materialBatchRefs.length, selectedWipItem,
       wipPickQty, productionStepMode, segStart, segEnd, segNote, segByproducts.length,
-      outputQty, semiOutputQty, byproducts.length, wasteQty, sampleRetainQty]);
+      outputQty, semiQtyByCode, byproducts.length, wasteQty, sampleRetainQty]);
 
   /**
    * 投入阶段 / 生产阶段的**退出口**。
@@ -3105,39 +3131,41 @@ const YieldStepReportScreen: React.FC = () => {
                 testID="yield-sample-retain"
               />
 
-              {/* SP1: 双产出 — 仅当 output-options 返回 semiCode 时显示 (F7: 单选项自动选中, 不让改) */}
+              {/* SP1→多产出: 仅当 output-options 返回 semiCode 时显示; 一道工序多个产出项全部渲染, 不再只取第一个 */}
               {outputOptionsLoading ? (
                 <View style={styles.semiOutputLoadingRow} testID="semi-output-loading">
                   <ActivityIndicator size="small" color="#409EFF" />
                   <Text style={styles.semiOutputLoadingText}>查询半成品产出选项…</Text>
                 </View>
               ) : null}
-              {!outputOptionsLoading && outputOptions.length > 0 && outputOptions[0]?.semiCode ? (
-                <View style={styles.semiOutputSection} testID="semi-output-section">
+              {!outputOptionsLoading && taskOptions.map((opt) => (
+                <View key={opt.semiCode} style={styles.semiOutputSection} testID={`semi-output-section-${opt.semiCode}`}>
                   <View style={styles.divider} />
                   <Text style={styles.semiOutputTitle}>
-                    剩余转半成品 — {outputOptions[0].processName}
+                    {opt.isRework ? `不良品 → 回料 — ${opt.processName}` : `剩余转半成品 — ${opt.processName}`}
                   </Text>
                   <View style={styles.semiOutputCodeRow}>
-                    <Text style={styles.semiOutputCodeLabel}>半成品编码</Text>
-                    <Text style={styles.semiOutputCodeValue} testID="semi-code-display">
-                      {outputOptions[0].semiCode}
+                    <Text style={styles.semiOutputCodeLabel}>{opt.isRework ? '回料编码' : '半成品编码'}</Text>
+                    <Text style={styles.semiOutputCodeValue} testID={`semi-code-display-${opt.semiCode}`}>
+                      {opt.semiCode}
                     </Text>
                     <Text style={styles.semiOutputCodeFixed}>(自动)</Text>
                   </View>
                   <YieldQuantityInput
-                    label="半成品产出量 (选填)"
-                    value={semiOutputQty}
-                    onChangeText={setSemiOutputQty}
+                    label={opt.isRework ? '不良品数量 (选填)' : '半成品产出量 (选填)'}
+                    value={semiQtyByCode[opt.semiCode!] ?? ''}
+                    onChangeText={(v) => setSemiQtyByCode((prev) => ({ ...prev, [opt.semiCode!]: v }))}
                     unit={outUnit}
                     disabled={submitting}
-                    testID="semi-output-qty"
+                    testID={`semi-output-qty-${opt.semiCode}`}
                   />
                   <Text style={styles.semiOutputHint}>
-                    填写后, 该数量将同步入半成品库存台账, 可用于二次加工
+                    {opt.isRework
+                      ? '⚠️ 上面的「产出量」请填良品量, 不含这里的不良品 (投入 = 产出量 + 不良品 + 损耗)。\n填写后, 该数量入回料库存, 下一批绞肉可领用; 不填 = 本批未清点(不会被记成零不良)'
+                      : '填写后, 该数量将同步入半成品库存台账, 可用于二次加工'}
                   </Text>
                 </View>
-              ) : null}
+              ))}
 
               {alertText ? (
                 <View style={styles.alertBanner} testID="yield-alert-banner">

@@ -12,7 +12,7 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
-import com.cretas.aims.entity.enums.ArApTransactionType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.factory.WarehouseCodes;
 import com.cretas.aims.entity.enums.CustomerSource;
 import com.cretas.aims.entity.enums.ProductCategory;
@@ -122,9 +122,21 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.FgReservationLedgerService reservationLedgerService;
 
-    /** Sales shipment auto-AR idempotency guard. Optional for legacy unit tests. */
+    /**
+     * 自动应收挂账的存量切换缝检测。Optional for legacy unit tests。
+     *
+     * <p>2026-08-28 起挂账幂等由 {@code ArApService#recordReceivableIfAbsent} 按
+     * (SALES_DELIVERY, deliveryId) 负责; 这里只用来认出「升级前挂过整单应收」的在飞订单,
+     * 对它们保持旧行为以免双重计费。
+     */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ArApTransactionRepository arApTransactionRepository;
+
+    /**
+     * 自动应收挂账的幂等来源类型 —— 与 DB 唯一键 {@code uk_aat_ar_invoice_per_shipment}
+     * (V20261031_06) 的 {@code source_type} 取值一致。对应采购侧的 {@code "PURCHASE_RECEIVE"}。
+     */
+    private static final String SOURCE_DOC_TYPE_SALES_DELIVERY = "SALES_DELIVERY";
 
     /** Canvas Config — 可选注入，模块未部署时不影响现有逻辑 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -3126,17 +3138,78 @@ public class SalesServiceImpl implements SalesService {
         if (record.getSalesOrderId() != null) {
             try {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
-                if (order != null && order.getCustomerId() != null && order.getTotalAmount() != null) {
-                    boolean arExists = arApTransactionRepository != null
-                            && arApTransactionRepository.existsByFactoryIdAndSalesOrderIdAndTransactionType(
-                                    factoryId, order.getId(), ArApTransactionType.AR_INVOICE);
-                    if (arExists) {
-                        log.info("应收自动挂账跳过: salesOrderId={} 已存在 AR_INVOICE", order.getId());
+                if (order != null && order.getCustomerId() != null) {
+                    // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
+                    //
+                    // 仓管在「确认发货」时可以覆盖实际发货数量 (warehouseConfirmDelivery,
+                    // 客户原话「车装不下 / 现场少装」)。覆盖后重算的是**发货单** totalAmount,
+                    // 而这里旧实现取的是**订单** totalAmount —— 两个数从此分家。prod 实测:
+                    //   SO-20260828-0012 订 2 盒 → 仓管填 5 → 库存真扣 5, 发运单 110.62,
+                    //                    应收只挂 44.25, 订单 COMPLETED ⇒ 3 盒没人收钱 (无条件错)
+                    //   SO-20260828-0013 订 4 盒 → 仓管填 2 → 发运单 44.25,
+                    //                    应收挂 88.50 ⇒ 客户被多收
+                    //
+                    // ⛔ 本修复只管会计正确性, **不表态**「超发允不允许、允许多少」——
+                    //   采购侧有 overReceiveRate + purchase_exceptions 的先例, 销售侧两样都没有,
+                    //   要不要照抄是产品决定, 不是这里能定的。无论策略怎么定,「应收 = 实发」都成立。
+                    //
+                    // 幂等键从「每 SO」改成「每子发运单」(SALES_DELIVERY, deliveryId):
+                    //   · 同一发运单重复确认 → 幂等命中, 不重复挂账 (原防双击语义保持)
+                    //   · 分批发货的不同发运单 → 各挂各的实发额, 累计 = 实发总额
+                    //     (旧实现在这里 `arExists` 直接 skip, 第二批永远不挂账 → 少收)
+                    // DB 侧唯一键同步换成 uk_aat_ar_invoice_per_shipment (V20261031_06) ——
+                    // ⚠️ 采购侧 2026-07-02 只改代码没改约束, 那次修复从未生效, 直到 8/03 分批
+                    //   到货第二批入不了库才被发现。这里代码与约束在同一个 PR 里改。
+                    //
+                    // ⚠️ 只有子发运单会走到这: shipDelivery 对 record_role='MASTER' 直接抛 409,
+                    //   所以母单不会重复挂一笔。
+                    //
+                    // ⛔ 金额缺失时 recordReceivableIfAbsent 诚实跳过(返回 null), 不回落到
+                    //   order.getTotalAmount() —— 那个回落正是本次要修的缺陷。
+                    //
+                    // 【切换缝】存量「整单挂账」的在飞订单保持旧行为, 否则客户被双重计费:
+                    //   改动前一张 SO 只挂一笔全额 AR_INVOICE (source_id 为 NULL)。若这样一张
+                    //   还有未发量的订单在升级后再发一批, 新逻辑会在整单应收之上**再挂一笔**。
+                    //   prod 实测 SO-20260828-0013 正是此形: PARTIAL_DELIVERED, 已挂 88.50 整单额,
+                    //   还剩 2 盒 —— 不设这道缝, 那 2 盒发货会再挂 44.25, 合计 132.75。
+                    // ⇒ 存量订单的账不追溯改写(它们的错账另行人工调整), 新订单走正确口径。
+                    boolean legacyWholeOrderAr = arApTransactionRepository != null
+                            && arApTransactionRepository.existsLegacyArInvoiceWithoutSource(factoryId, order.getId());
+                    if (legacyWholeOrderAr) {
+                        log.info("应收自动挂账跳过(存量整单挂账, 保持旧行为避免双重计费): salesOrderId={}, deliveryId={}",
+                                order.getId(), record.getId());
                     } else {
-                        arApService.recordReceivable(factoryId, order.getCustomerId(), order.getId(),
-                            order.getTotalAmount(), LocalDate.now().plusDays(30), userId,
-                            "销售发货自动挂账-" + record.getDeliveryNumber());
-                    log.info("自动创建应收: orderId={}, amount={}", order.getId(), order.getTotalAmount());
+                        // 🔴 2026-08-28 合并口径 (#292 × #302): 两个改动**都要**, 且不能二选一。
+                        //
+                        //   #292 修的是【口径】: 应收要含税 —— 旧实现传 order.getTotalAmount()
+                        //        (未税), 而同一次发货生成的销项发票是含税的 ⇒ 系统自己跟自己矛盾
+                        //        (发票说客户欠 250.00 / 应收台账说欠 221.24)。生产 7/7 全中。
+                        //   #302 修的是【数量基准】: 应收要按【实发】而不是订单 —— 仓管把实发数量
+                        //        从 2 改成 5, 库存真扣 5 而应收只记 2 的钱 (生产实测 SO-20260828-0012)。
+                        //
+                        // ⛔ 陷阱: 直接取 #302 的 record.getTotalAmount() 会**静默退回未税** ——
+                        //    sales_delivery_records.total_amount 是 Σ 实发量 × 单价, 而那个单价是
+                        //    **未税**的 (实测 DLV-20260828-9106-01 发货单额 221.24 == 订单未税额)。
+                        //    而且发货单上**没有任何税字段** (records 只有 total_amount,
+                        //    items 只有 unit_price) ⇒ 税率必须回订单行借。
+                        //    ⚠️ 那样合并**不会有任何测试变红**: #292 的用例钉订单口径、#302 的用例
+                        //      钉实发口径, 各自都还绿 —— 这一格是两个 PR 的共同盲区。
+                        //      由 shipArMergedCaliber_* 用例钉住。
+                        //
+                        // ⇒ 正确形态 = Σ(实发量 × 单价 × (1 + 税率/100)), 税率从
+                        //   sales_delivery_items.salesOrderItemId → sales_order_items.taxRate 借。
+                        //   与采购侧 PurchaseServiceImpl#taxInclusiveReceivedValue 同一范式与同一取整。
+                        BigDecimal shippedValue = taxInclusiveShippedValue(order, record);
+                        ArApTransaction ar = arApService.recordReceivableIfAbsent(
+                                factoryId, order.getCustomerId(), order.getId(),
+                                SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId(),
+                                shippedValue, LocalDate.now().plusDays(30), userId,
+                                "销售发货自动挂账-" + record.getDeliveryNumber());
+                        if (ar != null) {
+                            log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
+                                    order.getId(), record.getId(), shippedValue,
+                                    record.getTotalAmount(), order.getPayableAmount(), ar.getId());
+                        }
                     }
                 }
             } catch (BusinessException e) {
@@ -5023,5 +5096,69 @@ public class SalesServiceImpl implements SalesService {
                 "业务员账号 " + user.getId() + " 既没有姓名也没有登录名, 无法记录业务员")
                 .withHint("请先在用户管理里补全该账号的姓名")
                 .withHintTarget("salesperson");
+    }
+
+    /**
+     * 本次发货的【价税合计】实发金额 —— 应收挂账口径。
+     *
+     * <h3>它把 #292 与 #302 合成一个数</h3>
+     * <ul>
+     *   <li>#302【数量基准】: 按<b>实发</b>量算, 不按订单量
+     *       (仓管把实发从 2 改成 5, 库存真扣 5 —— 生产实测 SO-20260828-0012)</li>
+     *   <li>#292【口径】: 结果必须<b>含税</b>, 与同一次发货生成的销项发票一致
+     *       (发票 250.00 / 旧应收 221.24 —— 生产 7/7 全中)</li>
+     * </ul>
+     *
+     * <h3>⛔ 为什么不能直接用 {@code record.getTotalAmount()}</h3>
+     * 它是 Σ 实发量 × 单价, 而 {@code SalesDeliveryItem.unitPrice} 是<b>未税</b>价
+     * (实测 {@code DLV-20260828-9106-01} 发货单额 221.24 == 订单未税额 221.24)。
+     * 而且发货单上<b>没有任何税字段</b>: {@code sales_delivery_records} 只有
+     * {@code total_amount}, {@code sales_delivery_items} 只有 {@code unit_price}
+     * ⇒ 税率只能回订单行借 ({@code salesOrderItemId → SalesOrderItem.taxRate})。
+     *
+     * <h3>诚实的降级 (与采购侧 taxInclusiveReceivedValue 同一纪律)</h3>
+     * <ul>
+     *   <li>行无单价/无数量 → 该行贡献 0 (与旧 totalAmount 同口径, 不伪造金额)</li>
+     *   <li>挂不上订单行 / 税率为空 → <b>按 0 税率</b>只算未税额。
+     *       ⛔ 不猜税率 —— 宁可少算, 也不凭空造一笔税。</li>
+     * </ul>
+     * 取整与 {@link com.cretas.aims.entity.inventory.PurchaseOrderItem#getLineAmountWithTax()}
+     * 及采购侧助手一致: 行级 {@code setScale(2, HALF_UP)}, 税率除法 6 位 HALF_UP。
+     *
+     * <p>⚠️ 折扣: 订单级 {@code discountAmount} 不参与本式 —— 它是<b>整单</b>折扣,
+     * 无法按发货行摊。整单一次发完时与 {@code order.getPayableAmount()} 的差额即该折扣,
+     * <b>分批发货下的折扣分摊是未决问题</b>, 见 PR 说明。
+     */
+    private BigDecimal taxInclusiveShippedValue(SalesOrder order, SalesDeliveryRecord record) {
+        if (record == null || record.getItems() == null || record.getItems().isEmpty()) {
+            return record != null && record.getTotalAmount() != null
+                    ? record.getTotalAmount() : BigDecimal.ZERO;
+        }
+        java.util.Map<Long, BigDecimal> taxRateByOrderItemId = new java.util.HashMap<>();
+        if (order != null && order.getItems() != null) {
+            for (SalesOrderItem oi : order.getItems()) {
+                if (oi.getId() != null) {
+                    taxRateByOrderItemId.put(oi.getId(), oi.getTaxRate());
+                }
+            }
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getUnitPrice() == null || item.getDeliveredQuantity() == null) {
+                continue;
+            }
+            BigDecimal net = item.getDeliveredQuantity().multiply(item.getUnitPrice())
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+            BigDecimal rate = item.getSalesOrderItemId() != null
+                    ? taxRateByOrderItemId.get(item.getSalesOrderItemId()) : null;
+            if (rate == null || rate.compareTo(BigDecimal.ZERO) == 0) {
+                total = total.add(net);
+                continue;
+            }
+            BigDecimal multiplier = BigDecimal.ONE.add(
+                    rate.divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP));
+            total = total.add(net.multiply(multiplier).setScale(2, java.math.RoundingMode.HALF_UP));
+        }
+        return total;
     }
 }

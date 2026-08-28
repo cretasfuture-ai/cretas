@@ -24,7 +24,9 @@ import java.util.List;
  *       {@code data.isByproduct} on the canvas (see {@code WorkflowByproductNodes}); a single
  *       task can legitimately contribute more than one item (2B.2 multi-output). {@code semiCode}
  *       is the resolved {@code ProductType.code} (e.g. {@code PTSEMI-F006-2001}), not the raw
- *       {@code skuId} UUID.</li>
+ *       {@code skuId} UUID. 回料端口 (画布 {@code data.isRework} 标记, 见 {@code WorkflowReworkNodes})
+ *       与副产恰好相反 —— 刻意<b>保留</b>并在 {@link OutputOptionItem#getIsRework()} 上打标记, 不过滤掉:
+ *       金检/X光剔出的不良品仍要能选成产出目标, 回料链路才走得通。</li>
  * </ul>
  */
 @Data
@@ -54,5 +56,17 @@ public class OutputOptionsResponse {
 
         /** Process order (1-based), for display ordering in the dropdown. */
         private Integer processOrder;
+
+        /**
+         * 这一项是不是回料 (金检/X光 剔出的不良品去处)。
+         *
+         * <p>{@code true} 时报工屏把这一栏显示成「不良品数量」而不是「半成品产出量」,
+         * 并把填的数同时回填 {@code ProductionReport.defectQuantity} (质量账)。
+         *
+         * <p>判据唯一来源 {@link com.cretas.aims.service.workflow.WorkflowReworkNodes}。
+         * 旧版 App 不认这个字段, 会把回料当普通半成品产出项渲染 —— 物料账仍然对,
+         * 只是少了「不良品」这个措辞。这是刻意的向后兼容, 不是缺陷。
+         */
+        private Boolean isRework;
     }
 }
