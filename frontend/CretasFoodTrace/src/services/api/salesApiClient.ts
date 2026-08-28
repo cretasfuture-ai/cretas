@@ -86,25 +86,48 @@ export interface SalesDeliveryItem {
   batchNumber?: string;
 }
 
+/**
+ * 与 GET /api/mobile/{factoryId}/sales/finished-goods 的实际响应对齐。
+ *
+ * 2026-08-28 逐屏走查发现这个接口声明过三个后端**从不产出**的字段,
+ * 而 TypeScript 全绿 —— 声明是我们自己写的, 它不会去核对后端发了什么:
+ *
+ *   productTypeName  后端恒为 null, 真名在 productName 里
+ *                    ⇒ 屏上每一行的品名都退化成 productTypeId 那串 UUID
+ *   totalQuantity    后端根本没有这个键
+ *                    ⇒ 「总量」显示成空, 进度条恒 0,
+ *                       而 `availableQuantity / undefined` 是 NaN,
+ *                       `NaN < 0.2` 恒 false ⇒「库存偏低」这一档永远走不到
+ *   expiryDate       后端发的是 expireDate ⇒ 保质期从来没显示过
+ *
+ * ⛔ 改这里的字段名之前, 先拿真实响应核一遍键名。
+ */
 export interface FinishedGoodsBatch {
   id: string;
   factoryId: string;
   batchNumber: string;
   productTypeId: string;
-  productTypeName?: string;
-  totalQuantity: number;
+  /** 产品名。后端字段名是 productName; productTypeName 恒 null, 保留仅为兼容旧调用。 */
+  productName?: string | null;
+  productTypeName?: string | null;
+  /** 本批次产出量。后端字段名是 producedQuantity。 */
+  producedQuantity?: number | null;
+  /** 标称量, 后端可能为 null。 */
+  nominalQuantity?: number | null;
   availableQuantity: number;
   reservedQuantity: number;
+  shippedQuantity?: number | null;
   unit: string;
   packagingSpecId?: string;
-  packagingSpecName?: string;
+  packagingSpecName?: string | null;
   packagingUnit?: string;
   packagingBaseUnit?: string;
   packagingFactor?: number;
   productionDate: string;
-  expiryDate?: string;
+  /** 保质期到期日。后端字段名是 expireDate。 */
+  expireDate?: string | null;
   unitCost?: number;
-  storageLocation?: string;
+  storageLocation?: string | null;
   createdAt: string;
 }
 

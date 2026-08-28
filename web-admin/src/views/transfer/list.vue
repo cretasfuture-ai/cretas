@@ -402,6 +402,14 @@ function transferBaseQuantity(row: TransferCreateRow): number {
   return Number(row.quantity || 0) * Number(row._packageFactor || 1);
 }
 
+/**
+ * 这一行是不是真的在「折合」—— 包装系数为 1 时基本量恒等于填写量, 再打一遍只是噪音。
+ * ⚠️ 判据是**系数**而不是单位字符串比较: 单位可能写法不同(kg / 公斤)但系数仍是 1。
+ */
+function hasPackagingConversion(row: TransferCreateRow): boolean {
+  return Number(row._packageFactor || 1) !== 1;
+}
+
 function transferPackageLimit(row: TransferCreateRow): number | undefined {
   if (row._currentStock == null || row._currentStock === '') return undefined;
   return Number(row._currentStock) / Number(row._packageFactor || 1);
@@ -842,7 +850,12 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
                 />
                 <span class="unit-chip">{{ row.selectedItemId ? displayUnit(row.unit) : '单位' }}</span>
               </div>
-              <div v-if="row.selectedItemId && row.quantity" class="base-quantity-preview">
+              <!-- 🔴 2026-08-28 客户反馈「数量单位折合的问题」: 调拨包装选「kg(基本单位)」时
+                   _packageFactor = 1, 这一行会打出「50000.000 kg → 折合 50,000 kg」——
+                   同一个数换个写法再说一遍, 而「折合」这个词让人以为发生了换算。
+                   只有真的发生换算(包装单位 ≠ 基本单位)时才显示。 -->
+              <div v-if="row.selectedItemId && row.quantity && hasPackagingConversion(row)"
+                   class="base-quantity-preview">
                 折合 {{ formatStock(transferBaseQuantity(row)) }} {{ displayUnit(row._inventoryUnit || row.unit) }}
               </div>
             </template>

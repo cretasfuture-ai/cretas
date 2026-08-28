@@ -71,7 +71,10 @@
       "warning": "警告",
       "good_above": "良好（超过基准）",
       "caution_near": "关注（接近基准）",
-      "warning_below": "警告（低于基准）"
+      "warning_below": "警告（低于基准）",
+      "danger": "危险",
+      "danger_below": "危险（远低于基准）",
+      "warning_near": "警告（接近下限）"
     },
     "categories": {
       "profitability": "盈利能力",

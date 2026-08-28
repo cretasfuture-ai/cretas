@@ -87,7 +87,36 @@
     "add": {
       "title": "Add Staff",
       "success": "Staff added successfully",
-      "failed": "Failed to add staff"
+      "failed": "Failed to add staff",
+      "sections": {
+        "basicInfo": "Basic info",
+        "workInfo": "Work info"
+      },
+      "fields": {
+        "username": "Username",
+        "fullName": "Full name",
+        "phone": "Phone",
+        "email": "Email",
+        "position": "Position"
+      },
+      "selectDepartment": "Select department",
+      "submit": "Save",
+      "successMessage": "Employee added",
+      "roles": {
+        "worker": "Worker",
+        "teamLeader": "Team leader",
+        "departmentAdmin": "Department admin",
+        "qualityInspector": "Quality inspector",
+        "warehouseKeeper": "Warehouse keeper"
+      },
+      "validation": {
+        "usernameRequired": "Username is required",
+        "usernameMinLength": "Username needs at least 3 characters",
+        "nameRequired": "Full name is required",
+        "phoneRequired": "Phone number is required",
+        "phoneInvalid": "Phone number must be 11 digits",
+        "emailInvalid": "Email format is not valid"
+      }
     },
     "aiAnalysis": {
       "title": "AI Analysis",
@@ -141,16 +170,13 @@
       "suspended": "Suspended"
     },
     "form": {
-      "name": "Name",
-      "namePlaceholder": "Enter name",
-      "nameRequired": "Name is required",
+      "name": "Employee Name",
+      "namePlaceholder": "Enter the invited employee's name",
+      "nameRequired": "Employee name is required",
       "phone": "Phone",
       "phonePlaceholder": "Enter phone number",
       "phoneRequired": "Phone is required",
       "phoneInvalid": "Please enter a valid 11-digit phone number",
-      "name": "Employee Name",
-      "namePlaceholder": "Enter the invited employee's name",
-      "nameRequired": "Employee name is required",
       "email": "Email",
       "emailPlaceholder": "Enter email",
       "department": "Department",
@@ -189,7 +215,9 @@
       "earlyLeave": "Early Leave",
       "absent": "Absent",
       "departmentRanking": "Department Attendance Ranking",
-      "noData": "No data available"
+      "noData": "No data available",
+      "loadFailedTitle": "Attendance stats unavailable",
+      "loadFailedBody": "We could not load attendance data this time, so no numbers are shown. Pull down to retry."
     },
     "myAttendance": {
       "title": "My Attendance",
@@ -456,7 +484,26 @@
       "cancel": "Cancel",
       "create": "Create",
       "success": "Department created successfully",
-      "failed": "Failed to create department"
+      "failed": "Failed to create department",
+      "fields": {
+        "name": "Department name",
+        "description": "Description",
+        "manager": "Manager",
+        "status": "Active"
+      },
+      "placeholders": {
+        "name": "e.g. Processing workshop",
+        "description": "What this department does (optional)",
+        "manager": "Pick a manager (optional)"
+      },
+      "noManager": "Not assigned",
+      "statusHint": "When inactive, this department stops appearing in employee options.",
+      "submit": "Save",
+      "successMessage": "Department added",
+      "createFailed": "Could not add the department. Please try again.",
+      "validation": {
+        "nameRequired": "Department name is required"
+      }
     },
     "detail": {
       "title": "Department Details",
@@ -521,7 +568,10 @@
       "success": "Account invitation created",
       "failed": "Failed to add",
       "tipTitle": "Tip",
-      "errorTitle": "Error"
+      "errorTitle": "Error",
+      "name": "Name",
+      "namePlaceholder": "Employee name",
+      "nameRequired": "Name is required"
     }
   },
   "schedule": {
@@ -729,7 +779,9 @@
     "error": "Error",
     "success": "Success",
     "retryLater": "Failed to load data. Please try again later.",
-    "tip": "Tip"
+    "tip": "Tip",
+    "failed": "Operation failed",
+    "hint": "Note"
   },
   "common": {
     "user": "User",

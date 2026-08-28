@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.TransferItemType;
 import com.cretas.aims.entity.enums.TransferStatus;
@@ -386,8 +387,12 @@ public class TransferServiceImpl implements TransferService {
                                 return receipt.subtract(used).subtract(reserved).max(BigDecimal.ZERO);
                             })
                             .reduce(BigDecimal.ZERO, BigDecimal::add);
-                    ensureCreateQuantityAvailable(item, available,
-                            itemType == TransferItemType.PACKAGING_MATERIAL ? "包材" : "原料", materialTypeId);
+                    String label = itemType == TransferItemType.PACKAGING_MATERIAL ? "包材" : "原料";
+                    if (available.compareTo(item.getQuantity() != null
+                            ? item.getQuantity() : BigDecimal.ZERO) < 0) {
+                        explainUntransferableStock(factoryId, materialTypeId, sourceWarehouseId, label);
+                    }
+                    ensureCreateQuantityAvailable(item, available, label, materialTypeId);
                 }
             }
         }
@@ -447,6 +452,67 @@ public class TransferServiceImpl implements TransferService {
             total = total.add(row.getQuantity());
         }
         return String.format(" (合计 %s %s)", total.stripTrailingZeros().toPlainString(), unit);
+    }
+
+    /**
+     * 🔴 2026-08-28 六膳门生产实测: 页面「现有库存 100,000 kg」而提交报「可用 0 kg,
+     * 请减少调拨数量或选择有库存的调出仓库」—— 两条建议都没用, 因为货确实在那个仓,
+     * 只是**这一类库存不允许手动调拨**。用户按提示改数量/换仓库永远走不通。
+     *
+     * <p>成因: 「现有库存」来自 {@code /inventory/by-warehouse}
+     * ({@code findByFactoryIdAndWarehouseId}, 无任何过滤), 而闸走
+     * {@code findAvailableBatchesFEFOByWarehouse}, SQL 里排除了两类:
+     * <ul>
+     *   <li>{@code ownership <> COMPANY_OWNED} —— 客供料(来料加工)受
+     *       {@link com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard}
+     *       的 fail-closed 归属契约约束, 只能由 customer/销售单/行都对得上的生产计划,
+     *       经「按生产计划生成领料单」搬运。⛔ <b>不要为了让调拨通过而放开它</b>:
+     *       本类建目的批次时根本不写 ownership/ownerCustomerId, 放开等于把客供料洗成自有库存。</li>
+     *   <li>{@code sourceDocType = 'PRODUCTION_BATCH'} —— 在制半成品工件, 误拣会把半成品
+     *       当原料吃掉 (labor 双计 → 下游超扣 → 负库存)。</li>
+     * </ul>
+     *
+     * <p>本方法只在**可用量已经不够**时才多查一次(正常路径零额外开销), 把「有货但不可调拨」
+     * 这一类从「没货」里拆出来, 并指向真正能走通的入口。
+     *
+     * <p>⚠️ 只负责换措辞, 不改变放行与否 —— 拒绝仍然由
+     * {@link #ensureCreateQuantityAvailable} 做出, 这里抛不出来就原样往下走。
+     */
+    private void explainUntransferableStock(String factoryId, String materialTypeId,
+                                            String sourceWarehouseId, String label) {
+        List<MaterialBatch> allInWarehouse = materialBatchRepository
+                .findByFactoryIdAndWarehouseId(factoryId, sourceWarehouseId);
+        BigDecimal customerOwned = BigDecimal.ZERO;
+        BigDecimal wipWorkpiece = BigDecimal.ZERO;
+        for (MaterialBatch batch : allInWarehouse) {
+            if (!Objects.equals(materialTypeId, batch.getMaterialTypeId())) continue;
+            if (batch.getStatus() != MaterialBatchStatus.AVAILABLE) continue;
+            BigDecimal receipt = batch.getReceiptQuantity() != null ? batch.getReceiptQuantity() : BigDecimal.ZERO;
+            BigDecimal used = batch.getUsedQuantity() != null ? batch.getUsedQuantity() : BigDecimal.ZERO;
+            BigDecimal reserved = batch.getReservedQuantity() != null ? batch.getReservedQuantity() : BigDecimal.ZERO;
+            BigDecimal usable = receipt.subtract(used).subtract(reserved).max(BigDecimal.ZERO);
+            if (usable.signum() <= 0) continue;
+            if (batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+                customerOwned = customerOwned.add(usable);
+            } else if (SOURCE_DOC_TYPE_PRODUCTION_BATCH.equals(batch.getSourceDocType())) {
+                wipWorkpiece = wipWorkpiece.add(usable);
+            }
+        }
+        if (customerOwned.signum() > 0) {
+            throw new BusinessException(409, String.format(
+                    "%s在本仓的 %s 是客供料(来料加工), 不能用手动调拨搬运",
+                    label, customerOwned.stripTrailingZeros().toPlainString()))
+                    .withCode("TRANSFER_CUSTOMER_OWNED_STOCK_FORBIDDEN")
+                    .withHint("客供料要按生产计划生成领料单来投产, 系统会自动把料划到生产仓; "
+                            + "手动调拨没有客户与订单信息, 搬过去会丢掉归属");
+        }
+        if (wipWorkpiece.signum() > 0) {
+            throw new BusinessException(409, String.format(
+                    "%s在本仓的 %s 是在制半成品, 不是可调拨的原料库存",
+                    label, wipWorkpiece.stripTrailingZeros().toPlainString()))
+                    .withCode("TRANSFER_WIP_WORKPIECE_NOT_TRANSFERABLE")
+                    .withHint("在制半成品由报工流程消耗, 不走仓库调拨");
+        }
     }
 
     private void ensureCreateQuantityAvailable(CreateTransferRequest.TransferItemDTO item,
@@ -768,6 +834,8 @@ public class TransferServiceImpl implements TransferService {
      * JPQL/native 查询按这一列过滤。</p>
      */
     private static final String SOURCE_DOC_TYPE_TRANSFER_IN = "TRANSFER_IN";
+    /** 在制半成品工件的来源标记 —— 与 MaterialBatchRepository 的 FEFO JPQL 里那个字面量同源。 */
+    private static final String SOURCE_DOC_TYPE_PRODUCTION_BATCH = "PRODUCTION_BATCH";
 
     /**
      * 为调拨出库扣减的**每一个**批次写一条消耗流水。

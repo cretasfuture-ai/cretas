@@ -48,7 +48,10 @@ type ExceptionDecision =
   | 'REQUEST_RESUPPLY';
 
 type ExceptionStatus = 'PENDING' | 'RESOLVED';
-type ExceptionType = 'OVER_DELIVERY' | 'SHORT_DELIVERY' | 'QUALITY_ISSUE' | 'WRONG_ITEM';
+// 权威来源是后端枚举 ReceiveExceptionType —— 只有这两个值。
+// 这里原本写的是 OVER_DELIVERY / SHORT_DELIVERY / QUALITY_ISSUE / WRONG_ITEM,
+// 后端一个都不发; TypeScript 不会报, 因为接口是我们自己声明的。
+type ExceptionType = 'OVER_RECEIVE' | 'UNDER_RECEIVE';
 
 interface PurchaseException {
   id: string;
@@ -92,18 +95,26 @@ const SHORT_DECISIONS: { value: ExceptionDecision; label: string; desc: string }
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const EXCEPTION_TYPE_LABEL: Record<ExceptionType, string> = {
-  OVER_DELIVERY: '超收',
-  SHORT_DELIVERY: '少收',
-  QUALITY_ISSUE: '质量问题',
-  WRONG_ITEM: '货品错误',
+  OVER_RECEIVE: '超收',
+  UNDER_RECEIVE: '少收',
 };
 
 const EXCEPTION_TYPE_COLOR: Record<ExceptionType, string> = {
-  OVER_DELIVERY: '#E65100',
-  SHORT_DELIVERY: '#F57F17',
-  QUALITY_ISSUE: '#C62828',
-  WRONG_ITEM: '#6A1B9A',
+  OVER_RECEIVE: '#E65100',
+  UNDER_RECEIVE: '#F57F17',
 };
+
+/**
+ * 未知类型的兜底色。
+ *
+ * ⛔ 必须是 6 位。下面拼透明度用的是 `typeColor + '22'`,
+ * 三位色 '#666' 拼出来是 '#66622' —— 5 位, RN 直接抛
+ * `Unable to parse color from string`, 整个 App 白屏。
+ * 2026-08-28 实测: 线上 31 行采购异常全部走这条兜底 (后端发的是
+ * UNDER_RECEIVE/OVER_RECEIVE, 而当时表里写的是 SHORT_DELIVERY/OVER_DELIVERY),
+ * 所以这一屏对采购主管是 100% 打不开。
+ */
+const EXCEPTION_TYPE_COLOR_FALLBACK = '#666666';
 
 function formatDate(s: string | null | undefined): string {
   if (!s) return '—';
@@ -156,7 +167,7 @@ export default function PurchaseExceptionListScreen() {
 
   function openDecisionDialog(ex: PurchaseException) {
     // Pre-select sensible default
-    const isOver = ex.exceptionType === 'OVER_DELIVERY';
+    const isOver = ex.exceptionType === 'OVER_RECEIVE';
     const defaultDecision: ExceptionDecision = isOver ? 'ACCEPT_OVER' : 'ACCEPT_SHORT';
     setDecision(defaultDecision);
     setDecideTarget(ex);
@@ -194,7 +205,7 @@ export default function PurchaseExceptionListScreen() {
 
   function renderDecisionDialog() {
     if (!decideTarget) return null;
-    const isOver = decideTarget.exceptionType === 'OVER_DELIVERY';
+    const isOver = decideTarget.exceptionType === 'OVER_RECEIVE';
     const options = isOver ? OVER_DECISIONS : SHORT_DECISIONS;
 
     return (
@@ -270,7 +281,7 @@ export default function PurchaseExceptionListScreen() {
   // ─── Render Item ──────────────────────────────────────────────────────────
 
   function renderItem({ item }: { item: PurchaseException }) {
-    const typeColor = EXCEPTION_TYPE_COLOR[item.exceptionType] ?? '#666';
+    const typeColor = EXCEPTION_TYPE_COLOR[item.exceptionType] ?? EXCEPTION_TYPE_COLOR_FALLBACK;
     const isPending = item.status === 'PENDING';
     return (
       <Card style={styles.card} elevation={1}>

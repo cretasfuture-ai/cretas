@@ -23,8 +23,9 @@ type PeriodType = 'week' | 'month' | 'quarter';
 interface AttendanceStats {
   totalEmployees: number;
   avgAttendanceRate: number;
-  totalWorkHours: number;
-  avgDailyHours: number;
+  /** 后端没发就是 null。⛔ 不要兜底成 0 或 人数×8 —— 那会把「没有考勤数据」写成一个读数。 */
+  totalWorkHours: number | null;
+  avgDailyHours: number | null;
   lateCount: number;
   earlyLeaveCount: number;
   absentCount: number;
@@ -48,17 +49,22 @@ export default function AttendanceStatsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<PeriodType>('week');
   const [stats, setStats] = useState<AttendanceStats | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
       const data = await timeStatsApiClient.getAttendanceStats({ period });
       // API returns data directly
       if (data) {
+        setLoadError(null);
         setStats({
           totalEmployees: data.totalEmployees,
           avgAttendanceRate: data.avgAttendanceRate,
-          totalWorkHours: ('totalWorkHours' in data ? (data as { totalWorkHours: number }).totalWorkHours : data.totalEmployees * 8),
-          avgDailyHours: ('avgDailyHours' in data ? (data as { avgDailyHours: number }).avgDailyHours : 8),
+          // ⛔ 这两个字段后端可能不发。以前写的是 `data.totalEmployees * 8` 和 `8`,
+          // 于是一条考勤记录都没有的租户读到「总工时 176h / 日均工时 8.0h」,
+          // 和同屏的「平均出勤率 0.0%」直接打架。取不到就是 null, 屏上显示「—」。
+          totalWorkHours: 'totalWorkHours' in data ? (data as { totalWorkHours: number }).totalWorkHours : null,
+          avgDailyHours: 'avgDailyHours' in data ? (data as { avgDailyHours: number }).avgDailyHours : null,
           lateCount: data.totalLateCount,
           earlyLeaveCount: data.totalEarlyLeaveCount,
           absentCount: data.totalAbsentCount,
@@ -66,23 +72,12 @@ export default function AttendanceStatsScreen() {
         });
       }
     } catch (error) {
-      console.error(t('common.loading'), error);
-      // 设置默认数据
-      setStats({
-        totalEmployees: 45,
-        avgAttendanceRate: 96.5,
-        totalWorkHours: 1850,
-        avgDailyHours: 8.2,
-        lateCount: 12,
-        earlyLeaveCount: 5,
-        absentCount: 3,
-        departmentStats: [
-          { departmentName: '生产一部', attendanceRate: 98, avgHours: 8.5, employeeCount: 15 },
-          { departmentName: '生产二部', attendanceRate: 95, avgHours: 8.0, employeeCount: 12 },
-          { departmentName: '质检部', attendanceRate: 97, avgHours: 8.3, employeeCount: 8 },
-          { departmentName: '仓储部', attendanceRate: 94, avgHours: 7.8, employeeCount: 10 },
-        ],
-      });
+      // ⛔ 这里以前塞的是一整套假数据(45 人 / 96.5% 出勤 / 1850 工时 / 四个部门),
+      // 而这家租户只有 22 人、0 个部门 —— 接口挂了的时候 HR 看到的是一家不存在的公司,
+      // 屏上没有任何一处说请求失败了。违反 CLAUDE.md 核心原则 1「禁止降级处理」。
+      console.error('加载考勤统计失败', error);
+      setStats(null);
+      setLoadError(error instanceof Error && error.message ? error.message : t('messages.failed'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -137,6 +132,16 @@ export default function AttendanceStatsScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
+        {loadError && (
+          <Card style={styles.errorCard}>
+            <Card.Content>
+              <Text style={styles.errorTitle}>{t('attendance.stats.loadFailedTitle')}</Text>
+              <Text style={styles.errorBody}>{t('attendance.stats.loadFailedBody')}</Text>
+              <Text style={styles.errorDetail}>{loadError}</Text>
+            </Card.Content>
+          </Card>
+        )}
+
         {/* 核心指标 */}
         <View style={styles.statsGrid}>
           <Card style={styles.statCard}>
@@ -154,7 +159,7 @@ export default function AttendanceStatsScreen() {
               <View style={[styles.statIcon, { backgroundColor: HR_THEME.info + '15' }]}>
                 <MaterialCommunityIcons name="clock-outline" size={24} color={HR_THEME.info} />
               </View>
-              <Text style={styles.statValue}>{stats?.avgDailyHours?.toFixed(1) ?? 0}h</Text>
+              <Text style={styles.statValue}>{stats?.avgDailyHours != null ? `${stats.avgDailyHours.toFixed(1)}h` : '—'}</Text>
               <Text style={styles.statLabel}>{t('attendance.stats.avgHoursPerDay')}</Text>
             </Card.Content>
           </Card>
@@ -174,7 +179,7 @@ export default function AttendanceStatsScreen() {
               <View style={[styles.statIcon, { backgroundColor: HR_THEME.warning + '15' }]}>
                 <MaterialCommunityIcons name="timer-sand" size={24} color={HR_THEME.warning} />
               </View>
-              <Text style={styles.statValue}>{stats?.totalWorkHours ?? 0}h</Text>
+              <Text style={styles.statValue}>{stats?.totalWorkHours != null ? `${stats.totalWorkHours}h` : '—'}</Text>
               <Text style={styles.statLabel}>{t('attendance.stats.totalHours')}</Text>
             </Card.Content>
           </Card>
@@ -256,6 +261,15 @@ const styles = StyleSheet.create({
   periodSelector: { padding: 16, backgroundColor: HR_THEME.cardBackground },
   segmented: { backgroundColor: HR_THEME.background },
   content: { flex: 1, padding: 16 },
+  errorCard: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  errorTitle: { fontSize: 15, fontWeight: '600', color: '#B91C1C', marginBottom: 4 },
+  errorBody: { fontSize: 13, lineHeight: 20, color: '#7F1D1D' },
+  errorDetail: { fontSize: 12, color: '#9CA3AF', marginTop: 6 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -6, marginBottom: 16 },
   statCard: { width: (Dimensions.get('window').width - 44) / 2, margin: 6, borderRadius: 12, backgroundColor: HR_THEME.cardBackground },
   statContent: { alignItems: 'center', paddingVertical: 16 },

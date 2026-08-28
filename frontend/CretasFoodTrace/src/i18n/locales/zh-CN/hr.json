@@ -87,7 +87,36 @@
     "add": {
       "title": "添加员工",
       "success": "员工添加成功",
-      "failed": "添加失败"
+      "failed": "添加失败",
+      "sections": {
+        "basicInfo": "基本信息",
+        "workInfo": "工作信息"
+      },
+      "fields": {
+        "username": "登录用户名",
+        "fullName": "姓名",
+        "phone": "手机号",
+        "email": "邮箱",
+        "position": "岗位"
+      },
+      "selectDepartment": "选择部门",
+      "submit": "保存",
+      "successMessage": "员工已添加",
+      "roles": {
+        "worker": "普通员工",
+        "teamLeader": "班组长",
+        "departmentAdmin": "部门管理员",
+        "qualityInspector": "质检员",
+        "warehouseKeeper": "仓管员"
+      },
+      "validation": {
+        "usernameRequired": "请填写登录用户名",
+        "usernameMinLength": "登录用户名至少 3 个字符",
+        "nameRequired": "请填写姓名",
+        "phoneRequired": "请填写手机号",
+        "phoneInvalid": "手机号格式不对，请填 11 位数字",
+        "emailInvalid": "邮箱格式不对"
+      }
     },
     "aiAnalysis": {
       "title": "AI 分析",
@@ -141,16 +170,13 @@
       "suspended": "停职"
     },
     "form": {
-      "name": "姓名",
-      "namePlaceholder": "请输入姓名",
-      "nameRequired": "请输入姓名",
+      "name": "员工姓名",
+      "namePlaceholder": "请输入受邀员工姓名",
+      "nameRequired": "请输入员工姓名",
       "phone": "手机号",
       "phonePlaceholder": "请输入手机号",
       "phoneRequired": "请输入手机号",
       "phoneInvalid": "请输入有效的11位手机号",
-      "name": "员工姓名",
-      "namePlaceholder": "请输入受邀员工姓名",
-      "nameRequired": "请输入员工姓名",
       "email": "邮箱",
       "emailPlaceholder": "请输入邮箱",
       "department": "部门",
@@ -189,7 +215,9 @@
       "earlyLeave": "早退",
       "absent": "缺勤",
       "departmentRanking": "部门出勤排行",
-      "noData": "暂无数据"
+      "noData": "暂无数据",
+      "loadFailedTitle": "考勤统计没取到",
+      "loadFailedBody": "这次没能从服务器拿到考勤数据，所以这里不显示数字。下拉可以重试。"
     },
     "myAttendance": {
       "title": "我的考勤",
@@ -456,7 +484,26 @@
       "cancel": "取消",
       "create": "创建",
       "success": "部门创建成功",
-      "failed": "创建失败"
+      "failed": "创建失败",
+      "fields": {
+        "name": "部门名称",
+        "description": "部门说明",
+        "manager": "负责人",
+        "status": "启用状态"
+      },
+      "placeholders": {
+        "name": "例如：加工车间",
+        "description": "这个部门负责什么（选填）",
+        "manager": "选择负责人（选填）"
+      },
+      "noManager": "暂不指定",
+      "statusHint": "停用后，该部门不再出现在员工的部门选项里。",
+      "submit": "保存",
+      "successMessage": "部门已添加",
+      "createFailed": "添加失败，请重试",
+      "validation": {
+        "nameRequired": "请填写部门名称"
+      }
     },
     "detail": {
       "title": "部门详情",
@@ -521,7 +568,10 @@
       "success": "账号邀请已创建",
       "failed": "添加失败",
       "tipTitle": "提示",
-      "errorTitle": "错误"
+      "errorTitle": "错误",
+      "name": "姓名",
+      "namePlaceholder": "员工姓名",
+      "nameRequired": "请填写姓名"
     }
   },
   "schedule": {
@@ -729,7 +779,9 @@
     "error": "错误",
     "success": "成功",
     "retryLater": "加载数据失败，请稍后重试",
-    "tip": "提示"
+    "tip": "提示",
+    "failed": "操作失败",
+    "hint": "提示"
   },
   "common": {
     "user": "用户",
