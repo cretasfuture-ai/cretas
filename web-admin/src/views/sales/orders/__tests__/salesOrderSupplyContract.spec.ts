@@ -13,6 +13,7 @@ import {
 
 const listSource = readFileSync(resolve(import.meta.dirname, '../list.vue'), 'utf8');
 const detailSource = readFileSync(resolve(import.meta.dirname, '../detail.vue'), 'utf8');
+const newSource = readFileSync(resolve(import.meta.dirname, '../new.vue'), 'utf8');
 
 describe('sales order supply contract', () => {
   it('defaults a new order to explicit standard sale and factory supply', () => {
@@ -97,5 +98,10 @@ describe('sales order supply contract', () => {
     expect(detailSource).toContain('前往仓储收货任务');
     expect(detailSource).not.toContain('customer-material-receipts');
     expect(detailSource).not.toContain('客供料入库');
+  });
+
+  it('renders a real DOM focus target around the customer-material arrival picker', () => {
+    expect(newSource).toContain('<div data-field="arrival"><el-date-picker');
+    expect(newSource).toContain('target?.querySelector<HTMLElement>(\'input\')?.focus()');
   });
 });

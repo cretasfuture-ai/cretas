@@ -397,7 +397,7 @@ onMounted(() => {
           <div v-for="(row, index) in form.suppliedMaterials" :key="index" class="supplied-row" :data-supplied-row="index">
             <label><span>客供原料 <b>*</b></span><el-select data-field="material" v-model="row.materialTypeId" v-loading="loadingMaterials" filterable placeholder="选择客供原料" @change="onSuppliedMaterialChange(row)"><el-option v-for="material in suppliedMaterialOptions" :key="material.id" :label="`${material.name} (${material.code || '无编码'})`" :value="String(material.id)" /></el-select></label>
             <label><span>预计数量 <b>*</b></span><span class="quantity-field"><el-input-number data-field="quantity" v-model="row.expectedQuantity" :min="0" :precision="3" @change="dirty = true" /><em>{{ displayUnit(row.unit) || '单位' }}</em></span></label>
-            <label><span>预计到货 <b>*</b></span><el-date-picker data-field="arrival" v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" placeholder="预计到货" @change="dirty = true" /></label>
+            <label><span>预计到货 <b>*</b></span><div data-field="arrival"><el-date-picker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" placeholder="预计到货" @change="dirty = true" /></div></label>
             <label><span>目标仓库 <b>*</b></span><el-select data-field="warehouse" v-model="row.targetWarehouseId" placeholder="目标仓库" @change="dirty = true"><el-option v-for="warehouse in warehouses" :key="warehouse.id" :label="warehouseLabel(warehouse)" :value="warehouse.id" /></el-select></label>
             <el-button type="danger" link @click="form.suppliedMaterials.splice(index, 1); dirty = true">移除</el-button>
           </div>
