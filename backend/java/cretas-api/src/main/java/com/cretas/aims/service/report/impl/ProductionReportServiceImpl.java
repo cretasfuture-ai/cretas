@@ -548,7 +548,14 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     public Map<String, Object> getKPIMetrics(String factoryId, LocalDate date) {
         log.info("获取KPI指标: factoryId={}, date={}", factoryId, date);
         // 真实计算 (替换原硬编码 85/98/95/75 假数据). 统计窗口: 近 30 天 (与 getKpiMetricsDTO 一致)。
-        // 无数据 (如纯零售租户 / 无质检 / 无出货) → 返 0, 诚实空, 不造假。
+        //
+        // 🔴 这里原来写着「无数据 → 返 0, 诚实空, 不造假」——**返 0 恰恰是造假**:
+        //    「良品率 0%」读起来是全不合格,「单位成本 ¥0」读起来是不要钱,
+        //    「完成率 0%」读起来是一件没做完。而真相是这段期间没有数据。
+        //    最明显的自证: 无质检时它同时报「良品率 0%」和「缺陷率 0%」——
+        //    两个互斥的结论同时成立, 说明它们都不是读数。
+        // ⇒ 2026-08-29 起: 算不出来一律 null。web-admin 的 KPI 看板早就把这些字段
+        //    声明成 `number | null` 并初始化为 null, 接得住。
         LocalDate endDate = date != null ? date : LocalDate.now();
         LocalDate startDate = endDate.minusDays(30);
         final BigDecimal HUNDRED = new BigDecimal("100");
@@ -559,9 +566,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         if (output == null) output = BigDecimal.ZERO;
         BigDecimal plannedOutput = productionPlanRepository.calculatePlannedOutputBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        // ⛔ 没有计划产量时是 null, 不是 0 —— 「完成率 0%」读起来是**一件没做完**。
         BigDecimal completionRate = (plannedOutput != null && plannedOutput.compareTo(BigDecimal.ZERO) > 0)
                 ? output.divide(plannedOutput, 4, RoundingMode.HALF_UP).multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
+                : null;
 
         // 质检 → 良品率 / 首检合格率 (FPY) + 缺陷率
         List<QualityInspection> inspections = qualityInspectionRepository.findByFactoryIdAndDateRange(
@@ -570,12 +578,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         long passedInspections = inspections.stream()
                 .filter(q -> "PASS".equalsIgnoreCase(q.getResult()) || "passed".equalsIgnoreCase(q.getResult()))
                 .count();
-        BigDecimal fpy = totalInspections > 0
-                ? new BigDecimal(passedInspections).divide(new BigDecimal(totalInspections), 4, RoundingMode.HALF_UP)
-                        .multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-        BigDecimal defectRate = totalInspections > 0
-                ? HUNDRED.subtract(fpy).setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+        // 🔴 这两个原来都兜 0, 而它们**自相矛盾**: 没有质检记录时同时报
+        //    「良品率 0%」(全不合格) 和「缺陷率 0%」(零缺陷)。
+        //    两个互斥的结论同时成立, 本身就说明它们都不是读数。
+        BigDecimal fpy = rateOrNull(passedInspections, totalInspections);
+        BigDecimal defectRate = fpy == null ? null : HUNDRED.subtract(fpy).setScale(2, RoundingMode.HALF_UP);
 
         // 出货 → 准时交付率
         List<ShipmentRecord> shipments = shipmentRecordRepository.findByFactoryIdAndDateRange(
@@ -584,24 +591,26 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         long onTimeShipments = shipments.stream()
                 .filter(s -> "delivered".equalsIgnoreCase(s.getStatus()) || "shipped".equalsIgnoreCase(s.getStatus()))
                 .count();
-        BigDecimal onTimeRate = totalShipments > 0
-                ? new BigDecimal(onTimeShipments).divide(new BigDecimal(totalShipments), 4, RoundingMode.HALF_UP)
-                        .multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
+        // 🔴 原来无发货时兜 BigDecimal.ZERO —— 屏上「准时交付率 0%」读起来是**业绩很差**,
+        //    而真相是这段期间一单都没发。同一个量在 getKpiMetricsDto 里(本文件另一处)
+        //    已经正确地返回 null —— 同一件事两份, 已经漂了。⇒ 统一走 rateOrNull。
+        BigDecimal onTimeRate = rateOrNull(onTimeShipments, totalShipments);
 
         // 设备 → 真实 OEE (复用 getOeeReport, 已 .min(100) 封顶 + downtime 防负)
+        // ⛔ 算不出来(含抛异常)时是 null, 不是 0 —— 「OEE 0%」是一个**很像真的**坏读数。
         BigDecimal oee;
         try {
             OeeReportDTO oeeReport = getOeeReport(factoryId, startDate, endDate);
             oee = oeeReport != null && oeeReport.getOeeValue() != null
-                    ? oeeReport.getOeeValue().setScale(2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+                    ? oeeReport.getOeeValue().setScale(2, RoundingMode.HALF_UP) : null;
         } catch (Exception e) {
-            log.warn("KPI OEE 计算失败, 返 0: {}", e.getMessage());
-            oee = BigDecimal.ZERO;
+            log.warn("KPI OEE 计算失败, 返 null (⛔ 不返 0): {}", e.getMessage());
+            oee = null;
         }
 
-        // 成本 → 单位成本 (期间实际成本 / 产出). 无产出/无成本数据返 0。
-        BigDecimal unitCost = BigDecimal.ZERO;
+        // 成本 → 单位成本 (期间实际成本 / 产出)。
+        // ⛔ 无产出 / 无成本数据时是 **null**, 不是 0 —— 「单位成本 ¥0」读起来是「不要钱」。
+        BigDecimal unitCost = null;
         try {
             CostVarianceReportDTO costReport = getCostVarianceReport(factoryId, startDate, endDate);
             BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
@@ -609,7 +618,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 unitCost = totalActualCost.divide(output, 2, RoundingMode.HALF_UP);
             }
         } catch (Exception e) {
-            log.warn("KPI 单位成本计算失败, 返 0: {}", e.getMessage());
+            log.warn("KPI 单位成本计算失败, 返 null (⛔ 不返 0): {}", e.getMessage());
         }
 
         Map<String, Object> kpi = new HashMap<>();
