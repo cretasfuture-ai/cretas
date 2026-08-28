@@ -2298,19 +2298,50 @@ public class ProcessingServiceImpl implements ProcessingService {
         dashboard.put("averageUtilization", avgUtilization);
         return dashboard;
     }
+
+    /** 去掉尾随的 0：库存量给人看，⛔ 不要打出 3.200000。 */
+    private static String stripZeros(BigDecimal v) {
+        return v == null ? "-" : v.stripTrailingZeros().toPlainString();
+    }
     public Map<String, Object> getAlertsDashboard(String factoryId) {
         Map<String, Object> result = new HashMap<>();
         List<Map<String, Object>> alertList = new ArrayList<>();
 
         // 低库存预警
-        List<Object> lowStockMaterials = materialBatchRepository.findLowStockMaterials(factoryId);
-        for (Object material : lowStockMaterials) {
+        //
+        // 🔴 2026-08-29 逐屏走查：这里原来对每一种低库存原料都放同一句「原材料库存低」，
+        //    主体只以 id 的形式躺在 data 里(mrmt_1f41b247166d8e01)。
+        //    实测告警中心三条**完全一模一样**，仓管看不出是哪种料、还剩多少、低于多少 ——
+        //    一条无法据以行动的告警，和没有告警的区别只在于它占了一行。
+        //
+        // ⇒ 与紧挨着的过期预警对齐(那一条本来就会写「原材料即将过期: 批次号」)，把主体说出来。
+        //    ⛔ 没有改 findLowStockMaterials 本身：另外 3 个调用点只需要「有几种」这个计数。
+        for (Object[] row : materialBatchRepository.findLowStockMaterialsDetailed(factoryId)) {
+            String materialTypeId = row[0] == null ? null : String.valueOf(row[0]);
+            String name = row[1] == null ? null : String.valueOf(row[1]);
+            BigDecimal available = row[2] instanceof BigDecimal ? (BigDecimal) row[2]
+                    : row[2] == null ? null : new BigDecimal(String.valueOf(row[2]));
+            BigDecimal minStock = row[3] instanceof BigDecimal ? (BigDecimal) row[3]
+                    : row[3] == null ? null : new BigDecimal(String.valueOf(row[3]));
+            String unit = row[4] == null ? "" : String.valueOf(row[4]);
+
             Map<String, Object> alert = new HashMap<>();
             alert.put("type", "LOW_STOCK");
             alert.put("level", "WARNING");
             alert.put("status", "ACTIVE");
-            alert.put("message", "原材料库存低");
-            alert.put("data", material);
+            // 名称取不到时退回 id —— ⛔ 不要退回一句放之四海皆准的「原材料库存低」,
+            //   那样又变回三条一模一样。退回 id 至少还能区分是哪一条。
+            String subject = (name != null && !name.isBlank()) ? name : String.valueOf(materialTypeId);
+            alert.put("message", available != null && minStock != null
+                    ? String.format("%s 可用 %s%s，低于安全库存 %s%s",
+                            subject, stripZeros(available), unit, stripZeros(minStock), unit)
+                    : subject + " 库存低于安全水平");
+            alert.put("materialTypeId", materialTypeId);
+            alert.put("materialName", name);
+            alert.put("availableQuantity", available);
+            alert.put("minStock", minStock);
+            alert.put("unit", unit);
+            alert.put("data", materialTypeId);
             alert.put("createdAt", LocalDateTime.now());
             alertList.add(alert);
         }
