@@ -85,3 +85,114 @@ describe('图标按钮必须有可访问名（BUG-10）', () => {
     expect(PAGE).toContain('aria-label="添加储存区域"');
   });
 });
+
+/**
+ * 2026-08-28 仓库平面图设计器 —— 「接上没有」的源码闸。
+ *
+ * ⚠️ 这一层守的是**接线**，不是行为：
+ *   · 几何算术由 warehouseFloorPlan.spec.ts 验；
+ *   · 指针交互由 WarehouseFloorOverlay.spec.ts 用真实 DOM 事件驱动验；
+ *   · 「页面真的把叠加层接进画布、真的把权限传下去」只有读源码看得见 ——
+ *     组件自己的单测对「谁调它」是盲的。
+ */
+const OVERLAY = readFileSync(resolve(__dirname, 'WarehouseFloorOverlay.vue'), 'utf8');
+
+describe('全屏编辑不许再引入第二个 el-dialog 过渡（BUG-2 的同一条通道）', () => {
+  it('全屏是「同一块画布加一个 class」，不是弹窗', () => {
+    expect(PAGE).toContain("'is-fullscreen': mapFullscreen");
+    expect(PAGE).toContain('function openMapFullscreen');
+    expect(PAGE).toContain('function closeMapFullscreen');
+  });
+
+  it('弹窗数量没有增加 —— 仍然是原来那 4 个，每个都带 :key', () => {
+    // 原来 4 个：zone / location / move / recognize。多出第 5 个就是又开了一条
+    // 「leave 过渡被打断 → el-overlay-dialog 卡在 is-closing」的通道。
+    expect((PAGE.match(/<el-dialog/g) ?? []).length).toBe(4);
+    expect((PAGE.match(/<el-dialog :key=/g) ?? []).length).toBe(4);
+  });
+
+  it('全屏时锁住页面滚动，并且离开页面一定还回去', () => {
+    expect(PAGE).toContain("document.body.style.overflow = open ? 'hidden' : ''");
+    // 全屏时直接路由走掉的话，不还回去整站都滚不动了
+    const unmount = PAGE.slice(PAGE.indexOf('onUnmounted(() => {'), PAGE.indexOf('</script>'));
+    expect(unmount).toContain("document.body.style.overflow = ''");
+    expect(unmount.length).toBeGreaterThan(80);
+  });
+});
+
+describe('叠加层真的接在画布上（形态 B：机制在、没接上）', () => {
+  it('WarehouseFloorOverlay 挂在 VueFlow 里面，并且拿到了两层数据', () => {
+    expect(PAGE).toContain('<WarehouseFloorOverlay');
+    expect(PAGE).toContain(':floor="activeFloor"');
+    expect(PAGE).toContain('@zone-shape="applyZoneShape"');
+    expect(PAGE).toContain('@annotation-add="addAnnotation"');
+    expect(PAGE).toContain('@text-request="requestAnnotationText"');
+  });
+
+  it('可编辑性 = 有权限 且 全屏 —— 缩略图状态下叠加层不吃指针事件', () => {
+    expect(PAGE).toContain(':interactive="canDesignMap"');
+    expect(PAGE).toContain('const canDesignMap = computed(() => canEditLayout.value && mapFullscreen.value)');
+    // 阴性对照：权限判据本身没被放宽
+    expect(PAGE).toContain("['factory_super_admin', 'warehouse_manager'].includes(auth.currentRole)");
+  });
+
+  it('Controls 必须排在叠加层之后 —— 两者同为 z-index:5，后写的在上', () => {
+    const overlayAt = PAGE.indexOf('<WarehouseFloorOverlay');
+    const controlsAt = PAGE.indexOf('<Controls');
+    expect(overlayAt).toBeGreaterThan(-1);
+    expect(controlsAt).toBeGreaterThan(-1);
+    // 顺序反了的话，落笔状态下缩放按钮会被落笔面盖住，点不到
+    expect(controlsAt).toBeGreaterThan(overlayAt);
+  });
+
+  it('叠加层的 z 分层写死在组件里：区域在货架下、标注在货架上', () => {
+    expect(OVERLAY).toContain('.floor-overlay--base{z-index:auto}');
+    expect(OVERLAY).toContain('.floor-overlay--top{z-index:5}');
+  });
+});
+
+describe('三种拖拽共用同一个 600ms 保存节流（persist 打的是整份 layout）', () => {
+  it('货架拖拽的节流没有被这次改动摘掉', () => {
+    expect(PAGE).toContain('createTrailingDebouncer(600)');
+    const rackDrag = PAGE.slice(PAGE.indexOf('function onRackDrag'), PAGE.indexOf('async function bindLocation'));
+    expect(rackDrag).toContain('layoutPersistDebouncer.schedule');
+    expect(rackDrag.length).toBeGreaterThan(120);
+  });
+
+  it('区域几何与标注的拖拽走的是同一个调度器，⛔ 不是各自新建一个', () => {
+    // 各配一个防抖器会在同一个 600ms 窗口里打出三份整份 PUT。
+    expect((PAGE.match(/createTrailingDebouncer\(/g) ?? []).length).toBe(1);
+    for (const fn of ['applyZoneShape', 'addAnnotation', 'updateAnnotation']) {
+      const body = PAGE.slice(PAGE.indexOf(`function ${fn}(`));
+      expect(body.slice(0, 900), `${fn} 没有接到保存节流上`).toContain('layoutPersistDebouncer.schedule');
+    }
+  });
+});
+
+describe('区域几何是可逆的，并且删它的时候要说清删的是什么', () => {
+  it('删区域时它在每一层图上的面积都跟着删，不留孤块', () => {
+    const removeZone = PAGE.slice(PAGE.indexOf('async function removeZone'), PAGE.indexOf('async function removeLocation'));
+    expect(removeZone).toContain('floor.zoneShapes = floorZoneShapes(floor).filter');
+    expect(removeZone.length).toBeGreaterThan(200);
+  });
+
+  it('从图上移除区域几何 ≠ 删除区域，确认文案必须讲明白', () => {
+    expect(PAGE).toContain('区域本身和它下面的储位都保留');
+  });
+
+  it('删楼层会带走图上的面积和标注 —— 说出来，⛔ 不做无声的连带删除', () => {
+    const removeFloor = PAGE.slice(PAGE.indexOf('async function removeFloor'), PAGE.indexOf('async function moveBatch'));
+    expect(removeFloor).toContain('块区域面积');
+    expect(removeFloor).toContain('条标注');
+  });
+});
+
+describe('新增的按钮都有可访问名（BUG-10 同口径）', () => {
+  it('缩略图上的全屏入口不是一个没有名字的图标按钮', () => {
+    expect(PAGE).toContain('aria-label="全屏编辑平面图"');
+  });
+
+  it('颜色色块有名字', () => {
+    expect(PAGE).toContain(':aria-label="`标注颜色 ${color}`"');
+  });
+});

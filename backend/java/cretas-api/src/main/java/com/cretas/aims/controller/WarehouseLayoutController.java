@@ -37,6 +37,15 @@ public class WarehouseLayoutController {
     private static final String MODULE_ID = "WAREHOUSE_LAYOUT";
     private static final Pattern PREFIX_PATTERN = Pattern.compile("^[A-Z]{2,8}$");
     private static final Pattern JSON_OBJECT_PATTERN = Pattern.compile("\\{[\\s\\S]*}");
+    // 平面图体量护栏。与前端 warehouseLayoutModel.ts 里的常量同口径 ——
+    // 两份会漂，所以下限放在这里（接口是权威），前端那份只是提前给用户提示。
+    private static final int MAX_FLOORS = 50;
+    private static final int MAX_ZONE_SHAPES_PER_FLOOR = 200;
+    private static final int MAX_ANNOTATIONS_PER_FLOOR = 300;
+    /** 单条折线/自由笔的坐标个数（扁平数组，2 个数字 = 1 个点）。 */
+    private static final int MAX_ANNOTATION_POINTS = 1_000;
+    private static final Set<String> ANNOTATION_KINDS =
+            Set.of("rect", "ellipse", "polygon", "freehand", "text");
 
     private final FactoryFeatureConfigRepository featureConfigRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
@@ -176,6 +185,73 @@ public class WarehouseLayoutController {
                 if (!codes.add(code)) {
                     throw new BusinessException(400, "储存位置编码不能重复");
                 }
+            }
+        }
+        validateFloors(layout.get("floors"));
+    }
+
+    /**
+     * 楼层平面图的体量护栏（2026-08-28 随平面图设计器加入）。
+     *
+     * <p>为什么必须有：整份 layout 是一次 PUT 全量写进 {@code factory_feature_config.config}
+     * 这个 JSONB 列的，而平面图新增了两层可以「画多少有多少」的数据 ——
+     * 结构层（区域几何）和标注层（自由图形/文字）。前端已经各自设了上限，但那是
+     * 前端；接口是公开的，只有这里的判据算数（同 {@code ZZ99-NOT-CONFIGURED} 那次的教训：
+     * 前端拦住了不等于接口拦住了）。
+     *
+     * <p>⛔ 这里**只管体量和形状**，不校验 {@code zoneId} 指向的区域是否存在 ——
+     * 区域被删而几何还在是一种可恢复的中间态，前端会把它显示成「已删除的区域（孤块）」
+     * 让用户自己删掉。在这里 fail closed 会让用户连保存都做不了，反而卡死。
+     *
+     * <p>⚠️ 未知字段一律放行：{@code saveLayout} 存的是整份请求体，
+     * 这里不做白名单剔除，所以前端加字段不需要动后端（本次 zoneShapes / annotations
+     * 就是这么加进去的）。
+     */
+    private void validateFloors(Object floors) {
+        if (floors == null) return;
+        if (!(floors instanceof List<?> floorList)) {
+            throw new BusinessException(400, "楼层平面图配置格式无效");
+        }
+        if (floorList.size() > MAX_FLOORS) {
+            throw new BusinessException(400, "楼层数量不能超过 " + MAX_FLOORS + " 个");
+        }
+        for (Object item : floorList) {
+            if (!(item instanceof Map<?, ?> floor)) {
+                throw new BusinessException(400, "楼层平面图配置格式无效");
+            }
+            validateZoneShapes(floor.get("zoneShapes"));
+            validateAnnotations(floor.get("annotations"));
+        }
+    }
+
+    private void validateZoneShapes(Object zoneShapes) {
+        if (zoneShapes == null) return;
+        if (!(zoneShapes instanceof List<?> shapes) || shapes.size() > MAX_ZONE_SHAPES_PER_FLOOR) {
+            throw new BusinessException(400, "平面图上的区域数量超过限制");
+        }
+        for (Object item : shapes) {
+            if (!(item instanceof Map<?, ?> shape)
+                    || !(shape.get("zoneId") instanceof String zoneId)
+                    || zoneId.isBlank()) {
+                throw new BusinessException(400, "平面图上的区域必须关联一个储存区域");
+            }
+        }
+    }
+
+    private void validateAnnotations(Object annotations) {
+        if (annotations == null) return;
+        if (!(annotations instanceof List<?> marks) || marks.size() > MAX_ANNOTATIONS_PER_FLOOR) {
+            throw new BusinessException(400, "单层标注数量不能超过 " + MAX_ANNOTATIONS_PER_FLOOR + " 条");
+        }
+        for (Object item : marks) {
+            if (!(item instanceof Map<?, ?> annotation)
+                    || !(annotation.get("kind") instanceof String kind)
+                    || !ANNOTATION_KINDS.contains(kind)) {
+                throw new BusinessException(400, "平面图标注类型无效");
+            }
+            Object points = annotation.get("points");
+            if (points != null && (!(points instanceof List<?> list) || list.size() > MAX_ANNOTATION_POINTS)) {
+                throw new BusinessException(400, "单条标注的折线点数超过限制");
             }
         }
     }
