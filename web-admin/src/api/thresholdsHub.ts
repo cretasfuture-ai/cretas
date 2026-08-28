@@ -63,6 +63,17 @@ export interface FactoryThreshold {
   version: number;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * 🔴 后端标记：这一行是从全局 `'*'` 默认值继承来的，本厂还没有自己的 override。
+   *
+   * ⛔ **它的 `id` 属于全局那一行 —— 对它 PUT 会改掉全局默认值，影响所有工厂。**
+   * 保存时必须改走 {@link createThreshold} 建一条本厂 override。
+   *
+   * 背景（2026-08-29 生产实测）：列表接口原来严格按 factoryId 过滤，
+   * 全局行在任何工厂页面上都看不见 —— `LIUSHANMEN`(真实客户) 与 `MOCK_REST` 各 0 行，
+   * 管理员看到 15 个空分类，而解析器一直在用全局默认值跑。
+   */
+  inherited?: boolean;
 }
 
 /** Create payload — 必填字段. */

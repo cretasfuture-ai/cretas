@@ -25,6 +25,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   listThresholds,
+  createThreshold,
   updateThreshold,
   resetCategoryToDefault,
   ThresholdCategoryLabels,
@@ -104,12 +105,31 @@ async function onSaveRow(row: EditableRow) {
   if (!factoryId.value || !canWrite.value) return;
   savingId.value = row.id;
   try {
-    await updateThreshold(factoryId.value, row.id, {
-      thresholdValue: row._editValue,
-      enabled: row._editEnabled,
-      version: row.version,
-    });
-    ElMessage.success(`「${row.thresholdKey}」已保存`);
+    if (row.inherited) {
+      // 🔴 这一行是从全局 '*' 继承来的, 它的 id 属于【全局那一行】。
+      //    对它 PUT 会改掉全局默认值 —— 影响所有工厂, 不只本厂。
+      //    ⇒ 必须 POST 建一条本厂 override。后端 create 端点带唯一性防呆(409)。
+      await createThreshold(factoryId.value, {
+        thresholdKey: row.thresholdKey,
+        category: row.category,
+        valueType: row.valueType,
+        thresholdValue: row._editValue,
+        defaultValue: row.defaultValue,
+        description: row.description,
+        unit: row.unit,
+        minValue: row.minValue,
+        maxValue: row.maxValue,
+        enabled: row._editEnabled,
+      });
+      ElMessage.success(`「${row.thresholdKey}」已保存为本厂配置`);
+    } else {
+      await updateThreshold(factoryId.value, row.id, {
+        thresholdValue: row._editValue,
+        enabled: row._editEnabled,
+        version: row.version,
+      });
+      ElMessage.success(`「${row.thresholdKey}」已保存`);
+    }
     await loadCurrent();
   } catch (e) {
     console.error('[BusinessThresholds] save row failed:', e);
@@ -188,9 +208,14 @@ onMounted(() => {
             style="width: 100%"
             empty-text="此分类下暂无阈值配置"
           >
-            <el-table-column prop="thresholdKey" label="键" min-width="200">
+            <el-table-column prop="thresholdKey" label="键" min-width="230">
               <template #default="{ row }">
                 <code class="key-cell">{{ row.thresholdKey }}</code>
+                <!-- 继承行必须一眼看得出来: 它现在用的是全局默认值, 本厂还没有自己的配置。
+                     不标出来的话, 用户分不清"这是本厂设的"还是"这是所有厂共用的"。 -->
+                <el-tag v-if="row.inherited" size="small" type="info" effect="plain" class="inherit-tag">
+                  继承全局
+                </el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="description" label="描述" min-width="220" />

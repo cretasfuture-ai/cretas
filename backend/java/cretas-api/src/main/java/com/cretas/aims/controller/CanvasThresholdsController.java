@@ -60,14 +60,59 @@ public class CanvasThresholdsController {
     public ApiResponse<List<FactoryThreshold>> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String category) {
-        List<FactoryThreshold> list;
-        if (category != null && !category.isBlank()) {
-            ThresholdCategory cat = parseCategory(category);
-            list = repository.findByFactoryIdAndCategoryOrderByThresholdKey(factoryId, cat);
-        } else {
-            list = repository.findByFactoryIdOrderByCategoryAscThresholdKeyAsc(factoryId);
+        ThresholdCategory cat = (category != null && !category.isBlank()) ? parseCategory(category) : null;
+        List<FactoryThreshold> own = cat != null
+                ? repository.findByFactoryIdAndCategoryOrderByThresholdKey(factoryId, cat)
+                : repository.findByFactoryIdOrderByCategoryAscThresholdKeyAsc(factoryId);
+        return ApiResponse.success("查询成功", overlayGlobalDefaults(factoryId, cat, own));
+    }
+
+    /**
+     * 把全局 {@code '*'} 默认值叠加进工厂视图 —— 返回的是<b>有效配置</b>，不是「这张表里属于我的行」。
+     *
+     * <h3>它修的是什么 (2026-08-29 生产实测)</h3>
+     * 原实现严格按 {@code factory_id} 过滤，于是全局行在任何工厂的配置页上都<b>看不见</b>：
+     * <ul>
+     *   <li>{@code sales.delivery.over_ship_rate} 只 seed 了全局行 ⇒ <b>所有工厂都配不了它</b>
+     *       —— 一个专门为「让它可配」而建的页面，恰恰配不了它</li>
+     *   <li>{@code LIUSHANMEN}(真实客户) / {@code MOCK_REST} 各 <b>0 行</b> ⇒ 管理员看到 15 个
+     *       空分类，而解析器一直在用全局默认值跑。<b>界面上的「什么都没有」与实际生效的值完全脱节。</b></li>
+     * </ul>
+     *
+     * <p>⇒ 这里的梯子与 {@link com.cretas.aims.service.canvas.ThresholdResolverService} 一致：
+     * per-factory 优先，缺失时回落全局。⛔ 两处梯子必须同源，否则「页面上显示的」和
+     * 「运行时用的」会漂成两个东西 —— 那比看不见更危险。
+     *
+     * <p>⚠️ 继承来的行带 {@code inherited=true}，其 {@code id} 属于全局那一行。
+     * 前端<b>必须</b>对它走 POST 建 override，⛔ 不能 PUT（那会改掉全局默认，影响所有工厂）。
+     *
+     * @param factoryId 路径上的工厂；等于 {@value FactoryThreshold#GLOBAL_FALLBACK_FACTORY_ID}
+     *                  时表示正在直接管理全局行，此时<b>不</b>做叠加（否则自己叠自己）
+     */
+    private List<FactoryThreshold> overlayGlobalDefaults(String factoryId,
+            ThresholdCategory cat, List<FactoryThreshold> own) {
+        List<FactoryThreshold> globals = cat != null
+                ? repository.findByFactoryIdAndCategoryOrderByThresholdKey(
+                        FactoryThreshold.GLOBAL_FALLBACK_FACTORY_ID, cat)
+                : repository.findByFactoryIdOrderByCategoryAscThresholdKeyAsc(
+                        FactoryThreshold.GLOBAL_FALLBACK_FACTORY_ID);
+
+        java.util.Set<String> overridden = own.stream()
+                .map(FactoryThreshold::getThresholdKey)
+                .collect(java.util.stream.Collectors.toSet());
+
+        List<FactoryThreshold> merged = new java.util.ArrayList<>(own);
+        for (FactoryThreshold g : globals) {
+            if (overridden.contains(g.getThresholdKey())) {
+                continue;   // 工厂自己有 override, 全局那条不显示 —— 显示两条会让人不知道哪条在生效
+            }
+            g.setInherited(Boolean.TRUE);
+            merged.add(g);
         }
-        return ApiResponse.success("查询成功", list);
+        merged.sort(java.util.Comparator
+                .comparing((FactoryThreshold t) -> t.getCategory() == null ? "" : t.getCategory().name())
+                .thenComparing(t -> t.getThresholdKey() == null ? "" : t.getThresholdKey()));
+        return merged;
     }
 
     @GetMapping("/{key}")
