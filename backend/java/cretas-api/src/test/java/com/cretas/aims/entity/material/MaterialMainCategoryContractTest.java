@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 所以这里的闸钉的是<b>两份一致</b>, ⛔ 不是「各自都对」—— 两条各自正确的断言同时绿,
  * 并不排除两份内容不同。
  */
-class MaterialMainCategoryTest {
+class MaterialMainCategoryContractTest {
 
     /** 生产实测 (2026-08-28, cretas_prod_db, raw_material_types 506 行) 的 12 个 category 取值及行数。 */
     private static final Map<String, Integer> PRODUCTION_CATEGORIES = new LinkedHashMap<>();

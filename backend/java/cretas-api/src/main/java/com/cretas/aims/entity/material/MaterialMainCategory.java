@@ -33,7 +33,7 @@ import java.util.Set;
  *
  * <p><b>⚠️ 这张表有两份</b> (Java 这一份 + 迁移 {@code V20261101_04} 里的 SQL CASE),
  * 因为回填必须在 SQL 里做而运行时写入必须在 Java 里做, 抽不成一份。
- * 两份由 {@code MaterialMainCategoryTest#migrationBackfillAgreesWithJavaMapping}
+ * 两份由 {@code MaterialMainCategoryContractTest#migrationBackfillAgreesWithJavaMapping}
  * 钉住必须一致 —— 那道闸直接读迁移文件解析出 CASE 分支再逐条比对, ⛔ 不是各自断言各自对。
  */
 public final class MaterialMainCategory {
