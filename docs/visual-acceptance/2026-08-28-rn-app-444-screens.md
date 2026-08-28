@@ -907,3 +907,49 @@ F006 做的是**黄油鸡**，不是带鱼和虾仁；今天是 **2026-08-28**�
 
 ▎这八处的共同点：**说清楚这个数是什么、哪一半没有、下一步该找谁。**
 ▎`MyWage` 和它们是同一种写法。⇒ 统一到这一种是可论证的，不需要谁拍板。
+
+
+---
+
+## 九、部署记录（OTA）
+
+PR **#287** 合并进 main（`626bda9550`），三道 CI 全绿（jest / no-literal-nul-bytes / tracked-secret-scan）。
+从 **detached worktree @ origin/main** 推 OTA（RN 子树 hash 与我的分支完全相同：`bc06d381e1…`）：
+
+```
+./scripts/ota/push-bundle.sh production android
+PUSH_EXIT=0
+✓ bundle live: rv=1.0.4 channel=production ts=1787898056914   (2026-08-28 14:23 CST)
+```
+
+### 判据：不是「推成功了」，是**在正在下发的那份制品里找到这次改动的标记**
+
+Hermes `.hbc` 不以 UTF-8 直存中文，所以标记选 ASCII。取**新旧两份 bundle 各 grep 一次**
+（旧的是昨晚 23:28 那份 —— 也就是把仓储主管弄白屏的那一份）：
+
+| 标记 | 旧 bundle `1787844438192` | **新 bundle `1787898056914`（正在下发）** |
+|---|---:|---:|
+| `SHORT_DELIVERY` | 1 | **0** |
+| `OVER_DELIVERY` | 1 | **0** |
+| `UNDER_RECEIVE` | 0 | **1** |
+| `OVER_RECEIVE` | 0 | **1** |
+| `producedQuantity` | 0 | **1** |
+
+⇒ 标记本身是能区分的（旧的有、新的没有；新的有、旧的没有），不是「两边都长这样」。
+
+manifest 按设备的请求头取回来，`launchAsset` 指向新 ts；`createdAt 2026-08-28T06:23:16Z`。
+
+### ⚠️ 「已发布」不等于「已送达」——这一条要说清楚
+
+网关 `ota.cretaceousfuture.com` 的访问日志：**今天 2896 次 manifest 请求**，
+其中有真实 Android 客户端（`okhttp/4.9.2`，Expo updates 的 Android 端），最近一次 **13:59**。
+⇒ 这条通道是活的，不是「推上去没人取」。
+
+但截至写这段时，**我的推送(14:23)之后还没有观察到任何 okhttp 轮询**
+（`app.json` 里 `checkAutomatically: NEVER`，由 JS 壳在启动/回前台时主动查）。
+
+▎所以准确的说法是：**新 bundle 已发布并正在被 manifest 端点下发，通道活着，
+▎会在设备下次回前台时送达 —— 但我还没有观察到某台设备取走这一份。**
+（本仓有过「OTA 九天零送达而每次推送四步验收全绿」的先例，所以这句话不能含糊。）
+
+**回滚**：`./scripts/ota/rollback.sh 1.0.4 production 1787898056914`
