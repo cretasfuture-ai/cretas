@@ -163,6 +163,9 @@ async function onResetCategory() {
 }
 
 function onTabChange() {
+  // 🔴 切分类瞬间必须先清空 rows —— 否则新面板会先渲染上一个分类的旧数据
+  // (loadCurrent 是异步的, 在它 resolve 之前, 共享的 rows ref 仍是切换前的内容)。
+  rows.value = [];
   loadCurrent();
 }
 
@@ -181,111 +184,123 @@ onMounted(() => {
         </div>
       </template>
 
-      <el-tabs v-model="activeCategory" class="threshold-tabs" @tab-change="onTabChange">
-        <el-tab-pane
-          v-for="cat in CATEGORY_ORDER"
-          :key="cat"
-          :label="ThresholdCategoryLabels[cat] ?? cat"
-          :name="cat"
-        >
-          <div class="tab-actions">
-            <el-button
-              type="warning"
-              size="small"
-              :loading="resetting"
-              :disabled="!canWrite || loading"
-              @click="onResetCategory"
-            >
-              恢复默认值
-            </el-button>
-            <el-button size="small" :disabled="loading" @click="loadCurrent">刷新</el-button>
-          </div>
+      <!--
+        🔴 2026-08-29 修复: 表格只渲染一份, 放在 el-tabs 外面, 由 activeCategory 驱动。
+        之前 el-table 写在 v-for 循环内部, 15 个分类各自的 el-tab-pane 里都塞一份
+        <el-table :data="rows">——但绑的是同一个共享 rows ref, 于是 DOM 里同时存在
+        15 份完全相同的行 (Element Plus 默认把已访问过的 tab-pane 用 v-show 隐藏,
+        不会卸载, 所以数量只增不减)。表格移出循环后, 整个页面任意时刻只有一份
+        <el-table>, 天然不可能重复。
+        写法参照本仓既有约定 (web-admin/src/views/sales/orders/list.vue 的
+        el-tabs + 生命周期 tab 过滤器): el-tab-pane 只承载 label, 不承载内容。
+      -->
+      <div class="thresholds-body">
+        <el-tabs v-model="activeCategory" class="threshold-tabs" @tab-change="onTabChange">
+          <el-tab-pane
+            v-for="cat in CATEGORY_ORDER"
+            :key="cat"
+            :label="ThresholdCategoryLabels[cat] ?? cat"
+            :name="cat"
+          />
+        </el-tabs>
 
-          <el-table
-            v-loading="loading"
-            :data="rows"
-            stripe
-            style="width: 100%"
-            empty-text="此分类下暂无阈值配置"
+        <div class="tab-actions">
+          <el-button
+            type="warning"
+            size="small"
+            :loading="resetting"
+            :disabled="!canWrite || loading"
+            @click="onResetCategory"
           >
-            <el-table-column prop="thresholdKey" label="键" min-width="230">
-              <template #default="{ row }">
-                <code class="key-cell">{{ row.thresholdKey }}</code>
-                <!-- 继承行必须一眼看得出来: 它现在用的是全局默认值, 本厂还没有自己的配置。
-                     不标出来的话, 用户分不清"这是本厂设的"还是"这是所有厂共用的"。 -->
-                <el-tag v-if="row.inherited" size="small" type="info" effect="plain" class="inherit-tag">
-                  继承全局
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="description" label="描述" min-width="220" />
-            <el-table-column label="类型" width="90">
-              <template #default="{ row }">
-                <el-tag size="small" :type="valueTypeTagType(row.valueType)">{{ row.valueType }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="当前值" min-width="200">
-              <template #default="{ row }: { row: EditableRow }">
-                <el-input-number
-                  v-if="row.valueType !== 'STRING'"
-                  :model-value="numOrUndef(row._editValue)"
-                  :min="boundOrUndef(row.minValue)"
-                  :max="boundOrUndef(row.maxValue)"
-                  :precision="row.valueType === 'INTEGER' ? 0 : undefined"
-                  :step="row.valueType === 'INTEGER' ? 1 : 0.1"
-                  :disabled="!canWrite"
-                  size="small"
-                  controls-position="right"
-                  style="width: 140px"
-                  @update:model-value="(v: number | undefined) => (row._editValue = v === undefined || v === null ? '' : String(v))"
-                />
-                <el-input
-                  v-else
-                  v-model="row._editValue"
-                  :disabled="!canWrite"
-                  size="small"
-                  style="width: 160px"
-                />
-                <span v-if="row.unit" class="unit-text"> {{ row.unit }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="默认值" min-width="110">
-              <template #default="{ row }">
-                <span class="default-text">{{ row.defaultValue }}{{ row.unit ? ' ' + row.unit : '' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="范围" min-width="140">
-              <template #default="{ row }">
-                <span v-if="row.minValue || row.maxValue" class="range-text">
-                  <span v-if="row.minValue">≥ {{ row.minValue }}</span>
-                  <span v-if="row.minValue && row.maxValue">, </span>
-                  <span v-if="row.maxValue">≤ {{ row.maxValue }}</span>
-                </span>
-                <span v-else class="range-text">无限制</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="启用" width="80">
-              <template #default="{ row }: { row: EditableRow }">
-                <el-switch v-model="row._editEnabled" :disabled="!canWrite" />
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="100" fixed="right">
-              <template #default="{ row }: { row: EditableRow }">
-                <el-button
-                  size="small"
-                  type="primary"
-                  link
-                  :loading="savingId === row.id"
-                  :disabled="!canWrite"
-                  @click="onSaveRow(row)"
-                >
-                  保存
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-      </el-tabs>
+            恢复默认值
+          </el-button>
+          <el-button size="small" :disabled="loading" @click="loadCurrent">刷新</el-button>
+        </div>
+
+        <el-table
+          v-loading="loading"
+          :data="rows"
+          stripe
+          style="width: 100%"
+          empty-text="此分类下暂无阈值配置"
+        >
+          <el-table-column prop="thresholdKey" label="键" min-width="230">
+            <template #default="{ row }">
+              <code class="key-cell">{{ row.thresholdKey }}</code>
+              <!-- 继承行必须一眼看得出来: 它现在用的是全局默认值, 本厂还没有自己的配置。
+                   不标出来的话, 用户分不清"这是本厂设的"还是"这是所有厂共用的"。 -->
+              <el-tag v-if="row.inherited" size="small" type="info" effect="plain" class="inherit-tag">
+                继承全局
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="description" label="描述" min-width="220" />
+          <el-table-column label="类型" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="valueTypeTagType(row.valueType)">{{ row.valueType }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="当前值" min-width="200">
+            <template #default="{ row }: { row: EditableRow }">
+              <el-input-number
+                v-if="row.valueType !== 'STRING'"
+                :model-value="numOrUndef(row._editValue)"
+                :min="boundOrUndef(row.minValue)"
+                :max="boundOrUndef(row.maxValue)"
+                :precision="row.valueType === 'INTEGER' ? 0 : undefined"
+                :step="row.valueType === 'INTEGER' ? 1 : 0.1"
+                :disabled="!canWrite"
+                size="small"
+                controls-position="right"
+                style="width: 140px"
+                @update:model-value="(v: number | undefined) => (row._editValue = v === undefined || v === null ? '' : String(v))"
+              />
+              <el-input
+                v-else
+                v-model="row._editValue"
+                :disabled="!canWrite"
+                size="small"
+                style="width: 160px"
+              />
+              <span v-if="row.unit" class="unit-text"> {{ row.unit }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="默认值" min-width="110">
+            <template #default="{ row }">
+              <span class="default-text">{{ row.defaultValue }}{{ row.unit ? ' ' + row.unit : '' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="范围" min-width="140">
+            <template #default="{ row }">
+              <span v-if="row.minValue || row.maxValue" class="range-text">
+                <span v-if="row.minValue">≥ {{ row.minValue }}</span>
+                <span v-if="row.minValue && row.maxValue">, </span>
+                <span v-if="row.maxValue">≤ {{ row.maxValue }}</span>
+              </span>
+              <span v-else class="range-text">无限制</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="启用" width="80">
+            <template #default="{ row }: { row: EditableRow }">
+              <el-switch v-model="row._editEnabled" :disabled="!canWrite" />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="{ row }: { row: EditableRow }">
+              <el-button
+                size="small"
+                type="primary"
+                link
+                :loading="savingId === row.id"
+                :disabled="!canWrite"
+                @click="onSaveRow(row)"
+              >
+                保存
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-card>
   </div>
 </template>
@@ -333,8 +348,11 @@ onMounted(() => {
   }
 }
 
-.threshold-tabs {
+.thresholds-body {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .tab-actions {
