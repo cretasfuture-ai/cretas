@@ -141,7 +141,7 @@
     "overallEfficiency": "Overall Efficiency",
     "noEfficiencyData": "No efficiency data available",
     "cannotGetFactoryInfo": "Unable to get factory info. Please log in again.",
-    "loadFailed": "Load Failed",
+    "loadFailed": "Failed to load equipment statistics",
     "error": "Error"
   },
   "trend": {
