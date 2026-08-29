@@ -104,7 +104,9 @@ public class UserController {
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Valid @RequestBody UpdateMyProfileRequest request) {
-        Long userId = com.cretas.aims.utils.SecurityUtils.getCurrentUserId();
+        // ⛔ 不用 SecurityUtils.getCurrentUserId() —— 本项目从不填充 SecurityContextHolder,
+        //    那个方法恒返 null(2026-08-29 上线实测: 拿到 401 未登录)。见 SecurityUtils#currentUserId。
+        Long userId = com.cretas.aims.utils.SecurityUtils.currentUserId();
         if (userId == null) {
             throw new BusinessException(401, "未登录").withHint("请重新登录后再试");
         }

@@ -97,7 +97,7 @@ public class ImportRuleController {
             @PathVariable String factoryId,
             @PathVariable Long ruleId,
             @RequestParam("file") MultipartFile file) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ResponseEntity.ok(ApiResponse.success("dryrun 完成",
                 importService.dryrun(factoryId, ruleId, userId, file)));
     }

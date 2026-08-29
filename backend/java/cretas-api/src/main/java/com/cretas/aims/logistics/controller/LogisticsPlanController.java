@@ -138,7 +138,7 @@ public class LogisticsPlanController {
             @PathVariable String tripId,
             @RequestBody(required = false) ConfirmRequest request) {
         Long version = request == null ? null : request.getVersion();
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ApiResponse.success("车次已确认", planService.confirmTrip(factoryId, planId, tripId, version, userId));
     }
 
@@ -147,7 +147,7 @@ public class LogisticsPlanController {
     public ApiResponse<PlanSnapshotDto> confirmAllTrips(
             @PathVariable String factoryId,
             @PathVariable String planId) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ApiResponse.success("已确认全部车次", planService.confirmAllTrips(factoryId, planId, userId));
     }
 
@@ -158,7 +158,7 @@ public class LogisticsPlanController {
             @PathVariable String planId,
             @RequestBody(required = false) ConfirmRequest request) {
         Long version = request == null ? null : request.getVersion();
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ApiResponse.success("计划已确认", planService.confirmPlan(factoryId, planId, version, userId));
     }
 

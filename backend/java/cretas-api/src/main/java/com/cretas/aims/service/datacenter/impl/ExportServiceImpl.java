@@ -52,7 +52,7 @@ public class ExportServiceImpl implements ExportService {
         if (rule.getFormat() == null) rule.setFormat("XLSX");
         if (rule.getIsAsync() == null) rule.setIsAsync(Boolean.FALSE);
         if (rule.getRowThreshold() == null) rule.setRowThreshold(10000);
-        rule.setCreatedBy(SecurityUtils.getCurrentUserId());
+        rule.setCreatedBy(SecurityUtils.currentUserId());
         return ruleRepo.save(rule);
     }
 

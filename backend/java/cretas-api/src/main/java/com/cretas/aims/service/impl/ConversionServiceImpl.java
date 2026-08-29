@@ -671,7 +671,7 @@ public class ConversionServiceImpl implements ConversionService {
                                BigDecimal oldWastage, BigDecimal newWastage,
                                ChangeType changeType, String reason) {
         try {
-            Long userId = SecurityUtils.getCurrentUserId();
+            Long userId = SecurityUtils.currentUserId();
 
             ConversionChangeHistory history = new ConversionChangeHistory();
             history.setId(UUID.randomUUID().toString());

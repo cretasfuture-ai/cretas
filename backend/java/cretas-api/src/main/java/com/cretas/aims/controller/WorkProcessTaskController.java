@@ -133,7 +133,7 @@ public class WorkProcessTaskController {
     public ApiResponse<WorkProcessTaskDTO> start(
             @PathVariable String factoryId,
             @PathVariable Long id) {
-        Long operatorId = SecurityUtils.getCurrentUserId();
+        Long operatorId = SecurityUtils.currentUserId();
         return ApiResponse.success(service.start(factoryId, id, operatorId));
     }
 
@@ -147,7 +147,7 @@ public class WorkProcessTaskController {
             @PathVariable String factoryId,
             @PathVariable Long id,
             @RequestBody @Valid WorkProcessTaskDTO.CompleteRequest request) {
-        Long operatorId = SecurityUtils.getCurrentUserId();
+        Long operatorId = SecurityUtils.currentUserId();
         return ApiResponse.success(service.complete(factoryId, id, operatorId, request));
     }
 
@@ -162,7 +162,7 @@ public class WorkProcessTaskController {
             @PathVariable String factoryId,
             @PathVariable Long id,
             @RequestBody @Valid WorkProcessTaskDTO.SkipRequest request) {
-        Long operatorId = SecurityUtils.getCurrentUserId();
+        Long operatorId = SecurityUtils.currentUserId();
         return ApiResponse.success(service.skip(factoryId, id, operatorId, request));
     }
 

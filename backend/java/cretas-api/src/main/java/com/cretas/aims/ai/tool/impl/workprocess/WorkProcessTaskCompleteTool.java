@@ -67,7 +67,7 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool {
         Long taskId = getLong(params, "taskId");
         BigDecimal actualQuantity = getBigDecimal(params, "actualQuantity");
         String notes = getString(params, "notes");
-        Long operatorId = SecurityUtils.getCurrentUserId();
+        Long operatorId = SecurityUtils.currentUserId();
 
         WorkProcessTaskDTO.CompleteRequest req = WorkProcessTaskDTO.CompleteRequest.builder()
                 .actualQuantity(actualQuantity)

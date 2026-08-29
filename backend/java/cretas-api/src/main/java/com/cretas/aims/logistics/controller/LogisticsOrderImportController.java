@@ -67,7 +67,7 @@ public class LogisticsOrderImportController {
             @PathVariable String factoryId,
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "columnMapping", required = false) String columnMappingJson) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         Map<Integer, String> columnMapping = parseColumnMapping(columnMappingJson);
         log.info("[LogisticsOrderImport] preview 请求 factory={} filename={} size={} overrideMapping={}",
                 factoryId, file != null ? file.getOriginalFilename() : null, file != null ? file.getSize() : 0,
@@ -81,7 +81,7 @@ public class LogisticsOrderImportController {
     public ApiResponse<PreviewResultDto> previewPaste(
             @PathVariable String factoryId,
             @RequestBody PastePreviewRequest request) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.info("[LogisticsOrderImport] previewPaste 请求 factory={} textLen={} overrideMapping={}",
                 factoryId,
                 request != null && request.getRawText() != null ? request.getRawText().length() : 0,
@@ -108,7 +108,7 @@ public class LogisticsOrderImportController {
     public ApiResponse<PreviewResultDto> previewManual(
             @PathVariable String factoryId,
             @RequestBody ManualOrderCreateRequest request) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.info("[LogisticsOrderImport] previewManual 请求 factory={} rows={}",
                 factoryId, request != null && request.getRows() != null ? request.getRows().size() : 0);
         return ApiResponse.success("录入完成", importService.previewManual(factoryId, request, userId));

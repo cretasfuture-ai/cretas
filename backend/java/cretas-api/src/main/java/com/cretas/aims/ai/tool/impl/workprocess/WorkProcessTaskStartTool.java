@@ -58,7 +58,7 @@ public class WorkProcessTaskStartTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
         Long taskId = getLong(params, "taskId");
-        Long operatorId = SecurityUtils.getCurrentUserId();
+        Long operatorId = SecurityUtils.currentUserId();
         WorkProcessTaskDTO result = workProcessTaskService.start(factoryId, taskId, operatorId);
         log.info("AI 工具开始工序 task={}, operator={}", taskId, operatorId);
         return buildSimpleResult(

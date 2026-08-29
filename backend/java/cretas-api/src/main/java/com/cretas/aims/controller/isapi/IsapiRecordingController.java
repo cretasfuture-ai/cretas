@@ -108,7 +108,7 @@ public class IsapiRecordingController {
                             || SecurityUtils.hasRole(ROLE_EQUIPMENT_ADMIN));
             if (includeAuth && !credentialsAllowed) {
                 log.warn("[{}] 拒绝向当前用户暴露 RTSP 凭证 — username={}, 强制 includeAuth=false",
-                        factoryId, SecurityUtils.getCurrentUsername());
+                        factoryId, SecurityUtils.currentUsername());
             }
 
             String playbackUrl;

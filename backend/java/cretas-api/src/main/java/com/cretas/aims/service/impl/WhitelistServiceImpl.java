@@ -56,7 +56,7 @@ public class WhitelistServiceImpl implements WhitelistService {
                 .successPhones(new ArrayList<>())
                 .failedEntries(new ArrayList<>())
                 .build();
-        Long currentUserId = userId;//SecurityUtils.getCurrentUserId();
+        Long currentUserId = userId;//SecurityUtils.currentUserId();
         for (WhitelistDTO.WhitelistEntry entry : request.getEntries()) {
             try {
                 // 检查是否已存在
@@ -410,7 +410,7 @@ public class WhitelistServiceImpl implements WhitelistService {
                 .build();
 
         String[] lines = csvData.split("\n");
-        Long currentUserId = SecurityUtils.getCurrentUserId();
+        Long currentUserId = SecurityUtils.currentUserId();
 
         // 跳过标题行
         for (int i = 1; i < lines.length; i++) {

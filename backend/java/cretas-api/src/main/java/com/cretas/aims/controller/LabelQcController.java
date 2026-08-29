@@ -328,7 +328,7 @@ public class LabelQcController {
                 throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid user identity");
             }
         }
-        Long securityUser = SecurityUtils.getCurrentUserId();
+        Long securityUser = SecurityUtils.currentUserId();
         if (securityUser == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "missing user identity");
         }
