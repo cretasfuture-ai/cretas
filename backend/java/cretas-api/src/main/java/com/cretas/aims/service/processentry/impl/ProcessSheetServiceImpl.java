@@ -354,6 +354,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("实际投入");
         }
 
+        // 回料是一个已经存在于常驻 SFI 的可复用库存批次。与普通 SFI（小结时扣减）不同，
+        // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
+        // 只接受服务端标记为回料的来源；普通半成品仍保留原有的报工→小结延迟扣减语义。
+        List<ProcessSheetRowResult.InputAllocation> reworkAllocations =
+                consumeReworkInputs(factoryId, req, allocations.size());
+
         ProcessSheetRowResult result = saveRow(factoryId, planId, req, userId);
         List<ProcessSheetRow> submittedRows = resolveSubmittedRows(factoryId, planId, req, result);
         if (submittedRows.isEmpty()) {
@@ -369,10 +375,84 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     factoryId, planId, submittedRows.get(0).getId(), userId, allocations);
         }
         result.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
-        result.setInputAllocations(productionStockAllocationService == null
-                ? List.of()
-                : productionStockAllocationService.toResult(allocations));
+        List<ProcessSheetRowResult.InputAllocation> inputAllocations = new ArrayList<>();
+        if (productionStockAllocationService != null) {
+            inputAllocations.addAll(productionStockAllocationService.toResult(allocations));
+        }
+        inputAllocations.addAll(reworkAllocations);
+        result.setInputAllocations(List.copyOf(inputAllocations));
         return result;
+    }
+
+    /**
+     * 正式报工时扣减服务端确认的回料 SFI，并生成即时响应明细。
+     *
+     * <p>回料来源以 {@code sourceBatchNumber} 为稳定业务键，不是 MaterialBatch；因此这里的
+     * {@code InputAllocation.materialBatchId} 仅作为兼容响应字段回传该业务键，绝不写入原料
+     * {@code production_input_allocations} 表。扣减由 WIP 服务的悲观锁 + 严格不足校验保证，
+     * 调用失败会让整个正式报工事务回滚。</p>
+     */
+    private List<ProcessSheetRowResult.InputAllocation> consumeReworkInputs(
+            String factoryId, ProcessSheetRowRequest req, int allocationOrderOffset) {
+        if (wipInventoryService == null || req.getUpstreamSources() == null
+                || req.getUpstreamSources().isEmpty()) {
+            return List.of();
+        }
+        Map<String, BigDecimal> quantityByBatch = new LinkedHashMap<>();
+        Map<String, SemiFinishedInventory> sourceByBatch = new LinkedHashMap<>();
+        for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+            if (ref == null || !ref.isSemiFinished()
+                    || ref.getSourceBatchNumber() == null || ref.getSourceBatchNumber().isBlank()) {
+                continue;
+            }
+            SemiFinishedInventory source = wipRepo
+                    .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                            factoryId, ref.getSourceBatchNumber().trim())
+                    .orElseThrow(() -> new BusinessException(409,
+                            "半成品库存不存在: " + ref.getSourceBatchNumber())
+                            .withCode("SFI_NOT_FOUND")
+                            .withHint("请重新选择仍有库存的半成品批次")
+                            .withSeverity("BLOCKING")
+                            .withHintTarget(req.getProcessCode()));
+            // 普通 SFI 仍由小结统一扣减；不能把所有 semiFinished 来源提前扣掉，
+            // 否则会改变既有跨小结库存与成本口径。
+            if (!Boolean.TRUE.equals(source.getIsRework())) {
+                continue;
+            }
+            BigDecimal feed = ref.getFeedQuantityKg();
+            if (feed == null || feed.signum() <= 0) {
+                continue; // 正数量端口校验已在 submitRow 前置完成
+            }
+            String batchNo = ref.getSourceBatchNumber().trim();
+            quantityByBatch.merge(batchNo, feed, BigDecimal::add);
+            sourceByBatch.putIfAbsent(batchNo, source);
+        }
+
+        List<ProcessSheetRowResult.InputAllocation> result = new ArrayList<>();
+        int allocationOrder = allocationOrderOffset;
+        for (Map.Entry<String, BigDecimal> entry : quantityByBatch.entrySet()) {
+            String batchNo = entry.getKey();
+            BigDecimal requestedKg = entry.getValue();
+            SemiFinishedInventory source = sourceByBatch.get(batchNo);
+            BigDecimal actualSourceQuantity = wipInventoryService.consumeClerkSemiStrict(
+                    factoryId, batchNo, requestedKg);
+
+            ProcessSheetRowResult.InputAllocation allocation =
+                    new ProcessSheetRowResult.InputAllocation();
+            allocation.setMaterialTypeId(source.getProductTypeId());
+            allocation.setMaterialBatchId(batchNo);
+            allocation.setBatchNumber(batchNo);
+            allocation.setQuantity(actualSourceQuantity);
+            allocation.setUnit(source.getUnit() == null ? "kg" : source.getUnit());
+            allocation.setAllocationOrder(allocationOrder++);
+            allocation.setSourceType("REWORK");
+            allocation.setUnitPrice(wipInventoryService.getSemiUnitCost(factoryId, batchNo));
+            allocation.setTotalCost(allocation.getUnitPrice() == null ? null
+                    : allocation.getUnitPrice().multiply(actualSourceQuantity));
+            allocation.setAutomatic(false);
+            result.add(allocation);
+        }
+        return List.copyOf(result);
     }
 
     private List<ProductionStockAllocationService.AutomaticRequirement> buildAutomaticBomRequirements(
