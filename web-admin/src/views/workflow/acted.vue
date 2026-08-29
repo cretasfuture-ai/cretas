@@ -76,13 +76,19 @@ function handleSizeChange(size: number): void {
 }
 
 function goToDetail(row: WorkflowInstanceRow): void {
-  if (row.moduleCode === 'PURCHASE_ORDER' && row.businessEntityId) {
-    router.push(`/procurement/orders/${row.businessEntityId}`);
-  } else if (row.moduleCode === 'SALES_ORDER' && row.businessEntityId) {
-    router.push(`/sales/orders/${row.businessEntityId}`);
-  } else {
-    ElMessage.info(`暂不支持跳转模块：${row.moduleCode}`);
+  const id = row.businessEntityId;
+  if (!id) return;
+  const routeByModule: Record<string, string> = {
+    PURCHASE_ORDER: `/procurement/orders/${id}`,
+    SALES_ORDER: `/sales/orders/${id}`,
+    INVENTORY_ADJUSTMENT: `/warehouse/stocktakes?stocktakeId=${id}`,
+  };
+  const target = routeByModule[row.moduleCode];
+  if (target) {
+    router.push(target);
+    return;
   }
+  ElMessage.info(`暂不支持跳转模块：${row.moduleCode}`);
 }
 
 function formatTime(iso: string | null): string {
