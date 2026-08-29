@@ -5,6 +5,7 @@ import com.cretas.aims.dto.orchestration.StockCheckResult;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -112,6 +113,7 @@ class MaterialLineNotAProductionPlanContractTest {
         SalesOrder order = new SalesOrder();
         order.setId(SO_ID);
         order.setFactoryId(FACTORY);
+        order.setProcessingMode(SalesProcessingMode.STANDARD_SALE);
         order.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(order));
 
