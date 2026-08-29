@@ -249,12 +249,23 @@ export default function OnTimeDeliveryReportScreen() {
   };
 
   // Prepare trend chart data
-  const trendChartData = otifData?.dailyTrend && otifData.dailyTrend.length > 0
+  //
+  // 🔴 2026-08-29 真机实测: 后端把「那一天没有订单」的 otifRate 从 100 改成 null 之后,
+  //    这里把 null 原样喂给 LineChart, 图表库对它调 .toFixed 当场抛
+  //    `Cannot read property 'toFixed' of null` —— 整屏打不开。
+  //    (是本轮的屏级错误边界兜住的, 否则会掀掉整棵导航树。)
+  //
+  // ⛔ 不能把 null 换成 0 再画 —— 那等于在图上画出「那天准时率 0%」这个假读数。
+  //    正解: **跳过算不出来的那些天**; 一天都算不出来就不画这张图。
+  const trendPoints = (otifData?.dailyTrend ?? [])
+    .slice(-7)
+    .filter((item) => item.otifRate != null);
+  const trendChartData = trendPoints.length > 0
     ? {
-        labels: otifData.dailyTrend.slice(-7).map((item) => formatDateLabel(item.date)),
+        labels: trendPoints.map((item) => formatDateLabel(item.date)),
         datasets: [
           {
-            data: otifData.dailyTrend.slice(-7).map((item) => item.otifRate),
+            data: trendPoints.map((item) => Number(item.otifRate)),
             strokeWidth: 2,
           },
         ],
@@ -308,16 +319,23 @@ export default function OnTimeDeliveryReportScreen() {
               <Divider style={styles.divider} />
 
               <View style={styles.mainGaugeContainer}>
-                <GaugeChart
-                  value={otifData.otifRate ?? 0}
-                  maxValue={100}
-                  title="OTIF"
-                  unit="%"
-                  size={200}
-                  thresholds={targetOtif == null ? undefined : { warning: targetOtif - 10, danger: targetOtif }}
-                  showTicks={true}
-                  showLabels={true}
-                />
+                {/* ⛔ 算不出来时不画仪表盘 —— 一个指向 0 的表盘看起来是「准时率 0%」。 */}
+                {otifData.otifRate == null ? (
+                  <Text style={styles.noTrendText}>
+                    这段期间没有订单，算不出准时交付率。
+                  </Text>
+                ) : (
+                  <GaugeChart
+                    value={otifData.otifRate}
+                    maxValue={100}
+                    title="OTIF"
+                    unit="%"
+                    size={200}
+                    thresholds={targetOtif == null ? undefined : { warning: targetOtif - 10, danger: targetOtif }}
+                    showTicks={true}
+                    showLabels={true}
+                  />
+                )}
               </View>
 
               <View style={styles.targetRow}>
@@ -624,6 +642,12 @@ export default function OnTimeDeliveryReportScreen() {
 }
 
 const styles = StyleSheet.create({
+  noTrendText: {
+    color: '#9e9e9e',
+    fontSize: 13,
+    paddingVertical: 24,
+    textAlign: 'center',
+  },
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',

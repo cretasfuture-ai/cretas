@@ -91,16 +91,23 @@ export interface PayrollRecord {
 }
 
 export interface LaborCostAnalysis {
+  /** 计数/求和类：0 是合法读数（确实没人计件），所以保持非空。 */
   totalWage: number;
   totalPieceRateWage: number;
   totalPieceCount: number;
-  costPerPiece: number;
-  averageEfficiency: number;
+  /** 这段期间**有计件记录**的人数 —— ⛔ 不是工厂的在册人数。 */
+  workerCount: number;
+  /**
+   * 以下四个是**派生量**，分母（计件数 / 人数）为 0 时后端发 null。
+   * ⛔ 不要 `?? 0`：「¥0.00 单件成本」读起来是「做一件不要钱」。
+   * (2026-08-29 真机实测：F006 的 wage_calculation 与 piece_rate_rules 都是 0 条。)
+   */
+  costPerPiece: number | null;
+  averageEfficiency: number | null;
+  avgPiecesPerWorker: number | null;
+  avgWagePerWorker: number | null;
   byEfficiencyRating: Record<string, { count: number; totalWage: number }>;
   byProcessStage: Record<string, { avgEfficiency: number; totalPieces: number }>;
-  workerCount: number;
-  avgPiecesPerWorker: number;
-  avgWagePerWorker: number;
 }
 
 export interface EfficiencyTrendData {

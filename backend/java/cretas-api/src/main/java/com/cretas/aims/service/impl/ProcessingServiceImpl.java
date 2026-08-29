@@ -1966,7 +1966,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         BigDecimal avgEfficiency = productionBatchRepository.calculateAverageEfficiency(factoryId, todayStart);
         log.info("[查询9] 完成: avgEfficiency={}, 耗时={}ms", avgEfficiency, System.currentTimeMillis() - lastQueryTime);
         lastQueryTime = System.currentTimeMillis();
-        todayStats.put("productionEfficiency", avgEfficiency != null ? avgEfficiency : BigDecimal.ZERO);
+        // 🔴 比率类兜 0 是编的: 今天没有批次时 calculateAverageEfficiency 返 null,
+        //    兜成 0 之后屏上是「完成率 0.0%」—— 读起来是**一件没做完**, 而真相是今天还没开工。
+        //    ⚠️ 与产量类(todayOutputKg / monthlyOutput)不同: 产量的 0 是合法读数
+        //    (没生产就是产 0), 比率的 0 也是合法读数(效率确实是 0), 所以**必须**用 null
+        //    才能把「我不知道」和这两者分开。(2026-08-29 真机走查实测)
+        todayStats.put("productionEfficiency", avgEfficiency);
         todayStats.put("activeWorkers", totalWorkers);
 
         // 查询10: 今日产量
@@ -2028,14 +2033,14 @@ public class ProcessingServiceImpl implements ProcessingService {
 
         // ===== kpi (关键绩效指标) =====
         Map<String, Object> kpi = new HashMap<>();
-        kpi.put("productionEfficiency", avgEfficiency != null ? avgEfficiency : BigDecimal.ZERO);
+        kpi.put("productionEfficiency", avgEfficiency);   // ⛔ 同上, 不兜 0
 
         // 查询16: 质量合格率
         log.info("[查询16] calculateAverageYieldRate 开始");
         BigDecimal monthlyYieldRate = productionBatchRepository.calculateAverageYieldRate(factoryId, monthStart);
         log.info("[查询16] 完成: monthlyYieldRate={}, 耗时={}ms", monthlyYieldRate, System.currentTimeMillis() - lastQueryTime);
         lastQueryTime = System.currentTimeMillis();
-        kpi.put("qualityPassRate", monthlyYieldRate != null ? monthlyYieldRate : BigDecimal.ZERO);
+        kpi.put("qualityPassRate", monthlyYieldRate);   // ⛔ 本月没有批次 != 合格率 0%
 
         // 设备利用率（计算，无查询）
         BigDecimal equipmentUtilization = totalEquipment > 0 ?
@@ -2055,16 +2060,18 @@ public class ProcessingServiceImpl implements ProcessingService {
         log.info("[查询18] 完成: monthlyTotalOutput={}, 耗时={}ms", monthlyTotalOutput, System.currentTimeMillis() - lastQueryTime);
         lastQueryTime = System.currentTimeMillis();
 
-        BigDecimal unitCost = BigDecimal.ZERO;
-        if (monthlyTotalOutput != null && monthlyTotalOutput.compareTo(BigDecimal.ZERO) > 0) {
-            unitCost = (monthlyTotalCost != null ? monthlyTotalCost : BigDecimal.ZERO)
-                    .divide(monthlyTotalOutput, 2, RoundingMode.HALF_UP);
+        // ⛔ 无产量时单位成本**算不出来**, 不是 ¥0 ——「单位成本 ¥0」读起来是不要钱。
+        BigDecimal unitCost = null;
+        if (monthlyTotalOutput != null && monthlyTotalOutput.compareTo(BigDecimal.ZERO) > 0
+                && monthlyTotalCost != null) {
+            unitCost = monthlyTotalCost.divide(monthlyTotalOutput, 2, RoundingMode.HALF_UP);
         }
         kpi.put("unitCost", unitCost);
 
         // 查询19: 平均生产周期
         log.info("[查询19] findCompletedBatchesWithTimes 开始");
-        BigDecimal avgCycleHours = BigDecimal.ZERO;
+        // ⛔ 本月没有完工批次时平均周期算不出来, 不是 0 小时。
+        BigDecimal avgCycleHours = null;
         java.util.List<ProductionBatch> batchesWithTimes = productionBatchRepository.findCompletedBatchesWithTimes(factoryId, monthStart);
         log.info("[查询19] 完成: batchesWithTimes.size={}, 耗时={}ms", batchesWithTimes != null ? batchesWithTimes.size() : 0, System.currentTimeMillis() - lastQueryTime);
         lastQueryTime = System.currentTimeMillis();
@@ -2124,7 +2131,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         log.info("[查询20] 完成: monthlyOutput={}, 耗时={}ms", monthlyOutput, System.currentTimeMillis() - lastQueryTime);
         lastQueryTime = System.currentTimeMillis();
         overview.put("monthlyOutput", monthlyOutput != null ? monthlyOutput : BigDecimal.ZERO);
-        overview.put("monthlyYieldRate", monthlyYieldRate != null ? monthlyYieldRate : BigDecimal.ZERO);
+        overview.put("monthlyYieldRate", monthlyYieldRate);   // ⛔ 比率不兜 0
 
         // 查询21: 低库存原材料
         log.info("[查询21] countLowStockMaterials 开始");

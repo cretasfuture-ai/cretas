@@ -44,7 +44,8 @@ export default function ReportDashboardScreen() {
   const [productionData, setProductionData] = useState<{
     totalBatches: number;
     completedBatches: number;
-    completionRate: number;
+    /** 后端没有批次时发 null —— ⛔ 不要 `?? 0`，那会变成「完成率 0%」。 */
+    completionRate: number | null;
     totalOutput: number;
   } | null>(null);
 
@@ -61,17 +62,24 @@ export default function ReportDashboardScreen() {
   } | null>(null);
 
   const [efficiencyData, setEfficiencyData] = useState<{
-    equipmentOEE: number;
-    equipmentUtilization: number;
-    laborEfficiency: number;
-    overallEfficiency: number;
+    /** ⛔ 全部可空：这几个原来都 `?? 0`，屏上「设备OEE 0% / 综合效率 0%」读起来是设备全停。 */
+    equipmentOEE: number | null;
+    equipmentUtilization: number | null;
+    laborEfficiency: number | null;
+    overallEfficiency: number | null;
   } | null>(null);
 
   const [costData, setCostData] = useState<{
-    totalCost: number;
-    materialCost: number;
-    laborCost: number;
-    overheadCost: number;
+    /**
+     * ⛔ 全部可空。后端在「有生产计划但成本列没录」时发 null ——
+     * 兜成 0 的话屏上是「¥0 总成本」，读起来是**生产不花钱**。
+     * (2026-08-29 真机实测：同屏「总产出 8 kg」而四项成本全 ¥0；
+     *  库里 46 个计划的成本列一个都没填。)
+     */
+    totalCost: number | null;
+    materialCost: number | null;
+    laborCost: number | null;
+    overheadCost: number | null;
   } | null>(null);
 
   const [laborCostAnalysis, setLaborCostAnalysis] = useState<LaborCostAnalysis | null>(null);
@@ -165,14 +173,19 @@ export default function ReportDashboardScreen() {
         setProductionData({
           totalBatches: summary?.totalBatches ?? todayStats?.totalBatches ?? 0,
           completedBatches: summary?.completedBatches ?? 0,
-          completionRate: todayStats?.productionEfficiency ?? overviewRes.kpi?.productionEfficiency ?? 0,
+          // ⛔ 这里原来结尾是 `?? 0`。后端今天没有批次时 productionEfficiency 是 null，
+          //    兜成 0 之后屏上是「完成率 0.0%」—— 读起来是**一件没做完**。
+          //    (2026-08-29 真机实测：0 总批次 / 1 已完成 / 0.0% 完成率 / 8 总产出。)
+          completionRate: todayStats?.productionEfficiency ?? overviewRes.kpi?.productionEfficiency ?? null,
           totalOutput: todayStats?.todayOutputKg ?? 0,
         });
 
         // 从 overview 中获取效率数据（如果效率报表失败）
         if (!efficiencyRes && overviewRes.kpi) {
           setEfficiencyData({
-            equipmentOEE: 0, // 需要从设备数据获取
+            // ⛔ 原来写死 0 并注释「需要从设备数据获取」—— 屏上那是「设备OEE 0%」,
+            //    读起来是设备全停。没有来源就是 null。
+            equipmentOEE: null,
             equipmentUtilization: overviewRes.kpi.equipmentUtilization ?? 0,
             laborEfficiency: overviewRes.kpi.productionEfficiency ?? 0,
             overallEfficiency: overviewRes.kpi.productionEfficiency ?? 0,
@@ -211,10 +224,11 @@ export default function ReportDashboardScreen() {
       const efficiencyActual = (efficiencyRes && typeof efficiencyRes === 'object' && 'data' in efficiencyRes) ? (efficiencyRes as { data: Record<string, number> }).data : efficiencyRes;
       if (efficiencyActual) {
         setEfficiencyData({
-          equipmentOEE: efficiencyActual.equipmentOEE ?? 0,
-          equipmentUtilization: equipmentRes?.averageUtilization ?? 0,
-          laborEfficiency: 0,
-          overallEfficiency: efficiencyActual.completionRate ?? 0,
+          equipmentOEE: efficiencyActual.equipmentOEE ?? null,
+          equipmentUtilization: equipmentRes?.averageUtilization ?? null,
+          // ⛔ 原来写死 0 —— 屏上「人效 0%」是个假读数, 这一项本就没有来源。
+          laborEfficiency: null,
+          overallEfficiency: efficiencyActual.completionRate ?? null,
         });
       }
 
@@ -222,10 +236,10 @@ export default function ReportDashboardScreen() {
       const financeActual = (financeRes && typeof financeRes === 'object' && 'data' in financeRes) ? (financeRes as { data: Record<string, number> }).data : financeRes;
       if (financeActual) {
         setCostData({
-          totalCost: financeActual.totalCost ?? 0,
-          materialCost: financeActual.materialCost ?? 0,
-          laborCost: financeActual.laborCost ?? 0,
-          overheadCost: financeActual.otherCost ?? financeActual.equipmentCost ?? 0,
+          totalCost: financeActual.totalCost ?? null,
+          materialCost: financeActual.materialCost ?? null,
+          laborCost: financeActual.laborCost ?? null,
+          overheadCost: financeActual.otherCost ?? financeActual.equipmentCost ?? null,
         });
       }
 
@@ -269,7 +283,9 @@ export default function ReportDashboardScreen() {
   /**
    * 格式化货币
    */
-  const formatCurrency = (value: number) => {
+  const formatCurrency = (value: number | null) => {
+    // ⛔ 算不出来就写「—」，不要写 ¥0 —— ¥0 是一个具体的、错的金额。
+    if (value == null) return '—';
     if (value >= 10000) {
       return `¥${(value / 10000).toFixed(1)}万`;
     }
@@ -279,7 +295,9 @@ export default function ReportDashboardScreen() {
   /**
    * 获取状态颜色
    */
-  const getStatusColor = (value: number, threshold: number = 80) => {
+  const getStatusColor = (value: number | null, threshold: number = 80) => {
+    // ⛔ 算不出来的不判红绿 —— 一个灰色的「—」比一个红色的 0% 诚实。
+    if (value == null) return '#9e9e9e';
     if (value >= threshold) return '#4CAF50';
     if (value >= threshold - 20) return '#FF9800';
     return '#F44336';
@@ -337,17 +355,22 @@ export default function ReportDashboardScreen() {
                         <Text style={[styles.metricValue, { color: '#2196F3' }]}>
                           {productionData.totalBatches}
                         </Text>
-                        <Text style={styles.metricLabel}>总批次</Text>
+                        <Text style={styles.metricLabel}>今日新建</Text>
                       </View>
                       <View style={styles.metricItem}>
                         <Text style={[styles.metricValue, { color: '#4CAF50' }]}>
                           {productionData.completedBatches}
                         </Text>
-                        <Text style={styles.metricLabel}>已完成</Text>
+                        {/* ⛔ 原来叫「总批次 / 已完成」, 读起来是父子关系 —— 而它们量的是
+                            **不同的事件**: 前者按 createdAt(今天建的), 后者按 endTime(今天完工的)。
+                            昨天建、今天完工的批次只进后者 ⇒ 真机上出现「0 总批次 / 1 已完成」。 */}
+                        <Text style={styles.metricLabel}>今日完工</Text>
                       </View>
                       <View style={styles.metricItem}>
-                        <Text style={[styles.metricValue, { color: getStatusColor(productionData.completionRate) }]}>
-                          {Number(productionData.completionRate ?? 0).toFixed(1)}%
+                        <Text style={[styles.metricValue, { color: productionData.completionRate == null ? '#9e9e9e' : getStatusColor(productionData.completionRate) }]}>
+                          {productionData.completionRate == null
+                            ? '—'
+                            : `${Number(productionData.completionRate).toFixed(1)}%`}
                         </Text>
                         <Text style={styles.metricLabel}>完成率</Text>
                       </View>
@@ -456,8 +479,10 @@ export default function ReportDashboardScreen() {
                     <>
                       <View style={styles.efficiencyRow}>
                         <Text style={styles.efficiencyLabel}>设备OEE</Text>
-                        <Text style={[styles.efficiencyValue, { color: getStatusColor(efficiencyData.equipmentOEE, 85) }]}>
-                          {Number(efficiencyData.equipmentOEE ?? 0).toFixed(1)}%
+                        <Text style={[styles.efficiencyValue, { color: efficiencyData.equipmentOEE == null ? '#9e9e9e' : getStatusColor(efficiencyData.equipmentOEE, 85) }]}>
+                          {efficiencyData.equipmentOEE == null
+                            ? '—'
+                            : `${Number(efficiencyData.equipmentOEE).toFixed(1)}%`}
                         </Text>
                       </View>
                       <ProgressBar
@@ -468,7 +493,9 @@ export default function ReportDashboardScreen() {
                       <View style={styles.efficiencyRow}>
                         <Text style={styles.efficiencyLabel}>设备利用率</Text>
                         <Text style={[styles.efficiencyValue, { color: getStatusColor(efficiencyData.equipmentUtilization) }]}>
-                          {Number(efficiencyData.equipmentUtilization ?? 0).toFixed(1)}%
+                          {efficiencyData.equipmentUtilization == null
+                            ? '—'
+                            : `${Number(efficiencyData.equipmentUtilization).toFixed(1)}%`}
                         </Text>
                       </View>
                       <ProgressBar
@@ -479,7 +506,9 @@ export default function ReportDashboardScreen() {
                       <View style={styles.efficiencyRow}>
                         <Text style={styles.efficiencyLabel}>综合效率</Text>
                         <Text style={[styles.efficiencyValue, { color: getStatusColor(efficiencyData.overallEfficiency) }]}>
-                          {Number(efficiencyData.overallEfficiency ?? 0).toFixed(1)}%
+                          {efficiencyData.overallEfficiency == null
+                            ? '—'
+                            : `${Number(efficiencyData.overallEfficiency).toFixed(1)}%`}
                         </Text>
                       </View>
                       <ProgressBar
@@ -567,7 +596,9 @@ export default function ReportDashboardScreen() {
                         <Text style={[styles.laborValue, { color: '#795548' }]}>
                           {laborCostAnalysis.workerCount ?? 0}
                         </Text>
-                        <Text style={styles.laborLabel}>工人数</Text>
+                        {/* ⛔ 原来叫「工人数」，读起来是这家工厂有几个人（F006 有 22 个）。
+                            它其实是**这段期间有计件记录的人数**。改成不会被误读的名字。 */}
+                        <Text style={styles.laborLabel}>计件人数</Text>
                       </View>
                       <View style={styles.laborItem}>
                         <Text style={[styles.laborValue, { color: '#2196F3' }]}>
@@ -577,13 +608,18 @@ export default function ReportDashboardScreen() {
                       </View>
                       <View style={styles.laborItem}>
                         <Text style={[styles.laborValue, { color: '#4CAF50' }]}>
-                          {Number(laborCostAnalysis.averageEfficiency ?? 0).toFixed(1)}
+                          {laborCostAnalysis.averageEfficiency == null
+                            ? '—'
+                            : Number(laborCostAnalysis.averageEfficiency).toFixed(1)}
                         </Text>
                         <Text style={styles.laborLabel}>件/小时</Text>
                       </View>
                       <View style={styles.laborItem}>
                         <Text style={[styles.laborValue, { color: '#FF9800' }]}>
-                          ¥{Number(laborCostAnalysis.costPerPiece ?? 0).toFixed(2)}
+                          {/* ⛔ 0 件时单件成本没有定义 —— 「¥0.00」读起来是「做一件不要钱」。 */}
+                          {laborCostAnalysis.costPerPiece == null
+                            ? '—'
+                            : `¥${Number(laborCostAnalysis.costPerPiece).toFixed(2)}`}
                         </Text>
                         <Text style={styles.laborLabel}>单件成本</Text>
                       </View>

@@ -491,7 +491,11 @@ export default function PersonnelReportScreen() {
                 <View style={styles.costRow}>
                   <Text variant="bodyMedium">单件人工成本</Text>
                   <Text variant="bodyMedium" style={{ color: '#FF9800', fontWeight: '600' }}>
-                    ¥{laborCostAnalysis.costPerPiece?.toFixed(2) || '0.00'}/件
+                    {/* ⛔ 原来是 `|| '0.00'` —— 0 件时单件成本没有定义,
+                        「¥0.00/件」读起来是「做一件不要钱」。 */}
+                    {laborCostAnalysis.costPerPiece == null
+                      ? '—'
+                      : `¥${laborCostAnalysis.costPerPiece.toFixed(2)}/件`}
                   </Text>
                 </View>
                 <Divider style={{ marginVertical: 8 }} />
@@ -500,7 +504,9 @@ export default function PersonnelReportScreen() {
                 <View style={styles.costRow}>
                   <Text variant="bodyMedium">平均效率</Text>
                   <Text variant="bodyMedium" style={{ color: '#9C27B0', fontWeight: '600' }}>
-                    {laborCostAnalysis.averageEfficiency?.toFixed(1) || '0'} 件/小时
+                    {laborCostAnalysis.averageEfficiency == null
+                      ? '—'
+                      : `${laborCostAnalysis.averageEfficiency.toFixed(1)} 件/小时`}
                   </Text>
                 </View>
 
@@ -516,7 +522,9 @@ export default function PersonnelReportScreen() {
                 <View style={styles.costRow}>
                   <Text variant="bodyMedium">人均产出</Text>
                   <Text variant="bodyMedium" style={{ fontWeight: '600' }}>
-                    {laborCostAnalysis.avgPiecesPerWorker?.toFixed(0) || '0'} 件
+                    {laborCostAnalysis.avgPiecesPerWorker == null
+                      ? '—'
+                      : `${laborCostAnalysis.avgPiecesPerWorker.toFixed(0)} 件`}
                   </Text>
                 </View>
 
@@ -524,7 +532,9 @@ export default function PersonnelReportScreen() {
                 <View style={styles.costRow}>
                   <Text variant="bodyMedium">人均工资</Text>
                   <Text variant="bodyMedium" style={{ color: '#4CAF50', fontWeight: '600' }}>
-                    ¥{laborCostAnalysis.avgWagePerWorker?.toFixed(0) || '0'}
+                    {laborCostAnalysis.avgWagePerWorker == null
+                      ? '—'
+                      : `¥${laborCostAnalysis.avgWagePerWorker.toFixed(0)}`}
                   </Text>
                 </View>
               </>

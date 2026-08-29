@@ -184,17 +184,35 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalCost = Stream.of(materialCost, laborCost, equipmentCost, otherCost)
                 .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        report.put("materialCost", materialCost != null ? materialCost : BigDecimal.ZERO);
-        report.put("laborCost", laborCost != null ? laborCost : BigDecimal.ZERO);
-        report.put("equipmentCost", equipmentCost != null ? equipmentCost : BigDecimal.ZERO);
-        report.put("otherCost", otherCost != null ? otherCost : BigDecimal.ZERO);
-        report.put("totalCost", totalCost);
+        // 🔴 2026-08-29 真机走查: 屏上「¥0 总成本 / ¥0 材料 / ¥0 人工 / ¥0 制造费用」,
+        //    而同屏「总产出 8 kg」、近 30 天有 46 个生产计划。查库:
+        //      46 个计划, actual_/estimated_ x material_/labor_ 成本列**一个都没填**(全 null)
+        //    ⇒ SUM 返 null -> 兜成 0 -> 屏上读成「生产不花钱」。
+        //
+        // ⚠️ 与营收区别开(这是本处唯一需要判断的地方):
+        //      营收 SUM 为 null 是因为**一条出货记录都没有** -> 没卖就是没收入, ¥0 **正确**
+        //      成本 SUM 为 null 却有 46 个计划          -> 成本**未知**, ⛔ 不是 ¥0
+        //    ⇒ 判据: 窗口内有没有计划。没有计划 = 没生产 = 成本确实 0;
+        //             有计划而成本列为空 = 没录 = 算不出来。
+        boolean hasPlansInWindow = productionPlanRepository.countByFactoryIdAndCreatedAtBetween(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59)) > 0;
+        report.put("materialCost", costOrNull(materialCost, hasPlansInWindow));
+        report.put("laborCost", costOrNull(laborCost, hasPlansInWindow));
+        report.put("equipmentCost", costOrNull(equipmentCost, hasPlansInWindow));
+        report.put("otherCost", costOrNull(otherCost, hasPlansInWindow));
+        report.put("totalCost", (materialCost == null && laborCost == null
+                && equipmentCost == null && otherCost == null && hasPlansInWindow) ? null : totalCost);
         // 利润计算
-        BigDecimal totalProfit = totalRevenue.subtract(totalCost);
+        // ⛔ 成本未知时利润**算不出来** —— 原来 totalCost 兜 0, 于是「利润 = 营收」,
+        //    一家没录成本的工厂会被报成「全额都是利润」。
+        BigDecimal costForProfit = (BigDecimal) report.get("totalCost");
+        BigDecimal totalProfit = costForProfit == null ? null : totalRevenue.subtract(costForProfit);
         report.put("totalProfit", totalProfit);
-        Double profitMargin = totalRevenue.compareTo(BigDecimal.ZERO) > 0 ?
-                totalProfit.divide(totalRevenue, 4, RoundingMode.HALF_UP)
-                        .multiply(BigDecimal.valueOf(100)).doubleValue() : 0.0;
+        // ⛔ 营收为 0 时利润率没有定义 —— 原来兜 0.0, 读起来是「利润率 0%」。
+        Double profitMargin = (totalProfit != null && totalRevenue.compareTo(BigDecimal.ZERO) > 0)
+                ? totalProfit.divide(totalRevenue, 4, RoundingMode.HALF_UP)
+                        .multiply(BigDecimal.valueOf(100)).doubleValue()
+                : null;
         report.put("profitMargin", profitMargin);
         // 应收应付 (R42 BUG-13: 仅正余额; 客户预付分开统计)
         BigDecimal accountsReceivable = customerRepository.calculateTotalOutstandingBalance(factoryId);
@@ -1725,6 +1743,19 @@ public class ProductionReportServiceImpl implements ProductionReportService {
      * 「我不知道」和「确实是 0」。前端 {@code MetricItem} 对 null 已经有 "--" 分支,
      * 对 0 则会画出一个红色的 0.0%。
      */
+    /**
+     * 成本读数: <b>有生产计划但成本列为空 ⇒ null（未录）</b>；没有计划 ⇒ 0（没生产，确实没花钱）。
+     *
+     * <p>⛔ 一律兜 0 会让「成本没录进来」和「这段期间没生产」变成同一个 ¥0，
+     * 而前者在屏上读起来是<b>生产不花钱</b>。
+     */
+    private static BigDecimal costOrNull(BigDecimal value, boolean hasPlansInWindow) {
+        if (value != null) {
+            return value;
+        }
+        return hasPlansInWindow ? null : BigDecimal.ZERO;
+    }
+
     /**
      * 比率 = 分子 / 分母 x 100; <b>分母为 0 时返回 null</b>。
      *
