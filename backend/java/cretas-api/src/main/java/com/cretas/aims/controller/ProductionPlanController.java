@@ -717,6 +717,21 @@ public class ProductionPlanController {
         return ApiResponse.success("生产结单状态", response);
     }
 
+    @RequirePermission({"production:read_write", "finance:read_write"})
+    @RequireModule("production_plan")
+    @PostMapping("/{planId}/recalculate-settled-costs")
+    @Operation(summary = "重算已结单计划成本",
+            description = "只从权威领用与成本配置派生，不接受客户端成本数字；同步成品与回料单位成本")
+    @com.cretas.aims.annotation.Loggable(module = "PRODUCTION_PLAN", action = "RECALCULATE_SETTLED_COSTS",
+            entityType = "ProductionPlan", entityIdParam = "planId")
+    public ApiResponse<com.cretas.aims.dto.production.ProductionCostRecalculationResponse>
+            recalculateSettledCosts(
+                    @PathVariable @NotBlank String factoryId,
+                    @PathVariable @NotBlank String planId) {
+        return ApiResponse.success("计划成本已按权威领用重算并同步产出",
+                productionPlanService.recalculateSettledPlanCosts(factoryId, planId));
+    }
+
     @RequirePermission({"production:read_write", "scheduling:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/{planId}/settlement/bridge-by-stock")

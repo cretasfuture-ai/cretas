@@ -428,7 +428,13 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'stocktakes',
             name: 'WarehouseStocktakes',
             component: () => import('@/views/warehouse/stocktakes/index.vue'),
-            meta: { requiresAuth: true, title: '盘点与期初库存', module: 'warehouse' }
+            meta: {
+              requiresAuth: true,
+              title: '盘点与期初库存',
+              module: 'warehouse',
+              // 仓储负责发起/录入/应用，财务从个人 OA 查看依据并审批。
+              modulesAny: ['warehouse', 'finance']
+            }
           },
           // SP7 六扇门 ERP-lite — 报损管理 (仓库→财务 / 生产→厂长 双轨)
           {

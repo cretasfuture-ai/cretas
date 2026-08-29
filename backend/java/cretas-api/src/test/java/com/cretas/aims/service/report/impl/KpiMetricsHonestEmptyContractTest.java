@@ -6,6 +6,7 @@ import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.repository.ReworkRecordRepository;
@@ -72,6 +73,7 @@ class KpiMetricsHonestEmptyContractTest {
     @Mock ShipmentRecordRepository shipmentRecordRepository;
     @Mock SalesOrderRepository salesOrderRepository;
     @Mock ReworkRecordRepository reworkRecordRepository;
+    @Mock ProductionLineRepository productionLineRepository;
     /**
      * 2026-08-29 新增：{@code getOeeReport} 的计划工时改成读工厂真实配置
      * （原来写死 {@code days * 8 * 设备数}）。⚠️ 不 mock 它的话 Mockito

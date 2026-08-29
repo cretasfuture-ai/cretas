@@ -27,6 +27,9 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     // action authority are still enforced by the workflow API per factory,
     // current node, role and explicit assignee.
     '/workflow',
+    // 盘点审批详情是个人 OA 的下游只读入口。finance_manager 需要从
+    // INVENTORY_ADJUSTMENT 待办查看盘点依据，但不能因此开放其它仓储页面。
+    '/warehouse/stocktakes',
     '/finance',
     // 销售/采购审批统一在个人 OA；财务角色不再通过旧销售财审索引跨模块浏览。
     // 🔴 2026-08-22: 补上工作台。财务有 dashboard/finance 模块 ⇒ 菜单显示「工作台」,
@@ -162,11 +165,21 @@ export function setupRouterGuards(router: Router) {
     // 检查模块权限
     // demoModuleExempt: 演示租户进演示页时豁免这一道 (且**只有**这一道) —— 见上方说明。
     const module = to.meta.module as ModuleName | undefined;
-    if (module && !demoModuleExempt) {
+    const modulesAny = to.meta.modulesAny as ModuleName[] | undefined;
+    if (module && !modulesAny?.length && !demoModuleExempt) {
       if (!permissionStore.canAccess(module)) {
         next('/403');
         return;
       }
+    }
+
+    // modulesAny —— 页面由多个职责域共同使用，但只需拥有其中之一。
+    // 例如盘点由仓储执行、财务审批；两者都必须能查看同一张盘点依据。
+    // 保留 meta.module 作为菜单/工作区的权威分类，导航守卫则按 any-of 判定。
+    if (modulesAny?.length && !demoModuleExempt
+        && !modulesAny.some((m) => permissionStore.canAccess(m))) {
+      next('/403');
+      return;
     }
 
     // 🔴 2026-08-22: modulesAll —— 「这一页需要**不止一个**模块」。

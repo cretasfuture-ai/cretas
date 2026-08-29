@@ -288,6 +288,13 @@ public interface ProductionPlanService {
                                         BigDecimal laborCost,
                                         BigDecimal equipmentCost,
                                         BigDecimal otherCost);
+
+    /**
+     * 按权威成本分解重算已结单计划，并同步 settlement output、成品批次与同计划回料 WIP。
+     * 不接受客户端传成本数字，避免直接写 FG/WIP 造绿。
+     */
+    com.cretas.aims.dto.production.ProductionCostRecalculationResponse recalculateSettledPlanCosts(
+            String factoryId, String planId);
      /**
      * 分配原材料批次
       */

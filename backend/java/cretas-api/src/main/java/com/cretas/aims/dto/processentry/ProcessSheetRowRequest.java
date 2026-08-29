@@ -248,6 +248,15 @@ public class ProcessSheetRowRequest {
         private boolean semiFinished;
 
         /**
+         * 该常驻半成品来源是否已在正式报工事务内完成库存扣减。
+         *
+         * <p>这是服务端持久化的 exactly-once 标记，不接受客户端声明：正式提交入口会先统一清零，
+         * 只有确认来源为回料且严格扣减成功后才置为 true。结单读取该标记以避免对同一回料二次扣减；
+         * 缺失或 false 的普通半成品来源仍按原有结单口径扣减。</p>
+         */
+        private boolean stockConsumedAtSubmit;
+
+        /**
          * 成品库存(FG)投料 (成品作投料来源)。
          *
          * <p>true 时 {@code sourceBatchNumber} 指向常驻成品库存

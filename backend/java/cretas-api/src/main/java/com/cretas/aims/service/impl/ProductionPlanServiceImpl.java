@@ -6275,6 +6275,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     fgOut = fgOut.add(zeroIfNull(drawn));
                     fgCount++;
                 } else if (ref.isSemiFinished()) {
+                    if (ref.isStockConsumedAtSubmit()) {
+                        continue;   // 回料已在正式报工事务内严格扣减；结单只做一次消费
+                    }
                     if (manuallyPostedSemiBatchNumbers.contains(srcBatchNo)) {
                         continue;   // 仅该同一 SFI 已走手工领用时跳过，不能全局跳过其他真实投料
                     }
@@ -6927,6 +6930,129 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     factoryId, planId, e.getMessage());
             return null;
         }
+    }
+
+    @Override
+    @Transactional
+    public com.cretas.aims.dto.production.ProductionCostRecalculationResponse recalculateSettledPlanCosts(
+            String factoryId, String planId) {
+        productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        if (productionSettlementRepository == null || productionSettlementOutputLineRepository == null
+                || orderCostBreakdownService == null) {
+            throw new BusinessException(500, "结单成本重算依赖不可用, 本次未执行");
+        }
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
+                .orElseThrow(() -> new BusinessException(409, "该计划尚未结单, 不能重算结单成本"));
+        if (!"POSTED".equals(settlement.getPostingStatus())) {
+            throw new BusinessException(409, "结单尚未完成仓库入库, 不能重算产出成本")
+                    .withCode("SETTLEMENT_NOT_POSTED");
+        }
+        List<ProductionSettlementOutputLine> lines = productionSettlementOutputLineRepository
+                .lockByFactoryIdAndSettlementId(factoryId, settlement.getId());
+        if (lines.isEmpty() || lines.stream().anyMatch(line -> line.getReceivedQuantity() == null
+                || line.getReceivedQuantity().signum() <= 0 || line.getFinishedGoodsBatchId() == null)) {
+            throw new BusinessException(409, "结单产出尚未全部入库, 不能重算产出成本")
+                    .withCode("SETTLEMENT_OUTPUT_NOT_RECEIVED");
+        }
+
+        com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown =
+                orderCostBreakdownService.computeByPlan(factoryId, planId, false);
+        BigDecimal totalCost = usableTotalCost(breakdown);
+        if (totalCost == null) {
+            throw new BusinessException(409, describeCostUnavailableReason(breakdown))
+                    .withCode("PLAN_COST_INCOMPLETE");
+        }
+
+        List<ProductionBatch> productionBatches = productionBatchRepository
+                .findByFactoryIdAndProductionPlanId(factoryId, planId);
+        List<SemiFinishedInventory> reworkRows = new ArrayList<>();
+        if (semiFinishedInventoryRepository != null) {
+            for (ProductionBatch batch : productionBatches) {
+                if (batch.getId() == null) continue;
+                semiFinishedInventoryRepository.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batch.getId())
+                        .stream().filter(w -> Boolean.TRUE.equals(w.getIsRework()))
+                        .forEach(reworkRows::add);
+            }
+        }
+
+        BigDecimal sharedUnitCost;
+        if (!reworkRows.isEmpty()) {
+            long primaryProducts = lines.stream()
+                    .filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                    .map(ProductionSettlementOutputLine::getProductTypeId).distinct().count();
+            boolean hasByproduct = lines.stream()
+                    .anyMatch(line -> line.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT);
+            if (primaryProducts != 1 || hasByproduct) {
+                throw new BusinessException(409, "多主产/副产计划含回料时需先配置独立成本分摊, 本次未改任何成本")
+                        .withCode("REWORK_MULTI_OUTPUT_COST_POLICY_REQUIRED");
+            }
+            BigDecimal totalProduced = lines.stream().map(ProductionSettlementOutputLine::getReceivedQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .add(reworkRows.stream().map(SemiFinishedInventory::getProducedQuantity)
+                            .filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add));
+            if (totalProduced.signum() <= 0) {
+                throw new BusinessException(409, "良品与回料总产出为 0, 无法计算单位成本");
+            }
+            // 良品与回料对外都按 4 位单位成本；先统一量化再同时写，避免一边 6 位、一边 4 位
+            // 导致“来源相同但逐格比较不相等”。
+            sharedUnitCost = totalCost.divide(totalProduced, 4, RoundingMode.HALF_UP);
+            for (ProductionSettlementOutputLine line : lines) {
+                line.setUnitCost(sharedUnitCost);
+                line.setAllocatedCost(line.getReceivedQuantity().multiply(sharedUnitCost)
+                        .setScale(6, RoundingMode.HALF_UP));
+            }
+            for (SemiFinishedInventory wip : reworkRows) {
+                wip.setUnitCost(sharedUnitCost);
+                wip.setAccumulatedCost(wip.getProducedQuantity().multiply(sharedUnitCost)
+                        .setScale(2, RoundingMode.HALF_UP));
+            }
+            semiFinishedInventoryRepository.saveAll(reworkRows);
+        } else {
+            allocateWorkflowOutputCostsFromTotal(totalCost, lines);
+            sharedUnitCost = lines.size() == 1 ? lines.getFirst().getUnitCost() : null;
+        }
+        productionSettlementOutputLineRepository.saveAll(lines);
+
+        int finishedGoodsCount = 0;
+        for (ProductionSettlementOutputLine line : lines) {
+            com.cretas.aims.entity.inventory.FinishedGoodsBatch fg = finishedGoodsBatchRepository
+                    .findByIdAndFactoryIdForUpdate(line.getFinishedGoodsBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(409, "结单产出对应成品批次不存在: "
+                            + line.getFinishedGoodsBatchId()));
+            if (!planId.equals(fg.getProductionPlanId())) {
+                throw new BusinessException(409, "成品批次不属于当前计划, 本次成本重算已回滚");
+            }
+            fg.setUnitCost(line.getUnitCost());
+            finishedGoodsBatchRepository.save(fg);
+            finishedGoodsCount++;
+        }
+
+        for (ProductionBatch batch : productionBatches) {
+            batch.setMaterialCost(zeroIfNull(breakdown.getRawMaterialCost())
+                    .add(breakdown.getSeasoningCost() == null ? BigDecimal.ZERO : breakdown.getSeasoningCost())
+                    .add(breakdown.getPackagingCost() == null ? BigDecimal.ZERO : breakdown.getPackagingCost()));
+            batch.setLaborCost(breakdown.getLaborCost());
+            batch.setEquipmentCost(breakdown.getEquipmentCost());
+            batch.setOtherCost(breakdown.getOtherCost());
+            batch.calculateMetrics();
+        }
+        productionBatchRepository.saveAll(productionBatches);
+
+        log.info("结单成本重算完成 factory={} plan={} settlement={} total={} unit={} outputs={} fg={} rework={}",
+                factoryId, planId, settlement.getId(), totalCost, sharedUnitCost,
+                lines.size(), finishedGoodsCount, reworkRows.size());
+        return com.cretas.aims.dto.production.ProductionCostRecalculationResponse.builder()
+                .productionPlanId(planId)
+                .settlementId(settlement.getId())
+                .authoritativeTotalCost(totalCost)
+                .sharedUnitCost(sharedUnitCost)
+                .outputLineCount(lines.size())
+                .finishedGoodsBatchCount(finishedGoodsCount)
+                .reworkWipCount(reworkRows.size())
+                .productionBatchCount(productionBatches.size())
+                .build();
     }
 
     private String finishedGoodsBatchNumber(ProductionSettlement settlement) {

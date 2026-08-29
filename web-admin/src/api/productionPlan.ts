@@ -190,6 +190,24 @@ export function getProductionSettlement(factoryId: string, planId: string, confi
   return get<ProductionSettlementStatus>(`/${factoryId}/production-plans/${planId}/settlement`, config)
 }
 
+export interface ProductionCostRecalculationResult {
+  productionPlanId: string
+  settlementId: string
+  authoritativeTotalCost: number
+  sharedUnitCost?: number | null
+  outputLineCount: number
+  finishedGoodsBatchCount: number
+  reworkWipCount: number
+  productionBatchCount: number
+}
+
+/** 重算已入库计划成本；客户端不传任何成本数字。 */
+export function recalculateSettledPlanCosts(factoryId: string, planId: string) {
+  return post<ProductionCostRecalculationResult>(
+    `/${factoryId}/production-plans/${planId}/recalculate-settled-costs`,
+  )
+}
+
 export function confirmProductionWarehouseReceipt(
   factoryId: string,
   planId: string,

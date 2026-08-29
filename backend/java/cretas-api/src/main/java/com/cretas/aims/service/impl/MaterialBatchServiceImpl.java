@@ -175,6 +175,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private com.cretas.aims.repository.material.MaterialBatchDateCorrectionRepository
             materialBatchDateCorrectionRepository;
 
+    @Autowired
+    private com.cretas.aims.repository.material.MaterialBatchCostCorrectionRepository
+            materialBatchCostCorrectionRepository;
+
     /** 更正原因落库列是 varchar(255) —— 与 material_batch_adjustments.reason 对齐。 */
     private static final int CORRECTION_REASON_MAX_LENGTH = 255;
 
@@ -1831,6 +1835,55 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         log.info("更正批次入库日期: factoryId={}, batchId={}, {} → {}, role={}, operatorId={}",
                 factoryId, batchId, oldReceiptDate, newReceiptDate, callerRole, operatorId);
+        return materialBatchMapper.toDTO(batch);
+    }
+
+    @Override
+    @Transactional
+    public MaterialBatchDTO correctUnitPrice(String factoryId, String batchId, BigDecimal newUnitPrice,
+                                             String reason, Long operatorId, String callerRole) {
+        if (newUnitPrice == null || newUnitPrice.signum() <= 0) {
+            throw new BusinessException(400, "批次估值单价必须大于 0")
+                    .withHintTarget("unitPrice");
+        }
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (trimmedReason.isEmpty() || trimmedReason.length() > CORRECTION_REASON_MAX_LENGTH) {
+            throw new BusinessException(400, trimmedReason.isEmpty() ? "估值更正原因不能为空" : "估值更正原因不能超过 255 字")
+                    .withHintTarget("reason");
+        }
+        String normalizedRole = callerRole == null ? "" : callerRole.toLowerCase();
+        if (!RECEIPT_DATE_CORRECTION_ROLES.contains(normalizedRole)) {
+            throw new BusinessException(403, "更正批次估值需要财务经理或工厂管理员角色")
+                    .withHint("该动作会改变库存成本与生产成本, 权限与盘点审批同级")
+                    .withHintTarget("unitPrice");
+        }
+        MaterialBatch batch = materialBatchRepository.findById(batchId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+        if (!factoryId.equals(batch.getFactoryId())) {
+            throw new BusinessException(403, "无权操作该批次");
+        }
+        BigDecimal old = batch.getUnitPrice();
+        if (numericEquals(old, newUnitPrice)) {
+            throw new BusinessException(400, "批次估值单价没有变化").withHintTarget("unitPrice");
+        }
+        com.cretas.aims.entity.material.MaterialBatchCostCorrection trace =
+                com.cretas.aims.entity.material.MaterialBatchCostCorrection.builder()
+                        .id(java.util.UUID.randomUUID().toString())
+                        .factoryId(factoryId)
+                        .materialBatchId(batchId)
+                        .oldUnitPrice(old)
+                        .newUnitPrice(newUnitPrice)
+                        .reason(trimmedReason)
+                        .correctedBy(operatorId)
+                        .correctedByRole(callerRole)
+                        .correctedAt(LocalDateTime.now())
+                        .build();
+        materialBatchCostCorrectionRepository.save(trace);
+        batch.setUnitPrice(newUnitPrice);
+        batch = materialBatchRepository.save(batch);
+        recalculateMovingAvgPrice(batch.getMaterialTypeId(), batch.getCurrentQuantity(), newUnitPrice, batch.getId());
+        log.info("更正批次估值: factoryId={}, batchId={}, {} -> {}, role={}, operatorId={}",
+                factoryId, batchId, old, newUnitPrice, callerRole, operatorId);
         return materialBatchMapper.toDTO(batch);
     }
 

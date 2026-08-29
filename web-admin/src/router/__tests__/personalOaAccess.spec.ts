@@ -13,6 +13,15 @@ describe('personal OA route access', () => {
 
     expect(financeWhitelist).toBeDefined();
     expect(financeWhitelist).toContain("'/workflow'");
+    expect(financeWhitelist).toContain("'/warehouse/stocktakes'");
+  });
+
+  it('lets either warehouse or finance open the stocktake evidence page', () => {
+    expect(routerSource).toMatch(
+      /path:\s*'stocktakes'[\s\S]*?module:\s*'warehouse'[\s\S]*?modulesAny:\s*\['warehouse',\s*'finance'\]/,
+    );
+    expect(guardSource).toContain('const modulesAny = to.meta.modulesAny');
+    expect(guardSource).toContain('modulesAny.some((m) => permissionStore.canAccess(m))');
   });
 
   it('keeps personal OA queues authenticated and under the shared dashboard module', () => {

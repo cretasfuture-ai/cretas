@@ -310,6 +310,7 @@ const formData = reactive({
   boxCount: null as number | null,
   totalWeight: null as number | null,
   totalValue: null as number | null,
+  unitPrice: null as number | null,
   expireDate: '',
   notes: '',
   factoryNumber: '',
@@ -423,7 +424,7 @@ function handleCreate() {
   w02HintShown = false;
   weightHintShown = false;
   selectedMaterialUnit.value = null;
-  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: toDateString(new Date()), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, expireDate: '', notes: '', factoryNumber: '', originPlace: '' });
+  Object.assign(formData, { batchNumber: '', materialTypeId: '', supplierId: '', receiptDate: toDateString(new Date()), receiptQuantity: null, quantityUnit: 'kg', boxCount: null, totalWeight: null, totalValue: null, unitPrice: null, expireDate: '', notes: '', factoryNumber: '', originPlace: '' });
   formDialogVisible.value = true;
 }
 
@@ -443,6 +444,7 @@ function handleEdit(row: TableRow) {
     boxCount: row.boxCount ?? null,
     totalWeight: row.totalWeight ?? null,
     totalValue: row.totalValue ?? null,
+    unitPrice: row.unitPrice ?? null,
     expireDate: row.expireDate || row.expiryDate || '',
     notes: row.notes || '',
     factoryNumber: row.factoryNumber || '',
@@ -533,6 +535,60 @@ function openCorrectReceiptDate() {
   correctDateForm.receiptDate = correctDateOriginal.value;
   correctDateForm.reason = '';
   correctDateDialogVisible.value = true;
+}
+
+// ==================== 更正批次估值（成本事实，必须带新旧值留痕） ====================
+const costCorrectionDialogVisible = ref(false);
+const costCorrectionSaving = ref(false);
+const costCorrectionBatchId = ref<string | null>(null);
+const costCorrectionBatchNumber = ref('');
+const costCorrectionOriginal = ref<number | null>(null);
+const costCorrectionForm = reactive({ unitPrice: null as number | null, reason: '' });
+
+function openCostCorrection() {
+  costCorrectionBatchId.value = editingId.value;
+  costCorrectionBatchNumber.value = formData.batchNumber;
+  costCorrectionOriginal.value = formData.unitPrice == null ? null : Number(formData.unitPrice);
+  costCorrectionForm.unitPrice = costCorrectionOriginal.value;
+  costCorrectionForm.reason = '';
+  costCorrectionDialogVisible.value = true;
+}
+
+async function submitCostCorrection() {
+  const batchId = costCorrectionBatchId.value;
+  const price = Number(costCorrectionForm.unitPrice);
+  const reason = costCorrectionForm.reason.trim();
+  if (!batchId) return;
+  if (!Number.isFinite(price) || price <= 0) { ElMessage.warning('估值单价必须大于 0'); return; }
+  if (costCorrectionOriginal.value != null && Math.abs(price - costCorrectionOriginal.value) < 0.000001) {
+    ElMessage.warning('估值单价没有变化，无需更正'); return;
+  }
+  if (!reason) { ElMessage.warning('请填写估值依据，它会写入审计台账'); return; }
+  if (reason.length > CORRECTION_REASON_MAX_LENGTH) { ElMessage.warning('估值依据不能超过 255 字'); return; }
+  costCorrectionSaving.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/material-batches/${batchId}/cost-correction`, {
+      unitPrice: price,
+      reason,
+    });
+    if (!res.success) {
+      ElMessage({ message: res.message || '估值更正失败', type: 'error', duration: 0, showClose: true });
+      return;
+    }
+    ElMessage.success('批次估值已更正，已记录新旧单价、原因和操作人');
+    costCorrectionDialogVisible.value = false;
+    if (formData.receiptQuantity != null) {
+      formData.totalValue = Number((formData.receiptQuantity * price).toFixed(2));
+    }
+    formData.unitPrice = price;
+    await loadData();
+    if (viewMode.value === 'summary') await loadSummaryData();
+  } catch (error) {
+    console.error('更正批次估值失败:', error);
+    ElMessage({ message: '估值更正失败，请重试', type: 'error', duration: 0, showClose: true });
+  } finally {
+    costCorrectionSaving.value = false;
+  }
 }
 
 async function submitCorrectReceiptDate() {
@@ -981,6 +1037,12 @@ async function handleGenerateLabel(row: TableRow) {
         </el-form-item>
         <el-form-item v-if="canViewPrice" label="总价值(元)" prop="totalValue">
           <el-input-number v-model="formData.totalValue" :min="0" :precision="2" :disabled="!!editingId" style="width: 100%" />
+          <template v-if="editingId">
+            <el-button v-if="canCorrectReceiptDate" type="primary" link size="small" @click="openCostCorrection">
+              更正批次估值 →
+            </el-button>
+            <div v-else class="field-hint">估值会影响库存成本，需财务经理或工厂管理员更正（会记录新旧单价与原因）。</div>
+          </template>
         </el-form-item>
         <el-form-item label="过期日期">
           <el-date-picker v-model="formData.expireDate" type="date" value-format="YYYY-MM-DD" placeholder="选择过期日期" style="width: 100%" />
@@ -1012,6 +1074,27 @@ async function handleGenerateLabel(row: TableRow) {
       <template #footer>
         <el-button @click="formDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="formSaving" @click="handleFormSubmit">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="costCorrectionDialogVisible" title="更正批次估值" width="460px" destroy-on-close append-to-body>
+      <div class="locked-hint">
+        <div class="locked-hint__title">估值更正会影响该批次参与的生产成本</div>
+        <div class="locked-hint__body">系统会保存改前 / 改后的单位价格、估值依据、操作人和操作时间。历史成品成本需在生产计划中执行“重算已结单成本”。</div>
+      </div>
+      <el-form label-width="110px">
+        <el-form-item label="批次号"><el-input :model-value="costCorrectionBatchNumber" disabled /></el-form-item>
+        <el-form-item label="当前单价"><el-input :model-value="costCorrectionOriginal ?? '未估值'" disabled /></el-form-item>
+        <el-form-item label="更正为" required>
+          <el-input-number v-model="costCorrectionForm.unitPrice" :min="0.000001" :precision="6" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="估值依据" required>
+          <el-input v-model="costCorrectionForm.reason" type="textarea" :rows="3" :maxlength="CORRECTION_REASON_MAX_LENGTH" show-word-limit placeholder="例如：客户确认的本批结算参考价" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="costCorrectionDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="costCorrectionSaving" @click="submitCostCorrection">确认更正</el-button>
       </template>
     </el-dialog>
 

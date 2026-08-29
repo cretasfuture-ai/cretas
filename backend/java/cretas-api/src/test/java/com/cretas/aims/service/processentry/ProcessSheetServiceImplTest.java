@@ -250,6 +250,20 @@ class ProcessSheetServiceImplTest {
         sfiRepo.saveAndFlush(sfi);
     }
 
+    private void seedReworkSfi(String intermediateBatchNo, String available) {
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(intermediateBatchNo)
+                .productTypeId(PRODUCT_TYPE_ID)
+                .producedQuantity(new BigDecimal(available))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal(available))
+                .unit("kg")
+                .isRework(true)
+                .build();
+        sfiRepo.saveAndFlush(sfi);
+    }
+
     private ProcessSheetRowRequest baseReq(String clientRowId, String processCode,
                                            int order, String output) {
         ProcessSheetRowRequest r = new ProcessSheetRowRequest();
@@ -481,6 +495,60 @@ class ProcessSheetServiceImplTest {
         assertThat(processSheetService.getRows(FACTORY_ID, planId, "qidiao", 2)).hasSize(1);
         assertThat(processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1))
                 .singleElement().satisfies(item -> assertThat(item.getUsed()).isEqualByComparingTo("4.5"));
+    }
+
+    @Test
+    @DisplayName("正式报工: 指定回料 SFI 在提交时精确扣减并返回 allocation, 重复提交不二扣")
+    void submitRow_reworkSfi_consumesExactlyOnceAndReturnsAllocation() {
+        String reworkBatchNo = "CLK-SEMI-REWORK-1";
+        seedReworkSfi(reworkBatchNo, "1");
+
+        ProcessSheetRowRequest req = baseReq("row-rework-submit", "qidiao", 2, "1");
+        req.setFinished(true);
+        req.setProcessDate(LocalDate.of(2026, 7, 20));
+        req.setInputQuantity(new BigDecimal("1"));
+        UpstreamRef rework = upstreamRef(reworkBatchNo, "1");
+        rework.setSemiFinished(true);
+        req.setUpstreamSources(List.of(rework));
+
+        ProcessSheetRowResult submitted = processSheetService.submitRow(
+                FACTORY_ID, planId, req, operatorId);
+
+        assertThat(submitted.getInputAllocations())
+                .as("正式回料报工必须返回实际来源 allocation")
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.getMaterialBatchId()).isEqualTo(reworkBatchNo);
+                    assertThat(allocation.getBatchNumber()).isEqualTo(reworkBatchNo);
+                    assertThat(allocation.getQuantity()).isEqualByComparingTo("1");
+                    assertThat(allocation.getUnit()).isEqualTo("kg");
+                    assertThat(allocation.getSourceType()).isEqualTo("REWORK");
+                });
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                FACTORY_ID, reworkBatchNo).orElseThrow()).satisfies(sfi -> {
+                    assertThat(sfi.getProducedQuantity()).isEqualByComparingTo("1");
+                    assertThat(sfi.getConsumedQuantity()).isEqualByComparingTo("1");
+                    assertThat(sfi.getAvailableQuantity()).isEqualByComparingTo("0");
+               assertThat(sfi.getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+           });
+        ProcessSheetRow persisted = rowRepo
+                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                        FACTORY_ID, planId, "qidiao", "row-rework-submit")
+                .orElseThrow();
+        assertThat(persisted.getRowPayload())
+                .as("结单必须能识别该回料已在正式报工时扣减")
+                .contains("\"stockConsumedAtSubmit\":true");
+
+        assertThatThrownBy(() -> processSheetService.submitRow(
+                FACTORY_ID, planId, req, operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("PROCESS_SHEET_ROW_ALREADY_SUBMITTED"));
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                FACTORY_ID, reworkBatchNo).orElseThrow()).satisfies(sfi -> {
+                    assertThat(sfi.getConsumedQuantity()).isEqualByComparingTo("1");
+                    assertThat(sfi.getAvailableQuantity()).isEqualByComparingTo("0");
+                });
     }
 
     @Test
