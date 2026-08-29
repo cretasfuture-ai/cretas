@@ -130,6 +130,7 @@ class ProductionPlanSettlementTest {
     @Mock private com.cretas.aims.repository.ProcessSheetRowRepository processSheetRowRepository;
     @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
     @Mock private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+    @Mock private WorkshopReportReservationService workshopReservationService;
 
     private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -160,7 +161,10 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         ReflectionTestUtils.setField(service, "orderCostBreakdownService", orderCostBreakdownService);
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        ReflectionTestUtils.setField(service, "workshopReservationService", workshopReservationService);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
+        lenient().when(workshopReservationService.releaseForPlan(any(), any()))
+                .thenReturn(BigDecimal.ZERO);
     }
 
     @Test
@@ -712,6 +716,46 @@ class ProductionPlanSettlementTest {
         assertEquals(Boolean.FALSE, ReflectionTestUtils.invokeMethod(service,
                 "workflowRecipeAllowsInput", FACTORY_ID, plan, "FG-A", "RM-1",
                 "raw-node-FG-A", "wrong-port"));
+    }
+
+    @Test
+    @DisplayName("工艺单原料被本计划整批预留时, 结单预填仍保留该行")
+    void getSettlementPrefill_processSheetIncludesOwnReservation() {
+        ProductionPlan plan = workflowPlanWithTwoOutputs();
+        stubWorkflowPinnedBom("bom-a", "FG-A", "terminal-a", "RM-1");
+        stubWorkflowPinnedBom("bom-b", "FG-B", "terminal-b", "RM-B");
+        MaterialBatch batch = materialBatch();
+        batch.setReceiptQuantity(new BigDecimal("5"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(new BigDecimal("5"));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID))
+                .thenReturn(Optional.of(batch));
+        when(workshopReservationService.reservedByPlanOnBatch(FACTORY_ID, PLAN_ID, "MB-1"))
+                .thenReturn(new BigDecimal("5"));
+
+        ProcessSheetRow row = feedRow("FG-A-001", "1", false, false);
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setRowPayload("""
+                {"clientRowId":"own-reservation","processCode":"pack-a","processOrder":2,
+                 "productTypeId":"FG-A","batchNumber":"FG-A-001","outputQuantity":1,
+                 "outputUnit":"box","unit":"box","materialNodeId":"terminal-a","workflowPortId":"terminal-port-a",
+                 "rawMaterialInputs":[{"materialBatchId":"MB-1","quantity":5,"unit":"kg",
+                   "materialNodeId":"raw-node-FG-A","workflowPortId":"raw-port-FG-A"}]}
+                """);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(row));
+
+        ProductionSettlementPrefillResponse response = service.getSettlementPrefill(FACTORY_ID, PLAN_ID);
+
+        assertEquals(1, response.getPrefill().getRawMaterialConsumptions().size());
+        assertEquals(new BigDecimal("5"),
+                response.getPrefill().getRawMaterialConsumptions().get(0).getQuantity());
+        assertTrue(response.getAudit().getIssues().stream()
+                .noneMatch(issue -> "RAW_BATCH_INSUFFICIENT".equals(issue.getCode())));
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
+import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
@@ -180,6 +181,57 @@ class WorkshopReportReservationSettlementContractTest {
 
     private void wireReservationService(WorkshopReportReservationService candidate) {
         ReflectionTestUtils.setField(service, "workshopReservationService", candidate);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // G0 预填闸 —— 自己的预留不能把「核对结单」表单清空
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("G0 🔑 报工占满整批时, 结单预填把本计划自有预留加回并保留原料行")
+    void settlementPrefillIncludesMaterialHeldByItsOwnReport() {
+        MaterialBatch batch = workshopBatch(REPORTED_REF);
+        wireSettlement(batch);
+        ProductionReport report = reportHolding(REPORTED_REF);
+        report.setProcessOrder(1);
+        report.setProductTypeId("PT-1");
+        report.setOutputQuantity(REPORTED_REF);
+        report.setOutputUnit("kg");
+        wirePlanReports(report);
+
+        ProductionSettlementPrefillResponse response =
+                service.getSettlementPrefill(FACTORY_ID, PLAN_ID);
+
+        assertThat(response.getPrefill().getRawMaterialConsumptions())
+                .as("本计划自己的 20kg 预留会在正式结单前释放, 预填不能先把这一行丢掉")
+                .singleElement()
+                .satisfies(line -> {
+                    assertThat(line.getMaterialBatchId()).isEqualTo(BATCH_ID);
+                    assertThat(line.getQuantity()).isEqualByComparingTo(REPORTED_REF);
+                });
+        assertThat(response.getAudit().getIssues())
+                .noneMatch(issue -> "RAW_BATCH_INSUFFICIENT".equals(issue.getCode()));
+    }
+
+    @Test
+    @DisplayName("G0b ⛔ 反向保护: 无法证明是本计划的预留时, available=0 仍拒绝自动带入")
+    void settlementPrefillDoesNotReclaimUnattributedReservation() {
+        MaterialBatch batch = workshopBatch(REPORTED_REF);
+        wireSettlement(batch);
+        ProductionReport report = reportHolding(REPORTED_REF);
+        report.setProcessOrder(1);
+        report.setProductTypeId("PT-1");
+        report.setOutputQuantity(REPORTED_REF);
+        report.setOutputUnit("kg");
+        wirePlanReports(report);
+        wireReservationService(null); // 不能证明 reserved 属于当前计划
+
+        ProductionSettlementPrefillResponse response =
+                service.getSettlementPrefill(FACTORY_ID, PLAN_ID);
+
+        assertThat(response.getPrefill().getRawMaterialConsumptions()).isEmpty();
+        assertThat(response.getAudit().getIssues())
+                .anyMatch(issue -> "RAW_BATCH_INSUFFICIENT".equals(issue.getCode()));
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -380,6 +432,7 @@ class WorkshopReportReservationSettlementContractTest {
         productionBatch.setId(PRODUCTION_BATCH_ID);
         productionBatch.setFactoryId(FACTORY_ID);
         productionBatch.setProductionPlanId(PLAN_ID);
+        productionBatch.setBatchNumber("PB-RESERVE-1");
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(new ArrayList<>(List.of(productionBatch)));
         when(productionReportRepository.findYieldReportsByBatch(FACTORY_ID, PRODUCTION_BATCH_ID))
