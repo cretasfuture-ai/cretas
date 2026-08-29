@@ -177,6 +177,12 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
         if (r.width < 200 || r.height < 40) continue; // 太小的多半是图标/按钮
         const text = (el.innerText ?? '').trim();
         if (!text) continue;
+        // 菜单项（如“我的工资 / 个人信息”）也常是全宽 pointer；旧探针在一个伪导航的
+        // 财务列表路由上把它当源单据，随后把工资页冒充成详情页。真实列表行至少会带
+        // 编号、状态、日期等复合信息，因此过短的单一菜单标签不能作为详情入口证据。
+        if (text.replace(/\s+/g, '').length < 12) continue;
+        const businessRowSignal = /\d{4}[-/]\d{1,2}|\b(?:SO|PO|ST|PB|QC|WO|TR|INV|TASK|TODO)-[A-Z0-9-]+\b|草稿|待审批|已审批|进行中|已完成|部分发货|供应商|客户|批次|订单号|¥\s*\d/i;
+        if (!businessRowSignal.test(text)) continue;
         // 只有【短文本】才按动作词拦 —— 那才是按钮; 长卡片里出现「已完成」是状态, 不是动作。
         if (text.length <= 14 && blocked.some((w: string) => text.includes(w))) continue;
         picked.push(el);

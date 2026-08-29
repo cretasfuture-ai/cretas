@@ -43,6 +43,7 @@ const ROUTE_SETTLE_MS = Number(process.env.VSHOT_ROUTE_SETTLE_MS ?? 3500);
 const INTERMEDIATE_SETTLE_MS = Number(process.env.VSHOT_INTERMEDIATE_SETTLE_MS ?? 1200);
 const SCROLL_SETTLE_MS = Number(process.env.VSHOT_SCROLL_SETTLE_MS ?? 700);
 const LOADING_WAIT_MS = Number(process.env.VSHOT_LOADING_WAIT_MS ?? 7000);
+const ABORT_URL_PATTERN = process.env.VSHOT_ABORT_URL_PATTERN ?? '';
 
 /** ⛔ 含这些词的一律不点 —— 不可逆或影响他人。 */
 const DESTRUCTIVE = [
@@ -83,6 +84,15 @@ type RouteResult = {
 
 test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page }) => {
   fs.mkdirSync(OUT, { recursive: true });
+  if (ABORT_URL_PATTERN) {
+    await page.route('**/*', async (route) => {
+      if (route.request().url().includes(ABORT_URL_PATTERN)) {
+        await route.abort('failed');
+        return;
+      }
+      await route.continue();
+    });
+  }
   // 路由来源两种：显式传 VSHOT_ROUTES，或留空让它自己把整棵树走一遍。
   // ⚠️ 手写清单永远只覆盖「我想到的那些屏」——而目标是「所有的按钮」，
   //    所以默认走自动发现（与 walkthrough 用的是同一套 collectRouteNames）。
