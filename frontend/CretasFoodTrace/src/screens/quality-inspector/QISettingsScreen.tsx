@@ -15,11 +15,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Application from 'expo-application';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 import { useTranslation } from 'react-i18next';
 
 import { QI_COLORS } from '../../types/qualityInspector';
+
+const APP_VERSION = Application.nativeApplicationVersion;
 
 interface SettingItem {
   id: string;
@@ -189,7 +192,7 @@ export default function QISettingsScreen() {
           icon: 'information-circle-outline',
           label: t('settings.version'),
           type: 'value',
-          value: t('settings.versionNumber'),
+          value: APP_VERSION ? `v${APP_VERSION}` : '—',
         },
       ],
     },

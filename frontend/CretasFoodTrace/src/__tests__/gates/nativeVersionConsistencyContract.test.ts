@@ -132,6 +132,8 @@ describe('屏幕上显示的版本号不许写死', () => {
   const SCREEN_FILES = [
     'src/screens/auth/EnhancedLoginScreen.tsx',
     'src/screens/factory-admin/profile/AboutScreen.tsx',
+    'src/screens/quality-inspector/QIProfileScreen.tsx',
+    'src/screens/quality-inspector/QISettingsScreen.tsx',
   ];
 
   const readScreen = (rel: string): string =>
@@ -162,6 +164,20 @@ describe('屏幕上显示的版本号不许写死', () => {
       const src = readScreen(rel);
       expect(src).toContain("from 'expo-application'");
       expect(src).toMatch(/Application\.nativeApplicationVersion/);
+    }
+  });
+
+  it('质检员关于弹窗的中英文文案必须插入真实版本号', () => {
+    for (const locale of ['zh-CN', 'en-US']) {
+      const messages = JSON.parse(
+        fs.readFileSync(
+          path.resolve(RN_ROOT, `src/i18n/locales/${locale}/quality.json`),
+          'utf8',
+        ),
+      ) as { profile?: { aboutMessage?: string } };
+
+      expect(messages.profile?.aboutMessage).toContain('{{version}}');
+      expect(messages.profile?.aboutMessage).not.toMatch(/v\d+\.\d+\.\d+/);
     }
   });
 });
