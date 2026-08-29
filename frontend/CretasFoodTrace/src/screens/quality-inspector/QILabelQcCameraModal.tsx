@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { Ionicons } from '@expo/vector-icons';
 import { ActivityIndicator, Button, TouchableRipple } from 'react-native-paper';
 import Svg, { Line, Polygon } from 'react-native-svg';
@@ -26,6 +27,9 @@ interface Props {
   onAccepted: (asset: LabelQcCaptureAsset) => void;
   checkQuality: (asset: LabelQcCaptureAsset) => Promise<LabelQcCaptureQualityResult>;
 }
+
+const CAPTURE_MAX_LONG_EDGE = 1600;
+const CAPTURE_JPEG_QUALITY = 0.72;
 
 const ultraWideLens = (lenses: string[]): string | undefined => lenses.find((lens) => {
   const normalized = lens.toLowerCase().replace(/[\s_-]+/g, '');
@@ -71,10 +75,23 @@ export default function QILabelQcCameraModal({
         setErrorMessage('没有保存到照片，请重新拍摄');
         return;
       }
+      const resize = Math.max(photo.width, photo.height) > CAPTURE_MAX_LONG_EDGE
+        ? photo.width >= photo.height
+          ? { width: CAPTURE_MAX_LONG_EDGE }
+          : { height: CAPTURE_MAX_LONG_EDGE }
+        : undefined;
+      const prepared = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        resize ? [{ resize }] : [],
+        {
+          compress: CAPTURE_JPEG_QUALITY,
+          format: ImageManipulator.SaveFormat.JPEG,
+        },
+      );
       const asset: LabelQcCaptureAsset = {
-        uri: photo.uri,
-        width: photo.width,
-        height: photo.height,
+        uri: prepared.uri,
+        width: prepared.width,
+        height: prepared.height,
         fileName: `label-qc-capture-${Date.now()}.jpg`,
         mimeType: 'image/jpeg',
       };

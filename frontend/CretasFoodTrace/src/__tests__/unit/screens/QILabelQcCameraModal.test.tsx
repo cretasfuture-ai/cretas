@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 const takePictureAsync = jest.fn();
+const manipulateAsync = jest.fn();
 
 jest.mock('expo-camera', () => ({
   CameraView: forwardRef((_props: unknown, ref) => {
@@ -13,6 +14,11 @@ jest.mock('expo-camera', () => ({
     { granted: true },
     jest.fn(async () => ({ granted: true })),
   ],
+}));
+
+jest.mock('expo-image-manipulator', () => ({
+  manipulateAsync: (...args: unknown[]) => manipulateAsync(...args),
+  SaveFormat: { JPEG: 'jpeg' },
 }));
 
 jest.mock('react-native-svg', () => {
@@ -38,6 +44,11 @@ describe('QILabelQcCameraModal', () => {
       uri: 'file://capture.jpg',
       width: 3024,
       height: 4032,
+    });
+    manipulateAsync.mockResolvedValue({
+      uri: 'file://capture-compressed.jpg',
+      width: 1200,
+      height: 1600,
     });
   });
 
@@ -70,6 +81,11 @@ describe('QILabelQcCameraModal', () => {
     });
 
     expect(await screen.findByText('左右下角托盘没有拍全，请后退一点或切换广角重拍')).toBeTruthy();
+    expect(checkQuality).toHaveBeenCalledWith(expect.objectContaining({
+      uri: 'file://capture-compressed.jpg',
+      width: 1200,
+      height: 1600,
+    }));
     expect(onAccepted).not.toHaveBeenCalled();
     expect(screen.getByTestId('mock-camera-view')).toBeTruthy();
   });
@@ -101,10 +117,15 @@ describe('QILabelQcCameraModal', () => {
     fireEvent.press(screen.getByTestId('qi-label-qc-camera-shutter'));
 
     await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(expect.objectContaining({
-      uri: 'file://capture.jpg',
-      width: 3024,
-      height: 4032,
+      uri: 'file://capture-compressed.jpg',
+      width: 1200,
+      height: 1600,
     })));
+    expect(manipulateAsync).toHaveBeenCalledWith(
+      'file://capture.jpg',
+      [{ resize: { height: 1600 } }],
+      { compress: 0.72, format: 'jpeg' },
+    );
     expect(screen.queryByText('放大看一下，标签清楚吗？')).toBeNull();
   });
 });
