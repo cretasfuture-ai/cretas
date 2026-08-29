@@ -7,6 +7,7 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.Signature;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.aspectj.annotation.AspectJProxyFactory;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -74,6 +75,38 @@ class DataScopeAspectContractTest {
                 .isEqualTo("anonymous-result");
         verify(resolver).resolve(null);
         assertThat(DataScopeContext.current()).isNull();
+    }
+
+    @Test
+    void springProxyBindsTheMethodAnnotationBeforeReadingItsColumn() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute("userId", "1552");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+        DataScopeContext resolved = DataScopeContext.builder()
+                .userId(1552L)
+                .factoryId("F006")
+                .roleCode("sales_manager")
+                .scope(com.cretas.aims.entity.enums.DataScope.SELF)
+                .department("销售部")
+                .column("created_by")
+                .build();
+        when(resolver.resolve(1552L)).thenReturn(resolved);
+
+        AspectJProxyFactory proxyFactory = new AspectJProxyFactory(new AnnotatedService());
+        proxyFactory.addAspect(aspect);
+        AnnotatedService proxy = proxyFactory.getProxy();
+
+        assertThat(proxy.list()).isEqualTo("owner_id");
+        verify(resolver).resolve(1552L);
+        assertThat(DataScopeContext.current()).isNull();
+    }
+
+    static class AnnotatedService {
+        @DataScope(column = "owner_id")
+        public String list() {
+            return DataScopeContext.current().getColumn();
+        }
     }
 
     private static DataScope annotation(String column, String value) {
