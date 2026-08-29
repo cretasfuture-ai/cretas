@@ -47,9 +47,18 @@ public class CacheConfig {
     private RedisConnectionFactory redisConnectionFactory;
 
     /**
-     * 创建支持 Java 8 时间类型的 Redis JSON 序列化器
+     * 创建支持 Java 8 时间类型的 Redis JSON 序列化器。
+     *
+     * <p>⚠️ 2026-08-29 改成 {@code public static}：闸要拿**这一份**去做往返验证。
+     * 在测试里另建一个 ObjectMapper 就是形态 D（同一个东西有两份，它一定会漂）——
+     * 那样的闸只能证明「我抄的那份能往返」，证明不了 Redis 里那份能。
+     *
+     * <p>它守的是一次真实事故：{@code getOnTimeDeliveryReport} 往结果里放了
+     * {@code List.subList()} 的返回值（{@code ArrayList$SubList}）。
+     * 那个类型 <b>能被写出去、读不回来</b>（没有无参构造），于是缓存自我投毒：
+     * 第一次调用成功并写入毒条目，此后每次命中缓存都 500。
      */
-    private GenericJackson2JsonRedisSerializer createRedisSerializer() {
+    public static GenericJackson2JsonRedisSerializer createRedisSerializer() {
         ObjectMapper om = new ObjectMapper();
         om.registerModule(new JavaTimeModule());
         om.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);

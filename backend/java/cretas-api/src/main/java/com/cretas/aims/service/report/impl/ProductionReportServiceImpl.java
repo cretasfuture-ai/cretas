@@ -1732,7 +1732,24 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         // ⛔ 原来写死 95 —— 与产能利用率那个写死的 80 同一族: 库里没有目标值的来源。
         report.put("target", null);
         report.put("dailyTrend", dailyTrend);
-        report.put("orderDetails", orderDetails.subList(0, Math.min(20, orderDetails.size())));
+        // 🔴 必须包成 ArrayList —— ⛔ 不能直接放 subList 的返回值。
+        //
+        // 本方法带 @Cacheable("onTimeDelivery"), 结果整个进 Redis。
+        // List.subList() 返回的是 java.util.ArrayList$SubList, 它**能被 Jackson 写出去,
+        // 却读不回来**(没有无参构造):
+        //
+        //     SerializationException: Could not read JSON: Cannot construct instance of
+        //     `java.util.ArrayList$SubList` (no Creators, like default constructor, exist)
+        //       (through reference chain: java.util.HashMap["orderDetails"])
+        //
+        // ⚠️ 于是这是一个**自我投毒**的缓存: 第一次调用(未命中)成功, 顺手把毒条目写进去;
+        //    此后每一次命中缓存都 500, 直到 TTL 过期。
+        //    2026-08-29 逐屏走查实测: 同一屏先看到数据、几分钟后变成「暂无OTIF数据」——
+        //    第一个打开这张报表的人, 把它给所有人弄坏了。
+        //
+        // ⛔ 「写出去成功」不等于「读得回来」。缓存的判据必须是**往返**。
+        report.put("orderDetails",
+                new ArrayList<>(orderDetails.subList(0, Math.min(20, orderDetails.size()))));
         return report;
     }
 
