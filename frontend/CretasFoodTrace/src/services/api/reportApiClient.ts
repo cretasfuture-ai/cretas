@@ -275,19 +275,27 @@ export interface OnTimeDeliveryReport {
   factoryId: string;
   startDate: string;
   endDate: string;
-  target: number;  // 95%
+  /**
+   * 🔴 这几个字段原来全声明成 `number`（`target` 还带着注释 `// 95%`），
+   * 而后端 2026-08-29 起在「这段期间没有订单」时发 **null** ——
+   * 类型说谎, 于是 tsc 拦不住 `otifRate.toFixed()`，崩溃一路上到真机:
+   *   `OnTimeDeliveryReport: Cannot read property 'toFixed' of null`
+   * ▎类型声明比运行时值更宽松没关系，**更严格就会把编译器变成瞎子**。
+   */
+  target: number | null;
   totalOrders: number;
   onTimeOrders: number;
   otifOrders: number;
   inFullOrders: number;
-  onTimeRate: number;
-  inFullRate: number;
-  otifRate: number;
+  onTimeRate: number | null;
+  inFullRate: number | null;
+  otifRate: number | null;
   dailyTrend: Array<{
     date: string;
     totalOrders: number;
     onTimeOrders: number;
-    otifRate: number;
+    /** 那一天没有订单时是 null —— ⛔ 不要直接喂给图表库。 */
+    otifRate: number | null;
   }>;
   orderDetails: Array<{
     shipmentId: string;
