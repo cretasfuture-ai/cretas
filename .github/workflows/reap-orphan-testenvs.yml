@@ -1,0 +1,89 @@
+name: Reap orphan test envs
+
+# 收割自建 runner 上的【孤儿测试环境后端】。
+#
+# ## 为什么需要定时跑
+#
+# 2026-08-29 所有分支的 Java Gate 全红。根因: Mac mini 上 8 个跑了 8-17 小时的
+# 孤儿测试环境后端占掉 78/100 个 PostgreSQL 连接槽, 唯一连真 PG 的测试类
+# (FactoryConfigServiceImplReorderIT) 因此起不来上下文。
+#
+# 当天人工清了一次。**几小时后再看, 又长出 2 个新孤儿** —— 起临时环境的验证跑批
+# 结束后没有任何东西负责关掉它们。
+# ▎清一次不解决问题, 要有定时的。
+#
+# ## ⛔ 它会 kill 进程, 所以护栏写在这里
+#
+# · 只杀 jar 路径在 /Users/rex/testenvs/ 下的 cretas 后端
+# · 显式排除 cretas-testenv-new (团队在用的 100.85.234.108:10010)
+# · 逐个 PID 杀, 杀前回读它的 -jar 路径复查 (不用模式批量 kill)
+# · 定时路径用 6 小时阈值 —— 当天那批是 8~17 小时。正在跑的验证不会被误伤,
+#   而真正的孤儿远超这个数
+# · 脚本自带阳性对照: 保护目标不在运行时【拒绝继续】(rc=2)
+#
+# ## 三态, 不是两态
+#   rc=0 没孤儿    rc=1 有孤儿但只报告    rc=2 仪器坏 —— 读数作废, 必须让 job 红
+# ⚠️ rc=2 单独判红: 「没量到」不许折叠进「没问题」。
+
+on:
+  schedule:
+    # 每 4 小时。UTC。
+    - cron: '17 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只报告不清理'
+        type: boolean
+        default: false
+      min_age_hours:
+        description: '判为孤儿的最小运行小时数'
+        type: string
+        default: '6'
+
+concurrency:
+  group: reap-orphan-testenvs
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    # 必须落在自建 runner 上 —— 孤儿进程在那台机器上, 托管 runner 上什么都没有。
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 收割孤儿测试环境后端
+        id: reap
+        shell: bash
+        env:
+          # 已经在那台机器上, 直接本地执行。
+          # ⚠️ 让它 ssh 回自己会多一层 key/agent 依赖, 失败模式还更难判。
+          SSH_TARGET: local
+        run: |
+          set +e
+          age="${{ inputs.min_age_hours || '6' }}"
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            bash scripts/ci/reap-orphan-testenvs.sh --min-age-hours "$age"
+          else
+            bash scripts/ci/reap-orphan-testenvs.sh --kill --min-age-hours "$age"
+          fi
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "REAP_RC=$rc"
+          exit 0
+
+      - name: 判定 —— rc=2 是「没量到」, 必须红
+        if: always()
+        shell: bash
+        run: |
+          rc="${{ steps.reap.outputs.rc }}"
+          # ⛔ 反过来写判据: 不是 0 也不是 1, 一律当成「没量到」, 不枚举。
+          #    (本仓踩过: 三态判定只列 0/1/2, 第四种退出码两条都不命中 => 静默变绿)
+          if [[ "$rc" == "0" ]]; then
+            echo "✓ 没有孤儿"
+          elif [[ "$rc" == "1" ]]; then
+            echo "✓ 有孤儿, 本次只报告 (dry-run)"
+          else
+            echo "🔴 REAP_INSTRUMENT_DEAD rc=$rc —— 本次读数作废, 不代表「没有孤儿」"
+            exit 1
+          fi
