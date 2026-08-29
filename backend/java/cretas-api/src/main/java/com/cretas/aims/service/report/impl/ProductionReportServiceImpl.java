@@ -1507,7 +1507,21 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .updatedAt(LocalDateTime.now())
                 .oee(oeeReport.getOeeValue())
                 .outputCompletionRate(scaleOrNull(outputCompletionRate))
-                .capacityUtilization(oeeReport.getAvailability())
+                // 🔴 这里原来是 `oeeReport.getAvailability()` —— **产能利用率不是设备可用率**。
+                //
+                // 2026-08-29 逐屏走查实测, 同一个租户同一天:
+                //     GET /reports/capacity-utilization  ->  averageUtilization = 2.3
+                //     GET /reports/kpi-metrics           ->  capacityUtilization = 0.0
+                // 老板在「报表」tab 看到 2.3%, 在「数据洞察」看到 0.0% —— 同一个名字两个数。
+                //
+                // 而且它根本不是两份实现: 同一个 DTO 里 `equipmentAvailability` 已经装了
+                // availability 一次, 这里等于把**同一个量装第二次并挂上别的名字**。
+                // ⇒ 形态 D 的一种更隐蔽的长相: 不是两份会漂, 是两个量共用一个标签。
+                //
+                // 真正的产能利用率在 getCapacityUtilizationReport 里(产线小时产能 × 工厂工时
+                // 作分母), 那一份有来源、有口径说明。这里取它, 让两屏说同一件事。
+                // ⚠️ 同类内部调用绕过 @Cacheable 代理 —— 只是不吃缓存, 结果一样。
+                .capacityUtilization(capacityUtilizationFromReport(factoryId, date))
                 .throughput(totalOutput != null ? totalOutput.divide(new BigDecimal("30"), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO)
                 .fpy(scaleOrNull(fpy))
                 .overallQualityRate(oeeReport.getQuality())
@@ -1539,6 +1553,29 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         kpi.setScoreGrade(KpiMetricsDTO.calculateGrade(kpi.getOverallScore()));
 
         return kpi;
+    }
+
+    /**
+     * 取「产能利用率」这一个数，口径与 {@link #getCapacityUtilizationReport} 完全一致。
+     *
+     * <p>存在的理由：KPI 那边原来拿 {@code oeeReport.getAvailability()} 当产能利用率，
+     * 于是同一个租户同一天，「报表」tab 说 2.3%、「数据洞察」说 0.0%。
+     * <b>同一个名字两个数</b>，而用户没有任何办法知道哪个是对的。
+     *
+     * <p>⛔ 不在这里重算一遍 —— 那就真成了两份，一定会漂。
+     *
+     * @return 平均产能利用率；算不出来时 {@code null}（⛔ 不是 0）
+     */
+    private BigDecimal capacityUtilizationFromReport(String factoryId, LocalDate date) {
+        Map<String, Object> report = getCapacityUtilizationReport(factoryId, date.minusDays(30), date);
+        Object value = report == null ? null : report.get("averageUtilization");
+        if (value instanceof BigDecimal bd) {
+            return bd;
+        }
+        if (value instanceof Number n) {
+            return BigDecimal.valueOf(n.doubleValue());
+        }
+        return null;
     }
 
     @Override
