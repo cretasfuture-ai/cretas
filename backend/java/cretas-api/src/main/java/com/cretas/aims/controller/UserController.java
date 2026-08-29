@@ -5,6 +5,7 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.user.CreateUserRequest;
 import com.cretas.aims.dto.user.UpdateSkillsRequest;
+import com.cretas.aims.dto.user.UpdateMyProfileRequest;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.entity.enums.HireType;
@@ -75,6 +76,42 @@ public class UserController {
     /**
      * 更新用户信息
      */
+    /**
+     * 改**自己**的资料 —— 只认姓名与邮箱。
+     *
+     * <h3>为什么不复用 {@code PUT /{userId}}（2026-08-29 逐屏走查）</h3>
+     *
+     * 「我的 → 编辑 → 保存」对每个角色都可点，而它调的是 {@code PUT /users/{userId}}，
+     * 那个接口由 {@code @RequireModule("hr_employee")} + {@code hr:read_write} 守着。
+     * 仓储主管点保存实测拿到 <b>403</b>：
+     * <pre>您的角色 [仓储主管] 在 [人事管理] 模块无 [读写] 权限
+     * 请联系工厂管理员…开通 [人事管理] 的 [读写] 权限</pre>
+     *
+     * ▎按那句提示去做是<b>错的</b> —— 为了让人改自己的名字而开通整个人事模块的写权限，
+     * ▎等于把员工名册的增删改一起给出去。改自己的名字是自助行为，不是人事管理。
+     *
+     * <h3>安全</h3>
+     * <ul>
+     *   <li>userId <b>从 token 解析</b>，⛔ 不从路径或 body 取 —— 否则就是「改任意人」</li>
+     *   <li>请求体是 {@link UpdateMyProfileRequest}，<b>只有</b>两个字段；
+     *       ⛔ 不复用 {@code CreateUserRequest}（它带着角色/工厂/启用状态/用户名/密码）</li>
+     *   <li>仍校验 token 里的用户属于路径上的 factoryId（跨厂保护）</li>
+     * </ul>
+     */
+    @PutMapping("/me/profile")
+    @Operation(summary = "修改本人资料（仅姓名与邮箱）")
+    public ApiResponse<UserDTO> updateMyProfile(
+            @Parameter(description = "工厂ID", required = true, example = "F001")
+            @PathVariable @NotBlank String factoryId,
+            @Valid @RequestBody UpdateMyProfileRequest request) {
+        Long userId = com.cretas.aims.utils.SecurityUtils.getCurrentUserId();
+        if (userId == null) {
+            throw new BusinessException(401, "未登录").withHint("请重新登录后再试");
+        }
+        log.info("修改本人资料: factoryId={}, userId={}", factoryId, userId);
+        return ApiResponse.success("个人信息已保存", userService.updateMyProfile(factoryId, userId, request));
+    }
+
     @RequireModule("hr_employee")
     @PutMapping("/{userId}")
     @Operation(summary = "更新用户信息")

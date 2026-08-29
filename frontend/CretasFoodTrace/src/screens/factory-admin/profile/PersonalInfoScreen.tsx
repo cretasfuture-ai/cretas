@@ -78,11 +78,13 @@ export function PersonalInfoScreen() {
   const handleSave = async () => {
     try {
       setSaving(true);
-      await userApiClient.updateUser(userInfo.id, {
-        realName: userInfo.realName,
+      // ⛔ 自助编辑只提交姓名与邮箱, 走 /users/me/profile。
+      //    手机号是**登录凭证**、职位是**人事属性** —— 两者都不该自助改;
+      //    下面对应的两个输入框已改成只读。
+      //    (原来这里走人事管理的 PUT /users/{id}, 非 HR 角色一律 403。)
+      await userApiClient.updateMyProfile({
+        fullName: userInfo.realName,
         email: userInfo.email,
-        phone: userInfo.phone,
-        position: userInfo.position,
       });
       Alert.alert(t('messages.saveSuccess'), t('personalInfo.updateSuccess'));
       setEditing(false);
@@ -177,7 +179,7 @@ export function PersonalInfoScreen() {
             <InfoRow label={t('personalInfo.username')} value={userInfo.username} />
             <InfoRow label={t('personalInfo.realName')} value={userInfo.realName} editable field="realName" />
             <InfoRow label={t('personalInfo.email')} value={userInfo.email} editable field="email" />
-            <InfoRow label={t('personalInfo.phone')} value={userInfo.phone} editable field="phone" />
+            <InfoRow label={t('personalInfo.phone')} value={userInfo.phone} />
           </View>
         </View>
 
@@ -186,7 +188,7 @@ export function PersonalInfoScreen() {
           <Text style={styles.sectionTitle}>{t('personalInfo.workInfo')}</Text>
           <View style={styles.infoCard}>
             <InfoRow label={t('personalInfo.department')} value={userInfo.department} />
-            <InfoRow label={t('personalInfo.position')} value={userInfo.position} editable field="position" />
+            <InfoRow label={t('personalInfo.position')} value={userInfo.position} />
           </View>
         </View>
 

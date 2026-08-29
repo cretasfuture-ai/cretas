@@ -177,4 +177,15 @@ public interface UserService {
      * 投影在 controller 里显式写死, 加字段必须有人动那段代码。
      */
     List<User> getActiveUsersForDirectory(String factoryId, String roleCode);
+
+    /**
+     * 用户改**自己**的资料 —— 只允许姓名与邮箱。
+     *
+     * <p>⛔ 与 {@link #updateUser} 分开是刻意的: 后者收 {@code CreateUserRequest},
+     * 里面带着角色 / 工厂 / 启用状态 / 用户名 / 密码 —— 把它开给自助修改就是一条提权路径。
+     *
+     * @param factoryId 当前工厂; 与用户实际所属工厂不一致时拒绝(跨厂改人)
+     * @param userId    **从 token 解析的**当前用户 id, ⛔ 不接受请求方传入
+     */
+    UserDTO updateMyProfile(String factoryId, Long userId, com.cretas.aims.dto.user.UpdateMyProfileRequest request);
 }

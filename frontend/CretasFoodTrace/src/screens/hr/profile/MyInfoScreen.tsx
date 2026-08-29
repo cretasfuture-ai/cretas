@@ -38,10 +38,11 @@ export default function MyInfoScreen() {
 
     setLoading(true);
     try {
-      // updateUser returns UserDTO directly, not wrapped in ApiResponse
-      const res = await userApiClient.updateUser(user?.id || 0, {
-        realName: fullName.trim(), // API uses realName not fullName
-        phone: phone.trim(),
+      // ⛔ 自助编辑走 /users/me/profile —— 只提交姓名与邮箱。
+      //    手机号是**登录凭证**, 不该自助改(下面那个输入框已改成只读展示);
+      //    原来走人事管理的 PUT /users/{id}, 非 HR 角色一律 403。
+      const res = await userApiClient.updateMyProfile({
+        fullName: fullName.trim(),
         email: email.trim(),
       });
 
@@ -130,7 +131,8 @@ export default function MyInfoScreen() {
 
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>{t('profile.myInfo.phone')}</Text>
-              {isEditing ? (
+              {/* ⛔ 手机号是登录凭证, 不走自助编辑 —— 编辑态也只展示, 不给输入框。 */}
+              {false ? (
                 <TextInput
                   mode="outlined"
                   value={phone}

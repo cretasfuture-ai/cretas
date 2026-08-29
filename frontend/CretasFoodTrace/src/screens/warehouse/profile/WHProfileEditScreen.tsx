@@ -111,8 +111,11 @@ export function WHProfileEditScreen() {
     setSubmitting(true);
     try {
       if (user?.id) {
-        await userApiClient.updateUser(user.id, {
-          realName: profileData.name,
+        // ⛔ 自助编辑走 /users/me/profile, ⛔ 不走人事管理的 PUT /users/{id} ——
+        //    后者由 @RequireModule("hr_employee") + hr:read_write 守着,
+        //    2026-08-29 实测仓储主管点保存拿 403, 提示他去开通整个人事模块的写权限。
+        await userApiClient.updateMyProfile({
+          fullName: profileData.name,
           email: profileData.email,
         });
       }
