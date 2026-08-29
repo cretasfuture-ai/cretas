@@ -15,6 +15,8 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.util.WorkProcessTaskOverdue;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -70,6 +72,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.ByproductDeclarationResolver byproductDeclarationResolver;
+
+    /**
+     * Legacy 工序的 outputUnit 仍来自已废弃的 WorkProcess 字段；用单位契约拦住历史脏值继续
+     * 传播到报工和 WIP。required=false 保持既有手工构造测试兼容，非 Spring 路径只认内置单位。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UnitContractService unitContractService;
 
     // ==================== T142: batch assignedToName helper ====================
 
@@ -626,7 +635,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             dto.setProcessCategory(definition.getProcessCategory());
             dto.setStandardYieldMin(definition.getStandardYieldMin());
             dto.setStandardYieldMax(definition.getStandardYieldMax());
-            dto.setOutputUnit(definition.getOutputUnit());  // P0-2: 末道折份/盒
+            dto.setOutputUnit(resolveLegacyOutputUnit(task, definition));
             // 防呆 Rule 3: OUTPUT 阶段预填。副产声明线上有两处(工序自由文本 / BOM 第四类 SKU),
             // 优先级定死在 ByproductDeclarationResolver 里, 不在这里再判一次。
             dto.setExpectedByproducts(byproductDeclarationResolver == null
@@ -643,5 +652,21 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
             }
         }
         return dto;
+    }
+
+    private String resolveLegacyOutputUnit(WorkProcessTask task, WorkProcess definition) {
+        String configured = definition.getOutputUnit();
+        if (configured == null || configured.isBlank()) {
+            return configured;
+        }
+        boolean recognized = unitContractService != null
+                ? unitContractService.normalize(task.getFactoryId(), configured).recognized()
+                : UnitContractServiceImpl.describeBuiltIn(configured).isPresent();
+        if (recognized) {
+            return configured;
+        }
+        log.warn("[LEGACY_OUTPUT_UNIT_FALLBACK] 工序 {} 的产出单位 '{}' 无法识别，任务 {} 回落计划单位 '{}'",
+                definition.getId(), configured, task.getId(), task.getPlannedUnit());
+        return task.getPlannedUnit();
     }
 }
