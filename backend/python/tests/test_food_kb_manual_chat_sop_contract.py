@@ -2654,3 +2654,32 @@ def test_20260822_factory_mobile_roles_and_reporting_updates_are_complete_and_is
         assert "去调拨" not in restaurant_text
         assert "PAYMENT_REQUEST_LEGACY_WRITE_DISABLED" not in restaurant_text
         assert "系统未见风险" not in restaurant_text
+
+
+def test_20260829_rework_honest_reports_and_restaurant_retirement_are_isolated():
+    factory_sources = [
+        (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/manual/F006-production-full-chain-manual-test-sop.html").read_text(encoding="utf-8"),
+    ]
+    restaurant_sources = [
+        (PROJECT_ROOT / "docs/manual/restaurant-full-chain-sop.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-product-manual.html").read_text(encoding="utf-8"),
+    ]
+    ai_assist = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
+
+    for text in factory_sources:
+        assert "回料" in text
+        assert "一份报工只" in text
+        assert "没有订单" in text
+        assert "可用率 0%" in text
+        assert "在飞销售订单" not in text
+
+    for text in restaurant_sources:
+        assert "在飞销售订单" in text
+        assert "列出订单号" in text
+        assert "安全闸不可用时拒绝下架" in text
+        assert "回料纯度" not in text
+        assert "设备可用率" not in text
+
+    assert "回料多产出与报表诚实空值" in ai_assist
+    assert "餐饮导航与菜品下架履约门禁" in ai_assist
