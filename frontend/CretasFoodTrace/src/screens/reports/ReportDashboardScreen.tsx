@@ -70,10 +70,16 @@ export default function ReportDashboardScreen() {
   } | null>(null);
 
   const [costData, setCostData] = useState<{
-    totalCost: number;
-    materialCost: number;
-    laborCost: number;
-    overheadCost: number;
+    /**
+     * ⛔ 全部可空。后端在「有生产计划但成本列没录」时发 null ——
+     * 兜成 0 的话屏上是「¥0 总成本」，读起来是**生产不花钱**。
+     * (2026-08-29 真机实测：同屏「总产出 8 kg」而四项成本全 ¥0；
+     *  库里 46 个计划的成本列一个都没填。)
+     */
+    totalCost: number | null;
+    materialCost: number | null;
+    laborCost: number | null;
+    overheadCost: number | null;
   } | null>(null);
 
   const [laborCostAnalysis, setLaborCostAnalysis] = useState<LaborCostAnalysis | null>(null);
@@ -230,10 +236,10 @@ export default function ReportDashboardScreen() {
       const financeActual = (financeRes && typeof financeRes === 'object' && 'data' in financeRes) ? (financeRes as { data: Record<string, number> }).data : financeRes;
       if (financeActual) {
         setCostData({
-          totalCost: financeActual.totalCost ?? 0,
-          materialCost: financeActual.materialCost ?? 0,
-          laborCost: financeActual.laborCost ?? 0,
-          overheadCost: financeActual.otherCost ?? financeActual.equipmentCost ?? 0,
+          totalCost: financeActual.totalCost ?? null,
+          materialCost: financeActual.materialCost ?? null,
+          laborCost: financeActual.laborCost ?? null,
+          overheadCost: financeActual.otherCost ?? financeActual.equipmentCost ?? null,
         });
       }
 
@@ -277,7 +283,9 @@ export default function ReportDashboardScreen() {
   /**
    * 格式化货币
    */
-  const formatCurrency = (value: number) => {
+  const formatCurrency = (value: number | null) => {
+    // ⛔ 算不出来就写「—」，不要写 ¥0 —— ¥0 是一个具体的、错的金额。
+    if (value == null) return '—';
     if (value >= 10000) {
       return `¥${(value / 10000).toFixed(1)}万`;
     }
