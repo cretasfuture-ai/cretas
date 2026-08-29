@@ -1203,13 +1203,26 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         long totalRunningHours = 0;
         long totalEquipment = equipments.size();
 
+        // 🔴 「一台设备都没上报运行时长」和「设备确实全停」在原来的写法里是**同一个 0**。
+        //    实测 F006: 8 台设备 totalRunningHours 全为 null -> 可用率 0% -> OEE 0.0,
+        //    屏上读起来是「设备全停」, 而真相是这项数据没有采集。
+        //    ⇒ 数一下有几台真的报了数; 一台都没有就是 null。
+        long equipmentsReportingHours = 0;
         for (FactoryEquipment eq : equipments) {
             if (eq.getTotalRunningHours() != null) {
                 totalRunningHours += eq.getTotalRunningHours();
+                equipmentsReportingHours++;
             }
         }
 
-        long plannedHours = (long) ChronoUnit.DAYS.between(startDate, endDate) * 8 * totalEquipment;
+        // ⛔ 原来写死 `* 8` —— 又一个编出来的工作日长度(与产能利用率那处的
+        //    `totalDays * 8` 同源, 那处已改)。用工厂真实配置的工时; 没配就算不出来。
+        Integer oeeWorkingHours = factorySettingsRepository.findByFactoryId(factoryId)
+                .map(FactorySettings::getWorkingHours)
+                .filter(h -> h > 0)
+                .orElse(null);
+        long plannedHours = oeeWorkingHours == null ? 0
+                : (long) ChronoUnit.DAYS.between(startDate, endDate) * oeeWorkingHours * totalEquipment;
         // OEE 三因子(可用率/性能率/良品率)均为比率, 定义上 <=100%. 比值可能 >100%
         // (设备实跑 >8h/天 → availability>100; 超产 actual>planned → performance>100),
         // 不封顶会让 OEE = a*p*q/10000 算出 >100% 的不可能值, 且 *Loss 字段变负数. 一律 clamp 到 100.
@@ -1217,7 +1230,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         // 没有排产工时 / 没有计划量 / 没有产出时, 这三个因子【算不出来】。
         // 返回 null(诚实空)而不是一个好看的常量 —— 常量会被前端当成真实读数画进仪表盘,
         // 而 null 会走到 MetricItem 的 "--" 分支。⛔ 也不能返 0: 0% 在比率语境里是合法读数。
-        BigDecimal availability = plannedHours > 0 ?
+        // 三个前提缺任一都算不出来: 有排产工时 / 有设备 / **至少一台上报过运行时长**。
+        BigDecimal availability = (plannedHours > 0 && equipmentsReportingHours > 0) ?
                 new BigDecimal(totalRunningHours).divide(new BigDecimal(plannedHours), 4, RoundingMode.HALF_UP)
                         .multiply(hundred).min(hundred) : null;
 
