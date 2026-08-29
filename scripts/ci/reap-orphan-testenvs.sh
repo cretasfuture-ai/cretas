@@ -29,6 +29,7 @@
 #   ./scripts/ci/reap-orphan-testenvs.sh --kill          # 真的杀
 #   ./scripts/ci/reap-orphan-testenvs.sh --kill --min-age-hours 4
 #   SSH_TARGET=canada-mini ./scripts/ci/reap-orphan-testenvs.sh --kill
+#   SSH_TARGET=local ./scripts/ci/reap-orphan-testenvs.sh --kill   # 已经在那台机器上时
 #
 # 退出码 (三态, 不是两态):
 #   0 = 没有孤儿 / 已清理
@@ -38,6 +39,31 @@
 set -uo pipefail
 
 SSH_TARGET="${SSH_TARGET:-canada-mini}"
+
+# 在目标机上执行一条命令。
+#
+# ⚠️ SSH_TARGET=local 时【直接本地执行】—— 定时任务是跑在 Mac mini 【自己身上】的,
+#    让它 ssh 回自己既多一层依赖(key/agent)，失败模式还更难判。
+#    ⇒ 本地模式下 SSH 连不上这一类故障从物理上不存在。
+# ⛔ else 分支必须是【裸 ssh】。2026-08-29 实测: 用批量替换把
+#    `ssh "$SSH_TARGET" "` 换成 `on_host "` 时, 连这一行函数体也被换掉了
+#    => on_host 调用它自己 => 无限递归 => 段错误(exit 139)。
+#    ▎机械改写会把 helper 变成调用它自己 —— 改完必须跑一次, 不能只看 diff。
+on_host() {
+    if [ "$SSH_TARGET" = local ]; then
+        bash -c "$1"
+    else
+        ssh "$SSH_TARGET" "$1"
+    fi
+}
+
+# 仅用于自检: 目标可达吗
+host_reachable() {
+    if [ "$SSH_TARGET" = local ]; then
+        return 0
+    fi
+    ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_TARGET" true 2>/dev/null
+}
 MIN_AGE_HOURS=2
 DO_KILL=0
 
@@ -65,21 +91,21 @@ done
 say() { printf '%s\n' "$*"; }
 
 # ── 仪器自检 ────────────────────────────────────────────────────────────
-if ! ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_TARGET" true 2>/dev/null; then
+if ! host_reachable; then
     say "INSTRUMENT_DEAD: 连不上 $SSH_TARGET —— 本次读数作废, ⛔ 不代表「没有孤儿」"
     exit 2
 fi
 
 # ⚠️ 阳性对照: 保护目标必须在。它不在, 说明要么机器状态不对, 要么模式写错了,
 #    两种情况下继续 kill 都是危险的。
-if ! ssh "$SSH_TARGET" "ps -eo args | grep -q '[c]retas-testenv-new'" 2>/dev/null; then
+if ! on_host "ps -eo args | grep -q '[c]retas-testenv-new'" 2>/dev/null; then
     say "INSTRUMENT_DEAD: 保护目标 ($PROTECTED_PATH_PATTERN) 不在运行 —— 拒绝继续"
     say "  这台机器上本应有团队测试环境。它不在 = 状态与预期不符, 此时 kill 有误伤风险。"
     exit 2
 fi
 
 # ── 枚举孤儿 (pid|etime|jar) ────────────────────────────────────────────
-LIST=$(ssh "$SSH_TARGET" "ps -eo pid,etime,args | grep -E '$ORPHAN_JAR_PATTERN' | grep -v grep | grep -v '$PROTECTED_PATH_PATTERN'" 2>/dev/null)
+LIST=$(on_host "ps -eo pid,etime,args | grep -E '$ORPHAN_JAR_PATTERN' | grep -v grep | grep -v '$PROTECTED_PATH_PATTERN'" 2>/dev/null)
 
 if [[ -z "$LIST" ]]; then
     say "ORPHANS=0  没有孤儿测试环境后端。"
@@ -132,12 +158,12 @@ fi
 say ""
 say "=== 清理 ==="
 for pid in "${TARGETS[@]}"; do
-    owner=$(ssh "$SSH_TARGET" "ps -p $pid -o args= 2>/dev/null | grep -oE '/Users/rex/testenvs/[^ ]*\.jar' | head -1" 2>/dev/null)
+    owner=$(on_host "ps -p $pid -o args= 2>/dev/null | grep -oE '/Users/rex/testenvs/[^ ]*\.jar' | head -1" 2>/dev/null)
     if [[ -z "$owner" ]]; then
         say "  $pid 跳过: 已退出, 或不再是 testenvs 进程 (杀前复查未通过)"
         continue
     fi
-    ssh "$SSH_TARGET" "kill $pid" 2>/dev/null \
+    on_host "kill $pid" 2>/dev/null \
         && say "  $pid 已发 TERM  <- $owner" \
         || say "  $pid kill 失败"
 done
@@ -147,16 +173,16 @@ sleep 8
 # ── 验证: 正面证据, ⛔ 不是「没看到报错」 ────────────────────────────────
 say ""
 say "=== 验证 ==="
-LEFT=$(ssh "$SSH_TARGET" "ps -eo args | grep -E '$ORPHAN_JAR_PATTERN' | grep -v grep | grep -cv '$PROTECTED_PATH_PATTERN'" 2>/dev/null || echo 0)
+LEFT=$(on_host "ps -eo args | grep -E '$ORPHAN_JAR_PATTERN' | grep -v grep | grep -cv '$PROTECTED_PATH_PATTERN'" 2>/dev/null || echo 0)
 say "  残留 testenvs 后端: ${LEFT:-0}"
 
 PSQL_BIN='/opt/homebrew/opt/postgresql@17/bin/psql'
-CONNS=$(ssh "$SSH_TARGET" "$PSQL_BIN -U rex -d postgres -tAc 'select count(*) from pg_stat_activity'" 2>/dev/null | tr -d ' \r')
-MAXC=$(ssh "$SSH_TARGET" "$PSQL_BIN -U rex -d postgres -tAc 'show max_connections'" 2>/dev/null | tr -d ' \r')
+CONNS=$(on_host "$PSQL_BIN -U rex -d postgres -tAc 'select count(*) from pg_stat_activity'" 2>/dev/null | tr -d ' \r')
+MAXC=$(on_host "$PSQL_BIN -U rex -d postgres -tAc 'show max_connections'" 2>/dev/null | tr -d ' \r')
 say "  PG 连接: ${CONNS:-?} / ${MAXC:-?}"
 
 # 阳性对照: 普通用户能连上才算真的腾出来了 (超级用户槽是预留的, 用 rex 连成功说明不了问题)
-OK=$(ssh "$SSH_TARGET" "$PSQL_BIN -U cretas_user -d postgres -tAc 'select 1'" 2>/dev/null | tr -d ' \r')
+OK=$(on_host "$PSQL_BIN -U cretas_user -d postgres -tAc 'select 1'" 2>/dev/null | tr -d ' \r')
 if [[ "$OK" == "1" ]]; then
     say "  阳性对照: 普通用户 cretas_user 连得上 ✓"
 else
@@ -165,7 +191,7 @@ else
 fi
 
 # 阳性对照 2: 保护目标还活着
-if ssh "$SSH_TARGET" "ps -eo args | grep -q '[c]retas-testenv-new'" 2>/dev/null; then
+if on_host "ps -eo args | grep -q '[c]retas-testenv-new'" 2>/dev/null; then
     say "  阳性对照: 团队测试环境仍在运行 ✓"
 else
     say "  🔴 团队测试环境不见了 —— 可能被误杀, 立即人工检查"
