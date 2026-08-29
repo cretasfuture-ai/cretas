@@ -68,7 +68,10 @@ class LabelQcApi {
     const response = await apiClient.post<ApiEnvelope<LabelQcCaptureQualityResult>>(
       `${this.base(factoryId)}/capture-quality`,
       formData,
-      { headers: { 'Content-Type': 'multipart/form-data' } },
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 45000,
+      },
     );
     return response.data;
   }
