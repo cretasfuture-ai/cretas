@@ -177,4 +177,61 @@ class DashboardTodayScopeContractTest {
                 .as("summary.activeAlerts 是第四张卡的 fallback 链在读的, 动它会把已修好的卡弄坏")
                 .containsKey("activeAlerts");
     }
+
+    // ───────────────── 缺陷三：比率类兜 0（2026-08-29 真机走查）─────────────────
+
+    /**
+     * 真机屏上：「0 总批次 / 1 已完成 / <b>0.0% 完成率</b> / 8 总产出」。
+     * 那个 0.0% 来自 {@code avgEfficiency != null ? avgEfficiency : BigDecimal.ZERO} ——
+     * 今天没有批次时仓库返 null，兜成 0 之后读起来是<b>一件没做完</b>。
+     *
+     * <p>⚠️ 与产量类必须区别开：产量的 0（没生产就是产 0）是合法读数，所以产量<b>该</b>兜 0；
+     * 而比率的 0 <b>也是</b>合法读数（效率确实可以是 0），正因如此「我不知道」只能用 null 表达。
+     */
+    @Test
+    @DisplayName("没有批次时，比率/单位成本类是 null，⛔ 不是 0")
+    void rateLikeMetricsAreNullWhenThereIsNoData() {
+        when(batchRepo.calculateAverageEfficiency(anyString(), any())).thenReturn(null);
+        when(batchRepo.calculateAverageYieldRate(anyString(), any())).thenReturn(null);
+        when(batchRepo.calculateTotalOutputAfter(anyString(), any())).thenReturn(null);
+
+        Map<String, Object> o = overview();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> kpi = (Map<String, Object>) o.get("kpi");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> today = (Map<String, Object>) o.get("todayStats");
+
+        assertThat(today.get("productionEfficiency")).as("完成率(todayStats)").isNull();
+        assertThat(kpi.get("productionEfficiency")).as("完成率(kpi)").isNull();
+        assertThat(kpi.get("qualityPassRate")).as("合格率").isNull();
+        assertThat(kpi.get("unitCost")).as("单位成本").isNull();
+        assertThat(kpi.get("avgCycleHours")).as("平均生产周期").isNull();
+    }
+
+    @Test
+    @DisplayName("阴性对照：产量类照旧兜 0 —— 没生产就是产 0，那是合法读数")
+    void quantityLikeMetricsStillFallBackToZero() {
+        when(batchRepo.calculateTotalOutputCompletedAfter(anyString(), any())).thenReturn(null);
+
+        Map<String, Object> o = overview();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> today = (Map<String, Object>) o.get("todayStats");
+
+        assertThat(today.get("todayOutputKg")).isEqualTo(BigDecimal.ZERO);
+        assertThat(o.get("todayOutput")).isEqualTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    @DisplayName("阴性对照：有数据时照常出数（⛔ 防「一律返回 null」也能过）")
+    void withDataTheRatesAreStillComputed() {
+        when(batchRepo.calculateAverageEfficiency(anyString(), any())).thenReturn(new BigDecimal("87.50"));
+        when(batchRepo.calculateAverageYieldRate(anyString(), any())).thenReturn(new BigDecimal("93.20"));
+
+        Map<String, Object> o = overview();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> kpi = (Map<String, Object>) o.get("kpi");
+
+        assertThat(kpi.get("productionEfficiency")).isEqualTo(new BigDecimal("87.50"));
+        assertThat(kpi.get("qualityPassRate")).isEqualTo(new BigDecimal("93.20"));
+    }
 }
