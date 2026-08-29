@@ -107,6 +107,10 @@ public interface BomRecipeService {
     BomRecipeItem updateItem(String factoryId, Long itemId,
                              CreateBomRecipeRequest.BomRecipeItemDTO dto);
 
+    /** Audited price-only correction for a packaging row in the current ACTIVE BOM. */
+    BomRecipeItem correctActivePackagingItemCost(String factoryId, Long itemId,
+                                                 String reason, Long operatorId, String callerRole);
+
     /** 删除配方项 (软删). */
     void deleteItem(String factoryId, Long itemId);
 

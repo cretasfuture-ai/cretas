@@ -27,12 +27,15 @@ vi.mock('element-plus', async (importOriginal) => {
 
 const BOXED_MATERIAL: PackagingMaterialOption = {
   id: 'PK-BOX', name: '塑料桶 20L', category: '包材', primaryCode: 'BOX01', unit: 'pcs', quantityUnit: 'pcs',
+  movingAvgPrice: 12,
 };
 const BAG_MATERIAL: PackagingMaterialOption = {
   id: 'PK-BAG', name: '内袋', category: '包材', primaryCode: 'BOX01', unit: 'pcs', quantityUnit: 'pcs',
+  movingAvgPrice: 3,
 };
 const LABEL_MATERIAL_KG: PackagingMaterialOption = {
   id: 'PK-LABEL', name: '称重标签', category: '包材', primaryCode: 'BOX01', unit: 'kg', quantityUnit: 'kg',
+  movingAvgPrice: 1.5,
 };
 
 function mountDialog(overrides: Record<string, unknown> = {}) {
@@ -53,6 +56,20 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
       stubs: {
         teleport: true,
         transition: false,
+        // Element Plus 2.13 + jsdom can recursively update ElSelect while a
+        // test emits v-model directly. These contract tests only need the
+        // component boundary, not its popup implementation.
+        ElSelect: {
+          name: 'ElSelect',
+          props: ['modelValue'],
+          emits: ['update:modelValue'],
+          template: '<div><slot /></div>',
+        },
+        ElOption: {
+          name: 'ElOption',
+          props: ['label', 'value'],
+          template: '<div />',
+        },
         ElDialog: {
           props: ['modelValue', 'title'],
           template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
@@ -121,6 +138,60 @@ describe('包材编辑弹窗', () => {
     await flushPromises();
     await clickSave(wrapper);
     expect(addItem).not.toHaveBeenCalled();
+  });
+
+  it('移动平均库存成本为正数时优先于采购参考价', async () => {
+    const wrapper = mountDialog({
+      materials: [{
+        ...BOXED_MATERIAL,
+        movingAvgPrice: 12,
+        materialReferencePrice: 10,
+      }],
+    });
+    selectMaterial(wrapper, 'PK-BOX');
+    setQuantity(wrapper, 2);
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="packaging-automatic-price"]').text()).toContain('移动平均库存成本');
+    await clickSave(wrapper);
+    expect(addItem).toHaveBeenCalledWith('F006', 'R1', expect.objectContaining({ unitPrice: 12 }));
+  });
+
+  it('移动平均库存成本无效时回退到 materialReferencePrice', async () => {
+    const wrapper = mountDialog({
+      materials: [{
+        ...BOXED_MATERIAL,
+        movingAvgPrice: 0,
+        materialReferencePrice: 10.5,
+      }],
+    });
+    selectMaterial(wrapper, 'PK-BOX');
+    setQuantity(wrapper, 2);
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="packaging-automatic-price"]').text()).toContain('未税采购参考价');
+    await clickSave(wrapper);
+    expect(addItem).toHaveBeenCalledWith('F006', 'R1', expect.objectContaining({ unitPrice: 10.5 }));
+  });
+
+  it('两种价格均缺失或非正数时明确阻止保存', async () => {
+    const wrapper = mountDialog({
+      materials: [{
+        ...BOXED_MATERIAL,
+        movingAvgPrice: -1,
+        materialReferencePrice: null,
+      }],
+    });
+    selectMaterial(wrapper, 'PK-BOX');
+    setQuantity(wrapper, 2);
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="packaging-automatic-price"]')
+      .findComponent({ name: 'ElInput' }).props('modelValue')).toBe('保存前需先配置有效价格');
+    expect(wrapper.text()).toContain('暂不能保存');
+    await clickSave(wrapper);
+    expect(addItem).not.toHaveBeenCalled();
+    expect(elMessage.warning).toHaveBeenCalledWith(expect.stringContaining('缺少有效'));
   });
 
   it('跨单位替代物料未填等价系数时不允许保存', async () => {

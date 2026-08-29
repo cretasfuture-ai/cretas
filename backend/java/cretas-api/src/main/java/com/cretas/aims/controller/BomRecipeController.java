@@ -13,6 +13,7 @@ import com.cretas.aims.dto.bom.SeasoningBindingCreateRequest;
 import com.cretas.aims.dto.bom.SeasoningBindingMutationResponse;
 import com.cretas.aims.dto.bom.SeasoningBindingUpdateRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
+import com.cretas.aims.dto.bom.CorrectBomItemCostRequest;
 import com.cretas.aims.dto.bom.EnsureBomDraftRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.dto.bom.UpdateBomRecipeRequest;
@@ -263,6 +264,24 @@ public class BomRecipeController {
             @PathVariable Long itemId,
             @Valid @RequestBody BomRecipeItemDTO dto) {
         return ApiResponse.success(recipeService.updateItem(factoryId, itemId, dto));
+    }
+
+    @RequirePermission({"production:read_write", "finance:read_write"})
+    @PostMapping("/items/{itemId}/packaging-cost-correction")
+    @Operation(summary = "更正当前生效 BOM 包材成本 (从物料主数据取价并写审计台账)")
+    @com.cretas.aims.annotation.Loggable(module = "BOM", action = "CORRECT_PACKAGING_COST",
+            entityType = "BomRecipeItem", entityIdParam = "itemId")
+    public ApiResponse<BomRecipeItem> correctActivePackagingItemCost(
+            @PathVariable String factoryId,
+            @PathVariable Long itemId,
+            @Valid @RequestBody CorrectBomItemCostRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        Object rawUserId = httpRequest.getAttribute("userId");
+        Long userId = rawUserId instanceof Number number ? number.longValue() : null;
+        String role = String.valueOf(httpRequest.getAttribute("role"));
+        BomRecipeItem item = recipeService.correctActivePackagingItemCost(
+                factoryId, itemId, request.getReason(), userId, role);
+        return ApiResponse.success("已按物料主数据更正包材成本并记录审计", item);
     }
 
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
