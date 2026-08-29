@@ -29,21 +29,11 @@ export function AttendanceStackNavigator() {
         options={{ title: '考勤打卡' }}
       />
 
-      {/* 工时统计页面 - 支持多种模式 */}
-      <Stack.Screen
-        name="ClockHistory"
-        component={AttendanceStatisticsScreen}
-        options={{ title: '打卡历史' }}
-      />
+      {/* 工时统计页面 */}
       <Stack.Screen
         name="TimeStatistics"
         component={AttendanceStatisticsScreen}
         options={{ title: '工时统计' }}
-      />
-      <Stack.Screen
-        name="WorkRecords"
-        component={AttendanceStatisticsScreen}
-        options={{ title: '工作记录' }}
       />
 
       {/* Phase 3 P2 - 工时查询 */}

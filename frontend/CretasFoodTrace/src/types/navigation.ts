@@ -188,9 +188,7 @@ export type ProcessingStackParamList = {
 
 export type AttendanceStackParamList = {
   TimeClockScreen: undefined;
-  ClockHistory: { employeeId?: string };
   TimeStatistics: { employeeId?: string; period?: 'day' | 'week' | 'month' };
-  WorkRecords: { employeeId?: string };
 
   // Phase 3 P2: 工时查询
   AttendanceHistory: undefined;

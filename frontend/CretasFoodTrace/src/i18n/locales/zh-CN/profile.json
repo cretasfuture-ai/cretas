@@ -49,6 +49,9 @@
     "edit": "编辑",
     "saving": "保存中...",
     "loading": "加载中...",
+    "loadFailed": "个人信息加载失败，请检查网络后重试",
+    "retry": "重新加载",
+    "back": "返回个人中心",
     "basicInfo": "基本信息",
     "workInfo": "工作信息",
     "enterPlaceholder": "请输入{{field}}",
@@ -84,7 +87,17 @@
     "systemAlert": "系统告警",
     "taskReminder": "任务提醒",
     "productionAlert": "生产告警",
-    "qualityAlert": "质量告警"
+    "qualityAlert": "质量告警",
+    "equipmentAlert": "设备告警",
+    "inventoryAlert": "库存告警",
+    "notificationTypes": "通知类型",
+    "pushDescription": "接收移动端推送通知",
+    "productionDescription": "生产计划、批次和报工状态提醒",
+    "qualityDescription": "质检任务和异常处置提醒",
+    "equipmentDescription": "设备故障和维护提醒",
+    "inventoryDescription": "库存不足、临期和盘点提醒",
+    "systemDescription": "系统维护和服务状态提醒",
+    "disableTip": "通知偏好当前由系统统一管理，移动端暂不支持修改。"
   },
   "systemSettings": {
     "title": "系统设置",
@@ -102,8 +115,8 @@
     "wifiOnly": "仅WiFi同步",
     "wifiOnlyDescription": "仅在WiFi网络下同步数据",
     "storage": "存储",
-    "advancedSettings": "高级设置",
-    "serverSettings": "服务器设置",
+    "advancedSettings": "连接信息",
+    "serverSettings": "当前环境",
     "productionEnv": "生产环境",
     "networkDiagnostic": "网络诊断"
   },
@@ -124,7 +137,12 @@
     "productIntro": "产品介绍",
     "productDescription": "白垩纪AI Agent系统是一款专注于食品行业的全链路溯源管理平台，助力企业实现从原材料到成品的全流程追踪。",
     "userAgreement": "用户协议",
-    "latestVersion": "已是最新版本"
+    "latestVersion": "已是最新版本",
+    "updateAvailable": "发现可用更新，请按应用内更新提示安装",
+    "updateReady": "更新已下载，可按应用内更新提示重启生效",
+    "updateCheckUnavailable": "当前开发或预览环境不支持在线更新检查",
+    "updateCheckFailed": "更新检查失败，请稍后重试",
+    "updateCheckTimeout": "更新检查超时，请检查网络后重试"
   },
   "logout": {
     "confirmTitle": "退出登录",

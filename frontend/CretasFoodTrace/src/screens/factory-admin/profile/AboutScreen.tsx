@@ -16,6 +16,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import * as Application from 'expo-application';
+import { checkForOtaUpdateManual } from '../../../services/otaUpdateService';
 
 // ⛔ 同上(EnhancedLoginScreen): 版本号不许写死。
 //    2026-08-25 小米真机实测, 同一台设备上三个数字互不相干:
@@ -25,13 +26,23 @@ import * as Application from 'expo-application';
 //    本仓形态 D: 同一个东西有三份, 必定漂。读不到就留空, 不要给假值。
 const APP_VERSION = Application.nativeApplicationVersion;
 const BUILD_NUMBER = Application.nativeBuildVersion;
+const COPYRIGHT_END_YEAR = new Date().getFullYear();
 
 export function AboutScreen() {
   const navigation = useNavigation();
   const { t } = useTranslation('profile');
 
-  const handleCheckUpdate = () => {
-    Alert.alert(t('about.checkUpdate'), t('about.latestVersion'));
+  const handleCheckUpdate = async () => {
+    const result = await checkForOtaUpdateManual();
+    const messageKey = {
+      up_to_date: 'about.latestVersion',
+      available: 'about.updateAvailable',
+      downloaded: 'about.updateReady',
+      disabled: 'about.updateCheckUnavailable',
+      failed: 'about.updateCheckFailed',
+      timeout: 'about.updateCheckTimeout',
+    }[result.status];
+    Alert.alert(t('about.checkUpdate'), t(messageKey));
   };
 
   const handlePrivacyPolicy = () => {
@@ -97,7 +108,7 @@ export function AboutScreen() {
             <MenuItem
               icon="update"
               title={t('about.checkUpdate')}
-              onPress={handleCheckUpdate}
+              onPress={() => void handleCheckUpdate()}
               rightText={APP_VERSION ? `v${APP_VERSION}` : '—'}
             />
             <View style={styles.divider} />
@@ -118,7 +129,7 @@ export function AboutScreen() {
         {/* 版权信息 */}
         <View style={styles.copyrightSection}>
           <Text style={styles.copyrightText}>
-            Copyright 2024-2025 Cretas Technology
+            Copyright 2024-{COPYRIGHT_END_YEAR} Cretas Technology
           </Text>
           <Text style={styles.copyrightText}>
             All Rights Reserved

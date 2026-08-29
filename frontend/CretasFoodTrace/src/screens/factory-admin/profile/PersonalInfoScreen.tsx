@@ -35,6 +35,7 @@ export function PersonalInfoScreen() {
   const { user } = useAuthStore();
   const { t } = useTranslation('profile');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [userInfo, setUserInfo] = useState<UserInfo>({
@@ -54,32 +55,21 @@ export function PersonalInfoScreen() {
   const loadUserInfo = async () => {
     try {
       setLoading(true);
-      if (user?.id) {
-        const data = await userApiClient.getUserById(Number(user.id));
-        setUserInfo({
-          id: data.id,
-          username: data.username,
-          realName: data.realName || data.fullName || '',
-          email: data.email || '',
-          phone: data.phone || '',
-          department: data.departmentDisplayName || data.department || '',
-          position: data.position || '',
-        });
-      }
+      setLoadError(false);
+      if (!user?.id) throw new Error('Authenticated user ID is missing');
+      const data = await userApiClient.getUserById(Number(user.id));
+      setUserInfo({
+        id: data.id,
+        username: data.username,
+        realName: data.realName || data.fullName || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        department: data.departmentDisplayName || data.department || '',
+        position: data.position || '',
+      });
     } catch (error) {
       console.error('加载用户信息失败:', error);
-      // 使用本地 store 数据作为 fallback
-      if (user) {
-        setUserInfo({
-          id: Number(user.id) || 0,
-          username: user.username || '',
-          realName: user.fullName || user.username || '',
-          email: user.email || '',
-          phone: user.phone || '',
-          department: '',
-          position: '',
-        });
-      }
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -131,6 +121,23 @@ export function PersonalInfoScreen() {
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#667eea" />
           <Text style={styles.loadingText}>{t('personalInfo.loading')}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Icon source="alert-circle-outline" size={48} color="#d14343" />
+          <Text style={styles.errorTitle}>{t('personalInfo.loadFailed')}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => void loadUserInfo()}>
+            <Text style={styles.retryButtonText}>{t('personalInfo.retry')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.backToProfileButton} onPress={() => navigation.goBack()}>
+            <Text style={styles.backToProfileText}>{t('personalInfo.back')}</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -203,6 +210,40 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
     color: '#666',
+  },
+  errorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#333',
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 24,
+    minWidth: 140,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#667eea',
+    alignItems: 'center',
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  backToProfileButton: {
+    marginTop: 12,
+    padding: 10,
+  },
+  backToProfileText: {
+    color: '#667eea',
+    fontSize: 14,
   },
   header: {
     flexDirection: 'row',

@@ -633,7 +633,8 @@
       "all": "All",
       "slicing": "Slicing",
       "packaging": "Packaging",
-      "freezing": "Freezing"
+      "freezing": "Freezing",
+      "storage": "Storage"
     },
     "shifts": {
       "morning": "Morning",

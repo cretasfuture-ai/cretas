@@ -1,14 +1,13 @@
 /**
  * 通知设置页面
  */
-import React, { useState } from 'react';
+import React from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -19,59 +18,44 @@ interface NotificationSetting {
   key: string;
   title: string;
   description: string;
-  enabled: boolean;
 }
 
 export function NotificationSettingsScreen() {
   const navigation = useNavigation();
   const { t } = useTranslation('profile');
 
-  const [settings, setSettings] = useState<NotificationSetting[]>([
+  const settings: NotificationSetting[] = [
     {
       key: 'push',
       title: t('notificationSettings.pushNotification'),
       description: t('notificationSettings.pushDescription'),
-      enabled: true,
     },
     {
       key: 'production',
       title: t('notificationSettings.productionAlert'),
       description: t('notificationSettings.productionDescription'),
-      enabled: true,
     },
     {
       key: 'quality',
       title: t('notificationSettings.qualityAlert'),
       description: t('notificationSettings.qualityDescription'),
-      enabled: true,
     },
     {
       key: 'equipment',
       title: t('notificationSettings.equipmentAlert'),
       description: t('notificationSettings.equipmentDescription'),
-      enabled: true,
     },
     {
       key: 'inventory',
       title: t('notificationSettings.inventoryAlert'),
       description: t('notificationSettings.inventoryDescription'),
-      enabled: true,
     },
     {
       key: 'system',
       title: t('notificationSettings.systemAlert'),
       description: t('notificationSettings.systemDescription'),
-      enabled: false,
     },
-  ]);
-
-  const toggleSetting = (key: string) => {
-    setSettings(prev =>
-      prev.map(item =>
-        item.key === key ? { ...item, enabled: !item.enabled } : item
-      )
-    );
-  };
+  ];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -100,27 +84,9 @@ export function NotificationSettingsScreen() {
                   <Text style={styles.settingTitle}>{item.title}</Text>
                   <Text style={styles.settingDescription}>{item.description}</Text>
                 </View>
-                <Switch
-                  value={item.enabled}
-                  onValueChange={() => toggleSetting(item.key)}
-                  trackColor={{ false: '#e0e0e0', true: '#667eea' }}
-                  thumbColor={item.enabled ? '#fff' : '#f4f3f4'}
-                />
+                <Icon source="bell-outline" size={20} color="#999" />
               </View>
             ))}
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('notificationSettings.doNotDisturb')}</Text>
-          <View style={styles.settingsCard}>
-            <TouchableOpacity style={styles.menuItem}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingTitle}>{t('notificationSettings.enableDoNotDisturb')}</Text>
-                <Text style={styles.settingDescription}>22:00 - 08:00</Text>
-              </View>
-              <Icon source="chevron-right" size={20} color="#ccc" />
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -197,12 +163,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#999',
     marginTop: 4,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
   },
   tipText: {
     fontSize: 13,

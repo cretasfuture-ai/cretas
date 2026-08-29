@@ -49,6 +49,9 @@
     "edit": "Edit",
     "saving": "Saving...",
     "loading": "Loading...",
+    "loadFailed": "Failed to load personal information. Check your network and try again.",
+    "retry": "Try Again",
+    "back": "Back to Profile",
     "basicInfo": "Basic Info",
     "workInfo": "Work Info",
     "enterPlaceholder": "Enter {{field}}",
@@ -84,7 +87,17 @@
     "systemAlert": "System Alerts",
     "taskReminder": "Task Reminders",
     "productionAlert": "Production Alerts",
-    "qualityAlert": "Quality Alerts"
+    "qualityAlert": "Quality Alerts",
+    "equipmentAlert": "Equipment Alerts",
+    "inventoryAlert": "Inventory Alerts",
+    "notificationTypes": "Notification Types",
+    "pushDescription": "Receive mobile push notifications",
+    "productionDescription": "Production plan, batch, and work report updates",
+    "qualityDescription": "Quality inspection and exception handling updates",
+    "equipmentDescription": "Equipment fault and maintenance updates",
+    "inventoryDescription": "Low stock, expiry, and stocktake updates",
+    "systemDescription": "System maintenance and service status updates",
+    "disableTip": "Notification preferences are managed centrally and cannot currently be changed in the mobile app."
   },
   "systemSettings": {
     "title": "System Settings",
@@ -102,8 +115,8 @@
     "wifiOnly": "WiFi Only",
     "wifiOnlyDescription": "Only sync data on WiFi network",
     "storage": "Storage",
-    "advancedSettings": "Advanced Settings",
-    "serverSettings": "Server Settings",
+    "advancedSettings": "Connection",
+    "serverSettings": "Current Environment",
     "productionEnv": "Production Environment",
     "networkDiagnostic": "Network Diagnostic"
   },
@@ -134,7 +147,12 @@
     "productIntro": "Product Introduction",
     "productDescription": "Cretas AI Agentability System is a comprehensive food industry traceability management platform, enabling full chain tracking from raw materials to finished products.",
     "userAgreement": "User Agreement",
-    "latestVersion": "Already the latest version"
+    "latestVersion": "Already the latest version",
+    "updateAvailable": "An update is available. Follow the in-app update prompt to install it.",
+    "updateReady": "The update is downloaded. Follow the in-app update prompt to restart and apply it.",
+    "updateCheckUnavailable": "Online update checks are unavailable in this development or preview environment.",
+    "updateCheckFailed": "Update check failed. Please try again later.",
+    "updateCheckTimeout": "Update check timed out. Check your network and try again."
   },
   "logout": {
     "confirmTitle": "Logout",
