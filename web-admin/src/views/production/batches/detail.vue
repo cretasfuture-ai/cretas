@@ -77,9 +77,10 @@ async function loadOperators() {
       operatorsError.value = res.message || '操作员名单加载失败';
       return;
     }
-    // 服务端目录已按当前 factoryId + roleCode=operator + active 过滤；这里再钉住响应契约，
+    // 服务端目录已按当前 factoryId + 角色 + active 过滤；这里再钉住响应契约，
     // 失效账号或意外混入的其他角色绝不进入选人框。
-    operators.value = res.data.filter((op) => op.isActive !== false && (!op.roleCode || op.roleCode === 'operator'));
+    operators.value = res.data.filter((op) =>
+      op.isActive !== false && (op.roleCode === 'operator' || op.roleCode === 'yield_operator'));
   } catch (error) {
     operators.value = [];
     operatorsError.value = error instanceof Error ? error.message : '操作员名单加载失败';
@@ -1650,7 +1651,7 @@ function goToReversalList() {
                 />
                 <el-option label="取消负责人（恢复未分配）" value="__UNASSIGNED__" />
               </el-select>
-              <p class="field-help">名单仅来自当前工厂有效的 operator 账号，不能手填用户编号。</p>
+              <p class="field-help">名单仅来自当前工厂有效的操作员和报工员，不能手填用户编号。</p>
             </div>
 
             <el-alert

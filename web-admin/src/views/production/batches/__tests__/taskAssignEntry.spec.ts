@@ -55,10 +55,11 @@ describe('工序指派入口 —— 接线契约', () => {
     expect(view).toContain('taskAssignmentDisabledReason(task.status)');
   });
 
-  it('候选人只来自当前工厂有效 operator，禁止自由输入编号', () => {
+  it('候选人只来自当前工厂有效操作员/报工员，禁止自由输入编号', () => {
     expect(view).toContain("op.roleCode === 'operator'");
+    expect(view).toContain("op.roleCode === 'yield_operator'");
     expect(view).toContain('op.isActive !== false');
-    expect(view).toContain('名单仅来自当前工厂有效的 operator 账号，不能手填用户编号');
+    expect(view).toContain('名单仅来自当前工厂有效的操作员和报工员，不能手填用户编号');
     expect(view).not.toContain('allow-create');
   });
 
