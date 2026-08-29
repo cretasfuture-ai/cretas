@@ -186,22 +186,38 @@ const departmentOptions = computed<string[]>(() => {
   return Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-CN'));
 });
 
-const roleOptions = [
-  { value: 'factory_super_admin', label: '工厂总监' },
-  { value: 'hr_admin', label: 'HR管理员' },
-  { value: 'procurement_manager', label: '采购主管' },
-  { value: 'sales_manager', label: '销售主管' },
-  { value: 'operations_coordinator', label: '运营协调员' },
-  { value: 'dispatcher', label: '调度' },
-  { value: 'warehouse_manager', label: '仓储主管' },
-  { value: 'equipment_admin', label: '设备管理员' },
-  { value: 'quality_manager', label: '质量经理' },
-  { value: 'finance_manager', label: '财务主管' },
-  { value: 'workshop_supervisor', label: '车间主任' },
-  { value: 'quality_inspector', label: '质检员' },
-  { value: 'operator', label: '操作员' },
-  { value: 'warehouse_worker', label: '仓库员' },
-];
+/**
+ * 员工档案可创建的角色只维护角色码，显示名统一交给 ROLE_LABELS。
+ * 账号邀请页采用同一模式；这里曾漏掉 yield_operator 等在用岗位，导致管理员
+ * 无法从正式 UI 创建对应员工，只能依赖迁移或直接调用 API。平台、餐饮、未激活
+ * 与已废弃兼容角色不属于工厂员工新建选项，不从后端全量枚举盲目展开。
+ */
+const EMPLOYEE_ROLE_CODES = [
+  'factory_super_admin',
+  'hr_admin',
+  'procurement_manager',
+  'sales_manager',
+  'operations_coordinator',
+  'dispatcher',
+  'production_manager',
+  'production_clerk',
+  'warehouse_manager',
+  'equipment_admin',
+  'quality_manager',
+  'quality_controller',
+  'finance_manager',
+  'cashier',
+  'workshop_supervisor',
+  'team_leader',
+  'group_leader',
+  'quality_inspector',
+  'yield_operator',
+  'operator',
+  'warehouse_worker',
+  'viewer',
+] as const;
+
+const roleOptions = EMPLOYEE_ROLE_CODES.map((value) => ({ value, label: enumLabel(value) }));
 
 const formRules = {
   fullName: [{ required: true, message: '请输入姓名', trigger: 'blur' }],

@@ -47,6 +47,30 @@ describe('员工档案的角色与部门显示', () => {
         expect(enumLabel('yield_operator')).not.toContain('未知状态');
     });
 
+    it('创建员工的角色下拉必须覆盖工厂可分配岗位，并用权威表显示名称', () => {
+        const roleCodesBlock = source.match(
+            /const EMPLOYEE_ROLE_CODES = \[([\s\S]*?)\] as const;/,
+        )?.[1];
+        expect(roleCodesBlock, '没有读到员工角色码清单').toBeTruthy();
+
+        const roleCodes = Array.from(roleCodesBlock!.matchAll(/'([^']+)'/g), (match) => match[1]);
+        expect(roleCodes).toEqual(expect.arrayContaining([
+            'production_manager',
+            'production_clerk',
+            'quality_controller',
+            'cashier',
+            'team_leader',
+            'group_leader',
+            'yield_operator',
+            'viewer',
+        ]));
+        expect(new Set(roleCodes).size).toBe(roleCodes.length);
+        expect(enumLabel('yield_operator')).toBe('出成率录入员');
+        expect(source).toContain(
+            'const roleOptions = EMPLOYEE_ROLE_CODES.map((value) => ({ value, label: enumLabel(value) }));',
+        );
+    });
+
     it('对照: 私有表原本就有的角色仍然正确', () => {
         expect(enumLabel('quality_inspector')).toBe('质检员');
         expect(enumLabel('warehouse_manager')).toBe('仓储主管');
