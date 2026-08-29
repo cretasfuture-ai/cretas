@@ -180,4 +180,13 @@ describe('屏幕上显示的版本号不许写死', () => {
       expect(messages.profile?.aboutMessage).not.toMatch(/v\d+\.\d+\.\d+/);
     }
   });
+
+  it('质检员退出确认的两个账号分支都必须使用质检员角色文案', () => {
+    const src = readScreen('src/screens/quality-inspector/QIProfileScreen.tsx');
+    const handleLogout = src.match(/const handleLogout = \(\) => \{([\s\S]*?)\n  \};/)?.[1];
+
+    expect(handleLogout).toBeDefined();
+    expect(handleLogout).not.toContain("t('hr:profile.role')");
+    expect(handleLogout?.match(/t\('profile\.inspector'\)/g)).toHaveLength(2);
+  });
 });
