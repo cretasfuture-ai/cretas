@@ -54,6 +54,7 @@ describe('personal OA workbench contract', () => {
 
   it('renders pending business identity, approver roles and local time without internal-code leakage', () => {
     const enumDisplay = source('src/utils/enumDisplay.ts');
+    const nodeLabel = source('src/views/workflow/nodeLabel.ts');
     expect(enumDisplay).toContain("SALES_ORDER: '销售订单'");
     expect(enumDisplay).toContain("PURCHASE_ORDER: '采购订单'");
     expect(enumDisplay).toContain("finance_manager: '财务主管'");
@@ -69,8 +70,10 @@ describe('personal OA workbench contract', () => {
      * 形态 C‴: 断言好好地守着一个我们现在判定为冗余的行为。⇒ 抬到守**性质**:
      * 「审批角色仍然被读取, 且经过 enumLabel 翻成中文」。
      */
-    expect(pending).toContain('row.approverRoles');
-    expect(pending).toMatch(/approverRoles[\s\S]{0,120}enumLabel/);
+    expect(pending).toContain('currentNodeText(row)');
+    expect(pending).toContain('approverHint(row)');
+    expect(nodeLabel).toContain('row.approverRoles');
+    expect(nodeLabel).toMatch(/approverRoles[\s\S]{0,160}enumLabel/);
   });
 
   /**

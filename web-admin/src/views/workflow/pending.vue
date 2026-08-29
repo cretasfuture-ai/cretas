@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { useWorkspaceStore } from '@/store/modules/workspace';
 import { oaInvalidatedModules } from '@/utils/workspaceInvalidation';
 import { enumLabel } from '@/utils/enumDisplay';
+import { approverHint, currentNodeText } from './nodeLabel';
 
 /**
  * 业务类型中文名 —— 筛选下拉和表格列共用同一份。
@@ -246,7 +247,7 @@ function approveConfirmMessage(row: PendingApproval): string {
     ['业务单号', businessCodeOf(row)],
     ['往来单位', counterpartyOf(row) || '—'],
     ['金额', formatAmount(amountOf(row))],
-    ['当前节点', row.currentNodeLabel || '—'],
+    ['当前节点', currentNodeText(row)],
     ['申请人', applicant],
   ];
   // ⚠️ ElMessageBox 挂在 App 根节点之外, 本组件的 scoped CSS 够不着它 —— 用行内样式,
@@ -270,18 +271,6 @@ function sortByAmount(a: PendingApproval, b: PendingApproval): number {
   if (x === null) return 1;
   if (y === null) return -1;
   return x - y;
-}
-
-/**
- * 「当前节点」后面那句「· 财务主管」。
- * 原来这是独立一列「授权角色」, 与「当前节点=财务审批」说的是同一件事(M-12)。
- * ⇒ 并进节点列; 只有当它**确实带来新信息**(与节点名不同)时才显示。
- */
-function approverHint(row: PendingApproval): string {
-  const roles = (row.approverRoles || []).map((role) => enumLabel(role)).filter(Boolean);
-  if (!roles.length) return '';
-  const text = roles.join('、');
-  return text === row.currentNodeLabel ? '' : text;
 }
 
 /** 点单号 —— 按模块跳到对应详情。⚠️ 原来只有调拨单接了跳转, 采购单没接(M-12 根因)。 */
@@ -380,7 +369,7 @@ onMounted(async () => {
         -->
         <el-table-column prop="currentNodeLabel" label="当前节点" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.currentNodeLabel
+            {{ currentNodeText(row)
             }}<template v-if="approverHint(row)"> · {{ approverHint(row) }}</template>
           </template>
         </el-table-column>
