@@ -1,0 +1,3 @@
+# 2026-08-30 Active History
+
+- `BUG-RN-MATERIAL-BATCH-PICKER-SCROLL-20260830` — `review`（PR #387，候选已完成并释放 scope；等待 exact-head CI 后合并，发布与设备复验由协调任务另行安排）— Owner: `/root` — Base SHA `88a5d1533990fe10d860436d3c3ccf0c02b7edfb`，candidate `d244509f0a`。RN 首道报工多批次选择的固定高度内层 ScrollView 现在只负责选批次；2–5 个逐批数量输入移到其外、随 `YieldStepReportScreen` 页面外层 ScrollView 滚动，避免 Android 在选中行动态增高后把首批 TextInput 裁到 viewport 上方。单批选中第二批时把有效 `singleBatchQty` 原样迁移到首批逐批输入，新批保持待填；每批空值、非正数与超出 `remainingQuantity` 继续禁用确认并显示本批上限。新增真实组件回归覆盖 1→2→5 批、结构可达性、首批数量保留、空值/超量/恢复合法；相关 5 suites / 21 tests 全绿，`npm run typecheck`、`git diff --check` 通过。实际变异删除首批迁移后新 suite 2/2 精确变红，恢复后重绿。未修改 `YieldStepReportScreen.tsx`、API、后端或数据库；未操作生产业务数据、真机、OTA/APK 或发布。
