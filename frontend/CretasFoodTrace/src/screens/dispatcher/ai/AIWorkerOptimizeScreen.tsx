@@ -118,6 +118,19 @@ export default function AIWorkerOptimizeScreen() {
     }
     setError(null);
 
+    // 🔴 2026-08-29 逐屏走查: 不带参数打开这一屏时 scheduleId/planId 都是 undefined,
+    //    照样发请求 -> 后端 400「计划ID不能为空」-> 错误态 -> 点「重新加载」再 400,
+    //    **一个只可能失败的按钮**。
+    //    ⚠️ 而路由类型写的是 `AIWorkerOptimize: undefined`(声明不收参数),
+    //       全仓也没有任何一处 navigate('AIWorkerOptimize', ...) —— 这一屏目前没有入口。
+    //    ⇒ 缺参数就直说, ⛔ 不发那个注定 400 的请求。
+    if (!scheduleId && !planId) {
+      setError('没有指定要优化的排程或生产计划，请从排程详情进入。');
+      setInitialLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
       // 调用 AI 优化人员分配 API
       const response = await schedulingApiClient.optimizeWorkers({

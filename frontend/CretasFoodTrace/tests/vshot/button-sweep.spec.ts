@@ -377,8 +377,16 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       const isDestructive =
         b.text.length <= SHORT && DESTRUCTIVE.some((w) => b.text.includes(w));
       const label = b.text.replace(/^[-\s]+/, '');
-      const isSubmitLike = /^(提交|确认|保存|创建|发起|新增|确定|完成|应用|同步)/.test(label)
-        || /(提交|保存|确认)$/.test(label);
+      // ⛔ 三类**看起来像提交、其实不是**的，实测各贡献了红旗（2026-08-29 逐条核完 27 条）：
+      //    a) 状态词：「已确认」「已完成」—— `STATUS_MAP` 的标签和筛选 chip，不是动作
+      //    b) 对话框按钮：光秃秃的「确定」「确认」—— AppDialog / 日期选择器的确认键
+      //    c) 选项标签：「人工确认」—— 三选一的自动化模式
+      //    ▎一道会误报的闸最终会被人忽略（形态 E：宁可窄而可信）。
+      const isStatusWord = /^已/.test(label);
+      const isBareDialogButton = label === '确定' || label === '确认';
+      const isSubmitLike = !isStatusWord && !isBareDialogButton
+        && (/^(提交|确认|保存|创建|发起|新增|完成|应用|同步)/.test(label)
+          || /(提交|保存)$/.test(label));
       const buttonResult: ButtonResult = {
         label: b.text,
         submitLike: isSubmitLike,
@@ -391,9 +399,26 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
         continue;
       }
       if (MODE === 'inventory') continue;
+      if (b.disabled) {
+        // 点一个禁用按钮当然 0 请求 —— 那是**正确行为**，⛔ 不该报红。
+        // 实测 QILabelQcCreate 的「提交拍检」就是这样：表单没填完时它是灰的。
+        console.log(`     ⛔ 跳过(按钮是禁用态): ${b.text}`);
+        continue;
+      }
       const mark = fired.length;
       const dlgMark = dialogs.length;
-      const el = page.locator('[role="button"], button, [tabindex]').nth(b.idx);
+      // 🔴 ⛔ 不能用枚举时算好的下标。每点一次都会 navigateTo 回到本屏，
+      //    回来之后 DOM 重渲染，`nth(idx)` 已经指向别的元素 ——
+      //    实测 27 条红旗里 **14 条**是这么来的：日志抬头写着 A 屏，
+      //    实际点的是别处的按钮（MyWage 屏报了一个「保存」，而那一屏根本没有保存键）。
+      //    ⇒ 每次点击前**按文字重新定位**；找不到就跳过，⛔ 不报红。
+      const el = page.locator('[role="button"], button, [tabindex]')
+        .filter({ hasText: b.text })
+        .first();
+      if ((await el.count()) === 0) {
+        console.log(`     ⛔ 跳过(按钮已不在这一屏上): ${b.text}`);
+        continue;
+      }
       await el.click({ timeout: 6000 }).catch(() => {});
       await page.waitForTimeout(2500);
 
