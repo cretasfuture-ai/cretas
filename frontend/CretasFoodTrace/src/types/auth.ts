@@ -78,7 +78,7 @@ export const ROLE_METADATA: Record<string, RoleMetadata> = {
   // Level 30 - 一线员工
   quality_inspector: { displayName: '质检员', description: '执行质检、提交报告', level: 30, department: 'quality' },
   operator: { displayName: '操作员', description: '生产执行、打卡记录', level: 30, department: 'production' },
-  yield_operator: { displayName: '报工员', description: '生产报工、产量登记', level: 30, department: 'production' },
+  yield_operator: { displayName: '出成率录入员', description: '生产报工、产量登记', level: 30, department: 'production' },
   warehouse_worker: { displayName: '仓库员', description: '出入库操作、盘点', level: 30, department: 'warehouse' },
 
   // Level 50 - 查看者

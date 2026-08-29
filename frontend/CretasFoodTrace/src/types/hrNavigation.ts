@@ -502,7 +502,7 @@ export const HR_THEME = {
 /** 角色选项 - 用于白名单添加时选择预设角色 */
 export const ROLE_OPTIONS = [
   { label: '操作员', value: 'operator' },
-  { label: '报工员', value: 'yield_operator' },
+  { label: '出成率录入员', value: 'yield_operator' },
   { label: '质检员', value: 'quality_inspector' },
   { label: '车间主任', value: 'workshop_supervisor' },
   { label: '仓储主管', value: 'warehouse_manager' },
