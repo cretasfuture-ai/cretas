@@ -28,13 +28,17 @@ jest.mock('../../../services/api/productTypeApiClient', () => ({
 
 jest.mock('../../../screens/quality-inspector/QILabelQcCameraModal', () => ({
   __esModule: true,
-  default: ({ visible, onAccepted }: {
+  default: ({ visible, onAccepted, onQualityAdvisory }: {
     visible: boolean;
     onAccepted: (asset: { uri: string; width: number; height: number }) => void;
+    onQualityAdvisory: (message: string) => void;
   }) => visible ? (
     <Pressable
       testID="mock-camera-accept"
-      onPress={() => onAccepted({ uri: 'file://checked.jpg', width: 3024, height: 4032 })}
+      onPress={() => {
+        onAccepted({ uri: 'file://checked.jpg', width: 3024, height: 4032 });
+        onQualityAdvisory('照片可能有反光');
+      }}
     >
       <Text>应用内相机</Text>
     </Pressable>
@@ -59,7 +63,8 @@ describe('QILabelQcCreateScreen capture quality flow', () => {
 
     fireEvent.press(screen.getByTestId('mock-camera-accept'));
 
-    await waitFor(() => expect(screen.getByText('已自动检查')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('已添加')).toBeTruthy());
     expect(screen.queryByText('应用内相机')).toBeNull();
+    expect(screen.getByText('照片已添加，不影响提交。照片可能有反光；建议有空时补拍')).toBeTruthy();
   });
 });

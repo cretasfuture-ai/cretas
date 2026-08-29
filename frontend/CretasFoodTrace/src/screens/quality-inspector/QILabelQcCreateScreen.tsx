@@ -94,6 +94,7 @@ export default function QILabelQcCreateScreen() {
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [qualityAdvisory, setQualityAdvisory] = useState<string | null>(null);
   const [draftTaskId, setDraftTaskId] = useState<string | null>(null);
 
   const idempotencyKey = useRef<string | null>(null);
@@ -163,6 +164,10 @@ export default function QILabelQcCreateScreen() {
     factoryId,
   );
 
+  const showCaptureQualityAdvisory = (message: string) => {
+    setQualityAdvisory(`${message}；建议有空时补拍`);
+  };
+
   const selectWebPhotos = async () => {
     const availableSlots = MAX_PHOTOS - photos.length;
     if (availableSlots <= 0) {
@@ -188,16 +193,18 @@ export default function QILabelQcCreateScreen() {
           if (gate.reason) rejectedReasons.push(gate.reason);
           continue;
         }
-        try {
-          const quality = await checkCaptureQuality(asset);
-          if (quality.accepted) accepted.push(asset);
-          else rejectedReasons.push(quality.message);
-        } catch {
-          rejectedReasons.push('照片检查没有完成，请保持网络连接后重试');
-        }
+        accepted.push(asset);
       }
       if (accepted.length > 0) {
+        setQualityAdvisory(null);
         setPhotos((current) => [...current, ...accepted]);
+        accepted.forEach((asset) => {
+          void checkCaptureQuality(asset)
+            .then((quality) => {
+              if (!quality.accepted) showCaptureQualityAdvisory(quality.message);
+            })
+            .catch(() => undefined);
+        });
       }
       if (rejectedReasons.length > 0) {
         setTimeout(() => {
@@ -224,6 +231,7 @@ export default function QILabelQcCreateScreen() {
   };
 
   const acceptCameraPhoto = (asset: LabelQcCaptureAsset) => {
+    setQualityAdvisory(null);
     setPhotos((current) => [...current, asset].slice(0, MAX_PHOTOS));
     setCameraVisible(false);
     setSubmitError(null);
@@ -234,6 +242,7 @@ export default function QILabelQcCreateScreen() {
       Alert.alert('任务已创建', '上传失败后请直接重试，不能再更改已绑定的照片');
       return;
     }
+    setQualityAdvisory(null);
     setPhotos((current) => current.filter((_, itemIndex) => itemIndex !== index));
   };
 
@@ -455,7 +464,7 @@ export default function QILabelQcCreateScreen() {
               </View>
               <View style={styles.qualityPassedBadge}>
                 <Ionicons name="checkmark-circle" size={14} color="#FFFFFF" />
-                <Text style={styles.qualityPassedText}>已自动检查</Text>
+                <Text style={styles.qualityPassedText}>已添加</Text>
               </View>
               <TouchableRipple
                 style={styles.removePhoto}
@@ -491,6 +500,15 @@ export default function QILabelQcCreateScreen() {
             </TouchableRipple>
           )}
         </View>
+
+        {qualityAdvisory && (
+          <View style={styles.qualityAdvisory} testID="qi-label-qc-create-quality-advisory">
+            <Ionicons name="information-circle-outline" size={20} color="#8A5A00" />
+            <Text style={styles.qualityAdvisoryText}>
+              照片已添加，不影响提交。{qualityAdvisory}
+            </Text>
+          </View>
+        )}
 
         {formLocked && (
           <View style={styles.lockedHint}>
@@ -551,6 +569,7 @@ export default function QILabelQcCreateScreen() {
         ].filter(Boolean).join(' · ') || '六扇门标签拍检'}
         onClose={() => setCameraVisible(false)}
         onAccepted={acceptCameraPhoto}
+        onQualityAdvisory={showCaptureQualityAdvisory}
         checkQuality={checkCaptureQuality}
       />
 
@@ -758,6 +777,18 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   qualityPassedText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  qualityAdvisory: {
+    minHeight: 52,
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#FFF4D6',
+  },
+  qualityAdvisoryText: { flex: 1, color: '#6B4600', fontSize: 13, lineHeight: 19 },
   removePhoto: {
     position: 'absolute',
     top: 4,

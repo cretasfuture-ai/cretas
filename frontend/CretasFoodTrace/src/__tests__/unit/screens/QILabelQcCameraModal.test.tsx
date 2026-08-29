@@ -52,8 +52,9 @@ describe('QILabelQcCameraModal', () => {
     });
   });
 
-  it('keeps a rejected photo in the camera and gives one retake message', async () => {
+  it('accepts the photo immediately and reports a later quality advisory without blocking', async () => {
     const onAccepted = jest.fn();
+    const onQualityAdvisory = jest.fn();
     const checkQuality = jest.fn(async () => ({
       accepted: false,
       reasonCode: 'TRAY_CROPPED_AT_SIDE' as const,
@@ -72,6 +73,7 @@ describe('QILabelQcCameraModal', () => {
         contextLabel="CPLIUSHANMEN0015 · BATCH-01"
         onClose={jest.fn()}
         onAccepted={onAccepted}
+        onQualityAdvisory={onQualityAdvisory}
         checkQuality={checkQuality}
       />,
     );
@@ -80,29 +82,25 @@ describe('QILabelQcCameraModal', () => {
       fireEvent.press(screen.getByTestId('qi-label-qc-camera-shutter'));
     });
 
-    expect(await screen.findByText('左右下角托盘没有拍全，请后退一点或切换广角重拍')).toBeTruthy();
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(expect.objectContaining({
+      uri: 'file://capture-compressed.jpg',
+      width: 1200,
+      height: 1600,
+    })));
     expect(checkQuality).toHaveBeenCalledWith(expect.objectContaining({
       uri: 'file://capture-compressed.jpg',
       width: 1200,
       height: 1600,
     }));
-    expect(onAccepted).not.toHaveBeenCalled();
-    expect(screen.getByTestId('mock-camera-view')).toBeTruthy();
+    await waitFor(() => expect(onQualityAdvisory).toHaveBeenCalledWith(
+      '左右下角托盘没有拍全，请后退一点或切换广角重拍',
+    ));
   });
 
-  it('automatically accepts a clear and complete photo without a checklist', async () => {
+  it('does not wait for a slow quality check before accepting the photo', async () => {
     const onAccepted = jest.fn();
-    const checkQuality = jest.fn(async () => ({
-      accepted: true,
-      reasonCode: null,
-      message: '照片清晰，托盘已完整入框',
-      imageWidth: 3024,
-      imageHeight: 4032,
-      trayCount: 18,
-      sharpness: 1100,
-      leftMarginRatio: 0.04,
-      rightMarginRatio: 0.03,
-    }));
+    const onQualityAdvisory = jest.fn();
+    const checkQuality = jest.fn(() => new Promise<never>(() => undefined));
 
     render(
       <QILabelQcCameraModal
@@ -110,6 +108,7 @@ describe('QILabelQcCameraModal', () => {
         contextLabel="CPLIUSHANMEN0015 · BATCH-01"
         onClose={jest.fn()}
         onAccepted={onAccepted}
+        onQualityAdvisory={onQualityAdvisory}
         checkQuality={checkQuality}
       />,
     );
@@ -126,6 +125,34 @@ describe('QILabelQcCameraModal', () => {
       [{ resize: { height: 1600 } }],
       { compress: 0.72, format: 'jpeg' },
     );
-    expect(screen.queryByText('放大看一下，标签清楚吗？')).toBeNull();
+    expect(checkQuality).toHaveBeenCalledTimes(1);
+    expect(onQualityAdvisory).not.toHaveBeenCalled();
+    expect(screen.queryByText('检查中…')).toBeNull();
+  });
+
+  it('still accepts the photo when the background quality request fails', async () => {
+    const onAccepted = jest.fn();
+    const onQualityAdvisory = jest.fn();
+    const checkQuality = jest.fn(async () => {
+      throw new Error('network timeout');
+    });
+
+    render(
+      <QILabelQcCameraModal
+        visible
+        contextLabel="CPLIUSHANMEN0015 · BATCH-01"
+        onClose={jest.fn()}
+        onAccepted={onAccepted}
+        onQualityAdvisory={onQualityAdvisory}
+        checkQuality={checkQuality}
+      />,
+    );
+
+    fireEvent.press(screen.getByTestId('qi-label-qc-camera-shutter'));
+
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(checkQuality).toHaveBeenCalledTimes(1));
+    expect(onQualityAdvisory).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('qi-label-qc-camera-error')).toBeNull();
   });
 });

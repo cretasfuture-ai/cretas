@@ -74,7 +74,7 @@ describe('labelQcApi mobile review contract', () => {
     }, FACTORY_ID)).resolves.toEqual(quality);
 
     expect(mock.history.post[0]!.data).toBeInstanceOf(FormData);
-    expect(mock.history.post[0]!.timeout).toBe(45000);
+    expect(mock.history.post[0]!.timeout).toBe(5000);
   });
 
   it('submits AI decisions and human additions to the existing review endpoint', async () => {

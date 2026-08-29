@@ -25,6 +25,7 @@ interface Props {
   contextLabel: string;
   onClose: () => void;
   onAccepted: (asset: LabelQcCaptureAsset) => void;
+  onQualityAdvisory: (message: string) => void;
   checkQuality: (asset: LabelQcCaptureAsset) => Promise<LabelQcCaptureQualityResult>;
 }
 
@@ -41,6 +42,7 @@ export default function QILabelQcCameraModal({
   contextLabel,
   onClose,
   onAccepted,
+  onQualityAdvisory,
   checkQuality,
 }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
@@ -48,13 +50,13 @@ export default function QILabelQcCameraModal({
   const [availableLenses, setAvailableLenses] = useState<string[]>([]);
   const [useUltraWide, setUseUltraWide] = useState(false);
   const [torch, setTorch] = useState(false);
-  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const ultraWide = useMemo(() => ultraWideLens(availableLenses), [availableLenses]);
 
   useEffect(() => {
     if (!visible) {
-      setChecking(false);
+      setSaving(false);
       setErrorMessage(null);
       setTorch(false);
       setUseUltraWide(false);
@@ -62,8 +64,8 @@ export default function QILabelQcCameraModal({
   }, [visible]);
 
   const capture = async () => {
-    if (!cameraRef.current || checking) return;
-    setChecking(true);
+    if (!cameraRef.current || saving) return;
+    setSaving(true);
     setErrorMessage(null);
     try {
       const photo = await cameraRef.current.takePictureAsync({
@@ -100,16 +102,17 @@ export default function QILabelQcCameraModal({
         setErrorMessage(metadata.reason ?? '照片尺寸不合格，请重新拍摄');
         return;
       }
-      const result = await checkQuality(asset);
-      if (!result.accepted) {
-        setErrorMessage(result.message);
-        return;
-      }
       onAccepted(asset);
+      void Promise.resolve()
+        .then(() => checkQuality(asset))
+        .then((result) => {
+          if (!result.accepted) onQualityAdvisory(result.message);
+        })
+        .catch(() => undefined);
     } catch {
-      setErrorMessage('照片检查没有完成，请保持网络连接后重试');
+      setErrorMessage('照片没有保存成功，请重新拍摄');
     } finally {
-      setChecking(false);
+      setSaving(false);
     }
   };
 
@@ -120,7 +123,7 @@ export default function QILabelQcCameraModal({
       visible
       animationType="slide"
       presentationStyle="fullScreen"
-      onRequestClose={checking ? undefined : onClose}
+      onRequestClose={saving ? undefined : onClose}
       testID="qi-label-qc-camera-modal"
     >
       <View style={styles.screen}>
@@ -142,7 +145,7 @@ export default function QILabelQcCameraModal({
                 <TouchableRipple
                   style={styles.iconButton}
                   onPress={onClose}
-                  disabled={checking}
+                  disabled={saving}
                   borderless
                   accessibilityRole="button"
                   accessibilityLabel="关闭相机"
@@ -156,7 +159,7 @@ export default function QILabelQcCameraModal({
                 <TouchableRipple
                   style={styles.iconButton}
                   onPress={() => setTorch((current) => !current)}
-                  disabled={checking}
+                  disabled={saving}
                   borderless
                   accessibilityRole="button"
                   accessibilityLabel={torch ? '关闭补光灯' : '打开补光灯'}
@@ -203,7 +206,7 @@ export default function QILabelQcCameraModal({
                     <TouchableRipple
                       style={styles.lensButton}
                       onPress={() => setUseUltraWide((current) => !current)}
-                      disabled={checking}
+                      disabled={saving}
                       borderless
                       accessibilityRole="button"
                       accessibilityLabel={useUltraWide ? '切换一倍镜头' : '切换零点五倍广角'}
@@ -216,20 +219,20 @@ export default function QILabelQcCameraModal({
                 <TouchableRipple
                   style={styles.shutter}
                   onPress={() => void capture()}
-                  disabled={checking}
+                  disabled={saving}
                   borderless
                   accessibilityRole="button"
-                  accessibilityLabel="拍照并检查"
+                  accessibilityLabel="拍照"
                   testID="qi-label-qc-camera-shutter"
                 >
-                  {checking ? (
+                  {saving ? (
                     <ActivityIndicator color={QI_COLORS.primary} size={30} />
                   ) : (
                     <View style={styles.shutterInner} />
                   )}
                 </TouchableRipple>
                 <View style={styles.sideSlot}>
-                  {checking && <Text style={styles.checkingText}>检查中…</Text>}
+                  {saving && <Text style={styles.savingText}>保存中…</Text>}
                 </View>
               </View>
             </SafeAreaView>
@@ -338,7 +341,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
   },
   shutterInner: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#FFFFFF' },
-  checkingText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  savingText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   permission: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
   permissionTitle: { marginTop: 16, color: QI_COLORS.text, fontSize: 20, fontWeight: '800' },
   permissionText: { marginTop: 8, marginBottom: 22, color: QI_COLORS.textSecondary, fontSize: 14 },
