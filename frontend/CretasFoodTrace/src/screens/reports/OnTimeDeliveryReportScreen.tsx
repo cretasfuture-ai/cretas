@@ -34,6 +34,48 @@ import { formatDate } from '../../utils/formatters';
 // Create OTIF Report specific logger
 const otifReportLogger = logger.createContextLogger('OtifReport');
 
+// 算不出来的比率一律给「—」, 不给 0。
+//
+// 2026-08-29 逐屏走查实拍: 这一屏顶部已经在说「这段期间没有订单, 算不出准时交付率」,
+// 而同一屏下方三行写着「准时率 0.0% / 足量率 0.0% / OTIF率 0.0%」, 中间还画着三个
+// 指针指向 0 的仪表盘 —— 同一屏上两处给出互相矛盾的读数。
+//
+// 成因是这个文件里的 `?? 0`: 上一轮只把最显眼的那个(主仪表盘)加了守卫,
+// 派生出来的那些没动。修复的进度会掩盖修复的缺口, 掩盖方式正是「让最容易被检查的
+// 那个先对上」——「顶部那句话对了」于是没人往下翻。
+const formatRate = (v: number | null | undefined): string =>
+  v == null ? '—' : `${Number(v).toFixed(1)}%`;
+
+/** 比率算不出来时不画表盘 —— 一个指针指向 0 的表盘看起来就是「0%」这个假读数。 */
+const SubGauge: React.FC<{
+  value: number | null | undefined;
+  title: string;
+  desc: string;
+  color: string;
+}> = ({ value, title, desc, color }) => (
+  <View style={styles.subGaugeItem}>
+    {value == null ? (
+      <View style={styles.subGaugeEmpty}>
+        <Text style={styles.subGaugeEmptyValue}>—</Text>
+        <Text style={styles.subGaugeEmptyTitle}>{title}</Text>
+      </View>
+    ) : (
+      <GaugeChart
+        value={value}
+        maxValue={100}
+        title={title}
+        unit="%"
+        size={110}
+        color={color}
+        thresholds={{ warning: 85, danger: 95 }}
+        showTicks={false}
+        showLabels={false}
+      />
+    )}
+    <Text style={styles.subGaugeDesc}>{desc}</Text>
+  </View>
+);
+
 // ⛔ 这里原来是 `const DEFAULT_TARGET_OTIF = 95;` —— 前端自己编的目标值,
 //    和后端那个写死的 `report.put("target", new BigDecimal("95"))` 是同一个东西两份
 //    (形态 D), 而**两边都没有来源**: 库里没有任何地方配过 OTIF 目标。
@@ -342,28 +384,32 @@ export default function OnTimeDeliveryReportScreen() {
                 {targetOtif == null ? null : (
                   <Text style={styles.targetLabel}>目标: {targetOtif}%</Text>
                 )}
-                <Chip
-                  mode="flat"
-                  style={[
-                    styles.statusChip,
-                    { backgroundColor: `${getOtifStatusColor(otifData.otifRate ?? 0, targetOtif)}20` },
-                  ]}
-                  textStyle={[styles.statusChipText, { color: getOtifStatusColor(otifData.otifRate ?? 0, targetOtif) }]}
-                >
-                  {getOtifStatusLabel(otifData.otifRate ?? 0, targetOtif)}
-                </Chip>
+                {/* 算不出比率就没有「达标/未达标」可言 —— 不渲染, 而不是按 0 判成「未达标」。 */}
+                {otifData.otifRate == null ? null : (
+                  <Chip
+                    mode="flat"
+                    style={[
+                      styles.statusChip,
+                      { backgroundColor: `${getOtifStatusColor(otifData.otifRate, targetOtif)}20` },
+                    ]}
+                    textStyle={[styles.statusChipText, { color: getOtifStatusColor(otifData.otifRate, targetOtif) }]}
+                  >
+                    {getOtifStatusLabel(otifData.otifRate, targetOtif)}
+                  </Chip>
+                )}
               </View>
 
-              {targetOtif == null ? null : (otifData.otifRate ?? 0) >= targetOtif ? (
+              {targetOtif == null || otifData.otifRate == null ? null
+                : otifData.otifRate >= targetOtif ? (
                 <View style={styles.achievementBadge}>
                   <Text style={styles.achievementText}>
-                    已达成目标 (+{(Number(otifData.otifRate ?? 0) - targetOtif).toFixed(1)}%)
+                    已达成目标 (+{(Number(otifData.otifRate) - targetOtif).toFixed(1)}%)
                   </Text>
                 </View>
               ) : (
                 <View style={styles.gapBadge}>
                   <Text style={styles.gapText}>
-                    距目标差 {(targetOtif - Number(otifData.otifRate ?? 0)).toFixed(1)}%
+                    距目标差 {(targetOtif - Number(otifData.otifRate)).toFixed(1)}%
                   </Text>
                 </View>
               )}
@@ -377,50 +423,9 @@ export default function OnTimeDeliveryReportScreen() {
               <Divider style={styles.divider} />
 
               <View style={styles.subGaugesRow}>
-                <View style={styles.subGaugeItem}>
-                  <GaugeChart
-                    value={otifData.otifRate ?? 0}
-                    maxValue={100}
-                    title="OTIF率"
-                    unit="%"
-                    size={110}
-                    color="#4CAF50"
-                    thresholds={{ warning: 85, danger: 95 }}
-                    showTicks={false}
-                    showLabels={false}
-                  />
-                  <Text style={styles.subGaugeDesc}>准时且足量</Text>
-                </View>
-
-                <View style={styles.subGaugeItem}>
-                  <GaugeChart
-                    value={otifData.onTimeRate ?? 0}
-                    maxValue={100}
-                    title="准时率"
-                    unit="%"
-                    size={110}
-                    color="#2196F3"
-                    thresholds={{ warning: 85, danger: 95 }}
-                    showTicks={false}
-                    showLabels={false}
-                  />
-                  <Text style={styles.subGaugeDesc}>按时交付</Text>
-                </View>
-
-                <View style={styles.subGaugeItem}>
-                  <GaugeChart
-                    value={otifData.inFullRate ?? 0}
-                    maxValue={100}
-                    title="足量率"
-                    unit="%"
-                    size={110}
-                    color="#FF9800"
-                    thresholds={{ warning: 85, danger: 95 }}
-                    showTicks={false}
-                    showLabels={false}
-                  />
-                  <Text style={styles.subGaugeDesc}>数量完整</Text>
-                </View>
+                <SubGauge value={otifData.otifRate} title="OTIF率" desc="准时且足量" color="#4CAF50" />
+                <SubGauge value={otifData.onTimeRate} title="准时率" desc="按时交付" color="#2196F3" />
+                <SubGauge value={otifData.inFullRate} title="足量率" desc="数量完整" color="#FF9800" />
               </View>
             </Surface>
 
@@ -458,37 +463,46 @@ export default function OnTimeDeliveryReportScreen() {
                 <View style={styles.progressItem}>
                   <View style={styles.progressHeader}>
                     <Text style={styles.progressLabel}>准时率</Text>
-                    <Text style={styles.progressValue}>{Number(otifData.onTimeRate ?? 0).toFixed(1)}%</Text>
+                    <Text style={styles.progressValue}>{formatRate(otifData.onTimeRate)}</Text>
                   </View>
-                  <ProgressBar
-                    progress={Number(otifData.onTimeRate ?? 0) / 100}
-                    color="#4CAF50"
-                    style={styles.progressBar}
-                  />
+                  {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」。 */}
+                  {otifData.onTimeRate == null ? null : (
+                    <ProgressBar
+                      progress={Number(otifData.onTimeRate) / 100}
+                      color="#4CAF50"
+                      style={styles.progressBar}
+                    />
+                  )}
                 </View>
 
                 <View style={styles.progressItem}>
                   <View style={styles.progressHeader}>
                     <Text style={styles.progressLabel}>足量率</Text>
-                    <Text style={styles.progressValue}>{Number(otifData.inFullRate ?? 0).toFixed(1)}%</Text>
+                    <Text style={styles.progressValue}>{formatRate(otifData.inFullRate)}</Text>
                   </View>
-                  <ProgressBar
-                    progress={Number(otifData.inFullRate ?? 0) / 100}
-                    color="#FF9800"
-                    style={styles.progressBar}
-                  />
+                  {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」。 */}
+                  {otifData.inFullRate == null ? null : (
+                    <ProgressBar
+                      progress={Number(otifData.inFullRate) / 100}
+                      color="#FF9800"
+                      style={styles.progressBar}
+                    />
+                  )}
                 </View>
 
                 <View style={styles.progressItem}>
                   <View style={styles.progressHeader}>
                     <Text style={styles.progressLabel}>OTIF率</Text>
-                    <Text style={styles.progressValue}>{Number(otifData.otifRate ?? 0).toFixed(1)}%</Text>
+                    <Text style={styles.progressValue}>{formatRate(otifData.otifRate)}</Text>
                   </View>
-                  <ProgressBar
-                    progress={Number(otifData.otifRate ?? 0) / 100}
-                    color="#2196F3"
-                    style={styles.progressBar}
-                  />
+                  {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」。 */}
+                  {otifData.otifRate == null ? null : (
+                    <ProgressBar
+                      progress={Number(otifData.otifRate) / 100}
+                      color="#2196F3"
+                      style={styles.progressBar}
+                    />
+                  )}
                 </View>
               </View>
             </Surface>
@@ -754,6 +768,21 @@ const styles = StyleSheet.create({
   },
   subGaugeItem: {
     alignItems: 'center',
+  },
+  subGaugeEmpty: {
+    width: 110,
+    height: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subGaugeEmptyValue: {
+    fontSize: 28,
+    color: '#BDBDBD',
+  },
+  subGaugeEmptyTitle: {
+    fontSize: 12,
+    color: '#9E9E9E',
+    marginTop: 4,
   },
   subGaugeDesc: {
     fontSize: 11,

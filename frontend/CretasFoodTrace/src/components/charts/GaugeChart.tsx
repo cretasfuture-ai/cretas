@@ -54,6 +54,39 @@ const ZONE_COLORS = {
 };
 
 /**
+ * 极坐标 -> 直角坐标。角度沿用表盘约定：**180° 在左(9 点)，0° 在右(3 点)，90° 在正上**。
+ *
+ * 🔴 2026-08-29 逐屏走查发现: 原实现是
+ *
+ *     const angleInRadians = ((angleInDegrees - 180) * Math.PI) / 180;
+ *     x: cx + r * Math.cos(...)   y: cy + r * Math.sin(...)
+ *
+ * 代入 180°(本该是左) 得到 (cx + r, cy) —— **右边**。整张表盘水平镜像了：
+ * 0 画在右端、满值画在左端，刻度「80」落在左边、「20」落在右边。
+ * 弧、指针、刻度都走这一个函数, 所以三者**自洽地一起反着**, 看起来不像坏 ——
+ * 只有把刻度数字读出来才发现。实拍: KPI 屏「综合评分 9.3 分 / 评级 D」而指针
+ * 停在右侧绿区。
+ *
+ * ⚠️ 代码当时和自己的注释是矛盾的(`const startAngle = 180; // Left side (9 o'clock)`),
+ *    而那行注释是对的 —— 错的是这个换算。
+ *
+ * 提到模块级并导出, 是为了让闸能直接量几何, ⛔ 不用去渲染组件再猜像素。
+ */
+export function polarToCartesian(
+  cx: number,
+  cy: number,
+  r: number,
+  angleInDegrees: number
+): { x: number; y: number } {
+  const angleInRadians = (angleInDegrees * Math.PI) / 180;
+  return {
+    x: cx + r * Math.cos(angleInRadians),
+    // SVG 的 y 轴向下, 所以正上方要减
+    y: cy - r * Math.sin(angleInRadians),
+  };
+}
+
+/**
  * GaugeChart Component
  *
  * A half-circle gauge chart that displays a value with color-coded zones.
@@ -97,22 +130,6 @@ export function GaugeChart({
   const arcSpan = 180;    // Total arc span in degrees
 
   /**
-   * Convert polar coordinates to cartesian
-   */
-  const polarToCartesian = (
-    cx: number,
-    cy: number,
-    r: number,
-    angleInDegrees: number
-  ) => {
-    const angleInRadians = ((angleInDegrees - 180) * Math.PI) / 180;
-    return {
-      x: cx + r * Math.cos(angleInRadians),
-      y: cy + r * Math.sin(angleInRadians),
-    };
-  };
-
-  /**
    * Generate arc path
    */
   const describeArc = (
@@ -125,7 +142,9 @@ export function GaugeChart({
     const start = polarToCartesian(cx, cy, r, startAngleDeg);
     const end = polarToCartesian(cx, cy, r, endAngleDeg);
     const largeArcFlag = Math.abs(endAngleDeg - startAngleDeg) > 180 ? 1 : 0;
-    const sweepFlag = endAngleDeg > startAngleDeg ? 1 : 0;
+    // 角度从 180 递减到 0 = 从左经上到右 = SVG 里的**顺时针**(sweep=1)。
+    // 修正镜像之后, 原来的判断方向也跟着反了。
+    const sweepFlag = endAngleDeg < startAngleDeg ? 1 : 0;
 
     return [
       'M', start.x, start.y,
