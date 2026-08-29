@@ -38,6 +38,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 
 import { smartBIApi } from '../../services/api/smartbi';
+import { classifySmartBIError, type SmartBIErrorKind } from '../../services/api/smartbiError';
 import { useAuthStore } from '../../store/authStore';
 
 import type {
@@ -240,6 +241,7 @@ export default function DynamicAnalysisScreen(): React.ReactElement {
   const [refreshing, setRefreshing] = useState(false);
   const [isDimensionSwitching, setIsDimensionSwitching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<SmartBIErrorKind>('retryable');
   const [selectorVisible, setSelectorVisible] = useState(false);
 
   // Current sheet result
@@ -266,6 +268,8 @@ export default function DynamicAnalysisScreen(): React.ReactElement {
   const loadDatasets = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
+      setErrorKind('retryable');
       const factoryId = getFactoryId();
       const response = await smartBIApi.getDatasets(factoryId || undefined);
 
@@ -276,7 +280,10 @@ export default function DynamicAnalysisScreen(): React.ReactElement {
       }
     } catch (err) {
       console.error('Load datasets failed:', err);
-      setError('加载数据集失败');
+      const kind = classifySmartBIError(err);
+      setDatasets([]);
+      setErrorKind(kind);
+      setError(kind === 'unavailable' ? '多表分析还没上线' : '加载数据集失败，请重试');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -355,7 +362,12 @@ export default function DynamicAnalysisScreen(): React.ReactElement {
         }
       } catch (err) {
         console.error('Switch dimension failed:', err);
-        Alert.alert('提示', '切换维度失败');
+        Alert.alert(
+          '提示',
+          classifySmartBIError(err) === 'unavailable'
+            ? '切换维度功能还没上线'
+            : '切换维度失败，请重试'
+        );
       } finally {
         setIsDimensionSwitching(false);
       }
@@ -422,9 +434,13 @@ export default function DynamicAnalysisScreen(): React.ReactElement {
 
         {/* Error Banner */}
         {error && (
-          <View style={styles.errorBanner}>
-            <MaterialCommunityIcons name="alert-circle" size={20} color={THEME.danger} />
-            <Text style={styles.errorText}>{error}</Text>
+          <View style={errorKind === 'unavailable' ? styles.unavailableBanner : styles.errorBanner}>
+            <MaterialCommunityIcons
+              name={errorKind === 'unavailable' ? 'information-outline' : 'alert-circle'}
+              size={20}
+              color={errorKind === 'unavailable' ? THEME.primary : THEME.danger}
+            />
+            <Text style={errorKind === 'unavailable' ? styles.unavailableText : styles.errorText}>{error}</Text>
           </View>
         )}
 
@@ -684,6 +700,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: THEME.danger,
+  },
+  unavailableBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E6F7FF',
+    marginHorizontal: 16,
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  unavailableText: {
+    flex: 1,
+    fontSize: 14,
+    color: THEME.primary,
   },
   analyzingContainer: {
     alignItems: 'center',

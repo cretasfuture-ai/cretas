@@ -33,6 +33,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { smartBIApiClient } from '../../services/api/smartbi';
+import { classifySmartBIError, type SmartBIErrorKind } from '../../services/api/smartbiError';
 import { useAuthStore } from '../../store/authStore';
 import { SmartBIStackParamList } from '../../types/smartbi';
 import { formatNumberWithCommas, formatDate } from '../../utils/formatters';
@@ -315,6 +316,7 @@ export function FinanceAnalysisScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<SmartBIErrorKind>('retryable');
 
   // Analysis type
   const [selectedType, setSelectedType] = useState<AnalysisType>(
@@ -355,6 +357,7 @@ export function FinanceAnalysisScreen() {
   const loadData = useCallback(async () => {
     try {
       setError(null);
+      setErrorKind('retryable');
       const factoryId = getFactoryId();
 
       const response = await smartBIApiClient.getFinanceAnalysis({
@@ -367,11 +370,17 @@ export function FinanceAnalysisScreen() {
       if (response.success && response.data) {
         setFinanceData(response.data);
       } else {
+        setFinanceData(null);
         setError(response.message || t('errors.loadFailed', { defaultValue: '加载失败' }));
       }
     } catch (err) {
       console.error('Load finance analysis failed:', err);
-      setError(t('errors.loadFailed', { defaultValue: '数据加载失败，请重试' }));
+      const kind = classifySmartBIError(err);
+      setFinanceData(null);
+      setErrorKind(kind);
+      setError(kind === 'unavailable'
+        ? t('smartbi:errors.financeNotLaunched', { defaultValue: '财务分析还没上线' })
+        : t('errors.loadFailed', { defaultValue: '数据加载失败，请重试' }));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -527,13 +536,13 @@ export function FinanceAnalysisScreen() {
 
         {/* Error Banner */}
         {error && (
-          <View style={styles.errorBanner}>
+          <View style={errorKind === 'unavailable' ? styles.unavailableBanner : styles.errorBanner}>
             <MaterialCommunityIcons
-              name="alert-circle"
+              name={errorKind === 'unavailable' ? 'information-outline' : 'alert-circle'}
               size={20}
-              color={SMARTBI_THEME.danger}
+              color={errorKind === 'unavailable' ? SMARTBI_THEME.info : SMARTBI_THEME.danger}
             />
-            <Text style={styles.errorText}>{error}</Text>
+            <Text style={errorKind === 'unavailable' ? styles.unavailableText : styles.errorText}>{error}</Text>
           </View>
         )}
 
@@ -765,6 +774,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: SMARTBI_THEME.danger,
+  },
+  unavailableBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E6F7FF',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    gap: 8,
+  },
+  unavailableText: {
+    flex: 1,
+    fontSize: 14,
+    color: SMARTBI_THEME.info,
   },
   kpiGrid: {
     flexDirection: 'row',
