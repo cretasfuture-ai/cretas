@@ -70,7 +70,7 @@ class LabelQcApi {
       formData,
       {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 45000,
+        timeout: 5000,
       },
     );
     return response.data;
