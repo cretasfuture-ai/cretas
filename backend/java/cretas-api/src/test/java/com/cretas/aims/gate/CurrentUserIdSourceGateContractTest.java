@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       也返 <b>401「用户未登录」</b>（{@code FactoryAccessValidator.validateAccess(factoryId)} 单参版）</li>
  * </ul>
  */
-class CurrentUserIdSourceGateTest {
+class CurrentUserIdSourceGateContractTest {
 
     private static final Path MAIN = Paths.get("src/main/java/com/cretas/aims");
 
