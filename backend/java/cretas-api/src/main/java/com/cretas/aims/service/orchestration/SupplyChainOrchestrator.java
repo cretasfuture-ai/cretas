@@ -222,7 +222,7 @@ public class SupplyChainOrchestrator {
                     // ③b 库存不足 → 创建生产计划草稿
                     // approvedBy 一路传到 setCreatedBy —— 事件自带审批人, 不要再写死用户 id
                     createProductionPlanFromSO(
-                            event.getFactoryId(), event.getSalesOrderId(),
+                            event.getFactoryId(), sourceOrder,
                             match.getProductTypeId(), match.getProductTypeName(), match.getShortfallQuantity(),
                             event.getApprovedBy());
                 }
@@ -437,10 +437,11 @@ public class SupplyChainOrchestrator {
      * @param shortfallQuantity 库存缺口数量
      * @param createdBy         建计划归给谁 —— 用财审事件自带的 {@code approvedBy}
      */
-    private void createProductionPlanFromSO(String factoryId, String salesOrderId,
+    private void createProductionPlanFromSO(String factoryId, SalesOrder sourceOrder,
                                             String productTypeId, String productTypeName,
                                             BigDecimal shortfallQuantity,
                                             Long createdBy) {
+        String salesOrderId = sourceOrder.getId();
         // 创建PP草稿（PENDING状态，需调度员确认后排产）
         ProductionPlan plan = new ProductionPlan();
         plan.setId(UUID.randomUUID().toString());
@@ -476,6 +477,21 @@ public class SupplyChainOrchestrator {
                 .orElse("kg"));
         plan.setSourceType(PlanSourceType.CUSTOMER_ORDER);
         plan.setSourceOrderId(salesOrderId);
+        plan.setCustomerId(sourceOrder.getCustomerId());
+        plan.setProcessingMode(sourceOrder.getProcessingMode());
+        plan.setMaterialSupplyMode(sourceOrder.getMaterialSupplyMode());
+        if (sourceOrder.getProcessingMode() == null && sourceOrder.getMaterialSupplyMode() == null) {
+            plan.setOutputOwnership(null);
+        } else if (sourceOrder.getProcessingMode() == null || sourceOrder.getMaterialSupplyMode() == null) {
+            throw new IllegalStateException("自动创建生产计划的销售合同不完整: SO=" + salesOrderId);
+        } else {
+            plan.setOutputOwnership(sourceOrder.getProcessingMode() == SalesProcessingMode.TOLL_PROCESSING
+                    ? InventoryOwnership.CUSTOMER_OWNED
+                    : InventoryOwnership.COMPANY_OWNED);
+        }
+        log.info("[AUTO_PLAN_SALES_CONTRACT] SO={} customer={} processing={} materialSupply={} outputOwnership={}",
+                salesOrderId, plan.getCustomerId(), plan.getProcessingMode(), plan.getMaterialSupplyMode(),
+                plan.getOutputOwnership());
         plan.setStatus(ProductionPlanStatus.PENDING);
         plan.setIsFullyMatched(false);
         // ProductionPlan 无 productName 字段；productTypeName 冗余记录在 sourceCustomerName 旁

@@ -4,6 +4,9 @@ import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -189,6 +192,8 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
         order.setCustomerId(customerId);
         order.setOrderDate(LocalDate.now());
         order.setStatus(SalesOrderStatus.FINANCE_APPROVED);
+        order.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        order.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         order.setCreatedBy(createdBy);
         salesOrderId = salesOrderRepository.saveAndFlush(order).getId();
 
@@ -199,6 +204,8 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
         item.setProductName("无BOM测试品");
         item.setUnit("kg");
         item.setQuantity(new BigDecimal("130.0000"));
+        item.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        item.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
         salesOrderItemRepository.saveAndFlush(item);
     }
 
@@ -236,6 +243,15 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
                         + "之前 BOM 展开失败会把这次联动事务整体回滚, prod 日志打印 "
                         + "\"自动创建生产计划: PP=...\" 但库里查无此行, 正是这个症状")
                 .isTrue();
+
+        var contract = jdbcTemplate.queryForMap(
+                "SELECT customer_id, processing_mode, material_supply_mode, output_ownership "
+                        + "FROM production_plans WHERE factory_id = ? AND source_order_id = ?",
+                FACTORY_ID, salesOrderId);
+        assertThat(contract.get("customer_id")).isEqualTo(customerId);
+        assertThat(contract.get("processing_mode")).isEqualTo(SalesProcessingMode.TOLL_PROCESSING.name());
+        assertThat(contract.get("material_supply_mode")).isEqualTo(MaterialSupplyMode.FACTORY_SUPPLIED.name());
+        assertThat(contract.get("output_ownership")).isEqualTo(InventoryOwnership.CUSTOMER_OWNED.name());
     }
 
     private <T> Optional<T> pollUntilPresent(Supplier<Optional<T>> supplier) throws InterruptedException {
