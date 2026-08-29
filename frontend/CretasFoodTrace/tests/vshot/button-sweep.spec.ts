@@ -321,7 +321,7 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
     //    ⇒ 逐段滚动枚举，按文字去重。
     const collectVisible = async () =>
       page.evaluate((SHORT_LEN) => {
-      const out: { idx: number; text: string }[] = [];
+      const out: { idx: number; text: string; disabled: boolean }[] = [];
       // ⚠️ React Navigation 在 web 上把**已挂载但不在前台**的屏留在 DOM 里。
       //    直接 querySelectorAll 会把首页卡片、别的 tab 的按钮一起数进来 ——
       //    与第二轮 `innerText` 串屏是同一个坑。⇒ 只要**当前视口内可见**的。
@@ -346,7 +346,11 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
         }
         const txt = (el.innerText || '').trim().replace(/\s+/g, ' ');
         if (!txt || txt.length > 40) return;
-        out.push({ idx: i, text: txt });
+        // ⛔ 禁用的按钮点下去 0 请求是**正确行为**。不带上这一位，判据就会把
+        //    「表单没填完所以提交键是灰的」报成「提交键是死的」——
+        //    实测 QILabelQcCreate 的「提交拍检」就这样被误报过一次。
+        const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
+        out.push({ idx: i, text: txt, disabled });
       });
       // 去重：同文字只点一次
       const seen = new Set<string>();
@@ -354,7 +358,7 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
     }, SHORT);
 
     // 逐段滚动，把整屏的按钮都收上来
-    const byText = new Map<string, { idx: number; text: string }>();
+    const byText = new Map<string, { idx: number; text: string; disabled: boolean }>();
     for (let pass = 0; pass < 6; pass += 1) {
       for (const b of await collectVisible()) if (!byText.has(b.text)) byText.set(b.text, b);
       // ⛔ 不能用 window.scrollBy —— RN Web 的 ScrollView 是**内层**滚动容器，
