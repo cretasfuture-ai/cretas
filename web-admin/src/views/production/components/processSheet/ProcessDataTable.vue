@@ -2647,6 +2647,10 @@ const upstreamAllowedSkuIds = computed<string[]>(() => {
 });
 
 function sfiMatchesUpstreamPort(item: SemiFinishedStockItem): boolean {
+  // 回料 SKU 是 Workflow 金检/X 光产出的独立 SKU，天然不会等于绞肉端口的普通半成品 SKU。
+  // 它的可投目标已由 /semi-finished/inventory 按产品族、阶段和纯度矩阵服务端过滤；若这里仍做
+  // 普通端口精确匹配，会把后端明确放行的回料全部删掉，导致“有回料但新增行禁用”。
+  if (item.isRework === true) return true;
   const allowed = upstreamAllowedSkuIds.value;
   if (allowed.length === 0) return true;
   return item.productTypeId != null && allowed.includes(item.productTypeId);
@@ -2768,7 +2772,8 @@ function wipOptionsForSource(src: UpstreamRef): ProcessSheetInventoryItem[] {
 }
 
 function sfiOptionsForSource(src: UpstreamRef): SemiFinishedStockItem[] {
-  return sfiOptionsDisplay.value.filter((item) => sourceMatchesSku(item.productTypeId, src));
+  return sfiOptionsDisplay.value.filter((item) =>
+    item.isRework === true || sourceMatchesSku(item.productTypeId, src));
 }
 
 function fgOptionsForSource(src: UpstreamRef): FinishedGoodsStockItem[] {
@@ -2924,7 +2929,8 @@ function fgCandidate(item: FinishedGoodsStockItem): UpstreamBatchOption {
 function allUpstreamCandidates(src: UpstreamRef): UpstreamBatchOption[] {
   return [
     ...props.upstreamItems.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(wipCandidate),
-    ...sfiOptions.value.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(sfiCandidate),
+    ...sfiOptions.value.filter((item) =>
+      item.isRework === true || sourceMatchesSku(item.productTypeId, src)).map(sfiCandidate),
     ...fgOptions.value.filter((item) => sourceMatchesSku(item.productTypeId, src)).map(fgCandidate),
   ];
 }

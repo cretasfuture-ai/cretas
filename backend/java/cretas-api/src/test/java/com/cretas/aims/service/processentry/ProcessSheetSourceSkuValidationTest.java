@@ -3,6 +3,8 @@ package com.cretas.aims.service.processentry;
 import com.cretas.aims.dto.processentry.ProcessSheetInventoryItem;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
+import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
+import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.SemiFinishedInventory;
@@ -127,6 +129,21 @@ class ProcessSheetSourceSkuValidationTest {
                 });
     }
 
+    private String resolveAllowedUpstreamSku(
+            ProcessSheetRowRequest request,
+            ProcessSheetRowRequest.UpstreamRef source,
+            WorkflowClerkSheetConfigDTO.PortDescriptor port) throws Throwable {
+        Method method = ProcessSheetServiceImpl.class.getDeclaredMethod(
+                "resolveAllowedUpstreamSku", String.class, String.class, ProcessSheetRowRequest.class,
+                WorkflowClerkSheetConfigDTO.PortDescriptor.class, ProcessSheetRowRequest.UpstreamRef.class);
+        method.setAccessible(true);
+        try {
+            return (String) method.invoke(service, FACTORY, "PT-TARGET", request, port, source);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
+    }
+
     @Test
     void inPlanWipUsesStoredRowSkuNotClientClaim() throws Exception {
         when(rowRepo.findByFactoryIdAndPlanId(FACTORY, PLAN))
@@ -174,6 +191,56 @@ class ProcessSheetSourceSkuValidationTest {
         when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, BATCH))
                 .thenReturn(Optional.of(inventory));
         assertThat(resolve(request(true, false))).isEmpty();
+    }
+
+    @Test
+    void serverAuthorizedReworkBypassesNormalPortSkuButUsesInventorySku() throws Throwable {
+        ProcessSheetRowRequest request = request(true, false);
+        request.setProductTypeId("PT-TARGET");
+        request.setProcessOrder(4);
+        ProcessSheetRowRequest.UpstreamRef source = request.getUpstreamSources().getFirst();
+
+        SemiFinishedInventory inventory = new SemiFinishedInventory();
+        inventory.setProductTypeId("PT-REWORK");
+        inventory.setIsRework(true);
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, BATCH))
+                .thenReturn(Optional.of(inventory));
+        when(wipInventoryService.listWipByFactory(FACTORY, "PT-TARGET", 4))
+                .thenReturn(List.of(WipRowDTO.builder()
+                        .intermediateBatchNo(BATCH)
+                        .productTypeId("PT-REWORK")
+                        .isRework(true)
+                        .build()));
+        WorkflowClerkSheetConfigDTO.PortDescriptor port = WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
+                .skuId(EXPECTED)
+                .allowedSkuIds(List.of(EXPECTED))
+                .build();
+
+        assertThat(resolveAllowedUpstreamSku(request, source, port)).isEqualTo("PT-REWORK");
+    }
+
+    @Test
+    void reworkAbsentFromServerFilteredPickerIsRejectedAtSaveBoundary() {
+        ProcessSheetRowRequest request = request(true, false);
+        request.setProductTypeId("PT-TARGET");
+        request.setProcessOrder(4);
+        ProcessSheetRowRequest.UpstreamRef source = request.getUpstreamSources().getFirst();
+
+        SemiFinishedInventory inventory = new SemiFinishedInventory();
+        inventory.setProductTypeId("PT-REWORK");
+        inventory.setIsRework(true);
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, BATCH))
+                .thenReturn(Optional.of(inventory));
+        when(wipInventoryService.listWipByFactory(FACTORY, "PT-TARGET", 4)).thenReturn(List.of());
+        WorkflowClerkSheetConfigDTO.PortDescriptor port = WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
+                .skuId(EXPECTED)
+                .allowedSkuIds(List.of(EXPECTED))
+                .build();
+
+        assertThatThrownBy(() -> resolveAllowedUpstreamSku(request, source, port))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("PROCESS_SHEET_REWORK_INPUT_NOT_AUTHORIZED"));
     }
 
     @Test
