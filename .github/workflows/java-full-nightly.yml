@@ -192,8 +192,45 @@ jobs:
           echo "RATCHET_RC=$rc"
           exit 0
 
-      - name: 上传本次的失败名单（便于重新落基线）
+      # 🔴 2026-08-29: 留痕主渠道改成【job 日志】, 上传只是锦上添花。
+      #
+      # 那天所有分支的 Java Gate 全红, 而测试是 `Tests run: 12349, Failures: 0, Errors: 0`
+      # ——【全过】。唯一红的就是下面那个 upload 步骤:
+      #
+      #     ##[error]Failed to CreateArtifact: Artifact storage quota has been hit.
+      #              Usage is recalculated every 6-12 hours.
+      #
+      # ⚠️ 自建 runner 只换了【算力】没换【存储】: 测试跑在自己的 Mac mini 上,
+      #    但 upload-artifact 是把文件推到 GitHub 云端存储, 仍吃 GitHub 配额。
+      #    配额清空后, 用量统计还要 6-12 小时才重算 ⇒ 清完照样红。
+      #
+      # ⇒ 一个【留痕辅助】步骤把整条闸判红, 而它红的原因与被测代码零关系。
+      #    更讽刺的是: 它的产物是「失败名单」, 而没有失败的时候它反而更容易挂
+      #    (配额满 + 没文件可传)。
+      #
+      # 修法: 名单先打进 job 日志(免费、永远在、不依赖配额), 上传降级为不阻断。
+      # ⛔ 只动【留痕】这一段。判据步骤(全量套件 / 棘轮 / 下面的三态判定)一个不动 ——
+      #    本文件满是「静默变绿」的事故注释, 不能在修阻塞时新造一条静默绿。
+      - name: 失败名单打进日志（留痕主渠道，不依赖 GitHub 存储配额）
         if: always()
+        shell: bash
+        run: |
+          echo "::group::ratchet.log"
+          if [[ -s /tmp/ratchet.log ]]; then cat /tmp/ratchet.log; else echo "(空 —— 棘轮没有输出)"; fi
+          echo "::endgroup::"
+          echo "::group::known-failing-tests.txt"
+          f=backend/java/cretas-api/known-failing-tests.txt
+          if [[ -s "$f" ]]; then
+            echo "条目数: $(grep -cve '^\s*$' "$f")"
+            cat "$f"
+          else
+            echo "(空或不存在 —— 没有已知红)"
+          fi
+          echo "::endgroup::"
+
+      - name: 上传本次的失败名单（锦上添花；⛔ 它挂了不代表测试有问题）
+        if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: java-known-failing-tests
