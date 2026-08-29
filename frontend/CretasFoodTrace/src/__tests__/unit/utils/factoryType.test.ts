@@ -12,6 +12,7 @@ const factoryUser = (factoryType?: string) => transformBackendUser({
   role: 'operator',
   factoryId: 'F006',
   factoryType,
+  permissions: ['production:*'],
 });
 
 describe('factoryType', () => {
@@ -21,6 +22,7 @@ describe('factoryType', () => {
       username: 'platform.user',
       userType: 'platform',
       role: 'platform_admin',
+      permissions: ['*:*'],
     });
 
     expect(getFactoryType(null)).toBe('FACTORY');

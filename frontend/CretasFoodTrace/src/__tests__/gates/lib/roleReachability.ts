@@ -44,9 +44,9 @@
  *     `isRestaurant(user)` 工厂类型、`SIMPLIFIED_WAREHOUSE_NAV` 常量…）。
  *     方向是**保守的**：它只会让可达角色集**变大** ⇒ 更容易举出反例 ⇒
  *     只会把「空转」误判成「有效」，不会反过来。棘轮量的是空转数，所以宁可少报。
- *  2. **合成 user 的 `permissions` 是空数组**，于是 `hasPermission` 走
- *     `getDefaultPermissionsForRole` 那条兜底。真实用户的权限来自后端，可能更宽。
- *     ⇒ 这是「按角色默认权限」的模型，不是「按某个真实账号」。
+ *  2. **合成 user 的 `permissions` 来自 F006 真实登录快照**。这不是前端授权
+ *     默认值；它只是让静态分析器能用同一个 `hasPermission` 复现当前后端权限。
+ *     后端角色权限变更时，必须用新的真实登录结果同步此测试夹具。
  *  3. **只看屏文件自己**。屏里渲染的子组件里的权限分支不在本分析器视野内。
  *  4. **`navigate()` 冒泡不影响本闸**：屏级可达由另一道闸负责；这里只沿注册树走。
  *     一个屏若被别的 Stack 通过冒泡进入，它在本闸里的角色集只会**偏小** ——
@@ -88,12 +88,31 @@ export const ALL_ROLES: string[] = [
 
 const VALID_DEPARTMENTS: string[] = Object.values(DEPARTMENTS);
 
-/**
- * 每个角色一个合成 user。
- *
- * ⚠️ `permissions: []` 是**有意**的：`hasPermission` 只有在权限数组为空时才回落到
- *    `getDefaultPermissionsForRole`。见盲区 2。
- */
+const PERMISSIONS_BY_ROLE: Record<string, string[]> = {
+  platform_admin: ['*:*'],
+  factory_super_admin: ['*:*'],
+  hr_admin: ['hr:*'],
+  procurement_manager: ['procurement:*'],
+  sales_manager: ['sales:*'],
+  operations_coordinator: ['production:*'],
+  production_manager: ['production:*'],
+  warehouse_manager: ['warehouse:*'],
+  equipment_admin: ['equipment:*'],
+  quality_manager: ['quality:*'],
+  finance_manager: ['finance:*'],
+  cashier: ['finance:*'],
+  dispatcher: ['production:*'],
+  workshop_supervisor: ['production:*'],
+  quality_inspector: ['quality:*'],
+  operator: ['production:*'],
+  yield_operator: ['production:*'],
+  warehouse_worker: ['warehouse:*'],
+  viewer: ['view:*'],
+  permission_admin: [],
+  department_admin: [],
+};
+
+/** 每个角色一个合成 user，权限只用于静态分析的真实后端快照。 */
 export function makeUser(role: string): User {
   const metaDept = ROLE_METADATA[role]?.department;
   const department = (metaDept && VALID_DEPARTMENTS.includes(metaDept) ? metaDept : undefined) as
@@ -116,7 +135,7 @@ export function makeUser(role: string): User {
       ...base,
       roleCode: role as PlatformRole,
       userType: 'platform',
-      platformUser: { role: role as PlatformRole, permissions: [] },
+      platformUser: { role: role as PlatformRole, permissions: PERMISSIONS_BY_ROLE[role] ?? [] },
     };
   }
   return {
@@ -129,7 +148,7 @@ export function makeUser(role: string): User {
       factoryId: 'PROBE_FACTORY',
       factoryType: 'FACTORY',
       department,
-      permissions: [],
+      permissions: PERMISSIONS_BY_ROLE[role] ?? [],
     },
   };
 }

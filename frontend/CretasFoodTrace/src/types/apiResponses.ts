@@ -36,12 +36,7 @@ export interface UnifiedLoginResponseData {
     department?: string;
     position?: string;
   };
-  permissions?: {
-    modules?: Record<string, boolean>;
-    features?: string[];
-    role?: string;
-    roleLevel?: number;
-  };
+  permissions: string[];
   lastLoginTime?: string;
   createdAt?: string;
   updatedAt?: string;

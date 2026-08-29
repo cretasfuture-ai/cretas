@@ -4,45 +4,11 @@
 
 import { User } from '../types/auth';
 
-/**
- * 根据角色生成默认权限
- */
-function generatePermissionsFromRole(role: string): string[] {
-  const rolePermissions: Record<string, string[]> = {
-    // 平台角色
-    platform_admin: [
-      'platform_access',
-      'admin_access',
-      'processing_access',
-      'farming_access',
-      'logistics_access',
-      'trace_access',
-    ],
-
-    // 工厂角色
-    factory_super_admin: [
-      'admin_access',
-      'processing_access',
-      'farming_access',
-      'logistics_access',
-      'trace_access',
-    ],
-    permission_admin: [
-      'admin_access',
-    ],
-    department_admin: [
-      'processing_access', // 默认给生产权限,实际应根据department动态分配
-    ],
-    operator: [
-      'processing_access', // 操作员可访问生产模块
-    ],
-    viewer: [
-      'trace_access', // 查看者只能溯源查询
-    ],
-    unactivated: [],
-  };
-
-  return rolePermissions[role] || [];
+function requirePermissions(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some(permission => typeof permission !== 'string')) {
+    throw new Error('后端用户数据缺少有效的权限数组');
+  }
+  return value;
 }
 
 /**
@@ -51,23 +17,11 @@ function generatePermissionsFromRole(role: string): string[] {
 export function transformBackendUser(backendUser: any): User {
   console.log('🔄 transformBackendUser - Input:', JSON.stringify(backendUser, null, 2));
 
-  // 如果已经是前端格式，检查 permissions 是否需要补充
+  // 如果已经是前端格式，仅校验后端权限真值。
   if (backendUser.userType && (backendUser.platformUser || backendUser.factoryUser)) {
-    console.log('🔄 Already in frontend format, checking permissions...');
-
-    // 检查工厂用户的权限
-    if (backendUser.factoryUser && (!backendUser.factoryUser.permissions || backendUser.factoryUser.permissions.length === 0)) {
-      const role = backendUser.factoryUser.role || 'viewer';
-      backendUser.factoryUser.permissions = generatePermissionsFromRole(role);
-      console.log('✅ Generated permissions for factory user:', backendUser.factoryUser.permissions);
-    }
-
-    // 检查平台用户的权限
-    if (backendUser.platformUser && (!backendUser.platformUser.permissions || backendUser.platformUser.permissions.length === 0)) {
-      const role = backendUser.platformUser.role || 'platform_admin';
-      backendUser.platformUser.permissions = generatePermissionsFromRole(role);
-      console.log('✅ Generated permissions for platform user:', backendUser.platformUser.permissions);
-    }
+    console.log('🔄 Already in frontend format, validating permissions...');
+    if (backendUser.factoryUser) requirePermissions(backendUser.factoryUser.permissions);
+    if (backendUser.platformUser) requirePermissions(backendUser.platformUser.permissions);
 
     return backendUser as User;
   }
@@ -99,9 +53,7 @@ export function transformBackendUser(backendUser: any): User {
       userType: 'platform' as const,
       platformUser: {
         role: role === 'developer' ? 'platform_admin' : role,
-        permissions: backendUser.permissions?.length > 0
-          ? backendUser.permissions
-          : generatePermissionsFromRole(role),
+        permissions: requirePermissions(backendUser.permissions),
       },
     };
     console.log('✅ Created platform user:', JSON.stringify(user, null, 2));
@@ -118,9 +70,7 @@ export function transformBackendUser(backendUser: any): User {
       factoryType: backendUser.factoryType || 'FACTORY',
       department: backendUser.department,
       position: backendUser.position,
-      permissions: backendUser.permissions?.length > 0
-        ? backendUser.permissions
-        : generatePermissionsFromRole(role),
+      permissions: requirePermissions(backendUser.permissions),
     },
   };
 

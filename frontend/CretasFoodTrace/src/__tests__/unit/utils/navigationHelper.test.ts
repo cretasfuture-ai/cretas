@@ -2,8 +2,8 @@ import {
   getPostLoginRoute,
   getRoleDisplayName,
   hasModuleAccess,
-  hasPermission,
 } from '../../../utils/navigationHelper';
+import { hasPermission } from '../../../types/auth';
 import { transformBackendUser } from '../../../utils/roleMapping';
 
 describe('navigationHelper', () => {
@@ -29,6 +29,7 @@ describe('navigationHelper', () => {
       role: 'department_admin',
       factoryId: 'F006',
       department: 'processing',
+      permissions: ['production:*'],
     });
 
     expect(getPostLoginRoute(user)).toEqual({
@@ -46,6 +47,7 @@ describe('navigationHelper', () => {
       username: 'inactive',
       role: 'unactivated',
       factoryId: 'F006',
+      permissions: [],
     });
 
     expect(getPostLoginRoute(user)).toEqual({ screen: 'Login' });
@@ -65,7 +67,7 @@ describe('navigationHelper', () => {
     expect(hasPermission(user, 'production:write')).toBe(false);
   });
 
-  it('checks object-shaped permissions from existing frontend user data', () => {
+  it('honors global and module wildcards from the backend array', () => {
     const user = transformBackendUser({
       id: 5,
       username: 'platform',
@@ -75,10 +77,7 @@ describe('navigationHelper', () => {
       userType: 'platform',
       platformUser: {
         role: 'platform_admin',
-        permissions: {
-          modules: { platform_access: true },
-          features: ['debug:read'],
-        },
+        permissions: ['*:*'],
       },
     });
 
@@ -86,9 +85,23 @@ describe('navigationHelper', () => {
       screen: 'Main',
       params: { screen: 'HomeTab' },
     });
-    expect(hasModuleAccess(user, 'platform_access')).toBe(true);
+    expect(hasModuleAccess(user, 'platform:read')).toBe(true);
     expect(hasPermission(user, 'debug:read')).toBe(true);
-    expect(hasPermission(user, 'debug:write')).toBe(false);
+    expect(hasPermission(user, 'debug:write')).toBe(true);
+  });
+
+  it('limits a module wildcard to its module', () => {
+    const user = transformBackendUser({
+      id: 6,
+      username: 'sales',
+      role: 'sales_manager',
+      factoryId: 'F006',
+      permissions: ['sales:*'],
+    });
+
+    expect(hasPermission(user, 'sales:read')).toBe(true);
+    expect(hasPermission(user, 'sales:write')).toBe(true);
+    expect(hasPermission(user, 'warehouse:read')).toBe(false);
   });
 
   it('returns role display names and falls back to the role code', () => {

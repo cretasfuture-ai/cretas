@@ -8,7 +8,7 @@ import {
 } from '../../../utils/roleMapping';
 
 describe('roleMapping', () => {
-  it('transforms backend factory users and generates role permissions', () => {
+  it('transforms backend factory users and keeps authoritative permissions', () => {
     const user = transformBackendUser({
       id: 42,
       username: 'workshop.lead',
@@ -19,6 +19,7 @@ describe('roleMapping', () => {
       factoryType: 'FACTORY',
       department: 'processing',
       position: 'lead',
+      permissions: ['*:*'],
       createdAt: '2026-06-12T08:00:00Z',
       updatedAt: '2026-06-12T08:30:00Z',
     });
@@ -29,9 +30,7 @@ describe('roleMapping', () => {
     expect(user.isActive).toBe(true);
     expect(user.factoryUser?.role).toBe('factory_super_admin');
     expect(user.factoryUser?.factoryId).toBe('F006');
-    expect(user.factoryUser?.permissions).toEqual(
-      expect.arrayContaining(['admin_access', 'processing_access', 'logistics_access'])
-    );
+    expect(user.factoryUser?.permissions).toEqual(['*:*']);
     expect(getUserRole(user)).toBe('factory_super_admin');
     expect(getUserDisplayName(user)).toBe('Workshop Lead');
     expect(hasRole(user, 'factory_super_admin')).toBe(true);
@@ -60,7 +59,7 @@ describe('roleMapping', () => {
     expect(isFactoryAdmin(user)).toBe(false);
   });
 
-  it('fills missing permissions for users already in frontend format', () => {
+  it('keeps an authoritative empty permission array for frontend-format users', () => {
     const user = transformBackendUser({
       id: 9,
       username: 'operator',
@@ -76,7 +75,7 @@ describe('roleMapping', () => {
       },
     });
 
-    expect(user.factoryUser?.permissions).toEqual(['processing_access']);
+    expect(user.factoryUser?.permissions).toEqual([]);
     expect(getUserRole(user)).toBe('operator');
     expect(getUserDisplayName(user)).toBe('operator');
     expect(isFactoryAdmin(user)).toBe(false);
@@ -106,5 +105,14 @@ describe('roleMapping', () => {
     expect(isPlatformAdmin(platformDeveloper)).toBe(true);
     expect(isFactoryAdmin(permissionAdmin)).toBe(true);
     expect(hasRole(permissionAdmin, 'factory_super_admin')).toBe(false);
+  });
+
+  it('rejects backend users without an authoritative permission array', () => {
+    expect(() => transformBackendUser({
+      id: 13,
+      username: 'missing.permissions',
+      role: 'operator',
+      factoryId: 'F006',
+    })).toThrow('权限数组');
   });
 });

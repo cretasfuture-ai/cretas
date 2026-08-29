@@ -95,7 +95,7 @@ export function MainNavigator() {
 
         // 检查权限，确保目标 Tab 会被注册
         const hasTargetPermission = targetScreen === 'ProcessingTab'
-          ? hasPermission('processing_access')
+          ? hasPermission('production:read')
           : true; // 其他 Tab 的权限检查在渲染时已经完成
 
         // 避免重复导航尝试
@@ -204,7 +204,7 @@ export function MainNavigator() {
       )}
 
       {/* 生产模块 - 有生产权限且非餐饮场景 */}
-      {hasPermission('processing_access') && hasProductionCapability(user) && (
+      {hasPermission('production:read') && hasProductionCapability(user) && (
         <Tab.Screen
           name="ProcessingTab"
           component={ProcessingStackNavigator}
@@ -219,7 +219,7 @@ export function MainNavigator() {
       )}
 
       {/* 物流模块 - 有物流权限 */}
-      {hasPermission('logistics_access') && (
+      {hasPermission('warehouse:read') && (
         <Tab.Screen
           name="LogisticsTab"
           component={LogisticsStackNavigator}
