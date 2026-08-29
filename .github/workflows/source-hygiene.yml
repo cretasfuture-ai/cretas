@@ -138,11 +138,41 @@ jobs:
           echo "::error title=制品上传策略不合规::诊断制品上传失败不该判死闸; 产物制品上传失败必须判死闸。见上方清单。"
           exit 1
 
-      - name: 判定 —— 两个扫描都不是 0/1/2
+      - name: 定时 workflow 禁止整点 cron
+        id: scheduled_cron
+        run: |
+          PY=""
+          for c in python3 python python3.12 python3.11 python3.10; do
+            if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+          done
+          if [ -z "$PY" ]; then
+            echo "✗ 这台 runner 上一个 python 都找不到 —— 本次没量到"
+            echo "rc=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          set +e
+          "$PY" scripts/ci/check_scheduled_cron_minutes.py --repo .
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 判定 —— 定时 cron 本次没量到
+        if: steps.scheduled_cron.outputs.rc == '2'
+        run: |
+          echo "::error title=定时 cron 没量到::没有读到任何 schedule cron，本次读数作废。"
+          exit 1
+
+      - name: 判定 —— 定时 cron 落在整点
+        if: steps.scheduled_cron.outputs.rc == '1'
+        run: |
+          echo "::error title=定时 cron 落在整点::GitHub 整点高负载时 schedule 易延迟或丢失，见上方精确位置。"
+          exit 1
+
+      - name: 判定 —— 扫描退出码不是 0/1/2
         if: >-
           (steps.scan.outputs.rc != '0' && steps.scan.outputs.rc != '1' && steps.scan.outputs.rc != '2')
           || (steps.artifact_policy.outputs.rc != '0' && steps.artifact_policy.outputs.rc != '1' && steps.artifact_policy.outputs.rc != '2')
+          || (steps.scheduled_cron.outputs.rc != '0' && steps.scheduled_cron.outputs.rc != '1' && steps.scheduled_cron.outputs.rc != '2')
         run: |
-          echo "::error title=退出码不在三态里::scan=${{ steps.scan.outputs.rc }} artifact_policy=${{ steps.artifact_policy.outputs.rc }}"
+          echo "::error title=退出码不在三态里::scan=${{ steps.scan.outputs.rc }} artifact_policy=${{ steps.artifact_policy.outputs.rc }} scheduled_cron=${{ steps.scheduled_cron.outputs.rc }}"
           echo "三态判定只列了 0/1/2, 任何第四种退出码都会两条判定都不命中 ⇒ 静默落进绿。"
           exit 1

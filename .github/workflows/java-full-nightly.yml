@@ -46,8 +46,8 @@ name: Java Full Test (nightly ratchet)
 
 on:
   schedule:
-    # UTC 18:00 = 北京时间次日 02:00（避开白天的部署窗口）
-    - cron: '0 18 * * *'
+    # UTC 18:37 = 北京时间次日 02:37（避开白天部署窗口与 GitHub 整点高负载）
+    - cron: '37 18 * * *'
   workflow_dispatch:
     inputs:
       write_baseline:
