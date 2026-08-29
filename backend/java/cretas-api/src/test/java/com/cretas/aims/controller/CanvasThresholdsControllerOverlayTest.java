@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.entity.canvas.FactoryThreshold;
 import com.cretas.aims.entity.canvas.ThresholdCategory;
 import com.cretas.aims.entity.canvas.ThresholdValueType;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.canvas.FactoryThresholdRepository;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -177,5 +179,105 @@ class CanvasThresholdsControllerOverlayTest {
 
         assertThat(got).as("⛔ 只修带 category 的那条路径 = 又一个「只改一处」的漂移").hasSize(1);
         assertThat(got.get(0).getInherited()).isTrue();
+    }
+
+    // ── getByKey: 与 list 走同一条梯子 (2026-08-29) ─────────────────────
+    //
+    // #315 只把 list() 改成了「有效配置」, getByKey 还是精确查询。
+    // 于是同一个 key 在同一个工厂下有两个互相矛盾的答案:
+    //   列表里带着 inherited=true 显示出来了 → 点进去 404「阈值不存在」。
+    // ⚠️ 两处各自看都"对", 都不报错 —— 只有并排放才看得出来。
+
+    private static final String KEY = "sales.delivery.over_ship_rate";
+
+    private void stubByKey(String factoryId, String key, FactoryThreshold value) {
+        when(repository.findByFactoryIdAndThresholdKey(eq(factoryId), eq(key)))
+                .thenReturn(java.util.Optional.ofNullable(value));
+    }
+
+    @Test
+    @DisplayName("🔴 getByKey: 工厂没有这一行、全局有 → 返回全局值并标 inherited (原实现 404)")
+    void getByKeyFallsBackToGlobal() {
+        stubByKey(FACTORY, KEY, null);
+        stubByKey(GLOBAL, KEY, row(GLOBAL, KEY, "0.10", ThresholdCategory.SALES));
+
+        FactoryThreshold got = controller.getByKey(FACTORY, KEY).getData();
+
+        assertThat(got.getThresholdValue())
+                .as("404 = 列表里看得见、点进去说不存在 —— 而解析器一直在用这个 0.10 拦货")
+                .isEqualTo("0.10");
+        assertThat(got.getInherited())
+                .as("必须标出来, 否则前端会对它 PUT —— 那会改掉全局默认, 影响所有工厂")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("getByKey: 工厂有自己的 override → 用它, 且【不】标继承")
+    void getByKeyPrefersOwnRow() {
+        stubByKey(FACTORY, KEY, row(FACTORY, KEY, "0.25", ThresholdCategory.SALES));
+        stubByKey(GLOBAL, KEY, row(GLOBAL, KEY, "0.10", ThresholdCategory.SALES));
+
+        FactoryThreshold got = controller.getByKey(FACTORY, KEY).getData();
+
+        assertThat(got.getThresholdValue()).isEqualTo("0.25");
+        assertThat(got.getInherited()).isNull();
+    }
+
+    @Test
+    @DisplayName("⛔ 阴性对照: 两边都没有 → 仍然 404 —— 回落不能变成「总能返回点什么」")
+    void getByKeyStill404WhenNowhere() {
+        stubByKey(FACTORY, "nope", null);
+        stubByKey(GLOBAL, "nope", null);
+
+        BusinessException ex = catchThrowableOfType(
+                () -> controller.getByKey(FACTORY, "nope"), BusinessException.class);
+
+        assertThat(ex).as("没有就是没有").isNotNull();
+        assertThat(ex.getCode()).isEqualTo(404);
+        assertThat(ex.getActionHint()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("⛔ 阴性对照: 直接管理全局路径('*') 时不叠加 —— 自己不是自己的继承来源")
+    void getByKeyOnGlobalPathIsNotInherited() {
+        stubByKey(GLOBAL, KEY, row(GLOBAL, KEY, "0.10", ThresholdCategory.SALES));
+
+        FactoryThreshold got = controller.getByKey(GLOBAL, KEY).getData();
+
+        assertThat(got.getThresholdValue()).isEqualTo("0.10");
+        assertThat(got.getInherited())
+                .as("管理全局行时它就是本体 —— 标成 inherited 会让管理员以为不能改")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("⛔ 阴性对照: 全局路径上查一个不存在的 key → 404, ⛔ 不许自己叠自己造出一行")
+    void getByKeyOnGlobalPathStill404() {
+        stubByKey(GLOBAL, "nope", null);
+
+        BusinessException ex = catchThrowableOfType(
+                () -> controller.getByKey(GLOBAL, "nope"), BusinessException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getCode()).isEqualTo(404);
+    }
+
+    @Test
+    @DisplayName("list 与 getByKey 对同一个 key 必须给出同一个答案 (钉住「只有一条梯子」)")
+    void listAndGetByKeyAgree() {
+        stub(FACTORY, ThresholdCategory.SALES, List.of());
+        stub(GLOBAL, ThresholdCategory.SALES,
+                List.of(row(GLOBAL, KEY, "0.10", ThresholdCategory.SALES)));
+        stubByKey(FACTORY, KEY, null);
+        stubByKey(GLOBAL, KEY, row(GLOBAL, KEY, "0.10", ThresholdCategory.SALES));
+
+        FactoryThreshold fromList = listSales(FACTORY).stream()
+                .filter(t -> KEY.equals(t.getThresholdKey())).findFirst().orElseThrow();
+        FactoryThreshold fromGet = controller.getByKey(FACTORY, KEY).getData();
+
+        assertThat(fromGet.getThresholdValue()).isEqualTo(fromList.getThresholdValue());
+        assertThat(fromGet.getInherited())
+                .as("⛔ 一个说继承、另一个说不存在 —— 这正是两份梯子漂开的长相")
+                .isEqualTo(fromList.getInherited());
     }
 }
