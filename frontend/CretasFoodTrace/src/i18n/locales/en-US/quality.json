@@ -351,7 +351,7 @@
     "confirmLogoutMessage": "Are you sure you want to logout?",
     "logout": "Logout",
     "helpMessage": "Please contact administrator if you have any questions",
-    "aboutMessage": "Cretas AI Agent\\nQI Version v1.0.0",
+    "aboutMessage": "Cretas AI Agent\\nQI Version v{{version}}",
     "version": "v1.0.0"
   },
   "scan": {

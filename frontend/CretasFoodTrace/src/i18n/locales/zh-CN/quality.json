@@ -352,7 +352,7 @@
     "confirmLogoutMessage": "确定要退出登录吗？",
     "logout": "退出登录",
     "helpMessage": "如有问题请联系管理员",
-    "aboutMessage": "白垩纪AI Agent\\n质检员版本 v1.0.0",
+    "aboutMessage": "白垩纪AI Agent\\n质检员版本 v{{version}}",
     "version": "v1.0.0"
   },
   "scan": {

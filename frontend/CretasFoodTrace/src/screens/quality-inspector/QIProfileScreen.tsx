@@ -21,12 +21,14 @@ type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import * as Application from 'expo-application';
 
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 import { useAuthStore } from '../../store/authStore';
 import { useLanguageStore, LANGUAGE_NAMES, type SupportedLanguage } from '../../store/languageStore';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
+const APP_VERSION = Application.nativeApplicationVersion;
 
 interface MenuItem {
   id: string;
@@ -140,8 +142,11 @@ export default function QIProfileScreen() {
         id: 'about',
         icon: 'information-circle-outline',
         label: t('profile.menu.about'),
-        value: t('profile.version'),
-        onPress: () => Alert.alert(t('profile.menu.about'), t('profile.aboutMessage')),
+        value: APP_VERSION ? `v${APP_VERSION}` : '—',
+        onPress: () => Alert.alert(
+          t('profile.menu.about'),
+          t('profile.aboutMessage', { version: APP_VERSION ?? '—' }),
+        ),
       },
     ],
   ];
