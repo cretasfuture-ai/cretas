@@ -46,6 +46,12 @@ describe('personal OA workbench contract', () => {
     expect(pending).toContain('该业务域正在接入统一 OA，当前仅可查看审批进度');
   });
 
+  it('opens an acted inventory adjustment on the stocktake evidence page', () => {
+    expect(acted).toContain("INVENTORY_ADJUSTMENT: `/warehouse/stocktakes?stocktakeId=${id}`");
+    expect(acted).toMatch(/if \(target\) \{[\s\S]{0,120}router\.push\(target\)/);
+    expect(acted).toContain('暂不支持跳转模块');
+  });
+
   it('keeps user-facing Chinese readable instead of accepting mojibake', () => {
     expect(acted).toContain('已处理');
     expect(copied).toContain('抄送我的');
