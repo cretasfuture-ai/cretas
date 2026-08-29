@@ -86,6 +86,37 @@ class UserAccountManagementTest {
         return r;
     }
 
+    @Test
+    @DisplayName("创建员工时在职开关为 true 会写入激活状态")
+    void createHonorsExplicitActiveStatus() {
+        CreateUserRequest r = request("new_worker");
+        r.setIsActive(true);
+        when(userRepository.countByUsernameIncludingDeleted("new_worker")).thenReturn(0L);
+
+        service.createUser("F006", r);
+
+        User saved = verifyAndReturnSavedUser();
+        assertTrue(saved.getIsActive(), "表单显示在职，创建后却不能登录");
+    }
+
+    @Test
+    @DisplayName("阴性对照：创建时没送在职状态仍默认未激活")
+    void createWithoutActiveStatusRemainsInactive() {
+        CreateUserRequest r = request("pending_worker");
+        when(userRepository.countByUsernameIncludingDeleted("pending_worker")).thenReturn(0L);
+
+        service.createUser("F006", r);
+
+        User saved = verifyAndReturnSavedUser();
+        assertFalse(saved.getIsActive());
+    }
+
+    private User verifyAndReturnSavedUser() {
+        var captor = org.mockito.ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        return captor.getValue();
+    }
+
     // ── R-1: 改名要真的落库 ────────────────────────────────────────────
 
     @Test

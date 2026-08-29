@@ -95,7 +95,8 @@ public class UserMapper {
         if (request.getEmployeeCode() != null && !request.getEmployeeCode().isBlank()) {
             user.setEmployeeCode(request.getEmployeeCode());
         }
-        user.setIsActive(false); // 默认未激活
+        // 员工表单的“在职”开关必须在创建路径生效；没送时仍保持原有的默认未激活。
+        user.setIsActive(Boolean.TRUE.equals(request.getIsActive()));
         return user;
     }
 
