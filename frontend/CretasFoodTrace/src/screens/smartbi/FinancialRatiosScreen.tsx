@@ -132,25 +132,31 @@ function mapBackendRatios(apiData: Record<string, unknown>): RatioCategory[] | n
   const r = ratios as Record<string, number>;
   if (Object.keys(r).length === 0) return null;
 
+  // 🔴 2026-08-29: 这里原来对**没匹配上**的比率 `return ratio;` —— 也就是保留
+  //    DEMO_CATEGORIES 里那个编出来的值, 而这条路径 usingDemo=false,
+  //    **连那条免责横幅都没有** ⇒ 接口只给一半时, 另一半是静默造假。
+  //    (今天接口根本不存在所以走不到; 一旦有人把它实现出来, 这就是活的。)
+  //    ⇒ 接口没给的那一条**直接丢掉**, ⛔ 不拿模板值顶。
+  //
+  // ⚠️ 挂账: `benchmark`(行业基准)仍然来自 DEMO_CATEGORIES, 而 good/warning/danger
+  //    这个判定完全建立在它上面。基准值是不是该由租户配置, 是产品问题, 不在这次改动里。
   return DEMO_CATEGORIES.map((cat) => ({
     ...cat,
-    ratios: cat.ratios.map((ratio) => {
+    ratios: cat.ratios.flatMap((ratio) => {
       // Try snake_case and camelCase lookups
       const key = ratio.name.toLowerCase().replace(/[^a-z]/g, '');
       const found = Object.entries(r).find(([k]) => k.toLowerCase().replace(/[^a-z]/g, '').includes(key.slice(0, 4)));
-      if (found) {
-        const newVal = found[1];
-        const status: FinancialRatio['status'] =
-          Math.abs(newVal - ratio.benchmark) / ratio.benchmark < 0.1
-            ? 'good'
-            : Math.abs(newVal - ratio.benchmark) / ratio.benchmark < 0.25
-            ? 'warning'
-            : 'danger';
-        return { ...ratio, value: newVal, status };
-      }
-      return ratio;
+      if (!found) return [];
+      const newVal = found[1] as number;
+      const status: FinancialRatio['status'] =
+        Math.abs(newVal - ratio.benchmark) / ratio.benchmark < 0.1
+          ? 'good'
+          : Math.abs(newVal - ratio.benchmark) / ratio.benchmark < 0.25
+          ? 'warning'
+          : 'danger';
+      return [{ ...ratio, value: newVal, status }];
     }),
-  }));
+  })).filter((cat) => cat.ratios.length > 0);
 }
 
 // Status badge colors (labels translated at render time)
