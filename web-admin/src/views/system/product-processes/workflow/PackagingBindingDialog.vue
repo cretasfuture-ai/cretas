@@ -30,7 +30,8 @@ export interface PackagingMaterialOption {
   quantityUnit?: string | null;
   priceUnit?: string | null;
   movingAvgPrice?: number | null;
-  unitPrice?: number | null;
+  /** RawMaterialTypeDTO 的未税采购参考价键；响应不会使用 unitPrice。 */
+  materialReferencePrice?: number | null;
   taxRate?: string | null;
   /**
    * 三级物料分类节点 id(后端 RawMaterialTypeDTO.classificationId ←
@@ -76,6 +77,24 @@ const form = reactive({
 const saving = reactive({ value: false });
 
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
+const positivePrice = (value?: number | null): value is number => (
+  value != null && Number.isFinite(Number(value)) && Number(value) > 0
+);
+const effectivePrice = computed(() => {
+  const movingAvgPrice = selectedMaterial.value?.movingAvgPrice;
+  if (positivePrice(movingAvgPrice)) {
+    return { value: Number(movingAvgPrice), source: '移动平均库存成本' as const };
+  }
+  const referencePrice = selectedMaterial.value?.materialReferencePrice;
+  if (positivePrice(referencePrice)) {
+    return { value: Number(referencePrice), source: '未税采购参考价' as const };
+  }
+  return null;
+});
+const missingEffectivePrice = computed(() => selectedMaterial.value != null && effectivePrice.value == null);
+const automaticPriceLabel = computed(() => effectivePrice.value
+  ? `¥${effectivePrice.value.value.toFixed(4)}`
+  : '保存前需先配置有效价格');
 
 /** 与 index.vue 的 recipeUnitForMaterial(category='PACKAGING') 同规则: 缺档案单位兜底 pcs。 */
 const quantityUnit = computed(() => (
@@ -154,6 +173,9 @@ async function submit() {
   if (form.quantity == null || !Number.isFinite(form.quantity) || form.quantity <= 0) {
     return ElMessage.warning('请填写大于 0 的每份成品包材用量');
   }
+  if (!effectivePrice.value) {
+    return ElMessage.warning('该包材缺少有效移动平均库存成本或未税采购参考价，暂不能保存');
+  }
   const missingFactor = form.substituteMaterialTypeIds.find((materialTypeId) => {
     if (!substituteNeedsExplicitFactor(materialTypeId)) return false;
     const factor = Number(form.substituteFactors[materialTypeId]);
@@ -172,9 +194,7 @@ async function submit() {
       standardQuantity: form.quantity,
       yieldRate: 100,
       unit: quantityUnit.value,
-      unitPrice: Number.isFinite(Number(selectedMaterial.value?.movingAvgPrice ?? selectedMaterial.value?.unitPrice))
-        ? Number(selectedMaterial.value?.movingAvgPrice ?? selectedMaterial.value?.unitPrice)
-        : 0,
+      unitPrice: effectivePrice.value.value,
       taxRate: selectedMaterial.value?.taxRate === 'TAX_9' ? 9 : selectedMaterial.value?.taxRate === 'TAX_13' ? 13 : 0,
       materialCategory: 'PACKAGING',
       sortOrder: props.row?.sortOrder ?? 0,
@@ -247,6 +267,21 @@ async function submit() {
         <el-input :model-value="quantityUnitLabel" disabled />
         <div class="form-tip">单位从物料档案自动继承且只读；如不正确，请先维护物料档案。</div>
       </el-form-item>
+      <el-form-item label="自动单价">
+        <div class="automatic-price" data-testid="packaging-automatic-price">
+          <el-input :model-value="automaticPriceLabel" disabled />
+          <el-tag v-if="effectivePrice" :type="effectivePrice.source === '移动平均库存成本' ? 'success' : 'warning'">
+            {{ effectivePrice.source }}
+          </el-tag>
+        </div>
+      </el-form-item>
+      <el-alert
+        v-if="missingEffectivePrice"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="该包材缺少有效移动平均库存成本或未税采购参考价，暂不能保存"
+      />
       <el-form-item label="替代包材（可选）">
         <el-select
           v-model="form.substituteMaterialTypeIds"
@@ -316,6 +351,8 @@ async function submit() {
 <style scoped>
 .form-tip { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.4; }
 .unit-suffix { min-width: 40px; color: var(--el-text-color-regular); font-weight: 600; }
+.automatic-price { display: flex; align-items: center; gap: 8px; width: 100%; }
+.automatic-price :deep(.el-input) { flex: 1; }
 .substitute-factors { display: grid; gap: 6px; width: 100%; margin-top: 8px; }
 .substitute-factor-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .substitute-factor-row span { overflow: hidden; color: var(--el-text-color-regular); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
