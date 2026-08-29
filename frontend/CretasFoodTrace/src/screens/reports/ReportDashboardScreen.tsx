@@ -596,7 +596,9 @@ export default function ReportDashboardScreen() {
                         <Text style={[styles.laborValue, { color: '#795548' }]}>
                           {laborCostAnalysis.workerCount ?? 0}
                         </Text>
-                        <Text style={styles.laborLabel}>工人数</Text>
+                        {/* ⛔ 原来叫「工人数」，读起来是这家工厂有几个人（F006 有 22 个）。
+                            它其实是**这段期间有计件记录的人数**。改成不会被误读的名字。 */}
+                        <Text style={styles.laborLabel}>计件人数</Text>
                       </View>
                       <View style={styles.laborItem}>
                         <Text style={[styles.laborValue, { color: '#2196F3' }]}>
@@ -606,13 +608,18 @@ export default function ReportDashboardScreen() {
                       </View>
                       <View style={styles.laborItem}>
                         <Text style={[styles.laborValue, { color: '#4CAF50' }]}>
-                          {Number(laborCostAnalysis.averageEfficiency ?? 0).toFixed(1)}
+                          {laborCostAnalysis.averageEfficiency == null
+                            ? '—'
+                            : Number(laborCostAnalysis.averageEfficiency).toFixed(1)}
                         </Text>
                         <Text style={styles.laborLabel}>件/小时</Text>
                       </View>
                       <View style={styles.laborItem}>
                         <Text style={[styles.laborValue, { color: '#FF9800' }]}>
-                          ¥{Number(laborCostAnalysis.costPerPiece ?? 0).toFixed(2)}
+                          {/* ⛔ 0 件时单件成本没有定义 —— 「¥0.00」读起来是「做一件不要钱」。 */}
+                          {laborCostAnalysis.costPerPiece == null
+                            ? '—'
+                            : `¥${Number(laborCostAnalysis.costPerPiece).toFixed(2)}`}
                         </Text>
                         <Text style={styles.laborLabel}>单件成本</Text>
                       </View>

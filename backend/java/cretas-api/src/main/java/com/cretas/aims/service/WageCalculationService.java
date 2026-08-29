@@ -1066,15 +1066,20 @@ public class WageCalculationService {
         analysis.put("totalPieceCount", totalPieceCount != null ? totalPieceCount : 0);
 
         // 4. 单件人工成本
-        BigDecimal costPerPiece = BigDecimal.ZERO;
+        // 🔴 2026-08-29 真机走查: F006 的人效概览显示「¥0.00 单件成本 / 0.0 件每小时」,
+        //    而库里 wage_calculation 与 piece_rate_rules **都是 0 条** —— 这家工厂根本没启用计件。
+        //    0 件时的单件成本**没有定义**, 兜成 ¥0 之后屏上读起来是「做一件不要钱」。
+        //    ⚠️ 与计数类区别开: totalPieceCount / workerCount 的 0 是**合法读数**(确实没人计件),
+        //    所以它们照旧兜 0; 由它们做分母的那几个派生量才必须是 null。
+        BigDecimal costPerPiece = null;
         if (totalPieceCount != null && totalPieceCount > 0 && totalWage != null) {
             costPerPiece = totalWage.divide(BigDecimal.valueOf(totalPieceCount), 4, RoundingMode.HALF_UP);
         }
         analysis.put("costPerPiece", costPerPiece);
 
-        // 5. 平均效率
+        // 5. 平均效率 —— 没有记录时 AVG 返 null, ⛔ 不兜 0(「效率 0%」是个真实读数)
         BigDecimal avgEfficiency = payrollRecordRepository.avgEfficiencyByPeriod(factoryId, periodStart, periodEnd);
-        analysis.put("averageEfficiency", avgEfficiency != null ? avgEfficiency : BigDecimal.ZERO);
+        analysis.put("averageEfficiency", avgEfficiency);
 
         // 6. 按效率评级统计
         List<Object[]> ratingStats = payrollRecordRepository.countByEfficiencyRating(factoryId, periodStart, periodEnd);
@@ -1108,16 +1113,16 @@ public class WageCalculationService {
         long workerCount = workerDailyEfficiencyRepository.countWorkersByDate(factoryId, periodEnd);
         analysis.put("workerCount", workerCount);
 
-        // 9. 人均产出
-        BigDecimal avgPiecesPerWorker = BigDecimal.ZERO;
+        // 9. 人均产出 —— 分母是 workerCount, 为 0 时算不出来。⛔ 不兜 0。
+        BigDecimal avgPiecesPerWorker = null;
         if (workerCount > 0 && totalPieceCount != null) {
             avgPiecesPerWorker = BigDecimal.valueOf(totalPieceCount)
                     .divide(BigDecimal.valueOf(workerCount), 2, RoundingMode.HALF_UP);
         }
         analysis.put("avgPiecesPerWorker", avgPiecesPerWorker);
 
-        // 10. 人均工资
-        BigDecimal avgWagePerWorker = BigDecimal.ZERO;
+        // 10. 人均工资 —— 同上。
+        BigDecimal avgWagePerWorker = null;
         if (workerCount > 0 && totalWage != null) {
             avgWagePerWorker = totalWage.divide(BigDecimal.valueOf(workerCount), 2, RoundingMode.HALF_UP);
         }
