@@ -50,6 +50,11 @@ describe('finished-process input quantity (客户 2026-07-30)', () => {
     expect(source).toContain('upstreamAllowedSkuIds');
   });
 
+  it('keeps server-authorized rework even though its dedicated SKU differs from the normal upstream port', () => {
+    expect(source).toContain('if (item.isRework === true) return true;');
+    expect(source).toContain('item.isRework === true || sourceMatchesSku(item.productTypeId, src)');
+  });
+
   it('never shows a nameless 半成品 option the operator cannot tell apart', () => {
     expect(source).toContain('未命名半成品(${item.intermediateBatchNo})');
     expect(source).not.toContain("item.productTypeName || item.processName || '半成品'");

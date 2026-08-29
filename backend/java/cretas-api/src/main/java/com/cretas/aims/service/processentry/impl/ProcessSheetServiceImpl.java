@@ -1248,7 +1248,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING");
         }
 
-        applyWorkflowInputPorts(factoryId, descriptor, req, true);
+        applyWorkflowInputPorts(factoryId, config.getProductTypeId(), descriptor, req, true);
 
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputs = workflowOutputs(descriptor);
         Map<String, WorkflowClerkSheetConfigDTO.PortDescriptor> outputsById = new LinkedHashMap<>();
@@ -2105,7 +2105,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withSeverity("BLOCKING")
                     .withHintTarget("Workflow");
         }
-        applyWorkflowInputPorts(factoryId, desc, req, false);
+        applyWorkflowInputPorts(factoryId, config.getProductTypeId(), desc, req, false);
 
         Map<String, com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor> byPortId =
                 new HashMap<>();
@@ -3733,7 +3733,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         String outputUnit = requireWorkflowPortUnit(selectedOutput.getUnit(), "产出");
 
         // 与 ProductWorkProcess 路径同语义: 请求单位若提供则必须匹配端口, 否则按端口单位归一化。
-        applyWorkflowInputPorts(factoryId, descriptor, req, false);
+        applyWorkflowInputPorts(factoryId, config.getProductTypeId(), descriptor, req, false);
         assertConfiguredUnit(factoryId, req.getOutputUnit(), outputUnit, "产出");
         assertConfiguredUnit(factoryId, req.getUnit(), outputUnit, "产出");
 
@@ -3808,6 +3808,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      */
     private void applyWorkflowInputPorts(
             String factoryId,
+            String targetProductTypeId,
             com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor,
             ProcessSheetRowRequest req,
             boolean requireCompleteSelections) {
@@ -3892,7 +3893,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             for (ProcessSheetRowRequest.UpstreamRef input : req.getUpstreamSources()) {
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
-                String selectedSkuId = resolveAllowedInputSku(port, input.getSkuId());
+                String selectedSkuId = resolveAllowedUpstreamSku(
+                        factoryId, targetProductTypeId, req, port, input);
                 assertNonNegativeWorkflowInput(input.getFeedQuantityKg());
                 input.setSkuId(selectedSkuId);
                 input.setWorkflowPortId(port.getWorkflowPortId());
@@ -3974,6 +3976,44 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("实际投入");
         }
         return selectedSkuId;
+    }
+
+    /**
+     * 回料是发布 Workflow 产出的独立 SKU，不会等于靠前工序端口的普通半成品 SKU。
+     * 普通 SFI 仍走端口白名单；仅当库存真值标记为回料时，复用工厂级 picker 的同一
+     * 产品族、阶段与纯度矩阵判定。这样 UI 放行和保存期授权不会出现两套口径。
+     */
+    private String resolveAllowedUpstreamSku(
+            String factoryId,
+            String targetProductTypeId,
+            ProcessSheetRowRequest req,
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port,
+            ProcessSheetRowRequest.UpstreamRef input) {
+        if (!input.isSemiFinished() || input.getSourceBatchNumber() == null
+                || input.getSourceBatchNumber().isBlank()) {
+            return resolveAllowedInputSku(port, input.getSkuId());
+        }
+        SemiFinishedInventory source = wipRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                        factoryId, input.getSourceBatchNumber())
+                .orElse(null);
+        if (source == null || !Boolean.TRUE.equals(source.getIsRework())) {
+            return resolveAllowedInputSku(port, input.getSkuId());
+        }
+        boolean authorized = wipInventoryService
+                .listWipByFactory(factoryId, targetProductTypeId, req.getProcessOrder())
+                .stream()
+                .anyMatch(row -> Boolean.TRUE.equals(row.getIsRework())
+                        && Objects.equals(row.getIntermediateBatchNo(), input.getSourceBatchNumber())
+                        && Objects.equals(row.getProductTypeId(), source.getProductTypeId()));
+        if (!authorized) {
+            throw new BusinessException(409, "该回料不符合目标产品的纯度或工序要求")
+                    .withCode("PROCESS_SHEET_REWORK_INPUT_NOT_AUTHORIZED")
+                    .withHint("请刷新报工页面，并从当前工序显示的可用回料中选择")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("实际投入");
+        }
+        return source.getProductTypeId();
     }
 
     private static String requireWorkflowPortUnit(String unit, String side) {

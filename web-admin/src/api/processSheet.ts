@@ -677,6 +677,10 @@ export interface SemiFinishedStockItem {
    * 诚实 null: 未配每盒克重 → null (前端据此拦截盒装投料, 禁止臆造)。
    */
   gramsPerUnit?: number | null;
+  /** 回料由后端按目标产品纯度矩阵过滤；前端不得再用普通端口 SKU 把已放行回料删掉。 */
+  isRework?: boolean | null;
+  /** picker 上下文中的纯度闸判定状态，例如 ENFORCED。 */
+  reworkPurityStatus?: string | null;
 }
 
 /**
