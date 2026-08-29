@@ -339,7 +339,7 @@ async function handleSubmit() {
     const payload: Record<string, any> = {
       fullName: formData.fullName,
       username: formData.username,
-      phone: formData.phone,
+      phone: formData.phone.trim() || undefined,
       roleCode: formData.role,
       employeeCode: formData.employeeCode,
       department: formData.department || undefined,

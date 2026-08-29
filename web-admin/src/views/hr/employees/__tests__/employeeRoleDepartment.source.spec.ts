@@ -71,6 +71,11 @@ describe('员工档案的角色与部门显示', () => {
         );
     });
 
+    it('非必填手机号为空时不向后端发送空字符串', () => {
+        expect(source).toContain('phone: formData.phone.trim() || undefined,');
+        expect(source).not.toContain('phone: formData.phone,');
+    });
+
     it('对照: 私有表原本就有的角色仍然正确', () => {
         expect(enumLabel('quality_inspector')).toBe('质检员');
         expect(enumLabel('warehouse_manager')).toBe('仓储主管');
