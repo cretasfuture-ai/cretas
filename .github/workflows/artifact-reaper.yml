@@ -1,0 +1,115 @@
+# 定时删掉**已过期**的 Actions 制品，把它们仍然占着的存储配额立刻释放出来。
+#
+# ## 为什么需要它（2026-08-29 实测）
+#
+# 制品存储配额打满：
+#
+#     Failed to CreateArtifact: Artifact storage quota has been hit.
+#     Unable to upload any new artifacts. Usage is recalculated every 6-12 hours.
+#
+# 当时 10.28 GiB 里 **10.11 GiB 是已过期的**（89 个），只是还占着位置。
+#
+# ⚠️ **不是保留期设太长** —— `java-artifact.yml` 已经是 `retention-days: 1`，
+#    `web-dist.yml` 是 3。真因是过期制品要等 GitHub 每 6–12 小时重算才释放，
+#    而每次合并产出 169 MiB，攒得比释放快。
+#
+# ⛔ GitHub **没有**「过期就立刻删」这个设置。Settings → Actions → General 里那个
+#    「Artifact and log retention」只管保留期，而我们已经在 workflow 里写了更短的值。
+#    ⇒ 只能自己删，就是这个文件。
+#
+# ## 它连带修的是什么
+#
+# 配额一满，所有带 `upload-artifact` 的闸会一起变红 —— 而它们守的东西各自都是绿的。
+# `java-full-gate` 因此连红三个 PR，更糟的是它后面那两步「判定」被 skip，
+# **闸连自己的结论都说不出来**。#370 已经让诊断制品上传失败不再判死闸；
+# 这个文件补另一半：**让配额不要再满**。
+#
+# ## 安全性
+#
+# 只删 `expired == true` 的。那些制品 GitHub 已经判定过期、**下载不到了**。
+# ⛔ 绝不碰未过期的 —— 部署侧要按 `cretas-java-<sha>` / `cretas-web-<sha>` 取回它们。
+# 脚本对每一条在发 DELETE 之前**再检查一次** `expired`，即使列表筛错了也删不到活的。
+
+name: Artifact reaper
+
+on:
+  schedule:
+    # 🔴 ⛔ 不要用整点。GitHub 明确说过整点排队的定时任务在高负载时最容易被延迟甚至丢弃，
+    #    本仓 2026-08-27 实测错过的三次 tick 全都在整点（见 scheduler-canary.yml）。
+    # 每 3 小时一次：配额重算周期是 6–12 小时，比它快一档就够了。
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只列出会删哪些，不真的删'
+        type: boolean
+        default: false
+
+concurrency:
+  group: artifact-reaper
+  cancel-in-progress: false
+
+# 🔴 本仓的 default_workflow_permissions 是 **read** ——
+#    不显式写 actions: write，DELETE 会 403，而那会长成「删除失败」而不是「没权限」。
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  reap:
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # ⛔ 这里**不用** `actions/setup-python` —— 它在这台自建 macOS runner 上必失败
+      #    （把 /Users/runner 写死，而本机 /Users 不可写）。本脚本纯标准库、不装任何包。
+      #    并且把用的是哪个解释器打出来：「这一轮的读数是在哪个解释器上量的」必须能从日志读出来。
+      - name: 清理过期制品
+        id: reap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -e
+          PY=""
+          for c in python3 python python3.12 python3.11 python3.10; do
+            if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+          done
+          if [ -z "$PY" ]; then
+            echo "✗ 这台 runner 上一个 python 都找不到 —— 本次没量到"
+            echo "rc=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "PYTHON_USED=$PY ($("$PY" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])'))"
+          DRY=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          set +e
+          "$PY" scripts/ci/reap_expired_artifacts.py --repo "$GITHUB_REPOSITORY" $DRY \
+            | tee /tmp/reaper.log
+          echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # 三态（本仓硬约束 4）：rc=2「没量到」必须与 rc=1「有问题」用不同措辞 ——
+      # 否则一个连不上 API 的跑批会安静地天天绿，而它一个制品都没看过。
+      - name: 判定 —— rc=2 这次没量到
+        if: steps.reap.outputs.rc == '2'
+        run: |
+          echo "::error title=制品清理没量到::拿不到制品列表, 或一个制品都没读到。本次读数作废, ⛔ 不代表配额没问题。"
+          exit 1
+
+      - name: 判定 —— rc=1 有删除失败
+        if: steps.reap.outputs.rc == '1'
+        run: |
+          echo "::error title=有过期制品删不掉::见上方清单。若是 403, 先确认本 workflow 的 permissions 里有 actions: write。"
+          exit 1
+
+      - name: 判定 —— 退出码不在三态里
+        if: >-
+          steps.reap.outputs.rc != '0'
+          && steps.reap.outputs.rc != '1'
+          && steps.reap.outputs.rc != '2'
+        run: |
+          echo "::error title=退出码不在三态里::rc=${{ steps.reap.outputs.rc }}"
+          echo "三态判定只列了 0/1/2, 任何第四种退出码都会两条判定都不命中 ⇒ 静默落进绿。"
+          exit 1
