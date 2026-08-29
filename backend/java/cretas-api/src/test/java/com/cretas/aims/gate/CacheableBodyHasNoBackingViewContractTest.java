@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 那一类。它拦得住已经发生过的那种写法，拦不住所有可能。
  * 真正的兜底是 {@link CacheableResultRoundTripTest} 里的往返，以及部署后打一次那个接口。
  */
-class CacheableBodyHasNoBackingViewTest {
+class CacheableBodyHasNoBackingViewContractTest {
 
     private static final Path MAIN = Paths.get("src/main/java/com/cretas/aims");
 

@@ -29,6 +29,12 @@ jobs:
 
       - name: Upload audit results
         if: failure()
+        # ⛔ 诊断制品上传失败不许判死这道闸 —— 它是给人事后查的, 不是判据本身。
+        # 2026-08-29 实测: GitHub 制品配额打满
+        #   "Failed to CreateArtifact: Artifact storage quota has been hit."
+        # 于是 java-full-gate 连续三个 PR 报 fail, 而「跑全量」和「棘轮」两步都是绿的,
+        # 更糟的是它后面那两步「判定」被 skip 掉 —— **这道闸说不出自己的结论**。
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: tool-isolation-audit-results

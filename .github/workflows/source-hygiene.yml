@@ -92,3 +92,57 @@ jobs:
         run: |
           echo "::error title=源码里有字面 NUL 字节::这些文件会被 grep 整份跳过, 所有源码级闸对它们失明。见上方清单。"
           exit 1
+
+      # ── 制品上传策略 ────────────────────────────────────────────────
+      #
+      # 2026-08-29: GitHub 制品配额打满
+      #   "Failed to CreateArtifact: Artifact storage quota has been hit."
+      # 于是 java-full-gate 连续三个 PR 报 fail, 而「跑全量」「棘轮」两步全绿,
+      # 且它后面那两步「判定」被 skip —— **这道闸连自己的结论都说不出来**。
+      #
+      # ⚠️ 这个红叉会训练人「java-full-gate 又红了, 不用看」。
+      #    下次它因为**真的有新增红**而红时, 同样没人看。
+      #
+      # 本闸两个方向都守: 诊断制品必须带 continue-on-error(它不是判据),
+      # 产物制品**不许**带(那个制品就是产出本身, 传不上去就是真失败)。
+      #
+      # 与上面那道 NUL 闸同款: 纯标准库、三态、不装任何包。
+      - name: 扫描制品上传策略
+        id: artifact_policy
+        run: |
+          set -e
+          PY=""
+          for c in python3 python python3.12 python3.11 python3.10; do
+            if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+          done
+          if [ -z "$PY" ]; then
+            echo "✗ 这台 runner 上一个 python 都找不到 —— 本次没量到"
+            echo "rc=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "PYTHON_USED=$PY"
+          set +e
+          "$PY" scripts/ci/check_artifact_upload_policy.py --repo . | tee /tmp/artifact_policy.log
+          echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 判定 —— rc=2 制品策略这次没量到
+        if: steps.artifact_policy.outputs.rc == '2'
+        run: |
+          echo "::error title=制品上传策略没量到::一个 upload-artifact 步骤都没扫到, 或读不到 workflows 目录。本次读数作废。"
+          exit 1
+
+      - name: 判定 —— rc=1 制品上传策略不合规
+        if: steps.artifact_policy.outputs.rc == '1'
+        run: |
+          echo "::error title=制品上传策略不合规::诊断制品上传失败不该判死闸; 产物制品上传失败必须判死闸。见上方清单。"
+          exit 1
+
+      - name: 判定 —— 两个扫描都不是 0/1/2
+        if: >-
+          (steps.scan.outputs.rc != '0' && steps.scan.outputs.rc != '1' && steps.scan.outputs.rc != '2')
+          || (steps.artifact_policy.outputs.rc != '0' && steps.artifact_policy.outputs.rc != '1' && steps.artifact_policy.outputs.rc != '2')
+        run: |
+          echo "::error title=退出码不在三态里::scan=${{ steps.scan.outputs.rc }} artifact_policy=${{ steps.artifact_policy.outputs.rc }}"
+          echo "三态判定只列了 0/1/2, 任何第四种退出码都会两条判定都不命中 ⇒ 静默落进绿。"
+          exit 1
