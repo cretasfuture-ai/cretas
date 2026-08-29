@@ -165,6 +165,19 @@ public class SalesServiceImpl implements SalesService {
         return OverReceiveLimit.unlimited(OverReceiveLimit.SOURCE_SALES_UNCONFIGURED);
     }
 
+    /**
+     * 超发被拦时的留痕（2026-08-29）。
+     *
+     * <p>可选注入：本类有大量 legacy 单测走 4/8 参数构造器，那些上下文没有这个 bean。
+     * null 时不留痕，⛔ 但 409 照抛 —— 闸与留痕是两件事，缺一个不该带垮另一个。
+     *
+     * <p>🔴 它必须是<b>独立的 bean</b>：留痕要跑 {@code REQUIRES_NEW} 才能在
+     * {@code warehouseConfirmDelivery} 回滚之后活下来，而 Spring 的事务是代理生效的
+     * —— 写成本类的私有方法，propagation 一个字都不起作用且不会报错。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.SalesExceptionService salesExceptionService;
+
     /** HACCP 放行闸（可选注入，见 assertHaccpReleaseAllowed）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.foodsafety.HaccpMonitoringRecordRepository haccpMonitoringRecordRepository;
@@ -3528,7 +3541,18 @@ public class SalesServiceImpl implements SalesService {
                     }
                     // ⚠️ 校验在【写入之前】—— 失败要 fail-fast, 不要先改内存再抛,
                     //    那会留下一个已经被改脏的实体等着事务回滚(doomed-tx)。
-                    assertWithinOverShipCap(item, itemIdKey, actual, overShipLimit);
+                    //
+                    // 🔴 留痕在【抛出之前】: 这道闸原本只拦不留痕, 超限抛 409 之后没有
+                    //    任何记录说明「谁想超发多少、被哪条上限拦下」。recordBlockedOverShip
+                    //    走独立事务(REQUIRES_NEW)提交, 所以外层这次回滚带不走它。
+                    //    ⛔ 它永不抛异常 —— 留痕失败不许把 409 变成 500。
+                    try {
+                        assertWithinOverShipCap(item, itemIdKey, actual, overShipLimit);
+                    } catch (BusinessException capViolation) {
+                        recordBlockedOverShipAttempt(factoryId, record, item, actual,
+                                overShipLimit, capViolation, userId);
+                        throw capViolation;
+                    }
                     if (item.getDeliveredQuantity() != null
                             && actual.compareTo(item.getDeliveredQuantity()) != 0) {
                         log.info("仓库 confirm 调整数量: deliveryId={}, itemId={}, plannedQty={} → actualQty={}",
@@ -3611,6 +3635,55 @@ public class SalesServiceImpl implements SalesService {
                         + " 或联系业务员追加订单量后再发。"
                         + " 若本厂应当允许发更多, 在「系统设置 → 业务阈值配置 → 销售」调高发货超发上限。")
                 .withHintTarget("actualQuantities");
+    }
+
+    /**
+     * 给一次<b>被拦下的</b>超发尝试留痕 —— 这道闸此前只拦不留痕。
+     *
+     * <h2>⛔ 本方法永不抛异常</h2>
+     * 调用点在 {@code catch (BusinessException)} 里、紧接着就要把那个 409 重新抛出去。
+     * 如果留痕失败能抛出来，仓管看到的就从
+     * 「实发数量超出超发上限，最大可发 2.2 盒」（可执行）
+     * 变成「服务器内部错误」（不可执行）——<b>而发货本来就该被拒绝，结果没变，
+     * 变的只是用户还能不能知道为什么。</b>
+     * ⇒ 失败在 {@code SalesExceptionServiceImpl} 内部被吞掉并打 ERROR，
+     * 这里再兜一层，防止依赖注入 / 代理层自己出问题。
+     *
+     * <h2>事务边界</h2>
+     * {@code SalesExceptionService} 是<b>另一个 Spring bean</b>，
+     * 其 {@code persistAttempt} 标了 {@code REQUIRES_NEW}。
+     * ⛔ 不能写成本类的私有方法直接 save —— 本方法所在的事务下一行就抛 409 注定回滚，
+     * 同事务写入<b>什么都留不下来</b>，而且不会有任何报错提示你它没留下。
+     *
+     * <p>{@code salesExceptionService} 是<b>可选注入</b>：本类有大量 legacy 单测用
+     * 4/8 参数构造器直接 new，那些上下文里没有这个 bean。null 时静默跳过留痕，
+     * ⛔ 但绝不跳过 409（闸本身与留痕是两件事）。
+     */
+    private void recordBlockedOverShipAttempt(String factoryId, SalesDeliveryRecord record,
+            SalesDeliveryItem item, BigDecimal actual, OverReceiveLimit limit,
+            BusinessException capViolation, Long userId) {
+        if (salesExceptionService == null) {
+            return;
+        }
+        // 只给【超发上限】这一条留痕。⚠️ 上面那个 catch 抓的是 BusinessException,
+        // 日后 assertWithinOverShipCap 若长出第二种拒绝理由, 不该被记成超发。
+        if (!"DELIVERY_QUANTITY_EXCEEDS_OVER_SHIP_CAP".equals(capViolation.getErrorCode())) {
+            return;
+        }
+        try {
+            BigDecimal rate = (limit == null || limit.isUnlimited()) ? null : limit.rate();
+            String source = limit == null ? "limit-missing" : limit.source();
+            BigDecimal maxAllowed = (limit == null || item == null)
+                    ? null : limit.maxAllowed(item.getDeliveredQuantity());
+            salesExceptionService.recordBlockedOverShip(
+                    factoryId, record, item, actual, rate, source, maxAllowed, userId);
+        } catch (Exception e) {
+            log.error("SALES_EXCEPTION_RECORD_FAILED(caller): factoryId={}, deliveryId={}, itemId={}, "
+                            + "本次超发尝试【没有留下记录】—— 发货仍按 409 拒绝, 结果不受影响",
+                    factoryId,
+                    record == null ? null : record.getId(),
+                    item == null ? null : item.getId(), e);
+        }
     }
 
     /**
@@ -5248,11 +5321,21 @@ public class SalesServiceImpl implements SalesService {
      * 取整与 {@link com.cretas.aims.entity.inventory.PurchaseOrderItem#getLineAmountWithTax()}
      * 及采购侧助手一致: 行级 {@code setScale(2, HALF_UP)}, 税率除法 6 位 HALF_UP。
      *
-     * <p>⚠️ 折扣: 订单级 {@code discountAmount} 不参与本式 —— 它是<b>整单</b>折扣,
-     * 无法按发货行摊。整单一次发完时与 {@code order.getPayableAmount()} 的差额即该折扣,
-     * <b>分批发货下的折扣分摊是未决问题</b>, 见 PR 说明。
+     * <p>折扣: 订单级 {@code discountAmount} 按本次发货的<b>未税金额占订单未税总额的比例</b>
+     * 摊到本次挂账上，口径与取整见 {@link #orderDiscountShareForShipment}。
+     * 2026-08-29 之前它<b>完全不参与</b>本式 —— 有折扣的订单会把应收多记整整一个折扣额。
      */
     private BigDecimal taxInclusiveShippedValue(SalesOrder order, SalesDeliveryRecord record) {
+        BigDecimal grossOfDiscount = taxInclusiveShippedValueBeforeDiscount(order, record);
+        BigDecimal discountShare = orderDiscountShareForShipment(order, record);
+        if (discountShare.signum() == 0) {
+            return grossOfDiscount;
+        }
+        return grossOfDiscount.subtract(discountShare);
+    }
+
+    /** 折扣<b>之前</b>的本次发货价税合计 —— 原 {@code taxInclusiveShippedValue} 的算式，逐字未改。 */
+    private BigDecimal taxInclusiveShippedValueBeforeDiscount(SalesOrder order, SalesDeliveryRecord record) {
         if (record == null || record.getItems() == null || record.getItems().isEmpty()) {
             return record != null && record.getTotalAmount() != null
                     ? record.getTotalAmount() : BigDecimal.ZERO;
@@ -5283,5 +5366,157 @@ public class SalesServiceImpl implements SalesService {
             total = total.add(net.multiply(multiplier).setScale(2, java.math.RoundingMode.HALF_UP));
         }
         return total;
+    }
+
+    /** 本次发货的<b>未税</b>金额 —— 折扣摊派的分子。空行时退回发货单头额（与含税式同一降级）。 */
+    private BigDecimal netShippedValue(SalesDeliveryRecord record) {
+        if (record == null) {
+            return BigDecimal.ZERO;
+        }
+        if (record.getItems() == null || record.getItems().isEmpty()) {
+            return record.getTotalAmount() != null ? record.getTotalAmount() : BigDecimal.ZERO;
+        }
+        BigDecimal net = BigDecimal.ZERO;
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getUnitPrice() == null || item.getDeliveredQuantity() == null) {
+                continue;
+            }
+            net = net.add(item.getDeliveredQuantity().multiply(item.getUnitPrice())
+                    .setScale(2, java.math.RoundingMode.HALF_UP));
+        }
+        return net;
+    }
+
+    /**
+     * 订单级折扣摊到<b>本次发货</b>的份额。
+     *
+     * <h2>选了哪种口径，为什么</h2>
+     * <b>按发货的未税金额占订单未税总额的比例摊</b>。
+     * 依据不是「最常见」，而是本实体自己已有的权威口径:
+     * {@code SalesOrder.getPayableAmount() = totalAmount(未税) − discountAmount + taxAmount}
+     * —— 折扣是<b>扣在未税额上</b>的一笔平摊减项，且<b>不影响税额</b>。
+     * ⇒ 分母只能是未税总额；用含税额当分母会让整单发完时摊出来的总和 ≠ discountAmount。
+     *
+     * <p>自洽判据（也是本方法唯一值得记住的一条）:
+     * <b>整单一次发完时，挂账金额必须恰好等于 {@code order.getPayableAmount()}。</b>
+     * 2026-08-29 之前不成立 —— 折扣完全不参与，应收整整多记一个折扣额。
+     *
+     * <h2>🔴 取整误差: 选了【累计摊派】，⛔ 不是「最后一批兜底」也不是「逐批 HALF_UP」</h2>
+     * <pre>
+     *   已摊(含本次) = round(discount × min(累计发货未税 / 订单未税, 1), 2)
+     *   已摊(本次前) = round(discount × min(先前发货未税 / 订单未税, 1), 2)
+     *   本次份额     = 已摊(含本次) − 已摊(本次前)
+     * </pre>
+     * 三种做法的差别，必须表态:
+     * <ul>
+     *   <li><b>逐批 HALF_UP</b>（各批独立四舍五入）: Σ 各批份额 <b>不等于</b> discountAmount，
+     *       差几分。整单发完后应收合计 ≠ 应付额，财务对账每次都要解释那几分。⛔ 不选。</li>
+     *   <li><b>最后一批兜底</b>（末批吸收全部残差）: 口径本身没问题，
+     *       但它<b>要求在挂账那一刻知道「这是不是最后一批」</b>，而那是<b>未来的信息</b> ——
+     *       订单可以长期只发一半、可以中途取消、可以追加。
+     *       猜错的代价是把残差记到一个并非末批的批次上，之后再也无法更正。
+     *       <b>一条需要预知未来才能执行的规则，不是可实现的规则。</b>⛔ 不选。</li>
+     *   <li><b>累计摊派</b>（本实现）: 只用已经发生的事实。整单发完时
+     *       累计发货未税 == 订单未税 ⇒ 累计已摊 == round(discount, 2) == discountAmount，
+     *       <b>残差自动归零，不需要知道哪一批是最后一批</b>；
+     *       单批与其等比份额的偏差 ≤ 0.01。✅ 选它。</li>
+     * </ul>
+     *
+     * <h2>⛔ 本方法诚实的降级（一律返回 0，不猜）</h2>
+     * <ul>
+     *   <li>无折扣 / 折扣 ≤ 0 → 0。<b>这一格保证了本次改动对生产存量是零影响</b>:
+     *       实测 63 张订单 0 张用订单级折扣，全部走这一分支，
+     *       连 {@code findBySalesOrderId} 那次查询都不会发生。</li>
+     *   <li>订单未税总额为 null 或 ≤ 0 → 0 + WARN。没有分母就没有比例，
+     *       ⛔ 不兜底成「全摊到本次」——那会把「不知道」变成一个很有说服力的数。</li>
+     * </ul>
+     *
+     * <h2>⚠️ 本方法<b>不</b>处理的（显式登记，不是漏了）</h2>
+     * <ul>
+     *   <li><b>退货冲回</b>: 已发货后退回时，先前那一批的折扣份额不会被本方法退回来。
+     *       退货的应收冲销是另一条路径，本方法只管「发出去那一刻挂多少」。</li>
+     *   <li><b>超发</b>: {@code min(比例, 1)} 把折扣封顶在 discountAmount，
+     *       超发的部分<b>不再享受折扣</b>。这是有意的 —— 折扣是整单谈定的一笔钱，
+     *       多发的货没有理由分走更多。</li>
+     *   <li><b>折扣改了之后</b>: 改 {@code discountAmount} 不会重算已挂的账。</li>
+     * </ul>
+     *
+     * @return 本次应从挂账金额中扣掉的折扣（非负；无法摊派时为 {@code ZERO}）
+     */
+    private BigDecimal orderDiscountShareForShipment(SalesOrder order, SalesDeliveryRecord record) {
+        if (order == null || record == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal discount = order.getDiscountAmount();
+        if (discount == null || discount.signum() <= 0) {
+            return BigDecimal.ZERO;   // 生产存量 63/63 走这一支 —— 零行为变化
+        }
+        BigDecimal orderNet = order.getTotalAmount();
+        if (orderNet == null || orderNet.signum() <= 0) {
+            log.warn("订单级折扣无法摊派: orderId={} 折扣={} 但订单未税总额为 {} —— "
+                            + "本次挂账【不扣折扣】(⛔ 不猜一个分母)",
+                    order.getId(), discount.toPlainString(), orderNet);
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal thisNet = netShippedValue(record);
+        BigDecimal priorNet = priorShippedNetForOrder(order.getId(), record);
+
+        BigDecimal allocatedIncludingThis = allocateByRatio(discount, priorNet.add(thisNet), orderNet);
+        BigDecimal allocatedBefore = allocateByRatio(discount, priorNet, orderNet);
+        BigDecimal share = allocatedIncludingThis.subtract(allocatedBefore);
+        // 份额理论上非负 (累计只增不减); 真出现负数说明先前发货的口径与本次不一致 ——
+        // ⛔ 不要把负折扣加到应收上(那会把应收调高), 记 WARN 后按 0 处理。
+        if (share.signum() < 0) {
+            log.warn("订单级折扣摊派算出负份额: orderId={}, deliveryId={}, 先前未税={}, 本次未税={} —— 按 0 处理",
+                    order.getId(), record.getId(), priorNet, thisNet);
+            return BigDecimal.ZERO;
+        }
+        return share;
+    }
+
+    /** {@code round(discount × min(numerator / orderNet, 1), 2)}，HALF_UP。 */
+    private BigDecimal allocateByRatio(BigDecimal discount, BigDecimal numerator, BigDecimal orderNet) {
+        if (numerator == null || numerator.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal ratio = numerator.divide(orderNet, 10, java.math.RoundingMode.HALF_UP);
+        if (ratio.compareTo(BigDecimal.ONE) > 0) {
+            ratio = BigDecimal.ONE;   // 超发不多分折扣
+        }
+        return discount.multiply(ratio).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    /**
+     * 同一订单下、<b>本次之外</b>已经发出去的未税金额合计。
+     *
+     * <p>只数<b>货真的出门了</b>的那些状态 —— 草稿/待确认还没挂账，
+     * 已取消/已退回的那部分不该继续占着折扣额度。
+     *
+     * <p>⚠️ 取的是 {@code record.getTotalAmount()}（Σ 实发量 × <b>未税</b>单价，
+     * 见本类 {@code taxInclusiveShippedValue} 的实测注释），
+     * 所以不需要把兄弟发货单的行明细都拉起来（避免 N+1 + 懒加载）。
+     */
+    private BigDecimal priorShippedNetForOrder(String salesOrderId, SalesDeliveryRecord current) {
+        if (salesOrderId == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal sum = BigDecimal.ZERO;
+        for (SalesDeliveryRecord sibling : deliveryRecordRepository.findBySalesOrderId(salesOrderId)) {
+            if (sibling == null || sibling.getId() == null
+                    || sibling.getId().equals(current.getId())) {
+                continue;
+            }
+            SalesDeliveryStatus st = sibling.getStatus();
+            if (st != SalesDeliveryStatus.PARTIALLY_SHIPPED
+                    && st != SalesDeliveryStatus.SHIPPED
+                    && st != SalesDeliveryStatus.DELIVERED) {
+                continue;
+            }
+            if (sibling.getTotalAmount() != null) {
+                sum = sum.add(sibling.getTotalAmount());
+            }
+        }
+        return sum;
     }
 }

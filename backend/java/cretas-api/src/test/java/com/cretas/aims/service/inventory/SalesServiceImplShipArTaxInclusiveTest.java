@@ -173,11 +173,21 @@ class SalesServiceImplShipArTaxInclusiveTest {
      * 折扣也要算对 —— 这条钉住「⛔ 不要手写 totalAmount.add(taxAmount)」。
      * 那样写会漏掉折扣, 把应收多记 100 元。
      * 1000.00 - 100.00 + 117.00 = 1017.00
+     *
+     * <h3>⚠️ 2026-08-29 订正夹具: 喂进去的是【折扣前】的 1117.00</h3>
+     * 本条原本喂 {@code shippedValueForWiring = 1017.00} —— 那已经是<b>期望的答案</b>,
+     * 而当时的实现<b>根本不算折扣</b> (订单级 discountAmount 完全不参与
+     * {@code taxInclusiveShippedValue})。于是 DisplayName 说的「折扣必须参与计算」
+     * <b>是一条恒真断言</b>: 无论实现扣不扣折扣, 它都拿到夹具喂进去的 1017.00。
+     *
+     * <p>现在喂折扣前的 1117.00, 期望仍是 1017.00 ⇒ 那 100.00 只能由
+     * {@code orderDiscountShareForShipment} 摊出来。
+     * 变异对照: 把折扣摊派整段删掉, 本条会红 (1117.00 != 1017.00) —— 而在订正之前不会。
      */
     @Test
-    @DisplayName("发货挂应收: 有折扣时按 未税-折扣+税 = 1017.00, 手写 add(tax) 会算成 1117.00")
+    @DisplayName("发货挂应收: 有折扣时按 未税-折扣+税 = 1017.00, 不扣折扣会算成 1117.00")
     void shipDelivery_receivableAccountsForDiscount() {
-        shippedValueForWiring = new BigDecimal("1017.00");
+        shippedValueForWiring = new BigDecimal("1117.00");
         SalesDeliveryRecord delivery = makeDelivery();
         SalesOrder order = makeOrder("1000.00", "117.00", "100.00");
         stubCommon(delivery, order);
