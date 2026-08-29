@@ -66,8 +66,8 @@ public class LoggableAspect {
 
                 OperationLog logEntity = OperationLog.builder()
                         .factoryId(factoryId)
-                        .userId(SecurityUtils.getCurrentUserId())
-                        .username(SecurityUtils.getCurrentUsername())
+                        .userId(SecurityUtils.currentUserId())
+                        .username(SecurityUtils.currentUsername())
                         .module(loggable.module())
                         .action(loggable.action())
                         .entityType(emptyToNull(loggable.entityType()))

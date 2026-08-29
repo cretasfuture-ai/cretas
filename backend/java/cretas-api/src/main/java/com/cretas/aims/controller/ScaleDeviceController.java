@@ -183,7 +183,7 @@ public class ScaleDeviceController {
         }
 
         // 设置创建者
-        Long currentUserId = SecurityUtils.getCurrentUserId();
+        Long currentUserId = SecurityUtils.currentUserId();
         equipment.setCreatedBy(currentUserId != null ? currentUserId : 1L);
 
         equipment = equipmentRepository.save(equipment);

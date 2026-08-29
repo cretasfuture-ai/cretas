@@ -57,7 +57,7 @@ public class ImportServiceImpl implements ImportService {
             throw new BusinessException("targetEntity 必填 (fully-qualified class name)");
         }
         if (rule.getDedupStrategy() == null) rule.setDedupStrategy("ERROR");
-        rule.setCreatedBy(SecurityUtils.getCurrentUserId());
+        rule.setCreatedBy(SecurityUtils.currentUserId());
         return ruleRepo.save(rule);
     }
 

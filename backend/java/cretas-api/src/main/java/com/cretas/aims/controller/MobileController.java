@@ -139,7 +139,7 @@ public class MobileController {
             @RequestParam(required = false) @Parameter(description = "设备ID", example = "device-uuid-12345") String deviceId,
             HttpServletRequest request,
             HttpServletResponse httpResponse) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         // Extract token from header first, then cookie fallback
         String token = null;
         String authorization = request.getHeader("Authorization");
@@ -242,7 +242,7 @@ public class MobileController {
     @Operation(summary = "获取移动端仪表盘数据", description = "获取工厂概览数据，包括今日产量、设备状态、待处理任务等")
     public ApiResponse<MobileDTO.DashboardData> getMobileDashboard(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.debug("获取移动端仪表盘数据: factoryId={}, userId={}", factoryId, userId);
         MobileDTO.DashboardData data = mobileService.getDashboardData(factoryId, userId);
         return ApiResponse.success(data);
@@ -264,7 +264,7 @@ public class MobileController {
     @Operation(summary = "获取离线数据包", description = "获取工厂离线数据包，供移动端缓存使用")
     public ApiResponse<MobileDTO.OfflineDataPackage> getOfflineDataPackage(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.info("获取离线数据包: factoryId={}, userId={}", factoryId, userId);
         MobileDTO.OfflineDataPackage data = mobileService.getOfflineDataPackage(factoryId, userId);
         return ApiResponse.success(data);
@@ -276,7 +276,7 @@ public class MobileController {
     @Operation(summary = "注册推送通知")
     public ApiResponse<Void> registerPushNotification(
             @RequestBody @Valid MobileDTO.PushRegistration registration) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.info("注册推送: userId={}, platform={}", userId, registration.getPlatform());
         mobileService.registerPushNotification(userId, registration);
         return ApiResponse.success();
@@ -286,7 +286,7 @@ public class MobileController {
     @Operation(summary = "取消推送通知注册", description = "取消设备的推送通知订阅")
     public ApiResponse<Void> unregisterPushNotification(
             @RequestParam @Parameter(description = "设备令牌", example = "FCM_token_xxxxx") String deviceToken) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.info("取消推送: userId={}, token={}", userId, deviceToken);
         mobileService.unregisterPushNotification(userId, deviceToken);
         return ApiResponse.success();
@@ -297,7 +297,7 @@ public class MobileController {
     @GetMapping("/devices")
     @Operation(summary = "获取用户设备列表")
     public ApiResponse<List<MobileDTO.DeviceInfo>> getUserDevices() {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.debug("获取设备列表: userId={}", userId);
         List<MobileDTO.DeviceInfo> devices = mobileService.getUserDevices(userId);
         return ApiResponse.success(devices);
@@ -307,7 +307,7 @@ public class MobileController {
     @Operation(summary = "移除设备", description = "从账户中移除已登录的设备")
     public ApiResponse<Void> removeDevice(
             @PathVariable @Parameter(description = "设备ID", example = "device-uuid-12345") String deviceId) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         log.info("移除设备: userId={}, deviceId={}", userId, deviceId);
         mobileService.removeDevice(userId, deviceId);
         return ApiResponse.success();

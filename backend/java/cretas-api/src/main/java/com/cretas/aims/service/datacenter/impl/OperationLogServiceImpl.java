@@ -49,8 +49,8 @@ public class OperationLogServiceImpl implements OperationLogService {
             String action = oldValue == null ? "CREATE" : (newValue == null ? "DELETE" : "UPDATE");
             OperationLog logEntity = OperationLog.builder()
                     .factoryId(factoryId)
-                    .userId(SecurityUtils.getCurrentUserId())
-                    .username(SecurityUtils.getCurrentUsername())
+                    .userId(SecurityUtils.currentUserId())
+                    .username(SecurityUtils.currentUsername())
                     .module(module)
                     .action(action)
                     .entityType(entityType)

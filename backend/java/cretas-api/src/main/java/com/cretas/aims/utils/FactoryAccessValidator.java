@@ -59,7 +59,7 @@ public class FactoryAccessValidator {
      * @throws AuthorizationException 如果用户无权访问该工厂
      */
     public void validateAccess(String factoryId) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         validateAccess(factoryId, userId);
     }
 

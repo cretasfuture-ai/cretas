@@ -69,7 +69,7 @@ public class MaterialAbacaController {
     public ApiResponse<Map<String, Object>> create(
             @PathVariable String factoryId,
             @Valid @RequestBody CreateAbacaQuantityLogRequest req) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ApiResponse.success("称重记录已创建", abacaService.create(factoryId, userId, req));
     }
 
@@ -79,7 +79,7 @@ public class MaterialAbacaController {
     public ApiResponse<Map<String, Object>> createBatch(
             @PathVariable String factoryId,
             @Valid @RequestBody List<CreateAbacaQuantityLogRequest> reqs) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ApiResponse.success("批量称重已创建", abacaService.createBatch(factoryId, userId, reqs));
     }
 
@@ -89,7 +89,7 @@ public class MaterialAbacaController {
     public ApiResponse<AbacaQuantityLog> verify(
             @PathVariable String factoryId,
             @PathVariable String id) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ApiResponse.success("复核成功", abacaService.verify(factoryId, id, userId));
     }
 

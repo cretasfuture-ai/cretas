@@ -71,7 +71,7 @@ public class SalesNeedController {
     public ResponseEntity<ApiResponse<SalesNeed>> create(
             @PathVariable String factoryId,
             @Valid @RequestBody SalesNeedCreateRequest req) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         SalesNeed created = service.create(factoryId, req, userId);
         return ResponseEntity.ok(ApiResponse.success("创建成功", created));
     }
@@ -98,7 +98,7 @@ public class SalesNeedController {
     public ResponseEntity<ApiResponse<SalesOrder>> convert(
             @PathVariable String factoryId,
             @PathVariable String id) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         SalesOrder created = service.convertToSalesOrder(factoryId, id, userId);
         return ResponseEntity.ok(ApiResponse.success("已转销售订单", created));
     }

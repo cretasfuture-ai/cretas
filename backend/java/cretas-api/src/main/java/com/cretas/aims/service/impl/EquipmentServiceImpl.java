@@ -775,7 +775,7 @@ public class EquipmentServiceImpl implements EquipmentService {
         // 尝试从当前登录用户获取ID，失败则使用系统默认用户
         Long currentUserId = 1L;
         try {
-            Long securityUserId = com.cretas.aims.utils.SecurityUtils.getCurrentUserId();
+            Long securityUserId = com.cretas.aims.utils.SecurityUtils.currentUserId();
             if (securityUserId != null) {
                 currentUserId = securityUserId;
             }

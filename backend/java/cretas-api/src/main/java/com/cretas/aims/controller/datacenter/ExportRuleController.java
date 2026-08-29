@@ -127,7 +127,7 @@ public class ExportRuleController {
         @SuppressWarnings("unchecked")
         Map<String, Object> runtimeParams = body == null ? null
                 : (Map<String, Object>) body.getOrDefault("runtimeParams", null);
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         return ResponseEntity.ok(ApiResponse.success(
                 exportService.exportByRule(factoryId, ruleId, userId, runtimeParams)));
     }

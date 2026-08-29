@@ -52,7 +52,7 @@ public class ReminderController {
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         List<ReminderStatus> statuses = parseStatuses(status);
         Page<Reminder> result = reminderService.listMine(
                 factoryId, userId, statuses,
@@ -68,7 +68,7 @@ public class ReminderController {
     })
     public ResponseEntity<ApiResponse<Map<String, Long>>> badge(
             @PathVariable String factoryId) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         long pending = reminderService.countPending(factoryId, userId);
         return ResponseEntity.ok(ApiResponse.success(Map.of("pending", pending)));
     }
@@ -81,7 +81,7 @@ public class ReminderController {
             @PathVariable String factoryId,
             @PathVariable String id,
             @RequestBody @jakarta.validation.Valid SnoozeRequest req) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         Reminder updated = reminderService.snooze(factoryId, id, userId, req.getSnoozedUntil());
         return ResponseEntity.ok(ApiResponse.success("已延后", updated));
     }
@@ -93,7 +93,7 @@ public class ReminderController {
     public ResponseEntity<ApiResponse<Reminder>> dismiss(
             @PathVariable String factoryId,
             @PathVariable String id) {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         Reminder updated = reminderService.dismiss(factoryId, id, userId);
         return ResponseEntity.ok(ApiResponse.success("已处理", updated));
     }
