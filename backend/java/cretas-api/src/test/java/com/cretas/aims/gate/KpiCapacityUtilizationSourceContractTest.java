@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 看不见「传进来的值本身对不对」。真正的兜底是部署后同时打两个接口比一次 ——
  * 那一步写在 PR 的判据里。
  */
-class KpiCapacityUtilizationSourceTest {
+class KpiCapacityUtilizationSourceContractTest {
 
     private static final Path SERVICE = Paths.get(
             "src/main/java/com/cretas/aims/service/report/impl/ProductionReportServiceImpl.java");
