@@ -25,6 +25,7 @@
   "rfm": {
     "title": "客户RFM分析",
     "demo_data_message": "当前显示演示数据，实际数据将在 RFM 分析配置后显示",
+    "not_available_message": "客户 RFM 分析暂未接入，没有可显示的数据。",
     "total_customers": "客户总数",
     "segments_count": "客户分群",
     "high_value_ratio": "高价值占比",
@@ -58,6 +59,7 @@
   "ratios": {
     "title": "财务比率分析",
     "demo_data_message": "当前显示演示数据，配置财务比率分析后将显示真实数据",
+    "not_available_message": "财务比率分析暂未接入，没有可显示的数据。",
     "health_score": "财务健康分",
     "total_metrics": "指标总数",
     "detail_section": "财务比率详情",

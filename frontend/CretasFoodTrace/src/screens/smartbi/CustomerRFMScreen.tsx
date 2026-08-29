@@ -208,7 +208,8 @@ export function CustomerRFMScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [segments, setSegments] = useState<RFMSegment[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [usingDemo, setUsingDemo] = useState(false);
+  /** 接口没给出可用数据 —— ⛔ 不再用演示数据顶替。 */
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -232,15 +233,21 @@ export function CustomerRFMScreen() {
           suggestion: (s.strategy ?? s.suggestion ?? '制定针对性营销策略') as string,
         }));
         setSegments(mapped);
-        setUsingDemo(false);
+        setLoadFailed(false);
       } else {
-        setSegments(DEMO_SEGMENTS);
-        setUsingDemo(true);
+        // 🔴 2026-08-29: 原来这里 `setSegments(DEMO_SEGMENTS)` —— 屏上于是出现一整套
+        //    编出来的客户分层数(客户数/占比/建议), 只配一条小字「当前显示演示数据」。
+        //    实测 /smart-bi/analysis/finance?analysisType=rfm **404**;
+        //    SmartBIAnalysisController 只有 /query 和 /drill-down, 这条路由从来不存在
+        //    ⇒ 这一屏 100% 的时间都在显示演示数据。
+        //    ⛔ 违反本仓第一原则「禁止降级处理 —— 不返回假数据, 明确显示错误」。
+        setSegments([]);
+        setLoadFailed(true);
       }
     } catch (err) {
       console.error('Load RFM data failed:', err);
-      setSegments(DEMO_SEGMENTS);
-      setUsingDemo(true);
+      setSegments([]);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -291,14 +298,16 @@ export function CustomerRFMScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[SMARTBI_THEME.primary]} />}
         showsVerticalScrollIndicator={false}
       >
-        {/* Demo data banner */}
-        {usingDemo && (
+        {loadFailed && (
           <View style={styles.infoBanner}>
             <MaterialCommunityIcons name="information-outline" size={16} color={SMARTBI_THEME.info} />
-            <Text style={styles.infoBannerText}>{t('rfm.demo_data_message')}</Text>
+            <Text style={styles.infoBannerText}>{t('rfm.not_available_message')}</Text>
           </View>
         )}
 
+        {/* ⛔ 没有数据时整块不渲染 —— 否则汇总会显示「0 客户」这个假读数。 */}
+        {segments.length > 0 && (
+        <>
         {/* Summary row */}
         <Card style={styles.summaryCard}>
           <Card.Content>
@@ -416,6 +425,8 @@ export function CustomerRFMScreen() {
             ))}
           </Card>
         </View>
+        </>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
