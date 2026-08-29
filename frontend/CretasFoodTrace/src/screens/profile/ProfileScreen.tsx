@@ -11,6 +11,7 @@ import { theme } from '../../theme';
 import { logger } from '../../utils/logger';
 import { handleError } from '../../utils/errorHandler';
 import { useFactoryFeatureStore } from '../../store/factoryFeatureStore';
+import { ROLE_METADATA } from '../../types/auth';
 
 // 创建ProfileScreen专用logger
 const profileLogger = logger.createContextLogger('ProfileScreen');
@@ -152,11 +153,7 @@ export default function ProfileScreen() {
   const isOperator = roleCode === 'operator';
 
   const getRoleName = (role: string | undefined | null) => {
-    const roleMap: Record<string, string> = {
-      'developer': '系统开发者', 'platform_admin': '平台管理员', 'factory_super_admin': '工厂超级管理员',
-      'permission_admin': '权限管理员', 'operator': '操作员', 'viewer': '查看者'
-    };
-    return roleMap[role ?? ''] || role || '未知角色';
+    return ROLE_METADATA[role ?? '']?.displayName || '未知角色';
   };
 
   return (
