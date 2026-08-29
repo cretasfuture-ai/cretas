@@ -628,6 +628,62 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return saved;
     }
 
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+            readOnly = true)
+    public boolean pinNewPlanToCurrentAuthorityIfAvailable(String factoryId, ProductionPlan plan) {
+        if (plan == null || !Objects.equals(factoryId, plan.getFactoryId())) {
+            throw new BusinessException(400, "新生产计划与当前工厂不一致")
+                    .withCode("PRODUCTION_PLAN_FACTORY_MISMATCH");
+        }
+        PlanUnitAuthority authority;
+        try {
+            // The resolution service is transactional and deliberately translates a
+            // missing active Workflow into a BusinessException.  Probe its DTO path first
+            // so the expected "no Workflow" branch never throws through a transaction
+            // interceptor (which would mark the caller's transaction rollback-only even
+            // when this method catches the exception).
+            if (workflowResolutionService != null) {
+                List<String> targets = plan.getTargetFinishedGoodIds() == null
+                        || plan.getTargetFinishedGoodIds().isEmpty()
+                        ? List.of(plan.getProductTypeId()) : plan.getTargetFinishedGoodIds();
+                var resolution = workflowResolutionService.resolveForOutputs(
+                        factoryId, targets);
+                if (resolution != null && resolution.getCandidates() != null
+                        && resolution.getCandidates().isEmpty()) {
+                    if (productProcessWorkflowRepository != null
+                            && productProcessWorkflowRepository.existsByFactoryIdAndProductTypeId(
+                                    factoryId, plan.getProductTypeId())) {
+                        throw new BusinessException(409, "该产品已有 Workflow 配置，但尚无可用于生产的启用版本")
+                                .withCode("WORKFLOW_ENABLED_REQUIRED")
+                                .withHint("请先完成 BOM、发布并启用其固定的 Workflow 版本")
+                                .withHintTarget("selectedWorkflowId");
+                    }
+                    return false;
+                }
+            }
+            authority = resolvePlanUnitAuthority(
+                    factoryId, plan.getProductTypeId(), plan.getTargetFinishedGoodIds(),
+                    null, null, false);
+        } catch (BusinessException ex) {
+            // 自动计划还承担缺料/采购建议载体职责。完全没有覆盖该产品的 Workflow 时
+            // 允许先保留 PENDING 计划；其余解析错误（版本不完整、跨租户、配置冲突）
+            // 继续 fail closed，不能被这个兼容分支吞掉。
+            if ("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND".equals(ex.getErrorCode())
+                    || "WORKFLOW_SHARED_OUTPUT_NOT_FOUND".equals(ex.getErrorCode())) {
+                return false;
+            }
+            throw ex;
+        }
+        if (authority == null) {
+            return false;
+        }
+        // 与手工建计划、更新到当前配方共用同一个赋值入口，避免只补 Workflow
+        // 却漏掉 BOM family/recipe/version/outputUnits 形成新的半张快照。
+        applyPlanUnitAuthority(plan, authority);
+        return true;
+    }
+
     /**
      * 把计划的新权威搬到它名下的批次, 并丢掉据旧权威编译的运行时产物让它重编译。
      *

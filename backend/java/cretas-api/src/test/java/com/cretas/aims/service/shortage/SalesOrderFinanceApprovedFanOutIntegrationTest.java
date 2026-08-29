@@ -19,10 +19,12 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.service.ProductionPlanService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -35,6 +37,10 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 /**
  * 2026-08-01 incident — 销售订单财务审核通过事件 fan-out 丢写.
@@ -114,6 +120,7 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
     @Autowired private SalesOrderItemRepository salesOrderItemRepository;
     @Autowired private ApplicationEventPublisher eventPublisher;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @SpyBean private ProductionPlanService productionPlanService;
 
     private String customerId;
     private String productTypeId;
@@ -243,6 +250,13 @@ class SalesOrderFinanceApprovedFanOutIntegrationTest {
                         + "之前 BOM 展开失败会把这次联动事务整体回滚, prod 日志打印 "
                         + "\"自动创建生产计划: PP=...\" 但库里查无此行, 正是这个症状")
                 .isTrue();
+
+        verify(productionPlanService, timeout(POLL_TIMEOUT_MS).atLeastOnce())
+                .pinNewPlanToCurrentAuthorityIfAvailable(eq(FACTORY_ID), argThat(plan ->
+                        plan != null
+                                && FACTORY_ID.equals(plan.getFactoryId())
+                                && productTypeId.equals(plan.getProductTypeId())
+                                && salesOrderId.equals(plan.getSourceOrderId())));
 
         var contract = jdbcTemplate.queryForMap(
                 "SELECT customer_id, processing_mode, material_supply_mode, output_ownership "
