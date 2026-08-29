@@ -390,19 +390,35 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
                 : timeClockRecordRepository.findByFactoryIdAndUserIdInAndClockDateBetween(
                         factoryId, userIds, startDateTime, endDateTime);
 
+        // 🔴 这个窗口里一条打卡记录都没有 = **这家工厂没在用打卡**, ⛔ 不等于「所有人都缺勤」。
+        //
+        // 2026-08-29 逐屏走查实拍(F006, 本月):
+        //     总人数 23    在岗 0    缺勤 23    平均出勤率 0.0%
+        // 而同一屏下方写着「暂无工时数据」。
+        //
+        // 查库: `time_clock_records` **全表零行** —— 所有工厂都没用过打卡。
+        // 也就是说这张报表对**每一个客户**都断言「你全厂的人全部缺勤」。
+        //
+        // ⛔ 这是把「我不知道」翻译成了一个很具体的指控, 比翻译成 0 更糟。
+        //    没有记录时三个派生量一律 null, 让屏上说「没有打卡记录, 算不出出勤」。
+        //
+        // ⚠️ 有记录、而某个人没有 —— 那才是真的缺勤, 照常算。
+        //    分界线是**这个窗口里有没有任何记录**, 不是某个人有没有。
+        boolean attendanceTracked = !allRecords.isEmpty();
+
         // 统计实际出勤人数（在日期范围内有打卡记录的人数）
         Set<Long> presentUserIds = allRecords.stream()
                 .map(TimeClockRecord::getUserId)
                 .collect(Collectors.toSet());
-        int totalPresent = presentUserIds.size();
+        Integer totalPresent = attendanceTracked ? presentUserIds.size() : null;
 
         // 缺勤人数
-        int totalAbsent = totalEmployees - totalPresent;
+        Integer totalAbsent = attendanceTracked ? totalEmployees - presentUserIds.size() : null;
 
         // 计算平均出勤率（出勤人数 / 总人数）
-        double avgAttendanceRate = totalEmployees > 0
-                ? ((double) totalPresent / totalEmployees) * 100
-                : 0.0;
+        Double avgAttendanceRate = (attendanceTracked && totalEmployees > 0)
+                ? ((double) presentUserIds.size() / totalEmployees) * 100
+                : null;
 
         // 统计活跃部门数（有员工的部门）
         long activeDepartments = allUsers.stream()
@@ -411,23 +427,25 @@ public class MobileBusinessServiceImpl implements MobileBusinessService {
                 .distinct()
                 .count();
 
-        // 计算实际总工时（分钟转小时）
+        // 计算实际总工时（分钟转小时）—— 同上: 没有打卡记录时是「算不出」, ⛔ 不是「0 小时」
         double totalWorkMinutes = allRecords.stream()
                 .mapToDouble(record -> record.getWorkDurationMinutes() != null ? record.getWorkDurationMinutes() : 0.0)
                 .sum();
-        double totalWorkHours = totalWorkMinutes / 60.0;
+        Double totalWorkHours = attendanceTracked ? totalWorkMinutes / 60.0 : null;
 
         // 计算平均每人工时
-        double avgWorkHoursPerEmployee = totalEmployees > 0
-                ? totalWorkHours / totalEmployees
-                : 0.0;
+        Double avgWorkHoursPerEmployee = (attendanceTracked && totalEmployees > 0)
+                ? totalWorkMinutes / 60.0 / totalEmployees
+                : null;
 
         // 查询合同即将到期人数 (30天内)
         LocalDate warningDate = LocalDate.now().plusDays(30);
         long expiringContracts = userRepository.countExpiringContracts(factoryId, warningDate);
 
-        log.info("人员统计完成: 总人数={}, 出勤={}, 缺勤={}, 总工时={}小时, 合同即将到期={}",
-                totalEmployees, totalPresent, totalAbsent, String.format("%.1f", totalWorkHours), expiringContracts);
+        log.info("人员统计完成: 总人数={}, 有无打卡数据={}, 出勤={}, 缺勤={}, 总工时={}, 合同即将到期={}",
+                totalEmployees, attendanceTracked, totalPresent, totalAbsent,
+                totalWorkHours == null ? "算不出" : String.format("%.1f小时", totalWorkHours),
+                expiringContracts);
 
         return MobileDTO.PersonnelStatistics.builder()
                 .totalEmployees(totalEmployees)

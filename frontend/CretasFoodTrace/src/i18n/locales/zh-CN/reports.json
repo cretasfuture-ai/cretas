@@ -175,7 +175,9 @@
     "noWorkHoursData": "暂无工时数据",
     "cannotGetFactoryInfo": "无法获取工厂信息，请重新登录",
     "loadFailed": "加载失败",
-    "error": "错误"
+    "error": "错误",
+    "attendanceNotTracked": "没有打卡记录，算不出出勤",
+    "attendanceNotTrackedHint": "这段时间没有任何人打卡。可能是这家工厂没在用打卡功能——「缺勤」需要有打卡记录才能判断。"
   },
   "kpi": {
     "title": "KPI指标",

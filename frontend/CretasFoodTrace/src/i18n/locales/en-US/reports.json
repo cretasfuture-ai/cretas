@@ -175,7 +175,9 @@
     "noWorkHoursData": "No work hours data available",
     "cannotGetFactoryInfo": "Unable to get factory info. Please log in again.",
     "loadFailed": "Load Failed",
-    "error": "Error"
+    "error": "Error",
+    "attendanceNotTracked": "No clock-in records — attendance cannot be computed",
+    "attendanceNotTrackedHint": "Nobody clocked in during this period. This factory may not use clock-in at all — absence can only be inferred from clock-in records."
   },
   "kpi": {
     "title": "KPI Metrics",
