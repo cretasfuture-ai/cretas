@@ -7,7 +7,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { getBatchWip, getOrderYieldSummary, getBatchWorkProcessTasks, updateWorkProcessTaskPlan, type WipRowItem, type OrderYieldSummary, type WorkProcessTaskItem } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { handleCatchError } from '@/utils/errorToast';
 import { ArrowLeft, Refresh, User } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -15,6 +15,11 @@ import { displayProcessUnit } from '@/utils/processSheetUnits';
 import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
 import type { TableRow } from '@/types/api';
+import {
+  assignTasksWithReadback,
+  taskAssignmentDisabledReason,
+  type AssignmentResult,
+} from './taskAssignment';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,50 +38,134 @@ const canWrite = computed(() => permissionStore.canWrite('production'));
  *
  * ⚠️ 指派是**排他**的，两处判据一起：后端 ReportAuthGuard 不是本人且非主管 → 403；
  * App 的 isTaskClaimableBy 让别人在「我的任务」里**看不到**这道工序。
- * 所以下拉必须 clearable —— 清空 = 退回「未指派」= 谁都能报，那是唯一的逃生门。
+ * 所以批量对话框保留“取消负责人”选项 —— 退回「未指派」后，有权限的操作员才能重新领取。
  */
-const operators = ref<Array<{ id: number; username: string; realName?: string; fullName?: string }>>([]);
-const assigningTaskId = ref<number | null>(null);
-
-const TERMINAL_TASK_STATUSES = ['COMPLETED', 'SKIPPED', 'CANCELLED'];
-function isTerminalTaskStatus(status: string | null | undefined) {
-  return TERMINAL_TASK_STATUSES.includes(String(status || '').toUpperCase());
+interface OperatorOption {
+  id: number;
+  username: string;
+  realName?: string;
+  fullName?: string;
+  roleCode?: string;
+  isActive?: boolean;
 }
 
-function operatorLabel(op: { id: number; username: string; realName?: string; fullName?: string }) {
+const operators = ref<OperatorOption[]>([]);
+const operatorsLoading = ref(false);
+const operatorsError = ref('');
+const selectedTaskIds = ref<number[]>([]);
+const assignmentDialogVisible = ref(false);
+const assignmentTarget = ref<number | '__UNASSIGNED__' | null>(null);
+const assignmentSaving = ref(false);
+const assignmentResult = ref<AssignmentResult | null>(null);
+
+function isTerminalTaskStatus(status: string | null | undefined) {
+  return taskAssignmentDisabledReason(status) != null;
+}
+
+function operatorLabel(op: OperatorOption) {
   return op.fullName || op.realName || op.username || `#${op.id}`;
 }
 
 async function loadOperators() {
-  if (!factoryId.value) return;
+  if (!factoryId.value || !canWrite.value) return;
+  operatorsLoading.value = true;
+  operatorsError.value = '';
   try {
     const res = await getOperatorUsers(factoryId.value);
-    if (res.success && Array.isArray(res.data)) operators.value = res.data;
-  } catch {
-    // 尽力而为: 取不到就退化成只读显示, ⛔ 不弹错打断看批次详情
+    if (!res.success || !Array.isArray(res.data)) {
+      operators.value = [];
+      operatorsError.value = res.message || '操作员名单加载失败';
+      return;
+    }
+    // 服务端目录已按当前 factoryId + roleCode=operator + active 过滤；这里再钉住响应契约，
+    // 失效账号或意外混入的其他角色绝不进入选人框。
+    operators.value = res.data.filter((op) => op.isActive !== false && (!op.roleCode || op.roleCode === 'operator'));
+  } catch (error) {
+    operators.value = [];
+    operatorsError.value = error instanceof Error ? error.message : '操作员名单加载失败';
+  } finally {
+    operatorsLoading.value = false;
   }
 }
 
-/** @param workerId null/undefined = 取消指派（退回未指派） */
-async function handleAssignTask(task: WorkProcessTaskItem, workerId: number | null | undefined) {
-  if (!factoryId.value || assigningTaskId.value != null) return;
-  const clearing = workerId == null;
-  assigningTaskId.value = task.id;
-  try {
-    const res = await updateWorkProcessTaskPlan(factoryId.value, task.id,
-      clearing ? { clearAssignee: true } : { assignedTo: workerId as number });
-    if (!res.success) {
-      ElMessage.error(res.message || '指派失败');
+const assignableTasks = computed(() => workProcessTasks.value.filter((task) => !isTerminalTaskStatus(task.status)));
+const selectedTasks = computed(() => workProcessTasks.value.filter((task) => selectedTaskIds.value.includes(task.id)));
+
+function toggleAllAssignable(checked: boolean) {
+  selectedTaskIds.value = checked ? assignableTasks.value.map((task) => task.id) : [];
+}
+
+function openAssignmentDialog(task?: WorkProcessTaskItem) {
+  if (!canWrite.value) return;
+  if (task) {
+    const disabledReason = taskAssignmentDisabledReason(task.status);
+    if (disabledReason) {
+      ElMessage.warning(disabledReason);
       return;
     }
-    ElMessage.success(clearing
-      ? '已取消指派，这道工序现在谁都可以报工'
-      : `已指派给 ${operators.value.find((o) => o.id === workerId) ? operatorLabel(operators.value.find((o) => o.id === workerId)!) : '#' + workerId}；⚠️ 指派后只有他本人和主管能报这道工序`);
-    await loadData();
-  } catch (e) {
-    handleCatchError(e, '指派失败');
+    selectedTaskIds.value = [task.id];
+    assignmentTarget.value = operators.value.some((operator) => operator.id === task.assignedTo)
+      ? task.assignedTo
+      : null;
+  }
+  if (selectedTasks.value.length === 0) {
+    ElMessage.warning('请先勾选要分配的工序');
+    return;
+  }
+  assignmentResult.value = null;
+  assignmentDialogVisible.value = true;
+}
+
+async function saveAssignments() {
+  if (!factoryId.value || assignmentSaving.value) return;
+  if (assignmentTarget.value == null) {
+    ElMessage.warning('请选择报工员，或选择“取消负责人”');
+    return;
+  }
+
+  const assignedTo = assignmentTarget.value === '__UNASSIGNED__' ? null : assignmentTarget.value;
+  const assigneeName = assignedTo == null
+    ? '未分配（任何有权限的操作员均可报工）'
+    : operatorLabel(operators.value.find((operator) => operator.id === assignedTo)!);
+  const startedCount = selectedTasks.value.filter((task) => String(task.status).toUpperCase() === 'IN_PROGRESS').length;
+  const startedNote = startedCount > 0 ? `；其中 ${startedCount} 道已经开工，后端允许改派` : '';
+
+  try {
+    await ElMessageBox.confirm(
+      `将 ${selectedTasks.value.length} 道工序分给“${assigneeName}”${startedNote}。只会更新已勾选的工序，是否继续？`,
+      '确认分配操作员',
+      { confirmButtonText: '确认保存', cancelButtonText: '再检查一下', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+
+  assignmentSaving.value = true;
+  assignmentResult.value = null;
+  try {
+    const result = await assignTasksWithReadback({
+      tasks: [...selectedTasks.value],
+      assignedTo,
+      updateTask: (taskId, payload) => updateWorkProcessTaskPlan(factoryId.value!, taskId, payload),
+      reloadTasks: () => getBatchWorkProcessTasks(factoryId.value!, batchId.value),
+    });
+    assignmentResult.value = result;
+    if (result.refreshedTasks) workProcessTasks.value = result.refreshedTasks;
+
+    if (result.failed.length === 0) {
+      ElMessage.success(`已保存并回读确认 ${result.succeeded.length} 道工序`);
+      assignmentDialogVisible.value = false;
+      selectedTaskIds.value = [];
+      assignmentTarget.value = null;
+    } else if (result.succeeded.length > 0) {
+      ElMessage.warning(`${result.succeeded.length} 道已成功，${result.failed.length} 道失败；请查看失败明细`);
+    } else {
+      ElMessage.error(`没有工序完成分配；请查看 ${result.failed.length} 条失败原因`);
+    }
+  } catch (error) {
+    handleCatchError(error, '分配操作员失败');
   } finally {
-    assigningTaskId.value = null;
+    assignmentSaving.value = false;
   }
 }
 
@@ -1427,8 +1516,27 @@ function goToReversalList() {
         <el-card shadow="never" class="detail-card process-tasks-card">
           <template #header>
             <div class="section-header-row">
-              <span class="section-title">工序明细</span>
-              <span v-if="workProcessTasks.length > 0" class="section-meta">共 {{ workProcessTasks.length }} 道</span>
+              <div class="section-heading">
+                <span class="section-title">工序明细</span>
+                <span v-if="workProcessTasks.length > 0" class="section-meta">共 {{ workProcessTasks.length }} 道</span>
+              </div>
+              <div v-if="canWrite && workProcessTasks.length > 0" class="task-assignment-actions">
+                <el-checkbox
+                  :model-value="assignableTasks.length > 0 && selectedTaskIds.length === assignableTasks.length"
+                  :indeterminate="selectedTaskIds.length > 0 && selectedTaskIds.length < assignableTasks.length"
+                  :disabled="assignableTasks.length === 0 || assignmentSaving"
+                  @change="(checked: boolean) => toggleAllAssignable(checked)"
+                >
+                  全选可分配工序
+                </el-checkbox>
+                <el-button
+                  type="primary"
+                  :disabled="selectedTaskIds.length === 0 || assignmentSaving"
+                  @click="openAssignmentDialog()"
+                >
+                  分配操作员<span v-if="selectedTaskIds.length > 0">（{{ selectedTaskIds.length }}）</span>
+                </el-button>
+              </div>
             </div>
           </template>
           <!-- 诚实空态: 批次未 spawn 工序任务 (转为批次时还未点"生成工序任务") -->
@@ -1444,6 +1552,20 @@ function goToReversalList() {
               class="process-task-row"
               @click="openTaskDrawer(task)"
             >
+              <el-tooltip
+                v-if="canWrite"
+                :content="taskAssignmentDisabledReason(task.status) || '勾选这道工序进行分配'"
+                placement="top"
+              >
+                <span class="task-select" @click.stop>
+                  <el-checkbox
+                    v-model="selectedTaskIds"
+                    :value="task.id"
+                    :disabled="isTerminalTaskStatus(task.status) || assignmentSaving"
+                    :aria-label="`选择第${task.processOrder}道工序`"
+                  />
+                </span>
+              </el-tooltip>
               <!-- 道序号 -->
               <div class="task-order">
                 <span class="order-badge">{{ task.processOrder }}</span>
@@ -1459,38 +1581,28 @@ function goToReversalList() {
                   {{ getTaskStatusText(task.status) }}
                 </el-tag>
               </div>
-              <!-- 负责人 (T142: 显示真实姓名; fallback 到 #ID; 未分配时 "未分配")
-                   2026-08-19: 可写且未终态时变成可指派/改派的下拉。
-                   ⚠️ @click.stop —— 整行有 openTaskDrawer, 不拦住会一点就弹抽屉。
-                   ⚠️ clearable = 取消指派 = 退回「谁都能报」, 那是排他的唯一逃生门。 -->
+              <!-- 负责人始终只读展示；写入口统一走带确认与结果回读的对话框。 -->
               <div class="task-assignee" @click.stop>
-                <el-select
-                  v-if="canWrite && !isTerminalTaskStatus(task.status)"
-                  :model-value="task.assignedTo ?? undefined"
-                  placeholder="未指派"
-                  size="small"
-                  clearable
-                  filterable
-                  style="width: 132px"
-                  :loading="assigningTaskId === task.id"
-                  :disabled="assigningTaskId != null"
-                  title="指派后只有该工人和主管能报这道工序；清空即退回「谁都可以报」"
-                  @change="(v: number | undefined) => handleAssignTask(task, v ?? null)"
+                <span v-if="task.assignedTo != null" class="task-assignee-text">
+                  <el-icon style="vertical-align: middle; margin-right: 2px"><User /></el-icon>
+                  {{ task.assignedToName || '#' + task.assignedTo }}
+                </span>
+                <span v-else class="task-assignee-empty">未分配</span>
+                <el-tooltip
+                  v-if="canWrite"
+                  :content="taskAssignmentDisabledReason(task.status) || '选择本工厂在用的报工员；保存前会再次确认'"
+                  placement="top"
                 >
-                  <el-option
-                    v-for="op in operators"
-                    :key="op.id"
-                    :label="operatorLabel(op)"
-                    :value="op.id"
-                  />
-                </el-select>
-                <template v-else>
-                  <span v-if="task.assignedTo != null" class="task-assignee-text">
-                    <el-icon style="vertical-align: middle; margin-right: 2px"><User /></el-icon>
-                    {{ task.assignedToName || '#' + task.assignedTo }}
-                  </span>
-                  <span v-else class="task-assignee-empty">未分配</span>
-                </template>
+                  <el-button
+                    link
+                    type="primary"
+                    size="small"
+                    :disabled="isTerminalTaskStatus(task.status) || assignmentSaving"
+                    @click="openAssignmentDialog(task)"
+                  >
+                    {{ task.assignedTo == null ? '分配' : '改派' }}
+                  </el-button>
+                </el-tooltip>
               </div>
               <!-- 实际产出 (已完工时显示) -->
               <div v-if="task.status === 'COMPLETED' && task.actualQuantity != null" class="task-output">
@@ -1501,6 +1613,83 @@ function goToReversalList() {
             </div>
           </div>
         </el-card>
+
+        <el-dialog
+          v-model="assignmentDialogVisible"
+          title="分配工序操作员"
+          width="560px"
+          :close-on-click-modal="!assignmentSaving"
+          :close-on-press-escape="!assignmentSaving"
+          :show-close="!assignmentSaving"
+        >
+          <div class="assignment-dialog-body">
+            <el-alert
+              title="只会更新已勾选的工序"
+              :description="`当前选中 ${selectedTasks.length} 道；指派后只有该操作员本人和主管能报工。`"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+
+            <div class="assignment-field">
+              <label>报工员</label>
+              <el-select
+                v-model="assignmentTarget"
+                filterable
+                placeholder="搜索并选择本工厂报工员"
+                style="width: 100%"
+                :loading="operatorsLoading"
+                :disabled="assignmentSaving"
+                no-data-text="本工厂没有可用报工员"
+              >
+                <el-option
+                  v-for="op in operators"
+                  :key="op.id"
+                  :label="operatorLabel(op)"
+                  :value="op.id"
+                />
+                <el-option label="取消负责人（恢复未分配）" value="__UNASSIGNED__" />
+              </el-select>
+              <p class="field-help">名单仅来自当前工厂有效的 operator 账号，不能手填用户编号。</p>
+            </div>
+
+            <el-alert
+              v-if="operatorsError"
+              :title="operatorsError"
+              description="操作员名单没有加载成功，不能进行新的指派。"
+              type="error"
+              :closable="false"
+              show-icon
+            />
+
+            <div v-if="assignmentResult?.failed.length" class="assignment-failures">
+              <el-alert
+                :title="`${assignmentResult.succeeded.length} 道成功，${assignmentResult.failed.length} 道失败`"
+                description="已成功的不会回滚；下面这些工序没有确认生效，请处理后单独重试。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+              <ul>
+                <li v-for="failure in assignmentResult.failed" :key="failure.taskId">
+                  第 {{ failure.processOrder }} 道 {{ failure.processName }}：{{ failure.reason }}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <template #footer>
+            <el-button :disabled="assignmentSaving" @click="assignmentDialogVisible = false">取消</el-button>
+            <el-button
+              type="primary"
+              :loading="assignmentSaving"
+              :disabled="assignmentTarget == null || (assignmentTarget !== '__UNASSIGNED__' && !!operatorsError)"
+              @click="saveAssignments"
+            >
+              保存 {{ selectedTasks.length }} 道工序
+            </el-button>
+          </template>
+        </el-dialog>
 
         <!-- Timeline (T140 fixed: backend returns {time, event, status}; also handle {timestamp, title, action}) -->
         <el-card v-if="timeline.length > 0" shadow="never" class="detail-card">
@@ -2117,7 +2306,16 @@ function goToReversalList() {
 .section-header-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.section-heading,
+.task-assignment-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .process-task-list {
@@ -2141,6 +2339,12 @@ function goToReversalList() {
   &:hover {
     background: var(--el-fill-color-light, #f5f7fa);
   }
+}
+
+.task-select {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .task-order {
@@ -2182,8 +2386,13 @@ function goToReversalList() {
 }
 
 .task-assignee {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   flex-shrink: 0;
   font-size: 13px;
+  min-width: 176px;
 }
 
 .task-assignee-text {
@@ -2193,6 +2402,40 @@ function goToReversalList() {
 .task-assignee-empty {
   color: var(--text-color-placeholder, #c0c4cc);
   font-size: 12px;
+}
+
+.assignment-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.assignment-field {
+  label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-color-primary, #303133);
+    font-weight: 600;
+  }
+}
+
+.field-help {
+  margin: 6px 0 0;
+  color: var(--text-color-secondary, #7a8599);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.assignment-failures {
+  ul {
+    margin: 10px 0 0;
+    padding-left: 22px;
+    color: var(--text-color-primary, #303133);
+  }
+
+  li + li {
+    margin-top: 6px;
+  }
 }
 
 .task-output {

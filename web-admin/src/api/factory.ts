@@ -54,6 +54,13 @@ export function deactivateUser(factoryId: string, userId: number) {
 export function getOperatorUsers(factoryId: string) {
   // 🔴 2026-08-22: 改调只读名录 —— /users/role/{code} 同样要 **hr** 权限,
   //   而这里只是要列出操作员填下拉。⚠️ 端点注释(上面那行)已同步更新。
-  return get<Array<{ id: number; username: string; realName?: string; fullName?: string }>>(
+  return get<Array<{
+    id: number;
+    username: string;
+    realName?: string;
+    fullName?: string;
+    roleCode?: string;
+    isActive?: boolean;
+  }>>(
     `/${factoryId}/users/directory`, { params: { roleCode: 'operator' } });
 }
