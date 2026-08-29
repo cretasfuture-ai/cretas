@@ -354,6 +354,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withHintTarget("实际投入");
         }
 
+        // stockConsumedAtSubmit 是服务端 exactly-once 事实，客户端传 true 也不能绕过库存扣减。
+        // 先全部清零；consumeReworkInputs 只会在回料严格扣减成功后重新置 true，随后随 row_payload 落库。
+        if (req.getUpstreamSources() != null) {
+            req.getUpstreamSources().stream()
+                    .filter(Objects::nonNull)
+                    .forEach(ref -> ref.setStockConsumedAtSubmit(false));
+        }
+
         // 回料是一个已经存在于常驻 SFI 的可复用库存批次。与普通 SFI（小结时扣减）不同，
         // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
         // 只接受服务端标记为回料的来源；普通半成品仍保留原有的报工→小结延迟扣减语义。
@@ -436,6 +444,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             SemiFinishedInventory source = sourceByBatch.get(batchNo);
             BigDecimal actualSourceQuantity = wipInventoryService.consumeClerkSemiStrict(
                     factoryId, batchNo, requestedKg);
+            req.getUpstreamSources().stream()
+                    .filter(Objects::nonNull)
+                    .filter(ref -> ref.isSemiFinished()
+                            && ref.getSourceBatchNumber() != null
+                            && batchNo.equals(ref.getSourceBatchNumber().trim()))
+                    .forEach(ref -> ref.setStockConsumedAtSubmit(true));
 
             ProcessSheetRowResult.InputAllocation allocation =
                     new ProcessSheetRowResult.InputAllocation();

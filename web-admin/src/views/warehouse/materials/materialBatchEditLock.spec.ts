@@ -186,6 +186,22 @@ describe('入库日期: 锁了必须同时给正路 (owner 2026-08-20 第二轮)
   });
 });
 
+describe('批次估值: 锁了必须走带新旧值审计的正路', () => {
+  it('更正请求只提交单价与原因，不借编辑批次接口绕过账实红线', () => {
+    expect(SOURCE).toMatch(
+      /post\(`\/\$\{factoryId\.value\}\/material-batches\/\$\{batchId\}\/cost-correction`,\s*\{\s*unitPrice:\s*price,\s*reason,?\s*\}\)/,
+    );
+    expect(SOURCE).toContain('更正批次估值');
+    expect(SOURCE).toContain('已记录新旧单价、原因和操作人');
+  });
+
+  it('空原因、非正价格与未变化价格都在发送前拦截', () => {
+    expect(SOURCE).toContain("if (!Number.isFinite(price) || price <= 0)");
+    expect(SOURCE).toContain("ElMessage.warning('估值单价没有变化，无需更正')");
+    expect(SOURCE).toContain("if (!reason) { ElMessage.warning('请填写估值依据，它会写入审计台账'); return; }");
+  });
+});
+
 describe('批次状态中文取自 enumDisplay, 不在页面里写死', () => {
   it('用的是 MATERIAL_BATCH_STATUS_LABELS 而不是本文件的私有表', () => {
     expect(SOURCE).toContain("import { enumLabel, MATERIAL_BATCH_STATUS_LABELS } from '@/utils/enumDisplay'");

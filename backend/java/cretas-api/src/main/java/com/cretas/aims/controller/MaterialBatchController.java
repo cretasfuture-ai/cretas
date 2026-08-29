@@ -736,6 +736,26 @@ public class MaterialBatchController {
         return ApiResponse.success("入库日期已更正, 已记录更正原因与改前改后的日期", batch);
     }
 
+    @RequirePermission({"warehouse:read_write", "inventory:read_write", "finance:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{batchId}/cost-correction")
+    @Operation(summary = "更正批次估值 (原因必填, 写新旧值审计台账)")
+    @com.cretas.aims.annotation.Loggable(module = "MATERIAL_BATCH", action = "CORRECT_UNIT_PRICE",
+            entityType = "MaterialBatch", entityIdParam = "batchId")
+    public ApiResponse<MaterialBatchDTO> correctUnitPrice(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String batchId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody com.cretas.aims.dto.material.CorrectMaterialBatchCostRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        String token = TokenUtils.extractToken(authorization);
+        Long userId = mobileService.getUserFromToken(token).getId();
+        String callerRole = (String) httpRequest.getAttribute("role");
+        MaterialBatchDTO batch = materialBatchService.correctUnitPrice(
+                factoryId, batchId, request.getUnitPrice(), request.getReason(), userId, callerRole);
+        return ApiResponse.success("批次估值已更正, 已记录新旧单价与原因", batch);
+    }
+
     /**
      * 兼容墓碑：旧“续入已有批次”会丢失本次来源、价格、保质期与所有权快照，已永久关闭。
      * 保留路由只为给旧客户端明确迁移提示；后端不再保留可达的续入 Service 实现。

@@ -22,6 +22,7 @@ import {
   getReportModeDefault,
   getMaterialAdvisory,
   getProductionSettlement,
+  recalculateSettledPlanCosts,
   confirmProductionWarehouseReceipt,
   clearProductionTransitLedger,
   interimSettle,
@@ -2638,6 +2639,41 @@ function canClearTransit(row: TableRow): boolean {
     && settlement?.postingStatus === 'PENDING_CLEARING';
 }
 
+const costRecalculatingPlanId = ref<string | null>(null);
+
+function canRecalculateSettledCost(row: TableRow): boolean {
+  return canWrite.value && canViewPrice.value
+    && String(row.status || '').toUpperCase() === 'COMPLETED'
+    && ['POSTED', 'POSTED_WITH_TOLERANCE'].includes(String(getSettlementStatus(row)?.postingStatus || ''));
+}
+
+async function handleRecalculateSettledCost(row: TableRow) {
+  const planId = String(row.id || '');
+  if (!planId || !factoryId.value) return;
+  await ElMessageBox.confirm(
+    '系统将只读取本计划实际领用与已配置估值，重新计算并同步结单产出、成品批次和回料成本；不会使用手填成品成本。确认继续？',
+    '重算已结单成本',
+    { type: 'warning', confirmButtonText: '确认重算', cancelButtonText: '取消' },
+  );
+  costRecalculatingPlanId.value = planId;
+  try {
+    const res = await recalculateSettledPlanCosts(factoryId.value, planId);
+    if (!res.success || !res.data) {
+      ElMessage({ message: res.message || '成本重算失败', type: 'error', duration: 0, showClose: true });
+      return;
+    }
+    const d = res.data;
+    const sharedUnitCost = d.sharedUnitCost == null ? '—' : `¥${Number(d.sharedUnitCost).toFixed(4)}`;
+    ElMessage.success(`成本重算完成：总成本 ¥${Number(d.authoritativeTotalCost).toFixed(4)}，单位成本 ${sharedUnitCost}；同步成品 ${d.finishedGoodsBatchCount} 行、回料 ${d.reworkWipCount} 行`);
+    await loadSettlementStatuses([row]);
+  } catch (error) {
+    if (String(error).includes('cancel')) return;
+    handleCatchError(error, '成本重算失败');
+  } finally {
+    costRecalculatingPlanId.value = null;
+  }
+}
+
 // canStopPlan / canCancelPlan 已并入 productionMoreActions.ts —— 停产/取消的判据必须和
 // 「更多」的显隐闸出自同一处, 不再在本文件里留第二份。
 
@@ -4325,6 +4361,14 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 :loading="clearingLoading && String(clearingRow?.id) === String(row.id)"
                 @click="handleTransitClearing(row)"
               >中转挂账清账</el-button>
+              <el-button
+                v-if="canRecalculateSettledCost(row)"
+                type="primary"
+                link
+                size="small"
+                :loading="costRecalculatingPlanId === String(row.id)"
+                @click="handleRecalculateSettledCost(row)"
+              >重算成本</el-button>
               <el-button
                 type="primary"
                 link

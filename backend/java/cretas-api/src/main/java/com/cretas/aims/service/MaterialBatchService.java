@@ -290,9 +290,16 @@ public interface MaterialBatchService {
      * @param callerRole     JWT 角色码；⛔ null 一律拒绝（本方法没有内部调用方）
      */
     default MaterialBatchDTO correctReceiptDate(String factoryId, String batchId, LocalDate newReceiptDate,
-                                                String reason, Long operatorId, String callerRole) {
+                                                 String reason, Long operatorId, String callerRole) {
         throw new UnsupportedOperationException(
                 "correctReceiptDate 未实现 —— 这条路径必须留痕, 不允许桩实现静默放行");
+    }
+
+    /** 更正批次估值；必须写新旧单价、原因、操作人和当时角色的审计台账。 */
+    default MaterialBatchDTO correctUnitPrice(String factoryId, String batchId, BigDecimal newUnitPrice,
+                                              String reason, Long operatorId, String callerRole) {
+        throw new UnsupportedOperationException(
+                "correctUnitPrice 未实现 —— 这条路径必须留痕, 不允许桩实现静默放行");
     }
 
      /**

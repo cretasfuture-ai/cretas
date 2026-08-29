@@ -529,8 +529,15 @@ class ProcessSheetServiceImplTest {
                     assertThat(sfi.getProducedQuantity()).isEqualByComparingTo("1");
                     assertThat(sfi.getConsumedQuantity()).isEqualByComparingTo("1");
                     assertThat(sfi.getAvailableQuantity()).isEqualByComparingTo("0");
-                    assertThat(sfi.getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
-                });
+               assertThat(sfi.getStatus()).isEqualTo(SemiFinishedInventory.Status.DEPLETED);
+           });
+        ProcessSheetRow persisted = rowRepo
+                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                        FACTORY_ID, planId, "qidiao", "row-rework-submit")
+                .orElseThrow();
+        assertThat(persisted.getRowPayload())
+                .as("结单必须能识别该回料已在正式报工时扣减")
+                .contains("\"stockConsumedAtSubmit\":true");
 
         assertThatThrownBy(() -> processSheetService.submitRow(
                 FACTORY_ID, planId, req, operatorId))

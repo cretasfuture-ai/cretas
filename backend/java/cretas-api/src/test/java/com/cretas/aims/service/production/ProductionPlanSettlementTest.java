@@ -360,6 +360,26 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("R2 exactly-once: 正式报工已扣的回料在结单时不得二次扣减")
+    void settleProduction_doesNotRedeductReworkConsumedAtSubmit() {
+        ProcessSheetRow alreadyConsumed = feedRow("SFI-REWORK", "1", true, false);
+        try {
+            ProcessSheetRowRequest payload = r2Mapper.readValue(
+                    alreadyConsumed.getRowPayload(), ProcessSheetRowRequest.class);
+            payload.getUpstreamSources().get(0).setStockConsumedAtSubmit(true);
+            alreadyConsumed.setRowPayload(r2Mapper.writeValueAsString(payload));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        wireR2(plan(), alreadyConsumed);
+
+        service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
+
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(
+                FACTORY_ID, "SFI-REWORK", new BigDecimal("1"));
+    }
+
+    @Test
     @DisplayName("R2 定点覆盖: 手工补录其他 SFI 不得全局跳过 process-row SFI 自动扣")
     void settleProduction_manualDifferentSemiDoesNotSkipAutoSfi() {
         wireR2(plan(),
@@ -1443,6 +1463,67 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID, receiptRequest("receipt-1", "90", "kg", null, null), 11L);
 
         assertNull(captor.getValue().getUnitCost(), "无成本基准时 unitCost 必须诚实 null, 不伪造 ¥0");
+    }
+
+    @Test
+    @DisplayName("已结单成本重算: 良品0.99 + 回料0.01 共担成本, 两者单位成本逐格相等")
+    void recalculateSettledPlanCosts_propagatesOneSharedUnitCostToGoodAndRework() {
+        ProductionPlan plan = plan();
+        plan.setStatus(ProductionPlanStatus.COMPLETED);
+        ProductionSettlement settlement = settled();
+        settlement.setPostingStatus("POSTED");
+        ProductionSettlementOutputLine line = workflowOutputLine(
+                settlement, "PT-1", "FG-P-001", "kg", "bom-1", new BigDecimal("0.99"));
+        line.setReceivedQuantity(new BigDecimal("0.99"));
+        line.setFinishedGoodsBatchId("fg-1");
+        FinishedGoodsBatch fg = new FinishedGoodsBatch();
+        fg.setId("fg-1");
+        fg.setFactoryId(FACTORY_ID);
+        fg.setProductionPlanId(PLAN_ID);
+        SemiFinishedInventory rework = SemiFinishedInventory.builder()
+                .id(366L).factoryId(FACTORY_ID).batchId(10882L)
+                .intermediateBatchNo("REWORK-1").isRework(true)
+                .producedQuantity(new BigDecimal("0.01"))
+                .consumedQuantity(BigDecimal.ZERO).availableQuantity(new BigDecimal("0.01"))
+                .build();
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(10882L);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setProductionPlanId(PLAN_ID);
+        batch.setActualQuantity(BigDecimal.ONE);
+        batch.setGoodQuantity(BigDecimal.ONE);
+        batch.setUnit("kg");
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(FACTORY_ID, settlement.getId()))
+                .thenReturn(List.of(line));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        when(semiFinishedInventoryRepository.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, 10882L))
+                .thenReturn(List.of(rework));
+        when(finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate("fg-1", FACTORY_ID))
+                .thenReturn(Optional.of(fg));
+        when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
+                .thenReturn(OrderCostBreakdownDTO.builder()
+                        .hasData(true).totalCost(new BigDecimal("30.00"))
+                        .rawMaterialCost(new BigDecimal("30.00"))
+                        .laborCost(BigDecimal.ZERO).seasoningCost(BigDecimal.ZERO)
+                        .packagingCost(BigDecimal.ZERO).build());
+
+        var result = service.recalculateSettledPlanCosts(FACTORY_ID, PLAN_ID);
+
+        assertEquals(0, new BigDecimal("30.0000").compareTo(result.getSharedUnitCost()));
+        assertEquals(0, line.getUnitCost().compareTo(rework.getUnitCost()),
+                "良品与回料必须写入同一个量化后的单位成本");
+        assertEquals(0, new BigDecimal("30.0000").compareTo(fg.getUnitCost()));
+        assertEquals(0, new BigDecimal("0.30").compareTo(rework.getAccumulatedCost()));
+        assertEquals(1, result.getFinishedGoodsBatchCount());
+        assertEquals(1, result.getReworkWipCount());
+        verify(productionSettlementOutputLineRepository).saveAll(List.of(line));
+        verify(semiFinishedInventoryRepository).saveAll(List.of(rework));
+        verify(finishedGoodsBatchRepository).save(fg);
     }
 
     @Test
