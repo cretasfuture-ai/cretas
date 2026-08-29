@@ -281,7 +281,8 @@ export function FinancialRatiosScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [categories, setCategories] = useState<RatioCategory[]>([]);
   const [expandedCategories, setExpandedCategories] = useState<Set<number>>(new Set([0]));
-  const [usingDemo, setUsingDemo] = useState(false);
+  /** 接口没给出可用数据 —— ⛔ 不再用演示数据顶替。 */
+  const [loadFailed, setLoadFailed] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const [dateRange, setDateRange] = useState(() => {
@@ -308,17 +309,22 @@ export function FinancialRatiosScreen() {
         : null;
 
       const mapped = apiData ? mapBackendRatios(apiData) : null;
-      if (mapped) {
-        setCategories(mapped);
-        setUsingDemo(false);
-      } else {
-        setCategories(DEMO_CATEGORIES);
-        setUsingDemo(true);
-      }
+      // 🔴 2026-08-29: 这里原来在接口失败/为空时 `setCategories(DEMO_CATEGORIES)` ——
+      //    屏上于是出现「92 财务健康分 / 12 良好 / 1 警告 / 13 指标总数」这样一整套
+      //    **编出来的数**, 只配一条小字横幅「当前显示演示数据」。
+      //
+      //    实测: `/api/mobile/{factoryId}/smart-bi/analysis/finance` **404** ——
+      //    去 SmartBIAnalysisController 核对, 它只有 /query 和 /drill-down,
+      //    这条路由**从来不存在** ⇒ 这一屏 100% 的时间都在显示演示数据。
+      //
+      //    ⛔ 违反本仓第一原则「禁止降级处理 —— 不返回假数据, 明确显示错误」。
+      //    大号的数 + 小字的免责声明, 截出去就是一张假报表。
+      setCategories(mapped ?? []);
+      setLoadFailed(!mapped);
     } catch (err) {
       console.error('Load financial ratios failed:', err);
-      setCategories(DEMO_CATEGORIES);
-      setUsingDemo(true);
+      setCategories([]);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -403,14 +409,18 @@ export function FinancialRatiosScreen() {
           <MaterialCommunityIcons name="chevron-down" size={18} color={SMARTBI_THEME.textSecondary} />
         </TouchableOpacity>
 
-        {/* Demo data banner */}
-        {usingDemo && (
+        {/* 没有数据时**只**显示这一条, ⛔ 下面那些卡片不渲染 —— 它们会显示编出来的数。 */}
+        {loadFailed && (
           <View style={styles.infoBanner}>
             <MaterialCommunityIcons name="information-outline" size={16} color={SMARTBI_THEME.info} />
-            <Text style={styles.infoBannerText}>{t('ratios.demo_data_message')}</Text>
+            <Text style={styles.infoBannerText}>{t('ratios.not_available_message')}</Text>
           </View>
         )}
 
+        {/* ⛔ 没有数据时这一整块不渲染 —— 否则 categories=[] 会算出「0 财务健康分」,
+            那又是一个假读数(0 分看起来是「财务很糟」, 而真相是没有数据)。 */}
+        {categories.length > 0 && (
+        <>
         {/* Health summary card */}
         <Card style={styles.healthCard}>
           <Card.Content>
@@ -480,6 +490,9 @@ export function FinancialRatiosScreen() {
             </View>
           </Card.Content>
         </Card>
+
+        </>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
