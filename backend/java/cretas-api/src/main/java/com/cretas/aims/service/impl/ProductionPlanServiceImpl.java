@@ -4095,7 +4095,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         "rawMaterialConsumptions"));
                 continue;
             }
-            BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+            BigDecimal available = settlementPrefillAvailable(factoryId, currentPlanId, batch);
             PendingConsumptionConflict conflict = resolveOtherPendingConsumption(
                     factoryId, currentPlanId, currentProcessBatchIds, batchId);
             if (conflict.quantity().add(qty).compareTo(available) > 0) {
@@ -4537,7 +4537,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         "rawMaterialConsumptions"));
                 continue;
             }
-            BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
+            BigDecimal available = settlementPrefillAvailable(factoryId, plan.getId(), batch);
             if (available.compareTo(qty) < 0) {
                 // 报工领用量 > 当前可用 (批次已被部分消耗/标 USED_UP): 不臆造, 让人核对
                 issues.add(issue("RAW_BATCH_INSUFFICIENT",
@@ -4560,6 +4560,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             lines.add(line);
         }
         return lines;
+    }
+
+    /**
+     * 结单预填看到的可用量 = 当前可用 + 本计划自己真实挂在批次上的报工预留。
+     *
+     * <p>正式结单会在三道库存闸之前释放本计划预留；预填若仍只读
+     * {@link MaterialBatch#getCurrentQuantity()}，整批预留时就会把自己的领用行过滤掉，
+     * 让前端连提交都发不出来。只加回“报工可归属量”和“批次实有 reserved”两者较小值，
+     * 因而不会认领其他计划/未知来源的预留，也不会仅凭报工 JSON 虚增可用量。</p>
+     */
+    private BigDecimal settlementPrefillAvailable(String factoryId, String planId, MaterialBatch batch) {
+        BigDecimal available = batch == null
+                ? BigDecimal.ZERO
+                : zeroIfNull(batch.getCurrentQuantity());
+        if (batch == null || isBlank(planId) || workshopReservationService == null) {
+            return available;
+        }
+        BigDecimal ownHold = zeroIfNull(workshopReservationService
+                .reservedByPlanOnBatch(factoryId, planId, batch.getId()));
+        BigDecimal actualReserved = zeroIfNull(batch.getReservedQuantity());
+        return available.add(ownHold.min(actualReserved));
     }
 
     /**
