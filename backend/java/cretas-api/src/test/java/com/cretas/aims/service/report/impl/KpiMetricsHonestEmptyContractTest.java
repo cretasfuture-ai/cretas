@@ -4,6 +4,7 @@ import com.cretas.aims.dto.report.KpiMetricsDTO;
 import com.cretas.aims.dto.report.OeeReportDTO;
 import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.repository.EquipmentRepository;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
@@ -71,6 +72,13 @@ class KpiMetricsHonestEmptyContractTest {
     @Mock ShipmentRecordRepository shipmentRecordRepository;
     @Mock SalesOrderRepository salesOrderRepository;
     @Mock ReworkRecordRepository reworkRecordRepository;
+    /**
+     * 2026-08-29 新增：{@code getOeeReport} 的计划工时改成读工厂真实配置
+     * （原来写死 {@code days * 8 * 设备数}）。⚠️ 不 mock 它的话 Mockito
+     * 的构造注入会传 null，整类 NPE —— 而这是**测试接线**问题，生产上
+     * Spring 一定注得进来。
+     */
+    @Mock FactorySettingsRepository factorySettingsRepository;
 
     @InjectMocks
     ProductionReportServiceImpl service;
