@@ -13,12 +13,14 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomRecipeItemCostCorrection;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemCostCorrectionRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.bom.BomProcessInjectionConfigRepository;
@@ -86,9 +88,12 @@ public class BomRecipeServiceImpl implements BomRecipeService {
 
     private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final int MAX_VERSIONS_PER_PRODUCT = 10;
+    private static final Set<String> ACTIVE_COST_CORRECTION_ROLES = Set.of(
+            "factory_super_admin", "factory_admin", "finance_manager");
 
     private final BomRecipeRepository recipeRepo;
     private final BomRecipeItemRepository itemRepo;
+    private final BomRecipeItemCostCorrectionRepository itemCostCorrectionRepo;
     private final ProductTypeRepository productTypeRepo;
     private final RawMaterialTypeRepository materialTypeRepo;
     private final MaterialUomConverter materialUomConverter;
@@ -2036,6 +2041,96 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         recomputeFamilyCosts(recipe);
         recipeRepo.save(recipe);
         return item;
+    }
+
+    @Override
+    @Transactional
+    public BomRecipeItem correctActivePackagingItemCost(String factoryId, Long itemId,
+                                                        String reason, Long operatorId, String callerRole) {
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (trimmedReason.isEmpty() || trimmedReason.length() > 255) {
+            throw new BusinessException(400, trimmedReason.isEmpty()
+                    ? "BOM 成本更正原因不能为空" : "BOM 成本更正原因不能超过 255 字")
+                    .withHintTarget("reason");
+        }
+        String normalizedRole = callerRole == null ? "" : callerRole.toLowerCase();
+        if (!ACTIVE_COST_CORRECTION_ROLES.contains(normalizedRole)) {
+            throw new BusinessException(403, "更正已生效 BOM 成本需要财务经理或工厂管理员角色")
+                    .withHint("该动作会改变历史生产成本，权限与批次估值更正同级")
+                    .withHintTarget("unitPrice");
+        }
+        if (operatorId == null) {
+            throw new BusinessException(401, "无法识别成本更正操作人");
+        }
+
+        BomRecipeItem item = itemRepo.findByIdForUpdate(itemId)
+                .orElseThrow(() -> bomError(404, "这条 BOM 明细行不存在", "BOM_ITEM_MISSING",
+                        "请刷新后重新打开 BOM 明细。明细行ID: " + itemId, "bomItems"));
+        if (!factoryId.equals(item.getFactoryId())) {
+            throw new BusinessException(403, "无权更正其他工厂的 BOM 成本");
+        }
+        BomRecipe recipe = recipeRepo.lockByIdAndFactoryId(item.getRecipeId(), factoryId)
+                .orElseThrow(() -> bomError(404, "BOM 配方不存在", "BOM_RECIPE_MISSING",
+                        "请刷新后重新打开 BOM。", "bomRecipe"));
+        if (recipe.getStatus() != BomRecipe.Status.ACTIVE || !Boolean.TRUE.equals(recipe.getIsCurrent())) {
+            throw new BusinessException(409, "只能更正当前生效 BOM 的包材成本")
+                    .withCode("BOM_COST_CORRECTION_NOT_CURRENT_ACTIVE");
+        }
+        if (!"PACKAGING".equalsIgnoreCase(item.getMaterialCategory()) || item.getMaterialTypeId() == null) {
+            throw new BusinessException(409, "该明细不是可更正的包材投入行")
+                    .withCode("BOM_COST_CORRECTION_PACKAGING_ONLY");
+        }
+
+        RawMaterialType material = materialTypeRepo.findByIdAndFactoryId(item.getMaterialTypeId(), factoryId)
+                .orElseThrow(() -> new BusinessException(409, "包材档案不存在或不属于当前工厂")
+                        .withCode("BOM_COST_CORRECTION_MATERIAL_MISSING"));
+        BigDecimal authoritativePrice = material.getMovingAvgPrice() != null
+                && material.getMovingAvgPrice().signum() > 0
+                ? material.getMovingAvgPrice() : material.getUnitPrice();
+        if (authoritativePrice == null || authoritativePrice.signum() <= 0) {
+            throw new BusinessException(409, "包材档案没有有效移动均价或未税采购参考价")
+                    .withCode("BOM_COST_CORRECTION_PRICE_MISSING")
+                    .withHint("请先到原料类型字典维护含税采购参考价");
+        }
+
+        BigDecimal oldUnitPrice = item.getUnitPrice();
+        BigDecimal oldItemCost = item.getItemCost();
+        item.setUnitPrice(authoritativePrice);
+        applyPriceUnitContract(item, material.getUnit());
+        item.setActualQuantity(item.calculateActualQuantity());
+        item.setItemCost(item.computeItemCost());
+        if (sameNumber(oldUnitPrice, item.getUnitPrice()) && sameNumber(oldItemCost, item.getItemCost())) {
+            throw new BusinessException(400, "BOM 包材单价与单项成本没有变化")
+                    .withCode("BOM_COST_CORRECTION_NO_CHANGE");
+        }
+
+        item = itemRepo.save(item);
+        refreshItemsInPlace(recipe);
+        recomputeFamilyCosts(recipe);
+        recipeRepo.save(recipe);
+        itemCostCorrectionRepo.save(BomRecipeItemCostCorrection.builder()
+                .id(UUID.randomUUID().toString())
+                .factoryId(factoryId)
+                .bomRecipeId(recipe.getId())
+                .bomRecipeItemId(item.getId())
+                .materialTypeId(item.getMaterialTypeId())
+                .oldUnitPrice(oldUnitPrice)
+                .newUnitPrice(item.getUnitPrice())
+                .oldItemCost(oldItemCost)
+                .newItemCost(item.getItemCost())
+                .reason(trimmedReason)
+                .correctedBy(operatorId)
+                .correctedByRole(callerRole)
+                .correctedAt(LocalDateTime.now())
+                .build());
+        log.info("更正当前 ACTIVE BOM 包材成本 factory={} recipe={} item={} material={} unitPrice={} itemCost={} role={} operator={}",
+                factoryId, recipe.getId(), item.getId(), item.getMaterialTypeId(), item.getUnitPrice(),
+                item.getItemCost(), callerRole, operatorId);
+        return item;
+    }
+
+    private static boolean sameNumber(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
     }
 
     @Override
