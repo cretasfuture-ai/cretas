@@ -9,7 +9,7 @@ import { ModuleConfig } from '../../types/navigation';
 import { ModuleCard } from './components/ModuleCard';
 import { QuickStatsPanel } from './components/QuickStatsPanel';
 import { MainTabParamList } from '../../types/navigation';
-import { UserPermissions, ROLE_METADATA } from '../../types/auth';
+import { hasPermission, ROLE_METADATA } from '../../types/auth';
 import { ScreenWrapper } from '../../components/ui';
 import { theme } from '../../theme';
 import { hasProductionCapability } from '../../utils/factoryType';
@@ -31,10 +31,6 @@ export default function HomeScreen() {
   // Module Configuration
   const modules: ModuleConfig[] = useMemo(() => {
     if (!user) return [];
-    const userPermissions = (user.userType === 'platform'
-      ? user.platformUser?.permissions
-      : user.factoryUser?.permissions) || [];
-
     const allModules: ModuleConfig[] = [
       {
         id: 'processing',
@@ -43,7 +39,7 @@ export default function HomeScreen() {
         description: t('modules.processing.description'),
         status: 'available',
         progress: 27,
-        requiredPermissions: ['processing_access'],
+        requiredPermissions: ['production:read'],
         route: 'ProcessingTab',
         color: '#1890FF', // Neo Blue
       },
@@ -53,7 +49,7 @@ export default function HomeScreen() {
         icon: 'truck-delivery',
         description: t('modules.logistics.description'),
         status: 'available',
-        requiredPermissions: ['logistics_access'],
+        requiredPermissions: ['warehouse:read'],
         route: 'LogisticsTab',
         color: '#FAAD14', // Neo Orange
       },
@@ -63,7 +59,7 @@ export default function HomeScreen() {
         icon: 'qrcode-scan',
         description: t('modules.trace.description'),
         status: 'available',
-        requiredPermissions: ['trace_access'],
+        requiredPermissions: ['trace:read'],
         route: 'ProcessingTab',
         color: '#722ED1', // Neo Purple
       },
@@ -73,7 +69,7 @@ export default function HomeScreen() {
         icon: 'account-cog',
         description: t('modules.admin.description'),
         status: 'available',
-        requiredPermissions: ['admin_access'],
+        requiredPermissions: ['system:read'],
         route: 'ManagementTab',
         color: '#13C2C2', // Neo Cyan
       },
@@ -83,7 +79,7 @@ export default function HomeScreen() {
         icon: 'cog',
         description: t('modules.settings.description'),
         status: 'available',
-        requiredPermissions: [],
+        requiredPermissions: ['system:read'],
         color: '#595959', // Neo Gray
       },
     ];
@@ -91,18 +87,7 @@ export default function HomeScreen() {
     return allModules.filter(module => {
       if (!isModuleEnabled(module.id)) return false;
       if (module.id === 'processing' && !hasProductionCapability(user)) return false;
-      if (module.requiredPermissions.length === 0) return true;
-      return module.requiredPermissions.some(perm => {
-        if (Array.isArray(userPermissions)) {
-          return userPermissions.includes(perm);
-        }
-        if (typeof userPermissions === 'object' && userPermissions !== null && !Array.isArray(userPermissions)) {
-          const permsObj = userPermissions as Partial<UserPermissions>;
-          if (permsObj.modules && permsObj.modules[perm as keyof typeof permsObj.modules] === true) return true;
-          if (Array.isArray(permsObj.features) && permsObj.features.includes(perm)) return true;
-        }
-        return false;
-      });
+      return module.requiredPermissions.some(permission => hasPermission(user, permission));
     });
   }, [user, t, isModuleEnabled]);
 

@@ -3,7 +3,7 @@
  * 实现智能路由逻辑,根据用户角色和权限决定登录后的跳转目标
  */
 
-import { User, UserRole } from '../types/auth';
+import { hasPermission, User, UserRole } from '../types/auth';
 import { NavigationRoute } from '../types/navigation';
 
 /**
@@ -155,48 +155,7 @@ function getDepartmentAdminRoute(department?: string): NavigationRoute {
  * 检查用户是否有模块访问权限
  */
 export function hasModuleAccess(user: User, module: string): boolean {
-  const permissions = user.userType === 'platform'
-    ? user.platformUser?.permissions
-    : user.factoryUser?.permissions;
-
-  return checkPermission(permissions, module);
-}
-
-/**
- * 检查用户是否有某个权限
- */
-export function hasPermission(user: User, permission: string): boolean {
-  const permissions = user.userType === 'platform'
-    ? user.platformUser?.permissions
-    : user.factoryUser?.permissions;
-
-  return checkPermission(permissions, permission);
-}
-
-/**
- * 检查权限 - 兼容数组和对象格式
- */
-function checkPermission(permissions: any, perm: string): boolean {
-  if (!permissions) return false;
-
-  // 如果是数组格式
-  if (Array.isArray(permissions)) {
-    return permissions.includes(perm);
-  }
-
-  // 如果是对象格式 (后端返回的格式)
-  if (typeof permissions === 'object') {
-    // 检查 modules 对象
-    if (permissions.modules && permissions.modules[perm] === true) {
-      return true;
-    }
-    // 检查 features 数组
-    if (Array.isArray(permissions.features) && permissions.features.includes(perm)) {
-      return true;
-    }
-  }
-
-  return false;
+  return hasPermission(user, module);
 }
 
 /**

@@ -127,25 +127,6 @@ export type PlatformRole = typeof PLATFORM_ROLES[keyof typeof PLATFORM_ROLES];
 export type FactoryRole = typeof FACTORY_ROLES[keyof typeof FACTORY_ROLES];
 export type UserRole = PlatformRole | FactoryRole;
 
-// 用户权限接口
-export interface UserPermissions {
-  modules: {
-    farming_access: boolean;
-    processing_access: boolean;
-    logistics_access: boolean;
-    trace_access: boolean;
-    admin_access: boolean;
-    platform_access: boolean;
-    debug_access?: boolean;
-    system_config?: boolean;
-  };
-  features: string[];
-  role: string;
-  userType: 'platform' | 'factory';
-  level?: number;
-  departments?: string[];
-}
-
 // 部门定义 - 匹配后端数据库
 export const DEPARTMENTS = {
   FARMING: 'farming',
@@ -487,95 +468,6 @@ export function getUserPermissions(user: User | null | undefined): string[] {
 }
 
 /**
- * 根据角色获取默认权限
- * 权限格式: module:action (如 production:read, quality:write)
- */
-function getDefaultPermissionsForRole(role: string): string[] {
-  const rolePermissions: Record<string, string[]> = {
-    // 平台角色
-    platform_admin: ['platform_access', 'admin_access', 'processing_access', 'farming_access', 'logistics_access', 'trace_access'],
-
-    // Level 0 - 工厂总监 (所有权限)
-    factory_super_admin: [
-      'admin_access', 'processing_access', 'farming_access', 'logistics_access', 'trace_access',
-      'dashboard:read', 'dashboard:write',
-      'production:read', 'production:write',
-      'warehouse:read', 'warehouse:write',
-      'quality:read', 'quality:write',
-      'procurement:read', 'procurement:write',
-      'sales:read', 'sales:write',
-      'hr:read', 'hr:write',
-      'equipment:read', 'equipment:write',
-      'finance:read', 'finance:write',
-      'system:read', 'system:write'
-    ],
-
-    // Level 10 - 职能部门经理
-    hr_admin: ['hr:read', 'hr:write', 'dashboard:read'],
-    procurement_manager: ['procurement:read', 'procurement:write', 'warehouse:read', 'dashboard:read'],
-    sales_manager: ['sales:read', 'sales:write', 'warehouse:read', 'dashboard:read'],
-    production_manager: [
-      'production:read', 'production:write',
-      'warehouse:read', 'quality:read', 'procurement:read',
-      'hr:read', 'equipment:read', 'system:read',
-      'dashboard:read', 'dashboard:write',
-      'processing_access', 'admin_access'
-    ],
-    warehouse_manager: ['warehouse:read', 'warehouse:write', 'production:read', 'dashboard:read', 'dashboard:write'],
-    equipment_admin: ['equipment:read', 'equipment:write', 'dashboard:read'],
-    quality_manager: ['quality:read', 'quality:write', 'production:read', 'dashboard:read'],
-    finance_manager: [
-      'finance:read', 'finance:write',
-      'production:read', 'procurement:read', 'sales:read',
-      'dashboard:read'
-    ],
-    cashier: [
-      'finance:read', 'finance:write',
-      'procurement:read', 'sales:read',
-      'dashboard:read'
-    ],
-
-    // Level 15 - 调度管理
-    dispatcher: [
-      'scheduling:read', 'scheduling:write',
-      'production:read', 'production:write',
-      'hr:read', 'hr:write',
-      'equipment:read', 'warehouse:read',
-      'quality:read', 'dashboard:read', 'dashboard:write',
-      'processing_access', 'admin_access'
-    ],
-
-    // Level 20 - 车间管理
-    workshop_supervisor: [
-      'production:read', 'production:write',
-      'warehouse:read', 'quality:write',
-      'hr:read', 'equipment:read',
-      'dashboard:read',
-      'processing_access'
-    ],
-
-    // Level 30 - 一线员工
-    quality_inspector: ['quality:write', 'production:read', 'dashboard:read', 'processing_access'],
-    operator: ['production:write', 'dashboard:read', 'processing_access'],
-    yield_operator: ['production:write', 'dashboard:read', 'processing_access'],
-    warehouse_worker: ['warehouse:write', 'dashboard:read'],
-
-    // Level 50 - 查看者
-    viewer: [
-      'dashboard:read', 'production:read', 'warehouse:read',
-      'quality:read', 'procurement:read', 'sales:read',
-      'hr:read', 'equipment:read',
-      'trace_access'
-    ],
-
-    // 已废弃角色 (向后兼容)
-    permission_admin: ['admin_access', 'system:read', 'system:write'],
-    department_admin: ['processing_access', 'production:read', 'production:write'],
-  };
-  return rolePermissions[role] || [];
-}
-
-/**
  * 检查用户是否有某个权限
  * @param user 用户对象
  * @param permission 权限字符串
@@ -586,41 +478,14 @@ export function hasPermission(
 ): boolean {
   if (!user) return false;
 
-  // 获取用户角色
-  const role = isFactoryUser(user)
-    ? user.factoryUser.role
-    : isPlatformUser(user)
-      ? user.platformUser.role
-      : '';
-
-  // 获取用户权限数组
   const permissions = getUserPermissions(user);
+  const [requestedModule] = permission.split(':');
 
-  // 如果权限数组为空，根据角色自动授权
-  if (permissions.length === 0 && role) {
-    const defaultPermissions = getDefaultPermissionsForRole(role);
-    if (defaultPermissions.includes(permission)) {
-      return true;
-    }
-  }
-
-  // 部门管理员特殊处理：自动授予所在部门的访问权限
-  if (isFactoryUser(user) && user.factoryUser.role === 'department_admin') {
-    const department = user.factoryUser.department;
-    const departmentPermissionMap: Record<string, string> = {
-      'processing': 'processing_access',
-      'farming': 'farming_access',
-      'logistics': 'logistics_access',
-      'quality': 'quality_access',
-    };
-
-    if (department && departmentPermissionMap[department] === permission) {
-      return true;
-    }
-  }
-
-  // 检查权限数组
-  return permissions.includes(permission);
+  return permissions.some(granted => {
+    if (granted === '*:*' || granted === permission) return true;
+    const [grantedModule, grantedAction] = granted.split(':');
+    return grantedModule === requestedModule && grantedAction === '*';
+  });
 }
 
 /**

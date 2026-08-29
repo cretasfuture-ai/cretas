@@ -8,7 +8,6 @@ export {
   FactoryUser,
   UserDTO,
   UserRole,
-  UserPermissions,
   AuthTokens,
   LoginRequest,
   LoginResponse,
