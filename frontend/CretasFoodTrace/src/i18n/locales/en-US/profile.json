@@ -84,7 +84,17 @@
     "systemAlert": "System Alerts",
     "taskReminder": "Task Reminders",
     "productionAlert": "Production Alerts",
-    "qualityAlert": "Quality Alerts"
+    "qualityAlert": "Quality Alerts",
+    "equipmentAlert": "Equipment Alerts",
+    "inventoryAlert": "Inventory Alerts",
+    "notificationTypes": "Notification Types",
+    "pushDescription": "Receive mobile push notifications",
+    "productionDescription": "Production plan, batch, and work report updates",
+    "qualityDescription": "Quality inspection and exception handling updates",
+    "equipmentDescription": "Equipment fault and maintenance updates",
+    "inventoryDescription": "Low stock, expiry, and stocktake updates",
+    "systemDescription": "System maintenance and service status updates",
+    "disableTip": "Notification preferences are managed centrally and cannot currently be changed in the mobile app."
   },
   "systemSettings": {
     "title": "System Settings",

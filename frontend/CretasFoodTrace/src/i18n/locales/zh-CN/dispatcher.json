@@ -1162,7 +1162,8 @@
       "all": "全部",
       "slicing": "切片",
       "packaging": "包装",
-      "freezing": "冷冻"
+      "freezing": "冷冻",
+      "storage": "仓储"
     },
     "shifts": {
       "morning": "早班",

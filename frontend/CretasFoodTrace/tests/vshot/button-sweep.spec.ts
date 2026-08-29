@@ -25,13 +25,24 @@
  *   · 每一条非 GET 都逐条打印，⛔ 不做汇总
  */
 import { test, expect } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
-  waitForApp, navRefReady, login, navigateTo, screenText, rootState, collectRouteNames,
+  waitForApp, navRefReady, login, authSummary, navigateTo, currentPath,
+  screenText, rootState, collectRouteNames, navAlive,
 } from './vshot-lib';
 
 const APP = process.env.VSHOT_APP ?? 'http://localhost:3021';
 const USER = process.env.VSHOT_USER ?? 'f006_admin';
 const OUT = process.env.VSHOT_OUT ?? 'D:/Temp/vshots-buttons';
+const MODE = process.env.VSHOT_MODE ?? 'click';
+const RESULT = process.env.VSHOT_RESULT ?? path.join(OUT, `button-sweep-${USER}.json`);
+const DISCOVERY_SETTLE_MS = Number(process.env.VSHOT_DISCOVERY_SETTLE_MS ?? 900);
+const ROUTE_SETTLE_MS = Number(process.env.VSHOT_ROUTE_SETTLE_MS ?? 3500);
+const INTERMEDIATE_SETTLE_MS = Number(process.env.VSHOT_INTERMEDIATE_SETTLE_MS ?? 1200);
+const SCROLL_SETTLE_MS = Number(process.env.VSHOT_SCROLL_SETTLE_MS ?? 700);
+const LOADING_WAIT_MS = Number(process.env.VSHOT_LOADING_WAIT_MS ?? 7000);
 
 /** ⛔ 含这些词的一律不点 —— 不可逆或影响他人。 */
 const DESTRUCTIVE = [
@@ -42,8 +53,36 @@ const DESTRUCTIVE = [
 const SHORT = 14;
 
 type Fired = { method: string; url: string; status?: number };
+type ButtonResult = {
+  label: string;
+  submitLike: boolean;
+  destructive: boolean;
+  clicked: boolean;
+  navigatedAway?: boolean;
+  mutations?: Fired[];
+  dialogs?: string[];
+  verdict?: string;
+};
+type RouteResult = {
+  target: string;
+  landed: string;
+  renderText: string;
+  rendered: boolean;
+  navAlive: boolean;
+  screenErrorBoundary: boolean;
+  visibleProgressIndicators: number;
+  loadingText: boolean;
+  screenshot: string;
+  screenshotBytes: number;
+  screenshotSha256: string;
+  visibleI18nKeys: string[];
+  buttons: ButtonResult[];
+  invalidReason?: string;
+  duplicateOf?: string;
+};
 
 test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page }) => {
+  fs.mkdirSync(OUT, { recursive: true });
   // 路由来源两种：显式传 VSHOT_ROUTES，或留空让它自己把整棵树走一遍。
   // ⚠️ 手写清单永远只覆盖「我想到的那些屏」——而目标是「所有的按钮」，
   //    所以默认走自动发现（与 walkthrough 用的是同一套 collectRouteNames）。
@@ -78,6 +117,16 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
   await login(page, USER, '123456');
   await navRefReady(page);
   await page.waitForTimeout(4000);
+  const auth = await authSummary(page);
+  expect(auth?.username, '登录后的 auth store 没有用户，整轮读数作废').toBe(USER);
+  expect(auth?.factoryId, '登录后的 auth store 没有租户，整轮读数作废').toBe('F006');
+  const routeResults: RouteResult[] = [];
+  const renderedFingerprints = new Map<string, string>();
+  const flush = () => fs.writeFileSync(
+    RESULT,
+    JSON.stringify({ user: USER, auth, mode: MODE, routes: routeResults, fired }, null, 2),
+    'utf8',
+  );
 
   if (routes.length === 0) {
     // 逐步 BFS: 每走一步重新采一次。
@@ -102,12 +151,15 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
     while (queue.length) {
       const t = queue.shift() as string[];
       await navigateTo(page, t).catch(() => {});
-      await page.waitForTimeout(900);
+      await page.waitForTimeout(DISCOVERY_SETTLE_MS);
       const fresh = await collect();
       if (fresh.length) { containers.add(t.join('/')); queue.push(...fresh); }
       leaves.push(t.join('/'));
     }
-    let discovered = leaves.filter((r: string) => !containers.has(r) && r.includes('/'));
+    const uniqueLeaves = [...new Set(leaves)];
+    let discovered = uniqueLeaves.filter((r: string) =>
+      !containers.has(r) && !uniqueLeaves.some((other: string) => other !== r && other.startsWith(`${r}/`)),
+    );
     if (SKIP.length) {
       discovered = discovered.filter((r: string) => !SKIP.some((sk: string) => r.includes(sk)));
     }
@@ -117,11 +169,11 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
   expect(routes.length, '一条路由都没发现 —— 仪器坏了，读数作废').toBeGreaterThan(0);
 
   for (const route of routes) {
-    const path = route.split('/');
+    const routePath = route.split('/');
     // 逐级挂载：懒加载 tab 不先挂上，内层 stack 不存在
-    for (let i = 2; i <= path.length; i += 1) {
-      await navigateTo(page, path.slice(0, i));
-      await page.waitForTimeout(i === path.length ? 3500 : 1200);
+    for (let i = 2; i <= routePath.length; i += 1) {
+      await navigateTo(page, routePath.slice(0, i));
+      await page.waitForTimeout(i === routePath.length ? ROUTE_SETTLE_MS : INTERMEDIATE_SETTLE_MS);
     }
 
     // 错误边界顶着的话先恢复，否则后面每屏都读到同一张错误页
@@ -129,7 +181,7 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
     if ((await retry.count()) > 0) {
       await retry.click().catch(() => {});
       await page.waitForTimeout(2000);
-      await navigateTo(page, path);
+      await navigateTo(page, routePath);
       await page.waitForTimeout(3000);
     }
 
@@ -149,9 +201,110 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       }
     }
 
-    const before = await screenText(page);
+    // React Navigation 会保留上一屏的滚动容器；不归零会把下一屏标题裁掉，
+    // 截图看起来像“页面本来就没有标题”。所有可滚动容器与 window 一并复位。
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.querySelectorAll<HTMLElement>('*').forEach((el) => {
+        if (el.scrollTop > 0) el.scrollTop = 0;
+        if (el.scrollLeft > 0) el.scrollLeft = 0;
+      });
+    });
+    await page.waitForTimeout(150);
+
+    let before = await screenText(page);
+    let visibleProgressIndicators = 0;
+    let loadingText = false;
+    const loadingDeadline = Date.now() + LOADING_WAIT_MS;
+    do {
+      visibleProgressIndicators = await page.evaluate(() => {
+        const vh = window.innerHeight;
+        const vw = window.innerWidth;
+        return Array.from(document.querySelectorAll<HTMLElement>('[role="progressbar"]'))
+          .filter((el) => {
+            const r = el.getBoundingClientRect();
+            if (r.width < 4 || r.height < 4) return false;
+            if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return false;
+            for (let a: HTMLElement | null = el; a; a = a.parentElement) {
+              const st = getComputedStyle(a);
+              if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+              if (a.getAttribute('aria-hidden') === 'true') return false;
+            }
+            return true;
+          }).length;
+      });
+      loadingText = /加载中|正在加载|\bLoading\b/i.test(before.visible);
+      if (visibleProgressIndicators === 0 && !loadingText) break;
+      await page.waitForTimeout(300);
+      before = await screenText(page);
+    } while (Date.now() < loadingDeadline);
+    const landed = await currentPath(page);
+    const alive = await navAlive(page);
+    const screenErrorBoundary = await page.evaluate(() => {
+      const vh = window.innerHeight;
+      const vw = window.innerWidth;
+      return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="screen-error-boundary"]'))
+        .some((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width < 8 || r.height < 8) return false;
+          if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return false;
+          for (let a: HTMLElement | null = el; a; a = a.parentElement) {
+            const st = getComputedStyle(a);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            if (a.getAttribute('aria-hidden') === 'true') return false;
+          }
+          return true;
+        });
+    });
+    const safeRoute = route.replace(/[^\w.-]+/g, '_');
+    const screenshot = path.join(OUT, `${safeRoute}.png`);
+    await page.screenshot({ path: screenshot });
+    const screenshotBytes = fs.statSync(screenshot).size;
+    const screenshotSha256 = createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex');
+    const visibleI18nKeys = Array.from(new Set(
+      before.visible.match(/\b[a-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+\b/g) ?? [],
+    ));
+    const rendered = alive && !screenErrorBoundary && visibleProgressIndicators === 0 && !loadingText
+      && before.visible.trim().length >= 20 && screenshotBytes >= 8_000;
+    const visibleFingerprint = createHash('sha256')
+      .update(before.visible.replace(/\s+/g, ' ').trim())
+      .update('\0')
+      .update(screenshotSha256)
+      .digest('hex');
+    const duplicateOf = renderedFingerprints.get(visibleFingerprint);
+    const routeResult: RouteResult = {
+      target: route,
+      landed,
+      renderText: before.visible.slice(0, 240).replace(/\s+/g, ' '),
+      rendered,
+      navAlive: alive,
+      screenErrorBoundary,
+      visibleProgressIndicators,
+      loadingText,
+      screenshot,
+      screenshotBytes,
+      screenshotSha256,
+      visibleI18nKeys,
+      buttons: [],
+    };
     console.log(`\n════ ${route}`);
+    console.log(`     实际落点: ${landed}`);
     console.log(`     进屏: ${before.visible.slice(0, 110).replace(/\s+/g, ' ')}`);
+    if (landed !== route || !rendered || duplicateOf || visibleI18nKeys.length > 0) {
+      routeResult.duplicateOf = duplicateOf;
+      routeResult.invalidReason = landed !== route
+        ? `目标 ${route}，实际停在 ${landed}`
+        : !rendered
+          ? `真实渲染门禁失败: alive=${alive} screenError=${screenErrorBoundary} progress=${visibleProgressIndicators} loadingText=${loadingText} text=${before.visible.trim().length} bytes=${screenshotBytes}`
+          : duplicateOf
+            ? `目标 ${route} 与 ${duplicateOf} 的可见文字和截图完全相同，无法证明目标屏真实渲染`
+            : `页面直接显示未翻译 i18n key: ${visibleI18nKeys.join(', ')}`;
+      routeResults.push(routeResult);
+      flush();
+      console.log(`     ⛔ 读数作废: ${routeResult.invalidReason}`);
+      continue;
+    }
+    renderedFingerprints.set(visibleFingerprint, route);
 
     // ⚠️ 只看首屏会漏掉折叠线以下的按钮 —— 提交按钮往往正在那儿。
     //    实测：阳性对照那一屏只枚举到 1 个（返回箭头），提交按钮在下面。
@@ -200,7 +353,7 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       const sizeBefore = byText.size;
       await page.mouse.move(200, 400);
       await page.mouse.wheel(0, 600);
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(SCROLL_SETTLE_MS);
       for (const b of await collectVisible()) if (!byText.has(b.text)) byText.set(b.text, b);
       if (byText.size === sizeBefore && pass > 0) break; // 连续两轮没有新按钮 = 到底了
     }
@@ -213,10 +366,21 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
     for (const b of buttons) {
       const isDestructive =
         b.text.length <= SHORT && DESTRUCTIVE.some((w) => b.text.includes(w));
+      const label = b.text.replace(/^[-\s]+/, '');
+      const isSubmitLike = /^(提交|确认|保存|创建|发起|新增|确定|完成|应用|同步)/.test(label)
+        || /(提交|保存|确认)$/.test(label);
+      const buttonResult: ButtonResult = {
+        label: b.text,
+        submitLike: isSubmitLike,
+        destructive: isDestructive,
+        clicked: false,
+      };
+      routeResult.buttons.push(buttonResult);
       if (isDestructive) {
         console.log(`     ⛔ 跳过(破坏性): ${b.text}`);
         continue;
       }
+      if (MODE === 'inventory') continue;
       const mark = fired.length;
       const dlgMark = dialogs.length;
       const el = page.locator('[role="button"], button, [tabindex]').nth(b.idx);
@@ -245,9 +409,6 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       // ⚠️ 按钮文字常以**图标字形**开头(如 ` 提交入库 (1 行)`), 直接加 `^` 锚点会漏掉 ——
       //    实测「提交入库 (1 行)」因此没被报红, 是一次**静默假阴性**。
       //    ⇒ 先剥掉开头的私有区字形和空白, 再判。
-      const label = b.text.replace(/^[-\s]+/, '');
-      const isSubmitLike = /^(提交|确认|保存|创建|发起|新增|确定|完成|应用|同步)/.test(label)
-        || /(提交|保存|确认)$/.test(label);
       // ⛔ 不再用「屏上有没有成功字样」当判据。实测它把筛选 tab 的「已完成/历史(20)」
       //    当成了成功提示 —— 而在 web 上 Alert 又是空函数, 这一侧本来就读不全。
       //    ▎一个既漏又误报的判据, 比没有判据更糟。
@@ -260,6 +421,11 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       } else if (!saysOk && mutations.length > 0) {
         verdict = '⚠️ 没说话但发生了写入';
       }
+      buttonResult.clicked = true;
+      buttonResult.navigatedAway = navigatedAway;
+      buttonResult.mutations = mutations;
+      buttonResult.dialogs = newDialogs;
+      buttonResult.verdict = verdict;
 
       console.log(`     · 点「${b.text}」 → 非GET ${mutations.length} 条${verdict ? '  ' + verdict : ''}`);
       mutations.forEach((m) => console.log(`         ${m.method} ${m.status ?? '?'} ${m.url}`));
@@ -267,7 +433,7 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
       if (newText) console.log(`         屏上新增: ${newText.slice(0, 140)}`);
 
       // 回到这一屏（点击可能跳走了）
-      await navigateTo(page, path);
+      await navigateTo(page, routePath);
       await page.waitForTimeout(1600);
       if (drill) {
         const t = page.locator('[role="button"], button').filter({ hasText: drill }).first();
@@ -277,9 +443,16 @@ test('逐屏点按钮：屏上说的 vs 真的发出去的请求', async ({ page
         }
       }
     }
-    await page.screenshot({ path: `${OUT}/${route.replace(/\//g, '_')}.png`, fullPage: true });
+    routeResults.push(routeResult);
+    flush();
   }
 
   console.log(`\n════ 全程非 GET 请求合计 ${fired.length} 条`);
   fired.forEach((m) => console.log(`   ${m.method} ${m.status ?? '?'} ${m.url}`));
+  flush();
+  const invalidRoutes = routeResults.filter((r) => r.invalidReason);
+  const brokenButtons = routeResults.flatMap((r) => r.buttons)
+    .filter((b) => b.verdict?.startsWith('🔴'));
+  expect(invalidRoutes, '存在无法证明真实渲染的目标屏，整轮不得报绿').toEqual([]);
+  expect(brokenButtons, '存在提交假成功或请求失败按钮，整轮不得报绿').toEqual([]);
 });

@@ -84,7 +84,17 @@
     "systemAlert": "系统告警",
     "taskReminder": "任务提醒",
     "productionAlert": "生产告警",
-    "qualityAlert": "质量告警"
+    "qualityAlert": "质量告警",
+    "equipmentAlert": "设备告警",
+    "inventoryAlert": "库存告警",
+    "notificationTypes": "通知类型",
+    "pushDescription": "接收移动端推送通知",
+    "productionDescription": "生产计划、批次和报工状态提醒",
+    "qualityDescription": "质检任务和异常处置提醒",
+    "equipmentDescription": "设备故障和维护提醒",
+    "inventoryDescription": "库存不足、临期和盘点提醒",
+    "systemDescription": "系统维护和服务状态提醒",
+    "disableTip": "通知偏好当前由系统统一管理，移动端暂不支持修改。"
   },
   "systemSettings": {
     "title": "系统设置",

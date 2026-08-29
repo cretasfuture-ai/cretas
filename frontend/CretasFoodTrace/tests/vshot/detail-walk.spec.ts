@@ -20,7 +20,7 @@
  * ⚠️ 这仍然是**代理判据**：一个不带这些词、看起来像卡片的东西，理论上仍可能触发写入。
  * 所以本文件只在 F006（测试租户）上跑，且跑完要核对没有新增业务单据。
  */
-import { test } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -68,6 +68,7 @@ type Rec = {
   textLen: number;
   crashedApp: boolean;
   consoleErrors: string[];
+  invalidReason?: string;
 };
 
 test('open each list, tap one row, look at the detail screen', async ({ page }) => {
@@ -83,8 +84,12 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
   // （第一次跑完只对比了业务单据数，而那期间**另一条 session 的 E2E 正在建单**，
   //   于是「销售订单 45 → 51」既不能证明我写了、也不能证明我没写。）
   const mutations: string[] = [];
+  const readSignals: string[] = [];
   page.on('request', (r) => {
     const m = r.method();
+    if (r.url().includes('/api/') && (m === 'GET' || (m === 'POST' && /\/list-summary\//.test(r.url())))) {
+      readSignals.push(`${m} ${r.url().slice(0, 200)}`);
+    }
     if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
       mutations.push(`${m} ${r.url().slice(0, 200)}`);
     }
@@ -94,7 +99,8 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
   await waitForApp(page);
   await login(page, USER, PASS);
   const auth = await authSummary(page);
-  if (!auth?.isAuthenticated) throw new Error('login did not take');
+  expect(auth?.username, '详情走查登录串号，整轮读数作废').toBe(USER);
+  expect(auth?.factoryId, '详情走查不是 F006，整轮读数作废').toBe('F006');
   console.log('AUTH ' + JSON.stringify(auth));
   await navRefReady(page);
   await page.waitForTimeout(5000);
@@ -126,8 +132,12 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
     n += 1;
     consoleBuf = [];
 
-    const res = await navigateTo(page, target);
-    await page.waitForTimeout(SETTLE);
+    let res = { ok: true as boolean, error: undefined as string | undefined };
+    for (let depth = 2; depth <= target.length; depth += 1) {
+      res = await navigateTo(page, target.slice(0, depth));
+      await page.waitForTimeout(depth === target.length ? SETTLE : 600);
+      if (!res.ok) break;
+    }
     if (!res.ok || !(await navAlive(page))) {
       // 无参数进详情屏 -> 白屏。第二轮已经量过这一类，这里只重建会话继续。
       await page.goto(APP, { waitUntil: 'domcontentloaded' });
@@ -139,6 +149,13 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
       continue;
     }
     const before = await currentPath(page);
+    await enqueue();
+    const leafRoute = target[target.length - 1] ?? '';
+    if (!/(List|Orders|Records|Todo|Tasks|Queue|History|Approval|Notifications|Deliveries)$/.test(leafRoute)) {
+      // 只在语义明确的列表页找详情卡片。个人中心、测试页、导出页也有全宽可点卡片，
+      // 旧探针曾在 IntentExecutionTest 把测试场景当列表行并真的发出 AI execute POST。
+      continue;
+    }
 
     // ---- find plausible list rows ------------------------------------------
     //
@@ -209,17 +226,31 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
 
     const safe = `${key}__TO__${landed}`.replace(/[^\w.-]+/g, '_').slice(0, 150);
     const file = `${String(records.length + 1).padStart(3, '0')}__${safe}.png`;
-    try {
-      await page.screenshot({ path: path.join(OUT, file) });
-    } catch {
-      /* ignore */
-    }
     let text = '';
+    const deadline = Date.now() + 7000;
+    do {
+      try { text = (await screenText(page)).visible; } catch { text = ''; }
+      if (!/加载中|正在加载|\bLoading\b/i.test(text)) break;
+      await page.waitForTimeout(300);
+    } while (Date.now() < deadline);
+    let screenshotBytes = 0;
     try {
-      text = (await screenText(page)).visible;
+      const fullPath = path.join(OUT, file);
+      await page.screenshot({ path: fullPath });
+      screenshotBytes = fs.statSync(fullPath).size;
     } catch {
-      /* ignore */
+      /* invalidReason below records the missing screenshot */
     }
+    const i18nKeys = text.match(/\b[a-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+\b/g) ?? [];
+    const invalidReason = /这一页打不开/.test(text)
+      ? '真实源单据进入后仍显示屏级错误边界'
+      : /加载中|正在加载|\bLoading\b/i.test(text)
+        ? '真实源单据进入后仍停在加载态'
+        : i18nKeys.length
+          ? `页面直接显示未翻译 i18n key: ${[...new Set(i18nKeys)].join(', ')}`
+          : text.trim().length < 20 || screenshotBytes < 8000
+            ? `真实渲染门禁失败: text=${text.trim().length} bytes=${screenshotBytes}`
+            : undefined;
 
     records.push({
       list: before,
@@ -229,6 +260,7 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
       textLen: text.length,
       crashedApp: !alive,
       consoleErrors: consoleBuf.slice(0, 4),
+      invalidReason,
     });
     fs.appendFileSync(
       path.join(OUT, 'detail-text.jsonl'),
@@ -248,12 +280,16 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
   }
 
   // 登录本身是 POST，把它从「写入」里排除掉，剩下的都要解释。
-  const businessMutations = mutations.filter((u) => !/\/auth\/(unified-)?login|\/auth\/refresh|\/logs?/.test(u));
+  const queryOnlyPosts = mutations.filter((u) => /POST .*\/list-summary\//.test(u));
+  const businessMutations = mutations.filter((u) =>
+    !/\/auth\/(unified-)?login|\/auth\/refresh|\/logs?(?:\?|$)/.test(u)
+    && !/POST .*\/list-summary\//.test(u),
+  );
 
   fs.writeFileSync(
     path.join(OUT, 'detail-summary.json'),
     JSON.stringify(
-      { auth, visitedRoutes: n, detailScreens: records.length, mutations, businessMutations, records },
+      { auth, visitedRoutes: n, detailScreens: records.length, readSignals, queryOnlyPosts, mutations, businessMutations, records },
       null,
       2,
     ),
@@ -261,5 +297,10 @@ test('open each list, tap one row, look at the detail screen', async ({ page }) 
   );
   console.log(`DONE visited=${n} detailScreensReached=${records.length}`);
   console.log(`NON-GET requests: ${mutations.length} (business, excluding auth: ${businessMutations.length})`);
+  console.log(`READ signals: ${readSignals.length} (query-only POST: ${queryOnlyPosts.length})`);
   businessMutations.slice(0, 20).forEach((u) => console.log('   !! ' + u));
+  expect(records.length, '没有从任何真实列表卡片进入详情，零分母不得报绿').toBeGreaterThan(0);
+  expect(records.filter((r) => r.invalidReason), '真实源详情仍有未渲染/裸翻译键页面').toEqual([]);
+  expect(readSignals.length, '没有任何只读 API 信号，无法区分仪器失效与零业务写入').toBeGreaterThan(0);
+  expect(businessMutations, '只读详情走查发生了业务写请求').toEqual([]);
 });

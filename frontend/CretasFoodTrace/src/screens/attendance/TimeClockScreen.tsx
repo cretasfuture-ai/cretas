@@ -280,7 +280,6 @@ export default function TimeClockScreen() {
           <View style={styles.grid}>
             <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('AttendanceHistory')} style={styles.gridBtn}>{t('attendance.timeClock.historyRecords')}</NeoButton>
             <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('TimeStatistics', {})} style={styles.gridBtn}>{t('attendance.timeClock.timeStatistics')}</NeoButton>
-            <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('WorkRecords', {})} style={styles.gridBtn}>{t('attendance.timeClock.workRecords')}</NeoButton>
             <NeoButton variant="outline" size="small" onPress={() => navigation.navigate('DepartmentAttendance')} style={styles.gridBtn}>{t('attendance.timeClock.departmentAttendance')}</NeoButton>
           </View>
         </NeoCard>
