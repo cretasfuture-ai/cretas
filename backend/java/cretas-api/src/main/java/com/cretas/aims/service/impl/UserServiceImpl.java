@@ -92,7 +92,35 @@ public class UserServiceImpl implements UserService {
         return userMapper.toDTO(user);
     }
 
-    @Override
+        @Override
+    @Transactional
+    public UserDTO updateMyProfile(String factoryId, Long userId,
+                                   com.cretas.aims.dto.user.UpdateMyProfileRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new EntityNotFoundException("User", String.valueOf(userId)));
+
+        // 跨厂保护: token 里的 userId 与路径上的 factoryId 必须对得上。
+        if (!user.getFactoryId().equals(factoryId)) {
+            throw new BusinessException(403, "无权操作该用户")
+                    .withHint("当前用户不属于该工厂, 无法操作");
+        }
+
+        // ⛔ 白名单 —— 这个方法**只**动这两个字段。
+        //    角色 / 工厂 / 启用状态 / 用户名 / 密码一律不碰(那是人事管理的事)。
+        //    null 表示「这次不改」, 空串表示「清空」, 两者要分开。
+        if (request.getFullName() != null) {
+            user.setFullName(request.getFullName().trim());
+        }
+        if (request.getEmail() != null) {
+            user.setEmail(request.getEmail().trim());
+        }
+
+        userRepository.save(user);
+        log.info("用户更新本人资料: factoryId={}, userId={}", factoryId, userId);
+        return userMapper.toDTO(user);
+    }
+
+@Override
     @Transactional
     public UserDTO updateUser(String factoryId, Long userId, CreateUserRequest request) {
         User user = userRepository.findById(userId)

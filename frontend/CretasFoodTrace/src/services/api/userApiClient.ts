@@ -139,6 +139,25 @@ class UserApiClient {
    * 4. 更新用户信息
    * PUT /api/{factoryId}/users/{userId}
    */
+  /**
+   * 改**自己**的资料 —— 只有姓名与邮箱。
+   *
+   * ⛔ 自助编辑**不要**用 {@link updateUser}: 那个接口是人事管理的
+   * `PUT /users/{userId}`，由 `@RequireModule("hr_employee")` +
+   * `hr:read_write` 守着。2026-08-29 逐屏走查实测，仓储主管点「我的 → 编辑 → 保存」
+   * 拿到 **403**，提示他去开通整个人事模块的写权限 —— 那是错的处方。
+   */
+  async updateMyProfile(
+    request: { fullName?: string; email?: string },
+    factoryId?: string
+  ): Promise<UserDTO> {
+    const response = await apiClient.put<{ code: number; data: UserDTO; message: string; success: boolean; }>(
+      `${this.getFactoryPath(factoryId)}/users/me/profile`,
+      request
+    );
+    return response.data;
+  }
+
   async updateUser(
     userId: number,
     request: UpdateUserRequest,
