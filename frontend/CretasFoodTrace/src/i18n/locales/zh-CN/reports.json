@@ -141,7 +141,7 @@
     "overallEfficiency": "整体效率",
     "noEfficiencyData": "暂无效率数据",
     "cannotGetFactoryInfo": "无法获取工厂信息，请重新登录",
-    "loadFailed": "加载失败",
+    "loadFailed": "设备统计加载失败",
     "error": "错误"
   },
   "trend": {

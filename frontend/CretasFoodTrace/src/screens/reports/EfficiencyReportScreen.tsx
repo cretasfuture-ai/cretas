@@ -51,7 +51,26 @@ export default function EfficiencyReportScreen() {
   const [activeTab, setActiveTab] = useState('overview');
 
   // 数据状态
-  const [efficiencyStats, setEfficiencyStats] = useState<{ equipmentOEE: number; equipmentUtilization: number; laborEfficiency: number; overallEfficiency: number } | null>(null);
+  // 🔴 2026-08-29 逐屏走查: 这一屏的四个数, 没有一个是它标签说的那个量。
+  //
+  //   设备OEE      来自 equipmentApiClient.getStatistics 的 averageOEE, 字段不在就是 0
+  //   设备利用率    = activeCount / totalCount —— 那是「有几台设备是 active 状态」,
+  //                 与「产能利用率」是两个量, 而屏上就叫「设备利用率」
+  //   人员效率      **硬编码的字面 0**, 从来没有任何计算
+  //   整体效率      **硬编码的字面 0**, 同上
+  //
+  // 而 catch 分支写着「设备统计加载失败，使用默认数据」-> 四个全设 0。
+  // 那是核心原则 1 禁止的降级处理: 失败时给一屏看起来像读数的 0。
+  //
+  // ⇒ 全部改成可空: 算不出就是 null, 屏上显示「—」并说清为什么。
+  //   ⛔ 一条零长度的进度条读起来就是「这个指标是 0」, 所以 null 时连条也不画。
+  const [efficiencyStats, setEfficiencyStats] = useState<{
+    equipmentOEE: number | null;
+    activeEquipmentRatio: number | null;
+    laborEfficiency: number | null;
+    overallEfficiency: number | null;
+  } | null>(null);
+  const [efficiencyError, setEfficiencyError] = useState<string | null>(null);
 
   // OEE数据状态
   const [oeeData, setOeeData] = useState<OeeReportDTO | null>(null);
@@ -69,40 +88,48 @@ export default function EfficiencyReportScreen() {
 
       efficiencyReportLogger.debug('加载效率报表数据', { timeRange, factoryId });
 
+      setEfficiencyError(null);
       // 尝试加载设备统计（可能包含效率数据）
       try {
         const equipmentStatsResponse = await equipmentApiClient.getStatistics(factoryId);
 
         if (equipmentStatsResponse.success && equipmentStatsResponse.data) {
           const stats = equipmentStatsResponse.data;
+          const rawOee = 'averageOEE' in stats
+            ? (stats as { averageOEE: number | null }).averageOEE
+            : null;
           const newEfficiencyStats = {
-            equipmentOEE: ('averageOEE' in stats ? (stats as { averageOEE: number }).averageOEE : 0),
-            equipmentUtilization: stats.activeCount && stats.totalCount
+            // 接口没给这个字段就是算不出, ⛔ 不拿 0 顶
+            equipmentOEE: rawOee == null ? null : Number(rawOee),
+            // 改名成它真实的含义: 在运行的设备占比。
+            // ⛔ 它不是「设备利用率」—— 那个在产能利用率报表里, 分母是产线小时产能 × 工厂工时。
+            activeEquipmentRatio: (stats.totalCount != null && stats.totalCount > 0
+              && stats.activeCount != null)
               ? (stats.activeCount / stats.totalCount) * 100
-              : 0,
-            laborEfficiency: 0,
-            overallEfficiency: 0,
+              : null,
+            // ⛔ 这两个原来是硬编码的 0 —— 没有任何数据源。
+            //    在有对应事实之前一律 null, 屏上说「暂无数据」。
+            laborEfficiency: null,
+            overallEfficiency: null,
           };
           setEfficiencyStats(newEfficiencyStats);
 
           efficiencyReportLogger.info('效率报表数据加载成功', {
-            equipmentOEE: Number(newEfficiencyStats.equipmentOEE ?? 0).toFixed(1) + '%',
-            equipmentUtilization: Number(newEfficiencyStats.equipmentUtilization ?? 0).toFixed(1) + '%',
-            overallEfficiency: Number(newEfficiencyStats.overallEfficiency ?? 0).toFixed(1) + '%',
+            equipmentOEE: newEfficiencyStats.equipmentOEE == null ? '算不出' : Number(newEfficiencyStats.equipmentOEE).toFixed(1) + '%',
+            activeEquipmentRatio: newEfficiencyStats.activeEquipmentRatio == null ? '算不出' : Number(newEfficiencyStats.activeEquipmentRatio).toFixed(1) + '%',
+            overallEfficiency: newEfficiencyStats.overallEfficiency == null ? '算不出(没有数据源)' : Number(newEfficiencyStats.overallEfficiency).toFixed(1) + '%',
             factoryId,
           });
         }
       } catch (error) {
-        efficiencyReportLogger.warn('设备统计加载失败，使用默认数据', {
+        // ⛔ 原来这里是「使用默认数据」-> 四个全设 0。
+        //    那让「接口挂了」和「四项指标都是 0%」在屏上长得一模一样。
+        efficiencyReportLogger.warn('设备统计加载失败', {
           factoryId,
           error: (error as Error).message,
         });
-        setEfficiencyStats({
-          equipmentOEE: 0,
-          equipmentUtilization: 0,
-          laborEfficiency: 0,
-          overallEfficiency: 0,
-        });
+        setEfficiencyStats(null);
+        setEfficiencyError((error as Error).message || '设备统计加载失败');
       }
     } catch (error) {
       efficiencyReportLogger.error('加载效率报表失败', error as Error, {
@@ -246,45 +273,74 @@ export default function EfficiencyReportScreen() {
               <View style={styles.metricHeader}>
                 <Text style={styles.metricLabel}>{t('efficiency.equipmentOEE')}</Text>
                 <Text style={[styles.metricValue, { color: '#4CAF50' }]}>
-                  {Number(efficiencyStats.equipmentOEE ?? 0).toFixed(1)}%
+                  {efficiencyStats.equipmentOEE == null
+                    ? '—'
+                    : `${Number(efficiencyStats.equipmentOEE).toFixed(1)}%`}
                 </Text>
               </View>
-              <ProgressBar progress={Number(efficiencyStats.equipmentOEE ?? 0) / 100} color="#4CAF50" />
+              {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」 */}
+              {efficiencyStats.equipmentOEE == null ? null : (
+                <ProgressBar progress={Number(efficiencyStats.equipmentOEE) / 100} color="#4CAF50" />
+              )}
             </View>
 
             <View style={styles.metricItem}>
               <View style={styles.metricHeader}>
                 <Text style={styles.metricLabel}>{t('efficiency.equipmentUtilization')}</Text>
                 <Text style={[styles.metricValue, { color: '#2196F3' }]}>
-                  {Number(efficiencyStats.equipmentUtilization ?? 0).toFixed(1)}%
+                  {efficiencyStats.activeEquipmentRatio == null
+                    ? '—'
+                    : `${Number(efficiencyStats.activeEquipmentRatio).toFixed(1)}%`}
                 </Text>
               </View>
-              <ProgressBar progress={Number(efficiencyStats.equipmentUtilization ?? 0) / 100} color="#2196F3" />
+              {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」 */}
+              {efficiencyStats.activeEquipmentRatio == null ? null : (
+                <ProgressBar progress={Number(efficiencyStats.activeEquipmentRatio) / 100} color="#2196F3" />
+              )}
             </View>
 
             <View style={styles.metricItem}>
               <View style={styles.metricHeader}>
                 <Text style={styles.metricLabel}>{t('efficiency.laborEfficiency')}</Text>
                 <Text style={[styles.metricValue, { color: '#FF9800' }]}>
-                  {Number(efficiencyStats.laborEfficiency ?? 0).toFixed(1)}%
+                  {efficiencyStats.laborEfficiency == null
+                    ? '—'
+                    : `${Number(efficiencyStats.laborEfficiency).toFixed(1)}%`}
                 </Text>
               </View>
-              <ProgressBar progress={Number(efficiencyStats.laborEfficiency ?? 0) / 100} color="#FF9800" />
+              {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」 */}
+              {efficiencyStats.laborEfficiency == null ? null : (
+                <ProgressBar progress={Number(efficiencyStats.laborEfficiency) / 100} color="#FF9800" />
+              )}
             </View>
 
             <View style={styles.metricItem}>
               <View style={styles.metricHeader}>
                 <Text style={styles.metricLabel}>{t('efficiency.overallEfficiency')}</Text>
                 <Text style={[styles.metricValue, { color: '#9C27B0' }]}>
-                  {Number(efficiencyStats.overallEfficiency ?? 0).toFixed(1)}%
+                  {efficiencyStats.overallEfficiency == null
+                    ? '—'
+                    : `${Number(efficiencyStats.overallEfficiency).toFixed(1)}%`}
                 </Text>
               </View>
-              <ProgressBar progress={Number(efficiencyStats.overallEfficiency ?? 0) / 100} color="#9C27B0" />
+              {/* 算不出就不画条 —— 一条零长度的进度条读起来就是「这个指标是 0」 */}
+              {efficiencyStats.overallEfficiency == null ? null : (
+                <ProgressBar progress={Number(efficiencyStats.overallEfficiency) / 100} color="#9C27B0" />
+              )}
             </View>
           </>
         ) : (
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>{t('efficiency.noEfficiencyData')}</Text>
+            {/* 分开说: 「接口挂了」和「暂时没有数据」是两回事。
+                ⛔ 原来这两种都落到同一句「暂无效率数据」, 更早之前甚至都显示成 0.0%。 */}
+            <Text style={styles.emptyText}>
+              {efficiencyError
+                ? t('efficiency.loadFailed')
+                : t('efficiency.noEfficiencyData')}
+            </Text>
+            {efficiencyError ? (
+              <Text style={styles.emptyHint}>{efficiencyError}</Text>
+            ) : null}
           </View>
         )}
       </Surface>
@@ -459,6 +515,12 @@ const styles = StyleSheet.create({
   metricHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   metricLabel: { fontSize: 16, fontWeight: '500', color: '#212121' },
   metricValue: { fontSize: 20, fontWeight: '700' },
+  emptyHint: {
+    fontSize: 12,
+    color: '#9E9E9E',
+    marginTop: 6,
+    textAlign: 'center',
+  },
   emptyContainer: { padding: 40, alignItems: 'center' },
   emptyText: { color: '#999' },
   bottomPadding: { height: 80 },
