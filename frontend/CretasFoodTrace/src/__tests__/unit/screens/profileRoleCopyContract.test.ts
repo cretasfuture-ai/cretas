@@ -22,4 +22,16 @@ describe('个人中心角色文案', () => {
     expect(source).not.toContain('return roleMap[role');
     expect(source).not.toContain("|| role || '未知角色'");
   });
+
+  it('出成率录入员与普通操作员都不显示数据导出和开发测试入口', () => {
+    const source = read('screens/profile/ProfileScreen.tsx');
+
+    expect(source).toContain(
+      "const isOperator = roleCode === 'operator' || roleCode === 'yield_operator';"
+    );
+    expect(source.match(/\{!isOperator && \(/g)).toHaveLength(3);
+    expect(source).toContain('数据导出 — A1: hidden for operators');
+    expect(source).toContain('服务器连接测试 — A1: hidden for operators');
+    expect(source).toContain('意图执行测试 — A1: hidden for operators');
+  });
 });

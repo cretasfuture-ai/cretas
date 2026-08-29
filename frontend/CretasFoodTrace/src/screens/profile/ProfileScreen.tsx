@@ -150,7 +150,7 @@ export default function ProfileScreen() {
   // persisted-user-shape edge cases (e.g. platform vs factory discriminated union).
   const roleCode = getUserRole();
   // A1: operators see only user-facing items; dev/admin tools are hidden.
-  const isOperator = roleCode === 'operator';
+  const isOperator = roleCode === 'operator' || roleCode === 'yield_operator';
 
   const getRoleName = (role: string | undefined | null) => {
     return ROLE_METADATA[role ?? '']?.displayName || '未知角色';
