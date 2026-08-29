@@ -43,7 +43,7 @@ public class DataScopeAspect {
 
     private final DataScopeResolver resolver;
 
-    @Around("@annotation(scope) || @within(scope)")
+    @Around("@annotation(scope)")
     public Object aroundDataScope(ProceedingJoinPoint pjp, DataScope scope) throws Throwable {
         Long userId = SecurityUtils.currentUserId();
         DataScopeContext ctx = resolver.resolve(userId);
