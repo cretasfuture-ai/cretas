@@ -45,11 +45,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h3>Approach</h3>
  * Each test method (1) seeds a fresh user + org tree + sample customer rows in
- * {@code @BeforeEach}, (2) stubs {@link SecurityContextHolder} so
- * {@link com.cretas.aims.utils.SecurityUtils#getCurrentUserId()} returns the
- * fixture user, (3) injects the desired {@link DataScope} via
+ * {@code @BeforeEach}, (2) injects the desired {@link DataScope} via
  * {@link DataScopeContext#push} (bypassing role_definitions DB lookup so test
- * works on H2 without that table), (4) calls
+ * works on H2 without that table), (3) calls
  * {@link CustomerService#getCustomerList} and asserts visible row counts /
  * row owners match the expected scope semantics.
  *
@@ -202,12 +200,10 @@ class RbacIntegrationTest {
     /**
      * Push a {@link DataScopeContext} for the given fixture user + scope.
      *
-     * <p>Intentionally does NOT populate {@link SecurityContextHolder}: leaving it
-     * empty causes {@link DataScopeResolver#resolve} (called by the
-     * {@code @DataScope} AOP) to return null (because
-     * {@code SecurityUtils.getCurrentUserId()} returns null), which makes the
-     * aspect a NO-OP. The context we push here survives at the top of the stack
-     * and is what {@code CustomerServiceImpl.dispatchByScope} reads.
+     * <p>This fixture intentionally bypasses the production AOP identity path.
+     * Production requests obtain the user id from the JWT request attribute;
+     * this test invokes the service directly and pushes the exact context that
+     * {@code CustomerServiceImpl.dispatchByScope} reads.
      *
      * <p>This lets us test all 15 (role × scope) combos without needing to seed
      * 15 distinct entries in {@code role_definitions} (a table that doesn't

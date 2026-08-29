@@ -54,11 +54,10 @@ class CurrentUserIdSourceGateContractTest {
      *
      * <p>登记是留痕，不是豁免 —— 往这里加一行必须写清理由。
      */
-    private static final Map<String, String> DELIBERATELY_NOT_MIGRATED = Map.of(
-            "aspect/DataScopeAspect.java",
-            "改它会同时翻转 10 处 @DataScope 的数据可见性(现在因为 userId 恒 null 而整体 no-op)。"
-                    + "那是「用户能看见哪些行」的变化, 必须单独一轮逐屏验收, 不能夹在本次修复里。"
-    );
+    private static final Map<String, String> DELIBERATELY_NOT_MIGRATED = Map.of();
+
+    private static final Pattern DEPRECATED_CALL =
+            Pattern.compile("SecurityUtils\\.getCurrentUser(?:Id|name)\\(\\)");
 
     private static Stream<Path> javaSources() throws IOException {
         return Files.walk(MAIN).filter(p -> p.toString().endsWith(".java"));
@@ -71,7 +70,6 @@ class CurrentUserIdSourceGateContractTest {
     }
 
     private static Map<String, Integer> deprecatedCallSites() throws IOException {
-        Pattern call = Pattern.compile("SecurityUtils\\.getCurrentUser(?:Id|name)\\(\\)");
         Map<String, Integer> found = new TreeMap<>();
         try (Stream<Path> sources = javaSources()) {
             for (Path p : sources.toList()) {
@@ -79,7 +77,7 @@ class CurrentUserIdSourceGateContractTest {
                     continue; // 实现本身
                 }
                 String code = stripComments(Files.readString(p, StandardCharsets.UTF_8));
-                Matcher m = call.matcher(code);
+                Matcher m = DEPRECATED_CALL.matcher(code);
                 int n = 0;
                 while (m.find()) {
                     n++;
@@ -109,17 +107,11 @@ class CurrentUserIdSourceGateContractTest {
 
     @Test
     @DisplayName("阳性对照: 扫描器真的能在源码里找到这个调用 —— 否则「0 处」只是仪器瞎了")
-    void scannerCanActuallyFindTheCall() throws IOException {
-        Map<String, Integer> found = deprecatedCallSites();
-
-        assertThat(found)
-                .as("登记表里的文件必须真的还含有那个调用; 一个都找不到说明扫描器坏了, "
-                        + "此时上一条断言的「没有未登记调用点」是个无意义的绿")
-                .isNotEmpty();
-        assertThat(found.get("aspect/DataScopeAspect.java"))
-                .as("DataScopeAspect 是已知仍在用旧取法的那一处")
-                .isNotNull()
-                .isPositive();
+    void scannerCanActuallyFindTheCall() {
+        String syntheticViolation = "Long id = SecurityUtils.getCurrentUserId();";
+        assertThat(DEPRECATED_CALL.matcher(syntheticViolation).find())
+                .as("阳性对照必须命中旧身份取法，否则全仓 0 处只是扫描器瞎了")
+                .isTrue();
     }
 
     @Test
