@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>拦截 {@link DataScope @DataScope} 标注的方法:
  * <ol>
- *   <li>从 {@link SecurityUtils#getCurrentUserId()} 取当前 userId</li>
+ *   <li>从 {@link SecurityUtils#currentUserId()} 取当前 request attribute userId</li>
  *   <li>{@link DataScopeResolver#resolve(Long)} 解析 scope</li>
  *   <li>{@link DataScopeContext#push(DataScopeContext)} 入栈</li>
  *   <li>调用原方法 — Service 实现读 {@link DataScopeContext#current()} 决定 WHERE</li>
@@ -45,7 +45,7 @@ public class DataScopeAspect {
 
     @Around("@annotation(scope) || @within(scope)")
     public Object aroundDataScope(ProceedingJoinPoint pjp, DataScope scope) throws Throwable {
-        Long userId = SecurityUtils.getCurrentUserId();
+        Long userId = SecurityUtils.currentUserId();
         DataScopeContext ctx = resolver.resolve(userId);
 
         if (ctx == null) {
