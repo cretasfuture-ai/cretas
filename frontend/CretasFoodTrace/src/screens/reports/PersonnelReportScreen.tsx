@@ -254,15 +254,17 @@ export default function PersonnelReportScreen() {
                   <Text style={styles.statValue}>{personnelStats.totalEmployees}</Text>
                   <Text style={styles.statLabel}>{t('personnel.totalEmployees')}</Text>
                 </View>
+                {/* 没有打卡记录时不给数 —— ⛔「在岗 0 / 缺勤 23」是编出来的指控, 不是读数。
+                    实拍: F006 本月 23 人全判缺勤, 而 time_clock_records 全表零行。 */}
                 <View style={styles.statBox}>
                   <Text style={[styles.statValue, { color: '#4CAF50' }]}>
-                    {personnelStats.totalPresent}
+                    {personnelStats.totalPresent == null ? '—' : personnelStats.totalPresent}
                   </Text>
                   <Text style={styles.statLabel}>{t('personnel.present')}</Text>
                 </View>
                 <View style={styles.statBox}>
                   <Text style={[styles.statValue, { color: '#F44336' }]}>
-                    {personnelStats.totalAbsent}
+                    {personnelStats.totalAbsent == null ? '—' : personnelStats.totalAbsent}
                   </Text>
                   <Text style={styles.statLabel}>{t('personnel.absent')}</Text>
                 </View>
@@ -279,9 +281,23 @@ export default function PersonnelReportScreen() {
               <View style={styles.attendanceRateContainer}>
                 <Text style={styles.attendanceRateLabel}>{t('personnel.avgAttendanceRate')}</Text>
                 <Text style={styles.attendanceRateValue}>
-                  {Number(personnelStats.avgAttendanceRate ?? 0).toFixed(1)}%
+                  {personnelStats.avgAttendanceRate == null
+                    ? '—'
+                    : `${Number(personnelStats.avgAttendanceRate).toFixed(1)}%`}
                 </Text>
               </View>
+
+              {/* 说清为什么是「—」—— ⛔ 只给一个破折号等于让人自己猜 */}
+              {personnelStats.avgAttendanceRate == null && (
+                <View style={styles.attendanceUnknownBox}>
+                  <Text style={styles.attendanceUnknownTitle}>
+                    {t('personnel.attendanceNotTracked')}
+                  </Text>
+                  <Text style={styles.attendanceUnknownHint}>
+                    {t('personnel.attendanceNotTrackedHint')}
+                  </Text>
+                </View>
+              )}
             </>
           ) : (
             <View style={styles.emptyContainer}>
@@ -617,6 +633,23 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 13,
     color: '#666',
+  },
+  attendanceUnknownBox: {
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#F5F5F5',
+  },
+  attendanceUnknownTitle: {
+    fontSize: 13,
+    color: '#616161',
+    fontWeight: '600',
+  },
+  attendanceUnknownHint: {
+    fontSize: 12,
+    color: '#9E9E9E',
+    marginTop: 4,
+    lineHeight: 18,
   },
   attendanceRateContainer: {
     flexDirection: 'row',
