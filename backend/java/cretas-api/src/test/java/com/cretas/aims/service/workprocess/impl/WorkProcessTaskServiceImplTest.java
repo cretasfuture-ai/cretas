@@ -129,6 +129,58 @@ class WorkProcessTaskServiceImplTest {
     }
 
     @Test
+    @DisplayName("legacy DTO: 工序产出单位误填成工序名时回落任务计划单位")
+    void getById_legacyInvalidOutputUnitFallsBackToPlannedUnit() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID)
+                .factoryId(FACTORY_ID)
+                .workProcessId(WP_ID)
+                .plannedUnit("kg")
+                .status(WorkProcessTask.Status.PENDING)
+                .build();
+        WorkProcess definition = WorkProcess.builder()
+                .id(WP_ID)
+                .factoryId(FACTORY_ID)
+                .processName("绞肉")
+                .unit("kg")
+                .outputUnit("绞肉")
+                .build();
+
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID)).thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID)).thenReturn(Optional.of(definition));
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertEquals("kg", dto.getOutputUnit(), "非单位值不得传播到报工与 WIP");
+    }
+
+    @Test
+    @DisplayName("legacy DTO: 合法跨单位产出仍保留工序配置")
+    void getById_legacyRecognizedCrossUnitOutputIsPreserved() {
+        WorkProcessTask task = WorkProcessTask.builder()
+                .id(TASK_ID)
+                .factoryId(FACTORY_ID)
+                .workProcessId(WP_ID)
+                .plannedUnit("kg")
+                .status(WorkProcessTask.Status.PENDING)
+                .build();
+        WorkProcess definition = WorkProcess.builder()
+                .id(WP_ID)
+                .factoryId(FACTORY_ID)
+                .processName("装盒")
+                .unit("kg")
+                .outputUnit("盒")
+                .build();
+
+        when(taskRepository.findByFactoryIdAndId(FACTORY_ID, TASK_ID)).thenReturn(Optional.of(task));
+        when(workProcessRepository.findByFactoryIdAndId(FACTORY_ID, WP_ID)).thenReturn(Optional.of(definition));
+
+        WorkProcessTaskDTO dto = service.getById(FACTORY_ID, TASK_ID);
+
+        assertEquals("盒", dto.getOutputUnit(), "合法 kg→盒 跨单位不能被回落掉");
+    }
+
+    @Test
     @DisplayName("getById: definition 未配区间 → DTO 字段 null (不校验)")
     void getById_nullStandardYieldWhenUnconfigured() {
         WorkProcessTask task = WorkProcessTask.builder()
