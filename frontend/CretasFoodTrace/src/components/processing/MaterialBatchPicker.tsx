@@ -149,7 +149,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   validationRef.current = onValidationChange;
 
   rowsRef.current = rows;
-  const selectedRows = rows.filter((r) => r.selected);
+  const selectedRowEntries = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.selected);
+  const selectedRows = selectedRowEntries.map(({ row }) => row);
   const isMultiBatch = selectedRows.length > 1;
   const queryKey = `${factoryId ?? ''}|${productTypeId ?? ''}`;
   queryKeyRef.current = queryKey;
@@ -326,13 +329,34 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       // 切换选中时清除 confirmed 状态 (用户在重新选)
       setConfirmed(false);
       setConfirmFeedback(false);
-      setRows((prev: RowState[]) =>
-        prev.map((r: RowState, i: number) =>
-          i === idx ? { ...r, selected: !r.selected, qtyStr: !r.selected ? '' : r.qtyStr } : r,
-        ),
-      );
+      setRows((prev: RowState[]) => {
+        const target = prev[idx];
+        if (target == null) return prev;
+
+        const selecting = !target.selected;
+        const selectedBefore = prev.filter((row) => row.selected);
+        const parsedSingleQty = parseFloat(singleBatchQty);
+        const shouldCarrySingleQty =
+          selecting &&
+          selectedBefore.length === 1 &&
+          !forceIndependentQuantity &&
+          !Number.isNaN(parsedSingleQty) &&
+          parsedSingleQty > 0;
+
+        return prev.map((row: RowState, i: number) => {
+          if (i === idx) {
+            return { ...row, selected: selecting, qtyStr: selecting ? '' : row.qtyStr };
+          }
+          if (shouldCarrySingleQty && row.selected) {
+            // 单批 → 多批时，屏幕“投入量”就是原首批的真实用量。
+            // 把原始字符串带入逐批输入，避免切换模式后静默丢失已填数据。
+            return { ...row, qtyStr: singleBatchQty };
+          }
+          return row;
+        });
+      });
     },
-    [],
+    [forceIndependentQuantity, singleBatchQty],
   );
 
   const setQty = useCallback(
@@ -649,11 +673,14 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
               </View>
             ) : null}
 
-            {/* B2: removed scrollEnabled={false} — the 320dp clip was preventing scroll to lower batches
-              * BUG-3 fix: wrap each row in TouchableOpacity so the full row is tappable (≥44pt).
-              * The inner checkbox View is now visual-only (pointerEvents="none") — row press handles toggle.
-              * When multi-batch qty TextInput is rendered, it stops propagation naturally (TextInput handles its own touches). */}
-            <ScrollView style={styles.listScroll} nestedScrollEnabled>
+            {/* 固定高度区域只负责选批次。逐批数量输入放在此 ScrollView 外，避免 Android
+              * 同向嵌套滚动 + 选中行动态增高后把首个 TextInput 裁到 viewport 之外。 */}
+            <ScrollView
+              style={styles.listScroll}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              testID="material-batch-list-scroll"
+            >
               {visibleRowIndices.length === 0 ? (
                 <Text style={styles.emptyText}>该厂号下暂无可领批次</Text>
               ) : null}
@@ -699,33 +726,16 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                     <Text style={styles.remaining} testID={`material-batch-remaining-${row.batch.id}`}>
                       剩余 {row.batch.remainingQuantity} {rowUnit}
                     </Text>
-                    {row.selected && rowOverLimit(row, !isMultiBatch) ? (
-                      <Text style={styles.rowLimitText}>
-                        最多可领 {row.batch.remainingQuantity} {rowUnit}
-                      </Text>
-                    ) : null}
                   </View>
 
                   {/*
                    * Q1 单一数据源:
                    * 单批次已选 → 不显示 per-batch 用量输入，qty 由屏幕「投入量」驱动
-                   * 多批次已选 → 显示各自用量输入
-                   * Note: TextInput inside TouchableOpacity captures its own touches correctly.
+                   * 多批次已选 → 输入位于固定高度列表下方的独立编辑区
                    */}
                   {row.selected && (isMultiBatch || forceIndependentQuantity) ? (
-                    <View style={styles.qtyBox}>
-                      <TextInput
-                        style={[styles.qtyInput, disabled && styles.qtyInputDisabled]}
-                        keyboardType="decimal-pad"
-                        value={row.qtyStr}
-                        onChangeText={(v: string) => setQty(idx, v)}
-                        editable={!disabled}
-                        placeholder="用量"
-                        placeholderTextColor="#C0C4CC"
-                        accessibilityLabel={`批次 ${row.batch.batchNumber} 用量`}
-                        testID={`material-batch-qty-${row.batch.id}`}
-                      />
-                      <Text style={styles.qtyUnit} testID={`material-batch-qty-unit-${row.batch.id}`}>{rowUnit}</Text>
+                    <View style={styles.multiQtyLocationHint}>
+                      <Text style={styles.multiQtyLocationHintText}>下方填用量</Text>
                     </View>
                   ) : row.selected && !isMultiBatch ? (
                     // 单批次: 显示提示, 投入量由屏幕控制
@@ -739,6 +749,66 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
             </ScrollView>
             </>
           )}
+
+          {/*
+           * 多批次数量编辑区刻意放在 listScroll 外：它随 YieldStepReportScreen 的外层
+           * ScrollView 参与页面布局，因此 2–5 个输入都能滚到，不会被 320dp 选择列表裁剪。
+           */}
+          {selectedCount > 0 && (isMultiBatch || forceIndependentQuantity) ? (
+            <View
+              style={styles.selectedQuantitySection}
+              testID="material-batch-selected-quantity-section"
+            >
+              <Text style={styles.selectedQuantityTitle}>已选批次用量（逐批填写）</Text>
+              <Text style={styles.selectedQuantityHelp}>每批不能超过该批剩余量；全部填写后才能确定</Text>
+              {selectedRowEntries.map(({ row, index }) => {
+                const rowUnit = row.batch.quantityUnit ?? unit;
+                const overLimit = rowOverLimit(row, false);
+                return (
+                  <View
+                    key={row.batch.id}
+                    style={[styles.selectedQuantityRow, overLimit && styles.selectedQuantityRowError]}
+                    testID={`material-batch-selected-quantity-row-${row.batch.id}`}
+                  >
+                    <View style={styles.selectedQuantityIdentity}>
+                      <Text style={styles.batchNumber}>{row.batch.batchNumber}</Text>
+                      {row.batch.materialName ? (
+                        <Text style={styles.materialName}>{row.batch.materialName}</Text>
+                      ) : null}
+                      <Text style={styles.remaining}>
+                        最多可领 {row.batch.remainingQuantity} {rowUnit}
+                      </Text>
+                      {overLimit ? (
+                        <Text style={styles.rowLimitText}>
+                          已超出本批可领量，请调小后再确定
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.qtyBox}>
+                      <TextInput
+                        style={[
+                          styles.qtyInput,
+                          overLimit && styles.qtyInputError,
+                          disabled && styles.qtyInputDisabled,
+                        ]}
+                        keyboardType="decimal-pad"
+                        value={row.qtyStr}
+                        onChangeText={(v: string) => setQty(index, v)}
+                        editable={!disabled}
+                        placeholder="用量"
+                        placeholderTextColor="#C0C4CC"
+                        accessibilityLabel={`批次 ${row.batch.batchNumber} 用量`}
+                        testID={`material-batch-qty-${row.batch.id}`}
+                      />
+                      <Text style={styles.qtyUnit} testID={`material-batch-qty-unit-${row.batch.id}`}>
+                        {rowUnit}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
 
           {/* 多批次合计 */}
           {selectedCount > 0 && isMultiBatch ? (
@@ -886,8 +956,29 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF', textAlign: 'center',
   },
   qtyInputDisabled: { opacity: 0.5 },
+  qtyInputError: { borderColor: '#F56C6C', backgroundColor: '#FFF5F5' },
   qtyUnit: { fontSize: 13, color: '#909399', marginLeft: 4 },
   rowLimitText: { fontSize: 12, color: '#F56C6C', marginTop: 2 },
+
+  multiQtyLocationHint: {
+    paddingHorizontal: 8, paddingVertical: 4,
+    backgroundColor: '#FFF3EC', borderRadius: 6,
+  },
+  multiQtyLocationHintText: { fontSize: 12, color: '#E8732E', fontWeight: '600' },
+  selectedQuantitySection: {
+    marginTop: 12, padding: 10,
+    borderWidth: 1, borderColor: '#F3C6A9', borderRadius: 8,
+    backgroundColor: '#FFFBF7',
+  },
+  selectedQuantityTitle: { fontSize: 15, color: '#303133', fontWeight: '700' },
+  selectedQuantityHelp: { fontSize: 12, color: '#606266', marginTop: 3, marginBottom: 8 },
+  selectedQuantityRow: {
+    flexDirection: 'row', alignItems: 'center',
+    minHeight: 72, paddingVertical: 8,
+    borderTopWidth: 1, borderTopColor: '#F2E6DE',
+  },
+  selectedQuantityRowError: { backgroundColor: '#FFF5F5' },
+  selectedQuantityIdentity: { flex: 1, marginRight: 8 },
 
   // Q1: 单批次时 per-row 提示
   singleQtyHint: {
