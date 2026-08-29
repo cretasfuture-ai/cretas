@@ -77,6 +77,10 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
     @Autowired
     private PurchaseReceiveRecordRepository receiveRecordRepository;
 
+    /** 超收上限取值入口 —— 与执行侧 confirmReceive 同一个梯子。 */
+    @Autowired
+    private WorkdeskOverReceivePolicy overReceivePolicy;
+
     @Autowired
     private PurchaseService purchaseService;
 
@@ -113,7 +117,8 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> receivedQty = new HashMap<>();
         receivedQty.put("type", "number");
-        receivedQty.put("description", "本次实收数量 (必填, 必须 > 0). 系统校验 " + WorkdeskOverReceivePolicy.pctLabel() + " 超收上限.");
+        // ⛔ 不写具体百分比: schema 在注册时构建, 拿不到 factoryId, 而上限按工厂配。
+        receivedQty.put("description", "本次实收数量 (必填, 必须 > 0). 系统校验本厂配置的超收上限.");
         properties.put("receivedQty", receivedQty);
 
         Map<String, Object> receiveStatus = new HashMap<>();
@@ -196,8 +201,12 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         BigDecimal ordered = nonNull(item.getQuantity());
         BigDecimal alreadyReceived = nonNull(item.getReceivedQuantity());
         BigDecimal pending = ordered.subtract(alreadyReceived);
-        BigDecimal overReceiveLimit = ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT);
-        BigDecimal remainingCap = pending.add(overReceiveLimit);
+        // 上限来自【执行侧同一个梯子】。⚠️ 不限制时两者都是 null, 比较前必须判 null,
+        // ⛔ 不许兜底成 0 —— 那会把「不限制」翻译成「一件都不许多收」。
+        final com.cretas.aims.service.inventory.OverReceiveLimit limit =
+                overReceivePolicy.limitFor(po.getFactoryId());
+        BigDecimal overReceiveLimit = WorkdeskOverReceivePolicy.capFor(limit, ordered);
+        BigDecimal remainingCap = WorkdeskOverReceivePolicy.remainingCapFor(limit, ordered, pending);
 
         // 3. R4 idempotent precheck
         DuplicateCheckResult dup = checkDuplicate(factoryId, poId);
@@ -234,15 +243,16 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
                     item.getMaterialName(), stripZeros(ordered), stripZeros(alreadyReceived)));
             return result;
         }
-        if (proposed.compareTo(remainingCap) > 0) {
+        // ⚠️ remainingCap == null 表示【不限制】 —— 此时不做上限判定
+        if (remainingCap != null && proposed.compareTo(remainingCap) > 0) {
             result.put("status", "OVER_LIMIT");
             result.put("canDo", false);
-            result.put("warningIfOver", "超 " + WorkdeskOverReceivePolicy.pctLabel() + " 超收上限触发审批");
+            result.put("warningIfOver", "超 " + WorkdeskOverReceivePolicy.labelFor(limit) + " 超收上限触发审批");
             result.put("message", String.format(
                     "⛔ 实收 %s%s 超过 %s 超收上限 (最多 %s%s = 剩余 %s + 超收上限 %s). "
                             + "请减少实收数量或联系采购员调整 PO.",
                     stripZeros(proposed), nullToEmpty(item.getUnit()),
-                    WorkdeskOverReceivePolicy.pctLabel(),
+                    WorkdeskOverReceivePolicy.labelFor(limit),
                     stripZeros(remainingCap), nullToEmpty(item.getUnit()),
                     stripZeros(pending), stripZeros(overReceiveLimit)));
             return result;
@@ -268,7 +278,7 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         String overReceivedHint = proposed.compareTo(pending) > 0
                 ? String.format(" (超收 %s%s, 在 %s 范围内)",
                         stripZeros(proposed.subtract(pending)), nullToEmpty(item.getUnit()),
-                        WorkdeskOverReceivePolicy.pctLabel())
+                        WorkdeskOverReceivePolicy.labelFor(limit))
                 : "";
         result.put("message", String.format(
                 "✅ 收货 %s — %s %s%s%s. 收货状态: %s. 确认提交后立即更新库存 + 自动挂应付.",
@@ -314,12 +324,16 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         BigDecimal ordered = nonNull(item.getQuantity());
         BigDecimal alreadyReceived = nonNull(item.getReceivedQuantity());
         BigDecimal pending = ordered.subtract(alreadyReceived);
-        BigDecimal remainingCap = pending.add(ordered.multiply(WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT));
-        if (proposed.compareTo(remainingCap) > 0) {
+        final com.cretas.aims.service.inventory.OverReceiveLimit writeLimit =
+                overReceivePolicy.limitFor(po.getFactoryId());
+        BigDecimal remainingCap =
+                WorkdeskOverReceivePolicy.remainingCapFor(writeLimit, ordered, pending);
+        // ⚠️ null = 不限制 ⇒ 不做判定。⛔ 不许兜底成 0 去比。
+        if (remainingCap != null && proposed.compareTo(remainingCap) > 0) {
             throw new IllegalArgumentException(String.format(
                     "实收 %s%s 超过 %s 超收上限 %s%s, 拒绝入库",
                     stripZeros(proposed), nullToEmpty(item.getUnit()),
-                    WorkdeskOverReceivePolicy.pctLabel(),
+                    WorkdeskOverReceivePolicy.labelFor(writeLimit),
                     stripZeros(remainingCap), nullToEmpty(item.getUnit())));
         }
         if (proposed.compareTo(BigDecimal.ZERO) <= 0) {

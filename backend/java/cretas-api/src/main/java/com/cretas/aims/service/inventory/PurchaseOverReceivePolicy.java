@@ -44,6 +44,21 @@ public class PurchaseOverReceivePolicy {
     private final FactorySettingsRepository factorySettingsRepository;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 全局属性兜底值（ops 全工厂生效）。<b>留空 = 本层不表态</b>。
+     *
+     * <p>⚠️ 默认必须是 {@code null} 而不是 {@code 0.00}：用 {@code :0.00} 当默认值时，
+     * 「没人配过」和「限制 0%」不可区分，2026-08-25 生产上按 0% 把货堵在了门口。
+     *
+     * <p>⚠️ 这与 {@code PurchaseServiceImpl} 注入的是<b>同一个 property key</b>，
+     * 两处读到的必然是同一个值。之所以在这里也注入一份，是为了让
+     * {@link #effectiveLimit(String)} 能被<b>不持有该属性的调用方</b>（如 Workdesk 展示侧）
+     * 直接使用 —— 否则展示侧要么拿不到、要么自己再写一份字面量，
+     * 而「自己再写一份」正是本次要消灭的那个副本。
+     */
+    @org.springframework.beans.factory.annotation.Value("${cretas.purchase.over-receive-rate:#{null}}")
+    private BigDecimal globalPropertyRate;
+
     public PurchaseOverReceivePolicy(FactorySettingsRepository factorySettingsRepository,
             ObjectMapper objectMapper) {
         this.factorySettingsRepository = factorySettingsRepository;
@@ -99,5 +114,28 @@ public class PurchaseOverReceivePolicy {
      */
     public OverReceiveLimit effectiveLimit(String factoryId, BigDecimal globalPropertyRate) {
         return OverReceiveLimit.resolve(factoryConfiguredRate(factoryId), globalPropertyRate);
+    }
+
+    /**
+     * 该工厂当前<b>实际生效</b>的超收上限 —— <b>展示侧唯一入口</b>，不需要调用方持有全局属性。
+     *
+     * <h3>它修的是什么（2026-08-29）</h3>
+     * 上面那个双参重载的 javadoc 早就写着「展示侧应当调这一个方法，而不是自己再写一份百分比字面量」，
+     * 而 grep 全仓 <b>调用者是 0</b> —— Workdesk 的三个收货工具一直在用自己那份硬编码
+     * {@code WorkdeskOverReceivePolicy.OVER_RECEIVE_PCT = 0.30}。
+     *
+     * <p>后果是<b>展示侧对仓管员说 30%，而执行侧当前根本不限制</b>
+     * （{@code cretas.purchase.over-receive-rate} 全仓从未设置过）。
+     * 一旦有工厂把它配成 50%，Workdesk 仍然会说 30% —— 两个数，谁也不知道哪个算数。
+     *
+     * <p>⇒ 正确的 API 早就存在、还写明了用途，只是<b>没有人接上它</b>。
+     *
+     * @return 非 null；{@code isUnlimited()} 为真时表示不限制，
+     *         此时 {@link OverReceiveLimit#maxAllowed} 返回 {@code null}、
+     *         {@link OverReceiveLimit#label()} 返回「不限制」。
+     *         ⛔ 调用方不许把那个 null 兜底成 0 —— 那会把「不限制」翻译成「一件都不许收」。
+     */
+    public OverReceiveLimit effectiveLimit(String factoryId) {
+        return effectiveLimit(factoryId, globalPropertyRate);
     }
 }
