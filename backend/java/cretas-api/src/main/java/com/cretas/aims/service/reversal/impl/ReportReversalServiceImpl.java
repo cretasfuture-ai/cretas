@@ -374,6 +374,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             if (inTxns == null) {
                 continue;
             }
+            List<SemiFinishedInventoryTransaction> unmatchedReversals = inTxns.stream()
+                    .filter(existing -> SemiFinishedInventoryTransaction.TxnType.REVERSE
+                            .equals(existing.getTxnType()))
+                    .collect(Collectors.toCollection(ArrayList::new));
             for (SemiFinishedInventoryTransaction inTxn : inTxns) {
                 if (!SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())
                         && !SemiFinishedInventoryTransaction.TxnType.OUT.equals(inTxn.getTxnType())) {
@@ -385,13 +389,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 }
                 BigDecimal reverseQuantity = SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())
                         ? quantity.negate() : quantity.abs();
-                boolean alreadyReversed = inTxns.stream().anyMatch(existing ->
-                        SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(existing.getTxnType())
-                                && Objects.equals(existing.getSemiFinishedId(), inTxn.getSemiFinishedId())
-                                && Objects.equals(existing.getReportId(), r.getId())
-                                && existing.getQuantity() != null
-                                && existing.getQuantity().compareTo(reverseQuantity) == 0);
-                if (alreadyReversed) {
+                if (consumeMatchingReverse(unmatchedReversals, inTxn, r.getId(), reverseQuantity)) {
                     continue;
                 }
                 // IN 的逆是负量；OUT 的逆是正量。原流水永远不改。
@@ -555,6 +553,31 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 } catch (NumberFormatException ex) {
                     return true;
                 }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Consume one exact compensating row. Equal movements on another SFI, or a single REVERSE
+     * for duplicate original rows, must not make the remaining movement look compensated.
+     */
+    private static boolean consumeMatchingReverse(
+            List<SemiFinishedInventoryTransaction> candidates,
+            SemiFinishedInventoryTransaction original,
+            Long reportId,
+            BigDecimal reverseQuantity) {
+        if (reportId == null || reverseQuantity == null) {
+            return false;
+        }
+        for (int i = 0; i < candidates.size(); i++) {
+            SemiFinishedInventoryTransaction candidate = candidates.get(i);
+            if (Objects.equals(candidate.getSemiFinishedId(), original.getSemiFinishedId())
+                    && Objects.equals(candidate.getReportId(), reportId)
+                    && candidate.getQuantity() != null
+                    && candidate.getQuantity().compareTo(reverseQuantity) == 0) {
+                candidates.remove(i);
+                return true;
             }
         }
         return false;
