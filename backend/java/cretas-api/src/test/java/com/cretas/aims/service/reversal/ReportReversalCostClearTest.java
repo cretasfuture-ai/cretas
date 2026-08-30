@@ -7,6 +7,9 @@ import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
+import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -72,6 +75,9 @@ class ReportReversalCostClearTest {
     // 断点2 新增 field-inject deps
     @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
+    @Mock private MaterialBatchRepository materialBatchRepository;
+    @Mock private ProductionSettlementRepository productionSettlementRepository;
+    @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
 
     private List<SalesOrderItem> savedItems;
 
@@ -81,6 +87,10 @@ class ReportReversalCostClearTest {
         // 字段注入的断点2 新 deps → 手动注入.
         ReflectionTestUtils.setField(service, "productionPlanRepository", productionPlanRepository);
         ReflectionTestUtils.setField(service, "salesOrderItemRepository", salesOrderItemRepository);
+        ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
+                productionSettlementConsumptionRepository);
 
         savedItems = new ArrayList<>();
         when(salesOrderItemRepository.save(any(SalesOrderItem.class)))

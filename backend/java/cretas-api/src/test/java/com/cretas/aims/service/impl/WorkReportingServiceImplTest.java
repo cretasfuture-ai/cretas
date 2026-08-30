@@ -85,6 +85,29 @@ class WorkReportingServiceImplTest {
         return req;
     }
 
+    @Test
+    @DisplayName("手动结单使用同厂悲观锁批次读取")
+    void manualCompleteBatch_usesFactoryScopedPessimisticLookup() {
+        ProductionBatch batch = ProductionBatch.builder()
+                .id(BATCH_ID)
+                .factoryId(FACTORY_ID)
+                .batchNumber("PB-LOCK-001")
+                .productTypeId("PT-LOCK")
+                .quantity(new BigDecimal("10"))
+                .unit("kg")
+                .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                .build();
+        when(productionBatchRepository.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID))
+                .thenReturn(java.util.Optional.of(batch));
+
+        service.manualCompleteBatch(FACTORY_ID, BATCH_ID);
+
+        assertEquals(com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED, batch.getStatus());
+        verify(productionBatchRepository).findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID);
+        verify(productionBatchRepository).save(batch);
+        verify(productionBatchRepository, never()).findById(BATCH_ID);
+    }
+
     @Nested
     @DisplayName("按报工类型校验所属字段")
     class ReportTypeValidationTests {

@@ -11,6 +11,10 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
+import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -98,10 +102,23 @@ class ReportReversalServiceTest {
     private com.cretas.aims.service.NotificationService notificationService;
     @Mock
     private ProcessSheetRowRepository processSheetRowRepository;
+    @Mock
+    private MaterialBatchRepository materialBatchRepository;
+    @Mock
+    private ProductionSettlementRepository productionSettlementRepository;
+    @Mock
+    private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
+    @Mock
+    private ProductionPlanRepository productionPlanRepository;
 
     @BeforeEach
     void injectOptionalRepositories() {
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
+                productionSettlementConsumptionRepository);
+        ReflectionTestUtils.setField(service, "productionPlanRepository", productionPlanRepository);
         lenient().when(reversalLogRepo.findByIdAndFactoryIdForUpdate(anyLong(), anyString()))
                 .thenAnswer(invocation -> reversalLogRepo.findById(invocation.getArgument(0)));
     }

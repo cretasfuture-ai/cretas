@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -117,8 +119,10 @@ class ReportReversalMaterialRestoreTest {
                 .id(BATCH_ID).factoryId(FACTORY_ID).productionPlanId(PLAN_ID)
                 .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
                 .build();
-        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID))
                 .thenReturn(Optional.of(productionBatch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(productionBatch));
         com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
         plan.setId(PLAN_ID);
         plan.setFactoryId(FACTORY_ID);
@@ -366,9 +370,9 @@ class ReportReversalMaterialRestoreTest {
     }
 
     @Test
-    @DisplayName("R3: repo 未注入 (老 context) → 跳过原料恢复, 不抛异常 (向后兼容)")
-    void executeReversal_reposNotInjected_skipsGracefully() {
-        // 模拟老 context: 清空 R3 field-inject deps
+    @DisplayName("R3: 结单恢复依赖未注入 → fail closed 且不写任何数据")
+    void executeReversal_reposNotInjected_failsClosed() {
+        // 模拟错误 context: 清空 R3 field-inject deps; planId 非空时不得静默完成撤回
         ReflectionTestUtils.setField(service, "materialBatchRepository", null);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", null);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", null);
@@ -376,12 +380,11 @@ class ReportReversalMaterialRestoreTest {
         when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
                 .thenReturn(Collections.emptyList());
 
-        // 不应抛异常
-        service.executeReversal(LOG_ID, FACTORY_ID);
-
-        ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
-        verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getValue().getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("结单恢复依赖未配置");
+        verify(reportRepo, never()).findYieldReportsByBatch(any(), any());
+        verify(reversalLogRepo, never()).save(any());
     }
 
     // ─────────────────────────────────────────────────────────────

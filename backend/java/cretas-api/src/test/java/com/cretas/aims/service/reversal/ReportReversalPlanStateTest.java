@@ -136,10 +136,6 @@ class ReportReversalPlanStateTest {
         ProductionPlan plan = completedPlan();
         ProductionBatch batch = completedBatch();
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
-        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
-        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
-                .thenReturn(List.of(batch));
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
         when(settlementRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.empty());
 
@@ -180,6 +176,36 @@ class ReportReversalPlanStateTest {
     }
 
     @Test
+    void settlementReversal_completedPlanWithRunningBatch_reopensPlanOnly() {
+        ReportReversalLog log = pendingLog();
+        ProductionPlan plan = completedPlan();
+        ProductionBatch batch = completedBatch();
+        batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        batch.setActualQuantity(new BigDecimal("6.25"));
+        batch.setGoodQuantity(new BigDecimal("5.75"));
+        batch.setDefectQuantity(new BigDecimal("0.50"));
+        LocalDateTime batchEnd = LocalDateTime.of(2026, 8, 30, 11, 30);
+        batch.setEndTime(batchEnd);
+        stubScope(log, plan, batch, activeSettlement());
+
+        service.executeReversal(LOG_ID, FACTORY_ID);
+
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.IN_PROGRESS);
+        assertThat(plan.getActualQuantity()).isNull();
+        assertThat(plan.getEndTime()).isNull();
+        verify(planRepo, times(1)).save(plan);
+
+        assertThat(batch.getStatus()).isEqualTo(ProductionBatchStatus.IN_PROGRESS);
+        assertThat(batch.getActualQuantity()).isEqualByComparingTo("6.25");
+        assertThat(batch.getGoodQuantity()).isEqualByComparingTo("5.75");
+        assertThat(batch.getDefectQuantity()).isEqualByComparingTo("0.50");
+        assertThat(batch.getEndTime()).isEqualTo(batchEnd);
+        assertThat(batch.getStartTime()).isEqualTo(batchStart());
+        assertThat(batch.getProductTypeId()).isEqualTo("product-1");
+        verify(batchRepo, never()).save(any(ProductionBatch.class));
+    }
+
+    @Test
     void settlementReversal_crossFactorySettlement_failsBeforeAnyMutation() {
         ReportReversalLog log = pendingLog();
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
@@ -208,7 +234,7 @@ class ReportReversalPlanStateTest {
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
         when(settlementRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.of(settlement));
-        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
         when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(batch));
 
@@ -229,7 +255,7 @@ class ReportReversalPlanStateTest {
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
         when(settlementRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.of(settlement));
-        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
         when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(batch));
         when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.empty());
@@ -240,6 +266,82 @@ class ReportReversalPlanStateTest {
                         assertThat(error.getErrorCode()).isEqualTo("REVERSAL_SCOPE_INVALID"));
         verify(reportRepo, never()).save(any());
         verify(settlementRepo, never()).save(any());
+        verify(reversalLogRepo, never()).save(any());
+    }
+
+    @Test
+    void settlementReversal_planBelongsToOtherFactory_failsBeforeAnyMutation() {
+        ReportReversalLog log = pendingLog();
+        ProductionSettlement settlement = activeSettlement();
+        ProductionBatch batch = completedBatch();
+        ProductionPlan foreignPlan = completedPlan();
+        foreignPlan.setFactoryId(OTHER_FACTORY);
+        when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        when(settlementRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(settlement));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(foreignPlan));
+
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .hasMessageContaining("生产计划不属于当前工厂")
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("REVERSAL_SCOPE_INVALID");
+                });
+        verify(reportRepo, never()).save(any());
+        verify(workProcessTaskRepository, never()).saveAll(any());
+        verify(settlementRepo, never()).save(any());
+        verify(consumptionRepo, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
+        verify(wipRepo, never()).save(any());
+        verify(planRepo, never()).save(any());
+        verify(batchRepo, never()).save(any());
+        verify(reversalLogRepo, never()).save(any());
+    }
+
+    @Test
+    void settlementReversal_multipleFormalBatches_failsBeforeAnyMutation() {
+        ReportReversalLog log = pendingLog();
+        ProductionSettlement settlement = activeSettlement();
+        ProductionBatch batch = completedBatch();
+        ProductionBatch second = completedBatch();
+        second.setId(BATCH_ID + 1);
+        second.setBatchNumber("B-1924-2");
+        when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        when(settlementRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(settlement));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch, second));
+
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .hasMessageContaining("唯一对应一个可撤回正式批次")
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode())
+                            .isEqualTo("REVERSAL_SETTLEMENT_BATCH_SCOPE_INVALID");
+                });
+        verify(reportRepo, never()).save(any());
+        verify(settlementRepo, never()).save(any());
+        verify(reversalLogRepo, never()).save(any());
+    }
+
+    @Test
+    void settlementReversal_missingDependency_failsClosedBeforeAnyMutation() {
+        ReportReversalLog log = pendingLog();
+        when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        ReflectionTestUtils.setField(service, "productionPlanRepository", null);
+
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .hasMessageContaining("结单恢复依赖未配置")
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode())
+                            .isEqualTo("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING");
+                });
+        verify(reportRepo, never()).findYieldReportsByBatch(anyString(), anyLong());
+        verify(reportRepo, never()).save(any());
         verify(reversalLogRepo, never()).save(any());
     }
 
@@ -257,8 +359,9 @@ class ReportReversalPlanStateTest {
     private void stubScope(ReportReversalLog log, ProductionPlan plan,
                            ProductionBatch batch, ProductionSettlement settlement) {
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
-        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
-        when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
         when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(settlementRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.of(settlement));

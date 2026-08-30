@@ -209,6 +209,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         batch.setNotes(batch.getNotes() != null ? batch.getNotes() + "\n恢复生产: " + LocalDateTime.now() : "恢复生产: " + LocalDateTime.now());
         return productionBatchRepository.save(batch);
     }
+    @Transactional(rollbackFor = Exception.class)
     public ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                              BigDecimal goodQuantity, BigDecimal defectQuantity) {
         // 默认重载: 不改批次成品单位 (沿用 batch.unit)
@@ -216,12 +217,13 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                              BigDecimal goodQuantity, BigDecimal defectQuantity, String finishedUnit) {
         log.info("完成生产: factoryId={}, batchId={}, actualQuantity={}, finishedUnit={}",
                 factoryId, batchId, actualQuantity, finishedUnit);
         Long id = parseBatchId(batchId);
-        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(id, factoryId)
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
         if (ProductionBatchStatus.IN_PROGRESS != batch.getStatus() &&
             ProductionBatchStatus.PAUSED != batch.getStatus()) {

@@ -458,7 +458,7 @@ public class WorkReportingServiceImpl {
      */
     @Transactional
     public void manualCompleteBatch(String factoryId, Long batchId) {
-        ProductionBatch batch = productionBatchRepository.findById(batchId)
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
                 .orElseThrow(() -> new RuntimeException("生产批次不存在: " + batchId));
         if (!batch.getFactoryId().equals(factoryId)) {
             throw new RuntimeException("无权操作此批次");

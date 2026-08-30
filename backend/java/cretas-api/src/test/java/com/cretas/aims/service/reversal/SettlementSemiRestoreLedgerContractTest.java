@@ -159,7 +159,9 @@ class SettlementSemiRestoreLedgerContractTest {
                 .id(BATCH_ID).factoryId(FACTORY_ID).productionPlanId(PLAN_ID)
                 .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
                 .build();
-        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
         com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
         plan.setId(PLAN_ID);
         plan.setFactoryId(FACTORY_ID);
