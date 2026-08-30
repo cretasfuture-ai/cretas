@@ -677,15 +677,23 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             if (!isReversalOwnedOut(reversal, original, report, txns)) {
                 throw repairRejected("原 OUT 无法证明属于该撤回日志，拒绝修复", "REVERSAL_LINK_UNPROVEN");
             }
-            List<SemiFinishedInventoryTransaction> matching = txns.stream()
+            List<SemiFinishedInventoryTransaction> allPositiveCompensations = txns.stream()
                     .filter(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType()))
                     .filter(t -> t.getQuantity() != null && t.getQuantity().signum() > 0)
-                    .filter(t -> SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(t.getSourceType()))
-                    .filter(t -> Objects.equals(t.getSourceRef(),
-                            "wip-out-history-repair:reversal-log:" + reversal.getId() + ":out-txn:" + id))
                     .filter(t -> Objects.equals(t.getReportId(), original.getReportId()))
                     .filter(t -> Objects.equals(t.getSemiFinishedId(), original.getSemiFinishedId()))
                     .collect(Collectors.toList());
+            String expectedSourceRef = "wip-out-history-repair:reversal-log:" + reversal.getId() + ":out-txn:" + id;
+            List<SemiFinishedInventoryTransaction> matching = allPositiveCompensations.stream()
+                    .filter(t -> SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(t.getSourceType()))
+                    .filter(t -> Objects.equals(t.getSourceRef(),
+                            expectedSourceRef))
+                    .collect(Collectors.toList());
+            if (allPositiveCompensations.stream().anyMatch(t -> !Objects.equals(t.getSourceType(),
+                    SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    || !Objects.equals(t.getSourceRef(), expectedSourceRef))) {
+                throw repairRejected("原 OUT 存在非本次日志的正量补偿，无法判定归属", "AMBIGUOUS_COMPENSATION");
+            }
             if (matching.size() > 1) {
                 throw repairRejected("原 OUT 已存在多条正量 REVERSE，拒绝继续", "NON_UNIQUE_COMPENSATION");
             }
@@ -734,10 +742,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     private Optional<ReportReversalLog> findRepairLogForUpdate(Long id) {
-        if (entityManager != null) {
-            return Optional.ofNullable(entityManager.find(ReportReversalLog.class, id, LockModeType.PESSIMISTIC_WRITE));
+        if (entityManager == null) {
+            throw repairRejected("历史 WIP 修复无法取得撤回日志锁，拒绝执行", "REPAIR_LOCK_UNAVAILABLE");
         }
-        return reversalLogRepo.findById(id);
+        return Optional.ofNullable(entityManager.find(ReportReversalLog.class, id, LockModeType.PESSIMISTIC_WRITE));
     }
 
     private boolean isReversalOwnedOut(ReportReversalLog reversal,

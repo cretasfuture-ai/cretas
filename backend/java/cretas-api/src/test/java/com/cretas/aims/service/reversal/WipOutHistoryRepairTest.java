@@ -14,6 +14,7 @@ import com.cretas.aims.service.NotificationService;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -33,24 +34,26 @@ class WipOutHistoryRepairTest {
     private ReportReversalServiceImpl service;
     private final List<SemiFinishedInventoryTransaction> ledger = new ArrayList<>();
     private final SemiFinishedInventory sfi = SemiFinishedInventory.builder().id(370L).factoryId("LIUSHANMEN")
-            .batchId(10761L).intermediateBatchNo("WIP-370").producedQuantity(new BigDecimal("1.25"))
+            .batchId(10888L).intermediateBatchNo("WIP-370").producedQuantity(new BigDecimal("1.25"))
             .consumedQuantity(new BigDecimal("1.25")).availableQuantity(BigDecimal.ZERO)
             .status(SemiFinishedInventory.Status.AVAILABLE).build();
     private ReportReversalLog reversal;
+    private ProductionReport report;
+    private final jakarta.persistence.EntityManager entityManager = mock(jakarta.persistence.EntityManager.class);
 
     @BeforeEach
     void setUp() {
         service = new ReportReversalServiceImpl(logs, mock(ProductionBatchRepository.class), reports, wips, txns,
                 mock(FinishedGoodsBatchRepository.class), mock(UserRepository.class), tasks, mock(NotificationService.class));
         LocalDateTime t = LocalDateTime.of(2026, 8, 30, 10, 0);
-        reversal = ReportReversalLog.builder().id(18L).factoryId("LIUSHANMEN").batchId(10761L)
+        reversal = ReportReversalLog.builder().id(18L).factoryId("LIUSHANMEN").batchId(10888L)
                 .status(ReportReversalLog.ReversalStatus.DONE).approvedAt(t)
                 .revertedTxnIds(new ArrayList<>(List.of(141L, 142L, 143L))).build();
-        ProductionReport report = new ProductionReport();
-        report.setId(900L); report.setFactoryId("LIUSHANMEN"); report.setBatchId(10761L);
+        report = new ProductionReport();
+        report.setId(900L); report.setFactoryId("LIUSHANMEN"); report.setBatchId(10888L);
         report.setWorkProcessTaskId(77L); report.setDeletedAt(t.plusSeconds(2));
         WorkProcessTask task = WorkProcessTask.builder().id(77L).factoryId("LIUSHANMEN")
-                .productionBatchId(10761L).build();
+                .productionBatchId(10888L).build();
         ledger.add(SemiFinishedInventoryTransaction.builder().id(10L).factoryId("LIUSHANMEN").semiFinishedId(370L)
                 .txnType(SemiFinishedInventoryTransaction.TxnType.IN).sourceType(SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT)
                 .quantity(new BigDecimal("2.50")).unitCostAtTxn(new BigDecimal("1.25")).createdAt(t.minusSeconds(2)).build());
@@ -62,6 +65,8 @@ class WipOutHistoryRepairTest {
                 .sourceRef("TASK-77").quantity(new BigDecimal("-1.25")).unitCostAtTxn(new BigDecimal("1.25"))
                 .reportId(900L).createdAt(t.plusSeconds(1)).build());
         when(logs.findById(18L)).thenReturn(Optional.of(reversal));
+        when(entityManager.find(ReportReversalLog.class, 18L, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)).thenReturn(reversal);
+        ReflectionTestUtils.setField(service, "entityManager", entityManager);
         when(reports.findById(900L)).thenReturn(Optional.of(report));
         when(tasks.findByFactoryIdAndId("LIUSHANMEN", 77L)).thenReturn(Optional.of(task));
         when(wips.findById(370L)).thenReturn(Optional.of(sfi));
@@ -101,5 +106,38 @@ class WipOutHistoryRepairTest {
         assertThatThrownBy(() -> service.repairWipOutHistory("LIUSHANMEN", request(), 99L))
                 .hasMessageContaining("证明");
         verify(txns, never()).save(any());
+    }
+
+    @Test
+    void rejectsInvalidStatusActiveReportAndAmbiguousCompensation() {
+        reversal.setStatus(ReportReversalLog.ReversalStatus.PENDING);
+        assertThatThrownBy(() -> service.repairWipOutHistory("LIUSHANMEN", request(), 99L))
+                .hasMessageContaining("已完成");
+        reversal.setStatus(ReportReversalLog.ReversalStatus.DONE);
+        report.setDeletedAt(null);
+        assertThatThrownBy(() -> service.repairWipOutHistory("LIUSHANMEN", request(), 99L))
+                .hasMessageContaining("软删除");
+        report.setDeletedAt(reversal.getApprovedAt().plusSeconds(2));
+        ledger.add(SemiFinishedInventoryTransaction.builder().id(700L).factoryId("LIUSHANMEN").semiFinishedId(370L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE).sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef("other-log").reportId(900L).quantity(new BigDecimal("1.25"))
+                .unitCostAtTxn(new BigDecimal("1.25")).createdAt(reversal.getApprovedAt()).build());
+        assertThatThrownBy(() -> service.repairWipOutHistory("LIUSHANMEN", request(), 99L))
+                .hasMessageContaining("无法判定归属");
+        verify(txns, never()).save(any());
+    }
+
+    @Test
+    void requiresPessimisticReversalLogLock() {
+        ReflectionTestUtils.setField(service, "entityManager", null);
+        assertThatThrownBy(() -> service.repairWipOutHistory("LIUSHANMEN", request(), 99L))
+                .hasMessageContaining("日志锁");
+        verify(logs, never()).findById(18L);
+    }
+
+    @Test
+    void verifiesReversalLogLockCall() {
+        service.repairWipOutHistory("LIUSHANMEN", request(), 99L);
+        verify(entityManager).find(ReportReversalLog.class, 18L, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
     }
 }
