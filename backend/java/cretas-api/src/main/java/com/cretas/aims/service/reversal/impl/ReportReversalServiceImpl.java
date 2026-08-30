@@ -40,6 +40,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -87,6 +89,10 @@ import java.util.stream.Stream;
 @Service
 @RequiredArgsConstructor
 public class ReportReversalServiceImpl implements ReportReversalService {
+
+    /** Serializes repair requests so reverted_txn_ids cannot be lost by last-write-wins. */
+    @jakarta.persistence.PersistenceContext
+    private EntityManager entityManager;
 
     private final ReportReversalLogRepository reversalLogRepo;
     private final ProductionBatchRepository batchRepo;
@@ -624,7 +630,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 || new HashSet<>(request.getOriginalOutTxnIds()).size() != request.getOriginalOutTxnIds().size()) {
             throw repairRejected("reversalLogId 与 originalOutTxnIds 必须非空且不得重复", "INVALID_REQUEST");
         }
-        ReportReversalLog reversal = reversalLogRepo.findById(request.getReversalLogId())
+        ReportReversalLog reversal = findRepairLogForUpdate(request.getReversalLogId())
                 .orElseThrow(() -> repairRejected("撤回日志不存在: " + request.getReversalLogId(), "NOT_FOUND"));
         if (!Objects.equals(factoryId, reversal.getFactoryId())) {
             throw repairRejected("撤回日志工厂不匹配", "FACTORY_MISMATCH");
@@ -674,6 +680,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             List<SemiFinishedInventoryTransaction> matching = txns.stream()
                     .filter(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType()))
                     .filter(t -> t.getQuantity() != null && t.getQuantity().signum() > 0)
+                    .filter(t -> SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(t.getSourceType()))
+                    .filter(t -> Objects.equals(t.getSourceRef(),
+                            "wip-out-history-repair:reversal-log:" + reversal.getId() + ":out-txn:" + id))
                     .filter(t -> Objects.equals(t.getReportId(), original.getReportId()))
                     .filter(t -> Objects.equals(t.getSemiFinishedId(), original.getSemiFinishedId()))
                     .collect(Collectors.toList());
@@ -724,12 +733,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         return new WipOutHistoryRepairResultDTO(reversal.getId(), result);
     }
 
+    private Optional<ReportReversalLog> findRepairLogForUpdate(Long id) {
+        if (entityManager != null) {
+            return Optional.ofNullable(entityManager.find(ReportReversalLog.class, id, LockModeType.PESSIMISTIC_WRITE));
+        }
+        return reversalLogRepo.findById(id);
+    }
+
     private boolean isReversalOwnedOut(ReportReversalLog reversal,
                                        SemiFinishedInventoryTransaction original,
                                        ProductionReport report,
                                        List<SemiFinishedInventoryTransaction> txns) {
         List<Long> ids = reversal.getRevertedTxnIds();
-        if (ids == null || ids.isEmpty() || txns == null) {
+        if (ids == null || ids.isEmpty() || txns == null || reversal.getApprovedAt() == null) {
             return false;
         }
         Set<Long> owned = new HashSet<>(ids);
@@ -740,7 +756,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 && Objects.equals(t.getSourceRef(), "reversal-log:" + reversal.getId())
                 && Objects.equals(t.getSemiFinishedId(), original.getSemiFinishedId())
                 && t.getCreatedAt() != null && report.getDeletedAt() != null
-                && Math.abs(Duration.between(t.getCreatedAt(), report.getDeletedAt()).toMinutes()) <= 5);
+                && Math.abs(Duration.between(t.getCreatedAt(), reversal.getApprovedAt()).toMillis()) <= 10_000
+                && Math.abs(Duration.between(report.getDeletedAt(), reversal.getApprovedAt()).toMillis()) <= 10_000);
     }
 
     private void validateRepairOut(String factoryId, ReportReversalLog reversal,
