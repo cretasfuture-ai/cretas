@@ -13,6 +13,8 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
@@ -475,6 +477,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // before releasing reservations, soft-deleting reports, or resetting tasks.
         Set<Long> settlementSemiWipIds = preflightSettlementSemiFinished(
                 factoryId, log_.getPlanId(), involvedSfiIds);
+        SettlementReversalScope settlementScope = validateSettlementReversalScopeIfPresent(
+                factoryId, batchId, log_.getPlanId());
         LocalDateTime now = LocalDateTime.now();
         // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
         //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
@@ -637,12 +641,25 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
         // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
-        restoreSettlementConsumption(factoryId, log_.getPlanId(), logId, reversalOperatorId(log_));
+        boolean settlementRestored = restoreSettlementConsumption(
+                factoryId, log_.getPlanId(), logId, reversalOperatorId(log_));
         for (Long settlementSemiWipId : settlementSemiWipIds) {
             SemiFinishedInventory restored = wipRepo.findByIdForUpdate(settlementSemiWipId)
                     .orElseThrow(() -> malformedWipTransaction(
                             "结单恢复后半成品库存不存在", "WIP_NOT_FOUND"));
             validateFinalWipState(restored, false);
+        }
+
+        // ③.7 结单成功撤回后恢复计划/批次的可重报状态。
+        // 只在确实找到并恢复了活动结单时执行：报工未结单的撤回不应凭空改动一个
+        // 合法计划。复位前重新按工厂读取 plan/batch，并锁住 plan，确保不会把跨厂或
+        // 错关联数据写成 IN_PROGRESS；任何关联不一致都会让外层事务整体回滚。
+        if (settlementRestored) {
+            if (settlementScope == null) {
+                throw new BusinessException(409, "撤回失败: 已恢复结单但缺少计划/批次作用域")
+                        .withCode("REVERSAL_SCOPE_INVALID");
+            }
+            reopenPlanAndBatchAfterSettlementReversal(settlementScope);
         }
 
         // ④ 更新 ReportReversalLog → DONE
@@ -1505,16 +1522,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * @param reversalLogId  撤回日志ID (半成品「还回领用」流水的 sourceRef)
      * @param operatorId     记账人 (见 {@link #reversalOperatorId})
      */
-    private void restoreSettlementConsumption(String factoryId, String planId,
-                                              Long reversalLogId, Long operatorId) {
+    private boolean restoreSettlementConsumption(String factoryId, String planId,
+                                                 Long reversalLogId, Long operatorId) {
         if (materialBatchRepository == null
                 || productionSettlementRepository == null
                 || productionSettlementConsumptionRepository == null) {
             log.debug("[SP2] restoreSettlementConsumption: repo 未注入, 跳过 planId={}", planId);
-            return;
+            return false;
         }
         if (planId == null) {
-            return;
+            return false;
         }
 
         ProductionSettlement settlement = productionSettlementRepository
@@ -1523,7 +1540,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (settlement == null) {
             // 报工但未结单 → usedQuantity 未被结单路径增加, 无需回扣。
             log.debug("[SP2] restoreSettlementConsumption: 无结单记录, 跳过 planId={}", planId);
-            return;
+            return false;
         }
 
         List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository
@@ -1577,7 +1594,81 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
                 planId, settlement.getId(), restoredMaterial, restoredSemi);
+        return true;
     }
+
+    /** Validate the settlement's plan/batch scope before any report or settlement mutation. */
+    private SettlementReversalScope validateSettlementReversalScopeIfPresent(String factoryId,
+                                                                               Long batchId,
+                                                                               String planId) {
+        if (materialBatchRepository == null
+                || productionSettlementRepository == null
+                || productionSettlementConsumptionRepository == null
+                || planId == null) {
+            return null;
+        }
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
+                .orElse(null);
+        if (settlement == null) {
+            return null;
+        }
+        if (productionPlanRepository == null) {
+            throw new BusinessException(409, "撤回失败: 生产计划仓储未配置")
+                    .withCode("REVERSAL_SCOPE_INVALID");
+        }
+        if (!Objects.equals(factoryId, settlement.getFactoryId())
+                || !Objects.equals(planId, settlement.getProductionPlanId())
+                || settlement.getId() == null) {
+            throw new BusinessException(409, "撤回失败: 结单不属于当前工厂或计划")
+                    .withCode("REVERSAL_SCOPE_INVALID");
+        }
+        ProductionBatch batch = batchRepo.findByIdAndFactoryId(batchId, factoryId).orElseThrow(() ->
+                new BusinessException(409, "撤回失败: 批次不存在或不属于当前工厂")
+                        .withCode("REVERSAL_SCOPE_INVALID"));
+        if (!Objects.equals(factoryId, batch.getFactoryId())
+                || !Objects.equals(planId, batch.getProductionPlanId())) {
+            throw new BusinessException(409, "撤回失败: 批次工厂或计划关联不匹配")
+                    .withCode("REVERSAL_SCOPE_INVALID");
+        }
+        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId).orElseThrow(() ->
+                new BusinessException(409, "撤回失败: 生产计划不存在或已删除")
+                        .withCode("REVERSAL_SCOPE_INVALID"));
+        if (!Objects.equals(factoryId, plan.getFactoryId())) {
+            throw new BusinessException(409, "撤回失败: 生产计划不属于当前工厂")
+                    .withCode("REVERSAL_SCOPE_INVALID");
+        }
+        return new SettlementReversalScope(batch, plan);
+    }
+
+    /**
+     * Reopen only the plan/batch that were completed by the settlement being reversed.
+     * Derived completion fields are cleared; immutable workflow/BOM/lineage fields are untouched.
+     */
+    private void reopenPlanAndBatchAfterSettlementReversal(SettlementReversalScope scope) {
+        ProductionBatch batch = scope.batch();
+        ProductionPlan plan = scope.plan();
+        if (ProductionPlanStatus.COMPLETED == plan.getStatus()) {
+            plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+            plan.setActualQuantity(null);
+            plan.setEndTime(null);
+            productionPlanRepository.save(plan);
+        }
+
+        // Only COMPLETED is a derived terminal state. An already-running batch may contain
+        // legitimate partial output, so preserve its status, quantities, timestamps, and
+        // immutable workflow/BOM/lineage fields.
+        if (ProductionBatchStatus.COMPLETED == batch.getStatus()) {
+            batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
+            batch.setActualQuantity(null);
+            batch.setGoodQuantity(null);
+            batch.setDefectQuantity(null);
+            batch.setEndTime(null);
+            batchRepo.save(batch);
+        }
+    }
+
+    private record SettlementReversalScope(ProductionBatch batch, ProductionPlan plan) {}
 
     private Set<Long> preflightSettlementSemiFinished(String factoryId, String planId,
                                                        Set<Long> reportSfiIds) {
