@@ -7,6 +7,8 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.ReportReversalLog;
+import com.cretas.aims.dto.production.WipOutHistoryRepairRequestDTO;
+import com.cretas.aims.dto.production.WipOutHistoryRepairResultDTO;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
@@ -604,6 +606,185 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 throw new BusinessException(403, "半成品库存工厂不匹配: " + id);
             }
         });
+    }
+
+    /**
+     * Repairs only explicitly supplied historical OUT rows.  This is deliberately separate
+     * from whole-order reversal: it never edits/deletes an existing ledger row or report.
+     */
+    @Override
+    @Transactional
+    public WipOutHistoryRepairResultDTO repairWipOutHistory(String factoryId,
+                                                              WipOutHistoryRepairRequestDTO request,
+                                                              Long operatorId) {
+        if (request == null || request.getReversalLogId() == null
+                || request.getOriginalOutTxnIds() == null
+                || request.getOriginalOutTxnIds().isEmpty()
+                || request.getOriginalOutTxnIds().stream().anyMatch(Objects::isNull)
+                || new HashSet<>(request.getOriginalOutTxnIds()).size() != request.getOriginalOutTxnIds().size()) {
+            throw repairRejected("reversalLogId 与 originalOutTxnIds 必须非空且不得重复", "INVALID_REQUEST");
+        }
+        ReportReversalLog reversal = reversalLogRepo.findById(request.getReversalLogId())
+                .orElseThrow(() -> repairRejected("撤回日志不存在: " + request.getReversalLogId(), "NOT_FOUND"));
+        if (!Objects.equals(factoryId, reversal.getFactoryId())) {
+            throw repairRejected("撤回日志工厂不匹配", "FACTORY_MISMATCH");
+        }
+        if (reversal.getStatus() != ReportReversalLog.ReversalStatus.DONE) {
+            throw repairRejected("仅允许修复已完成的撤回日志", "INVALID_STATUS");
+        }
+
+        // Read first, then acquire all WIP locks in one stable order, then re-read every row.
+        Map<Long, SemiFinishedInventoryTransaction> originals = new HashMap<>();
+        Set<Long> sfiIds = new HashSet<>();
+        for (Long id : request.getOriginalOutTxnIds()) {
+            SemiFinishedInventoryTransaction txn = txnRepo.findById(id)
+                    .orElseThrow(() -> repairRejected("原 OUT 流水不存在: " + id, "OUT_NOT_FOUND"));
+            validateRepairOut(factoryId, reversal, txn);
+            originals.put(id, txn);
+            sfiIds.add(txn.getSemiFinishedId());
+        }
+        lockInvolvedWips(factoryId, sfiIds);
+        originals.clear();
+        for (Long id : request.getOriginalOutTxnIds()) {
+            SemiFinishedInventoryTransaction txn = txnRepo.findById(id)
+                    .orElseThrow(() -> repairRejected("加锁后原 OUT 流水不存在: " + id, "LEDGER_CHANGED"));
+            validateRepairOut(factoryId, reversal, txn);
+            originals.put(id, txn);
+        }
+
+        List<WipOutHistoryRepairResultDTO.Item> result = new ArrayList<>();
+        List<Long> repairedTxnIds = new ArrayList<>();
+        for (Long id : request.getOriginalOutTxnIds()) {
+            SemiFinishedInventoryTransaction original = originals.get(id);
+            SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(original.getSemiFinishedId())
+                    .orElseThrow(() -> repairRejected("半成品库存不存在: " + original.getSemiFinishedId(), "WIP_NOT_FOUND"));
+            BigDecimal quantity = original.getQuantity().abs();
+            BigDecimal beforeProduced = sfi.getProducedQuantity();
+            BigDecimal beforeConsumed = sfi.getConsumedQuantity();
+            BigDecimal beforeAvailable = sfi.getAvailableQuantity();
+            String beforeStatus = sfi.getStatus();
+
+            List<SemiFinishedInventoryTransaction> txns = txnRepo
+                    .findBySemiFinishedIdOrderByCreatedAtAsc(sfi.getId());
+            ProductionReport report = reportRepo.findById(original.getReportId()).orElseThrow(
+                    () -> repairRejected("原 OUT 的 report 不存在", "REPORT_NOT_FOUND"));
+            if (!isReversalOwnedOut(reversal, original, report, txns)) {
+                throw repairRejected("原 OUT 无法证明属于该撤回日志，拒绝修复", "REVERSAL_LINK_UNPROVEN");
+            }
+            List<SemiFinishedInventoryTransaction> matching = txns.stream()
+                    .filter(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType()))
+                    .filter(t -> t.getQuantity() != null && t.getQuantity().signum() > 0)
+                    .filter(t -> Objects.equals(t.getReportId(), original.getReportId()))
+                    .filter(t -> Objects.equals(t.getSemiFinishedId(), original.getSemiFinishedId()))
+                    .collect(Collectors.toList());
+            if (matching.size() > 1) {
+                throw repairRejected("原 OUT 已存在多条正量 REVERSE，拒绝继续", "NON_UNIQUE_COMPENSATION");
+            }
+            Long reverseId = null;
+            boolean idempotent = false;
+            if (!matching.isEmpty()) {
+                SemiFinishedInventoryTransaction existing = matching.get(0);
+                if (existing.getQuantity().compareTo(quantity) != 0) {
+                    throw repairRejected("原 OUT 已存在部分补偿，拒绝继续", "PARTIAL_COMPENSATION");
+                }
+                if (!sameCost(existing.getUnitCostAtTxn(), original.getUnitCostAtTxn())) {
+                    throw repairRejected("原 OUT 已存在异成本补偿，拒绝继续", "COST_MISMATCH");
+                }
+                reverseId = existing.getId();
+                idempotent = true;
+            } else {
+                SemiFinishedInventoryTransaction reverse = SemiFinishedInventoryTransaction.builder()
+                        .factoryId(factoryId)
+                        .semiFinishedId(sfi.getId())
+                        .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                        .sourceRef("wip-out-history-repair:reversal-log:" + reversal.getId() + ":out-txn:" + id)
+                        .quantity(quantity)
+                        .unitCostAtTxn(original.getUnitCostAtTxn())
+                        .reportId(original.getReportId())
+                        .operatorId(operatorId)
+                        .build();
+                reverseId = txnRepo.save(reverse).getId();
+                repairedTxnIds.add(reverseId);
+            }
+            replayMovingAverage(sfi.getId(), factoryId, LocalDateTime.now());
+            SemiFinishedInventory after = wipRepo.findByIdForUpdate(sfi.getId())
+                    .orElseThrow(() -> repairRejected("回放后半成品库存不存在", "WIP_NOT_FOUND"));
+            result.add(new WipOutHistoryRepairResultDTO.Item(id, reverseId, after.getId(), quantity,
+                    beforeProduced, after.getProducedQuantity(), beforeConsumed, after.getConsumedQuantity(),
+                    beforeAvailable, after.getAvailableQuantity(), beforeStatus, after.getStatus(), idempotent));
+        }
+        if (!repairedTxnIds.isEmpty()) {
+            List<Long> auditIds = reversal.getRevertedTxnIds() == null
+                    ? new ArrayList<>() : new ArrayList<>(reversal.getRevertedTxnIds());
+            auditIds.addAll(repairedTxnIds);
+            reversal.setRevertedTxnIds(auditIds);
+            reversalLogRepo.save(reversal);
+        }
+        return new WipOutHistoryRepairResultDTO(reversal.getId(), result);
+    }
+
+    private boolean isReversalOwnedOut(ReportReversalLog reversal,
+                                       SemiFinishedInventoryTransaction original,
+                                       ProductionReport report,
+                                       List<SemiFinishedInventoryTransaction> txns) {
+        List<Long> ids = reversal.getRevertedTxnIds();
+        if (ids == null || ids.isEmpty() || txns == null) {
+            return false;
+        }
+        Set<Long> owned = new HashSet<>(ids);
+        return txns.stream().anyMatch(t -> owned.contains(t.getId())
+                && SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType())
+                && t.getQuantity() != null && t.getQuantity().signum() < 0
+                && SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(t.getSourceType())
+                && Objects.equals(t.getSourceRef(), "reversal-log:" + reversal.getId())
+                && Objects.equals(t.getSemiFinishedId(), original.getSemiFinishedId())
+                && t.getCreatedAt() != null && report.getDeletedAt() != null
+                && Math.abs(Duration.between(t.getCreatedAt(), report.getDeletedAt()).toMinutes()) <= 5);
+    }
+
+    private void validateRepairOut(String factoryId, ReportReversalLog reversal,
+                                   SemiFinishedInventoryTransaction txn) {
+        if (!Objects.equals(factoryId, txn.getFactoryId())
+                || !SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())
+                || !SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())
+                || txn.getSemiFinishedId() == null || txn.getQuantity() == null
+                || txn.getQuantity().signum() >= 0 || txn.getReportId() == null) {
+            throw repairRejected("原流水不是同厂、负量 SECONDARY_CONSUME OUT 或缺少 reportId", "INVALID_OUT");
+        }
+        ProductionReport report = reportRepo.findById(txn.getReportId())
+                .orElseThrow(() -> repairRejected("原 OUT 的 report 不存在", "REPORT_NOT_FOUND"));
+        if (!Objects.equals(factoryId, report.getFactoryId())
+                || !Objects.equals(reversal.getBatchId(), report.getBatchId())
+                || report.getDeletedAt() == null) {
+            throw repairRejected("report 必须属于同厂同批且已软删除", "REPORT_SCOPE_INVALID");
+        }
+        String ref = txn.getSourceRef();
+        if (ref == null || !ref.startsWith("TASK-")) {
+            throw repairRejected("OUT sourceRef 不是 TASK-<id>", "TASK_REF_INVALID");
+        }
+        final Long taskId;
+        try {
+            taskId = Long.valueOf(ref.substring("TASK-".length()));
+        } catch (NumberFormatException ex) {
+            throw repairRejected("OUT sourceRef 的 taskId 无效", "TASK_REF_INVALID");
+        }
+        WorkProcessTask task = workProcessTaskRepository.findByFactoryIdAndId(factoryId, taskId)
+                .orElseThrow(() -> repairRejected("OUT sourceRef 指向的 task 不存在", "TASK_NOT_FOUND"));
+        if (!Objects.equals(reversal.getBatchId(), task.getProductionBatchId())
+                || !Objects.equals(taskId, report.getWorkProcessTaskId())) {
+            throw repairRejected("OUT sourceRef 指向跨批或非该 report 的 task", "TASK_SCOPE_INVALID");
+        }
+        SemiFinishedInventory sfi = wipRepo.findById(txn.getSemiFinishedId())
+                .orElseThrow(() -> repairRejected("原 OUT 的半成品库存不存在", "WIP_NOT_FOUND"));
+        if (!Objects.equals(factoryId, sfi.getFactoryId())
+                || !Objects.equals(reversal.getBatchId(), sfi.getBatchId())) {
+            throw repairRejected("半成品库存不属于同厂同生产批次", "WIP_SCOPE_INVALID");
+        }
+    }
+
+    private static BusinessException repairRejected(String message, String code) {
+        return new BusinessException(409, message).withCode(code);
     }
 
     /**
