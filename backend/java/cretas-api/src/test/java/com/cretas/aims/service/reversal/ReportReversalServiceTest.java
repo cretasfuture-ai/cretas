@@ -238,14 +238,13 @@ class ReportReversalServiceTest {
                         .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
                 when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
                         .thenReturn(List.of(wip));
-                SemiFinishedInventoryTransaction.Builder builder = SemiFinishedInventoryTransaction.builder()
+                Long reportId = testCase[2] == null ? null : Long.valueOf(testCase[2]);
+                SemiFinishedInventoryTransaction txn = SemiFinishedInventoryTransaction.builder()
                         .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
-                        .sourceType(testCase[0]).sourceRef(testCase[1]).quantity(new BigDecimal("-1"));
-                if (testCase[2] != null) {
-                    builder.reportId(Long.valueOf(testCase[2]));
-                }
+                        .sourceType(testCase[0]).sourceRef(testCase[1]).reportId(reportId)
+                        .quantity(new BigDecimal("-1")).build();
                 when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L))
-                        .thenReturn(List.of(builder.build()));
+                        .thenReturn(List.of(txn));
 
                 Boolean blocked = ReflectionTestUtils.invokeMethod(service,
                         "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of(10L));
