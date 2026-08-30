@@ -382,6 +382,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             List<SemiFinishedInventoryTransaction> txns =
                     txnRepo.findByFactoryIdAndReportId(factoryId, report.getId());
             List<SemiFinishedInventoryTransaction> safeTxns = txns == null ? List.of() : txns;
+            List<SemiFinishedInventoryTransaction> beforeTxns = reportTxns.getOrDefault(report.getId(), List.of());
+            if (!sameTransactionSnapshot(beforeTxns, safeTxns)) {
+                throw new BusinessException(409, "撤回失败: 加锁期间半成品流水发生变化，请重试")
+                        .withCode("WIP_LEDGER_CHANGED");
+            }
             lockedReportTxns.put(report.getId(), safeTxns);
             for (SemiFinishedInventoryTransaction txn : safeTxns) {
                 if (txn.getSemiFinishedId() != null) {
@@ -400,6 +405,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         reportTxns = lockedReportTxns;
         reportIds = lockedReportIds;
         inSfiIds = lockedSnapshotInSfiIds;
+        // A report-only legacy replay can have no materialised WIP rows in older fixtures;
+        // strict OUT provenance applies when the batch WIP ledger is present.
+        validateReportWipTransactions(factoryId, batchId, reports, reportTxns);
         if (hasExternalDownstreamConsumption(factoryId, batchId, reportIds)) {
             throw new BusinessException(409, String.format(
                     "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
@@ -475,6 +483,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             List<SemiFinishedInventoryTransaction> unmatchedReversals = inTxns.stream()
                     .filter(existing -> SemiFinishedInventoryTransaction.TxnType.REVERSE
                             .equals(existing.getTxnType()))
+                    .filter(existing -> SemiFinishedInventoryTransaction.SourceType.REVERSAL
+                            .equals(existing.getSourceType())
+                            || (existing.getSourceType() == null && existing.getReportId() == null))
                     .collect(Collectors.toCollection(ArrayList::new));
             for (SemiFinishedInventoryTransaction inTxn : inTxns) {
                 if (!SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())
@@ -511,6 +522,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 // 回放移动均价到 SemiFinishedInventory
                 replayMovingAverage(inTxn.getSemiFinishedId(), factoryId, now);
             }
+        }
+
+        // No reversal is complete until every locked WIP row has a coherent final ledger state.
+        // This is deliberately after all replay writes and before the reversal log becomes DONE.
+        for (SemiFinishedInventory wip : lockedWips) {
+            if (wip != null) validateFinalWipState(wip, true);
         }
 
         // ②.5 🔴 禁止降级 (2026-08-18): 一行都没冲销, 就不许对外说撤回完成。
@@ -600,6 +617,118 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
         return ids;
+    }
+
+    /** Compare the complete report ledger, not merely report/SFI ids, before the first mutation. */
+    private static boolean sameTransactionSnapshot(List<SemiFinishedInventoryTransaction> before,
+                                                   List<SemiFinishedInventoryTransaction> after) {
+        if (before == null || after == null || before.size() != after.size()) return false;
+        Map<Long, Integer> beforeIds = new HashMap<>();
+        Map<Long, Integer> afterIds = new HashMap<>();
+        for (SemiFinishedInventoryTransaction t : before) {
+            if (t != null && t.getId() != null) beforeIds.merge(t.getId(), 1, Integer::sum);
+        }
+        for (SemiFinishedInventoryTransaction t : after) {
+            if (t != null && t.getId() != null) afterIds.merge(t.getId(), 1, Integer::sum);
+        }
+        if (!beforeIds.equals(afterIds)
+                || beforeIds.values().stream().anyMatch(count -> count > 1)) return false;
+        List<String> beforeFingerprints = before.stream().map(ReportReversalServiceImpl::transactionFingerprint)
+                .sorted().toList();
+        List<String> afterFingerprints = after.stream().map(ReportReversalServiceImpl::transactionFingerprint)
+                .sorted().toList();
+        return beforeFingerprints.equals(afterFingerprints);
+    }
+
+    private static String transactionFingerprint(SemiFinishedInventoryTransaction t) {
+        if (t == null) return "<NULL>";
+        return String.valueOf(t.getId()) + '|' + String.valueOf(t.getFactoryId()) + '|'
+                + String.valueOf(t.getSemiFinishedId()) + '|' + String.valueOf(t.getTxnType()) + '|'
+                + String.valueOf(t.getSourceType()) + '|' + String.valueOf(t.getSourceRef()) + '|'
+                + String.valueOf(t.getQuantity()) + '|' + String.valueOf(t.getUnitCostAtTxn()) + '|'
+                + String.valueOf(t.getReportId());
+    }
+
+    private static void validateFinalWipState(SemiFinishedInventory wip, boolean mustBeEmpty) {
+        BigDecimal produced = Optional.ofNullable(wip.getProducedQuantity()).orElse(BigDecimal.ZERO);
+        BigDecimal consumed = Optional.ofNullable(wip.getConsumedQuantity()).orElse(BigDecimal.ZERO);
+        BigDecimal available = Optional.ofNullable(wip.getAvailableQuantity()).orElse(BigDecimal.ZERO);
+        BigDecimal adjustment = Optional.ofNullable(wip.getAdjustmentQuantity()).orElse(BigDecimal.ZERO);
+        if (produced.signum() < 0 || consumed.signum() < 0 || available.signum() < 0
+                || (mustBeEmpty && (produced.signum() != 0 || consumed.signum() != 0 || available.signum() != 0))
+                || available.compareTo(produced.add(adjustment).max(BigDecimal.ZERO)) > 0
+                || (wip.getStatus() != null
+                    && ((available.signum() > 0 && wip.getStatus() != SemiFinishedInventory.Status.AVAILABLE)
+                        || (available.signum() == 0 && wip.getStatus() != SemiFinishedInventory.Status.DEPLETED)))) {
+            throw new BusinessException(409, "撤回失败: 半成品回放后的库存账本不一致")
+                    .withCode("WIP_LEDGER_INVALID");
+        }
+    }
+
+    /** Reject malformed report-owned WIP rows before any report/reservation mutation. */
+    private void validateReportWipTransactions(String factoryId, Long batchId,
+                                               List<ProductionReport> reports,
+                                               Map<Long, List<SemiFinishedInventoryTransaction>> reportTxns) {
+        if (reports == null || reportTxns == null) return;
+        for (ProductionReport report : reports) {
+            if (report == null || report.getId() == null) continue;
+            for (SemiFinishedInventoryTransaction txn : reportTxns.getOrDefault(report.getId(), List.of())) {
+                if (txn == null) {
+                    throw malformedWipTransaction("流水为空", "WIP_LEDGER_INVALID");
+                }
+                if (txn.getFactoryId() == null && txn.getReportId() == null) continue;
+                // Older in-memory/legacy rows may not carry factory_id; a present value
+                // must never cross tenants, while null remains compatible with legacy data.
+                if (txn.getFactoryId() != null && !Objects.equals(factoryId, txn.getFactoryId())) {
+                    throw malformedWipTransaction("流水工厂不匹配", "WIP_FACTORY_MISMATCH");
+                }
+                if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
+                    if (txn.getSemiFinishedId() == null || txn.getQuantity() == null
+                            || txn.getQuantity().signum() <= 0) {
+                        throw malformedWipTransaction("IN 流水缺少半成品或有效数量", "WIP_LEDGER_INVALID");
+                    }
+                    SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(txn.getSemiFinishedId())
+                            .orElseThrow(() -> malformedWipTransaction("IN 半成品库存不存在", "WIP_NOT_FOUND"));
+                    if (!Objects.equals(factoryId, sfi.getFactoryId())
+                            || !Objects.equals(batchId, sfi.getBatchId())) {
+                        throw malformedWipTransaction("IN 半成品不属于本工厂本批次", "WIP_SCOPE_INVALID");
+                    }
+                    continue;
+                }
+                if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())
+                        && !SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(txn.getSourceType())) {
+                    throw malformedWipTransaction("报工关联 REVERSE 来源非法", "WIP_LEDGER_INVALID");
+                }
+                if (SemiFinishedInventoryTransaction.TxnType.ADJUST.equals(txn.getTxnType())) {
+                    throw malformedWipTransaction("报工关联 ADJUST 不属于撤回集合", "WIP_LEDGER_INVALID");
+                }
+                if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType()))
+                    throw malformedWipTransaction("报工关联流水类型非法", "WIP_LEDGER_INVALID");
+                if (!SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())
+                        || !Objects.equals(report.getId(), txn.getReportId())
+                        || txn.getSemiFinishedId() == null || txn.getQuantity() == null
+                        || txn.getQuantity().signum() >= 0) {
+                    throw malformedWipTransaction("OUT 必须是同报工负量 SECONDARY_CONSUME 流水", "WIP_LEDGER_INVALID");
+                }
+                String ref = txn.getSourceRef();
+                if (ref == null || !ref.startsWith("TASK-")) {
+                    throw malformedWipTransaction("OUT 缺少可验证的 TASK 引用", "WIP_LEDGER_INVALID");
+                }
+                try {
+                    Long taskId = Long.valueOf(ref.substring("TASK-".length()));
+                    Optional<WorkProcessTask> task = workProcessTaskRepository.findByFactoryIdAndId(factoryId, taskId);
+                    if (task == null || task.isEmpty() || !Objects.equals(batchId, task.get().getProductionBatchId())) {
+                        throw malformedWipTransaction("OUT 的 TASK 不属于本批次", "WIP_SCOPE_INVALID");
+                    }
+                } catch (NumberFormatException ex) {
+                    throw malformedWipTransaction("OUT 的 TASK 引用无效", "WIP_LEDGER_INVALID");
+                }
+            }
+        }
+    }
+
+    private static BusinessException malformedWipTransaction(String message, String code) {
+        return new BusinessException(409, "撤回失败: " + message).withCode(code);
     }
 
     private void lockInvolvedWips(String factoryId, Set<Long> sfiIds) {
@@ -853,6 +982,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
             Map<String, BigDecimal> restoredByReportAndSfi = txns.stream()
                     .filter(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType())
+                            && (SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(t.getSourceType())
+                                || (t.getSourceType() == null && t.getReportId() == null))
                             && t.getQuantity() != null && t.getQuantity().signum() > 0
                             && t.getReportId() != null)
                     .collect(Collectors.groupingBy(
@@ -917,33 +1048,62 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (reportId == null || reverseQuantity == null) {
             return false;
         }
-        int exactMatches = 0;
-        int exactIndex = -1;
+        BigDecimal matched = BigDecimal.ZERO;
+        List<Integer> matchedIndexes = new ArrayList<>();
+        // Prefer an exact row: legacy rows can omit report_id, so aggregating every
+        // same-sign row would incorrectly combine the compensation of another movement.
         for (int i = 0; i < candidates.size(); i++) {
             SemiFinishedInventoryTransaction candidate = candidates.get(i);
             if (Objects.equals(candidate.getSemiFinishedId(), original.getSemiFinishedId())
                     && Objects.equals(candidate.getReportId(), reportId)
-                    && candidate.getQuantity() != null) {
-                if (candidate.getQuantity().compareTo(reverseQuantity) == 0) {
-                    if (!sameCost(candidate.getUnitCostAtTxn(), original.getUnitCostAtTxn())) {
-                        throw new BusinessException(409, "撤回失败: 补偿流水成本不一致，无法安全重复撤回")
-                                .withCode("PARTIAL_COMPENSATION");
-                    }
-                    exactMatches++;
-                    exactIndex = i;
-                } else if (candidate.getQuantity().signum() == reverseQuantity.signum()) {
-                    throw new BusinessException(409, "撤回失败: 已存在部分或异质补偿流水，无法安全重复撤回")
+                    && candidate.getQuantity() != null
+                    && (SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(candidate.getSourceType())
+                        || (candidate.getSourceType() == null && candidate.getReportId() == null))
+                    && candidate.getQuantity().signum() == reverseQuantity.signum()) {
+                if (candidate.getUnitCostAtTxn() != null && original.getUnitCostAtTxn() != null
+                        && !sameCost(candidate.getUnitCostAtTxn(), original.getUnitCostAtTxn())) {
+                    throw new BusinessException(409, "撤回失败: 补偿流水成本不一致，无法安全重复撤回")
                             .withCode("PARTIAL_COMPENSATION");
+                }
+                if (candidate.getQuantity().compareTo(reverseQuantity) == 0) {
+                    candidates.remove(i);
+                    return true;
                 }
             }
         }
-        if (exactMatches > 1) {
-            throw new BusinessException(409, "撤回失败: 补偿流水不唯一，无法安全重复撤回")
+        BigDecimal remaining = reverseQuantity.abs();
+        for (int i = 0; i < candidates.size() && remaining.signum() > 0; i++) {
+            SemiFinishedInventoryTransaction candidate = candidates.get(i);
+            if (Objects.equals(candidate.getSemiFinishedId(), original.getSemiFinishedId())
+                    && Objects.equals(candidate.getReportId(), reportId)
+                    && candidate.getQuantity() != null
+                    && (SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(candidate.getSourceType())
+                        || (candidate.getSourceType() == null && candidate.getReportId() == null))
+                    && candidate.getQuantity().signum() == reverseQuantity.signum()
+                    && candidate.getQuantity().abs().compareTo(remaining) <= 0) {
+                remaining = remaining.subtract(candidate.getQuantity().abs());
+                matchedIndexes.add(i);
+            }
+        }
+        if (remaining.signum() != 0
+                && candidates.stream().anyMatch(candidate ->
+                        Objects.equals(candidate.getSemiFinishedId(), original.getSemiFinishedId())
+                                && Objects.equals(candidate.getReportId(), reportId)
+                                && candidate.getQuantity() != null
+                                && (SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(candidate.getSourceType())
+                                    || (candidate.getSourceType() == null && candidate.getReportId() == null))
+                                && candidate.getQuantity().signum() == reverseQuantity.signum())) {
+            throw new BusinessException(409, "撤回失败: 已存在部分或超量补偿流水，无法安全重复撤回")
                     .withCode("PARTIAL_COMPENSATION");
         }
-        if (exactIndex >= 0) {
-            candidates.remove(exactIndex);
+        if (remaining.signum() == 0 && !matchedIndexes.isEmpty()) {
+            matchedIndexes.sort(Comparator.reverseOrder());
+            for (Integer index : matchedIndexes) candidates.remove((int) index);
             return true;
+        }
+        if (matched.signum() != 0 || !matchedIndexes.isEmpty()) {
+            throw new BusinessException(409, "撤回失败: 已存在部分补偿流水，无法安全重复撤回")
+                    .withCode("PARTIAL_COMPENSATION");
         }
         return false;
     }
