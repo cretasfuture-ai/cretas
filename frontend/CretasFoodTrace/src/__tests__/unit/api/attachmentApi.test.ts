@@ -6,12 +6,6 @@
 import { attachmentApi } from '../../../services/api/attachmentApi';
 import { createApiMock, resetApiMock } from '../../utils/mockApiClient';
 import MockAdapter from 'axios-mock-adapter';
-import * as Crypto from 'expo-crypto';
-
-jest.mock('expo-crypto', () => ({
-  CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
-  digest: jest.fn(),
-}));
 
 const DEFAULT_FACTORY_ID = 'CRETAS_2024_001';
 const BASE = `/api/mobile/${DEFAULT_FACTORY_ID}/attachments`;
@@ -95,7 +89,6 @@ describe('attachmentApi', () => {
   describe('uploadAndRegister', () => {
     it('registers the SHA-256 and byte size of the uploaded blob', async () => {
       const bytes = Uint8Array.from([10, 20, 30, 40]);
-      const digest = Uint8Array.from({ length: 32 }, (_, index) => index);
       const blob = {
         size: bytes.byteLength,
         arrayBuffer: jest.fn().mockResolvedValue(bytes.buffer),
@@ -104,8 +97,6 @@ describe('attachmentApi', () => {
         .spyOn(global, 'fetch')
         .mockResolvedValueOnce({ blob: async () => blob } as Response)
         .mockResolvedValueOnce({ ok: true } as Response);
-      jest.mocked(Crypto.digest).mockResolvedValue(digest.buffer);
-
       mock.onPost(`${BASE}/upload-url`).reply(200, {
         success: true,
         data: {
@@ -125,10 +116,9 @@ describe('attachmentApi', () => {
       );
 
       const registerPayload = JSON.parse(mock.history.post[1]?.data ?? '{}');
-      expect(Crypto.digest).toHaveBeenCalledWith('SHA-256', bytes.buffer);
       expect(registerPayload.fileSize).toBe(4);
       expect(registerPayload.fileHash).toBe(
-        '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+        '5f53c0ff07ba5d9a330e68c95dabb1a9bc49e29f9ed53f6fa7c6d99abb000050',
       );
       expect(fetchMock).toHaveBeenLastCalledWith(
         'https://oss.example/upload?sig=1',
