@@ -117,6 +117,64 @@ interface RowState {
   qtyStr: string; // 仅多批次模式使用; 单批次模式下忽略 (由 singleBatchQty 驱动)
 }
 
+export interface MaterialBatchQuantityAllocation {
+  batchId: string;
+  quantity: number;
+}
+
+export interface MaterialBatchAllocationResult {
+  allocations: MaterialBatchQuantityAllocation[];
+  allocatedTotal: number;
+  shortage: number;
+}
+
+const QUANTITY_PRECISION = 6;
+const QUANTITY_EPSILON = 0.000001;
+
+function roundQuantity(value: number): number {
+  return Number(value.toFixed(QUANTITY_PRECISION));
+}
+
+/** 按服务端 FEFO 返回顺序分配；纯函数供目标测试与变异对照使用。 */
+export function allocateQuantityAcrossBatches(
+  batches: ReadonlyArray<Pick<MaterialBatch, 'id' | 'remainingQuantity'>>,
+  targetQuantity: number,
+): MaterialBatchAllocationResult {
+  if (!Number.isFinite(targetQuantity) || targetQuantity <= 0) {
+    return { allocations: [], allocatedTotal: 0, shortage: 0 };
+  }
+
+  let remainingTarget = roundQuantity(targetQuantity);
+  const allocations: MaterialBatchQuantityAllocation[] = [];
+
+  for (const batch of batches) {
+    if (remainingTarget <= QUANTITY_EPSILON) break;
+    const available = Number(batch.remainingQuantity);
+    if (!Number.isFinite(available) || available <= 0) continue;
+    const quantity = roundQuantity(Math.min(available, remainingTarget));
+    if (quantity <= 0) continue;
+    allocations.push({ batchId: batch.id, quantity });
+    remainingTarget = roundQuantity(Math.max(0, remainingTarget - quantity));
+  }
+
+  const shortage = remainingTarget <= QUANTITY_EPSILON ? 0 : remainingTarget;
+  return {
+    allocations,
+    allocatedTotal: roundQuantity(targetQuantity - shortage),
+    shortage,
+  };
+}
+
+type AllocationMode = 'choice' | 'auto' | 'manual';
+
+function normalizeQuantityUnit(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function formatAllocatedQuantity(value: number): string {
+  return String(roundQuantity(value));
+}
+
 export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   unit,
   factoryId,
@@ -142,7 +200,13 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [scannedLabel, setScannedLabel] = useState<MaterialBatchLabelScanResponse | null>(null);
   // F2 防呆: 同品多厂号时按厂号筛选 (不同厂号 = 不同批次, 易选错). null = 显示全部.
   const [factoryNumberFilter, setFactoryNumberFilter] = useState<string | null>(null);
+  const [allocationMode, setAllocationMode] = useState<AllocationMode>('choice');
+  const [allocationTargetQty, setAllocationTargetQty] = useState<number | null>(null);
+  const [autoAllocationShortage, setAutoAllocationShortage] = useState(0);
+  const [autoAllocationError, setAutoAllocationError] = useState<string | null>(null);
+  const [autoAllocationLoading, setAutoAllocationLoading] = useState(false);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoAllocationRequestRef = useRef(0);
   const queryKeyRef = useRef<string>('');
   const rowsRef = useRef<RowState[]>([]);   // mirrors `rows` for use inside async callbacks
   const validationRef = useRef(onValidationChange);
@@ -159,11 +223,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   const rowQuantity = useCallback(
     (row: RowState, isSingle: boolean): number | null => {
-      const useParentQty = isSingle && !forceIndependentQuantity;
+      const useParentQty = isSingle && !forceIndependentQuantity && allocationMode !== 'auto';
       const qty = parseFloat(useParentQty ? singleBatchQty : row.qtyStr);
       return Number.isNaN(qty) || qty <= 0 ? null : qty;
     },
-    [forceIndependentQuantity, singleBatchQty],
+    [allocationMode, forceIndependentQuantity, singleBatchQty],
   );
 
   const rowOverLimit = useCallback(
@@ -188,7 +252,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     const refs: MaterialBatchRef[] = [];
     const selected = rows.filter((r) => r.selected);
     const isSingle = selected.length === 1;
-    const useParentQty = isSingle && !forceIndependentQuantity;
+    const useParentQty = isSingle && !forceIndependentQuantity && allocationMode !== 'auto';
 
     for (const row of selected) {
       if (useParentQty) {
@@ -207,11 +271,18 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     }
     onChangeRef.current(refs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forceIndependentQuantity, rows, singleBatchQty, unit]);
+  }, [allocationMode, forceIndependentQuantity, rows, singleBatchQty, unit]);
 
   useEffect(() => {
     const selected = rows.filter((r) => r.selected);
     const isSingle = selected.length === 1;
+    if (allocationMode === 'auto' && autoAllocationShortage > QUANTITY_EPSILON) {
+      validationRef.current?.({
+        hasOverLimit: true,
+        message: `自动分配后还缺 ${formatAllocatedQuantity(autoAllocationShortage)} ${unit}，请改为手动选择批次或联系仓管`,
+      });
+      return;
+    }
     const over = selected.find((row) => rowOverLimit(row, isSingle));
     if (over == null) {
       validationRef.current?.({ hasOverLimit: false });
@@ -223,7 +294,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       hasOverLimit: true,
       message: `${name} 最多可领 ${over.batch.remainingQuantity} ${unit}，当前填写 ${qty ?? 0} ${unit}`,
     });
-  }, [rows, rowOverLimit, rowQuantity, unit]);
+  }, [allocationMode, autoAllocationShortage, rows, rowOverLimit, rowQuantity, unit]);
 
   // 从 value prop 初始化/同步 rows (仅在 batches 加载完成后)
   // Bug fix: preserve selections that are already in `rows` but not yet propagated
@@ -303,11 +374,17 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   // productTypeId comes from the batch detail request. If the operator opens the picker before
   // that request resolves, the first load is unfiltered. Reload once the BOM-filter key changes.
   useEffect(() => {
+    autoAllocationRequestRef.current += 1;
     setRows([]);
     setConfirmed(false);
     setConfirmFeedback(false);
     setLoadedQueryKey(null);
     setFactoryNumberFilter(null);  // F2: 切换工厂/产品时重置厂号筛选
+    setAllocationMode('choice');
+    setAllocationTargetQty(null);
+    setAutoAllocationShortage(0);
+    setAutoAllocationError(null);
+    setAutoAllocationLoading(false);
   }, [queryKey]);
 
   // 展开时加载
@@ -329,6 +406,30 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       // 切换选中时清除 confirmed 状态 (用户在重新选)
       setConfirmed(false);
       setConfirmFeedback(false);
+      autoAllocationRequestRef.current += 1;
+      setAutoAllocationLoading(false);
+      setAutoAllocationError(null);
+      setAutoAllocationShortage(0);
+
+      const currentTarget = rows[idx];
+      if (currentTarget != null) {
+        const nextSelectedCount = selectedRows.length + (currentTarget.selected ? -1 : 1);
+        if (nextSelectedCount > 1) {
+          const parsedSingleQty = parseFloat(singleBatchQty);
+          setAllocationMode('manual');
+          if (
+            allocationTargetQty == null &&
+            !Number.isNaN(parsedSingleQty) &&
+            parsedSingleQty > 0
+          ) {
+            setAllocationTargetQty(parsedSingleQty);
+          }
+        } else {
+          setAllocationMode('choice');
+          setAllocationTargetQty(null);
+        }
+      }
+
       setRows((prev: RowState[]) => {
         const target = prev[idx];
         if (target == null) return prev;
@@ -356,8 +457,119 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         });
       });
     },
-    [forceIndependentQuantity, singleBatchQty],
+    [allocationTargetQty, forceIndependentQuantity, rows, selectedRows.length, singleBatchQty],
   );
+
+  const switchToManualAllocation = useCallback(() => {
+    autoAllocationRequestRef.current += 1;
+    const parsedTarget = parseFloat(singleBatchQty);
+    if (allocationTargetQty == null && !Number.isNaN(parsedTarget) && parsedTarget > 0) {
+      setAllocationTargetQty(parsedTarget);
+    }
+    setAllocationMode('manual');
+    setAutoAllocationLoading(false);
+    setAutoAllocationShortage(0);
+    setAutoAllocationError(null);
+  }, [allocationTargetQty, singleBatchQty]);
+
+  const handleAutoAllocate = useCallback(async () => {
+    const selected = rows.filter((row) => row.selected);
+    const seed = selected[0];
+    const targetQuantity = parseFloat(singleBatchQty);
+    if (
+      selected.length !== 1 ||
+      seed == null ||
+      Number.isNaN(targetQuantity) ||
+      targetQuantity <= 0
+    ) {
+      return;
+    }
+
+    const inputUnit = normalizeQuantityUnit(unit);
+    const seedUnit = normalizeQuantityUnit(seed.batch.quantityUnit ?? unit);
+    if (inputUnit === '' || seedUnit !== inputUnit) {
+      setAutoAllocationError(
+        `当前批次单位为 ${seed.batch.quantityUnit ?? '未知'}，与投入单位 ${unit} 不一致，不能自动换算，请手动选择批次`,
+      );
+      return;
+    }
+
+    const requestId = autoAllocationRequestRef.current + 1;
+    autoAllocationRequestRef.current = requestId;
+    setAutoAllocationLoading(true);
+    setAutoAllocationError(null);
+    setAutoAllocationShortage(0);
+    setAllocationTargetQty(targetQuantity);
+
+    try {
+      const response = await materialBatchApiClient.getFefoBatches(
+        seed.batch.materialTypeId,
+        targetQuantity,
+        factoryId,
+      );
+      if (autoAllocationRequestRef.current !== requestId) return;
+      if (!response.success || !Array.isArray(response.data) || response.data.length === 0) {
+        setAutoAllocationError(response.message || '没有找到可自动分配的可用批次，请手动选择');
+        return;
+      }
+
+      const candidates = response.data.filter(
+        (batch) =>
+          batch.materialTypeId === seed.batch.materialTypeId &&
+          Number.isFinite(Number(batch.remainingQuantity)) &&
+          Number(batch.remainingQuantity) > 0,
+      );
+      const incompatible = candidates.find(
+        (batch) => normalizeQuantityUnit(batch.quantityUnit) !== inputUnit,
+      );
+      if (incompatible != null) {
+        setAutoAllocationError(
+          `批次 ${incompatible.batchNumber} 的单位为 ${incompatible.quantityUnit ?? '未知'}，与投入单位 ${unit} 不一致，不能自动换算，请手动选择`,
+        );
+        return;
+      }
+      if (candidates.length === 0) {
+        setAutoAllocationError('没有找到同原料、同单位的可用批次，请手动选择');
+        return;
+      }
+
+      const result = allocateQuantityAcrossBatches(candidates, targetQuantity);
+      const allocationMap = new Map(
+        result.allocations.map((allocation) => [allocation.batchId, allocation.quantity]),
+      );
+      const candidateIds = new Set(candidates.map((batch) => batch.id));
+
+      setRows((prev) => {
+        const previousById = new Map(prev.map((row) => [row.batch.id, row]));
+        const recommendedRows = candidates.map((batch) => {
+          const quantity = allocationMap.get(batch.id);
+          const previous = previousById.get(batch.id);
+          return {
+            batch,
+            selected: quantity != null && quantity > 0,
+            qtyStr: quantity != null && quantity > 0
+              ? formatAllocatedQuantity(quantity)
+              : (previous?.qtyStr ?? ''),
+          };
+        });
+        const otherRows = prev
+          .filter((row) => !candidateIds.has(row.batch.id))
+          .map((row) => ({ ...row, selected: false }));
+        return [...recommendedRows, ...otherRows];
+      });
+      setAllocationMode('auto');
+      setAutoAllocationShortage(result.shortage);
+      setAutoAllocationError(null);
+    } catch (error) {
+      if (autoAllocationRequestRef.current !== requestId) return;
+      const message = error instanceof Error ? error.message : '自动分配失败';
+      setAutoAllocationError(`${message}，可改为手动选择批次`);
+    } finally {
+      if (autoAllocationRequestRef.current === requestId) {
+        setAutoAllocationLoading(false);
+      }
+    }
+  }, [factoryId, rows, singleBatchQty, unit]);
 
   const setQty = useCallback(
     (idx: number, raw: string) => {
@@ -366,13 +578,18 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       const parts = cleaned.split('.');
       const normalized =
         parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+      if (allocationMode === 'auto') {
+        setAllocationMode('manual');
+        setAutoAllocationShortage(0);
+        setAutoAllocationError(null);
+      }
       setRows((prev: RowState[]) =>
         prev.map((r: RowState, i: number) =>
           i === idx ? { ...r, qtyStr: normalized, selected: true } : r,
         ),
       );
     },
-    [],
+    [allocationMode],
   );
 
   const handleLabelScan = useCallback(async (code: string) => {
@@ -405,6 +622,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       setExpanded(true);
       setConfirmed(false);
       setConfirmFeedback(false);
+      autoAllocationRequestRef.current += 1;
+      setAllocationMode('manual');
+      setAutoAllocationLoading(false);
+      setAutoAllocationShortage(0);
+      setAutoAllocationError(null);
       setRows((prev) => {
         const existing = prev.find((row) => row.batch.id === batch.id);
         if (existing) {
@@ -426,13 +648,14 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   // Q2: 「确定选择」按钮点击: 校验 → 折叠 + 显示确认反馈
   const handleConfirm = useCallback(() => {
+    if (allocationMode === 'auto' && autoAllocationShortage > QUANTITY_EPSILON) return;
     const selected = rows.filter((r) => r.selected);
     if (selected.length === 0) {
       // 不满足最少选 1 批
       return;
     }
     const isSingle = selected.length === 1;
-    if (isSingle && !forceIndependentQuantity) {
+    if (isSingle && !forceIndependentQuantity && allocationMode !== 'auto') {
       const qty = parseFloat(singleBatchQty);
       if (Number.isNaN(qty) || qty <= 0) {
         // 单批次 qty 来自屏幕 投入量, 为空时提示先填投入量
@@ -455,14 +678,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     confirmTimerRef.current = setTimeout(() => {
       setConfirmFeedback(false);
     }, 1500);
-  }, [forceIndependentQuantity, rows, singleBatchQty]);
+  }, [allocationMode, autoAllocationShortage, forceIndependentQuantity, rows, singleBatchQty]);
 
   // Q2 验证按钮是否可以点击
   const canConfirm = useCallback((): boolean => {
+    if (allocationMode === 'auto' && autoAllocationShortage > QUANTITY_EPSILON) return false;
     const selected = rows.filter((r) => r.selected);
     if (selected.length === 0) return false;
     const isSingle = selected.length === 1;
-    if (isSingle && !forceIndependentQuantity) {
+    if (isSingle && !forceIndependentQuantity && allocationMode !== 'auto') {
       const first = selected[0];
       const qty = parseFloat(singleBatchQty);
       return first != null && !Number.isNaN(qty) && qty > 0 && !rowOverLimit(first, true);
@@ -471,7 +695,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       const q = parseFloat(r.qtyStr);
       return !Number.isNaN(q) && q > 0 && !rowOverLimit(r, false);
     });
-  }, [forceIndependentQuantity, rows, singleBatchQty, rowOverLimit]);
+  }, [allocationMode, autoAllocationShortage, forceIndependentQuantity, rows, singleBatchQty, rowOverLimit]);
 
   /**
    * 「已选几批」的唯一口径 = **组件自己的行选择**。
@@ -486,11 +710,84 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
    * 两边不会各说各话。
    */
   const selectedCount = selectedRows.length;
+  const usesIndependentQuantity = isMultiBatch || forceIndependentQuantity || allocationMode === 'auto';
 
   // 已选各批的用量 (单批次取屏幕投入量, 多批次取各自输入)。null = 还没填。
   const selectedQuantities = selectedRows.map((r) => rowQuantity(r, selectedRows.length === 1));
   const hasPendingQty = selectedQuantities.some((q) => q == null);
   const selectedTotal = selectedQuantities.reduce((s: number, q) => s + (q ?? 0), 0);
+  const parsedSingleBatchQty = parseFloat(singleBatchQty);
+  const singleSelectedRow = selectedCount === 1 ? selectedRows[0] : null;
+  const needsAllocationChoice =
+    !forceIndependentQuantity &&
+    singleSelectedRow != null &&
+    !Number.isNaN(parsedSingleBatchQty) &&
+    parsedSingleBatchQty > (singleSelectedRow.batch.remainingQuantity ?? 0);
+  const showAllocationWindow =
+    needsAllocationChoice ||
+    allocationMode === 'auto' ||
+    (allocationMode === 'manual' && allocationTargetQty != null);
+  const selectedQuantityEditor = selectedCount > 0 && usesIndependentQuantity ? (
+    <View
+      style={styles.selectedQuantitySection}
+      testID="material-batch-selected-quantity-section"
+    >
+      <Text style={styles.selectedQuantityTitle}>
+        {allocationMode === 'auto' ? '自动分配结果（逐批核对）' : '已选批次用量（逐批填写）'}
+      </Text>
+      <Text style={styles.selectedQuantityHelp}>
+        {allocationMode === 'auto'
+          ? '系统已按批次剩余量拆分；每批身份仍分别保留，可直接核对或改为手动'
+          : '每批不能超过该批剩余量；全部填写后才能确定'}
+      </Text>
+      {selectedRowEntries.map(({ row, index }) => {
+        const rowUnit = row.batch.quantityUnit ?? unit;
+        const overLimit = rowOverLimit(row, false);
+        return (
+          <View
+            key={row.batch.id}
+            style={[styles.selectedQuantityRow, overLimit && styles.selectedQuantityRowError]}
+            testID={`material-batch-selected-quantity-row-${row.batch.id}`}
+          >
+            <View style={styles.selectedQuantityIdentity}>
+              <Text style={styles.batchNumber}>{row.batch.batchNumber}</Text>
+              {row.batch.materialName ? (
+                <Text style={styles.materialName}>{row.batch.materialName}</Text>
+              ) : null}
+              <Text style={styles.remaining}>
+                最多可领 {row.batch.remainingQuantity} {rowUnit}
+              </Text>
+              {overLimit ? (
+                <Text style={styles.rowLimitText}>
+                  已超出本批可领量，请调小后再确定
+                </Text>
+              ) : null}
+            </View>
+            <View style={styles.qtyBox}>
+              <TextInput
+                style={[
+                  styles.qtyInput,
+                  overLimit && styles.qtyInputError,
+                  disabled && styles.qtyInputDisabled,
+                ]}
+                keyboardType="decimal-pad"
+                value={row.qtyStr}
+                onChangeText={(v: string) => setQty(index, v)}
+                editable={!disabled}
+                placeholder="用量"
+                placeholderTextColor="#C0C4CC"
+                accessibilityLabel={`批次 ${row.batch.batchNumber} 用量`}
+                testID={`material-batch-qty-${row.batch.id}`}
+              />
+              <Text style={styles.qtyUnit} testID={`material-batch-qty-unit-${row.batch.id}`}>
+                {rowUnit}
+              </Text>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  ) : null;
 
   // F2 厂号筛选: 收集本批次列表里出现的不同厂号 (含 "未标厂号" 哨兵).
   // 同一品名出现 ≥2 个厂号时才展示筛选 chips —— 不同厂号 = 不同批次, 仓管易选错.
@@ -733,11 +1030,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
                    * 单批次已选 → 不显示 per-batch 用量输入，qty 由屏幕「投入量」驱动
                    * 多批次已选 → 输入位于固定高度列表下方的独立编辑区
                    */}
-                  {row.selected && (isMultiBatch || forceIndependentQuantity) ? (
+                  {row.selected && usesIndependentQuantity ? (
                     <View style={styles.multiQtyLocationHint}>
                       <Text style={styles.multiQtyLocationHintText}>下方填用量</Text>
                     </View>
-                  ) : row.selected && !isMultiBatch ? (
+                  ) : row.selected ? (
                     // 单批次: 显示提示, 投入量由屏幕控制
                     <View style={styles.singleQtyHint}>
                       <Text style={styles.singleQtyHintText}>用量 = 投入量</Text>
@@ -750,68 +1047,142 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
             </>
           )}
 
+          {showAllocationWindow ? (
+            <View style={styles.allocationWindow} testID="material-batch-allocation-window">
+              <View style={styles.allocationWindowHeader}>
+                <Text style={styles.allocationWindowTitle}>多批次用量分配</Text>
+                {allocationMode === 'auto' ? (
+                  <Text style={styles.allocationModeBadge}>自动</Text>
+                ) : allocationMode === 'manual' ? (
+                  <Text style={[styles.allocationModeBadge, styles.allocationModeBadgeManual]}>手动</Text>
+                ) : null}
+              </View>
+
+              {allocationMode === 'choice' && needsAllocationChoice ? (
+                <>
+                  <Text style={styles.allocationWindowText}>
+                    本次投入 {formatAllocatedQuantity(parsedSingleBatchQty)} {unit}，当前批次最多可领{' '}
+                    {singleSelectedRow?.batch.remainingQuantity ?? 0} {unit}，需要从多个批次领料。
+                  </Text>
+                  <Text style={styles.allocationWindowHint}>请选择分配方式；推荐先使用系统自动分配。</Text>
+
+                  <TouchableOpacity
+                    style={[styles.allocationOption, styles.allocationOptionRecommended]}
+                    onPress={handleAutoAllocate}
+                    disabled={disabled || autoAllocationLoading}
+                    accessibilityRole="button"
+                    accessibilityLabel="按效期优先自动分配用量"
+                    testID="material-batch-allocation-option-auto"
+                  >
+                    <View style={styles.allocationOptionCopy}>
+                      <View style={styles.allocationOptionTitleRow}>
+                        <Text style={styles.allocationOptionTitle}>按效期优先自动分配</Text>
+                        <Text style={styles.recommendedBadge}>推荐</Text>
+                      </View>
+                      <Text style={styles.allocationOptionDescription}>
+                        先用临近效期批次，再按入库先后补足；提交时仍逐批校验
+                      </Text>
+                    </View>
+                    {autoAllocationLoading ? (
+                      <ActivityIndicator size="small" color="#E8732E" />
+                    ) : (
+                      <Text style={styles.allocationOptionArrow}>›</Text>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.allocationOption}
+                    onPress={switchToManualAllocation}
+                    disabled={disabled || autoAllocationLoading}
+                    accessibilityRole="button"
+                    accessibilityLabel="手动选择批次并逐批填写"
+                    testID="material-batch-allocation-option-manual"
+                  >
+                    <View style={styles.allocationOptionCopy}>
+                      <Text style={styles.allocationOptionTitle}>手动选择批次</Text>
+                      <Text style={styles.allocationOptionDescription}>
+                        自己勾选本次共同投入的批次，再在同一窗口逐批填写用量
+                      </Text>
+                    </View>
+                    <Text style={styles.allocationOptionArrow}>›</Text>
+                  </TouchableOpacity>
+                </>
+              ) : allocationMode === 'auto' ? (
+                <>
+                  <Text style={styles.allocationWindowText}>
+                    目标 {formatAllocatedQuantity(allocationTargetQty ?? parsedSingleBatchQty)} {unit} · 已分配{' '}
+                    {selectedCount} 个批次 · 合计 {formatAllocatedQuantity(selectedTotal)} {unit}
+                  </Text>
+                  {autoAllocationShortage > QUANTITY_EPSILON ? (
+                    <Text style={styles.allocationError} testID="material-batch-auto-shortage">
+                      当前可用批次不足，还缺 {formatAllocatedQuantity(autoAllocationShortage)} {unit}；不能确定，请改为手动选择或联系仓管。
+                    </Text>
+                  ) : (
+                    <Text style={styles.allocationSuccess} testID="material-batch-auto-success">
+                      已按效期顺序分配完成。批次身份仍分别保留，可在下方核对。
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    style={styles.allocationOption}
+                    onPress={switchToManualAllocation}
+                    disabled={disabled}
+                    accessibilityRole="button"
+                    accessibilityLabel="改为手动选择和调整批次"
+                    testID="material-batch-allocation-switch-manual"
+                  >
+                    <View style={styles.allocationOptionCopy}>
+                      <Text style={styles.allocationOptionTitle}>改为手动选择或调整</Text>
+                      <Text style={styles.allocationOptionDescription}>保留当前结果，再自行增删批次或修改逐批用量</Text>
+                    </View>
+                    <Text style={styles.allocationOptionArrow}>›</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.allocationWindowText}>
+                    手动模式：继续在上方勾选批次，并在下方逐批填写；逐批合计将作为本次投入量。
+                  </Text>
+                  {needsAllocationChoice ? (
+                    <TouchableOpacity
+                      style={[styles.allocationOption, styles.allocationOptionRecommended]}
+                      onPress={handleAutoAllocate}
+                      disabled={disabled || autoAllocationLoading}
+                      accessibilityRole="button"
+                      accessibilityLabel="改用按效期优先自动分配"
+                      testID="material-batch-allocation-switch-auto"
+                    >
+                      <View style={styles.allocationOptionCopy}>
+                        <Text style={styles.allocationOptionTitle}>改用自动分配</Text>
+                        <Text style={styles.allocationOptionDescription}>系统按效期和剩余量拆分本次投入</Text>
+                      </View>
+                      {autoAllocationLoading ? (
+                        <ActivityIndicator size="small" color="#E8732E" />
+                      ) : (
+                        <Text style={styles.allocationOptionArrow}>›</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              )}
+
+              {autoAllocationError != null ? (
+                <Text style={styles.allocationError} testID="material-batch-auto-error">
+                  {autoAllocationError}
+                </Text>
+              ) : null}
+              <Text style={styles.allocationFootnote}>按当前可用量生成，正式提交时系统会再次校验库存。</Text>
+              {selectedQuantityEditor}
+            </View>
+          ) : null}
+
           {/*
            * 多批次数量编辑区刻意放在 listScroll 外：它随 YieldStepReportScreen 的外层
            * ScrollView 参与页面布局，因此 2–5 个输入都能滚到，不会被 320dp 选择列表裁剪。
            */}
-          {selectedCount > 0 && (isMultiBatch || forceIndependentQuantity) ? (
-            <View
-              style={styles.selectedQuantitySection}
-              testID="material-batch-selected-quantity-section"
-            >
-              <Text style={styles.selectedQuantityTitle}>已选批次用量（逐批填写）</Text>
-              <Text style={styles.selectedQuantityHelp}>每批不能超过该批剩余量；全部填写后才能确定</Text>
-              {selectedRowEntries.map(({ row, index }) => {
-                const rowUnit = row.batch.quantityUnit ?? unit;
-                const overLimit = rowOverLimit(row, false);
-                return (
-                  <View
-                    key={row.batch.id}
-                    style={[styles.selectedQuantityRow, overLimit && styles.selectedQuantityRowError]}
-                    testID={`material-batch-selected-quantity-row-${row.batch.id}`}
-                  >
-                    <View style={styles.selectedQuantityIdentity}>
-                      <Text style={styles.batchNumber}>{row.batch.batchNumber}</Text>
-                      {row.batch.materialName ? (
-                        <Text style={styles.materialName}>{row.batch.materialName}</Text>
-                      ) : null}
-                      <Text style={styles.remaining}>
-                        最多可领 {row.batch.remainingQuantity} {rowUnit}
-                      </Text>
-                      {overLimit ? (
-                        <Text style={styles.rowLimitText}>
-                          已超出本批可领量，请调小后再确定
-                        </Text>
-                      ) : null}
-                    </View>
-                    <View style={styles.qtyBox}>
-                      <TextInput
-                        style={[
-                          styles.qtyInput,
-                          overLimit && styles.qtyInputError,
-                          disabled && styles.qtyInputDisabled,
-                        ]}
-                        keyboardType="decimal-pad"
-                        value={row.qtyStr}
-                        onChangeText={(v: string) => setQty(index, v)}
-                        editable={!disabled}
-                        placeholder="用量"
-                        placeholderTextColor="#C0C4CC"
-                        accessibilityLabel={`批次 ${row.batch.batchNumber} 用量`}
-                        testID={`material-batch-qty-${row.batch.id}`}
-                      />
-                      <Text style={styles.qtyUnit} testID={`material-batch-qty-unit-${row.batch.id}`}>
-                        {rowUnit}
-                      </Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          ) : null}
+          {!showAllocationWindow ? selectedQuantityEditor : null}
 
           {/* 多批次合计 */}
-          {selectedCount > 0 && isMultiBatch ? (
+          {selectedCount > 0 && (isMultiBatch || allocationMode === 'auto') ? (
             <View style={styles.selectedHint}>
               <Text style={styles.selectedHintText}>
                 已选 {selectedCount} 批次 · 合计领料{' '}
@@ -821,7 +1192,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           ) : null}
 
           {/* Q1: 单批次时提示投入量即用量 */}
-          {selectedCount === 1 && !isMultiBatch && !forceIndependentQuantity ? (
+          {selectedCount === 1 && !usesIndependentQuantity ? (
             <View style={styles.singleBatchNote}>
               <Text style={styles.singleBatchNoteText}>
                 单批次: 投入量即该批次的领用量，请在下方「投入量」填写
@@ -836,13 +1207,18 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
               onPress={handleConfirm}
               disabled={disabled || !canConfirm()}
               accessibilityLabel="确定选择领料批次"
+              testID="material-batch-confirm"
             >
               <Text style={[styles.confirmBtnText, !canConfirm() && styles.confirmBtnTextDisabled]}>
-                {isMultiBatch
-                  ? (canConfirm() ? '确定选择' : '请为每批次填写用量')
-                  : forceIndependentQuantity
-                    ? (canConfirm() ? '确定选择' : '请填写批次用量')
-                  : (canConfirm() ? '确定选择' : '请先在下方填写投入量')}
+                {allocationMode === 'auto' && autoAllocationShortage > QUANTITY_EPSILON
+                  ? '自动分配仍有缺口，请改为手动'
+                  : usesIndependentQuantity
+                    ? (canConfirm()
+                        ? '确定选择'
+                        : forceIndependentQuantity
+                          ? '请填写批次用量'
+                          : '请为每批次填写用量')
+                    : (canConfirm() ? '确定选择' : '请先在下方填写投入量')}
               </Text>
             </TouchableOpacity>
           ) : null}
@@ -965,6 +1341,51 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF3EC', borderRadius: 6,
   },
   multiQtyLocationHintText: { fontSize: 12, color: '#E8732E', fontWeight: '600' },
+  allocationWindow: {
+    marginTop: 12, padding: 12,
+    borderWidth: 1.5, borderColor: '#F3C6A9', borderRadius: 12,
+    backgroundColor: '#FFFBF7',
+  },
+  allocationWindowHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  allocationWindowTitle: { fontSize: 17, color: '#303133', fontWeight: '700' },
+  allocationModeBadge: {
+    paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999,
+    backgroundColor: '#E8732E', color: '#FFFFFF', fontSize: 12, fontWeight: '700',
+  },
+  allocationModeBadgeManual: { backgroundColor: '#6B7280' },
+  allocationWindowText: { fontSize: 14, color: '#303133', lineHeight: 21, marginTop: 4 },
+  allocationWindowHint: { fontSize: 12, color: '#606266', lineHeight: 18, marginTop: 4, marginBottom: 8 },
+  allocationOption: {
+    minHeight: 64, marginTop: 8, paddingHorizontal: 12, paddingVertical: 10,
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderColor: '#DCDFE6', borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  allocationOptionRecommended: { borderColor: '#E8732E', backgroundColor: '#FFF5ED' },
+  allocationOptionCopy: { flex: 1, marginRight: 8 },
+  allocationOptionTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  allocationOptionTitle: { fontSize: 15, color: '#303133', fontWeight: '700' },
+  recommendedBadge: {
+    marginLeft: 8, paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: 999, backgroundColor: '#E8732E', color: '#FFFFFF',
+    fontSize: 11, fontWeight: '700', overflow: 'hidden',
+  },
+  allocationOptionDescription: { fontSize: 12, color: '#606266', lineHeight: 18, marginTop: 3 },
+  allocationOptionArrow: { fontSize: 28, lineHeight: 30, color: '#E8732E', fontWeight: '500' },
+  allocationSuccess: {
+    marginTop: 8, paddingHorizontal: 10, paddingVertical: 8,
+    borderRadius: 8, backgroundColor: '#F0F9EB', color: '#3B7A1D',
+    fontSize: 13, lineHeight: 19, fontWeight: '600',
+  },
+  allocationError: {
+    marginTop: 8, paddingHorizontal: 10, paddingVertical: 8,
+    borderRadius: 8, backgroundColor: '#FFF1F0', color: '#C0392B',
+    fontSize: 13, lineHeight: 19, fontWeight: '600',
+  },
+  allocationFootnote: { fontSize: 11, color: '#909399', lineHeight: 16, marginTop: 8 },
   selectedQuantitySection: {
     marginTop: 12, padding: 10,
     borderWidth: 1, borderColor: '#F3C6A9', borderRadius: 8,
