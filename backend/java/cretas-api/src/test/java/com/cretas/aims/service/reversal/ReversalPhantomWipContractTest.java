@@ -304,8 +304,10 @@ class ReversalPhantomWipContractTest {
         ProductionReport r = yieldReport(23837L, 10761L);
         // 关键: 该报工名下【一条 IN 流水都没有】—— 正是 F006 生产库的实际形态
         ReversalRig rig = new ReversalRig(15L, 10761L, List.of(r), List.of());
+        SemiFinishedInventory stranded = wipRow(343L, "B10761-S2-1789", "300", "0", "75");
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10761L))
-                .thenReturn(List.of(wipRow(343L, "B10761-S2-1789", "300", "0", "75")));
+                .thenReturn(List.of(stranded));
+        when(rig.wipRepo.findByIdForUpdate(343L)).thenReturn(Optional.of(stranded));
 
         assertThatThrownBy(() -> rig.service.executeReversal(15L, FACTORY))
                 .isInstanceOf(BusinessException.class)
@@ -423,8 +425,10 @@ class ReversalPhantomWipContractTest {
     void zeroAvailableButPositiveProducedStillBlocksWithoutInLedger() {
         ProductionReport r = yieldReport(23838L, 10762L);
         ReversalRig rig = new ReversalRig(19L, 10762L, List.of(r), List.of());
+        SemiFinishedInventory stranded = wipRow(344L, "B10762-S1-0001", "1.25", "1.25", "0");
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10762L))
-                .thenReturn(List.of(wipRow(344L, "B10762-S1-0001", "1.25", "1.25", "0")));
+                .thenReturn(List.of(stranded));
+        when(rig.wipRepo.findByIdForUpdate(344L)).thenReturn(Optional.of(stranded));
 
         BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
                 BusinessException.class, () -> rig.service.executeReversal(19L, FACTORY));
@@ -438,8 +442,10 @@ class ReversalPhantomWipContractTest {
     void refusalCarriesCodeAndActionableHint() {
         ProductionReport r = yieldReport(23837L, 10761L);
         ReversalRig rig = new ReversalRig(15L, 10761L, List.of(r), List.of());
+        SemiFinishedInventory stranded = wipRow(343L, "B10761-S2-1789", "300", "0", "75");
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10761L))
-                .thenReturn(List.of(wipRow(343L, "B10761-S2-1789", "300", "0", "75")));
+                .thenReturn(List.of(stranded));
+        when(rig.wipRepo.findByIdForUpdate(343L)).thenReturn(Optional.of(stranded));
 
         BusinessException ex = (BusinessException) org.junit.jupiter.api.Assertions
                 .assertThrows(BusinessException.class, () -> rig.service.executeReversal(15L, FACTORY));

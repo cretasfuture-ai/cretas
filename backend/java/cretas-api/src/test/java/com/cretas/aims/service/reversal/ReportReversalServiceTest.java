@@ -604,7 +604,7 @@ class ReportReversalServiceTest {
             assertThat(approved.getApprovedBy()).isEqualTo(88L);
             assertThat(approved.getApprovedAt()).isEqualTo(originalApprovedAt);
             assertThat(approved.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
-            verify(reportRepo).findYieldReportsByBatch(FACTORY_ID, BATCH_ID);
+            verify(reportRepo, times(2)).findYieldReportsByBatch(FACTORY_ID, BATCH_ID);
         }
 
         @Test
@@ -799,7 +799,7 @@ class ReportReversalServiceTest {
 
             verify(reversalLogRepo, atLeastOnce()).save(any());
             // executeReversal 被触发 (查询报工)
-            verify(reportRepo).findYieldReportsByBatch(FACTORY_ID, BATCH_ID);
+            verify(reportRepo, times(2)).findYieldReportsByBatch(FACTORY_ID, BATCH_ID);
         }
 
         @Test

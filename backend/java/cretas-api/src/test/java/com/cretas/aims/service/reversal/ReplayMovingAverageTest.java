@@ -165,7 +165,7 @@ class ReplayMovingAverageTest {
                     "replayMovingAverage", sfiId, FACTORY_ID, java.time.LocalDateTime.now());
 
             assertEquals(new BigDecimal("1.25"), sfi.getProducedQuantity());
-            assertEquals(BigDecimal.ZERO, sfi.getConsumedQuantity());
+            assertEquals(0, BigDecimal.ZERO.compareTo(sfi.getConsumedQuantity()));
             assertEquals(new BigDecimal("1.25"), sfi.getAvailableQuantity());
             assertEquals(SemiFinishedInventory.Status.AVAILABLE, sfi.getStatus());
         }
