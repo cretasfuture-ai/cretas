@@ -21,6 +21,12 @@ from PIL import Image, ImageOps
 
 
 MINIMUM_HOLDOUT_PHASH_DISTANCE = 11
+PATCH_DATASET_VERSION = "label-qc-tray-patch-dataset-v2"
+SAFE_TRUTH_BOUNDARY = {
+    "preannotations_used_as_truth": False,
+    "deleted_proposals_used_as_background": False,
+    "images_with_ignore_regions_excluded_from_training": True,
+}
 EXCLUSION_REASONS = {
     "multi_tray_group",
     "unjudgeable_or_misaligned",
@@ -55,6 +61,15 @@ def dataset_digest(root: Path) -> str:
             digest.update(b"\0")
             digest.update(bytes.fromhex(sha256_file(path)))
     return digest.hexdigest()
+
+
+def validate_prior_truth_boundary(prior: dict[str, Any]) -> dict[str, bool]:
+    for field, expected in SAFE_TRUTH_BOUNDARY.items():
+        if prior.get(field) is not expected:
+            raise RuntimeError(
+                f"prior dataset truth boundary is unsafe: {field} must be {expected}"
+            )
+    return dict(SAFE_TRUTH_BOUNDARY)
 
 
 def validate_box(box: Sequence[float]) -> list[float]:
@@ -190,6 +205,7 @@ def build_dataset(
     prior_root = prior_manifest_path.parent
     if prior.get("protected_holdout_included") is not False:
         raise RuntimeError("prior dataset does not prove protected holdout exclusion")
+    truth_boundary = validate_prior_truth_boundary(prior)
     if prior.get("dataset_sha256") != dataset_digest(prior_root):
         raise RuntimeError("prior dataset content drift")
     decision = mining.get("decision") or {}
@@ -201,7 +217,8 @@ def build_dataset(
     selected = (mining.get("results") or {}).get("selected") or []
     accepted, rejected = classify_candidates(selected, included, excluded)
     identity = {
-        "version": "label-qc-tray-patch-dataset-v1",
+        "version": PATCH_DATASET_VERSION,
+        "truth_boundary": truth_boundary,
         "prior_dataset_sha256": prior["dataset_sha256"],
         "mining_receipt_sha256": sha256_file(mining_receipt_path),
         "accepted": [
@@ -323,7 +340,7 @@ def build_dataset(
         encoding="utf-8",
     )
     manifest = {
-        "version": "label-qc-tray-patch-dataset-v1",
+        "version": PATCH_DATASET_VERSION,
         "dataset_id": dataset_id,
         "identity": identity,
         "base_dataset": str(prior_root),
@@ -361,6 +378,7 @@ def build_dataset(
         "protected_holdout": prior.get("protected_holdout"),
         "protected_holdout_included": False,
         "protected_target_used_for_training": False,
+        **truth_boundary,
         "minimum_holdout_phash_distance": min(
             int(row["nearest_holdout_phash_distance"]) for row in accepted
         ),
