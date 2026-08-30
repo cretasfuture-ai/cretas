@@ -353,12 +353,14 @@ class MineTrayQueueTests(unittest.TestCase):
         teacher = [
             {"box": [0.6, 0.6, 0.8, 0.8], "support": ["all"]},
             {"box": [0.4, 0.4, 0.55, 0.55], "support": ["isolated", "edge"]},
+            {"box": [0.12, 0.12, 0.32, 0.32], "support": ["all", "edge"]},
         ]
         merged = module.merge_preannotations(detector, teacher)
         boxes = [row["box"] for row in merged]
         self.assertIn(detector[0]["box"], boxes)
         self.assertIn(teacher[1]["box"], boxes)
         self.assertNotIn(teacher[0]["box"], boxes)
+        self.assertNotIn(teacher[2]["box"], boxes)
         self.assertTrue(all(row["source"] != "ground_truth" for row in merged))
 
     def test_feature_summary_tags_edge_isolated_and_overlap(self):

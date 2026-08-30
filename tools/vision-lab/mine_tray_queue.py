@@ -342,13 +342,14 @@ def merge_preannotations(
         support = sorted(set(row.get("support") or [row.get("prompt", "teacher")]))
         overlaps = [box_iou(row["box"], detector["box"]) for detector in detector_boxes]
         detector_support = max(overlaps, default=0.0)
-        # A teacher-only proposal needs either two prompt variants or some low-floor
-        # detector support. This keeps one-off full-scene hallucinations out.
-        if detector_support < 0.10 and len(support) < 2:
+        # Keep only independently supported teacher proposals that are genuinely
+        # absent from detector output. Overlapping teacher boxes add redraw noise
+        # without exposing a detector blind spot.
+        if detector_support >= 0.10 or len(support) < 2:
             continue
         proposals.append({
             "box": row["box"], "source": "locateanything_teacher",
-            "support": support + (["tray_detector_low_iou"] if detector_support >= 0.10 else []),
+            "support": support,
             "confidence": round(detector_support, 6), "priority": 1,
         })
     return deduplicate_boxes(proposals)
