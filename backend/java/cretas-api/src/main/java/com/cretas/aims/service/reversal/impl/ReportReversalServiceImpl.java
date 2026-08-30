@@ -172,7 +172,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         // G1: 下游领用检查
         String batchRef = String.valueOf(batchId);
-        if (txnRepo.existsDownstreamConsumed(factoryId, batchRef)) {
+        if (txnRepo.existsDownstreamConsumed(factoryId, batchRef)
+                || hasExternalDownstreamConsumption(factoryId, batchId)) {
             throw new BusinessException(409, String.format(
                     "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
                     .withCode("DOWNSTREAM_CONSUMED")
@@ -365,23 +366,44 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             workProcessTaskRepository.saveAll(batchTasks);
         }
 
-        // ② 每份报工: 找到对应 IN SIT 行 → 写 REVERSE 行 → 回放移动均价
+        // ② 每份报工: IN 写负 REVERSE；本整单内的正式 WIP OUT 写正 REVERSE。
+        //    OUT 是本批次下游工序的领用，不是新的产出；正量 REVERSE 只恢复 consumed。
         for (ProductionReport r : reports) {
             List<SemiFinishedInventoryTransaction> inTxns =
                     txnRepo.findByFactoryIdAndReportId(factoryId, r.getId());
+            if (inTxns == null) {
+                continue;
+            }
             for (SemiFinishedInventoryTransaction inTxn : inTxns) {
-                if (!SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())) {
-                    continue; // 只冲销 IN 行
+                if (!SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())
+                        && !SemiFinishedInventoryTransaction.TxnType.OUT.equals(inTxn.getTxnType())) {
+                    continue;
                 }
-                // 写 REVERSE 行 (负数量, 不改 IN 行)
+                BigDecimal quantity = inTxn.getQuantity();
+                if (quantity == null || quantity.signum() == 0) {
+                    continue;
+                }
+                BigDecimal reverseQuantity = SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())
+                        ? quantity.negate() : quantity.abs();
+                boolean alreadyReversed = inTxns.stream().anyMatch(existing ->
+                        SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(existing.getTxnType())
+                                && Objects.equals(existing.getSemiFinishedId(), inTxn.getSemiFinishedId())
+                                && Objects.equals(existing.getReportId(), r.getId())
+                                && existing.getQuantity() != null
+                                && existing.getQuantity().compareTo(reverseQuantity) == 0);
+                if (alreadyReversed) {
+                    continue;
+                }
+                // IN 的逆是负量；OUT 的逆是正量。原流水永远不改。
                 SemiFinishedInventoryTransaction reverseTxn = SemiFinishedInventoryTransaction.builder()
                         .factoryId(factoryId)
                         .semiFinishedId(inTxn.getSemiFinishedId())
                         .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
                         .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
                         .sourceRef("reversal-log:" + logId)
-                        .quantity(inTxn.getQuantity().negate())
+                        .quantity(reverseQuantity)
                         .unitCostAtTxn(inTxn.getUnitCostAtTxn())
+                        .reportId(r.getId())
                         .operatorId(reversalOperatorId(log_))
                         .build();
                 SemiFinishedInventoryTransaction saved = txnRepo.save(reverseTxn);
@@ -463,6 +485,79 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      */
     private static Long reversalOperatorId(ReportReversalLog log_) {
         return log_.getApprovedBy() != null ? log_.getApprovedBy() : log_.getSubmittedBy();
+    }
+
+    /**
+     * G1 的正式 WIP OUT 使用 {@code TASK-&lt;taskId&gt;} 作为 sourceRef，不是批次号。
+     * 只有同一整单内的下游任务才属于本次撤回集合；跨批次/转出/无法解析的 OUT 必须拒绝。
+     */
+    private boolean hasExternalDownstreamConsumption(String factoryId, Long batchId) {
+        if (wipRepo == null || workProcessTaskRepository == null || batchId == null) {
+            return false;
+        }
+        List<SemiFinishedInventory> wips =
+                wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
+        if (wips == null) {
+            return false;
+        }
+        for (SemiFinishedInventory wip : wips) {
+            if (wip == null || wip.getId() == null) {
+                continue;
+            }
+            List<SemiFinishedInventoryTransaction> txns =
+                    txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(wip.getId());
+            if (txns == null) {
+                continue;
+            }
+            Map<String, BigDecimal> restoredByReportAndSfi = txns.stream()
+                    .filter(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType())
+                            && t.getQuantity() != null && t.getQuantity().signum() > 0
+                            && t.getReportId() != null)
+                    .collect(Collectors.groupingBy(
+                            t -> t.getReportId() + ":" + t.getSemiFinishedId(),
+                            Collectors.reducing(BigDecimal.ZERO,
+                                    SemiFinishedInventoryTransaction::getQuantity,
+                                    BigDecimal::add)));
+            for (SemiFinishedInventoryTransaction txn : txns) {
+                if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())
+                        || !(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())
+                        || SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT.equals(txn.getSourceType()))) {
+                    continue;
+                }
+                // reverseReportPosting / prior whole-order repair may already have restored this exact report.
+                if (txn.getReportId() != null && txn.getQuantity() != null) {
+                    String key = txn.getReportId() + ":" + txn.getSemiFinishedId();
+                    BigDecimal restored = restoredByReportAndSfi.getOrDefault(key, BigDecimal.ZERO);
+                    BigDecimal required = txn.getQuantity().abs();
+                    if (restored.compareTo(required) >= 0) {
+                        restoredByReportAndSfi.put(key, restored.subtract(required));
+                        continue;
+                    }
+                }
+                if (SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT.equals(txn.getSourceType())) {
+                    return true;
+                }
+                String ref = txn.getSourceRef();
+                if (String.valueOf(batchId).equals(ref)) {
+                    return true; // legacy batch-level reference: no task boundary to prove safe
+                }
+                if (ref == null || !ref.startsWith("TASK-")) {
+                    return true; // fail closed for an unrecognised consumer
+                }
+                try {
+                    Long taskId = Long.valueOf(ref.substring("TASK-".length()));
+                    Optional<WorkProcessTask> consumerOpt = workProcessTaskRepository
+                            .findByFactoryIdAndId(factoryId, taskId);
+                    WorkProcessTask consumer = consumerOpt == null ? null : consumerOpt.orElse(null);
+                    if (consumer == null || !batchId.equals(consumer.getProductionBatchId())) {
+                        return true;
+                    }
+                } catch (NumberFormatException ex) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void softDeleteProcessSheetRows(String factoryId, Long batchId, String planId,

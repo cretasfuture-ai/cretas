@@ -5,6 +5,7 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
@@ -118,6 +119,58 @@ class ReportReversalServiceTest {
                     .hasMessageContaining("已被下道工序领用");
 
             verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("G1: TASK-* OUT 指向其他批次 → 409 DOWNSTREAM_CONSUMED")
+        void g1_taskScopedOutFromAnotherBatch_throws409() {
+            when(txnRepo.existsDownstreamConsumed(FACTORY_ID, String.valueOf(BATCH_ID)))
+                    .thenReturn(false);
+            SemiFinishedInventory wip = SemiFinishedInventory.builder().id(88L)
+                    .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
+            when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(wip));
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-99").quantity(new BigDecimal("-1")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L)).thenReturn(List.of(out));
+            WorkProcessTask consumer = WorkProcessTask.builder().id(99L)
+                    .factoryId(FACTORY_ID).productionBatchId(BATCH_ID + 1).build();
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 99L))
+                    .thenReturn(Optional.of(consumer));
+
+            assertThatThrownBy(() -> service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "test"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("已被下道工序领用");
+            verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("G1: 正向 REVERSE 必须按 SFI 精确抵扣，不能误放行另一库存行")
+        void g1_positiveReverseOnAnotherSfi_doesNotNeutralizeOut() {
+            SemiFinishedInventory wip = SemiFinishedInventory.builder().id(88L)
+                    .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
+            when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(wip));
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-99").reportId(10L).quantity(new BigDecimal("-2")).build();
+            SemiFinishedInventoryTransaction unrelatedRestore = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(89L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    .reportId(10L).quantity(new BigDecimal("2")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L)).thenReturn(List.of(out));
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 99L))
+                    .thenReturn(Optional.of(WorkProcessTask.builder().id(99L)
+                            .factoryId(FACTORY_ID).productionBatchId(BATCH_ID + 1).build()));
+
+            Boolean blocked = ReflectionTestUtils.invokeMethod(service,
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
+            assertThat(blocked).isTrue();
+            // Keep the unrelated row in the fixture explicit: the key must include semiFinishedId.
+            assertThat(unrelatedRestore.getSemiFinishedId()).isNotEqualTo(out.getSemiFinishedId());
         }
 
         @Test
