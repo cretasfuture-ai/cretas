@@ -89,6 +89,9 @@ public class WorkflowInstanceController {
     private final TransferService transferService;
     private final FactoryStocktakeService stocktakeService;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
+
     /** 业务类型中文名解析 — 权威表在 DecisionTypeMetadataRegistry, 前端不再维护第二份。 */
     @Autowired(required = false)
     private OaModuleLabelResolver oaModuleLabelResolver;
@@ -241,6 +244,7 @@ public class WorkflowInstanceController {
             // M-12: 除了那句拼好的摘要, 再把单号/金额/往来单位**分开**下发。
             // 前端要拆成三列(金额得能右对齐+排序), ⛔ 不许它从 businessSummary 正则反解。
             fillStructuredBusinessFields(dto, inst, poById, soById, stocktakeById, warehouseNameById);
+            fillReportCorrectionDetails(dto, inst, factoryId);
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -416,6 +420,17 @@ public class WorkflowInstanceController {
                             user.getId(), action, notes);
             businessEntityId = period.getId();
             businessStatus = period.getStatus().name();
+        } else if ("PRODUCTION_REPORT_CORRECTION".equals(instance.getModuleCode())) {
+            if (productionReportCorrectionService == null) {
+                throw new BusinessException(503, "报工修正服务暂不可用，请稍后重试")
+                        .withCode("OA_REPORT_CORRECTION_SERVICE_UNAVAILABLE");
+            }
+            com.cretas.aims.dto.production.ProductionReportCorrectionDTO correction =
+                    productionReportCorrectionService.applyWorkflowAction(
+                            factoryId, instance.getBusinessEntityId(), instanceId,
+                            user.getId(), user.getRoleCode(), action, notes);
+            businessEntityId = correction.getId();
+            businessStatus = correction.getStatus();
         } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
@@ -680,6 +695,7 @@ public class WorkflowInstanceController {
                     .status(inst.getStatus().name())
                     .completedAt(inst.getCompletedAt())
                     .build();
+            fillReportCorrectionDetails(dto, inst, factoryId);
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -820,6 +836,13 @@ public class WorkflowInstanceController {
                                         Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
+        if ("PRODUCTION_REPORT_CORRECTION".equals(moduleCode)
+                && productionReportCorrectionService != null) {
+            Map<String, Object> details = productionReportCorrectionService.approvalSummary(
+                    inst.getFactoryId(), bizId);
+            return "报工 #" + details.get("reportId") + " 修正"
+                    + (details.get("processCategory") == null ? "" : "（" + details.get("processCategory") + "）");
+        }
         if ("PURCHASE_ORDER".equals(moduleCode)) {
             PurchaseOrder po = poById.get(bizId);
             if (po != null) {
@@ -900,6 +923,17 @@ public class WorkflowInstanceController {
         }
         // generic fallback
         return (moduleCode == null ? "业务单据" : moduleCode) + " " + bizId;
+    }
+
+    private void fillReportCorrectionDetails(WorkflowInstancePendingDTO dto,
+                                             ApprovalWorkflowInstance inst,
+                                             String factoryId) {
+        if (!"PRODUCTION_REPORT_CORRECTION".equals(inst.getModuleCode())
+                || productionReportCorrectionService == null) return;
+        Map<String, Object> details = productionReportCorrectionService.approvalSummary(
+                factoryId, inst.getBusinessEntityId());
+        dto.setReportCorrectionDetails(details);
+        dto.setBusinessCode("报工 #" + details.get("reportId"));
     }
 
     private Map<String, SalesOrder> loadSalesOrders(Set<String> soIds) {

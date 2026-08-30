@@ -213,6 +213,9 @@ public class ApprovalChainConfig extends BaseEntity {
          */
         PRODUCTION_REVERSAL_APPROVAL,
 
+        /** 已提交、未结单报工的结果字段修正审批。 */
+        PRODUCTION_REPORT_CORRECTION_APPROVAL,
+
         // ============================================
         // 质检 / 物料 类 (quality / material)
         // ============================================

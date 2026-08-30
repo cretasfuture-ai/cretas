@@ -94,7 +94,7 @@ jobs:
           echo "CRETAS_WORKFLOW_PG_USER=cretas_user" >> "$GITHUB_ENV"
           echo "CRETAS_WORKFLOW_PG_PASSWORD=" >> "$GITHUB_ENV"
 
-      - name: Prove reversal decisions serialize at the PostgreSQL row lock
+      - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api
         env:
           MAVEN_OPTS: -Xmx2g
@@ -102,7 +102,7 @@ jobs:
           set -euo pipefail
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           "$MVN" -B test \
-            -Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT \
+            -Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT \
             -Dspring.profiles.active=test \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
 

@@ -190,6 +190,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowEngineService workflowEngine;
 
+    /** 日常报工修正：待审批期间必须在任何结单库存动作之前 fail closed。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -3184,6 +3188,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHintTarget("核对结单");
                 });
 
+        if (productionReportCorrectionService != null) {
+            productionReportCorrectionService.assertNoPendingForPlan(factoryId, planId);
+        }
+
         // 🔴🔒 生产仓预留释放 —— 必须在下面【任何一道】读 getCurrentQuantity() 的闸之前。
         //   报工提交时把 materialBatchRefs 的量记进 material_batches.reserved_quantity
         //   (WorkshopReportReservationService), 让「可用 = 在手 − 已提交报工引用量」成立。
@@ -3627,6 +3635,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional(readOnly = true)
     public ProductionSettlementPrefillResponse getSettlementPrefill(String factoryId, String planId) {
+        if (productionReportCorrectionService != null) {
+            productionReportCorrectionService.assertNoPendingForPlan(factoryId, planId);
+        }
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
 

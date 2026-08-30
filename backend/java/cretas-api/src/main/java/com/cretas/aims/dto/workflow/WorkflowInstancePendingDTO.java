@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * "我待审" widget 单行 DTO — issue #20.
@@ -70,6 +71,10 @@ public class WorkflowInstancePendingDTO {
 
     @Schema(description = "往来单位 —— 采购看供应商, 销售看客户; 无则为 null", example = "北京飞熊")
     private String counterpartyName;
+
+    /** 仅报工修正审批下发：含 before/after、原因、工序与关联计划/批次。 */
+    @Schema(description = "报工修正审批差异；非该业务类型时为 null")
+    private Map<String, Object> reportCorrectionDetails;
 
     @Schema(description = "当前 active 审批节点 ID")
     private String currentNodeId;

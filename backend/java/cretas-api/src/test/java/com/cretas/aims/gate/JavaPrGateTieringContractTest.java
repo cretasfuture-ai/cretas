@@ -58,7 +58,7 @@ class JavaPrGateTieringContractTest {
                 .contains("CRETAS_WORKFLOW_PG_VERIFY=true")
                 .contains("CRETAS_WORKFLOW_PG_URL=jdbc:postgresql://localhost:5432/$DB")
                 .contains("cretas_workflow_verify_${suffix}")
-                .contains("-Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT")
+                .contains("-Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT")
                 .contains("runner 缺少 psql；不能把跳过当通过")
                 .contains("dropdb --if-exists --force \"$CRETAS_WORKFLOW_PG_DB\"");
 

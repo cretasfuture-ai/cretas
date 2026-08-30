@@ -106,6 +106,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
+
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
@@ -1341,8 +1344,39 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private StocktakeDTO toDetailedDTO(FactoryStocktake stocktake, String factoryId) {
         StocktakeDTO dto = enrichHeader(StocktakeDTO.from(stocktake), stocktake, factoryId);
         enrichItemIdentity(dto, stocktake, factoryId);
+        enrichReportCorrectionWarnings(dto, factoryId);
         dto.setApprovalEvidence(buildApprovalEvidence(dto));
         return dto;
+    }
+
+    private void enrichReportCorrectionWarnings(StocktakeDTO dto, String factoryId) {
+        if (productionReportCorrectionService == null || dto.getItems() == null) return;
+        if (FactoryStocktake.InventoryScope.FINISHED_GOODS.name().equals(dto.getInventoryScope())) {
+            List<String> finishedBatchIds = dto.getItems().stream()
+                    .map(StocktakeDTO.StocktakeItemDTO::getFinishedGoodsBatchId)
+                    .filter(Objects::nonNull).distinct().toList();
+            List<String> planIds = finishedGoodsBatchRepo.findAllById(finishedBatchIds).stream()
+                    .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                    .filter(batch -> Objects.equals(dto.getWarehouseId(), batch.getWarehouseId()))
+                    .map(FinishedGoodsBatch::getProductionPlanId)
+                    .filter(Objects::nonNull).distinct().toList();
+            List<com.cretas.aims.dto.production.ProductionReportCorrectionDTO> warnings =
+                    productionReportCorrectionService.approvedForPlans(factoryId, planIds);
+            if (!warnings.isEmpty()) {
+                dto.setReportCorrectionWarningMessage("本批次存在经审批修正的报工数据，请重点核对实物数量");
+                dto.setReportCorrectionWarnings(warnings);
+            }
+            return;
+        }
+        List<String> productTypeIds = dto.getItems().stream()
+                .map(StocktakeDTO.StocktakeItemDTO::getProductTypeId)
+                .filter(Objects::nonNull).distinct().toList();
+        List<com.cretas.aims.dto.production.ProductionReportCorrectionDTO> warnings =
+                productionReportCorrectionService.approvedForProducts(factoryId, productTypeIds);
+        if (!warnings.isEmpty()) {
+            dto.setReportCorrectionWarningMessage("相关半成品存在经审批修正的报工数据，请重点核对实物数量");
+            dto.setReportCorrectionWarnings(warnings);
+        }
     }
 
     private StocktakeDTO enrichHeader(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {

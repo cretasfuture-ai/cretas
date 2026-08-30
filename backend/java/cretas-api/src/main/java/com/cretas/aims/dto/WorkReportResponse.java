@@ -50,6 +50,8 @@ public class WorkReportResponse {
     private ProductionReport.Status status;
     private String rejectionReason;
     private Boolean syncedToSmartbi;
+    private Boolean dataCorrected;
+    private String lastCorrectionId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }
