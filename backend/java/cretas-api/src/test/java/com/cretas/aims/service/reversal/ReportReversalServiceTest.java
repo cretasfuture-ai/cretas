@@ -36,6 +36,7 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -168,7 +169,7 @@ class ReportReversalServiceTest {
                             .factoryId(FACTORY_ID).productionBatchId(BATCH_ID + 1).build()));
 
             Boolean blocked = ReflectionTestUtils.invokeMethod(service,
-                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of(10L));
             assertThat(blocked).isTrue();
         }
 
@@ -189,7 +190,7 @@ class ReportReversalServiceTest {
                             .factoryId(FACTORY_ID).productionBatchId(BATCH_ID).build()));
 
             Boolean blocked = ReflectionTestUtils.invokeMethod(service,
-                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of(10L));
 
             assertThat(blocked).isFalse();
         }
@@ -213,7 +214,7 @@ class ReportReversalServiceTest {
                     .thenReturn(List.of(out, restored));
 
             Boolean blocked = ReflectionTestUtils.invokeMethod(service,
-                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of(10L));
 
             assertThat(blocked).isFalse();
             verify(workProcessTaskRepository, never()).findByFactoryIdAndId(anyString(), anyLong());

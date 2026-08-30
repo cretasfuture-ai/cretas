@@ -131,7 +131,7 @@ class ReplayMovingAverageTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .unit("kg")
                 .build();
-        when(wipRepo.findById(sfiId)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         return sfi;
     }
@@ -143,6 +143,32 @@ class ReplayMovingAverageTest {
     @Nested
     @DisplayName("replayMovingAverage — 撤回后均价回放")
     class ReplayTests {
+
+        @Test
+        @DisplayName("RP-OUT-2: IN1.25/OUT1.25/正REVERSE1.25 → produced1.25 consumed0 available1.25")
+        void replay_persistsConsumedQuantityAfterOutRestore() {
+            Long sfiId = 910L;
+            SemiFinishedInventory sfi = stubSfi(sfiId, new BigDecimal("1.25"),
+                    new BigDecimal("1.25"), BigDecimal.ZERO, new BigDecimal("10.0000"), "SEMI-RP-OUT-2");
+            SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("1.25")).unitCostAtTxn(new BigDecimal("10.0000")).build();
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .quantity(new BigDecimal("-1.25")).build();
+            SemiFinishedInventoryTransaction restore = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .quantity(new BigDecimal("1.25")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId)).thenReturn(List.of(in, out, restore));
+
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                    "replayMovingAverage", sfiId, FACTORY_ID, java.time.LocalDateTime.now());
+
+            assertEquals(new BigDecimal("1.25"), sfi.getProducedQuantity());
+            assertEquals(BigDecimal.ZERO, sfi.getConsumedQuantity());
+            assertEquals(new BigDecimal("1.25"), sfi.getAvailableQuantity());
+            assertEquals(SemiFinishedInventory.Status.AVAILABLE, sfi.getStatus());
+        }
 
         @Test
         @DisplayName("RP-OUT-1: 同一整单的 IN + WIP OUT 撤回必须分别写负/正 REVERSE")
@@ -282,6 +308,8 @@ class ReplayMovingAverageTest {
 
             assertEquals(BigDecimal.ZERO, finalSfi.getAvailableQuantity(),
                     "After full reversal: availableQuantity must be 0");
+            assertEquals(BigDecimal.ZERO, finalSfi.getConsumedQuantity(),
+                    "After full reversal: consumedQuantity must be 0");
             assertNull(finalSfi.getUnitCost(),
                     "After full reversal: unitCost must be null (no valid IN remaining)");
             assertEquals(SemiFinishedInventory.Status.DEPLETED, finalSfi.getStatus(),

@@ -44,10 +44,14 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -171,9 +175,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ---- 守卫与快速撤回同处外层事务，保证内部 self-invocation 仍有事务 ----
 
         // G1: 下游领用检查
+        List<ProductionReport> currentReports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+        Set<Long> currentReportIds = reportIds(currentReports);
         String batchRef = String.valueOf(batchId);
         if (txnRepo.existsDownstreamConsumed(factoryId, batchRef)
-                || hasExternalDownstreamConsumption(factoryId, batchId)) {
+                || hasExternalDownstreamConsumption(factoryId, batchId, currentReportIds)) {
             throw new BusinessException(409, String.format(
                     "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
                     .withCode("DOWNSTREAM_CONSUMED")
@@ -326,9 +332,33 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         Long batchId = log_.getBatchId();
         List<Long> revertedTxnIds = new ArrayList<>();
+        List<Long> revertedInTxnIds = new ArrayList<>();
 
         // ① 软删除该批次所有 YIELD 报工
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
+        Map<Long, List<SemiFinishedInventoryTransaction>> reportTxns = new HashMap<>();
+        Set<Long> reportIds = reportIds(reports);
+        Set<Long> involvedSfiIds = new HashSet<>();
+        Set<Long> inSfiIds = new HashSet<>();
+        for (ProductionReport report : reports) {
+            List<SemiFinishedInventoryTransaction> txns =
+                    txnRepo.findByFactoryIdAndReportId(factoryId, report.getId());
+            reportTxns.put(report.getId(), txns == null ? List.of() : txns);
+            for (SemiFinishedInventoryTransaction txn : reportTxns.get(report.getId())) {
+                if (txn.getSemiFinishedId() != null) {
+                    involvedSfiIds.add(txn.getSemiFinishedId());
+                    if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
+                        inSfiIds.add(txn.getSemiFinishedId());
+                    }
+                }
+            }
+        }
+        lockInvolvedWips(factoryId, involvedSfiIds);
+        if (hasExternalDownstreamConsumption(factoryId, batchId, reportIds)) {
+            throw new BusinessException(409, String.format(
+                    "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
+                    .withCode("DOWNSTREAM_CONSUMED");
+        }
         LocalDateTime now = LocalDateTime.now();
         // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
         //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
@@ -369,8 +399,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ② 每份报工: IN 写负 REVERSE；本整单内的正式 WIP OUT 写正 REVERSE。
         //    OUT 是本批次下游工序的领用，不是新的产出；正量 REVERSE 只恢复 consumed。
         for (ProductionReport r : reports) {
-            List<SemiFinishedInventoryTransaction> inTxns =
-                    txnRepo.findByFactoryIdAndReportId(factoryId, r.getId());
+            List<SemiFinishedInventoryTransaction> inTxns = reportTxns.getOrDefault(r.getId(), List.of());
             if (inTxns == null) {
                 continue;
             }
@@ -406,6 +435,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .build();
                 SemiFinishedInventoryTransaction saved = txnRepo.save(reverseTxn);
                 revertedTxnIds.add(saved.getId());
+                if (SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())) {
+                    revertedInTxnIds.add(saved.getId());
+                }
 
                 // 回放移动均价到 SemiFinishedInventory
                 replayMovingAverage(inTxn.getSemiFinishedId(), factoryId, now);
@@ -424,11 +456,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // 判据只看【这次撤回该负责的那批 WIP】: 按 batchId 取库存行 (报工产出的行都带 batchId;
         // 小结/逐道录入的 CLK-SEMI 行 batchId 为空, 不归整单撤回管, 不会被误伤)。
         // ⇒ 修好 IN 侧记账之后, 正常报工必有 IN 行 ⇒ 本闸只在补全之前的存量数据上响, 窄且可信。
-        if (revertedTxnIds.isEmpty() && !reports.isEmpty()) {
+        if (revertedInTxnIds.isEmpty() && !reports.isEmpty()) {
             BigDecimal stranded = BigDecimal.ZERO;
             for (SemiFinishedInventory w : wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId)) {
                 BigDecimal avail = w.getAvailableQuantity();
-                if (avail != null && avail.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal produced = w.getProducedQuantity();
+                if ((avail != null && avail.compareTo(BigDecimal.ZERO) > 0)
+                        || (produced != null && produced.compareTo(BigDecimal.ZERO) > 0
+                        && !inSfiIds.contains(w.getId()))) {
                     stranded = stranded.add(avail);
                 }
             }
@@ -485,18 +520,41 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         return log_.getApprovedBy() != null ? log_.getApprovedBy() : log_.getSubmittedBy();
     }
 
+    private static Set<Long> reportIds(List<ProductionReport> reports) {
+        Set<Long> ids = new HashSet<>();
+        if (reports != null) {
+            for (ProductionReport report : reports) {
+                if (report != null && report.getId() != null) ids.add(report.getId());
+            }
+        }
+        return ids;
+    }
+
+    private void lockInvolvedWips(String factoryId, Set<Long> sfiIds) {
+        if (sfiIds == null || sfiIds.isEmpty()) return;
+        sfiIds.stream().sorted(Comparator.naturalOrder()).forEach(id -> {
+            SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(id).orElseThrow(() ->
+                    new BusinessException(409, "撤回失败: 半成品库存行不存在或已删除: " + id)
+                            .withCode("WIP_NOT_FOUND"));
+            if (!factoryId.equals(sfi.getFactoryId())) {
+                throw new BusinessException(403, "半成品库存工厂不匹配: " + id);
+            }
+        });
+    }
+
     /**
      * G1 的正式 WIP OUT 使用 {@code TASK-&lt;taskId&gt;} 作为 sourceRef，不是批次号。
      * 只有同一整单内的下游任务才属于本次撤回集合；跨批次/转出/无法解析的 OUT 必须拒绝。
      */
-    private boolean hasExternalDownstreamConsumption(String factoryId, Long batchId) {
+    private boolean hasExternalDownstreamConsumption(String factoryId, Long batchId,
+                                                      Set<Long> currentReportIds) {
         if (wipRepo == null || workProcessTaskRepository == null || batchId == null) {
-            return false;
+            return true;
         }
         List<SemiFinishedInventory> wips =
                 wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
         if (wips == null) {
-            return false;
+            return true;
         }
         for (SemiFinishedInventory wip : wips) {
             if (wip == null || wip.getId() == null) {
@@ -517,10 +575,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                                     SemiFinishedInventoryTransaction::getQuantity,
                                     BigDecimal::add)));
             for (SemiFinishedInventoryTransaction txn : txns) {
-                if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())
-                        || !(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())
-                        || SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT.equals(txn.getSourceType()))) {
+                if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
                     continue;
+                }
+                if (!SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())) {
+                    return true;
+                }
+                if (txn.getReportId() == null || currentReportIds == null
+                        || !currentReportIds.contains(txn.getReportId())) {
+                    return true;
                 }
                 // reverseReportPosting / prior whole-order repair may already have restored this exact report.
                 if (txn.getReportId() != null && txn.getQuantity() != null) {
@@ -531,6 +594,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         restoredByReportAndSfi.put(key, restored.subtract(required));
                         continue;
                     }
+                    if (restored.signum() > 0) return true; // partial compensation is ambiguous
                 }
                 if (SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT.equals(txn.getSourceType())) {
                     return true;
@@ -570,17 +634,39 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (reportId == null || reverseQuantity == null) {
             return false;
         }
+        int exactMatches = 0;
+        int exactIndex = -1;
         for (int i = 0; i < candidates.size(); i++) {
             SemiFinishedInventoryTransaction candidate = candidates.get(i);
             if (Objects.equals(candidate.getSemiFinishedId(), original.getSemiFinishedId())
                     && Objects.equals(candidate.getReportId(), reportId)
-                    && candidate.getQuantity() != null
-                    && candidate.getQuantity().compareTo(reverseQuantity) == 0) {
-                candidates.remove(i);
-                return true;
+                    && candidate.getQuantity() != null) {
+                if (candidate.getQuantity().compareTo(reverseQuantity) == 0) {
+                    if (!sameCost(candidate.getUnitCostAtTxn(), original.getUnitCostAtTxn())) {
+                        throw new BusinessException(409, "撤回失败: 补偿流水成本不一致，无法安全重复撤回")
+                                .withCode("PARTIAL_COMPENSATION");
+                    }
+                    exactMatches++;
+                    exactIndex = i;
+                } else if (candidate.getQuantity().signum() == reverseQuantity.signum()) {
+                    throw new BusinessException(409, "撤回失败: 已存在部分或异质补偿流水，无法安全重复撤回")
+                            .withCode("PARTIAL_COMPENSATION");
+                }
             }
         }
+        if (exactMatches > 1) {
+            throw new BusinessException(409, "撤回失败: 补偿流水不唯一，无法安全重复撤回")
+                    .withCode("PARTIAL_COMPENSATION");
+        }
+        if (exactIndex >= 0) {
+            candidates.remove(exactIndex);
+            return true;
+        }
         return false;
+    }
+
+    private static boolean sameCost(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
     }
 
     private void softDeleteProcessSheetRows(String factoryId, Long batchId, String planId,
@@ -1128,11 +1214,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * 「0 行」是<b>还没发生</b>, 不是<b>不会发生</b> —— 所以修在它引爆之前。
      */
     private void replayMovingAverage(Long sfiId, String factoryId, LocalDateTime asOf) {
-        SemiFinishedInventory sfi = wipRepo.findById(sfiId)
+        SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(sfiId)
                 .orElse(null);
         if (sfi == null) {
             log.warn("[SP2] replayMovingAverage: sfiId={} not found, skip", sfiId);
             return;
+        }
+        if (!factoryId.equals(sfi.getFactoryId())) {
+            throw new BusinessException(403, "半成品库存工厂不匹配: " + sfiId);
         }
 
         List<SemiFinishedInventoryTransaction> allTxns =
@@ -1213,6 +1302,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
             consumedOut = net;
         }
+        consumedOut = consumedOut.max(BigDecimal.ZERO);
+        sfi.setConsumedQuantity(consumedOut);
 
         // 🔴 禁止降级 (2026-08-18): 本方法把「ΣIN + Σ(负量 REVERSE)」当权威净产出【回写】库存行 ——
         //    这只有在「每一笔入库都记过流水」时才成立。实测 F006 生产库并非如此:
