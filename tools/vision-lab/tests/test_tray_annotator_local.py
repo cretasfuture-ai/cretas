@@ -13,6 +13,14 @@ assert SPEC and SPEC.loader
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
 
+STANDALONE_PATH = Path(__file__).resolve().parents[1] / "tray_annotator_standalone.py"
+STANDALONE_SPEC = importlib.util.spec_from_file_location(
+    "tray_annotator_standalone", STANDALONE_PATH
+)
+assert STANDALONE_SPEC and STANDALONE_SPEC.loader
+standalone = importlib.util.module_from_spec(STANDALONE_SPEC)
+STANDALONE_SPEC.loader.exec_module(standalone)
+
 
 class TrayAnnotatorLocalTests(unittest.TestCase):
     def test_label_manifest_is_rejected_with_canonical_launcher(self):
@@ -78,6 +86,21 @@ async function confirmOk(){
     def test_precision_style_fails_closed_if_legacy_page_drifts(self):
         with self.assertRaisesRegex(RuntimeError, "legacy annotator UI changed"):
             module.apply_precision_box_style("<script>changed</script>")
+
+    def test_standalone_page_exposes_safe_redraw_workflow(self):
+        self.assertIn('onclick="beginAdd()">新增框', standalone.PAGE)
+        self.assertIn('onclick="beginReplace()">重新拉框', standalone.PAGE)
+        self.assertIn("action==='replace'", standalone.PAGE)
+        self.assertIn("旧框会保留，画完新框后才替换", standalone.PAGE)
+
+    def test_standalone_box_validation_fails_closed(self):
+        self.assertEqual(
+            [[0.1, 0.2, 0.8, 0.9]],
+            standalone._valid_boxes([[0.1, 0.2, 0.8, 0.9]]),
+        )
+        for invalid in ("not-a-list", [[0.1, 0.2, 1.1, 0.9]], [[0.8, 0.2, 0.1, 0.9]]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                standalone._valid_boxes(invalid)
 
 
 if __name__ == "__main__":

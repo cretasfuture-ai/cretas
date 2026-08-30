@@ -20,13 +20,13 @@ main{max-width:1600px;margin:auto;padding:10px}.hint{padding:8px 12px;margin-bot
 #status{margin-left:auto;color:#ffdd75}.count{font-weight:700}.small{color:#9fb2c2}
 </style></head><body><header>
 <span class="badge">队列 __QUEUE__</span><button onclick="go(-1)">上一张</button><button onclick="go(1)">下一张</button>
-<button onclick="undo()">撤销</button><button class="danger" onclick="removeSelected()">删除选中框</button><button onclick="clearAll()">清空</button>
+<button onclick="beginAdd()">新增框</button><button onclick="beginReplace()">重新拉框</button><button onclick="undo()">撤销</button><button class="danger" onclick="removeSelected()">删除选中框</button><button onclick="clearAll()">清空</button>
 <button class="primary" onclick="save(false)">保存</button><button class="ok" onclick="save(true)">确认完整并下一张</button>
 <span class="warn">整张图每个可见托盘都要框完整；被画面截断的托盘也沿可见边界框</span><span id="status"></span></header>
 <main><div class="hint">拖空白处新增框；拖框内部移动；拖四角调整边界；Delete 删除；Ctrl+Z 撤销。青色为普通框，黄色虚线为当前选中框。</div>
 <div id="stage"><canvas id="cv"></canvas></div><p class="small" id="meta"></p></main>
 <script>
-let items=[],cur=0,boxes=[],sel=-1,img=new Image(),drag=null,history=[];const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+let items=[],cur=0,boxes=[],sel=-1,img=new Image(),drag=null,history=[],drawMode=null,replaceIndex=-1;const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 const clamp=v=>Math.max(0,Math.min(1,v)); const copy=()=>boxes.map(b=>b.slice());
 function point(e){const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]}
 function cornerHit(b,x,y){const r=cv.getBoundingClientRect(),t=12/Math.max(r.width,1),c=[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]]];for(let i=0;i<4;i++)if(Math.hypot(x-c[i][0],y-c[i][1])<=t)return i;return -1}
@@ -38,12 +38,14 @@ function status(msg=''){const done=items.filter(x=>x.confirmed).length;document.
 async function save(next){const it=items[cur],r=await fetch('/api/ann/'+encodeURIComponent(it.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes})});if(!r.ok){alert('保存失败：'+await r.text());return}it.confirmed=true;status('已保存');if(next)go(1)}
 function go(d){cur=(cur+d+items.length)%items.length;load()}
 function snapshot(){history.push(copy());if(history.length>50)history.shift()}
+function beginAdd(){drawMode='add';replaceIndex=-1;status('请在图片上拖出新框 ·')}
+function beginReplace(){if(sel<0){alert('请先点击选中需要重拉的托盘框');return}drawMode='replace';replaceIndex=sel;status('旧框会保留，画完新框后才替换 ·')}
 function undo(){if(history.length){boxes=history.pop();sel=-1;draw();status()}}
 function removeSelected(){if(sel>=0){snapshot();boxes.splice(sel,1);sel=-1;draw();status()}}
 function clearAll(){if(boxes.length&&confirm('确认清空本张全部托盘框？')){snapshot();boxes=[];sel=-1;draw();status()}}
-cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);const [x,y]=point(e),[i,mode,corner]=hit(x,y);snapshot();sel=i;drag={mode,corner,start:[x,y],before:copy()};if(mode==='new'){boxes.push([x,y,x,y]);sel=boxes.length-1}draw()});
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);const [x,y]=point(e);if(drawMode){snapshot();const action=drawMode,target=replaceIndex;drawMode=null;replaceIndex=-1;boxes.push([x,y,x,y]);sel=boxes.length-1;drag={mode:'new',corner:-1,start:[x,y],before:copy(),action,target};draw();return}const [i,mode,corner]=hit(x,y);snapshot();sel=i;drag={mode,corner,start:[x,y],before:copy(),action:mode,target:i};if(mode==='new'){boxes.push([x,y,x,y]);sel=boxes.length-1}draw()});
 cv.addEventListener('pointermove',e=>{if(!drag)return;const [x,y]=point(e),b=boxes[sel],o=drag.before[sel],dx=x-drag.start[0],dy=y-drag.start[1];if(drag.mode==='new'){b[0]=Math.min(drag.start[0],x);b[1]=Math.min(drag.start[1],y);b[2]=Math.max(drag.start[0],x);b[3]=Math.max(drag.start[1],y)}else if(drag.mode==='move'){const w=o[2]-o[0],h=o[3]-o[1],nx=clamp(o[0]+dx),ny=clamp(o[1]+dy);b[0]=Math.min(nx,1-w);b[1]=Math.min(ny,1-h);b[2]=b[0]+w;b[3]=b[1]+h}else{const c=drag.corner;if(c===0||c===3)b[0]=clamp(x);else b[2]=clamp(x);if(c===0||c===1)b[1]=clamp(y);else b[3]=clamp(y)}draw()});
-cv.addEventListener('pointerup',()=>{if(!drag)return;const b=boxes[sel];if(b&&(Math.abs(b[2]-b[0])<.003||Math.abs(b[3]-b[1])<.003))boxes.splice(sel,1);else if(b){const x0=Math.min(b[0],b[2]),y0=Math.min(b[1],b[3]),x1=Math.max(b[0],b[2]),y1=Math.max(b[1],b[3]);boxes[sel]=[clamp(x0),clamp(y0),clamp(x1),clamp(y1)]}drag=null;draw();status()});
+cv.addEventListener('pointerup',()=>{if(!drag)return;const action=drag.action,target=drag.target,b=boxes[sel];if(b&&(Math.abs(b[2]-b[0])<.003||Math.abs(b[3]-b[1])<.003))boxes.splice(sel,1);else if(b){const x0=Math.min(b[0],b[2]),y0=Math.min(b[1],b[3]),x1=Math.max(b[0],b[2]),y1=Math.max(b[1],b[3]);boxes[sel]=[clamp(x0),clamp(y0),clamp(x1),clamp(y1)];if(action==='replace'&&target>=0&&target<boxes.length-1){const replacement=boxes[sel];boxes[target]=replacement;boxes.splice(sel,1);sel=target}}drag=null;draw();status(action==='replace'?'已重拉，确认无误后保存 ·':'')});
 addEventListener('keydown',e=>{if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();removeSelected()}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo()}else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)});boot();
 </script></body></html>"""
 
