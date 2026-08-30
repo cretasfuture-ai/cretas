@@ -221,10 +221,11 @@ def evaluate(
     model_dir: Path, records: list[dict[str, Any]], screening, yolo, threshold: float,
     work_area_annotations: dict[str, dict[str, Any]] | None = None,
     min_crop_px: int = 120,
+    tray_conf: float = 0.60,
 ) -> dict[str, Any]:
     work_area_annotations = work_area_annotations or {}
     params = screening.ScreeningParams(
-        tray_conf=0.60,
+        tray_conf=tray_conf,
         label_conf=threshold,
         min_crop_px=min_crop_px,
     )
@@ -340,6 +341,8 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.20)
     parser.add_argument("--baseline-min-crop-px", type=int, default=120)
     parser.add_argument("--candidate-min-crop-px", type=int, default=120)
+    parser.add_argument("--baseline-tray-conf", type=float, default=0.60)
+    parser.add_argument("--candidate-tray-conf", type=float, default=0.60)
     parser.add_argument("--onnx-parity-mismatches", type=int, required=True)
     parser.add_argument("--production-onnx-parity-mismatches", type=int, required=True)
     parser.add_argument("--work-area-annotations", action="append", type=Path)
@@ -348,6 +351,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.baseline_min_crop_px <= 0 or args.candidate_min_crop_px <= 0:
         raise ValueError("minimum crop pixels must be positive")
+    if not (0.0 < args.baseline_tray_conf <= 1.0 and 0.0 < args.candidate_tray_conf <= 1.0):
+        raise ValueError("tray confidence must be between zero and one")
     for path in (args.production_tray, args.candidate_tray, args.production_label):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -381,10 +386,12 @@ def main() -> None:
         baseline = evaluate(
             baseline_dir, records, screening, yolo, args.threshold, work_area_annotations,
             min_crop_px=args.baseline_min_crop_px,
+            tray_conf=args.baseline_tray_conf,
         )
         candidate = evaluate(
             candidate_dir, records, screening, yolo, args.threshold, work_area_annotations,
             min_crop_px=args.candidate_min_crop_px,
+            tray_conf=args.candidate_tray_conf,
         )
     payload = {
         "version": "vision-lab-tray-evaluation-v1",
@@ -399,8 +406,14 @@ def main() -> None:
         "records_before_truth_adjudication": original_record_count,
         "truth_adjudication": truth_adjudication,
         "screening_params": {
-            "baseline": {"min_crop_px": args.baseline_min_crop_px},
-            "candidate": {"min_crop_px": args.candidate_min_crop_px},
+            "baseline": {
+                "min_crop_px": args.baseline_min_crop_px,
+                "tray_conf": args.baseline_tray_conf,
+            },
+            "candidate": {
+                "min_crop_px": args.candidate_min_crop_px,
+                "tray_conf": args.candidate_tray_conf,
+            },
         },
         "protected_manifests": [
             {"path": str(path), "sha256": sha256_file(path)} for path in args.manifest

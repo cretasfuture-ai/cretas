@@ -243,10 +243,11 @@ class EvaluateTrayCandidateWorkAreaTests(unittest.TestCase):
                     "image_sha256": module.sha256_file(image),
                     "human_label": "NORMAL", "bbox": None, "group": "normal",
                 }],
-                screening, _Yolo, 0.2, {}, min_crop_px=150,
+                screening, _Yolo, 0.2, {}, min_crop_px=150, tray_conf=0.40,
             )
 
             self.assertEqual(screening.seen_params[0].kwargs["min_crop_px"], 150)
+            self.assertEqual(screening.seen_params[0].kwargs["tray_conf"], 0.40)
 
     def test_evaluation_splits_inside_outside_without_dropping_trays(self):
         with tempfile.TemporaryDirectory() as temporary:
