@@ -856,8 +856,13 @@ const YieldStepReportScreen: React.FC = () => {
   }, [productionPlanId]);
 
   useEffect(() => {
+    if (currentStepIndex !== 0) {
+      setMaterialAdvisory(null);
+      setMaterialAdvisoryError(null);
+      return;
+    }
     loadMaterialAdvisory();
-  }, [loadMaterialAdvisory]);
+  }, [currentStepIndex, loadMaterialAdvisory]);
 
   // 切道时重置所有阶段输入态 (每道独立). 投入预填上道产出.
   const resetStepInputs = useCallback(() => {
@@ -2101,7 +2106,7 @@ const YieldStepReportScreen: React.FC = () => {
 
   // ========================= 两点报工: 哨兵屏渲染 =========================
   const renderMaterialAdvisoryCard = () => {
-    if (!productionPlanId) return null;
+    if (!productionPlanId || currentStepIndex !== 0) return null;
     if (materialAdvisoryLoading && !materialAdvisory && !materialAdvisoryError) {
       return (
         <View style={styles.materialAdvisoryCard} testID="yield-material-advisory-loading">
