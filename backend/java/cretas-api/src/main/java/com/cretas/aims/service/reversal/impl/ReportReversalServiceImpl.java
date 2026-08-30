@@ -659,7 +659,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         }
 
         List<WipOutHistoryRepairResultDTO.Item> result = new ArrayList<>();
-        List<Long> repairedTxnIds = new ArrayList<>();
+        List<Long> auditTxnIdsToAppend = new ArrayList<>();
+        Map<String, SemiFinishedInventoryTransaction> expectedCompensationOwners = request.getOriginalOutTxnIds().stream()
+                .collect(Collectors.toMap(
+                        id -> "wip-out-history-repair:reversal-log:" + reversal.getId() + ":out-txn:" + id,
+                        originals::get));
         for (Long id : request.getOriginalOutTxnIds()) {
             SemiFinishedInventoryTransaction original = originals.get(id);
             SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(original.getSemiFinishedId())
@@ -689,9 +693,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     .filter(t -> Objects.equals(t.getSourceRef(),
                             expectedSourceRef))
                     .collect(Collectors.toList());
-            if (allPositiveCompensations.stream().anyMatch(t -> !Objects.equals(t.getSourceType(),
-                    SemiFinishedInventoryTransaction.SourceType.REVERSAL)
-                    || !Objects.equals(t.getSourceRef(), expectedSourceRef))) {
+            if (allPositiveCompensations.stream().anyMatch(t -> {
+                SemiFinishedInventoryTransaction owner = expectedCompensationOwners.get(t.getSourceRef());
+                return !Objects.equals(t.getSourceType(), SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                        || owner == null
+                        || !Objects.equals(owner.getReportId(), t.getReportId())
+                        || !Objects.equals(owner.getSemiFinishedId(), t.getSemiFinishedId());
+            })) {
                 throw repairRejected("原 OUT 存在非本次日志的正量补偿，无法判定归属", "AMBIGUOUS_COMPENSATION");
             }
             if (matching.size() > 1) {
@@ -722,7 +730,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .operatorId(operatorId)
                         .build();
                 reverseId = txnRepo.save(reverse).getId();
-                repairedTxnIds.add(reverseId);
+            }
+            List<Long> existingAuditIds = reversal.getRevertedTxnIds() == null
+                    ? List.of() : reversal.getRevertedTxnIds();
+            if (reverseId != null && !existingAuditIds.contains(reverseId)
+                    && !auditTxnIdsToAppend.contains(reverseId)) {
+                auditTxnIdsToAppend.add(reverseId);
             }
             replayMovingAverage(sfi.getId(), factoryId, LocalDateTime.now());
             SemiFinishedInventory after = wipRepo.findByIdForUpdate(sfi.getId())
@@ -731,10 +744,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     beforeProduced, after.getProducedQuantity(), beforeConsumed, after.getConsumedQuantity(),
                     beforeAvailable, after.getAvailableQuantity(), beforeStatus, after.getStatus(), idempotent));
         }
-        if (!repairedTxnIds.isEmpty()) {
+        if (!auditTxnIdsToAppend.isEmpty()) {
             List<Long> auditIds = reversal.getRevertedTxnIds() == null
                     ? new ArrayList<>() : new ArrayList<>(reversal.getRevertedTxnIds());
-            auditIds.addAll(repairedTxnIds);
+            auditIds.addAll(auditTxnIdsToAppend);
             reversal.setRevertedTxnIds(auditIds);
             reversalLogRepo.save(reversal);
         }
@@ -753,7 +766,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                                        ProductionReport report,
                                        List<SemiFinishedInventoryTransaction> txns) {
         List<Long> ids = reversal.getRevertedTxnIds();
-        if (ids == null || ids.isEmpty() || txns == null || reversal.getApprovedAt() == null) {
+        if (ids == null || ids.isEmpty() || txns == null || reversal.getApprovedAt() == null
+                || report.getDeletedAt() == null || original.getCreatedAt() == null
+                || original.getCreatedAt().isAfter(report.getDeletedAt())
+                || original.getCreatedAt().isAfter(reversal.getApprovedAt())) {
             return false;
         }
         Set<Long> owned = new HashSet<>(ids);
