@@ -312,6 +312,7 @@ class SettlementSemiRestoreLedgerContractTest {
         // 账面刻意 ≠ 正确答案: 回放没被触发的话捕获到的就是这两个数, 断言会红。
         SemiFinishedInventory replayTarget = sfiOnRecord("55.00", "0.00", "25.00");
         when(wipRepo.findById(SFI_ID)).thenReturn(Optional.of(replayTarget));
+        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(replayTarget));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
                 SemiFinishedInventoryTransaction.builder()
                         .factoryId(FACTORY_ID).semiFinishedId(SFI_ID)
@@ -388,6 +389,7 @@ class SettlementSemiRestoreLedgerContractTest {
 
         SemiFinishedInventory replayTarget = sfiOnRecord("55.00", "0.00", "25.00");
         when(wipRepo.findById(SFI_ID)).thenReturn(Optional.of(replayTarget));
+        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(replayTarget));
         // ⚠️ 账本里【一条 OUT 都没有】—— 这正是今天 prod 上那条正向缺口的长相。
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
                 SemiFinishedInventoryTransaction.builder()

@@ -131,7 +131,7 @@ class ReplayMovingAverageTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .unit("kg")
                 .build();
-        when(wipRepo.findById(sfiId)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         return sfi;
     }
@@ -143,6 +143,150 @@ class ReplayMovingAverageTest {
     @Nested
     @DisplayName("replayMovingAverage — 撤回后均价回放")
     class ReplayTests {
+
+        @Test
+        @DisplayName("RP-OUT-2: IN1.25/OUT1.25/正REVERSE1.25 → produced1.25 consumed0 available1.25")
+        void replay_persistsConsumedQuantityAfterOutRestore() {
+            Long sfiId = 910L;
+            SemiFinishedInventory sfi = stubSfi(sfiId, new BigDecimal("1.25"),
+                    new BigDecimal("1.25"), BigDecimal.ZERO, new BigDecimal("10.0000"), "SEMI-RP-OUT-2");
+            SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("1.25")).unitCostAtTxn(new BigDecimal("10.0000")).build();
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .quantity(new BigDecimal("-1.25")).build();
+            SemiFinishedInventoryTransaction restore = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .quantity(new BigDecimal("1.25")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId)).thenReturn(List.of(in, out, restore));
+
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                    "replayMovingAverage", sfiId, FACTORY_ID, java.time.LocalDateTime.now());
+
+            assertEquals(new BigDecimal("1.25"), sfi.getProducedQuantity());
+            assertEquals(0, BigDecimal.ZERO.compareTo(sfi.getConsumedQuantity()));
+            assertEquals(new BigDecimal("1.25"), sfi.getAvailableQuantity());
+            assertEquals(SemiFinishedInventory.Status.AVAILABLE, sfi.getStatus());
+        }
+
+        @Test
+        @DisplayName("RP-OUT-1: 同一整单的 IN + WIP OUT 撤回必须分别写负/正 REVERSE")
+        void wholeOrderReversal_reversesInAndOutWithOppositeSigns() {
+            Long logId = 901L, batchId = 902L, sfiId = 903L;
+            ProductionReport report = ProductionReport.builder()
+                    .id(904L).factoryId(FACTORY_ID).batchId(batchId).build();
+            SemiFinishedInventoryTransaction inTxn = SemiFinishedInventoryTransaction.builder()
+                    .id(905L).semiFinishedId(sfiId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("100")).unitCostAtTxn(new BigDecimal("10.0000"))
+                    .build();
+            SemiFinishedInventoryTransaction outTxn = SemiFinishedInventoryTransaction.builder()
+                    .id(906L).semiFinishedId(sfiId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-907").quantity(new BigDecimal("-20"))
+                    .unitCostAtTxn(new BigDecimal("10.0000"))
+                    .build();
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(report), List.of(inTxn, outTxn));
+            stubSfi(sfiId, new BigDecimal("100"), new BigDecimal("20"), new BigDecimal("80"),
+                    new BigDecimal("10.0000"), "SEMI-RP-OUT-1");
+            SemiFinishedInventoryTransaction reverseIn = SemiFinishedInventoryTransaction.builder()
+                    .id(908L).semiFinishedId(sfiId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .quantity(new BigDecimal("-100")).unitCostAtTxn(new BigDecimal("10.0000"))
+                    .build();
+            SemiFinishedInventoryTransaction reverseOut = SemiFinishedInventoryTransaction.builder()
+                    .id(909L).semiFinishedId(sfiId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .quantity(new BigDecimal("20")).unitCostAtTxn(new BigDecimal("10.0000"))
+                    .build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId))
+                    .thenReturn(List.of(inTxn, outTxn, reverseIn, reverseOut));
+
+            service.executeReversal(logId, FACTORY_ID);
+
+            ArgumentCaptor<SemiFinishedInventoryTransaction> captor =
+                    ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+            verify(txnRepo, times(2)).save(captor.capture());
+            assertEquals(List.of(new BigDecimal("-100"), new BigDecimal("20")),
+                    captor.getAllValues().stream()
+                            .map(SemiFinishedInventoryTransaction::getQuantity).toList());
+        }
+
+        @Test
+        @DisplayName("RP-OUT-2: 两笔等量 OUT 只有一笔已补偿 → 必须再写一笔正向 REVERSE")
+        void duplicateEqualOuts_oneExistingReverse_onlySkipsOne() {
+            Long logId = 911L, batchId = 912L, sfiId = 913L, reportId = 914L;
+            ProductionReport report = ProductionReport.builder()
+                    .id(reportId).factoryId(FACTORY_ID).batchId(batchId).build();
+            SemiFinishedInventoryTransaction out1 = SemiFinishedInventoryTransaction.builder()
+                    .id(915L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-920").quantity(new BigDecimal("-2")).build();
+            SemiFinishedInventoryTransaction out2 = SemiFinishedInventoryTransaction.builder()
+                    .id(916L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-921").quantity(new BigDecimal("-2")).build();
+            SemiFinishedInventoryTransaction existingReverse = SemiFinishedInventoryTransaction.builder()
+                    .id(917L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    .quantity(new BigDecimal("2")).build();
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(report),
+                    List.of(out1, out2, existingReverse));
+            stubSfi(sfiId, BigDecimal.ZERO, new BigDecimal("4"), BigDecimal.ZERO,
+                    new BigDecimal("10.0000"), "SEMI-RP-OUT-2");
+            SemiFinishedInventoryTransaction secondReverse = SemiFinishedInventoryTransaction.builder()
+                    .id(918L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    .quantity(new BigDecimal("2")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId))
+                    .thenReturn(List.of(out1, out2, existingReverse, secondReverse));
+
+            service.executeReversal(logId, FACTORY_ID);
+
+            ArgumentCaptor<SemiFinishedInventoryTransaction> captor =
+                    ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+            verify(txnRepo, times(1)).save(captor.capture());
+            assertEquals(new BigDecimal("2"), captor.getValue().getQuantity());
+            assertEquals(sfiId, captor.getValue().getSemiFinishedId());
+            assertEquals(reportId, captor.getValue().getReportId());
+        }
+
+        @Test
+        @DisplayName("RP-LOCK-1: 加锁后出现新 WIP 锚点 → 首个 mutation 前 409")
+        void ledgerChangesAfterLock_failsBeforeMutation() {
+            Long logId = 931L, batchId = 932L, sfiId = 933L, reportId = 934L;
+            ProductionReport report = ProductionReport.builder()
+                    .id(reportId).factoryId(FACTORY_ID).batchId(batchId).build();
+            SemiFinishedInventoryTransaction initialIn = SemiFinishedInventoryTransaction.builder()
+                    .id(935L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("1")).build();
+            SemiFinishedInventoryTransaction concurrentOut = SemiFinishedInventoryTransaction.builder()
+                    .id(936L).semiFinishedId(999L).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-937").quantity(new BigDecimal("-1")).build();
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(report), List.of(initialIn));
+            SemiFinishedInventory locked = stubSfi(sfiId, new BigDecimal("1"), BigDecimal.ZERO,
+                    new BigDecimal("1"), new BigDecimal("10.0000"), "SEMI-RP-LOCK-1");
+            when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(locked));
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, reportId))
+                    .thenReturn(List.of(initialIn), List.of(initialIn, concurrentOut));
+
+            com.cretas.aims.exception.BusinessException error = assertThrows(
+                    com.cretas.aims.exception.BusinessException.class,
+                    () -> service.executeReversal(logId, FACTORY_ID));
+
+            assertEquals("WIP_LEDGER_CHANGED", error.getErrorCode());
+            verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
+            verify(reportRepo, never()).save(any(ProductionReport.class));
+        }
 
         @Test
         @DisplayName("RP-1: 单次 IN 被完全撤回 → unitCost=null, availableQuantity=0, status=DEPLETED")
@@ -195,6 +339,8 @@ class ReplayMovingAverageTest {
 
             assertEquals(BigDecimal.ZERO, finalSfi.getAvailableQuantity(),
                     "After full reversal: availableQuantity must be 0");
+            assertEquals(BigDecimal.ZERO, finalSfi.getConsumedQuantity(),
+                    "After full reversal: consumedQuantity must be 0");
             assertNull(finalSfi.getUnitCost(),
                     "After full reversal: unitCost must be null (no valid IN remaining)");
             assertEquals(SemiFinishedInventory.Status.DEPLETED, finalSfi.getStatus(),
