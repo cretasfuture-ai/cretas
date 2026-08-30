@@ -22,7 +22,7 @@ main{max-width:1600px;margin:auto;padding:10px}.hint{padding:8px 12px;margin-bot
 <span class="badge">队列 __QUEUE__</span><button onclick="go(-1)">上一张</button><button onclick="go(1)">下一张</button>
 <button onclick="zoomOut()">缩小</button><button onclick="zoomIn()">放大</button><button onclick="resetZoom()">重置缩放</button><span class="badge" id="zoom-label">100%</span>
 <button onclick="beginAdd()">新增框</button><button onclick="beginReplace()">重新拉框</button><button onclick="undo()">撤销</button><button class="danger" onclick="removeSelected()">删除选中框</button><button onclick="clearAll()">清空</button>
-<button class="primary" onclick="save(false)">保存</button><button class="ok" onclick="save(true)">确认完整并下一张</button>
+<button class="primary" onclick="save(false)">保存</button><button class="ok" onclick="save(true)">确认完整并下一张</button><button class="danger" onclick="excludeCurrent()">不属于工作台 · 排除并下一张</button>
 <span class="warn">整张图每个可见托盘都要框完整；被画面截断的托盘也沿可见边界框</span><span id="status"></span></header>
 <main><div class="hint">鼠标滚轮以光标位置缩放；放大后用滚动条移动视野。拖空白处新增框；拖框内部移动；拖四角调整边界；Delete 删除；Ctrl+Z 撤销。</div>
 <div id="stage"><canvas id="cv"></canvas></div><p class="small" id="meta"></p></main>
@@ -36,7 +36,8 @@ function draw(){ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(img,0,0,cv.w
 async function boot(){items=await (await fetch('/api/items')).json();const pending=items.findIndex(x=>!x.confirmed);cur=pending<0?0:pending;await load()}
 async function load(){const it=items[cur],ann=await (await fetch('/api/ann/'+encodeURIComponent(it.id))).json();boxes=(ann.boxes||[]).map(b=>b.slice());sel=-1;history=[];resetZoom();img.onload=()=>{cv.width=img.naturalWidth;cv.height=img.naturalHeight;draw()};img.src='/image/'+encodeURIComponent(it.id)+'?v='+Date.now();document.getElementById('meta').textContent=`${cur+1}/${items.length}  ${it.id}  task=${it.task_id||'-'}  sku=${it.sku_code||'-'}`;status()}
 function status(msg=''){const done=items.filter(x=>x.confirmed).length;document.getElementById('status').textContent=`${msg} 完成 ${done}/${items.length} · 当前 ${boxes.length} 框`}
-async function save(next){const it=items[cur],r=await fetch('/api/ann/'+encodeURIComponent(it.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes})});if(!r.ok){alert('保存失败：'+await r.text());return}it.confirmed=true;status('已保存');if(next)go(1)}
+async function save(next){const it=items[cur],r=await fetch('/api/ann/'+encodeURIComponent(it.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes})});if(!r.ok){alert('保存失败：'+await r.text());return}it.confirmed=true;it.excluded=false;status('已保存');if(next)go(1)}
+async function excludeCurrent(){const it=items[cur];if(!confirm('确认此图不属于有效工作台场景？\n它会被明确排除，不会作为空框背景进入训练。'))return;const r=await fetch('/api/exclude/'+encodeURIComponent(it.id),{method:'POST'});if(!r.ok){alert('排除失败：'+await r.text());return}it.confirmed=true;it.excluded=true;go(1)}
 function go(d){cur=(cur+d+items.length)%items.length;load()}
 function snapshot(){history.push(copy());if(history.length>50)history.shift()}
 function setZoom(next,clientX,clientY){next=Math.max(1,Math.min(6,next));const sr=stage.getBoundingClientRect(),localX=(clientX??(sr.left+stage.clientWidth/2))-sr.left,localY=(clientY??(sr.top+stage.clientHeight/2))-sr.top,ratioX=(stage.scrollLeft+localX)/Math.max(cv.offsetWidth,1),ratioY=(stage.scrollTop+localY)/Math.max(cv.offsetHeight,1);zoom=next;cv.style.width=(zoom*100)+'%';document.getElementById('zoom-label').textContent=Math.round(zoom*100)+'%';requestAnimationFrame(()=>{stage.scrollLeft=ratioX*cv.offsetWidth-localX;stage.scrollTop=ratioY*cv.offsetHeight-localY})}
@@ -68,6 +69,24 @@ def _valid_boxes(value: object) -> list[list[float]]:
     return boxes
 
 
+def _human_annotation(item_id: str, boxes: list[list[float]]) -> dict:
+    return {
+        "photo_id": item_id, "format": "normalised_xyxy", "reviewed": True,
+        "source": "human", "preannotations_are_not_ground_truth": True,
+        "training_eligible": True, "training_exclusion_reason": None, "boxes": boxes,
+    }
+
+
+def _excluded_annotation(item_id: str) -> dict:
+    return {
+        "photo_id": item_id, "format": "normalised_xyxy", "reviewed": True,
+        "source": "human", "preannotations_are_not_ground_truth": True,
+        "training_eligible": False,
+        "training_exclusion_reason": "not_workbench_scene",
+        "boxes": [],
+    }
+
+
 def serve(queue: Path, port: int) -> None:
     manifest = json.loads((queue / "manifest.json").read_text(encoding="utf-8"))
     rows = manifest["rows"]
@@ -86,8 +105,12 @@ def serve(queue: Path, port: int) -> None:
                 "source": "tray_detector_preannotation_requires_full_human_review",
                 "preannotations_are_not_ground_truth": True, "boxes": boxes,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
-        reviewed = bool(json.loads(destination.read_text(encoding="utf-8")).get("reviewed"))
-        items.append({"id": item_id, "task_id": row.get("task_id"), "sku_code": row.get("sku_code"), "confirmed": reviewed})
+        saved = json.loads(destination.read_text(encoding="utf-8"))
+        reviewed = bool(saved.get("reviewed"))
+        items.append({
+            "id": item_id, "task_id": row.get("task_id"), "sku_code": row.get("sku_code"),
+            "confirmed": reviewed, "excluded": saved.get("training_eligible") is False,
+        })
 
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, status: int, body: bytes, content_type: str) -> None:
@@ -103,8 +126,10 @@ def serve(queue: Path, port: int) -> None:
             if path == "/api/items":
                 return self.send_bytes(200, json.dumps(items).encode(), "application/json")
             if path == "/api/stats":
-                reviewed = sum(json.loads((annotations / f"{item['id']}.json").read_text(encoding="utf-8")).get("reviewed") is True for item in items)
-                return self.send_bytes(200, json.dumps({"reviewed": reviewed, "total": len(items)}).encode(), "application/json")
+                saved = [json.loads((annotations / f"{item['id']}.json").read_text(encoding="utf-8")) for item in items]
+                reviewed = sum(row.get("reviewed") is True for row in saved)
+                excluded = sum(row.get("training_eligible") is False for row in saved)
+                return self.send_bytes(200, json.dumps({"reviewed": reviewed, "excluded": excluded, "total": len(items)}).encode(), "application/json")
             if path.startswith("/api/ann/"):
                 item_id = path.removeprefix("/api/ann/")
                 target = annotations / f"{item_id}.json"
@@ -120,17 +145,20 @@ def serve(queue: Path, port: int) -> None:
 
         def do_POST(self) -> None:
             path = unquote(urlparse(self.path).path)
-            if not path.startswith("/api/ann/"):
+            annotation_request = path.startswith("/api/ann/")
+            exclusion_request = path.startswith("/api/exclude/")
+            if not annotation_request and not exclusion_request:
                 return self.send_bytes(404, b"not found", "text/plain")
-            item_id = path.removeprefix("/api/ann/")
+            item_id = path.removeprefix("/api/ann/") if annotation_request else path.removeprefix("/api/exclude/")
             if item_id not in by_id:
                 return self.send_bytes(404, b"unknown item", "text/plain")
             try:
-                size = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(size))
-                boxes = _valid_boxes(payload.get("boxes"))
-                result = {"photo_id": item_id, "format": "normalised_xyxy", "reviewed": True,
-                          "source": "human", "preannotations_are_not_ground_truth": True, "boxes": boxes}
+                if exclusion_request:
+                    result = _excluded_annotation(item_id)
+                else:
+                    size = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(size))
+                    result = _human_annotation(item_id, _valid_boxes(payload.get("boxes")))
                 target = annotations / f"{item_id}.json"
                 temporary = target.with_suffix(".json.tmp")
                 temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -138,6 +166,7 @@ def serve(queue: Path, port: int) -> None:
                 for item in items:
                     if item["id"] == item_id:
                         item["confirmed"] = True
+                        item["excluded"] = exclusion_request
                 self.send_bytes(200, b'{"ok":true}', "application/json")
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.send_bytes(400, str(exc).encode("utf-8"), "text/plain; charset=utf-8")

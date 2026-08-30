@@ -97,6 +97,7 @@ def validate_reviewed_queue(queue: Path, holdout_path: Path) -> tuple[dict[str, 
         protected_hashes.append((row["image_sha256"], phash(image)))
 
     accepted: list[dict[str, Any]] = []
+    excluded: list[str] = []
     exact_overlap: list[str] = []
     near_overlap: list[dict[str, Any]] = []
     for source in rows:
@@ -118,10 +119,16 @@ def validate_reviewed_queue(queue: Path, holdout_path: Path) -> tuple[dict[str, 
         if annotation.get("format") != "normalised_xyxy":
             raise RuntimeError(f"unexpected tray annotation format: {annotation_path}")
         boxes = annotation.get("boxes") or []
-        if not boxes:
-            raise RuntimeError(f"reviewed tray image has no boxes: {annotation_path}")
-        for box in boxes:
-            yolo_line(box)
+        is_excluded = annotation.get("training_eligible") is False
+        if is_excluded:
+            if boxes or annotation.get("training_exclusion_reason") != "not_workbench_scene":
+                raise RuntimeError(f"invalid tray training exclusion: {annotation_path}")
+            excluded.append(stem)
+        else:
+            if not boxes:
+                raise RuntimeError(f"reviewed tray image has no boxes: {annotation_path}")
+            for box in boxes:
+                yolo_line(box)
         source_phash, packed_phash = source["source_perceptual_hash"], phash(image)
         for protected_sha, protected_phash in protected_hashes:
             if source["source_sha256"] == protected_sha or source["packed_image_sha256"] == protected_sha:
@@ -132,15 +139,18 @@ def validate_reviewed_queue(queue: Path, holdout_path: Path) -> tuple[dict[str, 
             )
             if distance <= PROTECTED_PHASH_DISTANCE:
                 near_overlap.append({"stem": stem, "distance": distance})
-        accepted.append({
-            "source": source, "task_id": str(source["task_id"]), "image": image,
-            "annotation_path": annotation_path, "annotation_sha256": sha256(annotation_path),
-            "boxes": boxes,
-        })
+        if not is_excluded:
+            accepted.append({
+                "source": source, "task_id": str(source["task_id"]), "image": image,
+                "annotation_path": annotation_path, "annotation_sha256": sha256(annotation_path),
+                "boxes": boxes,
+            })
     if exact_overlap or near_overlap:
         raise RuntimeError(f"protected holdout leaked into tray training: exact={exact_overlap}, near={near_overlap}")
-    if len(accepted) != len(rows):
-        raise RuntimeError(f"tray annotation completion gate: {len(accepted)}/{len(rows)}")
+    if len(accepted) + len(excluded) != len(rows):
+        raise RuntimeError(
+            f"tray annotation completion gate: accepted={len(accepted)} excluded={len(excluded)} total={len(rows)}"
+        )
     return manifest, accepted
 
 

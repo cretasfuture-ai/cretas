@@ -101,6 +101,15 @@ async function confirmOk(){
         self.assertIn("e.clientX,e.clientY", standalone.PAGE)
         self.assertIn("Math.min(6,next)", standalone.PAGE)
 
+    def test_standalone_page_exposes_non_workbench_exclusion(self):
+        self.assertIn("不属于工作台 · 排除并下一张", standalone.PAGE)
+        self.assertIn("/api/exclude/", standalone.PAGE)
+        payload = standalone._excluded_annotation("tray-1")
+        self.assertTrue(payload["reviewed"])
+        self.assertFalse(payload["training_eligible"])
+        self.assertEqual("not_workbench_scene", payload["training_exclusion_reason"])
+        self.assertEqual([], payload["boxes"])
+
     def test_standalone_box_validation_fails_closed(self):
         self.assertEqual(
             [[0.1, 0.2, 0.8, 0.9]],
