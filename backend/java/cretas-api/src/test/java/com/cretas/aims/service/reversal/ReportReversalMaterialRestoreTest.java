@@ -11,6 +11,7 @@ import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
@@ -85,6 +86,7 @@ class ReportReversalMaterialRestoreTest {
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private ProductionSettlementRepository productionSettlementRepository;
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
+    @Mock private ProductionPlanRepository productionPlanRepository;
 
     @BeforeEach
     void setUp() {
@@ -93,6 +95,7 @@ class ReportReversalMaterialRestoreTest {
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
                 productionSettlementConsumptionRepository);
+        ReflectionTestUtils.setField(service, "productionPlanRepository", productionPlanRepository);
 
         // executeReversal 主流程基础 mock
         ReportReversalLog log = ReportReversalLog.builder()
@@ -109,6 +112,21 @@ class ReportReversalMaterialRestoreTest {
                 FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
         when(fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
+
+        ProductionBatch productionBatch = ProductionBatch.builder()
+                .id(BATCH_ID).factoryId(FACTORY_ID).productionPlanId(PLAN_ID)
+                .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                .build();
+        when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(productionBatch));
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY_ID);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenAnswer(invocation ->
+                productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                        FACTORY_ID, PLAN_ID));
     }
 
     // ─────────────────────────────────────────────────────────────
