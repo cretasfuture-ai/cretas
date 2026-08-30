@@ -7,6 +7,11 @@ import { logger } from '../../utils/logger';
 // 创建ApiClient专用logger
 const apiLogger = logger.createContextLogger('ApiClient');
 
+// Axios's second generic controls the post-interceptor result type. `never`
+// marks the response as already consumed by the interceptor; the public
+// methods below expose the caller-provided payload type instead.
+type AxiosUnwrappedResponse = never;
+
 class ApiClient {
   private client: AxiosInstance;
 
@@ -156,27 +161,27 @@ class ApiClient {
 
   async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.get(url, config);
+    return await this.client.get<T, AxiosUnwrappedResponse>(url, config);
   }
 
   async post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.post(url, data, config);
+    return await this.client.post<T, AxiosUnwrappedResponse>(url, data, config);
   }
 
   async put<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.put(url, data, config);
+    return await this.client.put<T, AxiosUnwrappedResponse>(url, data, config);
   }
 
   async delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.delete(url, config);
+    return await this.client.delete<T, AxiosUnwrappedResponse>(url, config);
   }
 
   async patch<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.patch(url, data, config);
+    return await this.client.patch<T, AxiosUnwrappedResponse>(url, data, config);
   }
 }
 
