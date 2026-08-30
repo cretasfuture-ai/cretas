@@ -73,6 +73,7 @@ class StocktakeWorkflowIntegrationTest {
 
     /** 2026-08-27 新增依赖: 盘点补录待办要读结单三态。本测试不调该方法, 但构造器需要它。 */
     @Mock private com.cretas.aims.repository.ProductionSettlementRepository productionSettlementRepository;
+    @Mock private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
 
     @BeforeEach
     void setUp() {
@@ -87,7 +88,8 @@ class StocktakeWorkflowIntegrationTest {
                 rawMaterialTypeRepo,
                 productTypeRepo,
                 materialConsumptionRepo,
-                productionSettlementRepository);
+                productionSettlementRepository,
+                productionBatchRepository);
         // Inject optional workflowEngine via ReflectionTestUtils
         ReflectionTestUtils.setField(service, "workflowEngine", workflowEngine);
         lenient().when(stocktakeRepo.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY_ID)))

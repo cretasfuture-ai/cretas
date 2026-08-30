@@ -5,6 +5,7 @@ import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import org.springframework.data.domain.Page;
@@ -60,6 +61,9 @@ public interface FactoryStocktakeService {
      * ⛔ 已清点确认零不在待办里 —— 那是真实读数。
      */
     List<Map<String, Object>> listPendingDefectCounts(String factoryId);
+
+    Map<String, Object> completePendingDefectCount(String factoryId, String productionPlanId,
+            StocktakeDefectCountRequest request, Long userId);
 
     Map<String, Object> getInitiateConstraint();
 
