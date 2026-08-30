@@ -21,7 +21,7 @@ from PIL import Image, ImageOps
 
 
 MINIMUM_HOLDOUT_PHASH_DISTANCE = 11
-PATCH_DATASET_VERSION = "label-qc-tray-patch-dataset-v2"
+PATCH_DATASET_VERSION = "label-qc-tray-patch-dataset-v3"
 SAFE_TRUTH_BOUNDARY = {
     "preannotations_used_as_truth": False,
     "deleted_proposals_used_as_background": False,
@@ -70,6 +70,37 @@ def validate_prior_truth_boundary(prior: dict[str, Any]) -> dict[str, bool]:
                 f"prior dataset truth boundary is unsafe: {field} must be {expected}"
             )
     return dict(SAFE_TRUTH_BOUNDARY)
+
+
+def build_focus_occurrences(
+    provenance_rows: Sequence[dict[str, Any]], available_stems: set[str], derived_repeats: int,
+) -> tuple[list[str], dict[str, Any]]:
+    if derived_repeats < 1 or derived_repeats > 8:
+        raise ValueError("derived repeats must be between 1 and 8")
+    train_rows = [row for row in provenance_rows if row.get("split") == "train"]
+    train_stems = [str(row.get("stem") or "") for row in train_rows]
+    if not train_stems or "" in train_stems or len(set(train_stems)) != len(train_stems):
+        raise RuntimeError("train provenance stems are empty or duplicated")
+    if set(train_stems) != available_stems:
+        raise RuntimeError("train provenance/image inventory mismatch")
+    derived_stems = [
+        str(row["stem"]) for row in train_rows if row.get("derived_crop") is True
+    ]
+    historical_stems = [
+        str(row["stem"]) for row in train_rows if row.get("derived_crop") is not True
+    ]
+    if derived_repeats > 1 and not derived_stems:
+        raise RuntimeError("derived replay requested without derived patches")
+    occurrences = historical_stems + derived_stems * derived_repeats
+    return occurrences, {
+        "historical_physical_images": len(historical_stems),
+        "derived_physical_images": len(derived_stems),
+        "historical_repeats": 1,
+        "derived_repeats": derived_repeats,
+        "effective_train_occurrences": len(occurrences),
+        "unique_train_images": len(train_stems),
+        "validation_unchanged": True,
+    }
 
 
 def validate_box(box: Sequence[float]) -> list[float]:
@@ -197,7 +228,10 @@ def build_dataset(
     included: Sequence[str],
     excluded: dict[str, str],
     context_ratio: float,
+    derived_repeats: int = 1,
 ) -> tuple[Path, dict[str, Any]]:
+    if derived_repeats < 1 or derived_repeats > 8:
+        raise ValueError("derived repeats must be between 1 and 8")
     prior_manifest_path = prior_manifest_path.resolve()
     mining_receipt_path = mining_receipt_path.resolve()
     prior = load_json(prior_manifest_path)
@@ -235,6 +269,7 @@ def build_dataset(
             for row in rejected
         ],
         "context_ratio": context_ratio,
+        "derived_repeats": derived_repeats,
     }
     dataset_id = "tray-patch-" + hashlib.sha256(stable_json(identity)).hexdigest()[:12]
     output = output_root.resolve() / dataset_id
@@ -335,8 +370,22 @@ def build_dataset(
     provenance_path.write_text(
         json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
+    train_images = [path for path in (temporary / "images" / "train").iterdir() if path.is_file()]
+    image_names = {path.stem: path.name for path in train_images}
+    if len(image_names) != len(train_images):
+        raise RuntimeError("train image stems are not unique")
+    occurrences, replay_policy = build_focus_occurrences(
+        provenance_rows, set(image_names), derived_repeats,
+    )
+    train_source = "images/train"
+    if derived_repeats > 1:
+        train_source = "train-focus.txt"
+        (temporary / train_source).write_text(
+            "\n".join(f"./images/train/{image_names[stem]}" for stem in occurrences) + "\n",
+            encoding="utf-8",
+        )
     (temporary / "data.yaml").write_text(
-        f"path: {output.as_posix()}\ntrain: images/train\nval: images/val\nnames:\n  0: tray\n",
+        f"path: {output.as_posix()}\ntrain: {train_source}\nval: images/val\nnames:\n  0: tray\n",
         encoding="utf-8",
     )
     manifest = {
@@ -373,6 +422,7 @@ def build_dataset(
             "absence_in_unseen_region": "must not be inferred",
         },
         "crop_context_ratio": context_ratio,
+        "focus_replay_policy": replay_policy,
         "all_derived_rows_train_only": True,
         "validation_unchanged_from_base_dataset": True,
         "protected_holdout": prior.get("protected_holdout"),
@@ -406,6 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-photo", action="append", default=[])
     parser.add_argument("--exclude-photo", action="append", default=[])
     parser.add_argument("--context-ratio", type=float, default=0.08)
+    parser.add_argument("--derived-repeats", type=int, default=1)
     return parser
 
 
@@ -418,6 +469,7 @@ def main() -> None:
         args.include_photo,
         parse_exclusions(args.exclude_photo),
         args.context_ratio,
+        args.derived_repeats,
     )
     print(json.dumps({
         "dataset": str(output),
@@ -426,6 +478,7 @@ def main() -> None:
         "accepted_judgeable_trays": manifest["derived_train_boxes"],
         "excluded_unjudgeable_trays": len(manifest["excluded_scope_rows"]),
         "independent_tasks": manifest["independent_derived_tasks"],
+        "focus_replay_policy": manifest["focus_replay_policy"],
         "training_allowed": manifest["training_allowed"],
         "gpu_rental_required": manifest["gpu_rental_required"],
         "production_writes": 0,

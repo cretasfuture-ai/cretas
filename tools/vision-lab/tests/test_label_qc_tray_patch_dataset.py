@@ -84,3 +84,36 @@ def test_prior_truth_boundary_fails_closed_on_unsafe_or_missing_field(field, uns
 
     with pytest.raises(RuntimeError, match=f"truth boundary is unsafe: {field}"):
         module.validate_prior_truth_boundary(prior)
+
+
+def test_focus_replay_keeps_history_once_and_repeats_only_derived_patches():
+    provenance = [
+        {"stem": "old_a", "split": "train", "derived_crop": False},
+        {"stem": "old_b", "split": "train"},
+        {"stem": "new_a", "split": "train", "derived_crop": True},
+        {"stem": "validation", "split": "val"},
+    ]
+
+    occurrences, policy = module.build_focus_occurrences(
+        provenance, {"old_a", "old_b", "new_a"}, 6,
+    )
+
+    assert occurrences == ["old_a", "old_b"] + ["new_a"] * 6
+    assert policy == {
+        "historical_physical_images": 2,
+        "derived_physical_images": 1,
+        "historical_repeats": 1,
+        "derived_repeats": 6,
+        "effective_train_occurrences": 8,
+        "unique_train_images": 3,
+        "validation_unchanged": True,
+    }
+
+
+def test_focus_replay_fails_closed_on_inventory_drift_or_invalid_weight():
+    rows = [{"stem": "new_a", "split": "train", "derived_crop": True}]
+
+    with pytest.raises(RuntimeError, match="inventory mismatch"):
+        module.build_focus_occurrences(rows, {"different"}, 6)
+    with pytest.raises(ValueError, match="between 1 and 8"):
+        module.build_focus_occurrences(rows, {"new_a"}, 9)
