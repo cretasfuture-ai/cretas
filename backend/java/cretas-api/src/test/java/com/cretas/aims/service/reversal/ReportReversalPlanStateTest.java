@@ -137,6 +137,8 @@ class ReportReversalPlanStateTest {
         ProductionBatch batch = completedBatch();
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
         when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
         when(planRepo.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
         when(settlementRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.empty());
@@ -207,6 +209,8 @@ class ReportReversalPlanStateTest {
         when(settlementRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.of(settlement));
         when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
 
         assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
                 .hasMessageContaining("批次工厂或计划关联不匹配")
@@ -226,6 +230,8 @@ class ReportReversalPlanStateTest {
         when(settlementRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(Optional.of(settlement));
         when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
         when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
