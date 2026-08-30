@@ -1270,7 +1270,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      */
     private void replayMovingAverage(Long sfiId, String factoryId, LocalDateTime asOf) {
         // executeReversal already locked every involved SFI in stable id order before mutation.
-        SemiFinishedInventory sfi = wipRepo.findById(sfiId)
+        SemiFinishedInventory sfi = wipRepo.findByIdForUpdate(sfiId)
                 .orElse(null);
         if (sfi == null) {
             log.warn("[SP2] replayMovingAverage: sfiId={} not found, skip", sfiId);

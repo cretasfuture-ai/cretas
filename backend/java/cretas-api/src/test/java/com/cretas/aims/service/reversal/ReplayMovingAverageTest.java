@@ -131,7 +131,6 @@ class ReplayMovingAverageTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .unit("kg")
                 .build();
-        when(wipRepo.findById(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         return sfi;

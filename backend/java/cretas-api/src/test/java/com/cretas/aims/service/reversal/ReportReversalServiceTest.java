@@ -33,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -214,10 +215,84 @@ class ReportReversalServiceTest {
                     .thenReturn(List.of(out, restored));
 
             Boolean blocked = ReflectionTestUtils.invokeMethod(service,
-                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of(10L));
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of());
 
             assertThat(blocked).isFalse();
             verify(workProcessTaskRepository, never()).findByFactoryIdAndId(anyString(), anyLong());
+        }
+
+        @Test
+        @DisplayName("G1: 非法来源/引用（unknown、TRANSFER_OUT、裸 batch、null/wrong report）全部阻断")
+        void g1_malformedOutReferences_areBlocked() {
+            String[][] cases = {
+                    {SemiFinishedInventoryTransaction.SourceType.REVERSAL, "TASK-99", "10"},
+                    {SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT, "TASK-99", "10"},
+                    {SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME,
+                            String.valueOf(BATCH_ID), "10"},
+                    {SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME, "TASK-99", null},
+                    {SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME, "TASK-99", "11"}
+            };
+            for (String[] testCase : cases) {
+                reset(wipRepo, txnRepo, workProcessTaskRepository);
+                SemiFinishedInventory wip = SemiFinishedInventory.builder().id(88L)
+                        .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
+                when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
+                        .thenReturn(List.of(wip));
+                SemiFinishedInventoryTransaction.Builder builder = SemiFinishedInventoryTransaction.builder()
+                        .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(testCase[0]).sourceRef(testCase[1]).quantity(new BigDecimal("-1"));
+                if (testCase[2] != null) {
+                    builder.reportId(Long.valueOf(testCase[2]));
+                }
+                when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L))
+                        .thenReturn(List.of(builder.build()));
+
+                Boolean blocked = ReflectionTestUtils.invokeMethod(service,
+                        "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID, Set.of(10L));
+                assertThat(blocked).as("source=%s ref=%s report=%s", testCase[0], testCase[1], testCase[2])
+                        .isTrue();
+            }
+        }
+
+        @Test
+        @DisplayName("G1: 部分/异质补偿（OUT -2/+1、IN +2/-1、异成本） fail-closed")
+        void partialCompensation_isRejected() {
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .reportId(10L).quantity(new BigDecimal("-2")).unitCostAtTxn(new BigDecimal("10"))
+                    .build();
+            SemiFinishedInventoryTransaction positivePartial = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .reportId(10L).quantity(new BigDecimal("1")).unitCostAtTxn(new BigDecimal("10"))
+                    .build();
+            assertPartialCompensation(out, positivePartial, new BigDecimal("2"));
+
+            SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .reportId(10L).quantity(new BigDecimal("2")).unitCostAtTxn(new BigDecimal("10"))
+                    .build();
+            SemiFinishedInventoryTransaction negativePartial = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .reportId(10L).quantity(new BigDecimal("-1")).unitCostAtTxn(new BigDecimal("10"))
+                    .build();
+            assertPartialCompensation(in, negativePartial, new BigDecimal("-2"));
+
+            SemiFinishedInventoryTransaction differentCost = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .reportId(10L).quantity(new BigDecimal("2")).unitCostAtTxn(new BigDecimal("11"))
+                    .build();
+            assertPartialCompensation(out, differentCost, new BigDecimal("2"));
+        }
+
+        private void assertPartialCompensation(SemiFinishedInventoryTransaction original,
+                                                SemiFinishedInventoryTransaction candidate,
+                                                BigDecimal reverseQuantity) {
+            assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(service,
+                    "consumeMatchingReverse", new ArrayList<>(List.of(candidate)), original,
+                    10L, reverseQuantity))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                            .isEqualTo("PARTIAL_COMPENSATION"));
         }
 
         @Test
