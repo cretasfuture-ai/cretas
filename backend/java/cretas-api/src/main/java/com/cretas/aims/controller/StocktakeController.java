@@ -6,6 +6,8 @@ import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
@@ -88,6 +90,19 @@ public class StocktakeController {
     public ApiResponse<List<Map<String, Object>>> pendingDefectCounts(
             @PathVariable @Parameter(description = "工厂ID") String factoryId) {
         return ApiResponse.success(stocktakeService.listPendingDefectCounts(factoryId));
+    }
+
+    @PostMapping("/pending-defect-counts/{productionPlanId}/resolve")
+    @RequirePermission({"warehouse:read_write"})
+    @Operation(summary = "完成盘点补录待办", description = "记录有不良品或已清点确认零；仅待办计划可操作")
+    public ApiResponse<Map<String, Object>> resolvePendingDefectCount(
+            @PathVariable String factoryId,
+            @PathVariable String productionPlanId,
+            @RequestBody @Valid StocktakeDefectCountRequest body,
+            HttpServletRequest request) {
+        Map<String, Object> result = stocktakeService.completePendingDefectCount(
+                factoryId, productionPlanId, body, extractUserId(request));
+        return ApiResponse.success(String.valueOf(result.get("message")), result);
     }
 
     @GetMapping("/initiate-constraint")

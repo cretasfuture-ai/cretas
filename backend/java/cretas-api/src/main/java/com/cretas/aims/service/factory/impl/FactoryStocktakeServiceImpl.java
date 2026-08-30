@@ -6,6 +6,7 @@ import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
@@ -14,6 +15,7 @@ import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.VoucherType;
+import com.cretas.aims.entity.enums.DefectCountOutcome;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
@@ -24,6 +26,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.UserRepository;
@@ -34,6 +37,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.FactoryStocktakeService;
 import com.cretas.aims.service.inventory.ByproductCreditService;
+import com.cretas.aims.service.production.DefectCountResolver;
 import com.cretas.aims.service.voucher.VoucherService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
@@ -93,6 +97,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private final MaterialConsumptionRepository materialConsumptionRepo;
     /** 盘点补录待办要读结单时的三态结论 (2026-08-27)。 */
     private final ProductionSettlementRepository productionSettlementRepository;
+    private final ProductionBatchRepository productionBatchRepository;
 
     @Autowired(required = false)
     private UserRepository userRepository;
@@ -303,6 +308,65 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     return row;
                 })
                 .toList();
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> completePendingDefectCount(String factoryId, String productionPlanId,
+            StocktakeDefectCountRequest request, Long userId) {
+        boolean listed = productionSettlementRepository.findPendingDefectCounts(factoryId).stream()
+                .anyMatch(s -> productionPlanId.equals(s.getProductionPlanId()));
+        if (!listed) {
+            throw new BusinessException(409, "该生产计划已完成补录，或不属于当前工厂的待办")
+                    .withCode("STOCKTAKE_DEFECT_COUNT_NOT_PENDING");
+        }
+
+        // 先锁结单，再重读状态，避免两个盘点窗口同时完成同一条待办。
+        var settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, productionPlanId)
+                .orElseThrow(() -> new BusinessException(404, "找不到该工厂的生产结单待办")
+                        .withCode("STOCKTAKE_DEFECT_COUNT_NOT_FOUND"));
+        if (settlement.getDefectCountOutcome() != null
+                && settlement.getDefectCountOutcome() != DefectCountOutcome.NOT_COUNTED) {
+            throw new BusinessException(409, "这条待办已完成，不能重复补录")
+                    .withCode("STOCKTAKE_DEFECT_COUNT_ALREADY_COMPLETED");
+        }
+
+        DefectCountResolver.Resolved resolved = DefectCountResolver.resolve(
+                request.getOutcome(), request.getDefectQuantity());
+        settlement.setDefectCountOutcome(resolved.outcome());
+        settlement.setDefectQuantity(resolved.quantity());
+
+        List<com.cretas.aims.entity.ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, productionPlanId);
+        DefectCountResolver.BackfillDecision backfill = DefectCountResolver.decideBatchBackfill(
+                resolved, batches.size());
+        if (backfill.write()) {
+            batches.get(0).setDefectQuantity(backfill.quantity());
+            productionBatchRepository.save(batches.get(0));
+        }
+        productionSettlementRepository.save(settlement);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("productionPlanId", productionPlanId);
+        result.put("outcome", resolved.outcome());
+        result.put("defectQuantity", resolved.quantity());
+        result.put("formalBatchCount", batches.size());
+        result.put("backfilled", backfill.write());
+        result.put("backfillSkipReason", backfill.skipReason());
+        result.put("completedBy", userId);
+        String message;
+        if (backfill.write() && resolved.outcome() == DefectCountOutcome.NONE_CONFIRMED) {
+            message = "已清点确认零，不良品待办已完成，关联批次已同步为 0";
+        } else if (backfill.write()) {
+            message = "不良品数量已补录，关联批次已同步";
+        } else if (batches.size() > 1) {
+            message = "不良品结论已记录；该计划有多个正式批次，系统未猜测回填到任何批次";
+        } else {
+            message = "不良品结论已记录；没有唯一正式批次可回填";
+        }
+        result.put("message", message);
+        return result;
     }
 
     

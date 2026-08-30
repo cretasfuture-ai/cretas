@@ -60,15 +60,54 @@ const loading = ref(false);
  * 这个空值受阻。盘点是那个天然的卡点: 人本来就在数东西, 此时问「有几个坏的」是自然的。
  */
 const pendingDefectCounts = ref<Array<Record<string, unknown>>>([]);
+const pendingDefectLoadError = ref('');
+const defectDialogVisible = ref(false);
+const defectDialogRow = ref<Record<string, unknown> | null>(null);
+const defectOutcome = ref<'COUNTED' | 'NONE_CONFIRMED'>('COUNTED');
+const defectQuantity = ref<number | null>(null);
+const defectSubmitting = ref(false);
+const defectError = ref('');
 async function loadPendingDefectCounts() {
   if (!factoryId.value) return;
+  pendingDefectLoadError.value = '';
   try {
     const res = await get(`/${factoryId.value}/stocktakes/pending-defect-counts`);
     pendingDefectCounts.value = Array.isArray(res?.data) ? res.data : [];
-  } catch {
-    // ⛔ 拿不到就【不显示】, 不显示成 0 条 —— 「接口挂了」和「确实没有待办」
-    //    长得一模一样, 而后者会让人以为账已经清完了。
-    pendingDefectCounts.value = [];
+  } catch (error: unknown) {
+    // ⛔ 保留上次真值并持续显示错误 —— 接口挂了与确实没有待办不能长得一样。
+    pendingDefectLoadError.value = error instanceof Error ? error.message : '待办加载失败，请重试。';
+  }
+}
+function openDefectDialog(row: Record<string, unknown>) {
+  defectDialogRow.value = row;
+  defectOutcome.value = 'COUNTED';
+  defectQuantity.value = null;
+  defectError.value = '';
+  defectDialogVisible.value = true;
+}
+async function submitDefectCount() {
+  const row = defectDialogRow.value;
+  const planId = String(row?.productionPlanId || '');
+  if (!planId || !factoryId.value) return;
+  if (defectOutcome.value === 'COUNTED' && (!defectQuantity.value || defectQuantity.value <= 0)) {
+    defectError.value = '有不良品时必须填写大于 0 的数量。';
+    return;
+  }
+  defectSubmitting.value = true;
+  defectError.value = '';
+  try {
+    const res = await post(`/${factoryId.value}/stocktakes/pending-defect-counts/${planId}/resolve`, {
+      outcome: defectOutcome.value,
+      defectQuantity: defectOutcome.value === 'COUNTED' ? defectQuantity.value : null,
+    });
+    ElMessage.success(res?.message || res?.data?.message || '补录已完成');
+    defectDialogVisible.value = false;
+    await loadPendingDefectCounts();
+  } catch (error: unknown) {
+    const response = (error as { response?: { data?: { message?: string } } })?.response?.data;
+    defectError.value = response?.message || (error instanceof Error ? error.message : '补录失败，请保持窗口打开并重试。');
+  } finally {
+    defectSubmitting.value = false;
   }
 }
 const tableData = ref<TableRow[]>([]);
@@ -1188,6 +1227,16 @@ onMounted(async () => {
 
     <!-- 结单未清点不良品 —— 补录待办 -->
     <el-alert
+      v-if="pendingDefectLoadError"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="pendingDefectLoadError"
+      style="margin-bottom: 16px"
+    >
+      <el-button type="danger" link @click="loadPendingDefectCounts">重试加载待办</el-button>
+    </el-alert>
+    <el-alert
       v-if="pendingDefectCounts.length > 0"
       type="warning"
       show-icon
@@ -1212,9 +1261,45 @@ onMounted(async () => {
             </template>
           </el-table-column>
           <el-table-column prop="settledAt" label="结单时间" min-width="170" />
+          <el-table-column v-if="canWrite" label="操作" width="110" fixed="right">
+            <template #default="{ row }">
+              <el-button type="primary" link @click="openDefectDialog(row)">补录</el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </el-alert>
+
+    <el-dialog v-model="defectDialogVisible" title="补录不良品清点结果" width="520px">
+      <template v-if="defectDialogRow">
+        <el-descriptions :column="1" border size="small" style="margin-bottom: 16px">
+          <el-descriptions-item label="计划单号">{{ defectDialogRow.planNumber }}</el-descriptions-item>
+          <el-descriptions-item label="实际产量">
+            {{ defectDialogRow.actualFinishedQuantity }} {{ countDisplayUnit(String(defectDialogRow.quantityUnit || '')) }}
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="130px">
+          <el-form-item label="清点结论" required>
+            <el-radio-group v-model="defectOutcome">
+              <el-radio label="COUNTED">有不良品</el-radio>
+              <el-radio label="NONE_CONFIRMED">已清点确认零</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="不良品数量" :required="defectOutcome === 'COUNTED'">
+            <el-input-number v-model="defectQuantity" :min="0" :precision="2" :disabled="defectOutcome !== 'COUNTED'" />
+            <span class="unit-suffix" style="margin-left: 8px">{{ countDisplayUnit(String(defectDialogRow.quantityUnit || '')) || '单位' }}</span>
+            <div class="field-hint">选择“已清点确认零”时数量固定为 0，无需填写。</div>
+          </el-form-item>
+        </el-form>
+        <el-alert v-if="defectError" type="error" show-icon :closable="false" :title="defectError" />
+      </template>
+      <template #footer>
+        <el-button @click="defectDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="defectSubmitting"
+          :disabled="defectOutcome === 'COUNTED' && (!defectQuantity || defectQuantity <= 0)"
+          @click="submitDefectCount">确认补录</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 暂存提示 -->
     <el-alert
