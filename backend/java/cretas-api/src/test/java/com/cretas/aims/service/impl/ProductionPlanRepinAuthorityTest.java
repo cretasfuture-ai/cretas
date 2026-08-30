@@ -15,6 +15,7 @@ import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.service.workflow.ProductWorkflowResolutionService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static com.cretas.aims.service.production.WorkflowAuthorityTestFixture.install;
 
 /**
  * 「未开工的计划跟上新配方」的开工判据 —— Steve 2026-08-09 拍板:
@@ -104,6 +106,72 @@ class ProductionPlanRepinAuthorityTest {
         row.setSubmissionStatus(submissionStatus);
         row.setInterimSettledAt(settledAt);
         return row;
+    }
+
+    @Test
+    @DisplayName("自动新计划存在可用 Workflow 时一次冻结完整 Workflow/BOM/单位权威")
+    void newAutoPlanPinsCompleteAuthorityWhenWorkflowIsAvailable() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        install(service, FACTORY, "PT-1");
+        ProductionPlan plan = new ProductionPlan();
+        plan.setFactoryId(FACTORY);
+        plan.setProductTypeId("PT-1");
+
+        assertThat(service.pinNewPlanToCurrentAuthorityIfAvailable(FACTORY, plan)).isTrue();
+        assertThat(plan.getWorkflowSelectionMode()).isEqualTo(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        assertThat(plan.getSelectedWorkflowId()).isEqualTo(7001L);
+        assertThat(plan.getSelectedWorkflowVersion()).isEqualTo(1);
+        assertThat(plan.getSelectedWorkflowRevisionId()).isEqualTo(8001L);
+        assertThat(plan.getSelectedWorkflowRevisionHash()).isEqualTo("stub-revision-hash");
+        assertThat(plan.getWorkflowOutputUnit()).isEqualTo("kg");
+        assertThat(plan.getPlannedUnit()).isEqualTo("kg");
+        assertThat(plan.getSelectedBomFamilyId()).isEqualTo("BOM-FAMILY-STUB");
+        assertThat(plan.getSelectedBomRecipeIdsByProduct()).containsEntry("PT-1", "BOM-RECIPE-STUB");
+        assertThat(plan.getSelectedBomVersionsByProduct()).containsEntry("PT-1", 1);
+        assertThat(plan.getWorkflowOutputUnitsByProduct()).containsEntry("PT-1", "kg");
+    }
+
+    @Test
+    @DisplayName("完全没有 Workflow 覆盖时返回 false，保留 PENDING 计划载体")
+    void newAutoPlanLeavesPlanUnpinnedWhenWorkflowIsAbsent() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        ProductWorkflowResolutionService resolution = mock(ProductWorkflowResolutionService.class);
+        when(resolution.resolveActivePlanOutputContract(FACTORY, "PT-1", null))
+                .thenThrow(new BusinessException(409, "未找到覆盖该产品的工序 Workflow")
+                        .withCode("WORKFLOW_SINGLE_OUTPUT_NOT_FOUND"));
+        inject(service, "workflowResolutionService", resolution);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setFactoryId(FACTORY);
+        plan.setProductTypeId("PT-1");
+
+        assertThat(service.pinNewPlanToCurrentAuthorityIfAvailable(FACTORY, plan)).isFalse();
+        assertThat(plan.getSelectedWorkflowId()).isNull();
+        assertThat(plan.getSelectedBomFamilyId()).isNull();
+    }
+
+    @Test
+    @DisplayName("Workflow 配置冲突不得被无 Workflow 兼容分支吞掉")
+    void newAutoPlanPropagatesWorkflowConfigurationConflict() throws Exception {
+        ProductionPlanServiceImpl service = newService(
+                mock(ProductionPlanRepository.class), mock(ProcessSheetRowRepository.class));
+        ProductWorkflowResolutionService resolution = mock(ProductWorkflowResolutionService.class);
+        when(resolution.resolveActivePlanOutputContract(FACTORY, "PT-1", null))
+                .thenThrow(new BusinessException(409, "成品绑定了多个产出端口")
+                        .withCode("WORKFLOW_PLAN_OUTPUT_DUPLICATE"));
+        inject(service, "workflowResolutionService", resolution);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setFactoryId(FACTORY);
+        plan.setProductTypeId("PT-1");
+
+        Throwable thrown = catchThrowable(() ->
+                service.pinNewPlanToCurrentAuthorityIfAvailable(FACTORY, plan));
+
+        assertThat(thrown).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) thrown).getErrorCode())
+                .isEqualTo("WORKFLOW_PLAN_OUTPUT_DUPLICATE");
+        assertThat(plan.getSelectedWorkflowId()).isNull();
     }
 
     private Throwable repinWith(List<ProcessSheetRow> rows) throws Exception {

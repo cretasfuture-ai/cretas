@@ -34,6 +34,17 @@ import java.util.Collection;
 public interface ProductionPlanService {
 
     /**
+     * 给尚未落库的新计划冻结当前可用的 Workflow/BOM/输出单位权威。
+     *
+     * <p>自动联动计划还承担缺料/采购建议载体职责，因此产品暂未配置可用 Workflow 时
+     * 返回 {@code false}，保留 PENDING 计划等待配置；一旦存在可用 Workflow，必须与
+     * 手工建计划走同一套权威解析和赋值，不能留下半张快照。</p>
+     *
+     * @return true=已冻结完整权威；false=当前没有可用 Workflow
+     */
+    boolean pinNewPlanToCurrentAuthorityIfAvailable(String factoryId, ProductionPlan plan);
+
+    /**
      * 把**尚未开工**的计划重钉到当前生效的工艺修订 + BOM。
      *
      * <p>Steve 2026-08-09 拍板: 已生产的坚决不影响; 未开工但已建计划的必须能用上新配方。

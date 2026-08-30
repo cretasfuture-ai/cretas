@@ -15,6 +15,7 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BatchConsumptionService;
+import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.sales.SellableLineDomainResolver;
 import com.cretas.aims.service.sales.SellableLineDomainResolver.SellableDomain;
@@ -103,6 +104,7 @@ class MaterialLineNotAProductionPlanContractTest {
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private SalesOrderRepository salesOrderRepository;
     @Mock private SellableLineDomainResolver sellableLineDomainResolver;
+    @Mock private ProductionPlanService productionPlanService;
 
     @InjectMocks
     private SupplyChainOrchestrator orchestrator;

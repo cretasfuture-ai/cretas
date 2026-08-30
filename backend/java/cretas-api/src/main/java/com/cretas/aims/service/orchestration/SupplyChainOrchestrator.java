@@ -15,6 +15,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.BatchConsumptionService;
 import com.cretas.aims.service.LinkArrayService;
+import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.restock.RestockUnitConverter;
 import com.cretas.aims.service.sales.SellableLineDomainResolver;
@@ -68,6 +69,7 @@ public class SupplyChainOrchestrator {
     private final BatchConsumptionService batchConsumptionService;
     private final ProductTypeRepository productTypeRepository;
     private final SalesOrderRepository salesOrderRepository;
+    private final ProductionPlanService productionPlanService;
 
     /**
      * 订单行卖的是成品 / 物料 / 主数据已缺失 —— 判定收敛在这一个类里。
@@ -536,6 +538,14 @@ public class SupplyChainOrchestrator {
                             + "⛔ 不要用写死的 user id 兜底 (上一个写死的 1L 已随 F001 租户被清理而失效)");
         }
         plan.setCreatedBy(createdBy);
+
+        boolean authorityPinned = productionPlanService
+                .pinNewPlanToCurrentAuthorityIfAvailable(factoryId, plan);
+        if (!authorityPinned) {
+            log.warn("自动生产计划暂未冻结 Workflow/BOM 权威: SO={}, product={}，"
+                            + "保留 PENDING 计划用于缺料与采购建议，配置工艺后须先更新到当前配方再下发",
+                    salesOrderId, productTypeId);
+        }
 
         // 🔴 saveAndFlush 而不是 save —— 这一行是本次普查里**最贵的一条假读数**。
         //    JPA 批处理让 INSERT 一直拖到事务提交才 flush, 而提交由 @Transactional(REQUIRES_NEW)
