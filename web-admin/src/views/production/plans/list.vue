@@ -1954,6 +1954,9 @@ const settlementPrefillIssues = ref<SettlementPrefillIssue[]>([]);
 const settlementPrefillApplied = ref(false);
 // 后端审计 clean (只看 BLOCKER); 未带入数据时 false
 const settlementPrefillCleanFromServer = ref(false);
+// Clean prefill remains the fast path, but operators may explicitly add WIP
+// consumed outside this plan.  The opt-in flag keeps the normal dialog compact.
+const settlementManualWipVisible = ref(false);
 const settlementTerminalOutputs = ref<Array<{
   productTypeId: string;
   batchNumber: string;
@@ -2113,7 +2116,7 @@ function wipLineDisabledReason(line: SettlementWipConsumptionForm, index: number
   if (line.semiFinishedInventoryId == null) return `第 ${index + 1} 行半成品领用必须选择 WIP`;
   const wip = selectedWipForSettlement(line.semiFinishedInventoryId);
   if (!wip) return `第 ${index + 1} 行半成品库存不存在或未加载`;
-  if (!line.quantity || line.quantity <= 0) return `第 ${index + 1} 行半成品领用数量必须大于 0`;
+  if (!line.quantity || line.quantity < 0.01) return `第 ${index + 1} 行半成品领用数量必须至少为 0.01`;
   const available = Number(wip.availableQuantity || 0);
   if (line.quantity > available) return `第 ${index + 1} 行半成品领用超出可用量 ${available}${wip.unit || ''}`;
   return '';
@@ -2134,6 +2137,7 @@ const firstWipLineError = computed(() => {
   return '';
 });
 const completeSubmitDisabledReason = computed(() => {
+  if (settlementPrefillClean.value && firstWipLineError.value) return firstWipLineError.value;
   if (completeActualQuantity.value + completeSemiFinishedOutputQuantity.value <= 0) return '请填写有效的成品或半成品实际产量';
   if (!completeVarianceReasonReady.value) return '实际产量超过计划时必须选择差异原因';
   const hasMaterialLines = completeForm.value.rawMaterialConsumptions.length > 0
@@ -2148,7 +2152,9 @@ const completeSubmitDisabledReason = computed(() => {
   return '';
 });
 const completeCanSubmit = computed(
-  () => settlementPrefillClean.value || completeSubmitDisabledReason.value === '',
+  () => settlementPrefillClean.value
+    ? !firstWipLineError.value
+    : completeSubmitDisabledReason.value === '',
 );
 
 function buildSettlementIdempotencyKey(row: TableRow): string {
@@ -2173,11 +2179,31 @@ function removeRawConsumptionLine(index: number) {
 }
 
 function addWipConsumptionLine() {
+  settlementManualWipVisible.value = true;
   completeForm.value.semiFinishedConsumptions.push({
     semiFinishedInventoryId: null,
     quantity: 0,
     note: '',
   });
+}
+
+async function openSettlementManualWip() {
+  settlementManualWipVisible.value = true;
+  if (!factoryId.value) return;
+  wipListLoading.value = true;
+  try {
+    const res = await listAvailableWip(factoryId.value);
+    if (res.success && Array.isArray(res.data)) {
+      wipList.value = res.data.filter((wip) => Number(wip.availableQuantity || 0) > 0);
+    } else {
+      wipList.value = [];
+      ElMessage({ message: res.message || '半成品可用库存加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (error: unknown) {
+    handleCatchError(error, '半成品可用库存加载失败');
+  } finally {
+    wipListLoading.value = false;
+  }
 }
 
 function removeWipConsumptionLine(index: number) {
@@ -2311,6 +2337,7 @@ async function applySettlementPrefill(row: TableRow) {
   settlementPrefillApplied.value = false;
   settlementPrefillIssues.value = [];
   settlementPrefillCleanFromServer.value = false;
+  settlementManualWipVisible.value = false;
   settlementTerminalOutputs.value = [];
   if (!factoryId.value) return;
   settlementPrefillLoading.value = true;
@@ -2487,7 +2514,9 @@ async function submitComplete() {
   }
   actionLoading.value = true;
   try {
-    const payload = settlementPrefillClean.value
+    const hasManualWip = settlementPrefillClean.value
+      && completeForm.value.semiFinishedConsumptions.length > 0;
+    const payload = settlementPrefillClean.value && !hasManualWip
       ? {
           idempotencyKey: settlementIdempotencyKey.value,
           confirm: true,
@@ -5473,6 +5502,65 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             :closable="false"
             style="margin: 12px 0"
           />
+          <div class="settlement-line-header">
+            <span>外部半成品领用</span>
+            <el-button
+              v-if="!settlementManualWipVisible"
+              size="small"
+              type="primary"
+              plain
+              :loading="wipListLoading"
+              @click="openSettlementManualWip"
+            >补充外部半成品领用</el-button>
+          </div>
+          <div v-if="!settlementManualWipVisible" class="settlement-help">
+            如领用外部半成品，请点击上方入口手工添加；无需领用可直接确认结单。
+          </div>
+          <template v-else>
+            <div class="settlement-help">
+              仅添加本计划实际领用的外部半成品。请选择批次并填写 0.01 起的有效数量，不能超过当前可用量。
+            </div>
+            <div v-if="wipList.length === 0 && !wipListLoading" class="settlement-empty">
+              暂无可用半成品库存，无法添加外部半成品领用。
+            </div>
+            <div
+              v-for="(line, index) in completeForm.semiFinishedConsumptions"
+              :key="`clean-wip-${index}`"
+              class="settlement-consumption-row"
+            >
+              <el-select
+                v-model="line.semiFinishedInventoryId"
+                filterable
+                placeholder="选择半成品 WIP 批次"
+                :loading="wipListLoading"
+                class="consumption-select"
+              >
+                <el-option
+                  v-for="wip in wipList"
+                  :key="wip.id"
+                  :label="`${wip.intermediateBatchNo} | 可用 ${wip.availableQuantity}${displayUnit(wip.unit)}`"
+                  :value="wip.id"
+                />
+              </el-select>
+              <el-input-number
+                v-model="line.quantity"
+                :min="0.01"
+                :max="selectedWipForSettlement(line.semiFinishedInventoryId) ? Number(selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity || 0) : undefined"
+                :precision="2"
+                :step="0.01"
+                class="consumption-qty"
+              />
+              <el-input v-model="line.note" placeholder="备注/交接单号" class="consumption-note" />
+              <el-button text type="danger" @click="removeWipConsumptionLine(index)">删除</el-button>
+              <div v-if="selectedWipForSettlement(line.semiFinishedInventoryId)" class="settlement-wip-boundary">
+                当前可用 <strong>{{ selectedWipForSettlement(line.semiFinishedInventoryId)?.availableQuantity }} {{ displayUnit(selectedWipForSettlement(line.semiFinishedInventoryId)?.unit) }}</strong>；超出可用量或数量无效将禁止提交。
+              </div>
+              <div v-if="wipLineDisabledReason(line, index)" class="settlement-wip-boundary danger">
+                {{ wipLineDisabledReason(line, index) }}
+              </div>
+            </div>
+            <el-button size="small" :icon="Plus" @click="addWipConsumptionLine">增加半成品行</el-button>
+          </template>
         </template>
         <template v-else>
         <el-divider content-position="left">产出核对</el-divider>
