@@ -7,7 +7,6 @@
 
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
-import * as Crypto from 'expo-crypto';
 
 const hex = (buffer: ArrayBuffer): string => Array.from(
   new Uint8Array(buffer),
@@ -194,6 +193,7 @@ class AttachmentApi {
     const { uploadUrl, fileUrl } = await this.getUploadUrl(file.name, file.type, factoryId);
 
     const blob = await (await fetch(file.uri)).blob();
+    const Crypto = await import('expo-crypto');
     const fileHash = hex(await Crypto.digest(
       Crypto.CryptoDigestAlgorithm.SHA256,
       await blob.arrayBuffer(),
