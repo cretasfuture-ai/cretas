@@ -409,9 +409,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             BigDecimal available = wip.getAvailableQuantity() == null ? BigDecimal.ZERO : wip.getAvailableQuantity();
             if ((produced.signum() > 0 || available.signum() > 0)
                     && !inSfiIds.contains(wip.getId())) {
-                throw new BusinessException(409, "撤回失败: 半成品库存行缺少本次报工对应的入库流水: "
-                        + wip.getIntermediateBatchNo())
-                        .withCode("WIP_NOT_LEDGERED");
+                BigDecimal strandedQuantity = produced.max(available);
+                throw new BusinessException(409, String.format(
+                        "撤回失败: 半成品 %s 还有 %s 挂在账上，但缺少本次报工对应的入库流水",
+                        wip.getIntermediateBatchNo(),
+                        strandedQuantity.stripTrailingZeros().toPlainString()))
+                        .withCode("WIP_NOT_LEDGERED")
+                        .withHint("请先用「半成品盘点」把该批次余额校正到实际值，再重新提交撤回")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(String.valueOf(batchId));
             }
         }
         LocalDateTime now = LocalDateTime.now();
