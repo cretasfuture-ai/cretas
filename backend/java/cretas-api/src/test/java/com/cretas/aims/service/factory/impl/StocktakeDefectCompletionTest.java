@@ -52,6 +52,9 @@ class StocktakeDefectCompletionTest {
         var result = service.completePendingDefectCount("F006", "P1", request(DefectCountOutcome.COUNTED, "2"), 7L);
 
         assertEquals(Boolean.TRUE, result.get("backfilled"));
+        assertEquals(new BigDecimal("2"), result.get("defectQuantity"));
+        assertEquals(1, result.get("formalBatchCount"));
+        assertEquals(7L, result.get("completedBy"));
         assertEquals(new BigDecimal("2"), b.getDefectQuantity());
         verify(batches).save(b); verify(settlements).save(s);
     }
@@ -65,6 +68,9 @@ class StocktakeDefectCompletionTest {
         var result = service.completePendingDefectCount("F006", "P1", request(DefectCountOutcome.NONE_CONFIRMED, null), 7L);
 
         assertEquals(Boolean.TRUE, result.get("backfilled"));
+        assertEquals(BigDecimal.ZERO, result.get("defectQuantity"));
+        org.junit.jupiter.api.Assertions.assertTrue(
+                String.valueOf(result.get("message")).contains("已清点确认零"));
         assertEquals(BigDecimal.ZERO, s.getDefectQuantity());
         verify(batches).save(any());
     }
@@ -88,6 +94,9 @@ class StocktakeDefectCompletionTest {
         var result = service.completePendingDefectCount("F006", "P1", request(DefectCountOutcome.COUNTED, "2"), 7L);
 
         assertEquals(Boolean.FALSE, result.get("backfilled"));
+        assertEquals(2, result.get("formalBatchCount"));
+        org.junit.jupiter.api.Assertions.assertEquals(
+                "AMBIGUOUS_BATCH_COUNT:2", result.get("backfillSkipReason"));
         assertEquals(DefectCountOutcome.COUNTED, s.getDefectCountOutcome());
         assertEquals(new BigDecimal("2"), s.getDefectQuantity());
         org.junit.jupiter.api.Assertions.assertTrue(String.valueOf(result.get("message")).contains("多个正式批次"));

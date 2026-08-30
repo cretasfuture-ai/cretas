@@ -337,9 +337,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         settlement.setDefectCountOutcome(resolved.outcome());
         settlement.setDefectQuantity(resolved.quantity());
 
-        List<com.cretas.aims.entity.ProductionBatch> batches = productionBatchRepository == null
-                ? List.of()
-                : productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, productionPlanId);
+        List<com.cretas.aims.entity.ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, productionPlanId);
         DefectCountResolver.BackfillDecision backfill = DefectCountResolver.decideBatchBackfill(
                 resolved, batches.size());
         if (backfill.write()) {
@@ -351,12 +350,21 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("productionPlanId", productionPlanId);
         result.put("outcome", resolved.outcome());
+        result.put("defectQuantity", resolved.quantity());
+        result.put("formalBatchCount", batches.size());
         result.put("backfilled", backfill.write());
-        String message = backfill.write()
-                ? "不良品数量已补录，关联批次已同步"
-                : batches.size() > 1
-                    ? "不良品结论已记录；该计划有多个正式批次，系统未猜测回填到任何批次"
-                    : "已清点确认零，不良品待办已完成";
+        result.put("backfillSkipReason", backfill.skipReason());
+        result.put("completedBy", userId);
+        String message;
+        if (backfill.write() && resolved.outcome() == DefectCountOutcome.NONE_CONFIRMED) {
+            message = "已清点确认零，不良品待办已完成，关联批次已同步为 0";
+        } else if (backfill.write()) {
+            message = "不良品数量已补录，关联批次已同步";
+        } else if (batches.size() > 1) {
+            message = "不良品结论已记录；该计划有多个正式批次，系统未猜测回填到任何批次";
+        } else {
+            message = "不良品结论已记录；没有唯一正式批次可回填";
+        }
         result.put("message", message);
         return result;
     }
