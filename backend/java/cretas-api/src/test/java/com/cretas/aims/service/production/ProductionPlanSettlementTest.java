@@ -136,6 +136,7 @@ class ProductionPlanSettlementTest {
     @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
     @Mock private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
     @Mock private WorkshopReportReservationService workshopReservationService;
+    @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
 
     private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -243,7 +244,15 @@ class ProductionPlanSettlementTest {
         assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
         assertEquals(new BigDecimal("5"), wip.getConsumedQuantity());
         assertEquals(new BigDecimal("3"), wip.getAvailableQuantity());
-        verify(productionSettlementConsumptionRepository).saveAll(anyList());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProductionSettlementConsumption>> consumptionCaptor =
+                ArgumentCaptor.forClass((Class<List<ProductionSettlementConsumption>>) (Class<?>) List.class);
+        verify(productionSettlementConsumptionRepository).saveAll(consumptionCaptor.capture());
+        ProductionSettlementConsumption persistedSemi = consumptionCaptor.getValue().stream()
+                .filter(line -> "SEMI_FINISHED".equals(line.getSourceType()))
+                .findFirst().orElseThrow();
+        assertEquals("WIP-001", persistedSemi.getBatchNumber());
+        assertEquals("kg", persistedSemi.getUnit());
         ArgumentCaptor<SemiFinishedInventoryTransaction> outCaptor =
                 ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
         verify(semiFinishedInventoryTransactionRepository).save(outCaptor.capture());
@@ -911,6 +920,9 @@ class ProductionPlanSettlementTest {
                 .confirm(true)
                 .actualFinishedQuantity(new BigDecimal("999"))
                 .materialVarianceReason("本计划无外部领料")
+                // Non-Workflow confirmation must ignore caller production facts entirely.
+                .semiFinishedConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(404L).quantity(new BigDecimal("999")).unit("kg").build()))
                 .build();
 
         ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
@@ -918,6 +930,179 @@ class ProductionPlanSettlementTest {
         assertEquals(new BigDecimal("10"), response.getActualFinishedQuantity());
         assertEquals("盒", response.getQuantityUnit());
         assertEquals(new BigDecimal("10"), plan.getActualQuantity());
+        verify(semiFinishedInventoryRepository, never()).findByIdForUpdate(404L);
+    }
+
+    @Test
+    @DisplayName("Workflow confirmation preserves only explicitly entered external WIP")
+    void deriveConfirmedSettlementRequest_preservesManualWipOnly() {
+        ProductionSettlementRequest serverFacts = ProductionSettlementRequest.builder()
+                .actualFinishedQuantity(new BigDecimal("10"))
+                .quantityUnit("box")
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("SERVER-RM")
+                        .quantity(new BigDecimal("2"))
+                        .unit("kg")
+                        .build()))
+                .laborSegments(List.of(ProductionSettlementRequest.LaborSegment.builder()
+                        .workerName("server-worker").minutes(30).headcount(1).build()))
+                .terminalOutputs(List.of(ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId("SERVER-FG").batchNumber("SERVER-BATCH")
+                        .quantity(new BigDecimal("10")).unit("box")
+                        .materialNodeId("terminal").build()))
+                .build();
+        ProductionSettlementRequest manualWip = ProductionSettlementRequest.builder()
+                .semiFinishedConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(349L).batchNumber("WIP-B10822-S1-1844")
+                        .quantity(new BigDecimal("0.01")).unit("kg").build()))
+                .actualFinishedQuantity(new BigDecimal("999"))
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("CALLER-RM").quantity(new BigDecimal("999")).unit("kg").build()))
+                .laborSegments(List.of(ProductionSettlementRequest.LaborSegment.builder()
+                        .workerName("caller-worker").minutes(999).headcount(9).build()))
+                .terminalOutputs(List.of(ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId("CALLER-FG").batchNumber("CALLER-BATCH")
+                        .quantity(new BigDecimal("999")).unit("kg").materialNodeId("caller").build()))
+                .idempotencyKey("manual-wip")
+                .build();
+        ProductionSettlementPrefillResponse prefill = ProductionSettlementPrefillResponse.builder()
+                .prefill(serverFacts)
+                .audit(ProductionSettlementPrefillResponse.Audit.builder().clean(true).build())
+                .build();
+        service = org.mockito.Mockito.spy(service);
+        org.mockito.Mockito.doReturn(prefill).when(service).getSettlementPrefill(FACTORY_ID, PLAN_ID);
+
+        ProductionSettlementRequest derived = ReflectionTestUtils.invokeMethod(
+                service, "deriveConfirmedSettlementRequest", FACTORY_ID, PLAN_ID, manualWip, true);
+
+        assertEquals(new BigDecimal("10"), derived.getActualFinishedQuantity());
+        assertEquals("SERVER-RM", derived.getRawMaterialConsumptions().get(0).getMaterialBatchId());
+        assertEquals("server-worker", derived.getLaborSegments().get(0).getWorkerName());
+        assertEquals("SERVER-FG", derived.getTerminalOutputs().get(0).getProductTypeId());
+        assertEquals(349L, derived.getSemiFinishedConsumptions().get(0).getSemiFinishedInventoryId());
+    }
+
+    @Test
+    @DisplayName("Workflow confirm=false carries external WIP through settlement row, deduction and exact OUT")
+    void settleProduction_workflowManualWip_postsCanonicalConsumptionAndExactOut() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        plan.setSkipProcessReporting(true);
+        SemiFinishedInventory wip = wip();
+        wip.setIntermediateBatchNo("CANONICAL-WIP-BATCH");
+        wip.setUnit("kg");
+
+        ProductionSettlementRequest serverFacts = ProductionSettlementRequest.builder()
+                .actualFinishedQuantity(new BigDecimal("10"))
+                .quantityUnit("box")
+                .rawMaterialConsumptions(new java.util.ArrayList<>())
+                .semiFinishedConsumptions(new java.util.ArrayList<>())
+                .laborSegments(List.of(ProductionSettlementRequest.LaborSegment.builder()
+                        .workerName("server-worker").minutes(30).headcount(1).build()))
+                .terminalOutputs(List.of(ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId("FG-SKU-A").batchNumber("FG-WORKFLOW-001")
+                        .quantity(new BigDecimal("10")).unit("box")
+                        .materialNodeId("terminal-a").build()))
+                .build();
+        ProductionSettlementPrefillResponse prefill = ProductionSettlementPrefillResponse.builder()
+                .prefill(serverFacts)
+                .audit(ProductionSettlementPrefillResponse.Audit.builder().clean(true).build())
+                .build();
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("workflow-manual-wip")
+                .confirm(false)
+                .actualFinishedQuantity(new BigDecimal("999"))
+                .semiFinishedConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(7L)
+                        .batchNumber("SPOOFED-BATCH")
+                        .quantity(new BigDecimal("5"))
+                        .unit("box")
+                        .build()))
+                .laborSegments(List.of(ProductionSettlementRequest.LaborSegment.builder()
+                        .workerName("caller-worker").minutes(999).headcount(9).build()))
+                .build();
+
+        service = org.mockito.Mockito.spy(service);
+        ReflectionTestUtils.setField(service, "bomWorkflowRevisionService", bomWorkflowRevisionService);
+        org.mockito.Mockito.doReturn(prefill).when(service).getSettlementPrefill(FACTORY_ID, PLAN_ID);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "workflow-manual-wip")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+        when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementOutputLineRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        BomRecipe recipe = BomRecipe.builder()
+                .id("bom-a").factoryId(FACTORY_ID).recipeCode("BOM-FG-SKU-A")
+                .productTypeId("FG-SKU-A").productName("FG-SKU-A").version(2)
+                .bomFamilyId("family-v3").workflowRevisionId(4403L)
+                .workflowRevisionHash("revision-hash-v3").targetTerminalNodeId("terminal-a")
+                .outputRole(BomRecipe.OutputRole.MAIN).costAllocationRatio(BigDecimal.ONE)
+                .outputQuantityPerUnit(BigDecimal.ONE).outputUnit("box").build();
+        when(bomRecipeRepository.findById("bom-a")).thenReturn(Optional.of(recipe));
+        when(bomWorkflowRevisionService.resolveOutputCostPolicy(FACTORY_ID, recipe))
+                .thenReturn(com.cretas.aims.service.bom.BomWorkflowRevisionService.OutputCostPolicy.ALLOCATION_RATIO);
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
+
+        assertEquals(new BigDecimal("10"), response.getActualFinishedQuantity());
+        assertEquals(new BigDecimal("5"), wip.getConsumedQuantity());
+        assertEquals(new BigDecimal("3"), wip.getAvailableQuantity());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProductionSettlementConsumption>> consumptionCaptor =
+                ArgumentCaptor.forClass((Class<List<ProductionSettlementConsumption>>) (Class<?>) List.class);
+        verify(productionSettlementConsumptionRepository).saveAll(consumptionCaptor.capture());
+        ProductionSettlementConsumption semi = consumptionCaptor.getValue().stream()
+                .filter(line -> "SEMI_FINISHED".equals(line.getSourceType())).findFirst().orElseThrow();
+        assertEquals("CANONICAL-WIP-BATCH", semi.getBatchNumber());
+        assertEquals("kg", semi.getUnit());
+        assertEquals(new BigDecimal("5"), semi.getQuantity());
+        ArgumentCaptor<SemiFinishedInventoryTransaction> outCaptor =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(semiFinishedInventoryTransactionRepository).save(outCaptor.capture());
+        SemiFinishedInventoryTransaction out = outCaptor.getValue();
+        assertEquals(new BigDecimal("-5"), out.getQuantity());
+        assertEquals(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX
+                        + semi.getSettlementId() + ":" + semi.getId(), out.getSourceRef());
+        assertEquals("server-worker", serverFacts.getLaborSegments().get(0).getWorkerName());
+        verify(semiFinishedInventoryRepository, times(2)).findByIdForUpdate(7L);
+    }
+
+    @Test
+    @DisplayName("manual WIP validation fails closed before any settlement or OUT write")
+    void appendConsumptionLines_manualWipInvalidInputs_writeNothing() {
+        List<ProductionSettlementConsumption> target = new java.util.ArrayList<>();
+        SemiFinishedInventory foreign = wip();
+        foreign.setFactoryId("F007");
+        when(semiFinishedInventoryRepository.findByIdForUpdate(7L))
+                .thenReturn(Optional.of(foreign), Optional.empty(), Optional.of(wip()));
+
+        assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
+                "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
+                List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(7L).quantity(BigDecimal.ONE).unit("kg").build()), target));
+        assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
+                "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
+                List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(7L).quantity(BigDecimal.ONE).unit("kg").build()), target));
+        assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
+                "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
+                List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .semiFinishedInventoryId(7L).quantity(new BigDecimal("9")).unit("kg").build()), target));
+        assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
+                "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
+                java.util.Collections.singletonList(null), target));
+
+        assertTrue(target.isEmpty());
+        verify(productionSettlementRepository, never()).save(any());
+        verify(productionSettlementConsumptionRepository, never()).saveAll(anyList());
+        verify(semiFinishedInventoryRepository, never()).save(any());
+        verify(semiFinishedInventoryTransactionRepository, never()).save(any());
     }
 
     @Test
@@ -1975,6 +2160,7 @@ class ProductionPlanSettlementTest {
                 .id(7L)
                 .factoryId(FACTORY_ID)
                 .intermediateBatchNo("WIP-001")
+                .unit("kg")
                 .consumedQuantity(BigDecimal.ZERO)
                 .availableQuantity(new BigDecimal("8"))
                 .status(SemiFinishedInventory.Status.AVAILABLE)
