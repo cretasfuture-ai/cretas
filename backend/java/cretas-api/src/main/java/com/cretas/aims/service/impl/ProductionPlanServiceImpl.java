@@ -3204,7 +3204,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
         ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
-                ? deriveConfirmedSettlementRequest(factoryId, planId, request)
+                ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
                 : request;
 
         validateSettlementRequest(plan, effectiveRequest);
@@ -3318,7 +3318,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * lines are never trusted in confirmation-only mode.
      */
     private ProductionSettlementRequest deriveConfirmedSettlementRequest(
-            String factoryId, String planId, ProductionSettlementRequest confirmation) {
+            String factoryId, String planId, ProductionSettlementRequest confirmation,
+            boolean allowManualSemiFinishedConsumptions) {
         ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
         ProductionSettlementRequest derived = latest != null ? latest.getPrefill() : null;
         List<ProductionSettlementPrefillResponse.Issue> blockers = latest == null || latest.getAudit() == null
@@ -3346,6 +3347,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         derived.setMaterialVarianceNote(trimToNull(confirmation.getMaterialVarianceNote()));
         derived.setLaborDeferredReason(firstNonBlank(
                 derived.getLaborDeferredReason(), confirmation.getLaborDeferredReason()));
+        // Workflow facts remain server-authoritative, but external WIP consumption is
+        // intentionally a caller-entered exception: it is not present in process
+        // reports and must be carried into the derived request so the normal
+        // SEMI_FINISHED validation, inventory deduction, and OUT ledger path runs.
+        if (allowManualSemiFinishedConsumptions
+                && !isEmpty(confirmation.getSemiFinishedConsumptions())) {
+            derived.setSemiFinishedConsumptions(new ArrayList<>(confirmation.getSemiFinishedConsumptions()));
+        }
         return derived;
     }
 
@@ -5730,6 +5739,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return;
         }
         for (ProductionSettlementRequest.ConsumptionLine requestLine : requestLines) {
+            if (requestLine == null) {
+                throw new BusinessException(400, "领用明细不能为 null")
+                        .withHintTarget("实际领用");
+            }
+            SemiFinishedInventory lockedSemiFinished = null;
+            if ("SEMI_FINISHED".equals(sourceType)) {
+                if (requestLine.getSemiFinishedInventoryId() == null) {
+                    throw new BusinessException(400, "半成品领用必须选择半成品库存")
+                            .withHintTarget("半成品领用");
+                }
+                lockedSemiFinished = semiFinishedInventoryRepository
+                        .findByIdForUpdate(requestLine.getSemiFinishedInventoryId())
+                        .orElseThrow(() -> new BusinessException(404,
+                                "半成品库存不存在: " + requestLine.getSemiFinishedInventoryId())
+                                .withHintTarget("半成品领用"));
+                if (!factoryId.equals(lockedSemiFinished.getFactoryId())) {
+                    throw new BusinessException(403, "无权领用其他工厂的半成品库存")
+                            .withHintTarget("半成品领用");
+                }
+            }
             ProductionSettlementConsumption line = new ProductionSettlementConsumption();
             line.setFactoryId(factoryId);
             line.setProductionPlanId(plan.getId());
@@ -5745,7 +5774,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setUnit(trimToNull(requestLine.getUnit()));
             line.setWarehouseId(trimToNull(requestLine.getWarehouseId()));
             line.setNote(trimToNull(requestLine.getNote()));
-            line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine));
+            line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine,
+                    lockedSemiFinished));
+            if (lockedSemiFinished != null) {
+                // The request may carry a friendly/display batch or unit, but the
+                // immutable settlement ledger must identify the locked inventory row.
+                line.setBatchNumber(trimToNull(lockedSemiFinished.getIntermediateBatchNo()));
+                line.setUnit(trimToNull(lockedSemiFinished.getUnit()));
+            }
             if (isWorkflowPlan(plan)) {
                 line.setProductTypeId(null);
             }
@@ -5755,19 +5791,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private BigDecimal resolveAvailableBefore(String factoryId, ProductionPlan plan,
                                               String sourceType,
-                                              ProductionSettlementRequest.ConsumptionLine line) {
+                                              ProductionSettlementRequest.ConsumptionLine line,
+                                              SemiFinishedInventory lockedSemiFinished) {
         if ("SEMI_FINISHED".equals(sourceType)) {
-            if (line.getSemiFinishedInventoryId() == null) {
-                throw new BusinessException(400, "半成品领用必须选择半成品库存")
-                        .withHintTarget("半成品领用");
-            }
-            SemiFinishedInventory inventory = semiFinishedInventoryRepository.findByIdForUpdate(line.getSemiFinishedInventoryId())
-                    .orElseThrow(() -> new BusinessException(404, "半成品库存不存在: " + line.getSemiFinishedInventoryId())
-                            .withHintTarget("半成品领用"));
-            if (!factoryId.equals(inventory.getFactoryId())) {
-                throw new BusinessException(403, "无权领用其他工厂的半成品库存")
-                        .withHintTarget("半成品领用");
-            }
+            SemiFinishedInventory inventory = Objects.requireNonNull(lockedSemiFinished,
+                    "locked semi-finished inventory is required");
             BigDecimal available = zeroIfNull(inventory.getAvailableQuantity());
             ensureQuantityWithinAvailable("半成品库存 " + inventory.getIntermediateBatchNo(), line.getQuantity(), available, "半成品领用");
             return available;
