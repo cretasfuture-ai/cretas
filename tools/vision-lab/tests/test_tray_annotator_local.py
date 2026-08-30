@@ -93,6 +93,14 @@ async function confirmOk(){
         self.assertIn("action==='replace'", standalone.PAGE)
         self.assertIn("旧框会保留，画完新框后才替换", standalone.PAGE)
 
+    def test_standalone_page_exposes_cursor_centred_mouse_zoom(self):
+        self.assertIn('onclick="zoomOut()">缩小', standalone.PAGE)
+        self.assertIn('onclick="zoomIn()">放大', standalone.PAGE)
+        self.assertIn('onclick="resetZoom()">重置缩放', standalone.PAGE)
+        self.assertIn("cv.addEventListener('wheel'", standalone.PAGE)
+        self.assertIn("e.clientX,e.clientY", standalone.PAGE)
+        self.assertIn("Math.min(6,next)", standalone.PAGE)
+
     def test_standalone_box_validation_fails_closed(self):
         self.assertEqual(
             [[0.1, 0.2, 0.8, 0.9]],
