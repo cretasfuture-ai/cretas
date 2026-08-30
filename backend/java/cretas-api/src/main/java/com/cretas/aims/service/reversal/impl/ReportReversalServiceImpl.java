@@ -654,9 +654,6 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         || !currentReportIds.contains(txn.getReportId())) {
                     return true;
                 }
-                if (SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT.equals(txn.getSourceType())) {
-                    return true;
-                }
                 String ref = txn.getSourceRef();
                 if (String.valueOf(batchId).equals(ref)) {
                     return true; // legacy batch-level reference: no task boundary to prove safe
