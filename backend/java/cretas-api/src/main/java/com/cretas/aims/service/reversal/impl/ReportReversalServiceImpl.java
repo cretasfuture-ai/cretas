@@ -409,7 +409,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             BigDecimal available = wip.getAvailableQuantity() == null ? BigDecimal.ZERO : wip.getAvailableQuantity();
             if ((produced.signum() > 0 || available.signum() > 0)
                     && !inSfiIds.contains(wip.getId())) {
-                BigDecimal strandedQuantity = produced.max(available);
+                BigDecimal strandedQuantity = available.signum() > 0 ? available : produced;
                 throw new BusinessException(409, String.format(
                         "撤回失败: 半成品 %s 还有 %s 挂在账上，但缺少本次报工对应的入库流水",
                         wip.getIntermediateBatchNo(),
