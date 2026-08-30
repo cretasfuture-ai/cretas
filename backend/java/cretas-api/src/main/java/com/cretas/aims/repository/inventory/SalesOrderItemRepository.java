@@ -16,6 +16,21 @@ public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, 
 
     List<SalesOrderItem> findBySalesOrderId(String salesOrderId);
 
+    /**
+     * Load order lines only through a tenant-scoped SalesOrder join.  SalesOrderItem has no
+     * factory_id of its own, so the unscoped derived query is not safe for reversal mutations.
+     */
+    @Query("""
+            SELECT soi
+              FROM SalesOrderItem soi
+              JOIN soi.salesOrder so
+             WHERE soi.salesOrderId = :salesOrderId
+               AND so.factoryId = :factoryId
+            """)
+    List<SalesOrderItem> findBySalesOrderIdAndSalesOrderFactoryId(
+            @Param("salesOrderId") String salesOrderId,
+            @Param("factoryId") String factoryId);
+
     List<SalesOrderItem> findByProductTypeId(String productTypeId);
 
     /**

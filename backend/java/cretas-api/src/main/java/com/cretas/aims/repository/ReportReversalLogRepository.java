@@ -1,7 +1,9 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.ReportReversalLog;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,6 +18,17 @@ import java.util.Optional;
  */
 @Repository
 public interface ReportReversalLogRepository extends JpaRepository<ReportReversalLog, Long> {
+
+    /**
+     * Lock the approval row together with its tenant predicate.  Approval and rejection are
+     * mutually exclusive state transitions; the lock must be acquired before reading status so
+     * a concurrent second decision observes the committed terminal state.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM ReportReversalLog r "
+            + "WHERE r.id = :logId AND r.factoryId = :factoryId AND r.deletedAt IS NULL")
+    Optional<ReportReversalLog> findByIdAndFactoryIdForUpdate(@Param("logId") Long logId,
+                                                               @Param("factoryId") String factoryId);
 
     /**
      * 幂等检查: 给定批次+范围是否已存在未软删除的撤回记录。

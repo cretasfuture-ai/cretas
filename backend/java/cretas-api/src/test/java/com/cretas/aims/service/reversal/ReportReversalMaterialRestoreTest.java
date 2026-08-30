@@ -19,6 +19,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
+import com.cretas.aims.service.wip.WipLedgerEntries;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -102,6 +103,7 @@ class ReportReversalMaterialRestoreTest {
                 .build();
         log.setId(LOG_ID);
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        when(reversalLogRepo.findByIdAndFactoryIdForUpdate(LOG_ID, FACTORY_ID)).thenReturn(Optional.of(log));
         when(reversalLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(workProcessTaskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
                 FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
@@ -174,6 +176,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -213,6 +217,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -252,6 +258,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption sfLine = new ProductionSettlementConsumption();
         sfLine.setId(1L);
         sfLine.setSettlementId(SETTLEMENT_ID);
+        sfLine.setFactoryId(FACTORY_ID);
+        sfLine.setProductionPlanId(PLAN_ID);
         sfLine.setSourceType("SEMI_FINISHED");
         sfLine.setSemiFinishedInventoryId(77L);
         sfLine.setQuantity(new BigDecimal("15.00"));
@@ -267,6 +275,15 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder()
+                        .id(7001L).factoryId(FACTORY_ID).semiFinishedId(77L)
+                        .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX
+                                + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-15.00"))
+                        .build()));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
 
@@ -290,6 +307,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -413,7 +432,8 @@ class ReportReversalMaterialRestoreTest {
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
         when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
 
-        service.executeReversal(LOG_ID, FACTORY_ID);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                "replayMovingAverage", 77L, FACTORY_ID, java.time.LocalDateTime.now());
 
         // producedQuantity = ΣIN + ΣREVERSE = 200 - 100 = 100 (净 IN, 不含 OUT)
         assertThat(sfi.getProducedQuantity()).isEqualByComparingTo(new BigDecimal("100.00"));
@@ -606,6 +626,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-MISSING");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -643,6 +665,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption sfLine = new ProductionSettlementConsumption();
         sfLine.setId(1L);
         sfLine.setSettlementId(SETTLEMENT_ID);
+        sfLine.setFactoryId(FACTORY_ID);
+        sfLine.setProductionPlanId(PLAN_ID);
         sfLine.setSourceType("SEMI_FINISHED");
         sfLine.setSemiFinishedInventoryId(88L);
         sfLine.setQuantity(new BigDecimal("15.00"));
@@ -678,6 +702,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));

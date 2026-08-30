@@ -147,7 +147,6 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
-- `BUG-LIUSHANMEN-WIP-REVERSAL-HISTORY-REPAIR-20260830`：仅 reversal Controller/Service/DTO、必要的显式 ID 读取辅助与 `backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/**`；不得改 Entity/Repository/Flyway、不得改通用撤回契约、不得直接改库、不得操作生产、设备、Web/RN 或发布脚本。验收：显式 log + OUT txn lineage 全量证明、追加正量 REVERSE、移动平均终态、重复调用幂等及跨租户/错批/活 report/部分补偿/异成本阴性对照。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。

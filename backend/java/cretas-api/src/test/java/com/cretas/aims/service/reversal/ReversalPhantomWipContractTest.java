@@ -114,12 +114,22 @@ class ReversalPhantomWipContractTest {
                     .submittedBy(1309L)
                     .build();
             when(logRepo.findById(logId)).thenReturn(Optional.of(log));
+            when(logRepo.findByIdAndFactoryIdForUpdate(logId, FACTORY)).thenReturn(Optional.of(log));
             lenient().when(logRepo.save(any(ReportReversalLog.class))).thenAnswer(i -> i.getArgument(0));
             when(reportRepo.findYieldReportsByBatch(FACTORY, batchId)).thenReturn(reports);
             lenient().when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> i.getArgument(0));
             when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY, batchId))
                     .thenReturn(Collections.emptyList());
             for (ProductionReport r : reports) {
+                for (SemiFinishedInventoryTransaction txn : inTxnsForReport) {
+                    txn.setFactoryId(FACTORY);
+                    txn.setReportId(r.getId());
+                    if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
+                        txn.setSourceType(SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT);
+                    } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())) {
+                        txn.setSourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL);
+                    }
+                }
                 lenient().when(txnRepo.findByFactoryIdAndReportId(FACTORY, r.getId()))
                         .thenReturn(inTxnsForReport);
             }
@@ -139,6 +149,7 @@ class ReversalPhantomWipContractTest {
                                                 String consumed, String available) {
         return SemiFinishedInventory.builder()
                 .id(id).factoryId(FACTORY).intermediateBatchNo(no)
+                .batchId(10761L)
                 .producedQuantity(new BigDecimal(produced))
                 .consumedQuantity(new BigDecimal(consumed))
                 .availableQuantity(new BigDecimal(available))
@@ -426,6 +437,7 @@ class ReversalPhantomWipContractTest {
         ProductionReport r = yieldReport(23838L, 10762L);
         ReversalRig rig = new ReversalRig(19L, 10762L, List.of(r), List.of());
         SemiFinishedInventory stranded = wipRow(344L, "B10762-S1-0001", "1.25", "1.25", "0");
+        stranded.setBatchId(10762L);
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10762L))
                 .thenReturn(List.of(stranded));
         when(rig.wipRepo.findByIdForUpdate(344L)).thenReturn(Optional.of(stranded));
