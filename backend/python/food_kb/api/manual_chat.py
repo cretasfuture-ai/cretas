@@ -266,11 +266,11 @@ _LABEL_QC_REVIEW_ANSWER = """\
 普通质检照片证据与包装标签对象复核是两条独立链，不能用“提交成功”或 AI 初筛代替照片回读与人工真值。
 
 **普通质检照片：**
-1. 手机拍照后把照片带回质检表单；质检记录成功创建并取得记录 ID 后，逐张登记为 `QUALITY_CHECK` 附件。记录创建成功与每张照片上传成功要分别报告，单张上传失败会保留已创建质检记录并明确告警，不能冒充证据齐全。
+1. 手机拍照压缩完成后立即把照片带回质检表单；远程清晰度、托盘和边缘检查改为后台建议，最多等待 5 秒。检查超时、断网、服务失败或返回“不建议使用”都不能删除照片、退回相机或阻止正式提交；页面只提示可重拍建议，不能写成“已自动检查”。质检记录成功创建并取得记录 ID 后，逐张登记为 `QUALITY_CHECK` 附件。记录创建成功与每张照片上传成功要分别报告，单张上传失败会保留已创建质检记录并明确告警，不能冒充证据齐全。
 2. 质检详情从附件子系统回读照片，也允许在有权限时补传。验收必须看到正确质检记录 ID、附件数量和可打开的原图；空的旧 `photos` 字段不能作为“没有照片”的依据。
 
 **包装标签对象复核：**
-1. 拍照先过独立质量门禁：短边至少 960、长边至少 1280 像素；服务端还检查明显模糊、至少 3 个托盘以及左右边缘托盘是否拍全。失败时照片不计入列表，保留相机和已填表单并给出“靠近托盘 / 拿稳手机 / 对准整桌 / 后退或切换真实广角”等重拍动作；质量服务或托盘模型不可用时失败关闭，不能绕过收图。通过只说明照片可用，不代表白标/彩标合格。
+1. 拍摄质量检查只提供非阻断建议：短边、长边、明显模糊、托盘数量和左右边缘不完整时提示“靠近托盘 / 拿稳手机 / 对准整桌 / 后退或切换真实广角”，但照片仍立即进入列表。质量服务或托盘模型不可用时保持照片并允许提交，不能把后台检查失败冒充标签风险结论；质量建议也不代表白标/彩标合格。
 2. 客户“待我审核”只接收缺标风险、无法判断、未识别到可核查盒子或分析失败的照片；受信任流水线明确识别到盒子且无风险时显示“系统未见风险”，不进入人工队列。系统自动通过不是人工真值，缺少显式可信结论时一律失败关闭并进入待审。
 3. 日常复核只显示风险框；白标/彩标定位框只在人工主动校正时展开，不要求描画托盘。检测器的布尔提示不是人工结论：没有真实标签框时保持“看不清”，未触碰的 AI 盒子不会随提交冒充人工对象真值。人工可直接框住漏识别标签；无法归属已识别盒子时提示跳过，不凭空补托盘。切换盒子或照片时自动校验并保存当前草稿。
 4. 明确缺标必须与整图缺标结论一致；若盒子已标缺但整图选择正常，系统阻止提交并要求先统一。保存/提交超时按 30 秒处理，失败保留当前草稿，不把卡住的提交包装成成功。
@@ -278,6 +278,27 @@ _LABEL_QC_REVIEW_ANSWER = """\
 6. 托盘或标签侧视图裁切短边小于当前可靠阈值时只能标记 `UNJUDGEABLE`，不能误判成双缺标或干净合格样本。当前生产默认最小可靠裁切为 150 px，实际阈值以运行时配置回读为准。
 
 **边界：** 普通质检附件成功不等于标签审核通过；客户风险质检、平台训练选样、工厂整图审核、单盒裁切和平台标签精修分别保留隔离状态与版本，任何一层都不能静默覆盖另一层真值。"""
+
+_FACTORY_EXECUTION_RECOVERY_ANSWER = """\
+本轮生产执行收口的是三类独立问题：批量指派、投入可达与成本更正。它们都必须回读权威结果，不能用前端 Toast 或本地计算冒充完成。
+
+1. **批量工序指派：** 电脑 Web 打开生产批次详情，勾选可分配工序或“全选可分配工序”，再选择当前工厂仍有效的 `operator` 或 `yield_operator`。保存前必须确认“N 道工序 + 姓名”；系统逐任务调用既有更新端点，成功行刷新负责人，失败行保留并列出明细，不能把部分成功说成全部成功。派错时仍可清空负责人。
+2. **多批投入可达：** 首道报工从单批切换到多批时，原来已填的首批数量会迁入该批次行；所有已选批次的数量输入位于可滚动到达的区域，不会因内层列表高度或旧滚动位置把第一行裁掉。确认前逐批核对数量，服务端仍按真实批次与可用量校验。
+3. **回料投入：** 回料是 Workflow 产出的独立 WIP SKU，不必等于普通上游端口 SKU；但只能从当前工序 picker 中选择同工厂、目标产品族/阶段与纯度矩阵允许的回料。服务端保存时重新核对；不兼容返回 409，提示刷新页面并重新选择，不能靠客户端标记绕过。
+4. **成本更正：** 批次估值更正必须填写新单价和原因，并记录旧值、新值、操作者与时间；已结单计划可从权威领用与成本配置重算，随后同步成品与回料单位成本。当前 ACTIVE BOM 的包材成本只能从物料主数据重新取价，原因必填并写审计台账；不能直接改历史成本数字或静默覆盖。
+5. **结单预填与单位：** 结单预填的可用量会加回“本计划自己的真实预留”，但不认领其它计划或未知来源预留；历史工序产出单位无法识别时回落计划单位，不能把工序名当单位继续传播。
+
+**验收结果：** 分配结果逐道回读、多批数量逐批可见、回料兼容由服务端复核，三类成本更正都有原因和新旧值审计；重算后的计划、成品与回料单位成本一致。"""
+
+_RESTAURANT_RUNTIME_TRUTH_ANSWER = """\
+餐饮运行时必须把“没有能力、没有数据、只返回部分数据”和真实的 0 分开；任何一种缺口都不能用演示数字补齐。
+
+1. **SmartBI 未上线：** 销售分析、财务分析或多表分析请求返回 404 时，页面明确显示对应功能“还没上线”，不展示重试型故障文案；500、503 或网络失败才保留“加载失败，请重试”。
+2. **禁止演示兜底：** 财务比率和客户 RFM 接口无数据或不存在时，只显示“暂未接入，没有可显示的数据”，整块 KPI/客户卡片不渲染；不能显示演示数据，也不能把空数组汇总成“0 财务健康分”或“0 客户”。接口只返回部分财务比率时只展示实际返回项，缺失项直接省略，不能用模板值补齐。
+3. **阈值权限：** 餐饮老板 `restaurant_owner` 可以读取和修改业务阈值；餐饮经理 `restaurant_manager` 只读。单个 key 与列表使用同一继承规则：本店没有覆盖时回落全局默认并标记 inherited；只有本店和全局都不存在才是 404。继承项保存时新建本店 override，不能直接改全局行。
+4. **闸门时效：** 会直接 4xx 阻止用户动作的阈值使用短缓存；当前销售超发上限属于闸门类。管理员修改后仍可能有最多约 10 秒的跨节点窗口，不能宣称已经实现即时跨节点广播；普通红黄预警仍可使用 5 分钟缓存。
+
+**导览边界：** 餐饮导览助手只说明入口、错误含义、权限与方法，不替用户计算或分析经营数据。真实分析仍进入 SmartBI 餐饮 AI；没有数据时明确说明缺口。"""
 
 _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER = """\
 当前仓储空间、盘点审批和批次来源是三条互相衔接但不能互相代替的证据链。
@@ -966,6 +987,22 @@ def _needs_label_qc_review_guard(query: str) -> bool:
     return mentions_label and mentions_review
 
 
+def _needs_factory_execution_recovery_guard(query: str) -> bool:
+    """Explain batch assignment, multi-batch/rework input and audited cost repair."""
+    normalized = (query or "").lower()
+    assignment = any(term in normalized for term in (
+        "批量分配", "批量指派", "分配工序", "工序负责人", "报工员", "yield_operator",
+    ))
+    input_reachability = (
+        any(term in normalized for term in ("多批投入", "多个批次", "多批次"))
+        and any(term in normalized for term in ("首批数量", "数量输入", "滚动", "可达", "裁掉"))
+    ) or any(term in normalized for term in ("回料投入", "回料纯度", "纯度矩阵"))
+    cost_repair = any(term in normalized for term in (
+        "成本更正", "成本重算", "重算成本", "批次单价", "包材价", "估值更正", "审计台账",
+    ))
+    return assignment or input_reachability or cost_repair
+
+
 def _needs_factory_warehouse_governance_guard(query: str) -> bool:
     """Keep warehouse layout, stocktake approval and batch provenance truthful."""
     normalized = (query or "").lower()
@@ -1607,6 +1644,19 @@ def _needs_restaurant_single_dish_margin_guard(query: str) -> bool:
     return mentions_margin and mentions_single_dish_precision
 
 
+def _needs_restaurant_runtime_truth_guard(query: str) -> bool:
+    """Keep SmartBI missing/partial data and restaurant threshold access truthful."""
+    normalized = (query or "").lower()
+    smartbi_truth = "smartbi" in normalized and any(term in normalized for term in (
+        "没上线", "未上线", "404", "加载失败", "演示数据", "假数据", "部分", "补齐",
+        "财务比率", "客户 rfm", "没有数据", "暂未接入",
+    ))
+    threshold_access = "阈值" in normalized and any(term in normalized for term in (
+        "餐饮老板", "餐饮经理", "restaurant_owner", "restaurant_manager", "权限", "继承", "缓存", "超发",
+    ))
+    return smartbi_truth or threshold_access
+
+
 def _needs_restaurant_store_dimension_coverage_guard(query: str) -> bool:
     """Keep store-scoped operations answers on one roster and honest coverage."""
     normalized = (query or "").lower()
@@ -2171,7 +2221,7 @@ FACTORY_SYSTEM_PROMPT = """\
 - 正式报工撤回的守卫、审批状态、软删/反向流水、库存占用释放、成本回放和 DONE 收尾必须处于同一事务；任一步失败全部回滚，不能留下 APPROVED 但只执行一半。审批人与提交人必须分离；历史 APPROVED 半执行记录再次审批时只恢复执行，不能重写原审批人和时间。
 - 报工、生产结单、仓库确认完工入库、生产仓到主仓/外仓调拨是不同动作，不能互相冒充完成。生产小结备注必须持久化回读；审批撤销后合法重新小结的 DRAFT 行，仅在结算时间与当前有效小结会话 postedAt 精确一致时允许停产，普通草稿/撤销会话/伪造时间仍返回 409 BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE，绝不重放库存。多产出仓库每轮按完整终端产出行集合提交本次正数增量，混合单位不合计；累计实收不得超过各行报工数量，未收齐为 PARTIAL，累计收齐为 COMPLETED。同轮重试复用幂等键，下一轮使用新键；失败只回滚本轮。
 - 生产结单的不良品结论必须区分“有不良品 / 已清点无不良品 / 未清点”：没人回答或旧入口未询问时保持未知，不能写 0。唯一正式批次可回填；多批次不猜并进入“仓储管理 → 盘点管理”的待办清单。该页面目前只列待办，不能虚构直接补录按钮或引导去报废处置。良品数未知时批次详情良品率显示“—”，不能拿出成率冒充，也不能虚构“先完成质检才能结单”。
-- 质检实际合格率至少 95% 为 PASS、70% 至不足 95% 为 CONDITIONAL、不足 70% 为 FAIL；CONDITIONAL 和 FAIL 均进入处置审批并回读 QUALITY_CHECK 照片证据。标签拍照先检查短边 960、长边 1280、明显模糊、至少 3 个托盘和左右边缘拍全；未通过不收图，质量服务不可用时失败关闭。需要审批的处置先保持 PENDING_APPROVAL，申请人与审批人分离，批准及实际库存动作同事务；仅 AVAILABLE 成品可销售或发货，其它状态返回 409 FINISHED_GOODS_BATCH_NOT_SALEABLE。
+- 质检实际合格率至少 95% 为 PASS、70% 至不足 95% 为 CONDITIONAL、不足 70% 为 FAIL；CONDITIONAL 和 FAIL 均进入处置审批并回读 QUALITY_CHECK 照片证据。标签照片本地压缩后立即进入表单；分辨率、模糊、托盘和边缘检查只作最多 5 秒的后台非阻断建议，超时、断网、服务失败或不建议使用都不删图、不退回相机、不阻止正式提交。需要审批的处置先保持 PENDING_APPROVAL，申请人与审批人分离，批准及实际库存动作同事务；仅 AVAILABLE 成品可销售或发货，其它状态返回 409 FINISHED_GOODS_BATCH_NOT_SALEABLE。
 - 原料盘点 RAW_MATERIAL 与成品盘点 FINISHED_GOODS 分别建单；成品盘点仅对同仓成品批次生效，计数后库存漂移返回 409 STOCKTAKE_DRIFT，不得低于已发货数量。成品报废显示批次、产品、数量、单位与真实申请人，历史缺失明确显示“历史未记录”；审批前不扣库存。
 - 采购与销售统一填写含税单价并按税率反算不含税单价；采购量纲支持重量、体积和长度，米/厘米可按同一长度量纲选择，箱/卷仍需已登记的包装换算，跨量纲失败关闭。
 - 副产物先在原料类型字典建立带“副产”标记的 SKU，再在画布的 BOM 副产配置中声明；正式报工填写实际副产，不要求单独建立 Workflow。精确命中声明，或通用名“副产”且仅有一个声明时，系统才落生产仓；歧义或缺生产仓时不猜库存身份，也不阻断原报工。
@@ -2782,6 +2832,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         guard_answer = _LABEL_QC_REVIEW_ANSWER
     elif (
         not is_restaurant_request
+        and _needs_factory_execution_recovery_guard(request.question)
+    ):
+        guard_answer = _FACTORY_EXECUTION_RECOVERY_ANSWER
+    elif (
+        not is_restaurant_request
         and _needs_factory_warehouse_governance_guard(request.question)
     ):
         guard_answer = _FACTORY_WAREHOUSE_GOVERNANCE_ANSWER
@@ -2895,6 +2950,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         and _needs_restaurant_single_dish_margin_guard(request.question)
     ):
         guard_answer = _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER
+    elif (
+        is_restaurant_request
+        and _needs_restaurant_runtime_truth_guard(request.question)
+    ):
+        guard_answer = _RESTAURANT_RUNTIME_TRUTH_ANSWER
     elif (
         is_restaurant_request
         and _needs_restaurant_store_dimension_coverage_guard(request.question)

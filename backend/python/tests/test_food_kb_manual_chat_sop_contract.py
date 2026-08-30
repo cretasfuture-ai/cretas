@@ -14,6 +14,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER,
     _FACTORY_CURRENT_GATES_ANSWER,
     _FACTORY_DEFECT_COUNT_TRUTH_ANSWER,
+    _FACTORY_EXECUTION_RECOVERY_ANSWER,
     _FACTORY_FINISHED_GOODS_STOCKTAKE_ANSWER,
     _FACTORY_INCREMENTAL_RECEIPT_ANSWER,
     _FACTORY_PURCHASE_OA_RECEIPT_ANSWER,
@@ -62,6 +63,7 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_READ_WRITE_BOUNDARY_ANSWER,
     _RESTAURANT_SCOPE_ACTION_ANSWER,
     _RESTAURANT_SINGLE_DISH_MARGIN_ANSWER,
+    _RESTAURANT_RUNTIME_TRUTH_ANSWER,
     _RESTAURANT_STORE_DIMENSION_COVERAGE_ANSWER,
     _RESTAURANT_DAILY_CLOSE_ANSWER,
     _RESTAURANT_DAILY_PRESENTATION_ANSWER,
@@ -76,6 +78,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_batch_unknown_metrics_guard,
     _needs_factory_current_gates_guard,
     _needs_factory_defect_count_truth_guard,
+    _needs_factory_execution_recovery_guard,
     _needs_factory_finished_goods_stocktake_guard,
     _needs_factory_incremental_receipt_guard,
     _needs_factory_purchase_oa_receipt_guard,
@@ -124,6 +127,7 @@ from food_kb.api.manual_chat import (
     _needs_restaurant_read_write_boundary_guard,
     _needs_restaurant_scope_action_guard,
     _needs_restaurant_single_dish_margin_guard,
+    _needs_restaurant_runtime_truth_guard,
     _needs_restaurant_store_dimension_coverage_guard,
     _needs_restaurant_daily_close_guard,
     _needs_restaurant_daily_presentation_guard,
@@ -503,10 +507,10 @@ def test_20260827_label_capture_quality_gate_is_in_review_contract():
         "标签照片分辨率不够或托盘不足时会怎样？",
     )
     assert all(_needs_label_qc_review_guard(q) for q in questions)
-    assert "短边至少 960、长边至少 1280" in _LABEL_QC_REVIEW_ANSWER
-    assert "至少 3 个托盘" in _LABEL_QC_REVIEW_ANSWER
-    assert "照片不计入列表" in _LABEL_QC_REVIEW_ANSWER
-    assert "通过只说明照片可用，不代表白标/彩标合格" in _LABEL_QC_REVIEW_ANSWER
+    assert "最多等待 5 秒" in _LABEL_QC_REVIEW_ANSWER
+    assert "不能删除照片、退回相机或阻止正式提交" in _LABEL_QC_REVIEW_ANSWER
+    assert "照片仍立即进入列表" in _LABEL_QC_REVIEW_ANSWER
+    assert "质量建议也不代表白标/彩标合格" in _LABEL_QC_REVIEW_ANSWER
 
 
 def test_factory_workflow_storage_and_output_directory_is_deterministic():
@@ -776,7 +780,7 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
     )[1].split("</div>", 1)[0]
     for factory_topic in (
         "成品分次入库", "有条件通过或不合格", "成品盘点与原料盘点",
-        "按含税单价填写", "不良品三态、批次回填与盘点补录", "标签拍摄质量门禁与重拍",
+            "按含税单价填写", "不良品三态、批次回填与盘点补录", "标签拍摄非阻断建议与证据回读",
     ):
         assert factory_topic in factory_tab
         assert factory_topic not in restaurant_suggestions
@@ -1469,8 +1473,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "切换盒子或照片时自动校验并保存" in current_sop
     assert "平台训练选样" in current_sop
     assert "不能回写或覆盖工厂整图盒子真值" in current_sop
-    assert "短边至少 960、长边至少 1280 像素" in current_sop
-    assert "服务端再检查明显模糊、至少 3 个托盘" in current_sop
+    assert "本地压缩完成后照片立即进入表单" in current_sop
+    assert "最多等待 5 秒" in current_sop
+    assert "不删除照片、不退回相机、不阻止正式提交" in current_sop
     assert "有不良品 / 已清点无不良品 / 未清点" in current_sop
     assert "不能把没回答翻译成零不良" in current_sop
     assert "页面顶部列出已结单但不良品结论仍缺失的计划" in current_sop
@@ -1529,8 +1534,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "一个计划只有一个正式批次时回填该批次" in html
     assert "当前页面只列待办" in html
     assert "良品率显示“—”且不上绿色" in html
-    assert "短边至少 960、长边至少 1280 像素" in html
-    assert "至少 3 个托盘" in html
+    assert "本地压缩完成后照片立即进入表单" in html
+    assert "最多等待 5 秒" in html
+    assert "不能删除照片、退回相机或阻止正式提交" in html
     assert "SOP sync 2026-08-24" in html
     assert "Workflow 画布是 BOM 唯一写入口" in html
     assert "批次领用与消耗审计" in html
@@ -2683,3 +2689,65 @@ def test_20260829_rework_honest_reports_and_restaurant_retirement_are_isolated()
 
     assert "回料多产出与报表诚实空值" in ai_assist
     assert "餐饮导航与菜品下架履约门禁" in ai_assist
+
+
+def test_20260830_factory_execution_recovery_is_deterministic_and_isolated():
+    questions = (
+        "批次里怎样批量分配工序给操作员或报工员？",
+        "首道报工切到多个批次后，首批数量输入为什么不能丢？",
+        "已结单计划成本错了，怎样更正批次单价、BOM 包材价并重算成本？",
+    )
+    assert all(_needs_factory_execution_recovery_guard(q) for q in questions)
+    assert not _needs_factory_execution_recovery_guard("餐饮 SmartBI 没上线怎么办？")
+    assert "`operator` 或 `yield_operator`" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "部分成功说成全部成功" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "原来已填的首批数量会迁入" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "目标产品族/阶段与纯度矩阵" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "记录旧值、新值、操作者与时间" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+
+
+def test_20260830_restaurant_runtime_truth_is_deterministic_and_isolated():
+    questions = (
+        "SmartBI 接口没上线或 404 时能不能拿演示数据补齐？",
+        "SmartBI 只返回部分财务比率时缺项怎样显示？",
+        "餐饮老板和餐饮经理分别怎样读取或修改业务阈值？",
+    )
+    assert all(_needs_restaurant_runtime_truth_guard(q) for q in questions)
+    assert not _needs_restaurant_runtime_truth_guard("工厂批次怎样批量指派工序？")
+    assert "不能用演示数字补齐" in _RESTAURANT_RUNTIME_TRUTH_ANSWER
+    assert "缺失项直接省略" in _RESTAURANT_RUNTIME_TRUTH_ANSWER
+    assert "`restaurant_owner` 可以读取和修改" in _RESTAURANT_RUNTIME_TRUTH_ANSWER
+    assert "`restaurant_manager` 只读" in _RESTAURANT_RUNTIME_TRUTH_ANSWER
+    assert "最多约 10 秒" in _RESTAURANT_RUNTIME_TRUTH_ANSWER
+
+
+def test_20260830_dual_line_sources_and_ai_assist_are_complete_and_isolated():
+    factory_sources = [
+        (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/manual/F006-production-full-chain-manual-test-sop.html").read_text(encoding="utf-8"),
+    ]
+    restaurant_sources = [
+        (PROJECT_ROOT / "docs/manual/restaurant-full-chain-sop.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-product-manual.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-metrics-glossary.html").read_text(encoding="utf-8"),
+    ]
+    ai_assist = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
+
+    for text in factory_sources:
+        assert "最多等待 5 秒" in text
+        assert "yield_operator" in text
+        assert "首批" in text
+        assert "审计台账" in text
+        assert "restaurant_owner" not in text
+
+    for text in restaurant_sources:
+        assert "演示" in text
+        assert "restaurant_owner" in text
+        assert "restaurant_manager" in text
+        assert "约 10 秒" in text
+        assert "yield_operator" not in text
+
+    assert "标签拍摄非阻断建议与证据回读" in ai_assist
+    assert "批量工序指派与多批投入可达" in ai_assist
+    assert "SmartBI 未上线与缺数诚实空态" in ai_assist
+    assert "餐饮阈值权限、继承与时效" in ai_assist
