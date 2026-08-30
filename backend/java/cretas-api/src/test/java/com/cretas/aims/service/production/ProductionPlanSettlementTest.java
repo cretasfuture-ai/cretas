@@ -14,9 +14,11 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionInterimSettlement;
 import com.cretas.aims.entity.ProductionSettlement;
+import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.ProductionSettlementOutputLine;
 import com.cretas.aims.entity.ProductionTransitLedger;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.InventoryOwnership;
@@ -40,6 +42,7 @@ import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ProductionSettlementOutputLineRepository;
 import com.cretas.aims.repository.ProductionTransitLedgerRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
@@ -52,6 +55,7 @@ import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
+import com.cretas.aims.service.wip.WipLedgerEntries;
 import com.cretas.aims.service.yield.OrderCostBreakdownService;
 import com.cretas.aims.utils.ExcelUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -118,6 +122,7 @@ class ProductionPlanSettlementTest {
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
     @Mock private ProductionSettlementLaborRepository productionSettlementLaborRepository;
     @Mock private SemiFinishedInventoryRepository semiFinishedInventoryRepository;
+    @Mock private SemiFinishedInventoryTransactionRepository semiFinishedInventoryTransactionRepository;
     @Mock private ProductionTransitLedgerRepository productionTransitLedgerRepository;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private WarehouseResolver warehouseResolver;
@@ -152,6 +157,10 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", productionSettlementConsumptionRepository);
         ReflectionTestUtils.setField(service, "productionSettlementLaborRepository", productionSettlementLaborRepository);
         ReflectionTestUtils.setField(service, "semiFinishedInventoryRepository", semiFinishedInventoryRepository);
+        ReflectionTestUtils.setField(service, "semiFinishedInventoryTransactionRepository",
+                semiFinishedInventoryTransactionRepository);
+        when(semiFinishedInventoryTransactionRepository.save(any(SemiFinishedInventoryTransaction.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
         ReflectionTestUtils.setField(service, "productionTransitLedgerRepository", productionTransitLedgerRepository);
         ReflectionTestUtils.setField(service, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
@@ -220,7 +229,8 @@ class ProductionPlanSettlementTest {
         when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
         when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 
         ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
@@ -234,6 +244,16 @@ class ProductionPlanSettlementTest {
         assertEquals(new BigDecimal("5"), wip.getConsumedQuantity());
         assertEquals(new BigDecimal("3"), wip.getAvailableQuantity());
         verify(productionSettlementConsumptionRepository).saveAll(anyList());
+        ArgumentCaptor<SemiFinishedInventoryTransaction> outCaptor =
+                ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+        verify(semiFinishedInventoryTransactionRepository).save(outCaptor.capture());
+        SemiFinishedInventoryTransaction out = outCaptor.getValue();
+        assertEquals(SemiFinishedInventoryTransaction.TxnType.OUT, out.getTxnType());
+        assertEquals(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME, out.getSourceType());
+        assertEquals(new BigDecimal("-5"), out.getQuantity());
+        assertEquals(new BigDecimal("3"), out.getBalanceAfter());
+        assertEquals(10L, out.getOperatorId());
+        assertTrue(out.getSourceRef().startsWith(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX));
         verify(productionSettlementLaborRepository).saveAll(anyList());
         verify(materialBatchRepository).save(batch);
         verify(semiFinishedInventoryRepository).save(wip);
@@ -290,12 +310,25 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
         when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
         when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(rows));
         // isCrossUnitPlan (validateSettlementRequest) → 空批次列表 → false (跳过超产裸比)
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(new java.util.ArrayList<>());
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ProductionSettlementConsumption> assignSettlementConsumptionIds(Object value) {
+        List<ProductionSettlementConsumption> lines = (List<ProductionSettlementConsumption>) value;
+        long nextId = 1L;
+        for (ProductionSettlementConsumption line : lines) {
+            if (line.getId() == null) {
+                line.setId(nextId++);
+            }
+        }
+        return lines;
     }
 
     /** 结单请求: 无原料/半成品消耗行 (聚焦 process-row 投料扣减), finished 90 (<计划100, 无需超产原因)。 */
@@ -492,7 +525,8 @@ class ProductionPlanSettlementTest {
         when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
         when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 
         ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
@@ -547,7 +581,8 @@ class ProductionPlanSettlementTest {
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
         when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()
@@ -591,7 +626,8 @@ class ProductionPlanSettlementTest {
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
         when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 
         ProductionSettlementRequest request = rawOnlyRequest("idem-pinned", "RMT_1784467467288");
@@ -866,7 +902,8 @@ class ProductionPlanSettlementTest {
                 FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
         when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(productionSettlementConsumptionRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
         when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
 
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()

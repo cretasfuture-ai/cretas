@@ -102,6 +102,8 @@ class ReportReversalServiceTest {
     @BeforeEach
     void injectOptionalRepositories() {
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
+        lenient().when(reversalLogRepo.findByIdAndFactoryIdForUpdate(anyLong(), anyString()))
+                .thenAnswer(invocation -> reversalLogRepo.findById(invocation.getArgument(0)));
     }
 
     // ==================== submitReversal ====================
@@ -254,41 +256,44 @@ class ReportReversalServiceTest {
         }
 
         @Test
-        @DisplayName("G1: 部分/异质补偿（OUT -2/+1、IN +2/-1、异成本） fail-closed")
+        @DisplayName("G1: 部分补偿（OUT -2/+1、IN +2/-1）fail-closed；成本不参与幂等键")
         void partialCompensation_isRejected() {
             SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
-                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .id(101L).semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
                     .reportId(10L).quantity(new BigDecimal("-2")).unitCostAtTxn(new BigDecimal("10"))
                     .build();
             SemiFinishedInventoryTransaction positivePartial = SemiFinishedInventoryTransaction.builder()
                     .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
                     .reportId(10L).quantity(new BigDecimal("1")).unitCostAtTxn(new BigDecimal("10"))
                     .build();
-            assertPartialCompensation(out, positivePartial, new BigDecimal("2"));
+            assertPartialCompensation(out, positivePartial);
 
             SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
-                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .id(102L).semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
                     .reportId(10L).quantity(new BigDecimal("2")).unitCostAtTxn(new BigDecimal("10"))
                     .build();
             SemiFinishedInventoryTransaction negativePartial = SemiFinishedInventoryTransaction.builder()
                     .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
                     .reportId(10L).quantity(new BigDecimal("-1")).unitCostAtTxn(new BigDecimal("10"))
                     .build();
-            assertPartialCompensation(in, negativePartial, new BigDecimal("-2"));
+            assertPartialCompensation(in, negativePartial);
 
             SemiFinishedInventoryTransaction differentCost = SemiFinishedInventoryTransaction.builder()
                     .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
                     .reportId(10L).quantity(new BigDecimal("2")).unitCostAtTxn(new BigDecimal("11"))
                     .build();
-            assertPartialCompensation(out, differentCost, new BigDecimal("2"));
+            assertThat((Set<Long>) ReflectionTestUtils.invokeMethod(service,
+                    "matchExistingCompensations", List.of(out), List.of(differentCost)))
+                    .containsExactly(101L);
         }
 
         private void assertPartialCompensation(SemiFinishedInventoryTransaction original,
-                                                SemiFinishedInventoryTransaction candidate,
-                                                BigDecimal reverseQuantity) {
+                                                SemiFinishedInventoryTransaction candidate) {
             assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(service,
-                    "consumeMatchingReverse", new ArrayList<>(List.of(candidate)), original,
-                    10L, reverseQuantity))
+                    "matchExistingCompensations", List.of(original), List.of(candidate)))
                     .isInstanceOf(BusinessException.class)
                     .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                             .isEqualTo("PARTIAL_COMPENSATION"));
@@ -1074,6 +1079,9 @@ class ReportReversalServiceTest {
 
             // 报工: 本人提交, 1 min 前
             ProductionReport report = new ProductionReport();
+            report.setId(7001L);
+            report.setFactoryId(FACTORY_ID);
+            report.setBatchId(BATCH_ID);
             report.setWorkerId(SUBMITTED_BY);
             report.setCreatedAt(LocalDateTime.now().minusMinutes(1));
             when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))

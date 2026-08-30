@@ -138,6 +138,7 @@ class ReverseSignSemanticsContractTest {
                 .submittedBy(1309L)
                 .build();
         when(reversalLogRepo.findById(logId)).thenReturn(Optional.of(log));
+        when(reversalLogRepo.findByIdAndFactoryIdForUpdate(logId, FACTORY)).thenReturn(Optional.of(log));
         when(reversalLogRepo.save(any(ReportReversalLog.class))).thenAnswer(i -> i.getArgument(0));
 
         ProductionReport report = ProductionReport.builder()
@@ -175,7 +176,8 @@ class ReverseSignSemanticsContractTest {
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId)).thenReturn(ledger);
 
-        service.executeReversal(logId, FACTORY);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                "replayMovingAverage", sfiId, FACTORY, java.time.LocalDateTime.now());
 
         verify(wipRepo, atLeastOnce()).save(sfiCaptor.capture());
         return sfiCaptor.getValue();
