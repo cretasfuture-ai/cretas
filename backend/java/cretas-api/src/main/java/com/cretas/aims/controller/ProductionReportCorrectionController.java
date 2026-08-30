@@ -31,7 +31,8 @@ public class ProductionReportCorrectionController {
     private final ProductionReportCorrectionService correctionService;
 
     @GetMapping("/correctable")
-    @RequirePermission("production:read_write")
+    @RequirePermission(value = "production_report_correction:read_write",
+            message = "您没有报工核对修正权限，请联系管理员配置后再试")
     public ApiResponse<Page<Map<String, Object>>> listCorrectable(
             @PathVariable String factoryId,
             @RequestParam(defaultValue = "1") int page,
@@ -42,7 +43,8 @@ public class ProductionReportCorrectionController {
     }
 
     @PostMapping("/reports/{reportId}")
-    @RequirePermission("production:read_write")
+    @RequirePermission(value = "production_report_correction:read_write",
+            message = "您没有报工核对修正权限，请联系管理员配置后再试")
     public ApiResponse<ProductionReportCorrectionDTO> submit(
             @PathVariable String factoryId,
             @PathVariable Long reportId,

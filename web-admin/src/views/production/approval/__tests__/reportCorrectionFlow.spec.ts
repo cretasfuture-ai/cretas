@@ -8,6 +8,7 @@ const approval = readFileSync(resolve(here, '../list.vue'), 'utf8');
 const oaPending = readFileSync(resolve(here, '../../../workflow/pending.vue'), 'utf8');
 const stocktake = readFileSync(resolve(here, '../../../warehouse/stocktakes/index.vue'), 'utf8');
 const api = readFileSync(resolve(here, '../../../../api/processProduction.ts'), 'utf8');
+const permissionMatrix = readFileSync(resolve(here, '../../../platform/canvas-editor/components/ModulePermissionMatrix.vue'), 'utf8');
 
 describe('报工核对修正主链', () => {
   it('原值自动预填，且表单没有投入库存字段', () => {
@@ -34,5 +35,12 @@ describe('报工核对修正主链', () => {
     expect(stocktake).toContain('reportCorrectionWarningMessage');
     expect(stocktake).toContain('不会自动生成盘盈盘亏');
     expect(api).toContain('/production-report-corrections/reports/${reportId}');
+  });
+
+  it('报工修正入口使用独立可配置权限，不复用普通报工权限', () => {
+    expect(approval).toContain("canWrite('production_report_correction')");
+    expect(approval).toContain('v-if="canCorrectReports"');
+    expect(approval).toContain("canWrite('production')");
+    expect(permissionMatrix).toContain("'production_report_correction'");
   });
 });

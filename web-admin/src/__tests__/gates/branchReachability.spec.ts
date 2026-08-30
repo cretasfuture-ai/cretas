@@ -69,6 +69,7 @@ import {
   STRING_MEMBERS,
   VUE_NODE,
   FACTORY_TYPES,
+  RUNTIME_CONFIGURABLE_PERMISSION_MODULES,
   type AnalysisResult,
   type Finding,
   type Harness,
@@ -306,6 +307,25 @@ describe('分支可达性（棘轮：空转的权限分支只许变少）', () =
     expect(f?.verdict).toBe('EFFECTIVE');
     expect(f?.values['hr_admin@FACTORY']).toBe('T');
     expect(f?.values['viewer@FACTORY']).toBe('F');
+  });
+
+  it('动态配置对照：不硬编码默认角色的 L1/L2 模块仍有真/假两侧', () => {
+    expect(RUNTIME_CONFIGURABLE_PERMISSION_MODULES)
+      .toContain('production_report_correction');
+    const out = judgeSource(
+      H,
+      SFC(
+        "const canCorrect = computed(() => permissionStore.canWrite('production_report_correction'));",
+        '<div v-if="canCorrect">x</div>',
+      ),
+      ['production_manager@FACTORY', 'operator@FACTORY'],
+    );
+    const finding = out.find((item) =>
+      item.key === "perm.canWrite('production_report_correction')");
+    expect(finding?.verdict).toBe('EFFECTIVE');
+    expect(finding?.detail).toContain('L1/L2 运行时配置');
+    expect(finding?.values['production_manager@FACTORY']).toBe('U');
+    expect(finding?.values['operator@FACTORY']).toBe('U');
   });
 
   it('阴性对照 ④：判不了的必须单列，⛔ 不许折叠成「有效」或「空转」', () => {
