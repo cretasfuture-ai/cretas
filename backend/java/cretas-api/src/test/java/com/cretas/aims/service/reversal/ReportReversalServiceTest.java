@@ -147,8 +147,8 @@ class ReportReversalServiceTest {
         }
 
         @Test
-        @DisplayName("G1: 正向 REVERSE 必须按 SFI 精确抵扣，不能误放行另一库存行")
-        void g1_positiveReverseOnAnotherSfi_doesNotNeutralizeOut() {
+        @DisplayName("G1: 正向 REVERSE 只恢复一部分 OUT → 仍阻断")
+        void g1_partialPositiveReverse_doesNotNeutralizeOut() {
             SemiFinishedInventory wip = SemiFinishedInventory.builder().id(88L)
                     .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
             when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
@@ -157,11 +157,12 @@ class ReportReversalServiceTest {
                     .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
                     .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
                     .sourceRef("TASK-99").reportId(10L).quantity(new BigDecimal("-2")).build();
-            SemiFinishedInventoryTransaction unrelatedRestore = SemiFinishedInventoryTransaction.builder()
-                    .semiFinishedId(89L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+            SemiFinishedInventoryTransaction partialRestore = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
                     .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
-                    .reportId(10L).quantity(new BigDecimal("2")).build();
-            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L)).thenReturn(List.of(out));
+                    .reportId(10L).quantity(new BigDecimal("1")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L))
+                    .thenReturn(List.of(out, partialRestore));
             when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 99L))
                     .thenReturn(Optional.of(WorkProcessTask.builder().id(99L)
                             .factoryId(FACTORY_ID).productionBatchId(BATCH_ID + 1).build()));
@@ -169,8 +170,53 @@ class ReportReversalServiceTest {
             Boolean blocked = ReflectionTestUtils.invokeMethod(service,
                     "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
             assertThat(blocked).isTrue();
-            // Keep the unrelated row in the fixture explicit: the key must include semiFinishedId.
-            assertThat(unrelatedRestore.getSemiFinishedId()).isNotEqualTo(out.getSemiFinishedId());
+        }
+
+        @Test
+        @DisplayName("G1: TASK-* OUT 属于同一批次 → 允许整单撤回")
+        void g1_taskScopedOutFromSameBatch_allowsWholeOrderReversal() {
+            SemiFinishedInventory wip = SemiFinishedInventory.builder().id(88L)
+                    .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
+            when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(wip));
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-99").reportId(10L).quantity(new BigDecimal("-2")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L)).thenReturn(List.of(out));
+            when(workProcessTaskRepository.findByFactoryIdAndId(FACTORY_ID, 99L))
+                    .thenReturn(Optional.of(WorkProcessTask.builder().id(99L)
+                            .factoryId(FACTORY_ID).productionBatchId(BATCH_ID).build()));
+
+            Boolean blocked = ReflectionTestUtils.invokeMethod(service,
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
+
+            assertThat(blocked).isFalse();
+        }
+
+        @Test
+        @DisplayName("G1: OUT 已被同报工等量正向 REVERSE 恢复 → 不再阻断")
+        void g1_fullyRestoredOut_doesNotBlock() {
+            SemiFinishedInventory wip = SemiFinishedInventory.builder().id(88L)
+                    .factoryId(FACTORY_ID).batchId(BATCH_ID).build();
+            when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, BATCH_ID))
+                    .thenReturn(List.of(wip));
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-99").reportId(10L).quantity(new BigDecimal("-2")).build();
+            SemiFinishedInventoryTransaction restored = SemiFinishedInventoryTransaction.builder()
+                    .semiFinishedId(88L).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    .reportId(10L).quantity(new BigDecimal("2")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(88L))
+                    .thenReturn(List.of(out, restored));
+
+            Boolean blocked = ReflectionTestUtils.invokeMethod(service,
+                    "hasExternalDownstreamConsumption", FACTORY_ID, BATCH_ID);
+
+            assertThat(blocked).isFalse();
+            verify(workProcessTaskRepository, never()).findByFactoryIdAndId(anyString(), anyLong());
         }
 
         @Test

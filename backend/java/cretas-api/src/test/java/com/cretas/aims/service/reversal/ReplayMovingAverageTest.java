@@ -189,6 +189,49 @@ class ReplayMovingAverageTest {
         }
 
         @Test
+        @DisplayName("RP-OUT-2: 两笔等量 OUT 只有一笔已补偿 → 必须再写一笔正向 REVERSE")
+        void duplicateEqualOuts_oneExistingReverse_onlySkipsOne() {
+            Long logId = 911L, batchId = 912L, sfiId = 913L, reportId = 914L;
+            ProductionReport report = ProductionReport.builder()
+                    .id(reportId).factoryId(FACTORY_ID).batchId(batchId).build();
+            SemiFinishedInventoryTransaction out1 = SemiFinishedInventoryTransaction.builder()
+                    .id(915L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-920").quantity(new BigDecimal("-2")).build();
+            SemiFinishedInventoryTransaction out2 = SemiFinishedInventoryTransaction.builder()
+                    .id(916L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-921").quantity(new BigDecimal("-2")).build();
+            SemiFinishedInventoryTransaction existingReverse = SemiFinishedInventoryTransaction.builder()
+                    .id(917L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    .quantity(new BigDecimal("2")).build();
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(report),
+                    List.of(out1, out2, existingReverse));
+            stubSfi(sfiId, BigDecimal.ZERO, new BigDecimal("4"), BigDecimal.ZERO,
+                    new BigDecimal("10.0000"), "SEMI-RP-OUT-2");
+            SemiFinishedInventoryTransaction secondReverse = SemiFinishedInventoryTransaction.builder()
+                    .id(918L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                    .quantity(new BigDecimal("2")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId))
+                    .thenReturn(List.of(out1, out2, existingReverse, secondReverse));
+
+            service.executeReversal(logId, FACTORY_ID);
+
+            ArgumentCaptor<SemiFinishedInventoryTransaction> captor =
+                    ArgumentCaptor.forClass(SemiFinishedInventoryTransaction.class);
+            verify(txnRepo, times(1)).save(captor.capture());
+            assertEquals(new BigDecimal("2"), captor.getValue().getQuantity());
+            assertEquals(sfiId, captor.getValue().getSemiFinishedId());
+            assertEquals(reportId, captor.getValue().getReportId());
+        }
+
+        @Test
         @DisplayName("RP-1: 单次 IN 被完全撤回 → unitCost=null, availableQuantity=0, status=DEPLETED")
         void singleInFullyReversed_depleted() {
             /*
