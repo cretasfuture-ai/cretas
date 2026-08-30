@@ -56,11 +56,18 @@ class ProductionReportCorrectionPartialUniquePostgresIT {
                 assertEquals(1, rs.getInt("approved"));
             }
             try (ResultSet rs = statement.executeQuery("""
-                    SELECT indexdef FROM pg_indexes
-                    WHERE schemaname=current_schema() AND indexname='uq_prod_report_correction_pending'
+                    SELECT i.indisunique,
+                           pg_get_expr(i.indpred, i.indrelid) AS predicate
+                    FROM pg_index i
+                    JOIN pg_class c ON c.oid = i.indexrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = current_schema()
+                      AND c.relname = 'uq_prod_report_correction_pending'
                     """)) {
                 assertTrue(rs.next());
-                assertTrue(rs.getString(1).contains("WHERE (status = 'PENDING_APPROVAL'::text)"));
+                assertTrue(rs.getBoolean("indisunique"));
+                assertTrue(rs.getString("predicate").contains("status"));
+                assertTrue(rs.getString("predicate").contains("PENDING_APPROVAL"));
             }
             try (ResultSet rs = statement.executeQuery(
                     "SELECT data_corrected FROM production_reports WHERE id=101")) {
