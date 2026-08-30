@@ -639,10 +639,6 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 if (!SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())) {
                     return true;
                 }
-                if (txn.getReportId() == null || currentReportIds == null
-                        || !currentReportIds.contains(txn.getReportId())) {
-                    return true;
-                }
                 // reverseReportPosting / prior whole-order repair may already have restored this exact report.
                 if (txn.getReportId() != null && txn.getQuantity() != null) {
                     String key = txn.getReportId() + ":" + txn.getSemiFinishedId();
@@ -653,6 +649,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         continue;
                     }
                     if (restored.signum() > 0) return true; // partial compensation is ambiguous
+                }
+                if (txn.getReportId() == null || currentReportIds == null
+                        || !currentReportIds.contains(txn.getReportId())) {
+                    return true;
                 }
                 if (SemiFinishedInventoryTransaction.SourceType.TRANSFER_OUT.equals(txn.getSourceType())) {
                     return true;

@@ -323,11 +323,18 @@ class ReversalPhantomWipContractTest {
     @DisplayName("🔴 没有 IN 且 produced > 0，即使 available=0 ⇒ 必须阻断")
     void gateFiresWhenProducedIsUnledgeredEvenIfAvailableIsZero() {
         ProductionReport r = yieldReport(23833L, 10761L);
-        ReversalRig rig = new ReversalRig(16L, 10761L, List.of(r), List.of());
+        SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                .id(110L).factoryId(FACTORY).semiFinishedId(342L)
+                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                .quantity(new BigDecimal("240")).unitCostAtTxn(new BigDecimal("4.00")).build();
+        ReversalRig rig = new ReversalRig(16L, 10761L, List.of(r), List.of(in));
         SemiFinishedInventory wip = wipRow(342L, "B10761-S1-1788", "240", "240", "0");
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10761L))
-                .thenReturn(List.of(wip));
+                .thenReturn(List.of(wip,
+                        wipRow(343L, "B10761-S2-1789", "10", "10", "0")));
         when(rig.wipRepo.findByIdForUpdate(342L)).thenReturn(Optional.of(wip));
+        SemiFinishedInventory second = wipRow(343L, "B10761-S2-1789", "10", "10", "0");
+        when(rig.wipRepo.findByIdForUpdate(343L)).thenReturn(Optional.of(second));
 
         assertThatThrownBy(() -> rig.service.executeReversal(16L, FACTORY))
                 .isInstanceOf(BusinessException.class)
