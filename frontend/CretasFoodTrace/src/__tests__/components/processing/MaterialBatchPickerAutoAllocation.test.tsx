@@ -185,6 +185,72 @@ describe('MaterialBatchPicker 自动分配用量', () => {
     expect(screen.getByTestId('material-batch-confirm')).toHaveProp('disabled', false);
   });
 
+  it('单批自动结果切手动后仍立即显示逐批身份、数量和合计，并可继续编辑与增删', async () => {
+    const batches = await renderExpanded('9');
+    mockedApi.getFefoBatches.mockResolvedValue({
+      success: true,
+      data: [batches[4]],
+      message: 'ok',
+    } as never);
+    selectBatch(1);
+    fireEvent.press(await screen.findByTestId('material-batch-allocation-option-auto'));
+    await screen.findByTestId('material-batch-auto-success');
+
+    fireEvent.press(screen.getByTestId('material-batch-allocation-switch-manual'));
+    expect(screen.getByText(/手动模式：继续在上方勾选批次/)).toBeTruthy();
+    expect(screen.getByTestId('material-batch-selected-quantity-section')).toBeTruthy();
+    expect(screen.getByTestId('material-batch-qty-AUTO-5')).toHaveProp('value', '9');
+    expect(screen.getByText(/已选 1 批次 · 合计领料 9.00 kg/)).toBeTruthy();
+    expect(screen.getByTestId('material-batch-confirm')).toHaveProp('disabled', false);
+
+    fireEvent.changeText(screen.getByTestId('material-batch-qty-AUTO-5'), '8');
+    selectBatch(1);
+    expect(screen.getByTestId('material-batch-qty-AUTO-5')).toHaveProp('value', '8');
+    expect(screen.getByTestId('material-batch-qty-AUTO-1')).toHaveProp('value', '');
+    fireEvent.changeText(screen.getByTestId('material-batch-qty-AUTO-1'), '1');
+
+    await waitFor(() => {
+      const refs = screen.getByTestId('material-batch-refs-json').props.children as string;
+      expect(refs).toContain('"materialBatchId":"AUTO-5","quantity":8');
+      expect(refs).toContain('"materialBatchId":"AUTO-1","quantity":1');
+    });
+    expect(screen.getByText(/已选 2 批次 · 合计领料 9.00 kg/)).toBeTruthy();
+
+    fireEvent.press(screen.getByLabelText('取消选择批次 AUTO-1'));
+    expect(screen.getByTestId('material-batch-qty-AUTO-5')).toHaveProp('value', '8');
+    await waitFor(() => {
+      const refs = screen.getByTestId('material-batch-refs-json').props.children as string;
+      expect(refs).toContain('"materialBatchId":"AUTO-5","quantity":8');
+      expect(refs).not.toContain('"materialBatchId":"AUTO-1"');
+    });
+  });
+
+  it('多批自动结果切手动后保留每批身份、数量和合计，并允许调整数量', async () => {
+    const batches = await renderExpanded('9');
+    mockedApi.getFefoBatches.mockResolvedValue({
+      success: true,
+      data: batches.slice(0, 2),
+      message: 'ok',
+    } as never);
+    selectBatch(1);
+    fireEvent.press(await screen.findByTestId('material-batch-allocation-option-auto'));
+    await screen.findByTestId('material-batch-auto-success');
+
+    fireEvent.press(screen.getByTestId('material-batch-allocation-switch-manual'));
+    expect(screen.getByTestId('material-batch-qty-AUTO-1')).toHaveProp('value', '5');
+    expect(screen.getByTestId('material-batch-qty-AUTO-2')).toHaveProp('value', '4');
+    expect(screen.getByText(/已选 2 批次 · 合计领料 9.00 kg/)).toBeTruthy();
+
+    fireEvent.changeText(screen.getByTestId('material-batch-qty-AUTO-1'), '4');
+    fireEvent.changeText(screen.getByTestId('material-batch-qty-AUTO-2'), '5');
+    await waitFor(() => {
+      const refs = screen.getByTestId('material-batch-refs-json').props.children as string;
+      expect(refs).toContain('"materialBatchId":"AUTO-1","quantity":4');
+      expect(refs).toContain('"materialBatchId":"AUTO-2","quantity":5');
+    });
+    expect(screen.getByText(/已选 2 批次 · 合计领料 9.00 kg/)).toBeTruthy();
+  });
+
   it('手动方案保留原首批投入量，并继续使用逐批可达输入', async () => {
     await renderExpanded('9');
     selectBatch(1);
@@ -218,7 +284,13 @@ describe('MaterialBatchPicker 自动分配用量', () => {
 
     fireEvent.press(screen.getByTestId('material-batch-allocation-switch-manual'));
     expect(screen.getByText(/手动模式：继续在上方勾选批次/)).toBeTruthy();
-    expect(screen.getByTestId('material-batch-confirm')).toHaveProp('disabled', false);
+    expect(screen.getByTestId('material-batch-qty-AUTO-1')).toHaveProp('value', '5');
+    expect(screen.getByTestId('material-batch-qty-AUTO-2')).toHaveProp('value', '4');
+    expect(screen.getByTestId('material-batch-confirm')).toHaveProp('disabled', true);
+
+    selectBatch(3);
+    fireEvent.changeText(screen.getByTestId('material-batch-qty-AUTO-3'), '3');
+    await waitFor(() => expect(screen.getByTestId('material-batch-confirm')).toHaveProp('disabled', false));
   });
 
   it('单位不一致时不猜换算，错误仍与手动入口留在同一窗口', async () => {
