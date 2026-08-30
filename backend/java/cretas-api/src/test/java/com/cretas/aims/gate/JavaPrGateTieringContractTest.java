@@ -42,7 +42,9 @@ class JavaPrGateTieringContractTest {
         assertThat(workflow)
                 .contains("types: [opened, synchronize, reopened, labeled]")
                 .containsOnlyOnce("group: java-pr-gate-${{ github.event.pull_request.number }}")
-                .containsSubsequence("fast-contracts:", "ref: ${{ github.event.pull_request.head.sha }}")
+                .containsSubsequence("fast-contracts:",
+                        "if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}",
+                        "ref: ${{ github.event.pull_request.head.sha }}")
                 .contains("fast-contracts:")
                 .contains("*ContractTest")
                 .contains("*RepositoryQueryValidationTest")
@@ -79,6 +81,9 @@ class JavaPrGateTieringContractTest {
         assertThat(labeledFullJob.matcher(workflow).find())
                 .as("the full suite must be guarded by the final-candidate label on the same PR run")
                 .isTrue();
+        assertThat(workflow)
+                .as("the final candidate must not waste a third runner slot on tests already inside the full suite")
+                .contains("if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}");
         assertThat(workflow)
                 .contains("synchronize")
                 .contains("cancel-in-progress: true");
