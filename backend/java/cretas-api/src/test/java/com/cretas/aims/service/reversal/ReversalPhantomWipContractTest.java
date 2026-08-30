@@ -426,8 +426,8 @@ class ReversalPhantomWipContractTest {
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10762L))
                 .thenReturn(List.of(wipRow(344L, "B10762-S1-0001", "1.25", "1.25", "0")));
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> rig.service.executeReversal(19L, FACTORY));
+        BusinessException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class, () -> rig.service.executeReversal(19L, FACTORY));
 
         assertThat(ex.getErrorCode()).isEqualTo("WIP_NOT_LEDGERED");
     }
