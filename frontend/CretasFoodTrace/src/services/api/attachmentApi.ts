@@ -7,6 +7,12 @@
 
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import * as Crypto from 'expo-crypto';
+
+const hex = (buffer: ArrayBuffer): string => Array.from(
+  new Uint8Array(buffer),
+  (byte) => byte.toString(16).padStart(2, '0'),
+).join('');
 
 /** 关联实体类型 — 后端 Attachment.EntityType 枚举完整复刻 (18 值). */
 export type AttachmentEntityType =
@@ -188,6 +194,10 @@ class AttachmentApi {
     const { uploadUrl, fileUrl } = await this.getUploadUrl(file.name, file.type, factoryId);
 
     const blob = await (await fetch(file.uri)).blob();
+    const fileHash = hex(await Crypto.digest(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      await blob.arrayBuffer(),
+    ));
     const putRes = await fetch(uploadUrl, {
       method: 'PUT',
       headers: { 'Content-Type': file.type },
@@ -201,9 +211,10 @@ class AttachmentApi {
         entityId,
         fileName: file.name,
         fileUrl,
-        fileSize: file.size,
+        fileSize: blob.size,
         fileType: file.type,
         fileCategory: extras?.fileCategory,
+        fileHash,
         businessTag: extras?.businessTag,
         description: extras?.description,
         uploadSource: 'MOBILE',
