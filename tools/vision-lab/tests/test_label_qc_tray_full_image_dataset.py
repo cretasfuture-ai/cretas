@@ -170,6 +170,30 @@ def test_append_contract_rejects_base_task_overlap():
         )
 
 
+def test_audited_provenance_counts_uses_physical_bound_rows(tmp_path):
+    rows = []
+    for split, stem, box_count in (("train", "train-one", 2), ("val", "val-one", 1)):
+        (tmp_path / "images" / split).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "labels" / split).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "images" / split / f"{stem}.jpg").write_bytes(b"image")
+        (tmp_path / "labels" / split / f"{stem}.txt").write_text(
+            "\n".join(["0 0.5 0.5 0.2 0.2"] * box_count) + "\n", encoding="utf-8",
+        )
+        rows.append({"split": split, "stem": stem, "box_count": box_count})
+    assert module.audited_provenance_counts(tmp_path, rows) == {
+        "train_images": 1, "train_boxes": 2, "val_images": 1, "val_boxes": 1,
+    }
+
+
+def test_audited_provenance_counts_rejects_unbound_physical_image(tmp_path):
+    for kind in ("images", "labels"):
+        (tmp_path / kind / "train").mkdir(parents=True)
+        (tmp_path / kind / "val").mkdir(parents=True)
+    (tmp_path / "images" / "train" / "extra.jpg").write_bytes(b"image")
+    with pytest.raises(RuntimeError, match="inventory drift"):
+        module.audited_provenance_counts(tmp_path, [])
+
+
 def test_normal_regression_contract_allows_repeated_selected_task_but_locks_task_holdout(tmp_path):
     rows = [
         normal_reviewed("one", "photo-1", "task-a", "1" * 64),

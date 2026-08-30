@@ -349,6 +349,33 @@ def validate_append_contract(
     }
 
 
+def audited_provenance_counts(
+    dataset_root: Path, rows: Sequence[dict[str, Any]],
+) -> dict[str, int]:
+    counts = {"train_images": 0, "train_boxes": 0, "val_images": 0, "val_boxes": 0}
+    expected: dict[str, set[str]] = {"train": set(), "val": set()}
+    for row in rows:
+        split, stem = str(row.get("split") or ""), str(row.get("stem") or "")
+        if split not in expected or not stem or stem in expected[split]:
+            raise RuntimeError("prior dataset provenance contains an invalid split/stem")
+        image = dataset_root / "images" / split / f"{stem}.jpg"
+        label = dataset_root / "labels" / split / f"{stem}.txt"
+        if not image.is_file() or not label.is_file():
+            raise RuntimeError(f"prior dataset provenance artifact is missing: {stem}")
+        label_boxes = len([line for line in label.read_text(encoding="utf-8").splitlines() if line.strip()])
+        if label_boxes != int(row.get("box_count", -1)):
+            raise RuntimeError(f"prior dataset provenance box count drift: {stem}")
+        expected[split].add(stem)
+        counts[f"{split}_images"] += 1
+        counts[f"{split}_boxes"] += label_boxes
+    for split in expected:
+        physical_images = {path.stem for path in (dataset_root / "images" / split).glob("*.jpg")}
+        physical_labels = {path.stem for path in (dataset_root / "labels" / split).glob("*.txt")}
+        if physical_images != expected[split] or physical_labels != expected[split]:
+            raise RuntimeError(f"prior dataset physical/provenance inventory drift: {split}")
+    return counts
+
+
 def build_dataset(
     prior_manifest_path: Path, reviewed_queue: Path, output_root: Path,
 ) -> tuple[Path, dict[str, Any]]:
@@ -365,6 +392,7 @@ def build_dataset(
     provenance_path = prior_root / "provenance.json"
     provenance = load_json(provenance_path)
     prior_rows = provenance.get("rows") or []
+    prior_effective_counts = audited_provenance_counts(prior_root, prior_rows)
     append_audit = validate_append_contract(prior, queue_manifest, reviewed, prior_rows)
     training_stems = set(append_audit["training_stems"])
     training_reviewed = [
@@ -377,6 +405,8 @@ def build_dataset(
         "base_dataset_sha256": prior["dataset_sha256"],
         "reviewed_queue": queue_identity(reviewed_queue, reviewed),
         "append_audit": append_audit,
+        "prior_effective_counts": prior_effective_counts,
+        "count_policy": "all_physical_rows_bound_one_to_one_to_provenance",
         "split_policy": "append_train_only_preserve_base_validation",
         "tight_patch_rows_included": False,
     }
@@ -396,7 +426,7 @@ def build_dataset(
     copied_provenance = load_json(copied_provenance_path)
     copied_rows = copied_provenance.get("rows") or []
     appended: list[dict[str, Any]] = []
-    counts = dict(prior.get("counts") or {})
+    counts = dict(prior_effective_counts)
     for item in training_reviewed:
         source = item["source"]
         stem = str(source["packed_stem"])
@@ -459,6 +489,8 @@ def build_dataset(
         "base_dataset": str(prior_root),
         "base_dataset_id": prior.get("dataset_id"),
         "base_dataset_sha256": prior.get("dataset_sha256"),
+        "prior_declared_counts": prior.get("counts") or {},
+        "prior_effective_counts": prior_effective_counts,
         "reviewed_queue": str(reviewed_queue),
         "reviewed_queue_manifest_sha256": patch_dataset.sha256_file(reviewed_queue / "manifest.json"),
         "append_audit": append_audit,
