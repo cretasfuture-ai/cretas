@@ -19,6 +19,7 @@ describe('pending defect count completion UI contract', () => {
     expect(source).toContain('<el-radio label="NONE_CONFIRMED">已清点确认零</el-radio>');
     expect(source).toContain(':disabled="defectOutcome === \'COUNTED\' && (!defectQuantity || defectQuantity <= 0)"');
     expect(source).toContain("defectQuantity: defectOutcome.value === 'COUNTED' ? defectQuantity.value : null");
+    expect(source).toContain("countDisplayUnit(String(defectDialogRow.quantityUnit || ''))");
   });
 
   it('refreshes from the server after success and keeps a failed dialog actionable', () => {

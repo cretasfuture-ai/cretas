@@ -1275,7 +1275,7 @@ onMounted(async () => {
         <el-descriptions :column="1" border size="small" style="margin-bottom: 16px">
           <el-descriptions-item label="计划单号">{{ defectDialogRow.planNumber }}</el-descriptions-item>
           <el-descriptions-item label="实际产量">
-            {{ defectDialogRow.actualFinishedQuantity }} {{ defectDialogRow.quantityUnit }}
+            {{ defectDialogRow.actualFinishedQuantity }} {{ countDisplayUnit(String(defectDialogRow.quantityUnit || '')) }}
           </el-descriptions-item>
         </el-descriptions>
         <el-form label-width="130px">
@@ -1287,7 +1287,7 @@ onMounted(async () => {
           </el-form-item>
           <el-form-item label="不良品数量" :required="defectOutcome === 'COUNTED'">
             <el-input-number v-model="defectQuantity" :min="0" :precision="2" :disabled="defectOutcome !== 'COUNTED'" />
-            <span class="unit-suffix" style="margin-left: 8px">{{ defectDialogRow.quantityUnit || '单位' }}</span>
+            <span class="unit-suffix" style="margin-left: 8px">{{ countDisplayUnit(String(defectDialogRow.quantityUnit || '')) || '单位' }}</span>
             <div class="field-hint">选择“已清点确认零”时数量固定为 0，无需填写。</div>
           </el-form-item>
         </el-form>
