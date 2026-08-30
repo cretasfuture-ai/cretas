@@ -6,6 +6,8 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
+import com.cretas.aims.dto.production.WipOutHistoryRepairRequestDTO;
+import com.cretas.aims.dto.production.WipOutHistoryRepairResultDTO;
 import com.cretas.aims.service.reversal.ReportReversalService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.ProductionPlanService;
@@ -117,6 +119,18 @@ public class ReportReversalController {
         log.info("SP2 拒绝撤回: logId={}, approvedBy={}, factoryId={}", logId, userId, factoryId);
         reversalService.rejectReversal(factoryId, logId, userId, reason);
         return ApiResponse.success(null);
+    }
+
+    /** One-shot, fail-closed repair of explicitly identified historical WIP OUT rows. */
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/reversals/wip-out-history-repair")
+    @Operation(summary = "修复历史 WIP OUT 账本", description = "仅按 reversalLogId 与原 OUT 流水 ID 做一次性幂等修复")
+    public ApiResponse<WipOutHistoryRepairResultDTO> repairWipOutHistory(
+            @PathVariable String factoryId,
+            @RequestBody WipOutHistoryRepairRequestDTO body,
+            HttpServletRequest request) {
+        Long userId = (Long) request.getAttribute("userId");
+        return ApiResponse.success(reversalService.repairWipOutHistory(factoryId, body, userId));
     }
 
     // ========== T6: WIP 可用库存列表 ==========

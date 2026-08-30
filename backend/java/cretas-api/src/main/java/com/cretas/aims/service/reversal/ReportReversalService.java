@@ -1,6 +1,8 @@
 package com.cretas.aims.service.reversal;
 
 import com.cretas.aims.entity.ReportReversalLog;
+import com.cretas.aims.dto.production.WipOutHistoryRepairRequestDTO;
+import com.cretas.aims.dto.production.WipOutHistoryRepairResultDTO;
 
 import java.util.List;
 
@@ -68,4 +70,9 @@ public interface ReportReversalService {
      * @return 撤回申请列表 (按 createdAt DESC)
      */
     List<ReportReversalLog> listReversals(String factoryId, String status);
+
+    /** Repair explicitly identified historical OUT rows for an already completed reversal. */
+    WipOutHistoryRepairResultDTO repairWipOutHistory(String factoryId,
+                                                     WipOutHistoryRepairRequestDTO request,
+                                                     Long operatorId);
 }
