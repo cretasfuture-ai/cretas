@@ -16,7 +16,8 @@ import OpinionInputDialog from '@/components/approval/OpinionInputDialog.vue';
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('production'));
+const canApproveReports = computed(() => permissionStore.canWrite('production'));
+const canCorrectReports = computed(() => permissionStore.canWrite('production_report_correction'));
 
 const loading = ref(false);
 const allData = ref<ApprovalItem[]>([]);
@@ -39,7 +40,7 @@ const correctionForm = ref<ProductionReportCorrectionPayload>({
 });
 
 async function loadCorrectableReports() {
-  if (!factoryId.value || !canWrite.value) {
+  if (!factoryId.value || !canCorrectReports.value) {
     correctableReports.value = [];
     return;
   }
@@ -502,7 +503,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
         <div class="toolbar-right">
           <el-button :icon="Refresh" @click="loadData" />
           <el-button
-            v-if="canWrite && selectedIds.length > 0"
+            v-if="canApproveReports && selectedIds.length > 0"
             type="success"
             :icon="Check"
             :loading="batchApproveSubmitting"
@@ -515,7 +516,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
       </div>
     </el-card>
 
-    <el-card v-if="canWrite" class="correction-card" style="margin-top: 16px">
+    <el-card v-if="canCorrectReports" class="correction-card" style="margin-top: 16px">
       <template #header>
         <div class="correction-heading">
           <div>
@@ -575,7 +576,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
             <el-tag :type="correctionStatusType(row)">{{ correctionStatusText(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="130" fixed="right">
+        <el-table-column v-if="canCorrectReports" label="操作" width="130" fixed="right">
           <template #default="{ row }">
             <el-button
               type="primary"
@@ -754,7 +755,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
           </template>
         </el-table-column>
         <el-table-column prop="processTaskId" label="任务ID" width="120" show-overflow-tooltip />
-        <el-table-column label="操作" width="160" fixed="right" v-if="canWrite">
+        <el-table-column label="操作" width="160" fixed="right" v-if="canApproveReports">
           <template #default="{ row }">
             <el-button
               type="success"
