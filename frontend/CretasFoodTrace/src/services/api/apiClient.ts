@@ -7,13 +7,18 @@ import { logger } from '../../utils/logger';
 // 创建ApiClient专用logger
 const apiLogger = logger.createContextLogger('ApiClient');
 
-// Axios's second generic controls the post-interceptor result type. `never`
-// marks the response as already consumed by the interceptor; the public
-// methods below expose the caller-provided payload type instead.
-type AxiosUnwrappedResponse = never;
+// The response interceptor below returns response.data. Keep that runtime
+// invariant at one boundary instead of repeating assertions in every method.
+interface UnwrappedAxiosInstance extends AxiosInstance {
+  get<T>(url: string, config?: AxiosRequestConfig): Promise<T>;
+  post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
+  put<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
+  delete<T>(url: string, config?: AxiosRequestConfig): Promise<T>;
+  patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
+}
 
 class ApiClient {
-  private client: AxiosInstance;
+  private client: UnwrappedAxiosInstance;
 
   constructor() {
     this.client = axios.create({
@@ -23,7 +28,7 @@ class ApiClient {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-    });
+    }) as UnwrappedAxiosInstance;
 
     this.setupInterceptors();
   }
@@ -161,27 +166,27 @@ class ApiClient {
 
   async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.get<T, AxiosUnwrappedResponse>(url, config);
+    return await this.client.get<T>(url, config);
   }
 
   async post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.post<T, AxiosUnwrappedResponse>(url, data, config);
+    return await this.client.post<T>(url, data, config);
   }
 
   async put<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.put<T, AxiosUnwrappedResponse>(url, data, config);
+    return await this.client.put<T>(url, data, config);
   }
 
   async delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.delete<T, AxiosUnwrappedResponse>(url, config);
+    return await this.client.delete<T>(url, config);
   }
 
   async patch<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     // 拦截器已统一返回response.data，直接返回即可
-    return await this.client.patch<T, AxiosUnwrappedResponse>(url, data, config);
+    return await this.client.patch<T>(url, data, config);
   }
 }
 
