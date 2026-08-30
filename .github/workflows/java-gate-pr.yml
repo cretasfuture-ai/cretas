@@ -1,73 +1,119 @@
 name: Java Gate
 
-# ## 为什么需要它
+# Java PR 分层门禁：
 #
-# 2026-08-27 实测的缺口：**没有任何 PR workflow 触发在 `backend/java` 上。**
+# 1. 每次 push 都跑快速门禁。它编译全部 main/test 源码，并执行契约、真实 JPA
+#    Repository 启动、Flyway、权限/安全等高信号测试；任何失败直接红，不走基线。
+# 2. 独立 PostgreSQL job 每次 push 都在唯一 disposable DB 上验证撤回审批行锁并发。
+# 3. 只有最终候选加上 `java-full-ready` 标签后才调用全量棘轮。
+#    标签保留时再 push 会触发 synchronize，对新的 PR HEAD 重跑；旧 run 由 concurrency
+#    取消，不能拿旧 HEAD 的绿灯冒充最终候选。
+# 4. 夜间全量仍由 java-full-nightly.yml 的 schedule 独立执行。
 #
-#   · `ci.yml` 只有 `on.push`（打 Java 制品用），PR 上不跑
-#   · `jpa-gate-main.yml` 只有 `on.push: [main]`，且 paths 收窄到
-#     `repository/**` / `entity/**` / `db/**` / `*RepositoryQueryValidationTest.java`
-#   · `tool-inventory-gate.yml` 收窄到 `ai/tool/**`
-#
-# 于是一个改 `service/**` 的 Java PR，**合并前和合并后都没有任何 Java 测试跑过**。
-# 实测样本：#174（`service/yield/**`，新增 `BatchBomBinding` + 成本口径改动）
-# 的 checks 里**只有 `tracked-secret-scan: pass`** —— 一个 Java 测试都没执行。
-#
-# ⇒ 「PR 是绿的」在本仓的 Java 侧此前**等于「密钥扫描通过」**，仅此而已。
-#
-# ## 2026-08-27：从窄选择器换成全量 + 棘轮
-#
-# 此前这里跑的是四类后缀（`*ContractTest` / `*RepositoryQueryValidationTest` /
-# `FlywayVersionUniquenessTest` / `*StartupGuardTest`），共 **229 个类 / 1128 个测试**。
-# 当天实测：测试类总数 **1435**，⇒ **1206 个类（84%）在 PR 上一次都不会被执行**。
-#
-# 🔴 这个缺口当天就开火了：#184 / #185 引入 8 条红，那 4 个被改坏的类
-# 一个都不在选择器里 ⇒ PR 全绿合入，红在 main 上挂了半天，靠夜间跑批才发现。
-#
-# ⛔ 修法不是「再往选择器里加几个后缀」—— 用类名兼任 CI 选择器本身就脆，
-#    名字是给人读的。⇒ 直接跑全量，用夜间那把棘轮判「有没有【新增】的红」。
-#
-# 当初不上全量的两条理由，当天实测都已不成立：
-#   · 「约 12 分钟且吃内存」   → 自建 runner 上 **6 分 31 秒**（12007 个测试）
-#   · 「前提是目标环境已经绿」 → 存量红 143 → **5**，且 5 条全在基线里
-# ⇒ 代价 ~2 分钟 → ~6.5 分钟；覆盖 1128 → 12007 个测试。
-#
-# ⚠️ 换成棘轮语义（只拦【新增】红）不放松原来那四类：当天实测基线里那 5 条
-#    **没有一条**落在窄选择器里。而这个论据是个快照，所以在被调用的工作流里
-#    配了一步闸钉着它（「基线不许吞掉窄闸原本覆盖的类」）。
-#
-# ⛔ 判断只有一份：本文件只负责【触发】，跑批与棘轮全在 java-full-nightly.yml，
-#    经 `workflow_call` 复用。把那 60 行 MAVEN_OPTS / argLine / 三态 rc 抄一份过来
-#    就是「同一个东西两份，它一定会漂」。
-#
-# ## 元判据（本仓 2026-08-27 新增，见 gateTriggerSurfaceCoversWhatItReads.spec.ts）
-#
-# **一道闸扫的东西，必须在它自己的触发面里。**
-# 全量测试读的是 `backend/java/cretas-api/` 下的 main + test + resources，
-# 而 `paths:` 写的就是 `backend/java/cretas-api/**` —— 覆盖。
-# 另加本文件自身与被调用的 `java-full-nightly.yml`：改闸本身也要跑一次闸
-# （⚠️ 少了后者，改跑批逻辑的 PR 就跑不到这道闸 —— 那正是元判据要拦的形态）。
+# 这不是恢复 2026-08-27 以前的“只跑窄闸就允许合并”。快速门禁负责反馈速度，
+# `java-full-ready` 全量负责最终候选覆盖；两者缺一不可。
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'backend/java/cretas-api/**'
       - '.github/workflows/java-gate-pr.yml'
       - '.github/workflows/java-full-nightly.yml'
       - 'scripts/ci/java-test-ratchet.py'
 
-# ⚠️ 取消策略收在被调用的工作流里（它按 event 分组）。
-#    这里再套一层同名 group 只会让同一次 PR 被两套规则管，⛔ 去掉。
+concurrency:
+  group: java-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # ⛔ 本文件只负责【触发】。跑批 + 棘轮的全部判断在 java-full-nightly.yml,
-  #    经 workflow_call 复用 —— 一份基线、一段判断、两个触发。
-  #
-  # ⚠️ check 名会显示成 `java-full-gate / full-suite`（不再是 java-narrow-gate）。
-  #    本仓当前套餐拿不到分支保护 / 必需检查（API 返 403），
-  #    所以改名不会卡住任何人合并 —— 2026-08-27 实测确认过才改的。
-  java-full-gate:
+  fast-contracts:
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Compile all Java tests and run high-signal gates
+        working-directory: backend/java/cretas-api
+        env:
+          MAVEN_OPTS: -Xmx2g
+        run: |
+          set -euo pipefail
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          "$MVN" -B test \
+            -Dtest='*ContractTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*SecurityTest,*AuthorizationTest,*PermissionTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dspring.profiles.active=test \
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
+
+  postgres-reversal-concurrency:
+    runs-on: [self-hosted, cretas]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Create one disposable PostgreSQL database for this job
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+          command -v psql >/dev/null 2>&1 || {
+            echo "::error title=PostgreSQL 并发闸没量到::runner 缺少 psql；不能把跳过当通过。"
+            exit 1
+          }
+          suffix=$(printf '%s_%s_%s' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "${RUNNER_NAME:-runner}" \
+            | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_' | cut -c1-34)
+          DB="cretas_workflow_verify_${suffix}"
+          dropdb --if-exists --force "$DB"
+          createdb -O cretas_user "$DB"
+          echo "CRETAS_WORKFLOW_PG_DB=$DB" >> "$GITHUB_ENV"
+          echo "CRETAS_WORKFLOW_PG_VERIFY=true" >> "$GITHUB_ENV"
+          echo "CRETAS_WORKFLOW_PG_URL=jdbc:postgresql://localhost:5432/$DB" >> "$GITHUB_ENV"
+          echo "CRETAS_WORKFLOW_PG_USER=cretas_user" >> "$GITHUB_ENV"
+          echo "CRETAS_WORKFLOW_PG_PASSWORD=" >> "$GITHUB_ENV"
+
+      - name: Prove reversal decisions serialize at the PostgreSQL row lock
+        working-directory: backend/java/cretas-api
+        env:
+          MAVEN_OPTS: -Xmx2g
+        run: |
+          set -euo pipefail
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          "$MVN" -B test \
+            -Dtest=ReportReversalLogRepositoryPostgresConcurrencyIT \
+            -Dspring.profiles.active=test \
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
+
+      - name: Drop the disposable PostgreSQL database
+        if: always()
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+          if [ -n "${CRETAS_WORKFLOW_PG_DB:-}" ] && command -v dropdb >/dev/null 2>&1; then
+            dropdb --if-exists --force "$CRETAS_WORKFLOW_PG_DB"
+          fi
+
+  final-full-suite:
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     uses: ./.github/workflows/java-full-nightly.yml
-    # ⛔ 不传 write_baseline —— PR 永远不许写基线。
-    #    被调用方另有一道按 event 的硬否决，两道是【故意】重复的:
-    #    只靠「调用方不传」的保护, 换个调用方就没了。
+    # 不传 write_baseline：PR 永远不许改已知红基线。
