@@ -171,7 +171,7 @@ class ReverseSignSemanticsContractTest {
                 .unitCost(new BigDecimal("2.0000"))
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
-        when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findById(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId)).thenReturn(ledger);
 

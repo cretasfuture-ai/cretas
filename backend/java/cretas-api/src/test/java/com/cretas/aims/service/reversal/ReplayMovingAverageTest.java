@@ -131,6 +131,7 @@ class ReplayMovingAverageTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .unit("kg")
                 .build();
+        when(wipRepo.findById(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(sfi));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
         return sfi;
@@ -255,6 +256,37 @@ class ReplayMovingAverageTest {
             assertEquals(new BigDecimal("2"), captor.getValue().getQuantity());
             assertEquals(sfiId, captor.getValue().getSemiFinishedId());
             assertEquals(reportId, captor.getValue().getReportId());
+        }
+
+        @Test
+        @DisplayName("RP-LOCK-1: 加锁后出现新 WIP 锚点 → 首个 mutation 前 409")
+        void ledgerChangesAfterLock_failsBeforeMutation() {
+            Long logId = 931L, batchId = 932L, sfiId = 933L, reportId = 934L;
+            ProductionReport report = ProductionReport.builder()
+                    .id(reportId).factoryId(FACTORY_ID).batchId(batchId).build();
+            SemiFinishedInventoryTransaction initialIn = SemiFinishedInventoryTransaction.builder()
+                    .id(935L).semiFinishedId(sfiId).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("1")).build();
+            SemiFinishedInventoryTransaction concurrentOut = SemiFinishedInventoryTransaction.builder()
+                    .id(936L).semiFinishedId(999L).reportId(reportId)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                    .sourceRef("TASK-937").quantity(new BigDecimal("-1")).build();
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(report), List.of(initialIn));
+            SemiFinishedInventory locked = stubSfi(sfiId, new BigDecimal("1"), BigDecimal.ZERO,
+                    new BigDecimal("1"), new BigDecimal("10.0000"), "SEMI-RP-LOCK-1");
+            when(wipRepo.findByIdForUpdate(sfiId)).thenReturn(Optional.of(locked));
+            when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, reportId))
+                    .thenReturn(List.of(initialIn), List.of(initialIn, concurrentOut));
+
+            com.cretas.aims.exception.BusinessException error = assertThrows(
+                    com.cretas.aims.exception.BusinessException.class,
+                    () -> service.executeReversal(logId, FACTORY_ID));
+
+            assertEquals("WIP_LEDGER_CHANGED", error.getErrorCode());
+            verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
+            verify(reportRepo, never()).save(any(ProductionReport.class));
         }
 
         @Test

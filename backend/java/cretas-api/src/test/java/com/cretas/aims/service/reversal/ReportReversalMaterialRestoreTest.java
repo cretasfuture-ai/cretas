@@ -411,6 +411,7 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
 
@@ -453,6 +454,7 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
                 .thenReturn(List.of(inTxn, outTxn));
 
@@ -498,6 +500,7 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
                 .thenReturn(List.of(inKnown, inNull));
 
@@ -532,6 +535,7 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
                 .thenReturn(List.of(inNull));
 
@@ -568,6 +572,7 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
+        when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
         when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L))
                 .thenReturn(List.of(in1, in2));
 

@@ -265,6 +265,7 @@ class ReversalPhantomWipContractTest {
         ReversalRig rig = new ReversalRig(15L, 10761L, List.of(r), List.of(in));
         SemiFinishedInventory sfi = wipRow(342L, "B10761-S1-1788", "240", "0", "240");
         when(rig.wipRepo.findById(342L)).thenReturn(Optional.of(sfi));
+        when(rig.wipRepo.findByIdForUpdate(342L)).thenReturn(Optional.of(sfi));
         // 回放读到的是「IN 240 + 刚写的 REVERSE -240」
         when(rig.txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(342L)).thenAnswer(i -> {
             List<SemiFinishedInventoryTransaction> all = new ArrayList<>();
@@ -316,22 +317,22 @@ class ReversalPhantomWipContractTest {
     }
 
     /**
-     * 🔵 阴性对照 —— 闸要<b>窄</b>。货已经被下游领空（available = 0）时没有 phantom 可言，
-     * 不该拦人。没有这一条，上面那个闸可能是「只要没 IN 行就一律拦」。
+     * 🔴 即使 available = 0，只要 produced > 0 且没有本次 IN 流水，仍是无法解释的 phantom。
      */
     @Test
-    @DisplayName("🔵 阴性对照: 没有 IN 流水但余额已是 0 (货已领空) ⇒ 不拦, 正常完成")
-    void gateDoesNotFireWhenNothingIsStranded() {
+    @DisplayName("🔴 没有 IN 且 produced > 0，即使 available=0 ⇒ 必须阻断")
+    void gateFiresWhenProducedIsUnledgeredEvenIfAvailableIsZero() {
         ProductionReport r = yieldReport(23833L, 10761L);
         ReversalRig rig = new ReversalRig(16L, 10761L, List.of(r), List.of());
+        SemiFinishedInventory wip = wipRow(342L, "B10761-S1-1788", "240", "240", "0");
         when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10761L))
-                .thenReturn(List.of(wipRow(342L, "B10761-S1-1788", "240", "240", "0")));
+                .thenReturn(List.of(wip));
+        when(rig.wipRepo.findByIdForUpdate(342L)).thenReturn(Optional.of(wip));
 
-        rig.service.executeReversal(16L, FACTORY);
-
-        ArgumentCaptor<ReportReversalLog> logCap = ArgumentCaptor.forClass(ReportReversalLog.class);
-        verify(rig.logRepo).save(logCap.capture());
-        assertThat(logCap.getValue().getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+        assertThatThrownBy(() -> rig.service.executeReversal(16L, FACTORY))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("缺少本次报工对应的入库流水");
+        verify(rig.reportRepo, never()).save(any(ProductionReport.class));
     }
 
     // ══════════════════════ 3. 回放不许把没记账的量抹平 ══════════════════════
@@ -359,6 +360,7 @@ class ReversalPhantomWipContractTest {
         ReversalRig rig = new ReversalRig(17L, 10761L, List.of(r), List.of(partialIn));
         SemiFinishedInventory sfi = wipRow(343L, "B10761-S2-1789", "300", "0", "300");
         when(rig.wipRepo.findById(343L)).thenReturn(Optional.of(sfi));
+        when(rig.wipRepo.findByIdForUpdate(343L)).thenReturn(Optional.of(sfi));
         when(rig.txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(343L)).thenAnswer(i -> {
             List<SemiFinishedInventoryTransaction> all = new ArrayList<>();
             all.add(partialIn);
@@ -393,6 +395,7 @@ class ReversalPhantomWipContractTest {
         ReversalRig rig = new ReversalRig(18L, 10761L, List.of(r), List.of(in));
         SemiFinishedInventory sfi = wipRow(343L, "B10761-S2-1789", "300", "0", "300");
         when(rig.wipRepo.findById(343L)).thenReturn(Optional.of(sfi));
+        when(rig.wipRepo.findByIdForUpdate(343L)).thenReturn(Optional.of(sfi));
         when(rig.txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(343L)).thenAnswer(i -> {
             List<SemiFinishedInventoryTransaction> all = new ArrayList<>();
             all.add(in);
@@ -407,6 +410,20 @@ class ReversalPhantomWipContractTest {
     }
 
     // ══════════════════════ 4. 拦住人就要给下一步 ══════════════════════
+
+    @Test
+    @DisplayName("账面 produced>0 即使 available=0 且无 IN，也必须拦截幽灵 WIP")
+    void zeroAvailableButPositiveProducedStillBlocksWithoutInLedger() {
+        ProductionReport r = yieldReport(23838L, 10762L);
+        ReversalRig rig = new ReversalRig(19L, 10762L, List.of(r), List.of());
+        when(rig.wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, 10762L))
+                .thenReturn(List.of(wipRow(344L, "B10762-S1-0001", "1.25", "1.25", "0")));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> rig.service.executeReversal(19L, FACTORY));
+
+        assertThat(ex.getErrorCode()).isEqualTo("WIP_NOT_LEDGERED");
+    }
 
     /** 拦住人的地方必须告诉下一步 —— 只说「不行」而不说「那怎么办」等于把人堵死。 */
     @Test
