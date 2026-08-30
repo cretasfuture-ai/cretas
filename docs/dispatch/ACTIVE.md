@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `BUG-RN-AUTO-MANUAL-PRESERVE-20260830` — `in-progress` — Owner: `/root/rn_auto_manual_preserve` — Base SHA: `c2c2b39e5335c3fa4d8aa118d49180bf40562cad` — 真机确认首道自动批次分配成功后点击“改为手动选择或调整”，自动生成的批次与逐批数量会丢失并退回单批模式；修复必须保留自动结果，同时继续允许增删批次与逐批改量。Scope lock：仅 `frontend/CretasFoodTrace/src/components/processing/MaterialBatchPicker.tsx`、`frontend/CretasFoodTrace/src/__tests__/components/processing/MaterialBatchPickerAutoAllocation.test.tsx` 与本任务 dispatch；不得改报工提交 API、后端、数据库、发布脚本或生产数据。验收：新增“自动成功→切手动”真实组件回归，逐批 ID/数量与合计不变，可继续编辑；不足量→切手动仍保留已分配结果但不得误解锁；相关 picker tests、RN TypeScript、`git diff --check`，并做删除保留逻辑的变异红灯。停止条件：需要扩大到父页面/API/后端或改变库存校验契约时立即回传。
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
 - `QA-WEB-VISUAL-WALKTHROUGH-20260828` — `merged` — Owner: `claude-code/visual-acceptance` — **用 web-admin 逐屏走查(视觉验收)一轮, 抓到 3 个接口层/类型检查/单测全都抓不到的缺陷**, 并把其中重复三次的那一类升级成闸。凭 `f006_admin` 登录 prod(`139.196.165.140:8086`), ⛔ 全程从菜单点进去, 不用 `goto(url)` —— 本仓 8-26 实测过「E2E 直接敲 URL 对『入口缺失』这一类系统性免疫」。
@@ -147,6 +148,7 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+- `BUG-RN-AUTO-MANUAL-PRESERVE-20260830`：仅 `frontend/CretasFoodTrace/src/components/processing/MaterialBatchPicker.tsx`、对应 `MaterialBatchPickerAutoAllocation.test.tsx` 与 dispatch；不得修改提交 API、后端、数据库、发布脚本、生产数据或设备。
 - `BUG-LIUSHANMEN-WIP-REVERSAL-HISTORY-REPAIR-20260830`：仅 reversal Controller/Service/DTO、必要的显式 ID 读取辅助与 `backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/**`；不得改 Entity/Repository/Flyway、不得改通用撤回契约、不得直接改库、不得操作生产、设备、Web/RN 或发布脚本。验收：显式 log + OUT txn lineage 全量证明、追加正量 REVERSE、移动平均终态、重复调用幂等及跨租户/错批/活 report/部分补偿/异成本阴性对照。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
 
