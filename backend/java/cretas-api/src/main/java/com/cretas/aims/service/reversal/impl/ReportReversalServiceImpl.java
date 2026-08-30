@@ -340,6 +340,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             return;
         }
 
+        // A plan-scoped reversal must have every settlement dependency wired before
+        // any report/WIP mutation. Missing optional beans are a configuration error,
+        // not a reason to mark the reversal DONE without restoring the settlement.
+        requireSettlementDependencies(log_.getPlanId());
+
         Long batchId = log_.getBatchId();
         List<Long> revertedTxnIds = new ArrayList<>();
         List<Long> revertedInTxnIds = new ArrayList<>();
@@ -1527,6 +1532,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (materialBatchRepository == null
                 || productionSettlementRepository == null
                 || productionSettlementConsumptionRepository == null) {
+            if (planId != null) {
+                throw settlementDependencyMissing();
+            }
             log.debug("[SP2] restoreSettlementConsumption: repo 未注入, 跳过 planId={}", planId);
             return false;
         }
@@ -1601,10 +1609,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private SettlementReversalScope validateSettlementReversalScopeIfPresent(String factoryId,
                                                                                Long batchId,
                                                                                String planId) {
-        if (materialBatchRepository == null
-                || productionSettlementRepository == null
-                || productionSettlementConsumptionRepository == null
-                || planId == null) {
+        if (planId == null) {
             return null;
         }
         ProductionSettlement settlement = productionSettlementRepository
@@ -1623,7 +1628,20 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             throw new BusinessException(409, "撤回失败: 结单不属于当前工厂或计划")
                     .withCode("REVERSAL_SCOPE_INVALID");
         }
-        ProductionBatch batch = batchRepo.findByIdAndFactoryId(batchId, factoryId).orElseThrow(() ->
+        List<ProductionBatch> planBatches = batchRepo
+                .findByFactoryIdAndProductionPlanId(factoryId, planId);
+        List<ProductionBatch> validFormalBatches = planBatches == null ? List.of()
+                : planBatches.stream()
+                .filter(Objects::nonNull)
+                .filter(batch -> batch.getStatus() != ProductionBatchStatus.CANCELLED)
+                .filter(batch -> !"CLERK_WIP".equals(batch.getBatchType()))
+                .toList();
+        if (validFormalBatches.size() != 1
+                || !Objects.equals(batchId, validFormalBatches.get(0).getId())) {
+            throw new BusinessException(409, "撤回失败: 计划必须唯一对应一个可撤回正式批次")
+                    .withCode("REVERSAL_SETTLEMENT_BATCH_SCOPE_INVALID");
+        }
+        ProductionBatch batch = batchRepo.findByIdAndFactoryIdForUpdate(batchId, factoryId).orElseThrow(() ->
                 new BusinessException(409, "撤回失败: 批次不存在或不属于当前工厂")
                         .withCode("REVERSAL_SCOPE_INVALID"));
         if (!Objects.equals(factoryId, batch.getFactoryId())
@@ -1639,6 +1657,21 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     .withCode("REVERSAL_SCOPE_INVALID");
         }
         return new SettlementReversalScope(batch, plan);
+    }
+
+    private void requireSettlementDependencies(String planId) {
+        if (planId != null
+                && (materialBatchRepository == null
+                || productionSettlementRepository == null
+                || productionSettlementConsumptionRepository == null
+                || productionPlanRepository == null)) {
+            throw settlementDependencyMissing();
+        }
+    }
+
+    private BusinessException settlementDependencyMissing() {
+        return new BusinessException(409, "撤回失败: 结单恢复依赖未配置")
+                .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING");
     }
 
     /**
