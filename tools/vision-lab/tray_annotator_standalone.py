@@ -19,7 +19,7 @@ main{max-width:1600px;margin:auto;padding:10px}.hint{padding:8px 12px;margin-bot
 #stage{position:relative;max-height:calc(100vh - 128px);line-height:0;background:#090d12;border:1px solid #334454;border-radius:7px;overflow:auto}canvas{display:block;width:100%;height:auto;touch-action:none;transform-origin:0 0}
 #status{margin-left:auto;color:#ffdd75}.count{font-weight:700}.small{color:#9fb2c2}
 </style></head><body><header>
-<span class="badge">队列 __QUEUE__</span><button onclick="go(-1)">上一张</button><button onclick="go(1)">下一张</button>
+<span class="badge">队列 __QUEUE__</span><span class="badge">__SCOPE__</span><button onclick="go(-1)">上一张</button><button onclick="go(1)">下一张</button>
 <button onclick="zoomOut()">缩小</button><button onclick="zoomIn()">放大</button><button onclick="resetZoom()">重置缩放</button><span class="badge" id="zoom-label">100%</span>
 <button onclick="beginAdd()">新增框</button><button onclick="beginReplace()">重新拉框</button><button onclick="undo()">撤销</button><button class="danger" onclick="removeSelected()">删除选中框</button><button onclick="clearAll()">清空</button>
 <button class="primary" onclick="save(false)">保存</button><button class="ok" onclick="save(true)">确认完整并下一张</button><button class="danger" onclick="excludeCurrent()">不属于工作台 · 排除并下一张</button>
@@ -87,15 +87,74 @@ def _excluded_annotation(item_id: str) -> dict:
     }
 
 
-def serve(queue: Path, port: int) -> None:
+def _item_id(row: dict) -> str:
+    return str(row.get("packed_stem") or Path(row["packed_image"]).stem)
+
+
+def _select_review_rows(rows: list[dict], completed_ids: set[str], limit: int) -> list[dict]:
+    if limit <= 0:
+        raise ValueError("review limit must be greater than zero")
+    selected_ids = set(completed_ids)
+    for row in rows:
+        if len(selected_ids) >= limit:
+            break
+        selected_ids.add(_item_id(row))
+    return [row for row in rows if _item_id(row) in selected_ids]
+
+
+def _load_or_create_review_round(
+    queue: Path, rows: list[dict], annotations: Path, review_limit: int
+) -> list[dict]:
+    round_path = queue / f"review-round-{review_limit}.json"
+    known_rows = {_item_id(row): row for row in rows}
+    if round_path.exists():
+        round_data = json.loads(round_path.read_text(encoding="utf-8"))
+        if round_data.get("version") != "vision-lab-tray-review-round-v1":
+            raise RuntimeError(f"unsupported review round: {round_path}")
+        if round_data.get("requested_count") != review_limit:
+            raise RuntimeError(f"review round limit mismatch: {round_path}")
+        selected_ids = round_data.get("selected_ids")
+        if not isinstance(selected_ids, list) or any(item_id not in known_rows for item_id in selected_ids):
+            raise RuntimeError(f"review round contains unknown image ids: {round_path}")
+        selected = set(selected_ids)
+        return [row for row in rows if _item_id(row) in selected]
+
+    completed_ids: set[str] = set()
+    for row in rows:
+        item_id = _item_id(row)
+        target = annotations / f"{item_id}.json"
+        if target.is_file() and json.loads(target.read_text(encoding="utf-8")).get("reviewed") is True:
+            completed_ids.add(item_id)
+    selected_rows = _select_review_rows(rows, completed_ids, review_limit)
+    selected_ids = [_item_id(row) for row in selected_rows]
+    round_data = {
+        "version": "vision-lab-tray-review-round-v1",
+        "round_id": f"round-{review_limit}",
+        "requested_count": review_limit,
+        "queue_count": len(rows),
+        "selected_count": len(selected_ids),
+        "selected_ids": selected_ids,
+        "paused_count": len(rows) - len(selected_ids),
+    }
+    temporary = round_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(round_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(round_path)
+    return selected_rows
+
+
+def serve(queue: Path, port: int, review_limit: int | None = None) -> None:
     manifest = json.loads((queue / "manifest.json").read_text(encoding="utf-8"))
-    rows = manifest["rows"]
+    all_rows = manifest["rows"]
     annotations = queue / "annotations-human"
     annotations.mkdir(exist_ok=True)
+    rows = (
+        _load_or_create_review_round(queue, all_rows, annotations, review_limit)
+        if review_limit is not None else all_rows
+    )
     by_id: dict[str, dict] = {}
     items: list[dict] = []
     for row in rows:
-        item_id = str(row.get("packed_stem") or Path(row["packed_image"]).stem)
+        item_id = _item_id(row)
         by_id[item_id] = row
         destination = annotations / f"{item_id}.json"
         if not destination.exists():
@@ -121,7 +180,11 @@ def serve(queue: Path, port: int) -> None:
         def do_GET(self) -> None:
             path = unquote(urlparse(self.path).path)
             if path == "/":
-                page = PAGE.replace("__QUEUE__", queue.name)
+                scope = (
+                    f"第一轮 {len(items)} 张 · 全队列 {len(all_rows)} 张 · 暂停 {len(all_rows) - len(items)} 张"
+                    if review_limit is not None else f"全队列 {len(items)} 张"
+                )
+                page = PAGE.replace("__QUEUE__", queue.name).replace("__SCOPE__", scope)
                 return self.send_bytes(200, page.encode("utf-8"), "text/html; charset=utf-8")
             if path == "/api/items":
                 return self.send_bytes(200, json.dumps(items).encode(), "application/json")
@@ -129,7 +192,11 @@ def serve(queue: Path, port: int) -> None:
                 saved = [json.loads((annotations / f"{item['id']}.json").read_text(encoding="utf-8")) for item in items]
                 reviewed = sum(row.get("reviewed") is True for row in saved)
                 excluded = sum(row.get("training_eligible") is False for row in saved)
-                return self.send_bytes(200, json.dumps({"reviewed": reviewed, "excluded": excluded, "total": len(items)}).encode(), "application/json")
+                stats = {
+                    "reviewed": reviewed, "excluded": excluded, "total": len(items),
+                    "full_queue_total": len(all_rows), "paused": len(all_rows) - len(items),
+                }
+                return self.send_bytes(200, json.dumps(stats).encode(), "application/json")
             if path.startswith("/api/ann/"):
                 item_id = path.removeprefix("/api/ann/")
                 target = annotations / f"{item_id}.json"

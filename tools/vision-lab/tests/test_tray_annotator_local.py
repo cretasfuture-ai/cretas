@@ -119,6 +119,32 @@ async function confirmOk(){
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 standalone._valid_boxes(invalid)
 
+    def test_review_round_keeps_completed_and_fills_from_ranked_queue(self):
+        rows = [
+            {"packed_image": f"packed/tray-{index}.jpg"}
+            for index in range(1, 7)
+        ]
+        selected = standalone._select_review_rows(rows, {"tray-5"}, 3)
+        self.assertEqual(
+            ["tray-1", "tray-2", "tray-5"],
+            [standalone._item_id(row) for row in selected],
+        )
+
+    def test_review_round_preserves_all_completed_above_limit(self):
+        rows = [
+            {"packed_image": f"packed/tray-{index}.jpg"}
+            for index in range(1, 5)
+        ]
+        selected = standalone._select_review_rows(rows, {"tray-2", "tray-3", "tray-4"}, 2)
+        self.assertEqual(
+            ["tray-2", "tray-3", "tray-4"],
+            [standalone._item_id(row) for row in selected],
+        )
+
+    def test_review_round_rejects_non_positive_limit(self):
+        with self.assertRaisesRegex(ValueError, "greater than zero"):
+            standalone._select_review_rows([], set(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
