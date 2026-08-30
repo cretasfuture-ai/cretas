@@ -113,7 +113,9 @@ def main() -> None:
     queue = args.queue.resolve()
     validate_tray_queue(queue)
     if not args.annotator_script.is_file():
-        raise FileNotFoundError(args.annotator_script)
+        from tray_annotator_standalone import serve
+        serve(queue, args.port)
+        return
     os.environ["CRETAS_TRAY_ANNOTATION_ROOT"] = str(queue)
     os.environ["CRETAS_TRAY_ANNOTATION_PORT"] = str(args.port)
     bridge = load_module(args.annotator_script)
