@@ -161,6 +161,15 @@ public class ProductionReport {
     @Column(name = "notes", length = 500)
     private String notes;
 
+    /** 永久标记：至少一笔报工修正已经通过 OA 并应用。 */
+    @Column(name = "data_corrected", nullable = false)
+    @Builder.Default
+    private Boolean dataCorrected = false;
+
+    /** 最近一次已应用修正，供报工行快速跳转审计详情。 */
+    @Column(name = "last_correction_id", length = 36)
+    private String lastCorrectionId;
+
     // ==================== Phase A 报工事实层 (report_type='YIELD') ====================
 
     /** 对应工序任务 (关联 WorkProcessTask.id);权威规则: 有 YIELD report 的批次以此为产出权威源 */

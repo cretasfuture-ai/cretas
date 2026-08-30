@@ -46,6 +46,16 @@ interface PendingApproval {
   moduleLabel?: string;
   /** 由定时任务等系统流程发起, 没有人类申请人 (后端判据: initiatedBy == null)。 */
   systemInitiated?: boolean;
+  reportCorrectionDetails?: {
+    correctionId?: string;
+    reportId?: number;
+    planId?: string | null;
+    batchId?: number | null;
+    processCategory?: string | null;
+    reason?: string;
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+  };
 }
 
 const authStore = useAuthStore();
@@ -64,6 +74,7 @@ const size = ref(20);
 // 📌 BUDGET(会计期间结账) 刻意不在此列: 它的通过 = 执行月度关账, 已拆到独立 PR 等终审。
 const ACTIONABLE_MODULE_CODES = new Set([
   'PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT',
+  'PRODUCTION_REPORT_CORRECTION',
 ]);
 const moduleCode = ref('');
 const focusedInstanceId = ref('');
@@ -250,6 +261,14 @@ function approveConfirmMessage(row: PendingApproval): string {
     ['当前节点', currentNodeText(row)],
     ['申请人', applicant],
   ];
+  if (row.reportCorrectionDetails) {
+    fields.push(
+      ['工序', row.reportCorrectionDetails.processCategory || '—'],
+      ['修正原因', row.reportCorrectionDetails.reason || '—'],
+      ['修正前', reportCorrectionValues(row.reportCorrectionDetails.before)],
+      ['修正后', reportCorrectionValues(row.reportCorrectionDetails.after)],
+    );
+  }
   // ⚠️ ElMessageBox 挂在 App 根节点之外, 本组件的 scoped CSS 够不着它 —— 用行内样式,
   // 不要指望 <style scoped> 里的 class 生效。
   const rowsHtml = fields
@@ -261,6 +280,13 @@ function approveConfirmMessage(row: PendingApproval): string {
     ))
     .join('');
   return `<div style="text-align:left;">${rowsHtml}</div>`;
+}
+
+function reportCorrectionValues(values?: Record<string, unknown>): string {
+  if (!values) return '—';
+  const text = (value: unknown) => value === null || value === undefined || value === '' ? '—' : String(value);
+  return `产出 ${text(values.outputQuantity)} / 良品 ${text(values.goodQuantity)} / 不良 ${text(values.defectQuantity)}`
+    + ` / 人数 ${text(values.totalWorkers)} / 工时 ${text(values.totalWorkMinutes)} / 备注 ${text(values.notes)}`;
 }
 
 /** 无金额的排在最后, 免得一堆「—」占住大额单的位置。 */
@@ -285,6 +311,7 @@ function openDetail(row: PendingApproval): void {
     //    「暂未接入单据详情页」—— 而他正被要求批准一次真实的库存数量调整。
     //    盘点没有单条详情路由, 目标是列表页并带上单号让它自己定位。
     INVENTORY_ADJUSTMENT: `/warehouse/stocktakes?stocktakeId=${id}`,
+    PRODUCTION_REPORT_CORRECTION: `/production/approval?reportId=${row.reportCorrectionDetails?.reportId || ''}`,
   };
   const target = routeByModule[row.moduleCode];
   if (target) {
@@ -351,6 +378,9 @@ onMounted(async () => {
               {{ businessCodeOf(row) }}
             </el-button>
             <span v-else>{{ row.businessSummary || '—' }}</span>
+            <div v-if="row.reportCorrectionDetails" class="correction-summary">
+              {{ row.reportCorrectionDetails.processCategory || '工序未标注' }} · {{ row.reportCorrectionDetails.reason || '未填写原因' }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="金额" width="130" align="right" sortable :sort-method="sortByAmount">
@@ -361,6 +391,16 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="往来单位" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">{{ counterpartyOf(row) || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="修正内容" min-width="280">
+          <template #default="{ row }">
+            <div v-if="row.reportCorrectionDetails" class="correction-summary">
+              <div>前：{{ reportCorrectionValues(row.reportCorrectionDetails.before) }}</div>
+              <div>后：{{ reportCorrectionValues(row.reportCorrectionDetails.after) }}</div>
+              <div>原因：{{ row.reportCorrectionDetails.reason || '—' }}</div>
+            </div>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <!--
           「当前节点」已说明该谁审(如「财务审批」), 原来紧挨着的「授权角色」列写的是
@@ -432,6 +472,7 @@ onMounted(async () => {
   ⛔ 不要用普通比例字体: "¥35,000.00" 和 "¥1,081.00" 的位数一错开, 排序就白做了。
 */
 .amount-cell { font-variant-numeric: tabular-nums; font-weight: 500; }
+.correction-summary { font-size: 12px; line-height: 1.55; color: var(--el-text-color-regular); }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .header h2 { margin: 0 0 6px; }
 .header p { margin: 0; color: var(--el-text-color-secondary); }

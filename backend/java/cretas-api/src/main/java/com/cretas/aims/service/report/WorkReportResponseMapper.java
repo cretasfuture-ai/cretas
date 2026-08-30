@@ -47,6 +47,8 @@ public final class WorkReportResponseMapper {
                 .status(r.getStatus())
                 .rejectionReason(r.getRejectionReason())
                 .syncedToSmartbi(r.getSyncedToSmartbi())
+                .dataCorrected(r.getDataCorrected())
+                .lastCorrectionId(r.getLastCorrectionId())
                 .createdAt(r.getCreatedAt())
                 .updatedAt(r.getUpdatedAt())
                 .build();

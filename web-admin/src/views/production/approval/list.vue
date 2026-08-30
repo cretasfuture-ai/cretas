@@ -8,7 +8,8 @@ import { Check, Close, Refresh } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import {
   getPendingApprovals, approveReport, rejectReport, batchApproveReports,
-  type ApprovalItem
+  getCorrectableReports, submitReportCorrection,
+  type ApprovalItem, type CorrectableReportItem, type ProductionReportCorrectionPayload
 } from '@/api/processProduction';
 import OpinionInputDialog from '@/components/approval/OpinionInputDialog.vue';
 
@@ -21,6 +22,93 @@ const loading = ref(false);
 const allData = ref<ApprovalItem[]>([]);
 const pagination = ref({ page: 1, size: 20 });
 const selectedIds = ref<number[]>([]);
+
+const correctionLoading = ref(false);
+const correctableReports = ref<CorrectableReportItem[]>([]);
+const correctionDialogVisible = ref(false);
+const correctionTarget = ref<CorrectableReportItem | null>(null);
+const correctionSubmitting = ref(false);
+const correctionForm = ref<ProductionReportCorrectionPayload>({
+  outputQuantity: null,
+  goodQuantity: null,
+  defectQuantity: null,
+  totalWorkers: null,
+  totalWorkMinutes: null,
+  notes: '',
+  reason: '',
+});
+
+async function loadCorrectableReports() {
+  if (!factoryId.value || !canWrite.value) {
+    correctableReports.value = [];
+    return;
+  }
+  correctionLoading.value = true;
+  try {
+    const response = await getCorrectableReports(factoryId.value, { page: 1, size: 100 });
+    correctableReports.value = response.data?.content || [];
+  } catch (error) {
+    handleCatchError(error, '加载报工核对列表失败');
+  } finally {
+    correctionLoading.value = false;
+  }
+}
+
+function openCorrection(row: CorrectableReportItem) {
+  if (row.lastCorrection?.status === 'PENDING_APPROVAL') return;
+  correctionTarget.value = row;
+  correctionForm.value = {
+    outputQuantity: row.outputQuantity ?? null,
+    goodQuantity: row.goodQuantity ?? null,
+    defectQuantity: row.defectQuantity ?? null,
+    totalWorkers: row.totalWorkers ?? null,
+    totalWorkMinutes: row.totalWorkMinutes ?? null,
+    notes: row.notes || '',
+    reason: '',
+  };
+  correctionDialogVisible.value = true;
+}
+
+async function submitCorrection() {
+  if (!factoryId.value || !correctionTarget.value || correctionSubmitting.value) return;
+  if (!correctionForm.value.reason.trim()) {
+    ElMessage.warning('请填写修正原因');
+    return;
+  }
+  correctionSubmitting.value = true;
+  try {
+    await submitReportCorrection(factoryId.value, correctionTarget.value.id, {
+      ...correctionForm.value,
+      reason: correctionForm.value.reason.trim(),
+      notes: correctionForm.value.notes.trim(),
+    });
+    ElMessage.success('修正草稿已提交 OA 审批；批准前原报工仍然有效');
+    correctionDialogVisible.value = false;
+    await Promise.all([loadCorrectableReports(), loadData()]);
+  } catch (error) {
+    handleCatchError(error, '提交报工修正失败');
+  } finally {
+    correctionSubmitting.value = false;
+  }
+}
+
+function correctionStatusText(row: CorrectableReportItem): string {
+  if (row.lastCorrection?.status === 'PENDING_APPROVAL') return '待审批';
+  if (row.dataCorrected) return '报工数据已修正';
+  if (row.lastCorrection?.status === 'REJECTED') return '上次修正已驳回';
+  return '未修正';
+}
+
+function correctionStatusType(row: CorrectableReportItem): 'warning' | 'success' | 'danger' | 'info' {
+  if (row.lastCorrection?.status === 'PENDING_APPROVAL') return 'warning';
+  if (row.dataCorrected) return 'success';
+  if (row.lastCorrection?.status === 'REJECTED') return 'danger';
+  return 'info';
+}
+
+function hasPendingCorrection(row: CorrectableReportItem): boolean {
+  return row.lastCorrection?.status === 'PENDING_APPROVAL';
+}
 
 // 筛选: 报工模式/报工阶段/工序 (实时按当前待审批队列里实际存在的值生成选项, 非固定枚举)
 const filterReportMode = ref('');
@@ -96,12 +184,14 @@ function startAutoRefresh() {
 
 onMounted(() => {
   loadData();
+  loadCorrectableReports();
   startAutoRefresh();
 });
 
 // keep-alive: 回到本页时重新拉一次并恢复轮询; 离开时立刻停掉
 onActivated(() => {
   loadData();
+  loadCorrectableReports();
   startAutoRefresh();
 });
 onDeactivated(stopAutoRefresh);
@@ -425,6 +515,79 @@ function evidenceImageIndex(urls: string[], url: string): number {
       </div>
     </el-card>
 
+    <el-card v-if="canWrite" class="correction-card" style="margin-top: 16px">
+      <template #header>
+        <div class="correction-heading">
+          <div>
+            <h3>报工核对 / 修正</h3>
+            <p>只修正结果字段；投入与库存差异请走退补料或盘点。提交后先审批，批准前原值继续有效。</p>
+          </div>
+          <el-button :icon="Refresh" :loading="correctionLoading" @click="loadCorrectableReports">刷新核对列表</el-button>
+        </div>
+      </template>
+      <el-table v-loading="correctionLoading" :data="correctableReports" row-key="id" stripe empty-text="暂无未结单报工">
+        <el-table-column type="expand" width="44">
+          <template #default="{ row }">
+            <div v-if="row.lastCorrection" class="correction-audit">
+              <el-alert
+                :title="row.lastCorrection.status === 'PENDING_APPROVAL' ? '待审批：当前有效值仍为原报工' : correctionStatusText(row)"
+                :type="correctionStatusType(row)"
+                :closable="false"
+                show-icon
+              />
+              <div v-for="correction in row.corrections || [row.lastCorrection]" :key="correction.id" class="correction-history-item">
+                <el-descriptions :column="3" border size="small">
+                  <el-descriptions-item label="审批状态">{{ correction.status }}</el-descriptions-item>
+                  <el-descriptions-item label="修正原因" :span="2">{{ correction.reason }}</el-descriptions-item>
+                  <el-descriptions-item label="实际产出">{{ formatQty(correction.originalOutputQuantity) }} → {{ formatQty(correction.proposedOutputQuantity) }}</el-descriptions-item>
+                  <el-descriptions-item label="良品">{{ formatQty(correction.originalGoodQuantity) }} → {{ formatQty(correction.proposedGoodQuantity) }}</el-descriptions-item>
+                  <el-descriptions-item label="不良品">{{ formatQty(correction.originalDefectQuantity) }} → {{ formatQty(correction.proposedDefectQuantity) }}</el-descriptions-item>
+                  <el-descriptions-item label="人数">{{ correction.originalTotalWorkers ?? '-' }} → {{ correction.proposedTotalWorkers ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="工时(分钟)">{{ correction.originalTotalWorkMinutes ?? '-' }} → {{ correction.proposedTotalWorkMinutes ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="审批实例">{{ correction.workflowInstanceId || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="修正人">{{ correction.submittedByName || `用户 ${correction.submittedBy}` }}</el-descriptions-item>
+                  <el-descriptions-item label="修正时间">{{ correction.submittedAt }}</el-descriptions-item>
+                  <el-descriptions-item label="审批意见">{{ correction.decisionNotes || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="备注" :span="3">{{ correction.originalNotes || '-' }} → {{ correction.proposedNotes || '-' }}</el-descriptions-item>
+                </el-descriptions>
+              </div>
+            </div>
+            <el-empty v-else description="该报工尚无修正记录" :image-size="48" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="id" label="报工 ID" width="95" />
+        <el-table-column label="批次 / 任务" min-width="150">
+          <template #default="{ row }">
+            {{ row.batchId ?? '-' }} / {{ row.workProcessTaskId ?? '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="reporterName" label="报工人" width="100" />
+        <el-table-column prop="reportDate" label="报工日期" width="120" />
+        <el-table-column prop="productName" label="产品" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="processCategory" label="工序" min-width="110" />
+        <el-table-column label="当前有效结果" min-width="250">
+          <template #default="{ row }">
+            产出 {{ formatQty(row.outputQuantity) }} · 良品 {{ formatQty(row.goodQuantity) }} · 不良 {{ formatQty(row.defectQuantity) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="修正状态" min-width="150">
+          <template #default="{ row }">
+            <el-tag :type="correctionStatusType(row)">{{ correctionStatusText(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canWrite" label="操作" width="130" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              text
+              :disabled="hasPendingCorrection(row)"
+              @click="openCorrection(row)"
+            >核对修正</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-card style="margin-top: 16px">
       <!-- 筛选: 按当前待审批队列里实际存在的 报工模式/报工阶段/工序 生成选项, 非固定枚举 -->
       <div class="filter-bar">
@@ -686,6 +849,55 @@ function evidenceImageIndex(urls: string[], url: string): number {
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="correctionDialogVisible"
+      title="报工核对修正"
+      width="720px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!correctionSubmitting"
+      destroy-on-close
+    >
+      <template v-if="correctionTarget">
+        <el-alert
+          title="只修改报工结果。审批通过前，下方原始值仍是结单以外的当前有效事实；投入与库存不会在这里改变。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+        <el-descriptions :column="3" border size="small" style="margin-top: 12px">
+          <el-descriptions-item label="报工人">{{ correctionTarget.reporterName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="产品">{{ correctionTarget.productName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="工序">{{ correctionTarget.processCategory || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="报工 ID">{{ correctionTarget.id }}</el-descriptions-item>
+          <el-descriptions-item label="批次 ID">{{ correctionTarget.batchId ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="任务 ID">{{ correctionTarget.workProcessTaskId ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="原实际产出">{{ formatQty(correctionTarget.outputQuantity) }}</el-descriptions-item>
+          <el-descriptions-item label="原良品">{{ formatQty(correctionTarget.goodQuantity) }}</el-descriptions-item>
+          <el-descriptions-item label="原不良品">{{ formatQty(correctionTarget.defectQuantity) }}</el-descriptions-item>
+          <el-descriptions-item label="原人数">{{ correctionTarget.totalWorkers ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="原工时(分钟)">{{ correctionTarget.totalWorkMinutes ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="原备注">{{ correctionTarget.notes || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="120px" style="margin-top: 16px">
+          <div class="correction-form-grid">
+            <el-form-item label="修正实际产出"><el-input-number v-model="correctionForm.outputQuantity" :min="0" :precision="2" /></el-form-item>
+            <el-form-item label="修正良品"><el-input-number v-model="correctionForm.goodQuantity" :min="0" :precision="2" /></el-form-item>
+            <el-form-item label="修正不良品"><el-input-number v-model="correctionForm.defectQuantity" :min="0" :precision="2" /></el-form-item>
+            <el-form-item label="修正人数"><el-input-number v-model="correctionForm.totalWorkers" :min="0" :precision="0" /></el-form-item>
+            <el-form-item label="修正工时"><el-input-number v-model="correctionForm.totalWorkMinutes" :min="0" :precision="0" /></el-form-item>
+          </div>
+          <el-form-item label="报工备注"><el-input v-model="correctionForm.notes" maxlength="500" show-word-limit /></el-form-item>
+          <el-form-item label="修正原因" required>
+            <el-input v-model="correctionForm.reason" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="说明核对依据和为什么需要修正" />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button :disabled="correctionSubmitting" @click="correctionDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="correctionSubmitting" :disabled="correctionSubmitting" @click="submitCorrection">提交 OA 审批</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -693,6 +905,12 @@ function evidenceImageIndex(urls: string[], url: string): number {
 .page-container { padding: 20px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; }
+.correction-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.correction-heading h3 { margin: 0 0 4px; }
+.correction-heading p { margin: 0; color: var(--el-text-color-secondary); }
+.correction-audit { padding: 8px 24px 12px; }
+.correction-history-item { margin-top: 10px; }
+.correction-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .toolbar-right { display: flex; gap: 8px; }
 .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .text-warning { color: #e6a23c; font-weight: 600; }

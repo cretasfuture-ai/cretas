@@ -54,6 +54,8 @@ public class StocktakeDTO {
     /** 批量导入模式: NORMAL / OPENING(期初建账) / null(逐项UI盘点)。用于列表区分「期初建账」与常规盘点。*/
     private String importMode;
     private List<StocktakeItemDTO> items;
+    private String reportCorrectionWarningMessage;
+    private List<com.cretas.aims.dto.production.ProductionReportCorrectionDTO> reportCorrectionWarnings;
 
     @Data
     public static class ApprovalEvidence {

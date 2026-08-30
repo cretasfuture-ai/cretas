@@ -33,6 +33,8 @@ export const OA_ACTION_INVALIDATES: Record<string, readonly string[]> = {
   // 调拨批完库存还没过账(要回单据点「确认调拨入库」), 但调拨单/待办列表已经变了。
   INVENTORY_TRANSFER: ['dashboard', 'warehouse'],
   INVENTORY_ADJUSTMENT: ['dashboard', 'warehouse', 'finance'],
+  // 报工修正批准后，当前有效报工结果和盘点重点核对提醒同时变化。
+  PRODUCTION_REPORT_CORRECTION: ['dashboard', 'production', 'warehouse'],
 };
 
 /**
