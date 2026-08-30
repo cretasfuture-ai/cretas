@@ -202,6 +202,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const [factoryNumberFilter, setFactoryNumberFilter] = useState<string | null>(null);
   const [allocationMode, setAllocationMode] = useState<AllocationMode>('choice');
   const [allocationTargetQty, setAllocationTargetQty] = useState<number | null>(null);
+  const [allocationTargetEnforced, setAllocationTargetEnforced] = useState(false);
   const [autoAllocationShortage, setAutoAllocationShortage] = useState(0);
   const [autoAllocationError, setAutoAllocationError] = useState<string | null>(null);
   const [autoAllocationLoading, setAutoAllocationLoading] = useState(false);
@@ -223,11 +224,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
 
   const rowQuantity = useCallback(
     (row: RowState, isSingle: boolean): number | null => {
-      const useParentQty = isSingle && !forceIndependentQuantity && allocationMode !== 'auto';
+      const useParentQty =
+        isSingle &&
+        !forceIndependentQuantity &&
+        allocationMode !== 'auto' &&
+        allocationTargetQty == null;
       const qty = parseFloat(useParentQty ? singleBatchQty : row.qtyStr);
       return Number.isNaN(qty) || qty <= 0 ? null : qty;
     },
-    [allocationMode, forceIndependentQuantity, singleBatchQty],
+    [allocationMode, allocationTargetQty, forceIndependentQuantity, singleBatchQty],
   );
 
   const rowOverLimit = useCallback(
@@ -252,7 +257,11 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     const refs: MaterialBatchRef[] = [];
     const selected = rows.filter((r) => r.selected);
     const isSingle = selected.length === 1;
-    const useParentQty = isSingle && !forceIndependentQuantity && allocationMode !== 'auto';
+    const useParentQty =
+      isSingle &&
+      !forceIndependentQuantity &&
+      allocationMode !== 'auto' &&
+      allocationTargetQty == null;
 
     for (const row of selected) {
       if (useParentQty) {
@@ -271,7 +280,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     }
     onChangeRef.current(refs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allocationMode, forceIndependentQuantity, rows, singleBatchQty, unit]);
+  }, [allocationMode, allocationTargetQty, forceIndependentQuantity, rows, singleBatchQty, unit]);
 
   useEffect(() => {
     const selected = rows.filter((r) => r.selected);
@@ -382,6 +391,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     setFactoryNumberFilter(null);  // F2: 切换工厂/产品时重置厂号筛选
     setAllocationMode('choice');
     setAllocationTargetQty(null);
+    setAllocationTargetEnforced(false);
     setAutoAllocationShortage(0);
     setAutoAllocationError(null);
     setAutoAllocationLoading(false);
@@ -424,9 +434,18 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           ) {
             setAllocationTargetQty(parsedSingleQty);
           }
+        } else if (
+          nextSelectedCount === 1 &&
+          allocationMode === 'manual' &&
+          allocationTargetQty != null
+        ) {
+          // 多批手动编辑删回一批时，仍保留逐批上下文和已改数量。
+          // 否则会切回父层投入量，覆盖用户刚刚调整的剩余批次。
+          setAllocationMode('manual');
         } else {
           setAllocationMode('choice');
           setAllocationTargetQty(null);
+          setAllocationTargetEnforced(false);
         }
       }
 
@@ -448,7 +467,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           if (i === idx) {
             return { ...row, selected: selecting, qtyStr: selecting ? '' : row.qtyStr };
           }
-          if (shouldCarrySingleQty && row.selected) {
+          if (shouldCarrySingleQty && row.selected && row.qtyStr === '') {
             // 单批 → 多批时，屏幕“投入量”就是原首批的真实用量。
             // 把原始字符串带入逐批输入，避免切换模式后静默丢失已填数据。
             return { ...row, qtyStr: singleBatchQty };
@@ -457,20 +476,22 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         });
       });
     },
-    [allocationTargetQty, forceIndependentQuantity, rows, selectedRows.length, singleBatchQty],
+    [allocationMode, allocationTargetQty, forceIndependentQuantity, rows, selectedRows.length, singleBatchQty],
   );
 
   const switchToManualAllocation = useCallback(() => {
+    const preservingAutoAllocation = allocationMode === 'auto';
     autoAllocationRequestRef.current += 1;
     const parsedTarget = parseFloat(singleBatchQty);
     if (allocationTargetQty == null && !Number.isNaN(parsedTarget) && parsedTarget > 0) {
       setAllocationTargetQty(parsedTarget);
     }
     setAllocationMode('manual');
+    if (preservingAutoAllocation) setAllocationTargetEnforced(true);
     setAutoAllocationLoading(false);
     setAutoAllocationShortage(0);
     setAutoAllocationError(null);
-  }, [allocationTargetQty, singleBatchQty]);
+  }, [allocationMode, allocationTargetQty, singleBatchQty]);
 
   const handleAutoAllocate = useCallback(async () => {
     const selected = rows.filter((row) => row.selected);
@@ -558,6 +579,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         return [...recommendedRows, ...otherRows];
       });
       setAllocationMode('auto');
+      setAllocationTargetEnforced(true);
       setAutoAllocationShortage(result.shortage);
       setAutoAllocationError(null);
     } catch (error) {
@@ -624,6 +646,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       setConfirmFeedback(false);
       autoAllocationRequestRef.current += 1;
       setAllocationMode('manual');
+      setAllocationTargetEnforced(false);
       setAutoAllocationLoading(false);
       setAutoAllocationShortage(0);
       setAutoAllocationError(null);
@@ -655,7 +678,12 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       return;
     }
     const isSingle = selected.length === 1;
-    if (isSingle && !forceIndependentQuantity && allocationMode !== 'auto') {
+    if (
+      isSingle &&
+      !forceIndependentQuantity &&
+      allocationMode !== 'auto' &&
+      allocationTargetQty == null
+    ) {
       const qty = parseFloat(singleBatchQty);
       if (Number.isNaN(qty) || qty <= 0) {
         // 单批次 qty 来自屏幕 投入量, 为空时提示先填投入量
@@ -669,6 +697,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       });
       if (anyInvalid) return;
     }
+    if (allocationTargetEnforced && allocationTargetQty != null) {
+      const total = selected.reduce((sum, row) => sum + (parseFloat(row.qtyStr) || 0), 0);
+      if (Math.abs(total - allocationTargetQty) > QUANTITY_EPSILON) return;
+    }
 
     setConfirmed(true);
     setExpanded(false);
@@ -678,7 +710,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     confirmTimerRef.current = setTimeout(() => {
       setConfirmFeedback(false);
     }, 1500);
-  }, [allocationMode, autoAllocationShortage, forceIndependentQuantity, rows, singleBatchQty]);
+  }, [allocationMode, allocationTargetEnforced, allocationTargetQty, autoAllocationShortage, forceIndependentQuantity, rows, singleBatchQty]);
 
   // Q2 验证按钮是否可以点击
   const canConfirm = useCallback((): boolean => {
@@ -686,16 +718,25 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
     const selected = rows.filter((r) => r.selected);
     if (selected.length === 0) return false;
     const isSingle = selected.length === 1;
-    if (isSingle && !forceIndependentQuantity && allocationMode !== 'auto') {
+    if (
+      isSingle &&
+      !forceIndependentQuantity &&
+      allocationMode !== 'auto' &&
+      allocationTargetQty == null
+    ) {
       const first = selected[0];
       const qty = parseFloat(singleBatchQty);
       return first != null && !Number.isNaN(qty) && qty > 0 && !rowOverLimit(first, true);
     }
-    return selected.every((r) => {
+    const allRowsValid = selected.every((r) => {
       const q = parseFloat(r.qtyStr);
       return !Number.isNaN(q) && q > 0 && !rowOverLimit(r, false);
     });
-  }, [allocationMode, autoAllocationShortage, forceIndependentQuantity, rows, singleBatchQty, rowOverLimit]);
+    if (!allRowsValid) return false;
+    if (!allocationTargetEnforced || allocationTargetQty == null) return true;
+    const total = selected.reduce((sum, row) => sum + (parseFloat(row.qtyStr) || 0), 0);
+    return Math.abs(total - allocationTargetQty) <= QUANTITY_EPSILON;
+  }, [allocationMode, allocationTargetEnforced, allocationTargetQty, autoAllocationShortage, forceIndependentQuantity, rows, singleBatchQty, rowOverLimit]);
 
   /**
    * 「已选几批」的唯一口径 = **组件自己的行选择**。
@@ -710,9 +751,15 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
    * 两边不会各说各话。
    */
   const selectedCount = selectedRows.length;
-  const usesIndependentQuantity = isMultiBatch || forceIndependentQuantity || allocationMode === 'auto';
+  // 自动结果切手动后仍是“逐批分配”上下文，即使只剩一个自动批次。
+  // allocationTargetQty 是该上下文的标记，避免退回单批 UI 而隐藏已分配行。
+  const usesIndependentQuantity =
+    isMultiBatch ||
+    forceIndependentQuantity ||
+    allocationMode === 'auto' ||
+    (allocationMode === 'manual' && allocationTargetQty != null);
 
-  // 已选各批的用量 (单批次取屏幕投入量, 多批次取各自输入)。null = 还没填。
+  // 已选各批的用量 (普通单批取屏幕投入量，逐批分配上下文取各自输入)。null = 还没填。
   const selectedQuantities = selectedRows.map((r) => rowQuantity(r, selectedRows.length === 1));
   const hasPendingQty = selectedQuantities.some((q) => q == null);
   const selectedTotal = selectedQuantities.reduce((s: number, q) => s + (q ?? 0), 0);
@@ -736,7 +783,9 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
         {allocationMode === 'auto' ? '自动分配结果（逐批核对）' : '已选批次用量（逐批填写）'}
       </Text>
       <Text style={styles.selectedQuantityHelp}>
-        {allocationMode === 'auto'
+        {allocationTargetEnforced && allocationTargetQty != null
+          ? `目标 ${formatAllocatedQuantity(allocationTargetQty)} ${unit}；当前合计 ${hasPendingQty ? '待填' : `${formatAllocatedQuantity(selectedTotal)} ${unit}`}，合计达到目标后才能确定`
+          : allocationMode === 'auto'
           ? '系统已按批次剩余量拆分；每批身份仍分别保留，可直接核对或改为手动'
           : '每批不能超过该批剩余量；全部填写后才能确定'}
       </Text>
@@ -1182,7 +1231,10 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
           {!showAllocationWindow ? selectedQuantityEditor : null}
 
           {/* 多批次合计 */}
-          {selectedCount > 0 && (isMultiBatch || allocationMode === 'auto') ? (
+          {selectedCount > 0 &&
+          (isMultiBatch ||
+            allocationMode === 'auto' ||
+            (allocationMode === 'manual' && allocationTargetQty != null)) ? (
             <View style={styles.selectedHint}>
               <Text style={styles.selectedHintText}>
                 已选 {selectedCount} 批次 · 合计领料{' '}
@@ -1212,6 +1264,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
               <Text style={[styles.confirmBtnText, !canConfirm() && styles.confirmBtnTextDisabled]}>
                 {allocationMode === 'auto' && autoAllocationShortage > QUANTITY_EPSILON
                   ? '自动分配仍有缺口，请改为手动'
+                  : allocationTargetEnforced && allocationTargetQty != null && !canConfirm() && !hasPendingQty
+                    ? `逐批合计需达到 ${formatAllocatedQuantity(allocationTargetQty)} ${unit}`
                   : usesIndependentQuantity
                     ? (canConfirm()
                         ? '确定选择'
