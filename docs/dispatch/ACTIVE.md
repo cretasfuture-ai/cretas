@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-- `BUG-F006-SETTLEMENT-MANUAL-RAW-COVERAGE-20260901` — `in-progress` — Owner: `/root` — Base SHA: `3a424b3a53d8bb2e067a855930eaff75ef789fe8` — 生产实测已证明 Web 对客供 Workflow 结单发送 9 条原料，但服务端重新推导后仅保留 4 条报工原料并静默丢弃 5 条人工补齐行。状态机冻结为“服务端报工事实 4 条不可覆盖 → 仅合并销售订单客供要求的缺失批次 → 复用现有 BOM/客供归属/库存严格校验 → 覆盖完整才结单”；不改报工、采购、仓库、成本、撤回或审批模型。Scope lock：仅 `ProductionPlanServiceImpl.deriveConfirmedSettlementRequest/settleProduction` 的缺失客供原料合并接线、`CustomerSuppliedSettlementCoverageGuard`、对应 `*ContractTest`/`ProductionPlanSettlementTest`、本任务 dispatch。停止条件：跨租户、非客供原料被接纳、报工原料被覆盖、重复扣减、数量超出缺口或目标测试/生产回读不一致即停。
 
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
@@ -149,7 +148,6 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
-- `BUG-F006-SETTLEMENT-MANUAL-RAW-COVERAGE-20260901`：仅 `backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java` 的 `settleProduction/deriveConfirmedSettlementRequest` 缺失客供原料接线、`service/production/CustomerSuppliedSettlementCoverageGuard.java`、直接对应的 Java 目标测试、`docs/dispatch/ACTIVE.md` 与当日归档；与 `BUG-F006-PRODUCTION-COST-CLOSURE-001` 在同一大文件中的成本原因组装方法不重叠。禁止改 Entity/Repository/Flyway、报工事实、投入口径、审批、成本、撤回或其他计划族。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
