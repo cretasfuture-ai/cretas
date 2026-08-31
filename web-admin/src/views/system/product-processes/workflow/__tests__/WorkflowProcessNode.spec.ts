@@ -106,6 +106,28 @@ describe('WorkflowProcessNode output gestures', () => {
     expect(wrapper.emitted('editProcess')).toHaveLength(1);
   });
 
+  it('opens the branch rework matrix and renders saved source references without reverse lines', async () => {
+    const wrapper = mount(WorkflowProcessNode, {
+      props: {
+        data: processData,
+        selected: true,
+        canWrite: true,
+        semiOptions: SEMI_OPTIONS,
+        finishedOptions: FINISHED_OPTIONS,
+        reworkReferences: [
+          { sourceProductTypeId: 'AMERICAN', sourceProductName: '美式汉堡饼', color: '#1b65a8' },
+        ],
+        reworkMaxInputRatioPercent: 10,
+      },
+      global: { plugins: [ElementPlus], stubs: { Handle: PositionedHandleStub } },
+    });
+
+    expect(wrapper.get('[data-testid="rework-reference-panel"]').text()).toContain('美式汉堡饼');
+    expect(wrapper.get('[data-testid="rework-reference-panel"]').text()).toContain('最多 10%');
+    await wrapper.get('[data-testid="edit-rework-matrix"]').trigger('click');
+    expect(wrapper.emitted('editRework')).toHaveLength(1);
+  });
+
   it('P3: exposes an editable output SKU picker on each output row and emits selectOutput(portId, skuId)', () => {
     const wrapper = mountNode();
     // 现在允许在工序 Cell 上直接选/改产出物料的 SKU (不再只能通过右侧物料 Cell)。

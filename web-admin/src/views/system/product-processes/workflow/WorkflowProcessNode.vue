@@ -43,15 +43,24 @@
         <div class="eyebrow">工序 Cell</div>
         <div class="process-name">{{ data.processName }}</div>
       </div>
-      <button
-        v-if="canWrite"
-        type="button"
-        class="quick-edit-process nodrag"
-        title="快捷编辑工序"
-        aria-label="快捷编辑工序"
-        data-testid="quick-edit-process"
-        @click.stop="emit('editProcess')"
-      >编辑工序</button>
+      <div v-if="canWrite" class="process-heading-actions nodrag">
+        <button
+          type="button"
+          class="quick-edit-process"
+          title="配置本分支的回料来源矩阵"
+          aria-label="配置回料矩阵"
+          data-testid="edit-rework-matrix"
+          @click.stop="emit('editRework')"
+        >回料矩阵</button>
+        <button
+          type="button"
+          class="quick-edit-process"
+          title="快捷编辑工序"
+          aria-label="快捷编辑工序"
+          data-testid="quick-edit-process"
+          @click.stop="emit('editProcess')"
+        >编辑工序</button>
+      </div>
     </div>
 
     <div class="system-inference" data-testid="system-inference">
@@ -59,6 +68,21 @@
         可报工接口 · {{ inputPorts.length }} 个投入 · {{ outputPorts.length }} 个产出
       </span>
       <span class="system-inference-hint">正式报工时按实际情况选择，投入和产出至少各一项</span>
+    </div>
+
+    <div v-if="reworkReferences.length > 0" class="rework-reference-panel" data-testid="rework-reference-panel">
+      <div class="rework-reference-title">
+        <span>可选回料</span>
+        <strong>最多 {{ reworkMaxInputRatioPercent ?? 0 }}%</strong>
+      </div>
+      <div class="rework-reference-list">
+        <span
+          v-for="reference in reworkReferences"
+          :key="reference.sourceProductTypeId"
+          class="rework-reference-chip"
+          :style="{ '--rework-color': reference.color }"
+        >{{ reference.sourceProductName }}</span>
+      </div>
     </div>
 
     <section class="port-section">
@@ -199,7 +223,13 @@ const props = withDefaults(defineProps<{
   finishedOptions: WorkflowSkuPickerOption[];
   allowAddInput?: boolean;
   skuSpecifications?: Record<string, { unit: string; gramsPerUnit: number | null }>;
-}>(), { allowAddInput: true });
+  reworkReferences?: Array<{
+    sourceProductTypeId: string;
+    sourceProductName: string;
+    color: string;
+  }>;
+  reworkMaxInputRatioPercent?: number | null;
+}>(), { allowAddInput: true, reworkReferences: () => [] });
 
 // #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
 // 工序互相之间非法 → 灰化。
@@ -217,6 +247,7 @@ const emit = defineEmits<{
   selectOutput: [portId: string, skuId: string];
   delete: [];
   editProcess: [];
+  editRework: [];
 }>();
 
 const processNodeStyle = { minHeight: '96px' } as const;
@@ -287,15 +318,15 @@ function handleStyle(index: number, count: number): Record<string, string> {
   cursor: pointer; box-shadow: 0 2px 6px rgba(245, 108, 108, 0.4);
 }
 .cell-delete:hover { background: #f23c3c; }
-.cell-delete, .quick-edit-process { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.cell-delete, .process-heading-actions { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
 .process-node:hover .cell-delete,
-.process-node:hover .quick-edit-process,
+.process-node:hover .process-heading-actions,
 .process-node:focus-within .cell-delete,
-.process-node:focus-within .quick-edit-process,
+.process-node:focus-within .process-heading-actions,
 .process-node.selected .cell-delete,
-.process-node.selected .quick-edit-process { opacity: 1; pointer-events: auto; }
+.process-node.selected .process-heading-actions { opacity: 1; pointer-events: auto; }
 @media (hover: none) {
-  .process-node .cell-delete, .process-node .quick-edit-process { opacity: 1; pointer-events: auto; }
+  .process-node .cell-delete, .process-node .process-heading-actions { opacity: 1; pointer-events: auto; }
 }
 
 .process-node {
@@ -306,6 +337,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .process-node.selected { box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3); }
 .process-heading { display: flex; align-items: flex-start; gap: 8px; }
 .process-heading > div { min-width: 0; flex: 1; }
+.process-heading > .process-heading-actions { position: relative; z-index: 8; display: inline-flex; flex: 0 0 auto; gap: 4px; }
 .quick-edit-process {
   min-height: 32px; flex: 0 0 auto;
   padding: 0 10px; border: 1px solid #b9d8f4; border-radius: 6px; background: #fff;
@@ -318,6 +350,14 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .system-inference { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .system-inference-badge { width: fit-content; padding: 2px 8px; border-radius: 999px; background: #eef6ff; color: #1b65a8; font-size: 11px; font-weight: 650; }
 .system-inference-hint { color: #9aa5b8; font-size: 10px; }
+.rework-reference-panel { margin-top: 9px; padding: 8px 10px; border: 1px solid #d8e9df; border-radius: 8px; background: #f7fbf8; }
+.rework-reference-title { display: flex; align-items: center; justify-content: space-between; color: #397a4b; font-size: 11px; }
+.rework-reference-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.rework-reference-chip {
+  padding: 3px 7px 3px 10px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--rework-color) 35%, white);
+  border-left: 5px solid var(--rework-color); background: #fff; color: #344054; font-size: 11px; font-weight: 600;
+}
 .port-section, .unit-rule-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 /* 两个建产出按钮并排; space-between 只在"标题 vs 按钮组"之间生效, 按钮之间用 gap。 */

@@ -46,6 +46,8 @@ export interface MaterialNodeData extends Record<string, unknown> {
    * 与 `ProcessPort.outputRole` 的关系: 那个字段已弃用(见其注释), 不要用它表达副产。
    */
   isByproduct?: boolean;
+  /** 质量剔除后可回到后续批次继续使用的独立半成品 SKU。 */
+  isRework?: boolean;
   /**
    * 本原料 cell 是哪个原料的替代料(值 = 被替代原料 cell 的 node id)。
    * 空/缺省 = 独立投入(与主料一起投)。
@@ -149,6 +151,18 @@ export interface ProcessNodeData extends Record<string, unknown> {
   standardTime?: number | null;
   allowMultipleUpstreamSources?: boolean;
   allowFinishedGoodsSource?: boolean;
+  /**
+   * 当前分支目标成品的回料规则。配置随 Workflow 版本保存；运行时投料闸接入前，
+   * 这里只负责真实持久化配置，不能把它误称为已执行的库存限制。
+   */
+  reworkPolicy?: WorkflowReworkPolicy | null;
+}
+
+export interface WorkflowReworkPolicy {
+  targetProductTypeId: string;
+  targetProductName?: string | null;
+  allowedSourceProductTypeIds: string[];
+  maxInputRatioPercent: number;
 }
 
 export type WorkflowNodeData = MaterialNodeData | ProcessNodeData;

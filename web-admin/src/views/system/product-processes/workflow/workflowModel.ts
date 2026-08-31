@@ -440,11 +440,12 @@ const conversionModes = new Set(['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 
 const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE', 'OPTIONAL']);
 const materialDataKeys = new Set([
   'name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound', 'substituteOfNodeId',
+  'isRework',
 ]);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
   'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
-  'allowFinishedGoodsSource', 'reportingSelectionMode',
+  'allowFinishedGoodsSource', 'reportingSelectionMode', 'reworkPolicy',
 ]);
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
@@ -540,6 +541,7 @@ function isMaterialNodeData(value: Record<string, unknown>): value is MaterialNo
     && optionalNullableString(value.specification)
     && optionalString(value.baseUnit)
     && optionalBoolean(value.bound)
+    && optionalBoolean(value.isRework)
     && optionalNullableString(value.substituteOfNodeId);
 }
 
@@ -559,7 +561,23 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && optionalNullableFiniteNumber(value.standardTime)
     && optionalBoolean(value.allowMultipleUpstreamSources)
     && optionalBoolean(value.allowFinishedGoodsSource)
+    && isOptionalReworkPolicy(value.reworkPolicy)
     && (value.reportingSelectionMode === undefined || value.reportingSelectionMode === 'ACTUAL_IO');
+}
+
+function isOptionalReworkPolicy(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isRecord(value)
+    || !hasExactKeys(value, [
+      'targetProductTypeId', 'targetProductName', 'allowedSourceProductTypeIds', 'maxInputRatioPercent',
+    ])
+    || !isNonBlankString(value.targetProductTypeId)
+    || !optionalNullableString(value.targetProductName)
+    || !Array.isArray(value.allowedSourceProductTypeIds)
+    || !value.allowedSourceProductTypeIds.every(isNonBlankString)
+    || !isFiniteNumber(value.maxInputRatioPercent)) return false;
+  const ratio = Number(value.maxInputRatioPercent);
+  return ratio >= 0 && ratio <= 100;
 }
 
 function isProcessPortGroup(value: unknown): value is ProcessPortGroup {

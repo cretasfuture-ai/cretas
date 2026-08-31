@@ -92,6 +92,29 @@ function mountNode(overrides: {
   });
 }
 
+describe('WorkflowMaterialNode 回料引用', () => {
+  it('把回料显示成独立 Cell，并用来源产品颜色条建立远距离关联', () => {
+    const wrapper = mount(WorkflowMaterialNode, {
+      props: {
+        kind: 'SEMI_FINISHED',
+        data: { name: '美式回料', skuId: 'RW-AMERICAN', isRework: true },
+        canWrite: true,
+        rawMaterialOptions: [],
+        semiOptions: [],
+        finishedOptions: [],
+        reworkSourceProductName: '美式汉堡饼',
+        reworkReferenceColor: '#1b65a8',
+      },
+      global: { plugins: [ElementPlus], stubs: { Handle: HandleStub } },
+    });
+
+    expect(wrapper.attributes('data-testid')).toBe('rework-cell');
+    expect(wrapper.text()).toContain('回料 Cell');
+    expect(wrapper.get('[data-testid="rework-source-reference"]').text()).toContain('美式汉堡饼');
+    expect(wrapper.get('[data-testid="rework-source-reference"]').attributes('style')).toContain('#1b65a8');
+  });
+});
+
 describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3)', () => {
   it('splits candidates into a "本产品 BOM 原料" group (top) and an "其它原料" group when the product has a BOM', () => {
     const wrapper = mountNode({ bomRawMaterialIds: ['RM-PIG'] });

@@ -83,7 +83,9 @@
         class="aux-row nodrag"
         role="button"
         tabindex="0"
-        @click="canWrite && emit('edit-row', row.id)"
+        @click="emit('edit-row', row.id)"
+        @keydown.enter.prevent="emit('edit-row', row.id)"
+        @keydown.space.prevent="emit('edit-row', row.id)"
       >
         <span class="aux-row-name">{{ row.materialName }}</span>
         <span class="aux-row-markers">

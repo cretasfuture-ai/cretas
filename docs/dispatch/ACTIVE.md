@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `FEATURE-WORKFLOW-REWORK-CONFIG-20260831` — `review` — Owner: `codex/side-workflow-rework` — Base SHA: `4de31ba68017a83b383a72ee864dc6e8a490ae83` — 将已评审原型能力合入真实 Web「产品-工序配置」：各成品分支工序维护来源×目标回料矩阵和分支最大投入比例，矩阵随 Workflow 草稿/版本持久化；回料 Cell 与目标工序采用同色引用而不绘制逆向连线；辅料/包材先只读详情、明确开始编辑后才创建/切换 BOM 草稿；修复工序快捷编辑点击命中。Scope lock：仅 `web-admin/src/views/system/product-processes/workflow/**`、对应目标测试、本任务 dispatch；不改生产投料执行闸、BOM 后端、历史 Workflow/生产数据。验收：目标 Vitest 88/88、`vue-tsc -b`、Web build 已通过；待加拿大 Mac mini 隔离测试环境真实保存/重开和零意外 mutation 走查。
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
 - `QA-WEB-VISUAL-WALKTHROUGH-20260828` — `merged` — Owner: `claude-code/visual-acceptance` — **用 web-admin 逐屏走查(视觉验收)一轮, 抓到 3 个接口层/类型检查/单测全都抓不到的缺陷**, 并把其中重复三次的那一类升级成闸。凭 `f006_admin` 登录 prod(`139.196.165.140:8086`), ⛔ 全程从菜单点进去, 不用 `goto(url)` —— 本仓 8-26 实测过「E2E 直接敲 URL 对『入口缺失』这一类系统性免疫」。
@@ -147,6 +148,7 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+- `FEATURE-WORKFLOW-REWORK-CONFIG-20260831`：仅 `web-admin/src/views/system/product-processes/workflow/**`、对应目标测试、`docs/dispatch/ACTIVE.md` 与当日归档；矩阵配置随 Workflow 定义持久化，辅料/包材只读详情不得触发 `ensure-draft`，不改 Java/Flyway/生产运行时投料规则或历史业务数据。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。

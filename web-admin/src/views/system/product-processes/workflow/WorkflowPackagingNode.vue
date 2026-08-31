@@ -18,7 +18,11 @@
         v-for="row in data.rows"
         :key="row.id"
         class="packaging-row nodrag"
-        @click.stop="canWrite && emit('edit-row', row.id)"
+        role="button"
+        tabindex="0"
+        @click.stop="emit('edit-row', row.id)"
+        @keydown.enter.prevent="emit('edit-row', row.id)"
+        @keydown.space.prevent="emit('edit-row', row.id)"
       >
         <span class="row-material-name">{{ row.materialName }}</span>
         <span class="row-markers">

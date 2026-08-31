@@ -10,8 +10,9 @@
       'validation-error': !!validationError,
       'validation-attention': validationAttention,
       byproduct: data?.isByproduct === true,
+      rework: data?.isRework === true,
     }]"
-    :data-testid="data?.isByproduct === true ? 'byproduct-cell' : undefined"
+    :data-testid="data?.isByproduct === true ? 'byproduct-cell' : data?.isRework === true ? 'rework-cell' : undefined"
   >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
@@ -65,6 +66,15 @@
     <div class="identity-row">
       <span>SKU</span>
       <strong>{{ data.skuCode || data.skuId || '尚未选择' }}</strong>
+    </div>
+    <div
+      v-if="isRework"
+      class="rework-source-reference"
+      :style="{ '--rework-color': reworkReferenceColor || '#138a72' }"
+      data-testid="rework-source-reference"
+    >
+      <span class="rework-source-swatch" />
+      <span>{{ reworkSourceProductName || '来源产品待由同工序成品识别' }} · 回料来源</span>
     </div>
     <div v-if="data.specification" class="specification">{{ data.specification }}</div>
     <div v-if="unitError" class="unit-error-message" data-testid="unit-error">
@@ -271,6 +281,8 @@ const props = withDefaults(defineProps<{
   finishedOptions: WorkflowSkuPickerOption[];
   /** 副产可选物料(按 isByproduct 标记筛出的物料档案, 不是产品 SKU)。 */
   byproductOptions?: ByproductMaterialOption[];
+  reworkSourceProductName?: string | null;
+  reworkReferenceColor?: string | null;
   /**
    * 这个成品的 BOM 状态气泡文案 —— 空串 = 不显示。
    * 内容原本在画布顶部的黄色横幅里, 但那里离它描述的 Cell 太远, 用户得来回找。
@@ -426,14 +438,15 @@ const filteredOtherRawOptions = otherRawFilter.filtered;
  * 不改 kind, 也不加任何分支逻辑。
  */
 const isByproduct = computed(() => props.data?.isByproduct === true);
+const isRework = computed(() => props.data?.isRework === true);
 
-const kindLabel = computed(() => (isByproduct.value ? '副产 Cell' : {
+const kindLabel = computed(() => (isByproduct.value ? '副产 Cell' : isRework.value ? '回料 Cell' : {
   RAW_MATERIAL: '原料 Cell',
   SEMI_FINISHED: '半成品 Cell',
   FINISHED_GOOD: '成品 Cell',
 }[props.kind]));
 
-const kindMark = computed(() => (isByproduct.value ? '副' : {
+const kindMark = computed(() => (isByproduct.value ? '副' : isRework.value ? '回' : {
   RAW_MATERIAL: '原',
   SEMI_FINISHED: '半',
   FINISHED_GOOD: '成',
@@ -482,6 +495,13 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
 /* 副产: 与主产出的绿色左条区分开(owner 要求颜色能分辨)。只改视觉, 不改任何图逻辑。 */
 .material-node.byproduct { border-left-color: #dc6803; background: #fffcf5; }
+.material-node.rework { border-color: #a9d8c8; border-left-color: #138a72; background: #f7fcfa; }
+.rework-source-reference {
+  display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--rework-color) 30%, white); border-radius: 7px;
+  background: #fff; color: #344054; font-size: 11px; font-weight: 600;
+}
+.rework-source-swatch { width: 18px; height: 7px; border-radius: 3px; background: var(--rework-color); }
 .byproduct-empty {
   margin-top: 6px;
   padding: 7px 9px;

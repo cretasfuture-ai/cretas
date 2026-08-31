@@ -108,13 +108,14 @@ describe('辅料 cell', () => {
     expect(w.find('[data-testid="aux-add"]').exists()).toBe(false);
   });
 
-  it('只读用户点击行不触发 edit-row', async () => {
+  it('只读用户仍可点击行查看详情，但不会出现新增入口', async () => {
     const w = mount(WorkflowAuxiliaryNode, {
       global: { stubs: { Handle: HandleStub } },
       props: { id: 'x', canWrite: false, data: baseData },
     });
     await w.find('.aux-row').trigger('click');
-    expect(w.emitted('edit-row')).toBeFalsy();
+    expect(w.emitted('edit-row')?.[0]).toEqual(['r1']);
+    expect(w.find('[data-testid="aux-add"]').exists()).toBe(false);
   });
 
   // must-fix #3 (final whole-branch review of Phase 3-1): usageSupported 必须是三态。

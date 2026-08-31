@@ -132,12 +132,13 @@ describe('包材 cell', () => {
     expect(w.find('[data-testid="pack-add"]').exists()).toBe(false);
   });
 
-  it('只读用户点击行不触发 edit-row', async () => {
+  it('只读用户仍可点击行查看详情，但不会出现新增入口', async () => {
     const w = mount(WorkflowPackagingNode, {
       global: { stubs: { Handle: HandleStub } },
       props: { id: 'x', canWrite: false, data },
     });
     await w.find('[data-testid="pack-qty-r1"]').trigger('click');
-    expect(w.emitted('edit-row')).toBeFalsy();
+    expect(w.emitted('edit-row')?.[0]).toEqual(['r1']);
+    expect(w.find('[data-testid="pack-add"]').exists()).toBe(false);
   });
 });

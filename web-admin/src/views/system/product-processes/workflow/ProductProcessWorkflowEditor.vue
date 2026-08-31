@@ -276,6 +276,8 @@
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
               :byproduct-options="byproductMaterialOptions"
+              :rework-source-product-name="reworkSourceVisualForNode(slotProps.id)?.productName || null"
+              :rework-reference-color="reworkSourceVisualForNode(slotProps.id)?.color || null"
               :unit-error="unitIssueForNode(slotProps.id)"
               :validation-error="publishBindingErrorForNode(slotProps.id)"
               :validation-attention="publishBindingAttentionNodeIds.has(slotProps.id)"
@@ -303,6 +305,8 @@
               :semi-options="semiFinishedSkuOptions"
               :finished-options="finishedGoodSkuOptions"
               :sku-specifications="skuSpecifications"
+              :rework-references="reworkReferencesForProcess(slotProps.id)"
+              :rework-max-input-ratio-percent="reworkMaxRatioForProcess(slotProps.id)"
               :allow-add-input="true"
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
@@ -311,6 +315,7 @@
               @add-rework="addOutputToProcess(slotProps.id, { rework: true })"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
               @edit-process="openQuickEditProcess(slotProps.id)"
+              @edit-rework="openReworkMatrix(slotProps.id)"
               @delete="removeNode(slotProps.id)"
             />
           </template>
@@ -323,8 +328,8 @@
               :can-write="canEdit"
               :collapsed="collapsedAuxProcessIds.has(slotProps.data.processNodeId)"
               @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
-              @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
-              @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
+              @edit-row="(rowId) => openBomDetail('AUXILIARY', slotProps.data.processNodeId, rowId)"
+              @open-detail="openBomDetail('AUXILIARY', slotProps.data.processNodeId)"
               @set-collapsed="(next) => setAuxCollapsed(slotProps.data.processNodeId, next)"
             />
           </template>
@@ -334,7 +339,7 @@
               :data="slotProps.data"
               :can-write="canEdit"
               @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
-              @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
+              @edit-row="(rowId) => openBomDetail('PACKAGING', slotProps.data.outputNodeId, rowId)"
             />
           </template>
         </VueFlow>
@@ -488,6 +493,60 @@
         >标记并选入</el-button>
       </template>
     </el-dialog>
+
+    <WorkflowReworkMatrixDialog
+      v-model="reworkMatrixVisible"
+      :sources="reworkMatrixContext.sources"
+      :targets="reworkMatrixContext.targets"
+      :rules="reworkMatrixContext.rules"
+      :focus-target-product-type-id="reworkMatrixContext.focusTargetProductTypeId"
+      @save="applyReworkMatrixRules"
+    />
+
+    <el-drawer
+      v-model="bomDetailVisible"
+      :title="bomDetailKind === 'AUXILIARY' ? '辅料详情' : '包材详情'"
+      size="440px"
+      append-to-body
+      data-testid="workflow-bom-readonly-detail"
+    >
+      <template v-if="bomDetailRows.length > 0">
+        <div class="bom-readonly-context">
+          <span>{{ bomDetailContextName }}</span>
+          <el-tag type="info" size="small">只读查看</el-tag>
+        </div>
+        <div v-for="row in bomDetailRows" :key="row.id" class="bom-readonly-row">
+          <div>
+            <strong>{{ row.materialName }}</strong>
+            <span>{{ row.dosageText || '用量待补全' }}</span>
+          </div>
+          <el-button
+            v-if="canEdit"
+            text
+            type="primary"
+            @click="beginEditingBomDetail(row.id)"
+          >开始编辑</el-button>
+        </div>
+      </template>
+      <el-empty v-else description="当前还没有配置明细" />
+      <el-alert
+        class="bom-readonly-note"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="bomDetailKind === 'AUXILIARY'
+          ? '系统按本工序实际投入量和 g/kg 配方自动计算；报工员无需再次填写辅料数量。'
+          : '系统按成品数量和包装层级换算自动计算；报工员无需再次填写包材数量。'"
+      />
+      <template #footer>
+        <el-button @click="bomDetailVisible = false">关闭</el-button>
+        <el-button
+          v-if="canEdit && bomDetailRows.length === 0"
+          type="primary"
+          @click="beginEditingBomDetail()"
+        >开始配置</el-button>
+      </template>
+    </el-drawer>
 
     <el-dialog v-model="processDialogVisible" title="增加后续工序" width="480px" destroy-on-close>
       <el-form label-width="90px">
@@ -852,6 +911,12 @@ import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
+import WorkflowReworkMatrixDialog from './WorkflowReworkMatrixDialog.vue';
+import {
+  deriveReworkMatrixContext,
+  referenceColorForProduct,
+  type ReworkMatrixRule,
+} from './workflowReworkMatrix';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -1605,6 +1670,112 @@ const skuSpecifications = computed(() => Object.fromEntries(skuOptions.value.map
   option.id,
   { unit: option.unit || '', gramsPerUnit: option.gramsPerUnit ?? null },
 ])));
+
+const reworkMatrixVisible = ref(false);
+const reworkMatrixProcessNodeId = ref('');
+const reworkMatrixContext = computed(() => deriveReworkMatrixContext(
+  flowNodes.value.map((node) => ({ id: node.id, data: node.data as Record<string, unknown> })),
+  flowEdges.value.map((edge) => ({ source: edge.source, target: edge.target })),
+  reworkMatrixProcessNodeId.value,
+));
+const reworkVisualContext = computed(() => deriveReworkMatrixContext(
+  flowNodes.value.map((node) => ({ id: node.id, data: node.data as Record<string, unknown> })),
+  flowEdges.value.map((edge) => ({ source: edge.source, target: edge.target })),
+  '',
+));
+
+function openReworkMatrix(processNodeId: string): void {
+  reworkMatrixProcessNodeId.value = processNodeId;
+  reworkMatrixVisible.value = true;
+}
+
+function applyReworkMatrixRules(rules: ReworkMatrixRule[]): void {
+  mutate(() => {
+    rules.forEach((rule) => {
+      const node = flowNodes.value.find((candidate) => candidate.id === rule.processNodeId);
+      if (!node || node.data?.kind !== 'PROCESS') return;
+      (node.data as ProcessNodeData).reworkPolicy = {
+        targetProductTypeId: rule.targetProductTypeId,
+        targetProductName: rule.targetProductName ?? null,
+        allowedSourceProductTypeIds: [...rule.allowedSourceProductTypeIds],
+        maxInputRatioPercent: rule.maxInputRatioPercent,
+      };
+    });
+  });
+  ElMessage.success('回料矩阵已写入 Workflow 草稿，请保存草稿后再切换产品');
+}
+
+function reworkReferencesForProcess(processNodeId: string): Array<{
+  sourceProductTypeId: string;
+  sourceProductName: string;
+  color: string;
+}> {
+  const node = flowNodes.value.find((candidate) => candidate.id === processNodeId);
+  const policy = node && node.data?.kind === 'PROCESS'
+    ? (node.data as ProcessNodeData).reworkPolicy
+    : null;
+  if (!policy) return [];
+  return policy.allowedSourceProductTypeIds.flatMap((sourceProductTypeId) => {
+    const source = reworkVisualContext.value.sources.find((item) => item.productTypeId === sourceProductTypeId);
+    return source ? [{
+      sourceProductTypeId,
+      sourceProductName: source.productName,
+      color: source.color,
+    }] : [];
+  });
+}
+
+function reworkMaxRatioForProcess(processNodeId: string): number | null {
+  const node = flowNodes.value.find((candidate) => candidate.id === processNodeId);
+  const policy = node && node.data?.kind === 'PROCESS'
+    ? (node.data as ProcessNodeData).reworkPolicy
+    : null;
+  return policy?.maxInputRatioPercent ?? null;
+}
+
+function reworkSourceVisualForNode(nodeId: string): { productName: string; color: string } | null {
+  const productTypeId = reworkVisualContext.value.sourceProductByReworkNodeId[nodeId];
+  if (!productTypeId) return null;
+  const source = reworkVisualContext.value.sources.find((item) => item.productTypeId === productTypeId);
+  const color = referenceColorForProduct(reworkVisualContext.value, productTypeId);
+  return source && color ? { productName: source.productName, color } : null;
+}
+
+type BomDetailKind = 'AUXILIARY' | 'PACKAGING';
+const bomDetailVisible = ref(false);
+const bomDetailKind = ref<BomDetailKind>('AUXILIARY');
+const bomDetailOwnerNodeId = ref('');
+const bomDetailSelectedRowId = ref<string | null>(null);
+const bomDetailRows = computed<Array<AuxiliaryCellRow | PackagingCellRow>>(() => {
+  const rows = bomDetailKind.value === 'AUXILIARY'
+    ? bomOverlayAuxiliaryByProcess.value[bomDetailOwnerNodeId.value]?.rows ?? []
+    : bomOverlayPackagingByOutput.value[bomDetailOwnerNodeId.value]?.rows ?? [];
+  if (!bomDetailSelectedRowId.value) return rows;
+  return rows.filter((row) => row.id === bomDetailSelectedRowId.value);
+});
+const bomDetailContextName = computed(() => {
+  if (bomDetailKind.value === 'AUXILIARY') {
+    const node = flowNodes.value.find((candidate) => candidate.id === bomDetailOwnerNodeId.value);
+    return `${String(node?.data?.processName || '未命名工序')} · 每 1 kg 本工序实际投入`;
+  }
+  const node = flowNodes.value.find((candidate) => candidate.id === bomDetailOwnerNodeId.value);
+  return `${String(node?.data?.name || '未命名成品')} · 按包装层级自动折算`;
+});
+
+function openBomDetail(kind: BomDetailKind, ownerNodeId: string, rowId?: string): void {
+  bomDetailKind.value = kind;
+  bomDetailOwnerNodeId.value = ownerNodeId;
+  bomDetailSelectedRowId.value = rowId ?? null;
+  bomDetailVisible.value = true;
+}
+
+function beginEditingBomDetail(rowId?: string): void {
+  const ownerNodeId = bomDetailOwnerNodeId.value;
+  const kind = bomDetailKind.value;
+  bomDetailVisible.value = false;
+  if (kind === 'AUXILIARY') void openAuxiliaryEditor(ownerNodeId, rowId);
+  else void openPackagingEditor(ownerNodeId, rowId);
+}
 
 const processDialogVisible = ref(false);
 const processSourceMaterialId = ref('');
@@ -5996,4 +6167,16 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   color: var(--el-text-color-secondary, #909399);
 }
 .raw-input-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+.bom-readonly-context {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
+  padding: 10px 12px; border-radius: 8px; background: #f7f9fc; color: #344054; font-size: 13px;
+}
+.bom-readonly-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px;
+  padding: 12px; border: 1px solid #edf2f7; border-radius: 8px; background: #fff;
+}
+.bom-readonly-row > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bom-readonly-row strong { color: #1a2332; font-size: 13px; }
+.bom-readonly-row span { color: #667085; font-size: 12px; }
+.bom-readonly-note { margin-top: 16px; }
 </style>
