@@ -243,6 +243,15 @@ export interface AutoLayoutOptions {
    * 下方的特殊产出会压住下一行 —— §11 明确把这条列为不许出现的回归。
    */
   fusedExtent?: FusedExtentResolver;
+  /**
+   * owner 的**实测**高度。有就用实测, 没有才退回下面那个估算式。
+   *
+   * 🔴 2026-09-01 实测: 只用估算式排完, 真实页面上仍有 9 对 group 重叠 ——
+   *  给工序算 300 + 端口数×46 ≈ 390, 而真实工序 Cell 是 ~808px。
+   * 估算式偏小一倍, 行距自然不够。⛔ 不能靠把估算式调大来救(那只是换一个猜错的数),
+   * 有实测就用实测。
+   */
+  measuredHeight?: (nodeId: string) => number | undefined;
 }
 
 export function autoLayoutWorkflow(
@@ -253,6 +262,10 @@ export function autoLayoutWorkflow(
   const extentOf = (nodeId: string): { above: number; below: number } => (
     options.fusedExtent?.(nodeId) ?? { above: 0, below: 0 }
   );
+  const heightOf = (node: ProductProcessWorkflowNode): number => {
+    const measured = options.measuredHeight?.(node.id);
+    return typeof measured === 'number' && measured > 0 ? measured : estimatedNodeHeight(node);
+  };
   const nodeIds = new Set(result.nodes.map((node) => node.id));
   const incomingCount = new Map(result.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
@@ -304,7 +317,7 @@ export function autoLayoutWorkflow(
   // group 高度 = 上方附属 + owner 自身 + 下方附属。整组当成一个不可拆分矩形排版。
   const groupHeight = (node: ProductProcessWorkflowNode): number => {
     const extent = extentOf(node.id);
-    return extent.above + estimatedNodeHeight(node) + extent.below;
+    return extent.above + heightOf(node) + extent.below;
   };
   const layerHeight = (nodes: ProductProcessWorkflowNode[]): number => nodes.reduce(
     (height, node, index) => height + groupHeight(node) + (index === 0 ? 0 : NODE_VERTICAL_GAP),

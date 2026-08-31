@@ -5305,7 +5305,12 @@ function nextGraphIdSeed(): number {
 async function handleAutoLayout(): Promise<void> {
   if (!canEdit.value) return;
   remember();
-  const laidOut = autoLayoutWorkflow(currentDefinition(), { fusedExtent: fusedExtentFor });
+  const laidOut = autoLayoutWorkflow(currentDefinition(), {
+    fusedExtent: fusedExtentFor,
+    // 有实测就用实测: estimatedNodeHeight 给工序算 ~390px 而真实 Cell 是 ~808px,
+    // 只用估算式排完的图在真实页面上仍然会重叠(2026-09-01 本机实测 9 对)。
+    measuredHeight: (nodeId: string) => measuredNodeSizes.value[nodeId]?.height,
+  });
   hydrate(laidOut);
   dirty.value = true;
   await nextTick();
