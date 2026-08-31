@@ -29,6 +29,7 @@ import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.ProductionPlanService;
+import com.cretas.aims.service.production.CustomerSuppliedSettlementCoverageGuard;
 import com.cretas.aims.service.orchestration.ProductionWorkflowOrchestrator;
 import com.cretas.aims.service.yield.InterimSettleService;
 import com.cretas.aims.service.yield.InterimSettleReversalRequestService;
@@ -88,6 +89,7 @@ public class ProductionPlanController {
     private final PriceMaskResolver priceMaskResolver;
     private final ProductionTransitLedgerRepository transitLedgerRepository;
     private final ProductionSummaryService productionSummaryService;
+    private final CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
 
     /**
      * 创建生产计划
@@ -547,6 +549,11 @@ public class ProductionPlanController {
 
         Long userId = extractUserId(authorization);
         log.info("核对生产结单: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
+        if (request.isConfirm()) {
+            ProductionSettlementPrefillResponse auditedPrefill = customerSuppliedSettlementCoverageGuard.audit(
+                    factoryId, planId, productionPlanService.getSettlementPrefill(factoryId, planId));
+            customerSuppliedSettlementCoverageGuard.requireCleanForOneClick(auditedPrefill);
+        }
         ProductionSettlementResponse response =
                 productionPlanService.settleProduction(factoryId, planId, request, userId);
         return ApiResponse.success("生产结单已提交", response);
@@ -762,7 +769,8 @@ public class ProductionPlanController {
             @Parameter(description = "计划ID", required = true)
             @PathVariable @NotNull String planId) {
 
-        ProductionSettlementPrefillResponse response = productionPlanService.getSettlementPrefill(factoryId, planId);
+        ProductionSettlementPrefillResponse response = customerSuppliedSettlementCoverageGuard.audit(
+                factoryId, planId, productionPlanService.getSettlementPrefill(factoryId, planId));
         return ApiResponse.success("核对结单预填", response);
     }
 
