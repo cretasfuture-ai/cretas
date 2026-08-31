@@ -69,6 +69,10 @@ def match_boxes(
     return {
         "tp": len(overlaps), "fp": len(predicted) - len(overlaps),
         "fn": len(truth) - len(overlaps), "matched_ious": overlaps,
+        "best_iou_per_truth": [
+            max((iou(truth_box, predicted_box) for predicted_box in predicted), default=0.0)
+            for truth_box in truth
+        ],
     }
 
 
@@ -134,6 +138,8 @@ def evaluate(
                 ]
             results[name].append({
                 "packed_stem": item_id, "truth": len(truth), "predicted": len(predicted),
+                "truth_boxes_xyxy": truth,
+                "predicted_boxes_xyxy": predicted,
                 **match_boxes(truth, predicted),
             })
     metrics = {name: summarize(values) for name, values in results.items()}

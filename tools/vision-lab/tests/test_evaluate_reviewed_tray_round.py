@@ -19,6 +19,17 @@ def test_matching_is_one_to_one_and_prefers_highest_iou():
     assert result["tp"] == 2
     assert result["fp"] == 1
     assert result["fn"] == 0
+    assert result["best_iou_per_truth"] == [1.0, 1.0]
+
+
+def test_matching_reports_best_subthreshold_iou_for_boundary_diagnostics():
+    result = module.match_boxes(
+        [[0, 0, 10, 10]],
+        [[0, 0, 4, 10]],
+    )
+
+    assert result["tp"] == 0
+    assert result["best_iou_per_truth"] == [0.4]
 
 
 def test_summary_reports_precision_recall_and_boundary_iou():

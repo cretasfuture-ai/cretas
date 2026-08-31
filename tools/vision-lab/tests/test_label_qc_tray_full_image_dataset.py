@@ -194,6 +194,34 @@ def test_audited_provenance_counts_rejects_unbound_physical_image(tmp_path):
         module.audited_provenance_counts(tmp_path, [])
 
 
+def test_appended_occurrences_repeat_only_new_human_rows():
+    rows = [
+        {"split": "train", "stem": "historical"},
+        {"split": "train", "stem": "new-one"},
+        {"split": "train", "stem": "new-two"},
+        {"split": "val", "stem": "validation"},
+    ]
+
+    occurrences, policy = module.build_appended_occurrences(
+        rows, ["new-one", "new-two"], 3,
+    )
+
+    assert occurrences == [
+        "historical", "new-one", "new-two", "new-one", "new-two", "new-one", "new-two",
+    ]
+    assert policy["effective_train_occurrences"] == 7
+    assert policy["unique_train_images"] == 3
+    assert policy["validation_unchanged"] is True
+
+
+@pytest.mark.parametrize("repeats", [0, 9])
+def test_appended_occurrences_rejects_unsafe_repeat_count(repeats):
+    with pytest.raises(ValueError, match="between 1 and 8"):
+        module.build_appended_occurrences(
+            [{"split": "train", "stem": "new"}], ["new"], repeats,
+        )
+
+
 def test_normal_regression_contract_allows_repeated_selected_task_but_locks_task_holdout(tmp_path):
     rows = [
         normal_reviewed("one", "photo-1", "task-a", "1" * 64),
