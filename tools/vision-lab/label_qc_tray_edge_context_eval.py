@@ -231,6 +231,76 @@ class EdgeContextTrayModels:
         return self.base.detect_labels(crop, conf)
 
 
+class FullFrameSupplementTrayModels:
+    """Preserve every base box and add only non-overlapping full-frame candidates."""
+
+    def __init__(
+        self, base: Any, candidate: Any, candidate_confidence: float = 0.50,
+        production_overlap_ios: float = 0.60, iou_threshold: float = 0.50,
+        ios_threshold: float = 0.80,
+    ) -> None:
+        self.base = base
+        self.candidate = candidate
+        self.candidate_confidence = candidate_confidence
+        self.production_overlap_ios = production_overlap_ios
+        self.iou_threshold = iou_threshold
+        self.ios_threshold = ios_threshold
+        self.preserve_base_detections = True
+        self.last_raw_detections: list[dict[str, Any]] = []
+        self.last_stats: dict[str, Any] = {}
+
+    def detect_trays(self, image, conf: float) -> list[Any]:
+        production = list(self.base.detect_trays(image, conf))
+        candidates = list(self.candidate.detect_trays(image, self.candidate_confidence))
+        supplements: list[Any] = []
+        overlap_rejected = duplicate_rejected = 0
+        for detection in sorted(candidates, key=lambda row: -float(row.confidence)):
+            if any(
+                int(detection.class_id) == int(reference.class_id)
+                and diagnostics.intersection_over_smaller(
+                    detection.as_xyxy(), reference.as_xyxy(),
+                ) >= self.production_overlap_ios
+                for reference in production
+            ):
+                overlap_rejected += 1
+                continue
+            if any(
+                int(detection.class_id) == int(reference.class_id)
+                and (
+                    diagnostics.box_iou(
+                        detection.as_xyxy(), reference.as_xyxy(),
+                    ) >= self.iou_threshold
+                    or diagnostics.intersection_over_smaller(
+                        detection.as_xyxy(), reference.as_xyxy(),
+                    ) >= self.ios_threshold
+                )
+                for reference in supplements
+            ):
+                duplicate_rejected += 1
+                continue
+            supplements.append(detection)
+        base_rows = list(getattr(self.base, "last_raw_detections", []))
+        self.last_raw_detections = [
+            *(base_rows or [
+                diagnostics._detection_dict(row, "full") for row in production
+            ]),
+            *[
+                diagnostics._detection_dict(row, "candidate_lower_band")
+                for row in supplements
+            ],
+        ]
+        self.last_stats = {
+            "mode": "production_preserving_full_frame_candidate",
+            "full_frame_detections": len(production),
+            "candidate_full_frame_detections": len(candidates),
+            "candidate_production_overlap_rejected": overlap_rejected,
+            "candidate_duplicate_rejected": duplicate_rejected,
+            "candidate_supplements_kept": len(supplements),
+            "kept_detections": len(production) + len(supplements),
+        }
+        return [*production, *supplements]
+
+
 class _PreservedRuntimeTrayBase:
     """Expose the original V8 tray cascade before the runtime hook is installed."""
 
@@ -439,6 +509,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--edge-confidence", type=float, default=0.30)
+    parser.add_argument(
+        "--candidate-scope", choices=("lower-edge", "full-frame"),
+        default="lower-edge",
+    )
     parser.add_argument("--edge-width-fraction", type=float, default=0.50)
     parser.add_argument("--edge-height-fraction", type=float, default=0.60)
     parser.add_argument(
@@ -510,14 +584,22 @@ def main() -> None:
         candidate_base = yolo.LabelQcYoloModels(model_dir=candidate_dir)
         if not production_base.available or not candidate_base.available:
             raise RuntimeError(production_base.load_error or candidate_base.load_error or "model unavailable")
-        edge_models = EdgeContextTrayModels(
-            production_base,
-            yolo.Detection,
-            edge_base=candidate_base,
-            edge_confidence=args.edge_confidence,
-            width_fraction=args.edge_width_fraction,
-            height_fraction=args.edge_height_fraction,
-            source_edge_margin_ratio=args.source_edge_margin_ratio,
+        edge_models = (
+            FullFrameSupplementTrayModels(
+                production_base,
+                candidate_base,
+                candidate_confidence=args.edge_confidence,
+            )
+            if args.candidate_scope == "full-frame"
+            else EdgeContextTrayModels(
+                production_base,
+                yolo.Detection,
+                edge_base=candidate_base,
+                edge_confidence=args.edge_confidence,
+                width_fraction=args.edge_width_fraction,
+                height_fraction=args.edge_height_fraction,
+                source_edge_margin_ratio=args.source_edge_margin_ratio,
+            )
         )
         if args.runtime_bundle:
             runtime_bundle = args.runtime_bundle.resolve()

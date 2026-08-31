@@ -31,6 +31,23 @@ def iou(left: Sequence[float], right: Sequence[float]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def scale_box(
+    box: Sequence[float], factor: float, width: int, height: int,
+) -> list[float]:
+    if factor <= 0:
+        raise ValueError("box scale must be positive")
+    center_x = (float(box[0]) + float(box[2])) / 2.0
+    center_y = (float(box[1]) + float(box[3])) / 2.0
+    half_width = max(0.0, float(box[2]) - float(box[0])) * factor / 2.0
+    half_height = max(0.0, float(box[3]) - float(box[1])) * factor / 2.0
+    return [
+        max(0.0, center_x - half_width),
+        max(0.0, center_y - half_height),
+        min(float(width), center_x + half_width),
+        min(float(height), center_y + half_height),
+    ]
+
+
 def match_boxes(
     truth: list[list[float]], predicted: list[list[float]], threshold: float = 0.5,
 ) -> dict[str, Any]:
@@ -71,7 +88,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def evaluate(
     queue: Path, round_path: Path, production_model: Path, candidate_model: Path,
-    repo_root: Path, output: Path, confidence: float,
+    repo_root: Path, output: Path, production_confidence: float,
+    candidate_confidence: float, candidate_box_scale: float,
 ) -> dict[str, Any]:
     if output.exists():
         raise FileExistsError(f"refusing to overwrite reviewed-round evaluation: {output}")
@@ -106,7 +124,14 @@ def evaluate(
             for box in annotation.get("boxes") or []
         ]
         for name, detector in detectors.items():
+            confidence = (
+                production_confidence if name == "production" else candidate_confidence
+            )
             predicted = [detection.as_xyxy() for detection in detector.detect(frame, confidence)]
+            if name == "candidate" and candidate_box_scale != 1.0:
+                predicted = [
+                    scale_box(box, candidate_box_scale, width, height) for box in predicted
+                ]
             results[name].append({
                 "packed_stem": item_id, "truth": len(truth), "predicted": len(predicted),
                 **match_boxes(truth, predicted),
@@ -116,7 +141,9 @@ def evaluate(
         "version": "vision-lab-reviewed-tray-round-evaluation-v1",
         "queue": str(queue.resolve()), "queue_manifest_sha256": sha256(queue / "manifest.json"),
         "review_round": str(round_path.resolve()), "review_round_sha256": sha256(round_path),
-        "confidence": confidence,
+        "production_confidence": production_confidence,
+        "candidate_confidence": candidate_confidence,
+        "candidate_box_scale": candidate_box_scale,
         "production_model": str(production_model.resolve()),
         "production_model_sha256": sha256(production_model),
         "candidate_model": str(candidate_model.resolve()),
@@ -142,10 +169,14 @@ def main() -> None:
     parser.add_argument("--repo-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--confidence", type=float, default=0.60)
+    parser.add_argument("--candidate-confidence", type=float)
+    parser.add_argument("--candidate-box-scale", type=float, default=1.0)
     args = parser.parse_args()
     receipt = evaluate(
         args.queue.resolve(), args.review_round.resolve(), args.production_model.resolve(),
         args.candidate_model.resolve(), args.repo_root.resolve(), args.output.resolve(), args.confidence,
+        args.candidate_confidence if args.candidate_confidence is not None else args.confidence,
+        args.candidate_box_scale,
     )
     print(json.dumps({
         "receipt": str(args.output.resolve()), "metrics": receipt["metrics"],

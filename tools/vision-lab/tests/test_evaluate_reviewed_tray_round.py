@@ -30,3 +30,17 @@ def test_summary_reports_precision_recall_and_boundary_iou():
     assert summary["recall"] == 2 / 3
     assert summary["mean_matched_iou"] == 0.75
     assert summary["perfect_recall_images"] == 1
+
+
+def test_candidate_confidence_can_be_calibrated_independently():
+    import inspect
+
+    parameters = inspect.signature(module.evaluate).parameters
+
+    assert "production_confidence" in parameters
+    assert "candidate_confidence" in parameters
+
+
+def test_scale_box_expands_about_center_and_clips_to_image():
+    assert module.scale_box([20, 20, 40, 40], 1.2, 100, 100) == [18, 18, 42, 42]
+    assert module.scale_box([0, 0, 20, 20], 1.2, 100, 100) == [0, 0, 22, 22]

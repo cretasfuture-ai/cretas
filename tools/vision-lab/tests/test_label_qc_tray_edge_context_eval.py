@@ -203,6 +203,23 @@ def test_runtime_wrapper_uses_original_v8_cascade_as_preserved_base():
     assert inner.routes == [production_detection]
 
 
+def test_full_frame_supplement_preserves_base_and_adds_only_new_box():
+    production_detection = _Detection(0, 0, 100, 100, 0.5)
+    replacement = _Detection(5, 5, 105, 105, 0.9)
+    supplement = _Detection(200, 200, 300, 300, 0.7)
+    wrapper = module.FullFrameSupplementTrayModels(
+        _StaticModels([[production_detection]]),
+        _StaticModels([[replacement, supplement]]),
+        candidate_confidence=0.5,
+    )
+
+    result = wrapper.detect_trays(np.zeros((400, 400, 3), dtype=np.uint8), 0.6)
+
+    assert result == [production_detection, supplement]
+    assert wrapper.last_stats["candidate_production_overlap_rejected"] == 1
+    assert wrapper.last_stats["candidate_supplements_kept"] == 1
+
+
 def test_corrected_gate_ignores_invalid_legacy_targets_but_requires_judgeable_target():
     baseline = {
         "false_flags": 4, "p95_latency_ms": 100,
