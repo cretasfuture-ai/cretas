@@ -68,6 +68,7 @@ import {
   newSalesOrderSupplyContract,
   processingModeLabel,
   suppliedMaterialsValidationError,
+  customerMaterialCategoryLabel,
   supplyContractValidationError,
   type CustomerSuppliedMaterialRequirement,
   type CustomerStockFulfillmentMode,
@@ -661,6 +662,13 @@ function onSuppliedMaterialSelect(row: CustomerSuppliedMaterialRequirement) {
   row.unit = canonicalUnitCodeKeepingCount(material?.unit || material?.measurementUnit || '');
 }
 
+function suppliedMaterialCategory(row: CustomerSuppliedMaterialRequirement | TableRow): string {
+  const materialTypeId = 'materialTypeId' in row ? row.materialTypeId : row.id;
+  const option = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === String(materialTypeId));
+  const mainCategory = 'mainCategory' in row ? row.mainCategory : undefined;
+  return customerMaterialCategoryLabel(row.category || mainCategory || option?.category || option?.mainCategory);
+}
+
 function onProcessingModeChange() {
   if (form.value.processingMode === 'STANDARD_SALE'
     && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED') {
@@ -695,8 +703,10 @@ function suppliedMaterialsPayload(): CustomerSuppliedMaterialRequirement[] {
   return form.value.processingMode === 'TOLL_PROCESSING'
     && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED'
     && form.value.customerStockFulfillmentMode === 'ORDER_DRIVEN'
-    ? form.value.suppliedMaterials.map((row) => ({
-        ...row,
+    ? form.value.suppliedMaterials.map((row) => {
+        const { category: _category, ...payload } = row;
+        return {
+        ...payload,
         // 🔴 2026-08-18: 与订单明细同一条判据 —— row.unit 是【前端内部比较键】
         // (onSuppliedMaterialSelect / handleEdit 用 canonicalUnitCodeKeepingCount 存进去的,
         // 物料字典里的「盒」在这里是 `box`)。请求体必须带用户看到的那个字。
@@ -704,7 +714,7 @@ function suppliedMaterialsPayload(): CustomerSuppliedMaterialRequirement[] {
         expectedArrivalAt: row.expectedArrivalAt.length === 10
           ? `${row.expectedArrivalAt}T00:00:00`
           : row.expectedArrivalAt.slice(0, 19),
-      }))
+      }; })
     : [];
 }
 
@@ -2755,12 +2765,12 @@ function handleMergePurchase() {
               </el-select>
               <!--
                 ⛔ 2026-08-06 客户反馈: 「有个原料入库的问题, 客户自带料他入库能搞得快捷入库吗?」
-                功能其实一直都在(选「客户自带原料」→ 下方出现明细块 → 审批后进
+                功能其实一直都在(选「客户自带物料」→ 下方出现明细块 → 审批后进
                 仓储「待收货/待入库任务」), 只是**没人找得到** —— prod 实测客供料批次
                 `CMR-%` 0 行, 从没被用过。所以这里要把去处说出来, 而不是只说约束。
               -->
               <div class="form-help-text">
-                客户自带原料仅适用于代加工。选它之后，下方会出现「客户自带原料」明细块登记预计送来的料；
+                客户自带物料仅适用于代加工。选它之后，下方会出现「客户自带物料」明细块登记预计送来的料；
                 订单审批后进入<strong>仓储 → 原料入库与批次 → 待收货/待入库任务</strong>收货，不必走采购流程。
               </div>
             </el-form-item>
@@ -2796,7 +2806,7 @@ function handleMergePurchase() {
         </el-form-item>
         <el-form-item
           v-if="form.processingMode === 'TOLL_PROCESSING' && form.materialSupplyMode === 'CUSTOMER_SUPPLIED' && form.customerStockFulfillmentMode === 'ORDER_DRIVEN'"
-          label="客户自带原料"
+          label="客户自带物料"
           required
         >
           <div class="supplied-material-editor">
@@ -2804,16 +2814,16 @@ function handleMergePurchase() {
               type="warning"
               :closable="false"
               show-icon
-              title="这里只登记客户预计送来的原料；确认订单后由仓储统一页面执行实收，不会在销售侧直接增加库存。"
+              title="这里只登记客户预计送来的物料；确认订单后由仓储统一页面执行实收，不会在销售侧直接增加库存。"
             />
-            <el-table :data="form.suppliedMaterials" border empty-text="请添加客户自带原料需求">
-              <el-table-column label="原料 *" min-width="220">
+            <el-table :data="form.suppliedMaterials" border empty-text="请添加客户自带物料需求">
+              <el-table-column label="物料分类 / 名称 *" min-width="250">
                 <template #default="{ row }">
-                  <el-select v-model="row.materialTypeId" filterable placeholder="选择原料" style="width: 100%" @change="onSuppliedMaterialSelect(row)">
+                  <el-select v-model="row.materialTypeId" filterable placeholder="选择客供物料" style="width: 100%" @change="onSuppliedMaterialSelect(row)">
                     <el-option
                       v-for="material in suppliedMaterialOptions"
                       :key="material.id"
-                      :label="`${material.name} (${material.code || '无编码'})`"
+                      :label="`${material.name} (${material.code || '无编码'}) · ${suppliedMaterialCategory(material)}`"
                       :value="String(material.id)"
                     />
                   </el-select>
@@ -2839,7 +2849,7 @@ function handleMergePurchase() {
                 <template #default="{ $index }"><el-button type="danger" link @click="removeSuppliedMaterial($index)">移除</el-button></template>
               </el-table-column>
             </el-table>
-            <el-button :icon="Plus" class="supplied-material-add" @click="addSuppliedMaterial">添加客户自带原料</el-button>
+            <el-button :icon="Plus" class="supplied-material-add" @click="addSuppliedMaterial">添加客户自带物料</el-button>
           </div>
         </el-form-item>
         <el-form-item label="交货日期"><el-date-picker v-model="form.requiredDeliveryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
@@ -2894,7 +2904,7 @@ function handleMergePurchase() {
         <div class="form-help-text order-items-scope-hint">
           这里只登记<strong>卖给客户的成品/半成品</strong>；搜不到的品项请先到「生产管理 → SKU 管理」建 SKU。
           <template v-if="form.processingMode === 'TOLL_PROCESSING'">
-            客户送来加工的<strong>原料</strong>不在这里 —— 把上方「物料供应方式」改成<strong>客户自带原料</strong>，会出现专门的登记块。
+            客户送来加工的<strong>物料</strong>不在这里 —— 把上方「物料供应方式」改成<strong>客户自带物料</strong>，会出现专门的登记块。
           </template>
         </div>
         <div class="order-items-scroll" role="region" aria-label="产品明细，可横向滚动查看全部字段" tabindex="0">

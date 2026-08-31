@@ -1,3 +1,5 @@
+import { bigCategoryOf } from '@/utils/materialCategory';
+
 export type SalesProcessingMode = 'STANDARD_SALE' | 'TOLL_PROCESSING';
 export type MaterialSupplyMode = 'CUSTOMER_SUPPLIED' | 'FACTORY_SUPPLIED';
 export type CustomerStockFulfillmentMode = 'ORDER_DRIVEN' | 'PRESTOCKED';
@@ -21,6 +23,29 @@ export interface CustomerSuppliedMaterialRequirement {
   receivedQuantity?: number;
   remainingQuantity?: number;
   status?: string;
+  /** Optional read-only category supplied by detail APIs; never sent in create/update payloads. */
+  category?: string;
+}
+
+export type CustomerMaterialCategory = 'RAW' | 'AUXILIARY' | 'PACKAGING';
+
+/** Map existing material-master category values to the warehouse's three-category contract. */
+export function customerMaterialCategoryOf(category: unknown): CustomerMaterialCategory | null {
+  const raw = String(category ?? '').trim();
+  const code = raw.toUpperCase();
+  if (code === 'RAW' || code === 'RAW_MATERIAL' || code === '主材' || code === '原料') return 'RAW';
+  if (code === 'AUXILIARY' || code === 'AUX' || code === '辅材' || code === '辅料' || code === '添加剂' || code === '调料' || code === '调味料' || code === '调味品') return 'AUXILIARY';
+  if (code === 'PACKAGING' || code === '包装' || code === '包材') return 'PACKAGING';
+  const family = bigCategoryOf(raw);
+  if (family === '原料') return 'RAW';
+  if (family === '辅料' || family === '调料') return 'AUXILIARY';
+  if (family === '包材') return 'PACKAGING';
+  return null;
+}
+
+export function customerMaterialCategoryLabel(category: unknown): string {
+  const mapped = customerMaterialCategoryOf(category);
+  return mapped === 'RAW' ? '原料' : mapped === 'AUXILIARY' ? '辅料' : mapped === 'PACKAGING' ? '包材' : '未知分类';
 }
 
 export const SALES_PROCESSING_MODE_OPTIONS: ReadonlyArray<{
@@ -36,7 +61,7 @@ export const MATERIAL_SUPPLY_MODE_OPTIONS: ReadonlyArray<{
   label: string;
 }> = [
   { value: 'FACTORY_SUPPLIED', label: '工厂备料' },
-  { value: 'CUSTOMER_SUPPLIED', label: '客户自带原料' },
+  { value: 'CUSTOMER_SUPPLIED', label: '客户自带物料' },
 ];
 
 export const CUSTOMER_STOCK_FULFILLMENT_OPTIONS: ReadonlyArray<{
@@ -63,7 +88,7 @@ const processingModeLabels: Record<SalesProcessingMode, string> = {
 
 const materialSupplyModeLabels: Record<MaterialSupplyMode, string> = {
   FACTORY_SUPPLIED: '工厂备料',
-  CUSTOMER_SUPPLIED: '客户自带原料',
+  CUSTOMER_SUPPLIED: '客户自带物料',
 };
 
 export function newSalesOrderSupplyContract(): SalesOrderSupplyContract {
@@ -100,12 +125,12 @@ export function supplyContractValidationError(contract: SalesOrderSupplyContract
   if (!contract.materialSupplyMode) return '请选择物料供应方式';
   if (contract.processingMode === 'STANDARD_SALE'
     && contract.materialSupplyMode === 'CUSTOMER_SUPPLIED') {
-    return '普通销售不能选择客户自带原料；请改为代加工，或选择工厂备料';
+    return '普通销售不能选择客户自带物料；请改为代加工，或选择工厂备料';
   }
   if ((contract.processingMode !== 'TOLL_PROCESSING'
     || contract.materialSupplyMode !== 'CUSTOMER_SUPPLIED')
     && contract.customerStockFulfillmentMode === 'PRESTOCKED') {
-    return '使用客户已有库存只适用于“代加工 + 客户自带原料”';
+    return '使用客户已有库存只适用于“代加工 + 客户自带物料”';
   }
   return null;
 }
@@ -119,16 +144,16 @@ export function suppliedMaterialsValidationError(
     || contract.customerStockFulfillmentMode === 'PRESTOCKED') {
     return null;
   }
-  if (requirements.length === 0) return '请至少添加一项客户自带原料需求';
+  if (requirements.length === 0) return '请至少添加一项客户自带物料需求';
   const seen = new Set<string>();
   for (const row of requirements) {
-    if (!row.materialTypeId) return '请选择全部客户自带原料';
-    if (seen.has(row.materialTypeId)) return `客户自带原料“${row.materialName || row.materialTypeId}”不能重复添加`;
+    if (!row.materialTypeId) return '请选择全部客户自带物料';
+    if (seen.has(row.materialTypeId)) return `客户自带物料“${row.materialName || row.materialTypeId}”不能重复添加`;
     seen.add(row.materialTypeId);
-    if (!(Number(row.expectedQuantity) > 0)) return `“${row.materialName || '客户自带原料'}”预计数量必须大于 0`;
-    if (!row.unit) return `“${row.materialName || '客户自带原料'}”缺少库存计量单位`;
-    if (!row.expectedArrivalAt) return `请填写“${row.materialName || '客户自带原料'}”预计到货时间`;
-    if (!row.targetWarehouseId) return `请选择“${row.materialName || '客户自带原料'}”目标仓库`;
+    if (!(Number(row.expectedQuantity) > 0)) return `“${row.materialName || '客户自带物料'}”预计数量必须大于 0`;
+    if (!row.unit) return `“${row.materialName || '客户自带物料'}”缺少库存计量单位`;
+    if (!row.expectedArrivalAt) return `请填写“${row.materialName || '客户自带物料'}”预计到货时间`;
+    if (!row.targetWarehouseId) return `请选择“${row.materialName || '客户自带物料'}”目标仓库`;
   }
   return null;
 }

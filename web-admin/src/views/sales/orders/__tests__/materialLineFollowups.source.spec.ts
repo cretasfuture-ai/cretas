@@ -27,7 +27,7 @@ function functionBody(src: string, signature: string): string {
 /**
  * 🔴 AI 录入解析对了, 点「填入表单」却什么也没发生。
  *
- * <p>销售商品现在严格来自 `/product-types/sellable`，原料只允许进入客供原料区。
+ * <p>销售商品现在严格来自 `/product-types/sellable`，物料只允许进入客供物料区。
  * AI 填表必须与商品下拉同源，不能绕过业务白名单把原料塞进销售商品行。
  */
 describe('AI 录入 · 填入表单认得物料', () => {
@@ -40,7 +40,7 @@ describe('AI 录入 · 填入表单认得物料', () => {
       .not.toContain('resolveReferenceByName(prodName, products.value)');
   });
 
-  it('② 与下拉同源 —— sellableOptions 只取可售产品，客供原料使用独立集合', () => {
+  it('② 与下拉同源 —— sellableOptions 只取可售产品，客供物料使用独立集合', () => {
     expect(listSource).toContain('const sellableOptions = computed<TableRow[]>(() => products.value)');
     expect(listSource).toContain('const suppliedMaterialOptions = ref<TableRow[]>([])');
     expect(listSource).not.toContain('[...products.value, ...materialOptions.value]');

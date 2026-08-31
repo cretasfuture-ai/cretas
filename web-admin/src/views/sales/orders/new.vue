@@ -6,7 +6,7 @@ import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
-import { MATERIAL_SUPPLY_MODE_OPTIONS, SALES_PROCESSING_MODE_OPTIONS, suppliedMaterialsValidationError, type MaterialSupplyMode, type SalesProcessingMode } from './salesOrderSupplyContract';
+import { MATERIAL_SUPPLY_MODE_OPTIONS, SALES_PROCESSING_MODE_OPTIONS, customerMaterialCategoryLabel, suppliedMaterialsValidationError, type MaterialSupplyMode, type SalesProcessingMode } from './salesOrderSupplyContract';
 import { isSalesOrderProduct, type SalesProductOption } from './salesOrderProductSearch';
 import {
   buildSalesProductPickerOptions,
@@ -165,7 +165,7 @@ async function loadSuppliedMaterialOptions(): Promise<void> {
   try {
     const response = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
     suppliedMaterialOptions.value = unwrap<TableRow>(response?.data);
-  } catch { ElMessage.error('客供原料选项加载失败，请稍后重试'); }
+  } catch { ElMessage.error('客供物料选项加载失败，请稍后重试'); }
   finally { loadingMaterials.value = false; }
 }
 
@@ -237,6 +237,10 @@ function onSuppliedMaterialChange(row: SuppliedMaterial): void {
   row.materialName = String(material?.name || '');
   row.unit = canonicalUnitCodeKeepingCount(String(material?.unit || material?.measurementUnit || ''));
   dirty.value = true;
+}
+
+function suppliedMaterialCategory(material: TableRow): string {
+  return customerMaterialCategoryLabel(material.category || material.mainCategory);
 }
 
 function onProcessingModeChange(): void {
@@ -365,7 +369,7 @@ onMounted(() => {
       <div>
         <el-button link @click="leave">返回销售订单</el-button>
         <h2>新建{{ label('salesOrder') }}</h2>
-        <p>只选择可销售的成品/半成品；客户自带原料请登记在客供原料区。</p>
+        <p>只选择可销售的成品/半成品；客户自带物料请登记在客供物料区。</p>
       </div>
       <div class="page-actions">
         <el-button @click="leave">取消</el-button>
@@ -393,15 +397,15 @@ onMounted(() => {
           <el-col :md="12" :xs="24"><el-form-item label="物料供应方式" required><el-select v-model="form.materialSupplyMode" style="width:100%" @change="onMaterialSupplyModeChange"><el-option v-for="option in MATERIAL_SUPPLY_MODE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" :disabled="option.value === 'CUSTOMER_SUPPLIED' && form.processingMode === 'STANDARD_SALE'" /></el-select></el-form-item></el-col>
         </el-row>
         <div v-if="requiresSuppliedMaterials" class="supplied-materials">
-          <el-alert type="info" :closable="false" title="客户自带原料只登记预计到货，不会混入销售产品，也不会在销售侧直接增加库存。" />
+          <el-alert type="info" :closable="false" title="客户自带物料只登记预计到货，不会混入销售产品，也不会在销售侧直接增加库存。" />
           <div v-for="(row, index) in form.suppliedMaterials" :key="index" class="supplied-row" :data-supplied-row="index">
-            <label><span>客供原料 <b>*</b></span><el-select data-field="material" v-model="row.materialTypeId" v-loading="loadingMaterials" filterable placeholder="选择客供原料" @change="onSuppliedMaterialChange(row)"><el-option v-for="material in suppliedMaterialOptions" :key="material.id" :label="`${material.name} (${material.code || '无编码'})`" :value="String(material.id)" /></el-select></label>
+            <label><span>客供物料 <b>*</b></span><el-select data-field="material" v-model="row.materialTypeId" v-loading="loadingMaterials" filterable placeholder="选择客供物料" @change="onSuppliedMaterialChange(row)"><el-option v-for="material in suppliedMaterialOptions" :key="material.id" :label="`${material.name} (${material.code || '无编码'}) · ${suppliedMaterialCategory(material)}`" :value="String(material.id)" /></el-select></label>
             <label><span>预计数量 <b>*</b></span><span class="quantity-field"><el-input-number data-field="quantity" v-model="row.expectedQuantity" :min="0" :precision="3" @change="dirty = true" /><em>{{ displayUnit(row.unit) || '单位' }}</em></span></label>
             <label><span>预计到货 <b>*</b></span><div data-field="arrival"><el-date-picker v-model="row.expectedArrivalAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" placeholder="预计到货" @change="dirty = true" /></div></label>
             <label><span>目标仓库 <b>*</b></span><el-select data-field="warehouse" v-model="row.targetWarehouseId" placeholder="目标仓库" @change="dirty = true"><el-option v-for="warehouse in warehouses" :key="warehouse.id" :label="warehouseLabel(warehouse)" :value="warehouse.id" /></el-select></label>
             <el-button type="danger" link @click="form.suppliedMaterials.splice(index, 1); dirty = true">移除</el-button>
           </div>
-          <el-button link type="primary" @click="addSuppliedMaterial">+ 添加客供原料</el-button>
+          <el-button link type="primary" @click="addSuppliedMaterial">+ 添加客供物料</el-button>
         </div>
       </el-card>
 

@@ -123,6 +123,7 @@ class CustomerMaterialArrivalNoticeServiceTest {
         material.setFactoryId("F006");
         material.setIsActive(true);
         material.setUnit("kg");
+        material.setCategory("原料");
         when(rawMaterialTypeRepository.findById("RM-1")).thenReturn(Optional.of(material));
 
         FactoryWarehouse warehouse = new FactoryWarehouse();
@@ -331,6 +332,7 @@ class CustomerMaterialArrivalNoticeServiceTest {
         material.setFactoryId("F006");
         material.setIsActive(true);
         material.setUnit("kg");
+        material.setCategory("原料");
         when(rawMaterialTypeRepository.findById("RM-1")).thenReturn(Optional.of(material));
 
         FactoryWarehouse warehouse = new FactoryWarehouse();
