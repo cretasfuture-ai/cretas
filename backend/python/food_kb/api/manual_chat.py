@@ -187,10 +187,10 @@ _FACTORY_DEFECT_COUNT_TRUTH_ANSWER = """\
 
 1. **结单填写：** 选择“有不良品”时数量必须大于 0；选择“已清点、无不良品”时数量归一为 0，这个 0 表示有人真实清点确认；选择“未清点”或旧入口从未询问时数量保持空值。结论与数量矛盾会返回 400，不做静默纠正。
 2. **批次回填：** 一个计划只对应一个正式批次时，已清点结论会回填该批次；计划对应多个正式批次时不能猜该记到哪一批，结算记录保留结论，批次数量继续为空并留下盘点补录待办。
-3. **盘点补录：** 电脑 Web 进入“仓储管理 → 盘点管理”。页面顶部列出已结单但仍缺不良品结论的计划，并区分“结单时流程未问”与“已选未清点”；这不是“质量管理 → 报废处置”，也不会自动扣库存。当前页面只提供待办清单，不能声称已经存在一个未实现的直接补录按钮。
+3. **盘点补录：** 电脑 Web 进入“仓储管理 → 盘点管理”。页面顶部列出已结单但仍缺不良品结论的计划，并区分“结单时流程未问”与“已选未清点”；具备仓储读写权限时可直接选择“有不良品”并填写大于 0 的数量，或选择“已清点确认零”完成待办。系统按工厂锁定并重读结单行；非待办、重复提交或跨工厂请求会被拒绝。唯一正式批次才同步批次不良品数量，多批次只保存结单结论并明确不猜分配。这不是“质量管理 → 报废处置”，也不会自动扣库存。
 4. **良品率展示：** 良品数量未知时，批次详情的“良品率”显示 `—` 且不上绿色；不能拿逐道投入/产出的出成率冒充良品率。只有真实良品数量可用时才展示良品率，质检记录也不能被虚构为结单前置门禁。
 
-**验收结果：** 分别回读结算记录的三态与数量、唯一批次回填或多批不猜、盘点待办原因，以及批次详情的良品率 `—`。未知、已确认零和确有不良品必须始终可区分。"""
+**验收结果：** 补录响应回读结论、数量、正式批次数、回填或跳过原因和操作人；成功后重新拉取待办，失败时保留弹窗与错误。再核对批次详情的良品率 `—`。未知、已确认零和确有不良品必须始终可区分。"""
 
 _FACTORY_BATCH_UNKNOWN_METRICS_ANSWER = """\
 批次总重量、良品率和 BOM 达成率都只能在各自可信输入齐备时计算；缺项时必须显示 `—/未知`，不能用 0、100% 或旧派生值伪装已知。
@@ -280,15 +280,25 @@ _LABEL_QC_REVIEW_ANSWER = """\
 **边界：** 普通质检附件成功不等于标签审核通过；客户风险质检、平台训练选样、工厂整图审核、单盒裁切和平台标签精修分别保留隔离状态与版本，任何一层都不能静默覆盖另一层真值。"""
 
 _FACTORY_EXECUTION_RECOVERY_ANSWER = """\
-本轮生产执行收口的是三类独立问题：批量指派、投入可达与成本更正。它们都必须回读权威结果，不能用前端 Toast 或本地计算冒充完成。
+本轮生产执行收口的是四类独立问题：批量指派、多批投入、回料兼容与成本更正。它们都必须回读权威结果，不能用前端 Toast 或本地计算冒充完成。
 
 1. **批量工序指派：** 电脑 Web 打开生产批次详情，勾选可分配工序或“全选可分配工序”，再选择当前工厂仍有效的 `operator` 或 `yield_operator`。保存前必须确认“N 道工序 + 姓名”；系统逐任务调用既有更新端点，成功行刷新负责人，失败行保留并列出明细，不能把部分成功说成全部成功。派错时仍可清空负责人。
-2. **多批投入可达：** 首道报工从单批切换到多批时，原来已填的首批数量会迁入该批次行；所有已选批次的数量输入位于可滚动到达的区域，不会因内层列表高度或旧滚动位置把第一行裁掉。确认前逐批核对数量，服务端仍按真实批次与可用量校验。
+2. **首道 FEFO 多批投入：** 单批可领量不足时，同一个“多批次用量分配”窗口优先提供“按效期优先自动分配”，并始终保留手动选择。自动路径只接受同一原料、同一投入单位的可用批次，按 FEFO 返回顺序逐批使用 `min(本批可用量, 尚缺量)`；接口失败、单位不一致或总量不足都保持阻塞并说明缺口，不能猜换算。切到手动后保留批次身份、逐批数量与目标合计，原来已填的首批数量会迁入对应批次行，所有输入可滚动到达。自动或手动最终仍逐批提交 `materialBatchRefs`，服务端再次校验库存。
 3. **回料投入：** 回料是 Workflow 产出的独立 WIP SKU，不必等于普通上游端口 SKU；但只能从当前工序 picker 中选择同工厂、目标产品族/阶段与纯度矩阵允许的回料。服务端保存时重新核对；不兼容返回 409，提示刷新页面并重新选择，不能靠客户端标记绕过。
 4. **成本更正：** 批次估值更正必须填写新单价和原因，并记录旧值、新值、操作者与时间；已结单计划可从权威领用与成本配置重算，随后同步成品与回料单位成本。当前 ACTIVE BOM 的包材成本只能从物料主数据重新取价，原因必填并写审计台账；不能直接改历史成本数字或静默覆盖。
 5. **结单预填与单位：** 结单预填的可用量会加回“本计划自己的真实预留”，但不认领其它计划或未知来源预留；历史工序产出单位无法识别时回落计划单位，不能把工序名当单位继续传播。
 
-**验收结果：** 分配结果逐道回读、多批数量逐批可见、回料兼容由服务端复核，三类成本更正都有原因和新旧值审计；重算后的计划、成品与回料单位成本一致。"""
+**验收结果：** 分配结果逐道回读，自动与手动多批数量逐批可见且合计准确；缺口未补足不能确认。回料兼容由服务端复核，三类成本更正都有原因和新旧值审计；重算后的计划、成品与回料单位成本一致。"""
+
+_FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER = """\
+自动计划、结算、撤回和报工更正分别解决不同阶段的问题，不能把“修正页面数字”当成直接改库存、成本或历史流水。
+
+1. **自动计划权威：** 财审联动创建的新计划与人工计划共用 Workflow/BOM/输出单位解析。有可用 Workflow 时一次固定完整快照；完全没有 Workflow 覆盖时可以保留 `PENDING` 计划作为缺料/采购建议载体。已有配置但没有可用版本、跨工厂或配置冲突仍 fail closed，不能生成半张快照。
+2. **外部 WIP 结算：** “核对结单”使用服务端派生的产量、原料和工时；只有用户显式补充当前工厂可用的外部半成品领用时才把该行合并进结算。空行、低于 `0.01`、超可用量、批次或单位不一致会在任何结算/WIP/OUT 写入前拒绝；成功后必须回读 `SEMI_FINISHED` 消耗和负量 `OUT/SECONDARY_CONSUME` 流水。
+3. **整单撤回与重开：** 正式撤回在同一事务内反向 WIP `IN`、恢复 WIP `OUT`、释放占用、回放成本并完成审计；存在活动下游跨批消费、转出、错向/错量流水或租户不一致时整单停止。结单撤回完整成功后，计划从 `COMPLETED` 回到 `IN_PROGRESS` 并清空实际完成量/结束时间；只有自身已完成的唯一同厂批次才同步重开，不能覆盖真实混合状态。
+4. **已审批报工更正：** 电脑 Web 从“生产管理 → 报工核对”进入“核对修正”。只有专用“报工修正”权限可发起；普通报工员不能发起，审批人由已发布的 `PRODUCTION_REPORT_CORRECTION_APPROVAL` OA 流程决定。草稿 `PENDING_APPROVAL` 期间原报工仍是有效值并阻止结单；批准后只允许修改实际产出、良品/不良品、人数、总工时和备注，永久保留 before/after、原因与审批记录。投入批次、库存流水、成本及计划/批次/工序状态不得被这个入口改写；驳回保持原值。
+
+**验收结果：** 分别回读计划固定权威、外部 WIP 消耗流水、撤回后的计划/批次状态，以及报工更正的原值、待审批值和批准后值。任何一步失败都不能留下部分库存、成本、状态或审计写入。"""
 
 _RESTAURANT_RUNTIME_TRUTH_ANSWER = """\
 餐饮运行时必须把“没有能力、没有数据、只返回部分数据”和真实的 0 分开；任何一种缺口都不能用演示数字补齐。
@@ -994,13 +1004,34 @@ def _needs_factory_execution_recovery_guard(query: str) -> bool:
         "批量分配", "批量指派", "分配工序", "工序负责人", "报工员", "yield_operator",
     ))
     input_reachability = (
-        any(term in normalized for term in ("多批投入", "多个批次", "多批次"))
-        and any(term in normalized for term in ("首批数量", "数量输入", "滚动", "可达", "裁掉"))
+        any(term in normalized for term in ("多批投入", "多个批次", "多批次", "多批用量"))
+        and any(term in normalized for term in (
+            "首批数量", "数量输入", "滚动", "可达", "裁掉",
+            "自动分配", "按效期", "fefo", "手动选择", "库存不足",
+        ))
     ) or any(term in normalized for term in ("回料投入", "回料纯度", "纯度矩阵"))
     cost_repair = any(term in normalized for term in (
         "成本更正", "成本重算", "重算成本", "批次单价", "包材价", "估值更正", "审计台账",
     ))
     return assignment or input_reachability or cost_repair
+
+
+def _needs_factory_production_correction_lifecycle_guard(query: str) -> bool:
+    """Keep auto-plan authority, settlement reversal and report correction deterministic."""
+    normalized = (query or "").lower()
+    report_correction = any(term in normalized for term in (
+        "报工更正", "报工修正", "核对修正", "修正审批",
+        "production_report_correction", "报工数据已修正",
+    ))
+    auto_plan_authority = (
+        any(term in normalized for term in ("自动计划", "自动生产计划", "财审联动", "采购建议载体"))
+        and any(term in normalized for term in ("workflow", "bom", "权威", "快照", "pending", "固定"))
+    )
+    settlement_reversal = any(term in normalized for term in (
+        "外部半成品领用", "外部 wip", "结单撤回", "结算撤回",
+        "撤回后计划", "撤回后重开", "wip 撤回", "wip撤回",
+    ))
+    return report_correction or auto_plan_authority or settlement_reversal
 
 
 def _needs_factory_warehouse_governance_guard(query: str) -> bool:
@@ -2768,6 +2799,11 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         # Keep retrieval for source evidence, but do not let model variance invert
         # or omit the mandatory Workflow → BOM → Workflow sequence.
         guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_production_correction_lifecycle_guard(request.question)
+    ):
+        guard_answer = _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER
     elif (
         not is_restaurant_request
         and _needs_factory_batch_unknown_metrics_guard(request.question)

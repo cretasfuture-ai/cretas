@@ -29,6 +29,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_ACCOUNTING_PERIOD_OA_ANSWER,
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
     _FACTORY_PRODUCTION_ROLE_SPLIT_ANSWER,
+    _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER,
     _FACTORY_REPORTING_RUNTIME_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
@@ -93,6 +94,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_accounting_period_oa_guard,
     _needs_factory_production_execution_guard,
     _needs_factory_production_role_split_guard,
+    _needs_factory_production_correction_lifecycle_guard,
     _needs_factory_reporting_runtime_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
@@ -478,9 +480,12 @@ def test_20260827_factory_defect_count_truth_is_deterministic_and_isolated():
     assert not _needs_factory_defect_count_truth_guard("餐饮单菜毛利怎么计算？")
     assert "有不良品 / 已清点无不良品 / 未清点" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
     assert "不能伪造成零不良" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
-    assert "多批不猜" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "多批次只保存结单结论并明确不猜分配" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
     assert "不是“质量管理 → 报废处置”" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
-    assert "当前页面只提供待办清单" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "有不良品”并填写大于 0 的数量" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "已清点确认零" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "唯一正式批次才同步" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
+    assert "多批次只保存结单结论并明确不猜分配" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
     assert "良品率”显示 `—`" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
     assert "不能拿逐道投入/产出的出成率冒充良品率" in _FACTORY_DEFECT_COUNT_TRUTH_ANSWER
 
@@ -780,7 +785,7 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
     )[1].split("</div>", 1)[0]
     for factory_topic in (
         "成品分次入库", "有条件通过或不合格", "成品盘点与原料盘点",
-            "按含税单价填写", "不良品三态、批次回填与盘点补录", "标签拍摄非阻断建议与证据回读",
+            "按含税单价填写", "不良品三态、盘点补录与批次回填", "标签拍摄非阻断建议与证据回读",
     ):
         assert factory_topic in factory_tab
         assert factory_topic not in restaurant_suggestions
@@ -1532,7 +1537,9 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert required_sequence in html
     assert "有不良品、已清点无不良品或未清点" in html
     assert "一个计划只有一个正式批次时回填该批次" in html
-    assert "当前页面只列待办" in html
+    assert "有不良品（数量&gt;0）" in html
+    assert "已清点确认零" in html
+    assert "唯一正式批次同步数量，多批次只保存结单结论并明确不猜" in html
     assert "良品率显示“—”且不上绿色" in html
     assert "本地压缩完成后照片立即进入表单" in html
     assert "最多等待 5 秒" in html
@@ -2702,8 +2709,31 @@ def test_20260830_factory_execution_recovery_is_deterministic_and_isolated():
     assert "`operator` 或 `yield_operator`" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "部分成功说成全部成功" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "原来已填的首批数量会迁入" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "按效期优先自动分配" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "接口失败、单位不一致或总量不足都保持阻塞" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "逐批提交 `materialBatchRefs`" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "目标产品族/阶段与纯度矩阵" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "记录旧值、新值、操作者与时间" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+
+
+def test_20260831_factory_production_correction_lifecycle_is_deterministic_and_isolated():
+    questions = (
+        "财审联动自动计划怎样固定 Workflow 和 BOM 权威快照？",
+        "核对结单怎样补充外部半成品领用，结单撤回后计划怎样重开？",
+        "已审批报工数据错了，报工核对里的核对修正怎样走 OA？",
+    )
+    assert all(_needs_factory_production_correction_lifecycle_guard(q) for q in questions)
+    assert not _needs_factory_production_correction_lifecycle_guard(
+        "餐饮店长怎样查看本月毛利？"
+    )
+    answer = _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER
+    assert "一次固定完整快照" in answer
+    assert "外部半成品领用" in answer
+    assert "负量 `OUT/SECONDARY_CONSUME`" in answer
+    assert "计划从 `COMPLETED` 回到 `IN_PROGRESS`" in answer
+    assert "专用“报工修正”权限" in answer
+    assert "`PRODUCTION_REPORT_CORRECTION_APPROVAL`" in answer
+    assert "投入批次、库存流水、成本及计划/批次/工序状态不得" in answer
 
 
 def test_20260830_restaurant_runtime_truth_is_deterministic_and_isolated():
@@ -2737,6 +2767,9 @@ def test_20260830_dual_line_sources_and_ai_assist_are_complete_and_isolated():
         assert "最多等待 5 秒" in text
         assert "yield_operator" in text
         assert "首批" in text
+        assert "按效期优先自动分配" in text
+        assert "PRODUCTION_REPORT_CORRECTION_APPROVAL" in text
+        assert "COMPLETED" in text and "IN_PROGRESS" in text
         assert "审计台账" in text
         assert "restaurant_owner" not in text
 
@@ -2748,6 +2781,9 @@ def test_20260830_dual_line_sources_and_ai_assist_are_complete_and_isolated():
         assert "yield_operator" not in text
 
     assert "标签拍摄非阻断建议与证据回读" in ai_assist
-    assert "批量工序指派与多批投入可达" in ai_assist
+    assert "批量指派与 FEFO 多批用量" in ai_assist
+    assert "自动计划与完整权威快照" in ai_assist
+    assert "外部 WIP、整单撤回与重开" in ai_assist
+    assert "已审批报工核对修正" in ai_assist
     assert "SmartBI 未上线与缺数诚实空态" in ai_assist
     assert "餐饮阈值权限、继承与时效" in ai_assist
