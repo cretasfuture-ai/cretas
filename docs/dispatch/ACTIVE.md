@@ -5,6 +5,7 @@
 
 ## 在飞任务
 
+- `F006-CUSTOMER-MATERIAL-CATEGORY-20260901` — `in-progress` — Owner: Codex task `01a05923-e2d9-7fe3-a6e2-0f77c3795946` — Base SHA: `2b9ce05a047cced7e57f033332b185476fcc0c98` — 仅实现 Web“客供物料”文案与 RAW/AUXILIARY/PACKAGING 分类标签、按当前 `RawMaterialType` 分类真值接入现有仓库类别准入并移除客供收货硬编码 RAW，以及最小 Java/Web 正负测试。若当前模型无 `mainCategory` 字段，复用现有分类真值/映射，不凭空新增无消费者的通用模型。明确排除 `CustomerSuppliedSettlementCoverageGuard`、`ProductionPlanServiceImpl`、`ProductionInventoryOwnershipGuard`、同单混合 ownership、合并、部署和生产写；最终 review/merge/deploy/E2E 由当前 F006 全链协调者统一执行。
 
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
@@ -148,6 +149,8 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+- **2026-09-01 窄范围划拨**：经 Owner 明确授权，从 `ARCH-F006-DEMAND-DRIVEN-MATERIAL-RECEIPT-001` 与 `ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001` 中仅划出“销售订单客供原料→客供物料文案、RAW/AUXILIARY/PACKAGING 分类显示、客供收货按物料主分类进入现有仓库类别准入及对应目标测试”给 `F006-CUSTOMER-MATERIAL-CATEGORY-20260901`；两个父任务不再并发修改该窄范围，其余 scope 保持不变。
+- `F006-CUSTOMER-MATERIAL-CATEGORY-20260901`：仅 `web-admin/src/views/sales/orders/` 下客供物料文案/分类展示与对应目标测试、`SalesOrderSuppliedMaterialRequirementService`/`CustomerMaterialArrivalNoticeService` 的客供收货类别解析、`WarehouseInventoryGuardService` 现有准入映射及对应 Java 目标测试、dispatch/当日归档；不得修改结单覆盖守卫、生产计划服务、生产库存 ownership 守卫或其他审批/库存架构。验收：原料/辅料/包材均显示正确类别并只能进入现有允许的仓库类别，未知/不匹配类别 fail closed，客供 payload 与所有权语义不漂移，生产零写，严格 `NOT_DEPLOYED`。
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
