@@ -301,7 +301,7 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     @Test
-    void workspaceResolvesChineseKgFromPinnedOutgoingSemiFinishedMaterialNode() {
+    void workspaceUsesProcessInputKgInsteadOfOutgoingMaterialUnit() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         pinWithLinkedOutput(recipe, "p1", "公斤", "SEMI_FINISHED");
@@ -315,12 +315,12 @@ class BomSeasoningWorkspaceServiceTest {
         var process = response.getProcesses().get(0);
         assertEquals(BigDecimal.ONE, process.getStandardBasisQuantity());
         assertEquals("kg", process.getStandardBasisUnit());
-        assertEquals("SEMI_FINISHED", process.getStandardBasisMaterialKind());
+        assertNull(process.getStandardBasisMaterialKind());
         assertTrue(process.isStandardUsageSupported());
     }
 
     @Test
-    void workflowOutputPortUnitOverridesStaleProcessAndAdjacentMaterialUnits() {
+    void workflowOutputPortDoesNotOverrideTheInputKgSeasoningBasis() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         pinWithAuthoritativeOutputPort(recipe, "p1");
@@ -332,15 +332,12 @@ class BomSeasoningWorkspaceServiceTest {
         BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
 
         var process = response.getProcesses().get(0);
-        // 2026-08-14 定案 (UnitContractServiceImpl#systemUnits): 计数/包装单位的规范码
-        // 就是中文字本身, 英文单词 (box/bag/pcs...) 降级为别名。归一之后一律得到中文码。
-        // 期望值曾是 "box" (英文码年代的规范表), 现在的规范码是 "盒"。
-        assertEquals("盒", process.getStandardBasisUnit());
+        assertEquals("kg", process.getStandardBasisUnit());
         assertTrue(process.isStandardUsageSupported());
     }
 
     @Test
-    void customSkuOutputUnitIsAValidOpaquePerOutputBasis() {
+    void customSkuOutputUnitDoesNotChangeTheInputKgSeasoningBasis() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         pinWithLinkedOutput(recipe, "p1", "袋", "SEMI_FINISHED");
@@ -353,27 +350,12 @@ class BomSeasoningWorkspaceServiceTest {
 
         var process = response.getProcesses().getFirst();
         assertEquals(BigDecimal.ONE, process.getStandardBasisQuantity());
-        // 2026-07-31: 期望值从「袋」改为规范码 "bag"。
-        //
-        // 旧期望**编码的是缺陷本身**: 当时这里用一张只有 7 组的私有别名表, 「盒」在表里 → 归一成
-        // "box" (上一个用例断言的正是 "box"), 而「袋」不在表里 → 原样留着。同一个字段一会儿是
-        // 英文码一会儿是中文, 取决于那张表恰好收没收 —— 而这正是客户 2026-07-31 撞到的那类错。
-        // 改成走权威表后全部是规范码, 与上一个用例的 "box" 一致。
-        //
-        // 2026-08-14 定案 (第二次迁移, UnitContractServiceImpl#systemUnits): 计数/包装单位
-        // 的规范码改成中文字本身 (见该方法注释: 英文码让 件/个/只、框/筐 这类"一个码对应多个
-        // 中文单位"的场景只能靠 storageUnit 规则打补丁保字面)。"bag" 因此降级为别名,
-        // 归一后的规范码是「袋」——与本用例的输入字面重合只是巧合 (输入恰好就是中文)。
-        //
-        // ⚠️ 不是把中文单位换成英文给用户看: 前端 businessUnitLabel → displayUnit →
-        // UNIT_LABELS['袋'] = 「袋」, 界面显示不变。这个字段同时还喂端口单位冲突检测,
-        // 那里必须是规范码, 否则「袋」和「bag」会被数成两种单位。
-        assertEquals("袋", process.getStandardBasisUnit());
+        assertEquals("kg", process.getStandardBasisUnit());
         assertTrue(process.isStandardUsageSupported());
     }
 
     @Test
-    void workspaceFailsClosedWhenPinnedOutputUnitsConflict() {
+    void conflictingOutputUnitsDoNotBlockAnUnambiguousInputKgBasis() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         pinWithConflictingOutputs(recipe, "p1");
@@ -384,15 +366,15 @@ class BomSeasoningWorkspaceServiceTest {
 
         BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
 
-        assertFalse(response.getProcesses().get(0).isStandardUsageSupported());
-        assertNull(response.getProcesses().get(0).getStandardBasisUnit());
+        assertTrue(response.getProcesses().get(0).isStandardUsageSupported());
+        assertEquals("kg", response.getProcesses().get(0).getStandardBasisUnit());
     }
 
     @Test
-    void createRejectsUnsupportedPinnedOutputBasisBeforeClaimingRevision() {
+    void createRejectsUnsupportedPinnedInputBasisBeforeClaimingRevision() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
-        pinWithConflictingOutputs(recipe, "p1");
+        pinWithNonMassInput(recipe, "p1");
 
         BusinessException exception = assertThrows(BusinessException.class,
                 () -> service.createBinding(FACTORY, RECIPE, "p1", createRequest(3L, "node-p1")));
@@ -404,12 +386,12 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     @Test
-    void updateRejectsUnsupportedPinnedOutputBasisBeforeClaimingRevision() {
+    void updateRejectsUnsupportedPinnedInputBasisBeforeClaimingRevision() {
         BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
         BomSeasoningItem existing = binding(11L, "node-p1", "p1", "salt", "5");
         when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
         when(seasoningItemRepository.findByIdAndRecipeId(11L, RECIPE)).thenReturn(Optional.of(existing));
-        pinWithConflictingOutputs(recipe, "p1");
+        pinWithNonMassInput(recipe, "p1");
         SeasoningBindingUpdateRequest request = new SeasoningBindingUpdateRequest();
         request.setExpectedRevision(3L);
         request.setMaterialTypeId("salt");
@@ -652,6 +634,7 @@ class BomSeasoningWorkspaceServiceTest {
             steps.add(new PinnedWorkflowGraph.ProcessStep("node-" + processIds[i], processIds[i], i + 1));
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("workProcessId", processIds[i]);
+            data.put("inputUnit", "kg");
             data.put("outputUnit", "kg");
             data.put("ports", List.of(Map.of("direction", "OUTPUT", "unit", "kg")));
             nodes.add(new ProductProcessWorkflowDTO.Node(
@@ -711,9 +694,7 @@ class BomSeasoningWorkspaceServiceTest {
 
         var process = response.getProcesses().get(0);
         assertTrue(process.isStandardUsageSupported(), "副产不该让整道工序失去辅料基准");
-        // 输入 port/baseUnit 字面是英文别名 "box" (模拟存量/历史数据), 归一后的规范码
-        // 是「盒」(2026-08-14 定案, 见上一个用例的详细注释)。
-        assertEquals("盒", process.getStandardBasisUnit(), "基准应取主产出单位, 不受副产 kg 影响");
+        assertEquals("kg", process.getStandardBasisUnit(), "辅料基准应取投入 kg，不受主产出/副产单位影响");
     }
 
     /**
@@ -742,14 +723,14 @@ class BomSeasoningWorkspaceServiceTest {
         var process = response.getProcesses().get(0);
         assertTrue(process.isStandardUsageSupported(),
                 "副产节点不在切片里时也不该毁掉基准(prod 就是这个形态)");
-        // 同上: 输入是英文别名 "box", 规范码是「盒」。
-        assertEquals("盒", process.getStandardBasisUnit());
+        assertEquals("kg", process.getStandardBasisUnit());
     }
 
     /** 端口指向副产, 但副产节点**不在** graph.nodes() 里 —— 与 prod 的目标切片一致。 */
     private void pinWithByproductPortButNodeOutsideSlice(BomRecipe recipe, String processId) {
         Map<String, Object> processData = new LinkedHashMap<>();
         processData.put("workProcessId", processId);
+        processData.put("inputUnit", "kg");
         processData.put("ports", List.of(
                 Map.of("direction", "OUTPUT", "unit", "box",
                         "materialNodeId", "fg-1", "materialKind", "FINISHED_GOOD"),
@@ -776,6 +757,7 @@ class BomSeasoningWorkspaceServiceTest {
     private void pinWithByproductAlongsideFinished(BomRecipe recipe, String processId) {
         Map<String, Object> processData = new LinkedHashMap<>();
         processData.put("workProcessId", processId);
+        processData.put("inputUnit", "kg");
         processData.put("ports", List.of(
                 Map.of("direction", "OUTPUT", "unit", "box",
                         "materialNodeId", "fg-1", "materialKind", "FINISHED_GOOD"),
@@ -807,6 +789,7 @@ class BomSeasoningWorkspaceServiceTest {
     private void pinWithLinkedOutput(BomRecipe recipe, String processId, String baseUnit, String materialKind) {
         Map<String, Object> processData = new LinkedHashMap<>();
         processData.put("workProcessId", processId);
+        processData.put("inputUnit", "kg");
         processData.put("ports", List.of(Map.of(
                 "direction", "OUTPUT",
                 "materialNodeId", "semi-1",
@@ -833,6 +816,7 @@ class BomSeasoningWorkspaceServiceTest {
     private void pinWithConflictingOutputs(BomRecipe recipe, String processId) {
         Map<String, Object> processData = new LinkedHashMap<>();
         processData.put("workProcessId", processId);
+        processData.put("inputUnit", "kg");
         processData.put("ports", List.of(
                 Map.of("direction", "OUTPUT", "materialNodeId", "semi-kg"),
                 Map.of("direction", "OUTPUT", "materialNodeId", "semi-g")));
@@ -853,9 +837,33 @@ class BomSeasoningWorkspaceServiceTest {
         lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
     }
 
+    private void pinWithNonMassInput(BomRecipe recipe, String processId) {
+        Map<String, Object> processData = new LinkedHashMap<>();
+        processData.put("workProcessId", processId);
+        processData.put("inputUnit", "盒");
+        processData.put("ports", List.of(Map.of(
+                "direction", "OUTPUT",
+                "unit", "kg",
+                "materialNodeId", "semi-kg")));
+        Map<String, Object> outputData = Map.of(
+                "baseUnit", "kg", "materialKind", "SEMI_FINISHED");
+        List<ProductProcessWorkflowDTO.Node> nodes = List.of(
+                new ProductProcessWorkflowDTO.Node("node-" + processId, "PROCESS",
+                        new ProductProcessWorkflowDTO.Position(0D, 0D), processData),
+                new ProductProcessWorkflowDTO.Node("semi-kg", "SEMI_FINISHED",
+                        new ProductProcessWorkflowDTO.Position(1D, 0D), outputData));
+        when(bomWorkflowRevisionService.resolvePinnedGraph(FACTORY, recipe)).thenReturn(
+                new PinnedWorkflowGraph(101L, 41L, 1, "hash-101", "product-1", "finished",
+                        List.of("raw-1"),
+                        List.of(new PinnedWorkflowGraph.ProcessStep("node-" + processId, processId, 1)),
+                        nodes, List.of()));
+        lenient().when(bomWorkflowRevisionService.listCompatible(FACTORY, RECIPE)).thenReturn(List.of());
+    }
+
     private void pinWithAuthoritativeOutputPort(BomRecipe recipe, String processId) {
         Map<String, Object> processData = new LinkedHashMap<>();
         processData.put("workProcessId", processId);
+        processData.put("inputUnit", "kg");
         processData.put("outputUnit", "kg");
         processData.put("ports", List.of(Map.of(
                 "direction", "OUTPUT",

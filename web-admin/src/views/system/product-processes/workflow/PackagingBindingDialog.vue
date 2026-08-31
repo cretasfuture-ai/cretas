@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { bomRecipeApi, type BomItemSubstituteView, type BomRecipeItemPayload, type BomRecipeItemView } from '@/api/bom';
+import {
+  bomRecipeApi,
+  type BomItemSubstituteView,
+  type BomRecipeItemPayload,
+  type BomRecipeItemView,
+  type ProductPackagingSpecView,
+} from '@/api/bom';
 import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit } from '@/utils/unitPricing';
 
 /**
@@ -11,12 +17,9 @@ import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit } from '@
  * 不新增任何 API 函数/端点。这两个函数原本是旧 BOM 页(`views/production/bom/index.vue`)
  * 的包材新增/编辑路径在用的; 该页 2026-08-07 阶段 5 已删, 本组件成为唯一调用方。
  *
- * ⚠️ Phase 1 事故教训(来自那个已删页面的 :1252-1291): 它的表单字段叫
- * `naturalQuantity`,但落库/编辑回填走的是 `standardQuantity` —— `naturalQuantity`
- * 只是发给后端的包装层级兼容字段,从未被任何回填路径读取。本组件不复用这个容易
- * 混淆的表单字段名,内部状态叫 `form.quantity`;编辑回填只读 `row.standardQuantity`,
- * 提交时把它同时写进 payload 的 `standardQuantity`(权威)与 `naturalQuantity`(兼容,
- * 值相同)两个字段。
+ * 保存口径是「包装层级自然用量 → 成品基本单位标准用量」。例如 SKU 基本单位为盒，
+ * 包装规格为 1 箱 = 8 盒，外箱自然用量填 1 个/箱，标准折算即 0.125 个/盒。
+ * 报工只报实际成品产出，后端按标准折算自动计算包材需求。
  */
 
 export interface PackagingMaterialOption {
@@ -48,6 +51,8 @@ const props = withDefaults(defineProps<{
   factoryId: string;
   recipeId: string;
   outputName: string;
+  /** 产出 SKU，用于读取该产品自己的盒/箱/袋包装规格。 */
+  productTypeId: string;
   /** 产出 SKU 的基本单位 —— 用量分母的权威来源, 禁止硬编码。 */
   baseUnit: string;
   row?: PackagingRowPayload | null;
@@ -68,13 +73,28 @@ const emit = defineEmits<{
 
 const form = reactive({
   materialTypeId: '',
-  quantity: null as number | null,
+  packagingSpecId: '',
+  packagingRole: 'PRIMARY_CONTAINER',
+  naturalQuantity: null as number | null,
   isOptional: false,
   remark: '',
   substituteMaterialTypeIds: [] as string[],
   substituteFactors: {} as Record<string, number | null>,
 });
 const saving = reactive({ value: false });
+const packagingSpecs = ref<ProductPackagingSpecView[]>([]);
+const packagingSpecsLoading = ref(false);
+const packagingSpecsError = ref('');
+
+const PACKAGING_ROLE_OPTIONS = [
+  { value: 'PRIMARY_CONTAINER', label: '成品直接容器（彩盒/托盘）' },
+  { value: 'INNER_WRAP', label: '内包装（内袋/白套）' },
+  { value: 'SEAL', label: '封装（膜/封口材料）' },
+  { value: 'LABEL', label: '标签/标识' },
+  { value: 'OUTER_CASE', label: '外包装（纸箱/周转箱）' },
+  { value: 'ADHESIVE', label: '包装辅助耗材（胶等）' },
+  { value: 'OTHER', label: '其他包材' },
+] as const;
 
 const selectedMaterial = computed(() => props.materials.find((item) => item.id === form.materialTypeId));
 const positivePrice = (value?: number | null): value is number => (
@@ -102,6 +122,26 @@ const quantityUnit = computed(() => (
 ));
 const quantityUnitLabel = computed(() => displayUnit(quantityUnit.value));
 const baseUnitLabel = computed(() => displayUnit(props.baseUnit));
+const selectedPackagingSpec = computed(() => packagingSpecs.value
+  .find((item) => item.id === form.packagingSpecId));
+const packagingBasisLabel = computed(() => {
+  const spec = selectedPackagingSpec.value;
+  if (!spec) return `每 1 ${baseUnitLabel.value}成品`;
+  return `每 1 ${displayUnit(spec.packageUnit)}（=${spec.conversionFactor} ${displayUnit(spec.baseUnit)}）`;
+});
+const standardQuantityPreview = computed(() => {
+  if (form.naturalQuantity == null
+      || !Number.isFinite(form.naturalQuantity)
+      || form.naturalQuantity <= 0) {
+    return null;
+  }
+  const factor = Number(selectedPackagingSpec.value?.conversionFactor ?? 1);
+  if (!Number.isFinite(factor) || factor <= 0) return null;
+  return form.naturalQuantity / factor;
+});
+const standardQuantityPreviewText = computed(() => standardQuantityPreview.value == null
+  ? '—'
+  : `${Number(standardQuantityPreview.value.toFixed(8))} ${quantityUnitLabel.value}/${baseUnitLabel.value}`);
 
 /**
  * 替代包材的作用域判据 —— 只有同一个三级分类节点的包材才允许互替。
@@ -148,11 +188,40 @@ function substituteNeedsExplicitFactor(materialTypeId: string): boolean {
   return substituteUnit(materialTypeId) !== quantityUnit.value;
 }
 
-watch(() => [props.modelValue, props.row] as const, () => {
+let packagingSpecLoadSeq = 0;
+async function loadPackagingSpecs(): Promise<void> {
+  if (!props.modelValue || !props.productTypeId) return;
+  const seq = ++packagingSpecLoadSeq;
+  packagingSpecsLoading.value = true;
+  packagingSpecsError.value = '';
+  try {
+    const response = await bomRecipeApi.getProductPackagingSpecs(props.factoryId, props.productTypeId);
+    if (seq !== packagingSpecLoadSeq) return;
+    packagingSpecs.value = (response.data || []).filter((item) => item.active !== false);
+    if (form.packagingSpecId
+        && !packagingSpecs.value.some((item) => item.id === form.packagingSpecId)) {
+      packagingSpecsError.value = '该行引用的包装规格已停用或不存在，请重新选择后保存。';
+    }
+  } catch {
+    if (seq !== packagingSpecLoadSeq) return;
+    packagingSpecs.value = [];
+    packagingSpecsError.value = '包装规格读取失败，当前不能保存包材关系。';
+  } finally {
+    if (seq === packagingSpecLoadSeq) packagingSpecsLoading.value = false;
+  }
+}
+
+watch(() => [props.modelValue, props.row, props.productTypeId] as const, () => {
   if (!props.modelValue) return;
   form.materialTypeId = props.row?.materialTypeId || '';
-  // ⚠️ 只读 standardQuantity(落库字段), 不读 row.naturalQuantity —— 见头部注释。
-  form.quantity = props.row?.standardQuantity != null ? Number(props.row.standardQuantity) : null;
+  form.packagingSpecId = props.row?.packagingSpecId || '';
+  form.packagingRole = props.row?.packagingRole || 'PRIMARY_CONTAINER';
+  const factor = Number(props.row?.packagingConversionFactorSnapshot ?? 1);
+  form.naturalQuantity = props.row?.naturalQuantity != null
+    ? Number(props.row.naturalQuantity)
+    : props.row?.standardQuantity != null
+      ? Number(props.row.standardQuantity) * (Number.isFinite(factor) && factor > 0 ? factor : 1)
+      : null;
   form.isOptional = Boolean(props.row?.isOptional);
   form.remark = props.row?.remark || '';
   form.substituteMaterialTypeIds = props.substituteRelations.map((relation) => relation.substituteMaterialTypeId);
@@ -160,6 +229,7 @@ watch(() => [props.modelValue, props.row] as const, () => {
     relation.substituteMaterialTypeId,
     relation.conversionFactor == null ? null : Number(relation.conversionFactor),
   ]));
+  void loadPackagingSpecs();
 }, { immediate: true });
 
 function isRevisionConflict(error: unknown): boolean {
@@ -169,9 +239,16 @@ function isRevisionConflict(error: unknown): boolean {
 
 async function submit() {
   if (!form.materialTypeId) return ElMessage.warning('请选择包材');
-  // 禁止降级处理: 空值/非正数一律拒绝保存, 不能默默落库为 0。
-  if (form.quantity == null || !Number.isFinite(form.quantity) || form.quantity <= 0) {
-    return ElMessage.warning('请填写大于 0 的每份成品包材用量');
+  if (!form.packagingRole) return ElMessage.warning('请选择包材业务角色');
+  if (packagingSpecsLoading.value || packagingSpecsError.value) {
+    return ElMessage.warning(packagingSpecsError.value || '包装规格仍在读取，请稍后再保存');
+  }
+  // 禁止降级处理: 自然用量和折算量任一不可计算都拒绝保存，不能默默落库为 0。
+  if (form.naturalQuantity == null
+      || !Number.isFinite(form.naturalQuantity)
+      || form.naturalQuantity <= 0
+      || standardQuantityPreview.value == null) {
+    return ElMessage.warning('请填写大于 0 的包装层级自然用量');
   }
   if (!effectivePrice.value) {
     return ElMessage.warning('该包材缺少有效移动平均库存成本或未税采购参考价，暂不能保存');
@@ -191,7 +268,7 @@ async function submit() {
       workflowInputPortId: props.row?.workflowInputPortId ?? null,
       workflowEdgeId: props.row?.workflowEdgeId ?? null,
       costScope: 'OUTPUT_EXCLUSIVE',
-      standardQuantity: form.quantity,
+      standardQuantity: standardQuantityPreview.value,
       yieldRate: 100,
       unit: quantityUnit.value,
       unitPrice: effectivePrice.value.value,
@@ -200,9 +277,9 @@ async function submit() {
       sortOrder: props.row?.sortOrder ?? 0,
       isOptional: form.isOptional,
       substituteGroup: null,
-      packagingSpecId: null,
-      packagingRole: 'PRIMARY_CONTAINER',
-      naturalQuantity: form.quantity,
+      packagingSpecId: form.packagingSpecId || null,
+      packagingRole: form.packagingRole,
+      naturalQuantity: form.naturalQuantity,
       substitutes: form.substituteMaterialTypeIds.map((materialTypeId) => ({
         materialTypeId,
         conversionFactor: substituteNeedsExplicitFactor(materialTypeId)
@@ -236,21 +313,57 @@ async function submit() {
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" :title="row ? '编辑包材' : '添加包材'" width="560px" @close="emit('update:modelValue', false)">
+  <el-dialog :model-value="modelValue" :title="row ? '编辑包材' : '添加包材'" width="640px" @close="emit('update:modelValue', false)">
     <el-form label-width="130px" data-testid="packaging-binding-dialog">
       <el-form-item label="投入产出">
         <el-input data-testid="locked-output-context" :model-value="outputName" disabled />
         <div class="form-tip">产出由入口锁定，保存只影响该产出的包材。</div>
       </el-form-item>
       <el-form-item label="选择包材" required>
-        <el-select v-model="form.materialTypeId" filterable placeholder="从包材档案选择…" style="width: 100%">
+        <el-select v-model="form.materialTypeId" data-testid="packaging-material-select" filterable placeholder="从包材档案选择…" style="width: 100%">
           <el-option v-for="material in materials" :key="material.id" :label="material.name" :value="material.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="每 1 份成品用量" required>
+      <el-form-item label="包材角色" required>
+        <el-select v-model="form.packagingRole" data-testid="packaging-role-select" style="width: 100%">
+          <el-option
+            v-for="option in PACKAGING_ROLE_OPTIONS"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <div class="form-tip">角色用于区分内袋、封膜、标签、彩盒和外箱；替代包材只能在同角色内生效。</div>
+      </el-form-item>
+      <el-form-item label="用量基准" required>
+        <el-select
+          v-model="form.packagingSpecId"
+          data-testid="packaging-spec-select"
+          :loading="packagingSpecsLoading"
+          style="width: 100%"
+        >
+          <el-option :label="`基本规格：每 1 ${baseUnitLabel}`" value="" />
+          <el-option
+            v-for="spec in packagingSpecs"
+            :key="spec.id"
+            :label="`${spec.name}：1 ${displayUnit(spec.packageUnit)} = ${spec.conversionFactor} ${displayUnit(spec.baseUnit)}`"
+            :value="spec.id"
+          />
+        </el-select>
+        <div class="form-tip">从成品 SKU 的包装规格读取，不在 BOM 中另造“每箱几盒”。</div>
+        <el-alert
+          v-if="packagingSpecsError"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="packagingSpecsError"
+        />
+      </el-form-item>
+      <el-form-item label="自然用量" required>
         <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
           <el-input-number
-            v-model="form.quantity"
+            v-model="form.naturalQuantity"
+            data-testid="packaging-natural-quantity"
             :precision="4"
             :step="0.01"
             :controls="false"
@@ -260,8 +373,12 @@ async function submit() {
           <span class="unit-suffix" data-testid="packaging-quantity-unit">{{ quantityUnitLabel }}</span>
         </div>
         <div class="form-tip">
-          每生产 1{{ baseUnitLabel }}成品使用多少该包材。单位固定来自包材档案，不在此处修改。
+          {{ packagingBasisLabel }}使用多少该包材。单位固定来自包材档案，不在此处修改。
         </div>
+      </el-form-item>
+      <el-form-item label="标准折算">
+        <el-input data-testid="packaging-standard-preview" :model-value="standardQuantityPreviewText" disabled />
+        <div class="form-tip">系统按成品基本单位保存并自动计算报工需求；报工员不再填写包材数量。</div>
       </el-form-item>
       <el-form-item label="档案单位">
         <el-input :model-value="quantityUnitLabel" disabled />
@@ -340,6 +457,12 @@ async function submit() {
       <el-form-item label="备注">
         <el-input v-model="form.remark" type="textarea" :rows="2" />
       </el-form-item>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="正式报工只填写实际成品产出；系统按本配置自动分摊并扣减包材。损耗和额外领用不计入本标准用量。"
+      />
     </el-form>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>

@@ -6,6 +6,7 @@ import type { BomItemSubstituteView, BomRecipeItemView } from '@/api/bom';
 
 const addItem = vi.fn();
 const updateItem = vi.fn();
+const getProductPackagingSpecs = vi.fn();
 
 vi.mock('@/api/bom', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/api/bom')>();
@@ -15,6 +16,7 @@ vi.mock('@/api/bom', async (importOriginal) => {
       ...original.bomRecipeApi,
       addItem: (...args: unknown[]) => addItem(...args),
       updateItem: (...args: unknown[]) => updateItem(...args),
+      getProductPackagingSpecs: (...args: unknown[]) => getProductPackagingSpecs(...args),
     },
   };
 });
@@ -45,6 +47,7 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
       factoryId: 'F006',
       recipeId: 'R1',
       outputName: '鸭油',
+      productTypeId: 'FG-1',
       baseUnit: 'kg',
       row: null,
       materials: [BOXED_MATERIAL, BAG_MATERIAL, LABEL_MATERIAL_KG],
@@ -80,11 +83,21 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
 }
 
 function selectMaterial(wrapper: ReturnType<typeof mountDialog>, materialId: string) {
-  wrapper.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', materialId);
+  wrapper.findAllComponents({ name: 'ElSelect' })
+    .find((component) => component.attributes('data-testid') === 'packaging-material-select')!
+    .vm.$emit('update:modelValue', materialId);
 }
 
 function setQuantity(wrapper: ReturnType<typeof mountDialog>, value: number | null) {
-  wrapper.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', value);
+  wrapper.findAllComponents({ name: 'ElInputNumber' })
+    .find((component) => component.attributes('data-testid') === 'packaging-natural-quantity')!
+    .vm.$emit('update:modelValue', value);
+}
+
+function selectOption(wrapper: ReturnType<typeof mountDialog>, testId: string, value: string | string[]) {
+  wrapper.findAllComponents({ name: 'ElSelect' })
+    .find((component) => component.attributes('data-testid') === testId)!
+    .vm.$emit('update:modelValue', value);
 }
 
 async function clickSave(wrapper: ReturnType<typeof mountDialog>) {
@@ -111,13 +124,39 @@ describe('包材编辑弹窗', () => {
     vi.clearAllMocks();
     addItem.mockResolvedValue({ success: true, data: { id: 99 } });
     updateItem.mockResolvedValue({ success: true, data: { id: 42 } });
+    getProductPackagingSpecs.mockResolvedValue({
+      success: true,
+      data: [{
+        id: 'SPEC-CASE-8', name: '外箱装', packageUnit: '箱', baseUnit: 'kg',
+        conversionFactor: 8, defaultSpec: true, active: true, sortOrder: 0,
+      }],
+    });
   });
 
   it('用量输入框的分母来自传入的 baseUnit, 不是写死的「盒」', () => {
     // 按重量卖的副产品 baseUnit 是 kg, 写死会算错
     const wrapper = mountDialog({ baseUnit: 'kg' });
     expect(wrapper.text()).toContain('kg');
-    expect(wrapper.text()).not.toContain('盒');
+    expect(wrapper.text()).not.toContain('每 1 盒成品');
+  });
+
+  it('按成品包装规格把自然用量折算成基本单位标准用量', async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    selectMaterial(wrapper, 'PK-BOX');
+    selectOption(wrapper, 'packaging-role-select', 'OUTER_CASE');
+    selectOption(wrapper, 'packaging-spec-select', 'SPEC-CASE-8');
+    setQuantity(wrapper, 1);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('每 1 箱（=8 kg）');
+    await clickSave(wrapper);
+    expect(addItem).toHaveBeenCalledWith('F006', 'R1', expect.objectContaining({
+      packagingSpecId: 'SPEC-CASE-8',
+      packagingRole: 'OUTER_CASE',
+      naturalQuantity: 1,
+      standardQuantity: 0.125,
+    }));
   });
 
   it('用量为空或非正数时不允许保存', async () => {
@@ -200,7 +239,7 @@ describe('包材编辑弹窗', () => {
     selectMaterial(wrapper, 'PK-BOX');
     setQuantity(wrapper, 2);
     await flushPromises();
-    wrapper.findAllComponents({ name: 'ElSelect' })[1].vm.$emit('update:modelValue', ['PK-LABEL']);
+    selectOption(wrapper, 'packaging-substitute-select', ['PK-LABEL']);
     await flushPromises();
     await clickSave(wrapper);
     expect(addItem).not.toHaveBeenCalled();
@@ -220,7 +259,7 @@ describe('包材编辑弹窗', () => {
     selectMaterial(wrapper, 'PK-BOX');
     setQuantity(wrapper, 2);
     await flushPromises();
-    wrapper.findAllComponents({ name: 'ElSelect' })[1].vm.$emit('update:modelValue', ['PK-BAG']);
+    selectOption(wrapper, 'packaging-substitute-select', ['PK-BAG']);
     await flushPromises();
     expect(wrapper.find('[data-testid="packaging-substitute-factor-PK-BAG"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('同单位默认 1:1');
@@ -231,26 +270,30 @@ describe('包材编辑弹窗', () => {
     }));
   });
 
-  it('编辑既有行时回填的是落库字段而不是表单同名字段', async () => {
-    // Phase 1 事故: 表单叫 naturalQuantity, 落库在 standardQuantity。
-    // row.naturalQuantity 故意写一个错误值, row.standardQuantity 才是权威值 —— 回填必须读后者。
+  it('编辑既有包装层级行时回填自然用量并保留层级和角色', async () => {
     const row: Partial<BomRecipeItemView> = {
       id: 42,
       materialTypeId: 'PK-BOX',
       materialName: '塑料桶 20L',
-      standardQuantity: 5,
-      naturalQuantity: 999,
+      standardQuantity: 0.125,
+      naturalQuantity: 1,
+      packagingSpecId: 'SPEC-CASE-8',
+      packagingRole: 'OUTER_CASE',
+      packagingConversionFactorSnapshot: 8,
       unit: 'pcs',
       isOptional: false,
       remark: '备注文本',
     };
     const wrapper = mountDialog({ row });
     await flushPromises();
-    expect(wrapper.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(5);
-
+    expect(wrapper.get('[data-testid="packaging-natural-quantity"]')
+      .findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(1);
     await clickSave(wrapper);
     expect(updateItem).toHaveBeenCalledWith('F006', 42, expect.objectContaining({
-      standardQuantity: 5,
+      standardQuantity: 0.125,
+      naturalQuantity: 1,
+      packagingSpecId: 'SPEC-CASE-8',
+      packagingRole: 'OUTER_CASE',
     }));
   });
 

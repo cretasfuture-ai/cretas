@@ -695,6 +695,7 @@
       :factory-id="packagingDialogFactoryId"
       :recipe-id="packagingDialogRecipeId"
       :output-name="packagingDialogOutputName"
+      :product-type-id="packagingDialogProductTypeId"
       :base-unit="packagingDialogBaseUnit"
       :row="packagingDialogRow"
       :materials="bomOverlayPackagingMaterials"
@@ -1574,6 +1575,7 @@ const packagingDialogVisible = ref(false);
 const packagingDialogFactoryId = ref('');
 const packagingDialogRecipeId = ref('');
 const packagingDialogOutputName = ref('');
+const packagingDialogProductTypeId = ref('');
 const packagingDialogBaseUnit = ref('');
 const packagingDialogRow = ref<PackagingRowPayload | null>(null);
 const packagingDialogSubstituteRelations = computed<BomItemSubstituteView[]>(() => {
@@ -2771,7 +2773,14 @@ async function loadBomOverlayData(options: {
         id: String(item.id),
         materialName: item.materialName || '未命名物料',
         dosageText: formatPackagingDosageText(item.standardQuantity, item.unit, outputBaseUnit),
-        naturalHint: formatPackagingNaturalHint(item.standardQuantity, item.unit, outputBaseUnit),
+        naturalHint: formatPackagingNaturalHint(
+          item.standardQuantity,
+          item.unit,
+          outputBaseUnit,
+          item.naturalQuantity,
+          item.packagingPackageUnitSnapshot,
+          item.packagingConversionFactorSnapshot,
+        ),
         markers: markersForPackagingRow({
           substituteCount: item.substituteDetails?.length ?? 0,
           isOptional: item.isOptional === true,
@@ -3171,6 +3180,7 @@ async function openPackagingEditor(outputNodeId: string, rowId?: string): Promis
   packagingDialogFactoryId.value = props.factoryId;
   packagingDialogRecipeId.value = writablePackRecipeId;
   packagingDialogOutputName.value = String(node.data.name ?? '未命名产出');
+  packagingDialogProductTypeId.value = String(node.data.skuId ?? '');
   // 禁止降级处理: 基本单位缺失时占位「未配」, 不能让弹窗拼出 "个/undefined" 这种半成品字符串。
   packagingDialogBaseUnit.value = String(node.data.baseUnit ?? '未配');
   packagingDialogRow.value = writableRow;

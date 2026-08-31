@@ -504,17 +504,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (rawPorts instanceof List<?> ports) {
             for (Object rawPort : ports) {
                 if (!(rawPort instanceof Map<?, ?> port)
-                        || !"OUTPUT".equalsIgnoreCase(Objects.toString(port.get("direction"), ""))) {
-                    continue;
-                }
-                // 🔴 2026-08-09: 副产不参与「标准用量基准」的单位判定。
-                //
-                // 基准回答的是「每产出多少主/联产, 配多少辅料」。副产是这道工序捎带出来的东西
-                // (肥油/边角料), 它的单位与主产出天然可以不同 —— 真机: 成品是 盒、副产肥油是 kg。
-                // 把它算进来会让 outputUnits = {盒, kg} → size != 1 → 整道工序判为「缺少可用的产出基准」,
-                // 后果是**这道工序的辅料从此再也改不了**(弹窗里"当前不能保存", 而按钮不禁用, 点了没反应)。
-                // 即: 加一个副产 = 永久丧失辅料可配置性, 而两件事在业务上毫无关系。
-                if (isExcludedFromBasis(port, nodesById)) {
+                        || !"INPUT".equalsIgnoreCase(Objects.toString(port.get("direction"), ""))) {
                     continue;
                 }
                 addCanonicalUnit(portUnits, port.get("unit"));
@@ -524,35 +514,29 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                         fallbackUnits, fallbackKinds);
             }
         }
-        addCanonicalUnit(processUnits, node.getData().get("outputUnit"));
-        addCanonicalKind(processKinds, node.getData().get("outputMaterialKind"));
+        addCanonicalUnit(processUnits, node.getData().get("inputUnit"));
+        addCanonicalKind(processKinds, node.getData().get("inputMaterialKind"));
         for (ProductProcessWorkflowDTO.Edge edge : graph.edges()) {
-            if (Objects.equals(processNodeId, edge.getSource())) {
-                ProductProcessWorkflowDTO.Node target = nodesById.get(edge.getTarget());
-                // 兜底路径同样要排除副产, 否则 port 未声明单位时副产又从这里混进来。
-                if (isByproductNode(target)) {
-                    continue;
-                }
-                collectMaterialNodeContract(target, fallbackUnits, fallbackKinds);
+            if (Objects.equals(processNodeId, edge.getTarget())) {
+                collectMaterialNodeContract(nodesById.get(edge.getSource()), fallbackUnits, fallbackKinds);
             }
         }
-        // Workflow 修订中工序 OUTPUT port 是报工单位权威；相邻物料节点只在 port 未声明时兜底。
-        // 例如包装工序 port=box、成品 SKU 基本单位=kg 时不能合并成“多单位未解析”。
-        Set<String> outputUnits = !portUnits.isEmpty()
+        // dosagePerKgG 的运行公式是「本工序实际投入 kg × g/kg ÷ 1000」，与产出单位无关。
+        // 保存门禁必须读取 INPUT 契约；拿 OUTPUT 的盒/箱/袋来放行或拦截会与正式报工
+        // ProcessSheetServiceImpl#reportingMassToKg 的真实算式分裂。
+        Set<String> inputUnits = !portUnits.isEmpty()
                 ? portUnits : (!processUnits.isEmpty() ? processUnits : fallbackUnits);
-        Set<String> outputKinds = !portKinds.isEmpty()
+        Set<String> inputKinds = !portKinds.isEmpty()
                 ? portKinds : (!processKinds.isEmpty() ? processKinds : fallbackKinds);
-        if (outputUnits.size() != 1) return StandardBasis.unsupported();
-        String unit = outputUnits.iterator().next();
-        String materialKind = outputKinds.size() == 1 ? outputKinds.iterator().next() : null;
-        if (outputKinds.size() > 1) return StandardBasis.unsupported();
-        if ("kg".equals(unit)) return new StandardBasis(BigDecimal.ONE, "kg", materialKind, true);
-        if ("g".equals(unit)) return new StandardBasis(new BigDecimal("1000"), "g", materialKind, true);
-        // The dosage basis is the authoritative SKU/Workflow output unit itself. A
-        // custom unit such as 只、袋 or a tenant-defined code is an opaque "per one
-        // output unit" basis and needs no dimensional conversion. We only fail closed
-        // above when the pinned graph has no unit or conflicting output contracts.
-        return new StandardBasis(BigDecimal.ONE, unit, materialKind, true);
+        if (inputUnits.isEmpty() || inputUnits.stream().anyMatch(unit -> !isRuntimeMassUnit(unit))) {
+            return StandardBasis.unsupported();
+        }
+        String materialKind = inputKinds.size() == 1 ? inputKinds.iterator().next() : null;
+        return new StandardBasis(BigDecimal.ONE, "kg", materialKind, true);
+    }
+
+    private boolean isRuntimeMassUnit(String unit) {
+        return "kg".equals(unit) || "g".equals(unit);
     }
 
     private void collectMaterialNodeContract(ProductProcessWorkflowDTO.Node materialNode,
@@ -638,45 +622,6 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private String displayRevisionStatus(WorkflowRevisionCandidateDTO candidate) {
         if (candidate.isEnabled()) return "ENABLED";
         return candidate.getStatus();
-    }
-
-    /**
-     * 该 OUTPUT 端口要不要排除出「标准用量基准」的单位判定。
-     *
-     * <p>两种都排除:
-     * <ol>
-     *   <li>指向的节点**明确标了副产**;</li>
-     *   <li>指向的节点<b>根本不在本切片里</b> —— 🔴 这条才是 prod 的真实形态。
-     *       {@link PinnedWorkflowGraph} 是按目标产品切出来的子图(ancestors/terminals),
-     *       兄弟终端(副产、联产)通常**不在** graph.nodes() 里, 于是「按 materialNodeId 查
-     *       isByproduct」永远查不到 → 判不出副产 → 它的 kg 照样混进 outputUnits → size!=1 →
-     *       整道工序「标准用量不可用」, 辅料从此改不了。
-     *       我的第一版修复只判了第 1 条, 单测(节点在图里)绿、真机(节点不在图里)照挂 ——
-     *       判据不能依赖「节点恰好存在」。</li>
-     * </ol>
-     *
-     * <p>语义上也站得住: 基准回答的是「本配方的目标产出每一单位配多少辅料」, 不在本目标路径上的
-     * 产出(副产/兄弟终端)本就不该参与这个分母。
-     */
-    private boolean isExcludedFromBasis(
-            Map<?, ?> port, Map<String, ProductProcessWorkflowDTO.Node> nodesById) {
-        String materialNodeId = Objects.toString(port.get("materialNodeId"), null);
-        if (materialNodeId == null) {
-            return false;   // 没声明目标节点 → 按老路径参与判定, 不改变既有行为
-        }
-        ProductProcessWorkflowDTO.Node target = nodesById.get(materialNodeId);
-        return target == null || isByproductNode(target);
-    }
-
-    /**
-     * 画布把副产建成「普通产出节点 + isByproduct 标记」(刻意不设 kind:'BYPRODUCT',
-     * 见 MaterialNodeData.isByproduct: 「副产只看物料上的 isByproduct 标记, 与材质正交」),
-     * 所以这里只认这个标记, 不按 kind 判。
-     */
-    private boolean isByproductNode(ProductProcessWorkflowDTO.Node node) {
-        if (node == null || node.getData() == null) return false;
-        Object flag = node.getData().get("isByproduct");
-        return Boolean.TRUE.equals(flag) || "true".equalsIgnoreCase(Objects.toString(flag, ""));
     }
 
     private record ResolvedProcess(
