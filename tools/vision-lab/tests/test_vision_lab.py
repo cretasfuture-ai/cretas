@@ -635,6 +635,119 @@ class VisionLabTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "incomplete physical context"):
                 vision_lab.build_dataset(cfg)
 
+    def test_dataset_quarantines_whole_tasks_without_changing_human_annotations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            safe_queue = root / "queues" / "safe"
+            blurry_queue = root / "queues" / "blurry"
+            for queue in (safe_queue, blurry_queue):
+                (queue / "images").mkdir(parents=True)
+                (queue / "annotations-human").mkdir()
+
+            safe_rows = []
+            for index, task_id in enumerate(("task-a", "task-d", "quarantined-task")):
+                image = safe_queue / "images" / f"safe-{index}.jpg"
+                image.write_bytes(f"safe-image-{index}".encode())
+                safe_rows.append({
+                    "crop_id": f"safe-{index}", "image": str(image),
+                    "image_sha256": vision_lab.sha256_file(image),
+                    "source_task_id": task_id,
+                })
+                (safe_queue / "annotations-human" / f"safe-{index}.json").write_text(
+                    json.dumps({
+                        "reviewed": True, "unjudgeable": False,
+                        "boxes": [
+                            {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
+                            {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
+                        ],
+                    }), encoding="utf-8",
+                )
+            (safe_queue / "manifest.json").write_text(
+                json.dumps({"rows": safe_rows}), encoding="utf-8",
+            )
+            blurry_manifest = blurry_queue / "manifest.json"
+            blurry_manifest.write_text(
+                json.dumps({"rows": [{"crop_id": "blurry-1", "source_task_id": "quarantined-task"}]}),
+                encoding="utf-8",
+            )
+            receipt = root / "quarantine.json"
+            receipt.write_text(json.dumps({
+                "excluded_blurry_queue": str(blurry_queue),
+                "excluded_blurry_queue_crop_count": 1,
+                "excluded_blurry_queue_task_count": 1,
+                "quarantined_rows_by_reason": {"labels_exist_but_crop_too_blurry": 1},
+                "production_writes": 0,
+            }), encoding="utf-8")
+            manifest_before = blurry_manifest.read_bytes()
+            cfg = config(root / "runtime")
+            cfg["queue_globs"] = [str(root / "queues" / "*")]
+            cfg["training_quarantine_receipts"] = [str(receipt)]
+
+            dataset = vision_lab.build_dataset(cfg)
+
+            self.assertEqual(vision_lab.discover_queue_roots(cfg), [safe_queue.resolve()])
+            self.assertEqual({row["task_id"] for row in dataset["rows"]}, {"task-a", "task-d"})
+            self.assertEqual(
+                dataset["training_exclusions"]["reasons"],
+                {"labels_exist_but_crop_too_blurry": 2},
+            )
+            self.assertEqual(blurry_manifest.read_bytes(), manifest_before)
+
+    def test_dataset_excludes_missing_annotation_that_conflicts_with_verified_normal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "queue"
+            (queue / "images").mkdir(parents=True)
+            (queue / "annotations-human").mkdir()
+            rows = []
+            for index, task_id in enumerate(("task-a", "task-d", "task-conflict")):
+                image = queue / "images" / f"c{index}.jpg"
+                image.write_bytes(f"image-{index}".encode())
+                rows.append({
+                    "crop_id": f"c{index}", "image": str(image),
+                    "image_sha256": vision_lab.sha256_file(image),
+                    "source_task_id": task_id,
+                    "human_qc_verdict": "NO_DEFECT",
+                })
+                annotation = {
+                    "reviewed": True, "unjudgeable": False,
+                    "boxes": [
+                        {"c": 0, "b": [0.1, 0.1, 0.4, 0.4]},
+                        {"c": 1, "b": [0.5, 0.5, 0.9, 0.9]},
+                    ],
+                }
+                if index == 2:
+                    annotation |= {
+                        "missing_confirmed_by_human": True,
+                        "declared_missing_classes": ["white_label"],
+                        "boxes": [{"c": 1, "b": [0.5, 0.5, 0.9, 0.9]}],
+                    }
+                (queue / "annotations-human" / f"c{index}.json").write_text(
+                    json.dumps(annotation), encoding="utf-8",
+                )
+            (queue / "manifest.json").write_text(
+                json.dumps({"rows": rows, "photo_level_human_verdict_authoritative": True}),
+                encoding="utf-8",
+            )
+            cfg = config(root / "runtime")
+            cfg["queue_roots"] = [str(queue)]
+
+            dataset = vision_lab.build_dataset(cfg)
+
+            self.assertNotIn("c2", {row["crop_id"] for row in dataset["rows"]})
+            self.assertEqual(
+                dataset["training_exclusions"]["reasons"],
+                {"crop_missing_conflicts_with_human_verified_full_photo_normal": 1},
+            )
+
+            (queue / "manifest.json").write_text(
+                json.dumps({"rows": rows, "photo_level_human_verdict_authoritative": False}),
+                encoding="utf-8",
+            )
+            correction_dataset = vision_lab.build_dataset(cfg)
+            self.assertIn("c2", {row["crop_id"] for row in correction_dataset["rows"]})
+            self.assertEqual(correction_dataset["counts"]["isolated_missing_unique"], 1)
+
     def test_dataset_repeats_only_isolated_confirmed_missing_train_samples(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1028,6 +1141,101 @@ class VisionLabTests(unittest.TestCase):
             cfg["queue_roots"] = [str(queue)]
             cfg["queue_globs"] = [str(root / "queues" / "*")]
             self.assertEqual(vision_lab.discover_queue_roots(cfg), [queue.resolve()])
+
+    def test_explicit_quarantined_queue_cannot_bypass_exclusion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "quarantined"
+            queue.mkdir()
+            (queue / "manifest.json").write_text(
+                json.dumps({"rows": [{"crop_id": "c1", "source_task_id": "task-a"}]}),
+                encoding="utf-8",
+            )
+            receipt = root / "quarantine.json"
+            receipt.write_text(json.dumps({
+                "excluded_blurry_queue": str(queue),
+                "excluded_blurry_queue_crop_count": 1,
+                "excluded_blurry_queue_task_count": 1,
+                "quarantined_rows_by_reason": {"too_blurry": 1},
+                "production_writes": 0,
+            }), encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["queue_roots"] = [str(queue)]
+            cfg["training_quarantine_receipts"] = [str(receipt)]
+
+            with self.assertRaisesRegex(RuntimeError, "quarantined from training"):
+                vision_lab.discover_queue_roots(cfg)
+
+    def test_quarantine_receipt_fails_closed_when_queue_inventory_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "quarantined"
+            queue.mkdir()
+            (queue / "manifest.json").write_text(
+                json.dumps({"rows": [{"crop_id": "c1", "source_task_id": "task-a"}]}),
+                encoding="utf-8",
+            )
+            receipt = root / "quarantine.json"
+            receipt.write_text(json.dumps({
+                "excluded_blurry_queue": str(queue),
+                "excluded_blurry_queue_crop_count": 2,
+                "excluded_blurry_queue_task_count": 1,
+                "production_writes": 0,
+            }), encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["training_quarantine_receipts"] = [str(receipt)]
+
+            with self.assertRaisesRegex(RuntimeError, "no longer matches its queue"):
+                vision_lab.discover_queue_roots(cfg)
+
+    def test_miner_keeps_quarantined_photos_excluded_from_future_queues(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            safe_queue = root / "queues" / "safe"
+            blurry_queue = root / "queues" / "blurry"
+            for queue, task_id in ((safe_queue, "task-safe"), (blurry_queue, "task-blurry")):
+                queue.mkdir(parents=True)
+                (queue / "manifest.json").write_text(
+                    json.dumps({"rows": [{
+                        "crop_id": queue.name,
+                        "source_task_id": task_id,
+                        "source_photo_id": f"photo-{queue.name}",
+                    }]}), encoding="utf-8",
+                )
+            receipt = root / "quarantine.json"
+            receipt.write_text(json.dumps({
+                "excluded_blurry_queue": str(blurry_queue),
+                "excluded_blurry_queue_crop_count": 1,
+                "excluded_blurry_queue_task_count": 1,
+                "quarantined_rows_by_reason": {"too_blurry": 1},
+                "production_writes": 0,
+            }), encoding="utf-8")
+            cfg = config(root / "runtime")
+            cfg["queue_globs"] = [str(root / "queues" / "*")]
+            cfg["training_quarantine_receipts"] = [str(receipt)]
+            cfg["evaluation"] = {
+                "repo_root": str(root / "repo"),
+                "tray_model": str(root / "tray.onnx"),
+                "production_label_model": str(root / "label.onnx"),
+                "manifests": [str(root / "protected.json")],
+            }
+            state = SimpleNamespace(path=root / "state" / "vision.db")
+            completed = SimpleNamespace(returncode=0, stdout='{"created": false}', stderr="")
+
+            with mock.patch.object(vision_lab.subprocess, "run", return_value=completed) as run:
+                result = vision_lab.mine_next_queue(cfg, state)
+
+            command = run.call_args.args[0]
+            manifests = [
+                Path(command[index + 1])
+                for index, value in enumerate(command)
+                if value == "--existing-manifest"
+            ]
+            self.assertFalse(result["created"])
+            self.assertEqual(
+                set(manifests),
+                {safe_queue / "manifest.json", blurry_queue / "manifest.json"},
+            )
 
     def test_queue_globs_ignore_evaluation_manifests_without_annotation_rows(self):
         with tempfile.TemporaryDirectory() as temporary:
