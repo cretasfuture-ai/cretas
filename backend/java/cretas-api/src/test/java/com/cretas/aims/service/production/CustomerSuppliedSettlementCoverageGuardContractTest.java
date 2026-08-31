@@ -2,12 +2,14 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderSuppliedMaterialRequirementRepository;
 import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,9 +40,10 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
     private final SalesOrderSuppliedMaterialRequirementRepository requirementRepository =
             mock(SalesOrderSuppliedMaterialRequirementRepository.class);
     private final SalesOrderItemRepository salesOrderItemRepository = mock(SalesOrderItemRepository.class);
+    private final MaterialBatchRepository materialBatchRepository = mock(MaterialBatchRepository.class);
     private final CustomerSuppliedSettlementCoverageGuard guard =
             new CustomerSuppliedSettlementCoverageGuard(
-                    planRepository, requirementRepository, salesOrderItemRepository);
+                    planRepository, requirementRepository, salesOrderItemRepository, materialBatchRepository);
 
     @BeforeEach
     void setUpOrderItem() {
@@ -174,6 +177,80 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
                 .count());
     }
 
+    @Test
+    void mergeKeepsReportedFactsAndAddsOnlyTheExactMissingCustomerBatch() {
+        ProductionPlan plan = plan(MaterialSupplyMode.CUSTOMER_SUPPLIED, "835");
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(
+                        requirement(835L, "raw-a", "原料A", "0.21", "kg"),
+                        requirement(835L, "box", "成品盒", "1", "盒")));
+        when(materialBatchRepository.findByIdAndFactoryId("batch-box", FACTORY))
+                .thenReturn(Optional.of(batch("batch-box", "box", "盒")));
+        ProductionSettlementRequest.ConsumptionLine reported = line("batch-a", "raw-a", "0.21", "kg");
+        ProductionSettlementRequest derived = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(new ArrayList<>(List.of(reported))).build();
+        ProductionSettlementRequest submitted = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(List.of(
+                        line("batch-a", "spoofed", "0.21", "kg"),
+                        line("batch-box", "spoofed", "1", "kg")))
+                .build();
+
+        guard.mergeMissingManualRawConsumptions(FACTORY, plan, derived, submitted);
+
+        assertEquals(2, derived.getRawMaterialConsumptions().size());
+        assertEquals("raw-a", derived.getRawMaterialConsumptions().get(0).getMaterialTypeId());
+        ProductionSettlementRequest.ConsumptionLine added = derived.getRawMaterialConsumptions().get(1);
+        assertEquals("box", added.getMaterialTypeId());
+        assertEquals("盒", added.getUnit());
+        assertEquals("MB-batch-box", added.getBatchNumber());
+    }
+
+    @Test
+    void mergeRejectsAnyAttemptToOverrideReportedQuantity() {
+        ProductionPlan plan = plan(MaterialSupplyMode.CUSTOMER_SUPPLIED, "835");
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement(835L, "raw-a", "原料A", "0.21", "kg")));
+        ProductionSettlementRequest derived = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(new ArrayList<>(List.of(
+                        line("batch-a", "raw-a", "0.21", "kg"))))
+                .build();
+        ProductionSettlementRequest submitted = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(List.of(line("batch-a", "raw-a", "0.22", "kg")))
+                .build();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> guard.mergeMissingManualRawConsumptions(FACTORY, plan, derived, submitted));
+
+        assertEquals("CUSTOMER_SUPPLIED_REPORTED_FACT_OVERRIDE", ex.getErrorCode());
+        assertEquals(1, derived.getRawMaterialConsumptions().size());
+        verify(materialBatchRepository, never()).findByIdAndFactoryId("batch-a", FACTORY);
+    }
+
+    @Test
+    void mergeRejectsExtraOrOverGapManualBatch() {
+        ProductionPlan plan = plan(MaterialSupplyMode.CUSTOMER_SUPPLIED, "835");
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement(835L, "box", "成品盒", "1", "盒")));
+        when(materialBatchRepository.findByIdAndFactoryId("batch-extra", FACTORY))
+                .thenReturn(Optional.of(batch("batch-extra", "not-required", "盒")));
+        when(materialBatchRepository.findByIdAndFactoryId("batch-box", FACTORY))
+                .thenReturn(Optional.of(batch("batch-box", "box", "盒")));
+
+        BusinessException extra = assertThrows(BusinessException.class,
+                () -> guard.mergeMissingManualRawConsumptions(FACTORY, plan,
+                        ProductionSettlementRequest.builder().build(),
+                        ProductionSettlementRequest.builder().rawMaterialConsumptions(
+                                List.of(line("batch-extra", "not-required", "1", "盒"))).build()));
+        BusinessException over = assertThrows(BusinessException.class,
+                () -> guard.mergeMissingManualRawConsumptions(FACTORY, plan,
+                        ProductionSettlementRequest.builder().build(),
+                        ProductionSettlementRequest.builder().rawMaterialConsumptions(
+                                List.of(line("batch-box", "box", "2", "盒"))).build()));
+
+        assertEquals("CUSTOMER_SUPPLIED_MANUAL_LINE_NOT_REQUIRED", extra.getErrorCode());
+        assertEquals("CUSTOMER_SUPPLIED_MANUAL_QUANTITY_EXCEEDS_GAP", over.getErrorCode());
+    }
+
     private static ProductionPlan plan(MaterialSupplyMode supplyMode, String orderItemId) {
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN);
@@ -211,6 +288,27 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         requirement.setUnit(unit);
         requirement.setExpectedArrivalAt(LocalDateTime.now());
         return requirement;
+    }
+
+    private static MaterialBatch batch(String id, String materialTypeId, String unit) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY);
+        batch.setMaterialTypeId(materialTypeId);
+        batch.setBatchNumber("MB-" + id);
+        batch.setQuantityUnit(unit);
+        batch.setWarehouseId("WH-RAW");
+        return batch;
+    }
+
+    private static ProductionSettlementRequest.ConsumptionLine line(
+            String batchId, String materialTypeId, String quantity, String unit) {
+        return ProductionSettlementRequest.ConsumptionLine.builder()
+                .materialBatchId(batchId)
+                .materialTypeId(materialTypeId)
+                .quantity(new BigDecimal(quantity))
+                .unit(unit)
+                .build();
     }
 
     private static ProductionSettlementPrefillResponse prefill(String... reportedTypes) {
