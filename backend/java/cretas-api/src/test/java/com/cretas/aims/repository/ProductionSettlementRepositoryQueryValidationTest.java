@@ -10,7 +10,7 @@ import org.springframework.test.context.ActiveProfiles;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Real Hibernate startup/query parsing gate for settlement active-row lookups. */
-@DataJpaTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+@DataJpaTest
 @AutoConfigureTestDatabase
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
