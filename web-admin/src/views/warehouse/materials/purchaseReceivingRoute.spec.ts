@@ -63,6 +63,10 @@ describe('统一仓储待收货入口', () => {
     expect(panel).not.toContain('打印收货单');
     expect(panel).toContain('确认收货入库');
     expect(panel).toContain('来源、客户、物料、单位和目标仓库均由销售订单锁定');
+    expect(panel).toContain('<el-descriptions-item label="来源">客供物料</el-descriptions-item>');
+    expect(panel).toContain('<el-descriptions-item label="物料">{{ selectedCustomerLine.materialName }}</el-descriptions-item>');
+    expect(panel).not.toContain('<el-descriptions-item label="来源">客户自带原料</el-descriptions-item>');
+    expect(panel).not.toContain('<el-descriptions-item label="原料">{{ selectedCustomerLine.materialName }}</el-descriptions-item>');
     expect(panel).toContain(':max="Number(selectedCustomerLine.remainingReceivableQuantity)"');
     expect(panel).toContain('entity-type="CUSTOMER_SUPPLIED_RECEIPT"');
     expect(panel).toContain(':entity-id="selectedCustomerTask.taskId"');

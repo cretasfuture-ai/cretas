@@ -1354,11 +1354,11 @@ defineExpose({ loadTasks });
           title="来源、客户、物料、单位和目标仓库均由销售订单锁定，仓储只能填写本次实际收货事实。"
         />
         <el-descriptions :column="2" border class="customer-task-context">
-          <el-descriptions-item label="来源">客户自带原料</el-descriptions-item>
+          <el-descriptions-item label="来源">客供物料</el-descriptions-item>
           <el-descriptions-item label="销售订单">{{ selectedCustomerTask.salesOrderNo }}</el-descriptions-item>
           <el-descriptions-item label="客户">{{ selectedCustomerTask.customerName }}</el-descriptions-item>
           <el-descriptions-item label="所有权">客户所有（仅限该客户 / 订单）</el-descriptions-item>
-          <el-descriptions-item label="原料">{{ selectedCustomerLine.materialName }}</el-descriptions-item>
+          <el-descriptions-item label="物料">{{ selectedCustomerLine.materialName }}</el-descriptions-item>
           <el-descriptions-item label="目标仓库">{{ taskWarehouse(selectedCustomerTask) }}</el-descriptions-item>
           <el-descriptions-item label="预计来料">{{ fmtQty(selectedCustomerLine.orderedQuantity) }}{{ displayUnit(selectedCustomerLine.unit) }}</el-descriptions-item>
           <el-descriptions-item label="已收 / 待收">
