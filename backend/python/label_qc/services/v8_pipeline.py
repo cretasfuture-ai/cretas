@@ -1,10 +1,11 @@
 """Production runtime for the frozen Liushanmen v8 label-QC cascade.
 
 The bundle keeps the current production tray and label detectors authoritative.
-An additive tray detector is used only on the lower band of portrait workbench
-photos, and the newer label cascade is used only for original padded tray crops
-whose shorter side is 120-149 pixels.  Every unsafe post-processing rule fails
-closed to ``UNJUDGEABLE`` so the task enters the customer risk queue.
+The legacy lower-band tray supplement remains authoritative, while an optional
+full-frame work-area detector may add further trays.  The newer label cascade
+is used only for original padded tray crops whose shorter side is 120-149 pixels.
+Every unsafe post-processing rule fails closed to ``UNJUDGEABLE`` so the task
+enters the customer risk queue.
 
 Model files are external deployment artifacts.  ``manifest.json`` binds every
 file by SHA-256 before any ONNX session is created.
@@ -40,6 +41,7 @@ REQUIRED_MODELS = {
 }
 OPTIONAL_MODELS = {
     "label_supplement": "label-supplement.onnx",
+    "tray_full_frame_supplement": "tray-full-frame-supplement.onnx",
 }
 
 PRODUCTION_TRAY_CONFIDENCE = 0.60
@@ -55,6 +57,12 @@ MAX_TRAYS = 60
 PROPOSAL_CLASSIFIER_THRESHOLD = 0.50
 SUPPLEMENT_HEIGHT_FRACTION = 0.60
 SUPPLEMENT_SKIP_TRAY_COUNT = 8
+TRAY_SUPPLEMENT_FORMAT_YOLOX = "yolox"
+TRAY_SUPPLEMENT_FORMAT_ULTRALYTICS_NMS = "ultralytics_nms"
+TRAY_SUPPLEMENT_MODE_LOWER_BAND = "lower_band_v1"
+TRAY_SUPPLEMENT_MODE_FULL_FRAME_WORK_AREA = "full_frame_work_area_v1"
+FAR_BACKGROUND_MAX_CENTER_Y_RATIO = 0.18
+FAR_BACKGROUND_MAX_HEIGHT_RATIO = 0.037
 NESTED_IOS_THRESHOLD = 0.90
 SHALLOW_EXTENDED_OWNERSHIP_BOTTOM_RATIO = 0.75
 SHALLOW_EXTENDED_OWNERSHIP_MAX_HEIGHT = 120.0
@@ -104,6 +112,44 @@ def _label_supplement_classes(manifest: dict[str, Any]) -> frozenset[int]:
     ) or len(set(value)) != len(value):
         raise RuntimeError(f"invalid v8 label supplement classes: {value!r}")
     return frozenset(value)
+
+
+def _tray_full_frame_supplement_contract(
+    manifest: dict[str, Any],
+) -> Optional[tuple[str, str, float]]:
+    models = manifest.get("models") or {}
+    has_binding = "tray_full_frame_supplement" in models
+    model_format = manifest.get("trayFullFrameSupplementFormat")
+    mode = manifest.get("trayFullFrameSupplementMode")
+    confidence = manifest.get("trayFullFrameSupplementConfidence")
+    if not has_binding and model_format is None and mode is None and confidence is None:
+        return None
+    if (
+        model_format != TRAY_SUPPLEMENT_FORMAT_ULTRALYTICS_NMS
+        or mode != TRAY_SUPPLEMENT_MODE_FULL_FRAME_WORK_AREA
+        or type(confidence) not in (int, float)
+        or not 0.05 <= float(confidence) <= 1.0
+    ):
+        raise RuntimeError(
+            "invalid v8 full-frame tray supplement contract: "
+            f"format={model_format!r}, mode={mode!r}, confidence={confidence!r}"
+        )
+    return str(model_format), str(mode), float(confidence)
+
+
+def _is_far_background_supplement(
+    box: Sequence[float], width: int, height: int,
+) -> bool:
+    center_y_ratio = (float(box[1]) + float(box[3])) / 2.0 / max(height, 1)
+    height_ratio = max(0.0, float(box[3]) - float(box[1])) / max(height, 1)
+    return (
+        center_y_ratio < FAR_BACKGROUND_MAX_CENTER_Y_RATIO
+        and height_ratio < FAR_BACKGROUND_MAX_HEIGHT_RATIO
+    )
+
+
+def _is_candidate_tray_source(source: str) -> bool:
+    return source in {"candidate_lower_band", "candidate_full_frame_work_area"}
 
 
 def _box_iou(first: Sequence[float], second: Sequence[float]) -> float:
@@ -499,14 +545,20 @@ class _V8CascadeModels:
     def __init__(
         self,
         production: LabelQcYoloModels,
-        tray_supplement: _YoloxOnnxDetector,
+        tray_supplement: Any,
         production_label: _OnnxDetector,
         candidate_label: _MissingClassFallbackDetector,
+        candidate_tray_confidence: float = CANDIDATE_TRAY_CONFIDENCE,
+        tray_full_frame_supplement: Any | None = None,
+        full_frame_tray_confidence: float = 0.40,
     ) -> None:
         self.production = production
         self.tray_supplement = tray_supplement
         self.production_label = production_label
         self.candidate_label = candidate_label
+        self.candidate_tray_confidence = float(candidate_tray_confidence)
+        self.tray_full_frame_supplement = tray_full_frame_supplement
+        self.full_frame_tray_confidence = float(full_frame_tray_confidence)
         self.detection_type = Detection
         self.iou_threshold = 0.50
         self.ios_threshold = 0.80
@@ -557,6 +609,64 @@ class _V8CascadeModels:
         ]
 
     def detect_trays(self, image: np.ndarray, conf: float) -> list[Detection]:
+        preserved = self._detect_legacy_trays(image, conf)
+        if self.tray_full_frame_supplement is None:
+            return preserved
+        height, width = image.shape[:2]
+        candidates = list(
+            self.tray_full_frame_supplement.detect(
+                image, self.full_frame_tray_confidence
+            )
+        )
+        supplement_kept: list[Detection] = []
+        overlap_rejected = duplicate_rejected = far_background_rejected = 0
+        for detection in sorted(candidates, key=lambda row: -float(row.confidence)):
+            if any(
+                int(detection.class_id) == int(reference.class_id)
+                and _intersection_over_smaller(
+                    detection.as_xyxy(), reference.as_xyxy()
+                ) >= 0.60
+                for reference in preserved
+            ):
+                overlap_rejected += 1
+                continue
+            if _is_far_background_supplement(detection.as_xyxy(), width, height):
+                far_background_rejected += 1
+                continue
+            if self._duplicate(detection, [*preserved, *supplement_kept]):
+                duplicate_rejected += 1
+                continue
+            supplement_kept.append(detection)
+        legacy_stats = dict(self.last_stats)
+        legacy_raw = list(self.last_raw_detections)
+        combined = [*preserved, *supplement_kept]
+        self.last_raw_detections = [
+            *legacy_raw,
+            *[
+                _detection_row(row, "candidate_full_frame_work_area")
+                for row in supplement_kept
+            ],
+        ]
+        self.last_stats = {
+            "mode": "production_legacy_plus_candidate_full_frame_work_area",
+            "legacyBaseMode": legacy_stats.get("mode"),
+            "legacyBaseDetections": len(preserved),
+            "candidateFullFrameDetections": len(candidates),
+            "candidateProductionOverlapRejected": overlap_rejected,
+            "candidateFarBackgroundRejected": far_background_rejected,
+            "candidateDuplicateRejected": duplicate_rejected,
+            "farBackgroundMaxCenterYRatio": FAR_BACKGROUND_MAX_CENTER_Y_RATIO,
+            "farBackgroundMaxHeightRatio": FAR_BACKGROUND_MAX_HEIGHT_RATIO,
+            "productionPreservingMergeApplied": True,
+            "legacyBoxesPreserved": len(preserved),
+            "supplementBoxesKept": len(supplement_kept),
+        }
+        self._set_label_routes(image, combined)
+        return combined
+
+    def _detect_legacy_trays(
+        self, image: np.ndarray, conf: float,
+    ) -> list[Detection]:
         height, width = image.shape[:2]
         production = list(self.production.detect_trays(image, conf))
         if width >= height or len(production) >= SUPPLEMENT_SKIP_TRAY_COUNT:
@@ -580,7 +690,7 @@ class _V8CascadeModels:
         y0 = height - max(1, round(height * SUPPLEMENT_HEIGHT_FRACTION))
         raw_proposals = list(
             self.tray_supplement.detect(
-                image[y0:height, :], CANDIDATE_TRAY_CONFIDENCE
+                image[y0:height, :], self.candidate_tray_confidence
             )
         )
         accepted_rows: list[dict[str, Any]] = []
@@ -681,7 +791,7 @@ def _geometry_reason(tray: Any, source: str) -> Optional[str]:
     classes = {int(label.class_id) for label in tray.labels}
     if int(tray.own_label_count) == 0 and y0 <= 1.0:
         return "zero_label_top_boundary_tray"
-    if source == "candidate_lower_band" and tray.own_label_count >= 2 and len(classes) == 1:
+    if _is_candidate_tray_source(source) and tray.own_label_count >= 2 and len(classes) == 1:
         return "supplement_duplicate_single_class_labels"
     if aspect_ratio < 0.90:
         return "portrait_geometry_incomplete_tray"
@@ -725,7 +835,7 @@ def _apply_fail_closed_policies(
         reason: Optional[str] = None
         if int(tray.dropped_neighbour_labels) > 0:
             reason = "ownership_dropped_neighbour_label"
-        elif source == "candidate_lower_band" and int(tray.own_label_count) == 0:
+        elif _is_candidate_tray_source(source) and int(tray.own_label_count) == 0:
             reason = "supplement_tray_has_no_owned_label"
         elif nested_ios >= NESTED_IOS_THRESHOLD:
             reason = "resolution_gap_tray_nested_in_higher_confidence_tray"
@@ -989,13 +1099,30 @@ class LabelQcV8Models:
                     supplement_confidence,
                     allowed_classes=_label_supplement_classes(self._manifest),
                 )
+                full_frame_contract = _tray_full_frame_supplement_contract(
+                    self._manifest,
+                )
+                tray_full_frame_supplement = None
+                full_frame_confidence = 0.40
+                if full_frame_contract is not None:
+                    tray_format, tray_mode, full_frame_confidence = full_frame_contract
+                    if (
+                        tray_format != TRAY_SUPPLEMENT_FORMAT_ULTRALYTICS_NMS
+                        or tray_mode != TRAY_SUPPLEMENT_MODE_FULL_FRAME_WORK_AREA
+                    ):
+                        raise RuntimeError("unsupported full-frame tray supplement contract")
+                    tray_full_frame_supplement = _OnnxDetector(
+                        bindings["tray_full_frame_supplement"].path, imgsz=960,
+                    )
                 self._models = _V8CascadeModels(
                     production=production,
                     tray_supplement=_YoloxOnnxDetector(
-                        bindings["tray_supplement"].path, imgsz=960
+                        bindings["tray_supplement"].path, imgsz=960,
                     ),
                     production_label=production_label,
                     candidate_label=candidate_label,
+                    tray_full_frame_supplement=tray_full_frame_supplement,
+                    full_frame_tray_confidence=full_frame_confidence,
                 )
                 logger.info("Label QC v8 bundle loaded from %s", self._model_dir)
             except Exception as exc:  # environment and artifact dependent
