@@ -17,17 +17,123 @@ from label_qc.services.v8_pipeline import (
     DEFAULT_LABEL_FALLBACK_INPUT_SIZE,
     PIPELINE_ID,
     PRODUCTION_TRAY_CONFIDENCE,
+    TRAY_SUPPLEMENT_FORMAT_ULTRALYTICS_NMS,
+    TRAY_SUPPLEMENT_MODE_FULL_FRAME_WORK_AREA,
     LabelQcV8Models,
     _GenericLabelTypeDetector,
     _MissingClassFallbackDetector,
     _ProductionPreservingSupplementDetector,
+    _V8CascadeModels,
     _apply_fail_closed_policies,
     _apply_shallow_extended_ownership,
     _label_fallback_input_size,
     _label_fallback_onnx_threads,
     _label_supplement_classes,
+    _tray_full_frame_supplement_contract,
     _validate_label_fallback_input_shape,
 )
+
+
+def test_legacy_tray_supplement_contract_remains_unchanged() -> None:
+    assert _tray_full_frame_supplement_contract({}) is None
+
+
+def test_full_frame_work_area_contract_is_explicit() -> None:
+    assert _tray_full_frame_supplement_contract({
+        "models": {"tray_full_frame_supplement": {}},
+        "trayFullFrameSupplementFormat": "ultralytics_nms",
+        "trayFullFrameSupplementMode": "full_frame_work_area_v1",
+        "trayFullFrameSupplementConfidence": 0.40,
+    }) == (
+        TRAY_SUPPLEMENT_FORMAT_ULTRALYTICS_NMS,
+        TRAY_SUPPLEMENT_MODE_FULL_FRAME_WORK_AREA,
+        0.40,
+    )
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"trayFullFrameSupplementFormat": "ultralytics_nms"},
+        {"models": {"tray_full_frame_supplement": {}}},
+        {
+            "models": {"tray_full_frame_supplement": {}},
+            "trayFullFrameSupplementFormat": "yolox",
+            "trayFullFrameSupplementMode": "full_frame_work_area_v1",
+            "trayFullFrameSupplementConfidence": 0.40,
+        },
+        {
+            "models": {"tray_full_frame_supplement": {}},
+            "trayFullFrameSupplementFormat": "ultralytics_nms",
+            "trayFullFrameSupplementMode": "full_frame_work_area_v1",
+            "trayFullFrameSupplementConfidence": 0.01,
+        },
+    ],
+)
+def test_invalid_tray_supplement_contract_fails_closed(manifest: dict) -> None:
+    with pytest.raises(RuntimeError, match="invalid v8 full-frame tray supplement contract"):
+        _tray_full_frame_supplement_contract(manifest)
+
+
+def test_full_frame_work_area_supplement_preserves_base_and_filters_far_background() -> None:
+    from label_qc.services.yolo_detector import Detection
+
+    class _Production:
+        def detect_trays(self, image, confidence):
+            assert image.shape == (1000, 500, 3)
+            assert confidence == 0.60
+            return [Detection(100, 300, 250, 450, 0.90, 0)]
+
+    class _Supplement:
+        def __init__(self) -> None:
+            self.shape = None
+
+        def detect(self, image, confidence):
+            self.shape = image.shape
+            assert confidence == 0.40
+            return [
+                Detection(105, 305, 245, 445, 0.95, 0),  # production overlap
+                Detection(100, 50, 120, 80, 0.90, 0),   # reviewed far-background rule
+                Detection(200, 30, 260, 90, 0.85, 0),   # top but not tiny: retain
+                Detection(50, 500, 180, 650, 0.80, 0),  # workbench supplement
+            ]
+
+    class _LegacySupplement:
+        def detect(self, image, confidence):
+            return []
+
+    supplement = _Supplement()
+    models = _V8CascadeModels(
+        production=_Production(),
+        tray_supplement=_LegacySupplement(),
+        production_label=SimpleNamespace(),
+        candidate_label=SimpleNamespace(reset_stats=lambda: None),
+        tray_full_frame_supplement=supplement,
+        full_frame_tray_confidence=0.40,
+    )
+
+    rows = models.detect_trays(np.zeros((1000, 500, 3), dtype=np.uint8), 0.60)
+
+    assert supplement.shape == (1000, 500, 3)
+    assert [row.as_xyxy() for row in rows] == [
+        [100, 300, 250, 450],
+        [200, 30, 260, 90],
+        [50, 500, 180, 650],
+    ]
+    assert models.last_stats == {
+        "mode": "production_legacy_plus_candidate_full_frame_work_area",
+        "legacyBaseMode": "production_full_plus_candidate_lower_band",
+        "legacyBaseDetections": 1,
+        "candidateFullFrameDetections": 4,
+        "candidateProductionOverlapRejected": 1,
+        "candidateFarBackgroundRejected": 1,
+        "candidateDuplicateRejected": 0,
+        "farBackgroundMaxCenterYRatio": 0.18,
+        "farBackgroundMaxHeightRatio": 0.037,
+        "productionPreservingMergeApplied": True,
+        "legacyBoxesPreserved": 1,
+        "supplementBoxesKept": 2,
+    }
 
 
 class _PolicyModels:

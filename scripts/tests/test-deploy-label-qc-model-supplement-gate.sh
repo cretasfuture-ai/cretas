@@ -8,10 +8,14 @@ trap 'rm -rf -- "$WORK_DIR"' EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-[ "$(grep -Fxc 'optional = {"label_supplement": "label-supplement.onnx"}' "$DEPLOY_SCRIPT")" -eq 2 ] \
-    || fail "local and remote validators must both bind the optional supplement filename"
+[ "$(grep -Fc '"label_supplement": "label-supplement.onnx"' "$DEPLOY_SCRIPT")" -eq 2 ] \
+    || fail "local and remote validators must both bind the optional label supplement"
+[ "$(grep -Fc '"tray_full_frame_supplement": "tray-full-frame-supplement.onnx"' "$DEPLOY_SCRIPT")" -eq 2 ] \
+    || fail "local and remote validators must both bind the optional full-frame tray supplement"
 [ "$(grep -Fc 'orphan label supplement configuration' "$DEPLOY_SCRIPT")" -eq 2 ] \
     || fail "local and remote validators must both reject orphan supplement configuration"
+[ "$(grep -Fc 'invalid tray supplement runtime contract' "$DEPLOY_SCRIPT")" -eq 2 ] \
+    || fail "local and remote validators must both enforce the tray runtime contract"
 
 write_bundle() {
     local target=$1
@@ -69,6 +73,30 @@ if mode == "bad-hash":
     models["label_supplement"]["sha256"] = "0" * 64
 if mode == "orphan-config":
     models.pop("label_supplement")
+if mode in {"full-frame-work-area", "full-frame-missing-config", "full-frame-wrong-filename"}:
+    payload = b"fixture:tray-full-frame-supplement"
+    (root / "tray-full-frame-supplement.onnx").write_bytes(payload)
+    models["tray_full_frame_supplement"] = {
+        "file": "tray-full-frame-supplement.onnx",
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    if mode != "full-frame-missing-config":
+        manifest["trayFullFrameSupplementFormat"] = "ultralytics_nms"
+        manifest["trayFullFrameSupplementMode"] = "full_frame_work_area_v1"
+        manifest["trayFullFrameSupplementConfidence"] = 0.40
+if mode == "full-frame-wrong-filename":
+    models["tray_full_frame_supplement"]["file"] = "tray-supplement.onnx"
+if mode == "missing-tray-format":
+    manifest["trayFullFrameSupplementMode"] = "full_frame_work_area_v1"
+    manifest["trayFullFrameSupplementConfidence"] = 0.40
+if mode == "wrong-tray-pair":
+    manifest["trayFullFrameSupplementFormat"] = "yolox"
+    manifest["trayFullFrameSupplementMode"] = "full_frame_work_area_v1"
+    manifest["trayFullFrameSupplementConfidence"] = 0.40
+if mode == "low-tray-confidence":
+    manifest["trayFullFrameSupplementFormat"] = "ultralytics_nms"
+    manifest["trayFullFrameSupplementMode"] = "full_frame_work_area_v1"
+    manifest["trayFullFrameSupplementConfidence"] = 0.01
 (root / "manifest.json").write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
 )
@@ -94,6 +122,7 @@ expect_fail() {
 
 expect_pass legacy
 expect_pass supplement
+expect_pass full-frame-work-area
 expect_fail extra-binding
 expect_fail wrong-filename
 expect_fail missing-classes
@@ -102,5 +131,10 @@ expect_fail duplicate-class
 expect_fail low-confidence
 expect_fail bad-hash
 expect_fail orphan-config
+expect_fail missing-tray-format
+expect_fail wrong-tray-pair
+expect_fail low-tray-confidence
+expect_fail full-frame-missing-config
+expect_fail full-frame-wrong-filename
 
 printf 'PASS: legacy and constrained supplement bundles pass; malformed bundles fail closed\n'
