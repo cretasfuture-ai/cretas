@@ -696,6 +696,10 @@ public class WorkflowInstanceController {
                     .completedAt(inst.getCompletedAt())
                     .build();
             fillReportCorrectionDetails(dto, inst, factoryId);
+            if (oaModuleLabelResolver != null) {
+                dto.setModuleLabel(oaModuleLabelResolver.resolve(
+                        inst.getModuleCode(), inst.getContextJson()));
+            }
 
             // currentNodeId + label
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {

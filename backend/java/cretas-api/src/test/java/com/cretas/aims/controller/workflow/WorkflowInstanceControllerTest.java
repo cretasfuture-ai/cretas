@@ -22,6 +22,7 @@ import com.cretas.aims.service.ApprovalWorkflowService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.workflow.OaActionIdempotencyService;
+import com.cretas.aims.service.workflow.OaModuleLabelResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.inventory.TransferService;
@@ -91,6 +92,7 @@ class WorkflowInstanceControllerTest {
     private static final String AUTH_HEADER = "Bearer fake-token";
 
     @Mock private WorkflowEngineService workflowEngine;
+    @Mock private OaModuleLabelResolver oaModuleLabelResolver;
     @Mock private ApprovalWorkflowService approvalWorkflowService;
     @Mock private UserRepository userRepository;
     @Mock private MobileService mobileService;
@@ -111,6 +113,7 @@ class WorkflowInstanceControllerTest {
         ReflectionTestUtils.setField(controller, "purchaseOrderRepository", purchaseOrderRepository);
         ReflectionTestUtils.setField(controller, "salesOrderRepository", salesOrderRepository);
         ReflectionTestUtils.setField(controller, "oaActionIdempotencyService", oaActionIdempotencyService);
+        ReflectionTestUtils.setField(controller, "oaModuleLabelResolver", oaModuleLabelResolver);
         lenient().when(oaActionIdempotencyService.execute(any(), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
             java.util.function.Supplier<Map<String, Object>> action = invocation.getArgument(1);
@@ -365,6 +368,31 @@ class WorkflowInstanceControllerTest {
                 eq(FACTORY_ID), eq(108L), any(Pageable.class));
         verify(workflowEngine).findCopiedTo(
                 eq(FACTORY_ID), eq(108L), eq("finance_manager"), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("已处理列表下发权威业务类型名称, 不把报工修正显示成未知状态")
+    void acted_history_uses_authoritative_module_label() {
+        mockAuth(108L, "f006_admin", "factory_super_admin");
+        ApprovalWorkflowInstance instance = buildInstance(
+                "inst-report-correction", "wf-report-correction",
+                "PRODUCTION_REPORT_CORRECTION", "correction-1",
+                List.of(), 1552L);
+        instance.setStatus(InstanceStatus.APPROVED);
+        Page<ApprovalWorkflowInstance> result = new PageImpl<>(
+                List.of(instance), PageRequest.of(0, 20), 1L);
+        when(workflowEngine.findActedBy(
+                eq(FACTORY_ID), eq(108L), any(Pageable.class))).thenReturn(result);
+        when(oaModuleLabelResolver.resolve(
+                eq("PRODUCTION_REPORT_CORRECTION"), any(Map.class)))
+                .thenReturn("报工修正审批");
+        when(userRepository.findAllById(any())).thenReturn(List.of());
+
+        ApiResponse<PageResponse<WorkflowInstancePendingDTO>> response =
+                controller.getActed(FACTORY_ID, AUTH_HEADER, 1, 20);
+
+        assertEquals("报工修正审批",
+                response.getData().getContent().get(0).getModuleLabel());
     }
 
     @Test
