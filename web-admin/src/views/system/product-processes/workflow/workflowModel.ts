@@ -231,10 +231,28 @@ export function createWorkflowFromLegacy(input: {
   };
 }
 
+/**
+ * 一个节点作为 owner 时, 它上下各被融合附属卡片占掉多少高度。
+ * 调用方(编辑器)按实测尺寸提供; 不提供时按「没有附属」排版, 与旧行为一致。
+ */
+export type FusedExtentResolver = (nodeId: string) => { above: number; below: number } | undefined;
+
+export interface AutoLayoutOptions {
+  /**
+   * ⛔ 有融合附属时必须传。只按 owner 自身高度排版, 上方的辅料条会插进上一行 Cell、
+   * 下方的特殊产出会压住下一行 —— §11 明确把这条列为不许出现的回归。
+   */
+  fusedExtent?: FusedExtentResolver;
+}
+
 export function autoLayoutWorkflow(
   definition: ProductProcessWorkflowDefinition,
+  options: AutoLayoutOptions = {},
 ): ProductProcessWorkflowDefinition {
   const result = cloneDefinition(definition);
+  const extentOf = (nodeId: string): { above: number; below: number } => (
+    options.fusedExtent?.(nodeId) ?? { above: 0, below: 0 }
+  );
   const nodeIds = new Set(result.nodes.map((node) => node.id));
   const incomingCount = new Map(result.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
@@ -283,8 +301,13 @@ export function autoLayoutWorkflow(
   layers.forEach((layerNodes) => {
     layerNodes.sort((a, b) => edgeOrder(a) - edgeOrder(b) || a.id.localeCompare(b.id));
   });
+  // group 高度 = 上方附属 + owner 自身 + 下方附属。整组当成一个不可拆分矩形排版。
+  const groupHeight = (node: ProductProcessWorkflowNode): number => {
+    const extent = extentOf(node.id);
+    return extent.above + estimatedNodeHeight(node) + extent.below;
+  };
   const layerHeight = (nodes: ProductProcessWorkflowNode[]): number => nodes.reduce(
-    (height, node, index) => height + estimatedNodeHeight(node) + (index === 0 ? 0 : NODE_VERTICAL_GAP),
+    (height, node, index) => height + groupHeight(node) + (index === 0 ? 0 : NODE_VERTICAL_GAP),
     0,
   );
   const maxLayerHeight = Math.max(...[...layers.values()].map(layerHeight), 0);
@@ -296,13 +319,16 @@ export function autoLayoutWorkflow(
     nextLayerX = snapPosition({ x: nextLayerX + width + NODE_HORIZONTAL_GAP, y: 0 }).x;
   });
   layers.forEach((layerNodes, layer) => {
+    // y 现在游标走的是 **group 顶边**; owner 自己的坐标要再往下让出 above 那一段,
+    // 否则上方附属会越过本行顶边插进上一行。
     let y = CANVAS_ORIGIN + (maxLayerHeight - layerHeight(layerNodes)) / 2;
     layerNodes.forEach((node) => {
+      const extent = extentOf(node.id);
       node.position = snapPosition({
         x: layerX.get(layer) ?? CANVAS_ORIGIN,
-        y,
+        y: y + extent.above,
       });
-      y += estimatedNodeHeight(node) + NODE_VERTICAL_GAP;
+      y += groupHeight(node) + NODE_VERTICAL_GAP;
     });
   });
   return result;
@@ -440,11 +466,12 @@ const conversionModes = new Set(['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 
 const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE', 'OPTIONAL']);
 const materialDataKeys = new Set([
   'name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound', 'substituteOfNodeId',
+  'isRework',
 ]);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
   'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
-  'allowFinishedGoodsSource', 'reportingSelectionMode',
+  'allowFinishedGoodsSource', 'reportingSelectionMode', 'reworkPolicy',
 ]);
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
@@ -540,6 +567,7 @@ function isMaterialNodeData(value: Record<string, unknown>): value is MaterialNo
     && optionalNullableString(value.specification)
     && optionalString(value.baseUnit)
     && optionalBoolean(value.bound)
+    && optionalBoolean(value.isRework)
     && optionalNullableString(value.substituteOfNodeId);
 }
 
@@ -559,7 +587,27 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && optionalNullableFiniteNumber(value.standardTime)
     && optionalBoolean(value.allowMultipleUpstreamSources)
     && optionalBoolean(value.allowFinishedGoodsSource)
+    && isOptionalReworkPolicy(value.reworkPolicy)
     && (value.reportingSelectionMode === undefined || value.reportingSelectionMode === 'ACTUAL_IO');
+}
+
+/**
+ * 回料规则的形状校验 —— 承接 PR #417 的 `isOptionalReworkPolicy`, 只换了字段粒度。
+ *
+ * ⛔ 空数组不算合法: 「一个都不允许」必须写成 `reworkPolicy = null`, 不是留一个空壳。
+ * 两种写法并存会让「配过又全取消」和「从没配过」在数据上分不开(§7 fail closed 的前提)。
+ */
+function isOptionalReworkPolicy(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['allowedSourceReworkNodeIds', 'maxInputRatioPercent'])
+    || !Array.isArray(value.allowedSourceReworkNodeIds)
+    || value.allowedSourceReworkNodeIds.length === 0
+    || !value.allowedSourceReworkNodeIds.every(isNonBlankString)
+    || new Set(value.allowedSourceReworkNodeIds).size !== value.allowedSourceReworkNodeIds.length
+    || !isFiniteNumber(value.maxInputRatioPercent)) return false;
+  const ratio = Number(value.maxInputRatioPercent);
+  return ratio >= 0 && ratio <= 100;
 }
 
 function isProcessPortGroup(value: unknown): value is ProcessPortGroup {

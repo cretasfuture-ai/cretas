@@ -1,27 +1,25 @@
 <template>
   <!--
-    🔴 2026-08-12 (Steve): 不用辅料的工序, 那个空 Cell 一直挂在上面, 看着像没配完。
-    折叠成一条细窄的条 —— 但**不隐藏**: 隐藏之后「已确认不用」和「浮层还没加载出来」
-    长得一模一样, 用户没法区分, 也找不到地方恢复。
-    ⚠️ 这是**视图偏好**(存本地), 不是业务声明 —— 换个人看仍然会看到完整 Cell。
+    辅料附属卡片 —— **固定融合在归属工序 Cell 上方**(§6)。
+    收起态是约一行高的窄条; 展开态仍属于同一个 owner group, 不生成可拖动节点。
+    ⛔ 展开/收起只改本卡片自身高度, 位移走 `translateY(-100%)`, 一次都不碰 node position
+       ⇒ 视口在结构上不可能被改变(§10)。
   -->
-  <div
-    v-if="collapsed"
-    class="aux-node aux-node--collapsed"
-    data-testid="aux-collapsed"
+  <WorkflowFusedStrip
+    side="above"
+    tone="aux"
+    testid="aux-strip"
+    badge="辅"
+    :owner-width="FUSED_PROCESS_OWNER_WIDTH"
+    :collapsed="!!collapsed"
+    :summary="stripSummary"
+    :full-label="stripFullLabel"
+    @toggle="emit('set-collapsed', !collapsed)"
   >
-    <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
-    <span class="aux-collapsed-text">{{ data.processName }} · 本工序不用辅料</span>
-    <button
-      type="button"
-      class="aux-collapsed-toggle nodrag"
-      data-testid="aux-expand"
-      @click.stop="emit('set-collapsed', false)"
-    >展开</button>
-  </div>
-
-  <div v-else class="aux-node" :class="{ 'is-greyed': usageState !== 'supported' }">
-    <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
+    <template #handles>
+      <Handle type="source" :position="Position.Bottom" :id="AUX_OVERLAY_SOURCE_HANDLE" />
+    </template>
+    <div class="aux-node" :class="{ 'is-greyed': usageState !== 'supported' }">
 
     <div class="aux-heading">
       <span class="aux-step-mark">辅</span>
@@ -112,11 +110,14 @@
       @click.stop="emit('add-row')"
     >+ 加辅料</button>
   </div>
+  </WorkflowFusedStrip>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
+import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
+import { FUSED_PROCESS_OWNER_WIDTH } from './workflowFusedGroups';
 import { AUX_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
 import type { AuxiliaryCellData, AuxiliaryCellRow } from './bomOverlayTypes';
 
@@ -167,6 +168,12 @@ const subtitleText = computed(() => {
   return hasPotMarker.value ? `${base} · 报工需录锅数` : base;
 });
 
+/** 窄条一行文案: 类型 · 归属 · 配置状态/数量。过长由 CSS 省略, 全文进 title/aria-label。 */
+const stripSummary = computed(() => `辅料 · ${props.data.processName} · ${subtitleText.value}`);
+const stripFullLabel = computed(() => (
+  `${props.collapsed ? '展开' : '收起'}辅料附属卡片：${stripSummary.value}`
+));
+
 function formatDosage(row: AuxiliaryCellRow): string {
   return row.dosageText && row.dosageText.trim() ? row.dosageText : '未填用量';
 }
@@ -188,21 +195,15 @@ function formatDosage(row: AuxiliaryCellRow): string {
   color: #8a5a17; font-size: 11px; padding: 1px 7px; cursor: pointer;
 }
 .aux-collapsed-toggle:hover { background: #fdf6e6; }
+/* 宽度/外框由 WorkflowFusedStrip 承担 —— 融合要求「与 owner 同宽、边框相接」,
+   这里再写一份宽度就是形态 D(同一个东西两份)。 */
 .aux-node {
   position: relative;
-  width: 320px;
-  padding: 14px;
-  border: 1px solid #f3d9a4;
+  padding: 4px 0 0;
   border-left: 4px solid #d9822b;
-  border-radius: 10px;
-  background: #fffaf0;
-  box-shadow: 0 2px 12px rgba(217, 130, 43, 0.1);
+  background: transparent;
 }
-.aux-node.is-greyed {
-  border-left-color: #c0c4cc;
-  background: #f7f7f8;
-  box-shadow: none;
-}
+.aux-node.is-greyed { border-left-color: #c0c4cc; }
 .aux-heading { display: flex; align-items: flex-start; gap: 8px; }
 .aux-heading > div { min-width: 0; flex: 1; }
 .aux-step-mark {

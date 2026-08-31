@@ -142,6 +142,35 @@
     />
 
     <!--
+      回料配置入口 —— 显示名称/SKU/计量单位在上面已经可编辑, 这里补的是**允许回投的目标工序**。
+      ⛔ 措辞只说「已配置」不说「已限制投料」: Java 侧 `WorkflowReworkNodes` 只读 `data.isRework`,
+         没有任何运行时消费者读 `reworkPolicy` —— 说它在拦料是一句代码给不出证据的话。
+    -->
+    <div v-if="isRework" class="rework-config nodrag" data-testid="rework-config">
+      <div class="rework-config__line">
+        <span class="rework-config__label">允许回投的目标工序</span>
+        <span
+          class="rework-config__count"
+          :class="{ 'is-empty': reworkTargetCount === 0 }"
+          data-testid="rework-target-count"
+        >{{ reworkTargetCount === 0 ? '未配置' : `已选 ${reworkTargetCount} 道` }}</span>
+      </div>
+      <p v-if="reworkTargetCount === 0" class="rework-config__warn" data-testid="rework-missing-target">
+        没有目标工序的回料保存/发布会被拦下 —— 一块没有去处的回料只会在报工屏上多出一个没人知道该投到哪里的选项。
+      </p>
+      <p class="rework-config__scope">当前保存的是配置，系统尚未按它在报工时拦截投料。</p>
+      <el-button
+        v-if="canWrite"
+        size="small"
+        type="primary"
+        plain
+        class="nodrag"
+        data-testid="configure-rework"
+        @click.stop="emit('configureRework')"
+      >配置回投目标</el-button>
+    </div>
+
+    <!--
       副产选的是【物料】不是产品 SKU —— bom_recipe_items.material_type_id 是指向
       raw_material_types 的硬外键, 报工也按 materialTypeId 建 MaterialBatch。
       所以这里不能复用上面的 WorkflowSkuPicker(那份是产品档案)。
@@ -281,7 +310,13 @@ const props = withDefaults(defineProps<{
   unitError?: string;
   validationError?: string;
   validationAttention?: boolean;
+  /**
+   * 已允许回投的目标工序数量 —— 只用于展示。
+   * ⛔ 真值在各目标工序的 `reworkPolicy` 上(见 workflowReworkTargets.ts), 这里不存第二份。
+   */
+  reworkTargetCount?: number;
 }>(), {
+  reworkTargetCount: 0,
   connectingFromKind: '',
   bomRawMaterialIds: () => [],
   rawMaterialSegments: () => [],
@@ -310,6 +345,8 @@ const emit = defineEmits<{
   selectSku: [skuId: string];
   delete: [];
   editSku: [];
+  /** 打开回料配置抽屉(基本信息 + 允许回投的目标工序)。 */
+  configureRework: [];
 }>();
 
 const selectedRawSegmentPath = ref<string[]>([]);
@@ -426,14 +463,15 @@ const filteredOtherRawOptions = otherRawFilter.filtered;
  * 不改 kind, 也不加任何分支逻辑。
  */
 const isByproduct = computed(() => props.data?.isByproduct === true);
+const isRework = computed(() => props.data?.isRework === true);
 
-const kindLabel = computed(() => (isByproduct.value ? '副产 Cell' : {
+const kindLabel = computed(() => (isRework.value ? '回料 Cell' : isByproduct.value ? '副产 Cell' : {
   RAW_MATERIAL: '原料 Cell',
   SEMI_FINISHED: '半成品 Cell',
   FINISHED_GOOD: '成品 Cell',
 }[props.kind]));
 
-const kindMark = computed(() => (isByproduct.value ? '副' : {
+const kindMark = computed(() => (isRework.value ? '回' : isByproduct.value ? '副' : {
   RAW_MATERIAL: '原',
   SEMI_FINISHED: '半',
   FINISHED_GOOD: '成',
@@ -441,6 +479,17 @@ const kindMark = computed(() => (isByproduct.value ? '副' : {
 </script>
 
 <style scoped>
+.rework-config {
+  margin-top: 8px; padding: 8px; border-radius: 7px;
+  border: 1px solid #cdd8f0; background: #f6f8ff;
+}
+.rework-config__line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rework-config__label { color: #33499b; font-size: 11px; font-weight: 650; }
+.rework-config__count { color: #33499b; font-size: 11px; font-weight: 700; }
+.rework-config__count.is-empty { color: #b5590a; }
+.rework-config__warn { margin: 6px 0 0; color: #b5590a; font-size: 11px; line-height: 1.5; }
+.rework-config__scope { margin: 6px 0 6px; color: #667085; font-size: 11px; line-height: 1.5; }
+
 /* BOM 状态气泡: 贴在成品 Cell 右上角外侧, 带一个指向 Cell 的小三角。
    position:absolute 依赖 .material-node 的 position:relative —— 那条是本次一并加的。 */
 .bom-status-bubble {

@@ -1,8 +1,23 @@
 <template>
-  <div class="packaging-node" :class="{ selected }">
-    <!-- 包材挪到成品上方后由它出线, 进成品顶部 —— 与辅料 Cell 完全一致。 -->
-    <Handle type="source" :position="Position.Bottom" :id="PACK_OVERLAY_SOURCE_HANDLE" />
-
+  <!--
+    包材附属卡片 —— **固定融合在归属成品 Cell 上方**(§6), 与辅料同一套外壳。
+    ⛔ 收起/展开只改自身高度, 走 translateY(-100%), 不动 node position ⇒ 视口不变(§10)。
+  -->
+  <WorkflowFusedStrip
+    side="above"
+    tone="packaging"
+    testid="pack-strip"
+    badge="包"
+    :owner-width="FUSED_MATERIAL_OWNER_WIDTH"
+    :collapsed="!!collapsed"
+    :summary="stripSummary"
+    :full-label="stripFullLabel"
+    @toggle="emit('set-collapsed', !collapsed)"
+  >
+    <template #handles>
+      <Handle type="source" :position="Position.Bottom" :id="PACK_OVERLAY_SOURCE_HANDLE" />
+    </template>
+    <div class="packaging-node" :class="{ selected }">
     <div class="packaging-heading">
       <span class="step-mark">包</span>
       <div>
@@ -56,6 +71,7 @@
       @click.stop="emit('add-row')"
     >+ 添加包材</button>
   </div>
+  </WorkflowFusedStrip>
 </template>
 
 <script setup lang="ts">
@@ -72,6 +88,8 @@
 import { workflowDisplayUnit } from './workflowUnits';
 import { computed } from 'vue';
 import { Handle, Position } from '@vue-flow/core';
+import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
+import { FUSED_MATERIAL_OWNER_WIDTH } from './workflowFusedGroups';
 import { PACK_OVERLAY_SOURCE_HANDLE } from './bomOverlay';
 import type { PackagingCellData, PackagingCellRow } from './bomOverlayTypes';
 
@@ -86,11 +104,14 @@ const props = defineProps<{
   selected?: boolean;
   /** 只读用户不给「添加包材」/编辑行入口 —— 画布层传 canEdit 下来。 */
   canWrite: boolean;
+  /** 收起成一条窄条 —— 与辅料同一套视图偏好, 由画布层持久化到本地。 */
+  collapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
   'add-row': [];
   'edit-row': [rowId: string];
+  'set-collapsed': [collapsed: boolean];
 }>();
 
 // 多层包装(内袋/零售盒/外箱等)是同一 SKU 包装方案的若干层, 不是 N 个互不相干
@@ -107,6 +128,12 @@ const subtitleText = computed(() => {
   return `${props.data.rows.length} 种 · ${denominator}`;
 });
 
+/** 窄条一行文案: 类型 · 归属产出 · 层数/种数。全文进 title/aria-label。 */
+const stripSummary = computed(() => `包材 · ${props.data.outputName} · ${subtitleText.value}`);
+const stripFullLabel = computed(() => (
+  `${props.collapsed ? '展开' : '收起'}包材附属卡片：${stripSummary.value}`
+));
+
 // 禁止降级处理: 用量缺失时给出明确占位, 不能悄悄显示 0 或空白。
 function quantityDisplay(row: PackagingCellRow): string {
   return row.dosageText && row.dosageText.trim() ? row.dosageText : '用量待补全';
@@ -114,15 +141,12 @@ function quantityDisplay(row: PackagingCellRow): string {
 </script>
 
 <style scoped>
+/* 宽度/外框由 WorkflowFusedStrip 承担(融合要求与 owner 同宽、边框相接)。 */
 .packaging-node {
   position: relative;
-  width: 380px;
-  padding: 14px;
-  border: 1px solid #e3bccb;
+  padding: 4px 0 0;
   border-left: 4px solid #8e3454;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 2px 12px rgba(142, 52, 84, 0.1);
+  background: transparent;
 }
 .packaging-node.selected { box-shadow: 0 0 0 2px rgba(142, 52, 84, 0.3); }
 .packaging-heading { display: flex; align-items: flex-start; gap: 8px; }

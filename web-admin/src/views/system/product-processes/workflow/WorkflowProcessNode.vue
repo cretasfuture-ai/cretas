@@ -92,20 +92,6 @@
             data-testid="add-output-inline"
             @click.stop="emit('addOutput')"
           >+ 产出 Cell（分流）</el-button>
-          <el-button
-            text
-            size="small"
-            class="nodrag byproduct-add"
-            data-testid="add-byproduct-inline"
-            @click.stop="emit('addByproduct')"
-          >+ 副产</el-button>
-          <el-button
-            text
-            size="small"
-            class="nodrag rework-add"
-            data-testid="add-rework-inline"
-            @click.stop="emit('addRework')"
-          >+ 回料</el-button>
         </span>
       </div>
       <div class="actual-io-help">
@@ -166,6 +152,25 @@
       </div>
     </section>
 
+    <!--
+      §7: 每个可写工序底部**只保留一个常驻入口**。副产 / 不良品 / 回料原先是三个(或两个)
+      并排的小按钮, 收敛到这里再三选一。
+
+      ⛔ 「常驻」是硬要求, 不是样式偏好: 它是「这里可以加, 只是还没加」与「这里不能加」
+         唯一的区分手段(继承自浮层时代「没有副产也派生空 cell」那条判据)。
+         只允许按写权限(canWrite)收, ⛔ 不允许按「有没有特殊产出」收。
+    -->
+    <div v-if="canWrite" class="special-output-dock nodrag">
+      <el-button
+        text
+        size="small"
+        class="nodrag special-output-add"
+        data-testid="add-special-output"
+        @click.stop="emit('addSpecialOutput')"
+      >+ 添加特殊产出</el-button>
+      <span class="special-output-hint">副产 / 不良品 / 回料产出</span>
+    </div>
+
     <div class="reporting-row nodrag">
       <span>本道是否报工</span>
       <el-switch
@@ -210,10 +215,12 @@ const emit = defineEmits<{
   update: [patch: Partial<ProcessNodeData>];
   addInput: [];
   addOutput: [];
-  /** 副产走 addOutput 的同一条路径, 只是 data 上多一个 isByproduct 标记(见编辑器 addOutputToProcess)。 */
-  addByproduct: [];
-  /** 回料走 addOutput 的同一条路径, 只是 data 上多一个 isRework 标记(见编辑器 addOutputToProcess)。 */
-  addRework: [];
+  /**
+   * 统一的特殊产出入口 —— 画布层弹三选一(副产 / 不良品 / 回料), 选完再走
+   * `addOutputToProcess` 的同一条路径。⛔ 这里不新造 addByproduct/addRework 两个函数:
+   * 副产与回料仍然只是 data 上的一个标记(isByproduct / isRework), 不是新的 node kind。
+   */
+  addSpecialOutput: [];
   selectOutput: [portId: string, skuId: string];
   delete: [];
   editProcess: [];
@@ -259,6 +266,12 @@ function handleStyle(index: number, count: number): Record<string, string> {
 </script>
 
 <style scoped>
+.special-output-dock {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; padding-top: 8px; border-top: 1px dashed #dfe6f2;
+}
+.special-output-hint { color: #8a94a6; font-size: 11px; }
+
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
 .process-node { transition: opacity 150ms ease, box-shadow 150ms ease; }
 .process-node.wf-dim { opacity: 0.4; cursor: not-allowed; }

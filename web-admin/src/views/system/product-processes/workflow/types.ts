@@ -47,6 +47,14 @@ export interface MaterialNodeData extends Record<string, unknown> {
    */
   isByproduct?: boolean;
   /**
+   * 这个产出 Cell 是**回料**(2026-08-28 起编辑器已在写它, 本轮补进类型)。
+   *
+   * 回料 = 金检/X光 剔出、可回到后续批次继续投的独立半成品。⛔ 与副产刻意分成两个键:
+   * 副产端口被后端 `getOutputOptions` 过滤掉, 回料端口**必须留在**报工选项里让操作员填数。
+   * Java 侧唯一判据是 `WorkflowReworkNodes`(读的就是本字段), 不是端口上的任何东西。
+   */
+  isRework?: boolean;
+  /**
    * 本原料 cell 是哪个原料的替代料(值 = 被替代原料 cell 的 node id)。
    * 空/缺省 = 独立投入(与主料一起投)。
    *
@@ -149,6 +157,33 @@ export interface ProcessNodeData extends Record<string, unknown> {
   standardTime?: number | null;
   allowMultipleUpstreamSources?: boolean;
   allowFinishedGoodsSource?: boolean;
+  /**
+   * 这道工序**允许接收哪些回料**。承接 PR #417 的载体选择: 规则住在**目标工序**上,
+   * 随 Workflow 版本保存(进 nodesJson ⇒ 进 revisionHash)。
+   *
+   * 🔴 **诚实边界**: Java 侧当前没有任何运行时消费者读它 ——
+   * `WorkflowReworkNodes` 只认物料节点上的 `data.isRework`。所以它是**已持久化的配置**,
+   * ⛔ 不是「已生效的投料限制」。UI 措辞必须照这个口径说, 不许宣称已经在拦料。
+   */
+  reworkPolicy?: WorkflowReworkPolicy | null;
+}
+
+/**
+ * 回料规则。
+ *
+ * ## 与 PR #417 的差别只有一处
+ * #417 写的是 `allowedSourceProductTypeIds`(产品级, 一个成品折一道工序)。已确认交互要选的是
+ * **工序级**目标 —— 一条线路里可以有多道工序都允许回投, 产品级表达不了。所以同一个字段
+ * 换成回料 Cell 的 node id 集合; 其余(载体在目标工序、比例上限、校验形状)全部沿用。
+ *
+ * ⛔ **只有这一份真值**: 刻意不在回料 Cell 上再存一份 `allowedTargetIds`。同一个关系存两处
+ * 一定会漂, 而漂的那一份不会报错, 只会让画布和保存出来的定义讲两个故事。
+ */
+export interface WorkflowReworkPolicy {
+  /** 允许回投到本工序的**回料 Cell node id** 集合。至少 1 条, 否则整个 policy 应为 null。 */
+  allowedSourceReworkNodeIds: string[];
+  /** 回料占本工序投入的比例上限(0–100)。当前同样没有运行时消费者。 */
+  maxInputRatioPercent: number;
 }
 
 export type WorkflowNodeData = MaterialNodeData | ProcessNodeData;
