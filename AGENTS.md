@@ -286,6 +286,13 @@ frontend/CretasFoodTrace/src/
 4. handoff 必须包含目标/完成标准、阶段、已确认事实、仓库/worktree/branch/Base SHA、实际修改、验证结果、未完成项、权限边界、禁止重复的昂贵操作和下一动作。新 Chat 必须重新核验仓库与运行时真值。
 5. 新 Chat 接管后，旧 Chat 不得继续写同一 scope。测试、构建、CI 等待、部署/切流、迁移、事务、生产写入、回滚、合并中间态或仍在写共享 scope 时不得交接，先取得明确结果或安全停止点。
 
+### Worktree 跨 Chat 交接登记（强制）
+
+1. 跨 Chat 转移 worktree 写 Owner 时，源协调者必须维护本机登记表 `C:\Users\Steve\.codex\worktree-handoffs.json`，记录源/目标 `threadId`、任务名、worktree 绝对路径、branch、HEAD/Base SHA、PR/CI 状态、保留证据与处置状态；登记内容不得包含账号、令牌、密码等凭据。
+2. 仅取得 `clientThreadId` 不算完成交接。必须等目标 Chat 取得真实 `threadId`，并回读确认目标 worktree、branch 和唯一写 Owner 后，才能把目标标为 `KEEP_ACTIVE`，再将源标为 `REVIEW_AFTER_MERGE`、`REVIEW_EMPTY_PATH` 或继续保护。源 Chat 随后不得继续写同一 scope。
+3. 目标 Chat 完成或再次交接时，必须更新最终 HEAD、PR/merge/CI 状态、证据路径和 disposition。编辑登记表时先读取并保留其他任务条目，写后用 `ConvertFrom-Json` 或等价方式验证，禁止整文件盲写覆盖并发记录。
+4. 登记表只表示主机上的交接与保护状态，不替代 `origin/main`、Git、PR/CI 或 `docs/dispatch/ACTIVE.md`，也不构成删除授权。`KEEP_ACTIVE` 是硬保护信号；`REVIEW_*` 只允许清理任务优先审计。真正清理仍须实时核验绝对路径、worktree/branch/HEAD、工作区无修改和未跟踪文件、无进程/锁/ACTIVE/open PR/受保护证据，并以 fresh `origin/main` 的祖先关系、merged PR 或补丁等价证明改动已入主线；任一项不成立即保留。
+
 ### 发布与 E2E 去重复
 
 1. **唯一发布构建与可信 manifest** - 后续发布必须从干净且 `HEAD == origin/main` 的 exact release worktree 执行。同一 `backend/java/cretas-api` Git tree 与目标测试选择器只允许零或一次 `mvn clean package -Dtest=<tests>` 生命周期：manifest 格式合法且 `success=true`、记录的 `target_tests` 与本次选择器完全一致、记录的 backend tree 等于当前 HEAD backend tree、缓存 JAR 存在且通过归档完整性与 SHA-256 校验时，`release-jar-manifest.sh build` 直接复用并运行零次 Maven；任一条件不满足才执行一次 clean package，`CRETAS_RELEASE_FORCE_JAVA_BUILD=1` 可显式强制该构建。不得先单跑目标测试再重复 package。部署阶段的 manifest/制品复用还必须证明记录的 build commit 可由 Git 解析，且该 commit 的后端 tree、manifest 记录的后端 tree、当前 `origin/main` 后端 tree 三者一致，同时通过 SHA-256、JAR 完整性和当前 worktree clean 校验。squash 后 commit 不同但后端 tree 完全相同可复用；任一校验失败只回退一次本地 `clean package`。生产当前 JAR 的 MD5、真实 upstream、active systemd 与直连健康均匹配时，Java 未变化可按后端 tree cache 判定安全 no-op。

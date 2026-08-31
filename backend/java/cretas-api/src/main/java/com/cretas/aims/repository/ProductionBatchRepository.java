@@ -2,8 +2,10 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -33,6 +35,15 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * 根据ID和工厂ID查找
      */
     Optional<ProductionBatch> findByIdAndFactoryId(Long id, String factoryId);
+
+    /**
+     * Factory-scoped row lock for terminal-state transitions.
+     * Completion and reversal paths must use this method before changing a batch.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM ProductionBatch p WHERE p.id = :id AND p.factoryId = :factoryId")
+    Optional<ProductionBatch> findByIdAndFactoryIdForUpdate(@Param("id") Long id,
+                                                              @Param("factoryId") String factoryId);
 
     /**
      * 检查批次号是否存在

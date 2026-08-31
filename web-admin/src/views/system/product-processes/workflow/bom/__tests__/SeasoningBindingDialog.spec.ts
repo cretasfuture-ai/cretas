@@ -147,10 +147,9 @@ describe('SeasoningBindingDialog', () => {
       process: { ...process, standardBasisUnit: basisUnit, standardBasisQuantity: 1, standardUsageSupported: false },
     });
     await fillRequiredFields(wrapper, 5);
-    // ⛔ 这里原本还断言页面上回显出「1 box」/「1 L」这个**产出基准**。该回显已删除:
-    // 它描述的分母(产出)与后端真实算式(投料 kg)不符, 是 8.3 倍偏差的来源。
-    // 承重的两条断言留着 —— 停用提示仍在, 且 createBinding 一次都不许被调用(fail closed)。
-    expect(wrapper.text()).toContain('本工序缺少可用的产出基准');
+    // box/L 不能换算成正式报工使用的投入 kg，因此必须给出与运行公式一致的提示并 fail closed。
+    expect(wrapper.text()).toContain('本工序缺少可换算为 kg 的投入基准');
+    expect(wrapper.text()).toContain('绑定 kg 或 g 的原料/半成品');
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
     expect(createBinding).not.toHaveBeenCalled();

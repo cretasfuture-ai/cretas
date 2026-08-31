@@ -121,6 +121,17 @@ public class DecisionTypeMetadataRegistry {
                 .wired(false)  // SP12 T3 接入后改为 true
                 .build());
 
+        register(DecisionTypeMetadata.builder()
+                .decisionType(DecisionType.PRODUCTION_REPORT_CORRECTION_APPROVAL)
+                .chineseName("报工修正审批")
+                .description("审批已提交、未结单报工的结果字段修正；审批前原值继续有效")
+                .category(Category.PRODUCTION)
+                // 审批角色完全由 OA 节点配置决定，不提供角色默认值。
+                .defaultApproverRoles(List.of())
+                .moduleCode("PRODUCTION_REPORT_CORRECTION")
+                .wired(true)
+                .build());
+
         // ============================================
         // 质检 / 物料 类 (5)
         // ============================================

@@ -1,6 +1,7 @@
 package com.cretas.aims.service.reversal;
 
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.entity.ProductionSettlementConsumption;
@@ -8,8 +9,10 @@ import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
@@ -40,6 +43,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
@@ -52,13 +56,10 @@ import static org.mockito.Mockito.when;
  *
  * <h2>为什么单开这一条（2026-08-18 取证）</h2>
  *
- * <p>{@code ReportReversalServiceImpl.restoreSemiFinishedConsumption} 直接改库存行
- * （{@code consumedQuantity -= qty}、{@code availableQuantity += qty}）却<b>一行流水都不写</b>。
- * 普查全仓改 {@code SemiFinishedInventory} 余额的 15 个点，只有<b>两个</b>是哑的：
- * 本方法，和它的正向 {@code ProductionPlanServiceImpl.postSemiFinishedConsumption}。
- * 其余 13 个都配了 IN / OUT / REVERSE / ADJUST 行。
- * ⇒ 余额动了而账本解释不了它，正是 {@code WipLedgerEntries.productionRow} javadoc 里
- * 那个 phantom WIP 的形状：<b>只有余额，没有事实</b>。
+ * <p>{@code ReportReversalServiceImpl.restoreSemiFinishedConsumption} 更新库存行并写入
+ * 与结单消耗行一一对应的正量 REVERSE；正向
+ * {@code ProductionPlanServiceImpl.postSemiFinishedConsumption} 写入对应 OUT。
+ * 撤回前必须证明这两个事实都存在且数量一致，否则 fail closed。
  *
  * <h2>生产实测（F006 {@code cretas_prod_db}，{@code public} schema，只读，2026-08-18）</h2>
  *
@@ -122,6 +123,7 @@ class SettlementSemiRestoreLedgerContractTest {
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private ProductionSettlementRepository productionSettlementRepository;
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
+    @Mock private ProductionPlanRepository productionPlanRepository;
 
     private ProductionSettlement settlement;
 
@@ -131,6 +133,7 @@ class SettlementSemiRestoreLedgerContractTest {
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
                 productionSettlementConsumptionRepository);
+        ReflectionTestUtils.setField(service, "productionPlanRepository", productionPlanRepository);
 
         ReportReversalLog log = ReportReversalLog.builder()
                 .factoryId(FACTORY_ID)
@@ -141,6 +144,7 @@ class SettlementSemiRestoreLedgerContractTest {
                 .build();
         log.setId(LOG_ID);
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        when(reversalLogRepo.findByIdAndFactoryIdForUpdate(LOG_ID, FACTORY_ID)).thenReturn(Optional.of(log));
         when(reversalLogRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 
         // 本条测试隔离的是【结单消耗还回】那一段: 该批次没有 YIELD 报工 ⇒ executeReversal ② 不参与,
@@ -151,12 +155,36 @@ class SettlementSemiRestoreLedgerContractTest {
                 .thenReturn(Collections.emptyList());
         when(fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
+        ProductionBatch batch = ProductionBatch.builder()
+                .id(BATCH_ID).factoryId(FACTORY_ID).productionPlanId(PLAN_ID)
+                .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                .build();
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(batch));
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY_ID);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenAnswer(invocation ->
+                productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                        FACTORY_ID, PLAN_ID));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
         when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(i -> {
             SemiFinishedInventoryTransaction t = i.getArgument(0);
             t.setId(9100L);
             return t;
         });
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder()
+                        .id(9001L).factoryId(FACTORY_ID).semiFinishedId(SFI_ID)
+                        .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX
+                                + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-30.00"))
+                        .build()));
 
         settlement = new ProductionSettlement();
         settlement.setId(SETTLEMENT_ID);
@@ -170,8 +198,12 @@ class SettlementSemiRestoreLedgerContractTest {
 
     /** 真实上游形状: SEMI_FINISHED + 非空 sfiId + 正的 scale-2 数量。 */
     private ProductionSettlementConsumption semiLine(BigDecimal qty) {
+        return semiLine(1L, qty);
+    }
+
+    private ProductionSettlementConsumption semiLine(Long id, BigDecimal qty) {
         ProductionSettlementConsumption line = new ProductionSettlementConsumption();
-        line.setId(1L);
+        line.setId(id);
         line.setSettlementId(SETTLEMENT_ID);
         line.setFactoryId(FACTORY_ID);
         line.setProductionPlanId(PLAN_ID);
@@ -250,6 +282,8 @@ class SettlementSemiRestoreLedgerContractTest {
                         + "「被下道领用了没有」, 裸批次号会凭空把撤回拦成 409")
                 .startsWith(WipLedgerEntries.SETTLEMENT_RESTORE_REF_PREFIX)
                 .contains(String.valueOf(LOG_ID))
+                .contains(SETTLEMENT_ID)
+                .contains(":1")
                 .isNotEqualTo(String.valueOf(BATCH_ID));
 
         assertThat(row.getReportId())
@@ -290,6 +324,7 @@ class SettlementSemiRestoreLedgerContractTest {
                 .status(ReportReversalLog.ReversalStatus.APPROVED).build();
         logRecB.setId(logB);
         when(reversalLogRepo.findById(logB)).thenReturn(Optional.of(logRecB));
+        when(reversalLogRepo.findByIdAndFactoryIdForUpdate(logB, FACTORY_ID)).thenReturn(Optional.of(logRecB));
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
                 FACTORY_ID, planB)).thenReturn(Optional.empty());   // Phase B 不再走 ③.6
         when(fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, planB))
@@ -324,7 +359,8 @@ class SettlementSemiRestoreLedgerContractTest {
                         .quantity(new BigDecimal("-30.00")).unitCostAtTxn(new BigDecimal("2.00")).build(),
                 restoreRow));
 
-        service.executeReversal(logB, FACTORY_ID);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                "replayMovingAverage", SFI_ID, FACTORY_ID, java.time.LocalDateTime.now());
 
         ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
         verify(wipRepo, atLeastOnce()).save(sfiCaptor.capture());
@@ -344,86 +380,109 @@ class SettlementSemiRestoreLedgerContractTest {
     }
 
     @Test
-    @DisplayName("正向 OUT 还没补上时（今天的 prod 就是这样）：我们这一行 ⛔ 不许把库存行算坏 / 锁死")
-    void unpairedRestoreRowIsNumericallyHarmlessUntilTheForwardOutExists() {
-        // 现状: 正向 postSemiFinishedConsumption 不写 OUT ⇒ 这条库存行的流水账里 Σ|OUT| = 0,
-        // 而我们写的正量 REVERSE 会去抵扣一个本来就是 0 的 consumedOut。
-        // 这一条把「无害」从推断变成读数 —— 无害的话它绿, 有害的话它红。
+    @DisplayName("结单缺少正向 OUT 配对时首个 mutation 前 fail-closed")
+    void unpairedSettlementOutFailsBeforeMutation() {
+        // 旧结单若缺少正向 OUT，撤回无法证明其来源，必须在任何库存/软删 mutation 前拒绝。
         SemiFinishedInventory sfi = sfiOnRecord("100.00", "30.00", "70.00");
         when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(sfi));
         when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
                 .thenReturn(List.of(semiLine(new BigDecimal("30.00"))));
 
-        service.executeReversal(LOG_ID, FACTORY_ID);
-        List<SemiFinishedInventoryTransaction> phaseA = savedTxns();
-        assertThat(phaseA).as("阳性对照: 没写出行, 下面喂给回放的就是空气").hasSize(1);
-        SemiFinishedInventoryTransaction restoreRow = phaseA.get(0);
-        Mockito.clearInvocations(txnRepo, wipRepo);
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(Collections.emptyList());
 
-        final Long logB = 93L;
-        final Long batchB = 10763L;
-        final String planB = "PP-UNPAIRED";
-        ReportReversalLog logRecB = ReportReversalLog.builder()
-                .factoryId(FACTORY_ID).batchId(batchB).planId(planB)
-                .submittedBy(SUBMITTED_BY)
-                .status(ReportReversalLog.ReversalStatus.APPROVED).build();
-        logRecB.setId(logB);
-        when(reversalLogRepo.findById(logB)).thenReturn(Optional.of(logRecB));
-        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
-                FACTORY_ID, planB)).thenReturn(Optional.empty());
-        when(fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, planB))
-                .thenReturn(Collections.emptyList());
-        when(workProcessTaskRepository
-                .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(FACTORY_ID, batchB))
-                .thenReturn(Collections.emptyList());
-        ProductionReport report = ProductionReport.builder()
-                .id(23842L).factoryId(FACTORY_ID).batchId(batchB).build();
-        when(reportRepo.findYieldReportsByBatch(FACTORY_ID, batchB)).thenReturn(List.of(report));
-        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> i.getArgument(0));
-        SemiFinishedInventoryTransaction trigger = SemiFinishedInventoryTransaction.builder()
-                .factoryId(FACTORY_ID).semiFinishedId(SFI_ID)
-                .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
-                .quantity(new BigDecimal("1.00")).unitCostAtTxn(new BigDecimal("2.00")).build();
-        trigger.setId(1L);
-        when(txnRepo.findByFactoryIdAndReportId(FACTORY_ID, report.getId())).thenReturn(List.of(trigger));
-
-        SemiFinishedInventory replayTarget = sfiOnRecord("55.00", "0.00", "25.00");
-        when(wipRepo.findById(SFI_ID)).thenReturn(Optional.of(replayTarget));
-        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(replayTarget));
-        // ⚠️ 账本里【一条 OUT 都没有】—— 这正是今天 prod 上那条正向缺口的长相。
-        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
-                SemiFinishedInventoryTransaction.builder()
-                        .factoryId(FACTORY_ID).semiFinishedId(SFI_ID)
-                        .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
-                        .quantity(new BigDecimal("100.00")).unitCostAtTxn(new BigDecimal("2.00")).build(),
-                restoreRow));
-
-        service.executeReversal(logB, FACTORY_ID);
-
-        ArgumentCaptor<SemiFinishedInventory> sfiCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
-        verify(wipRepo, atLeastOnce()).save(sfiCaptor.capture());
-        SemiFinishedInventory replayed = sfiCaptor.getValue();
-
-        assertThat(replayed.getProducedQuantity())
-                .as("我们这一行是【还回领用】, 不进净产出 ⇒ 净产出仍是 ΣIN 100 (账面 55 ⇒ 非恒真)")
-                .isEqualByComparingTo(new BigDecimal("100.00"));
-        assertThat(replayed.getAvailableQuantity())
-                .as("Σ|OUT| = 0 时还回量被 clamp 到 0 ⇒ 可用量 = 100, "
-                        + "⛔ 不许倒挤成 130 那种凭空多出来的幻影库存 (账面 25 ⇒ 非恒真)")
-                .isEqualByComparingTo(new BigDecimal("100.00"));
-        assertThat(replayed.getAvailableQuantity())
-                .as("可用量任何时候都不许超过净产出")
-                .isLessThanOrEqualTo(replayed.getProducedQuantity());
-        assertThat(replayed.getProducedQuantity())
-                .as("🔴 最要紧的一条: 回写的 produced 一旦大于 ΣIN, 下一次回放必被 "
-                        + "WIP_LEDGER_INCOMPLETE 拦死, 这条库存行从此撤不了 —— "
-                        + "我们这一行绝不许把它推过 ΣIN")
-                .isLessThanOrEqualTo(new BigDecimal("100.00"));
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("WIP_LEDGER_INCOMPLETE"));
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+        verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
     }
 
     @Test
-    @DisplayName("脏数据 clamp：流水记【实际反冲量】, ⛔ 不记消耗行上写的请求量")
-    void clampedRestoreRecordsActualReversalNotRequestedQuantity() {
+    @DisplayName("同一 SFI 的多个结单消耗行各自精确配对 OUT 后允许撤回")
+    void multipleSettlementLinesForSameSfiPairIndividually() {
+        SemiFinishedInventory sfi = sfiOnRecord("100.00", "30.00", "70.00");
+        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(sfi));
+        ProductionSettlementConsumption first = semiLine(1L, new BigDecimal("10.00"));
+        ProductionSettlementConsumption second = semiLine(2L, new BigDecimal("20.00"));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(first, second));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder().id(9001L).factoryId(FACTORY_ID)
+                        .semiFinishedId(SFI_ID).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-10.00")).build(),
+                SemiFinishedInventoryTransaction.builder().id(9002L).factoryId(FACTORY_ID)
+                        .semiFinishedId(SFI_ID).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX + SETTLEMENT_ID + ":2")
+                        .quantity(new BigDecimal("-20.00")).build()));
+
+        service.executeReversal(LOG_ID, FACTORY_ID);
+
+        assertThat(sfi.getConsumedQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(sfi.getAvailableQuantity()).isEqualByComparingTo(new BigDecimal("100.00"));
+        verify(txnRepo, org.mockito.Mockito.times(2)).save(any(SemiFinishedInventoryTransaction.class));
+        assertThat(settlement.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("其他结单的合法 OUT 不会污染当前结单的一一配对证明")
+    void unrelatedSettlementOutDoesNotInvalidateCurrentPair() {
+        SemiFinishedInventory sfi = sfiOnRecord("100.00", "30.00", "70.00");
+        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(sfi));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(semiLine(new BigDecimal("30.00"))));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder().id(9001L).factoryId(FACTORY_ID)
+                        .semiFinishedId(SFI_ID).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-30.00")).build(),
+                SemiFinishedInventoryTransaction.builder().id(9002L).factoryId(FACTORY_ID)
+                        .semiFinishedId(SFI_ID).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX + "OLDER-SETTLEMENT:9")
+                        .quantity(new BigDecimal("-12.00")).build()));
+
+        service.executeReversal(LOG_ID, FACTORY_ID);
+
+        verify(txnRepo).save(any(SemiFinishedInventoryTransaction.class));
+        assertThat(settlement.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("当前结单重复 OUT 配对时首个 mutation 前 fail-closed")
+    void duplicateCurrentSettlementOutFailsBeforeMutation() {
+        SemiFinishedInventory sfi = sfiOnRecord("100.00", "30.00", "70.00");
+        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(sfi));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(semiLine(new BigDecimal("30.00"))));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(SFI_ID)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder().id(9001L).factoryId(FACTORY_ID)
+                        .semiFinishedId(SFI_ID).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-30.00")).build(),
+                SemiFinishedInventoryTransaction.builder().id(9002L).factoryId(FACTORY_ID)
+                        .semiFinishedId(SFI_ID).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-30.00")).build()));
+
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("WIP_LEDGER_INVALID"));
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+        verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
+        assertThat(settlement.getDeletedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("qty > consumed 无法一一证明时 fail-closed")
+    void excessiveSettlementQuantityFailsClosed() {
         // 消耗行说领了 30, 而库存行上只剩 10 的已领量 (例: 另一条路已经还过一部分)。
         // restoreSemiFinishedConsumption 把 consumed clamp 到 0 ⇒ 真正反冲掉的只有 10。
         SemiFinishedInventory sfi = sfiOnRecord("100.00", "10.00", "90.00");
@@ -431,20 +490,71 @@ class SettlementSemiRestoreLedgerContractTest {
         when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
                 .thenReturn(List.of(semiLine(new BigDecimal("30.00"))));
 
-        service.executeReversal(LOG_ID, FACTORY_ID);
-
-        List<SemiFinishedInventoryTransaction> txns = savedTxns();
-        assertThat(txns).hasSize(1);
-        assertThat(txns.get(0).getQuantity())
-                .as("clamp 之后真正从 consumedQuantity 反冲掉的是 10, 不是消耗行写的 30 —— "
-                        + "记请求量 = 账本自己在说谎 (与 clerkConsumptionRow 同一条纪律)")
-                .isEqualByComparingTo(new BigDecimal("10.00"));
-        assertThat(sfi.getConsumedQuantity()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("WIP_LEDGER_INCOMPLETE"));
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+        verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
     }
 
     @Test
-    @DisplayName("阴性对照：一笔都没反冲掉 → ⛔ 不凭空造流水 (配一条【必然发生】的读数证明它真的跑到了)")
-    void nothingActuallyRestoredWritesNoLedgerRow() {
+    @DisplayName("跨租户结单 SFI 在首个 mutation 前 fail-closed")
+    void crossFactorySettlementSfiFailsBeforeMutation() {
+        SemiFinishedInventory foreign = sfiOnRecord("100.00", "30.00", "70.00");
+        foreign.setFactoryId("OTHER_FACTORY");
+        when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(foreign));
+        ProductionSettlementConsumption line = semiLine(new BigDecimal("30.00"));
+        when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                .thenReturn(List.of(line));
+
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("WIP_SCOPE_INVALID"));
+
+        verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+        verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+        verify(productionSettlementConsumptionRepository, never()).save(any());
+        verify(productionSettlementRepository, never()).save(any());
+        assertThat(line.getDeletedAt()).isNull();
+        assertThat(settlement.getDeletedAt()).isNull();
+        verify(reversalLogRepo, never()).save(any(ReportReversalLog.class));
+    }
+
+    @Test
+    @DisplayName("结单 SFI 正负盘点调整都在首个 mutation 前 fail-closed")
+    void settlementSfiAdjustmentFailsBeforeMutation() {
+        for (String adjustment : List.of("1.00", "-1.00")) {
+            Mockito.clearInvocations(wipRepo, txnRepo, reportRepo,
+                    productionSettlementConsumptionRepository, productionSettlementRepository,
+                    reversalLogRepo);
+            SemiFinishedInventory sfi = sfiOnRecord("100.00", "30.00", "70.00");
+            sfi.setAdjustmentQuantity(new BigDecimal(adjustment));
+            when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(sfi));
+            ProductionSettlementConsumption line = semiLine(new BigDecimal("30.00"));
+            when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
+                    .thenReturn(List.of(line));
+
+            assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                            .isEqualTo("WIP_ADJUSTMENT_PRESENT"));
+
+            verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
+            verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
+            verify(reportRepo, never()).save(any(ProductionReport.class));
+            verify(productionSettlementConsumptionRepository, never()).save(any());
+            verify(productionSettlementRepository, never()).save(any());
+            verify(reversalLogRepo, never()).save(any(ReportReversalLog.class));
+            assertThat(line.getDeletedAt()).isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("结单消耗无已领量时 fail-closed，不软删")
+    void nothingActuallyRestoredFailsClosed() {
         // 库存行上 consumed 已经是 0 ⇒ 无可反冲。
         SemiFinishedInventory sfi = sfiOnRecord("100.00", "0.00", "100.00");
         when(wipRepo.findByIdForUpdate(SFI_ID)).thenReturn(Optional.of(sfi));
@@ -452,20 +562,14 @@ class SettlementSemiRestoreLedgerContractTest {
         when(productionSettlementConsumptionRepository.findBySettlementIdAndDeletedAtIsNull(SETTLEMENT_ID))
                 .thenReturn(List.of(line));
 
-        service.executeReversal(LOG_ID, FACTORY_ID);
-
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("WIP_LEDGER_INCOMPLETE"));
         verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
-
-        // 🔴 硬约束: 「X 没发生」必须配一个「Y 一定会发生」的读数。
-        //    这三个是设计上的必然 —— 全部恢复成功后才软删, 最后置 DONE。
-        //    它们没动就说明根本没跑到写流水那一步, 那么上面那条 never() 毫无意义。
-        assertThat(line.getDeletedAt()).as("必发生 1: 恢复成功 → 消耗行被软删").isNotNull();
-        assertThat(settlement.getDeletedAt()).as("必发生 2: 恢复成功 → settlement 被软删").isNotNull();
-        ArgumentCaptor<ReportReversalLog> logCaptor = ArgumentCaptor.forClass(ReportReversalLog.class);
-        verify(reversalLogRepo, atLeastOnce()).save(logCaptor.capture());
-        assertThat(logCaptor.getValue().getStatus())
-                .as("必发生 3: 撤回跑完置 DONE")
-                .isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+        assertThat(line.getDeletedAt()).isNull();
+        assertThat(settlement.getDeletedAt()).isNull();
+        verify(reversalLogRepo, never()).save(any(ReportReversalLog.class));
     }
 
     @Test

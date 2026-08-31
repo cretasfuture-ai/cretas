@@ -242,15 +242,44 @@ public final class WipLedgerEntries {
      */
     public static final String SETTLEMENT_RESTORE_REF_PREFIX = "reversal-settle-restore-out:";
 
+    /** Exact source-ref prefix pairing a settlement consumption row with its OUT ledger row. */
+    public static final String SETTLEMENT_CONSUMPTION_REF_PREFIX = "settlement-consumption-out:";
+
+    /**
+     * Construct the immutable OUT row for a forward settlement SFI consumption.  The settlement
+     * and consumption ids are both part of source_ref so reversal preflight can prove a strict
+     * one-to-one pair and reject orphan, duplicate, or partial history.
+     */
+    public static SemiFinishedInventoryTransaction settlementConsumptionRow(
+            String factoryId, SemiFinishedInventory sfi, BigDecimal outQty,
+            BigDecimal balanceAfter, String settlementId, Long consumptionId, Long operatorId) {
+        if (factoryId == null || sfi == null || outQty == null
+                || outQty.compareTo(BigDecimal.ZERO) <= 0
+                || settlementId == null || consumptionId == null) {
+            return null;
+        }
+        return SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                .sourceRef(SETTLEMENT_CONSUMPTION_REF_PREFIX + settlementId + ":" + consumptionId)
+                .quantity(outQty.negate())
+                .unitCostAtTxn(sfi.getUnitCost())
+                .balanceAfter(balanceAfter)
+                .balanceCostAfter(sfi.getUnitCost())
+                .operatorId(operatorId)
+                .build();
+    }
+
     /**
      * 构造一条<b>「还回领用」</b>的 REVERSE 流水行 —— 整单撤回把<b>结单时领走的半成品</b>退还回去。
      *
      * <p><b>为什么补这一条（2026-08-18 取证）</b>：
-     * {@code ReportReversalServiceImpl.restoreSemiFinishedConsumption} 直接改库存行
-     * （{@code consumedQuantity -= qty}、{@code availableQuantity += qty}）
-     * 却<b>一行流水都不写</b>。全仓 15 个改 SFI 余额的地方，只有它和它的正向
-     * （{@code ProductionPlanServiceImpl.postSemiFinishedConsumption}）是哑的。
-     * ⇒ 余额动了而账本解释不了，正是 {@link #productionRow} javadoc 里那个 phantom WIP 的形状。
+     * {@code ReportReversalServiceImpl.restoreSemiFinishedConsumption} 直接改库存行并写入
+     * 与结单消耗行配对的 REVERSE；正向
+     * {@code ProductionPlanServiceImpl.postSemiFinishedConsumption} 则写入对应 OUT，
+     * 因此余额变化和账本事实保持可追溯配对。
      *
      * <p>🔴 <b>符号必须是正的</b>。{@code REVERSE} 是<b>两种</b>语义共用的一个 txn_type，
      * 靠符号区分（见 {@code ReverseSignSemanticsContractTest}）：
@@ -262,10 +291,8 @@ public final class WipLedgerEntries {
      * 写成负量会被 {@code replayMovingAverage} 当成「退回产出」冲掉净产出，
      * 把一次<b>归还</b>记成一次<b>减产</b>（实测：变异成负量后，回放把净产出从 100 写成 70）。
      *
-     * <p>🔴 <b>{@code restoredQty} 必须是【实际反冲掉的消耗量】，不是【消耗行上写的量】</b>。
-     * 与 {@link #clerkConsumptionRow} 同一条纪律：调用方在脏数据下会把
-     * {@code consumedQuantity} clamp 到 0（回扣量 &gt; 已领量），那时真正还回去的只有
-     * 原来的 {@code consumedQuantity}。记请求量 = 账本自己在说谎。
+     * <p>🔴 <b>{@code restoredQty} 必须是已证明的实际反冲量</b>。撤回 preflight 会拒绝
+     * 无法完整证明的数量，因此这里不以 clamp 掩盖部分历史。
      *
      * <p>⚠️ <b>余额口径</b>：同 {@link #reversalRow} / {@link #clerkProductionRow} ——
      * <b>直接读改完的</b> {@code availableQuantity}，要求调用方<b>先把库存行改完再调</b>。
@@ -280,13 +307,15 @@ public final class WipLedgerEntries {
      * @param sfi            <b>已经改完</b>的半成品库存行
      * @param restoredQty    <b>实际反冲掉的消耗量</b>（正数）；{@code null} 或 {@code <= 0} 返回 {@code null}
      *                       —— ⛔ 一笔没还回去就不凭空造流水
-     * @param reversalLogId  {@code ReportReversalLog.id}；按实体 javadoc「REVERSE → ReportReversalLog.id」
+     * @param reversalLogId  {@code ReportReversalLog.id}
+     * @param settlementId   {@code ProductionSettlement.id}
+     * @param consumptionId  {@code ProductionSettlementConsumption.id}
      * @param operatorId     操作人（审批人优先，其次提交人）
      * @return REVERSE 流水行（正量）；无需记账时返回 {@code null}
      */
     public static SemiFinishedInventoryTransaction settlementRestoreRow(
             String factoryId, SemiFinishedInventory sfi, BigDecimal restoredQty,
-            Long reversalLogId, Long operatorId) {
+            Long reversalLogId, String settlementId, Long consumptionId, Long operatorId) {
 
         if (factoryId == null || sfi == null || restoredQty == null
                 || restoredQty.compareTo(BigDecimal.ZERO) <= 0) {
@@ -298,7 +327,8 @@ public final class WipLedgerEntries {
                 .semiFinishedId(sfi.getId())
                 .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
                 .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
-                .sourceRef(SETTLEMENT_RESTORE_REF_PREFIX + reversalLogId)
+                .sourceRef(SETTLEMENT_RESTORE_REF_PREFIX + reversalLogId + ":"
+                        + settlementId + ":" + consumptionId)
                 .quantity(restoredQty)              // 🔴 正量 = 还回领用（OUT 的逆）
                 .unitCostAtTxn(sfi.getUnitCost())   // 诚实 null 传播
                 .balanceAfter(nz(sfi.getAvailableQuantity()))

@@ -584,6 +584,7 @@ public class PermissionServiceImpl implements PermissionService {
      * permType 格式: read_write/read/write/none (legacy).
      */
     private boolean checkAction(String permType, String action) {
+        permType = denormalizeLevel(permType);
         if (permType == null || permType.equals("none") || permType.equals("-")) {
             return false;
         }

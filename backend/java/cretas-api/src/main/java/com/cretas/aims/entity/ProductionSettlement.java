@@ -30,7 +30,6 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_prod_settlement_status", columnList = "factory_id, posting_status")
         },
         uniqueConstraints = {
-                @UniqueConstraint(name = "uq_prod_settlement_plan", columnNames = {"factory_id", "production_plan_id"}),
                 @UniqueConstraint(name = "uq_prod_settlement_idem", columnNames = {"factory_id", "production_plan_id", "idempotency_key"})
         })
 @Where(clause = "deleted_at IS NULL")

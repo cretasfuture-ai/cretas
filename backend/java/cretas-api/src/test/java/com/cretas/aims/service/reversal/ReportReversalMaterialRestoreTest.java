@@ -9,8 +9,10 @@ import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementRepository;
@@ -19,6 +21,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
+import com.cretas.aims.service.wip.WipLedgerEntries;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,6 +41,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -84,6 +88,7 @@ class ReportReversalMaterialRestoreTest {
     @Mock private MaterialBatchRepository materialBatchRepository;
     @Mock private ProductionSettlementRepository productionSettlementRepository;
     @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
+    @Mock private ProductionPlanRepository productionPlanRepository;
 
     @BeforeEach
     void setUp() {
@@ -92,6 +97,7 @@ class ReportReversalMaterialRestoreTest {
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
                 productionSettlementConsumptionRepository);
+        ReflectionTestUtils.setField(service, "productionPlanRepository", productionPlanRepository);
 
         // executeReversal 主流程基础 mock
         ReportReversalLog log = ReportReversalLog.builder()
@@ -102,11 +108,29 @@ class ReportReversalMaterialRestoreTest {
                 .build();
         log.setId(LOG_ID);
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        when(reversalLogRepo.findByIdAndFactoryIdForUpdate(LOG_ID, FACTORY_ID)).thenReturn(Optional.of(log));
         when(reversalLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(workProcessTaskRepository.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(
                 FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
         when(fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
+
+        ProductionBatch productionBatch = ProductionBatch.builder()
+                .id(BATCH_ID).factoryId(FACTORY_ID).productionPlanId(PLAN_ID)
+                .status(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS)
+                .build();
+        when(batchRepo.findByIdAndFactoryIdForUpdate(BATCH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(productionBatch));
+        when(batchRepo.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(productionBatch));
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY_ID);
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenAnswer(invocation ->
+                productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                        FACTORY_ID, PLAN_ID));
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -174,6 +198,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -213,6 +239,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -252,6 +280,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption sfLine = new ProductionSettlementConsumption();
         sfLine.setId(1L);
         sfLine.setSettlementId(SETTLEMENT_ID);
+        sfLine.setFactoryId(FACTORY_ID);
+        sfLine.setProductionPlanId(PLAN_ID);
         sfLine.setSourceType("SEMI_FINISHED");
         sfLine.setSemiFinishedInventoryId(77L);
         sfLine.setQuantity(new BigDecimal("15.00"));
@@ -267,6 +297,15 @@ class ReportReversalMaterialRestoreTest {
                 .status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
         when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
+        when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(77L)).thenReturn(List.of(
+                SemiFinishedInventoryTransaction.builder()
+                        .id(7001L).factoryId(FACTORY_ID).semiFinishedId(77L)
+                        .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                        .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                        .sourceRef(WipLedgerEntries.SETTLEMENT_CONSUMPTION_REF_PREFIX
+                                + SETTLEMENT_ID + ":1")
+                        .quantity(new BigDecimal("-15.00"))
+                        .build()));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
 
@@ -290,6 +329,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -329,9 +370,9 @@ class ReportReversalMaterialRestoreTest {
     }
 
     @Test
-    @DisplayName("R3: repo 未注入 (老 context) → 跳过原料恢复, 不抛异常 (向后兼容)")
-    void executeReversal_reposNotInjected_skipsGracefully() {
-        // 模拟老 context: 清空 R3 field-inject deps
+    @DisplayName("R3: 结单恢复依赖未注入 → fail closed 且不写任何数据")
+    void executeReversal_reposNotInjected_failsClosed() {
+        // 模拟错误 context: 清空 R3 field-inject deps; planId 非空时不得静默完成撤回
         ReflectionTestUtils.setField(service, "materialBatchRepository", null);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", null);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository", null);
@@ -339,12 +380,11 @@ class ReportReversalMaterialRestoreTest {
         when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID))
                 .thenReturn(Collections.emptyList());
 
-        // 不应抛异常
-        service.executeReversal(LOG_ID, FACTORY_ID);
-
-        ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
-        verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getValue().getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, FACTORY_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("结单恢复依赖未配置");
+        verify(reportRepo, never()).findYieldReportsByBatch(any(), any());
+        verify(reversalLogRepo, never()).save(any());
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -413,7 +453,8 @@ class ReportReversalMaterialRestoreTest {
         when(wipRepo.findById(77L)).thenReturn(Optional.of(sfi));
         when(wipRepo.findByIdForUpdate(77L)).thenReturn(Optional.of(sfi));
 
-        service.executeReversal(LOG_ID, FACTORY_ID);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                "replayMovingAverage", 77L, FACTORY_ID, java.time.LocalDateTime.now());
 
         // producedQuantity = ΣIN + ΣREVERSE = 200 - 100 = 100 (净 IN, 不含 OUT)
         assertThat(sfi.getProducedQuantity()).isEqualByComparingTo(new BigDecimal("100.00"));
@@ -606,6 +647,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-MISSING");
         cons.setQuantity(new BigDecimal("30.00"));
@@ -643,6 +686,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption sfLine = new ProductionSettlementConsumption();
         sfLine.setId(1L);
         sfLine.setSettlementId(SETTLEMENT_ID);
+        sfLine.setFactoryId(FACTORY_ID);
+        sfLine.setProductionPlanId(PLAN_ID);
         sfLine.setSourceType("SEMI_FINISHED");
         sfLine.setSemiFinishedInventoryId(88L);
         sfLine.setQuantity(new BigDecimal("15.00"));
@@ -678,6 +723,8 @@ class ReportReversalMaterialRestoreTest {
         ProductionSettlementConsumption cons = new ProductionSettlementConsumption();
         cons.setId(1L);
         cons.setSettlementId(SETTLEMENT_ID);
+        cons.setFactoryId(FACTORY_ID);
+        cons.setProductionPlanId(PLAN_ID);
         cons.setSourceType("MATERIAL_BATCH");
         cons.setMaterialBatchId("MB-1");
         cons.setQuantity(new BigDecimal("30.00"));

@@ -155,6 +155,91 @@ export function batchApproveReports(factoryId: string, reportIds: number[]) {
   return put(`/${factoryId}/process-work-reporting/batch-approve`, reportIds);
 }
 
+export interface ProductionReportCorrection {
+  id: string;
+  productionReportId: number;
+  workProcessTaskId?: number | null;
+  productionBatchId?: number | null;
+  productionPlanId?: string | null;
+  productTypeId?: string | null;
+  processCategory?: string | null;
+  status: 'PENDING_APPROVAL' | 'APPROVED_APPLIED' | 'REJECTED';
+  originalOutputQuantity?: number | null;
+  proposedOutputQuantity?: number | null;
+  originalGoodQuantity?: number | null;
+  proposedGoodQuantity?: number | null;
+  originalDefectQuantity?: number | null;
+  proposedDefectQuantity?: number | null;
+  originalTotalWorkers?: number | null;
+  proposedTotalWorkers?: number | null;
+  originalTotalWorkMinutes?: number | null;
+  proposedTotalWorkMinutes?: number | null;
+  originalNotes?: string | null;
+  proposedNotes?: string | null;
+  reason: string;
+  submittedBy?: number | null;
+  submittedByName?: string | null;
+  submittedAt: string;
+  workflowInstanceId?: string | null;
+  decidedBy?: number | null;
+  decidedByName?: string | null;
+  decidedAt?: string | null;
+  decisionNotes?: string | null;
+  appliedAt?: string | null;
+}
+
+export interface CorrectableReportItem {
+  id: number;
+  batchId?: number | null;
+  workProcessTaskId?: number | null;
+  processCategory?: string | null;
+  productName?: string | null;
+  reporterName?: string | null;
+  reportDate?: string | null;
+  approvalStatus?: string | null;
+  outputQuantity?: number | null;
+  goodQuantity?: number | null;
+  defectQuantity?: number | null;
+  totalWorkers?: number | null;
+  totalWorkMinutes?: number | null;
+  notes?: string | null;
+  dataCorrected: boolean;
+  lastCorrection?: ProductionReportCorrection | null;
+  corrections?: ProductionReportCorrection[];
+}
+
+export interface ProductionReportCorrectionPayload {
+  outputQuantity: number | null;
+  goodQuantity: number | null;
+  defectQuantity: number | null;
+  totalWorkers: number | null;
+  totalWorkMinutes: number | null;
+  notes: string;
+  reason: string;
+}
+
+export function getCorrectableReports(factoryId: string, params?: Record<string, unknown>) {
+  return get<{ content: CorrectableReportItem[]; totalElements: number }>(
+    `/${factoryId}/production-report-corrections/correctable`, { params }
+  );
+}
+
+export function submitReportCorrection(
+  factoryId: string,
+  reportId: number,
+  payload: ProductionReportCorrectionPayload,
+) {
+  return post<ProductionReportCorrection>(
+    `/${factoryId}/production-report-corrections/reports/${reportId}`, payload
+  );
+}
+
+export function getReportCorrectionHistory(factoryId: string, reportId: number) {
+  return get<ProductionReportCorrection[]>(
+    `/${factoryId}/production-report-corrections/reports/${reportId}`
+  );
+}
+
 // === Types ===
 
 /** C5: A cluster of duplicate work-processes sharing the same normalized name + category. */

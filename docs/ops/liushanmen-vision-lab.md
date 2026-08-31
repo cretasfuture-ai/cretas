@@ -617,9 +617,13 @@ B:\anaconda3\python.exe tools\vision-lab\build_minimal_incomplete_tray_requeue.p
 标签级联、标签归属冲突降级和 `UNJUDGEABLE` 保护；人工裁决 sidecar 又会排除无效旧真值、替换
 已确认的 normal→缺标，并补入前瞻人工缺陷。缺少任一层都会把生产已覆盖的缺陷误报成漏检。
 
-边缘补检只允许生产保留式合并：全图框继续使用生产托盘模型；全图已检测到 8 盘时跳过补检；
-候选只运行两个下方边缘窗口；贴原图 1% 物理边界的框拒绝；与生产框 intersection-over-smaller
-达到 0.60 的框按重复拒绝。评估入口必须同时绑定 V8 bundle 与人工裁决：
+托盘补检只允许生产保留式合并，基础生产框和旧 YOLOX 下方边缘补检框均不得被新候选删除。
+整图工作区候选必须作为独立的 `tray_full_frame_supplement` 绑定，并同时显式声明
+`trayFullFrameSupplementFormat=ultralytics_nms`、
+`trayFullFrameSupplementMode=full_frame_work_area_v1` 和已验证置信度；
+运行时仅从候选新增框中排除 `center_y<0.18 && height<0.037` 的远景小托盘，并继续以
+intersection-over-smaller `0.60` 去除生产重叠。格式、模式、置信度或 ONNX 输出不匹配均 fail closed。
+评估入口必须同时绑定 V8 bundle、人工工作区证据与人工裁决：
 
 ```powershell
 B:\anaconda3\python.exe tools\vision-lab\label_qc_tray_edge_context_eval.py `

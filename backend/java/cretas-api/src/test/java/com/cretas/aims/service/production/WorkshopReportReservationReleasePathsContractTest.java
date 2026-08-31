@@ -394,7 +394,8 @@ class WorkshopReportReservationReleasePathsContractTest {
                     .status(ReportReversalLog.ReversalStatus.APPROVED)
                     .submittedBy(1309L)
                     .build();
-            lenient().when(logRepo.findById(77L)).thenReturn(Optional.of(log));
+            lenient().when(logRepo.findByIdAndFactoryIdForUpdate(77L, FACTORY))
+                    .thenReturn(Optional.of(log));
             lenient().when(logRepo.save(any(ReportReversalLog.class))).thenAnswer(i -> i.getArgument(0));
             lenient().when(reportRepo.findYieldReportsByBatch(FACTORY, PRODUCTION_BATCH_ID))
                     .thenReturn(new ArrayList<>(List.of(report)));

@@ -41,7 +41,7 @@ public class PlatformRolePermissionController {
     private static final Set<String> ALLOWED_MODULES = Set.of(
         "dashboard","production","warehouse","quality","procurement","sales",
         "hr","equipment","finance","system","analytics","scheduling",
-        "work_report","inventory","report","rd","restaurant",
+        "work_report","inventory","report","rd","restaurant","production_report_correction",
         // 2026-08-05 餐饮四部门驾驶舱细分权限。语义见 permission.ts:552:
         //   最终 = min(restaurant 上限, 该部门声明值 ?? 上限)
         // 大小写敏感, 必须与前端 ModulePermissions 的键逐字一致。

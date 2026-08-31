@@ -254,6 +254,14 @@ export const BOOL_MEMBERS: Record<string, BoolMember> = {
   isAuthenticated: { store: 'auth', kind: 'prop' },
 };
 
+/**
+ * 这些模块故意不进入前端 hardcoded 角色矩阵，只能由后端 L1/L2 权限配置赋值。
+ * 对它们用离线默认矩阵只能得到恒假；分析时必须保留“未配置/已配置”这条运行时轴。
+ */
+export const RUNTIME_CONFIGURABLE_PERMISSION_MODULES = new Set([
+  'production_report_correction',
+]);
+
 /** store 成员名 → 读一个字符串。用于 `xxx === 'literal'` 这类比较。 */
 export interface StringMember {
   store: 'perm' | 'auth';
@@ -325,6 +333,7 @@ export type Tri = 'T' | 'F' | 'U';
 
 export type Expr =
   | { k: 'atom'; canon: string; run: (p: Principal) => boolean }
+  | { k: 'runtime-configured'; canon: string }
   | { k: 'const'; value: boolean }
   | { k: 'not'; a: Expr }
   | { k: 'and'; a: Expr; b: Expr }
@@ -336,6 +345,8 @@ export type Expr =
 export function canon(e: Expr): string {
   switch (e.k) {
     case 'atom':
+      return e.canon;
+    case 'runtime-configured':
       return e.canon;
     case 'const':
       return String(e.value);
@@ -361,6 +372,8 @@ export function evalExpr(e: Expr, p: Principal): Tri {
       } catch {
         return 'U';
       }
+    case 'runtime-configured':
+      return 'U';
     case 'const':
       return e.value ? 'T' : 'F';
     case 'unknown':
@@ -405,6 +418,8 @@ export function evalExpr(e: Expr, p: Principal): Tri {
 export function core(e: Expr): Expr | null {
   switch (e.k) {
     case 'atom':
+      return e;
+    case 'runtime-configured':
       return e;
     case 'const':
       return e;
@@ -988,6 +1003,12 @@ function boolMemberAtom(node: ts.Node, env: FileEnv): Expr | null {
     if (member.kind === 'method1' && n.arguments.length >= 1) {
       const arg = literalArg(n.arguments[0] as ts.Expression, env);
       if (arg === null) return null; // 动态模块名 —— 判不了，⛔ 不猜
+      if (RUNTIME_CONFIGURABLE_PERMISSION_MODULES.has(arg)) {
+        return {
+          k: 'runtime-configured',
+          canon: which + '.' + name + "('" + arg + "')",
+        };
+      }
       return {
         k: 'atom',
         canon: which + '.' + name + "('" + arg + "')",
@@ -1590,6 +1611,16 @@ export function judge(expr: Expr, principals: Principal[]): Judgement {
 
   if (principals.length === 0) {
     return { verdict: 'UNDECIDED', detail: '零主体可达 —— 页面级可达性问题, 归 routeReachability 那道闸', values };
+  }
+
+  let runtimeAxis = expr;
+  while (runtimeAxis.k === 'not') runtimeAxis = runtimeAxis.a;
+  if (runtimeAxis.k === 'runtime-configured') {
+    return {
+      verdict: 'EFFECTIVE',
+      detail: 'L1/L2 运行时配置可使同一可达主体取真或假: ' + runtimeAxis.canon,
+      values,
+    };
   }
 
   const raw = principals.map((p) => values[p.id] as Tri);

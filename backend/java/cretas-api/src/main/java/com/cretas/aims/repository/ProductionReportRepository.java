@@ -5,6 +5,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -18,6 +19,14 @@ import java.util.Optional;
 
 @Repository
 public interface ProductionReportRepository extends JpaRepository<ProductionReport, Long> {
+
+    @Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM ProductionReport r WHERE r.id = :id AND r.factoryId = :factoryId AND r.deletedAt IS NULL")
+    Optional<ProductionReport> findByIdAndFactoryIdForUpdate(@Param("id") Long id,
+                                                              @Param("factoryId") String factoryId);
+
+    Page<ProductionReport> findByFactoryIdAndSettledFalseAndStatusInAndDeletedAtIsNull(
+            String factoryId, java.util.Collection<ProductionReport.Status> statuses, Pageable pageable);
 
     /**
      * 幂等查重: 同一工厂 + 同一客户端请求号 的未删报工。

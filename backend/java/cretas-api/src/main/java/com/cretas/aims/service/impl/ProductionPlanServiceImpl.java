@@ -61,6 +61,7 @@ import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard;
+import com.cretas.aims.service.wip.WipLedgerEntries;
 import com.cretas.aims.utils.ExcelUtil;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -181,9 +182,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
+    /** Settlement SFI consumption must have an immutable OUT ledger row. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SemiFinishedInventoryTransactionRepository semiFinishedInventoryTransactionRepository;
+
     /** SP12 T3: 生产撤回审批流引擎. required=false 兼容无 WorkflowEngine 环境 (e.g. 单测). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowEngineService workflowEngine;
+
+    /** 日常报工修正：待审批期间必须在任何结单库存动作之前 fail closed。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -3179,6 +3188,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHintTarget("核对结单");
                 });
 
+        if (productionReportCorrectionService != null) {
+            productionReportCorrectionService.assertNoPendingForPlan(factoryId, planId);
+        }
+
         // 🔴🔒 生产仓预留释放 —— 必须在下面【任何一道】读 getCurrentQuantity() 的闸之前。
         //   报工提交时把 materialBatchRefs 的量记进 material_batches.reserved_quantity
         //   (WorkshopReportReservationService), 让「可用 = 在手 − 已提交报工引用量」成立。
@@ -3199,7 +3212,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
         ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
-                ? deriveConfirmedSettlementRequest(factoryId, planId, request)
+                ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
                 : request;
 
         validateSettlementRequest(plan, effectiveRequest);
@@ -3238,7 +3251,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         for (ProductionSettlementConsumption line : consumptionLines) {
             line.setSettlementId(settlement.getId());
         }
-        postConsumptionToInventory(factoryId, plan, consumptionLines);
+        // Persist first so each immutable OUT ledger row can point to the exact consumption row.
+        productionSettlementConsumptionRepository.saveAll(consumptionLines);
+        postConsumptionToInventory(factoryId, plan, consumptionLines, settledBy);
         // 🔴🔒 R2 (2026-07-04): 结单族 process-row 的 SFI/FG 投料<b>严格扣减</b> (防 phantom 库存腐蚀)。
         //   逐道录入把常驻半成品(SFI)/成品(FG)作投料记在 process_sheet_rows.upstreamSources, 但结单预填
         //   把 semiFinishedConsumptions 留空 (让文员"手工再加"), 且 FG 投料结单请求无对应字段 → 这些投料
@@ -3246,7 +3261,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   直接严格扣减 (缺失/不足即抛, 整事务回滚, 禁止降级)。成本侧由 R4 computeByPlan (含 SFI/FG 投料桶)
         //   在仓库确认实收创建 FG 时补入, 此处仅补扣减。仅结单族 (SAFETY_STOCK 走小结扣减, 内部守卫)。
         deductProcessSheetStockFeeds(factoryId, plan, effectiveRequest);
-        productionSettlementConsumptionRepository.saveAll(consumptionLines);
         productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), effectiveRequest.getLaborSegments()));
 
         plan.setStatus(ProductionPlanStatus.COMPLETED);
@@ -3312,7 +3326,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * lines are never trusted in confirmation-only mode.
      */
     private ProductionSettlementRequest deriveConfirmedSettlementRequest(
-            String factoryId, String planId, ProductionSettlementRequest confirmation) {
+            String factoryId, String planId, ProductionSettlementRequest confirmation,
+            boolean allowManualSemiFinishedConsumptions) {
         ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
         ProductionSettlementRequest derived = latest != null ? latest.getPrefill() : null;
         List<ProductionSettlementPrefillResponse.Issue> blockers = latest == null || latest.getAudit() == null
@@ -3340,6 +3355,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         derived.setMaterialVarianceNote(trimToNull(confirmation.getMaterialVarianceNote()));
         derived.setLaborDeferredReason(firstNonBlank(
                 derived.getLaborDeferredReason(), confirmation.getLaborDeferredReason()));
+        // Workflow facts remain server-authoritative, but external WIP consumption is
+        // intentionally a caller-entered exception: it is not present in process
+        // reports and must be carried into the derived request so the normal
+        // SEMI_FINISHED validation, inventory deduction, and OUT ledger path runs.
+        if (allowManualSemiFinishedConsumptions
+                && !isEmpty(confirmation.getSemiFinishedConsumptions())) {
+            derived.setSemiFinishedConsumptions(new ArrayList<>(confirmation.getSemiFinishedConsumptions()));
+        }
         return derived;
     }
 
@@ -3612,6 +3635,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional(readOnly = true)
     public ProductionSettlementPrefillResponse getSettlementPrefill(String factoryId, String planId) {
+        if (productionReportCorrectionService != null) {
+            productionReportCorrectionService.assertNoPendingForPlan(factoryId, planId);
+        }
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
 
@@ -5724,6 +5750,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return;
         }
         for (ProductionSettlementRequest.ConsumptionLine requestLine : requestLines) {
+            if (requestLine == null) {
+                throw new BusinessException(400, "领用明细不能为 null")
+                        .withHintTarget("实际领用");
+            }
+            SemiFinishedInventory lockedSemiFinished = null;
+            if ("SEMI_FINISHED".equals(sourceType)) {
+                if (requestLine.getSemiFinishedInventoryId() == null) {
+                    throw new BusinessException(400, "半成品领用必须选择半成品库存")
+                            .withHintTarget("半成品领用");
+                }
+                lockedSemiFinished = semiFinishedInventoryRepository
+                        .findByIdForUpdate(requestLine.getSemiFinishedInventoryId())
+                        .orElseThrow(() -> new BusinessException(404,
+                                "半成品库存不存在: " + requestLine.getSemiFinishedInventoryId())
+                                .withHintTarget("半成品领用"));
+                if (!factoryId.equals(lockedSemiFinished.getFactoryId())) {
+                    throw new BusinessException(403, "无权领用其他工厂的半成品库存")
+                            .withHintTarget("半成品领用");
+                }
+            }
             ProductionSettlementConsumption line = new ProductionSettlementConsumption();
             line.setFactoryId(factoryId);
             line.setProductionPlanId(plan.getId());
@@ -5739,7 +5785,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setUnit(trimToNull(requestLine.getUnit()));
             line.setWarehouseId(trimToNull(requestLine.getWarehouseId()));
             line.setNote(trimToNull(requestLine.getNote()));
-            line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine));
+            line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine,
+                    lockedSemiFinished));
+            if (lockedSemiFinished != null) {
+                // The request may carry a friendly/display batch or unit, but the
+                // immutable settlement ledger must identify the locked inventory row.
+                line.setBatchNumber(trimToNull(lockedSemiFinished.getIntermediateBatchNo()));
+                line.setUnit(trimToNull(lockedSemiFinished.getUnit()));
+            }
             if (isWorkflowPlan(plan)) {
                 line.setProductTypeId(null);
             }
@@ -5749,19 +5802,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private BigDecimal resolveAvailableBefore(String factoryId, ProductionPlan plan,
                                               String sourceType,
-                                              ProductionSettlementRequest.ConsumptionLine line) {
+                                              ProductionSettlementRequest.ConsumptionLine line,
+                                              SemiFinishedInventory lockedSemiFinished) {
         if ("SEMI_FINISHED".equals(sourceType)) {
-            if (line.getSemiFinishedInventoryId() == null) {
-                throw new BusinessException(400, "半成品领用必须选择半成品库存")
-                        .withHintTarget("半成品领用");
-            }
-            SemiFinishedInventory inventory = semiFinishedInventoryRepository.findByIdForUpdate(line.getSemiFinishedInventoryId())
-                    .orElseThrow(() -> new BusinessException(404, "半成品库存不存在: " + line.getSemiFinishedInventoryId())
-                            .withHintTarget("半成品领用"));
-            if (!factoryId.equals(inventory.getFactoryId())) {
-                throw new BusinessException(403, "无权领用其他工厂的半成品库存")
-                        .withHintTarget("半成品领用");
-            }
+            SemiFinishedInventory inventory = Objects.requireNonNull(lockedSemiFinished,
+                    "locked semi-finished inventory is required");
             BigDecimal available = zeroIfNull(inventory.getAvailableQuantity());
             ensureQuantityWithinAvailable("半成品库存 " + inventory.getIntermediateBatchNo(), line.getQuantity(), available, "半成品领用");
             return available;
@@ -6213,13 +6258,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private void postConsumptionToInventory(String factoryId,
                                             ProductionPlan plan,
-                                            List<ProductionSettlementConsumption> lines) {
+                                            List<ProductionSettlementConsumption> lines,
+                                            Long operatorId) {
         if (isEmpty(lines)) {
             return;
         }
         for (ProductionSettlementConsumption line : lines) {
             if ("SEMI_FINISHED".equals(line.getSourceType())) {
-                postSemiFinishedConsumption(factoryId, line);
+                postSemiFinishedConsumption(factoryId, line, operatorId);
             } else {
                 postMaterialBatchConsumption(factoryId, plan, line);
             }
@@ -6251,7 +6297,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");
     }
 
-    private void postSemiFinishedConsumption(String factoryId, ProductionSettlementConsumption line) {
+    private void postSemiFinishedConsumption(String factoryId, ProductionSettlementConsumption line,
+                                              Long operatorId) {
+        if (semiFinishedInventoryTransactionRepository == null
+                || line.getId() == null || line.getSettlementId() == null) {
+            throw new BusinessException(409, "半成品结单消耗缺少可追溯 OUT 流水凭据")
+                    .withCode("WIP_LEDGER_UNAVAILABLE")
+                    .withHintTarget("半成品领用");
+        }
         SemiFinishedInventory inventory = semiFinishedInventoryRepository.findByIdForUpdate(line.getSemiFinishedInventoryId())
                 .orElseThrow(() -> new BusinessException(404, "半成品库存不存在: " + line.getSemiFinishedInventoryId())
                         .withHintTarget("半成品领用"));
@@ -6264,12 +6317,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         BigDecimal qty = zeroIfNull(line.getQuantity());
         BigDecimal remaining = available.subtract(qty);
+        SemiFinishedInventoryTransaction out = WipLedgerEntries.settlementConsumptionRow(
+                factoryId, inventory, qty, remaining, line.getSettlementId(), line.getId(), operatorId);
+        if (out == null) {
+            throw new BusinessException(409, "半成品结单消耗无法生成 OUT 流水")
+                    .withCode("WIP_LEDGER_UNAVAILABLE")
+                    .withHintTarget("半成品领用");
+        }
         inventory.setConsumedQuantity(zeroIfNull(inventory.getConsumedQuantity()).add(qty));
         inventory.setAvailableQuantity(remaining);
         inventory.setStatus(remaining.compareTo(BigDecimal.ZERO) <= 0
                 ? SemiFinishedInventory.Status.DEPLETED
                 : SemiFinishedInventory.Status.AVAILABLE);
         semiFinishedInventoryRepository.save(inventory);
+        semiFinishedInventoryTransactionRepository.save(out);
     }
 
     /**

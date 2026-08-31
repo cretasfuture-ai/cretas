@@ -752,10 +752,30 @@ async function openDetail(row: TableRow) {
   detailData.value = row;
   detailDialogVisible.value = true;
   diffPreview.value = [];
-  // Load diff-preview if approved/applied
-  if (row.status === 'APPROVED' || row.status === 'APPLIED') {
-    await loadDiffPreview(String(row.id));
+  detailLoading.value = true;
+  try {
+    const res = await get(`/${factoryId.value}/stocktakes/${row.id}`);
+    if (res.success && res.data) detailData.value = res.data;
+    const status = String(detailData.value?.status || row.status || '');
+    if (status === 'APPROVED' || status === 'APPLIED') {
+      await loadDiffPreview(String(row.id));
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '盘点详情加载失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    detailLoading.value = false;
   }
+}
+
+function correctionValue(value: unknown): string {
+  return value === null || value === undefined || value === '' ? '—' : String(value);
+}
+
+function correctionStatusLabel(status: unknown): string {
+  if (status === 'APPROVED_APPLIED') return '已审批并生效';
+  if (status === 'PENDING_APPROVAL') return '待审批';
+  if (status === 'REJECTED') return '已驳回';
+  return String(status || '—');
 }
 
 async function loadDiffPreview(stocktakeId: string) {
@@ -1731,8 +1751,57 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- ──────────────── Detail Dialog ──────────────── -->
-    <el-dialog v-model="detailDialogVisible" :title="`盘点详情 — ${detailData?.stocktakeNo || ''}`" width="700px">
+    <el-dialog v-model="detailDialogVisible" :title="`盘点详情 — ${detailData?.stocktakeNo || ''}`" width="820px">
       <template v-if="detailData">
+        <div v-loading="detailLoading">
+        <el-alert
+          v-if="detailData.reportCorrectionWarningMessage"
+          class="report-correction-warning"
+          type="warning"
+          show-icon
+          :closable="false"
+          :title="detailData.reportCorrectionWarningMessage"
+          description="这里只提醒盘点人员重点核对实物，不会自动生成盘盈盘亏；请按现场实盘结果正常提交。"
+        />
+
+        <el-collapse
+          v-if="Array.isArray(detailData.reportCorrectionWarnings) && detailData.reportCorrectionWarnings.length > 0"
+          class="report-correction-audit"
+        >
+          <el-collapse-item
+            v-for="correction in detailData.reportCorrectionWarnings"
+            :key="correction.id"
+            :title="`${correction.processCategory || '工序'} · ${correctionStatusLabel(correction.status)}`"
+          >
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="计划 / 批次" :span="2">
+                {{ correction.productionPlanId || '—' }} / {{ correction.productionBatchId || '—' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="实际产出">
+                {{ correctionValue(correction.originalOutputQuantity) }} → {{ correctionValue(correction.proposedOutputQuantity) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="良品 / 不良品">
+                {{ correctionValue(correction.originalGoodQuantity) }} / {{ correctionValue(correction.originalDefectQuantity) }}
+                →
+                {{ correctionValue(correction.proposedGoodQuantity) }} / {{ correctionValue(correction.proposedDefectQuantity) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="人员 / 工时">
+                {{ correctionValue(correction.originalTotalWorkers) }}人 / {{ correctionValue(correction.originalTotalWorkMinutes) }}分钟
+                →
+                {{ correctionValue(correction.proposedTotalWorkers) }}人 / {{ correctionValue(correction.proposedTotalWorkMinutes) }}分钟
+              </el-descriptions-item>
+              <el-descriptions-item label="审批状态">
+                <el-tag type="warning" size="small">{{ correctionStatusLabel(correction.status) }}</el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="修正原因" :span="2">{{ correction.reason || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="修正人 / 时间" :span="2">
+                {{ correction.submittedByName || `用户 ${correction.submittedBy}` }} / {{ formatBusinessDateTime(correction.submittedAt) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="审批实例" :span="2">{{ correction.workflowInstanceId || '—' }}</el-descriptions-item>
+            </el-descriptions>
+          </el-collapse-item>
+        </el-collapse>
+
         <el-descriptions :column="2" border>
           <el-descriptions-item label="盘点单号">{{ detailData.stocktakeNo }}</el-descriptions-item>
           <el-descriptions-item label="状态">
@@ -1805,6 +1874,7 @@ onMounted(async () => {
             description="无实际差异，无库存影响"
             :image-size="56"
           />
+        </div>
         </div>
       </template>
       <template #footer>
@@ -2146,5 +2216,11 @@ onMounted(async () => {
 .bulk-confirm-trigger:focus-visible {
   outline: 2px solid var(--el-color-primary);
   outline-offset: 2px;
+}
+.report-correction-warning {
+  margin-bottom: 12px;
+}
+.report-correction-audit {
+  margin-bottom: 16px;
 }
 </style>

@@ -51,9 +51,18 @@ export function formatPackagingNaturalHint(
   standardQuantity: number | null | undefined,
   unit: string | null | undefined,
   baseUnit: string,
+  naturalQuantity?: number | null,
+  packageUnit?: string | null,
+  conversionFactor?: number | null,
 ): string | undefined {
   if (standardQuantity == null || !Number.isFinite(standardQuantity) || standardQuantity <= 0) return undefined;
   if (!unit) return undefined;
+  if (naturalQuantity != null && Number.isFinite(naturalQuantity) && naturalQuantity > 0 && packageUnit) {
+    const factorHint = conversionFactor != null && Number.isFinite(conversionFactor) && conversionFactor > 0
+      ? ` (= ${formatFriendlyNumber(conversionFactor)} ${baseUnit})`
+      : '';
+    return `= ${formatFriendlyNumber(naturalQuantity)} ${unit} / 1 ${packageUnit}${factorHint}`;
+  }
   const reciprocal = 1 / standardQuantity;
   return `= 1 ${unit} / ${formatFriendlyNumber(reciprocal)} ${baseUnit}`;
 }

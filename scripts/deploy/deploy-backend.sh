@@ -157,7 +157,7 @@ R2_PUBLIC_URL="${R2_PUBLIC_URL:-https://pub-4913880cb5fa48a0abb5cdf9260f9a61.r2.
 # ==================== 参数解析 ====================
 MODE="jar"
 ARG=""
-DEPLOY_ENV="prod"        # prod | test | all
+DEPLOY_ENV="prod"        # prod only; co-located test/all retired 2026-07-13
 DEPLOY_MODE="bluegreen"  # bluegreen (默认, 生产零中断) | inplace (传统, 紧急回退)
 
 # Parse all arguments
@@ -183,8 +183,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --env)
             DEPLOY_ENV="$2"
-            if [[ ! "$DEPLOY_ENV" =~ ^(prod|test|all)$ ]]; then
-                echo "错误: --env 参数必须是 prod, test, 或 all"
+            if [[ "$DEPLOY_ENV" != "prod" ]]; then
+                echo "错误: 同机 test/all 环境已于 2026-07-13 下线; --env 仅支持 prod"
                 exit 1
             fi
             shift 2
@@ -202,7 +202,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "选项:"
             echo "  --jar [version]   JAR 部署模式 (默认)"
-            echo "  --env ENV         部署环境: prod (默认), test, all"
+            echo "  --env ENV         部署环境: prod (默认且唯一支持)"
             echo "  --mode MODE       部署策略: bluegreen (默认, 零中断) 或 inplace (传统, 60s 中断)"
             echo "  --dry-run         仅构建和验证，不上传/部署"
             echo "  --rollback        回滚到上一个备份版本"
@@ -210,14 +210,13 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "环境说明:"
             echo "  prod   生产环境 (端口 10010 blue / 10020 green, 数据库 cretas_prod_db)"
-            echo "  test   测试环境 (端口 10011+8084, 数据库 cretas_db)"
-            echo "  all    部署 prod (Blue-Green) + 重启 test"
+            echo "  test/all 已于 2026-07-13 从 47 服务器下线; 后续测试环境使用独立服务器"
             echo ""
             echo "部署策略说明:"
             echo "  bluegreen  启动 idle 实例 → 等健康 → nginx upstream 切换 → 停旧 active (零中断)"
             echo "             需要 139 Nginx upstream cretas_backend 已配置, 47 有 cretas-backend-green.service"
             echo "  inplace    替换 jar + systemctl restart cretas-backend (60s 中断, 紧急回退用)"
-            echo "  注意: test 环境始终 in-place (test 没有 Green 实例)"
+            echo "  注意: 当前入口不再接受 --env test/all"
             echo ""
             echo "上传策略 (Steve 2026-05-28 SSH 直传, 全部 SSH-based 谁快谁赢):"
             echo "  [主通道] rsync + rsync+compress (~/.bashrc 去 SKIP_RSYNC=1 启用)"
@@ -2149,22 +2148,10 @@ deploy_jar() {
         fi
     fi
 
-    # 防御性检查: 部署 prod 时也 ping test (反之亦然), 发现另一环境挂了就警告
+    # 同机 test/10011 已于 2026-07-13 正式下线。prod 发布不得再探测它，
+    # 更不能输出 restart.sh test / --env all 这类已失效的恢复指令。
     if [[ "$DEPLOY_ENV" == "prod" ]]; then
-        # SSH 到 47 走 loopback (10011 SG 仅放行 139/32, 本地 curl 永远 timeout → 旧版 exit 28).
-        # `|| echo "000"` 双重保险: ssh/curl 任一失败都不让 set -e 杀整个 deploy.
-        OTHER_STATUS=$(ssh -o ConnectTimeout=5 $SERVER \
-            "curl -s -o /dev/null --max-time 5 -w '%{http_code}' http://127.0.0.1:10011/api/mobile/health" \
-            2>/dev/null || echo "000")
-        if [ "$OTHER_STATUS" != "200" ]; then
-            echo ""
-            echo "   ⚠️  [防御检查] test 10011 异常 (HTTP $OTHER_STATUS)"
-            echo "      test 环境可能宕机或长期未同步"
-            echo "      恢复: ssh $SERVER 'cd $REMOTE_JAR_DIR && bash restart.sh test'"
-            echo "      或下次用: ./scripts/deploy/deploy-backend.sh --env all"
-        else
-            echo "   ✓ [防御检查] test 10011 同步运行"
-        fi
+        echo "   ℹ️  [环境边界] test/10011 已下线，跳过跨环境健康检查"
     elif [[ "$DEPLOY_ENV" == "test" ]]; then
         # 通过 nginx upstream 检查 prod (兼容 Blue-Green 和 in-place)
         # `|| echo "000"` 防 set -e: ssh GATEWAY 失败 → 让 if-check 走异常分支, 不杀 deploy.

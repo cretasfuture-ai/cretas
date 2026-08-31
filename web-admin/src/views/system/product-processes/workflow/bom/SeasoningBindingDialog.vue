@@ -356,8 +356,8 @@ async function refreshSelectedMaterialPrice() {
           type="warning"
           :closable="false"
           show-icon
-          title="本工序缺少可用的产出基准，当前不能保存"
-          description="请回到 Workflow，为该工序绑定明确的半成品或成品产出后重新保存修订。"
+          title="本工序缺少可换算为 kg 的投入基准，当前不能保存"
+          description="请回到 Workflow，为该工序的投入端口绑定 kg 或 g 的原料/半成品后重新保存修订。"
         />
       </el-form-item>
       <el-form-item label="按锅序计算"><el-switch v-model="form.potEnabled" /></el-form-item>

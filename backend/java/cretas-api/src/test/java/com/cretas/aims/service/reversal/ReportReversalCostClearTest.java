@@ -7,6 +7,9 @@ import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
+import com.cretas.aims.repository.ProductionSettlementRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -35,6 +38,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 /**
  * 断点2 (2026-06-11, Fable E2E): executeReversal 清 SalesOrderItem.costUnitPrice 测试.
@@ -70,6 +75,9 @@ class ReportReversalCostClearTest {
     // 断点2 新增 field-inject deps
     @Mock private ProductionPlanRepository productionPlanRepository;
     @Mock private SalesOrderItemRepository salesOrderItemRepository;
+    @Mock private MaterialBatchRepository materialBatchRepository;
+    @Mock private ProductionSettlementRepository productionSettlementRepository;
+    @Mock private ProductionSettlementConsumptionRepository productionSettlementConsumptionRepository;
 
     private List<SalesOrderItem> savedItems;
 
@@ -79,6 +87,10 @@ class ReportReversalCostClearTest {
         // 字段注入的断点2 新 deps → 手动注入.
         ReflectionTestUtils.setField(service, "productionPlanRepository", productionPlanRepository);
         ReflectionTestUtils.setField(service, "salesOrderItemRepository", salesOrderItemRepository);
+        ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
+                productionSettlementConsumptionRepository);
 
         savedItems = new ArrayList<>();
         when(salesOrderItemRepository.save(any(SalesOrderItem.class)))
@@ -96,6 +108,7 @@ class ReportReversalCostClearTest {
                 .build();
         log.setId(LOG_ID);
         when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(log));
+        when(reversalLogRepo.findByIdAndFactoryIdForUpdate(LOG_ID, FACTORY_ID)).thenReturn(Optional.of(log));
         when(reversalLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // 无报工 / 无 SIT / 无 FGB → 主流程简单走通 (本测试只关注 costUnitPrice 清理步)
@@ -137,13 +150,15 @@ class ReportReversalCostClearTest {
     @Test
     @DisplayName("撤回多SO合并 → 主+次级SO行 costUnitPrice 全部清 null (自愈链复活)")
     void executeReversal_clearsAllMergedSoCostUnitPrice() {
-        when(productionPlanRepository.findById(PLAN_ID))
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan(SO_PRIMARY, Arrays.asList(SO_PRIMARY, SO_EXTRA))));
 
         SalesOrderItem primaryItem = costedItem(SO_PRIMARY, PRODUCT_TYPE_ID, "12.50");
         SalesOrderItem extraItem = costedItem(SO_EXTRA, PRODUCT_TYPE_ID, "12.50");
-        when(salesOrderItemRepository.findBySalesOrderId(SO_PRIMARY)).thenReturn(List.of(primaryItem));
-        when(salesOrderItemRepository.findBySalesOrderId(SO_EXTRA)).thenReturn(List.of(extraItem));
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO_PRIMARY, FACTORY_ID))
+                .thenReturn(List.of(primaryItem));
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO_EXTRA, FACTORY_ID))
+                .thenReturn(List.of(extraItem));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
 
@@ -159,12 +174,12 @@ class ReportReversalCostClearTest {
     @Test
     @DisplayName("只清本批次productType, 同SO其他产品成本不动")
     void executeReversal_productScoped_doesNotTouchOtherProduct() {
-        when(productionPlanRepository.findById(PLAN_ID))
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan(SO_PRIMARY, Collections.singletonList(SO_PRIMARY))));
 
         SalesOrderItem targetProduct = costedItem(SO_PRIMARY, PRODUCT_TYPE_ID, "12.50");
         SalesOrderItem otherProduct = costedItem(SO_PRIMARY, "PT-OTHER", "8.80");
-        when(salesOrderItemRepository.findBySalesOrderId(SO_PRIMARY))
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO_PRIMARY, FACTORY_ID))
                 .thenReturn(Arrays.asList(targetProduct, otherProduct));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
@@ -181,11 +196,12 @@ class ReportReversalCostClearTest {
     @Test
     @DisplayName("遗留计划(sourceOrderIds=null) → 退回主sourceOrderId清成本")
     void executeReversal_legacyPlan_fallsBackToPrimary() {
-        when(productionPlanRepository.findById(PLAN_ID))
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan(SO_PRIMARY, null)));
 
         SalesOrderItem primaryItem = costedItem(SO_PRIMARY, PRODUCT_TYPE_ID, "12.50");
-        when(salesOrderItemRepository.findBySalesOrderId(SO_PRIMARY)).thenReturn(List.of(primaryItem));
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO_PRIMARY, FACTORY_ID))
+                .thenReturn(List.of(primaryItem));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
 
@@ -199,14 +215,33 @@ class ReportReversalCostClearTest {
     @Test
     @DisplayName("已是null的行不重复save")
     void executeReversal_skipsAlreadyNullItems() {
-        when(productionPlanRepository.findById(PLAN_ID))
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
                 .thenReturn(Optional.of(plan(SO_PRIMARY, Collections.singletonList(SO_PRIMARY))));
 
         SalesOrderItem alreadyNull = costedItem(SO_PRIMARY, PRODUCT_TYPE_ID, null);
-        when(salesOrderItemRepository.findBySalesOrderId(SO_PRIMARY)).thenReturn(List.of(alreadyNull));
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO_PRIMARY, FACTORY_ID))
+                .thenReturn(List.of(alreadyNull));
 
         service.executeReversal(LOG_ID, FACTORY_ID);
 
         assertThat(savedItems).isEmpty();
+    }
+
+    @Test
+    @DisplayName("跨厂 SalesOrder 行不会被清成本")
+    void executeReversal_crossFactoryOrderRowsAreNeverMutated() {
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan(SO_PRIMARY, Collections.singletonList(SO_PRIMARY))));
+        SalesOrderItem foreignItem = costedItem(SO_PRIMARY, PRODUCT_TYPE_ID, "12.50");
+        when(salesOrderItemRepository.findBySalesOrderId(SO_PRIMARY))
+                .thenReturn(List.of(foreignItem));
+        // The real JOIN SalesOrder query excludes a same-number order owned by another factory.
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO_PRIMARY, FACTORY_ID))
+                .thenReturn(Collections.emptyList());
+
+        service.executeReversal(LOG_ID, FACTORY_ID);
+
+        assertThat(foreignItem.getCostUnitPrice()).isEqualByComparingTo(new BigDecimal("12.50"));
+        verify(salesOrderItemRepository, never()).save(any(SalesOrderItem.class));
     }
 }

@@ -77,7 +77,10 @@ required = {
     "proposal_classifier": "proposal-classifier.onnx",
     "label_fallback": "label-fallback.onnx",
 }
-optional = {"label_supplement": "label-supplement.onnx"}
+optional = {
+    "label_supplement": "label-supplement.onnx",
+    "tray_full_frame_supplement": "tray-full-frame-supplement.onnx",
+}
 models = manifest.get("models")
 if not isinstance(models, dict) or not set(required) <= set(models) or not set(models) <= set(required) | set(optional):
     raise SystemExit("model binding set mismatch")
@@ -96,6 +99,21 @@ if has_label_supplement:
         raise SystemExit("invalid labelSupplementConfidence")
 elif "labelSupplementClasses" in manifest or "labelSupplementConfidence" in manifest:
     raise SystemExit("orphan label supplement configuration")
+tray_binding = "tray_full_frame_supplement" in models
+tray_fields = (
+    manifest.get("trayFullFrameSupplementFormat"),
+    manifest.get("trayFullFrameSupplementMode"),
+    manifest.get("trayFullFrameSupplementConfidence"),
+)
+if tray_binding or any(value is not None for value in tray_fields):
+    model_format, mode, confidence = tray_fields
+    if (
+        model_format != "ultralytics_nms"
+        or mode != "full_frame_work_area_v1"
+        or type(confidence) not in (int, float)
+        or not 0.05 <= float(confidence) <= 1.0
+    ):
+        raise SystemExit("invalid tray supplement runtime contract")
 for key, filename in {**required, **optional}.items():
     if key not in models:
         continue
@@ -193,7 +211,10 @@ required = {
     "proposal_classifier": "proposal-classifier.onnx",
     "label_fallback": "label-fallback.onnx",
 }
-optional = {"label_supplement": "label-supplement.onnx"}
+optional = {
+    "label_supplement": "label-supplement.onnx",
+    "tray_full_frame_supplement": "tray-full-frame-supplement.onnx",
+}
 models = manifest.get("models")
 if not isinstance(models, dict) or not set(required) <= set(models) or not set(models) <= set(required) | set(optional):
     raise SystemExit("remote model binding set mismatch")
@@ -212,6 +233,21 @@ if has_label_supplement:
         raise SystemExit("remote invalid labelSupplementConfidence")
 elif "labelSupplementClasses" in manifest or "labelSupplementConfidence" in manifest:
     raise SystemExit("remote orphan label supplement configuration")
+tray_binding = "tray_full_frame_supplement" in models
+tray_fields = (
+    manifest.get("trayFullFrameSupplementFormat"),
+    manifest.get("trayFullFrameSupplementMode"),
+    manifest.get("trayFullFrameSupplementConfidence"),
+)
+if tray_binding or any(value is not None for value in tray_fields):
+    model_format, mode, confidence = tray_fields
+    if (
+        model_format != "ultralytics_nms"
+        or mode != "full_frame_work_area_v1"
+        or type(confidence) not in (int, float)
+        or not 0.05 <= float(confidence) <= 1.0
+    ):
+        raise SystemExit("remote invalid tray supplement runtime contract")
 for key, filename in {**required, **optional}.items():
     if key not in models:
         continue
