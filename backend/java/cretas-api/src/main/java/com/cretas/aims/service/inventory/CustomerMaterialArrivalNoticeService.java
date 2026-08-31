@@ -6,7 +6,6 @@ import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
-import com.cretas.aims.entity.material.MaterialMainCategory;
 import com.cretas.aims.entity.enums.CustomerMaterialArrivalStatus;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -195,7 +194,7 @@ public class CustomerMaterialArrivalNoticeService {
                         .withCode("CUSTOMER_MATERIAL_ARRIVAL_MATERIAL_INVALID")
                         .withHintTarget("materialTypeId"));
         warehouseInventoryGuardService.assertCanReceiveCustomerSupplied(
-                request.getWarehouseId(), factoryId, MaterialMainCategory.require(material.getCategory()));
+                request.getWarehouseId(), factoryId, material.getMainCategory());
         warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(request.getWarehouseId(), factoryId)
                 .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
                 .orElseThrow(() -> new BusinessException(400, "实际入库仓库不存在、已停用或不属于当前工厂")

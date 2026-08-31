@@ -44,6 +44,10 @@ public class RawMaterialTypeDTO {
     private String name;
     private String category;
 
+    /** Authoritative three-value material family: 原料 / 辅料 / 包材. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private String mainCategory;
+
     /**
      * 是否副产：生产产出物而非采购物。与 category **正交** —— 副产仍保留其材质分类，
      * 因此能被别的 workflow 当投入投料。null 视为 false（不猜）。

@@ -454,7 +454,7 @@ function targetWarehouseLabel(row: CustomerSuppliedMaterialRequirement): string 
 
 function customerMaterialCategory(row: CustomerSuppliedMaterialRequirement): string {
   const option = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === String(row.materialTypeId));
-  return customerMaterialCategoryLabel(row.category || option?.category || option?.mainCategory);
+  return customerMaterialCategoryLabel(row.mainCategory || option?.mainCategory);
 }
 
 async function loadSuppliedMaterialOptions() {
@@ -463,7 +463,10 @@ async function loadSuppliedMaterialOptions() {
     const res = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
     const data = res?.data;
     suppliedMaterialOptions.value = Array.isArray(data) ? data : Array.isArray(data?.content) ? data.content : [];
-  } catch { suppliedMaterialOptions.value = []; }
+  } catch {
+    suppliedMaterialOptions.value = [];
+    ElMessage.error('客供物料分类加载失败，请刷新后重试');
+  }
 }
 
 const displayOrderMoney = computed(() => salesOrderDisplayMoney(

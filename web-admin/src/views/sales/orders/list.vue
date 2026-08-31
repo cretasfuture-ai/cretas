@@ -637,6 +637,7 @@ async function loadSuppliedMaterialOptions() {
         : [];
   } catch {
     suppliedMaterialOptions.value = [];
+    ElMessage.error('客供物料分类加载失败，请刷新后重试');
   }
 }
 
@@ -666,7 +667,7 @@ function suppliedMaterialCategory(row: CustomerSuppliedMaterialRequirement | Tab
   const materialTypeId = 'materialTypeId' in row ? row.materialTypeId : row.id;
   const option = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === String(materialTypeId));
   const mainCategory = 'mainCategory' in row ? row.mainCategory : undefined;
-  return customerMaterialCategoryLabel(row.category || mainCategory || option?.category || option?.mainCategory);
+  return customerMaterialCategoryLabel(mainCategory || option?.mainCategory);
 }
 
 function onProcessingModeChange() {
@@ -706,15 +707,16 @@ function suppliedMaterialsPayload(): CustomerSuppliedMaterialRequirement[] {
     ? form.value.suppliedMaterials.map((row) => {
         const { category: _category, ...payload } = row;
         return {
-        ...payload,
-        // 🔴 2026-08-18: 与订单明细同一条判据 —— row.unit 是【前端内部比较键】
-        // (onSuppliedMaterialSelect / handleEdit 用 canonicalUnitCodeKeepingCount 存进去的,
-        // 物料字典里的「盒」在这里是 `box`)。请求体必须带用户看到的那个字。
-        unit: storageUnitCode(row.unit),
-        expectedArrivalAt: row.expectedArrivalAt.length === 10
-          ? `${row.expectedArrivalAt}T00:00:00`
-          : row.expectedArrivalAt.slice(0, 19),
-      }; })
+          ...payload,
+          // 🔴 2026-08-18: 与订单明细同一条判据 —— row.unit 是【前端内部比较键】
+          // (onSuppliedMaterialSelect / handleEdit 用 canonicalUnitCodeKeepingCount 存进去的,
+          // 物料字典里的「盒」在这里是 `box`)。请求体必须带用户看到的那个字。
+          unit: storageUnitCode(row.unit),
+          expectedArrivalAt: row.expectedArrivalAt.length === 10
+            ? `${row.expectedArrivalAt}T00:00:00`
+            : row.expectedArrivalAt.slice(0, 19),
+        };
+      })
     : [];
 }
 

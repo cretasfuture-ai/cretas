@@ -1,5 +1,3 @@
-import { bigCategoryOf } from '@/utils/materialCategory';
-
 export type SalesProcessingMode = 'STANDARD_SALE' | 'TOLL_PROCESSING';
 export type MaterialSupplyMode = 'CUSTOMER_SUPPLIED' | 'FACTORY_SUPPLIED';
 export type CustomerStockFulfillmentMode = 'ORDER_DRIVEN' | 'PRESTOCKED';
@@ -25,21 +23,19 @@ export interface CustomerSuppliedMaterialRequirement {
   status?: string;
   /** Optional read-only category supplied by detail APIs; never sent in create/update payloads. */
   category?: string;
+  /** Authoritative read-only three-value family from RawMaterialType.mainCategory. */
+  mainCategory?: string;
 }
 
 export type CustomerMaterialCategory = 'RAW' | 'AUXILIARY' | 'PACKAGING';
 
-/** Map existing material-master category values to the warehouse's three-category contract. */
-export function customerMaterialCategoryOf(category: unknown): CustomerMaterialCategory | null {
-  const raw = String(category ?? '').trim();
+/** Map the authoritative material-master mainCategory to the warehouse's three-category contract. */
+export function customerMaterialCategoryOf(mainCategory: unknown): CustomerMaterialCategory | null {
+  const raw = String(mainCategory ?? '').trim();
   const code = raw.toUpperCase();
-  if (code === 'RAW' || code === 'RAW_MATERIAL' || code === '主材' || code === '原料') return 'RAW';
-  if (code === 'AUXILIARY' || code === 'AUX' || code === '辅材' || code === '辅料' || code === '添加剂' || code === '调料' || code === '调味料' || code === '调味品') return 'AUXILIARY';
-  if (code === 'PACKAGING' || code === '包装' || code === '包材') return 'PACKAGING';
-  const family = bigCategoryOf(raw);
-  if (family === '原料') return 'RAW';
-  if (family === '辅料' || family === '调料') return 'AUXILIARY';
-  if (family === '包材') return 'PACKAGING';
+  if (code === 'RAW' || raw === '原料') return 'RAW';
+  if (code === 'AUXILIARY' || raw === '辅料') return 'AUXILIARY';
+  if (code === 'PACKAGING' || raw === '包材') return 'PACKAGING';
   return null;
 }
 

@@ -103,14 +103,20 @@ describe('sales order supply contract', () => {
   });
 
   it('maps all three material-master categories for display without changing the payload contract', () => {
-    expect(customerMaterialCategoryOf('主材')).toBe('RAW');
-    expect(customerMaterialCategoryOf('调味料')).toBe('AUXILIARY');
+    expect(customerMaterialCategoryOf('原料')).toBe('RAW');
+    expect(customerMaterialCategoryOf('辅料')).toBe('AUXILIARY');
     expect(customerMaterialCategoryOf('PACKAGING')).toBe('PACKAGING');
+    expect(customerMaterialCategoryOf('包装')).toBeNull();
     expect(customerMaterialCategoryLabel('unclassified')).toBe('未知分类');
     expect(newSource).toContain('suppliedMaterialCategory(material)');
     expect(listSource).toContain('suppliedMaterialCategory(material)');
     expect(detailSource).toContain('customerMaterialCategory(row)');
     expect(listSource).toContain('const { category: _category, ...payload } = row');
+    expect(newSource).toContain('customerMaterialCategoryLabel(material.mainCategory)');
+    expect(listSource).toContain('customerMaterialCategoryLabel(mainCategory || option?.mainCategory)');
+    expect(detailSource).toContain('customerMaterialCategoryLabel(row.mainCategory || option?.mainCategory)');
+    expect(listSource).toContain("ElMessage.error('客供物料分类加载失败，请刷新后重试')");
+    expect(detailSource).toContain("ElMessage.error('客供物料分类加载失败，请刷新后重试')");
   });
 
   it('renders a real DOM focus target around the customer-material arrival picker', () => {

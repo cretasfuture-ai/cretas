@@ -7,7 +7,6 @@ import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
-import com.cretas.aims.entity.material.MaterialMainCategory;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -380,7 +379,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
                     .withHint("物料库存单位为 " + materialUnit);
         }
         warehouseInventoryGuardService.assertCanReceiveCustomerSupplied(
-                requirement.getTargetWarehouseId(), factoryId, MaterialMainCategory.require(material.getCategory()));
+                requirement.getTargetWarehouseId(), factoryId, material.getMainCategory());
         LocalDate expireDate = request.getExpireDate();
         if (expireDate == null && material.getShelfLifeDays() != null) {
             expireDate = receiptDate.plusDays(material.getShelfLifeDays());
@@ -503,7 +502,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
         }
 
         warehouseInventoryGuardService.assertCanReceiveCustomerSupplied(
-                request.getTargetWarehouseId(), order.getFactoryId(), MaterialMainCategory.require(material.getCategory()));
+                request.getTargetWarehouseId(), order.getFactoryId(), material.getMainCategory());
         FactoryWarehouse warehouse = factoryWarehouseRepository
                 .findByIdAndFactoryIdAndDeletedAtIsNull(
                         request.getTargetWarehouseId(), order.getFactoryId())
