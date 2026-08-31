@@ -29,18 +29,39 @@ export interface CustomerSuppliedMaterialRequirement {
 
 export type CustomerMaterialCategory = 'RAW' | 'AUXILIARY' | 'PACKAGING';
 
-/** Map the authoritative material-master mainCategory to the warehouse's three-category contract. */
-export function customerMaterialCategoryOf(mainCategory: unknown): CustomerMaterialCategory | null {
+const RAW_CATEGORY_ALIASES = new Set([
+  '原料', '主材', '蔬菜', '肉类', '水产', '米面', '干货', '禽类', '海鲜', '水产类',
+  '海水鱼', '淡水鱼', '虾类', '贝类', '水果', '粉类', '油类', 'RAW', 'RAW_MATERIAL',
+]);
+const AUXILIARY_CATEGORY_ALIASES = new Set([
+  '辅料', '调味料', '调料', '添加剂', '辅材', '调味品', 'AUXILIARY', 'SEASONING',
+]);
+const PACKAGING_CATEGORY_ALIASES = new Set(['包材', '包辅材', 'PACKAGING', 'PACKAGE']);
+
+function categoryFallbackOf(category: unknown): CustomerMaterialCategory | null {
+  const raw = String(category ?? '').trim();
+  const key = /[A-Za-z_]/.test(raw) ? raw.toUpperCase() : raw;
+  if (RAW_CATEGORY_ALIASES.has(key)) return 'RAW';
+  if (AUXILIARY_CATEGORY_ALIASES.has(key)) return 'AUXILIARY';
+  if (PACKAGING_CATEGORY_ALIASES.has(key)) return 'PACKAGING';
+  return null;
+}
+
+/** Prefer authoritative mainCategory; fall back only for cached legacy DTOs that omit it. */
+export function customerMaterialCategoryOf(
+  mainCategory: unknown,
+  legacyCategory?: unknown,
+): CustomerMaterialCategory | null {
   const raw = String(mainCategory ?? '').trim();
   const code = raw.toUpperCase();
   if (code === 'RAW' || raw === '原料') return 'RAW';
   if (code === 'AUXILIARY' || raw === '辅料') return 'AUXILIARY';
   if (code === 'PACKAGING' || raw === '包材') return 'PACKAGING';
-  return null;
+  return categoryFallbackOf(legacyCategory);
 }
 
-export function customerMaterialCategoryLabel(category: unknown): string {
-  const mapped = customerMaterialCategoryOf(category);
+export function customerMaterialCategoryLabel(mainCategory: unknown, legacyCategory?: unknown): string {
+  const mapped = customerMaterialCategoryOf(mainCategory, legacyCategory);
   return mapped === 'RAW' ? '原料' : mapped === 'AUXILIARY' ? '辅料' : mapped === 'PACKAGING' ? '包材' : '未知分类';
 }
 
