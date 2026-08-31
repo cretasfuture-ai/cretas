@@ -38,6 +38,17 @@ class RestaurantDepartmentModuleAllowlistTest {
     }
 
     @Test
+    @DisplayName("报工修正专用 module 可由 L1/L2 权限矩阵配置")
+    void productionReportCorrectionModuleIsConfigurableAtBothLayers() {
+        assertThatCode(() -> FactoryRoleModuleOverrideController
+                .assertModuleAllowed("production_report_correction"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> com.cretas.aims.controller.platform.PlatformRolePermissionController
+                .assertModuleAllowed("production_report_correction"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     @DisplayName("拼错的 module 名仍被拒 —— 白名单不是形同虚设")
     void typoStillRejected() {
         assertThatThrownBy(() -> FactoryRoleModuleOverrideController.assertModuleAllowed("restaurantops"))

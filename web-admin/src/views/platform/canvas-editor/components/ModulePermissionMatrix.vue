@@ -102,7 +102,7 @@ const props = defineProps<{ factoryId: string }>();
 const modules = [
   'dashboard', 'production', 'warehouse', 'quality', 'procurement', 'sales',
   'hr', 'equipment', 'finance', 'system', 'analytics', 'scheduling',
-  'work_report', 'inventory', 'report', 'rd', 'restaurant',
+  'work_report', 'inventory', 'report', 'rd', 'restaurant', 'production_report_correction',
 ];
 
 const loading = ref(false);

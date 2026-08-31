@@ -86,6 +86,48 @@ describe('attachmentApi', () => {
     });
   });
 
+  describe('uploadAndRegister', () => {
+    it('registers the SHA-256 and byte size of the uploaded blob', async () => {
+      const bytes = Uint8Array.from([10, 20, 30, 40]);
+      const blob = {
+        size: bytes.byteLength,
+        arrayBuffer: jest.fn().mockResolvedValue(bytes.buffer),
+      };
+      const fetchMock = jest
+        .spyOn(global, 'fetch')
+        .mockResolvedValueOnce({ blob: async () => blob } as Response)
+        .mockResolvedValueOnce({ ok: true } as Response);
+      mock.onPost(`${BASE}/upload-url`).reply(200, {
+        success: true,
+        data: {
+          uploadUrl: 'https://oss.example/upload?sig=1',
+          fileUrl: 'https://oss.example/file.jpg',
+        },
+      });
+      mock.onPost(BASE).reply(200, {
+        success: true,
+        data: { id: 'att-hashed', fileName: 'file.jpg' },
+      });
+
+      await attachmentApi.uploadAndRegister(
+        { uri: 'file:///capture.jpg', name: 'file.jpg', type: 'image/jpeg', size: 999 },
+        'QUALITY_CHECK',
+        'qc-task-1',
+      );
+
+      const registerPayload = JSON.parse(mock.history.post[1]?.data ?? '{}');
+      expect(registerPayload.fileSize).toBe(4);
+      expect(registerPayload.fileHash).toBe(
+        '5f53c0ff07ba5d9a330e68c95dabb1a9bc49e29f9ed53f6fa7c6d99abb000050',
+      );
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'https://oss.example/upload?sig=1',
+        expect.objectContaining({ method: 'PUT', body: blob }),
+      );
+      fetchMock.mockRestore();
+    });
+  });
+
   describe('update', () => {
     it('updates attachment metadata', async () => {
       mock.onPut(`${BASE}/att-1`).reply(200, {

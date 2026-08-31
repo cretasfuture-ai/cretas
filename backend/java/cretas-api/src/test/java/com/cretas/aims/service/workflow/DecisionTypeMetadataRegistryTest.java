@@ -65,9 +65,26 @@ class DecisionTypeMetadataRegistryTest {
             assertNotNull(m.getDescription(), dt + " description null");
             assertNotNull(m.getCategory(), dt + " category null");
             assertNotNull(m.getDefaultApproverRoles(), dt + " approverRoles null");
-            assertFalse(m.getDefaultApproverRoles().isEmpty(),
-                    dt + " approverRoles empty — 至少要 1 个默认角色");
+            if (dt == DecisionType.PRODUCTION_REPORT_CORRECTION_APPROVAL) {
+                assertTrue(m.getDefaultApproverRoles().isEmpty(),
+                        "报工修正的审批人必须完全由 OA 工作流配置，不得在代码里写死角色");
+            } else {
+                assertFalse(m.getDefaultApproverRoles().isEmpty(),
+                        dt + " approverRoles empty — 至少要 1 个默认角色");
+            }
         }
+    }
+
+    @Test
+    @DisplayName("报工修正审批已接入且不预设任何审批角色")
+    void productionReportCorrectionApprovalMetadata() {
+        DecisionTypeMetadata m = registry.get(DecisionType.PRODUCTION_REPORT_CORRECTION_APPROVAL);
+        assertNotNull(m);
+        assertEquals("报工修正审批", m.getChineseName());
+        assertEquals(Category.PRODUCTION, m.getCategory());
+        assertEquals("PRODUCTION_REPORT_CORRECTION", m.getModuleCode());
+        assertTrue(m.isWired());
+        assertTrue(m.getDefaultApproverRoles().isEmpty());
     }
 
     @Test

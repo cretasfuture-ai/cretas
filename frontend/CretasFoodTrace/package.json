@@ -66,6 +66,7 @@
     "expo-updates": "~0.28.18",
     "i18next": "^25.7.3",
     "intl-pluralrules": "^2.0.1",
+    "js-sha256": "^1.0.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-i18next": "^16.5.1",
