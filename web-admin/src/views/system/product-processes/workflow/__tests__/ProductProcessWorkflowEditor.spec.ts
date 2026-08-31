@@ -1279,7 +1279,7 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   // 上面这个 describe 的 beforeEach(否则 apiMocks.get/getProductProcessWorkflow 等
   // 都是未实现的裸 vi.fn(), mountEditor() 会在 catalog/definition/activation 加载阶段
   // 直接炸掉)。
-  it('浮层 cell 可拖动且保留位置，但不产生 Workflow dirty，也不可选删', async () => {
+  it('融合附属卡片扯不开：不可独立拖动，位置恒等于 owner，且不可选删', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
     vm.selectedWorkProcessId = 'WP-PACK';
@@ -1288,18 +1288,33 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     const auxCell = vm.flowNodes.find((node) => node.id.startsWith(`${BOM_OVERLAY_PREFIX}aux:`));
     if (!auxCell) throw new Error('Expected an aux overlay cell after adding a process (must-fix #7 wires mutate() to refreshBomOverlay)');
 
-    // 1) 节点级标志本身
-    expect(auxCell).toMatchObject({ draggable: true, selectable: false, deletable: false });
+    // 🔴 2026-09-01 判据换代（形态 C‴）。旧判据守的是「浮层可以被拖走且位置被保留」，
+    // 已确认交互(§6)把「能被扯开」判为缺陷：融合 = 同一个 owner group，
+    // 附属卡片没有自己的位置。所以这里换成守新不变式。
+    // 1) 节点级标志本身：不可拖、不可选、不可删
+    expect(auxCell).toMatchObject({ draggable: false, selectable: false, deletable: false });
 
-    // 2) 拖动只改浮层的会话布局，不会把 dirty 翻回 true，也不会在 BOM 重载时跳回去。
+    // 2) 位置恒等于 owner —— 同 x、同 y，边框才可能无缝相接。
+    const ownerId = auxCell.id.slice(`${BOM_OVERLAY_PREFIX}aux:`.length);
+    const owner = vm.flowNodes.find((node) => node.id === ownerId);
+    if (!owner) throw new Error('Expected the owning process node');
+    expect(auxCell.position).toEqual({ x: owner.position.x, y: owner.position.y });
+
+    // 3) 即使有代码试图把它挪走，一次派生刷新就把它钉回 owner 身上（结果层面的兜底，
+    //    不依赖"没人会去改它的位置"这个假设）。
     vm.dirty = false;
-    const movedPosition = { x: auxCell.position.x + 80, y: auxCell.position.y + 48 };
-    vm.onNodeDragStart({ node: auxCell });
-    vm.onNodeDragStop({ node: { ...auxCell, position: movedPosition } });
-    expect(vm.dirty).toBe(false);
-    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.position).toEqual(movedPosition);
+    const strayPosition = { x: auxCell.position.x + 80, y: auxCell.position.y + 48 };
+    vm.flowNodes.find((node) => node.id === auxCell.id)!.position = strayPosition;
     vm.refreshBomOverlay();
-    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.position).toEqual(movedPosition);
+    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.position)
+      .toEqual({ x: owner.position.x, y: owner.position.y });
+    expect(vm.dirty).toBe(false);
+
+    // 4) 拖 owner 时整组一起走。
+    const ownerMoved = { x: owner.position.x + 120, y: owner.position.y + 64 };
+    vm.onNodeDrag({ nodes: [{ ...owner, position: ownerMoved }] });
+    expect(vm.flowNodes.find((node) => node.id === auxCell.id)?.position).toEqual(ownerMoved);
+
     const auxEdge = vm.flowEdges.find((edge) => edge.source === auxCell.id);
     if (!auxEdge) throw new Error('Expected the auxiliary projection edge to stay attached');
     expect(auxEdge).toMatchObject({
@@ -1310,6 +1325,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       selectable: false,
       deletable: false,
       updatable: false,
+      // 融合之后附属与 owner 边框直接相接，中间没有空隙 —— 再画这条线就是「悬挂线」。
+      // 它仍留在数据里（归属判定与白名单复用它），只是不显形。
+      hidden: true,
     });
     const edgeCount = vm.flowEdges.length;
     vm.onEdgeClick({ edge: auxEdge });

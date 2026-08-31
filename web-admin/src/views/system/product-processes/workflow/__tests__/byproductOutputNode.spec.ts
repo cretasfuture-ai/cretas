@@ -38,6 +38,7 @@ const SRC = resolve(__dirname, '..');
 const read = (rel: string) => readFileSync(resolve(SRC, rel), 'utf-8');
 
 const EDITOR = read('ProductProcessWorkflowEditor.vue');
+const SPECIAL_OUTPUTS = read('workflowSpecialOutputs.ts');
 const PROCESS_NODE = read('WorkflowProcessNode.vue');
 const MATERIAL_NODE = read('WorkflowMaterialNode.vue');
 
@@ -166,16 +167,27 @@ describe('入口与选择器', () => {
     // goal: 「复用画布已有的『＋ 产出 Cell（分流）』入口, 不要新造入口」。
     expect(EDITOR).not.toMatch(/function addByproductToProcess/);
     expect(EDITOR).toMatch(/function addOutputToProcess\(processId: string, options: \{ byproduct\?: boolean \}/);
-    expect(EDITOR).toContain("addOutputToProcess(slotProps.id, { byproduct: true })");
+    // 2026-09-01: 调用点从模板内联挪进了统一入口的处理函数(§7 三选一), 函数本身没变。
+    // 判据仍然是「只有一条路径」, 只是钉在新的调用点上。
+    expect(EDITOR).toMatch(
+      /addOutputToProcess\(processId, kind === 'byproduct' \? \{ byproduct: true \} : \{ rework: true \}\)/);
   });
 
   it('每个工序上都有「+ 副产」入口 —— 「没配副产」与「不能配副产」必须能区分', () => {
     // 这条继承自浮层时代的「没有副产也派生空 cell」。浮层没了, 但那个信息不能没:
     // 用户要能看出"这里可以加副产, 只是还没加"。承接它的是工序上常驻的入口按钮。
-    expect(PROCESS_NODE).toContain('data-testid="add-byproduct-inline"');
-    expect(PROCESS_NODE).toMatch(/emit\('addByproduct'\)/);
+    // 2026-09-01: 入口从三个并排小按钮收敛成一个 `+ 添加特殊产出` 再三选一(§7)。
+    // 这条判据守的**意图**一字未改 ——「这里可以加, 只是还没加」必须能与「不能加」区分,
+    // 所以入口仍然常驻; 变的只是它长什么样, 于是断言从字面改成钉这个性质。
+    expect(PROCESS_NODE).toContain('data-testid="add-special-output"');
+    expect(PROCESS_NODE).toMatch(/emit\('addSpecialOutput'\)/);
+    // 三选一里副产必须**始终**在列(它是可用的那一类, 不许被藏)。
+    expect(SPECIAL_OUTPUTS).toMatch(/kind: 'byproduct'[\s\S]{0,400}available: true/);
+    // 阴性对照: 旧的两个并排入口确实**没有并存**(是换掉不是新增)。
+    expect(PROCESS_NODE).not.toContain('data-testid="add-byproduct-inline"');
+    expect(PROCESS_NODE).not.toContain('data-testid="add-rework-inline"');
     // ⛔ 不许被 v-if 藏起来: 只允许按写权限收(canWrite), 不允许按"有没有副产"收
-    const at = PROCESS_NODE.indexOf('data-testid="add-byproduct-inline"');
+    const at = PROCESS_NODE.indexOf('data-testid="add-special-output"');
     const block = PROCESS_NODE.slice(Math.max(0, at - 400), at);
     expect(block).not.toMatch(/v-if="[^"]*byproduct[^"]*"/i);
   });

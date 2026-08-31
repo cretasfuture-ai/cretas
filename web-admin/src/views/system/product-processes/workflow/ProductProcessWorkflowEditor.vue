@@ -255,6 +255,7 @@
           @node-click="onNodeClick"
           @pane-click="onPaneClick"
           @node-drag-start="onNodeDragStart"
+          @node-drag="onNodeDrag"
           @node-drag-stop="onNodeDragStop"
           @selection-end="onSelectionEnd"
           @viewport-change-end="onViewportChangeEnd"
@@ -262,8 +263,47 @@
           <Background :gap="16" pattern-color="#dce8f3" />
           <Controls />
 
+          <!--
+            特殊产出(副产/回料)与普通物料 Cell 共用**同一个** WorkflowMaterialNode:
+            props 从一个共享对象 v-bind 下去, ⛔ 不复制第二份 prop 清单(形态 D)。
+            差别只有外壳: 特殊产出套一层融合窄条, 固定贴在产出它的工序 Cell 下方(§6)。
+          -->
           <template #node-material="slotProps">
+            <WorkflowFusedStrip
+              v-if="isSpecialOutputNode(slotProps)"
+              side="below"
+              :tone="slotProps.data.isRework ? 'rework' : 'byproduct'"
+              :testid="`special-output-strip-${slotProps.id}`"
+              :badge="slotProps.data.isRework ? '回' : '副'"
+              :owner-width="FUSED_PROCESS_OWNER_WIDTH"
+              :owner-offset="fusedBelowOffsetFor(slotProps.id)"
+              :collapsed="isFusedCollapsed(slotProps.id)"
+              :summary="specialOutputSummary(slotProps.id, slotProps.data)"
+              :full-label="specialOutputFullLabel(slotProps.id, slotProps.data)"
+              @toggle="toggleFusedCollapsed(slotProps.id)"
+              @mouseenter="slotProps.data.isRework ? focusReworkWhole(slotProps.id) : undefined"
+              @mouseleave="slotProps.data.isRework ? focusReworkWhole(null) : undefined"
+            >
+              <template #handles>
+                <Handle type="target" :position="Position.Left" id="input" />
+                <Handle type="source" :position="Position.Right" id="output" />
+              </template>
+              <WorkflowMaterialNode
+                v-bind="materialNodeProps(slotProps)"
+                :rework-target-count="reworkTargetCountFor(slotProps.id)"
+                @add-next="openAddProcess(slotProps.id)"
+                @select-raw-sku="(skuId: string) => selectRawSku(slotProps.id, skuId)"
+                @select-sku="(skuId: string) => selectMaterialSku(slotProps.id, skuId)"
+                @select-byproduct-sku="(materialTypeId: string) => selectByproductSku(slotProps.id, materialTypeId)"
+                @quick-mark-byproduct="() => openByproductQuickMark(slotProps.id)"
+                @activate-bom-draft="() => activateBomDraft(bomStatusBySku[slotProps.data.skuId]?.notice)"
+                @edit-sku="openQuickEditSku(slotProps.id)"
+                @configure-rework="() => openReworkDrawer(slotProps.id)"
+                @delete="removeNode(slotProps.id)"
+              />
+            </WorkflowFusedStrip>
             <WorkflowMaterialNode
+              v-else
               :kind="slotProps.data.kind"
               :data="slotProps.data"
               :selected="slotProps.selected"
@@ -307,8 +347,7 @@
               @update="(patch) => updateProcessData(slotProps.id, patch)"
               @add-input="addInputToProcess(slotProps.id)"
               @add-output="addOutputToProcess(slotProps.id)"
-              @add-byproduct="addOutputToProcess(slotProps.id, { byproduct: true })"
-              @add-rework="addOutputToProcess(slotProps.id, { rework: true })"
+              @add-special-output="openSpecialOutputChooser(slotProps.id)"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
               @edit-process="openQuickEditProcess(slotProps.id)"
               @delete="removeNode(slotProps.id)"
@@ -325,7 +364,7 @@
               @add-row="openAuxiliaryEditor(slotProps.data.processNodeId)"
               @edit-row="(rowId) => openAuxiliaryEditor(slotProps.data.processNodeId, rowId)"
               @open-detail="openAuxiliaryEditor(slotProps.data.processNodeId)"
-              @set-collapsed="(next) => setAuxCollapsed(slotProps.data.processNodeId, next)"
+              @set-collapsed="(next: boolean) => toggleFusedCollapsed(slotProps.data.processNodeId, next)"
             />
           </template>
           <template #node-bomPackaging="slotProps">
@@ -333,11 +372,35 @@
               :id="slotProps.id"
               :data="slotProps.data"
               :can-write="canEdit"
+              :collapsed="isFusedCollapsed(slotProps.id)"
               @add-row="openPackagingEditor(slotProps.data.outputNodeId)"
               @edit-row="(rowId) => openPackagingEditor(slotProps.data.outputNodeId, rowId)"
+              @set-collapsed="() => toggleFusedCollapsed(slotProps.id)"
             />
           </template>
         </VueFlow>
+
+    <WorkflowSpecialOutputChooser
+      v-model:visible="specialOutputChooserVisible"
+      @choose="chooseSpecialOutput"
+    />
+    <WorkflowReworkConfigDrawer
+      v-if="reworkDrawerNodeId"
+      :visible="reworkDrawerVisible"
+      :can-write="canEdit"
+      :context="reworkDrawerContext"
+      :name="String((reworkDrawerNode?.data as Record<string, unknown>)?.name || '')"
+      :sku-id="String((reworkDrawerNode?.data as Record<string, unknown>)?.skuId || '')"
+      :unit="String((reworkDrawerNode?.data as Record<string, unknown>)?.baseUnit || 'kg')"
+      :semi-options="semiFinishedSkuOptions"
+      :finished-options="finishedGoodSkuOptions"
+      :unit-options="reworkUnitOptions"
+      :locked-target-id="focusLockedTargetId"
+      @update:visible="closeReworkDrawer"
+      @hover-target="onReworkHoverTarget"
+      @toggle-locate="onReworkToggleLocate"
+      @save="saveReworkConfig"
+    />
 
         <div
           :class="['canvas-floating-tools', { 'is-batch-selecting': interactionMode === 'SELECT' }]"
@@ -824,6 +887,8 @@ import {
   SelectionMode,
   VueFlow,
   useVueFlow,
+  Handle,
+  Position,
   type Connection,
   type Edge,
   type EdgeMouseEvent,
@@ -852,6 +917,29 @@ import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
+import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
+import WorkflowSpecialOutputChooser from './WorkflowSpecialOutputChooser.vue';
+import WorkflowReworkConfigDrawer from './WorkflowReworkConfigDrawer.vue';
+import {
+  FUSED_MATERIAL_OWNER_WIDTH,
+  FUSED_PROCESS_OWNER_WIDTH,
+  fusedBelowOffset,
+  fusedGroupBounds,
+  fusedGroupNodeIds,
+  reconcileFocusIds,
+  type FusedAttachmentDescriptor,
+  type FusedSizeLike,
+} from './workflowFusedGroups';
+import {
+  deriveReworkTargetContext,
+  planReworkTargetWrites,
+  pruneReworkPolicies,
+  reworkNodesMissingTargets,
+  selectedTargetProcessIds,
+  sourceProcessOfRework,
+  type ReworkTargetContext,
+} from './workflowReworkTargets';
+import { specialOutputOption, type SpecialOutputKind } from './workflowSpecialOutputs';
 import {
   buildRawMaterialSegmentTree,
   isRawMaterialOption,
@@ -1042,6 +1130,7 @@ const props = defineProps<{
 const router = useRouter();
 const {
   fitView, getViewport, setViewport, findNode, getSelectedNodes, removeSelectedNodes,
+  nodes: graphNodes,
 } = useVueFlow('product-process-workflow');
 const definition = ref<ProductProcessWorkflowDefinition | null>(null);
 const activation = ref<ProductProcessWorkflowActivation | null>(null);
@@ -1524,6 +1613,197 @@ const bomOverlayPackagingRawByOutput = ref<Record<string, BomRecipeItemView[]>>(
  */
 const collapsedAuxProcessIds = ref<Set<string>>(new Set());
 
+// ── 融合附属卡片 / 特殊产出 / 聚焦（§6–§11） ──────────────
+/**
+ * VueFlow 实测到的节点尺寸。**只用于 CSS 偏移与自动布局的包围盒**，
+ * ⛔ 绝不用来改 node position —— 那正是上一版让展开/收起漂移视口的成因。
+ */
+const measuredNodeSizes = computed<Record<string, FusedSizeLike>>(() => {
+  const sizes: Record<string, FusedSizeLike> = {};
+  for (const node of graphNodes.value ?? []) {
+    const dimensions = (node as { dimensions?: { width?: number; height?: number } }).dimensions;
+    if (dimensions && Number(dimensions.height) > 0) {
+      sizes[node.id] = { width: Number(dimensions.width) || 0, height: Number(dimensions.height) };
+    }
+  }
+  return sizes;
+});
+
+/** 量不到附属高度时按这个下限留白 —— 宁可多留也不能压上去。 */
+const FUSED_ATTACHMENT_FALLBACK_HEIGHT = 120;
+
+/** 这个物料节点是不是「特殊产出」（副产 / 回料）—— 唯一判据，⛔ 不在别处再写一次。 */
+function isSpecialOutputNode(node: { data?: unknown }): boolean {
+  const data = (node.data ?? {}) as MaterialNodeData;
+  return data.isByproduct === true || data.isRework === true;
+}
+
+/** 特殊产出节点 → 产出它的那道工序（真实边的 source）。 */
+function ownerProcessOfSpecialOutput(nodeId: string): string | null {
+  const edge = flowEdges.value.find((candidate) => candidate.target === nodeId
+    && !isBomOverlayEdge(candidate as { id: string; source?: string; target?: string }));
+  if (!edge) return null;
+  const source = flowNodes.value.find((candidate) => candidate.id === edge.source);
+  return source && (source.data as { kind?: string })?.kind === 'PROCESS' ? source.id : null;
+}
+
+/**
+ * 当前画布上所有融合附属卡片的归属描述。
+ * 上方：辅料（挂工序）/ 包材（挂成品）。下方：特殊产出（挂产出它的工序）。
+ */
+const fusedAttachments = computed<FusedAttachmentDescriptor[]>(() => {
+  const list: FusedAttachmentDescriptor[] = [];
+  const belowCounter = new Map<string, number>();
+  for (const node of flowNodes.value) {
+    if (isBomOverlayNode(node)) {
+      const auxOwner = node.id.startsWith('bom-overlay:aux:') ? node.id.slice('bom-overlay:aux:'.length) : null;
+      const packOwner = node.id.startsWith('bom-overlay:pack:') ? node.id.slice('bom-overlay:pack:'.length) : null;
+      const ownerId = auxOwner ?? packOwner;
+      if (ownerId) list.push({ id: node.id, ownerId, side: 'above', stackIndex: 0 });
+      continue;
+    }
+    if (!isSpecialOutputNode(node)) continue;
+    const ownerId = ownerProcessOfSpecialOutput(node.id);
+    if (!ownerId) continue;
+    const stackIndex = belowCounter.get(ownerId) ?? 0;
+    belowCounter.set(ownerId, stackIndex + 1);
+    list.push({ id: node.id, ownerId, side: 'below', stackIndex });
+  }
+  return list;
+});
+
+const fusedAttachmentById = computed(() => new Map(fusedAttachments.value.map((item) => [item.id, item])));
+
+function isFusedAttachmentNode(nodeId: string): boolean {
+  return fusedAttachmentById.value.has(nodeId);
+}
+
+/**
+ * 下方附属卡片的 CSS 偏移：owner 高度 + 排在它前面那几条的高度。
+ * 量不到返回 null —— 卡片先不显形，⛔ 不用 0 顶上（0 会把它画在 owner 身上）。
+ */
+function fusedBelowOffsetFor(nodeId: string): number | null {
+  const attachment = fusedAttachmentById.value.get(nodeId);
+  if (!attachment || attachment.side !== 'below') return null;
+  const preceding = fusedAttachments.value
+    .filter((item) => item.ownerId === attachment.ownerId
+      && item.side === 'below'
+      && item.stackIndex < attachment.stackIndex)
+    .map((item) => item.id);
+  return fusedBelowOffset(attachment.ownerId, preceding, measuredNodeSizes.value);
+}
+
+/**
+ * 把每个融合附属卡片的位置**钉死等于它 owner 的位置**，并关掉独立拖动。
+ *
+ * 这两件事合起来才叫「融合」：位置相同 ⇒ 拖 owner 时整组一起走；
+ * `draggable: false` ⇒ 用户扯不开它。
+ */
+function reconcileFusedPositions(): boolean {
+  let changed = false;
+  const ownerPosition = new Map(flowNodes.value.map((node) => [node.id, node.position]));
+  for (const attachment of fusedAttachments.value) {
+    const node = flowNodes.value.find((candidate) => candidate.id === attachment.id);
+    const owner = ownerPosition.get(attachment.ownerId);
+    if (!node || !owner) continue;
+    if (node.position.x !== owner.x || node.position.y !== owner.y) {
+      node.position = { x: owner.x, y: owner.y };
+      changed = true;
+    }
+    if (node.draggable !== false) { node.draggable = false; changed = true; }
+  }
+  return changed;
+}
+
+/** 自动布局用：一个 owner 上下各被融合附属占掉多少高度。 */
+function fusedExtentFor(nodeId: string): { above: number; below: number } {
+  const mine = fusedAttachments.value.filter((item) => item.ownerId === nodeId);
+  if (mine.length === 0) return { above: 0, below: 0 };
+  return fusedGroupBounds(mine, measuredNodeSizes.value, FUSED_ATTACHMENT_FALLBACK_HEIGHT);
+}
+
+/**
+ * ⛔ 展开/收起、打开抽屉这类**只改内部呈现**的动作，一律包在这里。
+ *
+ * 结构上它们本来就不动 node position（几何全在 CSS），所以这层是**第二道**保险：
+ * 万一 VueFlow 因为重新测量产生漂移，用同一个 x/y/zoom 原样放回去，duration 0 不闪。
+ * ⛔ 这里绝不调用 fitView / handleAutoLayout —— 只有用户明确点「自动布局」「适应画布」才允许 fit。
+ */
+async function withPreservedViewport<T>(action: () => T | Promise<T>): Promise<T> {
+  const saved = typeof getViewport === 'function' ? getViewport() : null;
+  const result = await action();
+  await nextTick();
+  if (saved && typeof setViewport === 'function') {
+    await setViewport({ x: saved.x, y: saved.y, zoom: saved.zoom }, { duration: 0 });
+  }
+  return result;
+}
+
+// ── 聚焦与淡化（§9） ──────────────────────
+/** 悬停产生的临时聚焦；移出即恢复。 */
+const focusHoverIds = ref<Set<string> | null>(null);
+/** 点击「定位」锁定的聚焦；再次点击取消。 */
+const focusLockedIds = ref<Set<string> | null>(null);
+const focusLockedTargetId = ref<string | null>(null);
+
+/**
+ * 生效的聚焦集合。**先与当前 nodes 对账**，对账后为空一律返回 null。
+ *
+ * [!] 这一句是「孤儿 focus ⇒ 整张画布 5% 透明」的唯一防线：节点重建 / 草稿切换 /
+ * 展开收起 / 删除 / undo 之后，旧 id 可能一个都不存在，此时若仍然全局 dim，
+ * 用户看到的是一张白图，而且没有任何报错。
+ */
+const effectiveFocusIds = computed<Set<string> | null>(() => {
+  const live = new Set(flowNodes.value.map((node) => node.id));
+  return reconcileFocusIds(focusLockedIds.value ?? focusHoverIds.value, live);
+});
+
+/** 聚焦一组 owner —— 自动带上它们的全部融合附属（融合就是一体，不许只亮一半）。 */
+function focusSetFor(ownerIds: string[]): Set<string> {
+  return fusedGroupNodeIds(ownerIds, fusedAttachments.value);
+}
+
+/** 悬停回料融合卡片：突出「回料 + 来源工序 + 全部已允许目标工序」及各自附属。 */
+function focusReworkWhole(reworkNodeId: string | null): void {
+  if (!reworkNodeId) { focusHoverIds.value = null; return; }
+  const owners = [reworkNodeId];
+  const source = sourceProcessOfRework(flowNodes.value, flowEdges.value, reworkNodeId);
+  if (source) owners.push(source);
+  owners.push(...selectedTargetProcessIds(flowNodes.value, reworkNodeId));
+  focusHoverIds.value = focusSetFor(owners);
+}
+
+/** 悬停某一条目标行：只突出「回料 + 来源工序 + 这一道精确目标」及各自附属。 */
+function focusReworkTarget(reworkNodeId: string, targetProcessId: string | null): Set<string> | null {
+  if (!targetProcessId) return null;
+  const owners = [reworkNodeId, targetProcessId];
+  const source = sourceProcessOfRework(flowNodes.value, flowEdges.value, reworkNodeId);
+  if (source) owners.push(source);
+  return focusSetFor(owners);
+}
+
+function clearFocus(): void {
+  focusHoverIds.value = null;
+  focusLockedIds.value = null;
+  focusLockedTargetId.value = null;
+}
+
+/**
+ * 把聚焦落到节点的 class 上。⛔ 只降低 opacity，**不从 DOM/拓扑里删除**，也不改布局 ——
+ * 删掉会连带改变连线与包围盒，等于让「看一眼」变成一次编辑。
+ */
+function applyFocusClasses(): void {
+  const focus = effectiveFocusIds.value;
+  let changed = false;
+  for (const node of flowNodes.value) {
+    const next = focus && !focus.has(node.id) ? 'wf-focus-dim' : undefined;
+    if (node.class !== next) { node.class = next; changed = true; }
+  }
+  if (changed) flowNodes.value = [...flowNodes.value];
+}
+
+watch(effectiveFocusIds, () => { applyFocusClasses(); });
+
 function collapsedAuxStorageKey(): string | null {
   const identity = currentLoadedIdentity();
   if (!identity) return null;
@@ -1542,15 +1822,33 @@ function loadCollapsedAux(): void {
   }
 }
 
-function setAuxCollapsed(processNodeId: string, collapsed: boolean): void {
+/**
+ * 收起状态的**唯一集合** —— 辅料 / 包材 / 特殊产出三类共用它, 共用同一个 localStorage 键。
+ *
+ * ⚠️ 键的形状按类分, 不是随手挑的:
+ * - 辅料用**工序节点 id**(历史形状, 已在用户机器上的存量数据就是这个);
+ * - 包材用浮层节点 id `bom-overlay:pack:*`;
+ * - 特殊产出用它自己的物料节点 id `material:output:*`。
+ * 三者前缀天然不冲突, 所以能装进同一个集合而不需要第二份存储(形态 D: 同一个东西两份一定会漂)。
+ */
+function setFusedCollapsed(collapseKey: string, collapsed: boolean): void {
   const next = new Set(collapsedAuxProcessIds.value);
-  if (collapsed) next.add(processNodeId); else next.delete(processNodeId);
+  if (collapsed) next.add(collapseKey); else next.delete(collapseKey);
   collapsedAuxProcessIds.value = next;
   const key = collapsedAuxStorageKey();
   if (!key) return;
   try {
     window.localStorage.setItem(key, JSON.stringify([...next]));
   } catch { /* 无痕模式/配额满: 本次会话内仍然生效, 不打断用户 */ }
+}
+
+/** 辅料收起 —— 键沿用工序节点 id(存量形状), 见 setFusedCollapsed 的说明。 */
+function setAuxCollapsed(processNodeId: string, collapsed: boolean): void {
+  setFusedCollapsed(processNodeId, collapsed);
+}
+
+function isFusedCollapsed(collapseKey: string): boolean {
+  return collapsedAuxProcessIds.value.has(collapseKey);
 }
 // 副产: 同样两份 —— 展示用行 + 编辑用原始行。
 const bomOverlayPackagingMaterials = ref<PackagingMaterialOption[]>([]);
@@ -3267,12 +3565,15 @@ function refreshBomOverlay(): void {
     ...strippedNodes,
     // 浮层业务数据仍是只读投影：不可选、不可删；但位置是画布布局，允许拖动。
     // onNodeDragStop 对浮层单独处理，不会制造 Workflow dirty 或新版本。
+    // 融合: 位置**恒等于 owner 的位置**, 视觉偏移全部交给 CSS(见 workflowFusedGroups.ts)。
+    // ⛔ draggable:false —— 附属卡片不可独立拖动、不参与自由布局, 这是「融合」的定义之一;
+    //    也因此 existingOverlayPositions 那份"用户拖过的位置"不再适用(附属没有自己的位置了)。
     ...overlayNodes.map((node) => ({
       id: node.id,
       type: node.type,
-      position: existingOverlayPositions.get(node.id) ?? node.position,
+      position: node.position,
       data: node.data,
-      draggable: true,
+      draggable: false,
       selectable: false,
       deletable: false,
     })),
@@ -3292,8 +3593,13 @@ function refreshBomOverlay(): void {
       deletable: false,
       updatable: false,
       zIndex: 1,
+      // 融合之后附属卡片与 owner 边框直接相接, 中间没有空隙可以画线 ——
+      // 再渲染这条投影边就是交接明说的「悬挂线」。仍保留在数据里(归属判定与
+      // isDerivedBomOverlayConnection 白名单继续复用它), 只是不显形。
+      hidden: true,
     })),
   ];
+  reconcileFusedPositions();
 }
 
 function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
@@ -3312,6 +3618,8 @@ function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
   projectUniqueRawMaterialBindings();
   refreshPortMaterialMetadata();
   refreshBomOverlay();
+  // 节点整体换了一批 ⇒ 旧的 focus id 可能一个都不在了。不清理就会「全部淡化」= 白屏(§9)。
+  applyFocusClasses();
   return false;
 }
 
@@ -3439,6 +3747,7 @@ function mutate(action: () => void): void {
   // 只是发生在"节点刚创建, BOM 数据里压根还没有它"这个更早的时刻。refreshBomOverlay
   // 是幂等的纯派生(见其函数注释), 每次 mutate 都跑一次代价可接受。
   refreshBomOverlay();
+  applyFocusClasses();
   editSeq += 1;
   workflowBomSyncPreflight.value = null;
   dirty.value = true;
@@ -3449,6 +3758,8 @@ function undo(): void {
   if (!canEdit.value) return;
   const previous = history.value.pop();
   if (!previous) return;
+  // undo 之后节点集合整个换掉, 旧 focus id 可能全部失效 —— 先清, hydrate 里再对账一次(§9)。
+  clearFocus();
   hydrate(previous);
   editSeq += 1;
   workflowBomSyncPreflight.value = null;
@@ -3540,9 +3851,27 @@ function onNodeDragStop({ node, nodes }: { node: Node; nodes?: Node[] }): void {
       ? { x: moved.position.x, y: moved.position.y }
       : snapPosition(moved.position);
   });
+  // 拖 owner 之后整组跟上 —— 融合附属没有自己的位置, 它的位置就是 owner 的位置。
+  reconcileFusedPositions();
   editSeq += 1;
   dirty.value = true;
   scheduleAutoSave();
+}
+
+/**
+ * 拖动**过程中**让整组跟着走。只有这一句还不够(停下时还要 reconcile 一次),
+ * 但没有它, 用户会看到附属卡片留在原地、直到松手才瞬移过去 —— 那正好是「能扯开」的观感。
+ */
+function onNodeDrag({ nodes }: { nodes?: Node[] }): void {
+  if (!canEdit.value) return;
+  if (!nodes || nodes.length === 0) return;
+  const moved = new Map(nodes.map((node) => [node.id, node.position]));
+  for (const attachment of fusedAttachments.value) {
+    const ownerPosition = moved.get(attachment.ownerId);
+    if (!ownerPosition) continue;
+    const node = flowNodes.value.find((candidate) => candidate.id === attachment.id);
+    if (node) node.position = { x: ownerPosition.x, y: ownerPosition.y };
+  }
 }
 
 function onViewportChangeEnd(viewport: ViewportTransform): void {
@@ -3798,6 +4127,21 @@ function removeEdgeById(edgeId: string): void {
 }
 
 // #9 删除一个 Cell (节点): 连带删掉它的所有连线, 并解绑引用它的工序端口 (模型一致)。
+/**
+ * 删除节点后要顺手清掉指向它的回料规则 —— 留着就是一批永远选不掉的幽灵 id,
+ * 同时也是「孤儿 focus => 全画布变白」的另一个入口(§9)。
+ */
+function pruneReworkPoliciesAfterRemoval(): void {
+  const { updates } = pruneReworkPolicies(stripBomOverlay(flowNodes.value));
+  updates.forEach((update) => {
+    const target = flowNodes.value.find((candidate) => candidate.id === update.processNodeId);
+    if (!target) return;
+    const data = target.data as ProcessNodeData;
+    if (update.policy === null) delete (data as Record<string, unknown>).reworkPolicy;
+    else data.reworkPolicy = update.policy;
+  });
+}
+
 function removeNode(nodeId: string): void {
   if (!canEdit.value) return;
   const node = flowNodes.value.find((n) => n.id === nodeId);
@@ -3824,7 +4168,11 @@ function removeNode(nodeId: string): void {
       }
       flowNodes.value = flowNodes.value.filter((n) => n.id !== nodeId);
       flowEdges.value = flowEdges.value.filter((e) => e.source !== nodeId && e.target !== nodeId);
+      pruneReworkPoliciesAfterRemoval();
     });
+    // 删掉的可能正是当前聚焦的那个 —— 不重算就会「全部淡化」= 白屏(§9)。
+    applyFocusClasses();
+    if (reworkDrawerNodeId.value === nodeId) closeReworkDrawer(false);
     if (selectedNodeId.value === nodeId) selectedNodeId.value = '';
     if (!flowEdges.value.some((edge) => edge.id === selectedEdgeId.value)) clearEdgeSelection();
     clearPublishBindingError(nodeId);
@@ -4180,6 +4528,226 @@ function addOutputToProcess(processId: string, options: { byproduct?: boolean } 
     ];
     flowEdges.value.push(flowEdge(processId, portId, materialId, 'input'));
   });
+}
+
+/**
+ * WorkflowMaterialNode 的**共享 prop 集合**。融合外壳与普通形态各挂一次组件,
+ * 但 prop 清单只写在这里一份 —— 复制第二份 20 行的 prop 列表就是形态 D(它一定会漂)。
+ */
+function materialNodeProps(slotProps: { id: string; data: Record<string, unknown>; selected?: boolean }) {
+  const data = slotProps.data as MaterialNodeData & { kind: ProductProcessNodeKind };
+  const status = bomStatusBySku.value[String(data.skuId || '')];
+  return {
+    kind: data.kind as Exclude<ProductProcessNodeKind, 'PROCESS'>,
+    data,
+    selected: slotProps.selected,
+    canWrite: canEdit.value,
+    connectingFromKind: connectingFromKind.value,
+    rawMaterialOptions: rawMaterialOptions.value,
+    rawMaterialSegments: rawMaterialSegments.value,
+    excludedRawMaterialIds: usedRawMaterialIdsExcept(slotProps.id),
+    bomRawMaterialIds: bomRawMaterialIdList.value,
+    semiOptions: semiFinishedSkuOptions.value,
+    finishedOptions: finishedGoodSkuOptions.value,
+    byproductOptions: byproductMaterialOptions.value,
+    unitError: unitIssueForNode(slotProps.id),
+    validationError: publishBindingErrorForNode(slotProps.id),
+    validationAttention: publishBindingAttentionNodeIds.value.has(slotProps.id),
+    bomStatusText: bomBubbleNeedsAction(status) ? bomBubbleText(status) : '',
+    bomStatusCanActivate: !!status?.notice,
+    bomStatusActivating: activatingBomDraft.value,
+  };
+}
+
+/** 融合窄条的展开/收起 —— 三类共用一个开关, 且**不碰视口**(§10)。 */
+function toggleFusedCollapsed(collapseKey: string, next?: boolean): void {
+  const target = typeof next === 'boolean' ? next : !isFusedCollapsed(collapseKey);
+  // ⛔ 这里绝不调用 handleAutoLayout / fitCanvas / fitView。几何全在 CSS,
+  //    node position 一个都不动; withPreservedViewport 是万一 VueFlow 重新测量时的第二道保险。
+  void withPreservedViewport(() => { setFusedCollapsed(collapseKey, target); });
+}
+
+/** 特殊产出窄条的单行摘要: 类型 · 名称 · 配置状态。 */
+function specialOutputSummary(nodeId: string, data: MaterialNodeData): string {
+  const label = data.isRework ? '回料' : '副产';
+  const name = String(data.name || '未命名');
+  if (data.isRework) {
+    const count = reworkTargetCountFor(nodeId);
+    return `${label} · ${name} · ${count === 0 ? '未配置回投目标' : `可回投 ${count} 道工序`}`;
+  }
+  return `${label} · ${name} · ${data.skuId ? '已绑定物料' : '未选择物料'}`;
+}
+
+function specialOutputFullLabel(nodeId: string, data: MaterialNodeData): string {
+  const state = isFusedCollapsed(nodeId) ? '展开' : '收起';
+  return `${state}特殊产出附属卡片：${specialOutputSummary(nodeId, data)}`;
+}
+
+// -- 特殊产出统一入口(§7) ------------------------------------------------
+const specialOutputChooserVisible = ref(false);
+const specialOutputTargetProcessId = ref<string | null>(null);
+
+/** 工序底部那个常驻入口 —— 只弹选择器, 不在这里建任何节点。 */
+function openSpecialOutputChooser(processId: string): void {
+  if (!canEdit.value) return;
+  specialOutputTargetProcessId.value = processId;
+  specialOutputChooserVisible.value = true;
+}
+
+/**
+ * 选中一类之后立即进入**该类的真实配置**, 不是只生成一个空壳 Cell(§7)。
+ *
+ * ⛔ 三类走的仍然是 `addOutputToProcess` 这一条路径, 只差 data 上的一个标记 ——
+ *    这里不新造 addByproductToProcess / addReworkToProcess。
+ */
+function chooseSpecialOutput(kind: SpecialOutputKind): void {
+  const processId = specialOutputTargetProcessId.value;
+  const option = specialOutputOption(kind);
+  if (!processId || !canEdit.value) return;
+  if (!option.available) {
+    // fail closed: 没有后端权威契约的那一类, 说出缺口, ⛔ 不建一个存得下却没人读的假闭环。
+    ElMessage.warning(option.blockedReason);
+    return;
+  }
+  specialOutputChooserVisible.value = false;
+  const createdBefore = new Set(flowNodes.value.map((node) => node.id));
+  addOutputToProcess(processId, kind === 'byproduct' ? { byproduct: true } : { rework: true });
+  const created = flowNodes.value.find((node) => !createdBefore.has(node.id));
+  if (!created) return;
+  // 副产的配置就在它自己的 Cell 上(物料档案下拉); 回料要选目标工序, 直接把抽屉打开。
+  if (kind === 'rework') void openReworkDrawer(created.id);
+}
+
+/**
+ * 回料计量单位候选。**来自后端单位目录 `unitCatalog`**, ⛔ 不手写一份清单 ——
+ * 手写清单就是缺陷源(workflowUnits.ts 的 CHINESE_UNIT_LABELS 已经因此漏过 pack/roll)。
+ * 目录还没加载出来时至少给当前节点已有的单位, 不给一个空下拉。
+ */
+const reworkUnitOptions = computed<string[]>(() => {
+  const fromCatalog = unitCatalog.value
+    .map((item) => String((item as { code?: string; unitCode?: string }).code
+      ?? (item as { unitCode?: string }).unitCode ?? ''))
+    .filter(Boolean);
+  const current = String((reworkDrawerNode.value?.data as MaterialNodeData | undefined)?.baseUnit || '');
+  return [...new Set([...(current ? [current] : []), ...fromCatalog])];
+});
+
+// -- 回料配置抽屉(§8) ----------------------------------------------------
+const reworkDrawerVisible = ref(false);
+const reworkDrawerNodeId = ref<string | null>(null);
+
+const reworkDrawerNode = computed(() => (reworkDrawerNodeId.value
+  ? flowNodes.value.find((node) => node.id === reworkDrawerNodeId.value) ?? null
+  : null));
+
+const reworkDrawerContext = computed<ReworkTargetContext>(() => (reworkDrawerNodeId.value
+  ? deriveReworkTargetContext(flowNodes.value, flowEdges.value, reworkDrawerNodeId.value)
+  : {
+    reworkNodeId: '', sourceProcessNodeId: null, sourceRouteProductTypeIds: [],
+    groups: [], selectedCount: 0, totalCount: 0,
+  }));
+
+/** 已允许回投的目标工序数 —— 展示用, 真值在各工序的 reworkPolicy 上。 */
+function reworkTargetCountFor(nodeId: string): number {
+  return selectedTargetProcessIds(flowNodes.value, nodeId).length;
+}
+
+/**
+ * 打开抽屉只改内部呈现, ⛔ 不许顺手 fit/居中 —— 用 withPreservedViewport 兜住
+ * 抽屉导致的任何测量漂移(§10)。
+ */
+async function openReworkDrawer(reworkNodeId: string): Promise<void> {
+  reworkDrawerNodeId.value = reworkNodeId;
+  await withPreservedViewport(() => { reworkDrawerVisible.value = true; });
+  focusReworkWhole(reworkNodeId);
+}
+
+/** 关闭抽屉必须清空 hover/locked focus, 恢复全部 Cell(§8)。 */
+function closeReworkDrawer(visible: boolean): void {
+  reworkDrawerVisible.value = visible;
+  if (!visible) { reworkDrawerNodeId.value = null; clearFocus(); }
+}
+
+/** 悬停目标行 -> 临时聚焦; 移出恢复。⛔ 只改 opacity, 不动画布位置。 */
+function onReworkHoverTarget(processNodeId: string | null): void {
+  const reworkNodeId = reworkDrawerNodeId.value;
+  if (!reworkNodeId) return;
+  if (focusLockedIds.value) return;   // 已锁定时悬停不再抢焦点
+  focusHoverIds.value = processNodeId
+    ? focusReworkTarget(reworkNodeId, processNodeId)
+    : focusSetFor([reworkNodeId,
+      ...(sourceProcessOfRework(flowNodes.value, flowEdges.value, reworkNodeId) ? [
+        sourceProcessOfRework(flowNodes.value, flowEdges.value, reworkNodeId) as string] : []),
+      ...selectedTargetProcessIds(flowNodes.value, reworkNodeId)]);
+}
+
+/**
+ * 点击行内「定位」: 锁定聚焦 + 把目标工序平滑移进可视区; 再次点击取消锁定。
+ *
+ * ⛔ 这是**用户明确要求的定位**, 与勾选 checkbox 严格分开(§8) ——
+ *    勾选一次都不许缩放/平移画布。
+ */
+async function onReworkToggleLocate(processNodeId: string): Promise<void> {
+  const reworkNodeId = reworkDrawerNodeId.value;
+  if (!reworkNodeId) return;
+  if (focusLockedTargetId.value === processNodeId) {
+    focusLockedTargetId.value = null;
+    focusLockedIds.value = null;
+    return;
+  }
+  focusLockedTargetId.value = processNodeId;
+  focusLockedIds.value = focusReworkTarget(reworkNodeId, processNodeId);
+  if (typeof fitView === 'function') {
+    await fitView({ nodes: [processNodeId], padding: 0.45, duration: 400, maxZoom: 1.1 });
+  }
+}
+
+/**
+ * 保存回料配置 —— **更新同一组规则, 不重复创建 node/edge, 也不重复追加规则**(§7)。
+ * 没有目标工序时 fail closed, 在抽屉里就按不下保存, 这里再挡一次。
+ */
+function saveReworkConfig(payload: {
+  name: string; skuId: string; unit: string; targetProcessIds: string[];
+}): void {
+  const reworkNodeId = reworkDrawerNodeId.value;
+  const node = reworkDrawerNode.value;
+  if (!reworkNodeId || !node || !canEdit.value) return;
+  if (payload.targetProcessIds.length === 0) {
+    ElMessage.error('回料必须至少配置 1 道允许回投的目标工序');
+    return;
+  }
+  const { updates } = planReworkTargetWrites(flowNodes.value, reworkNodeId, payload.targetProcessIds);
+  mutate(() => {
+    Object.assign(node.data as MaterialNodeData, {
+      name: payload.name,
+      ...(payload.skuId ? { skuId: payload.skuId, bound: true } : {}),
+      ...(payload.unit ? { baseUnit: payload.unit } : {}),
+    });
+    updates.forEach((update) => {
+      const target = flowNodes.value.find((candidate) => candidate.id === update.processNodeId);
+      if (!target) return;
+      const data = target.data as ProcessNodeData;
+      if (update.policy === null) delete (data as Record<string, unknown>).reworkPolicy;
+      else data.reworkPolicy = update.policy;
+    });
+  });
+  focusReworkWhole(reworkNodeId);
+}
+
+/**
+ * 发布/保存门禁: 每块回料至少 1 道目标工序, 否则 fail closed(§7)。
+ * 返回 true = 通过。
+ */
+function reworkTargetsSatisfied(showError = true): boolean {
+  const offenders = reworkNodesMissingTargets(stripBomOverlay(flowNodes.value));
+  if (offenders.length === 0) return true;
+  if (showError) {
+    const names = offenders
+      .map((id) => String((flowNodes.value.find((node) => node.id === id)?.data as MaterialNodeData)?.name || id))
+      .join('、');
+    ElMessage.error(`以下回料还没有允许回投的目标工序，无法发布：${names}`);
+  }
+  return false;
 }
 
 function updateProcessData(processId: string, patch: Partial<ProcessNodeData>): void {
@@ -4729,10 +5297,15 @@ function nextGraphIdSeed(): number {
   return lastGraphIdSeed;
 }
 
+/**
+ * 自动布局 —— 只有用户**明确点击**它(和「适应画布」)才允许 fit(§10/§11)。
+ * 按 owner group 的完整包围盒排间距: 只按 owner 自身高度排, 上方辅料会插进上一行、
+ * 下方特殊产出会压住下一行。
+ */
 async function handleAutoLayout(): Promise<void> {
   if (!canEdit.value) return;
   remember();
-  const laidOut = autoLayoutWorkflow(currentDefinition());
+  const laidOut = autoLayoutWorkflow(currentDefinition(), { fusedExtent: fusedExtentFor });
   hydrate(laidOut);
   dirty.value = true;
   await nextTick();
@@ -5636,6 +6209,19 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 </script>
 
 <style scoped>
+/*
+  §9 聚焦淡化。⛔ 只改 opacity —— 不从 DOM/拓扑里删除, 不改布局。
+  `:deep` 是必须的: 类挂在 vue-flow 自己渲染的 .vue-flow__node 外壳上, 不在本组件的模板里。
+*/
+.workflow-canvas :deep(.vue-flow__node.wf-focus-dim) {
+  opacity: 0.18;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .workflow-canvas :deep(.vue-flow__node.wf-focus-dim) { transition: none; }
+}
+
 .workflow-bom-alert, .workflow-validation-alert { margin: 0 12px 12px; }
 /* 版本状态合并条 (2026-08-11) —— 取代原先纵向堆叠的 3 条 BOM 横幅 + 1 条工艺草稿横幅。
    折叠态一行, 展开才给细节; 画布上方从 ~140px 压到 ~32px。 */

@@ -27,7 +27,14 @@ describe('Workflow 自动分叉与历史预览编辑闸', () => {
     expect(source).toContain('&& previewingVersion.value === null');
     expect(source).toContain(':nodes-draggable="canEdit"');
     expect(source).toContain(':nodes-connectable="canEdit"');
-    expect(source.match(/:can-write="canEdit"/g)?.length).toBe(4);
+    // 2026-09-01: 这里原来钉的是**挂载点个数**(4) —— 那是实现细节, 不是被守的行为。
+    // 特殊产出多挂了一次 WorkflowMaterialNode, 数就变成 5, 而权限一点没松。
+    // 改成钉真正的性质: **每一个** can-write 绑定都必须绑 canEdit, 一个例外都不许有。
+    const canWriteBindings = source.match(/:can-write="[^"]*"/g) ?? [];
+    expect(canWriteBindings.length).toBeGreaterThanOrEqual(4);
+    expect(canWriteBindings.every((binding) => binding === ':can-write="canEdit"')).toBe(true);
+    // 阴性对照: 绝不许出现写死放行的绑定。
+    expect(source).not.toContain(':can-write="true"');
     expect(source).toContain('function restorePreviewAsDraft');
   });
 

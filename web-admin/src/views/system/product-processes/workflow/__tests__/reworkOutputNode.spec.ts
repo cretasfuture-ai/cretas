@@ -8,7 +8,11 @@ describe('回料产出节点', () => {
   it('复用已有的 addOutputToProcess 入口, 不新造函数', () => {
     // 与副产同一条纪律: 「复用画布已有的『＋ 产出 Cell（分流）』入口, 不要新造入口」
     expect(EDITOR).not.toMatch(/function addReworkToProcess/);
-    expect(EDITOR).toContain("addOutputToProcess(slotProps.id, { rework: true })");
+    // 2026-09-01: 调用点挪进统一入口的处理函数(§7), 路径本身仍然只有一条。
+    expect(EDITOR).toMatch(
+      /addOutputToProcess\(processId, kind === 'byproduct' \? \{ byproduct: true \} : \{ rework: true \}\)/);
+    // 选中「回料」之后必须**立刻进入真实配置**, 不是只生成一个空壳 Cell(§7)。
+    expect(EDITOR).toMatch(/if \(kind === 'rework'\) void openReworkDrawer\(created\.id\)/);
   });
 
   it('回料标记与副产标记是两个独立的键 —— 合并会让回料进不了报工屏', () => {
