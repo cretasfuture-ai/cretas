@@ -21,6 +21,108 @@ import label_qc_oracle_diagnostics as diagnostics
 
 TARGET_PHOTO_ID = "locked-test-real_9827ccc7-7b30-48eb-bff2-c2493be09660"
 DEFAULT_SOURCE_EDGE_MARGIN_RATIO = 0.01
+DEFAULT_FAR_BACKGROUND_MAX_CENTER_Y_RATIO = 0.18
+DEFAULT_FAR_BACKGROUND_MAX_HEIGHT_RATIO = 0.037
+
+
+def is_far_background_supplement(
+    box: Sequence[float], width: int, height: int,
+    max_center_y_ratio: float = DEFAULT_FAR_BACKGROUND_MAX_CENTER_Y_RATIO,
+    max_height_ratio: float = DEFAULT_FAR_BACKGROUND_MAX_HEIGHT_RATIO,
+) -> bool:
+    """Identify only tiny candidate supplements at the remote top of a photo."""
+    if not 0 < max_center_y_ratio < 1 or not 0 < max_height_ratio < 1:
+        raise ValueError("far-background ratios must be in (0, 1)")
+    top, bottom = float(box[1]), float(box[3])
+    center_y_ratio = (top + bottom) / 2 / max(height, 1)
+    height_ratio = max(0.0, bottom - top) / max(height, 1)
+    return (
+        center_y_ratio < max_center_y_ratio
+        and height_ratio < max_height_ratio
+    )
+
+
+def _point_in_polygon(point: tuple[float, float], polygon: Sequence[Sequence[float]]) -> bool:
+    x, y = point
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        x0, y0 = float(previous[0]), float(previous[1])
+        x1, y1 = float(current[0]), float(current[1])
+        if (y0 > y) != (y1 > y):
+            intersection_x = (x1 - x0) * (y - y0) / (y1 - y0) + x0
+            if x < intersection_x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def audit_far_background_rule(
+    receipt_path: Path,
+    max_center_y_ratio: float = DEFAULT_FAR_BACKGROUND_MAX_CENTER_Y_RATIO,
+    max_height_ratio: float = DEFAULT_FAR_BACKGROUND_MAX_HEIGHT_RATIO,
+) -> dict[str, Any]:
+    """Bind the geometry rule to reviewed work-area polygons and tray boxes."""
+    receipt = load_and_verify(receipt_path)
+    if receipt.get("version") != "vision-lab-work-area-audit-receipt-v1":
+        raise RuntimeError("unsupported work-area audit receipt")
+    inside_total = outside_total = inside_rejected = outside_rejected = 0
+    reviewed_images = 0
+    for queue in receipt.get("queues", []):
+        for row in queue.get("rows", []):
+            annotation_path = Path(str(row["annotation"]))
+            tray_path = Path(str(row["tray_annotation"]))
+            for path, expected in (
+                (annotation_path, row["annotation_sha256"]),
+                (tray_path, row["tray_annotation_sha256"]),
+            ):
+                if not path.is_file() or diagnostics.sha256_file(path) != expected:
+                    raise RuntimeError(f"work-area audit input drift: {path}")
+            annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
+            tray_annotation = json.loads(tray_path.read_text(encoding="utf-8"))
+            if not annotation.get("reviewed") or not tray_annotation.get("reviewed"):
+                raise RuntimeError(f"unreviewed work-area evidence: {annotation_path}")
+            polygon = annotation.get("polygon", [])
+            if len(polygon) < 3:
+                raise RuntimeError(f"invalid work-area polygon: {annotation_path}")
+            reviewed_images += 1
+            for box in tray_annotation.get("boxes", []):
+                center = (
+                    (float(box[0]) + float(box[2])) / 2,
+                    (float(box[1]) + float(box[3])) / 2,
+                )
+                inside = _point_in_polygon(center, polygon)
+                rejected = is_far_background_supplement(
+                    box, 1, 1, max_center_y_ratio, max_height_ratio,
+                )
+                if inside:
+                    inside_total += 1
+                    inside_rejected += int(rejected)
+                else:
+                    outside_total += 1
+                    outside_rejected += int(rejected)
+    if inside_total != 547 or outside_total != 19 or reviewed_images != 31:
+        raise RuntimeError(
+            "work-area audit population drift: "
+            f"images={reviewed_images}, inside={inside_total}, outside={outside_total}"
+        )
+    if inside_rejected != 0 or outside_rejected < 18:
+        raise RuntimeError(
+            "far-background rule is not supported by reviewed work-area evidence: "
+            f"inside_rejected={inside_rejected}, outside_rejected={outside_rejected}"
+        )
+    return {
+        "receipt": str(receipt_path.resolve()),
+        "receipt_sha256": diagnostics.sha256_file(receipt_path),
+        "reviewed_images": reviewed_images,
+        "inside_work_area_trays": inside_total,
+        "outside_work_area_trays": outside_total,
+        "inside_rejected": inside_rejected,
+        "outside_rejected": outside_rejected,
+        "max_center_y_ratio": max_center_y_ratio,
+        "max_height_ratio": max_height_ratio,
+        "applies_to": "candidate_supplements_only",
+    }
 
 
 def edge_regions(
@@ -238,6 +340,9 @@ class FullFrameSupplementTrayModels:
         self, base: Any, candidate: Any, candidate_confidence: float = 0.50,
         production_overlap_ios: float = 0.60, iou_threshold: float = 0.50,
         ios_threshold: float = 0.80,
+        exclude_far_background: bool = False,
+        far_background_max_center_y_ratio: float = DEFAULT_FAR_BACKGROUND_MAX_CENTER_Y_RATIO,
+        far_background_max_height_ratio: float = DEFAULT_FAR_BACKGROUND_MAX_HEIGHT_RATIO,
     ) -> None:
         self.base = base
         self.candidate = candidate
@@ -245,15 +350,19 @@ class FullFrameSupplementTrayModels:
         self.production_overlap_ios = production_overlap_ios
         self.iou_threshold = iou_threshold
         self.ios_threshold = ios_threshold
+        self.exclude_far_background = exclude_far_background
+        self.far_background_max_center_y_ratio = far_background_max_center_y_ratio
+        self.far_background_max_height_ratio = far_background_max_height_ratio
         self.preserve_base_detections = True
         self.last_raw_detections: list[dict[str, Any]] = []
         self.last_stats: dict[str, Any] = {}
 
     def detect_trays(self, image, conf: float) -> list[Any]:
+        height, width = image.shape[:2]
         production = list(self.base.detect_trays(image, conf))
         candidates = list(self.candidate.detect_trays(image, self.candidate_confidence))
         supplements: list[Any] = []
-        overlap_rejected = duplicate_rejected = 0
+        overlap_rejected = duplicate_rejected = far_background_rejected = 0
         for detection in sorted(candidates, key=lambda row: -float(row.confidence)):
             if any(
                 int(detection.class_id) == int(reference.class_id)
@@ -263,6 +372,13 @@ class FullFrameSupplementTrayModels:
                 for reference in production
             ):
                 overlap_rejected += 1
+                continue
+            if self.exclude_far_background and is_far_background_supplement(
+                detection.as_xyxy(), width, height,
+                self.far_background_max_center_y_ratio,
+                self.far_background_max_height_ratio,
+            ):
+                far_background_rejected += 1
                 continue
             if any(
                 int(detection.class_id) == int(reference.class_id)
@@ -295,6 +411,10 @@ class FullFrameSupplementTrayModels:
             "candidate_full_frame_detections": len(candidates),
             "candidate_production_overlap_rejected": overlap_rejected,
             "candidate_duplicate_rejected": duplicate_rejected,
+            "candidate_far_background_rejected": far_background_rejected,
+            "far_background_filter_enabled": self.exclude_far_background,
+            "far_background_max_center_y_ratio": self.far_background_max_center_y_ratio,
+            "far_background_max_height_ratio": self.far_background_max_height_ratio,
             "candidate_supplements_kept": len(supplements),
             "kept_detections": len(production) + len(supplements),
         }
@@ -510,8 +630,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--edge-confidence", type=float, default=0.30)
     parser.add_argument(
-        "--candidate-scope", choices=("lower-edge", "full-frame"),
+        "--candidate-scope", choices=("lower-edge", "full-frame", "full-frame-work-area"),
         default="lower-edge",
+    )
+    parser.add_argument(
+        "--work-area-audit", type=Path,
+        help="reviewed work-area evidence required for full-frame-work-area scope",
     )
     parser.add_argument("--edge-width-fraction", type=float, default=0.50)
     parser.add_argument("--edge-height-fraction", type=float, default=0.60)
@@ -526,6 +650,8 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.runtime_bundle and not args.truth_adjudication:
         raise RuntimeError("production-equivalent replay requires reviewed truth adjudication")
+    if args.candidate_scope == "full-frame-work-area" and not args.work_area_audit:
+        raise RuntimeError("full-frame-work-area requires --work-area-audit")
     output = args.output.resolve()
     if output.exists():
         raise FileExistsError(f"refusing to overwrite edge evaluation: {output}")
@@ -533,6 +659,10 @@ def main() -> None:
     candidate_receipt = load_and_verify(args.candidate_receipt.resolve())
     dataset = load_and_verify(args.dataset_manifest.resolve())
     occlusion_audit = load_and_verify(args.occlusion_audit.resolve())
+    work_area_rule_audit = (
+        audit_far_background_rule(args.work_area_audit.resolve())
+        if args.candidate_scope == "full-frame-work-area" else None
+    )
     if candidate_receipt.get("dataset_id") != dataset.get("dataset_id"):
         raise RuntimeError("candidate/dataset id mismatch")
     if candidate_receipt.get("dataset_sha256") != dataset.get("dataset_sha256"):
@@ -589,8 +719,9 @@ def main() -> None:
                 production_base,
                 candidate_base,
                 candidate_confidence=args.edge_confidence,
+                exclude_far_background=args.candidate_scope == "full-frame-work-area",
             )
-            if args.candidate_scope == "full-frame"
+            if args.candidate_scope in ("full-frame", "full-frame-work-area")
             else EdgeContextTrayModels(
                 production_base,
                 yolo.Detection,
@@ -632,8 +763,13 @@ def main() -> None:
         baseline = diagnostics.evaluate_variant(
             "production_full_frame", records, production_models, screening, params, oracles,
         )
+        candidate_variant = (
+            "candidate_full_frame_work_area_supplements"
+            if args.candidate_scope == "full-frame-work-area"
+            else "candidate_full_plus_two_lower_edge_windows"
+        )
         candidate = diagnostics.evaluate_variant(
-            "candidate_full_plus_two_lower_edge_windows",
+            candidate_variant,
             records, candidate_models, screening, params, oracles,
         )
         independent_normal = (
@@ -652,9 +788,13 @@ def main() -> None:
         independent_normal,
     )
     payload = {
-        "version": "label-qc-tray-edge-context-eval-v2",
+        "version": "label-qc-tray-edge-context-eval-v3",
         "created_at": diagnostics.utc_now(),
-        "purpose": "bounded lower-edge zoom A/B after full-image candidate missed one judgeable tray",
+        "purpose": (
+            "production-preserving candidate supplements with reviewed work-area exclusion"
+            if args.candidate_scope == "full-frame-work-area"
+            else "bounded lower-edge zoom A/B after full-image candidate missed one judgeable tray"
+        ),
         "inputs": {
             "baseline_receipt": str(args.baseline_receipt.resolve()),
             "baseline_receipt_sha256": diagnostics.sha256_file(args.baseline_receipt),
@@ -669,6 +809,8 @@ def main() -> None:
             "records_before_truth_adjudication": records_before_truth_adjudication,
             "truth_adjudication": truth_adjudication,
             "edge_confidence": args.edge_confidence,
+            "candidate_scope": args.candidate_scope,
+            "work_area_rule_audit": work_area_rule_audit,
             "edge_width_fraction": args.edge_width_fraction,
             "edge_height_fraction": args.edge_height_fraction,
             "source_edge_margin_ratio": args.source_edge_margin_ratio,

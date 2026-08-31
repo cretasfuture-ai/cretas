@@ -220,6 +220,29 @@ def test_full_frame_supplement_preserves_base_and_adds_only_new_box():
     assert wrapper.last_stats["candidate_supplements_kept"] == 1
 
 
+def test_far_background_rule_rejects_only_tiny_top_boxes():
+    assert module.is_far_background_supplement([10, 10, 50, 30], 1000, 1000)
+    assert not module.is_far_background_supplement([10, 10, 50, 60], 1000, 1000)
+    assert not module.is_far_background_supplement([10, 200, 50, 220], 1000, 1000)
+
+
+def test_work_area_filter_never_removes_production_boxes():
+    production_tiny_top = _Detection(10, 10, 50, 30, 0.6)
+    candidate_tiny_top = _Detection(100, 10, 140, 30, 0.8)
+    candidate_workbench = _Detection(200, 200, 300, 300, 0.7)
+    wrapper = module.FullFrameSupplementTrayModels(
+        _StaticModels([[production_tiny_top]]),
+        _StaticModels([[candidate_tiny_top, candidate_workbench]]),
+        exclude_far_background=True,
+    )
+
+    result = wrapper.detect_trays(np.zeros((1000, 1000, 3), dtype=np.uint8), 0.6)
+
+    assert result == [production_tiny_top, candidate_workbench]
+    assert wrapper.last_stats["candidate_far_background_rejected"] == 1
+    assert wrapper.last_stats["far_background_filter_enabled"] is True
+
+
 def test_corrected_gate_ignores_invalid_legacy_targets_but_requires_judgeable_target():
     baseline = {
         "false_flags": 4, "p95_latency_ms": 100,
