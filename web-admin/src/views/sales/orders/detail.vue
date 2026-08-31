@@ -454,7 +454,10 @@ function targetWarehouseLabel(row: CustomerSuppliedMaterialRequirement): string 
 
 function customerMaterialCategory(row: CustomerSuppliedMaterialRequirement): string {
   const option = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === String(row.materialTypeId));
-  return customerMaterialCategoryLabel(row.mainCategory || option?.mainCategory);
+  return customerMaterialCategoryLabel(
+    row.mainCategory || option?.mainCategory,
+    row.category || option?.category,
+  );
 }
 
 async function loadSuppliedMaterialOptions() {

@@ -667,7 +667,10 @@ function suppliedMaterialCategory(row: CustomerSuppliedMaterialRequirement | Tab
   const materialTypeId = 'materialTypeId' in row ? row.materialTypeId : row.id;
   const option = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === String(materialTypeId));
   const mainCategory = 'mainCategory' in row ? row.mainCategory : undefined;
-  return customerMaterialCategoryLabel(mainCategory || option?.mainCategory);
+  return customerMaterialCategoryLabel(
+    mainCategory || option?.mainCategory,
+    row.category || option?.category,
+  );
 }
 
 function onProcessingModeChange() {
@@ -705,7 +708,7 @@ function suppliedMaterialsPayload(): CustomerSuppliedMaterialRequirement[] {
     && form.value.materialSupplyMode === 'CUSTOMER_SUPPLIED'
     && form.value.customerStockFulfillmentMode === 'ORDER_DRIVEN'
     ? form.value.suppliedMaterials.map((row) => {
-        const { category: _category, ...payload } = row;
+        const { category: _category, mainCategory: _mainCategory, ...payload } = row;
         return {
           ...payload,
           // 🔴 2026-08-18: 与订单明细同一条判据 —— row.unit 是【前端内部比较键】

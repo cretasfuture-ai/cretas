@@ -240,7 +240,7 @@ function onSuppliedMaterialChange(row: SuppliedMaterial): void {
 }
 
 function suppliedMaterialCategory(material: TableRow): string {
-  return customerMaterialCategoryLabel(material.mainCategory);
+  return customerMaterialCategoryLabel(material.mainCategory, material.category);
 }
 
 function onProcessingModeChange(): void {
