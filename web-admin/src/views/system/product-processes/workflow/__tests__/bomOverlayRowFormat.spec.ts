@@ -45,6 +45,11 @@ describe('formatPackagingDosageText', () => {
 });
 
 describe('formatPackagingNaturalHint', () => {
+  it('有包装层级快照时优先显示自然用量关系', () => {
+    expect(formatPackagingNaturalHint(0.125, '个', '盒', 1, '箱', 8))
+      .toBe('= 1 个 / 1 箱 (= 8 盒)');
+  });
+
   it('算出 dosageText 的倒数表达', () => {
     // 0.05 个/kg → 1 个能包 20 kg
     expect(formatPackagingNaturalHint(0.05, '个', 'kg')).toBe('= 1 个 / 20 kg');

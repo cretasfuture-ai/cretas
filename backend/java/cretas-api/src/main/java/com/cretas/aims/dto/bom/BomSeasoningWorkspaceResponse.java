@@ -52,10 +52,10 @@ public class BomSeasoningWorkspaceResponse {
         private String processName;
         private String processCategory;
         private Integer processOrder;
-        /** Standard denominator inherited from the pinned Workflow process node. */
+        /** Standard input denominator inherited from the pinned Workflow process node; currently 1 kg. */
         private BigDecimal standardBasisQuantity;
         private String standardBasisUnit;
-        /** SEMI_FINISHED / FINISHED_GOOD, inherited from the pinned output port or material node. */
+        /** Input material kind inherited from the pinned input port or material node when unambiguous. */
         private String standardBasisMaterialKind;
         /** False when the legacy g-per-kg seasoning model cannot represent this node safely. */
         private boolean standardUsageSupported;
