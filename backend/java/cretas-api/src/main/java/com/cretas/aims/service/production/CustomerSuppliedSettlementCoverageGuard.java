@@ -56,18 +56,24 @@ public class CustomerSuppliedSettlementCoverageGuard {
         }
 
         Long sourceOrderItemId = parseLong(plan.getSourceOrderItemId());
+        List<SalesOrderItem> orderItems = sourceOrderItemId == null ? List.of()
+                : salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(
+                        plan.getSourceOrderId(), factoryId);
+        boolean isExactSingleLineOrder = orderItems.size() == 1
+                && sourceOrderItemId.equals(orderItems.get(0).getId());
         List<SalesOrderSuppliedMaterialRequirement> requirements = requirementRepository
                 .findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(plan.getSourceOrderId())
                 .stream()
                 .filter(requirement -> requirement != null
                         && factoryId.equals(requirement.getFactoryId()))
                 .filter(requirement -> sourceOrderItemId == null
-                        || sourceOrderItemId.equals(requirement.getSalesOrderItemId()))
+                        || sourceOrderItemId.equals(requirement.getSalesOrderItemId())
+                        || (requirement.getSalesOrderItemId() == null && isExactSingleLineOrder))
                 .toList();
         if (requirements.isEmpty()) {
             return response;
         }
-        BigDecimal planShare = resolvePlanShare(factoryId, plan, sourceOrderItemId);
+        BigDecimal planShare = resolvePlanShare(plan, sourceOrderItemId, orderItems);
 
         Map<RequirementKey, BigDecimal> reportedQuantity = new LinkedHashMap<>();
         if (response.getPrefill().getRawMaterialConsumptions() != null) {
@@ -180,12 +186,13 @@ public class CustomerSuppliedSettlementCoverageGuard {
         return value == null || value.isBlank();
     }
 
-    private BigDecimal resolvePlanShare(String factoryId, ProductionPlan plan, Long sourceOrderItemId) {
+    private BigDecimal resolvePlanShare(ProductionPlan plan,
+                                        Long sourceOrderItemId,
+                                        List<SalesOrderItem> orderItems) {
         if (sourceOrderItemId == null) {
             return BigDecimal.ONE;
         }
-        SalesOrderItem orderItem = salesOrderItemRepository
-                .findBySalesOrderIdAndSalesOrderFactoryId(plan.getSourceOrderId(), factoryId).stream()
+        SalesOrderItem orderItem = orderItems.stream()
                 .filter(item -> sourceOrderItemId.equals(item.getId()))
                 .findFirst()
                 .orElse(null);

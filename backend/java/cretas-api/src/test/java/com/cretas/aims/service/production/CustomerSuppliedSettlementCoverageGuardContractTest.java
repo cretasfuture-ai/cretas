@@ -119,6 +119,35 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
     }
 
     @Test
+    void singleLineOrderSafelyOwnsLegacyNullLinkedRequirements() {
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED, "835")));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement(null, "box", "成品盒", "1", "盒")));
+
+        ProductionSettlementPrefillResponse audited = guard.audit(FACTORY, PLAN, prefill());
+
+        assertFalse(audited.getAudit().isClean());
+        assertTrue(audited.getAudit().getIssues().get(0).getMessage()
+                .contains("成品盒 要求 1盒，已报 0盒"));
+    }
+
+    @Test
+    void multiLineOrderDoesNotGuessOwnershipOfNullLinkedRequirements() {
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED, "835")));
+        when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(ORDER, FACTORY))
+                .thenReturn(List.of(orderItem(835L, "1"), orderItem(836L, "1")));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement(null, "box", "成品盒", "1", "盒")));
+
+        ProductionSettlementPrefillResponse audited = guard.audit(FACTORY, PLAN, prefill());
+
+        assertTrue(audited.getAudit().isClean());
+        assertTrue(audited.getAudit().getIssues().isEmpty());
+    }
+
+    @Test
     void factorySuppliedPlanIsOutsideThisGuard() {
         when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
                 .thenReturn(Optional.of(plan(MaterialSupplyMode.FACTORY_SUPPLIED, "835")));
