@@ -53,3 +53,67 @@ def test_context_crop_rebinds_target_box_without_using_whole_image():
     assert rect == [160, 80, 640, 320]
     assert target == pytest.approx([1 / 12, 1 / 12, 11 / 12, 11 / 12])
     assert module.yolo_line(target).startswith("0 0.500000 0.500000")
+
+
+def test_safe_prior_truth_boundary_is_preserved_for_patch_manifest():
+    boundary = module.validate_prior_truth_boundary({
+        "preannotations_used_as_truth": False,
+        "deleted_proposals_used_as_background": False,
+        "images_with_ignore_regions_excluded_from_training": True,
+    })
+
+    assert boundary == module.SAFE_TRUTH_BOUNDARY
+    assert boundary is not module.SAFE_TRUTH_BOUNDARY
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("preannotations_used_as_truth", True),
+        ("deleted_proposals_used_as_background", True),
+        ("images_with_ignore_regions_excluded_from_training", False),
+        ("preannotations_used_as_truth", None),
+    ],
+)
+def test_prior_truth_boundary_fails_closed_on_unsafe_or_missing_field(field, unsafe_value):
+    prior = dict(module.SAFE_TRUTH_BOUNDARY)
+    if unsafe_value is None:
+        prior.pop(field)
+    else:
+        prior[field] = unsafe_value
+
+    with pytest.raises(RuntimeError, match=f"truth boundary is unsafe: {field}"):
+        module.validate_prior_truth_boundary(prior)
+
+
+def test_focus_replay_keeps_history_once_and_repeats_only_derived_patches():
+    provenance = [
+        {"stem": "old_a", "split": "train", "derived_crop": False},
+        {"stem": "old_b", "split": "train"},
+        {"stem": "new_a", "split": "train", "derived_crop": True},
+        {"stem": "validation", "split": "val"},
+    ]
+
+    occurrences, policy = module.build_focus_occurrences(
+        provenance, {"old_a", "old_b", "new_a"}, 6,
+    )
+
+    assert occurrences == ["old_a", "old_b"] + ["new_a"] * 6
+    assert policy == {
+        "historical_physical_images": 2,
+        "derived_physical_images": 1,
+        "historical_repeats": 1,
+        "derived_repeats": 6,
+        "effective_train_occurrences": 8,
+        "unique_train_images": 3,
+        "validation_unchanged": True,
+    }
+
+
+def test_focus_replay_fails_closed_on_inventory_drift_or_invalid_weight():
+    rows = [{"stem": "new_a", "split": "train", "derived_crop": True}]
+
+    with pytest.raises(RuntimeError, match="inventory mismatch"):
+        module.build_focus_occurrences(rows, {"different"}, 6)
+    with pytest.raises(ValueError, match="between 1 and 8"):
+        module.build_focus_occurrences(rows, {"new_a"}, 9)

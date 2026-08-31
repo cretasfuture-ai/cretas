@@ -132,6 +132,52 @@ class TrayWorkflowTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not fully human-reviewed"):
                     module.validate_reviewed_queue(queue, holdout)
 
+    def test_queue_excludes_reviewed_non_workbench_scene_from_training(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            queue = root / "queue"
+            (queue / "images").mkdir(parents=True)
+            (queue / "annotations-human").mkdir()
+            rows = []
+            for index, stem in enumerate(("keep", "exclude"), 1):
+                source = root / f"source-{stem}.jpg"
+                packed = queue / "images" / f"{stem}.jpg"
+                Image.new("RGB", (80, 60), (20 * index, 80, 180)).save(source)
+                Image.new("RGB", (40, 30), (20 * index, 80, 180)).save(packed)
+                rows.append({
+                    "packed_stem": stem, "packed_image": f"images/{stem}.jpg",
+                    "packed_image_sha256": module.sha256(packed), "source_path": str(source),
+                    "source_sha256": module.sha256(source), "source_perceptual_hash": "f" * 64,
+                    "task_id": f"task-{index}", "source_photo_id": f"photo-{index}",
+                })
+            (queue / "manifest.json").write_text(json.dumps({
+                "queue_count": 2, "rows": rows, "protected_holdout_included": False,
+                "preannotations_are_not_ground_truth": True,
+            }), encoding="utf-8")
+            (queue / "annotations-human" / "keep.json").write_text(json.dumps({
+                "reviewed": True, "source": "human", "format": "normalised_xyxy",
+                "training_eligible": True, "boxes": [[0.1, 0.1, 0.8, 0.8]],
+            }), encoding="utf-8")
+            (queue / "annotations-human" / "exclude.json").write_text(json.dumps({
+                "reviewed": True, "source": "human", "format": "normalised_xyxy",
+                "training_eligible": False, "training_exclusion_reason": "not_workbench_scene",
+                "boxes": [],
+            }), encoding="utf-8")
+            holdout_rows = []
+            for index in range(27):
+                image = root / f"holdout-{index}.jpg"
+                Image.new("RGB", (16, 16), (index, index, index)).save(image)
+                holdout_rows.append({"image": str(image), "image_sha256": module.sha256(image)})
+            holdout = root / "holdout.json"
+            holdout.write_text(json.dumps({
+                "train_use_allowed": False, "records": holdout_rows,
+            }), encoding="utf-8")
+            with mock.patch.object(
+                module, "phash", side_effect=lambda path: "0" * 64 if "holdout" in path.name else "f" * 64,
+            ):
+                _, accepted = module.validate_reviewed_queue(queue, holdout)
+            self.assertEqual(["keep"], [row["source"]["packed_stem"] for row in accepted])
+
     def test_work_area_queue_audit_recomputes_inside_outside_counts(self):
         with tempfile.TemporaryDirectory() as temporary:
             queue = Path(temporary) / "queue"

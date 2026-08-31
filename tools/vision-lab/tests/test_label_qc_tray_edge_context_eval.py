@@ -126,6 +126,123 @@ def test_edge_candidate_overlapping_production_is_rejected_before_merge():
     assert wrapper.last_stats["edge_production_overlap_rejected"] == 1
 
 
+def test_preserving_merge_never_replaces_a_base_box_with_higher_confidence_edge_box():
+    production_detection = _Detection(100, 500, 400, 700, 0.5)
+    candidate_detection = _Detection(130, 180, 430, 380, 0.9)
+    production = _StaticModels([[production_detection]])
+    edge = _StaticModels([[candidate_detection], []])
+    wrapper = module.EdgeContextTrayModels(
+        production,
+        _Detection,
+        edge_base=edge,
+        production_overlap_ios=0.95,
+        preserve_base_detections=True,
+    )
+
+    result = wrapper.detect_trays(np.zeros((800, 1000, 3), dtype=np.uint8), 0.6)
+
+    assert result == [production_detection]
+    assert wrapper.last_stats["duplicates_removed"] == 1
+
+
+def test_runtime_wrapper_uses_original_v8_cascade_as_preserved_base():
+    production_detection = _Detection(100, 500, 400, 700, 0.7)
+
+    class _Inner:
+        def __init__(self):
+            self.last_raw_detections = []
+            self.last_stats = {}
+            self.routes = []
+
+        def detect_trays(self, _image, _conf):
+            self.last_raw_detections = [{
+                "source": "candidate_lower_band",
+                "box": production_detection.as_xyxy(),
+                "confidence": production_detection.confidence,
+                "class_id": production_detection.class_id,
+            }]
+            self.last_stats = {"mode": "v8_preserved_cascade"}
+            return [production_detection]
+
+        def _set_label_routes(self, _image, detections):
+            self.routes = list(detections)
+
+    class _Runtime:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def _require_models(self):
+            return self.inner
+
+    class _V8:
+        @staticmethod
+        def _box_key(box):
+            return tuple(round(float(value), 3) for value in box)
+
+        @staticmethod
+        def _detection_row(detection, source):
+            return {
+                "source": source,
+                "box": detection.as_xyxy(),
+                "confidence": detection.confidence,
+                "class_id": detection.class_id,
+            }
+
+    inner = _Inner()
+    edge_models = module.EdgeContextTrayModels(
+        _StaticModels([[]]), _Detection, edge_base=_StaticModels([[], []]),
+    )
+    wrapper = module.RuntimeEdgeContextModels(_Runtime(inner), edge_models, _V8)
+
+    result = wrapper._detect_trays(
+        np.zeros((800, 1000, 3), dtype=np.uint8), 0.6,
+    )
+
+    assert result == [production_detection]
+    assert inner.last_raw_detections[0]["source"] == "candidate_lower_band"
+    assert inner.routes == [production_detection]
+
+
+def test_full_frame_supplement_preserves_base_and_adds_only_new_box():
+    production_detection = _Detection(0, 0, 100, 100, 0.5)
+    replacement = _Detection(5, 5, 105, 105, 0.9)
+    supplement = _Detection(200, 200, 300, 300, 0.7)
+    wrapper = module.FullFrameSupplementTrayModels(
+        _StaticModels([[production_detection]]),
+        _StaticModels([[replacement, supplement]]),
+        candidate_confidence=0.5,
+    )
+
+    result = wrapper.detect_trays(np.zeros((400, 400, 3), dtype=np.uint8), 0.6)
+
+    assert result == [production_detection, supplement]
+    assert wrapper.last_stats["candidate_production_overlap_rejected"] == 1
+    assert wrapper.last_stats["candidate_supplements_kept"] == 1
+
+
+def test_far_background_rule_rejects_only_tiny_top_boxes():
+    assert module.is_far_background_supplement([10, 10, 50, 30], 1000, 1000)
+    assert not module.is_far_background_supplement([10, 10, 50, 60], 1000, 1000)
+    assert not module.is_far_background_supplement([10, 200, 50, 220], 1000, 1000)
+
+
+def test_work_area_filter_never_removes_production_boxes():
+    production_tiny_top = _Detection(10, 10, 50, 30, 0.6)
+    candidate_tiny_top = _Detection(100, 10, 140, 30, 0.8)
+    candidate_workbench = _Detection(200, 200, 300, 300, 0.7)
+    wrapper = module.FullFrameSupplementTrayModels(
+        _StaticModels([[production_tiny_top]]),
+        _StaticModels([[candidate_tiny_top, candidate_workbench]]),
+        exclude_far_background=True,
+    )
+
+    result = wrapper.detect_trays(np.zeros((1000, 1000, 3), dtype=np.uint8), 0.6)
+
+    assert result == [production_tiny_top, candidate_workbench]
+    assert wrapper.last_stats["candidate_far_background_rejected"] == 1
+    assert wrapper.last_stats["far_background_filter_enabled"] is True
+
+
 def test_corrected_gate_ignores_invalid_legacy_targets_but_requires_judgeable_target():
     baseline = {
         "false_flags": 4, "p95_latency_ms": 100,

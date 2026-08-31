@@ -342,13 +342,14 @@ def merge_preannotations(
         support = sorted(set(row.get("support") or [row.get("prompt", "teacher")]))
         overlaps = [box_iou(row["box"], detector["box"]) for detector in detector_boxes]
         detector_support = max(overlaps, default=0.0)
-        # A teacher-only proposal needs either two prompt variants or some low-floor
-        # detector support. This keeps one-off full-scene hallucinations out.
-        if detector_support < 0.10 and len(support) < 2:
+        # Keep only independently supported teacher proposals that are genuinely
+        # absent from detector output. Overlapping teacher boxes add redraw noise
+        # without exposing a detector blind spot.
+        if detector_support >= 0.10 or len(support) < 2:
             continue
         proposals.append({
             "box": row["box"], "source": "locateanything_teacher",
-            "support": support + (["tray_detector_low_iou"] if detector_support >= 0.10 else []),
+            "support": support,
             "confidence": round(detector_support, 6), "priority": 1,
         })
     return deduplicate_boxes(proposals)
@@ -467,31 +468,33 @@ def detector_predict(
     from ultralytics import YOLO
 
     model = YOLO(str(model_path), task="detect")
-    paths = [row["local_path"] for row in records]
-    if model_path.suffix.lower() == ".onnx":
-        # The deployed export has a static batch dimension of one. Ultralytics
-        # still stacks an in-memory path list even when batch=1, so call the
-        # persistent session one image at a time.
-        results = [
-            model.predict(path, imgsz=960, conf=0.05, iou=0.40, device=device, verbose=False)[0]
-            for path in paths
-        ]
-    else:
-        results = model.predict(
-            paths, imgsz=960, conf=0.05, iou=0.40, device=device,
-            batch=batch, workers=0, verbose=False,
-        )
-    if len(results) != len(records):
-        raise RuntimeError("tray detector result count mismatch")
     output: dict[str, list[dict[str, Any]]] = {}
-    for record, result in zip(records, results):
-        boxes = result.boxes.xyxyn.cpu().tolist() if result.boxes is not None else []
-        confidences = result.boxes.conf.cpu().tolist() if result.boxes is not None else []
-        output[str(record["photo_id"])] = [
-            {"box": [round(float(value), 8) for value in box], "confidence": round(float(confidence), 8)}
-            for box, confidence in zip(boxes, confidences)
-            if valid_box(box) is not None
-        ]
+    chunk_size = 1 if model_path.suffix.lower() == ".onnx" else max(1, batch)
+    for offset in range(0, len(records), chunk_size):
+        chunk = records[offset:offset + chunk_size]
+        paths = [row["local_path"] for row in chunk]
+        if model_path.suffix.lower() == ".onnx":
+            # The deployed export has a static batch dimension of one.
+            results = [model.predict(
+                paths[0], imgsz=960, conf=0.05, iou=0.40,
+                device=device, verbose=False,
+            )[0]]
+        else:
+            results = model.predict(
+                paths, imgsz=960, conf=0.05, iou=0.40, device=device,
+                batch=batch, workers=0, verbose=False,
+            )
+        if len(results) != len(chunk):
+            raise RuntimeError("tray detector result count mismatch")
+        for record, result in zip(chunk, results):
+            boxes = result.boxes.xyxyn.cpu().tolist() if result.boxes is not None else []
+            confidences = result.boxes.conf.cpu().tolist() if result.boxes is not None else []
+            output[str(record["photo_id"])] = [
+                {"box": [round(float(value), 8) for value in box], "confidence": round(float(confidence), 8)}
+                for box, confidence in zip(boxes, confidences)
+                if valid_box(box) is not None
+            ]
+        del results
     return output
 
 
@@ -1095,6 +1098,10 @@ def main() -> None:
     parser.add_argument("--queue-size", type=int, default=24)
     parser.add_argument("--max-per-task", type=int, default=2)
     parser.add_argument("--detector-batch", type=int, default=8)
+    parser.add_argument(
+        "--detector-device", default="cpu",
+        help="Ultralytics device for the tray detector (default: cpu; use 0 for the first GPU)",
+    )
     parser.add_argument("--near-holdout-hamming", type=int, default=10)
     parser.add_argument("--annotator-url", default="http://127.0.0.1:8765")
     parser.add_argument("--prefer-blue-basket", action="store_true")
@@ -1146,7 +1153,9 @@ def main() -> None:
             raise RuntimeError(
                 f"reusable tray selection count {len(candidates)} does not match queue-size {args.queue_size}"
             )
-    detector = detector_predict(args.tray_model, candidates, args.detector_batch, "cpu")
+    detector = detector_predict(
+        args.tray_model, candidates, args.detector_batch, args.detector_device
+    )
     comparison = (
         detector_predict(args.comparison_model, candidates, args.detector_batch, "0")
         if args.comparison_model else {}
@@ -1310,6 +1319,7 @@ def main() -> None:
             "skipped_reason": teacher_skip_reason,
         },
         "detector_model": str(args.tray_model), "detector_sha256": sha256_file(args.tray_model),
+        "detector_device": args.detector_device,
         "comparison_model": str(args.comparison_model) if args.comparison_model else None,
         "comparison_model_sha256": sha256_file(args.comparison_model) if args.comparison_model else None,
         "comparison_model_is_ground_truth": False,

@@ -107,13 +107,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--queue", required=True, type=Path)
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--review-limit", type=int)
     parser.add_argument("--annotator-script", type=Path, default=DEFAULT_ANNOTATOR)
     args = parser.parse_args()
 
     queue = args.queue.resolve()
     validate_tray_queue(queue)
-    if not args.annotator_script.is_file():
-        raise FileNotFoundError(args.annotator_script)
+    if args.review_limit is not None or not args.annotator_script.is_file():
+        from tray_annotator_standalone import serve
+        serve(queue, args.port, args.review_limit)
+        return
     os.environ["CRETAS_TRAY_ANNOTATION_ROOT"] = str(queue)
     os.environ["CRETAS_TRAY_ANNOTATION_PORT"] = str(args.port)
     bridge = load_module(args.annotator_script)

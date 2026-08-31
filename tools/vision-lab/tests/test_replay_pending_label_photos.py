@@ -32,3 +32,12 @@ def test_compare_trays_fails_closed_on_geometry_drift():
     current = [{"index": 0, "bbox": [0.2, 0.2, 0.3, 0.3], "verdict": "CLEAR", "labels": []}]
     with pytest.raises(RuntimeError, match="box parity drift"):
         MODULE.compare_trays(old, current)
+
+
+def test_select_model_rows_keeps_only_matching_persisted_model():
+    rows = [
+        {"photo_id": "old", "ai_model": "model-old"},
+        {"photo_id": "new", "ai_model": "model-new"},
+    ]
+    assert MODULE.select_model_rows(rows, "model-new") == [rows[1]]
+    assert MODULE.select_model_rows(rows, None) is rows

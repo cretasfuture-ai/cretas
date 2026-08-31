@@ -349,9 +349,64 @@ def validate_append_contract(
     }
 
 
+def audited_provenance_counts(
+    dataset_root: Path, rows: Sequence[dict[str, Any]],
+) -> dict[str, int]:
+    counts = {"train_images": 0, "train_boxes": 0, "val_images": 0, "val_boxes": 0}
+    expected: dict[str, set[str]] = {"train": set(), "val": set()}
+    for row in rows:
+        split, stem = str(row.get("split") or ""), str(row.get("stem") or "")
+        if split not in expected or not stem or stem in expected[split]:
+            raise RuntimeError("prior dataset provenance contains an invalid split/stem")
+        image = dataset_root / "images" / split / f"{stem}.jpg"
+        label = dataset_root / "labels" / split / f"{stem}.txt"
+        if not image.is_file() or not label.is_file():
+            raise RuntimeError(f"prior dataset provenance artifact is missing: {stem}")
+        label_boxes = len([line for line in label.read_text(encoding="utf-8").splitlines() if line.strip()])
+        if label_boxes != int(row.get("box_count", -1)):
+            raise RuntimeError(f"prior dataset provenance box count drift: {stem}")
+        expected[split].add(stem)
+        counts[f"{split}_images"] += 1
+        counts[f"{split}_boxes"] += label_boxes
+    for split in expected:
+        physical_images = {path.stem for path in (dataset_root / "images" / split).glob("*.jpg")}
+        physical_labels = {path.stem for path in (dataset_root / "labels" / split).glob("*.txt")}
+        if physical_images != expected[split] or physical_labels != expected[split]:
+            raise RuntimeError(f"prior dataset physical/provenance inventory drift: {split}")
+    return counts
+
+
+def build_appended_occurrences(
+    provenance_rows: Sequence[dict[str, Any]], appended_stems: Sequence[str], appended_repeats: int,
+) -> tuple[list[str], dict[str, Any]]:
+    if appended_repeats < 1 or appended_repeats > 8:
+        raise ValueError("appended repeats must be between 1 and 8")
+    train_stems = [str(row.get("stem") or "") for row in provenance_rows if row.get("split") == "train"]
+    if not train_stems or "" in train_stems or len(set(train_stems)) != len(train_stems):
+        raise RuntimeError("train provenance stems are invalid")
+    appended = list(appended_stems)
+    if not appended or "" in appended or len(set(appended)) != len(appended):
+        raise RuntimeError("appended training stems are invalid")
+    if not set(appended).issubset(set(train_stems)):
+        raise RuntimeError("appended training stems are not present in provenance")
+    historical = [stem for stem in train_stems if stem not in set(appended)]
+    occurrences = historical + appended * appended_repeats
+    return occurrences, {
+        "historical_physical_images": len(historical),
+        "appended_physical_images": len(appended),
+        "historical_repeats": 1,
+        "appended_repeats": appended_repeats,
+        "effective_train_occurrences": len(occurrences),
+        "unique_train_images": len(train_stems),
+        "validation_unchanged": True,
+    }
+
+
 def build_dataset(
-    prior_manifest_path: Path, reviewed_queue: Path, output_root: Path,
+    prior_manifest_path: Path, reviewed_queue: Path, output_root: Path, appended_repeats: int = 1,
 ) -> tuple[Path, dict[str, Any]]:
+    if appended_repeats < 1 or appended_repeats > 8:
+        raise ValueError("appended repeats must be between 1 and 8")
     prior_manifest_path = prior_manifest_path.resolve()
     reviewed_queue = reviewed_queue.resolve()
     output_root = output_root.resolve()
@@ -365,6 +420,7 @@ def build_dataset(
     provenance_path = prior_root / "provenance.json"
     provenance = load_json(provenance_path)
     prior_rows = provenance.get("rows") or []
+    prior_effective_counts = audited_provenance_counts(prior_root, prior_rows)
     append_audit = validate_append_contract(prior, queue_manifest, reviewed, prior_rows)
     training_stems = set(append_audit["training_stems"])
     training_reviewed = [
@@ -377,8 +433,11 @@ def build_dataset(
         "base_dataset_sha256": prior["dataset_sha256"],
         "reviewed_queue": queue_identity(reviewed_queue, reviewed),
         "append_audit": append_audit,
+        "prior_effective_counts": prior_effective_counts,
+        "count_policy": "all_physical_rows_bound_one_to_one_to_provenance",
         "split_policy": "append_train_only_preserve_base_validation",
         "tight_patch_rows_included": False,
+        "appended_repeats": appended_repeats,
     }
     dataset_id = "tray-full-" + hashlib.sha256(patch_dataset.stable_json(identity)).hexdigest()[:12]
     output = output_root / dataset_id
@@ -396,7 +455,7 @@ def build_dataset(
     copied_provenance = load_json(copied_provenance_path)
     copied_rows = copied_provenance.get("rows") or []
     appended: list[dict[str, Any]] = []
-    counts = dict(prior.get("counts") or {})
+    counts = dict(prior_effective_counts)
     for item in training_reviewed:
         source = item["source"]
         stem = str(source["packed_stem"])
@@ -448,8 +507,18 @@ def build_dataset(
     copied_provenance_path.write_text(
         json.dumps(copied_provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
+    occurrences, replay_policy = build_appended_occurrences(
+        copied_rows, [str(row["stem"]) for row in appended], appended_repeats,
+    )
+    train_source = "images/train"
+    if appended_repeats > 1:
+        train_source = "train-focus.txt"
+        (temporary / train_source).write_text(
+            "\n".join(f"./images/train/{stem}.jpg" for stem in occurrences) + "\n",
+            encoding="utf-8",
+        )
     (temporary / "data.yaml").write_text(
-        f"path: {output.as_posix()}\ntrain: images/train\nval: images/val\nnames:\n  0: tray\n",
+        f"path: {output.as_posix()}\ntrain: {train_source}\nval: images/val\nnames:\n  0: tray\n",
         encoding="utf-8",
     )
     manifest = {
@@ -459,6 +528,8 @@ def build_dataset(
         "base_dataset": str(prior_root),
         "base_dataset_id": prior.get("dataset_id"),
         "base_dataset_sha256": prior.get("dataset_sha256"),
+        "prior_declared_counts": prior.get("counts") or {},
+        "prior_effective_counts": prior_effective_counts,
         "reviewed_queue": str(reviewed_queue),
         "reviewed_queue_manifest_sha256": patch_dataset.sha256_file(reviewed_queue / "manifest.json"),
         "append_audit": append_audit,
@@ -475,6 +546,7 @@ def build_dataset(
         ),
         "independent_appended_tasks": len({row["task_id"] for row in appended}),
         "appended_rows": appended,
+        "training_replay_policy": replay_policy,
         "validation_task_ids": prior.get("validation_task_ids") or [],
         "validation_unchanged_from_base_dataset": True,
         "tight_patch_rows_included": False,
@@ -511,12 +583,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prior-dataset-manifest", required=True, type=Path)
     parser.add_argument("--reviewed-queue", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--appended-repeats", type=int, default=1)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    output, manifest = build_dataset(args.prior_dataset_manifest, args.reviewed_queue, args.output_root)
+    output, manifest = build_dataset(
+        args.prior_dataset_manifest, args.reviewed_queue, args.output_root, args.appended_repeats,
+    )
     print(json.dumps({
         "dataset": str(output),
         "dataset_id": manifest["dataset_id"],
