@@ -193,7 +193,8 @@ public class CustomerMaterialArrivalNoticeService {
                 .orElseThrow(() -> new BusinessException(400, "实际原料不存在、已停用或不属于当前工厂")
                         .withCode("CUSTOMER_MATERIAL_ARRIVAL_MATERIAL_INVALID")
                         .withHintTarget("materialTypeId"));
-        warehouseInventoryGuardService.assertCanReceive(request.getWarehouseId(), factoryId, "RAW");
+        warehouseInventoryGuardService.assertCanReceiveCustomerSupplied(
+                request.getWarehouseId(), factoryId, material.getMainCategory());
         warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(request.getWarehouseId(), factoryId)
                 .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))
                 .orElseThrow(() -> new BusinessException(400, "实际入库仓库不存在、已停用或不属于当前工厂")

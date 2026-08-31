@@ -263,6 +263,7 @@ class SalesOrderSuppliedMaterialRequirementRepositoryQueryValidationTest {
         material.setFactoryId(factoryId);
         material.setCode("RM-" + factoryId);
         material.setName("Material " + factoryId);
+        material.setCategory("原料");
         material.setUnit("kg");
         material.setIsActive(true);
         material.setCreatedBy(user.getId());

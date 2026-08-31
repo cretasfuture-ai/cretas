@@ -866,6 +866,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .code(materialType.getCode())
                 .name(materialType.getName())
                 .category(materialType.getCategory())
+                .mainCategory(materialType.getMainCategory())
                 .isByproduct(Boolean.TRUE.equals(materialType.getIsByproduct()))
                 .unit(materialType.getUnit())
                 .materialReferencePrice(materialType.getUnitPrice())

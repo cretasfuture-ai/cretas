@@ -41,7 +41,7 @@ describe('sales order product dropdown endpoint', () => {
     expect(source).not.toContain('...mats');
   });
 
-  it('new.vue 将商品和 suppliedMaterials 分别赋值，并按需加载客供原料', () => {
+  it('new.vue 将商品和 suppliedMaterials 分别赋值，并按需加载客供物料', () => {
     const source = readFileSync(resolve(__dirname, '..', 'new.vue'), 'utf8');
     expect(source).toContain('products.value = unwrap<Product>(productResponse?.data).filter(isSalesOrderProduct)');
     expect(source).toContain('async function loadSuppliedMaterialOptions(): Promise<void>');

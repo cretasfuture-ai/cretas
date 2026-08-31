@@ -1,6 +1,7 @@
 package com.cretas.aims.service.factory;
 
 import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.material.MaterialMainCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,21 @@ import java.util.Optional;
 public class WarehouseInventoryGuardService {
 
     private final FactoryWarehouseRepository warehouseRepo;
+
+    /**
+     * 客供物料三分类均以原料形态进入现有 RAW/SALTED 仓能力契约。
+     * 该入口只接受已由主数据严格解析出的三种大类，不把中文大类字符串传给旧契约。
+     */
+    public void assertCanReceiveCustomerSupplied(String warehouseId, String factoryId,
+                                                   String materialMainCategory) {
+        if (!MaterialMainCategory.ALLOWED.contains(materialMainCategory)) {
+            throw new BusinessException(400, "客供物料大类无效或未登记: " + materialMainCategory)
+                    .withCode("CUSTOMER_SUPPLIED_MATERIAL_CATEGORY_INVALID")
+                    .withHint("大类只有 原料 / 辅料 / 包材 三种")
+                    .withHintTarget("category");
+        }
+        assertCanReceive(warehouseId, factoryId, "RAW");
+    }
 
     /**
      * 校验给定的入库类型是否允许移入目标仓库类型。

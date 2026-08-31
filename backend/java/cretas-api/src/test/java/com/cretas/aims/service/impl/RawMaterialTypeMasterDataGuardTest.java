@@ -85,6 +85,7 @@ class RawMaterialTypeMasterDataGuardTest {
         RawMaterialTypeDTO result = service.createMaterialType(FACTORY, dto);
 
         assertThat(result.getName()).isEqualTo("牛肉");
+        assertThat(result.getMainCategory()).isEqualTo("原料");
         assertThat(result.getUnit()).isEqualTo("kg");
         assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_13);
         assertThat(result.getTaxIncludedUnitPrice()).isEqualByComparingTo("113.00");
@@ -106,6 +107,7 @@ class RawMaterialTypeMasterDataGuardTest {
         RawMaterialTypeDTO result = service.createMaterialType(FACTORY, dto);
 
         assertThat(result.getCategory()).isEqualTo("包材");
+        assertThat(result.getMainCategory()).isEqualTo("包材");
         assertThat(result.getStorageType()).isNull();
         assertThat(result.getTaxRate()).isEqualTo(TaxRate.TAX_13);
         assertThat(result.getTaxIncludedUnitPrice()).isEqualByComparingTo("113.00");

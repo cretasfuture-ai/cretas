@@ -112,6 +112,49 @@ class WarehouseInventoryGuardServiceTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    @DisplayName("T7: 客供物料三分类均映射现有 RAW 仓能力")
+    void customerSupplied_threeMainCategories_passesRawWarehouse() {
+        FactoryWarehouse warehouse = buildWarehouse(FactoryWarehouse.WarehouseType.RAW);
+        when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WH_ID, FACTORY_ID))
+                .thenReturn(Optional.of(warehouse));
+
+        assertThatCode(() -> guardService.assertCanReceiveCustomerSupplied(WH_ID, FACTORY_ID, "原料"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> guardService.assertCanReceiveCustomerSupplied(WH_ID, FACTORY_ID, "辅料"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> guardService.assertCanReceiveCustomerSupplied(WH_ID, FACTORY_ID, "包材"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("T8: 客供物料未知大类 fail closed")
+    void customerSupplied_unknownMainCategory_failsClosed() {
+        assertThatThrownBy(() -> guardService.assertCanReceiveCustomerSupplied(WH_ID, FACTORY_ID, "UNKNOWN"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("CUSTOMER_SUPPLIED_MATERIAL_CATEGORY_INVALID");
+    }
+
+    @Test
+    @DisplayName("T9: 客供三分类进入 WIP/成品仓均拒绝")
+    void customerSupplied_nonRawWarehouse_failsClosed() {
+        for (FactoryWarehouse.WarehouseType type :
+                new FactoryWarehouse.WarehouseType[] {FactoryWarehouse.WarehouseType.WIP,
+                        FactoryWarehouse.WarehouseType.FINISHED}) {
+            FactoryWarehouse warehouse = buildWarehouse(type);
+            when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(WH_ID, FACTORY_ID))
+                    .thenReturn(Optional.of(warehouse));
+            for (String category : new String[] {"原料", "辅料", "包材"}) {
+                assertThatThrownBy(() -> guardService.assertCanReceiveCustomerSupplied(
+                        WH_ID, FACTORY_ID, category))
+                        .isInstanceOf(BusinessException.class)
+                        .extracting(ex -> ((BusinessException) ex).getCode())
+                        .isEqualTo(422);
+            }
+        }
+    }
+
     private FactoryWarehouse buildWarehouse(FactoryWarehouse.WarehouseType type) {
         FactoryWarehouse wh = new FactoryWarehouse();
         wh.setId(WH_ID);

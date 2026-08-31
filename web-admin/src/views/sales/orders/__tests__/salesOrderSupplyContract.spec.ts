@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   customerMaterialReceivingStatusLabel,
+  customerMaterialCategoryLabel,
+  customerMaterialCategoryOf,
   materialSupplyModeLabel,
   newSalesOrderSupplyContract,
   processingModeLabel,
@@ -29,7 +31,7 @@ describe('sales order supply contract', () => {
       processingMode: 'STANDARD_SALE',
       materialSupplyMode: 'CUSTOMER_SUPPLIED',
       customerStockFulfillmentMode: 'ORDER_DRIVEN',
-    })).toContain('普通销售不能选择客户自带原料');
+    })).toContain('普通销售不能选择客户自带物料');
     const contract = {
       processingMode: 'TOLL_PROCESSING' as const,
       materialSupplyMode: 'CUSTOMER_SUPPLIED' as const,
@@ -58,7 +60,7 @@ describe('sales order supply contract', () => {
 
   it('uses Chinese labels and explicit legacy fallbacks', () => {
     expect(processingModeLabel('TOLL_PROCESSING')).toBe('代加工');
-    expect(materialSupplyModeLabel('CUSTOMER_SUPPLIED')).toBe('客户自带原料');
+    expect(materialSupplyModeLabel('CUSTOMER_SUPPLIED')).toBe('客户自带物料');
     expect(processingModeLabel(null)).toBe('未设置（历史数据）');
     expect(customerMaterialReceivingStatusLabel('PARTIALLY_RECEIVED')).toBe('部分收货');
   });
@@ -90,7 +92,7 @@ describe('sales order supply contract', () => {
     expect(listSource).toContain('Array.isArray(row.suppliedMaterials)');
     expect(listSource).toContain('const detailResponse = await get(`/${factoryId.value}/sales/orders/${orderId}`)');
     expect(detailSource).toContain('processingModeLabel(order.processingMode)');
-    expect(detailSource).toContain('客户自带原料需求');
+    expect(detailSource).toContain('客户自带物料需求');
     expect(detailSource).toContain('isOrderDrivenCustomerSuppliedOrder');
     expect(detailSource).toContain('客户已有成品库存');
     expect(detailSource).toContain('/sales/orders/${orderId.value}/reservations');
@@ -98,6 +100,23 @@ describe('sales order supply contract', () => {
     expect(detailSource).toContain('前往仓储收货任务');
     expect(detailSource).not.toContain('customer-material-receipts');
     expect(detailSource).not.toContain('客供料入库');
+  });
+
+  it('maps all three material-master categories for display without changing the payload contract', () => {
+    expect(customerMaterialCategoryOf('原料')).toBe('RAW');
+    expect(customerMaterialCategoryOf('辅料')).toBe('AUXILIARY');
+    expect(customerMaterialCategoryOf('PACKAGING')).toBe('PACKAGING');
+    expect(customerMaterialCategoryOf('包装')).toBeNull();
+    expect(customerMaterialCategoryLabel('unclassified')).toBe('未知分类');
+    expect(newSource).toContain('suppliedMaterialCategory(material)');
+    expect(listSource).toContain('suppliedMaterialCategory(material)');
+    expect(detailSource).toContain('customerMaterialCategory(row)');
+    expect(listSource).toContain('const { category: _category, ...payload } = row');
+    expect(newSource).toContain('customerMaterialCategoryLabel(material.mainCategory)');
+    expect(listSource).toContain('customerMaterialCategoryLabel(mainCategory || option?.mainCategory)');
+    expect(detailSource).toContain('customerMaterialCategoryLabel(row.mainCategory || option?.mainCategory)');
+    expect(listSource).toContain("ElMessage.error('客供物料分类加载失败，请刷新后重试')");
+    expect(detailSource).toContain("ElMessage.error('客供物料分类加载失败，请刷新后重试')");
   });
 
   it('renders a real DOM focus target around the customer-material arrival picker', () => {

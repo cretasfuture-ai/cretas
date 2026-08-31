@@ -1,13 +1,18 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.inventory.CustomerSuppliedMaterialReceiptRequest;
+import com.cretas.aims.dto.inventory.CreateSalesOrderRequest;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.enums.SalesProcessingMode;
 import com.cretas.aims.entity.enums.SalesOrderSuppliedMaterialRequirementStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement;
@@ -35,6 +40,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -46,6 +52,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
 class SalesOrderSuppliedMaterialRequirementReceiptTest {
@@ -86,6 +93,54 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
     }
 
     @Test
+    void createsRequirementsForRawAuxiliaryAndPackagingMaterialMasters() {
+        SalesOrder order = approvedOrder();
+        order.setProcessingMode(SalesProcessingMode.TOLL_PROCESSING);
+        order.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        order.setCustomerStockFulfillmentMode(CustomerStockFulfillmentMode.ORDER_DRIVEN);
+        FactoryWarehouse warehouse = new FactoryWarehouse();
+        warehouse.setId("warehouse-raw");
+        warehouse.setFactoryId("F006");
+        warehouse.setIsActive(true);
+        when(factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(
+                "warehouse-raw", "F006")).thenReturn(Optional.of(warehouse));
+        when(requirementRepository.saveAllAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        String[][] materials = {
+                {"material-raw", "主材", "原料"},
+                {"material-aux", "调味料", "辅料"},
+                {"material-packaging", "PACKAGING", "包材"}
+        };
+        for (String[] fixture : materials) {
+            RawMaterialType material = new RawMaterialType();
+            material.setId(fixture[0]);
+            material.setFactoryId("F006");
+            material.setName(fixture[0]);
+            material.setCategory(fixture[1]);
+            material.setUnit("kg");
+            material.setIsActive(true);
+            when(rawMaterialTypeRepository.findById(fixture[0])).thenReturn(Optional.of(material));
+
+            CreateSalesOrderRequest.SuppliedMaterialRequirementDTO request =
+                    new CreateSalesOrderRequest.SuppliedMaterialRequirementDTO();
+            request.setMaterialTypeId(fixture[0]);
+            request.setExpectedQuantity(BigDecimal.ONE);
+            request.setUnit("kg");
+            request.setExpectedArrivalAt(LocalDateTime.of(2026, 9, 2, 8, 0));
+            request.setTargetWarehouseId("warehouse-raw");
+
+            List<SalesOrderSuppliedMaterialRequirement> created =
+                    service.createForOrder(order, List.of(request));
+            assertThat(created).singleElement()
+                    .extracting(SalesOrderSuppliedMaterialRequirement::getMaterialTypeId)
+                    .isEqualTo(fixture[0]);
+            verify(warehouseInventoryGuardService).assertCanReceiveCustomerSupplied(
+                    "warehouse-raw", "F006", fixture[2]);
+        }
+        verify(requirementRepository, times(3)).saveAllAndFlush(any());
+    }
+
+    @Test
     void confirmsRemainingQuantityAsCustomerOwnedInventoryAndCompletesTask() {
         CustomerSuppliedMaterialReceiptRequest request = request("receipt-key-1", "6");
         SalesOrderSuppliedMaterialRequirement requirement = requirement("4");
@@ -93,6 +148,7 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
         material.setFactoryId("F006");
         material.setId("material-1");
         material.setUnit("kg");
+        material.setCategory("原料");
         material.setIsActive(true);
         material.setShelfLifeDays(7);
         MaterialBatchDTO response = new MaterialBatchDTO();
@@ -132,7 +188,7 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
         assertThat(requirement.getReceivedQuantity()).isEqualByComparingTo("10");
         assertThat(requirement.getStatus())
                 .isEqualTo(SalesOrderSuppliedMaterialRequirementStatus.COMPLETED);
-        verify(warehouseInventoryGuardService).assertCanReceive("warehouse-raw", "F006", "RAW");
+        verify(warehouseInventoryGuardService).assertCanReceiveCustomerSupplied("warehouse-raw", "F006", "原料");
     }
 
     @Test
@@ -234,6 +290,7 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
         material.setFactoryId("F006");
         material.setId("material-1");
         material.setUnit("kg");
+        material.setCategory("原料");
         material.setIsActive(true);
 
         when(materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceEventKey(

@@ -5,7 +5,6 @@
 
 ## 在飞任务
 
-
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
 - `QA-WEB-VISUAL-WALKTHROUGH-20260828` — `merged` — Owner: `claude-code/visual-acceptance` — **用 web-admin 逐屏走查(视觉验收)一轮, 抓到 3 个接口层/类型检查/单测全都抓不到的缺陷**, 并把其中重复三次的那一类升级成闸。凭 `f006_admin` 登录 prod(`139.196.165.140:8086`), ⛔ 全程从菜单点进去, 不用 `goto(url)` —— 本仓 8-26 实测过「E2E 直接敲 URL 对『入口缺失』这一类系统性免疫」。

@@ -41,6 +41,7 @@ import { allocationEmptyStateDesc, allocationEmptyStateTitle } from './allocatio
 import type { TableRow } from '@/types/api';
 import {
   customerMaterialReceivingStatusLabel,
+  customerMaterialCategoryLabel,
   materialSupplyModeLabel,
   processingModeLabel,
   warehouseReceivingRoute,
@@ -105,6 +106,7 @@ const customerSuppliedRequirements = computed<CustomerSuppliedMaterialRequiremen
     ? order.value.suppliedMaterials as CustomerSuppliedMaterialRequirement[]
     : [],
 );
+const suppliedMaterialOptions = ref<TableRow[]>([]);
 const isCustomerSuppliedOrder = computed(() =>
   order.value?.processingMode === 'TOLL_PROCESSING'
     && order.value?.materialSupplyMode === 'CUSTOMER_SUPPLIED',
@@ -411,7 +413,7 @@ async function loadProductsForEdit() {
   if (!factoryId.value) return;
   try {
     // Mirror list.vue loadProducts — same endpoints / response shape.
-    // /sellable 是销售订单专用白名单；原料只能在客供原料区维护。
+    // /sellable 是销售订单专用白名单；物料只能在客供物料区维护。
     const res = await get(`/${factoryId.value}/product-types/sellable`, { _silent: true } as never);
     const unwrap = (d: any) => (Array.isArray(d) ? d : (d?.content ?? [])) as any[];
     materialIdSet.value = new Set();
@@ -448,6 +450,23 @@ function sourceWarehouseLabel(code: string | null | undefined): string {
 function targetWarehouseLabel(row: CustomerSuppliedMaterialRequirement): string {
   return String(row.targetWarehouseName || '').trim()
     || warehouseNameById(warehouses.value, row.targetWarehouseId);
+}
+
+function customerMaterialCategory(row: CustomerSuppliedMaterialRequirement): string {
+  const option = suppliedMaterialOptions.value.find((candidate) => String(candidate.id) === String(row.materialTypeId));
+  return customerMaterialCategoryLabel(row.mainCategory || option?.mainCategory);
+}
+
+async function loadSuppliedMaterialOptions() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get(`/${factoryId.value}/raw-material-types/active`, { _silent: true } as never);
+    const data = res?.data;
+    suppliedMaterialOptions.value = Array.isArray(data) ? data : Array.isArray(data?.content) ? data.content : [];
+  } catch {
+    suppliedMaterialOptions.value = [];
+    ElMessage.error('客供物料分类加载失败，请刷新后重试');
+  }
 }
 
 const displayOrderMoney = computed(() => salesOrderDisplayMoney(
@@ -515,6 +534,7 @@ onMounted(async () => {
   loadPurchaseOrders();
   loadFormulas();
   loadWarehouses();
+  loadSuppliedMaterialOptions();
   await loadProductsForEdit();
   if (route.query.editItems === '1' && isDraft.value) {
     openEditItems();
@@ -1866,10 +1886,10 @@ async function handleQuickPayFull() {
               </el-table>
             </section>
 
-            <section v-if="isOrderDrivenCustomerSuppliedOrder" class="customer-supplied-progress" aria-label="客户自带原料收货进度">
+            <section v-if="isOrderDrivenCustomerSuppliedOrder" class="customer-supplied-progress" aria-label="客户自带物料收货进度">
               <div class="section-heading">
                 <div>
-                  <h3>客户自带原料需求</h3>
+                  <h3>客户自带物料需求</h3>
                   <p>销售侧仅查看预计来料和收货进度；实收、批次及库存只能由仓储任务处理。</p>
                 </div>
                 <el-button type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
@@ -1882,8 +1902,8 @@ async function handleQuickPayFull() {
                 title="该代加工订单尚未返回结构化客供料需求，请在订单草稿中补齐后再提交。"
               />
               <el-table v-else :data="customerSuppliedRequirements" border>
-                <el-table-column label="原料" min-width="220" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
+                <el-table-column label="物料分类 / 名称" min-width="250" show-overflow-tooltip>
+                  <template #default="{ row }"><el-tag size="small" effect="plain">{{ customerMaterialCategory(row) }}</el-tag> {{ row.materialName || row.materialTypeId }}</template>
                 </el-table-column>
                 <el-table-column label="预计到货" width="125">
                   <template #default="{ row }">{{ formatBusinessDateTime(row.expectedArrivalAt) }}</template>
