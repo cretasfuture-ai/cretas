@@ -1620,7 +1620,7 @@ const collapsedAuxProcessIds = ref<Set<string>>(new Set());
  */
 const measuredNodeSizes = computed<Record<string, FusedSizeLike>>(() => {
   const sizes: Record<string, FusedSizeLike> = {};
-  for (const node of graphNodes.value ?? []) {
+  for (const node of graphNodes?.value ?? []) {
     const dimensions = (node as { dimensions?: { width?: number; height?: number } }).dimensions;
     if (dimensions && Number(dimensions.height) > 0) {
       sizes[node.id] = { width: Number(dimensions.width) || 0, height: Number(dimensions.height) };
@@ -5407,6 +5407,9 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.info('当前没有待应用的配置修改；请先修改并保存当前配置');
     return;
   }
+  // §7 fail closed: 没有目标工序的回料不许发布。⛔ 这不是提示是闸 ——
+  // 一块没有去处的回料只会在报工屏上多出一个谁也不知道该投到哪里的选项。
+  if (!reworkTargetsSatisfied()) return;
   if (!(await confirmSeasoningAbsence(identity))) return;
   await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
 }

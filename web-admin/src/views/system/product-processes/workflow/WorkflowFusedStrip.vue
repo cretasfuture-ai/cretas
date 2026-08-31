@@ -1,8 +1,4 @@
 <template>
-  <!--
-    融合附属卡片的**唯一外壳**。辅料 / 包材 / 特殊产出三类都套它 —— 收起态窄条的形状、
-    展开箭头、键盘可达性、省略与 tooltip 只写一遍(形态 D: 同一个东西有两份一定会漂)。
-  -->
   <div
     class="fused-strip"
     :class="[`fused-strip--${side}`, `fused-strip--${tone}`, {
@@ -13,6 +9,13 @@
     :data-testid="testid"
     :data-fused-side="side"
   >
+    <!--
+      融合附属卡片的**唯一外壳**。辅料 / 包材 / 特殊产出三类都套它 —— 收起态窄条的形状、
+      展开箭头、键盘可达性、省略与 tooltip 只写一遍(形态 D: 同一个东西有两份一定会漂)。
+      ⚠️ 注释放在根元素**里面**: 放外面会让组件变成 fragment(注释 + div) 两个根节点,
+      于是 VTU 的 wrapper.element 指向注释, classes()/attributes() 全部读空 ——
+      那是仪器读不到, 不是样式没生效(形态 A⁗)。本轮实测踩过。
+    -->
     <slot name="handles" />
     <button
       type="button"
@@ -38,7 +41,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { CSSProperties } from 'vue';
-import type { FusedAttachmentSide } from './workflowFusedGroups';
+import { fusedStripTransform, type FusedAttachmentSide } from './workflowFusedGroups';
 
 const props = withDefaults(defineProps<{
   side: FusedAttachmentSide;
@@ -72,9 +75,7 @@ const emit = defineEmits<{ toggle: [] }>();
  */
 const rootStyle = computed<CSSProperties>(() => ({
   width: `${props.ownerWidth}px`,
-  transform: props.side === 'above'
-    ? 'translateY(-100%)'
-    : `translateY(${props.ownerOffset ?? 0}px)`,
+  transform: fusedStripTransform(props.side, props.ownerOffset),
 }));
 </script>
 

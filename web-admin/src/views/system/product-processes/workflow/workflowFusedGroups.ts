@@ -24,7 +24,7 @@
 
 /** owner Cell 的 CSS 宽度。⛔ 与 WorkflowProcessNode.vue / WorkflowMaterialNode.vue 的
  *  `.process-node{width}` / `.material-node{width}` 必须逐字一致 —— 附属卡片「同宽」
- *  是验收项，两处漂开就是形态 D。由 fusedGroupWidths.source.spec.ts 钉住。 */
+ *  是验收项，两处漂开就是形态 D。由 __tests__/workflowFusedGroups.spec.ts 钉住。 */
 export const FUSED_PROCESS_OWNER_WIDTH = 440;
 export const FUSED_MATERIAL_OWNER_WIDTH = 210;
 
@@ -67,6 +67,26 @@ export function fusedBelowOffset(
     offset += size.height;
   }
   return offset;
+}
+
+/**
+ * 融合附属卡片的**几何决策**（纯函数，唯一出处）。
+ *
+ * ⛔ 刻意抽出来而不是写在组件的 computed 里：jsdom 的 CSSStyleDeclaration 会把
+ * `transform` 这类它不认识的属性**静默丢掉**，于是在组件上断言 `style` 属性读到的是空串 ——
+ * 那不是「几何错了」，是仪器读不到（形态 A⁗：读取工具把「有」变成「我没看到」）。
+ * 抽成纯函数之后，几何决策可以被直接量，不必隔着一层会吃掉读数的 DOM。
+ */
+export function fusedStripTransform(
+  side: FusedAttachmentSide,
+  ownerOffset: number | null,
+): string {
+  // 上方附属：位移恰好等于**自身高度**，所以底边永远压在 owner 顶边上，
+  // 展开/收起自己长高长矮都自动跟上，一次测量都不需要。
+  if (side === 'above') return 'translateY(-100%)';
+  // 下方附属：位移 = owner 高度（+ 前面几条），只能实测；量不到时不显形（见 is-unmeasured），
+  // 这里返回 0 只是为了让 style 合法，配套的 visibility:hidden 保证它不会以错误位置出现。
+  return `translateY(${ownerOffset ?? 0}px)`;
 }
 
 export interface FusedGroupBounds {

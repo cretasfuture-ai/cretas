@@ -61,18 +61,43 @@ vi.mock('../workflowApi', () => ({
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
 }));
 
+/**
+ * 🔴 视口必须是**有状态**的, 不能是一个恒返回 {0,0,1} 的桩。
+ *
+ * 恒定桩会让「展开前后 viewport 不变」这条断言变成恒真式(形态 B'): 无论产品有没有
+ * 偷偷 fit, 读回来永远是同一个值。要让这条断言能红, 桩必须真的记住被写入的视口,
+ * 并且 fitView 真的会改它 —— 这样「不该 fit 的路径调了 fit」才会被抓出来。
+ */
+const flowState = vi.hoisted(() => ({
+  viewport: { x: 0, y: 0, zoom: 1 },
+  fitViewCalls: [] as unknown[],
+  setViewportCalls: [] as unknown[],
+}));
+
 vi.mock('@vue-flow/core', async () => {
-  const { defineComponent } = await import('vue');
+  const { defineComponent, ref } = await import('vue');
   return {
     MarkerType: { ArrowClosed: 'arrow-closed' },
     SelectionMode: { Partial: 'partial' },
+    Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+    Handle: defineComponent({ name: 'Handle', template: '<div />' }),
     VueFlow: defineComponent({ name: 'VueFlow', template: '<div />' }),
     useVueFlow: () => ({
       // 实测尺寸: 单测里给一个稳定高度, 让辅料 Cell 的间距计算走真实分支
       findNode: () => ({ dimensions: { width: 240, height: 400 } }),
-      fitView: vi.fn(),
-      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
-      setViewport: vi.fn(),
+      nodes: ref([]),
+      fitView: vi.fn((options?: unknown) => {
+        flowState.fitViewCalls.push(options);
+        // 阳性对照: fit 真的会改视口 —— 否则「没有 fit」这条断言无从证伪。
+        flowState.viewport = { x: -999, y: -999, zoom: 0.5 };
+        return Promise.resolve();
+      }),
+      getViewport: () => ({ ...flowState.viewport }),
+      setViewport: vi.fn((next: { x: number; y: number; zoom: number }) => {
+        flowState.setViewportCalls.push({ ...next });
+        flowState.viewport = { ...next };
+        return Promise.resolve();
+      }),
     }),
   };
 });
@@ -103,6 +128,21 @@ interface EditorVm {
   processCreateMode: 'existing' | 'create';
   newProcessForm: { name: string; processCategory: string; outputKind: 'SEMI_FINISHED' | 'FINISHED_GOOD' };
   openAddProcess: (materialNodeId: string) => void;
+  toggleFusedCollapsed: (collapseKey: string, next?: boolean) => void;
+  handleAutoLayout: () => Promise<void>;
+  onViewportChangeEnd: (viewport: { x: number; y: number; zoom: number }) => void;
+  onNodeDrag: (event: { nodes?: Array<{ id: string; position: { x: number; y: number } }> }) => void;
+  focusHoverIds: Set<string> | null;
+  reworkTargetCountFor: (nodeId: string) => number;
+  chooseSpecialOutput: (kind: 'byproduct' | 'defective' | 'rework') => void;
+  specialOutputChooserVisible: boolean;
+  specialOutputTargetProcessId: string | null;
+  reworkDrawerVisible: boolean;
+  reworkDrawerNodeId: string | null;
+  saveReworkConfig: (payload: {
+    name: string; skuId: string; unit: string; targetProcessIds: string[];
+  }) => void;
+  reworkTargetsSatisfied: (showError?: boolean) => boolean;
   confirmAddProcess: () => void;
   confirmCreateAndAddProcess: () => Promise<void>;
   addOutputToProcess: (processId: string) => void;
@@ -219,6 +259,9 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    flowState.viewport = { x: 0, y: 0, zoom: 1 };
+    flowState.fitViewCalls = [];
+    flowState.setViewportCalls = [];
     let timestamp = 1_000;
     vi.spyOn(Date, 'now').mockImplementation(() => timestamp++);
     apiMocks.get.mockImplementation((url: string) => {
@@ -1279,6 +1322,97 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
   // 上面这个 describe 的 beforeEach(否则 apiMocks.get/getProductProcessWorkflow 等
   // 都是未实现的裸 vi.fn(), mountEditor() 会在 catalog/definition/activation 加载阶段
   // 直接炸掉)。
+  /**
+   * §10 是本轮**最高优先级**的交互回归门禁：展开/收起融合附属卡片绝不能改变视口。
+   *
+   * 判据钉的是 exact 读数（交接点名的那三组），不是「大致没变」。
+   */
+  describe('§10 展开/收起绝不改变视口', () => {
+    async function editorWithAux(): Promise<{ vm: EditorVm; auxKey: string }> {
+      const vm = await mountEditor();
+      vm.openAddProcess('raw');
+      vm.selectedWorkProcessId = 'WP-PACK';
+      vm.confirmAddProcess();
+      const proc = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+      if (!proc) throw new Error('Expected a process node');
+      return { vm, auxKey: proc.id };
+    }
+
+    it('辅料展开前后 zoom 0.68 / x=310 / y=180 一字不差', async () => {
+      const { vm, auxKey } = await editorWithAux();
+      flowState.viewport = { x: 310, y: 180, zoom: 0.68 };
+      await vm.toggleFusedCollapsed(auxKey, true);
+      await flushPromises();
+      expect(flowState.viewport).toEqual({ x: 310, y: 180, zoom: 0.68 });
+      await vm.toggleFusedCollapsed(auxKey, false);
+      await flushPromises();
+      expect(flowState.viewport).toEqual({ x: 310, y: 180, zoom: 0.68 });
+      // ⛔ 展开/收起这条路径一次 fit 都不许调。
+      expect(flowState.fitViewCalls).toHaveLength(0);
+    });
+
+    it('收起前后 zoom 0.74 / x=420 / y=240 一字不差', async () => {
+      const { vm, auxKey } = await editorWithAux();
+      flowState.viewport = { x: 420, y: 240, zoom: 0.74 };
+      await vm.toggleFusedCollapsed(auxKey, true);
+      await flushPromises();
+      expect(flowState.viewport).toEqual({ x: 420, y: 240, zoom: 0.74 });
+      expect(flowState.fitViewCalls).toHaveLength(0);
+    });
+
+    it('用户用滚轮放大到 0.81 并把画布滚到别处之后展开，zoom/pan 仍然保持', async () => {
+      const { vm, auxKey } = await editorWithAux();
+      // 模拟真实滚轮缩放 + 平移：VueFlow 会通过 viewport-change-end 回写。
+      flowState.viewport = { x: -1240, y: 96, zoom: 0.81 };
+      vm.onViewportChangeEnd({ x: -1240, y: 96, zoom: 0.81 });
+      await vm.toggleFusedCollapsed(auxKey, false);
+      await flushPromises();
+      expect(flowState.viewport).toEqual({ x: -1240, y: 96, zoom: 0.81 });
+      expect(flowState.fitViewCalls).toHaveLength(0);
+    });
+
+    it('包材与特殊产出走同一个开关，所以同样不改视口', async () => {
+      const { vm } = await editorWithAux();
+      flowState.viewport = { x: 77, y: -33, zoom: 1.23 };
+      await vm.toggleFusedCollapsed('bom-overlay:pack:material:finished:whatever', true);
+      await vm.toggleFusedCollapsed('material:output:12345', true);
+      await flushPromises();
+      expect(flowState.viewport).toEqual({ x: 77, y: -33, zoom: 1.23 });
+      expect(flowState.fitViewCalls).toHaveLength(0);
+    });
+
+    it('阳性对照：用户主动点「自动布局」时**仍然**允许 fit —— 否则上面几条是恒真式', async () => {
+      // 形态 B′：一条「不该发生」的断言，必须配一条能证明它可以发生的对照。
+      // 没有这一条，「fitViewCalls 为空」也可能只是因为产品从来不会 fit。
+      const { vm } = await editorWithAux();
+      flowState.viewport = { x: 310, y: 180, zoom: 0.68 };
+      await vm.handleAutoLayout();
+      await flushPromises();
+      expect(flowState.fitViewCalls.length).toBeGreaterThan(0);
+      expect(flowState.viewport).not.toEqual({ x: 310, y: 180, zoom: 0.68 });
+    });
+
+    it('首次展开不白屏：没有 focus 时不许有任何 Cell 被淡化', async () => {
+      const { vm, auxKey } = await editorWithAux();
+      await vm.toggleFusedCollapsed(auxKey, false);
+      await flushPromises();
+      expect(vm.flowNodes.some((node) => node.class === 'wf-focus-dim')).toBe(false);
+    });
+
+    it('🔴 孤儿 focus 的负控：focus 指向已不存在的节点时回到全部正常显示，不是全部淡化', async () => {
+      const { vm } = await editorWithAux();
+      vm.focusHoverIds = new Set(['这个节点早就没了']);
+      await flushPromises();
+      expect(vm.flowNodes.some((node) => node.class === 'wf-focus-dim')).toBe(false);
+      // 阳性对照：focus 指向真实节点时，别的 Cell 确实会被淡化（否则上一条是恒真式）。
+      const proc = vm.flowNodes.find((node) => node.data.kind === 'PROCESS');
+      vm.focusHoverIds = new Set([proc!.id]);
+      await flushPromises();
+      expect(vm.flowNodes.some((node) => node.class === 'wf-focus-dim')).toBe(true);
+      expect(vm.flowNodes.find((node) => node.id === proc!.id)?.class).toBeUndefined();
+    });
+  });
+
   it('融合附属卡片扯不开：不可独立拖动，位置恒等于 owner，且不可选删', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');
