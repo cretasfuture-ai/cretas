@@ -115,18 +115,28 @@ def protected_inventory(path: Path) -> tuple[set[str], set[str]]:
     )
 
 
+def select_model_rows(rows: list[dict[str, Any]], model_id: str | None) -> list[dict[str, Any]]:
+    if model_id is None:
+        return rows
+    return [row for row in rows if str(row.get("ai_model") or "") == model_id]
+
+
 def replay(args: argparse.Namespace) -> dict[str, Any]:
     manifest = load_json(args.pending_manifest.resolve())
     if manifest.get("version") != "liushanmen-pending-label-photo-manifest-v1":
         raise RuntimeError("unsupported pending manifest")
     if manifest.get("training_eligible") is not False or manifest.get("production_writes") != 0:
         raise RuntimeError("pending manifest violated quarantine contract")
-    rows = manifest.get("rows") or []
+    rows = select_model_rows(manifest.get("rows") or [], args.model_id)
+    if args.model_id is not None and not rows:
+        raise RuntimeError(f"pending manifest has no photos for model: {args.model_id}")
     if args.expected_photos is not None and len(rows) != args.expected_photos:
         raise RuntimeError(f"pending replay count drift: {len(rows)} != {args.expected_photos}")
 
     bundle = args.production_bundle.resolve()
     bundle_manifest = AUDIT.verify_bundle(bundle)
+    if args.model_id is not None and args.model_id != str(bundle_manifest.get("modelId") or ""):
+        raise RuntimeError("selected model does not match production bundle")
     protected_ids, protected_hashes = protected_inventory(args.protected_manifest.resolve())
     overlap = [
         str(row["photo_id"]) for row in rows
@@ -201,6 +211,7 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
             "production_bundle": str(bundle),
             "production_manifest_sha256": AUDIT.sha256_file(bundle / "manifest.json"),
             "production_model_id": bundle_manifest.get("modelId"),
+            "selected_persisted_model_id": args.model_id,
             "protected_manifest": str(args.protected_manifest.resolve()),
             "protected_manifest_sha256": AUDIT.sha256_file(args.protected_manifest.resolve()),
             "threshold_tuning_used": False,
@@ -252,6 +263,7 @@ def main() -> None:
     parser.add_argument("--production-bundle", required=True, type=Path)
     parser.add_argument("--protected-manifest", required=True, type=Path)
     parser.add_argument("--expected-photos", type=int)
+    parser.add_argument("--model-id")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     output = args.output.resolve()

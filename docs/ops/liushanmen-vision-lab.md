@@ -115,6 +115,10 @@ B:\anaconda3\python.exe tools\vision-lab\replay_pending_label_photos.py `
   --output D:\CretasVisionLab\receipts\liushanmen-pending-replay-<timestamp>.json
 ```
 
+若同一份 pending manifest 跨越了生产模型切换时间，必须按行内持久化的 `ai_model` 分组，分别传入
+对应冻结 bundle 和 `--model-id <persisted-model-id>`；`--expected-photos` 写该模型组的照片数。
+工具仍会逐张核对模型绑定，禁止用当前模型一次性重放历史模型组。
+
 只有重放后仍为缺标或 `UNJUDGEABLE` 的目标托盘进入最小队列。浅托盘按宽高比识别，并按托盘宽度
 推算实体高度向下扩展，禁止使用随原图分辨率漂移的固定像素高度判断；预标注故意为空，人工只补
 中央目标托盘自己的白标/彩标，不补托盘框。更正裁剪时用 `--carry-reviewed-from` 把已完成的人框经
