@@ -22,6 +22,7 @@ import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.InventoryOwnership;
+import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -137,6 +138,7 @@ class ProductionPlanSettlementTest {
     @Mock private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
     @Mock private WorkshopReportReservationService workshopReservationService;
     @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
+    @Mock private CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
 
     private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -172,6 +174,8 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "orderCostBreakdownService", orderCostBreakdownService);
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         ReflectionTestUtils.setField(service, "workshopReservationService", workshopReservationService);
+        ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard",
+                customerSuppliedSettlementCoverageGuard);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
         lenient().when(workshopReservationService.releaseForPlan(any(), any()))
                 .thenReturn(BigDecimal.ZERO);
@@ -980,6 +984,59 @@ class ProductionPlanSettlementTest {
         assertEquals("server-worker", derived.getLaborSegments().get(0).getWorkerName());
         assertEquals("SERVER-FG", derived.getTerminalOutputs().get(0).getProductTypeId());
         assertEquals(349L, derived.getSemiFinishedConsumptions().get(0).getSemiFinishedInventoryId());
+    }
+
+    @Test
+    @DisplayName("客供 Workflow 在结单校验前合并缺失的手工原料，不再静默丢弃")
+    void settleProduction_customerWorkflow_routesManualRawThroughCoverageGuard() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        plan.setSkipProcessReporting(true);
+        plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        ProductionSettlementRequest serverFacts = ProductionSettlementRequest.builder()
+                .actualFinishedQuantity(BigDecimal.ONE)
+                .quantityUnit("盒")
+                .rawMaterialConsumptions(new java.util.ArrayList<>(List.of(
+                        ProductionSettlementRequest.ConsumptionLine.builder()
+                                .materialBatchId("reported-a").materialTypeId("raw-a")
+                                .quantity(new BigDecimal("0.21")).unit("kg").build())))
+                .laborSegments(List.of(ProductionSettlementRequest.LaborSegment.builder()
+                        .workerName("server-worker").minutes(30).headcount(1).build()))
+                .terminalOutputs(List.of(ProductionSettlementRequest.OutputLine.builder()
+                        .productTypeId("FG-SKU-A").batchNumber("FG-WORKFLOW-001")
+                        .quantity(BigDecimal.ONE).unit("盒").materialNodeId("terminal-a").build()))
+                .build();
+        ProductionSettlementPrefillResponse prefill = ProductionSettlementPrefillResponse.builder()
+                .prefill(serverFacts)
+                .audit(ProductionSettlementPrefillResponse.Audit.builder().clean(true).build())
+                .build();
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("customer-manual-raw")
+                .rawMaterialConsumptions(List.of(
+                        ProductionSettlementRequest.ConsumptionLine.builder()
+                                .materialBatchId("reported-a").quantity(new BigDecimal("0.21")).unit("kg").build(),
+                        ProductionSettlementRequest.ConsumptionLine.builder()
+                                .materialBatchId("manual-box").quantity(BigDecimal.ONE).unit("盒").build()))
+                .build();
+        service = org.mockito.Mockito.spy(service);
+        org.mockito.Mockito.doReturn(prefill).when(service).getSettlementPrefill(FACTORY_ID, PLAN_ID);
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "customer-manual-raw")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        org.mockito.Mockito.doThrow(new BusinessException(409, "coverage-guard-called")
+                        .withCode("COVERAGE_GUARD_SENTINEL"))
+                .when(customerSuppliedSettlementCoverageGuard)
+                .mergeMissingManualRawConsumptions(FACTORY_ID, plan, serverFacts, request);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L));
+
+        assertEquals("COVERAGE_GUARD_SENTINEL", ex.getErrorCode());
+        verify(customerSuppliedSettlementCoverageGuard)
+                .mergeMissingManualRawConsumptions(FACTORY_ID, plan, serverFacts, request);
+        verify(productionSettlementRepository, never()).save(any());
+        verify(materialBatchRepository, never()).save(any());
     }
 
     @Test

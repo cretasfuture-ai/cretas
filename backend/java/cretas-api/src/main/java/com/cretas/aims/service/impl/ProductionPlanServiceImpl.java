@@ -194,6 +194,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
 
+    /** 客供 Workflow 结单只允许把订单要求中缺失的手工批次合并进服务端报工事实。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.CustomerSuppliedSettlementCoverageGuard
+            customerSuppliedSettlementCoverageGuard;
+
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.engine.ValidationRuleEvaluator validationRuleEvaluator;
@@ -3214,6 +3219,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
                 ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
                 : request;
+        if (isWorkflowPlan(plan)
+                && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            if (customerSuppliedSettlementCoverageGuard == null) {
+                throw new BusinessException(500, "客供结单完整性校验服务未初始化，不能结单")
+                        .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE")
+                        .withHintTarget("rawMaterialConsumptions");
+            }
+            customerSuppliedSettlementCoverageGuard.mergeMissingManualRawConsumptions(
+                    factoryId, plan, effectiveRequest, request);
+        }
 
         validateSettlementRequest(plan, effectiveRequest);
 
