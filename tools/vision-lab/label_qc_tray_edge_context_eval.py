@@ -91,6 +91,7 @@ class EdgeContextTrayModels:
         production_overlap_ios: float = 0.60,
         iou_threshold: float = 0.50,
         ios_threshold: float = 0.80,
+        preserve_base_detections: bool = False,
     ) -> None:
         self.base = base
         self.edge_base = edge_base or base
@@ -106,6 +107,7 @@ class EdgeContextTrayModels:
         self.production_overlap_ios = production_overlap_ios
         self.iou_threshold = iou_threshold
         self.ios_threshold = ios_threshold
+        self.preserve_base_detections = preserve_base_detections
         self.last_stats: dict[str, Any] = {}
         self.last_raw_detections: list[dict[str, Any]] = []
 
@@ -113,7 +115,12 @@ class EdgeContextTrayModels:
         height, width = image.shape[:2]
         full = list(self.base.detect_trays(image, conf))
         all_detections = list(full)
-        raw_rows = [diagnostics._detection_dict(row, "full") for row in full]
+        base_raw_rows = list(getattr(self.base, "last_raw_detections", []))
+        raw_rows = (
+            base_raw_rows
+            if base_raw_rows
+            else [diagnostics._detection_dict(row, "full") for row in full]
+        )
         if len(full) >= self.skip_full_layout_count:
             self.last_raw_detections = raw_rows
             self.last_stats = {
@@ -175,9 +182,30 @@ class EdgeContextTrayModels:
                 all_detections.append(mapped)
                 raw_rows.append(diagnostics._detection_dict(mapped, name))
                 edge_accepted += 1
-        kept = diagnostics.deduplicate_detections(
-            all_detections, self.iou_threshold, self.ios_threshold,
-        )
+        if self.preserve_base_detections:
+            supplements: list[Any] = []
+            for detection in sorted(
+                all_detections[len(full):], key=lambda row: -float(row.confidence),
+            ):
+                if any(
+                    int(detection.class_id) == int(reference.class_id)
+                    and (
+                        diagnostics.box_iou(
+                            detection.as_xyxy(), reference.as_xyxy(),
+                        ) >= self.iou_threshold
+                        or diagnostics.intersection_over_smaller(
+                            detection.as_xyxy(), reference.as_xyxy(),
+                        ) >= self.ios_threshold
+                    )
+                    for reference in [*full, *supplements]
+                ):
+                    continue
+                supplements.append(detection)
+            kept = [*full, *supplements]
+        else:
+            kept = diagnostics.deduplicate_detections(
+                all_detections, self.iou_threshold, self.ios_threshold,
+            )
         self.last_raw_detections = raw_rows
         self.last_stats = {
             "mode": "candidate_full_plus_two_lower_edge_windows",
@@ -203,6 +231,22 @@ class EdgeContextTrayModels:
         return self.base.detect_labels(crop, conf)
 
 
+class _PreservedRuntimeTrayBase:
+    """Expose the original V8 tray cascade before the runtime hook is installed."""
+
+    def __init__(self, inner: Any, detect_trays: Any) -> None:
+        self.inner = inner
+        self._detect_trays = detect_trays
+        self.last_raw_detections: list[dict[str, Any]] = []
+        self.last_stats: dict[str, Any] = {}
+
+    def detect_trays(self, image, conf: float) -> list[Any]:
+        detections = list(self._detect_trays(image, conf))
+        self.last_raw_detections = list(self.inner.last_raw_detections)
+        self.last_stats = dict(self.inner.last_stats)
+        return detections
+
+
 class RuntimeEdgeContextModels:
     """Inject the bounded tray rescue while preserving all V8 runtime policies."""
 
@@ -211,6 +255,11 @@ class RuntimeEdgeContextModels:
         self.edge_models = edge_models
         self.v8 = v8
         self.inner = runtime._require_models()
+        self._preserved_base = _PreservedRuntimeTrayBase(
+            self.inner, self.inner.detect_trays,
+        )
+        self.edge_models.base = self._preserved_base
+        self.edge_models.preserve_base_detections = True
         self.inner.detect_trays = self._detect_trays
         self.last_stats: dict[str, Any] = {}
         self.last_raw_detections: list[dict[str, Any]] = []
@@ -224,9 +273,14 @@ class RuntimeEdgeContextModels:
         runtime_rows = []
         for detection in kept:
             source = source_by_box.get(self.v8._box_key(detection.as_xyxy()), "full")
+            runtime_source = (
+                source
+                if source in {"production_full", "candidate_lower_band"}
+                else "production_full" if source == "full" else "candidate_lower_band"
+            )
             runtime_rows.append(self.v8._detection_row(
                 detection,
-                "production_full" if source == "full" else "candidate_lower_band",
+                runtime_source,
             ))
         self.inner.last_raw_detections = runtime_rows
         self.inner.last_stats = {
