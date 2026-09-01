@@ -25,6 +25,7 @@
           </el-form-item>
           <el-form-item label="产出 SKU">
             <WorkflowSkuPicker
+              :key="skuPickerKey"
               test-id="rework-sku"
               :model-value="draftSkuId"
               :semi-options="semiOptions"
@@ -205,9 +206,20 @@ const props = defineProps<{
  * ⇒ 这里把哨兵拦下来交给画布层, 复用它已有的创建流程, ⛔ 不在抽屉里另造一个。
  */
 function onSkuChange(value: string): void {
-  if (value === CREATE_SKU_SENTINEL) { emit('create-sku'); return; }
+  if (value === CREATE_SKU_SENTINEL) {
+    // ⚠️ 只是「不写进草稿」还不够: el-cascader 有自己的内部选中态,
+    //    它已经把输入框显示成「半成品 / ＋ 现场创建半成品 SKU」了 ——
+    //    底层数据是对的, **显示在撒谎**(2026-09-01 真点击实测到)。
+    //    ⇒ 换 key 强制重挂, 让它照 draftSkuId 重新渲染。
+    skuPickerKey.value += 1;
+    emit('create-sku');
+    return;
+  }
   draftSkuId.value = value;
 }
+
+/** 换它就能把 SKU 选择器重挂一次 —— 用来擦掉 el-cascader 自己留下的假选中态。 */
+const skuPickerKey = ref(0);
 
 const emit = defineEmits<{
   'update:visible': [visible: boolean];
