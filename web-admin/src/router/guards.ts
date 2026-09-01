@@ -30,6 +30,13 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
     // 盘点审批详情是个人 OA 的下游只读入口。finance_manager 需要从
     // INVENTORY_ADJUSTMENT 待办查看盘点依据，但不能因此开放其它仓储页面。
     '/warehouse/stocktakes',
+    // 2026-09-01 LIUSHANMEN IA 收拢: 盘点页合并进 /warehouse/stocktake-query
+    // hub —— beforeEach 的 to.path 在 vue-router 里是**重定向后**的最终路径
+    // (已用 scratch probe 验证: redirect 记录不会让 beforeEach 看到原始路径),
+    // 所以旧路径 '/warehouse/stocktakes' 单独留着挡不住实际导航，必须把 hub
+    // 落点也加进白名单。两条都保留 (与 /smart-bi/financial-dashboard +
+    // /smart-bi/analysis-hub 同一形状，见下方 WS4 注释)。
+    '/warehouse/stocktake-query',
     '/finance',
     // 销售/采购审批统一在个人 OA；财务角色不再通过旧销售财审索引跨模块浏览。
     // 🔴 2026-08-22: 补上工作台。财务有 dashboard/finance 模块 ⇒ 菜单显示「工作台」,

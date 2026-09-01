@@ -239,16 +239,18 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/transfer/list', title: '调拨单', icon: '', module: 'inventory' },  // 🔴 2026-08-22: warehouse -> inventory, 端点要 inventory:write, 与 /rd/* 同形
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
       { path: '/warehouse/wastage-reports', title: '报损管理', icon: '', module: 'warehouse' },
-      { path: '/inventory/by-warehouse', title: '分仓库存查询', icon: '', module: 'warehouse', groupLabel: '库存盘点' },
-      // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
-      { path: '/warehouse/inventory-total', title: '总库存查询', icon: '', module: 'warehouse' },
-      { path: '/warehouse/inventory', title: '库存批次查询', icon: '', module: 'warehouse' },
-      { path: '/warehouse/stocktakes', title: '盘点与期初库存', icon: '', module: 'warehouse' },
-      // 半成品库存 / 半成品盘点 —— 2026-08-27 补入口。此前菜单零登记, 只能手打 URL,
-      //   而生产上一直在写: 半成品盘点单 29 / 盘点明细 4916 / 半成品库存 8,
-      //   最近写入 2026-08-25。⇒ 数据在流, 界面看不到 (与会计凭证、标签识别诊断同形)。
-      { path: '/warehouse/semi-finished', title: '半成品库存', icon: '', module: 'warehouse' },
-      { path: '/warehouse/semi-finished-stocktakes', title: '半成品盘点', icon: '', module: 'warehouse' },
+      // 2026-09-01 LIUSHANMEN 仓储「库存盘点」菜单收拢 (owner 拍板): 6 个条目
+      // 合并为 2 个 hub 入口 —— owner 原话「这么多库存盘点跟那个仓库查询太乱了」。
+      //   库存查询 hub = 分仓库存查询 + 总库存查询 + 库存批次查询 + 半成品库存
+      //   盘点 hub    = 盘点与期初库存 + 半成品盘点
+      // 4 个查询视角 / 2 个盘点视角全部保留 (el-tabs 承载, 组件原样未改),
+      // 6 个旧路径 (/inventory/by-warehouse、/warehouse/inventory-total、
+      // /warehouse/inventory、/warehouse/stocktakes、/warehouse/semi-finished、
+      // /warehouse/semi-finished-stocktakes) 仍可直接访问 (router redirect 保
+      // 书签, 见 router/index.ts + views/warehouse/{inventory-query,
+      // stocktake-query}/index.vue)。
+      { path: '/warehouse/inventory-query', title: '库存查询', icon: '', module: 'warehouse', groupLabel: '库存盘点' },
+      { path: '/warehouse/stocktake-query', title: '盘点', icon: '', module: 'warehouse' },
       // 2026-08-25: PR#76 上线了 /warehouse/storage-locations 但从未登记进本菜单,
       // 结果全生产 0 个租户配置过仓储空间 —— 没有入口就没人找得到。
       { path: '/warehouse/storage-locations', title: '仓储空间与现场盘点', icon: '', module: 'warehouse', groupLabel: '仓储配置' },

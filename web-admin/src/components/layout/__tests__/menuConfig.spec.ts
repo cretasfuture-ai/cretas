@@ -221,14 +221,17 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   });
 
 
-  it('exposes the real stocktake page and its opening-inventory entry under warehouse', () => {
+  // 2026-09-01 收拢：'/warehouse/inventory'（库存批次查询）与 '/warehouse/stocktakes'
+  // （盘点与期初库存）不再是各自独立的菜单项，见下方「库存盘点合并」describe 块。
+  // 本条改为钉住它们各自所在 hub 的菜单项 + 标题。
+  it('exposes the inventory-query and stocktake-query hub entries under warehouse', () => {
     expect(childPaths('/warehouse')).toEqual(expect.arrayContaining([
-      '/warehouse/inventory',
-      '/warehouse/stocktakes',
+      '/warehouse/inventory-query',
+      '/warehouse/stocktake-query',
     ]));
     expect(childTitles('/warehouse')).toEqual(expect.arrayContaining([
-      '库存批次查询',
-      '盘点与期初库存',
+      '库存查询',
+      '盘点',
     ]));
   });
 
@@ -337,11 +340,11 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
   });
 
-  it('keeps stock query, count, config, and price analysis discoverable under warehouse', () => {
+  // 2026-09-01 收拢：分仓库存查询/总库存查询/库存批次查询三项不再各自独立，
+  // 已合并进 /warehouse/inventory-query hub（见下方「库存盘点合并」describe 块）。
+  it('keeps stock query hub, dict config, and price analysis discoverable under warehouse', () => {
     expect(descendantPaths('/warehouse')).toEqual(expect.arrayContaining([
-      '/inventory/by-warehouse',
-      '/warehouse/inventory-total',
-      '/warehouse/inventory',
+      '/warehouse/inventory-query',
       '/warehouse/material-types',
       '/warehouse/material-segments',
       '/warehouse/material-price-trend',
@@ -462,6 +465,93 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
 
   it('hides the generic dashboard entry for logistics tenants', () => {
     expect(findGroup('/dashboard')?.hideForFactoryTypes).toContain('LOGISTICS');
+  });
+});
+
+/**
+ * 2026-09-01 LIUSHANMEN 仓储「库存盘点」菜单收拢 (owner 拍板)。
+ *
+ * owner 原话:「这个分仓库存查询跟总库存查询还有库存批次查询我觉得可以放在一起，
+ * 然后半成品库存也可以放在一起。另外，半成品盘点跟盘点与期初库存可以放在一起，
+ * 要不然这么多库存盘点跟那个仓库查询太乱了。」
+ *
+ *   库存查询 hub (/warehouse/inventory-query) = 分仓库存查询 + 总库存查询 +
+ *     库存批次查询 + 半成品库存 (4 个视角, el-tabs 承载)
+ *   盘点 hub (/warehouse/stocktake-query) = 盘点与期初库存 + 半成品盘点
+ *     (2 个视角, el-tabs 承载)
+ *
+ * 6 个旧菜单项从 menuConfig 里移除 (硬约束 1: 合并不是删功能 —— 6 个视角全部
+ * 保留, 只是从"各自一个菜单项"变成"tab"; 组件源码原样未改, 见
+ * views/warehouse/{inventory-query,stocktake-query}/index.vue)。
+ *
+ * 旧路径仍可直接访问 (router redirect, 见 warehouseInventoryStocktakeRedirects.spec.ts
+ * 与 warehouseHubRedirect.spec.ts 的行为测试; 本文件只钉菜单结构)。
+ */
+describe('menuConfig — 库存盘点合并 (LIUSHANMEN IA 收拢, 2026-09-01)', () => {
+  const OLD_MENU_PATHS = [
+    '/inventory/by-warehouse',
+    '/warehouse/inventory-total',
+    '/warehouse/inventory',
+    '/warehouse/stocktakes',
+    '/warehouse/semi-finished',
+    '/warehouse/semi-finished-stocktakes',
+  ];
+
+  it('6 个旧菜单项已从 menuConfig 里移除 (合并入 2 个 hub, 由 router redirect 桥接)', () => {
+    const paths = descendantPaths('/warehouse');
+    for (const p of OLD_MENU_PATHS) {
+      expect(paths, `${p} 应已从菜单移除 (合并入 hub)`).not.toContain(p);
+    }
+  });
+
+  it('2 个 hub 入口存在，标题正确，且落在原「库存盘点」分段', () => {
+    const warehouse = findGroup('/warehouse')!;
+    const hub1 = warehouse.children!.find((c) => c.path === '/warehouse/inventory-query');
+    const hub2 = warehouse.children!.find((c) => c.path === '/warehouse/stocktake-query');
+    expect(hub1, '缺库存查询 hub 项').toBeDefined();
+    expect(hub1!.title).toBe('库存查询');
+    expect(hub1!.groupLabel).toBe('库存盘点');
+    expect(hub2, '缺盘点 hub 项').toBeDefined();
+    expect(hub2!.title).toBe('盘点');
+  });
+
+  it('阴性对照: hub 标题不是随手写的裸字符串巧合 —— 换个不存在的标题就会红', () => {
+    const warehouse = findGroup('/warehouse')!;
+    const hub1 = warehouse.children!.find((c) => c.path === '/warehouse/inventory-query');
+    expect(hub1!.title).not.toBe('库存批次查询');
+  });
+
+  it('warehouse 组的 groupLabel 分段结构不变 (合并只影响该分段里的条目数)', () => {
+    const warehouse = findGroup('/warehouse')!;
+    expect(warehouse.children!.filter((c) => c.groupLabel).map((c) => c.groupLabel)).toEqual([
+      '仓储作业', '库存盘点', '仓储配置', '仓储分析',
+    ]);
+  });
+
+  it('6 个旧路径在真实路由表里仍然存在且能被解析 (还没接 redirect 断言, 只确认死链没有产生)', () => {
+    for (const p of OLD_MENU_PATHS) {
+      const r = router.resolve(p);
+      expect(r.matched.length, `${p} 在路由表里解析不到 —— 变成了死链`).toBeGreaterThan(0);
+    }
+  });
+
+  it('2 个 hub 路径在真实路由表里能解析到真实组件 (不是又一层 redirect stub)', () => {
+    for (const p of ['/warehouse/inventory-query', '/warehouse/stocktake-query']) {
+      const r = router.resolve(p);
+      expect(r.matched.length, `${p} 解析不到`).toBeGreaterThan(0);
+      const leaf = r.matched[r.matched.length - 1];
+      expect(leaf.redirect, `${p} 不该是 redirect stub —— 它应该是真实页面`).toBeUndefined();
+      expect(typeof leaf.components?.default, `${p} 没有挂真实 component`).toBe('function');
+    }
+  });
+
+  it('半成品库存名称已收敛 (形态 D 修复): route title 与 menu title 现在一致', () => {
+    // 合并前 route.meta.title = '半成品重量库存', menuConfig title = '半成品库存'
+    // —— 两个名字描述同一个页面。合并进 hub 后统一成菜单那个说法, tab label
+    // 与 route stub 的 title 都改成 '半成品库存'。
+    const r = router.resolve('/warehouse/semi-finished');
+    expect(r.matched[r.matched.length - 1].meta?.title).toBe('半成品库存');
+    expect(r.matched[r.matched.length - 1].meta?.title).not.toBe('半成品重量库存');
   });
 });
 
