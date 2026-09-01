@@ -61,13 +61,17 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
-// 🔴 2026-08-22: 绑到 production —— 原来绑 warehouse, 而**原料类型的增/改/删
-//   后端要 production:read_write**(RawMaterialType / material-packaging 两组端点都是)。
-//   ⇒ warehouse_worker 看得见新增/编辑/删除, 点下去必 403。
-// ⛔ 不放宽后端: 原料类型是主数据, 仓库工人不该增删改(收货时**选**它, 读端点没拦)。
-// ⚠️ 同文件的 canManageClassification 已经绑对了(system), ⛔ 别把两者合并 ——
-//   它们守的是两组不同端点。
-const canWrite = computed(() => permissionStore.canWrite('production'));
+// 🔴 缺陷 46 (2026-09-02, owner 拍板改页面写权限): 菜单条目
+//   (`/warehouse/material-types`, menuConfig.ts) module 是 warehouse, 但这里绑的是
+//   production —— 仓库角色进得了页面(菜单放行), 新增/编辑/删除按钮却因 `v-if="canWrite"`
+//   全部隐藏, 只剩「供应商」一栏能操作。原料类型字典是包材/原料主数据, 属于仓储岗位职责。
+// 2026-08-22 那次"绑到 production"是因为后端 RawMaterialTypeController 的
+//   create/update/delete 与 MaterialPackagingHierarchyController 的 by-material PUT/DELETE
+//   当时只认 production:read_write —— 已同 commit 改成 {production, warehouse}:read_write
+//   任一即可(仓库角色不再 403); markByproduct / batch-status 两个端点本页不调用, 未动。
+// ⚠️ 同文件的 canManageClassification (system) / canManageSupplierRelations (procurement)
+//   是另外两组端点的门禁, ⛔ 别把三者合并。
+const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canManageSupplierRelations = computed(() => permissionStore.canWrite('procurement'));
 const canManageClassification = computed(() => permissionStore.canWrite('system'));
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
