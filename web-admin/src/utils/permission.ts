@@ -52,7 +52,13 @@ const PERMISSION_MATRIX: Record<string, Record<string, string>> = {
     dashboard: 'none',       // 隐藏旧首页（用 SmartBI 驾驶舱替代）
     finance: 'none',         // 隐藏旧财务管理（合并到 SmartBI）
     production: 'none',      // 隐藏生产管理（财务主管不需要）
-    procurement: 'none',     // 隐藏采购管理（财务主管不需要）
+    // ⚠️ 2026-09-01 订正措辞: 原注释写「财务主管不需要采购管理」—— **那句是假的**,
+    //    审批链就是把采购单派给财务审的(缺陷 30)。真实口径见
+    //    V20261030_14__finance_manager_narrow.sql 里 owner 的原话:
+    //    「采购的话需要看的是采购单的详情……但是又不能让他直接跨模块去看」
+    //    ⇒ 财务**需要读**采购单详情, 只是不通过这个模块开关 —— 走 OA 里的
+    //      只读速览抽屉(不注册路由)。⛔ 不要因为「财务其实需要看」就把这里改回 read。
+    procurement: 'none',     // 菜单/路由不给（读订单详情走只读抽屉）
     sales: 'none',           // 隐藏销售管理（用 SmartBI 销售分析替代）
     analytics: 'read_write'  // 保留 SmartBI 完整权限
   },

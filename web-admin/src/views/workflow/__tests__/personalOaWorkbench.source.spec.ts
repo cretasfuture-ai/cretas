@@ -48,7 +48,14 @@ describe('personal OA workbench contract', () => {
 
   it('opens an acted inventory adjustment on the stocktake evidence page', () => {
     expect(acted).toContain("INVENTORY_ADJUSTMENT: `/warehouse/stocktakes?stocktakeId=${id}`");
-    expect(acted).toMatch(/if \(target\) \{[\s\S]{0,120}router\.push\(target\)/);
+    // 2026-09-01: 原来这里是 `toMatch(/if \(target\) \{ … router\.push\(target\)/)` ——
+    // 与本文件第 31 行注释记着的那次是同一个坑: **它锁的是源码格式而不是意图**。
+    // 缺陷 30 要求「够不着目标路由时退到只读速览」, 于是控制流从
+    // 「拿到 target 就 push」变成「交给 openApprovalDoc 决定 push 还是开抽屉」,
+    // 那条正则因此变红 —— 而它守的行为(盘点审批点开落在盘点依据页)一个字都没变。
+    // ⇒ 改成守**意图**: 映射被真的消费了, 且未接入的模块仍有明确兜底。
+    expect(acted, '拿到 target 之后没有交给统一入口 —— 够不着的角色会被送去 /403')
+      .toMatch(/const target = routeByModule\[row\.moduleCode\][\s\S]{0,200}openApprovalDoc\(target/);
     expect(acted).toContain('暂不支持跳转模块');
   });
 
