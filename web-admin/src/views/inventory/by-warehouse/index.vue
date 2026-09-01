@@ -23,6 +23,7 @@ import { Search, Refresh } from '@element-plus/icons-vue';
 // see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident.
 import { warehouseDisplayName } from '@/utils/warehouse';
 import { displayUnit } from '@/utils/unitPricing';
+import { resolveWarehouseInventoryEmpty } from './warehouseInventoryEmptyState';
 
 const authStore = useAuthStore();
 const ownFactoryId = computed(() => authStore.factoryId);
@@ -115,6 +116,13 @@ interface MaterialBatchRow {
   materialName?: string;
   materialTypeId?: string;
   currentQuantity?: number;
+  /**
+   * 报工在途、尚未结单的预扣消耗量 (缺陷 A, 2026-09-02)。仅本页请求的
+   * WarehouseInventoryController#queryByWarehouse 填充; undefined/null = 未知,
+   * 按 0 处理(即 可用 == 账面)。⛔ 不要拿它覆盖 currentQuantity —— 两个数各自
+   * 都对(账面 vs 可投料), 合并会丢信息量, 必须并排显示且各自标清口径。
+   */
+  unsettledConsumption?: number | null;
   receiptQuantity?: number;
   quantityUnit?: string;
   unit?: string;
@@ -257,6 +265,56 @@ function getProductAvailable(row: FinishedGoodsRow): number {
   return produced - shipped - reserved;
 }
 
+// ==================== 原料「账面 / 可用」两个数 (缺陷 A, 2026-09-02) ====================
+//
+// LIUSHANMEN 生产实测: 同一批次 1399, 分仓库存查询显示「当前数量」5900kg,
+// 报工投料区「生产仓可用」显示 5800kg —— 两个数都对: 5900 是账面(未结单),
+// 5800 是可投料量(已减报工在途预扣)。旧版列头只写「当前数量」不说口径,
+// 工人拿账面数去投料会短 100kg。⛔ 不把一个数改成另一个 —— 那会丢信息量,
+// 这里改成并排显示两个数, 各自标清口径 (账面 / 可用)。
+//
+// currentQuantity(账面) 由后端 currentQuantity 直接下发 (= receipt-used-reserved,
+// reserved 目前恒 0, 报工不写这一列)。unsettledConsumption(报工在途未结单预扣)
+// 只有 WarehouseInventoryController#queryByWarehouse 这个端点会填充 (读 material_
+// consumptions, interim_settled_at IS NULL), 与报损/调拨弹窗同一口径, 未知时按 0
+// 处理 —— 此时账面==可用, 而不是隐藏可用列 (阳性对照要求两者都显示且相等)。
+
+/** 账面数量: 后端 currentQuantity, 缺失时返回 null (不猜)。 */
+function getMaterialLedgerQty(row: MaterialBatchRow): number | null {
+  return row.currentQuantity == null ? null : Number(row.currentQuantity);
+}
+
+/** 可用数量 = 账面 − 报工在途未结单预扣, clamp ≥ 0 (与 wastage-reports「货架实物」同一口径)。 */
+function getMaterialAvailableQty(row: MaterialBatchRow): number | null {
+  const ledger = getMaterialLedgerQty(row);
+  if (ledger == null) return null;
+  const unsettled = Number(row.unsettledConsumption) || 0;
+  const available = ledger - unsettled;
+  return available < 0 ? 0 : available;
+}
+
+// ==================== 空态文案 (缺陷 B, 2026-09-02) ====================
+//
+// 「搜不到」≠「仓库是空的」——纯函数判定见 warehouseInventoryEmptyState.ts,
+// 与 procurement/orders/materialDropdownEmptyState.ts (#459) 同一判定顺序:
+// 先看这一类批次总数(与搜索词无关), 再看有没有搜索词。
+
+const materialEmptyText = computed<string>(() =>
+  resolveWarehouseInventoryEmpty({
+    totalCount: data.value?.materialCount ?? 0,
+    query: keywordFilter.value,
+    kind: 'materials',
+  }).text,
+);
+
+const productEmptyText = computed<string>(() =>
+  resolveWarehouseInventoryEmpty({
+    totalCount: data.value?.productCount ?? 0,
+    query: keywordFilter.value,
+    kind: 'products',
+  }).text,
+);
+
 // ==================== 联动 watch ====================
 
 watch(selectedFactoryId, async (v) => {
@@ -384,7 +442,7 @@ onMounted(async () => {
           <el-table
             :data="filteredMaterials"
             v-loading="loading"
-            empty-text="该仓库暂无原料批次"
+            :empty-text="materialEmptyText"
             stripe
             border
             style="width: 100%"
@@ -396,9 +454,26 @@ onMounted(async () => {
               </template>
             </el-table-column>
             <el-table-column prop="materialName" label="原料名称" min-width="160" show-overflow-tooltip />
-            <el-table-column label="当前数量" width="120" align="right">
+            <!-- 缺陷 A (2026-09-02): 「当前数量」拆成账面/可用两列, 各自标清口径,
+                 ⛔ 不互相覆盖 —— 见脚本区 getMaterialLedgerQty / getMaterialAvailableQty 注释。 -->
+            <el-table-column label="账面数量" width="110" align="right">
+              <template #header>
+                <el-tooltip content="收货量 − 已用 − 预留（不含报工在途尚未结单的预扣量）" placement="top">
+                  <span>账面数量</span>
+                </el-tooltip>
+              </template>
               <template #default="{ row }">
-                {{ row.currentQuantity ?? '-' }}
+                {{ getMaterialLedgerQty(row) ?? '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="可用数量" width="110" align="right">
+              <template #header>
+                <el-tooltip content="账面数量 − 报工在途未结单预扣量，即当前可投料量" placement="top">
+                  <span>可用数量</span>
+                </el-tooltip>
+              </template>
+              <template #default="{ row }">
+                <strong>{{ getMaterialAvailableQty(row) ?? '-' }}</strong>
               </template>
             </el-table-column>
             <el-table-column label="单位" width="80" align="center">
@@ -438,7 +513,7 @@ onMounted(async () => {
           <el-table
             :data="filteredProducts"
             v-loading="loading"
-            empty-text="该仓库暂无成品批次"
+            :empty-text="productEmptyText"
             stripe
             border
             style="width: 100%"
