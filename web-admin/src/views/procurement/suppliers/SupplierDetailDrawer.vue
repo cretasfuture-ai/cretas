@@ -217,7 +217,11 @@
         </el-form-item>
         <el-form-item :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
           <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
-          <div class="field-hint">价格与采购单位绑定；未配置时采购单会明确提示，不会静默按 0 元处理。</div>
+          <!-- 缺陷 17 / 形态 B⁵: 这句原本写的是「未配置时采购单会明确提示，不会静默按 0 元处理」——
+               那是"价格可以不配"年代的说明。现在新增必填, 描述必须跟着改, ⛔ 不能留一句过期的承诺。 -->
+          <div class="field-hint">
+            价格与采购单位绑定。新增时必须填写；编辑既有关系时，不动这一栏就不会被拦。
+          </div>
         </el-form-item>
         <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
         <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
@@ -546,6 +550,7 @@ async function openRelationCreate(): Promise<void> {
     materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
     minOrderQuantity: null, leadTimeDays: null, preferred: false, active: true, version: undefined,
   });
+  relationOriginalPrice.value = null;   // 新增: 没有"原值", 价格必填
   inlineSpecEnabled.value = false;
   resetInlineSpecForm();
   relationDialogVisible.value = true;
@@ -553,6 +558,46 @@ async function openRelationCreate(): Promise<void> {
 
 function resetInlineSpecForm(): void {
   Object.assign(inlineSpecForm, { name: '', purchasePackageUnit: '', factor: 1, quotedPrice: null });
+}
+
+/* ═══════════════ 缺陷 17: 价格必填 —— 但只在价格被动过时拦 ═══════════════
+ *
+ * 🔴 这里的校验是**手写**的, 不是 el-form 的 rules。
+ *    本文件三个 <el-form> 里, 只有供应商基本信息那个(:44)真正接了
+ *    `:model` + `:rules` + `ref`; 采购关系(:188)/内联规格(:233)两个三样全无,
+ *    独立规格(:290)只有 `:model`。全文件**没有任何地方调用 formRef.validate()**。
+ *    ⇒ el-form-item 上的 `required` 在这三个表单里**只画一个红星, 不拦任何东西**。
+ *    在价格上加 `required` 会得到一个截图上"看起来修好了"、实际零约束的假修复。
+ *
+ * 🔒 owner 裁定「只在价格被动过时拦」的理由(照此解释边界情况):
+ *    LIUSHANMEN 存量有 4 条价格为空的关系(DEMO235005→WL026/WL065/WL130、上海鹃城→YL063)。
+ *    一律拦会让"只想把某条从启用改成停用"的人先编一个价格出来 ——
+ *    ⛔ 而编出来的价格比空着更糟: 空的还能被发现, 编的会一直安静地错下去。
+ */
+
+/** 编辑态打开时的原始价格快照 —— 用来判断"用户到底动没动这个字段"。 */
+const relationOriginalPrice = ref<number | null>(null);
+const specOriginalPrice = ref<number | null>(null);
+
+function samePrice(a: number | null | undefined, b: number | null | undefined): boolean {
+  const left = a ?? null;
+  const right = b ?? null;
+  if (left === null || right === null) return left === right;
+  return Number(left) === Number(right);
+}
+
+/**
+ * 价格本身合不合法。
+ *
+ * ⚠️ 判据是 **> 0** 而不是"非空", 因为后端就是这么判的:
+ *   SupplierMaterialServiceImpl:116        → SUPPLIER_MATERIAL_PRICE_INVALID
+ *   SupplierMaterialPurchaseSpecServiceImpl:134 → PURCHASE_SPEC_PRICE_INVALID
+ * 只拦空值会让前端放行 0, 然后被接口 400 打回 —— 那是把一个死胡同挪到了下一步。
+ */
+function priceProblem(value: number | null | undefined): string | null {
+  if (value == null) return '请填写价格';
+  if (!(Number(value) > 0)) return '价格必须大于 0';
+  return null;
 }
 
 function onRelationMaterialChange(materialTypeId: string): void {
@@ -578,6 +623,8 @@ async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
     active: row.active !== false,
     version: row.version ?? undefined,
   });
+  // 编辑: 记下打开时的价格。用户没动它就不拦 —— 存量空价格的关系仍然可以改别的字段。
+  relationOriginalPrice.value = row.defaultPurchasePrice ?? null;
   inlineSpecEnabled.value = false;
   resetInlineSpecForm();
   relationDialogVisible.value = true;
@@ -588,11 +635,22 @@ async function saveRelation(): Promise<void> {
   if (!isActive.value) return void ElMessage.warning('供应商已暂停合作，不能保存供应原料关系');
   if (!relationForm.materialTypeId) return void ElMessage.warning('请选择物料');
   if (relationUnitReason.value) return void ElMessage.warning(relationUnitReason.value);
+  // 缺陷 17 ①: 默认采购价。新增必填; 编辑只在用户动过这个字段时才校验。
+  if (!relationEditingId.value
+      || !samePrice(relationForm.defaultPurchasePrice, relationOriginalPrice.value)) {
+    const problem = priceProblem(relationForm.defaultPurchasePrice);
+    if (problem) return void ElMessage.warning(`默认采购价：${problem}`);
+  }
   const wantsInlineSpec = !relationEditingId.value && inlineSpecEnabled.value;
   if (wantsInlineSpec) {
     if (!inlineSpecForm.name.trim()) return void ElMessage.warning('请输入采购规格名称');
     if (!inlineSpecForm.purchasePackageUnit) return void ElMessage.warning('请选择采购规格的采购包装单位');
     if (!(Number(inlineSpecForm.factor) > 0)) return void ElMessage.warning('采购规格的换算系数必须大于 0');
+    // 缺陷 17 ②: 内联规格的未税报价。
+    // 🔴 这条分支只在【新增】时可达(wantsInlineSpec 自带 !relationEditingId), 所以恒为必填。
+    //    它是空价格最主要的来源 —— 只修 ① 和 ③ 等于堵了编辑口, 前门照开。
+    const specProblem = priceProblem(inlineSpecForm.quotedPrice);
+    if (specProblem) return void ElMessage.warning(`采购规格的未税报价：${specProblem}`);
   }
   const payload: SupplierMaterialPayload = {
     ...relationForm,
@@ -658,6 +716,7 @@ function resetSpecForm(): void {
     name: '', purchasePackageUnit: '', inventoryBaseUnit: specRelation.value?.baseUnit || '', factor: 1, quotedPrice: null, currency: 'CNY',
     minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true, version: undefined,
   });
+  specOriginalPrice.value = null;   // 新增规格: 没有"原值", 报价必填
 }
 
 function editPurchaseSpec(row: SupplierPurchaseSpec): void {
@@ -676,6 +735,8 @@ function editPurchaseSpec(row: SupplierPurchaseSpec): void {
     active: row.active !== false,
     version: row.version ?? undefined,
   });
+  // 编辑既有规格: 记下打开时的报价, 没动就不拦。
+  specOriginalPrice.value = row.quotedPrice ?? null;
 }
 
 async function savePurchaseSpec(): Promise<void> {
@@ -684,6 +745,11 @@ async function savePurchaseSpec(): Promise<void> {
   if (!specForm.name.trim()) return void ElMessage.warning('请输入规格名称');
   if (!specForm.purchasePackageUnit) return void ElMessage.warning('请选择采购包装单位');
   if (!(Number(specForm.factor) > 0)) return void ElMessage.warning('换算系数必须大于 0');
+  // 缺陷 17 ③: 独立规格的未税报价(编辑路径)。新增必填; 编辑只在动过时才校验。
+  if (!specEditingId.value || !samePrice(specForm.quotedPrice, specOriginalPrice.value)) {
+    const problem = priceProblem(specForm.quotedPrice);
+    if (problem) return void ElMessage.warning(`未税报价：${problem}`);
+  }
   const payload: SupplierPurchaseSpecPayload = {
     ...specForm,
     name: specForm.name.trim(),
