@@ -14,6 +14,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
+import { useUserDirectory } from '@/composables/useUserDirectory';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import {
@@ -71,7 +72,16 @@ async function loadData() {
   }
 }
 
-onMounted(loadData);
+
+// 缺陷 5 (2026-09-01, LIUSHANMEN): 「请购人」列原来渲染 `#{{ row.requesterId }}`,
+// 生产上显示 `#1638` —— 一个数据库主键, 采购主管看不出是谁提的单。
+// ⛔ 不为此开 hr 权限; 解析口径与回退规则见 `@/composables/useUserDirectory` 头部。
+const { load: loadUserDirectory, personLabel } = useUserDirectory();
+
+onMounted(() => {
+  loadData();
+  loadUserDirectory(factoryId.value);
+});
 
 function handlePageChange(p: number) {
   pagination.value.page = p;
@@ -199,7 +209,7 @@ async function confirmReject() {
       >
         <el-table-column prop="requisitionNumber" label="单号" width="200" />
         <el-table-column prop="requesterId" label="请购人" width="100" align="center">
-          <template #default="{ row }">#{{ row.requesterId }}</template>
+          <template #default="{ row }">{{ personLabel(row.requesterId) }}</template>
         </el-table-column>
         <el-table-column label="明细" min-width="240">
           <template #default="{ row }">
@@ -284,7 +294,7 @@ async function confirmReject() {
       <template v-if="rejectingRow">
         <div class="reject-context">
           单号: <strong>{{ rejectingRow.requisitionNumber }}</strong> ·
-          请购人: <strong>#{{ rejectingRow.requesterId }}</strong>
+          请购人: <strong>{{ personLabel(rejectingRow.requesterId) }}</strong>
         </div>
       </template>
       <el-form label-width="100px" style="margin-top: 12px">

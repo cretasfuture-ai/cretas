@@ -18,6 +18,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { get } from '@/api/request';
+import { useUserDirectory } from '@/composables/useUserDirectory';
 import {
   getRequisition,
   submitRequisition,
@@ -48,7 +49,9 @@ const canManageOwnDraft = computed(() => {
 const detailTitle = computed(() => (isRestaurant.value ? '报货单详情' : '请购单详情'));
 const submitButtonText = computed(() => (isRestaurant.value ? '提交采购计划' : '提交审批'));
 const expectedDateLabel = computed(() => (isRestaurant.value ? '希望到货' : '期望交货'));
-const requesterLabel = computed(() => (isRestaurant.value ? '报货人ID' : '请购人ID'));
+// 缺陷 5 (2026-09-01, LIUSHANMEN): 列头原来叫「请购人ID」且值是 `#1638` ——
+// 列头和值是**一起**定义成内部标识符的, 所以两者要一起改 (与缺陷 7 同形)。
+const requesterLabel = computed(() => (isRestaurant.value ? '报货人' : '请购人'));
 const requesterDeptLabel = computed(() => (isRestaurant.value ? '报货部门' : '请购部门'));
 const reasonLabel = computed(() => (isRestaurant.value ? '报货原因' : '申请原因'));
 const detailDividerText = computed(() => (isRestaurant.value ? '报货明细' : '请购明细'));
@@ -73,6 +76,51 @@ interface Supplier {
   name: string;
 }
 const suppliers = ref<Supplier[]>([]);
+
+// ─────────────────────────────────────────────────────────────────────────
+// 缺陷 5 / 6 / 7 (2026-09-01, LIUSHANMEN 生产走查) —— 同一个形态的三个实例:
+// **把数据库内部标识符摆到操作者面前当业务编号用**。
+//   5: 请购人/审批人渲染成 `#1638` (users.id)
+//   6: 「关联PO」渲染成 `97141602-6db9-…` (purchase_orders.id)
+//   7: 「建议供应商 ID」整列渲染成 `d0b9c77a-…` (suppliers.id)
+// 本仓 `UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802` 已在 RN 餐饮侧定过口径
+// (「供应商与食材只使用业务名称展示, 移除内部 ID 泄漏」), web-admin 采购侧此前没跟上。
+//
+// ▎三处共同的回退口径: **查不到名字就回退显示原 ID, ⛔ 不回退成空白**。
+//   「查不到这个人/这家供应商」与「这一格没有值」是两件事, 回退成空白会把前者
+//   伪装成后者 (本仓形态 A¹⁰: 兜底的默认值会把「我不知道」翻译成一个假读数)。
+// ─────────────────────────────────────────────────────────────────────────
+
+// 人名解析抽在 `@/composables/useUserDirectory` —— 请购单的 列表 / 待审批 / 详情
+// 三个页面都要它, ⛔ 不在三处各抄一份 (形态 D: 同一个东西有三份, 它一定会漂)。
+// 端点选型、hr 权限为什么不能开、以及「查不到回退 #id 而不是空白」的理由,
+// 全部写在那个文件的头部。
+const { load: loadUserDirectory, personLabel } = useUserDirectory();
+
+/** 建议供应商显示: 查得到显示名称, 查不到回退原 ID。 */
+function supplierLabel(supplierId: string | null | undefined): string {
+  if (!supplierId) return '-';
+  const hit = suppliers.value.find((s) => String(s.id) === String(supplierId));
+  return hit?.name ? String(hit.name) : String(supplierId);
+}
+
+// 缺陷 6: 「关联PO」要显示 **PO 单号**, 而跳转仍然用 UUID。
+// ⚠️ 显示和跳转**必须拆开** —— goPO() 用的还是 convertedPoId, 一个字没改。
+const convertedPoNumber = ref<string>('');
+
+async function loadConvertedPoNumber(poId: string) {
+  if (!factoryId.value || !poId) return;
+  try {
+    // 采购订单详情端点的 @RequirePermission 含 procurement:read ⇒ 采购主管进得来。
+    const res = await get<{ orderNumber?: string }>(
+      `/${factoryId.value}/purchase/orders/${poId}`,
+      { _silent: true } as never,
+    );
+    convertedPoNumber.value = String(res?.data?.orderNumber || '');
+  } catch {
+    // 拿不到单号就回退显示 UUID (见 template), ⛔ 不显示空白
+  }
+}
 
 // 驳回 dialog state (same constrained-dropdown as pending-approval.vue)
 const rejectDialogVisible = ref(false);
@@ -107,6 +155,12 @@ async function loadRequisition() {
           ? String((firstItem as { suggestedSupplierId?: string }).suggestedSupplierId || '')
           : '';
       if (suggested) convertSupplierId.value = suggested;
+      // 缺陷 6: 每次重载都重算单号 —— loadRequisition 在转PO/审批之后会被再调一次,
+      // 不清掉会让「已转PO」之前的空值或上一单的号留在屏幕上。
+      convertedPoNumber.value = '';
+      if (res.data.convertedPoId) {
+        await loadConvertedPoNumber(String(res.data.convertedPoId));
+      }
     }
   } catch (err: unknown) {
     const e = err as { status?: number; response?: { status?: number; data?: { code?: string; message?: string } }; code?: string; message?: string };
@@ -136,7 +190,7 @@ async function loadSuppliers() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadRequisition(), loadSuppliers()]);
+  await Promise.all([loadRequisition(), loadSuppliers(), loadUserDirectory(factoryId.value)]);
 });
 
 const lineCount = computed(() =>
@@ -151,7 +205,7 @@ async function handleSubmit() {
   try {
     await ElMessageBox.confirm(
       `确认${isRestaurant.value ? '提交采购计划' : '提交审批'}: ${r.requisitionNumber} (${lineCount.value} 行明细)?\n\n` +
-      `${isRestaurant.value ? '报货人' : '请购人'} #${r.requesterId}` +
+      `${isRestaurant.value ? '报货人' : '请购人'} ${personLabel(r.requesterId)}` +
       `${r.expectedDate ? ` · ${expectedDateLabel.value} ${r.expectedDate}` : ''}`,
       isRestaurant.value ? '提交采购计划' : '提交审批',
       { type: 'warning' },
@@ -179,7 +233,7 @@ async function handleApprove() {
   try {
     await ElMessageBox.confirm(
       `确认审批通过请购单 ${r.requisitionNumber}?\n\n` +
-      `明细 ${lineCount.value} 行 · ${isRestaurant.value ? '报货人' : '请购人'} #${r.requesterId}`,
+      `明细 ${lineCount.value} 行 · ${isRestaurant.value ? '报货人' : '请购人'} ${personLabel(r.requesterId)}`,
       '审批通过',
       { type: 'success', confirmButtonText: '通过' },
     );
@@ -394,7 +448,7 @@ function goBack() {
 
         <el-descriptions :column="2" border style="margin-top: 16px">
           <el-descriptions-item :label="requesterLabel">
-            #{{ requisition.requesterId }}
+            {{ personLabel(requisition.requesterId) }}
           </el-descriptions-item>
           <el-descriptions-item :label="requesterDeptLabel">
             {{ requisition.requesterDeptId || '-' }}
@@ -405,8 +459,12 @@ function goBack() {
           <el-descriptions-item label="创建时间">
             {{ requisition.createdAt ? String(requisition.createdAt).replace('T', ' ').slice(0, 19) : '-' }}
           </el-descriptions-item>
+          <!-- 审批人与请购人同源同形 (都是 users.id), 一起改 —— 本仓「改共享结构前
+               先数, 改完再数」: 这一页 requesterId/approverId 共 5 个渲染点。
+               ⚠️ 这里**只改显示**, ⛔ 没有碰审批逻辑 —— 请购单能否自批 (审计里的
+               待核 8) 是另一件事, 未在本轮改动范围内。 -->
           <el-descriptions-item label="审批人">
-            {{ requisition.approverId ? '#' + requisition.approverId : '-' }}
+            {{ personLabel(requisition.approverId) }}
           </el-descriptions-item>
           <el-descriptions-item label="审批时间">
             {{ requisition.approvedAt ? String(requisition.approvedAt).replace('T', ' ').slice(0, 19) : '-' }}
@@ -415,8 +473,9 @@ function goBack() {
             <span style="color: #f56c6c">{{ requisition.rejectionReason }}</span>
           </el-descriptions-item>
           <el-descriptions-item v-if="requisition.convertedPoId" label="关联PO" :span="2">
+            <!-- 缺陷 6: 显示 PO 单号, 跳转仍用 convertedPoId (见 goPO) —— 两者拆开。 -->
             <el-button type="primary" link @click="goPO">
-              {{ requisition.convertedPoId }}
+              {{ convertedPoNumber || requisition.convertedPoId }}
             </el-button>
             <span v-if="requisition.convertedAt" style="margin-left: 12px; color: #909399">
               {{ String(requisition.convertedAt).replace('T', ' ').slice(0, 19) }}
@@ -451,9 +510,11 @@ function goBack() {
           <el-table-column label="单位" width="80" align="center">
             <template #default="{ row }">{{ row.unit || '-' }}</template>
           </el-table-column>
-          <el-table-column label="建议供应商 ID" width="200">
+          <!-- 缺陷 7: 列头原来就叫「建议供应商 ID」—— 不是渲染疏忽, 是列的定义本身
+               把内部主键当成了要展示的东西 ⇒ **列头和值一起改**。 -->
+          <el-table-column label="建议供应商" width="200" show-overflow-tooltip>
             <template #default="{ row }">
-              {{ row.suggestedSupplierId || '-' }}
+              {{ supplierLabel(row.suggestedSupplierId) }}
             </template>
           </el-table-column>
           <el-table-column label="行备注" min-width="180">
@@ -474,7 +535,7 @@ function goBack() {
       <template v-if="requisition">
         <div class="reject-context">
           单号: <strong>{{ requisition.requisitionNumber }}</strong> ·
-          请购人: <strong>#{{ requisition.requesterId }}</strong>
+          {{ requesterLabel }}: <strong>{{ personLabel(requisition.requesterId) }}</strong>
         </div>
       </template>
       <el-form label-width="100px" style="margin-top: 12px">
