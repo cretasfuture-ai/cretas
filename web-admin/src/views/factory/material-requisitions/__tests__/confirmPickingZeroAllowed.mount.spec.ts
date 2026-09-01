@@ -67,7 +67,13 @@ import RequisitionList from '../list.vue';
 
 interface Vm {
   confirmTarget: { id: string; requisitionNo: string } | null;
-  confirmRows: Array<{ id: string; materialName: string; requiredQty: number | null; pickedInput: number | null }>;
+  confirmRows: Array<{
+    id: string;
+    materialName: string;
+    requiredQty: number | null;
+    pickedInput: number | null;
+    selfSupplied?: boolean;
+  }>;
   submitConfirm: () => Promise<void>;
   submitting: boolean;
 }
@@ -238,6 +244,58 @@ describe('确认领料: 「用量待定」行 —— 0 与 null 语义相反, �
 
     expect(harness.message).not.toHaveBeenCalled();
     expect(harness.put).toHaveBeenCalledTimes(1);
+
+    wrapper.unmount();
+  });
+
+  /**
+   * 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 自备料 (冰水/水/蒸汽/
+   * 现场自制高汤) 是「用量待定」行且留空(null) 是常态, 不是漏填 —— 与②(同样是待定+null)
+   * 的行为必须相反: ②必须被拦, 这一条必须放行, 唯一的差异是 selfSupplied=true。
+   * 两条测试对着放, 证明豁免只对自备料生效, 没有把 null 判据本身弱化。
+   */
+  it('⑥🔴自备料(缺陷47): 待定行 selfSupplied=true 留空(null) 仍必须放行, 不进 pending', async () => {
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as Vm;
+
+    vm.confirmTarget = { id: 'MR-1', requisitionNo: 'MR-20260901-0001' };
+    vm.confirmRows = [
+      { id: 'ITEM-1', materialName: '冰水', requiredQty: null, pickedInput: null, selfSupplied: true },
+    ];
+
+    await vm.submitConfirm();
+    await flushPromises();
+
+    expect(harness.message, '自备料行留空却仍被当成"没填"拦下 —— 缺陷47的豁免没接上').not.toHaveBeenCalled();
+    expect(harness.put, '自备料行本该放行, PUT 却没发出去').toHaveBeenCalledTimes(1);
+    expect(harness.put).toHaveBeenCalledWith(
+      '/F006/material-requisitions/MR-1/confirm-picking',
+      { items: [{ itemId: 'ITEM-1', pickedQty: 0 }] },
+    );
+
+    wrapper.unmount();
+  });
+
+  it('⑦ 混合行: 自备料留空 + 普通待定行留空 —— 只点名普通行, 自备料不该被误伤地也拦下来', async () => {
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as Vm;
+
+    vm.confirmTarget = { id: 'MR-1', requisitionNo: 'MR-20260901-0001' };
+    vm.confirmRows = [
+      { id: 'ITEM-1', materialName: '冰水', requiredQty: null, pickedInput: null, selfSupplied: true },
+      { id: 'ITEM-2', materialName: 'L1纸箱', requiredQty: null, pickedInput: null },
+    ];
+
+    await vm.submitConfirm();
+    await flushPromises();
+
+    expect(harness.message).toHaveBeenCalledTimes(1);
+    const msg = String(harness.message.mock.calls[0][0].message);
+    expect(msg, '自备料「冰水」不该被点名 —— 它留空是常态不是漏填').not.toContain('冰水');
+    expect(msg).toContain('L1纸箱');
+    expect(harness.put, '有一味非自备料待定行还没录, 整单不该提交').not.toHaveBeenCalled();
 
     wrapper.unmount();
   });
