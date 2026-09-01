@@ -65,6 +65,7 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
         if (repository.findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, request.getMaterialTypeId()).isPresent()) {
             throw new BusinessException(409, "该供应商与物料的供应关系已存在").withHintTarget("materialTypeId");
         }
+        requireCreationPrice(request);
         SupplierMaterial relation = new SupplierMaterial();
         relation.setFactoryId(factoryId); relation.setSupplierId(supplierId);
         relation.setMaterialTypeId(material.getId()); relation.setActive(request.getActive() == null || request.getActive());
@@ -108,6 +109,46 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
                 .filter(other -> Boolean.TRUE.equals(other.getPreferred()))
                 .forEach(other -> other.setPreferred(false));
         repository.saveAll(active);
+    }
+
+    /**
+     * 缺陷 17 后端闸 —— <b>新建</b>供应原料关系必须带默认采购价。
+     *
+     * <h2>为什么前端那条不够</h2>
+     *
+     * <p>web-admin 已经在 {@code SupplierDetailDrawer} 里拦了空价格, 但那是 <b>UX 闸不是执行边界</b>:
+     * 直接调接口照样能建出没有价格的关系 —— LIUSHANMEN 现存那 4 条空价格关系
+     * (DEMO235005→WL026/WL065/WL130、上海鹃城→YL063) 就是这么来的。
+     *
+     * <h2>⛔ 只拦 create, 绝不碰 update</h2>
+     *
+     * <p>{@link #apply} 把 {@code null} 当作<b>「本次不修改」</b>而不是「清空」。这个语义正是
+     * 「不动价格就能改别的字段」之所以天然安全的原因 —— 那 4 条存量关系要保持可编辑
+     * (owner 裁定: 逼人为了改启用状态先编一个价格出来, 比留空更糟, 因为编出来的价格
+     * 会一直安静地错下去)。
+     * ⇒ 所以这道闸<b>只装在 create 上</b>, 且⛔ <b>不能</b>改成把
+     * {@code defaultPurchasePrice} 做成 {@code @NotNull} 的必填字段 —— 那会同时打在 update 上,
+     * 从另一侧把 owner 那条裁定破坏掉。
+     *
+     * <h2>判据是 &gt; 0, 与既有校验同口径</h2>
+     *
+     * <p>{@link #apply} 里对已给出的价格就是 {@code <= 0} 即 400
+     * ({@code SUPPLIER_MATERIAL_PRICE_INVALID})。这里只补「create 时不许不给」这一种情况,
+     * 具体的数值合法性仍然由那一处判 —— ⛔ 不在两处各写一份大小判断。
+     *
+     * <p>创建路径实测<b>只有一条</b>: {@code SupplierMaterialController:32}。
+     * 关系仓储的 {@code save/saveAll} 在 main 树里除本类外<b>零命中</b>
+     * (MaterialPackagingHierarchy / PurchaseService / PurchaseSpec 三处都只读),
+     * 供应商 Excel 导入也建不了关系 ({@code SupplierImportTemplateRow} 只有 9 个档案字段)。
+     * ⇒ 没有任何合法内部路径会被这道闸误伤。
+     */
+    private void requireCreationPrice(SupplierMaterialRequest request) {
+        if (request.getDefaultPurchasePrice() == null) {
+            throw new BusinessException(400, "新建供应原料关系必须填写默认采购价")
+                    .withCode("SUPPLIER_MATERIAL_PRICE_REQUIRED")
+                    .withHint("请填写该物料在此供应商处的默认采购价；价格与采购单位绑定")
+                    .withHintTarget("defaultPurchasePrice");
+        }
     }
 
     private void apply(SupplierMaterial target, SupplierMaterialRequest request, RawMaterialType material) {
