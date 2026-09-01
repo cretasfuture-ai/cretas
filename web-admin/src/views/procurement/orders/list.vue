@@ -1586,7 +1586,7 @@ function handleAiFill(params: TableRow) {
               :value="spec.id"
             />
           </el-select>
-          <el-input-number v-model="item.quantity" :min="0.001" :precision="3" placeholder="采购数量" controls-position="right" style="width: 140px" />
+          <el-input-number v-model="item.quantity" :min="0.01" :precision="3" placeholder="最小 0.01" controls-position="right" style="width: 140px" />
           <el-input :model-value="displayUnit(item.unit) || '-'" disabled style="width: 90px" />
           <div class="price-input-cell" style="width: 158px">
             <el-input-number

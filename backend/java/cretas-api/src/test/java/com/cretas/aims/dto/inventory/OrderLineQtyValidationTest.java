@@ -123,7 +123,30 @@ class OrderLineQtyValidationTest {
         assertThat(violations)
                 .as("qty=0 应触发 @DecimalMin(0.01) on items[0].quantity")
                 .anyMatch(v -> v.getPropertyPath().toString().contains("quantity")
-                        && v.getMessage().contains("采购数量必须大于0"));
+                        && v.getMessage().contains("采购数量不得小于 0.01"));
+    }
+
+    @Test
+    @DisplayName("采购单: qty=0.001 → 被拒, 且提示必须说出真实门槛 0.01 (缺陷 28)")
+    void purchaseOrder_belowThresholdQty_messageNamesTheRealThreshold() {
+        CreatePurchaseOrderRequest req = validPurchaseOrderRequest(new BigDecimal("0.001"));
+
+        Set<ConstraintViolation<CreatePurchaseOrderRequest>> violations = validator.validate(req);
+
+        // 生产实证 (2026-09-01): 填 0.001 报「采购数量必须大于0」。0.001 确实大于 0,
+        // 用户照这句提示永远改不对。⇒ 守的是【提示要说出真实门槛】这个性质,
+        // ⛔ 不是守某一句字面文案 —— 所以断言找的是门槛值本身。
+        assertThat(violations)
+                .as("qty=0.001 低于 @DecimalMin(0.01), 必须被拒")
+                .anyMatch(v -> v.getPropertyPath().toString().contains("quantity"));
+        assertThat(violations)
+                .filteredOn(v -> v.getPropertyPath().toString().contains("quantity"))
+                .as("提示里必须出现真实门槛 0.01, 否则用户不知道该改成多少")
+                .allMatch(v -> v.getMessage().contains("0.01"));
+        assertThat(violations)
+                .filteredOn(v -> v.getPropertyPath().toString().contains("quantity"))
+                .as("⛔ 不许退回「大于0」这种与约束值不符的说法")
+                .noneMatch(v -> v.getMessage().contains("必须大于0"));
     }
 
     @Test
