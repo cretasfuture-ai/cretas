@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { pickRawWarehouse } from './rawWarehousePicker';
+import { pickSettlementEligibleWarehouses, summarizeStockByWarehouse } from './rawWarehousePicker';
+import { applyPickedMaterialBatchToLine, rawConsumptionDisplayLabel } from './settlementRawBatchDisplay';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { useAuthStore } from '@/store/modules/auth';
@@ -1805,6 +1806,9 @@ interface SettlementRawConsumptionForm {
   productTypeId?: string | null;
   materialTypeId?: string | null;
   batchNumber?: string | null;
+  // 缺陷 48 (A): 手工选批次时立即带上物料名, 供摘要行渲染「批次号 · 物料名」,
+  // ⛔ 不靠 materialBatchOptions 在渲染那一刻还在(它可能已经清空/没加载过)。
+  materialName?: string | null;
   unit?: string | null;
   warehouseId?: string | null;
   workflowMaterialNodeId?: string | null;
@@ -1983,7 +1987,9 @@ function settlementFieldHasIssue(field: string): boolean {
 }
 const materialBatchListLoading = ref(false);
 const materialBatchOptions = ref<MaterialBatchOption[]>([]);
-const rawWarehouseId = ref('');
+// 缺陷 48 (B): 结单可用库存参考覆盖的仓 (RAW/LOGISTICS/WORKSHOP), 与后端写路径守卫
+// ensureMaterialBatchAllowedForSettlement 同口径 —— 不是单一仓, 也不是工厂全部仓。
+const settlementEligibleWarehouses = ref<FactoryWarehouseOption[]>([]);
 
 // ===== 防呆 Rule 1: 原料领用下拉 BOM 预过滤 (#结单原料越权 fix) =====
 // 后端结单提交守卫 (ensureMaterialBatchAllowedForSettlement) 会在提交后才 409 拒绝不属于
@@ -2078,6 +2084,12 @@ const completeVarianceReasonReady = computed(() => {
 
 function selectedMaterialBatch(batchId: string): MaterialBatchOption | null {
   return materialBatchOptions.value.find((b) => b.id === batchId) ?? null;
+}
+
+// 缺陷 48 (A): 用户在下拉里选中批次的那一刻, 把 batchNumber/物料名带到这一行上,
+// ⛔ 不等到结单真正提交、下一次 prefill 回填才有 —— 见 settlementRawBatchDisplay.ts。
+function applyPickedRawMaterialBatch(line: SettlementRawConsumptionForm): void {
+  applyPickedMaterialBatchToLine(line, selectedMaterialBatch(line.materialBatchId));
 }
 
 function selectedWipForSettlement(wipId: number | null): WipInventoryItem | null {
@@ -2214,25 +2226,53 @@ function isFactoryWarehouseOption(value: unknown): value is FactoryWarehouseOpti
   return isRecord(value) && typeof value.id === 'string';
 }
 
-async function ensureRawWarehouseId(): Promise<string | null> {
-  if (rawWarehouseId.value) return rawWarehouseId.value;
-  if (!factoryId.value) return null;
+/**
+ * 结单可用库存参考该覆盖哪些仓 —— 缺陷 48 (B)。
+ *
+ * 不能只挑 `pickRawWarehouse` 选中的**一个**仓：后端结单写路径守卫
+ * `ensureMaterialBatchAllowedForSettlement` (ProductionPlanServiceImpl.java)
+ * 同时放行 RAW/LOGISTICS/WORKSHOP 三类仓的批次 —— 领料会把原料从原料仓
+ * 物理迁到生产仓 (WORKSHOP) 后再报工消耗，那是合法料流。只查一个仓会把
+ * 已经在生产仓、报工在用的批次漏掉，显示假的「可用 0」。
+ * 也不能查工厂全部仓：FINISHED/RD/WIP 等类型后端结单闸不认，算进「可用」
+ * 会显示一个提交必被 409 拒绝的假可用量。见 rawWarehousePicker.ts。
+ */
+async function ensureSettlementEligibleWarehouses(): Promise<FactoryWarehouseOption[]> {
+  if (settlementEligibleWarehouses.value.length > 0) return settlementEligibleWarehouses.value;
+  if (!factoryId.value) return [];
   const res = await get<unknown>(`/${factoryId.value}/factory/warehouses`);
   if (!res.success || !Array.isArray(res.data)) {
     ElMessage({ message: res.message || '原料仓列表加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
-    return null;
+    return [];
   }
   const warehouses = res.data.filter(isFactoryWarehouseOption);
-  // 按**类型**取仓, 不按编码 —— WH-LOG 是某些工厂给外仓起的编码, 编码是命名习惯、
-  // 类型才是契约。原实现编码优先, 让「既有外仓又有原料仓」的工厂去外仓找原料批次,
-  // 永远找不到, 然后提示「请先完成仓库入库」——而用户已经入过库了。见 rawWarehousePicker。
-  const raw = pickRawWarehouse(warehouses);
-  if (!raw) {
-    ElMessage({ message: '未找到原料仓/物流仓，不能核对生产原料领用', type: 'error', duration: 0, showClose: true });
-    return null;
+  const eligible = pickSettlementEligibleWarehouses(warehouses);
+  if (eligible.length === 0) {
+    ElMessage({ message: '未找到原料仓/物流仓/生产仓，不能核对生产原料领用', type: 'error', duration: 0, showClose: true });
+    return [];
   }
-  rawWarehouseId.value = raw.id;
-  return raw.id;
+  settlementEligibleWarehouses.value = eligible;
+  return eligible;
+}
+
+function settlementWarehouseName(warehouseId: string | null | undefined): string | null {
+  if (!warehouseId) return null;
+  return settlementEligibleWarehouses.value.find((w) => w.id === warehouseId)?.name || null;
+}
+
+/**
+ * 同一物料在多个(结单认可的)仓库都有可用量时，给出「主仓 40 · 生产仓 10」
+ * 这样的分布说明，取代旧的单仓「可用 0」误判 (缺陷 48 (B))。只有一个仓有
+ * 库存时不必要地展示分布反而添噪音，故只在覆盖 ≥2 个仓时才显示。
+ */
+function materialWarehouseBreakdown(batch: MaterialBatchOption | null): string {
+  if (!batch || !batch.materialTypeId) return '';
+  const entries = materialBatchOptions.value
+    .filter((b) => b.materialTypeId === batch.materialTypeId && !!b.warehouseId)
+    .map((b) => ({ warehouseId: String(b.warehouseId), quantity: materialBatchAvailable(b) }));
+  const distinctWarehouses = new Set(entries.map((e) => e.warehouseId));
+  if (distinctWarehouses.size < 2) return '';
+  return summarizeStockByWarehouse(entries, settlementWarehouseName);
 }
 
 async function loadSettlementInventoryOptions(row: TableRow) {
@@ -2242,21 +2282,23 @@ async function loadSettlementInventoryOptions(row: TableRow) {
   settlementBomEligibility.value = null;
   const planId = row.id ? String(row.id) : '';
   try {
-    const warehouseId = await ensureRawWarehouseId();
-    if (!warehouseId) {
+    const eligibleWarehouses = await ensureSettlementEligibleWarehouses();
+    if (eligibleWarehouses.length === 0) {
       materialBatchOptions.value = [];
       wipList.value = [];
       return;
     }
+    const eligibleWarehouseIds = new Set(eligibleWarehouses.map((w) => w.id));
     const bomEligibilityPromise = planId
       ? get<SettlementBomEligibilityResponse>(
           `/${factoryId.value}/production-plans/${planId}/settlement-bom-eligibility`,
         )
       : Promise.resolve(null);
     const [materialRes, wipRes, bomRes] = await Promise.allSettled([
+      // 不传 warehouseId —— 结单认可 RAW/LOGISTICS/WORKSHOP 三类仓, 单仓范围会漏掉
+      // 已领入生产仓的批次; 下面按 eligibleWarehouseIds 过滤, 不会因此纳入 FINISHED/RD/WIP。
       get<unknown>(`/${factoryId.value}/material-batches/status/AVAILABLE`, {
         params: {
-          warehouseId,
           size: 200,
         },
       }),
@@ -2265,7 +2307,8 @@ async function loadSettlementInventoryOptions(row: TableRow) {
     ]);
     if (materialRes.status === 'fulfilled' && materialRes.value.success) {
       materialBatchOptions.value = extractMaterialBatchRows(materialRes.value.data)
-        .filter((batch) => materialBatchAvailable(batch) > 0);
+        .filter((batch) => materialBatchAvailable(batch) > 0)
+        .filter((batch) => !!batch.warehouseId && eligibleWarehouseIds.has(batch.warehouseId));
     } else {
       materialBatchOptions.value = [];
       ElMessage({ message: '原料可用批次加载失败，请刷新后重试', type: 'error', duration: 0, showClose: true });
@@ -5480,7 +5523,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               :key="`recorded-raw-${line.materialBatchId}-${index}`"
               class="settlement-reconciliation-row"
             >
-              <span>{{ line.batchNumber || line.materialBatchId }}</span>
+              <span>{{ rawConsumptionDisplayLabel(line) }}</span>
               <strong>{{ line.quantity }} {{ displayUnit(line.unit) }}</strong>
             </div>
           </div>
@@ -5723,6 +5766,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             placeholder="选择原料批次 (已按产品 BOM 预过滤)"
             :loading="materialBatchListLoading"
             class="consumption-select"
+            @change="applyPickedRawMaterialBatch(line)"
           >
             <el-option
               v-for="batch in bomFilteredMaterialBatchOptions"
@@ -5744,6 +5788,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             class="consumption-note"
           />
           <el-button text type="danger" @click="removeRawConsumptionLine(index)">删除</el-button>
+          <div
+            v-if="materialWarehouseBreakdown(selectedMaterialBatch(line.materialBatchId))"
+            class="settlement-wip-boundary"
+          >
+            可用分布：{{ materialWarehouseBreakdown(selectedMaterialBatch(line.materialBatchId)) }}
+          </div>
         </div>
         <div class="settlement-line-header">
           <span>半成品实际领用</span>
