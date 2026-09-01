@@ -105,6 +105,27 @@ describe('sales order unit and packaging contract', () => {
     expect(canonicalSalesOrderItemPayload({ unit: '只', packagingSpecs: [] }).unit).not.toBe('pcs');
   });
 
+  // 🔒 2026-09-02: taxIncludedUnitPrice 是 list.vue 新增的界面录入字段 (含税单价) ——
+  // 后端 SalesOrderItemDTO 没有这个字段, 提交前必须剥掉, 只发既有的未税 unitPrice。
+  it('strips the UI-only taxIncludedUnitPrice entry field before it reaches the create/update payload', () => {
+    const payload = canonicalSalesOrderItemPayload({
+      productTypeId: 'SKU-BOX',
+      unit: '盒',
+      unitPrice: 100,
+      taxIncludedUnitPrice: 113,
+      taxRate: 13,
+    } as Parameters<typeof canonicalSalesOrderItemPayload>[0] & {
+      productTypeId: string;
+      unitPrice: number;
+      taxIncludedUnitPrice: number;
+      taxRate: number;
+    });
+
+    expect(payload).not.toHaveProperty('taxIncludedUnitPrice');
+    // 阴性对照配对的正面: 后端实际消费的未税 unitPrice 必须原样送到.
+    expect(payload).toMatchObject({ unitPrice: 100, taxRate: 13 });
+  });
+
   it('blocks a stale package spec before a base-unit request can be sent', () => {
     const line = {
       unit: '盒',

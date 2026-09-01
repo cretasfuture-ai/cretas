@@ -21,6 +21,11 @@ const UI_ONLY_FIELDS = [
   'packagingBaseUnit',
   'packagingFactor',
   'packagingLoadError',
+  // 🔒 2026-09-02 Owner 裁定 (list.vue 是本裁定的主录入面): taxIncludedUnitPrice 仅供
+  // 界面录入含税单价, 后端存储口径不变 (unitPrice 仍是未税, 见 SalesOrderItem.getLineAmount())。
+  // 与 OrderItemsEditor.vue / detail.vue 的 `taxIncludedUnitPrice 仅供界面录入...不进后端 DTO`
+  // 同一条约束 —— 提交前必须剥掉, 不进 CreateSalesOrderRequest.SalesOrderItemDTO。
+  'taxIncludedUnitPrice',
 ] as const;
 
 /**

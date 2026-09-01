@@ -47,6 +47,32 @@ export function untaxedUnitPrice(taxIncludedUnitPrice: number, taxRate: number):
   return Number((price / (1 + rate / 100)).toFixed(4));
 }
 
+/**
+ * 税率必须是 0-100 的有效数字才能反算未税单价; 清空/非法税率一律判定为「未知」而不是 0。
+ * 与 {@link OrderItemsEditor.vue} 里的同名私有 helper 同一条判据 —— 这里导出供
+ * 其它录入面 (如 sales/orders/list.vue 的行内表格) 复用, 避免第三份实现。
+ */
+export function validTaxRatePercent(rate: unknown): number | null {
+  if (rate === null || rate === undefined || rate === '') return null;
+  const n = Number(rate);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+}
+
+/**
+ * 含税单价 + 税率 → 未税单价 (仅供展示; 与提交给后端的 unitPrice 用同一条公式
+ * {@link untaxedUnitPrice}, 保证「展示的数」和「实际存的数」永远一致)。
+ * 税率未知 (null/undefined/空串/超出 0-100) 时返回 null —— 调用方必须把它当成
+ * 「算不出来」处理, 禁止落到 0 或原样回显含税价 (⛔ 不要用 `?? 0` 兜底掉这个 null)。
+ */
+export function derivedUntaxedPriceOrNull(
+  taxIncludedUnitPrice: unknown,
+  taxRate: unknown,
+): number | null {
+  const rate = validTaxRatePercent(taxRate);
+  if (rate === null) return null;
+  return untaxedUnitPrice(Number(taxIncludedUnitPrice) || 0, rate);
+}
+
 export function salesOrderUnitOptions(product: SalesOrderPricedProduct): string[] {
   const baseUnit = canonicalUnitCodeKeepingCount(String(
     product.unit || product.measurementUnit || product.defaultUnit || '',
