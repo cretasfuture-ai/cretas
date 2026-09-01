@@ -243,13 +243,16 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
     //       spec.setQuotedPrice(request.getQuotedPrice());        // 无条件
     //       ⇒ null = 「清空」
     //
-    // ⚠️ 而且**同一个方法内部**就不一致: quotedPrice / minOrderQuantity / leadTimeDays
+    // ⚠️ 而且**同一个方法内部**就不一致: quotedPrice
     //    是清空语义, 而紧挨着的 defaultSpec / active 却是「null 就保持原值」。
+    //    (缺陷 16 phase 1, 2026-09-02: minOrderQuantity/leadTimeDays 已从规格
+    //     表单/DTO/实体中移除 —— 与供应关系侧字段重复且零读者, 不再是这条漂移的一部分;
+    //     起订量/交期现在只在供应关系层录入一次。)
     //
     // 📌 这是**原始设计漂移不是回归**: git log -S 显示 quotedPrice 从 `Initial company
     //    baseline` 起就从未加过 null 判断, defaultSpec/active 也从一开始就是保持语义。
     //
-    // 📌 爆炸半径(实测): 目前**只有 web-admin 一个写入方**, 且它每次都发完整的 10 字段
+    // 📌 爆炸半径(实测): 目前**只有 web-admin 一个写入方**, 且它每次都发完整的
     //    payload(specForm 全量) ⇒ 这条数据丢失路径**当前不可达**。RN 侧
     //    supplierApiClient 对规格**只有 GET**。⇒ 是潜伏形状, 不是正在发生的事故。
     //    ⛔ 但任何新写入方(集成/脚本/RN 补写)发一个合法的部分更新, 就会静默抹掉报价。

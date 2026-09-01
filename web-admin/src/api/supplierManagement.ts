@@ -224,8 +224,9 @@ export interface SupplierPurchaseSpec {
   /** SUPPLIER_RELATION_SAME_UNIT / SUPPLIER_RELATION_CONVERTED；未推导时为空。 */
   derivedPriceSource?: string | null;
   currency?: string | null;
-  minOrderQuantity?: number | null;
-  leadTimeDays?: number | null;
+  // 🔒 缺陷 16 phase 1 (2026-09-02): minOrderQuantity/leadTimeDays 已从规格移除 ——
+  //    与供应关系（SupplierMaterialRelation）上的同名字段重复，且零读者。
+  //    起订量/交期现在只在供应关系层录入一次；⛔ 不要在这里加回来。
   defaultSpec?: boolean | null;
   active?: boolean | null;
   version?: number | null;
@@ -240,8 +241,6 @@ export interface SupplierPurchaseSpecPayload {
   /** 含税报价 —— 19② 之后人工录入的权威值; 未税由后端派生。 */
   taxIncludedQuotedPrice?: number | null;
   currency: string;
-  minOrderQuantity?: number | null;
-  leadTimeDays?: number | null;
   defaultSpec: boolean;
   active: boolean;
   version?: number;
