@@ -5,6 +5,23 @@
 
 ## 在飞任务
 
+### 📌 2026-09-02 凌晨 · LIUSHANMEN 走查线 · organizer 状态快照（`liushanmen-organizer-handoff-fa5fb5-bb`）
+
+**背景**：owner 明早给客户演示，通宵走操作手册；organizer 22:00 接手（交接件 `docs/audits/liushanmen/2026-09-01-ORGANIZER-HANDOFF.md`）。
+**判据口径**：每次部署都在**运行中的制品**里核排他标记 + 阴性对照，⛔ 不看 exit code；web 侧从 live `index.html` 追引用链，⛔ 不裸 grep 部署目录（孤儿 chunk 累积）。
+
+**已合 main 且已部署 prod（8 次部署，最新 `832847cec3` @ 01:19）**：#442 #444 #445 #446 #447 #448 #449 #450 #451 #452 #453 #454 #455 #456 #457 #458 #459 #460 #461 #462(nginx) #463 #464(迁移 `V20261101_23`, success=t) #465 #466 #467 #468 #469 #470。
+**已合未部署**（下次一起发）：#471 销售主录入面含税 / #472 列表列口径 / #473 表头税率读权威值 / #474 「个」不再碾成 pcs / #475 假注释订正。
+
+**在飞（🔴 演示唯一拦路）**：`FIX-LSM-TOLL-PROCESSING-AUX-20260902` — 缺陷 38：来料加工计划领不出工厂自有辅料/包材。owner 裁定**按类别分档**（RAW 保持严格客户血缘；AUXILIARY/PACKAGING/SEASONING 允许公司库存）。两个调用点（领料 `findEligibleSourceBatches` + 报工 `findEligibleBatchesForUpdate`）必须一起改。⚠️ 阳性对照必须是 `CUSTOMER_SUPPLIED` 计划 + BOM 含 `COMPANY_OWNED` AUX（全客供的单是恒真式）；🔴 阴性对照「别的客户的 RAW 仍被拒」是这次改动能上线的全部理由。Owner: subagent `ae6b1c85d180026c0`，WIP `83f7ca9ea2`。
+**在飞**：`FIX-LSM-SPEC-DIALOG-MERGE-20260902` — 缺陷 16 UI 合并（lucid-nobel），⛔ 只做 UI，`active` 列**不删**（读取方非空集：索引/2 查询/停用功能/3 前端消费方；删掉=失去「单独退役一个包装规格」），等 owner 复核。
+
+**🔒 等 owner**：规格表 `active` 列去留 / 缺陷 16 那三个重复字段（`min_order_quantity`/`lead_time_days` 读取方为空可删，两阶段：先去字段再 DROP，蓝绿窗口旧实例会读到不存在的列）。
+
+**登记未派（无执行者）**：31 开工前不做料齐检查（BOM 建计划即钉死，可纯计算短缺；现在每道工序各撞一次墙）/ 32 混批面板渲染在提交区下方且「正式报工」不可点无说明 / A 同一批次 5900 vs 5800 口径未标（⛔ 别改成一个数，并列标口径；批次行 used/reserved 仍为 0，预扣是算出来的）/ B 空态「仓库是空的」而同屏写着 56 / C 拼音搜索跨页面缺失（统一组件不逐页补）/ D 分摊成本单价加口径说明（客供料材料成本 0 是对的不是算漏）/ E 半成品批次工序投入区「无生产日期/成本 0」与总览行不一致 / F 表头点文字排序 vs 点图标 / 缺陷 33 根治：`UNIT_ALIASES` 目标码对齐后端 `systemAliases()`（**不动点判据**：每个目标码 `normalize()` 后等于自己；⚠️ 该表参与构造请求体，上次加 `'斤'→'jin'` 弄坏 SeasoningBindingDialog）/ 全站不带 actionHint 的 409 静默 / `production_manager` fallback 漂移 6 条 / `priceSource` 词表分散 / 领料单「累计已领 vs 计划」无人管（分批领料缺幂等提示）/ 规格名称自由文本与换算系数矛盾 / 采购规格单位应与原料字典联动（设计）/ `MergePurchaseDialog` 同形单位碾平 / 后端 `update` 仍接受无价格（organizer 判：不收，否则存量关系连停用都不能；要收须配「不带价格也能停用」豁免）。
+
+**今晚被执行 session 纠正的 organizer 错误（保留机制：让他们敢反驳）**：PR comment 当载体 / `required` 是装饰 / 硬约束 7 过度套用 / 「两个空态同因」判反 / `router.push` 会毁掉半填表单 / 「共享断言守历史」只对一半成立 / brief 说 5 处实际 8 处 / `priceUnit` 提示会只修一半 / 「来料加工从未走通」太宽 / 拿测试文件里的串当部署标记 ×3 / 拿过期生产计数当论据 ×3。
+
 - `QA-LSM-APPROVAL-403-AS-ZERO-20260901` — `merged` — Owner: `claude-code/liushanmen-organizer` — **PR #449 已合入 `e88d769870`**。生产实测(LIUSHANMEN 真实客户): `lsm008` 质量经理打开 `/production/approval` 看到「待审批 0」+ 暂无数据 + 零提示, 而 `lsm015` 生产经理同一 URL 是「待审批 26」⇒ **那个 0 不是空列表, 是挡在 26 条真实待办前面的伪造读数**。机制: `loadData()` 的 catch 吞掉 403, `allData` 停在初始 `[]`, 模板据此渲染一个 confident 的 0 —— **「加载失败」与「真的没有待审批」在数据模型里是同一个状态**; `response.success === false` 那条分支同样静默。硬约束 8: 同页同形态 **BEFORE=2**(`loadData` / `loadCorrectableReports`), 两处都修, `2 + 0 == 2`。硬约束 9: 每条失败用例**同时**断言「假的 0 不出现」**和**「`.load-error` 面板确实出现」(只断言前者的话, 组件整个渲染失败也满足)。**阳性对照**: 真的 200 且空队列时**仍然显示「待审批 0」**, 证明没有过度修正成永远显示「—」。变异两条各自只打红为它设计的那条。全量 web-admin 3980 passed / `vue-tsc -b` 0 error。排他性核验: `loadError` 合并前 **0** 次、合并后 **10** 次。
   ⚠️ **刻意未做**: ⛔ 没碰 `request.ts` 吐司层。「是这一页吞了 403, 还是两条相同的 403 被折叠成一条」**至今未定** —— 403 分支 `severity` 缺省为 `'BLOCKING'` ⇒ 走 `ElMessageBox.alert` 模态, 且另有 `showSingletonNotification` 单例 + `ElMessage grouping` + 2000ms `_toastSeen` 去重, **三种机制都会把并发的相同错误折叠**。本修复与哪一种为真**无关**, 故两件事分开。
   📌 报告者自曝两处**自己的仪器错误且都没报成缺陷**(`innerText.length` 把菜单文字算进空判定 / `lsm015` 登录 POST 根本没发出去是 refs 过期), 这是它其余读数可信的理由。
