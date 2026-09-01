@@ -1,9 +1,41 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-09-01
+**最后更新**：2026-09-01（organizer 交接后重写在飞段）
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件为当前任务状态真值。完成记录见 [2026-09-01-active-history.md](archive/2026-09-01-active-history.md)、[2026-08-31-active-history.md](archive/2026-08-31-active-history.md)、[2026-08-30-active-history.md](archive/2026-08-30-active-history.md)、[2026-08-29-active-history.md](archive/2026-08-29-active-history.md)、[2026-08-27-active-history.md](archive/2026-08-27-active-history.md)、[2026-08-26-active-history.md](archive/2026-08-26-active-history.md)、[2026-08-25-active-history.md](archive/2026-08-25-active-history.md)、[2026-08-24-active-history.md](archive/2026-08-24-active-history.md)、[2026-08-21-active-history.md](archive/2026-08-21-active-history.md)、[2026-08-17-active-history.md](archive/2026-08-17-active-history.md)、[2026-08-16-active-history.md](archive/2026-08-16-active-history.md)、[2026-08-15-active-history.md](archive/2026-08-15-active-history.md)、[2026-08-14-active-history.md](archive/2026-08-14-active-history.md)、[2026-08-13-active-history.md](archive/2026-08-13-active-history.md)、[2026-08-12-active-history.md](archive/2026-08-12-active-history.md)、[2026-08-11-active-history.md](archive/2026-08-11-active-history.md)、[2026-08-10-active-history.md](archive/2026-08-10-active-history.md)、[2026-08-09-active-history.md](archive/2026-08-09-active-history.md)、[2026-08-07-active-history.md](archive/2026-08-07-active-history.md)、[2026-08-04-active-history.md](archive/2026-08-04-active-history.md)、[2026-08-03-active-history.md](archive/2026-08-03-active-history.md)、[2026-08-02-active-history.md](archive/2026-08-02-active-history.md)、[2026-08-01-active-history.md](archive/2026-08-01-active-history.md)、[2026-07-31-active-history.md](archive/2026-07-31-active-history.md)、[2026-07-30-active-history.md](archive/2026-07-30-active-history.md)、[2026-07-29-active-history.md](archive/2026-07-29-active-history.md)、[2026-07-28-active-history.md](archive/2026-07-28-active-history.md)、[2026-07-27-active-history.md](archive/2026-07-27-active-history.md) 与 [2026-07-26-active-history.md](archive/2026-07-26-active-history.md)，此前历史见 [2026-07-25-active-history.md](archive/2026-07-25-active-history.md)。
 
 ## 在飞任务
+
+- `QA-LSM-APPROVAL-403-AS-ZERO-20260901` — `merged` — Owner: `claude-code/liushanmen-organizer` — **PR #449 已合入 `e88d769870`**。生产实测(LIUSHANMEN 真实客户): `lsm008` 质量经理打开 `/production/approval` 看到「待审批 0」+ 暂无数据 + 零提示, 而 `lsm015` 生产经理同一 URL 是「待审批 26」⇒ **那个 0 不是空列表, 是挡在 26 条真实待办前面的伪造读数**。机制: `loadData()` 的 catch 吞掉 403, `allData` 停在初始 `[]`, 模板据此渲染一个 confident 的 0 —— **「加载失败」与「真的没有待审批」在数据模型里是同一个状态**; `response.success === false` 那条分支同样静默。硬约束 8: 同页同形态 **BEFORE=2**(`loadData` / `loadCorrectableReports`), 两处都修, `2 + 0 == 2`。硬约束 9: 每条失败用例**同时**断言「假的 0 不出现」**和**「`.load-error` 面板确实出现」(只断言前者的话, 组件整个渲染失败也满足)。**阳性对照**: 真的 200 且空队列时**仍然显示「待审批 0」**, 证明没有过度修正成永远显示「—」。变异两条各自只打红为它设计的那条。全量 web-admin 3980 passed / `vue-tsc -b` 0 error。排他性核验: `loadError` 合并前 **0** 次、合并后 **10** 次。
+  ⚠️ **刻意未做**: ⛔ 没碰 `request.ts` 吐司层。「是这一页吞了 403, 还是两条相同的 403 被折叠成一条」**至今未定** —— 403 分支 `severity` 缺省为 `'BLOCKING'` ⇒ 走 `ElMessageBox.alert` 模态, 且另有 `showSingletonNotification` 单例 + `ElMessage grouping` + 2000ms `_toastSeen` 去重, **三种机制都会把并发的相同错误折叠**。本修复与哪一种为真**无关**, 故两件事分开。
+  📌 报告者自曝两处**自己的仪器错误且都没报成缺陷**(`innerText.length` 把菜单文字算进空判定 / `lsm015` 登录 POST 根本没发出去是 refs 过期), 这是它其余读数可信的理由。
+
+- `QA-LSM-APPROVAL-MENU-ROLES-20260901` — `review` — Owner: `claude-code/liushanmen-organizer` — **PR #450**, Base `3c5e36b4fd`。上一条的另一半: **菜单放行而后端拒绝**。两侧判的不是同一件事 —— 菜单按 `module:'production'` → `canAccess()`(quality_manager 的 production=`'r'`)放行, 后端 `GET /pending-approval` 的闸是 **`@RequireRole` 角色白名单**(`ProcessWorkReportingController:41`), 差集就是「看得见点不开」。
+  🔴 **不是权限漂移, ⛔ 别去改权限矩阵**: `quality_manager` 的 `production:'r'` 在 **DB L1 / 两份前端 fallback / Java fallback 四处一致**, 且 `V20261030_11` 显式保留过同类跨模块只读(「质检结果影响生产」)。撤它会打断一批角色的合法访问。
+  ⚠️ **菜单 `roles[]` = `@RequireRole`(5) ∪ `RequireRoleInterceptor.PLATFORM_ADMIN_ROLES`(4)**。第二个集合不能漏 —— 那 4 个平台角色**无条件绕过** `@RequireRole`, 只照注解抄会把**本来打得开的页从平台管理员菜单里藏掉**(反向缺陷)。
+  ⚠️ menuConfig 里那段 ⛔「不加 roles 白名单」**不适用本条**: 那段前提是「菜单闸判的模块 == 后端闸判的模块」, 而本页后端判的是角色名单。它自己写的另一半正是本条 ——「菜单宽、页面窄」。`workshop_supervisor` 在白名单内, 那段担心的误伤有阴性对照钉着。
+  🔴 **元闸拦了我一次且是对的**(本仓第三次同形): 本闸读两个 Java 文件而 `web-admin-gate` 的 `paths:` 不含它们 ⇒ **只改 `@RequireRole` 名单的 PR 恰好是它看不见的那类改动**。已**逐文件**登记进 `push` 与 `pull_request` 两处; ⛔ 没用宽 glob(8-28 有人那样补触发面, 把另一道元闸的阴性对照变成恒真式)。
+  判据: 新闸 5/5 + 变异两条各打中自己那条 + 回归 12 文件 116 条 + `vue-tsc -b` EXIT=0 零输出 + 元闸修前 1 红修后 3/3。
+
+- `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901` — `in-progress` — Owner: `lucid-nobel-4a3795-7c` — 缺陷 **16 + 17** 一批(同文件, 必须一起数才数得全)。Scope: `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` + 目标测试。
+  🔴 **审计的「给价格字段加 `required`」是错的做法, 照做会产出假修复**: 该文件 3 个 `<el-form>` **全都没有 `:rules`/`ref`**(其一连 `:model` 都没有), 8 个 `required` 只有 5 个带 `prop`, **全文件没有一处调 `validate()`** ⇒ `required` 是**装饰**, 加了只是一颗红星 + 零强制, 而且**截图好看、视觉验收会过**(形态 B)。真正的校验手写在 `saveRelation`(~`:586`) 与 `savePurchaseSpec`(~`:681`) **两个不同函数**。
+  价格字段 **3 处不是 2 处**: `:218` 关系表单 / `:242` **内联规格(新增路径)** / `:299` 独立规格(编辑路径)。⛔ 漏 `:242` = 拦住编辑、放过新增, 而空价格主要从新增进来。
+  🔒 **Owner 2026-09-01 裁定「只在价格被动过时拦」**: 新增必填, 编辑仅当用户改动了价格字段才校验。理由 —— LIUSHANMEN 有 **4 条存量关系价格未设置**(DEMO235005 的 WL026/WL065/WL130 + 上海鹃城 YL063), 无条件拦会逼着只想改启用状态的用户先编一个价, **而编出来的价比空值更糟(空值还拦得住, 编的价一路通过)**。
+  ⚠️ 未核: 后端/Excel 导入路径对空价格的行为是否与「必填」一致(前端拦住而接口还能进空值)。⛔ 若需改后端 → 🔒 回协调者。
+
+- `QA-LSM-443-ACCEPTANCE-20260901` — `in-progress` — Owner: `strange-yalow-28966b-4e` — PR **#443**(线性步骤列表 UI)的浏览器/对抗性验收。**#447 已先合**(见下), #443 rebase 后验**最终形状**, ⛔ 不验一个此后还要变的树。
+  🔒 **边界(协调者背书)**: 只在 Mac mini 测试环境(`100.85.234.108:10010`)驱动 UI; **生产只读, ⛔ 不点保存**。理由: 验「有在途实例时只读闸拦得住」要求在真客户审批链上点一次保存, 闸若失效就是**亲手再造一次缺陷 27**, 而 `PO-20260901-0001` 已经因此永久卡死、恢复入口(#446)尚未部署。在途实例改为在测试环境构造。测试环境验不了的部分**一律标「未验证」**, ⛔ 不拿测试环境的绿冒充生产结论。
+
+- `QA-LSM-READONLY-ROLE-SWEEP-20260901` — `review` — Owner: `adoring-hellman-b219c0-07` — PR **#445**(docs-only)。`lsm006` 仓储主管 15/15 页可达无 403; `lsm004` 销售主管 6/6 干净; `lsm011` 操作员 / `lsm013` 质检员 → `/mobile-only`, **MOBILE_ONLY 设计如此不是缺陷**。
+  🔴 **覆盖缺口(不是「走过了没问题」)**: 质检段与报工段的执行角色都是**移动端专属**, Web 只有管理视角 ⇒ **手册那两段在 Web 上走不完**, 需另派 RN 线, 不在本线范围。
+  📌 刻意未追(登记防丢): ① `lsm015` 菜单 60 项且含质量管理组(疑似 1 的**反向镜像**); ② `/sales/orders` 同屏「共 12 条」vs 标签「全部 10」+ 表格 10 行 —— **可能是两个合法维度**(工作流状态 vs 履约状态), 未查证故只记疑似 ⛔ 未当缺陷记账。
+
+- `OBS-SILENT-409-WITHOUT-ACTIONHINT-20260901` — `queued` — Owner: 无 — 🔴 **全产品级静默**: `request.ts:539` 的 `isVanillaOptimisticLock = (status===409 && !actionHint && !hintTarget)` 把这类 409 的 toast **整条吞掉**(本意消 optimistic-lock 噪音), 而业务侧 `handleCatchError` 见 `err.status` 有值又认为「拦截器已经显示过了」而闭嘴 ⇒ **两层各自以为对方会说话, 用户看到「点了没反应」**。
+  ▎与 `QA-LSM-APPROVAL-403-AS-ZERO` **是同一形态**(两层互相推让), 只是一个吞提示、一个把失败渲染成一个肯定的数字。
+  #446 只用 `actionHint` 治好了缺陷 27 那一条; **「任何不带 actionHint 的 409 在全站静默」仍然成立**。收窄它会改全站行为 ⇒ 先量爆炸半径再动。由 `lucid-nobel` 查出并明确未擅自收窄。
+
+- `OBS-PRODUCTION-MANAGER-FALLBACK-DRIFT-20260901` — `queued` — Owner: 无 — `V20261030_11` 把 `production_manager` 的 `analytics`/`report`/`procurement` 在 DB 收窄为 `'-'`, 但**前端 store fallback 与 Java 硬编码 fallback 都仍是 `'r'`** ⇒ 3 模块 × 2 份 = **6 条陈旧条目**。与 PR #441 给 `finance_manager` 修的**同一形态**, 但**不在**那份 `KNOWN_DRIFT` 名单里(它只圈了 finance_manager)。DB 可达时 L1 胜出故**休眠**, 只在 DB 不可达/竞态的 fallback 窗口显形 —— 而那正是 #441 关心的窗口。
+
+
 
 - `FIX-QC-VERSION-OTA-APK-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0f11d9a91bdfb77115c9cc3cebab05984f02a458` — 质检员“关于/设置”版本号改读 APK 原生真值并补一致性闸；合入后从 clean exact `origin/main` 向错误原生标识仍报 1.0.3 的现场设备发布兼容 OTA，同时重建并发布原生 runtime 已修正、保留最低 APK 版本门禁的 1.0.4 签名 APK。Scope lock：仅 QIProfile/QISettings、quality 中英文版本文案、nativeVersionConsistencyContract 测试、ACTIVE/当日归档；验收为质检上传目标测试、版本一致性闸、TypeScript、签名/启动冒烟、OTA manifest/CDN 与 APK CDN/版本/哈希验证。
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base SHA: `0ed3f10da8` — Scope lock: RN `QILabelQcCameraModal.tsx`、`QILabelQcCreateScreen.tsx`、`labelQcApi.ts`、对应 Label QC camera/create/API 目标测试、`docs/specs/label-qc-cold-start.md` 与本任务 dispatch；照片本地压缩后立即添加，远程清晰度检查只作后台建议，5 秒超时、断网、服务失败和明确拒绝均不得删除照片或阻塞正式提交，状态不得伪称“已自动检查”。验收：RN 目标 Jest、TypeScript、`git diff --check`、Android production OTA、线上 manifest/CDN、真实设备 LIUSHANMEN 拍照立即返回表单并成功上传回读。
@@ -147,6 +179,11 @@
   **未决**：`应用差异` 的修复尚未部署 ⇒ **F006 那张 `ST-202608-C20566F3` 仍停在「已审批」未过账**，等本批上线后再点一次「应用差异」收尾。
 
 ## Scope 锁地图
+
+- `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
+- `QA-LSM-APPROVAL-MENU-ROLES-20260901`（PR #450，待合）：`web-admin/src/components/layout/menuConfig.ts` 的 `/production/approval` 那一条、`web-admin/src/components/layout/__tests__/reportApprovalMenuMatchesBackendRoles.spec.ts`、`.github/workflows/web-admin-gate.yml` 的 `paths:`。⚠️ 与 `QA-LSM-APPROVAL-403-AS-ZERO`(已合, 改 `views/production/approval/list.vue`) **同屏但不同文件**, 无冲突。
+- `QA-LSM-443-ACCEPTANCE-20260901`：`web-admin/src/views/platform/approval-workflow-editor/**`（#443 的 4 个文件）。⛔ 只读验收不改产品代码; ⛔ 不碰 `views/production/**`。
+
 - `FIX-QC-VERSION-OTA-APK-20260829`：`frontend/CretasFoodTrace/src/screens/quality-inspector/QIProfileScreen.tsx`、`QISettingsScreen.tsx`、`src/i18n/locales/{zh-CN,en-US}/quality.json`、`src/__tests__/gates/nativeVersionConsistencyContract.test.ts`、`docs/dispatch/ACTIVE.md` 与当日归档；发布阶段只读使用官方 OTA/APK 脚本。验收：屏幕版本来自 `expo-application`，1.0.3 兼容 OTA 可拉取，1.0.4 APK 原生版本/runtime/versionCode 一致且强制更新门禁保留，签名、启动冒烟及公网制品验证通过。
 
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811`：仅 `tools/vision-lab/work_area*.py`、`tools/vision-lab/mine_tray_queue.py`、`tools/vision-lab/tray_workflow.py`、`tools/vision-lab/evaluate_tray_candidate.py`、对应 `tools/vision-lab/tests/`、`docs/ops/liushanmen-vision-lab.md`、`docs/dispatch/ACTIVE.md` 与当日归档；不得改写人工真值、保护集、原图、现有模型或生产。
