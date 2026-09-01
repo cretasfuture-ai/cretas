@@ -56,7 +56,7 @@ const props = withDefaults(defineProps<{
   summary: string;
   /** 完整文案(tooltip + aria-label), 摘要被省略时用户仍能读到全文。 */
   fullLabel: string;
-  tone?: 'aux' | 'packaging' | 'byproduct' | 'rework';
+  tone?: 'aux' | 'packaging' | 'byproduct' | 'defective' | 'rework';
   testid: string;
 }>(), { ownerOffset: null, tone: 'aux' });
 
@@ -96,6 +96,7 @@ const rootStyle = computed<CSSProperties>(() => ({
 .fused-strip--packaging { --fused-border: #cfe3d2; --fused-bg: #f6fbf7; --fused-ink: #2f6d46; --fused-chip: #d8efdf; }
 .fused-strip--byproduct { --fused-border: #f0d3a8; --fused-bg: #fffcf5; --fused-ink: #b54708; --fused-chip: #fef0c7; }
 .fused-strip--rework { --fused-border: #cdd8f0; --fused-bg: #f6f8ff; --fused-ink: #33499b; --fused-chip: #dfe6fb; }
+.fused-strip--defective { --fused-border: #f5c6c2; --fused-bg: #fffbfa; --fused-ink: #b42318; --fused-chip: #fee4e2; }
 
 /* 收起态 = 约一行高的窄条。高度由 line-height + padding 决定(随字号/语言变),
    ⛔ 不写死 px —— 交接明确点名不要盲写 42px。 */

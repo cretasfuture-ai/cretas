@@ -272,9 +272,11 @@
             <WorkflowFusedStrip
               v-if="isSpecialOutputNode(slotProps)"
               side="below"
-              :tone="slotProps.data.isRework ? 'rework' : 'byproduct'"
+              :tone="slotProps.data.isRework
+                ? 'rework'
+                : slotProps.data.isDefective ? 'defective' : 'byproduct'"
               :testid="`special-output-strip-${slotProps.id}`"
-              :badge="slotProps.data.isRework ? '回' : '副'"
+              :badge="slotProps.data.isRework ? '回' : slotProps.data.isDefective ? '不' : '副'"
               :owner-width="FUSED_PROCESS_OWNER_WIDTH"
               :owner-offset="fusedBelowOffsetFor(slotProps.id)"
               :collapsed="isFusedCollapsed(slotProps.id)"
@@ -1637,10 +1639,10 @@ const measuredNodeSizes = computed<Record<string, FusedSizeLike>>(() => {
 /** 量不到附属高度时按这个下限留白 —— 宁可多留也不能压上去。 */
 const FUSED_ATTACHMENT_FALLBACK_HEIGHT = 120;
 
-/** 这个物料节点是不是「特殊产出」（副产 / 回料）—— 唯一判据，⛔ 不在别处再写一次。 */
+/** 这个物料节点是不是「特殊产出」（副产 / 不良品 / 回料）—— 唯一判据，⛔ 不在别处再写一次。 */
 function isSpecialOutputNode(node: { data?: unknown }): boolean {
   const data = (node.data ?? {}) as MaterialNodeData;
-  return data.isByproduct === true || data.isRework === true;
+  return data.isByproduct === true || data.isDefective === true || data.isRework === true;
 }
 
 /** 特殊产出节点 → 产出它的那道工序（真实边的 source）。 */
@@ -4534,11 +4536,17 @@ function createRawInputCell(
  * (不出现在报工屏), 回料端口必须留在选项里让操作员填数, 合并会让回料要么进不了
  * 报工屏、要么丢掉成本。
  */
-function addOutputToProcess(processId: string, options: { byproduct?: boolean } & { rework?: boolean } = {}): void {
+function addOutputToProcess(
+  processId: string,
+  options: { byproduct?: boolean; defective?: boolean; rework?: boolean } = {},
+): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   const isByproduct = options.byproduct === true;
-  // 回料 = 金检/X光 剔出的不良品去处。与副产刻意分开:
+  // 不良品 = 剔出来、**还没复查**的那部分。⛔ 不判废也不是不入库 —— 它照常报工、照常入库
+  // 「存着」, 靠的就是后端对没有标记的半成品产出的默认处理(workflowOutputOptions 只滤副产)。
+  const isDefective = options.defective === true;
+  // 回料 = 复查过、确定要回投的那部分。与副产刻意分开:
   // 副产端口会被后端 getOutputOptions 过滤掉, 回料端口必须留在选项里让操作员填数。
   const isRework = options.rework === true;
   // 建了副产 cell 才去拉副产档案 —— 不建就不请求。⚠️ 不 await: 建节点必须立即可见,
@@ -4553,6 +4561,9 @@ function addOutputToProcess(processId: string, options: { byproduct?: boolean } 
     const reworkCount = flowNodes.value.filter(
       (node) => node.type === 'material' && (node.data as MaterialNodeData)?.isRework === true,
     ).length;
+    const defectiveCount = flowNodes.value.filter(
+      (node) => node.type === 'material' && (node.data as MaterialNodeData)?.isDefective === true,
+    ).length;
     const timestamp = nextGraphIdSeed();
     const materialId = `material:output:${timestamp}`;
     const portId = `output:${timestamp}`;
@@ -4562,12 +4573,19 @@ function addOutputToProcess(processId: string, options: { byproduct?: boolean } 
       position: snapPosition({ x: process.position.x + 480, y: process.position.y + outputCount * 160 }),
       data: {
         kind: 'SEMI_FINISHED',
-        name: isByproduct ? `副产 ${byproductCount + 1}` : isRework ? `回料 ${reworkCount + 1}` : `产出半成品 ${outputCount + 1}`,
+        name: isByproduct
+          ? `副产 ${byproductCount + 1}`
+          : isDefective
+            ? `不良品 ${defectiveCount + 1}`
+            : isRework
+              ? `回料 ${reworkCount + 1}`
+              : `产出半成品 ${outputCount + 1}`,
         skuId: '',
         skuCode: '待选择或现场创建 SKU',
         bound: false,
         baseUnit: 'kg',
         ...(isByproduct ? { isByproduct: true } : {}),
+        ...(isDefective ? { isDefective: true } : {}),
         ...(isRework ? { isRework: true } : {}),
       },
     });
@@ -4621,12 +4639,13 @@ function toggleFusedCollapsed(collapseKey: string, next?: boolean): void {
 
 /** 特殊产出窄条的单行摘要: 类型 · 名称 · 配置状态。 */
 function specialOutputSummary(nodeId: string, data: MaterialNodeData): string {
-  const label = data.isRework ? '回料' : '副产';
+  const label = data.isRework ? '回料' : data.isDefective ? '不良品' : '副产';
   const name = String(data.name || '未命名');
   if (data.isRework) {
     const count = reworkTargetCountFor(nodeId);
     return `${label} · ${name} · ${count === 0 ? '未配置回投目标' : `可回投 ${count} 道工序`}`;
   }
+  // 不良品与普通产出一样按 SKU 绑定 —— 它没有额外配置项, 所以摘要就到绑定状态为止。
   return `${label} · ${name} · ${data.skuId ? '已绑定物料' : '未选择物料'}`;
 }
 
@@ -4654,15 +4673,20 @@ function openSpecialOutputChooser(processId: string): void {
  */
 function chooseSpecialOutput(kind: SpecialOutputKind): void {
   const processId = specialOutputTargetProcessId.value;
-  // 只剩两类, 且两类都有后端运行时契约(见 workflowSpecialOutputs.ts) —— 不再需要可用性分支。
+  // 三类都可用 —— ⛔ 不要在这里加「这一类还不能用」的分支。不良品走的是后端对
+  // 无标记半成品产出的默认路径(报工选项 + semi_finished_inventory), 见 workflowSpecialOutputs.ts。
   specialOutputOption(kind);
   if (!processId || !canEdit.value) return;
   specialOutputChooserVisible.value = false;
   const createdBefore = new Set(flowNodes.value.map((node) => node.id));
-  addOutputToProcess(processId, kind === 'byproduct' ? { byproduct: true } : { rework: true });
+  addOutputToProcess(processId, kind === 'byproduct'
+    ? { byproduct: true }
+    : kind === 'defective'
+      ? { defective: true }
+      : { rework: true });
   const created = flowNodes.value.find((node) => !createdBefore.has(node.id));
   if (!created) return;
-  // 副产的配置就在它自己的 Cell 上(物料档案下拉); 回料要选目标工序, 直接把抽屉打开。
+  // 副产/不良品的配置就在它自己的 Cell 上(选物料/选 SKU); 回料要选目标工序, 直接把抽屉打开。
   if (kind === 'rework') void openReworkDrawer(created.id);
 }
 

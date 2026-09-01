@@ -165,12 +165,23 @@ describe('图校验对副产的处理', () => {
 describe('入口与选择器', () => {
   it('副产与主产出共用 addOutputToProcess —— 不是另起一个函数', () => {
     // goal: 「复用画布已有的『＋ 产出 Cell（分流）』入口, 不要新造入口」。
-    expect(EDITOR).not.toMatch(/function addByproductToProcess/);
-    expect(EDITOR).toMatch(/function addOutputToProcess\(processId: string, options: \{ byproduct\?: boolean \}/);
-    // 2026-09-01: 调用点从模板内联挪进了统一入口的处理函数(§7 三选一), 函数本身没变。
-    // 判据仍然是「只有一条路径」, 只是钉在新的调用点上。
-    expect(EDITOR).toMatch(
-      /addOutputToProcess\(processId, kind === 'byproduct' \? \{ byproduct: true \} : \{ rework: true \}\)/);
+    // 🔴 2026-09-01 判据换了承载方式: 原来钉的是**函数签名与调用点的字面文本**,
+    //    于是加第三类(不良品)时这条测试红了 —— 而产品行为一点没变坏。
+    //    钉字面文本守不住「只有一条路径」这件事, 它守的是「这一行长什么样」。
+    //    ⇒ 换成数**结构**: 没有 per-kind 的函数, 且建产出 Cell 的函数只有一个。
+    for (const forbidden of [/function addByproductToProcess/,
+      /function addReworkToProcess/, /function addDefectiveToProcess/]) {
+      expect(EDITOR, String(forbidden)).not.toMatch(forbidden);
+    }
+    expect(EDITOR.match(/function addOutputToProcess\(/g) ?? []).toHaveLength(1);
+    // 三类都从统一入口穿过同一个函数, 差别只在 options 上的那个键
+    const chooser = EDITOR.slice(
+      EDITOR.indexOf('function chooseSpecialOutput'),
+      EDITOR.indexOf('function chooseSpecialOutput') + 900);
+    expect(chooser).toContain('addOutputToProcess(processId');
+    for (const key of ['byproduct: true', 'defective: true', 'rework: true']) {
+      expect(chooser, key).toContain(key);
+    }
   });
 
   it('每个工序上都有「+ 副产」入口 —— 「没配副产」与「不能配副产」必须能区分', () => {

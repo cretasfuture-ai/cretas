@@ -4,7 +4,7 @@ import type { ProcessNodeData, ProductProcessWorkflowDefinition } from '../types
 
 /**
  * AI 草稿这条链上，本轮**动过**的正是补丁的字段白名单与校验器
- * （新增 `isRework` / `reworkPolicy`）。
+ * （新增 `isRework` / `isDefective` / `reworkPolicy`）。
  *
  * ⚠️ 这两处是**同一道闸的两个承载点**（见 workflowModel.ts 里 fieldPaths 的注释）：
  * 键没进 `materialDataKeys` / `processDataKeys` 会被 `hasAllowedKeys` 拒，
@@ -106,17 +106,54 @@ describe('AI 补丁：回料相关字段', () => {
     expect(ok.errors).toEqual([]);
   });
 
-  it('⛔ 不良品那类标记不存在，AI 也造不出来', () => {
-    // 业务上没有「判废/不入库」这一类（owner 2026-09-01），所以画布上不该出现它的标记。
+  it('可以建一个带 isDefective 标记的产出 Cell', () => {
+    // 🔴 2026-09-01 订正：上一版这条测试断言的是「不良品标记不存在，AI 也造不出来」。
+    //    那条断言守的是我误读出来的一个裁定 —— owner 原话是「我要的是不良品」，
+    //    被否掉的只是「判废 / 不入库」这两个说法（形态 C‴：断言守的是历史不是需求）。
     const result = applyWorkflowPatches(baseDefinition(), [{
       op: 'UPSERT_NODE',
       node: {
         id: 'material:output:2',
         kind: 'SEMI_FINISHED',
         position: { x: 0, y: 0 },
-        data: { name: '判废', skuId: 'X', isDefective: true } as Record<string, unknown>,
+        data: { name: '金检剔出待复查', skuId: 'PT-DEFECT', isDefective: true },
+      },
+    }]);
+    expect(result.errors).toEqual([]);
+    const created = result.definition.nodes.find((node) => node.id === 'material:output:2');
+    expect((created?.data as { isDefective?: boolean })?.isDefective).toBe(true);
+  });
+
+  it('🔴 值形状不对照样被拒 —— 证明上一条的绿不是「什么都放行」', () => {
+    // 阴性对照。少了这条，`isDefective` 那条正例可能只是因为白名单形同虚设。
+    const result = applyWorkflowPatches(baseDefinition(), [{
+      op: 'UPSERT_NODE',
+      node: {
+        id: 'material:output:3',
+        kind: 'SEMI_FINISHED',
+        position: { x: 0, y: 0 },
+        data: { name: 'x', skuId: 'X', isDefective: '是' } as Record<string, unknown>,
+      },
+    }]);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.summary).toHaveLength(0);
+  });
+
+  it('⛔ 副产标记 AI 仍然造不出来 —— 这一条是刻意的，不是漏加', () => {
+    // 三个特殊产出标记里只有副产被挡在 AI 之外。理由不是「副产更危险」，
+    // 是副产 Cell 必须绑物料档案里 is_byproduct=true 的条目 —— AI 编一个出来，
+    // 发布时会被 PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH 拒。
+    // ⇒ 让它写等于让它造一张必然发不出去的图。
+    const result = applyWorkflowPatches(baseDefinition(), [{
+      op: 'UPSERT_NODE',
+      node: {
+        id: 'material:output:4',
+        kind: 'SEMI_FINISHED',
+        position: { x: 0, y: 0 },
+        data: { name: '肥油', skuId: 'RM-FAT', isByproduct: true } as Record<string, unknown>,
       },
     }]);
     expect(result.errors.length).toBeGreaterThan(0);
   });
+
 });

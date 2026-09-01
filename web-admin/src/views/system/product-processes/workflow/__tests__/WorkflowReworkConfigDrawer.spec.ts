@@ -259,10 +259,19 @@ describe('比例是配方值，不是上限', () => {
     expect(text).not.toContain('不超过');
   });
 
-  it('诚实边界仍在：说明系统还不会自动配料', () => {
+  it('诚实边界仍在：报工时不用填、系统也不动手，而「按比例提醒」还没有', () => {
+    // 🔴 2026-09-01 owner 补充了这个比例在报工时**应该**起什么作用：
+    //    ⛔ 不自动配料、⛔ 报工不用为它填一笔、⛔ 不扣料不拦报工，
+    //    ✅ 目标是产出之后按比例**提醒该配的料**（owner 口述时先说「扣款」，当场订正为「警告」）。
+    //    ⇒ 这条判据要同时守两件事：说清目标，并且**说清它还没有**。
     const text = mountDrawer().text();
-    expect(text).toContain('不会');
-    expect(text).toContain('自动配料');
+    expect(text).toContain('报工时不用');
+    expect(text).toContain('不扣料');
+    expect(text).toContain('提醒该配的料');
+    // 🔴 最要紧的一句：目标不能被写成已经在跑的功能
+    expect(text).toContain('现在还没有');
     expect(text).not.toContain('已生效');
+    // 阴性对照：owner 自己否掉的那个词不许出现在产品文案里
+    expect(text).not.toContain('扣款');
   });
 });

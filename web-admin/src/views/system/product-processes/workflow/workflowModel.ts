@@ -477,9 +477,15 @@ const workflowNodeKinds = new Set<ProductProcessNodeKind>([
 const materialNodeKinds = new Set(['RAW_MATERIAL', 'SEMI_FINISHED', 'FINISHED_GOOD']);
 const conversionModes = new Set(['ACTUAL_WEIGHT', 'FIXED_RATIO', 'SUM_OUTPUTS', 'FORMULA']);
 const portSelectionModes = new Set(['ALL_REQUIRED', 'EXACTLY_ONE', 'AT_LEAST_ONE', 'OPTIONAL']);
+// ⚠️ 这是 **AI 补丁**能写的键，不是用户保存时的白名单。
+// ⛔ `isByproduct` 刻意不在里面：副产 Cell 必须绑物料档案里 `is_byproduct=true` 的条目，
+//    AI 编一个出来会在发布时被 PRODUCT_PROCESS_WORKFLOW_CATALOG_MISMATCH 拒 ——
+//    让它写等于让它造一张必然发不出去的图。
+// ✅ `isRework` / `isDefective` 没有这条档案约束（都是普通半成品产出 + 一个标记），
+//    所以 AI 可以写。
 const materialDataKeys = new Set([
   'name', 'skuId', 'skuCode', 'specification', 'baseUnit', 'bound', 'substituteOfNodeId',
-  'isRework',
+  'isRework', 'isDefective',
 ]);
 const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
@@ -581,6 +587,7 @@ function isMaterialNodeData(value: Record<string, unknown>): value is MaterialNo
     && optionalString(value.baseUnit)
     && optionalBoolean(value.bound)
     && optionalBoolean(value.isRework)
+    && optionalBoolean(value.isDefective)
     && optionalNullableString(value.substituteOfNodeId);
 }
 

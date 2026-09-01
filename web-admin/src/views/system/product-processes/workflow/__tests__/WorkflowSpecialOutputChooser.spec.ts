@@ -20,37 +20,71 @@ function mountChooser() {
 }
 
 describe('§7 统一入口后的选择器', () => {
-  it('恰好两类：副产 / 回料产出', () => {
-    // 🔴 2026-09-01 判据换代（形态 C‴：断言守的是历史，不是需求）。
-    // 旧判据钉的是「恰好三类，不良品常驻可见但不可选」。owner 裁定业务上**不存在**
-    // 「判废 / 不入库」这个场景 —— 车间是「复查 → 存着 → 回料直接回投」，
-    // 剔出来的东西最终都走回料。所以这一类整个去掉，不是「暂时禁用」。
-    expect(SPECIAL_OUTPUT_OPTIONS.map((option) => option.kind)).toEqual(['byproduct', 'rework']);
+  it('恰好三类：副产 / 不良品 / 回料产出', () => {
+    // 🔴 2026-09-01 这条判据当天改了**两次**，第二次是订正第一次的误读（形态 C‴）。
+    //
+    //   原判据：三类，不良品常驻可见但不可选。
+    //   第一次改：整类删掉 —— 我把 owner 的「判废跟不入库这两个功能可以去掉」
+    //             读成了「不良品这一类可以去掉」。
+    //   第二次改（本条）：owner 原话「**我要的是不良品，不良品是需要的**」。
+    //             要去掉的是挂在它身上的两句错话，不是这一类。
+    //
+    // ⇒ 判据钉的是「三类都在、都能选」，理由写在 workflowSpecialOutputs.ts。
+    expect(SPECIAL_OUTPUT_OPTIONS.map((option) => option.kind))
+      .toEqual(['byproduct', 'defective', 'rework']);
     const wrapper = mountChooser();
     expect(wrapper.find('[data-testid="special-output-byproduct"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="special-output-defective"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="special-output-rework"]').exists()).toBe(true);
   });
 
-  it('⛔ 阴性对照：不良品这一项**彻底不存在**，不是藏起来也不是置灰', () => {
+  it('⛔ 被否掉的是「判废 / 不入库」这两个说法 —— 一个字都不许回来', () => {
+    // 阴性对照。⛔ 不是「不许提不良品」（那正是我上一版搞反的地方），
+    // 是不许把不良品描述成「判死」或「不入库」—— 它照常报工、照常入库存着。
     const wrapper = mountChooser();
-    expect(wrapper.find('[data-testid="special-output-defective"]').exists()).toBe(false);
-    expect(wrapper.text()).not.toContain('不良品');
+    expect(wrapper.text()).toContain('不良品');
     expect(wrapper.text()).not.toContain('判废');
-    // 定义层也不许留一个 available:false 的死条目
-    expect(read('workflowSpecialOutputs.ts')).not.toMatch(/kind:\s*'defective'/);
-    expect(read('workflowSpecialOutputs.ts')).not.toContain('available');
+    expect(wrapper.text()).not.toContain('不入库');
+    const source = read('workflowSpecialOutputs.ts');
+    // 描述正文里不许出现这两个词。⚠️ 注释里**可以**出现（那段注释就是在解释为什么不许），
+    // 所以只扫 description 字段本身，不扫整份文件 —— 否则闸会把自己的解释当成违例
+    // （本仓踩过：「闸把自己的注释当成被测对象」）。
+    for (const option of SPECIAL_OUTPUT_OPTIONS) {
+      expect(option.description, option.kind).not.toContain('判废');
+      expect(option.description, option.kind).not.toContain('不入库');
+    }
+    // 定义层也不许留一个 available:false 的死条目 —— 三类都是真能选的
+    expect(source).not.toContain('available');
   });
 
-  it('两类都可选，选中后带着 kind 抛给画布层', async () => {
+  it('不良品「照常报工入库」这句话有 Java 侧证据 —— 是去读实现，不是转述', () => {
+    // 🔑 这条守的是**产品文案的真假**。UI 上写着不良品「照常报工入库存着」，
+    //    它成立的唯一理由是：后端那段筛选**只把副产滤掉**，没有标记的半成品产出
+    //    照常进报工选项。哪天有人给不良品也加一道过滤，这句话就变成假话，本条会红。
+    const impl = readFileSync(resolve(
+      __dirname, '../../../../../../..',
+      'backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl',
+      'WipInventoryServiceImpl.java'), 'utf8');
+    const body = impl.slice(impl.indexOf('workflowOutputOptions('));
+    // 正例：确实存在「滤掉副产」这一条
+    expect(body).toContain('!byproductNodeIds.contains(p.getMaterialNodeId())');
+    // 阴性对照：没有任何一条按不良品过滤
+    expect(body).not.toMatch(/defective/i);
+  });
+
+  it('三类都可选，选中后带着 kind 抛给画布层', async () => {
     const wrapper = mountChooser();
     await wrapper.get('[data-testid="special-output-byproduct"]').trigger('click');
+    await wrapper.get('[data-testid="special-output-defective"]').trigger('click');
     await wrapper.get('[data-testid="special-output-rework"]').trigger('click');
-    expect(wrapper.emitted('choose')).toEqual([['byproduct'], ['rework']]);
+    expect(wrapper.emitted('choose')).toEqual([['byproduct'], ['defective'], ['rework']]);
   });
 
-  it('留下的两类都有后端运行时契约 —— 判据是去 Java 源码树里数，不是转述', () => {
+  it('副产/回料各有 Java 判据类 —— 判据是去源码树里读，不是转述', () => {
     // 形态 B⁷：引用一句注释来支撑判断之前，先让它自己说。
-    // 这两个判据类**必须存在**，否则选择器里留的就是两个没人读的假选项。
+    // ⚠️ 三类里只有这两类需要判据类。不良品**刻意没有** —— 它走的是「没有标记的
+    //    半成品产出」那条默认路径（上一条测试就是在钉这件事）。给它加一个判据类
+    //    只会把它从那条路上挪走。⇒ 这里不要顺手补第三个 expect。
     const javaRoot = resolve(
       __dirname, '../../../../../../..',
       'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow');
@@ -58,9 +92,15 @@ describe('§7 统一入口后的选择器', () => {
     expect(readFileSync(resolve(javaRoot, 'WorkflowReworkNodes.java'), 'utf8')).toContain('isRework');
   });
 
-  it('两类语义分开写：副产入库、回料回投，描述里各自点名', () => {
+  it('三类语义分开写，描述里各自点名，⛔ 不许互相串味', () => {
     expect(specialOutputOption('byproduct').description).toContain('入库');
     expect(specialOutputOption('rework').description).toContain('回到后续批次');
     expect(specialOutputOption('rework').description).toContain('比例');
+    // 不良品 = 还没复查的那部分，且要说清它照常报工入库
+    expect(specialOutputOption('defective').description).toContain('复查');
+    expect(specialOutputOption('defective').description).toContain('入库');
+    // 阴性对照：不良品和回料是**两个阶段**，描述不许把不良品说成「可以直接回投」——
+    // 回投的前提是复查通过，说反了会让用户把没复查的东西配到工序上。
+    expect(specialOutputOption('defective').description).not.toContain('确定要回到');
   });
 });

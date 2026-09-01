@@ -60,7 +60,10 @@
         <p class="rework-drawer__scope">
           比例是<strong>配方值</strong>：这块回料就按它投进那道工序，由车间纪律照此执行，
           实际投多少不必登记，后续核算直接按这个比例算。
-          系统当前<strong>不会</strong>在报工时按它自动配料 —— 后端只读画布上的回料标记。
+          报工时<strong>不用</strong>为它填一笔配料，系统也不会替你把料配上、不扣料、不拦报工。
+          <br />
+          目标是等这部分产出之后按这个比例<strong>提醒该配的料</strong>，
+          但这个提醒<strong>现在还没有</strong> —— 后端只读画布上的回料标记，还没有人读这个比例。
         </p>
         <p v-if="draftTargets.size === 0" class="rework-drawer__hint" data-testid="rework-no-target">
           还没配回投目标。回料是可选项，<strong>不影响保存与发布</strong>；先留空也可以，回头再补。

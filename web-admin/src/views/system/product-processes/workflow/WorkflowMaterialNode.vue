@@ -10,8 +10,11 @@
       'validation-error': !!validationError,
       'validation-attention': validationAttention,
       byproduct: data?.isByproduct === true,
+      defective: data?.isDefective === true,
     }]"
-    :data-testid="data?.isByproduct === true ? 'byproduct-cell' : undefined"
+    :data-testid="data?.isByproduct === true
+      ? 'byproduct-cell'
+      : data?.isDefective === true ? 'defective-cell' : undefined"
   >
     <Handle v-if="kind !== 'RAW_MATERIAL'" type="target" :position="Position.Left" id="input" />
     <Handle v-if="kind !== 'FINISHED_GOOD'" type="source" :position="Position.Right" id="output" />
@@ -142,6 +145,16 @@
     />
 
     <!--
+      不良品说明 —— 它**没有额外配置项**(名称/SKU/单位上面已经能填完), 这里只说清它是什么。
+      ⛔ 措辞不许出现「判废」「不入库」: 它照常报工、照常入库存着。这条不是客气话 ——
+         `workflowOutputOptions` 只把副产滤掉, 没有标记的半成品产出走的就是这条默认路径。
+      ⛔ 也不许写成「复查通过会自动变回料」: 没有那个流转, 回投是人在回料 Cell 那边报的。
+    -->
+    <p v-if="isDefective" class="defective-note" data-testid="defective-note">
+      剔出来、还没复查的那部分。照常报工入库存着；复查通过后从回料那边回投。
+    </p>
+
+    <!--
       回料配置入口 —— 显示名称/SKU/计量单位在上面已经可编辑, 这里补的是**允许回投的目标工序**。
       ⛔ 措辞只说「已配置」不说「已限制投料」: Java 侧 `WorkflowReworkNodes` 只读 `data.isRework`,
          没有任何运行时消费者读 `reworkPolicy` —— 说它在拦料是一句代码给不出证据的话。
@@ -158,7 +171,10 @@
       <p v-if="reworkTargetCount === 0" class="rework-config__hint" data-testid="rework-missing-target">
         还没配回投目标。⛔ 这不拦保存也不拦发布 —— 回料是可选项。
       </p>
-      <p class="rework-config__scope">比例是配方值（按它投、按它算）；系统尚未在报工时自动配料。</p>
+      <p class="rework-config__scope">
+        比例是配方值（按它投、按它算）；报工不用为它填配料，系统也不扣料不拦报工。
+        「按比例提醒配料」是目标，现在还没有。
+      </p>
       <el-button
         v-if="canWrite"
         size="small"
@@ -464,18 +480,32 @@ const filteredOtherRawOptions = otherRawFilter.filtered;
  */
 const isByproduct = computed(() => props.data?.isByproduct === true);
 const isRework = computed(() => props.data?.isRework === true);
+/**
+ * 不良品标记（2026-09-01 owner 订正后加回）。与副产同一个套路：kind 仍是 SEMI_FINISHED,
+ * 只改 label/mark/配色, 不加任何分支逻辑 —— 它就是一件要入库存着的产出物。
+ * ⛔ 别把它做成「不入库」或「判废」, 那两个说法正是被否掉的东西。
+ */
+const isDefective = computed(() => props.data?.isDefective === true);
 
-const kindLabel = computed(() => (isRework.value ? '回料 Cell' : isByproduct.value ? '副产 Cell' : {
-  RAW_MATERIAL: '原料 Cell',
-  SEMI_FINISHED: '半成品 Cell',
-  FINISHED_GOOD: '成品 Cell',
-}[props.kind]));
+const kindLabel = computed(() => (isRework.value
+  ? '回料 Cell'
+  : isDefective.value
+    ? '不良品 Cell'
+    : isByproduct.value ? '副产 Cell' : {
+      RAW_MATERIAL: '原料 Cell',
+      SEMI_FINISHED: '半成品 Cell',
+      FINISHED_GOOD: '成品 Cell',
+    }[props.kind]));
 
-const kindMark = computed(() => (isRework.value ? '回' : isByproduct.value ? '副' : {
-  RAW_MATERIAL: '原',
-  SEMI_FINISHED: '半',
-  FINISHED_GOOD: '成',
-}[props.kind]));
+const kindMark = computed(() => (isRework.value
+  ? '回'
+  : isDefective.value
+    ? '不'
+    : isByproduct.value ? '副' : {
+      RAW_MATERIAL: '原',
+      SEMI_FINISHED: '半',
+      FINISHED_GOOD: '成',
+    }[props.kind]));
 </script>
 
 <style scoped>
@@ -542,6 +572,18 @@ const kindMark = computed(() => (isRework.value ? '回' : isByproduct.value ? '�
 }
 .material-node.byproduct .kind-mark { background: #fef0c7; color: #b54708; }
 .material-node.byproduct .kind-label { color: #b54708; }
+.material-node.defective { border-left-color: #d92d20; background: #fffbfa; }
+.material-node.defective .kind-mark { background: #fee4e2; color: #b42318; }
+.material-node.defective .kind-label { color: #b42318; }
+.defective-note {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #fef3f2;
+  color: #912018;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .material-node { transition: opacity 150ms ease, box-shadow 150ms ease; }
 .material-node.wf-dim { opacity: 0.4; cursor: not-allowed; }
 .material-node.wf-valid { box-shadow: 0 0 0 2px #1b65a8, 0 0 12px rgba(27, 101, 168, 0.35); }
