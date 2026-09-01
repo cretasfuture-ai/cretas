@@ -159,6 +159,52 @@ public interface WorkflowEngineService {
     ApprovalWorkflowInstance cancel(String instanceId, Long cancellerUserId, String reason);
 
     /**
+     * 缺陷 27 恢复入口 — 把「绑定定义已变更」而卡死的在途实例作废并按当前定义重开.
+     *
+     * <h2>为什么需要它</h2>
+     *
+     * <p>{@code transitionNode} 会用 {@code verifyBoundDefinition} 比对实例创建时绑定的
+     * 定义摘要与当前定义摘要, 不等即 409 {@code WORKFLOW_BOUND_DEFINITION_CHANGED}.
+     * 通过与驳回<b>两条路都走这道闸</b> ⇒ 改过一次已发布定义之后, 该链上所有在途单据
+     * 通过不了也驳回不了, 而产品内此前<b>没有任何恢复入口</b>
+     * (LIUSHANMEN 生产实证: PO-20260901-0001 / 实例 851d0845-…).
+     *
+     * <p>⚠️ 摘要喂的是 {@code nodesJson} 整串, 其中含 {@code position:{x,y}} ⇒
+     * <b>在画布上挪动一个节点一像素并保存, 就会砸掉这条链上全部在途审批</b>。
+     * 触发面是日常操作, 不是罕见事故 —— 所以这个入口按「会经常用」设计, 不是藏起来的后门。
+     *
+     * <h2>语义: 作废并自动重开 (owner 2026-09-01 拍板)</h2>
+     *
+     * <ol>
+     *   <li>旧实例 → CANCELLED, 写 CANCEL history (reason 落库)</li>
+     *   <li>按<b>当前</b>启用定义新建实例, 沿用原 businessEntityId / context / 发起人</li>
+     *   <li>审批<b>从头重走一遍</b> ⇒ 结构上不可能"跳过已走过的审批"</li>
+     * </ol>
+     *
+     * <p>⛔ 刻意<b>不</b>提供「静默重绑摘要后原地继续」——那等于把「审批依据中途换过」
+     * 藏起来。本方法把换绑这件事变成一次显式的作废+重开, 并在新实例 contextJson 的
+     * {@code approvalRebind} 块里留痕 (原实例 id / 前后摘要 / 操作人 / 原因 / 被作废时
+     * 停在哪个节点 / 丢弃了几条已通过的审批)。
+     *
+     * <p>业务方状态不需要跟着改: 旧实例 CANCELLED 与新实例 RUNNING 在同一事务内完成,
+     * 单据始终有且只有一个 RUNNING 实例 ⇒ {@code getCurrentInstance} 全程可解,
+     * PurchaseOrder 之类的 {@code WORKFLOW_RUNNING} 投影保持正确。
+     *
+     * @param factoryId  租户 id — 必须与实例所属租户一致, 否则 404
+     * @param instanceId 卡住的在途实例 id
+     * @param operatorUserId 执行恢复的管理员 (留痕用, 不可为 null)
+     * @param reason     恢复原因 (留痕用, 不可为空)
+     * @return 按当前定义新建的 RUNNING 实例
+     * @throws com.cretas.aims.exception.BusinessException 409 当实例不是 RUNNING,
+     *         或当绑定摘要与当前定义<b>一致</b>(没卡住就不给重开, 防止拿它跳过审批)
+     * @since 2026-09-01 (缺陷 27)
+     */
+    ApprovalWorkflowInstance restartWithCurrentDefinition(String factoryId,
+                                                          String instanceId,
+                                                          Long operatorUserId,
+                                                          String reason);
+
+    /**
      * issue #20 — 查 user 角色待审的 RUNNING instances.
      *
      * <p>过滤逻辑:
