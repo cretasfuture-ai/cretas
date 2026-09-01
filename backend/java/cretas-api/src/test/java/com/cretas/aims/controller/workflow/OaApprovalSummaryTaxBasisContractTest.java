@@ -116,6 +116,23 @@ class OaApprovalSummaryTaxBasisContractTest {
     }
 
     @Test
+    @DisplayName("🔒 owner 裁定(2026-09-01): 含税领先, 税率说明, 未税殿后 —— 顺序不能反")
+    void summaryLeadsWithTaxInclusiveAmount() {
+        // owner 原话:「首先肯定是计算含税总额, 然后告诉这个税率是多少, 然后再计算未税总额」。
+        // 税额 0.01 / 未税 0.09 → 税率 11.11%(0.01/0.09*100, HALF_UP 到 2 位)。
+        String summary = summaryFor(new BigDecimal("0.09"), new BigDecimal("0.01"));
+
+        assertTrue(summary.contains("税率11.11%"), "缺税率说明: " + summary);
+
+        int taxInclusiveIdx = summary.indexOf("含税¥0.10");
+        int taxUntaxedIdx = summary.indexOf("未税¥0.09");
+        assertTrue(taxInclusiveIdx >= 0 && taxUntaxedIdx >= 0,
+                "两个口径本身应都在(与上面那条用例同一份数据): " + summary);
+        assertTrue(taxInclusiveIdx < taxUntaxedIdx,
+                "含税应该排在未税前面(owner 裁定「先算含税」), 实际: " + summary);
+    }
+
+    @Test
     @DisplayName("税额为 0/缺失 → 只写未税一个数, ⛔ 不凭空造一个含税")
     void summaryDoesNotInventTaxInclusiveWhenTaxUnknown() {
         String summary = summaryFor(new BigDecimal("40000"), BigDecimal.ZERO);
@@ -135,10 +152,28 @@ class OaApprovalSummaryTaxBasisContractTest {
         assertTrue(summary.contains("操作手册演示供应商235005"), "丢了供应商名: " + summary);
     }
 
+    @Test
+    @DisplayName("缺陷 30 续: businessTaxAmount 结构化下发, 前端才拼得出「金额」列/确认框的含税")
+    void dtoCarriesStructuredTaxAmountForPurchaseOrder() {
+        WorkflowInstancePendingDTO dto = pendingFor(new BigDecimal("750.00"), new BigDecimal("97.50"));
+
+        assertTrue(dto.getBusinessAmount() != null
+                        && dto.getBusinessAmount().compareTo(new BigDecimal("750.00")) == 0,
+                "businessAmount 应是未税额: " + dto.getBusinessAmount());
+        assertTrue(dto.getBusinessTaxAmount() != null
+                        && dto.getBusinessTaxAmount().compareTo(new BigDecimal("97.50")) == 0,
+                "businessTaxAmount 应下发税额, 前端才拼得出含税总额, 实际: " + dto.getBusinessTaxAmount());
+    }
+
     // ==================== fixture ====================
 
     /** 跑一次 /pending 并取回该实例的 businessSummary。 */
     private String summaryFor(BigDecimal totalAmount, BigDecimal taxAmount) {
+        return pendingFor(totalAmount, taxAmount).getBusinessSummary();
+    }
+
+    /** 跑一次 /pending 并取回该实例完整的 DTO(含结构化字段, 不只是拼好的摘要句)。 */
+    private WorkflowInstancePendingDTO pendingFor(BigDecimal totalAmount, BigDecimal taxAmount) {
         mockAuth();
 
         String poId = "po-1";
@@ -193,9 +228,10 @@ class OaApprovalSummaryTaxBasisContractTest {
 
         List<WorkflowInstancePendingDTO> content = resp.getData().getContent();
         assertTrue(content.size() == 1, "阳性对照: 应当恰好取回 1 条实例, 实际 " + content.size());
-        String summary = content.get(0).getBusinessSummary();
-        assertTrue(summary != null && !summary.isBlank(), "businessSummary 为空, 后面的断言无意义");
-        return summary;
+        WorkflowInstancePendingDTO dto = content.get(0);
+        assertTrue(dto.getBusinessSummary() != null && !dto.getBusinessSummary().isBlank(),
+                "businessSummary 为空, 后面的断言无意义");
+        return dto;
     }
 
     private void mockAuth() {

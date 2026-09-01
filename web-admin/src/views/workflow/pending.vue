@@ -38,7 +38,13 @@ interface PendingApproval {
   businessSummary?: string;
   /** M-12 结构化字段: 单号 / 金额 / 往来单位分开下发, ⛔ 不要从 businessSummary 反解。 */
   businessCode?: string;
+  /** ⚠️ 未税额 —— 配合下面 businessTaxAmount 才能算出含税, 不能单独当付款额显示。 */
   businessAmount?: number | string | null;
+  /**
+   * 缺陷 30 续 (2026-09-01): 目前只有 PURCHASE_ORDER 下发; 无税额概念/暂未接入时为 null。
+   * ⛔ null 不是 0 —— 不许据此假装「这单没有税」。
+   */
+  businessTaxAmount?: number | string | null;
   counterpartyName?: string | null;
   currentNodeId?: string;
   currentNodeLabel?: string;
@@ -310,6 +316,55 @@ function formatAmount(value: number | null): string {
   return `¥${value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * 税额 —— 与 amountOf 同一条纪律: 取不到就是 null, ⛔ 不是 0。
+ * 目前只有 PURCHASE_ORDER 下发 businessTaxAmount, 其余模块恒为 null。
+ */
+function taxAmountOf(row: PendingApproval): number | null {
+  const raw = row.businessTaxAmount;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 缺陷 30 续 —— owner 裁定(2026-09-01):「先算含税总额、说清税率、再倒算未税总额」。
+ * 只有 amountOf(未税) 与 taxAmountOf(税额) **都**读得到时才拆得出含税 ——
+ * ⛔ 税额未知(null)时不许当 0 处理去算一个「含税」出来, 那是把「不知道」悄悄说成
+ * 「没有税」, 和「未税额本来就取不到时不许显示 0」是同一条纪律的另一半。
+ */
+function taxInclusiveAmountOf(row: PendingApproval): number | null {
+  const base = amountOf(row);
+  const tax = taxAmountOf(row);
+  if (base === null || tax === null) return null;
+  return base + tax;
+}
+
+/** 税率(%) —— 从「未税 + 税额」反推, 供确认框/金额列旁注「税率N%」。 */
+function taxRatePercentOf(row: PendingApproval): number | null {
+  const base = amountOf(row);
+  const tax = taxAmountOf(row);
+  if (base === null || tax === null || base <= 0) return null;
+  return (tax / base) * 100;
+}
+
+function formatTaxRatePercent(row: PendingApproval): string {
+  const pct = taxRatePercentOf(row);
+  if (pct === null) return '—';
+  const rounded = Math.round(pct * 100) / 100;
+  return `${rounded}%`;
+}
+
+/**
+ * 是否值得拆成「含税(税率) / 未税」两段 —— 与 buildBusinessSummary 同一条判据:
+ * 税额为 0(真的免税)或未知时, 含税与未税相等或无法确定, 拆开只是徒增噪音,
+ * 单一个数就够了。⛔ 不要在税额为 0/未知时也硬凑一段「税率0%」出来。
+ */
+function hasStatedTaxBasis(row: PendingApproval): boolean {
+  const tax = taxAmountOf(row);
+  return tax !== null && tax > 0;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -330,10 +385,24 @@ function approveConfirmMessage(row: PendingApproval): string {
     ['业务类型', moduleText],
     ['业务单号', businessCodeOf(row)],
     ['往来单位', counterpartyOf(row) || '—'],
-    ['金额', formatAmount(amountOf(row))],
+  ];
+  // 🔒 owner 裁定(2026-09-01):「首先肯定是计算含税总额, 然后告诉这个税率是多少,
+  // 然后再计算未税总额」—— 通过前最后看一眼的这个数, 必须是含税领先。
+  // ⚠️ 税额未知/为 0 时(hasStatedTaxBasis 为 false)拆成两段没有意义, 退回单一个数 ——
+  // 与「金额」列同一条判据, ⛔ 两处不许各写一份。
+  if (hasStatedTaxBasis(row)) {
+    fields.push(
+      ['金额（含税）', formatAmount(taxInclusiveAmountOf(row))],
+      ['税率', formatTaxRatePercent(row)],
+      ['金额（未税）', formatAmount(amountOf(row))],
+    );
+  } else {
+    fields.push(['金额', formatAmount(amountOf(row))]);
+  }
+  fields.push(
     ['当前节点', currentNodeText(row)],
     ['申请人', applicant],
-  ];
+  );
   if (row.reportCorrectionDetails) {
     fields.push(
       ['工序', row.reportCorrectionDetails.processCategory || '—'],
@@ -363,9 +432,14 @@ function reportCorrectionValues(values?: Record<string, unknown>): string {
 }
 
 /** 无金额的排在最后, 免得一堆「—」占住大额单的位置。 */
+/** 排序要按**列里实际显示的那个主数**排 —— 有含税就按含税排, 否则退回未税, 与「金额」列同一条判据。 */
+function primaryAmountOf(row: PendingApproval): number | null {
+  return hasStatedTaxBasis(row) ? taxInclusiveAmountOf(row) : amountOf(row);
+}
+
 function sortByAmount(a: PendingApproval, b: PendingApproval): number {
-  const x = amountOf(a);
-  const y = amountOf(b);
+  const x = primaryAmountOf(a);
+  const y = primaryAmountOf(b);
   if (x === null && y === null) return 0;
   if (x === null) return 1;
   if (y === null) return -1;
@@ -481,9 +555,25 @@ onMounted(async () => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="金额" width="130" align="right" sortable :sort-method="sortByAmount">
+        <!--
+          缺陷 30 续 (2026-09-01, LIUSHANMEN 生产, 财务主管 lsm009): 这一列原来只显示
+          formatAmount(amountOf(row)) —— 而 amountOf 取的是 businessAmount, **未税**额,
+          且没有任何标注。审批人看到「¥750.00」会读成要付 750, 实付含税 847.50。
+
+          🔒 owner 裁定:「首先肯定是计算含税总额, 然后告诉这个税率是多少, 然后再计算未税
+          总额」⇒ 含税领先(粗体主行), 未税+税率作为小字副行殿后。
+          ⚠️ 税额未知/为 0 (hasStatedTaxBasis=false) 时拆分没有意义, 退回单一个未税数,
+          与确认框(approveConfirmMessage)同一条判据, ⛔ 不另写一份。
+        -->
+        <el-table-column label="金额" width="190" align="right" sortable :sort-method="sortByAmount">
           <template #default="{ row }">
-            <span v-if="amountOf(row) !== null" class="amount-cell">{{ formatAmount(amountOf(row)) }}</span>
+            <template v-if="amountOf(row) !== null">
+              <template v-if="hasStatedTaxBasis(row)">
+                <div class="amount-cell">{{ formatAmount(taxInclusiveAmountOf(row)) }}</div>
+                <div class="amount-sub">税率{{ formatTaxRatePercent(row) }} · 未税{{ formatAmount(amountOf(row)) }}</div>
+              </template>
+              <div v-else class="amount-cell">{{ formatAmount(amountOf(row)) }}</div>
+            </template>
             <span v-else>—</span>
           </template>
         </el-table-column>
@@ -571,6 +661,8 @@ onMounted(async () => {
   ⛔ 不要用普通比例字体: "¥35,000.00" 和 "¥1,081.00" 的位数一错开, 排序就白做了。
 */
 .amount-cell { font-variant-numeric: tabular-nums; font-weight: 500; }
+/* 缺陷 30 续: 含税领先(主行) + 未税/税率殿后(副行, 小字弱化) —— 右对齐跟主行一致。 */
+.amount-sub { font-size: 12px; color: var(--el-text-color-secondary); text-align: right; white-space: nowrap; }
 .correction-summary { font-size: 12px; line-height: 1.55; color: var(--el-text-color-regular); }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .header h2 { margin: 0 0 6px; }
