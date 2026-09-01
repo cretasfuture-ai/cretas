@@ -524,6 +524,47 @@ class ProductionStockAllocationServiceTest {
     }
 
     @Test
+    @org.junit.jupiter.api.DisplayName(
+            "🔒🔴 负控 (真实产品入口 planExplicit): 用户手选别客户的 CUSTOMER_OWNED 辅料批次仍必须被拒")
+    void explicitAuxiliaryBatchFromAnotherCustomerIsRejectedEvenThoughAuxiliaryIsTiered() {
+        // 🔴 对抗终审揪出的洞的真实入口版本: planExplicit 的批次来自用户传的 batchId,
+        // 经 findByIdAndFactoryIdForUpdate 取 —— 那条查询只有工厂域, 没有所有权过滤。
+        // 一个工厂服务多个客户正是来料加工的形状: 用户显式指定另一个客户的 AUX 批次时,
+        // 挡住它的必须是 assertMaterialBatchAllowed 里 ownership != CUSTOMER_OWNED 那半行,
+        // 不能因为「辅料可用公司库存」这条放宽就跟着放行别客户的客供辅料。
+        ProductionPlan plan = customerSuppliedPlan();
+        RawMaterialType auxiliary = new RawMaterialType();
+        auxiliary.setId("AUX-1");
+        auxiliary.setFactoryId("F006");
+        auxiliary.setCategory("辅料");
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("AUX-1", "F006"))
+                .thenReturn(Optional.of(auxiliary));
+
+        MaterialBatch otherCustomerAuxiliary = batch(
+                "AUXCB1", "AUX-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+        otherCustomerAuxiliary.setOwnership(InventoryOwnership.CUSTOMER_OWNED); // 别的客户的客供辅料
+        otherCustomerAuxiliary.setOwnerCustomerId("CUS-OTHER");
+        otherCustomerAuxiliary.setSourceSalesOrderId("SO-OTHER");
+
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("AUXCB1");
+        input.setSkuId("AUX-1");
+        input.setQuantity(BigDecimal.ONE);
+
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("AUXCB1", "F006"))
+                .thenReturn(Optional.of(otherCustomerAuxiliary));
+
+        assertThatThrownBy(() -> service.planExplicit(
+                "F006", "PLAN-1", List.of(input)))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH"));
+    }
+
+    @Test
     void factorySuppliedPlanCannotExplicitlyConsumeCustomerOwnedStock() {
         MaterialBatch customerBatch = batch(
                 "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));

@@ -153,6 +153,38 @@ class CustomerOwnedInventoryGuardsTest {
     }
 
     @Test
+    @DisplayName("🔒🔴 负控③: 辅料放宽只对 COMPANY_OWNED 生效 —— 别的客户的 CUSTOMER_OWNED 辅料批次仍必须被拒")
+    void tollProcessingPlanStillRejectsAuxiliaryFromDifferentCustomerWhenCustomerOwned() {
+        // 🔴 对抗终审揪出的洞: assertMaterialBatchAllowed 里
+        //     isCompanyStockEligibleCategory(materialMainCategory)
+        //             && batch.getOwnership() != InventoryOwnership.CUSTOMER_OWNED
+        // 这个合取的第二个条件 (ownership != CUSTOMER_OWNED) 是跨客户轴上唯一承重的东西 ——
+        // 删掉它, 之前的 52 条测试一条都不会红 (阳性对照全用 COMPANY_OWNED 的 AUX,
+        // 阴性对照全用 RAW), 没有一条把 AUXILIARY/PACKAGING 和 CUSTOMER_OWNED 配在一起。
+        // 而这不是纸面风险: planExplicit 的批次来自用户传的 batchId, 经
+        // findByIdAndFactoryIdForUpdate 取, 那条查询只有工厂域, 没有所有权过滤 ——
+        // 一个工厂服务多个客户正是来料加工的形状, 用户显式指定另一个客户的 AUX 批次时,
+        // 挡住它的只有这半行。
+        ProductionPlan plan = new ProductionPlan();
+        plan.setFactoryId("F006");
+        plan.setCustomerId("CUSTOMER-1");
+        plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        plan.setSourceOrderId("SO-1");
+        plan.setSourceOrderItemId("ITEM-1");
+
+        MaterialBatch otherCustomerAuxiliary = new MaterialBatch();
+        otherCustomerAuxiliary.setFactoryId("F006");
+        otherCustomerAuxiliary.setOwnership(InventoryOwnership.CUSTOMER_OWNED); // 别的客户的客供辅料
+        otherCustomerAuxiliary.setOwnerCustomerId("CUSTOMER-2");
+
+        BusinessException error = assertThrows(BusinessException.class, () -> ProductionInventoryOwnershipGuard
+                .assertMaterialBatchAllowed(
+                        plan, otherCustomerAuxiliary, MaterialMainCategory.AUXILIARY, "materialBatchId"),
+                "辅料的公司库存放宽口不能被 CUSTOMER_OWNED 批次借用来绕开跨客户检查");
+        assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", error.getErrorCode());
+    }
+
+    @Test
     @DisplayName("3-arg 兼容重载逐字不变: 未传大类的旧调用点继续得到最严格口径 (不会被这次改动意外放宽)")
     void threeArgOverloadStaysStrictForCompanyOwnedBatchUnderTollProcessingPlan() {
         ProductionPlan plan = new ProductionPlan();
