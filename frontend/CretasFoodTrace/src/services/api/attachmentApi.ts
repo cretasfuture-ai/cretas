@@ -9,6 +9,23 @@ import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
 import { sha256 } from 'js-sha256';
 
+const readBlobAsArrayBuffer = (blob: Blob): Promise<ArrayBuffer> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('读取上传文件失败'));
+    };
+    reader.onload = () => {
+      const result = reader.result;
+      if (result === null || typeof result === 'string') {
+        reject(new Error('读取上传文件失败'));
+        return;
+      }
+      resolve(result);
+    };
+    reader.readAsArrayBuffer(blob);
+  });
+
 /** 关联实体类型 — 后端 Attachment.EntityType 枚举完整复刻 (18 值). */
 export type AttachmentEntityType =
   | 'CUSTOMER'
@@ -189,7 +206,7 @@ class AttachmentApi {
     const { uploadUrl, fileUrl } = await this.getUploadUrl(file.name, file.type, factoryId);
 
     const blob = await (await fetch(file.uri)).blob();
-    const fileHash = sha256(await blob.arrayBuffer());
+    const fileHash = sha256(await readBlobAsArrayBuffer(blob));
     const putRes = await fetch(uploadUrl, {
       method: 'PUT',
       headers: { 'Content-Type': file.type },
