@@ -34,6 +34,7 @@ import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
 import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
+import { deriveByShare } from '@/views/system/product-processes/workflow/workflowInputShare';
 import type { BoundByproductLine, MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import type {
   InputSourceLineView,
@@ -144,6 +145,8 @@ interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
   materialName: string;
   quantity: number | null;
   selected: boolean;
+  /** 这一格是按份额推出来的(不是手填) —— 下次推算允许覆盖; 手填后清掉。⛔ 不进请求体。 */
+  autoFilled?: boolean;
 }
 
 // SelectableUpstreamRef 已随 ./processSheetInputs 迁走 —— 卡片模式和表格模式共用
@@ -303,6 +306,26 @@ const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiS
 /** 本工序 workflow 计划产出端口 (null = 无 workflow 上下文, 或该 workflow 任务无产出端口)。 */
 const workflowOutput = computed(() => props.workflowContext?.output ?? null);
 /** 本工序 workflow 声明的原料类型 (仅 RAW_MATERIAL kind, 供领料 picker 旁提示"需要哪些原料")。 */
+/**
+ * 主原料份额推算(owner 2026-09-02): 操作员填了任一原料的投入量, 其余**已选用**且带份额的原料
+ * 按画布端口 inputShareRatio 自动跳出。只推「还没手填」的行 —— 手填过的不覆盖(autoFilled 标记)。
+ */
+function autoFillInputsByShare(row: SheetRow, changed: MaterialInputTotalLine): void {
+  const lines = row.materialInputTotals
+    .filter((l) => l.selected)
+    .map((l) => ({ id: l.workflowPortId || l.materialTypeId, share: portById(l.workflowPortId)?.inputShareRatio ?? null }));
+  const changedId = changed.workflowPortId || changed.materialTypeId;
+  const derived = deriveByShare(lines, changedId, changed.quantity);
+  if (derived.size === 0) return;
+  for (const line of row.materialInputTotals) {
+    const id = line.workflowPortId || line.materialTypeId;
+    if (id === changedId || !derived.has(id)) continue;
+    if (line.quantity != null && !line.autoFilled) continue;   // 手填过的不动
+    line.quantity = derived.get(id) ?? null;
+    line.autoFilled = true;
+  }
+  changed.autoFilled = false;
+}
 const workflowRawInputs = computed(() =>
   (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
 );
@@ -3490,6 +3513,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :min="0"
                         :precision="6"
                         controls-position="right"
+                        @change="autoFillInputsByShare(row, item)"
                         size="small"
                         :aria-label="`${item.materialName} 投料总量`"
                       />
@@ -4119,6 +4143,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :min="0"
                         :precision="6"
                         controls-position="right"
+                        @change="autoFillInputsByShare(row, item)"
                         style="width:110px"
                         size="small"
                       />

@@ -88,7 +88,27 @@
           size="small"
         />
         <span class="unit-chip" data-testid="input-unit-chip">{{ unitLabel(port.unit) }}</span>
+        <!-- 主原料份额(%): owner 2026-09-02 走 (a)。多于一个投入才有「配比」可言; 单投入不显示。 -->
+        <el-tooltip
+          v-if="inputPorts.length > 1"
+          placement="top"
+          content="主原料份额(%)。填 30/70 后, 领料与报工时填任一原料的量, 其余按比例自动跳。留空=不参与推算"
+        >
+          <!-- 原生 input 而不是 el-input-number: 画布上有一道闸「ElInputNumber 必须为 0 个」
+               守的是「这里不录投入产出数量」; 份额不是数量, 但用同一个组件会让那道闸失去意义。 -->
+          <input
+            class="nodrag share-input"
+            type="text"
+            inputmode="decimal"
+            :value="port.inputShareRatio ?? ''"
+            placeholder="份额%"
+            data-testid="input-share"
+            :aria-label="`${port.materialName || '投入'} 份额%`"
+            @change="onShareInput(port.id, $event)"
+          />
+        </el-tooltip>
       </div>
+      <div v-if="inputShareWarning" class="share-warning" data-testid="input-share-warning">{{ inputShareWarning }}</div>
     </section>
 
     <section class="port-section output-section">
@@ -236,6 +256,7 @@ import { Handle, Position } from '@vue-flow/core';
 import { AUX_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowDisplayUnit, workflowSkuSpecificationEquation } from './workflowUnits';
+import { shareSumWarning } from './workflowInputShare';
 import type { ProcessNodeData } from './types';
 
 const props = withDefaults(defineProps<{
@@ -292,6 +313,20 @@ function unitLabel(value: string | null | undefined): string {
   return workflowDisplayUnit(value);
 }
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
+const inputShareWarning = computed(() => shareSumWarning(inputPorts.value.map((p) => p.inputShareRatio)));
+/** 只改这一条端口的份额, 其余端口原样; 通过统一的 update 出口回写(会进 nodesJson ⇒ 发布时成为新修订)。 */
+function onShareInput(portId: string, event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  const parsed = raw === '' ? Number.NaN : Number(raw);
+  // 空 = 不参与推算; 非数/超界 = 当作没填(⛔ 不夹逼成 0 或 100 —— 那会造出一个用户没填的份额)
+  setInputShare(portId, Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : undefined);
+}
+function setInputShare(portId: string, value: number | undefined): void {
+  const next = value == null || !Number.isFinite(value) ? null : value;
+  emit('update', {
+    ports: props.data.ports.map((port) => (port.id === portId ? { ...port, inputShareRatio: next } : port)),
+  });
+}
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const unitRelationshipSummary = computed(() => {
@@ -353,6 +388,12 @@ function handleStyle(index: number, count: number): Record<string, string> {
   font-size: 11px; font-weight: 700; cursor: help; vertical-align: middle;
 }
 .io-help-mark:hover { background: #e0ebf7; color: #1b65a8; }
+.share-input {
+  width: 58px; margin-left: 4px; padding: 2px 6px; font-size: 11px;
+  border: 1px solid #dcdfe6; border-radius: 4px; text-align: right; background: #fff;
+}
+.share-input:focus { outline: none; border-color: #409eff; }
+.share-warning { margin: 2px 0 4px; color: #b7791f; font-size: 11px; }
 .special-output-hint { color: #8a94a6; font-size: 11px; }
 
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */

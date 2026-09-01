@@ -348,3 +348,28 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
 
 
 });
+
+describe('WorkflowProcessNode 主原料份额 (owner 2026-09-02 走 (a))', () => {
+  it('多于一个投入时每个 INPUT 行有份额输入; 改动通过 update 回写整份 ports', async () => {
+    const ports: ProcessPort[] = [
+      { id: 'in-1', direction: 'INPUT', materialName: '2082上脑', unit: 'kg', ordinal: 0 },
+      { id: 'in-2', direction: 'INPUT', materialName: '1399上脑', unit: 'kg', ordinal: 1 },
+      { id: 'out-1', direction: 'OUTPUT', materialName: '缓化肉块', unit: 'kg', ordinal: 0 },
+    ];
+    const wrapper = mountNode(true, withPorts({ ports }));
+    const shares = wrapper.findAll('[data-testid="input-share"]');
+    expect(shares.length).toBe(2);
+    await shares[0].setValue('30');
+    await shares[0].trigger('change');
+    const updates = wrapper.emitted('update') ?? [];
+    const last = updates[updates.length - 1]?.[0] as { ports?: ProcessPort[] } | undefined;
+    expect(last?.ports?.find((p) => p.id === 'in-1')?.inputShareRatio).toBe(30);
+    expect(last?.ports?.find((p) => p.id === 'in-2')?.inputShareRatio ?? null).toBeNull();
+    expect(last?.ports?.length).toBe(3);
+  });
+
+  it('阴性对照: 只有一个投入 → 没有份额输入 (单投入无配比可言)', () => {
+    const wrapper = mountNode();
+    expect(wrapper.findAll('[data-testid="input-share"]').length).toBe(0);
+  });
+});

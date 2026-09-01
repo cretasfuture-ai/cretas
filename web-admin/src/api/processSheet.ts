@@ -556,6 +556,8 @@ export interface WorkflowPortDescriptor {
    * 老快照/未升级后端缺这个字段时按 undefined 处理 (即「不是副产」), 行为逐字不变。
    */
   byproduct?: boolean | null;
+  /** 仅 input 端口有意义: 主原料份额(%)。报工表/领料单据此「填一个原料, 其余按份额自动跳」。 */
+  inputShareRatio?: number | null;
   /**
    * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**回料**。
    *

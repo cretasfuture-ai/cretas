@@ -105,6 +105,12 @@ export interface ProcessPort {
   outputRole?: WorkflowOutputRole | null;
   /** Shared-cost allocation percentage; multi-output ports must total 100. */
   costAllocationRatio?: number | null;
+  /**
+   * 主原料份额(%), 仅 INPUT 端口。owner 2026-09-02 裁定走 (a): 配比进画布端口, 发布即新修订。
+   * 相对量: 各端口之和不必是 100, 推算按已填端口归一化 —— 「填 30 吨, 另一个自动跳 70 吨」。
+   * null = 该入口不参与推算(领料仍按实际领用)。⛔ 不是投入量, 也不是 standardQuantity。
+   */
+  inputShareRatio?: number | null;
   ordinal: number;
 }
 
