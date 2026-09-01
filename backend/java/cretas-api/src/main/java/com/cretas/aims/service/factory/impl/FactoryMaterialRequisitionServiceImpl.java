@@ -749,8 +749,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // 一说」, 留空是常态而不是漏填 —— ⛔ 不能扩大这条闸的口径去覆盖它 (硬约束: 只在这两条
         // 路径上放宽, 不弱化对其它行的保护), 而是把它排除在这道闸之外: 与「有参考用量的行」不
         // 同, 它压根不需要「录入实际领用数量」这件事本身。
+        //
+        // 终审追加 (2026-09-02): 判据不能只认行快照 —— 见 resolveLiveSelfSuppliedMaterialTypeIds
+        // 的类注释 (领料早于报工, 快照可能定格在 owner 勾选自备料之前)。一次性批量查活值,
+        // 与下面 autoAllocate/relocate 两处共用同一份, 不重复查询。
+        Set<String> liveSelfSuppliedMaterialTypeIds =
+                resolveLiveSelfSuppliedMaterialTypeIds(factoryId, mr.getItems());
         List<String> unpickedPendingRows = mr.getItems().stream()
-                .filter(it -> !Boolean.TRUE.equals(it.getSelfSupplied()))
+                .filter(it -> !isEffectivelySelfSupplied(it, liveSelfSuppliedMaterialTypeIds))
                 .filter(it -> it.getRequiredQty() == null)
                 .filter(it -> it.getPickedQty() == null)
                 .map(this::materialLabel)
@@ -778,8 +784,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         String targetWarehouseId = resolveWorkshopWarehouseId(factoryId, mr);
         // 防呆 (客户原话「你告诉他这个东西你要收多少就行了」): 仓管确认领料只录数量, 系统按 FEFO 从
         // 原料仓自动分配领料批次。若某行确认时已带批次 (前端预选/老单) 则不动。
-        autoAllocatePickedBatchesIfMissing(factoryId, mr, plan);
-        relocatePickedMaterialToWorkshop(factoryId, mr, plan, targetWarehouseId, operatorId);
+        autoAllocatePickedBatchesIfMissing(factoryId, mr, plan, liveSelfSuppliedMaterialTypeIds);
+        relocatePickedMaterialToWorkshop(
+                factoryId, mr, plan, targetWarehouseId, operatorId, liveSelfSuppliedMaterialTypeIds);
 
         mr.setStatus(Status.TRANSFERRED);
         mr.setTransferredBy(operatorId);
@@ -859,7 +866,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      */
     private void autoAllocatePickedBatchesIfMissing(String factoryId,
                                                      FactoryMaterialRequisition mr,
-                                                     ProductionPlan plan) {
+                                                     ProductionPlan plan,
+                                                     Set<String> liveSelfSuppliedMaterialTypeIds) {
         if (materialBatchRepository == null) {
             return; // relocate 会再报 UNAVAILABLE
         }
@@ -867,8 +875,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             // 缺陷 47 (owner 2026-09-02 裁定): 自备料「没有库存一说」——无论 issuedQty 是多少
             // (含被前端预填成正数的参考量), 都不做批次查找。⛔ 放在 skipUnissuedRow 之前:
-            // 那道闸只在 issued<=0/null 时才跳过, 而自备料要**无条件**跳过。
-            if (Boolean.TRUE.equals(it.getSelfSupplied())) {
+            // 那道闸只在 issued<=0/null 时才跳过, 而自备料要**无条件**跳过。判据是快照或活值
+            // 任一为 true (见 isEffectivelySelfSupplied), 不是单查行快照。
+            if (isEffectivelySelfSupplied(it, liveSelfSuppliedMaterialTypeIds)) {
                 log.info("⏭️ 领料自动分批 跳过(自备料) 物料需求单 {} 物料 {}: 现场取用, 不查库存",
                         mr.getRequisitionNo(), materialLabel(it));
                 continue;
@@ -1009,6 +1018,61 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     /**
+     * 缺陷 47 终审追加 (2026-09-02): 领料这一侧原来只读**行快照** {@code it.getSelfSupplied()}
+     * (生成需求单那一刻定格), 而报工那侧 {@link #isSelfSupplied} 读的是**物料档案活值**。
+     * 两者不同源, 后果: 领料单在 owner 勾「自备料」<b>之前</b>已生成 ⇒ 快照 false, 而领料
+     * 发生在报工之前 ⇒ 这一行 requiredQty=null && pickedQty=null 仍会被
+     * {@code unpickedPendingRows} 收走, 卡在「确认领料」, 报工那道豁免根本走不到。
+     *
+     * <p>批量按本单出现的 materialTypeId 一次性查活值 (⛔ 不在循环里逐行查, 那是 N+1)。
+     * 只在 transferToFactory 调用一次, 结果传给下面两个私有方法与 unpickedPendingRows 共用 ——
+     * 三处必须读同一份, 否则又是「同一个东西多份会漂」(形态 D) 的另一个实例。
+     *
+     * @return 该需求单里"物料档案活值=自备料"的 materialTypeId 集合; repository 未注入/
+     *         查询失败一律返回空集 (不放宽, 与 {@link #isSelfSupplied} 同一条纪律)。
+     */
+    private Set<String> resolveLiveSelfSuppliedMaterialTypeIds(
+            String factoryId, List<FactoryMaterialRequisitionItem> items) {
+        if (rawMaterialTypeRepository == null || items == null || items.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> materialTypeIds = items.stream()
+                .map(FactoryMaterialRequisitionItem::getMaterialTypeId)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        if (materialTypeIds.isEmpty()) {
+            return Set.of();
+        }
+        try {
+            return rawMaterialTypeRepository.findByIdIn(materialTypeIds).stream()
+                    // findByIdIn 不按 factoryId 过滤 (repository 注释: 工厂隔离由调用方逐行校验) ——
+                    // 这里补上, 否则跨厂撞 id 会把别的工厂的自备料标记读进本厂的判定。
+                    .filter(mt -> factoryId.equals(mt.getFactoryId()))
+                    .filter(mt -> Boolean.TRUE.equals(mt.getSelfSupplied()))
+                    .map(com.cretas.aims.entity.RawMaterialType::getId)
+                    .collect(java.util.stream.Collectors.toSet());
+        } catch (Exception e) {
+            log.debug("批量读取自备料活值失败, 视为空集(不放宽): {}", e.getMessage());
+            return Set.of();
+        }
+    }
+
+    /**
+     * 快照 true <b>或</b>活值 true 都算自备料 —— 单向加宽。
+     *
+     * <p>活值 true (owner 刚勾上) ⇒ 豁免, 即使这张单是勾选之前生成的老单, 也不必重建。
+     * 活值改回 false <b>不会</b>让已经按自备料生成的老单重新去查库存/扣库存 —— 快照定格的
+     * 审计意图 (「这条单当初是不是按自备料展开的」) 保住, 这里只是在快照之上<b>再加一条</b>
+     * 能命中的条件, 不覆盖快照。
+     */
+    private boolean isEffectivelySelfSupplied(
+            FactoryMaterialRequisitionItem it, Set<String> liveSelfSuppliedMaterialTypeIds) {
+        return Boolean.TRUE.equals(it.getSelfSupplied())
+                || (it.getMaterialTypeId() != null
+                        && liveSelfSuppliedMaterialTypeIds.contains(it.getMaterialTypeId()));
+    }
+
+    /**
      * 物理迁移: 逐已拣批次把 issued 数量从源批次 (原料仓) 划出, 在生产仓建同物料新批次。
      * 保留单价/单位/效期/批号血缘。把新建的生产仓批次 id 回写进 batch_numbers 行 (workshopBatchId),
      * 供关单退料时精确反向划出。幂等: batch_row 已带 workshopBatchId → 跳过 (二次防呆)。
@@ -1017,7 +1081,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                                                   FactoryMaterialRequisition mr,
                                                   ProductionPlan plan,
                                                   String targetWarehouseId,
-                                                  Long operatorId) {
+                                                  Long operatorId,
+                                                  Set<String> liveSelfSuppliedMaterialTypeIds) {
         if (materialBatchRepository == null) {
             throw new BusinessException(500, "领料调拨失败: MaterialBatchRepository 未注入")
                     .withCode("PRODUCTION_REQUISITION_TRANSFER_UNAVAILABLE")
@@ -1032,8 +1097,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             // 缺陷 47 (owner 2026-09-02 裁定): 自备料「没有库存一说」——即使 issuedQty 是正数
             // (前端预填的参考量), 这里也不做批次划出。⛔ 必须放在 skipUnissuedRow 之前, 且必须
             // 放在下方"缺少领料批次"校验之前: 自备料从没被 autoAllocatePickedBatchesIfMissing
-            // 分配过批次, 若不在此提前跳过, issued>0 时会撞上那条 400「缺少领料批次」。
-            if (Boolean.TRUE.equals(it.getSelfSupplied())) {
+            // 分配过批次, 若不在此提前跳过, issued>0 时会撞上那条 400「缺少领料批次」。判据是
+            // 快照或活值任一为 true (见 isEffectivelySelfSupplied), 不是单查行快照。
+            if (isEffectivelySelfSupplied(it, liveSelfSuppliedMaterialTypeIds)) {
                 log.info("⏭️ 领料划出生产仓 跳过(自备料) 物料需求单 {} 物料 {}: 现场取用, 不产生批次消耗",
                         mr.getRequisitionNo(), materialLabel(it));
                 continue;

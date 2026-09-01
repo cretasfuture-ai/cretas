@@ -682,6 +682,97 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         verify(repository, never()).save(any());
     }
 
+    /**
+     * 缺陷 47 终审追加 (2026-09-02, 快照 vs 活值双源): 钉住这两行分叉是**设计决定**,
+     * 不是巧合 —— 领料侧判据是「快照 OR 活值」(单向加宽, {@code isEffectivelySelfSupplied}),
+     * 报工侧 ({@code ProductionStockAllocationServiceImpl#planNative}) 只认活值(它不持久化
+     * 快照, 每次报工都从当前 BOM 动态展开自备料需求)。
+     *
+     * <pre>
+     *   行1 (MAT-002/Material B): 快照 false (领料单在 owner 勾选之前生成) + 活值 true
+     *                (owner 已勾选) → 领料侧必须跳过 (走 || 的活值分支) —— 这正是终审揪出
+     *                的缺口: b 修复前, 这一行会被 unpickedPendingRows 收走, 卡在「确认领料」,
+     *                报工那道豁免根本走不到。
+     *   行2 (MAT-003/Material C): 快照 true (老单当初就是按自备料展开) + 活值 false (owner
+     *                事后把这个物料的自备料标记取消了) → 领料侧**仍然**跳过 (单向加宽: 快照
+     *                已经定格的老单不因活值改回 false 而被追溯重新扣库存/拦截, 迁移注释的审计
+     *                意图保住) —— 报工侧对同一个「活值 false」场景仍然报短缺, 见
+     *                {@link com.cretas.aims.service.processentry.ProductionStockAllocationServiceTest
+     *                #planNativeStillReportsShortageWhenMaterialIsNotSelfSupplied} —— 两处判据
+     *                不同源, 各自正确 (报工没有快照可读, 只能读活值)。
+     * </pre>
+     *
+     * 变异 (删掉 {@code isEffectivelySelfSupplied} 里的 `||` 活值分支, 只剩快照): 行1 判据
+     * 从 true 退化成 false → unpickedPendingRows 收走它 → 调拨在行1这里先炸 → 断言
+     * {@code Status.TRANSFERRED} 那一句先红 (第一条), 而行2(单靠快照就够)不受影响 ——
+     * 精确定位是哪个分支失守。
+     */
+    @Test
+    @DisplayName("缺陷 47 终审: 快照/活值分叉是决定不是巧合 —— 快照false+活值true 与 快照true+活值false 都必须领料侧放行")
+    void transferToFactory_snapshotAndLiveValueDivergence_bothCombinationsSkipOnRequisitionSide() {
+        // MAT-001 (Material A) 正常物料, 阳性对照, buildMrInPicking() 默认状态保持不变 —— 但仍要
+        // 备好它的源批次, 否则 assertPickedBatchesAllInSourceWarehouse 会报「批次不存在」,
+        // 那是这条测试的仪器缺口, 不是被测行为。
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+
+        // 行1: MAT-002 (Material B) 快照 false + 活值 true。
+        RawMaterialType liveSelfSupplied = new RawMaterialType();
+        liveSelfSupplied.setId("MAT-002");
+        liveSelfSupplied.setFactoryId(FACTORY_ID);
+        liveSelfSupplied.setCategory("辅料");
+        liveSelfSupplied.setSelfSupplied(true);
+
+        // 行2: MAT-003 (Material C) 快照 true + 活值 false。
+        RawMaterialType liveNotSelfSupplied = new RawMaterialType();
+        liveNotSelfSupplied.setId("MAT-003");
+        liveNotSelfSupplied.setFactoryId(FACTORY_ID);
+        liveNotSelfSupplied.setCategory("辅料");
+        liveNotSelfSupplied.setSelfSupplied(false);
+
+        // resolveLiveSelfSuppliedMaterialTypeIds 批量查, 一次 findByIdIn 覆盖本单出现的物料
+        // (⛔ N+1 防呆: 不逐行 findByIdAndFactoryId)。
+        lenient().when(rawMaterialTypeRepository.findByIdIn(any()))
+                .thenReturn(List.of(liveSelfSupplied, liveNotSelfSupplied));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        // 行1 (MAT-002 / it-2): 快照 false (默认), 待定 + 留空 —— 只有活值能救它。
+        mr.getItems().get(1).setSelfSupplied(false);
+        mr.getItems().get(1).setRequiredQty(null);
+        mr.getItems().get(1).setPickedQty(null);
+        mr.getItems().get(1).setBatchNumbers(new ArrayList<>());
+
+        // 行2 (MAT-003 / it-3): 快照 true, 待定 + 留空 —— 活值救不了它, 但快照本身够了。
+        FactoryMaterialRequisitionItem it3 = new FactoryMaterialRequisitionItem();
+        it3.setId("it-3");
+        it3.setRequisition(mr);
+        it3.setMaterialTypeId("MAT-003");
+        it3.setMaterialName("Material C");
+        it3.setSelfSupplied(true);
+        it3.setRequiredQty(null);
+        it3.setPickedQty(null);
+        it3.setUnit("kg");
+        it3.setBatchNumbers(new ArrayList<>());
+        mr.getItems().add(it3);
+
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        assertEquals(Status.TRANSFERRED, mr.getStatus(),
+                "两行(快照false+活值true / 快照true+活值false)都必须在领料侧放行, 调拨才能成功");
+        assertNull(findWorkshopBatch("MAT-002"), "行1(活值救的)不该产生批次消耗");
+        assertNull(findWorkshopBatch("MAT-003"), "行2(快照救的)不该产生批次消耗");
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFOByWarehouse(eq(FACTORY_ID), eq("MAT-002"), any());
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFOByWarehouse(eq(FACTORY_ID), eq("MAT-003"), any());
+
+        // 阳性对照: 同单里的正常物料不受影响。
+        assertEquals(new BigDecimal("10.00"), mr.getItems().get(0).getIssuedQty());
+        assertNotNull(findWorkshopBatch("MAT-001"));
+    }
+
     // ==================== close: return + workshop drawdown ====================
 
     @Test
