@@ -220,10 +220,15 @@
              而它会一路流到采购单和入库批次。现在标题就把基准说清楚。 -->
         <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）` : `含税默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
           <el-input-number v-model="relationForm.taxIncludedDefaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
-          <!-- 形态 B⁵ 第二次: 这句话已经改过一次(从「不会静默按 0 元处理」改成「不动就不拦」),
-               现在 owner 改判 A(一律必填)之后, 「不动这一栏就不会被拦」**又变成一句假话**。
-               ⛔ 删掉一条承诺就要同一个 commit 里删掉它的描述 —— 描述过期比没有描述更糟,
-               因为它会让下一个人跳过核实。 -->
+          <!-- 形态 B⁵ 第二次打在同一句 hint 上: 缺陷 17 改过一次(价格从选填变必填),
+               owner 2026-09-02 改判 A(一律必填、存量也要补)之后又得改一次。
+               ⛔ 删掉一条承诺就要在同一个 commit 里删掉它的描述 —— 过期的描述比没有描述更糟,
+               它会让下一个人跳过核实。
+
+               ⚠️ 这段注释刻意**不复述**那两句已被推翻的原文。
+               `supplierMaterialRelation.source.spec.ts` 有一条阴性对照钉着它们不许回来,
+               而源码闸是按字面匹配的 —— 把被禁的措辞抄进注释, 闸就会匹配到注释本身,
+               既弄红了正确的代码, 又正是本仓记过的「闸把自己的注释当成被测对象」那个形态。 -->
           <div class="field-hint">
             价格与采购单位绑定，按含税价填写。新增与编辑都必须填写；存量没有价格的关系，需要补上价格才能保存。
           </div>
