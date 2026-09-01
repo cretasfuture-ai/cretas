@@ -65,6 +65,7 @@ interface ConfirmRow {
   manuallyTouched?: boolean;
 }
 interface Vm {
+  requiredQtyLabel: (item: { requiredQty?: number | string | null; inputShareRatio?: number | null }) => string;
   confirmRows: ConfirmRow[];
   openConfirmDialog: (row: { id: string; requisitionNo?: string }) => Promise<void>;
   handlePickedInputChange: (row: ConfirmRow) => void;
@@ -131,6 +132,7 @@ const DETAIL = {
     { id: 'R-1399', materialName: '1399上脑', materialTypeId: 'RMT_1399', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: 30 },
     { id: 'R-WAGYU', materialName: '和牛50', materialTypeId: 'RMT_WAGYU', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: 40 },
     { id: 'R-50CL', materialName: '50CL', materialTypeId: 'RMT_50CL', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: null },
+    { id: 'R-ZERO', materialName: '份额0料', materialTypeId: 'RMT_ZERO', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: 0 },
     { id: 'R-SELF', materialName: '冰水(自备)', materialTypeId: 'RMT_ICE', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: 10, selfSupplied: true },
     { id: 'AUX-ONION', materialName: '洋葱泥', materialTypeId: 'RMT_ONION', materialCategory: 'AUXILIARY', unit: 'kg', requiredQty: null, pickedQty: null },
   ],
@@ -191,6 +193,18 @@ describe('确认领料 — 主料份额 → 辅料, 一次填数全出 (owner/or
     // 83.8 g/kg × 1000 kg ÷ 1000 = 83.8 kg —— 精确值, 不是约等于
     expect(row(vm, 'AUX-ONION').pickedInput).toBe(83.8);
     expect(row(vm, 'AUX-ONION').autoLocked).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('阴性对照(终审跟进①): 持久化为 0 的份额 —— 不被推, 标签也不能写「按配比 0%」', async () => {
+    const { wrapper, vm } = await openDialog();
+    const r2082 = row(vm, 'R-2082');
+    r2082.pickedInput = 300;
+    vm.handlePickedInputChange(r2082);
+    const zero = row(vm, 'R-ZERO');
+    expect(zero.pickedInput).toBeNull();
+    expect(vm.requiredQtyLabel(zero)).toBe('按实际领用');
+    expect(vm.requiredQtyLabel(r2082)).toBe('按配比 30%');
     wrapper.unmount();
   });
 
