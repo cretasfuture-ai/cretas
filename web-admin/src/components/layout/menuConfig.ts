@@ -235,6 +235,13 @@ const rawMenuConfig: MenuItem[] = [
     path: '/procurement', title: '采购管理', icon: 'ShoppingCart', module: 'procurement',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
+      { path: '/procurement/requisitions/my', title: '我的请购', icon: '', module: 'procurement', groupLabel: '请购流程',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin',
+          'restaurant_purchaser', 'restaurant_owner'] },
+      { path: '/procurement/requisitions/pending-approval', title: '待审批请购', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin'] },
+      { path: '/procurement/requisitions', title: '全部请购单', icon: '', module: 'procurement',
+        roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'permission_admin'] },
       { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement', groupLabel: '采购执行' },
       { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement', groupLabel: '供应商与价格' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }

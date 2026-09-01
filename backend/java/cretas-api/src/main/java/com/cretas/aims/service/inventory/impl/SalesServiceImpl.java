@@ -3365,6 +3365,15 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(409, "只有已发货状态的发货单可以确认签收")
                     .withHint("请刷新发货单列表查看最新状态");
         }
+        if (record.getSignedByName() == null || record.getSignedByName().isBlank()
+                || record.getSignaturePhotoUrls() == null
+                || record.getSignaturePhotoUrls().isBlank()
+                || "[]".equals(record.getSignaturePhotoUrls().trim())) {
+            throw new BusinessException(409, "确认签收前必须填写签收人并上传至少一张客户签收凭证")
+                    .withCode("SALES_DELIVERY_SIGNATURE_REQUIRED")
+                    .withHint("请在销售订单的发货记录中点击“签收”，填写签收人、上传凭证照片后再确认")
+                    .withHintTarget("销售管理 → 销售订单 → 发货记录");
+        }
         record.setStatus(SalesDeliveryStatus.DELIVERED);
         if (record.getSignedAt() == null) record.setSignedAt(LocalDateTime.now());
         SalesDeliveryRecord saved = deliveryRecordRepository.save(record);

@@ -8,6 +8,8 @@ import { get, post, put } from '@/api/request';
 import OrderItemsEditor, { type OrderItemRow } from './components/OrderItemsEditor.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
+import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
+import type { Attachment } from '@/api/attachment';
 import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -85,6 +87,12 @@ function loadDocumentTrace() {
 }
 const approvalProgress = ref<SalesOrderApprovalProgress | null>(null);
 const deliveries = ref<TableRow[]>([]);
+const signatureDialogVisible = ref(false);
+const signatureTarget = ref<TableRow | null>(null);
+const signatureUploadKey = ref(0);
+const signaturePhotoUrls = ref<string[]>([]);
+const signatureQueue = ref({ total: 0, pending: 0, failed: 0 });
+const signatureForm = ref({ signedByName: '', remark: '' });
 const associatedProductionPlans = ref<TableRow[]>([]);
 const productionPlansLoading = ref(false);
 const productionPlansFailed = ref(false);
@@ -209,6 +217,52 @@ const transportAggregate = computed(() => deliveryTransportAggregate(deliveries.
 const transportDisplayStatus = computed(() => deliveries.value.length > 0
   ? transportAggregate.value
   : String(order.value?.transportPlanStatus || 'PLANNING'));
+const signatureSubmissionReady = computed(() => Boolean(
+  signatureTarget.value
+    && signatureForm.value.signedByName.trim()
+    && signaturePhotoUrls.value.length > 0
+    && signatureQueue.value.pending === 0
+    && signatureQueue.value.failed === 0,
+));
+
+function existingSignaturePhotoUrls(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((url): url is string => typeof url === 'string' && Boolean(url));
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((url): url is string => typeof url === 'string' && Boolean(url))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function openSignatureDialog(row: TableRow) {
+  signatureTarget.value = row;
+  signatureForm.value = {
+    signedByName: String(row.signedByName || ''),
+    remark: String(row.signatureRemark || ''),
+  };
+  signaturePhotoUrls.value = existingSignaturePhotoUrls(row.signaturePhotoUrls);
+  signatureQueue.value = { total: 0, pending: 0, failed: 0 };
+  signatureUploadKey.value += 1;
+  signatureDialogVisible.value = true;
+}
+
+function handleSignatureUploaded(attachment: Attachment) {
+  if (attachment.fileUrl && !signaturePhotoUrls.value.includes(attachment.fileUrl)) {
+    signaturePhotoUrls.value.push(attachment.fileUrl);
+  }
+}
+
+function handleSignatureDeleted(attachment: Attachment) {
+  signaturePhotoUrls.value = signaturePhotoUrls.value.filter((url) => url !== attachment.fileUrl);
+}
+
+function handleSignatureQueueChange(summary: { total: number; pending: number; failed: number }) {
+  signatureQueue.value = summary;
+}
 
 // T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 dialog.
 // Builds CreateReturnOrderRequest with returnType=SALES_RETURN + counterpartyId=customerId
@@ -1133,17 +1187,45 @@ async function handleCreateShipment() {
   finally { submitting.value = false; }
 }
 
-async function handleDelivered(deliveryId: string) {
-  if (submitting.value) return;
-  try {
-    await ElMessageBox.confirm('确认客户已签收？', '确认');
-  } catch { return; }
+async function submitDeliveredWithSignature() {
+  const target = signatureTarget.value;
+  if (!target || !signatureSubmissionReady.value || submitting.value) return;
   submitting.value = true;
+  let signatureSaved = false;
   try {
-    const res = await post(`/${factoryId.value}/sales/deliveries/${deliveryId}/delivered`);
-    if (res.success) { ElMessage.success('签收确认成功'); loadDeliveries(); loadOrder(); }
-    else { ElMessage.error(res.message || '签收确认失败，请重试'); }
-  } catch (e) { handleCatchError(e, '签收确认失败，请检查网络'); }
+    const signatureRes = await post<TableRow>(
+      `/${factoryId.value}/sales/deliveries/${target.id}/signature`,
+      {
+        photoUrls: signaturePhotoUrls.value,
+        signedByName: signatureForm.value.signedByName.trim(),
+        remark: signatureForm.value.remark.trim(),
+      },
+    );
+    if (!signatureRes.success) {
+      throw new Error(signatureRes.message || '签收凭证保存失败');
+    }
+    signatureSaved = true;
+
+    const deliveredRes = await post<TableRow>(`/${factoryId.value}/sales/deliveries/${target.id}/delivered`);
+    if (!deliveredRes.success) {
+      throw new Error(deliveredRes.message || '签收状态更新失败');
+    }
+
+    ElMessage.success(`发货单 ${target.deliveryNumber || target.id} 已完成客户签收`);
+    signatureDialogVisible.value = false;
+    await Promise.all([loadDeliveries(), loadOrder()]);
+  } catch (e) {
+    if (signatureSaved) {
+      ElMessage({
+        message: '签收凭证已保存，但签收状态未更新。请保留本弹窗内容并再次点击“保存凭证并确认签收”；系统不会重复扣减库存。',
+        type: 'error',
+        duration: 0,
+        showClose: true,
+      });
+    } else {
+      handleCatchError(e, '签收凭证保存失败，请检查照片、签收人和网络后重试');
+    }
+  }
   finally { submitting.value = false; }
 }
 
@@ -2262,7 +2344,7 @@ async function handleQuickPayFull() {
                       @click="router.push('/warehouse/shipments')"
                     >等待仓库确认</el-button>
                   </el-tooltip>
-                  <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="handleDelivered(row.id)">签收</el-button>
+                  <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="openSignatureDialog(row)">填写凭证并签收</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -2539,6 +2621,84 @@ async function handleQuickPayFull() {
       <template #footer>
         <el-button @click="returnDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="returnSubmitting" @click="handleCreateReturn">提交退货申请</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="signatureDialogVisible"
+      :title="`客户签收 — ${signatureTarget?.deliveryNumber || ''}`"
+      width="620px"
+      destroy-on-close
+      :close-on-click-modal="false"
+      :close-on-press-escape="signatureQueue.pending === 0"
+      :show-close="signatureQueue.pending === 0"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        title="先核对发货单，再上传客户签收照片"
+        description="必须填写签收人并至少上传 1 张真实签收凭证。照片上传成功后才能确认；资料不一致时请停止，不要先点签收。"
+        style="margin-bottom: 16px"
+      />
+      <el-descriptions :column="2" border class="signature-context">
+        <el-descriptions-item label="销售订单">{{ order?.orderNumber || orderId }}</el-descriptions-item>
+        <el-descriptions-item label="发货单">{{ signatureTarget?.deliveryNumber || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="客户" :span="2">
+          {{ order?.customerName || signatureTarget?.customerName || '-' }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <el-form label-width="92px" class="signature-form">
+        <el-form-item label="签收人" required>
+          <el-input
+            v-model="signatureForm.signedByName"
+            maxlength="100"
+            show-word-limit
+            placeholder="填写客户现场实际签收人姓名"
+          />
+        </el-form-item>
+        <el-form-item label="签收凭证" required>
+          <div class="signature-upload-field">
+            <AttachmentDropZone
+              v-if="signatureTarget"
+              :key="signatureUploadKey"
+              entity-type="SHIPMENT"
+              :entity-id="String(signatureTarget.id)"
+              :factory-id="factoryId"
+              business-tag="CUSTOMER_RECEIPT_SIGNATURE"
+              file-category="SIGNATURE"
+              accept="image/*"
+              :max-size="5 * 1024 * 1024"
+              :max-files="3"
+              @uploaded="handleSignatureUploaded"
+              @deleted="handleSignatureDeleted"
+              @queue-change="handleSignatureQueueChange"
+            />
+            <div class="signature-upload-status" :class="{ 'is-ready': signaturePhotoUrls.length > 0 && signatureQueue.failed === 0 }">
+              已关联 {{ signaturePhotoUrls.length }} 张签收照片
+              <span v-if="signatureQueue.pending > 0"> · {{ signatureQueue.pending }} 张上传中，请等待</span>
+              <span v-if="signatureQueue.failed > 0"> · {{ signatureQueue.failed }} 张失败，请删除后重传</span>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="签收备注">
+          <el-input
+            v-model="signatureForm.remark"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="可填写外箱、数量或客户现场异常；无异常可留空"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="submitting || signatureQueue.pending > 0" @click="signatureDialogVisible = false">取消</el-button>
+        <el-button
+          type="success"
+          :loading="submitting"
+          :disabled="!signatureSubmissionReady"
+          @click="submitDeliveredWithSignature"
+        >保存凭证并确认签收</el-button>
       </template>
     </el-dialog>
 
@@ -2830,4 +2990,14 @@ async function handleQuickPayFull() {
   background: var(--el-color-primary-light-9) !important;
 }
 .muted-audit { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
+.signature-context { margin-bottom: 16px; }
+.signature-form { margin-top: 16px; }
+.signature-upload-field { width: 100%; }
+.signature-upload-status {
+  margin-top: 8px;
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.signature-upload-status.is-ready { color: var(--el-color-success); }
 </style>
