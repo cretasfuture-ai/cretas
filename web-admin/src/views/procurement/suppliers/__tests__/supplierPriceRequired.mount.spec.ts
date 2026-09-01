@@ -228,7 +228,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
 
     await vm.openRelationCreate();
     Object.assign(vm.relationForm, { materialTypeId: 'MAT-1', purchaseUnit: 'kg' });
-    vm.relationForm.defaultPurchasePrice = null;   // 用户没填价格
+    vm.relationForm.taxIncludedDefaultPurchasePrice = null;   // 19②: 人填的是含税, 没填
 
     await vm.saveRelation();
     await flushPromises();
@@ -246,7 +246,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
 
     await vm.openRelationEdit(RELATION);
     vm.relationForm.active = false;                // 只改了启用状态
-    expect(vm.relationForm.defaultPurchasePrice).toBeNull();   // 价格仍是空的
+    expect(vm.relationForm.taxIncludedDefaultPurchasePrice).toBeNull();   // 含税价仍是空的
 
     await vm.saveRelation();
     await flushPromises();
@@ -261,7 +261,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     const vm = wrapper.vm as unknown as Vm;
 
     await vm.openRelationEdit(RELATION);
-    vm.relationForm.defaultPurchasePrice = 0;      // 动过了, 而且是非法值
+    vm.relationForm.taxIncludedDefaultPurchasePrice = 0;      // 动过了, 而且是非法值
 
     await vm.saveRelation();
     await flushPromises();
@@ -276,7 +276,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     const vm = wrapper.vm as unknown as Vm;
 
     await vm.openRelationEdit(RELATION);
-    vm.relationForm.defaultPurchasePrice = 12.5;
+    vm.relationForm.taxIncludedDefaultPurchasePrice = 12.5;
 
     await vm.saveRelation();
     await flushPromises();
@@ -291,11 +291,11 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
 
     await vm.openRelationCreate();
     Object.assign(vm.relationForm, {
-      materialTypeId: 'MAT-1', purchaseUnit: 'kg', defaultPurchasePrice: 10,
+      materialTypeId: 'MAT-1', purchaseUnit: 'kg', taxIncludedDefaultPurchasePrice: 10,
     });
     vm.inlineSpecEnabled = true;
     Object.assign(vm.inlineSpecForm, {
-      name: '10kg/箱', purchasePackageUnit: 'box', factor: 10, quotedPrice: null,
+      name: '10kg/箱', purchasePackageUnit: 'box', factor: 10, taxIncludedQuotedPrice: null,
     });
 
     await vm.saveRelation();
@@ -315,7 +315,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     await vm.openSpecManager(RELATION);
     vm.showNewSpecForm = true;
     Object.assign(vm.specForm, {
-      name: '20kg/袋', purchasePackageUnit: 'bag', factor: 20, quotedPrice: null,
+      name: '20kg/袋', purchasePackageUnit: 'bag', factor: 20, taxIncludedQuotedPrice: null,
     });
 
     await vm.savePurchaseSpec();
@@ -333,7 +333,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     await vm.openSpecManager(RELATION);
     vm.editPurchaseSpec(SPEC);
     vm.specForm.active = false;                 // 只改启用状态
-    expect(vm.specForm.quotedPrice).toBeNull();  // 报价仍是空的
+    expect(vm.specForm.taxIncludedQuotedPrice).toBeNull();  // 含税报价仍是空的
 
     await vm.savePurchaseSpec();
     await flushPromises();

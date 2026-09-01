@@ -14,6 +14,11 @@ public class SupplierMaterialPurchaseSpecDTO {
     private String inventoryBaseUnit;
     private BigDecimal factor;
     @PriceSensitive private BigDecimal quotedPrice;
+    /**
+     * 含税报价 —— 编辑态回填输入框用的就是它。
+     * 🔴 本字段为空而 quotedPrice 有值 = 存量基准未知, ⛔ 不许反推。
+     */
+    @PriceSensitive private BigDecimal taxIncludedQuotedPrice;
     private String quotedPriceUnit;
     /**
      * 该规格没有自己的报价时, 由**供应关系上配的采购价**推导出来的、按本规格包装单位计价的参考价。

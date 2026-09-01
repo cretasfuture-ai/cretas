@@ -12,7 +12,11 @@ public class SupplierMaterialRequest {
     @Size(max = 100, message = "供应商料号不能超过100字符")
     private String supplierMaterialCode;
     @Positive(message = "默认采购价必须大于0")
+    /** 未税默认采购价 —— 兼容既有集成; 界面已不再让人填未税 (19②)。 */
     private BigDecimal defaultPurchasePrice;
+
+    /** 含税默认采购价 —— 19② 之后人工录入的权威值, 未税由物料税率派生。 */
+    private BigDecimal taxIncludedDefaultPurchasePrice;
     @Pattern(regexp = "^[A-Z]{3}$", message = "币种必须是3位大写代码")
     private String currency;
     @Size(max = 20, message = "采购单位不能超过20字符")
