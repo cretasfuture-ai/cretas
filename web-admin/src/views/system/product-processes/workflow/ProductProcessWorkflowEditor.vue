@@ -958,6 +958,7 @@
 </template>
 
 <script setup lang="ts">
+
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import gsap from 'gsap';
 import { prefersReducedMotion } from '@/utils/motion/prefersReducedMotion';
@@ -1877,7 +1878,27 @@ const immersive = ref<boolean>((() => {
 })());
 watch(immersive, (value) => {
   try { window.localStorage.setItem(IMMERSIVE_STORAGE_KEY, value ? 'on' : 'off'); } catch { /* 无痕模式等 */ }
-});
+  applyImmersiveBodyClass(value);
+}, { immediate: true });
+
+/**
+ * 沉浸态靠**收起外框**实现, ⛔ 不靠盖住它。
+ *
+ * 🔴 第一版是「编辑器 position:fixed 盖上去」, 实测坏了两次:
+ *   ① 顶栏(z-index 99)盖在编辑器(z-index 1500)上面 —— 祖先链上有栈上下文,
+ *      z-index 拉到 9999 都没用, 工具栏按钮点下去命中的是顶栏。
+ *      最阴的是**画布宽度量出来是 100%**, 只量尺寸读不出这个缺陷。
+ *   ② 改用 Teleport 到 body 解决了层级, 却把内容挪出了组件树:
+ *      父组件的 class 被丢掉(20 条警告), 10 个既有测试的 wrapper.find 读空。
+ *
+ * ⇒ 换成「把 .app-header / 侧边菜单收起来」: 没有覆盖就没有层级之争,
+ *   组件树也没动。⛔ 不要再改回覆盖式。
+ */
+function applyImmersiveBodyClass(on: boolean): void {
+  document.body.classList.toggle('workflow-immersive', on);
+}
+// 离开本页要还原 —— ⛔ 否则整个应用的顶栏和菜单会一直消失。
+onUnmounted(() => applyImmersiveBodyClass(false));
 
 /** Esc 退出全屏 —— 盖住导航就必须给一条键盘出口。 */
 function onImmersiveEscape(event: KeyboardEvent): void {
@@ -6645,13 +6666,19 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 
 /* 沉浸态: 铺满视口。⚠️ z-index 要压过侧边菜单与顶栏, 但低于 el-dialog/el-drawer(2000+)。 */
 .workflow-editor.is-immersive {
-  position: fixed; inset: 0; z-index: 1500;
+  position: fixed; inset: 0;
   background: #fff;
   display: flex; flex-direction: column;
 }
 .workflow-editor.is-immersive .workflow-main { flex: 1; min-height: 0; }
+/*
+ * ⚠️ z-index 必须压过画布浮动工具条(24)和工具栏里的一切。
+ * 2026-09-01 实测: z-index:5 时这个按钮**点不到** —— 它在模板里排在最前, 后面的
+ * 兄弟元素盖住了它。而它是全屏态下**唯一**的鼠标出口(全屏盖住了导航),
+ * 点不到 = 用户被关在里面。⛔ 这个层级不要往下调。
+ */
 .workflow-immersive-exit, .workflow-immersive-enter {
-  position: absolute; top: 10px; right: 14px; z-index: 5;
+  position: absolute; top: 10px; right: 14px; z-index: 60;
   height: 28px; padding: 0 12px;
   border: 1px solid #dcdfe6; border-radius: 6px; background: rgba(255, 255, 255, 0.92);
   color: #49647e; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -7021,4 +7048,25 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   color: var(--el-text-color-secondary, #909399);
 }
 .raw-input-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+</style>
+
+<!--
+  沉浸(全屏)态的外框收起规则。
+
+  ⚠️ 必须是**非 scoped**: 要动的是应用外壳(.app-header / 侧边菜单), 那些元素不在本组件里。
+  ⚠️ 用 `body.workflow-immersive` 做开关, 组件卸载时移除 —— 否则离开本页后整个应用
+     的顶栏和菜单会一直消失(那比不全屏糟糕得多)。
+  ⛔ 不要改回「编辑器 position:fixed 盖上去」: 实测顶栏(z-index 99)会盖在
+     z-index 9999 的编辑器上面(祖先栈上下文), 而画布宽度**仍然量出来 100%** ——
+     一个只量尺寸就读不出来的缺陷。
+-->
+<style>
+body.workflow-immersive .app-header { display: none !important; }
+body.workflow-immersive .app-sidebar,
+body.workflow-immersive .app-layout > .el-aside,
+body.workflow-immersive .el-aside { display: none !important; }
+/* 页面自己的留白也一并收掉, 否则画布四周还会剩一圈灰底。 */
+body.workflow-immersive .app-content,
+body.workflow-immersive .page-container { padding: 0 !important; margin: 0 !important; }
+body.workflow-immersive .workflow-viewport { padding: 0 !important; }
 </style>
