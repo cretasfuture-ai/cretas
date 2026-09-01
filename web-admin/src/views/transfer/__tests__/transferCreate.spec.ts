@@ -51,7 +51,9 @@ describe('M08 手动调拨选择器契约', () => {
     expect(listSource).toContain("sourceInventoryError.value = '库存基本类型读取失败");
     expect(listSource).toContain(':disabled="Boolean(transferCategoryUnavailableReason)"');
   });
-  it('按所选仓库聚合唯一可用成品 SKU，并保留 canonical box / 中文显示盒', () => {
+  // 🔴 2026-09-02 (缺陷 33 根治): canonicalUnitCode('box') 现在直接返回 '盒'
+  // (不动点判据, 见 unitPricing.ts 的 UNIT_ALIASES 注释), 内部键与中文显示不再是两个字。
+  it('按所选仓库聚合唯一可用成品 SKU，canonical 与中文显示统一为「盒」', () => {
     const options = aggregateFinishedGoodsOptions([
       {
         productTypeId: 'CPF0060015',
@@ -75,7 +77,7 @@ describe('M08 手动调拨选择器契约', () => {
       expect.objectContaining({
         id: 'CPF0060015',
         name: 'E2E-MVP-20260719-2111-黄油鸡-成品800g',
-        unit: 'box',
+        unit: '盒',
         currentStock: 5,
       }),
     ]);
@@ -100,7 +102,7 @@ describe('M08 手动调拨选择器契约', () => {
       productTypeId: 'CPF0060015',
       itemName: '黄油鸡-成品800g',
       quantity: 5,
-      unit: 'box',
+      unit: '盒',
       unitPrice: 11.2,
       remark: undefined,
     });
@@ -142,8 +144,9 @@ describe('M08 手动调拨选择器契约', () => {
     expect(packagingOptions.map((option) => option.id)).toEqual(['PACK-BOX']);
     packagingRow.quantity = 1;
     applySelectedOption(packagingRow, packagingOptions[0]);
+    // 缺陷 33 根治后: canonicalUnitCode('box') = '盒' (不再是内部键 'box')。
     expect(toTransferItemPayload(packagingRow)).toMatchObject({
-      itemType: 'PACKAGING_MATERIAL', materialTypeId: 'PACK-BOX', unit: 'box', quantity: 1,
+      itemType: 'PACKAGING_MATERIAL', materialTypeId: 'PACK-BOX', unit: '盒', quantity: 1,
     });
     expect(packagingRow.productTypeId).toBeUndefined();
   });
@@ -177,12 +180,13 @@ describe('M08 手动调拨选择器契约', () => {
     raw._packageFactor = 10;
     raw._inventoryUnit = 'kg';
 
+    // 缺陷 33 根治后: canonicalUnitCode('case') = '箱' (不再是内部键 'case')。
     expect(toTransferItemPayload(raw)).toMatchObject({
       itemType: 'RAW_MATERIAL',
       materialTypeId: 'RAW-KG',
       materialPackagingSpecId: 'SPEC-CASE-10KG',
       quantity: 8,
-      unit: 'case',
+      unit: '箱',
       unitPrice: 120,
     });
     expect(listSource).toContain('label="调拨包装"');

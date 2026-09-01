@@ -174,7 +174,12 @@ describe('storageUnitCode: 可换算的国际单位保持拉丁符号, 不连坐
     expect(storageUnitCode('公斤')).toBe('kg');
     expect(storageUnitCode('千克')).toBe('kg');
     expect(storageUnitCode('克')).toBe('g');
-    expect(storageUnitCode('毫升')).toBe('mL');
+    // 🔴 2026-09-02 (缺陷 33 根治): 目标码从大写 'mL' 改成后端真正的不动点小写 'ml'
+    // (见 UNIT_ALIASES 注释)。后端 key() 本就大小写不敏感, 这不是行为回归 ——
+    // 上面 it.each 那条 `.toLowerCase()` 比较早就只保证大小写不敏感, 这里改成
+    // 断言实际值, 与「目标码就是不动点」的新契约对齐。展示层 (displayUnit) 仍然是 'mL'。
+    expect(storageUnitCode('毫升')).toBe('ml');
+    expect(displayUnit('毫升')).toBe('mL');
   });
 
   /**

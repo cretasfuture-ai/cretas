@@ -153,9 +153,12 @@ describe('purchase suggestion pricing units survive the merge dialog mapping', (
 
     const units = resolvePurchaseSuggestionUnits(backendItem);
 
-    // 内部比较键仍是 box —— el-select 的 value 与包装规格匹配都靠它。
+    // 🔴 2026-09-02 (缺陷 33 根治): 内部比较键不再是 box —— unitPricing.ts 的
+    // UNIT_ALIASES 目标码改成后端 normalize() 的不动点之后, canonicalUnitCode('盒')
+    // 直接返回 '盒' 本身。el-select 的 value / 包装规格匹配现在用的就是这个中文码,
+    // 不再需要经 storageUnitCode 才翻回中文 (那一步现在是 no-op, 见下方 payload 断言)。
     expect(units.quantityUnit).toBe('g');
-    expect(units.priceUnit).toBe('box');
+    expect(units.priceUnit).toBe('盒');
     expect(units.priceUnit).not.toBe(units.quantityUnit);
 
     const payload = purchaseOrderPricingPayload({
@@ -187,6 +190,64 @@ describe('purchase suggestion pricing units survive the merge dialog mapping', (
     const units = resolvePurchaseSuggestionUnits({ unit: 'kg' });
     expect(units.priceUnit).toBe('kg');
     expect(units.quantityUnit).toBe('kg');
+  });
+});
+
+/**
+ * 缺陷 33 的兄弟场景 (2026-09-02): 物料字典单位是「个」/「只」的原料, 经**合并采购弹窗**
+ * 这条路径提交采购单。#474 只修了 `procurement/orders/list.vue` 的 7 处调用点 ——
+ * `MergePurchaseDialog.vue` 走的是完全不同的组件, 从没接过那次修复, 同一形状的
+ * 422/400 会在这条路径重演。根治点在 `unitPricing.ts` 的 `UNIT_ALIASES` 本身,
+ * 所以这里断言的是**共享函数**的行为 —— MergePurchaseDialog.vue 通过
+ * `resolvePurchaseSuggestionUnits` + `purchaseOrderPricingPayload` 复用同一份逻辑,
+ * 断言打在这两个函数上就等于打在了本弹窗的提交路径上。
+ */
+describe('缺陷 33: 字典单位「个」/「只」的物料经合并采购弹窗提交, 不再折成「件」', () => {
+  it('真实样本 L1纸箱 (字典单位「个」): quantityUnit 与 priceUnit 全程保留「个」', () => {
+    const backendItem = { unit: '个', quantityUnit: '个', referencePriceUnit: '个' };
+    const units = resolvePurchaseSuggestionUnits(backendItem);
+    expect(units.quantityUnit).toBe('个');
+    expect(units.priceUnit).toBe('个');
+
+    const payload = purchaseOrderPricingPayload({ ...backendItem, ...units });
+    expect(payload.unit).toBe('个');
+    expect(payload.quantityUnit).toBe('个');
+    expect(payload.priceUnit).toBe('个');
+    // 阴性对照: 「件」不许出现 —— 那正是 422 的成因 (物料字典单位「个」!= 提交单位「件」)
+    expect([payload.unit, payload.quantityUnit, payload.priceUnit]).not.toContain('件');
+    expect([payload.unit, payload.quantityUnit, payload.priceUnit]).not.toContain('pcs');
+  });
+
+  it('真实样本 YL-元益漫-黄油鸡 (字典单位「只」): 全程保留「只」', () => {
+    const backendItem = { unit: '只', quantityUnit: '只', referencePriceUnit: '只' };
+    const units = resolvePurchaseSuggestionUnits(backendItem);
+    expect(units.quantityUnit).toBe('只');
+    expect(units.priceUnit).toBe('只');
+
+    const payload = purchaseOrderPricingPayload({ ...backendItem, ...units });
+    expect(payload.unit).toBe('只');
+    expect(payload.quantityUnit).toBe('只');
+    expect(payload.priceUnit).toBe('只');
+    expect([payload.unit, payload.quantityUnit, payload.priceUnit]).not.toContain('件');
+    expect([payload.unit, payload.quantityUnit, payload.priceUnit]).not.toContain('pcs');
+  });
+
+  it('阴性对照: 「件」仍然正确地保持为「件」(没有过度纠正)', () => {
+    const backendItem = { unit: '件', quantityUnit: '件', referencePriceUnit: '件' };
+    const units = resolvePurchaseSuggestionUnits(backendItem);
+    const payload = purchaseOrderPricingPayload({ ...backendItem, ...units });
+    expect(payload.unit).toBe('件');
+    expect(payload.quantityUnit).toBe('件');
+    expect(payload.priceUnit).toBe('件');
+  });
+
+  it('阴性对照: kg 物料不受影响 (没有连坐改坏可换算单位)', () => {
+    const backendItem = { unit: 'kg', quantityUnit: 'kg', referencePriceUnit: 'kg' };
+    const units = resolvePurchaseSuggestionUnits(backendItem);
+    const payload = purchaseOrderPricingPayload({ ...backendItem, ...units });
+    expect(payload.unit).toBe('kg');
+    expect(payload.quantityUnit).toBe('kg');
+    expect(payload.priceUnit).toBe('kg');
   });
 });
 
