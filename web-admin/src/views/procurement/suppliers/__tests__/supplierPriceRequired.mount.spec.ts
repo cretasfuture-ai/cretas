@@ -239,20 +239,24 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     wrapper.unmount();
   });
 
-  it('🔴 阴性对照: 编辑价格为空的存量关系, 不动价格照样存得下去', async () => {
-    // owner 裁定的那一条 —— 只想把它从启用改成停用的人, 不该被逼着先编一个价格出来。
+  it('🔒 17-A 判据已反转: 编辑空价格的存量关系, 不补价格【必须被拦】', async () => {
+    // ⚠️ 本用例的断言在 2026-09-02 被**反过来**了。
+    //    #451 时 owner 的裁定是「只在价格被动过时拦」, 所以这里原本断言的是【放行】,
+    //    而且那个行为当晚在生产上验过。现在 owner 改判 A(一律必填, 存量也要补)。
+    // 🔴 谁拿旧判据来复验, 会把缺陷读成正确行为 —— 所以这条注释必须留着。
     const wrapper = await openDrawer();
     const vm = wrapper.vm as unknown as Vm;
 
     await vm.openRelationEdit(RELATION);
-    vm.relationForm.active = false;                // 只改了启用状态
+    vm.relationForm.active = false;                // 只改启用状态
     expect(vm.relationForm.taxIncludedDefaultPurchasePrice).toBeNull();   // 含税价仍是空的
 
     await vm.saveRelation();
     await flushPromises();
 
     expect(api.updateSupplierMaterial,
-      '把存量空价格的关系锁死了 —— 用户只能先编一个假价格才能改别的字段').toHaveBeenCalled();
+      '空价格的存量关系被放行了 —— 17-A 要求补上价格才能保存').not.toHaveBeenCalled();
+    expect(api.warning).toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -326,7 +330,8 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     wrapper.unmount();
   });
 
-  it('🔴 阴性对照: 编辑报价为空的存量规格, 不动报价照样存得下去', async () => {
+  it('🔒 17-A 判据已反转: 编辑空报价的存量规格, 不补报价【必须被拦】', async () => {
+    // 同上, 三条价格路径现在是同一条规则。
     const wrapper = await openDrawer();
     const vm = wrapper.vm as unknown as Vm;
 
@@ -339,7 +344,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     await flushPromises();
 
     expect(api.updateSupplierPurchaseSpec,
-      '把存量空报价的规格锁死了').toHaveBeenCalled();
+      '空报价的存量规格被放行了 —— 17-A 要求补上报价才能保存').not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });
