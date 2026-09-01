@@ -186,31 +186,32 @@ const rawMenuConfig: MenuItem[] = [
       //   ⚠️ workshop_supervisor 在白名单里(受众没被挡掉); 另外 4 个是
       //      RequireRoleInterceptor.PLATFORM_ADMIN_ROLES —— 它们**绕过** @RequireRole,
       //      漏掉就会把本来打得开的页从平台管理员菜单里藏掉。
-      //   ▎两份一致由 reportApprovalMenuMatchesBackendRoles.spec.ts 钉住, 别手工改单侧。
+      //   ▎两份一致原来由 reportApprovalMenuMatchesBackendRoles.spec.ts 钉在**本菜单项**
+      //      的 roles[] 上；2026-09-02 报工审批+撤回审批合并成一个 hub 之后，判定目标
+      //      挪到了 tab 级 (见下方说明)，别再往这条上加 roles[]。
       //
       // 2026-09-02 同上收拢: 报工审批 hub = 报工审批 + 撤回审批, ⛔ 路径不变
-      // (仍是 /production/approval —— 上面这道闸按精确路径字符串查找菜单项,
-      // 换路径闸就找不到了)。旧路径 /production/reversals 仍可直接访问 (router
-      // redirect 保书签，见 views/production/approval-hub/index.vue)。
+      // (仍是 /production/approval —— reportApprovalMenuMatchesBackendRoles.spec.ts
+      // 按精确路径字符串查找菜单项)。旧路径 /production/reversals 仍可直接访问
+      // (router redirect 保书签，见 views/production/approval-hub/index.vue)。
       //
-      // ⚠️ 已知副作用 (合并前 撤回审批 无 roles[], 仅 module:'production' 门控;
-      // 合并后随 hub 一起被这份 roles[] 收窄): dispatcher 有 production:'rw'、
-      // 原本能在菜单里点到「撤回审批」，合并后菜单不再显示这个条目 (不在 roles[]
-      // 里)。⛔ 这不是可以随手加宽 roles[] 解决的 —— 加宽 = quality_manager 那类
-      // 角色重新看得见「报工审批」tab、点进去 403 的缺陷复发 (本闸的阴性对照就是
-      // 钉这个)。后端 ReportReversalController#listReversals 的权限判据本来就比
-      // 报工审批宽 (production:read_write 模块权限, 非角色白名单)，dispatcher 仍可
-      // 通过直接访问 /production/reversals (或书签) 到达 —— 只是菜单点击路径没了。
-      {
-        path: '/production/approval', title: '报工审批', icon: '', module: 'production',
-        roles: [
-          // ① ProcessWorkReportingController#getPendingApprovals 的 @RequireRole
-          'factory_super_admin', 'permission_admin', 'production_manager',
-          'production_clerk', 'workshop_supervisor',
-          // ② RequireRoleInterceptor.PLATFORM_ADMIN_ROLES(无条件放行)
-          'super_admin', 'platform_admin', 'developer', 'platform_super_admin',
-        ],
-      },
+      // 🔴 二次修正 (coordinator 复核指出的回归): 上面 @RequireRole 的 9 角色白名单
+      // **只属于「报工审批」这一个视角**，合并前「撤回审批」是 module:'production'
+      // 无 roles[] 门控 (production:read_write 模块权限即可, 比 9 角色白名单宽 ——
+      // 例如 dispatcher 有 production:'rw' 但不在 9 角色白名单里)。第一版把 roles[]
+      // 整个套在 hub 菜单项上，会让 dispatcher 连「撤回审批」菜单项都看不到——是
+      // 删功能，不是可登记的副作用。
+      //
+      // ⇒ roles[] 已挪进 views/production/approvalQueryTab.ts 的 APPROVAL_TAB_ROLES，
+      // 只门控 hub 内部「报工审批」那一个 tab 的渲染 (v-if，见 approval-hub/index.vue)；
+      // 本菜单项退回到与合并前「撤回审批」一致的最广条件 (纯 module:'production')。
+      // hub 菜单项可见性 = 两个 tab 可见性的并集 —— 「撤回审批」的可见集合 (任何有
+      // production 模块权限的角色) 已经是「报工审批」9 角色白名单的超集，并集就是
+      // 「撤回审批」那个更宽的集合，菜单层不需要 (也不应该) 再叠一层 roles[]。
+      // ▎判据: 以 dispatcher 身份 mount hub ⇒ 看得到「撤回审批」tab、看不到「报工
+      // 审批」tab；以 quality_manager ⇒ 看不到「报工审批」tab；以 factory_super_admin
+      // ⇒ 两个 tab 都在。见 approval-hub/__tests__/approvalHub.mount.spec.ts。
+      { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },
       // 2026-09-02 同上收拢: 领料 hub = 领料单 (原「物料需求单」, #460 已改名) +
       // 退料记录。2 个旧路径 (/production/material-requisitions、
       // /production/material-returns) 仍可直接访问 (router redirect 保书签，见

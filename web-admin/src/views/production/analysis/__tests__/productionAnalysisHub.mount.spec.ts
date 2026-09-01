@@ -11,6 +11,13 @@ import ElementPlus from 'element-plus';
  * 那 3 个 tab-pane 连 DOM 都不出现，与合并前「路由守卫 403」的最终用户可见效果一致。
  */
 
+// 成品出厂核算 tab (PAYieldCost = M67YieldCost.vue) 静态 import `@/utils/echarts`，
+// 该模块静态 `import 'echarts-wordcloud'` —— 那个包在没有 canvas 2d context 的 jsdom
+// 环境下会同步 throw，把整个模块炸掉。⛔ 不改生产行为(保留静态 import, 见
+// utils/echarts.ts 头部说明)，测试侧规避即可：只替身词云插件本身，echarts.ts 里其余
+// 17 种真实图表类型的注册逻辑照常执行。
+vi.mock('echarts-wordcloud', () => ({}));
+
 const mockRoute: { query: Record<string, unknown> } = { query: { tab: 'bom-achievement' } };
 const routerReplace = vi.fn();
 const routerPush = vi.fn();

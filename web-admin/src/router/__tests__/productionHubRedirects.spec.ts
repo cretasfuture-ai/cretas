@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import router from '@/router';
+
+// analysis/index.vue → M67YieldCost.vue(成品出厂核算) → @/utils/echarts →
+// 静态 `import 'echarts-wordcloud'`。那个包在没有 canvas 2d context 的 jsdom
+// 环境下同步 throw —— 下面这行「预热」静态 import 会把这条链一起转译, 不 mock
+// 就在文件加载阶段直接炸。⛔ 不改生产行为(echarts.ts 保留静态 import), 只替身
+// 词云插件本身。见 utils/echarts.ts 头部说明 + productionAnalysisHub.mount.spec.ts。
+vi.mock('echarts-wordcloud', () => ({}));
 
 // 预热: 静态 import 5 个 hub 组件, 让 vitest 在**文件加载阶段**(不计入单条测试的
 // timeout)就转译完它们及其内嵌的真实大页面。router.push() 命中同一个模块时走缓存,
