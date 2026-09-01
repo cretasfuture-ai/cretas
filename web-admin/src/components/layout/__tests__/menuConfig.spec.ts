@@ -142,15 +142,13 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   // 归属**本身**存疑的登记在这里, 每条写明理由, 交 owner 定。
   // ⛔ 登记是留痕, 不是豁免 —— 也不许用通配符或放宽判据把它们盖过去。
   const BREADCRUMB_DRIFT_ACCEPTED: Record<string, string> = {
-    '/rd/samples':
-      '侧边栏没有「研发管理」这一组, 这条被寄放在「生产管理」下, 面包屑却如实写「研发管理」。' +
-      'router 里 /rd 是一个完整的域(研发样品 / 已转样品库 / 报价), 侧边栏只暴露了其中 1 条。' +
-      '要不要给研发单开一组, 是 IA 决策 —— 待 owner 定, ⛔ 本轮不擅自动菜单。',
-    '/procurement/requisitions/my':
-      '同一条路由**同时**挂在两个组下: 「采购管理」(工厂侧, 组上有 hideForFactoryTypes RESTAURANT) ' +
-      '和「餐饮运营」(餐饮侧), 而且两处标题还不同(我的请购 / 报货·采购计划)。' +
-      'meta.breadcrumbParent 是静态的只有一个值: 给餐饮侧写对, 就把工厂侧写错了。' +
-      '需要 owner 先定归属 —— menuConfig.ts 那条自己就挂着「餐饮侧要不要保留这条…待定」的注释。',
+    // 2026-09-01: 曾登记 2 条, owner 都已裁定, 所以现在空着:
+    //   · /rd/samples                  → A2 研发重新独立成组 (menuConfig 的 /rd 组)
+    //   · /procurement/requisitions/my → B1 餐饮侧改走 /restaurant/purchase-plan
+    //
+    // ⚠️ 空表意味着下面「登记项必须确实还在漂」那条阳性对照**一条都跑不到**。
+    //    没有别的对照的话, 这道闸在「0 条漂移」的日子里和一个恒真式长得一模一样 ——
+    //    所以测试体里另外补了两组构造输入的阳性对照。⛔ 别把它们删了。
   };
 
   it('全表: 面包屑渲染出来的上一级, 必须是用户在侧边栏里找得到的名字', () => {
@@ -173,6 +171,17 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       }
     }
 
+    // 阳性对照(一): 判据本身既要能亮红, 也要能正确放行。
+    // ⚠️ 只定义一次, 主循环也用它 —— 判据有两份就会漂, 那时对照守的就不是真正在跑的那份。
+    const isDrift = (crumb: string, findable: string[]) => !findable.includes(crumb);
+    expect(isDrift('系统管理', ['生产管理', '生产配置']), '判据红不起来').toBe(true);
+    expect(isDrift('生产管理', ['生产管理', '生产配置']), '判据把组名误判成漂').toBe(false);
+    expect(isDrift('生产配置', ['生产管理', '生产配置']), '判据把分段名误判成漂').toBe(false);
+
+    // 阳性对照(二): 仪器确实在读 meta.breadcrumbParent, 不是永远返回路由父级。
+    // /system/users 的路由父级是「系统管理」, 而它声明了 breadcrumbParent: '人事管理'。
+    expect(renderedParent('/system/users'), 'breadcrumbParent 没被读到 —— 仪器坏了').toBe('人事管理');
+
     const drifting: { path: string; group: string; crumb: string }[] = [];
     for (const g of menuConfig) {
       let section: string | null = null; // groupLabel 是分段小标题, 向下继承到下一个 label
@@ -186,7 +195,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
         const crumb = renderedParent(c.path);
         if (crumb === null) continue;
         const findable = [g.title, section].filter(Boolean) as string[];
-        if (!findable.includes(crumb)) drifting.push({ path: c.path, group: g.title, crumb });
+        if (isDrift(crumb, findable)) drifting.push({ path: c.path, group: g.title, crumb });
       }
     }
 

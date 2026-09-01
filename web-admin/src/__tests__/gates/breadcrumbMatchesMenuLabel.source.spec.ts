@@ -60,7 +60,6 @@ const BASELINE: Record<string, [string, string]> = {
   '/calibration/list': ['行为校准', '校准列表'],
   '/dashboard/production-progress': ['生产进度大屏', '生产进度看板'],
   '/finance/voucher-list': ['会计凭证', '凭证列表'],
-  '/procurement/requisitions/my': ['报货/采购计划', '我的请购'],
   '/production/labor-efficiency': ['人效双口径对比', '人效对比'],
   '/rd/samples': ['研发样品', '研发样品管理'],
   '/restaurant/admin/etl-status': ['ETL 状态', '餐饮 ETL 状态'],
@@ -130,7 +129,7 @@ describe('面包屑(router meta.title) 与菜单标签一致', () => {
     }
   });
 
-  it('⛔ 不许出现新的名字漂移(既有 16 处已冻结, 只减不增)', async () => {
+  it('⛔ 不许出现新的名字漂移(存量已冻结, 只减不增 —— ⛔ 别把条数写死在标题里, 它会随棘轮失真)', async () => {
     const menu = menuTitles();
     const router = await routerTitles();
     const fresh: string[] = [];
