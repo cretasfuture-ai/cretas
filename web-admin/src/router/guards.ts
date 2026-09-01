@@ -55,6 +55,26 @@ const ROLE_PATH_WHITELIST: Record<string, string[]> = {
   ],
 };
 
+/**
+ * 角色路径白名单判定 —— 「这个角色的 URL 前缀白名单允不允许它去 `path`」。
+ * 不在 {@link ROLE_PATH_WHITELIST} 里的角色不受这道闸约束, 返回 `true`。
+ *
+ * 🔴 **导出的理由**: 让跨模块入口按钮能按「点下去会不会 403」决定显不显示。
+ * 缺陷 9 (2026-09-01, LIUSHANMEN 生产走查): 采购订单详情上「查看财务详情」和
+ * 「前往仓储收货任务」两个按钮对采购主管是死链 —— 点了整页跳 `/403`, 上下文全丢。
+ *
+ * ⚠️ 调用方**必须与 beforeEach 用同一份判定**。⛔ 在组件里只写一句
+ * `canAccess('finance')` 是不够的: 那只覆盖了下面的模块闸, 漏掉本白名单这一道。
+ * 实例: `finance_manager` 的白名单有 `/warehouse/stocktakes` 但**没有**
+ * `/warehouse/materials` ⇒ 即使模块权限通, 路径闸照样 403。
+ * 两道闸是**串联**的, 隐藏条件必须同时满足两道 (形态 D: 同一个判定有两份就会漂)。
+ */
+export function isPathAllowedForRole(role: string, path: string): boolean {
+  const roleWhitelist = ROLE_PATH_WHITELIST[role];
+  if (!roleWhitelist) return true;
+  return roleWhitelist.some(prefix => path === prefix || path.startsWith(prefix + '/'));
+}
+
 export function setupRouterGuards(router: Router) {
   // 前置守卫
   router.beforeEach(async (to, _from, next) => {
@@ -152,14 +172,10 @@ export function setupRouterGuards(router: Router) {
       return;
     }
 
-    // 检查角色路由白名单
-    const roleWhitelist = ROLE_PATH_WHITELIST[authStore.currentRole];
-    if (roleWhitelist) {
-      const pathAllowed = roleWhitelist.some(prefix => to.path === prefix || to.path.startsWith(prefix + '/'));
-      if (!pathAllowed) {
-        next('/403');
-        return;
-      }
+    // 检查角色路由白名单 (判定抽在 isPathAllowedForRole, 与跨模块入口按钮共用同一份)
+    if (!isPathAllowedForRole(authStore.currentRole, to.path)) {
+      next('/403');
+      return;
     }
 
     // 检查模块权限

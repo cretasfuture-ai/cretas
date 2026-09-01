@@ -17,6 +17,7 @@ import { ElMessage } from 'element-plus';
 import { Plus, Delete } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
+import { usePinyinFilter } from '@/utils/pinyinSearch';
 import {
   createRequisition,
   type CreatePurchaseRequisitionRequest,
@@ -103,6 +104,46 @@ const form = reactive<{
 
 const suppliers = ref<Supplier[]>([]);
 const materials = ref<Material[]>([]);
+
+// ─────────────────────────────────────────────────────────────────────────
+// 缺陷 13 (2026-09-01, LIUSHANMEN 生产走查): owner 在物料框输入 `ht` (海天的首字母)
+// → 下拉显示「无匹配数据」。
+//
+// ⚠️ **这不是「搜索坏了」** —— 输「海天」或「老抽」能搜到。是**匹配面不够**,
+//    两个因素叠加才让它难用:
+//      1. Element Plus 默认 `filterable` 只对 label 做中文子串匹配, 不认拼音/首字母;
+//         而中文 ERP 里一线用拼音比切输入法打汉字快。
+//      2. 物料名**以规格开头** (生产实测 `13.9kg海天草菇老抽`) ⇒ 用户凭直觉去输
+//         最自然的品名首字母, 一定不中。
+//
+// 复用 `@/utils/pinyinSearch` (pinyin-pro): 原文 / 全拼 / 首字母 三种任一命中即匹配,
+// 所以 `海天` `haitian` `ht` 都能找到 `13.9kg海天草菇老抽`。
+// ⛔ 不在这里再抄一份匹配逻辑 —— 那个文件头部已经把「两份会漂」登记在案, 并且
+//    明写了物料下拉是它预期要推广到的场景之一。
+// ⚠️ 用了 `:filter-method` 之后 el-select 会**关掉内建的字面过滤**,
+//    过滤结果必须自己维护并喂给 v-for (见 usePinyinFilter 内部注释) ⇒ 下面用 filteredMaterials。
+const materialFilter = usePinyinFilter(
+  () => materials.value,
+  (m) => [m.name],
+);
+const handleMaterialFilter = materialFilter.handleFilter;
+const handleMaterialVisibleChange = materialFilter.handleVisibleChange;
+const filteredMaterials = materialFilter.filtered;
+
+// 🔴 空态文案要挂 `no-data-text`, ⛔ 不能只挂 `no-match-text`。
+// 读过 element-plus 2.13.0 的 useSelect.mjs `emptyText`:
+//     filterable && inputValue && states.options.size > 0 && filteredCount === 0 → noMatchText
+//     states.options.size === 0                                                  → noDataText
+// `states.options` 数的是**真正渲染出来的 <el-option> 组件**。我们用 filter-method
+// 自己过滤 v-for 列表 ⇒ 没命中时**一个 el-option 都不渲染** ⇒ options.size === 0
+// ⇒ 走的是 **noDataText** 那一支, noMatchText 永远到不了。
+// (只挂 noMatchText 就是「机制在、没接上」—— 文案写了但用户永远看不到。)
+// ⇒ 两个都挂同一份文案, 由 query 是否为空区分「搜不到」和「本来就没有」。
+const materialEmptyText = computed(() =>
+  materialFilter.query.value.trim()
+    ? '没找到这个物料 —— 试试品名关键字或拼音首字母, 例如 老抽 / laochou / lc'
+    : '暂无可选物料 —— 请先在「原料档案」里维护',
+);
 const submitting = ref(false);
 
 async function loadSuppliers() {
@@ -293,15 +334,21 @@ void _avoidUnusedWarning;
         <span style="width: 60px">操作</span>
       </div>
       <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
+        <!-- 缺陷 13: 拼音/首字母搜索 + 能指路的空态 (默认的「无匹配数据」不告诉
+             用户该换什么词输)。filter-method 关掉内建过滤 ⇒ v-for 走 filteredMaterials。 -->
         <el-select
           v-model="item.materialTypeId"
-          placeholder="选择物料"
+          placeholder="选择物料 (支持拼音, 如 ht)"
           filterable
+          :filter-method="handleMaterialFilter"
+          :no-data-text="materialEmptyText"
+          :no-match-text="materialEmptyText"
           style="width: 240px"
           @change="onMaterialChange(item)"
+          @visible-change="handleMaterialVisibleChange"
         >
           <el-option
-            v-for="m in materials"
+            v-for="m in filteredMaterials"
             :key="m.id"
             :label="m.name"
             :value="m.id"

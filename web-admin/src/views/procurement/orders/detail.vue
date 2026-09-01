@@ -2,7 +2,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
+import { usePermissionStore, type ModuleName } from '@/store/modules/permission';
+import { isPathAllowedForRole } from '@/router/guards';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import request, { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -37,6 +38,39 @@ const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+// ─────────────────────────────────────────────────────────────────────────
+// 缺陷 9 (2026-09-01, LIUSHANMEN 生产走查): 这一页有 3 个跨模块入口, 其中 2 个
+// 对采购主管是**死链** —— 点了整页跳 /403, 上下文全丢, 只能「返回上页」。
+//
+//   查看审批进度 / 前往 OA  → /workflow/my-created   workflow  ✅ 采购通
+//   查看财务详情            → /finance/ar-ap         finance   ❌ 403
+//   前往仓储收货任务        → /warehouse/materials   warehouse ❌ 403
+//
+// 🔒 owner 裁定 (2026-09-01):「共享的数据就是在这个 PO 详情里面就可以反馈了,
+//    不需要给财务详情和收货任务的 tab 给采购。」
+//    ⇒ 按目标模块权限**隐藏**这两个按钮 (⛔ 不是禁用, ⛔ 不是留死链, ⛔ 不是跳 403)。
+//
+// ⛔ **不删按钮本身** —— 「前往仓储收货任务」是台账任务
+//    BUG-F006-PURCHASE-WAREHOUSE-RECEIVING-BOUNDARY-001 明确要求的入口
+//    (采购详情移除收货写动作, 只追踪并跳转仓储工作台)。有 finance / warehouse
+//    权限的角色仍然要能用它。缺陷不是「多了个按钮」, 是**那个设计假设了点它的人进得去**。
+//
+// ⚠️ 安全层没破: 403 恰恰证明后端/路由那道闸是守住的。坏的是**可见性层** ——
+//    台账管了「能不能做」, 没人管「该不该看见入口」, 实现就无条件渲染了。
+//
+// 🔴 判定必须**跟真正会 403 的那道闸同源**, 所以两个条件都要:
+//    ① 路由守卫的角色路径白名单 isPathAllowedForRole (⛔ 漏了它会错判:
+//       finance_manager 有 /warehouse/stocktakes 却没有 /warehouse/materials)
+//    ② 模块闸 canAccess(meta.module) —— 两条目标路由的 meta 都是单个 module
+//       (ar-ap: finance / materials: warehouse), 没有 modulesAny/modulesAll。
+// ─────────────────────────────────────────────────────────────────────────
+function canReach(path: string, module: ModuleName): boolean {
+  return isPathAllowedForRole(authStore.currentRole, path)
+    && permissionStore.canAccess(module);
+}
+const canReachFinanceDetails = computed(() => canReach('/finance/ar-ap', 'finance'));
+const canReachWarehouseReceiving = computed(() => canReach('/warehouse/materials', 'warehouse'));
 const orderId = computed(() => route.params.id as string);
 
 const loading = ref(false);
@@ -182,9 +216,63 @@ function goEditDraft() {
   router.push({ path: '/procurement/orders', query: { edit: orderId.value } });
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 缺陷 10 (2026-09-01, LIUSHANMEN 生产走查): PO-20260830-0004 的「原材料明细」表
+// **原材料名称列整列空白**, 而同一屏下方「三价对比分析」里同一个物料显示得好好的
+// (`13.9kg海天草菇老抽`)。
+//
+// ▎判据是「**同屏两处给出不同的数**」⇒ 不是数据缺失 (下方证明名字取得到),
+// ▎是这张表拿不到名字。
+//
+// 成因 (查过, 不是推的):
+//   · `purchase_order_items.material_name` 是一列**冗余快照** (建单时写入),
+//     这张 PO 上是空的 —— 建单那一侧没写。
+//   · 详情端点 `GET /purchase/orders/{id}` 直接返回 JPA 实体 PurchaseOrder,
+//     而 `PurchaseOrderItem.materialType` 上有 `@JsonIgnore` ⇒ 响应里**只有**
+//     `materialTypeId`, 没有任何名字。
+//   · 三价对比走的是另一个端点, 返回 MaterialPriceComparisonDTO, 它自己
+//     关联 RawMaterialType 取到了名字 —— 所以同屏两处不一样。
+//
+// 修法: 用物料档案 (`raw-material-types/active`, 全仓通用的那个端点) 做**回退**。
+// ⚠️ 语义差别如实记一笔: 回退拿到的是**档案当前名**, 而 material_name 是**下单时
+//    的快照名**。物料改过名的话两者会不同 ⇒ 所以是 `materialName ||` 回退,
+//    快照有值时**优先用快照**, ⛔ 不要反过来。
+// ⚠️ 根治仍在后端 (建单写入 material_name, 或详情端点补投影); 这里只是让操作者
+//    现在就能看见名字, ⛔ 不是说后端那半不用做了。
+const materialNameById = ref<Record<string, string>>({});
+
+async function loadMaterialCatalog() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<TableRow[] | { content?: TableRow[] }>(
+      `/${factoryId.value}/raw-material-types/active`,
+      { _silent: true } as never,
+    );
+    const data = res?.data as TableRow[] | { content?: TableRow[] } | undefined;
+    const rows: TableRow[] = Array.isArray(data) ? data : (data?.content ?? []);
+    const map: Record<string, string> = {};
+    for (const row of rows) {
+      if (row?.id != null && row?.name) map[String(row.id)] = String(row.name);
+    }
+    materialNameById.value = map;
+  } catch {
+    // 拿不到档案就维持现状 (显示 '-'), ⛔ 不编一个名字出来
+  }
+}
+
+/** 明细行的原料名: 下单快照优先, 其次物料档案当前名, 都没有才是 '-'。 */
+function itemMaterialName(row: TableRow): string {
+  const snapshot = row?.materialName ? String(row.materialName) : '';
+  if (snapshot) return snapshot;
+  const id = row?.materialTypeId;
+  if (id != null && materialNameById.value[String(id)]) return materialNameById.value[String(id)];
+  return '-';
+}
+
 onMounted(() => {
   loadOrder();
   loadApprovalProgress();
+  loadMaterialCatalog();
   // owner 2026-08-20: 三价对比「这个事还是蛮重要的, 如果价格有误差…」——
   // 默认展开, 所以数据要在挂载时就拉, 不能再等 collapse 的 @change 事件。
   // 仍然受 canViewPrice 约束: 没有看价权限的人整块 collapse 都不渲染。
@@ -454,7 +542,11 @@ async function handleDownloadSupplyOrderPdf() {
 
         <div class="section-heading finance-heading">
           <h3>采购履约与财务状态（只读）</h3>
-          <el-button plain @click="goFinanceDetails">查看财务详情</el-button>
+          <!-- 缺陷 9: 没有 finance 可达权限的角色 (采购主管) 隐藏这个入口 ——
+               对他们它是死链。⛔ 不删按钮: 有 finance 权限的角色仍然要能用。
+               ⚠️ 下面这块摘要区**本身不隐藏** —— owner 定的是「共享的数据就在
+               这个 PO 详情里反馈」, 采购应当看到履约与财务状态。 -->
+          <el-button v-if="canReachFinanceDetails" plain @click="goFinanceDetails">查看财务详情</el-button>
         </div>
         <!-- 🔴 2026-08-20 实测: 这一块 8 个字段里, 后端详情接口 `GET /purchase/orders/{id}`
              只下发 `invoiceStatus` 一个。该接口返回的是 JPA 实体 `PurchaseOrder` 本身
@@ -489,7 +581,11 @@ async function handleDownloadSupplyOrderPdf() {
         <h3 style="margin: 20px 0 12px">{{ label('rawMaterial') }}明细</h3>
         <!-- T3-6 fix (issue #523): widen 规格 + 原料名称 columns + scroll-x fallback to prevent 字段挤压 / tooltip overlay 盖住邻列. -->
         <el-table :data="order.items || []" border stripe style="width: 100%" :scrollbar-always-on="true">
-          <el-table-column prop="materialName" :label="label('rawMaterial')" min-width="180" show-overflow-tooltip />
+          <!-- 缺陷 10: 原来是纯 `prop="materialName"`, 而这张 PO 上那一列是空的
+               ⇒ 整列空白。改走 itemMaterialName (快照优先 → 档案回退), 理由见上。 -->
+          <el-table-column prop="materialName" :label="label('rawMaterial')" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ itemMaterialName(row) }}</template>
+          </el-table-column>
           <!-- owner 2026-08-20: 「每个原料都应该有自己的规格, 规格里说清 kg 怎么换算成
                箱/件, 不需要两列, **以规格为主**」⇒ 原来的「箱数」列已去掉。
                ⚠️ `specification` 是 purchase_order_items 上的**真实列** (length=200),
@@ -597,7 +693,10 @@ async function handleDownloadSupplyOrderPdf() {
              那会把「本单一次没收」显示成「这个原料从来没收过货」, 正好是最误导财务的读数。 -->
         <div class="section-heading">
           <h3>{{ label('rawMaterial') }}历史{{ label('receive') }}记录</h3>
-          <el-button type="primary" plain @click="goWarehouseReceive">前往仓储收货任务</el-button>
+          <!-- 缺陷 9: 同上 —— 没有 warehouse 可达权限的角色隐藏这个入口。
+               ⛔ 不删: 台账 BUG-F006-PURCHASE-WAREHOUSE-RECEIVING-BOUNDARY-001
+               要求仓储角色从这里跳去收货工作台。 -->
+          <el-button v-if="canReachWarehouseReceiving" type="primary" plain @click="goWarehouseReceive">前往仓储收货任务</el-button>
         </div>
         <el-empty
           description="该原料的历史收货记录尚未接入 —— 后端还没有「按原料查历史收货」的接口。在补上之前这里不显示任何数据，以免与本单收货记录混淆。"

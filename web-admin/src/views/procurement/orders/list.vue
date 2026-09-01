@@ -326,6 +326,27 @@ const filteredSuppliers = supplierFilter.filtered;
 const materials = ref<TableRow[]>([]);
 const salesOrders = ref<TableRow[]>([]);
 const supplierMaterialRelations = ref<SupplierMaterialRelation[]>([]);
+// 缺陷 13 第二处 (2026-09-01): 同一页的**供应商**下拉 2026-08-20 就有拼音搜索了,
+// 而它旁边的**原料**下拉没有 —— 同一个表单里两个下拉搜索能力不一致。
+// 请购单那处 (CreateRequisitionDialog) 修的是同一条, 那边的完整理由写在那个文件里。
+// ⛔ 不只修被 owner 点到的那一处 (本仓「改共享结构前先数, 改完再数」)。
+// ⚠️ 匹配文本取**原料名 + 供应商料号**: 下拉 label 本来就是这两段拼的,
+//    只喂原料名会让「按料号搜」这个既有能力反而变弱。
+const materialRelationFilter = usePinyinFilter(
+  () => supplierMaterialRelations.value,
+  (r) => [r.materialName, r.supplierMaterialCode],
+);
+const handleMaterialRelationFilter = materialRelationFilter.handleFilter;
+const handleMaterialRelationVisibleChange = materialRelationFilter.handleVisibleChange;
+const filteredMaterialRelations = materialRelationFilter.filtered;
+// 空态文案挂 no-data-text (理由同 CreateRequisitionDialog: filter-method 自己过滤
+// v-for 时 options.size 归零, element-plus 走 noDataText 那一支, noMatchText 到不了)。
+const materialRelationEmptyText = computed(() => {
+  if (!form.value.supplierId) return '请先选择供应商';
+  return materialRelationFilter.query.value.trim()
+    ? '没找到 —— 试试原料名关键字或拼音首字母; 也确认该原料已配到这家供应商名下'
+    : '这家供应商名下还没有配任何原料 —— 请先在供应商详情的「供应原料」里维护';
+});
 const purchaseSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
 const materialSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
 
@@ -1527,16 +1548,22 @@ function handleAiFill(params: TableRow) {
           <span style="width: 60px">操作</span>
         </div>
         <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
+          <!-- 缺陷 13 第二处: 拼音/首字母搜索 (与本页供应商下拉口径一致)。
+               filter-method 关掉内建过滤 ⇒ v-for 走 filteredMaterialRelations。 -->
           <el-select
             v-model="item.supplierMaterialId"
-            placeholder="选择该供应商的原料"
+            placeholder="选择该供应商的原料 (支持拼音)"
             filterable
+            :filter-method="handleMaterialRelationFilter"
+            :no-data-text="materialRelationEmptyText"
+            :no-match-text="materialRelationEmptyText"
             :disabled="!form.supplierId"
             style="width: 210px"
             @change="onSupplierMaterialChange(item)"
+            @visible-change="handleMaterialRelationVisibleChange"
           >
             <el-option
-              v-for="relation in supplierMaterialRelations"
+              v-for="relation in filteredMaterialRelations"
               :key="relation.id"
               :label="`${relation.materialName}${relation.supplierMaterialCode ? ` · ${relation.supplierMaterialCode}` : ''}`"
               :value="relation.id"
