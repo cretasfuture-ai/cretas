@@ -288,6 +288,10 @@
 
 **在飞 1**：#497 断言修 → CI → 合 → 部署 18 → 通知工艺 chat rebase 配比（迁移 `_25`）。**待 owner 醒后**：配比 PR 在工艺 chat 说「开 PR」；46 的 `warehouse_worker` 同获写权限要不要收成角色门；单位不一致 INFO 提示。
 
+### 📌 2026-09-02 06:40 增量 · 部署 18（47 自备料）核验通过, 合并 66, 在飞 0
+
+**部署 18** 06:35:38 green（#497，`FactoryMaterialRequisitionServiceImpl.isEffectivelySelfSupplied` 0→1、48 仍 2、假串 0；`flyway_schema_history 20261101.24 success=t 06:35:46`；两张表 `self_supplied` 列都在；LIUSHANMEN 已勾 0；web `list-BPERIKjL`/`index-CS_YlESX` 含「自备料」经 `index-BwIJqWiw` 挂主入口）✅。#497 的 CI 红修法：`pendingRequiredQty.source.spec.ts` 改成括号计数提取 + 性质断言（含三种「没填」、不含三种「把 0 当没填」）+ 三个合成坏 fixture 阴性 + 真 `list.vue` 变异红绿；`list.vue` 字节不变。**生产 = main = `c3d59bbf93`，无积压，在飞 0。** 交接件 `2026-09-02-ORGANIZER-HANDOFF.md` 已订正为 06:40 版。工艺 chat 已收到 47 合入通知，在 rebase 配比（`_25`），等 owner 在它 session 说「开 PR」。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。

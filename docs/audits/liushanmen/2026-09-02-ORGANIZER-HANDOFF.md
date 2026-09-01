@@ -1,4 +1,4 @@
-# 2026-09-02 06:30 · LIUSHANMEN 走查线 organizer 交接件
+# 2026-09-02 06:40 · LIUSHANMEN 走查线 organizer 交接件
 
 **接手人**：读完本件后 `Skill(organizer)`；权威状态在 `docs/dispatch/ACTIVE.md`（本件只是索引）。上一份交接件：`2026-09-01-ORGANIZER-HANDOFF.md`（22:00 接手时的状态）。
 **owner 状态**：04:5x 去睡；**今早给客户演示**。演示 6 屏全部落在已验证读数上（f006 讲稿 `2026-09-02-DEMO-SCRIPT.md`）。
@@ -11,8 +11,8 @@
 
 | | |
 |---|---|
-| main / prod | `2bcdb55dd1`（部署 17，06:20:03 blue）+ web `8dcaf7bda1`（部署 16，06:01） |
-| **未部署** | **#497 缺陷 47「自备料」**——终审已通过，CI vitest 差一条源码闸断言（守字面）在改；合了发 18 |
+| main / prod | `c3d59bbf93`（部署 18，06:35:38 green，含迁移 `20261101.24` success=t）|
+| **未部署** | 无。**66 合入 / 18 次部署全部核验**。#497（47 自备料）06:35 上线，LIUSHANMEN 尚无一行勾选 ⇒ 上线当刻零行为变化 |
 | 唯一真客户租户 | LIUSHANMEN（六膳门）；MOCK_REST 是唯一验收租户 |
 
 ## 早上 owner 醒来后按序做（f006 `f006-handoff-closure-cbcccc-8d` 已收到同一清单）
@@ -21,7 +21,7 @@
 2. `PLAN-1788280683352-34F8CD82` 结单弹窗：**不再**报「1399上脑 要求 5900 已报 100 / 50CL 要求 3000 已报 0」；批次显示 `批次号 · 物料名`；库存参考显示「主仓 40 · 生产仓 10」分布。
 3. 阴性对照（不写库）：手加一条**清单外**客供批次 ⇒ 被拦「本批使用了客供清单之外的料」。
 4. 真结单 → 核 `CMR-20260831-753973766C24` 5900 → 5800。
-5. #497 上线后：物料档案给 **冰水** 勾「自备料」，**已生成的领料单不必重建**。
+5. 物料字典给 **冰水** 勾「自备料（现场取用，不计库存）」，**已生成的领料单不必重建**（活值 OR 快照）。⚠️ 别勾错真实物料：误勾后生成的单会把 true 定格进快照，取消勾选不改那批老单。
 
 ## 需要 owner 亲口定的（都不阻塞演示）
 
@@ -44,6 +44,6 @@
 ## 怎么续
 
 ```
-Skill(organizer) → 读 docs/dispatch/ACTIVE.md 最新增量 → gh pr view 497 → 落地即合并、从 cretas-deploy-20260901 发 18 → 通知工艺 chat rebase
+Skill(organizer) → 读 docs/dispatch/ACTIVE.md 最新增量 → 等工艺 chat 的配比 PR（owner 说「开 PR」后）→ 送终审 subagent → 合前 FlywayVersionUniquenessTest（迁移 _25）→ 从 cretas-deploy-20260901 发 19
 ```
 终审 subagent（Opus）今晚共判 6 次：#478 ✅ #496 ✅（两轮）#497 ✅（两轮）#443 ❌。执行者一律 Sonnet worktree，PR-and-stop，我核 CI + diff 再合。
