@@ -155,8 +155,7 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
         // 🔒 见 SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY 的裁定说明 (缺陷 21)。
         //    ⚠️ 这两处是同一条口径的两个承载点, ⛔ 不要只改一处。
         spec.setCurrency(SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY);
-        spec.setMinOrderQuantity(request.getMinOrderQuantity());
-        spec.setLeadTimeDays(request.getLeadTimeDays());
+        // 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格移除 —— 见实体注释。
         if (request.getDefaultSpec() != null) spec.setDefaultSpec(request.getDefaultSpec());
         else if (spec.getDefaultSpec() == null) spec.setDefaultSpec(false);
         if (request.getActive() != null) spec.setActive(request.getActive());
@@ -207,7 +206,7 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
                 .inventoryBaseUnit(s.getInventoryBaseUnit()).factor(s.getConversionFactor()).quotedPrice(s.getQuotedPrice())
                 .taxIncludedQuotedPrice(s.getTaxIncludedQuotedPrice())
                 .quotedPriceUnit(s.getPurchasePackageUnit())
-                .currency(s.getCurrency()).minOrderQuantity(s.getMinOrderQuantity()).leadTimeDays(s.getLeadTimeDays())
+                .currency(s.getCurrency())
                 .defaultSpec(s.getDefaultSpec()).active(s.getActive()).version(s.getVersion()).build();
     }
 }

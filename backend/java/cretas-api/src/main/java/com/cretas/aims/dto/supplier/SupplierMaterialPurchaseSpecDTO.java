@@ -36,8 +36,7 @@ public class SupplierMaterialPurchaseSpecDTO {
     /** {@code SUPPLIER_RELATION_SAME_UNIT} / {@code SUPPLIER_RELATION_CONVERTED}; 未推导时为 null。 */
     private String derivedPriceSource;
     private String currency;
-    private BigDecimal minOrderQuantity;
-    private Integer leadTimeDays;
+    // 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格 DTO 移除 —— 见实体注释。
     private Boolean defaultSpec;
     private Boolean active;
     private Long version;

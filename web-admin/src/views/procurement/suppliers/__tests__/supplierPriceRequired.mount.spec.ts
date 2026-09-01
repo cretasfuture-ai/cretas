@@ -179,9 +179,10 @@ type Vm = {
   inlineSpecForm: Record<string, unknown>;
   saveRelation: () => Promise<void>;
   openRelationCreate: () => Promise<void>;
+  // 🔒 缺陷 16: openSpecManager 已删 —— 两个弹窗合一之后, openRelationEdit 同时
+  // 服务"编辑关系"和"查看/管理它的采购规格", 见 SupplierDetailDrawer.vue。
   openRelationEdit: (row: unknown) => Promise<void>;
   materialOptions: Array<unknown>;
-  openSpecManager: (row: unknown) => Promise<void>;
   editPurchaseSpec: (row: unknown) => void;
   savePurchaseSpec: () => Promise<void>;
   showNewSpecForm: boolean;
@@ -316,7 +317,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     const wrapper = await openDrawer();
     const vm = wrapper.vm as unknown as Vm;
 
-    await vm.openSpecManager(RELATION);
+    await vm.openRelationEdit(RELATION);
     vm.showNewSpecForm = true;
     Object.assign(vm.specForm, {
       name: '20kg/袋', purchasePackageUnit: 'bag', factor: 20, taxIncludedQuotedPrice: null,
@@ -335,7 +336,7 @@ describe('缺陷 17: 供应原料关系 / 采购规格的价格', () => {
     const wrapper = await openDrawer();
     const vm = wrapper.vm as unknown as Vm;
 
-    await vm.openSpecManager(RELATION);
+    await vm.openRelationEdit(RELATION);
     vm.editPurchaseSpec(SPEC);
     vm.specForm.active = false;                 // 只改启用状态
     expect(vm.specForm.taxIncludedQuotedPrice).toBeNull();  // 含税报价仍是空的

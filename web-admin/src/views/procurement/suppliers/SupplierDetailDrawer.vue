@@ -151,10 +151,15 @@
                 </el-tag>
               </template>
             </el-table-column>
+            <!-- 🔒 缺陷 16: 「采购规格」/「编辑」两个按钮 -> 一个动作。
+                 单一按钮永远可点(不带 canWrite/isActive 门槛), 因为「查看」这个能力
+                 之前挂在「采购规格」按钮上、不受写权限/停用状态限制 —— 合并后必须继续保留。
+                 可写与否只改按钮文案和弹窗内部能不能动, 不改按钮是否出现。 -->
             <el-table-column label="操作" width="210" fixed="right">
               <template #default="{ row }">
-                <el-button type="primary" link @click="openSpecManager(row)">采购规格</el-button>
-                <el-button v-if="canWrite && isActive" type="primary" link @click="openRelationEdit(row)">编辑</el-button>
+                <el-button type="primary" link @click="openRelationEdit(row)">
+                  {{ canWrite && isActive ? '编辑' : '查看' }}
+                </el-button>
                 <el-button v-if="canWrite && isActive && row.active !== false" type="warning" link @click="removeRelation(row)">停用</el-button>
               </template>
             </el-table-column>
@@ -192,16 +197,22 @@
         </el-tab-pane>
       </el-tabs>
     </template>
+    <!-- 🔒 缺陷 16: 新增/编辑现在是同一个弹窗形状 —— 关系表单 + 采购规格管理合在一起,
+         ⛔ 不再拆成「关系」「采购规格」两个 el-dialog。
+         新增: 关系还不存在, 只给「顺手新增一个采购规格」的轻量入口(原样保留)。
+         编辑/查看: 关系表单之后紧跟完整的规格列表管理器(原 specDialogVisible 的内容原样搬进来)。
+         `relationWritable` 统一控制"能不能改"; 查看态下相同表单以只读(disabled)呈现,
+         ⛔ 不是新做一套 el-descriptions —— 复用同一批 v-model, 避免两份口径漂移。 -->
     <el-dialog
       v-model="relationDialogVisible"
-      :title="relationEditingId ? '编辑供应原料关系' : '新增供应原料关系'"
-      width="620px"
+      :title="relationDialogTitle"
+      width="760px"
       append-to-body
       :close-on-click-modal="false"
     >
       <el-form label-width="120px">
         <el-form-item label="物料" required>
-          <el-select v-model="relationForm.materialTypeId" filterable :disabled="Boolean(relationEditingId)" style="width: 100%" @change="onRelationMaterialChange">
+          <el-select v-model="relationForm.materialTypeId" filterable :disabled="Boolean(relationEditingId) || !relationWritable" style="width: 100%" @change="onRelationMaterialChange">
             <el-option
               v-for="material in materialOptions"
               :key="material.id"
@@ -210,7 +221,7 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" /></el-form-item>
+        <el-form-item label="供应商料号"><el-input v-model="relationForm.supplierMaterialCode" maxlength="100" :disabled="!relationWritable" /></el-form-item>
         <el-form-item label="采购单位" required>
           <UnitSelect
             v-model="relationForm.purchaseUnit"
@@ -218,6 +229,7 @@
             :options="relationPurchaseUnitOptions"
             usage-scope="PURCHASE_QUANTITY"
             placeholder="请选择采购单位"
+            :disabled="!relationWritable"
           />
           <el-alert
             v-if="relationUnitReason"
@@ -233,7 +245,7 @@
              ⚠️ :218 原本【一个基准都没说】—— 用户填 50, 系统不知道那是含税还是未税,
              而它会一路流到采购单和入库批次。现在标题就把基准说清楚。 -->
         <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）` : `含税默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
-          <el-input-number v-model="relationForm.taxIncludedDefaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
+          <el-input-number v-model="relationForm.taxIncludedDefaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" :disabled="!relationWritable" />
           <!-- 形态 B⁵ 第二次打在同一句 hint 上: 缺陷 17 改过一次(价格从选填变必填),
                owner 2026-09-02 改判 A(一律必填、存量也要补)之后又得改一次。
                ⛔ 删掉一条承诺就要在同一个 commit 里删掉它的描述 —— 过期的描述比没有描述更糟,
@@ -260,11 +272,13 @@
           ⚠️ 这条关系是在「含税/未税」区分之前录入的，存量价格 {{ relationForm.defaultPurchasePrice }} 的基准未知。
           填写含税价即可确认；在此之前它不会被用来自动带价。
         </div>
-        <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
-        <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
-        <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" /></el-form-item>
-        <el-form-item label="关系启用"><el-switch v-model="relationForm.active" /></el-form-item>
+        <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" :disabled="!relationWritable" /></el-form-item>
+        <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" :disabled="!relationWritable" /></el-form-item>
+        <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" :disabled="!relationWritable" /></el-form-item>
+        <el-form-item label="关系启用"><el-switch v-model="relationForm.active" :disabled="!relationWritable" /></el-form-item>
       </el-form>
+
+      <!-- 新增: 关系还不存在, 规格只给"顺手加一个"的轻量入口。 -->
       <template v-if="!relationEditingId">
         <el-divider><span class="inline-spec-divider">采购规格（选填，不填按 {{ displayUnit(relationForm.purchaseUnit) || '库存基本单位' }} 直采）</span></el-divider>
         <div v-if="!inlineSpecEnabled" class="inline-spec-toggle">
@@ -293,86 +307,82 @@
           </div>
         </template>
       </template>
-      <template #footer>
-        <el-button @click="relationDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="relationSaving" @click="saveRelation">保存</el-button>
-      </template>
-    </el-dialog>
-    <el-dialog
-      v-model="specDialogVisible"
-      title="采购规格"
-      width="760px"
-      append-to-body
-      :close-on-click-modal="false"
-    >
-      <el-alert
-        :closable="false"
-        type="info"
-        show-icon
-        :title="`${specRelation?.materialName || '当前物料'} · 库存基本单位 ${displayUnit(specRelation?.baseUnit)}`"
-        description="采购订单选择规格后按包装数量下单，系统按换算系数折合库存基本单位；换算系数由后端快照锁定。"
-        style="margin-bottom: 12px"
-      />
-      <el-table :data="purchaseSpecs" border stripe empty-text="暂无采购规格；采购订单将按库存基本单位直采">
-        <el-table-column prop="name" label="规格名称" min-width="130" />
-        <el-table-column label="采购包装单位" width="120"><template #default="{ row }">{{ displayUnit(row.purchasePackageUnit) }}</template></el-table-column>
-        <el-table-column label="换算" min-width="150"><template #default="{ row }">1 {{ displayUnit(row.purchasePackageUnit) }} = {{ row.factor }} {{ displayUnit(row.inventoryBaseUnit) }}</template></el-table-column>
-        <!-- 缺陷 35 第二处: 与上面那一列同一个形状(列头无口径 / 值是未税)。
-             ⚠️ 只修关系那一列就又是「改共享结构只改了一部分」—— 这次一起改。 -->
-        <el-table-column label="含税报价" width="165">
-          <template #default="{ row }">
-            <span v-if="row.taxIncludedQuotedPrice != null">
-              {{ row.currency || 'CNY' }} {{ Number(row.taxIncludedQuotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
-            </span>
-            <el-tooltip v-else-if="row.quotedPrice != null" placement="top"
-                        content="该规格的报价是在「含税/未税」区分之前录入的，无法确定口径；编辑并填写含税报价即可确认。">
-              <span class="price-basis-unknown">
-                {{ row.currency || 'CNY' }} {{ Number(row.quotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
-                · 基准未知
+
+      <!-- 编辑/查看: 已有关系, 展示完整的采购规格列表 + 增改停用(原 specDialogVisible 内容)。 -->
+      <template v-else>
+        <el-divider>采购规格</el-divider>
+        <el-alert
+          :closable="false"
+          type="info"
+          show-icon
+          :title="`${specRelation?.materialName || '当前物料'} · 库存基本单位 ${displayUnit(specRelation?.baseUnit)}`"
+          description="采购订单选择规格后按包装数量下单，系统按换算系数折合库存基本单位；换算系数由后端快照锁定。"
+          style="margin-bottom: 12px"
+        />
+        <el-table :data="purchaseSpecs" border stripe empty-text="暂无采购规格；采购订单将按库存基本单位直采">
+          <el-table-column prop="name" label="规格名称" min-width="130" />
+          <el-table-column label="采购包装单位" width="120"><template #default="{ row }">{{ displayUnit(row.purchasePackageUnit) }}</template></el-table-column>
+          <el-table-column label="换算" min-width="150"><template #default="{ row }">1 {{ displayUnit(row.purchasePackageUnit) }} = {{ row.factor }} {{ displayUnit(row.inventoryBaseUnit) }}</template></el-table-column>
+          <!-- 缺陷 35 第二处: 与上面那一列同一个形状(列头无口径 / 值是未税)。
+               ⚠️ 只修关系那一列就又是「改共享结构只改了一部分」—— 这次一起改。 -->
+          <el-table-column label="含税报价" width="165">
+            <template #default="{ row }">
+              <span v-if="row.taxIncludedQuotedPrice != null">
+                {{ row.currency || 'CNY' }} {{ Number(row.taxIncludedQuotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
               </span>
-            </el-tooltip>
-            <span v-else>-</span>
+              <el-tooltip v-else-if="row.quotedPrice != null" placement="top"
+                          content="该规格的报价是在「含税/未税」区分之前录入的，无法确定口径；编辑并填写含税报价即可确认。">
+                <span class="price-basis-unknown">
+                  {{ row.currency || 'CNY' }} {{ Number(row.quotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
+                  · 基准未知
+                </span>
+              </el-tooltip>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.active === false ? 'info' : 'success'">{{ row.active === false ? '停用' : row.defaultSpec ? '默认' : '启用' }}</el-tag></template></el-table-column>
+          <el-table-column v-if="relationWritable" label="操作" width="130">
+            <template #default="{ row }">
+              <el-button type="primary" link @click="editPurchaseSpec(row)">编辑</el-button>
+              <el-button v-if="row.active !== false" type="warning" link @click="removePurchaseSpec(row)">停用</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <template v-if="relationWritable">
+          <div v-if="!specEditingId && !showNewSpecForm" class="spec-add-toggle">
+            <el-button type="primary" plain @click="showNewSpecForm = true">+ 新增规格</el-button>
+          </div>
+          <template v-else>
+            <el-divider>{{ specEditingId ? '编辑规格' : '新增规格' }}</el-divider>
+            <el-form label-width="125px" :model="specForm">
+              <el-form-item label="规格名称" required><el-input v-model="specForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
+              <el-form-item label="采购包装单位" required>
+                <UnitSelect v-model="specForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE_QUANTITY" />
+              </el-form-item>
+              <el-form-item label="换算系数" required>
+                <el-input-number v-model="specForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
+                <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
+              </el-form-item>
+              <el-form-item :label="isExemptMaterial(specMaterial) ? `免税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.taxIncludedQuotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
+              <el-form-item v-if="specDerivedUntaxed != null" :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`">
+                <el-input :model-value="specDerivedUntaxed.toFixed(4)" disabled style="width: 220px" />
+                <span class="field-hint">{{ isExemptMaterial(specMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算' }}</span>
+              </el-form-item>
+              <el-form-item label="默认规格"><el-switch v-model="specForm.defaultSpec" /></el-form-item>
+              <el-form-item label="启用"><el-switch v-model="specForm.active" /></el-form-item>
+              <el-form-item>
+                <el-button v-if="specEditingId" @click="resetSpecForm">取消编辑</el-button>
+                <el-button v-else @click="showNewSpecForm = false; resetSpecForm()">收起</el-button>
+                <el-button type="primary" :loading="specSaving" @click="savePurchaseSpec">{{ specEditingId ? '保存规格' : '新增规格' }}</el-button>
+              </el-form-item>
+            </el-form>
           </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.active === false ? 'info' : 'success'">{{ row.active === false ? '停用' : row.defaultSpec ? '默认' : '启用' }}</el-tag></template></el-table-column>
-        <el-table-column v-if="canWrite && isActive" label="操作" width="130">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="editPurchaseSpec(row)">编辑</el-button>
-            <el-button v-if="row.active !== false" type="warning" link @click="removePurchaseSpec(row)">停用</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <template v-if="canWrite && isActive">
-        <div v-if="!specEditingId && !showNewSpecForm" class="spec-add-toggle">
-          <el-button type="primary" plain @click="showNewSpecForm = true">+ 新增规格</el-button>
-        </div>
-        <template v-else>
-          <el-divider>{{ specEditingId ? '编辑规格' : '新增规格' }}</el-divider>
-          <el-form label-width="125px" :model="specForm">
-            <el-form-item label="规格名称" required><el-input v-model="specForm.name" maxlength="100" placeholder="例如 10kg/箱" /></el-form-item>
-            <el-form-item label="采购包装单位" required>
-              <UnitSelect v-model="specForm.purchasePackageUnit" :factory-id="factoryId" usage-scope="PURCHASE_QUANTITY" />
-            </el-form-item>
-            <el-form-item label="换算系数" required>
-              <el-input-number v-model="specForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
-              <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
-            </el-form-item>
-            <el-form-item :label="isExemptMaterial(specMaterial) ? `免税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.taxIncludedQuotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
-            <el-form-item v-if="specDerivedUntaxed != null" :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`">
-              <el-input :model-value="specDerivedUntaxed.toFixed(4)" disabled style="width: 220px" />
-              <span class="field-hint">{{ isExemptMaterial(specMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算' }}</span>
-            </el-form-item>
-            <el-form-item label="最小起订量"><el-input-number v-model="specForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 220px" /></el-form-item>
-            <el-form-item label="交期（天）"><el-input-number v-model="specForm.leadTimeDays" :min="0" :precision="0" style="width: 220px" /></el-form-item>
-            <el-form-item label="默认规格"><el-switch v-model="specForm.defaultSpec" /></el-form-item>
-            <el-form-item label="启用"><el-switch v-model="specForm.active" /></el-form-item>
-            <el-form-item>
-              <el-button v-if="specEditingId" @click="resetSpecForm">取消编辑</el-button>
-              <el-button v-else @click="showNewSpecForm = false; resetSpecForm()">收起</el-button>
-              <el-button type="primary" :loading="specSaving" @click="savePurchaseSpec">{{ specEditingId ? '保存规格' : '新增规格' }}</el-button>
-            </el-form-item>
-          </el-form>
         </template>
+      </template>
+
+      <template #footer>
+        <el-button @click="relationDialogVisible = false">{{ relationWritable ? '取消' : '关闭' }}</el-button>
+        <el-button v-if="relationWritable" type="primary" :loading="relationSaving" @click="saveRelation">保存</el-button>
       </template>
     </el-dialog>
   </el-drawer>
@@ -449,15 +459,17 @@ const inlineSpecEnabled = ref(false);
 const inlineSpecForm = reactive<{ name: string; purchasePackageUnit: string; factor: number; quotedPrice: number | null; taxIncludedQuotedPrice: number | null }>({
   name: '', purchasePackageUnit: '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null,
 });
-const specDialogVisible = ref(false);
+// 🔒 缺陷 16: 采购规格管理不再有独立弹窗(specDialogVisible 已删) —— 现在合在
+//    relationDialogVisible 里, 编辑/查看态下随关系表单一起展示。
 const specRelation = ref<SupplierMaterialRelation | null>(null);
 const purchaseSpecs = ref<SupplierPurchaseSpec[]>([]);
 const specEditingId = ref('');
 const specSaving = ref(false);
 const showNewSpecForm = ref(false);
+// 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格表单移除 —— 见 supplierManagement.ts 注释。
 const specForm = reactive<SupplierPurchaseSpecPayload>({
   name: '', purchasePackageUnit: '', inventoryBaseUnit: '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null, currency: 'CNY',
-  minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true,
+  defaultSpec: false, active: true,
 });
 const formRef = ref<FormInstance>();
 const originalForm = ref('');
@@ -467,6 +479,17 @@ const form = reactive<SupplierSavePayload>({
 
 const isActive = computed(() => detail.value ? supplierStatus(detail.value) === 'ACTIVE' : false);
 const relationMaterial = computed(() => materialOptions.value.find((row) => row.id === relationForm.materialTypeId));
+
+/**
+ * 🔒 缺陷 16: 合并弹窗之后，同一个表单形状既要给"编辑"用也要给"查看"用。
+ * 新增永远可写；编辑仅在 canWrite && isActive 时可写，否则整份表单以只读呈现。
+ * ⚠️ 单一按钮（"编辑"/"查看"）不再靠 v-if 隐藏入口，靠这个 computed 控制"能不能改"。
+ */
+const relationWritable = computed(() => !relationEditingId.value || (props.canWrite && isActive.value));
+const relationDialogTitle = computed(() => {
+  if (!relationEditingId.value) return '新增供应原料关系';
+  return relationWritable.value ? '编辑供应原料关系' : '查看供应原料关系';
+});
 
 /* ═══════════ 19②: 含税录入 / 未税派生 ═══════════
  *
@@ -714,8 +737,15 @@ function onRelationMaterialChange(materialTypeId: string): void {
   relationForm.purchaseUnit = resolution.defaultUnit;
 }
 
+/**
+ * 🔒 缺陷 16: 两个入口合一 —— 这个函数现在既服务"编辑"也服务"查看"。
+ * ⚠️ 不再在这里挡 `!isActive`：以前"编辑"按钮本身就被 `v-if="canWrite && isActive"`
+ * 藏起来了, 这条早退是防御性的、从未真正被点到; 而旧的"采购规格"按钮**没有**这层门槛,
+ * 供应商暂停合作时仍然可以查看规格。合并成一个按钮之后, 这个能力必须保留 ——
+ * 门槛移到 `relationWritable`(只挡"能不能保存", 不挡"能不能看")。
+ */
 async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
-  if (!isActive.value) return void ElMessage.warning('供应商已暂停合作，不能修改供应原料关系');
+  if (!detail.value) return;
   await ensureMaterialOptions();
   relationEditingId.value = row.id;
   Object.assign(relationForm, {
@@ -736,6 +766,12 @@ async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
   // 编辑: 记下打开时的价格。用户没动它就不拦 —— 存量空价格的关系仍然可以改别的字段。
   inlineSpecEnabled.value = false;
   resetInlineSpecForm();
+  // 缺陷 16: 两个弹窗合一之后, 这里顺带做以前 openSpecManager() 做的事 ——
+  // 不然编辑/查看弹窗里的采购规格列表会是空的。
+  specRelation.value = row;
+  purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, row.id);
+  showNewSpecForm.value = false;
+  resetSpecForm();
   relationDialogVisible.value = true;
 }
 
@@ -784,6 +820,8 @@ async function saveRelation(): Promise<void> {
       savedRelation = await createSupplierMaterial(props.factoryId, detail.value.id, payload);
     }
     if (wantsInlineSpec) {
+      // 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格 payload 移除 ——
+      // 起订量/交期只在供应关系层(payload 之上的 relationForm)录入一次。
       const specPayload: SupplierPurchaseSpecPayload = {
         name: inlineSpecForm.name.trim(),
         purchasePackageUnit: inlineSpecForm.purchasePackageUnit,
@@ -791,8 +829,6 @@ async function saveRelation(): Promise<void> {
         factor: Number(inlineSpecForm.factor),
         taxIncludedQuotedPrice: inlineSpecForm.taxIncludedQuotedPrice,
         currency: payload.currency,
-        minOrderQuantity: null,
-        leadTimeDays: null,
         defaultSpec: true,
         active: true,
       };
@@ -815,26 +851,23 @@ async function removeRelation(row: SupplierMaterialRelation): Promise<void> {
   ElMessage.success('供应原料关系已停用');
 }
 
-async function openSpecManager(row: SupplierMaterialRelation): Promise<void> {
-  if (!detail.value) return;
-  specRelation.value = row;
-  purchaseSpecs.value = await listSupplierPurchaseSpecs(props.factoryId, detail.value.id, row.id);
-  showNewSpecForm.value = false;
-  resetSpecForm();
-  specDialogVisible.value = true;
-}
+// 🔒 缺陷 16: openSpecManager() 已删 —— 它做的事(加载规格列表 + 重置规格子表单 +
+// 打开弹窗)现在是 openRelationEdit() 的一部分, 两个入口合一之后不再需要独立函数。
+// 旧的 `vm.openSpecManager(row)` 调用点(测试)改调 `vm.openRelationEdit(row)`。
 
 function resetSpecForm(): void {
   specEditingId.value = '';
+  // 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格表单移除。
   Object.assign(specForm, {
     name: '', purchasePackageUnit: '', inventoryBaseUnit: specRelation.value?.baseUnit || '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null, currency: 'CNY',
-    minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true, version: undefined,
+    defaultSpec: false, active: true, version: undefined,
   });
 }
 
 function editPurchaseSpec(row: SupplierPurchaseSpec): void {
   showNewSpecForm.value = true;
   specEditingId.value = row.id;
+  // 🔒 缺陷 16 phase 1: minOrderQuantity/leadTimeDays 已从规格表单移除。
   Object.assign(specForm, {
     name: row.name,
     purchasePackageUnit: row.purchasePackageUnit,
@@ -842,10 +875,7 @@ function editPurchaseSpec(row: SupplierPurchaseSpec): void {
     factor: Number(row.factor),
     quotedPrice: row.quotedPrice ?? null,
     taxIncludedQuotedPrice: row.taxIncludedQuotedPrice ?? null,   // ⛔ 同样不反推
-
     currency: row.currency || 'CNY',
-    minOrderQuantity: row.minOrderQuantity ?? null,
-    leadTimeDays: row.leadTimeDays ?? null,
     defaultSpec: Boolean(row.defaultSpec),
     active: row.active !== false,
     version: row.version ?? undefined,
