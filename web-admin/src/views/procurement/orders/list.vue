@@ -57,6 +57,7 @@ import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit, pricingA
 import { enumLabel } from '@/utils/enumDisplay';
 // R-4 (2026-08-20，HANDOFF 台账): 供应商下拉支持拼音/首字母搜索 (bjfx / beijing / 北京 都要命中).
 import { usePinyinFilter } from '@/utils/pinyinSearch';
+import { resolveMaterialDropdownEmpty } from './materialDropdownEmptyState';
 import { canDownloadSupplyOrder, canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
 import { resolveSupplierMaterialRelations } from './purchaseOrderEditPrefill';
 import {
@@ -339,15 +340,58 @@ const materialRelationFilter = usePinyinFilter(
 const handleMaterialRelationFilter = materialRelationFilter.handleFilter;
 const handleMaterialRelationVisibleChange = materialRelationFilter.handleVisibleChange;
 const filteredMaterialRelations = materialRelationFilter.filtered;
-// 空态文案挂 no-data-text (理由同 CreateRequisitionDialog: filter-method 自己过滤
-// v-for 时 options.size 归零, element-plus 走 noDataText 那一支, noMatchText 到不了)。
-const materialRelationEmptyText = computed(() => {
-  if (!form.value.supplierId) return '请先选择供应商';
-  return materialRelationFilter.query.value.trim()
-    ? '没找到 —— 试试原料名关键字或拼音首字母; 也确认该原料已配到这家供应商名下'
-    : '这家供应商名下还没有配任何原料 —— 请先在供应商详情的「供应原料」里维护';
-});
+// 空态判定抽在 ./materialDropdownEmptyState —— 那里逐象限可测,
+// 尤其钉住「供应商零原料 + 有搜索词」不得再建议搜索(那是不可能成功的指令)。
+const materialRelationEmpty = computed(() => resolveMaterialDropdownEmpty({
+  hasSupplier: Boolean(form.value.supplierId),
+  // ⚠️ 传**全量**条数, ⛔ 不是 filteredMaterialRelations.length ——
+  //    后者在搜不到时也是 0, 会把两个象限重新塌成一个。
+  relationCount: supplierMaterialRelations.value.length,
+  query: materialRelationFilter.query.value,
+}));
+
 const purchaseSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
+
+/**
+ * 「去配置供应原料」——⛔ 刻意**不用** router.push。
+ *
+ * 本下拉在 `<el-dialog fullscreen destroy-on-close>` 里（见本文件 :1406）：
+ * 路由跳走会把用户填了一半的采购单**不可恢复**地丢掉。
+ * 拿一个「没指路」的缺陷换一个「丢数据」的缺陷，不划算。
+ *
+ * ⇒ 新标签页打开 + 回焦刷新，形状照 `SeasoningBindingDialog.vue:232-239`
+ * （仓里对「弹窗内去配置」这个**同一场景**的既有做法，⛔ 不新发明）。
+ *
+ * ⚠️ `keyword` 是给 `procurement/suppliers/list.vue` 的 `searchKeyword` 播种用的，
+ * 本次一并在那边加了读取 —— ⛔ 传一个目标页不读的参数，就是「产出端发了、消费端不读」，
+ * 链接看着能点、落地什么也没发生。
+ */
+function goConfigureSupplierMaterials(): void {
+  const supplierName = String(
+    suppliers.value.find((s) => String(s.id) === String(form.value.supplierId))?.name ?? '',
+  );
+  const target = router.resolve({
+    path: '/procurement/suppliers',
+    query: {
+      _returnTo: route.fullPath,
+      ...(supplierName ? { keyword: supplierName } : {}),
+    },
+  }).href;
+  window.open(target, '_blank', 'noopener');
+  // 用户配完切回本标签页时重拉供应关系 —— 否则他配好了回来, 下拉还是空的,
+  // 会以为「配了没用」。once: true 防止监听器堆积。
+  window.addEventListener('focus', refreshSupplierMaterialRelations, { once: true });
+}
+
+async function refreshSupplierMaterialRelations(): Promise<void> {
+  if (!factoryId.value || !form.value.supplierId) return;
+  supplierMaterialRelations.value = await resolveSupplierMaterialRelations(
+    factoryId.value,
+    form.value.supplierId,
+    listSupplierMaterials,
+  );
+}
+
 const materialSpecCache = ref<Record<string, SupplierPurchaseSpec[]>>({});
 
 function materialTaxRate(value: unknown): number | null {
@@ -1558,9 +1602,9 @@ function handleAiFill(params: TableRow) {
             placeholder="选择该供应商的原料 (支持拼音)"
             filterable
             :filter-method="handleMaterialRelationFilter"
-            :no-data-text="materialRelationEmptyText"
-            :no-match-text="materialRelationEmptyText"
+            :loading="dropdownsRefreshing"
             :disabled="!form.supplierId"
+            popper-class="material-relation-select-popper"
             style="width: 210px"
             @change="onSupplierMaterialChange(item)"
             @visible-change="handleMaterialRelationVisibleChange"
@@ -1571,6 +1615,39 @@ function handleAiFill(params: TableRow) {
               :label="`${relation.materialName}${relation.supplierMaterialCode ? ` · ${relation.supplierMaterialCode}` : ''}`"
               :value="relation.id"
             />
+            <!-- ⚠️ #loading 必须单独给: el-select 内部是「loading || 无选项 → 渲染 #empty」,
+                 不给的话加载中也会显示空态文案, 用户会截图「它说这家供应商没有原料」——
+                 而那家其实有一堆(见 ProcessDataTable.vue:3502 同形教训)。 -->
+            <template #loading>
+              <div class="material-relation-empty">正在加载该供应商的原料…</div>
+            </template>
+            <!-- 缺陷: 空态原来只能挂 no-data-text 字符串 ⇒ (a) 塞不下动作,
+                 (b) 210px 宽的下拉里被截断。改用 #empty 插槽自己控制 markup:
+                 换行 + 加宽 popper(见 <style> 里 .material-relation-select-popper)。
+                 ⛔ 不靠删字解决截断 —— 那是拿信息去迁就宽度。 -->
+            <template #empty>
+              <div class="material-relation-empty">
+                <p class="material-relation-empty__text">{{ materialRelationEmpty.text }}</p>
+                <p
+                  v-if="materialRelationEmpty.suggestSearchTips"
+                  class="material-relation-empty__hint"
+                >
+                  换个原料名关键字或拼音首字母试试（如 老抽 / laochou / lc）
+                </p>
+                <!-- ⛔ 不用 router.push: 本下拉在 fullscreen + destroy-on-close 的弹窗里,
+                     跳走会把填了一半的采购单不可恢复地丢掉。
+                     新标签页打开 + 回焦刷新, 形状照 SeasoningBindingDialog.vue:232-239。 -->
+                <el-button
+                  v-if="materialRelationEmpty.showConfigureAction"
+                  type="primary"
+                  link
+                  class="material-relation-empty__action"
+                  @click="goConfigureSupplierMaterials"
+                >
+                  去配置供应原料（新标签页打开）
+                </el-button>
+              </div>
+            </template>
           </el-select>
           <el-select
             v-model="item.purchasePackagingSpecId"
@@ -1692,6 +1769,46 @@ function handleAiFill(params: TableRow) {
   </div>
   </CanvasAwareWrapper>
 </template>
+
+<!-- ⚠️ 这一块**不能** scoped: el-select 的下拉面板被 teleport 到 body,
+     scoped 的属性选择器够不到它, 样式会静默不生效(截断照旧)。
+     所以单开一个非 scoped 块, 并用 .material-relation-select-popper 这个
+     专属 popper-class 把作用域限死在这一个下拉上, ⛔ 不影响别处的 el-select。 -->
+<style lang="scss">
+.material-relation-select-popper {
+  /* 缺陷: 210px 的下拉装不下空态文案, 一行被截断。
+     ⛔ 修法不是删字(那是拿信息迁就宽度), 是让面板在空态时能变宽。 */
+  min-width: 300px !important;
+  max-width: 360px;
+}
+
+.material-relation-empty {
+  padding: 10px 12px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+  /* 关键: 允许换行。el-select 空态默认 nowrap, 这正是截断的直接原因。 */
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
+}
+
+.material-relation-empty__text {
+  margin: 0;
+  color: #606266;
+}
+
+.material-relation-empty__hint {
+  margin: 4px 0 0;
+}
+
+.material-relation-empty__action {
+  margin-top: 6px;
+  padding: 0;
+  height: auto;
+  font-size: 12px;
+}
+</style>
 
 <style lang="scss" scoped>
 .wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
