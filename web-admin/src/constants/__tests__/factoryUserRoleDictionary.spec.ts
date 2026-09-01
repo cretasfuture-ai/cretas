@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FACTORY_USER_ROLE_CODES, factoryUserRoleOptions } from '../factoryUserRoles';
+import {
+  DELIBERATELY_NOT_SELECTABLE,
+  FACTORY_USER_ROLE_CODES,
+  factoryUserRoleOptions,
+} from '../factoryUserRoles';
 import { ROLE_LABELS } from '@/utils/enumDisplay';
 
 /**
@@ -85,18 +89,54 @@ describe('角色字典: 前端取值域与 FactoryUserRole 枚举必须一致', 
     expect(JAVA_CODES).not.toContain('displayName');
   });
 
-  it('前端取值域 == 枚举值集合 (两份一致, 不是各自都对)', () => {
-    const missing = JAVA_CODES.filter((c) => !FACTORY_USER_ROLE_CODES.includes(c as never));
+  it('前端取值域 == 枚举值集合 减去显式登记的排除项 (两份一致, 不是各自都对)', () => {
+    const missing = JAVA_CODES
+      .filter((c) => !(c in DELIBERATELY_NOT_SELECTABLE))
+      .filter((c) => !FACTORY_USER_ROLE_CODES.includes(c as never));
     const extra = FACTORY_USER_ROLE_CODES.filter((c) => !JAVA_CODES.includes(c));
-    expect(missing, `后端有而前端下拉没有 (这些角色在 UI 里选不到): ${missing.join(', ')}`).toEqual([]);
+    expect(
+      missing,
+      `后端有而前端下拉没有, 且没登记理由 (这些角色在 UI 里选不到): ${missing.join(', ')}\n` +
+        `⇒ 要么补进 FACTORY_USER_ROLE_CODES, 要么登记进 DELIBERATELY_NOT_SELECTABLE 并写清为什么。`,
+    ).toEqual([]);
     expect(extra, `前端下拉有而后端枚举没有 (选了会被 Jackson 反序列化拒成 400): ${extra.join(', ')}`).toEqual([]);
+  });
+
+  it('排除项本身必须是真枚举值, 且不许和取值域重复 (⛔ 登记不是豁免)', () => {
+    const excluded = Object.keys(DELIBERATELY_NOT_SELECTABLE);
+    // 阳性对照: 确实登记了东西, 否则上面那条的「减去」是空操作。
+    expect(excluded.length, '排除表是空的 —— 那条「减去排除项」等于没减, 本条无意义').toBeGreaterThan(0);
+    for (const c of excluded) {
+      expect(JAVA_CODES, `${c} 不是 FactoryUserRole 的成员, 登记它没有意义(可能是拼错了)`).toContain(c);
+      expect(
+        FACTORY_USER_ROLE_CODES.includes(c as never),
+        `${c} 既登记成「刻意不可选」又出现在取值域里 —— 两份自相矛盾`,
+      ).toBe(false);
+      expect(DELIBERATELY_NOT_SELECTABLE[c].length, `${c} 的排除理由是空的`).toBeGreaterThan(10);
+    }
+  });
+
+  it('被排除的角色仍然有中文, 且编辑弹窗会把当前值补进下拉', () => {
+    // 排除只影响「能不能选」, ⛔ 不该影响「能不能显示」——
+    // 否则存量餐饮角色账号的角色列会退回英文原码, 那是缺陷 2 的老样子。
+    for (const c of Object.keys(DELIBERATELY_NOT_SELECTABLE)) {
+      expect(ROLE_LABELS[c], `${c} 被排除后连中文都没了`).toBeTruthy();
+    }
+    const listVue = readFileSync(resolve(__dirname, '../../views/system/users/list.vue'), 'utf8');
+    expect(
+      listVue,
+      '编辑弹窗必须用 editRoleOptions —— 直接用 roleOptions 会让存量餐饮角色账号的下拉显示空白, ' +
+        '用户随手补选就静默改掉角色(缺陷 2 的次生风险)',
+    ).toContain('option in editRoleOptions');
   });
 
   it('每个枚举角色都有中文, 且没有码会退成英文原样显示', () => {
     const noLabel = JAVA_CODES.filter((c) => !ROLE_LABELS[c]);
     expect(noLabel, `角色缺中文 (列表里会显示英文原码): ${noLabel.join(', ')}`).toEqual([]);
+    // 下拉 = 枚举值 减去登记的排除项。⛔ 不写成 `<= JAVA_CODES.length` 之类的松判据:
+    // 那样漏掉一个角色也过得去, 而「漏一个没人发现」正是缺陷 2 本身。
     const options = factoryUserRoleOptions();
-    expect(options).toHaveLength(JAVA_CODES.length);
+    expect(options).toHaveLength(JAVA_CODES.length - Object.keys(DELIBERATELY_NOT_SELECTABLE).length);
     expect(options.filter((o) => o.label === o.value), '有选项的 label 退成了角色码本身').toEqual([]);
   });
 

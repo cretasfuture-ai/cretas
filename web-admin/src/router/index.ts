@@ -1289,17 +1289,26 @@ const businessRoutes: RouteRecordRaw[] = [
         redirect: '/system/users',
         meta: { requiresAuth: true, title: '系统管理', icon: 'Setting', module: 'system' },
         children: [
+          // 🔴 2026-09-01: 这两条的 URL 前缀是 /system, 而它们在侧边栏里挂在**人事管理**下
+          // (menuConfig.ts 的 /hr 组) —— 建号/改角色是 HR 的活。owner 拍板保持这个归属,
+          // 让**面包屑**跟随侧边栏, 而不是反过来动菜单。
+          //
+          // ⛔ 不改 URL: /system/users 是存量深链/书签/E2E 用了很久的地址, 换前缀的
+          //    代价远大于收益。⇒ 用 breadcrumbParent 覆盖面包屑的上一级 (AppHeader.vue)。
+          //
+          // 现场 (LIUSHANMEN, 2026-09-01): owner 按「系统管理」找账号管理找不到,
+          // 最后是从人事管理点进去的, 而进去之后面包屑写着「系统管理 / 账号管理」。
           {
             path: 'users',
             name: 'SystemUsers',
             component: () => import('@/views/system/users/list.vue'),
-            meta: { requiresAuth: true, title: '账号管理', module: 'system' }
+            meta: { requiresAuth: true, title: '账号管理', module: 'system', breadcrumbParent: '人事管理' }
           },
           {
             path: 'roles',
             name: 'SystemRoles',
             component: () => import('@/views/system/roles/list.vue'),
-            meta: { requiresAuth: true, title: '角色权限', module: 'system' }
+            meta: { requiresAuth: true, title: '角色权限', module: 'system', breadcrumbParent: '人事管理' }
           },
           {
             path: 'logs',

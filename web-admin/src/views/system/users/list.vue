@@ -55,10 +55,17 @@ const createRules: FormRules = {
   fullName: [
     { required: true, message: '请输入姓名', trigger: 'blur' }
   ],
-  // 手机号与邮箱相反: 后端一直有 @Pattern(^1[3-9]\\d{9}$) 而前端一条规则都没有,
-  // placeholder 还写着「(选填)」。建号场景改必填 —— 手机号是这批岗位账号唯一的联系方式。
+  // 手机号: **只校验格式, 不必填** (owner 2026-09-01 改判)。
+  //
+  // 最初按「必填项只保留 用户名/密码/姓名/手机号/角色」做成了必填, owner 看过真实
+  // 流程后推翻: 建号实际是**批量**的, 一次建一批只填用户名和部门; 手机号是**登录**
+  // 时才需要的东西, 等这个账号真的要有人登录时再补。统一建号阶段强制它, 等于让
+  // 建号的人去凑一批当时根本拿不到的号码。
+  //
+  // ⚠️ 后端 CreateUserRequest 也**没有** @NotBlank(owner 同一轮决定不加) ——
+  //    所以前后端在「手机号非必填」这件事上是一致的, ⛔ 不要单方面把前端改严。
+  //    格式校验保留: 填了就得是能用的号码, 不填则放行。
   phone: [
-    { required: true, message: '请输入手机号', trigger: 'blur' },
     { pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确', trigger: 'blur' }
   ],
   roleCode: [
@@ -126,6 +133,19 @@ function handlePageChange(page: number) {
 //   `src/constants/__tests__/factoryUserRoleDictionary.spec.ts` 钉住「两份一致」。
 //   ⛔ 不要在本文件里再抄一份角色表 —— 那道闸会红。
 const roleOptions = factoryUserRoleOptions();
+
+/**
+ * 编辑弹窗的下拉 = 可选角色 + **这个账号的当前角色**(哪怕它已不可选)。
+ *
+ * 🔴 少了后半截就会复现缺陷 2 的次生风险: 当前值不在 options 里 → 下拉显示空白 →
+ * 用户为了填满随手选一个 → 保存 → **静默把角色改掉**。餐饮角色 2026-09-01 起
+ * 不在工厂侧可选清单里, 但库里存量账号仍可能挂着它们, 所以这条必须在。
+ */
+const editRoleOptions = computed(() => {
+  const current = editForm.roleCode;
+  if (!current || roleOptions.some(o => o.value === current)) return roleOptions;
+  return [...roleOptions, { value: current, label: getRoleText(current) }];
+});
 
 // 中文走 ROLE_LABELS (角色中文的单一来源), ⛔ 不在本页另抄一份。
 // 兜底仍原样吐出角色码 —— 禁降级: 显示英文码好过显示一个错的中文。
@@ -390,7 +410,7 @@ async function handleToggleActive(row: TableRow) {
           <el-input v-model="createForm.fullName" placeholder="请输入真实姓名" />
         </el-form-item>
         <el-form-item label="手机号" prop="phone">
-          <el-input v-model="createForm.phone" placeholder="请输入 11 位手机号" />
+          <el-input v-model="createForm.phone" placeholder="选填，登录时再补即可" />
         </el-form-item>
         <el-form-item label="角色" prop="roleCode">
           <el-select v-model="createForm.roleCode" placeholder="请选择角色" style="width: 100%">
@@ -450,7 +470,7 @@ async function handleToggleActive(row: TableRow) {
         </el-form-item>
         <el-form-item label="角色" prop="roleCode" :rules="[{ required: true, message: '请选择角色', trigger: 'change' }]">
           <el-select v-model="editForm.roleCode" placeholder="请选择角色" style="width: 100%">
-            <el-option v-for="option in roleOptions" :key="option.value" :label="option.label" :value="option.value" />
+            <el-option v-for="option in editRoleOptions" :key="option.value" :label="option.label" :value="option.value" />
           </el-select>
         </el-form-item>
       </el-form>

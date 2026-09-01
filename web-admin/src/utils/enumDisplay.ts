@@ -81,16 +81,17 @@ export const ROLE_LABELS: Record<string, string> = {
   cashier: '出纳',
   hr_admin: '人事管理员',
   equipment_admin: '设备管理员',
-  // ⚠️ 2026-09-01 待 owner 裁定, **本轮刻意不改**: 本表的措辞是 approvalDirectory 那一套
-  // (见文件头), 与 Java 枚举的 displayName 有意不同 —— `factory_super_admin` 这边是
-  // 「工厂总管理员」而枚举是「工厂总监」, `warehouse_worker` 是「仓管员」而枚举是「仓库员」,
-  // 都是同一个决定的一部分, 有 whitelistRoleLabels / employeeRoleDepartment 两处断言钉着。
+  // 🔴 2026-09-01 owner 裁定改名: 「出成率录入员」→「报工操作员」。
   //
-  // 但这一条与其它几条不同: 枚举的 displayName 是「报工操作员」(职责写着「报工写入:
-  // 产量/工时/工序报告」), 与「出成率」无关。LIUSHANMEN 的 9 个账号也叫 baogong00X。
-  // ⇒ 疑似不只是措辞差异, 而是名字指错了事。改它会同时弄红上述两处断言, 且不在本轮
-  //   四条缺陷范围内 (缺陷 2 修完这些账号已经显示中文而不是英文码) ⇒ 单独提给 owner。
-  yield_operator: '出成率录入员',
+  // 本表其余措辞刻意与 Java 枚举的 displayName 不同(采用 approvalDirectory 那一套,
+  // 见文件头) —— `factory_super_admin` 这边是「工厂总管理员」而枚举是「工厂总监」,
+  // `warehouse_worker` 是「仓管员」而枚举是「仓库员」。那些是**措辞**差异, 保留。
+  //
+  // 这一条不是措辞差异, 是**名字指错了事**: 枚举职责写着「报工写入: 产量/工时/工序报告」,
+  // 与「出成率」无关; LIUSHANMEN 挂这个角色的 9 个账号也叫 baogong00X(报工)。
+  // 缺陷 2 修完之后这些账号第一次在列表里显示中文, 显示一个指错事的中文比显示英文码
+  // 更糟 —— 用户不会怀疑它。⇒ 与枚举对齐。
+  yield_operator: '报工操作员',
   restaurant_manager: '餐厅经理',
   restaurant_owner: '餐厅老板',
   restaurant_chef: '餐厅厨师',

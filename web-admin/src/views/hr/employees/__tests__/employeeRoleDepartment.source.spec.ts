@@ -65,7 +65,11 @@ describe('员工档案的角色与部门显示', () => {
             'viewer',
         ]));
         expect(new Set(roleCodes).size).toBe(roleCodes.length);
-        expect(enumLabel('yield_operator')).toBe('出成率录入员');
+        // 2026-09-01 owner 裁定改名 —— 这条断言此前钉的是「与 approvalDirectory 措辞一致」,
+        // 而 yield_operator 那一条并不是措辞差异, 是名字指错了事(枚举职责是报工写入,
+        // 与出成率无关; 挂它的账号叫 baogong00X)。⇒ 守的东西没变(权威表给正确名字),
+        // 变的是「什么才算正确」。
+        expect(enumLabel('yield_operator')).toBe('报工操作员');
         expect(source).toContain(
             'const roleOptions = EMPLOYEE_ROLE_CODES.map((value) => ({ value, label: enumLabel(value) }));',
         );

@@ -28,6 +28,16 @@ import { ROLE_LABELS } from '@/utils/enumDisplay';
  * 下拉里根本选不到, 也就无法通过 UI 建这些角色的账号。
  * 注释里还记着上一次同样的漂移 (Apr 20 BR-14), 即同一处至少漂过两次 ⇒ 靠注释不管用。
  *
+ * ## ⛔ 工厂侧不提供餐饮角色 (owner 2026-09-01)
+ *
+ * owner 原话:「工厂侧确实还是跟餐饮一点关系都没有, 全部拿掉」。四个 `restaurant_*`
+ * 因此**不在本清单里** —— 见 `DELIBERATELY_NOT_SELECTABLE`, 闸按「枚举值集合减去
+ * 登记的排除项」比对, ⛔ 不是放宽成「前端是枚举的子集就行」(那样漏一个角色就查不出来)。
+ *
+ * ⚠️ 排除只影响**能不能选**, 不影响**能不能显示**: 中文仍在 `ROLE_LABELS` 里,
+ * 存量餐饮角色账号照常显示中文; 编辑这类账号时 `list.vue` 的 `editRoleOptions`
+ * 会把当前角色补进下拉, 免得出现「空白 → 随手补选 → 静默改角色」。
+ *
  * ⚠️ 顺序沿用 Java 枚举的声明顺序 (按 level 分层: 平台 → 工厂总监 → 部门经理 →
  * 车间 → 一线 → 特殊), 下拉据此渲染。闸只钉集合相等, 不钉顺序 —— 顺序是 UX 选择。
  */
@@ -49,10 +59,6 @@ export const FACTORY_USER_ROLE_CODES = [
   'quality_controller',
   'finance_manager',
   'cashier',
-  'restaurant_manager',
-  'restaurant_owner',
-  'restaurant_chef',
-  'restaurant_purchaser',
   // Level 20~28: 车间管理层
   'workshop_supervisor',
   'team_leader',
@@ -68,6 +74,19 @@ export const FACTORY_USER_ROLE_CODES = [
   'viewer',
   'unactivated',
 ] as const;
+
+/**
+ * 枚举里有、但**工厂侧账号管理刻意不提供**的角色 —— 每条写理由。
+ *
+ * ⛔ 登记是留痕, 不是豁免。往这里加一条之前先确认: 它是「业务上不该在这个页面分配」,
+ * 而不是「我漏了一个」—— 后者正是缺陷 2 本身(手抄表少 6 个, 而少的那 6 个没人发现)。
+ */
+export const DELIBERATELY_NOT_SELECTABLE: Record<string, string> = {
+  restaurant_manager: '餐饮岗位 —— 工厂侧账号管理不分配餐饮角色 (owner 2026-09-01 拍板)',
+  restaurant_owner: '餐饮岗位 —— 工厂侧账号管理不分配餐饮角色 (owner 2026-09-01 拍板)',
+  restaurant_chef: '餐饮岗位, 且枚举里已标 @Deprecated —— 后厨岗位本身已随餐饮租户收敛停用',
+  restaurant_purchaser: '餐饮岗位 —— 工厂侧账号管理不分配餐饮角色 (owner 2026-09-01 拍板)',
+};
 
 export type FactoryUserRoleCode = (typeof FACTORY_USER_ROLE_CODES)[number];
 

@@ -274,14 +274,18 @@ const rawMenuConfig: MenuItem[] = [
     path: '/hr', title: '人事管理', icon: 'User', module: 'hr',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
-      // 2026-09-01: 「账号管理」/「角色权限」已移回 系统管理 (见下方 /system 组)。
-      // 原因有两条, 第二条比第一条严重:
-      //   1. IA 自相矛盾 —— 路由是 /system/users、面包屑写「系统管理 / 账号管理」,
-      //      而侧边栏挂在人事管理下。owner 在 LIUSHANMEN 上照手册找账号, 按「系统管理」
-      //      找不到入口 (2026-09-01 实测)。三处各说各话, 只能挑一处对齐, 这里对齐路由。
-      //   2. 🔴 本组带 hideForFactoryTypes: ['RESTAURANT'], 而 filterMenuItem 先判父级
-      //      (AppSidebar.vue canSeeMenuItem) ⇒ 餐饮租户整组不可见, 于是「账号管理」
-      //      在餐饮租户侧边栏里**一个入口都没有**。/system 组没有这个限制。
+      // 2026-09-01 owner 拍板: 账号管理**留在人事管理**, 三处不一致改**面包屑**去跟随它
+      // (router 的 meta.breadcrumbParent, 见 router/index.ts)。
+      //
+      // 曾短暂改成移去「系统管理」以对齐路由前缀, owner 否决 —— 理由是业务归属:
+      // 建号/改角色是 HR 的活, 放 HR 底下才符合谁在用它。URL 前缀是历史, 不是分类依据。
+      //
+      // ⚠️ 已知且**被接受**的后果: 本组带 hideForFactoryTypes: ['RESTAURANT'],
+      //    而 AppSidebar.filterMenuItem 先判父级 ⇒ 餐饮租户侧边栏里没有账号管理入口。
+      //    owner 2026-09-01: 「工厂侧跟餐饮一点关系都没有」—— 这个页面是工厂侧工具,
+      //    餐饮租户不从这里管账号。⛔ 不要把它当成待修缺陷「顺手修好」。
+      { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
+      { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
       { path: '/hr/employees', title: '员工档案', icon: '', module: 'hr', groupLabel: '员工组织' },
       { path: '/hr/departments', title: '部门管理', icon: '', module: 'hr' },
       { path: '/hr/work-types', title: '工种字典', icon: '', module: 'hr' },
@@ -331,10 +335,6 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/system', title: '系统管理', icon: 'Setting', module: 'system',
     children: [
-      // 2026-09-01: 从 人事管理 迁回 —— 路由 /system/users + 面包屑「系统管理 / 账号管理」
-      // 本来就在这一组, 侧边栏是唯一漂开的那一份。理由详见 /hr 组里的注释。
-      { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
-      { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
       { path: '/system/logs', title: '操作日志', icon: '', module: 'system', groupLabel: '系统运维' },
       { path: '/system/settings', title: '系统设置', icon: '', module: 'system', groupLabel: '工厂配置' },
       // 2026-08-28: 阈值参数中心工厂侧入口 —— owner 原话「得有一个模块专门去设置这个东西」。

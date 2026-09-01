@@ -18,7 +18,7 @@ import { enumLabel } from '@/utils/enumDisplay';
  *   <tr><td>dispatcher</td><td>调度员</td><td>生产调度员</td></tr>
  *   <tr><td>quality_manager</td><td>质量经理</td><td>质量主管</td></tr>
  *   <tr><td>workshop_supervisor</td><td>车间主任</td><td>车间主管</td></tr>
- *   <tr><td>yield_operator</td><td>报工员</td><td>出成率录入员</td></tr>
+ *   <tr><td>yield_operator</td><td>报工员</td><td>出成率录入员 → 2026-09-01 改名「报工操作员」</td></tr>
  *   <tr><td>warehouse_worker</td><td>仓库员</td><td>仓管员</td></tr>
  *   <tr><td>viewer</td><td>查看者</td><td>只读人员</td></tr>
  * </table>
@@ -66,7 +66,11 @@ describe('白名单邀请页的角色名', () => {
         expect(enumLabel('dispatcher')).toBe('生产调度员');
         expect(enumLabel('quality_manager')).toBe('质量主管');
         expect(enumLabel('workshop_supervisor')).toBe('车间主管');
-        expect(enumLabel('yield_operator')).toBe('出成率录入员');
+        // 2026-09-01 owner 裁定改名 —— 这条断言此前钉的是「与 approvalDirectory 措辞一致」,
+        // 而 yield_operator 那一条并不是措辞差异, 是名字指错了事(枚举职责是报工写入,
+        // 与出成率无关; 挂它的账号叫 baogong00X)。⇒ 守的东西没变(权威表给正确名字),
+        // 变的是「什么才算正确」。
+        expect(enumLabel('yield_operator')).toBe('报工操作员');
         expect(enumLabel('warehouse_worker')).toBe('仓管员');
         expect(enumLabel('viewer')).toBe('只读人员');
     });
