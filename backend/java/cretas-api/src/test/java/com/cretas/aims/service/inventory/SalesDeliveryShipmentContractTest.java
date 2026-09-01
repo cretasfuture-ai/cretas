@@ -155,6 +155,8 @@ class SalesDeliveryShipmentContractTest {
         SalesDeliveryRecord child = delivery("S1", SalesDeliveryStatus.SHIPPED);
         child.setRecordRole("SHIPMENT");
         child.setSalesOrderId("SO-1");
+        child.setSignedByName("客户验收人");
+        child.setSignaturePhotoUrls("[\"https://example.test/signature.jpg\"]");
         SalesOrder order = new SalesOrder();
         order.setId("SO-1");
         order.setFactoryId("F006");
@@ -169,6 +171,29 @@ class SalesDeliveryShipmentContractTest {
         assertThat(child.getSignedAt()).isNotNull();
         assertThat(order.getTransportPlanStatus()).isEqualTo("RECEIVED");
         verify(salesOrderRepository).save(order);
+    }
+
+    @Test
+    @DisplayName("shipment without signer and receipt photo fails closed before status mutation")
+    void deliveryWithoutReceiptProofCannotBeConfirmed() {
+        SalesDeliveryRecord child = delivery("S1", SalesDeliveryStatus.SHIPPED);
+        child.setSalesOrderId("SO-1");
+        SalesOrder order = new SalesOrder();
+        order.setId("SO-1");
+        order.setFactoryId("F006");
+        when(deliveryRecordRepository.findById("S1")).thenReturn(Optional.of(child));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate("SO-1", "F006"))
+                .thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.confirmDelivered("F006", "S1"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("SALES_DELIVERY_SIGNATURE_REQUIRED"));
+
+        assertThat(child.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
+        verify(deliveryRecordRepository, never()).save(any());
+        verify(salesOrderRepository).findByIdAndFactoryIdForUpdate("SO-1", "F006");
+        verify(salesOrderRepository, never()).save(any());
     }
 
     @Test

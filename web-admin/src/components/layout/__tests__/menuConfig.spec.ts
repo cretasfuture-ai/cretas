@@ -68,6 +68,25 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/finance')).not.toContain('/procurement/finance-review');
   });
 
+  it('exposes the manufacturing purchase-requisition flow from the procurement menu', () => {
+    expect(childPaths('/procurement')).toEqual(expect.arrayContaining([
+      '/procurement/requisitions/my',
+      '/procurement/requisitions/pending-approval',
+      '/procurement/requisitions',
+      '/procurement/orders',
+    ]));
+    expect(childTitles('/procurement')).toEqual(expect.arrayContaining([
+      '我的请购',
+      '待审批请购',
+      '全部请购单',
+      '采购订单',
+    ]));
+    expect(findDescendant('/procurement', '/procurement/requisitions/pending-approval')?.roles)
+      .toContain('procurement_manager');
+    expect(findDescendant('/procurement', '/procurement/requisitions/my')?.roles)
+      .toContain('procurement_manager');
+  });
+
   it('keeps account and department management under HR, with workflow setup in system', () => {
     expect(childPaths('/hr')).toEqual(expect.arrayContaining([
       '/system/users',
@@ -215,11 +234,15 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     // 它恒空且按钮打 410, 已整条移除 —— 组随之消失, 不是漏配。
     // 采购的审批入口现在是菜单里的「待我审批」(/workflow/pending)。
     expect(childGroupLabels('/procurement')).toEqual([
+      '请购流程',
       '采购执行',
       '供应商与价格',
     ]);
     expect(childGroupLabels('/procurement')).not.toContain('采购审批');
     expect(childPaths('/procurement')).toEqual([
+      '/procurement/requisitions/my',
+      '/procurement/requisitions/pending-approval',
+      '/procurement/requisitions',
       '/procurement/orders',
       '/procurement/suppliers',
       '/procurement/price-lists',
