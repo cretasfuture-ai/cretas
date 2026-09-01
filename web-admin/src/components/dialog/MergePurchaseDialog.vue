@@ -32,6 +32,7 @@ import { get, post } from '@/api/request';
 import { convertUnit } from '@/api/unitContract';
 import {
   canonicalUnitCode,
+  canonicalUnitCodeKeepingCount,
   displayUnit,
   formatPriceUnit,
   mergeCanonicalUnitOptions,
@@ -279,7 +280,12 @@ function onQuantityChange(item: EditableItem) {
 }
 
 function onPriceUnitChange(item: EditableItem) {
-  const nextUnit = canonicalUnitCode(item.priceUnit);
+  // 硬约束 8 (2026-09-02, 缺陷 33 的同根缺陷): 这里把 canonicalUnitCode() 的结果直接
+  // 写回 item.priceUnit —— 与 list.vue #474 修的 applyRelationPrice 是同一形状
+  // (写入单位字段前先归一, 提交时的守卫已经够不着)。改用 canonicalUnitCodeKeepingCount
+  // 双重防线: 根治已在 unitPricing.ts 的 UNIT_ALIASES 表本身 (canonicalUnitCode 现在
+  // 也不折叠 个/只/件 了), 这里换函数是防线加固, 不是必需, 但与 list.vue 保持同一模式。
+  const nextUnit = canonicalUnitCodeKeepingCount(item.priceUnit);
   if (!nextUnit) {
     item.priceUnit = item._activePriceUnit;
     return;

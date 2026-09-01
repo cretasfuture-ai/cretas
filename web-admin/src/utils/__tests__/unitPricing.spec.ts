@@ -101,20 +101,36 @@ describe('unitPricing', () => {
     expect(displayUnit('件')).toBe('件');
   });
 
-  it('normalizes canonical aliases without changing the price value', () => {
+  /**
+   * 🔴 2026-09-02 (缺陷 33 根治): `canonicalUnitCode` 的目标码改成后端 `normalize()`
+   * 的不动点之后, `canonicalUnitCode('盒')` 直接就是 `'盒'` (不再折成 `box`) ——
+   * 这里原先断言的是「折成英文别名」, 现在改断言「折成后端真正的规范码 (中文)」,
+   * 且不动点意味着 `canonicalUnitCode(canonicalUnitCode(x)) === canonicalUnitCode(x)`。
+   * `displayUnit`/`formatPriceUnit` 的输入输出不受影响 —— 它们对英文别名和中文规范码
+   * 给出同一个展示结果 (查表命中 vs 回落到 code 本身, 见 UNIT_LABELS 注释)。
+   */
+  it('normalizes canonical aliases to the backend fixed point without changing the price value', () => {
     expect(canonicalUnitCode('公斤')).toBe('kg');
-    expect(canonicalUnitCode('盒')).toBe('box');
+    expect(canonicalUnitCode('盒')).toBe('盒');
+    expect(canonicalUnitCode('box')).toBe('盒');
+    // 不动点: 目标码再喂一次自己, 结果不变
+    expect(canonicalUnitCode(canonicalUnitCode('盒'))).toBe('盒');
     expect(displayUnit('box')).toBe('盒');
-    expect(canonicalUnitCode('箱')).toBe('case');
+    expect(canonicalUnitCode('箱')).toBe('箱');
+    expect(canonicalUnitCode('case')).toBe('箱');
     expect(displayUnit('case')).toBe('箱');
-    expect(canonicalUnitCode('片')).toBe('slice');
+    expect(canonicalUnitCode('片')).toBe('片');
+    expect(canonicalUnitCode('slice')).toBe('片');
     expect(displayUnit('slice')).toBe('片');
     expect(canonicalUnitCode('g')).toBe('g');
     expect(canonicalUnitCode('kg')).toBe('kg');
     expect(displayUnit('g')).toBe('g');
     expect(displayUnit('kg')).toBe('kg');
-    expect(canonicalUnitCode('pcs:只')).toBe('pcs');
-    // 遗留复合写法自带用户填的标签, 必须原样保留(不受 pcs 口径变更影响)
+    // 遗留复合写法 'pcs:只' 只看 group[1]('pcs'), 折到 UNIT_ALIASES['pcs'] 现在的目标 '件'
+    // (不看 group[2] 具体标签 —— 见 canonicalUnitCode 自己的注释, 这是内部比较键允许的折叠)。
+    expect(canonicalUnitCode('pcs:只')).toBe('件');
+    // 但 displayUnit 自己有独立的 legacyCountComposite 分支, 原样保留用户当初填的标签,
+    // 不受 canonicalUnitCode 目标码变更影响 —— 这条阴性对照钉住两者不是同一份逻辑。
     expect(displayUnit('pcs:只')).toBe('只');
     // 裸规范码走 2026-08-01 定案的「件」
     expect(displayUnit('pcs')).toBe('件');
@@ -125,9 +141,15 @@ describe('unitPricing', () => {
     expect(formatPriceUnit('kg')).toBe('元/kg');
   });
 
+  /**
+   * 🔴 2026-09-02: 去重键改成中文规范码之后, `mergeCanonicalUnitOptions` 的输出
+   * 也跟着变成中文 —— 这不是本函数自己的逻辑变了, 是它调用的 `canonicalUnitCode`
+   * 变了。'ml' 与 '毫升' 都折到小写 'ml' (与后端不动点对齐, 见 UNIT_ALIASES 注释),
+   * 不再是历史上刻意选的大写 'mL'。
+   */
   it('builds price-unit options from material/catalog values without a static whitelist', () => {
     expect(mergeCanonicalUnitOptions(['kg', '袋', 'mL'], 'CUSTOM_TRAY', 'bag'))
-      .toEqual(['kg', 'bag', 'mL', 'CUSTOM_TRAY']);
+      .toEqual(['kg', '袋', 'ml', 'CUSTOM_TRAY']);
   });
 
   it('uses backend lineAmount before any client calculation', () => {

@@ -17,17 +17,49 @@ export type PricingLine = {
  *
  * 要让某个规范码显示成中文, 加到下面的 {@link UNIT_LABELS} 即可 —— 那张表是纯展示,
  * 且中文写法本来就会原样透传 (查不到 label 就返回自身)。
+ *
+ * <h2>🔴 不动点判据 (2026-09-02, 缺陷 33 根治)</h2>
+ *
+ * <b>每一个目标码 (等号右边的值) 必须是后端 `UnitContractServiceImpl#normalize()` 的
+ * 不动点</b> —— 即 `normalize(目标码).code() === 目标码`。这不是新规则, 是这张表
+ * 从一开始就该满足、却一直没人校验的契约 ({@code __tests__/unitAliasFixedPoint.source.spec.ts}
+ * 直接读后端源码钉住)。
+ *
+ * <p>旧表把计数/包装单位的目标码写成英文 (`box`/`case`/`bag`/`slice`/`pcs`), 而后端
+ * #2628 起这类单位的规范码<b>就是中文字本身</b> ({@code alias("盒","盒","box")} ——
+ * `box` 只是别名, `盒` 才是不动点)。于是任何直接把 `canonicalUnitCode()` 的输出当作
+ * 请求体字段值发出去的调用点 (未经 {@link storageUnitCode} 翻译), 发的都是后端的
+ * <b>别名</b>而不是<b>规范码</b>。多数场景后端 `normalize()` 能认出别名, 不会立刻炸;
+ * 但 `pcs` 这个别名<b>只指向「件」一个目标</b> (`alias("件","件","pcs",...)`, 后端
+ * <b>没有</b> `个 -> pcs`/`只 -> pcs` 的别名), 而旧表却把 个/只/件 三个不同的后端规范码
+ * <b>全部折进同一个内部键 `'pcs'`</b> —— 「个」经这张表变成 `'pcs'` 后, 唯一能被后端
+ * 认回的目标就是「件」, 「个」这个身份从此丢失、拿不回来。这正是
+ * `PurchaseServiceImpl#canonicalUnit('pcs')`('件') != 物料字典单位「个」的
+ * `canonicalUnit('个')`('个') → 422/400 的根因: 请求体在**构造阶段**就已经把
+ * 「个」写成了「件」的别名, 不是后端不认「个」。
+ *
+ * <p>本次改动: 让 个/只/件 各自映射到<b>自己</b> (三个不动点, 不再共享 `'pcs'`),
+ * box/case/carton/slice/bag/pcs/pc/piece/pieces 映射到各自的中文规范码,
+ * L/mL 的目标码改成后端实际的小写码 `l`/`ml` (后端 `key()` 会把大小写都折成小写,
+ * 规范码本身是小写)。
+ *
+ * <p>⚠️ <b>`canonicalUnitCodeKeepingCount` 因此在功能上变成了 no-op 包装</b> ——
+ * `canonicalUnitCode` 自己现在就不再折叠 个/只/件。<b>不要因此删除它</b>: 它仍是
+ * `sameUnit`/多处调用点的显式依赖, 删掉是另一次改动, 不在本次范围内; 留着也是
+ * 防线 (万一这张表将来又被改回折叠写法, 至少那些显式调用点还守着)。
  */
 const UNIT_ALIASES: Record<string, string> = {
   kg: 'kg', '千克': 'kg', '公斤': 'kg',
   g: 'g', '克': 'g',
-  box: 'box', '盒': 'box',
-  case: 'case', carton: 'case', '箱': 'case',
-  slice: 'slice', '片': 'slice',
-  bag: 'bag', '袋': 'bag',
-  pcs: 'pcs', pc: 'pcs', piece: 'pcs', pieces: 'pcs', '个': 'pcs', '只': 'pcs', '件': 'pcs',
-  l: 'L', '升': 'L',
-  ml: 'mL', '毫升': 'mL',
+  box: '盒', '盒': '盒',
+  case: '箱', carton: '箱', '箱': '箱',
+  slice: '片', '片': '片',
+  bag: '袋', '袋': '袋',
+  pcs: '件', pc: '件', piece: '件', pieces: '件', '件': '件',
+  '个': '个',
+  '只': '只',
+  l: 'l', '升': 'l',
+  ml: 'ml', '毫升': 'ml',
 };
 
 /**
@@ -42,14 +74,35 @@ const UNIT_ALIASES: Record<string, string> = {
  *
  * 缺一条就会漏出英文码 (`displayUnit` 查不到 label 时原样返回)。同目录
  * `__tests__/unitDisplayContract.spec.ts` 直接读后端权威表比对, 后端加了单位这里没加就会红。
+ *
+ * <h2>⚠️ 2026-09-02 (缺陷 33): 这张表现在服务<b>两个</b>互相独立的查询路径</h2>
+ *
+ * 1. `displayUnit()` 的正常路径 —— 键是 `canonicalUnitCode()` 的<b>输出</b>。
+ *    {@link UNIT_ALIASES} 改成不动点之后, `canonicalUnitCode('box')` 已经直接返回
+ *    `'盒'`, 查不到 `UNIT_LABELS['盒']`(没有这个键)时会回落到 `code` 本身 —— 恰好就是
+ *    `'盒'`, 结果不变。<b>`pcs`/`box`/`case`/`bag`/`slice`/`portion`/`item`/`pack`/
+ *    `bottle`/`can`/`crate`/`pail`/`roll`/`tray`/`plate`/`sheet` 这些键因此不会再被
+ *    这条路径命中</b>, 但留着不是垃圾 —— 见下一条。
+ * 2. `productSpecification.ts` 的 `TRANSLATED_UNIT_CODES` (由本表 `value !== key`
+ *    的条目反推) —— 匹配的是<b>历史落库文本里字面出现的英文单词</b>(后端曾经把
+ *    `product.getUnit()` 的码直接拼进规格串, 例如 `"10pack/箱"`), 与
+ *    `canonicalUnitCode()` 现在输出什么<b>无关</b>。删掉这些键会让
+ *    `displayProductSpecification` 认不出这些历史英文缩写, 所以<b>保留</b>。
+ *
+ * `l`/`ml` 的键从大写 `L`/`mL` 改成小写: 后端 `key()` 把所有输入都折成小写,
+ * `canonicalUnitCode()` 现在对齐输出小写 `l`/`ml`(见 {@link UNIT_ALIASES} 注释),
+ * 这里的键必须跟着变, 否则 `displayUnit('升')` 会查不到条目、回落成 code 本身 `l`
+ * (小写字母 l), 用户会看到「1 l/瓶」而不是「1 L/瓶」。展示文案本身仍保持大写 `L`/`mL`
+ * —— 国际单位大小写写法是展示层的独立选择, 不因内部键变小写而变。
  */
 const UNIT_LABELS: Record<string, string> = {
-  // 可换算国际单位 —— 保持英文
-  mg: 'mg', g: 'g', kg: 'kg', L: 'L', mL: 'mL',
+  // 可换算国际单位 —— 保持英文 (键小写, 与 canonicalUnitCode 的输出对齐; 展示文案仍大写)
+  mg: 'mg', g: 'g', kg: 'kg', l: 'L', ml: 'mL',
   mm: 'mm', cm: 'cm', m: 'm', km: 'km',
   // 中文计量单位 —— 英文码对用户无意义
   jin: '斤', t: '吨',
-  // 计数 / 包装 —— 一律中文
+  // 计数 / 包装 —— 一律中文。这些键不再被 canonicalUnitCode() 的输出直接命中
+  // (它现在已经返回中文), 保留是为了 productSpecification.ts 匹配历史英文缩写。
   // 🔴 pcs 展示成「件」而不是「只」(2026-08-01 定案, 推翻 #1672 的对齐方向):
   //   本文件的 DISTINCT_COUNT_LABELS 与后端 UnitContractServiceImpl 同源, 都是 {只, 个} ——
   //   两侧都把「件」排除在外, 即两侧都认定 **件 ≡ pcs**。把 pcs 渲染成「只」等于断言
@@ -66,16 +119,27 @@ const UNIT_LABELS: Record<string, string> = {
 export function canonicalUnitCode(value: unknown): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
+  // 遗留复合写法 `pcs:只` 是 #2628 迁移前「码=pcs, 附带用户当初填的中文标签」的存量数据。
+  // 🔴 2026-09-02: 这里的返回值只取 group[1] (pcs/kg/g), **不看** group[2] 的具体标签 ——
+  // 意味着 canonicalUnitCode('pcs:只') 与 canonicalUnitCode('pcs:个')(若存在)会折到同一个值。
+  // 这是刻意的: 本函数是**内部比较键**, 允许折叠; 具体标签的保留由 displayUnit() 自己的
+  // legacyCountComposite 分支负责 (它直接返回 group[1] 本身, 不经过这张表)。
   const legacyComposite = raw.match(/^(pcs|kg|g):(只|公斤|克)$/i);
   if (legacyComposite) return UNIT_ALIASES[legacyComposite[1].toLowerCase()] || legacyComposite[1];
   return UNIT_ALIASES[raw.toLowerCase()] || UNIT_ALIASES[raw] || raw;
 }
 
 /**
- * 件/个/只 三个中文计数标签都归一到 `pcs`, 但它们**互相不能替换**
- * (见下面 {@link DISTINCT_COUNT_LABELS}: 一只鸡不是一件包材)。所以展示时
- * 必须把用户原本填的那个标签原样还回去 —— 走一遍 `pcs` 再取 `UNIT_LABELS`
- * 会把三个都渲染成同一个字。
+ * 件/个/只 三个中文计数标签在展示时必须原样还回去, 不能互相替换
+ * (见下面 {@link DISTINCT_COUNT_LABELS}: 一只鸡不是一件包材)。
+ *
+ * ⚠️ 2026-09-02 (缺陷 33 根治后): `canonicalUnitCode('个')`/`('只')`/`('件')`
+ * 现在<b>各自返回自己</b> (不再折成共同的 `pcs`, 见 {@link UNIT_ALIASES} 注释),
+ * 且这三个字都不在 {@link UNIT_LABELS} 的键里, 所以就算<b>没有</b>这道守卫,
+ * `displayUnit` 走到最后一行 `UNIT_LABELS[code] || code` 也会因为查不到条目而
+ * 回落成 `code` 本身、结果不变。<b>这道守卫因此从「必需」降级为「防线」</b> ——
+ * 不删是因为它独立于 `UNIT_ALIASES` 的具体取值, 万一那张表将来又被改回折叠写法,
+ * 至少这三个最常见的字面值还有兜底。
  *
  * 🔴 #1672 (2026-07-23) 把 `UNIT_LABELS.pcs` 从「件」改成「只」以对齐系统单位表的
  * `unitName`, 于是**用户填「件」的产品在界面上显示成「只」**。
@@ -98,14 +162,27 @@ export function displayUnit(value: unknown): string {
 
 /**
  * 需要翻译的单位码 —— `UNIT_LABELS` 里 label 与 code 不同的那些 (`box`/`bag`/`pack`…)。
+ * 用于 `displayProductSpecification` 正则匹配<b>历史落库文本里字面出现的英文单词</b>
+ * (与 `canonicalUnitCode()` 现在输出什么无关, 见 `UNIT_LABELS` 顶部注释)。
  *
  * 🔴 由表推导, 不手抄。手抄过一次: `displayProductSpecification` 原先硬编码
  * `box|case|slice` 三个码, 于是 2026-08-06 客户在规格列看到 `1kg/pack 10pack/箱`
  * —— `pack` 明明在 UNIT_LABELS 里有「包」, 只是那条正则没跟上。
- * `kg`/`g`/`L` 这些自映射的国际符号不在此列, 本来就不该翻。
+ * `kg`/`g`/`mg`/`mm`/`cm`/`m`/`km` 这些自映射的国际符号不在此列, 本来就不该翻。
+ *
+ * <h2>⚠️ 2026-09-02: `l`/`ml` 显式排除, 尽管它们在 UNIT_LABELS 里 value !== key</h2>
+ *
+ * `UNIT_LABELS` 里 `l: 'L'` / `ml: 'mL'` 只是**内部键小写、展示文案大写**的记录
+ * (键跟着 canonicalUnitCode() 的不动点走, 见 {@link UNIT_ALIASES} 注释), 不是
+ * 「需要把字面英文翻成中文」那类条目 —— 与 box/case/pack 这些"英文缩写→中文"的翻译
+ * 不是同一件事。如果不排除, `displayProductSpecification` 会把规格文本里任何形似
+ * "毫升/升"的拉丁字母 l/L/ml/mL 都当成待翻译的匹配对象, 而 `250ml/L` 这种<b>本来就该
+ * 原样保留</b>的国际单位符号会被交给 `displayUnit()` —— 大小写被悄悄改写 (`ml`→`mL`),
+ * 与"国际计量符号不翻"这条既有契约(`productSpecification.spec.ts`)冲突。
  */
+const NEVER_TRANSLATE_IN_SPEC_TEXT = new Set(['l', 'ml']);
 export const TRANSLATED_UNIT_CODES: readonly string[] = Object.keys(UNIT_LABELS)
-  .filter((code) => UNIT_LABELS[code] !== code)
+  .filter((code) => UNIT_LABELS[code] !== code && !NEVER_TRANSLATE_IN_SPEC_TEXT.has(code))
   .sort((a, b) => b.length - a.length);
 
 /**
@@ -120,7 +197,7 @@ const DISTINCT_COUNT_LABELS = new Set(['只', '个']);
  * {@code UnitContractServiceImpl.crossLanguageCode} 逐条对应(它同样先查
  * DISTINCT_COUNT_LABELS 再走权威表)。
  *
- * <h2>🔴 2026-08-13 真机 E2E 抓到</h2>
+ * <h2>🔴 2026-08-13 真机 E2E 抓到 (根治于 2026-09-02, 缺陷 33)</h2>
  * 销售订单选中物料 {@code YL060 温氏黄油鸡}(物料字典单位「只」)后, 订单行显示
  * 「<b>件</b>」; {@code BC001 吸塑盒}(单位「个」)也显示「件」——
  * 三个计件单位在界面上被合并成同一个字。
@@ -132,6 +209,13 @@ const DISTINCT_COUNT_LABELS = new Set(['只', '个']);
  * 数量算术不受影响(扣减用纯数字), 坏的是**人读到的东西**。
  * 这正是同文件里 #1672 / #2097 修过两次的那类「用户填的标签被改写」缺陷 ——
  * 名单早就在({@code DISTINCT_COUNT_LABELS}), 只是**只接在 sameUnit 上, 没接到落库/展示这条路**。
+ *
+ * <h2>⚠️ 2026-09-02 (缺陷 33 根治): 本函数现在与 {@link canonicalUnitCode} 行为等价</h2>
+ * {@link UNIT_ALIASES} 的目标码改成不动点之后, `canonicalUnitCode('个')`/`('只')` 已经
+ * 各自返回自己 —— 与本函数「先查 {@link DISTINCT_COUNT_LABELS} 再原样返回」的效果完全相同。
+ * <b>不要因此删除本函数或它的调用点</b>(list.vue 由 #474 显式接了 7 处):
+ * (1) 它是既有 API, 删除是另一次改动, 超出本次「对齐目标码」的范围;
+ * (2) 万一 {@link UNIT_ALIASES} 将来又被改回折叠写法, 这些显式调用点仍然守着 #1976。
  */
 export function canonicalUnitCodeKeepingCount(value: unknown): string {
   const raw = String(value ?? '').trim();
@@ -149,9 +233,11 @@ export function canonicalUnitCodeKeepingCount(value: unknown): string {
  * 分组与后端是否一致由 {@code __tests__/unitStorageContract.spec.ts} <b>直接读后端源码</b>钉住:
  * 后端加一个单位而这里没跟, 那条会红。
  */
+// ⚠️ 2026-09-02: 'l'/'ml' 改小写, 与 canonicalUnitCode() 现在的输出对齐
+// (见 UNIT_ALIASES 注释 —— 后端规范码本身就是小写)。
 const CONVERTIBLE_UNIT_CODES = new Set([
   'mg', 'g', 'kg', 'jin', 't',
-  'mL', 'L',
+  'ml', 'l',
   'mm', 'cm', 'm', 'km',
 ]);
 
@@ -161,12 +247,21 @@ const CONVERTIBLE_UNIT_CODES = new Set([
  *
  * <h2>🔴 为什么必须与 {@link canonicalUnitCode} 分开 (2026-08-18)</h2>
  *
- * {@link canonicalUnitCode} 是<b>前端内部的比较键</b> (去重 / 判同 / el-select 的 value),
- * 它把「盒」折成 {@code box}。而后端权威表在 #2628 之后<b>方向相反</b> ——
- * 「盒」的规范码就是「盒」, {@code box} 只是别名。两个方向撞在一起的后果:
- * 用户在下拉里选的是「盒」, 请求体里发出去的是 {@code box}, 落库/回传/发货单再翻回中文 ——
- * <b>中间凭空多了一趟翻译, 而任何一处漏翻, 仓管就在单据上读到英文</b>
- * (实测 {@code sales_delivery_items} 至今躺着 2 行 {@code box})。
+ * {@link canonicalUnitCode} 是<b>前端内部的比较键</b> (去重 / 判同 / el-select 的 value)。
+ * 2026-08-18 写下这段话时, 它把「盒」折成 {@code box}, 与后端 #2628 之后的方向相反
+ * (「盒」的规范码就是「盒」, {@code box} 只是别名) —— 于是用户在下拉里选的是「盒」,
+ * 请求体里发出去的是 {@code box}, 落库/回传/发货单再翻回中文, <b>中间凭空多了一趟翻译,
+ * 而任何一处漏翻, 仓管就在单据上读到英文</b> (实测 {@code sales_delivery_items} 至今
+ * 躺着 2 行 {@code box})。
+ *
+ * <p>⚠️ <b>2026-09-02 更新 (缺陷 33 根治)</b>: {@link UNIT_ALIASES} 的目标码改成
+ * 后端 `normalize()` 的不动点之后, {@link canonicalUnitCode} 对计数/包装单位<b>也</b>
+ * 直接返回中文规范码了 —— 两个函数现在<b>只在 斤/吨 上还有分歧</b> (见下方例外说明),
+ * 其余情况 {@code storageUnitCode(x) === canonicalUnitCode(x)} 恒成立。
+ * <b>本函数依然保留、依然是「发给后端」的唯一入口</b>: (1) 斤/吨 这一个真实例外还需要它
+ * 分派; (2) 它是本仓单测/契约测试 (`unitStorageContract.spec.ts`) 独立钉住的公开契约,
+ * 删掉是另一次改动, 不在本次「对齐目标码」的范围内; (3) 万一 `UNIT_ALIASES` 未来又漂回
+ * 折叠写法, 这个「发出去之前统一走一遍」的出口仍然兜底。
  *
  * <p>⇒ 内部键继续用 {@link canonicalUnitCode}(比较 / 去重 / 包装规格匹配都不用改),
  * <b>请求体一律走这个函数</b>: 用户看到哪个字, 就发哪个字。
@@ -178,6 +273,8 @@ const CONVERTIBLE_UNIT_CODES = new Set([
  * <p>⚠️ 已知且<b>有意</b>的例外: 斤 / 吨。后端的码是 {@code jin}/{@code t}, 这里发中文;
  * 后端 {@code normalize} 会把它们收回 {@code jin}/{@code t}, <b>落库值不变</b>。
  * 反过来在前端把「斤」翻成 {@code jin} 正是 2026-07-31 那次事故(见 {@link UNIT_ALIASES} 注释), 别做。
+ * (「斤」/「吨」不在 {@link UNIT_ALIASES} 表里, 就是为了不让它们参与折叠, 这个例外因此
+ * 与不动点判据不冲突 —— 判据只约束「表里出现的目标码」, 「斤」/「吨」本就不在表里。)
  *
  * <p>⛔ 也<b>不要</b>把它和 {@link displayUnit} 合并成一个函数。{@link displayUnit} 服务于眼睛,
  * 改它的动机随时会出现(#1672 就把 {@code pcs} 的标签从「件」改成「只」又改回来);

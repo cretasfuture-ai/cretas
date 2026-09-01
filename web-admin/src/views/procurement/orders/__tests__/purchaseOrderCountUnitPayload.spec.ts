@@ -29,6 +29,16 @@ import { canonicalUnitCode, canonicalUnitCodeKeepingCount, displayUnit } from '@
  * 而不是整份 mount Element Plus + router + pinia。这里延续同一套路, 但断言收在
  * **payload 的实际值**上 (`item.priceUnit` / 提交对象), 不是「源码里有没有这几个字」——
  * 源码字面量只在下面「前提」那条里作为阳性对照出现。
+ *
+ * <h2>⚠️ 2026-09-02 (同日追加): 根治点从「调用点改用 KeepingCount」上移到「表本身」</h2>
+ * 本文件原先记录的根因是「list.vue 的调用点用了 canonicalUnitCode 而不是
+ * canonicalUnitCodeKeepingCount」—— 这仍然是**当天上午**发生的真实缺陷与真实修复
+ * (#474)。**当天晚些时候**又发现同一形状的缺陷在 `MergePurchaseDialog.vue`
+ * 重演 (它从没接过 #474 的修复), 于是把根治点上移: `unitPricing.ts` 的
+ * `UNIT_ALIASES` 目标码本身改成后端 `normalize()` 的不动点, `canonicalUnitCode`
+ * 现在对 个/只/件 也不再折叠。下面测试里凡是"证明旧行为会复现缺陷"的对照,
+ * 已改用手工构造的旧折叠函数, 不再拿真实的 `canonicalUnitCode` 当"旧实现"用
+ * (它已经是修复后的实现)。
  */
 
 const listSource = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
@@ -133,7 +143,11 @@ describe('阻断性缺陷: 「个」/「只」字典单位的物料必须能建�
     expect(item.priceUnit).toBe('kg');
   });
 
-  it('⛔ 负对照 2: 「件」仍然折成 pcs —— 只有「个」/「只」被单独保留, 「件」≡pcs 没被推翻', () => {
+  it('⛔ 负对照 2: 「件」保持为「件」(与 pcs 是同一个单位, 只是不再折叠成内部别名)', () => {
+    // 🔴 2026-09-02 (缺陷 33 根治): UNIT_ALIASES 的目标码改成后端 normalize() 的不动点
+    // 之后, canonicalUnitCode('件') 直接返回 '件' 本身 (不再折成 'pcs')。「件 ≡ pcs」这个
+    // 事实没有被推翻 —— canonicalUnitCode('pcs') 依然是 '件' (两个写法归到同一个规范码),
+    // 只是「规范码」这个身份本身从英文别名换成了后端真正的中文码。
     const applyRelationPrice = buildApplyRelationPrice(canonicalUnitCodeKeepingCount);
     const item: Record<string, unknown> = {};
     applyRelationPrice(item, {
@@ -141,13 +155,30 @@ describe('阻断性缺陷: 「个」/「只」字典单位的物料必须能建�
       effectivePriceUnit: null, effectivePurchasePrice: null,
       defaultPurchasePrice: 5, priceSource: null,
     }, '件');
-    expect(item.priceUnit).toBe('pcs');
+    expect(item.priceUnit).toBe('件');
+    expect(canonicalUnitCode('pcs')).toBe('件'); // 两个写法仍然归到同一处
   });
 
-  it('硬约束 C″: 注入旧实现 canonicalUnitCode 会让上面那条断言塌成 pcs —— 证明它不是在守空气', () => {
-    // 这不是靠改文件再改回来做的变异对照 (那一步在 PR 描述里另外用 git 做), 而是把
-    // 「哪个规范化函数被调用」作为依赖注入点, 直接验证「换回旧行为 == 复现缺陷」。
-    const buggyApplyRelationPrice = buildApplyRelationPrice(canonicalUnitCode);
+  /**
+   * 🔴 2026-09-02 (缺陷 33 根治): 根治点搬到了 `UNIT_ALIASES` 表本身, `canonicalUnitCode`
+   * 现在对 个/只/件 也不折叠了 —— 上面那条「注入真实的旧 canonicalUnitCode 会复现缺陷」
+   * 的证明**不再成立**(它已经不是"旧"的了)。这里改用一个**手工构造**的、精确复刻
+   * "2026-09-02 前 pcs 折叠写法"的替身函数 (不是从 unitPricing.ts 抄一份真表, 那会造出
+   * 硬约束 8 警告过的第二份单位表), 证明依赖注入这条缝本身仍然有效: 换一个真的会折叠
+   * 个/只/件的实现进去, 断言确实会塌。
+   */
+  it('硬约束 C″: 注入手工构造的旧折叠实现会让断言塌成 pcs —— 证明依赖注入缝仍然有效', () => {
+    const oldFoldingCanonicalUnitCode = (value: unknown): string => {
+      const raw = String(value ?? '').trim();
+      const OLD_TARGETS: Record<string, string> = {
+        pcs: 'pcs', pc: 'pcs', piece: 'pcs', pieces: 'pcs', '个': 'pcs', '只': 'pcs', '件': 'pcs',
+      };
+      return OLD_TARGETS[raw] || raw;
+    };
+    // 阳性对照: 先证明这个替身函数真的复刻了旧行为, 不是随手写的空函数。
+    expect(oldFoldingCanonicalUnitCode('个')).toBe('pcs');
+
+    const buggyApplyRelationPrice = buildApplyRelationPrice(oldFoldingCanonicalUnitCode);
     const item: Record<string, unknown> = {};
     buggyApplyRelationPrice(item, {
       purchaseUnit: '个', baseUnit: '个',
@@ -156,6 +187,16 @@ describe('阻断性缺陷: 「个」/「只」字典单位的物料必须能建�
     }, '个');
     expect(item.priceUnit, '注入旧函数后可观测量没有变化 —— 说明这条判据打不到被测代码').toBe('pcs');
     expect(item.priceUnit).not.toBe('个');
+
+    // 与之相对: 注入当前真实的 canonicalUnitCode (已根治) 不会复现缺陷。
+    const fixedApplyRelationPrice = buildApplyRelationPrice(canonicalUnitCode);
+    const fixedItem: Record<string, unknown> = {};
+    fixedApplyRelationPrice(fixedItem, {
+      purchaseUnit: '个', baseUnit: '个',
+      effectivePriceUnit: null, effectivePurchasePrice: null,
+      defaultPurchasePrice: 3.2, priceSource: null,
+    }, '个');
+    expect(fixedItem.priceUnit).toBe('个');
   });
 
   it('提交前的完整载荷: unit/quantityUnit/priceUnit 与字典单位三方一致 (不是字典「个」/发送「pcs」/显示「件」三个不同的字)', () => {
@@ -182,12 +223,21 @@ describe('阻断性缺陷: 「个」/「只」字典单位的物料必须能建�
     // 用户在下拉/详情页看到的字 —— displayUnit 对「个」/「只」原样返回 (RAW_COUNT_LABELS)。
     expect(displayUnit(submitted.unit)).toBe('个');
 
-    // 对照: 缺陷发生前 (未修复) 的三个字互不相同 —— 字典「个」/ 发出去的「pcs」/
-    // 显示成的「件」。用同一份数据跑一遍旧函数, 证明修复前后三方一致性的差异是真实的。
-    const buggyUnit = canonicalUnitCode(item.quantityUnit || item.unit);
+    // 🔴 2026-09-02: 「用同一份数据跑一遍旧函数」这句话本身就是缺陷描述 —— 根治后
+    // canonicalUnitCode('个') 已经不是 'pcs' 了 (下面单独验证一次, 作为回归网)。
+    // 「修复前三个字互不相同」这条对照因此改用手工构造的旧折叠函数复现, 不再用
+    // 当前真实的 canonicalUnitCode (它已经是修复后的实现, 拿它做"旧行为"对照
+    // 会是一句假话)。
+    expect(canonicalUnitCode(item.quantityUnit || item.unit), '回归网: 根治后 canonicalUnitCode 不再折叠').toBe('个');
+
+    const oldFoldingCanonicalUnitCode = (value: unknown): string => {
+      const raw = String(value ?? '').trim();
+      return raw === '个' || raw === '只' || raw === '件' || raw === 'pcs' ? 'pcs' : raw;
+    };
+    const buggyUnit = oldFoldingCanonicalUnitCode(item.quantityUnit || item.unit);
     expect(buggyUnit).toBe('pcs');
     expect(displayUnit(buggyUnit)).toBe('件');
-    expect(new Set(['个', buggyUnit, displayUnit(buggyUnit)]).size, '修复前三个字互不相同').toBe(3);
+    expect(new Set(['个', buggyUnit, displayUnit(buggyUnit)]).size, '修复前(手工构造对照)三个字互不相同').toBe(3);
     expect(new Set(['个', submitted.unit, displayUnit(submitted.unit)]).size, '修复后三方归一').toBe(1);
   });
 });

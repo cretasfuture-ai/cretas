@@ -34,7 +34,9 @@ describe('sales order full-page price and unit contract', () => {
         { id: 'inactive', packageUnit: '箱', baseUnit: '盒', conversionFactor: 10, active: false },
       ],
     };
-    expect(salesOrderUnitOptions(product)).toEqual(['box', '框']);
+    // 缺陷 33 根治后 (2026-09-02): canonicalUnitCode('盒') = '盒' 本身 (不动点),
+    // 不再折成内部键 'box'。
+    expect(salesOrderUnitOptions(product)).toEqual(['盒', '框']);
     expect(packagingSpecIdForUnit(product, '框')).toBe('spec-1');
     expect(packagingSpecIdForUnit(product, '盒')).toBeUndefined();
   });
