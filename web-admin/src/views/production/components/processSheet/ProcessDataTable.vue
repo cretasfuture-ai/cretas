@@ -33,7 +33,8 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
-import { byproductEntryMode, partitionOutputPorts } from './processSheetOutputs';
+import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
+import { deriveByShare } from '@/views/system/product-processes/workflow/workflowInputShare';
 import type { BoundByproductLine, MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import type {
   InputSourceLineView,
@@ -144,6 +145,8 @@ interface MaterialInputTotalLine extends Omit<MaterialInputTotal, 'quantity'> {
   materialName: string;
   quantity: number | null;
   selected: boolean;
+  /** 这一格是按份额推出来的(不是手填) —— 下次推算允许覆盖; 手填后清掉。⛔ 不进请求体。 */
+  autoFilled?: boolean;
 }
 
 // SelectableUpstreamRef 已随 ./processSheetInputs 迁走 —— 卡片模式和表格模式共用
@@ -303,6 +306,26 @@ const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiS
 /** 本工序 workflow 计划产出端口 (null = 无 workflow 上下文, 或该 workflow 任务无产出端口)。 */
 const workflowOutput = computed(() => props.workflowContext?.output ?? null);
 /** 本工序 workflow 声明的原料类型 (仅 RAW_MATERIAL kind, 供领料 picker 旁提示"需要哪些原料")。 */
+/**
+ * 主原料份额推算(owner 2026-09-02): 操作员填了任一原料的投入量, 其余**已选用**且带份额的原料
+ * 按画布端口 inputShareRatio 自动跳出。只推「还没手填」的行 —— 手填过的不覆盖(autoFilled 标记)。
+ */
+function autoFillInputsByShare(row: SheetRow, changed: MaterialInputTotalLine): void {
+  const lines = row.materialInputTotals
+    .filter((l) => l.selected)
+    .map((l) => ({ id: l.workflowPortId || l.materialTypeId, share: portById(l.workflowPortId)?.inputShareRatio ?? null }));
+  const changedId = changed.workflowPortId || changed.materialTypeId;
+  const derived = deriveByShare(lines, changedId, changed.quantity);
+  if (derived.size === 0) return;
+  for (const line of row.materialInputTotals) {
+    const id = line.workflowPortId || line.materialTypeId;
+    if (id === changedId || !derived.has(id)) continue;
+    if (line.quantity != null && !line.autoFilled) continue;   // 手填过的不动
+    line.quantity = derived.get(id) ?? null;
+    line.autoFilled = true;
+  }
+  changed.autoFilled = false;
+}
 const workflowRawInputs = computed(() =>
   (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
 );
@@ -877,6 +900,8 @@ function initMultiOutputs(): MultiOutputLine[] {
     gramsPerUnit: p.gramsPerUnit ?? null,
     finished: p.finished === true,
     isByproduct: p.byproduct === true,
+    isDefective: p.defective === true,
+    isRework: p.rework === true,
     required: p.required === true,
     selected: portSelectedByDefault(p),
     quantity: null,
@@ -894,7 +919,11 @@ function initMultiOutputs(): MultiOutputLine[] {
   }));
 }
 
-/** 由画布副产端口造一条待填的副产条目 —— SKU/单位只读, 数量与回收单价留空等人填。 */
+/**
+ * 由画布的不良品/副产端口造一条待填条目 —— SKU/单位只读, 数量与回收单价留空等人填。
+ *
+ * 角色随端口带过来, 界面逐条打 tag（owner 2026-09-01：两类一起填, 底层分类）。
+ */
 function boundByproductFromPort(port: WorkflowPortDescriptor): BoundByproductLine {
   return {
     workflowPortId: port.workflowPortId,
@@ -904,6 +933,7 @@ function boundByproductFromPort(port: WorkflowPortDescriptor): BoundByproductLin
     unit: workflowPortDisplayUnit(port),
     quantity: null,
     unitPrice: null,
+    role: boundOutputRoleOf(port),
   };
 }
 
@@ -1160,6 +1190,8 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     gramsPerUnit: port?.gramsPerUnit ?? null,
     finished: port ? port.finished === true : p.finished === true,
     isByproduct: port ? port.byproduct === true : false,
+    isDefective: port ? port.defective === true : false,
+    isRework: port ? port.rework === true : false,
     required: port?.required ?? true,
     selected: true,
     quantity: p.outputQuantity ?? null,
@@ -1777,8 +1809,37 @@ function outputLinePrecision(line: MultiOutputLine): number {
  * 所有派生值都在这里算完 —— 卡片模式和表格模式传同一份进去, 就不可能再像以前那样
  * 一边有必填标识和出成率说明、另一边没有。
  */
+/**
+ * 表格要渲染的产出行。
+ *
+ * 🔴 owner 2026-09-01：「不良品产出和副产是一起填写的……底层逻辑会分类」。
+ * 于是**三类填在同一块区**：副产/不良品本来就在（它们是宿主行的副产明细），
+ * 回料这一轮搬进来 —— 但它**仍然是一条独立的产出条目**：
+ *
+ *   ⛔ 不把它转成 BoundByproductLine（那会让它走 `material_batches`，成本直接丢）
+ *   ✅ 只把它从「独立成行」改成「渲染在宿主行的那块区里」，值仍写回自己的
+ *      MultiOutputLine，`row.multiOutputs` 一个字节没动
+ *
+ * ⚠️ 判据：提交负载必须与搬动前逐字相同（见 defectiveSharesByproductEntry.spec.ts）。
+ */
 function outputViews(row: SheetRow): OutputLineView[] {
-  return row.multiOutputs.map((line) => {
+  const all = outputViewsAll(row);
+  const reworkViews = all.filter((view) => isReworkLine(view.line));
+  const rowViews = all.filter((view) => !isReworkLine(view.line));
+  if (reworkViews.length === 0) return rowViews;
+  // 没有主产出行时不静默丢掉回料 —— 与副产 orphanNotice 同一条纪律: 它得看得见。
+  if (rowViews.length === 0) return reworkViews;
+  return rowViews.map((view, index) => (index === 0
+    ? { ...view, inlineReworkViews: reworkViews }
+    : view));
+}
+
+/**
+ * 每条产出条目的派生值。⚠️ 只决定**怎么显示**，
+ * ⛔ 不动 `row.multiOutputs` —— 提交负载、校验、批次号回填全读那个数组。
+ */
+function outputViewsAll(row: SheetRow): OutputLineView[] {
+  return row.multiOutputs.map((line): OutputLineView => {
     const port = portById(line.workflowPortId);
     const yieldRate = outputLineYield(row, line);
     return {
@@ -1800,6 +1861,7 @@ function outputViews(row: SheetRow): OutputLineView[] {
             ? '未配置单位净重，无法计算成品重量'
             : `成品重量 ${formattedWeight(outputLineWeightKg(line))}`)
         : null,
+      inlineReworkViews: [],
     };
   });
 }
@@ -3451,6 +3513,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :min="0"
                         :precision="6"
                         controls-position="right"
+                        @change="autoFillInputsByShare(row, item)"
                         size="small"
                         :aria-label="`${item.materialName} 投料总量`"
                       />
@@ -4080,6 +4143,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :min="0"
                         :precision="6"
                         controls-position="right"
+                        @change="autoFillInputsByShare(row, item)"
                         style="width:110px"
                         size="small"
                       />

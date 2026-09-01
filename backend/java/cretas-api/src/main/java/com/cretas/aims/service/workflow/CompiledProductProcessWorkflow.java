@@ -61,7 +61,25 @@ public record CompiledProductProcessWorkflow(
             String selectionGroupLabel,
             String selectionGroupMode,
             Integer selectionGroupMinSelections,
-            Integer selectionGroupMaxSelections) {
+            Integer selectionGroupMaxSelections,
+            /** 主原料份额(%), 仅 INPUT 端口有意义; null = 不参与推算。 */
+            BigDecimal inputShareRatio) {
+
+        /** 2026-09-02 之前的规范构造器(22 参): 既有测试与老调用点用它, 份额记 null。 */
+        public CompiledPort(
+                String workflowNodeId, String workflowPortId, String direction, int ordinal,
+                String materialNodeId, String materialKind, String skuId, String unit,
+                String materialPrimaryUnitCode, String conversionRefId, Long conversionVersion,
+                BigDecimal conversionFactorSnapshot, boolean required, String conversionMode,
+                String conversionExpression, BigDecimal standardQuantity, String quantityMode,
+                String selectionGroupId, String selectionGroupLabel, String selectionGroupMode,
+                Integer selectionGroupMinSelections, Integer selectionGroupMaxSelections) {
+            this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
+                    skuId, unit, materialPrimaryUnitCode, conversionRefId, conversionVersion,
+                    conversionFactorSnapshot, required, conversionMode, conversionExpression,
+                    standardQuantity, quantityMode, selectionGroupId, selectionGroupLabel,
+                    selectionGroupMode, selectionGroupMinSelections, selectionGroupMaxSelections, null);
+        }
 
         public CompiledPort(
                 String workflowNodeId,
@@ -84,7 +102,7 @@ public record CompiledProductProcessWorkflow(
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
                     skuId, unit, materialPrimaryUnitCode, conversionRefId, conversionVersion,
                     conversionFactorSnapshot, required, conversionMode, conversionExpression,
-                    standardQuantity, quantityMode, null, null, null, null, null);
+                    standardQuantity, quantityMode, null, null, null, null, null, null);
         }
 
         public CompiledPort(
@@ -106,7 +124,7 @@ public record CompiledProductProcessWorkflow(
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
                     skuId, unit, materialPrimaryUnitCode, conversionRefId, conversionVersion,
                     conversionFactorSnapshot, required, conversionMode, conversionExpression,
-                    null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null);
         }
 
         public CompiledPort(
@@ -123,7 +141,7 @@ public record CompiledProductProcessWorkflow(
                 String conversionExpression) {
             this(workflowNodeId, workflowPortId, direction, ordinal, materialNodeId, materialKind,
                     skuId, unit, unit, null, null, null, required, conversionMode,
-                    conversionExpression, null, null, null, null, null, null, null);
+                    conversionExpression, null, null, null, null, null, null, null, null);
         }
     }
 }

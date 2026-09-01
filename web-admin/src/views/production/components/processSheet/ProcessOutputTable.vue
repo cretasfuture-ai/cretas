@@ -14,7 +14,7 @@
  */
 import { ref } from 'vue';
 import { ArrowDown, ArrowRight, Warning } from '@element-plus/icons-vue';
-import { outputGridTemplate, type MultiOutputLine, type OutputLineView } from './processSheetOutputs';
+import { boundOutputRoleLabel, outputGridTemplate, type MultiOutputLine, type OutputLineView } from './processSheetOutputs';
 
 const props = defineProps<{
   views: OutputLineView[];
@@ -211,7 +211,9 @@ function gridStyle(): Record<string, string> {
 
         <div v-show="detailOpen(view.line.workflowPortId)" class="sp-io-detail">
           <div class="sp-io-detail-title">
-            {{ view.byproductMode === 'BOUND' ? '按需填写：本工序副产与成本分摊' : '按需填写：副产与成本分摊' }}
+            {{ view.byproductMode === 'BOUND'
+              ? '按需填写：本工序不良品/副产与成本分摊'
+              : '按需填写：不良品/副产与成本分摊' }}
           </div>
           <!--
             二选一, 不并存 (同一个事实两份必然漂):
@@ -226,19 +228,28 @@ function gridStyle(): Record<string, string> {
               class="sp-byproduct-bound"
               data-testid="byproduct-bound-item"
             >
+              <!--
+                owner 2026-09-01：不良品和副产**一起填**，画布上标注它到底算哪一类。
+                两类共用同一块录入区，角色靠这个 tag 逐条区分。
+                ⛔ tag 文字不许写成「判废」「不入库」—— 不良品是要入库存着的。
+              -->
               <span class="sp-byproduct-name" data-testid="byproduct-bound-name">
-                <el-tag size="small" type="info">副产</el-tag>
+                <el-tag
+                  size="small"
+                  :type="bp.role === 'DEFECTIVE' ? 'danger' : 'info'"
+                  :data-testid="`byproduct-bound-role-${bp.role}`"
+                >{{ boundOutputRoleLabel(bp.role) }}</el-tag>
                 <strong>{{ bp.materialName }}</strong>
               </span>
               <label>数量
-                <span class="sp-inline-input" role="group" :aria-label="`${bp.materialName} 副产数量与单位`">
+                <span class="sp-inline-input" role="group" :aria-label="`${bp.materialName} ${boundOutputRoleLabel(bp.role)}数量与单位`">
                   <el-input-number
                     v-model="bp.quantity"
                     :min="0"
                     :precision="6"
                     controls-position="right"
                     size="small"
-                    :aria-label="`${bp.materialName} 副产数量`"
+                    :aria-label="`${bp.materialName} ${boundOutputRoleLabel(bp.role)}数量`"
                   />
                   <span class="sp-fixed-unit">{{ bp.unit }}</span>
                 </span>
@@ -250,7 +261,7 @@ function gridStyle(): Record<string, string> {
                   :precision="4"
                   controls-position="right"
                   size="small"
-                  :aria-label="`${bp.materialName} 副产回收单价`"
+                  :aria-label="`${bp.materialName} ${boundOutputRoleLabel(bp.role)}回收单价`"
                 />
               </label>
             </div>
@@ -277,6 +288,49 @@ function gridStyle(): Record<string, string> {
                 size="small"
               />
             </label>
+          </div>
+
+          <!--
+            回料条目 —— owner 2026-09-01 要求三类**填在同一处**。
+            ⛔ 它**不在**上面那个二选一里, 是独立的第三块:
+               回料不是这一行的副产明细, 是**另一条产出条目**被搬过来显示,
+               值写回它自己的 MultiOutputLine, 提交负载不变。
+            ⛔ 只给「数量」没有「回收单价」—— 回料走 semi_finished_inventory
+               带移动加权成本进下一批, 不是回收物。
+            ⚠️ 用独立 v-if 而不是接进上面的 v-else 链: 接进去会让「有回料 + 手填副产」
+               这一种组合里的手填字段整块消失(本轮实测过一次)。
+          -->
+          <div
+            v-if="view.inlineReworkViews.length > 0"
+            class="sp-io-detail-fields"
+            data-testid="rework-inline-list"
+          >
+            <div
+              v-for="rw in view.inlineReworkViews"
+              :key="rw.line.workflowPortId"
+              class="sp-byproduct-bound"
+              data-testid="rework-inline-item"
+            >
+              <span class="sp-byproduct-name">
+                <el-tag size="small" type="warning" data-testid="rework-inline-role">回料</el-tag>
+                <strong>{{ rw.line.materialName }}</strong>
+              </span>
+              <label>数量
+                <span class="sp-inline-input" role="group" :aria-label="`${rw.line.materialName} 回料产出数量与单位`">
+                  <el-input-number
+                    v-model="rw.line.quantity"
+                    :min="0"
+                    :precision="rw.quantityPrecision"
+                    controls-position="right"
+                    size="small"
+                    :data-testid="`rework-inline-quantity-${rw.line.workflowPortId}`"
+                    :aria-label="`${rw.line.materialName} 回料产出数量`"
+                  />
+                  <span class="sp-fixed-unit">{{ rw.unitLabel }}</span>
+                </span>
+              </label>
+              <span v-if="rw.line.batchNumber" class="sp-rework-batch">批次 {{ rw.line.batchNumber }}</span>
+            </div>
           </div>
 
           <!--
@@ -439,6 +493,7 @@ function gridStyle(): Record<string, string> {
   padding: 4px 0;
 }
 .sp-byproduct-bound + .sp-byproduct-bound { border-top: 1px dashed #eef1f6; }
+.sp-rework-batch { color: #8a5a17; font-size: 12px; }
 .sp-byproduct-name {
   display: inline-flex;
   align-items: center;

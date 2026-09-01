@@ -35,6 +35,8 @@ public class ProductionSummaryDTO {
      */
     private String yieldNote;
     private BigDecimal totalCost;
+    /** 总成本为 null 且不是脱敏时的原因（哪个批次、缺什么）。⛔ 不要在前端把 null 画成 ¥0。 */
+    private String costNote;
     private boolean priceMasked;
     private List<BatchLine> batches;
     /** 复用半成品血缘: 每个被复用的外部 SFI 批次的来源/领用/前段接续明细 (①d 血缘可见)。 */

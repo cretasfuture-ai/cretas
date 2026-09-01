@@ -68,5 +68,21 @@ public class OutputOptionsResponse {
          * 只是少了「不良品」这个措辞。这是刻意的向后兼容, 不是缺陷。
          */
         private Boolean isRework;
+
+        /**
+         * 这一项是不是不良品 (剔出来、还没复查的那部分)。
+         *
+         * <p>判据唯一来源 {@link com.cretas.aims.service.workflow.WorkflowDefectiveNodes}。
+         *
+         * <p>🔴 它<b>只是个显示标</b>。不良品端口<b>必须留在</b>这个列表里 ——
+         * 它照常报工、照常入库存着，走的就是「没有标记的半成品产出」那条默认路径。
+         * ⛔ 不要因为有了这个字段就顺手在 {@code workflowOutputOptions} 里按它加一道
+         * {@code .filter(...)}：那会让不良品从报工屏上消失，而症状（「找不到这一项」）
+         * 很难往回追到那一行。
+         *
+         * <p>加它的理由是 owner 2026-09-01「好的区别一下吧」：在此之前这个列表里没有
+         * 任何字段能把不良品和普通半成品产出分开，操作员只能靠品名猜。
+         */
+        private Boolean isDefective;
     }
 }

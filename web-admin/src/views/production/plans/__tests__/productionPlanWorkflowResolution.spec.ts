@@ -93,16 +93,22 @@ describe('production plan Workflow resolution', () => {
     const large = candidate(6, ['FG-A', 'FG-B', 'FG-C', 'FG-D']);
     const smallB = candidate(7, ['FG-A', 'FG-B', 'FG-E']);
 
-    expect(resolvePlanWorkflowCandidates(
-      ['FG-A', 'FG-B'], [large, smallA, smallB],
-    )).toEqual({ mode: 'NONE', candidates: [] });
+    const result = resolvePlanWorkflowCandidates(['FG-A', 'FG-B'], [large, smallA, smallB]);
+    expect(result.mode).toBe('NONE');
+    expect(result.candidates).toEqual([]);
+    // 三张图都是超集 ⇒ 界面可以提示「一起选上」, 但**放行与否**仍然是 candidates 说了算。
+    expect(result.jointSupersets.map((c) => c.workflowId)).toEqual([6, 5, 7]);
   });
 
   it('multiple selections reject unrelated single-output Workflows', () => {
-    expect(resolvePlanWorkflowCandidates(
+    const result = resolvePlanWorkflowCandidates(
       ['FG-A', 'FG-B'],
       [candidate(1, ['FG-A']), candidate(2, ['FG-B'])],
-    )).toEqual({ mode: 'NONE', candidates: [] });
+    );
+    expect(result.mode).toBe('NONE');
+    expect(result.candidates).toEqual([]);
+    // 两张图都只盖住一半 ⇒ 不是超集, 界面不该提示「一起选上」。
+    expect(result.jointSupersets).toEqual([]);
   });
 
   it('supports the planned compact DTO aliases without unsafe casts', () => {
@@ -187,5 +193,56 @@ describe('production plan Workflow resolution', () => {
     legacy.workflowType = 'SINGLE_OUTPUT_PRODUCT';
 
     expect(workflowCandidateTopologyLabel(legacy)).toBe('单成品工序链 · 投入关系待确认');
+  });
+
+  /**
+   * 2026-09-02 实测(本机 UAT, 汉堡肉产品族): 只选 4 个联产成品里的 1 个时,
+   * 界面打「未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置」——
+   * 而后端**找到了**图, 返回的是「匹配到包含额外联产成品的 Workflow，请确认完整产出集合」。
+   * ⇒ 提示把用户支去重配一张本来就正确的图。
+   *
+   * ⛔ 精确匹配那条规则(D6)不动: `candidates` 仍必须为空、mode 仍是 NONE。
+   *    新增的只有 `jointSupersets` —— 让界面能说清「差的是什么」。
+   */
+  describe('联产超集: 图在, 缺的是把联产成品一起选上', () => {
+    it('只选 1 个联产成品 → 仍不放行, 但把那张联产图交给界面', () => {
+      const result = resolvePlanWorkflowCandidates(['FG-A'], [
+        candidate(11, ['FG-A', 'FG-B', 'FG-C', 'FG-D']),
+      ]);
+      expect(result.mode).toBe('NONE');
+      expect(result.candidates).toEqual([]);          // ⛔ 精确匹配规则没有被放松
+      expect(result.jointSupersets).toHaveLength(1);
+      expect(result.jointSupersets[0].workflowId).toBe(11);
+      expect(workflowCandidateExtraOutputs(result.jointSupersets[0], ['FG-A']))
+        .toEqual(['FG-B', 'FG-C', 'FG-D']);
+    });
+
+    it('把 4 个一起选上 → 精确匹配, 且不再提示联产超集', () => {
+      const result = resolvePlanWorkflowCandidates(['FG-A', 'FG-B', 'FG-C', 'FG-D'], [
+        candidate(11, ['FG-A', 'FG-B', 'FG-C', 'FG-D']),
+      ]);
+      expect(result.mode).toBe('SHARED_MULTI_OUTPUT');
+      expect(result.candidates).toHaveLength(1);
+      expect(result.jointSupersets).toEqual([]);
+    });
+
+    it('阴性对照: 真的没有图时 jointSupersets 必须为空 —— 否则界面会拿它编一句提示', () => {
+      const result = resolvePlanWorkflowCandidates(['FG-A'], [
+        candidate(12, ['FG-X', 'FG-Y']),
+      ]);
+      expect(result.mode).toBe('NONE');
+      expect(result.candidates).toEqual([]);
+      expect(result.jointSupersets).toEqual([]);
+    });
+
+    it('阴性对照: 有精确匹配时不带联产超集 —— 不给界面制造二义提示', () => {
+      const result = resolvePlanWorkflowCandidates(['FG-A'], [
+        candidate(1, ['FG-A']),
+        candidate(2, ['FG-A', 'FG-B']),
+      ]);
+      expect(result.mode).toBe('SINGLE_OUTPUT');
+      expect(result.candidates).toHaveLength(1);
+      expect(result.jointSupersets).toEqual([]);
+    });
   });
 });

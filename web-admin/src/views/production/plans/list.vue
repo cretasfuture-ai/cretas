@@ -769,6 +769,8 @@ const planForm = ref({
   // 非 CUSTOMER_ORDER 来源：按所选成品集合解析一个完整 Workflow。
   targetFinishedGoodIds: [] as string[],
   resolvedCandidates: [] as WorkflowResolutionCandidate[],
+  // 覆盖了所选成品、但还多产别的联产成品的图。只用于把「未找到」换成说得清的提示(2026-09-02)。
+  jointSupersets: [] as WorkflowResolutionCandidate[],
   selectedCandidateWorkflowId: null as number | null,
   resolutionMode: '' as '' | PlanWorkflowResolutionMode,
 });
@@ -1213,6 +1215,7 @@ function resetWorkflowResolutionState() {
   workflowResolveGeneration += 1;
   planForm.value.resolutionMode = '';
   planForm.value.resolvedCandidates = [];
+  planForm.value.jointSupersets = [];
   planForm.value.selectedCandidateWorkflowId = null;
   workflowCandidateDialogVisible.value = false;
   pendingCandidateWorkflowId.value = null;
@@ -1307,6 +1310,7 @@ async function resolveTargetFinishedGoods(ids: string[]): Promise<void> {
     const resolution = resolvePlanWorkflowCandidates(ids, res.data.candidates || []);
     planForm.value.resolutionMode = resolution.mode;
     planForm.value.resolvedCandidates = resolution.candidates;
+    planForm.value.jointSupersets = resolution.jointSupersets;
     const preferred = preferredWorkflowSelection?.targetKey === ids.join(',')
       ? resolution.candidates.find((candidate) =>
           candidate.workflowId === preferredWorkflowSelection?.workflowId
@@ -1363,6 +1367,35 @@ watch(
     }, 300);
   }
 );
+
+/**
+ * 「这个成品由一张**联产**工艺图产出」—— 有它时就不该再说「未找到工艺图」。
+ *
+ * 🔴 2026-09-02 实测(本机 UAT, 汉堡肉产品族): 只选「美式谷饲牛肉饼」时, 后端
+ * `resolve-by-outputs` 返回的是 `匹配到包含额外联产成品的 Workflow，请确认完整产出集合`
+ * + 4 个终端产出, 而界面显示「未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置」
+ * ⇒ 把用户支去重配一张**本来就正确**的图。
+ *
+ * ⛔ 精确匹配那条规则(D6)不动 —— 这里只负责把「为什么不行」说清楚, 并给一键补选。
+ */
+const jointSupersetHint = computed(() => {
+  const superset = planForm.value.jointSupersets[0];
+  if (!superset) return null;
+  const requested = new Set(planForm.value.targetFinishedGoodIds);
+  const outputs = superset.terminalOutputs || [];
+  return {
+    allIds: outputs.map((o) => o.productTypeId).filter(Boolean),
+    extraNames: outputs.filter((o) => !requested.has(o.productTypeId))
+      .map((o) => o.productName).filter(Boolean),
+  };
+});
+
+/** 一键把联产图的全部终端产出补进「生产成品」—— 补完 watch 会自动重解析。 */
+function adoptJointSupersetOutputs() {
+  const hint = jointSupersetHint.value;
+  if (!hint || hint.allIds.length === 0) return;
+  planForm.value.targetFinishedGoodIds = hint.allIds.slice();
+}
 
 const nonSoSubmitBlocked = computed(() => {
   if (planForm.value.sourceType === 'CUSTOMER_ORDER') return false;
@@ -1425,6 +1458,7 @@ function handleCreate() {
     // raw-centric 多SKU (2026-07-13): 重置多选成品 + 工序图解析状态。
     targetFinishedGoodIds: [],
     resolvedCandidates: [],
+    jointSupersets: [],
     selectedCandidateWorkflowId: null,
     resolutionMode: '',
   };
@@ -1575,9 +1609,12 @@ async function submitPlan() {
   }
   if (nonSoSubmitBlocked.value) {
     if (planForm.value.resolutionMode === 'NONE') {
-      ElMessage.warning(planForm.value.targetFinishedGoodIds.length === 1
-        ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
-        : '未找到共享的工序 Workflow，请分开创建生产计划');
+      const hint = jointSupersetHint.value;
+      ElMessage.warning(hint
+        ? `这个成品由联产工艺图产出，需要把 ${hint.extraNames.join('、')} 一起选上`
+        : planForm.value.targetFinishedGoodIds.length === 1
+          ? '未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置'
+          : '未找到共享的工序 Workflow，请分开创建生产计划');
     } else {
       ElMessage.warning('检测到多个可用 Workflow，请先选择本计划使用的版本');
     }
@@ -4003,6 +4040,7 @@ function handleAiFill(params: TableRow) {
     // 保持「生产成品」下拉与 productTypeId 一致 (触发 watch → 解析工序图)。
     targetFinishedGoodIds: matched ? [String(matched.id)] : [],
     resolvedCandidates: [],
+    jointSupersets: [],
     selectedCandidateWorkflowId: null,
     resolutionMode: '',
   };
@@ -5097,6 +5135,33 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               >
                 选择生产工序路线
               </el-button>
+            </el-alert>
+            <!-- 有联产超集: 图是对的, 缺的是「把联产成品一起选上」。⛔ 不要说「未找到」。 -->
+            <el-alert
+              v-else-if="planForm.resolutionMode === 'NONE' && jointSupersetHint"
+              type="warning"
+              show-icon
+              :closable="false"
+              style="margin-top: 8px;"
+              data-testid="joint-superset-hint"
+            >
+              <template #title>
+                这个成品由一张联产工艺图产出，同一批还会产出：{{ jointSupersetHint.extraNames.join('、') }}
+              </template>
+              <div style="margin-top: 4px; color: #606266; font-size: 12px;">
+                联产图不能只为其中一个成品建计划（产出会对不上账）。把它们一起选上即可继续。
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 8px;">
+                <el-button
+                  size="small"
+                  type="primary"
+                  data-testid="adopt-joint-outputs"
+                  @click="adoptJointSupersetOutputs"
+                >一起选上这 {{ jointSupersetHint.allIds.length }} 个成品</el-button>
+                <el-button size="small" @click="goToWorkflowConfig(planForm.targetFinishedGoodIds)">
+                  查看工艺图
+                </el-button>
+              </div>
             </el-alert>
             <el-alert
               v-else-if="planForm.resolutionMode === 'NONE' && planForm.targetFinishedGoodIds.length === 1"

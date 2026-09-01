@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { deriveByShare } from '@/views/system/product-processes/workflow/workflowInputShare';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { showSingletonNotification } from '@/utils/singletonNotification';
@@ -22,6 +23,8 @@ interface RequisitionItem {
   materialName?: string | null;
   materialCategory?: string | null;
   requiredQty?: number | string | null;
+  /** 主原料份额(%), 建单时抄自计划钉住的工艺修订端口; null=按实际领用。 */
+  inputShareRatio?: number | null;
   pickedQty?: number | string | null;
   issuedQty?: number | string | null;
   consumedQty?: number | string | null;
@@ -107,7 +110,26 @@ interface ConfirmPickRow extends RequisitionItem {
   autoLocked?: boolean;
   // true = 用户手改过这一行的自动计算值 —— 之后 recalc 不再覆盖它, 直到点
   // 「恢复自动计算」重置 (owner 卡点②: 现场多放了盐是真实的, 不能被静默吃掉)。
+  // 主料份额推算 (a) 复用同一个标记: RAW 行手填过就不再被份额推算覆盖 (⛔ 不留第二套标记)。
   manuallyTouched?: boolean;
+}
+
+/**
+ * owner 2026-09-02: 「填入第一个原料 30 吨, 第二个它会自动跳出 70 吨」。
+ * 只在**原料**行之间推; 自备料行不参与 (它没有领用量, 既不被推也不当基准);
+ * 手填过 (manuallyTouched) 的行不覆盖。份额来自 item.inputShareRatio (工艺端口冻结值)。
+ * 调用顺序固定为 RAW 份额 → recalcAuxRows: 一次填数, 其余主料和辅料全部跳出来。
+ */
+function autoFillPickedByShare(changed: ConfirmPickRow): void {
+  const raws = confirmRows.value.filter((r) => (r.materialCategory ?? 'RAW') === 'RAW' && !isSelfSupplied(r));
+  const derived = deriveByShare(raws.map((r) => ({ id: r.id, share: r.inputShareRatio ?? null })), changed.id, changed.pickedInput);
+  if (derived.size === 0) return;
+  for (const r of raws) {
+    if (r.id === changed.id || !derived.has(r.id)) continue;
+    if (r.pickedInput != null && r.manuallyTouched) continue;
+    r.pickedInput = derived.get(r.id) ?? null;
+    r.manuallyTouched = false;
+  }
 }
 const confirmDialogVisible = ref(false);
 const confirmTarget = ref<Requisition | null>(null);
@@ -244,8 +266,10 @@ function isPendingQty(item: { requiredQty?: number | string | null }): boolean {
   return item.requiredQty === null || item.requiredQty === undefined || item.requiredQty === '';
 }
 
-function requiredQtyLabel(item: { requiredQty?: number | string | null }): string {
-  return isPendingQty(item) ? '按实际领用' : qty(item.requiredQty);
+function requiredQtyLabel(item: { requiredQty?: number | string | null; inputShareRatio?: number | null }): string {
+  if (!isPendingQty(item)) return qty(item.requiredQty);
+  // 主料带份额: 不再只是一句「按实际领用」—— 告诉仓管填任一原料, 其余会按这个比例跳出来。
+  return item.inputShareRatio != null ? `按配比 ${Number(item.inputShareRatio)}%` : '按实际领用';
 }
 
 /**
@@ -513,6 +537,9 @@ function recalcAuxRows() {
 // 输入框 @change —— 写路径②(RAW 行变化触发重算) / 写路径③(用户手改自动计算行, 打上手改标记)。
 function handlePickedInputChange(row: ConfirmPickRow) {
   if (row.materialCategory === 'RAW') {
+    // 顺序固定: 主料份额先推其余主料 → 再按新的 RAW 合计推辅料 (organizer 2026-09-02)。
+    row.manuallyTouched = true;
+    autoFillPickedByShare(row);
     recalcAuxRows();
     return;
   }
@@ -960,6 +987,7 @@ async function submitCancel() {
                 :step="0.001"
                 controls-position="right"
                 class="qty-input"
+                data-testid="picked-input"
                 :placeholder="row.autoLocked && !row.manuallyTouched ? '按原料自动计算' : undefined"
                 @change="handlePickedInputChange(row)"
               />

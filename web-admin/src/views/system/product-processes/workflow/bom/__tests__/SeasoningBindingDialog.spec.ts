@@ -56,7 +56,7 @@ function mountDialog(price: number | null, materials = [{ id: 'M1', name: 'è¾£æ¤
       stubs: {
         teleport: true,
         transition: false,
-        ElDialog: {
+        ElDrawer: {
           props: ['modelValue', 'title'],
           template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
         },
@@ -97,7 +97,7 @@ describe('SeasoningBindingDialog', () => {
         stubs: {
           teleport: true,
           transition: false,
-          ElDialog: {
+          ElDrawer: {
             props: ['modelValue', 'title'],
             template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
           },

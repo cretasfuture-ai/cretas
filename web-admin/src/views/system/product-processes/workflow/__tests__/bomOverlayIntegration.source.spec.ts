@@ -61,8 +61,19 @@ describe('画布接入 BOM 浮层', () => {
     expect(source).toContain('versions.unshift(options.preferredDraft)');
   });
 
-  it('浮层允许拖动但不会进入 Workflow dirty，派生刷新保留拖后位置', () => {
-    expect(source).toMatch(/existingOverlayPositions[\s\S]{0,1800}draggable:\s*true/);
+  it('融合附属卡片不可独立拖动，位置恒等于 owner，且拖动不产生 Workflow dirty', () => {
+    // 🔴 2026-09-01 判据换代(形态 C‴: 断言守的是历史, 不是需求)。
+    // 旧判据钉的是 `existingOverlayPositions … draggable: true` —— 「浮层有自己的位置、
+    // 可以被拖走」。已确认交互把「能被拖开」直接判为缺陷: 融合 = 同一个 owner group,
+    // 附属卡片没有自己的位置, 也扯不开。所以这里改成守新不变式, 并保留阴性对照。
+    expect(source).toMatch(/overlayNodes\.map[\s\S]{0,400}draggable:\s*false/);
+    // 阴性对照: 位置必须来自派生结果(= owner 位置), ⛔ 不许再落回"用户拖过的位置"。
+    expect(source).not.toMatch(/position:\s*existingOverlayPositions\.get/);
+    // 位置由 reconcileFusedPositions 钉死等于 owner —— 这是「同 x、无缝相接」的承载点。
+    expect(source).toContain('function reconcileFusedPositions');
+    expect(source).toMatch(/reconcileFusedPositions[\s\S]{0,900}node\.position = \{ x: owner\.x, y: owner\.y \}/);
+    // 融合之后中间没有空隙可画线 —— 投影边保留在数据里但不显形(不许有"悬挂线")。
+    expect(source).toMatch(/zIndex: 1,[\s\S]{0,300}hidden: true/);
     // 窗口要够大: onNodeDragStop 2026-08-11 加了多选拖动处理(消费 nodes[] 而不只是 node),
     // 900 字符已经切不到 dirty 那行了 —— 切片不够长会让断言拿到 -1, 看着像"没有 dirty"。
     const dragStopBody = source.slice(source.indexOf('function onNodeDragStop'), source.indexOf('function onNodeDragStop') + 2000);

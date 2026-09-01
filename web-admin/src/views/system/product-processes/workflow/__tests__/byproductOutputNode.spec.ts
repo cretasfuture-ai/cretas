@@ -38,6 +38,7 @@ const SRC = resolve(__dirname, '..');
 const read = (rel: string) => readFileSync(resolve(SRC, rel), 'utf-8');
 
 const EDITOR = read('ProductProcessWorkflowEditor.vue');
+const SPECIAL_OUTPUTS = read('workflowSpecialOutputs.ts');
 const PROCESS_NODE = read('WorkflowProcessNode.vue');
 const MATERIAL_NODE = read('WorkflowMaterialNode.vue');
 
@@ -164,18 +165,40 @@ describe('图校验对副产的处理', () => {
 describe('入口与选择器', () => {
   it('副产与主产出共用 addOutputToProcess —— 不是另起一个函数', () => {
     // goal: 「复用画布已有的『＋ 产出 Cell（分流）』入口, 不要新造入口」。
-    expect(EDITOR).not.toMatch(/function addByproductToProcess/);
-    expect(EDITOR).toMatch(/function addOutputToProcess\(processId: string, options: \{ byproduct\?: boolean \}/);
-    expect(EDITOR).toContain("addOutputToProcess(slotProps.id, { byproduct: true })");
+    // 🔴 2026-09-01 判据换了承载方式: 原来钉的是**函数签名与调用点的字面文本**,
+    //    于是加第三类(不良品)时这条测试红了 —— 而产品行为一点没变坏。
+    //    钉字面文本守不住「只有一条路径」这件事, 它守的是「这一行长什么样」。
+    //    ⇒ 换成数**结构**: 没有 per-kind 的函数, 且建产出 Cell 的函数只有一个。
+    for (const forbidden of [/function addByproductToProcess/,
+      /function addReworkToProcess/, /function addDefectiveToProcess/]) {
+      expect(EDITOR, String(forbidden)).not.toMatch(forbidden);
+    }
+    expect(EDITOR.match(/function addOutputToProcess\(/g) ?? []).toHaveLength(1);
+    // 三类都从统一入口穿过同一个函数, 差别只在 options 上的那个键
+    const chooser = EDITOR.slice(
+      EDITOR.indexOf('function chooseSpecialOutput'),
+      EDITOR.indexOf('function chooseSpecialOutput') + 900);
+    expect(chooser).toContain('addOutputToProcess(processId');
+    for (const key of ['byproduct: true', 'defective: true', 'rework: true']) {
+      expect(chooser, key).toContain(key);
+    }
   });
 
   it('每个工序上都有「+ 副产」入口 —— 「没配副产」与「不能配副产」必须能区分', () => {
     // 这条继承自浮层时代的「没有副产也派生空 cell」。浮层没了, 但那个信息不能没:
     // 用户要能看出"这里可以加副产, 只是还没加"。承接它的是工序上常驻的入口按钮。
-    expect(PROCESS_NODE).toContain('data-testid="add-byproduct-inline"');
-    expect(PROCESS_NODE).toMatch(/emit\('addByproduct'\)/);
+    // 2026-09-01: 入口从三个并排小按钮收敛成一个 `+ 添加特殊产出` 再三选一(§7)。
+    // 这条判据守的**意图**一字未改 ——「这里可以加, 只是还没加」必须能与「不能加」区分,
+    // 所以入口仍然常驻; 变的只是它长什么样, 于是断言从字面改成钉这个性质。
+    expect(PROCESS_NODE).toContain('data-testid="add-special-output"');
+    expect(PROCESS_NODE).toMatch(/emit\('addSpecialOutput'\)/);
+    // 选择器里副产必须**始终**在列, 不许被藏。
+    expect(SPECIAL_OUTPUTS).toMatch(/kind: 'byproduct'/);
+    // 阴性对照: 旧的两个并排入口确实**没有并存**(是换掉不是新增)。
+    expect(PROCESS_NODE).not.toContain('data-testid="add-byproduct-inline"');
+    expect(PROCESS_NODE).not.toContain('data-testid="add-rework-inline"');
     // ⛔ 不许被 v-if 藏起来: 只允许按写权限收(canWrite), 不允许按"有没有副产"收
-    const at = PROCESS_NODE.indexOf('data-testid="add-byproduct-inline"');
+    const at = PROCESS_NODE.indexOf('data-testid="add-special-output"');
     const block = PROCESS_NODE.slice(Math.max(0, at - 400), at);
     expect(block).not.toMatch(/v-if="[^"]*byproduct[^"]*"/i);
   });
@@ -263,12 +286,20 @@ describe('删掉副产入口后, 没有文案再指向它', () => {
     expect(visible).toMatch(/辅料 \/ 包材 cell 上配置/);
   });
 
-  it('归属不明的提示指向仍然存在的包材 cell', () => {
-    const at = EDITOR.indexOf('未能确定该工序归属的成品');
-    expect(at).toBeGreaterThan(-1);
-    const line = EDITOR.slice(at, at + 200);
-    expect(line).toMatch(/包材 cell/);
-    expect(line).not.toMatch(/副产入口/);
+  it('归属不明时**问用户**，⛔ 不再把他支去另一扇门', () => {
+    // 🔴 2026-09-01 判据换代（形态 C‴：断言守的是历史，不是需求）。
+    //
+    // 旧断言钉的是「那句提示指向仍然存在的包材 cell」—— 它守的是**提示的措辞**。
+    // owner 实测发现那扇门本身是死的: 归属定不出来的唯一常见原因是这张图产出多个成品,
+    // 而他被支去的包材入口在成品不是终端的图上也开不了 ⇒ 死循环
+    //（「包材跟辅料都没有办法去添加, 知道去哪儿加呀?」）。
+    //
+    // ⇒ 需求变了: 定不出来不该拒绝, 该问「算在哪个成品头上」。
+    //    那句提示随之删除, 所以这条断言必须改, ⛔ 不是把提示加回来。
+    expect(EDITOR).not.toContain('联合生产请先从产出侧的包材 cell 建立 BOM');
+    expect(EDITOR).toContain('auxOwnerPickerVisible.value = true');
+    // 阴性对照: 真的走不到成品时仍然要有一句解释, ⛔ 不许静默 return
+    expect(EDITOR).toContain('这道工序往下走不到任何成品 Cell');
   });
 });
 

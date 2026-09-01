@@ -210,7 +210,9 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     optionalPositiveDecimal(
                             port.get("standardQuantity"), nodeId, path + ".standardQuantity"),
                     optionalQuantityMode(
-                            port.get("quantityMode"), nodeId, path + ".quantityMode")));
+                            port.get("quantityMode"), nodeId, path + ".quantityMode"),
+                    optionalPercent(
+                            port.get("inputShareRatio"), nodeId, path + ".inputShareRatio")));
         }
         return List.copyOf(ports);
     }
@@ -396,6 +398,33 @@ public class ProductProcessWorkflowRuntimeCompiler {
         return parsed;
     }
 
+    /**
+     * 0–100 的可选百分比(主料份额)。⛔ 与 {@link #optionalPositiveDecimal} 不同: 0 是合法值
+     * (「这个入口不参与推算」), 超出 [0,100] 才拒 —— 份额是相对量, 各端口之和不强制等于 100,
+     * 推算时按份额归一化。
+     */
+    private BigDecimal optionalPercent(Object value, String nodeId, String fieldPath) {
+        if (value == null) {
+            return null;
+        }
+        BigDecimal parsed;
+        if (value instanceof BigDecimal decimal) {
+            parsed = decimal;
+        } else if (value instanceof Number number) {
+            double d = number.doubleValue();
+            if (!Double.isFinite(d)) {
+                throw runtimeInvalid(nodeId, fieldPath, "must be a finite number");
+            }
+            parsed = BigDecimal.valueOf(d);
+        } else {
+            throw runtimeInvalid(nodeId, fieldPath, "must be a number");
+        }
+        if (parsed.signum() < 0 || parsed.compareTo(new BigDecimal("100")) > 0) {
+            throw runtimeInvalid(nodeId, fieldPath, "must be between 0 and 100");
+        }
+        return parsed;
+    }
+
     private String optionalQuantityMode(Object value, String nodeId, String fieldPath) {
         String mode = optionalString(value, nodeId, fieldPath);
         if (mode != null && !QUANTITY_MODES.contains(mode)) {
@@ -522,7 +551,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     selectionGroup == null ? null : selectionGroup.label(),
                     selectionGroup == null ? null : selectionGroup.mode(),
                     selectionGroup == null ? null : selectionGroup.minSelections(),
-                    selectionGroup == null ? null : selectionGroup.maxSelections()));
+                    selectionGroup == null ? null : selectionGroup.maxSelections(),
+                    declaredPort.inputShareRatio()));
         }
     }
 
@@ -694,7 +724,9 @@ public class ProductProcessWorkflowRuntimeCompiler {
             Long conversionVersion,
             Integer ordinal,
             BigDecimal standardQuantity,
-            String quantityMode) {
+            String quantityMode,
+            /** 主原料在本工序投入端口间的相对份额(%)。null = 不参与推算。owner 2026-09-02 裁定走 (a): 配比进画布端口。 */
+            BigDecimal inputShareRatio) {
     }
 
     private record DeclaredPortGroup(

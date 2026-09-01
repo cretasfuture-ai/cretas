@@ -73,7 +73,10 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
           props: ['label', 'value'],
           template: '<div />',
         },
-        ElDialog: {
+        // 🔴 2026-09-01: 外壳从 el-dialog 换成 el-drawer(owner 指定「应该就是侧边栏」,
+        //    已确认原型里这两个编辑器是停靠式侧栏)。桩不跟着换, 内容整块渲染不出来,
+        //    读数会长成「字段没了」而不是「桩错了」。
+        ElDrawer: {
           props: ['modelValue', 'title'],
           template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>',
         },

@@ -7,8 +7,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
-import org.springframework.cache.caffeine.CaffeineCache;
-import org.springframework.cache.support.SimpleCacheManager;
+import org.springframework.cache.caffeine.CaffeineCacheManager;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -162,34 +161,27 @@ public class CacheConfig {
                 .build();
     }
 
+    /**
+     * Redis 不可用时的降级缓存。
+     *
+     * 🔴 2026-09-01 修: 原来是 `SimpleCacheManager` + 一份**写死的缓存名单**。
+     * 那份名单是「本仓用到的全部 @Cacheable 名字」的第二份副本, 它漂了 ——
+     * `allUnits` / `unitsByCategory` 从来没被加进去, 于是任何一次
+     * `@Cacheable("allUnits")` 在降级路径上直接 400:
+     *   「Cannot find cache named 'allUnits'」
+     * 本机(没起 Redis)实测: 单位目录接口全挂, 回料抽屉的「计量单位」下拉只剩当前单位。
+     * 生产用 Redis, RedisCacheManager 按需建缓存, 所以这个缺陷在生产上看不见 ——
+     * 「只在降级路径上坏」正是它能活这么久的原因。
+     *
+     * ⇒ 换成 `CaffeineCacheManager`: 它**按需创建**缓存, 那份名单从物理上不再需要,
+     *   也就漂不起来了(⛔ 不要再加回一份 String[] 清单来「补全」)。
+     */
     private CacheManager buildSimpleCacheManager() {
-        log.warn("Redis 不可用，使用 Caffeine 内存缓存作为降级方案");
-
-        // Caffeine cache with TTL and size limits (prevents OOM unlike ConcurrentMapCache)
-        String[] cacheNames = {
-                "aiAnalysisResults", "aiIntents", "aiQuota", "dashboardStats",
-                "allIntents", "intentsByCategory", "intentCategories", "intentsBySensitivity",
-                "allIntents_legacy", "intentsByCategory_legacy", "intentCategories_legacy",
-                "qualityStats", "shipmentStats", "customerStats", "alertStats",
-                "equipmentStats", "productTypes", "productTypeOptions", "materialTypes", "equipmentList", "customerList",
-                "dailySummary", "weeklySummary", "aiToolResult",
-                "realtimeReport", "oeeReport", "kpiMetrics", "costVarianceReport",
-                "capacityUtilization", "onTimeDelivery", "productionByProduct",
-                "monthlyReport", "yearlyReport", "inventoryReport", "financeReport",
-                "workflowStats"
-        };
-
-        java.util.List<org.springframework.cache.Cache> caches = new java.util.ArrayList<>();
-        for (String name : cacheNames) {
-            caches.add(new CaffeineCache(name,
-                    Caffeine.newBuilder()
-                            .maximumSize(500)
-                            .expireAfterWrite(Duration.ofMinutes(10))
-                            .build()));
-        }
-
-        SimpleCacheManager cacheManager = new SimpleCacheManager();
-        cacheManager.setCaches(caches);
+        log.warn("Redis 不可用，使用 Caffeine 内存缓存作为降级方案（按需建缓存）");
+        CaffeineCacheManager cacheManager = new CaffeineCacheManager();
+        cacheManager.setCaffeine(Caffeine.newBuilder()
+                .maximumSize(500)
+                .expireAfterWrite(Duration.ofMinutes(10)));
         return cacheManager;
     }
 }

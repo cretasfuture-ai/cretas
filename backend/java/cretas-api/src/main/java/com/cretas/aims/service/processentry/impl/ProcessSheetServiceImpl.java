@@ -26,6 +26,7 @@ import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.service.workflow.WorkflowSheetDownstream;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
@@ -633,9 +634,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             ProcessSheetRowRequest req) {
         String workflowProcessNodeId = null;
         String workProcessId = null;
+        WorkflowClerkSheetConfigDTO config = null;   // 中间道要沿图往下游走, 所以提到外层
         if (pinnedWorkflow && workflowClerkSheetService != null && req.getProcessOrder() != null) {
-            WorkflowClerkSheetConfigDTO config =
-                    workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
             WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor =
                     config == null || config.getProcesses() == null ? null
                             : config.getProcesses().stream()
@@ -657,14 +658,30 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         Set<String> reportedProductIds = new LinkedHashSet<>(
                 reportedFinishedProductIds(req));
+        Set<String> reportedTerminalNodeIds = new LinkedHashSet<>();
+        if (reportedProductIds.isEmpty() && workflowProcessNodeId != null) {
+            // 🔴 2026-09-02 本机 UAT 实拍: 联产图里中间道报工行不带成品, 原来这里退到
+            //    plan.selectedBomRecipeId(整个计划只有一个) 的终端去比 OUTPUT_EXCLUSIVE 的 scope,
+            //    结果**只有被钉为默认的那条线扣辅料**——小吃吧线绞肉 3 行/搅拌 5 行一克没扣,
+            //    美式线能扣只是因为默认恰好钉在它身上。
+            //    这道属于哪条线, 图上沿产出往下走就到终端了; 用它, ⛔ 不用计划级默认。
+            for (WorkflowSheetDownstream.Terminal t
+                    : WorkflowSheetDownstream.reachableTerminals(config, workflowProcessNodeId)) {
+                reportedTerminalNodeIds.add(t.materialNodeId());
+                if (t.skuId() != null) {
+                    reportedProductIds.add(t.skuId());
+                }
+            }
+        }
         if (reportedProductIds.isEmpty()) {
+            // 走不到任何成品(图不完整)才退回计划级默认 —— 保留旧行为而不是抛错, 但它是兜底不是口径。
             reportedProductIds.add(pinnedRecipe.getProductTypeId());
         }
-        Set<String> reportedTerminalNodeIds = pinnedFamily.stream()
+        pinnedFamily.stream()
                 .filter(member -> reportedProductIds.contains(member.getProductTypeId()))
                 .map(BomRecipe::getTargetTerminalNodeId)
                 .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
+                .forEach(reportedTerminalNodeIds::add);
 
         LinkedHashMap<Long, BomSeasoningItem> applicable = new LinkedHashMap<>();
         for (BomRecipe member : pinnedFamily) {

@@ -47,6 +47,36 @@ export interface MaterialNodeData extends Record<string, unknown> {
    */
   isByproduct?: boolean;
   /**
+   * 这个产出 Cell 是**回料**(2026-08-28 起编辑器已在写它, 本轮补进类型)。
+   *
+   * 回料 = 金检/X光 剔出、可回到后续批次继续投的独立半成品。⛔ 与副产刻意分成两个键:
+   * 副产端口被后端 `getOutputOptions` 过滤掉, 回料端口**必须留在**报工选项里让操作员填数。
+   * Java 侧唯一判据是 `WorkflowReworkNodes`(读的就是本字段), 不是端口上的任何东西。
+   */
+  isRework?: boolean;
+  /**
+   * 这个产出 Cell 是**不良品**（2026-09-01 owner 订正后加回）。
+   *
+   * 语义 = 金检/X光 剔出来、**还没复查**的那部分。车间流程是
+   * 「剔出 → 复查 → 存着 → 回料直接回过去」。
+   *
+   * ⛔ 不是「判废」，⛔ 不是「不入库」—— 那两个说法是 2026-09-01 被 owner 否掉的东西，
+   *    而我第一版误把整类删掉了。它**要入库**，「存着」就是入库。
+   *
+   * 🔑 与另外两个标记的关键区别：Java 侧的 `WorkflowDefectiveNodes` 是**纯角色标**，
+   * ⛔ 一个字都不出现在任何 `.filter(...)` 里。
+   * `WipInventoryServiceImpl.workflowOutputOptions` 只把**副产**滤掉，没有被滤的半成品
+   * 产出照常进报工选项、照常入 `semi_finished_inventory` —— 不良品要的
+   * 「报得了 + 存得住」走的就是这条默认路径。把它加进过滤会让它从报工屏上消失。
+   *
+   * ⚠️ 2026-09-01 订正：本注释上一版写着「没有也不需要 Java 判据类」。
+   * 那是在 owner 说「好的区别一下吧，补吧」之前 —— 现在有了，但它的职责只有
+   * **区分显示**（录入表上不良品和副产一起填，靠这个标打 tag），不是过滤。
+   *
+   * ⚠️ 诚实边界：没有「复查通过 → 自动变回料」的流转。复查完回投是人在回料 Cell 那边报的。
+   */
+  isDefective?: boolean;
+  /**
    * 本原料 cell 是哪个原料的替代料(值 = 被替代原料 cell 的 node id)。
    * 空/缺省 = 独立投入(与主料一起投)。
    *
@@ -75,6 +105,12 @@ export interface ProcessPort {
   outputRole?: WorkflowOutputRole | null;
   /** Shared-cost allocation percentage; multi-output ports must total 100. */
   costAllocationRatio?: number | null;
+  /**
+   * 主原料份额(%), 仅 INPUT 端口。owner 2026-09-02 裁定走 (a): 配比进画布端口, 发布即新修订。
+   * 相对量: 各端口之和不必是 100, 推算按已填端口归一化 —— 「填 30 吨, 另一个自动跳 70 吨」。
+   * null = 该入口不参与推算(领料仍按实际领用)。⛔ 不是投入量, 也不是 standardQuantity。
+   */
+  inputShareRatio?: number | null;
   ordinal: number;
 }
 
@@ -149,6 +185,65 @@ export interface ProcessNodeData extends Record<string, unknown> {
   standardTime?: number | null;
   allowMultipleUpstreamSources?: boolean;
   allowFinishedGoodsSource?: boolean;
+  /** 这道工序接收哪些回料、各按多少比例投 —— 见 {@link WorkflowReworkPolicy}。 */
+  reworkPolicy?: WorkflowReworkPolicy | null;
+}
+
+/**
+ * 一道工序的回料规则 —— **规则住在目标工序上**（承接 PR #417 的载体选择），
+ * 随 Workflow 版本保存（进 nodesJson ⇒ 进 revisionHash ⇒ 改它产生新工艺版本）。
+ *
+ * ⛔ **只有这一份真值**：刻意不在回料 Cell 上再存一份「我能去哪」。同一个关系存两处
+ * 一定会漂，而漂的那一份不会报错，只会让画布和保存出来的定义讲两个故事。
+ */
+export interface WorkflowReworkPolicy {
+  /** 允许回投到本工序的回料，以及各自的投入比例。至少 1 条，否则整个 policy 应为 null。 */
+  sources: WorkflowReworkSource[];
+}
+
+/**
+ * 一块回料回投进某一道工序的配方项。
+ *
+ * 🔴 **`inputRatioPercent` 是 BOM 性质的确定投入比例，不是「上限」**（2026-09-01 owner 订正）。
+ * 语义是「这块回料就是按这个百分比投进这道工序的」——由工厂纪律保证照此执行，
+ * **实际投了多少不需要记录**。
+ *
+ * ⛔ 所以措辞里不许出现「上限」「最多」「不超过」：那会让人以为系统在卡一个天花板，
+ * 而它其实是在声明一个配方值。
+ *
+ * ## 分母是**主料**，不是工序总投入（2026-09-01 owner 第二次订正）
+ * owner 原话：「比例的话是按照投入的原料或者半成品」。所以算式是：
+ *
+ *     回料投入量 = 本工序投入的原料/半成品数量 × inputRatioPercent%
+ *
+ * 例：腌制投 100kg 猪蹄原料、比例 8.5% ⇒ 回料投 8.5kg，本工序共投 108.5kg。
+ *
+ * ⛔ **不是**「本工序总投入里有 8.5% 是回料」（那样算是 8.5kg 回料 + 91.5kg 主料）。
+ * 两种读法差一个量级，而它直接进核算 —— 这就是为什么要写死在类型上，不靠界面措辞。
+ *
+ * ⚠️ 由此：同一块回料投给多道工序时，各道**各算各的、不要求合计 100%**
+ * （每道以自己的主料为分母）。⛔ 不要加「合计必须等于 100」的校验。
+ *
+ * ## 它拿来干什么：**自动扣减**（2026-09-01 owner 第三次订正，**尚未实现**）
+ * owner 原话：「不用提醒，我说的是直接作为自动扣减，拉数据的时候能看到」。
+ * - ⛔ 不提醒、不警告、不弹窗（我上一版写成「实时警告」是错的）；
+ * - ⛔ 报工时不要操作员为它填一笔投入，也不替他把料配上；
+ * - ⛔ 不拦报工；
+ * - ✅ 核算时**按这个比例自动扣减**，结果在拉数据时看得到。
+ *
+ * ⚠️ 诚实边界：上面那条 ✅ **现在不存在**。Java 侧没有任何消费者读本字段 ——
+ * `WorkflowReworkNodes` 只认物料节点上的 `data.isRework`。所以它今天是一个
+ * **已持久化的配方声明**，扣减引擎还没接。
+ * ⛔ UI 上不许写成「系统会自动扣」——那是一句代码给不出证据的话。
+ */
+export interface WorkflowReworkSource {
+  /** 回料 Cell 的 node id。 */
+  reworkNodeId: string;
+  /**
+   * 这块回料按本工序**主料**（投入的原料/半成品）的百分比投（0–100）。
+   * ⛔ 不是「占工序总投入的比例」—— 见上方类型注释里的算式。
+   */
+  inputRatioPercent: number;
 }
 
 export type WorkflowNodeData = MaterialNodeData | ProcessNodeData;

@@ -851,6 +851,44 @@ public class TransferServiceImpl implements TransferService {
      * (为兼容既有 7 参数构造器单测)。为 null 时**必须留下 WARN** —— 静默跳过就等于把这个洞
      * 原样保留, 而且下次没人看得出来。
      */
+    /**
+     * 调拨明细<b>继承源批次的单价</b> —— 内部移库不改变成本基础(owner 2026-09-02 裁定)。
+     *
+     * <h3>🔴 为什么要有这一步</h3>
+     * 原来目标批次的单价<b>只</b>来自请求体 ({@code item.setUnitPrice(itemDTO.getUnitPrice())}
+     * → {@code batch.setUnitPrice(item.getUnitPrice())})，而界面上那一列是<b>默认留空</b>、
+     * 且被 {@code canViewPrice} 权限门控的手填框。⇒ 仓管不填(或没有看价权限<b>根本填不了</b>)，
+     * 调过去的批次就 {@code unit_price IS NULL}，此后所有下游成本全部丢失。
+     *
+     * <p>本机 UAT 实拍(2026-09-02, 汉堡肉产品族)：原料仓→生产仓调拨 28 行后报工 + 小结，
+     * 半成品单价读出来 <b>¥0.4132/kg</b>，而原料是 44.8~78 元/kg。算式闭合：
+     * {@code 48 工时 × 26 元 ÷ 3020 kg = 0.4132} 逐位相同 ⇒ 成本里<b>只有人工，原料是 0</b>。
+     *
+     * <h3>口径</h3>
+     * FEFO 一行可能扣<b>多个</b>批次且各自单价不同 ⇒ 用<b>实际扣减量的加权平均</b>，
+     * ⛔ 不取第一个批次的价(那正是 {@code sourceBatchId} 单值列已经吃过的亏)。
+     *
+     * <p>⛔ <b>源批次全都没有单价时保持 null，不写 0。</b> 0 是一个会一路往下传的
+     * <b>假读数</b>(成本报表会把它当成"这批料不要钱")，而 null 至少说得出"不知道"。
+     *
+     * <p>请求体显式给了单价就<b>不覆盖</b> —— 那是调拨方主动的定价(例如跨厂结算价)。
+     */
+    private void inheritSourceUnitPrice(InternalTransferItem item,
+                                        BigDecimal inheritedQty, BigDecimal inheritedCost) {
+        if (item.getUnitPrice() != null) {
+            return;
+        }
+        if (inheritedQty == null || inheritedQty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("调拨明细未能继承源批次单价(源批次均无单价): materialTypeId={}, qty={}",
+                    item.getMaterialTypeId(), item.getQuantity());
+            return;
+        }
+        BigDecimal weighted = inheritedCost.divide(inheritedQty, 4, RoundingMode.HALF_UP);
+        item.setUnitPrice(weighted);
+        log.info("调拨明细继承源批次单价: materialTypeId={}, 加权单价={}, 计价量={}",
+                item.getMaterialTypeId(), weighted, inheritedQty);
+    }
+
     private void recordTransferConsumption(String factoryId, MaterialBatch batch, BigDecimal deduct,
                                            InternalTransferItem item, Long recordedBy, String transferNumber) {
         if (materialConsumptionRepository == null) {
@@ -1523,6 +1561,9 @@ public class TransferServiceImpl implements TransferService {
 
             BigDecimal remaining = item.getQuantity();
             String firstConsumedBatchId = null;
+            // 继承源批次成本用的累加器 —— 见循环后的 inheritSourceUnitPrice。
+            BigDecimal inheritedQty = BigDecimal.ZERO;
+            BigDecimal inheritedCost = BigDecimal.ZERO;
             for (MaterialBatch batch : batches) {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
                 // 使用乐观锁思路: 读取→计算→保存，@Transactional 保证原子性
@@ -1546,12 +1587,17 @@ public class TransferServiceImpl implements TransferService {
                 // ⚠️ 尤其是这个 FEFO 循环会扣【多个】批次, 而下面的 item.setSourceBatchId 只记得住
                 // 第一个 —— 第二个以后的批次在全库任何地方都没有记录。逐批次写流水是唯一的补法。
                 recordTransferConsumption(factoryId, batch, deduct, item, recordedBy, transferNumber);
+                if (batch.getUnitPrice() != null) {
+                    inheritedQty = inheritedQty.add(deduct);
+                    inheritedCost = inheritedCost.add(deduct.multiply(batch.getUnitPrice()));
+                }
                 if (firstConsumedBatchId == null) firstConsumedBatchId = batch.getId();
                 inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "TRANSFER_OUT");
                 remaining = remaining.subtract(deduct);
                 log.info("扣减原料批次: batchId={}, deduct={}, remaining={}, preselected={}",
                         batch.getId(), deduct, remaining, preselectedBatchId != null);
             }
+            inheritSourceUnitPrice(item, inheritedQty, inheritedCost);
             if (remaining.compareTo(BigDecimal.ZERO) > 0) {
                 // 原因不同, 出路就不同 —— 账面为 0 才该去采购; 被未结报工占住时去采购是白跑一趟,
                 // 正确动作是先做生产小结把消耗落账 (或改调较小的量)。不分清楚就是让人做他做不到的事。
@@ -1924,6 +1970,38 @@ public class TransferServiceImpl implements TransferService {
                         || item.getItemType() == TransferItemType.PACKAGING_MATERIAL);
     }
 
+    /**
+     * 调入批次号 —— <b>按构造唯一</b>，不做占用查询。
+     *
+     * <h3>🔴 2026-09-02 实测事故</h3>
+     * 原来是 {@code String.format("TRF-MT-%s-%04d", 日期, System.currentTimeMillis() % 10000)}。
+     * 同一张调拨单的多行明细在<b>同一个循环、同一个事务</b>里建批次，彼此相差不到 1 毫秒
+     * ⇒ 后缀完全相同 ⇒ 撞 {@code material_batches_batch_number_key}：
+     * <pre>
+     * 重复键违反唯一约束"material_batches_batch_number_key"
+     * 详细：键值"(batch_number)=(TRF-MT-20260902-9419)" 已经存在
+     * </pre>
+     * 用户侧看到的只是一句「数据处理异常」。⚠️ 这不是偶发：**一张单只要有 2 行以上
+     * 原料/包材，几乎必然复现**（本机 28 行的单 100% 失败）。
+     *
+     * <h3>为什么不用「查一下号占没占」</h3>
+     * ⛔ {@code existsByBatchNumber} 走 JPA，而本仓软删全局生效
+     * （{@code @SQLDelete} + {@code @Where}）—— 它答的是「有没有<b>活着的</b>行」，
+     * 而唯一约束管的是<b>所有</b>行（{@code UNIQUE (batch_number)}，不带 deleted_at 条件）。
+     * 拿它当发号器的占用判据，就是本仓已经记过的那 20 个 BROKEN 发号器的同一个坑。
+     *
+     * <p>⇒ 改成从明细自己的主键派生：{@code InternalTransferItem.id} 是数据库自增主键，
+     * 全局唯一且不复用 ⇒ 批次号<b>不查也不会撞</b>。id 为空（理论上不该发生）时退回
+     * 随机 UUID 片段，同样不做查询。
+     */
+    private static String transferInBatchNumber(InternalTransferItem item) {
+        String day = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String unique = item != null && item.getId() != null
+                ? String.format("%06d", item.getId())
+                : UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        return String.format("TRF-MT-%s-%s", day, unique);
+    }
+
     private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item, Long userId) {
         BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : item.getQuantity();
 
@@ -1937,9 +2015,7 @@ public class TransferServiceImpl implements TransferService {
             MaterialBatch batch = new MaterialBatch();
             batch.setId(UUID.randomUUID().toString());
             batch.setFactoryId(targetFactoryId);
-            batch.setBatchNumber(String.format("TRF-MT-%s-%04d",
-                    LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")),
-                    System.currentTimeMillis() % 10000));
+            batch.setBatchNumber(transferInBatchNumber(item));
             batch.setMaterialTypeId(item.getMaterialTypeId());
             batch.setReceiptQuantity(qty);
             batch.setUsedQuantity(BigDecimal.ZERO);

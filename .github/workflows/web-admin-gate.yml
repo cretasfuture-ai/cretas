@@ -36,6 +36,15 @@ on:
       #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
       #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
+      # 🔴 2026-09-01: WorkflowSpecialOutputChooser.spec.ts 读**这三个** Java 文件。
+      # 前两个是副产/回料各自的判据类, 证明选择器里留的不是没人读的假选项。
+      # 第三个是产品文案的真假所系: UI 上写着不良品「照常报工入库存着」, 它成立的唯一
+      # 理由是 workflowOutputOptions **只把副产滤掉** —— 没有标记的半成品产出照常进
+      # 报工选项。哪天有人给不良品也加一道过滤, 那句话就变成假话, 那条断言会红。
+      # ⚠️ 只加这三个确切文件, ⛔ 不用 backend/**/*.java 之类的宽 glob(见上一条的理由)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/WorkflowByproductNodes.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/WorkflowReworkNodes.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java'
       # 🔴 2026-08-28: dispositionFiltersAtTheSource.source.spec.ts 读**这个** controller 的
       # `getInspections` 签名, 钉住「前端传的 result, 后端得真的声明」——
       # Spring 对未声明的请求参数静默忽略, 于是「待处置质检」屏显示全部质检记录且每条两遍。
@@ -96,6 +105,15 @@ on:
       #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
       #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
+      # 🔴 2026-09-01: WorkflowSpecialOutputChooser.spec.ts 读**这三个** Java 文件。
+      # 前两个是副产/回料各自的判据类, 证明选择器里留的不是没人读的假选项。
+      # 第三个是产品文案的真假所系: UI 上写着不良品「照常报工入库存着」, 它成立的唯一
+      # 理由是 workflowOutputOptions **只把副产滤掉** —— 没有标记的半成品产出照常进
+      # 报工选项。哪天有人给不良品也加一道过滤, 那句话就变成假话, 那条断言会红。
+      # ⚠️ 只加这三个确切文件, ⛔ 不用 backend/**/*.java 之类的宽 glob(见上一条的理由)。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/WorkflowByproductNodes.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/WorkflowReworkNodes.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java'
       # 🔴 2026-08-28: dispositionFiltersAtTheSource.source.spec.ts 读**这个** controller 的
       # `getInspections` 签名, 钉住「前端传的 result, 后端得真的声明」——
       # Spring 对未声明的请求参数静默忽略, 于是「待处置质检」屏显示全部质检记录且每条两遍。

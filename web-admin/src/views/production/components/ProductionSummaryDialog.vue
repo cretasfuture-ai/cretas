@@ -176,6 +176,12 @@ function hasProcessData(): boolean {
                 {{ formatCost(summary.totalCost, summary.priceMasked) }}
               </span>
               <el-tag v-if="summary.priceMasked" type="info" size="small" style="margin-left: 8px;">无采购价权限</el-tag>
+              <!-- 2026-09-02: 后端不再把「成本未知」折成 ¥0, 这里把原因说出来, 别让「—」看起来像还没算 -->
+              <span
+                v-else-if="summary.totalCost == null && summary.costNote"
+                data-testid="summary-cost-note"
+                style="margin-left: 8px; font-size: 12px; font-weight: 400; color: #e6a23c;"
+              >{{ summary.costNote }}</span>
             </el-descriptions-item>
           </el-descriptions>
 

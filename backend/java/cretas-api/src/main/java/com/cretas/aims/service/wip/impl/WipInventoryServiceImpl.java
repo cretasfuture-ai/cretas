@@ -26,6 +26,7 @@ import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowByproductNodes;
+import com.cretas.aims.service.workflow.WorkflowDefectiveNodes;
 import com.cretas.aims.service.workflow.WorkflowReworkNodes;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
@@ -1946,6 +1947,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 回料端口必须出现在选项里 (与副产相反 —— 副产是被过滤掉的)。判据唯一来源 WorkflowReworkNodes。
         Set<String> reworkNodeIds =
                 WorkflowReworkNodes.reworkMaterialNodeIds(instance.getNodesJson());
+        // 不良品只是**显示标** —— ⛔ 下面的 filter 链里一个字都不许提它。
+        // 它照常进选项、照常入库存着, 走的就是「没有标记的半成品产出」那条默认路径。
+        Set<String> defectiveNodeIds =
+                WorkflowDefectiveNodes.defectiveMaterialNodeIds(instance.getNodesJson());
 
         Map<Long, WorkProcessTask> tasksById = tasks.stream()
                 .collect(Collectors.toMap(WorkProcessTask::getId, t -> t, (a, b) -> a));
@@ -1996,6 +2001,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .semiCode(productType.getCode())
                     .processOrder(task.getProcessOrder())
                     .isRework(reworkNodeIds.contains(port.getMaterialNodeId()))
+                    .isDefective(defectiveNodeIds.contains(port.getMaterialNodeId()))
                     .build());
         }
         return items;

@@ -39,7 +39,10 @@ describe('process reporting information architecture', () => {
 
     const startTime = outputTableSource.indexOf('data-testid="output-start-time"');
     const outputQuantity = outputTableSource.indexOf('data-testid="output-quantity"');
-    const optional = outputTableSource.indexOf('按需填写：副产与成本分摊');
+    // ⚠️ 锚在**结构**上, 不锚措辞: 这条断言要的是「按需填写块排在开始时间之后」,
+    //    与那块叫什么名字无关。2026-09-01 标题从「副产」改成「不良品/副产」时,
+    //    锚在字面量上的旧写法当场红了 —— 而顺序一点没变。
+    const optional = outputTableSource.indexOf('class="sp-io-detail-title"');
     expect(outputQuantity).toBeGreaterThan(-1);
     expect(startTime).toBeGreaterThan(outputQuantity);
     expect(optional).toBeGreaterThan(startTime);

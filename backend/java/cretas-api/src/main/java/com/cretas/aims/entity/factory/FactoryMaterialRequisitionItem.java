@@ -63,6 +63,13 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     @Column(name = "required_qty", precision = 15, scale = 3)
     private BigDecimal requiredQty;
 
+    /**
+     * 主原料份额(%), 建单时从计划钉住的工艺修订 INPUT 端口抄来(经 bom_recipe_items.workflow_input_port_id)。
+     * 仓管确认领料时「填一个原料, 其余按份额自动跳」。null = 该行不参与推算(领料仍按实际领用)。
+     */
+    @Column(name = "input_share_ratio", precision = 9, scale = 4)
+    private BigDecimal inputShareRatio;
+
     @Column(name = "picked_qty", precision = 15, scale = 3)
     private BigDecimal pickedQty;
 
