@@ -3173,8 +3173,11 @@ public class SalesServiceImpl implements SalesService {
                             item.getDeliveredQuantity(), item.getUnit(), item.getSourceWarehouseCode());
 
                     if (!allocated) {
-                        throw new BusinessException(409, "发货行 " + itemIdStr
-                                + "（产品：" + productLabel + "）可用库存不足，无法发货")
+                        // 🔴 2026-09-02 六扇门实拍走查抓到: 原来这里把内部行 ID (itemIdStr, 数据库
+                        // 自增主键) 拼进了报错正文 ——「发货行 255（产品：熟肉饼）可用库存不足」。
+                        // 255 对仓管没有任何可操作性; 产品名才是他能核对的东西, 去掉数字, 其余
+                        // (为什么 + 两条出路) 原样保留。
+                        throw new BusinessException(409, "产品「" + productLabel + "」可用库存不足，无法发货")
                                 .withHint("仓库里这个产品的可用批次不够本次发货量。"
                                         + "请先入库补货，或从其它库区调拨后再确认发货。")
                                 .withHintTarget("库存");
@@ -4571,12 +4574,18 @@ public class SalesServiceImpl implements SalesService {
             remaining = remaining.subtract(shipInTarget);
         }
 
-        // 分配总量在 allocateBatches 时已强校验 == deliveredQuantity → 正常 remaining 归 0。
-        // 若仍 > 漂移容差 → 分配记录与发货行数量不一致 (异常状态), loud-fail 而不是静默少发。
+        // 🔴 owner 2026-09-02 拍板: allocateBatches 现在只强校验 分配总量 <= deliveredQuantity
+        // (放行短发, 见 SalesDeliveryBatchAllocationServiceImpl), 不再是 ==。所以这里的
+        // remaining 在「有意短发但没跟着调低 deliveredQuantity」时会 > 0, 这是【预期】会发生的,
+        // 不是异常状态。发货这一步仍然要求「实际扣的批次量 == deliveredQuantity」这个不变式
+        // (否则应收账款会按 deliveredQuantity 算多——见后面自动创建 AR_INVOICE) ——
+        // 短发的正确姿势是先经「仓库确认」把 deliveredQuantity 调到与实际一致 (actualQuantities),
+        // 而不是留一份对不上号的分配记录。remaining > 漂移容差时仍然 loud-fail, 而不是静默少发。
         if (remaining.compareTo(driftEps) > 0) {
             throw new BusinessException(409, "按已分配批次发货后仍缺 " + remaining
                     + (targetUnit != null ? targetUnit : "") + " — 分配记录与发货数量不一致")
-                    .withHint("请到「发货记录 → 分配批次」重新分配, 确保分配总量等于发货数量")
+                    .withHint("如为短发, 请先到「仓储管理 → 出货管理」仓库确认里把实发数量改小；"
+                            + "如需补齐分配, 请到「发货记录 → 分配批次」重新分配")
                     .withHintTarget("发货记录 Tab");
         }
     }
