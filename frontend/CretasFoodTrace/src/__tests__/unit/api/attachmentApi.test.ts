@@ -87,12 +87,26 @@ describe('attachmentApi', () => {
   });
 
   describe('uploadAndRegister', () => {
-    it('registers the SHA-256 and byte size of the uploaded blob', async () => {
+    it('uses React Native FileReader to register the SHA-256 and byte size', async () => {
       const bytes = Uint8Array.from([10, 20, 30, 40]);
       const blob = {
         size: bytes.byteLength,
-        arrayBuffer: jest.fn().mockResolvedValue(bytes.buffer),
       };
+      const originalFileReader = global.FileReader;
+      const readAsArrayBuffer = jest.fn();
+      class MockFileReader {
+        error = null;
+        result = null;
+        onerror = null;
+        onload = null;
+
+        readAsArrayBuffer(input) {
+          readAsArrayBuffer(input);
+          this.result = bytes.buffer;
+          this.onload?.();
+        }
+      }
+      global.FileReader = MockFileReader;
       const fetchMock = jest
         .spyOn(global, 'fetch')
         .mockResolvedValueOnce({ blob: async () => blob } as Response)
@@ -120,11 +134,13 @@ describe('attachmentApi', () => {
       expect(registerPayload.fileHash).toBe(
         '5f53c0ff07ba5d9a330e68c95dabb1a9bc49e29f9ed53f6fa7c6d99abb000050',
       );
+      expect(readAsArrayBuffer).toHaveBeenCalledWith(blob);
       expect(fetchMock).toHaveBeenLastCalledWith(
         'https://oss.example/upload?sig=1',
         expect.objectContaining({ method: 'PUT', body: blob }),
       );
       fetchMock.mockRestore();
+      global.FileReader = originalFileReader;
     });
   });
 
