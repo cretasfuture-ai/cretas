@@ -370,11 +370,35 @@ let w02HintShown = false;
 /** 「单位不是重量单位所以没自动填」的提示，每次开弹窗只说一遍。 */
 let weightHintShown = false;
 function autoCalcWeightAndValue() {
+  // 缺陷 A/C (2026-09-01, LIUSHANMEN 批次 MT-20260901-3312 实测):
+  //
+  // 编辑既有批次时, 数量/原料类型/总重量/总价值全部是账实红线锁定字段——
+  // EDITABLE_FIELDS_ON_UPDATE 不含它们, 对应控件也全部 `:disabled="!!editingId"`。
+  // 用户在编辑态下**不可能**改动这些字段, 这两个 watch 之所以在编辑态触发,
+  // 纯粹是 handleEdit() 用 Object.assign 一次性灌入既有批次数据的副作用,
+  // 不是真实的用户输入。继续跑这段自动填充/提示逻辑会:
+  //
+  //   (a) 拿"原料主数据当前单价"覆盖批次自己在收货时锁定的总价值——
+  //       批次自己的 unitPrice(本例 8.85, 随 PO 收货写入 formData.unitPrice)
+  //       与主数据的当前单价是两回事, 覆盖显示值与账实红线本身的精神矛盾
+  //       (即便不会真的提交, 见 buildUpdatePayload 白名单);
+  //   (b) 弹出"原料「X」未配置单价，请手动输入总价值"——而编辑态下这句指令
+  //       **在任何情况下都不可能被执行**: 总价值控件要么因 canViewPrice=false
+  //       整个不渲染, 要么 :disabled="!!editingId" 被锁定, 唯一的正路是
+  //       "更正批次估值"(openCostCorrection, 走带新旧值审计的独立接口)。
+  //       这正是 fool-proof-design Rule 5(死路必须变成可导航)与四位一体(d)
+  //       (指令必须指向真实存在的下一步)要守住的东西。
+  //
+  // ⇒ 只在新增模式(editingId === null)跑这段自动填充/提示, 编辑态整段跳过。
+  //   这同时消掉了「总重量」那条姊妹提示(weightHintShown)在编辑态的同一问题——
+  //   它守的 formData.totalWeight 同样被锁, 同一条判据同样适用, 见下面 PR 说明。
+  if (editingId.value) return;
+
   const qty = formData.receiptQuantity;
   const mat = materialTypes.value.find((m: TableRow) => m.id === formData.materialTypeId) as TableRow | undefined;
 
   // T158: sync unit on every material-selection change, even before qty is entered.
-  // Only apply in add mode (editingId === null) to avoid clobbering a saved batch's unit on edit-open.
+  // 此处只在新增模式跑得到(上面已 return), editingId === null 恒成立, 保留判断只是防御式写法。
   if (mat) {
     selectedMaterialUnit.value = (mat.unit as string) || null;
     if (editingId.value === null && mat.unit) {
@@ -399,8 +423,14 @@ function autoCalcWeightAndValue() {
     // ⛔ 不回退成 qty —— 那正是被修的那个毛病。留空 + 说明为什么，让用户自己录。
     formData.totalWeight = null;
     if (!weightHintShown) {
-      ElMessage.info({ message: autoWeightSkippedHint(formData.quantityUnit), duration: 5000 });
+      // 缺陷 C (2026-09-01 实测): 守卫必须在 ElMessage.info() **之前**置位。
+      // 实测 ElMessage.info() 会在同一个 Vue watcher flush 周期内重入调度器,
+      // 让"仍在等待执行"的另一个 watch(本文件 materialTypeId / receiptQuantity
+      // 两个 watch 在同一次 Object.assign 后同时挂起)在守卫真正落地之前
+      // 就跑到这一行, 读到的仍是旧值——同一句提示因此弹两次。
+      // 先置位再弹, 第二个 watch 进来时守卫已经是 true, 重入也不会再穿透。
       weightHintShown = true;
+      ElMessage.info({ message: autoWeightSkippedHint(formData.quantityUnit), duration: 5000 });
     }
   }
   // totalValue = quantity * unitPrice
@@ -410,8 +440,9 @@ function autoCalcWeightAndValue() {
     w02HintShown = false;
   } else if (!w02HintShown) {
     // Show hint once per dialog session so user knows why totalValue wasn't auto-filled
-    ElMessage.info({ message: `原料「${mat.name || '该原料'}」未配置单价，请手动输入总价值`, duration: 4000 });
+    // 同上: 守卫先置位, 再弹提示, 堵住 ElMessage.info() 的重入窗口(缺陷 C)。
     w02HintShown = true;
+    ElMessage.info({ message: `原料「${mat.name || '该原料'}」未配置单价，请手动输入总价值`, duration: 4000 });
   }
 }
 
@@ -993,7 +1024,24 @@ async function handleGenerateLabel(row: TableRow) {
           <UpstreamMissingHint v-if="suppliers.length === 0 && !editingId" description="本工厂暂无供应商" target-module="procurement" require-write action-text="去创建供应商" contact-text="请联系采购或管理员先创建供应商" @action="goCreate('/procurement/suppliers')" />
         </el-form-item>
         <el-form-item label="数量" prop="receiptQuantity">
-          <el-input-number v-model="formData.receiptQuantity" :min="0" :precision="1" :disabled="!!editingId" style="width: 100%" />
+          <!--
+            缺陷 B (2026-09-01, LIUSHANMEN 批次 MT-20260901-3312 实测): 这里原来是
+            `:precision="1"`。el-input-number 的 displayValue 用 `currentValue.toFixed(precision)`
+            —— (0.02).toFixed(1) = "0.0", 与列表/详情/DB 的 receipt_quantity=0.020000 对不上,
+            看着像"数量丢了"(0.02 kg 是极小但合法的收货量, min=0.01 与 PendingPurchaseReceivingPanel
+            的收货入口一致)。
+
+            ⚠️ 底层 formData.receiptQuantity 本身没被这个精度污染——el-input-number 只在用户
+            blur/change(实际输入)时才把截断值写回 v-model; 初始挂载走的是
+            `watch(modelValue, ..., {immediate:true})` 分支, 只更新内部 currentValue(纯显示),
+            不 emit UPDATE_MODEL_EVENT。也因此 buildUpdatePayload() 从不含 receiptQuantity,
+            这条显示 bug 从未污染过提交体, 见 handleFormSubmit()。
+
+            修法: 不传 :precision, 让组件按 `getPrecision(modelValue)` 动态取值——
+            与列表/详情"原样打印数字"完全一致(0.02 → "0.02", 12.5 → "12.5", 5 → "5"),
+            不再用一个与本字段无关的固定小数位截断真实收货量。
+          -->
+          <el-input-number v-model="formData.receiptQuantity" :min="0" :disabled="!!editingId" style="width: 100%" />
         </el-form-item>
         <el-form-item label="单位">
           <el-select v-model="formData.quantityUnit" :disabled="!!editingId" style="width: 100%">
