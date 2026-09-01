@@ -1347,11 +1347,24 @@ async function deserializeGraph(dto: ApprovalWorkflowDTO) {
  * ⚠️ 只还原**仍然存在**的 id: 服务端可能已经把某个节点删了(或改了 id),
  * 那时不该凭空造一个选中态出来 —— 按 id 匹配不上就让它落空, 属性面板自然关闭。
  */
-function redrawCanvasPreservingSelection(dto: ApprovalWorkflowDTO) {
+async function redrawCanvasPreservingSelection(dto: ApprovalWorkflowDTO) {
   const selectedNodeIds = new Set(selectedNodes.value.map((node) => node.id))
   const selectedEdgeIds = new Set(selectedEdges.value.map((edge) => edge.id))
 
-  deserializeGraph(dto)
+  /*
+   * 🔴 这个 await 不能省（2026-09-01，nice-lederberg 查出）。
+   *
+   * `deserializeGraph` 被改成 async 时**有 2 个调用点，只更新了 1 个** ——
+   * 本仓「改共享结构前先数，改完再数，两个数必须相等」。
+   *
+   * 不 await 的实际行为：同步段先 `edges.value = []`，然后停在内部的 `await nextTick()`，
+   * 控制权立刻回到这里 ⇒ 下面那两个 `edges.value.map(...)` 全在**空数组**上跑，
+   * 而 `edges.value.some(...)` 在空数组上恒 false ⇒ 选中的若是一条**边**，
+   * 属性面板**必然被关掉** —— 正是本函数要防的事，它自己犯了。
+   *
+   * ⚠️ 不丢数据（边最终会被 deserializeGraph 写回来），但「保住选中」在边这一侧从未生效。
+   */
+  await deserializeGraph(dto)
 
   if (selectedNodeIds.size) {
     nodes.value = nodes.value.map((node) => (
@@ -1431,7 +1444,7 @@ async function handleSave() {
         //
         // ⚠️ 为什么这条不能当小事: 「显示的」与「实际存的」不一致, 会让人
         //   (a) 以为没保存成功而重复操作, 或 (b) 以为钉死了某个具体审批人而其实没有。
-        redrawCanvasPreservingSelection(res.data)
+        await redrawCanvasPreservingSelection(res.data)
         draftDirty.value = false
         ElMessage.success(res.data.publishStatus === 'draft' ? '草稿已保存' : '修改已保存')
         await refreshWorkflowList()
