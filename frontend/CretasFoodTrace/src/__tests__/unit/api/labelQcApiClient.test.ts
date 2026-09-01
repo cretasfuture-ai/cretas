@@ -18,6 +18,26 @@ describe('labelQcApi mobile review contract', () => {
     resetApiMock(mock);
   });
 
+  it('creates a photo task without a batch number', async () => {
+    const request = {
+      productTypeId: 'sku-1',
+      productionDate: '2026-09-01',
+      idempotencyKey: 'photo-task-without-batch',
+    };
+    const detail = {
+      task: { id: 'task-1', batchNumber: '', status: 'DRAFT' },
+      photos: [],
+    };
+    mock.onPost(`${BASE}/tasks`).reply(200, {
+      success: true,
+      data: detail,
+      message: '拍检任务已创建',
+    });
+
+    await expect(labelQcApi.createTask(request, FACTORY_ID)).resolves.toEqual(detail);
+    expect(JSON.parse(mock.history.post[0]!.data)).toEqual(request);
+  });
+
   it('loads the mobile review queue with comma-separated task statuses', async () => {
     const page = {
       content: [],

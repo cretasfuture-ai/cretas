@@ -22,7 +22,7 @@ public final class LabelQcDtos {
 
     public record CreateTaskRequest(
             @NotBlank @Size(max = 100) String productTypeId,
-            @NotBlank @Size(max = 100) String batchNumber,
+            @Size(max = 100) String batchNumber,
             @NotNull LocalDate productionDate,
             @NotBlank @Size(max = 100) String idempotencyKey
     ) {}

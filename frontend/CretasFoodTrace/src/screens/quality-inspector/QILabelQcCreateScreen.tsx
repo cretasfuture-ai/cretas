@@ -145,15 +145,13 @@ export default function QILabelQcCreateScreen() {
   const selectedCode = selectedProduct?.code ?? '';
   const formLocked = Boolean(draftTaskId);
   const isReadyToSubmit = Boolean(
-    selectedProduct && batchNumber.trim() && photos.length > 0,
+    selectedProduct && photos.length > 0,
   );
   const readinessHint = !selectedProduct
     ? '先选择成品 SKU'
-    : !batchNumber.trim()
-      ? '再填写批次号'
-      : photos.length === 0
-        ? `再${Platform.OS === 'web' ? '选择' : '拍摄'}至少 1 张照片`
-        : null;
+    : photos.length === 0
+      ? `再${Platform.OS === 'web' ? '选择' : '拍摄'}至少 1 张照片`
+      : null;
 
   const checkCaptureQuality = async (asset: LabelQcCaptureAsset) => labelQcApi.checkCaptureQuality(
     {
@@ -249,7 +247,6 @@ export default function QILabelQcCreateScreen() {
   const validate = (): string | null => {
     if (!selectedProduct) return '请选择成品 SKU';
     const batch = batchNumber.trim();
-    if (!batch) return '请输入批次号';
     if (batch.length > 100) return '批次号不能超过 100 个字符';
     const latest = maxProductionDate();
     if (startOfDay(productionDate).getTime() > latest.getTime()) {
@@ -407,7 +404,7 @@ export default function QILabelQcCreateScreen() {
         <TextInput
           testID="qi-label-qc-create-batch-input"
           mode="outlined"
-          label="批次号 *"
+          label="批次号（选填，可跳过）"
           value={batchNumber}
           onChangeText={(value) => {
             setBatchNumber(value);
@@ -420,6 +417,7 @@ export default function QILabelQcCreateScreen() {
           outlineColor={QI_COLORS.border}
           activeOutlineColor={QI_COLORS.primary}
         />
+        <Text style={styles.fieldHint}>目前无法获取批次时可以留空，后续生产流程启用后改为下拉选择</Text>
 
         <Text style={styles.fieldLabel}>生产日期 *</Text>
         <TouchableRipple

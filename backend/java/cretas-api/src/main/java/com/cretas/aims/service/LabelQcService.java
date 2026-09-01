@@ -97,7 +97,8 @@ public class LabelQcService {
                 .productTypeId(product.getId())
                 .skuCode(product.getCode())
                 .skuName(product.getName())
-                .batchNumber(request.batchNumber().trim())
+                // 批次下拉依赖正式生产流程；过渡期允许现场拍检员跳过，数据库以空串表示未提供。
+                .batchNumber(Optional.ofNullable(request.batchNumber()).orElse("").trim())
                 .productionDate(request.productionDate())
                 .createdBy(userId)
                 .idempotencyKey(request.idempotencyKey().trim())

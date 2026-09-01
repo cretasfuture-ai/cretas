@@ -35,6 +35,13 @@ class LabelQcControllerTrainingPermissionTest {
     }
 
     @Test
+    void mobileHumanReviewExcludesPhotoOnlyQualityInspectorRole() {
+        assertPermissions("review", Set.of("quality:read_write"));
+        assertRoles("review", Set.of(
+                "quality_manager", "quality_controller", "factory_super_admin", "platform_admin"));
+    }
+
+    @Test
     void trayCropRefinementRequiresPlatformRoleAndSystemWritePermission() {
         Set<String> platformRoles = Set.of(
                 "platform_admin", "super_admin", "developer", "platform_super_admin");
