@@ -60,6 +60,14 @@ import {
   packagingOptionsForUnit,
   packagingSelectionError,
 } from './salesOrderUnitContract';
+// 🔒 2026-09-02 Owner 裁定: 「销售订单行不再让人填单价(未税)」—— 复用 new.vue /
+// OrderItemsEditor.vue 已用的同一套契约, 不新造第四份实现. initialTaxIncludedUnitPrice
+// 用于「选产品/采纳协议价·记忆价」时把已知的未税价折算成含税初值; derivedUntaxedPriceOrNull
+// 是含税→未税展示 + 提交口径的唯一算法, 税率未知时返回 null (调用方不许兜底成 0)。
+import {
+  derivedUntaxedPriceOrNull,
+  initialTaxIncludedUnitPrice,
+} from './salesOrderNewLineContract';
 import {
   MATERIAL_SUPPLY_MODE_OPTIONS,
   CUSTOMER_STOCK_FULFILLMENT_OPTIONS,
@@ -540,7 +548,14 @@ interface OrderItem {
   productTypeId: string;
   quantity: number;
   unit: string;
+  // 🔒 2026-09-02 Owner 裁定: unitPrice 存储口径不变 (仍是未税, 见
+  // SalesOrderItem.getLineAmount()) —— 但它不再是用户直接填的字段, 而是由
+  // taxIncludedUnitPrice + taxRate 实时反算 (recalculateUnitPrice), 只在提交/毛利
+  // 红线校验时读取。⛔ 不要在模板里给它接 v-model。
   unitPrice: number;
+  // 仅供界面录入含税单价; 提交仍是后端既有的未税 unitPrice, 由此值与 taxRate 实时反算
+  // (与 OrderItemsEditor.vue / new.vue 同一条契约, 复用 salesOrderNewLineContract.ts)。
+  taxIncludedUnitPrice?: number;
   taxRate: number;
   specification?: string;
   boxQuantity?: number | null;
@@ -584,7 +599,7 @@ const form = ref({
   shippingFee: 0,
   extraFees: [] as Array<{ name: string; amount: number; remark: string }>,
   suppliedMaterials: [] as CustomerSuppliedMaterialRequirement[],
-  items: [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxRate: 13 }] as OrderItem[],
+  items: [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxIncludedUnitPrice: 0, taxRate: 13 }] as OrderItem[],
   contractFileUrl: '' as string | null,
   contractFileName: '' as string | null,
   customFields: {} as TableRow,
@@ -807,6 +822,7 @@ function emptyOrderItem(): OrderItem {
     quantity: 0,
     unit: '份',
     unitPrice: 0,
+    taxIncludedUnitPrice: 0,
     taxRate: 13,
     specification: '',
     boxQuantity: null,
@@ -1033,6 +1049,17 @@ function removeItem(idx: number) {
   ensureTrailingEmptyRow();
 }
 
+/**
+ * 🔒 2026-09-02 Owner 裁定: unitPrice (提交给后端的未税单价) 不再是用户直接填的字段,
+ * 由 taxIncludedUnitPrice + taxRate 实时反算。税率未知/非法时 derivedUntaxedPriceOrNull
+ * 返回 null —— 落到 0 (而不是原样回显含税价), 让既有的"单价必须为正"校验(handleCreate /
+ * handleSave 各一处)挡住提交, 而不是把一个算不出来的数悄悄当真发给后端。
+ */
+function recalculateUnitPrice(item: OrderItem) {
+  const derived = derivedUntaxedPriceOrNull(item.taxIncludedUnitPrice, item.taxRate);
+  item.unitPrice = derived === null ? 0 : derived;
+}
+
 function onProductSelect(item: TableRow, productId: string) {
   const p = sellableOptions.value.find((x: TableRow) => x.id === productId);
   if (p) {
@@ -1043,9 +1070,14 @@ function onProductSelect(item: TableRow, productId: string) {
     // 只是没接到这条路上; 后端 crossLanguageCode 本来就保留这两个标签。
     const pu = canonicalUnitCodeKeepingCount(p.unit || '份');
     item.unit = pu || item.unit || '份';
-    if (p.unitPrice != null && (item.unitPrice == null || item.unitPrice === 0)) {
-      item.unitPrice = Number(p.unitPrice);
+    // 🔒 2026-09-02: 录入字段是含税单价 —— 用产品自带的含税价(或未税价×产品自己的税率)
+    // 做初值 (复用 salesOrderNewLineContract.ts, 与 new.vue addProduct() 同一条公式)。
+    // 只在用户还没填过时预填 (与改动前 "只在 unitPrice 为空/0 时才覆盖" 同一条件)。
+    if ((p.unitPrice != null || p.taxIncludedUnitPrice != null)
+      && (item.taxIncludedUnitPrice == null || item.taxIncludedUnitPrice === 0)) {
+      item.taxIncludedUnitPrice = initialTaxIncludedUnitPrice(p);
     }
+    recalculateUnitPrice(item as OrderItem);
     // P1-3: spec 自动填后立即调 calcBox, 抄码品会清空 boxQuantity (内部判断).
     // T130: calcBox 现支持两分支 (份→qty/coeff, 箱→qty), 总是重算箱数 (只读列).
     calcBox(item);
@@ -1056,7 +1088,7 @@ function onProductSelect(item: TableRow, productId: string) {
   }
   // Issue #793 — 客户协议价 lookup. Customer + product 都选好后查协议价, 命中即覆盖 unitPrice.
   // Priority: 协议价 (合同) > 上次成交价 > BOM 默认价. 用户仍可手动覆盖.
-  fetchContractPrice(item, productId);
+  fetchContractPrice(item as OrderItem, productId);
   // Sprint 4 W2 S-PRICE-1 (R1) — 上次成交价 hint:
   // 选完产品立即异步查记忆价, 显在 unitPrice 输入框下. 用户**预先看到**, 不是输完后再被告知偏离.
   fetchPriceMemory(item, productId);
@@ -1141,14 +1173,17 @@ function onOrderUnitChange(item: OrderItem) {
 }
 
 /**
- * Issue #793: 查询客户协议价 (合同价).
- * - 命中客户专属价格 → 自动覆盖 unitPrice + 显示 "协议价 (来自 X)" 提示
- * - 命中全局价格 → 设置 hint 但不强制覆盖 (因 BOM/product.unitPrice 已带入)
+ * Issue #793: 查询客户协议价 (合同价). price-lists/lookup 返回的 price 口径与
+ * SalesOrderItem.unitPrice 一致 (未税, 见 PriceListItem.standardPrice 直接落 unitPrice
+ * 的既有用法) —— 命中时不能再直接赋给 unitPrice(它现在是派生字段), 要折成含税单价
+ * 写回 taxIncludedUnitPrice(录入字段), 再触发 recalculateUnitPrice 反算回未税。
+ * - 命中客户专属价格 → 自动覆盖 taxIncludedUnitPrice + 显示 "协议价 (来自 X)" 提示
+ * - 命中全局价格 → 设置 hint 但不强制覆盖 (因 BOM/product.taxIncludedUnitPrice 已带入)
  * - 都不命中 → 清空 hint
  *
- * 用户可在 unitPrice 输入框手动修改, 协议价提示不阻塞.
+ * 用户可在 含税单价 输入框手动修改, 协议价提示不阻塞.
  */
-async function fetchContractPrice(item: TableRow, productTypeId: string) {
+async function fetchContractPrice(item: OrderItem, productTypeId: string) {
   if (!form.value.customerId || !productTypeId || !factoryId.value) {
     item.contractPriceHint = null;
     return;
@@ -1164,10 +1199,14 @@ async function fetchContractPrice(item: TableRow, productTypeId: string) {
         source: String(res.data.source || ''),
         priceListName: String(res.data.priceListName || ''),
       };
-      // Customer-specific 协议价命中时, 主动覆盖 unitPrice (用户仍可手动改).
+      // Customer-specific 协议价命中时, 主动覆盖含税录入值 (用户仍可手动改).
       // 全局价仅作提示, 不覆盖 BOM/product 默认价 (那个已在 onProductSelect 前段填好).
       if (res.data.source === 'CUSTOMER') {
-        item.unitPrice = Number(res.data.price);
+        item.taxIncludedUnitPrice = initialTaxIncludedUnitPrice({
+          unitPrice: Number(res.data.price),
+          taxRate: item.taxRate,
+        });
+        recalculateUnitPrice(item);
       }
     } else {
       item.contractPriceHint = null;
@@ -1195,11 +1234,45 @@ async function fetchPriceMemory(item: TableRow, productTypeId: string) {
   }
 }
 
-// Sprint 4 W2 S-PRICE-1 (R1) — "采用上次成交价" 一键按钮 handler
-function applyPriceMemory(item: TableRow) {
+// Sprint 4 W2 S-PRICE-1 (R1) — "采用上次成交价" 一键按钮 handler.
+// priceMemoryHint.unitPrice 口径与 SalesOrderItem.unitPrice 一致 (未税, 见
+// CustomerPriceMemoryServiceImpl.recordFromSalesOrder 直接落 item.getUnitPrice()) ——
+// 折成含税单价写回录入字段, 再反算未税, 不直接赋给已是派生字段的 unitPrice。
+function applyPriceMemory(item: OrderItem) {
   if (item.priceMemoryHint?.unitPrice != null) {
-    item.unitPrice = Number(item.priceMemoryHint.unitPrice);
+    item.taxIncludedUnitPrice = initialTaxIncludedUnitPrice({
+      unitPrice: Number(item.priceMemoryHint.unitPrice),
+      taxRate: item.taxRate,
+    });
+    recalculateUnitPrice(item);
   }
+}
+
+// 🔒 2026-09-02: contractPriceHint.price / priceMemoryHint.unitPrice 都是未税口径
+// (见各自函数上方注释), 但录入字段现在是含税 —— 展示 chip 时折成含税, 让「看到的数」
+// 和「点了会填进哪个数」永远一致, 不需要用户心算换算。
+function contractHintTaxIncludedPrice(item: OrderItem): number {
+  return item.contractPriceHint
+    ? initialTaxIncludedUnitPrice({ unitPrice: item.contractPriceHint.price, taxRate: item.taxRate })
+    : 0;
+}
+function priceMemoryHintTaxIncludedPrice(item: OrderItem): number {
+  return item.priceMemoryHint
+    ? initialTaxIncludedUnitPrice({ unitPrice: item.priceMemoryHint.unitPrice, taxRate: item.taxRate })
+    : 0;
+}
+// "全局价" chip 的点击采纳 (CUSTOMER 命中已在 fetchContractPrice 里自动应用)。
+function applyContractPriceHint(item: OrderItem): void {
+  if (!item.contractPriceHint) return;
+  item.taxIncludedUnitPrice = contractHintTaxIncludedPrice(item);
+  recalculateUnitPrice(item);
+}
+
+// 🔒 2026-09-02: 未税单价只读展示 —— 税率未知/非法时 derivedUntaxedPriceOrNull 返回
+// null, 这里必须显式转成 '-' (⛔ 不能 `?? 0`/`|| 0`, 那会把"算不出来"悄悄显示成 0)。
+function displayUntaxedUnitPrice(item: OrderItem): string {
+  const derived = derivedUntaxedPriceOrNull(item.taxIncludedUnitPrice, item.taxRate);
+  return derived === null ? '-' : derived.toFixed(2);
 }
 
 // U-SP5: 毛利红线 check — 单价 blur 时调后端 check-margin 端点
@@ -1207,6 +1280,11 @@ function applyPriceMemory(item: TableRow) {
 // belowRedline=true  → sticky 红色警告 (不卡死提交, fool-proof)
 // belowRedline=null  → 未配置毛利红线, 静默
 // belowRedline=false → 合格, 静默
+// 🔒 2026-09-02: quotedPrice 必须是未税 —— 后端 checkMargin() 用 standardCost 直接比较
+// resolvedUnitPrice (同一条比较也发生在建单时的 SalesServiceImpl, 两处同一基准)。
+// 录入的是含税单价, 这里读的 item.unitPrice 是 recalculateUnitPrice() 反算出的未税值,
+// 不能改读 item.taxIncludedUnitPrice —— 那会把含税数字喂进一个按未税标准成本算的比较,
+// 产出一个「看起来合理」但基准错误的假警告/假放行。
 async function checkMarginOnBlur(item: OrderItem) {
   if (!factoryId.value || !item.productTypeId || item.unitPrice == null || item.unitPrice <= 0) return;
   try {
@@ -1839,33 +1917,42 @@ async function handleEdit(row: TableRow) {
         }))
       : [],
     items: Array.isArray(row.items) && row.items.length > 0
-      ? row.items.map((item: TableRow) => ({
-          productTypeId: String(item.productTypeId || item.productType?.id || ''),
-          quantity: Number(item.quantity || 0),
-          // 🔴 KeepingCount: 这是【打开已有订单去编辑】的路径。用普通 canonicalUnitCode
-          // 会把库里存的 只/个 就地改写成 pcs, 用户只是点开看一眼再保存, 单位就被换掉了 ——
-          // 静默改写已落库的数据, 比新建时显示错更糟。
-          unit: canonicalUnitCodeKeepingCount(item.unit || '份'),
-          unitPrice: Number(item.unitPrice || 0),
-          // PR #173 reviewer follow-up M-4 (May 9 2026): preserve specification + boxQuantity
-          // on edit. 旧 bug: handleEdit 重建 form.items 时漏了这两字段, 用户编辑现有订单后
-          // 提交导致 specification/boxQuantity 被覆盖为空 (新 form 不含 → 后端把 null 写库).
-          // 抄码品识别 + 箱数自动算依赖这两字段, 不能丢.
-          specification: String(item.specification || ''),
-          boxQuantity: item.boxQuantity != null ? Number(item.boxQuantity) : null,
-          packagingSpecId: String(item.packagingSpecId || ''),
-          packagingSpecName: String(item.packagingSpecName || ''),
-          packagingUnit: String(item.packagingUnit || ''),
-          packagingBaseUnit: String(item.packagingBaseUnit || ''),
-          packagingFactor: item.packagingFactor != null ? Number(item.packagingFactor) : undefined,
-          packagingSpecs: [] as NonNullable<OrderItem['packagingSpecs']>,
-          taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
-          // T130 Feature C / F9 fix (issue #525): handleEdit 之前漏带 sourceWarehouseCode,
-          // 编辑现有订单后提交会把来源仓库覆盖为空 → 补回(保留原值,不再强制回 WH-LOG).
-          // 🔴 BLOCKING fix (2026-07-03): 空 (未声明) 是合法且现在是"好"状态 (G1 跨仓 FEFO),
-          // 不要把编辑时本来是空的行强改成显式 WH-LOG — 那会重新挡住 G1 修的路径.
-          sourceWarehouseCode: String(item.sourceWarehouseCode || ''),
-        }))
+      ? row.items.map((item: TableRow) => {
+          // 🔒 2026-09-02: unitPrice 存储口径没变 (仍是未税, 见 SalesOrderItem.getLineAmount())
+          // —— 已有产品行不需要任何数据迁移。这里只是给「含税单价」这个新增的界面录入字段
+          // 算一个初始展示值 (未税 unitPrice × (1+税率/100)), 方便继续编辑; 不改写 unitPrice 本身
+          // (与 detail.vue openEditItems() 同一条公式)。
+          const taxRate = item.taxRate != null ? Number(item.taxRate) : 13;
+          const unitPrice = Number(item.unitPrice || 0);
+          return {
+            productTypeId: String(item.productTypeId || item.productType?.id || ''),
+            quantity: Number(item.quantity || 0),
+            // 🔴 KeepingCount: 这是【打开已有订单去编辑】的路径。用普通 canonicalUnitCode
+            // 会把库里存的 只/个 就地改写成 pcs, 用户只是点开看一眼再保存, 单位就被换掉了 ——
+            // 静默改写已落库的数据, 比新建时显示错更糟。
+            unit: canonicalUnitCodeKeepingCount(item.unit || '份'),
+            unitPrice,
+            taxIncludedUnitPrice: initialTaxIncludedUnitPrice({ unitPrice, taxRate }),
+            // PR #173 reviewer follow-up M-4 (May 9 2026): preserve specification + boxQuantity
+            // on edit. 旧 bug: handleEdit 重建 form.items 时漏了这两字段, 用户编辑现有订单后
+            // 提交导致 specification/boxQuantity 被覆盖为空 (新 form 不含 → 后端把 null 写库).
+            // 抄码品识别 + 箱数自动算依赖这两字段, 不能丢.
+            specification: String(item.specification || ''),
+            boxQuantity: item.boxQuantity != null ? Number(item.boxQuantity) : null,
+            packagingSpecId: String(item.packagingSpecId || ''),
+            packagingSpecName: String(item.packagingSpecName || ''),
+            packagingUnit: String(item.packagingUnit || ''),
+            packagingBaseUnit: String(item.packagingBaseUnit || ''),
+            packagingFactor: item.packagingFactor != null ? Number(item.packagingFactor) : undefined,
+            packagingSpecs: [] as NonNullable<OrderItem['packagingSpecs']>,
+            taxRate,
+            // T130 Feature C / F9 fix (issue #525): handleEdit 之前漏带 sourceWarehouseCode,
+            // 编辑现有订单后提交会把来源仓库覆盖为空 → 补回(保留原值,不再强制回 WH-LOG).
+            // 🔴 BLOCKING fix (2026-07-03): 空 (未声明) 是合法且现在是"好"状态 (G1 跨仓 FEFO),
+            // 不要把编辑时本来是空的行强改成显式 WH-LOG — 那会重新挡住 G1 修的路径.
+            sourceWarehouseCode: String(item.sourceWarehouseCode || ''),
+          };
+        })
       : [emptyOrderItem()],
     contractFileUrl: (row.contractFileUrl ? String(row.contractFileUrl) : null) as string | null,
     contractFileName: (row.contractFileName ? String(row.contractFileName) : null) as string | null,
@@ -2045,13 +2132,20 @@ function handleAiFill(params: TableRow) {
       if (productResolution.status !== 'MATCHED') {
         throw new Error(`产品“${prodName}”${productResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
       }
+      // 🔒 2026-09-02: AI 从对话里抽出的"单价 X 元"跟人手填时是同一件事 —— 操作员说的是
+      // 含税报价 (裁定原话:"一般…都是含税报价…他填的指的是含税报价")。AiEntryDrawer 的
+      // 抽取字段仍叫 unitPrice(未改上游 schema), 但落进 OrderItem 时要当含税单价处理,
+      // 再反算未税, 不能直接把这个数当成后端存储口径的未税 unitPrice。
+      const aiTaxRate = item.taxRate != null ? Number(item.taxRate) : 13;
+      const aiTaxIncludedUnitPrice = Number(item.unitPrice || 0);
       return {
         productTypeId: productResolution.id,
         quantity: Number(item.quantity || 0),
         // KeepingCount: 普通 canonicalUnitCode 把 只/个 并成 pcs → 显示回「件」。
         unit: canonicalUnitCodeKeepingCount(item.unit || 'kg'),
-        unitPrice: Number(item.unitPrice || 0),
-        taxRate: item.taxRate != null ? Number(item.taxRate) : 13,
+        taxIncludedUnitPrice: aiTaxIncludedUnitPrice,
+        unitPrice: derivedUntaxedPriceOrNull(aiTaxIncludedUnitPrice, aiTaxRate) ?? 0,
+        taxRate: aiTaxRate,
       };
       });
     } catch (error) {
@@ -2920,9 +3014,10 @@ function handleMergePurchase() {
           <span class="sticky-col sticky-quantity" style="width: 130px">下单数量</span>
           <span class="sticky-col sticky-unit" style="width: 80px">单位</span>
           <span style="width: 150px">包装规格</span>
-          <span style="width: 130px">单价 (未税)</span>
-          <!-- E-FP-1 Rule2: 含税单价/含税小计派生只读，用户填未税+税率，此列自动显示 -->
+          <!-- 🔒 2026-09-02 Owner 裁定("一般…都是含税报价…他填的指的是含税报价"): 含税单价
+               才是录入项; 未税单价/含税小计派生只读, 用户填含税+税率, 后两列自动显示. -->
           <span style="width: 130px">含税单价</span>
+          <span style="width: 130px">单价 (未税)</span>
           <span style="width: 130px">含税小计</span>
           <span style="width: 130px">箱数</span>
           <span style="width: 90px" title="税率 (开票 G1 按此分组): 9=原料, 13=加工, 6=服务">税率(%)</span>
@@ -2971,14 +3066,27 @@ function handleMergePurchase() {
             />
           </el-select>
           <el-text v-else type="info" size="small" style="width: 150px; text-align: center;">不涉及</el-text>
-          <!-- Sprint 4 W2 S-PRICE-1 R1: unitPrice + 上次成交价 hint chip (一键采纳) -->
+          <!-- Sprint 4 W2 S-PRICE-1 R1: taxIncludedUnitPrice + 上次成交价 hint chip (一键采纳) -->
           <!-- Issue #793: 客户协议价 hint (CUSTOMER 自动覆盖, GLOBAL 仅提示) -->
+          <!-- 🔒 2026-09-02: 两个 hint 的原始数字口径是未税 (price-lists/lookup 的
+               standardPrice、customer-price-history 的 unitPrice 都直接落
+               SalesOrderItem.unitPrice) —— 展示/采纳时都折成含税, 与录入字段同一基准,
+               点了就是这个数, 不需要用户再心算换算 (见 contractHintTaxIncludedPrice /
+               priceMemoryHintTaxIncludedPrice)。 -->
           <div class="unit-price-wrap">
-            <!-- U-SP5: @blur 触发毛利红线 check (advisory, 不卡死提交) -->
-            <el-input-number v-model="item.unitPrice" :min="0" :precision="2" style="width: 130px" @blur="() => checkMarginOnBlur(item)" />
+            <!-- U-SP5: @blur 触发毛利红线 check (advisory, 不卡死提交; checkMarginOnBlur
+                 内部读 recalculateUnitPrice 反算出的未税 item.unitPrice). -->
+            <el-input-number
+              v-model="item.taxIncludedUnitPrice"
+              :min="0"
+              :precision="2"
+              style="width: 130px"
+              @update:model-value="() => recalculateUnitPrice(item)"
+              @blur="() => checkMarginOnBlur(item)"
+            />
             <el-tooltip
               v-if="item.contractPriceHint"
-              :content="`${item.contractPriceHint.source === 'CUSTOMER' ? '协议价' : '全局价'} ¥${item.contractPriceHint.price} · ${item.contractPriceHint.priceListName}${item.contractPriceHint.source === 'CUSTOMER' ? ' · 已自动应用' : ' · 点击采用'}`"
+              :content="`${item.contractPriceHint.source === 'CUSTOMER' ? '协议价' : '全局价'} 含税¥${contractHintTaxIncludedPrice(item).toFixed(2)} (未税¥${item.contractPriceHint.price}) · ${item.contractPriceHint.priceListName}${item.contractPriceHint.source === 'CUSTOMER' ? ' · 已自动应用' : ' · 点击采用'}`"
               placement="top"
             >
               <el-tag
@@ -2986,14 +3094,14 @@ function handleMergePurchase() {
                 effect="plain"
                 size="small"
                 class="contract-price-chip"
-                @click="item.unitPrice = Number(item.contractPriceHint.price)"
+                @click="applyContractPriceHint(item)"
               >
-                {{ item.contractPriceHint.source === 'CUSTOMER' ? '协议' : '统一' }} ¥{{ item.contractPriceHint.price }}
+                {{ item.contractPriceHint.source === 'CUSTOMER' ? '协议' : '统一' }} ¥{{ contractHintTaxIncludedPrice(item).toFixed(2) }}
               </el-tag>
             </el-tooltip>
             <el-tooltip
               v-if="item.priceMemoryHint"
-              :content="`上次成交 ¥${item.priceMemoryHint.unitPrice} · ${item.priceMemoryHint.orderDate} · ${item.priceMemoryHint.sourceOrderNumber} · 点击采用`"
+              :content="`上次成交 含税¥${priceMemoryHintTaxIncludedPrice(item).toFixed(2)} (未税¥${item.priceMemoryHint.unitPrice}) · ${item.priceMemoryHint.orderDate} · ${item.priceMemoryHint.sourceOrderNumber} · 点击采用`"
               placement="top"
             >
               <el-tag
@@ -3003,25 +3111,28 @@ function handleMergePurchase() {
                 class="price-memory-chip"
                 @click="applyPriceMemory(item)"
               >
-                ↻ ¥{{ item.priceMemoryHint.unitPrice }}
+                ↻ ¥{{ priceMemoryHintTaxIncludedPrice(item).toFixed(2) }}
               </el-tag>
             </el-tooltip>
           </div>
-          <!-- E-FP-1 Rule2: 含税单价 = 未税单价 × (1 + 税率/100), 只读派生，不提交后端 -->
-          <el-tooltip content="含税单价 = 未税单价 × (1 + 税率/100)，自动计算，不可编辑" placement="top">
+          <!-- 🔒 2026-09-02: 未税单价 = 含税单价 ÷ (1 + 税率/100), 只读派生, 不提交后端.
+               税率未知/非法时不渲染任何数字 (⛔ 不是 0, 不是原样回显含税价) ——
+               derivedUntaxedPriceOrNull 严格区分"算出来是 0"和"算不出来"
+               (salesOrderNewLineContract.ts)。 -->
+          <el-tooltip content="未税单价 = 含税单价 ÷ (1 + 税率/100)，自动计算，不可编辑" placement="top">
             <el-input
-              :model-value="item.unitPrice != null && item.taxRate != null
-                ? (item.unitPrice * (1 + (item.taxRate as number) / 100)).toFixed(2)
-                : '-'"
+              :model-value="displayUntaxedUnitPrice(item)"
               disabled
               style="width: 130px"
             />
           </el-tooltip>
-          <!-- E-FP-1 Rule2: 含税小计 = 含税单价 × 数量，只读派生，不提交后端 -->
+          <!-- 🔒 2026-09-02: 含税小计 = 含税单价 × 数量 —— 含税单价本身已是录入值, 不再
+               需要税率参与这一步 (与旧版"未税×(1+税率)×数量"数学等价, 但不再依赖未税
+               中间值)。 -->
           <el-tooltip content="含税小计 = 含税单价 × 数量，自动计算，不可编辑" placement="top">
             <el-input
-              :model-value="item.unitPrice != null && item.taxRate != null && item.quantity != null
-                ? (item.unitPrice * (1 + (item.taxRate as number) / 100) * (item.quantity as number)).toFixed(2)
+              :model-value="item.taxIncludedUnitPrice != null && item.quantity != null
+                ? (item.taxIncludedUnitPrice * (item.quantity as number)).toFixed(2)
                 : '-'"
               disabled
               style="width: 130px"
@@ -3045,7 +3156,10 @@ function handleMergePurchase() {
           <el-tooltip v-else content="由数量与箱规自动计算，非第二销售单位" placement="top">
             <el-input-number v-model="item.boxQuantity" :min="0" :precision="2" disabled style="width: 130px" placeholder="箱" />
           </el-tooltip>
-          <el-select v-model="item.taxRate" placeholder="税率" style="width: 90px" size="default">
+          <!-- 🔒 2026-09-02: 税率变了, 未税单价 (item.unitPrice, 提交/毛利红线校验用)
+               必须跟着重算 —— @change 触发 recalculateUnitPrice, 与含税单价输入框的
+               @update:model-value 走同一个反算函数。 -->
+          <el-select v-model="item.taxRate" placeholder="税率" style="width: 90px" size="default" @change="() => recalculateUnitPrice(item)">
             <el-option :value="0" label="0% 免税" />
             <el-option :value="3" label="3% 小规模" />
             <el-option :value="6" label="6% 服务" />
