@@ -261,6 +261,30 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public PageResponse<UserDTO> getUserList(String factoryId, PageRequest pageRequest) {
+        return getUserList(factoryId, null, pageRequest);
+    }
+
+    /**
+     * 2026-09-01: 接上 keyword / role 过滤。
+     *
+     * <p>此前这里直接 {@code userRepository.findByFactoryId(factoryId, pageable)} ——
+     * {@code pageRequest.getKeyword()} <b>一次都没被读过</b>，所以账号管理页的搜索框
+     * 输入什么都返回全量（LIUSHANMEN 实测：搜 {@code lsm} 仍回 33 条，第 2 页照样
+     * 列着 {@code baogong004}–{@code baogong010}）。典型的「机制在、没接上」。
+     */
+    @Override
+    public PageResponse<UserDTO> getUserList(String factoryId, String role, PageRequest pageRequest) {
+        return pagedSearch(factoryId, pageRequest.getKeyword(), role, pageRequest);
+    }
+
+    /**
+     * 关键词 + 角色的唯一查询路径 —— {@code getUserList} 与 {@code searchUsers} 都走它。
+     *
+     * <p>⛔ 不要在任何一端再写一遍过滤：那正是本仓「同一个东西有两份，它一定会漂」的形状，
+     * 而 {@code searchUsers} 原本那份（内存里过滤当前页 + 把 total 重算成过滤后条数）
+     * 已经是漂坏了的——按角色筛选时只会从「本页这 10 个人」里挑，翻页和总数全错。
+     */
+    private PageResponse<UserDTO> pagedSearch(String factoryId, String keyword, String role, PageRequest pageRequest) {
         Sort sort = Sort.by(
                 pageRequest.getSortDirection().equalsIgnoreCase("DESC") ?
                 Sort.Direction.DESC : Sort.Direction.ASC,
@@ -273,7 +297,13 @@ public class UserServiceImpl implements UserService {
                 sort
         );
 
-        Page<User> userPage = userRepository.findByFactoryId(factoryId, pageable);
+        // 空串 = 该维不过滤。⛔ 不传 null: 让 :keyword / :role 在 JPQL 里始终有 String 类型上下文。
+        String safeKeyword = keyword == null || keyword.isBlank()
+                ? ""
+                : com.cretas.aims.util.SqlLikeEscaper.escape(keyword.trim());
+        String safeRole = role == null || role.isBlank() ? "" : role.trim();
+
+        Page<User> userPage = userRepository.searchUsersByKeywordAndRole(factoryId, safeKeyword, safeRole, pageable);
 
         List<UserDTO> userDTOs = userPage.getContent().stream()
                 .map(userMapper::toDTO)
@@ -376,39 +406,17 @@ public class UserServiceImpl implements UserService {
         return searchUsers(factoryId, keyword, null, pageRequest);
     }
 
+    /**
+     * 2026-09-01: 角色筛选从内存下推到 SQL，与 {@code getUserList} 共用同一条查询。
+     *
+     * <p>原实现是 {@code userPage.getContent().stream().filter(role::equals)} 并把
+     * {@code total} 重算成 {@code userDTOs.size()} —— 即<b>只在当前页内过滤</b>。
+     * 工厂用户超过一页时（LIUSHANMEN 33 个账号 / 每页 10 条），按角色筛选会漏掉
+     * 第 2 页起的所有人，而「共 N 条」还显示成一个看着合理的小数字。
+     */
     @Override
     public PageResponse<UserDTO> searchUsers(String factoryId, String keyword, String role, PageRequest pageRequest) {
-        Sort sort = Sort.by(
-                pageRequest.getSortDirection().equalsIgnoreCase("DESC") ?
-                Sort.Direction.DESC : Sort.Direction.ASC,
-                pageRequest.getSortBy()
-        );
-
-        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
-                pageRequest.getPage() - 1,
-                pageRequest.getSize(),
-                sort
-        );
-
-        Page<User> userPage = userRepository.searchUsers(factoryId,
-            com.cretas.aims.util.SqlLikeEscaper.escape(keyword), pageable);
-
-        List<UserDTO> userDTOs = userPage.getContent().stream()
-                .filter(u -> role == null || role.isBlank() || role.equals(u.getRoleCode()))
-                .map(userMapper::toDTO)
-                .collect(Collectors.toList());
-
-        // Recalculate total after role filter (in-memory, factory user lists are typically <50)
-        long total = role == null || role.isBlank()
-                ? userPage.getTotalElements()
-                : userDTOs.size();
-
-        return PageResponse.of(
-                userDTOs,
-                pageRequest.getPage(),
-                pageRequest.getSize(),
-                total
-        );
+        return pagedSearch(factoryId, keyword, role, pageRequest);
     }
 
     @Override

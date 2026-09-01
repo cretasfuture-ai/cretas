@@ -44,6 +44,15 @@ public interface UserService {
     PageResponse<UserDTO> getUserList(String factoryId, PageRequest pageRequest);
 
     /**
+     * 获取用户列表(分页) —— 支持关键词 + 角色筛选。
+     *
+     * <p>关键词取 {@code pageRequest.getKeyword()}；两者留空即该维不过滤。
+     * 2026-09-01 新增：此前账号管理页的搜索框与角色下拉<b>完全不生效</b>，
+     * 参数绑不上、service 也没读过 keyword。
+     */
+    PageResponse<UserDTO> getUserList(String factoryId, String role, PageRequest pageRequest);
+
+    /**
      * 根据角色获取用户列表
      */
     List<UserDTO> getUsersByRole(String factoryId, FactoryUserRole role);

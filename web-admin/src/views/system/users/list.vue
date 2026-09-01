@@ -8,6 +8,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, View, Edit, Key } from '@element-plus/icons-vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import type { TableRow } from '@/types/api';
+import { factoryUserRoleOptions } from '@/constants/factoryUserRoles';
+import { ROLE_LABELS } from '@/utils/enumDisplay';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -17,16 +19,25 @@ const canWrite = computed(() => permissionStore.canWrite('system'));
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
-const searchForm = ref({ username: '', roleCode: '' });
+// 🔴 2026-09-01 缺陷 4: 这里原本是 `{ username, roleCode }`, 而 `GET /{factoryId}/users`
+// 绑的是 `PageRequest` (page/size/sortBy/sortDirection/keyword/status) —— 两个名字
+// 一个都绑不上, 被 Spring **静默丢弃**。owner 在 LIUSHANMEN 上输入 lsm 点搜索,
+// 拿回的仍是全部 33 条 (第 2 页照样列着 baogong004-010)。
+// ⇒ 参数名对齐后端: username → keyword, roleCode → role;
+//   后端同步接上过滤 (UserServiceImpl.getUserList 此前从头到尾没读 keyword)。
+const searchForm = ref({ keyword: '', role: '' });
 
 // Create user dialog state
 const createDialogVisible = ref(false);
 const createLoading = ref(false);
 const createFormRef = ref<FormInstance>();
+// 缺陷 3 (owner 2026-09-01 拍板): 邮箱**直接隐藏**, 必填只保留
+// 用户名 / 密码 / 姓名 / 手机号 / 角色。
+// ⇒ email 整个字段从建号表单移除, 也不再进请求体 —— 后端 `CreateUserRequest.email`
+//   只有 @Email + @Size, **没有 @NotBlank**, 从来不要求它 (是前端单方面比后端严)。
 const createForm = reactive({
   username: '',
   password: '',
-  email: '',
   fullName: '',
   phone: '',
   roleCode: ''
@@ -41,12 +52,14 @@ const createRules: FormRules = {
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 6, max: 20, message: '长度在 6 到 20 个字符', trigger: 'blur' }
   ],
-  email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }
-  ],
   fullName: [
     { required: true, message: '请输入姓名', trigger: 'blur' }
+  ],
+  // 手机号与邮箱相反: 后端一直有 @Pattern(^1[3-9]\\d{9}$) 而前端一条规则都没有,
+  // placeholder 还写着「(选填)」。建号场景改必填 —— 手机号是这批岗位账号唯一的联系方式。
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确', trigger: 'blur' }
   ],
   roleCode: [
     { required: true, message: '请选择角色', trigger: 'change' }
@@ -89,7 +102,7 @@ function handleSearch() {
 }
 
 function handleReset() {
-  searchForm.value = { username: '', roleCode: '' };
+  searchForm.value = { keyword: '', role: '' };
   handleSearch();
 }
 
@@ -98,45 +111,31 @@ function handlePageChange(page: number) {
   loadData();
 }
 
-// Must match FactoryUserRole enum values exactly
-// Apr 20 Bug BR-14 fix: 补上 Phase 1 新增的 platform_admin + restaurant_manager,
-// 否则用户编辑时 roleOptions 不完整, 无法切到这两个角色.
-const roleOptions = [
-  { value: 'platform_admin', label: '平台管理员' },
-  { value: 'factory_super_admin', label: '工厂总监' },
-  { value: 'hr_admin', label: 'HR管理员' },
-  { value: 'procurement_manager', label: '采购主管' },
-  { value: 'sales_manager', label: '销售主管' },
-  { value: 'operations_coordinator', label: '运营协调员' },
-  { value: 'dispatcher', label: '调度员' },
-  { value: 'production_manager', label: '生产经理' },
-  { value: 'production_clerk', label: '生产文员' },
-  { value: 'warehouse_manager', label: '仓储主管' },
-  { value: 'equipment_admin', label: '设备管理员' },
-  { value: 'quality_manager', label: '质量经理' },
-  { value: 'finance_manager', label: '财务主管' },
-  { value: 'restaurant_manager', label: '餐饮经理' },
-  { value: 'workshop_supervisor', label: '车间主任' },
-  { value: 'team_leader', label: '大组长' },
-  { value: 'group_leader', label: '小组长' },
-  { value: 'quality_inspector', label: '质检员' },
-  { value: 'operator', label: '操作员' },
-  { value: 'warehouse_worker', label: '仓库员' },
-  { value: 'permission_admin', label: '权限管理员' },
-  { value: 'department_admin', label: '部门管理员' },
-  { value: 'viewer', label: '查看者' },
-  { value: 'unactivated', label: '未激活' }
-];
+// 🔴 2026-09-01 缺陷 2: 这里原本是**手抄的 24 条**, 上方注释写着
+// 「Must match FactoryUserRole enum values exactly」而它自己少了 6 个
+// (yield_operator / quality_controller / cashier / restaurant_owner /
+//  restaurant_chef / restaurant_purchaser)。注释里还记着上一次同样的漂移
+// (Apr 20 BR-14) —— 同一处至少漂过两次, 说明注释不构成约束力。
+//
+// 后果不只是「列表显示英文原码」(LIUSHANMEN 9 个 baogong00X 账号实证):
+// 这 6 个角色在添加/编辑下拉里**根本选不到**, UI 建不出这些角色的账号;
+// 且编辑一个 yield_operator 账号时下拉当前值不在 options 里会显示空白,
+// 用户随手补选再保存就**静默改掉了角色**。
+//
+// ⇒ 取值域改为从 FactoryUserRole 枚举派生的单一副本, 由
+//   `src/constants/__tests__/factoryUserRoleDictionary.spec.ts` 钉住「两份一致」。
+//   ⛔ 不要在本文件里再抄一份角色表 —— 那道闸会红。
+const roleOptions = factoryUserRoleOptions();
 
+// 中文走 ROLE_LABELS (角色中文的单一来源), ⛔ 不在本页另抄一份。
+// 兜底仍原样吐出角色码 —— 禁降级: 显示英文码好过显示一个错的中文。
 function getRoleText(role: string) {
-  const option = roleOptions.find(o => o.value === role);
-  return option?.label || role;
+  return ROLE_LABELS[role] ?? role;
 }
 
 function openCreateDialog() {
   createForm.username = '';
   createForm.password = '';
-  createForm.email = '';
   createForm.fullName = '';
   createForm.phone = '';
   createForm.roleCode = '';
@@ -153,7 +152,6 @@ async function handleCreateUser() {
     const response = await createUser(factoryId.value, {
       username: createForm.username,
       password: createForm.password,
-      email: createForm.email,
       fullName: createForm.fullName || undefined,
       phone: createForm.phone || undefined,
       roleCode: createForm.roleCode
@@ -184,10 +182,13 @@ function handleViewUser(row: TableRow) {
 const editDialogVisible = ref(false);
 const editLoading = ref(false);
 const editFormRef = ref<FormInstance>();
+// 编辑弹窗同步隐藏邮箱 (缺陷 3 第 3 条): 存量账号大量没有邮箱, 只改建号那一个
+// 会让编辑时又被逼着填一个后端根本不要的字段。
+// ⚠️ email 也不再进 PUT 请求体 —— `UserMapper.updateEntity` 是
+//    `if (getEmail() != null && !isBlank())` 才覆盖, 所以不送 = 保持原值, 不会清空。
 const editForm = reactive({
   id: 0,
   username: '',
-  email: '',
   fullName: '',
   phone: '',
   roleCode: ''
@@ -196,7 +197,6 @@ const editForm = reactive({
 function handleEditUser(row: TableRow) {
   editForm.id = row.id;
   editForm.username = row.username;
-  editForm.email = row.email || '';
   editForm.fullName = row.fullName || '';
   editForm.phone = row.phone || '';
   editForm.roleCode = row.roleCode || '';
@@ -211,9 +211,9 @@ async function handleSaveEdit() {
   editLoading.value = true;
   try {
     const response = await put(`/${factoryId.value}/users/${editForm.id}`, {
-      email: editForm.email,
       fullName: editForm.fullName,
-      phone: editForm.phone,
+      // 空串会被 updateEntity 无条件写回去 (phone 那条没有 isBlank 判断), 清掉原值。
+      phone: editForm.phone || undefined,
       roleCode: editForm.roleCode
     });
     if (response.success) {
@@ -292,10 +292,10 @@ async function handleToggleActive(row: TableRow) {
     <el-card class="search-card">
       <el-form :model="searchForm" inline>
         <el-form-item label="用户名">
-          <el-input v-model="searchForm.username" placeholder="请输入用户名" clearable @keyup.enter="handleSearch" />
+          <el-input v-model="searchForm.keyword" placeholder="用户名 / 姓名 / 手机号" clearable @keyup.enter="handleSearch" />
         </el-form-item>
         <el-form-item label="角色">
-          <el-select v-model="searchForm.roleCode" placeholder="全部角色" clearable>
+          <el-select v-model="searchForm.role" placeholder="全部角色" clearable>
             <el-option
               v-for="option in roleOptions"
               :key="option.value"
@@ -386,14 +386,11 @@ async function handleToggleActive(row: TableRow) {
         <el-form-item label="密码" prop="password">
           <el-input v-model="createForm.password" type="password" show-password placeholder="6-20位密码" />
         </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="createForm.email" placeholder="请输入邮箱" />
-        </el-form-item>
         <el-form-item label="姓名" prop="fullName">
           <el-input v-model="createForm.fullName" placeholder="请输入真实姓名" />
         </el-form-item>
         <el-form-item label="手机号" prop="phone">
-          <el-input v-model="createForm.phone" placeholder="请输入手机号（选填）" />
+          <el-input v-model="createForm.phone" placeholder="请输入 11 位手机号" />
         </el-form-item>
         <el-form-item label="角色" prop="roleCode">
           <el-select v-model="createForm.roleCode" placeholder="请选择角色" style="width: 100%">
@@ -416,7 +413,6 @@ async function handleToggleActive(row: TableRow) {
       <el-descriptions :column="1" border>
         <el-descriptions-item label="用户名">{{ viewUser.username || '-' }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ viewUser.fullName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="邮箱">{{ viewUser.email || '-' }}</el-descriptions-item>
         <el-descriptions-item label="手机号">{{ viewUser.phone || '-' }}</el-descriptions-item>
         <el-descriptions-item label="角色">
           <el-tag>{{ getRoleText(viewUser.roleCode) }}</el-tag>
@@ -439,14 +435,18 @@ async function handleToggleActive(row: TableRow) {
         <el-form-item label="用户名">
           <el-input :model-value="editForm.username" disabled />
         </el-form-item>
-        <el-form-item label="邮箱" prop="email" :rules="[{ type: 'email', message: '邮箱格式不正确', trigger: 'blur' }]">
-          <el-input v-model="editForm.email" placeholder="请输入邮箱" />
-        </el-form-item>
         <el-form-item label="姓名" prop="fullName" :rules="[{ required: true, message: '请输入姓名', trigger: 'blur' }]">
           <el-input v-model="editForm.fullName" placeholder="请输入姓名" />
         </el-form-item>
-        <el-form-item label="手机号">
-          <el-input v-model="editForm.phone" placeholder="请输入手机号" />
+        <!-- 编辑侧手机号只校验格式、**不设 required** —— 与建号表单刻意不同。
+             存量账号大量没有手机号, 设成必填会把「改个角色」这种无关编辑一并挡死,
+             而改角色恰恰是缺陷 2 的补救路径。⇒ 建号强制, 存量不倒逼。 -->
+        <el-form-item
+          label="手机号"
+          prop="phone"
+          :rules="[{ pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确', trigger: 'blur' }]"
+        >
+          <el-input v-model="editForm.phone" placeholder="请输入 11 位手机号" />
         </el-form-item>
         <el-form-item label="角色" prop="roleCode" :rules="[{ required: true, message: '请选择角色', trigger: 'change' }]">
           <el-select v-model="editForm.roleCode" placeholder="请选择角色" style="width: 100%">

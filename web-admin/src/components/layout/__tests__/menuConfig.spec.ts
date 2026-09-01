@@ -87,19 +87,37 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       .toContain('procurement_manager');
   });
 
-  it('keeps account and department management under HR, with workflow setup in system', () => {
-    expect(childPaths('/hr')).toEqual(expect.arrayContaining([
+  // 2026-09-01: 这条断言原本钉的是「账号管理挂在人事管理下」。那不是需求, 是历史 ——
+  // 路由 (/system/users) 与面包屑 (「系统管理 / 账号管理」) 一直说的是系统管理,
+  // 侧边栏是唯一漂开的那份, owner 在 LIUSHANMEN 上因此找不到入口 (2026-09-01 实测)。
+  // ⇒ 断言跟着需求走, 现在钉的是「三处一致」而不是「维持旧位置」。
+  it('keeps account management in system, matching its route and breadcrumb', () => {
+    expect(childPaths('/system')).toEqual(expect.arrayContaining([
       '/system/users',
       '/system/roles',
-      '/hr/departments',
-    ]));
-    expect(childPaths('/system')).not.toContain('/system/users');
-    expect(childPaths('/system')).not.toContain('/system/roles');
-    expect(childPaths('/system')).toEqual(expect.arrayContaining([
       '/system/approval-chains',
       '/system/workflow-designer',
       '/canvas-editor',
     ]));
+    expect(childPaths('/hr')).not.toContain('/system/users');
+    expect(childPaths('/hr')).not.toContain('/system/roles');
+    expect(childPaths('/hr')).toEqual(expect.arrayContaining([
+      '/hr/departments',
+    ]));
+  });
+
+  // 🔴 缺陷 1 的第二半 —— 也是更严重的那半: /hr 组带 hideForFactoryTypes: ['RESTAURANT'],
+  // 而 AppSidebar 的 filterMenuItem 先判父级 ⇒ 账号管理挂在那儿时, 餐饮租户侧边栏里
+  // **一个入口都没有**。这条阴性对照钉住它不许再挂回任何对某业态隐藏的组下面。
+  it('账号管理不挂在任何按业态隐藏的组下 (否则餐饮租户没有入口)', () => {
+    const owner = menuConfig.find((g) => g.children?.some((c) => c.path === '/system/users'));
+    expect(owner, '/system/users 在菜单里找不到 —— 仪器坏了').toBeTruthy();
+    expect(
+      owner!.hideForFactoryTypes ?? [],
+      `账号管理现在挂在「${owner!.title}」下, 而该组对 ${owner!.hideForFactoryTypes?.join('/')} 隐藏`,
+    ).toEqual([]);
+    // 阳性对照: 确实存在按业态隐藏的组, 所以上面那条不是恒真式。
+    expect(menuConfig.some((g) => g.hideForFactoryTypes?.length)).toBe(true);
   });
 
   it('exposes the real stocktake page and its opening-inventory entry under warehouse', () => {
@@ -129,13 +147,10 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   it('uses clear HR menu groups to avoid account/profile/onboarding duplication', () => {
     const hr = findGroup('/hr')!;
     expect(hr.children!.filter((c) => c.groupLabel).map((c) => c.groupLabel)).toEqual([
-      '账号权限',
       '员工组织',
       '入职考勤',
     ]);
     expect(childTitles('/hr')).toEqual([
-      '账号管理',
-      '角色权限',
       '员工档案',
       '部门管理',
       '工种字典',
@@ -311,7 +326,8 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
     expect(childGroupLabels('/equipment')).toEqual(['设备台账', '维护监控']);
     expect(childGroupLabels('/scheduling')).toEqual(['日常调度', '基础资料', '工厂智能调度', '资源与预警', '调度配置']);
-    expect(childGroupLabels('/system')).toEqual(['系统运维', '工厂配置', '平台治理']);
+    // 2026-09-01: '账号权限' 从 /hr 迁入 (缺陷 1), 排在最前。
+    expect(childGroupLabels('/system')).toEqual(['账号权限', '系统运维', '工厂配置', '平台治理']);
   });
 
   it('exposes four logistics modules only to LOGISTICS tenants', () => {
