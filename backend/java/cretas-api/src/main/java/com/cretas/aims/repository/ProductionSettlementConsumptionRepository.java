@@ -4,11 +4,23 @@ import com.cretas.aims.entity.ProductionSettlementConsumption;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 
 @Repository
 public interface ProductionSettlementConsumptionRepository extends JpaRepository<ProductionSettlementConsumption, Long> {
     List<ProductionSettlementConsumption> findBySettlementIdAndDeletedAtIsNull(String settlementId);
+
+    /**
+     * 客供结单口径闸用 —— 同一销售订单下【其它已结单计划】已经领用了多少（2026-09-02）。
+     *
+     * <p>{@code production_settlement_consumptions} 只在 {@code settleProduction()} 结单成功那一刻
+     * 才写入，所以按计划 ID 集合查这张表，天然只会读到<b>已经结单</b>的计划 —— 草稿/未结单计划
+     * 在这张表里没有任何行。这正是「累计用量只数已结单计划」这条口径的落地方式，不需要额外的
+     * 状态过滤。</p>
+     */
+    List<ProductionSettlementConsumption> findByFactoryIdAndProductionPlanIdInAndDeletedAtIsNull(
+            String factoryId, Collection<String> productionPlanIds);
 
     /**
      * 按计划取结单领用行 —— 成本归集用（2026-08-18）。
