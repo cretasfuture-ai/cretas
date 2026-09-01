@@ -762,6 +762,27 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
         cancel(instanceId, operatorUserId, "审批流定义已变更，按当前定义重新发起：" + rebindReason);
 
+        // 🔴 2026-09-01 生产首例实跑失败 (LIUSHANMEN, PO-20260901-0001) — 必须显式 flush,
+        // 不能删掉当"多余调用"。
+        //
+        // cancel() 只是把内存中的 instance.status 改成 CANCELLED 并调 instanceRepository.save(),
+        // 在同一个 @Transactional 里这只是把 UPDATE 记进 Hibernate ActionQueue, 不落库。紧接着
+        // 下面 startWorkflow() 会 save() 一个新 RUNNING 实例, 记进同一 ActionQueue 的是 INSERT。
+        // Hibernate flush 时 INSERT 先于 UPDATE 执行 (ActionQueue 固定顺序), 于是新行在旧行
+        // 还是 RUNNING 的那一刻被插入 —— 撞上 V20260608_02__unique_active_workflow_instance.sql
+        // 的 partial unique index uq_aw_instances_active
+        // (factory_id, module_code, business_entity_id) WHERE status='RUNNING'。
+        //
+        // 后果不是"报错但能兜住": try/catch 只包在 startWorkflow 内部那一次 save() 调用外面,
+        // 而真正抛错的时机是 flush/commit, 已经跑出了那个 try/catch 之外 —— 表现为用户看到
+        // GlobalExceptionHandler 的裸「数据已存在，请勿重复提交」而不是这里设计的友好提示,
+        // 整个恢复操作连带回滚 (无半态, 但恢复彻底失败)。
+        //
+        // 这里强制 flush 把 CANCELLED 立刻落库, 让下面 startWorkflow() 的 INSERT 在旧行已经
+        // 退出 partial index 之后才发生。⛔ 删掉这行会让上面这个失败原样复现 —— 见
+        // WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT (需真实 PG + 该索引)。
+        instanceRepository.flush();
+
         Map<String, Object> newContext = instance.getContextJson() == null
                 ? new HashMap<>()
                 : new HashMap<>(instance.getContextJson());
