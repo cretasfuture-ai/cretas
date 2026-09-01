@@ -35,9 +35,27 @@ describe('物料需求单「用量待定」行不能退化成 0 (Sheet 第 45 �
 
   it('待定行留空不许提交, 且要指名是哪几味料', () => {
     expect(source).toContain('missingPending');
-    expect(source).toContain('isPendingQty(row) && !(Number(row.pickedInput) > 0)');
     // 错误提示按 fool-proof「4 位一体」: sticky + 可关 + 指名 + 说清下一步
     expect(source).toMatch(/missingPending\.map\(\(row\) => row\.materialName\)/);
     expect(source).toMatch(/missingPending[\s\S]{0,400}duration: 0/);
+  });
+
+  /**
+   * 🔴 2026-09-02 owner 卡点: 上面这条闸原来写成 `!(Number(row.pickedInput) > 0)` ——
+   * 把「显式填 0」和「没填(null)」当成了同一件事一起拦下来。0 是「这次一个都不领」的
+   * 明确事实, null 才是这道闸原本要防的「不知道」。LIUSHANMEN 现场 7 味辅料库存全是 0,
+   * 用户如实填 0 却被拒绝提交。
+   *
+   * 这条断言原本钉的是 `!(Number(row.pickedInput) > 0)` 这个具体实现字面量 ——
+   * 那是**历史实现**, 不是**需求**(需求是「没填才拦, 0 不拦」); 按 C‴ 判据只改断言,
+   * 不删这道闸。行为层面的阳性/阴性对照(0 放行 / null 仍拦)见同目录
+   * confirmPickingZeroAllowed.mount.spec.ts。
+   */
+  it('🔴 判据只拦"没填"(null/undefined/空串), ⛔ 不许把显式 0 也当成没填', () => {
+    expect(source).toMatch(
+      /isPendingQty\(row\) && \(row\.pickedInput === null \|\| row\.pickedInput === undefined/,
+    );
+    // 阴性对照: 旧的、会把 0 也拦下来的判据不许再出现
+    expect(source).not.toContain('isPendingQty(row) && !(Number(row.pickedInput) > 0)');
   });
 });
