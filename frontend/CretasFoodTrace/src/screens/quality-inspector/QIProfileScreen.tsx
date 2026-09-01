@@ -6,18 +6,21 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { TouchableRipple } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Application from 'expo-application';
+import { useTranslation } from 'react-i18next';
 
 import { useAuthStore } from '../../store/authStore';
 import { LANGUAGE_NAMES, type SupportedLanguage, useLanguageStore } from '../../store/languageStore';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
+const APP_VERSION = Application.nativeApplicationVersion;
 
 export default function QIProfileScreen() {
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuthStore();
   const { language, setLanguage } = useLanguageStore();
+  const { t } = useTranslation('quality');
 
   const toggleLanguage = () => {
     const next: SupportedLanguage = language === 'zh-CN' ? 'en-US' : 'zh-CN';
@@ -25,7 +28,9 @@ export default function QIProfileScreen() {
   };
 
   const handleLogout = () => {
-    const account = user?.fullName || user?.username || '当前账号';
+    const account = user?.fullName
+      ? `${user.fullName}（${t('profile.inspector')}）`
+      : `@${user?.username ?? ''}（${t('profile.inspector')}）`;
     const message = `确定退出 ${account} 吗？`;
     if (Platform.OS === 'web') {
       if (window.confirm(message)) logout();
@@ -90,7 +95,7 @@ export default function QIProfileScreen() {
           <Ionicons name="information-circle-outline" size={23} color={QI_COLORS.textSecondary} />
           <Text style={styles.menuLabel}>版本</Text>
           <Text style={styles.menuValue}>
-            {Application.nativeApplicationVersion ? `v${Application.nativeApplicationVersion}` : '—'}
+            {APP_VERSION ? `v${APP_VERSION}` : '—'}
           </Text>
         </View>
       </View>

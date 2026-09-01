@@ -20,7 +20,10 @@ import QISettingsScreen from '../screens/quality-inspector/QISettingsScreen';
 import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspector';
 
 const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator<QualityInspectorStackParamList>();
+const HomeStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
+const CaptureStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
+const RecordsStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
+const ProfileStackNavigator = createNativeStackNavigator<QualityInspectorStackParamList>();
 
 const stackScreenOptions = {
   headerStyle: { backgroundColor: QI_COLORS.primary },
@@ -30,57 +33,57 @@ const stackScreenOptions = {
 
 function HomeStack() {
   return (
-    <Stack.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
-      <Stack.Screen name="QIHome" component={QIHomeScreen} options={{ title: '质检拍照' }} />
-    </Stack.Navigator>
+    <HomeStackNavigator.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
+      <HomeStackNavigator.Screen name="QIHome" component={QIHomeScreen} options={{ title: '质检拍照' }} />
+    </HomeStackNavigator.Navigator>
   );
 }
 
 function CaptureStack() {
   return (
-    <Stack.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
-      <Stack.Screen
+    <CaptureStackNavigator.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
+      <CaptureStackNavigator.Screen
         name="QILabelQcCreate"
         component={QILabelQcCreateScreen}
         options={{ title: '发起标签拍检' }}
       />
-      <Stack.Screen
+      <CaptureStackNavigator.Screen
         name="QILabelQcSubmitted"
         component={QILabelQcSubmittedScreen}
         options={{ title: '拍检状态', headerBackVisible: false }}
       />
-    </Stack.Navigator>
+    </CaptureStackNavigator.Navigator>
   );
 }
 
 function RecordsStack() {
   return (
-    <Stack.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
-      <Stack.Screen
+    <RecordsStackNavigator.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
+      <RecordsStackNavigator.Screen
         name="QILabelQcQueue"
         component={QILabelQcQueueScreen}
         options={{ title: '拍检记录' }}
       />
-      <Stack.Screen
+      <RecordsStackNavigator.Screen
         name="QILabelQcSubmitted"
         component={QILabelQcSubmittedScreen}
         options={{ title: '拍检状态' }}
       />
-      <Stack.Screen
+      <RecordsStackNavigator.Screen
         name="QILabelQcCreate"
         component={QILabelQcCreateScreen}
         options={{ title: '发起标签拍检' }}
       />
-    </Stack.Navigator>
+    </RecordsStackNavigator.Navigator>
   );
 }
 
 function ProfileStack() {
   return (
-    <Stack.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
-      <Stack.Screen name="QIProfile" component={QIProfileScreen} options={{ title: '我的' }} />
-      <Stack.Screen name="QISettings" component={QISettingsScreen} options={{ title: '设置' }} />
-    </Stack.Navigator>
+    <ProfileStackNavigator.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
+      <ProfileStackNavigator.Screen name="QIProfile" component={QIProfileScreen} options={{ title: '我的' }} />
+      <ProfileStackNavigator.Screen name="QISettings" component={QISettingsScreen} options={{ title: '设置' }} />
+    </ProfileStackNavigator.Navigator>
   );
 }
 

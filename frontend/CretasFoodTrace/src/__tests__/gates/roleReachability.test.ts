@@ -172,8 +172,11 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     // 涨的 17 个正是 `screens/reports/*` 那一套 —— 上面记的那 33 个里
     // 「17+2 来自 FAReportsTab」那一拨，它们现在从 BossNavigator 真的走得到了。
     // ⛔ 下限只许往严了调；上一轮调低是因为口径变准，这一轮调高是因为覆盖面真的回来了。
-    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(373);
-    expect(s.screensExamined).toBeGreaterThanOrEqual(404);
+    // 2026-09-01: 现场质检员职责收窄为标签拍照和记录，主动移除审核、分析、
+    // 通用质检、打卡和通知等错误可达屏。可达文件减少 8，分析器遍历屏减少 14；
+    // 对应角色契约测试守住这些负向边界。
+    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(365);
+    expect(s.screensExamined).toBeGreaterThanOrEqual(390);
     expect(s.branchesExamined).toBeGreaterThanOrEqual(68);
     // 三态都得有人 —— 全落进一态说明分类器退化了。
     expect(RESULT.vacuous.length).toBeGreaterThan(0);

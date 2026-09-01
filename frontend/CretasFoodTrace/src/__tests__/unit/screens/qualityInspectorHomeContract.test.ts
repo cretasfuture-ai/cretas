@@ -8,24 +8,25 @@ const read = (relativePath: string) =>
 describe('quality inspector home workflow contract', () => {
   const homeSource = read('screens/quality-inspector/QIHomeScreen.tsx');
   const navigatorSource = read('navigation/QualityInspectorNavigator.tsx');
+  const createSource = read('screens/quality-inspector/QILabelQcCreateScreen.tsx');
   const queueSource = read('screens/quality-inspector/QILabelQcQueueScreen.tsx');
   const submittedSource = read('screens/quality-inspector/QILabelQcSubmittedScreen.tsx');
 
-  it('places pending human review on the home screen with one-tap queue navigation', () => {
-    expect(homeSource).toContain('testID="qi-home-pending-review"');
-    expect(homeSource).toContain("statuses: ['NEEDS_REVIEW', 'ANALYSIS_FAILED']");
+  it('keeps the field inspector home limited to capture and records', () => {
+    expect(homeSource).toContain('testID="qi-home-new-label-qc"');
+    expect(homeSource).toContain('testID="qi-home-label-qc-records"');
+    expect(homeSource).toContain("screen: 'QILabelQcCreate'");
     expect(homeSource).toContain("screen: 'QILabelQcQueue'");
-    expect(homeSource.indexOf('qi-home-pending-review')).toBeLessThan(
-      homeSource.indexOf('qi-home-new-label-qc'),
-    );
+    expect(homeSource).not.toContain('qi-home-pending-review');
   });
 
-  it('keeps the primary mobile actions focused on review, capture, and records', () => {
-    expect(homeSource).toContain('待我审核');
+  it('does not expose review, analytics, summaries, or generic quality work', () => {
     expect(homeSource).toContain('发起标签拍检');
-    expect(homeSource).toContain('查看质检记录');
-    expect(homeSource).not.toContain('home.voiceInspection');
-    expect(homeSource).not.toContain('home.dataAnalysis');
+    expect(homeSource).toContain('拍检记录');
+    for (const forbidden of ['待我审核', '今日摘要', '其他待检批次', 'QILabelQcReview', 'QIAnalysisTab']) {
+      expect(homeSource).not.toContain(forbidden);
+      expect(navigatorSource).not.toContain(`name="${forbidden}"`);
+    }
   });
 
   it('adds the device safe area to the full bottom navigation height', () => {
@@ -36,26 +37,23 @@ describe('quality inspector home workflow contract', () => {
     expect(navigatorSource).toContain('tabBarHideOnKeyboard: true');
   });
 
-  it('refreshes the current-user unread badge whenever the home screen regains focus', () => {
-    expect(homeSource).toContain('useFocusEffect(');
-    expect(homeSource).toContain('qualityInspectorApi.getUnreadCount(userId)');
-    expect(homeSource).toContain('}, [factoryId, loadReviewQueue, userId])');
+  it('allows the batch number to be skipped without fabricating a placeholder', () => {
+    expect(createSource).toContain('批次号（选填，可跳过）');
+    expect(createSource).toContain("batchNumber: batchNumber.trim()");
+    expect(createSource).not.toMatch(/batchNumber:\s*['\"]1['\"]/);
+    expect(createSource).not.toContain('if (!batchNumber.trim())');
   });
 
-  it('keeps the pending human-review card current while AI analysis finishes', () => {
-    expect(homeSource).toContain('const loadReviewQueue = useCallback');
-    expect(homeSource).toContain('setPendingReviewCount(page.totalElements)');
-    expect(homeSource).toContain('setNextReviewTask(page.content[0] ?? null)');
-    expect(homeSource).toContain('setInterval(() =>');
-    expect(homeSource).toContain('}, 10_000)');
-    expect(homeSource).toContain('clearInterval(reviewRefreshTimer)');
+  it('shows pending-review states as read-only processing records', () => {
+    expect(queueSource).toContain("PROCESSING: ['DRAFT', 'UPLOADING', 'QUEUED', 'ANALYZING', 'NEEDS_REVIEW', 'ANALYSIS_FAILED']");
+    expect(queueSource).toContain("navigation.navigate('QILabelQcSubmitted'");
+    expect(queueSource).not.toContain("navigation.navigate('QILabelQcReview'");
+    expect(submittedSource).not.toContain("navigation.navigate('QILabelQcReview'");
   });
 
-  it('separates trusted AI auto-pass from human review in the customer queue', () => {
+  it('separates trusted AI auto-pass from completed human review in the records', () => {
     expect(queueSource).toContain("DONE: ['AUTO_PASSED', 'REVIEWED']");
     expect(queueSource).toContain("AUTO_PASSED: { label: 'AI 未见风险'");
-    expect(queueSource).toContain("['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(task.status)");
-    expect(queueSource).toContain("navigation.navigate('QILabelQcSubmitted'");
     expect(submittedSource).toContain("['AUTO_PASSED', 'REVIEWED'].includes(status)");
     expect(submittedSource).toContain('本批未发现风险');
     expect(submittedSource).toContain('AI 自动完成不等同于人工训练真值');
