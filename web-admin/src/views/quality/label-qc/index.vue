@@ -245,7 +245,7 @@ async function submitReview(payload: LabelQcReviewRequest, keyboardConfirmed = f
       ? rows.value.find((row) => row.id !== taskId && row.status === 'NEEDS_REVIEW')
       : undefined;
     if (next) {
-      ElMessage.success(`本批已完成，继续下一批：${next.batchNumber}`);
+      ElMessage.success(`本批已完成，继续下一批：${next.batchNumber || '未填写批次'}`);
       await openReview(next);
     } else {
       drawerVisible.value = false;
@@ -359,7 +359,7 @@ async function backupSelectedTasks() {
     for (const task of selected) {
       const response = await getLabelQcTask(factoryId.value, task.id);
       if (!response.success) {
-        throw new Error(`${task.skuName}（${task.batchNumber}）详情读取失败，未下载残缺归档`);
+        throw new Error(`${task.skuName}（${task.batchNumber || '未填写批次'}）详情读取失败，未下载残缺归档`);
       }
       details.push(response.data);
     }
@@ -658,7 +658,7 @@ onMounted(load);
           <template #default="{ row }">
             <div class="sku-cell">
               <strong>{{ row.skuName }}</strong>
-              <span>{{ row.skuCode }} · {{ row.batchNumber }}</span>
+              <span>{{ row.skuCode }} · {{ row.batchNumber || '未填写批次' }}</span>
             </div>
           </template>
         </el-table-column>

@@ -37,7 +37,7 @@ class LabelQcApi {
   async createTask(
     request: {
       productTypeId: string;
-      batchNumber: string;
+      batchNumber?: string;
       productionDate: string;
       idempotencyKey: string;
     },

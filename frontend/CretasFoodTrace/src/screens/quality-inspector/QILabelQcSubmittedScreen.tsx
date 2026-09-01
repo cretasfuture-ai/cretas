@@ -22,7 +22,7 @@ const STATUS_COPY: Record<LabelQcTaskStatus, { title: string; body: string; colo
   NEEDS_REVIEW: { title: '等待人工审核', body: 'AI 初筛已完成，最终结果由质量审核员确认。', color: QI_COLORS.warning },
   AUTO_PASSED: { title: '本批未发现风险', body: 'AI 初筛没有发现需要人工处理的疑点，本批已自动完成。', color: QI_COLORS.success },
   REVIEWED: { title: '人工审核已完成', body: '审核结果已经保存，可在手机端查看最终标注。', color: QI_COLORS.success },
-  ANALYSIS_FAILED: { title: 'AI 初筛失败', body: '照片仍已保存，人工审核员可以直接检查或重新分析。', color: QI_COLORS.danger },
+  ANALYSIS_FAILED: { title: '等待人工处理', body: '照片已经保存，质量审核员会在审核工作台继续处理。', color: QI_COLORS.danger },
 };
 
 export default function QILabelQcSubmittedScreen() {
@@ -39,7 +39,7 @@ export default function QILabelQcSubmittedScreen() {
       setRefreshError(null);
       setDetail(await labelQcApi.getTask(route.params.taskId, factoryId));
     } catch {
-      setRefreshError('状态刷新失败，任务已提交，可稍后在 Web 端查看。');
+      setRefreshError('状态刷新失败，任务已提交，可稍后在拍检记录中查看。');
     }
   };
 
@@ -63,7 +63,7 @@ export default function QILabelQcSubmittedScreen() {
   const context = useMemo(
     () => [
       ['SKU', `${route.params.skuCode} · ${route.params.skuName}`],
-      ['批次号', route.params.batchNumber],
+      ['批次号', route.params.batchNumber || '未填写'],
       ['生产日期', route.params.productionDate],
       ['任务编号', route.params.taskId],
     ],
@@ -136,30 +136,11 @@ export default function QILabelQcSubmittedScreen() {
         </View>
       )}
 
-      {['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) && (
-        <Button
-          mode="contained"
-          buttonColor={QI_COLORS.primary}
-          contentStyle={styles.buttonContent}
-          labelStyle={styles.buttonLabel}
-          icon={status === 'REVIEWED' ? 'eye-outline' : 'gesture-tap'}
-          onPress={() =>
-            navigation.navigate('QILabelQcReview', {
-              taskId: route.params.taskId,
-            })
-          }
-          testID="qi-label-qc-submitted-review-button"
-        >
-          {status === 'REVIEWED' ? '查看人工审核结果' : '开始逐张人工审核'}
-        </Button>
-      )}
       <Button
-        mode={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? 'outlined' : 'contained'}
-        buttonColor={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? undefined : QI_COLORS.primary}
-        textColor={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? QI_COLORS.primary : undefined}
+        mode="contained"
+        buttonColor={QI_COLORS.primary}
         contentStyle={styles.buttonContent}
         labelStyle={styles.buttonLabel}
-        style={['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(status) ? styles.secondaryButton : undefined}
         onPress={() => navigation.replace('QILabelQcCreate')}
         testID="qi-label-qc-submitted-new-task-button"
       >

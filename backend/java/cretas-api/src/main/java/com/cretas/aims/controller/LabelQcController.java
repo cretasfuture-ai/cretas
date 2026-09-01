@@ -175,6 +175,7 @@ public class LabelQcController {
 
     @PutMapping("/tasks/{taskId}/review")
     @RequirePermission({"quality:read_write"})
+    @RequireRole({"quality_manager", "quality_controller", "factory_super_admin", "platform_admin"})
     public ApiResponse<TaskDetailResponse> review(
             @PathVariable String factoryId,
             @PathVariable String taskId,

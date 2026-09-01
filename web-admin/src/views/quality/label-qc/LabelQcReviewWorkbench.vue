@@ -1224,7 +1224,7 @@ onBeforeUnmount(() => {
       <div class="task-context">
         <span class="context-kicker">正在审核</span>
         <strong>{{ detail.task.skuName }}</strong>
-        <span>{{ detail.task.skuCode }} · {{ detail.task.batchNumber }} · {{ detail.task.productionDate }}</span>
+        <span>{{ detail.task.skuCode }} · {{ detail.task.batchNumber || '未填写批次' }} · {{ detail.task.productionDate }}</span>
       </div>
       <div class="progress-block">
         <span>{{ completedCount }}/{{ drafts.length }} 张已完成</span>

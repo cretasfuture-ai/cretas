@@ -24,11 +24,10 @@ import {
 } from '../../types/qualityInspector';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
-type QueueFilter = 'REVIEW' | 'AI' | 'DONE';
+type QueueFilter = 'PROCESSING' | 'DONE';
 
 const FILTER_STATUSES: Record<QueueFilter, LabelQcTaskStatus[]> = {
-  REVIEW: ['NEEDS_REVIEW', 'ANALYSIS_FAILED'],
-  AI: ['QUEUED', 'ANALYZING'],
+  PROCESSING: ['DRAFT', 'UPLOADING', 'QUEUED', 'ANALYZING', 'NEEDS_REVIEW', 'ANALYSIS_FAILED'],
   DONE: ['AUTO_PASSED', 'REVIEWED'],
 };
 
@@ -40,10 +39,10 @@ const STATUS_COPY: Record<
   UPLOADING: { label: '上传中', color: '#174A7E', background: '#EAF3FF' },
   QUEUED: { label: '排队中', color: '#174A7E', background: '#EAF3FF' },
   ANALYZING: { label: 'AI 初筛中', color: '#174A7E', background: '#EAF3FF' },
-  NEEDS_REVIEW: { label: '待人工审核', color: '#8A5100', background: '#FFF0D2' },
+  NEEDS_REVIEW: { label: '等待审核', color: '#8A5100', background: '#FFF0D2' },
   AUTO_PASSED: { label: 'AI 未见风险', color: '#08795A', background: '#DCF8EF' },
   REVIEWED: { label: '已完成', color: '#08795A', background: '#DCF8EF' },
-  ANALYSIS_FAILED: { label: 'AI 失败·人工检查', color: '#A12D23', background: '#FFE9E6' },
+  ANALYSIS_FAILED: { label: '等待人工处理', color: '#A12D23', background: '#FFE9E6' },
 };
 
 const getErrorMessage = (error: unknown): string => {
@@ -52,14 +51,14 @@ const getErrorMessage = (error: unknown): string => {
   )?.response?.data?.message;
   if (responseMessage) return responseMessage;
   if (error instanceof Error && error.message) return error.message;
-  return '待审核任务加载失败，请检查网络后重试';
+  return '拍检记录加载失败，请检查网络后重试';
 };
 
 export default function QILabelQcQueueScreen() {
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
   const factoryId = useAuthStore((state) => state.user?.factoryId);
-  const [filter, setFilter] = useState<QueueFilter>('REVIEW');
+  const [filter, setFilter] = useState<QueueFilter>('PROCESSING');
   const [tasks, setTasks] = useState<LabelQcTaskSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -98,32 +97,21 @@ export default function QILabelQcQueueScreen() {
   );
 
   const emptyCopy = useMemo(() => {
-    if (filter === 'REVIEW') {
-      return {
-        icon: 'checkmark-done-circle-outline' as const,
-        title: '当前没有待审核任务',
-        body: '新任务完成 AI 初筛后会自动出现在这里。',
-      };
-    }
-    if (filter === 'AI') {
+    if (filter === 'PROCESSING') {
       return {
         icon: 'sparkles-outline' as const,
-        title: '当前没有初筛中的任务',
-        body: '拍检提交后可以在这里查看 AI 处理进度。',
+        title: '当前没有处理中的拍检',
+        body: '发起拍检并上传照片后，可以在这里查看处理进度。',
       };
     }
     return {
       icon: 'archive-outline' as const,
       title: '还没有已完成记录',
-      body: 'AI 未发现风险或人工审核完成后会保留在这里。',
+      body: '拍检处理完成后会保留在这里。',
     };
   }, [filter]);
 
   const openTask = (task: LabelQcTaskSummary) => {
-    if (['NEEDS_REVIEW', 'ANALYSIS_FAILED', 'REVIEWED'].includes(task.status)) {
-      navigation.navigate('QILabelQcReview', { taskId: task.id });
-      return;
-    }
     navigation.navigate('QILabelQcSubmitted', {
       taskId: task.id,
       skuCode: task.skuCode,
@@ -137,8 +125,8 @@ export default function QILabelQcQueueScreen() {
     <View style={styles.screen} testID="qi-label-qc-queue-screen">
       <View style={styles.headerCard}>
         <View style={styles.headerCopy}>
-          <Text style={styles.title}>标签拍检</Text>
-          <Text style={styles.subtitle}>AI 先找疑点，人工逐图给最终结论</Text>
+          <Text style={styles.title}>拍检记录</Text>
+          <Text style={styles.subtitle}>查看照片上传、AI 初筛和处理结果</Text>
         </View>
         <Button
           mode="contained"
@@ -156,8 +144,7 @@ export default function QILabelQcQueueScreen() {
         onValueChange={(value) => setFilter(value as QueueFilter)}
         style={styles.filters}
         buttons={[
-          { value: 'REVIEW', label: '待我审核' },
-          { value: 'AI', label: 'AI 初筛中' },
+          { value: 'PROCESSING', label: '处理中' },
           { value: 'DONE', label: '已完成' },
         ]}
       />
@@ -213,7 +200,9 @@ export default function QILabelQcQueueScreen() {
                   </View>
                 </View>
                 <View style={styles.metaRow}>
-                  <Text style={styles.metaText}>批次 {item.batchNumber}</Text>
+                  <Text style={styles.metaText}>
+                    {item.batchNumber ? `批次 ${item.batchNumber}` : '未填写批次'}
+                  </Text>
                   <Text style={styles.metaText}>{item.productionDate}</Text>
                 </View>
                 <View style={styles.summaryRow}>

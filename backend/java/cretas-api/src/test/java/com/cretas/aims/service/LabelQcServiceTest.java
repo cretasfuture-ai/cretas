@@ -176,6 +176,29 @@ class LabelQcServiceTest {
     }
 
     @Test
+    void createTaskAllowsBatchNumberToBeSkippedUntilProductionFlowIsAvailable() {
+        ProductType product = product("finished-id", ProductCategory.FINISHED_PRODUCT);
+        when(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
+                FACTORY_ID, 7L, "create-without-batch")).thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("finished-id", FACTORY_ID))
+                .thenReturn(Optional.of(product));
+
+        var result = service.createTask(
+                FACTORY_ID,
+                7L,
+                new CreateTaskRequest(
+                        "finished-id",
+                        null,
+                        LocalDate.now(),
+                        "create-without-batch"));
+
+        ArgumentCaptor<LabelQcTask> saved = ArgumentCaptor.forClass(LabelQcTask.class);
+        verify(taskRepository).save(saved.capture());
+        assertEquals("", saved.getValue().getBatchNumber());
+        assertEquals("", result.task().batchNumber());
+    }
+
+    @Test
     void createTaskRejectsActiveSemiFinishedProductBeforeWriting() {
         ProductType product = product("semi-id", ProductCategory.SEMI_FINISHED);
         when(taskRepository.findByFactoryIdAndCreatedByAndIdempotencyKey(
