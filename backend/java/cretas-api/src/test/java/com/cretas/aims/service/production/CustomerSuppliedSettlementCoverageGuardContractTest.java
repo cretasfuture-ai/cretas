@@ -14,8 +14,15 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.SalesOrderSuppliedMaterialRequirementRepository;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -57,9 +64,29 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
                     planRepository, requirementRepository, materialBatchRepository,
                     settlementConsumptionRepository, rawMaterialTypeRepository);
 
+    private Logger guardLogger;
+    private ListAppender<ILoggingEvent> logAppender;
+
     @BeforeEach
     void noSiblingPlansByDefault() {
         when(planRepository.findByFactoryIdAndSourceOrderId(FACTORY, ORDER)).thenReturn(List.of());
+        guardLogger = (Logger) LoggerFactory.getLogger(CustomerSuppliedSettlementCoverageGuard.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        guardLogger.addAppender(logAppender);
+        guardLogger.setLevel(Level.WARN);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        guardLogger.detachAppender(logAppender);
+    }
+
+    private List<String> warnLines() {
+        return logAppender.list.stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
     }
 
     // ------------------------------------------------------------------
@@ -131,6 +158,26 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
     }
 
     @Test
+    void mismatchedUnitBetweenConsumedAndReceivedSkipsTheCumulativeCheckAndWarns() {
+        // 终审订正: 旧实现按 (materialTypeId, unit) 建 key, 新实现只按 materialTypeId 聚合就
+        // 把单位丢了 —— 已收按 kg 记, 这批却按「个」报, 数值直接相减比较会双向坏(小单位数值大
+        // 就假拦, 大单位数值小就放过超收)。单位不一致时必须不拦, 按硬约束4 当「没量到」处理。
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+
+        ProductionSettlementPrefillResponse audited =
+                guard.audit(FACTORY, PLAN, prefill(line("pork-1399", "9999", "个")));
+
+        assertTrue(audited.getAudit().isClean(), "单位不一致不该拦, 应当当「没量到」处理");
+        assertTrue(audited.getAudit().getIssues().isEmpty());
+        assertTrue(warnLines().stream().anyMatch(msg -> msg.contains("pork-1399")
+                        && msg.contains("kg") && msg.contains("个")),
+                "单位不一致时必须留 warn 让人核对口径, 实际打的 WARN 行: " + warnLines());
+    }
+
+    @Test
     void unusedAndPartiallyUsedOrderMaterialsProduceNoMessage() {
         when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
                 .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
@@ -177,7 +224,7 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
                 .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
         when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
                 .thenReturn(List.of(requirement("box", "成品盒", "1", "1", "盒")));
-        ProductionSettlementPrefillResponse response = prefill(line("box", "2"));
+        ProductionSettlementPrefillResponse response = prefill(line("box", "2", "盒"));
 
         guard.audit(FACTORY, PLAN, response);
         guard.audit(FACTORY, PLAN, response);
@@ -310,6 +357,30 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         assertTrue(ex.getMessage().contains("5950"), ex.getMessage());
     }
 
+    @Test
+    void mergeSkipsTheGapCheckOnUnitMismatchInsteadOfBlockingOrSilentlyPassing() {
+        // 已收按「盒」记, 这个批次自己按「个」记 —— 数值上 50 远超剩余额度 1, 若单位不看会
+        // 被误拦(EXCEEDS_GAP); 单位一致性判断必须先拦住这条比较本身, 不拦这一笔手工补录,
+        // 只留 warn。写路径与 audit() 弹窗必须是同一份口径(形态 D)。
+        ProductionPlan plan = plan(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("box", "成品盒", "1", "1", "盒")));
+        when(materialBatchRepository.findByIdAndFactoryId("batch-loose", FACTORY))
+                .thenReturn(Optional.of(batch("batch-loose", "box", "个")));
+        ProductionSettlementRequest derived = ProductionSettlementRequest.builder().build();
+        ProductionSettlementRequest submitted = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(List.of(consumptionLine("batch-loose", "box", "50", "个")))
+                .build();
+
+        guard.mergeMissingManualRawConsumptions(FACTORY, plan, derived, submitted);
+
+        assertEquals(1, derived.getRawMaterialConsumptions().size());
+        assertEquals("个", derived.getRawMaterialConsumptions().get(0).getUnit());
+        assertTrue(warnLines().stream().anyMatch(msg -> msg.contains("box")
+                        && msg.contains("盒") && msg.contains("个")),
+                "单位不一致时必须留 warn, 实际打的 WARN 行: " + warnLines());
+    }
+
     // ------------------------------------------------------------------
     // Fixtures
     // ------------------------------------------------------------------
@@ -387,10 +458,15 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
 
     /** Prefill 用的报工带入行 —— 只需要 materialTypeId + quantity, 不需要真实批次。 */
     private static ProductionSettlementRequest.ConsumptionLine line(String materialTypeId, String quantity) {
+        return line(materialTypeId, quantity, "kg");
+    }
+
+    private static ProductionSettlementRequest.ConsumptionLine line(
+            String materialTypeId, String quantity, String unit) {
         return ProductionSettlementRequest.ConsumptionLine.builder()
                 .materialTypeId(materialTypeId)
                 .quantity(new BigDecimal(quantity))
-                .unit("kg")
+                .unit(unit)
                 .build();
     }
 
