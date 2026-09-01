@@ -844,6 +844,10 @@ public class WorkflowInstanceController {
             if (po != null) {
                 dto.setBusinessCode(po.getOrderNumber());
                 dto.setBusinessAmount(po.getTotalAmount());
+                // 缺陷 30 续: 下发税额, 前端才拼得出含税总额(owner 裁定的口径: 含税领先)。
+                // ⛔ 不在这里做加法算含税 —— "未税 + 税额" 这个算法只写一处, 交给前端复用
+                // (pending.vue 的 amountOf/taxAmountOf), 后端下发的是原始分量。
+                dto.setBusinessTaxAmount(po.getTaxAmount());
                 dto.setCounterpartyName(po.getSupplierName());
             }
             return;
@@ -906,16 +910,25 @@ public class WorkflowInstanceController {
                 //
                 // 本例只差 1 分, 但**按 13% 税率金额越大偏差越大**, 而审批人正是按这个数
                 // 做批准决定的 —— 口径不标是实质风险, 不是文案洁癖。
-                // ⚠️ 有税额才写两个口径; 税额为 0 或缺失时只写一个数并标「未税」——
+                //
+                // 🔒 owner 裁定 (2026-09-01, display 侧同一条口径): 「首先肯定是计算含税总额,
+                // 然后告诉这个税率是多少, 然后再计算未税总额」—— 含税领先、税率说明、
+                // 未税作为反算结果殿后, 顺序**反过来**是不对的。缺陷 24 当时只解决了「两个
+                // 口径都要标」, 没有解决「谁在前面」; 这里补上顺序。
+                // ⚠️ 有税额才拆两段; 税额为 0 或缺失时只写一个数并标「未税」——
                 //    ⛔ 不在税额未知时凭空算一个「含税」出来 (那就是编数字)。
                 if (po.getTotalAmount() != null
                         && po.getTotalAmount().compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal untaxed = po.getTotalAmount();
                     BigDecimal tax = po.getTaxAmount();
                     if (tax != null && tax.compareTo(BigDecimal.ZERO) > 0) {
-                        sb.append(" 未税¥").append(po.getTotalAmount().toPlainString())
-                          .append(" / 含税¥").append(po.getTotalAmount().add(tax).toPlainString());
+                        BigDecimal rate = tax.multiply(new BigDecimal("100"))
+                                .divide(untaxed, 2, java.math.RoundingMode.HALF_UP);
+                        sb.append(" 含税¥").append(untaxed.add(tax).toPlainString())
+                          .append("（税率").append(rate.stripTrailingZeros().toPlainString()).append("%）")
+                          .append(" / 未税¥").append(untaxed.toPlainString());
                     } else {
-                        sb.append(" 未税¥").append(po.getTotalAmount().toPlainString());
+                        sb.append(" 未税¥").append(untaxed.toPlainString());
                     }
                 }
                 if (po.getSupplierName() != null && !po.getSupplierName().isBlank()) {

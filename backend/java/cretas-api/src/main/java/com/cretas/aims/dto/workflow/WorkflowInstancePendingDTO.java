@@ -65,9 +65,24 @@ public class WorkflowInstancePendingDTO {
     @Schema(description = "业务单据号 (结构化, 供前端单独成列并做跳转)", example = "PO-20260820-0002")
     private String businessCode;
 
-    @Schema(description = "单据金额 (结构化, 供前端右对齐 + 排序); 该业务无金额概念时为 null",
+    @Schema(description = "单据金额 (结构化, 供前端右对齐 + 排序); 该业务无金额概念时为 null; "
+            + "⚠️ 这是**未税**额 —— 前端需配合下面 businessTaxAmount 现算含税, 不能单独当付款额展示",
             example = "35000.00")
     private java.math.BigDecimal businessAmount;
+
+    /**
+     * 缺陷 30 续 (2026-09-01, owner 裁定「先算含税总额、说清税率、再倒算未税总额」):
+     * 待办列表 / 通过前确认框都要能推出含税额, 而之前只下发 businessAmount(未税) 一个数,
+     * 前端拼不出含税。
+     *
+     * <p>目前只对 PURCHASE_ORDER 下发(po.getTaxAmount()); 其余模块保持 null ——
+     * ⛔ 不为了填满这个字段就去猜一个税额出来, null 就是「这个模块没有税额概念/暂未接入」。
+     * 前端据此区分: null → 只显示 businessAmount 单值; 非 null → 才拆 含税/税率/未税 三段。
+     */
+    @Schema(description = "单据税额 (结构化, PURCHASE_ORDER 下发; 含税额 = businessAmount + 本字段); "
+            + "无税额概念或暂未接入时为 null, ⛔ 前端不得把 null 当 0 处理",
+            example = "97.50")
+    private java.math.BigDecimal businessTaxAmount;
 
     @Schema(description = "往来单位 —— 采购看供应商, 销售看客户; 无则为 null", example = "北京飞熊")
     private String counterpartyName;
