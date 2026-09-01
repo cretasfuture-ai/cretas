@@ -1630,19 +1630,56 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return "原料 " + (materialTypeId != null ? materialTypeId : "?");
     }
 
+    /**
+     * 物料大类 (原料/辅料/包材) —— 权威来源 {@code RawMaterialType.mainCategory}，
+     * 与 {@code FactoryMaterialRequisitionServiceImpl.resolveMaterialMainCategory} 同一个取数方式
+     * (同文件那个方法的注释已明说: ⛔ 不查 BOM 行自带的 materialCategory 副本,
+     * 那是编辑器可改的独立字段, 与本方法找批次时用的口径不同源会漂)。
+     * 查不到一律返回 null, {@link ProductionInventoryOwnershipGuard#isCompanyStockEligibleCategory}
+     * 对 null 按最严格口径处理, 不会误放宽。
+     */
+    private String resolveMaterialMainCategory(String factoryId, String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return null;
+        }
+        try {
+            return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                    .map(com.cretas.aims.entity.RawMaterialType::getMainCategory)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("读取物料大类失败: {} ({})", materialTypeId, e.getMessage());
+            return null;
+        }
+    }
+
     private BigDecimal resolveAvailableRawStock(String factoryId,
                                                 ProductionPlan plan,
                                                 String materialTypeId) {
         if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
             requireCustomerSuppliedPlanLineage(plan, "原料库存");
-            return isBlank(plan.getSourceOrderId())
+            BigDecimal customerOwned = isBlank(plan.getSourceOrderId())
                     ? materialBatchRepository.sumAvailableUnassignedCustomerOwnedRawStock(
                             factoryId, materialTypeId, plan.getCustomerId())
                     : materialBatchRepository.sumAvailableCustomerSuppliedRawStock(
                             factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+            // 缺陷 49 (2026-09-02 owner 现场实测, LIUSHANMEN 真实数据直查确认): 此时自己开的那个
+            // CUSTOMER_SUPPLIED 计划, L1纸箱(PACKAGING)/冰水(AUXILIARY) 的实际库存全部是 COMPANY_OWNED,
+            // 上面的客户所有查询恒为 0 —— 与结单写路径守卫
+            // (ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed, 缺陷 38) 同样的口径:
+            // 辅料/包材(含调料, 经 MaterialMainCategory 归一) 本就该由工厂自有库存出, RAW 不受影响
+            // (仍只能用客户来料, 逐字不变)。
+            if (ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
+                    resolveMaterialMainCategory(factoryId, materialTypeId))) {
+                BigDecimal companyOwned =
+                        materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(factoryId, materialTypeId);
+                return customerOwned.add(companyOwned);
+            }
+            return customerOwned;
         }
         // Repository contract excludes customer-owned inventory while retaining
         // null ownership only for read-compatible legacy company stock.
+        // 缺陷 49: 上面这个方法已限定 RAW/LOGISTICS/WORKSHOP 三类仓
+        // (与 WarehouseResolver.isSettlementEligibleWarehouse 同一个判定，见该方法 SQL 上面的注释)。
         return materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(factoryId, materialTypeId);
     }
 
@@ -5993,6 +6030,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return available;
     }
 
+    /**
+     * 结单合法仓 = RAW/LOGISTICS 类型 ∪ WORKSHOP 类型，与本方法下面
+     * {@link #ensureMaterialBatchAllowedForSettlement} 原来的内联判定字字相同，抽成共享方法后
+     * {@link #resolveAvailableRawStock} 新增的可用量查询 (SQL 层 JPQL 子查询, 无法直接调
+     * Java 方法) 也教得使用同一个定义 —— 看该方法上方的注释。
+     *
+     * <p>⛔ 抽在 {@code WarehouseResolver} 上会断现有测试: 那个字段在多个现有测试里是直接
+     * {@code mock(WarehouseResolver.class)} 并只针对 isRawOrLogisticsWarehouse/isWorkshopWarehouse 打框，
+     * 包装方法若放到那个 mock 上不会执行真实体而恒返 false (2026-09-02 实测踩过)。
+     */
+    private boolean isSettlementEligibleWarehouse(String factoryId, String warehouseId) {
+        return warehouseResolver.isRawOrLogisticsWarehouse(factoryId, warehouseId)
+                || warehouseResolver.isWorkshopWarehouse(factoryId, warehouseId);
+    }
+
     private void ensureMaterialBatchAllowedForSettlement(String factoryId,
                                                          ProductionPlan plan,
                                                          ProductionSettlementRequest.ConsumptionLine line,
@@ -6020,10 +6072,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   RAW/LOGISTICS 类型仓 及 WORKSHOP 类型仓 (料合法落点) 的批次。
         //   诚实-null: batch 无仓 / 仓非 RAW/LOGISTICS/WORKSHOP (如 成品仓 FINISHED / 研发库 RD) → loud-fail 409。
         String batchWarehouseId = batch.getWarehouseId();
+        // 缺陷 49 (2026-09-02): 三类仓判定抽成本类的 isSettlementEligibleWarehouse
+        // (与 ProductionPlanServiceImpl.resolveAvailableRawStock 共用), ⛔ 不在第二处再写一次这三个枚举值。
+        // 抽在本类而不是 WarehouseResolver 上: warehouseResolver 在已有测试里被
+        // 直接 mock(WarehouseResolver.class) 且只根据 isRawOrLogisticsWarehouse/isWorkshopWarehouse 打框,
+        // 若把共享方法放到它上面, mock 不会执行真实方法体而恒返 false。
         boolean warehouseAllowed = !isBlank(batchWarehouseId)
                 && (rawWarehouseId.equals(batchWarehouseId)
-                    || warehouseResolver.isRawOrLogisticsWarehouse(factoryId, batchWarehouseId)
-                    || warehouseResolver.isWorkshopWarehouse(factoryId, batchWarehouseId));
+                    || isSettlementEligibleWarehouse(factoryId, batchWarehouseId));
         if (!warehouseAllowed) {
             throw new BusinessException(409, "生产结单原料只能从原料仓/物流仓/生产仓领用，不能从其他仓库扣减")
                     .withCode("PRODUCTION_RAW_WAREHOUSE_REQUIRED")

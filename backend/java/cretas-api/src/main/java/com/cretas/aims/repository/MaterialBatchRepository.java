@@ -583,13 +583,23 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      *
      * <p>同一 materialType 下若混入 PRODUCTION_BATCH 批次, 会把 WIP 产出当成原料库存,
      * 进一步污染库存单位判定 (例如主仓 只, 生产仓 kg)。生产计划展开 BOM 时只应参考原料可领用库存。
+     *
+     * <p>缺陷 49 (2026-09-02 owner 现场实测): 原来这里不限仓库类型 —— 导致它比结单
+     * ({@code ProductionPlanServiceImpl.ensureMaterialBatchAllowedForSettlement}, 只认 RAW/LOGISTICS/WORKSHOP
+     * 三类仓) 反而宽(会数到 FINISHED/RD/WIP 仓的货)。现在对齐到同一个仓库集合
+     * (与 {@link com.cretas.aims.service.factory.WarehouseResolver#isSettlementEligibleWarehouse} 同一个判定,
+     * 只是 SQL 侧直接写枚举值——JPQL 子查询调不到 Java 方法, 两边同时改才不漂)。
      */
     @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
            "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId AND m.status = 'AVAILABLE' " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
            "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
-           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
+           "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
+           "AND m.warehouseId IN (SELECT fw.id FROM FactoryWarehouse fw WHERE fw.factoryId = :factoryId " +
+           "AND fw.type IN (com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.RAW, " +
+           "com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.LOGISTICS, " +
+           "com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.WORKSHOP))")
     BigDecimal sumAvailableRawStockQuantityByMaterialType(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId);
