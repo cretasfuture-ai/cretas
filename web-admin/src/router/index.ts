@@ -9,6 +9,13 @@ import crmRoutes from './modules/crm';
 import opsRoutes from './modules/ops';
 import { buildHubRedirect } from './analysisHubRedirect';
 import { buildInventoryQueryRedirect, buildStocktakeQueryRedirect } from './warehouseHubRedirect';
+import {
+  buildApprovalQueryRedirect,
+  buildMaterialFlowRedirect,
+  buildProductionKanbanRedirect,
+  buildProductionAnalysisRedirect,
+  buildProcessConfigRedirect,
+} from './productionHubRedirect';
 import { RESTAURANT_DECISION_ROLES } from '@/views/restaurant/restaurantRoleExperience';
 
 const platformAdminOnlyRoles = ['platform_admin'];
@@ -248,24 +255,38 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/plans/list.vue'),
             meta: { requiresAuth: true, title: '生产计划', module: 'production' }
           },
+          // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
+          // 合并未完成计划队列/备货看板/交货预警 3 个视角为一个入口 (el-tabs), 见
+          // views/production/kanban/index.vue + views/production/productionKanbanTab.ts。
+          // 下面 3 条旧路由原地保留, 只把 component 换成 redirect (保书签, ⛔ 不删),
+          // meta 原样不动。
           {
             // N1 开工无条件化：文员视角"未完成计划队列"——按交期升序展示 PENDING+IN_PROGRESS 计划
+            // 已合并进生产看板 hub 的「未完成计划队列」tab, 见下方 kanban 路由。
             path: 'pending-queue',
             name: 'ProductionPendingQueue',
-            component: () => import('@/views/production/plans/PendingQueue.vue'),
+            redirect: (to) => buildProductionKanbanRedirect(to, 'pending-queue'),
             meta: { requiresAuth: true, title: '未完成计划队列', module: 'production' }
           },
+          // 已合并进生产看板 hub 的「备货看板」tab, 见下方 kanban 路由。
           {
             path: 'restock-board',
             name: 'RestockBoard',
-            component: () => import('@/views/production/restock-board/index.vue'),
+            redirect: (to) => buildProductionKanbanRedirect(to, 'restock-board'),
             meta: { requiresAuth: true, title: '备货看板', module: 'production' }
           },
+          // 已合并进生产看板 hub 的「交货预警」tab, 见下方 kanban 路由。
           {
             path: 'delivery-warnings',
             name: 'ProductionDeliveryWarnings',
-            component: () => import('@/views/production/delivery-warnings/list.vue'),
+            redirect: (to) => buildProductionKanbanRedirect(to, 'delivery-warnings'),
             meta: { requiresAuth: true, title: '交货预警', module: 'production' }
+          },
+          {
+            path: 'kanban',
+            name: 'ProductionKanban',
+            component: () => import('@/views/production/kanban/index.vue'),
+            meta: { requiresAuth: true, title: '生产看板', module: 'production' }
           },
           // 2026-08-07 阶段 5(画布即 BOM): BOM 配方页 / 多级展开 / 版本列表三条路由连同页面一起删除。
           // BOM 就在产品-工序配置画布的辅料 / 包材 cell 上配, 不再有第二个入口。
@@ -303,55 +324,99 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/bom/EcnList.vue'),
             meta: { requiresAuth: true, title: '工程变更通知', module: 'production' }
           },
+          // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 报工审批 hub ——
+          // 合并报工审批/撤回审批 2 个视角为一个入口 (el-tabs), 见
+          // views/production/approval-hub/index.vue。⛔ 路径不变, 仍是
+          // /production/approval (见 approvalQueryTab.ts 头部说明:
+          // reportApprovalMenuMatchesBackendRoles.spec.ts 按这个精确路径查找
+          // 菜单项), component 从原页面换成 hub 组件, meta 原样不动 (roles[] 在
+          // menuConfig.ts 里, 本路由从未挂过 roles meta, 不新增)。
           {
             path: 'approval',
             name: 'ProductionApproval',
-            component: () => import('@/views/production/approval/list.vue'),
+            component: () => import('@/views/production/approval-hub/index.vue'),
             meta: { requiresAuth: true, title: '报工审批', module: 'production' }
           },
+          // 2026-09-02 同上收拢: 生产分析 hub —— 合并本文件内的 3 个视角
+          // (BOM达成率分析/工序投入产出对比/人效双口径对比) + 另外 3 个视角
+          // (车间实时生产报表 in /analytics/*, 生产数据分析/成品出厂核算 in
+          // /production-analytics/*, 见 router/modules/production-analytics.ts)
+          // 为一个入口, 见 views/production/analysis/index.vue +
+          // views/production/productionAnalysisTab.ts。下面 3 条旧路由原地保留,
+          // 只把 component 换成 redirect (保书签, ⛔ 不删), meta 原样不动。
           {
             path: 'bom-achievement',
             name: 'BomAchievement',
-            component: () => import('@/views/production/BomAchievementView.vue'),
+            redirect: (to) => buildProductionAnalysisRedirect(to, 'bom-achievement'),
             meta: { requiresAuth: true, title: 'BOM达成率分析', module: 'production' }
           },
           {
             path: 'process-io',
             name: 'ProcessIOComparison',
-            component: () => import('@/views/production/ProcessIOComparison.vue'),
+            redirect: (to) => buildProductionAnalysisRedirect(to, 'process-io'),
             meta: { requiresAuth: true, title: '工序投入产出对比', module: 'production' }
           },
           {
+            path: 'analysis-query',
+            name: 'ProductionAnalysisQuery',
+            component: () => import('@/views/production/analysis/index.vue'),
+            // modulesAny: 合并前 3 个「analytics 系」tab 要 analytics, 3 个「production
+            // 系」tab 要 production —— 见 menuConfig.ts 该菜单项旁边的完整说明。
+            meta: { requiresAuth: true, title: '生产分析', module: 'production', modulesAny: ['production', 'analytics'] }
+          },
+          // 2026-09-02 同上收拢: 领料 hub —— 合并领料单/退料记录 2 个视角为一个
+          // 入口, 见 views/production/material-flow/index.vue。⛔ 两个子页面
+          // (views/factory/material-requisitions/**、views/factory/material-returns/**)
+          // 内容不动, 只搬菜单入口。
+          {
             path: 'material-requisitions',
             name: 'FactoryMaterialRequisitions',
-            component: () => import('@/views/factory/material-requisitions/list.vue'),
+            redirect: (to) => buildMaterialFlowRedirect(to, 'requisitions'),
             meta: { requiresAuth: true, title: '领料单', module: 'production' }
           },
           {
             path: 'material-returns',
             name: 'ProductionMaterialReturns',
-            component: () => import('@/views/factory/material-returns/list.vue'),
+            redirect: (to) => buildMaterialFlowRedirect(to, 'returns'),
             meta: { requiresAuth: true, title: '退料记录', module: 'production' }
           },
           {
+            path: 'material-flow',
+            name: 'ProductionMaterialFlow',
+            component: () => import('@/views/production/material-flow/index.vue'),
+            meta: { requiresAuth: true, title: '领料', module: 'production' }
+          },
+          // 已合并进生产分析 hub 的「人效双口径对比」tab, 见上方 analysis-query 路由。
+          {
             path: 'labor-efficiency',
             name: 'LaborEfficiency',
-            component: () => import('@/views/production/labor-efficiency/index.vue'),
+            redirect: (to) => buildProductionAnalysisRedirect(to, 'labor-efficiency'),
             meta: { requiresAuth: true, title: '人效对比', module: 'production' }
           },
           {
-            // SP9-M5: 人效看板 — 达成率趋势 + 工序对比图表
+            // SP9-M5: 人效看板 — 达成率趋势 + 工序对比图表 (未参与本轮合并, 从
+            // labor-efficiency 页面内部跳转进入的下钻页, menuConfig 无对应条目)
             path: 'labor-efficiency/dashboard',
             name: 'LaborEfficiencyDashboard',
             component: () => import('@/views/production/labor-efficiency/dashboard.vue'),
             meta: { requiresAuth: true, title: '人效看板', module: 'production' }
           },
+          // 已合并进报工审批 hub 的「撤回审批」tab, 见上方 approval 路由。
           {
             // SP2: 报工整单撤回申请列表 + 审批
             path: 'reversals',
             name: 'ProductionReversals',
-            component: () => import('@/views/production/reversals/list.vue'),
+            redirect: (to) => buildApprovalQueryRedirect(to, 'reversal'),
             meta: { requiresAuth: true, title: '撤回审批', module: 'production' }
+          },
+          // 2026-09-02 同上收拢: 工序 hub —— 合并工序管理/产品-工序配置 2 个视角
+          // 为一个入口, 见 views/production/process-hub/index.vue。两个原页面在
+          // /system/* 下 (见 system 路由块), 那两条旧路由改成 redirect 到这里。
+          {
+            path: 'process-hub',
+            name: 'ProductionProcessHub',
+            component: () => import('@/views/production/process-hub/index.vue'),
+            meta: { requiresAuth: true, title: '工序', module: 'production', hideForFactoryTypes: ['RESTAURANT'] }
           }
         ]
       },
@@ -1595,10 +1660,17 @@ meta: { requiresAuth: true, title: 'SKU 管理', module: 'production', breadcrum
             component: () => import('@/views/system/pos/list.vue'),
             meta: { requiresAuth: true, title: 'POS集成', module: 'system', roles: platformAdminOnlyRoles }
           },
+          // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 工序 hub —— 合并
+          // 工序管理/产品-工序配置 2 个视角为一个入口, 见
+          // views/production/process-hub/index.vue (挂在 /production 路由块下,
+          // 见 router/index.ts 的 production children)。下面 2 条旧路由原地保留,
+          // 只把 component 换成 redirect (保书签, ⛔ 不删), meta 原样不动 (含
+          // 2026-08-22 那段 system->production 漂移说明的历史注释, 一并保留 ——
+          // 那段注释解释的是「module 该写什么」, 这次改动不碰这一点)。
           {
             path: 'work-processes',
             name: 'WorkProcesses',
-            component: () => import('@/views/system/work-processes/index.vue'),
+            redirect: (to) => buildProcessConfigRedirect(to, 'work-processes'),
             // 🔴 2026-08-22: system -> production。**菜单里这三项写的就是 production**
             //   (menuConfig「生产配置」组), 而路由写 system ⇒ 生产经理看得见入口、
             //   点进去被**路由守卫**直接送到 /403。
@@ -1613,7 +1685,7 @@ meta: { requiresAuth: true, title: '工序管理', module: 'production', breadcr
           {
             path: 'product-processes',
             name: 'ProductProcesses',
-            component: () => import('@/views/system/product-processes/index.vue'),
+            redirect: (to) => buildProcessConfigRedirect(to, 'product-processes'),
             // 🔴 2026-08-22: system -> production。**菜单里这三项写的就是 production**
             //   (menuConfig「生产配置」组), 而路由写 system ⇒ 生产经理看得见入口、
             //   点进去被**路由守卫**直接送到 /403。
@@ -1757,10 +1829,15 @@ meta: { requiresAuth: true, title: '产品-工序配置', module: 'production', 
             name: 'AnalyticsKPI',
             redirect: (to) => buildHubRedirect(to, 'kpi')
           },
+          // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 已合并进
+          // /production/analysis-query 的「车间实时生产报表」tab, 见
+          // views/production/analysis/index.vue + router/index.ts 的 production
+          // children (analysis-query 路由)。旧路径原地保留, 只把 component 换成
+          // redirect (保书签, ⛔ 不删), meta 原样不动。
           {
             path: 'production-report',
             name: 'ProductionReport',
-            component: () => import('@/views/analytics/production-report/index.vue'),
+            redirect: (to) => buildProductionAnalysisRedirect(to, 'workshop-report'),
             // 面包屑归属: 路由挂在 /analytics 下, 但侧边栏在「生产管理 / 生产分析」 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
 meta: { requiresAuth: true, title: '车间实时生产报表', module: 'analytics', breadcrumbParent: '生产管理' }
           },

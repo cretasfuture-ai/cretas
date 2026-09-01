@@ -91,6 +91,26 @@ import {
 import { CanvasRenderer, SVGRenderer } from 'echarts/renderers'
 
 // ---- Word Cloud Plugin (auto-registers wordCloud series type) ----
+//
+// 🔴 2026-09-02: 这个包在没有 canvas 2d context 的环境(jsdom 单测)下会**同步 throw**
+// (`Sorry your browser not support wordCloud`, 见 echarts-wordcloud/src/wordCloud.js
+// 的 isSupported 探测)。实测: M67YieldCost.vue(成品出厂核算)因此**从未被任何 spec
+// mount 过**——生产管理菜单收拢 (LIUSHANMEN) 把它并进 /production/analysis-query
+// hub 后, 想按硬约束 9 证明这个 tab 真的渲染, 第一次踩中这颗雷。
+//
+// ⚠️ 曾经改成过 fire-and-forget 动态 import + catch —— coordinator 复核 #487 时
+// 指出这样会引入竞态: 真实浏览器里注册挪到了下一个 microtask，若某个组件在**首次
+// 渲染 wordCloud 系列时注册还没完成**，echarts 会报「series type wordCloud not
+// exists」。⇒ **保留静态 import**(注册一定先于任何渲染完成)，测试侧改用
+// `vi.mock('echarts-wordcloud', () => ({}))` 规避 jsdom 无 canvas 的问题——
+// ⛔ 不为了测试能跑而改生产行为。消费方 (git grep -n wordCloud web-admin/src)：
+// components/smartbi/DynamicChartRenderer.vue (唯一真正渲染 type:'wordCloud' 系列
+// 的组件) + views/smart-bi/composables/useSmartBIDashboardLayout.ts (只是图表类型
+// 选择器里的一个目录项，不触发渲染)。需要挂载会触达词云渲染路径的组件的 spec，
+// 各自在文件顶部 `vi.mock('echarts-wordcloud', () => ({}))`——见
+// productionAnalysisHub.mount.spec.ts 与 productionHubRedirects.spec.ts
+// (后者的「预热」静态 import 会把 analysis/index.vue → M67YieldCost.vue → 本文件
+// 一起转译)。
 import 'echarts-wordcloud'
 
 echarts.use([

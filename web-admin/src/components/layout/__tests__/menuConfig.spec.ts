@@ -267,14 +267,21 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   });
 
   it('keeps production master data under production instead of system', () => {
+    // 2026-09-02 LIUSHANMEN 生产管理菜单收拢: 工序管理/产品-工序配置已合并进
+    // /production/process-hub (el-tabs hub, 见 productionHubs.mount.spec.ts)。
+    // 旧的 /system/work-processes、/system/product-processes 不再是独立菜单项
+    // (仍是路由, 只是改成 redirect —— 见 productionHubRedirects.spec.ts)。
     expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
       '/system/products',
-      '/system/work-processes',
-      '/system/product-processes',
+      '/production/process-hub',
     ]));
     expect(childPaths('/system')).not.toContain('/system/products');
     expect(childPaths('/system')).not.toContain('/system/work-processes');
     expect(childPaths('/system')).not.toContain('/system/product-processes');
+    // 阴性对照: 旧的两条独立入口不该再出现在 menuConfig 任何位置 (只应作为 redirect
+    // 留在 router 里)。
+    expect(descendantPaths('/production')).not.toContain('/system/work-processes');
+    expect(descendantPaths('/production')).not.toContain('/system/product-processes');
   });
 
   it('groups production with inline section labels instead of nested lanes', () => {
@@ -290,28 +297,50 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   });
 
   it('keeps plans, batches, and reporting approval together in production process', () => {
+    // 2026-09-02 LIUSHANMEN 生产管理菜单收拢: 报工审批+撤回审批合并为一个 hub,
+    // ⛔ 路径仍是 /production/approval (reportApprovalMenuMatchesBackendRoles.spec.ts
+    // 按精确路径查找)。/production/reversals 不再是独立菜单项 (仍是路由 redirect)。
+    // 生产看板/领料 两个新 hub 也在同一段落里。
     expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
       '/production/plans',
       '/production/batches',
+      '/production/kanban',
       '/production/approval',
-      '/production/reversals',
+      '/production/material-flow',
     ]));
+    expect(descendantPaths('/production')).not.toContain('/production/reversals');
+    expect(descendantPaths('/production')).not.toContain('/production/pending-queue');
+    expect(descendantPaths('/production')).not.toContain('/production/restock-board');
+    expect(descendantPaths('/production')).not.toContain('/production/delivery-warnings');
+    expect(descendantPaths('/production')).not.toContain('/production/material-requisitions');
+    expect(descendantPaths('/production')).not.toContain('/production/material-returns');
   });
 
   it('moves production analytics out of SmartBI sidebar duplication', () => {
+    // 2026-09-02 LIUSHANMEN 生产管理菜单收拢: 6 个生产分析视角合并进
+    // /production/analysis-query 这一个 hub (el-tabs)。/production-analytics/cost-summary
+    // 不在合并范围内 (owner 拍板的合并表未列它), 仍是独立菜单项。
     expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
-      '/analytics/production-report',
-      '/production-analytics/production',
-      '/production-analytics/yield-cost',
+      '/production/analysis-query',
       '/production-analytics/cost-summary',
     ]));
     const smartBiPaths = descendantPaths('/smart-bi');
     for (const path of [
-      '/analytics/production-report',
-      '/production-analytics/production',
-      '/production-analytics/yield-cost',
+      '/production/analysis-query',
       '/production-analytics/cost-summary',
     ]) {
+      expect(smartBiPaths).not.toContain(path);
+    }
+    // 阴性对照: 6 个已合并视角里的另外 5 个不该再是独立菜单项 (仍是 router redirect)。
+    for (const path of [
+      '/analytics/production-report',
+      '/production-analytics/production',
+      '/production/bom-achievement',
+      '/production/process-io',
+      '/production/labor-efficiency',
+      '/production-analytics/yield-cost',
+    ]) {
+      expect(descendantPaths('/production')).not.toContain(path);
       expect(smartBiPaths).not.toContain(path);
     }
   });
@@ -655,13 +684,21 @@ describe('menuConfig — 业态门控方向 (WS4)', () => {
     expect(child(p).hideForFactoryTypes).toContain('RESTAURANT');
   });
 
+  // 2026-09-02 LIUSHANMEN 生产管理菜单收拢: 车间实时生产报表/生产数据分析/
+  // 成品出厂核算已合并进 /production/analysis-query hub, 该菜单项自己不再单独
+  // 携带 hideForFactoryTypes (RESTAURANT 靠父级 /production 组的 hideForFactoryTypes
+  // 挡住, 见下一条; FACTORY 那部分门控挪到组件内部按 tab 各自 v-if, 见
+  // productionAnalysisTab.ts)。/production-analytics/cost-summary 不在合并范围内,
+  // 仍保留原样的菜单级 hideForFactoryTypes。
   it.each([
-    '/analytics/production-report',
-    '/production-analytics/production',
-    '/production-analytics/yield-cost',
     '/production-analytics/cost-summary',
   ])('生产分析项 %s 对餐饮隐藏 (hideForFactoryTypes 含 RESTAURANT)', (p) => {
     expect(findDescendant('/production', p)!.hideForFactoryTypes).toContain('RESTAURANT');
+  });
+
+  it('生产分析 hub 本身不单独门控业态 —— RESTAURANT 靠父级 /production 组挡住', () => {
+    expect(findDescendant('/production', '/production/analysis-query')!.hideForFactoryTypes).toBeUndefined();
+    expect(findGroup('/production')!.hideForFactoryTypes).toContain('RESTAURANT');
   });
 
   it('经营分析 hub 不门控 (双业态自适应 — 财务/销售/趋势/KPI 各 tab 内部自适应)', () => {
