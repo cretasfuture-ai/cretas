@@ -283,6 +283,14 @@ export interface DashboardOverview {
   // R42 BUG-14 修过此处 fallback 链, R76 升级类型避免 `as any`.
   plannedOutput?: number;
   completionRate?: number;
+  /**
+   * 全量历史进行中批次数(不受 period 影响; ProcessingServiceImpl.getDashboardOverview
+   * 用 countByFactoryIdAndStatus(factoryId, IN_PROGRESS) 无日期过滤查询)。
+   * 与 /reports/dashboard/production?period=today 的 productionStats.inProgressBatches
+   * (该端点根本不返回这个字段)不是同一个数据源 —— 「进行中」是「当前未结束」,
+   * 不是「今天开始的」, 见 DashboardProduction.vue 里对该字段的使用说明。
+   */
+  inProgressBatches?: number;
   summary?: {
     activeAlerts?: number;
     [key: string]: unknown;
