@@ -46,6 +46,11 @@ export interface UserDirectoryHandle {
    * - 查不到 → `#${id}` (⛔ 不是空白, 见文件头「回退口径」)
    */
   personLabel: (userId: number | string | null | undefined) => string;
+  /**
+   * 某人**当前**所属部门的显示名（后端已翻成中文）；查不到返回空串。
+   * ⚠️ 是「现在」不是「单据创建时」—— 有快照字段的调用方应快照优先、本函数兜底。
+   */
+  personDepartment: (userId: number | string | null | undefined) => string;
 }
 
 export function useUserDirectory(): UserDirectoryHandle {
@@ -68,7 +73,23 @@ export function useUserDirectory(): UserDirectoryHandle {
     return name ? String(name) : `#${userId}`;
   }
 
-  return { users, load, personLabel };
+  /**
+   * 某个人**当前**所属部门的显示名（缺陷 15）。
+   *
+   * ⚠️ 名录端点返回的 `department` 已经由后端 `DepartmentDisplayNames` 翻成中文
+   * （`procurement` → `采购部`），⛔ 前端不再自己翻一遍 —— 那会变成第二份字典。
+   *
+   * ⚠️ 这是**当前**部门，不是单据创建时的快照。调用方若手上有快照字段
+   * （如 `requisition.requesterDeptId`），应当**快照优先、本函数兜底**，
+   * 理由与采购明细的原料名同形：快照记录的是当时，名录给的是现在，人调岗后两者会不同。
+   */
+  function personDepartment(userId: number | string | null | undefined): string {
+    if (userId === null || userId === undefined || userId === '') return '';
+    const hit = users.value.find((u) => String(u.id) === String(userId));
+    return hit?.department ? String(hit.department) : '';
+  }
+
+  return { users, load, personLabel, personDepartment };
 }
 
 export default useUserDirectory;

@@ -8,6 +8,7 @@ import com.cretas.aims.dto.user.UpdateSkillsRequest;
 import com.cretas.aims.dto.user.UpdateMyProfileRequest;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.utils.DepartmentDisplayNames;
 import com.cretas.aims.entity.enums.HireType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.UserService;
@@ -199,7 +200,9 @@ public class UserController {
                     row.put("id", u.getId());
                     row.put("fullName", u.getFullName());
                     row.put("username", u.getUsername());
-                    row.put("department", u.getDepartment());
+                    // 缺陷 15: 名录同样要给显示名 —— 请购单详情的「请购部门」
+                    // 和审批人选择器都读这里。⛔ 不在前端各写一份翻译。
+                    row.put("department", DepartmentDisplayNames.display(u.getDepartment()));
                     row.put("roleCode", u.getRoleCode());
                     row.put("isActive", u.getIsActive());
                     return row;
