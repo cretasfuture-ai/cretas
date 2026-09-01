@@ -207,10 +207,79 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
       }
     }
   } catch (error) {
+    if (await handleStaleDefinition(error, row)) return;
     handleCatchError(error, '审批操作失败');
   } finally {
     operatingId.value = '';
   }
+}
+
+/**
+ * 缺陷 27 —— 「点了没反应」的那条路。
+ *
+ * <h3>为什么原来什么都不显示</h3>
+ * 后端明确回了 409 `WORKFLOW_BOUND_DEFINITION_CHANGED`, 但两层各自以为对方会说话:
+ * ① `request.ts` 的 `isVanillaOptimisticLock`(409 且无 actionHint 无 hintTarget)
+ *    把 toast 整条吞掉; ② `handleCatchError` 见 `err.status` 有值就闭嘴, 认为
+ *    拦截器已经显示过了。⇒ 用户唯一能做的就是反复点, 而每次都同样无声。
+ * 后端现在给这条 409 带上了 actionHint, 它才越得过①。
+ *
+ * <h3>为什么恢复入口放在这里</h3>
+ * 这是用户**撞上**这个故障的那一刻 —— 不是某个只有平台管理员知道的深层菜单。
+ * 摘要含节点 position, 画布上挪一像素就会触发, 所以它是常见故障, 入口必须就在手边。
+ * 防呆 Rule 5: dead-end 必须给下一步动作, ⛔ 不能只告诉用户"不行"。
+ *
+ * @returns true 表示这个错误已经被处理干净(已经给了用户明确说法与下一步)
+ */
+async function handleStaleDefinition(error: unknown, row: PendingApproval): Promise<boolean> {
+  const err = error as { code?: string; status?: number };
+  if (err?.status !== 409 || err?.code !== 'WORKFLOW_BOUND_DEFINITION_CHANGED') return false;
+
+  const what = `${businessCodeOf(row)}（${row.moduleLabel || row.moduleCode}）`;
+  // ⛔ 只有能真正执行恢复的人才看到"恢复"按钮 —— 给看不到权限的人一个点了必 403 的
+  //    按钮, 只是把死胡同往后挪一格。后端同样按这两个角色守门。
+  if (!authStore.hasRole(['factory_super_admin', 'platform_admin'])) {
+    await ElMessageBox.alert(
+      `${what} 绑定的审批流已经被修改过，这张单在旧流程上无法继续审批。\n\n`
+        + '请联系工厂管理员，对该单据执行「按当前审批流重新发起」，之后你会重新收到待办。',
+      '该单据的审批流已变更',
+      { confirmButtonText: '知道了', type: 'warning' },
+    );
+    return true;
+  }
+
+  let reason: string;
+  try {
+    const prompt = await ElMessageBox.prompt(
+      `${what} 绑定的审批流已经被修改过，无法在旧流程上继续。\n\n`
+        + '继续将：作废当前审批实例 → 按【当前】审批流从头重新发起。\n'
+        + '⚠️ 这张单此前已通过的审批会作废，需要重新审一遍；此次操作会记录在审批历史里。',
+      '按当前审批流重新发起',
+      {
+        confirmButtonText: '确认重新发起',
+        cancelButtonText: '暂不处理',
+        inputPlaceholder: '请填写恢复原因（会留痕，至少 5 个字）',
+        inputValidator: (v: string) => (v?.trim().length ?? 0) >= 5 || '请填写恢复原因（至少 5 个字）',
+      },
+    );
+    reason = prompt.value.trim();
+  } catch {
+    return true; // 用户选「暂不处理」—— 已经明确告知过了, 不再走 fallback toast
+  }
+
+  try {
+    const res = await post(
+      `/${factoryId.value}/workflow/instances/${row.instanceId}/restart-binding`,
+      { reason, confirm: true },
+    );
+    if (!res.success) throw new Error(res.message || '重新发起失败');
+    ElMessage.success('已按当前审批流重新发起，请重新处理该单据');
+    workspace.invalidateModules(oaInvalidatedModules(row.moduleCode));
+    await loadPending();
+  } catch (e) {
+    handleCatchError(e, '按当前审批流重新发起失败');
+  }
+  return true;
 }
 
 /* ───────────────── M-12: 单号 / 金额 / 往来单位 各归各位 ───────────────── */
