@@ -219,7 +219,6 @@
           <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
           <div class="field-hint">价格与采购单位绑定；未配置时采购单会明确提示，不会静默按 0 元处理。</div>
         </el-form-item>
-        <el-form-item label="币种" required><el-input v-model="relationForm.currency" maxlength="10" /></el-form-item>
         <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
         <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
         <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" /></el-form-item>
@@ -298,7 +297,6 @@
               <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
             </el-form-item>
             <el-form-item :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.quotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
-            <el-form-item label="币种" required><el-input v-model="specForm.currency" maxlength="10" style="width: 220px" /></el-form-item>
             <el-form-item label="最小起订量"><el-input-number v-model="specForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 220px" /></el-form-item>
             <el-form-item label="交期（天）"><el-input-number v-model="specForm.leadTimeDays" :min="0" :precision="0" style="width: 220px" /></el-form-item>
             <el-form-item label="默认规格"><el-switch v-model="specForm.defaultSpec" /></el-form-item>
@@ -590,7 +588,6 @@ async function saveRelation(): Promise<void> {
   if (!isActive.value) return void ElMessage.warning('供应商已暂停合作，不能保存供应原料关系');
   if (!relationForm.materialTypeId) return void ElMessage.warning('请选择物料');
   if (relationUnitReason.value) return void ElMessage.warning(relationUnitReason.value);
-  if (!relationForm.currency.trim()) return void ElMessage.warning('请输入币种');
   const wantsInlineSpec = !relationEditingId.value && inlineSpecEnabled.value;
   if (wantsInlineSpec) {
     if (!inlineSpecForm.name.trim()) return void ElMessage.warning('请输入采购规格名称');
@@ -600,6 +597,9 @@ async function saveRelation(): Promise<void> {
   const payload: SupplierMaterialPayload = {
     ...relationForm,
     supplierMaterialCode: relationForm.supplierMaterialCode?.trim(),
+    // 🔒 币种输入已按 owner 裁定收起 (缺陷 21): 目前只可能人民币。
+    //    这里仍然带上它 —— ⛔ 不删数据库列, 也不改后端契约; 后端
+    //    SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY 才是最终口径。
     currency: relationForm.currency.trim().toUpperCase(),
     purchaseUnit: relationForm.purchaseUnit.trim(),
   };

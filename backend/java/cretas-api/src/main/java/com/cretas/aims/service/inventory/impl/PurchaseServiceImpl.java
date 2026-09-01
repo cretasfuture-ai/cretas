@@ -649,6 +649,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         // 🔴 2026-08-02 owner 拍板: 强制资质闸。装在【提交】而不是创建 —— 该类既有设计是
         //    "草稿宽松、提交才 fail-closed"(见 createPurchaseOrder 里那句注释)。
         assertSupplierQualified(factoryId, order);
+        // 🔴 2026-09-01: 先按主数据回解一次缺价的行, 再让下面那道闸判。顺序不能反 ——
+        //    反了就还是「提示让去配主数据, 配完草稿单不更新」的死结。见该方法 javadoc。
+        refreshMissingLinePricesFromMasterData(factoryId, order);
         validateOrderLinesBeforeApproval(factoryId, order);
 
         if (workflowEngine == null) {
@@ -888,6 +891,129 @@ public class PurchaseServiceImpl implements PurchaseService {
         return purchaseOrderRepository.save(order);
     }
 
+    /**
+     * 提交审批前, 把<b>行价为空</b>的行按主数据重新解一次价。
+     *
+     * <h4>🔴 2026-09-01 修的是一个闭环死结 (LIUSHANMEN 生产实证)</h4>
+     * <ol>
+     *   <li>{@code PO-20260901-0001} 提交审批 → 报 {@code PURCHASE_PRICE_REQUIRED},
+     *       提示「请在供应商—物料关系或采购包装规格中维护大于0的未税采购价」;</li>
+     *   <li>owner 照提示去把默认采购价填成 8.85, <b>保存成功</b>;</li>
+     *   <li>回到同一张单重新提交 → <b>报一模一样的错</b>。</li>
+     * </ol>
+     *
+     * <p>成因: 价格是在<b>转 PO 那一刻</b>落到行上的
+     * ({@code PurchaseRequisitionServiceImpl#mapItemsToPoItems} 从请购行 JSONB 抄
+     * {@code unitPrice}, 而请购创建弹窗根本没有单价字段 ⇒ 必为 null), 而
+     * {@link #validateOrderLinesBeforeApproval} 只<b>读</b>行上那个值做判空,
+     * <b>不重新解析主数据</b>。⇒ 转 PO 时主数据没配 → 价空; 主数据配好了 → 已存在的草稿单不会更新。
+     *
+     * <p>⚠️ 这比「没有提示」更糟: 提示是准确的、用户是照做的、做完没用,
+     * 而且没有任何一句话告诉他还要回来点「编辑草稿」。
+     *
+     * <p><b>只补空的, 不覆盖已有的</b> —— 行上已经有正价时一律不动, 采购员手填的价
+     * 与谈好的一次性价格不能被主数据悄悄改写。
+     *
+     * <p><b>解不出来不兜底</b> —— 解不到就保持为空, 交给下面那道闸以
+     * {@code PURCHASE_PRICE_REQUIRED} 明确拒绝。⛔ 不落 0 (本仓「兜底的默认值会把
+     * 『我不知道』翻译成『是 0』」)。
+     */
+    private void refreshMissingLinePricesFromMasterData(String factoryId, PurchaseOrder order) {
+        if (order.getSupplierId() == null || order.getSupplierId().isBlank()) {
+            return;
+        }
+        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
+        List<PurchaseOrderItem> refreshed = new ArrayList<>();
+        for (PurchaseOrderItem item : items) {
+            if (positivePriceOrNull(item.getUnitPrice()) != null) {
+                continue;
+            }
+            BigDecimal resolved = resolveStoredLineUnitPrice(factoryId, order.getSupplierId(), item);
+            if (resolved == null) {
+                continue;
+            }
+            item.setUnitPrice(resolved);
+            // 单价变了, 三个金额快照必须跟着重算 —— 否则单子会带着 0 元快照进审批。
+            snapshotPurchaseAmounts(item);
+            refreshed.add(item);
+        }
+        if (refreshed.isEmpty()) {
+            return;
+        }
+        purchaseOrderItemRepository.saveAll(refreshed);
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        BigDecimal taxAmount = BigDecimal.ZERO;
+        for (PurchaseOrderItem item : items) {
+            BigDecimal lineAmount = item.getLineAmount();
+            if (lineAmount == null) {
+                continue;
+            }
+            totalAmount = totalAmount.add(lineAmount);
+            BigDecimal lineAmountWithTax = item.getLineAmountWithTax();
+            if (lineAmountWithTax != null) {
+                taxAmount = taxAmount.add(lineAmountWithTax.subtract(lineAmount));
+            }
+        }
+        order.setTotalAmount(totalAmount);
+        order.setTaxAmount(taxAmount);
+        purchaseOrderRepository.save(order);
+        log.info("提交前按主数据回解采购行价: orderId={}, orderNumber={}, refreshedLines={}, totalAmount={}, taxAmount={}",
+                order.getId(), order.getOrderNumber(), refreshed.size(), totalAmount, taxAmount);
+    }
+
+    /**
+     * 拿一条<b>已持久化</b>的采购行去问一次「主数据现在给什么价」。
+     *
+     * <p>⛔ 这里<b>不另写</b>一套价格来源顺序 —— 直接复用
+     * {@link #resolvePurchaseUnitPrice} 这一份权威解析(规格报价 → 供应关系默认价 →
+     * 物料参考价, 且带单位换算)。同一个东西有两份, 它一定会漂。
+     *
+     * <p>传进去的 probe DTO <b>刻意不带</b> {@code unitPrice} / {@code priceUnit}:
+     * 那两个字段一给, {@code resolvePurchaseUnitPrice} 就走「显式价」分支直接返回,
+     * 而本方法要问的恰恰是「不看行上的值, 主数据自己给什么」。
+     *
+     * <p>解不出来一律返回 {@code null}(物料/供应关系读不到、单位缺失…),
+     * 由调用方保持原样并让既有的 {@code PURCHASE_PRICE_REQUIRED} 拒绝。
+     * ⚠️ 单位换算不出来时<b>让异常抛出去</b>, 不吞 —— 本方法只在「该行已经因为缺价
+     * 必然提交失败」时才会跑, 抛一个说得清原因的错不会比原来更差。
+     */
+    private BigDecimal resolveStoredLineUnitPrice(String factoryId, String supplierId, PurchaseOrderItem item) {
+        if (item.getMaterialTypeId() == null || item.getMaterialTypeId().isBlank()) {
+            return null;
+        }
+        String rawTargetUnit = firstNonBlank(item.getPriceUnit(), item.getUnit());
+        if (rawTargetUnit == null || rawTargetUnit.isBlank()) {
+            return null;
+        }
+        RawMaterialType material = materialTypeRepository.findById(item.getMaterialTypeId()).orElse(null);
+        if (material == null || !factoryId.equals(material.getFactoryId())) {
+            return null;
+        }
+        if (supplierMaterialRepository == null) {
+            return null;
+        }
+        com.cretas.aims.entity.SupplierMaterial relation = supplierMaterialRepository
+                .findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, item.getMaterialTypeId())
+                .orElse(null);
+        if (relation == null) {
+            return null;
+        }
+        com.cretas.aims.entity.SupplierMaterialPurchaseSpec spec = null;
+        if (item.getPurchasePackagingSpecId() != null && supplierMaterialPurchaseSpecRepository != null) {
+            spec = supplierMaterialPurchaseSpecRepository
+                    .findById(item.getPurchasePackagingSpecId()).orElse(null);
+            if (spec != null && (!Boolean.TRUE.equals(spec.getActive())
+                    || !factoryId.equals(spec.getFactoryId()))) {
+                // 停用 / 跨厂的规格不作价源。它本身的非法性由 validateOrderLinesBeforeApproval
+                // 以 PURCHASE_PACKAGING_SPEC_INACTIVE 拦, ⛔ 这里不重复报错。
+                spec = null;
+            }
+        }
+        return resolvePurchaseUnitPrice(factoryId, material, relation,
+                new CreatePurchaseOrderRequest.PurchaseOrderItemDTO(),
+                canonicalUnit(factoryId, rawTargetUnit, "采购计价单位"), spec);
+    }
+
     private void validateOrderLinesBeforeApproval(String factoryId, PurchaseOrder order) {
         List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId());
         if (items.isEmpty()) {
@@ -897,9 +1023,13 @@ public class PurchaseServiceImpl implements PurchaseService {
         for (PurchaseOrderItem item : items) {
             assertSupplierMaterialActive(factoryId, order.getSupplierId(), item.getMaterialTypeId());
             if (item.getUnitPrice() == null || item.getUnitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                // ⚠️ 走到这里之前, refreshMissingLinePricesFromMasterData 已经按主数据回解过一次。
+                //    所以提示要说清「刚查过、确实没有」, ⛔ 不能再让用户以为"配一下就好"而
+                //    配完回来撞同一个错(那正是 2026-09-01 修掉的那个死结的长相)。
                 throw new BusinessException(422, "采购物料未配置有效采购价: " + item.getMaterialName())
                         .withCode("PURCHASE_PRICE_REQUIRED")
-                        .withHint("请在供应商—物料关系或采购包装规格中维护大于0的未税采购价")
+                        .withHint("提交时已重新读取该供应商的物料关系与采购包装规格，仍未取到大于0的未税采购价。"
+                                + "请先维护价格，维护后直接重新提交本单即可，无需重建")
                         .withHintTarget("unitPrice");
             }
             String quantityUnit = canonicalUnit(factoryId, item.getUnit(), "采购数量单位");

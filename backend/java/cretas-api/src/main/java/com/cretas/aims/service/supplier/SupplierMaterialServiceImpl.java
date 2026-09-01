@@ -27,6 +27,15 @@ import java.util.Objects;
 @Service
 @RequiredArgsConstructor
 public class SupplierMaterialServiceImpl implements SupplierMaterialService {
+    /**
+     * 供应关系与采购规格的记账币种 —— 全系统当前唯一取值。
+     *
+     * <p>🔒 2026-09-01 owner 裁定 (缺陷 21):「目前普遍默认币种肯定就是人民币,
+     * 不可能出现其他币种」。⛔ 不删 {@code currency} 数据库列, 只把写入端钉住,
+     * 将来要多币种时改这一处 + 把 UI 放回来即可。
+     */
+    static final String SUPPLIER_MATERIAL_CURRENCY = "CNY";
+
     private static final String PRICE_SOURCE_RELATION = "SUPPLIER_RELATION";
     private static final String PRICE_SOURCE_MATERIAL = "MATERIAL_REFERENCE";
     private static final String PRICE_SOURCE_UNCONFIGURED = "UNCONFIGURED";
@@ -111,7 +120,11 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
             }
             target.setDefaultPurchasePrice(request.getDefaultPurchasePrice());
         }
-        target.setCurrency(request.getCurrency() != null ? request.getCurrency() : target.getCurrency() != null ? target.getCurrency() : "CNY");
+        // 🔒 2026-09-01 owner 裁定 (缺陷 21):「目前普遍默认币种肯定就是人民币, 不可能出现其他币种」。
+        //    ⇒ 前端已收起币种输入, 后端在这里固定 CNY —— 收起 UI 而不钉后端, 等于把一个
+        //    用户改不了的字段留成可被构造请求改写的。⛔ 不删数据库列, 留将来多币种的余地。
+        //    ⚠️ 与 SupplierMaterialPurchaseSpecServiceImpl 那一处是同一条口径, 两处必须同时改。
+        target.setCurrency(SUPPLIER_MATERIAL_CURRENCY);
         String requestedUnit = request.getPurchaseUnit() != null
                 ? request.getPurchaseUnit()
                 : target.getPurchaseUnit() != null ? target.getPurchaseUnit() : material.getUnit();
