@@ -852,9 +852,30 @@ public class WorkflowInstanceController {
             if (po != null) {
                 StringBuilder sb = new StringBuilder();
                 sb.append(po.getOrderNumber() != null ? po.getOrderNumber() : bizId);
+                // 缺陷 24 (2026-09-01, LIUSHANMEN 生产): 这里原来只 append 一个不带口径的
+                // `¥{totalAmount}` —— 而 totalAmount 是**未税**额。审批人看到
+                // `PO-20260901-0001 ¥0.09` 会读成「这单要付 0.09」, 实际付的是含税 ¥0.10。
+                //
+                // ▎口径是从源码确证的, ⛔ 不是推的:
+                //   PurchaseServiceImpl#createPurchaseOrder 的累加循环:
+                //     totalAmount += item.getLineAmount()                      ⇒ 未税
+                //     taxAmount   += lineAmountWithTax - lineAmount            ⇒ 税额
+                //   (⛔ 这里不写行号 —— 那个文件正被别的批次改动, 行号会漂; 认方法名与语句形状)
+                //   ⇒ 含税 = totalAmount + taxAmount
+                //
+                // 本例只差 1 分, 但**按 13% 税率金额越大偏差越大**, 而审批人正是按这个数
+                // 做批准决定的 —— 口径不标是实质风险, 不是文案洁癖。
+                // ⚠️ 有税额才写两个口径; 税额为 0 或缺失时只写一个数并标「未税」——
+                //    ⛔ 不在税额未知时凭空算一个「含税」出来 (那就是编数字)。
                 if (po.getTotalAmount() != null
                         && po.getTotalAmount().compareTo(BigDecimal.ZERO) > 0) {
-                    sb.append(" ¥").append(po.getTotalAmount().toPlainString());
+                    BigDecimal tax = po.getTaxAmount();
+                    if (tax != null && tax.compareTo(BigDecimal.ZERO) > 0) {
+                        sb.append(" 未税¥").append(po.getTotalAmount().toPlainString())
+                          .append(" / 含税¥").append(po.getTotalAmount().add(tax).toPlainString());
+                    } else {
+                        sb.append(" 未税¥").append(po.getTotalAmount().toPlainString());
+                    }
                 }
                 if (po.getSupplierName() != null && !po.getSupplierName().isBlank()) {
                     sb.append(" (").append(po.getSupplierName()).append(")");
