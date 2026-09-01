@@ -19,6 +19,7 @@ import PendingPurchaseReceivingPanel from './PendingPurchaseReceivingPanel.vue';
 import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseInboundLifecycle';
 import { autoTotalWeightKg, autoWeightSkippedHint } from './autoWeight';
 import { toDateString } from '@/utils/dateFormat';
+import { groupBatchesBySourceDocument, type DocumentBatchGroup } from './groupBySourceDocument';
 
 const router = useRouter();
 const route = useRoute();
@@ -76,7 +77,7 @@ interface MaterialSummaryGroup {
   batches: TableRow[];
 }
 
-const viewMode = ref<'detail' | 'summary'>('detail');
+const viewMode = ref<'detail' | 'summary' | 'byDocument'>('detail');
 const summaryLoading = ref(false);
 const summaryRows = ref<TableRow[]>([]);
 const summaryTruncated = ref(false);
@@ -143,9 +144,19 @@ const groupedSummary = computed<MaterialSummaryGroup[]>(() => {
   return Array.from(map.values()).sort((a, b) => a.materialName.localeCompare(b.materialName, 'zh-CN'));
 });
 
+// ==================== 按收货单分组 (2026-09-01, owner 原话: "一次一个单入库…应该放在一个组里边") ====================
+// 与「按物料汇总」共用同一份全量拉取(summaryRows) — 分组键 source_doc_id 早就存在于
+// material_batches, 这里只是纯前端聚合, 不新增请求。详见 ./groupBySourceDocument.ts。
+const groupedByDocument = computed<DocumentBatchGroup[]>(() => groupBatchesBySourceDocument(summaryRows.value));
+
+/** 「按物料汇总」和「按收货单分组」都需要全量(不分页)批次数据, 与「按批次明细」的分页数据分开维护。 */
+function isAggregateView(mode: 'detail' | 'summary' | 'byDocument' = viewMode.value): boolean {
+  return mode === 'summary' || mode === 'byDocument';
+}
+
 function handleViewModeChange(mode: string | number | boolean) {
-  viewMode.value = mode as 'detail' | 'summary';
-  if (viewMode.value === 'summary') loadSummaryData();
+  viewMode.value = mode as 'detail' | 'summary' | 'byDocument';
+  if (isAggregateView()) loadSummaryData();
 }
 
 const materialTypes = ref<TableRow[]>([]);
@@ -212,7 +223,7 @@ async function loadData() {
 
 function handleSearch() {
   pagination.value.page = 1;
-  if (viewMode.value === 'summary') {
+  if (isAggregateView()) {
     loadSummaryData();
   } else {
     loadData();
@@ -222,7 +233,7 @@ function handleSearch() {
 function handleRefresh() {
   searchKeyword.value = '';
   pagination.value.page = 1;
-  if (viewMode.value === 'summary') {
+  if (isAggregateView()) {
     loadSummaryData();
   } else {
     loadData();
@@ -231,7 +242,7 @@ function handleRefresh() {
 
 function handleReceivingRefresh() {
   loadData();
-  if (viewMode.value === 'summary') loadSummaryData();
+  if (isAggregateView()) loadSummaryData();
 }
 
 function handlePageChange(page: number) {
@@ -613,7 +624,7 @@ async function submitCostCorrection() {
     }
     formData.unitPrice = price;
     await loadData();
-    if (viewMode.value === 'summary') await loadSummaryData();
+    if (isAggregateView()) await loadSummaryData();
   } catch (error) {
     console.error('更正批次估值失败:', error);
     ElMessage({ message: '估值更正失败，请重试', type: 'error', duration: 0, showClose: true });
@@ -649,7 +660,7 @@ async function submitCorrectReceiptDate() {
       formData.receiptDate = newDate;
       correctDateOriginal.value = newDate;
       loadData();
-      if (viewMode.value === 'summary') loadSummaryData();
+      if (isAggregateView()) loadSummaryData();
     } else {
       // ⛔ 不吞后端文案: 403 的时候它说的是"该找谁", 比一句通用"操作失败"有用得多。
       ElMessage({ message: res.message || '更正失败', type: 'error', duration: 0, showClose: true });
@@ -685,7 +696,7 @@ async function handleFormSubmit() {
       ElMessage.success(editingId.value ? '更新成功' : '入库登记成功');
       formDialogVisible.value = false;
       loadData();
-      if (viewMode.value === 'summary') loadSummaryData();
+      if (isAggregateView()) loadSummaryData();
     } else {
       ElMessage.error(response.message || '操作失败');
     }
@@ -782,6 +793,7 @@ async function handleGenerateLabel(row: TableRow) {
         <el-radio-group v-model="viewMode" @change="handleViewModeChange">
           <el-radio-button label="detail">按批次明细</el-radio-button>
           <el-radio-button label="summary">按物料汇总</el-radio-button>
+          <el-radio-button label="byDocument">按收货单分组</el-radio-button>
         </el-radio-group>
         <el-input
           v-model="searchKeyword"
@@ -864,7 +876,97 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table>
       </template>
 
-      <el-table v-else :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <!--
+        按收货单分组视图 (2026-09-01, owner 原话: "3251厂牛前 跟 941厂牛后…一次一个单入库,
+        它应该是放在一个组里边"). 分组键是 material_batches.source_doc_id (数据早就存在,
+        见 groupBySourceDocument.ts 头部说明), 与「按物料汇总」共用同一份全量批次拉取。
+        ⛔ 这是第三个维度, 不替代上面两个视图 —— 都问不出"这一次收货都到了哪几个批次号"。
+      -->
+      <template v-if="viewMode === 'byDocument'">
+        <div class="summary-hint">
+          <span>共 <strong>{{ groupedByDocument.length }}</strong> 个收货单据分组</span>
+          <span v-if="summaryTruncated" class="summary-warning">
+            数据量较大, 当前分组仅基于前 {{ summaryRows.length }} 条批次记录, 如有遗漏请缩小搜索范围重新分组
+          </span>
+        </div>
+        <el-table
+          :data="groupedByDocument"
+          v-loading="summaryLoading"
+          empty-text="暂无库存数据"
+          stripe
+          border
+          row-key="key"
+          style="width: 100%"
+        >
+          <el-table-column type="expand">
+            <template #default="{ row }">
+              <el-table :data="row.batches" size="small" border stripe class="nested-batch-table">
+                <el-table-column prop="batchNumber" label="批次号" width="160" />
+                <el-table-column label="原料类型" min-width="140" show-overflow-tooltip>
+                  <template #default="{ row: b }">{{ b.materialTypeName || b.materialName || '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="supplierName" label="供应商" min-width="140" show-overflow-tooltip />
+                <el-table-column label="数量" width="120" align="right">
+                  <template #default="{ row: b }">
+                    {{ b.receiptQuantity ?? b.inboundQuantity ?? b.currentQuantity ?? '-' }} {{ displayUnit(b.quantityUnit || b.unit) }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="100" align="center">
+                  <template #default="{ row: b }">
+                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+                <el-table-column label="操作" width="180" fixed="right" align="center">
+                  <template #default="{ row: b }">
+                    <el-button type="primary" link size="small" @click="handleView(b)">查看</el-button>
+                    <el-button v-if="canWrite" type="primary" link size="small" @click="handleEdit(b)">编辑</el-button>
+                    <el-button
+                      v-if="canWrite"
+                      type="success"
+                      link
+                      size="small"
+                      :loading="labelGenerating === String(b.id)"
+                      @click="handleGenerateLabel(b)"
+                    >生成标签</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
+          </el-table-column>
+          <el-table-column label="收货单号" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ row.docLabel }}</span>
+              <el-tag v-if="row.isUnlinked" type="info" size="small" class="doc-group-unlinked-tag">
+                无来源单据
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="收货时间" width="130" align="center">
+            <template #default="{ row }">{{ row.receivedAt || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="批次数" width="110" align="right">
+            <template #default="{ row }">{{ row.batchCount }} 个批次</template>
+          </el-table-column>
+          <el-table-column label="本次总量" min-width="220">
+            <template #default="{ row }">
+              <!--
+                ⛔ 一次收货可能混不同单位/物料, 绝不把不同单位的数量直接相加成一个假总数
+                (owner 明确点名的第 6 个缺陷形状) —— 按单位逐条展示。数量算不出来的批次
+                单独计数标出来, 不悄悄按 0 处理。
+              -->
+              <div v-for="t in (row.totalsByUnit as any[])" :key="t.unit" class="doc-group-unit-line">
+                {{ fmtQty(t.total) }} {{ displayUnit(t.unit) }}
+                <span v-if="t.unknownCount > 0" class="text-secondary">
+                  (另有 {{ t.unknownCount }} 批数量未知)
+                </span>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </template>
+
+      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
         <el-table-column prop="batchNumber" label="批次号" width="160" />
         <el-table-column label="原料类型" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialTypeName || row.materialName || '-' }}</template>
@@ -1316,6 +1418,14 @@ async function handleGenerateLabel(row: TableRow) {
 .nested-batch-table {
   width: calc(100% - 48px);
   margin-left: 48px;
+}
+
+.doc-group-unlinked-tag {
+  margin-left: 8px;
+}
+
+.doc-group-unit-line {
+  line-height: 1.6;
 }
 
 .el-table {
