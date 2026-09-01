@@ -201,7 +201,123 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
     expect(inclusive.text()).not.toContain('¥0.00');
     expect(inclusive.text()).not.toContain('¥750.00');
 
+    // 缺陷 30 再续 (2026-09-02): 税率现在读明细行的权威 taxRate 字段, 与订单级
+    // taxAmount 是否为 null **无关** —— orderWithTax() 的三行明细都带着 taxRate:13,
+    // 这份数据本来就知道税率, 只是不知道税额合计。⇒ 税率应该照常显示 13%,
+    // 不该因为一个不相关的字段是 null 就跟着说「不知道」(那是旧的反算实现遗留的
+    // 耦合, 已经被本次修复解开)。
     const rate = wrapper.find('[data-label="税率"]');
-    expect(rate.text(), '税率未知时不许编一个百分比出来').toBe('税率：—');
+    expect(rate.text(), '明细行税率仍然可读, 不应该被 taxAmount=null 连带隐藏')
+      .toBe('税率：13%');
+  });
+
+  it('缺陷 30 再续 (PO-20260902-0001): 反算会丢精度, 权威值不会 —— 阳性对照必须选一个反算真的算错的样本', async () => {
+    // ⛔ 不能用「未税 750 / 税额 97.5」这类整除样本: 97.5÷750×100 = 13 与权威值
+    // 完全相同, 修复前后读数一样, 证明不了任何东西(本文件顶部另一条用例就是这种
+    // 样本, 留着测总额求和逻辑没问题, 但它不能当"税率修复"的阳性对照)。
+    // 生产实测: 未税 8.85 / 税额 1.15 / 权威 taxRate 13.00 —— 反算 = 1.15÷8.85×100
+    // = 12.9944…% 四舍五入显示 12.99%, 与权威值不同, 才是真正能证伪的样本。
+    harness.get.mockResolvedValue({
+      success: true,
+      data: {
+        orderNumber: 'PO-20260902-0001',
+        supplierName: '测试供应商',
+        status: 'PENDING_APPROVAL',
+        orderDate: '2026-09-02',
+        totalAmount: 8.85,
+        taxAmount: 1.15,
+        invoicedAmount: 0,
+        paidAmount: 0,
+        items: [
+          {
+            materialName: '测试物料', quantity: 1, unit: '件', priceUnit: '件',
+            unitPrice: 8.85, taxRate: 13, lineAmount: 8.85, lineAmountWithTax: 10,
+          },
+        ],
+      },
+    });
+
+    const wrapper = await mountDrawer();
+    await flushPromises();
+
+    expect(wrapper.text(), '订单没渲染出来 —— 后面的断言无意义').toContain('PO-20260902-0001');
+
+    const rate = wrapper.find('[data-label="税率"]');
+    // 阳性断言: 权威值必须真的渲染出来了(硬约束 9 —— 不能只验证"坏值不在", 还要
+    // 验证"对的值在")。
+    expect(rate.text(), '应该显示库里的权威税率 13%, 不是反算出的 12.99%')
+      .toBe('税率：13%');
+    // 阴性对照: 反算残留一个字符都不许出现。
+    expect(rate.text()).not.toContain('12.99');
+  });
+
+  it('多税率单据: 不挑一个代表, 也不显示反算出的加权平均', async () => {
+    harness.get.mockResolvedValue({
+      success: true,
+      data: {
+        orderNumber: 'PO-20260902-0002',
+        supplierName: '测试供应商',
+        status: 'PENDING_APPROVAL',
+        orderDate: '2026-09-02',
+        totalAmount: 200,
+        taxAmount: 19,
+        invoicedAmount: 0,
+        paidAmount: 0,
+        items: [
+          {
+            materialName: '13%税率物料', quantity: 1, unit: '件', priceUnit: '件',
+            unitPrice: 100, taxRate: 13, lineAmount: 100, lineAmountWithTax: 113,
+          },
+          {
+            materialName: '6%税率物料', quantity: 1, unit: '件', priceUnit: '件',
+            unitPrice: 100, taxRate: 6, lineAmount: 100, lineAmountWithTax: 106,
+          },
+        ],
+      },
+    });
+
+    const wrapper = await mountDrawer();
+    await flushPromises();
+
+    expect(wrapper.text(), '订单没渲染出来 —— 后面的断言无意义').toContain('PO-20260902-0002');
+
+    const rate = wrapper.find('[data-label="税率"]');
+    expect(rate.text(), '逐行税率不一致时应显式说「多税率」').toBe('税率：多税率');
+    // 阴性对照: 不许悄悄挑了 13 或 6, 也不许显示 (19÷200×100=9.5) 这个加权平均。
+    expect(rate.text()).not.toContain('13%');
+    expect(rate.text()).not.toContain('6%');
+    expect(rate.text()).not.toContain('9.5%');
+  });
+
+  it('明细行没有可读税率时显示「—」, ⛔ 不编一个 0% 或猜测值', async () => {
+    harness.get.mockResolvedValue({
+      success: true,
+      data: {
+        orderNumber: 'PO-20260902-0003',
+        supplierName: '测试供应商',
+        status: 'PENDING_APPROVAL',
+        orderDate: '2026-09-02',
+        totalAmount: 100,
+        taxAmount: null,
+        invoicedAmount: 0,
+        paidAmount: 0,
+        items: [
+          {
+            // 历史单据: 明细行本身就没有 taxRate 字段(不是 0, 是压根没配过)。
+            materialName: '老单据物料', quantity: 1, unit: '件', priceUnit: '件',
+            unitPrice: 100, lineAmount: 100,
+          },
+        ],
+      },
+    });
+
+    const wrapper = await mountDrawer();
+    await flushPromises();
+
+    expect(wrapper.text(), '订单没渲染出来 —— 后面的断言无意义').toContain('PO-20260902-0003');
+
+    const rate = wrapper.find('[data-label="税率"]');
+    expect(rate.text(), '明细行读不到税率, 不许显示 0% 或任何猜测值').toBe('税率：—');
+    expect(rate.text()).not.toContain('0%');
   });
 });
