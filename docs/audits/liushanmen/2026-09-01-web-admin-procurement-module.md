@@ -893,6 +893,57 @@ approvalBusinessLocked = initialApprovalDecisionType !== undefined
 
 ---
 
+## 🔴🔴 缺陷 30｜审批链把采购单派给财务审，而财务点开这张单必跳 403（缺陷 9 的镜像）
+
+**实际发生**（2026-09-01 19:0x，生产）：`lsm009`（六膳门财务主管）审完
+`PO-20260901-0003` 之后想看这张单的详情，**整页跳 `/403`**。
+
+⇒ **审批人看不见自己在审什么。** 这不是"少个链接"，是审批这个动作本身失去了依据
+（本仓 `fool-proof-design.md` Rule 2「上下文必带身份信息」的最强形式）。
+
+### 分层实测：接口放行，前端守卫拦人
+
+| 层 | `lsm009` 打开 `PO-20260901-0003` | 读数 |
+|---|---|---|
+| 后端 `GET /api/mobile/LIUSHANMEN/purchase/orders/{id}` | **200**，`orderNumber` / `supplierName` 全给 | 实测 |
+| 前端路由守卫 `router/guards.ts` | `next('/403')` | 实测 |
+
+成因：登录接口给 `lsm009` 下发的是 `permissions: ["finance:*"]`（**只有 finance**），
+而 `ProcurementOrderDetail` 路由的 `meta.module = 'procurement'`
+（`web-admin/src/router/index.ts:583-586`）⇒ `canAccess('procurement')` 为假 ⇒ 守卫送 403。
+
+⇒ **纯前端缺陷**：后端乐意把数据给这个角色，是前端自己把人挡在门外。
+
+### ⚠️ 顺带查出：`PERMISSION_MATRIX` 有两份，而且互相矛盾（形态 D）
+
+| 文件 | `finance_manager` 的 `procurement` |
+|---|---|
+| `web-admin/src/utils/permission.ts:51-58` | `'none'`，注释写着「隐藏采购管理（财务主管不需要）」 |
+| `web-admin/src/store/modules/permission.ts:205-208` | `'r'` |
+
+⛔ **不要照任一份直接改** —— 两份都只是 DB 不可用时的 fallback，
+**真正生效的是后端下发的 `permissions`**（实测 `["finance:*"]`）。
+⇒ 修这条要动的是**权限来源**，不是这两张表；但这两张表既然已经漂了，
+应当同时收敛成一份（形态 D：抽不成一份就要有闸钉住一致）。
+
+⚠️ 那句「财务主管不需要采购管理」的注释**现在是假的** —— 审批链就是把采购单派给他审的。
+删承诺要连描述一起删（本仓形态 B⁵）。
+
+### 修法（两条都要，⛔ 不要只做第一条）
+
+1. **可达性**：审批人对自己待办/已办里的业务单，必须能打开详情。
+   ⛔ 不是把 `procurement` 整个模块开给 finance_manager（那会顺手把新建采购订单也开了），
+   而是让「我审过/待我审的单」这条路径可达。
+2. **回归闸**：加一条断言 —— 审批链里出现的每个 `approverRoles`，
+   对应角色必须能通过该业务单详情路由的守卫。
+   ⛔ 这条闸要能红：拿 `finance_manager` + `procurement` 这对当阳性对照。
+
+🔴 **与缺陷 9 是同一个根**：那条是采购够不着财务，这条是财务够不着采购。
+两条都是「跨模块入口的设计假设了点它的人进得去对面」。
+⇒ 建议合并成一条任务做，⛔ 不要分两个 PR 各改一半（本仓「改共享结构前先数」）。
+
+---
+
 ## 台账 12｜`BUG-F006-PURCHASE-WAREHOUSE-RECEIVING-BOUNDARY-001` 标着 NOT_DEPLOYED，但它的产物已在生产上
 
 ⚠️ **不是代码缺陷，是台账状态与生产实况不符。** 本文件不改 ACTIVE.md
