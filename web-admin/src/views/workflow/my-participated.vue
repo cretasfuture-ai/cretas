@@ -23,6 +23,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
+import { currentNodeText } from './nodeLabel';
 
 interface WorkflowInstanceRow {
   instanceId: string;
@@ -33,6 +34,9 @@ interface WorkflowInstanceRow {
   businessSummary: string;
   currentNodeId: string | null;
   currentNodeLabel: string | null;
+  // 后端 hydrateInstances 早就在填这个字段(节点 config 的 approverRoles),
+  // 只是前端类型此前没声明 ⇒ currentNodeText() 靠它把英文节点名换成中文角色名。
+  approverRoles?: string[] | null;
   initiatedAt: string | null;
   initiatedByUsername: string | null;
 }
@@ -158,8 +162,15 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="当前节点" width="140">
           <template #default="{ row }">
+            <!-- 缺陷 23 (2026-09-01, LIUSHANMEN 生产): 这里原来渲染裸的
+                 `row.currentNodeLabel`, 而节点名在数据里**本来就是英文配置 key**
+                 (后端 currentNodeLabel = node.getLabel()), 一线看到
+                 `LIUSHANMEN admin approval` 判断不了卡在谁那里。
+                 ⇒ 改用既有 helper: 英文名回退到授权角色中文名。
+                 ⛔ 不新写第二份 —— `nodeLabel.ts` 是 PR #349 建的, 已有单测钉住,
+                    6 个屏此前只有 pending.vue 接了它 (形态 B: 机制在、没接上)。 -->
             <el-tag v-if="row.currentNodeLabel" size="small" type="warning">
-              {{ row.currentNodeLabel }}
+              {{ currentNodeText(row) }}
             </el-tag>
             <span v-else class="text-muted">已完成</span>
           </template>

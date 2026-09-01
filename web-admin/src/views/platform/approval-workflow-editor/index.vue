@@ -1308,6 +1308,55 @@ function deserializeGraph(dto: ApprovalWorkflowDTO) {
   }))
 }
 
+/**
+ * 缺陷 26: 用服务端返回的权威配置重绘画布, 并**保住用户当前的选中**。
+ *
+ * ⚠️ 直接调 `deserializeGraph` 会整体重建 nodes/edges, 而 vue-flow 的选中态就挂在
+ * node.selected / edge.selected 上 ⇒ 重建等于取消选择, 右侧属性面板会当场关掉。
+ * 用户刚点了「保存修改」就发现自己被踢出正在编辑的节点, 那是拿一个缺陷换另一个。
+ * ⇒ 重绘前记下选中的 id, 重绘后按 id 还原。
+ *
+ * ⚠️ 只还原**仍然存在**的 id: 服务端可能已经把某个节点删了(或改了 id),
+ * 那时不该凭空造一个选中态出来 —— 按 id 匹配不上就让它落空, 属性面板自然关闭。
+ */
+function redrawCanvasPreservingSelection(dto: ApprovalWorkflowDTO) {
+  const selectedNodeIds = new Set(selectedNodes.value.map((node) => node.id))
+  const selectedEdgeIds = new Set(selectedEdges.value.map((edge) => edge.id))
+
+  deserializeGraph(dto)
+
+  if (selectedNodeIds.size) {
+    nodes.value = nodes.value.map((node) => (
+      selectedNodeIds.has(node.id) ? { ...node, selected: true } : node
+    ))
+  }
+  if (selectedEdgeIds.size) {
+    edges.value = edges.value.map((edge) => (
+      selectedEdgeIds.has(edge.id) ? { ...edge, selected: true } : edge
+    ))
+  }
+
+  // 属性面板指向的那个元素也要跟着换成服务端的新值 —— 否则面板显示的还是
+  // 保存前的 config, 就把缺陷 26 从画布挪到了面板上(同一个病换个位置)。
+  const sel = selectedElement.value
+  if (sel?.kind === 'node') {
+    const fresh = nodes.value.find((node) => node.id === sel.id)
+    selectedElement.value = fresh
+      ? {
+          kind: 'node',
+          id: fresh.id,
+          type: fresh.type as NodeType,
+          data: {
+            label: String(fresh.data?.label ?? ''),
+            config: { ...(fresh.data?.config as Record<string, unknown> ?? {}) },
+          },
+        }
+      : null
+  } else if (sel?.kind === 'edge' && !edges.value.some((edge) => edge.id === sel.id)) {
+    selectedElement.value = null
+  }
+}
+
 async function handleSave() {
   if (!factoryId.value || !canSave.value) return
   saving.value = true
@@ -1324,6 +1373,16 @@ async function handleSave() {
       })
       if (res.success && res.data) {
         currentWorkflow.value = res.data
+        // 缺陷 26 (2026-09-01, LIUSHANMEN 生产): 这里原来只更新 currentWorkflow,
+        // **没有用服务端返回的配置重绘画布** —— 而画布节点是另一份状态
+        // (nodes/edges), 只在载入时被 deserializeGraph 填过一次。
+        // 实证: 把「指定审批人」从 六膳门财务主管(lsm009) 清空并保存后,
+        //   右侧属性面板已是空 ✅ / 画布节点卡片仍显示绿色行 lsm009 ❌, F5 才更新。
+        // ⇒ 保存成功后按服务端返回重绘, ⛔ 不能只更新属性面板。
+        //
+        // ⚠️ 为什么这条不能当小事: 「显示的」与「实际存的」不一致, 会让人
+        //   (a) 以为没保存成功而重复操作, 或 (b) 以为钉死了某个具体审批人而其实没有。
+        redrawCanvasPreservingSelection(res.data)
         draftDirty.value = false
         ElMessage.success(res.data.publishStatus === 'draft' ? '草稿已保存' : '修改已保存')
         await refreshWorkflowList()

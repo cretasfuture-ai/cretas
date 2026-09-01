@@ -13,6 +13,7 @@ import {
   type DecisionTypeMetadataDTO,
 } from '@/api/approvalWorkflow'
 import { canConfigureUnifiedOaForRole } from './unifiedOaAccess'
+import { isHumanReadableName } from '@/views/workflow/nodeLabel'
 import {
   buildApprovalCatalog,
   buildOaCanvasQuery,
@@ -291,8 +292,26 @@ onMounted(loadData)
           <template #default="{ row }">
             <div class="business-name">
               <strong>{{ row.chineseName }}</strong>
-              <span v-if="row.activeWorkflowName" class="workflow-name">
+              <!-- 缺陷 23 第二处 (2026-09-01, LIUSHANMEN 生产): 这里原来无条件显示
+                   工作流的 `name`, 而六膳门那条链的 name 是纯英文配置 key ⇒ 每行副标题
+                   显示 `PURCHASE_ORDER_APPROVAL - LIUSHANMEN admin approval`。
+                   左边 `chineseName` 已经写着「采购订单审批」, 英文 key 是冗余噪音。
+                   ⇒ 只在它是人起的中文名时显示(管理员自定义的「采购审批-华东区」仍然看得到),
+                     是内部 key 就收进 title tooltip, ⛔ 不整个删掉 —— 排查时仍需要看得到它。
+                   ⚠️ 判据与 OA 那一处**共用同一个函数**, ⛔ 不在这里另写一份
+                     「像不像英文 key」的判断(形态 D: 两份一定会漂)。 -->
+              <span
+                v-if="isHumanReadableName(row.activeWorkflowName)"
+                class="workflow-name"
+              >
                 {{ row.activeWorkflowName }}
+              </span>
+              <span
+                v-else-if="row.activeWorkflowName"
+                class="workflow-name workflow-name--internal"
+                :title="row.activeWorkflowName"
+              >
+                （内部配置名，鼠标悬停查看）
               </span>
               <span>{{ row.description }}</span>
             </div>
@@ -537,6 +556,13 @@ h1 {
   color: #1b65a8;
   font-size: 12.5px;
   font-weight: 500;
+}
+
+/* 缺陷 23: 内部配置名弱化 —— 它对一线没有意义, 但排查时要看得到(挂在 title 上) */
+.business-name .workflow-name--internal {
+  color: #909399;
+  font-weight: 400;
+  cursor: help;
 }
 
 .amount-threshold {
