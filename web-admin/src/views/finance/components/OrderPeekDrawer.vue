@@ -91,13 +91,37 @@ const taxInclusiveTotal = computed<number | null>(() => {
   return untaxedTotal.value + taxAmountTotal.value;
 });
 
-const taxRatePercent = computed<number | null>(() => {
-  if (untaxedTotal.value === null || taxAmountTotal.value === null || untaxedTotal.value <= 0) return null;
-  return (taxAmountTotal.value / untaxedTotal.value) * 100;
+/**
+ * 缺陷 30 再续 (2026-09-02, LIUSHANMEN 生产, PO-20260902-0001): 头部「税率」原来是用
+ * taxAmountTotal ÷ untaxedTotal **反算**的 —— 反算在四舍五入之后必然有精度损失:
+ *   库权威值 taxRate = 13.00, 而 1.15 ÷ 8.85 = 12.9944…% 显示成 12.99%。
+ *   「几乎对」比「明显错」更糟: 12.99% 会被看账的人当成"税率配置错了"去查一个
+ *   根本没问题的设置。
+ * ⇒ 明细行本来就下发权威的 `taxRate`(purchaseTaxIncludedUnitPrice 已经在读它算单价) ——
+ *   直接读它, ⛔ 不再反算, 也⛔ 不新增后端字段。
+ *
+ * 多税率单据: 逐行税率不一致时, 不能挑一个代表(挑哪个都是武断的), 也不能显示
+ * taxAmountTotal/untaxedTotal 算出的加权平均 —— 那是同一个"反算出的假精度"换了个
+ * 形式, 一样会被当成一个确定的答案。⇒ 显式说「多税率」。
+ */
+const lineTaxRates = computed<number[]>(() => {
+  const seen: number[] = [];
+  for (const row of items.value) {
+    const rate = financeNumber(row.taxRate);
+    if (rate === null || rate < 0 || rate > 100) continue;
+    // 四舍五入到 4 位小数再去重 —— 容忍浮点表示误差, 不容忍真实税率差异(标准税率
+    // 精确到 2 位小数, 4 位足够分辨 13 vs 12.9944 这类反算残留, 同时不会把两个
+    // 本该相同的真实值因为浮点噪声误判成"多税率")。
+    const rounded = Math.round(rate * 10000) / 10000;
+    if (!seen.includes(rounded)) seen.push(rounded);
+  }
+  return seen;
 });
 
-function formatTaxRate(pct: number | null): string {
-  return pct === null ? '—' : `${Math.round(pct * 100) / 100}%`;
+function formatAuthoritativeTaxRate(rates: number[]): string {
+  if (rates.length === 0) return '—';
+  if (rates.length > 1) return '多税率';
+  return `${rates[0]}%`;
 }
 
 /**
@@ -179,9 +203,12 @@ watch(() => [visible.value, props.orderId], ([open]) => { if (open) void load();
             缺陷 30 续 (2026-09-01): 🔒 owner 裁定「先算含税总额、说清税率、再倒算未税总额」——
             含税领先, 未税作为反算结果殿后。⚠️ 含税总额是**前端现算**(untaxedTotal + taxAmountTotal),
             ⛔ 不是 order.totalAmountWithTax —— 那个字段名在这两个端点上从不存在(见函数注释)。
+            缺陷 30 再续 (2026-09-02): ⚠️ 「税率」不跟着这条反算规则 —— 它读的是明细行的
+            权威 taxRate 字段(见 lineTaxRates 注释), 与含税/未税两个"现算"的总额是两条
+            独立的路, 互不依赖。
           -->
           <el-descriptions-item label="含税总额">{{ moneyIfKnown(taxInclusiveTotal) }}</el-descriptions-item>
-          <el-descriptions-item label="税率">{{ formatTaxRate(taxRatePercent) }}</el-descriptions-item>
+          <el-descriptions-item label="税率">{{ formatAuthoritativeTaxRate(lineTaxRates) }}</el-descriptions-item>
           <el-descriptions-item label="未税总额">{{ money(order.totalAmount) }}</el-descriptions-item>
           <el-descriptions-item label="已开票">{{ money(order.invoicedAmount) }}</el-descriptions-item>
           <el-descriptions-item label="已收/付款">{{ money(order.paidAmount) }}</el-descriptions-item>
