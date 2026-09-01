@@ -29,7 +29,13 @@ describe('采购规格无自报价时用后端换算价 (Sheet 第 38 行)', () 
 
   it('用后端给的换算价时, 计价单位也跟着后端走 —— 不能沿用旧单位标签', () => {
     expect(listSource).toContain('item.unitPrice = Number(spec?.derivedPrice)');
-    expect(listSource).toContain("canonicalUnitCode(spec?.derivedPriceUnit || unit)");
+    // 2026-09-02: 原断言钉的是 canonicalUnitCode(...) —— 那正是阻断性缺陷本身
+    // (字典单位「个」/「只」的物料把值折成 'pcs' 写进 item.priceUnit, 到提交时已经
+    // 救不回来, PurchaseServiceImpl 拿它跟供应关系采购单位精确比较必炸)。改用
+    // KeepingCount 保留「个」/「只」字面, 断言跟着改写而不是删除 —— 它守的行为没变
+    // (换算价必须带上正确的计价单位), 只是原来钉错了实现。
+    expect(listSource).toContain('canonicalUnitCodeKeepingCount(spec?.derivedPriceUnit || unit)');
+    expect(listSource).not.toContain('item.priceUnit = canonicalUnitCode(spec?.derivedPriceUnit || unit)');
   });
 
   it('换算过的价必须在界面上说清来源, 不能伪装成用户自己配的那个数', () => {

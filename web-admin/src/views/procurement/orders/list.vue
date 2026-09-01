@@ -505,9 +505,15 @@ function applyRelationPrice(
   relation: SupplierMaterialRelation,
   expectedPriceUnit: string,
 ): void {
-  const expectedUnit = canonicalUnitCode(expectedPriceUnit);
-  const effectiveUnit = canonicalUnitCode(relation.effectivePriceUnit);
-  const relationUnit = canonicalUnitCode(relation.purchaseUnit || relation.baseUnit);
+  // 硬约束 8 (2026-09-02): 这三处原先都是 canonicalUnitCode, 把 只/个 折成 pcs 再比较。
+  // item.priceUnit 由本函数写出 (513/519/524 行), 折叠过的值经 canonicalUnitCodeKeepingCount
+  // 也救不回来 —— 到了 :893 提交时 i.priceUnit 已经是 'pcs', KeepingCount 对它无效。
+  // 后端 PurchaseServiceImpl:3905-3908 (PURCHASE_PRICE_UNIT_RELATION_MISMATCH) 会拿
+  // priceUnit 与供应关系采购单位做**精确**比较 —— 'pcs' 归一到「件」而物料字典单位是
+  // 「个」/「只」时两者不等, 触发这条 400, 与 :3294 的 422 是同一类阻断的另一个入口。
+  const expectedUnit = canonicalUnitCodeKeepingCount(expectedPriceUnit);
+  const effectiveUnit = canonicalUnitCodeKeepingCount(relation.effectivePriceUnit);
+  const relationUnit = canonicalUnitCodeKeepingCount(relation.purchaseUnit || relation.baseUnit);
   if (hasConfiguredPrice(relation.effectivePurchasePrice) && effectiveUnit === expectedUnit) {
     item.unitPrice = Number(relation.effectivePurchasePrice);
     item.priceUnit = effectiveUnit;
@@ -561,7 +567,11 @@ async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<voi
   item.materialTypeId = relation.materialTypeId;
   item.purchasePackagingSpecId = null;
   item.materialPackagingSpecId = null;
-  const purchaseUnit = canonicalUnitCode(relation.purchaseUnit || relation.baseUnit);
+  // 2026-09-02 阻断性缺陷修复: 字典单位「个」/「只」的物料一律建不了采购单 (422)。
+  // 根因: 这里把「个」/「只」折成 'pcs' 写进 item.unit, 提交时 :891 的
+  // canonicalUnitCodeKeepingCount 够不着 —— 值已经在这里被换成 'pcs' 了, 是「先破坏
+  // 后守卫」的顺序问题(守卫本身没错)。改用 KeepingCount 让「个」/「只」原样走到底。
+  const purchaseUnit = canonicalUnitCodeKeepingCount(relation.purchaseUnit || relation.baseUnit);
   item.unit = purchaseUnit;
   item.quantityUnit = purchaseUnit;
   const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
@@ -584,7 +594,9 @@ function onPurchaseSpecChange(item: ProcurementOrderItem): void {
   const spec = specsForItem(item).find((row) => row.id === item.purchasePackagingSpecId);
   const relation = supplierMaterialRelations.value.find((row) => row.id === item.supplierMaterialId);
   if (!relation) return;
-  const unit = canonicalUnitCode(spec?.purchasePackageUnit || relation.purchaseUnit || relation.baseUnit);
+  // 同上 (applyRelationPrice 附近的说明) —— 这一路也直接写 item.unit/quantityUnit/priceUnit。
+  const unit = canonicalUnitCodeKeepingCount(
+    spec?.purchasePackageUnit || relation.purchaseUnit || relation.baseUnit);
   item.materialPackagingSpecId = spec?.id.startsWith('material:')
     ? spec.id.slice('material:'.length) : null;
   item.unit = unit;
@@ -598,7 +610,7 @@ function onPurchaseSpecChange(item: ProcurementOrderItem): void {
     // 该规格没有自己的报价, 但后端已用这一行声明的「1 箱 = N kg」把关系价折到了包装单位。
     // 换算是后端做的 —— 前端只搬数, 不碰单位数学 (utils/unitPricing.ts 的三种权威口径)。
     item.unitPrice = Number(spec?.derivedPrice);
-    item.priceUnit = canonicalUnitCode(spec?.derivedPriceUnit || unit);
+    item.priceUnit = canonicalUnitCodeKeepingCount(spec?.derivedPriceUnit || unit);
     item.priceSource = spec?.derivedPriceSource === 'SUPPLIER_RELATION_CONVERTED'
       ? 'SUPPLIER_RELATION_CONVERTED' : 'SUPPLIER_RELATION';
   } else {
@@ -859,6 +871,10 @@ async function handleCreate() {
   if (missingPriceIndex >= 0) {
     return ElMessage.warning(`第 ${missingPriceIndex + 1} 行尚未配置采购价，请维护供应商关系/采购规格报价或明确填写本单价格`);
   }
+  // 硬约束 8 登记 (故意不改): 纯粹的「是否为空」判断, canonicalUnitCode 与
+  // canonicalUnitCodeKeepingCount 对任何非空输入都返回非空字符串(KeepingCount 只是
+  // 把「个」/「只」的返回值从 'pcs' 换成原字面), !x 的真值结果对所有输入完全一致 ——
+  // 换了没有任何行为差异, 不引入无意义 diff。
   if (form.value.items.some(i => !canonicalUnitCode(i.priceUnit))) {
     return ElMessage.warning('采购价必须绑定明确的计价单位');
   }
@@ -1039,7 +1055,10 @@ async function openEditDialog(orderId: string) {
     invoiceReminderDays: order.invoiceReminderDays == null ? null : Number(order.invoiceReminderDays),
     items: (Array.isArray(order.items) ? order.items : []).map((raw) => {
       const item = raw as TableRow;
-      const quantityUnit = canonicalUnitCode(item.quantityUnit || item.unit);
+      // openEditDialog 把已保存的单据读回表单 —— 这里若折叠, 保存下来的「个」/「只」
+      // 会在打开编辑时被换成 'pcs', 用户不改任何东西直接重新提交也会复现同一个 422/400
+      // (:891 的 KeepingCount 救不回已经在这里被换掉的值)。
+      const quantityUnit = canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit);
       return {
         supplierMaterialId: String(item.supplierMaterialId || supplierMaterialRelations.value.find((relation) => relation.materialTypeId === String(item.materialTypeId || ''))?.id || ''),
         purchasePackagingSpecId: item.purchasePackagingSpecId
