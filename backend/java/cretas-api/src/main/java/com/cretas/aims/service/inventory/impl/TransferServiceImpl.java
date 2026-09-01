@@ -1924,6 +1924,38 @@ public class TransferServiceImpl implements TransferService {
                         || item.getItemType() == TransferItemType.PACKAGING_MATERIAL);
     }
 
+    /**
+     * 调入批次号 —— <b>按构造唯一</b>，不做占用查询。
+     *
+     * <h3>🔴 2026-09-02 实测事故</h3>
+     * 原来是 {@code String.format("TRF-MT-%s-%04d", 日期, System.currentTimeMillis() % 10000)}。
+     * 同一张调拨单的多行明细在<b>同一个循环、同一个事务</b>里建批次，彼此相差不到 1 毫秒
+     * ⇒ 后缀完全相同 ⇒ 撞 {@code material_batches_batch_number_key}：
+     * <pre>
+     * 重复键违反唯一约束"material_batches_batch_number_key"
+     * 详细：键值"(batch_number)=(TRF-MT-20260902-9419)" 已经存在
+     * </pre>
+     * 用户侧看到的只是一句「数据处理异常」。⚠️ 这不是偶发：**一张单只要有 2 行以上
+     * 原料/包材，几乎必然复现**（本机 28 行的单 100% 失败）。
+     *
+     * <h3>为什么不用「查一下号占没占」</h3>
+     * ⛔ {@code existsByBatchNumber} 走 JPA，而本仓软删全局生效
+     * （{@code @SQLDelete} + {@code @Where}）—— 它答的是「有没有<b>活着的</b>行」，
+     * 而唯一约束管的是<b>所有</b>行（{@code UNIQUE (batch_number)}，不带 deleted_at 条件）。
+     * 拿它当发号器的占用判据，就是本仓已经记过的那 20 个 BROKEN 发号器的同一个坑。
+     *
+     * <p>⇒ 改成从明细自己的主键派生：{@code InternalTransferItem.id} 是数据库自增主键，
+     * 全局唯一且不复用 ⇒ 批次号<b>不查也不会撞</b>。id 为空（理论上不该发生）时退回
+     * 随机 UUID 片段，同样不做查询。
+     */
+    private static String transferInBatchNumber(InternalTransferItem item) {
+        String day = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String unique = item != null && item.getId() != null
+                ? String.format("%06d", item.getId())
+                : UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        return String.format("TRF-MT-%s-%s", day, unique);
+    }
+
     private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item, Long userId) {
         BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : item.getQuantity();
 
@@ -1937,9 +1969,7 @@ public class TransferServiceImpl implements TransferService {
             MaterialBatch batch = new MaterialBatch();
             batch.setId(UUID.randomUUID().toString());
             batch.setFactoryId(targetFactoryId);
-            batch.setBatchNumber(String.format("TRF-MT-%s-%04d",
-                    LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")),
-                    System.currentTimeMillis() % 10000));
+            batch.setBatchNumber(transferInBatchNumber(item));
             batch.setMaterialTypeId(item.getMaterialTypeId());
             batch.setReceiptQuantity(qty);
             batch.setUsedQuantity(BigDecimal.ZERO);

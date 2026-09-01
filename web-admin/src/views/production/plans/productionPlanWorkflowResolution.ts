@@ -5,6 +5,17 @@ export type PlanWorkflowResolutionMode = 'SINGLE_OUTPUT' | 'SHARED_MULTI_OUTPUT'
 export interface PlanWorkflowResolution {
   mode: PlanWorkflowResolutionMode;
   candidates: WorkflowResolutionCandidate[];
+  /**
+   * 覆盖了所选成品、但**还多产出别的联产成品**的图(2026-09-02)。
+   *
+   * ⛔ 它们**不进** `candidates` —— 精确匹配那条规则(D6)不动。
+   * 存在的唯一理由是让界面能说清「为什么不行」：`mode: 'NONE'` 原本让界面打
+   * 「未找到覆盖该产品的工序 Workflow，请前往 Workflow 配置」，把用户支去重配一张
+   * **本来就正确**的图。实测(本机 UAT, 汉堡肉产品族)：后端返回的是
+   * 「匹配到包含额外联产成品的 Workflow，请确认完整产出集合」+ 4 个终端产出,
+   * 而界面显示「未找到」—— 内容对不上, 且指错方向。
+   */
+  jointSupersets: WorkflowResolutionCandidate[];
 }
 
 function uniqueIds(ids: readonly string[]): string[] {
@@ -27,7 +38,7 @@ export function resolvePlanWorkflowCandidates(
   candidates: readonly WorkflowResolutionCandidate[],
 ): PlanWorkflowResolution {
   const requested = uniqueIds(requestedProductTypeIds);
-  if (requested.length === 0) return { mode: 'NONE', candidates: [] };
+  if (requested.length === 0) return { mode: 'NONE', candidates: [], jointSupersets: [] };
 
   const matching = candidates.filter((candidate) => {
     const outputs = workflowCandidateOutputIds(candidate);
@@ -53,6 +64,10 @@ export function resolvePlanWorkflowCandidates(
       ? 'NONE'
       : requested.length === 1 ? 'SINGLE_OUTPUT' : 'SHARED_MULTI_OUTPUT',
     candidates: samePriority,
+    // 只在没有精确匹配时才有意义 —— 有精确匹配时界面根本不该提别的图。
+    jointSupersets: samePriority.length === 0
+      ? matching.filter((candidate) => workflowCandidateOutputIds(candidate).length > requested.length)
+      : [],
   };
 }
 
