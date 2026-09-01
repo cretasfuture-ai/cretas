@@ -436,3 +436,22 @@ export function reworkPairFocusIds(
 ): string[] {
   return [reworkNodeId, ...selectedTargetProcessIds(nodes, reworkNodeId)];
 }
+
+/**
+ * 从某道工序沿出边能走到的**终端成品** SKU。
+ *
+ * 用途：一张联产/多线路的图上，「这道工序的辅料算在哪个成品头上」答不出来时，
+ * 要给用户一个**候选清单**去选 —— ⛔ 而不是把整张画布的成品都列出来
+ * （那会把别的线路的成品也塞进来，用户选了就是错的归属）。
+ */
+export function downstreamFinishedSkuIds(
+  nodes: readonly ReworkFlowNodeLike[],
+  edges: readonly ReworkFlowEdgeLike[],
+  processNodeId: string,
+): string[] {
+  const { nodesById, outgoing } = buildAdjacency(nodes, edges);
+  return downstreamFinishedIds(processNodeId, nodesById, outgoing)
+    .map((id) => String(dataOf<MaterialNodeData>(nodesById.get(id)!).skuId ?? ''))
+    .filter((skuId) => skuId.length > 0)
+    .filter((skuId, index, all) => all.indexOf(skuId) === index);
+}

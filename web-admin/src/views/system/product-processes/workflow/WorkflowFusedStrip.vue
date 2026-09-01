@@ -40,10 +40,18 @@
           eyebrow(类型) / 粗体名称 / 灰色细节行, 右侧一个**写着字**的按钮。
         ⛔ 别再把它压回一行 —— 一行放不下这三段信息, 挤是必然的。
       -->
+      <!--
+        🔴 展开态只留一行标题。
+        收起态需要三行(类型/名称/细节)才说得清这是什么; 但**展开之后**里面那张卡片
+        自己就带着类型标签、名称和状态 —— 三行原样留着就是同一段信息显示两遍,
+        owner 实测截图里「辅料 cell / 整箱装 / 状态尚未确定」上下各出现一次。
+        ⛔ 不要用「都显示、把里面的藏掉」来解决: 里面那张卡片带着操作按钮(详情/不用辅料),
+           藏掉会连按钮一起没。
+      -->
       <span class="fused-strip__text">
-        <span class="fused-strip__eyebrow">{{ eyebrow }}</span>
+        <span v-if="collapsed" class="fused-strip__eyebrow">{{ eyebrow }}</span>
         <span class="fused-strip__name">{{ title }}</span>
-        <span v-if="summary" class="fused-strip__summary">{{ summary }}</span>
+        <span v-if="collapsed && summary" class="fused-strip__summary">{{ summary }}</span>
       </span>
       <span class="fused-strip__toggle" aria-hidden="true">{{ collapsed ? '展开' : '收起' }}</span>
     </button>
@@ -130,6 +138,7 @@ const rootStyle = computed<CSSProperties>(() => ({
 .fused-strip__bar {
   display: flex; align-items: center; gap: 10px;
   width: 100%; padding: 8px 10px;
+  transition: padding 120ms ease;
   border: 0; background: transparent; cursor: pointer;
   color: var(--fused-ink); text-align: left;
 }
@@ -167,6 +176,8 @@ const rootStyle = computed<CSSProperties>(() => ({
   color: #1b65a8; border-color: #9dc6e8; background: #eef7ff;
 }
 
+/* 展开态标题行只有一行, 收紧上下留白 —— 否则空出来的地方看着像漏排版。 */
+.fused-strip:not(.is-collapsed) .fused-strip__bar { padding: 5px 10px; }
 .fused-strip__body {
   padding: 2px 10px 10px;
   border-top: 1px dashed var(--fused-border);

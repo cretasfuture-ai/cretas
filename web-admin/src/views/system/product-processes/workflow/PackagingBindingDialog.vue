@@ -313,7 +313,24 @@ async function submit() {
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" :title="row ? '编辑包材' : '添加包材'" width="640px" @close="emit('update:modelValue', false)">
+  <!--
+    🔴 2026-09-01 owner 指定: 「包材跟辅料按照之前我们原型图的样式的话, 应该就是侧边栏」。
+    已确认原型里这两个编辑器是**停靠式侧栏**(evidence/auxiliary-recipe-docked-editor.png、
+    packaging-recipe-docked-editor.png), 不是居中模态框。
+
+    为什么侧栏比模态框对: 配料/包材要**边看画布边填** —— 居中模态框把画布整个盖住,
+    用户看不到自己正在给哪道工序配料。侧栏靠边, 画布还在。
+
+    ⛔ 只换外壳: 里面的表单、校验、保存逻辑一个字都没动(它们是已经在跑的东西)。
+  -->
+  <el-drawer
+    :model-value="modelValue"
+    :title="row ? '编辑包材' : '添加包材'"
+    size="640px"
+    direction="rtl"
+    append-to-body
+    @close="emit('update:modelValue', false)"
+  >
     <el-form label-width="130px" data-testid="packaging-binding-dialog">
       <el-form-item label="投入产出">
         <el-input data-testid="locked-output-context" :model-value="outputName" disabled />
@@ -468,7 +485,7 @@ async function submit() {
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
       <el-button type="primary" :loading="saving.value" @click="submit">保存包材</el-button>
     </template>
-  </el-dialog>
+  </el-drawer>
 </template>
 
 <style scoped>

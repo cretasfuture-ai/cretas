@@ -286,12 +286,20 @@ describe('删掉副产入口后, 没有文案再指向它', () => {
     expect(visible).toMatch(/辅料 \/ 包材 cell 上配置/);
   });
 
-  it('归属不明的提示指向仍然存在的包材 cell', () => {
-    const at = EDITOR.indexOf('未能确定该工序归属的成品');
-    expect(at).toBeGreaterThan(-1);
-    const line = EDITOR.slice(at, at + 200);
-    expect(line).toMatch(/包材 cell/);
-    expect(line).not.toMatch(/副产入口/);
+  it('归属不明时**问用户**，⛔ 不再把他支去另一扇门', () => {
+    // 🔴 2026-09-01 判据换代（形态 C‴：断言守的是历史，不是需求）。
+    //
+    // 旧断言钉的是「那句提示指向仍然存在的包材 cell」—— 它守的是**提示的措辞**。
+    // owner 实测发现那扇门本身是死的: 归属定不出来的唯一常见原因是这张图产出多个成品,
+    // 而他被支去的包材入口在成品不是终端的图上也开不了 ⇒ 死循环
+    //（「包材跟辅料都没有办法去添加, 知道去哪儿加呀?」）。
+    //
+    // ⇒ 需求变了: 定不出来不该拒绝, 该问「算在哪个成品头上」。
+    //    那句提示随之删除, 所以这条断言必须改, ⛔ 不是把提示加回来。
+    expect(EDITOR).not.toContain('联合生产请先从产出侧的包材 cell 建立 BOM');
+    expect(EDITOR).toContain('auxOwnerPickerVisible.value = true');
+    // 阴性对照: 真的走不到成品时仍然要有一句解释, ⛔ 不许静默 return
+    expect(EDITOR).toContain('这道工序往下走不到任何成品 Cell');
   });
 });
 

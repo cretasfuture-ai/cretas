@@ -1,5 +1,35 @@
 <template>
-  <div class="workflow-editor" data-testid="workflow-viewport-editor">
+  <!--
+    🔴 2026-09-01 owner 要求:「进入 workflow page 的时候能不能直接进入全屏状态,
+    整体的界面会更加丰满一点, 空间会更加多一点」。
+    实测进页面时画布只占 82% 宽 x 77% 高 —— 左边 220px 菜单, 上面 415px(顶栏 + 页头 + 工具条)。
+
+    沉浸态 = 编辑器整块铺满视口(盖住菜单与顶栏), **默认开**。
+    ⛔ 不用浏览器原生全屏 API: 它必须由用户手势触发, 进页面自动调会被浏览器拒,
+       而且 Esc 退出后应用完全不知道, 状态会对不上。
+    ⚠️ 盖住导航就必须给一条明确的出口 —— 右上角「退出全屏」, 并支持 Esc。
+  -->
+  <div
+    class="workflow-editor"
+    :class="{ 'is-immersive': immersive }"
+    data-testid="workflow-viewport-editor"
+  >
+    <button
+      v-if="immersive"
+      type="button"
+      class="workflow-immersive-exit"
+      data-testid="workflow-immersive-exit"
+      title="退出全屏（Esc）"
+      @click="immersive = false"
+    >⤢ 退出全屏</button>
+    <button
+      v-else
+      type="button"
+      class="workflow-immersive-enter"
+      data-testid="workflow-immersive-enter"
+      title="全屏编辑"
+      @click="immersive = true"
+    >⤢ 全屏</button>
     <div class="workflow-main">
       <div class="workflow-toolbar" aria-label="Workflow 编辑工具栏">
         <div class="toolbar-status">
@@ -664,6 +694,41 @@
       </template>
     </el-dialog>
 
+    <!--
+      联产图上「这份辅料算在哪个成品头上」。
+      ⛔ 它不是一道门禁, 是一次**提问** —— 旧行为是弹一句警告然后什么都不做,
+         而归属定不出来的唯一常见原因就是这张图产出多个成品(那是合法配置, 不是错误)。
+    -->
+    <el-dialog
+      v-model="auxOwnerPickerVisible"
+      title="这份辅料算在哪个成品上？"
+      width="460px"
+      append-to-body
+      destroy-on-close
+      data-testid="aux-owner-picker"
+    >
+      <p class="aux-owner-lead">
+        这道工序往下能走到多个成品，辅料用量要记在其中一个成品的 BOM 上。选完就直接进配料表。
+      </p>
+      <el-radio-group v-model="auxOwnerPickerChoice" class="aux-owner-options">
+        <el-radio
+          v-for="skuId in auxOwnerPickerCandidates"
+          :key="skuId"
+          :value="skuId"
+          :data-testid="`aux-owner-${skuId}`"
+        >{{ skuOptions.find((option) => option.id === skuId)?.name || skuId }}</el-radio>
+      </el-radio-group>
+      <template #footer>
+        <el-button @click="auxOwnerPickerVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!auxOwnerPickerChoice"
+          data-testid="aux-owner-confirm"
+          @click="confirmAuxOwner"
+        >继续</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="skuDialogVisible" title="现场创建半成品 SKU" width="500px" destroy-on-close>
       <el-form label-width="90px">
         <el-form-item label="半成品名称" required>
@@ -955,6 +1020,7 @@ import {
   assignReworkPairs,
   reworkPairsForProcess,
   type ReworkPair,
+  downstreamFinishedSkuIds,
 } from './workflowReworkTargets';
 import { specialOutputOption, type SpecialOutputKind } from './workflowSpecialOutputs';
 import {
@@ -1652,6 +1718,9 @@ const measuredNodeSizes = computed<Record<string, FusedSizeLike>>(() => {
   return sizes;
 });
 
+/** 沉浸态的记忆键。⛔ 与折叠态那个键分开: 两件事, 合起来会互相覆盖。 */
+const IMMERSIVE_STORAGE_KEY = 'cretas.workflow.immersive';
+
 /** 量不到附属高度时按这个下限留白 —— 宁可多留也不能压上去。 */
 const FUSED_ATTACHMENT_FALLBACK_HEIGHT = 120;
 
@@ -1797,6 +1866,29 @@ const focusLockedTargetId = ref<string | null>(null);
  * 差别的意义: 远端往往在画布另一头、屏幕外, 光有描边环你根本注意不到它亮了。
  * ⛔ 两端一视同仁 = 回到「整张图变灰」, 那正是 owner 说观感不对的地方。
  */
+/**
+ * 沉浸(全屏)态 —— 进页面**默认开**(owner 2026-09-01 指定)。
+ *
+ * 记住用户的选择: 有人会想看着左侧菜单干活, 每次进来又被强制全屏是骚扰。
+ * ⛔ 读不到 localStorage 时默认 **true** 而不是 false —— 「读不到」不等于「用户关过」。
+ */
+const immersive = ref<boolean>((() => {
+  try { return window.localStorage.getItem(IMMERSIVE_STORAGE_KEY) !== 'off'; } catch { return true; }
+})());
+watch(immersive, (value) => {
+  try { window.localStorage.setItem(IMMERSIVE_STORAGE_KEY, value ? 'on' : 'off'); } catch { /* 无痕模式等 */ }
+});
+
+/** Esc 退出全屏 —— 盖住导航就必须给一条键盘出口。 */
+function onImmersiveEscape(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !immersive.value) return;
+  // ⛔ 有弹窗/抽屉开着时不抢 Esc: 那一下是用户要关弹窗, 不是要退全屏。
+  if (document.querySelector('.el-dialog__wrapper:not([style*="display: none"]), .el-drawer.open, .el-overlay')) return;
+  immersive.value = false;
+}
+onMounted(() => window.addEventListener('keydown', onImmersiveEscape));
+onUnmounted(() => window.removeEventListener('keydown', onImmersiveEscape));
+
 const focusAnchorId = ref<string | null>(null);
 const focusRemoteIds = ref<Set<string> | null>(null);
 
@@ -3519,8 +3611,26 @@ async function ensureBomOverlayMaterials(): Promise<void> {
   }
 }
 
+// -- 联产图上「这份辅料算在哪个成品头上」的选择器(2026-09-01) --------------
+const auxOwnerPickerVisible = ref(false);
+const auxOwnerPickerProcessId = ref<string | null>(null);
+const auxOwnerPickerRowId = ref<string | null>(null);
+const auxOwnerPickerCandidates = ref<string[]>([]);
+const auxOwnerPickerChoice = ref<string>('');
+
+/** 选完成品继续原来的流程 —— ⛔ 不复制第二份打开逻辑。 */
+async function confirmAuxOwner(): Promise<void> {
+  const processNodeId = auxOwnerPickerProcessId.value;
+  const chosen = auxOwnerPickerChoice.value;
+  if (!processNodeId || !chosen) return;
+  auxOwnerPickerVisible.value = false;
+  await openAuxiliaryEditor(processNodeId, auxOwnerPickerRowId.value ?? undefined, chosen);
+}
+
 // 辅料编辑入口 —— 直接复用既有 SeasoningBindingDialog(不新建编辑面, 见 task-6-brief.md)。
-async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promise<void> {
+async function openAuxiliaryEditor(
+  processNodeId: string, rowId?: string, forcedProductTypeId?: string,
+): Promise<void> {
   // ⛔ fool-proof Rule 5(死胡同必须变成导航或解释): 「详情」按钮在只读态下始终渲染
   // (WorkflowAuxiliaryNode.vue 没有 v-if="canWrite" 挡它 —— 辅料行本身对只读用户也该
   // 可见), 过去这里直接静默 return, 用户点了没有任何反馈。SeasoningBindingDialog 是
@@ -3536,13 +3646,35 @@ async function openAuxiliaryEditor(processNodeId: string, rowId?: string): Promi
   const recipeId = bomOverlayRecipeIdByProcess.value[processNodeId];
   await ensureBomOverlayMaterials();
 
-  const auxProductTypeId = resolveProductForProcess(processNodeId);
+  let auxProductTypeId = forcedProductTypeId || resolveProductForProcess(processNodeId);
   if (!auxProductTypeId) {
-    // ⛔ 防呆规则 5: 这句要指向一个**真的存在**的入口。
-    // 阶段 2 之前它写的是「包材/副产入口」, 而副产入口已随浮层删除(副产改成了工序上的
-    // 真实产出节点, 不再产生 BOM 行) —— 留着就是把用户指向一扇不存在的门。
-    ElMessage.warning('未能确定该工序归属的成品；联合生产请先从产出侧的包材 cell 建立 BOM');
-    return;
+    // 🔴 2026-09-01 owner 实测:「包材跟辅料都没有办法去添加, 知道去哪儿加呀?
+    //    不就是在这个[画布上加]吗?」—— 他说得对。
+    //
+    // 旧行为: 归属产品定不出来就弹一句「请先从产出侧的包材 cell 建立 BOM」然后 return。
+    // 而归属定不出来的**唯一常见原因**是这张图产出了多个成品(联产/多线路) ——
+    // `pickOwningProductId` 要求「画布上恰好一个成品」。于是任何联产图上辅料都加不了,
+    // 而那句提示把用户支去另一扇门(实测在成品不是终端的图上那扇门也开不了) ⇒ 死循环。
+    //
+    // ⇒ 定不出来不该拒绝, 该**问用户算在哪个成品头上**。
+    // ⚠️ 候选只取「从这道工序沿出边走得到的终端成品」, ⛔ 不是整张画布的成品 ——
+    //    别的线路的成品选了就是错的归属。
+    const candidates = downstreamFinishedSkuIds(flowNodes.value, flowEdges.value, processNodeId);
+    if (candidates.length > 1) {
+      auxOwnerPickerProcessId.value = processNodeId;
+      auxOwnerPickerRowId.value = rowId ?? null;
+      auxOwnerPickerCandidates.value = candidates;
+      auxOwnerPickerChoice.value = candidates[0];
+      auxOwnerPickerVisible.value = true;
+      return;
+    }
+    if (candidates.length === 1) {
+      auxProductTypeId = candidates[0];
+    } else {
+      // 真的一个成品都走不到 —— 这时那句「去建 BOM」才是**成立**的下一步。
+      ElMessage.warning('这道工序往下走不到任何成品 Cell，无法确定辅料算在哪个成品的 BOM 上；请先把它接到成品线上');
+      return;
+    }
   }
   const writableRecipeId = await resolveWritableRecipeId(
     auxProductTypeId,
@@ -6511,9 +6643,27 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   .workflow-canvas :deep(.vue-flow__node.wf-focus-dim) { transition: none; }
 }
 
+/* 沉浸态: 铺满视口。⚠️ z-index 要压过侧边菜单与顶栏, 但低于 el-dialog/el-drawer(2000+)。 */
+.workflow-editor.is-immersive {
+  position: fixed; inset: 0; z-index: 1500;
+  background: #fff;
+  display: flex; flex-direction: column;
+}
+.workflow-editor.is-immersive .workflow-main { flex: 1; min-height: 0; }
+.workflow-immersive-exit, .workflow-immersive-enter {
+  position: absolute; top: 10px; right: 14px; z-index: 5;
+  height: 28px; padding: 0 12px;
+  border: 1px solid #dcdfe6; border-radius: 6px; background: rgba(255, 255, 255, 0.92);
+  color: #49647e; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.workflow-immersive-exit:hover, .workflow-immersive-enter:hover {
+  color: #1b65a8; border-color: #9dc6e8; background: #eef7ff;
+}
 .workflow-bom-alert, .workflow-validation-alert { margin: 0 12px 12px; }
 /* 版本状态合并条 (2026-08-11) —— 取代原先纵向堆叠的 3 条 BOM 横幅 + 1 条工艺草稿横幅。
    折叠态一行, 展开才给细节; 画布上方从 ~140px 压到 ~32px。 */
+.aux-owner-lead { margin: 0 0 12px; color: #667085; font-size: 13px; line-height: 1.6; }
+.aux-owner-options { display: flex; flex-direction: column; gap: 10px; }
 .byproduct-mark-search { margin: 12px 0 8px; }
 .byproduct-mark-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
 .byproduct-mark-item { display: flex; height: auto; padding: 6px 4px; margin-right: 0; }

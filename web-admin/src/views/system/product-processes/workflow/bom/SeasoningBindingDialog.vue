@@ -260,7 +260,24 @@ async function refreshSelectedMaterialPrice() {
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" :title="binding ? '编辑工序调料' : '添加工序调料'" width="560px" @close="emit('update:modelValue', false)">
+  <!--
+    🔴 2026-09-01 owner 指定: 「包材跟辅料按照之前我们原型图的样式的话, 应该就是侧边栏」。
+    已确认原型里这两个编辑器是**停靠式侧栏**(evidence/auxiliary-recipe-docked-editor.png、
+    packaging-recipe-docked-editor.png), 不是居中模态框。
+
+    为什么侧栏比模态框对: 配料/包材要**边看画布边填** —— 居中模态框把画布整个盖住,
+    用户看不到自己正在给哪道工序配料。侧栏靠边, 画布还在。
+
+    ⛔ 只换外壳: 里面的表单、校验、保存逻辑一个字都没动(它们是已经在跑的东西)。
+  -->
+  <el-drawer
+    :model-value="modelValue"
+    :title="binding ? '编辑工序调料' : '添加工序调料'"
+    size="560px"
+    direction="rtl"
+    append-to-body
+    @close="emit('update:modelValue', false)"
+  >
     <el-form label-width="145px" data-testid="seasoning-binding-dialog">
       <el-form-item label="投入工序">
         <el-input data-testid="locked-process-context" :model-value="process?.processName" disabled />
@@ -411,7 +428,7 @@ async function refreshSelectedMaterialPrice() {
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
       <el-button type="primary" :loading="saving.value" @click="submit">保存到本工序</el-button>
     </template>
-  </el-dialog>
+  </el-drawer>
 </template>
 
 <style scoped>
