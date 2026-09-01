@@ -100,6 +100,48 @@ describe('useUserDirectory —— 人名解析与回退口径', () => {
     expect(personLabel('')).toBe('-');
   });
 
+  describe('personDepartment (缺陷 15) —— 部门显示名', () => {
+    it('返回名录里的 department, 且**不在前端二次翻译**', async () => {
+      // 后端 DepartmentDisplayNames 已经把 procurement 翻成「采购部」,
+      // 名录返回的就是中文 ⇒ 前端原样用。
+      getMock.mockResolvedValue({
+        success: true,
+        data: [{ id: 1638, fullName: '张三', department: '采购部' }],
+      });
+      const { load, personDepartment } = useUserDirectory();
+      await load('LIUSHANMEN');
+
+      expect(personDepartment(1638)).toBe('采购部');
+      expect(personDepartment('1638')).toBe('采购部');
+    });
+
+    it('🔴 万一后端仍给英文 code, 前端原样透出, ⛔ 不自己建第二份字典', async () => {
+      // 这条不是「期望英文」, 是钉住**职责边界**: 翻译只有后端一处。
+      // 若这里改成前端翻译, 就会出现 web-admin 与 RN 各一份(形态 D)。
+      getMock.mockResolvedValue({
+        success: true,
+        data: [{ id: 7, fullName: '李四', department: 'procurement' }],
+      });
+      const { load, personDepartment } = useUserDirectory();
+      await load('LIUSHANMEN');
+
+      expect(personDepartment(7)).toBe('procurement');
+    });
+
+    it('查不到人 / 没有部门 → 空串, 由调用方决定显示 `-`', async () => {
+      getMock.mockResolvedValue({
+        success: true,
+        data: [{ id: 1, fullName: '在职的人', department: null }],
+      });
+      const { load, personDepartment } = useUserDirectory();
+      await load('LIUSHANMEN');
+
+      expect(personDepartment(1)).toBe('');      // 有这个人但没部门
+      expect(personDepartment(999)).toBe('');    // 查不到这个人
+      expect(personDepartment(null)).toBe('');
+    });
+  });
+
   it('factoryId 为空时不发请求 (登录态还没就绪)', async () => {
     const { load } = useUserDirectory();
     await load('');

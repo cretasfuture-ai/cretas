@@ -4,6 +4,7 @@ import com.cretas.aims.dto.user.CreateUserRequest;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.util.BusinessDomainUtils;
+import com.cretas.aims.utils.DepartmentDisplayNames;
 import org.springframework.stereotype.Component;
 /**
  * 用户实体映射器
@@ -39,7 +40,11 @@ public class UserMapper {
                 .roleCode(user.getRoleEnum())
                 .roleDisplayName(user.getPosition()) // 使用position作为显示名称
                 .department(null) // department现在是String，不是枚举
-                .departmentDisplayName(user.getDepartment()) // 直接使用department字符串
+                // 缺陷 15 (2026-09-01): 原来是**原样透传 code** —— 账号管理/HR/工牌/导出/
+                // RN 个人信息与新员工屏都在把 `procurement`/`warehouse` 这种内部 code
+                // 显示给一线。⚠️ 这是本字段**唯一**的构造点, 改这一处六个消费屏一起好。
+                // ⛔ 认不出的值原样返回(department 是自由文本, 里面已有中文), 不回退空白。
+                .departmentDisplayName(DepartmentDisplayNames.display(user.getDepartment()))
                 .position(user.getPosition())
                 .monthlySalary(user.getMonthlySalary())
                 .expectedWorkMinutes(user.getExpectedWorkMinutes())

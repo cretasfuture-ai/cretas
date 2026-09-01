@@ -95,7 +95,7 @@ const suppliers = ref<Supplier[]>([]);
 // 三个页面都要它, ⛔ 不在三处各抄一份 (形态 D: 同一个东西有三份, 它一定会漂)。
 // 端点选型、hr 权限为什么不能开、以及「查不到回退 #id 而不是空白」的理由,
 // 全部写在那个文件的头部。
-const { load: loadUserDirectory, personLabel } = useUserDirectory();
+const { load: loadUserDirectory, personLabel, personDepartment } = useUserDirectory();
 
 /** 建议供应商显示: 查得到显示名称, 查不到回退原 ID。 */
 function supplierLabel(supplierId: string | null | undefined): string {
@@ -450,8 +450,16 @@ function goBack() {
           <el-descriptions-item :label="requesterLabel">
             {{ personLabel(requisition.requesterId) }}
           </el-descriptions-item>
+          <!-- 缺陷 15 (2026-09-01, LIUSHANMEN 生产): 这一格恒为 `-`。
+               根因: 建单弹窗**从不传** requesterDeptId, 后端 create 只是
+               `pr.setRequesterDeptId(request.getRequesterDeptId())` 原样抄 ⇒ 恒 null。
+               ⇒ 存量单子里这个快照字段永远是空的, 只能从名录取当前部门。
+               ⚠️ 快照优先、名录兜底 —— 快照记的是建单时, 名录给的是现在, 调岗后两者不同
+                  (与采购明细「原料名快照优先、档案兜底」同形)。
+               ⚠️ 名录返回的已是中文(后端 DepartmentDisplayNames 翻的),
+                  ⛔ 前端不再翻一遍。 -->
           <el-descriptions-item :label="requesterDeptLabel">
-            {{ requisition.requesterDeptId || '-' }}
+            {{ requisition.requesterDeptId || personDepartment(requisition.requesterId) || '-' }}
           </el-descriptions-item>
           <el-descriptions-item :label="expectedDateLabel">
             {{ requisition.expectedDate || '-' }}
