@@ -1186,6 +1186,12 @@ const workProcessOptions = ref<WorkProcessItem[]>([]);
 const workProcessCategories = ref<string[]>([]);
 const skuOptions = ref<SkuOption[]>([]);
 const rawMaterialOptions = ref<RawMaterialPickerOption[]>([]);
+/**
+ * 物料档案的 id → 主单位，**未按业务分类过滤**。只服务单位上下文。
+ * ⛔ 不要拿它去填任何选择器 —— 那些选择器各有各的业务过滤（原料只选原料、
+ *    副产只选打了副产标记的），混用会把不该出现的选项放进去。
+ */
+const materialArchiveForUnits = ref<Array<{ id: string; unit: string }>>([]);
 const rawMaterialSegments = ref<MaterialSegmentNode[]>([]);
 /**
  * 新增原料 Cell 的关系弹窗 (2026-08-10)。
@@ -1795,7 +1801,19 @@ function applyFocusClasses(): void {
   const focus = effectiveFocusIds.value;
   let changed = false;
   for (const node of flowNodes.value) {
-    const next = focus && !focus.has(node.id) ? 'wf-focus-dim' : undefined;
+    const classes: string[] = [];
+    // 🔴 融合附属的 VueFlow 外壳留在 owner 的位置上, 窄条只是被 transform 移走了 ——
+    // transform **不改变布局盒**, 所以那个不可见的外壳正好压在 owner 顶部一条带子上,
+    // 把「工序 Cell」标题、「编辑工序」按钮和整块可抓取区一起挡住。
+    //
+    // 2026-09-01 真实鼠标拖动时才撞出来: Playwright 报
+    // 「<div data-id="bom-overlay:aux:process:cook"> intercepts pointer events」——
+    // 合成事件不走命中测试, 所以之前几轮一次都没发现(形态: 仪器够不着被测行为)。
+    //
+    // ⇒ 外壳整体不接鼠标, 只有窄条自己接。
+    if (isFusedAttachmentNode(node.id)) classes.push('wf-fused-attachment');
+    if (focus && !focus.has(node.id)) classes.push('wf-focus-dim');
+    const next = classes.length > 0 ? classes.join(' ') : undefined;
     if (node.class !== next) { node.class = next; changed = true; }
   }
   if (changed) flowNodes.value = [...flowNodes.value];
@@ -2509,6 +2527,14 @@ async function loadCatalogs(): Promise<void> {
       detailLoaded: Object.prototype.hasOwnProperty.call(option, 'gramsPerUnit'),
     }));
     rawMaterialOptions.value = rawResponse.data.filter(isRawMaterialOption);
+    // 🔴 单位上下文要的是「档案里**每一个**物料的主单位」, 与它是不是「原料」无关。
+    //    rawMaterialOptions 被 isRawMaterialOption 按 `category === '原料'` 过滤过 ——
+    //    副产/调料/包材一个都进不来, 而它们都可能被节点当 SKU 用。
+    //    ⇒ 单独留一份未过滤的, 只喂 unitContext, 不影响原料选择器。
+    materialArchiveForUnits.value = rawResponse.data.map((row) => ({
+      id: String((row as { id?: unknown }).id ?? ''),
+      unit: String((row as { unit?: unknown }).unit ?? ''),
+    })).filter((row) => row.id && row.unit);
     rawMaterialSegments.value = buildRawMaterialSegmentTree(segmentResponse.data);
     if (unitCatalogResponse?.success && Array.isArray(unitCatalogResponse.data)) {
       unitCatalog.value = unitCatalogResponse.data;
@@ -2537,6 +2563,7 @@ function invalidateCatalogs(): void {
   workProcessCategories.value = [];
   skuOptions.value = [];
   rawMaterialOptions.value = [];
+  materialArchiveForUnits.value = [];
   rawMaterialSegments.value = [];
   unitCatalog.value = [];
 }
@@ -2547,19 +2574,22 @@ function isCurrentCatalogLoad(generation: number, factoryId: string): boolean {
 
 function unitContext(): WorkflowUnitContext {
   const products: WorkflowUnitContext['products'] = {};
-  // 🔴 2026-09-01 本机实测: 副产 Cell 绑的是**物料档案的副产池**(raw_material_types
-  // 里 isByproduct=true 那些), 而 rawMaterialOptions 被 isRawMaterialOption 按
-  // `category === '原料'` 过滤过 —— 副产物料的 category 按定义不是「原料」,
-  // 于是它一条都进不来。
+  // 🔴 2026-09-01 本机两次实测出来的缺口, 第二次才把范围看全:
   //
-  // 后果不是「副产显示不好看」, 是**整张工艺图存不了也发不了**:
-  // reconcileWorkflowUnits 找不到这个 SKU 的主单位 ⇒ 报
-  // 「SKU RM-xxx 缺少规范主单位，请先维护 SKU 单位后再发布」——
-  // 而那个物料**明明有 unit='kg'**, 用户照着提示去物料档案只会发现单位是好的。
+  //   第一次: 副产 Cell 绑的是物料档案里 isByproduct=true 的那些, 而 rawMaterialOptions
+  //           被 isRawMaterialOption 按 `category === '原料'` 过滤过 —— 副产进不来。
+  //   第二次: 换成一个 category='调料' 的物料当副产用, **同样**查不到单位。
   //
-  // ⛔ 修法不是把副产物料的 category 揉成「原料」(那是改数据迁就代码);
-  //    是让单位上下文认它本来就该在的那个池子。
-  [...skuOptions.value, ...rawMaterialOptions.value, ...byproductMaterialOptions.value]
+  // ⇒ 根因不是「副产这一类漏了」, 是**按业务分类过滤过的列表不该当作单位来源**:
+  //   副产/调料/包材都可能被节点当 SKU 用, 而它们的 category 都不是「原料」。
+  //
+  // 后果不是「显示不好看」, 是**整张工艺图存不了也发不了**:
+  // reconcileWorkflowUnits 找不到主单位 ⇒ 报「SKU RM-xxx 缺少规范主单位，请先维护
+  // SKU 单位后再发布」—— 而那个物料**明明有 unit='kg'**, 用户照提示去档案只会发现单位是好的。
+  //
+  // ⛔ 修法不是把物料的 category 揉成「原料」(那是改数据迁就代码);
+  //    也不是逐类往里加池子(加一类漏一类) —— 是喂一份**未按业务分类过滤**的档案。
+  [...skuOptions.value, ...materialArchiveForUnits.value]
     .forEach((option) => {
     if (!option.id || !option.unit) return;
     products[option.id] = {
@@ -2671,12 +2701,8 @@ async function reconcileForPersistence(
   identity: WorkflowIdentity,
   showErrors: boolean,
 ): Promise<ProductProcessWorkflowDefinition | null> {
-  // ⛔ 必须 await: 单位对账要用副产物料的主单位, 而副产池是**懒加载**的 ——
-  //    只在「新建副产 Cell」和「就地标记副产」两个动作里拉过。
-  //    打开一张**已有**副产的图从来不拉它 ⇒ 池子是空的 ⇒ 对账报
-  //    「SKU 缺少规范主单位」把保存和发布一起挡住(2026-09-01 本机实测)。
-  //    fire-and-forget 在这里不够: 对账就在下一行, 等不到它回来。
-  if (canvasHasByproduct()) await ensureByproductMaterialOptions();
+  // ⚠️ 这里**不再**需要等副产池: 单位来源已换成随目录一起加载的 materialArchiveForUnits,
+  //    不依赖那个懒加载的池子(它现在只服务副产下拉)。
   let current = currentDefinition();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const seq = editSeq;
@@ -6221,6 +6247,19 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 </script>
 
 <style scoped>
+/*
+  融合附属的外壳不接鼠标 —— 它的布局盒压在 owner 顶部/底部, 而它本身是不可见的。
+  ⛔ 只关外壳, 窄条自己必须照常可点(展开/收起、配置入口都在上面)。
+
+  🔴 `!important` 在这里是**必须的**, 不是偷懒: vue-flow 把 `pointer-events: all`
+  写成节点外壳的**行内样式**(实测 `style="…; pointer-events: all;"`), 行内压过任何
+  样式表规则。第一版没加 important —— 类挂上了、选择器也命中了, 而 computed 值仍是
+  `all`, 拖动照样被挡。⇒ 「类挂上没有 / CSS 命中没有 / 是不是被行内覆盖」是三件事,
+  只量前两件会得出「修好了」。
+*/
+.workflow-canvas :deep(.vue-flow__node.wf-fused-attachment) { pointer-events: none !important; }
+.workflow-canvas :deep(.vue-flow__node.wf-fused-attachment .fused-strip) { pointer-events: auto; }
+
 /*
   §9 聚焦淡化。⛔ 只改 opacity —— 不从 DOM/拓扑里删除, 不改布局。
   `:deep` 是必须的: 类挂在 vue-flow 自己渲染的 .vue-flow__node 外壳上, 不在本组件的模板里。
