@@ -58,17 +58,28 @@
       <span class="system-inference-badge">
         可报工接口 · {{ inputPorts.length }} 个投入 · {{ outputPorts.length }} 个产出
       </span>
-      <span class="system-inference-hint">正式报工时按实际情况选择，投入和产出至少各一项</span>
+      <el-tooltip placement="right" content="正式报工时按实际情况选择，投入和产出至少各一项">
+        <span class="io-help-mark nodrag" data-testid="reporting-help">?</span>
+      </el-tooltip>
     </div>
 
     <section class="port-section">
       <div class="section-title">
-        <span>投入物料</span>
+        <span class="section-label">
+          投入物料
+          <el-tooltip
+            placement="right"
+            :content="'Workflow 只声明可投入物料；主料和替代料由生产计划固定的 BOM 自动限定。'"
+          ><span class="io-help-mark nodrag" data-testid="input-help">?</span></el-tooltip>
+        </span>
         <el-button v-if="canWrite && allowAddInput" text size="small" type="primary" class="nodrag" @click="emit('addInput')">+ 来源 Cell（合流）</el-button>
       </div>
-      <div class="actual-io-help">
-        Workflow 只声明可投入物料；主料和替代料由生产计划固定的 BOM 自动限定。
-      </div>
+      <!--
+        🔴 说明文字收进小问号(owner 2026-09-01:「工序里面的文字稍微节俭一点, 要不然
+        整个工序 cell 太高了; 投入物料/产出物料/单位关系里面的解释直接隐藏为小问号」)。
+        ⛔ 不是删掉: 这几段解释各自都在挡一个真实误解(以为这里要配比例/主副角色/数量),
+        删了那些误解会回来。⇒ 换成按需查看。
+      -->
       <div v-for="port in inputPorts" :key="port.id" class="port-row">
         <el-input
           class="nodrag"
@@ -82,7 +93,12 @@
 
     <section class="port-section output-section">
       <div class="section-title">
-        <span>产出物料</span>
+        <span class="section-label">
+          产出物料
+          <el-tooltip placement="right" :content="OUTPUT_HELP">
+            <span class="io-help-mark nodrag" data-testid="output-help">?</span>
+          </el-tooltip>
+        </span>
         <span v-if="canWrite" class="section-actions">
           <el-button
             text
@@ -93,11 +109,6 @@
             @click.stop="emit('addOutput')"
           >+ 产出 Cell（分流）</el-button>
         </span>
-      </div>
-      <div class="actual-io-help">
-        这里不配置产出关系、主副角色或固定比例；每次报工填写本次实际产出的 SKU 和数量。
-        副产同理——只在这里指定它是哪个 SKU，产出多少在报工时填。
-        回料同理——标记为回料的产出会保留在报工选项里，供操作员登记退回复投的数量。
       </div>
       <div v-for="port in outputPorts" :key="port.id" class="output-entry">
         <div class="port-row output-row">
@@ -120,9 +131,14 @@
       <div class="section-title"><span>单位关系</span></div>
       <div class="unit-only-summary" data-testid="unit-only-summary">
         <strong>{{ unitRelationshipSummary }}</strong>
-        <span>这里只约定各物料的报工单位，不预设投入产出数量；实际投入、实际产出和出成率以正式报工为准。</span>
-        <small v-if="primaryOutputSpecification">
-          成品 SKU 规格：{{ primaryOutputSpecification }}，计划、报工与结单需要折算时自动使用。
+        <el-tooltip placement="right" :content="UNIT_HELP">
+          <span class="io-help-mark nodrag" data-testid="unit-help">?</span>
+        </el-tooltip>
+        <small
+          v-if="primaryOutputSpecification"
+          :title="`成品 SKU 规格：${primaryOutputSpecification}，计划、报工与结单需要折算时自动使用。`"
+        >
+          规格 {{ primaryOutputSpecification }}
         </small>
       </div>
       <div class="unit-relationship-list" data-testid="unit-relationship-list">
@@ -243,6 +259,13 @@ const props = withDefaults(defineProps<{
 const isValidConnectTarget = computed(() => props.connectingFromKind === 'MATERIAL');
 const isConnectDimmed = computed(() => !!props.connectingFromKind && !isValidConnectTarget.value);
 
+/** 收进问号里的两段长说明。⛔ 不要塞回模板 —— 它们是 cell 变高的主因。 */
+const OUTPUT_HELP = '这里不配置产出关系、主副角色或固定比例；每次报工填写本次实际产出的 SKU 和数量。'
+  + '副产同理——只在这里指定它是哪个 SKU，产出多少在报工时填。'
+  + '回料同理——标记为回料的产出会保留在报工选项里，供操作员登记退回复投的数量。';
+const UNIT_HELP = '这里只约定各物料的报工单位，不预设投入产出数量；'
+  + '实际投入、实际产出和出成率以正式报工为准。';
+
 const emit = defineEmits<{
   update: [patch: Partial<ProcessNodeData>];
   addInput: [];
@@ -324,6 +347,12 @@ function handleStyle(index: number, count: number): Record<string, string> {
   display: flex; align-items: center; gap: 8px;
   margin-top: 10px; padding-top: 8px; border-top: 1px dashed #dfe6f2;
 }
+.io-help-mark {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 6px;
+  border-radius: 50%; background: #eef2f7; color: #7a8798;
+  font-size: 11px; font-weight: 700; cursor: help; vertical-align: middle;
+}
+.io-help-mark:hover { background: #e0ebf7; color: #1b65a8; }
 .special-output-hint { color: #8a94a6; font-size: 11px; }
 
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
@@ -382,9 +411,10 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .step-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #1b65a8; background: #eaf4ff; font-weight: 700; }
 .eyebrow { color: #7a8599; font-size: 11px; }
 .process-name { color: #1a2332; font-size: 15px; font-weight: 700; }
-.system-inference { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+/* 长文案收进问号后不再需要换行 —— 徽标与 `?` 同一行, 省一整行高度。 */
+.system-inference { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
+.section-label { display: inline-flex; align-items: center; }
 .system-inference-badge { width: fit-content; padding: 2px 8px; border-radius: 999px; background: #eef6ff; color: #1b65a8; font-size: 11px; font-weight: 650; }
-.system-inference-hint { color: #9aa5b8; font-size: 10px; }
 .port-section, .unit-rule-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #edf2f7; }
 .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; color: #475467; font-size: 12px; font-weight: 650; }
 /* 两个建产出按钮并排; space-between 只在"标题 vs 按钮组"之间生效, 按钮之间用 gap。 */
@@ -396,15 +426,6 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .output-row { grid-template-columns: minmax(0, 1fr) 70px; }
 .output-entry { margin-top: 6px; }
 .output-entry .output-row { margin-top: 0; }
-.actual-io-help {
-  margin: 5px 0 7px;
-  padding: 8px 10px;
-  border-radius: 7px;
-  background: #eef6ff;
-  color: #1b65a8;
-  font-size: 12px;
-  line-height: 1.5;
-}
 .output-contract-row {
   display: grid; grid-template-columns: minmax(132px, 0.8fr) minmax(190px, 1.2fr);
   align-items: center; gap: 6px; margin-top: 6px; padding: 7px 8px;
@@ -441,12 +462,14 @@ function handleStyle(index: number, count: number): Record<string, string> {
   overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; line-height: 1.35;
 }
 .unit-relationship-row.is-long-name .unit-flow-chip { justify-self: end; width: min(100%, 190px); }
+/* `?` 与摘要同一行, `<small>` 换行 —— 两行, 原先是三行加一段说明。 */
 .unit-only-summary {
-  display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; border-radius: 7px;
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: 2px; row-gap: 4px;
+  padding: 9px 10px; border-radius: 7px;
   background: #f7f9fc; color: #667085; font-size: 12px; line-height: 1.45;
 }
 .unit-only-summary strong { color: #344054; }
-.unit-only-summary small { color: #1b65a8; }
+.unit-only-summary small { flex-basis: 100%; color: #1b65a8; }
 .unit-flow-chip {
   padding: 5px 8px; border-radius: 6px; background: #f7f9fc; color: #667085;
   font-size: 12px; font-weight: 600; text-align: center;

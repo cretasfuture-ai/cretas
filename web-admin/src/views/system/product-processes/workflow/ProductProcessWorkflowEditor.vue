@@ -14,22 +14,6 @@
     :class="{ 'is-immersive': immersive }"
     data-testid="workflow-viewport-editor"
   >
-    <button
-      v-if="immersive"
-      type="button"
-      class="workflow-immersive-exit"
-      data-testid="workflow-immersive-exit"
-      title="退出全屏（Esc）"
-      @click="immersive = false"
-    >⤢ 退出全屏</button>
-    <button
-      v-else
-      type="button"
-      class="workflow-immersive-enter"
-      data-testid="workflow-immersive-enter"
-      title="全屏编辑"
-      @click="immersive = true"
-    >⤢ 全屏</button>
     <div class="workflow-main">
       <div class="workflow-toolbar" aria-label="Workflow 编辑工具栏">
         <div class="toolbar-status">
@@ -97,6 +81,29 @@
             :loading="activationChanging"
             @click="deactivateWorkflow"
           >停用 Workflow</el-button>
+          <!--
+            🔴 全屏开关排在工具栏**行内最后**, ⛔ 不再 position:absolute。
+            2026-09-01 owner 实拍: 绝对定位的「⤢ 全屏」正好压在「生产版本记录」上 ——
+            绝对定位不占位, 所以它跟工具栏右端的按钮必然会随宽度变化互相盖。
+            排进 flex 行里, 重叠在物理上不可能发生, 并且它仍在 .workflow-main 内,
+            全屏态下照样是那条鼠标出口。
+          -->
+          <button
+            v-if="immersive"
+            type="button"
+            class="workflow-immersive-exit"
+            data-testid="workflow-immersive-exit"
+            title="退出全屏（Esc）"
+            @click="immersive = false"
+          >⤢ 退出全屏</button>
+          <button
+            v-else
+            type="button"
+            class="workflow-immersive-enter"
+            data-testid="workflow-immersive-enter"
+            title="全屏编辑"
+            @click="immersive = true"
+          >⤢ 全屏</button>
         </div>
       </div>
 
@@ -6678,8 +6685,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
  * 点不到 = 用户被关在里面。⛔ 这个层级不要往下调。
  */
 .workflow-immersive-exit, .workflow-immersive-enter {
-  position: absolute; top: 10px; right: 14px; z-index: 60;
-  height: 28px; padding: 0 12px;
+  height: 32px; padding: 0 12px; flex: none;
   border: 1px solid #dcdfe6; border-radius: 6px; background: rgba(255, 255, 255, 0.92);
   color: #49647e; font-size: 12px; font-weight: 600; cursor: pointer;
 }
@@ -7062,6 +7068,14 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 -->
 <style>
 body.workflow-immersive .app-header { display: none !important; }
+/*
+ * 🔴 多标签栏也要收 —— owner 实测:「为什么还会有拖动标签的那个 label 啊」。
+ * 全屏只收了顶栏和侧边菜单, 漏了 `nav.workspace-tabs`(带「拖动标签到右侧可同屏参考」
+ * 那句分屏提示)。它悬在沉浸画布顶上, 属于**另一个语境**的东西:
+ * 全屏的意思是「现在只干这一件事」, 而标签栏说的是「你还开着别的页面」。
+ * ⇒ 一起收。⛔ 别只藏那句提示 —— 留下半条空标签栏更奇怪。
+ */
+body.workflow-immersive .workspace-tabs { display: none !important; }
 body.workflow-immersive .app-sidebar,
 body.workflow-immersive .app-layout > .el-aside,
 body.workflow-immersive .el-aside { display: none !important; }

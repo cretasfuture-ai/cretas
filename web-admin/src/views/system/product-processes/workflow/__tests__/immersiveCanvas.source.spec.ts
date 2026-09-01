@@ -33,6 +33,19 @@ describe('§ 沉浸式画布', () => {
     expect(EDITOR).not.toMatch(/is-immersive\s*\{[^}]*z-index/);
   });
 
+  it('🔴 外框要**收全**，⛔ 不是收一半', () => {
+    // owner 实测两次都是「漏了一个」:
+    //   第一次漏侧边菜单 → 画布左边被菜单压着;
+    //   第二次漏多标签栏 → 沉浸画布顶上悬着一句「拖动标签到右侧可同屏参考」,
+    //   那是**另一个语境**的东西(全屏 = 只干这一件事; 标签栏 = 你还开着别的页面)。
+    // ⇒ 把「哪些算外框」列成清单钉住, 漏一个这条就红。
+    for (const sel of ['.app-header', '.el-aside', '.workspace-tabs']) {
+      expect(EDITOR, sel).toContain(`body.workflow-immersive ${sel}`);
+    }
+    // 内容区的留白也要收, 否则画布四周剩一圈灰底
+    expect(EDITOR).toContain('body.workflow-immersive .page-container');
+  });
+
   it('🔴 离开本页必须还原 —— 否则整个应用的顶栏和菜单会一直消失', () => {
     // body 上的 class 是**全局**副作用: 组件卸载了它还在, 后果比不全屏严重得多。
     expect(EDITOR).toContain('onUnmounted(() => applyImmersiveBodyClass(false))');

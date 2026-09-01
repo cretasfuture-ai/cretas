@@ -6,6 +6,14 @@ import WorkflowProcessNode from '../WorkflowProcessNode.vue';
 import WorkflowSkuPicker from '../WorkflowSkuPicker.vue';
 import type { ProcessNodeData, ProcessPort } from '../types';
 
+/**
+ * 说明文案 2026-09-01 起收进 `?` 的 el-tooltip(owner: 工序 cell 太高)。
+ * ⛔ 断言不能因此删掉 —— 它守的是「这里不配比例/主副角色」这个**意思**还在被告知，
+ *    不是那段文字长在页面上。⇒ 改成读 tooltip 的 content，性质不变、载体变了。
+ */
+const tooltipCopy = (wrapper: { findAllComponents: (m: { name: string }) => Array<{ props: (k: string) => unknown }> }) =>
+  wrapper.findAllComponents({ name: 'ElTooltip' }).map((t) => String(t.props('content') ?? '')).join(' | ');
+
 const SEMI_OPTIONS = [{ id: 'SKU-SEMI-1', name: '半成品 A', unit: 'kg' }];
 const FINISHED_OPTIONS = [{ id: 'SKU-FIN-1', name: '成品 A', unit: '盒' }];
 
@@ -177,7 +185,7 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
 
     expect(wrapper.get('[data-testid="unit-only-summary"]').text()).toContain('投入单位：kg · 产出单位：kg');
     expect(wrapper.get('[data-testid="unit-flow-input"]').text()).toContain('kg投入 → kg产出');
-    expect(wrapper.text()).toContain('实际投入、实际产出和出成率以正式报工为准');
+    expect(tooltipCopy(wrapper)).toContain('实际投入、实际产出和出成率以正式报工为准');
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
 
@@ -194,9 +202,9 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
 
     expect(wrapper.get('[data-testid="system-inference"]').text())
       .toContain('2 个投入 · 2 个产出');
-    expect(wrapper.text()).toContain('投入和产出至少各一项');
-    expect(wrapper.text()).toContain('主料和替代料由生产计划固定的 BOM 自动限定');
-    expect(wrapper.text()).toContain('不配置产出关系、主副角色或固定比例');
+    expect(tooltipCopy(wrapper)).toContain('投入和产出至少各一项');
+    expect(tooltipCopy(wrapper)).toContain('主料和替代料由生产计划固定的 BOM 自动限定');
+    expect(tooltipCopy(wrapper)).toContain('不配置产出关系、主副角色或固定比例');
     expect(wrapper.find('[data-testid="input-relation-select"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="output-port-relation"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid^="output-contract-"]').exists()).toBe(false);
@@ -264,8 +272,9 @@ describe('WorkflowProcessNode 系统研判 + 数量关系 (P2)', () => {
     const wrapper = mountNode(true, withPorts({ ports }));
 
     expect(wrapper.get('[data-testid="unit-only-summary"]').text()).toContain('投入单位：kg · 产出单位：盒');
-    expect(wrapper.get('[data-testid="unit-only-summary"]').text()).toContain('成品 SKU 规格：1盒 = 800g');
-    expect(wrapper.get('[data-testid="unit-only-summary"]').text()).toContain('计划、报工与结单需要折算时自动使用');
+    expect(wrapper.get('[data-testid="unit-only-summary"]').text()).toContain('规格 1盒 = 800g');
+    expect(wrapper.get('[data-testid="unit-only-summary"] small').attributes('title'))
+      .toBe('成品 SKU 规格：1盒 = 800g，计划、报工与结单需要折算时自动使用。');
     expect(wrapper.get('[data-testid="unit-flow-input"]').text()).toContain('kg投入 → 盒产出');
     expect(wrapper.findComponent({ name: 'ElInputNumber' }).exists()).toBe(false);
   });
