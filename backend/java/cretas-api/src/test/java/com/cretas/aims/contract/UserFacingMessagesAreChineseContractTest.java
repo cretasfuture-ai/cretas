@@ -61,6 +61,14 @@ class UserFacingMessagesAreChineseContractTest {
      * <p>⛔ 若本地跑出更大的数字, 先查是不是提取逻辑变了, <b>不要直接把这个数字改大</b>——
      * 改大就是把棘轮松开, 等于这道闸不存在。
      */
+    // 2026-09-01(四次收紧): 37 -> 36。缺陷 27-C 把审批引擎那条翻成了中文:
+    //   - WorkflowEngineServiceImpl.verifyBoundDefinition: 原本 message 就是英文常量
+    //     "WORKFLOW_BOUND_DEFINITION_CHANGED", 一线在生产上看到的就是这一串。
+    //     现在 message 换成中文 + 常量挪到 errorCode + 补 actionHint。
+    //   ⚠️ 这条不只是"不好看": web-admin 拦截器有
+    //     isVanillaOptimisticLock = (409 && !actionHint && !hintTarget) 会把这类 409
+    //     的 toast 整条吞掉 ⇒ 用户看到的是"点了没反应"。补上 actionHint 才越得过它。
+    //   ⚠️ 本次是【收紧】(37→36), 不是把基线改大放行新增。
     // 2026-08-25(三次收紧): 38 -> 37。有人翻译/删除了一条却没把基线减一, 于是
     //   baselineMustNotBeLooserThanReality 开火(expected 37 but was 38) —— 它在要求把空档收掉,
     //   这正是它存在的理由。⚠️ 这次是【收紧】(38→37), 不是把基线改大放行新增。
@@ -76,7 +84,7 @@ class UserFacingMessagesAreChineseContractTest {
     // 2026-08-18: 45 -> 41, 结算链路上 BYPRODUCT_NRV_REQUIRED /
     // WORKFLOW_OUTPUT_UNIT_MISMATCH / PINNED_BOM_OUTPUT_POLICY_INCOMPLETE /
     // OUTPUT_COST_ALLOCATION_RATIO_REQUIRED 四条已翻成中文并补上下一步。
-    private static final int BASELINE = 37;
+    private static final int BASELINE = 36;
 
     private static final Path SERVICE_ROOT =
             Path.of("src/main/java/com/cretas/aims/service");

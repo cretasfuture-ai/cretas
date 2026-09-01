@@ -353,14 +353,39 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (expectedDigest == null) {
             return;
         }
+        if (!boundDefinitionUnchanged(instance, workflow, expectedDigest)) {
+            // 缺陷 27-C: 这里原本把英文常量当 message 直接下发, 一线看到的就是
+            // "WORKFLOW_BOUND_DEFINITION_CHANGED"。
+            //
+            // 🔴 缺陷 27-A: 而且当时它连**显示**都没显示。web-admin 的 axios 拦截器有一条
+            //    isVanillaOptimisticLock = (status === 409 && !actionHint && !hintTarget)
+            //    会把这类 409 的 toast 整条吞掉 (本意是消 optimistic-lock 的噪音);
+            //    业务侧 handleCatchError 看到 err.status 有值又认为"拦截器已经显示过了"而闭嘴。
+            //    两层各自以为对方会说话 ⇒ 用户看到的是"点了没反应"。
+            //    带上 actionHint 之后这条 409 才越得过那道抑制。
+            //    ⚠️ 这只治好了本条; 「任何不带 actionHint 的 409 全产品静默」仍然成立。
+            throw new BusinessException(409, "该单据绑定的审批流已被修改，无法继续审批")
+                    .withCode("WORKFLOW_BOUND_DEFINITION_CHANGED")
+                    .withHint("请联系工厂管理员，对该单据执行「按当前审批流重新发起」后再审批")
+                    .withSeverity("warning");
+        }
+    }
+
+    /**
+     * 绑定定义有没有被动过 —— {@link #verifyBoundDefinition} 与
+     * {@link #restartWithCurrentDefinition} 共用这一个判据。
+     *
+     * <p>⛔ 不要在这两处各写一份比较逻辑: 两份一定会漂, 而漂的方向是
+     * 「闸认为变了、恢复入口认为没变」⇒ 卡死的单恢复不了。
+     */
+    private boolean boundDefinitionUnchanged(ApprovalWorkflowInstance instance,
+                                             ApprovalWorkflow workflow,
+                                             String expectedDigest) {
         String stableDigest = stableBoundDefinitionDigest(instance);
-        boolean unchanged = stableDigest != null
+        return stableDigest != null
                 ? expectedDigest.equals(stableDefinitionDigest(workflow))
                 : expectedDigest.equals(definitionDigest(workflow))
                         || expectedDigest.equals(legacyActiveDefinitionDigest(workflow));
-        if (!unchanged) {
-            throw new BusinessException(409, "WORKFLOW_BOUND_DEFINITION_CHANGED");
-        }
     }
 
     /**
@@ -663,6 +688,109 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         log.info("取消 workflow 实例 - instanceId={}, canceller={}, reason={}",
                 instanceId, cancellerUserId, reason);
         return saved;
+    }
+
+    /** 缺陷 27 恢复入口 — 契约与设计理由见 {@link WorkflowEngineService#restartWithCurrentDefinition}. */
+    @Override
+    @Transactional
+    public ApprovalWorkflowInstance restartWithCurrentDefinition(String factoryId,
+                                                                 String instanceId,
+                                                                 Long operatorUserId,
+                                                                 String reason) {
+        Objects.requireNonNull(factoryId, "factoryId must not be null");
+        Objects.requireNonNull(instanceId, "instanceId must not be null");
+        if (operatorUserId == null) {
+            throw new BusinessException(401, "无法识别执行恢复的管理员身份")
+                    .withCode("WORKFLOW_REBIND_OPERATOR_REQUIRED");
+        }
+        String rebindReason = reason == null ? "" : reason.trim();
+        if (rebindReason.isEmpty()) {
+            throw new BusinessException(422, "必须填写恢复原因")
+                    .withCode("WORKFLOW_REBIND_REASON_REQUIRED")
+                    .withHintTarget("reason");
+        }
+        if (rebindReason.length() > 500) {
+            throw new BusinessException(422, "恢复原因过长(上限 500 字)")
+                    .withCode("WORKFLOW_REBIND_REASON_INVALID")
+                    .withHintTarget("reason");
+        }
+
+        ApprovalWorkflowInstance instance = loadInstanceOrFail(instanceId);
+        // 租户隔离: 别让 A 厂管理员拿 B 厂的实例 id 重开 B 厂的单子。
+        if (!factoryId.equals(instance.getFactoryId())) {
+            throw new BusinessException(404, "审批实例不存在: " + instanceId)
+                    .withCode("WORKFLOW_INSTANCE_NOT_FOUND");
+        }
+        if (instance.getStatus() != InstanceStatus.RUNNING) {
+            throw new BusinessException(409,
+                    "该审批实例已结束，无需恢复。当前状态=" + instance.getStatus())
+                    .withCode("WORKFLOW_REBIND_STATUS_INVALID");
+        }
+
+        String expectedDigest = stableBoundDefinitionDigest(instance);
+        if (expectedDigest == null) {
+            expectedDigest = boundDefinitionDigest(instance);
+        }
+        ApprovalWorkflow boundWorkflow = workflowService
+                .getByIdForUpdate(instance.getFactoryId(), instance.getWorkflowId())
+                .orElseThrow(() -> new BusinessException(404,
+                        "工作流配置不存在 — workflowId=" + instance.getWorkflowId()));
+
+        // ⛔ 只对**真的卡住**的实例开这个口子。
+        //
+        // 没有这道闸, 它就成了一个"把审批倒回第一步"的通用按钮 —— 管理员可以拿它
+        // 抹掉任何一条已经走到一半的审批, 而那正是 owner 明确禁止的"悄悄跳过审批"。
+        // 判据必须与 verifyBoundDefinition 用**同一个** boundDefinitionUnchanged,
+        // 否则两处一漂, 卡住的单会被这里判成"没卡住"而永远恢复不了。
+        if (expectedDigest == null
+                || boundDefinitionUnchanged(instance, boundWorkflow, expectedDigest)) {
+            throw new BusinessException(409,
+                    "该单据的审批流没有发生变更，不需要恢复")
+                    .withCode("WORKFLOW_REBIND_NOT_STALE")
+                    .withHint("如果审批仍然点不动，请把单号与实例号提供给技术支持，这不是定义变更导致的");
+        }
+
+        // 留痕素材必须在 cancel **之前**取 —— cancel 会清空 currentNodeIds。
+        List<String> strandedNodeIds = new ArrayList<>(instance.getCurrentNodeIds());
+        long discardedApprovals = getHistory(instance.getFactoryId(), instanceId).stream()
+                .filter(h -> h.getAction() == HistoryAction.APPROVE)
+                .count();
+        String currentDigest = stableDefinitionDigest(boundWorkflow);
+        Long originalInitiator = instance.getInitiatedBy() != null
+                ? instance.getInitiatedBy()
+                : operatorUserId;
+
+        cancel(instanceId, operatorUserId, "审批流定义已变更，按当前定义重新发起：" + rebindReason);
+
+        Map<String, Object> newContext = instance.getContextJson() == null
+                ? new HashMap<>()
+                : new HashMap<>(instance.getContextJson());
+        // 🔴 留痕: 让「这张单的审批依据中途换过」在数据里查得到, 而不是只存在于日志。
+        //    ⛔ 不要把它做成静默重绑 —— 那是把审批依据变更这件事藏起来。
+        Map<String, Object> rebindAudit = new LinkedHashMap<>();
+        rebindAudit.put("previousInstanceId", instanceId);
+        rebindAudit.put("previousBoundDigest", expectedDigest);
+        rebindAudit.put("currentBoundDigest", currentDigest);
+        rebindAudit.put("strandedNodeIds", strandedNodeIds);
+        rebindAudit.put("discardedApprovals", discardedApprovals);
+        rebindAudit.put("operatorUserId", operatorUserId);
+        rebindAudit.put("reason", rebindReason);
+        rebindAudit.put("restartedAt", LocalDateTime.now().toString());
+        newContext.put("approvalRebind", rebindAudit);
+
+        ApprovalWorkflowInstance restarted = startWorkflow(
+                instance.getFactoryId(),
+                instance.getModuleCode(),
+                instance.getBusinessEntityId(),
+                newContext,
+                originalInitiator);
+
+        log.warn("审批实例按当前定义重开 - factoryId={}, module={}, businessEntityId={}, "
+                        + "previousInstanceId={}, newInstanceId={}, discardedApprovals={}, "
+                        + "operator={}, reason={}",
+                instance.getFactoryId(), instance.getModuleCode(), instance.getBusinessEntityId(),
+                instanceId, restarted.getId(), discardedApprovals, operatorUserId, rebindReason);
+        return restarted;
     }
 
     @Override

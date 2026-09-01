@@ -3,6 +3,7 @@ package com.cretas.aims.controller.workflow;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.workflow.RestartWorkflowBindingRequest;
 import com.cretas.aims.dto.workflow.WorkflowInstancePendingDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
@@ -28,6 +29,7 @@ import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -626,6 +628,45 @@ public class WorkflowInstanceController {
         PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
                 dtos, page, size, instances.getTotalElements());
         return ApiResponse.success(response);
+    }
+
+    /**
+     * 缺陷 27 恢复入口 — 把「绑定的审批流已被改过」而卡死的在途实例作废并按当前定义重开.
+     *
+     * <p><b>为什么必须有它</b>: 改一次已发布的审批定义, 该链上所有在途单据的
+     * 「通过」和「驳回」<b>两条路同时 409</b>({@code WORKFLOW_BOUND_DEFINITION_CHANGED}),
+     * 而在此之前产品内没有任何解卡路径 —— LIUSHANMEN 生产上已实证卡死一张真实采购单。
+     * 且摘要含节点 {@code position} ⇒ 画布上挪一个节点再保存就会触发, 是日常操作。
+     *
+     * <p><b>语义是「作废并重开」而不是「重绑」</b>: 审批从头重走一遍, 所以结构上不可能
+     * 把已经走过的审批悄悄跳过去。换绑这件事在新实例 contextJson 的
+     * {@code approvalRebind} 里留痕(原实例 / 前后摘要 / 丢弃了几条审批 / 操作人 / 原因)。
+     *
+     * <p>RBAC 与 {@code /admin-running} 同档 — 它就是从那个「卡住的流程」列表点进来的动作。
+     *
+     * @since 2026-09-01 (缺陷 27)
+     */
+    @PostMapping("/{instanceId}/restart-binding")
+    // @PreAuthorize 在本项目是 NO-OP (Spring Security method security 未启用) → 用 @RequireRole 真正守门。
+    @RequireRole({"factory_super_admin", "platform_admin"})
+    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")
+    @Operation(summary = "按当前审批流重新发起 — 恢复因定义变更卡死的在途实例 (super-admin only)")
+    public ApiResponse<WorkflowInstancePendingDTO> restartBinding(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String instanceId,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody RestartWorkflowBindingRequest request) {
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+        ApprovalWorkflowInstance restarted = workflowEngine.restartWithCurrentDefinition(
+                factoryId, instanceId, user.getId(), request.getReason());
+        log.warn("按当前审批流重开: factoryId={}, previousInstanceId={}, newInstanceId={}, operator={}",
+                factoryId, instanceId, restarted.getId(), user.getUsername());
+        List<WorkflowInstancePendingDTO> hydrated = hydrateInstances(factoryId, List.of(restarted));
+        return ApiResponse.success("已按当前审批流重新发起，请通知审批人重新处理",
+                hydrated.isEmpty() ? null : hydrated.get(0));
     }
 
     // ==================== internal helpers ====================
