@@ -9,7 +9,7 @@
  *
  * null 值显示为 "—" (诚实, 不造假 — per .claude/rules/api-response-handling.md).
  */
-import { computed, h, ref, watch } from 'vue';
+import { computed, h, ref, watch, type VNode } from 'vue';
 import { ElIcon, ElTooltip } from 'element-plus';
 import { QuestionFilled } from '@element-plus/icons-vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
@@ -113,7 +113,7 @@ const COLUMN_HELP: Record<string, string> = {
 function sortableHeader({ column }: { column: { label?: string; property?: string } }) {
   const label = column.label || '本列';
   const help = column.property ? COLUMN_HELP[column.property] : undefined;
-  const children: unknown[] = [label];
+  const children: (string | VNode)[] = [label];
   if (help) {
     children.push(
       h(

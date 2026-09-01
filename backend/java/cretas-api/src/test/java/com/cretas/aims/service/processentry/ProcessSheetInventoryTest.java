@@ -461,4 +461,36 @@ class ProcessSheetInventoryTest {
         assertThat(item.getProductionDate()).isEqualTo(LocalDate.of(2026, 9, 2));
         assertThat(item.getUnitPrice()).isEqualByComparingTo("3.50");
     }
+
+    /**
+     * E-3 (阳性对照): 真实的 0 成本 (例如客供料, 工厂不承担原料成本) 必须仍然显示成 0,
+     * 不能被这次「未知成本传 null」的修复连坐误伤成 null。
+     *
+     * <p>「未知」和「确实是 0」是两个不同的态 —— E-1 断言前者传 null, 这条断言后者原样传 0。
+     * 缺了这一条, E-1 那条断言可能是在偷懒地把「传 null」写成了「什么都不传/永远传 null」这种
+     * 过度修正, 而不是真的只处理了 wip.getUnitPrice() 恰好是 null 的那一种情况。
+     */
+    @Test
+    @DisplayName("E-3 (阳性对照): 真实的 0 成本 (如客供料) 仍然显示 0, 不会被误伤成 null")
+    void getInventory_genuineZeroCost_staysZero_notCoercedToNull() throws Exception {
+        Long batchId = 900003L;
+        String batchNumber = "CLK-W-20260902-E3";
+        ProcessSheetRow row = buildWipRow("inv-e3", batchNumber, batchId, LocalDate.of(2026, 9, 2));
+        rowRepo.saveAndFlush(row);
+
+        // 客供料: 工厂不承担原料成本, wip.unitPrice 按口径就是 BigDecimal.ZERO —— 这是真值, 不是缺失。
+        MaterialBatch wip = buildWipBatch("INV-E3-WIP-" + UUID.randomUUID(), batchNumber, batchId,
+                BigDecimal.ZERO, LocalDate.of(2026, 9, 2));
+        materialBatchRepo.saveAndFlush(wip);
+
+        List<ProcessSheetInventoryItem> inventory =
+                processSheetService.getInventory(FACTORY_ID, planId, "pocui", 1);
+
+        assertThat(inventory).hasSize(1);
+        ProcessSheetInventoryItem item = inventory.get(0);
+        assertThat(item.getUnitPrice())
+                .as("真实的 0 成本(客供料)不该被「未知成本传 null」的修复误伤")
+                .isNotNull()
+                .isEqualByComparingTo("0");
+    }
 }
