@@ -899,12 +899,18 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     /**
      * 领料 FEFO 必须沿用生产计划冻结的库存所有权范围。普通计划保持原有公司库存查询；
      * 客户库存生产只允许同客户、且与计划销售订单归属一致的客户库存，绝不回退到公司库存。
+     *
+     * <p>🔒 2026-09-02 owner 裁定 (来料加工首跑失败修复): 辅料/包材(含调料)不受上面这条限制 ——
+     * 它们本就该由工厂自有库存出、计入加工费而非客户物料成本, 与「工厂备料生产」同一条件。
+     * ⛔ RAW 逐字不变: 仍必须走下面的客户库存严格分支, 绝不回退公司库存。</p>
      */
     private List<MaterialBatch> findEligibleSourceBatches(String factoryId,
                                                            ProductionPlan plan,
                                                            String materialTypeId,
                                                            String sourceWarehouseId) {
-        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED
+                || ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
+                        resolveMaterialMainCategory(factoryId, materialTypeId))) {
             List<MaterialBatch> candidates = Collections.emptyList();
             if (sourceWarehouseId != null && !sourceWarehouseId.isBlank()) {
                 candidates = materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
@@ -933,6 +939,28 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 .findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
                         factoryId, materialTypeId, sourceWarehouseId,
                         plan.getCustomerId(), plan.getSourceOrderId());
+    }
+
+    /**
+     * 物料大类 (原料/辅料/包材) —— 权威来源 {@code RawMaterialType.mainCategory}
+     * (DB NOT NULL + CHECK 约束, 100% 覆盖, 见 {@link com.cretas.aims.entity.material.MaterialMainCategory})。
+     * ⛔ 不查 BOM 行自带的 {@code materialCategory} 副本 —— 那是编辑器可改的独立字段,
+     * 与本方法找批次时用的口径不同源会漂 (形态 D)。查不到 (repository 未注入/物料不存在)
+     * 一律返回 null, {@link ProductionInventoryOwnershipGuard#isCompanyStockEligibleCategory}
+     * 对 null 按最严格口径处理, 不会误放宽。
+     */
+    private String resolveMaterialMainCategory(String factoryId, String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return null;
+        }
+        try {
+            return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                    .map(com.cretas.aims.entity.RawMaterialType::getMainCategory)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("读取物料大类失败: {} ({})", materialTypeId, e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -996,7 +1024,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                             .withSeverity("BLOCKING");
                 }
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
-                        plan, source, it.getId());
+                        plan, source, resolveMaterialMainCategory(factoryId, it.getMaterialTypeId()),
+                        it.getId());
                 BigDecimal available = source.getCurrentQuantity();
                 if (available.compareTo(moveQty) < 0) {
                     throw new BusinessException(409, String.format(
