@@ -80,13 +80,19 @@
           >
             克隆为新版本
           </el-button>
+          <!--
+            🔴 2026-09-01: 这里原来还有一个「仍然直接改」按钮(forceEditUnlocked -> force=true),
+            已移除。理由见 readOnlyWorkflow 上方那段。文案同时改写 ——
+            原来只说「会影响判定依据」, 那是把「单据再也推不动」说轻了。
+            ⚠️ 措辞描述的是【现在仍然存在的状态】(锁定 + 只能克隆), ⛔ 不描述已经删掉的按钮。
+          -->
           <template v-if="readOnlyWorkflow && runningInstanceCount">
             <el-tag type="warning" class="running-instance-tag">
-              有 {{ runningInstanceCount }} 条在途审批
+              有 {{ runningInstanceCount }} 条在途审批，本版本已锁定
             </el-tag>
-            <el-button @click="confirmForceEditDespiteRunningInstances">
-              仍然直接改
-            </el-button>
+            <span class="running-instance-hint">
+              直接改会让这些单据找不到当前审批节点、再也无法推进；请用「克隆为新版本」。
+            </span>
           </template>
           <el-button v-if="!showNoApproval" :disabled="nodes.length === 0" @click="handleValidate">
             校验画布
@@ -610,19 +616,38 @@ const runtimeApprovalEnabled = computed(() => workflowList.value.some((workflow)
 )))
 /**
  * M-6 (2026-08-20 手动测试台账): 已发布/历史版本不再一律锁死 —— 按在途实例数决定。
- * 0 条在途顺畅可编辑；>0 条默认锁住，用户显式点「仍然直接改」(forceEditUnlocked) 才放开。
+ * 0 条在途顺畅可编辑；>0 条锁住。
  * runningInstanceCount 还没查回来 (null) 时按"锁住"处理 —— 安全默认, 避免在真正知道
  * 在途条数之前有一瞬间的"看起来能编辑"。
+ *
+ * <h4>🔴 2026-09-01: 「仍然直接改」逃生门已移除</h4>
+ * 它原本让用户在有在途实例时也能原地保存(前端 forceEditUnlocked -> 请求 force=true,
+ * 后端 `ApprovalWorkflowServiceImpl.update` 便跳过 `assertNoRunningInstances`)。
+ *
+ * 画布模式下这尚属温和 —— 手工编辑通常不改节点 id。但步骤列表模式的保存走
+ * `stepsToGraph` **确定性重建**图, 节点 id 会被重命名
+ * (`start_1 -> start`、`end_approved -> approved`, 2026-09-01 测试环境实测)。
+ * 而 `ApprovalWorkflowInstance.currentNodeIds` 存的就是节点 id 字符串,
+ * 引擎用 `getCurrentNodeIds().get(0)` 去图里找当前节点。
+ * ⇒ 有在途实例时保存 = 那些单据的当前节点 id 不复存在 = **当场搁浅**,
+ *   与缺陷 27 同形, 只是入口换成了这个按钮。
+ *
+ * ⚠️ 缺陷 27 已经永久搁浅过一张真客户的单(`PO-20260901-0001`), 而恢复入口
+ * 2026-09-01 当晚才上线、**尚未对任何真实搁浅单据执行过**。
+ * ⇒ 在恢复手段本身未经证实之前, 不保留第二条制造搁浅的路径。
+ *
+ * 用户的真实目的是"要一份改过的定义", 「克隆为新版本」完整地满足它, 且不碰在途单据。
+ *
+ * ⛔ 想恢复这个能力, 先做「保存时复用能对上的原节点 id、只给新增步骤发新 id」
+ * (已登记为 follow-up)。⛔ 不要只把按钮加回来。
  */
 const runningInstanceCount = ref<number | null>(null)
-const forceEditUnlocked = ref(false)
 const isPublishedOrArchived = computed(() => (
   currentWorkflow.value?.publishStatus === 'published'
   || currentWorkflow.value?.publishStatus === 'archived'
 ))
 const readOnlyWorkflow = computed(() => (
   isPublishedOrArchived.value
-  && !forceEditUnlocked.value
   && runningInstanceCount.value !== 0
 ))
 const canEditDraft = computed(() => !showNoApproval.value && !readOnlyWorkflow.value)
@@ -637,11 +662,8 @@ const saveButtonLabel = computed(() => (
   currentWorkflow.value?.publishStatus === 'draft' ? '保存草稿' : '保存修改'
 ))
 
-// M-6: 每次 currentWorkflow 变化 (切换工作流 / 保存后拿到新的响应对象) 都重新查一次
-// 在途实例数, 并把上一轮的强制解锁状态收回 —— 不能让"半小时前点过仍然直接改"
-// 悄悄延续到下一个工作流或下一次编辑。
+// M-6: 每次 currentWorkflow 变化 (切换工作流 / 保存后拿到新的响应对象) 都重新查一次在途实例数。
 watch(currentWorkflow, async (workflow) => {
-  forceEditUnlocked.value = false
   runningInstanceCount.value = null
   if (!factoryId.value || !workflow?.id) return
   if (workflow.publishStatus !== 'published' && workflow.publishStatus !== 'archived') return
@@ -655,20 +677,6 @@ watch(currentWorkflow, async (workflow) => {
   }
 }, { immediate: true })
 
-async function confirmForceEditDespiteRunningInstances() {
-  if (!currentWorkflow.value || runningInstanceCount.value == null) return
-  try {
-    await ElMessageBox.confirm(
-      `该审批流程仍有 ${runningInstanceCount.value} 条在途审批实例，直接修改会影响它们的判定依据。`
-        + '确定仍然原地修改吗？（也可以选择「克隆为新版本」，不影响在途实例）',
-      '有在途审批实例',
-      { type: 'warning', confirmButtonText: '仍然直接改', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  forceEditUnlocked.value = true
-}
 const selectedNodes = computed(() => nodes.value.filter((node) => (
   Boolean((node as Node & { selected?: boolean }).selected)
 )))
@@ -1427,11 +1435,14 @@ async function handleSave() {
     }
 
     if (currentWorkflow.value?.id) {
-      // Update existing — M-6: 已发布/历史版本原地修改时带上 force (仅在用户明确点过
-      // 「仍然直接改」时为 true), 让后端按在途实例数决定是否放行。
+      // Update existing — M-6: 已发布/历史版本原地修改时带 force 给后端判定。
       const res = await updateWorkflow(factoryId.value, currentWorkflow.value.id, {
         ...payload,
-        force: forceEditUnlocked.value,
+        // 🔴 恒为 false —— 「仍然直接改」逃生门已移除(见 runningInstanceCount 上方说明)。
+        //    后端 `update` 对 published/archived 在 !force 时执行 assertNoRunningInstances,
+        //    ⇒ 有在途实例时保存会被【服务端】拒绝, 前端锁定只是第一道。
+        //    ⛔ 不要把它改回某个可解锁的标志, 除非先做「保存时复用原节点 id」。
+        force: false,
       })
       if (res.success && res.data) {
         currentWorkflow.value = res.data
@@ -2137,5 +2148,12 @@ onMounted(async () => {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* 在途实例锁定说明 —— 与 .running-instance-tag 同排, 文字次一级。 */
+.running-instance-hint {
+  font-size: 12px;
+  color: var(--el-color-warning);
+  margin-left: 4px;
 }
 </style>
