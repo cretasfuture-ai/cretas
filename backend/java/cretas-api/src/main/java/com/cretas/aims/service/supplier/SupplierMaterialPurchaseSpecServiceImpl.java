@@ -137,7 +137,21 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
                     .withHintTarget("quotedPrice");
         }
         spec.setConversionFactor(request.getFactor());
-        spec.setQuotedPrice(request.getQuotedPrice());
+        // 19②: 含税是人填的权威值, 未税由物料税率派生。
+        if (request.getTaxIncludedQuotedPrice() != null) {
+            spec.setTaxIncludedQuotedPrice(request.getTaxIncludedQuotedPrice());
+            java.math.BigDecimal derived = SupplierTaxInclusivePricing.deriveUntaxed(
+                    request.getTaxIncludedQuotedPrice(), material);
+            if (derived != null) {
+                spec.setQuotedPrice(derived);
+            }
+            // derived == null ⇒ 物料无税率, 算不出未税 ⇒ ⛔ 不动既有未税值。
+        } else {
+            // ⚠️ 这里保持**既有语义**: 规格侧的 quotedPrice 一直是无条件赋值,
+            //    null 即清空(见 #457 把这条钉住的那两个用例)。⛔ 本批次不改它 ——
+            //    「null 到底是不修改还是清空」是 #457 登记的独立契约问题, 那是另一条线。
+            spec.setQuotedPrice(request.getQuotedPrice());
+        }
         // 🔒 见 SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY 的裁定说明 (缺陷 21)。
         //    ⚠️ 这两处是同一条口径的两个承载点, ⛔ 不要只改一处。
         spec.setCurrency(SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY);
@@ -191,6 +205,7 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
         return SupplierMaterialPurchaseSpecDTO.builder().id(s.getId()).supplierMaterialId(s.getSupplierMaterialId())
                 .materialTypeId(s.getMaterialTypeId()).name(s.getName()).purchasePackageUnit(s.getPurchasePackageUnit())
                 .inventoryBaseUnit(s.getInventoryBaseUnit()).factor(s.getConversionFactor()).quotedPrice(s.getQuotedPrice())
+                .taxIncludedQuotedPrice(s.getTaxIncludedQuotedPrice())
                 .quotedPriceUnit(s.getPurchasePackageUnit())
                 .currency(s.getCurrency()).minOrderQuantity(s.getMinOrderQuantity()).leadTimeDays(s.getLeadTimeDays())
                 .defaultSpec(s.getDefaultSpec()).active(s.getActive()).version(s.getVersion()).build();

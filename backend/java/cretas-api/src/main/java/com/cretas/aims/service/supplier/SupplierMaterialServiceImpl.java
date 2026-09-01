@@ -143,7 +143,11 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
      * ⇒ 没有任何合法内部路径会被这道闸误伤。
      */
     private void requireCreationPrice(SupplierMaterialRequest request) {
-        if (request.getDefaultPurchasePrice() == null) {
+        // 19② 之后界面填的是【含税】, 所以「给没给价格」要认两个字段中的任意一个。
+        // ⚠️ 这不是放松必填性(仍然必填), 只是承认权威字段换了 —— 只认未税会让
+        //    「照界面填了含税」的新建请求被这道闸拒掉, 而那正是界面引导用户做的事。
+        if (request.getTaxIncludedDefaultPurchasePrice() == null
+                && request.getDefaultPurchasePrice() == null) {
             throw new BusinessException(400, "新建供应原料关系必须填写默认采购价")
                     .withCode("SUPPLIER_MATERIAL_PRICE_REQUIRED")
                     .withHint("请填写该物料在此供应商处的默认采购价；价格与采购单位绑定")
@@ -153,7 +157,25 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
 
     private void apply(SupplierMaterial target, SupplierMaterialRequest request, RawMaterialType material) {
         if (request.getSupplierMaterialCode() != null) target.setSupplierMaterialCode(SupplierProfileValidator.trimToNull(request.getSupplierMaterialCode()));
-        if (request.getDefaultPurchasePrice() != null) {
+        // 19②: 含税是人填的权威值, 未税由物料税率派生。⛔ 既有的未税列语义不变,
+        //       所以四个下游消费点一行都不用改。
+        if (request.getTaxIncludedDefaultPurchasePrice() != null) {
+            if (request.getTaxIncludedDefaultPurchasePrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "含税默认采购价必须大于0")
+                        .withCode("SUPPLIER_MATERIAL_PRICE_INVALID")
+                        .withHintTarget("taxIncludedDefaultPurchasePrice");
+            }
+            target.setTaxIncludedDefaultPurchasePrice(request.getTaxIncludedDefaultPurchasePrice());
+            BigDecimal derived = SupplierTaxInclusivePricing.deriveUntaxed(
+                    request.getTaxIncludedDefaultPurchasePrice(), material);
+            if (derived != null) {
+                target.setDefaultPurchasePrice(derived);
+            }
+            // derived == null ⇒ 物料没有税率, 算不出未税。⛔ 此时**不动**既有未税值,
+            //    也不拿含税值顶替 —— 那等于断言税率为 0。
+        } else if (request.getDefaultPurchasePrice() != null) {
+            // 兼容既有 API 调用方直接给未税值。⚠️ 界面已不再让人填未税(19② owner 裁定),
+            //    这条路留给迁移期与既有集成, ⛔ 不要在前端复活它。
             if (request.getDefaultPurchasePrice().compareTo(BigDecimal.ZERO) <= 0) {
                 throw new BusinessException(400, "默认采购价必须大于0")
                         .withCode("SUPPLIER_MATERIAL_PRICE_INVALID")
@@ -161,6 +183,9 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
             }
             target.setDefaultPurchasePrice(request.getDefaultPurchasePrice());
         }
+        // 🔴 两个都为 null ⇒ 这次请求没给价格 ⇒ 什么都不做。
+        //    这正是「未税有值 / 含税为空」那 2 行存量能在改别的字段时活下来的原因:
+        //    ⛔ 绝不能在这里写 setDefaultPurchasePrice(null) 或写入派生出来的 null。
         // 🔒 2026-09-01 owner 裁定 (缺陷 21):「目前普遍默认币种肯定就是人民币, 不可能出现其他币种」。
         //    ⇒ 前端已收起币种输入, 后端在这里固定 CNY —— 收起 UI 而不钉后端, 等于把一个
         //    用户改不了的字段留成可被构造请求改写的。⛔ 不删数据库列, 留将来多币种的余地。
@@ -243,6 +268,7 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
                 .materialReferencePrice(material == null ? null : positiveOrNull(material.getUnitPrice()))
                 .materialReferencePriceUnit(material == null ? null : material.getUnit())
                 .supplierMaterialCode(relation.getSupplierMaterialCode()).defaultPurchasePrice(relation.getDefaultPurchasePrice())
+                .taxIncludedDefaultPurchasePrice(relation.getTaxIncludedDefaultPurchasePrice())
                 .currency(relation.getCurrency()).purchaseUnit(relation.getPurchaseUnit())
                 .effectivePurchasePrice(price.price()).effectivePriceUnit(price.unit()).priceSource(price.source())
                 .minOrderQuantity(relation.getMinOrderQuantity())

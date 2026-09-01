@@ -19,6 +19,12 @@ public class SupplierMaterialDTO {
     private String materialReferencePriceUnit;
     private String supplierMaterialCode;
     @PriceSensitive private BigDecimal defaultPurchasePrice;
+    /**
+     * 含税默认采购价 —— 编辑态回填输入框用的就是它。
+     * 🔴 本字段为空而 defaultPurchasePrice 有值 = 存量基准未知,
+     *    前端必须显示为「基准未知」, ⛔ 不许从未税反推一个含税值填进输入框。
+     */
+    @PriceSensitive private BigDecimal taxIncludedDefaultPurchasePrice;
     private String currency;
     private String purchaseUnit;
     @PriceSensitive private BigDecimal effectivePurchasePrice;

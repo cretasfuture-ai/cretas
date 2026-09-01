@@ -215,14 +215,30 @@
           />
           <div class="field-hint">采购订单将沿用该单位；系统内部保存标准单位代码，页面只显示中文业务单位。</div>
         </el-form-item>
-        <el-form-item :label="`默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
-          <el-input-number v-model="relationForm.defaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
+        <!-- 🔒 19②: 人填含税, 未税只读派生 (owner: 「未税报价……只能是自动计算出来」)。
+             ⚠️ :218 原本【一个基准都没说】—— 用户填 50, 系统不知道那是含税还是未税,
+             而它会一路流到采购单和入库批次。现在标题就把基准说清楚。 -->
+        <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）` : `含税默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
+          <el-input-number v-model="relationForm.taxIncludedDefaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
           <!-- 缺陷 17 / 形态 B⁵: 这句原本写的是「未配置时采购单会明确提示，不会静默按 0 元处理」——
                那是"价格可以不配"年代的说明。现在新增必填, 描述必须跟着改, ⛔ 不能留一句过期的承诺。 -->
           <div class="field-hint">
             价格与采购单位绑定。新增时必须填写；编辑既有关系时，不动这一栏就不会被拦。
           </div>
         </el-form-item>
+        <!-- ⛔ 算不出来时【不渲染】这一行, 而不是显示 0 或空白 —— 空白会被读成 0。
+             镜像 material-types/list.vue:1772 的 v-if 写法。 -->
+        <el-form-item v-if="relationDerivedUntaxed != null" :label="`未税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
+          <el-input :model-value="relationDerivedUntaxed.toFixed(4)" disabled style="width: 100%" />
+          <div class="field-hint">{{ isExemptMaterial(relationMaterial) ? '免税时未税价等于采购价' : '= 含税价 ÷ (1 + 税率)，按物料税率自动计算，不需要填写' }}</div>
+        </el-form-item>
+        <div v-else-if="relationForm.taxIncludedDefaultPurchasePrice != null" class="field-hint">
+          该物料未配置税率，暂时算不出未税价。⛔ 这不代表未税价等于含税价。
+        </div>
+        <div v-else-if="relationEditingId && relationForm.defaultPurchasePrice != null" class="field-hint">
+          ⚠️ 这条关系是在「含税/未税」区分之前录入的，存量价格 {{ relationForm.defaultPurchasePrice }} 的基准未知。
+          填写含税价即可确认；在此之前它不会被用来自动带价。
+        </div>
         <el-form-item label="最小起订量"><el-input-number v-model="relationForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 100%" /></el-form-item>
         <el-form-item label="交期（天）"><el-input-number v-model="relationForm.leadTimeDays" :min="0" :precision="0" style="width: 100%" /></el-form-item>
         <el-form-item label="首选供应商"><el-switch v-model="relationForm.preferred" /></el-form-item>
@@ -243,8 +259,12 @@
               <el-input-number v-model="inlineSpecForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
               <span class="field-hint">1 {{ displayUnit(inlineSpecForm.purchasePackageUnit) }} = {{ inlineSpecForm.factor || '?' }} {{ displayUnit(relationForm.purchaseUnit) || '库存基本单位' }}</span>
             </el-form-item>
-            <el-form-item :label="`未税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`">
-              <el-input-number v-model="inlineSpecForm.quotedPrice" :min="0" :precision="4" style="width: 220px" />
+            <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`">
+              <el-input-number v-model="inlineSpecForm.taxIncludedQuotedPrice" :min="0" :precision="4" style="width: 220px" />
+            </el-form-item>
+            <el-form-item v-if="inlineSpecDerivedUntaxed != null" :label="`未税报价（元/${displayUnit(inlineSpecForm.purchasePackageUnit) || '采购包装单位'}）`">
+              <el-input :model-value="inlineSpecDerivedUntaxed.toFixed(4)" disabled style="width: 220px" />
+              <span class="field-hint">{{ isExemptMaterial(relationMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算' }}</span>
             </el-form-item>
           </el-form>
           <div class="inline-spec-toggle">
@@ -300,7 +320,11 @@
               <el-input-number v-model="specForm.factor" :min="0.0001" :precision="4" style="width: 220px" />
               <span class="field-hint">1 {{ displayUnit(specForm.purchasePackageUnit) }} = {{ specForm.factor || '?' }} {{ displayUnit(specRelation?.baseUnit) }}</span>
             </el-form-item>
-            <el-form-item :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.quotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
+            <el-form-item :label="isExemptMaterial(specMaterial) ? `免税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）` : `含税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`"><el-input-number v-model="specForm.taxIncludedQuotedPrice" :min="0" :precision="4" style="width: 220px" /></el-form-item>
+            <el-form-item v-if="specDerivedUntaxed != null" :label="`未税报价（元/${displayUnit(specForm.purchasePackageUnit) || '采购包装单位'}）`">
+              <el-input :model-value="specDerivedUntaxed.toFixed(4)" disabled style="width: 220px" />
+              <span class="field-hint">{{ isExemptMaterial(specMaterial) ? '免税时未税价等于报价' : '= 含税报价 ÷ (1 + 税率)，自动计算' }}</span>
+            </el-form-item>
             <el-form-item label="最小起订量"><el-input-number v-model="specForm.minOrderQuantity" :min="0.0001" :precision="4" style="width: 220px" /></el-form-item>
             <el-form-item label="交期（天）"><el-input-number v-model="specForm.leadTimeDays" :min="0" :precision="0" style="width: 220px" /></el-form-item>
             <el-form-item label="默认规格"><el-switch v-model="specForm.defaultSpec" /></el-form-item>
@@ -344,6 +368,8 @@ import {
   type SupplierSavePayload,
 } from '@/api/supplierManagement';
 import { displayUnit } from '@/utils/unitPricing';
+// ⚠️ 复用采购单侧那一份换算, ⛔ 不新写 —— 见下方 19② 注释块。
+import { purchaseUntaxedUnitPrice } from '@/views/procurement/orders/purchaseOrderTaxInclusivePricing';
 import { purchaseUnitSelectionReason, resolvePurchaseUnits } from '@/utils/purchaseUnitContract';
 import {
   supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
@@ -366,19 +392,25 @@ const activeTab = ref('profile');
 const detail = ref<SupplierRecord | null>(null);
 const history = ref<SupplierHistoryViewRow[]>([]);
 const materialRelations = ref<SupplierMaterialRelation[]>([]);
-const materialOptions = ref<Array<{ id: string; name: string; code?: string | null; unit?: string | null }>>([]);
+// ⚠️ 19②: 多带 taxRate / taxTreatment 回来 —— 未税是由含税按【物料】税率派生的,
+// 税率是货物的属性不是供应商的属性, 所以供应侧没有也不需要自己的税率字段。
+// 接口 /raw-material-types/active 返回的 RawMaterialTypeDTO 本来就带这两个字段。
+const materialOptions = ref<Array<{
+  id: string; name: string; code?: string | null; unit?: string | null;
+  taxRate?: string | null; taxTreatment?: string | null;
+}>>([]);
 const allUnitOptions = ref<SystemUnit[]>([]);
 const purchaseUnitOptions = ref<SystemUnit[]>([]);
 const relationDialogVisible = ref(false);
 const relationEditingId = ref('');
 const relationSaving = ref(false);
 const relationForm = reactive<SupplierMaterialPayload>({
-  materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
+  materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, taxIncludedDefaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
   minOrderQuantity: null, leadTimeDays: null, preferred: false, active: true,
 });
 const inlineSpecEnabled = ref(false);
-const inlineSpecForm = reactive<{ name: string; purchasePackageUnit: string; factor: number; quotedPrice: number | null }>({
-  name: '', purchasePackageUnit: '', factor: 1, quotedPrice: null,
+const inlineSpecForm = reactive<{ name: string; purchasePackageUnit: string; factor: number; quotedPrice: number | null; taxIncludedQuotedPrice: number | null }>({
+  name: '', purchasePackageUnit: '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null,
 });
 const specDialogVisible = ref(false);
 const specRelation = ref<SupplierMaterialRelation | null>(null);
@@ -387,7 +419,7 @@ const specEditingId = ref('');
 const specSaving = ref(false);
 const showNewSpecForm = ref(false);
 const specForm = reactive<SupplierPurchaseSpecPayload>({
-  name: '', purchasePackageUnit: '', inventoryBaseUnit: '', factor: 1, quotedPrice: null, currency: 'CNY',
+  name: '', purchasePackageUnit: '', inventoryBaseUnit: '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null, currency: 'CNY',
   minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true,
 });
 const formRef = ref<FormInstance>();
@@ -398,6 +430,56 @@ const form = reactive<SupplierSavePayload>({
 
 const isActive = computed(() => detail.value ? supplierStatus(detail.value) === 'ACTIVE' : false);
 const relationMaterial = computed(() => materialOptions.value.find((row) => row.id === relationForm.materialTypeId));
+
+/* ═══════════ 19②: 含税录入 / 未税派生 ═══════════
+ *
+ * 🔒 owner 裁定:「一般在中国基本上都是含税报价含税价格……不可能一开始就知道未税报价。
+ *    未税报价是不需要去填写的, 只能是自动计算出来; 他填的指的是含税报价。」
+ * ⇒ 三个录入口一律填【含税】, 未税只读派生。
+ *
+ * ⚠️ 换算刻意复用采购单侧那一份 (purchaseUntaxedUnitPrice, 4 位) 而不是自己写:
+ *    同一条「未税 = 含税 ÷ (1+税率)」在本仓已经有两份实现且精度不同
+ *    (采购单 4 位 / 原料档案内联 computed 2 位)。供应商价格【流向】采购单,
+ *    所以在被消费的那个边界上对齐。⛔ 不要在这里再写一遍除法。
+ */
+
+/** 物料的税率百分数 (9 / 13); 免税或未配置返回 null。 */
+function materialTaxPercent(material?: { taxRate?: string | null; taxTreatment?: string | null } | null): number | null {
+  if (!material || material.taxTreatment === 'EXEMPT') return null;
+  if (material.taxRate === 'TAX_9') return 9;
+  if (material.taxRate === 'TAX_13') return 13;
+  return null;
+}
+
+function isExemptMaterial(material?: { taxTreatment?: string | null } | null): boolean {
+  return material?.taxTreatment === 'EXEMPT';
+}
+
+/**
+ * 由含税价派生未税价。
+ * ⛔ 返回 null 一律表示「算不出来」—— 调用方必须【不显示】, 而不是显示 0 或空白。
+ * 空白会被读成 0, 那正是本次改动要消灭的形状。
+ */
+function derivedUntaxed(taxIncluded: number | null | undefined,
+                        material?: { taxRate?: string | null; taxTreatment?: string | null } | null): number | null {
+  if (taxIncluded == null) return null;
+  if (isExemptMaterial(material)) return Number(taxIncluded);   // 免税: 未税 == 含税
+  const pct = materialTaxPercent(material);
+  if (pct == null) return null;                                  // 没有税率 ⇒ 不显示
+  return purchaseUntaxedUnitPrice(taxIncluded, pct);
+}
+
+/** 关系侧: 当前选中物料的派生未税价。 */
+const relationDerivedUntaxed = computed(
+  () => derivedUntaxed(relationForm.taxIncludedDefaultPurchasePrice, relationMaterial.value));
+
+/** 规格侧: 规格挂在某条关系上, 税率取那条关系的物料。 */
+const specMaterial = computed(
+  () => materialOptions.value.find((row) => row.id === specRelation.value?.materialTypeId));
+const inlineSpecDerivedUntaxed = computed(
+  () => derivedUntaxed(inlineSpecForm.taxIncludedQuotedPrice, relationMaterial.value));
+const specDerivedUntaxed = computed(
+  () => derivedUntaxed(specForm.taxIncludedQuotedPrice, specMaterial.value));
 const relationUnitResolution = computed(() => resolvePurchaseUnits(
   relationMaterial.value?.unit,
   allUnitOptions.value,
@@ -547,7 +629,7 @@ async function openRelationCreate(): Promise<void> {
   await ensureMaterialOptions();
   relationEditingId.value = '';
   Object.assign(relationForm, {
-    materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
+    materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, taxIncludedDefaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
     minOrderQuantity: null, leadTimeDays: null, preferred: false, active: true, version: undefined,
   });
   relationOriginalPrice.value = null;   // 新增: 没有"原值", 价格必填
@@ -557,7 +639,7 @@ async function openRelationCreate(): Promise<void> {
 }
 
 function resetInlineSpecForm(): void {
-  Object.assign(inlineSpecForm, { name: '', purchasePackageUnit: '', factor: 1, quotedPrice: null });
+  Object.assign(inlineSpecForm, { name: '', purchasePackageUnit: '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null });
 }
 
 /* ═══════════════ 缺陷 17: 价格必填 —— 但只在价格被动过时拦 ═══════════════
@@ -615,6 +697,9 @@ async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
     materialTypeId: row.materialTypeId,
     supplierMaterialCode: row.supplierMaterialCode ?? '',
     defaultPurchasePrice: row.defaultPurchasePrice ?? null,
+    // 🔴 只回填后端存的含税值。⛔ 不从未税反推 —— 存量行的基准我们不知道,
+    //    反推出来的数会以「用户填过」的样子出现在输入框里。
+    taxIncludedDefaultPurchasePrice: row.taxIncludedDefaultPurchasePrice ?? null,
     currency: row.currency || 'CNY',
     purchaseUnit: row.purchaseUnit || row.baseUnit || '',
     minOrderQuantity: row.minOrderQuantity ?? null,
@@ -624,7 +709,7 @@ async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
     version: row.version ?? undefined,
   });
   // 编辑: 记下打开时的价格。用户没动它就不拦 —— 存量空价格的关系仍然可以改别的字段。
-  relationOriginalPrice.value = row.defaultPurchasePrice ?? null;
+  relationOriginalPrice.value = row.taxIncludedDefaultPurchasePrice ?? null;   // 19②: 校验对象是人填的含税值
   inlineSpecEnabled.value = false;
   resetInlineSpecForm();
   relationDialogVisible.value = true;
@@ -637,9 +722,9 @@ async function saveRelation(): Promise<void> {
   if (relationUnitReason.value) return void ElMessage.warning(relationUnitReason.value);
   // 缺陷 17 ①: 默认采购价。新增必填; 编辑只在用户动过这个字段时才校验。
   if (!relationEditingId.value
-      || !samePrice(relationForm.defaultPurchasePrice, relationOriginalPrice.value)) {
-    const problem = priceProblem(relationForm.defaultPurchasePrice);
-    if (problem) return void ElMessage.warning(`默认采购价：${problem}`);
+      || !samePrice(relationForm.taxIncludedDefaultPurchasePrice, relationOriginalPrice.value)) {
+    const problem = priceProblem(relationForm.taxIncludedDefaultPurchasePrice);
+    if (problem) return void ElMessage.warning(`含税默认采购价：${problem}`);
   }
   const wantsInlineSpec = !relationEditingId.value && inlineSpecEnabled.value;
   if (wantsInlineSpec) {
@@ -649,8 +734,8 @@ async function saveRelation(): Promise<void> {
     // 缺陷 17 ②: 内联规格的未税报价。
     // 🔴 这条分支只在【新增】时可达(wantsInlineSpec 自带 !relationEditingId), 所以恒为必填。
     //    它是空价格最主要的来源 —— 只修 ① 和 ③ 等于堵了编辑口, 前门照开。
-    const specProblem = priceProblem(inlineSpecForm.quotedPrice);
-    if (specProblem) return void ElMessage.warning(`采购规格的未税报价：${specProblem}`);
+    const specProblem = priceProblem(inlineSpecForm.taxIncludedQuotedPrice);
+    if (specProblem) return void ElMessage.warning(`采购规格的含税报价：${specProblem}`);
   }
   const payload: SupplierMaterialPayload = {
     ...relationForm,
@@ -675,7 +760,7 @@ async function saveRelation(): Promise<void> {
         purchasePackageUnit: inlineSpecForm.purchasePackageUnit,
         inventoryBaseUnit: savedRelation.baseUnit || payload.purchaseUnit,
         factor: Number(inlineSpecForm.factor),
-        quotedPrice: inlineSpecForm.quotedPrice,
+        taxIncludedQuotedPrice: inlineSpecForm.taxIncludedQuotedPrice,
         currency: payload.currency,
         minOrderQuantity: null,
         leadTimeDays: null,
@@ -713,7 +798,7 @@ async function openSpecManager(row: SupplierMaterialRelation): Promise<void> {
 function resetSpecForm(): void {
   specEditingId.value = '';
   Object.assign(specForm, {
-    name: '', purchasePackageUnit: '', inventoryBaseUnit: specRelation.value?.baseUnit || '', factor: 1, quotedPrice: null, currency: 'CNY',
+    name: '', purchasePackageUnit: '', inventoryBaseUnit: specRelation.value?.baseUnit || '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null, currency: 'CNY',
     minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true, version: undefined,
   });
   specOriginalPrice.value = null;   // 新增规格: 没有"原值", 报价必填
@@ -728,6 +813,8 @@ function editPurchaseSpec(row: SupplierPurchaseSpec): void {
     inventoryBaseUnit: row.inventoryBaseUnit,
     factor: Number(row.factor),
     quotedPrice: row.quotedPrice ?? null,
+    taxIncludedQuotedPrice: row.taxIncludedQuotedPrice ?? null,   // ⛔ 同样不反推
+
     currency: row.currency || 'CNY',
     minOrderQuantity: row.minOrderQuantity ?? null,
     leadTimeDays: row.leadTimeDays ?? null,
@@ -736,7 +823,7 @@ function editPurchaseSpec(row: SupplierPurchaseSpec): void {
     version: row.version ?? undefined,
   });
   // 编辑既有规格: 记下打开时的报价, 没动就不拦。
-  specOriginalPrice.value = row.quotedPrice ?? null;
+  specOriginalPrice.value = row.taxIncludedQuotedPrice ?? null;                // 19②: 同上
 }
 
 async function savePurchaseSpec(): Promise<void> {
@@ -746,9 +833,9 @@ async function savePurchaseSpec(): Promise<void> {
   if (!specForm.purchasePackageUnit) return void ElMessage.warning('请选择采购包装单位');
   if (!(Number(specForm.factor) > 0)) return void ElMessage.warning('换算系数必须大于 0');
   // 缺陷 17 ③: 独立规格的未税报价(编辑路径)。新增必填; 编辑只在动过时才校验。
-  if (!specEditingId.value || !samePrice(specForm.quotedPrice, specOriginalPrice.value)) {
-    const problem = priceProblem(specForm.quotedPrice);
-    if (problem) return void ElMessage.warning(`未税报价：${problem}`);
+  if (!specEditingId.value || !samePrice(specForm.taxIncludedQuotedPrice, specOriginalPrice.value)) {
+    const problem = priceProblem(specForm.taxIncludedQuotedPrice);
+    if (problem) return void ElMessage.warning(`含税报价：${problem}`);
   }
   const payload: SupplierPurchaseSpecPayload = {
     ...specForm,

@@ -172,6 +172,8 @@ export interface SupplierMaterialRelation {
   baseUnit?: string | null;
   supplierMaterialCode?: string | null;
   defaultPurchasePrice?: number | null;
+  /** 含税默认采购价 —— 19② 之后人工录入的权威值; 未税由后端按物料税率派生。 */
+  taxIncludedDefaultPurchasePrice?: number | null;
   materialReferencePrice?: number | null;
   materialReferencePriceUnit?: string | null;
   effectivePurchasePrice?: number | null;
@@ -190,6 +192,8 @@ export interface SupplierMaterialPayload {
   materialTypeId: string;
   supplierMaterialCode?: string;
   defaultPurchasePrice?: number | null;
+  /** 含税默认采购价 —— 19② 之后人工录入的权威值; 未税由后端按物料税率派生。 */
+  taxIncludedDefaultPurchasePrice?: number | null;
   currency: string;
   purchaseUnit: string;
   minOrderQuantity?: number | null;
@@ -208,6 +212,8 @@ export interface SupplierPurchaseSpec {
   inventoryBaseUnit: string;
   factor: number;
   quotedPrice?: number | null;
+  /** 含税报价 —— 19② 之后人工录入的权威值; 未税由后端派生。 */
+  taxIncludedQuotedPrice?: number | null;
   /**
    * 该规格没有自己的报价时, 后端用**本规格行声明的换算系数**把供应关系价折到该规格包装单位后的参考价。
    * 客户 2026-07-30 表格第 38 行:「设完换算规格后不再自动填入供应商配好的采购单价」。
@@ -231,6 +237,8 @@ export interface SupplierPurchaseSpecPayload {
   inventoryBaseUnit: string;
   factor: number;
   quotedPrice?: number | null;
+  /** 含税报价 —— 19② 之后人工录入的权威值; 未税由后端派生。 */
+  taxIncludedQuotedPrice?: number | null;
   currency: string;
   minOrderQuantity?: number | null;
   leadTimeDays?: number | null;

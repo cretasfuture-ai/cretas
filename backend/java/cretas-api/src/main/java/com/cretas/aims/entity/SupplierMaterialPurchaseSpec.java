@@ -38,8 +38,17 @@ public class SupplierMaterialPurchaseSpec extends BaseEntity {
     private String inventoryBaseUnit;
     @Column(name = "conversion_factor", nullable = false, precision = 24, scale = 12)
     private BigDecimal conversionFactor;
+    /** 未税报价 —— <b>派生值</b>, 由服务层从 {@link #taxIncludedQuotedPrice} 按物料税率算出。语义未变。 */
     @PriceSensitive @Column(name = "quoted_price", precision = 18, scale = 6)
     private BigDecimal quotedPrice;
+
+    /**
+     * 含税报价 —— <b>人工录入的权威值</b> (19②)。
+     *
+     * <p>🔴 本列为空而 {@link #quotedPrice} 有值 = 存量基准未知, ⛔ 不猜不回填。
+     */
+    @PriceSensitive @Column(name = "tax_included_quoted_price", precision = 18, scale = 6)
+    private BigDecimal taxIncludedQuotedPrice;
     @Column(nullable = false, length = 8)
     private String currency;
     @Column(name = "min_order_quantity", precision = 18, scale = 6)

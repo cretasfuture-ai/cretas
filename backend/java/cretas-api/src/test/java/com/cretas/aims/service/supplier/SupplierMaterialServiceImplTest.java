@@ -13,6 +13,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -259,5 +260,118 @@ class SupplierMaterialServiceImplTest {
         material.setCode("RMT-1"); material.setName("原料A"); material.setUnit(unit);
         material.setUnitPrice(referencePrice);
         return material;
+    }
+
+    // ═══════════ 19②: 含税录入 → 未税派生 ═══════════
+    //
+    // owner 裁定:「不可能一开始就知道未税报价……未税报价是不需要去填写的, 只能是自动计算出来」。
+    // ⇒ 人填含税, 未税由物料税率派生; 既有的未税列语义不变, 四个下游消费点不用改。
+
+    private RawMaterialType taxedMaterial(com.cretas.aims.entity.enums.TaxRate rate) {
+        RawMaterialType m = material("kg", new BigDecimal("8.00"));
+        m.setTaxRate(rate);
+        m.setTaxTreatment(com.cretas.aims.entity.enums.TaxTreatment.TAXABLE);
+        return m;
+    }
+
+    /** 一条【未税有值 / 含税为空】的存量关系 —— 生产上 LIUSHANMEN 就是这个形状(2 行)。 */
+    private SupplierMaterial legacyRelationWithUnknownBasis() {
+        SupplierMaterial relation = new SupplierMaterial();
+        relation.setId("rel"); relation.setFactoryId("F006"); relation.setSupplierId("sup");
+        relation.setMaterialTypeId("mat"); relation.setActive(true);
+        relation.setDefaultPurchasePrice(new BigDecimal("50.000000"));  // 基准未知的那个真实价格
+        relation.setTaxIncludedDefaultPurchasePrice(null);
+        when(repository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        return relation;
+    }
+
+    @Test
+    @DisplayName("🔴 存量基准未知的行: 只改 active, 未税价必须原封不动")
+    void legacyUnknownBasisPrice_survivesUnrelatedUpdate() {
+        // 派生方向是 含税 → 未税。这两行的含税是空的, 若派生照跑就会把 null 写回未税,
+        // 把该租户【仅有的两个真实价格】清掉 —— 一条静默的数据丢失路径。
+        stubOwnedMasterData(taxedMaterial(com.cretas.aims.entity.enums.TaxRate.TAX_13));
+        stubUnits();
+        SupplierMaterial relation = legacyRelationWithUnknownBasis();
+
+        SupplierMaterialRequest request = request("kg");
+        request.setActive(false);              // 只动启用状态, 完全没碰价格
+        service.update("F006", "sup", "rel", request);
+
+        assertThat(relation.getDefaultPurchasePrice())
+                .as("存量未税价被改动了 —— 这会抹掉该租户仅有的真实价格")
+                .isEqualByComparingTo("50.000000");
+        assertThat(relation.getTaxIncludedDefaultPurchasePrice())
+                .as("⛔ 不许替存量行反推一个含税值出来: 我们不知道那 50 是含税还是未税")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("🔴 存量基准未知的行: 改交期这类无关字段, 未税价同样原封不动")
+    void legacyUnknownBasisPrice_survivesLeadTimeUpdate() {
+        // 与上一条同形但换一个字段 —— #457 钉住的那种「写路径顺手清掉它没被要求碰的字段」
+        // 往往只在某一条调用形态上才暴露。
+        stubOwnedMasterData(taxedMaterial(com.cretas.aims.entity.enums.TaxRate.TAX_13));
+        stubUnits();
+        SupplierMaterial relation = legacyRelationWithUnknownBasis();
+
+        SupplierMaterialRequest request = request("kg");
+        request.setLeadTimeDays(7);
+        service.update("F006", "sup", "rel", request);
+
+        assertThat(relation.getDefaultPurchasePrice()).isEqualByComparingTo("50.000000");
+    }
+
+    @Test
+    @DisplayName("阳性对照: 填含税 + 物料 13% ⇒ 未税 = 含税 ÷ 1.13 (4 位, 与 TaxRate.preTaxPrice 同口径)")
+    void taxIncludedEntry_derivesUntaxedPrice() {
+        // ⚠️ 没有这一条, 上面两条「价格没被动」也可能是因为**派生根本没跑**。
+        stubOwnedMasterData(taxedMaterial(com.cretas.aims.entity.enums.TaxRate.TAX_13));
+        stubUnits();
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        SupplierMaterialRequest request = request("kg");
+        request.setTaxIncludedDefaultPurchasePrice(new BigDecimal("113.00"));
+        var result = service.create("F006", "sup", request);
+
+        assertThat(result.getDefaultPurchasePrice()).as("未税应为 113 / 1.13 = 100.0000")
+                .isEqualByComparingTo("100.0000");
+        assertThat(result.getTaxIncludedDefaultPurchasePrice()).as("含税是人填的权威值, 必须原样存下来")
+                .isEqualByComparingTo("113.00");
+    }
+
+    @Test
+    @DisplayName("免税物料: 未税 = 含税 (与原料档案「免税时未税价等于采购参考价」同口径)")
+    void exemptMaterial_untaxedEqualsTaxIncluded() {
+        RawMaterialType exempt = material("kg", new BigDecimal("8.00"));
+        exempt.setTaxTreatment(com.cretas.aims.entity.enums.TaxTreatment.EXEMPT);
+        stubOwnedMasterData(exempt);
+        stubUnits();
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        SupplierMaterialRequest request = request("kg");
+        request.setTaxIncludedDefaultPurchasePrice(new BigDecimal("88.00"));
+        var result = service.create("F006", "sup", request);
+
+        assertThat(result.getDefaultPurchasePrice()).isEqualByComparingTo("88.00");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 物料没有税率 ⇒ 含税照存, 未税【不动】, ⛔ 不拿含税值顶替")
+    void materialWithoutTaxRate_doesNotFabricateUntaxedPrice() {
+        // 拿含税值直接当未税用 = 断言税率为 0。那是一个我们没有依据的数。
+        stubOwnedMasterData(material("kg", new BigDecimal("8.00")));   // taxRate / taxTreatment 均为 null
+        stubUnits();
+        SupplierMaterial relation = legacyRelationWithUnknownBasis();
+
+        SupplierMaterialRequest request = request("kg");
+        request.setTaxIncludedDefaultPurchasePrice(new BigDecimal("113.00"));
+        service.update("F006", "sup", "rel", request);
+
+        assertThat(relation.getDefaultPurchasePrice()).as("算不出未税时不该改动既有未税值")
+                .isEqualByComparingTo("50.000000");
+        assertThat(relation.getTaxIncludedDefaultPurchasePrice())
+                .as("含税仍应存下来 —— 与 ProductTypeServiceImpl「无税率: 含税照存, 不推导」同政策")
+                .isEqualByComparingTo("113.00");
     }
 }
