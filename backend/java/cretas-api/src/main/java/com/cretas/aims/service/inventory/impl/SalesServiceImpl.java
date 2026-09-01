@@ -3025,7 +3025,54 @@ public class SalesServiceImpl implements SalesService {
         saved.setTotalAmount(totalAmount);
         saved = deliveryRecordRepository.save(saved);
         updateMasterDeliveryStatus(parent, children, saved);
+        // 缺陚42 (owner 拍板 「出库照抄入库」): 子发运单创建后自动按 FIFO 预填成品批次分配，
+        // 不等用户另外点「分配批次」才看到推荐 —— 镜像入库侧 PendingPurchaseReceivingPanel.vue
+        // openReceive() 的原则: 一开对话框就把每行默认填成 remainingReceivableQuantity。
+        autoPrefillFifoAllocations(factoryId, saved);
         return saved;
+    }
+
+    /**
+     * 缺陚42: 子发运单创建后结果默认没有任何批次分配, 仅在用户手动点「分配批次」时才按 FIFO 预填推荐
+     * ({@code openBatchAllocDialog} @ web-admin detail.vue). 与入库侧「一开对话框就默认满额」的原则不一致 ——
+     * 现在创建子发运单时就直接调用与 {@link #shipDelivery} P0-13 同一个 {@code autoAllocateFifo},
+     * 把默认推荐提前到创建那一刻, 用户在「分配批次/发货记录」看到的就是已经预填好的结果, 可直接豆改。
+     *
+     * <p>—— 不会堆叠两次分配: {@code allocateBatches} 内部是先删后写 (见 {@code allocateBatches}
+     * 方法中的 {@code deleteByFactoryIdAndDeliveryItemId}), 而本方法只在刚创建的新子发运单上调用一次, 那时每行肯定还没有
+     * 任何分配记录 —— 不存在“重复预填覆盖用户手动编辑”的风险。
+     *
+     * <p>物料行没有成品批次可分配 ({@code isMaterialLine} 判定, 与 shipDelivery P0-13 同一处豁免) —— 跳过。
+     * 库存不够时 {@code autoAllocateFifo} 返回 false 且不写任何记录 (“不做部分分配”, 见
+     * {@code SalesDeliveryBatchAllocationServiceImpl.autoAllocateFifo} 头部注释) —— 那一行保持未分配、诚实显示,
+     * 不报错也不让整张子发运单创建失败 —— 缺口留到「分配批次」手工处理或发货时 shipDelivery 的 P0-13 兵底重试。
+     * 分配总量恰守 #484 定的 ≤ 发货行数量天花板 —— {@code autoAllocateFifo} 本身按 requiredQty 做上限, 不会超发。
+     */
+    private void autoPrefillFifoAllocations(String factoryId, SalesDeliveryRecord shipment) {
+        if (batchAllocationService == null || shipment == null || shipment.getItems() == null) {
+            return;
+        }
+        for (SalesDeliveryItem item : shipment.getItems()) {
+            if (item.getDeliveredQuantity() == null || item.getDeliveredQuantity().signum() <= 0) {
+                continue;
+            }
+            if (item.getProductTypeId() == null || item.getProductTypeId().isBlank()) {
+                continue;
+            }
+            if (isMaterialLine(factoryId, item.getProductTypeId())) {
+                continue;
+            }
+            try {
+                batchAllocationService.autoAllocateFifo(
+                        factoryId, String.valueOf(item.getId()), item.getProductTypeId(),
+                        item.getDeliveredQuantity(), item.getUnit(), item.getSourceWarehouseCode());
+            } catch (BusinessException e) {
+                // 诚实降级: 预填是便利功能, 不是硬闸 —— 预填失败 (比如单位换算冲突) 不该拖垒
+                // 子发运单创建这个更重要的动作。用户仍能去「分配批次」手工处理。
+                log.warn("[缺陚42] 子发运创建后自动FIFO预填失败, 转手工分配: factoryId={}, itemId={}, reason={}",
+                        factoryId, item.getId(), e.getMessage());
+            }
+        }
     }
 
     @Override
