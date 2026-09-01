@@ -167,20 +167,21 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private BusinessException planBomUnresolvedError(ProductionPlan plan) {
         if (PlanBomItems.isMultiOutput(plan)) {
             return new BusinessException(404,
-                    "这张计划一次产出多个成品, 它钉住的配方版本现在取不到, 无法生成物料需求单")
+                    "这张计划一次产出多个成品, 它钉住的配方版本现在取不到, 无法生成领料单")
                     .withCode("PLAN_PINNED_BOM_UNRESOLVED")
                     .withHint("请在「生产管理 → BOM成本管理」把这组产出的配方重新激活后再新建计划; "
                             + "这张计划挂在入口原料上, 给原料单独配 BOM 解决不了")
                     .withHintTarget("productionPlanId")
                     .withSeverity("warning");
         }
-        return new BusinessException(404, "产品 BOM 未配置, 无法生成物料需求单: productTypeId=" + plan.getProductTypeId())
+        return new BusinessException(404, "产品 BOM 未配置, 无法生成领料单: productTypeId=" + plan.getProductTypeId())
                 .withHint("请前往「生产管理 → BOM成本管理」配置产品 BOM");
     }
 
     @Override
     @Transactional
-    public FactoryMaterialRequisition generateFromPlan(String factoryId, String productionPlanId, Long requestedBy) {
+    public FactoryMaterialRequisition generateFromPlan(String factoryId, String productionPlanId, Long requestedBy,
+                                                        BigDecimal plannedRawInputKg) {
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "status", "PENDING",
             "planId", productionPlanId != null ? productionPlanId : ""));
@@ -326,7 +327,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             mr.getItems().add(item);
         }
 
-        appendSeasoningItems(factoryId, bomItems, mr);
+        appendSeasoningItems(factoryId, bomItems, mr, plannedRawInputKg);
 
         FactoryMaterialRequisition saved = repository.save(mr);
         log.info("✅ 生成物料需求单: {} factory={} plan={} items={}",
@@ -354,15 +355,27 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      *
      * <p>普遍性: F006 有 21 条调料行、LIUSHANMEN 15 条，不是个例。
      *
-     * <h3>用量为什么留空</h3>
-     * 调料按「每 kg <b>投入</b>」计量，而领料单只知道<b>计划产出</b>（80 盒）；
-     * 这个产品的 BOM 原料行又是 workflow 驱动（无标准用量），推不出投入 kg。
-     * ⇒ 与本方法对原料/辅料的既有口径一致：<b>留空而不是拦单</b>，
-     * 把每 kg 用量写进备注让仓管有据可依。防短料的闸在 {@code transferToFactory}（留空的行
-     * 必须录了实际领用量才准调拨），不在这个参考数字上。
+     * <h3>🔴 2026-08-18 的「修复」从未在生产环境真正生效过（2026-09-01 订正此文档）</h3>
+     * 那次改动的行内注释曾写「投入 kg 是算得出来的 —— 见 {@link #plannedRawInputKg} 的说明」，
+     * 依据是汇总本单 RAW 明细行的 {@code requiredQty}。<b>这句话不成立</b>：BOM 编辑器对
+     * RAW/AUXILIARY 强制 {@code standardQuantity=null}（产品口径：原料/辅料在 BOM 里只登记
+     * 配方资格，见上面主循环 requiredQty 那段注释），于是 RAW 行的 {@code requiredQty} 恒为
+     * {@code null} ⇒ {@link #plannedRawInputKg} 恒返回 {@code null} ⇒ 调料需求量在生产环境
+     * 从来没有算出来过，一直是「按实际领用」。2026-09-01 LIUSHANMEN 实测
+     * {@code MR20260901-0001}（熟肉饼）：3 行原料 + 7 行辅料全部「按实际领用」，唯一算出来的
+     * 是 1 行包材（走的是主循环那条口径，不经过这里）。删承诺要连描述一起删——这段文档就是
+     * 那次删除。
+     *
+     * <h3>真正的修法：本单投入量是人当场填的，不是能反推的（owner 2026-09-01 拍板）</h3>
+     * 早上定产量 → 人据此决定「这批领多少原料」→ 这个数字作为 {@code generateFromPlan} 的
+     * {@code plannedRawInputKg} 参数，由前端「按生产计划生成领料单」弹窗人工填入（可选，kg），
+     * 随请求一路传到这里。有了它，调料需求量才真正按「每 kg 投入」配比展开；不填 = 沿用旧行为，
+     * 留空「按实际领用」，⛔ 不猜、不编 0。{@link #plannedRawInputKg(FactoryMaterialRequisition)}
+     * 只作兜底——在当前 BOM 编辑器强制 RAW.standardQuantity=null 的产品口径下几乎总是返回
+     * null，保留只是为了不破坏万一存量 BOM 行确实带标准用量的旧数据。
      */
     private void appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
-                                      FactoryMaterialRequisition mr) {
+                                      FactoryMaterialRequisition mr, BigDecimal userPlannedRawInputKg) {
         if (bomSeasoningItemRepository == null || bomItems == null || bomItems.isEmpty()) {
             return;
         }
@@ -386,9 +399,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 .filter(java.util.Objects::nonNull)
                 .collect(java.util.stream.Collectors.toSet());
         // 调料用量是 g / kg【投入原料】, 所以先要有「本单计划投多少 kg 原料」。
-        // ⛔ 不重新从 BOM 算一遍 —— 上面那个循环已经把每行的 requiredQty 连同单位换算做完了,
-        //    直接复用它, 否则同一个数会有两份实现, 迟早漂 (本仓形态 D)。
-        BigDecimal plannedRawInputKg = plannedRawInputKg(mr);
+        // 权威口径: 调用方 (generateFromPlan) 传入的 userPlannedRawInputKg —— 人在「按计划生成」
+        // 弹窗里填的当场决定, 不是能反推的主数据 (owner 2026-09-01 拍板, 见上方类注释)。
+        // 缺省 (null/非正数) 才退回按 RAW 明细行求和的兜底 plannedRawInputKg(mr) —— 在当前
+        // BOM 编辑器强制 RAW.standardQuantity=null 的产品口径下, 兜底几乎总是返回 null。
+        BigDecimal effectiveRawInputKg = (userPlannedRawInputKg != null && userPlannedRawInputKg.signum() > 0)
+                ? userPlannedRawInputKg
+                : plannedRawInputKg(mr);
         int added = 0;
         for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasonings) {
             String mtId = s.getMaterialTypeId();
@@ -403,10 +420,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
             String stockUnit = resolveMaterialStockUnit(factoryId, mtId);
             item.setUnit(stockUnit != null ? stockUnit : "kg");
-            // 🔴 2026-08-18: 需求量原来一律留空("推不出投入 kg"), 于是拣货员只能猜。
-            //    实测: 80kg 投料 × 10g/kg 正确答案是 0.8kg, 操作员填的是 1。
-            //    投入 kg 是算得出来的 —— 见 plannedRawInputKg 的说明。
-            item.setRequiredQty(seasoningRequiredQty(s, plannedRawInputKg, item.getUnit()));
+            // 🔴 2026-08-18 曾以为这里能自动算出来("投入 kg 是算得出来的"), 但那个前提
+            //    (RAW 行有 requiredQty) 在本产品口径下不成立, 从未在生产环境真正生效过 ——
+            //    一直是「按实际领用」, 见上方类注释。2026-09-01: 改吃调用方传入的人工填报值
+            //    (effectiveRawInputKg)。真实代价: 80kg 投料 × 10g/kg 正确答案是 0.8kg,
+            //    没有这个数字时操作员只能凭经验估, 实测填成了 1。
+            item.setRequiredQty(seasoningRequiredQty(s, effectiveRawInputKg, item.getUnit()));
             // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
             //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
             mr.getItems().add(item);
@@ -419,7 +438,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     /**
-     * 本单计划投入的原料质量 (kg) —— 调料用量的分母。
+     * 兜底: 从<b>已经算好的</b> RAW 明细行求和出投入原料质量 (kg)。
+     *
+     * <p>⚠️ 权威口径是 {@code generateFromPlan} 的 {@code plannedRawInputKg} 参数
+     * (人工填报, 见 {@link #appendSeasoningItems} 类注释), <b>不是这个方法</b>。这里只在
+     * 参数缺省时兜底 —— 而在当前 BOM 编辑器强制 RAW/AUXILIARY {@code standardQuantity=null}
+     * 的产品口径下, RAW 行 {@code requiredQty} 恒为 {@code null}, 本方法因此几乎总是返回
+     * {@code null} (2026-08-18 那次曾以为这条路能自动算出投入 kg, 从未在生产环境真正生效过)。
+     * 保留是为了不破坏万一存量 BOM 行确实带标准用量的旧数据, ⛔ 不是当前依赖的路径。
      *
      * <p>直接汇总<b>已经算好的</b> RAW 明细行（上面那个循环已做过单位换算），
      * ⛔ 不从 BOM 再算一遍：同一个数两份实现迟早漂（本仓形态 D）。
@@ -545,8 +571,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @Transactional(readOnly = true)
     public FactoryMaterialRequisition getById(String factoryId, String id) {
         FactoryMaterialRequisition mr = repository.findByIdAndFactoryIdAndDeletedAtIsNull(id, factoryId)
-                .orElseThrow(() -> new BusinessException(404, "物料需求单不存在: " + id)
-                        .withHint("请刷新物料需求单列表后重新选择").withHintTarget("id"));
+                .orElseThrow(() -> new BusinessException(404, "领料单不存在: " + id)
+                        .withHint("请刷新领料单列表后重新选择").withHintTarget("id"));
         // 触发懒加载
         mr.getItems().size();
         return mr;
@@ -674,7 +700,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 .findByIdAndFactoryId(mr.getProductionPlanId(), factoryId)
                 .orElseThrow(() -> new BusinessException(409, "领料调拨失败: 关联生产计划不存在或不属于当前工厂")
                         .withCode("PRODUCTION_REQUISITION_PLAN_NOT_FOUND")
-                        .withHint("请刷新物料需求单并核对关联生产计划")
+                        .withHint("请刷新领料单并核对关联生产计划")
                         .withHintTarget(mr.getProductionPlanId())
                         .withSeverity("BLOCKING"));
 
@@ -1248,7 +1274,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         FactoryMaterialRequisition mr = getById(factoryId, id);
         if (mr.getStatus() != Status.ISSUED && mr.getStatus() != Status.IN_USE) {
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许关单")
-                    .withHint("请刷新物料需求单列表查看最新状态");
+                    .withHint("请刷新领料单列表查看最新状态");
         }
 
         // 🔴🔒🔒 2026-07-04 关单-前-小结 防呆 (幻库存 + 永久卡死 修复, F006 live 复现):
@@ -1365,7 +1391,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         FactoryMaterialRequisition mr = getById(factoryId, id);
         if (mr.getStatus() == Status.CLOSED || mr.getStatus() == Status.CANCELLED) {
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许取消")
-                    .withHint("请刷新物料需求单列表查看最新状态");
+                    .withHint("请刷新领料单列表查看最新状态");
         }
         mr.setStatus(Status.CANCELLED);
         mr.setRemarks((mr.getRemarks() == null ? "" : mr.getRemarks() + " | ") + "取消原因: " + reason);
@@ -1745,7 +1771,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         int dash = maxNo.lastIndexOf('-');
         String tail = dash >= 0 && dash + 1 < maxNo.length() ? maxNo.substring(dash + 1) : null;
         if (tail == null || tail.isBlank() || !tail.chars().allMatch(Character::isDigit)) {
-            throw new BusinessException(500, "物料需求单号规则异常, 无法生成新单号: " + maxNo)
+            throw new BusinessException(500, "领料单号规则异常, 无法生成新单号: " + maxNo)
                     .withHint("请联系管理员核对该工厂当天的单号")
                     .withHintTarget("requisition_no");
         }
@@ -1755,7 +1781,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private void assertStatus(FactoryMaterialRequisition mr, Status expected) {
         if (mr.getStatus() != expected) {
             throw new BusinessException(409, "状态不匹配: 需要 " + expected + ", 当前 " + mr.getStatus())
-                    .withHint("请刷新物料需求单列表查看最新状态");
+                    .withHint("请刷新领料单列表查看最新状态");
         }
     }
 }

@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -38,8 +40,35 @@ public class FactoryMaterialRequisitionController {
             @RequestBody Map<String, Object> body,
             @RequestAttribute(value = "userId", required = false) Long userId) {
         String planId = (String) body.get("productionPlanId");
-        FactoryMaterialRequisition mr = service.generateFromPlan(factoryId, planId, userId);
+        BigDecimal plannedRawInputKg = parsePlannedRawInputKg(body.get("plannedRawInputKg"));
+        FactoryMaterialRequisition mr = service.generateFromPlan(factoryId, planId, userId, plannedRawInputKg);
         return ResponseEntity.ok(Map.of("success", true, "data", mr, "message", "material requisition generated"));
+    }
+
+    /**
+     * 「本单计划投入原料量」(kg) —— 可选。留空/未传 = 沿用旧行为 (辅料/包材需求量留空
+     * 「按实际领用」)。传了但解析不出数字则当场拒绝, 而不是静默丢弃当 null —— 用户以为
+     * 填了会算出数量, 静默忽略只会让人以为系统坏了。
+     */
+    private BigDecimal parsePlannedRawInputKg(Object raw) {
+        if (raw == null || (raw instanceof String s && s.isBlank())) {
+            return null;
+        }
+        try {
+            BigDecimal parsed = raw instanceof Number n ? new BigDecimal(n.toString()) : new BigDecimal(raw.toString());
+            if (parsed.signum() <= 0) {
+                throw new BusinessException(400, "计划投入原料量必须大于 0")
+                        .withCode("REQUISITION_PLANNED_RAW_INPUT_INVALID")
+                        .withHint("留空则按旧行为生成 (辅料/包材需求量留空「按实际领用」)")
+                        .withHintTarget("plannedRawInputKg");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "计划投入原料量格式不正确: " + raw)
+                    .withCode("REQUISITION_PLANNED_RAW_INPUT_INVALID")
+                    .withHint("请输入数字 (单位 kg)，或留空按旧行为生成")
+                    .withHintTarget("plannedRawInputKg");
+        }
     }
 
     @GetMapping

@@ -78,7 +78,7 @@ public class MaterialRequisitionQueryPendingTool extends AbstractBusinessTool {
         Page<FactoryMaterialRequisition> page = service.list(factoryId, status,
                 PageRequest.of(0, size, Sort.by(Sort.Direction.DESC, "createdAt")));
         return buildSimpleResult(
-                "找到 " + page.getTotalElements() + " 条 " + status + " 物料需求单",
+                "找到 " + page.getTotalElements() + " 条 " + status + " 领料单",
                 Map.of("status", status, "total", page.getTotalElements(), "list", page.getContent()));
     }
 

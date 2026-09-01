@@ -75,8 +75,8 @@ public class FmrExpiryScanner {
             notificationService.notifyRole(
                     e.getKey(),
                     "WORKSHOP_SUPERVISOR",
-                    "[鲜棉仓清仓] 跨天未关单物料需求单",
-                    String.format("发现 %d 条跨天未关单物料需求单, 请检查是否需要手动 close 或追加退料流水.",
+                    "[鲜棉仓清仓] 跨天未关单领料单",
+                    String.format("发现 %d 条跨天未关单领料单, 请检查是否需要手动 close 或追加退料流水.",
                             e.getValue())
             );
         }

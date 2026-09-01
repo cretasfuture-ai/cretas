@@ -195,7 +195,7 @@ const rawMenuConfig: MenuItem[] = [
         ],
       },
       { path: '/production/reversals', title: '撤回审批', icon: '', module: 'production' },
-      { path: '/production/material-requisitions', title: '物料需求单', icon: '', module: 'production' },
+      { path: '/production/material-requisitions', title: '领料单', icon: '', module: 'production' },
       { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
       // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/*), module 归 'production' 而非 'system' —
       // 否则会被 demo 策展 DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。

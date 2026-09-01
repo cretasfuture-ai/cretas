@@ -324,7 +324,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'material-requisitions',
             name: 'FactoryMaterialRequisitions',
             component: () => import('@/views/factory/material-requisitions/list.vue'),
-            meta: { requiresAuth: true, title: '物料需求单', module: 'production' }
+            meta: { requiresAuth: true, title: '领料单', module: 'production' }
           },
           {
             path: 'material-returns',

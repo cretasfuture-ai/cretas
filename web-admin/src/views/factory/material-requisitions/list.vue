@@ -71,7 +71,13 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 const statusFilter = ref('');
 
 const createDialogVisible = ref(false);
-const createForm = ref({ productionPlanId: '' });
+// plannedRawInputKg: 可选。留空 = 沿用旧行为(辅料/包材需求量留空「按实际领用」)。
+// 早上定产量 → 人据此决定这批领多少原料 → 这里就是那个数字的落点(owner 2026-09-01 拍板),
+// 不是能反推的主数据, ⛔ 不预填、不猜。
+const createForm = ref<{ productionPlanId: string; plannedRawInputKg: number | null }>({
+  productionPlanId: '',
+  plannedRawInputKg: null,
+});
 const planOptions = ref<PlanOption[]>([]);
 const planOptionsLoading = ref(false);
 
@@ -263,7 +269,7 @@ async function loadData() {
       });
     }
   } catch (e) {
-    handleCatchError(e, '加载物料需求单失败');
+    handleCatchError(e, '加载领料单失败');
   } finally {
     loading.value = false;
   }
@@ -280,7 +286,7 @@ function handlePageChange(page: number) {
 }
 
 function openCreateDialog() {
-  createForm.value = { productionPlanId: '' };
+  createForm.value = { productionPlanId: '', plannedRawInputKg: null };
   createDialogVisible.value = true;
   void loadPlanOptions();
 }
@@ -291,12 +297,21 @@ async function handleCreate() {
     ElMessage.warning('请选择生产计划');
     return;
   }
+  if (createForm.value.plannedRawInputKg !== null && createForm.value.plannedRawInputKg <= 0) {
+    ElMessage.warning('计划投入原料量必须大于 0，留空则按旧行为生成');
+    return;
+  }
   submitting.value = true;
   try {
-    const res = await post(`/${factoryId.value}/material-requisitions/generate`, createForm.value);
+    const payload = {
+      productionPlanId: createForm.value.productionPlanId,
+      // 留空不传字段, 而不是传 null —— 与后端「未传 = 沿用旧行为」的判定对齐 (Map.get 缺键 vs 传 null 语义一致, 但显式不传更省一层歧义)。
+      ...(createForm.value.plannedRawInputKg !== null ? { plannedRawInputKg: createForm.value.plannedRawInputKg } : {}),
+    };
+    const res = await post(`/${factoryId.value}/material-requisitions/generate`, payload);
     if (res.success) {
       createDialogVisible.value = false;
-      ElMessage.success('物料需求单已生成');
+      ElMessage.success('领料单已生成');
       loadData();
     }
   } finally {
@@ -323,7 +338,7 @@ async function openDetail(row: Requisition) {
       }
     }
   } catch (e) {
-    handleCatchError(e, '加载物料需求单详情失败');
+    handleCatchError(e, '加载领料单详情失败');
   }
 }
 
@@ -588,7 +603,7 @@ async function submitCancel() {
   <div class="page-container">
     <div class="page-header">
       <div>
-        <h2>物料需求单</h2>
+        <h2>领料单</h2>
         <span class="page-subtitle">领料、调拨、签收、关单退料</span>
       </div>
       <div class="header-actions">
@@ -654,7 +669,7 @@ async function submitCancel() {
       </div>
     </el-card>
 
-    <el-dialog v-model="createDialogVisible" title="按生产计划生成物料需求单" width="560px" destroy-on-close>
+    <el-dialog v-model="createDialogVisible" title="按生产计划生成领料单" width="560px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item label="生产计划" required>
           <el-select
@@ -672,8 +687,24 @@ async function submitCancel() {
             />
           </el-select>
           <div v-if="!planOptionsLoading && planOptions.length === 0" style="font-size: 12px; color: #f56c6c; margin-top: 6px">
-            暂无待生成物料需求单的生产计划(待执行/进行中)，请先
+            暂无待生成领料单的生产计划(待执行/进行中)，请先
             <el-button type="primary" link size="small" @click="createDialogVisible = false; router.push('/production/plans')">去创建生产计划</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="计划投入原料量">
+          <el-input-number
+            v-model="createForm.plannedRawInputKg"
+            :min="0.001"
+            :precision="3"
+            :step="1"
+            controls-position="right"
+            placeholder="选填，单位 kg"
+            style="width: 220px"
+          />
+          <span style="margin-left: 8px; font-size: 12px; color: #909399">kg，选填</span>
+          <div style="font-size: 12px; color: #909399; margin-top: 6px">
+            这批计划实际领多少原料，由你现场决定；填了才能按配方比例算出辅料/包材需求量，
+            留空则辅料/包材需求量显示「按实际领用」。
           </div>
         </el-form-item>
       </el-form>
@@ -683,7 +714,7 @@ async function submitCancel() {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="detailDialogVisible" :title="`物料需求单 ${detailData?.requisitionNo || ''}`" width="900px" destroy-on-close>
+    <el-dialog v-model="detailDialogVisible" :title="`领料单 ${detailData?.requisitionNo || ''}`" width="900px" destroy-on-close>
       <template v-if="detailData">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="单号">{{ detailData.requisitionNo }}</el-descriptions-item>
@@ -790,7 +821,7 @@ async function submitCancel() {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="cancelDialogVisible" :title="`取消物料需求单 ${cancelTarget?.requisitionNo || ''}`" width="480px" destroy-on-close>
+    <el-dialog v-model="cancelDialogVisible" :title="`取消领料单 ${cancelTarget?.requisitionNo || ''}`" width="480px" destroy-on-close>
       <el-alert
         title="取消后该需求单不可恢复；已备料/已调拨的物料请另行走退料流程。"
         type="warning"

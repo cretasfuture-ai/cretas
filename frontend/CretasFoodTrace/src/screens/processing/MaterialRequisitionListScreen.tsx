@@ -61,7 +61,7 @@ export function MaterialRequisitionListScreen(): React.JSX.Element {
       setList(res.data?.content ?? []);
     } catch (err) {
       const e = err as { response?: { data?: { message?: string } } };
-      setLoadError(e.response?.data?.message ?? '加载物料需求单失败，请检查网络后重试');
+      setLoadError(e.response?.data?.message ?? '加载领料单失败，请检查网络后重试');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -79,7 +79,7 @@ export function MaterialRequisitionListScreen(): React.JSX.Element {
       <TouchableRipple onPress={() => navigation.goBack()} style={styles.backBtn} borderless testID="material-req-list-back">
         <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
       </TouchableRipple>
-      <Text style={styles.headerTitle}>物料需求单</Text>
+      <Text style={styles.headerTitle}>领料单</Text>
       <View style={{ width: 44 }} />
     </View>
   );
@@ -102,7 +102,7 @@ export function MaterialRequisitionListScreen(): React.JSX.Element {
         {Header}
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={PRIMARY} />
-          <Text style={styles.loadingText}>加载物料需求单...</Text>
+          <Text style={styles.loadingText}>加载领料单...</Text>
         </View>
       </SafeAreaView>
     );
@@ -136,7 +136,7 @@ export function MaterialRequisitionListScreen(): React.JSX.Element {
         ListEmptyComponent={
           <View style={styles.centered}>
             <MaterialCommunityIcons name="clipboard-list-outline" size={64} color="#ccc" />
-            <Text style={styles.emptyText}>暂无物料需求单</Text>
+            <Text style={styles.emptyText}>暂无领料单</Text>
             <Text style={styles.emptySubText}>生产计划生成需求单后，会显示在这里</Text>
           </View>
         }
