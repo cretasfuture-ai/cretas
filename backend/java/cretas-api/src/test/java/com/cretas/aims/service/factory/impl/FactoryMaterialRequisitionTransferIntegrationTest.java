@@ -13,9 +13,11 @@ import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.production.ProductionMaterialReturn;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
@@ -30,6 +32,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -83,6 +86,8 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     private MaterialConsumptionRepository materialConsumptionRepository;
     @Mock
     private ProductionMaterialReturnRepository productionMaterialReturnRepository;
+    @Mock
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     @InjectMocks
     private FactoryMaterialRequisitionServiceImpl service;
@@ -110,6 +115,10 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         });
         lenient().when(materialConsumptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(productionMaterialReturnRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // 注意: @InjectMocks 只做构造器注入（@RequiredArgsConstructor 的 final 字段），
+        // 不会再做字段注入 —— rawMaterialTypeRepository 是 @Autowired(required=false) 非-final
+        // 字段，必须手动回填，否则 @Mock 定义了也不会被接上。
+        ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
     }
 
     // ==================== transferToFactory: physical move ====================
@@ -209,8 +218,69 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     }
 
     @Test
+    @DisplayName("🔒 阳性对照 (真实产品入口): 来料加工计划下辅料/包材领料改用工厂自有库存, 调拨成功")
+    void transferToFactory_tollProcessingPlanUsesCompanyStockForAuxiliaryAndPackaging() {
+        // MAT-001=辅料(冰水), MAT-002=包材(L1纸箱) —— 与 LIUSHANMEN PLAN-1788280683352-34F8CD82 实例同形。
+        RawMaterialType auxiliary = new RawMaterialType();
+        auxiliary.setId("MAT-001");
+        auxiliary.setFactoryId(FACTORY_ID);
+        auxiliary.setCategory("辅料"); // setCategory 会连带算出 mainCategory=辅料, 与生产回填口径一致
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("MAT-001", FACTORY_ID))
+                .thenReturn(Optional.of(auxiliary));
+        RawMaterialType packaging = new RawMaterialType();
+        packaging.setId("MAT-002");
+        packaging.setFactoryId(FACTORY_ID);
+        packaging.setCategory("包材");
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("MAT-002", FACTORY_ID))
+                .thenReturn(Optional.of(packaging));
+
+        // 源批次是工厂自有库存 (COMPANY_OWNED, batch() 默认值) —— 阳性对照的关键: 不伪装成客供。
+        MaterialBatch companySource1 = batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50");
+        MaterialBatch companySource2 = batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00");
+        batchStore.put(companySource1.getId(), companySource1);
+        batchStore.put(companySource2.getId(), companySource2);
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        mr.getItems().forEach(item -> item.setBatchNumbers(new ArrayList<>())); // 触发自动分批, 走 findEligibleSourceBatches
+        ProductionPlan plan = customerInventoryPlan("CUSTOMER-1"); // 来料加工: 客户供主料, 计划仍是 CUSTOMER_SUPPLIED
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID))
+                .thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY_ID, "MAT-001", WH_LOGISTICS))
+                .thenReturn(List.of(companySource1));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse(FACTORY_ID, "MAT-002", WH_LOGISTICS))
+                .thenReturn(List.of(companySource2));
+
+        // 修复前: 这里会抛 PRODUCTION_REQUISITION_TRANSFER_INSUFFICIENT_STOCK
+        // ("原料仓可用库存不足以领出 …") —— candidate set 为空, 不是真的库存不足。
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        MaterialBatch workshop1 = findWorkshopBatch("MAT-001");
+        assertNotNull(workshop1, "辅料调拨必须成功产出生产仓批次");
+        assertEquals(InventoryOwnership.COMPANY_OWNED, workshop1.getOwnership(), "工厂自有库存搬仓后仍是工厂自有");
+        assertEquals(WH_WORKSHOP, workshop1.getWarehouseId());
+
+        MaterialBatch workshop2 = findWorkshopBatch("MAT-002");
+        assertNotNull(workshop2, "包材调拨必须成功产出生产仓批次");
+        assertEquals(InventoryOwnership.COMPANY_OWNED, workshop2.getOwnership());
+
+        assertEquals(Status.TRANSFERRED, mr.getStatus());
+    }
+
+    @Test
     @DisplayName("customer inventory production rejects an explicitly supplied batch owned by another customer")
     void transferToFactory_customerInventoryRejectsOtherCustomerBatch() {
+        // 🔒 显式钉死 MAT-001 大类=原料(RAW) —— 证明「辅料/包材可用工厂自有库存」这条放宽
+        // 完全不影响 RAW 的严格路径 (不依赖 rawMaterialTypeRepository 未打桩时的默认 null)。
+        RawMaterialType raw = new RawMaterialType();
+        raw.setId("MAT-001");
+        raw.setFactoryId(FACTORY_ID);
+        raw.setCategory("原料");
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("MAT-001", FACTORY_ID))
+                .thenReturn(Optional.of(raw));
+
         MaterialBatch wrongCustomer = customerBatch(
                 batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"),
                 "CUSTOMER-2", null);
