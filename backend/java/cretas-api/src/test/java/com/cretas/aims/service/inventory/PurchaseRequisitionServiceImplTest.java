@@ -41,6 +41,7 @@ class PurchaseRequisitionServiceImplTest {
 
     @Mock private PurchaseRequisitionRepository repo;
     @Mock private PurchaseService purchaseService;
+    @Mock private com.cretas.aims.repository.UserRepository userRepository;
 
     private PurchaseRequisitionServiceImpl service;
 
@@ -53,7 +54,7 @@ class PurchaseRequisitionServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new PurchaseRequisitionServiceImpl(repo, purchaseService);
+        service = new PurchaseRequisitionServiceImpl(repo, purchaseService, userRepository);
     }
 
     private PurchaseRequisition buildPr(PurchaseRequisitionStatus status, String factoryId) {
@@ -457,5 +458,69 @@ class PurchaseRequisitionServiceImplTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.createRequisition(FACTORY, REQUESTER_ID, req));
         assertEquals(400, ex.getCode());
+    }
+
+    // ============ 缺陷 15: 请购部门恒为空 ============
+    //
+    // 是「没投影」不是「真没值」—— 全仓 requesterDeptId 只有一处写入, 且只从请求体取,
+    // 而没有任何前端表单会送它 ⇒ 永远 null ⇒ 详情页永远显示 "-"。
+    // 部门就挂在请购人账号上(实测 lsm003 = procurement), 所以修法是把它投影过来。
+
+    private void stubSaveEcho() {
+        when(repo.countByFactoryIdAndDate(eq(FACTORY), any())).thenReturn(0L);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private CreatePurchaseRequisitionRequest requestWithDept(String deptId) {
+        Map<String, Object> item = Map.of(
+                "materialTypeId", "MAT-001", "quantity", new BigDecimal("50"), "unit", "kg");
+        return new CreatePurchaseRequisitionRequest(
+                deptId, List.of(item), LocalDate.now().plusDays(7), "缺货", "test");
+    }
+
+    private void stubRequesterDepartment(String department) {
+        com.cretas.aims.entity.User requester = new com.cretas.aims.entity.User();
+        requester.setId(REQUESTER_ID);
+        requester.setDepartment(department);
+        when(userRepository.findById(REQUESTER_ID)).thenReturn(java.util.Optional.of(requester));
+    }
+
+    @Test
+    @DisplayName("缺陷 15: 表单没送部门时, 从请购人账号上把部门投影过来")
+    void requesterDeptProjectedFromRequesterAccount() {
+        stubSaveEcho();
+        stubRequesterDepartment("procurement");
+
+        PurchaseRequisition result = service.createRequisition(
+                FACTORY, REQUESTER_ID, requestWithDept(null));
+
+        assertEquals("procurement", result.getRequesterDeptId(),
+                "请购部门仍然是空 —— 详情页还会显示 '-'");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 请求体显式给了部门就以它为准, ⛔ 不被账号部门覆盖")
+    void explicitDeptWins() {
+        stubSaveEcho();
+
+        PurchaseRequisition result = service.createRequisition(
+                FACTORY, REQUESTER_ID, requestWithDept("DEPT-WH"));
+
+        assertEquals("DEPT-WH", result.getRequesterDeptId());
+        // 显式给了就不该再去查账号 —— 否则是白查一次库。
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("阴性对照: 请购人账号上没有部门时留 null, ⛔ 不编一个默认部门出来")
+    void blankDepartmentStaysNull() {
+        stubSaveEcho();
+        stubRequesterDepartment("   ");
+
+        PurchaseRequisition result = service.createRequisition(
+                FACTORY, REQUESTER_ID, requestWithDept(null));
+
+        assertNull(result.getRequesterDeptId(),
+                "查不到就该留空, 让它显示 '-'; 兜底出一个假部门比空着更糟");
     }
 }

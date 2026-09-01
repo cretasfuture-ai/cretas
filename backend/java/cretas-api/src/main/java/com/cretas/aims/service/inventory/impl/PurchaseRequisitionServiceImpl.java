@@ -8,6 +8,7 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseRequisition;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.PurchaseRequisitionRepository;
 import com.cretas.aims.service.inventory.PurchaseRequisitionService;
 import com.cretas.aims.service.inventory.PurchaseService;
@@ -42,6 +43,7 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
 
     private final PurchaseRequisitionRepository requisitionRepository;
     private final PurchaseService purchaseService;
+    private final UserRepository userRepository;
 
     @Override
     @Transactional
@@ -55,7 +57,7 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         pr.setFactoryId(factoryId);
         pr.setRequisitionNumber(generateRequisitionNumber(factoryId));
         pr.setRequesterId(requesterId);
-        pr.setRequesterDeptId(request.getRequesterDeptId());
+        pr.setRequesterDeptId(resolveRequesterDept(requesterId, request.getRequesterDeptId()));
         pr.setRequestedItems(new ArrayList<>(request.getRequestedItems()));
         pr.setStatus(PurchaseRequisitionStatus.DRAFT);
         pr.setExpectedDate(request.getExpectedDate());
@@ -65,6 +67,39 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         log.info("创建请购单: factoryId={}, requisitionNumber={}, items={}",
                 factoryId, pr.getRequisitionNumber(), pr.getRequestedItems().size());
         return pr;
+    }
+
+    /**
+     * 缺陷 15 — 请购单详情的「请购部门」恒为空。
+     *
+     * <h2>是「没投影」不是「真没值」</h2>
+     *
+     * <p>这个字段此前<b>只</b>从请求体里取, 而<b>没有任何前端表单会送它</b>
+     * (全仓 {@code requesterDeptId} 的写入方只有这一处; web-admin 侧只有详情页在<b>读</b>)。
+     * ⇒ 它永远是 null, 详情页永远显示 {@code -}。
+     * 而部门信息是<b>存在</b>的 —— 就挂在请购人自己的账号上(实测 lsm003 = {@code procurement})。
+     *
+     * <p>所以修法是「把已经存在的值投影过来」, 不是「让用户多填一个字段」:
+     * 请购部门本来就该跟着请购人走, 让人在下单时再选一次部门只会引入不一致。
+     *
+     * <p>⚠️ 存量单据仍然是 null, 本方法只作用于新建。⛔ 刻意不在读取时用请购人的
+     * <b>当前</b>部门回填历史单据 —— 那是另一个语义(下单时的部门 vs 今天的部门),
+     * 把它们混成一个字段, 人事调动之后历史单据的部门就会静默改写。
+     *
+     * @param requesterId 请购人
+     * @param explicitDeptId 请求体里显式给的部门(目前没有调用方会给, 但给了就以它为准)
+     */
+    private String resolveRequesterDept(Long requesterId, String explicitDeptId) {
+        if (explicitDeptId != null && !explicitDeptId.isBlank()) {
+            return explicitDeptId;
+        }
+        if (requesterId == null) {
+            return null;
+        }
+        return userRepository.findById(requesterId)
+                .map(u -> u.getDepartment())
+                .filter(d -> d != null && !d.isBlank())
+                .orElse(null);
     }
 
     @Override
