@@ -31,7 +31,7 @@
               :finished-options="finishedOptions"
               :disabled="!canWrite"
               placeholder="选择或现场创建回料 SKU"
-              @change="(value: string) => draftSkuId = value"
+              @change="onSkuChange"
             />
           </el-form-item>
           <el-form-item label="计量单位">
@@ -57,16 +57,17 @@
             已选 {{ draftTargets.size }} / {{ context.totalCount }}
           </span>
         </h4>
+        <!--
+          🔴 2026-09-01 owner 实测反馈:「这里的说法太复杂了，简单点说不用太多细节的解释，
+          非常明确地表示它的目的是什么就好了，以及怎么去选择就好了」。
+          ⇒ 正文只留两句: **干什么** + **怎么选**。
+          口径的完整推导(分母为什么是主料、为什么不要求合计 100%、扣减还没接)
+          留在 types.ts 的 WorkflowReworkSource 注释里, ⛔ 不再灌进用户界面。
+        -->
         <p class="rework-drawer__scope">
-          比例是<strong>配方值</strong>，分母是这道工序投入的<strong>原料/半成品</strong>：
-          投 100kg 主料、填 8.5%，就是再投 8.5kg 回料。
-          由车间纪律照此执行，实际投多少不必登记。
-          <br />
-          多道工序各算各的，<strong>不要求合计 100%</strong>（每道以自己的主料为分母）。
-          <br />
-          它是给<strong>核算自动扣减</strong>用的：报工时不用为它填一笔，系统也不拦报工，
-          扣减结果在拉数据时看得到。⚠️ 这个自动扣减<strong>现在还没接</strong> ——
-          后端只读画布上的回料标记，还没有人读这个比例。
+          勾上这道工序，就表示这块回料可以投回它；比例按<strong>主料</strong>算——
+          投 100kg 主料填 8.5%，就是再投 8.5kg 回料。
+          <span class="rework-drawer__pending">核算按这个比例自动扣减（尚未接通）</span>
         </p>
         <p v-if="draftTargets.size === 0" class="rework-drawer__hint" data-testid="rework-no-target">
           还没配回投目标。回料是可选项，<strong>不影响保存与发布</strong>；先留空也可以，回头再补。
@@ -174,7 +175,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
+import WorkflowSkuPicker, { CREATE_SKU_SENTINEL, type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import type { ReworkRouteGroup, ReworkTargetContext } from './workflowReworkTargets';
 
 const props = defineProps<{
@@ -191,8 +192,26 @@ const props = defineProps<{
   lockedTargetId: string | null;
 }>();
 
+/**
+ * 🔴 2026-09-01 owner 实测:「点击现场创建半成品 SKU 以后没有任何反应」。
+ *
+ * 真因**不是**抽屉和弹窗的层级冲突 —— 是这里根本没接:
+ * 原来写的是 `@change="(value) => draftSkuId = value"`, 于是选中哨兵值
+ * `__CREATE__` 只是把这个假 id 存进草稿, 既不弹创建框, 也不报错,
+ * 而且**会把一个不存在的 SKU 写进定义**。
+ *
+ * 物料 Cell 和工序 Cell 上的同一个选择器没这个毛病 —— 它们的 change 都走
+ * `selectOutputSku`, 那里有 `__CREATE__` 分支。只有抽屉这一处漏了。
+ * ⇒ 这里把哨兵拦下来交给画布层, 复用它已有的创建流程, ⛔ 不在抽屉里另造一个。
+ */
+function onSkuChange(value: string): void {
+  if (value === CREATE_SKU_SENTINEL) { emit('create-sku'); return; }
+  draftSkuId.value = value;
+}
+
 const emit = defineEmits<{
   'update:visible': [visible: boolean];
+  'create-sku': [];
   /** 悬停目标行 → 临时聚焦；null = 移出恢复。 */
   'hover-target': [processNodeId: string | null];
   /** 点击「定位」→ 锁定/取消锁定聚焦，并把目标平滑移进可视区。 */
@@ -303,6 +322,10 @@ function handleBeforeClose(done: () => void): void {
   margin: 0; color: #1f2d3d; font-size: 14px; font-weight: 700;
 }
 .rework-drawer__total { color: #1b65a8; font-size: 12px; font-weight: 700; }
+.rework-drawer__pending {
+  display: inline-block; margin-left: 4px; padding: 0 6px;
+  border-radius: 4px; background: #fdf6ec; color: #b88230; font-size: 12px;
+}
 .rework-drawer__scope { margin: 0; color: #667085; font-size: 12px; line-height: 1.6; }
 .rework-drawer__warn { margin: 0; color: #b5590a; font-size: 12px; font-weight: 650; }
 

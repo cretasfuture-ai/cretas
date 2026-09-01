@@ -42,6 +42,23 @@
   </div>
 </template>
 
+<!--
+  ⚠️ 这个常量必须放在**非 setup** 的 script 块里: `<script setup>` 不允许运行时 export
+  (`[@vue/compiler-sfc] <script setup> cannot contain ES module exports`)。
+  🔴 而 `vue-tsc -b` 对此是**绿的** —— 它只做类型检查, 不跑 SFC 编译。
+     判「能不能构建」要看 build/vitest, ⛔ tsc 过了不代表过。
+-->
+<script lang="ts">
+/**
+ * 「现场创建半成品 SKU」这条入口的哨兵值。
+ *
+ * ⛔ 不要在别处再写一遍这个字面量: 消费方按**精确相等**认它, 而消费方永远不会
+ * 提到产出方的名字 —— 漂了不会报错, 只会让创建入口变成一个静默存进去的假 id。
+ * (2026-09-01 实测: 回料抽屉就是这么坏的。)
+ */
+export const CREATE_SKU_SENTINEL = '__CREATE__';
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { matchesSearchText } from './pinyinInitials';
@@ -168,7 +185,7 @@ const cascaderOptions = computed<SkuCascaderNode[]>(() => [
     label: '半成品',
     children: [
       { value: '__SEARCH_SEMI__', label: '搜索半成品', isSearch: true, searchKind: 'SEMI' },
-      { value: '__CREATE__', label: '＋ 现场创建半成品 SKU', isCreate: true },
+      { value: CREATE_SKU_SENTINEL, label: '＋ 现场创建半成品 SKU', isCreate: true },
       ...props.semiOptions.filter((option) => matchesOption(option, semiSearch.value)).map(toNode),
     ],
   },

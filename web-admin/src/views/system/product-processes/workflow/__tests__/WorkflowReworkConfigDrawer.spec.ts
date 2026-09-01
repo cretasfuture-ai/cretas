@@ -252,13 +252,15 @@ describe('比例是配方值，不是上限', () => {
     // owner 订正：这个比例不是天花板，是「就按这个百分比投」的 BOM 值。
     // 说成上限会让人以为系统在卡一个边界，而它其实在声明一个配方。
     const text = mountDrawer().text();
-    expect(text).toContain('配方值');
-    // 🔴 2026-09-01 owner 第二次订正: 分母是**主料**(投入的原料/半成品),
-    //    不是工序总投入。两种读法差一个量级, 而它直接进核算。
-    expect(text).toContain('原料/半成品');
-    expect(text).toContain('主料');
-    // 多道工序各以自己的主料为分母 ⇒ ⛔ 不许要求合计 100%
-    expect(text).toContain('不要求合计 100%');
+    // 🔴 2026-09-01 第三次订正(owner:「说法太复杂了，简单点说…非常明确地表示它的目的
+    //    是什么就好了，以及怎么去选择就好了」)。⇒ 判据从「把口径讲全」换成
+    //    「**目的**和**怎么选**这两件事说到了」，⛔ 不再要求正文复述完整推导。
+    expect(text).toContain('主料');            // 分母说清了
+    expect(text).toContain('8.5');             // 给了一个能照着算的例子
+    expect(text).toContain('勾上');            // 说了怎么选
+    // ⛔ 完整推导挪去 types.ts 之后, 正文不该再长成一段说明书
+    expect(text).not.toContain('不要求合计 100%');
+    expect(text).not.toContain('由车间纪律照此执行');
     expect(text).not.toContain('上限');
     expect(text).not.toContain('最多');
     expect(text).not.toContain('不超过');
@@ -271,10 +273,9 @@ describe('比例是配方值，不是上限', () => {
     //    ⇒ 提醒/警告这条线整个作废，措辞不许再出现。
     const text = mountDrawer().text();
     expect(text).toContain('自动扣减');
-    expect(text).toContain('报工时不用');
-    expect(text).toContain('不拦报工');
-    // 🔴 最要紧的一句：目标不能被写成已经在跑的功能
-    expect(text).toContain('现在还没接');
+    // 🔴 最要紧的一句：目标不能被写成已经在跑的功能。
+    //    文案精简之后它缩成了一个角标, ⛔ 但**不许因为要精简就把它删掉**。
+    expect(text).toContain('尚未接通');
     expect(text).not.toContain('已生效');
     // 阴性对照：被 owner 逐个否掉的措辞，一个都不许回来
     for (const forbidden of ['扣款', '提醒', '警告', '弹窗']) {

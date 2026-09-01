@@ -171,10 +171,8 @@
       <p v-if="reworkTargetCount === 0" class="rework-config__hint" data-testid="rework-missing-target">
         还没配回投目标。⛔ 这不拦保存也不拦发布 —— 回料是可选项。
       </p>
-      <p class="rework-config__scope">
-        比例是配方值，按本工序主料的百分比投；多道工序各算各的，不要求合计 100%。
-        给核算自动扣减用，报工不用为它填、也不拦报工 —— 自动扣减现在还没接。
-      </p>
+      <!-- 与抽屉同一条纪律(owner 2026-09-01「说法太复杂了」): 卡片上只留结论, 推导在 types.ts。 -->
+      <p class="rework-config__scope">按主料比例投，核算自动扣减（尚未接通）。</p>
       <el-button
         v-if="canWrite"
         size="small"

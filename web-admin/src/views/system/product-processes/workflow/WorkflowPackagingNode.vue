@@ -10,7 +10,9 @@
     badge="包"
     :owner-width="FUSED_MATERIAL_OWNER_WIDTH"
     :collapsed="!!collapsed"
-    :summary="stripSummary"
+    eyebrow="包材 cell"
+    :title="data.outputName"
+    :summary="subtitleText"
     :full-label="stripFullLabel"
     @toggle="emit('set-collapsed', !collapsed)"
   >

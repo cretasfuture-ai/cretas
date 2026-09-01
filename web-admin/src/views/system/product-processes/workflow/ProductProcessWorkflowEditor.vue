@@ -231,7 +231,10 @@
           id="product-process-workflow"
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
-          :class="['workflow-canvas', { 'is-batch-selecting': interactionMode === 'SELECT' }]"
+          :class="['workflow-canvas', {
+            'is-batch-selecting': interactionMode === 'SELECT',
+            'is-pair-focus': effectiveFocusIds !== null,
+          }]"
           :min-zoom="0.35"
           :max-zoom="1.8"
           :pan-on-drag="interactionMode === 'PAN' ? true : [1, 2]"
@@ -276,10 +279,15 @@
                 ? 'rework'
                 : slotProps.data.isDefective ? 'defective' : 'byproduct'"
               :testid="`special-output-strip-${slotProps.id}`"
-              :badge="slotProps.data.isRework ? '回' : slotProps.data.isDefective ? '不' : '副'"
+              :badge="slotProps.data.isRework
+                ? (reworkPairOf(slotProps.id)?.label ?? '回')
+                : slotProps.data.isDefective ? '不' : '副'"
+              :badge-color="slotProps.data.isRework ? reworkPairOf(slotProps.id)?.color : undefined"
               :owner-width="FUSED_PROCESS_OWNER_WIDTH"
               :owner-offset="fusedBelowOffsetFor(slotProps.id)"
               :collapsed="isFusedCollapsed(slotProps.id)"
+              :eyebrow="specialOutputEyebrow(slotProps.data)"
+              :title="slotProps.data.name || '未命名'"
               :summary="specialOutputSummary(slotProps.id, slotProps.data)"
               :full-label="specialOutputFullLabel(slotProps.id, slotProps.data)"
               @toggle="toggleFusedCollapsed(slotProps.id)"
@@ -338,6 +346,7 @@
 
           <template #node-process="slotProps">
             <WorkflowProcessNode
+              :rework-pairs="reworkPairsOnProcess(slotProps.id)"
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
@@ -401,6 +410,7 @@
       @update:visible="closeReworkDrawer"
       @hover-target="onReworkHoverTarget"
       @toggle-locate="onReworkToggleLocate"
+      @create-sku="onReworkCreateSku"
       @save="saveReworkConfig"
     />
 
@@ -920,6 +930,7 @@ import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
 import WorkflowPackagingNode from './WorkflowPackagingNode.vue';
 import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
+import { CREATE_SKU_SENTINEL } from './WorkflowSkuPicker.vue';
 import WorkflowSpecialOutputChooser from './WorkflowSpecialOutputChooser.vue';
 import WorkflowReworkConfigDrawer from './WorkflowReworkConfigDrawer.vue';
 import {
@@ -939,6 +950,9 @@ import {
   selectedTargetProcessIds,
   sourceProcessOfRework,
   type ReworkTargetContext,
+  assignReworkPairs,
+  reworkPairsForProcess,
+  type ReworkPair,
 } from './workflowReworkTargets';
 import { specialOutputOption, type SpecialOutputKind } from './workflowSpecialOutputs';
 import {
@@ -1719,6 +1733,26 @@ function reconcileFusedPositions(): boolean {
     }
     if (node.draggable !== false) { node.draggable = false; changed = true; }
   }
+  // 🔴 2026-09-01 owner 实测:「这边显示它的链路没有通」。
+  //
+  // 真因是我做融合时的一个物理事实没算到: 附属的位移走 CSS transform, 而
+  // **transform 不改变布局盒**。附属的 node.position 等于 owner 的 position,
+  // 于是 VueFlow 把连到它的边画到 owner 自己身上 —— 实测 material:byp 的布局盒在
+  // y=-89(与 owner 重合), 视觉位置在 y=528, 边画在 y≈8..322, 三个位置互不相干。
+  //
+  // ⛔ 修法不是「把边挪过去」: 已确认原型里附属条**根本不画线**
+  //   (`.node.attached-strip .port { display:none }`) —— 它是无缝贴在 owner 上的
+  //   附属条, 不是画布上另一个需要连线才说得清关系的节点。
+  // ⇒ 隐掉这条边。隐掉之后「贴着」本身就是那个关系的表达。
+  const attachmentIds = new Set(fusedAttachments.value.map((item) => item.id));
+  for (const edge of flowEdges.value) {
+    const shouldHide = attachmentIds.has(edge.target) || attachmentIds.has(edge.source);
+    if (shouldHide && edge.hidden !== true) { edge.hidden = true; changed = true; }
+    // 取消融合(例如撤销掉副产标记)后要能恢复 —— ⛔ 不要只单向隐藏。
+    if (!shouldHide && edge.hidden === true && !isBomOverlayEdge(edge)) {
+      edge.hidden = false; changed = true;
+    }
+  }
   return changed;
 }
 
@@ -1815,13 +1849,55 @@ function applyFocusClasses(): void {
     // ⇒ 外壳整体不接鼠标, 只有窄条自己接。
     if (isFusedAttachmentNode(node.id)) classes.push('wf-fused-attachment');
     if (focus && !focus.has(node.id)) classes.push('wf-focus-dim');
+    // 🔴 已确认原型：被聚焦的那一对不是「只是没被压暗」，而是**主动亮起**
+    //   (同色描边环 + 抬到最上层)。少了这一步，观感就是「整张图变灰」而不是
+    //   「这两个是一对」—— owner 反馈的正是这个差别。
+    if (focus && focus.has(node.id)) classes.push('wf-pair-active');
     const next = classes.length > 0 ? classes.join(' ') : undefined;
     if (node.class !== next) { node.class = next; changed = true; }
+    // 配对色写成 CSS 变量, 描边环、R 角标、左侧竖条共用同一个值(⛔ 不各写一份)。
+    const pairColor = pairColorForNode(node.id);
+    const nextStyle = pairColor ? { '--pair-color': pairColor } : undefined;
+    const currentColor = (node.style as Record<string, string> | undefined)?.['--pair-color'];
+    if (currentColor !== pairColor) { node.style = nextStyle; changed = true; }
   }
   if (changed) flowNodes.value = [...flowNodes.value];
 }
 
+/**
+ * 每块回料的 R 编号与配色。
+ *
+ * 为什么用编号而不是连线：回投是跨工序的远程关系，画成线会让一张多线路的图上
+ * 出现十几条横穿画布的回头线。已确认原型的口径是
+ * 「回料使用同色 R 编号配对，不绘制永久回头线」。
+ */
+const reworkPairs = computed<Map<string, ReworkPair>>(
+  () => assignReworkPairs(flowNodes.value),
+);
+
+/** 这块回料自己的 R 角标；不是回料则为 null。 */
+function reworkPairOf(nodeId: string): ReworkPair | null {
+  return reworkPairs.value.get(nodeId) ?? null;
+}
+
+/** 这道工序上要显示的 R 角标（哪些回料允许回投到它）。 */
+function reworkPairsOnProcess(processId: string): ReworkPair[] {
+  return reworkPairsForProcess(flowNodes.value, processId);
+}
+
+/**
+ * 一个节点在高亮时该用哪个配对色。
+ * 回料自己用自己的；目标工序用「打在它身上的第一个」——多块回料共用一道工序时，
+ * ⛔ 不混色（混出来的颜色不属于任何一块回料，等于新造了一个没人认识的编号）。
+ */
+function pairColorForNode(nodeId: string): string | undefined {
+  const own = reworkPairs.value.get(nodeId);
+  if (own) return own.color;
+  return reworkPairsOnProcess(nodeId)[0]?.color;
+}
+
 watch(effectiveFocusIds, () => { applyFocusClasses(); });
+watch(reworkPairs, () => { applyFocusClasses(); });
 
 function collapsedAuxStorageKey(): string | null {
   const identity = currentLoadedIdentity();
@@ -4637,16 +4713,27 @@ function toggleFusedCollapsed(collapseKey: string, next?: boolean): void {
   void withPreservedViewport(() => { setFusedCollapsed(collapseKey, target); });
 }
 
-/** 特殊产出窄条的单行摘要: 类型 · 名称 · 配置状态。 */
+/** 窄条第一行的类型小标签。措辞照已确认原型: 「副产 Cell / 不良品结果 / 回料产出 Cell」。 */
+function specialOutputEyebrow(data: MaterialNodeData): string {
+  if (data.isRework) return '回料产出 Cell';
+  if (data.isDefective) return '不良品 Cell';
+  return '副产 Cell';
+}
+
+/**
+ * 窄条第三行的灰色细节 —— ⛔ 不再重复类型和名称。
+ * 那两段现在有自己的行(eyebrow / title), 把它们再拼进这一行就是同一个信息三份,
+ * 而它正是 owner 说「特别挤」的直接原因。
+ */
 function specialOutputSummary(nodeId: string, data: MaterialNodeData): string {
-  const label = data.isRework ? '回料' : data.isDefective ? '不良品' : '副产';
-  const name = String(data.name || '未命名');
+  const sku = String(data.skuCode || data.skuId || '');
   if (data.isRework) {
     const count = reworkTargetCountFor(nodeId);
-    return `${label} · ${name} · ${count === 0 ? '未配置回投目标' : `可回投 ${count} 道工序`}`;
+    const target = count === 0 ? '未配置回投目标' : `可回投 ${count} 道工序`;
+    return sku ? `${sku} · ${target}` : target;
   }
-  // 不良品与普通产出一样按 SKU 绑定 —— 它没有额外配置项, 所以摘要就到绑定状态为止。
-  return `${label} · ${name} · ${data.skuId ? '已绑定物料' : '未选择物料'}`;
+  // 不良品与普通产出一样按 SKU 绑定 —— 它没有额外配置项, 所以细节行就到绑定状态为止。
+  return sku ? `${sku} · 已绑定物料` : '未选择物料';
 }
 
 function specialOutputFullLabel(nodeId: string, data: MaterialNodeData): string {
@@ -4718,6 +4805,20 @@ const reworkDrawerContext = computed<ReworkTargetContext>(() => (reworkDrawerNod
     reworkNodeId: '', sourceProcessNodeId: null, sourceRouteProductTypeIds: [],
     groups: [], selectedCount: 0, totalCount: 0,
   }));
+
+/**
+ * 抽屉里点「＋ 现场创建半成品 SKU」。
+ *
+ * ⛔ 不在抽屉里另造一套创建流程 —— 复用画布已有的那条(`selectOutputSku` 的
+ *    `CREATE_SKU_SENTINEL` 分支)。回料 Cell 本来就是它 owner 工序的一个产出端口,
+ *    所以按 node id 找回那个端口就能进同一条路。
+ * 创建成功后 SKU 写回节点 data, 抽屉的 draftSkuId 由 visible/nodeId 的 watch 带回来。
+ */
+async function onReworkCreateSku(): Promise<void> {
+  const nodeId = reworkDrawerNodeId.value;
+  if (!nodeId) return;
+  await selectMaterialSku(nodeId, CREATE_SKU_SENTINEL);
+}
 
 /** 已允许回投的目标工序数 —— 展示用, 真值在各工序的 reworkPolicy 上。 */
 function reworkTargetCountFor(nodeId: string): number {
@@ -4956,7 +5057,7 @@ async function ensurePrimaryOutputKind(
 
 async function selectOutputSku(processId: string, portId: string, skuId: string): Promise<void> {
   if (!canEdit.value) return;
-  if (skuId === '__CREATE__') {
+  if (skuId === CREATE_SKU_SENTINEL) {
     const process = flowNodes.value.find((node) => node.id === processId);
     const data = process?.data as ProcessNodeData | undefined;
     const port = data?.ports.find((candidate) => candidate.id === portId);
@@ -6288,10 +6389,33 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   §9 聚焦淡化。⛔ 只改 opacity —— 不从 DOM/拓扑里删除, 不改布局。
   `:deep` 是必须的: 类挂在 vue-flow 自己渲染的 .vue-flow__node 外壳上, 不在本组件的模板里。
 */
+/*
+ * 悬停配对信标 —— 数值取自已确认原型 `workflow-rework-prototype/index.html`:
+ *   #canvas.pair-focus .node:not(.pair-active) { opacity:.22; filter:saturate(.38) }
+ *   .node[data-pair].pair-active { box-shadow: 0 0 0 5px color-mix(--pair-color 32%) … }
+ *
+ * 🔴 owner 实测反馈「整体的样式，它的感受完全是不一样的」——
+ * 差别不在压暗那一半(我原来有), 在**亮起**那一半(我原来没有):
+ * 只压暗 = 整张图变灰; 压暗 + 同色描边环 + 抬层 = 「这两个是一对」。
+ */
 .workflow-canvas :deep(.vue-flow__node.wf-focus-dim) {
-  opacity: 0.18;
-  transition: opacity 140ms ease;
+  opacity: 0.22;
+  filter: saturate(0.38);
+  transition: opacity 140ms ease, filter 140ms ease;
   pointer-events: none;
+}
+.workflow-canvas :deep(.vue-flow__node.wf-pair-active) {
+  z-index: 10;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--pair-color, #409eff) 32%, transparent),
+    0 12px 30px rgba(27, 101, 168, 0.2);
+  transition: box-shadow 140ms ease;
+}
+/* 关系压暗时连线也让路 —— 否则线仍是满不透明, 把「只有这两个亮着」冲掉。 */
+.workflow-canvas.is-pair-focus :deep(.vue-flow__edge) { opacity: 0.1; }
+@media (prefers-reduced-motion: reduce) {
+  .workflow-canvas :deep(.vue-flow__node.wf-pair-active) { transition: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .workflow-canvas :deep(.vue-flow__node.wf-focus-dim) { transition: none; }

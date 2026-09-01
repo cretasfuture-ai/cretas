@@ -171,6 +171,24 @@
       <span class="special-output-hint">副产 / 不良品 / 回料产出</span>
     </div>
 
+    <!--
+      🔴 回投关系用**同色 R 编号配对**表达，⛔ 不画回头线（已确认原型 v8：
+      「回料使用同色 R 编号配对，不绘制永久回头线」）。
+      一张多线路的图上，回头线会变成十几条横穿画布的线，谁连谁根本读不出来。
+      这里是配对的**另一半**：回料 Cell 上有 R1，允许它回投的工序上也有 R1。
+    -->
+    <div v-if="reworkPairs.length > 0" class="rework-pair-row nodrag" data-testid="rework-pair-row">
+      <span class="rework-pair-row__label">可接回料</span>
+      <span
+        v-for="pair in reworkPairs"
+        :key="pair.label"
+        class="rework-pair-chip"
+        :style="{ background: pair.color }"
+        :title="`${pair.label} 回料可回投到本工序`"
+        :data-testid="`rework-pair-${pair.label}`"
+      >{{ pair.label }}</span>
+    </div>
+
     <div class="reporting-row nodrag">
       <span>本道是否报工</span>
       <el-switch
@@ -195,6 +213,8 @@ import { workflowDisplayUnit, workflowSkuSpecificationEquation } from './workflo
 import type { ProcessNodeData } from './types';
 
 const props = withDefaults(defineProps<{
+  /** 允许回投到本工序的回料 R 角标（同色配对，见模板里的说明）。 */
+  reworkPairs?: Array<{ label: string; color: string }>;
   data: ProcessNodeData;
   selected?: boolean;
   canWrite: boolean;
@@ -204,7 +224,7 @@ const props = withDefaults(defineProps<{
   finishedOptions: WorkflowSkuPickerOption[];
   allowAddInput?: boolean;
   skuSpecifications?: Record<string, { unit: string; gramsPerUnit: number | null }>;
-}>(), { allowAddInput: true });
+}>(), { allowAddInput: true, reworkPairs: () => [] });
 
 // #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
 // 工序互相之间非法 → 灰化。
@@ -266,6 +286,17 @@ function handleStyle(index: number, count: number): Record<string, string> {
 </script>
 
 <style scoped>
+.rework-pair-row {
+  display: flex; align-items: center; gap: 6px;
+  margin: 6px 0 0; padding: 5px 8px;
+  border-radius: 6px; background: #f4f7fb;
+}
+.rework-pair-row__label { color: #66758a; font-size: 12px; }
+.rework-pair-chip {
+  display: inline-grid; place-items: center; min-width: 24px; height: 20px;
+  padding: 0 6px; border-radius: 5px;
+  color: #fff; font-size: 11px; font-weight: 700; letter-spacing: -0.2px;
+}
 .special-output-dock {
   display: flex; align-items: center; gap: 8px;
   margin-top: 10px; padding-top: 8px; border-top: 1px dashed #dfe6f2;

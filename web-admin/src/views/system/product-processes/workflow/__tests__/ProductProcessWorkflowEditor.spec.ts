@@ -1409,7 +1409,12 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
       vm.focusHoverIds = new Set([proc!.id]);
       await flushPromises();
       expect(vm.flowNodes.some((node) => node.class === 'wf-focus-dim')).toBe(true);
-      expect(vm.flowNodes.find((node) => node.id === proc!.id)?.class).toBeUndefined();
+      // 🔴 2026-09-01: 被聚焦的那个从「什么都不加」换成了**主动亮起**(wf-pair-active)。
+      //    owner 反馈原来只压暗、不亮起, 观感是「整张图变灰」而不是「这两个是一对」。
+      //    ⇒ 判据仍然是「它没被淡化」, 只是不再等价于「class 是 undefined」。
+      const focused = vm.flowNodes.find((node) => node.id === proc!.id)?.class ?? '';
+      expect(focused).not.toContain('wf-focus-dim');
+      expect(focused).toContain('wf-pair-active');
     });
   });
 

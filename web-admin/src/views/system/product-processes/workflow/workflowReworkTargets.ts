@@ -357,3 +357,79 @@ export function reworkNodesWithoutTargets(
     .filter((node) => selectedTargetProcessIds(nodes, node.id).length === 0)
     .map((node) => node.id);
 }
+
+// -- R 编号配对（已确认原型 v8/v11：「回料使用同色 R 编号配对，不绘制永久回头线」）--
+
+/**
+ * 配对色板 —— 取自已确认原型 `workflow-rework-prototype/index.html` 的
+ * `pair:'R1'..'R4'` 那四条数据（`#2878D0` / `#17846F` / `#C56A10` / `#7656C9`）。
+ *
+ * ⛔ 不要按「好看」改这四个值：它们同时用在 R 角标、卡片左侧竖条和悬停时的色环上，
+ * 换一处就会出现「同一块回料两种颜色」。
+ */
+export const REWORK_PAIR_COLORS = ['#2878D0', '#17846F', '#C56A10', '#7656C9'] as const;
+
+export interface ReworkPair {
+  /** 显示用编号：R1、R2 …… */
+  label: string;
+  color: string;
+}
+
+/**
+ * 给画布上每一块回料分配 R 编号与配色。
+ *
+ * 为什么要编号：回投是**跨工序的远程关系**。把它画成连线，一张多线路的图上会出现
+ * 十几条横穿画布的回头线，谁连谁根本读不出来。原型的做法是给每块回料一个 R 编号，
+ * 在它自己和它的目标工序上各打一个同色角标，悬停时两头一起亮 ——
+ * 关系用**配对**表达，不用线。
+ *
+ * ⚠️ 编号按**节点顺序**分配，不是按名字或 id 排序：用户看到的顺序就是画布上的顺序，
+ * 换个排序规则会让同一张图在两次打开之间编号不同。
+ */
+export function assignReworkPairs(
+  nodes: readonly ReworkFlowNodeLike[],
+): Map<string, ReworkPair> {
+  const pairs = new Map<string, ReworkPair>();
+  let index = 0;
+  for (const node of nodes) {
+    if (dataOf<MaterialNodeData>(node).isRework !== true) continue;
+    pairs.set(node.id, {
+      label: `R${index + 1}`,
+      color: REWORK_PAIR_COLORS[index % REWORK_PAIR_COLORS.length],
+    });
+    index += 1;
+  }
+  return pairs;
+}
+
+/**
+ * 一道工序上要显示哪些 R 角标 —— 即「哪些回料允许回投到这道工序」。
+ *
+ * 真值仍然只有一份（各工序 data.reworkPolicy.sources），这里只是把它翻译成角标。
+ */
+export function reworkPairsForProcess(
+  nodes: readonly ReworkFlowNodeLike[],
+  processNodeId: string,
+): ReworkPair[] {
+  const pairs = assignReworkPairs(nodes);
+  const process = nodes.find((node) => node.id === processNodeId);
+  if (!process) return [];
+  const policy = dataOf<ProcessNodeData>(process).reworkPolicy;
+  if (!policy || !Array.isArray(policy.sources)) return [];
+  return policy.sources
+    .map((source) => pairs.get(source.reworkNodeId))
+    .filter((pair): pair is ReworkPair => pair != null);
+}
+
+/**
+ * 悬停一块回料时该一起亮起来的节点集合 = 它自己 + 它的全部目标工序。
+ *
+ * ⛔ 不包含中间路径上的节点：原型压暗的是「与这条关系无关的一切」，
+ * 而路径是推断出来的，不是用户配的关系。
+ */
+export function reworkPairFocusIds(
+  nodes: readonly ReworkFlowNodeLike[],
+  reworkNodeId: string,
+): string[] {
+  return [reworkNodeId, ...selectedTargetProcessIds(nodes, reworkNodeId)];
+}

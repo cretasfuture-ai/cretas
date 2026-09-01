@@ -12,7 +12,9 @@
     badge="辅"
     :owner-width="FUSED_PROCESS_OWNER_WIDTH"
     :collapsed="!!collapsed"
-    :summary="stripSummary"
+    eyebrow="辅料 cell"
+    :title="data.processName"
+    :summary="subtitleText"
     :full-label="stripFullLabel"
     @toggle="emit('set-collapsed', !collapsed)"
   >
@@ -169,6 +171,7 @@ const subtitleText = computed(() => {
 });
 
 /** 窄条一行文案: 类型 · 归属 · 配置状态/数量。过长由 CSS 省略, 全文进 title/aria-label。 */
+/** 完整文案仍然是拼起来的一句 —— 三行被省略时用户靠 tooltip 读全。 */
 const stripSummary = computed(() => `辅料 · ${props.data.processName} · ${subtitleText.value}`);
 const stripFullLabel = computed(() => (
   `${props.collapsed ? '展开' : '收起'}辅料附属卡片：${stripSummary.value}`
@@ -203,7 +206,12 @@ function formatDosage(row: AuxiliaryCellRow): string {
   border-left: 4px solid #d9822b;
   background: transparent;
 }
-.aux-node.is-greyed { border-left-color: #c0c4cc; }
+/*
+ * 🔴 2026-09-01 去掉「未确定状态把左侧竖条变灰」。
+ * owner 实测反馈:「辅料左边有一个灰色的小线, 不知道它是用来干什么的, 然后就很难看」——
+ * 它表达的「状态尚未确定」在卡片正文里已经有一句明确的话说了, 这条灰线是**第二份表达**,
+ * 而且它是唯一一个用颜色编码却没有图例的东西。⛔ 不要再加回来。
+ */
 .aux-heading { display: flex; align-items: flex-start; gap: 8px; }
 .aux-heading > div { min-width: 0; flex: 1; }
 .aux-step-mark {

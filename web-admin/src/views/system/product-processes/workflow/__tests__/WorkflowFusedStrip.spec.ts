@@ -27,7 +27,9 @@ function mountStrip(props: Record<string, unknown> = {}) {
       ownerWidth: 440,
       collapsed: true,
       badge: '辅',
-      summary: '辅料 · 卤制 · 2 种',
+      eyebrow: '辅料 cell',
+      title: '卤制',
+      summary: '2 种 · 每 1kg 投入',
       fullLabel: '展开辅料附属卡片：辅料 · 卤制 · 2 种',
       testid: 'aux-strip',
       ...props,
@@ -36,24 +38,47 @@ function mountStrip(props: Record<string, unknown> = {}) {
   });
 }
 
-describe('§6 收起态是一条约一行高的窄条', () => {
-  it('显示类型标记、单行摘要与展开箭头', () => {
+describe('§6 收起态是原型确认的三行卡片', () => {
+  it('类型标记 / 类型小标签 / 粗体名称 / 灰色细节各占一行', () => {
+    // 🔴 2026-09-01 判据换代（形态 C‴：断言守的是历史，不是需求）。
+    //    旧判据钉的是「一行摘要 + 展开箭头」。owner 实测反馈那个形状
+    //    「文字特别挤」「按钮太小非常不明显」，已确认原型
+    //    (workflow-rework-prototype) 的形状是三行卡片 + 写着字的按钮。
+    //    ⇒ 三段信息各自成行, ⛔ 不许再拼回一行。
     const wrapper = mountStrip();
     expect(wrapper.get('.fused-strip__badge').text()).toBe('辅');
-    expect(wrapper.get('.fused-strip__line').text()).toBe('辅料 · 卤制 · 2 种');
-    expect(wrapper.find('.fused-strip__chevron').exists()).toBe(true);
+    expect(wrapper.get('.fused-strip__eyebrow').text()).toBe('辅料 cell');
+    expect(wrapper.get('.fused-strip__name').text()).toBe('卤制');
+    expect(wrapper.get('.fused-strip__summary').text()).toBe('2 种 · 每 1kg 投入');
     // 收起时展开态内容不渲染
     expect(wrapper.find('.body-content').exists()).toBe(false);
   });
 
-  it('整条可点击展开，箭头方向随状态变', async () => {
+  it('整条可点击展开，按钮上的字随状态变', async () => {
     const wrapper = mountStrip();
-    expect(wrapper.get('.fused-strip__chevron').classes()).not.toContain('is-open');
+    expect(wrapper.get('.fused-strip__toggle').text()).toBe('展开');
     await wrapper.get('[data-testid="aux-strip-toggle"]').trigger('click');
     expect(wrapper.emitted('toggle')).toHaveLength(1);
     const expanded = mountStrip({ collapsed: false });
-    expect(expanded.get('.fused-strip__chevron').classes()).toContain('is-open');
+    expect(expanded.get('.fused-strip__toggle').text()).toBe('收起');
     expect(expanded.find('.body-content').exists()).toBe(true);
+  });
+
+  it('🔴 细节行为空时不渲染那一行 —— ⛔ 不留一条空白占位', () => {
+    // 阴性对照：证明三行是**按内容**渲染的，不是无条件画三行。
+    const wrapper = mountStrip({ summary: '' });
+    expect(wrapper.find('.fused-strip__summary').exists()).toBe(false);
+    expect(wrapper.get('.fused-strip__name').text()).toBe('卤制');
+  });
+
+  it('🔴 展开按钮要有可点面积和字 —— owner 实测反馈原来的 7px 箭头太小', () => {
+    const css = stripComments(read('WorkflowFusedStrip.vue'));
+    const rule = css.slice(css.indexOf('.fused-strip__toggle {'));
+    expect(rule).toMatch(/min-width:\s*(5[0-9]|[6-9][0-9])px/);   // >= 50px
+    expect(rule).toMatch(/height:\s*(2[4-9]|[3-9][0-9])px/);      // >= 24px
+    expect(rule).toContain('border:');                             // 看得出是个按钮
+    // ⛔ 旧的箭头不许留着 —— 留着就是两套展开控件
+    expect(css).not.toContain('fused-strip__chevron');
   });
 
   it('过长文案由 CSS 省略，全文放 tooltip 与 aria-label', () => {
@@ -69,7 +94,8 @@ describe('§6 收起态是一条约一行高的窄条', () => {
     const css = stripComments(read('WorkflowFusedStrip.vue'));
     expect(css).not.toMatch(/\.fused-strip__bar\s*\{[^}]*height:\s*\d+px/);
     expect(css).not.toContain('42px');
-    expect(css).toMatch(/\.fused-strip__bar\s*\{[^}]*line-height/);
+    // 三行各自有 line-height, 高度仍然由内容决定
+    expect(css).toMatch(/\.fused-strip__name\s*\{[^}]*line-height/);
     // 阳性对照: 剥注释之后闸仍然看得见真正的 CSS —— 否则上面两条是恒真式。
     expect(css).toContain('.fused-strip__bar');
   });
