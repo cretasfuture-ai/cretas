@@ -66,6 +66,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -2685,6 +2686,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String storedOutputUnit = storedRequest == null
                     ? wip.getQuantityUnit()
                     : firstNonBlank(storedRequest.getOutputUnit(), storedRequest.getUnit(), wip.getQuantityUnit());
+            // 🔴 缺陷 E (2026-09-02): wip.getProductionDate() 在经 process_sheet_rows 物化的
+            // CLERK_WIP 批次上常年为 null (那条 MaterialBatch 从不写这一列) —— 而同一行提交时
+            // 填的「生产日期」其实就存在 storedRequest.getProcessDate() 里, getInventoryYieldCard
+            // (双出成率总览) 用的正是这同一个字段。此前这里只读 wip 一侧, 于是同一个批次在
+            // 「本工序投料来源」下拉里显示"无生产日期", 总览行却有日期 —— 两处读的不是同一份数据。
+            LocalDate productionDate = wip.getProductionDate() != null
+                    ? wip.getProductionDate()
+                    : (storedRequest == null ? null : storedRequest.getProcessDate());
 
             result.add(ProcessSheetInventoryItem.builder()
                     .batchNumber(row.getBatchNumber())
@@ -2694,10 +2703,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .remaining(remaining)
                     .status(status)
                     .unit(storedOutputUnit)
-                    .unitPrice(nz(wip.getUnitPrice()))
+                    // 🔴 缺陷 E: 此前 nz(wip.getUnitPrice()) 把"没有成本卡/尚未结算"的 null 静默
+                    // 写成 BigDecimal.ZERO —— 前端据此显示"成本0", 而真实含义是"成本未知"。
+                    // 成本卡未覆盖是合法状态 (不是数据缺失), 不许伪造成一个具体数字 (⛔ 硬约束:
+                    // 兜底默认值会把「不知道」翻译成「是 0」)。诚实传 null, 由前端 costText()
+                    // 渲染成"成本未知"; 真正为 0 的成本 (客供料等) 走的是另一条口径, 不受影响。
+                    .unitPrice(wip.getUnitPrice())
                     // ② 批次下拉补 品名 + 生产日期 (成本用 unitPrice)。品名从 row payload 的 productTypeId 反查。
                     .productTypeName(resolveProductTypeName(factoryId, row))
-                    .productionDate(wip.getProductionDate())
+                    .productionDate(productionDate)
                     .build());
         }
         return result;

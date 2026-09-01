@@ -10,6 +10,8 @@
  * null 值显示为 "—" (诚实, 不造假 — per .claude/rules/api-response-handling.md).
  */
 import { computed, h, ref, watch } from 'vue';
+import { ElIcon, ElTooltip } from 'element-plus';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
 import { normalizeMassQuantityForReporting } from '@/utils/processSheetUnits';
 import { useTableColumnWidth } from '@/composables/useTableColumnWidth';
@@ -79,23 +81,70 @@ function filterStatus(value: string, row: ProcessSheetInventoryItem): boolean {
 }
 
 /**
+ * 缺陷 D (2026-09-02): 「分摊成本」「单价」两列此前没有任何口径说明 —— 客供料计划下
+ * material_consumptions.unit_price=0/total_cost=0 是**按设计**(工厂不承担客供原料成本),
+ * 但看到「¥52.00」的人分不清这是算出来的人工/损耗分摊, 还是漏了什么。连查库的人都要猜。
+ * ⛔ 不改数字本身, 只加口径说明。挂在 prop 上(而不是硬编码某一列的位置), 别的地方
+ * 复用这两个 prop 名(如卡片模式)时不用再抄一遍。
+ */
+const COLUMN_HELP: Record<string, string> = {
+  rowTotalCost: '本行归集到的实际成本 = 继承自上游批次的成本 + 本工序新增的人工、损耗等费用，'
+    + '按本行实际产出分摊得到。若本计划是客供料（工厂不承担原料成本），原料成本按口径算作 0 元 —— '
+    + '这是设计如此，不是数据缺失或系统故障。',
+  unitPrice: '单价 = 分摊成本 ÷ 本行产出数量，即每公斤（或对应单位）分摊到的成本，与「分摊成本」同一口径。'
+    + '客供料计划下原料成本按口径为 0，单价会相应偏低，同样是设计如此。',
+};
+
+/**
  * 表头仍是一个真按钮 —— 触屏和键盘要有明确的可点区域与名字。
  *
  * 但它不再自带任何视觉外壳: 客户反馈「每个表头套了独立边框盒子」, 那个盒子感来自
  * 加深的表头底色 + 逐格右边框 + 每格一个带 ↕ 的按钮三层叠加。现在按钮完全继承单元格
  * 的字体与颜色, 排序方向交回 el-table 自己的箭头, 看上去就是生产计划列表那种通栏表头。
+ *
+ * 缺陷 F (2026-09-02): 这段文字之前**同时**是排序触发区 —— el-table 把 <th> 整格都
+ * 注册成点击排序区(见 table-header/event-helper.mjs 的 handleHeaderClick), 点文字和点
+ * 右侧真正的排序箭头(.caret-wrapper, el-table 在这段渲染结果**后面**自动追加)效果一样,
+ * 与同一格里的筛选漏斗(工序/状态两列)挤在一起, 容易误触。
+ * stopPropagation 后点击这段文字只是点文字, 不再冒泡到 <th> 触发排序 —— 排序只能从
+ * el-table 自带的箭头图标触发(箭头自己的 onClick 已经 event.stopPropagation() 过一次,
+ * 不受这里影响, 见 handleSortClick)。
  */
-function sortableHeader({ column }: { column: { label?: string } }) {
+function sortableHeader({ column }: { column: { label?: string; property?: string } }) {
   const label = column.label || '本列';
+  const help = column.property ? COLUMN_HELP[column.property] : undefined;
+  const children: unknown[] = [label];
+  if (help) {
+    children.push(
+      h(
+        ElTooltip,
+        { content: help, placement: 'top', effect: 'dark' },
+        {
+          default: () => h(
+            ElIcon,
+            {
+              class: 'yield-header-help',
+              'aria-label': `${label}口径说明`,
+              // 图标自己也在同一个 <button> 里, 不额外 stopPropagation 也没关系 ——
+              // 外层按钮本身已经挡住冒泡了, 这里显式写一次只是让「不会误触排序」不依赖外层实现细节。
+              onClick: (event: MouseEvent) => event.stopPropagation(),
+            },
+            { default: () => h(QuestionFilled) },
+          ),
+        },
+      ),
+    );
+  }
   return h(
     'button',
     {
       type: 'button',
       class: 'yield-sort-trigger',
-      'aria-label': `按${label}排序，连续操作可切换升序和降序`,
-      title: '点击切换升序和降序',
+      'aria-label': `${label}列标题，排序请点击右侧箭头图标`,
+      title: '排序请点击右侧箭头图标（点这段文字不会排序）',
+      onClick: (event: MouseEvent) => event.stopPropagation(),
     },
-    label,
+    children,
   );
 }
 
@@ -417,6 +466,20 @@ defineExpose({ refresh });
   :deep(.yield-sort-trigger:focus-visible) {
     outline: 2px solid var(--el-color-primary, #409eff);
     outline-offset: 2px;
+  }
+
+  /* 缺陷 D: 「分摊成本」「单价」列头的口径说明图标 —— 与 ProcessDataTable.vue 里
+     .sp-th-custom-hint 同一套观感, 一个灰色小 ? , 不抢文字的视觉重量。 */
+  :deep(.yield-header-help) {
+    margin-left: 3px;
+    font-size: 13px;
+    color: #c0c4cc;
+    cursor: help;
+    vertical-align: -1px;
+  }
+
+  :deep(.yield-header-help:hover) {
+    color: var(--el-color-primary, #409eff);
   }
 }
 

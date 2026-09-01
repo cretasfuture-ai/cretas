@@ -13,6 +13,7 @@ import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
@@ -20,6 +21,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -84,6 +86,9 @@ class ProcessSheetInventoryTest {
 
     @Autowired
     private ProductTypeRepository productTypeRepo;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     private static final String FACTORY_ID   = "INV-FACTORY";
     private static final String PRODUCT_TYPE = "INV-PTYPE-001";
@@ -349,5 +354,111 @@ class ProcessSheetInventoryTest {
         assertThat(inventory.get(0).getBatchNumber())
                 .as("只返回本 plan 的批次")
                 .isEqualTo(thisPlan.getBatchNumber());
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 缺陷 E (2026-09-02): 「本工序投料来源」下拉 (getInventory) 与「双出成率总览」
+    // (getInventoryYieldCard) 对同一批次的生产日期/成本必须读到同一个答案。
+    //
+    // 直接构造 ProcessSheetRow + WIP MaterialBatch (绕开 saveRow, 因为正常报工链路
+    // 总能把 unitPrice/productionDate 算出来 —— 这里要复现的正是「算不出来」那个态,
+    // 即 costKnown=false / WIP 从未 setProductionDate 的真实生产形状)。
+    // ─────────────────────────────────────────────────────────────
+
+    private ProcessSheetRow buildWipRow(String clientRowId, String batchNumber, Long batchId,
+                                         LocalDate payloadProcessDate) throws Exception {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setClientRowId(clientRowId);
+        req.setProcessCode("pocui");
+        req.setProcessOrder(1);
+        req.setProcessName("破碎");
+        req.setProductTypeId(PRODUCT_TYPE);
+        req.setFinished(false);
+        req.setOutputQuantity(new BigDecimal("40"));
+        req.setUnit("kg");
+        req.setProcessDate(payloadProcessDate);
+
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(FACTORY_ID);
+        row.setPlanId(planId);
+        row.setProcessCode("pocui");
+        row.setProcessOrder(1);
+        row.setClientRowId(clientRowId);
+        row.setBatchId(batchId);
+        row.setBatchNumber(batchNumber);
+        row.setRowPayload(objectMapper.writeValueAsString(req));
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        return row;
+    }
+
+    private MaterialBatch buildWipBatch(String id, String batchNumber, Long sourceDocId,
+                                        BigDecimal unitPrice, LocalDate productionDate) {
+        MaterialBatch wip = new MaterialBatch();
+        wip.setId(id);
+        wip.setFactoryId(FACTORY_ID);
+        wip.setBatchNumber(batchNumber);
+        wip.setWarehouseId("WH-INV-001");
+        wip.setReceiptDate(LocalDate.now());
+        wip.setReceiptQuantity(new BigDecimal("40.00"));
+        wip.setQuantityUnit("kg");
+        wip.setStatus(MaterialBatchStatus.AVAILABLE);
+        wip.setSourceDocType("PRODUCTION_BATCH");
+        wip.setSourceDocId(sourceDocId.toString());
+        wip.setUnitPrice(unitPrice);
+        wip.setProductionDate(productionDate);
+        wip.setCreatedBy(operatorId);
+        return wip;
+    }
+
+    @Test
+    @DisplayName("E-1: WIP 自身没有 productionDate/unitPrice → 回退到行 payload 的 processDate; "
+            + "成本诚实传 null (不伪造成 0)，与总览 (getInventoryYieldCard) 同源")
+    void getInventory_fallsBackToPayloadProcessDate_andKeepsUnknownCostNull() throws Exception {
+        Long batchId = 900001L;
+        String batchNumber = "CLK-W-20260902-E1";
+        ProcessSheetRow row = buildWipRow("inv-e1", batchNumber, batchId, LocalDate.of(2026, 9, 2));
+        rowRepo.saveAndFlush(row);
+
+        // WIP 自身 productionDate=null, unitPrice=null —— 正是 costKnown=false /
+        // 从未 setProductionDate 的真实物化路径 (本文件里 wip.setProductionDate 从未被调用过)。
+        MaterialBatch wip = buildWipBatch("INV-E1-WIP-" + UUID.randomUUID(), batchNumber, batchId, null, null);
+        materialBatchRepo.saveAndFlush(wip);
+
+        List<ProcessSheetInventoryItem> inventory =
+                processSheetService.getInventory(FACTORY_ID, planId, "pocui", 1);
+
+        assertThat(inventory).hasSize(1);
+        ProcessSheetInventoryItem item = inventory.get(0);
+        assertThat(item.getBatchNumber()).isEqualTo(batchNumber);
+        // 缺陷 E 断言 1: 生产日期回退到 payload 的 processDate, 不再显示"无生产日期"。
+        assertThat(item.getProductionDate())
+                .as("wip 自身没有生产日期时应回退到该行提交时的 processDate")
+                .isEqualTo(LocalDate.of(2026, 9, 2));
+        // 缺陷 E 断言 2: 未知成本必须是 null (前端 costText() 渲染"成本未知"), 不是伪造的 0。
+        assertThat(item.getUnitPrice())
+                .as("未知成本不许被 nz() 静默改写成 0")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("E-2: WIP 自身已有 productionDate/unitPrice → 直接用它, 不被 payload 覆盖")
+    void getInventory_prefersWipsOwnDateAndPrice_whenPresent() throws Exception {
+        Long batchId = 900002L;
+        String batchNumber = "CLK-W-20260902-E2";
+        // payload 里故意塞一个不同的日期, 断言它不会覆盖 wip 自己的权威值。
+        ProcessSheetRow row = buildWipRow("inv-e2", batchNumber, batchId, LocalDate.of(2020, 1, 1));
+        rowRepo.saveAndFlush(row);
+
+        MaterialBatch wip = buildWipBatch("INV-E2-WIP-" + UUID.randomUUID(), batchNumber, batchId,
+                new BigDecimal("3.50"), LocalDate.of(2026, 9, 2));
+        materialBatchRepo.saveAndFlush(wip);
+
+        List<ProcessSheetInventoryItem> inventory =
+                processSheetService.getInventory(FACTORY_ID, planId, "pocui", 1);
+
+        assertThat(inventory).hasSize(1);
+        ProcessSheetInventoryItem item = inventory.get(0);
+        assertThat(item.getProductionDate()).isEqualTo(LocalDate.of(2026, 9, 2));
+        assertThat(item.getUnitPrice()).isEqualByComparingTo("3.50");
     }
 }
