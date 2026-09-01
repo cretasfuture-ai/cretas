@@ -48,6 +48,15 @@ on:
       # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
+      # 🔴 2026-09-01: reportApprovalMenuMatchesBackendRoles.spec.ts 读这两个文件, 钉的是
+      # 「报工审批菜单放行的角色 == 后端实际放行的角色全集」。生产实测: 质量经理菜单里
+      # 看得见本页, GET 却 403, 页面把它渲染成「待审批 0」——而真实待办有 26 条。
+      # 一个**只改 @RequireRole 名单**(或只改 PLATFORM_ADMIN_ROLES 绕过集)的 PR
+      # 恰好是它看不见的那类改动, 而那正是它要守的漂移。
+      # ⛔ 逐文件登记, 不用 controller/** 这种宽 glob —— 2026-08-28 有人为补触发面加宽 glob,
+      #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
       # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
       # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
       # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。
@@ -99,6 +108,15 @@ on:
       # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
+      # 🔴 2026-09-01: reportApprovalMenuMatchesBackendRoles.spec.ts 读这两个文件, 钉的是
+      # 「报工审批菜单放行的角色 == 后端实际放行的角色全集」。生产实测: 质量经理菜单里
+      # 看得见本页, GET 却 403, 页面把它渲染成「待审批 0」——而真实待办有 26 条。
+      # 一个**只改 @RequireRole 名单**(或只改 PLATFORM_ADMIN_ROLES 绕过集)的 PR
+      # 恰好是它看不见的那类改动, 而那正是它要守的漂移。
+      # ⛔ 逐文件登记, 不用 controller/** 这种宽 glob —— 2026-08-28 有人为补触发面加宽 glob,
+      #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
       # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
       # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
       # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。

@@ -138,7 +138,34 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/production/pending-queue', title: '未完成计划队列', icon: '', module: 'production' },
       { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
       { path: '/production/delivery-warnings', title: '交货预警', icon: '', module: 'production' },
-      { path: '/production/approval', title: '报工审批', icon: '', module: 'production' },
+      // 🔴 2026-09-01 生产实测: lsm008(六膳门质量经理) 打开本页看到「待审批 0」+ 暂无数据,
+      //   而同一 URL 用 lsm015(生产经理) 是「待审批 26」。那个 0 不是空列表, 是挡在
+      //   26 条真实待办前面的伪造读数(GET 403 被渲染成了一个肯定的数字)。
+      //
+      //   ⚠️ 这条**不适用**上面 /dashboard/production-progress 那段「⛔ 不加 roles 白名单」——
+      //   那段的前提是「菜单闸判的模块与后端闸判的模块是同一个」。本条**不满足**该前提:
+      //     · 本页 GET 的闸是 @RequireRole 角色白名单(ProcessWorkReportingController:41),
+      //       **不是**模块判据。菜单按 module:'production' 放行, 而 quality_manager 的
+      //       production 是 'r'(四份声明一致, 且是刻意保留的跨模块只读) ⇒ 菜单放行、接口拒绝。
+      //     · 即那段注释自己写的另一半:「菜单宽、页面窄 ⇒ 看得见点不开」。
+      //   ⇒ 这是 /dashboard/ai-value 那一类, 不是 /dashboard/production-progress 那一类。
+      //
+      //   ⛔ 不要改 permission.ts 的 production:'r' —— 那是四份声明交叉确认过的刻意设计,
+      //      撤它会打断一批角色的合法跨模块只读。要对齐的是**菜单侧的角色约束**。
+      //   ⚠️ workshop_supervisor 在白名单里(受众没被挡掉); 另外 4 个是
+      //      RequireRoleInterceptor.PLATFORM_ADMIN_ROLES —— 它们**绕过** @RequireRole,
+      //      漏掉就会把本来打得开的页从平台管理员菜单里藏掉。
+      //   ▎两份一致由 reportApprovalMenuMatchesBackendRoles.spec.ts 钉住, 别手工改单侧。
+      {
+        path: '/production/approval', title: '报工审批', icon: '', module: 'production',
+        roles: [
+          // ① ProcessWorkReportingController#getPendingApprovals 的 @RequireRole
+          'factory_super_admin', 'permission_admin', 'production_manager',
+          'production_clerk', 'workshop_supervisor',
+          // ② RequireRoleInterceptor.PLATFORM_ADMIN_ROLES(无条件放行)
+          'super_admin', 'platform_admin', 'developer', 'platform_super_admin',
+        ],
+      },
       { path: '/production/reversals', title: '撤回审批', icon: '', module: 'production' },
       { path: '/production/material-requisitions', title: '物料需求单', icon: '', module: 'production' },
       { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
