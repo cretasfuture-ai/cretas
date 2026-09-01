@@ -22,7 +22,13 @@ describe('仓储空间必须能被用户找到（BUG-1：上线即不可达）',
   it('阳性对照：这个闸确实在读那份真的菜单文件', () => {
     // 若路径写错读到空文件/别的文件，上面那条会因为「什么都不包含」而假绿地红，
     // 但反过来——闸读错文件时这条会先炸，指出是仪器问题而不是产品问题。
-    expect(MENU).toContain("path: '/warehouse/stocktakes'");
+    //
+    // 2026-09-01: 原用 'path: \'/warehouse/stocktakes\'' 当锚点。LIUSHANMEN
+    // 仓储「库存盘点」菜单收拢 (owner 拍板) 把它与另外 5 条合并进 2 个 hub
+    // 入口，这个字面量已经从 menuConfig.ts 里消失 (旧路径仍可访问，只是改成了
+    // router redirect，不再是菜单项，见 menuConfig.spec.ts 的收拢说明)。换一个
+    // 不受这次合并影响的锚点。
+    expect(MENU).toContain("path: '/warehouse/materials'");
     expect(MENU.length).toBeGreaterThan(2000);
   });
 });

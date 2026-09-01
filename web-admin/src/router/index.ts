@@ -8,6 +8,7 @@ import productionAnalyticsRoutes from './modules/production-analytics';
 import crmRoutes from './modules/crm';
 import opsRoutes from './modules/ops';
 import { buildHubRedirect } from './analysisHubRedirect';
+import { buildInventoryQueryRedirect, buildStocktakeQueryRedirect } from './warehouseHubRedirect';
 import { RESTAURANT_DECISION_ROLES } from '@/views/restaurant/restaurantRoleExperience';
 
 const platformAdminOnlyRoles = ['platform_admin'];
@@ -386,11 +387,23 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/materials/list.vue'),
             meta: { requiresAuth: true, title: '入库任务与批次', module: 'warehouse' }
           },
+          // 2026-09-01 LIUSHANMEN 仓储「库存盘点」菜单收拢 (owner 拍板): 库存查询
+          // hub —— 合并分仓库存查询/总库存查询/库存批次查询/半成品库存 4 个视角
+          // 为一个入口 (el-tabs), 见 views/warehouse/inventory-query/index.vue +
+          // views/warehouse/inventoryQueryTab.ts。下面 4 条旧路由原地保留, 只把
+          // component 换成 redirect (保书签, ⛔ 不删), meta 原样不动。
+          {
+            path: 'inventory-query',
+            name: 'WarehouseInventoryQuery',
+            component: () => import('@/views/warehouse/inventory-query/index.vue'),
+            meta: { requiresAuth: true, title: '库存查询', module: 'warehouse' }
+          },
           // F006 六膳门 — 总库存查询 (工厂级原料总库存, 按物料聚合, 跨所有仓库)
+          // 已合并进 inventory-query 的「总库存查询」tab, 见上。
           {
             path: 'inventory-total',
             name: 'WarehouseInventoryTotal',
-            component: () => import('@/views/warehouse/inventory-total/index.vue'),
+            redirect: (to) => buildInventoryQueryRedirect(to, 'total'),
             meta: { requiresAuth: true, title: '总库存查询', module: 'warehouse' }
           },
           {
@@ -411,10 +424,11 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/shipments/list.vue'),
             meta: { requiresAuth: true, title: '出货管理', module: 'warehouse' }
           },
+          // 已合并进 inventory-query 的「库存批次查询」tab, 见上。
           {
             path: 'inventory',
             name: 'WarehouseInventory',
-            component: () => import('@/views/warehouse/inventory/index.vue'),
+            redirect: (to) => buildInventoryQueryRedirect(to, 'batch'),
             meta: { requiresAuth: true, title: '库存批次查询', module: 'warehouse' }
           },
           {
@@ -423,11 +437,30 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/warehouse/storage-locations/index.vue'),
             meta: { requiresAuth: true, title: '储存位置与现场盘点', module: 'warehouse' }
           },
+          // 2026-09-01 同上收拢: 盘点 hub —— 合并盘点与期初库存/半成品盘点 2 个
+          // 视角为一个入口, 见 views/warehouse/stocktake-query/index.vue。
+          {
+            path: 'stocktake-query',
+            name: 'WarehouseStocktakeQuery',
+            component: () => import('@/views/warehouse/stocktake-query/index.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '盘点',
+              module: 'warehouse',
+              // 仓储负责发起/录入/应用，财务从个人 OA 查看依据并审批 (与旧
+              // /warehouse/stocktakes 相同的组合, 见 personalOaAccess.spec.ts)。
+              modulesAny: ['warehouse', 'finance']
+            }
+          },
           // SP7 六扇门 ERP-lite — 盘点任务管理 (发起→录入→审批→应用)
+          // 已合并进 stocktake-query 的「盘点与期初库存」tab, 见上。旧路径保留
+          // (finance_manager 从个人 OA 深链 /warehouse/stocktakes?stocktakeId=x
+          // 打开, 见 workflow/acted.vue + pending.vue), meta 原样不动 ——
+          // personalOaAccess.spec.ts 钉住这个 module+modulesAny 组合不许漂。
           {
             path: 'stocktakes',
             name: 'WarehouseStocktakes',
-            component: () => import('@/views/warehouse/stocktakes/index.vue'),
+            redirect: (to) => buildStocktakeQueryRedirect(to, 'main'),
             meta: {
               requiresAuth: true,
               title: '盘点与期初库存',
@@ -456,17 +489,21 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '物料均价趋势', module: 'warehouse' }
           },
           // C3: 半成品重量库存视图 (只读快照, 仅重量字段)
+          // 已合并进 inventory-query 的「半成品库存」tab, 见上。title 与菜单
+          // 收拢 (原 '半成品重量库存' 与 menuConfig 的 '半成品库存' 不一致,
+          // 2026-09-01 一并收敛为 '半成品库存')。
           {
             path: 'semi-finished',
             name: 'WarehouseSemiFinished',
-            component: () => import('@/views/warehouse/semi-finished/list.vue'),
-            meta: { requiresAuth: true, title: '半成品重量库存', module: 'warehouse' }
+            redirect: (to) => buildInventoryQueryRedirect(to, 'semi-finished'),
+            meta: { requiresAuth: true, title: '半成品库存', module: 'warehouse' }
           },
           // 半成品盘点 (SP7 式 + 审批) — 半成品 WIP 周期盘点校准, 复用 INVENTORY_ADJUSTMENT 审批
+          // 已合并进 stocktake-query 的「半成品盘点」tab, 见上。
           {
             path: 'semi-finished-stocktakes',
             name: 'WarehouseSemiFinishedStocktakes',
-            component: () => import('@/views/warehouse/semi-finished-stocktakes/index.vue'),
+            redirect: (to) => buildStocktakeQueryRedirect(to, 'semi-finished'),
             meta: { requiresAuth: true, title: '半成品盘点', module: 'warehouse' }
           },
           // SP7 F11 #738 盐化仓独立扣量记录 + 独立报表 (对客户代加工)
@@ -487,18 +524,31 @@ const businessRoutes: RouteRecordRaw[] = [
       },
 
       // PR #309 B2 — 分仓库存查询 (Dropdown 跨 factoryId × warehouseId)
+      // 2026-09-01 LIUSHANMEN 仓储「库存盘点」菜单收拢 (owner 拍板): 已合并进
+      // /warehouse/inventory-query 的「分仓库存查询」tab, 见
+      // views/warehouse/inventory-query/index.vue。旧路径原地保留、只重定向。
+      //
+      // #435 面包屑归属 patch 收尾: 原来这里挂了 breadcrumbParent: '仓储管理'
+      // (父子同名, 面包屑会显示「分仓库存查询 / 分仓库存查询」)。本路由现在是
+      // 纯 redirect, 不再渲染任何页面, 用户永远看不到它的面包屑 ——
+      // AppHeader.vue 读的是**当前匹配路由**(重定向后的 inventory-query)的
+      // meta, 不会读到这条 redirect stub 的 meta。#435 的一致性闸
+      // (menuConfig.spec.ts「全表」测试) 只扫 menuConfig.ts 里登记的路径, 这条
+      // 已不在菜单里 (合并进 inventory-query 了), 不受影响 —— 已用变异对照确认
+      // 该闸仍然能红 (见 PR 说明)。因此 breadcrumbParent patch 在此处已是死代码,
+      // 一并移除; 不移除 meta 的其余字段 (title/module), 保持与其它 5 条旧路由
+      // 一致的「meta 原样保留、只加 redirect」处理方式。
       {
         path: 'inventory',
         name: 'Inventory',
-        redirect: '/inventory/by-warehouse',
+        redirect: (to) => buildInventoryQueryRedirect(to, 'by-warehouse'),
         meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse' },
         children: [
           {
             path: 'by-warehouse',
             name: 'InventoryByWarehouse',
-            component: () => import('@/views/inventory/by-warehouse/index.vue'),
-            // 面包屑归属: 父子同名, 面包屑会显示「分仓库存查询 / 分仓库存查询」; 侧边栏在「仓储管理」 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
-            meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse', breadcrumbParent: '仓储管理' }
+            redirect: (to) => buildInventoryQueryRedirect(to, 'by-warehouse'),
+            meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse' }
           }
         ]
       },

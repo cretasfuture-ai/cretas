@@ -6,13 +6,19 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 
 /**
- * C3: 半成品重量库存视图 (只读, 仅重量字段)
+ * C3: 半成品库存视图 (只读, 仅重量字段)
  *
  * 数据来源: GET /api/mobile/{factoryId}/semi-finished/inventory
  * 展示 semi_finished_inventories 全状态快照 (AVAILABLE / DEPLETED / RETURNED),
  * 按产品类型名称分组, 仅显示重量字段, 不含成本。
  *
  * 客户要求: "只做重量库存" — 仓管员只需知道有多少可用半成品, 不需要看成本。
+ *
+ * 2026-09-01 LIUSHANMEN IA 收拢 (owner 拍板): 标题从「半成品重量库存」改为
+ * 「半成品库存」，与 menuConfig 曾经的说法收敛 (形态 D，见
+ * router/index.ts 与 __tests__/gates/breadcrumbMatchesMenuLabel.source.spec.ts
+ * 的说明)，本页现在是 /warehouse/inventory-query hub 里「半成品库存」tab 的
+ * 内嵌页面，标题字面量不再有第二个名字。
  */
 
 interface WipRow {
@@ -109,7 +115,7 @@ function formatKg(val: number | null | undefined): string {
 <template>
   <div class="semi-finished-inventory-page">
     <div class="page-header">
-      <h2>半成品重量库存</h2>
+      <h2>半成品库存</h2>
       <div class="page-actions">
         <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
       </div>
