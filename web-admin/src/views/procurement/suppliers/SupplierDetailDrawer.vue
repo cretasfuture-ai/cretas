@@ -220,10 +220,12 @@
              而它会一路流到采购单和入库批次。现在标题就把基准说清楚。 -->
         <el-form-item :label="isExemptMaterial(relationMaterial) ? `免税采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）` : `含税默认采购价（元/${displayUnit(relationForm.purchaseUnit) || '采购单位'}）`">
           <el-input-number v-model="relationForm.taxIncludedDefaultPurchasePrice" :min="0" :precision="4" controls-position="right" style="width: 100%" />
-          <!-- 缺陷 17 / 形态 B⁵: 这句原本写的是「未配置时采购单会明确提示，不会静默按 0 元处理」——
-               那是"价格可以不配"年代的说明。现在新增必填, 描述必须跟着改, ⛔ 不能留一句过期的承诺。 -->
+          <!-- 形态 B⁵ 第二次: 这句话已经改过一次(从「不会静默按 0 元处理」改成「不动就不拦」),
+               现在 owner 改判 A(一律必填)之后, 「不动这一栏就不会被拦」**又变成一句假话**。
+               ⛔ 删掉一条承诺就要同一个 commit 里删掉它的描述 —— 描述过期比没有描述更糟,
+               因为它会让下一个人跳过核实。 -->
           <div class="field-hint">
-            价格与采购单位绑定。新增时必须填写；编辑既有关系时，不动这一栏就不会被拦。
+            价格与采购单位绑定，按含税价填写。新增与编辑都必须填写；存量没有价格的关系，需要补上价格才能保存。
           </div>
         </el-form-item>
         <!-- ⛔ 算不出来时【不渲染】这一行, 而不是显示 0 或空白 —— 空白会被读成 0。
@@ -632,7 +634,6 @@ async function openRelationCreate(): Promise<void> {
     materialTypeId: '', supplierMaterialCode: '', defaultPurchasePrice: null, taxIncludedDefaultPurchasePrice: null, currency: 'CNY', purchaseUnit: '',
     minOrderQuantity: null, leadTimeDays: null, preferred: false, active: true, version: undefined,
   });
-  relationOriginalPrice.value = null;   // 新增: 没有"原值", 价格必填
   inlineSpecEnabled.value = false;
   resetInlineSpecForm();
   relationDialogVisible.value = true;
@@ -656,17 +657,6 @@ function resetInlineSpecForm(): void {
  *    一律拦会让"只想把某条从启用改成停用"的人先编一个价格出来 ——
  *    ⛔ 而编出来的价格比空着更糟: 空的还能被发现, 编的会一直安静地错下去。
  */
-
-/** 编辑态打开时的原始价格快照 —— 用来判断"用户到底动没动这个字段"。 */
-const relationOriginalPrice = ref<number | null>(null);
-const specOriginalPrice = ref<number | null>(null);
-
-function samePrice(a: number | null | undefined, b: number | null | undefined): boolean {
-  const left = a ?? null;
-  const right = b ?? null;
-  if (left === null || right === null) return left === right;
-  return Number(left) === Number(right);
-}
 
 /**
  * 价格本身合不合法。
@@ -709,7 +699,6 @@ async function openRelationEdit(row: SupplierMaterialRelation): Promise<void> {
     version: row.version ?? undefined,
   });
   // 编辑: 记下打开时的价格。用户没动它就不拦 —— 存量空价格的关系仍然可以改别的字段。
-  relationOriginalPrice.value = row.taxIncludedDefaultPurchasePrice ?? null;   // 19②: 校验对象是人填的含税值
   inlineSpecEnabled.value = false;
   resetInlineSpecForm();
   relationDialogVisible.value = true;
@@ -720,19 +709,24 @@ async function saveRelation(): Promise<void> {
   if (!isActive.value) return void ElMessage.warning('供应商已暂停合作，不能保存供应原料关系');
   if (!relationForm.materialTypeId) return void ElMessage.warning('请选择物料');
   if (relationUnitReason.value) return void ElMessage.warning(relationUnitReason.value);
-  // 缺陷 17 ①: 默认采购价。新增必填; 编辑只在用户动过这个字段时才校验。
-  if (!relationEditingId.value
-      || !samePrice(relationForm.taxIncludedDefaultPurchasePrice, relationOriginalPrice.value)) {
-    const problem = priceProblem(relationForm.taxIncludedDefaultPurchasePrice);
-    if (problem) return void ElMessage.warning(`含税默认采购价：${problem}`);
-  }
+  // 缺陷 17-A ①: 含税默认采购价 —— 新增与编辑【一律必填】。
+  //
+  // 🔒 owner 2026-09-02 改判: 原先是「只在价格被动过时拦」(#451), 现在是「一律必填,
+  //    存量也得补」。⇒ 编辑一条空价格的存量关系, 在补上价格之前存不下去。
+  //
+  // ⚠️ owner 是在**知道代价**的前提下选的 A: 逼人填会促使人编一个价格出来, 而编出来的
+  //    价格比空着更危险 —— 空的还会在 submitOrder 被拦, 编的会一路静默进应付。
+  //    ⇒ 那是他的选择, ⛔ 不是可以在这里设计规避的东西。
+  const problem = priceProblem(relationForm.taxIncludedDefaultPurchasePrice);
+  if (problem) return void ElMessage.warning(`含税默认采购价：${problem}`);
   const wantsInlineSpec = !relationEditingId.value && inlineSpecEnabled.value;
   if (wantsInlineSpec) {
     if (!inlineSpecForm.name.trim()) return void ElMessage.warning('请输入采购规格名称');
     if (!inlineSpecForm.purchasePackageUnit) return void ElMessage.warning('请选择采购规格的采购包装单位');
     if (!(Number(inlineSpecForm.factor) > 0)) return void ElMessage.warning('采购规格的换算系数必须大于 0');
-    // 缺陷 17 ②: 内联规格的未税报价。
-    // 🔴 这条分支只在【新增】时可达(wantsInlineSpec 自带 !relationEditingId), 所以恒为必填。
+    // 缺陷 17-A ②: 内联规格的含税报价 —— 与 ①③ 同一条规则。
+    // 🔴 这条分支只在【新增】时可达(wantsInlineSpec 自带 !relationEditingId),
+    //    本来就是无条件必填; 17-A 之后三条路径规则一致。
     //    它是空价格最主要的来源 —— 只修 ① 和 ③ 等于堵了编辑口, 前门照开。
     const specProblem = priceProblem(inlineSpecForm.taxIncludedQuotedPrice);
     if (specProblem) return void ElMessage.warning(`采购规格的含税报价：${specProblem}`);
@@ -801,7 +795,6 @@ function resetSpecForm(): void {
     name: '', purchasePackageUnit: '', inventoryBaseUnit: specRelation.value?.baseUnit || '', factor: 1, quotedPrice: null, taxIncludedQuotedPrice: null, currency: 'CNY',
     minOrderQuantity: null, leadTimeDays: null, defaultSpec: false, active: true, version: undefined,
   });
-  specOriginalPrice.value = null;   // 新增规格: 没有"原值", 报价必填
 }
 
 function editPurchaseSpec(row: SupplierPurchaseSpec): void {
@@ -823,7 +816,6 @@ function editPurchaseSpec(row: SupplierPurchaseSpec): void {
     version: row.version ?? undefined,
   });
   // 编辑既有规格: 记下打开时的报价, 没动就不拦。
-  specOriginalPrice.value = row.taxIncludedQuotedPrice ?? null;                // 19②: 同上
 }
 
 async function savePurchaseSpec(): Promise<void> {
@@ -833,10 +825,9 @@ async function savePurchaseSpec(): Promise<void> {
   if (!specForm.purchasePackageUnit) return void ElMessage.warning('请选择采购包装单位');
   if (!(Number(specForm.factor) > 0)) return void ElMessage.warning('换算系数必须大于 0');
   // 缺陷 17 ③: 独立规格的未税报价(编辑路径)。新增必填; 编辑只在动过时才校验。
-  if (!specEditingId.value || !samePrice(specForm.taxIncludedQuotedPrice, specOriginalPrice.value)) {
-    const problem = priceProblem(specForm.taxIncludedQuotedPrice);
-    if (problem) return void ElMessage.warning(`含税报价：${problem}`);
-  }
+  // 缺陷 17-A ③: 与 ① 同一条规则 —— 新增与编辑一律必填。
+  const problem = priceProblem(specForm.taxIncludedQuotedPrice);
+  if (problem) return void ElMessage.warning(`含税报价：${problem}`);
   const payload: SupplierPurchaseSpecPayload = {
     ...specForm,
     name: specForm.name.trim(),
