@@ -1486,13 +1486,51 @@ public class PrintController {
                 if (item.getRequiredQty() == null) {
                     row.put("requiredQtyPending", Boolean.TRUE);
                 }
+                // 缺陷 49: requiredQty 有两种完全不同的来源, 同名不同义, FactoryMaterialRequisitionItem
+                // 没有字段区分它们, 只能按 materialCategory 判:
+                //
+                //  ① 主 BOM 循环 (FactoryMaterialRequisitionServiceImpl.generateFromPlan:298 一带,
+                //     requiredBom = plannedQty.multiply(perUnit)) —— plannedQty 取的是
+                //     plan.getPlannedQuantity() **整计划总量**, 与"这批/这张单新增了多少"无关。
+                //     同一计划每次(重新)生成领料单都会把这个数重新算一遍、算出同一个数。
+                //     appendSeasoningItems 永远把调料行的 category 写死成 AUXILIARY (见该方法),
+                //     所以 RAW / SEMI_FINISHED / PACKAGING 三类**只可能**来自这条主循环。
+                //  ② appendSeasoningItems (调料表, AUXILIARY) —— requiredQty 按调用方传入的
+                //     plannedRawInputKg(人工填报的"这批投了多少原料")逐次算出, 不同批次可以合法
+                //     给出不同投入量, 是真正的增量, 理应累加 (与既有测试
+                //     PrintControllerSp12T8Test#buildConsolidatedMaterialRequisitionPayload_withServices_populatesItemsAndCount
+                //     的口径一致)。但主循环里 AUXILIARY 类 BOM 行 (万一带了标准用量的旧数据) 也会
+                //     落到同一个 category, 两者在数据里区分不开 —— 保守起见 AUXILIARY 继续按累加处理,
+                //     不误伤调料的合法累加场景。
+                //
+                // 实测(2026-09-02, LIUSHANMEN plan PLAN-1788280683352-34F8CD82): L1纸箱(①类, PACKAGING)
+                // 两张领料单(MR20260902-0003 / MR20260902-0005)各自的 requiredQty 都是 6.94(= BOM
+                // standardQuantity 0.0694 × plannedQuantity 100), 旧的 addQty(不分青红皂白全累加)把
+                // 它印成 13.88 —— 而 ProductionPlanServiceImpl#scanMaterialAdvisory (结单旁「缺料预警」
+                // 面板用的同一份口径: perUnitRequired.multiply(plannedQty), :1259-1263) 从不读
+                // factory_material_requisitions, 恒算出 6.94。
                 BigDecimal requiredQty = item.getRequiredQty() != null ? item.getRequiredQty() : BigDecimal.ZERO;
-                addQty(row, "totalQtyValue", requiredQty);
-                if ("RAW".equals(bucket)) {
-                    addQty(row, "plannedRawQtyValue", requiredQty);
-                } else if ("SEMI_FINISHED".equals(bucket)) {
-                    addQty(row, "plannedSemiFinishedQtyValue", requiredQty);
+                FactoryMaterialRequisitionItem.MaterialCategory rawCategory = item.getMaterialCategory();
+                boolean requiredQtyIsWholePlanConstant = rawCategory == null
+                        || rawCategory == FactoryMaterialRequisitionItem.MaterialCategory.RAW
+                        || rawCategory == FactoryMaterialRequisitionItem.MaterialCategory.PACKAGING
+                        || rawCategory == FactoryMaterialRequisitionItem.MaterialCategory.SEMI_FINISHED;
+                if (requiredQtyIsWholePlanConstant) {
+                    // 取 max 而不是取第一条: 理论上同一计划多次生成应得到相同值; 万一 BOM 或计划量
+                    // 在两次生成之间被改过, 宁可保留较大的那个(不低报物料/包材需求), 也不依赖生成顺序。
+                    BigDecimal existingTotal = (BigDecimal) row.get("totalQtyValue");
+                    if (requiredQty.compareTo(existingTotal) > 0) {
+                        row.put("totalQtyValue", requiredQty);
+                        if ("RAW".equals(bucket)) {
+                            row.put("plannedRawQtyValue", requiredQty);
+                        } else if ("SEMI_FINISHED".equals(bucket)) {
+                            row.put("plannedSemiFinishedQtyValue", requiredQty);
+                        } else {
+                            row.put("plannedAuxiliaryQtyValue", requiredQty);
+                        }
+                    }
                 } else {
+                    addQty(row, "totalQtyValue", requiredQty);
                     addQty(row, "plannedAuxiliaryQtyValue", requiredQty);
                 }
 
