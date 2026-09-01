@@ -4,14 +4,16 @@ import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionSettlementConsumption;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
-import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.SalesOrderSuppliedMaterialRequirementRepository;
-import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -23,11 +25,23 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 
 /**
- * Fails closed when a customer-supplied order plan reaches settlement with fewer
- * reported material types than the exact sales-order line requires.
+ * Fails closed when a customer-supplied order plan reaches settlement having consumed a raw
+ * material that this sales order never had a customer-supply requirement for, or having pushed
+ * cumulative consumption of a listed material (across every settled plan of this order) past
+ * what the customer actually delivered.
+ *
+ * <p>缺陷 48（2026-09）：本闸原来的方向是反的 —— 它要求<b>这一个批次</b>把整张 SO 客供清单的
+ * <b>全部</b>数量在<b>这一次</b>报工里报完，哪怕这批的 BOM 根本不含那种料（来料加工按批分次
+ * 生产是正常形态，一张 SO 的客供料由多个批次陆续领用天经地义）。现在只守两件事：</p>
+ * <ol>
+ *   <li>这批实际用掉的每一种料，必须在这张 SO 的客供清单里 —— 不许拿别的订单/别人的料结这单；</li>
+ *   <li>同一种料，跨这张 SO 已结单的所有批次累计用量，不能超过客户实际已收的数量。</li>
+ * </ol>
+ * <p>SO 清单里这批没用到的料、或只用了一部分的料 —— 都不产生任何提示。这两条判据在
+ * {@link #audit} (核对结单弹窗) 和 {@link #mergeMissingManualRawConsumptions} (真正结单的写路径)
+ * 里必须是同一份口径，见 {@link #evaluateAgainstLedger}。</p>
  *
  * <p>This guard is deliberately narrow: it does not infer quantities, mutate reports,
  * or post inventory. It only turns the existing settlement exception form on so a
@@ -37,18 +51,28 @@ import java.math.RoundingMode;
 @RequiredArgsConstructor
 public class CustomerSuppliedSettlementCoverageGuard {
 
-    public static final String ISSUE_CODE = "CUSTOMER_SUPPLIED_MATERIAL_REPORT_MISSING";
+    /** 本批用了一种不在这张 SO 客供清单里的料 —— 「拿别人的料做这单」。 */
+    public static final String ISSUE_CODE_MATERIAL_NOT_LISTED = "CUSTOMER_SUPPLIED_MATERIAL_NOT_ON_ORDER";
+    /** 同一种客供料, 跨这张 SO 已结单的所有批次累计用量超过了客户实际已收的数量。 */
+    public static final String ISSUE_CODE_MATERIAL_OVER_RECEIVED = "CUSTOMER_SUPPLIED_MATERIAL_OVER_RECEIVED";
 
     private final ProductionPlanRepository productionPlanRepository;
     private final SalesOrderSuppliedMaterialRequirementRepository requirementRepository;
-    private final SalesOrderItemRepository salesOrderItemRepository;
     private final MaterialBatchRepository materialBatchRepository;
+    private final ProductionSettlementConsumptionRepository settlementConsumptionRepository;
+    private final RawMaterialTypeRepository rawMaterialTypeRepository;
 
     /**
      * Workflow settlement keeps submitted process reports authoritative, but a
      * customer-supplied order may legitimately need the clerk to add batches that
      * the process reports omitted. Merge only those missing requirements; echoed
      * report rows are ignored only when their quantity is unchanged.
+     *
+     * <p>After the merge, the <b>final</b> set of raw-material consumption lines (auto-derived
+     * + manually added) is evaluated against the same two-rule coverage predicate the settlement
+     * dialog uses (see {@link #evaluateAgainstLedger}) — this is the write-path half of that shared
+     * predicate; a plan cannot settle with a coverage violation even if nobody opened the
+     * one-click dialog first.</p>
      */
     public void mergeMissingManualRawConsumptions(String factoryId,
                                                   ProductionPlan plan,
@@ -59,10 +83,14 @@ public class CustomerSuppliedSettlementCoverageGuard {
                 || isBlank(plan.getSourceOrderId())) {
             return;
         }
-        RequirementContext context = resolveRequirementContext(factoryId, plan);
-        if (context.requirements().isEmpty()) {
+        List<SalesOrderSuppliedMaterialRequirement> requirements =
+                resolveRequirements(factoryId, plan.getSourceOrderId());
+        if (requirements.isEmpty()) {
             return;
         }
+        Map<String, BigDecimal> receivedByType = receivedByMaterialType(requirements);
+        Map<String, BigDecimal> consumedElsewhere =
+                consumedByOtherSettledPlans(factoryId, plan.getSourceOrderId(), plan.getId());
 
         List<ProductionSettlementRequest.ConsumptionLine> merged = new ArrayList<>(
                 derived.getRawMaterialConsumptions() == null
@@ -72,8 +100,9 @@ public class CustomerSuppliedSettlementCoverageGuard {
                 .collect(Collectors.toMap(ProductionSettlementRequest.ConsumptionLine::getMaterialBatchId,
                         line -> line, (left, right) -> left, LinkedHashMap::new));
         Set<String> addedManualBatchIds = new LinkedHashSet<>();
-        Map<RequirementKey, BigDecimal> required = requiredQuantities(context.requirements(), context.planShare());
-        Map<RequirementKey, BigDecimal> covered = reportedQuantities(merged);
+        // 本批内部已经算入的量（从 derived 起算，随手工补录逐步增长）——
+        // 用来判断「再加这一笔会不会把这张 SO 这种料的累计用量顶穿已收数量」。
+        Map<String, BigDecimal> coveredWithinThisPlan = reportedQuantitiesByType(merged);
 
         List<ProductionSettlementRequest.ConsumptionLine> submittedLines =
                 submitted.getRawMaterialConsumptions() == null
@@ -100,17 +129,23 @@ public class CustomerSuppliedSettlementCoverageGuard {
                     .findByIdAndFactoryId(candidate.getMaterialBatchId(), factoryId)
                     .orElseThrow(() -> mergeFailure("客供补录批次不存在或不属于当前工厂",
                             "CUSTOMER_SUPPLIED_BATCH_NOT_FOUND"));
-            RequirementKey key = new RequirementKey(batch.getMaterialTypeId(), batch.getQuantityUnit());
-            BigDecimal remaining = required.getOrDefault(key, BigDecimal.ZERO)
-                    .subtract(covered.getOrDefault(key, BigDecimal.ZERO));
-            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
-                throw mergeFailure("所选批次不属于当前订单仍缺少的客供物料",
-                        "CUSTOMER_SUPPLIED_MANUAL_LINE_NOT_REQUIRED");
+            String materialTypeId = batch.getMaterialTypeId();
+            BigDecimal received = receivedByType.get(materialTypeId);
+            if (received == null) {
+                throw mergeFailure("所选批次不属于当前订单的客供物料清单",
+                        ISSUE_CODE_MATERIAL_NOT_LISTED);
             }
             BigDecimal quantity = candidate.getQuantity();
             if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
                 throw mergeFailure("客供补录数量必须大于 0",
                         "CUSTOMER_SUPPLIED_MANUAL_QUANTITY_INVALID");
+            }
+            BigDecimal alreadyAccounted = coveredWithinThisPlan.getOrDefault(materialTypeId, BigDecimal.ZERO)
+                    .add(consumedElsewhere.getOrDefault(materialTypeId, BigDecimal.ZERO));
+            BigDecimal remaining = received.subtract(alreadyAccounted);
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                throw mergeFailure("所选批次的客供数量已在本订单其它已结单批次用完",
+                        ISSUE_CODE_MATERIAL_NOT_LISTED);
             }
             if (quantity.compareTo(remaining) > 0) {
                 throw mergeFailure("客供补录数量超过当前订单缺口 "
@@ -120,7 +155,7 @@ public class CustomerSuppliedSettlementCoverageGuard {
             ProductionSettlementRequest.ConsumptionLine authoritative =
                     ProductionSettlementRequest.ConsumptionLine.builder()
                             .materialBatchId(batch.getId())
-                            .materialTypeId(batch.getMaterialTypeId())
+                            .materialTypeId(materialTypeId)
                             .batchNumber(batch.getBatchNumber())
                             .quantity(quantity)
                             .unit(batch.getQuantityUnit())
@@ -128,18 +163,20 @@ public class CustomerSuppliedSettlementCoverageGuard {
                             .note(candidate.getNote())
                             .build();
             merged.add(authoritative);
-            covered.merge(key, quantity, BigDecimal::add);
+            coveredWithinThisPlan.merge(materialTypeId, quantity, BigDecimal::add);
         }
 
-        List<String> remaining = required.entrySet().stream()
-                .filter(entry -> covered.getOrDefault(entry.getKey(), BigDecimal.ZERO)
-                        .compareTo(entry.getValue()) < 0)
-                .map(entry -> entry.getKey().materialTypeId() + " 尚缺 "
-                        + entry.getValue().subtract(covered.getOrDefault(entry.getKey(), BigDecimal.ZERO))
-                                .stripTrailingZeros().toPlainString() + entry.getKey().unit())
-                .toList();
-        if (!remaining.isEmpty()) {
-            throw mergeFailure("客供原料仍未补齐：" + String.join("、", remaining), ISSUE_CODE);
+        // 最终整批校验：auto-derived 行本身也可能违反口径（例如逐道报工引用了一个不在
+        // 客供清单里的批次），不能只查手工补录的那几行。
+        CoverageEvaluation evaluation = evaluateAgainstLedger(
+                requirements, receivedByType, consumedElsewhere, coveredWithinThisPlan);
+        if (!evaluation.foreignMaterialTypeIds().isEmpty()) {
+            throw mergeFailure("本批使用了客供清单之外的料：" + describeForeign(evaluation),
+                    ISSUE_CODE_MATERIAL_NOT_LISTED);
+        }
+        if (!evaluation.overages().isEmpty()) {
+            throw mergeFailure("客供原料累计用量超过已收数量：" + describeOverages(evaluation),
+                    ISSUE_CODE_MATERIAL_OVER_RECEIVED);
         }
         derived.setRawMaterialConsumptions(merged);
     }
@@ -158,42 +195,20 @@ public class CustomerSuppliedSettlementCoverageGuard {
             return response;
         }
 
-        RequirementContext context = resolveRequirementContext(factoryId, plan);
-        List<SalesOrderSuppliedMaterialRequirement> requirements = context.requirements();
+        List<SalesOrderSuppliedMaterialRequirement> requirements =
+                resolveRequirements(factoryId, plan.getSourceOrderId());
         if (requirements.isEmpty()) {
             return response;
         }
-        BigDecimal planShare = context.planShare();
+        Map<String, BigDecimal> receivedByType = receivedByMaterialType(requirements);
+        Map<String, BigDecimal> consumedElsewhere =
+                consumedByOtherSettledPlans(factoryId, plan.getSourceOrderId(), planId);
+        Map<String, BigDecimal> reportedByType =
+                reportedQuantitiesByType(response.getPrefill().getRawMaterialConsumptions());
 
-        Map<RequirementKey, BigDecimal> reportedQuantity = new LinkedHashMap<>();
-        if (response.getPrefill().getRawMaterialConsumptions() != null) {
-            for (ProductionSettlementRequest.ConsumptionLine line
-                    : response.getPrefill().getRawMaterialConsumptions()) {
-                if (line == null || isBlank(line.getMaterialTypeId()) || isBlank(line.getUnit())
-                        || line.getQuantity() == null) {
-                    continue;
-                }
-                reportedQuantity.merge(new RequirementKey(line.getMaterialTypeId(), line.getUnit()),
-                        line.getQuantity(), BigDecimal::add);
-            }
-        }
-        Set<String> reportedTypes = reportedQuantity.keySet().stream()
-                .map(RequirementKey::materialTypeId)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-
-        Map<RequirementKey, BigDecimal> requiredQuantity = new LinkedHashMap<>();
-        Map<RequirementKey, SalesOrderSuppliedMaterialRequirement> requirementByKey = new LinkedHashMap<>();
-        for (SalesOrderSuppliedMaterialRequirement requirement : requirements) {
-            RequirementKey key = new RequirementKey(requirement.getMaterialTypeId(), requirement.getUnit());
-            requiredQuantity.merge(key, requirement.getExpectedQuantity().multiply(planShare), BigDecimal::add);
-            requirementByKey.putIfAbsent(key, requirement);
-        }
-        Map<RequirementKey, BigDecimal> missingOrShort = requiredQuantity.entrySet().stream()
-                .filter(entry -> reportedQuantity.getOrDefault(entry.getKey(), BigDecimal.ZERO)
-                        .compareTo(entry.getValue()) < 0)
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
-                        (left, right) -> left, LinkedHashMap::new));
-        if (missingOrShort.isEmpty()) {
+        CoverageEvaluation evaluation = evaluateAgainstLedger(
+                requirements, receivedByType, consumedElsewhere, reportedByType);
+        if (evaluation.foreignMaterialTypeIds().isEmpty() && evaluation.overages().isEmpty()) {
             return response;
         }
 
@@ -207,20 +222,25 @@ public class CustomerSuppliedSettlementCoverageGuard {
             issues = new ArrayList<>();
             audit.setIssues(issues);
         }
-        boolean alreadyPresent = issues.stream()
-                .anyMatch(issue -> issue != null && ISSUE_CODE.equals(issue.getCode()));
-        if (!alreadyPresent) {
-            String missingSummary = missingOrShort.entrySet().stream()
-                    .map(entry -> displayRequirement(requirementByKey.get(entry.getKey()), entry.getValue(),
-                            reportedQuantity.getOrDefault(entry.getKey(), BigDecimal.ZERO)))
-                    .collect(Collectors.joining("、"));
+        if (!evaluation.foreignMaterialTypeIds().isEmpty()
+                && issues.stream().noneMatch(i -> i != null
+                        && ISSUE_CODE_MATERIAL_NOT_LISTED.equals(i.getCode()))) {
             issues.add(ProductionSettlementPrefillResponse.Issue.builder()
-                    .code(ISSUE_CODE)
+                    .code(ISSUE_CODE_MATERIAL_NOT_LISTED)
                     .severity(ProductionSettlementPrefillResponse.Severity.BLOCKER)
                     .field("rawMaterialConsumptions")
-                    .message("客供要求共 " + distinctTypeCount(requirements) + " 种，逐道报工仅带入 "
-                            + reportedTypes.size() + " 种；还缺或数量不足 " + missingOrShort.size() + " 项："
-                            + missingSummary + "。请在“原料/辅料实际领用”补齐已入库客供批次后再结单。")
+                    .message("本批使用了客供清单之外的料：" + describeForeign(evaluation)
+                            + "。请确认领用批次，或改从客供物料清单里补录。")
+                    .build());
+        }
+        if (!evaluation.overages().isEmpty()
+                && issues.stream().noneMatch(i -> i != null
+                        && ISSUE_CODE_MATERIAL_OVER_RECEIVED.equals(i.getCode()))) {
+            issues.add(ProductionSettlementPrefillResponse.Issue.builder()
+                    .code(ISSUE_CODE_MATERIAL_OVER_RECEIVED)
+                    .severity(ProductionSettlementPrefillResponse.Severity.BLOCKER)
+                    .field("rawMaterialConsumptions")
+                    .message("客供原料累计用量超过已收数量：" + describeOverages(evaluation) + "。请核对领用数量。")
                     .build());
         }
         audit.setClean(false);
@@ -238,84 +258,150 @@ public class CustomerSuppliedSettlementCoverageGuard {
                             .collect(Collectors.joining("；"));
             throw new BusinessException(409, isBlank(reasons)
                     ? "结单自动带入不完整，请先在核对页补齐。" : reasons)
-                    .withCode(ISSUE_CODE)
-                    .withHint("请返回核对结单页，补齐缺失的客供原料/辅料批次")
+                    .withCode(ISSUE_CODE_MATERIAL_NOT_LISTED)
+                    .withHint("请返回核对结单页，补齐或修正客供原料/辅料批次")
                     .withHintTarget("rawMaterialConsumptions");
         }
     }
 
-    private static long distinctTypeCount(List<SalesOrderSuppliedMaterialRequirement> requirements) {
-        return requirements.stream()
-                .map(SalesOrderSuppliedMaterialRequirement::getMaterialTypeId)
-                .filter(type -> !isBlank(type))
-                .distinct()
-                .count();
-    }
+    // ------------------------------------------------------------------
+    // Shared coverage predicate — dialog (audit) 和写路径 (mergeMissingManualRawConsumptions)
+    // 必须共用同一份判定, 见类注释「形态 D」。
+    // ------------------------------------------------------------------
 
-    private static String displayRequirement(SalesOrderSuppliedMaterialRequirement requirement,
-                                             BigDecimal expected,
-                                             BigDecimal reported) {
-        String name = isBlank(requirement.getMaterialName())
-                ? requirement.getMaterialTypeId() : requirement.getMaterialName();
-        return name + " 要求 " + expected.stripTrailingZeros().toPlainString() + requirement.getUnit()
-                + "，已报 " + reported.stripTrailingZeros().toPlainString() + requirement.getUnit();
-    }
-
-    private static Long parseLong(String value) {
-        if (isBlank(value)) {
-            return null;
-        }
-        try {
-            return Long.valueOf(value.trim());
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
-    }
-
-    private RequirementContext resolveRequirementContext(String factoryId, ProductionPlan plan) {
-        Long sourceOrderItemId = parseLong(plan.getSourceOrderItemId());
-        List<SalesOrderItem> orderItems = sourceOrderItemId == null ? List.of()
-                : salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(
-                        plan.getSourceOrderId(), factoryId);
-        boolean isExactSingleLineOrder = sourceOrderItemId != null
-                && orderItems.size() == 1
-                && sourceOrderItemId.equals(orderItems.get(0).getId());
-        List<SalesOrderSuppliedMaterialRequirement> requirements = requirementRepository
-                .findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(plan.getSourceOrderId())
-                .stream()
-                .filter(requirement -> requirement != null
-                        && factoryId.equals(requirement.getFactoryId()))
-                .filter(requirement -> sourceOrderItemId == null
-                        || sourceOrderItemId.equals(requirement.getSalesOrderItemId())
-                        || (requirement.getSalesOrderItemId() == null && isExactSingleLineOrder))
-                .toList();
-        return new RequirementContext(requirements,
-                resolvePlanShare(plan, sourceOrderItemId, orderItems));
-    }
-
-    private static Map<RequirementKey, BigDecimal> requiredQuantities(
-            List<SalesOrderSuppliedMaterialRequirement> requirements, BigDecimal planShare) {
-        Map<RequirementKey, BigDecimal> required = new LinkedHashMap<>();
+    /**
+     * @param reportedByType 本批（audit 场景：核对结单弹窗预填；merge 场景：合并后的最终领用集合）
+     *                       按 materialTypeId 汇总后的用量
+     */
+    private CoverageEvaluation evaluateAgainstLedger(
+            List<SalesOrderSuppliedMaterialRequirement> requirements,
+            Map<String, BigDecimal> receivedByType,
+            Map<String, BigDecimal> consumedElsewhere,
+            Map<String, BigDecimal> reportedByType) {
+        Map<String, SalesOrderSuppliedMaterialRequirement> representative = new LinkedHashMap<>();
         for (SalesOrderSuppliedMaterialRequirement requirement : requirements) {
-            required.merge(new RequirementKey(requirement.getMaterialTypeId(), requirement.getUnit()),
-                    requirement.getExpectedQuantity().multiply(planShare), BigDecimal::add);
+            representative.putIfAbsent(requirement.getMaterialTypeId(), requirement);
         }
-        return required;
+
+        List<String> foreign = new ArrayList<>();
+        Map<String, Overage> overages = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> entry : reportedByType.entrySet()) {
+            String materialTypeId = entry.getKey();
+            BigDecimal thisPlanQuantity = entry.getValue();
+            BigDecimal received = receivedByType.get(materialTypeId);
+            if (received == null) {
+                foreign.add(materialTypeId);
+                continue;
+            }
+            BigDecimal cumulative = consumedElsewhere.getOrDefault(materialTypeId, BigDecimal.ZERO)
+                    .add(thisPlanQuantity);
+            if (cumulative.compareTo(received) > 0) {
+                SalesOrderSuppliedMaterialRequirement requirement = representative.get(materialTypeId);
+                overages.put(materialTypeId, new Overage(requirement, cumulative, received));
+            }
+        }
+        return new CoverageEvaluation(foreign, overages);
     }
 
-    private static Map<RequirementKey, BigDecimal> reportedQuantities(
+    private String describeForeign(CoverageEvaluation evaluation) {
+        Map<String, String> names = resolveForeignMaterialNames(evaluation.foreignMaterialTypeIds());
+        return evaluation.foreignMaterialTypeIds().stream()
+                .map(typeId -> names.getOrDefault(typeId, typeId))
+                .collect(Collectors.joining("、"));
+    }
+
+    private Map<String, String> resolveForeignMaterialNames(List<String> materialTypeIds) {
+        if (materialTypeIds.isEmpty() || rawMaterialTypeRepository == null) {
+            return Map.of();
+        }
+        Map<String, String> names = new LinkedHashMap<>();
+        for (RawMaterialType type : rawMaterialTypeRepository.findByIdIn(new LinkedHashSet<>(materialTypeIds))) {
+            if (type != null && type.getId() != null && !isBlank(type.getName())) {
+                names.put(type.getId(), type.getName());
+            }
+        }
+        return names;
+    }
+
+    private String describeOverages(CoverageEvaluation evaluation) {
+        return evaluation.overages().values().stream()
+                .map(this::displayOverage)
+                .collect(Collectors.joining("、"));
+    }
+
+    private String displayOverage(Overage overage) {
+        SalesOrderSuppliedMaterialRequirement requirement = overage.requirement();
+        String name = requirement != null && !isBlank(requirement.getMaterialName())
+                ? requirement.getMaterialName()
+                : (requirement != null ? requirement.getMaterialTypeId() : "?");
+        String unit = requirement != null && !isBlank(requirement.getUnit()) ? requirement.getUnit() : "";
+        return name + " 累计已用 " + overage.cumulative().stripTrailingZeros().toPlainString() + unit
+                + "，超过已收 " + overage.received().stripTrailingZeros().toPlainString() + unit;
+    }
+
+    // ------------------------------------------------------------------
+    // Data access helpers
+    // ------------------------------------------------------------------
+
+    private List<SalesOrderSuppliedMaterialRequirement> resolveRequirements(
+            String factoryId, String sourceOrderId) {
+        return requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(sourceOrderId)
+                .stream()
+                .filter(requirement -> requirement != null && factoryId.equals(requirement.getFactoryId()))
+                .toList();
+    }
+
+    private static Map<String, BigDecimal> receivedByMaterialType(
+            List<SalesOrderSuppliedMaterialRequirement> requirements) {
+        Map<String, BigDecimal> received = new LinkedHashMap<>();
+        for (SalesOrderSuppliedMaterialRequirement requirement : requirements) {
+            BigDecimal quantity = requirement.getReceivedQuantity() == null
+                    ? BigDecimal.ZERO : requirement.getReceivedQuantity();
+            received.merge(requirement.getMaterialTypeId(), quantity, BigDecimal::add);
+        }
+        return received;
+    }
+
+    /**
+     * 同一张 SO 下【其它已结单计划】按 materialTypeId 汇总的客供原料领用量。
+     *
+     * <p>只读 {@code production_settlement_consumptions}（结单成功后才写入的账本），天然只覆盖
+     * 「已结单」的计划 —— 草稿/进行中的其它计划在这张表里没有行，不会被误算进累计用量。</p>
+     */
+    private Map<String, BigDecimal> consumedByOtherSettledPlans(
+            String factoryId, String sourceOrderId, String excludePlanId) {
+        List<String> siblingPlanIds = productionPlanRepository
+                .findByFactoryIdAndSourceOrderId(factoryId, sourceOrderId).stream()
+                .map(ProductionPlan::getId)
+                .filter(id -> id != null && !id.equals(excludePlanId))
+                .toList();
+        if (siblingPlanIds.isEmpty()) {
+            return Map.of();
+        }
+        List<ProductionSettlementConsumption> rows = settlementConsumptionRepository
+                .findByFactoryIdAndProductionPlanIdInAndDeletedAtIsNull(factoryId, siblingPlanIds);
+        Map<String, BigDecimal> consumed = new LinkedHashMap<>();
+        for (ProductionSettlementConsumption row : rows) {
+            if (row == null || !"RAW_MATERIAL".equals(row.getSourceType())
+                    || isBlank(row.getMaterialTypeId()) || row.getQuantity() == null) {
+                continue;
+            }
+            consumed.merge(row.getMaterialTypeId(), row.getQuantity(), BigDecimal::add);
+        }
+        return consumed;
+    }
+
+    private static Map<String, BigDecimal> reportedQuantitiesByType(
             List<ProductionSettlementRequest.ConsumptionLine> lines) {
-        Map<RequirementKey, BigDecimal> reported = new LinkedHashMap<>();
+        Map<String, BigDecimal> reported = new LinkedHashMap<>();
         if (lines == null) {
             return reported;
         }
         for (ProductionSettlementRequest.ConsumptionLine line : lines) {
-            if (line == null || isBlank(line.getMaterialTypeId()) || isBlank(line.getUnit())
-                    || line.getQuantity() == null) {
+            if (line == null || isBlank(line.getMaterialTypeId()) || line.getQuantity() == null) {
                 continue;
             }
-            reported.merge(new RequirementKey(line.getMaterialTypeId(), line.getUnit()),
-                    line.getQuantity(), BigDecimal::add);
+            reported.merge(line.getMaterialTypeId(), line.getQuantity(), BigDecimal::add);
         }
         return reported;
     }
@@ -331,30 +417,11 @@ public class CustomerSuppliedSettlementCoverageGuard {
         return value == null || value.isBlank();
     }
 
-    private BigDecimal resolvePlanShare(ProductionPlan plan,
-                                        Long sourceOrderItemId,
-                                        List<SalesOrderItem> orderItems) {
-        if (sourceOrderItemId == null) {
-            return BigDecimal.ONE;
-        }
-        SalesOrderItem orderItem = orderItems.stream()
-                .filter(item -> sourceOrderItemId.equals(item.getId()))
-                .findFirst()
-                .orElse(null);
-        BigDecimal orderQuantity = orderItem == null ? null : orderItem.getQuantity();
-        BigDecimal planQuantity = plan.getSourceDisplayQuantity() != null
-                ? plan.getSourceDisplayQuantity() : plan.getPlannedQuantity();
-        if (orderQuantity == null || orderQuantity.compareTo(BigDecimal.ZERO) <= 0
-                || planQuantity == null || planQuantity.compareTo(BigDecimal.ZERO) <= 0) {
-            return BigDecimal.ONE;
-        }
-        return planQuantity.divide(orderQuantity, 8, RoundingMode.HALF_UP);
+    private record Overage(SalesOrderSuppliedMaterialRequirement requirement,
+                            BigDecimal cumulative, BigDecimal received) {
     }
 
-    private record RequirementKey(String materialTypeId, String unit) {
-    }
-
-    private record RequirementContext(List<SalesOrderSuppliedMaterialRequirement> requirements,
-                                      BigDecimal planShare) {
+    private record CoverageEvaluation(List<String> foreignMaterialTypeIds,
+                                       Map<String, Overage> overages) {
     }
 }
