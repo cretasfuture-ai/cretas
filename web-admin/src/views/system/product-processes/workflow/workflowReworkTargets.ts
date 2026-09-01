@@ -1,4 +1,6 @@
-import type { MaterialNodeData, ProcessNodeData, WorkflowReworkPolicy } from './types';
+import type {
+  MaterialNodeData, ProcessNodeData, WorkflowReworkPolicy, WorkflowReworkSource,
+} from './types';
 
 /**
  * 回料「允许回投的目标工序」的**唯一真值读写口**。
@@ -11,17 +13,25 @@ import type { MaterialNodeData, ProcessNodeData, WorkflowReworkPolicy } from './
  * ## 与 #417 的唯一差别：关系的粒度
  * #417 的 `allowedSourceProductTypeIds` 是**产品级**的（一个成品折一道工序），
  * 而已确认的交互（§8）要选的是**工序级**的目标 —— 一条线路里可以有多道工序都允许回投。
- * 产品级模型表达不了「同一线路选两道工序」，所以这里把同一个字段换成
- * `allowedSourceReworkNodeIds`：装的是**回料 Cell 的 node id**。
+ * 产品级模型表达不了「同一线路选两道工序」，所以换成 per-(回料, 目标工序) 的配方项
+ * `sources: [{ reworkNodeId, inputRatioPercent }]`。
+ *
+ * 🔴 比例是**每一对**各自一个，不是每道工序一个：同一道工序可以接收两块不同的回料，
+ * 各自的投入比例本来就不同 —— 只挂一个数在工序上表达不了，那是 #417 模型的另一个缺口。
  *
  * ⛔ 只有这一份真值。刻意**不**在回料 Cell 上再存一份 `allowedTargetIds`：
  * 同一个关系存两处一定会漂（形态 D）。抽屉是源侧视图，读写都经过本文件反查。
  *
  * ## 诚实边界
- * 这份配置**会持久化**（进 nodesJson ⇒ 进 revisionHash ⇒ 改它产生新工艺版本），
+ * 这份配方**会持久化**（进 nodesJson ⇒ 进 revisionHash ⇒ 改它产生新工艺版本），
  * 但 Java 侧当前**没有任何运行时消费者**：`WorkflowReworkNodes` 只认 `data.isRework`
  * 这个标记，没有读过 `reworkPolicy`。所以 UI 只能说「已配置」，
  * ⛔ 不能说「已限制投料」——那是一句代码给不出证据的话。
+ *
+ * ## ⛔ 回料是**可选项**，不许堵塞主线（2026-09-01 owner 裁定）
+ * 不配回料、配了回料但还没配回投目标，都**不影响**保存与发布。
+ * 交接书 §7 原写「没有目标时保存/发布 fail closed」——那条已被 owner 推翻：
+ * 回料本来就是可选能力，让它拦住整张工艺图的发布是本末倒置。
  */
 
 export interface ReworkFlowNodeLike {
@@ -57,6 +67,8 @@ export interface ReworkTargetOption {
   /** 这道工序通向哪些终端成品（>1 即共用工序）。 */
   routeProductTypeIds: string[];
   selected: boolean;
+  /** 已配的投入比例（BOM 性质的确定值）；没配这一对时为 null。 */
+  inputRatioPercent: number | null;
 }
 
 export interface ReworkTargetContext {
@@ -126,6 +138,11 @@ export function sourceProcessOfRework(
   return null;
 }
 
+function sourcesOf(node: ReworkFlowNodeLike): WorkflowReworkSource[] {
+  const policy = dataOf<ProcessNodeData>(node).reworkPolicy;
+  return Array.isArray(policy?.sources) ? policy.sources : [];
+}
+
 /** 已经允许这块回料回投的目标工序 id（从各工序的 reworkPolicy 反查，唯一真值）。 */
 export function selectedTargetProcessIds(
   nodes: readonly ReworkFlowNodeLike[],
@@ -133,12 +150,20 @@ export function selectedTargetProcessIds(
 ): string[] {
   return nodes
     .filter((node) => kindOf(node) === 'PROCESS')
-    .filter((node) => {
-      const policy = dataOf<ProcessNodeData>(node).reworkPolicy;
-      return Array.isArray(policy?.allowedSourceReworkNodeIds)
-        && policy.allowedSourceReworkNodeIds.includes(reworkNodeId);
-    })
+    .filter((node) => sourcesOf(node).some((source) => source.reworkNodeId === reworkNodeId))
     .map((node) => node.id);
+}
+
+/** 这块回料投进某道工序的**配方比例**；没配这一对时返回 null（⛔ 不返回 0 —— 0 是合法比例）。 */
+export function inputRatioFor(
+  nodes: readonly ReworkFlowNodeLike[],
+  reworkNodeId: string,
+  processNodeId: string,
+): number | null {
+  const node = nodes.find((candidate) => candidate.id === processNodeId);
+  if (!node) return null;
+  const source = sourcesOf(node).find((item) => item.reworkNodeId === reworkNodeId);
+  return source ? clampRatio(source.inputRatioPercent) : null;
 }
 
 /**
@@ -192,6 +217,7 @@ export function deriveReworkTargetContext(
       fullLabel: `${processName} · ${routeLabel}`,
       routeProductTypeIds,
       selected: selected.has(node.id),
+      inputRatioPercent: inputRatioFor(nodes, reworkNodeId, node.id),
     };
   });
 
@@ -241,42 +267,45 @@ export interface ReworkPolicyWriteResult {
   updates: Array<{ processNodeId: string; policy: WorkflowReworkPolicy | null }>;
 }
 
+/** 一条待写入的「这块回料 → 这道工序，按这个比例投」。 */
+export interface ReworkTargetSelection {
+  processNodeId: string;
+  inputRatioPercent: number;
+}
+
 /**
- * 把「这块回料允许回投到哪些工序」写成各目标工序上的 `reworkPolicy` 变更。
+ * 把「这块回料回投到哪些工序、各按多少比例」写成各目标工序上的 `reworkPolicy` 变更。
  *
- * ⛔ **更新同一组规则，不重复追加**：每次都以「目标工序当前的 allowedSourceReworkNodeIds」
- * 为基准做集合增删，绝不 push 新条目。同一块回料保存两次得到完全相同的结果（幂等）。
- * 目标被取消且该工序不再接受任何回料时，`reworkPolicy` 整个清成 null，
+ * ⛔ **更新同一组规则，不重复追加**：以目标工序当前的 `sources` 为基准做集合增删改，
+ * 绝不 push 重复条目。同一块回料保存两次得到完全相同的结果（幂等）。
+ *
+ * ⛔ 目标被取消且该工序不再接受任何回料时，`reworkPolicy` 整个清成 null，
  * 不留一个空数组的空壳（空壳会让「配过又取消」和「从没配过」长得一样）。
+ *
+ * ⚠️ `nextSelections` 允许为空 —— 回料是可选项，用户可以把目标全清掉再保存。
  */
 export function planReworkTargetWrites(
   nodes: readonly ReworkFlowNodeLike[],
   reworkNodeId: string,
-  nextTargetProcessIds: readonly string[],
+  nextSelections: readonly ReworkTargetSelection[],
 ): ReworkPolicyWriteResult {
-  const next = new Set(nextTargetProcessIds);
+  const wanted = new Map(nextSelections.map((item) => [item.processNodeId, clampRatio(item.inputRatioPercent)]));
   const updates: ReworkPolicyWriteResult['updates'] = [];
   nodes.filter((node) => kindOf(node) === 'PROCESS').forEach((node) => {
-    const data = dataOf<ProcessNodeData>(node);
-    const current = Array.isArray(data.reworkPolicy?.allowedSourceReworkNodeIds)
-      ? data.reworkPolicy.allowedSourceReworkNodeIds
-      : [];
-    const has = current.includes(reworkNodeId);
-    const shouldHave = next.has(node.id);
-    if (has === shouldHave) return;
-    const merged = shouldHave
-      ? [...current, reworkNodeId]
-      : current.filter((id) => id !== reworkNodeId);
-    if (merged.length === 0) {
-      updates.push({ processNodeId: node.id, policy: null });
-      return;
-    }
+    const current = sourcesOf(node);
+    const others = current.filter((source) => source.reworkNodeId !== reworkNodeId);
+    const mine = current.find((source) => source.reworkNodeId === reworkNodeId) ?? null;
+    const nextRatio = wanted.has(node.id) ? (wanted.get(node.id) as number) : null;
+    const unchanged = nextRatio === null
+      ? mine === null
+      : mine !== null && clampRatio(mine.inputRatioPercent) === nextRatio;
+    if (unchanged) return;
+    const merged = nextRatio === null
+      ? others
+      : [...others, { reworkNodeId, inputRatioPercent: nextRatio }];
     updates.push({
       processNodeId: node.id,
-      policy: {
-        allowedSourceReworkNodeIds: [...new Set(merged)],
-        maxInputRatioPercent: clampRatio(data.reworkPolicy?.maxInputRatioPercent),
-      },
+      policy: merged.length === 0 ? null : { sources: merged },
     });
   });
   return { updates };
@@ -302,29 +331,25 @@ export function pruneReworkPolicies(
     .map((node) => node.id));
   const updates: ReworkPolicyWriteResult['updates'] = [];
   nodes.filter((node) => kindOf(node) === 'PROCESS').forEach((node) => {
-    const data = dataOf<ProcessNodeData>(node);
-    const current = data.reworkPolicy?.allowedSourceReworkNodeIds;
-    if (!Array.isArray(current)) return;
-    const kept = current.filter((id) => liveReworkIds.has(id));
+    const current = sourcesOf(node);
+    if (current.length === 0) return;
+    const kept = current.filter((source) => liveReworkIds.has(source.reworkNodeId));
     if (kept.length === current.length) return;
     updates.push({
       processNodeId: node.id,
-      policy: kept.length === 0 ? null : {
-        allowedSourceReworkNodeIds: kept,
-        maxInputRatioPercent: clampRatio(data.reworkPolicy?.maxInputRatioPercent),
-      },
+      policy: kept.length === 0 ? null : { sources: kept },
     });
   });
   return { updates };
 }
 
 /**
- * 发布/保存门禁：回料 Cell 必须至少有 1 道允许回投的目标工序。
+ * 「配了回料但一道回投目标都没配」的回料 Cell。
  *
- * fail closed —— 一块「没有任何去处」的回料在业务上无意义，放它过去只会在报工屏上
- * 出现一个谁也不知道该投到哪里的选项。返回**违规的回料节点 id**，空数组即通过。
+ * ⛔ 这**不是门禁**（2026-09-01 owner 裁定）：回料是可选能力，不许拦住保存与发布。
+ * 它只用来在 Cell 上显示一个可见状态，让用户知道这块回料的去处还没写。
  */
-export function reworkNodesMissingTargets(
+export function reworkNodesWithoutTargets(
   nodes: readonly ReworkFlowNodeLike[],
 ): string[] {
   return nodes

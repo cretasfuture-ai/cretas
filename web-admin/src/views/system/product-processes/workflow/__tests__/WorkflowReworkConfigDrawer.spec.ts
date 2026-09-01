@@ -27,6 +27,7 @@ function context(overrides: Partial<ReworkTargetContext> = {}): ReworkTargetCont
             fullLabel: '腌制A · 产品甲',
             routeProductTypeIds: ['SKU-A'],
             selected: true,
+            inputRatioPercent: 15,
           },
           {
             processNodeId: 'p-a2',
@@ -34,6 +35,7 @@ function context(overrides: Partial<ReworkTargetContext> = {}): ReworkTargetCont
             fullLabel: '熟制A · 产品甲',
             routeProductTypeIds: ['SKU-A'],
             selected: false,
+            inputRatioPercent: null,
           },
         ],
       },
@@ -49,6 +51,7 @@ function context(overrides: Partial<ReworkTargetContext> = {}): ReworkTargetCont
           fullLabel: '腌制B · 产品乙',
           routeProductTypeIds: ['SKU-B'],
           selected: false,
+          inputRatioPercent: null,
         }],
       },
     ],
@@ -163,26 +166,47 @@ describe('§8 勾选与定位严格拆开', () => {
   });
 });
 
-describe('§7 fail closed：没有目标工序不许保存', () => {
-  it('一个目标都没有时保存按钮禁用，并给出明确原因', () => {
+describe('⛔ 回料是可选项：一个目标都不配也能保存（owner 2026-09-01 裁定）', () => {
+  it('一个目标都没有时保存**仍然可用**，提示只说「不影响保存与发布」', () => {
+    // 判据换代：旧断言守的是交接书 §7 的 fail-closed（没有目标不许保存）。
+    // owner 推翻了它 —— 回料是可选能力，不许拦住主线。
     const empty = context({
       groups: context().groups.map((group) => ({
         ...group,
-        options: group.options.map((option) => ({ ...option, selected: false })),
+        options: group.options.map((option) => ({ ...option, selected: false, inputRatioPercent: null })),
       })),
       selectedCount: 0,
     });
     const wrapper = mountDrawer({ context: empty });
-    expect(wrapper.get('[data-testid="rework-save"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[data-testid="rework-no-target"]').text()).toContain('至少选择 1 道');
+    expect(wrapper.get('[data-testid="rework-save"]').attributes('disabled')).toBeUndefined();
+    const hint = wrapper.get('[data-testid="rework-no-target"]').text();
+    expect(hint).toContain('不影响保存与发布');
+    // 阴性对照：⛔ 不许再出现任何拦截口径的措辞
+    expect(hint).not.toContain('拦下');
+    expect(hint).not.toContain('至少选择');
   });
 
-  it('阳性对照：有目标时保存按钮可用并抛出完整 payload', async () => {
-    const wrapper = mountDrawer();
-    expect(wrapper.get('[data-testid="rework-save"]').attributes('disabled')).toBeUndefined();
+  it('清空目标后保存，抛出的 targets 是空数组（不是被吞掉的一次点击）', async () => {
+    const empty = context({
+      groups: context().groups.map((group) => ({
+        ...group,
+        options: group.options.map((option) => ({ ...option, selected: false, inputRatioPercent: null })),
+      })),
+      selectedCount: 0,
+    });
+    const wrapper = mountDrawer({ context: empty });
     await wrapper.get('[data-testid="rework-save"]').trigger('click');
     expect(wrapper.emitted('save')?.[0]).toEqual([{
-      name: '回料 1', skuId: '', unit: 'kg', targetProcessIds: ['p-a1'],
+      name: '回料 1', skuId: '', unit: 'kg', targets: [],
+    }]);
+  });
+
+  it('有目标时抛出完整 payload，带每一对各自的投入比例', async () => {
+    const wrapper = mountDrawer();
+    await wrapper.get('[data-testid="rework-save"]').trigger('click');
+    expect(wrapper.emitted('save')?.[0]).toEqual([{
+      name: '回料 1', skuId: '', unit: 'kg',
+      targets: [{ processNodeId: 'p-a1', inputRatioPercent: 15 }],
     }]);
   });
 
@@ -193,13 +217,52 @@ describe('§7 fail closed：没有目标工序不许保存', () => {
   });
 });
 
-describe('诚实边界：说「已配置」，不说「已限制投料」', () => {
-  it('抽屉写明系统当前不会按它拦截投料', () => {
+describe('比例是配方值，不是上限', () => {
+  it('已勾选的目标带一个比例输入框，未勾选的没有', () => {
+    const wrapper = mountDrawer();
+    expect(wrapper.find('[data-testid="rework-ratio-p-a1"]').exists()).toBe(true);
+    expect((wrapper.get('[data-testid="rework-ratio-p-a1"]').element as HTMLInputElement).value).toBe('15');
+    // 阴性对照：没勾的那道工序不该出现比例框
+    expect(wrapper.find('[data-testid="rework-ratio-p-a2"]').exists()).toBe(false);
+  });
+
+  it('改比例只改这一对，保存时带出去', async () => {
+    const wrapper = mountDrawer();
+    const input = wrapper.get('[data-testid="rework-ratio-p-a1"]');
+    (input.element as HTMLInputElement).value = '22.5';
+    await input.trigger('change');
+    await wrapper.get('[data-testid="rework-save"]').trigger('click');
+    expect(wrapper.emitted('save')?.[0]).toEqual([{
+      name: '回料 1', skuId: '', unit: 'kg',
+      targets: [{ processNodeId: 'p-a1', inputRatioPercent: 22.5 }],
+    }]);
+  });
+
+  it('超范围的输入被夹回 0–100', async () => {
+    const wrapper = mountDrawer();
+    const input = wrapper.get('[data-testid="rework-ratio-p-a1"]');
+    (input.element as HTMLInputElement).value = '250';
+    await input.trigger('change');
+    await wrapper.get('[data-testid="rework-save"]').trigger('click');
+    expect((wrapper.emitted('save')?.[0]?.[0] as { targets: Array<{ inputRatioPercent: number }> })
+      .targets[0].inputRatioPercent).toBe(100);
+  });
+
+  it('🔴 措辞是「配方值/按它算」，⛔ 不许出现「上限 / 最多 / 不超过」', () => {
+    // owner 订正：这个比例不是天花板，是「就按这个百分比投」的 BOM 值。
+    // 说成上限会让人以为系统在卡一个边界，而它其实在声明一个配方。
+    const text = mountDrawer().text();
+    expect(text).toContain('配方值');
+    expect(text).toContain('按这个比例算');
+    expect(text).not.toContain('上限');
+    expect(text).not.toContain('最多');
+    expect(text).not.toContain('不超过');
+  });
+
+  it('诚实边界仍在：说明系统还不会自动配料', () => {
     const text = mountDrawer().text();
     expect(text).toContain('不会');
-    expect(text).toContain('拦截投料');
-    // 阴性对照：⛔ 不许出现宣称已经生效的措辞。
+    expect(text).toContain('自动配料');
     expect(text).not.toContain('已生效');
-    expect(text).not.toContain('已限制');
   });
 });

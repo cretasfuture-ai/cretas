@@ -58,11 +58,12 @@
           </span>
         </h4>
         <p class="rework-drawer__scope">
-          这里保存的是配置。系统当前<strong>不会</strong>在报工时按它拦截投料 ——
-          后端只读画布上的回料标记，没有任何运行时消费者读这份目标清单。
+          比例是<strong>配方值</strong>：这块回料就按它投进那道工序，由车间纪律照此执行，
+          实际投多少不必登记，后续核算直接按这个比例算。
+          系统当前<strong>不会</strong>在报工时按它自动配料 —— 后端只读画布上的回料标记。
         </p>
-        <p v-if="draftTargets.size === 0" class="rework-drawer__warn" data-testid="rework-no-target">
-          至少选择 1 道目标工序，否则保存与发布会被拦下。
+        <p v-if="draftTargets.size === 0" class="rework-drawer__hint" data-testid="rework-no-target">
+          还没配回投目标。回料是可选项，<strong>不影响保存与发布</strong>；先留空也可以，回头再补。
         </p>
         <el-input
           v-if="context.totalCount > 8"
@@ -118,6 +119,27 @@
                 @keydown.enter.prevent.stop="emit('toggle-locate', option.processNodeId)"
                 @keydown.space.prevent.stop="emit('toggle-locate', option.processNodeId)"
               >{{ lockedTargetId === option.processNodeId ? '定位中' : '定位' }}</button>
+              <label
+                v-if="draftTargets.has(option.processNodeId)"
+                class="target-card__ratio"
+                :title="`${option.processName} 的回料投入比例（配方值）`"
+              >
+                <span class="target-card__ratio-label">回投比例</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  class="target-card__ratio-input"
+                  :value="draftTargets.get(option.processNodeId)"
+                  :disabled="!canWrite"
+                  :aria-label="`${option.fullLabel} 的回料投入比例，百分比`"
+                  :data-testid="`rework-ratio-${option.processNodeId}`"
+                  @change="(event: Event) => setRatio(option.processNodeId, (event.target as HTMLInputElement).value)"
+                  @click.stop
+                />
+                <span aria-hidden="true">%</span>
+              </label>
             </div>
           </div>
         </div>
@@ -135,7 +157,7 @@
       </el-button>
       <el-button
         type="primary"
-        :disabled="!canWrite || draftTargets.size === 0"
+        :disabled="!canWrite"
         data-testid="rework-save"
         @click="save"
       >保存</el-button>
@@ -169,19 +191,24 @@ const emit = defineEmits<{
   'hover-target': [processNodeId: string | null];
   /** 点击「定位」→ 锁定/取消锁定聚焦，并把目标平滑移进可视区。 */
   'toggle-locate': [processNodeId: string];
-  save: [payload: { name: string; skuId: string; unit: string; targetProcessIds: string[] }];
+  save: [payload: {
+    name: string; skuId: string; unit: string;
+    targets: Array<{ processNodeId: string; inputRatioPercent: number }>;
+  }];
 }>();
 
 const draftName = ref('');
 const draftSkuId = ref('');
 const draftUnit = ref('');
-const draftTargets = ref<Set<string>>(new Set());
+/** processNodeId → 投入比例（%）。⛔ 用 Map 不用 Set：比例是这一对的属性，不是工序的属性。 */
+const draftTargets = ref<Map<string, number>>(new Map());
 const keyword = ref('');
 const initialSnapshot = ref('');
 
 function snapshot(): string {
   return JSON.stringify({
-    n: draftName.value, s: draftSkuId.value, u: draftUnit.value, t: [...draftTargets.value].sort(),
+    n: draftName.value, s: draftSkuId.value, u: draftUnit.value,
+    t: [...draftTargets.value.entries()].sort((a, b) => a[0].localeCompare(b[0])),
   });
 }
 
@@ -190,10 +217,10 @@ watch(() => [props.visible, props.context.reworkNodeId], ([visible]) => {
   draftName.value = props.name;
   draftSkuId.value = props.skuId;
   draftUnit.value = props.unit;
-  draftTargets.value = new Set(
+  draftTargets.value = new Map(
     props.context.groups.flatMap((group) => group.options)
       .filter((option) => option.selected)
-      .map((option) => option.processNodeId),
+      .map((option) => [option.processNodeId, option.inputRatioPercent ?? 0] as const),
   );
   keyword.value = '';
   initialSnapshot.value = snapshot();
@@ -218,18 +245,29 @@ function selectedInGroup(group: ReworkRouteGroup): number {
 }
 
 function toggleTarget(processNodeId: string, checked: boolean): void {
-  const next = new Set(draftTargets.value);
-  if (checked) next.add(processNodeId); else next.delete(processNodeId);
+  const next = new Map(draftTargets.value);
+  if (checked) next.set(processNodeId, next.get(processNodeId) ?? 0);
+  else next.delete(processNodeId);
+  draftTargets.value = next;
+}
+
+/** 比例是配方值，允许 0（「登记了这条去向，比例待定」），⛔ 但不接受负数/超 100/非数。 */
+function setRatio(processNodeId: string, raw: string): void {
+  const numeric = Number(raw);
+  const clamped = Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 0;
+  const next = new Map(draftTargets.value);
+  next.set(processNodeId, clamped);
   draftTargets.value = next;
 }
 
 function save(): void {
-  if (draftTargets.value.size === 0) return;   // fail closed —— 没有目标不许保存
+  // ⛔ 不再 fail closed：回料是可选项，允许一个目标都不配就保存（owner 2026-09-01 裁定）。
   emit('save', {
     name: draftName.value.trim() || props.name,
     skuId: draftSkuId.value,
     unit: draftUnit.value,
-    targetProcessIds: [...draftTargets.value],
+    targets: [...draftTargets.value.entries()]
+      .map(([processNodeId, inputRatioPercent]) => ({ processNodeId, inputRatioPercent })),
   });
   initialSnapshot.value = snapshot();
   emit('update:visible', false);
@@ -276,8 +314,12 @@ function handleBeforeClose(done: () => void): void {
 }
 @media (max-width: 560px) { .route-group__grid { grid-template-columns: minmax(0, 1fr); } }
 
+/* 两行：第一行 勾选 + 工序名 + 定位；第二行（仅已选）投入比例。
+   ⛔ 不把比例挤进第一行 —— 本机实测工序名会被省略成「熟…」，
+      而工序名正是这张卡片唯一要传达的信息。 */
 .target-card {
-  display: flex; align-items: center; gap: 6px; min-width: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  gap: 4px 6px; min-width: 0;
   padding: 5px 7px; border: 1px solid #e6ebf2; border-radius: 7px; background: #fff;
 }
 /* 已选状态不只靠颜色：加粗边框 + 左侧色条 + checkbox 勾选本身(§8)。 */
@@ -290,6 +332,19 @@ function handleBeforeClose(done: () => void): void {
   display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 12px;
 }
+.target-card__ratio {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 4px;
+  padding-top: 2px; border-top: 1px dashed #e6ebf2;
+  color: #1b65a8; font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.target-card__ratio-label { flex: 1; min-width: 0; color: #667085; }
+.target-card__ratio-input {
+  width: 46px; padding: 1px 4px; border: 1px solid #d8e4ef; border-radius: 5px;
+  font-size: 11px; text-align: right; font-variant-numeric: tabular-nums;
+}
+.target-card__ratio-input:focus-visible { outline: 2px solid #1b65a8; outline-offset: 1px; }
+.rework-drawer__hint { margin: 0; color: #667085; font-size: 12px; line-height: 1.6; }
 .target-card__locate {
   flex: none; padding: 1px 7px; border: 1px solid #d8e4ef; border-radius: 5px;
   background: #fff; color: #1b65a8; font-size: 11px; cursor: pointer;

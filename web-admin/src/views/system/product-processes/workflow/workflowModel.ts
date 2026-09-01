@@ -605,21 +605,28 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
 }
 
 /**
- * 回料规则的形状校验 —— 承接 PR #417 的 `isOptionalReworkPolicy`, 只换了字段粒度。
+ * 回料规则的形状校验 —— 承接 PR #417 的 `isOptionalReworkPolicy`, 换成 per-(回料, 工序) 的配方项。
  *
- * ⛔ 空数组不算合法: 「一个都不允许」必须写成 `reworkPolicy = null`, 不是留一个空壳。
- * 两种写法并存会让「配过又全取消」和「从没配过」在数据上分不开(§7 fail closed 的前提)。
+ * ⛔ 空数组不算合法: 「一条都没有」必须写成 `reworkPolicy = null`, 不是留一个空壳。
+ * 两种写法并存会让「配过又全删」和「从没配过」在数据上分不开。
  */
 function isOptionalReworkPolicy(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (!isRecord(value)
-    || !hasExactKeys(value, ['allowedSourceReworkNodeIds', 'maxInputRatioPercent'])
-    || !Array.isArray(value.allowedSourceReworkNodeIds)
-    || value.allowedSourceReworkNodeIds.length === 0
-    || !value.allowedSourceReworkNodeIds.every(isNonBlankString)
-    || new Set(value.allowedSourceReworkNodeIds).size !== value.allowedSourceReworkNodeIds.length
-    || !isFiniteNumber(value.maxInputRatioPercent)) return false;
-  const ratio = Number(value.maxInputRatioPercent);
+    || !hasExactKeys(value, ['sources'])
+    || !Array.isArray(value.sources)
+    || value.sources.length === 0) return false;
+  const ids = value.sources.map((source) => (isRecord(source) ? source.reworkNodeId : null));
+  if (new Set(ids).size !== ids.length) return false;
+  return value.sources.every(isReworkSource);
+}
+
+function isReworkSource(value: unknown): boolean {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['reworkNodeId', 'inputRatioPercent'])
+    || !isNonBlankString(value.reworkNodeId)
+    || !isFiniteNumber(value.inputRatioPercent)) return false;
+  const ratio = Number(value.inputRatioPercent);
   return ratio >= 0 && ratio <= 100;
 }
 

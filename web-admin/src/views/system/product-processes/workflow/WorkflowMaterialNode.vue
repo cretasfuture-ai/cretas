@@ -153,12 +153,12 @@
           class="rework-config__count"
           :class="{ 'is-empty': reworkTargetCount === 0 }"
           data-testid="rework-target-count"
-        >{{ reworkTargetCount === 0 ? '未配置' : `已选 ${reworkTargetCount} 道` }}</span>
+        >{{ reworkTargetCount === 0 ? '未配置（可选）' : `已选 ${reworkTargetCount} 道` }}</span>
       </div>
-      <p v-if="reworkTargetCount === 0" class="rework-config__warn" data-testid="rework-missing-target">
-        没有目标工序的回料保存/发布会被拦下 —— 一块没有去处的回料只会在报工屏上多出一个没人知道该投到哪里的选项。
+      <p v-if="reworkTargetCount === 0" class="rework-config__hint" data-testid="rework-missing-target">
+        还没配回投目标。⛔ 这不拦保存也不拦发布 —— 回料是可选项。
       </p>
-      <p class="rework-config__scope">当前保存的是配置，系统尚未按它在报工时拦截投料。</p>
+      <p class="rework-config__scope">比例是配方值（按它投、按它算）；系统尚未在报工时自动配料。</p>
       <el-button
         v-if="canWrite"
         size="small"
@@ -487,7 +487,7 @@ const kindMark = computed(() => (isRework.value ? '回' : isByproduct.value ? '�
 .rework-config__label { color: #33499b; font-size: 11px; font-weight: 650; }
 .rework-config__count { color: #33499b; font-size: 11px; font-weight: 700; }
 .rework-config__count.is-empty { color: #b5590a; }
-.rework-config__warn { margin: 6px 0 0; color: #b5590a; font-size: 11px; line-height: 1.5; }
+.rework-config__hint { margin: 6px 0 0; color: #667085; font-size: 11px; line-height: 1.5; }
 .rework-config__scope { margin: 6px 0 6px; color: #667085; font-size: 11px; line-height: 1.5; }
 
 /* BOM 状态气泡: 贴在成品 Cell 右上角外侧, 带一个指向 Cell 的小三角。

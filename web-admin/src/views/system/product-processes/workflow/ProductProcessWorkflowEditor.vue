@@ -934,7 +934,6 @@ import {
   deriveReworkTargetContext,
   planReworkTargetWrites,
   pruneReworkPolicies,
-  reworkNodesMissingTargets,
   selectedTargetProcessIds,
   sourceProcessOfRework,
   type ReworkTargetContext,
@@ -2548,7 +2547,20 @@ function isCurrentCatalogLoad(generation: number, factoryId: string): boolean {
 
 function unitContext(): WorkflowUnitContext {
   const products: WorkflowUnitContext['products'] = {};
-  [...skuOptions.value, ...rawMaterialOptions.value].forEach((option) => {
+  // 🔴 2026-09-01 本机实测: 副产 Cell 绑的是**物料档案的副产池**(raw_material_types
+  // 里 isByproduct=true 那些), 而 rawMaterialOptions 被 isRawMaterialOption 按
+  // `category === '原料'` 过滤过 —— 副产物料的 category 按定义不是「原料」,
+  // 于是它一条都进不来。
+  //
+  // 后果不是「副产显示不好看」, 是**整张工艺图存不了也发不了**:
+  // reconcileWorkflowUnits 找不到这个 SKU 的主单位 ⇒ 报
+  // 「SKU RM-xxx 缺少规范主单位，请先维护 SKU 单位后再发布」——
+  // 而那个物料**明明有 unit='kg'**, 用户照着提示去物料档案只会发现单位是好的。
+  //
+  // ⛔ 修法不是把副产物料的 category 揉成「原料」(那是改数据迁就代码);
+  //    是让单位上下文认它本来就该在的那个池子。
+  [...skuOptions.value, ...rawMaterialOptions.value, ...byproductMaterialOptions.value]
+    .forEach((option) => {
     if (!option.id || !option.unit) return;
     products[option.id] = {
       productTypeId: option.id,
@@ -2659,6 +2671,12 @@ async function reconcileForPersistence(
   identity: WorkflowIdentity,
   showErrors: boolean,
 ): Promise<ProductProcessWorkflowDefinition | null> {
+  // ⛔ 必须 await: 单位对账要用副产物料的主单位, 而副产池是**懒加载**的 ——
+  //    只在「新建副产 Cell」和「就地标记副产」两个动作里拉过。
+  //    打开一张**已有**副产的图从来不拉它 ⇒ 池子是空的 ⇒ 对账报
+  //    「SKU 缺少规范主单位」把保存和发布一起挡住(2026-09-01 本机实测)。
+  //    fire-and-forget 在这里不够: 对账就在下一行, 等不到它回来。
+  if (canvasHasByproduct()) await ensureByproductMaterialOptions();
   let current = currentDefinition();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const seq = editSeq;
@@ -3618,9 +3636,17 @@ function hydrate(nextDefinition: ProductProcessWorkflowDefinition): boolean {
   projectUniqueRawMaterialBindings();
   refreshPortMaterialMetadata();
   refreshBomOverlay();
+  // 图里已经有副产 ⇒ 把副产物料池拉起来(下拉要用, 单位对账也要用)。
+  // 这里不 await —— 渲染不必等它; 保存路径上有一次 await 的兜底。
+  if (canvasHasByproduct()) void ensureByproductMaterialOptions();
   // 节点整体换了一批 ⇒ 旧的 focus id 可能一个都不在了。不清理就会「全部淡化」= 白屏(§9)。
   applyFocusClasses();
   return false;
+}
+
+/** 画布上有没有副产 Cell —— 决定要不要把副产物料池拉起来。 */
+function canvasHasByproduct(): boolean {
+  return flowNodes.value.some((node) => (node.data as MaterialNodeData)?.isByproduct === true);
 }
 
 function currentDefinition(): ProductProcessWorkflowDefinition {
@@ -4602,13 +4628,9 @@ function openSpecialOutputChooser(processId: string): void {
  */
 function chooseSpecialOutput(kind: SpecialOutputKind): void {
   const processId = specialOutputTargetProcessId.value;
-  const option = specialOutputOption(kind);
+  // 只剩两类, 且两类都有后端运行时契约(见 workflowSpecialOutputs.ts) —— 不再需要可用性分支。
+  specialOutputOption(kind);
   if (!processId || !canEdit.value) return;
-  if (!option.available) {
-    // fail closed: 没有后端权威契约的那一类, 说出缺口, ⛔ 不建一个存得下却没人读的假闭环。
-    ElMessage.warning(option.blockedReason);
-    return;
-  }
   specialOutputChooserVisible.value = false;
   const createdBefore = new Set(flowNodes.value.map((node) => node.id));
   addOutputToProcess(processId, kind === 'byproduct' ? { byproduct: true } : { rework: true });
@@ -4707,16 +4729,14 @@ async function onReworkToggleLocate(processNodeId: string): Promise<void> {
  * 没有目标工序时 fail closed, 在抽屉里就按不下保存, 这里再挡一次。
  */
 function saveReworkConfig(payload: {
-  name: string; skuId: string; unit: string; targetProcessIds: string[];
+  name: string; skuId: string; unit: string;
+  targets: Array<{ processNodeId: string; inputRatioPercent: number }>;
 }): void {
   const reworkNodeId = reworkDrawerNodeId.value;
   const node = reworkDrawerNode.value;
   if (!reworkNodeId || !node || !canEdit.value) return;
-  if (payload.targetProcessIds.length === 0) {
-    ElMessage.error('回料必须至少配置 1 道允许回投的目标工序');
-    return;
-  }
-  const { updates } = planReworkTargetWrites(flowNodes.value, reworkNodeId, payload.targetProcessIds);
+  // ⛔ 目标为空**照样保存**: 回料是可选项, 不许拦(owner 2026-09-01 裁定)。
+  const { updates } = planReworkTargetWrites(flowNodes.value, reworkNodeId, payload.targets);
   mutate(() => {
     Object.assign(node.data as MaterialNodeData, {
       name: payload.name,
@@ -4732,22 +4752,6 @@ function saveReworkConfig(payload: {
     });
   });
   focusReworkWhole(reworkNodeId);
-}
-
-/**
- * 发布/保存门禁: 每块回料至少 1 道目标工序, 否则 fail closed(§7)。
- * 返回 true = 通过。
- */
-function reworkTargetsSatisfied(showError = true): boolean {
-  const offenders = reworkNodesMissingTargets(stripBomOverlay(flowNodes.value));
-  if (offenders.length === 0) return true;
-  if (showError) {
-    const names = offenders
-      .map((id) => String((flowNodes.value.find((node) => node.id === id)?.data as MaterialNodeData)?.name || id))
-      .join('、');
-    ElMessage.error(`以下回料还没有允许回投的目标工序，无法发布：${names}`);
-  }
-  return false;
 }
 
 function updateProcessData(processId: string, patch: Partial<ProcessNodeData>): void {
@@ -5412,9 +5416,9 @@ async function publishWorkflow(): Promise<void> {
     ElMessage.info('当前没有待应用的配置修改；请先修改并保存当前配置');
     return;
   }
-  // §7 fail closed: 没有目标工序的回料不许发布。⛔ 这不是提示是闸 ——
-  // 一块没有去处的回料只会在报工屏上多出一个谁也不知道该投到哪里的选项。
-  if (!reworkTargetsSatisfied()) return;
+  // ⛔ 这里刻意**没有**回料门禁(owner 2026-09-01 裁定): 回料是可选能力,
+  // 「配了回料但还没配回投目标」不许拦住整张工艺图的发布 —— 那是本末倒置。
+  // 状态在回料 Cell 上可见即可, 见 WorkflowMaterialNode 的 rework-config 区块。
   if (!(await confirmSeasoningAbsence(identity))) return;
   await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
 }

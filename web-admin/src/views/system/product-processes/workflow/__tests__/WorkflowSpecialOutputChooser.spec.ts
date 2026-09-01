@@ -5,9 +5,7 @@ import { resolve } from 'node:path';
 import WorkflowSpecialOutputChooser from '../WorkflowSpecialOutputChooser.vue';
 import { SPECIAL_OUTPUT_OPTIONS, specialOutputOption } from '../workflowSpecialOutputs';
 
-const JAVA_ROOT = resolve(
-  __dirname, '../../../../../../..',
-  'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow');
+const read = (name: string): string => readFileSync(resolve(__dirname, '..', name), 'utf8');
 
 function mountChooser() {
   return mount(WorkflowSpecialOutputChooser, {
@@ -21,73 +19,48 @@ function mountChooser() {
   });
 }
 
-describe('§7 统一入口后的三选一', () => {
-  it('恰好三类：副产 / 不良品 / 回料产出', () => {
-    expect(SPECIAL_OUTPUT_OPTIONS.map((option) => option.kind))
-      .toEqual(['byproduct', 'defective', 'rework']);
+describe('§7 统一入口后的选择器', () => {
+  it('恰好两类：副产 / 回料产出', () => {
+    // 🔴 2026-09-01 判据换代（形态 C‴：断言守的是历史，不是需求）。
+    // 旧判据钉的是「恰好三类，不良品常驻可见但不可选」。owner 裁定业务上**不存在**
+    // 「判废 / 不入库」这个场景 —— 车间是「复查 → 存着 → 回料直接回投」，
+    // 剔出来的东西最终都走回料。所以这一类整个去掉，不是「暂时禁用」。
+    expect(SPECIAL_OUTPUT_OPTIONS.map((option) => option.kind)).toEqual(['byproduct', 'rework']);
     const wrapper = mountChooser();
     expect(wrapper.find('[data-testid="special-output-byproduct"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="special-output-defective"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="special-output-rework"]').exists()).toBe(true);
   });
 
-  it('选择可用的一类会带着 kind 抛给画布层', async () => {
+  it('⛔ 阴性对照：不良品这一项**彻底不存在**，不是藏起来也不是置灰', () => {
+    const wrapper = mountChooser();
+    expect(wrapper.find('[data-testid="special-output-defective"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('不良品');
+    expect(wrapper.text()).not.toContain('判废');
+    // 定义层也不许留一个 available:false 的死条目
+    expect(read('workflowSpecialOutputs.ts')).not.toMatch(/kind:\s*'defective'/);
+    expect(read('workflowSpecialOutputs.ts')).not.toContain('available');
+  });
+
+  it('两类都可选，选中后带着 kind 抛给画布层', async () => {
     const wrapper = mountChooser();
     await wrapper.get('[data-testid="special-output-byproduct"]').trigger('click');
     await wrapper.get('[data-testid="special-output-rework"]').trigger('click');
     expect(wrapper.emitted('choose')).toEqual([['byproduct'], ['rework']]);
   });
-});
 
-describe('§7 不良品 fail closed —— 后端没有权威契约就不许伪装成可用', () => {
-  it('不良品是**常驻可见但不可选**的一项，⛔ 不是悄悄隐藏', () => {
-    // 隐藏会让「这里不能配」与「这个功能不存在」长得一模一样 —— 用户无从判断。
-    const wrapper = mountChooser();
-    const option = wrapper.get('[data-testid="special-output-defective"]');
-    expect(option.attributes('disabled')).toBeDefined();
-    expect(option.attributes('aria-disabled')).toBe('true');
+  it('留下的两类都有后端运行时契约 —— 判据是去 Java 源码树里数，不是转述', () => {
+    // 形态 B⁷：引用一句注释来支撑判断之前，先让它自己说。
+    // 这两个判据类**必须存在**，否则选择器里留的就是两个没人读的假选项。
+    const javaRoot = resolve(
+      __dirname, '../../../../../../..',
+      'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow');
+    expect(readFileSync(resolve(javaRoot, 'WorkflowByproductNodes.java'), 'utf8')).toContain('isByproduct');
+    expect(readFileSync(resolve(javaRoot, 'WorkflowReworkNodes.java'), 'utf8')).toContain('isRework');
   });
 
-  it('点它不会 emit —— 不会生成任何存得下却没人读的节点', async () => {
-    const wrapper = mountChooser();
-    await wrapper.get('[data-testid="special-output-defective"]').trigger('click');
-    expect(wrapper.emitted('choose')).toBeUndefined();
-  });
-
-  it('说出**具体缺口**，⛔ 不是一句「暂不支持」', () => {
-    const wrapper = mountChooser();
-    const text = wrapper.get('[data-testid="special-output-defective-blocked"]').text();
-    expect(text).toContain('WorkflowByproductNodes');
-    expect(text).toContain('WorkflowReworkNodes');
-    expect(text).not.toContain('暂不支持');
-  });
-
-  it('🔴 这个缺口是**实测**的，不是转述：Java 侧确有副产/回料两个判据类，没有不良品的', () => {
-    // 形态 B⁷：从一句注释推出行为要先验它。这里直接去后端源码树里数。
-    // 如果哪天真的补了不良品的运行契约，这条会红 —— 那正是应该重新评估 available 的时刻。
-    const byproduct = readFileSync(resolve(JAVA_ROOT, 'WorkflowByproductNodes.java'), 'utf8');
-    const rework = readFileSync(resolve(JAVA_ROOT, 'WorkflowReworkNodes.java'), 'utf8');
-    expect(byproduct).toContain('isByproduct');
-    expect(rework).toContain('isRework');
-    // 阴性对照：没有任何一个判据类读「不良品」标记。
-    expect(byproduct).not.toContain('isDefective');
-    expect(rework).not.toContain('isDefective');
-    expect(specialOutputOption('defective').available).toBe(false);
-    expect(specialOutputOption('byproduct').available).toBe(true);
-    expect(specialOutputOption('rework').available).toBe(true);
-  });
-
-  it('可用的两类不带阻断说明（阴性对照：不是每一项都在喊缺口）', () => {
-    expect(specialOutputOption('byproduct').blockedReason).toBe('');
-    expect(specialOutputOption('rework').blockedReason).toBe('');
-    expect(specialOutputOption('defective').blockedReason.length).toBeGreaterThan(20);
-  });
-});
-
-describe('§7 三类语义分开写：不良品不能被默认当成可回投库存', () => {
-  it('不良品与回料的描述互相点名对方，不混为一谈', () => {
-    expect(specialOutputOption('defective').description).toContain('回料');
-    expect(specialOutputOption('defective').description).toContain('不进入回投库存');
+  it('两类语义分开写：副产入库、回料回投，描述里各自点名', () => {
+    expect(specialOutputOption('byproduct').description).toContain('入库');
     expect(specialOutputOption('rework').description).toContain('回到后续批次');
+    expect(specialOutputOption('rework').description).toContain('比例');
   });
 });

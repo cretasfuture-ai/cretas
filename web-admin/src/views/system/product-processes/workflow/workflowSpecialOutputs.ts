@@ -1,33 +1,33 @@
 /**
- * 「特殊产出」三类的**唯一定义**（§7）。
+ * 「特殊产出」的**唯一定义**（§7）。
  *
- * 三类共用工序底部同一个常驻入口 `+ 添加特殊产出`，选中后才进入各自的真实配置。
+ * 两类共用工序底部同一个常驻入口 `+ 添加特殊产出`，选中后才进入各自的真实配置。
  *
- * ## 为什么第三类当前不可用
- * 副产与回料在 Java 侧各有一条**权威运行契约**：
- * - 副产 → `WorkflowByproductNodes` 读物料节点的 `data.isByproduct`，被标记的端口会被
- *   `getOutputOptions` 过滤掉，走 `material_batches`；
+ * ## ⛔ 为什么只有两类，没有「不良品」
+ * 交接书原本要求三选一（副产 / 不良品 / 回料）。**2026-09-01 owner 裁定：业务上不存在
+ * 「判废 / 不入库」这个场景** —— 车间的真实流程是「复查 → 存着 → 回料直接回投」，
+ * 剔出来的东西最终都走回料那条链，没有一类需要被判废后从系统里消失。
+ *
+ * 所以这一类**整个去掉**，不是「暂时禁用」：
+ * - 留一个永远点不动的选项，是给用户一个他这辈子都用不到的选择题；
+ * - 而它当初之所以被列出来，是照着原型的三分法写的，不是照着车间。
+ *
+ * ⇒ 与此同时，Java 侧「没有不良品判据类」这件事也就不再是缺口了 —— 它本来就不该有。
+ *
+ * ## 两类各自的运行时契约（都是真的，不是留痕）
+ * - 副产 → `WorkflowByproductNodes` 读 `data.isByproduct`，被标记的端口会被
+ *   `getOutputOptions` **过滤掉**，走 `material_batches`；
  * - 回料 → `WorkflowReworkNodes` 读 `data.isRework`，端口**必须留在**报工选项里，
- *   走 `semi_finished_inventory` 并带移动加权成本。
- *
- * 不良品**一条都没有**：后端既没有对应的节点标记判据，也没有任何运行时消费者
- * （`defectQuantity` 是报工请求体上的一个数，由 App 端汇总，与画布节点毫无关系）。
- *
- * ⇒ 交接 §7 的裁定是 fail closed：**禁止凭想象补一个字段并宣称可用**。所以它在选择器里
- * 是常驻可见但不可选的一项，并写出准确缺口 —— 不是悄悄隐藏（隐藏会让「这里不能配」和
- * 「这个功能不存在」长得一模一样），也不是做一个存得下却没人读的假闭环。
+ *   走 `semi_finished_inventory` 并带移动加权成本进下一批。
  */
 
-export type SpecialOutputKind = 'byproduct' | 'defective' | 'rework';
+export type SpecialOutputKind = 'byproduct' | 'rework';
 
 export interface SpecialOutputOption {
   kind: SpecialOutputKind;
   badge: string;
   title: string;
   description: string;
-  available: boolean;
-  /** 不可用时的**具体**缺口，⛔ 不许写成「暂不支持」。 */
-  blockedReason: string;
 }
 
 export const SPECIAL_OUTPUT_OPTIONS: readonly SpecialOutputOption[] = [
@@ -36,27 +36,12 @@ export const SPECIAL_OUTPUT_OPTIONS: readonly SpecialOutputOption[] = [
     badge: '副',
     title: '副产',
     description: '肥油、料头一类可入库的伴生产出。选择物料档案中已标记为副产的物料；数量在报工时填。',
-    available: true,
-    blockedReason: '',
-  },
-  {
-    kind: 'defective',
-    badge: '不',
-    title: '不良品',
-    description: '判废、不进入回投库存的剔除产出。与「回料」是两件事，不能默认当成可回投库存。',
-    available: false,
-    blockedReason: '后端缺少权威契约：画布节点上没有不良品判据（副产是 WorkflowByproductNodes'
-      + '、回料是 WorkflowReworkNodes，不良品一个都没有），也没有任何运行时消费者。'
-      + '现在做出来只能存下一个谁也不读的字段，所以本轮停在这里，不伪造闭环。'
-      + '需要它请先定后端持久化与报工消费契约。',
   },
   {
     kind: 'rework',
     badge: '回',
     title: '回料产出',
-    description: '金检/X光剔出、可回到后续批次继续投的半成品。需要配置显示名称、SKU、单位和允许回投的目标工序。',
-    available: true,
-    blockedReason: '',
+    description: '金检/X光剔出、复查后回到后续批次继续投的半成品。可以配置回投到哪些工序、按多少比例投。',
   },
 ] as const;
 

@@ -157,33 +157,40 @@ export interface ProcessNodeData extends Record<string, unknown> {
   standardTime?: number | null;
   allowMultipleUpstreamSources?: boolean;
   allowFinishedGoodsSource?: boolean;
-  /**
-   * 这道工序**允许接收哪些回料**。承接 PR #417 的载体选择: 规则住在**目标工序**上,
-   * 随 Workflow 版本保存(进 nodesJson ⇒ 进 revisionHash)。
-   *
-   * 🔴 **诚实边界**: Java 侧当前没有任何运行时消费者读它 ——
-   * `WorkflowReworkNodes` 只认物料节点上的 `data.isRework`。所以它是**已持久化的配置**,
-   * ⛔ 不是「已生效的投料限制」。UI 措辞必须照这个口径说, 不许宣称已经在拦料。
-   */
+  /** 这道工序接收哪些回料、各按多少比例投 —— 见 {@link WorkflowReworkPolicy}。 */
   reworkPolicy?: WorkflowReworkPolicy | null;
 }
 
 /**
- * 回料规则。
+ * 一道工序的回料规则 —— **规则住在目标工序上**（承接 PR #417 的载体选择），
+ * 随 Workflow 版本保存（进 nodesJson ⇒ 进 revisionHash ⇒ 改它产生新工艺版本）。
  *
- * ## 与 PR #417 的差别只有一处
- * #417 写的是 `allowedSourceProductTypeIds`(产品级, 一个成品折一道工序)。已确认交互要选的是
- * **工序级**目标 —— 一条线路里可以有多道工序都允许回投, 产品级表达不了。所以同一个字段
- * 换成回料 Cell 的 node id 集合; 其余(载体在目标工序、比例上限、校验形状)全部沿用。
- *
- * ⛔ **只有这一份真值**: 刻意不在回料 Cell 上再存一份 `allowedTargetIds`。同一个关系存两处
- * 一定会漂, 而漂的那一份不会报错, 只会让画布和保存出来的定义讲两个故事。
+ * ⛔ **只有这一份真值**：刻意不在回料 Cell 上再存一份「我能去哪」。同一个关系存两处
+ * 一定会漂，而漂的那一份不会报错，只会让画布和保存出来的定义讲两个故事。
  */
 export interface WorkflowReworkPolicy {
-  /** 允许回投到本工序的**回料 Cell node id** 集合。至少 1 条, 否则整个 policy 应为 null。 */
-  allowedSourceReworkNodeIds: string[];
-  /** 回料占本工序投入的比例上限(0–100)。当前同样没有运行时消费者。 */
-  maxInputRatioPercent: number;
+  /** 允许回投到本工序的回料，以及各自的投入比例。至少 1 条，否则整个 policy 应为 null。 */
+  sources: WorkflowReworkSource[];
+}
+
+/**
+ * 一块回料回投进某一道工序的配方项。
+ *
+ * 🔴 **`inputRatioPercent` 是 BOM 性质的确定投入比例，不是「上限」**（2026-09-01 owner 订正）。
+ * 语义是「这块回料就是按这个百分比投进这道工序的」——由工厂纪律保证照此执行，
+ * **实际投了多少不需要记录**；后续核算/减扣直接按这个比例算。
+ *
+ * ⛔ 所以措辞里不许出现「上限」「最多」「不超过」：那会让人以为系统在卡一个天花板，
+ * 而它其实是在声明一个配方值。
+ *
+ * ⚠️ 诚实边界：Java 侧目前没有消费者读它 —— `WorkflowReworkNodes` 只认物料节点上的
+ * `data.isRework`。所以它是**已持久化的配方声明**，报工时系统不会按它自动配料。
+ */
+export interface WorkflowReworkSource {
+  /** 回料 Cell 的 node id。 */
+  reworkNodeId: string;
+  /** 这块回料在本工序投入中占的比例（0–100）。 */
+  inputRatioPercent: number;
 }
 
 export type WorkflowNodeData = MaterialNodeData | ProcessNodeData;

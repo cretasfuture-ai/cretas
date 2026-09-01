@@ -181,8 +181,8 @@ describe('入口与选择器', () => {
     // 所以入口仍然常驻; 变的只是它长什么样, 于是断言从字面改成钉这个性质。
     expect(PROCESS_NODE).toContain('data-testid="add-special-output"');
     expect(PROCESS_NODE).toMatch(/emit\('addSpecialOutput'\)/);
-    // 三选一里副产必须**始终**在列(它是可用的那一类, 不许被藏)。
-    expect(SPECIAL_OUTPUTS).toMatch(/kind: 'byproduct'[\s\S]{0,400}available: true/);
+    // 选择器里副产必须**始终**在列, 不许被藏。
+    expect(SPECIAL_OUTPUTS).toMatch(/kind: 'byproduct'/);
     // 阴性对照: 旧的两个并排入口确实**没有并存**(是换掉不是新增)。
     expect(PROCESS_NODE).not.toContain('data-testid="add-byproduct-inline"');
     expect(PROCESS_NODE).not.toContain('data-testid="add-rework-inline"');
