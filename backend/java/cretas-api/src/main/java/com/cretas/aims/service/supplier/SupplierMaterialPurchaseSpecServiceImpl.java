@@ -138,7 +138,9 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
         }
         spec.setConversionFactor(request.getFactor());
         spec.setQuotedPrice(request.getQuotedPrice());
-        spec.setCurrency(request.getCurrency() == null ? "CNY" : request.getCurrency());
+        // 🔒 见 SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY 的裁定说明 (缺陷 21)。
+        //    ⚠️ 这两处是同一条口径的两个承载点, ⛔ 不要只改一处。
+        spec.setCurrency(SupplierMaterialServiceImpl.SUPPLIER_MATERIAL_CURRENCY);
         spec.setMinOrderQuantity(request.getMinOrderQuantity());
         spec.setLeadTimeDays(request.getLeadTimeDays());
         if (request.getDefaultSpec() != null) spec.setDefaultSpec(request.getDefaultSpec());

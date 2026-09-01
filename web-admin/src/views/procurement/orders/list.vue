@@ -1533,21 +1533,24 @@ function handleAiFill(params: TableRow) {
                单侧, 并按实测(真实 el-input-number DOM, controls-position=right 时
                padding 开销固定 57px)再加宽: 采购数量 120→140px, 未税单价输入框
                112→130px(price-input-cell 容器同步 140→158px, 含 tooltip 图标).
-               ⚠️ 表头 span 宽度与输入框/容器宽度是两处, 改宽度必须同步改, 只改一处会错位. -->
+               ⚠️ 表头 span 宽度与输入框/容器宽度是两处, 改宽度必须同步改, 只改一处会错位.
+               Sep 1 2026 反馈 (缺陷 20): 12 列共 1498px + 11 个 8px 间隔, 1080p 下右侧
+               列被挤出可视区, 必须横向滚动才看得到合同号和删除 —— 而滚出去的那几列里
+               有 * 必填的税点. 修法: 把【系统算出来的只读列】(折合入库量/未税金额/
+               税额/含税金额, 合计 410px) 从主行移到本行下方的次要行, 主行只留可编辑列
+               8 列 1088px, 首屏放得下.
+               ⚠️ 只读列没有消失, 4 个读数一个不少 —— 只是换了位置, 见 .item-derived. -->
           <span style="width: 210px"><span class="req-star">*</span>供应原料</span>
           <span style="width: 170px"><span class="req-star">*</span>采购规格</span>
           <span style="width: 140px"><span class="req-star">*</span>采购数量</span>
           <span style="width: 90px">采购单位</span>
-          <span style="width: 110px">折合入库量</span>
           <span style="width: 158px">含税单价</span>
-          <span style="width: 100px">未税金额</span>
           <span style="width: 110px"><span class="req-star">*</span>税点(%)</span>
-          <span style="width: 90px">税额</span>
-          <span style="width: 110px">含税金额</span>
           <span style="width: 150px">合同号</span>
           <span style="width: 60px">操作</span>
         </div>
-        <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
+        <div v-for="(item, idx) in form.items" :key="idx" class="item-block">
+        <div class="item-row">
           <!-- 缺陷 13 第二处: 拼音/首字母搜索 (与本页供应商下拉口径一致)。
                filter-method 关掉内建过滤 ⇒ v-for 走 filteredMaterialRelations。 -->
           <el-select
@@ -1585,7 +1588,6 @@ function handleAiFill(params: TableRow) {
           </el-select>
           <el-input-number v-model="item.quantity" :min="0.001" :precision="3" placeholder="采购数量" controls-position="right" style="width: 140px" />
           <el-input :model-value="displayUnit(item.unit) || '-'" disabled style="width: 90px" />
-          <div class="inventory-preview" style="width: 110px">{{ inventoryQuantityPreview(item) }}</div>
           <div class="price-input-cell" style="width: 158px">
             <el-input-number
               v-model="item.taxIncludedUnitPrice"
@@ -1603,10 +1605,6 @@ function handleAiFill(params: TableRow) {
               </template>
               <el-icon :class="['price-source-icon', { 'price-source-icon--missing': item.priceSource === 'MISSING' }]"><QuestionFilled /></el-icon>
             </el-tooltip>
-          </div>
-          <div class="amount-cell" style="width: 100px">
-            <span v-if="itemAmountPreview(item).amount != null">{{ itemAmountPreview(item).amount?.toFixed(2) }}</span>
-            <span v-else class="amount-cell--pending">{{ itemAmountPreview(item).message }}</span>
           </div>
           <div class="tax-select-cell" style="width: 110px">
             <el-tooltip :disabled="!validateTaxRate(item.taxRate)" :content="validateTaxRate(item.taxRate) || ''" placement="top">
@@ -1629,8 +1627,6 @@ function handleAiFill(params: TableRow) {
               </el-select>
             </el-tooltip>
           </div>
-          <div class="amount-cell" style="width: 90px">{{ itemTaxPreview(item) ? itemTaxPreview(item)?.tax.toFixed(2) : '-' }}</div>
-          <div class="amount-cell" style="width: 110px">{{ itemTaxPreview(item) ? itemTaxPreview(item)?.taxed.toFixed(2) : '-' }}</div>
           <el-input
             v-model="item.contractNumber"
             maxlength="64"
@@ -1638,6 +1634,19 @@ function handleAiFill(params: TableRow) {
             style="width: 150px"
           />
           <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1" style="width: 60px">删除</el-button>
+        </div>
+        <!-- 系统算出来的只读读数 —— 从主行移下来 (缺陷 20)。四个读数一个不少,
+             各自带标签, 所以不需要跟表头对齐, 也就不再占主行的横向预算。 -->
+        <div class="item-derived">
+          <span class="derived-cell"><em>折合入库量</em>{{ inventoryQuantityPreview(item) }}</span>
+          <span class="derived-cell">
+            <em>未税金额</em>
+            <template v-if="itemAmountPreview(item).amount != null">{{ itemAmountPreview(item).amount?.toFixed(2) }}</template>
+            <span v-else class="amount-cell--pending">{{ itemAmountPreview(item).message }}</span>
+          </span>
+          <span class="derived-cell"><em>税额</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.tax.toFixed(2) : '-' }}</span>
+          <span class="derived-cell"><em>含税金额</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.taxed.toFixed(2) : '-' }}</span>
+        </div>
         </div>
         <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
         </div>
@@ -1700,7 +1709,24 @@ function handleAiFill(params: TableRow) {
 .search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .item-detail-scroll { overflow-x: auto; padding-bottom: 4px; }
+/* 一行明细 = 可编辑主行 + 只读派生行 (缺陷 20)。整块加左侧色条与底部分隔,
+   免得两行看起来像两条明细。 */
+.item-block {
+  width: max-content; min-width: 100%;
+  border-left: 2px solid #ebeef5; padding-left: 8px; margin-bottom: 10px;
+}
+.item-block:hover { border-left-color: var(--el-color-primary); }
 .item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; width: max-content; min-width: 100%; }
+/* 只读派生读数: 折合入库量 / 未税金额 / 税额 / 含税金额。
+   ⚠️ 它们不与表头对齐 —— 每个自带标签, 所以不吃主行的横向预算。 */
+.item-derived {
+  display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline;
+  font-size: 12px; color: #606266; padding: 0 0 2px 2px;
+}
+.derived-cell {
+  font-variant-numeric: tabular-nums; font-feature-settings: 'tnum';
+  em { font-style: normal; color: #909399; margin-right: 4px; }
+}
 .price-input-cell { display: flex; align-items: center; gap: 4px; }
 .price-source-icon { color: #909399; font-size: 14px; cursor: help; flex-shrink: 0; }
 .price-source-icon--missing { color: #e6a23c; }
