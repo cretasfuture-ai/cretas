@@ -37,6 +37,26 @@ class SummaryCostRollupTest {
     }
 
     @Test
+    @DisplayName("计划级容器批次(无产出 + NO_COST_COLLECTED)不算未知 —— 美式线实拍: 有它在也得是 74544.28")
+    void planContainerBatchIsIgnored() {
+        OrderCostBreakdownDTO container = OrderCostBreakdownDTO.builder().orderId("PB-PLAN-1")
+                .totalCost(null).boxCount(0).outputQuantity(null)
+                .missingCostItems(List.of("NO_COST_COLLECTED", "EQUIPMENT_COST:PB-PLAN-1")).build();
+        var r = SummaryCostRollup.rollup(List.of(container, cb("CLK-B-9", "74544.28", List.of())));
+        assertThat(r.total()).isEqualByComparingTo("74544.28");
+        assertThat(r.note()).isNull();
+    }
+
+    @Test
+    @DisplayName("阴性对照: 有产出但一条成本行都没有 → 仍然是未知, ⛔ 不能当作没发生")
+    void outputWithoutCostRowsIsStillUnknown() {
+        OrderCostBreakdownDTO odd = OrderCostBreakdownDTO.builder().orderId("CLK-B-X")
+                .totalCost(null).boxCount(10).outputQuantity(new BigDecimal("10"))
+                .missingCostItems(List.of("NO_COST_COLLECTED")).build();
+        assertThat(SummaryCostRollup.rollup(List.of(odd)).total()).isNull();
+    }
+
+    @Test
     @DisplayName("阴性对照: 没有成品批次 → 0 (这是「还没发生」不是「未知」)")
     void emptyIsZero() {
         var r = SummaryCostRollup.rollup(List.of());

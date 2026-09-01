@@ -30,12 +30,26 @@ public final class SummaryCostRollup {
     public record Result(BigDecimal total, String note) {
     }
 
+    /** 没产出且一条成本行都没收集到 ⇒ 这个批次对总成本没有贡献, 也不构成「未知」。 */
+    static boolean nothingHappened(OrderCostBreakdownDTO cb) {
+        boolean noOutput = (cb.getOutputQuantity() == null || cb.getOutputQuantity().signum() == 0)
+                && (cb.getBoxCount() == null || cb.getBoxCount() == 0);
+        boolean noCostRows = cb.getMissingCostItems() != null
+                && cb.getMissingCostItems().contains("NO_COST_COLLECTED");
+        return noOutput && noCostRows;
+    }
+
     public static Result rollup(List<OrderCostBreakdownDTO> breakdowns) {
         BigDecimal sum = BigDecimal.ZERO;
         List<String> unknownBatches = new ArrayList<>();
         Set<String> missing = new LinkedHashSet<>();
         for (OrderCostBreakdownDTO cb : breakdowns) {
             if (cb == null) continue;
+            if (nothingHappened(cb)) {
+                // 计划级容器批次(PB-PLAN-…): 没有产出、也没收集到任何成本行 —— 这是「还没发生」,
+                // ⛔ 不是「未知」。第一版把它也算成未知, 美式线从 ¥74,544 变成「—」, 与要修的方向相反。
+                continue;
+            }
             if (cb.getTotalCost() == null) {
                 unknownBatches.add(cb.getOrderId() != null ? cb.getOrderId() : "?");
                 if (cb.getMissingCostItems() != null) missing.addAll(cb.getMissingCostItems());
