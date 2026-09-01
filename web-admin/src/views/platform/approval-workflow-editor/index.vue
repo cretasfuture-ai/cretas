@@ -393,6 +393,12 @@ const saving = ref(false)
 
 const nodes = ref<Node[]>([])
 const edges = ref<Edge[]>([])
+/**
+ * 后端定义里**加载进来时**有多少条边。用于 handleSave 的破坏性写入闸:
+ * 载入时有边、保存时变 0 条 ⇒ 说明边在前端被丢了(而不是用户删的), 拒绝写回。
+ * 见 deserializeGraph 顶部那段 2026-09-01 事故说明。
+ */
+const loadedEdgeCount = ref(0)
 const currentWorkflow = ref<ApprovalWorkflowDTO | null>(null)
 const workflowList = ref<ApprovalWorkflowDTO[]>([])
 const selectedWorkflowId = ref<string | undefined>(undefined)
@@ -1287,17 +1293,39 @@ function conditionNodeSourceHandle(sourceType: string | undefined, label: string
   return String(label ?? '').trim().toUpperCase() === 'DEFAULT' ? 'default' : 'match'
 }
 
-/** Deserialize a backend ApprovalWorkflowDTO → VueFlow nodes/edges arrays. */
-function deserializeGraph(dto: ApprovalWorkflowDTO) {
+/**
+ * Deserialize a backend ApprovalWorkflowDTO → VueFlow nodes/edges arrays.
+ *
+ * 🔴 2026-09-01 生产事故根因: 本函数原来在**同一个 tick** 里先后写 nodes.value 和
+ * edges.value。VueFlow 在边模型一变就立刻按它内部 node store 校验端点, 而此时新节点
+ * 还没注册进去 ⇒ 三条边被当成悬空连线**静默丢弃**, 画布显示"没有连线", 用户保存时
+ * serializeGraph 又把这个空数组原样写回后端 ⇒ `edges_json` 被清空, 该审批链从此
+ * 路由不到任何节点 (新单 422「没有可处理的当前节点」, 在途单 409
+ * WORKFLOW_BOUND_DEFINITION_CHANGED), 且产品内没有恢复入口。
+ *
+ * 实测: LIUSHANMEN 的 PURCHASE_ORDER_APPROVAL 被这样清空 (edges_json="[]"),
+ * 而从未用画布保存过的 BUDGET_APPROVAL 的三条边完好 —— 两者节点结构完全相同。
+ *
+ * ⚠️ 同一个坑在 AI 编辑那条路径里**早就被发现并规避了** (见 applyAiDraft 里
+ * 「register the new cells first; otherwise edges are checked against the previous
+ * node set and silently discarded」)。加载路径漏了同样的规避 —— 形态 D: 同一个东西
+ * 两份, 一份修了一份没修。⛔ 以后改这里, 两处要一起看。
+ */
+async function deserializeGraph(dto: ApprovalWorkflowDTO) {
   const parsedNodes: ApprovalWorkflowNode[] = JSON.parse(dto.nodesJson || '[]')
   const parsedEdges: ApiEdge[] = JSON.parse(dto.edgesJson || '[]')
+  loadedEdgeCount.value = parsedEdges.length
   const nodeTypeById = new Map(parsedNodes.map(n => [n.id, n.type]))
+  // 先清空边, 再注册节点 —— 顺序与 applyAiDraft 一致, 不可调换。
+  edges.value = []
   nodes.value = parsedNodes.map(n => ({
     id: n.id,
     type: n.type,
     position: { x: n.position?.x ?? 0, y: n.position?.y ?? 0 },
     data: { label: n.label ?? n.id, config: n.config ?? {} },
   }))
+  // 等 VueFlow 把节点注册进内部 store, 再挂边, 否则边会被判为悬空并丢弃。
+  await nextTick()
   edges.value = parsedEdges.map(e => ({
     id: e.id,
     source: e.source,
@@ -1363,6 +1391,27 @@ async function handleSave() {
   try {
     const payload = serializeGraph()
     if (!payload) return
+
+    /*
+     * 🔴 破坏性写入闸 (2026-09-01 生产事故后加)。
+     *
+     * 载入时定义里有边、现在要写回 0 条 ⇒ 边是在前端被丢的, 不是用户删的。
+     * 放它过去的后果是**不可逆**的: edges_json 被清空后该审批链再也路由不到节点
+     * (新单 422, 在途单 409), 而产品内**没有恢复入口** (force-cancel 只存在于
+     * 两处 "W4+ 要加" 的注释里)。LIUSHANMEN 的 PURCHASE_ORDER_APPROVAL 就是这样废掉的。
+     *
+     * ⚠️ 这里刻意做成**硬拒绝**而不是二次确认: 一个没有边的审批流在引擎里
+     * (walkToFirstHumanNode 沿边走) 本来就不可路由 ⇒ 保存它没有任何合法用途,
+     * 不存在"用户确实想这么做"的场景。
+     */
+    if (payload.edges.length === 0 && loadedEdgeCount.value > 0) {
+      ElMessage.error(
+        `已阻止保存: 载入时有 ${loadedEdgeCount.value} 条连线, 现在是 0 条。`
+        + '这通常是连线未能正确加载, 直接保存会清空审批流并使其永久无法路由。'
+        + '请刷新页面重新载入后再操作。',
+      )
+      return
+    }
 
     if (currentWorkflow.value?.id) {
       // Update existing — M-6: 已发布/历史版本原地修改时带上 force (仅在用户明确点过
@@ -1595,7 +1644,7 @@ async function loadWorkflow(id: string | undefined, silent: boolean) {
       currentWorkflow.value = res.data
       workflowName.value = res.data.name
       selectedDecisionType.value = res.data.decisionType
-      deserializeGraph(res.data)
+      await deserializeGraph(res.data)
       selectedElement.value = null
       approvalSetupStarted.value = true
       undoHistory.value = []
