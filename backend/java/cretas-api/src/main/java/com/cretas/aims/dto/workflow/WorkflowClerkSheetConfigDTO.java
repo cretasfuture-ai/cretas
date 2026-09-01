@@ -96,5 +96,16 @@ public class WorkflowClerkSheetConfigDTO {
         private Boolean byproduct;
         /** 仅 output 端口有意义：冻结 Workflow 物料节点 data.isRework 的服务端投影。 */
         private Boolean rework;
+        /**
+         * 仅 output 端口有意义：冻结 Workflow 物料节点 data.isDefective 的服务端投影。
+         *
+         * <p>不良品 = 剔出来、<b>还没复查</b>的那部分（owner 2026-09-01：⛔ 不是判废、⛔ 不是不入库）。
+         * 它和副产在录入表上<b>一起填</b>，靠这个标区分底层分类。
+         *
+         * <p>⚠️ 与 {@link #byproduct} / {@link #rework} 三者互斥地表达「角色」，但它们是
+         * <b>三个独立布尔</b>而不是一个枚举 —— 历史快照里可能出现同时打两个标的脏数据，
+         * 用枚举会逼出一个「优先谁」的隐式判断。消费端自己决定怎么显示。
+         */
+        private Boolean defective;
     }
 }

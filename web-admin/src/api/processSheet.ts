@@ -556,6 +556,15 @@ export interface WorkflowPortDescriptor {
    * 老快照/未升级后端缺这个字段时按 undefined 处理 (即「不是副产」), 行为逐字不变。
    */
   byproduct?: boolean | null;
+  /**
+   * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**不良品**
+   * (剔出来、还没复查的那部分)。
+   *
+   * ⛔ 不是「判废」也不是「不入库」(owner 2026-09-01 明确否掉这两个说法) ——
+   * 它照常报工、照常入库存着，只是在录入表上和副产**一起填**、靠这个标区分。
+   * 老快照/未升级后端缺这个字段时按 undefined 处理 (即「不是不良品」), 行为逐字不变。
+   */
+  defective?: boolean | null;
 }
 
 /**

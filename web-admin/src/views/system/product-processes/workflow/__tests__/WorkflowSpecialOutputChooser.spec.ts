@@ -68,8 +68,18 @@ describe('§7 统一入口后的选择器', () => {
     const body = impl.slice(impl.indexOf('workflowOutputOptions('));
     // 正例：确实存在「滤掉副产」这一条
     expect(body).toContain('!byproductNodeIds.contains(p.getMaterialNodeId())');
-    // 阴性对照：没有任何一条按不良品过滤
-    expect(body).not.toMatch(/defective/i);
+    // 正例：不良品作为**显示标**下发（owner 2026-09-01「好的区别一下吧，补吧」）
+    expect(body).toContain('.isDefective(defectiveNodeIds.contains(');
+
+    // 🔴 阴性对照，本条的要害：不良品**只能是标，不能是筛子**。
+    // ⚠️ 上一版这里写的是 `not.toMatch(/defective/i)` —— 加了显示标之后它当场红了，
+    //    而产品行为一点没坏。那条断言钉的是「这个词不许出现」，太钝；
+    //    真正的不变量是「这个词不许出现在 .filter(...) 里」。
+    const filterLines = body.split(/\r?\n/).filter((line) => line.includes('.filter('));
+    expect(filterLines.length).toBeGreaterThan(0);   // 阳性对照：确实数到了 filter 链
+    for (const line of filterLines) {
+      expect(line.toLowerCase(), line.trim()).not.toContain('defective');
+    }
   });
 
   it('三类都可选，选中后带着 kind 抛给画布层', async () => {

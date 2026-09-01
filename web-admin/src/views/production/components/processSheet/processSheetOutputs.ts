@@ -22,6 +22,27 @@ export interface BoundByproductLine {
   unit: string;
   quantity: number | null;
   unitPrice: number | null;
+  /**
+   * 这一条在画布上被标成了什么 —— owner 2026-09-01:
+   * 「不良品产出和副产是一起填写的，只是在 workflow 里面会标注…底层逻辑会分类」。
+   *
+   * 所以录入口只有一个（这块区域），⛔ 不给不良品另开一块；
+   * 区分靠这个角色标，界面上逐条打 tag。
+   */
+  role: BoundOutputRole;
+}
+
+/**
+ * 副产区里一条产出的角色。
+ *
+ * ⛔ 不做成「三选一枚举包含回料」：回料**独立成行**（它要填产出数量、要带批次和
+ * 移动加权成本进下一批），不在这块区里。这块区只有两种。
+ */
+export type BoundOutputRole = 'BYPRODUCT' | 'DEFECTIVE';
+
+/** 角色 → 界面上那个 tag 的文字。⛔ 措辞不许出现「判废」「不入库」（owner 2026-09-01 否掉）。 */
+export function boundOutputRoleLabel(role: BoundOutputRole): string {
+  return role === 'DEFECTIVE' ? '不良品' : '副产';
 }
 
 // -------------------------------------------------------------------------
@@ -54,6 +75,13 @@ export interface MultiOutputLine {
    * 成品/半成品, 于是画布上标成副产的物料在报工单上显示成「半成品」。
    */
   isByproduct: boolean;
+  /**
+   * 画布上这个物料 Cell 被标记成了不良品。
+   *
+   * 与 `isByproduct` 一样与 `finished` 正交。两者一起决定这条产出进不进
+   * 「不良品/副产」区（见 partitionOutputPorts）。
+   */
+  isDefective: boolean;
   /**
    * 画布已经绑定好的副产 —— SKU 是配置出来的, 用户只填数量和回收单价。
    *
@@ -113,6 +141,8 @@ export interface ByproductPartitionablePort {
   workflowPortId: string;
   /** 后端 PortDescriptor.byproduct —— 画布物料节点 data.isByproduct 的投影。 */
   byproduct?: boolean | null;
+  /** 后端 PortDescriptor.defective —— 画布物料节点 data.isDefective 的投影。 */
+  defective?: boolean | null;
   materialName?: string | null;
 }
 
@@ -132,8 +162,26 @@ export interface OutputPortPartition<T> {
   orphanNotice: string | null;
 }
 
-function isByproductPort(port: ByproductPartitionablePort): boolean {
-  return port.byproduct === true;
+/**
+ * 进「不良品/副产」区的判据。
+ *
+ * 🔴 2026-09-01 owner 订正后加进不良品：这两类**一起填**，所以归位判据是它们的并集。
+ * ⛔ 回料不在里面 —— 它独立成行（见 BoundOutputRole 的注释）。
+ */
+function isInlineRolePort(port: ByproductPartitionablePort): boolean {
+  return port.byproduct === true || port.defective === true;
+}
+
+/**
+ * 端口的角色。
+ *
+ * ⚠️ 后端刻意用**三个独立布尔**而不是一个枚举（历史快照可能同时带两个标），
+ * 所以这里必须自己定一个次序：同时为真时按「不良品」算。
+ * 理由：不良品是更强的约束（不可直接卖），把它降级成副产的后果更坏。
+ * 正常路径上不可能同时为真 —— 画布上的选择器是三选一。
+ */
+export function boundOutputRoleOf(port: ByproductPartitionablePort): BoundOutputRole {
+  return port.defective === true ? 'DEFECTIVE' : 'BYPRODUCT';
 }
 
 /**
@@ -149,8 +197,8 @@ function isByproductPort(port: ByproductPartitionablePort): boolean {
 export function partitionOutputPorts<T extends ByproductPartitionablePort>(
   ports: T[],
 ): OutputPortPartition<T> {
-  const byproductPorts = ports.filter(isByproductPort);
-  const mainPorts = ports.filter((p) => !isByproductPort(p));
+  const byproductPorts = ports.filter(isInlineRolePort);
+  const mainPorts = ports.filter((p) => !isInlineRolePort(p));
 
   if (byproductPorts.length === 0) {
     return { rowPorts: mainPorts, inlineByproductPorts: [], hostPortId: null, orphanNotice: null };
@@ -162,8 +210,8 @@ export function partitionOutputPorts<T extends ByproductPartitionablePort>(
       rowPorts: byproductPorts,
       inlineByproductPorts: [],
       hostPortId: null,
-      orphanNotice: `本工序在画布上只配了副产产出（${names}），没有主产出。`
-        + '副产已按独立产出行展示；请回 Workflow 画布为本工序补一个主产出 Cell。',
+      orphanNotice: `本工序在画布上只配了不良品/副产产出（${names}），没有主产出。`
+        + '已按独立产出行展示；请回 Workflow 画布为本工序补一个主产出 Cell。',
     };
   }
 

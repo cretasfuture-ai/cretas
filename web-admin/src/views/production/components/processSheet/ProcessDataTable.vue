@@ -33,7 +33,7 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
-import { byproductEntryMode, partitionOutputPorts } from './processSheetOutputs';
+import { boundOutputRoleOf, byproductEntryMode, partitionOutputPorts } from './processSheetOutputs';
 import type { BoundByproductLine, MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import type {
   InputSourceLineView,
@@ -877,6 +877,7 @@ function initMultiOutputs(): MultiOutputLine[] {
     gramsPerUnit: p.gramsPerUnit ?? null,
     finished: p.finished === true,
     isByproduct: p.byproduct === true,
+    isDefective: p.defective === true,
     required: p.required === true,
     selected: portSelectedByDefault(p),
     quantity: null,
@@ -894,7 +895,11 @@ function initMultiOutputs(): MultiOutputLine[] {
   }));
 }
 
-/** 由画布副产端口造一条待填的副产条目 —— SKU/单位只读, 数量与回收单价留空等人填。 */
+/**
+ * 由画布的不良品/副产端口造一条待填条目 —— SKU/单位只读, 数量与回收单价留空等人填。
+ *
+ * 角色随端口带过来, 界面逐条打 tag（owner 2026-09-01：两类一起填, 底层分类）。
+ */
 function boundByproductFromPort(port: WorkflowPortDescriptor): BoundByproductLine {
   return {
     workflowPortId: port.workflowPortId,
@@ -904,6 +909,7 @@ function boundByproductFromPort(port: WorkflowPortDescriptor): BoundByproductLin
     unit: workflowPortDisplayUnit(port),
     quantity: null,
     unitPrice: null,
+    role: boundOutputRoleOf(port),
   };
 }
 
@@ -1160,6 +1166,7 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     gramsPerUnit: port?.gramsPerUnit ?? null,
     finished: port ? port.finished === true : p.finished === true,
     isByproduct: port ? port.byproduct === true : false,
+    isDefective: port ? port.defective === true : false,
     required: port?.required ?? true,
     selected: true,
     quantity: p.outputQuantity ?? null,

@@ -58,12 +58,15 @@
           </span>
         </h4>
         <p class="rework-drawer__scope">
-          比例是<strong>配方值</strong>：这块回料就按它投进那道工序，由车间纪律照此执行，
-          实际投多少不必登记，后续核算直接按这个比例算。
-          报工时<strong>不用</strong>为它填一笔配料，系统也不会替你把料配上、不扣料、不拦报工。
+          比例是<strong>配方值</strong>，分母是这道工序投入的<strong>原料/半成品</strong>：
+          投 100kg 主料、填 8.5%，就是再投 8.5kg 回料。
+          由车间纪律照此执行，实际投多少不必登记。
           <br />
-          目标是等这部分产出之后按这个比例<strong>提醒该配的料</strong>，
-          但这个提醒<strong>现在还没有</strong> —— 后端只读画布上的回料标记，还没有人读这个比例。
+          多道工序各算各的，<strong>不要求合计 100%</strong>（每道以自己的主料为分母）。
+          <br />
+          它是给<strong>核算自动扣减</strong>用的：报工时不用为它填一笔，系统也不拦报工，
+          扣减结果在拉数据时看得到。⚠️ 这个自动扣减<strong>现在还没接</strong> ——
+          后端只读画布上的回料标记，还没有人读这个比例。
         </p>
         <p v-if="draftTargets.size === 0" class="rework-drawer__hint" data-testid="rework-no-target">
           还没配回投目标。回料是可选项，<strong>不影响保存与发布</strong>；先留空也可以，回头再补。
@@ -125,7 +128,7 @@
               <label
                 v-if="draftTargets.has(option.processNodeId)"
                 class="target-card__ratio"
-                :title="`${option.processName} 的回料投入比例（配方值）`"
+                :title="`${option.processName} 的回料投入比例：按本工序主料的百分比投`"
               >
                 <span class="target-card__ratio-label">回投比例</span>
                 <input
@@ -254,7 +257,13 @@ function toggleTarget(processNodeId: string, checked: boolean): void {
   draftTargets.value = next;
 }
 
-/** 比例是配方值，允许 0（「登记了这条去向，比例待定」），⛔ 但不接受负数/超 100/非数。 */
+/**
+ * 比例是配方值（分母 = 本工序投入的原料/半成品），允许 0（「登记了这条去向，比例待定」），
+ * ⛔ 但不接受负数/超 100/非数。
+ *
+ * ⛔ 这里**不做**跨工序的合计校验：分母各是各道工序的主料，合计 100% 没有意义
+ * （owner 2026-09-01：「比例的话是按照投入的原料或者半成品」）。
+ */
 function setRatio(processNodeId: string, raw: string): void {
   const numeric = Number(raw);
   const clamped = Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 0;

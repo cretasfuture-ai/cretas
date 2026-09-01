@@ -253,25 +253,32 @@ describe('比例是配方值，不是上限', () => {
     // 说成上限会让人以为系统在卡一个边界，而它其实在声明一个配方。
     const text = mountDrawer().text();
     expect(text).toContain('配方值');
-    expect(text).toContain('按这个比例算');
+    // 🔴 2026-09-01 owner 第二次订正: 分母是**主料**(投入的原料/半成品),
+    //    不是工序总投入。两种读法差一个量级, 而它直接进核算。
+    expect(text).toContain('原料/半成品');
+    expect(text).toContain('主料');
+    // 多道工序各以自己的主料为分母 ⇒ ⛔ 不许要求合计 100%
+    expect(text).toContain('不要求合计 100%');
     expect(text).not.toContain('上限');
     expect(text).not.toContain('最多');
     expect(text).not.toContain('不超过');
   });
 
-  it('诚实边界仍在：报工时不用填、系统也不动手，而「按比例提醒」还没有', () => {
-    // 🔴 2026-09-01 owner 补充了这个比例在报工时**应该**起什么作用：
-    //    ⛔ 不自动配料、⛔ 报工不用为它填一笔、⛔ 不扣料不拦报工，
-    //    ✅ 目标是产出之后按比例**提醒该配的料**（owner 口述时先说「扣款」，当场订正为「警告」）。
-    //    ⇒ 这条判据要同时守两件事：说清目标，并且**说清它还没有**。
+  it('诚实边界仍在：说清它是给自动扣减用的，并且说清扣减还没接', () => {
+    // 🔴 2026-09-01 owner 前后订正了**两次**，这条判据钉的是第二次：
+    //    第一次：「实时警告」（我据此写了「提醒该配的料」）
+    //    第二次：「不用提醒，我说的是直接作为自动扣减，拉数据的时候能看到」
+    //    ⇒ 提醒/警告这条线整个作废，措辞不许再出现。
     const text = mountDrawer().text();
+    expect(text).toContain('自动扣减');
     expect(text).toContain('报工时不用');
-    expect(text).toContain('不扣料');
-    expect(text).toContain('提醒该配的料');
+    expect(text).toContain('不拦报工');
     // 🔴 最要紧的一句：目标不能被写成已经在跑的功能
-    expect(text).toContain('现在还没有');
+    expect(text).toContain('现在还没接');
     expect(text).not.toContain('已生效');
-    // 阴性对照：owner 自己否掉的那个词不许出现在产品文案里
-    expect(text).not.toContain('扣款');
+    // 阴性对照：被 owner 逐个否掉的措辞，一个都不许回来
+    for (const forbidden of ['扣款', '提醒', '警告', '弹窗']) {
+      expect(text, forbidden).not.toContain(forbidden);
+    }
   });
 });

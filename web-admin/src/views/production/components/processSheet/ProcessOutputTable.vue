@@ -14,7 +14,7 @@
  */
 import { ref } from 'vue';
 import { ArrowDown, ArrowRight, Warning } from '@element-plus/icons-vue';
-import { outputGridTemplate, type MultiOutputLine, type OutputLineView } from './processSheetOutputs';
+import { boundOutputRoleLabel, outputGridTemplate, type MultiOutputLine, type OutputLineView } from './processSheetOutputs';
 
 const props = defineProps<{
   views: OutputLineView[];
@@ -211,7 +211,9 @@ function gridStyle(): Record<string, string> {
 
         <div v-show="detailOpen(view.line.workflowPortId)" class="sp-io-detail">
           <div class="sp-io-detail-title">
-            {{ view.byproductMode === 'BOUND' ? '按需填写：本工序副产与成本分摊' : '按需填写：副产与成本分摊' }}
+            {{ view.byproductMode === 'BOUND'
+              ? '按需填写：本工序不良品/副产与成本分摊'
+              : '按需填写：不良品/副产与成本分摊' }}
           </div>
           <!--
             二选一, 不并存 (同一个事实两份必然漂):
@@ -226,19 +228,28 @@ function gridStyle(): Record<string, string> {
               class="sp-byproduct-bound"
               data-testid="byproduct-bound-item"
             >
+              <!--
+                owner 2026-09-01：不良品和副产**一起填**，画布上标注它到底算哪一类。
+                两类共用同一块录入区，角色靠这个 tag 逐条区分。
+                ⛔ tag 文字不许写成「判废」「不入库」—— 不良品是要入库存着的。
+              -->
               <span class="sp-byproduct-name" data-testid="byproduct-bound-name">
-                <el-tag size="small" type="info">副产</el-tag>
+                <el-tag
+                  size="small"
+                  :type="bp.role === 'DEFECTIVE' ? 'danger' : 'info'"
+                  :data-testid="`byproduct-bound-role-${bp.role}`"
+                >{{ boundOutputRoleLabel(bp.role) }}</el-tag>
                 <strong>{{ bp.materialName }}</strong>
               </span>
               <label>数量
-                <span class="sp-inline-input" role="group" :aria-label="`${bp.materialName} 副产数量与单位`">
+                <span class="sp-inline-input" role="group" :aria-label="`${bp.materialName} ${boundOutputRoleLabel(bp.role)}数量与单位`">
                   <el-input-number
                     v-model="bp.quantity"
                     :min="0"
                     :precision="6"
                     controls-position="right"
                     size="small"
-                    :aria-label="`${bp.materialName} 副产数量`"
+                    :aria-label="`${bp.materialName} ${boundOutputRoleLabel(bp.role)}数量`"
                   />
                   <span class="sp-fixed-unit">{{ bp.unit }}</span>
                 </span>
@@ -250,7 +261,7 @@ function gridStyle(): Record<string, string> {
                   :precision="4"
                   controls-position="right"
                   size="small"
-                  :aria-label="`${bp.materialName} 副产回收单价`"
+                  :aria-label="`${bp.materialName} ${boundOutputRoleLabel(bp.role)}回收单价`"
                 />
               </label>
             </div>
