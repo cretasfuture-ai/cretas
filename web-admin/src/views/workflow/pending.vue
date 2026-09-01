@@ -9,6 +9,9 @@ import { useWorkspaceStore } from '@/store/modules/workspace';
 import { oaInvalidatedModules } from '@/utils/workspaceInvalidation';
 import { enumLabel } from '@/utils/enumDisplay';
 import { approverHint, currentNodeText } from './nodeLabel';
+import { usePermissionStore } from '@/store/modules/permission';
+import OrderPeekDrawer from '@/views/finance/components/OrderPeekDrawer.vue';
+import { isRouteReachable, PEEKABLE_BY_MODULE } from './approvalDocReach';
 
 /**
  * 业务类型中文名 —— 筛选下拉和表格列共用同一份。
@@ -62,6 +65,7 @@ const authStore = useAuthStore();
 const workspace = useWorkspaceStore();
 const route = useRoute();
 const router = useRouter();
+const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const operatingId = ref('');
@@ -314,13 +318,38 @@ function openDetail(row: PendingApproval): void {
     PRODUCTION_REPORT_CORRECTION: `/production/approval?reportId=${row.reportCorrectionDetails?.reportId || ''}`,
   };
   const target = routeByModule[row.moduleCode];
-  if (target) {
+  if (!target) {
+    // ⛔ 不静默失败: 说清楚是「这个业务域还没接详情页」, 而不是让人以为点坏了。
+    ElMessage.info(`「${row.moduleLabel || row.moduleCode}」暂未接入单据详情页`);
+    return;
+  }
+  // 缺陷 30 (2026-09-01 LIUSHANMEN 生产): 审批链把采购单派给财务审, 而财务点开
+  // 自己审的单必跳 /403。⛔ 修法不是把那条路由开给财务(见 approvalDocReach.ts),
+  //    而是够得着就跳转、够不着就开 owner 定的那个只读速览抽屉(不注册路由)。
+  openApprovalDoc(target, row.moduleCode, id, row.moduleLabel || row.moduleCode);
+}
+// ── 缺陷 30: 够不着目标路由时的只读速览 ────────────────────────────────
+const peekVisible = ref(false);
+const peekOrderId = ref<string | null>(null);
+const peekKind = ref<'sales' | 'purchase'>('purchase');
+
+/** 打开单据: 够得着就跳转, 够不着就退到只读抽屉, 都不行才说清楚为什么。 */
+function openApprovalDoc(target: string, moduleCode: string, entityId: string, label: string): void {
+  if (isRouteReachable(router, authStore.currentRole, target, permissionStore.canAccess)) {
     router.push(target);
     return;
   }
-  // ⛔ 不静默失败: 说清楚是「这个业务域还没接详情页」, 而不是让人以为点坏了。
-  ElMessage.info(`「${row.moduleLabel || row.moduleCode}」暂未接入单据详情页`);
+  const kind = PEEKABLE_BY_MODULE[moduleCode];
+  if (kind) {
+    peekKind.value = kind;
+    peekOrderId.value = entityId;
+    peekVisible.value = true;
+    return;
+  }
+  // ⛔ 不静默失败, 也不再把人送去 /403 丢掉上下文。
+  ElMessage.info(`你没有查看「${label}」详情的权限, 且该单据暂无只读速览`);
 }
+
 
 onMounted(async () => {
   mounted = true;
@@ -461,6 +490,7 @@ onMounted(async () => {
       />
     </el-card>
   </div>
+  <OrderPeekDrawer v-model:visible="peekVisible" :order-id="peekOrderId" :kind="peekKind" />
 </template>
 
 <style scoped>

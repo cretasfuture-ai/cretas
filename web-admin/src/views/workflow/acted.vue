@@ -5,9 +5,12 @@ import { enumLabel } from '@/utils/enumDisplay';
 import { MODULE_LABELS } from './moduleLabels';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { currentNodeText } from './nodeLabel';
+import OrderPeekDrawer from '@/views/finance/components/OrderPeekDrawer.vue';
+import { isRouteReachable, PEEKABLE_BY_MODULE } from './approvalDocReach';
 
 interface WorkflowInstanceRow {
   instanceId: string;
@@ -34,6 +37,7 @@ interface PageResp {
 }
 
 const router = useRouter();
+const permissionStore = usePermissionStore();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 const instances = ref<WorkflowInstanceRow[]>([]);
@@ -79,6 +83,10 @@ function handleSizeChange(size: number): void {
   load();
 }
 
+// 缺陷 30 (2026-09-01 LIUSHANMEN 生产): 审批链把采购单派给财务审, 而财务点开
+// 自己审的单必跳 /403 —— 审批人看不见自己在审什么。
+// ⛔ 修法不是把那条路由开给财务(见 approvalDocReach.ts 里的两条理由), 而是
+//    够得着就跳转、够不着就开 owner 定的那个**只读速览抽屉**(不注册路由)。
 function goToDetail(row: WorkflowInstanceRow): void {
   const id = row.businessEntityId;
   if (!id) return;
@@ -88,12 +96,34 @@ function goToDetail(row: WorkflowInstanceRow): void {
     INVENTORY_ADJUSTMENT: `/warehouse/stocktakes?stocktakeId=${id}`,
   };
   const target = routeByModule[row.moduleCode];
-  if (target) {
+  if (!target) {
+    ElMessage.info(`暂不支持跳转模块：${row.moduleCode}`);
+    return;
+  }
+  openApprovalDoc(target, row.moduleCode, id, row.moduleLabel || row.moduleCode);
+}
+// ── 缺陷 30: 够不着目标路由时的只读速览 ────────────────────────────────
+const peekVisible = ref(false);
+const peekOrderId = ref<string | null>(null);
+const peekKind = ref<'sales' | 'purchase'>('purchase');
+
+/** 打开单据: 够得着就跳转, 够不着就退到只读抽屉, 都不行才说清楚为什么。 */
+function openApprovalDoc(target: string, moduleCode: string, entityId: string, label: string): void {
+  if (isRouteReachable(router, authStore.currentRole, target, permissionStore.canAccess)) {
     router.push(target);
     return;
   }
-  ElMessage.info(`暂不支持跳转模块：${row.moduleCode}`);
+  const kind = PEEKABLE_BY_MODULE[moduleCode];
+  if (kind) {
+    peekKind.value = kind;
+    peekOrderId.value = entityId;
+    peekVisible.value = true;
+    return;
+  }
+  // ⛔ 不静默失败, 也不再把人送去 /403 丢掉上下文。
+  ElMessage.info(`你没有查看「${label}」详情的权限, 且该单据暂无只读速览`);
 }
+
 
 function formatTime(iso: string | null): string {
   if (!iso) return '-';
@@ -164,6 +194,7 @@ onMounted(load);
       </div>
     </el-card>
   </div>
+  <OrderPeekDrawer v-model:visible="peekVisible" :order-id="peekOrderId" :kind="peekKind" />
 </template>
 
 <style lang="scss" scoped>

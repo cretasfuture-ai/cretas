@@ -202,9 +202,21 @@ const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
     rd: 'r'  // QA 审核样品, 只读
   },
   // Apr 24: procurement 硬编码 '-' 与 DB 'r' 不一致 (finance 经理需 read 采购数据做成本分析). 对齐 DB.
+  //
+  // 🔴 2026-09-01: 上面那句「对齐 DB」**已经过期** —— 2026-08-22 的
+  //    V20261030_14__finance_manager_narrow.sql 把 finance_manager 的
+  //    analytics / procurement / production / rd / sales 全部 UPDATE 成 '-'。
+  //    本表是 DB 不可用时的兜底, 兜底比真实权限**宽**是最坏的方向:
+  //    DB 一挂, 财务的侧边栏会铺开采购整组, 而线上他本来看不到。
+  //    ⇒ procurement 跟随 migration 改成 '-'。
+  //    ⚠️ 同一张表里 analytics / production / sales 也仍与 migration 不符,
+  //       本轮**未改**(缺陷 30 只用得到 procurement, 动其余三个会改变
+  //       SmartBI 等页面在兜底态下的可见性, 超出本次范围) ——
+  //       已显式登记在 __tests__/financeManagerFallbackMatchesMigration.spec.ts
+  //       的 KNOWN_DRIFT 里, ⛔ 不是漏了。
   finance_manager: {
     dashboard: 'r', production: 'r', warehouse: '-', quality: '-',
-    procurement: 'r', sales: 'r', hr: '-', equipment: '-',
+    procurement: '-', sales: 'r', hr: '-', equipment: '-',
     finance: 'rw', system: '-', analytics: 'rw', scheduling: '-',
     // 餐饮侧只看财务口径的页(供应商对账 / 成本归因)。此前是在 router/guards.ts 的
     // ROLE_PATH_WHITELIST 里硬编码那两条路径, 现由权限模型表达, 那个补丁已删。
