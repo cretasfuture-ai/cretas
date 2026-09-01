@@ -849,6 +849,48 @@ approvalBusinessLocked = initialApprovalDecisionType !== undefined
 3. `evaluateOutgoingEdges` 在审批节点上遇到无条件分支边时应当**显式报错**，
    ⛔ 不要静默按数组顺序选一条 —— 那是把配置错误变成了业务错误。
 
+### 生产侧已处置（2026-09-01 18:44，owner 授权）
+
+走**高级模式 URL**（不带 `source=approval-chains`）重连三条边并逐条填条件，
+`PUT` 200。**判据不是画布显示，是从接口读回来的定义**：
+
+| 边 | source → target | condition |
+|---|---|---|
+| `e_1788259053965` | `admin_approval → approved` | `#decision == 'APPROVE'` |
+| `e_1788259322493` | `start → admin_approval` | `null`（入口边，无条件是对的） |
+| `e_1788259340871` | `admin_approval → rejected` | `#decision == 'REJECT'` |
+
+⚠️ **哪条边是哪条，没有靠"我点的是左边那条"这种几何推断**：边 id 是创建时间戳，
+与我连线的先后顺序一一对应，与几何判断互相独立地印证；最终仍以接口读回的
+`source`/`target` 为准。
+
+🔴 **代价（已实测，不是推断）**：`stableDefinitionDigest` 把 `edgesJson` 计进摘要
+（`WorkflowEngineServiceImpl:299-315`），所以这次修改**使在途实例的绑定摘要失配**。
+在 prod 库里按 Java 的算法（每字段 `int4send(UTF8长度) || UTF8字节`，顺序喂 SHA-256）
+复刻计算，直接比：
+
+| 实例 | 决策类型 | 绑定摘要 | 当前定义摘要 | 匹配 |
+|---|---|---|---|---|
+| `851d0845…` (PO `4c1f6592…`) | PURCHASE_ORDER_APPROVAL | `295acd8b…` | `d8da9ce3…` | **f** |
+| `ee9c2f3d…` | BUDGET_APPROVAL（**阳性对照**，从未被编辑） | `0675596e…` | `0675596e…` | t |
+
+阳性对照逐字符相等 ⇒ **复刻算法是对的**，那个 `f` 是真失配，不是仪器造的。
+⇒ 该在途单已进入缺陷 27 的「看得见、点不动」死状态（409
+`WORKFLOW_BOUND_DEFINITION_CHANGED`）。复核过 force-cancel **至今仍只是一句
+`W4+ 加` 的注释**（`WorkflowEngineService.java:246`、
+`WorkflowInstanceController.java:553`），**产品内没有恢复入口** ⇒ 只能作废重开。
+
+⚠️ **路上踩的一次假读数（记下来免得重犯）**：第一次查 `context_json` 用的 key 是
+`stableDefinitionDigest` / `boundDefinitionDigest`（照 Java 的**变量名**猜的），
+两条实例都读出「没有绑定摘要」⇒ 差一步得出**相反**结论（「不会 409」）。
+真实 key 是常量的**值**：`_cretas_bound_workflow_definition_v2_sha256`
+（`WorkflowEngineServiceImpl:104-109`）。⇒ 查 JSON 字段先 `jsonb_object_keys` 列一遍，
+⛔ 不要拿变量名当 key 名。
+
+⇒ 这恰好是缺陷 27 的第二次实证：**修配置的代价落在在途单头上，
+而修配置正是发现配置错了以后唯一能做的事** —— 两者互斥，说明缺 force-cancel
+不是"锦上添花"，是这条链上的必需件。
+
 ---
 
 ## 台账 12｜`BUG-F006-PURCHASE-WAREHOUSE-RECEIVING-BOUNDARY-001` 标着 NOT_DEPLOYED，但它的产物已在生产上
