@@ -213,6 +213,24 @@
 1. 🔴 「必发生」的量**要从被测代码路径推，⛔ 不能从历史相似数据推** —— B 线拿 `TRF-MT-*` 批次数当必发生量读到「仍是 5」差点判失败，真相是领料现在走 `-WKS-`/`MATERIAL_REQUISITION`（7-03 双扣防呆后不再产 transfer），`TRF-MT-*` 是 8-30 旧路径的产物。上一次同形是拿 `finished_goods_adjustment_log` 当发货对照。
 2. 🔴 打印类判据要走到第三级：**「按钮在」→「文件下得来」→「纸上是这张单的数据」**。我给 #469 定的「真下载到文件」停在第二级，文件真下了、PDF 真渲染了、纸上全是占位符。与第 1 条同形：挑了一个看起来相关但不区分的读数。
 
+### 📌 2026-09-02 04:25 增量 · 部署 9/10 落地, 38 上线, 合并 55
+
+**部署（判据：运行制品里的排他标记 + 假串 0 + 进程启动时间 > jar mtime）**
+- **9**（`c49fce15ed`，#471–#475 #479 #480 #482）：Java ✅ 03:59:38 blue，`WarehouseInventoryController.getUnsettledConsumptionByBatchIds` 0→1；**web 被 01:21 遗留的 `/tmp/cretas-web-admin-deploy.lock` 拒**（PID 早不在）⇒ `DEPLOY_EXIT=1`、`RELEASE_FINAL_STATUS` 0 次。
+- **10**（`4647003404`，+#478 缺陷 38）：✅ 04:08:18 green(10020)，`ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory` 0→1；web 复用 9 的可信 dist（03:55 构建），原子交换 04:10:01，链 `index.html → index-DGnGihV5 → index-DTIXTmZq → index-mA8SF2Fu` 含「收货量 − 已用 − 预留」。生产入口 `admin…/api/mobile/health`=200。
+- **11**（`40fecfa067`，#483 #484 #485 #486 #488）：第一次被 **`/tmp/cretas-release.lock`（部署 10 自己 04:03 留下、进程已退）拒**，摘锁重发 04:2x，在跑。
+- 🔴 **部署脚本缺陷（登记）**：两把 `/tmp` 锁都**不校验持有者存活**，一晚两次被陈旧锁拒。判「另一个 deploy 在跑」先 `kill -0 <pid>`。
+- ⚠️ 观察项：green 期间 47 上**没有进程听 10010**（只 10020），直连 000 是常态；前 8 次同形，走 139 反代不受影响。未深追。
+
+**合并（55）**：#478 38（终审通过：`:57` 两侧阴性对照 + 真入口无 mockStatic）/ #482 33 单位根修（`UNIT_ALIASES` 目标改成后端 normalize 不动点，4 张兄弟别名表登记未动）/ #485 31 订正 / #483 辅料实时推算（只 AUXILIARY；PACKAGING 无 `dosagePerKgG`、按计划产出量走原路 —— 执行者纠正了我的 brief）+43 折叠 / #484 41「不得超过」+39 三步 + 行 ID / #486 报工屏 32·E·D·F（成本 null 透传，前端 `costText()` 早就渲染「成本未知」）/ #488 44 打印读真数据（`getById` 租户内）。
+**退回**：#487 生产菜单 21→11（不是 19→9，执行者量了）——`dispatcher` 丢「撤回审批」（hub 沿用 roles[] 门 ⇒ 改成 tab 级门禁、hub 可见性取并集）+ `echarts-wordcloud` 改 fire-and-forget 动态 import 有首渲染竞态 ⇒ 让它改回静态 import + 测试 mock。
+
+**核销**：#460（owner 实测 7/7）、#469 两象限、37 撤回。**我的错**：#477 是我 03:10 合的（压缩前），之后拿已 MERGED 的 PR 轮询并写「等你推订正版」—— 上下文压缩丢了合并记录；订正走 #485。
+
+**新登记（演示后）**：**46** `/warehouse/material-types` 菜单按 `module:'warehouse'` 放行、页面写权限 `canWrite('production')` ⇒ 仓管看得见点不开（我倾向改页面权限，owner 定）；**47**（owner）领料单把「出现」与「扣库存」绑死，缺「出现 + 不扣库存（现场取用：冰水/水/蒸汽/自制高汤）」一格 —— 两处都改（`appendSeasoningItems` + 报工 `planNative`），⛔ 不复用 `count_in_seasoning`（成本口径）；它解释了今晚撞 38 的成因。**主料配比走 (a)**（进 `nodesJson`、INPUT port 存归一化份额、改配比=发新修订，一天）——经 f006 转述，派前跟 owner 当面确认。**在途审批实例 2 条**（`851d0845…` + `ee9c2f3d…`），交接件写 1 是错的。
+
+**对照矩阵（f006）**：{客供/公司} × {领料/报工} 四格三通，只坏「客供料 + 领工厂辅料」一格 ⇒ 工厂自产线整条可演。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
