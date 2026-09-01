@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Close, Refresh } from '@element-plus/icons-vue';
-import { handleCatchError } from '@/utils/errorToast';
+import { handleCatchError, getErrorMessage } from '@/utils/errorToast';
 import {
   getPendingApprovals, approveReport, rejectReport, batchApproveReports,
   getCorrectableReports, submitReportCorrection,
@@ -21,11 +21,18 @@ const canCorrectReports = computed(() => permissionStore.canWrite('production_re
 
 const loading = ref(false);
 const allData = ref<ApprovalItem[]>([]);
+// 缺陷修复 (2026-09-01, LIUSHANMEN 生产事故): loadData() 403 时 allData 保持初始 []，
+// 页面渲染「待审批 0」+「暂无数据」—— 与"确实没有待审批"长得一模一样。
+// loadError 把"加载失败"和"真的是空"分开: 非空 = 加载失败, 数量位置渲染 "—" 不渲染 0。
+const loadError = ref('');
 const pagination = ref({ page: 1, size: 20 });
 const selectedIds = ref<number[]>([]);
 
 const correctionLoading = ref(false);
 const correctableReports = ref<CorrectableReportItem[]>([]);
+// 同一形状第二处 (硬约束 8): loadCorrectableReports() 也是「catch → 列表停在旧值/空 →
+// 渲染confident 的 empty-text」。独立于上面的 loadError，因为两个队列各自独立加载/失败。
+const correctionLoadError = ref('');
 const correctionDialogVisible = ref(false);
 const correctionTarget = ref<CorrectableReportItem | null>(null);
 const correctionSubmitting = ref(false);
@@ -42,14 +49,21 @@ const correctionForm = ref<ProductionReportCorrectionPayload>({
 async function loadCorrectableReports() {
   if (!factoryId.value || !canCorrectReports.value) {
     correctableReports.value = [];
+    correctionLoadError.value = '';
     return;
   }
   correctionLoading.value = true;
   try {
     const response = await getCorrectableReports(factoryId.value, { page: 1, size: 100 });
-    correctableReports.value = response.data?.content || [];
+    if (response.success) {
+      correctableReports.value = response.data?.content || [];
+      correctionLoadError.value = '';
+    } else {
+      correctionLoadError.value = response.message || '加载报工核对列表失败';
+    }
   } catch (error) {
     handleCatchError(error, '加载报工核对列表失败');
+    correctionLoadError.value = getErrorMessage(error, '加载报工核对列表失败');
   } finally {
     correctionLoading.value = false;
   }
@@ -214,10 +228,18 @@ async function loadData() {
     });
     if (response.success && response.data) {
       allData.value = (response.data.content || []) as ApprovalItem[];
+      loadError.value = '';
+    } else {
+      // response.success === false: 原先这个分支静默不做事, allData 停在陈旧/空值上
+      // 且没有任何信号 —— 与"加载成功且真的没有待审批"无法区分.
+      loadError.value = response.message || '加载待审批列表失败';
     }
   } catch (e) {
     // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
     handleCatchError(e, '加载待审批列表失败,请检查网络');
+    // LIUSHANMEN 生产事故 (2026-09-01): 403 走这条路, allData 保持 []，
+    // 页面此前渲染「待审批 0」+「暂无数据」—— 与"确实没有待审批"读数完全相同.
+    loadError.value = getErrorMessage(e, '加载待审批列表失败,请检查网络');
   } finally {
     loading.value = false;
     inFlight = false;
@@ -498,7 +520,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
       <div class="toolbar">
         <div class="toolbar-left">
           <h2 style="margin: 0">报工审批</h2>
-          <el-tag type="warning">待审批 {{ allData.length }}</el-tag>
+          <el-tag :type="loadError ? 'danger' : 'warning'">待审批 {{ loadError ? '—' : allData.length }}</el-tag>
         </div>
         <div class="toolbar-right">
           <el-button :icon="Refresh" @click="loadData" />
@@ -514,6 +536,21 @@ function evidenceImageIndex(urls: string[], url: string): number {
           </el-button>
         </div>
       </div>
+      <!-- LIUSHANMEN 生产事故 (2026-09-01): 加载失败(如 403)时不能只剩「待审批 0」+「暂无数据」，
+           那与「确实没有待审批」是同一个画面。这里显式喊出来，且不claim为空。 -->
+      <el-alert
+        v-if="loadError"
+        class="load-error"
+        type="error"
+        :closable="false"
+        title="待审批列表加载失败 —— 以下不代表「暂无待审批」"
+        style="margin-top: 12px"
+      >
+        <template #default>
+          <span>{{ loadError }}</span>
+          <el-button link type="primary" @click="loadData">重新加载</el-button>
+        </template>
+      </el-alert>
     </el-card>
 
     <el-card v-if="canCorrectReports" class="correction-card" style="margin-top: 16px">
@@ -526,7 +563,26 @@ function evidenceImageIndex(urls: string[], url: string): number {
           <el-button :icon="Refresh" :loading="correctionLoading" @click="loadCorrectableReports">刷新核对列表</el-button>
         </div>
       </template>
-      <el-table v-loading="correctionLoading" :data="correctableReports" row-key="id" stripe empty-text="暂无未结单报工">
+      <el-alert
+        v-if="correctionLoadError"
+        class="load-error"
+        type="error"
+        :closable="false"
+        title="报工核对列表加载失败 —— 以下不代表「无未结单报工」"
+        style="margin-bottom: 12px"
+      >
+        <template #default>
+          <span>{{ correctionLoadError }}</span>
+          <el-button link type="primary" @click="loadCorrectableReports">重新加载</el-button>
+        </template>
+      </el-alert>
+      <el-table
+        v-loading="correctionLoading"
+        :data="correctableReports"
+        row-key="id"
+        stripe
+        :empty-text="correctionLoadError ? '加载失败，数据未知' : '暂无未结单报工'"
+      >
         <el-table-column type="expand" width="44">
           <template #default="{ row }">
             <div v-if="row.lastCorrection" class="correction-audit">
@@ -609,6 +665,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
         v-loading="loading"
         row-key="id"
         stripe
+        :empty-text="loadError ? '加载失败，数据未知，请点击右上角刷新重试' : '暂无待审批数据'"
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="50" />

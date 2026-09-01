@@ -29,7 +29,10 @@ vi.mock('@/store/modules/auth', () => ({
 vi.mock('@/store/modules/permission', () => ({
   usePermissionStore: () => ({ canWrite: () => true }),
 }));
-vi.mock('@/utils/errorToast', () => ({ handleCatchError: vi.fn() }));
+vi.mock('@/utils/errorToast', () => ({
+  handleCatchError: vi.fn(),
+  getErrorMessage: (_e: unknown, fallback: string) => fallback,
+}));
 vi.mock('@/utils/processSheetUnits', () => ({ displayProcessUnit: (v: unknown) => String(v ?? '') }));
 vi.mock('@/components/approval/OpinionInputDialog.vue', () => ({
   default: defineComponent({ name: 'OpinionInputDialog', render: () => h('div') }),
