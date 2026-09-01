@@ -497,7 +497,8 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'by-warehouse',
             name: 'InventoryByWarehouse',
             component: () => import('@/views/inventory/by-warehouse/index.vue'),
-            meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse' }
+            // 面包屑归属: 父子同名, 面包屑会显示「分仓库存查询 / 分仓库存查询」; 侧边栏在「仓储管理」 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+            meta: { requiresAuth: true, title: '分仓库存查询', module: 'warehouse', breadcrumbParent: '仓储管理' }
           }
         ]
       },
@@ -513,7 +514,8 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'list',
             name: 'TransferList',
             component: () => import('@/views/transfer/list.vue'),
-            meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory' }
+            // 面包屑归属: 路由父级叫「调拨管理」, 侧边栏挂在「仓储管理 / 仓储作业」 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', breadcrumbParent: '仓储管理' }
           },
           {
             path: 'new',
@@ -1528,7 +1530,8 @@ const businessRoutes: RouteRecordRaw[] = [
             // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
             //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
             //   GET /product-process-workflows 要 production。是路由声明错了。
-            meta: { requiresAuth: true, title: 'SKU 管理', module: 'production' }
+            // 面包屑归属: URL 前缀 /system 是历史; 侧边栏挂在「生产管理 / 生产配置」下 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+meta: { requiresAuth: true, title: 'SKU 管理', module: 'production', breadcrumbParent: '生产管理' }
           },
           {
             path: 'features',
@@ -1554,7 +1557,8 @@ const businessRoutes: RouteRecordRaw[] = [
             // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
             //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
             //   GET /product-process-workflows 要 production。是路由声明错了。
-            meta: { requiresAuth: true, title: '工序管理', module: 'production' }
+            // 面包屑归属: 同上: /system 前缀是历史, 归属在生产管理 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+meta: { requiresAuth: true, title: '工序管理', module: 'production', breadcrumbParent: '生产管理' }
           },
           {
             path: 'product-processes',
@@ -1568,7 +1572,8 @@ const businessRoutes: RouteRecordRaw[] = [
             // ⛔ 不是改菜单去迁就路由: 后端**没有任何端点要 system** ——
             //   POST/PUT /product-types 要 production|rd, POST /work-processes 要 production,
             //   GET /product-process-workflows 要 production。是路由声明错了。
-            meta: { requiresAuth: true, title: '产品-工序配置', module: 'production' }
+            // 面包屑归属: 同上: /system 前缀是历史, 归属在生产管理 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+meta: { requiresAuth: true, title: '产品-工序配置', module: 'production', breadcrumbParent: '生产管理' }
           },
           {
             path: 'workflow-designer',
@@ -1706,7 +1711,8 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'production-report',
             name: 'ProductionReport',
             component: () => import('@/views/analytics/production-report/index.vue'),
-            meta: { requiresAuth: true, title: '车间实时生产报表', module: 'analytics' }
+            // 面包屑归属: 路由挂在 /analytics 下, 但侧边栏在「生产管理 / 生产分析」 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+meta: { requiresAuth: true, title: '车间实时生产报表', module: 'analytics', breadcrumbParent: '生产管理' }
           },
           {
             path: 'alert-dashboard',
@@ -1748,7 +1754,8 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'list',
             name: 'CalibrationList',
             component: () => import('@/views/calibration/CalibrationListView.vue'),
-            meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: platformAdminOnlyRoles }
+            // 面包屑归属: 路由父级叫「行为校准」, 侧边栏挂在「系统管理 / 平台治理」 ⇒ breadcrumbParent 覆盖上一级 (AppHeader.vue)。⛔ 不改 URL(存量深链)。
+meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: platformAdminOnlyRoles, breadcrumbParent: '系统管理' }
           },
           {
             path: ':id',

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { financeManagerMenu, menuConfig, type MenuItem } from '../menuConfig';
+import router from '@/router';
 
 function findGroup(path: string): MenuItem | undefined {
   return menuConfig.find((m) => m.path === path);
@@ -112,51 +113,104 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   // (/system/users 是存量深链/书签/E2E 用了很久的地址)。
   // ⇒ 路由用 meta.breadcrumbParent 声明「我在导航里的上一级」, AppHeader 以它为准。
   //
-  // ⚠️ **本闸刻意只管账号管理这两条**, 不扫全表。
-  //    建闸时量过: 全表有 18 个菜单项的侧边栏归属与 URL 前缀不一致 (生产管理下的
-  //    /system/products、系统管理下的 /canvas-editor、仓储管理下的 /transfer/list …),
-  //    它们都是**存量**, 与本轮缺陷无关。把闸开到全表 = 一上来 18 条红, 结局是被关掉
-  //    或者被迫改 18 条不相干的路由 —— 本仓形态 E: 宁可窄而可信, 不要宽而被关掉。
+  // ── 2026-09-01 第二轮: 本闸从「账号管理两条」扩到**全表** ──────────────────
   //
-  //    那 18 条不写死在这里(写死就会烂)。要重新取这份清单, 把下面 SCOPE 改成扫全表即可:
-  //    menuConfig.flatMap(g => (g.children ?? []).filter(c =>
-  //      c.path.split('/')[1] !== g.path.split('/')[1]).map(c => `${g.title}|${c.path}`))
-  it('账号管理/角色权限: 侧边栏归属与 URL 前缀不一致, 面包屑必须被显式改写成侧边栏那个组名', () => {
-    const routerSource = readFileSync(resolve(__dirname, '../../../router/index.ts'), 'utf8');
-    const SCOPE = ['/system/users', '/system/roles'];
+  // ⚠️ 判据换了, 口径必须一起说清, 否则两轮的数字没法比:
+  //   #432 建闸时量的是「URL 前缀 != 侧边栏组的 path 前缀」, 注释里写「18 条」——
+  //   **实测是 20 条**(#432 只给 menuConfig.ts 加了 10 行注释, 没动结构, 所以当时
+  //   也是 20; 那个 18 是写错的, 不是后来漂的)。
+  //
+  //   更要紧的是: 那个判据量的不是缺陷本身。20 条里有 8 条是假阳性 —— 例如
+  //   /analytics/overview 挂在「数据与分析」组下, URL 前缀 /analytics 与组 path
+  //   /smart-bi 不同, 可它渲染出来的面包屑上一级**正好就是**「数据与分析」,
+  //   用户看不到任何矛盾, 给它加 breadcrumbParent 是个 no-op。
+  //
+  // ⇒ 本闸改成量**用户真看得见的那件事**: 渲染出来的面包屑上一级, 必须是用户在
+  //   侧边栏里找得到的名字 —— 组名(如「仓储管理」), 或它所在的 groupLabel 分段名
+  //   (如「生产分析」; SidebarMenuNode.vue 把 groupLabel 渲染成分段小标题)。
+  //   两者都不是, 才算漂。
+  //
+  //   换判据的实测: 20 条前缀漂 → 9 条真漂, 且**前缀判据一条真漂都没漏**
+  //   (「前缀不漂但面包屑漂」的交集实测 0 条)。9 条里 7 条已按 (a) 修, 2 条登记待定。
+  //
+  // ⛔ 不再用源码 grep 定位路由。#432 那版靠 routerSource.indexOf(`path: '<叶子>'`),
+  //    扩到全表就会读错行: router/index.ts 里 path: 'list' 有 3 处(调拨/校准/…),
+  //    而 /production-analytics/* 根本不在 index.ts 里(在 router/modules/ 下)。
+  //    改用 router.resolve() 直接问路由表 —— 与 AppHeader 读的是同一个 meta。
 
-    const checked = SCOPE.map((path) => {
-      const group = menuConfig.find((g) => g.children?.some((c) => c.path === path));
-      expect(group, `${path} 在菜单里找不到 —— 仪器坏了`).toBeTruthy();
-      const routeLeaf = path.split('/').pop()!;
-      const idx = routerSource.indexOf(`path: '${routeLeaf}'`);
-      expect(idx, `router 里找不到 path: '${routeLeaf}' —— 仪器坏了`).toBeGreaterThan(-1);
-      const metaChunk = routerSource.slice(idx, idx + 700);
-      return {
-        path,
-        groupTitle: group!.title,
-        urlPrefix: `/${path.split('/')[1]}`,
-        declares: metaChunk.includes(`breadcrumbParent: '${group!.title}'`),
-      };
-    });
+  // 侧边栏归属对、只是面包屑没跟上的, 一律加 meta.breadcrumbParent (见 router/index.ts)。
+  // 归属**本身**存疑的登记在这里, 每条写明理由, 交 owner 定。
+  // ⛔ 登记是留痕, 不是豁免 —— 也不许用通配符或放宽判据把它们盖过去。
+  const BREADCRUMB_DRIFT_ACCEPTED: Record<string, string> = {
+    '/rd/samples':
+      '侧边栏没有「研发管理」这一组, 这条被寄放在「生产管理」下, 面包屑却如实写「研发管理」。' +
+      'router 里 /rd 是一个完整的域(研发样品 / 已转样品库 / 报价), 侧边栏只暴露了其中 1 条。' +
+      '要不要给研发单开一组, 是 IA 决策 —— 待 owner 定, ⛔ 本轮不擅自动菜单。',
+    '/procurement/requisitions/my':
+      '同一条路由**同时**挂在两个组下: 「采购管理」(工厂侧, 组上有 hideForFactoryTypes RESTAURANT) ' +
+      '和「餐饮运营」(餐饮侧), 而且两处标题还不同(我的请购 / 报货·采购计划)。' +
+      'meta.breadcrumbParent 是静态的只有一个值: 给餐饮侧写对, 就把工厂侧写错了。' +
+      '需要 owner 先定归属 —— menuConfig.ts 那条自己就挂着「餐饮侧要不要保留这条…待定」的注释。',
+  };
 
-    // 阳性对照: 这两条**确实**是「归属 != URL 前缀」的, 否则本闸守的是空气。
-    for (const c of checked) {
-      expect(
-        c.urlPrefix.startsWith(`/${menuConfig.find((g) => g.title === c.groupTitle)!.path.split('/')[1]}`),
-        `${c.path} 的 URL 前缀已经和侧边栏组一致了 —— 那本闸不再有意义, 该删`,
-      ).toBe(false);
+  it('全表: 面包屑渲染出来的上一级, 必须是用户在侧边栏里找得到的名字', () => {
+    // 仪器: 直接问路由表, 与 AppHeader.vue 读的是同一个 meta。
+    const renderedParent = (path: string): string | null => {
+      const r = router.resolve(path);
+      const titled = r.matched.filter((m) => m.meta?.title);
+      const override = r.meta.breadcrumbParent as string | undefined;
+      if (override) return override;
+      // 只有一级 ⇒ 面包屑不显示上一级。那是「没说」, 不是「说错」, 不构成矛盾。
+      if (titled.length < 2) return null;
+      return (titled[titled.length - 2].meta.title as string) ?? null;
+    };
+
+    // 覆盖面自查: 菜单当前是两级(组 > 叶)。哪天多出第三级, 本闸就只扫到了一部分 ——
+    // 那时要先改仪器, ⛔ 不能让它安静地少扫。
+    for (const g of menuConfig) {
+      for (const c of g.children ?? []) {
+        expect((c.children ?? []).length, `${c.path} 有下级菜单 —— 本闸只走两级, 覆盖面不够了`).toBe(0);
+      }
     }
 
-    const missing = checked.filter((c) => !c.declares);
+    const drifting: { path: string; group: string; crumb: string }[] = [];
+    for (const g of menuConfig) {
+      let section: string | null = null; // groupLabel 是分段小标题, 向下继承到下一个 label
+      for (const c of g.children ?? []) {
+        if (c.groupLabel) section = c.groupLabel;
+        const r = router.resolve(c.path);
+        expect(
+          r.matched.length,
+          `${c.path} 在路由表里解析不到 —— 要么仪器坏了, 要么这个菜单项指向死链`,
+        ).toBeGreaterThan(0);
+        const crumb = renderedParent(c.path);
+        if (crumb === null) continue;
+        const findable = [g.title, section].filter(Boolean) as string[];
+        if (!findable.includes(crumb)) drifting.push({ path: c.path, group: g.title, crumb });
+      }
+    }
+
+    // 阳性对照: 登记的例外必须**确实还在漂**。
+    // 修好了却留在名单里 = 名单开始烂, 而烂掉的名单会把整道闸的可信度一起带走。
+    for (const path of Object.keys(BREADCRUMB_DRIFT_ACCEPTED)) {
+      expect(
+        drifting.some((d) => d.path === path),
+        `${path} 已经不漂了 —— 请把它从 BREADCRUMB_DRIFT_ACCEPTED 里删掉`,
+      ).toBe(true);
+    }
+
+    const unregistered = drifting.filter((d) => !(d.path in BREADCRUMB_DRIFT_ACCEPTED));
     expect(
-      missing.map((c) => `${c.groupTitle}|${c.path}`),
-      `以下菜单项挂在与 URL 前缀不同的组下, 但路由没声明 breadcrumbParent ——\n` +
-        `  ${missing.map((c) => `${c.groupTitle}|${c.path}`).join('\n  ')}\n\n` +
-        `⇒ 面包屑会退回跟着 URL 前缀走, 与侧边栏各说各话, 缺陷原样回来(而且不报错)。\n` +
-        `修法: 给该路由的 meta 加 breadcrumbParent: '<它在侧边栏里的组名>'。`,
+      unregistered.map((d) => `${d.group}|${d.path}|面包屑写的是「${d.crumb}」`),
+      `以下菜单项渲染出来的面包屑上一级, 用户在侧边栏里根本找不到 ——\n` +
+        `  ${unregistered.map((d) => `${d.group}|${d.path}|面包屑「${d.crumb}」`).join('\n  ')}\n\n` +
+        `用户会像 owner 在 LIUSHANMEN 那样: 照面包屑那个名字去侧边栏找, 找不到。\n` +
+        `修法二选一:\n` +
+        `  (a) 侧边栏归属是对的 → 给该路由 meta 加 breadcrumbParent: '<它在侧边栏里的组名>'\n` +
+        `  (b) 归属本身存疑 → 登记进 BREADCRUMB_DRIFT_ACCEPTED 并写明理由, 交 owner 定`,
     ).toEqual([]);
   });
+
 
   it('exposes the real stocktake page and its opening-inventory entry under warehouse', () => {
     expect(childPaths('/warehouse')).toEqual(expect.arrayContaining([
