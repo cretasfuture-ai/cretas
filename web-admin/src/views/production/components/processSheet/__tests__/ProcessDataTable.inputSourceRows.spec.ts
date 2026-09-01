@@ -348,4 +348,51 @@ describe('半成品/成品投入的行式布局与唯一候选自动选中 (客�
       expect.objectContaining({ sourceBatchNumber: 'UP-ONLY', feedQuantityKg: 6 }),
     ]);
   });
+
+  // ---------------------------------------------------------------------
+  // 缺陷 32 (2026-09-02, 刘山门 ④绞肉 实测): 混批展开面板的 DOM 位置 + 提交按钮禁用原因
+  // ---------------------------------------------------------------------
+
+  it('缺陷 32: 表格模式下「破碎来源(混批)」展开面板紧跟在触发行后面, 不被挤到「确认提交」下方', async () => {
+    const wrapper = mountTable({
+      viewMode: 'grid',
+      allowMulti: true,
+      inputs: [port({ materialName: '主料' })],
+      upstreamItems: [wip('UP-A'), wip('UP-B')],
+    });
+    await flushPromises();
+    await addRow(wrapper);
+    await expandSources(wrapper);
+
+    const trs = wrapper.findAll('tr');
+    const mainRowIndex = trs.findIndex((tr) => tr.classes().includes('sp-tr'));
+    const mixRowIndex = trs.findIndex((tr) => tr.text().includes('投入来源'));
+    const submitRowIndex = trs.findIndex((tr) => tr.text().includes('确认提交'));
+
+    expect(mainRowIndex, '应该能找到触发行(主录入行)').toBeGreaterThan(-1);
+    expect(mixRowIndex, '应该能找到展开的「投入来源」面板').toBeGreaterThan(-1);
+    expect(submitRowIndex, '应该能找到「确认提交」区块').toBeGreaterThan(-1);
+    // 修复前: mixRowIndex 排在 submitRowIndex 后面(视觉上① 在④ 之后)。
+    // 修复后: 展开面板紧跟在触发它的那一行(主行)后面, 早于「确认提交」。
+    expect(mixRowIndex).toBe(mainRowIndex + 1);
+    expect(mixRowIndex).toBeLessThan(submitRowIndex);
+  });
+
+  it('缺陷 32: 混批没选完批次时「正式报工」置灰, 且原因直接显示 (不能只靠 hover)', async () => {
+    const wrapper = mountTable({
+      viewMode: 'grid',
+      allowMulti: true,
+      inputs: [port({ materialName: '主料' })],
+      upstreamItems: [wip('UP-A'), wip('UP-B')], // 两个候选 → 不会自动选中, 逼出「未选批次」这条原因
+    });
+    await flushPromises();
+    await addRow(wrapper);
+
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('正式报工'));
+    expect(submitBtn, '应该能找到「正式报工」按钮').toBeTruthy();
+    expect(submitBtn!.attributes('disabled')).not.toBeUndefined();
+
+    // 防呆 Rule 1: disabled 元素不触发鼠标事件, 原因必须直接印在页面上, 不能只存在于 hover title 里。
+    expect(wrapper.text()).toContain('还不能正式报工');
+  });
 });

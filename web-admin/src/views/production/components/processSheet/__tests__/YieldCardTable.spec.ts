@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { nextTick } from 'vue';
-import ElementPlus from 'element-plus';
+import ElementPlus, { ElTooltip } from 'element-plus';
 import YieldCardTable from '../YieldCardTable.vue';
 
 const getInventoryYieldCard = vi.fn();
@@ -160,8 +160,70 @@ describe('YieldCardTable', () => {
 
     const sortButtons = wrapper.findAll('button.yield-sort-trigger');
     expect(sortButtons.length).toBeGreaterThan(10);
-    expect(sortButtons.some((button) => button.attributes('aria-label')?.includes('连续操作可切换升序和降序'))).toBe(true);
+    // 缺陷 F: 文案不再暗示"点这段文字能排序" —— 真正的排序入口是 el-table 自带的箭头图标。
+    expect(sortButtons.some((button) => button.attributes('aria-label')?.includes('排序请点击右侧箭头图标'))).toBe(true);
     expect(sortButtons.every((button) => button.attributes('type') === 'button')).toBe(true);
+  });
+
+  it('缺陷 F: 点表头文字不排序，点表头右侧的箭头图标才排序', async () => {
+    // 「产出」故意按降序喂 API (先高后低)；点文字不该动它，点排序箭头才该把它翻成升序。
+    getInventoryYieldCard.mockResolvedValue({
+      data: [
+        { batchNumber: 'ZZZ-HIGH-BATCH', produced: 90, used: 0, remaining: 90, status: 'ACTIVE', unit: 'kg' },
+        { batchNumber: 'ZZZ-LOW-BATCH', produced: 10, used: 0, remaining: 10, status: 'ACTIVE', unit: 'kg' },
+      ],
+    });
+
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const firstRowText = () => wrapper.find('.el-table__body tbody tr').text();
+    expect(firstRowText()).toContain('ZZZ-HIGH-BATCH'); // 未排序前：API 顺序原样显示
+
+    // 定位「产出」这一列的表头 —— 这段文字按钮与 el-table 自带的排序箭头同在一个 <th> 里。
+    const producedHeader = wrapper.findAll('th').find((th) =>
+      th.find('button.yield-sort-trigger').exists()
+      && th.find('button.yield-sort-trigger').text() === '产出');
+    expect(producedHeader, '「产出」列表头应该存在').toBeTruthy();
+
+    // ① 点表头文字：不该触发排序。
+    await producedHeader!.find('button.yield-sort-trigger').trigger('click');
+    await nextTick();
+    expect(firstRowText(), '点表头文字不该排序').toContain('ZZZ-HIGH-BATCH');
+
+    // ② 点右侧真正的排序箭头（升序半只）：这才该触发排序。
+    const ascendingCaret = producedHeader!.find('.caret-wrapper .sort-caret.ascending');
+    expect(ascendingCaret.exists(), '应能找到「产出」列的升序排序箭头').toBe(true);
+    await ascendingCaret.trigger('click');
+    await nextTick();
+    expect(firstRowText(), '点排序箭头应该把「产出」按升序排列').toContain('ZZZ-LOW-BATCH');
+  });
+
+  it('缺陷 D: 「分摊成本」「单价」表头有口径说明，讲清客供料成本为 0 是设计如此', async () => {
+    getInventoryYieldCard.mockResolvedValue({ data: [] });
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const tooltipContents = wrapper.findAllComponents(ElTooltip)
+      .map((tooltip) => tooltip.props('content'))
+      .filter((content): content is string => typeof content === 'string');
+    const costHelp = tooltipContents.find((c) => c.includes('本行归集到的实际成本 = 继承自上游批次的成本'));
+    const priceHelp = tooltipContents.find((c) => c.includes('单价 = 分摊成本 ÷ 本行产出数量'));
+
+    expect(costHelp, '「分摊成本」表头应该有口径说明 tooltip').toBeTruthy();
+    expect(priceHelp, '「单价」表头应该有口径说明 tooltip').toBeTruthy();
+    // 两条说明都要点名: 客供料的原料成本按口径为 0, 不是数据缺失。
+    expect(costHelp).toContain('客供料');
+    expect(costHelp).toContain('设计如此');
+    expect(priceHelp).toContain('客供料');
   });
 
   it('表头是通栏的，不给每一格套自己的外壳', async () => {

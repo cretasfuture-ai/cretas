@@ -4365,14 +4365,26 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                           :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
                   @click="handleSave(row, 'draft')"
                   style="padding:3px 6px">保存草稿</el-button>
-                <el-button
+                <!--
+                  disabled 元素不触发鼠标事件, 原生 title 弹不出来(卡片模板同款注释, 见 3822 行)。
+                  用 el-tooltip 包一层 span 才能在按钮点不亮时也说清楚原因(缺陷 32)。
+                -->
+                <el-tooltip
                   v-if="!isPortOutputMode"
-                  type="primary" size="small" :icon="Check"
-                  :loading="row.saving"
-                  :disabled="!!submitDisabledReason(row) || row.saving"
-                  :title="submitDisabledReason(row) || '正式报工并自动分摊生产库批次'"
-                  @click="handleSave(row, 'submit')"
-                  style="padding:3px 6px;margin-left:4px">正式报工</el-button>
+                  :content="submitDisabledReason(row) || '正式报工并自动分摊生产库批次'"
+                  placement="top"
+                  :show-after="0"
+                  :hide-after="0"
+                >
+                  <span class="sp-submit-wrap">
+                    <el-button
+                      type="primary" size="small" :icon="Check"
+                      :loading="row.saving"
+                      :disabled="!!submitDisabledReason(row) || row.saving"
+                      @click="handleSave(row, 'submit')"
+                      style="padding:3px 6px;margin-left:4px">正式报工</el-button>
+                  </span>
+                </el-tooltip>
                 <el-button
                   v-if="hasHistory(row)"
                   link size="small" :icon="Clock"
@@ -4388,6 +4400,43 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   aria-label="删除本行"
                   @click="handleDelete(row)"
                   style="margin-left:4px" />
+              </td>
+            </tr>
+
+            <!-- ============================================================
+                 混锅来源 expander row (熟制 / 气调 SP-G G3b)
+
+                 原来熟制与气调各写了一份**一模一样**的实现, 只有 v-if 上的 isQidiao 不同 ——
+                 加上卡片模式那份, 同一块 UI 在这个文件里有三份。现在三份都走
+                 ProcessInputSourceTable 子组件, 只剩一份实现。
+
+                 🔴 2026-09-02 缺陷 32: 这个 <tr> 原来排在 v-for 的最末尾(labor 展开行之后),
+                 而 multiout 行(③产出明细+④确认提交)排在它前面 —— 视觉顺序变成
+                 ①(触发按钮) → ③ → ④ → ①(展开内容), 混批分摊面板被挤到页面最下面,
+                 操作员填完产出却找不到「破碎来源」的分摊入口。挪到主行紧后面,
+                 让展开内容始终紧跟它自己的触发行(①), 不再被③④插队。
+                 ============================================================ -->
+            <tr v-if="isMultiSource && row.mixExpanded" :key="row.clientRowId + '-mix'"
+                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
+              <td :colspan="999" class="sp-td-expand">
+                <div class="sp-expand-section">
+                  <div class="sp-expand-title">{{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}</div>
+                  <ProcessInputSourceTable
+                    :views="inputSourceViews(row)"
+                    hint="批次由 Workflow 端口收敛；数量按实际投入填写"
+                    :loading="sfiLoading"
+                    :show-add-source="workflowUpstreamInputs.length === 0"
+                    add-source-label="+ 来源批"
+                    :batch-placeholder="sourcePickerPlaceholder"
+                    @toggle-select="(index: number, selected: boolean) => onInputSourceToggle(row, index, selected)"
+                    @select-batch="(index: number, key: string) => onInputSourceBatchSelect(row, index, key)"
+                    @remove="(index: number) => onInputSourceRemove(row, index)"
+                    @add-same-material="(index: number) => onInputSourceAdd(row, row.upstreamSources[index])"
+                    @add-source="() => onInputSourceAdd(row)"
+                    @filter-batches="onBatchSelectFilter"
+                    @batch-picker-visible="onBatchSelectVisibleChange"
+                  />
+                </div>
               </td>
             </tr>
 
@@ -4473,14 +4522,34 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       :title="draftSaveDisabledReason(row) || '只保存草稿，不占用生产库库存'"
                       @click="handleSave(row, 'draft')"
                     >保存草稿</el-button>
-                    <el-button
-                      type="primary" size="large" :icon="Check"
-                      class="sp-submit-primary"
-                      :loading="row.saving"
-                      :disabled="!!submitDisabledReason(row) || row.saving"
-                      :title="submitDisabledReason(row) || '正式报工并自动分摊生产库批次'"
-                      @click="handleSave(row, 'submit')"
-                    >正式报工</el-button>
+                    <!--
+                      disabled 元素不触发鼠标事件, 原生 title 弹不出来也没法调速度。
+                      用 el-tooltip 包一层 span 才能既显示原因又立刻弹出(show-after=0);
+                      卡片模板同款(见 3826 行) —— 缺陷 32: 表格模式此前没有这层, 混批分摊没填完时
+                      按钮只是灰着, 悬停/点击都问不出原因。
+                    -->
+                    <el-tooltip
+                      :content="submitDisabledReason(row) || '正式报工并由系统自动分摊生产库批次'"
+                      placement="top"
+                      :show-after="0"
+                      :hide-after="0"
+                    >
+                      <span class="sp-submit-wrap">
+                        <el-button
+                          type="primary" size="large" :icon="Check"
+                          class="sp-submit-primary"
+                          :loading="row.saving"
+                          :disabled="!!submitDisabledReason(row) || row.saving"
+                          @click="handleSave(row, 'submit')"
+                        >正式报工</el-button>
+                      </span>
+                    </el-tooltip>
+                  </div>
+                  <!-- 防呆 Rule 1「预先显示边界」: 提交按钮 disabled 时, 原因必须直接印在按钮旁边
+                       (卡片模板同款, 见 3849 行) —— 不能只靠 hover 才看得到。 -->
+                  <div v-if="submitDisabledReason(row)" class="sp-blocked-hint" role="status">
+                    <el-icon><Warning /></el-icon>
+                    <span>还不能正式报工：{{ submitDisabledReason(row) }}</span>
                   </div>
                 </div>
               </td>
@@ -4498,37 +4567,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 </div>
               </td>
             </tr>
-
-            <!-- ============================================================
-                 混锅来源 expander row (熟制 / 气调 SP-G G3b)
-
-                 原来熟制与气调各写了一份**一模一样**的实现, 只有 v-if 上的 isQidiao 不同 ——
-                 加上卡片模式那份, 同一块 UI 在这个文件里有三份。现在三份都走
-                 ProcessInputSourceTable 子组件, 只剩一份实现。
-                 ============================================================ -->
-            <tr v-if="isMultiSource && row.mixExpanded" :key="row.clientRowId + '-mix'"
-                :class="['sp-tr-expand', ri % 2 === 0 ? 'sp-tr-even' : 'sp-tr-odd']">
-              <td :colspan="999" class="sp-td-expand">
-                <div class="sp-expand-section">
-                  <div class="sp-expand-title">{{ sourceTitle }} — {{ row.batchNumber || '(未保存行)' }}</div>
-                  <ProcessInputSourceTable
-                    :views="inputSourceViews(row)"
-                    hint="批次由 Workflow 端口收敛；数量按实际投入填写"
-                    :loading="sfiLoading"
-                    :show-add-source="workflowUpstreamInputs.length === 0"
-                    add-source-label="+ 来源批"
-                    :batch-placeholder="sourcePickerPlaceholder"
-                    @toggle-select="(index: number, selected: boolean) => onInputSourceToggle(row, index, selected)"
-                    @select-batch="(index: number, key: string) => onInputSourceBatchSelect(row, index, key)"
-                    @remove="(index: number) => onInputSourceRemove(row, index)"
-                    @add-same-material="(index: number) => onInputSourceAdd(row, row.upstreamSources[index])"
-                    @add-source="() => onInputSourceAdd(row)"
-                    @filter-batches="onBatchSelectFilter"
-                    @batch-picker-visible="onBatchSelectVisibleChange"
-                  />
-                </div>
-              </td>
-            </tr>
+            <!-- 混锅来源(混批) expander row 已挪到本行 v-for 块最前面(紧跟主行), 见「缺陷 32」注释 —— 不在这里 -->
 
           </template><!-- end v-for rows -->
         </tbody>
