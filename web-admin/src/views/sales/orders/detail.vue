@@ -6,6 +6,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { useBusinessMode } from '@/composables/useBusinessMode';
 import { get, post, put } from '@/api/request';
 import OrderItemsEditor, { type OrderItemRow } from './components/OrderItemsEditor.vue';
+import { initialTaxIncludedUnitPrice } from './salesOrderNewLineContract';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
@@ -533,16 +534,24 @@ const displayOrderMoney = computed(() => salesOrderDisplayMoney(
 function openEditItems() {
   const existing = Array.isArray((order.value as any)?.items) ? (order.value as any).items : [];
   editItemsRows.value = existing.length
-    ? existing.map((it: any) => ({
-        productTypeId: String(it.productTypeId ?? ''),
-        productName: it.productName,
-        quantity: Number(it.quantity ?? 0),
-        unit: it.unit ?? '份',
-        unitPrice: Number(it.unitPrice ?? 0),
-        taxRate: Number(it.taxRate ?? 13),
-        specification: it.specification ?? '',
-      }))
-    : [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxRate: 13 }];
+    ? existing.map((it: any) => {
+        // 🔒 2026-09-02: unitPrice 存储口径没变(仍是未税, 见 SalesOrderItem.getLineAmount())——
+        // 已有产品行不需要任何数据迁移。这里只是给「含税单价」这个新增的界面录入字段
+        // 算一个初始展示值(未税 unitPrice × (1+税率/100)), 方便继续编辑; 不改写 unitPrice 本身。
+        const unitPrice = Number(it.unitPrice ?? 0);
+        const taxRate = Number(it.taxRate ?? 13);
+        return {
+          productTypeId: String(it.productTypeId ?? ''),
+          productName: it.productName,
+          quantity: Number(it.quantity ?? 0),
+          unit: it.unit ?? '份',
+          unitPrice,
+          taxIncludedUnitPrice: initialTaxIncludedUnitPrice({ unitPrice, taxRate }),
+          taxRate,
+          specification: it.specification ?? '',
+        };
+      })
+    : [{ productTypeId: '', quantity: 0, unit: '份', unitPrice: 0, taxIncludedUnitPrice: 0, taxRate: 13 }];
   editItemsVisible.value = true;
 }
 
@@ -554,7 +563,10 @@ async function saveEditItems() {
   if (!factoryId.value || !orderId.value) return;
   const items = editItemsRows.value
     .filter((r) => r.productTypeId)
-    .map((r) => ({ ...r, quantity: r.quantity ?? 0, unitPrice: r.unitPrice ?? 0, taxRate: r.taxRate ?? 0 }));
+    // taxIncludedUnitPrice 仅供界面录入 (见 OrderItemsEditor.vue 顶部注释), 不进后端 DTO。
+    .map(({ taxIncludedUnitPrice: _taxIncludedUnitPrice, ...r }) => ({
+      ...r, quantity: r.quantity ?? 0, unitPrice: r.unitPrice ?? 0, taxRate: r.taxRate ?? 0,
+    }));
   if (items.length === 0) { ElMessage.warning('请至少添加一个产品行'); return; }
   editItemsSaving.value = true;
   try {
