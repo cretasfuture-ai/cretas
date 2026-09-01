@@ -933,18 +933,107 @@ public class PrintController {
         return p;
     }
 
-    private Map<String, Object> buildMaterialRequisitionPayload(String factoryId, String id, Map<String, String> overrides) {
+    /**
+     * 单张领料单 payload builder (缺陷 44 修复).
+     *
+     * <p>此前的实现从未接 {@link FactoryMaterialRequisitionService} — 每个字段都是
+     * {@code overrides} 兜底常量, {@code items} 恒为空列表, 打出来的 PDF 单号是 UUID、
+     * 产品名是"(产品)"、0 行明细。真正的取数(按 id 查详情, 含明细)一直存在, 只是没被
+     * 这条路径调用(形态 D: {@link #buildConsolidatedMaterialRequisitionPayload} 是对的,
+     * 这个是错的; 两个 builder 长得像, 一个按 planId 汇总多张单, 一个按单据 id 查这一张)。
+     *
+     * <p>{@link FactoryMaterialRequisitionService#getById} 按 (id, factoryId) 查询,
+     * 天然做租户隔离; 查不到时抛 {@code BusinessException(404, ...)}, 与
+     * {@link #buildProductionWorkOrderPayload} 同一诚实原则 — 查无此单据就报错,
+     * 不拿 overrides 伪造一张假单据出来.
+     */
+    private Map<String, Object> buildMaterialRequisitionPayload(
+            String factoryId, String id, Map<String, String> overrides) {
         Map<String, Object> p = new HashMap<>();
         p.put("factoryName", or(overrides, "factoryName", "白垩纪食品 — " + factoryId));
-        p.put("requisitionNumber", or(overrides, "requisitionNumber", id));
-        p.put("productName", or(overrides, "productName", "(产品)"));
-        p.put("plannedQuantity", or(overrides, "plannedQuantity", "0"));
-        p.put("unit", or(overrides, "unit", "kg"));
-        p.put("requestDate", or(overrides, "requestDate", java.time.LocalDate.now().toString()));
+
+        if (factoryMaterialRequisitionService == null) {
+            throw new BusinessException(503, "领料单服务不可用 — 无法生成真实领料单");
+        }
+
+        final FactoryMaterialRequisition req;
+        try {
+            req = factoryMaterialRequisitionService.getById(factoryId, id);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("printMaterialRequisition: requisition {} not found or inaccessible in factory {}: {}",
+                    id, factoryId, e.getMessage());
+            throw new BusinessException(404, "领料单不存在或不可访问 — 无法生成领料单: " + id);
+        }
+
+        p.put("requisitionNumber", req.getRequisitionNo() != null && !req.getRequisitionNo().isBlank()
+                ? req.getRequisitionNo() : id);
+        p.put("productName", req.getProductName() != null && !req.getProductName().isBlank()
+                ? req.getProductName() : or(overrides, "productName", "(产品)"));
+
+        // 计划产量 + 单位取自关联生产计划 (需求单实体本身不落这两个字段) — 与
+        // buildProductionWorkOrderPayload / buildBatchingSheetPayload 同一取数路径.
+        // 计划已删除/服务不可用时不影响本单据打印, 仅这两个抬头字段诚实空.
+        BigDecimal plannedQuantity = null;
+        String unit = null;
+        if (productionPlanService != null && req.getProductionPlanId() != null) {
+            try {
+                ProductionPlanDTO plan =
+                        productionPlanService.getProductionPlanById(factoryId, req.getProductionPlanId());
+                plannedQuantity = plan.getPlannedQuantity();
+                unit = firstNonBlank(plan.getPlannedUnit(), plan.getWorkflowOutputUnit(), plan.getProductUnit());
+            } catch (Exception e) {
+                log.warn("printMaterialRequisition: plan {} for requisition {} not found: {}",
+                        req.getProductionPlanId(), id, e.getMessage());
+            }
+        }
+        p.put("plannedQuantity", plannedQuantity != null && plannedQuantity.compareTo(BigDecimal.ZERO) > 0
+                ? formatQty(plannedQuantity) : or(overrides, "plannedQuantity", "-"));
+        p.put("unit", unit != null ? unit : or(overrides, "unit", "kg"));
+
+        p.put("requestDate", req.getRequiredDate() != null
+                ? req.getRequiredDate().toString() : or(overrides, "requestDate", "-"));
+        // 需求单实体无车间字段 — 诚实空, 不伪造.
         p.put("workshop", or(overrides, "workshop", "-"));
-        p.put("requester", or(overrides, "requester", "-"));
-        p.put("items", java.util.List.of());
+        // 需求单实体只存 requestedBy(用户ID 快照), 无姓名 — 与调拨指示单 requestedBy
+        // 同一口径 (buildTransferInstructionPayload:1776-1777 同样打印数字 ID).
+        p.put("requester", req.getRequestedBy() != null ? req.getRequestedBy().toString() : "-");
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        List<FactoryMaterialRequisitionItem> reqItems = req.getItems();
+        if (reqItems != null) {
+            for (FactoryMaterialRequisitionItem item : reqItems) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name", item.getMaterialName() != null && !item.getMaterialName().isBlank()
+                        ? item.getMaterialName() : item.getMaterialTypeId());
+                row.put("plannedQty", item.getRequiredQty() != null
+                        ? formatQty(item.getRequiredQty()) : "按实际领用");
+                // #469 三态语义: pickedQty==null(未拣/不知道领了多少) 与 ==0(明确本次一个
+                // 不领) 是两件不同的事, 不能塌缩成同一个空. formatQty(ZERO)=="0" 照实打印
+                // 字面 0; null 保持 null, 交给 Python 渲染层的默认空白展示 (与本模板其余
+                // 缺失字段同一展示口径, 见 _render_items_table: item.get(k) or "-").
+                row.put("actualQty", item.getPickedQty() != null ? formatQty(item.getPickedQty()) : null);
+                row.put("unit", item.getUnit());
+                row.put("batch", formatBatchNumbers(item.getBatchNumbers()));
+                items.add(row);
+            }
+        }
+        p.put("items", items);
         return p;
+    }
+
+    /** 把明细行的 FEFO 批次号列表合并成打印用的逗号分隔字符串 (与 aggregateMaterialRequirementRows 同一口径). */
+    private String formatBatchNumbers(List<Map<String, Object>> batchNumbers) {
+        if (batchNumbers == null || batchNumbers.isEmpty()) return null;
+        List<String> refs = new ArrayList<>();
+        for (Map<String, Object> bn : batchNumbers) {
+            Object bno = bn.get("batchNo");
+            if (bno != null && !refs.contains(bno.toString())) {
+                refs.add(bno.toString());
+            }
+        }
+        return refs.isEmpty() ? null : String.join(", ", refs);
     }
 
     // ==================== Sprint 6 W3-C — 3 P1 payload builders ====================
