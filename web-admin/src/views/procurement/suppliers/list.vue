@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
 import { Download, MoreFilled, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
@@ -31,6 +32,7 @@ const canWrite = computed(() => permissionStore.canWrite('procurement'));
 const loading = ref(false);
 const allData = ref<SupplierRecord[]>([]);
 const pagination = reactive({ page: 1, size: 10 });
+const route = useRoute();
 const searchKeyword = ref('');
 const filterStatus = ref<'' | 'ACTIVE' | 'INACTIVE'>('');
 const detailVisible = ref(false);
@@ -57,7 +59,24 @@ const tableData = computed(() => {
   return filteredData.value.slice(start, start + pagination.size);
 });
 
-onMounted(loadData);
+/**
+ * 深链支持（2026-09-01）：采购订单弹窗的物料下拉在「该供应商没配原料」时，
+ * 会新标签页打开本页并带 `?keyword=<供应商名>`，让用户直接看到那一家。
+ *
+ * ⚠️ 加这一段的**理由**：在此之前本页**完全不读** `route.query` ——
+ * 那时若从别处传 `keyword` 过来，就是「产出端发了、消费端不读」：
+ * 链接看着能点、点完什么也没发生，而 review 时看不出来。
+ * ⇒ 要么这边真的读，要么那边别传。选了前者。
+ *
+ * ⛔ 只播种既有的 `searchKeyword`（客户端过滤），不改任何查询/权限逻辑。
+ */
+onMounted(() => {
+  const keyword = route.query.keyword;
+  if (typeof keyword === 'string' && keyword.trim()) {
+    searchKeyword.value = keyword.trim();
+  }
+  loadData();
+});
 
 async function loadData(): Promise<void> {
   if (!factoryId.value) return;
