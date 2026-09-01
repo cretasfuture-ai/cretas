@@ -414,6 +414,16 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withCode("AUTOMATIC_MATERIAL_REQUIREMENT_INVALID")
                         .withSeverity("BLOCKING");
             }
+            // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制
+            // 高汤等自备料 —— 今晚在⑤搅拌撞的「可用库存不足」墙, 命根子就在这里: 本方法原来
+            // 对每一条 requirement 无条件查批次、无条件算短缺。自备料 BOM 配置(materialTypeId
+            // + dosage)仍然完整、仍然进了 requirements 列表(见上面的完整性校验), 只是从这里
+            // 起不再查库存、不产生分摊、不计入短缺 —— 报工因此不会因为它被拦。
+            if (isSelfSupplied(factoryId, requirement.materialTypeId())) {
+                log.info("[报工自动投料] 跳过自备料 {} ({}): 现场取用, 不查库存, 不产生批次消耗",
+                        requirement.materialName(), requirement.materialTypeId());
+                continue;
+            }
             String requiredUnit = canonicalNativeUnit(factoryId, requirement.unit());
             if (requiredUnit == null) {
                 throw new BusinessException(409, "BOM 自动投料缺少计量单位: " + requirement.materialName())
@@ -786,6 +796,22 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
                 .map(com.cretas.aims.entity.RawMaterialType::getMainCategory)
                 .orElse(null);
+    }
+
+    /**
+     * 自备料 (缺陷 47, owner 2026-09-02 裁定「它没有所谓的库存一说」) —— 权威来源
+     * {@code RawMaterialType.selfSupplied}。查不到 (repository 未注入/物料不存在) 一律
+     * 返回 false, 不猜自备 —— 默认仍然查库存/仍然可能短缺, 不会因为查询失败而意外放过
+     * 一个本该扣库存的物料 (与 {@link #mainCategoryOf} 同一条"查不到不放宽"的纪律)。
+     */
+    private boolean isSelfSupplied(String factoryId, String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return false;
+        }
+        return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getSelfSupplied)
+                .map(Boolean.TRUE::equals)
+                .orElse(false);
     }
 
     /**

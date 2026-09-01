@@ -207,6 +207,25 @@ public class RawMaterialType extends BaseEntity {
     private Boolean isByproduct = Boolean.FALSE;
 
     /**
+     * 自备料 (owner 2026-09-02 裁定「它没有所谓的库存一说」)：冰水 / 水 / 蒸汽 /
+     * 现场自制高汤等现场取用、不走采购入库的物料。
+     *
+     * <p>挂在物料类型本身而不是某一条 BOM 配方行 —— 「没有库存一说」描述的是这个物料，
+     * 不是它出现在哪张配方里（与 {@link #category} 描述"材质"是同一个道理：属性挂在
+     * 恰当的那一层）。</p>
+     *
+     * <p>true 时：领料单仍把它列成配方提醒行（不消失），但不强制填数量、确认领料/调拨
+     * 不做批次查找、不因库存不足拦截；报工自动投料（{@code planNative}）同理跳过库存
+     * 查找，不产生批次消耗。</p>
+     *
+     * <p>⛔ 不要复用 {@code bom_seasoning_items.count_in_seasoning} —— 那是【成本口径】
+     * （熟制段不计入调料成本），这个是【库存口径】。复用会把两个含义焊到一个字段上
+     * （本仓已知的「同一个字段当两件事」形状）。</p>
+     */
+    @Column(name = "self_supplied", nullable = false)
+    private Boolean selfSupplied = Boolean.FALSE;
+
+    /**
      * 计量单位
      * <p>原材料的计量单位，默认为 kg</p>
      * <p>示例：kg、g、箱、包、桶</p>

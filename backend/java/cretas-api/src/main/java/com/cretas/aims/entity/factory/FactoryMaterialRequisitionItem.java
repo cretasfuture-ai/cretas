@@ -81,6 +81,19 @@ public class FactoryMaterialRequisitionItem extends BaseEntity {
     @Column(name = "unit", length = 20)
     private String unit;
 
+    /**
+     * 生成需求单那一刻 {@code RawMaterialType.selfSupplied} 的快照 —— 与
+     * material_name / material_category 同一套「BOM 展开时定格」做法, 不做实时 join
+     * (缺陷 47, owner 2026-09-02 裁定)。
+     *
+     * <p>true = 「自备料」配方提醒行 (冰水/水/蒸汽/现场自制高汤等): 不强制填
+     * required/picked/issued 数量, 确认领料 ({@code autoAllocatePickedBatchesIfMissing})
+     * 与调拨划出 ({@code relocatePickedMaterialToWorkshop}) 都跳过它, 不做批次查找、
+     * 不因库存不足拦截。
+     */
+    @Column(name = "self_supplied", nullable = false)
+    private Boolean selfSupplied = Boolean.FALSE;
+
     /** FEFO 锁定的批次列表 [{batchNo, qty}]. */
     @Type(JsonBinaryType.class)
     @Column(name = "batch_numbers", columnDefinition = "jsonb")

@@ -226,6 +226,61 @@ class ProductionStockAllocationServiceTest {
                 });
     }
 
+    /**
+     * 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」) 阳性对照: 冰水一类自备料在
+     * 报工自动投料 (planNative, ⑤搅拌一类工序的调料展开) 里【零库存】也不该被拦 ——
+     * 修复前这个形状必定撞「可用库存不足」墙 (findEligibleBatchesForUpdate 查不到批次 → shortage)。
+     */
+    @Test
+    void planNativeSkipsStockLookupAndShortageForSelfSuppliedMaterial() {
+        RawMaterialType iceWater = new RawMaterialType();
+        iceWater.setId("ICE-WATER");
+        iceWater.setFactoryId("F006");
+        iceWater.setCategory("辅料");
+        iceWater.setSelfSupplied(true);
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("ICE-WATER", "F006"))
+                .thenReturn(Optional.of(iceWater));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        // 故意不给 findAvailableBatchesFEFOByWarehouseForUpdate("ICE-WATER", ...) 打桩 ——
+        // 若被调用, Mockito 会返回默认空 List, 但下面的 verify(never()) 会揪出「其实被调用过」。
+
+        List<ProductionStockAllocationService.PlannedAllocation> result = service.planNative(
+                "F006",
+                "PLAN-1",
+                List.of(new ProductionStockAllocationService.AutomaticRequirement(
+                        "ICE-WATER", "冰水", new BigDecimal("0.8"), "kg", "SEASONING")));
+
+        assertThat(result).isEmpty(); // 自备料不产生任何批次分配 (无库存消耗)
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFOByWarehouseForUpdate("F006", "ICE-WATER", "WKS-1");
+    }
+
+    /**
+     * 阴性对照: 与上面同一物料形状(零库存), 唯一区别是 selfSupplied=false —— 必须仍然按
+     * 既有行为报缺库存, 证明本次改动没有放宽对非自备料的保护。
+     */
+    @Test
+    void planNativeStillReportsShortageWhenMaterialIsNotSelfSupplied() {
+        RawMaterialType notSelfSupplied = new RawMaterialType();
+        notSelfSupplied.setId("ICE-WATER");
+        notSelfSupplied.setFactoryId("F006");
+        notSelfSupplied.setCategory("辅料");
+        notSelfSupplied.setSelfSupplied(false);
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("ICE-WATER", "F006"))
+                .thenReturn(Optional.of(notSelfSupplied));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "ICE-WATER", "WKS-1"))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.planNative(
+                "F006",
+                "PLAN-1",
+                List.of(new ProductionStockAllocationService.AutomaticRequirement(
+                        "ICE-WATER", "冰水", new BigDecimal("0.8"), "kg", "SEASONING"))))
+                .isInstanceOf(ProductionStockShortageException.class);
+    }
+
     @Test
     void nativePackagingShortageReportsTheRequestedUnitWithoutMassConversion() {
         MaterialBatch only = batch("CASE-1", "PKG-CASE", "WKS-1", "1", LocalDate.of(2026, 8, 1));

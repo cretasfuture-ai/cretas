@@ -194,6 +194,9 @@ const form = ref({
   category: '',
   // 副产标记: 与 category 正交 —— 副产仍保留材质分类, 因此能被别的 workflow 当投入投料
   isByproduct: false,
+  // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制高汤等
+  // 现场取用、不走采购入库的物料。挂在物料类型本身, 领料单/报工据此跳过库存查找与拦截。
+  selfSupplied: false,
   unit: 'kg',
   storageType: '',
   shelfLifeDays: null as number | null,
@@ -920,6 +923,7 @@ function openCreate() {
     name: '',
     category: '',
     isByproduct: false,
+    selfSupplied: false,
     unit: 'kg',
     storageType: storageTypeChoices()[0]?.value || '',
     shelfLifeDays: null,
@@ -977,6 +981,8 @@ async function openEdit(row: TableRow) {
     category: String(row.category || ''),
     // 编辑时保留既有副产标记 —— 漏了这行会让编辑一次就把标记悄悄抹掉
     isByproduct: row.isByproduct === true || row.isByproduct === 'true',
+    // 缺陷 47: 与副产同一条纪律 —— 漏了这行, 编辑一次就把「自备料」标记悄悄抹掉
+    selfSupplied: row.selfSupplied === true || row.selfSupplied === 'true',
     unit: String(row.unit || 'kg'),
     storageType: String(row.storageType || ''),
     shelfLifeDays: row.shelfLifeDays as number | null ?? null,
@@ -1621,6 +1627,18 @@ function handleSizeChange(size: number) {
           <div class="field-hint">
             勾选后：不出现在采购下拉与补货建议；可在 BOM 配方内容的「副产」页签被声明；
             报工产出落生产仓。它的类别仍按上方材质填写，不影响被当作原料投入。
+          </div>
+        </el-form-item>
+
+        <!-- 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制
+             高汤等现场取用、不走采购入库的物料。挂在物料类型本身 —— 领料单仍会把它列成
+             配方提醒行(不消失), 但不强制填数量、不查库存、不因库存不足拦截。 -->
+        <el-form-item label="自备料">
+          <el-switch v-model="form.selfSupplied" active-text="自备料（现场取用，不计库存）" />
+          <div class="field-hint">
+            勾选后：在领料单/报工投料中仍作为配方提醒行出现，但不要求填写数量、不查库存、
+            不因缺库存被拦截，也不会产生任何库存扣减。适用于冰水、水、蒸汽、现场自制高汤等
+            没有采购入库记录的物料。
           </div>
         </el-form-item>
 

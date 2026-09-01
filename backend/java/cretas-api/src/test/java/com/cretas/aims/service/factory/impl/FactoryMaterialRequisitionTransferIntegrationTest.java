@@ -559,6 +559,129 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         verify(repository, never()).save(any());
     }
 
+    // ==================== 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 自备料 ====================
+
+    /**
+     * 阳性对照: 自备料 (冰水) 在需求单上是「待定行」(requiredQty=null, pickedQty=null, 无批次),
+     * 库存零 (batchStore 里根本没有 MAT-002 的批次) —— 修复前这个形状必定撞两道墙:
+     * ① transferToFactory 的 unpickedPendingRows (待定行没录数量, "确认领料"拦下)
+     * ② 就算①放过, autoAllocatePickedBatchesIfMissing 也会因为查不到批次报「库存不足」
+     * 缺陷 47 要求两道墙都不出现: 调拨照常成功, 且这一行完全不产生批次查找/库存消耗。
+     */
+    @Test
+    @DisplayName("缺陷 47 阳性对照: 自备料(冰水) 待定+零库存 → 调拨照常成功, 不查库存不产生消耗")
+    void transferToFactory_selfSuppliedRow_skipsStockAndBlank() {
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+        // MAT-002 (冰水) 故意不放入 batchStore —— 库存为 0, 证明确实没有被查找过。
+
+        RawMaterialType iceWater = new RawMaterialType();
+        iceWater.setId("MAT-002");
+        iceWater.setFactoryId(FACTORY_ID);
+        iceWater.setCategory("辅料");
+        iceWater.setSelfSupplied(true);
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("MAT-002", FACTORY_ID))
+                .thenReturn(Optional.of(iceWater));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        // it-2 (Material B / MAT-002) 是自备料的配方提醒行: 没有需求量参考, 仓管留空未称重,
+        // 也没有批次(自备料压根不需要批次)。
+        mr.getItems().get(1).setSelfSupplied(true);
+        mr.getItems().get(1).setRequiredQty(null);
+        mr.getItems().get(1).setPickedQty(null);
+        mr.getItems().get(1).setBatchNumbers(new ArrayList<>());
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        assertEquals(Status.TRANSFERRED, mr.getStatus(),
+                "自备料留空不该被 unpickedPendingRows 拦下 (「没有库存一说」不是「漏录」)");
+
+        // 判据: 自备料这一行完全没有产生批次查找/库存消耗 (material_consumptions / batch used 不变)。
+        assertNull(findWorkshopBatch("MAT-002"), "自备料不该凭空搬出一批生产仓库存");
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFOByWarehouse(eq(FACTORY_ID), eq("MAT-002"), any());
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFO(eq(FACTORY_ID), eq("MAT-002"));
+
+        // 阳性对照: 同单里正常物料 (MAT-001) 完全不受影响, 照常搬到生产仓 —— 证明自备料标记
+        // 不会「泄漏」到别的行 (只在这一条 materialTypeId 上生效)。
+        assertEquals(new BigDecimal("10.00"), mr.getItems().get(0).getIssuedQty());
+        MaterialBatch wks1 = findWorkshopBatch("MAT-001");
+        assertNotNull(wks1, "同单里的正常物料不该被自备料标记连带影响");
+        assertEquals(new BigDecimal("10.00"), wks1.getReceiptQuantity());
+    }
+
+    /**
+     * 阳性对照 (正数 issued 变体): 与上面那条不同, 这条的仓管**填了正数**(前端把调料按
+     * dosage 比例算出的参考量预填/确认成了 0.80) —— 证明自备料的跳过是**无条件**的, 不是
+     * 靠 issuedQty<=0 顺带跳过的巧合。若 autoAllocatePickedBatchesIfMissing /
+     * relocatePickedMaterialToWorkshop 里的自备料 continue 被去掉, 这条会转而撞上
+     * PRODUCTION_REQUISITION_TRANSFER_BATCH_REQUIRED (issued>0 却没有批次)。
+     */
+    @Test
+    @DisplayName("缺陷 47 阳性对照(正数 issued): 自备料录了正数参考量仍不查库存、不建批次")
+    void transferToFactory_selfSuppliedRowWithPositiveIssuedQty_stillSkipsBatchLookup() {
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+        // MAT-002 (冰水) 故意不放入 batchStore —— 就算 issued>0, 也不该有任何批次查找。
+
+        RawMaterialType iceWater = new RawMaterialType();
+        iceWater.setId("MAT-002");
+        iceWater.setFactoryId(FACTORY_ID);
+        iceWater.setCategory("辅料");
+        iceWater.setSelfSupplied(true);
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("MAT-002", FACTORY_ID))
+                .thenReturn(Optional.of(iceWater));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        mr.getItems().get(1).setSelfSupplied(true);
+        mr.getItems().get(1).setRequiredQty(new BigDecimal("0.80")); // 按 dosage 比例算出的参考量
+        mr.getItems().get(1).setPickedQty(new BigDecimal("0.80"));   // 仓管确认了这个参考量
+        mr.getItems().get(1).setBatchNumbers(new ArrayList<>());     // 自备料从没被分配过批次
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        assertEquals(Status.TRANSFERRED, mr.getStatus());
+        assertNull(findWorkshopBatch("MAT-002"), "自备料即使 issued>0 也不该产生生产仓批次");
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFOByWarehouse(eq(FACTORY_ID), eq("MAT-002"), any());
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFO(eq(FACTORY_ID), eq("MAT-002"));
+    }
+
+    /**
+     * 阴性对照: 与上面同一物料形状 (待定 + 零库存), 唯一区别是 selfSupplied=false ——
+     * 必须仍然按修复前 (#469) 的既有行为被拦, 证明本次改动没有放宽对非自备料的保护。
+     */
+    @Test
+    @DisplayName("缺陷 47 阴性对照: 同形但 self_supplied=false → 仍照 #469 既有行为被拦")
+    void transferToFactory_pendingRowNotSelfSupplied_stillBlocked() {
+        RawMaterialType notSelfSupplied = new RawMaterialType();
+        notSelfSupplied.setId("MAT-002");
+        notSelfSupplied.setFactoryId(FACTORY_ID);
+        notSelfSupplied.setCategory("辅料");
+        notSelfSupplied.setSelfSupplied(false);
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("MAT-002", FACTORY_ID))
+                .thenReturn(Optional.of(notSelfSupplied));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        mr.getItems().get(1).setSelfSupplied(false);
+        mr.getItems().get(1).setRequiredQty(null);
+        mr.getItems().get(1).setPickedQty(null);
+        mr.getItems().get(1).setBatchNumbers(new ArrayList<>());
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR));
+
+        assertEquals("PRODUCTION_REQUISITION_PENDING_QTY_NOT_PICKED", ex.getErrorCode(),
+                "非自备料的待定行留空必须仍然被拦, 不能被这次改动误放行");
+        assertEquals(Status.PICKING, mr.getStatus());
+        verify(repository, never()).save(any());
+    }
+
     // ==================== close: return + workshop drawdown ====================
 
     @Test

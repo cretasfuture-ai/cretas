@@ -54,6 +54,12 @@ public class RawMaterialTypeDTO {
      */
     private Boolean isByproduct;
 
+    /**
+     * 自备料 (缺陷 47, owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/
+     * 现场自制高汤等现场取用、不走采购入库的物料。null 视为 false（不猜）。
+     */
+    private Boolean selfSupplied;
+
     private String unit;
 
     /**

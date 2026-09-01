@@ -264,6 +264,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             }
             item.setMaterialCategory(category);
             item.setBomRecipeItemId(bom.getId());
+            // 自备料快照 (缺陷 47): 主循环也要写 —— 冰水等物料并不保证只出现在调料表
+            // (appendSeasoningItems), 也可能被建成普通 RAW/AUXILIARY 行。两处不写会漂 (形态 D)。
+            item.setSelfSupplied(isSelfSupplied(factoryId, bom.getMaterialTypeId()));
             // required_qty = planned_quantity * actual_quantity (按出成率调整), 单位 = BOM unit (e.g. g)
             //
             // BOM 行允许只登记"配方资格"而不填参考用量 (standardQuantity=null). 对**原料/辅料**这不是
@@ -418,6 +421,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             item.setMaterialTypeId(mtId);
             item.setMaterialName(resolveLiveMaterialName(mtId, s.getName()));
             item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
+            // 自备料快照 (缺陷 47, owner 2026-09-02 裁定): 冰水/水/蒸汽/现场自制高汤等
+            // 「没有库存一说」的调料 —— 这一行是本方法(appendSeasoningItems)存在的直接原因
+            // (今晚冰水在⑤搅拌撞的墙)。true 时该行仍然出现(配方提醒), 但确认领料/调拨
+            // 会跳过它, 不做批次查找、不因库存不足拦截 —— 见 autoAllocatePickedBatchesIfMissing
+            // / relocatePickedMaterialToWorkshop / transferToFactory 的 unpickedPendingRows。
+            item.setSelfSupplied(isSelfSupplied(factoryId, mtId));
             String stockUnit = resolveMaterialStockUnit(factoryId, mtId);
             item.setUnit(stockUnit != null ? stockUnit : "kg");
             // 🔴 2026-08-18 曾以为这里能自动算出来("投入 kg 是算得出来的"), 但那个前提
@@ -735,7 +744,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //   > 0           → 正常领用, 照旧
         // LIUSHANMEN 现场 7 味辅料 + L1 纸箱库存全是 0, 如实填 0 却被这道闸当场拒收, 卡在
         // 「确认领料」通过之后的下一步(调拨), 报工链路整段演示不了。
+        //
+        // 缺陷 47 (owner 2026-09-02 裁定) 追加: 自备料 (冰水/水/蒸汽/现场自制高汤) 「没有库存
+        // 一说」, 留空是常态而不是漏填 —— ⛔ 不能扩大这条闸的口径去覆盖它 (硬约束: 只在这两条
+        // 路径上放宽, 不弱化对其它行的保护), 而是把它排除在这道闸之外: 与「有参考用量的行」不
+        // 同, 它压根不需要「录入实际领用数量」这件事本身。
         List<String> unpickedPendingRows = mr.getItems().stream()
+                .filter(it -> !Boolean.TRUE.equals(it.getSelfSupplied()))
                 .filter(it -> it.getRequiredQty() == null)
                 .filter(it -> it.getPickedQty() == null)
                 .map(this::materialLabel)
@@ -850,6 +865,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
         String sourceWarehouseId = mr.getSourceWarehouseId();
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            // 缺陷 47 (owner 2026-09-02 裁定): 自备料「没有库存一说」——无论 issuedQty 是多少
+            // (含被前端预填成正数的参考量), 都不做批次查找。⛔ 放在 skipUnissuedRow 之前:
+            // 那道闸只在 issued<=0/null 时才跳过, 而自备料要**无条件**跳过。
+            if (Boolean.TRUE.equals(it.getSelfSupplied())) {
+                log.info("⏭️ 领料自动分批 跳过(自备料) 物料需求单 {} 物料 {}: 现场取用, 不查库存",
+                        mr.getRequisitionNo(), materialLabel(it));
+                continue;
+            }
             BigDecimal issued = it.getIssuedQty();
             if (skipUnissuedRow(mr, it, issued, "领料自动分批")) {
                 continue;
@@ -964,6 +987,28 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     /**
+     * 自备料 (缺陷 47, owner 2026-09-02 裁定「它没有所谓的库存一说」) —— 权威来源
+     * {@code RawMaterialType.selfSupplied}。查不到 (repository 未注入/物料不存在)
+     * 一律返回 false, 不猜自备 (与 {@link #resolveMaterialMainCategory} 同一条纪律,
+     * 只是保守方向相反: 那边"查不到"要按最严格口径处理, 这边"查不到"同样不放宽 ——
+     * 默认仍然扣库存/仍然拦, 不会因为查询失败而意外放过一个本该扣库存的物料)。
+     */
+    private boolean isSelfSupplied(String factoryId, String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return false;
+        }
+        try {
+            return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                    .map(com.cretas.aims.entity.RawMaterialType::getSelfSupplied)
+                    .map(Boolean.TRUE::equals)
+                    .orElse(false);
+        } catch (Exception e) {
+            log.debug("读取物料自备料标记失败: {} ({})", materialTypeId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * 物理迁移: 逐已拣批次把 issued 数量从源批次 (原料仓) 划出, 在生产仓建同物料新批次。
      * 保留单价/单位/效期/批号血缘。把新建的生产仓批次 id 回写进 batch_numbers 行 (workshopBatchId),
      * 供关单退料时精确反向划出。幂等: batch_row 已带 workshopBatchId → 跳过 (二次防呆)。
@@ -984,6 +1029,15 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //    (封膜 + 成品盒) 同时越仓。前置一遍才能把它们一次列全, 也保证抛出时一行库存都还没动。
         assertPickedBatchesAllInSourceWarehouse(factoryId, mr);
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            // 缺陷 47 (owner 2026-09-02 裁定): 自备料「没有库存一说」——即使 issuedQty 是正数
+            // (前端预填的参考量), 这里也不做批次划出。⛔ 必须放在 skipUnissuedRow 之前, 且必须
+            // 放在下方"缺少领料批次"校验之前: 自备料从没被 autoAllocatePickedBatchesIfMissing
+            // 分配过批次, 若不在此提前跳过, issued>0 时会撞上那条 400「缺少领料批次」。
+            if (Boolean.TRUE.equals(it.getSelfSupplied())) {
+                log.info("⏭️ 领料划出生产仓 跳过(自备料) 物料需求单 {} 物料 {}: 现场取用, 不产生批次消耗",
+                        mr.getRequisitionNo(), materialLabel(it));
+                continue;
+            }
             BigDecimal issued = it.getIssuedQty();
             if (skipUnissuedRow(mr, it, issued, "领料划出生产仓")) {
                 continue;
