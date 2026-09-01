@@ -230,37 +230,79 @@ export function assertGeneratedGraphIsSound(graph: GeneratedGraph): void {
   }
 }
 
+/** 线性步骤列表读不了这张图时的**具体**原因。⛔ 不要合并成一句笼统文案。 */
+export type StepListFallbackReason =
+  | 'branching-node'
+  | 'start-fanout'
+  | 'cycle'
+  | 'unknown-node'
+  | 'unsupported-node'
+  | 'no-approve-edge'
+  | 'no-steps'
+
+/** 面向一线的中文原因。⚠️ 必须由实际判定**算出来**，⛔ 不许调用方硬编码一句了事。 */
+export const STEP_LIST_FALLBACK_TEXT: Record<StepListFallbackReason, string> = {
+  'branching-node': '这条审批流里有条件分支、并行或汇聚节点，线性步骤列表表达不了，已切换到高级画布。',
+  'start-fanout': '这条审批流的开始节点有多条出边（分叉），线性步骤列表表达不了，已切换到高级画布。',
+  cycle: '这条审批流里有环（步骤会绕回之前的节点），线性步骤列表表达不了，已切换到高级画布。',
+  'unknown-node': '这条审批流里有连线指向不存在的节点，线性步骤列表读不了，已切换到高级画布。',
+  'unsupported-node': '这条审批流里有线性步骤列表不支持的节点类型，已切换到高级画布。',
+  'no-approve-edge': '这条审批流里有审批节点没有「通过」出边，线性步骤列表读不了，已切换到高级画布。',
+  'no-steps': '这条审批流里没有任何审批或抄送步骤，已切换到高级画布。',
+}
+
+export interface StepListAnalysis {
+  flow: StepFlow | null
+  reason: StepListFallbackReason | null
+}
+
 /**
- * 引擎图 → 步骤列表（读回既有定义时用）。
+ * 引擎图 → 步骤列表的**唯一**判定处。{@link graphToSteps} 与
+ * {@link explainStepListFallback} 都只是它的薄包装 —— ⛔ 不要写第二份遍历，
+ * 否则「能不能读」和「为什么读不了」一定会漂。
  *
- * ⚠️ 只还原本模块生成得出来的形状。遇到分支/并行/条件节点等线性列表表达不了的图，
- * 返回 `null` —— 调用方应当退回画布模式，⛔ 不要静默丢弃用户已有的配置
- * （2026-09-01 事故就是"读不出来就当没有"造成的）。
+ * <h4>🔴 2026-09-01 修：终止判据曾经写死 id，导致只认自己生成的图</h4>
+ * 原实现是 {@code while (cursor !== APPROVED_NODE_ID && cursor !== REJECTED_NODE_ID)}，
+ * 而这两个 id 正是 {@link stepsToGraph} 自己产出的。任何**不是本模块生成的**图
+ * （历史种子数据、画布手绘的），终端节点 id 通常是 {@code end_approved} 之类，
+ * 游标便走不出循环、撞上「不是 approval/notify」而返回 null。
+ *
+ * <p>实测（F006 测试环境 14 条审批流）：<b>0 条</b>能进步骤列表；其中 <b>9 条</b>
+ * 完全线性、无分支，仅仅因为终端 id 不叫 {@code approved}/{@code rejected} 就被拒。
+ * 而要产出「本模块形状的图」又必须先进步骤列表 ⇒ <b>自举死锁</b>，新建也进不去。</p>
+ *
+ * ⇒ 终止判据改为按**节点类型**（{@code type === 'end'}）。id 是某一个生产者的产物，
+ * 类型才是图本身的性质。
  */
-export function graphToSteps(
+function analyzeGraphForStepList(
   nodes: ApprovalWorkflowNode[],
   edges: ApprovalWorkflowEdge[],
   startNodeId: string,
-): StepFlow | null {
+): StepListAnalysis {
+  const bail = (reason: StepListFallbackReason): StepListAnalysis => ({ flow: null, reason })
+
   if (nodes.some(n => n.type === 'condition' || n.type === 'parallel' || n.type === 'join')) {
-    return null
+    return bail('branching-node')
   }
   const byId = new Map(nodes.map(n => [n.id, n]))
   const outgoing = (id: string) => edges.filter(e => e.source === id)
 
   const first = outgoing(startNodeId)
-  if (first.length !== 1) return null
+  if (first.length !== 1) return bail('start-fanout')
 
   const steps: ApprovalStep[] = []
   const visited = new Set<string>()
   let cursor: string | undefined = first[0].target
 
-  while (cursor && cursor !== APPROVED_NODE_ID && cursor !== REJECTED_NODE_ID) {
-    if (visited.has(cursor)) return null // 有环，线性列表表达不了
+  while (cursor) {
+    if (visited.has(cursor)) return bail('cycle')
     visited.add(cursor)
     const node = byId.get(cursor)
-    if (!node) return null
-    if (node.type !== 'approval' && node.type !== 'notify') return null
+    if (!node) return bail('unknown-node')
+
+    // 🔴 终止判据按【类型】，⛔ 不按 id —— 见本函数 javadoc。
+    if (node.type === 'end') break
+    if (node.type !== 'approval' && node.type !== 'notify') return bail('unsupported-node')
 
     const cfg = (node.config ?? {}) as Record<string, unknown>
     steps.push({
@@ -281,12 +323,59 @@ export function graphToSteps(
     })
 
     const outs = outgoing(cursor)
+    /*
+     * ⚠️ 审批节点只认**显式带 APPROVE 条件**的出边 —— 这条严格是**有意保留**的，
+     * 不在 2026-09-01 那次「终端 id 写死」的修复范围内。
+     *
+     * 理由：引擎的 `evaluateOutgoingEdges` 把「空 condition」当永真并取第一条命中的，
+     * **与用户点的是通过还是驳回无关** —— 那正是让「通过」走到 Rejected 的成因。
+     * 一条出边不带条件的审批节点，在引擎眼里已经是有缺陷的图；把它读进步骤列表、
+     * 再由 stepsToGraph 写回去，等于**静默改写它的运行时语义**。
+     * ⇒ 宁可退回画布并说明原因，让人看见它，⛔ 不静默"修好"。
+     *
+     * 实测（F006 全量 14 条）：7 条 `E2E_DEEP_v2_*` 草稿属于这一类，均为 E2E 夹具，
+     * 无真实业务链落在此类。若将来要放宽，那是一个**独立决定**，要连同
+     * 「读进来会不会改写语义」一起评估。
+     */
     const onward = node.type === 'approval'
       ? outs.find(e => e.condition === COND_APPROVE)
       : outs[0]
-    if (!onward) return null
+    if (!onward) return bail('no-approve-edge')
     cursor = onward.target
   }
 
-  return steps.length > 0 ? { steps } : null
+  return steps.length > 0 ? { flow: { steps }, reason: null } : bail('no-steps')
+}
+
+/**
+ * 引擎图 → 步骤列表（读回既有定义时用）。
+ *
+ * ⚠️ 只还原线性形状。遇到分支/并行/条件节点等线性列表表达不了的图，
+ * 返回 `null` —— 调用方应当退回画布模式，⛔ 不要静默丢弃用户已有的配置
+ * （2026-09-01 事故就是"读不出来就当没有"造成的）。
+ *
+ * ⚠️ 要向用户说明**为什么**退回时，用 {@link explainStepListFallback}，
+ * ⛔ 不要自己硬编码一句「有分支、并行或自定义条件」—— 那句话对
+ * 「终端 id 不匹配」「有环」等原因都是**假话**，会让人去找一个不存在的分支。
+ */
+export function graphToSteps(
+  nodes: ApprovalWorkflowNode[],
+  edges: ApprovalWorkflowEdge[],
+  startNodeId: string,
+): StepFlow | null {
+  return analyzeGraphForStepList(nodes, edges, startNodeId).flow
+}
+
+/**
+ * 读不了这张图的**真实**原因（中文，可直接显示给一线）；能读则返回 `null`。
+ *
+ * 与 {@link graphToSteps} 共用同一次判定，⛔ 两者不会给出互相矛盾的答案。
+ */
+export function explainStepListFallback(
+  nodes: ApprovalWorkflowNode[],
+  edges: ApprovalWorkflowEdge[],
+  startNodeId: string,
+): string | null {
+  const { reason } = analyzeGraphForStepList(nodes, edges, startNodeId)
+  return reason === null ? null : STEP_LIST_FALLBACK_TEXT[reason]
 }
