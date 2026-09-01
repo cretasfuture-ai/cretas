@@ -60,7 +60,11 @@ const BASELINE: Record<string, [string, string]> = {
   '/calibration/list': ['行为校准', '校准列表'],
   '/dashboard/production-progress': ['生产进度大屏', '生产进度看板'],
   '/finance/voucher-list': ['会计凭证', '凭证列表'],
-  '/production/labor-efficiency': ['人效双口径对比', '人效对比'],
+  // 2026-09-02: '/production/labor-efficiency' 这一条已删除 —— LIUSHANMEN 生产
+  // 管理菜单收拢 (owner 拍板) 把它从 menuConfig 里移除、合并进
+  // /production/analysis-query 的「人效双口径对比」tab。路径不再在
+  // 「菜单 ∩ router」交集里，本闸的棘轮检测会正确判定这条基线已过期，所以删掉，
+  // ⛔ 不留着当免检条目 (与 08-28 warehouse/semi-finished 那条同一处理方式)。
   '/rd/samples': ['研发样品', '研发样品管理'],
   '/restaurant/admin/etl-status': ['ETL 状态', '餐饮 ETL 状态'],
   '/smart-bi/analysis': ['AI 问答 / 数据分析', '智能数据分析'],

@@ -163,9 +163,12 @@ const rawMenuConfig: MenuItem[] = [
       //   后端要的那个, 再叠 roles 只会把车间主管挡在外面 —— 那是把问题反着修一遍。
       { path: '/dashboard/production-progress', title: '生产进度大屏', icon: '', module: 'production' },
       { path: '/production/batches', title: '生产批次', icon: '', module: 'production' },
-      { path: '/production/pending-queue', title: '未完成计划队列', icon: '', module: 'production' },
-      { path: '/production/restock-board', title: '备货看板', icon: '', module: 'production' },
-      { path: '/production/delivery-warnings', title: '交货预警', icon: '', module: 'production' },
+      // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 19 条合并为 ~9 条。
+      // 生产看板 hub = 未完成计划队列 + 备货看板 + 交货预警 (el-tabs 承载, 组件
+      // 原样未改动)。3 个旧路径 (/production/pending-queue、/production/restock-board、
+      // /production/delivery-warnings) 仍可直接访问 (router redirect 保书签，见
+      // router/index.ts + views/production/kanban/index.vue)。
+      { path: '/production/kanban', title: '生产看板', icon: '', module: 'production' },
       // 🔴 2026-09-01 生产实测: lsm008(六膳门质量经理) 打开本页看到「待审批 0」+ 暂无数据,
       //   而同一 URL 用 lsm015(生产经理) 是「待审批 26」。那个 0 不是空列表, 是挡在
       //   26 条真实待办前面的伪造读数(GET 403 被渲染成了一个肯定的数字)。
@@ -184,6 +187,20 @@ const rawMenuConfig: MenuItem[] = [
       //      RequireRoleInterceptor.PLATFORM_ADMIN_ROLES —— 它们**绕过** @RequireRole,
       //      漏掉就会把本来打得开的页从平台管理员菜单里藏掉。
       //   ▎两份一致由 reportApprovalMenuMatchesBackendRoles.spec.ts 钉住, 别手工改单侧。
+      //
+      // 2026-09-02 同上收拢: 报工审批 hub = 报工审批 + 撤回审批, ⛔ 路径不变
+      // (仍是 /production/approval —— 上面这道闸按精确路径字符串查找菜单项,
+      // 换路径闸就找不到了)。旧路径 /production/reversals 仍可直接访问 (router
+      // redirect 保书签，见 views/production/approval-hub/index.vue)。
+      //
+      // ⚠️ 已知副作用 (合并前 撤回审批 无 roles[], 仅 module:'production' 门控;
+      // 合并后随 hub 一起被这份 roles[] 收窄): dispatcher 有 production:'rw'、
+      // 原本能在菜单里点到「撤回审批」，合并后菜单不再显示这个条目 (不在 roles[]
+      // 里)。⛔ 这不是可以随手加宽 roles[] 解决的 —— 加宽 = quality_manager 那类
+      // 角色重新看得见「报工审批」tab、点进去 403 的缺陷复发 (本闸的阴性对照就是
+      // 钉这个)。后端 ReportReversalController#listReversals 的权限判据本来就比
+      // 报工审批宽 (production:read_write 模块权限, 非角色白名单)，dispatcher 仍可
+      // 通过直接访问 /production/reversals (或书签) 到达 —— 只是菜单点击路径没了。
       {
         path: '/production/approval', title: '报工审批', icon: '', module: 'production',
         roles: [
@@ -194,15 +211,23 @@ const rawMenuConfig: MenuItem[] = [
           'super_admin', 'platform_admin', 'developer', 'platform_super_admin',
         ],
       },
-      { path: '/production/reversals', title: '撤回审批', icon: '', module: 'production' },
-      { path: '/production/material-requisitions', title: '领料单', icon: '', module: 'production' },
-      { path: '/production/material-returns', title: '退料记录', icon: '', module: 'production' },
-      // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/*), module 归 'production' 而非 'system' —
-      // 否则会被 demo 策展 DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。
+      // 2026-09-02 同上收拢: 领料 hub = 领料单 (原「物料需求单」, #460 已改名) +
+      // 退料记录。2 个旧路径 (/production/material-requisitions、
+      // /production/material-returns) 仍可直接访问 (router redirect 保书签，见
+      // views/production/material-flow/index.vue)。⛔ 两个子页面
+      // (views/factory/material-requisitions/**、views/factory/material-returns/**)
+      // 内容不动，只搬菜单入口。
+      { path: '/production/material-flow', title: '领料', icon: '', module: 'production' },
+      // 这3项是「生产管理」下的生产配置项 (虽路由在 /system/* 或已合并进 /production/*),
+      // module 归 'production' 而非 'system' — 否则会被 demo 策展
+      // DEMO_HIDE_MODULES_BY_TYPE['FACTORY'] 的 'system' 规则连带隐藏 (本意只藏系统管理顶级组)。
       { path: '/system/products', title: 'SKU 管理', icon: '', module: 'production', groupLabel: '生产配置' },
-      { path: '/system/work-processes', title: '工序管理', icon: '', module: 'production',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/system/product-processes', title: '产品-工序配置', icon: '', module: 'production',
+      // 2026-09-02 同上收拢: 工序 hub = 工序管理 + 产品-工序配置。2 个旧路径
+      // (/system/work-processes、/system/product-processes) 仍可直接访问
+      // (router redirect 保书签，见 views/production/process-hub/index.vue)。
+      // ⛔ 只搬菜单入口/路由挂载点，不碰 WorkProcess 实体/Service/DTO (与在飞的
+      // FEATURE-F006-R2-WORKPROCESS-DEDUP-001 不冲突，那条任务锁的是后端代码)。
+      { path: '/production/process-hub', title: '工序', icon: '', module: 'production',
         hideForFactoryTypes: ['RESTAURANT'] },
       // 调料维护已并入产品-工序配置画布的「辅料 cell」；旧路由仅作兼容重定向
       // T125: 转换率配置菜单入口早已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂
@@ -213,16 +238,28 @@ const rawMenuConfig: MenuItem[] = [
       // —— 判据见 workflow/__tests__/bomMenuRetired.source.spec.ts。
       // (副产 2026-08-07 阶段 2 起是工序上的真实产出节点, 不再是 BOM 的一类 cell。)
       { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
-      { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
-        groupLabel: '生产分析', hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
-      { path: '/production-analytics/production', title: '生产数据分析', icon: '', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
-      { path: '/production/bom-achievement', title: 'BOM达成率分析', icon: '', module: 'production' },
-      { path: '/production/process-io', title: '工序投入产出对比', icon: '', module: 'production' },
-      // SP9: 人效双口径对比 (报价 quotedLaborCost vs 实际 actualLaborCost)
-      { path: '/production/labor-efficiency', title: '人效双口径对比', icon: '', module: 'production' },
-      { path: '/production-analytics/yield-cost', title: '成品出厂核算', icon: '', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
+      // 2026-09-02 同上收拢: 生产分析 hub = 车间实时生产报表 + 生产数据分析 +
+      // BOM达成率分析 + 工序投入产出对比 + 人效双口径对比 + 成品出厂核算。
+      // 6 个旧路径 (/analytics/production-report、/production-analytics/production、
+      // /production/bom-achievement、/production/process-io、
+      // /production/labor-efficiency、/production-analytics/yield-cost) 仍可直接
+      // 访问 (router redirect 保书签，见 views/production/analysis/index.vue)。
+      //
+      // ⚠️ 合并前的业态门控不是同一份: 车间实时生产报表/生产数据分析/成品出厂核算
+      // 原本各自 hideForFactoryTypes:['RESTAURANT','FACTORY']，另 3 个无此限制。
+      // 路由级 meta 只能挂一份, 这里不设 hideForFactoryTypes (取并集，与合并前
+      // 3 个「production 系」tab 的可见范围一致) —— 业态门控挪到 hub 组件内部,
+      // 按 tab 各自 v-if 保留 (与合并前逐字节等价), 见 productionAnalysisTab.ts
+      // 头部说明 + views/production/analysis/index.vue 的 showAnalyticsTabs。
+      // 🔴 module 不叠 modulesAny (menuConfig 的 MenuItem 类型 / AppSidebar 的
+      // canSeeMenuItem 只按单个 item.module 过滤菜单可见性，不支持 modulesAny) ——
+      // 路由级另有 modulesAny:['production','analytics'] 放宽 (见 router/index.ts),
+      // 两者不必一致: 父级 /production 组已强制要求 production, 能看到这个菜单项的
+      // 人本来就有 production, 所以这里写 module:'production' 不会让任何原本进不了
+      // /production 组的人多得到菜单可见性。
+      { path: '/production/analysis-query', title: '生产分析', icon: '', module: 'production',
+        groupLabel: '生产分析' },
+      // 不在本轮合并范围内 (owner 拍板的合并表未列它) —— 保持独立菜单项。
       { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
     ]

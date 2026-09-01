@@ -91,7 +91,25 @@ import {
 import { CanvasRenderer, SVGRenderer } from 'echarts/renderers'
 
 // ---- Word Cloud Plugin (auto-registers wordCloud series type) ----
-import 'echarts-wordcloud'
+//
+// 🔴 2026-09-02: 原来是静态 `import 'echarts-wordcloud'`。这个包自己在没有 canvas
+// 2d context 时会**同步 throw**(`Sorry your browser not support wordCloud`,
+// 见 echarts-wordcloud/src/wordCloud.js 的 isSupported 探测), 而不是静默跳过 ——
+// jsdom (vitest 单测环境) 没有 canvas 2d context, 于是这一行把**整个模块的 import**
+// 炸掉, 连带任何间接 import `@/utils/echarts` 的组件全部无法在单测里挂载。
+// 实测: M67YieldCost.vue (成品出厂核算) 因此**从未被任何 spec mount 过**——
+// 生产管理菜单收拢 (LIUSHANMEN, 2026-09-02) 把它并进 /production/analysis-query
+// hub 之后, 想按硬约束 9 证明这个 tab 真的渲染, 第一次踩中这颗雷。
+//
+// 换成 fire-and-forget 的动态 import + catch: 真实浏览器里 isSupported 恒为
+// true, 行为与原来等价(只是注册从模块求值那一刻挪到下一个 microtask, 图表渲染
+// 发生在组件 mount 之后, 早已经过了那个 microtask, 不影响任何真实用户路径)；
+// jsdom 等无 canvas 环境下, 词云图表本来就渲染不出来, 现在只是"不注册"而不是
+// "整个模块炸掉"——影响面收窄到词云本身, 不再连带其余 17 种图表类型。
+import('echarts-wordcloud').catch(() => {
+  // eslint-disable-next-line no-console
+  console.warn('[echarts] 词云图表(wordCloud)在当前环境不可用 (无 canvas 2d context, 常见于测试环境), 已跳过注册。')
+})
 
 echarts.use([
   // charts
