@@ -6,7 +6,7 @@
         <span class="context-divider" aria-hidden="true" />
         <div>
           <strong>正在配置：{{ selectedDecisionTypeLabel }}</strong>
-          <span>当前业务使用独立画布；在途审批不会被修改（无在途实例时可直接改已发布版本）。</span>
+          <span>当前业务用线性步骤列表配置；在途审批不会被修改（无在途实例时可直接改已发布版本）。</span>
         </div>
         <el-tag :type="runtimeApprovalEnabled ? 'success' : 'info'" effect="plain">
           {{ runtimeApprovalEnabled ? '审批已启用' : '无需审批' }}
@@ -377,7 +377,12 @@ import ApprovalWorkflowAIComposer from './components/ApprovalWorkflowAIComposer.
 import WorkflowSimulator from './components/WorkflowSimulator.vue'
 import ConditionRulesPanel from './components/ConditionRulesPanel.vue'
 import { parseSalesApprovalAmountThreshold } from './lib/salesApprovalCondition'
-import { graphToSteps, stepsToGraph, type ApprovalStep } from './lib/stepGraph'
+import {
+  explainStepListFallback,
+  graphToSteps,
+  stepsToGraph,
+  type ApprovalStep,
+} from './lib/stepGraph'
 import { compileApprovalWorkflowAiDraft } from './lib/approvalWorkflowAi'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
@@ -705,11 +710,16 @@ const readOnlyWorkflow = computed(() => (
   && runningInstanceCount.value !== 0
 ))
 const canEditDraft = computed(() => !showNoApproval.value && !readOnlyWorkflow.value)
+/*
+ * 步骤列表模式下"有没有可保存的内容"要看 stepFlow, ⛔ 不能看 nodes —— 新建业务审批
+ * 时画布节点是空的(见 createDefaultDraft), 若这里仍只判 nodes.length, 保存按钮会对
+ * 一个已经加好步骤的新审批流恒为 disabled。
+ */
 const canSave = computed(() => Boolean(
   canEditDraft.value
   && workflowName.value
   && selectedDecisionType.value
-  && nodes.value.length > 0,
+  && (useStepList.value ? (stepFlow.value?.length ?? 0) > 0 : nodes.value.length > 0),
 ))
 const canPublish = computed(() => currentWorkflow.value?.publishStatus === 'draft')
 const saveButtonLabel = computed(() => (
@@ -996,49 +1006,27 @@ function deleteSelectedElements() {
   draftDirty.value = true
 }
 
+/**
+ * 新建业务审批草稿。
+ *
+ * 唯一调用点 {@link enableApprovalDraft} 只在 `showNoApproval` 为真时可达，
+ * 而 `showNoApproval` 要求 `props.lockDecisionType` 为真 —— 这里恒是业务入口，
+ * 因此恒进步骤列表模式。
+ *
+ * <h4>🔴 曾经的缺陷：新建时 stepFlow 停在初始值 null</h4>
+ * 这里原来只填画布 nodes/edges(一个虚构的"主管审批"默认节点)，从不碰 stepFlow。
+ * `useStepList = lockDecisionType && stepFlow.value !== null` 于是判定为假 ——
+ * 业务入口新建时**静默退回画布**，把整个 PR 要消灭的东西又摆在了第一次使用的
+ * 用户面前，且没有任何 fallback 提示(stepModeFallbackReason 同样没被设置)。
+ *
+ * ⇒ 修法是给一个**空步骤列表**，⛔ 不是换一个不同形状的虚构默认值 ——
+ * 用户自己按"+加一级审批"添加，与 StepListEditor 已有的空态处理一致。
+ */
 async function createDefaultDraft() {
-  const defaultRoles = decisionTypeMetadata.value.find(
-    (item) => item.decisionType === selectedDecisionType.value,
-  )?.defaultApproverRoles ?? []
-  const timestamp = Date.now()
-  nodes.value = [
-    {
-      id: `start_${timestamp}`,
-      type: 'start',
-      position: { x: 420, y: 40 },
-      data: { label: '开始', nodeType: 'start', config: {} },
-    },
-    {
-      id: `approval_${timestamp}`,
-      type: 'approval',
-      position: { x: 420, y: 200 },
-      data: {
-        label: '主管审批',
-        nodeType: 'approval',
-        config: { approverRoles: defaultRoles, requiredApprovers: 1, timeoutMinutes: 0 },
-      },
-    },
-    {
-      id: `end_${timestamp}`,
-      type: 'end',
-      position: { x: 420, y: 360 },
-      data: { label: '审批通过', nodeType: 'end', config: { outcome: 'APPROVED' } },
-    },
-  ]
-  edges.value = [
-    {
-      id: `edge_start_${timestamp}`,
-      source: `start_${timestamp}`,
-      target: `approval_${timestamp}`,
-      data: { priority: 0 },
-    },
-    {
-      id: `edge_end_${timestamp}`,
-      source: `approval_${timestamp}`,
-      target: `end_${timestamp}`,
-      data: { priority: 0 },
-    },
-  ]
+  nodes.value = []
+  edges.value = []
+  stepFlow.value = []
+  stepModeFallbackReason.value = ''
   workflowName.value = `${selectedDecisionTypeLabel.value}流程`
   currentWorkflow.value = null
   selectedWorkflowId.value = undefined
@@ -1046,8 +1034,6 @@ async function createDefaultDraft() {
   undoHistory.value = []
   redoHistory.value = []
   draftDirty.value = true
-  await nextTick()
-  await fitCanvas()
 }
 
 async function enableApprovalDraft() {
@@ -1423,9 +1409,13 @@ async function deserializeGraph(dto: ApprovalWorkflowDTO) {
    */
   const flow = graphToSteps(parsedNodes, parsedEdges, dto.startNodeId)
   stepFlow.value = flow ? flow.steps : null
-  stepModeFallbackReason.value = flow
-    ? ''
-    : '这条审批流里有分支、并行或自定义条件，线性步骤列表表达不了，已切换到高级画布。'
+  // ⚠️ 原因必须由 explainStepListFallback **算出来**，⛔ 不许在这里硬编码一句 ——
+  // 那句话对「终端 id 不匹配」「有环」「缺通过出边」等原因是假话（本仓 2026-09-01
+  // 的事故教训：错的原因会让人去找一个不存在的分支）。graphToSteps 与
+  // explainStepListFallback 共用同一次判定（见 stepGraph.ts），两者不会矛盾。
+  stepModeFallbackReason.value = explainStepListFallback(
+    parsedNodes, parsedEdges, dto.startNodeId,
+  ) ?? ''
 
   const nodeTypeById = new Map(parsedNodes.map(n => [n.id, n.type]))
   // 先清空边, 再注册节点 —— 顺序与 applyAiDraft 一致, 不可调换。
@@ -1688,6 +1678,11 @@ async function handleValidate() {
 function resetEditor() {
   nodes.value = []
   edges.value = []
+  // ⚠️ 与 createDefaultDraft / deserializeGraph 是同一份"当前已载入定义"状态的
+  // 三个复位点 —— 少这一个, 切换 decisionType 后 stepFlow 停在上一个业务类型的
+  // 步骤数组上, useStepList 读到"非 null"而误判为步骤列表模式仍然有效。
+  stepFlow.value = null
+  stepModeFallbackReason.value = ''
   currentWorkflow.value = null
   selectedWorkflowId.value = undefined
   workflowName.value = ''

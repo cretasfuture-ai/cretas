@@ -91,6 +91,45 @@ describe('业务入口必须走线性步骤列表', () => {
   })
 
   /**
+   * 🔴 2026-09-02 审查发现：`explainStepListFallback` 在 stepGraph.ts 里定义了
+   * （#453 加的，7 个具名原因），但 index.vue 一次都没调用它 —— 横幅文案仍是
+   * `deserializeGraph` 里手写的一句「有分支、并行或自定义条件」。
+   * 那句话对「终端 id 不匹配」「有环」「缺通过出边」等原因是**假话**，
+   * 会让人去找一个不存在的分支（正是 #453 那次事故复盘明确指出要避免的）。
+   *
+   * ⇒ 横幅文案必须由 `explainStepListFallback` **算出来**，⛔ 不许硬编码字面量。
+   * 行为侧的逐原因验证见 `stepListFallbackBanner.spec.ts`（挂载真实组件，
+   * 对 branching-node / unknown-node / no-approve-edge 各断言横幅文案
+   * 精确等于 `STEP_LIST_FALLBACK_TEXT[reason]`，而不是"包含关键词"这种松判据）。
+   */
+  it('🔴 stepModeFallbackReason 必须来自 explainStepListFallback，⛔ 不许硬编码字面量', () => {
+    const body = functionBody(editor, 'async function deserializeGraph(')
+
+    const call = body.indexOf('stepModeFallbackReason.value = explainStepListFallback(')
+    expect(
+      call,
+      'stepModeFallbackReason 不是由 explainStepListFallback 算出来的 —— '
+      + '又变回了一句猜的文案，对「有环」「终端 id 不匹配」等原因是假话',
+    ).toBeGreaterThan(-1)
+
+    // 阴性对照：旧的那句硬编码文案不能再出现在源码的任何地方。
+    expect(
+      editor,
+      '旧的硬编码横幅文案还在源码里 —— 它对多数退回原因是假话',
+    ).not.toContain('有分支、并行或自定义条件，线性步骤列表表达不了')
+
+    // 顶层 import 必须真的引入了这个符号，⛔ 不能只在注释里提到它。
+    // import 可能跨多行（`import {\n  a,\n  b,\n} from '...'`），所以取整块，
+    // 不能只看含 `from` 的那一行 —— 那一行常常只有闭括号。
+    const fromIdx = editor.indexOf("from './lib/stepGraph'")
+    expect(fromIdx, '找不到 stepGraph 的 import').toBeGreaterThan(-1)
+    const openBraceIdx = editor.lastIndexOf('import {', fromIdx)
+    expect(openBraceIdx, 'stepGraph 的 import 不是花括号具名导入').toBeGreaterThan(-1)
+    const importBlock = editor.slice(openBraceIdx, fromIdx)
+    expect(importBlock).toContain('explainStepListFallback')
+  })
+
+  /**
    * 数「没带 await 的 deserializeGraph 调用点」。
    * `(?<!function )` 把声明行本身排除掉，所以结果里**只有调用点**，⛔ 不要再减声明数。
    */
