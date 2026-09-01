@@ -3,8 +3,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { showSingletonNotification } from '@/utils/singletonNotification';
-import { Plus, Refresh, View, Tickets } from '@element-plus/icons-vue';
-import { get, post, put } from '@/api/request';
+import { Plus, Refresh, View, Tickets, Printer } from '@element-plus/icons-vue';
+import request, { get, post, put } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
@@ -342,6 +342,47 @@ async function openDetail(row: Requisition) {
   }
 }
 
+// 领料单打印 (owner ask, 2026-09-01) — 仓管纸质凭据。后端 PrintController:231
+// GET /{factoryId}/print/material-requisition/{id} 已验证生产可用 (200,
+// application/pdf, ReportLab PDF)，唯独前端没有入口 (形态 B: built, never wired)。
+//
+// 硬约束 8 台账: 全仓 `responseType: 'blob'` 调用点普查 (grep, 排除纯注释行/测试文件) =
+// 28 处 (BEFORE) → 29 处 (AFTER, 本行)。本次镜像
+// procurement/orders/list.vue 的 handleDownloadPdf (采购订单「打印」逐行 action,
+// key=print-pdf) —— 那是单据级 blob 下载，与本处单张领料单打印语义一致。
+// 未发现字面意义上的「批量打印」按钮挂在采购订单列表；production/plans/list.vue
+// 才有 productionBatchMode 批量打印，是另一个多选批处理形状，不适配这里的单行动作，
+// 未采用。consolidated-material-requisition / batching-sheet 两个后端端点未验证，
+// 依 brief 要求不在本次范围内，登记为 follow-up，不构建。
+const printingIds = ref<Set<string>>(new Set());
+async function handlePrint(row: Requisition) {
+  if (!factoryId.value || !row.id) return;
+  const id = row.id;
+  if (printingIds.value.has(id)) return;
+  printingIds.value.add(id);
+  try {
+    const response = await request.get(
+      `/${factoryId.value}/print/material-requisition/${id}`,
+      { responseType: 'blob' },
+    );
+    const blob = new Blob([response.data], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `领料单_${row.requisitionNo || id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    ElMessage.success('打印文件已生成');
+  } catch (e) {
+    console.error('[领料单打印失败]', e);
+    ElMessage.error('打印失败，请稍后重试');
+  } finally {
+    printingIds.value.delete(id);
+  }
+}
+
 async function handleAction(row: Requisition, action: string, confirmMsg: string, successMsg: string) {
   if (submitting.value) return;
   try {
@@ -485,16 +526,29 @@ async function submitConfirm() {
   }
   // 「用量待定」行没有参考数字可对照 —— 留空提交后 issuedQty=null, 调拨时那一味料会被整个跳过
   // (料没搬却推到 TRANSFERRED)。后端 transferToFactory 也拦, 这里先在录入现场说清是哪几味。
+  //
+  // 🔴 2026-09-02 owner 卡点: 原判据 `!(Number(row.pickedInput) > 0)` 把「显式填 0」
+  // 和「没填(null/留空)」当成同一件事拦下来 —— 而这两者语义相反: 0 是「这次一个都不领」
+  // 的明确事实, null 才是「我不知道」(正是这道闸原本要防的)。LIUSHANMEN 现场 7 味辅料
+  // + L1 纸箱库存全是 0, 用户如实填 0 却被当成"没填"拒绝提交, 领料确认整段卡死。
+  // ⇒ 只拦 null/undefined/空串 (真正"没填"), 显式 0 放行。
   const missingPending = confirmRows.value.filter(
-    (row) => isPendingQty(row) && !(Number(row.pickedInput) > 0),
+    (row) => isPendingQty(row) && (row.pickedInput === null || row.pickedInput === undefined
+      || (row.pickedInput as unknown) === ''),
   );
   if (missingPending.length > 0) {
+    // 🔴 2026-09-02 owner 并发同一 PR 报出的独立缺陷: 用户反复点「确认领料」被这道闸拦回来时,
+    // 同一条 sticky (duration:0) 提示不去重地一层层堆, 11 条一起盖住操作区,
+    // 用户看不清自己在改什么。⛔ 不改成非 sticky —— 4-位一体规定 error/警示类必须
+    // duration:0 + showClose 由用户手动关; 该修的是「堆多层」, 不是「不常驻」。
+    // grouping:true 是 Element Plus 内置去重: 相同文案合并成一条并带次数徽标, 不再重复入栈。
     ElMessage({
       message: `原料「${missingPending.map((row) => row.materialName).join('」「')}」按实际领用，`
         + '请称重后录入实际领用数量（这些原料在 BOM 中只登记配方资格、没有参考用量）',
       type: 'warning',
       duration: 0,
       showClose: true,
+      grouping: true,
     });
     return;
   }
@@ -645,9 +699,10 @@ async function submitCancel() {
         <el-table-column prop="createdAt" label="创建时间" width="160">
           <template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="300" align="center" fixed="right">
+        <el-table-column label="操作" width="360" align="center" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="openDetail(row)">详情</el-button>
+            <el-button type="info" link size="small" :icon="Printer" :loading="printingIds.has(row.id)" @click="handlePrint(row)">打印</el-button>
             <el-button v-if="row.status === 'PENDING' && canWrite" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
             <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="openConfirmDialog(row)">确认领料</el-button>
             <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>

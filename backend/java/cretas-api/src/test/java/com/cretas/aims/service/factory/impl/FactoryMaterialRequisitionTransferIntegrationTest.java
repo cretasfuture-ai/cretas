@@ -377,6 +377,61 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
                 "待定行只要录了数量就该照常走完 —— 守卫拦的是漏录, 不是「待定」本身");
     }
 
+    /**
+     * 🔴 2026-09-02 owner 卡点 (#469 追加, 与前端 list.vue submitConfirm 的 missingPending
+     * 同一套语义, ⛔ 两侧不许各自演化):
+     *
+     * <pre>
+     *   null / 未设置 → 我不知道领了多少 → 仍然 loud-block (见上面
+     *                    transferToFactory_pendingQtyRowNotPicked_blocksNamingTheMaterial,
+     *                    那条就是这条的阴性对照 —— 同一个错误码, 未受此次改动影响)
+     *   0             → 这次一个都不领, 是明确的事实, 不是「不知道」→ 放行,
+     *                    issuedQty 记为字面 0 (不是 null, 不是被吞掉/跳过)
+     *   > 0           → 正常领用, 照旧 (Material A 同单出现, 作阳性对照)
+     * </pre>
+     *
+     * LIUSHANMEN 现场 7 味辅料 + L1 纸箱库存全是 0, 修复前旧判据
+     * ({@code pickedQty == null || <= 0}) 把这一行也当成"漏录"拒收, 卡在调拨这一步 ——
+     * 前端 missingPending 那道闸放行之后, 用户点得下去调拨, 这里又拒一次, 整段演示不了。
+     */
+    @Test
+    @DisplayName("Sheet 第45行 + #469: 用量待定的行显式录了 0 (这次一个都不领) → 放行, 记为字面 0")
+    void transferToFactory_pendingQtyRowExplicitZero_proceedsAndRecordsLiteralZero() {
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50"));
+
+        FactoryMaterialRequisition mr = buildMrInPicking();
+        // it-1 (Material A) 正常领用, 作阳性对照; it-2 (Material B) 是「用量待定」行,
+        // 仓管如实称重录了 0 —— 这次一个都不领, 不是没填。
+        mr.getItems().get(1).setRequiredQty(null);
+        mr.getItems().get(1).setPickedQty(new BigDecimal("0.00"));
+        mr.getItems().get(1).setBatchNumbers(new ArrayList<>()); // 没领 = 没有批次可选
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR);
+
+        // 判据 1: 调拨成功, 不再被 PRODUCTION_REQUISITION_PENDING_QTY_NOT_PICKED 拒收
+        assertEquals(Status.TRANSFERRED, mr.getStatus(),
+                "显式录 0 是「这次不领」的明确事实, 不该被当成「漏录」拦下");
+
+        // issuedQty 必须是字面 0 (而不是 null / 未设置) —— 这就是「记为本次未领」的持久化留痕:
+        // 与"待定行没录"(issuedQty=null, 上面那条测试)在存量上分得清清楚楚。
+        BigDecimal it2Issued = mr.getItems().get(1).getIssuedQty();
+        assertNotNull(it2Issued, "0 必须被记成字面 0, 不能退化成 null (那就和「没填」分不清了)");
+        assertEquals(0, it2Issued.compareTo(BigDecimal.ZERO), "issuedQty 必须真的是 0");
+
+        // 明确跳过: 这一行不该产生任何生产仓批次或库存移动 (0 无料可搬)
+        assertNull(findWorkshopBatch("MAT-002"), "0 的行不该凭空搬出一批库存");
+        verify(materialBatchRepository, never())
+                .findAvailableBatchesFEFOByWarehouse(eq(FACTORY_ID), eq("MAT-002"), any());
+
+        // 阳性对照: 同单里正常领用的 Material A 完全不受影响, 照常搬到生产仓
+        assertEquals(new BigDecimal("10.00"), mr.getItems().get(0).getIssuedQty());
+        MaterialBatch wks1 = findWorkshopBatch("MAT-001");
+        assertNotNull(wks1, "正常领用的行不该被这次改动连带影响");
+        assertEquals(new BigDecimal("10.00"), wks1.getReceiptQuantity());
+    }
+
     @Test
     @DisplayName("transferToFactory auto-allocates batches (FEFO) when 仓管 only entered picked qty, then moves stock")
     void transferToFactory_autoAllocatesBatchesWhenMissing_movesStock() {
