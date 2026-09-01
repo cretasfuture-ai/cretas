@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { financeManagerMenu, menuConfig, type MenuItem } from '../menuConfig';
 
@@ -100,6 +102,60 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/system/workflow-designer',
       '/canvas-editor',
     ]));
+  });
+
+  // 🔴 缺陷 1 (2026-09-01, LIUSHANMEN 实测): URL 前缀 /system、面包屑「系统管理」、
+  // 侧边栏「人事管理」三处各说各话, owner 按「系统管理」找账号管理找不到, 最后从
+  // 人事管理点进去, 而进去之后面包屑写着「系统管理 / 账号管理」。
+  //
+  // owner 拍板: 归属以**侧边栏**为准 (建号/改角色是 HR 的活), 面包屑跟随它, URL 不动
+  // (/system/users 是存量深链/书签/E2E 用了很久的地址)。
+  // ⇒ 路由用 meta.breadcrumbParent 声明「我在导航里的上一级」, AppHeader 以它为准。
+  //
+  // ⚠️ **本闸刻意只管账号管理这两条**, 不扫全表。
+  //    建闸时量过: 全表有 18 个菜单项的侧边栏归属与 URL 前缀不一致 (生产管理下的
+  //    /system/products、系统管理下的 /canvas-editor、仓储管理下的 /transfer/list …),
+  //    它们都是**存量**, 与本轮缺陷无关。把闸开到全表 = 一上来 18 条红, 结局是被关掉
+  //    或者被迫改 18 条不相干的路由 —— 本仓形态 E: 宁可窄而可信, 不要宽而被关掉。
+  //
+  //    那 18 条不写死在这里(写死就会烂)。要重新取这份清单, 把下面 SCOPE 改成扫全表即可:
+  //    menuConfig.flatMap(g => (g.children ?? []).filter(c =>
+  //      c.path.split('/')[1] !== g.path.split('/')[1]).map(c => `${g.title}|${c.path}`))
+  it('账号管理/角色权限: 侧边栏归属与 URL 前缀不一致, 面包屑必须被显式改写成侧边栏那个组名', () => {
+    const routerSource = readFileSync(resolve(__dirname, '../../../router/index.ts'), 'utf8');
+    const SCOPE = ['/system/users', '/system/roles'];
+
+    const checked = SCOPE.map((path) => {
+      const group = menuConfig.find((g) => g.children?.some((c) => c.path === path));
+      expect(group, `${path} 在菜单里找不到 —— 仪器坏了`).toBeTruthy();
+      const routeLeaf = path.split('/').pop()!;
+      const idx = routerSource.indexOf(`path: '${routeLeaf}'`);
+      expect(idx, `router 里找不到 path: '${routeLeaf}' —— 仪器坏了`).toBeGreaterThan(-1);
+      const metaChunk = routerSource.slice(idx, idx + 700);
+      return {
+        path,
+        groupTitle: group!.title,
+        urlPrefix: `/${path.split('/')[1]}`,
+        declares: metaChunk.includes(`breadcrumbParent: '${group!.title}'`),
+      };
+    });
+
+    // 阳性对照: 这两条**确实**是「归属 != URL 前缀」的, 否则本闸守的是空气。
+    for (const c of checked) {
+      expect(
+        c.urlPrefix.startsWith(`/${menuConfig.find((g) => g.title === c.groupTitle)!.path.split('/')[1]}`),
+        `${c.path} 的 URL 前缀已经和侧边栏组一致了 —— 那本闸不再有意义, 该删`,
+      ).toBe(false);
+    }
+
+    const missing = checked.filter((c) => !c.declares);
+    expect(
+      missing.map((c) => `${c.groupTitle}|${c.path}`),
+      `以下菜单项挂在与 URL 前缀不同的组下, 但路由没声明 breadcrumbParent ——\n` +
+        `  ${missing.map((c) => `${c.groupTitle}|${c.path}`).join('\n  ')}\n\n` +
+        `⇒ 面包屑会退回跟着 URL 前缀走, 与侧边栏各说各话, 缺陷原样回来(而且不报错)。\n` +
+        `修法: 给该路由的 meta 加 breadcrumbParent: '<它在侧边栏里的组名>'。`,
+    ).toEqual([]);
   });
 
   it('exposes the real stocktake page and its opening-inventory entry under warehouse', () => {

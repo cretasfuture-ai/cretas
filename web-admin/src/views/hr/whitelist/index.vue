@@ -48,6 +48,8 @@ const statistics = ref({
  *   dispatcher 调度员/生产调度员、quality_manager 质量经理/质量主管、
  *   workshop_supervisor 车间主任/车间主管、yield_operator 报工员/出成率录入员、
  *   warehouse_worker 仓库员/仓管员、viewer 查看者/只读人员。
+ *   （↑ 是 2026-08-02 当时的对照。2026-09-01 起权威表的 yield_operator 已改名为
+ *     「报工操作员」—— 这一行记的是历史，不是现在的权威名。）
  * 同一个角色在邀请页和员工档案页显示两个名字，用户会以为是两个岗位。
  * 这是本仓里第 N 张同形私有映射表（前有单位别名、OA MODULE_LABELS、员工档案角色），
  * 修法一样：**只保留码的清单，名字委托 enumLabel**。以后加角色只改权威表一处。

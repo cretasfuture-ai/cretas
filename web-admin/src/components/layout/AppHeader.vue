@@ -14,12 +14,27 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 
 // 面包屑
+//
+// 默认由 route.matched 的 meta.title 链拼出来, 即**跟着 URL 前缀走**。
+// 但少数页面的 URL 前缀与它在侧边栏里的归属不一致 —— 例如 /system/users「账号管理」
+// 挂在侧边栏的「人事管理」下 (建号/改角色是 HR 的活), URL 前缀是历史遗留。
+// 这时面包屑跟 URL 走就会和侧边栏各说各话: owner 2026-09-01 在 LIUSHANMEN 上
+// 按「系统管理」找账号管理找不到, 从人事管理点进去后面包屑却写着「系统管理」。
+//
+// ⇒ 路由可以用 meta.breadcrumbParent 显式声明「我在导航里的上一级叫什么」,
+//   面包屑以它为准。⛔ 不改 URL(存量深链/书签), 也不搬菜单(业务归属是对的)。
 const breadcrumbs = computed(() => {
   const matched = route.matched.filter(r => r.meta.title);
-  return matched.map(r => ({
-    path: r.path,
-    title: r.meta.title as string
-  }));
+  const override = route.meta.breadcrumbParent as string | undefined;
+  if (!override) {
+    return matched.map(r => ({ path: r.path, title: r.meta.title as string }));
+  }
+  // 末级(当前页)保留, 它上面的那一级换成声明的归属。
+  const leaf = matched[matched.length - 1];
+  return [
+    { path: '', title: override },
+    { path: leaf.path, title: leaf.meta.title as string },
+  ];
 });
 
 // 用户信息

@@ -274,6 +274,16 @@ const rawMenuConfig: MenuItem[] = [
     path: '/hr', title: '人事管理', icon: 'User', module: 'hr',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
+      // 2026-09-01 owner 拍板: 账号管理**留在人事管理**, 三处不一致改**面包屑**去跟随它
+      // (router 的 meta.breadcrumbParent, 见 router/index.ts)。
+      //
+      // 曾短暂改成移去「系统管理」以对齐路由前缀, owner 否决 —— 理由是业务归属:
+      // 建号/改角色是 HR 的活, 放 HR 底下才符合谁在用它。URL 前缀是历史, 不是分类依据。
+      //
+      // ⚠️ 已知且**被接受**的后果: 本组带 hideForFactoryTypes: ['RESTAURANT'],
+      //    而 AppSidebar.filterMenuItem 先判父级 ⇒ 餐饮租户侧边栏里没有账号管理入口。
+      //    owner 2026-09-01: 「工厂侧跟餐饮一点关系都没有」—— 这个页面是工厂侧工具,
+      //    餐饮租户不从这里管账号。⛔ 不要把它当成待修缺陷「顺手修好」。
       { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
       { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
       { path: '/hr/employees', title: '员工档案', icon: '', module: 'hr', groupLabel: '员工组织' },

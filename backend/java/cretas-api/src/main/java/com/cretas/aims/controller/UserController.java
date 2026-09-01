@@ -249,8 +249,13 @@ public class UserController {
     public ApiResponse<PageResponse<UserDTO>> getUserList(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
+            // 2026-09-01: 角色筛选。keyword 走 PageRequest 自带的那个字段, 这里只补 role。
+            // ⚠️ Spring 对**没有声明**的请求参数是静默忽略的 —— 前端此前传的
+            //    username / roleCode 就是这么被丢掉的, 搜索框看着能点、结果永远是全量。
+            @Parameter(description = "角色筛选，为空时不筛选", required = false, example = "yield_operator")
+            @RequestParam(required = false) String role,
             @Valid PageRequest pageRequest) {
-        PageResponse<UserDTO> response = userService.getUserList(factoryId, pageRequest);
+        PageResponse<UserDTO> response = userService.getUserList(factoryId, role, pageRequest);
         return ApiResponse.success(response);
     }
 

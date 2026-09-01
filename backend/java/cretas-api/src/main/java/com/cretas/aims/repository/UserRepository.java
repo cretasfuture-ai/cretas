@@ -110,6 +110,41 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Page<User> searchUsers(@Param("factoryId") String factoryId,
                           @Param("keyword") String keyword,
                           Pageable pageable);
+
+    /**
+     * 关键词 + 角色联合筛选（两者都可为空 = 该维不过滤）。
+     *
+     * <p><b>2026-09-01 新增的理由</b>：账号管理页的搜索此前<b>完全不生效</b>
+     * —— 前端把 {@code username}/{@code roleCode} 传给 {@code GET /{factoryId}/users}，
+     * 而那个接口只绑 {@code PageRequest}（page/size/sortBy/sortDirection/keyword/status），
+     * 两个名字一个都绑不上，被 Spring 静默丢弃；即便改名成 {@code keyword} 也没用，
+     * 因为 {@code UserServiceImpl.getUserList} 从头到尾没读过它，直接走
+     * {@code findByFactoryId}。owner 在 LIUSHANMEN 上搜 {@code lsm}，拿回的仍是全部 33 条。
+     *
+     * <p>🔴 <b>为什么不是让前端改调 {@code /users/search} 就完事</b>：那条路的角色筛选
+     * 是<b>在内存里对当前页做的</b>（{@code userDTOs.stream().filter(role::equals)}），
+     * 并且把 {@code total} 重算成过滤后的条数。于是按角色筛选时，第 1 页只会从
+     * 「全厂前 10 个人」里挑出符合的，翻页与总数全错。⇒ 两个维度都下推到 SQL，
+     * 并让两个入口共用<b>这一个</b>查询，免得再长出两份会漂的过滤逻辑（形态 D）。
+     *
+     * <p>⚠️ 参数<b>不接受 null</b>，空串即「该维不过滤」。这样 {@code :keyword} 与
+     * {@code :role} 在 JPQL 里始终有明确的 String 类型上下文 —— 本仓踩过
+     * 「原生 SQL 里没类型上下文的参数前 4 次能过、第 5 次起每次必炸」
+     * （pgjdbc {@code prepareThreshold=5}），不给它复发的机会。
+     *
+     * <p>匹配口径与 {@link #searchUsers} 保持一致：username/phone 右模糊（可走索引），
+     * fullName 双向模糊。
+     */
+    @Query("SELECT u FROM User u WHERE u.factoryId = :factoryId AND " +
+           "(:keyword = '' OR " +
+           " LOWER(u.username) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
+           " LOWER(u.fullName) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+           " u.phone LIKE CONCAT(:keyword, '%') ESCAPE '\\') AND " +
+           "(:role = '' OR u.roleCode = :role)")
+    Page<User> searchUsersByKeywordAndRole(@Param("factoryId") String factoryId,
+                                           @Param("keyword") String keyword,
+                                           @Param("role") String role,
+                                           Pageable pageable);
     /**
      * 更新用户最后登录时间
      */
