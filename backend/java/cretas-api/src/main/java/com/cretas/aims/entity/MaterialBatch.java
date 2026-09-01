@@ -6,6 +6,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.PriceSensitive;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import lombok.*;
+import org.hibernate.annotations.Formula;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 import jakarta.persistence.*;
@@ -223,6 +224,24 @@ public class MaterialBatch extends BaseEntity {
     /** 发起单ID (P0-17) */
     @Column(name = "source_doc_id", length = 64)
     private String sourceDocId;
+
+    /**
+     * 收货单号 (2026-09-01, owner 原话「一次一个单入库…应该放在一个组里边」)。
+     *
+     * <p>只在 {@code sourceDocType='PURCHASE_RECEIVE'} 时非空 —— {@link #sourceDocId} 本身是
+     * {@code purchase_receive_records.id}(UUID), 直接露给用户不可读。「已入库批次」按收货单分组
+     * 展示时用这个字段做表头, 与 {@link com.cretas.aims.entity.inventory.PurchaseReceiveRecord}
+     * 的 {@code purchaseOrderNumber}/{@code supplierName} 同一个只读关联子查询惯用法 ——
+     * 不新增列、不迁移，只在读时把已经存在的关联解成人能读的单号。</p>
+     *
+     * <p>其它 {@code sourceDocType}(TRANSFER_IN / OPENING / CUSTOMER_MATERIAL_RECEIPT / …)
+     * 的子查询天然查不到匹配的 {@code purchase_receive_records} 行, 恒为 null ——
+     * 前端据此走「无关联单据」/按单据类型的 fallback 展示, 见
+     * {@code web-admin/src/views/warehouse/materials/list.vue} 的 groupedByDocument。</p>
+     */
+    @Formula("(SELECT prr.receive_number FROM purchase_receive_records prr "
+            + "WHERE prr.id = source_doc_id AND source_doc_type = 'PURCHASE_RECEIVE')")
+    private String sourceDocNumber;
 
     /** Idempotency identity of one inbound event; multiple partial receipts use distinct keys. */
     @Column(name = "source_event_key", length = 64)

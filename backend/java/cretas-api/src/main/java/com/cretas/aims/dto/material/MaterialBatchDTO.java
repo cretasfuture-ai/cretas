@@ -140,6 +140,20 @@ public class MaterialBatchDTO {
      */
     private String sourceDocType;
 
+    /**
+     * 发起单 ID (P0-17)。同一次收货共享同一个 sourceDocId ——
+     * 「已入库批次」按收货单分组的分组键 (2026-09-01)。
+     */
+    @Schema(description = "发起单ID (同一次收货共享同一个 ID, 按收货单分组用)")
+    private String sourceDocId;
+
+    /**
+     * 收货单号 (仅 sourceDocType=PURCHASE_RECEIVE 非空)。与 sourceDocId 配套，
+     * 是给用户看的人能读的单号 —— 见 {@link com.cretas.aims.entity.MaterialBatch#getSourceDocNumber()}。
+     */
+    @Schema(description = "收货单号 (仅采购收货批次非空, 分组表头展示用)")
+    private String sourceDocNumber;
+
     @Schema(description = "来源销售订单ID快照")
     private String sourceSalesOrderId;
 
