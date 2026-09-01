@@ -109,5 +109,9 @@ describe('工序 hub —— 2 个视角逐一挂载真实子页面 (LIUSHANMEN I
     );
     expect(wrapper.findComponent(ProductProcesses).exists()).toBe(true);
     wrapper.unmount();
-  });
+    // 15s: 同 productionKanbanHub.mount.spec.ts 那条一样的判据 —— product-processes
+    // 挂了 ProductProcessWorkflowEditor(重组件, 见 stderr 里的 catalog loading 日志),
+    // 冷转译+挂载在全量套件并发跑(多 worker 抢 CPU)时能超过默认 5000ms
+    // (2026-09-02 实测: 单独跑该文件通过, 混进全量套件同一条超时)。
+  }, 15000);
 });
