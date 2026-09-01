@@ -4,6 +4,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
+import com.cretas.aims.entity.material.MaterialMainCategory;
 import com.cretas.aims.exception.BusinessException;
 
 import java.util.Objects;
@@ -17,8 +18,24 @@ public final class ProductionInventoryOwnershipGuard {
     private ProductionInventoryOwnershipGuard() {
     }
 
+    /**
+     * 3-arg 兼容重载 —— 未升级传大类的调用点继续得到<b>逐字不变</b>的严格校验
+     * (等价于 materialMainCategory=null, 见 4-arg 版本), ⛔ 不会因这次改动被动放宽。
+     */
     public static void assertMaterialBatchAllowed(ProductionPlan plan,
                                                   MaterialBatch batch,
+                                                  String hintTarget) {
+        assertMaterialBatchAllowed(plan, batch, null, hintTarget);
+    }
+
+    /**
+     * @param materialMainCategory 物料大类 (原料/辅料/包材, 权威来源
+     *        {@code RawMaterialType.mainCategory}, 见 {@link MaterialMainCategory})。
+     *        null / 未知一律按<b>最严格</b>口径(等同原料), ⛔ 不兜底放宽。
+     */
+    public static void assertMaterialBatchAllowed(ProductionPlan plan,
+                                                  MaterialBatch batch,
+                                                  String materialMainCategory,
                                                   String hintTarget) {
         if (plan == null || batch == null) {
             throw new BusinessException(409, "生产计划或原料批次归属信息缺失")
@@ -32,6 +49,14 @@ public final class ProductionInventoryOwnershipGuard {
         }
 
         if (plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            // 🔒 2026-09-02 owner 裁定: 来料加工(客户供主料)下, 辅料/包材(含调料, 经
+            // MaterialMainCategory 归一)本就该由工厂自有库存出、计入加工费而非客户物料成本 ——
+            // 与「工厂备料生产」同一条件, 直接放行。⛔ RAW 不受影响: 走不到这里, 仍必须
+            // 是同客户、同销售订单归属的客供批次, 绝不回退公司库存 (下面的严格分支逐字未动)。
+            if (isCompanyStockEligibleCategory(materialMainCategory)
+                    && batch.getOwnership() != InventoryOwnership.CUSTOMER_OWNED) {
+                return;
+            }
             requireCustomerSuppliedPlanLineage(plan, hintTarget);
             boolean sameCustomer = Objects.equals(plan.getCustomerId(), batch.getOwnerCustomerId());
             boolean inventoryProduction = isBlank(plan.getSourceOrderId());
@@ -61,6 +86,16 @@ public final class ProductionInventoryOwnershipGuard {
                     .withHint("请选择公司自有原料批次；客供料仅可用于其绑定的客户订单")
                     .withHintTarget(hintTarget);
         }
+    }
+
+    /**
+     * 辅料/包材(含调料, 经 {@link MaterialMainCategory} 归一到「辅料」大类)在来料加工计划下
+     * 允许用工厂自有库存。RAW(「原料」)不在此列 —— 那是这条规则存在的全部理由(客户主料的
+     * 归属守卫必须原样保留)。
+     */
+    public static boolean isCompanyStockEligibleCategory(String materialMainCategory) {
+        return MaterialMainCategory.AUXILIARY.equals(materialMainCategory)
+                || MaterialMainCategory.PACKAGING.equals(materialMainCategory);
     }
 
     public static void requireCustomerSuppliedPlanLineage(ProductionPlan plan, String hintTarget) {

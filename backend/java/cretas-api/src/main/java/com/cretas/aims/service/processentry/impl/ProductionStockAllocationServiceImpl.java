@@ -91,9 +91,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
 
             BigDecimal remaining = required;
             BigDecimal availableForInput = BigDecimal.ZERO;
+            String materialMainCategory = mainCategoryOf(factoryId, materialTypeId);
             for (MaterialBatch batch : batches) {
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
-                        plan, batch, "生产报工投料");
+                        plan, batch, materialMainCategory, "生产报工投料");
                 // 非质量单位不做跨单位折算, 只吃单位一致的批次 —— 与 BOM 自动投料同一口径。
                 // 🔴 2026-08-03: 这里原来是 unitMatches/batchAvailable 的<b>内联复制</b>
                 // (那两个 helper 的注释还写着「与 plan() 逐字同一条件」)。改成直接复用,
@@ -290,7 +291,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                             .withCode("PRODUCTION_INPUT_BATCH_NOT_FOUND")
                             .withSeverity("BLOCKING"));
             ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
-                    plan, batch, "生产报工投料");
+                    plan, batch, mainCategoryOf(factoryId, batch.getMaterialTypeId()), "生产报工投料");
             lockedByBatch.put(batchId, batch);
         }
 
@@ -428,8 +429,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             BigDecimal availableForItem = BigDecimal.ZERO;
             List<MaterialBatch> batches = findEligibleBatchesForUpdate(
                     factoryId, plan, requirement.materialTypeId(), workshopId);
+            String materialMainCategory = mainCategoryOf(factoryId, requirement.materialTypeId());
             for (MaterialBatch batch : batches) {
-                ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, "生产报工自动投料");
+                ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
+                        plan, batch, materialMainCategory, "生产报工自动投料");
                 String batchUnit = canonicalNativeUnit(factoryId, batch.getQuantityUnit());
                 if (massRequirement ? !isCanonicalMassUnit(batchUnit)
                         : !Objects.equals(requiredUnit, batchUnit)) {
@@ -653,11 +656,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             }
             String inputUnit = canonicalNativeUnit(factoryId, normalizeUnit(port.getUnit()));
             boolean massInput = isCanonicalMassUnit(inputUnit);
+            // 本轮循环内多处 ownershipAllows() 共用同一个物料的大类判定 —— 算一次, 不逐批次重查。
+            String materialMainCategory = mainCategoryOf(factoryId, materialTypeId);
 
             BigDecimal available = BigDecimal.ZERO;
             if (workshopId != null && !workshopId.isBlank()) {
                 for (MaterialBatch batch : findEligibleBatches(factoryId, plan, materialTypeId, workshopId)) {
-                    if (!ownershipAllows(plan, batch)) {
+                    if (!ownershipAllows(plan, batch, materialMainCategory)) {
                         continue;
                     }
                     if (!unitMatches(factoryId, batch, inputUnit, massInput)) {
@@ -674,7 +679,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     continue;
                 }
                 // 展示口径: 按箱/袋存量的批次也要报出来, 否则「原料仓另有 100kg」会整条消失
-                if (!ownershipAllows(plan, batch)
+                if (!ownershipAllows(plan, batch, materialMainCategory)
                         || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                     continue;
                 }
@@ -696,7 +701,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesByWarehouse(
                     factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
                 // 展示口径: 同上 —— 过期提醒本就是纯信息, 漏掉按箱存量的批次等于瞒着仓管
-                if (!ownershipAllows(plan, batch)
+                if (!ownershipAllows(plan, batch, materialMainCategory)
                         || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                     continue;
                 }
@@ -708,7 +713,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             Map<String, BigDecimal> expiredByWarehouse = new LinkedHashMap<>();
             for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesOutsideWarehouse(
                     factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
-                if (!ownershipAllows(plan, batch)
+                if (!ownershipAllows(plan, batch, materialMainCategory)
                         || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                     continue;
                 }
@@ -730,10 +735,18 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         return out;
     }
 
-    /** plan() 用带锁的那个; 这里是同一条件的非锁定版 (渲染路径不该锁行)。 */
+    /**
+     * plan() 用带锁的那个; 这里是同一条件的非锁定版 (渲染路径不该锁行)。
+     *
+     * <p>🔒 2026-09-02: 与 {@link #findEligibleBatchesForUpdate} 同一条 owner 裁定的辅料/包材
+     * 加宽 —— 两份必须一起改, 否则展示口径会说「不够」而提交口径其实能成, 界面和提交打架
+     * (本方法自己的类注释早就写了这条纪律)。</p>
+     */
     private List<MaterialBatch> findEligibleBatches(String factoryId, ProductionPlan plan,
                                                     String materialTypeId, String warehouseId) {
-        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED
+                || ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
+                        mainCategoryOf(factoryId, materialTypeId))) {
             return materialBatchRepository.findAvailableBatchesFEFOByWarehouse(
                     factoryId, materialTypeId, warehouseId);
         }
@@ -752,13 +765,27 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     }
 
     /** 归属守卫在 plan() 里是抛异常; 渲染路径只需要"能不能用"这个布尔。 */
-    private boolean ownershipAllows(ProductionPlan plan, MaterialBatch batch) {
+    private boolean ownershipAllows(ProductionPlan plan, MaterialBatch batch, String materialMainCategory) {
         try {
-            ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, "生产报工投料");
+            ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
+                    plan, batch, materialMainCategory, "生产报工投料");
             return true;
         } catch (RuntimeException ignored) {
             return false;
         }
+    }
+
+    /**
+     * 物料大类 (原料/辅料/包材) —— 权威来源 {@code RawMaterialType.mainCategory}
+     * (DB NOT NULL + CHECK 约束, 100% 覆盖)。查不到一律 null, 守卫对 null 按最严格口径处理。
+     */
+    private String mainCategoryOf(String factoryId, String materialTypeId) {
+        if (rawMaterialTypeRepository == null || materialTypeId == null) {
+            return null;
+        }
+        return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getMainCategory)
+                .orElse(null);
     }
 
     /**
@@ -859,7 +886,11 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                                                               ProductionPlan plan,
                                                               String materialTypeId,
                                                               String warehouseId) {
-        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+        // 🔒 2026-09-02 owner 裁定: 辅料/包材(含调料)不受客户库存限制 —— 与「工厂备料生产」
+        // 同一条件, 直接走公司 FEFO。⛔ RAW 逐字不变: 仍必须走下面的客户库存严格分支。
+        if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED
+                || ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
+                        mainCategoryOf(factoryId, materialTypeId))) {
             return materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
                     factoryId, materialTypeId, warehouseId);
         }

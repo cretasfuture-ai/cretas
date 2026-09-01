@@ -4,6 +4,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProductionStockShortageDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
@@ -33,6 +34,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -445,8 +448,57 @@ class ProductionStockAllocationServiceTest {
     }
 
     @Test
+    @org.junit.jupiter.api.DisplayName(
+            "🔒 阳性对照 (真实产品入口 plan()): 来料加工计划下报工自动投料辅料改用工厂自有库存")
+    void tollProcessingPlanAutoAllocatesCompanyOwnedAuxiliaryStockDuringReporting() {
+        ProductionPlan plan = customerSuppliedPlan();
+        RawMaterialType auxiliary = new RawMaterialType();
+        auxiliary.setId("AUX-1");
+        auxiliary.setFactoryId("F006");
+        auxiliary.setCategory("辅料"); // 冰水一类 —— setCategory 连带算出 mainCategory=辅料
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("AUX-1", "F006"))
+                .thenReturn(Optional.of(auxiliary));
+
+        // ⚠️ 阳性对照的关键: 批次是 COMPANY_OWNED (batch() 默认值, 未包一层 CUSTOMER_OWNED) ——
+        // 证明真的走了公司 FEFO, 不是恰好满足了客户归属检查。
+        MaterialBatch companyAuxiliaryBatch = batch(
+                "AUXB1", "AUX-1", "WKS-1", "8", LocalDate.of(2026, 7, 20));
+
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
+                "F006", "AUX-1", "WKS-1"))
+                .thenReturn(List.of(companyAuxiliaryBatch));
+        when(allocationRepository.sumPendingQuantityByMaterialBatchId("F006", "AUXB1"))
+                .thenReturn(BigDecimal.ZERO);
+
+        // 修复前: findEligibleBatchesForUpdate 只查客供批次(候选集为空) → 缺口异常;
+        // 即便候选集不为空, assertMaterialBatchAllowed(3-arg 严格口径) 也会拒绝这批 COMPANY_OWNED 批次。
+        assertThat(service.plan("F006", "PLAN-1", List.of(total("AUX-1", "4"))))
+                .singleElement()
+                .satisfies(allocation -> {
+                    assertThat(allocation.materialBatchId()).isEqualTo("AUXB1");
+                    assertThat(allocation.quantity()).isEqualByComparingTo("4");
+                });
+        // 客供严格路径必须完全没被触碰 —— 证明真的绕开了它, 不是恰好也满足了它。
+        verify(materialBatchRepository, never())
+                .findAvailableCustomerSuppliedBatchesFEFOByWarehouseForUpdate(
+                        anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
     void explicitCustomerBatchFromAnotherCustomerOrOrderIsRejected() {
         ProductionPlan plan = customerSuppliedPlan();
+        // 🔒 显式钉死 RAW-1 大类=原料(RAW), 不依赖 rawMaterialTypeRepository 未打桩时的默认 null ——
+        // 证明「辅料/包材可用工厂自有库存」这条放宽完全不影响 RAW 的严格路径。
+        RawMaterialType raw = new RawMaterialType();
+        raw.setId("RAW-1");
+        raw.setFactoryId("F006");
+        raw.setCategory("原料");
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("RAW-1", "F006"))
+                .thenReturn(Optional.of(raw));
+
         MaterialBatch wrongCustomer = batch(
                 "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
         wrongCustomer.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
@@ -463,6 +515,47 @@ class ProductionStockAllocationServiceTest {
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate("CB1", "F006"))
                 .thenReturn(Optional.of(wrongCustomer));
+
+        assertThatThrownBy(() -> service.planExplicit(
+                "F006", "PLAN-1", List.of(input)))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode())
+                                .isEqualTo("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH"));
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName(
+            "🔒🔴 负控 (真实产品入口 planExplicit): 用户手选别客户的 CUSTOMER_OWNED 辅料批次仍必须被拒")
+    void explicitAuxiliaryBatchFromAnotherCustomerIsRejectedEvenThoughAuxiliaryIsTiered() {
+        // 🔴 对抗终审揪出的洞的真实入口版本: planExplicit 的批次来自用户传的 batchId,
+        // 经 findByIdAndFactoryIdForUpdate 取 —— 那条查询只有工厂域, 没有所有权过滤。
+        // 一个工厂服务多个客户正是来料加工的形状: 用户显式指定另一个客户的 AUX 批次时,
+        // 挡住它的必须是 assertMaterialBatchAllowed 里 ownership != CUSTOMER_OWNED 那半行,
+        // 不能因为「辅料可用公司库存」这条放宽就跟着放行别客户的客供辅料。
+        ProductionPlan plan = customerSuppliedPlan();
+        RawMaterialType auxiliary = new RawMaterialType();
+        auxiliary.setId("AUX-1");
+        auxiliary.setFactoryId("F006");
+        auxiliary.setCategory("辅料");
+        lenient().when(rawMaterialTypeRepository.findByIdAndFactoryId("AUX-1", "F006"))
+                .thenReturn(Optional.of(auxiliary));
+
+        MaterialBatch otherCustomerAuxiliary = batch(
+                "AUXCB1", "AUX-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+        otherCustomerAuxiliary.setOwnership(InventoryOwnership.CUSTOMER_OWNED); // 别的客户的客供辅料
+        otherCustomerAuxiliary.setOwnerCustomerId("CUS-OTHER");
+        otherCustomerAuxiliary.setSourceSalesOrderId("SO-OTHER");
+
+        ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
+        input.setMaterialBatchId("AUXCB1");
+        input.setSkuId("AUX-1");
+        input.setQuantity(BigDecimal.ONE);
+
+        when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("AUXCB1", "F006"))
+                .thenReturn(Optional.of(otherCustomerAuxiliary));
 
         assertThatThrownBy(() -> service.planExplicit(
                 "F006", "PLAN-1", List.of(input)))
