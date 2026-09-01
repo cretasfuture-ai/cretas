@@ -333,7 +333,25 @@ public class ApprovalWorkflowServiceImpl implements ApprovalWorkflowService {
 
     @Override
     public int countRunningInstances(String factoryId, String workflowId) {
-        if (workflowInstanceRepository == null) return 0;
+        if (workflowInstanceRepository == null) {
+            // M-6: 这里原本 `return 0` —— 而 0 的语义是「没有在途」⇒ 闸放行。
+            //
+            // 🔴 依赖读不到时判定为「可以随便改」是最坏的方向, 而 #455 之后
+            //    这道闸是**唯一**权威(前端「仍然直接改」逃生门已删、force 钉死 false),
+            //    所以一个假的 0 会让 update/delete 在该拦的时候放行, 把在途单据改成
+            //    缺陷 27 那种「看得见点不动」的死状态。
+            //
+            // ⚠️ 本仓形态: 「兜底的默认值会把『我不知道』翻译成『是 0』」——
+            //    读不到就抛, 让上层 fail-closed, ⛔ 不要编一个读数出来。
+            //
+            // 📌 严重度: 生产上这条**不可达** —— 2026-09-01 实测 prod 两条审批流分别
+            //    返回 1 / 1(其余 13 条为 0), 证明 repository 确实注入了。
+            //    ⇒ 这是**潜伏**的 fail-open, 不是正在发生的事故; 修它是纵深防御,
+            //      因为 @Autowired(required=false) 让「哪天注不进来」在结构上是可能的。
+            throw new BusinessException(503, "审批实例服务暂不可用，无法确认是否有在途审批")
+                    .withCode("OA_RUNNING_INSTANCE_COUNT_UNAVAILABLE")
+                    .withHint("请稍后重试；在确认没有在途审批之前，不会修改该审批流程");
+        }
         return workflowInstanceRepository.findByFactoryIdAndWorkflowIdAndStatus(
                 factoryId, workflowId,
                 com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING)

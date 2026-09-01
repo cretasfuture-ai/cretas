@@ -292,6 +292,58 @@ class ApprovalWorkflowServiceImplTest {
                 .findByFactoryIdAndWorkflowIdAndStatus(any(), any(), any());
     }
 
+    // ═══════════════ M-6: 读不到在途实例时必须 fail-closed ═══════════════
+    //
+    // 原实现是 `if (workflowInstanceRepository == null) return 0;` —— 而 0 的语义是
+    // 「没有在途」⇒ 闸放行。依赖读不到时判定为「可以随便改」是最坏的方向。
+    //
+    // ⚠️ #455 之后这道闸是**唯一**权威(前端「仍然直接改」逃生门已删、force 钉死 false),
+    //    所以一个假的 0 会让 update/delete 在该拦的时候放行, 把在途单据改成
+    //    缺陷 27 那种「看得见点不动」的死状态。
+    //
+    // 📌 严重度(实测, ⛔ 不是推断): 2026-09-01 生产上 16 条审批流里两条分别返回 1 / 1,
+    //    其余为 0, 且与 admin-running 独立路径列出的 2 条 RUNNING 实例逐条吻合
+    //    ⇒ repository 在生产上确实注入了, 这条 fail-open **不可达**。
+    //    修它是纵深防御 —— @Autowired(required = false) 让「哪天注不进来」结构上可能。
+    //
+    // 🔴 这两条是本文件里**第一次**覆盖「repository 缺席」这一路: 之前没有任何用例走过它,
+    //    这正是那个 return 0 能一直活着的原因。
+
+    @Test
+    @DisplayName("M-6: 拿不到在途实例数时抛 503, ⛔ 不许编一个 0 出来")
+    void countRunningInstances_repositoryAbsent_failsClosed() {
+        ReflectionTestUtils.setField(service, "workflowInstanceRepository", null);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.countRunningInstances(FACTORY_ID, WORKFLOW_ID));
+
+        assertEquals(503, ex.getCode());
+        assertEquals("OA_RUNNING_INSTANCE_COUNT_UNAVAILABLE", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("M-6: 拿不到在途实例数时, 已发布审批流的原地修改必须被拦住")
+    void update_publishedWorkflow_repositoryAbsent_isBlocked() {
+        // 这条才是安全属性本身 —— 上面那条只证明它抛, 这条证明**闸真的关上了**。
+        ApprovalWorkflow existing = validSequentialWorkflow();
+        existing.setId(WORKFLOW_ID);
+        existing.setFactoryId(FACTORY_ID);
+        existing.setPublishStatus("published");
+        when(repository.findById(WORKFLOW_ID)).thenReturn(Optional.of(existing));
+        ReflectionTestUtils.setField(service, "workflowInstanceRepository", null);
+
+        ApprovalWorkflow partial = new ApprovalWorkflow();
+        partial.setName("renamed-while-count-unavailable");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.update(FACTORY_ID, WORKFLOW_ID, partial, false));
+        assertEquals(503, ex.getCode());
+
+        // ⛔ 最要紧的一条: 没落库。原实现会当作「0 条在途」直接改下去。
+        verify(repository, never()).save(any(ApprovalWorkflow.class));
+        assertEquals("published", existing.getPublishStatus());
+    }
+
     @Test
     @DisplayName("Case 6: update wrong factory → BusinessException(403)")
     void update_wrongFactory_throws403() {
