@@ -180,6 +180,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         materialType.setCategory(materialCategory);
         // 副产标记与 category 正交; 禁降级: null 当 false, 不猜
         materialType.setIsByproduct(Boolean.TRUE.equals(dto.getIsByproduct()));
+        // 自备料 (缺陷 47): 与副产同一条纪律 —— 禁降级, null 当 false, 不猜
+        materialType.setSelfSupplied(Boolean.TRUE.equals(dto.getSelfSupplied()));
         materialType.setUnit(dto.getUnit());
         materialType.setStorageType(packaging ? null : dto.getStorageType());
         materialType.setShelfLifeDays(dto.getShelfLifeDays());
@@ -321,6 +323,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         // 用户照做, 回来发现下拉还是空的, 因为那一勾从来没保存过。
         // null-tolerant 与相邻字段一致: 不传就不动, 传了才改。
         if (dto.getIsByproduct() != null) materialType.setIsByproduct(dto.getIsByproduct());
+        // 自备料 (缺陷 47): 与副产同一条纪律 —— create/update 两条路径都要写,
+        // 漏了 update 就是上面这条注释描述的那个已知形状的重演 (只有新建时才生效)。
+        if (dto.getSelfSupplied() != null) materialType.setSelfSupplied(dto.getSelfSupplied());
 
         // SP4-A8: 税率 + 含税单价 null-guard 更新 → 自动换算未税单价
         if (dto.getTaxRate() != null) materialType.setTaxRate(dto.getTaxRate());
@@ -868,6 +873,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .category(materialType.getCategory())
                 .mainCategory(materialType.getMainCategory())
                 .isByproduct(Boolean.TRUE.equals(materialType.getIsByproduct()))
+                .selfSupplied(Boolean.TRUE.equals(materialType.getSelfSupplied()))
                 .unit(materialType.getUnit())
                 .materialReferencePrice(materialType.getUnitPrice())
                 .materialReferencePriceUnit(materialType.getUnit())

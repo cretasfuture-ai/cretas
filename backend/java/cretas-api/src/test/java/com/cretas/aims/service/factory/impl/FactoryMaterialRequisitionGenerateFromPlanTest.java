@@ -1,6 +1,7 @@
 package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
@@ -11,6 +12,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
@@ -34,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -90,15 +93,19 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
     @Mock
     private BomSeasoningItemRepository bomSeasoningItemRepository;
 
+    @Mock
+    private RawMaterialTypeRepository rawMaterialTypeRepository;
+
     @InjectMocks
     private FactoryMaterialRequisitionServiceImpl service;
 
     @BeforeEach
     void setup() {
-        // warehouseResolver / bomSeasoningItemRepository 是 @Autowired(required=false) 字段,
-        // @InjectMocks 走构造器注入策略不会填它们 → 手动反射注入.
+        // warehouseResolver / bomSeasoningItemRepository / rawMaterialTypeRepository 是
+        // @Autowired(required=false) 字段, @InjectMocks 走构造器注入策略不会填它们 → 手动反射注入.
         org.springframework.test.util.ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         org.springframework.test.util.ReflectionTestUtils.setField(service, "bomSeasoningItemRepository", bomSeasoningItemRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
@@ -384,6 +391,89 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
                         .filter(it -> it.getMaterialCategory() == FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY)
                         .allMatch(it -> it.getRequiredQty() == null),
                 "0 不是有效投入量, 不能被当作「投了 0kg 原料」算出一堆 0 需求量");
+    }
+
+    // ==================== 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 自备料 ====================
+
+    /**
+     * 阳性对照: appendSeasoningItems (~:412, owner brief 点名的那个 guard) 遇到自备料
+     * (冰水) 时, 行必须**照常生成**(不消失) 且带上 selfSupplied=true 快照; 同单里其它调料
+     * (非自备料) 必须仍是 selfSupplied=false —— 证明标记不会「泄漏」到其它行。
+     */
+    @Test
+    @DisplayName("缺陷 47: appendSeasoningItems 遇自备料(冰水) → 行仍生成, 且带 selfSupplied=true")
+    void generateFromPlan_selfSuppliedSeasoning_appearsWithSnapshotFlag() {
+        BomRecipeItem rawBom = cookedMeatPattyRawBom();
+        List<BomSeasoningItem> seasonings = new ArrayList<>(cookedMeatPattySeasonings());
+        BomSeasoningItem iceWater = new BomSeasoningItem();
+        iceWater.setRecipeId("RECIPE-SMR-001");
+        iceWater.setFactoryId(FACTORY_ID);
+        iceWater.setMaterialTypeId("ICE-WATER");
+        iceWater.setSection(BomSeasoningItem.SECTION_INJECTION);
+        iceWater.setSeq(99);
+        iceWater.setName("冰水");
+        iceWater.setDosagePerKgG(new BigDecimal("50.0"));
+        seasonings.add(iceWater);
+        stubCookedMeatPattyPlan(rawBom, seasonings);
+
+        RawMaterialType iceWaterMaster = new RawMaterialType();
+        iceWaterMaster.setId("ICE-WATER");
+        iceWaterMaster.setFactoryId(FACTORY_ID);
+        iceWaterMaster.setCategory("辅料");
+        iceWaterMaster.setSelfSupplied(true);
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("ICE-WATER", FACTORY_ID))
+                .thenReturn(Optional.of(iceWaterMaster));
+        // 其它 7 条调料 (SEASON-0..6) 不打桩 selfSupplied → findByIdAndFactoryId 默认空,
+        // isSelfSupplied 查不到时返回 false (不猜自备)。
+
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L, new BigDecimal("100"));
+
+        FactoryMaterialRequisitionItem iceWaterItem = mr.getItems().stream()
+                .filter(it -> "ICE-WATER".equals(it.getMaterialTypeId())).findFirst().orElseThrow(
+                        () -> new AssertionError("自备料(冰水)行必须照常出现在需求单上, 不能消失"));
+        assertTrue(Boolean.TRUE.equals(iceWaterItem.getSelfSupplied()),
+                "冰水行必须带 selfSupplied=true 快照");
+
+        // 阴性对照: 同单里普通调料(非自备料)不该被这次改动误标记。
+        FactoryMaterialRequisitionItem normalSeasoning = mr.getItems().stream()
+                .filter(it -> "SEASON-0".equals(it.getMaterialTypeId())).findFirst().orElseThrow();
+        assertFalse(Boolean.TRUE.equals(normalSeasoning.getSelfSupplied()),
+                "普通调料不该被自备料标记连带影响");
+    }
+
+    /**
+     * 阳性对照 (主循环): 冰水等自备料也可能被直接建成普通 RAW/AUXILIARY BOM 行 (不经过调料表),
+     * 主循环 (bomItems 展开) 同样要写 selfSupplied 快照, 否则会漏标 (硬约束 8: 两处不写会漂)。
+     */
+    @Test
+    @DisplayName("缺陷 47: 自备料建成普通 BOM 行 (非调料表) 时, 主循环同样写 selfSupplied 快照")
+    void generateFromPlan_selfSuppliedMainBomRow_carriesSnapshotFlag() {
+        BomRecipeItem steamBom = new BomRecipeItem();
+        steamBom.setId(20L);
+        steamBom.setMaterialTypeId("STEAM");
+        steamBom.setMaterialName("蒸汽");
+        steamBom.setStandardQuantity(new BigDecimal("1"));
+        steamBom.setUnit("kg");
+        steamBom.setMaterialCategory("AUXILIARY");
+        when(bomItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
+                .thenReturn(List.of(steamBom));
+        when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "STEAM"))
+                .thenReturn(List.of("kg"));
+        when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
+
+        RawMaterialType steamMaster = new RawMaterialType();
+        steamMaster.setId("STEAM");
+        steamMaster.setFactoryId(FACTORY_ID);
+        steamMaster.setCategory("辅料");
+        steamMaster.setSelfSupplied(true);
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("STEAM", FACTORY_ID))
+                .thenReturn(Optional.of(steamMaster));
+
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L);
+
+        assertEquals(1, mr.getItems().size());
+        assertTrue(Boolean.TRUE.equals(mr.getItems().get(0).getSelfSupplied()),
+                "普通 BOM 行(非调料表)里的自备料同样要带 selfSupplied=true 快照");
     }
 
     private FactoryWarehouse warehouse(String id, WarehouseType type) {

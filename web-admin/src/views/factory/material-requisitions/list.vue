@@ -28,6 +28,10 @@ interface RequisitionItem {
   wastageQty?: number | string | null;
   returnedQty?: number | string | null;
   unit?: string | null;
+  // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 生成需求单那一刻
+  // RawMaterialType.selfSupplied 的快照。true = 冰水/水/蒸汽/现场自制高汤等配方
+  // 提醒行 —— 不强制填数量、不查库存、不因库存不足拦截。
+  selfSupplied?: boolean | null;
 }
 
 interface Requisition {
@@ -242,6 +246,15 @@ function isPendingQty(item: { requiredQty?: number | string | null }): boolean {
 
 function requiredQtyLabel(item: { requiredQty?: number | string | null }): string {
   return isPendingQty(item) ? '按实际领用' : qty(item.requiredQty);
+}
+
+/**
+ * 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 自备料
+ * (冰水/水/蒸汽/现场自制高汤等) —— 配方提醒行, 不强制填数量、不查库存、
+ * 不因缺库存被拦截。判据只认后端快照 selfSupplied, ⛔ 不猜。
+ */
+function isSelfSupplied(item: { selfSupplied?: boolean | null }): boolean {
+  return item.selfSupplied === true;
 }
 
 function calcReturn(row: ClosePreviewRow): number {
@@ -630,8 +643,13 @@ async function submitConfirm() {
   // 的明确事实, null 才是「我不知道」(正是这道闸原本要防的)。LIUSHANMEN 现场 7 味辅料
   // + L1 纸箱库存全是 0, 用户如实填 0 却被当成"没填"拒绝提交, 领料确认整段卡死。
   // ⇒ 只拦 null/undefined/空串 (真正"没填"), 显式 0 放行。
+  //
+  // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」) 追加: 自备料
+  // (冰水/水/蒸汽/现场自制高汤) 留空是常态, 不是漏填 —— ⛔ 不扩大这道闸的口径去覆盖它
+  // (硬约束: 只在这一处排除自备料, 不弱化对其它行的保护), 而是把它排除在判据之外。
   const missingPending = confirmRows.value.filter(
-    (row) => isPendingQty(row) && (row.pickedInput === null || row.pickedInput === undefined
+    (row) => !isSelfSupplied(row) && isPendingQty(row)
+      && (row.pickedInput === null || row.pickedInput === undefined
       || (row.pickedInput as unknown) === ''),
   );
   if (missingPending.length > 0) {
@@ -883,7 +901,12 @@ async function submitCancel() {
         </el-descriptions>
 
         <el-table :data="detailData.items || []" border size="small" class="detail-table" max-height="360">
-          <el-table-column prop="materialName" label="物料" min-width="150" show-overflow-tooltip />
+          <el-table-column label="物料" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ row.materialName }}
+              <el-tag v-if="isSelfSupplied(row)" type="info" size="small" effect="plain" style="margin-left: 4px">自备料</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="类别" width="90" align="center">
             <template #default="{ row }">{{ materialCategoryLabel(row.materialCategory) }}</template>
           </el-table-column>
@@ -915,29 +938,39 @@ async function submitCancel() {
         <el-descriptions-item label="生产计划">{{ planLabel(confirmTarget.productionPlanId) }}</el-descriptions-item>
       </el-descriptions>
       <el-table :data="confirmRows" border size="small">
-        <el-table-column prop="materialName" label="物料" min-width="180" show-overflow-tooltip />
+        <el-table-column label="物料" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.materialName }}
+            <el-tag v-if="isSelfSupplied(row)" type="info" size="small" effect="plain" style="margin-left: 4px">自备料</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="需求量" width="130" align="right">
           <template #default="{ row }">{{ requiredQtyLabel(row) }}</template>
         </el-table-column>
         <el-table-column label="实际拣货" width="220" align="right">
           <template #default="{ row }">
-            <el-input-number
-              v-model="row.pickedInput"
-              :min="0"
-              :precision="row.materialCategory === 'AUXILIARY' ? 4 : 3"
-              :step="0.001"
-              controls-position="right"
-              class="qty-input"
-              :placeholder="row.autoLocked && !row.manuallyTouched ? '按原料自动计算' : undefined"
-              @change="handlePickedInputChange(row)"
-            />
-            <div v-if="row.autoLocked" class="aux-auto-hint">
-              <el-tag v-if="!row.manuallyTouched" type="success" size="small" effect="plain">自动计算</el-tag>
-              <template v-else>
-                <el-tag type="warning" size="small" effect="plain">手改</el-tag>
-                <el-button link type="primary" size="small" @click="resetAuxToAuto(row)">恢复自动计算</el-button>
-              </template>
-            </div>
+            <!-- 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 自备料不查库存、
+                 不需要称重录入 —— 用一句说明替掉数量输入框, 不让人误以为漏填了。 -->
+            <span v-if="isSelfSupplied(row)" class="field-hint">现场取用，无需称重录入</span>
+            <template v-else>
+              <el-input-number
+                v-model="row.pickedInput"
+                :min="0"
+                :precision="row.materialCategory === 'AUXILIARY' ? 4 : 3"
+                :step="0.001"
+                controls-position="right"
+                class="qty-input"
+                :placeholder="row.autoLocked && !row.manuallyTouched ? '按原料自动计算' : undefined"
+                @change="handlePickedInputChange(row)"
+              />
+              <div v-if="row.autoLocked" class="aux-auto-hint">
+                <el-tag v-if="!row.manuallyTouched" type="success" size="small" effect="plain">自动计算</el-tag>
+                <template v-else>
+                  <el-tag type="warning" size="small" effect="plain">手改</el-tag>
+                  <el-button link type="primary" size="small" @click="resetAuxToAuto(row)">恢复自动计算</el-button>
+                </template>
+              </div>
+            </template>
           </template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="80" align="center" />
