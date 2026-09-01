@@ -334,6 +334,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
         port.setConversionMode(compiled.conversionMode());
         port.setConversionExpression(compiled.conversionExpression());
         port.setStandardQuantity(compiled.standardQuantity());
+        port.setInputShareRatio(compiled.inputShareRatio());
         port.setQuantityMode(compiled.quantityMode());
         port.setSelectionGroupId(compiled.selectionGroupId());
         port.setSelectionGroupLabel(compiled.selectionGroupLabel());

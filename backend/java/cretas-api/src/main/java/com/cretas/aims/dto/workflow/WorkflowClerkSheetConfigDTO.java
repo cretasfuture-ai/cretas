@@ -107,5 +107,10 @@ public class WorkflowClerkSheetConfigDTO {
          * 用枚举会逼出一个「优先谁」的隐式判断。消费端自己决定怎么显示。
          */
         private Boolean defective;
+        /**
+         * 仅 input 端口有意义: 主原料在本工序投入端口间的相对份额(%)。null = 不参与推算。
+         * 报工表/领料单用它做「填一个原料, 其余按份额自动跳」(owner 2026-09-02: 30 吨 ⇒ 70 吨)。
+         */
+        private BigDecimal inputShareRatio;
     }
 }

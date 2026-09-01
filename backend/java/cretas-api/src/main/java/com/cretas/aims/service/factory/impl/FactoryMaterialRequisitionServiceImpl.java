@@ -50,6 +50,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private final FactoryMaterialRequisitionItemRepository itemRepository;
     private final ProductionPlanRepository productionPlanRepository;
     private final BomRecipeItemRepository bomRecipeItemRepository;
+
+    /** 读计划钉住的工艺修订, 把 INPUT 端口的主料份额抄到领料明细。非 final + required=false: 不进 @RequiredArgsConstructor, 兼容既有构造器单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -227,6 +231,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : BigDecimal.ZERO;
+        // 主原料份额: 计划钉住的工艺修订 → INPUT 端口 inputShareRatio → 经 bom_recipe_items.workflow_input_port_id
+        // 抄到明细行。读不到(老修订/没配)就是 null = 按实际领用, ⛔ 不拦单。
+        java.util.Map<String, BigDecimal> inputShares = resolveInputShares(factoryId, plan);
         for (BomRecipeItem bom : bomItems) {
             // 🔴 2026-08-29: 回料(半成品)行**不进原料领料单**。
             //
@@ -267,6 +274,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             // 自备料快照 (缺陷 47): 主循环也要写 —— 冰水等物料并不保证只出现在调料表
             // (appendSeasoningItems), 也可能被建成普通 RAW/AUXILIARY 行。两处不写会漂 (形态 D)。
             item.setSelfSupplied(isSelfSupplied(factoryId, bom.getMaterialTypeId()));
+            // 主料份额 (a): 自备料行不参与推算 —— 它没有领用量, 既不被推也不当基准 (organizer 2026-09-02)。
+            if (category == MaterialCategory.RAW && bom.getWorkflowInputPortId() != null
+                    && !Boolean.TRUE.equals(item.getSelfSupplied())) {
+                item.setInputShareRatio(inputShares.get(bom.getWorkflowInputPortId()));
+            }
             // required_qty = planned_quantity * actual_quantity (按出成率调整), 单位 = BOM unit (e.g. g)
             //
             // BOM 行允许只登记"配方资格"而不填参考用量 (standardQuantity=null). 对**原料/辅料**这不是
@@ -465,6 +477,16 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      * @return 算不出时返回 {@code null}（⛔ 不返回 0：0 会让下游算出「需要 0 kg 调料」，
      *         那是个看起来很确定的假答案）
      */
+    private java.util.Map<String, BigDecimal> resolveInputShares(String factoryId, ProductionPlan plan) {
+        if (workflowRevisionRepository == null || plan.getSelectedWorkflowRevisionId() == null) {
+            return java.util.Map.of();
+        }
+        return workflowRevisionRepository.findById(plan.getSelectedWorkflowRevisionId())
+                .filter(rev -> factoryId.equals(rev.getFactoryId()))
+                .map(rev -> com.cretas.aims.service.workflow.InputShareRatios.fromNodesJson(rev.getNodesJson()))
+                .orElse(java.util.Map.of());
+    }
+
     private BigDecimal plannedRawInputKg(FactoryMaterialRequisition mr) {
         if (mr == null || mr.getItems() == null) {
             return null;

@@ -107,6 +107,10 @@ public class WorkflowTaskPort extends BaseEntity {
     @Column(name = "standard_quantity", precision = 20, scale = 6)
     private BigDecimal standardQuantity;
 
+    /** 主原料份额(%), 冻结自画布 INPUT 端口的 inputShareRatio。null = 不参与推算。 */
+    @Column(name = "input_share_ratio", precision = 9, scale = 4)
+    private BigDecimal inputShareRatio;
+
     @Column(name = "quantity_mode", length = 24)
     private String quantityMode;
 

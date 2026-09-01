@@ -148,6 +148,38 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         assertEquals("FIXED_RATIO", runtimeOutput.path("quantityMode").asText());
     }
 
+    /** owner 2026-09-02 走 (a): 主原料份额进画布 INPUT 端口, 编译进运行时端口。 */
+    @Test
+    void compilesInputShareRatioOnInputPorts() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        Map<String, Object> input = processPorts(definition, "cut").stream()
+                .filter(port -> "INPUT".equals(port.get("direction")))
+                .findFirst().orElseThrow();
+        input.put("inputShareRatio", 30);
+
+        CompiledProductProcessWorkflow.CompiledPort compiledInput = compiler.compile(definition)
+                .portsFor("cut").stream()
+                .filter(port -> "INPUT".equals(port.direction()))
+                .findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("30").compareTo(compiledInput.inputShareRatio()));
+    }
+
+    @Test
+    void rejectsInputShareRatioOutsidePercentRange() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        Map<String, Object> input = processPorts(definition, "cut").stream()
+                .filter(port -> "INPUT".equals(port.get("direction")))
+                .findFirst().orElseThrow();
+        input.put("inputShareRatio", 150);
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(definition));
+    }
+
+    @Test
+    void legacyPortsWithoutShareCompileToNullShare() {
+        assertEquals(null, compiler.compile(linearWorkflow()).portsFor("cut").getFirst().inputShareRatio());
+    }
+
     @Test
     void keepsLegacyPortsWithoutQuantityFieldsCompatible() {
         CompiledProductProcessWorkflow.CompiledPort compiled = compiler.compile(linearWorkflow())

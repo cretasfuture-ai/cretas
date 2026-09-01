@@ -381,6 +381,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .unit(unit.trim())
                 .gramsPerUnit(port.getNetWeightGramsSnapshot())
                 .required(port.getRequired())
+                .inputShareRatio(port.getInputShareRatio())
                 .selectionGroupId(port.getSelectionGroupId())
                 .selectionGroupLabel(port.getSelectionGroupLabel())
                 .selectionGroupMode(port.getSelectionGroupMode())
