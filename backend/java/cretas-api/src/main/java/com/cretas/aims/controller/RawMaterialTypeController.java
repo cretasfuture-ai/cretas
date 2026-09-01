@@ -49,8 +49,14 @@ public class RawMaterialTypeController {
 
     /**
      * 创建原材料类型
+     *
+     * 缺陷 46 (2026-09-02): 原来只认 production:read_write, warehouse_manager/
+     * warehouse_worker 点「新建」必 403 (两个角色的 platform_role_permissions.production
+     * 分别是 'r'/'-')。原料类型字典是仓储主数据, 前端页面写门禁同 commit 已改到
+     * canWrite('warehouse') —— 此处加 warehouse:read_write 作为任一即可的第二条件,
+     * 不移除 production:read_write (生产侧角色仍可写)。
      */
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
     @PostMapping
     @Operation(summary = "创建原材料类型", description = "创建新的原材料类型，需指定名称、编码、类别、单位、存储类型等信息")
     public ApiResponse<RawMaterialTypeDTO> createMaterialType(
@@ -83,8 +89,10 @@ public class RawMaterialTypeController {
 
     /**
      * 更新原材料类型
+     *
+     * 缺陷 46 (2026-09-02): 同 createMaterialType 加 warehouse:read_write, 见上方注释。
      */
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
     @PutMapping("/{id}")
     @Operation(summary = "更新原材料类型", description = "更新原材料类型信息，可修改名称、类别、单位、存储条件等")
     public ApiResponse<RawMaterialTypeDTO> updateMaterialType(
@@ -118,8 +126,10 @@ public class RawMaterialTypeController {
 
     /**
      * 删除原材料类型
+     *
+     * 缺陷 46 (2026-09-02): 同 createMaterialType 加 warehouse:read_write, 见上方注释。
      */
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
     @DeleteMapping("/{id}")
     @Operation(summary = "删除原材料类型", description = "删除指定的原材料类型，已关联的原材料批次不受影响")
     public ApiResponse<Void> deleteMaterialType(

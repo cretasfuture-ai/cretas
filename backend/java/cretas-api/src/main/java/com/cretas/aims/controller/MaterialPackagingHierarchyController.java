@@ -54,7 +54,9 @@ public class MaterialPackagingHierarchyController {
                 service.getByMaterialTypeId(factoryId, materialTypeId, supplierMaterialId).orElse(null));
     }
 
-    @RequirePermission({"production:read_write"})
+    // 缺陷 46 (2026-09-02): 与 RawMaterialTypeController 同一批 —— 加 warehouse:read_write,
+    // 使仓储角色新建/编辑原料类型时一并保存包装规格不再 403 (原来只认 production:read_write)。
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
     @PutMapping("/by-material/{materialTypeId}")
     @Operation(summary = "保存某原料的包装换算 (upsert)", description = "支持多条包装单位直接换算到库存基本单位")
     public ApiResponse<MaterialPackagingHierarchyDTO> upsert(
@@ -66,7 +68,8 @@ public class MaterialPackagingHierarchyController {
         return ApiResponse.success(service.upsert(factoryId, materialTypeId, dto, userId));
     }
 
-    @RequirePermission({"production:read_write"})
+    // 缺陷 46 (2026-09-02): 同上方 upsert —— 加 warehouse:read_write。
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
     @DeleteMapping("/by-material/{materialTypeId}")
     @Operation(summary = "删除某原料的包装换算", description = "软删除")
     public ApiResponse<Void> delete(
