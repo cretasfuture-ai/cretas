@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import router from '@/router';
 
+// 预热: 静态 import 两个 hub 组件, 让 vitest 在**文件加载阶段**(不计入单条测试的
+// timeout)就转译完它们及其内嵌的 4/2 个真实大页面 (stocktakes/index.vue 2226 行
+// 等)。router.push() 命中同一个模块时走缓存, 不再重新转译。
+// ⚠️ 这不是可选的性能优化 —— 没有它, 全量套件并发跑（多 worker 抢 CPU）时,
+// 首次 push 触发的冷转译实测能超过 20000ms 单测超时 (2026-09-01 实测: 单独跑
+// 该文件 5477ms 通过, 混进全量套件后同一条超过 20000ms 判超时, 同一份代码,
+// 差的只是并发负载)。
+import '@/views/warehouse/inventory-query/index.vue';
+import '@/views/warehouse/stocktake-query/index.vue';
+
 /**
  * 2026-09-01 LIUSHANMEN 仓储「库存盘点」菜单收拢 (owner 拍板) —— 硬约束 2:
  * 「Old URLs must have a defined behavior.」六个旧路径不删，只重定向；本文件

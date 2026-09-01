@@ -68,7 +68,12 @@ const BASELINE: Record<string, [string, string]> = {
   '/smart-bi/upload': ['Excel 上传', 'Excel上传'],
   '/system/skill-tools': ['Skill/Tool治理', 'Skill/Tool 治理'],
   '/transfer/list': ['调拨单', '调拨单列表'],
-  '/warehouse/semi-finished': ['半成品库存', '半成品重量库存'],
+  // 2026-09-01: '/warehouse/semi-finished' 这一条已删除 —— LIUSHANMEN 仓储
+  // 「库存盘点」菜单收拢 (owner 拍板) 把它从 menuConfig 里移除、合并进
+  // /warehouse/inventory-query 的「半成品库存」tab；同一 PR 顺手把 route
+  // meta.title 也从 '半成品重量库存' 改成了 '半成品库存'，与菜单曾经的说法
+  // 收敛 (硬约束 4)。路径不再在「菜单 ∩ router」交集里，本闸的棘轮检测会正确
+  // 判定这条基线已过期，所以删掉，⛔ 不留着当免检条目。
   '/warehouse/storage-locations': ['仓储空间与现场盘点', '储存位置与现场盘点'],
 };
 
