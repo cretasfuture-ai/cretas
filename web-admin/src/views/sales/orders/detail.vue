@@ -778,6 +778,10 @@ async function loadAllocationSummaries() {
       allocated,
       planned,
       // 整单都是物料 → 没有任何批次要分, 直接算完成, 否则「继续分配」按钮永远亮着。
+      // 🔴 2026-09-02: 这个 == 特意【没有】跟着缺陷 41 改成 <=。它回答的是「还有没有活要干」
+      // (按钮显示"分配批次"/"继续分配"/"查看修改批次"), 不是「这份分配合不合法」——
+      // 那道校验(handleBatchAllocate 的分配合计检查)已经放宽为 <=, 但已确认的 0.98/1.00 短发
+      // 仍然「没分完」, 按钮理应继续提示"继续分配/修改批次", 而不是谎称"已完成"。
       complete: goodsLines === 0
         ? materialLines > 0
         : planned > 0 && Math.abs(allocated - planned) < 0.000001,
@@ -1357,10 +1361,12 @@ async function handleBatchAllocate() {
   if (activeItems.length === 0) {
     return ElMessage.warning('无需分配 (所有发货行数量为 0)');
   }
-  // Validation: per-item total must equal deliveredQuantity (backend enforces)
+  // Validation: per-item total must not exceed deliveredQuantity (backend enforces same rule).
+  // 🔴 owner 2026-09-02 拍板: 分配合计 <= 发货量 (原「必须等于」把短发——食品厂常态，
+  // 例如车装不下、生产损耗——堵在了这一步；仍然拒绝「分配 > 发货量」这一种超分配真错误)。
   for (const item of activeItems) {
-    // 物料行不参与成品批次分配 —— 不跳过的话它永远「分配合计 0 ≠ 发货量」, 整个对话框提交不了,
-    // 同一张子发运单里只要有一行物料就会把成品行也一起卡死。
+    // 物料行不参与成品批次分配 —— 不跳过的话它永远命中「尚无可分配批次」的空态提示 (它的
+    // allocations 恒为空数组), 同一张子发运单里只要有一行物料就会把成品行也一起卡死。
     if (item.isMaterial) {
       continue;
     }
@@ -1368,8 +1374,8 @@ async function handleBatchAllocate() {
       return ElMessage.warning(`${item.productName}: ${emptyStateDesc(item)}`);
     }
     const total = sumAllocated(item);
-    if (Math.abs(total - item.deliveredQuantity) > 0.001) {
-      return ElMessage.warning(`${item.productName}: 分配合计 ${total} 必须等于发货量 ${item.deliveredQuantity}`);
+    if (total - item.deliveredQuantity > 0.001) {
+      return ElMessage.warning(`${item.productName}: 分配合计 ${total} 超过发货量 ${item.deliveredQuantity}，分配量不能大于发货量`);
     }
     // Duplicate batch guard — backend 先清空再写入 would accept dupes silently.
     const uniqueIds = new Set(item.allocations.map(a => a.finishedGoodsBatchId));
@@ -2720,7 +2726,7 @@ async function handleQuickPayFull() {
         type="info"
         :closable="false"
         title="系统已按 FIFO (生产日期升序) 预填推荐批次"
-        description="每行 '分配合计' 必须等于发货数量才能提交。可手动调整分配数量或选择其他批次。"
+        description="每行 '分配合计' 不能超过发货数量才能提交(可以少分配, 用于短发场景)。可手动调整分配数量或选择其他批次。"
         style="margin-bottom: 12px"
       />
       <div v-if="batchAllocForm.deliveryNumber" style="margin-bottom: 8px; color: #606266;">

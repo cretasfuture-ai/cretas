@@ -227,11 +227,15 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             total = total.add(dto.getAllocatedQty());
         }
 
-        // 3. 总量必须等于发货行数量
-        if (total.compareTo(item.getDeliveredQuantity()) != 0) {
+        // 3. 总量不得超过发货行数量 (🔴 owner 2026-09-02 拍板: 短发是食品厂常态 ——
+        //    实际可用只有 0.98 而计划发 1.00 时, 原来的「必须等于」把短发的人堵在分配这一步,
+        //    逼得所有人绕过分配对话框直接去仓库确认(那里本来就允许 实发 < 计划)。
+        //    仍然拒绝「分配 > 发货行数量」—— 那是超分配, 真错误, 不能放行。
+        if (total.compareTo(item.getDeliveredQuantity()) > 0) {
             throw new BusinessException(400, "批次分配总量 " + total
-                    + " 不等于发货行数量 " + item.getDeliveredQuantity())
-                    .withHint("分配总量必须等于发货行数量").withHintTarget("allocations");
+                    + " 超过发货行数量 " + item.getDeliveredQuantity())
+                    .withHint("分配总量不能超过发货行数量；可少分配(短发), 但不能多分配")
+                    .withHintTarget("allocations");
         }
 
         // 4. 先清空旧分配，再写入
@@ -559,6 +563,11 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         return true;
     }
 
+    // 🔴 2026-09-02: 这里的 == 特意【没有】跟着缺陷 41 改成 <=。allocateBatches 现在允许
+    // 分配合计 < deliveredQuantity (短发), 但 isFullyAllocated 回答的是不同的问题——
+    // 「shipDelivery 还需不需要再跑一次 autoAllocateFifo 去补足差额」。一份已确认的短发分配
+    // (0.98/1.00) 仍然「没补足」，shipDelivery 应该照常尝试补足(补不到就诚实报库存不足)，
+    // 而不是被当成"已经分完了"直接放行——那会绕过库存真实性校验。
     @Override
     public boolean isFullyAllocated(String factoryId, String deliveryItemId) {
         BigDecimal sum = allocationRepository.sumAllocatedQtyByDeliveryItemId(factoryId, deliveryItemId);

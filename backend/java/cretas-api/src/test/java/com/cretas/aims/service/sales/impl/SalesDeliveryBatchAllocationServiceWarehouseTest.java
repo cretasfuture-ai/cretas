@@ -17,6 +17,7 @@ import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationReposito
 import com.cretas.aims.service.factory.WarehouseResolver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -149,6 +150,51 @@ class SalesDeliveryBatchAllocationServiceWarehouseTest {
 
         assertDoesNotThrow(() -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
         verify(allocationRepository).saveAll(anyList());
+    }
+
+    // ─────────────── 缺陷 41 (2026-09-02 owner 拍板): 分配合计 <= 发货行数量 ───────────────
+    // 复现: 六扇门 DLV-20260902-6382 发货行计划发 1.00, 实际只有 0.98 可用(0.02 是生产损耗),
+    // 原来的「必须等于」把短发(食品厂常态)堵死在分配这一步。owner 裁定: 允许分配 < 发货量
+    // (短发), 但仍然拒绝分配 > 发货量(那是超分配, 真错误)。
+
+    @Test
+    @DisplayName("🔴 缺陷41: 分配合计 0.98 < 发货行数量 1.00 → 放行(短发)")
+    void allocateBatches_partialAllocationBelowDeliveredQuantity_isAccepted() {
+        SalesDeliveryItem item = deliveryItem("WH-WKS", new BigDecimal("1.00"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-WKS")).thenReturn(WH_WKS_ID);
+
+        FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(wksBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("0.98"));
+
+        assertDoesNotThrow(() -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        verify(allocationRepository).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("🔴 缺陷41 阴性对照: 分配合计 1.02 > 发货行数量 1.00 → 仍然拒绝(超分配是真错误)")
+    void allocateBatches_overAllocationAboveDeliveredQuantity_isStillRejected() {
+        SalesDeliveryItem item = deliveryItem("WH-WKS", new BigDecimal("1.00"));
+        when(deliveryItemRepository.findById(42L)).thenReturn(Optional.of(item));
+        when(warehouseResolver.resolveId(FID, "WH-WKS")).thenReturn(WH_WKS_ID);
+
+        FinishedGoodsBatch wksBatch = batch("b1", WH_WKS_ID, new BigDecimal("20"));
+        when(finishedGoodsBatchRepository.findById("b1")).thenReturn(Optional.of(wksBatch));
+
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("b1");
+        dto.setAllocatedQty(new BigDecimal("1.02"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.allocateBatches(FID, ITEM_ID, List.of(dto)));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("超过发货行数量"),
+                "拒绝理由应该说清是超分配, 而不是老的「不等于」措辞: " + ex.getMessage());
+        verify(allocationRepository, never()).saveAll(anyList());
     }
 
     @Test

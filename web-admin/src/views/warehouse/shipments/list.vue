@@ -390,7 +390,7 @@ function getStatusText(status: string) {
         <el-tab-pane name="legacy" label="历史出货记录 (只读)">
 
       <el-alert
-        title="旧出货台账已冻结，仅供历史查询；新发货请从销售订单创建发货单，并在左侧待确认页完成仓库确认。"
+        title="旧出货台账已冻结，仅供历史查询；新发货流程：① 在销售订单中创建发货单 → ② 点「新建分批发运」生成子发运单 → ③ 在左侧「销售发货单待确认」页完成仓库确认。"
         type="warning"
         :closable="false"
         show-icon
@@ -490,8 +490,8 @@ function getStatusText(status: string) {
         >
           <template #title>
             <span style="font-size: 13px;">
-              请填写每行实际发货数量 (默认 = 计划数量). 确认后系统将扣减成品库存.
-              如修改数量, 需先到"销售订单 → 发货记录"重新分配批次保证总量匹配.
+              请填写每行实际发货数量 (默认 = 计划数量, 可少填以记录短发). 确认后系统将按已提前分配的批次
+              扣减成品库存; 未提前分配的, 由系统按 FIFO 自动选择批次并记录, 无需先去手动分配。
             </span>
           </template>
         </el-alert>
