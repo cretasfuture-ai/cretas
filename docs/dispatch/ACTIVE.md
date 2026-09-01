@@ -274,6 +274,20 @@
 
 **在飞 3**：#496 单位修 → 复审 → 合 → 部署 → 通知 f006（owner 早上在场走结单）/ 47 🔒（`a3d5a2483b00d63a4`）/ 结单弹窗两处（`a79b8504de3165b5e`）。47 合后通知工艺 chat rebase 配比。
 
+### 📌 2026-09-02 06:25 增量 · 48 上线(部署 17), 47 终审通过待 CI, 合并 65
+
+**部署 16** 06:01 web-only（#499 结单弹窗 UUID→`批次号 · 物料名` + 库存参考按 RAW/LOGISTICS/WORKSHOP 三类仓合计显示分布，镜像 `ensureMaterialBatchAllowedForSettlement` :6022；`list-D8pxQbDO` 含「批次号待加载」）✅ / **17** 06:20:03 blue（#496 缺陷 48，`CustomerSuppliedSettlementCoverageGuard.consumedByOtherSettledPlans` 0→2、旧 `resolvePlanShare` 0 作阴性）✅。生产 = `2bcdb55dd1`；**未部署：#497**（待 CI）。
+
+**#496 终审两轮 → 通过**：第一轮卡单位口径（新聚合只按 materialTypeId、kg 与 个 直接相加）与 `received_quantity`=0 前置（我 prod 排除：5/5 全填）；第二轮：三个聚合改 `UnitQuantity`、**三侧**单位一致才比、不一致跳过 + WARN（`ListAppender` 断言真打了）、聚合内混单位 `unit` 落 null ⇒ 任何比较都不可比（堵住 `merge` 里的漏）、写路径「剩余额度」减法同样守。终审：全关比半开安全（半开产出看起来权威的假数 = 形态 A¹⁰）。**非阻塞跟进（登记）**：`audit()` 里把单位不一致挂成 `Severity.INFO` 可见提示，不只留 `log.warn`（本仓「没人读的告警等于没有」）。既有范围：闸只对 `isWorkflowPlan && CUSTOMER_SUPPLIED` 生效。
+**#497（47 自备料）终审两轮 → 通过**：第一轮卡快照/活值双源（领料三处读行快照、`planNative` 读档案活值 ⇒ owner 勾完冰水会卡在确认领料走不到报工豁免）；修成 `isEffectivelySelfSupplied` = 快照 OR 活值（单向加宽，`findByIdIn` 批量一次 + factoryId 过滤两层边界），矩阵测试两行、变异只红活值行。**⚠️ CI vitest 红 1**：`pendingRequiredQty.source.spec.ts` 按字面正则钉 #469 的留空判断，#497 在同一表达式加豁免 ⇒ 字面变性质没变（C‴），已退执行者改断言守性质 + 补「把 0 当没填 ⇒ 红」阴性。**上线后操作**：物料档案勾「自备料」即可，已生成的领料单不必重建；误勾后生成的单会把 true 定格进快照，取消勾选不改老单（迁移注释的既定意图）。
+**#499**：48 执行者诊断的两条已修并上线（见部署 16）。
+
+**方法学（本段）**：源码闸**守字面就会咬到同一表达式上的正当修改**（今晚第二次同形：#487 的 `reportApprovalMenuMatchesBackendRoles` 守 menu roles[] 被搬到 tab 时也得跟着搬）⇒ 源码闸断言性质（含/不含哪些形状），不断言整段字面。
+
+**早上 owner 在场后（f006 已收）**：硬刷新 → `PLAN-…-34F8CD82` 结单弹窗不再报 5900/3000 那两行 → 阴性对照（手加一条清单外客供批次 ⇒ 拦）→ 真结单 → 核 `CMR-20260831-753973766C24` 5900→5800。
+
+**在飞 1**：#497 断言修 → CI → 合 → 部署 18 → 通知工艺 chat rebase 配比（迁移 `_25`）。**待 owner 醒后**：配比 PR 在工艺 chat 说「开 PR」；46 的 `warehouse_worker` 同获写权限要不要收成角色门；单位不一致 INFO 提示。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
