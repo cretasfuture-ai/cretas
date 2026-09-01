@@ -292,6 +292,23 @@
 
 **部署 18** 06:35:38 green（#497，`FactoryMaterialRequisitionServiceImpl.isEffectivelySelfSupplied` 0→1、48 仍 2、假串 0；`flyway_schema_history 20261101.24 success=t 06:35:46`；两张表 `self_supplied` 列都在；LIUSHANMEN 已勾 0；web `list-BPERIKjL`/`index-CS_YlESX` 含「自备料」经 `index-BwIJqWiw` 挂主入口）✅。#497 的 CI 红修法：`pendingRequiredQty.source.spec.ts` 改成括号计数提取 + 性质断言（含三种「没填」、不含三种「把 0 当没填」）+ 三个合成坏 fixture 阴性 + 真 `list.vue` 变异红绿；`list.vue` 字节不变。**生产 = main = `c3d59bbf93`，无积压，在飞 0。** 交接件 `2026-09-02-ORGANIZER-HANDOFF.md` 已订正为 06:40 版。工艺 chat 已收到 47 合入通知，在 rebase 配比（`_25`），等 owner 在它 session 说「开 PR」。
 
+### 📌 2026-09-02 07:55 增量 · 部署 19/20, 合并 68, 48 热修上线, 建产品 NOT NULL 事故, #443 接手
+
+**owner 醒后裁定/动作**：在工艺 chat 说「合并部署推送吧」（#503）；对我说「合了就直接发 19」「443 还没合并吗」。
+
+**部署 19** 07:30:57 blue（`b2adcfb2f4` = #503 主料份额线 + #504）✅：jar 含 `InputShareRatios.class`/`WorkflowSheetDownstream.class`，`flyway 20261101.25 success=t 07:31:07`，`input_share_ratio` 两列在，web `index-Dd3XQTh7` 含「按配比」。工艺 chat 独立只读复核五项一致，已收本机 worktree。**人工待做（owner 亲手或在工艺 chat 让它陪）**：工艺 190/192 第 1 道三个 INPUT 填 30/30/40 重新发布。
+**部署 20**（`909f71e2e6` = #505 缺陷 48 热修）：**第一次被脚本误回滚** —— `[BG 2/4]` readiness 循环跑在一条远端 ssh 里，只会返回 `UP/RESTART_LIMIT/TIMEOUT`，这次 ssh 35 秒断线返回**空串**，脚本走进「健康检查失败 ⇒ 停 idle + 回滚 jar」；journal green 07:47:40 Started → 07:48:17 Stopping，应用日志 07:48:26 `Started … in 44.651s`（正常）。⇒ **发布脚本三态漏洞（登记，未修）**：空串 = 没量到，应重探不应回滚（memory 已记）。**重发 07:49 → 07:52:00 green ✅**，`filterCustomerOwned` 0→2。生产 = main = `909f71e2e6`。
+
+**合并 68**：#503（终审六条全过 + 27 commit 清单只 4 条碰写路径均过；跟进：`WorkflowReworkDeduction` 零生产调用点 = **回料扣减未上线，⛔ 演示别承诺**；领料读修订 `nodesJson`、报工读编译列，同一值两存储今天一致）/ #504 份额 0 不显示「按配比 0%」/ **#505 缺陷 48 热修**：#496 的规则①②被应用到本批**每一样**消耗，`COMPANY_OWNED` 的冰水/L1纸箱被报「清单之外」—— 我 brief 的「客供料」没落到批次 ownership（f006 认一半：它的阴性对照原文也没写「客供」）⇒ `filterCustomerOwned` 只对 `CUSTOMER_OWNED` 批次校验，三个喂入点全覆盖；终审通过，跟进：查不到 batchId 应 warn、`consumedElsewhere` 不按 ownership 过滤的罕见假拦截。**判据里的限定词不落到字段上等于没有。**
+
+**🔴 建产品 NOT NULL 事故（07:47:51，owner 亲撞）**：建半成品「金检剔出不良品」`PTSEMI-LSM-DEFECT` 被拒 `null value in column "accepts_rework" violates not-null`。#503 迁移加了 NOT NULL 列，实体字段可空无 Java 默认 ⇒ Hibernate 显式插 NULL，DB 默认不生效。**热修已派**（`ad9a6a8bcf4a5cb20`：实体默认 false + 扫 #503 同形列）。⚠️ 这是「合并前 CI/终审都绿、上线后第一次真实写入才炸」—— 终审只判了 4 个写路径 commit 的账本风险，没查「新增 NOT NULL 列 vs 可空实体」这一形状，**登记为终审清单新项**。
+**#506（advisory 口径）**：执行者找到更深根因 —— `resolveAvailableRawStock` 客供分支只查 `CUSTOMER_OWNED`，从没吃到 38 的类别规则（与 38 同根、38 只修了一半，f006 独立核到同一处）；修法复用 `isCompanyStockEligibleCategory` + 仓类型限 RAW/LOGISTICS/WORKSHOP。**CI 两道红**（JPA 启动校验 context 起不来，疑 JPQL 枚举全限定字面量），退执行者改成参数传集合。跟进：全仓数 `== CUSTOMER_SUPPLIED` 收窄查询的地方（`resolveMaterialStockUnit` :1649 同形）。
+**#443 接手**（`afc3cddf0c8099e9f`）：rebase（落后 64，含 #447）、横幅接 `explainStepListFallback`、新流程 `stepFlow` null、画布↔步骤列表往返不丢边测试；回来过终审。
+
+**新登记**：「有 N 行成本未显示 —— 检查来源半成品单价/工序成本/成品成本结算」三个原因都不对，真因 `laborSegments == null`（未录工时）100% 可判 ⇒ 提示应说「本道未录工时」。**方法学**：读数自相矛盾先怀疑标记（f006 用 `CUSTOMER_OWNED|ownership` 读出 7→0）；`filterCustomerOwned` 是好标记（排他/ASCII/19 字符/方法名）。
+
+**在飞 3**：`accepts_rework` 热修 → 发 21 / #506 CI 修 → 合 → 发 21 或 22 / #443 → 终审。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
