@@ -95,7 +95,11 @@ public class CreatePurchaseOrderRequest {
         private String materialName;
 
         @NotNull(message = "数量不能为空")
-        @DecimalMin(value = "0.01", message = "采购数量必须大于0")
+        // 🔴 2026-09-01 缺陷 28: 约束值是 0.01, 文案却说「大于0」。0.001 确实大于 0,
+        //    于是用户照着这句提示【永远改不对】—— 他以为自己填的不是正数, 真实规则是不得小于 0.01。
+        //    ⛔ 没有把约束放宽成 @Positive: 0.001 这种精度下游(折合入库量/单价换算/库存流水)
+        //    能不能承受未经确认, 放宽是改业务规则, 对齐文案只是把已有规则说清楚。
+        @DecimalMin(value = "0.01", message = "采购数量不得小于 0.01")
         private BigDecimal quantity;
 
         @Size(max = 20, message = "单位长度不能超过20个字符")
