@@ -291,14 +291,16 @@ _FACTORY_EXECUTION_RECOVERY_ANSWER = """\
 **验收结果：** 分配结果逐道回读，自动与手动多批数量逐批可见且合计准确；缺口未补足不能确认。回料兼容由服务端复核，三类成本更正都有原因和新旧值审计；重算后的计划、成品与回料单位成本一致。"""
 
 _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER = """\
-自动计划、结算、撤回和报工更正分别解决不同阶段的问题，不能把“修正页面数字”当成直接改库存、成本或历史流水。
+自动计划、自动消耗、客供结算、撤回重结和报工更正分别解决不同阶段的问题，不能把“修正页面数字”当成直接改库存、成本或历史流水。
 
 1. **自动计划权威：** 财审联动创建的新计划与人工计划共用 Workflow/BOM/输出单位解析。有可用 Workflow 时一次固定完整快照；完全没有 Workflow 覆盖时可以保留 `PENDING` 计划作为缺料/采购建议载体。已有配置但没有可用版本、跨工厂或配置冲突仍 fail closed，不能生成半张快照。
 2. **外部 WIP 结算：** “核对结单”使用服务端派生的产量、原料和工时；只有用户显式补充当前工厂可用的外部半成品领用时才把该行合并进结算。空行、低于 `0.01`、超可用量、批次或单位不一致会在任何结算/WIP/OUT 写入前拒绝；成功后必须回读 `SEMI_FINISHED` 消耗和负量 `OUT/SECONDARY_CONSUME` 流水。
 3. **整单撤回与重开：** 正式撤回在同一事务内反向 WIP `IN`、恢复 WIP `OUT`、释放占用、回放成本并完成审计；存在活动下游跨批消费、转出、错向/错量流水或租户不一致时整单停止。结单撤回完整成功后，计划从 `COMPLETED` 回到 `IN_PROGRESS` 并清空实际完成量/结束时间；只有自身已完成的唯一同厂批次才同步重开，不能覆盖真实混合状态。
 4. **已审批报工更正：** 电脑 Web 从“生产管理 → 报工核对”进入“核对修正”。只有专用“报工修正”权限可发起；普通报工员不能发起，审批人由已发布的 `PRODUCTION_REPORT_CORRECTION_APPROVAL` OA 流程决定。草稿 `PENDING_APPROVAL` 期间原报工仍是有效值并阻止结单；批准后只允许修改实际产出、良品/不良品、人数、总工时和备注，永久保留 before/after、原因与审批记录。投入批次、库存流水、成本及计划/批次/工序状态不得被这个入口改写；驳回保持原值。
+5. **自动辅料与包材：** 辅料保存和运行统一读取本工序 kg/g 投入基准，正式报工按“实际投入 kg × g/kg ÷ 1000”计算，盒/箱/袋产出不作为分母。包材先选成品 SKU 包装规格与包材角色，再把每包装层级自然用量折算为每成品基本单位标准用量；例如 `1箱=8盒`、每箱 1 个外箱即 `0.125 个/盒`。投入非质量单位、包装规格失效、读取失败或折算不可计算时失败关闭。
+6. **客供物料结单与重结：** 客供原料、辅料、包材都在独立 `suppliedMaterials` 登记，由仓储受控收货为客户所有权批次；未知分类或 WIP/成品错仓拒绝。结单按精确销售订单行和计划占比核对物料类型、单位与数量，缺项/不足返回 `clean=false`，一键确认在任何写入前停止，只允许人工核对补录。整单撤回后旧结单保留软删除审计，活动唯一性只约束未删除记录；重新核对当前客供覆盖、WIP、库存和成本后可创建一条新的正式结单，旧幂等键不能复用，重试不能重复结单。
 
-**验收结果：** 分别回读计划固定权威、外部 WIP 消耗流水、撤回后的计划/批次状态，以及报工更正的原值、待审批值和批准后值。任何一步失败都不能留下部分库存、成本、状态或审计写入。"""
+**验收结果：** 分别回读计划固定权威、自动辅料/包材折算、客供三分类与结单缺口、外部 WIP 消耗流水、撤回后的计划/批次/新结单状态，以及报工更正的原值、待审批值和批准后值。任何一步失败都不能留下部分库存、成本、状态或审计写入。"""
 
 _RESTAURANT_RUNTIME_TRUTH_ANSWER = """\
 餐饮运行时必须把“没有能力、没有数据、只返回部分数据”和真实的 0 分开；任何一种缺口都不能用演示数字补齐。
@@ -1017,7 +1019,7 @@ def _needs_factory_execution_recovery_guard(query: str) -> bool:
 
 
 def _needs_factory_production_correction_lifecycle_guard(query: str) -> bool:
-    """Keep auto-plan authority, settlement reversal and report correction deterministic."""
+    """Keep auto-plan, automatic consumption, customer settlement and correction deterministic."""
     normalized = (query or "").lower()
     report_correction = any(term in normalized for term in (
         "报工更正", "报工修正", "核对修正", "修正审批",
@@ -1031,7 +1033,25 @@ def _needs_factory_production_correction_lifecycle_guard(query: str) -> bool:
         "外部半成品领用", "外部 wip", "结单撤回", "结算撤回",
         "撤回后计划", "撤回后重开", "wip 撤回", "wip撤回",
     ))
-    return report_correction or auto_plan_authority or settlement_reversal
+    automatic_consumption = (
+        any(term in normalized for term in ("自动辅料", "自动调料", "自动包材", "包材折算", "包装规格"))
+        and any(term in normalized for term in ("投入基准", "g/kg", "实际投入", "自然用量", "标准用量", "每盒", "每箱"))
+    )
+    customer_material_settlement = (
+        any(term in normalized for term in ("客供物料", "客户自带物料", "客供原料", "客户自带原料"))
+        and any(term in normalized for term in ("结单", "结算", "缺项", "不足", "clean=false", "重结"))
+    )
+    resettlement = any(term in normalized for term in (
+        "撤回后重结", "撤回后重新结单", "软删除后重结", "新的正式结单",
+    ))
+    return (
+        report_correction
+        or auto_plan_authority
+        or settlement_reversal
+        or automatic_consumption
+        or customer_material_settlement
+        or resettlement
+    )
 
 
 def _needs_factory_warehouse_governance_guard(query: str) -> bool:

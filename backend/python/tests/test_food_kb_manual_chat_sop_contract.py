@@ -2736,6 +2736,50 @@ def test_20260831_factory_production_correction_lifecycle_is_deterministic_and_i
     assert "投入批次、库存流水、成本及计划/批次/工序状态不得" in answer
 
 
+def test_20260901_factory_auto_consumption_customer_settlement_and_resettlement_are_current():
+    questions = (
+        "自动辅料和包材怎样按实际投入、包装规格折算，客供物料缺项为什么不能一键结单，撤回后怎样重结？",
+        "调料 g/kg 与外箱每盒标准量怎么计算？客户自带原料不足时结算为什么 clean=false，软删除后能否重新结单？",
+        "Workflow 的自动调料、包装自然用量如何落到报工？客供原料辅料包材没收齐时如何补录，整单撤回后怎样创建新结单？",
+    )
+    assert all(_needs_factory_production_correction_lifecycle_guard(q) for q in questions)
+    assert not _needs_factory_production_correction_lifecycle_guard(
+        "餐饮每道菜的毛利能不能自动精确计算？"
+    )
+    answer = _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER
+    assert "实际投入 kg × g/kg ÷ 1000" in answer
+    assert "1箱=8盒" in answer and "0.125 个/盒" in answer
+    assert "客供原料、辅料、包材" in answer
+    assert "客户所有权批次" in answer
+    assert "`clean=false`" in answer
+    assert "任何写入前停止" in answer
+    assert "活动唯一性只约束未删除记录" in answer
+    assert "旧幂等键不能复用" in answer
+
+    factory_sources = [
+        (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/manual/F006-production-full-chain-manual-test-sop.html").read_text(encoding="utf-8"),
+    ]
+    restaurant_sources = [
+        (PROJECT_ROOT / "docs/manual/restaurant-full-chain-sop.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-product-manual.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-metrics-glossary.html").read_text(encoding="utf-8"),
+    ]
+    for text in factory_sources:
+        assert "实际投入 kg" in text
+        assert "0.125" in text
+        assert "clean=false" in text
+        assert "客户所有权" in text
+        assert "唯一性只约束未删除" in text
+        assert "restaurant_owner" not in text
+    for text in restaurant_sources:
+        assert "活动唯一性只约束未删除" not in text
+        assert "客供原料、辅料、包材" not in text
+
+    ai_assist = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
+    assert "自动消耗、客供结单与安全重结" in ai_assist
+
+
 def test_20260830_restaurant_runtime_truth_is_deterministic_and_isolated():
     questions = (
         "SmartBI 接口没上线或 404 时能不能拿演示数据补齐？",
