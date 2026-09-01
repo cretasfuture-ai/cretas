@@ -11,6 +11,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.FactoryService;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.utils.FactoryAccessValidator;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +59,7 @@ class WarehouseInventoryControllerTest {
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private FactoryWarehouseRepository factoryWarehouseRepository;
     @Mock private MaterialBatchMapper materialBatchMapper;
+    @Mock private MaterialBatchService materialBatchService;
     @Mock private HttpServletRequest request;
 
     private WarehouseInventoryController controller;
@@ -69,7 +72,8 @@ class WarehouseInventoryControllerTest {
                 materialBatchRepository,
                 finishedGoodsBatchRepository,
                 factoryWarehouseRepository,
-                materialBatchMapper);
+                materialBatchMapper,
+                materialBatchService);
     }
 
     @Test
@@ -106,6 +110,57 @@ class WarehouseInventoryControllerTest {
         assertEquals("WH-LOG", data.get("warehouseCode"));
         assertEquals(0, data.get("materialCount"));
         assertEquals(0, data.get("productCount"));
+    }
+
+    /**
+     * 缺陷 A (2026-09-02, LIUSHANMEN 生产实测批次 1399): currentQuantity(账面) 5900
+     * 与报工投料区「可用」5800 是两个不同口径, 分仓库存查询必须把「报工在途未结单预扣量」
+     * 一并下发, 前端才能并排显示两个数、各自标清口径, 而不是互相覆盖丢信息。
+     */
+    @Test
+    @DisplayName("queryByWarehouse: 批次的报工在途未结单预扣量透出到 DTO.unsettledConsumption")
+    void queryByWarehouse_setsUnsettledConsumptionOnMaterialDto() {
+        String factoryId = "F001";
+        String warehouseId = "wh-uuid-1";
+        String batchId = "batch-1399";
+
+        FactoryWarehouse wh = new FactoryWarehouse();
+        wh.setId(warehouseId);
+        wh.setFactoryId(factoryId);
+        wh.setCode("WH-WKS");
+        wh.setName("生产仓");
+        wh.setType(WarehouseType.WORKSHOP);
+
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(batchId);
+        batch.setFactoryId(factoryId);
+
+        MaterialBatchDTO dto = new MaterialBatchDTO();
+        dto.setId(batchId);
+        dto.setFactoryId(factoryId);
+        dto.setCurrentQuantity(new BigDecimal("5900"));
+
+        when(factoryWarehouseRepository
+                .findByIdAndFactoryIdAndDeletedAtIsNull(eq(warehouseId), eq(factoryId)))
+                .thenReturn(Optional.of(wh));
+        when(materialBatchRepository.findByFactoryIdAndWarehouseId(eq(factoryId), eq(warehouseId)))
+                .thenReturn(List.of(batch));
+        when(finishedGoodsBatchRepository.findByFactoryIdAndWarehouseId(eq(factoryId), eq(warehouseId)))
+                .thenReturn(Collections.emptyList());
+        when(materialBatchMapper.toDTO(batch)).thenReturn(dto);
+        when(materialBatchService.getUnsettledConsumptionByBatchIds(eq(factoryId), eq(List.of(batchId))))
+                .thenReturn(Map.of(batchId, new BigDecimal("100")));
+
+        ApiResponse<Map<String, Object>> resp =
+                controller.queryByWarehouse(factoryId, null, warehouseId, request);
+
+        @SuppressWarnings("unchecked")
+        List<MaterialBatchDTO> materials = (List<MaterialBatchDTO>) resp.getData().get("materials");
+        assertEquals(1, materials.size());
+        assertEquals(new BigDecimal("5900"), materials.get(0).getCurrentQuantity(),
+                "账面数量不应被预扣量覆盖");
+        assertEquals(new BigDecimal("100"), materials.get(0).getUnsettledConsumption(),
+                "报工在途未结单预扣量应透出到 DTO");
     }
 
     @Test

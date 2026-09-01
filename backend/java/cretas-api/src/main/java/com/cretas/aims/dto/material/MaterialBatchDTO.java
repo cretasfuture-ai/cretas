@@ -94,6 +94,26 @@ public class MaterialBatchDTO {
     @Schema(description = "预留数量")
     private BigDecimal reservedQuantity;
 
+    /**
+     * 报工在途、尚未结单的预扣消耗量 (defect A, 2026-09-02 分仓库存查询)。
+     *
+     * <p>与 {@code currentQuantity}(账面) 是<b>两个不同口径</b>: {@code currentQuantity} =
+     * receiptQuantity − usedQuantity − reservedQuantity, 而 {@code reservedQuantity} 目前
+     * <b>没有报工写入路径会动它</b> —— 报工在途占用走的是另一条账
+     * ({@code material_consumptions.interim_settled_at IS NULL}), 与
+     * 报损/调拨/盘点弹窗同一口径 ({@link com.cretas.aims.service.MaterialBatchService
+     * #getUnsettledConsumptionByBatchIds})。
+     *
+     * <p>⛔ 不要用它覆盖 {@code currentQuantity} —— 两个数各自都对, 合并会丢信息量
+     * (「账面」vs「已减报工预扣的可投料量」)。前端应<b>并排</b>显示
+     * {@code 可用 = max(0, currentQuantity − unsettledConsumption)}。
+     *
+     * <p>{@code null} = 未查询该批次的预扣量 (仅 {@code WarehouseInventoryController
+     * #queryByWarehouse} 填充此字段, 其它端点保持 null; 调用方按 0 处理, 即 可用==账面)。
+     */
+    @Schema(description = "报工在途未结单预扣量 (可用数量 = 当前数量 − 本字段; 仅分仓库存查询端点填充, 其余端点为 null)")
+    private BigDecimal unsettledConsumption;
+
     @Schema(description = "单位")
     private String unit;
 

@@ -11,6 +11,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.FactoryService;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.utils.FactoryAccessValidator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +64,7 @@ public class WarehouseInventoryController {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final FactoryWarehouseRepository factoryWarehouseRepository;
     private final MaterialBatchMapper materialBatchMapper;
+    private final MaterialBatchService materialBatchService;
 
     /**
      * 分仓库存查询 — 返回指定 factory × warehouse 的 material + finished-goods 批次。
@@ -161,6 +164,28 @@ public class WarehouseInventoryController {
                     dto.setWarehouseName(warehouse.getName());
                 })
                 .collect(Collectors.toList());
+
+        // 5b. 缺陷 A (2026-09-02): currentQuantity(账面) 目前恒 == receiptQuantity
+        //     (reservedQuantity 列没有报工写入路径), 报工在途预扣走的是另一条账
+        //     (material_consumptions.interim_settled_at IS NULL) —— 与报损/调拨/盘点弹窗同一
+        //     只读口径 (MaterialBatchService#getUnsettledConsumptionByBatchIds), 这里补齐到 DTO
+        //     上让前端能并排显示「账面 / 可用」, 不重新发明这条查询。
+        //     ⛔ 只读聚合, 不改任何批次列/gate; 查询失败或某批次无未结单消耗 → 字段留 null,
+        //     前端按「无预扣信息, 可用==账面」处理, 不假装知道。
+        List<String> materialIds = materials.stream()
+                .map(MaterialBatchDTO::getId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+        if (!materialIds.isEmpty()) {
+            Map<String, BigDecimal> unsettledByBatch =
+                    materialBatchService.getUnsettledConsumptionByBatchIds(effectiveFactoryId, materialIds);
+            for (MaterialBatchDTO dto : materials) {
+                BigDecimal unsettled = unsettledByBatch.get(dto.getId());
+                if (unsettled != null) {
+                    dto.setUnsettledConsumption(unsettled);
+                }
+            }
+        }
 
         // 6. Query finished-goods batches in this warehouse — uses idx_finished_batch_warehouse composite index.
         //    @Where(deleted_at IS NULL) on FinishedGoodsBatch entity excludes soft-deleted rows.
