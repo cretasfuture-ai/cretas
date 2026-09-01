@@ -119,9 +119,23 @@
             <el-table-column label="供应商料号" width="130">
               <template #default="{ row }">{{ row.supplierMaterialCode || '-' }}</template>
             </el-table-column>
-            <el-table-column label="默认采购价" width="145" align="right">
+            <!-- 🔴 缺陷 35: 列头不说口径、值却有口径 —— owner 表单填含税 2.00, 列表显示 1.77,
+                 长得像「我填的数被系统改了」。列头与取值必须**一起**改, ⛔ 不能只改一头。
+                 现在列头写明含税, 取的也是含税那个字段; 存量基准未知的行单独标出来。 -->
+            <el-table-column label="含税默认采购价" width="165" align="right">
               <template #default="{ row }">
-                {{ row.defaultPurchasePrice == null ? '未设置' : `${row.currency || 'CNY'} ${Number(row.defaultPurchasePrice).toFixed(2)}/${displayUnit(row.purchaseUnit)}` }}
+                <span v-if="row.taxIncludedDefaultPurchasePrice != null">
+                  {{ row.currency || 'CNY' }} {{ Number(row.taxIncludedDefaultPurchasePrice).toFixed(2) }}/{{ displayUnit(row.purchaseUnit) }}
+                </span>
+                <!-- ⛔ 基准未知的存量值不能摆在「含税」列头下面 —— 那是把同一个谎反过来说一遍。 -->
+                <el-tooltip v-else-if="row.defaultPurchasePrice != null" placement="top"
+                            content="这条关系是在「含税/未税」区分之前录入的，无法确定该价格是含税还是未税；编辑并填写含税价即可确认。">
+                  <span class="price-basis-unknown">
+                    {{ row.currency || 'CNY' }} {{ Number(row.defaultPurchasePrice).toFixed(2) }}/{{ displayUnit(row.purchaseUnit) }}
+                    · 基准未知
+                  </span>
+                </el-tooltip>
+                <span v-else>未设置</span>
               </template>
             </el-table-column>
             <el-table-column label="起订量" width="105" align="right">
@@ -303,7 +317,23 @@
         <el-table-column prop="name" label="规格名称" min-width="130" />
         <el-table-column label="采购包装单位" width="120"><template #default="{ row }">{{ displayUnit(row.purchasePackageUnit) }}</template></el-table-column>
         <el-table-column label="换算" min-width="150"><template #default="{ row }">1 {{ displayUnit(row.purchasePackageUnit) }} = {{ row.factor }} {{ displayUnit(row.inventoryBaseUnit) }}</template></el-table-column>
-        <el-table-column label="报价" width="150"><template #default="{ row }">{{ row.quotedPrice == null ? '-' : `${row.currency || 'CNY'} ${Number(row.quotedPrice).toFixed(2)}/${displayUnit(row.purchasePackageUnit)}` }}</template></el-table-column>
+        <!-- 缺陷 35 第二处: 与上面那一列同一个形状(列头无口径 / 值是未税)。
+             ⚠️ 只修关系那一列就又是「改共享结构只改了一部分」—— 这次一起改。 -->
+        <el-table-column label="含税报价" width="165">
+          <template #default="{ row }">
+            <span v-if="row.taxIncludedQuotedPrice != null">
+              {{ row.currency || 'CNY' }} {{ Number(row.taxIncludedQuotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
+            </span>
+            <el-tooltip v-else-if="row.quotedPrice != null" placement="top"
+                        content="该规格的报价是在「含税/未税」区分之前录入的，无法确定口径；编辑并填写含税报价即可确认。">
+              <span class="price-basis-unknown">
+                {{ row.currency || 'CNY' }} {{ Number(row.quotedPrice).toFixed(2) }}/{{ displayUnit(row.purchasePackageUnit) }}
+                · 基准未知
+              </span>
+            </el-tooltip>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.active === false ? 'info' : 'success'">{{ row.active === false ? '停用' : row.defaultSpec ? '默认' : '启用' }}</el-tag></template></el-table-column>
         <el-table-column v-if="canWrite && isActive" label="操作" width="130">
           <template #default="{ row }">
@@ -881,6 +911,9 @@ function formatMoney(value: number | null | undefined): string {
 .tab-toolbar { justify-content: space-between; margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
 .contract-alert { margin-top: 12px; }
 .field-hint { margin-left: 10px; color: var(--el-text-color-secondary); font-size: 12px; }
+/* 缺陷 35: 基准未知的存量价格 —— 视觉上要与「已确认含税」区分开,
+   ⛔ 但不能弱到看不见: 它是一个需要人去确认的状态, 不是次要信息。 */
+.price-basis-unknown { color: var(--el-color-warning); }
 .inline-spec-divider { color: var(--el-text-color-secondary); font-size: 13px; font-weight: 400; }
 .inline-spec-toggle, .spec-add-toggle { display: flex; justify-content: center; margin: 4px 0 12px; }
 .inline-spec-form { margin-top: 4px; }
