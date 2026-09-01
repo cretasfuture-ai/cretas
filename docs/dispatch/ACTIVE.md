@@ -262,6 +262,18 @@
 
 **在飞 4**：31+49t（`aa3b35b873bab5177`）/ 47 🔒（`a3d5a2483b00d63a4`）/ 48 🔒（`a85f90135e94e680f`）/ 49p（`a3a7a38eaf271a120`）。owner 04:5x 睡，48 落地后结单留到早上他在场。
 
+### 📌 2026-09-02 05:40 增量 · 部署 15, 合并 62, 49 订正为「1 真 + 2 误报」, 48 终审卡单位口径
+
+**部署 14** 05:21:41 blue（#492，`SalesServiceImpl.autoPrefillFifoAllocations` 0→1）✅ / **15** 05:35:56 green（#494 #495，`ProductionPlanServiceImpl.scanZeroStockNonRawMaterials` 0→1）✅。生产 = `6da9b7ec63`，无积压。
+
+**合并 62**：#494 **缺陷 49（唯一真的那一处）**：根因不是打印算错 —— 同一计划两张领料单（`MR20260902-0003` / `-0005`，第二张是 f006 让 owner 建来领 L1纸箱 的）各自带整单包材需求 6.94，`aggregateMaterialRequirementRows`（配料单/生产工单/汇总领料单共用）跨单据相加成 13.88；修成 RAW/PACKAGING/SEMI 取 max、AUXILIARY 保留 sum（Sp12T8 既有断言）。#495 **缺陷 31**：根因比「漏报零库存」深 —— `scanMaterialAdvisory` **根本不读 `bom_seasoning_items`**（7 个辅料全在那张表，`bom_recipe_items` 只有 3 RAW + L1纸箱），与 8-18 seasoning 白名单缺口同形；新增「库存为 0（无论投料多少都会拦）」一组，复用 `resolveAvailableRawStock` 口径。
+**🔴 49 订正**：tooltip 的 0.0694 是**熟肉饼 `PLAN-…-B141A9D8` 计划量 1.00** 的正确值，结单弹窗 6.94 是**美式汉堡饼 `…-34F8CD82` 计划量 100** —— 两张计划被并排比了（f006 自认形态 A）。49 = **1 真（打印加倍，已修）+ 2 误报**；执行者加了 100→6.94 / 50→3.47 缩放钉子。落盘件零改动。判据补一条：**跨界面比同一个量，先把「哪张单」写在读数旁边**。
+
+**48（#496）终审：不通过，但方向与主体过**。过：`planShare`（本批必须用完 SO 全量的产生器）连根拔掉；`sourceOrderItemId==null` 时白名单按整张 SO（没反向收紧成按产品）；撤销结单 `ReportReversalServiceImpl:1595` 逐行软删 ⇒ `deletedAtIsNull` 排除；本计划以 `excludePlanId` 排除；`new ProductionSettlementConsumption()` 全仓唯一写点 `:5788`；`sourceType` 字面量两侧一致；旧「自动补行」已删且 derived+manual 全集再过一次 `evaluateAgainstLedger`。**卡**：① 新聚合只按 `materialTypeId`、一处不看 `unit` ⇒ kg 与 个/只 直接相加（修法：单位不一致就不比、按硬约束 4 当没量到，⛔ 不要按 (type,unit) 建 key —— 会造 `received=0` 桶）→ 已退执行者；② `receivedQuantity` 若为 0 明早换句话再拦 → **我 prod 实测已排除**：LIUSHANMEN 5 条客供需求 `received_quantity` 全填（演示 SO 1399上脑 5900/5900、50CL 3000/3000）。⚠️ 既有范围：闸只对 `isWorkflowPlan && CUSTOMER_SUPPLIED` 生效，非 workflow 来料计划不过闸，未改。
+**48 执行者顺手诊断（另派 `a79b8504de3165b5e`）**：结单弹窗 UUID 回退在 `plans/list.vue:5483`（手动加的客供批次结单前 `batchNumber` 空）；「可用 0」不是缓存 —— `rawWarehousePicker.pickRawWarehouse()` 只选一个仓，主仓 40 + 生产仓 10 读成 0。
+
+**在飞 3**：#496 单位修 → 复审 → 合 → 部署 → 通知 f006（owner 早上在场走结单）/ 47 🔒（`a3d5a2483b00d63a4`）/ 结单弹窗两处（`a79b8504de3165b5e`）。47 合后通知工艺 chat rebase 配比。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
