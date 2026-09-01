@@ -1215,16 +1215,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     }
 
     /**
-     * 缺料核算的结果 + <b>没算成的那部分</b>。
+     * 缺料核算的结果 + <b>没算成的那部分</b> + <b>库存本身为 0 的那部分</b>。
      *
      * <p>⚠️ {@code uncomputable} 只进汇总语的<b>口径说明</b>, <b>不</b>做成预警项 ——
      * 实测全库 ACTIVE BOM 里 F006 有 69.2% 的行没有标准用量(7 个配方中 6 个受影响),
      * 做成预警就是天天误报, 而天天误报的提示最终会被人忽略掉(形态 E)。
      * 它要解决的是「一条预警都没有」同时表示「都够」和「一行都没算」这个歧义, 不是催人去配数据。
+     *
+     * <p>🔴 缺陷31 (owner 实测 2026-09-02): {@code zeroStock} 补的是另一个歧义 —— 上面那条
+     * 「缺口」预警<b>只报算得出需求量的那些行</b>。AUXILIARY/PACKAGING 全厂库存为 0 时,
+     * 如果算出的需求量恰好是 0 (辅料用量按 {@code dosagePerKgG} 现场折算, 计划期算不出总量)
+     * 或者这一行连需求量都算不出来(跳进上面的 byReporting/uncomputable), 它就会<b>同时</b>
+     * 不出现在缺口清单、也不出现在豁免清单里 —— 「库存为 0」这件事与需求量多少无关,
+     * 计划期 100% 可判, 不该被「算不出需求量」这件事拖累。
+     * ⛔ 豁免只对 RAW 成立(用量由报工当场决定); 非 RAW 物料库存为 0 时无论投料多少都会拦, 必须说。
      */
     private record AdvisoryScan(List<ProductionPlanMaterialAdvisoryDTO.Item> items,
                                 List<String> byReporting,
-                                List<String> uncomputable) { }
+                                List<String> uncomputable,
+                                List<String> zeroStock) { }
 
     private List<ProductionPlanMaterialAdvisoryDTO.Item> buildMaterialAdvisoryItems(String factoryId, ProductionPlan plan) {
         return scanMaterialAdvisory(factoryId, plan).items();
@@ -1235,7 +1244,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 || plan.getProductTypeId() == null || plan.getProductTypeId().isBlank()
                 || plan.getPlannedQuantity() == null
                 || plan.getPlannedQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
 
         List<BomRecipeItem> bomItems;
@@ -1245,10 +1254,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             bomItems = PlanBomItems.resolve(factoryId, plan, bomRecipeItemRepository);
         } catch (Exception e) {
             log.warn("Material advisory failed to load BOM: planId={}, err={}", plan.getId(), e.getMessage());
-            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
         if (bomItems == null || bomItems.isEmpty()) {
-            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+            return new AdvisoryScan(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
 
         BigDecimal plannedQty = plan.getPlannedQuantity();
@@ -1352,7 +1361,106 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .build());
             }
         }
-        return new AdvisoryScan(warnings, byReporting, uncomputable);
+
+        List<String> zeroStock = scanZeroStockNonRawMaterials(factoryId, plan, bomItems, warnings);
+        return new AdvisoryScan(warnings, byReporting, uncomputable, zeroStock);
+    }
+
+    /**
+     * 缺陷31: 「库存为 0」与需求量多少无关, 计划期 100% 可判 —— 独立于上面那条只报
+     * 「算得出需求量」的缺口扫描。两个来源都要扫:
+     * <ol>
+     *   <li>{@code bom_recipe_items} 里的非 RAW 行 (PACKAGING 等) —— 已经在上面的循环里算过
+     *       需求量的, 已在 {@code warnings} 里, 这里跳过去重; 需求量算不出来 (byReporting/
+     *       uncomputable) 或算出来恰好是 0 的, 从来没进过 warnings, 这里补上。</li>
+     *   <li>{@code bom_seasoning_items} (调料/辅料, 按 {@code dosagePerKgG} 现场折算, 计划期
+     *       从来算不出总量) —— 上面那个循环<b>根本不读这张表</b>, 与 {@code resolveEligibleBomMaterialTypeIds}
+     *       2026-08-18 那次踩的坑 (调料在另一张表, 消费侧只读了 bom_recipe_items) 同一形状。
+     *       实测: 熟肉饼 BOM 的 7 个辅料(洋葱泥/食用盐/白砂糖/复合磷酸盐/黑胡椒/小苏打/白洋葱粒)
+     *       全部只存在于 bom_seasoning_items, {@code bom_recipe_items} 里一行都没有。</li>
+     * </ol>
+     *
+     * <p>库存口径复用 {@link #resolveAvailableRawStock} —— 与上面缺口计算<b>同一个方法</b>
+     * (同租户/同来料归属口径), ⛔ 不新开一条查询。
+     */
+    private List<String> scanZeroStockNonRawMaterials(String factoryId, ProductionPlan plan,
+            List<BomRecipeItem> bomItems, List<ProductionPlanMaterialAdvisoryDTO.Item> warnings) {
+        Set<String> seen = warnings.stream()
+                .map(ProductionPlanMaterialAdvisoryDTO.Item::getMaterialTypeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<String> zeroStock = new ArrayList<>();
+
+        for (BomRecipeItem item : bomItems) {
+            String materialTypeId = item.getMaterialTypeId();
+            if (materialTypeId == null || !seen.add(materialTypeId)) {
+                continue;
+            }
+            if (!isNonRawStockCheckableCategory(item.getMaterialCategory())) {
+                continue;
+            }
+            BigDecimal available = resolveAvailableRawStock(factoryId, plan, materialTypeId);
+            if (available != null && available.compareTo(BigDecimal.ZERO) == 0) {
+                zeroStock.add(resolveLiveMaterialName(materialTypeId, item.getMaterialName()));
+            }
+        }
+
+        if (bomSeasoningItemRepository != null) {
+            Set<String> recipeIds = bomItems.stream()
+                    .map(BomRecipeItem::getRecipeId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            for (String recipeId : recipeIds) {
+                List<com.cretas.aims.entity.bom.BomSeasoningItem> seasoningItems;
+                try {
+                    seasoningItems = bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
+                } catch (RuntimeException ex) {
+                    // ⛔ 读不到调料不能让「原料参考」整个挂掉, 留痕给排查用 (同 6.08.18 那次修复的纪律)。
+                    log.warn("[原料参考] 调料明细读不出来 recipe={}: {}", recipeId, ex.getMessage());
+                    continue;
+                }
+                if (seasoningItems == null) {
+                    continue;
+                }
+                for (com.cretas.aims.entity.bom.BomSeasoningItem seasoning : seasoningItems) {
+                    String materialTypeId = seasoning.getMaterialTypeId();
+                    if (materialTypeId == null || !seen.add(materialTypeId)) {
+                        continue;
+                    }
+                    BigDecimal available = resolveAvailableRawStock(factoryId, plan, materialTypeId);
+                    if (available != null && available.compareTo(BigDecimal.ZERO) == 0) {
+                        zeroStock.add(resolveLiveMaterialName(materialTypeId, seasoning.getName()));
+                    }
+                }
+            }
+        }
+        return zeroStock;
+    }
+
+    /**
+     * RAW 以外、真正代表「投入」且能查库存的类别 —— PACKAGING / AUXILIARY 等。
+     *
+     * <p>⛔ RAW 排除: 它的豁免走「不参与事前核算」名单(投料量由报工当场决定), 不是这里。
+     * ⛔ {@link BomRecipeItem#CATEGORY_BYPRODUCT} 排除: 那是这张配方的产出声明, 不是投入。
+     * ⛔ {@link BomRecipeItem#CATEGORY_SEMI_FINISHED} 排除: 回料没有 materialTypeId, 本来就查不了原料库存。
+     * ⛔ 空/未知类别排除: DB 侧默认值是 "RAW", 测试里 {@code new BomRecipeItem()} 没显式设置类别时
+     *    也是 null —— 按 RAW 处理, 避免把不确定的东西误判成「非 RAW」。
+     */
+    private static boolean isNonRawStockCheckableCategory(String materialCategory) {
+        if (materialCategory == null || materialCategory.isBlank()) {
+            return false;
+        }
+        String upper = materialCategory.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("RAW".equals(upper)) {
+            return false;
+        }
+        if (BomRecipeItem.CATEGORY_BYPRODUCT.equals(upper)) {
+            return false;
+        }
+        if (BomRecipeItem.CATEGORY_SEMI_FINISHED.equals(upper)) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -2825,7 +2933,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 🔴 没算成的那部分要说出来 —— 否则「一条预警都没有」同时表示「都够」和「一行都没算」。
         //    实测 F006 黄油鸡 BOM 7 行里 4 个原料没有标准用量, 缺料核算对它们从未生效。
         //    ⚠️ 只做口径说明, 不做告警(全库 69.2% 的 ACTIVE BOM 行都缺这个数, 告警会天天响)。
+        // 🔴 缺陷31: 三组顺序固定 —— ①缺口(已在上面 warnings 里) ②库存为 0(不看需求量,
+        //    非 RAW 专属) ③豁免名单(byReporting/uncomputable, RAW 专属)。⛔ 不要把 ②挪到 ③后面
+        //    —— 「库存为 0」比「未配标准用量」更值得先看到, 它是拦生产的硬闸, 不是口径说明。
         StringBuilder note = new StringBuilder();
+        if (!scan.zeroStock().isEmpty()) {
+            note.append("（库存为 0（无论投料多少都会拦）：")
+                    .append(String.join("、", scan.zeroStock())).append("）");
+        }
         if (!scan.byReporting().isEmpty()) {
             note.append("（其中 ").append(scan.byReporting().size())
                     .append(" 项投料量由报工当场决定，不参与事前核算：")
@@ -2844,11 +2959,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //
         // ⚠️ 三态, 不是两态 (硬约束 4): 「没量到生产仓」不能折叠进「生产仓没问题」——
         //    没配生产仓的工厂照样会走到这里, 那时宣称「生产仓也已备料」就是一句没量就下的结论。
+        //
+        // 🔴 缺陷31: zeroStock 非空时不许再说「库存足够」——那句话与下面的（库存为 0：...）
+        //    note 直接矛盾。hasWarning 同理要把 zeroStock 算进去。
+        boolean hasZeroStock = !scan.zeroStock().isEmpty();
         String message;
         if (!warnings.isEmpty()) {
             message = "原料库存参考: " + warnings.stream()
                     .map(ProductionPlanMaterialAdvisoryDTO.Item::getMessage)
                     .collect(Collectors.joining("; "));
+        } else if (hasZeroStock) {
+            message = "原料库存参考: 有物料库存为 0（见下）";
         } else if (workshopCaliberAvailable(factoryId, plan)) {
             message = "原料库存参考: 全厂库存足够, 生产仓也已备料";
         } else {
@@ -2858,7 +2979,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return ProductionPlanMaterialAdvisoryDTO.builder()
                 .planId(plan.getId())
                 .planNumber(plan.getPlanNumber())
-                .hasWarning(!warnings.isEmpty())
+                .hasWarning(!warnings.isEmpty() || hasZeroStock)
                 .message(message)
                 .warnings(warnings)
                 .build();
