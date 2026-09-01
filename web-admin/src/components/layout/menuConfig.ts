@@ -107,10 +107,38 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/workflow/copied', title: '抄送我的', icon: '', module: 'dashboard' },
     ],
   },
+  // 研发管理 (2026-09-01 owner 拍板 A2: 重新独立成组)
+  //
+  // ⚠️ 这是**反转**当年那条「UX P2-5: 合并"研发管理" 1-item 组, 减少顶级菜单」。
+  //    反转的理由是**当年那条理由已经不成立**: 合并时它确实只有 1 条, 但
+  //    /rd/converted(已转样品库)一直没有任何入口 —— 菜单里没有, 全仓也 grep 不到
+  //    一处跳转, 用户根本走不到。露出它之后这一组是 2 条, 不再是「1-item 组」。
+  //    (报价详情/三价对比/中报价是从样品页跳进去的 detail 页, 本来就不该进菜单 ——
+  //     samples/list.vue 里有跳转, 它们是可达的, ⛔ 别把它们也当成孤儿页补进来。)
+  //
+  // 🔴 module 一律 'rd' 不是 'production' (2026-08-22 的结论, 随条目一起搬过来):
+  //    声明 production ⇒ 几乎所有生产侧角色都看得见, 但页面调的 /rd/* 端点要 rd
+  //    (只有 12 个角色有) ⇒ 差集那 9 个角色点进去必 403。
+  //    ▎菜单按「有没有 production」判可见, 页面按「有没有 rd」判可用 ——
+  //      中间的差就是「看得见点不开」。⛔ 不是给那 9 个角色开 rd 权限。
+  //
+  // ⚠️ hideForFactoryTypes 必须带上: 原来 /rd/samples 是靠**生产组**的
+  //    hideForFactoryTypes:['RESTAURANT'] 对餐饮租户隐藏的。搬出来不带这个标记
+  //    就等于顺手把研发暴露给餐饮租户 —— 这里保持原可见性不变。
+  {
+    path: '/rd', title: '研发管理', icon: 'Aim', module: 'rd',
+    hideForFactoryTypes: ['RESTAURANT'],
+    children: [
+      { path: '/rd/samples', title: '研发样品', icon: '', module: 'rd' },
+      { path: '/rd/converted', title: '已转样品库', icon: '', module: 'rd' },
+    ],
+  },
+
   {
     // P1-5: restaurants 默认不见 "生产管理" (BOM/批次是 manufacturing 语言,
     // 餐饮用配方/备餐在 /restaurant/recipes)
-    // UX P2-5: 合并"研发管理" 1-item 组, 减少顶级菜单
+    // UX P2-5 曾把"研发管理"并进来(理由: 它只有 1 条, 减少顶级菜单);
+    // 2026-09-01 owner 拍板 A2 又拆回独立组 —— 理由见 /rd 组上的注释。
     path: '/production', title: '生产管理', icon: 'Operation', module: 'production',
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
@@ -158,14 +186,6 @@ const rawMenuConfig: MenuItem[] = [
       // —— 判据见 workflow/__tests__/bomMenuRetired.source.spec.ts。
       // (副产 2026-08-07 阶段 2 起是工序上的真实产出节点, 不再是 BOM 的一类 cell。)
       { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
-      // 🔴 2026-08-22: module 从 'production' 改成 'rd'。
-      // 原来声明 production ⇒ **几乎所有生产侧角色都看得见**, 但页面调的 /rd/* 端点要 rd
-      // (只有 12 个角色有) ⇒ 差集那 9 个角色点进去必 403。
-      // ▎菜单按「有没有 production」判可见, 页面按「有没有 rd」判可用 —— 中间的差就是「看得见点不开」。
-      // ⛔ 不是给那 9 个角色开 rd 权限: 研发样品/报价是研发数据, 不该对生产一线开放。
-      // ⚠️ router/index.ts 里那 5 条 /rd 路由的 meta.module 同步改了 —— 菜单只挡入口,
-      //    报价单/三价对比/中间报价是从样品页跳进去的, 不改路由的话深链照样进得去。
-      { path: '/rd/samples', title: '研发样品', icon: '', module: 'rd' },
       { path: '/analytics/production-report', title: '车间实时生产报表', icon: '', module: 'analytics',
         groupLabel: '生产分析', hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
       { path: '/production-analytics/production', title: '生产数据分析', icon: '', module: 'analytics',
@@ -451,11 +471,16 @@ const rawMenuConfig: MenuItem[] = [
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'sales_manager', 'restaurant_purchaser', 'warehouse_manager', 'procurement_manager'] },
       // ⚠️ 本项 module='procurement' 而 sales_manager **没有** procurement 权限,
       // 所以即使加进 roles 也会被 module 闸挡在前面(守卫先查 module 后查 roles)。
-      // 餐饮侧要不要保留这条、还是改走 /restaurant/requisitions(module=restaurantOps,
-      // 店长已有), 待定 —— 本轮只摘掉两个退役角色, 不擅自改 module 断工厂侧。
+      // 2026-09-01 owner 拍板 B1, 上面那个「待定」由此了结: **保留**, 但换成餐饮自己的
+      // 地址 /restaurant/purchase-plan(同一个页面组件, 见 router/index.ts)。
+      // ⛔ 没有改走 /restaurant/requisitions —— 那条已经在本组里了, 标题是「领料管理」,
+      //    跟报货是两回事, 当年那个备选方案实际上不可用。
+      // Why 要拆: 原来两侧共用 /procurement/requisitions/my, 而面包屑的上一级是**静态的
+      // 只有一个值** ⇒ 给餐饮侧写对就把工厂侧写错。现在工厂侧仍走 /procurement/
+      // requisitions/my(「我的请购」), 两侧各自的面包屑都对得上自己的侧边栏组。
       // restaurant_purchaser 同样是被上面那条败的注释一起摘掉的 —— 报货/采购计划
       // 正是采购部门的活。V20261029_64 给了它 procurement:'rw', module 闸能过。
-      { path: '/procurement/requisitions/my', title: '报货/采购计划', icon: '', module: 'procurement',
+      { path: '/restaurant/purchase-plan', title: '报货/采购计划', icon: '', module: 'procurement',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'warehouse_manager', 'procurement_manager'] },
 
       // ── 市场 ────────────────────────────────────────────────────
@@ -582,6 +607,7 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/procurement': 30,
   '/sales': 40,
   '/finance': 50,
+  '/rd': 55,
   '/production': 60,
   '/warehouse': 70,
   '/quality': 80,

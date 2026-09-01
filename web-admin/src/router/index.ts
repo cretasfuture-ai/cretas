@@ -1866,6 +1866,24 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
         redirect: '/restaurant/requisitions',
         meta: { requiresAuth: true, title: '餐饮运营', icon: 'Bowl', module: 'restaurant' },
         children: [
+          // 餐饮侧的报货入口 (2026-09-01 owner 拍板 B1)。
+          //
+          // 与工厂侧 /procurement/requisitions/my 是**同一个页面组件**, 只是两边叫法不同
+          // (工厂「我的请购」/ 餐饮「报货·采购计划」)。原来两侧共用一条路由, 而
+          // meta.breadcrumbParent 是静态的只有一个值 ⇒ 给餐饮侧写对就把工厂侧写错。
+          //
+          // ⇒ 各给一条路由。这里**不需要** breadcrumbParent: 父级 /restaurant 的 title
+          //   就是「餐饮运营」, 面包屑天然渲染成「餐饮运营 / 报货·采购计划」。
+          //
+          // 🔴 module 写 'procurement' 不是 'restaurant': 守卫读的是 to.meta 这份**合并后**
+          //    的 meta(子覆盖父), 所以这里写 procurement 就等价于原来那条路由的判定 ——
+          //    ⛔ 不会因为挂在 /restaurant 下而额外要求 restaurant 模块, 可见性零变化。
+          {
+            path: 'purchase-plan',
+            name: 'RestaurantPurchasePlan',
+            component: () => import('@/views/procurement/requisitions/my-list.vue'),
+            meta: { requiresAuth: true, title: '报货/采购计划', module: 'procurement' }
+          },
           // 四部门驾驶舱 (2026-07-31)。四条共用一个组件, 差异在
           // views/restaurant/departments/departmentConfig.ts。
           // meta.module 用四个部门权限键 —— guards 的模块闸据此放行, 没权限的

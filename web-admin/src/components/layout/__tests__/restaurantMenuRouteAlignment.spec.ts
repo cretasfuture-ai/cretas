@@ -91,6 +91,11 @@ describe('餐饮功能页按五部门归属', () => {
   const DELIBERATE_EXCEPTIONS: Record<string, string> = {
     '/restaurant/supplier-delivery':
       '跨工厂/餐饮两侧使用(warehouse_manager / procurement_manager 也在用, 而这些角色 restaurant=-)',
+    '/restaurant/purchase-plan':
+      '跨工厂/餐饮两侧的同一个页面(与工厂侧 /procurement/requisitions/my 同组件), '
+      + '权限挂在 procurement 而不是 restaurantProcurement。⛔ 不能为了过本闸把 module 改成 '
+      + 'restaurantProcurement —— 菜单按 module 判可见, 路由也按 module 判可用, 只改菜单那一侧 '
+      + '就会变成「看得见点不开」。与 /restaurant/supplier-delivery 同形。',
     '/restaurant/data-completeness': '跨部门数据基础设施, 归进任一部门会让其余三个找不到',
     '/restaurant/admin/etl-status': 'admin 页, 只给平台管理员',
     '/restaurant/admin/name-resolution': 'admin 页, 只给平台管理员',
