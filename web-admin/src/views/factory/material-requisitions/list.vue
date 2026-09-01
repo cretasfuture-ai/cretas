@@ -13,6 +13,8 @@ import {
 } from '@/constants/rawWorkflowOwnerAnchor';
 import { handleCatchError } from '@/utils/errorToast';
 import { listWarehouses } from '@/api/factoryWarehouse';
+import { bomSeasoningApi } from '@/api/bom';
+import { deriveAuxiliaryQty, rawPickedTotalKg, splitZeroQtyRows } from './confirmPickingAuxDerive';
 
 interface RequisitionItem {
   id: string;
@@ -96,10 +98,19 @@ const closeRows = ref<ClosePreviewRow[]>([]);
 interface ConfirmPickRow extends RequisitionItem {
   // null = 「用量待定」行留空待仓管称重录入 (见 prepareConfirmDialog); 不是 0。
   pickedInput: number | null;
+  // true = 辅料行命中了 BOM 调料配方的 dosagePerKgG 比例, 由 RAW 合计自动推算
+  // (owner 2026-09-02 拍板)。false/undefined = 没有比例数据, 维持人工填 (老行为)。
+  autoLocked?: boolean;
+  // true = 用户手改过这一行的自动计算值 —— 之后 recalc 不再覆盖它, 直到点
+  // 「恢复自动计算」重置 (owner 卡点②: 现场多放了盐是真实的, 不能被静默吃掉)。
+  manuallyTouched?: boolean;
 }
 const confirmDialogVisible = ref(false);
 const confirmTarget = ref<Requisition | null>(null);
 const confirmRows = ref<ConfirmPickRow[]>([]);
+// 物料id(materialTypeId) → dosagePerKgG(g/kg投入) —— 来自该计划产品当前 BOM 的调料配方
+// (bomSeasoningApi.getByProduct), 供辅料行实时推算。见 loadAuxRatios / recalcAuxRows。
+const auxRatioMap = ref<Record<string, number>>({});
 
 // 取消原因: 标准选项 (Rule 3 防呆 — 自由文本改约束选择), 选"其他"才显文本框。
 const CANCEL_REASON_OPTIONS = ['计划取消', '需求变更', '重复单据', '数量错误', '其他'] as const;
@@ -404,24 +415,106 @@ const handleStartPicking = (row: Requisition) =>
   handleAction(row, 'start-picking', `开始备料 ${row.requisitionNo}?`, '已进入备料状态');
 
 // 物料行摘要 HTML (供调拨/签收富确认弹窗使用) — Rule 2 防呆: 上下文带品名+数量+仓库, 不只给个单号。
+//
+// 缺陷43 (owner 2026-09-02 演示走查, 同一屏): 11 行里 8 行「× 0kg」占了 73% 篇幅,
+// 真正要看的 3 行反而要滚动。⛔ 不删零值行 —— 0 是明确的事实 (#469: 0=这次不领,
+// 审计要留痕), 只是不该占主视野。非零行照常逐行列出、排最前; 零值行折进一条可展开
+// 摘要。这段 HTML 走 ElMessageBox 的 dangerouslyUseHTMLString, 没有 Vue 事件绑定,
+// 折叠交互只能用原生 <details>/<summary> (浏览器原生行为, 不需要 JS)。
 function buildItemsSummaryHtml(items: RequisitionItem[], qtyField: 'pickedQty' | 'issuedQty'): string {
   if (items.length === 0) return '<div style="color:#909399">（无物料行）</div>';
-  const rows = items
-    .map((it) => {
-      const name = it.materialName || it.materialTypeId || '-';
-      const amount = qty(it[qtyField] ?? it.pickedQty);
-      const unit = it.unit || '';
-      return `<div>${name} × ${amount}${unit}</div>`;
-    })
-    .join('');
-  return `<div style="margin-top:8px;max-height:200px;overflow-y:auto">${rows}</div>`;
+  const rowHtml = (it: RequisitionItem) => {
+    const name = it.materialName || it.materialTypeId || '-';
+    const amount = qty(it[qtyField] ?? it.pickedQty);
+    const unit = it.unit || '';
+    return `<div>${name} × ${amount}${unit}</div>`;
+  };
+  const { nonZero, zero } = splitZeroQtyRows(items, (it) => toNumber(it[qtyField] ?? it.pickedQty));
+  const nonZeroHtml = nonZero.map(rowHtml).join('');
+  const zeroHtml = zero.length > 0
+    ? `<details style="margin-top:4px;color:#909399"><summary style="cursor:pointer">另有 ${zero.length} 项本次不领</summary>${zero.map(rowHtml).join('')}</details>`
+    : '';
+  return `<div style="margin-top:8px;max-height:200px;overflow-y:auto">${nonZeroHtml}${zeroHtml}</div>`;
 }
 
 function hasPickedQuantity(items: RequisitionItem[]): boolean {
   return items.some((item) => toNumber(item.pickedQty) > 0);
 }
 
-function prepareConfirmDialog(data: Requisition) {
+// 辅料自动计算 (owner 2026-09-02 拍板, 逐字引用见 confirmPickingAuxDerive.ts 头部):
+// 「原料放最前面填, 辅料基本不用填, 自动计算; 改原料它就重新算。」
+//
+// productionPlanId → productTypeId 只能现查 (Requisition 实体没有 productTypeId 字段,
+// 只有 productionPlanId/productName 快照), 再用 productTypeId 查该产品当前 BOM 的调料配方
+// (bomSeasoningApi.getByProduct, 只读, 与「生成」弹窗用的 plannedRawInputKg 后端口径同源:
+// FactoryMaterialRequisitionServiceImpl#seasoningRequiredQty 的 dosagePerKgG × 投入kg ÷ 1000)。
+async function resolveProductTypeId(planId: string): Promise<string | null> {
+  try {
+    const res = await get<{ productTypeId?: string | null }>(`/${factoryId.value}/production-plans/${planId}`);
+    if (!res.success) return null;
+    return (res.data as { productTypeId?: string | null } | undefined)?.productTypeId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadAuxRatios(productionPlanId?: string | null) {
+  auxRatioMap.value = {};
+  if (!factoryId.value || !productionPlanId) return;
+  const productTypeId = await resolveProductTypeId(productionPlanId);
+  if (!productTypeId) return;
+  try {
+    const res = await bomSeasoningApi.getByProduct(factoryId.value, productTypeId);
+    if (!res.success || !res.data) return;
+    const map: Record<string, number> = {};
+    (res.data.seasoningItems || []).forEach((s) => {
+      if (!s.materialTypeId) return;
+      // 镜像后端 seasoningRequiredQty 口径: COOKING 段且不计入调料成本的行(如老汤)不参与自动计算
+      if (s.section === 'COOKING' && s.countInSeasoning === false) return;
+      const dosage = Number(s.dosagePerKgG);
+      if (Number.isFinite(dosage) && dosage > 0) map[s.materialTypeId] = dosage;
+    });
+    auxRatioMap.value = map;
+  } catch {
+    // best-effort: 比例拿不到就退回人工填 (老行为), 不阻塞确认领料主流程
+  }
+}
+
+// 用 RAW 行的「实际拣货」合计, 实时重算命中比例的辅料行 —— 写路径①(见 PR 说明「AUX 写路径普查」)。
+// ⛔ 只接管 materialCategory==='AUXILIARY' 且命中 auxRatioMap 的行: 没有比例数据的辅料 (未在
+// BOM 调料表登记) 和 PACKAGING (走的是另一条与 RAW 无关的口径, 没有 dosagePerKgG 这类比例数据,
+// 见本文件顶部 import 处的 PR 说明) 维持人工填, 不接管 —— 不编一个没有数据支撑的公式。
+function recalcAuxRows() {
+  const totalKg = rawPickedTotalKg(confirmRows.value);
+  confirmRows.value.forEach((row) => {
+    if (row.materialCategory !== 'AUXILIARY') return;
+    const ratio = row.materialTypeId ? auxRatioMap.value[row.materialTypeId] : undefined;
+    if (ratio === undefined) return;
+    row.autoLocked = true;
+    // 手改保护 (owner 卡点②): 用户已经动过这一行, recalc 不再覆盖, 直到「恢复自动计算」重置。
+    if (row.manuallyTouched) return;
+    row.pickedInput = deriveAuxiliaryQty(ratio, totalKg, row.unit);
+  });
+}
+
+// 输入框 @change —— 写路径②(RAW 行变化触发重算) / 写路径③(用户手改自动计算行, 打上手改标记)。
+function handlePickedInputChange(row: ConfirmPickRow) {
+  if (row.materialCategory === 'RAW') {
+    recalcAuxRows();
+    return;
+  }
+  if (row.autoLocked) {
+    row.manuallyTouched = true;
+  }
+}
+
+// 「恢复自动计算」—— 写路径④: 清掉手改标记, 立即用当前 RAW 合计重算这一行。
+function resetAuxToAuto(row: ConfirmPickRow) {
+  row.manuallyTouched = false;
+  recalcAuxRows();
+}
+
+async function prepareConfirmDialog(data: Requisition) {
   confirmTarget.value = data;
   confirmRows.value = (data.items || []).map((item) => {
     const picked = toNumber(item.pickedQty);
@@ -431,6 +524,8 @@ function prepareConfirmDialog(data: Requisition) {
     return {
       ...item,
       pickedInput: picked > 0 ? picked : (isPendingQty(item) ? null : toNumber(item.requiredQty)),
+      autoLocked: false,
+      manuallyTouched: false,
     };
   });
   confirmDialogVisible.value = true;
@@ -440,6 +535,9 @@ function prepareConfirmDialog(data: Requisition) {
       productName: data.productName,
     };
   }
+  // 比例是异步查回来的; 先把对话框和 RAW 行原样呈现, 比例到了再补算辅料行 (不阻塞打开对话框)。
+  await loadAuxRatios(data.productionPlanId);
+  recalcAuxRows();
 }
 
 // 调拨: 备料仓 → 生产仓, 富确认带品名+数量+仓库路由 (对齐「确认领料」上下文标准, 不是裸单号弹窗)。
@@ -451,7 +549,7 @@ async function handleTransfer(row: Requisition) {
     const items = data.items || [];
     if (!hasPickedQuantity(items)) {
       ElMessage.warning('请先确认领料数量，再调拨到生产仓');
-      prepareConfirmDialog(data);
+      void prepareConfirmDialog(data);
       return;
     }
     const from = warehouseName(data.sourceWarehouseId);
@@ -511,7 +609,7 @@ async function openConfirmDialog(row: Requisition) {
   try {
     const data = await fetchDetail(row);
     if (!data) return;
-    prepareConfirmDialog(data);
+    void prepareConfirmDialog(data);
   } catch (e) {
     handleCatchError(e, '加载领料明细失败');
   }
@@ -806,7 +904,7 @@ async function submitCancel() {
 
     <el-dialog v-model="confirmDialogVisible" :title="`确认领料 ${confirmTarget?.requisitionNo || ''}`" width="820px" destroy-on-close>
       <el-alert
-        title="仓管确认实际拣货数量。默认已按需求量预填，核对无误直接确认；确认后可调拨到生产仓。"
+        title="原料请先称重录入实际拣货数量；辅料按原料合计自动实时计算，无需手填。改了原料，辅料会重新算；要人工改辅料也可以直接改，改后不再被覆盖（可点「恢复自动计算」重置）。确认后可调拨到生产仓。"
         type="info"
         :closable="false"
         show-icon
@@ -821,16 +919,25 @@ async function submitCancel() {
         <el-table-column label="需求量" width="130" align="right">
           <template #default="{ row }">{{ requiredQtyLabel(row) }}</template>
         </el-table-column>
-        <el-table-column label="实际拣货" width="180" align="right">
+        <el-table-column label="实际拣货" width="220" align="right">
           <template #default="{ row }">
             <el-input-number
               v-model="row.pickedInput"
               :min="0"
-              :precision="3"
+              :precision="row.materialCategory === 'AUXILIARY' ? 4 : 3"
               :step="0.001"
               controls-position="right"
               class="qty-input"
+              :placeholder="row.autoLocked && !row.manuallyTouched ? '按原料自动计算' : undefined"
+              @change="handlePickedInputChange(row)"
             />
+            <div v-if="row.autoLocked" class="aux-auto-hint">
+              <el-tag v-if="!row.manuallyTouched" type="success" size="small" effect="plain">自动计算</el-tag>
+              <template v-else>
+                <el-tag type="warning" size="small" effect="plain">手改</el-tag>
+                <el-button link type="primary" size="small" @click="resetAuxToAuto(row)">恢复自动计算</el-button>
+              </template>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="80" align="center" />
@@ -955,6 +1062,15 @@ async function submitCancel() {
 
 .qty-input {
   width: 132px;
+}
+
+.aux-auto-hint {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 12px;
 }
 
 .danger {
