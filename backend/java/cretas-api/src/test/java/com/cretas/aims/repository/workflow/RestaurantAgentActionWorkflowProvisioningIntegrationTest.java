@@ -240,10 +240,20 @@ class RestaurantAgentActionWorkflowProvisioningIntegrationTest {
         // Map JSON on a full EntityManager reload; production PostgreSQL does not.
         entityManager.detach(configured);
 
-        assertThatThrownBy(() -> engine.transitionNode(
-                started.getId(), 42L, "restaurant_owner", HistoryAction.APPROVE, "approve"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("WORKFLOW_BOUND_DEFINITION_CHANGED");
+        // 守的行为没变: 定义漂移之后不许再 transition。
+        //
+        // ⚠️ 但认它的方式变了 —— 这条断言原本拿【message 含英文常量】当判据,
+        // 而那正是缺陷 27-C 要消灭的东西(英文常量直接甩给一线)。常量现在挪到了
+        // errorCode(机器读), message 换成中文(人读)。
+        // ⇒ 把判据从【字面】抬到【性质】, 并补一条阴性对照钉住常量不许回到 message 里。
+        BusinessException drift = (BusinessException) org.assertj.core.api.Assertions
+                .catchThrowable(() -> engine.transitionNode(
+                        started.getId(), 42L, "restaurant_owner", HistoryAction.APPROVE, "approve"));
+        assertThat(drift).isInstanceOf(BusinessException.class);
+        assertThat(drift.getErrorCode()).isEqualTo("WORKFLOW_BOUND_DEFINITION_CHANGED");
+        assertThat(drift.getMessage())
+                .as("缺陷 27-C: 英文常量不许再当 message 下发给一线")
+                .doesNotContain("WORKFLOW_BOUND_DEFINITION_CHANGED");
 
         assertThat(started.getStatus()).isEqualTo(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
         assertThat(started.getCurrentNodeIds()).containsExactly("human_review");
