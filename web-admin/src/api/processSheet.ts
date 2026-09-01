@@ -557,6 +557,14 @@ export interface WorkflowPortDescriptor {
    */
   byproduct?: boolean | null;
   /**
+   * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**回料**。
+   *
+   * ⚠️ 2026-09-01 发现: 后端 `PortDescriptor.rework` **一直在发**, 而这份 TS 镜像
+   * 从来没声明它 —— 于是前端拿不到回料角色, 报工单上回料和普通半成品产出长得一样。
+   * (`byproduct` 有声明, `rework` 漏了; 两个字段是同一批加的。)
+   */
+  rework?: boolean | null;
+  /**
    * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**不良品**
    * (剔出来、还没复查的那部分)。
    *

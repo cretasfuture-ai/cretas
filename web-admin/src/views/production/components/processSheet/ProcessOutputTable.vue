@@ -291,6 +291,49 @@ function gridStyle(): Record<string, string> {
           </div>
 
           <!--
+            回料条目 —— owner 2026-09-01 要求三类**填在同一处**。
+            ⛔ 它**不在**上面那个二选一里, 是独立的第三块:
+               回料不是这一行的副产明细, 是**另一条产出条目**被搬过来显示,
+               值写回它自己的 MultiOutputLine, 提交负载不变。
+            ⛔ 只给「数量」没有「回收单价」—— 回料走 semi_finished_inventory
+               带移动加权成本进下一批, 不是回收物。
+            ⚠️ 用独立 v-if 而不是接进上面的 v-else 链: 接进去会让「有回料 + 手填副产」
+               这一种组合里的手填字段整块消失(本轮实测过一次)。
+          -->
+          <div
+            v-if="view.inlineReworkViews.length > 0"
+            class="sp-io-detail-fields"
+            data-testid="rework-inline-list"
+          >
+            <div
+              v-for="rw in view.inlineReworkViews"
+              :key="rw.line.workflowPortId"
+              class="sp-byproduct-bound"
+              data-testid="rework-inline-item"
+            >
+              <span class="sp-byproduct-name">
+                <el-tag size="small" type="warning" data-testid="rework-inline-role">回料</el-tag>
+                <strong>{{ rw.line.materialName }}</strong>
+              </span>
+              <label>数量
+                <span class="sp-inline-input" role="group" :aria-label="`${rw.line.materialName} 回料产出数量与单位`">
+                  <el-input-number
+                    v-model="rw.line.quantity"
+                    :min="0"
+                    :precision="rw.quantityPrecision"
+                    controls-position="right"
+                    size="small"
+                    :data-testid="`rework-inline-quantity-${rw.line.workflowPortId}`"
+                    :aria-label="`${rw.line.materialName} 回料产出数量`"
+                  />
+                  <span class="sp-fixed-unit">{{ rw.unitLabel }}</span>
+                </span>
+              </label>
+              <span v-if="rw.line.batchNumber" class="sp-rework-batch">批次 {{ rw.line.batchNumber }}</span>
+            </div>
+          </div>
+
+          <!--
             成本分摊比例与重量提示与「副产怎么录」无关, 所以放在二选一之外 ——
             放进任一分支都会让另一种模式下它凭空消失。
           -->
@@ -450,6 +493,7 @@ function gridStyle(): Record<string, string> {
   padding: 4px 0;
 }
 .sp-byproduct-bound + .sp-byproduct-bound { border-top: 1px dashed #eef1f6; }
+.sp-rework-batch { color: #8a5a17; font-size: 12px; }
 .sp-byproduct-name {
   display: inline-flex;
   align-items: center;

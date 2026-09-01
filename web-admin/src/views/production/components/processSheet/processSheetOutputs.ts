@@ -83,6 +83,18 @@ export interface MultiOutputLine {
    */
   isDefective: boolean;
   /**
+   * 画布上这个物料 Cell 被标记成了回料。
+   *
+   * 🔴 回料与另外两类的**关键不同**：它仍然是一条**独立的产出条目**（有自己的
+   * quantity / batchNumber，进 `semi_finished_inventory`、带移动加权成本进下一批），
+   * ⛔ 不是副产明细。owner 2026-09-01 要求三类**填在同一处**，所以它只是
+   * **渲染位置**挪进了「不良品/副产」区 —— 提交负载一个字节都没变。
+   *
+   * ⚠️ 这个区别是本文件最容易被后来者抹平的地方：把回料改成 BoundByproductLine
+   * 会让它走副产那条 `material_batches` 链，成本直接丢。
+   */
+  isRework: boolean;
+  /**
    * 画布已经绑定好的副产 —— SKU 是配置出来的, 用户只填数量和回收单价。
    *
    * 非空时**取代**下面那三个手填字段 (二选一, 见 `byproductEntryMode`): 同一个事实
@@ -126,6 +138,13 @@ export interface OutputLineView {
   weightHint: string | null;
   /** Workflow 已配置单位净重时显示的规格，如 800g/盒；缺数据时不猜。 */
   specLabel: string | null;
+  /**
+   * 渲染在本行「不良品/副产」区里的**回料**条目（只有宿主行非空）。
+   *
+   * ⛔ 它们不是这一行的副产明细，是**别的产出条目**被搬过来显示。
+   * 各自的值仍然写回自己的 `MultiOutputLine`，提交时照旧走产出数组。
+   */
+  inlineReworkViews: OutputLineView[];
 }
 
 // -------------------------------------------------------------------------
@@ -182,6 +201,11 @@ function isInlineRolePort(port: ByproductPartitionablePort): boolean {
  */
 export function boundOutputRoleOf(port: ByproductPartitionablePort): BoundOutputRole {
   return port.defective === true ? 'DEFECTIVE' : 'BYPRODUCT';
+}
+
+/** 这条产出是不是回料 —— 决定它渲染在行里还是「不良品/副产」区里。 */
+export function isReworkLine(line: Pick<MultiOutputLine, 'isRework'>): boolean {
+  return line.isRework === true;
 }
 
 /**

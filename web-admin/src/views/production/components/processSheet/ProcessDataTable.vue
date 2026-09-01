@@ -33,7 +33,7 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
-import { boundOutputRoleOf, byproductEntryMode, partitionOutputPorts } from './processSheetOutputs';
+import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
 import type { BoundByproductLine, MultiOutputLine, OutputLineView } from './processSheetOutputs';
 import type {
   InputSourceLineView,
@@ -878,6 +878,7 @@ function initMultiOutputs(): MultiOutputLine[] {
     finished: p.finished === true,
     isByproduct: p.byproduct === true,
     isDefective: p.defective === true,
+    isRework: p.rework === true,
     required: p.required === true,
     selected: portSelectedByDefault(p),
     quantity: null,
@@ -1167,6 +1168,7 @@ function multiOutputLineFromView(view: ProcessSheetRowView): MultiOutputLine {
     finished: port ? port.finished === true : p.finished === true,
     isByproduct: port ? port.byproduct === true : false,
     isDefective: port ? port.defective === true : false,
+    isRework: port ? port.rework === true : false,
     required: port?.required ?? true,
     selected: true,
     quantity: p.outputQuantity ?? null,
@@ -1784,8 +1786,37 @@ function outputLinePrecision(line: MultiOutputLine): number {
  * 所有派生值都在这里算完 —— 卡片模式和表格模式传同一份进去, 就不可能再像以前那样
  * 一边有必填标识和出成率说明、另一边没有。
  */
+/**
+ * 表格要渲染的产出行。
+ *
+ * 🔴 owner 2026-09-01：「不良品产出和副产是一起填写的……底层逻辑会分类」。
+ * 于是**三类填在同一块区**：副产/不良品本来就在（它们是宿主行的副产明细），
+ * 回料这一轮搬进来 —— 但它**仍然是一条独立的产出条目**：
+ *
+ *   ⛔ 不把它转成 BoundByproductLine（那会让它走 `material_batches`，成本直接丢）
+ *   ✅ 只把它从「独立成行」改成「渲染在宿主行的那块区里」，值仍写回自己的
+ *      MultiOutputLine，`row.multiOutputs` 一个字节没动
+ *
+ * ⚠️ 判据：提交负载必须与搬动前逐字相同（见 defectiveSharesByproductEntry.spec.ts）。
+ */
 function outputViews(row: SheetRow): OutputLineView[] {
-  return row.multiOutputs.map((line) => {
+  const all = outputViewsAll(row);
+  const reworkViews = all.filter((view) => isReworkLine(view.line));
+  const rowViews = all.filter((view) => !isReworkLine(view.line));
+  if (reworkViews.length === 0) return rowViews;
+  // 没有主产出行时不静默丢掉回料 —— 与副产 orphanNotice 同一条纪律: 它得看得见。
+  if (rowViews.length === 0) return reworkViews;
+  return rowViews.map((view, index) => (index === 0
+    ? { ...view, inlineReworkViews: reworkViews }
+    : view));
+}
+
+/**
+ * 每条产出条目的派生值。⚠️ 只决定**怎么显示**，
+ * ⛔ 不动 `row.multiOutputs` —— 提交负载、校验、批次号回填全读那个数组。
+ */
+function outputViewsAll(row: SheetRow): OutputLineView[] {
+  return row.multiOutputs.map((line): OutputLineView => {
     const port = portById(line.workflowPortId);
     const yieldRate = outputLineYield(row, line);
     return {
@@ -1807,6 +1838,7 @@ function outputViews(row: SheetRow): OutputLineView[] {
             ? '未配置单位净重，无法计算成品重量'
             : `成品重量 ${formattedWeight(outputLineWeightKg(line))}`)
         : null,
+      inlineReworkViews: [],
     };
   });
 }
