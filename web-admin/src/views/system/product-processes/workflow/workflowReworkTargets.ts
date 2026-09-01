@@ -373,6 +373,8 @@ export interface ReworkPair {
   /** 显示用编号：R1、R2 …… */
   label: string;
   color: string;
+  /** 这个编号指向哪块回料 —— 点角标要靠它定位到远端。 */
+  reworkNodeId: string;
 }
 
 /**
@@ -396,6 +398,7 @@ export function assignReworkPairs(
     pairs.set(node.id, {
       label: `R${index + 1}`,
       color: REWORK_PAIR_COLORS[index % REWORK_PAIR_COLORS.length],
+      reworkNodeId: node.id,
     });
     index += 1;
   }

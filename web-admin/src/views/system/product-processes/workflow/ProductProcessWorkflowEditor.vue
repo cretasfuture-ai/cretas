@@ -347,6 +347,8 @@
           <template #node-process="slotProps">
             <WorkflowProcessNode
               :rework-pairs="reworkPairsOnProcess(slotProps.id)"
+              :active-pair-label="activePairLabelOn(slotProps.id)"
+              @toggle-pair="(reworkNodeId: string) => toggleReworkPairPin(slotProps.id, reworkNodeId)"
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
@@ -1786,6 +1788,17 @@ const focusHoverIds = ref<Set<string> | null>(null);
 /** 点击「定位」锁定的聚焦；再次点击取消。 */
 const focusLockedIds = ref<Set<string> | null>(null);
 const focusLockedTargetId = ref<string | null>(null);
+/**
+ * 配对高亮的**锚点**与**远端**。
+ *
+ * 已确认原型把这一对分成两种角色, 视觉完全不同:
+ *   `pair-active`        —— 你正在看的这一端, 只给同色描边环;
+ *   `pair-target-active` —— **远端**, 额外给一个浮标签「远程关联目标」+ 右上角脉冲圆点。
+ * 差别的意义: 远端往往在画布另一头、屏幕外, 光有描边环你根本注意不到它亮了。
+ * ⛔ 两端一视同仁 = 回到「整张图变灰」, 那正是 owner 说观感不对的地方。
+ */
+const focusAnchorId = ref<string | null>(null);
+const focusRemoteIds = ref<Set<string> | null>(null);
 
 /**
  * 生效的聚焦集合。**先与当前 nodes 对账**，对账后为空一律返回 null。
@@ -1812,6 +1825,24 @@ function focusReworkWhole(reworkNodeId: string | null): void {
   if (source) owners.push(source);
   owners.push(...selectedTargetProcessIds(flowNodes.value, reworkNodeId));
   focusHoverIds.value = focusSetFor(owners);
+  // 悬停回料 ⇒ 锚点是回料自己, 远端是它能回投的那几道工序。
+  focusAnchorId.value = reworkNodeId;
+  focusRemoteIds.value = new Set(selectedTargetProcessIds(flowNodes.value, reworkNodeId));
+}
+
+/**
+ * 点工序上的 R 角标 —— 从工序这一端看这段关系, 于是锚点/远端刚好反过来:
+ * 锚点是这道工序, 远端是那块回料(它多半在画布另一头)。
+ *
+ * 再点一次取消。⛔ 与「勾选目标工序」严格无关: 这只改高亮, 一个字段都不写。
+ */
+function toggleReworkPairPin(processId: string, reworkNodeId: string): void {
+  const same = focusLockedIds.value !== null && focusAnchorId.value === processId
+    && focusRemoteIds.value?.has(reworkNodeId) === true;
+  if (same) { clearFocus(); return; }
+  focusLockedIds.value = focusSetFor([processId, reworkNodeId]);
+  focusAnchorId.value = processId;
+  focusRemoteIds.value = new Set([reworkNodeId]);
 }
 
 /** 悬停某一条目标行：只突出「回料 + 来源工序 + 这一道精确目标」及各自附属。 */
@@ -1826,6 +1857,8 @@ function focusReworkTarget(reworkNodeId: string, targetProcessId: string | null)
 function clearFocus(): void {
   focusHoverIds.value = null;
   focusLockedIds.value = null;
+  focusAnchorId.value = null;
+  focusRemoteIds.value = null;
   focusLockedTargetId.value = null;
 }
 
@@ -1852,7 +1885,10 @@ function applyFocusClasses(): void {
     // 🔴 已确认原型：被聚焦的那一对不是「只是没被压暗」，而是**主动亮起**
     //   (同色描边环 + 抬到最上层)。少了这一步，观感就是「整张图变灰」而不是
     //   「这两个是一对」—— owner 反馈的正是这个差别。
-    if (focus && focus.has(node.id)) classes.push('wf-pair-active');
+    if (focus && focus.has(node.id)) {
+      // 远端要的是「看得见它亮了」, 锚点只要不被压暗 —— 见 focusRemoteIds 的注释。
+      classes.push(focusRemoteIds.value?.has(node.id) ? 'wf-pair-remote' : 'wf-pair-active');
+    }
     const next = classes.length > 0 ? classes.join(' ') : undefined;
     if (node.class !== next) { node.class = next; changed = true; }
     // 配对色写成 CSS 变量, 描边环、R 角标、左侧竖条共用同一个值(⛔ 不各写一份)。
@@ -1878,6 +1914,15 @@ const reworkPairs = computed<Map<string, ReworkPair>>(
 /** 这块回料自己的 R 角标；不是回料则为 null。 */
 function reworkPairOf(nodeId: string): ReworkPair | null {
   return reworkPairs.value.get(nodeId) ?? null;
+}
+
+/** 这道工序上当前被钉住的那个 R 编号；没钉住返回 null（角标据此画成按下态）。 */
+function activePairLabelOn(processId: string): string | null {
+  if (focusAnchorId.value !== processId || !focusRemoteIds.value) return null;
+  for (const pair of reworkPairsOnProcess(processId)) {
+    if (focusRemoteIds.value.has(pair.reworkNodeId)) return pair.label;
+  }
+  return null;
 }
 
 /** 这道工序上要显示的 R 角标（哪些回料允许回投到它）。 */
@@ -6398,9 +6443,15 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
  * 差别不在压暗那一半(我原来有), 在**亮起**那一半(我原来没有):
  * 只压暗 = 整张图变灰; 压暗 + 同色描边环 + 抬层 = 「这两个是一对」。
  */
+/*
+ * 压暗强度取原型**悬停那一套**的数(`#canvas.rework-focus.rework-focus-ready`):
+ *   .node { opacity:.1; filter:saturate(.35) }   .edge { opacity:.06 }
+ * ⚠️ 我上一版取的是另一套机制(`pair-focus`)的 .22/.38 —— 压得不够狠,
+ *    观感就退回「有点灰」而不是「只剩这一对」。
+ */
 .workflow-canvas :deep(.vue-flow__node.wf-focus-dim) {
-  opacity: 0.22;
-  filter: saturate(0.38);
+  opacity: 0.1;
+  filter: saturate(0.35);
   transition: opacity 140ms ease, filter 140ms ease;
   pointer-events: none;
 }
@@ -6413,7 +6464,46 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   transition: box-shadow 140ms ease;
 }
 /* 关系压暗时连线也让路 —— 否则线仍是满不透明, 把「只有这两个亮着」冲掉。 */
-.workflow-canvas.is-pair-focus :deep(.vue-flow__edge) { opacity: 0.1; }
+.workflow-canvas.is-pair-focus :deep(.vue-flow__edge) { opacity: 0.06; }
+
+/*
+ * 远端信标 —— 原型 `.node.pair-target-active` 的三件套。
+ * 远端往往在画布另一头甚至屏幕外, 只给描边环用户根本不知道它亮了:
+ *   ::before 一个浮标签说清「这是那一端」
+ *   ::after  一个**脉冲**圆点, 余光里也能捕捉到
+ * ⛔ 减少动效偏好下关掉脉冲(保留圆点) —— 它是提示, 不该变成困扰。
+ */
+.workflow-canvas :deep(.vue-flow__node.wf-pair-remote) {
+  z-index: 11;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--pair-color, #409eff) 32%, transparent),
+    0 14px 34px rgba(27, 101, 168, 0.22);
+}
+.workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::before {
+  content: '远程关联目标';
+  position: absolute; left: 8px; top: -25px; height: 20px;
+  display: flex; align-items: center; padding: 0 8px;
+  border-radius: 10px; color: #fff;
+  background: var(--pair-color, #409eff);
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--pair-color, #409eff) 28%, transparent);
+  font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: none;
+}
+.workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::after {
+  content: ''; position: absolute; right: -8px; top: -8px;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 3px solid var(--pair-color, #409eff); background: #fff; pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::after {
+    animation: wf-pair-beacon 1.25s ease-out infinite;
+  }
+}
+@keyframes wf-pair-beacon {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pair-color, #409eff) 44%, transparent); }
+  70% { box-shadow: 0 0 0 13px transparent; }
+  100% { box-shadow: 0 0 0 13px transparent; }
+}
 @media (prefers-reduced-motion: reduce) {
   .workflow-canvas :deep(.vue-flow__node.wf-pair-active) { transition: none; }
 }

@@ -51,8 +51,10 @@ describe('回料 R 编号配对', () => {
   it('按画布顺序发号，配色取自原型色板', () => {
     const pairs = assignReworkPairs(nodes);
     expect([...pairs.keys()]).toEqual(['material:rw1', 'material:rw2']);
-    expect(pairs.get('material:rw1')).toEqual({ label: 'R1', color: REWORK_PAIR_COLORS[0] });
-    expect(pairs.get('material:rw2')).toEqual({ label: 'R2', color: REWORK_PAIR_COLORS[1] });
+    expect(pairs.get('material:rw1'))
+      .toEqual({ label: 'R1', color: REWORK_PAIR_COLORS[0], reworkNodeId: 'material:rw1' });
+    expect(pairs.get('material:rw2'))
+      .toEqual({ label: 'R2', color: REWORK_PAIR_COLORS[1], reworkNodeId: 'material:rw2' });
   });
 
   it('🔴 阴性对照：不是回料的节点不发号 —— 证明上面不是「给每个节点都编一个」', () => {
@@ -86,12 +88,34 @@ describe('回料 R 编号配对', () => {
   it('画布上「亮起」和「压暗」都在，⛔ 不是只压暗', () => {
     // 🔴 这条守的正是 owner 反馈的那个差别。少了 wf-pair-active，
     //    悬停的效果就退回成「整张图变灰」。
-    expect(EDITOR).toContain("classes.push('wf-pair-active')");
     expect(EDITOR).toContain("classes.push('wf-focus-dim')");
     expect(EDITOR).toContain('--pair-color');
-    // 描边环用配对色，且压暗时连线也让路
+    // 锚点与远端是**两种**角色, ⛔ 不一视同仁(见 focusRemoteIds 的注释)
+    expect(EDITOR).toContain("'wf-pair-remote' : 'wf-pair-active'");
     expect(EDITOR).toMatch(/\.wf-pair-active\)\s*\{[\s\S]{0,200}box-shadow/);
-    expect(EDITOR).toContain('.workflow-canvas.is-pair-focus :deep(.vue-flow__edge) { opacity: 0.1; }');
+    // 🔴 远端信标三件套: 描边环 + 浮标签 + 脉冲圆点。
+    //    少了后两个, 远端在画布另一头时用户根本不知道它亮了。
+    expect(EDITOR).toContain("content: '远程关联目标'");
+    expect(EDITOR).toContain('animation: wf-pair-beacon');
+    expect(EDITOR).toContain('@keyframes wf-pair-beacon');
+    // 压暗强度取原型悬停那一套的数, 不是另一套的 .22
+    expect(EDITOR).toMatch(/wf-focus-dim\)\s*\{[\s\S]{0,120}opacity:\s*0\.1;/);
+    expect(EDITOR).toContain('.workflow-canvas.is-pair-focus :deep(.vue-flow__edge) { opacity: 0.06; }');
+  });
+
+  it('🔴 R 角标可点 —— 点了钉住这一对，⛔ 但一个字段都不写', () => {
+    // 回投目标常在画布另一头。只显示不可点 = 用户知道有这么个关系, 但过不去。
+    expect(PROCESS_NODE).toContain('togglePair');
+    expect(PROCESS_NODE).toContain('cursor: pointer');
+    expect(PROCESS_NODE).toContain(':aria-pressed="activePairLabel === pair.label"');
+    // ⛔ 阴性对照: 它绝不能顺手改回投关系(那是勾选框的事)
+    const editorFn = EDITOR.slice(
+      EDITOR.indexOf('function toggleReworkPairPin'),
+      EDITOR.indexOf('function toggleReworkPairPin') + 700,
+    );
+    expect(editorFn).not.toContain('planReworkTargetWrites');
+    expect(editorFn).not.toContain('mutate(');
+    expect(editorFn).not.toContain('reworkPolicy');
   });
 
   it('工序卡片上真的渲染了同色角标', () => {

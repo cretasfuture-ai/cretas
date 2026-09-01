@@ -179,14 +179,24 @@
     -->
     <div v-if="reworkPairs.length > 0" class="rework-pair-row nodrag" data-testid="rework-pair-row">
       <span class="rework-pair-row__label">可接回料</span>
-      <span
+      <!--
+        可点 —— 原型里 `.pair-chip` 是 `cursor:pointer`。点一下钉住这一对:
+        画布压暗，只留这道工序和那块回料，并在**远端**打上信标。
+        回投的目标往往在画布另一头，不给一个「带我去看」的动作就等于看不见。
+        ⛔ 它只改高亮，一个字段都不写(与勾选目标工序严格无关)。
+      -->
+      <button
         v-for="pair in reworkPairs"
         :key="pair.label"
-        class="rework-pair-chip"
+        type="button"
+        class="rework-pair-chip nodrag"
+        :class="{ 'is-active': activePairLabel === pair.label }"
         :style="{ background: pair.color }"
-        :title="`${pair.label} 回料可回投到本工序`"
+        :aria-pressed="activePairLabel === pair.label"
+        :title="`${pair.label} 回料可回投到本工序 —— 点一下在画布上定位它`"
         :data-testid="`rework-pair-${pair.label}`"
-      >{{ pair.label }}</span>
+        @click.stop="emit('togglePair', pair.reworkNodeId)"
+      >{{ pair.label }}</button>
     </div>
 
     <div class="reporting-row nodrag">
@@ -214,7 +224,9 @@ import type { ProcessNodeData } from './types';
 
 const props = withDefaults(defineProps<{
   /** 允许回投到本工序的回料 R 角标（同色配对，见模板里的说明）。 */
-  reworkPairs?: Array<{ label: string; color: string }>;
+  reworkPairs?: Array<{ label: string; color: string; reworkNodeId: string }>;
+  /** 当前被钉住的那一对（用来把角标画成按下态）；没钉住时为 null。 */
+  activePairLabel?: string | null;
   data: ProcessNodeData;
   selected?: boolean;
   canWrite: boolean;
@@ -224,7 +236,7 @@ const props = withDefaults(defineProps<{
   finishedOptions: WorkflowSkuPickerOption[];
   allowAddInput?: boolean;
   skuSpecifications?: Record<string, { unit: string; gramsPerUnit: number | null }>;
-}>(), { allowAddInput: true, reworkPairs: () => [] });
+}>(), { allowAddInput: true, reworkPairs: () => [], activePairLabel: null });
 
 // #8: 工序 Cell 只有在「物料拖向工序(投入)」时才是合法目标；「工序拖向物料」时
 // 工序互相之间非法 → 灰化。
@@ -241,6 +253,8 @@ const emit = defineEmits<{
    * 副产与回料仍然只是 data 上的一个标记(isByproduct / isRework), 不是新的 node kind。
    */
   addSpecialOutput: [];
+  /** 点 R 角标：钉住/取消这一对（只改高亮，⛔ 不写任何字段）。 */
+  togglePair: [reworkNodeId: string];
   selectOutput: [portId: string, skuId: string];
   delete: [];
   editProcess: [];
@@ -293,10 +307,19 @@ function handleStyle(index: number, count: number): Record<string, string> {
 }
 .rework-pair-row__label { color: #66758a; font-size: 12px; }
 .rework-pair-chip {
-  display: inline-grid; place-items: center; min-width: 24px; height: 20px;
-  padding: 0 6px; border-radius: 5px;
-  color: #fff; font-size: 11px; font-weight: 700; letter-spacing: -0.2px;
+  display: inline-grid; place-items: center; min-width: 26px; height: 22px;
+  padding: 0 7px; border: 0; border-radius: 11px;
+  color: #fff; font-size: 11px; font-weight: 800; letter-spacing: -0.2px;
+  cursor: pointer; transition: transform 120ms ease, box-shadow 120ms ease;
 }
+.rework-pair-chip:hover,
+.rework-pair-chip.is-active {
+  transform: translateY(-1px) scale(1.06);
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent);
+  filter: brightness(1.06);
+}
+.rework-pair-chip:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .rework-pair-chip { transition: none; } }
 .special-output-dock {
   display: flex; align-items: center; gap: 8px;
   margin-top: 10px; padding-top: 8px; border-top: 1px dashed #dfe6f2;
