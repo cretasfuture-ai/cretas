@@ -96,13 +96,18 @@ public class ProductionSummaryService {
         }
 
         BigDecimal totalCost = null;
+        String costNote = null;
         if (!maskPrice) {
-            totalCost = planBatches.stream()
+            // 🔴 2026-09-02: 原来 nz(cb.getTotalCost()) 把「成本未知」折成 0 相加, 小吃吧线屏幕上
+            //    写着「总成本 ¥0」而 cost-breakdown 明明说 costComplete=false。改为任一批次未知 ⇒ 总成本 null + 说明。
+            java.util.List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO> breakdowns = planBatches.stream()
                     .filter(b -> "REGULAR".equals(b.getBatchType()) && b.getBatchNumber() != null)
                     .map(b -> orderCostBreakdownService.computeByBatch(factoryId, b.getBatchNumber(), false))
                     .filter(java.util.Objects::nonNull)
-                    .map(cb -> nz(cb.getTotalCost()))
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    .toList();
+            SummaryCostRollup.Result rolled = SummaryCostRollup.rollup(breakdowns);
+            totalCost = rolled.total();
+            costNote = rolled.note();
         }
 
         java.util.List<ProductionSummaryDTO.BatchLine> lines = items.stream()
@@ -124,6 +129,7 @@ public class ProductionSummaryService {
                 .realYieldRate(realYield)
                 .yieldNote(yieldNote)
                 .totalCost(totalCost)
+                .costNote(costNote)
                 .batches(lines)
                 .reusedSemiLineages(lineage == null ? null : lineage.getLineages())
                 .priceMasked(maskPrice)
