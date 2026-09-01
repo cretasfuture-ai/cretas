@@ -722,10 +722,22 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // 才准调拨。上面的 anyPicked 是 anyMatch —— 只要有一行填了就放行, 而没填的行 issuedQty=null
         // 会被 autoAllocate/relocate 两个循环整个 skip: 料没搬, 却照样推到 TRANSFERRED 返 200。
         // 有参考用量的行至少还能在打印单上看出漏了多少; 待定行连个对照数字都没有, 只能在这里 loud-block。
+        //
+        // 🔴 2026-09-02 owner 卡点 (#469 追加): 原判据 `pickedQty == null || <= 0` 把「显式填 0」
+        // 和「没填(null)」当成同一件事一起拒 —— 与前端 list.vue submitConfirm 的 missingPending
+        // 曾经的旧判据同一个缺陷。两侧语义必须对齐, ⛔ 不许各自演化:
+        //   null / 未设置 → 我不知道领了多少 (原闸真正在防的场景: issuedQty=null 会被下面
+        //                    autoAllocate/relocate 两个循环整个 skip, 料没搬却推到 TRANSFERRED)
+        //                    → 仍然 loud-block, 错误码不变
+        //   0             → 这次一个都不领, 是明确的事实, 不是「不知道」→ 放行 (见下方
+        //                    setIssuedQty 之后, autoAllocate/relocate 循环会把它记为「明确跳过」,
+        //                    与 null 造成的 skip 在日志里分得开)
+        //   > 0           → 正常领用, 照旧
+        // LIUSHANMEN 现场 7 味辅料 + L1 纸箱库存全是 0, 如实填 0 却被这道闸当场拒收, 卡在
+        // 「确认领料」通过之后的下一步(调拨), 报工链路整段演示不了。
         List<String> unpickedPendingRows = mr.getItems().stream()
                 .filter(it -> it.getRequiredQty() == null)
-                .filter(it -> it.getPickedQty() == null
-                        || it.getPickedQty().compareTo(BigDecimal.ZERO) <= 0)
+                .filter(it -> it.getPickedQty() == null)
                 .map(this::materialLabel)
                 .toList();
         if (!unpickedPendingRows.isEmpty()) {
@@ -796,6 +808,35 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     /**
+     * 领料调拨物理迁移的两个循环 ({@link #autoAllocatePickedBatchesIfMissing} /
+     * {@link #relocatePickedMaterialToWorkshop}) 共用的"该行本次要不要处理"判据 + 留痕。
+     *
+     * <p>🔴 2026-09-02 owner 卡点 (#469 追加): "明确跳过"(issuedQty=0, 这次一个都不领)
+     * 和"因为 issuedQty=null 而跳过"(该行本来就有参考用量, 允许留空领用, 与"待定行"
+     * 无关 —— 待定行的 null 在 {@code transferToFactory} 前面那道
+     * {@code unpickedPendingRows} 闸就已经 loud-block 了, 到不了这里) 在语义上完全相反,
+     * 必须在日志里分得开 —— 否则事后没人能回答"那一味到底是没领, 还是系统漏了"。
+     * ⛔ 两处循环各写一份判据会漂(形态 D: 同一个东西有两份, 它一定会漂), 只在这一处定义。
+     *
+     * @return true 表示该行本次不处理(调用方应 continue); false 表示 issued > 0, 正常处理
+     */
+    private boolean skipUnissuedRow(FactoryMaterialRequisition mr, FactoryMaterialRequisitionItem it,
+                                     BigDecimal issued, String stage) {
+        if (issued == null) {
+            log.info("⏭️ {} 跳过(未设置) 物料需求单 {} 物料 {}: issuedQty=null —— 该行有参考用量,"
+                            + " 允许留空领用, 不是「本次未领」",
+                    stage, mr.getRequisitionNo(), materialLabel(it));
+            return true;
+        }
+        if (issued.compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("⏭️ {} 明确跳过(本次未领) 物料需求单 {} 物料 {}: issuedQty={}",
+                    stage, mr.getRequisitionNo(), materialLabel(it), issued.toPlainString());
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * 防呆自动分批: 仓管确认领料只录「实际拣货数量」(picked_qty), 不选批次。调拨前按 FEFO (先到期先出)
      * 从原料仓 (mr.sourceWarehouseId, 缺失回退工厂全仓) 自动为每行分配领料批次, 写进 batch_numbers,
      * 供 {@link #relocatePickedMaterialToWorkshop} 逐批划出。已带批次的行 (前端预选 / 老单) 跳过。
@@ -810,7 +851,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         String sourceWarehouseId = mr.getSourceWarehouseId();
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             BigDecimal issued = it.getIssuedQty();
-            if (issued == null || issued.compareTo(BigDecimal.ZERO) <= 0) {
+            if (skipUnissuedRow(mr, it, issued, "领料自动分批")) {
                 continue;
             }
             List<Map<String, Object>> existing = it.getBatchNumbers();
@@ -916,7 +957,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         assertPickedBatchesAllInSourceWarehouse(factoryId, mr);
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             BigDecimal issued = it.getIssuedQty();
-            if (issued == null || issued.compareTo(BigDecimal.ZERO) <= 0) {
+            if (skipUnissuedRow(mr, it, issued, "领料划出生产仓")) {
                 continue;
             }
             List<Map<String, Object>> batchRows = it.getBatchNumbers();
