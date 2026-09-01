@@ -269,7 +269,9 @@ function isPendingQty(item: { requiredQty?: number | string | null }): boolean {
 function requiredQtyLabel(item: { requiredQty?: number | string | null; inputShareRatio?: number | null }): string {
   if (!isPendingQty(item)) return qty(item.requiredQty);
   // 主料带份额: 不再只是一句「按实际领用」—— 告诉仓管填任一原料, 其余会按这个比例跳出来。
-  return item.inputShareRatio != null ? `按配比 ${Number(item.inputShareRatio)}%` : '按实际领用';
+  // 份额 0 = 不参与推算(与 deriveByShare / InputShareRatios 同口径), 标签也不能说「按配比 0%」
+  return item.inputShareRatio != null && Number(item.inputShareRatio) > 0
+    ? `按配比 ${Number(item.inputShareRatio)}%` : '按实际领用';
 }
 
 /**
