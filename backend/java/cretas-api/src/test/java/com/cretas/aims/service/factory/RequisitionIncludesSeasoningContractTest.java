@@ -97,11 +97,16 @@ class RequisitionIncludesSeasoningContractTest {
         return mr;
     }
 
+    // 2026-09-02: appendSeasoningItems 新增第 4 参 plannedRawInputKg(人工填报的计划投入原料量,
+    // 见 ServiceImpl 类注释)。本闸测的是「调料行有没有被列进单据」这件事本身, 与用不用得到
+    // 人工填报值无关 —— 传 (BigDecimal) null 沿用「走内部 RAW 求和兜底」的旧路径, 与本闸原来
+    // 测的路径完全一致, 不改变任何断言语义(实测: ReflectionTestUtils.invokeMethod 对 null 值
+    // 按声明类型 BigDecimal 精确匹配到新签名, 不会退化成参数数量不对)。
     private List<FactoryMaterialRequisitionItem> run(List<BomSeasoningItem> seasonings,
                                                      List<BomRecipeItem> bomItems) {
         when(seasoningRepo.findByRecipeIdOrderBySeqAsc(anyString())).thenReturn(seasonings);
         FactoryMaterialRequisition mr = emptyMr();
-        ReflectionTestUtils.invokeMethod(service, "appendSeasoningItems", F, bomItems, mr);
+        ReflectionTestUtils.invokeMethod(service, "appendSeasoningItems", F, bomItems, mr, (BigDecimal) null);
         return mr.getItems();
     }
 
@@ -146,7 +151,7 @@ class RequisitionIncludesSeasoningContractTest {
         FactoryMaterialRequisitionItem existing = new FactoryMaterialRequisitionItem();
         existing.setMaterialTypeId(RAW_A);
         mr.getItems().add(existing);
-        ReflectionTestUtils.invokeMethod(service, "appendSeasoningItems", F, List.of(bomItem(RAW_A)), mr);
+        ReflectionTestUtils.invokeMethod(service, "appendSeasoningItems", F, List.of(bomItem(RAW_A)), mr, (BigDecimal) null);
         assertEquals(1, mr.getItems().size(), "同一物料被加了两行: " + mr.getItems().size());
     }
 
@@ -176,6 +181,6 @@ class RequisitionIncludesSeasoningContractTest {
         FactoryMaterialRequisition mr = emptyMr();
         assertDoesNotThrow(() ->
                 ReflectionTestUtils.invokeMethod(service, "appendSeasoningItems", F,
-                        List.of(bomItem(RAW_A)), mr));
+                        List.of(bomItem(RAW_A)), mr, (BigDecimal) null));
     }
 }

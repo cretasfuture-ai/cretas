@@ -14,7 +14,7 @@ const LABELS: Record<string, string> = {
   SALES_ORDER: '销售订单',
   PURCHASE_ORDER: '采购订单',
   PURCHASE_RECEIPT: '采购入库',
-  MATERIAL_REQUISITION: '物料需求单',
+  MATERIAL_REQUISITION: '领料单',
   PRODUCTION_PLAN: '生产计划',
   PRODUCTION_BATCH: '生产批次',
   PRODUCTION_SETTLEMENT: '核对结单',

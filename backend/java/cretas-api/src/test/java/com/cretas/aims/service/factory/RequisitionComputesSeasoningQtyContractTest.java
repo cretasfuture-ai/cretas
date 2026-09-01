@@ -172,8 +172,12 @@ class RequisitionComputesSeasoningQtyContractTest {
         FactoryMaterialRequisition m = mr(raw("20", "kg"), raw("20", "kg"),
                 raw("20", "kg"), raw("20", "kg"));
 
+        // 2026-09-02: appendSeasoningItems 新增第 4 参 plannedRawInputKg(人工填报)。这条闸测的
+        // 正是「不传人工填报值时, 内部 RAW 求和兜底也能算出正确数」这条路径本身 —— 传
+        // (BigDecimal) null 就是「不传」, 与本闸标题「helper 算得出不等于接上了」的断言语义完全
+        // 不变(实测: ReflectionTestUtils 对 null 按声明类型精确匹配, 不会退化)。
         ReflectionTestUtils.invokeMethod(svc, "appendSeasoningItems",
-                "F006", List.of(bomItem), m);
+                "F006", List.of(bomItem), m, (BigDecimal) null);
 
         List<FactoryMaterialRequisitionItem> aux = m.getItems().stream()
                 .filter(i -> i.getMaterialCategory()

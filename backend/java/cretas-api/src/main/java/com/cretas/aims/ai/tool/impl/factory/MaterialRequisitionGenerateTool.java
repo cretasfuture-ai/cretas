@@ -61,7 +61,7 @@ public class MaterialRequisitionGenerateTool extends AbstractBusinessTool {
                 ? Long.valueOf(context.get("userId").toString()) : null;
         FactoryMaterialRequisition mr = service.generateFromPlan(factoryId, planId, userId);
         return buildSimpleResult(
-                "物料需求单已生成: " + mr.getRequisitionNo() + " (" + mr.getItems().size() + " 行)",
+                "领料单已生成: " + mr.getRequisitionNo() + " (" + mr.getItems().size() + " 行)",
                 mr);
     }
 

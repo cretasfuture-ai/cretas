@@ -4388,7 +4388,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return new BusinessException(409,
                 "生产报工需先领料：" + detail + "。请先在该生产计划生成领料单，由仓管拣货确认并调拨到生产仓后再报工。")
                 .withCode("PRODUCTION_REQUISITION_REQUIRED")
-                .withHint("路径: 生产管理 → 物料需求单 → 按计划生成 → 备料 → 确认领料 → 调拨")
+                .withHint("路径: 生产管理 → 领料单 → 按计划生成 → 备料 → 确认领料 → 调拨")
                 .withHintTarget("原料批次")
                 .withSeverity("BLOCKING");
     }

@@ -2,6 +2,7 @@ package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
@@ -11,6 +12,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionItemRepository;
 import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
@@ -27,6 +29,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -84,13 +87,18 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
     @Mock
     private WarehouseResolver warehouseResolver;
 
+    @Mock
+    private BomSeasoningItemRepository bomSeasoningItemRepository;
+
     @InjectMocks
     private FactoryMaterialRequisitionServiceImpl service;
 
     @BeforeEach
     void setup() {
-        // warehouseResolver 是 @Autowired 字段, @InjectMocks 走构造器注入策略不会填它 → 手动反射注入.
+        // warehouseResolver / bomSeasoningItemRepository 是 @Autowired(required=false) 字段,
+        // @InjectMocks 走构造器注入策略不会填它们 → 手动反射注入.
         org.springframework.test.util.ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "bomSeasoningItemRepository", bomSeasoningItemRepository);
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);
@@ -269,6 +277,113 @@ class FactoryMaterialRequisitionGenerateFromPlanTest {
         assertNull(pending.getRequiredQty());
         assertNotNull(computed.getRequiredQty(), "有标准用量的行必须仍然算出需求量");
         assertTrue(computed.getRequiredQty().compareTo(BigDecimal.ZERO) > 0);
+    }
+
+    /**
+     * 2026-09-01 缺陷修复 (LIUSHANMEN MR20260901-0001, 熟肉饼): 辅料需求量原来恒「按实际领用」,
+     * 因为分母 (本单计划投入的原料 kg) 从未真正算出来过 (RAW 行 requiredQty 恒 null, 见
+     * {@code appendSeasoningItems} 类注释)。现在改为吃 {@code generateFromPlan} 新增的
+     * {@code plannedRawInputKg} 参数 (人工填报, owner 2026-09-01 拍板)。
+     */
+    private BomRecipeItem cookedMeatPattyRawBom() {
+        BomRecipeItem rawBom = new BomRecipeItem();
+        rawBom.setId(10L);
+        rawBom.setRecipeId("RECIPE-SMR-001");
+        rawBom.setMaterialTypeId("MAT-PORK");
+        rawBom.setMaterialName("猪肉");
+        rawBom.setStandardQuantity(null); // 产品口径: RAW 只登记配方资格, 不带参考用量
+        rawBom.setUnit("kg");
+        rawBom.setMaterialCategory("RAW");
+        return rawBom;
+    }
+
+    /** 7 条调料行, dosagePerKgG 合计 102.40 g/kg (与 LIUSHANMEN 熟肉饼实测口径同量级)。 */
+    private List<BomSeasoningItem> cookedMeatPattySeasonings() {
+        BigDecimal[] dosages = {
+            new BigDecimal("30.5"), new BigDecimal("20.3"), new BigDecimal("15.6"),
+            new BigDecimal("12.0"), new BigDecimal("10.0"), new BigDecimal("8.0"), new BigDecimal("6.0"),
+        };
+        List<BomSeasoningItem> seasonings = new ArrayList<>();
+        for (int i = 0; i < dosages.length; i++) {
+            BomSeasoningItem s = new BomSeasoningItem();
+            s.setRecipeId("RECIPE-SMR-001");
+            s.setFactoryId(FACTORY_ID);
+            s.setMaterialTypeId("SEASON-" + i);
+            s.setSection(BomSeasoningItem.SECTION_INJECTION);
+            s.setSeq(i);
+            s.setName("调料" + i);
+            s.setDosagePerKgG(dosages[i]);
+            seasonings.add(s);
+        }
+        return seasonings;
+    }
+
+    private void stubCookedMeatPattyPlan(BomRecipeItem rawBom, List<BomSeasoningItem> seasonings) {
+        when(bomItemRepository.findCurrentByProduct(FACTORY_ID, PRODUCT_TYPE_ID)).thenReturn(List.of(rawBom));
+        lenient().when(materialBatchRepository.findStockUnitsByMaterialType(FACTORY_ID, "MAT-PORK"))
+                .thenReturn(List.of("kg"));
+        lenient().when(warehouseResolver.resolvePurchaseInboundWh(FACTORY_ID)).thenReturn(WH_RAW);
+        lenient().when(bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc("RECIPE-SMR-001"))
+                .thenReturn(seasonings);
+    }
+
+    @Test
+    @DisplayName("熟肉饼: 传入计划投入原料量(100kg) 时, 7 条辅料行按各自 g/kg 配比展开, 合计 10.24kg")
+    void generateFromPlan_withPlannedRawInputKg_expandsAuxiliaryRowsByDosageRatio() {
+        stubCookedMeatPattyPlan(cookedMeatPattyRawBom(), cookedMeatPattySeasonings());
+
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L, new BigDecimal("100"));
+
+        List<FactoryMaterialRequisitionItem> auxRows = mr.getItems().stream()
+                .filter(it -> it.getMaterialCategory() == FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY)
+                .toList();
+        assertEquals(7, auxRows.size(), "7 条调料行都应该追加到领料单");
+
+        BigDecimal total = auxRows.stream()
+                .map(FactoryMaterialRequisitionItem::getRequiredQty)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertEquals(0, new BigDecimal("10.240").compareTo(total),
+                "100kg 投入 x 102.40 g/kg 合计应为 10.24kg, 实际=" + total);
+
+        // 合计对不代表逐行拆分对 —— 至少验两条独立行 (acceptance 硬约束)。
+        FactoryMaterialRequisitionItem row0 = auxRows.stream()
+                .filter(it -> "SEASON-0".equals(it.getMaterialTypeId())).findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("3.050").compareTo(row0.getRequiredQty()),
+                "SEASON-0: 30.5 g/kg x 100kg = 3.05kg, 实际=" + row0.getRequiredQty());
+        FactoryMaterialRequisitionItem row6 = auxRows.stream()
+                .filter(it -> "SEASON-6".equals(it.getMaterialTypeId())).findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("0.600").compareTo(row6.getRequiredQty()),
+                "SEASON-6: 6.0 g/kg x 100kg = 0.60kg, 实际=" + row6.getRequiredQty());
+    }
+
+    @Test
+    @DisplayName("负例: 不传计划投入原料量时, 辅料行仍是「按实际领用」(null)，不能退化成 0")
+    void generateFromPlan_withoutPlannedRawInputKg_auxiliaryRowsStayPendingNotZero() {
+        stubCookedMeatPattyPlan(cookedMeatPattyRawBom(), cookedMeatPattySeasonings());
+
+        FactoryMaterialRequisition mr = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L, null);
+
+        List<FactoryMaterialRequisitionItem> auxRows = mr.getItems().stream()
+                .filter(it -> it.getMaterialCategory() == FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY)
+                .toList();
+        // 硬约束 9: 阴性对照 (留空不该是 0) 必须配一条阳性对照 (组件确实渲染出来了) ——
+        // 单独断言 requiredQty==null 分不清「没生成」和「生成了但正确留空」。
+        assertEquals(7, auxRows.size(), "即使投入量未知, 调料行也必须照常出现在单据上");
+        assertTrue(auxRows.stream().allMatch(it -> it.getRequiredQty() == null),
+                "留空必须是 null (前端渲染「按实际领用」), 不能是 0 —— 0 会让仓管照单发 0 短料");
+    }
+
+    @Test
+    @DisplayName("传入 0/负数视同未填 (防呆: 不当真实投入量用), 仍回退旧行为")
+    void generateFromPlan_withNonPositivePlannedRawInputKg_treatedAsAbsent() {
+        stubCookedMeatPattyPlan(cookedMeatPattyRawBom(), cookedMeatPattySeasonings());
+
+        FactoryMaterialRequisition mrZero = service.generateFromPlan(FACTORY_ID, PLAN_ID, 1L, BigDecimal.ZERO);
+        assertTrue(mrZero.getItems().stream()
+                        .filter(it -> it.getMaterialCategory() == FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY)
+                        .allMatch(it -> it.getRequiredQty() == null),
+                "0 不是有效投入量, 不能被当作「投了 0kg 原料」算出一堆 0 需求量");
     }
 
     private FactoryWarehouse warehouse(String id, WarehouseType type) {
