@@ -6,6 +6,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement;
 import com.cretas.aims.exception.BusinessException;
@@ -27,14 +28,18 @@ import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -67,9 +72,27 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
     private Logger guardLogger;
     private ListAppender<ILoggingEvent> logAppender;
 
+    /**
+     * 缺陷48终审②：批次归属登记表，喂给 {@code materialBatchRepository.findAllById(...)} 的
+     * mock 回答——{@link CustomerSuppliedSettlementCoverageGuard#filterCustomerOwned} 批量按
+     * materialBatchId 查一次，这里模拟同一份批量查询行为（不逐条 stub，与生产代码一致）。
+     */
+    private final Map<String, MaterialBatch> knownBatches = new LinkedHashMap<>();
+
     @BeforeEach
     void noSiblingPlansByDefault() {
         when(planRepository.findByFactoryIdAndSourceOrderId(FACTORY, ORDER)).thenReturn(List.of());
+        when(materialBatchRepository.findAllById(any())).thenAnswer(invocation -> {
+            Iterable<String> ids = invocation.getArgument(0);
+            List<MaterialBatch> found = new ArrayList<>();
+            for (String id : ids) {
+                MaterialBatch batch = knownBatches.get(id);
+                if (batch != null) {
+                    found.add(batch);
+                }
+            }
+            return found;
+        });
         guardLogger = (Logger) LoggerFactory.getLogger(CustomerSuppliedSettlementCoverageGuard.class);
         logAppender = new ListAppender<>();
         logAppender.start();
@@ -110,6 +133,56 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         assertTrue(audited.getAudit().isClean());
         assertTrue(audited.getAudit().getIssues().isEmpty());
         guard.requireCleanForOneClick(audited);
+    }
+
+    @Test
+    void companyOwnedAuxiliaryLinesNeverTriggerAnyMessageEvenWhenNotOnTheCustomerList() {
+        // 缺陷48终审②(2026-09, prod PLAN-...-34F8CD82 实测): 同一批实际报工里, 客供
+        // 1399上脑(CUSTOMER_OWNED) 与工厂自购的冰水/L1纸箱(COMPANY_OWNED) 混在一起——
+        // 后两者根本不在任何客供清单里, 规则①②只该管前者。阳性对照。
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+
+        ProductionSettlementPrefillResponse audited = guard.audit(FACTORY, PLAN, prefill(
+                line("pork-1399", "100"),
+                companyOwnedLine("ice-water", "20", "kg"),
+                companyOwnedLine("l1-carton", "6.94", "个")));
+
+        assertTrue(audited.getAudit().isClean());
+        assertTrue(audited.getAudit().getIssues().isEmpty());
+        guard.requireCleanForOneClick(audited);
+    }
+
+    @Test
+    void overageMessageNeverNamesCompanyOwnedMaterialsEvenWhenACustomerMaterialIsOverReceived() {
+        // 「只断言没拦」不够——还要断言消息文本里真的没提到工厂自有料的名字, 否则一个
+        // 把过滤写反/漏掉的实现也可能在这条阳性对照上侥幸通过(见交接说明)。
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+        when(planRepository.findByFactoryIdAndSourceOrderId(FACTORY, ORDER))
+                .thenReturn(List.of(plan("plan-b", MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(settlementConsumptionRepository.findByFactoryIdAndProductionPlanIdInAndDeletedAtIsNull(
+                FACTORY, List.of("plan-b")))
+                .thenReturn(List.of(settledConsumption("pork-1399", "5850")));
+        // 就算过滤被写反/漏掉让 ice-water 混进 foreign 名单, 它的显示名也会解析成「冰水」——
+        // 这样断言「消息不含冰水」才是真的在守规则, 不是碰巧没人给这个 id 起中文名。
+        when(rawMaterialTypeRepository.findByIdIn(Set.of("ice-water")))
+                .thenReturn(List.of(rawMaterialType("ice-water", "冰水")));
+
+        ProductionSettlementPrefillResponse audited = guard.audit(FACTORY, PLAN, prefill(
+                line("pork-1399", "100"),
+                companyOwnedLine("ice-water", "20", "kg")));
+
+        assertFalse(audited.getAudit().isClean());
+        String allMessages = audited.getAudit().getIssues().stream()
+                .map(ProductionSettlementPrefillResponse.Issue::getMessage)
+                .collect(Collectors.joining(" | "));
+        assertTrue(allMessages.contains("1399上脑"), allMessages);
+        assertFalse(allMessages.contains("冰水"), allMessages);
     }
 
     @Test
@@ -238,6 +311,36 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
     // ------------------------------------------------------------------
     // mergeMissingManualRawConsumptions() — 结单写路径, 必须与 audit() 同一份口径
     // ------------------------------------------------------------------
+
+    @Test
+    void mergeAllowsProdShapeCustomerAndCompanyOwnedMixWithoutBlocking() {
+        // 真正结单的写路径必须和 audit() 弹窗同一个结论——这是这次事故实际打到的入口
+        // (settleProduction -> mergeMissingManualRawConsumptions), 不是弹窗本身。
+        ProductionPlan plan = plan(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+        ProductionSettlementRequest derived = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(new ArrayList<>(List.of(
+                        consumptionLine("batch-pork", "pork-1399", "100", "kg"))))
+                .build();
+        registerBatch("batch-pork", "pork-1399", InventoryOwnership.CUSTOMER_OWNED);
+        registerBatch("batch-ice", "ice-water", InventoryOwnership.COMPANY_OWNED);
+        registerBatch("batch-carton", "l1-carton", InventoryOwnership.COMPANY_OWNED);
+        derived.getRawMaterialConsumptions().add(
+                ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("batch-ice").materialTypeId("ice-water")
+                        .quantity(new BigDecimal("20")).unit("kg").build());
+        derived.getRawMaterialConsumptions().add(
+                ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("batch-carton").materialTypeId("l1-carton")
+                        .quantity(new BigDecimal("6.94")).unit("个").build());
+        ProductionSettlementRequest submitted = ProductionSettlementRequest.builder()
+                .rawMaterialConsumptions(List.of()).build();
+
+        guard.mergeMissingManualRawConsumptions(FACTORY, plan, derived, submitted);
+
+        assertEquals(3, derived.getRawMaterialConsumptions().size());
+    }
 
     @Test
     void mergeAddsCustomerBatchWithinRemainingAllowance() {
@@ -424,7 +527,13 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         return type;
     }
 
+    /** 默认客供（CUSTOMER_OWNED）——本测试文件里绝大多数批次原本就代表客供物料。 */
     private static MaterialBatch batch(String id, String materialTypeId, String unit) {
+        return batch(id, materialTypeId, unit, InventoryOwnership.CUSTOMER_OWNED);
+    }
+
+    private static MaterialBatch batch(String id, String materialTypeId, String unit,
+                                        InventoryOwnership ownership) {
         MaterialBatch batch = new MaterialBatch();
         batch.setId(id);
         batch.setFactoryId(FACTORY);
@@ -432,6 +541,7 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         batch.setBatchNumber("MB-" + id);
         batch.setQuantityUnit(unit);
         batch.setWarehouseId("WH-RAW");
+        batch.setOwnership(ownership);
         return batch;
     }
 
@@ -446,8 +556,18 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         return row;
     }
 
-    private static ProductionSettlementRequest.ConsumptionLine consumptionLine(
+    private MaterialBatch registerBatch(String id, String materialTypeId, InventoryOwnership ownership) {
+        MaterialBatch registered = batch(id, materialTypeId, "kg", ownership);
+        knownBatches.put(id, registered);
+        return registered;
+    }
+
+    /** derived（auto-derived from 逐道报工）用的消耗行——批次默认客供，与既有测试原意一致。 */
+    private ProductionSettlementRequest.ConsumptionLine consumptionLine(
             String batchId, String materialTypeId, String quantity, String unit) {
+        if (!knownBatches.containsKey(batchId)) {
+            registerBatch(batchId, materialTypeId, InventoryOwnership.CUSTOMER_OWNED);
+        }
         return ProductionSettlementRequest.ConsumptionLine.builder()
                 .materialBatchId(batchId)
                 .materialTypeId(materialTypeId)
@@ -456,14 +576,41 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
                 .build();
     }
 
-    /** Prefill 用的报工带入行 —— 只需要 materialTypeId + quantity, 不需要真实批次。 */
-    private static ProductionSettlementRequest.ConsumptionLine line(String materialTypeId, String quantity) {
+    /**
+     * Prefill 用的报工带入行——自动登记一个 CUSTOMER_OWNED 批次（缺陷48终审②之前, 这里的
+     * 行天然就代表客供物料; 现在规则①②只认批次 ownership, 所以显式登记一个批次让
+     * {@code filterCustomerOwned} 能查到）。
+     */
+    private ProductionSettlementRequest.ConsumptionLine line(String materialTypeId, String quantity) {
         return line(materialTypeId, quantity, "kg");
     }
 
-    private static ProductionSettlementRequest.ConsumptionLine line(
+    private ProductionSettlementRequest.ConsumptionLine line(
             String materialTypeId, String quantity, String unit) {
+        String batchId = "cust-batch-" + materialTypeId;
+        if (!knownBatches.containsKey(batchId)) {
+            registerBatch(batchId, materialTypeId, InventoryOwnership.CUSTOMER_OWNED);
+        }
         return ProductionSettlementRequest.ConsumptionLine.builder()
+                .materialBatchId(batchId)
+                .materialTypeId(materialTypeId)
+                .quantity(new BigDecimal(quantity))
+                .unit(unit)
+                .build();
+    }
+
+    /**
+     * 工厂自有（COMPANY_OWNED）消耗行——缺陷48终审②的核心夹具：prod 实测同一批次报工里
+     * 混着客供 1399上脑与工厂自购的冰水/L1纸箱，规则①②必须只管前者、对后者零提示。
+     */
+    private ProductionSettlementRequest.ConsumptionLine companyOwnedLine(
+            String materialTypeId, String quantity, String unit) {
+        String batchId = "co-batch-" + materialTypeId;
+        if (!knownBatches.containsKey(batchId)) {
+            registerBatch(batchId, materialTypeId, InventoryOwnership.COMPANY_OWNED);
+        }
+        return ProductionSettlementRequest.ConsumptionLine.builder()
+                .materialBatchId(batchId)
                 .materialTypeId(materialTypeId)
                 .quantity(new BigDecimal(quantity))
                 .unit(unit)

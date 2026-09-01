@@ -6,6 +6,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.inventory.SalesOrderSuppliedMaterialRequirement;
 import com.cretas.aims.exception.BusinessException;
@@ -104,7 +105,10 @@ public class CustomerSuppliedSettlementCoverageGuard {
         Set<String> addedManualBatchIds = new LinkedHashSet<>();
         // 本批内部已经算入的量（从 derived 起算，随手工补录逐步增长）——
         // 用来判断「再加这一笔会不会把这张 SO 这种料的累计用量顶穿已收数量」。
-        Map<String, UnitQuantity> coveredWithinThisPlan = reportedQuantitiesByType(merged);
+        // 只算 ownership=CUSTOMER_OWNED 的行——derived 里混着工厂自有的辅料
+        // (冰水/纸箱等) 天经地义, 规则①②不该管它们(缺陷48终审②)。
+        Map<String, UnitQuantity> coveredWithinThisPlan =
+                reportedQuantitiesByType(filterCustomerOwned(factoryId, merged));
 
         List<ProductionSettlementRequest.ConsumptionLine> submittedLines =
                 submitted.getRawMaterialConsumptions() == null
@@ -132,17 +136,34 @@ public class CustomerSuppliedSettlementCoverageGuard {
                     .orElseThrow(() -> mergeFailure("客供补录批次不存在或不属于当前工厂",
                             "CUSTOMER_SUPPLIED_BATCH_NOT_FOUND"));
             String materialTypeId = batch.getMaterialTypeId();
-            UnitQuantity received = receivedByType.get(materialTypeId);
-            if (received == null) {
-                throw mergeFailure("所选批次不属于当前订单的客供物料清单",
-                        ISSUE_CODE_MATERIAL_NOT_LISTED);
-            }
             BigDecimal quantity = candidate.getQuantity();
             if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
                 throw mergeFailure("客供补录数量必须大于 0",
                         "CUSTOMER_SUPPLIED_MANUAL_QUANTITY_INVALID");
             }
             String batchUnit = batch.getQuantityUnit();
+            // 缺陷48终审②: 规则①②只管客供(ownership=CUSTOMER_OWNED)批次。工厂自有料
+            // (及无 ownership 的老批次) 一律不校验、不说话——判定用批次自己的 ownership 字段,
+            // ⛔ 不用物料类别/plan.materialSupplyMode 推。
+            if (batch.getOwnership() != InventoryOwnership.CUSTOMER_OWNED) {
+                ProductionSettlementRequest.ConsumptionLine companyOwnedLine =
+                        ProductionSettlementRequest.ConsumptionLine.builder()
+                                .materialBatchId(batch.getId())
+                                .materialTypeId(materialTypeId)
+                                .batchNumber(batch.getBatchNumber())
+                                .quantity(quantity)
+                                .unit(batchUnit)
+                                .warehouseId(batch.getWarehouseId())
+                                .note(candidate.getNote())
+                                .build();
+                merged.add(companyOwnedLine);
+                continue;
+            }
+            UnitQuantity received = receivedByType.get(materialTypeId);
+            if (received == null) {
+                throw mergeFailure("所选批次不属于当前订单的客供物料清单",
+                        ISSUE_CODE_MATERIAL_NOT_LISTED);
+            }
             if (!unitsComparable(received.unit(), batchUnit)) {
                 // 单位口径不一致（例如已收按 kg 记, 这个批次按「个/只/箱」记）——不能用数值
                 // 直接减出「缺口」, 按硬约束4 当「没量到」处理：不拦这一笔手工补录, 也不在这里
@@ -217,8 +238,8 @@ public class CustomerSuppliedSettlementCoverageGuard {
         Map<String, UnitQuantity> receivedByType = receivedByMaterialType(requirements);
         Map<String, UnitQuantity> consumedElsewhere =
                 consumedByOtherSettledPlans(factoryId, plan.getSourceOrderId(), planId);
-        Map<String, UnitQuantity> reportedByType =
-                reportedQuantitiesByType(response.getPrefill().getRawMaterialConsumptions());
+        Map<String, UnitQuantity> reportedByType = reportedQuantitiesByType(
+                filterCustomerOwned(factoryId, response.getPrefill().getRawMaterialConsumptions()));
 
         CoverageEvaluation evaluation = evaluateAgainstLedger(
                 requirements, receivedByType, consumedElsewhere, reportedByType);
@@ -375,6 +396,49 @@ public class CustomerSuppliedSettlementCoverageGuard {
                 .stream()
                 .filter(requirement -> requirement != null && factoryId.equals(requirement.getFactoryId()))
                 .toList();
+    }
+
+    /**
+     * 规则①②只管客供（{@code ownership = CUSTOMER_OWNED}）批次的消耗行——工厂自有料
+     * （及无 ownership 的老批次）一律不校验、不说话（缺陷48终审②，2026-09）。
+     *
+     * <p>prod 实测：{@code PLAN-...-34F8CD82} 这批同时消耗了客供 1399上脑（CUSTOMER_OWNED）
+     * 和工厂自购的冰水/L1纸箱（COMPANY_OWNED），旧版本把规则①②套用到了本批<b>每一样</b>消耗，
+     * 冰水/纸箱天生不在任何客供清单里，被误判「本批使用了客供清单之外的料」挡住结单。</p>
+     *
+     * <p>判 ownership 用<b>批次</b>上的字段，⛔ 不用物料类别、⛔ 不用
+     * {@code plan.materialSupplyMode} 推——同一个计划里客供原料与工厂自有辅料混用是正常形态。
+     * 消耗行只带 {@code materialBatchId}，批量按 id 查一次批次（{@link MaterialBatchRepository}
+     * 继承自 {@code JpaRepository} 的 {@code findAllById}，与本仓既有约定一致，例如
+     * {@code MaterialConsumptionController} 同款用法），⛔ 不逐行查（N+1）。</p>
+     */
+    private List<ProductionSettlementRequest.ConsumptionLine> filterCustomerOwned(
+            String factoryId, List<ProductionSettlementRequest.ConsumptionLine> lines) {
+        if (lines == null || lines.isEmpty()) {
+            return List.of();
+        }
+        Set<String> batchIds = lines.stream()
+                .filter(line -> line != null && !isBlank(line.getMaterialBatchId()))
+                .map(ProductionSettlementRequest.ConsumptionLine::getMaterialBatchId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, InventoryOwnership> ownershipByBatchId = new LinkedHashMap<>();
+        if (!batchIds.isEmpty()) {
+            for (MaterialBatch batch : materialBatchRepository.findAllById(batchIds)) {
+                if (batch != null && batch.getId() != null && factoryId.equals(batch.getFactoryId())) {
+                    ownershipByBatchId.put(batch.getId(), batch.getOwnership());
+                }
+            }
+        }
+        List<ProductionSettlementRequest.ConsumptionLine> customerOwned = new ArrayList<>();
+        for (ProductionSettlementRequest.ConsumptionLine line : lines) {
+            if (line == null || isBlank(line.getMaterialBatchId())) {
+                continue;
+            }
+            if (ownershipByBatchId.get(line.getMaterialBatchId()) == InventoryOwnership.CUSTOMER_OWNED) {
+                customerOwned.add(line);
+            }
+        }
+        return customerOwned;
     }
 
     private static Map<String, UnitQuantity> receivedByMaterialType(
