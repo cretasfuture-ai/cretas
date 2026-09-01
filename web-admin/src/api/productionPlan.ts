@@ -318,6 +318,8 @@ export interface ProductionSummaryDTO {
   realYieldRate: number | null
   /** 成品重量未录入时的提示文字; realYieldRate 为 null 时填充 */
   yieldNote: string | null
+  /** 总成本为 null 且不是脱敏时的原因(哪个批次、缺什么)。⛔ 不要把 null 画成 ¥0。 */
+  costNote?: string | null
   totalCost: number | null
   priceMasked: boolean
   batches: ProductionSummaryBatch[]
