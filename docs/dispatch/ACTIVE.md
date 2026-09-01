@@ -248,6 +248,20 @@
 
 **在飞 7**：#487 已合待部署 / 31+49t / 46 / 47 🔒 / 48 🔒 / 40-42 / 49p。**下一次部署**：任一到达即发。
 
+### 📌 2026-09-02 05:20 增量 · 部署 12/13/14, 合并 59, 主料配比改由工艺 chat 交付
+
+⚠️ 时钟订正：上一段标「05:05」实为 04:4x（我按估计写的，下面全部用日志/系统时钟）。
+
+**部署**：**12** 04:44 web-only（#487 生产菜单，`index-CDmtbKC4 → index-Cr-oYtLd` 含 `/production/material-flow`）✅ / **13** 05:13:59 green（#491，`RawMaterialTypeController` `warehouse:read_write` 0→1；web 页 chunk `list-C1AJznBq` `canWrite("warehouse")`=1、`("production")`=0）✅ / **14** 05:2x 在跑（#492，`SalesServiceImpl.autoPrefillFifoAllocations` 0→2）。
+
+**合并 59**：#491 **缺陷 46**（owner 裁「改页面写权限」）：前端 `canWrite('warehouse')` + 后端 5 个端点（原料类型 CUD + 包装层级 PUT/DELETE）加 `warehouse:read_write`（否则前端改了就是 403）；阴性对照钉 `markByproduct` 仍只认 production。⚠️ 两条给 owner 的副作用：① **`warehouse_worker` 与 `warehouse_manager` 一起获得物料主数据写权限**（模块级权限分不开两者，若只想给经理要改成角色门）；② **推翻了 2026-08-22 的相反决定**（当时注释：「原料类型是主数据，仓库工人不该增删改」）。#492 **缺陷 42**：建子发运时后端自动 FIFO 预填（复用 `autoAllocateFifo`，单一实现点不会双触发；库存不足 `BusinessException` 捕获→warn→转手工，⛔ 不让建单失败）；**缺陷 40 早在 8-24 (`96175083beb`) 就存在**（FULL 模式自动整单子发运，不自动确认，二次建单无唯一性陷阱），执行者核了没重造 —— 走查时登记的 40 是误报。
+
+**主料配比 (a) 改由工艺 chat `local-workflow-prototype-uat-1ddf54-3e` 交付**（它已在本机做完：INPUT 端口 `inputShareRatio` → `workflow_task_ports.input_share_ratio` → 领料单 RAW 行「按配比 30%」+ 确认领料填一个自动跳其余；LOCALUAT 实测 2082=300 ⇒ 1399 300 / 和牛50 400；在途计划钉旧修订不受影响）。**我不另派。** 排期：🔴 **它的迁移 `V20261101_23` 撞号**（已被 #464 用掉并上 prod）→ 改 `_25`（47 用 `_24`）；等 **47 合入** → 它 rebase（复用 #483 的 `manuallyTouched`，顺序「RAW 份额推算 → 触发辅料推算」，#483 的 0.2514/0.419 与 #469 语义不能红，加「手改行不被份额覆盖」阴性）→ **owner 在它 session 说「开 PR」**（它那条线的既定门禁，转述不算）→ 🔒 终审 → 合 → 部署 → **人工**：LIUSHANMEN 工艺 190/192 第 1 道三个 INPUT 填份额重发布（已开计划不变）。**独立登记**：路①「按成品量反推领料」需标准出成率，BOM RAW `yield_rate` 全 100 默认、真实出成率报工时人填。
+
+**方法学（本段三条）**：① **迁移号是序号不是日期，并行线合前必须重数一次 max，⛔ 不能各自数各自的** —— 同号不同文件 git/编译/测试全静默，到启动才炸。② **说「X 还没发生」之前先跑一条命令让它自己说**（f006 今晚第四次「读数 vs 假设」：`tail` 退出码 / `TRF-MT-*` / 回料表 / 「#485 还没合」——最后这次压根没读）。③ 验前端改动第一句先硬刷新（34、33 两次被浏览器缓存骗）。
+
+**在飞 4**：31+49t（`aa3b35b873bab5177`）/ 47 🔒（`a3d5a2483b00d63a4`）/ 48 🔒（`a85f90135e94e680f`）/ 49p（`a3a7a38eaf271a120`）。owner 04:5x 睡，48 落地后结单留到早上他在场。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
