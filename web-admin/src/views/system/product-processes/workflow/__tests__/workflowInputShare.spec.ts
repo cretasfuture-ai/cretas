@@ -21,6 +21,12 @@ describe('deriveByShare', () => {
     expect(d.get('c')).toBe(70);
   });
 
+  it('阴性对照: 份额 0 的行不参与 —— 不被推成 0 (organizer 自查项)', () => {
+    const d = deriveByShare([{ id: 'a', share: 30 }, { id: 'b', share: 70 }, { id: 'z', share: 0 }], 'a', 30);
+    expect(d.has('z')).toBe(false);
+    expect(d.get('b')).toBe(70);
+  });
+
   it('阴性对照: 刚填的那行没份额 ⇒ 不推 (⛔ 不猜)', () => {
     expect(deriveByShare([{ id: 'a', share: null }, { id: 'b', share: 70 }], 'a', 30).size).toBe(0);
   });

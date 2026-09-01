@@ -21,7 +21,8 @@ export function deriveByShare(lines: ShareLine[], changedId: string, changedQty:
   const base = lines.find((l) => l.id === changedId)?.share;
   if (base == null || !(base > 0)) return out;
   for (const l of lines) {
-    if (l.id === changedId || l.share == null) continue;
+    // 份额 0 = 不参与推算(与后端 InputShareRatios 同口径), ⛔ 不推成 0
+    if (l.id === changedId || l.share == null || !(l.share > 0)) continue;
     out.set(l.id, Number(((changedQty * l.share) / base).toFixed(6)));
   }
   return out;

@@ -74,7 +74,8 @@ public final class InputShareRatios {
             return out;
         }
         for (Map.Entry<String, BigDecimal> e : shares.entrySet()) {
-            if (e.getKey().equals(filledPortId) || e.getValue() == null) continue;
+            // 份额 0 = 「这个入口不参与推算」(与编译器 optionalPercent 的口径一致), ⛔ 不推成一个 0 kg
+            if (e.getKey().equals(filledPortId) || e.getValue() == null || e.getValue().signum() <= 0) continue;
             out.put(e.getKey(), filledQty.multiply(e.getValue()).divide(base, 6, RoundingMode.HALF_UP));
         }
         return out;

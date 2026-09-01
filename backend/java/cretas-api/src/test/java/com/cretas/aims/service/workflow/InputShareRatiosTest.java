@@ -56,6 +56,15 @@ class InputShareRatiosTest {
     }
 
     @Test
+    @DisplayName("阴性对照: 份额 0 的端口不参与 —— 不被推成 0 kg (organizer 自查项)")
+    void zeroShareIsNotDerived() {
+        Map<String, BigDecimal> d = InputShareRatios.derive(
+                Map.of("in:a", new BigDecimal("30"), "in:b", new BigDecimal("70"), "in:z", BigDecimal.ZERO),
+                "in:a", new BigDecimal("30"));
+        assertThat(d).containsOnlyKeys("in:b");
+    }
+
+    @Test
     @DisplayName("阴性对照: 非法 JSON → 空表, 不抛 (建单不能因它拦)")
     void invalidJsonIsEmpty() {
         assertThat(InputShareRatios.fromNodesJson("not json")).isEmpty();
