@@ -743,6 +743,26 @@ class ProcessSheetServiceImplTest {
                 ledger.stream().filter(t -> t.getTxnType() == com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.REVERSE)
                         .findFirst().orElseThrow().getId());
 
+        // 终审 #527 跟进 1: 还回流水之所以不撞 PARTIAL_COMPENSATION / WIP_SCOPE_INVALID, 是它够不着 executeReversal
+        //   的 involvedSfiIds 两个来源 —— 这是两个查询的性质, 钉住: (i) 本批报工流水 (按 reportId) 里没有它;
+        //   (ii) 本批 WIP (按 batchId) 里没有回料 SFI (它是别的批产的)。
+        com.cretas.aims.entity.SemiFinishedInventoryTransaction reverseTxn = ledger.stream()
+                .filter(t -> t.getTxnType() == com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .findFirst().orElseThrow();
+        List<ProductionReport> allReportsOfBatch = jdbcTemplate.queryForList(
+                        "SELECT id FROM production_reports WHERE factory_id = ? AND batch_id = ?", Long.class,
+                        FACTORY_ID, submitted.getBatchId()).stream()
+                .map(id -> reportRepo.findById(id).orElse(null)).filter(java.util.Objects::nonNull).toList();
+        assertThat(allReportsOfBatch).as("这一批确实有报工 (含已软删), 否则下面的「找不到」是恒真式").isNotEmpty();
+        for (ProductionReport r : allReportsOfBatch) {
+            assertThat(sfiTxnRepo.findByFactoryIdAndReportId(FACTORY_ID, r.getId()))
+                    .as("来源 (i): 报工 %s 的流水里不能有还回流水", r.getId())
+                    .noneMatch(t -> java.util.Objects.equals(t.getId(), reverseTxn.getId()));
+        }
+        assertThat(sfiRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY_ID, submitted.getBatchId()))
+                .as("来源 (ii): 本批 WIP 里没有回料 SFI (它是别的批产的)")
+                .noneMatch(w -> java.util.Objects.equals(w.getId(), restored.getId()));
+
         // 终审 #527 验收①: 同一批次再 executeReversal 一次 → DONE 幂等 no-op, 不是 WIP_SCOPE_INVALID; 库存不动
         reportReversalService.executeReversal(log.getId(), FACTORY_ID);
         assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)

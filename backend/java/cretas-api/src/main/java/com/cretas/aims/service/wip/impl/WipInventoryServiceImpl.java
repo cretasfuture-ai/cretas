@@ -811,20 +811,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 🟠 盒⇄kg 折算: 计数单位半成品 (盒/个/件/只) 作 kg 道投料来源时, 把 kg 投料量折算为盒数扣减
         //   (依据 ProductType.gramsPerUnit)。kg/重量单位来源 → 原样 (deductQty = qty, 行为不变; 不查产品避免多余 IO)。
         //   🔴 诚实 null (禁止降级): 计数单位来源缺每盒克重 → 无法折算 → loud-fail, 绝不臆造 1盒=1kg。
-        BigDecimal deductQty;
-        if (FeedUnitConverter.isCountUnit(sfi.getUnit())) {
-            deductQty = FeedUnitConverter.feedKgToSourceUnit(
-                    qty, sfi.getUnit(), resolveGramsPerUnit(sfi.getProductTypeId()));
-            if (deductQty == null) {
-                throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为" + sfi.getUnit()
-                        + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为" + sfi.getUnit() + "扣减")
-                        .withCode("SFI_NO_GRAMS_PER_UNIT")
-                        .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试投料")
-                        .withSeverity("BLOCKING")
-                        .withHintTarget(intermediateBatchNo);
-            }
-        } else {
-            deductQty = qty; // kg / 重量单位: 直投 (行为不变)
+        // 盒⇄kg 折算收成一条路径 (终审 #527 跟进 2): 与 resolveSemiFeedQtyInSourceUnit / restoreClerkSemiStrict 同源。
+        //   kg/重量单位源 → 原值; 计数单位源 → 盒数; 计数单位缺每盒克重 → null ⇒ loud-fail (禁止臆造 1盒=1kg)。
+        BigDecimal deductQty = resolveSemiFeedQtyInSourceUnit(factoryId, intermediateBatchNo, qty);
+        if (deductQty == null) {
+            throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为"
+                    + com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit())
+                    + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为"
+                    + com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit()) + "扣减")
+                    .withCode("SFI_NO_GRAMS_PER_UNIT")
+                    .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试投料")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
         }
         BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal consumed = nz(sfi.getConsumedQuantity());
