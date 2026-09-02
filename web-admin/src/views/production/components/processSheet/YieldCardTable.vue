@@ -57,9 +57,43 @@ const missingYieldCount = computed(() =>
   rows.value.filter((row) => row.cumulativeYieldRate == null).length,
 );
 
-const missingCostCount = computed(() =>
-  rows.value.filter((row) => row.rowTotalCost == null || row.unitPrice == null).length,
+const missingCostRows = computed(() =>
+  rows.value.filter((row) => row.rowTotalCost == null || row.unitPrice == null),
 );
+
+const missingCostCount = computed(() => missingCostRows.value.length);
+
+const LEGACY_COST_MISSING_HINT = '检查来源半成品单价、工序成本或成品成本结算数据。';
+
+/**
+ * 缺陷 A (2026-09-02, prod 实拍 plan PLAN-1788305552728-D94F7E22): 旧文案对「有 N 行成本未显示」
+ * 不分青红皂白固定列三个原因 (检查来源半成品单价/工序成本/成品成本结算数据), 而 prod 实测这批
+ * 10 道工序全都没录工时, 前 4 道因此成本未知 —— 三个原因一个都不对。
+ *
+ * 后端在能 100% 判定「本道没录工时」时会在 costMissingReasons 里标 "LABOR_NOT_LOGGED"；判不出
+ * 具体原因的行（costMissingReasons 为空/未标）沿用旧的通用排查文案。⛔ 只有多种原因同时存在时才
+ * 并列展示，不许只挑一个说。
+ */
+const missingCostHint = computed(() => {
+  const missing = missingCostRows.value;
+  const laborNotLogged = missing.filter((row) =>
+    (row.costMissingReasons || []).includes('LABOR_NOT_LOGGED'),
+  ).length;
+  const other = missing.length - laborNotLogged;
+  if (missing.length === 0) {
+    return LEGACY_COST_MISSING_HINT;
+  }
+  const parts: string[] = [];
+  if (laborNotLogged > 0) {
+    parts.push(`本道未录工时（${laborNotLogged} 道）`);
+  }
+  if (other > 0) {
+    parts.push(laborNotLogged > 0
+      ? `其余 ${other} 行请${LEGACY_COST_MISSING_HINT}`
+      : LEGACY_COST_MISSING_HINT);
+  }
+  return parts.join('；');
+});
 
 const processFilters = computed(() => Array.from(new Set(rows.value
   .map((row) => row.processName || '未命名工序')))
@@ -261,7 +295,7 @@ defineExpose({ refresh });
         有 {{ missingCostCount }} 行成本未显示
       </template>
       <template #default>
-        检查来源半成品单价、工序成本或成品成本结算数据。
+        {{ missingCostHint }}
       </template>
     </el-alert>
   </div>

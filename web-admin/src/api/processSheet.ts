@@ -303,6 +303,11 @@ export interface ProcessSheetInventoryItem {
   stepYieldRate?: number | null;
   /** 对原料累计出成率 (%) = 本道产出(折算首道单位) / 首道投入 × 100; null = 跨单位无折算系数 */
   cumulativeYieldRate?: number | null;
+  /**
+   * 缺陷 A (2026-09-02): rowTotalCost/unitPrice 为 null 时, 后端能 100% 判定的具体原因
+   * (目前只有 "LABOR_NOT_LOGGED" 一种)。判不出时为 null/空数组 —— 页面沿用旧的通用排查文案。
+   */
+  costMissingReasons?: string[] | null;
 }
 
 /**

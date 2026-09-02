@@ -2869,6 +2869,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 processName = processNameByOrder.get(wip.getProcessOrder()); // 兜底真实名, 否则前端显示"工序N"
             }
 
+            BigDecimal rowTotalCost = wip.getUnitCost() == null || produced == null ? null
+                    : wip.getUnitCost().multiply(produced).setScale(2, RoundingMode.HALF_UP); // §9 口径铁律: 展示侧镜像持久化 scale-2, 防亚分噪音(1.9206→1.92)
+            // 缺陷 A (2026-09-02, prod 实拍): 成本缺失时尽力标注能 100% 判定的原因, 不用旧的
+            // 「三个原因通打」文案掩盖真因 (常见真因: 本道没录工时)。
+            List<String> costMissingReasons = rowTotalCost == null
+                    ? resolveCostMissingReasons(factoryId, wip.getSourceWorkProcessTaskId())
+                    : List.of();
+
             result.add(ProcessSheetInventoryItem.builder()
                     .batchNumber(wip.getIntermediateBatchNo())
                     .produced(produced)
@@ -2876,8 +2884,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .remaining(available)
                     .status(wip.getStatus())
                     .unitPrice(wip.getUnitCost())
-                    .rowTotalCost(wip.getUnitCost() == null || produced == null ? null
-                            : wip.getUnitCost().multiply(produced).setScale(2, RoundingMode.HALF_UP)) // §9 口径铁律: 展示侧镜像持久化 scale-2, 防亚分噪音(1.9206→1.92)
+                    .rowTotalCost(rowTotalCost)
+                    .costMissingReasons(costMissingReasons)
                     .processOrder(wip.getProcessOrder())
                     .processName(processName)
                     .unit(unit)
@@ -2886,6 +2894,36 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .build());
         }
         return result;
+    }
+
+    /** 成本缺失原因的机器可读码 —— 前端按此选择措辞, 不解析中文文案。 */
+    private static final String COST_MISSING_REASON_LABOR_NOT_LOGGED = "LABOR_NOT_LOGGED";
+
+    /**
+     * 缺陷 A（2026-09-02，prod 实拍 plan PLAN-1788305552728-D94F7E22）：missingCostCount 提示旧文案
+     * 固定列「检查来源半成品单价/工序成本/成品成本结算数据」三个原因，但 prod 实测这批 10 道工序
+     * 全都没录工时（laborSegments 为空），前 4 道因此成本未知——三个原因一个都不对。
+     *
+     * <p>与 {@code WipInventoryServiceImpl.upsertProducedWip} 的诚实-null 判据同源：WIP.unitCost
+     * 为 null 只可能来自「本次贡献成本未知（labor 与 material 都缺）」或「历史已被毒化」。本方法
+     * 只在能 100% 判定「本道所有 YIELD 报工都没有录工时」时才归因 LABOR_NOT_LOGGED —— 判不出就
+     * 返回空列表，前端保留旧的通用排查文案，⛔ 不猜。
+     *
+     * @param taskId {@link SemiFinishedInventory#getSourceWorkProcessTaskId()}；为 null（查不到
+     *               关联报工任务）时无法归因，返回空列表。
+     */
+    private List<String> resolveCostMissingReasons(String factoryId, Long taskId) {
+        if (taskId == null) {
+            return List.of();
+        }
+        List<ProductionReport> reports = reportRepo.findYieldReportsByTask(factoryId, taskId);
+        if (reports.isEmpty()) {
+            return List.of();
+        }
+        boolean laborLogged = reports.stream().anyMatch(r ->
+                (r.getLaborSegments() != null && !r.getLaborSegments().isEmpty())
+                        || r.getLaborCost() != null);
+        return laborLogged ? List.of() : List.of(COST_MISSING_REASON_LABOR_NOT_LOGGED);
     }
 
     /**

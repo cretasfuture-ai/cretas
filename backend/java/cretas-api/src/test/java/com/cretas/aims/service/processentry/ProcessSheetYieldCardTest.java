@@ -34,12 +34,16 @@ import org.mockito.quality.Strictness;
 import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -726,6 +730,104 @@ class ProcessSheetYieldCardTest {
         assertThat(finalStep.getCumulativeYieldRate())
                 .as("450份×200g=90kg / 100kg = 90%")
                 .isEqualByComparingTo("90.0000");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 缺陷 A (2026-09-02, prod 实拍 plan PLAN-1788305552728-D94F7E22): missingCostCount 提示
+    // 旧文案固定列三个原因, 真因常是「本道未录工时」——见 resolveCostMissingReasons Javadoc。
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("YIELD-CARD-COST-A1: 缺陷A - 本道所有报工都没录工时 → costMissingReasons=[LABOR_NOT_LOGGED]")
+    void costMissing_laborNotLogged_marksReason() {
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(batch(BATCH_ID)));
+        Long taskId = 555L;
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, BATCH_ID))
+                .thenReturn(List.of(wipWithUnitCost(BATCH_ID, 1, "100", "0", "100", "kg", taskId, null)));
+        when(reportRepo.findYieldReportsByBatch(FACTORY, BATCH_ID)).thenReturn(List.of());
+        // 本道两条 YIELD 报工都没有 laborSegments/laborCost —— 100% 可判「没录工时」。
+        when(reportRepo.findYieldReportsByTask(FACTORY, taskId))
+                .thenReturn(List.of(reportWithLabor(null, null), reportWithLabor(List.of(), null)));
+        when(taskRepo.findByFactoryIdAndIdIn(eq(FACTORY), any(Collection.class))).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        when(productTypeRepo.findById(anyString())).thenReturn(Optional.empty());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getRowTotalCost()).as("未录工时不改变现有诚实-null 语义").isNull();
+        assertThat(result.get(0).getCostMissingReasons()).containsExactly("LABOR_NOT_LOGGED");
+    }
+
+    @Test
+    @DisplayName("YIELD-CARD-COST-A2: 缺陷A - 本道已录工时但成本仍未知(如半成品单价缺失) → costMissingReasons 为空, 沿用旧通用文案")
+    void costMissing_laborLogged_reasonsEmpty() {
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(batch(BATCH_ID)));
+        Long taskId = 556L;
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, BATCH_ID))
+                .thenReturn(List.of(wipWithUnitCost(BATCH_ID, 1, "100", "0", "100", "kg", taskId, null)));
+        when(reportRepo.findYieldReportsByBatch(FACTORY, BATCH_ID)).thenReturn(List.of());
+        // 有一条报工带了 laborSegments —— 已经录了工时, 成本未知另有他因 (不是本方法要归因的那类)。
+        when(reportRepo.findYieldReportsByTask(FACTORY, taskId))
+                .thenReturn(List.of(reportWithLabor(
+                        List.of(Map.of("startTime", "08:00", "endTime", "10:00", "workerCount", 2)), null)));
+        when(taskRepo.findByFactoryIdAndIdIn(eq(FACTORY), any(Collection.class))).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        when(productTypeRepo.findById(anyString())).thenReturn(Optional.empty());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getRowTotalCost()).isNull();
+        assertThat(result.get(0).getCostMissingReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("YIELD-CARD-COST-A3 阴性对照: 成本已知时不判定原因、不查报工")
+    void costPresent_noReasonLookup() {
+        when(productionBatchRepo.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(batch(BATCH_ID)));
+        Long taskId = 557L;
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(FACTORY, BATCH_ID))
+                .thenReturn(List.of(wipWithUnitCost(BATCH_ID, 1, "100", "0", "100", "kg", taskId, "12.5")));
+        when(reportRepo.findYieldReportsByBatch(FACTORY, BATCH_ID)).thenReturn(List.of());
+        when(taskRepo.findByFactoryIdAndIdIn(eq(FACTORY), any(Collection.class))).thenReturn(List.of());
+        when(processRepo.findAllById(any())).thenReturn(List.of());
+        when(productTypeRepo.findById(anyString())).thenReturn(Optional.empty());
+
+        List<ProcessSheetInventoryItem> result = service.getInventoryYieldCard(FACTORY, PLAN_ID);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getRowTotalCost()).isEqualByComparingTo("1250.00");
+        assertThat(result.get(0).getCostMissingReasons()).isNullOrEmpty();
+        verify(reportRepo, never()).findYieldReportsByTask(anyString(), anyLong());
+    }
+
+    private SemiFinishedInventory wipWithUnitCost(long batchId, int order, String produced, String consumed,
+                                                  String available, String unit, Long taskId, String unitCost) {
+        return SemiFinishedInventory.builder()
+                .id((long) order)
+                .factoryId(FACTORY)
+                .batchId(batchId)
+                .intermediateBatchNo("WIP-" + batchId + "-" + order)
+                .processOrder(order)
+                .producedQuantity(new BigDecimal(produced))
+                .consumedQuantity(new BigDecimal(consumed))
+                .availableQuantity(new BigDecimal(available))
+                .unit(unit)
+                .status("AVAILABLE")
+                .sourceWorkProcessTaskId(taskId)
+                .unitCost(unitCost == null ? null : new BigDecimal(unitCost))
+                .build();
+    }
+
+    private ProductionReport reportWithLabor(List<Map<String, Object>> laborSegments, BigDecimal laborCost) {
+        ProductionReport r = new ProductionReport();
+        r.setLaborSegments(laborSegments);
+        r.setLaborCost(laborCost);
+        return r;
     }
 
     // ─────────────────────────────────────────────────────────────

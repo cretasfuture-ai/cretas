@@ -125,6 +125,17 @@ public class ProcessSheetInventoryItem {
     /** 成品重(kg) — 仅末道(finished)行有值; 来自该行 productWeight。 */
     private BigDecimal productWeight;
 
+    /**
+     * 缺陷 A（2026-09-02，prod 实拍 plan PLAN-1788305552728-D94F7E22）：rowTotalCost/unitPrice
+     * 为 null 时，能 100% 判定的具体原因（目前只有 "LABOR_NOT_LOGGED" 一种 —— 本道对应的
+     * YIELD 报工全都没有录工时，见 ProcessSheetServiceImpl#resolveCostMissingReasons）。
+     *
+     * <p>判不出具体原因（例如成本未知另有他因、或压根查不到关联报工）时留 null 或空列表，
+     * 前端沿用旧的通用排查文案（检查来源半成品单价/工序成本/成品成本结算数据）。
+     * ⛔ 不是穷举式因果分类 —— 只在能确定时才标注，判不出就不猜。
+     */
+    private List<String> costMissingReasons;
+
     @Data
     @Builder
     @NoArgsConstructor
