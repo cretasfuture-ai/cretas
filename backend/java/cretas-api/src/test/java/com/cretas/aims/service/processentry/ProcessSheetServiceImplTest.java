@@ -250,15 +250,102 @@ class ProcessSheetServiceImplTest {
         sfiRepo.saveAndFlush(sfi);
     }
 
+    /** 修油行 (原料 100 → 80, 人工时段 ⇒ 写 YIELD 报工) + 回料上游正式提交; 生产仓/工序绑定种子一并造好。 */
+    private ProcessSheetRowResult submitXiuyouWithRework(String clientRowId, String reworkBatchNo, String feedKg) {
+        // 正式提交的生产库分摊与撤回释放占用都要解析 WH-WKS (WarehouseResolver), 测试工厂没有种子 → 补一个
+        FactoryWarehouse workshop = new FactoryWarehouse();
+        workshop.setId("PSF-WH-WKS-" + UUID.randomUUID().toString().substring(0, 8));
+        workshop.setFactoryId(FACTORY_ID);
+        workshop.setCode("WH-WKS");
+        workshop.setName("测试生产仓");
+        workshop.setType(WarehouseType.WORKSHOP);
+        workshop.setIsActive(true);
+        warehouseRepo.saveAndFlush(workshop);
+        // 正式提交只能投「已领到生产仓」的原料批 → 在生产仓再种一批
+        String wsBatchId = "PSF-RAWWS-" + UUID.randomUUID().toString().substring(0, 8);
+        MaterialBatch wsRaw = new MaterialBatch();
+        wsRaw.setId(wsBatchId);
+        wsRaw.setFactoryId(FACTORY_ID);
+        wsRaw.setBatchNumber("PSF-RAWWS-" + System.currentTimeMillis() % 100000);
+        wsRaw.setMaterialTypeId(RAW_MATERIAL_TYPE_ID);
+        wsRaw.setWarehouseId(workshop.getId());
+        wsRaw.setReceiptQuantity(new BigDecimal("100.00"));
+        wsRaw.setQuantityUnit("kg");
+        wsRaw.setUsedQuantity(BigDecimal.ZERO);
+        wsRaw.setReservedQuantity(BigDecimal.ZERO);
+        wsRaw.setUnitPrice(RAW_PRICE);
+        wsRaw.setStatus(MaterialBatchStatus.AVAILABLE);
+        wsRaw.setReceiptDate(LocalDate.now());
+        wsRaw.setCreatedBy(operatorId);
+        materialBatchRepo.saveAndFlush(wsRaw);
+        // 正式提交带原料时 normalizeConfiguredUnits 要求产品配置了该工序 (legacy 单单位旁路只对无单位载荷开)
+        com.cretas.aims.entity.WorkProcess xiuyouWp = new com.cretas.aims.entity.WorkProcess();
+        xiuyouWp.setId("PSF-WP-XIUYOU-" + UUID.randomUUID().toString().substring(0, 8));
+        xiuyouWp.setFactoryId(FACTORY_ID);
+        xiuyouWp.setProcessName("修油");
+        xiuyouWp.setProcessCategory("修油");
+        xiuyouWp.setUnit("kg");
+        xiuyouWp.setDefaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED);
+        workProcessRepoForReversal.saveAndFlush(xiuyouWp);
+        com.cretas.aims.entity.ProductWorkProcess pwp = new com.cretas.aims.entity.ProductWorkProcess();
+        pwp.setFactoryId(FACTORY_ID);
+        pwp.setProductTypeId(PRODUCT_TYPE_ID);
+        pwp.setWorkProcessId(xiuyouWp.getId());
+        pwp.setProcessOrder(1);
+        pwp.setReportingRequired(true);
+        pwp.setAllowSemiFinishedInjection(true);
+        pwp.setAllowMultipleUpstreamSources(true);
+        pwp.setAllowFinishedGoodsSource(false);
+        productWorkProcessRepoForReversal.saveAndFlush(pwp);
+
+        // 行形态: 修油 (原料 100 → 产出 80) + 人工时段 (⇒ 写 YIELD/LABOR 报工, 撤回才有东西可撤) + 4kg 回料上游。
+        //   第一版只带回料上游的 qidiao 行没有 YIELD 报工, submitReversal 走「无报工 → no-op DONE」, 读数无意义。
+        ProcessSheetRowRequest req = baseReq(clientRowId, "xiuyou", 1, "80");
+        req.setProcessDate(LocalDate.of(2026, 7, 22));
+        req.setInputQuantity(new BigDecimal("104"));
+        req.setRawMaterialInputs(List.of(rawInput(wsBatchId, "100")));
+        com.cretas.aims.dto.processentry.LaborSegment shift = new com.cretas.aims.dto.processentry.LaborSegment();
+        shift.setStartTime("08:00");
+        shift.setEndTime("10:00");
+        shift.setWorkerCount(2);
+        req.setLaborSegments(List.of(shift));
+        UpstreamRef rework = upstreamRef(reworkBatchNo, feedKg);
+        rework.setSemiFinished(true);
+        req.setUpstreamSources(List.of(rework));
+        return processSheetService.submitRow(FACTORY_ID, planId, req, operatorId);
+    }
+
+    private User seedApprover() {
+        User approver = new User();
+        approver.setFactoryId(FACTORY_ID);
+        approver.setUsername("psf_approver_" + UUID.randomUUID().toString().substring(0, 8));
+        approver.setPasswordHash("$2a$10$DUMMYHASHFORTESTPLACEHOLDERONLY1");
+        approver.setIsActive(true);
+        return userRepo.saveAndFlush(approver);
+    }
+
+    private com.cretas.aims.entity.ReportReversalLog reverseWholeBatch(Long batchId) {
+        User approver = seedApprover();
+        var log = reportReversalService.submitReversal(FACTORY_ID, batchId, operatorId, "test");
+        if (log.getStatus() == com.cretas.aims.entity.ReportReversalLog.ReversalStatus.PENDING) {
+            reportReversalService.approveReversal(FACTORY_ID, log.getId(), approver.getId());
+        }
+        return log;
+    }
+
     private void seedReworkSfi(String intermediateBatchNo, String available) {
+        seedReworkSfi(intermediateBatchNo, available, "kg", PRODUCT_TYPE_ID);
+    }
+
+    private void seedReworkSfi(String intermediateBatchNo, String available, String unit, String productTypeId) {
         SemiFinishedInventory sfi = SemiFinishedInventory.builder()
                 .factoryId(FACTORY_ID)
                 .intermediateBatchNo(intermediateBatchNo)
-                .productTypeId(PRODUCT_TYPE_ID)
+                .productTypeId(productTypeId)
                 .producedQuantity(new BigDecimal(available))
                 .consumedQuantity(BigDecimal.ZERO)
                 .availableQuantity(new BigDecimal(available))
-                .unit("kg")
+                .unit(unit)
                 .isRework(true)
                 .build();
         sfiRepo.saveAndFlush(sfi);
@@ -610,6 +697,91 @@ class ProcessSheetServiceImplTest {
         } finally {
             ReflectionTestUtils.setField(target, "reworkPolicyAutoDeduction", null);
         }
+    }
+
+    @Autowired
+    private com.cretas.aims.service.reversal.ReportReversalService reportReversalService;
+    @Autowired
+    private com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository sfiTxnRepo;
+    @Autowired
+    private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepoForReversal;
+    @Autowired
+    private com.cretas.aims.repository.WorkProcessRepository workProcessRepoForReversal;
+
+    @Test
+    @DisplayName("2026-09-02 票: 提交时扣掉的回料, 整批撤回后还回 (OUT 流水挂到 YIELD 报工, 撤回沿 report_id 找到它)")
+    void batchReversal_restoresReworkConsumedAtSubmit() {
+        String reworkBatchNo = "CLK-SEMI-REWORK-REV";
+        seedReworkSfi(reworkBatchNo, "10");
+        ProcessSheetRowResult submitted = submitXiuyouWithRework("row-rework-reversal", reworkBatchNo, "4");
+        assertThat(submitted.getBatchId()).isNotNull();
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)
+                .orElseThrow().getAvailableQuantity()).as("提交时严格扣了 4").isEqualByComparingTo("6");
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, submitted.getBatchId()))
+                .as("阳性对照前提: 这一批有活 YIELD 报工 (人工), 撤回才不会走 no-op").isNotEmpty();
+
+        var log = reverseWholeBatch(submitted.getBatchId());
+
+        // 阳性对照: 撤回真的跑了 —— executeReversal ① 软删这一批全部 YIELD 报工 (设计上的必然)
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, submitted.getBatchId()))
+                .as("撤回必须真的执行 (否则下面的读数无意义)").isEmpty();
+        // 第一个 commit 钉住的阴性事实是 6; 修法后整单撤回把提交时扣的 4 还回来
+        SemiFinishedInventory restored = sfiRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo).orElseThrow();
+        assertThat(restored.getAvailableQuantity()).as("提交时扣的回料撤回后还回 (6 → 10)").isEqualByComparingTo("10");
+        assertThat(restored.getConsumedQuantity()).isEqualByComparingTo("0");
+        // 终审 #527 ②: REVERSE 流水 ⛔ 不挂报工 (批次作用域校验对报工上每条流水都成立), 血缘在 sourceRef
+        List<com.cretas.aims.entity.SemiFinishedInventoryTransaction> ledger =
+                sfiTxnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(restored.getId());
+        assertThat(ledger).filteredOn(t -> t.getTxnType() == com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .singleElement().satisfies(t -> {
+                    assertThat(t.getReportId()).isNull();
+                    assertThat(t.getSourceRef()).isEqualTo("reversal-log:" + log.getId());
+                    assertThat(t.getQuantity()).isEqualByComparingTo("4");
+                });
+        assertThat(log.getRevertedTxnIds()).as("还回流水 id 进撤回记录").contains(
+                ledger.stream().filter(t -> t.getTxnType() == com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                        .findFirst().orElseThrow().getId());
+
+        // 终审 #527 验收①: 同一批次再 executeReversal 一次 → DONE 幂等 no-op, 不是 WIP_SCOPE_INVALID; 库存不动
+        reportReversalService.executeReversal(log.getId(), FACTORY_ID);
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)
+                .orElseThrow().getAvailableQuantity()).isEqualByComparingTo("10");
+    }
+
+    @Test
+    @DisplayName("终审 #527 验收②: 计数单位回料 (盒, 每盒 500g) —— 扣 8 盒, 撤回按同一段折算还 8 盒, 不是还 4")
+    void batchReversal_restoresCountUnitReworkInSourceUnit() {
+        // 盒装回料 SKU: gramsPerUnit=500 ⇒ 4kg 投料 = 8 盒
+        String boxSku = "PT-REWORK-BOX";
+        ProductType box = new ProductType();
+        box.setId(boxSku);
+        box.setFactoryId(FACTORY_ID);
+        box.setCode(boxSku);
+        box.setName(boxSku);
+        box.setUnit("盒");
+        box.setCategory("SEMI_FINISHED");
+        box.setProductCategory("SEMI_FINISHED");
+        box.setIsActive(true);
+        box.setCreatedBy(operatorId);
+        box.setGramsPerUnit(new BigDecimal("500"));
+        productTypeRepo.saveAndFlush(box);
+        String reworkBatchNo = "CLK-SEMI-REWORK-BOX";
+        seedReworkSfi(reworkBatchNo, "20", "盒", boxSku);
+
+        ProcessSheetRowResult submitted = submitXiuyouWithRework("row-rework-reversal-box", reworkBatchNo, "4");
+        SemiFinishedInventory afterSubmit = sfiRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo).orElseThrow();
+        assertThat(afterSubmit.getConsumedQuantity()).as("4kg ÷ 500g = 8 盒").isEqualByComparingTo("8");
+        assertThat(afterSubmit.getAvailableQuantity()).isEqualByComparingTo("12");
+
+        reverseWholeBatch(submitted.getBatchId());
+
+        SemiFinishedInventory restored = sfiRepo
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo).orElseThrow();
+        // 直接用 feedKg 反冲会变成 8 − 4 = 4 盒 (4 盒永久蒸发); 成对折算后回到 0
+        assertThat(restored.getConsumedQuantity()).as("consumed 回原值").isEqualByComparingTo("0");
+        assertThat(restored.getAvailableQuantity()).isEqualByComparingTo("20");
     }
 
     @Test

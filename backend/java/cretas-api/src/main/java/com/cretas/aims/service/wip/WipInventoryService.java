@@ -237,6 +237,23 @@ public interface WipInventoryService {
     BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty);
 
     /**
+     * {@link #consumeClerkSemiStrict} 的<b>成对</b>逆操作 (整单撤回还回正式报工时扣掉的回料)。
+     *
+     * <p>入参与扣减同为 <b>kg 投料量</b>; 计数单位来源 (盒/个) 走<b>同一段</b> {@code FeedUnitConverter} 折算成原生单位再反冲
+     * consumed —— ⛔ 不在撤回侧另抄一遍折算 (终审 #527: 扣 8 盒还 4kg 会让 4 盒永久蒸发)。还量超过已消耗 ⇒ 抛
+     * SFI_REVERSE_OVER_CONSUMED (不 clamp); 源行不在 ⇒ 返回 null 让调用方登记, 不造库存。
+     * 写一条 REVERSE/REVERSAL 流水: {@code reportId=null} (⛔ 不挂报工 —— validateReportWipTransactions 的批次作用域
+     * 校验对报工上每条流水都成立, 常驻回料是别的批产的), 血缘由 {@code sourceRef} 承担。
+     *
+     * @return 实际还回量 (来源原生单位) + 流水 id; 源行不存在时 null
+     */
+    ClerkSemiRestore restoreClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal feedKg,
+                                            String sourceRef, Long operatorId);
+
+    /** 严格还回的回执: 实际还回量 (来源原生单位) + REVERSE 流水 id。 */
+    record ClerkSemiRestore(BigDecimal restored, Long ledgerTxnId) { }
+
+    /**
      * 盒⇄kg 成本口径 — 把 kg 投料量折算为半成品来源的<b>原生单位</b>数量 (计数单位 盒/个/件/只 → 盒数; kg 源 → 原值),
      * 供小结成本核算 (成本 = 折算后数量 × 每单位 {@link #getSemiUnitCost})。与 {@link #consumeClerkSemiStrict}
      * 的扣减折算<b>同源同口径</b> (盒 = feedKg × 1000 / gramsPerUnit, scale=2 HALF_UP), 保证扣减量与计价量一致。

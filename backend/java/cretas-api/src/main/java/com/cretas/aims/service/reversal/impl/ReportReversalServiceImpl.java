@@ -159,6 +159,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProcessSheetRowRepository processSheetRowRepository;
 
+    /** 还回正式报工时扣掉的回料 (与 consumeClerkSemiStrict 成对); field-inject 同上, 缺失时 ①.0 loud-fail。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+
     /**
      * 生产仓占用的释放 (释放路径 2/3: <b>冲销</b>)。
      *
@@ -498,6 +502,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             r.setDeletedAt(now);
             reportRepo.save(r);
         }
+
+        // ①.0 (2026-09-02 票) 还回正式报工时严格扣掉的回料: 那些 OUT 流水没有 reportId (consumeClerkSemiStrict
+        //   不认识报工), ② 沿 report_id 的循环看不见它们; 真相在被软删的行的 row_payload 里
+        //   (upstreamSources.stockConsumedAtSubmit=true)。必须在软删行之前读。
+        restoreReworkConsumedAtSubmit(factoryId, batchId, log_, revertedTxnIds);
 
         // ①.1 软删除逐道录入物化行。取消计划的兜底门禁会读取这些行，必须与 YIELD 报工同进退。
         softDeleteProcessSheetRows(factoryId, batchId, log_.getPlanId(), now);
@@ -1269,6 +1278,94 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
     private static boolean sameCost(BigDecimal left, BigDecimal right) {
         return left == null ? right == null : right != null && left.compareTo(right) == 0;
+    }
+
+    /**
+     * 还回正式报工时扣掉的回料 (手工选的 / 按配比自动追加的都长一样: {@code semiFinished && stockConsumedAtSubmit})。
+     *
+     * <p>行的选择与 {@link #softDeleteProcessSheetRows} 完全相同 (整单撤回按计划), 必须在软删之前读。
+     * 每条引用经 {@link WipInventoryService#restoreClerkSemiStrict} 还回 —— 与扣减 {@code consumeClerkSemiStrict}
+     * <b>成对</b>, 计数单位 (盒/个) 的折算在那一边只写一次 (终审 #527 ①)。REVERSE 流水 {@code reportId=null},
+     * 血缘由 {@code sourceRef=reversal-log:<id>} 承担 (终审 #527 ②: 挂报工会让本批此后每次 executeReversal 撞
+     * WIP_SCOPE_INVALID)。还回流水 id 进 {@code revertedTxnIds}; 源行不在的引用跳过并写进 reason 后缀, 不只留日志。
+     * 幂等靠 {@code deletedAt} 过滤 (撤回软删过的行不再读到), ⛔ 不靠 sourceRef 判重。
+     */
+    private void restoreReworkConsumedAtSubmit(String factoryId, Long batchId, ReportReversalLog log_,
+                                               List<Long> revertedTxnIds) {
+        if (processSheetRowRepository == null || batchId == null) {
+            return;
+        }
+        String planId = log_.getPlanId();
+        List<ProcessSheetRow> rows = planId != null && !planId.isBlank()
+                ? processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId)
+                : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batchId);
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper = payloadMapper();
+        int restoredRefs = 0;
+        BigDecimal restoredKg = BigDecimal.ZERO;
+        List<String> skipped = new ArrayList<>();
+        for (ProcessSheetRow row : rows) {
+            if (row == null || row.getDeletedAt() != null || row.getRowPayload() == null
+                    || row.getRowPayload().isBlank()) {
+                continue;
+            }
+            com.cretas.aims.dto.processentry.ProcessSheetRowRequest req;
+            try {
+                req = mapper.readValue(row.getRowPayload(),
+                        com.cretas.aims.dto.processentry.ProcessSheetRowRequest.class);
+            } catch (Exception e) {
+                // 读不懂的载荷不能让整单撤回静默漏还 —— 抛出来 (与本方法其它 loud-fail 同口径)
+                throw malformedWipTransaction("报工行载荷无法解析, 无法判断有没有提交时扣的回料: rowId="
+                        + row.getId(), "PROCESS_SHEET_PAYLOAD_INVALID");
+            }
+            if (req.getUpstreamSources() == null) {
+                continue;
+            }
+            for (com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                if (ref == null || !ref.isSemiFinished() || !ref.isStockConsumedAtSubmit()
+                        || ref.getSourceBatchNumber() == null || ref.getSourceBatchNumber().isBlank()
+                        || ref.getFeedQuantityKg() == null || ref.getFeedQuantityKg().signum() <= 0) {
+                    continue;
+                }
+                if (wipInventoryService == null) {
+                    throw new BusinessException(500, "半成品库存服务未就绪, 无法还回提交时扣的回料 (来源: "
+                            + ref.getSourceBatchNumber() + ")").withCode("WIP_SERVICE_UNAVAILABLE");
+                }
+                String batchNo = ref.getSourceBatchNumber().trim();
+                com.cretas.aims.service.wip.WipInventoryService.ClerkSemiRestore restore = wipInventoryService.restoreClerkSemiStrict(
+                        factoryId, batchNo, ref.getFeedQuantityKg(),
+                        "reversal-log:" + log_.getId(), reversalOperatorId(log_));
+                if (restore == null) {
+                    // 源行已不在 (被删/盘掉): 无处可还, 登记而不阻塞撤回, ⛔ 不造库存
+                    skipped.add(batchNo + "×" + ref.getFeedQuantityKg().stripTrailingZeros().toPlainString() + "kg");
+                    continue;
+                }
+                if (restore.ledgerTxnId() != null) {
+                    revertedTxnIds.add(restore.ledgerTxnId());
+                }
+                restoredRefs++;
+                restoredKg = restoredKg.add(ref.getFeedQuantityKg());
+            }
+        }
+        if (!skipped.isEmpty()) {
+            String note = " [撤回还回回料: 跳过 " + skipped.size() + " 条(源行不在): " + String.join(", ", skipped) + "]";
+            log_.setReason((log_.getReason() == null ? "" : log_.getReason()) + note);
+            log.warn("[SP2] 撤回还回回料: factoryId={} batchId={} 跳过 {} 条 (源行不在): {}",
+                    factoryId, batchId, skipped.size(), skipped);
+        }
+        if (restoredRefs > 0) {
+            log.info("[SP2] 撤回还回提交时扣的回料: factoryId={} planId={} batchId={} refs={} feedKg={}",
+                    factoryId, planId, batchId, restoredRefs, restoredKg.stripTrailingZeros().toPlainString());
+        }
+    }
+
+    private com.fasterxml.jackson.databind.ObjectMapper payloadMapper() {
+        com.fasterxml.jackson.databind.ObjectMapper m = new com.fasterxml.jackson.databind.ObjectMapper();
+        m.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        m.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        return m;
     }
 
     private void softDeleteProcessSheetRows(String factoryId, Long batchId, String planId,
