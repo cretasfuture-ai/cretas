@@ -530,7 +530,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
                         .withCode("PINNED_BOM_NOT_FOUND")
-                        .withHint("请前往「生产管理 → 生产计划」重新选择该计划的 BOM 版本")
+                        .withHint("请前往「生产管理 → 生产计划」重新选择该计划的 BOM 版本；"
+                                + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                         .withSeverity("BLOCKING"));
         List<BomRecipe> pinnedFamily = workflowPlan
                 ? resolvePinnedBomFamily(plan, pinnedRecipes)
@@ -566,7 +567,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                             .withCode("BOM_OUTPUT_BASIS_INVALID")
                             .withHint("请前往「BOM成本管理」为该产品配方补齐基准产出数量后重新激活；"
                                     + "仅改配方不会让在途计划自动跟上，还需前往「生产管理 → 生产计划」"
-                                    + "对本计划执行「更新到当前配方」（仅未开工的计划可用），批次才会跟上新版本")
+                                    + "对本计划执行「更新到当前配方」（仅未开工的计划可用），批次才会跟上新版本；"
+                                    + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                             .withSeverity("BLOCKING");
                 }
                 BigDecimal scale = reportedOutput.quantity().divide(
@@ -584,7 +586,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                 .withHint("请前往「BOM成本管理」为包装材料 " + item.getMaterialName()
                                         + " 补齐用量后重新激活；仅改配方不会让在途计划自动跟上，"
                                         + "还需前往「生产管理 → 生产计划」对本计划执行「更新到当前配方」"
-                                        + "（仅未开工的计划可用），批次才会跟上新版本")
+                                        + "（仅未开工的计划可用），批次才会跟上新版本；"
+                                        + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                                 .withSeverity("BLOCKING");
                     }
                     requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
@@ -626,7 +629,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                             .withHint("请前往「BOM成本管理 → 调料配置」为 " + item.getName()
                                     + " 补齐物料与用量后重新激活；仅改配方不会让在途计划自动跟上，"
                                     + "还需前往「生产管理 → 生产计划」对本计划执行「更新到当前配方」"
-                                    + "（仅未开工的计划可用），批次才会跟上新版本")
+                                    + "（仅未开工的计划可用），批次才会跟上新版本；"
+                                    + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                             .withSeverity("BLOCKING");
                 }
                 if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
@@ -1475,7 +1479,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
                     .withHint("该批次报工用的是开工时冻结的 Workflow 运行时快照，回 Workflow 配置修复画布"
                             + "不会让这个批次自动跟上；请核对选择组「" + groupId
-                            + "」的标签/模式/选择数量设置，修复并重新发布 Workflow 后创建新批次")
+                            + "」的标签/模式/选择数量设置，修复并重新发布 Workflow 后创建新批次；"
+                            + "本批次的报工无法在现有快照下完成，请前往批次详情执行「整单撤回」将其取消/作废")
                     .withSeverity("BLOCKING");
         }
         int min = snapshot.getSelectionGroupMinSelections();
@@ -1492,7 +1497,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
                     .withHint("该批次报工用的是开工时冻结的 Workflow 运行时快照，回 Workflow 配置修复画布"
                             + "不会让这个批次自动跟上；请核对选择组「" + groupId
-                            + "」的选择模式与最少/最多选择数量是否匹配，修复并重新发布 Workflow 后创建新批次")
+                            + "」的选择模式与最少/最多选择数量是否匹配，修复并重新发布 Workflow 后创建新批次；"
+                            + "本批次的报工无法在现有快照下完成，请前往批次详情执行「整单撤回」将其取消/作废")
                     .withSeverity("BLOCKING");
         }
     }
@@ -4066,7 +4072,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .withCode("PROCESS_SHEET_WORKFLOW_INPUT_PORT_ID_MISSING")
                         .withHint("该批次报工用的是开工时冻结的 Workflow 运行时快照，回 Workflow 配置修复画布"
                                 + "不会让这个批次自动跟上；请为该投入端口补充稳定标识（portId），"
-                                + "修复并重新发布 Workflow 后创建新批次")
+                                + "修复并重新发布 Workflow 后创建新批次；"
+                                + "本批次的报工无法在现有快照下完成，请前往批次详情执行「整单撤回」将其取消/作废")
                         .withSeverity("BLOCKING");
             }
             byId.put(port.getWorkflowPortId(), port);

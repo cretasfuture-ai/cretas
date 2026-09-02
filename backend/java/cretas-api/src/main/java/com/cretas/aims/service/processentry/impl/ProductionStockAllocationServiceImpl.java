@@ -420,7 +420,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withCode("AUTOMATIC_MATERIAL_REQUIREMENT_INVALID")
                         .withHint("请前往「BOM成本管理」为该产品配方补全物料与用量后重新激活；"
                                 + "仅改配方不会让在途计划自动跟上，还需前往「生产管理 → 生产计划」"
-                                + "对本计划执行「更新到当前配方」（仅未开工的计划可用），批次才会跟上新版本")
+                                + "对本计划执行「更新到当前配方」（仅未开工的计划可用），批次才会跟上新版本；"
+                                + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                         .withSeverity("BLOCKING");
             }
             // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制
@@ -440,7 +441,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withHint("请前往「BOM成本管理」为该产品配方里的包装材料 " + requirement.materialName()
                                 + " 补齐计量单位后重新激活；仅改配方不会让在途计划自动跟上，"
                                 + "还需前往「生产管理 → 生产计划」对本计划执行「更新到当前配方」"
-                                + "（仅未开工的计划可用），批次才会跟上新版本")
+                                + "（仅未开工的计划可用），批次才会跟上新版本；"
+                                + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                         .withSeverity("BLOCKING");
             }
             boolean massRequirement = isCanonicalMassUnit(requiredUnit);
