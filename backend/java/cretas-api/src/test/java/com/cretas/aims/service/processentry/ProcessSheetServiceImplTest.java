@@ -925,6 +925,29 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
+    @DisplayName("阴性对照: 外部领用净额为负 (还回多于领用, 账不平) → WIP_LEDGER_INVALID, ⛔ 不静默放行")
+    void producerBatch_withExternalRestoreExceedingConsumption_isRefusedAsLedgerInvalid() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-E", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-E", "CLK-SEMI-THROWAWAY-E", "1");
+        SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-E", "10");
+        // 手工造: 外部领用 OUT 3, 还回 REVERSE 5 ⇒ 净 −2
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID).semiFinishedId(produced.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                .sourceRef(com.cretas.aims.service.wip.WipLedgerEntries.CLERK_OUT_REF_PREFIX + "CLK-SEMI-FROM-E")
+                .quantity(new BigDecimal("-3")).balanceAfter(new BigDecimal("7")).operatorId(operatorId).build());
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID).semiFinishedId(produced.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef("reversal-log:999999")
+                .quantity(new BigDecimal("5")).balanceAfter(new BigDecimal("12")).operatorId(operatorId).build());
+
+        assertThat(reversalErrorCode(producer.getBatchId())).isEqualTo("WIP_LEDGER_INVALID");
+    }
+
+    @Test
     @DisplayName("5a: 跨租户 planId → 403")
     void saveRow_crossTenantPlan_throws403() {
         // A plan belonging to OTHER_FACTORY_ID

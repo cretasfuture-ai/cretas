@@ -1101,6 +1101,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     externalNet = externalNet.subtract(txn.getQuantity().abs());
                 }
             }
+            if (externalNet.signum() < 0) {
+                // 还回多于领用: 账不平 —— 与 SFI_REVERSE_OVER_CONSUMED 同一纪律, ⛔ 不静默放行
+                throw malformedWipTransaction("外部领用净额为负 (还回多于领用), 账不平, 请先盘点该半成品批次",
+                        "WIP_LEDGER_INVALID");
+            }
             if (externalNet.signum() > 0) {
                 return true; // 还有别批领走没还回来的量 ⇒ 业务拒绝 DOWNSTREAM_CONSUMED (这条要保留)
             }
