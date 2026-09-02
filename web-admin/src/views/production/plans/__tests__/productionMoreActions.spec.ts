@@ -37,7 +37,22 @@ describe('productionMoreCommands', () => {
     ];
     const commands = productionMoreCommands(SCREENSHOT_ROW);
     expect(commands.filter((c) => legacyConditional.includes(c))).toEqual([]);
-    expect(commands).toEqual(['edit', 'copy']);
+    expect(commands).toEqual(['edit', 'copy', 'assign-process-operator']);
+  });
+
+  // 缺陷 51: 「分配工序操作员」恒在(与 edit/copy 同规矩) —— 能不能真的点由 list.vue
+  // 异步解析成品批次后驱动灰显/提示, 不在这里按状态/来源猜。
+  it('「分配工序操作员」在任何能走到「更多」的行都出现, 与状态/来源/canCancel 无关', () => {
+    for (const status of REACHABLE_STATUSES) {
+      for (const sourceType of ['SAFETY_STOCK', 'CUSTOMER_ORDER', 'MANUAL']) {
+        for (const canCancel of [true, false]) {
+          expect(
+            hasProductionMoreCommand({ status, sourceType, canCancel }, 'assign-process-operator'),
+            `${status}/${sourceType}/canCancel=${canCancel}`,
+          ).toBe(true);
+        }
+      }
+    }
   });
 
   it('任何能走到「更多」的行都至少有一项, 菜单永不为空', () => {
@@ -62,6 +77,7 @@ describe('productionMoreCommands', () => {
     expect(commands).toEqual([
       'edit',
       'copy',
+      'assign-process-operator',
       'app-reporting',
       'reverse-interim-settle',
       'cancel',
@@ -75,7 +91,9 @@ describe('productionMoreCommands', () => {
       sourceType: 'CUSTOMER_ORDER',
       canCancel: true,
     });
-    expect(commands).toEqual(['edit', 'copy', 'app-reporting', 'generate-transfer', 'cancel']);
+    expect(commands).toEqual([
+      'edit', 'copy', 'assign-process-operator', 'app-reporting', 'generate-transfer', 'cancel',
+    ]);
     expect(commands).not.toContain('reverse-interim-settle');
     expect(commands).not.toContain('stop-production');
   });

@@ -18,6 +18,7 @@
 export type ProductionMoreCommand =
   | 'edit'
   | 'copy'
+  | 'assign-process-operator'
   | 'start-secondary'
   | 'app-reporting'
   | 'generate-transfer'
@@ -117,7 +118,12 @@ export function productionMoreCommands(row: ProductionMoreActionRow): Production
   const startable = status === 'PENDING';
   const stopBlockedReason = String(row.stopBlockedReason ?? '').trim();
 
-  const commands: ProductionMoreCommand[] = ['edit', 'copy'];
+  // 缺陷 51 (owner 拍板 2026-09-02): 「分配工序操作员」原来只挂在
+  // production/batches/detail.vue 的「工序明细」卡片上 —— 一张计划开工后会生成
+  // ~10 个批次(9 个 CLK-W-* 逐道工件 + 1 个 PB-* 成品批次), 任务只挂在 PB-* 那个上,
+  // 用户从计划列表根本找不到这唯一入口。恒在(与 edit/copy 同规矩): 是否有可分配的
+  // 成品批次由 list.vue 异步解析后驱动灰显/提示, 不在这里按状态猜。
+  const commands: ProductionMoreCommand[] = ['edit', 'copy', 'assign-process-operator'];
   // SECONDARY must use /start: that transaction deducts the linked WIP and
   // creates the batch atomically. create-batch alone deliberately does not
   // deduct WIP and would leave the secondary plan semantically unstarted.

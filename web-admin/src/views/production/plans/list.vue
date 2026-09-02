@@ -127,6 +127,11 @@ import {
 } from './productionMoreActions';
 import { classifySettlementFailure, isNotSettledPayload } from './settlementStatusFailure';
 import { toDateString } from '@/utils/dateFormat';
+import {
+  finishedGoodsBatchCandidates,
+  assignProcessOperatorTarget,
+  PLAN_HAS_NO_FINISHED_BATCH_TOOLTIP,
+} from './assignProcessOperatorEntry';
 
 const router = useRouter();
 const route = useRoute();
@@ -268,6 +273,81 @@ async function openDocumentTrace(row: TableRow) {
   } finally {
     documentTraceLoading.value = false;
   }
+}
+
+/**
+ * 缺陷 51:「分配工序操作员」入口 (owner 拍板: 挪进生产计划的操作里, 不再只挂在批次详情)。
+ *
+ * 每行按需解析 (「更多」下拉打开时才拉), 不是列表一加载就对每一行都请求一遍 ——
+ * 复用 openDocumentTrace 同一个 API (getProductionDocumentTrace), 从中挑出
+ * documentType === 'PRODUCTION_BATCH' 的条目 (已排除 CLERK_WIP 内部工件, 见
+ * assignProcessOperatorEntry.ts 顶部注释)。菜单项的灰显/提示文案由这份缓存驱动,
+ * 而不是点了才知道 —— 与 repin-authority 同一条防呆规矩(预先显示边界)。
+ */
+interface AssignOperatorRowState {
+  loading: boolean;
+  /** null = 尚未解析过 */
+  candidates: ProductionTraceDocument[] | null;
+  error?: string;
+}
+const assignOperatorState = ref<Record<string, AssignOperatorRowState>>({});
+const assignOperatorPickerVisible = ref(false);
+const assignOperatorPickerRow = ref<TableRow | null>(null);
+
+/** 打开「更多」下拉时惰性解析一次；已在解析中或已有结果就不重复请求。 */
+async function ensureAssignOperatorCandidates(row: TableRow): Promise<void> {
+  const key = String(row.id || '');
+  if (!key || !factoryId.value) return;
+  const existing = assignOperatorState.value[key];
+  if (existing && (existing.loading || existing.candidates !== null)) return;
+  assignOperatorState.value[key] = { loading: true, candidates: null };
+  try {
+    const response = await getProductionDocumentTrace(factoryId.value, key);
+    if (!response.success || !response.data) {
+      assignOperatorState.value[key] = {
+        loading: false,
+        candidates: null,
+        error: response.message || '加载生产批次信息失败',
+      };
+      return;
+    }
+    assignOperatorState.value[key] = {
+      loading: false,
+      candidates: finishedGoodsBatchCandidates(response.data),
+    };
+  } catch (error) {
+    assignOperatorState.value[key] = {
+      loading: false,
+      candidates: null,
+      error: error instanceof Error ? error.message : '加载生产批次信息失败',
+    };
+  }
+}
+
+/** 「分配工序操作员」灰显时展示的原因；可点时返回空串。 */
+function assignOperatorDisabledReason(row: TableRow): string {
+  const state = assignOperatorState.value[String(row.id || '')];
+  if (!state || state.loading) return '正在获取该计划的生产批次…';
+  if (state.error) return state.error;
+  if (!state.candidates || state.candidates.length === 0) return PLAN_HAS_NO_FINISHED_BATCH_TOOLTIP;
+  return '';
+}
+
+/** 点击「分配工序操作员」：唯一候选直接跳转；多个候选弹选择框，不悄悄取第一个。 */
+function handleAssignProcessOperator(row: TableRow) {
+  const candidates = assignOperatorState.value[String(row.id || '')]?.candidates || [];
+  if (candidates.length === 0) return; // 灰显时不会派发到这里，防御性 no-op
+  if (candidates.length === 1) {
+    void router.push(assignProcessOperatorTarget(candidates[0].documentId));
+    return;
+  }
+  assignOperatorPickerRow.value = row;
+  assignOperatorPickerVisible.value = true;
+}
+
+function goToAssignOperatorBatch(document: ProductionTraceDocument) {
+  assignOperatorPickerVisible.value = false;
+  void router.push(assignProcessOperatorTarget(document.documentId));
 }
 
 /**
@@ -432,6 +512,7 @@ type ProductionActionCommand =
   | 'process-entry'
   | 'edit'
   | 'copy'
+  | 'assign-process-operator'
   | 'start-secondary'
   | 'app-reporting'
   | 'generate-transfer'
@@ -554,6 +635,9 @@ function handleProductionActionCommand(command: ProductionActionCommand, row: Ta
       break;
     case 'copy':
       void handleCopyPlan(row);
+      break;
+    case 'assign-process-operator':
+      handleAssignProcessOperator(row);
       break;
     case 'start-secondary':
       void handleStart(row);
@@ -4494,6 +4578,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               v-if="canShowProductionActions(row) && productionMoreCommands(row).length > 0"
               trigger="click"
               @command="(command: ProductionActionCommand) => handleProductionActionCommand(command, row)"
+              @visible-change="(visible: boolean) => visible && ensureAssignOperatorCandidates(row)"
             >
               <el-button type="info" link size="small">
                 更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -4511,6 +4596,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                     command="copy"
                     :disabled="actionLoading"
                   >复制为新计划</el-dropdown-item>
+                  <!--
+                    缺陷 51: 「分配工序操作员」——生产计划开工后生成的 PB-* 成品批次才挂工序任务,
+                    这里下拉打开时惰性解析(ensureAssignOperatorCandidates), 无成品批次时灰显并说清
+                    原因, 而不是点了才知道 (与「编辑」同一条防呆规矩)。
+                  -->
+                  <el-dropdown-item
+                    v-if="hasProductionMoreCommand(row, 'assign-process-operator')"
+                    command="assign-process-operator"
+                    :disabled="actionLoading || assignOperatorDisabledReason(row) !== ''"
+                    :title="assignOperatorDisabledReason(row)"
+                  >分配工序操作员</el-dropdown-item>
                   <el-dropdown-item
                     v-if="hasProductionMoreCommand(row, 'start-secondary')"
                     command="start-secondary"
@@ -4691,6 +4787,36 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-tabs>
       </template>
     </el-drawer>
+
+    <!--
+      缺陷 51: 一张计划可能有多个成品批次(联产/多产品), 「分配工序操作员」不能悄悄取第一个 ——
+      多候选时弹这个选择框, 用户自己挑要分配哪个批次的工序。
+    -->
+    <el-dialog
+      v-model="assignOperatorPickerVisible"
+      title="选择要分配工序操作员的批次"
+      width="440px"
+      data-testid="assign-operator-picker"
+    >
+      <div v-if="assignOperatorPickerRow" class="assign-operator-picker">
+        <p class="assign-operator-picker-hint">
+          该计划生成了多个成品批次，请选择要分配工序操作员的批次：
+        </p>
+        <div
+          v-for="candidate in (assignOperatorState[String(assignOperatorPickerRow.id || '')]?.candidates || [])"
+          :key="candidate.documentId"
+          class="assign-operator-picker-item"
+          data-testid="assign-operator-picker-item"
+        >
+          <span>{{ candidate.documentNumber || candidate.documentId }}</span>
+          <el-button
+            type="primary"
+            link
+            @click="goToAssignOperatorBatch(candidate)"
+          >前往分配</el-button>
+        </div>
+      </div>
+    </el-dialog>
 
     <el-dialog
       v-model="documentPackVisible"
@@ -6538,6 +6664,20 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
 
 <style lang="scss" scoped>
 .wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
+// 缺陷 51: 多成品批次时的「分配工序操作员」选择框。
+.assign-operator-picker-hint {
+  margin: 0 0 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.assign-operator-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  &:last-child { border-bottom: none; }
+}
 .ai-unit-preserved { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 // 校验失败字段红框锚定 (fool-proof-design Rule: 预先显示边界, 不只弹 toast 让用户自己找字段)。
 .field-error {
