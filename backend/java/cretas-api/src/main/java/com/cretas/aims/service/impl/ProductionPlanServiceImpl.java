@@ -1467,6 +1467,15 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 生产仓这一层<b>量得到吗</b> —— 与 {@link #resolveWorkshopRawStock} 的可判定条件同源。
      *
      * <p>存在的唯一理由是让「无预警」那句话分得清「生产仓没问题」和「没量生产仓」。
+     *
+     * <p>🔴 缺陷38 系统性排查 (2026-09-02) — <b>刻意不改</b>, 逐字保留 CUSTOMER_SUPPLIED
+     * 恒 false: 这个方法只按<b>计划</b>粒度判定, 没有 materialTypeId, 推不出「这张计划的 BOM
+     * 里有没有 PACKAGING/AUXILIARY 行」。{@link #resolveWorkshopRawStock} 已经按<b>物料</b>粒度
+     * 修正(辅料/包材现在真的会核对生产仓), 逐行预警(NOT_IN_WORKSHOP)因此已经是对的; 本方法只影响
+     * 「全部预警都为空时」那句<b>收尾文案</b>是否说「生产仓也已备料」—— 说得更保守(维持现状)只会让
+     * CUSTOMER_SUPPLIED 计划在辅料/包材恰好也备齐生产仓时,收尾少说一句好话,不会漏报任何预警,
+     * 不是数据缺陷。要治本必须把 BOM 物料大类集合传进来改造成按类别判定, 属于更大的重构,
+     * 本次不做(硬约束 8: 显式登记「故意不改」并写明理由)。
      */
     private boolean workshopCaliberAvailable(String factoryId, ProductionPlan plan) {
         if (warehouseResolver == null) {
@@ -1489,14 +1498,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * <p>⛔ 读不到就返回 null 让调用方跳过 —— 兜底成 0 会把「我不知道」翻译成「一粒都没有」,
      * 于是每个计划都长出一条假的「请先领料」。本仓形态 A¹⁰。
      *
-     * <p>返回 null 的情形: 没配生产仓 / resolver 不可用 / 客户来料计划(那类走另一套归属校验,
-     * 仓库维度的结论不适用)。
+     * <p>返回 null 的情形: 没配生产仓 / resolver 不可用 / 客户来料计划下的 <b>RAW</b> 物料
+     * (那类走另一套归属校验, 仓库维度的结论不适用)。
+     *
+     * <p>🔴 缺陷38 系统性排查 (2026-09-02): 原来对 CUSTOMER_SUPPLIED 计划<b>无条件</b>返回 null,
+     * 与 {@link #resolveAvailableRawStock}(缺陷49) 同一形状漏了物料大类判断 —— PACKAGING/AUXILIARY
+     * 本就该走工厂自有库存(与「工厂备料生产」同一条件), 而
+     * {@link com.cretas.aims.repository.MaterialBatchRepository#sumAvailableRawStockQuantityByMaterialTypeAndWarehouse}
+     * 本来就只认 COMPANY_OWNED —— 于是「忘了调拨到生产仓」这条预警对 CUSTOMER_SUPPLIED 计划下的
+     * 辅料/包材<b>从未生效过</b>, 同一物料换到普通计划下却会正常预警, 纯粹因为 materialSupplyMode
+     * 不同。RAW 逐字不变: 仍然整体跳过(客供归属校验管它, 与仓库维度无关)。
      */
     private BigDecimal resolveWorkshopRawStock(String factoryId, ProductionPlan plan, String materialTypeId) {
         if (warehouseResolver == null || materialTypeId == null) {
             return null;
         }
-        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+        if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED
+                && !ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
+                        resolveMaterialMainCategory(factoryId, materialTypeId))) {
             return null;
         }
         String workshopId;
@@ -1685,6 +1704,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(factoryId, materialTypeId);
     }
 
+    /**
+     * 🔴 缺陷38 系统性排查 (2026-09-02): CUSTOMER_SUPPLIED 分支原来<b>只</b>查客供批次单位 ——
+     * 与 {@link #resolveAvailableRawStock}(缺陷49) 修复前同一形状。PACKAGING/AUXILIARY 走公司
+     * 自有库存(isCompanyStockEligibleCategory)时, 客供批次通常查不到任何行, {@code units} 恒空,
+     * 于是每次都落到方法末尾「无可用批次」的兜底 —— 回退 {@code RawMaterialType.unit}(采购/展示
+     * 标签, 如「箱」), 而不是公司批次真实的称重/计数单位(如「个」)。resolveAvailableRawStock 那边
+     * 已经把公司库存数量算进「可用量」, 这里的单位却没跟上, 于是「需要 X箱, 可用 50箱」这类提示
+     * 用错的单位比较, 与结单/领料侧的真实单位口径自相矛盾(与缺陷49同一形态 D)。RAW 逐字不变:
+     * 仍然只认客供批次单位。
+     */
     private String resolveMaterialStockUnit(String factoryId,
                                             ProductionPlan plan,
                                             String materialTypeId) {
@@ -1695,11 +1724,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             java.util.List<String> units;
             if (plan != null && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
                 requireCustomerSuppliedPlanLineage(plan, "原料库存单位");
-                units = isBlank(plan.getSourceOrderId())
+                java.util.List<String> customerUnits = isBlank(plan.getSourceOrderId())
                         ? materialBatchRepository.findUnassignedCustomerOwnedRawStockUnits(
                                 factoryId, materialTypeId, plan.getCustomerId())
                         : materialBatchRepository.findCustomerSuppliedRawStockUnits(
                                 factoryId, materialTypeId, plan.getCustomerId(), plan.getSourceOrderId());
+                if (ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
+                        resolveMaterialMainCategory(factoryId, materialTypeId))) {
+                    java.util.List<String> companyUnits =
+                            materialBatchRepository.findRawStockUnitsByMaterialType(factoryId, materialTypeId);
+                    units = new java.util.ArrayList<>();
+                    if (customerUnits != null) {
+                        units.addAll(customerUnits);
+                    }
+                    if (companyUnits != null) {
+                        units.addAll(companyUnits);
+                    }
+                } else {
+                    units = customerUnits;
+                }
             } else {
                 units = materialBatchRepository.findRawStockUnitsByMaterialType(factoryId, materialTypeId);
             }
