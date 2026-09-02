@@ -326,6 +326,14 @@
 
 **在飞 2**：结单 3 参热修 → 合 → 发 22 → f006 陪 owner 结单 / #509 两处小改 → 合 → 随 22。
 
+### 📌 2026-09-02 09:05 增量 · 部署 22/23, 合并 74, 结单第三处上线, 在飞 0
+
+**部署 22** 08:55:33 green（`ff2f69aaaa` = **#511 结单第三处热修**）✅：守卫类 3 参描述符 `(ProductionPlan;MaterialBatch;String)V` **1→0**（X 消失）+ 4 参描述符 1（Y 必在）+ 假串 0。#511 内容：`:6161` 改 4 参、按批次批量取 `mainCategory`、**删除 3 参重载与 `assertMaterialBatchOwnershipMatchesPlan` 3 参包装**（守卫 6 + 包装 4 = 10 个调用点全显式传 category）；真入口 `settleProduction()` 阳性/阴性；变异回 null 逐字复现 prod 原串；rebase 撞上 #506 同名 `resolveMaterialMainCategory`，保留 #506 的。
+**部署 23** 09:02:39 blue（`ea8327082c` = **#509 联产 family 收编**）✅：`BOM_FAMILY_ADOPTION_AMBIGUOUS` 0→1。#509 终审过 + 两处 follow-up 已加（4 参 `activateRecipe` 自带 `@Transactional`；多合格 family 报 CONFLICT 不静默择一 + 阴性）；CI 红真因 = `ByProductActivationAndBomUxContractTest` 按 `private BomRecipe activateRecipe(` 字面定位方法体，提成 public 后失配（**源码闸守字面**第三例）。`docs/audits/liushanmen/sql/` 四个只读记录随之进 main。
+**生产 = main = `ea8327082c`，在飞 0。** f006 陪 owner 走结单（预期读数：`CMR-20260902-2596675BDD9E` used 12、`production_settlement_consumptions` +3、计划 COMPLETED、`PB-…-47204` 9.8kg）。
+
+**工艺 chat 下一条**：`WorkflowReworkDeduction` 接进结算（owner 在它 session 说「按照顺序吧」），🔒 到 PR 送终审。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
