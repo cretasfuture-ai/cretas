@@ -164,7 +164,7 @@ def test_factory_prompt_keeps_restaurant_analysis_out_of_ai_assist():
     assert "画布首次保存 BOM 配置时自动固定该工艺修订" in FACTORY_SYSTEM_PROMPT
     assert "普通用户不选择 Workflow 版本" in FACTORY_SYSTEM_PROMPT
     assert "投入 → 工序执行（开始/结束/人数）→ 产出 → 确认提交" in FACTORY_SYSTEM_PROMPT
-    assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in FACTORY_SYSTEM_PROMPT
+    assert "生效（ACTIVE） BOM 是 Workflow 发布启用的前置门禁" in FACTORY_SYSTEM_PROMPT
     assert "使用“自动同步并发布”" in FACTORY_SYSTEM_PROMPT
     assert "每轮按完整终端产出行集合提交本次正数增量" in FACTORY_SYSTEM_PROMPT
     assert "累计实收不得超过各行报工数量" in FACTORY_SYSTEM_PROMPT
@@ -617,7 +617,7 @@ def test_label_qc_workbench_uses_three_reference_layers_and_human_tools():
     )
     assert all(_needs_label_qc_review_guard(q) for q in equivalent_questions)
     assert _needs_label_qc_review_guard("普通质检照片上传后怎样作为照片证据回读？")
-    assert "`QUALITY_CHECK` 附件" in _LABEL_QC_REVIEW_ANSWER
+    assert "质检附件（`QUALITY_CHECK`） 附件" in _LABEL_QC_REVIEW_ANSWER
     assert "切换盒子或照片时自动校验并保存" in _LABEL_QC_REVIEW_ANSWER
     assert "明确识别到盒子且无风险时显示“系统未见风险”" in _LABEL_QC_REVIEW_ANSWER
     assert "缺少显式可信结论时一律失败关闭" in _LABEL_QC_REVIEW_ANSWER
@@ -659,10 +659,10 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
     assert "累计实收不得超过该行正式报工数量" in (
         _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     )
-    assert "`PARTIAL` / `PARTIALLY_RECEIVED`" in (
+    assert "部分入库（`PARTIAL`） / 部分入库（`PARTIALLY_RECEIVED`）" in (
         _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     )
-    assert "`COMPLETED` / `RECEIVED`" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
+    assert "已完成（`COMPLETED`） / 已收货（`RECEIVED`）" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     assert "同一请求内仍然整组原子过账" in (
         _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     )
@@ -708,7 +708,7 @@ def test_factory_workflow_autofork_and_active_reference_gate_are_deterministic()
     assert not _needs_factory_workflow_autofork_guard("餐饮 Workflow 怎么配置？")
     assert "保存草稿（自动新版本）" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "原已启用版本继续服务生产" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
-    assert "先把原 Workflow 行冻结为 `SNAPSHOT`" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
+    assert "先把原 Workflow 行冻结为 历史快照（`SNAPSHOT`）" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "`selectedWorkflowId` 固定创建时版本" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "未开工计划不应冻结成历史" in _FACTORY_WORKFLOW_AUTOFORK_ANSWER
     assert "`lockVersion` 身份过期时返回 409" in (
@@ -728,10 +728,10 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
     )
     assert all(_needs_factory_incremental_receipt_guard(q) for q in receipt_questions)
     assert "备注由服务端持久化" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
-    assert "`PARTIAL` / `PARTIALLY_RECEIVED`" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
-    assert "`COMPLETED` / `RECEIVED`" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "部分入库（`PARTIAL`） / 部分入库（`PARTIALLY_RECEIVED`）" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "已完成（`COMPLETED`） / 已收货（`RECEIVED`）" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
     assert "主动开始下一轮生成新键" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
-    assert "当前有效小结会话 `postedAt` 精确一致" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "当前有效小结会话 小结入账时间（`postedAt`） 精确一致" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
     assert "`BY_STOCK_SETTLEMENT_ROWS_INCOMPLETE`" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
 
     quality_questions = (
@@ -740,8 +740,8 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
         "不合格质检批准报废前能不能放行成品销售？",
     )
     assert all(_needs_factory_quality_disposition_guard(q) for q in quality_questions)
-    assert "至少 95% 为 `PASS`" in _FACTORY_QUALITY_DISPOSITION_ANSWER
-    assert "70% 至不足 95% 为 `CONDITIONAL`" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+    assert "至少 95% 为 合格（`PASS`）" in _FACTORY_QUALITY_DISPOSITION_ANSWER
+    assert "70% 至不足 95% 为 有条件通过（`CONDITIONAL`）" in _FACTORY_QUALITY_DISPOSITION_ANSWER
     assert "`PENDING_APPROVAL`" in _FACTORY_QUALITY_DISPOSITION_ANSWER
     assert "申请人与审批人必须分离" in _FACTORY_QUALITY_DISPOSITION_ANSWER
     assert "FINISHED_GOODS_BATCH_NOT_SALEABLE" in _FACTORY_QUALITY_DISPOSITION_ANSWER
@@ -802,7 +802,7 @@ def test_factory_sales_delivery_and_auto_invoice_chain_is_deterministic():
     assert all(_needs_factory_sales_delivery_invoice_guard(q) for q in equivalent_questions)
     assert not _needs_factory_sales_delivery_invoice_guard("餐饮外卖订单怎样开票？")
     assert "`FINISHED_PRODUCT` 和 `SEMI_FINISHED`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
-    assert "独立 `suppliedMaterials`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "独立 “客户自带物料”区（`suppliedMaterials`）" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "母单永远不能直接扣库存" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "`PENDING_WAREHOUSE_CONFIRM`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "全部子单发完的完成态边沿只生成一个" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
@@ -925,7 +925,7 @@ def test_factory_batch_quantity_and_receipt_date_use_controlled_correction_guard
     )
     assert "普通编辑页静默覆盖" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
     assert "盘点或库存调整" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
-    assert "入库日期会影响 FIFO 批次顺序" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
+    assert "入库日期会影响 先进先出（FIFO） 批次顺序" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
     assert "专用留痕更正" in _FACTORY_BATCH_ADJUSTMENT_ANSWER
 
 
@@ -1451,7 +1451,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
         " → Workflow 刷新、发布并启用"
     )
     assert required_sequence in current_sop
-    assert "ACTIVE BOM 是 Workflow 发布启用的前置门禁" in current_sop
+    assert "生效（ACTIVE） BOM 是 Workflow 发布启用的前置门禁" in current_sop
     assert "BOM 激活本身不会自动发布 Workflow" in current_sop
     assert "自动同步并发布" in current_sop
     assert "READY" in current_sop
@@ -1476,7 +1476,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "不能把系统自动通过当成人工结论" in current_sop
     assert "日常只显示风险框" in current_sop
     assert "未触碰的 AI 盒子不能随提交变成人工对象真值" in current_sop
-    assert "`QUALITY_CHECK` 附件" in current_sop
+    assert "质检附件（`QUALITY_CHECK`） 附件" in current_sop
     assert "切换盒子或照片时自动校验并保存" in current_sop
     assert "平台训练选样" in current_sop
     assert "不能回写或覆盖工厂整图盒子真值" in current_sop
@@ -1521,7 +1521,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "申请、审批和仓库实收是三个独立动作" in current_sop
     assert "客户来料必须选择有效客户" in current_sop
     assert "汇总量严格等于批次数量之和" in current_sop
-    assert "`BY_STOCK` 小结形成的成品已经是有效、可用库存批次" in current_sop
+    assert "存货生产（`BY_STOCK`） 小结形成的成品已经是有效、可用库存批次" in current_sop
     assert "调拨凭证只在收货确认后生成" in current_sop
     assert "归属读取失败时保持缺失并阻止" in current_sop
     assert "整条 Workflow 版本谱系自动重锚到该共享原料" in current_sop
@@ -1530,7 +1530,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "包材 Cell 位于成品上方并连向所属成品" in current_sop
     assert "旧启用版本不能把“自动同步并发布”自身误拦" in current_sop
     assert "仓储待收货 / 采购收货列表" in current_sop
-    assert "实际更新批次 `storageLocation`" in current_sop
+    assert "实际更新批次 库位（`storageLocation`）" in current_sop
     assert "只展示该供应商当前有效供应关系中的物料" in current_sop
     assert "按 OA 实例当前节点筛选" in current_sop
 
@@ -2713,7 +2713,7 @@ def test_20260830_factory_execution_recovery_is_deterministic_and_isolated():
     assert "原来已填的首批数量会迁入" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "按效期优先自动分配" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "接口失败、单位不一致或总量不足都保持阻塞" in _FACTORY_EXECUTION_RECOVERY_ANSWER
-    assert "逐批提交 `materialBatchRefs`" in _FACTORY_EXECUTION_RECOVERY_ANSWER
+    assert "逐批提交 投入批次明细（`materialBatchRefs`）" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "目标产品族/阶段与纯度矩阵" in _FACTORY_EXECUTION_RECOVERY_ANSWER
     assert "记录旧值、新值、操作者与时间" in _FACTORY_EXECUTION_RECOVERY_ANSWER
 
@@ -2732,7 +2732,7 @@ def test_20260831_factory_production_correction_lifecycle_is_deterministic_and_i
     assert "一次固定完整快照" in answer
     assert "外部半成品领用" in answer
     assert "负量 `OUT/SECONDARY_CONSUME`" in answer
-    assert "计划从 `COMPLETED` 回到 `IN_PROGRESS`" in answer
+    assert "计划从 已完成（`COMPLETED`） 回到 进行中（`IN_PROGRESS`）" in answer
     assert "专用“报工修正”权限" in answer
     assert "`PRODUCTION_REPORT_CORRECTION_APPROVAL`" in answer
     assert "投入批次、库存流水、成本及计划/批次/工序状态不得" in answer
