@@ -396,11 +396,33 @@ acquire_deploy_lock() {
     # 自己 (main_guard 期间 origin/main 前进了), PID 不变但脚本从头重新执行, 会
     # 再次跑到这里。lock 文件里此刻已经是【我自己】的 PID —— 这不是"另一个进程
     # 持锁", 是重入, 必须放行, 否则会把自己当成别的持锁者拒绝, 整次发布在 main
-    # 前进的那一刻自杀。判据: 文件内容与自己当前 PID 逐字相同才算重入, 不做任何
-    # 猜测性放宽。
+    # 前进的那一刻自杀。
+    #
+    # 🔴 光比 PID 不够: PID 是操作系统回收再分配的。一次崩溃的 release 会留下
+    # 死锁文件(记着它当时的 PID); 之后系统把那个 PID 重新派给一个**全新、无关**
+    # 的 release 进程, 纯属巧合命中同一个数字。如果判据只看"文件里的 PID == 我
+    # 的 PID", 这个全新进程会被误判成"重入", 直接 return 0 —— **完全跳过 flock/
+    # PID 文件那一层真正的互斥**, 于是第三个进程还能同时拿到锁, 两个 deploy 并发
+    # 上传同一份共享 jar/dist (5/30 事故的形态)。
+    #
+    # 判据因此是合取, 缺一不可:
+    #   1. 锁文件里的 PID == 我的 PID (原有判据, 单靠它不够)
+    #   2. $CRETAS_DEPLOY_REENTRY_PID == 我的 PID —— 这个环境变量只在
+    #      recover_from_main_drift() 真正 `exec bash "$0" ...` 之前才会被设置成
+    #      "重新执行前那个进程自己的 PID"; exec 保留环境, 所以真重入时这个变量
+    #      会原样带过来并且值等于重入后的 $$ (同一个 OS 进程, PID 不变)。
+    #      PID 回收撞上的全新进程从来没经过这条 exec 路径, 环境里根本没有这个
+    #      变量 —— 合取因此为假, 落回下面正常的 stale 回收 + flock/PID 文件判据,
+    #      不会被这个巧合的 PID 数字骗过去。
+    #      ⚠️ 两个判据故意用了两套 PID 表示: 条件 1 比的是 $my_pid(winpid 优先,
+    #      与锁文件里存的、deploy_lock_pid() 写入的值同一表示); 条件 2 比的是
+    #      裸 $$(MSYS PID, 与 release-cretas.sh 设置时用的同一表示)。只要两处
+    #      各自的表示分别自洽(写入和读出用同一套), 合取本身不需要两个表示相同。
     local my_pid
     my_pid=$(deploy_lock_pid)
-    if [ -f "$lock_file" ] && [ "$(cat "$lock_file" 2>/dev/null)" = "$my_pid" ]; then
+    if [ -f "$lock_file" ] \
+        && [ "$(cat "$lock_file" 2>/dev/null)" = "$my_pid" ] \
+        && [ "${CRETAS_DEPLOY_REENTRY_PID:-}" = "$$" ]; then
         log "DEBUG" "已持有锁 (自我重入, PID $my_pid): $lock_file"
         ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
         return 0

@@ -674,7 +674,14 @@ recover_from_main_drift() {
     echo ""
 
     # exec 保留已持有的 fd (含 cretas-release 锁), 不会出现放锁再抢锁的窗口。
+    #
+    # CRETAS_DEPLOY_REENTRY_PID=$$: acquire_deploy_lock() 的自我重入判据要靠它
+    # 跟"lock 文件里的 PID 恰好等于我的 PID"这个巧合区分开 —— 后者也可能来自
+    # OS 把一个死进程的 PID 回收派给了全新的第三方 release 进程。这里的 $$ 是
+    # exec 替换进程映像**之前**这个 shell 自己的 PID; exec 不 fork, 是同一个 OS
+    # 进程, 所以重入后 $$ 不变, 这个环境变量能原样带过去并且值仍然匹配。
     CRETAS_RELEASE_DRIFT_ATTEMPT=$((DRIFT_ATTEMPT + 1)) \
+        CRETAS_DEPLOY_REENTRY_PID=$$ \
         exec bash "$0" "${RELEASE_ORIGINAL_ARGS[@]}"
 }
 

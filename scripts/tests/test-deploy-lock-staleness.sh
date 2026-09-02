@@ -5,7 +5,7 @@
 # 01:21 的 web 锁(已死 PID)拒了部署 9 的 web 半程; 部署 10 自己已退出(rc=0)的
 # release 锁拒了部署 11 —— 两次都靠人工 `rm` 锁文件重发。
 #
-# 本测试锁定三件事:
+# 本测试锁定四件事:
 #   A1/A2: acquire_deploy_lock 本身对死/活 PID 的判定, 且日志里带 mtime(死)/
 #          cmdline(活), 不是只报个光秃秃的 PID。
 #   A3:    release-cretas.sh 的 drift-retry 用 `exec bash "$0" ...` 重新跑自己
@@ -13,6 +13,14 @@
 #   A4:    调用方(release-cretas.sh / deploy-web-admin.sh)自己的 EXIT trap 必须
 #          用 $ACQUIRED_DEPLOY_LOCK_FILE 显式清锁 —— 这是 R43 fix 的核心, 缺了它
 #          的调用方模式会在本测试里被复现成"锁文件在正常退出后仍然存在"。
+#   A5:    (2026-09-02 跟进, PR #518 终审后的非阻塞发现) A3 那条自我重入判据
+#          光比"锁文件里的 PID == 我的 PID"不够 —— PID 是操作系统回收再分配的,
+#          一次崩溃的 release 留下死锁文件, 之后系统把那个 PID 派给一个全新、
+#          无关的 release 进程纯属巧合命中同一个数字, 若判据只看 PID 相等就会
+#          把它误判成"重入"而 return 0, 完全跳过 flock/PID 文件那层真正的互斥
+#          (5/30 事故的形态: 两个 deploy 并发)。判据加了合取
+#          $CRETAS_DEPLOY_REENTRY_PID == 我的 PID(只有 exec 重入路径会设它),
+#          本节验证缺这个环境变量时不会走重入分支。
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -28,7 +36,7 @@ on_test_exit() {
     for p in "${CLEANUP_PIDS[@]:-}"; do
         [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
     done
-    rm -f /tmp/lockstale-a1.lock /tmp/lockstale-a2.lock /tmp/lockstale-a3.lock
+    rm -f /tmp/lockstale-a1.lock /tmp/lockstale-a2.lock /tmp/lockstale-a3.lock /tmp/lockstale-a5.lock
 }
 trap on_test_exit EXIT
 
@@ -99,17 +107,23 @@ rm -f /tmp/lockstale-a2.lock
 # ---------------------------------------------------------------------------
 # A3: 自我重入(模拟 release-cretas.sh 的 drift-retry `exec bash "$0" ...`,
 #     同一个 PID 在同一进程里再次调用 acquire_deploy_lock) 不能把自己拒绝掉。
+#     🔴 修复后判据是合取, 第二次调用前必须像 recover_from_main_drift() 那样
+#     把 CRETAS_DEPLOY_REENTRY_PID 设成自己的 PID(exec 保留环境, 这正是真实
+#     重入时环境变量会存在且值匹配的原因) —— 不设的话这次调用会落进 A5 那种
+#     "巧合撞见自己 PID 但没有重入凭证"的形状, 见 A5。
 # ---------------------------------------------------------------------------
 rm -f /tmp/lockstale-a3.lock
 acquire_deploy_lock "lockstale-a3" >/dev/null 2>&1
 FIRST_RC=$?
 [ "$FIRST_RC" -eq 0 ] || fail "A3 precondition: 第一次获取锁应该成功, 实际 rc=$FIRST_RC"
+export CRETAS_DEPLOY_REENTRY_PID=$$
 A3_LOG=$(acquire_deploy_lock "lockstale-a3" 2>&1)
 A3_RC=$?
+unset CRETAS_DEPLOY_REENTRY_PID
 [ "$A3_RC" -eq 0 ] \
     || fail "A3: exec 自我重入(同 PID 二次获取同名锁)必须放行(rc=0), 实际 rc=$A3_RC — 这正是把自己当'另一个进程'拒绝的那个 bug, 日志: $A3_LOG"
 echo "$A3_LOG" | grep -qi "自我重入" || fail "A3: 未按预期走自我重入分支, 日志: $A3_LOG"
-echo "PASS A3: exec 自我重入不自杀"
+echo "PASS A3: exec 自我重入(带重入凭证)不自杀"
 rm -f /tmp/lockstale-a3.lock
 
 # ---------------------------------------------------------------------------
@@ -164,6 +178,46 @@ echo "PASS A4 (反例): 不清锁的调用方形状确实会漏留锁文件 -- �
 rm -f "$BUGGY_CALLER_SCRIPT" /tmp/lockstale-a4b.lock
 
 # ---------------------------------------------------------------------------
+# A5 (安全闸, 2026-09-02 跟进): OS 把一个死进程的 PID 回收派给一个全新、无关的
+#     release 进程时, "锁文件里的 PID == 我的 PID" 这个巧合不能被判成自我重入
+#     直接放行 —— 那会跳过 flock/PID 文件那层真正的互斥, 第三个进程还能并发
+#     拿到锁(5/30 事故的形态: 两个 deploy 上传同一份共享 jar/dist)。
+#
+#     真实的 OS PID 回收没法在测试里可靠制造, 用桩固定 deploy_lock_pid() 的
+#     返回值来构造这个巧合 —— 锁文件里的"死 PID"和这次调用 deploy_lock_pid()
+#     算出来的"我的 PID"恰好是同一个字符串, 但**刻意不设**
+#     CRETAS_DEPLOY_REENTRY_PID, 模拟"这个新进程从没走过 exec 重入这条路"。
+# ---------------------------------------------------------------------------
+rm -f /tmp/lockstale-a5.lock
+unset CRETAS_DEPLOY_REENTRY_PID 2>/dev/null || true
+RECYCLED_PID="999999"
+echo "$RECYCLED_PID" > /tmp/lockstale-a5.lock
+
+# 桩替换真实函数(bash 允许在当前 shell 里重定义已 source 进来的函数)。
+deploy_lock_pid() { echo "$RECYCLED_PID"; }
+deploy_pid_alive() { [ "$1" != "$RECYCLED_PID" ]; }   # RECYCLED_PID 判死 -> 应走 stale 回收
+
+A5_LOGFILE=$(mktemp)
+acquire_deploy_lock "lockstale-a5" > "$A5_LOGFILE" 2>&1
+A5_RC=$?
+A5_LOG=$(cat "$A5_LOGFILE")
+rm -f "$A5_LOGFILE"
+
+# 用完立刻恢复真实函数, 不让桩污染后面的结构闸或任何提前 return/fail 路径。
+unset -f deploy_lock_pid deploy_pid_alive
+# shellcheck source=/dev/null
+source "$COMMON"
+
+[ "$A5_RC" -eq 0 ] \
+    || fail "A5: 缺 CRETAS_DEPLOY_REENTRY_PID 时应该照常走 stale 回收成功(rc=0), 实际 rc=$A5_RC, 日志: $A5_LOG"
+echo "$A5_LOG" | grep -qi "自我重入" \
+    && fail "A5 SECURITY: 没有 CRETAS_DEPLOY_REENTRY_PID 却走了自我重入分支 —— PID 回收撞库漏洞未修复! 日志: $A5_LOG"
+echo "$A5_LOG" | grep -q "reclaiming" \
+    || fail "A5: 应该走真正的 stale 回收路径(日志里要有 'reclaiming'), 实际日志: $A5_LOG"
+echo "PASS A5: PID 回收撞见自己巧合时不会误判自我重入, 照常走 stale 回收 + flock/PID 文件那层真正互斥"
+rm -f /tmp/lockstale-a5.lock
+
+# ---------------------------------------------------------------------------
 # 结构闸: 真实的 release-cretas.sh / deploy-web-admin.sh 必须落在 A4 的"正例"
 # 那个形状里, 不是"反例"那个形状 —— 光测试模式对不代表真文件真的改了。
 # ---------------------------------------------------------------------------
@@ -177,4 +231,12 @@ grep -Pzo '(?s)web_deploy_on_exit\(\).*?\n\}' "$WEB" | tr -d '\0' \
     || fail "结构闸: deploy-web-admin.sh 的 web_deploy_on_exit() 里没找到用 \$ACQUIRED_DEPLOY_LOCK_FILE 清锁的那一行"
 echo "PASS 结构闸: deploy-web-admin.sh web_deploy_on_exit() 含清锁兜底"
 
-echo "PASS: deploy lock 正确核实持有者存活状态, 自我重入不自杀, 调用方清锁兜底就位"
+# A5 的真实布线闸: recover_from_main_drift() 必须真的在 exec 之前设了这个
+# 环境变量 —— 光有 A5 那个原语级测试不够, 原语对了不代表真实调用点接上了
+# (形态 B: 机制在, 没接上)。
+grep -Pzo '(?s)exec bash "\$0".*?\n' "$RELEASE" >/dev/null 2>&1  # 仅确认还是这个 exec 形状, 没静默改名
+grep -Fq 'CRETAS_DEPLOY_REENTRY_PID=$$' "$RELEASE" \
+    || fail "结构闸: release-cretas.sh 里没找到 CRETAS_DEPLOY_REENTRY_PID=\$\$ —— drift-retry 的 exec 没有带上重入凭证"
+echo "PASS 结构闸: release-cretas.sh 的 drift-retry exec 前设了 CRETAS_DEPLOY_REENTRY_PID"
+
+echo "PASS: deploy lock 正确核实持有者存活状态, 自我重入(带凭证)不自杀, PID 回收撞库不会被误判成重入, 调用方清锁兜底就位"
