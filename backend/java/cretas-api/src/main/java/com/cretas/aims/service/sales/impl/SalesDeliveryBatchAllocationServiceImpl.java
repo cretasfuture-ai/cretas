@@ -90,14 +90,17 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             String role = item.getDeliveryRecord().getRecordRole();
             if ("MASTER".equals(role)) {
                 throw new BusinessException(409, "库存批次必须分配到子发运单，不能直接分配到母发货单")
-                        .withCode("DELIVERY_SHIPMENT_REQUIRED");
+                        .withCode("DELIVERY_SHIPMENT_REQUIRED")
+                        .withHint("请先在该发货单下选择或新建子发运单，再在子发运单的发货行上分配批次");
             }
             var status = item.getDeliveryRecord().getStatus();
             if (status != com.cretas.aims.entity.enums.SalesDeliveryStatus.DRAFT
                     && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
                     && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PICKED) {
                 throw new BusinessException(409, "当前发货单状态不允许新增或修改批次分配")
-                        .withCode("BATCH_ALLOCATION_FROZEN");
+                        .withCode("BATCH_ALLOCATION_FROZEN")
+                        .withHint("该发货单已确认发货或已取消，如需调整批次请先撤销发货确认，"
+                                + "或改在草稿/待仓库确认/已拣货状态下操作");
             }
         }
         SalesOrder salesOrder = resolveSalesOrder(factoryId, item);
@@ -392,7 +395,9 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         }
         SalesOrder order = salesOrderRepository.findById(item.getDeliveryRecord().getSalesOrderId())
                 .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
-                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND"));
+                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND")
+                        .withHint("该发货单关联的销售订单可能已被作废或删除，请核对订单状态；"
+                                + "如订单确已作废，请改为公司库存发货或重新关联有效订单"));
         if (!factoryId.equals(order.getFactoryId())) {
             throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
                     .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
@@ -426,11 +431,13 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 otherItemId = Long.valueOf(allocation.getDeliveryItemId());
             } catch (NumberFormatException error) {
                 throw new BusinessException(409, "批次存在无法识别的历史发货占用，不能继续分配")
-                        .withCode("BATCH_ALLOCATION_IDENTITY_INVALID");
+                        .withCode("BATCH_ALLOCATION_IDENTITY_INVALID")
+                        .withHint("请更换其他成品批次进行分配；该批次存在无法识别的历史占用记录");
             }
             SalesDeliveryItem otherItem = deliveryItemRepository.findById(otherItemId)
                     .orElseThrow(() -> new BusinessException(409, "批次存在失去发货行关联的占用记录")
-                            .withCode("BATCH_ALLOCATION_IDENTITY_INVALID"));
+                            .withCode("BATCH_ALLOCATION_IDENTITY_INVALID")
+                            .withHint("请更换其他成品批次进行分配；该批次存在已失效的发货行占用记录"));
             var delivery = otherItem.getDeliveryRecord();
             if (delivery != null) {
                 var status = delivery.getStatus();
@@ -442,7 +449,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             }
             if (!expectedProductTypeId.equals(otherItem.getProductTypeId())) {
                 throw new BusinessException(409, "同一成品批次存在产品身份不一致的发货占用")
-                        .withCode("BATCH_ALLOCATION_PRODUCT_MISMATCH");
+                        .withCode("BATCH_ALLOCATION_PRODUCT_MISMATCH")
+                        .withHint("请更换其他成品批次进行分配；该批次的占用记录存在产品不一致的问题");
             }
             String allocationUnit = allocation.getUnit() != null
                     ? allocation.getUnit() : otherItem.getUnit();
@@ -459,7 +467,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     batch.getPackagingFactor());
             if (nativeQuantity == null) {
                 throw new BusinessException(409, "批次存在单位无法换算的有效发货占用")
-                        .withCode("ACTIVE_BATCH_ALLOCATION_UNIT_UNRESOLVED");
+                        .withCode("ACTIVE_BATCH_ALLOCATION_UNIT_UNRESOLVED")
+                        .withHint("请更换其他成品批次进行分配；该批次现有占用记录的计量单位无法与本次发货单位换算");
             }
             total = total.add(nativeQuantity);
         }

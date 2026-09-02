@@ -50,10 +50,34 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>修好一条历史债务 → 必须同时从 {@link #KNOWN_DEBT} 里删掉，否则「陈旧条目」断言会红
  *       —— 名单只能变短，不能变长。</li>
  * </ul>
+ *
+ * <h2>🔴 代理判据 —— 闸只量「有没有 hint」，量不出「说得对不对」（形态 E）</h2>
+ *
+ * <p>本闸（以及同目录的 {@link BusinessException409HintCoverageContractTest}）用
+ * {@code .withHint(} 的<b>字面存在</b>作代理，断言「拦得住也得说下一步」。它<b>验证不了</b>
+ * hint 说的那一步是不是真的解决问题 —— 而这条区别不是空谈：
+ *
+ * <p><b>2026-09-02 LIUSHANMEN 终审实测</b>：本闸当天新收录的一批 hint 里，抽 10 条终审出
+ * 4 条不成立，同一形状——守卫读的是<b>计划钉住的那一份</b>（BOM 修订 / Workflow 修订，见
+ * {@code ProcessSheetServiceImpl#resolvePinnedBomFamily} 与
+ * {@code WorkflowClerkSheetServiceImpl#getWorkflowSheetConfig} 的
+ * "开工时冻结的运行时快照, 不会因为事后改图而漂移" docstring），hint 却让用户去改<b>活的那一份</b>
+ * （BOM成本管理 / Workflow 画布）——改完发布 = 新版本，在途计划/已开工批次仍钉着旧版本，
+ * 用户照做完还是同一个 409。<b>写代码时本闸五颗绿灯全亮，问题从没被这道闸挡下来过。</b>
+ *
+ * <p>⚠️ 更刺的是：这份 docstring 上面第 43-45 行早就写了「批量编文案不经业务确认，产出的是
+ * 看着像话、实际指错地方的提示——那比没有 hint 更糟」，而当天新增的那批 hint 正是踩中了
+ * 自己文档里描述的这个坑。<b>「读过这条规则」和「这条规则会在自己手上开火」是两回事</b>——
+ * 闸红/绿分不出这个区别，只有走查（终审 / 真机核对守卫读的哪份数据）能分。
+ *
+ * <p><b>判据</b>：新增/改写 hint 时，先问「这条 hint 让用户去改的东西，和守卫实际读取的东西，
+ * 是不是同一份数据」——尤其是「计划/批次开工时钉住快照」这类语义，本仓至少三处
+ * （BOM 版本、Workflow 修订、报工计划快照）都有「活的可以改，钉住的不会跟着动」的落差。
+ * 这一步<b>本闸测不出来</b>，必须人工核对被守卫读取的字段来源。
  */
 class BlockingErrorsCarryActionHintContractTest {
 
-    static final int KNOWN_DEBT_SIZE = 17;
+    static final int KNOWN_DEBT_SIZE = 1;
 
     /**
      * 只扫<b>报工 / 生产</b>链路 —— BLOCKING 在这里的字面意思就是"人停在机器前干不下去了"。
@@ -73,25 +97,13 @@ class BlockingErrorsCarryActionHintContractTest {
     /**
      * 2026-08-01 盘点出的历史欠账。<b>只允许变短。</b>
      * 修好一条就从这里删一条；新增一条会让下面的"未登记违规"断言变红。
+     *
+     * <p>2026-09-02 LIUSHANMEN 走查修完 16 条（全部是 409 BLOCKING，见同一批 PR），
+     * 只剩 {@code PROCESS_SHEET_INPUT_QUANTITY_INVALID}——它是 400，不在这批
+     * "409 缺 hint" 走查范围内，留给下一轮。
      */
     private static final Set<String> KNOWN_DEBT = Set.of(
-            "AUTOMATIC_MATERIAL_REQUIREMENT_INVALID",
-            "AUTOMATIC_MATERIAL_UNIT_REQUIRED",
-            "BOM_OUTPUT_BASIS_INVALID",
-            "PACKAGING_REQUIREMENT_INVALID",
-            "PINNED_BOM_NOT_FOUND",
-            "PROCESS_SHEET_INPUT_QUANTITY_INVALID",
-            "PROCESS_SHEET_PLAN_UNIT_MISMATCH",
-            "PROCESS_SHEET_WORKFLOW_INPUT_PORT_ID_MISSING",
-            "PROCESS_SHEET_WORKFLOW_INPUT_PORT_NOT_FOUND",
-            "PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED",
-            "PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID",
-            "PRODUCTION_INPUT_BATCH_MATERIAL_MISMATCH",
-            "PRODUCTION_INPUT_BATCH_NOT_FOUND",
-            "PRODUCTION_INPUT_BATCH_UNIT_REQUIRED",
-            "PRODUCTION_PLAN_NOT_FOUND",
-            "PRODUCTION_PLAN_OWNERSHIP_CONTEXT_REQUIRED",
-            "SEASONING_REQUIREMENT_INVALID");
+            "PROCESS_SHEET_INPUT_QUANTITY_INVALID");
 
     private record Scan(Set<String> hintless, int blockingSeen) {
     }

@@ -817,7 +817,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         if (order.getStatus() != PurchaseOrderStatus.SUBMITTED) {
             throw new BusinessException(409, "只有已提交且缺少 OA 实例的采购订单可以恢复")
-                    .withCode("PURCHASE_APPROVAL_RECOVERY_STATUS_INVALID");
+                    .withCode("PURCHASE_APPROVAL_RECOVERY_STATUS_INVALID")
+                    .withHint("该采购订单当前状态（" + order.getStatus()
+                            + "）不是「已提交」，无法恢复审批实例；如需重新发起审批，请回到采购订单重新提交");
         }
         if (!workflowEngine.hasActiveWorkflow(factoryId, "PURCHASE_ORDER")) {
             throw new BusinessException(422, "当前工厂没有可用的采购 OA 审批流程")
@@ -1051,6 +1053,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                         || !Objects.equals(item.getSupplierMaterialId(), spec.getSupplierMaterialId())) {
                     throw new BusinessException(409, "采购包装规格已停用或与供应关系不匹配")
                             .withCode("PURCHASE_PACKAGING_SPEC_INACTIVE")
+                            .withHint("请重新选择该供应商与物料仍在生效的包装规格")
                             .withHintTarget("purchasePackagingSpecId");
                 }
             }
@@ -3207,7 +3210,11 @@ public class PurchaseServiceImpl implements PurchaseService {
             String receiveUnit = canonicalUnit(factoryId, receiveItem.getUnit(), "收货数量单位");
             if (!orderUnit.equals(receiveUnit)) {
                 throw new BusinessException(409, "历史收货行缺少跨单位换算快照")
-                        .withCode("PURCHASE_RECEIPT_CONVERSION_SNAPSHOT_REQUIRED");
+                        .withCode("PURCHASE_RECEIPT_CONVERSION_SNAPSHOT_REQUIRED")
+                        .withHint("本次收货单位与采购订单单位不一致，且该商品缺少历史换算快照，暂无法自动折算；"
+                                + "请改用采购订单单位（"
+                                + com.cretas.aims.service.unit.UnitDisplayNames.display(orderUnit)
+                                + "）收货，或先为该物料补充包装换算关系后重试");
             }
             return receiveItem.getReceivedQuantity();
         }
@@ -3891,7 +3898,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         assertSupplierMaterialActive(factoryId, supplierId, item.getMaterialTypeId());
         com.cretas.aims.entity.SupplierMaterial relation = supplierMaterialRepository
                 .findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, item.getMaterialTypeId())
-                .orElseThrow(() -> new BusinessException(409, "供应商与物料的供应关系不存在"));
+                .orElseThrow(() -> new BusinessException(409, "供应商与物料的供应关系不存在")
+                        .withCode("SUPPLIER_MATERIAL_RELATION_NOT_FOUND")
+                        .withHint("该供应商尚未维护可采购原料，请先在供应商详情的「供应原料」中建立关系"));
         if (request.getSupplierMaterialId() != null && !request.getSupplierMaterialId().equals(relation.getId())) {
             throw new BusinessException(400, "供应关系与所选供应商/物料不一致")
                     .withCode("SUPPLIER_MATERIAL_IDENTITY_MISMATCH").withHintTarget("supplierMaterialId");

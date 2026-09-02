@@ -960,7 +960,9 @@ public class TransferServiceImpl implements TransferService {
                         .withHint("禁止在调拨详情重复审批，请联系管理员核对统一 OA 实例");
             }
             throw new BusinessException(409, "只有草稿状态的调拨单可以提交审批")
-                    .withCode("TRANSFER_SUBMIT_STATUS_INVALID");
+                    .withCode("TRANSFER_SUBMIT_STATUS_INVALID")
+                    .withHint("该调拨单当前状态（" + transfer.getStatus()
+                            + "）不是草稿，请刷新调拨单列表查看当前进度，无需重复提交");
         }
         if (workflowEngine == null) {
             throw new BusinessException(503, "审批运行时暂不可用")

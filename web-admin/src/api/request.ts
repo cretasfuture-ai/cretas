@@ -522,21 +522,30 @@ request.interceptors.response.use(
       return Promise.reject(new ApiError(uomMessage, 'MATERIAL_UOM_UNCONFIGURED', 409, uomHint));
     }
 
-    // 409 differentiation (R24 P2 real-window finding):
-    //   - Optimistic lock 409: GlobalExceptionHandler emits {code:409, message:"数据已被其他用户修改..."}
-    //     with NO actionHint. Callers (suppliers/customers/sales-orders/DynamicModulePage)
-    //     catch status===409 and ElMessageBox.alert their own "刷新列表" dialog. Interceptor
-    //     toast would be redundant.
-    //   - Business 409: BusinessException(409, ...).withHint(...) emits {code:409, message:..,
-    //     actionHint:.., hintTarget:..}. R18+R21+R23 invariants (DRAFT/CANCELLED/PRE_FINANCE
-    //     SO/PO blocked from /finance/receivable, /finance/payable, /finance/invoices/request,
-    //     /finance/payments/record, etc.) all use this path. Pre-R24 the blanket-suppress
-    //     swallowed actionHint so users got NO feedback — captured by R24 real-window test
-    //     on /finance/invoices/request with CONFIRMED SO (toast log empty, network 409).
-    // Apr 24 LOW-1 fix was too broad; this re-narrows the suppression to vanilla optimistic
-    // lock only (no actionHint).
+    // 409 differentiation (R24 P2 real-window finding; narrowed 2026-09-02 —
+    // LIUSHANMEN 走查: 好几个 BusinessException(409) 没配 hint, 而当时的判据把
+    // "没配 hint" 直接读成"这是乐观锁, 调用方会自己弹框", 于是整条 toast 被吞掉,
+    // 用户看到的是操作被拒但**什么提示都没有**):
+    //   - True optimistic lock 409: GlobalExceptionHandler.handleOptimisticLockException
+    //     emits errorCode="OPTIMISTIC_LOCK_CONFLICT" — 且自 AUD-4 (2026-05-20) 起
+    //     **恒带** actionHint("请刷新页面查看最新数据后再编辑")。少数调用方
+    //     (suppliers/customers/sales-orders/DynamicModulePage) 仍在自己的 catch 里
+    //     检查 `status===409 && !actionHint` 弹自定义"并发编辑冲突"确认框 —
+    //     那是给**没有** actionHint 的旧后端行为设计的; 真正的乐观锁响应现在必有
+    //     actionHint, 会先被下面的 rich toast 接住, 那些自定义确认框实际已很少触发。
+    //   - Business 409 without hint (本次要修的那一类): BusinessException(409, msg)
+    //     忘了 .withHint(...) —— 以及 ResponseStatusException(HttpStatus.CONFLICT, ...)
+    //     这类完全不带 actionHint 的路径。旧判据 `!actionHint && !hintTarget` 把这两类
+    //     跟"乐观锁, 调用方会自己处理"混为一谈, 一并噤声。收窄成只按**真正的判别信号**
+    //     (errorCode) 识别乐观锁, 其余一律走下面的 showRichError → 至少落一条
+    //     sticky toast 展示后端原始 message, 不再是"点了没反应"。
+    //   - Business 409 with hint: BusinessException(409, ...).withHint(...) emits
+    //     {code:409, message:.., actionHint:.., hintTarget:..}. R18+R21+R23 invariants
+    //     (DRAFT/CANCELLED/PRE_FINANCE SO/PO blocked from /finance/receivable,
+    //     /finance/payable, /finance/invoices/request, /finance/payments/record, etc.)
+    //     all use this path — unaffected by this narrowing.
     const rich = (error.response?.data as unknown as Record<string, string | null>) || {};
-    const isVanillaOptimisticLock = status === 409 && !rich.actionHint && !rich.hintTarget;
+    const isVanillaOptimisticLock = status === 409 && rich.errorCode === 'OPTIMISTIC_LOCK_CONFLICT';
     const isCallerHandledConflict = status === 409
       && typeof rich.errorCode === 'string'
       && originalRequest._handledErrorCodes?.includes(rich.errorCode) === true;
