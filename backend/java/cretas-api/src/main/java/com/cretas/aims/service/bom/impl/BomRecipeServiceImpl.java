@@ -388,6 +388,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      *        {@link #requireDraftMatchesEnabledWorkflow(String, List, Long)}。
      */
     @Override
+    @Transactional   // 终审 #509: 提成接口后自己必须带事务, 否则下一个非事务调用方会留下「2 ACTIVE + 2 DRAFT」半状态
     public BomRecipe activateRecipe(
             String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);

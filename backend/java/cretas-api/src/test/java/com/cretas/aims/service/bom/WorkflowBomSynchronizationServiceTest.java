@@ -287,6 +287,33 @@ class WorkflowBomSynchronizationServiceTest {
         verify(recipeService, never()).synchronizeActiveBomToWorkflowRevision(any(), any(), any(), any());
     }
 
+    @Test
+    @DisplayName("阴性对照(终审 #509): 两个都合格的 DRAFT family → 报冲突让人选, ⛔ 不静默取第一个")
+    void twoAdoptableDraftFamiliesIsAConflict() {
+        when(recipeRepository.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, "FAMILY-1", BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(main));
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(main.getId())).thenReturn(List.of());
+        when(revisionService.resolveTerminalOutputsForRevision(FACTORY, target)).thenReturn(outputs);
+        when(revisionService.resolveExactBinding(FACTORY, main, target.getId()))
+                .thenReturn(binding(main, "main"));
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(
+                        draft("A-MAIN", MAIN_PRODUCT, "FAMILY-A"), draft("A-CO", CO_PRODUCT, "FAMILY-A"),
+                        draft("B-MAIN", MAIN_PRODUCT, "FAMILY-B"), draft("B-CO", CO_PRODUCT, "FAMILY-B")));
+
+        WorkflowBomSyncPreflightResponse result = service.preflight(FACTORY, OWNER, target);
+
+        assertThat(result.getClassification())
+                .isEqualTo(WorkflowBomSyncPreflightResponse.Classification.CONFLICT);
+        assertThat(result.isCanCompleteAutomatically()).isFalse();
+        assertThat(result.getAdoptableDraftRecipeId()).isNull();
+        assertThat(result.getConflicts()).extracting(
+                        WorkflowBomSyncPreflightResponse.SyncIssue::getCode)
+                .contains("BOM_FAMILY_ADOPTION_AMBIGUOUS");
+    }
+
     private BomRecipe draft(String id, String productTypeId, String familyId) {
         BomRecipe d = recipe(id, productTypeId, "terminal:new-" + productTypeId, BomRecipe.OutputRole.MAIN);
         d.setStatus(BomRecipe.Status.DRAFT);
