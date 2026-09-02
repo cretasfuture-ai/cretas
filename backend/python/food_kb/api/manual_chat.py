@@ -1029,6 +1029,35 @@ def _needs_factory_execution_recovery_guard(query: str) -> bool:
     return assignment or input_reachability or cost_repair
 
 
+def _select_rework_requisition_share_answer(query: str) -> str:
+    """Return only the sections of _FACTORY_REWORK_REQUISITION_SHARE_ANSWER the question is about.
+
+    Sections: 1 回料自动扣减, 2 只扣一次与撤回还回, 3 领料单计划投入原料量,
+    4 主料份额端口, 5 409 出路, 6 分配工序操作员. Unknown mix -> full answer.
+    """
+    normalized = (query or "").lower()
+    sections: Dict[int, str] = {}
+    for block in _FACTORY_REWORK_REQUISITION_SHARE_ANSWER.strip().split("\n"):
+        if block[:1].isdigit() and block[1:5] == ". **":
+            sections[int(block[0])] = block.strip()
+    wanted: List[int] = []
+    if "回料" in normalized:
+        reversal_terms = ("撤回", "还回", "退回", "领过", "净额", "扣两次", "再扣", "二次扣", "扣一次")
+        wanted += [1, 2] if any(t in normalized for t in reversal_terms) else [1]
+    if any(t in normalized for t in ("领料单", "物料需求单", "计划投入原料量", "计划投入量")):
+        wanted.append(3)
+    if "份额" in normalized or "主料配比" in normalized or "投入端口" in normalized:
+        wanted.append(4)
+    if "409" in normalized:
+        wanted.append(5)
+    if "分配" in normalized and ("操作员" in normalized or "工序" in normalized):
+        wanted.append(6)
+    picked = [sections[n] for n in sorted(set(wanted)) if n in sections]
+    if not picked or len(sections) < 6:
+        return _FACTORY_REWORK_REQUISITION_SHARE_ANSWER
+    return "\n\n".join(picked)
+
+
 def _needs_factory_rework_requisition_share_guard(query: str) -> bool:
     """Keep rework auto-deduction, requisition planned input, input share ports and 409 exits current (2026-09-02)."""
     normalized = (query or "").lower()
@@ -2286,6 +2315,9 @@ FACTORY_SYSTEM_PROMPT = """\
 4. 路径统一使用“模块 → 页面 → 动作”。字段值优先用短列表，步骤使用编号列表。
 5. 用户问“为什么/逻辑是什么”时先解释业务口径，再给一个真实例子，最后指出会在哪一步体现。
 6. 用户描述报错时，按“最可能原因 → 先检查什么 → 如何恢复 → 恢复后验证”回答；库存、审批、单位、版本快照和权限必须分别判断。
+7. 面向一线使用者写：状态、字段和错误码先用中文说法，英文码只在括号里附一次，不用英文码当标题或句子主语；不出现 revision、payload、幂等键、事务这类实现词。
+8. “适用路线”只在问题需要区分存货生产 / 销售订单生产 / 来料加工时写；不要把“MVP 非阻塞最小闭环”“通用建档与生产主链”这类内部测试范围标签写进回答。
+9. 一屏读完：先一句结论，操作步骤最多 6 步，“填写内容”和“操作步骤”不重复写同一件事；用户问“怎么配置 X”时先给入口在画布/页面的哪个位置。
 
 【SOP 核心口径】
 - 默认从 MVP 非阻塞最小闭环回答；用户选择中度或全量时再加入拓扑冲突、异常、审批、冲销和治理用例。
@@ -2350,7 +2382,7 @@ def _build_scope_prompt(
     }
     return (
         "【本轮用户选择的回答范围】\n"
-        f"- 测试深度：{depth_labels[depth]}\n"
+        f"- 测试深度：{depth_labels[depth]}（内部测试深度标签，不要写进回答）\n"
         f"- 业务线：{line_labels[business_line]}\n"
         "回答必须遵守该范围；只有为避免误操作所必需时才补充范围外提醒。"
     )
@@ -2871,7 +2903,7 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         # ports, 409 exits). One reviewed answer, checked before the older
         # execution-recovery / production-execution guards that also match
         # 回料 / 分配工序 / 已开工 wording.
-        guard_answer = _FACTORY_REWORK_REQUISITION_SHARE_ANSWER
+        guard_answer = _select_rework_requisition_share_answer(request.question)
     elif (
         not is_restaurant_request
         and _needs_factory_production_correction_lifecycle_guard(request.question)

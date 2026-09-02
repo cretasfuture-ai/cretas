@@ -511,6 +511,56 @@
         "#298",
         "#514"
       ]
+    },
+    {
+      "id": "aux-config-entry",
+      "question": "辅料和调料怎么配置？",
+      "must_contain_any": [
+        "辅料 cell",
+        "调料工作区",
+        "添加工序调料"
+      ],
+      "must_not_contain": [
+        "投入物料区，点击添加辅料",
+        "不写在 BOM 配置格里"
+      ],
+      "refs": [
+        "#520"
+      ]
+    },
+    {
+      "id": "pack-config-entry",
+      "question": "包材怎么配置？",
+      "must_contain_any": [
+        "包材 cell",
+        "添加包材"
+      ],
+      "must_contain_any_2": [
+        "包装规格",
+        "自然用量"
+      ],
+      "must_not_contain": [
+        "生产管理 → BOM"
+      ],
+      "refs": [
+        "#415"
+      ]
+    },
+    {
+      "id": "byprod-config-entry",
+      "question": "副产怎么配置？",
+      "must_contain_any": [
+        "+ 副产",
+        "副产 Cell",
+        "标记为副产"
+      ],
+      "must_not_contain": [
+        "生产管理 → BOM",
+        "副产页签"
+      ],
+      "refs": [
+        "#298"
+      ]
     }
   ]
 }
