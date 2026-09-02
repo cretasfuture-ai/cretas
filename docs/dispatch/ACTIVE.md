@@ -361,6 +361,19 @@
 
 **在飞 4**：NOT NULL 列 vs 可空实体扫描闸（`a4a3a0f8e36f32f18`）/ 批次搜索后端参数（`a5e14e58d08f5ac35`）/ #518 跟进 2 行（`a4ef11071c69d0f8f`）/ 撤销回料票（工艺 chat）。**不做（需 owner 重裁）**：路①「按成品量反推领料」与 9-01「本单投入现场填」裁定冲突。**演示后**：45 `baogong001` 角色（f006 陪 owner 界面改）、成品「仓储确认入库」读数。
 
+### 📌 2026-09-02 10:30 增量（时钟按系统 date 订正） · 合并 85, 待发 25 批次齐, 三道终审
+
+**合并 85**（演示中冻结部署，均未发）：
+- **#522** NOT NULL 闸：684 迁移 → 857 列 → 78 处「NOT NULL DEFAULT 列 + 可空实体无 Java 默认」全修（35 个实体；72 处还要 `@Builder.Default`，Lombok `@Builder` 会**静默丢掉字段初始化**；6 处实体被当自己的 PATCH 载体（`ApprovalWorkflow.nodesJson/edgesJson`、`ExportRule.*`、`ImportRule.dedupStrategy`）不能加默认 ⇒ `@PrePersist`，执行者是被周边测试红了才发现）。终审过：风险面按形状**闭合枚举**（patch 载体恰好 3、`Example.of` 0、copy 源 1 安全）；点名的 status/active 字段全走 DTO 更新，实体是 target。**跟进**：`copyForTarget` 显式传 null 绕过 `@Builder.Default`（`BomItemSubstitute.conversionExplicit` 补 `@PrePersist`）+ 闸注释写明看不见什么（已退执行者）。memory 已记。
+- **#523** #518 跟进：重入判据加 `CRETAS_DEPLOY_REENTRY_PID` 合取，封 PID 回收撞泄漏锁。
+- **#524** 缺陷 50 第二步：`batches-with-clerk-wip` 加 `batchNumber` 模糊参数，CLERK_WIP 经 `ProcessSheetRow ⋈ ProductionPlan` 子查询按计划号匹配，**分页在过滤后**；87 个 `*RepositoryQueryValidationTest` 绿。#513 的前端过滤保留为恒真式保险。
+- **#520**（见上段）终审过。
+
+**工艺 chat 撤销回料票摸出更重一层**：回料 OUT 流水无 `report_id` ⇒ 不只撤回不还，`validateFullWipLedgersBeforeMutation` 会让**产出该回料的整批**撤回时撞 `WIP_LEDGER_INVALID`（一旦有人从它领过回料）；修法 = 提交时把 OUT 流水挂到该行首条 YIELD 报工。小结路 (A) `consumeClerkSemiStrict` 同形（既有设计，登记）。第一版阴性测试是仪器问题（造的行无 YIELD 报工 ⇒ `submitReversal` 真 no-op，硬约束 9 阳性没亮），已换形态。
+
+**待发 25**（等 owner 说演示结束）：Java `#514 #517 #519 #520 #522 #523 #524`（+ #518 已在 main 但脚本不入 jar）；web `#516`。⚠️ 行为变化：报工投入量含回料（100→108.5）；新建实体行拿 78 个列默认。
+**在飞 2**：#522 跟进 / 撤销回料票。**演示后**：45、成品入库读数、路①需 owner 重裁。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
