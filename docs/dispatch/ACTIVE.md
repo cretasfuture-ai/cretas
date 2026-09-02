@@ -423,6 +423,12 @@
 
 **在飞 0。生产 = main = `7680a75a4e`（Java）/ web 14:53。**
 
+### 📌 2026-09-02 15:32 增量（系统时钟）· 部署 27, 合并 97, 在飞 0
+
+**部署 27** 15:30:32 green（`35108edf2a` = #539 409 提示跟进：9 条 BOM 钉住 hint（含复扫出的 `PINNED_BOM_NOT_FOUND`）补「已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划」；3 条 Workflow 冻结快照 hint 补「请前往批次详情执行「整单撤回」将其取消/作废」（核过是真实按钮，走 `ReportReversalServiceImpl` 置 CANCELLED）；其余 38 条复扫无同形；登记两条既有同形未动 `PLAN_BOM_AUTHORITY_INCOMPLETE` / `PINNED_BOM_FAMILY_INVALID`）✅：jar 15:30:14，`ProcessSheetServiceImpl.class` `grep -a` 「整单撤回」2 /「三信号归零」3，假串 0，health 200。**生产 = main = `35108edf2a`。在飞 0。**
+
+**待 owner**：46 角色门。**待 f006**：45 改前后 `role_code`；成品 `unit_cost` 重算（owner 点一次「确认重算」）；销售出库（`lsm004` 建发货单 → `lsm006` 确认）。**待时机**：192 停用（`PLAN-1788008667414` 结束后）。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
