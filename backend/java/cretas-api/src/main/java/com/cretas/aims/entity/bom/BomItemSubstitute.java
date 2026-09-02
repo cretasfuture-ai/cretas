@@ -40,8 +40,23 @@ public class BomItemSubstitute extends BaseEntity {
     @Column(name = "id", nullable = false, length = 64)
     private String id;
 
+    /**
+     * ⚠️ JPA only allows <b>one</b> {@code @PrePersist}-annotated method per entity class
+     * (Hibernate throws {@code PersistenceException: You can only annotate one callback
+     * method with jakarta.persistence.PrePersist} at {@code EntityManagerFactory} boot
+     * otherwise — hit this for real on 2026-09-02, CI run 33583870365, and it took down
+     * every {@code @DataJpaTest}/{@code *RepositoryQueryValidationTest} in the whole
+     * module, not just this entity's). All pre-insert defaulting for this class funnels
+     * through this single callback; add new defaulting as another private helper called
+     * from here, never as a second {@code @PrePersist} method.
+     */
     @PrePersist
-    void assignId() {
+    void applyPrePersistDefaults() {
+        assignId();
+        applyConversionExplicitDefault();
+    }
+
+    private void assignId() {
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
@@ -107,7 +122,22 @@ public class BomItemSubstitute extends BaseEntity {
     @Column(name = "conversion_factor", nullable = false, precision = 24, scale = 12)
     private BigDecimal conversionFactor;
 
-    /** True only when the user explicitly supplied the conversion instead of the 1:1 default. */
+    /**
+     * True only when the user explicitly supplied the conversion instead of the 1:1 default.
+     *
+     * <p>⛔ {@code @Builder.Default} only covers the "builder method never called" path.
+     * {@link com.cretas.aims.service.bom.impl.BomItemSubstituteServiceImpl#copyForTarget}
+     * calls {@code .conversionExplicit(source.getConversionExplicit())} unconditionally, so a
+     * historical row where this column is legitimately {@code null} (predates the NOT NULL
+     * migration) still clones into an explicit {@code null} — the builder method WAS invoked,
+     * just with a null argument, and {@code @Builder.Default} does not fire for that case.
+     * {@link #applyConversionExplicitDefault()} closes the gap at persist time regardless of call
+     * site; {@code copyForTarget} additionally coalesces at the call site so the in-memory clone
+     * is already correct before any JPA lifecycle runs. This exact blind spot (explicit null
+     * passed through a builder/setter call) is one the mechanical
+     * {@code NotNullColumnsHaveEntityDefaultsContractTest} scanner cannot see — see that class's
+     * javadoc.
+     */
     @Column(name = "conversion_explicit", nullable = false)
     @Builder.Default
     private Boolean conversionExplicit = Boolean.FALSE;
@@ -115,4 +145,15 @@ public class BomItemSubstitute extends BaseEntity {
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
+
+    /**
+     * Only fires at actual INSERT (called from {@link #applyPrePersistDefaults()}) — defends
+     * against explicit-null builder calls too. ⛔ Not itself {@code @PrePersist}-annotated —
+     * see the warning on {@link #applyPrePersistDefaults()} for why.
+     */
+    private void applyConversionExplicitDefault() {
+        if (conversionExplicit == null) {
+            conversionExplicit = Boolean.FALSE;
+        }
+    }
 }

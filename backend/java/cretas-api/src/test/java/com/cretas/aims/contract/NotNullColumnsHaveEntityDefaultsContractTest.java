@@ -114,6 +114,40 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>⇒ 修复后 offender 数应为 <b>0</b>, 本测试是<b>硬门禁</b> (不是棘轮): 任何新迁移
  * 引入同型缺陷都会让它当场变红, 不需要另外维护基线文件。</p>
  *
+ * <h3>⚠️ 本闸看不见什么 (代理判据边界, 2026-09-02 补, 见 [[measurement-and-wiring]] 形态 E)</h3>
+ *
+ * <p>这道闸判「有没有防御」用的是<b>静态代理判据</b> ——「字段声明本身带初始化表达式」
+ * 或「有结构性注解」。这两条代理判据<b>都测不到</b>以下两类, 绿灯不代表这一类清零:</p>
+ *
+ * <ol>
+ *   <li><b>(a) 显式传 null 的 builder/setter 调用点。</b> {@code @Builder.Default} 只覆盖
+ *       「这个 builder 方法根本没被调用」——如果调用点写的是
+ *       {@code .field(source.getField())} 而 {@code source.getField()} 恰好是
+ *       {@code null}(常见于「克隆一条历史行, 那一列在 NOT NULL 迁移之前就已存在且合法为
+ *       null」), builder 方法<b>确实被调用了</b>, 只是参数是 null —— {@code @Builder.Default}
+ *       对此不生效, 本闸的字段声明扫描也看不出调用点长什么样。
+ *       实例: {@code BomItemSubstituteServiceImpl.copyForTarget} 写
+ *       {@code .conversionExplicit(source.getConversionExplicit())}, 源行该列为
+ *       null 时克隆结果仍是 null, 照样撞 {@code accepts_rework} 同型的 23502。
+ *       本闸完全测不到这条 —— 它只看字段声明, 不追踪调用图。防御这一类要么在实体上补
+ *       {@code @PrePersist} 兜底(只在真正 INSERT 时补, 与调用点无关, 见
+ *       {@code BomItemSubstitute.applyConversionExplicitDefault()}), 要么在具体调用点
+ *       coalesce, 而且要**为这条调用路径单独写测试**(本闸不会替你写)。</li>
+ *   <li><b>(b) 默认值语义对不对, 本闸不判断, 只判断"有没有"。</b> 给字段补一个匹配
+ *       DB {@code DEFAULT} 的默认值, 在"这个字段是不是也被复用成 PATCH 载体"这件事上
+ *       完全不检查语义——{@code null} 在某些实体里不是"缺省", 而是"这次没提供,
+ *       调用方明确表示不要动这一列"的哨兵值(见上文 {@code ApprovalWorkflow} /
+ *       {@code ExportRule} / {@code ImportRule} 三个 verdict-a 例外)。本闸能做的只是
+ *       「结构性证据存在 ⇒ 跳过」, 判不出「这个默认值加上去对不对」——那次是靠
+ *       <b>跑周边 service 测试</b>(不是本闸)才抓到两个
+ *       {@code ApprovalWorkflowServiceImplTest} 用例变红。⇒ 改一个字段的默认值之后,
+ *       {@code grep} 一遍这个实体类名 + 常见 PATCH 合并写法
+ *       ({@code if (x.getY() != null) target.setY(...)}), 而不是只看本闸绿了没有。</li>
+ * </ol>
+ *
+ * <p>⇒ 判据: <b>本闸绿只代表「静态声明层面有防御」, 不代表「这一类缺陷在这个代码库里
+ * 清零」。</b> 两条盲区都是在同一批修复里真实撞到的, 不是理论风险。</p>
+ *
  * <h3>阳性对照</h3>
  *
  * <p>{@link #positiveControlScannerCatchesMissingInitializer()} 用
