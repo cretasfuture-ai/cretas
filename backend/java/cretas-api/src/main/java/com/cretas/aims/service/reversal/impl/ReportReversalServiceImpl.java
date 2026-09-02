@@ -1092,9 +1092,24 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                             Collectors.reducing(BigDecimal.ZERO,
                                     SemiFinishedInventoryTransaction::getQuantity,
                                     BigDecimal::add)));
+            // 外部领用血缘 (无 reportId): 按净额判 —— 被别批领走又在那批撤回时还回来的, 不再算「仍被领着」。
+            BigDecimal externalNet = BigDecimal.ZERO;
+            for (SemiFinishedInventoryTransaction txn : txns) {
+                if (isExternalConsumptionOut(txn) && txn.getQuantity() != null) {
+                    externalNet = externalNet.add(txn.getQuantity().abs());
+                } else if (isExternalConsumptionReverse(txn) && txn.getQuantity() != null) {
+                    externalNet = externalNet.subtract(txn.getQuantity().abs());
+                }
+            }
+            if (externalNet.signum() > 0) {
+                return true; // 还有别批领走没还回来的量 ⇒ 业务拒绝 DOWNSTREAM_CONSUMED (这条要保留)
+            }
             for (SemiFinishedInventoryTransaction txn : txns) {
                 if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
                     continue;
+                }
+                if (isExternalConsumptionOut(txn)) {
+                    continue; // 已按净额判过
                 }
                 if (!SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME.equals(txn.getSourceType())) {
                     return true;
@@ -1135,6 +1150,35 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
         return false;
+    }
+
+    /**
+     * 「外部领用血缘」—— 不属于任何报工的 SFI 流水, 只有 sourceRef 说得清来路:
+     * <ul>
+     *   <li>OUT {@code interim-settle-out:<batchNo>}: 正式报工扣回料 / 小结 SFI 投料 ({@code consumeClerkSemiStrict});</li>
+     *   <li>REVERSE {@code reversal-log:<id>} (#527 整单撤回还回回料) / {@code interim-settle-reverse-out:<batchNo>}
+     *       (小结撤销 {@code restoreClerkSemi})。</li>
+     * </ul>
+     * 它们 {@code reportId} 必然为 null (挂谁的报工都会撞 validateReportWipTransactions 的批次作用域)。
+     * 整单撤回对这类行的态度: <b>豁免 reportId 要求与报工级配对, 但余额照算</b>; 「还被领着」按同一 SFI 上
+     * OUT − REVERSE 的净额判。⛔ 判据只认这几个前缀 —— 没有 sourceRef / 未知前缀的无 reportId 流水照旧拦。
+     */
+    static boolean isExternalConsumptionOut(SemiFinishedInventoryTransaction txn) {
+        return txn != null
+                && SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())
+                && txn.getReportId() == null
+                && txn.getSourceRef() != null
+                && txn.getSourceRef().startsWith(com.cretas.aims.service.wip.WipLedgerEntries.CLERK_OUT_REF_PREFIX);
+    }
+
+    static boolean isExternalConsumptionReverse(SemiFinishedInventoryTransaction txn) {
+        return txn != null
+                && SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())
+                && SemiFinishedInventoryTransaction.SourceType.REVERSAL.equals(txn.getSourceType())
+                && txn.getReportId() == null
+                && txn.getSourceRef() != null
+                && (txn.getSourceRef().startsWith("reversal-log:")
+                        || txn.getSourceRef().startsWith("interim-settle-reverse-out:"));
     }
 
     private record CompensationKey(Long reportId, Long semiFinishedId,
@@ -1216,6 +1260,22 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         || txn.getQuantity() == null || txn.getQuantity().signum() == 0) {
                     throw malformedWipTransaction("完整半成品流水存在空值、重复 ID、跨工厂或零数量",
                             "WIP_LEDGER_INVALID");
+                }
+                if (isExternalConsumptionOut(txn)) {
+                    // 外部领用: 不属于任何报工 ⇒ 不进配对 (originals), 但它真的动过余额 ⇒ 计入 consumed
+                    if (txn.getQuantity().signum() >= 0) {
+                        throw malformedWipTransaction("外部领用 OUT 流水数量非法", "WIP_LEDGER_INVALID");
+                    }
+                    rawConsumed = rawConsumed.add(txn.getQuantity().abs());
+                    continue;
+                }
+                if (isExternalConsumptionReverse(txn)) {
+                    // 外部领用的还回: 同理不进配对 (reversals), 余额上抵消 consumed
+                    if (txn.getQuantity().signum() <= 0) {
+                        throw malformedWipTransaction("外部领用还回流水数量非法", "PARTIAL_COMPENSATION");
+                    }
+                    rawConsumed = rawConsumed.subtract(txn.getQuantity());
+                    continue;
                 }
                 if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
                     if (txn.getQuantity().signum() <= 0 || txn.getReportId() == null) {

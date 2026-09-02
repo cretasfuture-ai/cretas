@@ -870,8 +870,8 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
-    @DisplayName("阴性事实 (票): 产出批的回料被别批领过又还回 (净 0) 后, 整单撤回仍被拒 —— OUT/REVERSE 流水没有 reportId")
-    void producerBatch_afterConsumerReversed_stillCannotBeReversed() {
+    @DisplayName("票: 产出批的回料被别批领过又还回 (净 0) 后, 整单撤回能撤 —— 外部领用 OUT/REVERSE 按净额判, 账本校验豁免 reportId 但余额照算")
+    void producerBatch_afterConsumerReversed_isReversibleAgain() {
         seedReworkSfi("CLK-SEMI-THROWAWAY-B", "10");
         ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-B", "CLK-SEMI-THROWAWAY-B", "1");
         SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-B", "10");
@@ -880,9 +880,35 @@ class ProcessSheetServiceImplTest {
         SemiFinishedInventory afterRestore = sfiRepo.findById(produced.getId()).orElseThrow();
         assertThat(afterRestore.getAvailableQuantity()).as("消费批撤回后净 0").isEqualByComparingTo("10");
 
-        // 今天: 守卫只认带 reportId 的 REVERSE 作补偿, 这条 OUT 永远算「外部领用」⇒ 产出批永久撤不了
+        // 第一个 commit 钉住的阴性事实是 DOWNSTREAM_CONSUMED; 修法后净 0 ⇒ 能撤, 且产出的 IN 被冲回
+        assertThat(reversalErrorCode(producer.getBatchId())).isEqualTo("OK");
+        assertThat(sfiRepo.findById(produced.getId()).orElseThrow().getAvailableQuantity())
+                .as("产出批撤回 ⇒ 它产的回料 IN 被冲回 (10 → 0)").isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 无 reportId 且来路不明 (sourceRef 不是这两类前缀) 的 OUT 仍拦 —— 豁免只认前缀")
+    void producerBatch_withUnknownExternalOut_isStillRefused() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-D", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-D", "CLK-SEMI-THROWAWAY-D", "1");
+        SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-D", "10");
+        // 一条来路不明的 OUT (无 reportId, sourceRef 不是 interim-settle-out:)
+        produced.setConsumedQuantity(new BigDecimal("3"));
+        produced.setAvailableQuantity(new BigDecimal("7"));
+        sfiRepo.saveAndFlush(produced);
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID)
+                .semiFinishedId(produced.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                .sourceRef("mystery:" + UUID.randomUUID())
+                .quantity(new BigDecimal("-3"))
+                .balanceAfter(new BigDecimal("7"))
+                .operatorId(operatorId)
+                .build());
+
         assertThat(reversalErrorCode(producer.getBatchId()))
-                .as("既有缺陷钉成事实: 领了又还, 产出批仍撤不了 (修法落地后这条要翻成 OK)")
+                .as("来路不明的领用: 守卫 fail-closed")
                 .isEqualTo("DOWNSTREAM_CONSUMED");
     }
 
