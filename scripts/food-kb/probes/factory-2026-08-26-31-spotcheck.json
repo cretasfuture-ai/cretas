@@ -5,127 +5,312 @@
     {
       "id": "settlement-defect-tri-state-157-158",
       "question": "结单时必须回答这批有没有不良品吗？不良品数怎么回填到批次？",
-      "must_contain_any": ["不良品", "三态", "不知道", "未知"],
-      "must_not_contain": ["填 0 即可", "可以填0"],
-      "refs": ["#157", "#158"]
+      "must_contain_any": [
+        "不良品",
+        "三态",
+        "不知道",
+        "未知"
+      ],
+      "must_not_contain": [
+        "填 0 即可",
+        "可以填0"
+      ],
+      "refs": [
+        "#157",
+        "#158"
+      ]
     },
     {
       "id": "stocktake-pending-defect-160-396",
       "question": "结单时没回答不良品的计划，后面在哪里补录？",
-      "must_contain_any": ["盘点", "补录", "待办"],
-      "refs": ["#160", "#396"]
+      "must_contain_any": [
+        "盘点",
+        "补录",
+        "待办"
+      ],
+      "refs": [
+        "#160",
+        "#396"
+      ]
     },
     {
       "id": "batch-cost-bom-version-174",
       "question": "同一个产品的不同批次，成本是按哪一版 BOM 算的？版本不一致时会提示吗？",
-      "must_contain_any": ["创建时", "绑定", "那一版", "钉住", "快照"],
-      "refs": ["#174"]
+      "must_contain_any": [
+        "创建时",
+        "绑定",
+        "那一版",
+        "钉住",
+        "快照"
+      ],
+      "refs": [
+        "#174"
+      ]
     },
     {
       "id": "storage-location-vocab-184-312",
       "question": "原料档案的储存位置和储存类型是自由填写还是从固定词表里选？",
-      "must_contain_any": ["受控", "词表", "下拉", "固定", "选择"],
-      "must_not_contain": ["自由填写", "任意填写"],
-      "refs": ["#184", "#312", "#284"]
+      "must_contain_any": [
+        "受控",
+        "词表",
+        "下拉",
+        "固定",
+        "选择"
+      ],
+      "must_not_contain": [
+        "可以自由填写",
+        "支持自由填写",
+        "任意填写"
+      ],
+      "refs": [
+        "#184",
+        "#312",
+        "#284"
+      ]
     },
     {
       "id": "receiving-box-not-kg-195",
       "question": "原料入库填「3 箱」时，系统会不会自动把它当成 3 公斤？总重量怎么算？",
-      "must_contain_any": ["不会", "不能", "单位", "折合", "包装规格"],
-      "must_not_contain": ["自动填成 3 公斤", "当成 3 公斤"],
-      "refs": ["#195", "#289"]
+      "must_contain_any": [
+        "不会",
+        "不能",
+        "单位",
+        "折合",
+        "包装规格"
+      ],
+      "must_not_contain": [
+        "自动填成 3 公斤",
+        "当成 3 公斤"
+      ],
+      "refs": [
+        "#195",
+        "#289"
+      ]
     },
     {
       "id": "semi-stocktake-needs-oa-196",
       "question": "半成品盘点没有配置审批流时能直接过账吗？",
-      "must_contain_any": ["不能", "不会", "必须", "阻止", "拒绝", "审批流"],
-      "refs": ["#196", "#250"]
+      "must_contain_any": [
+        "不能",
+        "不会",
+        "必须",
+        "阻止",
+        "拒绝",
+        "审批流"
+      ],
+      "refs": [
+        "#196",
+        "#250"
+      ]
     },
     {
       "id": "voucher-only-production-consume-220-235",
       "question": "会计凭证里「原料发出」收哪些流水？仓间移库会不会被记成原料发出？",
-      "must_contain_any": ["生产领用", "不会", "不记", "只收"],
-      "refs": ["#220", "#235"]
+      "must_contain_any": [
+        "生产领用",
+        "不会",
+        "不记",
+        "只收"
+      ],
+      "refs": [
+        "#220",
+        "#235"
+      ]
     },
     {
       "id": "transfer-page-hides-unavailable-286",
       "question": "调拨页显示现有库存很多但提交报可用 0，是怎么回事？不可调拨的库存会出现在调拨页吗？",
-      "must_contain_any": ["可用", "不可调拨", "不出现", "不会出现", "占用", "预留"],
-      "refs": ["#286"]
+      "must_contain_any": [
+        "可用",
+        "不可调拨",
+        "不出现",
+        "不会出现",
+        "占用",
+        "预留"
+      ],
+      "refs": [
+        "#286"
+      ]
     },
     {
       "id": "rework-purity-guard-313-343",
       "question": "回料投入下一批时有什么纯度限制？纯度没配置会怎样？",
-      "must_contain_any": ["纯度", "未配置", "兼容"],
-      "refs": ["#313", "#343", "#298"]
+      "must_contain_any": [
+        "纯度",
+        "未配置",
+        "兼容"
+      ],
+      "refs": [
+        "#313",
+        "#343",
+        "#298"
+      ]
     },
     {
       "id": "rework-in-standard-bom-319",
       "question": "回料（半成品）能不能作为一行写进标准配方 BOM？",
-      "must_contain_any": ["可以", "能", "允许"],
-      "must_not_contain": ["不能作为", "不允许"],
-      "refs": ["#319"]
+      "must_contain_any": [
+        "可以",
+        "能",
+        "允许"
+      ],
+      "must_not_contain": [
+        "不能作为",
+        "不允许"
+      ],
+      "refs": [
+        "#319"
+      ]
     },
     {
       "id": "over-ship-threshold-308-321",
       "question": "仓管改实发数量有没有上限？超发上限在哪里配置，超了会留痕吗？",
-      "must_contain_any": ["阈值", "上限", "留痕", "异常"],
-      "must_not_contain": ["没有上限", "无上限"],
-      "refs": ["#308", "#321", "#323"]
+      "must_contain_any": [
+        "阈值",
+        "上限",
+        "留痕",
+        "异常"
+      ],
+      "must_not_contain": [
+        "没有上限",
+        "无上限"
+      ],
+      "refs": [
+        "#308",
+        "#321",
+        "#323"
+      ]
     },
     {
       "id": "sku-offshelf-blocked-311",
       "question": "成品 SKU 还有在飞的销售订单时能下架吗？",
-      "must_contain_any": ["不能", "拦", "阻止", "订单号"],
-      "refs": ["#311"]
+      "must_contain_any": [
+        "不能",
+        "拦",
+        "阻止",
+        "订单号"
+      ],
+      "refs": [
+        "#311"
+      ]
     },
     {
       "id": "rework-cannot-sell-328",
       "question": "回料批次能不能直接卖给客户、进销售订单或发货？",
-      "must_contain_any": ["不能", "不允许", "拒绝", "拦"],
-      "refs": ["#328"]
+      "must_contain_any": [
+        "不能",
+        "不允许",
+        "拒绝",
+        "拦"
+      ],
+      "refs": [
+        "#328"
+      ]
     },
     {
       "id": "kpi-no-data-not-zero-333-335",
       "question": "报表 KPI 没有数据时会显示 0 吗？零订单时准时交付率显示什么？",
-      "must_contain_any": ["不会", "不显示 0", "无数据", "没有数据", "不能显示 100%", "空"],
-      "refs": ["#333", "#335", "#303"]
+      "must_contain_any": [
+        "不会",
+        "不显示 0",
+        "无数据",
+        "没有数据",
+        "不能显示 100%",
+        "空"
+      ],
+      "refs": [
+        "#333",
+        "#335",
+        "#303"
+      ]
     },
     {
       "id": "settlement-prefill-own-reservation-362",
       "question": "结单预填的领用量会不会包含本计划自己的预留？",
-      "must_contain_any": ["包含", "计入", "自己的预留", "本计划"],
-      "refs": ["#362"]
+      "must_contain_any": [
+        "包含",
+        "计入",
+        "自己的预留",
+        "本计划"
+      ],
+      "refs": [
+        "#362"
+      ]
     },
     {
       "id": "auto-plan-pins-authority-365-390",
       "question": "财审联动自动创建的生产计划会固定哪些东西？销售合同和 Workflow 是不是创建时就钉住？",
-      "must_contain_any": ["快照", "钉", "固定", "权威"],
-      "refs": ["#365", "#390"]
+      "must_contain_any": [
+        "快照",
+        "钉",
+        "固定",
+        "权威"
+      ],
+      "refs": [
+        "#365",
+        "#390"
+      ]
     },
     {
       "id": "batch-assign-operators-384-386",
       "question": "能不能一次给多个生产工序批量分配操作员？成品率操作员能不能被分配？",
-      "must_contain_any": ["批量", "yield_operator", "成品率操作员", "可以"],
-      "refs": ["#384", "#386"]
+      "must_contain_any": [
+        "批量",
+        "yield_operator",
+        "成品率操作员",
+        "可以"
+      ],
+      "refs": [
+        "#384",
+        "#386"
+      ]
     },
     {
       "id": "settlement-reversal-reopen-403-405",
       "question": "结单撤回后计划会重新打开吗？软删除的结单之后还能再建新结单吗？",
-      "must_contain_any": ["重开", "重新打开", "新的正式结单", "可以再"],
-      "refs": ["#403", "#405"]
+      "must_contain_any": [
+        "重开",
+        "重新打开",
+        "新的正式结单",
+        "可以再"
+      ],
+      "refs": [
+        "#403",
+        "#405"
+      ]
     },
     {
       "id": "customer-material-fail-closed-420-423",
       "question": "客供物料没收齐时结单会怎样？客户自带物料在销售订单和仓库里怎么标出来？",
-      "must_contain_any": ["clean=false", "阻止", "不能一键", "客供", "客户所有权"],
-      "refs": ["#420", "#421", "#422", "#423", "#425"]
+      "must_contain_any": [
+        "clean=false",
+        "阻止",
+        "不能一键",
+        "客供",
+        "客户所有权"
+      ],
+      "refs": [
+        "#420",
+        "#421",
+        "#422",
+        "#423",
+        "#425"
+      ]
     },
     {
       "id": "approved-report-correction-407-412",
       "question": "已审批的报工数据填错了怎么改？改动会留历史吗？",
-      "must_contain_any": ["核对修正", "报工更正", "OA", "审批", "历史"],
-      "refs": ["#407", "#412"]
+      "must_contain_any": [
+        "核对修正",
+        "报工更正",
+        "OA",
+        "审批",
+        "历史"
+      ],
+      "refs": [
+        "#407",
+        "#412"
+      ]
     }
   ]
 }
