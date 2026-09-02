@@ -779,18 +779,15 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
         assert "PARTIALLY_RECEIVED" not in restaurant_text
 
     ai_assist = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
-    factory_tab, restaurant_tab = ai_assist.split('<div id="welcome-factory">', 1)[1].split(
-        '<div id="welcome-restaurant"', 1
-    )
-    restaurant_suggestions = restaurant_tab.split(
-        '<div class="suggestions" aria-label="推荐问题">', 1
-    )[1].split("</div>", 1)[0]
+    # 2026-09-03 owner 裁定: AI Assist 只保留工厂 tab, 页面不再含餐饮欢迎区。
+    assert '<div id="welcome-restaurant"' not in ai_assist
+    assert 'data-tab="restaurant"' not in ai_assist
+    factory_tab = ai_assist.split('<div id="welcome-factory">', 1)[1]
     for factory_topic in (
         "成品分次入库", "有条件通过或不合格", "成品盘点与原料盘点",
             "按含税单价填写", "不良品三态、盘点补录与批次回填", "标签拍摄非阻断建议与证据回读",
     ):
         assert factory_topic in factory_tab
-        assert factory_topic not in restaurant_suggestions
 
 
 def test_factory_sales_delivery_and_auto_invoice_chain_is_deterministic():
@@ -1798,57 +1795,57 @@ def test_restaurant_registered_sources_match_current_product_contract():
     ).read_text(encoding="utf-8")
     assert "质检照片、客户风险队列与训练选样" in ai_assist
     assert "报工单位与跨单位成品率" in ai_assist
-    assert "指定区间、全部門店与输出形态" in ai_assist
-    assert "月报预览、导出与截至时间" in ai_assist
-    assert "AI 飞轮与菜品别名怎么治理？" in ai_assist
-    assert "计划预警与平台同步边界" in ai_assist
+    assert "指定区间、全部門店与输出形态" not in ai_assist
+    assert "月报预览、导出与截至时间" not in ai_assist
+    assert "AI 飞轮与菜品别名怎么治理？" not in ai_assist
+    assert "计划预警与平台同步边界" not in ai_assist
     assert "RN 正规收货与真实上架" in ai_assist
     assert "供应关系与 OA 当前节点" in ai_assist
-    assert "日结菜品表与异常成本动作" in ai_assist
-    assert "季度、追问时间窗与输出否定" in ai_assist
+    assert "日结菜品表与异常成本动作" not in ai_assist
+    assert "季度、追问时间窗与输出否定" not in ai_assist
     assert "未知数值与未支持分析边界" in ai_assist
     assert "页面未知、失败与租户名称边界" in ai_assist
-    assert "高峰时段只读查询边界" in ai_assist
+    assert "高峰时段只读查询边界" not in ai_assist
     assert "投入来源、缺料与单据追踪" in ai_assist
-    assert "指标口径与菜单目录裁决" in ai_assist
-    assert "默认全店与当前限制" in ai_assist
-    assert "范围：全部门店合计" in ai_assist
-    assert "最近30天加权毛利率是多少" in ai_assist
-    assert "最近30天哪个时段生意最好" in ai_assist
-    assert "历史时段表现 resolver" in ai_assist
-    assert "食材成本占营收多少" in ai_assist
-    assert "折扣金额、折扣率与优惠构成" in ai_assist
+    assert "指标口径与菜单目录裁决" not in ai_assist
+    assert "默认全店与当前限制" not in ai_assist
+    assert "范围：全部门店合计" not in ai_assist
+    assert "最近30天加权毛利率是多少" not in ai_assist
+    assert "最近30天哪个时段生意最好" not in ai_assist
+    assert "历史时段表现 resolver" not in ai_assist
+    assert "食材成本占营收多少" not in ai_assist
+    assert "折扣金额、折扣率与优惠构成" not in ai_assist
     assert "折扣力度多大」仍未闭环" not in ai_assist
     assert "仍缺历史时段表现 resolver" not in ai_assist
-    assert "数据库表/字段只进入工程侧元数据" in ai_assist
+    assert "数据库表/字段只进入工程侧元数据" not in ai_assist
     assert "agg_supplier_price" not in ai_assist
     assert "actual_receive" not in ai_assist
-    assert "7 节小课 · 约 12 分钟" in ai_assist
-    assert "飞轮与人审边界" in ai_assist
-    assert "不做计算" in ai_assist
+    assert "7 节小课 · 约 12 分钟" not in ai_assist
+    assert "飞轮与人审边界" not in ai_assist
+    assert "不做计算" not in ai_assist
     assert "开工、批次与完工入库链路" in ai_assist
-    assert "预测排班的范围与调整边界" in ai_assist
-    assert "默认每 6 小时刷新" in ai_assist
+    assert "预测排班的范围与调整边界" not in ai_assist
+    assert "默认每 6 小时刷新" not in ai_assist
     assert "画布 BOM 与成本边界" in ai_assist
     assert "BOM 单一入口与批次调整审计" in ai_assist
-    assert "毛利实收、覆盖率与估算边界" in ai_assist
-    assert "<strong>毛利三层口径：</strong>" in ai_assist
-    assert "五部门与角色权限边界" in ai_assist
-    assert "主动发现与接地行动建议" in ai_assist
-    assert "<strong>五部门驾驶舱：</strong>" in ai_assist
-    assert "AI 工作台" in ai_assist
-    assert "营销员提成" in ai_assist
+    assert "毛利实收、覆盖率与估算边界" not in ai_assist
+    assert "<strong>毛利三层口径：</strong>" not in ai_assist
+    assert "五部门与角色权限边界" not in ai_assist
+    assert "主动发现与接地行动建议" not in ai_assist
+    assert "<strong>五部门驾驶舱：</strong>" not in ai_assist
+    assert "AI 工作台" not in ai_assist
+    assert "营销员提成" not in ai_assist
     assert "基本类型、可选分类与短料号" in ai_assist
     assert "无订单入库与库存归属" in ai_assist
-    assert "登记表与通用问答边界" in ai_assist
-    assert "营收预测与历史回测误差" in ai_assist
+    assert "登记表与通用问答边界" not in ai_assist
+    assert "营收预测与历史回测误差" not in ai_assist
     assert "存放位置、本图产出与自动重锚" in ai_assist
     assert "产出门禁、版本状态与包材连线" in ai_assist
-    assert "标准表格与门店匹配确认" in ai_assist
-    assert "征询分析与写操作安全门" in ai_assist
-    assert "把新门店范围拼回原问题后再规划" in ai_assist
-    assert "简称或片段唯一匹配时也先显示真实门店确认按钮" in ai_assist
-    assert "本次不执行操作也不猜答案" in ai_assist
+    assert "标准表格与门店匹配确认" not in ai_assist
+    assert "征询分析与写操作安全门" not in ai_assist
+    assert "把新门店范围拼回原问题后再规划" not in ai_assist
+    assert "简称或片段唯一匹配时也先显示真实门店确认按钮" not in ai_assist
+    assert "本次不执行操作也不猜答案" not in ai_assist
     assert "<strong>四部门驾驶舱：</strong>" not in ai_assist
 
 
@@ -2614,7 +2611,7 @@ def test_20260821_dual_line_manual_updates_are_complete_and_isolated():
         assert "未结报工占用" not in restaurant_text
 
     assert "移动仓储待收货、关单与 FIFO 发货" in ai_assist
-    assert "部分可算、缺口说明与最近替代" in ai_assist
+    assert "部分可算、缺口说明与最近替代" not in ai_assist
     assert "整段时间都在未来" not in factory_markdown
 
 
@@ -2697,7 +2694,7 @@ def test_20260829_rework_honest_reports_and_restaurant_retirement_are_isolated()
         assert "设备可用率" not in text
 
     assert "回料多产出与报表诚实空值" in ai_assist
-    assert "餐饮导航与菜品下架履约门禁" in ai_assist
+    assert "餐饮导航与菜品下架履约门禁" not in ai_assist
 
 
 def test_20260830_factory_execution_recovery_is_deterministic_and_isolated():
@@ -2831,8 +2828,8 @@ def test_20260830_dual_line_sources_and_ai_assist_are_complete_and_isolated():
     assert "自动计划与完整权威快照" in ai_assist
     assert "外部 WIP、整单撤回与重开" in ai_assist
     assert "已审批报工核对修正" in ai_assist
-    assert "SmartBI 未上线与缺数诚实空态" in ai_assist
-    assert "餐饮阈值权限、继承与时效" in ai_assist
+    assert "SmartBI 未上线与缺数诚实空态" not in ai_assist
+    assert "餐饮阈值权限、继承与时效" not in ai_assist
 
 
 def test_20260902_factory_post_sync_gap_is_closed_and_isolated():
