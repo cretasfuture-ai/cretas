@@ -79,6 +79,14 @@ public class ReworkPolicyAutoDeduction {
         if (req == null || req.getProcessOrder() == null) {
             return Outcome.empty();
         }
+        // 幂等 (终审 #514): 载荷里已经带着自动追加的回料引用 ⇒ 这一行已经算过一次, 一个字都不再追加。
+        //   否则客户端回显后重提 / 重放会把上一次的追加当成「手工投的」再算一遍。
+        boolean alreadyAutoApplied = req.getUpstreamSources() != null
+                && req.getUpstreamSources().stream().filter(Objects::nonNull)
+                        .anyMatch(ProcessSheetRowRequest.UpstreamRef::isAutomaticRework);
+        if (alreadyAutoApplied) {
+            return Outcome.empty();
+        }
         WorkflowClerkSheetConfigDTO config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
         if (config == null || config.getProcesses() == null || config.getWorkflowBatchId() == null) {
             return Outcome.empty(); // 没钉 Workflow 的计划没有 reworkPolicy 可言

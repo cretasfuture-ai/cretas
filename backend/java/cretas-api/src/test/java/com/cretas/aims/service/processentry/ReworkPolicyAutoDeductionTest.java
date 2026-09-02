@@ -235,6 +235,28 @@ class ReworkPolicyAutoDeductionTest {
     }
 
     @Test
+    @DisplayName("幂等 (终审 #514): 载荷里已含 automaticRework=true 的引用 → 不再追加、不查库存、inputQuantity 不动")
+    void payloadAlreadyCarryingAutoRefsIsNotAppliedTwice() {
+        when(wip.listWipByFactory(FACTORY, TARGET, 4)).thenReturn(List.of(
+                rework("RW-1", "50", LocalDate.of(2026, 9, 1))));
+        ProcessSheetRowRequest r = req(4, "108.5");
+        UpstreamRef echoed = new UpstreamRef();
+        echoed.setSourceBatchNumber("RW-1");
+        echoed.setFeedQuantityKg(new BigDecimal("8.5"));
+        echoed.setSemiFinished(true);
+        echoed.setAutomaticRework(true);
+        r.getUpstreamSources().add(echoed);
+
+        ReworkPolicyAutoDeduction.Outcome out = sut.apply(FACTORY, PLAN, r);
+
+        assertThat(out.lines()).isEmpty();
+        assertThat(r.getUpstreamSources()).hasSize(1);
+        assertThat(r.getInputQuantity()).isEqualByComparingTo("108.5");
+        verify(wip, never()).listWipByFactory(any(), any(), any());
+        verify(sfiRepo, never()).findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(any(), any());
+    }
+
+    @Test
     @DisplayName("没钉 Workflow 的计划 (config=null) → 空结果, 不动 req")
     void noPinnedWorkflowIsNoop() {
         when(sheetService.getWorkflowSheetConfig(FACTORY, PLAN)).thenReturn(null);
