@@ -374,6 +374,18 @@
 **待发 25**（等 owner 说演示结束）：Java `#514 #517 #519 #520 #522 #523 #524`（+ #518 已在 main 但脚本不入 jar）；web `#516`。⚠️ 行为变化：报工投入量含回料（100→108.5）；新建实体行拿 78 个列默认。
 **在飞 2**：#522 跟进 / 撤销回料票。**演示后**：45、成品入库读数、路①需 owner 重裁。
 
+### 📌 2026-09-02 11:34 增量（系统时钟）· 合并 89, 在飞 0, 仍冻结等演示结束
+
+**时钟事故（两边同犯）**：我台账「10:10 / 11:2x」按估计写，f006 整轮没跑 `date` 差整一小时（把 09:05 的 DB 时间戳当「刚刚」）。三方核对 10:32 一致（本机 / 47 / DB）。⇒ **时间只用 `date`，⛔ 不估**（形态 A：想知道「现在几点」，量的是「我以为过了多久」）。
+
+**合并 89**：
+- **#526** #522 跟进：`BomItemSubstitute.conversionExplicit` copy 处 coalesce + `@PrePersist`；闸注释写明看不见什么（显式 null 调用点 / 默认语义对不对）。**CI 曾红**：同一实体两个 `@PrePersist`（JPA 每类每事件只允许一个）⇒ EMF 起不来 ⇒ 所有 `@DataJpaTest` 红 —— 与 #506 的嵌套枚举字面量**症状逐字相同、根因不同**（memory 已记：看 log-failed 第一个非 H2 `Caused by`；本地跑 `-Dtest=*RepositoryQueryValidationTest`）。
+- **#527** 撤销报工还回提交时扣的回料（🔒 两轮）：c1 H2 阴性钉「没还」（仪器教训：只带回料上游的行不写 YIELD 报工 ⇒ `submitReversal` 走 no-op，前两版探针白量）；c2 `executeReversal` ①.0 软删前按 `row_payload` 还回。第一轮卡两处：**计数单位 SFI「扣盒还 kg」**（`consumeClerkSemiStrict` 扣前折算成原生单位、还回直接减 kg ⇒ 4 盒蒸发/凭空造）⇒ 建成对的 `restoreClerkSemiStrict` 复用 `resolveSemiFeedQtyInSourceUnit`；**REVERSE 挂 reportId 违反批次作用域**（`WIP_SCOPE_INVALID` 在 txnType 分派前，这次没炸只因写在校验后 ⇒ 该批次后续撤销永久锁死）⇒ `reportId=null`、血缘 `sourceRef=reversal-log:<id>`。复审过：`reportId=null` 不撞 `PARTIAL_COMPENSATION` 的真因是 `involvedSfiIds` 两个来源（本批报工流水 / 本批 WIP）都够不着别批产的回料 —— **涌现性质无测试钉住**（跟进①）；用例 (a) 第二次撤回走「无报工 no-op」对此恒真。c4 棘轮 `UserFacingUnitTranslationRatchet` 52→53 改 `UnitDisplayNames.display`，合进的 squash 含它。跟进②`consumeClerkSemiStrict` 委托同一 helper；跟进③票外那张范围改 **OUT + REVERSE 一起**合规。
+- **#528** 工艺画布辅料 cell 标 `¥?` + BOM 气泡缺价计数（只认后端 `MISSING_PRICE`）。
+
+**待发 25**（等 owner/f006 说演示结束）：Java `#514 #517 #519 #520 #522 #523 #524 #526 #527`；web `#516 #528`。⚠️ 行为变化：报工投入量含回料（100→108.5）；78 个列默认；撤销报工会还回料。
+**演示后**：45 `baogong001`（改前读数 `id=1653 role_code=warehouse_manager`）；成品批次 `unit_cost=NULL` 定性（点一次「重算成本」）；销售出库需 `lsm004`（`SO-20260902-0001` 仍 FINANCE_APPROVED）；路①需 owner 重裁。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
