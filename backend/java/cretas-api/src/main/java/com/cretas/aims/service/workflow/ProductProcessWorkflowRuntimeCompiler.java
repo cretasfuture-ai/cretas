@@ -403,26 +403,13 @@ public class ProductProcessWorkflowRuntimeCompiler {
      * (「这个入口不参与推算」), 超出 [0,100] 才拒 —— 份额是相对量, 各端口之和不强制等于 100,
      * 推算时按份额归一化。
      */
+    /** 委托 {@link InputShareRatios#parsePercent} —— 与领料侧同一个解析, 见那边注释 (份额收敛票)。 */
     private BigDecimal optionalPercent(Object value, String nodeId, String fieldPath) {
-        if (value == null) {
-            return null;
+        try {
+            return InputShareRatios.parsePercent(value);
+        } catch (IllegalArgumentException e) {
+            throw runtimeInvalid(nodeId, fieldPath, e.getMessage());
         }
-        BigDecimal parsed;
-        if (value instanceof BigDecimal decimal) {
-            parsed = decimal;
-        } else if (value instanceof Number number) {
-            double d = number.doubleValue();
-            if (!Double.isFinite(d)) {
-                throw runtimeInvalid(nodeId, fieldPath, "must be a finite number");
-            }
-            parsed = BigDecimal.valueOf(d);
-        } else {
-            throw runtimeInvalid(nodeId, fieldPath, "must be a number");
-        }
-        if (parsed.signum() < 0 || parsed.compareTo(new BigDecimal("100")) > 0) {
-            throw runtimeInvalid(nodeId, fieldPath, "must be between 0 and 100");
-        }
-        return parsed;
     }
 
     private String optionalQuantityMode(Object value, String nodeId, String fieldPath) {
