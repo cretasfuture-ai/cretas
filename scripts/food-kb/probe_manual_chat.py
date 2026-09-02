@@ -134,9 +134,11 @@ def run(base: str, probe_set: dict[str, Any], timeout: float, only: set[str] | N
         for phrase in probe.get("must_contain", []):
             if _norm(phrase) not in n:
                 problems.append(f"missing «{phrase}»")
-        anyset = probe.get("must_contain_any", [])
-        if anyset and not any(_norm(p) in n for p in anyset):
-            problems.append("none of must_contain_any: " + " / ".join(anyset))
+        # one or more "at least one of" groups: must_contain_any, must_contain_any_2, ...
+        for key in sorted(k for k in probe if k.startswith("must_contain_any")):
+            anyset = probe.get(key) or []
+            if anyset and not any(_norm(p) in n for p in anyset):
+                problems.append(f"none of {key}: " + " / ".join(anyset))
         for phrase in probe.get("must_not_contain", []):
             if _norm(phrase) in n:
                 problems.append(f"forbidden «{phrase}» present")

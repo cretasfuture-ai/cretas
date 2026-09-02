@@ -1,0 +1,196 @@
+{
+  "category": "factory",
+  "note": "2026-09-02 补课扩展探针：从六组起草稿各抽 3-4 条，覆盖 09-01 09:16 之后合入的工厂改动。判据写行为不写字面。",
+  "probes": [
+    {
+      "id": "share-sum-not-forced-100",
+      "question": "工序上三个原料的份额之和必须凑够 100% 吗？填了 3 和 7 行不行？",
+      "must_contain_any": ["相对", "不强制", "不要求等于 100", "只提示"],
+      "must_not_contain": ["必须等于 100", "阻止保存", "自动补齐"],
+      "refs": ["#503", "#504"]
+    },
+    {
+      "id": "seasoning-no-price-bind",
+      "question": "调料还没有成本价，能不能先绑到工序的辅料格里？",
+      "must_contain_any": ["可以", "允许"],
+      "must_contain": ["暂记 0"],
+      "must_not_contain": ["必须先维护价格", "阻止保存", "先补价再绑"],
+      "refs": ["#520", "#528"]
+    },
+    {
+      "id": "coproduct-family-adoption",
+      "question": "四个成品原来各有一个 BOM，改成一张联产工艺图后点发布报“终端缺少生效 BOM”，草稿又激活不了，怎么办？",
+      "must_contain": ["自动同步并发布"],
+      "must_contain_any": ["整体激活", "收编", "family"],
+      "must_not_contain": ["直接改库", "先生效该草稿", "先激活草稿再发布"],
+      "refs": ["#509"]
+    },
+    {
+      "id": "requisition-confirm-share-label",
+      "question": "领料单主料行写着“按配比 30%”，仓管确认领料时要怎么填？",
+      "must_contain_any": ["填任一", "填一个原料", "任意一行"],
+      "must_contain_any_2": ["自动跳出", "自动推算", "按相对比例"],
+      "must_not_contain": ["按配比 0%", "每行都要手填"],
+      "refs": ["#503", "#483"]
+    },
+    {
+      "id": "print-no-double-count",
+      "question": "同一张生产计划生成了两张领料单，配料单上纸箱需求会不会变成两倍？",
+      "must_contain_any": ["不加倍", "不会翻倍", "取最大值", "取较大值", "不相加", "仍是 6.94", "不累加"],
+      "must_not_contain": ["13.88", "翻倍"],
+      "refs": ["#494"]
+    },
+    {
+      "id": "rework-settle-no-double",
+      "question": "回料在报工时已经扣过，小结和结单还会再扣吗？",
+      "must_contain_any": ["不会", "跳过"],
+      "must_contain": ["已在报工扣过"],
+      "must_not_contain": ["小结时再扣一次", "结单再次扣减"],
+      "refs": ["#514"]
+    },
+    {
+      "id": "batch-search-server-side",
+      "question": "生产批次列表输入批次号搜不到，是不是批次不存在？",
+      "must_contain_any": ["服务端", "模糊", "分页在过滤之后", "没有匹配"],
+      "must_not_contain": ["只能搜当前页", "回退到未过滤列表"],
+      "refs": ["#513", "#524"]
+    },
+    {
+      "id": "self-supplied-material",
+      "question": "冰水在物料档案勾了“自备料”之后，领料单和报工会怎样？",
+      "must_contain_any": ["配方提醒", "提醒", "现场取用"],
+      "must_contain_any_2": ["不扣库存", "不扣减", "不产生批次消耗"],
+      "must_not_contain": ["库存不足", "必须先入库", "需要称重录入"],
+      "refs": ["#497"]
+    },
+    {
+      "id": "customer-supplied-gate-two-rules",
+      "question": "客供计划结单时提示“本批使用了客供清单之外的料”是什么意思，清单里没用完的料要不要补齐？",
+      "must_contain_any": ["不在客供清单", "清单之外", "清单里"],
+      "must_contain_any_2": ["不要求", "不产生提示", "没用到", "只用了一部分", "不用补齐"],
+      "must_not_contain": ["必须报完", "按比例补齐", "按占比"],
+      "refs": ["#496", "#505"]
+    },
+    {
+      "id": "requisition-explicit-zero",
+      "question": "确认领料时某个辅料实际没领，填 0 会被拦吗？",
+      "must_contain_any": ["合法", "不会被拦", "放行", "只有未填"],
+      "must_not_contain": ["必须大于 0", "0 视为未填", "不能填 0"],
+      "refs": ["#469"]
+    },
+    {
+      "id": "supplier-price-tax-inclusive",
+      "question": "供应商的默认采购价应该填含税还是未税？未税价要不要自己算？",
+      "must_contain": ["含税"],
+      "must_contain_any": ["自动", "系统换算", "只读"],
+      "must_not_contain": ["手填未税", "未税价必填"],
+      "refs": ["#464", "#472"]
+    },
+    {
+      "id": "supplier-price-required",
+      "question": "新增供应原料关系不填默认采购价能保存吗？历史上没价格的关系只改启用状态呢？",
+      "must_contain_any": ["必填", "不能保存", "大于 0"],
+      "must_not_contain": ["可以留空", "按 0 元处理"],
+      "refs": ["#465", "#454"]
+    },
+    {
+      "id": "po-resubmit-after-price",
+      "question": "采购单提交审批报“未配置有效采购价”，我去供应商那里补了价，需要重建采购单吗？",
+      "must_contain_any": ["直接重新提交", "无需重建", "不需要重建", "重新提交本单"],
+      "must_not_contain": ["需要重建", "删掉草稿"],
+      "refs": ["#434"]
+    },
+    {
+      "id": "warehouse-book-vs-available",
+      "question": "分仓库存查询里账面数量 5900、可用数量 5800，投料该按哪个？",
+      "must_contain": ["可用数量"],
+      "must_contain_any": ["预扣", "未结单", "在途"],
+      "must_not_contain": ["账面数就是可用", "数据不一致"],
+      "refs": ["#479"]
+    },
+    {
+      "id": "warehouse-menu-hubs",
+      "question": "仓储菜单里分仓库存查询和盘点与期初库存现在在哪里？",
+      "must_contain": ["库存查询", "盘点"],
+      "must_contain_any": ["页签", "hub", "入口"],
+      "must_not_contain": ["入库管理", "盘点管理"],
+      "refs": ["#463"]
+    },
+    {
+      "id": "sales-price-tax-inclusive",
+      "question": "销售订单新建时单价填含税还是未税，税率没填会怎样？",
+      "must_contain": ["含税"],
+      "must_contain_any": ["反算", "自动", "只读"],
+      "must_not_contain": ["填未税单价", "默认按 0 计算"],
+      "refs": ["#468", "#471"]
+    },
+    {
+      "id": "finance-peek-no-403",
+      "question": "财务经理在待我审批里点开采购单会不会跳 403？",
+      "must_contain_any": ["只读速览", "不会跳", "不跳 403", "抽屉"],
+      "must_not_contain": ["直接进采购模块", "会跳到 403"],
+      "refs": ["#441"]
+    },
+    {
+      "id": "oa-amount-tax-first",
+      "question": "审批人看到的采购单金额是含税还是未税？",
+      "must_contain": ["含税"],
+      "must_contain_any": ["领先", "为主", "主数", "税率"],
+      "must_not_contain": ["只显示未税", "含税等于未税"],
+      "refs": ["#466", "#473"]
+    },
+    {
+      "id": "oa-definition-changed-restart",
+      "question": "审批链被改过之后在途的采购单通过不了怎么办？",
+      "must_contain_any": ["按当前审批流重新发起", "重新发起"],
+      "must_contain_any_2": ["工厂超级管理员", "管理员"],
+      "must_not_contain": ["超级管理员直接审批通过", "删掉实例", "自动继续"],
+      "refs": ["#446"]
+    },
+    {
+      "id": "shipment-fifo-prefill-short",
+      "question": "建了子发运单之后批次要不要手动分配，分配数量能不能少于发货量？",
+      "must_contain_any": ["自动", "预填", "FIFO"],
+      "must_contain_any_2": ["可以少", "允许少", "短发", "不超过"],
+      "must_not_contain": ["必须等于发货量", "必须手动分配"],
+      "refs": ["#492", "#484"]
+    },
+    {
+      "id": "production-menu-and-reversal-tab",
+      "question": "生产管理菜单现在分成哪几块？撤回审批去哪里找？",
+      "must_contain": ["报工审批", "撤回审批"],
+      "must_contain_any": ["页签", "hub", "同一"],
+      "must_not_contain": ["撤回审批是独立菜单项"],
+      "refs": ["#487"]
+    },
+    {
+      "id": "quality-manager-cannot-approve",
+      "question": "质量经理能不能审核报工？",
+      "must_contain_any": ["不能", "看不到", "只读"],
+      "must_not_contain": ["质量经理可以审批报工"],
+      "refs": ["#450"]
+    },
+    {
+      "id": "approval-zero-vs-dash",
+      "question": "报工审批页面显示“待审批 0”，是不是说明没有待审批的报工？",
+      "must_contain_any": ["加载失败", "待审批 —", "—"],
+      "must_not_contain": ["一定没有待审批", "肯定没有"],
+      "refs": ["#449"]
+    },
+    {
+      "id": "material-dict-warehouse-write",
+      "question": "仓库员能不能在原料类型字典新增一种包材？在哪个菜单？",
+      "must_contain": ["仓储管理"],
+      "must_contain_any": ["可以", "能"],
+      "must_not_contain": ["系统管理 → 原料类型字典", "不能新增"],
+      "refs": ["#491"]
+    },
+    {
+      "id": "count-unit-ge-not-jian",
+      "question": "字典单位是“个”的纸箱建采购单，单位会不会变成“件”？",
+      "must_contain_any": ["不会", "保留", "保持"],
+      "must_not_contain": ["统一折成件", "会变成件"],
+      "refs": ["#474", "#482"]
+    }
+  ]
+}

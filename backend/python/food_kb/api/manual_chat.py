@@ -282,13 +282,24 @@ _LABEL_QC_REVIEW_ANSWER = """\
 _FACTORY_EXECUTION_RECOVERY_ANSWER = """\
 本轮生产执行收口的是四类独立问题：批量指派、多批投入、回料兼容与成本更正。它们都必须回读权威结果，不能用前端 Toast 或本地计算冒充完成。
 
-1. **批量工序指派：** 电脑 Web 打开生产批次详情，勾选可分配工序或“全选可分配工序”，再选择当前工厂仍有效的 `operator` 或 `yield_operator`。保存前必须确认“N 道工序 + 姓名”；系统逐任务调用既有更新端点，成功行刷新负责人，失败行保留并列出明细，不能把部分成功说成全部成功。派错时仍可清空负责人。
+1. **批量工序指派：** 电脑 Web 从生产计划列表计划行“更多 → 分配工序操作员”（尚未生成成品批次时灰显并提示“计划尚未生成成品批次”，多个成品批次时弹出选择框）或直接打开生产批次详情，勾选可分配工序或“全选可分配工序”，再选择当前工厂仍有效的 `operator` 或 `yield_operator`。保存前必须确认“N 道工序 + 姓名”；系统逐任务调用既有更新端点，成功行刷新负责人，失败行保留并列出明细，不能把部分成功说成全部成功。派错时仍可清空负责人。
 2. **首道 FEFO 多批投入：** 单批可领量不足时，同一个“多批次用量分配”窗口优先提供“按效期优先自动分配”，并始终保留手动选择。自动路径只接受同一原料、同一投入单位的可用批次，按 FEFO 返回顺序逐批使用 `min(本批可用量, 尚缺量)`；接口失败、单位不一致或总量不足都保持阻塞并说明缺口，不能猜换算。切到手动后保留批次身份、逐批数量与目标合计，原来已填的首批数量会迁入对应批次行，所有输入可滚动到达。自动或手动最终仍逐批提交 `materialBatchRefs`，服务端再次校验库存。
 3. **回料投入：** 回料是 Workflow 产出的独立 WIP SKU，不必等于普通上游端口 SKU；但只能从当前工序 picker 中选择同工厂、目标产品族/阶段与纯度矩阵允许的回料。服务端保存时重新核对；不兼容返回 409，提示刷新页面并重新选择，不能靠客户端标记绕过。
 4. **成本更正：** 批次估值更正必须填写新单价和原因，并记录旧值、新值、操作者与时间；已结单计划可从权威领用与成本配置重算，随后同步成品与回料单位成本。当前 ACTIVE BOM 的包材成本只能从物料主数据重新取价，原因必填并写审计台账；不能直接改历史成本数字或静默覆盖。
 5. **结单预填与单位：** 结单预填的可用量会加回“本计划自己的真实预留”，但不认领其它计划或未知来源预留；历史工序产出单位无法识别时回落计划单位，不能把工序名当单位继续传播。
 
 **验收结果：** 分配结果逐道回读，自动与手动多批数量逐批可见且合计准确；缺口未补足不能确认。回料兼容由服务端复核，三类成本更正都有原因和新旧值审计；重算后的计划、成品与回料单位成本一致。"""
+
+_FACTORY_REWORK_REQUISITION_SHARE_ANSWER = """\
+回料自动扣减、领料单投入量、主料份额和报工被拦后的出路是四件不同的事，都以当前生产执行链为准，不能按旧口径“回料只能手工选、投入量系统反推、配比写在 BOM 配置格”回答。
+
+1. **回料按配比自动扣减：** 计划钉住的 Workflow 运行时快照里本道工序配置了回料政策（来源回料 Cell + 配比）时，正式报工按“主料投入量 × 配比”计算应投回料；分母是主料，不含回料（主料 100 kg、配比 8.5% ⇒ 回料 8.5 kg，本工序投入总量 108.5 kg）。先减去操作员已手工投入的同 SKU 回料，缺口才从本产品、本工序已授权且服务端标记为回料的库存按生产日期先进先出自动追加，来源标签为“回料·按配比自动”，在正式报工的同一事务内严格扣减。没钉 Workflow、工序没配回料政策、或只是保存草稿时不扣。回料库存不足、主料投入量未知、回料 Cell 未绑 SKU 时不拦报工，只在结果里写明缺口或未扣原因，不按 0 处理。
+2. **只扣一次与撤回还回：** 正式报工时扣过的回料由服务端在行载荷里标记“已在报工扣过”，小结与结单对这类来源跳过再次扣减，成本仍按投入量 × 单位成本计入；普通半成品来源仍是报工不扣、小结/结单统一扣。整单撤回在软删报工行之前按该标记逐笔把回料还回来源批次并写 REVERSE 流水；还回量超过已消耗量时以 `SFI_REVERSE_OVER_CONSUMED` 拒绝。产出回料的那一批能否整单撤回按净额判：别批领走且未还回的净量大于 0 时返回 `DOWNSTREAM_CONSUMED`，下游撤回把回料还回、净量归零后即可撤回。
+3. **领料单“计划投入原料量”由人工填报：** 电脑 Web“生产管理 → 领料 → 领料单 → 按生产计划生成”弹窗里的“计划投入原料量”（kg，选填）由生产/仓管当场填写，这批实际打算投多少原料是人的决定，系统没有自动来源可以替人填。填了它，辅料/调料行需求量按“配方 g/kg × 计划投入 kg ÷ 1000”算出；留空则辅料/包材需求量显示“按实际领用”，不猜、不填 0；填 0 或负数被拒。确认领料时原料行称重手填，辅料行按原料实拣合计实时自动算并可手改、可“恢复自动计算”，包材行手填；显式填 0 是合法事实，只有未填才拦。
+4. **主料份额（配比）配在画布工序节点的投入端口：** 打开产品-工序配置画布，在吃这些原料的那道工序节点“投入物料”区，每个投入端口右侧有“份额%”输入框（两个及以上投入端口时才显示）。份额是相对量，各端口之和不强制等于 100，合计不是 100 只提示不阻断；留空或填 0 都表示不参与推算。份额随 Workflow 修订发布，只对钉住新修订的新计划生效。领料单主料行显示“按配比 30%”，确认领料或报工时填任一原料，其余带份额的原料按相对比例自动跳出，手改过的行不覆盖。它不写在 BOM 配置格里，也不写在物料主档里。
+5. **报工被 409 拦住时的出路：** 业务校验失败直接显示服务端 message 与 actionHint；没有附带 actionHint 的 409 也以常驻提示显示原文，不会点了没反应。“计划钉住的配方”类 409：未开工的计划在“生产管理 → 生产计划”执行“更新到当前配方”或重新选择 BOM 版本；配方缺项的先补齐并重新激活；已开工的计划需先撤销本批报工（行状态、提交状态、小结时间三个开工信号全部归零后即可重钉），或改为新建计划。“开工时冻结的 Workflow 运行时快照”类 409：修复并重新发布 Workflow 后创建新批次，本批次前往批次详情执行“整单撤回”取消/作废。
+6. **分配工序操作员：** 入口在生产计划列表计划行“更多 → 分配工序操作员”。尚未生成成品批次时灰显并提示“计划尚未生成成品批次”；一个成品批次直接进入其详情的“工序明细”卡片；多个成品批次弹出选择框。批次详情原有的分配入口保留，多批次生产仍需逐批分配。
+"""
 
 _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER = """\
 自动计划、自动消耗、客供结算、撤回重结和报工更正分别解决不同阶段的问题，不能把“修正页面数字”当成直接改库存、成本或历史流水。
@@ -298,7 +309,7 @@ _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER = """\
 3. **整单撤回与重开：** 正式撤回在同一事务内反向 WIP `IN`、恢复 WIP `OUT`、释放占用、回放成本并完成审计；存在活动下游跨批消费、转出、错向/错量流水或租户不一致时整单停止。结单撤回完整成功后，计划从 `COMPLETED` 回到 `IN_PROGRESS` 并清空实际完成量/结束时间；只有自身已完成的唯一同厂批次才同步重开，不能覆盖真实混合状态。
 4. **已审批报工更正：** 电脑 Web 从“生产管理 → 报工核对”进入“核对修正”。只有专用“报工修正”权限可发起；普通报工员不能发起，审批人由已发布的 `PRODUCTION_REPORT_CORRECTION_APPROVAL` OA 流程决定。草稿 `PENDING_APPROVAL` 期间原报工仍是有效值并阻止结单；批准后只允许修改实际产出、良品/不良品、人数、总工时和备注，永久保留 before/after、原因与审批记录。投入批次、库存流水、成本及计划/批次/工序状态不得被这个入口改写；驳回保持原值。
 5. **自动辅料与包材：** 辅料保存和运行统一读取本工序 kg/g 投入基准，正式报工按“实际投入 kg × g/kg ÷ 1000”计算，盒/箱/袋产出不作为分母。包材先选成品 SKU 包装规格与包材角色，再把每包装层级自然用量折算为每成品基本单位标准用量；例如 `1箱=8盒`、每箱 1 个外箱即 `0.125 个/盒`。投入非质量单位、包装规格失效、读取失败或折算不可计算时失败关闭。
-6. **客供物料结单与重结：** 客供原料、辅料、包材都在独立 `suppliedMaterials` 登记，由仓储受控收货为客户所有权批次；未知分类或 WIP/成品错仓拒绝。结单按精确销售订单行和计划占比核对物料类型、单位与数量，缺项/不足返回 `clean=false`，一键确认在任何写入前停止，只允许人工核对补录。整单撤回后旧结单保留软删除审计，活动唯一性只约束未删除记录；重新核对当前客供覆盖、WIP、库存和成本后可创建一条新的正式结单，旧幂等键不能复用，重试不能重复结单。
+6. **客供物料结单与重结：** 客供原料、辅料、包材都在独立 `suppliedMaterials` 登记，由仓储受控收货为客户所有权批次；未知分类或 WIP/成品错仓拒绝。结单只对消耗批次归属为客户所有的行做客供核对，判据只有两条：本批用掉的客供料必须在这张销售订单的客供清单里；同一种客供料在这张订单下所有已结单批次的累计用量加本批不能超过客户实际已收数量。清单里本批没用到或只用了一部分的客供料不产生提示，来料加工按批分次生产是正常形态；工厂自有的辅料/包材批次不校验。命中判据时返回 `clean=false`，一键确认在任何写入前停止，只允许人工核对补录；已收单位与本批消耗单位口径不一致时不做累计比较，只给提示。整单撤回后旧结单保留软删除审计，活动唯一性只约束未删除记录；重新核对当前客供覆盖、WIP、库存和成本后可创建一条新的正式结单，旧幂等键不能复用，重试不能重复结单。
 
 **验收结果：** 分别回读计划固定权威、自动辅料/包材折算、客供三分类与结单缺口、外部 WIP 消耗流水、撤回后的计划/批次/新结单状态，以及报工更正的原值、待审批值和批准后值。任何一步失败都不能留下部分库存、成本、状态或审计写入。"""
 
@@ -1016,6 +1027,38 @@ def _needs_factory_execution_recovery_guard(query: str) -> bool:
         "成本更正", "成本重算", "重算成本", "批次单价", "包材价", "估值更正", "审计台账",
     ))
     return assignment or input_reachability or cost_repair
+
+
+def _needs_factory_rework_requisition_share_guard(query: str) -> bool:
+    """Keep rework auto-deduction, requisition planned input, input share ports and 409 exits current (2026-09-02)."""
+    normalized = (query or "").lower()
+    rework_auto = (
+        "回料" in normalized
+        and any(term in normalized for term in (
+            "配比", "自动扣", "自动追加", "扣两次", "扣一次", "再扣", "二次扣",
+            "还回", "退回", "撤回", "领过", "净额",
+        ))
+    )
+    requisition_input = (
+        any(term in normalized for term in ("领料单", "物料需求单", "计划投入原料量", "计划投入量"))
+        and any(term in normalized for term in (
+            "人工", "手填", "手工", "自动算", "自动计算", "系统算", "反推", "谁填", "填写",
+            "按实际领用", "自动跳", "恢复自动计算", "填 0", "填0",
+        ))
+    )
+    input_share = (
+        any(term in normalized for term in ("主料份额", "主料配比", "份额%", "份额百分比", "投入端口", "input 端口"))
+        or ("份额" in normalized and any(term in normalized for term in ("画布", "workflow", "端口", "配在哪", "在哪里配", "哪个位置", "凑够", "等于 100", "等于100")))
+    )
+    blocked_exit = (
+        "409" in normalized
+        and any(term in normalized for term in ("actionhint", "下一步", "已开工", "钉住", "冻结", "怎么办", "出路"))
+    )
+    assign_entry = "分配工序操作员" in normalized or (
+        any(term in normalized for term in ("分配操作员", "指派操作员"))
+        and any(term in normalized for term in ("入口", "在哪", "哪里", "怎么"))
+    )
+    return rework_auto or requisition_input or input_share or blocked_exit or assign_entry
 
 
 def _needs_factory_production_correction_lifecycle_guard(query: str) -> bool:
@@ -2819,6 +2862,16 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
         # Keep retrieval for source evidence, but do not let model variance invert
         # or omit the mandatory Workflow → BOM → Workflow sequence.
         guard_answer = _BOM_WORKFLOW_SEQUENCE_ANSWER
+    elif (
+        not is_restaurant_request
+        and _needs_factory_rework_requisition_share_guard(request.question)
+    ):
+        # 2026-09-02 resync: these four topics inverted on prod when left to
+        # retrieval (rework auto-deduction, requisition planned input, share
+        # ports, 409 exits). One reviewed answer, checked before the older
+        # execution-recovery / production-execution guards that also match
+        # 回料 / 分配工序 / 已开工 wording.
+        guard_answer = _FACTORY_REWORK_REQUISITION_SHARE_ANSWER
     elif (
         not is_restaurant_request
         and _needs_factory_production_correction_lifecycle_guard(request.question)
