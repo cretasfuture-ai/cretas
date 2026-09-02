@@ -865,6 +865,68 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return deductQty;
     }
 
+    /** {@link #consumeClerkSemiStrict} 的成对逆操作, 见接口 Javadoc。折算与扣减侧同一段代码路径 (resolveSemiFeedQtyInSourceUnit)。 */
+    @Override
+    @Transactional
+    public ClerkSemiRestore restoreClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal feedKg,
+                                                   String sourceRef, Long operatorId) {
+        if (feedKg == null || feedKg.signum() <= 0) {
+            return new ClerkSemiRestore(BigDecimal.ZERO, null);
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElse(null);
+        if (sfi == null) {
+            log.warn("[wip] restoreClerkSemiStrict: no SFI row for batchNo={} (factory={}) — nothing to restore",
+                    intermediateBatchNo, factoryId);
+            return null;
+        }
+        // 与扣减同一段折算: kg 源原样; 计数单位源 → 盒数 (缺每盒克重 ⇒ 与扣减侧同样 loud-fail)
+        BigDecimal restoreQty = resolveSemiFeedQtyInSourceUnit(factoryId, intermediateBatchNo, feedKg);
+        if (restoreQty == null) {
+            throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为" + sfi.getUnit()
+                    + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为" + sfi.getUnit() + "还回")
+                    .withCode("SFI_NO_GRAMS_PER_UNIT")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
+        }
+        BigDecimal produced = nz(sfi.getProducedQuantity());
+        BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(restoreQty);
+        if (newConsumed.signum() < 0) {
+            String u = sfi.getUnit() != null ? sfi.getUnit() : "";
+            throw new BusinessException(409, "撤回还回量超过已消耗量: " + intermediateBatchNo
+                    + " 请求还 " + restoreQty.stripTrailingZeros().toPlainString() + u
+                    + " 已消耗 " + nz(sfi.getConsumedQuantity()).stripTrailingZeros().toPlainString() + u)
+                    .withCode("SFI_REVERSE_OVER_CONSUMED")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
+        }
+        sfi.setConsumedQuantity(newConsumed);
+        sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
+        if (sfi.getAvailableQuantity().signum() > 0
+                && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
+            sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        }
+        wipRepo.save(sfi);
+        SemiFinishedInventoryTransaction revTxn = txnRepo.save(SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(sfi.getId())
+                .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef(sourceRef)
+                .quantity(restoreQty)                   // OUT 冲销 = 正量 (还回, 原生单位, 与 OUT 流水同口径)
+                .unitCostAtTxn(sfi.getUnitCost())
+                .balanceAfter(nz(sfi.getAvailableQuantity()))
+                .balanceCostAfter(sfi.getUnitCost())
+                .reportId(null)                         // ⛔ 不挂报工: 批次作用域校验对报工上每条流水都成立
+                .operatorId(operatorId)
+                .build());
+        log.info("[wip] restoreClerkSemiStrict SFI RESTORE: factory={}, batchNo={}, feedKg={}, restored={}{}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, feedKg, restoreQty, sfi.getUnit() != null ? sfi.getUnit() : "",
+                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return new ClerkSemiRestore(restoreQty, revTxn.getId());
+    }
+
     /**
      * 盒⇄kg 成本口径: 把 kg 投料量折算为半成品来源的原生单位数量 (计数单位→盒数; kg 源→原值),
      * 供小结成本核算 (成本 = 折算后数量 × 每单位 unitCost)。与 {@link #consumeClerkSemiStrict} 折算同源 (口径一致)。

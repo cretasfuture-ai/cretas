@@ -159,6 +159,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ProcessSheetRowRepository processSheetRowRepository;
 
+    /** 还回正式报工时扣掉的回料 (与 consumeClerkSemiStrict 成对); field-inject 同上, 缺失时 ①.0 loud-fail。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+
     /**
      * 生产仓占用的释放 (释放路径 2/3: <b>冲销</b>)。
      *
@@ -502,7 +506,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ①.0 (2026-09-02 票) 还回正式报工时严格扣掉的回料: 那些 OUT 流水没有 reportId (consumeClerkSemiStrict
         //   不认识报工), ② 沿 report_id 的循环看不见它们; 真相在被软删的行的 row_payload 里
         //   (upstreamSources.stockConsumedAtSubmit=true)。必须在软删行之前读。
-        restoreReworkConsumedAtSubmit(factoryId, batchId, log_, reports, now);
+        restoreReworkConsumedAtSubmit(factoryId, batchId, log_, revertedTxnIds);
 
         // ①.1 软删除逐道录入物化行。取消计划的兜底门禁会读取这些行，必须与 YIELD 报工同进退。
         softDeleteProcessSheetRows(factoryId, batchId, log_.getPlanId(), now);
@@ -1279,13 +1283,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     /**
      * 还回正式报工时扣掉的回料 (手工选的 / 按配比自动追加的都长一样: {@code semiFinished && stockConsumedAtSubmit})。
      *
-     * <p>行的选择与 {@link #softDeleteProcessSheetRows} 完全相同 (整单撤回按计划); 每条引用按
-     * intermediateBatchNo 锁行, consumed 反冲 (超过已消耗 ⇒ 抛, 不静默置 0), 写一条 REVERSE/REVERSAL 流水,
-     * reportId 挂本批首条 YIELD 报工, sourceRef 与 ② 同款 ({@code reversal-log:<id>})。
-     * ⛔ 不经 {@code restoreClerkSemi}: 那条给小结撤销用, 流水 sourceRef/reportId 口径不同。
+     * <p>行的选择与 {@link #softDeleteProcessSheetRows} 完全相同 (整单撤回按计划), 必须在软删之前读。
+     * 每条引用经 {@link WipInventoryService#restoreClerkSemiStrict} 还回 —— 与扣减 {@code consumeClerkSemiStrict}
+     * <b>成对</b>, 计数单位 (盒/个) 的折算在那一边只写一次 (终审 #527 ①)。REVERSE 流水 {@code reportId=null},
+     * 血缘由 {@code sourceRef=reversal-log:<id>} 承担 (终审 #527 ②: 挂报工会让本批此后每次 executeReversal 撞
+     * WIP_SCOPE_INVALID)。还回流水 id 进 {@code revertedTxnIds}; 源行不在的引用跳过并写进 reason 后缀, 不只留日志。
+     * 幂等靠 {@code deletedAt} 过滤 (撤回软删过的行不再读到), ⛔ 不靠 sourceRef 判重。
      */
     private void restoreReworkConsumedAtSubmit(String factoryId, Long batchId, ReportReversalLog log_,
-                                               List<ProductionReport> reports, LocalDateTime now) {
+                                               List<Long> revertedTxnIds) {
         if (processSheetRowRepository == null || batchId == null) {
             return;
         }
@@ -1296,10 +1302,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (rows == null || rows.isEmpty()) {
             return;
         }
-        Long reportId = reports == null || reports.isEmpty() ? null : reports.get(0).getId();
         com.fasterxml.jackson.databind.ObjectMapper mapper = payloadMapper();
         int restoredRefs = 0;
         BigDecimal restoredKg = BigDecimal.ZERO;
+        List<String> skipped = new ArrayList<>();
         for (ProcessSheetRow row : rows) {
             if (row == null || row.getDeletedAt() != null || row.getRowPayload() == null
                     || row.getRowPayload().isBlank()) {
@@ -1323,52 +1329,34 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         || ref.getFeedQuantityKg() == null || ref.getFeedQuantityKg().signum() <= 0) {
                     continue;
                 }
+                if (wipInventoryService == null) {
+                    throw new BusinessException(500, "半成品库存服务未就绪, 无法还回提交时扣的回料 (来源: "
+                            + ref.getSourceBatchNumber() + ")").withCode("WIP_SERVICE_UNAVAILABLE");
+                }
                 String batchNo = ref.getSourceBatchNumber().trim();
-                SemiFinishedInventory sfi = wipRepo
-                        .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, batchNo)
-                        .orElse(null);
-                if (sfi == null) {
-                    // 源行已不在 (被删/盘掉): 无处可还, 诚实告警, 不阻塞撤回 (与 restoreClerkSemi 同口径)
-                    log.warn("[SP2] 撤回还回回料: SFI 行不存在 batchNo={} factory={} — 跳过", batchNo, factoryId);
+                com.cretas.aims.service.wip.WipInventoryService.ClerkSemiRestore restore = wipInventoryService.restoreClerkSemiStrict(
+                        factoryId, batchNo, ref.getFeedQuantityKg(),
+                        "reversal-log:" + log_.getId(), reversalOperatorId(log_));
+                if (restore == null) {
+                    // 源行已不在 (被删/盘掉): 无处可还, 登记而不阻塞撤回, ⛔ 不造库存
+                    skipped.add(batchNo + "×" + ref.getFeedQuantityKg().stripTrailingZeros().toPlainString() + "kg");
                     continue;
                 }
-                BigDecimal qty = ref.getFeedQuantityKg();
-                BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(qty);
-                if (newConsumed.signum() < 0) {
-                    throw new BusinessException(409, "撤回还回回料量超过已消耗量: " + batchNo
-                            + " 请求还 " + qty.stripTrailingZeros().toPlainString()
-                            + " 已消耗 " + nz(sfi.getConsumedQuantity()).stripTrailingZeros().toPlainString())
-                            .withCode("SFI_REVERSE_OVER_CONSUMED")
-                            .withSeverity("BLOCKING")
-                            .withHintTarget(batchNo);
+                if (restore.ledgerTxnId() != null) {
+                    revertedTxnIds.add(restore.ledgerTxnId());
                 }
-                sfi.setConsumedQuantity(newConsumed);
-                sfi.setAvailableQuantity(nz(sfi.getProducedQuantity()).subtract(newConsumed)
-                        .add(nz(sfi.getAdjustmentQuantity())));
-                if (sfi.getAvailableQuantity().signum() > 0
-                        && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
-                    sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
-                }
-                wipRepo.save(sfi);
-                txnRepo.save(SemiFinishedInventoryTransaction.builder()
-                        .factoryId(factoryId)
-                        .semiFinishedId(sfi.getId())
-                        .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
-                        .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
-                        .sourceRef("reversal-log:" + log_.getId())
-                        .quantity(qty)                       // OUT 冲销 = 正量 (还回)
-                        .unitCostAtTxn(sfi.getUnitCost())
-                        .balanceAfter(nz(sfi.getAvailableQuantity()))
-                        .balanceCostAfter(sfi.getUnitCost())
-                        .reportId(reportId)
-                        .operatorId(reversalOperatorId(log_))
-                        .build());
                 restoredRefs++;
-                restoredKg = restoredKg.add(qty);
+                restoredKg = restoredKg.add(ref.getFeedQuantityKg());
             }
         }
+        if (!skipped.isEmpty()) {
+            String note = " [撤回还回回料: 跳过 " + skipped.size() + " 条(源行不在): " + String.join(", ", skipped) + "]";
+            log_.setReason((log_.getReason() == null ? "" : log_.getReason()) + note);
+            log.warn("[SP2] 撤回还回回料: factoryId={} batchId={} 跳过 {} 条 (源行不在): {}",
+                    factoryId, batchId, skipped.size(), skipped);
+        }
         if (restoredRefs > 0) {
-            log.info("[SP2] 撤回还回提交时扣的回料: factoryId={} planId={} batchId={} refs={} kg={}",
+            log.info("[SP2] 撤回还回提交时扣的回料: factoryId={} planId={} batchId={} refs={} feedKg={}",
                     factoryId, planId, batchId, restoredRefs, restoredKg.stripTrailingZeros().toPlainString());
         }
     }
@@ -1378,10 +1366,6 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         m.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         m.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
         return m;
-    }
-
-    private static BigDecimal nz(BigDecimal v) {
-        return v == null ? BigDecimal.ZERO : v;
     }
 
     private void softDeleteProcessSheetRows(String factoryId, Long batchId, String planId,
