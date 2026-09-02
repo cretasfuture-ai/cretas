@@ -6247,19 +6247,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionInventoryOwnershipGuard.requireCustomerSuppliedPlanLineage(plan, hintTarget);
     }
 
-    /**
-     * 物料大类单行查询 (单发调用点用, 如 recordMaterialConsumption) ——
-     * 权威来源 {@code RawMaterialType.mainCategory} (DB NOT NULL + CHECK 约束, 100% 覆盖)。
-     * 查不到一律返回 null, 守卫对 null 按最严格口径处理。
-     */
-    private String resolveMaterialMainCategory(String factoryId, String materialTypeId) {
-        if (rawMaterialTypeRepository == null || materialTypeId == null) {
-            return null;
-        }
-        return rawMaterialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
-                .map(com.cretas.aims.entity.RawMaterialType::getMainCategory)
-                .orElse(null);
-    }
+    // 🔀 单行查询版 resolveMaterialMainCategory(factoryId, materialTypeId) 与并行落地的
+    // 缺陷 49 修复重名重复, rebase 后编译器报 "重复的方法" —— 已删除这份, 统一用上面
+    // (第 1641 行附近) 那份逐字同源的实现, 不留两份会漂的口径 (形态 D)。
 
     /**
      * 物料大类批量预取 (循环调用点用, 如结单逐行校验/过账) ——
