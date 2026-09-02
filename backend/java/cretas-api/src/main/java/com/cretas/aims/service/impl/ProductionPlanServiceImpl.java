@@ -3392,10 +3392,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         validateSettlementRequest(plan, effectiveRequest);
 
+        // 缺陷 38 结单热修: 物料大类在这里一次性批量取全 (⛔ 不逐行查),
+        // 然后传进下面两个循环调用链 (validation + posting), 避免 N+1。
+        java.util.Map<String, String> settlementMaterialMainCategoryByType = batchResolveMaterialMainCategories(
+                factoryId, settlementMaterialTypeIds(effectiveRequest));
+
         List<ProductionSettlementConsumption> consumptionLines = new ArrayList<>();
-        appendConsumptionLines(factoryId, plan, "RAW_MATERIAL", effectiveRequest.getRawMaterialConsumptions(), consumptionLines);
-        appendConsumptionLines(factoryId, plan, "SEMI_FINISHED", effectiveRequest.getSemiFinishedConsumptions(), consumptionLines);
-        appendConsumptionLines(factoryId, plan, "AUXILIARY", effectiveRequest.getAuxiliaryConsumptions(), consumptionLines);
+        appendConsumptionLines(factoryId, plan, "RAW_MATERIAL", effectiveRequest.getRawMaterialConsumptions(),
+                consumptionLines, settlementMaterialMainCategoryByType);
+        appendConsumptionLines(factoryId, plan, "SEMI_FINISHED", effectiveRequest.getSemiFinishedConsumptions(),
+                consumptionLines, settlementMaterialMainCategoryByType);
+        appendConsumptionLines(factoryId, plan, "AUXILIARY", effectiveRequest.getAuxiliaryConsumptions(),
+                consumptionLines, settlementMaterialMainCategoryByType);
 
         ProductionSettlement settlement = new ProductionSettlement();
         settlement.setId(UUID.randomUUID().toString());
@@ -5920,7 +5928,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     private void appendConsumptionLines(String factoryId, ProductionPlan plan, String sourceType,
                                         List<ProductionSettlementRequest.ConsumptionLine> requestLines,
-                                        List<ProductionSettlementConsumption> target) {
+                                        List<ProductionSettlementConsumption> target,
+                                        java.util.Map<String, String> materialMainCategoryByType) {
         if (isEmpty(requestLines)) {
             return;
         }
@@ -5961,7 +5970,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setWarehouseId(trimToNull(requestLine.getWarehouseId()));
             line.setNote(trimToNull(requestLine.getNote()));
             line.setAvailableBefore(resolveAvailableBefore(factoryId, plan, sourceType, requestLine,
-                    lockedSemiFinished));
+                    lockedSemiFinished, materialMainCategoryByType));
             if (lockedSemiFinished != null) {
                 // The request may carry a friendly/display batch or unit, but the
                 // immutable settlement ledger must identify the locked inventory row.
@@ -5978,7 +5987,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private BigDecimal resolveAvailableBefore(String factoryId, ProductionPlan plan,
                                               String sourceType,
                                               ProductionSettlementRequest.ConsumptionLine line,
-                                              SemiFinishedInventory lockedSemiFinished) {
+                                              SemiFinishedInventory lockedSemiFinished,
+                                              java.util.Map<String, String> materialMainCategoryByType) {
         if ("SEMI_FINISHED".equals(sourceType)) {
             SemiFinishedInventory inventory = Objects.requireNonNull(lockedSemiFinished,
                     "locked semi-finished inventory is required");
@@ -5994,7 +6004,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
                         .withHintTarget("实际领用"));
-        ensureMaterialBatchAllowedForSettlement(factoryId, plan, line, batch, "实际领用");
+        // 缺陷 38 结单热修: 大类从批次的 materialTypeId 查预取好的 map, ⛔ 不用请求行自带的
+        // materialTypeId (用户可能没填/填错) —— 批次是权威, map 里没有就是 null, 按最严格口径。
+        ensureMaterialBatchAllowedForSettlement(
+                factoryId, plan, line, batch, "实际领用",
+                materialMainCategoryByType.get(batch.getMaterialTypeId()));
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         Set<Long> currentProcessBatchIds = processSheetRowRepository == null
                 ? Set.of()
@@ -6051,9 +6065,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                                                          ProductionPlan plan,
                                                          ProductionSettlementRequest.ConsumptionLine line,
                                                          MaterialBatch batch,
-                                                         String hintTarget) {
+                                                         String hintTarget,
+                                                         String materialMainCategory) {
         if (plan != null) {
-            assertMaterialBatchOwnershipMatchesPlan(plan, batch, hintTarget);
+            assertMaterialBatchOwnershipMatchesPlan(plan, batch, materialMainCategory, hintTarget);
         }
         if (warehouseResolver == null) {
             throw new BusinessException(500, "仓库解析服务未初始化，不能核对生产领料")
@@ -6213,14 +6228,74 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         && inputPortId.equals(item.getWorkflowInputPortId()));
     }
 
+    /**
+     * @param materialMainCategory 物料大类(原料/辅料/包材)，
+     *        权威来源 {@code RawMaterialType.mainCategory}。拿不到就显式传 null
+     *        (按最严格口径处理)，⛔ 不要猜「辅料」。
+     *        ⛔ 无 3-arg 重载 —— 2026-09-02 对抗终审裁定:
+     *        3-arg 兼容重载是三次漏改的载体，已删除。
+     */
     static void assertMaterialBatchOwnershipMatchesPlan(ProductionPlan plan,
                                                         MaterialBatch batch,
+                                                        String materialMainCategory,
                                                         String hintTarget) {
-        ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(plan, batch, hintTarget);
+        ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
+                plan, batch, materialMainCategory, hintTarget);
     }
 
     private static void requireCustomerSuppliedPlanLineage(ProductionPlan plan, String hintTarget) {
         ProductionInventoryOwnershipGuard.requireCustomerSuppliedPlanLineage(plan, hintTarget);
+    }
+
+    // 🔀 单行查询版 resolveMaterialMainCategory(factoryId, materialTypeId) 与并行落地的
+    // 缺陷 49 修复重名重复, rebase 后编译器报 "重复的方法" —— 已删除这份, 统一用上面
+    // (第 1641 行附近) 那份逐字同源的实现, 不留两份会漂的口径 (形态 D)。
+
+    /**
+     * 物料大类批量预取 (循环调用点用, 如结单逐行校验/过账) ——
+     * 一次 {@code findByIdIn} 批量取全, ⛔ 不逐行 N+1。这是对抗终审
+     * 明确指名的硬约束：结单行有 materialTypeId，必须批量取一次。
+     *
+     * @return materialTypeId -> mainCategory；查不到/跨厂的不入表 (map.get 恢复因 null,
+     *         守卫同样按最严格口径处理)。
+     */
+    private java.util.Map<String, String> batchResolveMaterialMainCategories(
+            String factoryId, java.util.Collection<String> materialTypeIds) {
+        if (rawMaterialTypeRepository == null || materialTypeIds == null || materialTypeIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        java.util.Set<String> ids = materialTypeIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        if (ids.isEmpty()) {
+            return java.util.Map.of();
+        }
+        return rawMaterialTypeRepository.findByIdIn(ids).stream()
+                .filter(rmt -> factoryId.equals(rmt.getFactoryId()))
+                .collect(java.util.stream.Collectors.toMap(
+                        com.cretas.aims.entity.RawMaterialType::getId,
+                        com.cretas.aims.entity.RawMaterialType::getMainCategory,
+                        (a, b) -> a));
+    }
+
+    /**
+     * 结单请求里会走物料批次(非半成品)路径的全部 materialTypeId ——
+     * 原料 + 辅料两个桶。半成品不走 MaterialBatch/RawMaterialType, 不列入。
+     */
+    private java.util.Set<String> settlementMaterialTypeIds(ProductionSettlementRequest request) {
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        for (java.util.List<ProductionSettlementRequest.ConsumptionLine> lines
+                : java.util.List.of(request.getRawMaterialConsumptions(), request.getAuxiliaryConsumptions())) {
+            if (lines == null) {
+                continue;
+            }
+            for (ProductionSettlementRequest.ConsumptionLine line : lines) {
+                if (line != null && line.getMaterialTypeId() != null) {
+                    ids.add(line.getMaterialTypeId());
+                }
+            }
+        }
+        return ids;
     }
 
     /**
@@ -6457,18 +6532,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (isEmpty(lines)) {
             return;
         }
+        // 缺陷 38 结单热修: 过账环节的第二个循环, 同样需要大类 —— 一次性批量预取, 不逐行查。
+        java.util.Map<String, String> materialMainCategoryByType = batchResolveMaterialMainCategories(
+                factoryId, lines.stream()
+                        .map(ProductionSettlementConsumption::getMaterialTypeId)
+                        .collect(java.util.stream.Collectors.toSet()));
         for (ProductionSettlementConsumption line : lines) {
             if ("SEMI_FINISHED".equals(line.getSourceType())) {
                 postSemiFinishedConsumption(factoryId, line, operatorId);
             } else {
-                postMaterialBatchConsumption(factoryId, plan, line);
+                postMaterialBatchConsumption(factoryId, plan, line, materialMainCategoryByType);
             }
         }
     }
 
     private void postMaterialBatchConsumption(String factoryId,
                                                ProductionPlan plan,
-                                               ProductionSettlementConsumption line) {
+                                               ProductionSettlementConsumption line,
+                                               java.util.Map<String, String> materialMainCategoryByType) {
         MaterialBatch batch = materialBatchRepository
                 .findByIdAndFactoryIdForUpdate(line.getMaterialBatchId(), factoryId)
                 .orElseThrow(() -> new BusinessException(404, "原料批次不存在: " + line.getMaterialBatchId())
@@ -6477,7 +6558,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // its mixed-SKU productTypeId. Re-running BOM resolution here would lose
         // that line-level identity and could incorrectly fall back to the plan's
         // primary product. The ownership guard remains mandatory after the lock.
-        assertMaterialBatchOwnershipMatchesPlan(plan, batch, "实际领用");
+        // 大类同上: 从批次的 materialTypeId 查预取好的 map, 不用行自带的字面值。
+        assertMaterialBatchOwnershipMatchesPlan(
+                plan, batch, materialMainCategoryByType.get(batch.getMaterialTypeId()), "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 
@@ -8044,7 +8127,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
-        assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料领用");
+        // 单发调用点(每次一个 batchId), 单行查询即可, 不需要批量。
+        assertMaterialBatchOwnershipMatchesPlan(
+                plan, batch, resolveMaterialMainCategory(factoryId, batch.getMaterialTypeId()), "原料领用");
 
         // 检查库存是否足够
         if (batch.getCurrentQuantity().compareTo(quantity) < 0) {
@@ -8248,11 +8333,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 分配原材料批次到生产计划
      */
     private void assignMaterialBatchesToPlan(ProductionPlan plan, List<String> batchIds) {
+        // 先取完全部批次(materialTypeId 要等批次加载后才知道), 再一次性批量预取大类,
+        // ⛔ 不逐个 batchId 查 RawMaterialType —— 这是缺陷 38 结单热修同一条纪律。
+        java.util.Map<String, MaterialBatch> batchesById = new java.util.LinkedHashMap<>();
         for (String batchId : batchIds) {
             MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, plan.getFactoryId())
                     .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+            batchesById.put(batchId, batch);
+        }
+        java.util.Map<String, String> materialMainCategoryByType = batchResolveMaterialMainCategories(
+                plan.getFactoryId(), batchesById.values().stream()
+                        .map(MaterialBatch::getMaterialTypeId)
+                        .collect(java.util.stream.Collectors.toSet()));
 
-            assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料批次");
+        for (String batchId : batchIds) {
+            MaterialBatch batch = batchesById.get(batchId);
+
+            assertMaterialBatchOwnershipMatchesPlan(
+                    plan, batch, materialMainCategoryByType.get(batch.getMaterialTypeId()), "原料批次");
 
             // 检查批次状态
             if (batch.getStatus() != MaterialBatchStatus.AVAILABLE) {

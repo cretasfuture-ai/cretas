@@ -18,15 +18,13 @@ public final class ProductionInventoryOwnershipGuard {
     private ProductionInventoryOwnershipGuard() {
     }
 
-    /**
-     * 3-arg 兼容重载 —— 未升级传大类的调用点继续得到<b>逐字不变</b>的严格校验
-     * (等价于 materialMainCategory=null, 见 4-arg 版本), ⛔ 不会因这次改动被动放宽。
-     */
-    public static void assertMaterialBatchAllowed(ProductionPlan plan,
-                                                  MaterialBatch batch,
-                                                  String hintTarget) {
-        assertMaterialBatchAllowed(plan, batch, null, hintTarget);
-    }
+    // 🔴 2026-09-02 (缺陷 38 第三次漏改后, 对抗终审裁定): 曾有 3-arg 兼容重载
+    // (materialMainCategory 隐式传 null = 按最严格口径), 目的是让未升级的调用点"安全地"继续
+    // 走严格路径。它反而成了三次漏改的载体 —— 结单路径 (ProductionPlanServiceImpl) 一直调用
+    // 这个 3-arg 版本, 编译器不会提示"你漏传了大类", 于是辅料/包材在结单时被当原料核对客户
+    // 血缘, LIUSHANMEN prod 08:0x 结单报错。⛔ 已删除 3-arg 重载, 不再留一个"默认最严格"的
+    // 静默入口 —— 每个调用点必须显式决定 materialMainCategory (拿不到就显式传 null,
+    // 而不是靠重载解析帮你悄悄选中它)。
 
     /**
      * @param materialMainCategory 物料大类 (原料/辅料/包材, 权威来源

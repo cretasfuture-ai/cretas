@@ -9,6 +9,7 @@ import com.cretas.aims.dto.production.ProductionTransitClearingRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptRequest;
 import com.cretas.aims.dto.production.ProductionWarehouseReceiptResponse;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionBatch;
@@ -29,6 +30,7 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.ConversionRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -85,6 +87,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -139,6 +142,7 @@ class ProductionPlanSettlementTest {
     @Mock private WorkshopReportReservationService workshopReservationService;
     @Mock private com.cretas.aims.service.bom.BomWorkflowRevisionService bomWorkflowRevisionService;
     @Mock private CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
+    @Mock private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     private final com.fasterxml.jackson.databind.ObjectMapper r2Mapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
@@ -176,6 +180,7 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "workshopReservationService", workshopReservationService);
         ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard",
                 customerSuppliedSettlementCoverageGuard);
+        ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
         lenient().when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
         lenient().when(workshopReservationService.releaseForPlan(any(), any()))
                 .thenReturn(BigDecimal.ZERO);
@@ -1039,6 +1044,200 @@ class ProductionPlanSettlementTest {
         verify(materialBatchRepository, never()).save(any());
     }
 
+    // ==================== 2026-09-02 PROD 热修: 缺陷 38 第三处漏改 (结单) ====================
+    // ProductionPlanServiceImpl:6161 assertMaterialBatchOwnershipMatchesPlan 一直调 3-arg 旧重载
+    // (materialMainCategory=null -> 按最严格口径), 于是 COMPANY_OWNED 的辅料/包材在结单时被当
+    // 客供原料核对客户血缘 -> prod PLAN-1788305552728-D94F7E22 结单报
+    // "客供料只能用于同一客户、同一销售订单的生产计划"。已改调 4-arg, 大类从 RawMaterialType
+    // 批量预取。下面三条覆盖: 阳性(客供 RAW 主料 + 工厂自有辅料/包材共存) / 阴性①(COMPANY_OWNED
+    // RAW 仍拦, 38 号守卫不拆) / 阴性②(别的客户的 CUSTOMER_OWNED 主料仍拦)。
+
+    @Test
+    @DisplayName("🔒 阳性对照 (结单真实入口): 客供计划下 CUSTOMER_OWNED 主料 + COMPANY_OWNED 辅料/包材共同结单成功")
+    void settleProduction_customerSuppliedPlan_allowsCompanyOwnedAuxiliaryAlongsideCustomerOwnedRawMaterial() {
+        ProductionPlan plan = plan();
+        plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        plan.setCustomerId("CUSTOMER-1");
+        plan.setSourceOrderId("SO-1");
+        plan.setSourceOrderItemId("ITEM-1");
+
+        MaterialBatch rawBatch = materialBatch();
+        rawBatch.setId("MB-RAW");
+        rawBatch.setMaterialTypeId("RM-1");
+        rawBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        rawBatch.setOwnerCustomerId("CUSTOMER-1");
+        rawBatch.setSourceSalesOrderId("SO-1");
+        rawBatch.setSourceSalesOrderItemId("ITEM-1");
+
+        MaterialBatch auxBatch = materialBatch();
+        auxBatch.setId("MB-AUX");
+        auxBatch.setMaterialTypeId("AUX-1");
+        // COMPANY_OWNED 是 materialBatch() 默认值 —— 阳性对照的关键: 不伪装成客供。
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-toll")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-RAW", FACTORY_ID)).thenReturn(Optional.of(rawBatch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-RAW", FACTORY_ID)).thenReturn(Optional.of(rawBatch));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-AUX", FACTORY_ID)).thenReturn(Optional.of(auxBatch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-AUX", FACTORY_ID)).thenReturn(Optional.of(auxBatch));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBomWithTwoItems("RM-1", "AUX-1");
+        RawMaterialType rawType = rawMaterialType("RM-1", "原料");
+        RawMaterialType auxType = rawMaterialType("AUX-1", "辅料");
+        when(rawMaterialTypeRepository.findByIdIn(anyCollection())).thenReturn(List.of(rawType, auxType));
+        when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
+        when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-toll")
+                .actualFinishedQuantity(new BigDecimal("90"))
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .laborDeferredReason("工时稍后补录")
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("MB-RAW").materialTypeId("RM-1")
+                        .quantity(new BigDecimal("5")).unit("kg").build()))
+                .auxiliaryConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("MB-AUX").materialTypeId("AUX-1")
+                        .quantity(new BigDecimal("2")).unit("kg").build()))
+                .build();
+
+        // 修复前: postMaterialBatchConsumption 里 3-arg 调用把 AUX-1 当原料核客户血缘 -> 409
+        // CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH, 整单结不了。
+        ProductionSettlementResponse response = service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L);
+
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
+        verify(materialBatchRepository).save(rawBatch);
+        verify(materialBatchRepository).save(auxBatch);
+        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+    }
+
+    @Test
+    @DisplayName("🔒🔴 负控①(结单真实入口): COMPANY_OWNED 的 RAW 仍必须被拦 (缺陷 38 守卫不拆)")
+    void settleProduction_customerSuppliedPlan_rejectsCompanyOwnedRawMaterial() {
+        ProductionPlan plan = plan();
+        plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        plan.setCustomerId("CUSTOMER-1");
+        plan.setSourceOrderId("SO-1");
+        plan.setSourceOrderItemId("ITEM-1");
+
+        MaterialBatch companyRaw = materialBatch();
+        companyRaw.setId("MB-RAW");
+        companyRaw.setMaterialTypeId("RM-1");
+        // ownership 保持 materialBatch() 默认值 COMPANY_OWNED —— RAW 大类不在放宽白名单里,
+        // 即便批次是工厂自有也必须仍被拒。
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-toll-neg1")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-RAW", FACTORY_ID)).thenReturn(Optional.of(companyRaw));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+        RawMaterialType rawType = rawMaterialType("RM-1", "原料");
+        when(rawMaterialTypeRepository.findByIdIn(anyCollection())).thenReturn(List.of(rawType));
+
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-toll-neg1")
+                .actualFinishedQuantity(new BigDecimal("90"))
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .laborDeferredReason("工时稍后补录")
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("MB-RAW").materialTypeId("RM-1")
+                        .quantity(new BigDecimal("5")).unit("kg").build()))
+                .build();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L));
+
+        // plan 是 CUSTOMER_SUPPLIED, 落进守卫的客供分支; RAW 大类不在放宽白名单里, 早退不成立,
+        // 落回严格分支: ownership != CUSTOMER_OWNED 触发同一条 "客供料只能用于同一客户..." 拒绝。
+        assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("🔒🔴 负控②(结单真实入口): 别的客户的 CUSTOMER_OWNED 主料仍必须被拦")
+    void settleProduction_customerSuppliedPlan_rejectsOtherCustomersRawBatch() {
+        ProductionPlan plan = plan();
+        plan.setMaterialSupplyMode(MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        plan.setCustomerId("CUSTOMER-1");
+        plan.setSourceOrderId("SO-1");
+        plan.setSourceOrderItemId("ITEM-1");
+
+        MaterialBatch otherCustomerRaw = materialBatch();
+        otherCustomerRaw.setId("MB-RAW");
+        otherCustomerRaw.setMaterialTypeId("RM-1");
+        otherCustomerRaw.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        otherCustomerRaw.setOwnerCustomerId("CUSTOMER-2"); // 别的客户
+        otherCustomerRaw.setSourceSalesOrderId("SO-1");
+        otherCustomerRaw.setSourceSalesOrderItemId("ITEM-1");
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID, "idem-toll-neg2")).thenReturn(Optional.empty());
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId("MB-RAW", FACTORY_ID)).thenReturn(Optional.of(otherCustomerRaw));
+        when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+        stubCurrentBom("RM-1");
+        RawMaterialType rawType = rawMaterialType("RM-1", "原料");
+        when(rawMaterialTypeRepository.findByIdIn(anyCollection())).thenReturn(List.of(rawType));
+
+        ProductionSettlementRequest request = ProductionSettlementRequest.builder()
+                .idempotencyKey("idem-toll-neg2")
+                .actualFinishedQuantity(new BigDecimal("90"))
+                .actualSemiFinishedQuantity(BigDecimal.ZERO)
+                .laborDeferredReason("工时稍后补录")
+                .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("MB-RAW").materialTypeId("RM-1")
+                        .quantity(new BigDecimal("5")).unit("kg").build()))
+                .build();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY_ID, PLAN_ID, request, 10L));
+
+        assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", ex.getErrorCode());
+        verify(productionSettlementRepository, never()).save(any());
+    }
+
+    private void stubCurrentBomWithTwoItems(String materialTypeIdA, String materialTypeIdB) {
+        BomRecipe recipe = BomRecipe.builder()
+                .id("bom-1")
+                .factoryId(FACTORY_ID)
+                .recipeCode("BOM-PT-1")
+                .productTypeId("PT-1")
+                .productName("Product")
+                .outputQuantityPerUnit(BigDecimal.ONE)
+                .build();
+        BomRecipeItem itemA = BomRecipeItem.builder()
+                .recipeId("bom-1").factoryId(FACTORY_ID)
+                .materialTypeId(materialTypeIdA).standardQuantity(BigDecimal.ONE).unit("kg").build();
+        BomRecipeItem itemB = BomRecipeItem.builder()
+                .recipeId("bom-1").factoryId(FACTORY_ID)
+                .materialTypeId(materialTypeIdB).standardQuantity(BigDecimal.ONE).unit("kg").build();
+        when(bomRecipeRepository.findByFactoryIdAndProductTypeIdAndIsCurrentTrue(FACTORY_ID, "PT-1"))
+                .thenReturn(Optional.of(recipe));
+        when(bomRecipeItemRepository.findByRecipeIdOrderBySortOrderAsc("bom-1"))
+                .thenReturn(List.of(itemA, itemB));
+    }
+
+    private RawMaterialType rawMaterialType(String materialTypeId, String category) {
+        RawMaterialType type = new RawMaterialType();
+        type.setId(materialTypeId);
+        type.setFactoryId(FACTORY_ID);
+        type.setCategory(category); // setCategory 连带算出 mainCategory, 与生产回填口径一致
+        return type;
+    }
+
     @Test
     @DisplayName("Workflow confirm=false carries external WIP through settlement row, deduction and exact OUT")
     void settleProduction_workflowManualWip_postsCanonicalConsumptionAndExactOut() {
@@ -1142,18 +1341,21 @@ class ProductionPlanSettlementTest {
         assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
                 "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
                 List.of(ProductionSettlementRequest.ConsumptionLine.builder()
-                        .semiFinishedInventoryId(7L).quantity(BigDecimal.ONE).unit("kg").build()), target));
+                        .semiFinishedInventoryId(7L).quantity(BigDecimal.ONE).unit("kg").build()), target,
+                java.util.Map.of()));
         assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
                 "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
                 List.of(ProductionSettlementRequest.ConsumptionLine.builder()
-                        .semiFinishedInventoryId(7L).quantity(BigDecimal.ONE).unit("kg").build()), target));
+                        .semiFinishedInventoryId(7L).quantity(BigDecimal.ONE).unit("kg").build()), target,
+                java.util.Map.of()));
         assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
                 "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
                 List.of(ProductionSettlementRequest.ConsumptionLine.builder()
-                        .semiFinishedInventoryId(7L).quantity(new BigDecimal("9")).unit("kg").build()), target));
+                        .semiFinishedInventoryId(7L).quantity(new BigDecimal("9")).unit("kg").build()), target,
+                java.util.Map.of()));
         assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(service,
                 "appendConsumptionLines", FACTORY_ID, plan(), "SEMI_FINISHED",
-                java.util.Collections.singletonList(null), target));
+                java.util.Collections.singletonList(null), target, java.util.Map.of()));
 
         assertTrue(target.isEmpty());
         verify(productionSettlementRepository, never()).save(any());

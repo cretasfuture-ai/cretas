@@ -19,17 +19,17 @@ class ProductionPlanMaterialOwnershipGuardTest {
         MaterialBatch batch = customerBatch("CUSTOMER-1", "SO-1", "101");
 
         assertDoesNotThrow(() -> ProductionPlanServiceImpl
-                .assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料领用"));
+                .assertMaterialBatchOwnershipMatchesPlan(plan, batch, null, "原料领用"));
 
         batch.setOwnerCustomerId("CUSTOMER-2");
         BusinessException wrongCustomer = assertThrows(BusinessException.class, () ->
-                ProductionPlanServiceImpl.assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料领用"));
+                ProductionPlanServiceImpl.assertMaterialBatchOwnershipMatchesPlan(plan, batch, null, "原料领用"));
         assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", wrongCustomer.getErrorCode());
 
         batch.setOwnerCustomerId("CUSTOMER-1");
         batch.setSourceSalesOrderId("SO-2");
         BusinessException wrongOrder = assertThrows(BusinessException.class, () ->
-                ProductionPlanServiceImpl.assertMaterialBatchOwnershipMatchesPlan(plan, batch, "原料领用"));
+                ProductionPlanServiceImpl.assertMaterialBatchOwnershipMatchesPlan(plan, batch, null, "原料领用"));
         assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", wrongOrder.getErrorCode());
     }
 
@@ -41,16 +41,16 @@ class ProductionPlanMaterialOwnershipGuardTest {
 
         assertEquals("CUSTOMER_OWNED_MATERIAL_FORBIDDEN",
                 assertThrows(BusinessException.class, () -> ProductionPlanServiceImpl
-                        .assertMaterialBatchOwnershipMatchesPlan(factoryPlan, batch, "原料领用"))
+                        .assertMaterialBatchOwnershipMatchesPlan(factoryPlan, batch, null, "原料领用"))
                         .getErrorCode());
         assertEquals("CUSTOMER_OWNED_MATERIAL_FORBIDDEN",
                 assertThrows(BusinessException.class, () -> ProductionPlanServiceImpl
-                        .assertMaterialBatchOwnershipMatchesPlan(legacyPlan, batch, "原料领用"))
+                        .assertMaterialBatchOwnershipMatchesPlan(legacyPlan, batch, null, "原料领用"))
                         .getErrorCode());
 
         batch.setOwnership(InventoryOwnership.COMPANY_OWNED);
         assertDoesNotThrow(() -> ProductionPlanServiceImpl
-                .assertMaterialBatchOwnershipMatchesPlan(factoryPlan, batch, "原料领用"));
+                .assertMaterialBatchOwnershipMatchesPlan(factoryPlan, batch, null, "原料领用"));
     }
 
     /**
@@ -66,7 +66,7 @@ class ProductionPlanMaterialOwnershipGuardTest {
 
         BusinessException error = assertThrows(BusinessException.class, () ->
                 ProductionPlanServiceImpl.assertMaterialBatchOwnershipMatchesPlan(
-                        plan, customerBatch("CUSTOMER-1", "SO-1", "101"), "原料领用"));
+                        plan, customerBatch("CUSTOMER-1", "SO-1", "101"), null, "原料领用"));
 
         assertEquals("CUSTOMER_SUPPLIED_PLAN_LINEAGE_INCOMPLETE", error.getErrorCode());
     }
@@ -84,20 +84,20 @@ class ProductionPlanMaterialOwnershipGuardTest {
         // 正向: same customer, stock not committed to any sales order
         assertDoesNotThrow(() -> ProductionPlanServiceImpl
                 .assertMaterialBatchOwnershipMatchesPlan(
-                        plan, customerBatch("CUSTOMER-1", null, null), "原料领用"));
+                        plan, customerBatch("CUSTOMER-1", null, null), null, "原料领用"));
 
         // 阴性对照: same customer, but the stock is already reserved by a sales order
         assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH",
                 assertThrows(BusinessException.class, () -> ProductionPlanServiceImpl
                         .assertMaterialBatchOwnershipMatchesPlan(
-                                plan, customerBatch("CUSTOMER-1", "SO-1", "101"), "原料领用"))
+                                plan, customerBatch("CUSTOMER-1", "SO-1", "101"), null, "原料领用"))
                         .getErrorCode());
 
         // 阴性对照: unbound stock, but a different customer
         assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH",
                 assertThrows(BusinessException.class, () -> ProductionPlanServiceImpl
                         .assertMaterialBatchOwnershipMatchesPlan(
-                                plan, customerBatch("CUSTOMER-2", null, null), "原料领用"))
+                                plan, customerBatch("CUSTOMER-2", null, null), null, "原料领用"))
                         .getErrorCode());
     }
 
