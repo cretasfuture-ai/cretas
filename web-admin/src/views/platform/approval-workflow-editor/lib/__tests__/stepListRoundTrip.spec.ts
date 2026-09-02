@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   COND_APPROVE,
   COND_REJECT,
+  STEP_LIST_FALLBACK_TEXT,
+  explainStepListFallback,
   graphToSteps,
   stepsToGraph,
   type ApprovalStep,
@@ -128,6 +130,36 @@ describe('步骤列表这条通路', () => {
     it('阴性对照：完好的线性图**不该**被判成表达不了', () => {
       const g = liushanmenFixedGraph()
       expect(graphToSteps(g.nodes, g.edges, g.startNodeId)).not.toBeNull()
+    })
+
+    /**
+     * 前置 B：审查发现 3 明确要的负控——「悬空连线」：审批节点的通过边条件完好，
+     * 只是**目标节点不存在**（比如那个节点在一次编辑里被删掉，边却留了下来）。
+     * 用的是同一份 LIUSHANMEN 真实修好形状，只改一处，其余原样 —— 与 stepGraph.spec.ts
+     * 里"端点悬空必须抛"那条不同：那条测的是**写**方向(assertGeneratedGraphIsSound
+     * 拦一个人为构造出的坏生成物)，这条测的是**读**方向——喂一张外部产生的、
+     * 边指向不存在节点的图，业务入口必须把它识别出来并说明原因，
+     * ⛔ 不能静默丢弃这条连线、猜一个不完整的步骤列表。
+     */
+    it('🔴 悬空连线（通过边指向不存在的节点）必须被识别并报告，⛔ 不静默丢配置', () => {
+      const g = liushanmenFixedGraph()
+      const dangling = {
+        nodes: g.nodes,
+        // 只改 e1 的 target —— 其余(e2/e3)原样，与"完好的线性图"只差这一处。
+        edges: g.edges.map((e) => (
+          e.id === 'e1' ? { ...e, target: 'approved_but_this_node_was_deleted' } : e
+        )),
+      }
+
+      expect(
+        graphToSteps(dangling.nodes, dangling.edges, g.startNodeId),
+        '悬空连线的图被读成了一个步骤列表 —— 它应该是 null, 不是猜一个不完整的结果',
+      ).toBeNull()
+
+      expect(
+        explainStepListFallback(dangling.nodes, dangling.edges, g.startNodeId),
+        '读不了必须给出具体原因, ⛔ 不能返回 null 让调用方(以及最终用户)自己猜',
+      ).toBe(STEP_LIST_FALLBACK_TEXT['unknown-node'])
     })
   })
 })
