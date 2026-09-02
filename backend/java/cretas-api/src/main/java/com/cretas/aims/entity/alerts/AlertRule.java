@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -86,11 +87,13 @@ public class AlertRule extends BaseEntity {
     /** 严重度 snapshot — 影响通知优先级. */
     @Enumerated(EnumType.STRING)
     @Column(name = "severity", length = 10, nullable = false)
-    private AlertSeverity severity;
+    @Builder.Default
+    private AlertSeverity severity = AlertSeverity.MID;
 
     /** 启用状态 — false 时 scheduler / listener 跳过此规则. */
     @Column(name = "enabled", nullable = false)
-    private Boolean enabled;
+    @Builder.Default
+    private Boolean enabled = Boolean.TRUE;
 
     /**
      * 通知渠道 — JSONB list&lt;String&gt;.

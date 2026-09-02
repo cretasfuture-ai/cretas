@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -73,7 +74,8 @@ public class LogisticsStop extends BaseEntity {
 
     /** 与上一停靠点(或车场 DEPOT)间的公里数 — 不伪造, 缺边由 trip 落 NEEDS_ROUTE_DATA。 */
     @Column(name = "leg_distance_km", nullable = false, precision = 12, scale = 2)
-    private BigDecimal legDistanceKm;
+    @Builder.Default
+    private BigDecimal legDistanceKm = BigDecimal.ZERO;
 
     @Column(name = "arrival_window_start", length = 8)
     private String arrivalWindowStart;

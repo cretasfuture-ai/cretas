@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -83,7 +84,8 @@ public class WorkProcessTask extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
-    private Status status;
+    @Builder.Default
+    private Status status = Status.PENDING;
 
     @Column(name = "planned_quantity", precision = 15, scale = 4)
     private BigDecimal plannedQuantity;

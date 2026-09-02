@@ -5,6 +5,7 @@ import com.cretas.aims.logistics.entity.enums.TripStatus;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -93,22 +94,28 @@ public class LogisticsTrip extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 24, nullable = false)
-    private TripStatus status;
+    @Builder.Default
+    private TripStatus status = TripStatus.DRAFT;
 
     @Column(name = "total_volume_cbm", nullable = false, precision = 12, scale = 3)
-    private BigDecimal totalVolumeCbm;
+    @Builder.Default
+    private BigDecimal totalVolumeCbm = BigDecimal.ZERO;
 
     @Column(name = "total_weight_kg", nullable = false, precision = 12, scale = 3)
-    private BigDecimal totalWeightKg;
+    @Builder.Default
+    private BigDecimal totalWeightKg = BigDecimal.ZERO;
 
     @Column(name = "load_rate", nullable = false, precision = 6, scale = 4)
-    private BigDecimal loadRate;
+    @Builder.Default
+    private BigDecimal loadRate = BigDecimal.ZERO;
 
     @Column(name = "weight_load_rate", nullable = false, precision = 6, scale = 4)
-    private BigDecimal weightLoadRate;
+    @Builder.Default
+    private BigDecimal weightLoadRate = BigDecimal.ZERO;
 
     @Column(name = "total_distance_km", nullable = false, precision = 12, scale = 2)
-    private BigDecimal totalDistanceKm;
+    @Builder.Default
+    private BigDecimal totalDistanceKm = BigDecimal.ZERO;
 
     /**
      * 全程预计时长 (分钟, scale=2)。Nullable — 只有地图 provider 路线规划成功才有值

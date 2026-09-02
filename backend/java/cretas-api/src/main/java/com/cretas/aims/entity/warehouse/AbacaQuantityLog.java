@@ -61,11 +61,11 @@ public class AbacaQuantityLog extends BaseEntity {
     private BigDecimal actualWeight;
 
     @Column(name = "unit", nullable = false, length = 20)
-    private String unit;
+    private String unit = "kg";
 
     /** SCALE=电子秤 / MANUAL=手工 / IMPORTED=批量导入 */
     @Column(name = "weighing_method", nullable = false, length = 20)
-    private String weighingMethod;
+    private String weighingMethod = "SCALE";
 
     /** 电子秤设备 ID (如对接 scale Tool) */
     @Column(name = "scale_device_id", length = 50)

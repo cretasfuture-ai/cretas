@@ -6,6 +6,7 @@ import com.cretas.aims.logistics.entity.enums.PlanStatus;
 import com.cretas.aims.logistics.entity.enums.RouteOptimizeMode;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -83,15 +84,18 @@ public class LogisticsPlan extends BaseEntity {
     private String planNumber;
 
     @Column(name = "target_load_pct", nullable = false, precision = 5, scale = 2)
-    private BigDecimal targetLoadPct;
+    @Builder.Default
+    private BigDecimal targetLoadPct = new BigDecimal("88");
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 24, nullable = false)
-    private PlanStatus status;
+    @Builder.Default
+    private PlanStatus status = PlanStatus.DRAFT;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "distance_source", length = 24, nullable = false)
-    private PlanDistanceSource distanceSource;
+    @Builder.Default
+    private PlanDistanceSource distanceSource = PlanDistanceSource.MAINTAINED_MATRIX;
 
     /**
      * 排线优化模式 (时间最快/路程最短) — 生成时由调度员选择, {@code regeneratePlan} 复用本值
@@ -102,13 +106,16 @@ public class LogisticsPlan extends BaseEntity {
     private RouteOptimizeMode optimizeBy;
 
     @Column(name = "total_stores", nullable = false)
-    private Integer totalStores;
+    @Builder.Default
+    private Integer totalStores = 0;
 
     @Column(name = "total_trips", nullable = false)
-    private Integer totalTrips;
+    @Builder.Default
+    private Integer totalTrips = 0;
 
     @Column(name = "total_distance_km", nullable = false, precision = 12, scale = 2)
-    private BigDecimal totalDistanceKm;
+    @Builder.Default
+    private BigDecimal totalDistanceKm = BigDecimal.ZERO;
 
     @Column(name = "created_by", length = 64)
     private String createdBy;

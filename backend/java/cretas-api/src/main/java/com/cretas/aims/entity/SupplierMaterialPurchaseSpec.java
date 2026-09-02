@@ -50,7 +50,7 @@ public class SupplierMaterialPurchaseSpec extends BaseEntity {
     @PriceSensitive @Column(name = "tax_included_quoted_price", precision = 18, scale = 6)
     private BigDecimal taxIncludedQuotedPrice;
     @Column(nullable = false, length = 8)
-    private String currency;
+    private String currency = "CNY";
     // 🔒 缺陷 16 phase 1 (2026-09-02): min_order_quantity / lead_time_days 从本实体移除 ——
     //    与供应关系(SupplierMaterial)上的同名字段重复, 且零读者(只有自己的 apply()
     //    setter + 前端两个表单输入)。起订量/交期现在只在供应关系层录入一次。
@@ -58,9 +58,9 @@ public class SupplierMaterialPurchaseSpec extends BaseEntity {
     //    prod 蓝绿发布期间新旧实例并存, 同一 deploy 里 DROP COLUMN 会让旧实例读列失败。
     //    DROP COLUMN 是 phase 2(独立 PR, 确认本次已稳定上线后再做)。
     @Column(name = "is_default", nullable = false)
-    private Boolean defaultSpec;
+    private Boolean defaultSpec = Boolean.FALSE;
     @Column(nullable = false)
-    private Boolean active;
+    private Boolean active = Boolean.TRUE;
     @Version @Column(nullable = false)
     private Long version;
 }

@@ -5,6 +5,7 @@ import com.cretas.aims.logistics.entity.enums.DistanceEdgeSource;
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -80,7 +81,8 @@ public class LogisticsDistanceEdge extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "source", length = 24, nullable = false)
-    private DistanceEdgeSource source;
+    @Builder.Default
+    private DistanceEdgeSource source = DistanceEdgeSource.DEMO_FIXTURE;
 
     @Version
     @Column(name = "version", nullable = false)

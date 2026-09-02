@@ -56,7 +56,15 @@ public class ImportRule extends BaseEntity {
     @Column(name = "mapping", nullable = false, columnDefinition = "jsonb")
     private List<Map<String, Object>> mapping;
 
-    /** SKIP | UPDATE | ERROR — 如何处理 dedup_key_field 已存在的行. */
+    /**
+     * SKIP | UPDATE | ERROR — 如何处理 dedup_key_field 已存在的行.
+     *
+     * <p>⛔ 不给字段初始化: {@link com.cretas.aims.service.datacenter.impl.ImportServiceImpl#updateRule}
+     * 把这个实体本身当 PATCH 载体用 ({@code patch.getDedupStrategy() != null} 才覆盖) ——
+     * 字段初始化会让 {@code new ImportRule()} 永远非 null, PATCH 语义直接失效
+     * (与 ApprovalWorkflow.nodesJson 同型, 2026-09-02 实测发现)。防 23502 改用
+     * {@link #applyDefaults()}, 只在真正 INSERT 时补。
+     */
     @Column(name = "dedup_strategy", nullable = false, length = 20)
     private String dedupStrategy;
 
@@ -69,4 +77,12 @@ public class ImportRule extends BaseEntity {
 
     @Column(name = "created_by")
     private Long createdBy;
+
+    /** 只在真正建行 (INSERT) 时补默认值, PATCH 载体角色的实例永不触发。 */
+    @PrePersist
+    void applyDefaults() {
+        if (dedupStrategy == null) {
+            dedupStrategy = "ERROR";
+        }
+    }
 }

@@ -63,7 +63,7 @@ public class SalesOrderShortageReport extends BaseEntity {
 
     /** PENDING (默认) / COMPLETED / FAILED */
     @Column(name = "analysis_status", nullable = false, length = 20)
-    private String analysisStatus;
+    private String analysisStatus = "PENDING";
 
     /** BOM 原料需求 (聚合 by materialTypeId) */
     @Type(JsonBinaryType.class)

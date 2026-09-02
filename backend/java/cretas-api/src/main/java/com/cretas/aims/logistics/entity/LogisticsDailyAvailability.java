@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.logistics.entity.enums.AvailabilityResourceType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -82,7 +83,8 @@ public class LogisticsDailyAvailability extends BaseEntity {
 
     /** false = 当天整体不可用 (请假/维修), 该资源当天从排线算法输入中排除。 */
     @Column(name = "available", nullable = false)
-    private Boolean available;
+    @Builder.Default
+    private Boolean available = Boolean.TRUE;
 
     /** 非空 = 覆盖当天班次 (优先于 {@code LogisticsDriver}/{@code LogisticsVehicleProfile} 的固定班次)。 */
     @Column(name = "shift_start", length = 8)
