@@ -38,7 +38,7 @@ class CustomerOwnedInventoryGuardsTest {
         allowed.setSourceSalesOrderId(null);
 
         assertDoesNotThrow(() -> ProductionInventoryOwnershipGuard
-                .assertMaterialBatchAllowed(plan, allowed, "materialBatchId"));
+                .assertMaterialBatchAllowed(plan, allowed, MaterialMainCategory.RAW, "materialBatchId"));
 
         MaterialBatch alreadyBound = new MaterialBatch();
         alreadyBound.setFactoryId("F006");
@@ -47,7 +47,7 @@ class CustomerOwnedInventoryGuardsTest {
         alreadyBound.setSourceSalesOrderId("SO-OTHER");
 
         assertThrows(BusinessException.class, () -> ProductionInventoryOwnershipGuard
-                .assertMaterialBatchAllowed(plan, alreadyBound, "materialBatchId"));
+                .assertMaterialBatchAllowed(plan, alreadyBound, MaterialMainCategory.RAW, "materialBatchId"));
     }
 
     @Test
@@ -185,8 +185,12 @@ class CustomerOwnedInventoryGuardsTest {
     }
 
     @Test
-    @DisplayName("3-arg 兼容重载逐字不变: 未传大类的旧调用点继续得到最严格口径 (不会被这次改动意外放宽)")
-    void threeArgOverloadStaysStrictForCompanyOwnedBatchUnderTollProcessingPlan() {
+    @DisplayName("materialMainCategory=null 显式传入仍按最严格口径处理 (拿不到大类不兜底放宽)")
+    void nullMaterialMainCategoryStaysStrictForCompanyOwnedBatchUnderTollProcessingPlan() {
+        // 🔴 2026-09-02 对抗终审裁定: 曾有 3-arg 兼容重载(隐式 null), 是三次漏改的载体
+        // (ProductionPlanServiceImpl 结单路径一直调它, 编译器不提示漏传大类, prod 结单报错) ——
+        // 已删除该重载。本测试改为显式传 null, 断言的不变式没变: 拿不到大类就按最严格口径,
+        // 而现在每个调用点都必须显式做这个决定, 不能靠重载解析悄悄替它做。
         ProductionPlan plan = new ProductionPlan();
         plan.setFactoryId("F006");
         plan.setCustomerId("CUSTOMER-1");
@@ -198,8 +202,7 @@ class CustomerOwnedInventoryGuardsTest {
         companyOwned.setFactoryId("F006");
         companyOwned.setOwnership(InventoryOwnership.COMPANY_OWNED);
 
-        // 3-arg 版本没有大类信息可传, 必须继续拒绝 (等价于 materialMainCategory=null)。
         assertThrows(BusinessException.class, () -> ProductionInventoryOwnershipGuard
-                .assertMaterialBatchAllowed(plan, companyOwned, "materialBatchId"));
+                .assertMaterialBatchAllowed(plan, companyOwned, null, "materialBatchId"));
     }
 }
