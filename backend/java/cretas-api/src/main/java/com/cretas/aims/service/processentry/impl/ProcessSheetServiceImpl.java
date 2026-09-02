@@ -52,6 +52,7 @@ import com.cretas.aims.service.processentry.ProcessSheetService;
 import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -3883,7 +3884,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 && !plan.getPlannedUnit().equalsIgnoreCase(outputUnit)) {
             throw new BusinessException(409, "成品报工单位与计划快照不一致")
                     .withCode("PROCESS_SHEET_PLAN_UNIT_MISMATCH")
-                    .withHint("请按计划快照的单位（" + plan.getPlannedUnit()
+                    .withHint("请按计划快照的单位（" + UnitDisplayNames.display(plan.getPlannedUnit())
                             + "）录入成品报工数量，或前往「生产管理 → 生产计划」修改该计划的计量单位后重试")
                     .withSeverity("BLOCKING");
         }

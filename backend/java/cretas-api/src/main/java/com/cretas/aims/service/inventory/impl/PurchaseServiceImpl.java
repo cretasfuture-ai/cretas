@@ -3212,7 +3212,9 @@ public class PurchaseServiceImpl implements PurchaseService {
                 throw new BusinessException(409, "历史收货行缺少跨单位换算快照")
                         .withCode("PURCHASE_RECEIPT_CONVERSION_SNAPSHOT_REQUIRED")
                         .withHint("本次收货单位与采购订单单位不一致，且该商品缺少历史换算快照，暂无法自动折算；"
-                                + "请改用采购订单单位（" + orderUnit + "）收货，或先为该物料补充包装换算关系后重试");
+                                + "请改用采购订单单位（"
+                                + com.cretas.aims.service.unit.UnitDisplayNames.display(orderUnit)
+                                + "）收货，或先为该物料补充包装换算关系后重试");
             }
             return receiveItem.getReceivedQuantity();
         }
