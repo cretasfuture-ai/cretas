@@ -403,6 +403,16 @@
 
 **待发 25**（等 owner 本人）：Java `#514 #517 #519 #520 #522 #523 #524 #526 #527 #530 #531 #533(迁移 _26) #534`；web `#516 #528`。**在飞 1**：409 无 `actionHint` 扫（`ae31c75c88fbfb067`）。**未派（登记太粗或需裁定）**：路① / 46 角色门 / 激活权威 / production_manager fallback / priceSource 词表 / 规格单位联动 / 采购门槛随单位 / 各角色首页空态 / 拼音搜索统一 / 质检 0 检验项。
 
+### 📌 2026-09-02 14:06 增量（系统时钟）· 演示结束, 部署 25 落地, 生产 = main `4304bc88d7`, 合并 95
+
+**owner 11:40「结束演示了」**（f006 转达；发的授权 owner 早上直接给过）。**部署 25**（14:03:11 green > jar 14:02:49；`restoreClerkSemiStrict` 0→3 / `resolveCompiledInputShares` 0→1 / `filterCustomerOwned` 仍 2 / 假串 0；`flyway 20261101.26 success 14:03:21`，`supplier_material_purchase_specs` 两列已不存在；web 13:58 `list-FgGEbnUW` 含「计划尚未生成成品批次」经 `index-DHSrdcp0` 挂主入口；health 200）✅。内容：#514 回料自动扣减 / #516 分配操作员入口 / #517 38 扫尾 / #519 工时提示+#496 跟进 / #520 调料无价 / #522+#526 NOT NULL 闸 78 处默认 / #523 脚本重入 / #524 批次搜索后端 / #527+#530+#531 撤销回料与产出批撤回 / #528 缺价标记 / #533 缺陷 16 phase 2 / #534 份额解析合一。
+⚠️ **时钟/延迟事故第三次**：从 f006 转达放行到我真正起跑隔了约 2 小时（消息延迟），我又按估计写了「11:45 起跑」；f006 13:57 按三行判据读到「还是上午那版」—— 因为构建才跑 1 分钟，「还在跑」与「跑完没上」在 jar/进程/flyway 三行上同形，**区分靠 exit 文件 + 进程**。⇒ 报「起跑」时贴 `date`；判「没上」前先看有没有在跑。
+**f006 登记**：点「重算成本」落空 20px 差点把「请求没发出」读成「重算不填成本」（读结果前核弹窗关没关、`updated_at` 动没动）；演示期间 owner 又结了 `PLAN-…-34F8CD82`（COMPLETED / 88kg，卡仓库确认入库），计划汇总 4 条 / 112kg / 99.79kg / 89.1%。
+**两个行为读数**（报工投入量含回料、78 列默认）：⛔ 不主动在真实租户造数据；改前基线读现有 `row_payload` / `information_schema.column_default`，改后等 owner 真实报工。
+**45**：#516 已在主入口链 ⇒ f006 陪 owner 改 `baogong001` 角色（改前 `id=1653 role_code=warehouse_manager`）。
+**在飞 1**：#536（409 提示）终审抽 10 条 4 条为「必要但不充分」（守卫读计划钉住的修订，hint 让改活的 BOM/画布）⇒ 补「回计划重钉」半句并全扫 37 条；闸注释写明只量有无不量真伪。
+**等 owner 裁**：激活表权威 / 三条激活改指 197 / 46 角色门 / 路①。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
