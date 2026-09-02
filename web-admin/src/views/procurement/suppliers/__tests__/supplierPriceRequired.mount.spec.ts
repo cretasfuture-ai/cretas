@@ -198,8 +198,7 @@ const SPEC = {
   factor: 10,
   quotedPrice: null,          // 存量空报价
   currency: 'CNY',
-  minOrderQuantity: null,
-  leadTimeDays: null,
+  // 缺陷 16 phase 2: minOrderQuantity/leadTimeDays 不再是采购规格的字段 —— 见 supplierManagement.ts 注释。
   defaultSpec: false,
   active: true,
   version: 2,
