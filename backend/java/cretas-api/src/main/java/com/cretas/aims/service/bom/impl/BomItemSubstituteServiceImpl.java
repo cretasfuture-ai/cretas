@@ -399,7 +399,13 @@ public class BomItemSubstituteServiceImpl implements BomItemSubstituteService {
                 .parentUnitSnapshot(source.getParentUnitSnapshot())
                 .substituteUnitSnapshot(source.getSubstituteUnitSnapshot())
                 .conversionFactor(source.getConversionFactor())
-                .conversionExplicit(source.getConversionExplicit())
+                // ⛔ @Builder.Default only covers "method never called" — this call always fires,
+                // so a historical source row with a legitimately-null conversionExplicit would
+                // otherwise clone into an explicit null. Coalesce here so the in-memory clone is
+                // already correct before any JPA lifecycle runs (BomItemSubstitute also carries a
+                // @PrePersist fallback for any other path that reaches insert with this null).
+                .conversionExplicit(source.getConversionExplicit() != null
+                        ? source.getConversionExplicit() : Boolean.FALSE)
                 .build();
     }
 

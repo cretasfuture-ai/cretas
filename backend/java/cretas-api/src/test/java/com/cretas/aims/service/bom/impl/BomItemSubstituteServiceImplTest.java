@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -393,6 +394,48 @@ class BomItemSubstituteServiceImplTest {
         assertEquals(100L, cloned.getParentRecipeItemId());
         assertEquals("B", cloned.getSubstituteMaterialTypeId());
         assertEquals(RECIPE, cloned.getRecipeId());
+    }
+
+    /**
+     * ⛔ {@code @Builder.Default} only covers "the builder method was never called" — it does
+     * NOT catch {@code copyForTarget}'s {@code .conversionExplicit(source.getConversionExplicit())},
+     * which calls the builder method unconditionally. A pre-migration source row with a
+     * legitimately-null {@code conversionExplicit} used to clone into an explicit null, which
+     * would trip the {@code NOT NULL} constraint on save. Asserts on the entity actually handed
+     * to {@code saveAllAndFlush} (not the returned DTO) — {@code BomItemSubstituteDTO.conversionExplicit}
+     * is a primitive {@code boolean} produced via {@code Boolean.TRUE.equals(...)}, which is
+     * already null-safe and would mask this bug if asserted on instead.
+     */
+    @Test
+    @DisplayName("clone coalesces a null source conversionExplicit to false before it reaches save")
+    void cloneCoalescesNullConversionExplicitBeforeSave() {
+        String sourceRecipe = "recipe-v1";
+        when(entityManager.find(BomRecipe.class, sourceRecipe, LockModeType.PESSIMISTIC_WRITE))
+                .thenReturn(recipe(sourceRecipe, BomRecipe.Status.ACTIVE));
+        when(entityManager.find(BomRecipe.class, RECIPE, LockModeType.PESSIMISTIC_WRITE))
+                .thenReturn(recipe(RECIPE, BomRecipe.Status.DRAFT));
+        BomRecipeItem targetParent = recipeItem(100L, "A", "kg", "RAW", null);
+        when(entityManager.find(BomRecipeItem.class, 100L, LockModeType.PESSIMISTIC_WRITE))
+                .thenReturn(targetParent);
+        when(materialRepository.findById("A"))
+                .thenReturn(Optional.of(material("A", "主料A", "kg", "001", FACTORY, true)));
+
+        BomItemSubstitute source = relation(10L, "A", "B");
+        source.setRecipeId(sourceRecipe);
+        source.setConversionExplicit(null); // simulates a pre-migration row
+        when(repository.findByFactoryIdAndRecipeIdOrderByCreatedAtAsc(FACTORY, sourceRecipe))
+                .thenReturn(List.of(source));
+        when(repository.findByFactoryIdAndRecipeIdOrderByCreatedAtAsc(FACTORY, RECIPE))
+                .thenReturn(List.of());
+
+        service.cloneRelations(FACTORY, sourceRecipe, RECIPE, Map.of(10L, 100L), Map.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BomItemSubstitute>> saved = ArgumentCaptor.forClass(List.class);
+        verify(repository).saveAllAndFlush(saved.capture());
+        assertEquals(Boolean.FALSE, saved.getValue().get(0).getConversionExplicit(),
+                "source.conversionExplicit == null must coalesce to false before saveAllAndFlush "
+                        + "is called, not stay null (that would trip the NOT NULL constraint)");
     }
 
     @Test
