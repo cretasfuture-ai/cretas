@@ -75,3 +75,16 @@ export function otherProcessUsages(
       && (process.bindings || []).some((binding) => binding.materialTypeId === materialTypeId),
   );
 }
+
+/**
+ * 工作区 anomalies 里 MISSING_PRICE 的 bindingId 集合。判据只认后端登记的异常码, ⛔ 前端不自己判价格。
+ */
+export function missingPriceBindingIds(
+  anomalies: { code: string; bindingId?: number | null }[] | null | undefined,
+): Set<string> {
+  const ids = new Set<string>();
+  (anomalies ?? []).forEach((anomaly) => {
+    if (anomaly?.code === 'MISSING_PRICE' && anomaly.bindingId != null) ids.add(String(anomaly.bindingId));
+  });
+  return ids;
+}

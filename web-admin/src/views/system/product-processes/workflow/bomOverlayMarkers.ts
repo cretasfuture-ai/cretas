@@ -18,6 +18,8 @@ export interface BomRowMarker {
 }
 
 export interface AuxiliaryRowInput {
+  /** 物料两个成本价都没有 (工作区 anomalies MISSING_PRICE)。2026-09-02 起无价可绑, 得有个常驻入口让人去补。 */
+  missingPrice?: boolean;
   subsequentPotRatio: number | null;
   countInSeasoning: boolean;
   substituteCount: number;
@@ -33,10 +35,17 @@ export interface PackagingRowInput {
 }
 
 /**
- * 辅料行标记，固定顺序：◷ 按锅序 → ⊘ 不计入成本 → ⇄ 有替代 → ◑ 成本不共享。
+ * 辅料行标记，固定顺序：¥? 缺成本价 → ◷ 按锅序 → ⊘ 不计入成本 → ⇄ 有替代 → ◑ 成本不共享。
  */
 export function markersForAuxiliaryRow(row: AuxiliaryRowInput): BomRowMarker[] {
   const markers: BomRowMarker[] = [];
+  if (row.missingPrice === true) {
+    markers.push({
+      glyph: '¥?',
+      kind: 'unpriced',
+      title: '缺成本价 · 报工核算时该调料成本暂记 0；请在「物料主数据」维护移动平均库存成本或未税采购参考价',
+    });
+  }
 
   if (row.subsequentPotRatio != null) {
     const percent = Number((row.subsequentPotRatio * 100).toFixed(2));

@@ -1071,6 +1071,7 @@ import {
   isValidSubsequentPotRatio,
 } from './seasoningProcessCategory';
 import { createBomDraftEnsurer } from './bom/bomDraftLifecycle';
+import { missingPriceBindingIds } from './bom/seasoningModel';
 import { markersForAuxiliaryRow, markersForPackagingRow } from './bomOverlayMarkers';
 import type { AuxiliaryCellRow, PackagingCellRow } from './bomOverlayTypes';
 import type { ByproductMaterialOption } from './WorkflowMaterialNode.vue';
@@ -1469,9 +1470,11 @@ const bomStatusBySku = computed<Record<string, BomVersionLine>>(() => {
  * 现在成品 Cell 只留**没有别处能说**的两件: 还没建 BOM / 草稿未生效。
  */
 function bomBubbleText(line: BomVersionLine): string {
+  const unpriced = bomUnpricedCountByProduct.value[line.productId] ?? 0;
+  const suffix = unpriced > 0 ? ` · ${unpriced} 项辅料缺价` : '';
   if (line.activeVersion == null) return '还没建 BOM';
-  if (line.draftVersion != null) return `草稿 v${line.draftVersion} 未生效`;
-  return `BOM 生效 v${line.activeVersion}`;
+  if (line.draftVersion != null) return `草稿 v${line.draftVersion} 未生效${suffix}`;
+  return `BOM 生效 v${line.activeVersion}${suffix}`;
 }
 
 /**
@@ -1680,6 +1683,8 @@ async function resolveWritableRecipeId(
   return refreshed;
 }
 const bomOverlaySeasoningWorkspaceByRecipe = ref<Record<string, SeasoningWorkspace>>({});
+/** 每个产品有几条辅料绑定缺成本价 (工作区 MISSING_PRICE 计数); 气泡文案用。 */
+const bomUnpricedCountByProduct = ref<Record<string, number>>({});
 const bomOverlaySubstitutesByRecipe = ref<Record<string, BomItemSubstituteView[]>>({});
 /**
  * 副产 cell 的可选物料。空列表**不是**「加载中」—— 见 WorkflowMaterialNode 的空态文案:
@@ -3287,6 +3292,7 @@ async function loadBomOverlayData(options: {
     bomDraftNotices.value = [];
     bomOverlayRecipeWritable.value = {};
     bomOverlaySeasoningWorkspaceByRecipe.value = {};
+    bomUnpricedCountByProduct.value = {};
     bomOverlaySubstitutesByRecipe.value = {};
     bomOverlayRecipeIdByOutput.value = {};
     bomOverlayPackagingRawByOutput.value = {};
@@ -3423,12 +3429,19 @@ async function loadBomOverlayData(options: {
     // 别搬回来, 搬回来就是 TDZ (见上面的事故注释)。
     const recipeIdByProcess: Record<string, string> = {};
     const workspaceByRecipe: Record<string, SeasoningWorkspace> = {};
+    const unpricedByProduct: Record<string, number> = {};
     // must-fix #8: 统计每个工序节点被多少份不同 recipe 引用到 —— 独立于下面的
     // "first recipe wins" 判重, 覆盖判重发生之后仍要继续数, 否则统计会在第一份就停。
     const recipeIdsByProcessNode: Record<string, Set<string>> = {};
     workspaceResponses.forEach(({ recipeId, response }) => {
       if (!response?.success || !response.data) return;
       workspaceByRecipe[recipeId] = response.data;
+      // 2026-09-02: 无价可绑之后, 缺价必须有常驻可见入口 —— 行标 ¥? + 产品气泡计数; 判据只认后端 MISSING_PRICE
+      const unpricedIds = missingPriceBindingIds(response.data.anomalies);
+      if (unpricedIds.size > 0) {
+        const productId = productIdByRecipe[recipeId] ?? response.data.productTypeId;
+        if (productId) unpricedByProduct[productId] = (unpricedByProduct[productId] ?? 0) + unpricedIds.size;
+      }
       const relations = substitutesByRecipe[recipeId] || [];
       response.data.processes.forEach((process) => {
         const nodeId = process.workflowProcessNodeId;
@@ -3457,6 +3470,7 @@ async function loadBomOverlayData(options: {
             materialName: binding.name || binding.materialName || '未命名辅料',
             dosageText: formatAuxiliaryDosageText(binding.dosagePerKgG),
             markers: markersForAuxiliaryRow({
+              missingPrice: unpricedIds.has(String(binding.id)),
               subsequentPotRatio: binding.subsequentPotRatio,
               countInSeasoning: binding.countInSeasoning,
               substituteCount: relations.filter((relation) =>
@@ -3487,6 +3501,7 @@ async function loadBomOverlayData(options: {
     bomDraftNotices.value = draftNotices;
     bomOverlayRecipeIdByProcess.value = recipeIdByProcess;
     bomOverlaySeasoningWorkspaceByRecipe.value = workspaceByRecipe;
+    bomUnpricedCountByProduct.value = unpricedByProduct;
     bomOverlaySubstitutesByRecipe.value = substitutesByRecipe;
     bomOverlayRecipeIdByOutput.value = recipeIdByOutput;
     bomOverlayPackagingRawByOutput.value = packagingRawByOutput;
