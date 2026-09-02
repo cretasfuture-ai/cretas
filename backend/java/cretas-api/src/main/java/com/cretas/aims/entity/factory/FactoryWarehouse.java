@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.util.Set;
 import java.util.UUID;
 import org.hibernate.annotations.Where;
 
@@ -110,4 +111,24 @@ public class FactoryWarehouse extends BaseEntity {
         /** 研发/中试库 - 试制批次 (is_trial=true) 产出专属仓库，不混入可售库存 (SP10 §RD-1) */
         RD
     }
+
+    /**
+     * 生产结单 (settlement) 合法领料仓类型集合 —— 缺陷 49 (2026-09-02) 的唯一权威定义。
+     *
+     * <p>结单只认原料仓/物流仓/生产仓的批次 (成品仓 FINISHED / 研发库 RD 等不算)。
+     * 这个判定原来分别在 {@code ProductionPlanServiceImpl.isSettlementEligibleWarehouse}
+     * (Java 侧, 经 {@code WarehouseResolver} 逐条查活库存仓) 和
+     * {@code MaterialBatchRepository.sumAvailableRawStockQuantityByMaterialType} (JPQL 子查询里
+     * 写死同一组枚举值) 各写一次。JPQL 无法调用 Java 方法, 但**可以**接收一个绑定参数
+     * ({@code IN (:eligibleTypes)}) —— 于是把这个集合抽到这里, repository 侧用参数化查询
+     * 引用它, 不再在 JPQL 字符串里重复写字面量 (原写法 {@code fw.type IN (com.cretas.aims.entity.factory.
+     * FactoryWarehouse.WarehouseType.RAW, ...)} 在 Hibernate 6 的 HQL 解析器上不合法: 嵌套枚举类型的
+     * 全限定名会被当成一条无法绑定的路径表达式, 而不是枚举字面量, 见
+     * {@code org.hibernate.query.SemanticException: Could not interpret path expression
+     * 'com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.RAW'}, 2026-09-02 CI 实测)。
+     *
+     * ⛔ 改这个集合时不用再改 SQL 字符串 —— repository 那边直接引用这个常量。
+     */
+    public static final Set<WarehouseType> SETTLEMENT_ELIGIBLE_TYPES =
+            Set.of(WarehouseType.RAW, WarehouseType.LOGISTICS, WarehouseType.WORKSHOP);
 }

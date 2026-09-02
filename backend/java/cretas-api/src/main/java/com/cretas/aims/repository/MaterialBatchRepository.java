@@ -2,6 +2,7 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.factory.FactoryWarehouse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
@@ -15,6 +16,7 @@ import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -587,9 +589,18 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      * <p>缺陷 49 (2026-09-02 owner 现场实测): 原来这里不限仓库类型 —— 导致它比结单
      * ({@code ProductionPlanServiceImpl.ensureMaterialBatchAllowedForSettlement}, 只认 RAW/LOGISTICS/WORKSHOP
      * 三类仓) 反而宽(会数到 FINISHED/RD/WIP 仓的货)。现在对齐到同一个仓库集合
-     * (与 {@code ProductionPlanServiceImpl#isSettlementEligibleWarehouse} 同一个判定,
-     * 只是 SQL 侧直接写枚举值(下面 fw.type IN (RAW, LOGISTICS, WORKSHOP))
-     * —— JPQL 子查询调不到 Java 方法, 两处判定必须同步改, 否则一定漂)。
+     * (与 {@code ProductionPlanServiceImpl#isSettlementEligibleWarehouse} 同一个判定) ——
+     * 仓类型集合的唯一权威定义在 {@link FactoryWarehouse#SETTLEMENT_ELIGIBLE_TYPES}, 下面的
+     * 3 参数重载把它作为绑定参数 {@code :eligibleTypes} 传给 JPQL 子查询, 不再在 SQL 字符串里
+     * 写枚举字面量。
+     *
+     * <p>🔴 2026-09-02 CI 实测: 最初写法是在 JPQL 里直接写
+     * {@code fw.type IN (com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.RAW, ...)} ——
+     * Hibernate 6 的 HQL 解析器把嵌套枚举类型的全限定名当成一条无法绑定的路径表达式, 而不是枚举
+     * 字面量 (只有顶层枚举, 如 {@code com.cretas.aims.entity.enums.XxxEnum.VALUE}, 才能这样直接写),
+     * 导致 {@code materialBatchRepository} bean 在 {@code @DataJpaTest}/{@code *RepositoryQueryValidationTest}
+     * 启动校验阶段就抛 {@code org.hibernate.query.SemanticException}, 拖垮整个 ApplicationContext。
+     * 改成绑定参数后不会再触发这个解析问题。
      */
     @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) " +
            "FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
@@ -598,12 +609,24 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND m.warehouseId IN (SELECT fw.id FROM FactoryWarehouse fw WHERE fw.factoryId = :factoryId " +
-           "AND fw.type IN (com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.RAW, " +
-           "com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.LOGISTICS, " +
-           "com.cretas.aims.entity.factory.FactoryWarehouse.WarehouseType.WORKSHOP))")
+           "AND fw.type IN (:eligibleTypes))")
     BigDecimal sumAvailableRawStockQuantityByMaterialType(
             @Param("factoryId") String factoryId,
-            @Param("materialTypeId") String materialTypeId);
+            @Param("materialTypeId") String materialTypeId,
+            @Param("eligibleTypes") Collection<FactoryWarehouse.WarehouseType> eligibleTypes);
+
+    /**
+     * 2 参数便捷重载 —— 现有调用方 (生产/仓 code + 测试里的 mock 桩) 全部按这个签名写,
+     * 加第 3 个参数会连累 6 个测试文件的 {@code when(...)} 桩都要跟着改签名。用 Java
+     * {@code default} 方法在 repository 接口内部把 {@link FactoryWarehouse#SETTLEMENT_ELIGIBLE_TYPES}
+     * 补上, 委托给上面那个真正执行 {@code @Query} 的 3 参数方法 —— Spring Data JPA 只给
+     * <b>抽象</b>方法生成实现, {@code default} 方法的方法体原样执行, 支持在接口内部调用
+     * {@code this.<其它 repository 方法>}。
+     */
+    default BigDecimal sumAvailableRawStockQuantityByMaterialType(String factoryId, String materialTypeId) {
+        return sumAvailableRawStockQuantityByMaterialType(
+                factoryId, materialTypeId, FactoryWarehouse.SETTLEMENT_ELIGIBLE_TYPES);
+    }
 
     /**
      * 同上, 但**限定一个仓库** —— 用来把「全厂没货」和「货在别的仓、还没领/调过来」分开。

@@ -1679,8 +1679,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // Repository contract excludes customer-owned inventory while retaining
         // null ownership only for read-compatible legacy company stock.
         // 缺陷 49: 上面这个方法已限定 RAW/LOGISTICS/WORKSHOP 三类仓
-        // (与本类的 isSettlementEligibleWarehouse 同一个判定，具体枚举值见该
-        // JPQL 查询上方的 fw.type IN (RAW, LOGISTICS, WORKSHOP) 子查询)。
+        // (与本类的 isSettlementEligibleWarehouse 同一个判定; 权威枚举集合见
+        // FactoryWarehouse.SETTLEMENT_ELIGIBLE_TYPES, 这个 2 参数重载在 repository 里
+        // 已经补上该集合再委托给真正执行 @Query 的 3 参数方法)。
         return materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(factoryId, materialTypeId);
     }
 
