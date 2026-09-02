@@ -620,8 +620,8 @@ class ProcessSheetServiceImplTest {
     private com.cretas.aims.repository.WorkProcessRepository workProcessRepoForReversal;
 
     @Test
-    @DisplayName("阴性事实 (2026-09-02 票): 提交时扣掉的回料, 整批撤回后【没有】还回 —— OUT 流水无 reportId, 撤回只按 reportId 找")
-    void batchReversal_doesNotRestoreReworkConsumedAtSubmit() {
+    @DisplayName("2026-09-02 票: 提交时扣掉的回料, 整批撤回后还回 (OUT 流水挂到 YIELD 报工, 撤回沿 report_id 找到它)")
+    void batchReversal_restoresReworkConsumedAtSubmit() {
         String reworkBatchNo = "CLK-SEMI-REWORK-REV";
         // 正式提交的生产库分摊与撤回释放占用都要解析 WH-WKS (WarehouseResolver), 测试工厂没有种子 → 补一个
         FactoryWarehouse workshop = new FactoryWarehouse();
@@ -707,11 +707,11 @@ class ProcessSheetServiceImplTest {
         // 阳性对照: 撤回真的跑了 —— executeReversal ① 软删这一批全部 YIELD 报工 (设计上的必然)
         assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, submitted.getBatchId()))
                 .as("撤回必须真的执行 (否则下面的「没还」读数无意义)").isEmpty();
-        // 阴性事实: 回料没有还回来 (修法落地后这条要翻成 10)
+        // 修法之前这里是 6 (第一个 commit 钉住的阴性事实); 现在整单撤回把提交时扣的 4 还回来
         assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)
                 .orElseThrow().getAvailableQuantity())
-                .as("既有缺陷钉成事实: 提交时扣的回料撤回后没还 (仍是 6, 不是 10)")
-                .isEqualByComparingTo("6");
+                .as("提交时扣的回料撤回后还回 (6 → 10)")
+                .isEqualByComparingTo("10");
     }
 
     @Test
