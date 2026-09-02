@@ -6,7 +6,7 @@
         <span class="context-divider" aria-hidden="true" />
         <div>
           <strong>正在配置：{{ selectedDecisionTypeLabel }}</strong>
-          <span>当前业务使用独立画布；在途审批不会被修改（无在途实例时可直接改已发布版本）。</span>
+          <span>当前业务用线性步骤列表配置；在途审批不会被修改（无在途实例时可直接改已发布版本）。</span>
         </div>
         <el-tag :type="runtimeApprovalEnabled ? 'success' : 'info'" effect="plain">
           {{ runtimeApprovalEnabled ? '审批已启用' : '无需审批' }}
@@ -149,7 +149,33 @@
     </section>
 
     <template v-else>
-      <div class="editor-body">
+      <!--
+        业务入口（审批链配置）用线性步骤列表；平台高级模式仍用自由画布。
+        ⚠️ 表达不出来的图（分支/并行/环）会退回画布并显示原因，
+        ⛔ 绝不静默丢弃用户已有的配置 —— 那正是 2026-09-01 事故的成因形状。
+      -->
+      <div v-if="useStepList" class="editor-body step-mode">
+        <StepListEditor
+          :steps="stepFlow ?? []"
+          :directory="approvalDirectory"
+          :directory-loading="directoryLoading"
+          :directory-error="directoryError"
+          :read-only="!canEditDraft"
+          :decision-label="selectedDecisionTypeLabel"
+          @update:steps="onStepsUpdate"
+        />
+      </div>
+
+      <div v-else class="editor-body">
+        <el-alert
+          v-if="props.lockDecisionType && stepModeFallbackReason"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="step-fallback-alert"
+          title="这条审批流用的是高级画布"
+          :description="stepModeFallbackReason"
+        />
         <aside class="palette" aria-label="流程节点">
           <div class="panel-title-row">
             <h4>流程节点</h4>
@@ -290,7 +316,13 @@
 
       <footer class="editor-status">
         <span>{{ canEditDraft ? '当前为可编辑草稿' : '当前版本只读' }}</span>
-        <span>{{ nodes.length }} 个 Cell · {{ edges.length }} 条连线</span>
+        <span v-if="useStepList">
+          {{ (stepFlow ?? []).filter(s => s.type === 'approval').length }} 级审批
+          <template v-if="(stepFlow ?? []).some(s => s.type === 'cc')">
+            · {{ (stepFlow ?? []).filter(s => s.type === 'cc').length }} 个抄送
+          </template>
+        </span>
+        <span v-else>{{ nodes.length }} 个 Cell · {{ edges.length }} 条连线</span>
         <span v-if="draftDirty">尚未保存</span>
         <span v-else>已与当前版本同步</span>
       </footer>
@@ -340,10 +372,17 @@ import JoinNode from './components/nodes/JoinNode.vue'
 import NotifyNode from './components/nodes/NotifyNode.vue'
 import EndNode from './components/nodes/EndNode.vue'
 import PropertyPanel from './components/PropertyPanel.vue'
+import StepListEditor from './components/StepListEditor.vue'
 import ApprovalWorkflowAIComposer from './components/ApprovalWorkflowAIComposer.vue'
 import WorkflowSimulator from './components/WorkflowSimulator.vue'
 import ConditionRulesPanel from './components/ConditionRulesPanel.vue'
 import { parseSalesApprovalAmountThreshold } from './lib/salesApprovalCondition'
+import {
+  explainStepListFallback,
+  graphToSteps,
+  stepsToGraph,
+  type ApprovalStep,
+} from './lib/stepGraph'
 import { compileApprovalWorkflowAiDraft } from './lib/approvalWorkflowAi'
 import type { SimulatorInput } from './composables/useSimulator'
 import {
@@ -405,6 +444,26 @@ const edges = ref<Edge[]>([])
  * 见 deserializeGraph 顶部那段 2026-09-01 事故说明。
  */
 const loadedEdgeCount = ref(0)
+
+/**
+ * ==================== 线性步骤列表模式 ====================
+ *
+ * 业务入口（审批链配置）用**步骤列表**编辑，不用自由画布：画布把 `edges_json`
+ * 保存成 `"[]"` 砸过真客户租户（见 deserializeGraph 顶部那段），
+ * 而步骤列表里**不存在"连线"这个概念** ⇒ 结构上不可能丢线。
+ *
+ * `stepFlow === null` 表示这张图**线性列表表达不出来**（有条件/并行节点、环、
+ * 无条件分支边等）。此时 ⛔ **不能**静默丢弃用户已有的配置 —— 退回画布，
+ * 并把原因显式说出来。这正是 2026-09-01 事故的成因形状（"读不出来就当没有"）。
+ */
+const stepFlow = ref<ApprovalStep[] | null>(null)
+const stepModeFallbackReason = ref('')
+
+/** 只有业务入口 + 这张图能被线性表达时，才用步骤列表。 */
+const useStepList = computed(
+  () => Boolean(props.lockDecisionType) && stepFlow.value !== null,
+)
+
 const currentWorkflow = ref<ApprovalWorkflowDTO | null>(null)
 const workflowList = ref<ApprovalWorkflowDTO[]>([])
 const selectedWorkflowId = ref<string | undefined>(undefined)
@@ -651,11 +710,16 @@ const readOnlyWorkflow = computed(() => (
   && runningInstanceCount.value !== 0
 ))
 const canEditDraft = computed(() => !showNoApproval.value && !readOnlyWorkflow.value)
+/*
+ * 步骤列表模式下"有没有可保存的内容"要看 stepFlow, ⛔ 不能看 nodes —— 新建业务审批
+ * 时画布节点是空的(见 createDefaultDraft), 若这里仍只判 nodes.length, 保存按钮会对
+ * 一个已经加好步骤的新审批流恒为 disabled。
+ */
 const canSave = computed(() => Boolean(
   canEditDraft.value
   && workflowName.value
   && selectedDecisionType.value
-  && nodes.value.length > 0,
+  && (useStepList.value ? (stepFlow.value?.length ?? 0) > 0 : nodes.value.length > 0),
 ))
 const canPublish = computed(() => currentWorkflow.value?.publishStatus === 'draft')
 const saveButtonLabel = computed(() => (
@@ -787,6 +851,17 @@ function captureHistory() {
 
 function markDraftChanged() {
   if (canEditDraft.value) draftDirty.value = true
+}
+
+/**
+ * 步骤列表改动 —— 唯一的写入口。
+ * ⚠️ 只在可编辑时接受：`canEditDraft` 为假时（已发布 + 有在途实例）子组件本来就是只读的，
+ * 这里再挡一道，防止将来有别的路径绕过 UI 直接 emit。
+ */
+function onStepsUpdate(next: ApprovalStep[]) {
+  if (!canEditDraft.value) return
+  stepFlow.value = next
+  markDraftChanged()
 }
 
 function undo() {
@@ -931,49 +1006,27 @@ function deleteSelectedElements() {
   draftDirty.value = true
 }
 
+/**
+ * 新建业务审批草稿。
+ *
+ * 唯一调用点 {@link enableApprovalDraft} 只在 `showNoApproval` 为真时可达，
+ * 而 `showNoApproval` 要求 `props.lockDecisionType` 为真 —— 这里恒是业务入口，
+ * 因此恒进步骤列表模式。
+ *
+ * <h4>🔴 曾经的缺陷：新建时 stepFlow 停在初始值 null</h4>
+ * 这里原来只填画布 nodes/edges(一个虚构的"主管审批"默认节点)，从不碰 stepFlow。
+ * `useStepList = lockDecisionType && stepFlow.value !== null` 于是判定为假 ——
+ * 业务入口新建时**静默退回画布**，把整个 PR 要消灭的东西又摆在了第一次使用的
+ * 用户面前，且没有任何 fallback 提示(stepModeFallbackReason 同样没被设置)。
+ *
+ * ⇒ 修法是给一个**空步骤列表**，⛔ 不是换一个不同形状的虚构默认值 ——
+ * 用户自己按"+加一级审批"添加，与 StepListEditor 已有的空态处理一致。
+ */
 async function createDefaultDraft() {
-  const defaultRoles = decisionTypeMetadata.value.find(
-    (item) => item.decisionType === selectedDecisionType.value,
-  )?.defaultApproverRoles ?? []
-  const timestamp = Date.now()
-  nodes.value = [
-    {
-      id: `start_${timestamp}`,
-      type: 'start',
-      position: { x: 420, y: 40 },
-      data: { label: '开始', nodeType: 'start', config: {} },
-    },
-    {
-      id: `approval_${timestamp}`,
-      type: 'approval',
-      position: { x: 420, y: 200 },
-      data: {
-        label: '主管审批',
-        nodeType: 'approval',
-        config: { approverRoles: defaultRoles, requiredApprovers: 1, timeoutMinutes: 0 },
-      },
-    },
-    {
-      id: `end_${timestamp}`,
-      type: 'end',
-      position: { x: 420, y: 360 },
-      data: { label: '审批通过', nodeType: 'end', config: { outcome: 'APPROVED' } },
-    },
-  ]
-  edges.value = [
-    {
-      id: `edge_start_${timestamp}`,
-      source: `start_${timestamp}`,
-      target: `approval_${timestamp}`,
-      data: { priority: 0 },
-    },
-    {
-      id: `edge_end_${timestamp}`,
-      source: `approval_${timestamp}`,
-      target: `end_${timestamp}`,
-      data: { priority: 0 },
-    },
-  ]
+  nodes.value = []
+  edges.value = []
+  stepFlow.value = []
+  stepModeFallbackReason.value = ''
   workflowName.value = `${selectedDecisionTypeLabel.value}流程`
   currentWorkflow.value = null
   selectedWorkflowId.value = undefined
@@ -981,8 +1034,6 @@ async function createDefaultDraft() {
   undoHistory.value = []
   redoHistory.value = []
   draftDirty.value = true
-  await nextTick()
-  await fitCanvas()
 }
 
 async function enableApprovalDraft() {
@@ -1255,7 +1306,33 @@ function onDeleteSelected() {
 }
 
 /** Serialize current VueFlow graph state → CreateWorkflowRequest wire shape. */
+/**
+ * 步骤列表模式的序列化：图由 {@link stepsToGraph} **确定性生成**，
+ * ⛔ 完全不读画布的 nodes/edges —— 那份状态正是会丢边的那份。
+ *
+ * `stepsToGraph` 在出口自检（{@link assertGeneratedGraphIsSound}），
+ * 生成不出合法图时抛，这里转成给一线看得懂的提示，⛔ 不静默产出一个坏图。
+ */
+function serializeStepFlow(): CreateWorkflowRequest | null {
+  const steps = stepFlow.value
+  if (!steps) return null
+  try {
+    const graph = stepsToGraph({ steps })
+    return {
+      decisionType: selectedDecisionType.value,
+      name: workflowName.value,
+      nodes: graph.nodes,
+      edges: graph.edges,
+      startNodeId: graph.startNodeId,
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '审批步骤不完整，无法保存')
+    return null
+  }
+}
+
 function serializeGraph(): CreateWorkflowRequest | null {
+  if (useStepList.value) return serializeStepFlow()
   const startNode = nodes.value.find(n => n.type === 'start')
   if (!startNode) {
     ElMessage.warning('工作流必须包含一个 start 节点')
@@ -1323,6 +1400,23 @@ async function deserializeGraph(dto: ApprovalWorkflowDTO) {
   const parsedNodes: ApprovalWorkflowNode[] = JSON.parse(dto.nodesJson || '[]')
   const parsedEdges: ApiEdge[] = JSON.parse(dto.edgesJson || '[]')
   loadedEdgeCount.value = parsedEdges.length
+
+  /*
+   * 线性步骤列表：能读出来就用它，读不出来退回画布并说明原因。
+   * ⚠️ 这一步放在**画布反序列化之前**：即使 VueFlow 那边把边丢了(正是那个事故),
+   *    步骤列表读的是 parsedEdges 这份**后端原文**, 不受画布状态影响。
+   *    ⇒ 步骤列表模式下的保存不可能写回一个被前端丢空的图。
+   */
+  const flow = graphToSteps(parsedNodes, parsedEdges, dto.startNodeId)
+  stepFlow.value = flow ? flow.steps : null
+  // ⚠️ 原因必须由 explainStepListFallback **算出来**，⛔ 不许在这里硬编码一句 ——
+  // 那句话对「终端 id 不匹配」「有环」「缺通过出边」等原因是假话（本仓 2026-09-01
+  // 的事故教训：错的原因会让人去找一个不存在的分支）。graphToSteps 与
+  // explainStepListFallback 共用同一次判定（见 stepGraph.ts），两者不会矛盾。
+  stepModeFallbackReason.value = explainStepListFallback(
+    parsedNodes, parsedEdges, dto.startNodeId,
+  ) ?? ''
+
   const nodeTypeById = new Map(parsedNodes.map(n => [n.id, n.type]))
   // 先清空边, 再注册节点 —— 顺序与 applyAiDraft 一致, 不可调换。
   edges.value = []
@@ -1584,6 +1678,11 @@ async function handleValidate() {
 function resetEditor() {
   nodes.value = []
   edges.value = []
+  // ⚠️ 与 createDefaultDraft / deserializeGraph 是同一份"当前已载入定义"状态的
+  // 三个复位点 —— 少这一个, 切换 decisionType 后 stepFlow 停在上一个业务类型的
+  // 步骤数组上, useStepList 读到"非 null"而误判为步骤列表模式仍然有效。
+  stepFlow.value = null
+  stepModeFallbackReason.value = ''
   currentWorkflow.value = null
   selectedWorkflowId.value = undefined
   workflowName.value = ''
@@ -1787,6 +1886,23 @@ onMounted(async () => {
 .header-actions { display: flex; gap: 8px; align-items: center; }
 
 .editor-body { flex: 1; display: flex; gap: 8px; min-height: 0; }
+
+/* 步骤列表模式：单栏，不需要调色板与属性面板 */
+.editor-body.step-mode {
+  display: block;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+}
+
+.step-fallback-alert {
+  position: absolute;
+  z-index: 10;
+  top: 8px;
+  left: 232px;
+  right: 300px;
+}
 
 .palette {
   width: 220px; flex-shrink: 0; background: #fff;
