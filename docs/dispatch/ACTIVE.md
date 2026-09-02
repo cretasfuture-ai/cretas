@@ -309,6 +309,23 @@
 
 **在飞 3**：`accepts_rework` 热修 → 发 21 / #506 CI 修 → 合 → 发 21 或 22 / #443 → 终审。
 
+### 📌 2026-09-02 08:40 增量 · 部署 21, 合并 72, owner 「在飞修好直接合并部署、能省就省」, 结单第三处漏改
+
+**owner 裁定（08:1x）**：「在飞的内容修复好了以后全部直接合并部署」「热修合了直接发 21，好了叫我，中间能省就省」⇒ 终审只保留写路径新增项（#509），#443/#506/#508 CI 绿即合。
+
+**部署 21** 08:26:44 blue（`26ac4d3699` = #506 + #508 + #443）✅：`FactoryWarehouse.SETTLEMENT_ELIGIBLE_TYPES` 0→1、`filterCustomerOwned` 仍 2、web `index-VEXa_owu` 含「线性步骤列表」（旧构建 0）经 `index-CHPn4nSG` 挂主入口。生产 = main = `26ac4d3699`。
+
+**合并 72**：#506 advisory 口径（根因 `resolveAvailableRawStock` 客供分支只查 `CUSTOMER_OWNED`，与 38 同根；CI 红 = Hibernate 6 HQL **解析不了嵌套枚举全限定字面量** `FactoryWarehouse.WarehouseType.RAW` ⇒ 改成 `IN (:eligibleTypes)` 参数 + `FactoryWarehouse.SETTLEMENT_ELIGIBLE_TYPES` 唯一定义，2 参 default 重载委托 3 参，28 处测试桩零改动）/ #508 `accepts_rework`（**根因订正：列来自 #313 `V20261101_05` NOT NULL DEFAULT TRUE，不是 #503**；8 个构造点 1 个显式写 null、7 个同样暴露；实体默认 TRUE + 创建路径判空；⚠️ 标记不可 grep，行为判：建产品成功）/ #443 步骤列表（rebase 64 落后含 #447/#453/#455；横幅改由 `explainStepListFallback` 推导；新建业务流程空步骤列表 + 修 `canSave`；补悬空边阴性；111/111；按 owner「能省就省」未再送终审）。
+
+**🔴 缺陷 48 第三处（结单仍拦，08:0x owner 亲撞）**：#505 生效后（「审计通过」绿条），点确认报「客供料只能用于同一客户、同一销售订单」—— `ProductionPlanServiceImpl:6161` 调 `ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed` **3 参旧重载**（category null ⇒ 「一律按最严格 = 原料」）⇒ `COMPANY_OWNED` 冰水/L1纸箱 在结单被当客供原料核血缘。**38 同一形状第三次**（领料 ✅ 报工 ✅ 结单 ❌）；6 个调用点 5 个传了 category、唯独结单没传。f006 独立核到同一行。**热修在做**（`ae6b1c85d180026c0`：改 4 参 + 批量取 mainCategory + **删/废 3 参重载**——「默认最严格」的静默重载就是三次漏改的载体）。方法学：**改共享结构时，凡带「默认口径」的静默重载都算一处未改。** 顺带登记：`sameSalesOrderItem` 的 item 级判据在生产上永远走不到 equals（客供批次 `source_sales_order_item_id` 全 NULL）= 死代码，不动。
+
+**#509（工艺 chat，缺口②）**：单成品 BOM → 联产 family 的 API 死锁 ⇒ 预检把「钉在目标修订上的完整 DRAFT family」判 `AUTO_MIGRATABLE`，发布时 4 参 `activateRecipe` 整体激活。终审**过**，合前加两处：4 参方法自己加 `@Transactional`（今天靠调用方 `synchronizeForPublish` 的事务）；同一修订两个合格 family 时**不静默择一**（改报 CONFLICT）。在途计划按 id 读无 status 过滤 ✅。
+**工艺 chat 在 owner 直接授权下的 prod 配置**：工艺 197 v2 产品族（4 线各 10 道，共用原料 Cell；份额 美式 30/30/40、小吃吧 50.88/49.12、熟肉饼 50.73/49.27、汉堡排 88.66/11.34；回投矩阵在绞肉；金检出「不良品」共用 SKU `PTSEMI-LSM-DEFECT`）；BOM family 4 份 ACTIVE v2 钉 197/315，旧 v1 ARCHIVED；小吃吧/汉堡排旧工艺已停，**熟肉饼 192 等 `PLAN-…-B141A9D8` 结束再停**。直接改库 SQL 作只读记录进 `docs/audits/liushanmen/sql/`（随 #509）。演示口径：「主料比例、跨线回料、不良品、辅料自动扣减已配置；份额只对新建计划生效；**回料扣减未上线**」。
+
+**新登记（不派）**：**50** 生产批次搜索无命中回落到未过滤列表（必须空态）；**51** 「分配工序操作员」入口藏在批次详情，owner 意见放计划行「更多」，保留批次侧 + 「取消负责人」+ 已完工禁用；45 `baogong001` 是仓管角色；调料绑定「物料必须有价」闸（14/24 味无价）。
+
+**在飞 2**：结单 3 参热修 → 合 → 发 22 → f006 陪 owner 结单 / #509 两处小改 → 合 → 随 22。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
