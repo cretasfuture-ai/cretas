@@ -54,6 +54,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     /** 读计划钉住的工艺修订, 把 INPUT 端口的主料份额抄到领料明细。非 final + required=false: 不进 @RequiredArgsConstructor, 兼容既有构造器单测。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
+
+    /** 份额收敛票: 计划已转批次且实例已物化 ⇒ 份额读编译列 (与报工同源), 见 resolveInputShares。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowClerkSheetService workflowClerkSheetService;
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -478,6 +482,17 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      *         那是个看起来很确定的假答案）
      */
     private java.util.Map<String, BigDecimal> resolveInputShares(String factoryId, ProductionPlan plan) {
+        // ① 已转批次且运行时实例已物化 ⇒ 读编译冻结列 (与报工读的是同一列, 编译器的归一化/钳位对领料承重)。
+        //    prod 只读探针 (2026-09-02): 按计划生成的领料单 17 张里 3 张先于首批次、2 张没批次 ⇒ 不能只读编译列,
+        //    那 5 张会静默退成「按实际领用」。所以 ② 转批次前仍读修订 nodesJson —— 但解析走编译器同一个
+        //    InputShareRatios.parsePercent, 两边不会漂。
+        if (workflowClerkSheetService != null && plan.getId() != null) {
+            java.util.Optional<java.util.Map<String, BigDecimal>> compiled =
+                    workflowClerkSheetService.resolveCompiledInputShares(factoryId, plan.getId());
+            if (compiled.isPresent()) {
+                return compiled.get();
+            }
+        }
         if (workflowRevisionRepository == null || plan.getSelectedWorkflowRevisionId() == null) {
             return java.util.Map.of();
         }

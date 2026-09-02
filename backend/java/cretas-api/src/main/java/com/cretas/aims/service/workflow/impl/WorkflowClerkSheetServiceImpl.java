@@ -130,6 +130,24 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .build();
     }
 
+    @Override
+    public java.util.Optional<Map<String, java.math.BigDecimal>> resolveCompiledInputShares(
+            String factoryId, String planId) {
+        WorkflowRuntimeSelection selection = findWorkflowRuntime(factoryId, planId);
+        if (selection == null || selection.instance() == null) {
+            return java.util.Optional.empty();
+        }
+        Map<String, java.math.BigDecimal> shares = new java.util.LinkedHashMap<>();
+        for (WorkflowTaskPort port : portRepository
+                .findByFactoryIdAndWorkflowInstanceId(factoryId, selection.instance().getId())) {
+            if (port.getDirection() == WorkflowTaskPort.Direction.INPUT
+                    && port.getInputShareRatio() != null && port.getWorkflowPortId() != null) {
+                shares.put(port.getWorkflowPortId(), port.getInputShareRatio());
+            }
+        }
+        return java.util.Optional.of(shares);
+    }
+
     private WorkflowRuntimeSelection findWorkflowRuntime(String factoryId, String planId) {
         List<ProductionBatch> workflowBatches = productionBatchRepository
                 .findByFactoryIdAndProductionPlanId(factoryId, planId).stream()

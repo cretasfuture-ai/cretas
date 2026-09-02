@@ -24,6 +24,8 @@ import java.util.Map;
 public final class InputShareRatios {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(InputShareRatios.class);
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
 
     private InputShareRatios() {
     }
@@ -31,6 +33,38 @@ public final class InputShareRatios {
     /**
      * portId → 份额(%)。只收 INPUT 端口且 inputShareRatio 非 null 的。
      * nodesJson 非法时返回空表，⛔ 不抛：建单不能因为读份额失败而拦。
+     */
+    /**
+     * 份额百分比的<b>唯一</b>解析 (两个存储收敛的那一层): null ⇒ null; 非数字 / 非有限 / 越界 [0,100] ⇒ 抛
+     * {@link IllegalArgumentException}, 消息与编译器历史文案一致。编译器 {@code optionalPercent} 把它包成
+     * runtimeInvalid 拒绝发布; 领料侧 {@link #fromNodesJson} 把它变成「这个端口无份额 + WARN」, ⛔ 不拦建单。
+     * 两边判定同一个函数 ⇒ 不会出现「编译器拒了、领料照收」的漂移。
+     */
+    public static BigDecimal parsePercent(Object value) {
+        if (value == null) {
+            return null;
+        }
+        BigDecimal parsed;
+        if (value instanceof BigDecimal decimal) {
+            parsed = decimal;
+        } else if (value instanceof Number number) {
+            double d = number.doubleValue();
+            if (!Double.isFinite(d)) {
+                throw new IllegalArgumentException("must be a finite number");
+            }
+            parsed = BigDecimal.valueOf(d);
+        } else {
+            throw new IllegalArgumentException("must be a number");
+        }
+        if (parsed.signum() < 0 || parsed.compareTo(HUNDRED) > 0) {
+            throw new IllegalArgumentException("must be between 0 and 100");
+        }
+        return parsed;
+    }
+
+    /**
+     * 调用点登记 (硬约束 8): ① FactoryMaterialRequisitionServiceImpl.resolveInputShares —— 只在计划还没有物化的
+     * 运行时实例 (转批次前) 时走这里; 有实例一律读编译列 workflow_task_ports.input_share_ratio。② 本类。
      */
     public static Map<String, BigDecimal> fromNodesJson(String nodesJson) {
         Map<String, BigDecimal> out = new LinkedHashMap<>();
@@ -51,8 +85,17 @@ public final class InputShareRatios {
                 if (!"INPUT".equals(port.get("direction"))) continue;
                 Object id = port.get("id");
                 Object share = port.get("inputShareRatio");
-                if (id == null || !(share instanceof Number n)) continue;
-                out.put(String.valueOf(id), new BigDecimal(n.toString()));
+                if (id == null || share == null) continue;
+                BigDecimal parsed;
+                try {
+                    parsed = parsePercent(share);
+                } catch (IllegalArgumentException e) {
+                    // 与编译器同一判定: 编译器会拒绝发布这份修订; 这里是建单, 不拦, 当作该端口无份额并留痕
+                    log.warn("[input-share] 端口 {} 的 inputShareRatio={} 非法 ({}), 领料按无份额处理", id, share, e.getMessage());
+                    continue;
+                }
+                if (parsed == null) continue;
+                out.put(String.valueOf(id), parsed);
             }
         }
         return out;

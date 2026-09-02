@@ -14,4 +14,13 @@ public interface WorkflowClerkSheetService {
      * @throws com.cretas.aims.exception.BusinessException 已锁定 WORKFLOW 的批次快照不完整时阻断，禁止回退 legacy
      */
     WorkflowClerkSheetConfigDTO getWorkflowSheetConfig(String factoryId, String planId);
+
+    /**
+     * 计划钉住的 Workflow 已转批次且运行时实例已物化时, 返回编译冻结的 INPUT 端口份额
+     * ({@code workflow_task_ports.input_share_ratio}, key = workflowPortId, 只收非 null 的)。
+     * 没有 Workflow 批次 / 实例还没物化 ⇒ {@link java.util.Optional#empty()} (调用方退回读修订 nodesJson);
+     * 多批次歧义 ⇒ 与报工同一个 409 WORKFLOW_RUNTIME_BATCH_AMBIGUOUS。
+     */
+    java.util.Optional<java.util.Map<String, java.math.BigDecimal>> resolveCompiledInputShares(
+            String factoryId, String planId);
 }
