@@ -178,12 +178,12 @@ async function submit() {
   const duplicate = findDuplicateBinding(props.process, form.materialTypeId, props.binding?.id);
   if (duplicate) return ElMessage.warning('该调料已在本工序配置');
   if (missingEffectivePrice.value) {
+    // 2026-09-02: 无价不再拦保存 (后端同步放开)。只提醒: 报工核算时该调料成本暂记 0 并会提示。
     showSingletonNotification({
-      title: '该调料尚无有效成本价格',
-      message: '表单内容已保留。请维护移动平均库存成本或未税采购参考价，完成后回到本页重新读取即可继续保存。',
-      type: 'warning', duration: 0, showClose: true,
+      title: '该调料暂无成本价，已按无价保存',
+      message: '报工核算时该调料成本暂记 0 并提示；维护移动平均库存成本或未税采购参考价后重新核算即可。',
+      type: 'warning', duration: 8000, showClose: true,
     });
-    return;
   }
   const missingFactor = form.substituteMaterialTypeIds.find((materialTypeId) => {
     const candidate = props.materials.find((item) => item.id === materialTypeId);
@@ -397,7 +397,7 @@ async function refreshSelectedMaterialPrice() {
         type="warning"
         :closable="false"
         show-icon
-        title="该调料缺少有效移动平均库存成本或未税采购参考价，暂不能保存"
+        title="该调料缺少有效移动平均库存成本或未税采购参考价；可以保存，但报工核算时其成本暂记 0 并提示"
       >
         <template #default>
           <span>当前表单会保留。</span>

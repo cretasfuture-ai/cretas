@@ -104,6 +104,29 @@ class ClerkProcessEntrySeasoningPerProcessTest {
     // ─────────────────────────────────────────────────────────────
 
     @Test
+    @DisplayName("熟制工序: 绑定的调料没有成本价 → 成本暂记 0 且必须有 warning 点名 (⛔ 不静默)")
+    void cookingStep_unpricedBindingWarnsInsteadOfSilentZero() throws Exception {
+        WorkProcess cook = wp("WP-COOK", "熟制", "熟制");
+        when(workProcessRepository.findByFactoryIdAndProcessName(F, "熟制")).thenReturn(List.of(cook));
+        stubRecipe();
+        BomSeasoningItem unpriced = new BomSeasoningItem();
+        unpriced.setSection("COOKING");
+        unpriced.setName("老抽");
+        unpriced.setDosagePerKgG(new BigDecimal("1000"));
+        unpriced.setCountInSeasoning(true);
+        when(bomSeasoningItemRepo.findByRecipeIdAndWorkProcessIdOrderBySeqAsc(RECIPE, "WP-COOK"))
+                .thenReturn(List.of(unpriced));
+        List<String> warnings = new ArrayList<>();
+
+        BigDecimal cost = computePerProcess(step("熟制"), List.of(new BigDecimal("100")), warnings);
+
+        assertEquals(0, BigDecimal.ZERO.compareTo(cost), "无价按 0 计");
+        assertEquals(1, warnings.size(), "必须恰好一条 warning 点名无价调料");
+        assertEquals(true, warnings.get(0).contains("老抽"), warnings.get(0));
+        assertEquals(true, warnings.get(0).contains("暂记 0"), warnings.get(0));
+    }
+
+    @Test
     @DisplayName("熟制工序: 只算本工序卤料, 第二锅按该工序比例")
     void cookingStep_scopedCookingCost() throws Exception {
         WorkProcess cook = wp("WP-COOK", "熟制", "熟制");
