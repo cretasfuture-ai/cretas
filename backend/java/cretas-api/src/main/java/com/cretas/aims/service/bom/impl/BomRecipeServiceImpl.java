@@ -387,7 +387,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * @param publishingWorkflowId 仅发布链路传入 —— 见
      *        {@link #requireDraftMatchesEnabledWorkflow(String, List, Long)}。
      */
-    private BomRecipe activateRecipe(
+    @Override
+    @Transactional   // 终审 #509: 提成接口后自己必须带事务, 否则下一个非事务调用方会留下「2 ACTIVE + 2 DRAFT」半状态
+    public BomRecipe activateRecipe(
             String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
         if (recipe.getStatus() == BomRecipe.Status.ACTIVE && Boolean.TRUE.equals(recipe.getIsCurrent())) {

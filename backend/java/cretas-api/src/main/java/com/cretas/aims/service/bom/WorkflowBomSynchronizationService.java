@@ -269,6 +269,31 @@ public class WorkflowBomSynchronizationService {
                     .build());
         }
 
+        // 🔴 2026-09-02 LIUSHANMEN 死锁: 四个单成品 BOM 各自一个 family, 改成一张联产图后
+        //    这里永远报「终端缺少生效 BOM」, 而草稿激活又要求工艺已启用 —— 谁也不能先走。
+        //    出路: 只要有一个钉在目标修订上的 DRAFT family 覆盖了全部终端, 就当它是要收编的那份,
+        //    发布时由 synchronizeForPublish 整体激活(publishingWorkflowId 让 lineage 闸放行)。
+        String adoptableDraftRecipeId = null;
+        // 只要缺的是「终端没有生效 BOM」且没有冲突, 就找可收编的草稿 family; 收编成立时旧 family 上的
+        // 其它缺项(它的行怎么映射到新端口)一并作废 —— 那些行不会被迁移, 迁移结果就是这个 DRAFT family 本身。
+        if (conflicts.isEmpty()
+                && missing.stream().anyMatch(item -> "BOM_FAMILY_OUTPUTS_INCOMPLETE".equals(item.getCode()))) {
+            List<String> adoptable = findAdoptableDraftFamilies(
+                    factoryId, target, active.getProductTypeId(), targetOutputProductIds);
+            if (adoptable.size() > 1) {
+                // 终审 #509: 两个都合格时 ⛔ 不按 OrderByProductTypeIdAsc 静默择一 —— 报冲突让人选
+                conflicts.add(issue(
+                        "BOM_FAMILY_ADOPTION_AMBIGUOUS",
+                        null, active.getProductTypeId(), null,
+                        "bomFamily",
+                        "目标修订上有 " + adoptable.size() + " 个都覆盖全部终端的 BOM 草稿 Family: "
+                                + String.join(", ", adoptable),
+                        "请删除多余的草稿 Family, 只保留要发布的那一个"));
+            } else if (adoptable.size() == 1) {
+                adoptableDraftRecipeId = adoptable.getFirst();
+                missing.clear();
+            }
+        }
         WorkflowBomSyncPreflightResponse.Classification classification =
                 !conflicts.isEmpty()
                         ? WorkflowBomSyncPreflightResponse.Classification.CONFLICT
@@ -289,6 +314,7 @@ public class WorkflowBomSynchronizationService {
                 .conflicts(conflicts)
                 .canCompleteAutomatically(classification
                         == WorkflowBomSyncPreflightResponse.Classification.AUTO_MIGRATABLE)
+                .adoptableDraftRecipeId(adoptableDraftRecipeId)
                 .build();
     }
 
@@ -328,8 +354,45 @@ public class WorkflowBomSynchronizationService {
             String productTypeId,
             ProductProcessWorkflowRevision targetRevision,
             Long operatorId) {
+        // 收编: 钉在本修订上的完整 DRAFT family ⇒ 直接整体激活(带 publishingWorkflowId, 旧 lineage 闸放行),
+        //       ⛔ 不再从旧 ACTIVE 克隆一份「同步草稿」—— 那会和收编的 family 撞出第二份草稿。
+        WorkflowBomSyncPreflightResponse preflight = preflight(factoryId, productTypeId, targetRevision);
+        if (preflight.getAdoptableDraftRecipeId() != null) {
+            return recipeService.activateRecipe(
+                    factoryId, preflight.getAdoptableDraftRecipeId(), operatorId, targetRevision.getWorkflowId());
+        }
         return recipeService.synchronizeActiveBomToWorkflowRevision(
                 factoryId, productTypeId, targetRevision, operatorId);
+    }
+
+    /**
+     * 钉在 {@code target} 上的 DRAFT 配方按 family 分组, 找出<b>每一个</b>产品集合 ⊇ 全部终端的 family,
+     * 各返回其锚点产品那份(没有就第一份)的 id。空 = 真的缺员; 多于一个 = 调用方报冲突, ⛔ 不择一。
+     */
+    List<String> findAdoptableDraftFamilies(
+            String factoryId,
+            ProductProcessWorkflowRevision target,
+            String anchorProductTypeId,
+            Set<String> requiredProductTypeIds) {
+        List<BomRecipe> drafts = recipeRepository
+                .findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                        factoryId, target.getId(), BomRecipe.Status.DRAFT);
+        Map<String, List<BomRecipe>> byFamily = new LinkedHashMap<>();
+        for (BomRecipe draft : drafts) {
+            if (draft.getBomFamilyId() == null || draft.getBomFamilyId().isBlank()) continue;
+            byFamily.computeIfAbsent(draft.getBomFamilyId(), k -> new ArrayList<>()).add(draft);
+        }
+        List<String> hits = new ArrayList<>();
+        for (List<BomRecipe> family : byFamily.values()) {
+            Set<String> products = family.stream()
+                    .map(BomRecipe::getProductTypeId)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (!products.containsAll(requiredProductTypeIds)) continue;
+            hits.add(family.stream()
+                    .filter(d -> Objects.equals(d.getProductTypeId(), anchorProductTypeId))
+                    .findFirst().orElse(family.getFirst()).getId());
+        }
+        return hits;
     }
 
     private static WorkflowBomSyncPreflightResponse.SyncIssue issue(

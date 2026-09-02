@@ -64,8 +64,9 @@ class ByProductActivationAndBomUxContractTest {
         //    于是「闸在校验之前」这条断言恒假 —— 我第一版正是这么写的, 当场红在自己的锚点上。
         // 2026-08-11: 对外的 activateRecipe 现在只是一层 delegate(补 publishingWorkflowId=null),
         // 真正的流程在私有重载里 —— 锚点跟着搬, 否则量的是那三行 delegate。
-        int methodStart = src.indexOf("private BomRecipe activateRecipe(");
-        assertThat(methodStart).as("应能定位到 activateRecipe 私有重载").isGreaterThan(0);
+        // 2026-09-02 (#509): 4 参重载提成接口方法(public + @Transactional), 定位串跟着改; 守的仍是「lineage 闸先于契约校验」。
+        int methodStart = src.indexOf("String recipeId, Long operatorId, Long publishingWorkflowId) {");
+        assertThat(methodStart).as("应能定位到 activateRecipe 4 参重载").isGreaterThan(0);
         String method = src.substring(methodStart);
         int guardAt = method.indexOf("requireDraftMatchesEnabledWorkflow(factoryId, family, publishingWorkflowId);");
         int validateAt = method.indexOf("validateFamilyContracts(factoryId, family);");
