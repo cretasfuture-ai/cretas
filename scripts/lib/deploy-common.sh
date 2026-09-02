@@ -347,19 +347,75 @@ deploy_pid_alive() {
     esac
 }
 
+# deploy_pid_cmdline <pid>
+# 尽力而为取一条给人看的「这是谁的进程」线索(可执行路径/命令行), 只用于日志,
+# 取不到就是 "unknown" —— 不让这条辅助信息拖累主判据 (deploy_pid_alive 才是判据)。
+deploy_pid_cmdline() {
+    local pid="$1"
+    [ -n "$pid" ] || { echo "unknown"; return; }
+
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*)
+            if command -v powershell.exe >/dev/null 2>&1; then
+                local out
+                out=$(powershell.exe -NoProfile -Command                     "(Get-Process -Id $pid -ErrorAction SilentlyContinue).Path"                     2>/dev/null | tr -d '\r')
+                if [ -n "$out" ]; then
+                    echo "$out"
+                    return
+                fi
+            fi
+            echo "unknown"
+            ;;
+        *)
+            if [ -r "/proc/$pid/cmdline" ]; then
+                local out
+                out=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+                if [ -n "$out" ]; then
+                    echo "$out"
+                    return
+                fi
+            fi
+            if command -v ps >/dev/null 2>&1; then
+                ps -o command= -p "$pid" 2>/dev/null && return
+            fi
+            echo "unknown"
+            ;;
+    esac
+}
+
+# acquire_deploy_lock 成功获取锁后把锁文件路径写进这个全局变量, 供调用方自己的
+# EXIT trap 兜底清理用 —— 见下面 "调用方必须自己兜底" 那段注释, 这不是可选项。
+ACQUIRED_DEPLOY_LOCK_FILE=""
+
 acquire_deploy_lock() {
     local lock_name="${1:-cretas-deploy}"
     local lock_file="/tmp/${lock_name}.lock"
+    ACQUIRED_DEPLOY_LOCK_FILE=""
+
+    # 自我重入: release-cretas.sh 的 drift-retry 用 `exec bash "$0" ...` 重新跑
+    # 自己 (main_guard 期间 origin/main 前进了), PID 不变但脚本从头重新执行, 会
+    # 再次跑到这里。lock 文件里此刻已经是【我自己】的 PID —— 这不是"另一个进程
+    # 持锁", 是重入, 必须放行, 否则会把自己当成别的持锁者拒绝, 整次发布在 main
+    # 前进的那一刻自杀。判据: 文件内容与自己当前 PID 逐字相同才算重入, 不做任何
+    # 猜测性放宽。
+    local my_pid
+    my_pid=$(deploy_lock_pid)
+    if [ -f "$lock_file" ] && [ "$(cat "$lock_file" 2>/dev/null)" = "$my_pid" ]; then
+        log "DEBUG" "已持有锁 (自我重入, PID $my_pid): $lock_file"
+        ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
+        return 0
+    fi
 
     # Stale-PID precheck (covers both branches below).
     # SIGKILL / Ctrl-C race / harness termination skips the EXIT trap;
     # flock fd auto-release is also brittle on Git Bash for Windows.
     # If the file contains a dead PID, treat as stale and remove.
     if [ -f "$lock_file" ]; then
-        local stale_pid
+        local stale_pid stale_mtime
         stale_pid=$(cat "$lock_file" 2>/dev/null)
         if [ -n "$stale_pid" ] && ! deploy_pid_alive "$stale_pid"; then
-            log "WARN" "发现残留 lock 文件 (PID $stale_pid 已不存在), 自动清理后继续."
+            stale_mtime=$(stat -c '%y' "$lock_file" 2>/dev/null || echo unknown)
+            log "WARN" "stale lock from PID $stale_pid (dead), mtime $stale_mtime — reclaiming ($lock_file)"
             rm -f "$lock_file"
         fi
     fi
@@ -368,7 +424,10 @@ acquire_deploy_lock() {
         # flock 模式 (POSIX advisory lock, Linux/Mac/Git Bash)
         exec 200>"$lock_file"
         if ! flock -n 200; then
-            log "ERROR" "另一个 deploy 进程持有锁 ($lock_file). 等它完成后重试."
+            local holder_pid holder_cmdline
+            holder_pid=$(cat "$lock_file" 2>/dev/null)
+            holder_cmdline=$(deploy_pid_cmdline "$holder_pid")
+            log "ERROR" "另一个 deploy 进程持有锁 ($lock_file), PID $holder_pid, cmdline: $holder_cmdline. 等它完成后重试."
             log "ERROR" "  或 rm $lock_file 如果确认无其他进程."
             # 尝试显示持有者
             if command -v lsof >/dev/null 2>&1; then
@@ -380,22 +439,34 @@ acquire_deploy_lock() {
         deploy_lock_pid >&200
         # fd 200 保持打开, 进程退出时 flock 自动释放
         log "DEBUG" "获取 flock: $lock_file (PID $$)"
+        ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
     else
         # PID 文件模式 (fallback)
         if [ -f "$lock_file" ]; then
-            local old_pid
+            local old_pid old_cmdline old_mtime
             old_pid=$(cat "$lock_file" 2>/dev/null)
             if [ -n "$old_pid" ] && deploy_pid_alive "$old_pid"; then
-                log "ERROR" "另一个 deploy 进程正在跑 (PID $old_pid, $lock_file). 退出."
+                old_cmdline=$(deploy_pid_cmdline "$old_pid")
+                log "ERROR" "另一个 deploy 进程正在跑 (PID $old_pid, cmdline: $old_cmdline, $lock_file). 退出."
                 return 1
             fi
-            log "WARN" "发现残留 lock 文件 (PID $old_pid 已不存在), 清理后继续."
+            old_mtime=$(stat -c '%y' "$lock_file" 2>/dev/null || echo unknown)
+            log "WARN" "stale lock from PID $old_pid (dead), mtime $old_mtime — reclaiming ($lock_file)"
             rm -f "$lock_file"
         fi
         deploy_lock_pid > "$lock_file"
-        # trap 在 exit 时清理 (调用方 script 的 EXIT trap 会保留我们的)
+        # 🔴 这条 trap 只在【调用方之后再也不设自己的 EXIT trap】时才会生效 —— bash
+        # 的 trap 不叠加, 后设的会【整个替换】先设的, 不是"追加"。deploy-backend.sh
+        # 的 R43 fix 就是因为这个坑踩出来的("trap cleanup 会覆盖 acquire_deploy_lock
+        # 注册的 lock cleanup trap, 导致 stale lock leak, 反复出现'另一 deploy 进程在
+        # 跑'")。release-cretas.sh / deploy-web-admin.sh 都会在这之后设自己的
+        # `trap on_exit EXIT`, 这条 trap 届时【不会执行】——
+        # 调用方必须在自己的 EXIT handler 里用 $ACQUIRED_DEPLOY_LOCK_FILE 显式兜底清理,
+        # 不能假设这里注册的 trap 还活着。这里仍然注册它, 是为了覆盖"调用方之后不再
+        # 设 trap"的场景(例如本文件自己的单测), 而不是承诺它总会跑。
         trap 'rm -f "'"$lock_file"'" 2>/dev/null; true' EXIT
         log "DEBUG" "获取 PID 锁: $lock_file (PID $$)"
+        ACQUIRED_DEPLOY_LOCK_FILE="$lock_file"
     fi
 
     return 0
