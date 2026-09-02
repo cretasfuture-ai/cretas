@@ -1238,6 +1238,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 return BigDecimal.ZERO;
             }
             SeasoningCost sc = RecipeCostCalculator.compute(lines, injectionAmountKg, null);
+            warnUnpricedSeasoning(sc, warnings);
             return sc.getTotal();
         }
         if (lines.isEmpty()) {
@@ -1245,7 +1246,20 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         }
         // 熟制只读每条调料 binding 的锅序比例；不存在 process/header fallback。
         SeasoningCost sc = RecipeCostCalculator.computeBindingPotRules(lines, potRawKgs);
+        warnUnpricedSeasoning(sc, warnings);
         return sc.getTotal();
+    }
+
+    /**
+     * 调料工作区 2026-09-02 起允许绑定没有成本价的物料; 算法把它们按 0 计入并登记名字,
+     * 这里必须把「按 0 计了」说出来 —— 与本文件其它「暂记 0 + warning」同一口径, ⛔ 不静默。
+     */
+    private static void warnUnpricedSeasoning(SeasoningCost sc, List<String> warnings) {
+        if (sc == null || sc.getUnpricedNames() == null || sc.getUnpricedNames().isEmpty()) {
+            return;
+        }
+        warnings.add("调料「" + String.join("、", sc.getUnpricedNames())
+                + "」缺少成本价，其调料成本暂记 0；请在「物料主数据」维护移动平均库存成本或未税采购参考价后重新核算。");
     }
 
     private BigDecimal computeSeasoningCost(String factoryId, String productTypeId,
@@ -1270,6 +1284,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 if (!bomSeasoning.isEmpty()) {
                     SeasoningCost sc = RecipeCostCalculator.compute(
                             bomSeasoning, injectionRawKg, potRawKgs);
+                    warnUnpricedSeasoning(sc, warnings);
                     return sc.getTotal();
                 }
                 warnings.add("产品 " + productTypeId + " 的当前 BOM 无调料明细，调料成本暂记 0；"

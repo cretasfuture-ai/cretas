@@ -278,8 +278,9 @@ class BomSeasoningWorkspaceServiceTest {
     }
 
     @Test
-    void createRejectsNullZeroOrNegativePricesBeforeClaimingRevision() {
-        for (BigDecimal movingAverage : List.of(BigDecimal.ZERO, new BigDecimal("-1"))) {
+    void createAcceptsMaterialWithoutPriceAndStoresNullPrices() {
+        // 2026-09-02 (owner 底层缺口 2): 无价不再拒绝绑定。此前这里断言 SEASONING_PRICE_REQUIRED —— 守的是历史。
+        for (BigDecimal movingAverage : java.util.Arrays.asList(null, BigDecimal.ZERO, new BigDecimal("-1"))) {
             reset(materialTypeRepository, seasoningItemRepository, recipeRepository,
                     bomWorkflowRevisionService, substituteService);
             BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 4L);
@@ -290,14 +291,48 @@ class BomSeasoningWorkspaceServiceTest {
             material.setUnitPrice(BigDecimal.ZERO);
             material.setTaxIncludedUnitPrice(BigDecimal.ZERO);
             when(materialTypeRepository.findById("salt")).thenReturn(Optional.of(material));
+            when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdAndMaterialTypeId(
+                    RECIPE, "node-p1", "salt")).thenReturn(Optional.empty());
+            when(seasoningItemRepository.findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc(RECIPE, "node-p1"))
+                    .thenReturn(List.of());
+            when(recipeRepository.claimSeasoningRevision(RECIPE, FACTORY, 4L)).thenReturn(1);
+            when(seasoningItemRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-            BusinessException exception = assertThrows(BusinessException.class,
-                    () -> service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1")));
+            service.createBinding(FACTORY, RECIPE, "p1", createRequest(4L, "node-p1"));
 
-            assertEquals("SEASONING_PRICE_REQUIRED", exception.getErrorCode());
-            verify(recipeRepository, never()).claimSeasoningRevision(anyString(), anyString(), anyLong());
-            verify(seasoningItemRepository, never()).save(any());
+            ArgumentCaptor<BomSeasoningItem> captor = ArgumentCaptor.forClass(BomSeasoningItem.class);
+            verify(seasoningItemRepository).save(captor.capture());
+            // ⛔ 不是 0: 「不知道单价」双 null, 下游按 incomplete / warning 走
+            assertNull(captor.getValue().getPriceSource1());
+            assertNull(captor.getValue().getPriceSource2());
+            verify(recipeRepository).claimSeasoningRevision(RECIPE, FACTORY, 4L);
         }
+    }
+
+    @Test
+    void workspaceFlagsBindingWhoseMaterialHasNoPriceAsMissingPriceAnomaly() {
+        BomRecipe recipe = recipe(BomRecipe.Status.DRAFT, 3L);
+        when(recipeRepository.findById(RECIPE)).thenReturn(Optional.of(recipe));
+        pin(recipe, "p1");
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY), anyList()))
+                .thenReturn(List.of(workProcess("p1", "滚揉")));
+        BomSeasoningItem unpriced = binding(1L, "node-p1", "p1", "salt", "5.0000");
+        unpriced.setPriceSource1(null);   // 无价绑定: 快照双 null (不是 0)
+        unpriced.setPriceSource2(null);
+        when(seasoningItemRepository.findByRecipeIdOrderBySeqAsc(RECIPE)).thenReturn(List.of(unpriced));
+        RawMaterialType salt = material("salt");
+        salt.setMovingAvgPrice(null);
+        salt.setUnitPrice(null);
+        salt.setTaxIncludedUnitPrice(null);
+        when(materialTypeRepository.findAllById(any())).thenReturn(List.of(salt));
+
+        BomSeasoningWorkspaceResponse response = service.getWorkspace(FACTORY, RECIPE);
+
+        // 无价绑定进得来, 但工作区必须把它标出来 (前端据此显示「缺价」)
+        assertEquals(1, response.getMaterialSummaries().size());
+        assertNull(response.getMaterialSummaries().get(0).getPriceSnapshot());
+        assertEquals(true, response.getAnomalies().stream()
+                .anyMatch(a -> String.valueOf(a).contains("MISSING_PRICE")));
     }
 
     @Test

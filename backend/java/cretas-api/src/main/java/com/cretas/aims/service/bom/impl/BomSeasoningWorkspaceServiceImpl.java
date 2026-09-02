@@ -660,10 +660,15 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
                     .withHint("物料大类需为「辅料」(调料 / 调味料 / 添加剂 等小类都归辅料)")
                     .withHintTarget("materialTypeId");
         }
-        resolvePrice(material);
+        // 2026-09-02: 不再要求物料先有成本价才能绑定 (owner 底层缺口 2)。无价的绑定 priceSource 双 null,
+        //   工作区以 MISSING_PRICE 异常显示, BOM 成本 CostValue.incomplete, 报工调料成本暂记 0 并显式 warning。
         return material;
     }
 
+    /**
+     * 物料当前的价格快照。两个价都没有 ⇒ 双 null (⛔ 不是 0, 也不再拒绝绑定):
+     * 「不知道单价」和「单价为 0」对下游是两件事, 下游按 null 走 incomplete / warning。
+     */
     private PriceSnapshot resolvePrice(RawMaterialType material) {
         if (positive(material.getMovingAvgPrice())) {
             return new PriceSnapshot(material.getMovingAvgPrice(), null);
@@ -671,9 +676,7 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
         if (positive(material.getUnitPrice())) {
             return new PriceSnapshot(null, material.getUnitPrice());
         }
-        throw new BusinessException(400, "调料物料缺少有效成本价格: " + material.getName())
-                .withCode("SEASONING_PRICE_REQUIRED")
-                .withHint("请维护正数移动平均库存成本或未税采购参考价");
+        return new PriceSnapshot(null, null);
     }
 
     private boolean positive(BigDecimal value) {

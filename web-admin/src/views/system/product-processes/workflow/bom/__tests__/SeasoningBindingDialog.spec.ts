@@ -261,7 +261,8 @@ describe('SeasoningBindingDialog', () => {
     expect(createBinding).toHaveBeenCalled();
   });
 
-  it('keeps the form open and offers a price shortcut when both prices are missing', async () => {
+  // 2026-09-02: 无价不再拦保存 (后端同步放开); 弹窗只提示「报工时暂记 0」, 快捷入口保留。此前这里守的是「拦住」—— 那是历史。
+  it('saves with a warning and still offers a price shortcut when both prices are missing', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     const wrapper = mountDialog(null, [{
       id: 'M1',
@@ -273,16 +274,16 @@ describe('SeasoningBindingDialog', () => {
     await fillRequiredFields(wrapper, 5);
 
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
-    await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
-    expect(createBinding).not.toHaveBeenCalled();
-    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
-
+    expect(wrapper.text()).toContain('报工核算时其成本暂记 0');
     await wrapper.get('[data-testid="configure-seasoning-price"]').trigger('click');
     expect(open).toHaveBeenCalledWith('/warehouse/material-types?keyword=辣椒粉', '_blank', 'noopener');
     open.mockRestore();
+    await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
+    await flushPromises();
+    expect(createBinding).toHaveBeenCalledWith('F006', 'R1', 'ROLL', expect.objectContaining({ materialTypeId: 'M1' }));
   });
 
-  it.each([0, -1])('rejects a non-positive price value of %s', async (invalidPrice) => {
+  it.each([0, -1])('treats a non-positive price value of %s as missing but still saves', async (invalidPrice) => {
     const wrapper = mountDialog(invalidPrice, [{
       id: 'M1',
       name: '辣椒粉',
@@ -294,7 +295,7 @@ describe('SeasoningBindingDialog', () => {
     expect(wrapper.get('[data-testid="configure-seasoning-price"]').exists()).toBe(true);
     await wrapper.findAll('button').find((button) => button.text().includes('保存到本工序'))?.trigger('click');
     await flushPromises();
-    expect(createBinding).not.toHaveBeenCalled();
+    expect(createBinding).toHaveBeenCalled();
   });
 
   it('normalizes 公斤 from the pinned Workflow contract to the 1 kg display basis', async () => {

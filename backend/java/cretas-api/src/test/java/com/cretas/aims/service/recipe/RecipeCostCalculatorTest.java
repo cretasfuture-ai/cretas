@@ -26,6 +26,22 @@ class RecipeCostCalculatorTest {
 
     // 注射/kg = Σ INJECTION: dosage_g/1000 × max(p1,p2)
     @Test
+    void unpricedIngredientsAreCountedAsZeroButNamed() {
+        // 2026-09-02: 工作区允许无价绑定 ⇒ 算法按 0 计, 但必须把名字交出去让报工发 warning
+        BomSeasoningItem salt = ing("INJECTION", "盐", "1000", null, null, true);
+        BomSeasoningItem sugar = ing("COOKING", "糖", "1000", "2", null, true);
+        SeasoningCost c = RecipeCostCalculator.compute(java.util.List.of(salt, sugar),
+                new BigDecimal("10"), java.util.List.of(new BigDecimal("100")));
+        assertEquals(java.util.List.of("盐"), c.getUnpricedNames());
+        assertEquals(new BigDecimal("0.0000"), c.getInjectionTotal());
+        assertEquals(new BigDecimal("200.0000"), c.getCookingTotal());
+        // 阴性对照: 全部有价 ⇒ 清单为空
+        SeasoningCost priced = RecipeCostCalculator.computeBindingPotRules(
+                java.util.List.of(sugar), java.util.List.of(new BigDecimal("100")));
+        assertEquals(java.util.List.of(), priced.getUnpricedNames());
+    }
+
+    @Test
     @DisplayName("注射/kg 取两源最高")
     void injectionPerKg_takesMaxPrice() {
         // 料A: 1000g/kg × max(2, 5)=5 → 5.0 ; 料B: 500g/kg × (p2 null→p1=4) → 2.0
