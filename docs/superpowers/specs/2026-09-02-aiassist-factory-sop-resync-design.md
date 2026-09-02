@@ -120,7 +120,7 @@ PR 粗分组（113 个，一 PR 可入两组）：
 
 ### 4.7 同步线陈旧告警 `.github/workflows/sop-corpus-staleness.yml`
 
-- 每天 10:00 CST（02:00 UTC，即自动同步应完成之后）跑一次，也可手动触发。
+- 每天 10:17 CST（02:17 UTC，避开整点；自动同步约 09:10 CST 应已完成）跑一次，也可手动触发。
 - 取 `git log -1 --format=%cI -- backend/python/food_kb/data/f006_production_sop.md` 为语料时间；用 `gh pr list --state merged --search "merged:>=<语料时间>"` 数碰 `backend/java|web-admin|frontend` 的 PR。
 - 语料时间距今 > 26 小时 **且** 碰代码 PR ≥ 1 → 开或更新一个固定标题的 issue「SOP 语料陈旧」，正文列 PR 号；否则关闭该 issue。
 - 三态退出：0 新鲜 / 1 陈旧 / 2 没量到（`gh` 失败、语料文件不存在），2 也开 issue 但措辞不同。

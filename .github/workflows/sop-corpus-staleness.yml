@@ -1,6 +1,6 @@
 name: SOP corpus staleness gate
 
-# 每天 10:00 CST（02:00 UTC，即 Codex 每日 SOP 自动同步应已完成之后）检查
+# 每天 10:17 CST（02:17 UTC，避开整点；Codex 每日 SOP 自动同步约 09:10 CST 应已完成）检查
 # backend/python/food_kb/data/f006_production_sop.md 的最后同步时间，
 # 与之后合入 main 的碰代码 PR 数。陈旧就开/更新固定标题的 issue，新鲜就关掉它。
 #
@@ -14,7 +14,7 @@ name: SOP corpus staleness gate
 
 on:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
       pretend_corpus_time:
