@@ -118,7 +118,8 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
         Supplier supplier = supplierRepository
                 .findByIdAndFactoryId(request.getSupplierId(), factoryId)
                 .orElseThrow(() -> new BusinessException(409, "应付供应商不存在或不属于当前工厂")
-                        .withCode("AP_SUPPLIER_IDENTITY_MISMATCH"));
+                        .withCode("AP_SUPPLIER_IDENTITY_MISMATCH")
+                        .withHint("请重新选择当前工厂下有效的供应商"));
         BigDecimal supplierBalance = supplier.getCurrentBalance();
         if (supplierBalance == null || supplierBalance.compareTo(amount) < 0) {
             throw new BusinessException(409, "供应商应付总账与开放应付不一致，禁止继续付款")
@@ -271,7 +272,8 @@ public class PayableSettlementServiceImpl implements PayableSettlementService {
                 || payable.getCounterpartyType() != CounterpartyType.SUPPLIER
                 || !supplierId.equals(payable.getCounterpartyId())) {
             throw new BusinessException(409, "付款供应商与应付记录不一致")
-                    .withCode("AP_SUPPLIER_IDENTITY_MISMATCH");
+                    .withCode("AP_SUPPLIER_IDENTITY_MISMATCH")
+                    .withHint("请核对该应付记录对应的供应商，选择正确的供应商后重试");
         }
         if (payable.getCurrencyCode() == null || !currency.equalsIgnoreCase(payable.getCurrencyCode())) {
             throw new BusinessException(409, "付款币种与应付币种不一致")

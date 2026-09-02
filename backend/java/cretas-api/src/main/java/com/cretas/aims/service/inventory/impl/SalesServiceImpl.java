@@ -1332,7 +1332,8 @@ public class SalesServiceImpl implements SalesService {
             return rejectFinanceForOrder(factoryId, order, notes, actorId);
         }
         throw new BusinessException(409, "销售订单 OA 审批实例状态无法回写: " + updated.getStatus())
-                .withCode("SALES_APPROVAL_STATE_UNSUPPORTED");
+                .withCode("SALES_APPROVAL_STATE_UNSUPPORTED")
+                .withHint("请刷新销售订单状态后重试；如持续出现，请在原审批发起处重新提交审批");
     }
 
     @Override
@@ -2882,14 +2883,18 @@ public class SalesServiceImpl implements SalesService {
             String factoryId, String parentDeliveryId, CreateDeliveryShipmentRequest request, Long userId) {
         SalesDeliveryRecord parentSnapshot = getDeliveryRecordById(factoryId, parentDeliveryId);
         if (parentSnapshot.getSalesOrderId() == null) {
-            throw new BusinessException(409, "母发货单缺少销售订单关联");
+            throw new BusinessException(409, "母发货单缺少销售订单关联")
+                    .withCode("DELIVERY_SALES_ORDER_REQUIRED_FOR_SHIPMENT")
+                    .withHint("该母发货单未关联销售订单，无法创建分批发运；"
+                            + "请先在发货单中关联对应的销售订单，或改用整单发货流程");
         }
         salesOrderRepository.findByIdAndFactoryIdForUpdate(parentSnapshot.getSalesOrderId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在或不属于当前组织"));
         SalesDeliveryRecord parent = lockDeliveryForMutation(factoryId, parentDeliveryId);
         if (!"MASTER".equals(parent.getRecordRole()) || parent.getParentDeliveryId() != null) {
             throw new BusinessException(409, "只能在母发货单下创建分批发运")
-                    .withCode("DELIVERY_MASTER_REQUIRED");
+                    .withCode("DELIVERY_MASTER_REQUIRED")
+                    .withHint("请选择一个母发货单（而非分批发运）来创建子发运单");
         }
         List<SalesDeliveryRecord> children = getDeliveryShipments(factoryId, parentDeliveryId);
         if (request.getIdempotencyKey() != null && !request.getIdempotencyKey().isBlank()) {
@@ -3099,7 +3104,9 @@ public class SalesServiceImpl implements SalesService {
         }
         if (child.getStatus() == SalesDeliveryStatus.CANCELLED) return child;
         if (child.getStatus() == SalesDeliveryStatus.SHIPPED || child.getStatus() == SalesDeliveryStatus.DELIVERED) {
-            throw new BusinessException(409, "已确认发货的子发运单不能直接取消");
+            throw new BusinessException(409, "已确认发货的子发运单不能直接取消")
+                    .withCode("DELIVERY_SHIPMENT_ALREADY_SHIPPED")
+                    .withHint("该子发运单已确认发货，无法直接取消；如需撤销请走销售退货流程，对已发货数量做退货处理");
         }
         if (batchAllocationService != null) {
             child.getItems().forEach(item -> batchAllocationService.clearAllocations(factoryId, String.valueOf(item.getId())));
@@ -3755,7 +3762,9 @@ public class SalesServiceImpl implements SalesService {
         }
         SalesOrder salesOrder = salesOrderRepository.findById(record.getSalesOrderId())
                 .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
-                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND"));
+                        .withCode("DELIVERY_SALES_ORDER_NOT_FOUND")
+                        .withHint("该发货单关联的销售订单可能已被作废或删除，请核对订单状态；"
+                                + "如订单确已作废，请改为公司库存发货或重新关联有效订单"));
         if (!factoryId.equals(salesOrder.getFactoryId())) {
             throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
                     .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
@@ -4349,7 +4358,9 @@ public class SalesServiceImpl implements SalesService {
                 ? null
                 : salesOrderRepository.findById(salesOrderId)
                         .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
-                                .withCode("DELIVERY_SALES_ORDER_NOT_FOUND"));
+                                .withCode("DELIVERY_SALES_ORDER_NOT_FOUND")
+                                .withHint("该发货单关联的销售订单可能已被作废或删除，请核对订单状态；"
+                                        + "如订单确已作废，请改为公司库存发货或重新关联有效订单"));
         if (salesOrder != null && !factoryId.equals(salesOrder.getFactoryId())) {
             throw new BusinessException(403, "发货单关联的销售订单不属于当前工厂")
                     .withCode("DELIVERY_SALES_ORDER_CROSS_FACTORY");
