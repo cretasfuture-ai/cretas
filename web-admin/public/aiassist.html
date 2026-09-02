@@ -1064,10 +1064,6 @@
         <h1 id="assistant-title">工厂操作助手</h1>
         <p><span class="status-dot" aria-hidden="true"></span><span id="assistant-subtitle">解释 SOP 与系统逻辑，不执行业务操作</span></p>
       </div>
-      <div class="tab-switch" id="tab-switch" role="tablist" aria-label="助手类型">
-        <button type="button" data-tab="factory" role="tab" aria-pressed="true">工厂</button>
-        <button type="button" data-tab="restaurant" role="tab" aria-pressed="false">餐饮</button>
-      </div>
       <nav class="top-actions" aria-label="对话操作">
         <a class="manual-link" id="manual-link" href="/lsmsop/" target="_blank" rel="noopener" aria-label="打开生产全链路 SOP">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22.5z"/><path d="M4 4.5v18M8 6h8M8 10h8"/></svg>
@@ -1174,76 +1170,9 @@
               <p class="welcome-note">也可以上传当前页面截图。助手会读取截图文字后结合操作手册回答，不会替你提交或修改业务数据。</p>
             </div>
 
-            <div id="welcome-restaurant" class="hidden">
-              <div class="welcome-eyebrow"><span class="status-dot" aria-hidden="true"></span>餐饮全链路导览</div>
-              <h2>想了解哪一块？</h2>
-              <p class="welcome-lead">问我板块去哪找、图表什么意思、系统支持哪些维度分析、餐饮老板在意什么。我只做导览和解释——具体数据分析请去 SmartBI 餐饮 AI。</p>
-
-              <div class="suggestions" aria-label="推荐问题">
-                <button class="suggestion" type="button" data-question="我们的系统支持哪些维度的餐饮分析？想看某一类内容应该去哪个板块？"><span class="suggestion-index">01</span><span>我们支持哪些维度分析？</span></button>
-                <button class="suggestion" type="button" data-question="餐饮老板最看重哪些指标？为什么这些指标重要？"><span class="suggestion-index">02</span><span>餐饮老板最看重什么指标？</span></button>
-                <button class="suggestion" type="button" data-question="大众点评的数据我们是怎么用的？点评分析能得出什么结论？"><span class="suggestion-index">03</span><span>大众点评的数据我们怎么用？</span></button>
-                <button class="suggestion" type="button" data-question="菜品四象限图怎么读？四个象限分别代表什么，应该采取什么动作？"><span class="suggestion-index">04</span><span>菜品 4 象限图怎么读？</span></button>
-                <button class="suggestion" type="button" data-question="看 2026年7月1日到7月15日全部門店营收并要求表格时，系统怎样理解日期、门店范围和输出形态？"><span class="suggestion-index">05</span><span>指定区间、全部門店与输出形态</span></button>
-                <button class="suggestion" type="button" data-question="餐饮月度经营报告怎样预览并导出 XLSX 或 PDF？数据截至时间和失败规则是什么？"><span class="suggestion-index">06</span><span>月报预览、导出与截至时间</span></button>
-                <button class="suggestion" type="button" data-question="AI 飞轮运营台谁能使用？候选晋升和菜品别名为什么都必须人工审核？"><span class="suggestion-index">07</span><span>AI 飞轮与菜品别名怎么治理？</span></button>
-                <button class="suggestion" type="button" data-question="餐饮计划预警怎样复用 QuerySpec？客如云平台同步、Gold 刷新和模拟数据的边界是什么？"><span class="suggestion-index">08</span><span>计划预警与平台同步边界</span></button>
-                <button class="suggestion" type="button" data-question="问损耗金额、领料花费或堂食外卖时，系统如何选正确指标并避免把业务名词误认成菜名？"><span class="suggestion-index">09</span><span>指标口径与菜单目录裁决</span></button>
-          <button class="suggestion" type="button" data-question="首轮没写门店时默认全部门店何时生效？当前还有哪些已知限制？"><span class="suggestion-index">10</span><span>默认全店与当前限制</span></button>
-                <button class="suggestion" type="button" data-question="餐饮运营、市场、财务、人事、采购五个部门怎样分工，厨师长角色还在吗？"><span class="suggestion-index">11</span><span>五部门与角色权限边界</span></button>
-<button class="suggestion" type="button" data-question="盘点亏了多少为什么优先按金额回答，怎样切换本月、上月、最近7天或最近30天？"><span class="suggestion-index">12</span><span>盘点金额与时间范围切换</span></button>
-<button class="suggestion" type="button" data-question="餐饮预测排班会根据什么数据，支持哪些时间范围和门店范围，一键调整怎样安全确认？"><span class="suggestion-index">13</span><span>预测排班的范围与调整边界</span></button>
-<button class="suggestion" type="button" data-question="餐饮 AI 实时经营指挥屏展示哪些事实，传输状态、模拟来源和大模型解释的边界是什么？"><span class="suggestion-index">14</span><span>实时经营指挥屏与来源边界</span></button>
-<button class="suggestion" type="button" data-question="今日营运台的主动发现、谜题菜、损耗提示、几点最忙和行动建议分别怎么理解？"><span class="suggestion-index">15</span><span>主动发现与接地行动建议</span></button>
-	<button class="suggestion" type="button" data-question="AI 工作台和营销员提成分别从哪里进入，菜单、路由与权限有哪些边界？"><span class="suggestion-index">16</span><span>AI 工作台与营销员提成入口</span></button>
-	<button class="suggestion" type="button" data-question="餐饮问答的指标、维度和聚合怎样由登记表驱动？通用执行器为什么不能执行任意 SQL，也不接管诊断优化？"><span class="suggestion-index">17</span><span>登记表与通用问答边界</span></button>
-	<button class="suggestion" type="button" data-question="营收预测现在用什么历史模型？经营断点怎样用本店回测选择，为什么误差不能固定写成 ±15-20%？"><span class="suggestion-index">18</span><span>营收预测与历史回测误差</span></button>
-	<button class="suggestion" type="button" data-question="排行和构成类答案怎样显示标准 Markdown 表格，门店简称唯一或多家匹配时分别怎样确认？"><span class="suggestion-index">19</span><span>标准表格与门店匹配确认</span></button>
-	<button class="suggestion" type="button" data-question="“这个菜要不要下架”为什么保持只读分析，真正下架与读写歧义时分别怎样处理？"><span class="suggestion-index">20</span><span>征询分析与写操作安全门</span></button>
-	<button class="suggestion" type="button" data-question="只缺时间时为什么默认最近30天？数字怎样标实测或估算，缺数据时怎样告诉我补什么能算什么？"><span class="suggestion-index">21</span><span>默认时间、数字出处与补数提示</span></button>
-		<button class="suggestion" type="button" data-question="打烊后问“今天怎么样”为什么显示菜品、营收、成本、毛利表？缺成本卡和成本高于营收的菜应该怎样处理？"><span class="suggestion-index">22</span><span>日结菜品表与异常成本动作</span></button>
-	<button class="suggestion" type="button" data-question="毛利回答为什么既展示实收，又只计算有可用成本卡的菜品？覆盖率、单菜折扣、异常成本卡和补卡后的估算边界分别怎么读？"><span class="suggestion-index">23</span><span>毛利实收、覆盖率与估算边界</span></button>
-		<button class="suggestion" type="button" data-question="数据补到 6 类里的几类、成本卡覆盖率、缺卡菜入口和补卡后从 X% 到 Y% 分别是什么意思？追问按钮什么时候不该显示？"><span class="suggestion-index">24</span><span>数据进度、缺卡入口与补卡反馈</span></button>
-		<button class="suggestion" type="button" data-question="本季度和上个季度怎样按自然季度计算？为什么追问按钮必须携带当前时间窗，“别用表格”也必须真的只返回文字？"><span class="suggestion-index">25</span><span>季度、追问时间窗与输出否定</span></button>
-		<button class="suggestion" type="button" data-question="门店营收变化怎样拆成订单量、客单价和交叉项？单日、月初至今、季度与半年分别用什么不重叠基线？"><span class="suggestion-index">26</span><span>营收归因与不重叠基线</span></button>
-		<button class="suggestion" type="button" data-question="手机追问为什么显示短标签却发送完整问题？今天到现在、到今天为止和上半年分别是什么时间窗？"><span class="suggestion-index">27</span><span>完整追问与精确时间窗</span></button>
-		<button class="suggestion" type="button" data-question="当前查询不支持我要求的维度时，为什么不能降级成另一个汇总层，应该怎样改成可回答的问题？"><span class="suggestion-index">28</span><span>维度缺口与可回答改问</span></button>
-		<button class="suggestion" type="button" data-question="渠道、损耗、领料、盘点和时段怎样按门店拆？覆盖不全怎样声明，门店×时段表按什么口径排序？"><span class="suggestion-index">29</span><span>门店拆分、覆盖与排序</span></button>
-		<button class="suggestion" type="button" data-question="餐饮问题只有一部分能算时，为什么要先给能确定的结果，再说明另一部分缺什么，而不是整题拒答？"><span class="suggestion-index">30</span><span>部分可算、缺口说明与最近替代</span></button>
-		<button class="suggestion" type="button" data-question="门店简称、未知门店和菜单外菜名怎样核对？未来时间窗为什么要明确说尚未发生，不能伪装成系统繁忙？"><span class="suggestion-index">31</span><span>门店菜品核对与未来窗口</span></button>
-		<button class="suggestion" type="button" data-question="没有金额权限、成本卡覆盖不足或指标不支持时，餐饮 AI 应该怎样保留可见事实并明确不能算的部分？"><span class="suggestion-index">32</span><span>权限、覆盖与明确拒答边界</span></button>
-		<button class="suggestion" type="button" data-question="餐饮角色登录后从哪里进入各自模块？真正下架菜品时如果还有在飞销售订单，系统为什么必须列出订单并拒绝下架？"><span class="suggestion-index">33</span><span>餐饮导航与菜品下架履约门禁</span></button>
-		<button class="suggestion" type="button" data-question="餐饮高峰时段为什么属于 Gold 只读咨询，可以直接查询但不能修改排班、订单或门店数据？"><span class="suggestion-index">33</span><span>高峰时段只读查询边界</span></button>
-		<button class="suggestion" type="button" data-question="SmartBI 接口没上线、没有数据或只返回部分财务比率时，页面为什么不能拿演示数字补齐？"><span class="suggestion-index">34</span><span>SmartBI 未上线与缺数诚实空态</span></button>
-		<button class="suggestion" type="button" data-question="餐饮老板和经理分别怎样读取或修改业务阈值？继承全局默认与闸门短缓存应该怎样理解？"><span class="suggestion-index">35</span><span>餐饮阈值权限、继承与时效</span></button>
-              </div>
-
-              <button class="learn-launch" id="learn-launch" type="button">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                <span>
-                  <strong>学习：餐饮分析入门</strong>
-                  <em>7 节小课 · 约 12 分钟 · 从「老板在意什么」讲到「能力怎么治理」</em>
-                </span>
-              </button>
-              <p class="welcome-note">学习模式为预编排内容，可离线浏览；每课末尾可选择深入提问。</p>
-            </div>
           </div>
         </section>
 
-        <section class="learn hidden" id="learn" aria-label="餐饮分析入门课程">
-          <div class="learn-card">
-            <div class="learn-top">
-              <span class="learn-kicker" id="learn-kicker">第 1 课 / 7</span>
-              <div class="learn-dots" id="learn-dots" aria-hidden="true"></div>
-              <button class="learn-exit" id="learn-exit" type="button">退出学习</button>
-            </div>
-            <div id="lesson-view"></div>
-            <div class="learn-nav">
-              <button type="button" id="learn-prev">上一课</button>
-              <button type="button" id="learn-next" class="primary">下一课</button>
-            </div>
-          </div>
-        </section>
         <div class="message-list hidden" id="message-list" aria-live="polite" aria-relevant="additions"></div>
       </div>
     </section>
@@ -1290,14 +1219,6 @@
           manualAria: '打开生产全链路 SOP',
           placeholder: '描述页面、字段或当前状态…',
           storageKey: 'cretas_factory_ai_session_v2'
-        },
-        restaurant: {
-          title: '餐饮导览助手',
-          subtitle: '解释板块、图表与分析方法，不做计算',
-          manualHref: '/cysop/',
-          manualAria: '打开餐饮全链路 SOP',
-          placeholder: '问板块、图表或分析方法…',
-          storageKey: 'cretas_restaurant_ai_session_v1'
         }
       };
 
@@ -1330,129 +1251,6 @@
       };
 
       /* 学习模式课程 — 预编排静态内容, 除「深入问一问」外零网络请求 */
-      var LESSONS = [
-        {
-          title: '为什么要有餐饮分析模块？',
-          body: '<p>先记住一个背景：<strong>AI 在餐饮的渗透是所有行业里最慢的一批</strong>。餐饮本身不够规范，一家店往往同时用四五套系统（收银 POS、财务、进销存、预定、内控），数据靠人工录入、口径互相打架。</p>' +
-            '<ul><li>老板的真实处境：营业额和毛利看着很高，但房租、人工、损耗、折旧层层吃掉，净利很难看；</li>' +
-            '<li>人工占比逼近 40% 是普遍危机，决策还停留在「月底开会复盘」，等发现问题已经过了一个月；</li>' +
-            '<li>所以我们的定位不是「给老板看报表」，而是：<strong>把数据做准 → 让问题次日可见 → 给出可执行的下一步</strong>。</li></ul>' +
-            '<p>AI 在这里的角色是「代理人」：暴露问题、定位责任，而不是炫技的全自动。</p>',
-          note: '内容人员要记住：客户买的不是图表，是「今天的损耗，明天就能看到」这句承诺。',
-          asks: [
-            { label: '系统里有哪些餐饮板块？', question: '我们的餐饮系统有哪些板块？每个板块给用户看什么？' },
-            { label: '数据从哪来？', question: '餐饮分析的数据是怎么进系统的？POS、财务、评价数据怎么上传？' }
-          ]
-        },
-        {
-          title: '老板视角的核心指标',
-          body: '<p>跟餐饮老板对话，围绕四条线展开：</p>' +
-            '<ul><li><strong>收入线</strong>：营业额、客单价、翻台率/上座率、宴席频率——正餐老板最先看的是「包厢满不满、翻台快不快」；</li>' +
-            '<li><strong>成本线</strong>：食材成本率（实财占比）、人力成本率（40% 是危机线）、隐性损耗（餐具、纸巾、打包盒这类「一号品」黑洞）；</li>' +
-'<li><strong>利润线</strong>：毛利率 → 净利率。正餐净利做到 4 个点就值得对赌——不要用互联网行业的利润率去想餐饮。注意口径：中餐<strong>单菜精确毛利算不出来</strong>（成本 BOM 卡拉不齐），可信的是一段时间的总毛利率（期初库存+采购−期末库存倒算）；单菜成本只汇总已登记食材，未登记辅料、调味料和损耗不猜算，登记不超过 3 项时提示覆盖不足，毛利仅是偏上限的理论参考；</li>' +
-            '<li><strong>现金流线</strong>：充卡/储值依赖度——储值是预收不是收入，依赖过高是隐性风险。</li></ul>',
-          note: '话术技巧：跟老板谈「同样 1 万营业额，昨天成本为什么涨了」，比谈「数据中台」有效一百倍。',
-          asks: [
-            { label: '翻台率去哪看？', question: '翻台率是什么？在系统哪个板块能看到相关分析？' },
-            { label: '什么是成本刚性？', question: '成本刚性（成本弹性指数）是什么意思？为什么说它是救命指标？' },
-            { label: '一号品是什么？', question: '餐饮里说的一号品损耗指什么？系统怎么管损耗？' }
-          ]
-        },
-        {
-          title: '我们支持的维度分析地图',
-          body: '<p>SmartBI 当前使用<strong>固定 21 维证据目录</strong>，不是笼统的「六大类」：</p>' +
-            '<ul><li><strong>经营与门店</strong>：1 营收与订单、2 同比环比、3 多门店比较、4 真实就餐人数、5 商场及门前物理客流；</li>' +
-            '<li><strong>菜品与渠道</strong>：6 菜品销售结构、7 菜品毛利、8 堂食/外卖/自提、9 午晚市与时段、10 优惠与营销活动；</li>' +
-            '<li><strong>口碑与供应链</strong>：11 评价与口碑、12 供应商与采购价格、13 库存风险、14 损耗与报损、15 盘点差异；</li>' +
-            '<li><strong>人效与外部环境</strong>：16 排班与人效、17 天气、18 节假日与调休、19 商场活动、20 周边演出与赛事、21 竞品与商圈。</li></ul>' +
-            '<p>每一维必须标注 <strong>REAL / PROXY / SIMULATED / MISSING</strong>：真实、代理、模拟或缺失。缺数据就说明缺失，演示值不能冒充客户事实，相关性也不能写成因果。</p>' +
-          '<p><strong>门店范围与连续追问：</strong>首轮新问题没写门店，且 planner 结构化判定唯一缺项是门店范围时，默认查询全部门店，并在答案显式披露「范围：全部门店合计」；拿到真实目录后才可披露门店数。「最近30天总营收是多少」「最近30天加权毛利率是多少」等问法已生效。「最近30天哪个时段生意最好」由历史时段表现 resolver 按 POS 时间戳和统一日段边界回答，缺时间戳记录如实披露；金额权限决定按营收或单量排序。「最近30天食材成本占营收多少」按全店比率处理；缺少同期间食材成本事实时明确不可计算，不用配方理论成本或 0 代替。「最近30天折扣力度多大」按折扣金额、折扣率与优惠构成描述，不作未经验证的因果归因。点名未知/停用门店、正在回答上一轮澄清、或仍缺时间等必需条件时继续追问，不能用默认全店绕过。门店、菜品和时间只在同一会话沿用，最新明确条件覆盖旧条件；先看全店再只说门店或片段时，系统保留原指标、菜品和时间，把新门店范围拼回原问题后再规划，不能把原问题丢成裸店名。清空对话会重置，跨页面筛选不会自动继承。</p>' +
-	            '<p><strong>范围切换与追问按钮：</strong>答案会在当前 resolver 确实支持门店维度、存在其它可选范围且能组成完整问句时，提供「看全部门店 / 只看某店」按钮；只有 resolver 真正接收明确时间窗时，才提供时间按钮。手机端最多显示 4 个可点击追问 chip：可用短标签，但实际发送的是保留原指标、门店和当前屏幕时间窗的完整问题，不能从更早历史轮次换窗；不支持的维度不显示误导动作。</p>' +
-	            '<p><strong>精确日期与输出：</strong>明确起止日期按自然日闭区间并标记「指定区间」；本季度/上个季度按自然季度，上半年/下半年按自然半年。「今天到现在」只查今天，「到今天为止」保留原起点累计到今天。实质数据缺口才同时披露请求窗口与实际窗口；普通 ETL 尾日/尾周延迟不制造告警。未识别但模型可解析的时间短语只进入人工审查语料，不会自动改运行时规则。用户明确要求文字、表格、图表或报告文件时优先，未明确时默认文字 + 表格；「别用表格/只用文字」必须真的移除表格。</p>' +
-            '<p><strong>标准表格与门店确认：</strong>排行、对比、构成和预警类真实结果统一使用 GFM Markdown 表格，保留表格前后空行，数字列右对齐，缺失值显示「—」而不是 0；没有金额权限时省略金额列。完整写出有效门店全名才直接使用；简称或片段唯一匹配时也先显示真实门店确认按钮，匹配多家时返回最多 3 个候选，点击完整店名后不重复确认。澄清只说业务对象和下一步，不向店长展示问题对象、分析范围、语义规划、查询计划或计划版本等内部概念。</p>' +
-            '<p><strong>读写安全门：</strong>「要不要 / 该不该 / 是否要 / 建议 / 如果 / 假如」属于征询或假设，即使句子出现下架、调整等写动词也保持只读分析。真正写操作必须明确对象与动作，并继续先预览、再精确确认；若写判定与只读意图矛盾，系统就地 fail closed，明确告诉用户怎样改成“看数据”或“改对象”，本次不执行操作也不猜答案。</p>' +
-            '<p><strong>菜品下架履约门禁：</strong>精确下架并确认后仍检查在飞销售订单；已提交、审批中、已批准或部分发货订单命中时返回 409，列出订单号并提示先发完或取消。草稿、已完成和已取消订单不阻止；安全闸不可用时拒绝下架，不能静默放行。</p>' +
-            '<p><strong>指标与实体裁决：</strong>问损耗金额时按食材损耗成本排序并同时展示数量，金额轴尚未生成时明确说不可排名，不用数量冒充；问采购/领料花费走领料成本，不误路由到菜品成本；问「盘点亏了多少」优先走盘点差异金额，数量只作分物料明细，不能把 kg 与 L 相加成总量。费用分类使用统一词表：食材类只认食材、原材料、食品、饮料、酒水、菜品，人工类只认人工、工资、薪、员工、劳务；其它泛词不静默猜分类。堂食/外卖兼容中文和 POS 的 order_type 码。菜名、门店名先与当前租户目录核对，后厨业务词和「哪个/多少」等疑问片段不能被当成菜名。</p>' +
-	            '<p><strong>毛利三层口径：</strong>财务第一口径是期间总毛利率，食材成本按「期初库存 + 本期采购 − 期末库存」倒算。SmartBI 成本卡运营汇总展示实收营收，但毛利额/率的分子、分母只使用有可用成本卡的菜品营收，并披露同口径覆盖率；毛利只扣食材成本，不是利润。回答先给毛利结论，并把覆盖率、理论用量、只扣食材成本、结构性估算原因和整单优惠无法确定性分摊紧贴数字说明；分组与汇总使用同一优惠口径。成本卡用理论用量，补卡只提高覆盖率，不能说「补上就从估变实」；异常卡会点名、暂时排除，修正后自动纳入。</p>' +
-	            '<p><strong>打烊日结菜品表：</strong>表格偏好生效时固定显示菜品、营收、成本、毛利；420 px 手机宽度下四列同时可见，默认不依赖横向滚动，覆盖说明移出菜名列。缺卡写「缺成本卡」而不是 0；下一步同时保留覆盖率，并用金额说明仍有多少营收无法计算毛利及补齐收益。成本高于营收的有卡菜最多点名 3 道，先核数量单位及整箱/整锅是否误记到单份，不能直接据此调价或下架。</p>' +
-	            '<p><strong>营收归因与维度缺口：</strong>门店营收变化按 ΔR = ΔQ×P0 + Q0×ΔP + ΔQ×ΔP 拆成订单量、客单价和交叉项；默认环比并按窗口形状选择点名且不重叠的基线，交叉项超过 30% 时不编造单一主因。没有有效基线就明确无法归因。当前 resolver 不支持用户要求的维度时，只说明能看/不能看哪一层并给完整可回答改问，不能删除维度后偷偷回答另一汇总，也不暴露内部字段。</p>' +
-	            '<p><strong>门店拆分、覆盖与排序：</strong>渠道构成、门店毛利、损耗、领料和盘点共享当前租户门店目录。问“哪家店”时才做门店排行；只有部分记录带门店身份时，首段就限定为已归属记录并披露覆盖范围，不能冒充全品牌结论。门店×时段结果按业务量最强的首位时段统一排序：有金额权限按该时段营收，无金额权限按该时段单量；首段点名与表格第一行一致，表格写明排序口径，不能改按各时段总计。损耗、领料、盘点和渠道各走自己的指标，换一种问法不能换租户、换门店名单或把已有数据说成“你没提供”。</p>' +
-            '<p><strong>数据进度与下一步：</strong>「你的数据补到 6 类里的 X 类了」按登记来源的有、部分、有但没接线、无四态判断，回答接到了哪里，不等于成本卡营收覆盖率。问「哪些菜没有成本卡」会按明确日期范围列出有销售但缺卡的菜，按覆盖影响排序并指向现有配方编辑页。答案按钮只提供当前 resolver 真能回答的缺卡补录或门店/时间下钻；无数据、权限遮蔽、服务不可用或仍需澄清时不显示。最近补卡只有让同期间覆盖率真实提高时才显示「从 X% 到 Y%」，没有提高不伪造进步，且结果仍是理论估算。</p>' +
-            '<p><strong>五部门驾驶舱：</strong>运营看损耗金额、领料成本、盘亏与趋势；市场看营收、订单、客流和渠道，并从「营销员提成」按营销员和月份查看复购阶梯提成；财务在配方成本覆盖足够时看毛利，否则显示「—」而不是 0；人事缺在岗人数和目标人效时只显示缺项空态；采购处理报货、供应商与采购协同，并只读领料和盘点依据。餐饮老板为全局读写角色；店长管运营并只读人事，市场经理、财务经理、人事管理员和餐饮采购分别管理自己的部门，厨师长系统角色已退役。菜单、路由、写操作和金额读取继续受中央角色/模块/金额权限闸控制。</p>' +
-            '<p><strong>餐饮角色导航：</strong>受支持餐饮角色登录后进入餐饮导航与各自授权模块；缺少页面参数或单屏异常显示可恢复错误，不能带走整棵导航。入口恢复不扩大权限，菜单、金额和写操作仍由中央权限闸裁决。</p>' +
-            '<p><strong>AI 工作台：</strong>左侧顶层「AI 工作台」进入 <code>/dashboard/ai-value</code> 查看 AI 价值汇总。当前菜单与路由均已接通；入口可达不代表权限放宽，页面数据和动作仍受中央权限闸控制。</p>' +
-            '<p><strong>营销员提成：</strong>餐饮运营 → 市场 → 营销员提成（<code>/restaurant/commission</code>）。按营销员与月份查看月度累计复购业绩、当前档位、计业绩到访和逐笔明细；金额无价权时显示「—」，待发放记录确认后才能标记。菜单和路由均归属市场部门。</p>' +
-          '<p><strong>数据可用与诚实表达：</strong>餐饮租户只要有 POS 流水或后厨事实任一类即可进入餐饮问答；缺少另一类数据时对应问题如实回答「无记录」。已登记缺口只在原本要走域外拒答时真查当前租户；确实没有记录时，客户文案点名「供应商报价」或「实收金额」等缺失业务事实和补录动作，数据库表/字段只进入工程侧元数据、不向店长展示。有数据或查表失败时不得硬说缺失。系统提出的预算、目标、试点天数或目标单量等具体数字必须标成建议值/假设并待确认，不能冒充当前事实。</p>' +
-            '<p><strong>餐饮月报：</strong>服务端可按现有查询计划预览，并导出 XLSX/PDF；当前固定 9 节，且每节显式使用全部门店范围。损耗、领料和盘点三节已经恢复，并必须按指定月份的明确时间窗取数；不能用近 30 天或全历史数据冒充某月数据。报告标注业务数据截至时间和生成时间；任一章节需要澄清、契约失败或没有可信数据时整份拒绝生成。只有当前页面真实接入生成动作并返回文件后，才能说报告已经生成。</p>' +
-            '<p><strong>计划预警：</strong>定时把租户配置的相对时间查询计划重编译为与问答相同的 sealed QuerySpec，再应用阈值；当前 P1 只支持销售汇总环比。无数据、覆盖不一致或执行失败都是“无法判定”，不能当正常或自动关闭既有告警。</p>' +
-'<p><strong>平台同步：</strong>当前已实现客如云风格服务端 connector，订单生产按 60 秒拉取，当天营收/渠道 Gold 每轮刷新，菜品月聚合默认 600 秒刷新。菜品、食材和配方主数据启动时先同步一次、默认每 6 小时刷新；整批校验和替换，失败保留上一版菜单且不影响订单增量同步。瞬时故障保留重试；达到卡死条件的永久坏单据进入死信隔离，让游标继续推进并保留人工复核线索。它不是门店自助填密钥的设置页；mock 平台只用于测试，未开通正式直连时仍走 SmartBI → Excel 上传。</p>' +
-'<p><strong>预测排班：</strong>支持明天、下周、下个月，按门店及午市/下午茶/晚市/夜宵展示。确定性预测 FactBook 读取当前预订、过去 7/30/365 天 POS 与客流趋势、岗位技能、工时和目标人效；历史实际人效只作证据，大模型只解释、不补数字。预订来源标注模拟或平台；看板只读，一键调整必须预览后按相同计划指纹精确确认，保留幂等回执与审计，过期计划拒绝提交。</p>' +
-	'<p><strong>登记表与通用问答：</strong>planner 词汇、允许的指标/维度/聚合和通用执行器共享同一登记表；只有登记且当前真实表结构存在的组合才执行，缺字段明确为缺失，不补 0、不执行任意 SQL。通用兜底只处理查询、排行和对比，诊断/优化仍交给专用能力。扩展闸说“已有”还要实际跑通；答案相关性裁判只决定是否学习或晋升，裁判不可用时关闭学习但本轮回答照常返回。</p>' +
-	'<p><strong>营收预测回测：</strong>当前按日净营收历史过滤异常值；历史不足 14 天时用均值兜底，足够时用线性趋势并在样本充分时叠加星期因子。经营断点通过本店滚动回测 MAPE 比较全历史与断点后历史；缺失日期不补 0，预测从最新业务数据日后开始。页面展示实际模型的历史回测误差和上下界，不固定写 ±15–20%，也不宣称已使用 Prophet、节假日、天气或竞品事实。</p>' +
-	'<p><strong>实时经营指挥屏：</strong>Dashboard 分别传输 Java 经营汇总和 Python 预测 FactBook，展示今日请领、待审批、当前预订、近 15 分钟客流事件、明日预测客数、建议/当前人数、正向缺口与置信度。等待、连接中、刷新中、实时、部分可用和失败必须如实显示；平台、内部与模拟来源分别标注，模拟数据不能冒充实单。大模型只在提问时读取事实并解释，不生成数字；排班页内 AI 也只用 FactBook 数字，历史实际人效仅作证据。</p>',
-          note: '导览助手只解释目录、证据等级和提问方法，不替用户计算或分析实际业务数据；真实分析进入 SmartBI 餐饮 AI。',
-          asks: [
-            { label: '16 项诊断都有什么？', question: '系统的餐饮诊断引擎都检查哪些指标？超标了会怎样？' },
-            { label: '范围怎么沿用？', question: '在 SmartBI 连续追问时，门店、菜品和时间范围如何沿用或重置？' },
-            { label: '预警和同步边界', question: '计划预警、平台同步和 Gold 刷新的当前边界是什么？' }
-          ]
-        },
-        {
-          title: '图表怎么读：每张图能得出什么结论',
-          body: '<ul><li><strong>菜品四象限（Kasavana-Smith）</strong>：横轴销量、纵轴毛利率，中位数分割。明星（高销高利）＝招牌保住；金牛（高销低利）＝走量引流；潜力（低销高利）＝推一把；瘦狗（低销低利）＝考虑下架；</li>' +
-            '<li><strong>瀑布图</strong>：营收一步步减到净利，看「利润被哪一层吃掉了」；</li>' +
-            '<li><strong>桑基图</strong>：资金/成本流向，适合讲「钱从哪来到哪去」；</li>' +
-            '<li><strong>RFM 散点</strong>：会员按最近消费/频次/金额分层——冠军客户维护、流失风险客户召回；</li>' +
-            '<li><strong>时段热力图</strong>：星期×小时的营收分布，找「中午淡季」这类改造空间；</li>' +
-            '<li><strong>雷达图</strong>：本店 vs 大众点评竞对的多维差距；</li>' +
-            '<li><strong>双轴图</strong>：量+率一起看（如评价量+平均星级），单看任何一条都会误判。</li></ul>',
-          note: '给客户讲图表的模板：这张图是什么 → 你的店落在哪 → 和基准差多少 → 建议做什么。永远讲到「建议做什么」才算讲完。',
-          asks: [
-            { label: '四象限的动作建议', question: '菜品四象限每个象限对应什么经营动作？' },
-            { label: '热力图能发现什么？', question: '时段营业热力图能发现什么经营机会？' }
-          ]
-        },
-        {
-          title: '解决方案怎么给：套路与三个「知道」',
-          body: '<p>标准链路永远是四步：<strong>分析现状 → 给市场同类对标 → 出具体方案 → 跟进落地</strong>。只给诊断不给处方，等于没说。</p>' +
-            '<p>关键认知：动作分两类——</p>' +
-            '<ul><li><strong>一次性动作</strong>：改头图、调套餐结构、改宣传语，做完一两次就稳定；</li>' +
-            '<li><strong>持续性动作</strong>：评价维护、点评互动、新菜单上线后的培训→验收→回馈，需要不同部门的人不断参与。方案里必须写清「谁、什么时候做、什么时候看结果」。</li></ul>' +
-            '<p>衡量方案好坏的三个「知道」：老板<strong>知道要干啥</strong>；每个执行的人<strong>知道自己要干啥</strong>；所有人<strong>知道结果</strong>。三个都满足才是闭环，我们不做一锤子买卖。</p>',
-          note: '业态口径：中餐、快餐、茶饮、咖啡的消费逻辑完全不同，方案和对标都要先切业态（如中餐人均 80-120 一档），不可混比。',
-          asks: [
-            { label: '目标拆分怎么做？', question: '经营目标怎么从年拆到月周日？没完成怎么预警？' },
-            { label: '诊断报告长什么样？', question: 'AI 经营体检报告包含什么内容？在哪里生成？' }
-          ]
-        },
-        {
-          title: '大众点评与外部数据的口径',
-          body: '<p>为什么从点评切入：它是餐饮对外展现的<strong>核心界面</strong>，认知度最高。上海 21 万家饭店，绝大多数把点评页面做得很糟糕——但优化恰恰<strong>有规律可循</strong>。</p>' +
-            '<ul><li>能优化什么：头图、套餐组合、图片展示、宣传语、评价互动节奏；</li>' +
-            '<li>我们的做法：分析你的页面 → 给市场同类对标 → 出方案 → 确认后执行并展示进展；</li>' +
-            '<li>口径迁移：点评的逻辑跑通了，小红书、抖音是同一套打法的复制；</li>' +
-            '<li>无形的东西也能量化：比如把服务员收盘时的对话转成文字分析服务质量——「抓不出来的东西，帮你明确化」。</li></ul>',
-          note: '红线口径：我们做的是分析、对标、出方案，不是刷评、不是买流量。对外表述永远站在「帮商家把真实体验呈现好」这一边。',
-          asks: [
-            { label: '平台分析板块在哪？', question: '平台评价分析在系统哪个板块？能看到什么图表？' },
-            { label: '竞对差距怎么看？', question: '和大众点评竞对的差距分析怎么看？雷达图各维度是什么？' }
-          ]
-        },
-        {
-          title: '能力怎么治理：飞轮与人审边界',
-          body: '<p>AI 飞轮运营台是<strong>平台能力治理工具</strong>，不是门店老板的经营分析入口。它位于“系统管理 → AI 飞轮运营台”，只对平台管理员开放；当前只接入餐饮域，“工厂（待接入）”不可选择。</p>' +
-            '<ul><li><strong>五类治理页面</strong>：总览看板、晋升审核工作台、Miss 复盘、质量与回归、蒸馏数据集；</li>' +
-            '<li><strong>候选不自动晋升</strong>：先展示问法、频次、置信度、契约通过率、最近真实答案和计划详情，平台管理员通过后才写入确定性路由；</li>' +
-            '<li><strong>菜品别名不自动合并</strong>：机器初匹配只是 pending，只有 confirmed 映射会影响线上解析，rejected 不生效；门店级确认优先于租户级，没有确认映射就保留原菜名；</li>' +
-            '<li><strong>失败必须真实</strong>：权限、接口或依赖异常时明确报错，不得用演示数据或假成功兜底。</li></ul>' +
-            '<p>网页图表洞察和移动餐饮 AI 共享意图编排后，仍保留原有安全门：咨询只读，操作先预览、再确认。导览助手只解释入口和方法，不替用户计算或分析业务数据。</p>',
-          note: '治理口诀：机器提候选，人工做决定；没有确认映射就保留原名，没有真实成功就明确报错。',
-          asks: [
-            { label: '飞轮谁能用？', question: 'AI 飞轮运营台谁能使用？五个治理页面分别做什么？' },
-            { label: '别名为何要人审？', question: '菜品别名候选的 pending、confirmed、rejected 分别代表什么？' }
-          ]
-        }
-      ];
 
       var toastTimer;
 
@@ -1624,7 +1422,6 @@
       }
 
       function setConversationVisible() {
-        closeLearn(true);
         welcome.classList.add('hidden');
         messageList.classList.remove('hidden');
       }
@@ -2142,7 +1939,6 @@
         state.sending = false;
         messageList.innerHTML = '';
         messageList.classList.add('hidden');
-        closeLearn(true);
         welcome.classList.remove('hidden');
         clearAttachment();
         questionInput.value = '';
@@ -2183,18 +1979,12 @@
 
       function applyTabChrome(animate) {
         var config = TABS[state.tab];
-        document.querySelector('.app').classList.toggle('tab-restaurant', state.tab === 'restaurant');
         $('assistant-title').textContent = config.title;
         $('assistant-subtitle').textContent = config.subtitle;
         var manualLink = $('manual-link');
         manualLink.href = config.manualHref;
         manualLink.setAttribute('aria-label', config.manualAria);
         questionInput.placeholder = config.placeholder;
-        $('welcome-factory').classList.toggle('hidden', state.tab !== 'factory');
-        $('welcome-restaurant').classList.toggle('hidden', state.tab !== 'restaurant');
-        Array.prototype.forEach.call($('tab-switch').querySelectorAll('button'), function (button) {
-          button.setAttribute('aria-pressed', button.dataset.tab === state.tab ? 'true' : 'false');
-        });
         if (animate) {
           var card = $('welcome-card');
           card.classList.remove('tab-anim');
@@ -2203,80 +1993,11 @@
         }
       }
 
-      function switchTab(tab) {
-        if (!TABS[tab] || tab === state.tab) return;
-        if (state.controller) state.controller.abort();
-        state.controller = null;
-        state.sending = false;
-        persistSession();
-        state.tab = tab;
-        try { sessionStorage.setItem(TAB_KEY, tab); } catch (_) { /* optional */ }
-        closeLearn(true);
-        state.messages = [];
-        messageList.innerHTML = '';
-        messageList.classList.add('hidden');
-        welcome.classList.remove('hidden');
-        clearAttachment();
-        questionInput.value = '';
-        applyTabChrome(true);
-        restoreSession();
-        if (!state.messages.length) feed.scrollTop = 0;
-        updateComposer();
-      }
 
       /* ---------- 学习模式 (纯静态) ---------- */
 
-      function renderLesson(direction) {
-        var lesson = LESSONS[state.learnIndex];
-        $('learn-kicker').textContent = '第 ' + (state.learnIndex + 1) + ' 课 / ' + LESSONS.length;
-        var dots = $('learn-dots');
-        dots.innerHTML = '';
-        LESSONS.forEach(function (_, i) {
-          var dot = document.createElement('i');
-          if (i === state.learnIndex) dot.className = 'on';
-          dots.appendChild(dot);
-        });
-        var view = $('lesson-view');
-        var asksHtml = '';
-        if (lesson.asks && lesson.asks.length) {
-          asksHtml = '<div class="learn-asks"><span class="learn-asks-label">深入问一问（将调用问答助手）</span>' +
-            lesson.asks.map(function (ask) {
-              return '<button type="button" data-question="' + escapeHtml(ask.question) + '">' + escapeHtml(ask.label) + '</button>';
-            }).join('') + '</div>';
-        }
-        view.innerHTML = '<div class="lesson' +
-          (direction === 'next' ? ' lesson-enter-next' : direction === 'prev' ? ' lesson-enter-prev' : '') +
-          '"><h3>' + escapeHtml(lesson.title) + '</h3>' +
-          '<div class="lesson-body">' + lesson.body + '</div>' +
-          (lesson.note ? '<div class="lesson-note">' + escapeHtml(lesson.note) + '</div>' : '') +
-          asksHtml + '</div>';
-        $('learn-prev').disabled = state.learnIndex === 0;
-        $('learn-next').textContent = state.learnIndex === LESSONS.length - 1 ? '完成学习' : '下一课';
-        feed.scrollTop = 0;
-      }
 
-      function openLearn() {
-        state.learnActive = true;
-        state.learnIndex = 0;
-        welcome.classList.add('hidden');
-        messageList.classList.add('hidden');
-        $('learn').classList.remove('hidden');
-        renderLesson(null);
-      }
 
-      function closeLearn(silent) {
-        if (!state.learnActive) return;
-        state.learnActive = false;
-        $('learn').classList.add('hidden');
-        if (!silent) {
-          if (state.messages.length) {
-            messageList.classList.remove('hidden');
-          } else {
-            welcome.classList.remove('hidden');
-          }
-          feed.scrollTop = 0;
-        }
-      }
 
       $('depth-segment').addEventListener('click', function (event) {
         var button = event.target.closest('button[data-value]');
@@ -2321,45 +2042,9 @@
       $('remove-attachment').addEventListener('click', clearAttachment);
       $('new-chat').addEventListener('click', startNewConversation);
 
-      $('tab-switch').addEventListener('click', function (event) {
-        var button = event.target.closest('button[data-tab]');
-        if (!button) return;
-        switchTab(button.dataset.tab);
-      });
 
-      $('learn-launch').addEventListener('click', openLearn);
-      $('learn-exit').addEventListener('click', function () { closeLearn(false); });
-      $('learn-prev').addEventListener('click', function () {
-        if (state.learnIndex === 0) return;
-        state.learnIndex -= 1;
-        renderLesson('prev');
-      });
-      $('learn-next').addEventListener('click', function () {
-        if (state.learnIndex >= LESSONS.length - 1) {
-          closeLearn(false);
-          showToast('已完成餐饮分析入门课程');
-          return;
-        }
-        state.learnIndex += 1;
-        renderLesson('next');
-      });
-      $('lesson-view').addEventListener('click', function (event) {
-        var button = event.target.closest('button[data-question]');
-        if (!button) return;
-        closeLearn(true);
-        welcome.classList.remove('hidden');
-        sendQuestion(button.dataset.question);
-      });
-      document.addEventListener('keydown', function (event) {
-        if (!state.learnActive) return;
-        if (event.key === 'ArrowRight') $('learn-next').click();
-        else if (event.key === 'ArrowLeft') $('learn-prev').click();
-        else if (event.key === 'Escape') closeLearn(false);
-      });
 
       try {
-        var storedTab = sessionStorage.getItem(TAB_KEY);
-        if (storedTab && TABS[storedTab]) state.tab = storedTab;
       } catch (_) { /* optional */ }
       applyTabChrome(false);
       restoreSession();
