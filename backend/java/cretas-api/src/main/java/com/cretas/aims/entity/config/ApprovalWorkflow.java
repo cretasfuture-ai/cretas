@@ -66,17 +66,33 @@ public class ApprovalWorkflow extends BaseEntity {
     /**
      * Graph nodes — JSONB array of {@link ApprovalWorkflowNode}.
      * 服务层用 Jackson serde 在 String ↔ List 之间转换.
+     *
+     * <p>⛔ 不给字段初始化: {@link com.cretas.aims.service.impl.ApprovalWorkflowServiceImpl#update}
+     * 把这个实体本身当 PATCH 载体用 ({@code null} = 这次没提供, 不动那个字段) ——
+     * 字段初始化会让 {@code new ApprovalWorkflow()} 永远非 null, PATCH 语义直接失效
+     * (2026-09-02 实测: 两个 update 单测当场报「节点列表不能为空」, 因为 partial 的
+     * 空默认值把 existing 的真实节点覆盖掉了)。防 23502 改用 {@link #applyJsonDefaults()},
+     * 只在真正 INSERT 时补, 不影响「只是拿来当 PATCH 载体、从不落库」的实例。
      */
     @Column(name = "nodes_json", nullable = false, columnDefinition = "jsonb")
-    @Builder.Default
-    private String nodesJson = "[]";
+    private String nodesJson;
 
     /**
-     * Graph edges — JSONB array of {@link ApprovalWorkflowEdge}.
+     * Graph edges — JSONB array of {@link ApprovalWorkflowEdge}. 同上, 不给字段初始化。
      */
     @Column(name = "edges_json", nullable = false, columnDefinition = "jsonb")
-    @Builder.Default
-    private String edgesJson = "[]";
+    private String edgesJson;
+
+    /** 只在真正建行 (INSERT) 时补默认值, PATCH 载体角色的实例永不触发。 */
+    @PrePersist
+    void applyJsonDefaults() {
+        if (nodesJson == null) {
+            nodesJson = "[]";
+        }
+        if (edgesJson == null) {
+            edgesJson = "[]";
+        }
+    }
 
     /** 工作流入口节点 id (必须在 nodes 中存在且 type=start). */
     @Column(name = "start_node_id", length = 50)

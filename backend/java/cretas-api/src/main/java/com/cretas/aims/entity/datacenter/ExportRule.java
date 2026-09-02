@@ -63,18 +63,23 @@ public class ExportRule extends BaseEntity {
     @Column(name = "filter_expression", columnDefinition = "TEXT")
     private String filterExpression;
 
-    /** XLSX | CSV | PDF. */
+    /**
+     * XLSX | CSV | PDF.
+     *
+     * <p>⛔ 不给字段初始化: {@link com.cretas.aims.service.datacenter.impl.ExportServiceImpl#updateRule}
+     * 把这个实体本身当 PATCH 载体用 ({@code patch.getFormat() != null} 才覆盖) ——
+     * 字段初始化会让 {@code new ExportRule()} 永远非 null, PATCH 语义直接失效
+     * (与 ApprovalWorkflow.nodesJson 同型, 2026-09-02 实测发现)。防 23502 改用
+     * {@link #applyDefaults()}, 只在真正 INSERT 时补。
+     */
     @Column(name = "format", nullable = false, length = 10)
-    @Builder.Default
-    private String format = "XLSX";
+    private String format;
 
     @Column(name = "is_async", nullable = false)
-    @Builder.Default
-    private Boolean isAsync = Boolean.FALSE;
+    private Boolean isAsync;
 
     @Column(name = "row_threshold", nullable = false)
-    @Builder.Default
-    private Integer rowThreshold = 10000;
+    private Integer rowThreshold;
 
     /** Fully-qualified JPA entity class name, e.g. {@code com.cretas.aims.entity.Customer}. */
     @Column(name = "target_entity", nullable = false, length = 200)
@@ -82,4 +87,18 @@ public class ExportRule extends BaseEntity {
 
     @Column(name = "created_by")
     private Long createdBy;
+
+    /** 只在真正建行 (INSERT) 时补默认值, PATCH 载体角色的实例永不触发。 */
+    @PrePersist
+    void applyDefaults() {
+        if (format == null) {
+            format = "XLSX";
+        }
+        if (isAsync == null) {
+            isAsync = Boolean.FALSE;
+        }
+        if (rowThreshold == null) {
+            rowThreshold = 10000;
+        }
+    }
 }

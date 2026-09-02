@@ -14,8 +14,8 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.type.filter.AnnotationTypeFilter;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -90,12 +90,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li><b>45 处</b> — {@code @Version} 乐观锁字段 (structural verdict a, 见上)</li>
  *   <li><b>1 处</b> — {@code ProductionBatch.workflowSelectionMode},
  *       {@code insertable = false} + DB 触发器回填 (structural verdict a)</li>
- *   <li><b>78 处</b> — verdict b (无任何防御, 真实同型缺陷), 全部按 DB 侧
- *       {@code DEFAULT} 字面量补了匹配的字段初始化值并已在同一 PR 修复
- *       (枚举常量逐个核对过实际枚举定义, 例如 {@code DistanceEdgeSource.DEMO_FIXTURE}
- *       与 {@code PlanDistanceSource.MAINTAINED_MATRIX} 是两个相似但不同值集的
+ *   <li><b>72 处</b> — verdict b (无任何防御, 真实同型缺陷), 全部按 DB 侧
+ *       {@code DEFAULT} 字面量补了匹配的字段初始化值 (+ {@code @Builder.Default},
+ *       见下) 并已在同一 PR 修复 (枚举常量逐个核对过实际枚举定义, 例如
+ *       {@code DistanceEdgeSource.DEMO_FIXTURE} 与
+ *       {@code PlanDistanceSource.MAINTAINED_MATRIX} 是两个相似但不同值集的
  *       独立枚举, 分别对号入座, 没有混用)</li>
+ *   <li><b>6 处</b> — verdict a (手工核实, 见
+ *       {@link #MANUALLY_VERIFIED_PREPERSIST_DEFENSE}): {@code ApprovalWorkflow}
+ *       / {@code ExportRule} / {@code ImportRule} 把实体自身复用成 PATCH 载体,
+ *       {@code null} 是「这次没提供」的哨兵值, 字段初始化会摧毁这层语义(实测:
+ *       两个 {@code ApprovalWorkflowServiceImplTest} 用例因此报「节点列表不能为空」)。
+ *       改用 {@code @PrePersist} 兜底, 只在真正 INSERT 时补。</li>
  * </ul>
+ *
+ * <p>🔴 <b>Lombok {@code @Builder}/{@code @SuperBuilder} 会吃掉字段初始化</b>
+ * (32/35 个被改实体用了这两个注解之一): 没有 {@code @Builder.Default}, 通过
+ * {@code .builder()...build()} 构造(这批实体最常见的构造方式)拿到的对象仍然是
+ * {@code null} —— 字段初始化只在 {@code new Entity()} 这条路径上生效。javac 会为此
+ * 打 warning("will ignore the initializing expression entirely"), 已按该 warning
+ * 补全 72 处 {@code @Builder.Default}(72 = 78 - 6, 6 处走 {@code @PrePersist} 不需要)。</p>
  *
  * <p>⇒ 修复后 offender 数应为 <b>0</b>, 本测试是<b>硬门禁</b> (不是棘轮): 任何新迁移
  * 引入同型缺陷都会让它当场变红, 不需要另外维护基线文件。</p>
@@ -121,6 +135,37 @@ class NotNullColumnsHaveEntityDefaultsContractTest {
      */
     private static final int MIN_SQL_COLUMNS = 400;
     private static final int MIN_MATCHED_CHECKED_TYPE_PAIRS = 200;
+
+    /**
+     * Verdict (a) 手工核实过的例外 —— 无法用「字段初始化」表达、扫描器测不出来,
+     * 但确实「每条构造路径都会在真正 INSERT 前补上默认值」的字段 (task step 2(a):
+     * 「prove: grep constructors/builders/set… before save」)。
+     *
+     * <p>触发原因(2026-09-02 首次跑批发现, 不是理论风险): {@code ApprovalWorkflow} /
+     * {@code ExportRule} / {@code ImportRule} 把实体本身复用成 PATCH 载体
+     * (例: {@code ApprovalWorkflowServiceImpl.update(..., ApprovalWorkflow partial, ...)}
+     * 里 {@code if (partial.getNodesJson() != null) existing.setNodesJson(...)}) ——
+     * {@code null} 是「这次没提供, 别动那个字段」的哨兵值。给这些字段加字段初始化会让
+     * {@code new XxxEntity()} 永远非 null, PATCH 语义直接失效: 实测两个
+     * {@code ApprovalWorkflowServiceImplTest} 用例当场报「工作流校验失败: [节点列表不能为空]」
+     * ——partial 的空默认值 {@code "[]"} 把 existing 的真实节点覆盖掉了。
+     *
+     * <p>改用 {@code @PrePersist} 兜底 (只在真正 INSERT 时补, 见各实体类的
+     * {@code applyDefaults()}/{@code applyJsonDefaults()}), 对 PATCH 载体角色的实例
+     * 完全不可见 —— 只有真正要落库的那个实例才会触发。
+     *
+     * <p>⚠️ 这份清单不是免检: {@link #manuallyVerifiedExceptionsActuallyHavePrePersist()}
+     * 反射校验每个声明类确实还有 {@code @PrePersist} 方法, 防止有人删掉兜底方法却忘了
+     * 把这条从清单里摘掉。
+     */
+    private static final Set<String> MANUALLY_VERIFIED_PREPERSIST_DEFENSE = Set.of(
+            "approval_workflows.nodes_json",
+            "approval_workflows.edges_json",
+            "export_rules.format",
+            "export_rules.is_async",
+            "export_rules.row_threshold",
+            "import_rules.dedup_strategy"
+    );
 
     private static final Set<String> TABLE_CONSTRAINT_KEYWORDS = Set.of(
             "PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "CONSTRAINT", "EXCLUDE", "LIKE");
@@ -172,6 +217,9 @@ class NotNullColumnsHaveEntityDefaultsContractTest {
             if (isStructurallyDefended(ef.field(), ef.beanClass())) {
                 continue;
             }
+            if (MANUALLY_VERIFIED_PREPERSIST_DEFENSE.contains(key(sc.table(), sc.column()))) {
+                continue; // verdict (a): 手工核实过, 见类注释与 manuallyVerifiedExceptionsActuallyHavePrePersist()
+            }
             if (hasSourceInitializer(Path.of("src/main/java"), ef.declaringClass(), ef.field().getName())) {
                 continue;
             }
@@ -218,6 +266,34 @@ class NotNullColumnsHaveEntityDefaultsContractTest {
         assertTrue(hasSourceInitializer(Path.of("src/main/java"), ef.declaringClass(), ef.field().getName()),
                 "ProductType.acceptsRework 当前应已有 `= Boolean.TRUE` 初始化 (#508 修复) —— "
                         + "若这条断言红了, 说明 #508 的修复被回退了。");
+    }
+
+    @Test
+    @DisplayName("MANUALLY_VERIFIED_PREPERSIST_DEFENSE 清单不是免检: 每条都要真的有 @PrePersist")
+    void manuallyVerifiedExceptionsActuallyHavePrePersist() throws Exception {
+        Map<String, EntityField> entityFields = scanEntityFields();
+        List<String> missing = new ArrayList<>();
+        for (String key : MANUALLY_VERIFIED_PREPERSIST_DEFENSE) {
+            EntityField ef = entityFields.get(key);
+            if (ef == null) {
+                missing.add(key + " —— 反射扫描不到这个字段了, 清单条目已过期");
+                continue;
+            }
+            boolean hasPrePersist = false;
+            for (Method m : ef.declaringClass().getDeclaredMethods()) {
+                if (m.isAnnotationPresent(jakarta.persistence.PrePersist.class)) {
+                    hasPrePersist = true;
+                    break;
+                }
+            }
+            if (!hasPrePersist) {
+                missing.add(key + " —— " + ef.declaringClass().getSimpleName()
+                        + " 已经没有 @PrePersist 方法了, 这条 verdict(a) 豁免的依据没了, 得改回字段初始化"
+                        + "或补回 @PrePersist");
+            }
+        }
+        assertTrue(missing.isEmpty(), () -> "MANUALLY_VERIFIED_PREPERSIST_DEFENSE 清单里 "
+                + missing.size() + " 条豁免的依据已经不成立:" + String.join("\n  ", missing));
     }
 
     /**
