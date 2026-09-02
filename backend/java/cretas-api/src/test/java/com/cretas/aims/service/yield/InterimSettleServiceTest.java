@@ -339,6 +339,30 @@ class InterimSettleServiceTest {
     }
 
     @Test
+    @DisplayName("回料已在正式报工扣过 (stockConsumedAtSubmit=true): 小结不再二扣; 没标记的同类来源照扣 (阴性对照)")
+    void sfiFeedAlreadyConsumedAtSubmitIsNotDrawnAgain() {
+        // 同一成品道两笔常驻 SFI 投料: REWORK-1 已在报工时严格扣减 (手工选的回料 / 按配比自动追加的都长这样),
+        //   SFI-PLAIN 是普通半成品 (报工不扣, 小结扣)。结单早有这道守卫, 小结此前没有 → 回料被扣两次。
+        List<UpstreamRef> feeds = new ArrayList<>(upstreamSemi("REWORK-1", "8.5"));
+        feeds.get(0).setStockConsumedAtSubmit(true);
+        feeds.get(0).setAutomaticRework(true);
+        feeds.addAll(upstreamSemi("SFI-PLAIN", "30"));
+        ProcessSheetRow rX = row(21L, 1, "CLK-B-Y", reqFinished(1, "CLK-B-Y", new BigDecimal("40"),
+                new BigDecimal("6"), feeds));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+
+        Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(eq(FACTORY), eq("REWORK-1"), any());
+        verify(wipInventoryService, times(1))
+                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-PLAIN"), eq(new BigDecimal("30")));
+        // semiOutQuantity 只数小结真扣的那 30, 不把报工时已扣的 8.5 再算一遍
+        assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("30"));
+    }
+
+    @Test
     @DisplayName("SFI 投料(半成品直接产成品): 成品道吃常驻 SFI → consumeClerkSemi(intermediateBatchNo) 直扣 + FG; 不走 priorStocked anchor")
     void sfiFeedstockDrawsDownStandingSemiAndCreatesFg() {
         // 成品道 (CLK-B-X, finished) 吃一笔常驻半成品库存 "SFI-STANDING-1" feed 30 (无任何前序小结 → 非 priorStocked)。

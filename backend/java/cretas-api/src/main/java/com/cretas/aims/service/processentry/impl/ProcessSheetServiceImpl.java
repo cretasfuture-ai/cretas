@@ -155,6 +155,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowClerkSheetService workflowClerkSheetService;
+    /** 回料按配比自动扣减 (正式提交时在 consumeReworkInputs 之前追加回料投料)。 */
+    @Autowired(required = false)
+    private ReworkPolicyAutoDeduction reworkPolicyAutoDeduction;
 
     /** Workflow progress is projected only after the process-sheet transaction commits. */
     @Autowired(required = false)
@@ -364,6 +367,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .forEach(ref -> ref.setStockConsumedAtSubmit(false));
         }
 
+        // 回料按配比自动扣减: 主料已定 (inputQuantity 已由分摊/客户端给出), 在这里按画布 reworkPolicy
+        // 追加回料投料 (semiFinished + automaticRework), 然后与手工回料走同一条严格扣减路。
+        // 库存不够只记缺口不拦报工; 主料未知不兜 0。
+        ReworkPolicyAutoDeduction.Outcome reworkAuto = reworkPolicyAutoDeduction == null
+                ? ReworkPolicyAutoDeduction.Outcome.empty()
+                : reworkPolicyAutoDeduction.apply(factoryId, planId, req);
+
         // 回料是一个已经存在于常驻 SFI 的可复用库存批次。与普通 SFI（小结时扣减）不同，
         // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
         // 只接受服务端标记为回料的来源；普通半成品仍保留原有的报工→小结延迟扣减语义。
@@ -391,6 +401,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         inputAllocations.addAll(reworkAllocations);
         result.setInputAllocations(List.copyOf(inputAllocations));
+        result.setReworkAutoDeductions(reworkAuto.lines());
+        if (!reworkAuto.warnings().isEmpty()) {
+            List<String> merged = new ArrayList<>();
+            if (result.getWarnings() != null) {
+                merged.addAll(result.getWarnings());
+            }
+            merged.addAll(reworkAuto.warnings());
+            result.setWarnings(merged);
+        }
         return result;
     }
 
@@ -461,11 +480,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             allocation.setQuantity(actualSourceQuantity);
             allocation.setUnit(source.getUnit() == null ? "kg" : source.getUnit());
             allocation.setAllocationOrder(allocationOrder++);
-            allocation.setSourceType("REWORK");
+            boolean automatic = req.getUpstreamSources().stream()
+                    .filter(Objects::nonNull)
+                    .anyMatch(ref -> ref.isAutomaticRework()
+                            && ref.getSourceBatchNumber() != null
+                            && batchNo.equals(ref.getSourceBatchNumber().trim()));
+            allocation.setSourceType(automatic ? ReworkPolicyAutoDeduction.SOURCE_TYPE_AUTO : "REWORK");
             allocation.setUnitPrice(wipInventoryService.getSemiUnitCost(factoryId, batchNo));
             allocation.setTotalCost(allocation.getUnitPrice() == null ? null
                     : allocation.getUnitPrice().multiply(actualSourceQuantity));
-            allocation.setAutomatic(false);
+            allocation.setAutomatic(automatic);
             result.add(allocation);
         }
         return List.copyOf(result);

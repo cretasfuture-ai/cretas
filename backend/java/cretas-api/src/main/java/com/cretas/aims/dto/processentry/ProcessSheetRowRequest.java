@@ -257,6 +257,14 @@ public class ProcessSheetRowRequest {
         private boolean stockConsumedAtSubmit;
 
         /**
+         * 这条回料投料是服务端按画布 {@code reworkPolicy}（主料 × 比例）<b>自动追加</b>的，不是操作员选的。
+         *
+         * <p>只由 {@code ReworkPolicyAutoDeduction} 在正式提交时置 true；随 row_payload 持久化，
+         * 让报工页/小结/结单能把「自动扣减」与「手工领用」分开展示。扣减、成本口径与手工回料完全同一条路。</p>
+         */
+        private boolean automaticRework;
+
+        /**
          * 成品库存(FG)投料 (成品作投料来源)。
          *
          * <p>true 时 {@code sourceBatchNumber} 指向常驻成品库存

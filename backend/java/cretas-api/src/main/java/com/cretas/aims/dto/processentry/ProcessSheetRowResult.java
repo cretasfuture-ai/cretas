@@ -44,6 +44,41 @@ public class ProcessSheetRowResult {
     /** 正式提交时由生产库自动生成的批次分摊明细。 */
     private List<InputAllocation> inputAllocations;
 
+    /**
+     * 正式提交时按画布 reworkPolicy 自动扣减的回料明细（每条政策一行）。
+     * 没钉 Workflow / 本工序无政策时为空。缺口不拦报工，只在这里与 warnings 里说。
+     */
+    private List<ReworkAutoDeduction> reworkAutoDeductions;
+
+    @Data
+    public static class ReworkAutoDeduction {
+        /** 画布回料 Cell 节点 id。 */
+        private String reworkNodeId;
+        /** 回料 SKU（半成品 ProductType id）；画布没绑时 null。 */
+        private String reworkSkuId;
+        /** 配方比例 0–100。 */
+        private BigDecimal inputRatioPercent;
+        /** 分母：本工序主料投入量（不含回料）；算不出时 null。 */
+        private BigDecimal mainInputKg;
+        /** 按比例应投的回料量；算不出时 null。 */
+        private BigDecimal targetKg;
+        /** 操作员已手工投入的同 SKU 回料量。 */
+        private BigDecimal manualKg;
+        /** 本次自动追加并扣减的量。 */
+        private BigDecimal drawnKg;
+        /** 目标 − 手工 − 自动 之后仍缺的量；算不出时 null。 */
+        private BigDecimal shortfallKg;
+        /** RESOLVED / UNRESOLVED_MAIN_INPUT / REWORK_SKU_UNBOUND。 */
+        private String outcome;
+        private List<ReworkAutoDeductionBatch> batches;
+    }
+
+    @Data
+    public static class ReworkAutoDeductionBatch {
+        private String batchNumber;
+        private BigDecimal quantityKg;
+    }
+
     @Data
     public static class InputAllocation {
         private String materialTypeId;
