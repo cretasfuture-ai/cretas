@@ -344,10 +344,15 @@ public class ProductType extends BaseEntity {
 
     /**
      * 这个产品收不收回料。{@code false} (汉堡排) = <b>任何</b>来源的回料都不可投入,
-     * 与来源是谁、来源配没配等级<b>无关</b>。DB 侧默认 TRUE = 维持现状。
+     * 与来源是谁、来源配没配等级<b>无关</b>。DB 侧 {@code NOT NULL DEFAULT TRUE} = 维持现状
+     * (见 {@code V20261101_05__product_types_rework_purity.sql})。
+     *
+     * <p>🔴 2026-09-02 prod hotfix: 字段初始值必须与 DB 默认值同步 —— Hibernate 插入时
+     * 会把这一列显式列进 INSERT, 值为 {@code null} 时 DB 侧的 {@code DEFAULT TRUE} 不会生效
+     * (只有列<b>完全不出现</b>在 INSERT 里才会用列默认值), 直接撞 NOT NULL 违例。
      */
     @Column(name = "accepts_rework")
-    private Boolean acceptsRework;
+    private Boolean acceptsRework = Boolean.TRUE;
 
     // ==================== End 回料纯度 ====================
 
