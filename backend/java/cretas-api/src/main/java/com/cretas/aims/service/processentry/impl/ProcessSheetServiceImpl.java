@@ -529,6 +529,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
                         .withCode("PINNED_BOM_NOT_FOUND")
+                        .withHint("请前往「生产管理 → 生产计划」重新选择该计划的 BOM 版本")
                         .withSeverity("BLOCKING"));
         List<BomRecipe> pinnedFamily = workflowPlan
                 ? resolvePinnedBomFamily(plan, pinnedRecipes)
@@ -562,6 +563,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         || outputRecipe.getOutputQuantityPerUnit().signum() <= 0) {
                     throw new BusinessException(409, "计划固定 BOM 缺少有效的基准产出数量")
                             .withCode("BOM_OUTPUT_BASIS_INVALID")
+                            .withHint("请前往「BOM成本管理」为该产品配方补齐基准产出数量后重新激活")
                             .withSeverity("BLOCKING");
                 }
                 BigDecimal scale = reportedOutput.quantity().divide(
@@ -576,6 +578,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     if (perBasis == null || perBasis.signum() <= 0) {
                         throw new BusinessException(409, "包装材料缺少有效用量: " + item.getMaterialName())
                                 .withCode("PACKAGING_REQUIREMENT_INVALID")
+                                .withHint("请前往「BOM成本管理」为包装材料 " + item.getMaterialName()
+                                        + " 补齐用量后重新激活")
                                 .withSeverity("BLOCKING");
                     }
                     requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
@@ -614,6 +618,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         || item.getDosagePerKgG().signum() <= 0) {
                     throw new BusinessException(409, "调料配置缺少物料或用量: " + item.getName())
                             .withCode("SEASONING_REQUIREMENT_INVALID")
+                            .withHint("请前往「BOM成本管理 → 调料配置」为 " + item.getName()
+                                    + " 补齐物料与用量后重新激活")
                             .withSeverity("BLOCKING");
                 }
                 if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
@@ -1295,6 +1301,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             throw new BusinessException(409, "多产出工序必须使用逐产出结构报工")
                     .withCode("PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED")
+                    .withHint("该工序配置了多个产出端口，请切换到「逐产出」报工方式并为每个产出端口分别填写数据")
                     .withSeverity("BLOCKING");
         }
         return outputs.stream()
@@ -1459,6 +1466,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (invalid) {
             throw new BusinessException(409, "Workflow 端口选择组快照不完整或不一致: " + groupId)
                     .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
+                    .withHint("请回 Workflow 配置核对选择组「" + groupId
+                            + "」的标签/模式/选择数量设置，修复并重新发布后再报工")
                     .withSeverity("BLOCKING");
         }
         int min = snapshot.getSelectionGroupMinSelections();
@@ -1473,6 +1482,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (!boundsValid) {
             throw new BusinessException(409, "Workflow 端口选择组边界与模式不一致: " + groupId)
                     .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
+                    .withHint("请回 Workflow 配置核对选择组「" + groupId
+                            + "」的选择模式与最少/最多选择数量是否匹配，修复并重新发布后再报工")
                     .withSeverity("BLOCKING");
         }
     }
@@ -2532,7 +2543,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
             if (!downstream.isEmpty()) {
                 throw new BusinessException(409,
-                        "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
+                        "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改")
+                        .withCode("PRODUCTION_BATCH_HAS_DOWNSTREAM_CONSUMPTION")
+                        .withHint("请先在工序行列表中删除该批次的 " + downstream.size()
+                                + " 条下游消耗行，再修改本行");
             }
         }
 
@@ -2650,7 +2664,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         .findByFactoryIdAndBatchId(factoryId, wipOpt.get().getId());
                 if (!downstream.isEmpty()) {
                     throw new BusinessException(409,
-                            "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改");
+                            "该批已被下游 " + downstream.size() + " 行消耗，请先删除下游行再改")
+                            .withCode("PRODUCTION_BATCH_HAS_DOWNSTREAM_CONSUMPTION")
+                            .withHint("请先在工序行列表中删除该批次的 " + downstream.size()
+                                    + " 条下游消耗行，再删除本行");
                 }
             }
             reverseMaterialization(factoryId, row.getBatchId(), wipOpt);
@@ -3740,12 +3757,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 ProductionBatch pb = productionBatchRepo
                         .findByFactoryIdAndBatchNumber(factoryId, ur.getSourceBatchNumber())
                         .orElseThrow(() -> new BusinessException(409,
-                                "上游批次 " + ur.getSourceBatchNumber() + " 不存在"));
+                                "上游批次 " + ur.getSourceBatchNumber() + " 不存在")
+                                .withCode("UPSTREAM_PRODUCTION_BATCH_NOT_FOUND")
+                                .withHint("请重新选择仍存在的上游生产批次")
+                                .withHintTarget(req.getProcessCode()));
                 MaterialBatch srcMb = materialBatchRepo
                         .findByFactoryIdAndSourceDocTypeAndSourceDocId(
                                 factoryId, "PRODUCTION_BATCH", pb.getId().toString())
                         .orElseThrow(() -> new BusinessException(409,
-                                "上游批次 " + ur.getSourceBatchNumber() + " 尚未物化半成品 (无 WIP 库存)"));
+                                "上游批次 " + ur.getSourceBatchNumber() + " 尚未物化半成品 (无 WIP 库存)")
+                                .withCode("UPSTREAM_PRODUCTION_BATCH_WIP_NOT_MATERIALIZED")
+                                .withHint("该上游批次尚未生成半成品库存(WIP)，请等待上道工序完成物化后再选择，"
+                                        + "或改选其他已有库存的批次")
+                                .withHintTarget(req.getProcessCode()));
                 // 防御: 双重确认 factory 归属 (findBy* 已 factory-scoped, 这里二次断言)
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
@@ -3851,6 +3875,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 && !plan.getPlannedUnit().equalsIgnoreCase(outputUnit)) {
             throw new BusinessException(409, "成品报工单位与计划快照不一致")
                     .withCode("PROCESS_SHEET_PLAN_UNIT_MISMATCH")
+                    .withHint("请按计划快照的单位（" + plan.getPlannedUnit()
+                            + "）录入成品报工数量，或前往「生产管理 → 生产计划」修改该计划的计量单位后重试")
                     .withSeverity("BLOCKING");
         }
         req.setProductWeight(authoritativeFinishedWeight(
@@ -4029,6 +4055,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (port.getWorkflowPortId() == null || port.getWorkflowPortId().isBlank()) {
                 throw new BusinessException(409, "Workflow 投入端口缺少稳定标识")
                         .withCode("PROCESS_SHEET_WORKFLOW_INPUT_PORT_ID_MISSING")
+                        .withHint("请回 Workflow 配置为该投入端口补充稳定标识（portId），修复并重新发布后再报工")
                         .withSeverity("BLOCKING");
             }
             byId.put(port.getWorkflowPortId(), port);
@@ -4140,6 +4167,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (port == null) {
             throw new BusinessException(409, "请求包含不属于该 Workflow 工序的投入端口")
                     .withCode("PROCESS_SHEET_WORKFLOW_INPUT_PORT_NOT_FOUND")
+                    .withHint("请刷新逐道录入页面后重新选择投入端口")
                     .withSeverity("BLOCKING");
         }
         return port;
@@ -4774,7 +4802,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 // UK (factory,plan,processCode,clientRowId) 冲突 — 并发双 POST。
                 // 完整幂等读已有行测在 Task 1.7; 这里映射 409 + 整事务回滚 loser 的物化图。
                 throw new BusinessException(409, "该行已存在 (并发提交)")
-                        .withCode("PROCESS_SHEET_ROW_DUPLICATE");
+                        .withCode("PROCESS_SHEET_ROW_DUPLICATE")
+                        .withHint("请刷新报工页面查看该行是否已提交成功，避免重复点击提交");
             }
             log.warn("process sheet row flush failed: factory={}, plan={}, process={}, clientRowId={}, detail={}",
                     factoryId, planId, req.getProcessCode(), req.getClientRowId(), detail, e);
