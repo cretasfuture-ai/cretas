@@ -413,6 +413,16 @@
 **在飞 1**：#536（409 提示）终审抽 10 条 4 条为「必要但不充分」（守卫读计划钉住的修订，hint 让改活的 BOM/画布）⇒ 补「回计划重钉」半句并全扫 37 条；闸注释写明只量有无不量真伪。
 **等 owner 裁**：激活表权威 / 三条激活改指 197 / 46 角色门 / 路①。
 
+### 📌 2026-09-02 14:59 增量（系统时钟）· 部署 26, 合并 96, owner 三条裁定, 在飞 0
+
+**部署 26** 14:56:24 blue（`7680a75a4e` = #536 409 提示：47 处 `withHint`，其中 8 条按终审改成「说清机制 + 真出路 + 如实标限制」—— BOM 钉住的指向计划列表「更新到当前配方」（仅未开工），Workflow 冻结快照的指向「修复并重新发布后创建新批次」；前端 `request.ts` 无 hint 的 409 也 sticky 显示 message；ratchet 197、`KNOWN_DEBT` 17→1）✅：jar 14:56:06，`ProcessSheetServiceImpl.class` `grep -a` 到「更新到当前配方」2 /「开工时冻结」2，假串 0；web 14:53 build。CI 曾红两次：单位棘轮 52→55（两处 hint 拼裸单位，与 #527 同坑；棘轮正则把同一 throw 里的 `BusinessException(` 与 `.withHint(` 各数一次所以 +3 不是 +2）。**跟进（非阻塞，登记）**：5 条 BOM 钉住 hint 补「已开工需先撤销本批报工（三信号归零后可重钉）或新建计划」；3 条 Workflow hint 补「本批次请一并取消/作废」；终审只抽了 8 条，其余 39 条同形未重看。
+
+**owner 在工艺 chat 裁（14:2x）**：① 族图激活：三个成品都改指 197 —— **实测已就位**：`GET /product-process-workflows/{productTypeId}/activation` 小吃吧→193 `enabled=false`、汉堡排→191 `enabled=false`（早上工艺 chat 查表只看 `active_workflow_id` 没看 `enabled`，形态 A 读错列），建单对它们只剩 197 可解析；**只剩 192（熟肉饼）等 `PLAN-1788008667414` 结束再停**（deactivate 对在途计划本就 409）。② 路①「按成品量反推领料」**不做**，维持 9-01。③ 如上。**仍等 owner**：46 角色门。
+
+**f006**：25 独立核验通过（口径不同：数含串的 class 文件数而非 strings 次数，⛔ 两组数别并排比）；`unit_cost` 重算**未验**（五次点击都落在遮罩、nginx 日志无该请求 —— 阳性对照是它自己同会话的请求可见，所以「没有」是真没有；需 owner 点一次「确认重算」）。
+
+**在飞 0。生产 = main = `7680a75a4e`（Java）/ web 14:53。**
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
