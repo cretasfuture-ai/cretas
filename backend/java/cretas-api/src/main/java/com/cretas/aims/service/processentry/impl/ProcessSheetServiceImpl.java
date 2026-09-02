@@ -563,7 +563,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         || outputRecipe.getOutputQuantityPerUnit().signum() <= 0) {
                     throw new BusinessException(409, "计划固定 BOM 缺少有效的基准产出数量")
                             .withCode("BOM_OUTPUT_BASIS_INVALID")
-                            .withHint("请前往「BOM成本管理」为该产品配方补齐基准产出数量后重新激活")
+                            .withHint("请前往「BOM成本管理」为该产品配方补齐基准产出数量后重新激活；"
+                                    + "仅改配方不会让在途计划自动跟上，还需前往「生产管理 → 生产计划」"
+                                    + "对本计划执行「更新到当前配方」（仅未开工的计划可用），批次才会跟上新版本")
                             .withSeverity("BLOCKING");
                 }
                 BigDecimal scale = reportedOutput.quantity().divide(
@@ -579,7 +581,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         throw new BusinessException(409, "包装材料缺少有效用量: " + item.getMaterialName())
                                 .withCode("PACKAGING_REQUIREMENT_INVALID")
                                 .withHint("请前往「BOM成本管理」为包装材料 " + item.getMaterialName()
-                                        + " 补齐用量后重新激活")
+                                        + " 补齐用量后重新激活；仅改配方不会让在途计划自动跟上，"
+                                        + "还需前往「生产管理 → 生产计划」对本计划执行「更新到当前配方」"
+                                        + "（仅未开工的计划可用），批次才会跟上新版本")
                                 .withSeverity("BLOCKING");
                     }
                     requirements.add(new ProductionStockAllocationService.AutomaticRequirement(
@@ -619,7 +623,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     throw new BusinessException(409, "调料配置缺少物料或用量: " + item.getName())
                             .withCode("SEASONING_REQUIREMENT_INVALID")
                             .withHint("请前往「BOM成本管理 → 调料配置」为 " + item.getName()
-                                    + " 补齐物料与用量后重新激活")
+                                    + " 补齐物料与用量后重新激活；仅改配方不会让在途计划自动跟上，"
+                                    + "还需前往「生产管理 → 生产计划」对本计划执行「更新到当前配方」"
+                                    + "（仅未开工的计划可用），批次才会跟上新版本")
                             .withSeverity("BLOCKING");
                 }
                 if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
@@ -1466,8 +1472,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (invalid) {
             throw new BusinessException(409, "Workflow 端口选择组快照不完整或不一致: " + groupId)
                     .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
-                    .withHint("请回 Workflow 配置核对选择组「" + groupId
-                            + "」的标签/模式/选择数量设置，修复并重新发布后再报工")
+                    .withHint("该批次报工用的是开工时冻结的 Workflow 运行时快照，回 Workflow 配置修复画布"
+                            + "不会让这个批次自动跟上；请核对选择组「" + groupId
+                            + "」的标签/模式/选择数量设置，修复并重新发布 Workflow 后创建新批次")
                     .withSeverity("BLOCKING");
         }
         int min = snapshot.getSelectionGroupMinSelections();
@@ -1482,8 +1489,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (!boundsValid) {
             throw new BusinessException(409, "Workflow 端口选择组边界与模式不一致: " + groupId)
                     .withCode("PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID")
-                    .withHint("请回 Workflow 配置核对选择组「" + groupId
-                            + "」的选择模式与最少/最多选择数量是否匹配，修复并重新发布后再报工")
+                    .withHint("该批次报工用的是开工时冻结的 Workflow 运行时快照，回 Workflow 配置修复画布"
+                            + "不会让这个批次自动跟上；请核对选择组「" + groupId
+                            + "」的选择模式与最少/最多选择数量是否匹配，修复并重新发布 Workflow 后创建新批次")
                     .withSeverity("BLOCKING");
         }
     }
@@ -4055,7 +4063,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             if (port.getWorkflowPortId() == null || port.getWorkflowPortId().isBlank()) {
                 throw new BusinessException(409, "Workflow 投入端口缺少稳定标识")
                         .withCode("PROCESS_SHEET_WORKFLOW_INPUT_PORT_ID_MISSING")
-                        .withHint("请回 Workflow 配置为该投入端口补充稳定标识（portId），修复并重新发布后再报工")
+                        .withHint("该批次报工用的是开工时冻结的 Workflow 运行时快照，回 Workflow 配置修复画布"
+                                + "不会让这个批次自动跟上；请为该投入端口补充稳定标识（portId），"
+                                + "修复并重新发布 Workflow 后创建新批次")
                         .withSeverity("BLOCKING");
             }
             byId.put(port.getWorkflowPortId(), port);

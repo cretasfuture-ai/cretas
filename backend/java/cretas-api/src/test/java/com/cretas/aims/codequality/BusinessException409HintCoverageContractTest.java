@@ -34,6 +34,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       批量编文案而不经业务确认，产出的是看着像话、实际指错地方的提示（同源判据见
  *       {@link BlockingErrorsCarryActionHintContractTest}）。</li>
  * </ol>
+ *
+ * <h2>🔴 代理判据 —— 本闸只量「有没有 hint」，量不出「说得对不对」（形态 E）</h2>
+ *
+ * <p>{@code .withHint(} 的字面存在是代理，不是终审。<b>2026-09-02 当天就应验了</b>：
+ * 首批 41 条写完、本闸五颗绿灯全亮之后，终审抽 10 条查出 4 条不成立——同一形状：守卫读的是
+ * <b>计划/批次开工时钉住的那一份</b>快照（BOM 修订 / Workflow 修订），hint 却让用户去改
+ * <b>活的那一份</b>（BOM成本管理 / Workflow 画布）；改完发布 = 新版本，在途计划/已开工批次
+ * 仍钉着旧版本，用户照做完还是同一个 409——比没有 hint 更糟，因为它让人误以为"照着做就好了"。
+ * 详细案例与判据见 {@link BlockingErrorsCarryActionHintContractTest} 顶部注释；已在同一批 PR
+ * 里改正（8 处：3 条 BOM 相关 + 2 条 BOM 自动投料相关 + 3 条 Workflow 端口快照相关），
+ * 逐条核对本 PR 其余 39 处 hint 不涉及"读钉住值、指活的源"这个形状，故不受影响。
+ * <b>本闸对这一类假 hint 是瞎的</b>——它红不了，因为它只查字符串存不存在，不查语义；
+ * 能查出来的只有走查/终审。
  */
 class BusinessException409HintCoverageContractTest {
 

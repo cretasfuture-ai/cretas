@@ -418,7 +418,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     || requirement.quantity() == null || requirement.quantity().signum() <= 0) {
                 throw new BusinessException(409, "BOM 自动投料需求不完整")
                         .withCode("AUTOMATIC_MATERIAL_REQUIREMENT_INVALID")
-                        .withHint("请前往「产品管理 → 该产品配方(BOM)」补全物料与用量后重试")
+                        .withHint("请前往「BOM成本管理」为该产品配方补全物料与用量后重新激活；"
+                                + "仅改配方不会让在途计划自动跟上，还需前往「生产管理 → 生产计划」"
+                                + "对本计划执行「更新到当前配方」（仅未开工的计划可用），批次才会跟上新版本")
                         .withSeverity("BLOCKING");
             }
             // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制
@@ -435,8 +437,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (requiredUnit == null) {
                 throw new BusinessException(409, "BOM 自动投料缺少计量单位: " + requirement.materialName())
                         .withCode("AUTOMATIC_MATERIAL_UNIT_REQUIRED")
-                        .withHint("请前往「原料管理 → " + requirement.materialName()
-                                + "」设置计量单位，或在 BOM 配置里补充单位后重试")
+                        .withHint("请前往「BOM成本管理」为该产品配方里的包装材料 " + requirement.materialName()
+                                + " 补齐计量单位后重新激活；仅改配方不会让在途计划自动跟上，"
+                                + "还需前往「生产管理 → 生产计划」对本计划执行「更新到当前配方」"
+                                + "（仅未开工的计划可用），批次才会跟上新版本")
                         .withSeverity("BLOCKING");
             }
             boolean massRequirement = isCanonicalMassUnit(requiredUnit);
