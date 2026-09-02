@@ -90,7 +90,7 @@ public class CommissionRule extends BaseEntity {
 
     /** 启用标志. 关闭 = 不参与匹配 (软关闭, 不软删). */
     @Column(name = "active", nullable = false)
-    private Boolean active;
+    private Boolean active = Boolean.TRUE;
 
     /** 创建人. */
     @Column(name = "created_by", nullable = false)
@@ -125,7 +125,7 @@ public class CommissionRule extends BaseEntity {
      * 提成周期类型: MONTHLY (默认) / QUARTERLY.
      */
     @Column(name = "period_type", length = 20, nullable = false)
-    private String periodType;
+    private String periodType = "MONTHLY";
 
     /**
      * 排行榜公式 hint (UI 显, 不参与执行).

@@ -58,7 +58,7 @@ public class ImportRule extends BaseEntity {
 
     /** SKIP | UPDATE | ERROR — 如何处理 dedup_key_field 已存在的行. */
     @Column(name = "dedup_strategy", nullable = false, length = 20)
-    private String dedupStrategy;
+    private String dedupStrategy = "ERROR";
 
     @Column(name = "dedup_key_field", length = 100)
     private String dedupKeyField;

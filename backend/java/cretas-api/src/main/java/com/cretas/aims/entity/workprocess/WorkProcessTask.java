@@ -83,7 +83,7 @@ public class WorkProcessTask extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
-    private Status status;
+    private Status status = Status.PENDING;
 
     @Column(name = "planned_quantity", precision = 15, scale = 4)
     private BigDecimal plannedQuantity;

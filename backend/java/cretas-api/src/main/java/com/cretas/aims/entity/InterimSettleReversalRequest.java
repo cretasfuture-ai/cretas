@@ -67,7 +67,7 @@ public class InterimSettleReversalRequest extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
-    private Status status;
+    private Status status = Status.PENDING_APPROVAL;
 
     @Column(name = "requested_by")
     private Long requestedBy;

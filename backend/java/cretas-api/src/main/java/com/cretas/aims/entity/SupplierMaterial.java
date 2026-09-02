@@ -62,7 +62,7 @@ public class SupplierMaterial extends BaseEntity {
     @Column(name = "tax_included_default_purchase_price", precision = 18, scale = 6)
     private BigDecimal taxIncludedDefaultPurchasePrice;
     @Column(name = "currency", nullable = false, length = 8)
-    private String currency;
+    private String currency = "CNY";
     @Column(name = "purchase_unit", nullable = false, length = 20)
     private String purchaseUnit;
     @Column(name = "min_order_quantity", precision = 18, scale = 6)
@@ -70,9 +70,9 @@ public class SupplierMaterial extends BaseEntity {
     @Column(name = "lead_time_days")
     private Integer leadTimeDays;
     @Column(name = "preferred", nullable = false)
-    private Boolean preferred;
+    private Boolean preferred = Boolean.FALSE;
     @Column(name = "active", nullable = false)
-    private Boolean active;
+    private Boolean active = Boolean.TRUE;
     @Version @Column(name = "version", nullable = false)
     private Long version;
 }

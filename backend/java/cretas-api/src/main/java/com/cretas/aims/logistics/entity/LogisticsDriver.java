@@ -58,7 +58,7 @@ public class LogisticsDriver extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "employment_type", length = 16, nullable = false)
-    private OwnershipType employmentType;
+    private OwnershipType employmentType = OwnershipType.OWNED;
 
     @Column(name = "service_areas", length = 512)
     private String serviceAreas;
@@ -70,7 +70,7 @@ public class LogisticsDriver extends BaseEntity {
     private String availableTo;
 
     @Column(name = "active", nullable = false)
-    private Boolean active;
+    private Boolean active = Boolean.TRUE;
 
     @Version
     @Column(name = "version", nullable = false)

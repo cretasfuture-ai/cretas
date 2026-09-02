@@ -92,12 +92,12 @@ public class LogisticsStoreMaster extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "location_status", length = 24, nullable = false)
-    private LocationStatus locationStatus;
+    private LocationStatus locationStatus = LocationStatus.UNRESOLVED;
 
     /** 坐标来源 — GEOCODED (自动解析) / MANUAL (调度员修正) / IMPORT (导入行自带坐标)。 */
     @Enumerated(EnumType.STRING)
     @Column(name = "source", length = 24, nullable = false)
-    private StoreMasterSource source;
+    private StoreMasterSource source = StoreMasterSource.GEOCODED;
 
     @Version
     @Column(name = "version", nullable = false)

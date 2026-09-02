@@ -83,15 +83,15 @@ public class LogisticsPlan extends BaseEntity {
     private String planNumber;
 
     @Column(name = "target_load_pct", nullable = false, precision = 5, scale = 2)
-    private BigDecimal targetLoadPct;
+    private BigDecimal targetLoadPct = new BigDecimal("88");
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 24, nullable = false)
-    private PlanStatus status;
+    private PlanStatus status = PlanStatus.DRAFT;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "distance_source", length = 24, nullable = false)
-    private PlanDistanceSource distanceSource;
+    private PlanDistanceSource distanceSource = PlanDistanceSource.MAINTAINED_MATRIX;
 
     /**
      * 排线优化模式 (时间最快/路程最短) — 生成时由调度员选择, {@code regeneratePlan} 复用本值
@@ -102,13 +102,13 @@ public class LogisticsPlan extends BaseEntity {
     private RouteOptimizeMode optimizeBy;
 
     @Column(name = "total_stores", nullable = false)
-    private Integer totalStores;
+    private Integer totalStores = 0;
 
     @Column(name = "total_trips", nullable = false)
-    private Integer totalTrips;
+    private Integer totalTrips = 0;
 
     @Column(name = "total_distance_km", nullable = false, precision = 12, scale = 2)
-    private BigDecimal totalDistanceKm;
+    private BigDecimal totalDistanceKm = BigDecimal.ZERO;
 
     @Column(name = "created_by", length = 64)
     private String createdBy;

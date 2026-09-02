@@ -69,7 +69,7 @@ public class RestaurantRepCommissionSummary extends BaseEntity {
     /** 当月累计复购业绩（跨档位依据）。 */
     @PriceSensitive
     @Column(name = "cumulative_revenue", precision = 15, scale = 2, nullable = false)
-    private BigDecimal cumulativeRevenue;
+    private BigDecimal cumulativeRevenue = BigDecimal.ZERO;
 
     /** 当前所处档位 index（0-based，从 tierConfig 重算）。NULL = 无 tierConfig / flat。 */
     @Column(name = "current_tier")
@@ -77,7 +77,7 @@ public class RestaurantRepCommissionSummary extends BaseEntity {
 
     /** 当月计业绩到访次数（展示用）。 */
     @Column(name = "attributed_visit_count", nullable = false)
-    private Integer attributedVisitCount;
+    private Integer attributedVisitCount = 0;
 
     /** 乐观锁。 */
     @Version

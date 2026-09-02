@@ -86,11 +86,11 @@ public class AlertRule extends BaseEntity {
     /** 严重度 snapshot — 影响通知优先级. */
     @Enumerated(EnumType.STRING)
     @Column(name = "severity", length = 10, nullable = false)
-    private AlertSeverity severity;
+    private AlertSeverity severity = AlertSeverity.MID;
 
     /** 启用状态 — false 时 scheduler / listener 跳过此规则. */
     @Column(name = "enabled", nullable = false)
-    private Boolean enabled;
+    private Boolean enabled = Boolean.TRUE;
 
     /**
      * 通知渠道 — JSONB list&lt;String&gt;.

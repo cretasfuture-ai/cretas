@@ -93,7 +93,7 @@ public class SalesOpportunity extends BaseEntity {
      * 用户可手动覆盖 (e.g. DEMO stage 但客户已口头承诺 → 手动调到 80%).
      */
     @Column(name = "probability", nullable = false)
-    private Integer probability;
+    private Integer probability = 10;
 
     /** 预期成交日期. */
     @Column(name = "expected_close_date")

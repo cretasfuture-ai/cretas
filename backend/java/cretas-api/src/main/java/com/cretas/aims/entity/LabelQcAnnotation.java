@@ -49,7 +49,7 @@ public class LabelQcAnnotation extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "audience", nullable = false, length = 10)
-    private LabelQcAnnotationAudience audience;
+    private LabelQcAnnotationAudience audience = LabelQcAnnotationAudience.CUSTOMER;
 
     @Column(name = "ai_candidate_id", length = 100)
     private String aiCandidateId;

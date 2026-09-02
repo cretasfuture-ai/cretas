@@ -86,16 +86,16 @@ public class LogisticsOrderBatch extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 32, nullable = false)
-    private OrderBatchStatus status;
+    private OrderBatchStatus status = OrderBatchStatus.PREVIEWED;
 
     @Column(name = "total_rows", nullable = false)
-    private Integer totalRows;
+    private Integer totalRows = 0;
 
     @Column(name = "valid_rows", nullable = false)
-    private Integer validRows;
+    private Integer validRows = 0;
 
     @Column(name = "error_rows", nullable = false)
-    private Integer errorRows;
+    private Integer errorRows = 0;
 
     @Column(name = "created_by", length = 64)
     private String createdBy;

@@ -89,7 +89,7 @@ public class OperationLog extends BaseEntity {
     private Long elapsedMs;
 
     @Column(name = "success", nullable = false)
-    private Boolean success;
+    private Boolean success = Boolean.TRUE;
 
     @Column(name = "error_message", length = 1000)
     private String errorMessage;

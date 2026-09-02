@@ -109,7 +109,7 @@ public class BomItemSubstitute extends BaseEntity {
 
     /** True only when the user explicitly supplied the conversion instead of the 1:1 default. */
     @Column(name = "conversion_explicit", nullable = false)
-    private Boolean conversionExplicit;
+    private Boolean conversionExplicit = Boolean.FALSE;
 
     @Version
     @Column(name = "version", nullable = false)

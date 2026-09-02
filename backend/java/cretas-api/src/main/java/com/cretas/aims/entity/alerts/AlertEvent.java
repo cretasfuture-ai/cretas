@@ -76,7 +76,7 @@ public class AlertEvent extends BaseEntity {
     /** 严重度 snapshot (rule.severity 在事件创建时的拷贝, 规则后续变化不追溯). */
     @Enumerated(EnumType.STRING)
     @Column(name = "severity", length = 10, nullable = false)
-    private AlertSeverity severity;
+    private AlertSeverity severity = AlertSeverity.MID;
 
     /**
      * 告警消息 — 人读, 含上下文具体数字.
@@ -90,7 +90,7 @@ public class AlertEvent extends BaseEntity {
     /** 事件状态机. */
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
-    private AlertEventStatus status;
+    private AlertEventStatus status = AlertEventStatus.OPEN;
 
     /** 确认人 userId (用户点 acknowledge 时填). */
     @Column(name = "acked_by_user_id")

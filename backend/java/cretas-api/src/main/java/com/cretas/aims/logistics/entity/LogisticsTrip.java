@@ -93,22 +93,22 @@ public class LogisticsTrip extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 24, nullable = false)
-    private TripStatus status;
+    private TripStatus status = TripStatus.DRAFT;
 
     @Column(name = "total_volume_cbm", nullable = false, precision = 12, scale = 3)
-    private BigDecimal totalVolumeCbm;
+    private BigDecimal totalVolumeCbm = BigDecimal.ZERO;
 
     @Column(name = "total_weight_kg", nullable = false, precision = 12, scale = 3)
-    private BigDecimal totalWeightKg;
+    private BigDecimal totalWeightKg = BigDecimal.ZERO;
 
     @Column(name = "load_rate", nullable = false, precision = 6, scale = 4)
-    private BigDecimal loadRate;
+    private BigDecimal loadRate = BigDecimal.ZERO;
 
     @Column(name = "weight_load_rate", nullable = false, precision = 6, scale = 4)
-    private BigDecimal weightLoadRate;
+    private BigDecimal weightLoadRate = BigDecimal.ZERO;
 
     @Column(name = "total_distance_km", nullable = false, precision = 12, scale = 2)
-    private BigDecimal totalDistanceKm;
+    private BigDecimal totalDistanceKm = BigDecimal.ZERO;
 
     /**
      * 全程预计时长 (分钟, scale=2)。Nullable — 只有地图 provider 路线规划成功才有值

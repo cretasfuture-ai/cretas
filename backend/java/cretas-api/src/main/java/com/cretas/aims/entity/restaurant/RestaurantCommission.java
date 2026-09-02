@@ -99,7 +99,7 @@ public class RestaurantCommission extends BaseEntity {
     /** 状态 PENDING/PAID/CANCELLED。 */
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
-    private CommissionStatus status;
+    private CommissionStatus status = CommissionStatus.PENDING;
 
     /** 发放时间。NULL = 未发放。 */
     @Column(name = "paid_at")

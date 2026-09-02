@@ -68,13 +68,13 @@ public class ApprovalWorkflow extends BaseEntity {
      * 服务层用 Jackson serde 在 String ↔ List 之间转换.
      */
     @Column(name = "nodes_json", nullable = false, columnDefinition = "jsonb")
-    private String nodesJson;
+    private String nodesJson = "[]";
 
     /**
      * Graph edges — JSONB array of {@link ApprovalWorkflowEdge}.
      */
     @Column(name = "edges_json", nullable = false, columnDefinition = "jsonb")
-    private String edgesJson;
+    private String edgesJson = "[]";
 
     /** 工作流入口节点 id (必须在 nodes 中存在且 type=start). */
     @Column(name = "start_node_id", length = 50)

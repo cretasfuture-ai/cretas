@@ -61,13 +61,13 @@ public class LabelQcTask extends BaseEntity {
     private LabelQcTaskStatus status;
 
     @Column(name = "photo_count", nullable = false)
-    private Integer photoCount;
+    private Integer photoCount = 0;
 
     @Column(name = "ai_candidate_count", nullable = false)
-    private Integer aiCandidateCount;
+    private Integer aiCandidateCount = 0;
 
     @Column(name = "final_defect_count", nullable = false)
-    private Integer finalDefectCount;
+    private Integer finalDefectCount = 0;
 
     @Column(name = "reviewed_by")
     private Long reviewedBy;
@@ -79,7 +79,7 @@ public class LabelQcTask extends BaseEntity {
     private String reviewRequestId;
 
     @Column(name = "archived", nullable = false)
-    private Boolean archived;
+    private Boolean archived = Boolean.FALSE;
 
     @Column(name = "archived_by")
     private Long archivedBy;
@@ -89,7 +89,7 @@ public class LabelQcTask extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "training_status", nullable = false, length = 20)
-    private LabelQcTrainingStatus trainingStatus;
+    private LabelQcTrainingStatus trainingStatus = LabelQcTrainingStatus.PENDING;
 
     @Column(name = "training_decided_by")
     private Long trainingDecidedBy;
