@@ -1,0 +1,87 @@
+{
+  "category": "factory",
+  "note": "AI Assist 工厂 tab 回归探针。判据写行为不写字面：must_not_contain 用来抓 2026-09-02 重灌前线上答反的旧口径。",
+  "probes": [
+    {
+      "id": "rework-auto-deduct-514",
+      "question": "正式报工时，回料会不会按配比自动扣减？小结的时候怎么防止同一份回料被扣两次？",
+      "must_contain": ["配比"],
+      "must_contain_any": ["自动扣减", "自动扣", "自动按配比"],
+      "must_not_contain": ["不会按配比自动扣减", "不自动计算配比", "手动选择投入的，系统不自动"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#514", "#530"]
+    },
+    {
+      "id": "reversal-returns-rework-527-531",
+      "question": "整单撤回时，报工扣掉的回料会还回去吗？如果产出批已经被别的批次领过又还回来了，还能整单撤回吗？",
+      "must_contain": ["撤回", "回料"],
+      "must_contain_any": ["还回", "退回", "恢复", "反向"],
+      "must_not_contain": ["没有扫码报工"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#527", "#531"]
+    },
+    {
+      "id": "main-share-on-input-ports-503",
+      "question": "主料份额（主料配比）现在配在哪里？是在 Workflow 画布的哪个位置配置？",
+      "must_contain": ["份额"],
+      "must_contain_any": ["投入端口", "INPUT 端口", "输入端口", "工序的投入", "端口"],
+      "must_not_contain": ["不在 Workflow 的工序拓扑或 Cell 节点上", "BOM 派生配置格"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#503", "#534", "#504"]
+    },
+    {
+      "id": "production-menu-hubs-487",
+      "question": "Web 后台的生产管理菜单现在有哪几个入口？报工审批和领料分别在哪个入口下面？",
+      "must_contain": ["报工审批", "领料"],
+      "must_contain_any": ["生产看板", "生产分析", "工序"],
+      "must_not_contain": ["无独立“领料”入口", "无独立领料入口"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#487"]
+    },
+    {
+      "id": "requisition-planned-qty-manual-460",
+      "question": "领料单上的计划投入原料量是系统自动算出来的，还是需要人工填写？",
+      "must_contain": ["领料单"],
+      "must_contain_any": ["人工填", "手工填", "人工录入", "手工录入", "由人填写"],
+      "must_not_contain": ["不需要人工填写", "自动计算生成，不需要"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#460", "#469"]
+    },
+    {
+      "id": "assign-operator-entry-516",
+      "question": "怎么给生产计划的各道工序分配操作员？入口在哪里？",
+      "must_contain": ["分配工序操作员"],
+      "must_contain_any": ["生产计划列表", "计划列表"],
+      "must_not_contain": ["具体名称以页面为准"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#516"]
+    },
+    {
+      "id": "self-supplied-never-deducts-497-478",
+      "question": "来料加工计划里，辅料和包材能不能用工厂自有库存？工厂自供的物料在结单时会扣减或阻塞吗？",
+      "must_contain": ["自有库存"],
+      "must_contain_any": ["不扣减", "不会扣减", "只作为提醒", "只提醒", "不阻塞", "不会阻塞"],
+      "must_not_contain": ["系统会按实际领用扣减自有库存"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#497", "#478", "#517"]
+    },
+    {
+      "id": "no-price-binding-520-528",
+      "question": "工艺画布的调料工作区，能不能绑定一个没有成本价的物料？没有价格时页面和成本会怎么显示？",
+      "must_contain": ["可以"],
+      "must_contain_any": ["¥?", "待补", "缺价", "价格未填", "无价"],
+      "must_not_contain": ["按 0 计", "视为 0 元"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#520", "#528"]
+    },
+    {
+      "id": "409-action-hint-536-539",
+      "question": "报工或结单被 409 拦住时，系统会不会告诉我下一步该做什么？已开工的计划被钉住时提示是什么？",
+      "must_contain": ["actionHint"],
+      "must_contain_any": ["已开工", "钉住", "冻结", "下一步"],
+      "must_not_contain": ["没有扫码报工"],
+      "expect_source_prefix": "f006-production-full-chain-sop",
+      "refs": ["#536", "#539"]
+    }
+  ]
+}

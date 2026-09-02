@@ -1,0 +1,135 @@
+name: SOP corpus staleness gate
+
+# 每天 10:00 CST（02:00 UTC，即 Codex 每日 SOP 自动同步应已完成之后）检查
+# backend/python/food_kb/data/f006_production_sop.md 的最后同步时间，
+# 与之后合入 main 的碰代码 PR 数。陈旧就开/更新固定标题的 issue，新鲜就关掉它。
+#
+# 三态退出：
+#   0 = 新鲜（语料 < 26h 或之后没有碰代码的 PR）
+#   1 = 陈旧（语料 >= 26h 且之后有 >= 1 个碰 backend/java|web-admin|frontend 的 PR）
+#   2 = 没量到（gh 失败 / 语料文件不存在）—— 也开 issue，但措辞不同
+#
+# 背景：2026-09-02 自动同步悄悄没跑，语料落后 113 个 PR，线上助手把三条口径答反。
+# 见 docs/superpowers/specs/2026-09-02-aiassist-factory-sop-resync-design.md §4.7。
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      pretend_corpus_time:
+        description: "调试用：把语料时间伪装成这个 ISO 时间（例如 2026-08-01T00:00:00Z）以验证告警能开 issue"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: sop-corpus-staleness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CORPUS: backend/python/food_kb/data/f006_production_sop.md
+      ISSUE_TITLE: "[auto] SOP 语料陈旧 — AI Assist 工厂 tab 可能按旧逻辑回答"
+      MAX_AGE_HOURS: "26"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Measure corpus age and post-sync code PRs
+        id: measure
+        shell: bash
+        run: |
+          set -u
+          rc=0
+          report=/tmp/staleness-report.md
+          : > "$report"
+
+          if [ ! -f "$CORPUS" ]; then
+            echo "INSTRUMENT DEAD: $CORPUS missing" | tee -a "$report"
+            echo "rc=2" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          corpus_time="${{ github.event.inputs.pretend_corpus_time }}"
+          if [ -z "$corpus_time" ]; then
+            corpus_time=$(git log -1 --format=%cI -- "$CORPUS")
+          fi
+          if [ -z "$corpus_time" ]; then
+            echo "INSTRUMENT DEAD: cannot read corpus commit time" | tee -a "$report"
+            echo "rc=2" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          corpus_epoch=$(date -d "$corpus_time" +%s)
+          now_epoch=$(date +%s)
+          age_h=$(( (now_epoch - corpus_epoch) / 3600 ))
+          corpus_utc=$(date -u -d "$corpus_time" +%Y-%m-%dT%H:%M:%SZ)
+
+          # 之后合入的 PR（按合并时间），只数碰代码的
+          if ! gh pr list -R "$GITHUB_REPOSITORY" --state merged --limit 400 \
+                --search "merged:>=$corpus_utc" \
+                --json number,title,mergedAt,files > /tmp/prs.json; then
+            echo "INSTRUMENT DEAD: gh pr list failed" | tee -a "$report"
+            echo "rc=2" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          jq -r '[.[] | select(any(.files[]; .path | test("^(backend/java|web-admin|frontend/)")))] | .[] | "- #\(.number) \(.mergedAt[0:16]) \(.title)"' /tmp/prs.json > /tmp/code-prs.txt
+          code_n=$(wc -l < /tmp/code-prs.txt)
+
+          {
+            echo "语料文件: \`$CORPUS\`"
+            echo "语料最后同步: $corpus_time（约 ${age_h} 小时前）"
+            echo "之后合入且碰代码的 PR: **${code_n}** 个"
+            echo
+            echo "<details><summary>PR 清单</summary>"
+            echo
+            cat /tmp/code-prs.txt
+            echo
+            echo "</details>"
+            echo
+            echo "处理：重跑 Codex 每日 SOP 同步（\`codex/sop-sync-YYYYMMDD\`），或按 \`docs/superpowers/specs/2026-09-02-aiassist-factory-sop-resync-design.md\` 手工补课后重灌。"
+          } >> "$report"
+
+          if [ "$age_h" -ge "$MAX_AGE_HOURS" ] && [ "$code_n" -ge 1 ]; then
+            rc=1
+          fi
+          echo "corpus_age_h=$age_h code_prs=$code_n rc=$rc"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Open / update / close the staleness issue
+        shell: bash
+        run: |
+          set -u
+          rc="${{ steps.measure.outputs.rc }}"
+          report=/tmp/staleness-report.md
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number // empty')
+          case "$rc" in
+            0)
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body-file "$report"
+                gh issue close "$existing" -R "$GITHUB_REPOSITORY" --comment "语料已更新，自动关闭。"
+              fi
+              echo "fresh";;
+            1)
+              { echo "## 🔴 陈旧"; echo; cat "$report"; } > /tmp/body.md
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body-file /tmp/body.md
+              else
+                gh issue create -R "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file /tmp/body.md
+              fi
+              echo "stale"; exit 1;;
+            *)
+              { echo "## ⚠️ 仪器没量到（这不是「新鲜」）"; echo; cat "$report"; } > /tmp/body.md
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body-file /tmp/body.md
+              else
+                gh issue create -R "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file /tmp/body.md
+              fi
+              echo "instrument dead"; exit 2;;
+          esac
