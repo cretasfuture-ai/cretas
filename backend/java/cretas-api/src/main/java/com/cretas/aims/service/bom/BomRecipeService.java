@@ -56,6 +56,12 @@ public interface BomRecipeService {
     /** 激活草稿: DRAFT → ACTIVE, 同产品其他 is_current=TRUE 的版本设为 FALSE. */
     BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId);
 
+    /**
+     * 发布链路专用: 带 {@code publishingWorkflowId} 激活一份(及其 family), 让「所钉工艺必须已启用」的 lineage 闸
+     * 对正在发布的那个 workflow 放行。实现类早有此方法, 2026-09-02 收编 DRAFT family 时才需要从接口调它。
+     */
+    BomRecipe activateRecipe(String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId);
+
     /** 克隆为新版本草稿: source ACTIVE/ARCHIVED → 新 DRAFT recipe, version+1. */
     BomRecipe cloneRecipe(String factoryId, String recipeId);
 

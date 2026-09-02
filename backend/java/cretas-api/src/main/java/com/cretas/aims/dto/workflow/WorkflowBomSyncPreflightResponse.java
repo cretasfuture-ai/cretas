@@ -35,6 +35,11 @@ public class WorkflowBomSyncPreflightResponse {
     @Builder.Default
     private List<SyncIssue> conflicts = new ArrayList<>();
     private boolean canCompleteAutomatically;
+    /**
+     * 生效 family 缺员, 但有一个<b>钉在目标修订上的 DRAFT family</b> 覆盖了全部终端 ⇒ 发布时整体激活它。
+     * 非 null 即「可收编」; 是那个 family 里锚点产品那份草稿的 id。见 2026-09-02 LIUSHANMEN 死锁。
+     */
+    private String adoptableDraftRecipeId;
 
     @Data
     @Builder

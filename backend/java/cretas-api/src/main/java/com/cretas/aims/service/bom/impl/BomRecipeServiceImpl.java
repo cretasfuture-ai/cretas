@@ -387,7 +387,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * @param publishingWorkflowId 仅发布链路传入 —— 见
      *        {@link #requireDraftMatchesEnabledWorkflow(String, List, Long)}。
      */
-    private BomRecipe activateRecipe(
+    @Override
+    public BomRecipe activateRecipe(
             String factoryId, String recipeId, Long operatorId, Long publishingWorkflowId) {
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
         if (recipe.getStatus() == BomRecipe.Status.ACTIVE && Boolean.TRUE.equals(recipe.getIsCurrent())) {

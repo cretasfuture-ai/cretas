@@ -24,6 +24,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -204,6 +207,95 @@ class WorkflowBomSynchronizationServiceTest {
                 .containsExactly(org.assertj.core.groups.Tuple.tuple(
                         "BOM_FAMILY_OUTPUT_REMOVED", CO_PRODUCT));
         verifyNoInteractions(recipeService);
+    }
+
+    /**
+     * 🔴 2026-09-02 LIUSHANMEN 实拍死锁: 四个单成品 BOM(各自一个 family)改成一张联产图后,
+     * 预检永远报「终端缺少生效 BOM」, 而草稿激活又要求「所钉工艺已启用」—— 两边互相等。
+     * 出路: 钉在目标修订上的完整 DRAFT family 视为可收编, 发布时整体激活。
+     */
+    @Test
+    @DisplayName("生效 family 缺员, 但目标修订上有完整 DRAFT family → 可自动完成, 并指出要收编的草稿")
+    void completeDraftFamilyPinnedToTargetIsAdoptable() {
+        when(recipeRepository.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, "FAMILY-1", BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(main));                       // 生效 family 只有主产, 缺联产
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(main.getId())).thenReturn(List.of());
+        when(revisionService.resolveTerminalOutputsForRevision(FACTORY, target)).thenReturn(outputs);
+        when(revisionService.resolveExactBinding(FACTORY, main, target.getId()))
+                .thenReturn(binding(main, "main"));
+        BomRecipe draftMain = draft("D-MAIN", MAIN_PRODUCT, "FAMILY-2");
+        BomRecipe draftCo = draft("D-CO", CO_PRODUCT, "FAMILY-2");
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(draftCo, draftMain));
+
+        WorkflowBomSyncPreflightResponse result = service.preflight(FACTORY, OWNER, target);
+
+        assertThat(result.getClassification())
+                .isEqualTo(WorkflowBomSyncPreflightResponse.Classification.AUTO_MIGRATABLE);
+        assertThat(result.isCanCompleteAutomatically()).isTrue();
+        assertThat(result.getMissingItems()).isEmpty();
+        assertThat(result.getAdoptableDraftRecipeId()).isEqualTo("D-MAIN");   // 锚点产品那份
+    }
+
+    @Test
+    @DisplayName("阴性对照: DRAFT family 也缺员 → 仍是缺员, ⛔ 不收编")
+    void incompleteDraftFamilyIsNotAdoptable() {
+        when(recipeRepository.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, "FAMILY-1", BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(main));
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(main.getId())).thenReturn(List.of());
+        when(revisionService.resolveTerminalOutputsForRevision(FACTORY, target)).thenReturn(outputs);
+        when(revisionService.resolveExactBinding(FACTORY, main, target.getId()))
+                .thenReturn(binding(main, "main"));
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(draft("D-MAIN", MAIN_PRODUCT, "FAMILY-2")));
+
+        WorkflowBomSyncPreflightResponse result = service.preflight(FACTORY, OWNER, target);
+
+        assertThat(result.getClassification())
+                .isEqualTo(WorkflowBomSyncPreflightResponse.Classification.USER_INPUT_REQUIRED);
+        assertThat(result.getAdoptableDraftRecipeId()).isNull();
+        // 旧 family 的行映射缺项(BOM_WORKFLOW_INPUT_ITEM_MISSING)照旧报出 —— 没收编就没理由抹掉它
+        assertThat(result.getMissingItems()).extracting(
+                        WorkflowBomSyncPreflightResponse.SyncIssue::getCode)
+                .contains("BOM_FAMILY_OUTPUTS_INCOMPLETE");
+    }
+
+    @Test
+    @DisplayName("发布时: 可收编 → 整体激活那份草稿(带 publishingWorkflowId), 不再克隆同步草稿")
+    void publishAdoptsTheDraftFamilyInsteadOfCloning() {
+        when(recipeRepository.findByFactoryIdAndBomFamilyIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, "FAMILY-1", BomRecipe.Status.ACTIVE))
+                .thenReturn(List.of(main));
+        when(itemRepository.findByRecipeIdOrderBySortOrderAsc(main.getId())).thenReturn(List.of());
+        when(revisionService.resolveTerminalOutputsForRevision(FACTORY, target)).thenReturn(outputs);
+        when(revisionService.resolveExactBinding(FACTORY, main, target.getId()))
+                .thenReturn(binding(main, "main"));
+        BomRecipe draftMain = draft("D-MAIN", MAIN_PRODUCT, "FAMILY-2");
+        when(recipeRepository.findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
+                FACTORY, target.getId(), BomRecipe.Status.DRAFT))
+                .thenReturn(List.of(draftMain, draft("D-CO", CO_PRODUCT, "FAMILY-2")));
+        when(recipeService.activateRecipe(FACTORY, "D-MAIN", 9L, 10L)).thenReturn(draftMain);
+
+        BomRecipe result = service.synchronizeForPublish(FACTORY, OWNER, target, 9L);
+
+        assertThat(result).isSameAs(draftMain);
+        verify(recipeService).activateRecipe(FACTORY, "D-MAIN", 9L, 10L);
+        verify(recipeService, never()).synchronizeActiveBomToWorkflowRevision(any(), any(), any(), any());
+    }
+
+    private BomRecipe draft(String id, String productTypeId, String familyId) {
+        BomRecipe d = recipe(id, productTypeId, "terminal:new-" + productTypeId, BomRecipe.OutputRole.MAIN);
+        d.setStatus(BomRecipe.Status.DRAFT);
+        d.setIsCurrent(false);
+        d.setBomFamilyId(familyId);
+        d.setWorkflowRevisionId(target.getId());
+        d.setWorkflowRevisionHash(target.getRevisionHash());
+        d.setVersion(2);
+        return d;
     }
 
     private void stubMultiOutputFamily(List<BomRecipeItem> items) {
