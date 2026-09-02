@@ -125,6 +125,31 @@ const searchForm = ref({
   status: ''
 });
 
+// 缺陷 50: 后端 /batches-with-clerk-wip 不接受 batchNumber 参数 (见
+// ProcessingController#getBatchesWithClerkWip / ProcessingServiceImpl#getBatches* 全链路),
+// Spring 会静默丢弃这个查询参数 —— 服务端从来没有按批次号过滤过。之前的表现是:
+// 搜一个「存在但不在当前页」的批次号, 页面照样把当前页的全部(分组后)数据显示出来,
+// 用户会读成「查到的就是这些」, 误以为搜的批次不存在。
+// 这里只能在前端对「已经加载到本页的数据」做诚实的关键词过滤 —— 命中就只显示命中的
+// 行/分组, 不命中就显示明确的空态(而不是退回未过滤列表)。跨页的真正后端关键词检索
+// 需要后端加一个 batchNumber/keyword 查询参数, 现有 API 没有, 不在本次改动范围内。
+const appliedBatchKeyword = ref('');
+
+function normalizeBatchSearchKeyword(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function rowMatchesBatchKeyword(row: BatchTableRow, keyword: string): boolean {
+  if (String(row.batchNumber || '').toLowerCase().includes(keyword)) return true;
+  // CLERK_WIP 行归组时用 sourcePlanNumber/sourcePlanId 当分组标题 (见 displayTableData),
+  // 按计划号搜也应该命中该计划下的批次, 不只是按批次自己的编号搜。
+  if (row.batchType === 'CLERK_WIP') {
+    if (String(row.sourcePlanNumber || '').toLowerCase().includes(keyword)) return true;
+    if (String(row.sourcePlanId || '').toLowerCase().includes(keyword)) return true;
+  }
+  return false;
+}
+
 function sumQuantity(rows: BatchTableRow[], key: string) {
   let total = 0;
   let hasValue = false;
@@ -142,7 +167,12 @@ const displayTableData = computed<BatchTableRow[]>(() => {
   const result: BatchTableRow[] = [];
   const groups = new Map<string, BatchTableRow>();
 
-  for (const row of tableData.value) {
+  const keyword = appliedBatchKeyword.value;
+  const sourceRows = keyword
+    ? tableData.value.filter((row) => rowMatchesBatchKeyword(row, keyword))
+    : tableData.value;
+
+  for (const row of sourceRows) {
     const sourcePlanKey = row.batchType === 'CLERK_WIP'
       ? String(row.sourcePlanId || row.sourcePlanNumber || '')
       : '';
@@ -184,6 +214,15 @@ const displayTableData = computed<BatchTableRow[]>(() => {
   }
 
   return result;
+});
+
+// 命中 0 行时, 必须明确说「没搜到」而不是回退成暂无数据/未过滤列表 —— 后者
+// 会被用户读成「这批次不存在」(缺陷 50)。空态回显关键词, 让用户能核对自己输对了没有。
+const tableEmptyText = computed(() => {
+  if (appliedBatchKeyword.value && displayTableData.value.length === 0) {
+    return `没有匹配「${searchForm.value.batchNumber.trim()}」的批次`;
+  }
+  return '暂无数据';
 });
 
 /**
@@ -344,6 +383,7 @@ async function loadData() {
 
 function handleSearch() {
   pagination.value.page = 1;
+  appliedBatchKeyword.value = normalizeBatchSearchKeyword(searchForm.value.batchNumber);
   loadData();
 }
 
@@ -528,7 +568,7 @@ function getStatusText(status: string) {
         row-key="id"
         :tree-props="{ children: 'children' }"
         default-expand-all
-        empty-text="暂无数据"
+        :empty-text="tableEmptyText"
         stripe
         border
         table-layout="fixed"
