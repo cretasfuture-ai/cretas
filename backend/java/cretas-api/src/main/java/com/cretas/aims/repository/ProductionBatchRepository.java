@@ -2,6 +2,8 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -74,6 +76,41 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.status = :status")
     Page<ProductionBatch> findByFactoryIdAndStatusIncludingClerkWip(@Param("factoryId") String factoryId,
             @Param("status") ProductionBatchStatus status, Pageable pageable);
+
+    /**
+     * 缺陷 50 第二步 (2026-09-02, LIUSHANMEN prod owner-hit): 按批次号搜索, 模糊 + 不区分大小写,
+     * 分页在过滤之后 (Page 的 totalElements 是过滤后的真实命中数)。
+     *
+     * <p>{@code status}/{@code supervisorId} 传 null 表示不按该维度过滤 (与既有 6 个
+     * find...By... 分支组合的语义完全对齐); {@code includeClerkWip=false} 时排除
+     * CLERK_WIP 内部工件批次, 与 {@link #findByFactoryId} 口径一致。
+     *
+     * <p>🔴 CLERK_WIP 合成行的 sourcePlanNumber 是 {@link ProductionBatch#getSourcePlanNumber()}
+     * 上的 {@code @Transient} 字段 (只在 service 层 enrichClerkWipSourceFields 里按
+     * ProcessSheetRow.planId 关联出来, 这张表上不存在这一列), 不能直接
+     * {@code WHERE p.sourcePlanNumber LIKE ...}。按计划号搜要经
+     * {@code ProcessSheetRow(batchId) ⋈ ProductionPlan(planId=id).planNumber} 这条链路单独匹配,
+     * 用 {@code p.id IN (子查询)} 补一条命中路径。
+     *
+     * <p>⚠️ 只在 batchNumber 非空/非空白时调用 (见
+     * {@code ProcessingServiceImpl#getBatchPage}) —— 空搜索词继续走既有 6 个分支, 零改动。
+     */
+    @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId "
+         + "AND (:status IS NULL OR p.status = :status) "
+         + "AND (:supervisorId IS NULL OR p.supervisorId = :supervisorId) "
+         + "AND (:includeClerkWip = true OR p.batchType <> 'CLERK_WIP') "
+         + "AND (LOWER(p.batchNumber) LIKE LOWER(CONCAT('%', :batchNumber, '%')) "
+         + "     OR p.id IN (SELECT r.batchId FROM ProcessSheetRow r, ProductionPlan pl "
+         + "                 WHERE r.planId = pl.id AND pl.factoryId = :factoryId "
+         + "                 AND r.batchId IS NOT NULL "
+         + "                 AND LOWER(pl.planNumber) LIKE LOWER(CONCAT('%', :batchNumber, '%'))))")
+    Page<ProductionBatch> searchByFactoryIdAndBatchNumber(
+            @Param("factoryId") String factoryId,
+            @Param("status") ProductionBatchStatus status,
+            @Param("supervisorId") Long supervisorId,
+            @Param("includeClerkWip") boolean includeClerkWip,
+            @Param("batchNumber") String batchNumber,
+            Pageable pageable);
 
     /**
      * Counts running/paused batches pinned to a Workflow before deactivation.

@@ -74,6 +74,19 @@ public interface ProcessingService {
                                              PageRequest pageRequest);
 
     /**
+     * 获取批次列表(带批次号搜索, 缺陷 50 第二步 —— server-side, 分页在过滤之后)。
+     *
+     * <p>{@code batchNumber} 为空/null 时与上面 6 参版本行为完全一致(委托给同一条既有代码路径,
+     * 零改动)。非空时按批次号模糊/不区分大小写匹配, 命中 CLERK_WIP 合成行时同时按其
+     * 归属计划号(ProcessSheetRow.planId → ProductionPlan.planNumber)匹配 —— 该字段在
+     * ProductionBatch 上是 @Transient, 不能直接 WHERE, 见 ProductionBatchRepository
+     * #searchByFactoryIdAndBatchNumber 的实现注释。
+     */
+    PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId,
+                                             Boolean isTrial, Boolean includeClerkWip, String batchNumber,
+                                             PageRequest pageRequest);
+
+    /**
      * 班组批量报工
      */
     Map<String, Object> submitTeamBatchReport(String factoryId, TeamBatchReportRequest request);
