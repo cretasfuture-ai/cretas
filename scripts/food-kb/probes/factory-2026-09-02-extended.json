@@ -590,6 +590,113 @@
       "refs": [
         "#508"
       ]
+    },
+    {
+      "id": "leftover-return-loss",
+      "question": "生产用剩的余料怎么退回仓库？损耗怎么记？",
+      "must_contain_any": [
+        "关单退料",
+        "退料记录",
+        "领料单"
+      ],
+      "must_contain_any_2": [
+        "报损管理",
+        "报损"
+      ],
+      "must_not_contain": [
+        "填写为负数",
+        "填为负数",
+        "负数",
+        "损耗 = 计划投入量"
+      ],
+      "refs": [
+        "#460"
+      ]
+    },
+    {
+      "id": "multi-output-no-add-button",
+      "question": "一道工序同时产出两种半成品怎么报工？成本怎么分？",
+      "must_contain_any": [
+        "已经列出",
+        "已按",
+        "不需要",
+        "留空"
+      ],
+      "must_not_contain": [
+        "+ 添加产出",
+        "添加产出"
+      ],
+      "refs": [
+        "#503"
+      ]
+    },
+    {
+      "id": "sales-return-no-photo",
+      "question": "客户退货怎么处理？",
+      "must_contain": [
+        "销售退货"
+      ],
+      "must_contain_any": [
+        "财务审批",
+        "提交审批"
+      ],
+      "must_not_contain": [
+        "签收照片",
+        "上传照片",
+        "至少1张"
+      ],
+      "refs": [
+        "#484"
+      ]
+    },
+    {
+      "id": "defect-vs-rework",
+      "question": "报工时发现不良品怎么记？不良品和回料有什么区别？",
+      "must_contain_any": [
+        "不良品 Cell",
+        "还没复查",
+        "复查通过"
+      ],
+      "must_not_contain": [
+        "不良品**不是**可以重新投入",
+        "如果页面只有一个"
+      ],
+      "refs": [
+        "#298"
+      ]
+    },
+    {
+      "id": "voucher-triggers",
+      "question": "系统会自动生成会计凭证吗？哪些业务会生成？",
+      "must_contain_any": [
+        "盘点",
+        "报损",
+        "收款",
+        "付款",
+        "关账"
+      ],
+      "must_not_contain": [
+        "会计凭证不会自动生成",
+        "财务工作 →",
+        "财务管理 → 会计期间管理"
+      ],
+      "refs": [
+        "#220",
+        "#235"
+      ]
+    },
+    {
+      "id": "export-inventory",
+      "question": "能不能把库存报表导出成 Excel？在哪里导？",
+      "must_contain_any": [
+        "导出报告",
+        "总库存查询"
+      ],
+      "must_not_contain": [
+        "右键",
+        "通常为 Excel 图标"
+      ],
+      "refs": []
     }
   ]
 }
