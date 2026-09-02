@@ -346,6 +346,21 @@
 
 **#514（工艺 chat）`WorkflowReworkDeduction` 接进正式报工**：🔒 送终审（重复扣减/撤销退回、幂等、跨线回投矩阵边界、对 48 累计口径的污染、顺手修的 `InterimSettleServiceImpl` continue）。**合并后 10 点演示前不发**（它改变报工投入量 100→108.5），演示后随下一批发。
 
+### 📌 2026-09-02 10:10 增量 · 演示中冻结部署, 合并 82, 待发批次已攒
+
+**演示期（10:00 起）不发部署。** 生产 = Java `ea8327082c`（部署 23）+ web `63123c529f`（部署 24）。
+
+**演示前合入（未部署，等 owner 说演示结束一次发 25）**：
+- **#514** 回料按配比自动扣减接进正式报工（🔒 终审两轮：Q1 两套 sourceType 词表结构性隔离 / Q3 矩阵在画布 policy 层 + 阴性 / Q4 不进 RAW_MATERIAL/CUSTOMER_OWNED 累计 / Q5 小结 continue 不误跳旧行；卡 Q2 幂等 → 4 行守卫「载荷已含 automaticRework ⇒ Outcome.empty」已补）。⚠️ **上线后报工投入量会加上回料（100 → 108.5）**。**登记既有问题**：撤销报工**不退回**提交时扣的回料（OUT 流水无 reportId、撤销只按 reportId 找流水），手工回料同样中招，本 PR 让它每天发生 —— 工艺 chat 开票 `codex/claude-rework-reversal`，第一个 commit 先放 H2 阴性钉「没还」。候选池 (factory, product, processOrder) 不含 planId，与手工同池。
+- **#516** 缺陷 51 计划行「分配工序操作员」（经 `ProductionDocumentTrace` 取 `PB-*`，`findByFactoryIdAndProductionPlanId` 排除 CLERK_WIP；无 PB 禁用 + tooltip、多 PB 弹选；批次侧/取消出口/已完工禁用三条钉住）。
+- **#517** 38 系统性扫：19 处分类，再修 2 处（`resolveWorkshopRawStock` 对辅料从不报「未调拨到生产仓」；`resolveMaterialStockUnit` 读成采购标签「箱」而非批次「个」）；`workshopCaliberAvailable` 登记不改。
+- **#518** 发布脚本：陈旧锁**根因 = `release-cretas.sh`/`deploy-web-admin.sh` 的 `trap … EXIT` 覆盖了 `acquire_deploy_lock` 的清锁 trap**（bash trap 不叠加；`deploy-backend.sh` R43 早修过同坑）⇒ `$ACQUIRED_DEPLOY_LOCK_FILE` 三处统一；漂移重试 `exec bash "$0"` 同 PID 自拒 ⇒ 自重入检查；readiness 三态（空串=没量到 ⇒ 有限重探 + 独立直查，总预算仍 ~150s，上界 ~193s；真失败分支回滚 jar 原样）。终审过；**跟进 2 行**：重入判据加 `CRETAS_DEPLOY_REENTRY_PID` 合取，封 PID 回收撞泄漏锁的窄口（已退执行者）。
+- **#519** 「有 N 行成本未显示」改为派生原因「本道未录工时（N 道）」（后端 `costMissingReasons`，只在 WIP 分支；clerk 分支工时缺失只贡献 0 不致 null，故不归因）+ #496 两条跟进（单位不一致挂 `Severity.INFO` 不影响 `clean`；查不到 batchId warn）。
+- **#520** 调料工作区允许绑无价物料：`priceSource1/2` 双 null 不是 0；报工侧 `unpricedNames` 登记 + warning（与既有「调料成本暂记 0」四处同口径）。终审过：**权威成本走实际批次价**（`OrderCostBreakdownService:348` 独立登记 `SEASONING_PRICE:*` ⇒ `costComplete=false` ⇒ #503 null+note 守卫仍触发），0 只在报工屏估算层。**跟进**：工作区列表补「无价」计数（14/24 项需常驻入口）。
+- **#513**（已随部署 24 上）根因：后端 `batches-with-clerk-wip` 无 `batchNumber` 参数 ⇒ 后端参数作第二 PR（在做）。
+
+**在飞 4**：NOT NULL 列 vs 可空实体扫描闸（`a4a3a0f8e36f32f18`）/ 批次搜索后端参数（`a5e14e58d08f5ac35`）/ #518 跟进 2 行（`a4ef11071c69d0f8f`）/ 撤销回料票（工艺 chat）。**不做（需 owner 重裁）**：路①「按成品量反推领料」与 9-01「本单投入现场填」裁定冲突。**演示后**：45 `baogong001` 角色（f006 陪 owner 界面改）、成品「仓储确认入库」读数。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
