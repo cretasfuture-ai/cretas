@@ -289,6 +289,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     .findByIdAndFactoryIdForUpdate(batchId, factoryId)
                     .orElseThrow(() -> new BusinessException(409, "投料批次不存在或不属于当前工厂")
                             .withCode("PRODUCTION_INPUT_BATCH_NOT_FOUND")
+                            .withHint("请返回报工页重新选择当前工厂下有效的库存批次后重试")
+                            .withHintTarget("rawMaterialInputs")
                             .withSeverity("BLOCKING"));
             ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
                     plan, batch, mainCategoryOf(factoryId, batch.getMaterialTypeId()), "生产报工投料");
@@ -329,6 +331,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (batchUnit == null) {
                 throw new BusinessException(409, "投料批次 " + batch.getBatchNumber() + " 缺少库存单位")
                         .withCode("PRODUCTION_INPUT_BATCH_UNIT_REQUIRED")
+                        .withHint("请前往「库存管理 → 批次」为该批次补齐库存单位后重试")
+                        .withHintTarget("rawMaterialInputs")
                         .withSeverity("BLOCKING");
             }
             String declaredUnit = canonicalNativeUnit(factoryId, metadata.getUnit());
@@ -346,6 +350,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     && !Objects.equals(metadata.getSkuId(), batch.getMaterialTypeId())) {
                 throw new BusinessException(409, "投料批次与物料不匹配")
                         .withCode("PRODUCTION_INPUT_BATCH_MATERIAL_MISMATCH")
+                        .withHint("请重新选择与所需原料匹配的库存批次")
+                        .withHintTarget("rawMaterialInputs")
                         .withSeverity("BLOCKING");
             }
             BigDecimal pending = nz(allocationRepository
@@ -412,6 +418,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                     || requirement.quantity() == null || requirement.quantity().signum() <= 0) {
                 throw new BusinessException(409, "BOM 自动投料需求不完整")
                         .withCode("AUTOMATIC_MATERIAL_REQUIREMENT_INVALID")
+                        .withHint("请前往「产品管理 → 该产品配方(BOM)」补全物料与用量后重试")
                         .withSeverity("BLOCKING");
             }
             // 缺陷 47 (owner 2026-09-02 裁定「它没有所谓的库存一说」): 冰水/水/蒸汽/现场自制
@@ -428,6 +435,8 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             if (requiredUnit == null) {
                 throw new BusinessException(409, "BOM 自动投料缺少计量单位: " + requirement.materialName())
                         .withCode("AUTOMATIC_MATERIAL_UNIT_REQUIRED")
+                        .withHint("请前往「原料管理 → " + requirement.materialName()
+                                + "」设置计量单位，或在 BOM 配置里补充单位后重试")
                         .withSeverity("BLOCKING");
             }
             boolean massRequirement = isCanonicalMassUnit(requiredUnit);
@@ -630,11 +639,13 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         if (planId == null || planId.isBlank()) {
             throw new BusinessException(409, "生产报工缺少生产计划归属")
                     .withCode("PRODUCTION_PLAN_OWNERSHIP_CONTEXT_REQUIRED")
+                    .withHint("请刷新报工页，确认在具体生产计划下提交，而不是脱离计划单独报工")
                     .withSeverity("BLOCKING");
         }
         return productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new BusinessException(409, "生产计划不存在或不属于当前工厂")
                         .withCode("PRODUCTION_PLAN_NOT_FOUND")
+                        .withHint("请确认所选生产计划仍然存在且属于当前工厂，刷新后重新提交")
                         .withSeverity("BLOCKING"));
     }
 
