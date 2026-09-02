@@ -811,20 +811,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 🟠 盒⇄kg 折算: 计数单位半成品 (盒/个/件/只) 作 kg 道投料来源时, 把 kg 投料量折算为盒数扣减
         //   (依据 ProductType.gramsPerUnit)。kg/重量单位来源 → 原样 (deductQty = qty, 行为不变; 不查产品避免多余 IO)。
         //   🔴 诚实 null (禁止降级): 计数单位来源缺每盒克重 → 无法折算 → loud-fail, 绝不臆造 1盒=1kg。
-        BigDecimal deductQty;
-        if (FeedUnitConverter.isCountUnit(sfi.getUnit())) {
-            deductQty = FeedUnitConverter.feedKgToSourceUnit(
-                    qty, sfi.getUnit(), resolveGramsPerUnit(sfi.getProductTypeId()));
-            if (deductQty == null) {
-                throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为" + sfi.getUnit()
-                        + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为" + sfi.getUnit() + "扣减")
-                        .withCode("SFI_NO_GRAMS_PER_UNIT")
-                        .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试投料")
-                        .withSeverity("BLOCKING")
-                        .withHintTarget(intermediateBatchNo);
-            }
-        } else {
-            deductQty = qty; // kg / 重量单位: 直投 (行为不变)
+        // 盒⇄kg 折算收成一条路径 (终审 #527 跟进 2): 与 resolveSemiFeedQtyInSourceUnit / restoreClerkSemiStrict 同源。
+        //   kg/重量单位源 → 原值; 计数单位源 → 盒数; 计数单位缺每盒克重 → null ⇒ loud-fail (禁止臆造 1盒=1kg)。
+        BigDecimal deductQty = toSourceUnit(sfi, qty);
+        if (deductQty == null) {
+            throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为"
+                    + com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit())
+                    + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为"
+                    + com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit()) + "扣减")
+                    .withCode("SFI_NO_GRAMS_PER_UNIT")
+                    .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试投料")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(intermediateBatchNo);
         }
         BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal consumed = nz(sfi.getConsumedQuantity());
@@ -881,8 +879,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     intermediateBatchNo, factoryId);
             return null;
         }
-        // 与扣减同一段折算: kg 源原样; 计数单位源 → 盒数 (缺每盒克重 ⇒ 与扣减侧同样 loud-fail)
-        BigDecimal restoreQty = resolveSemiFeedQtyInSourceUnit(factoryId, intermediateBatchNo, feedKg);
+        // 与扣减同一段折算 (toSourceUnit): kg 源原样; 计数单位源 → 盒数 (缺每盒克重 ⇒ 与扣减侧同样 loud-fail)
+        BigDecimal restoreQty = toSourceUnit(sfi, feedKg);
         if (restoreQty == null) {
             // 用户可见文案不拼裸单位 (UserFacingUnitTranslationRatchetContractTest 棘轮): 走 UnitDisplayNames.display
             throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为"
@@ -948,6 +946,15 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (sfi == null) {
             return null; // 诚实 null: 批次缺失 → 成本未知
         }
+        return toSourceUnit(sfi, feedKg);
+    }
+
+    /**
+     * 盒⇄kg 折算的<b>唯一</b>实现 (#527 跟进 2): kg/重量单位源 → 原值; 计数单位源 → 按每盒克重折成盒数;
+     * 计数单位缺每盒克重 → null (调用方决定 loud-fail 还是诚实 null)。只吃已加载的 SFI, ⛔ 不再查库 ——
+     * 扣减/还回已经持有 findForUpdate 的行, 重查一次既多一次 IO, 也让只桩了 findForUpdate 的测试读成「缺克重」。
+     */
+    private BigDecimal toSourceUnit(SemiFinishedInventory sfi, BigDecimal feedKg) {
         if (!FeedUnitConverter.isCountUnit(sfi.getUnit())) {
             return feedKg; // kg / 重量单位: 原值 (不查产品避免多余 IO)
         }
