@@ -30,6 +30,7 @@ from food_kb.api.manual_chat import (
     _FACTORY_PRODUCTION_EXECUTION_ANSWER,
     _FACTORY_PRODUCTION_ROLE_SPLIT_ANSWER,
     _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER,
+    _FACTORY_REWORK_REQUISITION_SHARE_ANSWER,
     _FACTORY_REPORTING_RUNTIME_ANSWER,
     _FACTORY_REPORTING_SOURCE_SHORTAGE_ANSWER,
     _FACTORY_RN_READONLY_ANSWER,
@@ -95,6 +96,7 @@ from food_kb.api.manual_chat import (
     _needs_factory_production_execution_guard,
     _needs_factory_production_role_split_guard,
     _needs_factory_production_correction_lifecycle_guard,
+    _needs_factory_rework_requisition_share_guard,
     _needs_factory_reporting_runtime_guard,
     _needs_factory_reporting_source_shortage_guard,
     _needs_factory_rn_readonly_guard,
@@ -2831,3 +2833,68 @@ def test_20260830_dual_line_sources_and_ai_assist_are_complete_and_isolated():
     assert "已审批报工核对修正" in ai_assist
     assert "SmartBI 未上线与缺数诚实空态" in ai_assist
     assert "餐饮阈值权限、继承与时效" in ai_assist
+
+
+def test_20260902_factory_post_sync_gap_is_closed_and_isolated():
+    """2026-09-02 resync: the daily SOP sync skipped a day and the assistant inverted
+    rework auto-deduction, requisition planned input and input-share ports on prod.
+    Pin the reviewed guard, the corpus, the static page and the quick prompts together."""
+    questions = (
+        "正式报工时，回料会不会按配比自动扣减？小结的时候怎么防止同一份回料被扣两次？",
+        "领料单上的计划投入原料量是系统自动算出来的，还是需要人工填写？",
+        "主料份额（主料配比）现在配在哪里？是在 Workflow 画布的哪个位置配置？",
+        "报工或结单被 409 拦住时，系统会不会告诉我下一步该做什么？已开工的计划被钉住时提示是什么？",
+        "怎么给生产计划的各道工序分配操作员？入口在哪里？",
+    )
+    assert all(_needs_factory_rework_requisition_share_guard(q) for q in questions)
+    assert not _needs_factory_rework_requisition_share_guard("餐饮每道菜的毛利能不能自动精确计算？")
+    assert not _needs_factory_rework_requisition_share_guard("翻台率是什么？在系统哪个板块能看到")
+
+    answer = _FACTORY_REWORK_REQUISITION_SHARE_ANSWER
+    assert "主料投入量 × 配比" in answer
+    assert "108.5 kg" in answer
+    assert "回料·按配比自动" in answer
+    assert "已在报工扣过" in answer
+    assert "`SFI_REVERSE_OVER_CONSUMED`" in answer and "`DOWNSTREAM_CONSUMED`" in answer
+    assert "由人工填报" in answer and "按实际领用" in answer
+    assert "份额%" in answer and "不强制等于 100" in answer
+    assert "不写在 BOM 配置格里" in answer
+    assert "更新到当前配方" in answer and "整单撤回" in answer
+    assert "计划尚未生成成品批次" in answer
+    # the older customer-supplied wording must not survive in any factory guard answer
+    assert "计划占比核对" not in _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER
+    assert "累计用量加本批不能超过客户实际已收数量" in _FACTORY_PRODUCTION_CORRECTION_LIFECYCLE_ANSWER
+
+    factory_sources = [
+        (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/manual/F006-production-full-chain-manual-test-sop.html").read_text(encoding="utf-8"),
+    ]
+    restaurant_sources = [
+        (PROJECT_ROOT / "docs/manual/restaurant-full-chain-sop.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-product-manual.html").read_text(encoding="utf-8"),
+        (PROJECT_ROOT / "docs/plans/restaurant-metrics-glossary.html").read_text(encoding="utf-8"),
+    ]
+    for text in factory_sources:
+        assert "份额%" in text
+        assert "回料·按配比自动" in text
+        assert "计划投入原料量" in text
+        assert "按实际领用" in text
+        assert "客供清单" in text
+        assert "restaurant_owner" not in text
+    corpus = factory_sources[0]
+    assert "领料单" in corpus
+    assert "系统管理 → 原料类型字典" not in corpus
+    assert "生产管理 → 工序 →" in corpus
+    assert "分配工序操作员" in corpus
+    assert "SFI_REVERSE_OVER_CONSUMED" in corpus and "DOWNSTREAM_CONSUMED" in corpus
+    assert "按计划占订单行的数量比例核对" not in corpus
+    for text in restaurant_sources:
+        assert "回料·按配比自动" not in text
+        assert "计划投入原料量" not in text
+        assert "份额%" not in text
+
+    ai_assist = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
+    assert "回料自动扣减、防二扣与撤回还回" in ai_assist
+    assert "领料单人工投入量与主料份额端口" in ai_assist
+    assert "采购与销售含税录入口径" in ai_assist
+    assert "生产菜单 hub、报工审批角色与仓储入口" in ai_assist
