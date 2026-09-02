@@ -486,7 +486,7 @@ public class ProcessingServiceImpl implements ProcessingService {
 
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest) {
         if (pageRequest != null) {
-            return getBatchPage(factoryId, status, null, false, pageRequest);
+            return getBatchPage(factoryId, status, null, false, null, pageRequest);
         }
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1,
@@ -515,8 +515,20 @@ public class ProcessingServiceImpl implements ProcessingService {
                                                     Boolean isTrial, Boolean includeClerkWip,
                                                     PageRequest pageRequest) {
         if (isTrial == null) {
-            return getBatchPage(factoryId, status, supervisorId, Boolean.TRUE.equals(includeClerkWip), pageRequest);
+            return getBatchPage(factoryId, status, supervisorId, Boolean.TRUE.equals(includeClerkWip), null, pageRequest);
         }
+        return getBatches(factoryId, status, supervisorId, isTrial, pageRequest);
+    }
+
+    @Override
+    public PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId,
+                                                    Boolean isTrial, Boolean includeClerkWip, String batchNumber,
+                                                    PageRequest pageRequest) {
+        if (isTrial == null) {
+            return getBatchPage(factoryId, status, supervisorId, Boolean.TRUE.equals(includeClerkWip), batchNumber, pageRequest);
+        }
+        // isTrial (SP10 中报价试制批次下拉) 从没和批次号搜索一起用过, 不新增组合 —— 与旧 6 参
+        // 版本一样直接落到不支持 batchNumber 的 isTrial 分支。
         return getBatches(factoryId, status, supervisorId, isTrial, pageRequest);
     }
 
@@ -574,15 +586,31 @@ public class ProcessingServiceImpl implements ProcessingService {
         );
     }
 
+    /**
+     * 缺陷 50 第二步 (2026-09-02): 加了 batchNumber 的过滤。
+     *
+     * <p>⚠️ {@code batchNumber} 为空/空白时逐字保留原来 6 个分支的既有 derived-query 调用
+     * (下面 else 分支跟改动前一模一样, 零改动) —— 只有真的带了搜索词才会切到
+     * {@link ProductionBatchRepository#searchByFactoryIdAndBatchNumber} 那条通用查询,
+     * 不影响 /processing/batches (非 clerk-wip) 等既有调用方的行为。
+     */
     private PageResponse<ProductionBatch> getBatchPage(String factoryId, String status, Long supervisorId,
-                                                       boolean includeClerkWip, PageRequest pageRequest) {
+                                                       boolean includeClerkWip, String batchNumber,
+                                                       PageRequest pageRequest) {
         org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
                 pageRequest.getPage() - 1,
                 pageRequest.getSize(),
                 Sort.by(Sort.Direction.DESC, "createdAt")
         );
+        String trimmedBatchNumber = (batchNumber != null && !batchNumber.isBlank()) ? batchNumber.trim() : null;
         Page<ProductionBatch> page;
-        if (status != null && !status.isEmpty()) {
+        if (trimmedBatchNumber != null) {
+            ProductionBatchStatus statusEnum = (status != null && !status.isEmpty())
+                    ? ProductionBatchStatus.valueOf(status.toUpperCase())
+                    : null;
+            page = productionBatchRepository.searchByFactoryIdAndBatchNumber(
+                    factoryId, statusEnum, supervisorId, includeClerkWip, trimmedBatchNumber, pageable);
+        } else if (status != null && !status.isEmpty()) {
             ProductionBatchStatus statusEnum = ProductionBatchStatus.valueOf(status.toUpperCase());
             if (supervisorId == null) {
                 page = includeClerkWip

@@ -183,15 +183,19 @@ public class ProcessingController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Long supervisorId,
             @RequestParam(required = false) Boolean isTrial,
+            // 缺陷 50 第二步: 之前这个方法没有 batchNumber 形参, Spring 会静默丢弃前端一直在发的
+            // 同名查询参数 —— 服务端从来没按批次号过滤过 (web-admin list.vue 早就在发这个参数,
+            // 只是没人接)。模糊/不区分大小写匹配, 分页在过滤之后。
+            @RequestParam(required = false) String batchNumber,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size) {
-        log.info("Get production batches with clerk WIP: factoryId={}, status={}, supervisorId={}, isTrial={}",
-                factoryId, status, supervisorId, isTrial);
+        log.info("Get production batches with clerk WIP: factoryId={}, status={}, supervisorId={}, isTrial={}, batchNumber={}",
+                factoryId, status, supervisorId, isTrial, batchNumber);
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
         PageResponse<ProductionBatch> result = processingService.getBatches(
-                factoryId, status, supervisorId, isTrial, true, pageRequest);
+                factoryId, status, supervisorId, isTrial, true, batchNumber, pageRequest);
         return ApiResponse.success(result);
     }
 
