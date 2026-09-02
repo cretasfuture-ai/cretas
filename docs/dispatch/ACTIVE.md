@@ -386,6 +386,15 @@
 **待发 25**（等 owner/f006 说演示结束）：Java `#514 #517 #519 #520 #522 #523 #524 #526 #527`；web `#516 #528`。⚠️ 行为变化：报工投入量含回料（100→108.5）；78 个列默认；撤销报工会还回料。
 **演示后**：45 `baogong001`（改前读数 `id=1653 role_code=warehouse_manager`）；成品批次 `unit_cost=NULL` 定性（点一次「重算成本」）；销售出库需 `lsm004`（`SO-20260902-0001` 仍 FINANCE_APPROVED）；路①需 owner 重裁。
 
+### 📌 2026-09-02 12:36 增量（系统时钟）· 合并 91, 在飞 1, 仍冻结
+
+**合并 91**：
+- **#530** #527 跟进 1+2：钉「还回流水够不着 `involvedSfiIds` 两个来源」（本批每份报工含已软删按 reportId 查不到 REVERSE；本批 WIP 里没有回料 SFI）；扣减/还回/查询三处折算收成私有 `toSourceUnit(sfi, feedKg)`（第一版委托按批号再查库让契约测试读成「缺克重」，改成只吃已加载 SFI）。
+- **#531** 产出批被别批领过又还回后能整单撤回（🔒 过）。**诊断修正**：今天拦的是 **G1 `hasExternalDownstreamConsumption`**（只认带 reportId 的 REVERSE 作补偿 ⇒ 无 reportId 的 OUT 永远算外部领用），`WIP_LEDGER_INVALID` 是第二道 —— #527 终审只追到第二道。修法 (b)：「外部领用血缘」定义一处（`isExternalConsumptionOut/Reverse`：前缀 `interim-settle-out:` / `reversal-log:` / `interim-settle-reverse-out:` 且 reportId=null），G1 按同一 SFI **OUT − REVERSE 净额 > 0** 才算仍被领着（领着 ⇒ `DOWNSTREAM_CONSUMED` **保留**），账本校验对这两类豁免 reportId/配对但**余额照算 + 符号断言**；来路不明的无 reportId OUT 仍 fail-closed。终审核：报工路径与小结路 OUT 同一写入口 `clerkConsumptionRow`，前缀常量 `CLERK_OUT_REF_PREFIX`（命名债：报工的 OUT 也叫 interim-settle-out，已加注释不改名）；合前补 **净额 < 0 ⇒ `WIP_LEDGER_INVALID`**（新开的静默放行路径，硬约束 4）+ 阴性用例。不选 (a) 的理由：挂消费批报工撞 `WIP_SCOPE_INVALID`，挂产出批报工被 ② 当本批正量 REVERSE。
+**派（工艺 chat）**：份额两个存储收敛 —— 领料改读编译列 `workflow_task_ports.input_share_ratio`，`fromNodesJson` 只留编译器；阴性：改 nodesJson 不重编译 ⇒ 领料不变。
+
+**待发 25**（等 owner 本人「可以发」；「时间过了」「在飞 0」都不是放行条件）：Java `#514 #517 #519 #520 #522 #523 #524 #526 #527 #530 #531`；web `#516 #528`。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
