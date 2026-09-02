@@ -530,7 +530,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new BusinessException(409, "计划固定的 BOM 版本不存在")
                         .withCode("PINNED_BOM_NOT_FOUND")
-                        .withHint("请前往「生产管理 → 生产计划」重新选择该计划的 BOM 版本")
+                        .withHint("请前往「生产管理 → 生产计划」重新选择该计划的 BOM 版本；"
+                                + "已开工的计划需先撤销本批报工（三信号归零后即可重钉），或改为新建计划")
                         .withSeverity("BLOCKING"));
         List<BomRecipe> pinnedFamily = workflowPlan
                 ? resolvePinnedBomFamily(plan, pinnedRecipes)
