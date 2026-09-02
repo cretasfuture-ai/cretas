@@ -334,6 +334,18 @@
 
 **工艺 chat 下一条**：`WorkflowReworkDeduction` 接进结算（owner 在它 session 说「按照顺序吧」），🔒 到 PR 送终审。
 
+### 📌 2026-09-02 09:30 增量 · 结单真扣落账, 部署 24, 合并 75, 「继续飞」六条 + #514 在审
+
+**🎉 来料加工线整条走通**：`PLAN-1788305552728-D94F7E22` 09:05:34 结单 COMPLETED actual 9.80；客供 `CMR-20260902-2596675BDD9E` used 12.000 DEPLETED（`-WKS-` USED_UP）；`production_settlement_consumptions` +3（1399上脑 12 / 冰水 0.42361 / L1纸箱 0.68012 = 13.10）；辅料真扣（冰水 used 0.42361、L1纸箱 0.68012）。**成品批次未进 `finished_goods_batches` 是正确行为**：`production_settlements.posting_status = PENDING_WAREHOUSE_RECEIPT`，等「仓储确认入库」（前两次结单的成品行都是那步以 `Workflow output receipt` 生成）。#506 行为读数：计划列表「原料参考」不再报缺料、弹窗横幅消失。「金检剔出不良品」`PTSEMI-LSM-DEFECT` 07:49 由工艺 chat 建（`accepts_rework=f`）。
+
+**部署 24** 09:25 web-only（`63123c529f` = #513 缺陷 50 搜索空态，`list-BiH_ENak` 含「没有匹配「」经 `index-BSAIgiRF` 挂主入口，旧构建 0）✅。生产 = Java `ea8327082c`（部署 23）+ web `63123c529f`。
+
+**合并 75**：#513 —— 根因比登记的深：`GET /processing/batches-with-clerk-wip` **没有 `batchNumber` 参数**（Spring 静默丢弃），服务端分页 ⇒ 不在当前页的批次永远搜不到；#513 只做了前端过滤 + 诚实空态，**后端参数作第二个 PR**（同一执行者续做，`ContainingIgnoreCase`，⛔ 别在 `@Query` 里用嵌套枚举全限定字面量）。
+
+**owner「继续飞」（09:1x）→ 六条已派**：51 计划行「分配工序操作员」入口（保留批次侧/取消出口/已完工禁用）/ `== CUSTOMER_SUPPLIED` 收窄查询全仓扫（含 `resolveMaterialStockUnit`，复用 `isCompanyStockEligibleCategory`）/ 「有 N 行成本未显示」改「本道未录工时」+ #496 两条跟进（INFO 提示、查不到 batchId warn）/ **NOT NULL 列 vs 可空实体全仓扫描做成闸**（`accepts_rework` 形状，含阳性对照）/ 发布脚本两处三态（陈旧锁 `kill -0`、readiness 空串重探不回滚）/ 批次搜索后端参数。**45**（`baogong001` 角色）f006 陪 owner **10 点演示后**在界面改。
+
+**#514（工艺 chat）`WorkflowReworkDeduction` 接进正式报工**：🔒 送终审（重复扣减/撤销退回、幂等、跨线回投矩阵边界、对 48 累计口径的污染、顺手修的 `InterimSettleServiceImpl` continue）。**合并后 10 点演示前不发**（它改变报工投入量 100→108.5），演示后随下一批发。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
