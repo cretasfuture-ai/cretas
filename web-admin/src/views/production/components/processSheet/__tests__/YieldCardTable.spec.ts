@@ -133,6 +133,102 @@ describe('YieldCardTable', () => {
     expect(text).toContain('有 1 行累计出成率未显示');
     expect(text).toContain('检查来源批次、原料投入或 SKU 标准克重配置');
     expect(text).toContain('有 1 行成本未显示');
+    // 缺陷 A: 后端没标 costMissingReasons (判不出具体原因) 时沿用旧的通用排查文案。
+    expect(text).toContain('检查来源半成品单价、工序成本或成品成本结算数据');
+    expect(text).not.toContain('未录工时');
+  });
+
+  it('缺陷 A: 后端标了 LABOR_NOT_LOGGED 时, 提示改说「本道未录工时」, 不再列三个不相关原因', async () => {
+    // prod 实拍 plan PLAN-1788305552728-D94F7E22: 10 道工序全没录工时, 前 4 道成本未知。
+    getInventoryYieldCard.mockResolvedValue({
+      data: [
+        { batchNumber: 'CLK-W-1', produced: 100, used: 0, remaining: 100, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: ['LABOR_NOT_LOGGED'] },
+        { batchNumber: 'CLK-W-2', produced: 90, used: 0, remaining: 90, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: ['LABOR_NOT_LOGGED'] },
+        { batchNumber: 'CLK-W-3', produced: 80, used: 0, remaining: 80, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: ['LABOR_NOT_LOGGED'] },
+        { batchNumber: 'CLK-W-4', produced: 70, used: 0, remaining: 70, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: ['LABOR_NOT_LOGGED'] },
+      ],
+    });
+
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain('有 4 行成本未显示');
+    expect(text).toContain('本道未录工时（4 道）');
+    // 三个不相关原因(#503 遗留文案里那三个)不该在纯 labor-missing 场景里出现。
+    expect(text).not.toContain('检查来源半成品单价、工序成本或成品成本结算数据');
+  });
+
+  it('缺陷 A: 成本未知原因不是未录工时时 (例如半成品单价缺失), 沿用旧的通用排查文案', async () => {
+    getInventoryYieldCard.mockResolvedValue({
+      data: [
+        { batchNumber: 'CLK-W-PRICED-LABOR', produced: 50, used: 0, remaining: 50, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: [] },
+      ],
+    });
+
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain('有 1 行成本未显示');
+    expect(text).toContain('检查来源半成品单价、工序成本或成品成本结算数据');
+    expect(text).not.toContain('未录工时');
+  });
+
+  it('缺陷 A: 未录工时 + 其它原因混合时并列展示, 不许只挑一个说', async () => {
+    getInventoryYieldCard.mockResolvedValue({
+      data: [
+        { batchNumber: 'CLK-W-LABOR', produced: 100, used: 0, remaining: 100, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: ['LABOR_NOT_LOGGED'] },
+        { batchNumber: 'CLK-W-PRICE', produced: 90, used: 0, remaining: 90, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: null, unitPrice: null, costMissingReasons: [] },
+      ],
+    });
+
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain('有 2 行成本未显示');
+    expect(text).toContain('本道未录工时（1 道）');
+    expect(text).toContain('其余 1 行请检查来源半成品单价、工序成本或成品成本结算数据');
+  });
+
+  it('缺陷 A 阴性对照: 每一行成本都齐全时, 不出现成本缺失提示', async () => {
+    getInventoryYieldCard.mockResolvedValue({
+      data: [
+        { batchNumber: 'CLK-W-FULL', produced: 100, used: 0, remaining: 100, status: 'ACTIVE', unit: 'kg',
+          rowTotalCost: 1000, unitPrice: 10, cumulativeYieldRate: 100, stepYieldRate: 100 },
+      ],
+    });
+
+    const wrapper = mount(YieldCardTable, {
+      props: { factoryId: 'F006', planId: 'PLAN-001' },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const text = wrapper.text();
+    expect(text).not.toContain('行成本未显示');
+    expect(text).not.toContain('未录工时');
   });
 
   it('shows legacy gram snapshots as kg and exposes the horizontal-scroll hint', async () => {

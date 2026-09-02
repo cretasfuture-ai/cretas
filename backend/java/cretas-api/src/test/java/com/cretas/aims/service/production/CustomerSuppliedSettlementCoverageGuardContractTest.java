@@ -235,6 +235,9 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
         // 终审订正: 旧实现按 (materialTypeId, unit) 建 key, 新实现只按 materialTypeId 聚合就
         // 把单位丢了 —— 已收按 kg 记, 这批却按「个」报, 数值直接相减比较会双向坏(小单位数值大
         // 就假拦, 大单位数值小就放过超收)。单位不一致时必须不拦, 按硬约束4 当「没量到」处理。
+        //
+        // #496 non-blocking review ①: 「不拦」不等于「什么都不说」——audit() 弹窗现在会带一条
+        // INFO 提示(不影响 clean/一键确认), 讲清楚这种料本次没做累计校验。
         when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
                 .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
         when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
@@ -244,10 +247,79 @@ class CustomerSuppliedSettlementCoverageGuardContractTest {
                 guard.audit(FACTORY, PLAN, prefill(line("pork-1399", "9999", "个")));
 
         assertTrue(audited.getAudit().isClean(), "单位不一致不该拦, 应当当「没量到」处理");
-        assertTrue(audited.getAudit().getIssues().isEmpty());
+        assertEquals(1, audited.getAudit().getIssues().size());
+        ProductionSettlementPrefillResponse.Issue issue = audited.getAudit().getIssues().get(0);
+        assertEquals(CustomerSuppliedSettlementCoverageGuard.ISSUE_CODE_MATERIAL_UNIT_MISMATCH, issue.getCode());
+        assertEquals(ProductionSettlementPrefillResponse.Severity.INFO, issue.getSeverity(),
+                "INFO 级——不该让 clean 变 false");
+        assertTrue(issue.getMessage().contains("1399上脑"), issue.getMessage());
+        assertTrue(issue.getMessage().contains("kg") && issue.getMessage().contains("个"), issue.getMessage());
+        assertTrue(issue.getMessage().contains("未做累计校验"), issue.getMessage());
         assertTrue(warnLines().stream().anyMatch(msg -> msg.contains("pork-1399")
                         && msg.contains("kg") && msg.contains("个")),
                 "单位不一致时必须留 warn 让人核对口径, 实际打的 WARN 行: " + warnLines());
+    }
+
+    @Test
+    void mismatchedUnitInfoIssueDoesNotDuplicateOnRepeatedAudit() {
+        // 与 duplicateAuditDoesNotDuplicateTheBlocker 同形状, 只是这次守的是 INFO 级 issue。
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+        ProductionSettlementPrefillResponse response = prefill(line("pork-1399", "9999", "个"));
+
+        guard.audit(FACTORY, PLAN, response);
+        guard.audit(FACTORY, PLAN, response);
+
+        assertEquals(1, response.getAudit().getIssues().stream()
+                .filter(issue -> CustomerSuppliedSettlementCoverageGuard.ISSUE_CODE_MATERIAL_UNIT_MISMATCH
+                        .equals(issue.getCode()))
+                .count());
+    }
+
+    @Test
+    void unresolvableCustomerSuppliedBatchIsWarnedNotSilentlySkippedLikeLegacyNullOwnership() {
+        // #496 non-blocking review ②: 批次查不到(跨工厂/脏数据) 与 「查到了但 ownership=null
+        // (老批次, 按设计视为工厂自有)」是两件不同的事——前者是数据缺口, 必须留痕。
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+        // 故意不 registerBatch —— materialBatchRepository.findAllById(...) 的默认 mock 找不到它。
+        ProductionSettlementRequest.ConsumptionLine unresolvable =
+                ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("ghost-batch").materialTypeId("pork-1399")
+                        .quantity(new BigDecimal("5")).unit("kg").build();
+
+        ProductionSettlementPrefillResponse audited = guard.audit(FACTORY, PLAN, prefill(unresolvable));
+
+        // 查不到的批次不计入客供口径核算 (与 null-ownership 一样被过滤掉), 但必须留下 warn 痕迹。
+        assertTrue(audited.getAudit().isClean());
+        assertTrue(warnLines().stream().anyMatch(msg -> msg.contains("ghost-batch") && msg.contains(FACTORY)),
+                "批次不可解析必须留 warn, 实际打的 WARN 行: " + warnLines());
+    }
+
+    @Test
+    void legacyNullOwnershipBatchIsSkippedSilentlyWithoutTheUnresolvableWarning() {
+        // 阴性对照: 查得到批次、只是 ownership=null (老批次, 按设计当工厂自有) —— 不该触发
+        // 「批次不可解析」的 warn, 这是 unresolvableCustomerSuppliedBatchIsWarnedNotSilentlySkipped...
+        // 要守住的边界: 两种「不算客供」的成因必须留下不同的痕迹(或不留痕迹)。
+        when(planRepository.findByIdAndFactoryId(PLAN, FACTORY))
+                .thenReturn(Optional.of(plan(MaterialSupplyMode.CUSTOMER_SUPPLIED)));
+        when(requirementRepository.findBySalesOrderIdOrderByExpectedArrivalAtAscIdAsc(ORDER))
+                .thenReturn(List.of(requirement("pork-1399", "1399上脑", "5900", "5900", "kg")));
+        registerBatch("legacy-batch", "pork-1399", null);
+        ProductionSettlementRequest.ConsumptionLine legacyLine =
+                ProductionSettlementRequest.ConsumptionLine.builder()
+                        .materialBatchId("legacy-batch").materialTypeId("pork-1399")
+                        .quantity(new BigDecimal("5")).unit("kg").build();
+
+        ProductionSettlementPrefillResponse audited = guard.audit(FACTORY, PLAN, prefill(legacyLine));
+
+        assertTrue(audited.getAudit().isClean());
+        assertTrue(warnLines().stream().noneMatch(msg -> msg.contains("批次不可解析")),
+                "ownership=null 是已知的 legacy 形态, 不该触发「批次不可解析」的 warn: " + warnLines());
     }
 
     @Test

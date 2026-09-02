@@ -58,6 +58,12 @@ public class CustomerSuppliedSettlementCoverageGuard {
     public static final String ISSUE_CODE_MATERIAL_NOT_LISTED = "CUSTOMER_SUPPLIED_MATERIAL_NOT_ON_ORDER";
     /** 同一种客供料, 跨这张 SO 已结单的所有批次累计用量超过了客户实际已收的数量。 */
     public static final String ISSUE_CODE_MATERIAL_OVER_RECEIVED = "CUSTOMER_SUPPLIED_MATERIAL_OVER_RECEIVED";
+    /**
+     * #496 non-blocking review ①: 某种客供料的「已收」单位与本次核对的单位口径对不上, 规则②
+     * (累计用量 vs 已收数量) 因此被跳过、不做数值比较 —— 只在 {@link #audit} 弹窗里提示核对,
+     * INFO 级, 不阻塞一键确认 (不像 {@link #ISSUE_CODE_MATERIAL_OVER_RECEIVED} 那样是 BLOCKER)。
+     */
+    public static final String ISSUE_CODE_MATERIAL_UNIT_MISMATCH = "CUSTOMER_SUPPLIED_MATERIAL_UNIT_MISMATCH";
 
     private final ProductionPlanRepository productionPlanRepository;
     private final SalesOrderSuppliedMaterialRequirementRepository requirementRepository;
@@ -243,7 +249,8 @@ public class CustomerSuppliedSettlementCoverageGuard {
 
         CoverageEvaluation evaluation = evaluateAgainstLedger(
                 requirements, receivedByType, consumedElsewhere, reportedByType);
-        if (evaluation.foreignMaterialTypeIds().isEmpty() && evaluation.overages().isEmpty()) {
+        if (evaluation.foreignMaterialTypeIds().isEmpty() && evaluation.overages().isEmpty()
+                && evaluation.unitMismatches().isEmpty()) {
             return response;
         }
 
@@ -278,7 +285,26 @@ public class CustomerSuppliedSettlementCoverageGuard {
                     .message("客供原料累计用量超过已收数量：" + describeOverages(evaluation) + "。请核对领用数量。")
                     .build());
         }
-        audit.setClean(false);
+        // #496 non-blocking review ①: 单位口径对不上导致规则②被跳过 (evaluateAgainstLedger 里
+        // 只 log.warn 且不做数值比较) —— 这件事本身不该拦人 (仍按硬约束4「没量到」处理), 但完全
+        // 不提示会让人以为「累计已经核对过、没超」。INFO 级, 不进 audit.setClean(false) 的判断。
+        if (!evaluation.unitMismatches().isEmpty()
+                && issues.stream().noneMatch(i -> i != null
+                        && ISSUE_CODE_MATERIAL_UNIT_MISMATCH.equals(i.getCode()))) {
+            issues.add(ProductionSettlementPrefillResponse.Issue.builder()
+                    .code(ISSUE_CODE_MATERIAL_UNIT_MISMATCH)
+                    .severity(ProductionSettlementPrefillResponse.Severity.INFO)
+                    .field("rawMaterialConsumptions")
+                    .message(describeUnitMismatches(evaluation) + "，本次未做累计校验。")
+                    .build());
+        }
+        // clean 只看 BLOCKER 级——本方法只在①②命中时才走到这里, 但①②过去总是 BLOCKER,
+        // 现在还可能只命中③(单位口径, INFO), 不能再无条件 setClean(false)。
+        boolean hasBlocker = issues.stream().anyMatch(i -> i != null
+                && i.getSeverity() == ProductionSettlementPrefillResponse.Severity.BLOCKER);
+        if (hasBlocker) {
+            audit.setClean(false);
+        }
         return response;
     }
 
@@ -320,6 +346,7 @@ public class CustomerSuppliedSettlementCoverageGuard {
 
         List<String> foreign = new ArrayList<>();
         Map<String, Overage> overages = new LinkedHashMap<>();
+        List<UnitMismatch> unitMismatches = new ArrayList<>();
         for (Map.Entry<String, UnitQuantity> entry : reportedByType.entrySet()) {
             String materialTypeId = entry.getKey();
             UnitQuantity thisPlan = entry.getValue();
@@ -339,6 +366,8 @@ public class CustomerSuppliedSettlementCoverageGuard {
                 log.warn("客供结单累计校验跳过（单位不一致，视为未量到）: materialTypeId={} "
                                 + "已收单位={} 本批消耗单位={} 其它已结单批次单位={}",
                         materialTypeId, received.unit(), thisPlan.unit(), elsewhere.unit());
+                unitMismatches.add(new UnitMismatch(materialTypeId, representative.get(materialTypeId),
+                        received.unit(), thisPlan.unit()));
                 continue;
             }
             BigDecimal cumulative = elsewhere.quantity().add(thisPlan.quantity());
@@ -347,7 +376,22 @@ public class CustomerSuppliedSettlementCoverageGuard {
                 overages.put(materialTypeId, new Overage(requirement, cumulative, received.quantity()));
             }
         }
-        return new CoverageEvaluation(foreign, overages);
+        return new CoverageEvaluation(foreign, overages, unitMismatches);
+    }
+
+    /** #496 non-blocking review ①: 单位口径对不上时给 audit() 弹窗的 INFO 提示拼一句人话。 */
+    private String describeUnitMismatches(CoverageEvaluation evaluation) {
+        return evaluation.unitMismatches().stream()
+                .map(this::displayUnitMismatch)
+                .collect(Collectors.joining("、"));
+    }
+
+    private String displayUnitMismatch(UnitMismatch mismatch) {
+        SalesOrderSuppliedMaterialRequirement requirement = mismatch.requirement();
+        String name = requirement != null && !isBlank(requirement.getMaterialName())
+                ? requirement.getMaterialName()
+                : mismatch.materialTypeId();
+        return name + " 的单位口径对不上（已收 " + mismatch.receivedUnit() + " / 本批 " + mismatch.reportedUnit() + "）";
     }
 
     private String describeForeign(CoverageEvaluation evaluation) {
@@ -434,7 +478,16 @@ public class CustomerSuppliedSettlementCoverageGuard {
             if (line == null || isBlank(line.getMaterialBatchId())) {
                 continue;
             }
-            if (ownershipByBatchId.get(line.getMaterialBatchId()) == InventoryOwnership.CUSTOMER_OWNED) {
+            String batchId = line.getMaterialBatchId();
+            if (!ownershipByBatchId.containsKey(batchId)) {
+                // #496 non-blocking review ②: 批次查不到(跨工厂/已删除/脏数据)与「查到了但
+                // ownership=null(老批次, 按设计视为工厂自有)」是两件不同的事——前者是数据缺口,
+                // 不该被悄悄当成后者一样直接跳过、不留痕迹。
+                log.warn("客供归属判定跳过（批次不可解析）: factoryId={} materialBatchId={}",
+                        factoryId, batchId);
+                continue;
+            }
+            if (ownershipByBatchId.get(batchId) == InventoryOwnership.CUSTOMER_OWNED) {
                 customerOwned.add(line);
             }
         }
@@ -539,8 +592,14 @@ public class CustomerSuppliedSettlementCoverageGuard {
                             BigDecimal cumulative, BigDecimal received) {
     }
 
+    /** #496 non-blocking review ①: 一种客供料「已收」的单位与本次核对（本批/其它已结单批次）对不上。 */
+    private record UnitMismatch(String materialTypeId, SalesOrderSuppliedMaterialRequirement requirement,
+                                 String receivedUnit, String reportedUnit) {
+    }
+
     private record CoverageEvaluation(List<String> foreignMaterialTypeIds,
-                                       Map<String, Overage> overages) {
+                                       Map<String, Overage> overages,
+                                       List<UnitMismatch> unitMismatches) {
     }
 
     /** 一个 materialTypeId 汇总后的数量, 连同它的单位——单位不一致时不能直接数值相加/比较。 */
