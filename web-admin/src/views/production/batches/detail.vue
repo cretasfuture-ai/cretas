@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, nextTick } from 'vue';
 import { sameUnit } from '@/utils/unitPricing';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -20,6 +20,7 @@ import {
   taskAssignmentDisabledReason,
   type AssignmentResult,
 } from './taskAssignment';
+import { shouldFocusAssignmentSection } from './assignmentDeepLink';
 
 const route = useRoute();
 const router = useRouter();
@@ -205,8 +206,27 @@ const orderYieldLoading = ref(false);
 const orderYield = ref<OrderYieldSummary | null>(null);
 const orderYieldError = ref('');
 
+// 缺陷 51: 生产计划列表「分配工序操作员」深链而来 (query.focusAssignment=1) 时,
+// 滚动到并短暂高亮「工序明细」卡片 —— 不是每次进本页都触发, 只在带这个 query 时。
+const isAssignmentDeepLinkHighlighted = ref(false);
+let assignmentHighlightTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function maybeFocusAssignmentFromQuery(): Promise<void> {
+  if (!shouldFocusAssignmentSection(route.query)) return;
+  await nextTick();
+  const target = document.querySelector<HTMLElement>('[data-testid="process-tasks-card"]');
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  isAssignmentDeepLinkHighlighted.value = true;
+  if (assignmentHighlightTimer) clearTimeout(assignmentHighlightTimer);
+  assignmentHighlightTimer = setTimeout(() => {
+    isAssignmentDeepLinkHighlighted.value = false;
+  }, 2600);
+}
+
 onMounted(() => {
-  loadData();
+  void loadData().then(() => {
+    void maybeFocusAssignmentFromQuery();
+  });
   // 指派下拉的候选人。⛔ 不能只定义不调用 —— 不加载 operators 的话下拉永远是空的,
   //    界面看着有入口, 点开一个人都没有。
   loadOperators();
@@ -1514,7 +1534,12 @@ function goToReversalList() {
         </el-card>
 
         <!-- T140: 工序明细 section (from WorkProcessTask list) -->
-        <el-card shadow="never" class="detail-card process-tasks-card">
+        <el-card
+          shadow="never"
+          class="detail-card process-tasks-card"
+          :class="{ 'is-deep-link-highlight': isAssignmentDeepLinkHighlighted }"
+          data-testid="process-tasks-card"
+        >
           <template #header>
             <div class="section-header-row">
               <div class="section-heading">
@@ -2301,6 +2326,13 @@ function goToReversalList() {
 .process-tasks-card {
   :deep(.el-card__body) {
     padding: 0;
+  }
+
+  // 缺陷 51: 从生产计划列表「分配工序操作员」深链跳转过来时短暂高亮, 2.6s 后自动褪去
+  // (与 isAssignmentDeepLinkHighlighted 的 setTimeout 时长一致)。
+  &.is-deep-link-highlight {
+    transition: box-shadow 0.3s ease;
+    box-shadow: 0 0 0 2px var(--el-color-primary, #409eff);
   }
 }
 
