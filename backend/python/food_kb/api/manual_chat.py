@@ -982,6 +982,13 @@ def _needs_reporting_unit_yield_guard(query: str) -> bool:
 def _needs_label_qc_review_guard(query: str) -> bool:
     """Explain persisted QC evidence and isolated label-review truth layers."""
     normalized = (query or "").lower()
+    # 2026-09-03: “手机上采购收货怎么操作？要拍照吗？” was hijacked by this guard through
+    # the bare word 拍照. Receiving/purchasing questions without any QC or label term
+    # belong to retrieval (or the purchase-OA-receipt guard), not here.
+    if any(term in normalized for term in ("采购", "收货", "入库")) and not any(
+        term in normalized for term in ("质检", "标签", "白标", "彩标", "托盘", "复核")
+    ):
+        return False
     mentions_label = any(
         term in normalized
         for term in (
