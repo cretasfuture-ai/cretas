@@ -561,6 +561,25 @@
       "refs": [
         "#298"
       ]
+    },
+    {
+      "id": "sku-entry",
+      "question": "新建一个成品 SKU 要填什么？",
+      "must_contain": [
+        "SKU 管理"
+      ],
+      "must_contain_any": [
+        "产品大类",
+        "标准克重",
+        "1盒=800克"
+      ],
+      "must_not_contain": [
+        "基础数据 →",
+        "基础数据→"
+      ],
+      "refs": [
+        "#508"
+      ]
     }
   ]
 }
