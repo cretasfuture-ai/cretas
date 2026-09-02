@@ -97,6 +97,13 @@ git checkout main && git pull origin main
 ./scripts/deploy/prewarm-main-artifact.sh --tests '<tests>' --wait 420   # 合并后先预热, 不能省
 ./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<tests>' --confirm-prod YES-PROD
 # 判据: DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好 1 次 (不出现本身就是失败信号)
+# ⚠️ deploy-backend.sh 的 [BG 2/4] idle readiness 判据是三态: result 是 UP:* 才算
+#    健康, TIMEOUT/RESTART_LIMIT:* 才算真失败; result 是空串(ssh 会话自己中途
+#    断线, 不是远端 loop 吐出来的三种已知字面量之一)是【没量到】, 不是【量到了
+#    说挂了】—— 现在会先换新 ssh 连接重试, 重试预算耗尽再做一次独立直接核验
+#    (systemctl is-active + 单次 curl), 那次也不健康才真的判失败并回滚。
+#    2026-09-02 事故: 这条判据曾经是两态(非 UP 一律判挂了), ssh 掉线被当场
+#    判死触发回滚+换回旧 jar, 9 秒后直接查新版早就 UP 了。
 
 # 单组件/排查入口:
 ./scripts/deploy/deploy-backend.sh --env prod        # Java

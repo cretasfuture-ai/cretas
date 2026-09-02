@@ -130,6 +130,125 @@ post_switch_probe() {
 }
 # END_POST_SWITCH_PROBE_HELPER
 
+# BEGIN_IDLE_READINESS_PROBE_HELPER
+# [BG 2/4] 等 idle service 起来的判据一度只有两态: `UP:*`(健康) / 其它全部一律
+# 判「挂了」并回滚。但那个远端 loop 只可能吐 UP:n / RESTART_LIMIT:.../TIMEOUT
+# 三种字面量 —— 如果整条 ssh 连接自己中途断了(BG_EXIT=255, 输出空串), 那不是
+# 这三种里的任何一种, 是【没量到】, 不是【量到了、量到的是"挂了"】。
+#
+# 2026-09-02 实测事故: ssh 会话掉线被当场判成"idle 起不来", 触发回滚 + 磁盘 jar
+# 换回旧版; 9 秒之后直接去查, 新版早就 UP 了 —— 部署本身没问题, 判据本身把一次
+# 网络抖动当成了应用挂了, 代价是一次多余的回滚 + 重新部署。
+#
+# 硬约束 4(三态): rc=0 是没问题, 已知的失败字面量(TIMEOUT/RESTART_LIMIT:*)是
+# 真失败, 剩下的任何东西(空串/exit=255/管道被打断/……)一律"没量到", 不能直接
+# 当"真失败"处理, 也不能枚举失败码去猜它是第几种。
+#
+# 三态判据 + 有界重试:
+#   UP:*                          -> 健康
+#   TIMEOUT / RESTART_LIMIT:*     -> 真失败(走原有回滚)
+#   其它(含空串、ssh 掉线)         -> 没量到: 换一条新 ssh 连接, 用剩余时间预算
+#                                     重试(CRETAS_IDLE_READINESS_SSH_RETRIES 次,
+#                                     默认 2); 预算耗尽后再做一次独立的直接核验
+#                                     (systemctl is-active + 单次 curl, 不依赖
+#                                     同一种会掉线的远端 loop 形状); 直接核验
+#                                     健康才判活, 否则才真的判失败。
+wait_for_idle_readiness() {
+    local server="$1" IDLE_MANAGEMENT_PORT="$2" service="$3" restart_baseline="$4" restart_limit="$5"
+    local total_budget="${CRETAS_IDLE_READINESS_TOTAL_SECONDS:-150}"
+    local max_ssh_retries="${CRETAS_IDLE_READINESS_SSH_RETRIES:-2}"
+    local ssh_attempt elapsed_total=0 t0 result exit_code elapsed remaining
+    # `local -` (bash 4.4+) 把 `set -e/+e` 的开关状态限定在这个函数里 —— 函数内部
+    # 为了拿 ssh 的真实退出码要临时关掉 -e, 拿到之后再开回来; 若不用 `local -`
+    # 兜底, 这个"开回来"会**泄漏给调用方**: 调用方若在调用前自己关了 -e(常见于
+    # 测试里 `set +e; wait_for_idle_readiness ...; rc=$?; set -e` 这种写法),
+    # 函数一返回非零, 调用方的 -e 已经被这个函数偷偷打开, 当场把整个调用方脚本
+    # 杀掉 —— 症状是"脚本莫名其妙提前退出, 没有任何 FAIL 输出"。
+    local -
+
+    IDLE_READINESS_RESULT=""
+    IDLE_READINESS_STATE=""
+    IDLE_READINESS_ELAPSED=0
+
+    for ((ssh_attempt = 0; ssh_attempt <= max_ssh_retries; ssh_attempt++)); do
+        remaining=$((total_budget - elapsed_total))
+        [ "$remaining" -ge 5 ] || remaining=5
+        t0=$(date +%s)
+        set +e
+        result=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 "$server" "
+            for i in \$(seq 1 $remaining); do
+                STATUS=\$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' http://localhost:$IDLE_MANAGEMENT_PORT/actuator/health/readiness 2>/dev/null)
+                if [ \"\$STATUS\" = '200' ]; then
+                    echo \"UP:\${i}\"
+                    exit 0
+                fi
+                RESTARTS=\$(systemctl show $service -p NRestarts --value 2>/dev/null || echo 0)
+                case \"\$RESTARTS\" in ''|*[!0-9]*) RESTARTS=0 ;; esac
+                if [ \"\$RESTARTS\" -lt '$restart_baseline' ]; then
+                    RESTART_DELTA=\$RESTARTS
+                else
+                    RESTART_DELTA=\$((RESTARTS - $restart_baseline))
+                fi
+                if [ \"\$RESTART_DELTA\" -ge '$restart_limit' ]; then
+                    ACTIVE_STATE=\$(systemctl is-active $service 2>/dev/null || true)
+                    UNIT_RESULT=\$(systemctl show $service -p Result --value 2>/dev/null || true)
+                    echo \"RESTART_LIMIT:\${RESTART_DELTA}:\${ACTIVE_STATE}:\${UNIT_RESULT}\"
+                    exit 2
+                fi
+                sleep 1
+            done
+            echo 'TIMEOUT'
+            exit 1
+        " 2>/dev/null)
+        exit_code=$?
+        set -e
+        elapsed=$(( $(date +%s) - t0 ))
+        elapsed_total=$((elapsed_total + elapsed))
+
+        IDLE_READINESS_RESULT="$result"
+        IDLE_READINESS_ELAPSED=$elapsed_total
+
+        if [ "$exit_code" = "0" ] && [[ "$result" == UP:* ]]; then
+            IDLE_READINESS_STATE="up"
+            return 0
+        fi
+        if [[ "$result" == TIMEOUT ]] || [[ "$result" == RESTART_LIMIT:* ]]; then
+            IDLE_READINESS_STATE="real_failure"
+            return 1
+        fi
+
+        # 非 UP / 非 TIMEOUT / 非 RESTART_LIMIT:* —— 没量到, 不是"量到了说挂了"。
+        echo "   ⚠️  [BG 2/4] readiness 探针 ssh 中断(exit=$exit_code, result='${result:-empty}') — 没量到, 不是应用挂了; 重试 $((ssh_attempt + 1))/$((max_ssh_retries + 1))"
+        [ "$elapsed_total" -lt "$total_budget" ] || break
+    done
+
+    # 有界重试全部落空 —— 再走一条独立的直接核验, 不依赖同一种会掉线的远端 loop
+    # 形状(单次 ssh 里跑单次 systemctl + 单次 curl, 会话更短, 更不容易再掉线)。
+    echo "   [BG 2/4] readiness 探针重试预算耗尽, 做一次直接核验(systemctl + 单次 curl)"
+    set +e
+    local direct direct_exit
+    direct=$(ssh -o ConnectTimeout=10 "$server" "
+        ACTIVE=\$(systemctl is-active $service 2>/dev/null || echo unknown)
+        STATUS=\$(curl -s -o /dev/null --max-time 3 -w '%{http_code}' http://localhost:$IDLE_MANAGEMENT_PORT/actuator/health/readiness 2>/dev/null)
+        echo \"\${ACTIVE}:\${STATUS}\"
+    " 2>/dev/null)
+    direct_exit=$?
+    set -e
+
+    if [ "$direct_exit" = "0" ] && [ "$direct" = "active:200" ]; then
+        IDLE_READINESS_STATE="up"
+        IDLE_READINESS_RESULT="UP:direct-check"
+        echo "   ✓ [BG 2/4] 直接核验确认健康(systemctl=active, readiness=200) — 之前是 ssh 掉线, 不是应用挂了"
+        return 0
+    fi
+
+    IDLE_READINESS_STATE="real_failure"
+    IDLE_READINESS_RESULT="UNMEASURED_THEN_CONFIRMED_DEAD:${direct:-empty}"
+    echo "   ❌ [BG 2/4] 直接核验仍不健康(systemctl:readiness='${direct:-empty}', exit=$direct_exit) — 判定为真失败"
+    return 1
+}
+# END_IDLE_READINESS_PROBE_HELPER
+
 # GitHub 镜像列表
 GITHUB_MIRRORS=(
     "ghproxy.cc"
@@ -843,7 +962,10 @@ cleanup() {
     rm -rf "$UPLOAD_STATUS_DIR"
     # R43 fix: 也清 deploy lock — 否则 trap cleanup 会覆盖 acquire_deploy_lock
     # 注册的 lock cleanup trap, 导致 stale lock leak. 反复出现"另一deploy进程在跑".
-    rm -f /tmp/cretas-backend-deploy.lock 2>/dev/null || true
+    # 用 $ACQUIRED_DEPLOY_LOCK_FILE (acquire_deploy_lock 在 deploy-common.sh 里写的)
+    # 而不是重复硬编码路径字符串 —— 硬编码的那份和这里注册的锁名早晚会漂
+    # (release-cretas.sh / deploy-web-admin.sh 2026-09-02 同款修复一起改成这个变量)。
+    rm -f "${ACQUIRED_DEPLOY_LOCK_FILE:-/tmp/cretas-backend-deploy.lock}" 2>/dev/null || true
     return "$exit_code"
 }
 trap cleanup EXIT
@@ -1861,47 +1983,18 @@ deploy_jar() {
                 exit 1
             fi
 
-            # [BG 2/4] 等 idle 健康 — 单次 ssh + 远端 loop
-            # 避免 client-side ssh roundtrip 每轮建立连接导致的卡死
+            # [BG 2/4] 等 idle 健康 — 三态判据(见上面 wait_for_idle_readiness 的
+            # BEGIN_IDLE_READINESS_PROBE_HELPER 注释): ssh 掉线是"没量到", 不是
+            # "量到了说挂了", 有界重试 + 一次独立直接核验之后才判真失败。
             echo "   [BG 2/4] 等待 $IDLE_COLOR core readiness (management $IDLE_MANAGEMENT_PORT, 最多 150s)..."
-            BG_T0=$(date +%s)
             IDLE_HEALTHY=false
-            set +e
-            BG_RESULT=$(ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 $SERVER "
-                for i in \$(seq 1 150); do
-                    STATUS=\$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' http://localhost:$IDLE_MANAGEMENT_PORT/actuator/health/readiness 2>/dev/null)
-                    if [ \"\$STATUS\" = '200' ]; then
-                        echo \"UP:\${i}\"
-                        exit 0
-                    fi
-                    RESTARTS=\$(systemctl show $IDLE_SERVICE -p NRestarts --value 2>/dev/null || echo 0)
-                    case \"\$RESTARTS\" in ''|*[!0-9]*) RESTARTS=0 ;; esac
-                    if [ \"\$RESTARTS\" -lt '$IDLE_RESTART_BASELINE' ]; then
-                        RESTART_DELTA=\$RESTARTS
-                    else
-                        RESTART_DELTA=\$((RESTARTS - $IDLE_RESTART_BASELINE))
-                    fi
-                    if [ \"\$RESTART_DELTA\" -ge '$STARTUP_RESTART_LIMIT' ]; then
-                        ACTIVE_STATE=\$(systemctl is-active $IDLE_SERVICE 2>/dev/null || true)
-                        UNIT_RESULT=\$(systemctl show $IDLE_SERVICE -p Result --value 2>/dev/null || true)
-                        echo \"RESTART_LIMIT:\${RESTART_DELTA}:\${ACTIVE_STATE}:\${UNIT_RESULT}\"
-                        exit 2
-                    fi
-                    sleep 1
-                done
-                echo 'TIMEOUT'
-                exit 1
-            " 2>/dev/null)
-            BG_EXIT=$?
-            set -e
-            BG_ELAPSED=$(( $(date +%s) - BG_T0 ))
-
-            if [ "$BG_EXIT" = "0" ] && [[ "$BG_RESULT" == UP:* ]]; then
+            if wait_for_idle_readiness "$SERVER" "$IDLE_MANAGEMENT_PORT" "$IDLE_SERVICE" \
+                "$IDLE_RESTART_BASELINE" "$STARTUP_RESTART_LIMIT"; then
                 deploy_timing_end idle_startup
-                echo "   ✓ $IDLE_COLOR 健康 (${BG_ELAPSED}s, 远端计数: ${BG_RESULT#UP:}s)"
+                echo "   ✓ $IDLE_COLOR 健康 (${IDLE_READINESS_ELAPSED}s, 远端计数: ${IDLE_READINESS_RESULT#UP:}s)"
                 IDLE_HEALTHY=true
             else
-                echo "   ❌ $IDLE_COLOR 健康检查失败 (${BG_ELAPSED}s elapsed, result: '$BG_RESULT')"
+                echo "   ❌ $IDLE_COLOR 健康检查失败 (${IDLE_READINESS_ELAPSED}s elapsed, result: '$IDLE_READINESS_RESULT')"
                 echo "   保持原 active 不切换, 停止 idle"
                 echo "   ---- $IDLE_SERVICE 最近日志（只读，最多 80 行）----"
                 ssh $SERVER "journalctl -u $IDLE_SERVICE -n 80 --no-pager -o short-iso" 2>/dev/null || true
