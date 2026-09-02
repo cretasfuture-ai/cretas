@@ -11,6 +11,21 @@ describe('辅料行标记', () => {
     })).toEqual([]);
   });
 
+  it('缺成本价标 ¥? 且排在最前 (2026-09-02 无价可绑之后的常驻入口)', () => {
+    const markers = markersForAuxiliaryRow({
+      missingPrice: true, subsequentPotRatio: 0.5, countInSeasoning: true,
+      substituteCount: 0, costScope: 'SHARED',
+    });
+    expect(glyphs(markers)).toEqual(['¥?', '◷']);
+    expect(markers[0].kind).toBe('unpriced');
+    expect(markers[0].title).toContain('暂记 0');
+    // 阴性对照: 没标 / 显式 false 都不出现
+    expect(glyphs(markersForAuxiliaryRow({
+      missingPrice: false, subsequentPotRatio: null, countInSeasoning: true,
+      substituteCount: 0, costScope: 'SHARED',
+    }))).toEqual([]);
+  });
+
   it('按锅序标 ◷ 并在 title 带出比例', () => {
     const markers = markersForAuxiliaryRow({
       subsequentPotRatio: 0.6, countInSeasoning: true,
