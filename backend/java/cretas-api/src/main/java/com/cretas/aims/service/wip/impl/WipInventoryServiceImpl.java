@@ -884,8 +884,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 与扣减同一段折算: kg 源原样; 计数单位源 → 盒数 (缺每盒克重 ⇒ 与扣减侧同样 loud-fail)
         BigDecimal restoreQty = resolveSemiFeedQtyInSourceUnit(factoryId, intermediateBatchNo, feedKg);
         if (restoreQty == null) {
-            throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为" + sfi.getUnit()
-                    + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为" + sfi.getUnit() + "还回")
+            // 用户可见文案不拼裸单位 (UserFacingUnitTranslationRatchetContractTest 棘轮): 走 UnitDisplayNames.display
+            throw new BusinessException(409, "半成品批次 " + intermediateBatchNo + " 为"
+                    + com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit())
+                    + "装但未配置每盒标准克重(每盒克重), 无法把 kg 投料折算为"
+                    + com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit()) + "还回")
                     .withCode("SFI_NO_GRAMS_PER_UNIT")
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
@@ -893,7 +896,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(restoreQty);
         if (newConsumed.signum() < 0) {
-            String u = sfi.getUnit() != null ? sfi.getUnit() : "";
+            String u = com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit());
             throw new BusinessException(409, "撤回还回量超过已消耗量: " + intermediateBatchNo
                     + " 请求还 " + restoreQty.stripTrailingZeros().toPlainString() + u
                     + " 已消耗 " + nz(sfi.getConsumedQuantity()).stripTrailingZeros().toPlainString() + u)
