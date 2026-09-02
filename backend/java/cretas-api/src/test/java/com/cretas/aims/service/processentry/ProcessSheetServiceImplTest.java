@@ -552,6 +552,67 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
+    @DisplayName("正式报工接线: ReworkPolicyAutoDeduction 追加的回料引用与手工回料同路严格扣减, allocation 标 REWORK_AUTO, payload 带 automaticRework+stockConsumedAtSubmit")
+    void submitRow_autoReworkRefsAreConsumedOnTheSamePath() {
+        String autoBatchNo = "CLK-SEMI-REWORK-AUTO";
+        seedReworkSfi(autoBatchNo, "10");
+        // 本测试的计划没钉 Workflow, 真组件会 no-op; 这里桩掉它, 只验 submitRow 与 consumeReworkInputs 的接线。
+        com.cretas.aims.service.processentry.impl.ReworkPolicyAutoDeduction stub =
+                org.mockito.Mockito.mock(com.cretas.aims.service.processentry.impl.ReworkPolicyAutoDeduction.class);
+        org.mockito.Mockito.when(stub.apply(org.mockito.ArgumentMatchers.eq(FACTORY_ID),
+                        org.mockito.ArgumentMatchers.eq(planId), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> {
+                    ProcessSheetRowRequest r = inv.getArgument(2);
+                    UpstreamRef auto = upstreamRef(autoBatchNo, "8.5");
+                    auto.setSemiFinished(true);
+                    auto.setAutomaticRework(true);
+                    r.setUpstreamSources(new java.util.ArrayList<>(List.of(auto)));
+                    r.setInputQuantity(new BigDecimal("108.5"));
+                    ProcessSheetRowResult.ReworkAutoDeduction line = new ProcessSheetRowResult.ReworkAutoDeduction();
+                    line.setDrawnKg(new BigDecimal("8.5"));
+                    line.setOutcome("RESOLVED");
+                    return new com.cretas.aims.service.processentry.impl.ReworkPolicyAutoDeduction.Outcome(
+                            List.of(line), List.of("回料库存不足：缺口 1kg（未拦报工）"));
+                });
+        Object target = AopTestUtils.getTargetObject(processSheetServiceImpl);
+        ReflectionTestUtils.setField(target, "reworkPolicyAutoDeduction", stub);
+        try {
+            ProcessSheetRowRequest req = baseReq("row-rework-auto", "qidiao", 2, "1");
+            req.setFinished(true);
+            req.setProcessDate(LocalDate.of(2026, 7, 21));
+            req.setInputQuantity(new BigDecimal("100"));
+
+            ProcessSheetRowResult submitted = processSheetService.submitRow(
+                    FACTORY_ID, planId, req, operatorId);
+
+            assertThat(submitted.getInputAllocations()).singleElement().satisfies(allocation -> {
+                assertThat(allocation.getBatchNumber()).isEqualTo(autoBatchNo);
+                assertThat(allocation.getQuantity()).isEqualByComparingTo("8.5");
+                assertThat(allocation.getSourceType()).as("账本口径与 RAW_MATERIAL/REWORK 分开").isEqualTo("REWORK_AUTO");
+                assertThat(allocation.getAutomatic()).isTrue();
+            });
+            assertThat(submitted.getReworkAutoDeductions()).singleElement()
+                    .satisfies(line -> assertThat(line.getDrawnKg()).isEqualByComparingTo("8.5"));
+            assertThat(submitted.getWarnings()).anySatisfy(w -> assertThat(w).contains("缺口 1kg"));
+            assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                    FACTORY_ID, autoBatchNo).orElseThrow()).satisfies(sfi -> {
+                        assertThat(sfi.getConsumedQuantity()).isEqualByComparingTo("8.5");
+                        assertThat(sfi.getAvailableQuantity()).isEqualByComparingTo("1.5");
+                    });
+            ProcessSheetRow persisted = rowRepo
+                    .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                            FACTORY_ID, planId, "qidiao", "row-rework-auto")
+                    .orElseThrow();
+            assertThat(persisted.getRowPayload())
+                    .contains("\"automaticRework\":true")
+                    .contains("\"stockConsumedAtSubmit\":true")
+                    .contains("\"inputQuantity\":108.5");
+        } finally {
+            ReflectionTestUtils.setField(target, "reworkPolicyAutoDeduction", null);
+        }
+    }
+
+    @Test
     @DisplayName("5a: 跨租户 planId → 403")
     void saveRow_crossTenantPlan_throws403() {
         // A plan belonging to OTHER_FACTORY_ID

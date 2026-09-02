@@ -89,3 +89,25 @@ export function inputSourceGridTemplate(withSelector: boolean): string {
     '104px',
   ].filter(Boolean).join(' ');
 }
+
+/** 「本次实际扣料」里的来源标签。此前 REWORK 走 else 分支被显示成「原料」, 与账本口径 (RAW_MATERIAL 才计) 对不上。 */
+export function allocationSourceLabel(sourceType: string | null | undefined): string {
+  switch (sourceType) {
+    case 'PACKAGING':
+      return '包材';
+    case 'SEASONING':
+      return '调料';
+    case 'REWORK':
+      return '回料';
+    case 'REWORK_AUTO':
+      return '回料·按配比自动';
+    default:
+      return '原料';
+  }
+}
+
+export function allocationSourceTagType(sourceType: string | null | undefined): 'success' | 'warning' | 'info' {
+  if (sourceType === 'PACKAGING') return 'success';
+  if (sourceType === 'REWORK' || sourceType === 'REWORK_AUTO') return 'info';
+  return 'warning';
+}

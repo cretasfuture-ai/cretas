@@ -42,6 +42,7 @@ import type {
   UpstreamBatchOption,
   UpstreamBatchOptionGroup,
 } from './processSheetInputs';
+import { allocationSourceLabel, allocationSourceTagType } from './processSheetInputs';
 import { boxAvailableKg, isCountUnit, countUnitFeedWarning, countUnitLabelSuffix } from '@/utils/feedUnitConversion';
 import {
   displayProcessUnit,
@@ -2473,6 +2474,14 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     // 否则快照少了后端刚给回来的字段, 下一帧就会被判成"又改过了"。
     row.savedSnapshot = rowContentKey(row);
     row.inputAllocations = action === 'submit' ? (result?.inputAllocations ?? []) : [];
+    const autoRework = (result?.reworkAutoDeductions ?? []).filter((d) => (d.drawnKg ?? 0) > 0);
+    if (autoRework.length) {
+      const total = autoRework.reduce((sum, d) => sum + Number(d.drawnKg || 0), 0);
+      ElMessage({
+        message: `已按配比自动扣减回料 ${total} kg（${autoRework.map((d) => `${d.inputRatioPercent}%：` + d.batches.map((b) => `${b.batchNumber} ${b.quantityKg}kg`).join('、')).join('；')}），已计入本工序投入与成本`,
+        type: 'info', duration: 8000, showClose: true,
+      });
+    }
     if (result?.warnings?.length) {
       ElMessage({ message: `${action === 'draft' ? '草稿已保存' : '正式报工成功'}(含提示): ` + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
     } else {
@@ -3857,8 +3866,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               class="sp-allocation-result-item"
               data-testid="automatic-input-allocation"
             >
-              <el-tag size="small" :type="allocation.sourceType === 'PACKAGING' ? 'success' : 'warning'">
-                {{ allocation.sourceType === 'PACKAGING' ? '包材' : allocation.sourceType === 'SEASONING' ? '调料' : '原料' }}
+              <el-tag size="small" :type="allocationSourceTagType(allocation.sourceType)">
+                {{ allocationSourceLabel(allocation.sourceType) }}
               </el-tag>
               <strong>{{ allocation.materialName || allocation.materialTypeId }}</strong>
               <span>批次 {{ allocation.batchNumber || allocation.materialBatchId }}</span>
@@ -4539,8 +4548,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       class="sp-allocation-result-item"
                       data-testid="automatic-input-allocation"
                     >
-                      <el-tag size="small" :type="allocation.sourceType === 'PACKAGING' ? 'success' : 'warning'">
-                        {{ allocation.sourceType === 'PACKAGING' ? '包材' : allocation.sourceType === 'SEASONING' ? '调料' : '原料' }}
+                      <el-tag size="small" :type="allocationSourceTagType(allocation.sourceType)">
+                        {{ allocationSourceLabel(allocation.sourceType) }}
                       </el-tag>
                       <strong>{{ allocation.materialName || allocation.materialTypeId }}</strong>
                       <span>批次 {{ allocation.batchNumber || allocation.materialBatchId }}</span>

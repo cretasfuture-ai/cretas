@@ -290,6 +290,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 }
                 // (A) SFI 投料: 严格扣减常驻 SFI 库存 (缺失/不足即抛, 整事务回滚 → 不产 phantom FG)。
                 if (ref.isSemiFinished()) {
+                    if (ref.isStockConsumedAtSubmit()) {
+                        // 回料 (手工选的 / 按配比自动追加的) 已在正式报工事务内严格扣减 —— 与结单同一道守卫。
+                        // 成本仍在下方 stockFeedCost 段按 feedKg × unitCost 计入 (那一段不看这个标记)。
+                        continue;
+                    }
                     if (srcBatchNo != null && feed.signum() > 0) {
                         BigDecimal drawn = wipInventoryService
                                 .consumeClerkSemiStrict(factoryId, srcBatchNo, feed);

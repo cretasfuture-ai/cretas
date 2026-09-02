@@ -71,6 +71,11 @@ export interface UpstreamRef {
    * consumeForFeedStrict 严格扣减成品 (loud-fail)。与 semiFinished 互斥。默认 false。
    */
   finishedGoods?: boolean;
+  /**
+   * 服务端按画布 reworkPolicy（主料 × 比例）自动追加的回料投料，不是操作员选的。
+   * 只读回显；扣减与成本口径与手工回料同一条路。
+   */
+  automaticRework?: boolean;
 
   // 2B.2 端口身份 (多投入合流必带, 区分同 SKU 出现在不同投入端口)。可空 (legacy 单产出/非 workflow)。
   /** 对应 workflow 投入端口 id。 */
@@ -216,6 +221,22 @@ export interface ProcessSheetRowResult {
   outputs?: OutputResult[] | null;
   submissionStatus?: 'DRAFT' | 'SUBMITTED' | 'LEGACY';
   inputAllocations?: ProductionInputAllocation[];
+  /** 正式提交时按画布 reworkPolicy 自动扣减的回料 (每条政策一行); 无政策时为空。 */
+  reworkAutoDeductions?: ReworkAutoDeduction[];
+}
+
+export interface ReworkAutoDeduction {
+  reworkNodeId: string;
+  reworkSkuId: string | null;
+  inputRatioPercent: number;
+  /** 分母: 本工序主料 (不含回料); 算不出时 null */
+  mainInputKg: number | null;
+  targetKg: number | null;
+  manualKg: number | null;
+  drawnKg: number;
+  shortfallKg: number | null;
+  outcome: 'RESOLVED' | 'UNRESOLVED_MAIN_INPUT' | 'REWORK_SKU_UNBOUND';
+  batches: { batchNumber: string; quantityKg: number }[];
 }
 
 export interface ProductionInputAllocation {
