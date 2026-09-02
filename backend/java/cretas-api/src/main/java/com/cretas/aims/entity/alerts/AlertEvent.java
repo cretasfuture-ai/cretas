@@ -3,6 +3,7 @@ package com.cretas.aims.entity.alerts;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -76,6 +77,7 @@ public class AlertEvent extends BaseEntity {
     /** 严重度 snapshot (rule.severity 在事件创建时的拷贝, 规则后续变化不追溯). */
     @Enumerated(EnumType.STRING)
     @Column(name = "severity", length = 10, nullable = false)
+    @Builder.Default
     private AlertSeverity severity = AlertSeverity.MID;
 
     /**
@@ -90,6 +92,7 @@ public class AlertEvent extends BaseEntity {
     /** 事件状态机. */
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
+    @Builder.Default
     private AlertEventStatus status = AlertEventStatus.OPEN;
 
     /** 确认人 userId (用户点 acknowledge 时填). */

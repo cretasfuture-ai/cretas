@@ -76,6 +76,7 @@ public class WorkflowRule extends BaseEntity {
      * </ul>
      */
     @Column(name = "expression", nullable = false, columnDefinition = "jsonb")
+    @Builder.Default
     private String expression = "{}";
 
     /** rule eval=true 时路由到此 nodeId */

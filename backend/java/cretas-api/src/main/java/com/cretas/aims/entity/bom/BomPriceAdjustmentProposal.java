@@ -73,6 +73,7 @@ public class BomPriceAdjustmentProposal extends BaseEntity {
     private BigDecimal deltaPercent;
 
     @Column(name = "affected_product_count", nullable = false)
+    @Builder.Default
     private Integer affectedProductCount = 0;
 
     @Enumerated(EnumType.STRING)

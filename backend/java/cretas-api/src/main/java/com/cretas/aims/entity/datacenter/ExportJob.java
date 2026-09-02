@@ -52,6 +52,7 @@ public class ExportJob extends BaseEntity {
 
     /** PENDING | RUNNING | SUCCESS | FAILED. */
     @Column(name = "status", nullable = false, length = 20)
+    @Builder.Default
     private String status = "PENDING";
 
     /** SpEL filter 输入变量, e.g. {@code {"startDate":"2026-01-01","endDate":"2026-05-31"}}. */

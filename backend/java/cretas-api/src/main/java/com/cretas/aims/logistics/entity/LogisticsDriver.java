@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.logistics.entity.enums.OwnershipType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -58,6 +59,7 @@ public class LogisticsDriver extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "employment_type", length = 16, nullable = false)
+    @Builder.Default
     private OwnershipType employmentType = OwnershipType.OWNED;
 
     @Column(name = "service_areas", length = 512)
@@ -70,6 +72,7 @@ public class LogisticsDriver extends BaseEntity {
     private String availableTo;
 
     @Column(name = "active", nullable = false)
+    @Builder.Default
     private Boolean active = Boolean.TRUE;
 
     @Version

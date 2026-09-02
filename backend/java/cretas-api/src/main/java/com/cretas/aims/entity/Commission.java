@@ -83,6 +83,7 @@ public class Commission extends BaseEntity {
     /** 状态 PENDING/PAID/CANCELLED. */
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
+    @Builder.Default
     private CommissionStatus status = CommissionStatus.PENDING;
 
     /** 发放时间. NULL = 未发放. */

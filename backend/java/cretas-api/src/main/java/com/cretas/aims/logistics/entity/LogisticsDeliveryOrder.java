@@ -6,6 +6,7 @@ import com.cretas.aims.logistics.entity.enums.DeliveryOrderStatus;
 import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -95,15 +96,19 @@ public class LogisticsDeliveryOrder extends BaseEntity {
     private String areaCode;
 
     @Column(name = "pieces", nullable = false)
+    @Builder.Default
     private Integer pieces = 0;
 
     @Column(name = "boxes", nullable = false)
+    @Builder.Default
     private Integer boxes = 0;
 
     @Column(name = "weight_kg", nullable = false, precision = 12, scale = 3)
+    @Builder.Default
     private BigDecimal weightKg = BigDecimal.ZERO;
 
     @Column(name = "volume_cbm", nullable = false, precision = 12, scale = 3)
+    @Builder.Default
     private BigDecimal volumeCbm = BigDecimal.ZERO;
 
     @Column(name = "delivery_window_start", length = 8)
@@ -120,15 +125,18 @@ public class LogisticsDeliveryOrder extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "location_status", length = 24, nullable = false)
+    @Builder.Default
     private LocationStatus locationStatus = LocationStatus.UNRESOLVED;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 24, nullable = false)
+    @Builder.Default
     private DeliveryOrderStatus status = DeliveryOrderStatus.IMPORTED;
 
     // ===== 执行态(排线确认后的送达跟踪, 与规划态 status 独立) =====
     @Enumerated(EnumType.STRING)
     @Column(name = "delivery_status", length = 24, nullable = false)
+    @Builder.Default
     private DeliveryExecutionStatus deliveryStatus = DeliveryExecutionStatus.PENDING;
 
     /** 送达时间(标记已送达时写)。 */

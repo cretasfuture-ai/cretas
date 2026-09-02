@@ -65,12 +65,15 @@ public class ExportRule extends BaseEntity {
 
     /** XLSX | CSV | PDF. */
     @Column(name = "format", nullable = false, length = 10)
+    @Builder.Default
     private String format = "XLSX";
 
     @Column(name = "is_async", nullable = false)
+    @Builder.Default
     private Boolean isAsync = Boolean.FALSE;
 
     @Column(name = "row_threshold", nullable = false)
+    @Builder.Default
     private Integer rowThreshold = 10000;
 
     /** Fully-qualified JPA entity class name, e.g. {@code com.cretas.aims.entity.Customer}. */

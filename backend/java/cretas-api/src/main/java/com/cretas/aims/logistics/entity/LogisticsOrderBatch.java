@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.logistics.entity.enums.OrderBatchStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -86,15 +87,19 @@ public class LogisticsOrderBatch extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 32, nullable = false)
+    @Builder.Default
     private OrderBatchStatus status = OrderBatchStatus.PREVIEWED;
 
     @Column(name = "total_rows", nullable = false)
+    @Builder.Default
     private Integer totalRows = 0;
 
     @Column(name = "valid_rows", nullable = false)
+    @Builder.Default
     private Integer validRows = 0;
 
     @Column(name = "error_rows", nullable = false)
+    @Builder.Default
     private Integer errorRows = 0;
 
     @Column(name = "created_by", length = 64)

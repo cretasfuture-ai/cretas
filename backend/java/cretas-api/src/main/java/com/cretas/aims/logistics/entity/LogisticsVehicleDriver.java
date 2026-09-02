@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.logistics.entity.enums.DriverRole;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -74,6 +75,7 @@ public class LogisticsVehicleDriver extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "role", length = 16, nullable = false)
+    @Builder.Default
     private DriverRole role = DriverRole.PRIMARY;
 
     @Column(name = "shift_start", length = 8)
@@ -83,6 +85,7 @@ public class LogisticsVehicleDriver extends BaseEntity {
     private String shiftEnd;
 
     @Column(name = "priority", nullable = false)
+    @Builder.Default
     private Integer priority = 0;
 
     @Column(name = "effective_from")
@@ -92,6 +95,7 @@ public class LogisticsVehicleDriver extends BaseEntity {
     private LocalDate effectiveTo;
 
     @Column(name = "active", nullable = false)
+    @Builder.Default
     private Boolean active = Boolean.TRUE;
 
     @Version

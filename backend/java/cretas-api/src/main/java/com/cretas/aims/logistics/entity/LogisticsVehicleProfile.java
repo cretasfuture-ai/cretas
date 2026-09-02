@@ -5,6 +5,7 @@ import com.cretas.aims.logistics.entity.enums.OwnershipType;
 import com.cretas.aims.logistics.entity.enums.TemperatureMode;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -73,13 +74,16 @@ public class LogisticsVehicleProfile extends BaseEntity {
     private String factoryId;
 
     @Column(name = "capacity_cbm", nullable = false, precision = 12, scale = 3)
+    @Builder.Default
     private BigDecimal capacityCbm = BigDecimal.ZERO;
 
     @Column(name = "max_weight_kg", nullable = false, precision = 12, scale = 3)
+    @Builder.Default
     private BigDecimal maxWeightKg = BigDecimal.ZERO;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "source", length = 16, nullable = false)
+    @Builder.Default
     private OwnershipType source = OwnershipType.OWNED;
 
     @Column(name = "body_type", length = 64)
@@ -87,6 +91,7 @@ public class LogisticsVehicleProfile extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "temperature_mode", length = 24, nullable = false)
+    @Builder.Default
     private TemperatureMode temperatureMode = TemperatureMode.DUAL_TEMP;
 
     @Column(name = "service_areas", length = 512)
@@ -99,6 +104,7 @@ public class LogisticsVehicleProfile extends BaseEntity {
     private String availableTo;
 
     @Column(name = "active", nullable = false)
+    @Builder.Default
     private Boolean active = Boolean.TRUE;
 
     @Version

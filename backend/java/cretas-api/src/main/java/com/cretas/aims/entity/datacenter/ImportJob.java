@@ -53,6 +53,7 @@ public class ImportJob extends BaseEntity {
 
     /** PENDING | DRYRUN_DONE | COMMITTED | FAILED. */
     @Column(name = "status", nullable = false, length = 20)
+    @Builder.Default
     private String status = "PENDING";
 
     @Column(name = "source_filename", columnDefinition = "TEXT")

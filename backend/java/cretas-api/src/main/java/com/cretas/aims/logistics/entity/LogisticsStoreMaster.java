@@ -5,6 +5,7 @@ import com.cretas.aims.logistics.entity.enums.LocationStatus;
 import com.cretas.aims.logistics.entity.enums.StoreMasterSource;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -92,11 +93,13 @@ public class LogisticsStoreMaster extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "location_status", length = 24, nullable = false)
+    @Builder.Default
     private LocationStatus locationStatus = LocationStatus.UNRESOLVED;
 
     /** 坐标来源 — GEOCODED (自动解析) / MANUAL (调度员修正) / IMPORT (导入行自带坐标)。 */
     @Enumerated(EnumType.STRING)
     @Column(name = "source", length = 24, nullable = false)
+    @Builder.Default
     private StoreMasterSource source = StoreMasterSource.GEOCODED;
 
     @Version
