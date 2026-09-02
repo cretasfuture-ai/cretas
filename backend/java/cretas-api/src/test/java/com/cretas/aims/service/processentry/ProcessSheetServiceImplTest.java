@@ -612,6 +612,108 @@ class ProcessSheetServiceImplTest {
         }
     }
 
+    @Autowired
+    private com.cretas.aims.service.reversal.ReportReversalService reportReversalService;
+    @Autowired
+    private com.cretas.aims.repository.ProductWorkProcessRepository productWorkProcessRepoForReversal;
+    @Autowired
+    private com.cretas.aims.repository.WorkProcessRepository workProcessRepoForReversal;
+
+    @Test
+    @DisplayName("阴性事实 (2026-09-02 票): 提交时扣掉的回料, 整批撤回后【没有】还回 —— OUT 流水无 reportId, 撤回只按 reportId 找")
+    void batchReversal_doesNotRestoreReworkConsumedAtSubmit() {
+        String reworkBatchNo = "CLK-SEMI-REWORK-REV";
+        // 正式提交的生产库分摊与撤回释放占用都要解析 WH-WKS (WarehouseResolver), 测试工厂没有种子 → 补一个
+        FactoryWarehouse workshop = new FactoryWarehouse();
+        workshop.setId("PSF-WH-WKS-" + UUID.randomUUID().toString().substring(0, 8));
+        workshop.setFactoryId(FACTORY_ID);
+        workshop.setCode("WH-WKS");
+        workshop.setName("测试生产仓");
+        workshop.setType(WarehouseType.WORKSHOP);
+        workshop.setIsActive(true);
+        warehouseRepo.saveAndFlush(workshop);
+        // 正式提交只能投「已领到生产仓」的原料批 → 在生产仓再种一批
+        String wsBatchId = "PSF-RAWWS-" + UUID.randomUUID().toString().substring(0, 8);
+        MaterialBatch wsRaw = new MaterialBatch();
+        wsRaw.setId(wsBatchId);
+        wsRaw.setFactoryId(FACTORY_ID);
+        wsRaw.setBatchNumber("PSF-RAWWS-" + System.currentTimeMillis() % 100000);
+        wsRaw.setMaterialTypeId(RAW_MATERIAL_TYPE_ID);
+        wsRaw.setWarehouseId(workshop.getId());
+        wsRaw.setReceiptQuantity(new BigDecimal("100.00"));
+        wsRaw.setQuantityUnit("kg");
+        wsRaw.setUsedQuantity(BigDecimal.ZERO);
+        wsRaw.setReservedQuantity(BigDecimal.ZERO);
+        wsRaw.setUnitPrice(RAW_PRICE);
+        wsRaw.setStatus(MaterialBatchStatus.AVAILABLE);
+        wsRaw.setReceiptDate(LocalDate.now());
+        wsRaw.setCreatedBy(operatorId);
+        materialBatchRepo.saveAndFlush(wsRaw);
+        // 正式提交带原料时 normalizeConfiguredUnits 要求产品配置了该工序 (legacy 单单位旁路只对无单位载荷开)
+        com.cretas.aims.entity.WorkProcess xiuyouWp = new com.cretas.aims.entity.WorkProcess();
+        xiuyouWp.setId("PSF-WP-XIUYOU-" + UUID.randomUUID().toString().substring(0, 8));
+        xiuyouWp.setFactoryId(FACTORY_ID);
+        xiuyouWp.setProcessName("修油");
+        xiuyouWp.setProcessCategory("修油");
+        xiuyouWp.setUnit("kg");
+        xiuyouWp.setDefaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED);
+        workProcessRepoForReversal.saveAndFlush(xiuyouWp);
+        com.cretas.aims.entity.ProductWorkProcess pwp = new com.cretas.aims.entity.ProductWorkProcess();
+        pwp.setFactoryId(FACTORY_ID);
+        pwp.setProductTypeId(PRODUCT_TYPE_ID);
+        pwp.setWorkProcessId(xiuyouWp.getId());
+        pwp.setProcessOrder(1);
+        pwp.setReportingRequired(true);
+        pwp.setAllowSemiFinishedInjection(true);
+        pwp.setAllowMultipleUpstreamSources(true);
+        pwp.setAllowFinishedGoodsSource(false);
+        productWorkProcessRepoForReversal.saveAndFlush(pwp);
+
+        seedReworkSfi(reworkBatchNo, "10");
+        // 行形态: 修油 (原料 100 → 产出 80) + 人工时段 (⇒ 写 YIELD/LABOR 报工, 撤回才有东西可撤) + 4kg 回料上游。
+        //   第一版只带回料上游的 qidiao 行没有 YIELD 报工, submitReversal 走「无报工 → no-op DONE」, 读数无意义。
+        ProcessSheetRowRequest req = baseReq("row-rework-reversal", "xiuyou", 1, "80");
+        req.setProcessDate(LocalDate.of(2026, 7, 22));
+        req.setInputQuantity(new BigDecimal("104"));
+        req.setRawMaterialInputs(List.of(rawInput(wsBatchId, "100")));
+        com.cretas.aims.dto.processentry.LaborSegment shift = new com.cretas.aims.dto.processentry.LaborSegment();
+        shift.setStartTime("08:00");
+        shift.setEndTime("10:00");
+        shift.setWorkerCount(2);
+        req.setLaborSegments(List.of(shift));
+        UpstreamRef rework = upstreamRef(reworkBatchNo, "4");
+        rework.setSemiFinished(true);
+        req.setUpstreamSources(List.of(rework));
+        ProcessSheetRowResult submitted = processSheetService.submitRow(FACTORY_ID, planId, req, operatorId);
+        assertThat(submitted.getBatchId()).isNotNull();
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)
+                .orElseThrow().getAvailableQuantity()).as("提交时严格扣了 4").isEqualByComparingTo("6");
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, submitted.getBatchId()))
+                .as("阳性对照前提: 这一批有活 YIELD 报工 (人工), 撤回才不会走 no-op").isNotEmpty();
+
+        // 4 眼原则: 审批人不能是提交人
+        User approver = new User();
+        approver.setFactoryId(FACTORY_ID);
+        approver.setUsername("psf_approver_" + UUID.randomUUID().toString().substring(0, 8));
+        approver.setPasswordHash("$2a$10$DUMMYHASHFORTESTPLACEHOLDERONLY1");
+        approver.setIsActive(true);
+        approver = userRepo.saveAndFlush(approver);
+        var log = reportReversalService.submitReversal(FACTORY_ID, submitted.getBatchId(), operatorId, "test");
+        // 有报工数据 → PENDING 需审批; 没有 → 直通 DONE (executeReversal 已跑)
+        if (log.getStatus() == com.cretas.aims.entity.ReportReversalLog.ReversalStatus.PENDING) {
+            reportReversalService.approveReversal(FACTORY_ID, log.getId(), approver.getId());
+        }
+
+        // 阳性对照: 撤回真的跑了 —— executeReversal ① 软删这一批全部 YIELD 报工 (设计上的必然)
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, submitted.getBatchId()))
+                .as("撤回必须真的执行 (否则下面的「没还」读数无意义)").isEmpty();
+        // 阴性事实: 回料没有还回来 (修法落地后这条要翻成 10)
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)
+                .orElseThrow().getAvailableQuantity())
+                .as("既有缺陷钉成事实: 提交时扣的回料撤回后没还 (仍是 6, 不是 10)")
+                .isEqualByComparingTo("6");
+    }
+
     @Test
     @DisplayName("5a: 跨租户 planId → 403")
     void saveRow_crossTenantPlan_throws403() {
