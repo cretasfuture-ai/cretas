@@ -145,6 +145,11 @@ public final class WipLedgerEntries {
      */
     public static final String CLERK_IN_REF_PREFIX  = "interim-settle-in:";
     /** 见 {@link #CLERK_IN_REF_PREFIX}。 */
+    /**
+     * ⚠️ 命名债 (不改名): 这个前缀同时覆盖<b>两条</b>写入口 —— 小结的 SFI 投料扣减 和 正式报工的回料严格扣减, 都经
+     * {@code consumeClerkSemiStrict} → {@link #clerkConsumptionRow}。整单撤回的「外部领用血缘」白名单按它识别
+     * (ReportReversalServiceImpl.isExternalConsumptionOut), 改名要两边一起改。
+     */
     public static final String CLERK_OUT_REF_PREFIX = "interim-settle-out:";
 
     /**

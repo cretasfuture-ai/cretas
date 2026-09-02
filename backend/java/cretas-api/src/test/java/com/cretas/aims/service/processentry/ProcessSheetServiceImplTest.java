@@ -253,7 +253,14 @@ class ProcessSheetServiceImplTest {
     /** 修油行 (原料 100 → 80, 人工时段 ⇒ 写 YIELD 报工) + 回料上游正式提交; 生产仓/工序绑定种子一并造好。 */
     private ProcessSheetRowResult submitXiuyouWithRework(String clientRowId, String reworkBatchNo, String feedKg) {
         // 正式提交的生产库分摊与撤回释放占用都要解析 WH-WKS (WarehouseResolver), 测试工厂没有种子 → 补一个
-        FactoryWarehouse workshop = new FactoryWarehouse();
+        boolean workshopSeeded = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM factory_warehouses WHERE factory_id = ? AND code = 'WH-WKS'", Integer.class,
+                FACTORY_ID) > 0;
+        FactoryWarehouse workshop = workshopSeeded
+                ? warehouseRepo.findAll().stream().filter(w -> FACTORY_ID.equals(w.getFactoryId())
+                        && "WH-WKS".equals(w.getCode())).findFirst().orElseThrow()
+                : new FactoryWarehouse();
+        if (!workshopSeeded) {
         workshop.setId("PSF-WH-WKS-" + UUID.randomUUID().toString().substring(0, 8));
         workshop.setFactoryId(FACTORY_ID);
         workshop.setCode("WH-WKS");
@@ -261,6 +268,7 @@ class ProcessSheetServiceImplTest {
         workshop.setType(WarehouseType.WORKSHOP);
         workshop.setIsActive(true);
         warehouseRepo.saveAndFlush(workshop);
+        }
         // 正式提交只能投「已领到生产仓」的原料批 → 在生产仓再种一批
         String wsBatchId = "PSF-RAWWS-" + UUID.randomUUID().toString().substring(0, 8);
         MaterialBatch wsRaw = new MaterialBatch();
@@ -279,6 +287,8 @@ class ProcessSheetServiceImplTest {
         wsRaw.setCreatedBy(operatorId);
         materialBatchRepo.saveAndFlush(wsRaw);
         // 正式提交带原料时 normalizeConfiguredUnits 要求产品配置了该工序 (legacy 单单位旁路只对无单位载荷开)
+        if (productWorkProcessRepoForReversal
+                .findByFactoryIdAndProductTypeIdAndProcessOrder(FACTORY_ID, PRODUCT_TYPE_ID, 1).isEmpty()) {
         com.cretas.aims.entity.WorkProcess xiuyouWp = new com.cretas.aims.entity.WorkProcess();
         xiuyouWp.setId("PSF-WP-XIUYOU-" + UUID.randomUUID().toString().substring(0, 8));
         xiuyouWp.setFactoryId(FACTORY_ID);
@@ -297,6 +307,7 @@ class ProcessSheetServiceImplTest {
         pwp.setAllowMultipleUpstreamSources(true);
         pwp.setAllowFinishedGoodsSource(false);
         productWorkProcessRepoForReversal.saveAndFlush(pwp);
+        }
 
         // 行形态: 修油 (原料 100 → 产出 80) + 人工时段 (⇒ 写 YIELD/LABOR 报工, 撤回才有东西可撤) + 4kg 回料上游。
         //   第一版只带回料上游的 qidiao 行没有 YIELD 报工, submitReversal 走「无报工 → no-op DONE」, 读数无意义。
@@ -802,6 +813,138 @@ class ProcessSheetServiceImplTest {
         // 直接用 feedKg 反冲会变成 8 − 4 = 4 盒 (4 盒永久蒸发); 成对折算后回到 0
         assertThat(restored.getConsumedQuantity()).as("consumed 回原值").isEqualByComparingTo("0");
         assertThat(restored.getAvailableQuantity()).isEqualByComparingTo("20");
+    }
+
+    /**
+     * 把「批次 {@code producerBatchId} 产出了一块常驻回料 SFI」种进账本: SFI 行 batchId=产出批, IN 流水挂产出批的首条
+     * YIELD 报工 (PRODUCTION_OUTPUT) —— 与 WipLedgerEntries.productionRow 落下来的形状一致, 整单撤回的
+     * WIP_NOT_LEDGERED / validateReportWipTransactions 都认。
+     */
+    private SemiFinishedInventory seedProducedReworkSfi(Long producerBatchId, String batchNo, String qty) {
+        Long reportId = reportRepo.findYieldReportsByBatch(FACTORY_ID, producerBatchId).get(0).getId();
+        SemiFinishedInventory sfi = SemiFinishedInventory.builder()
+                .factoryId(FACTORY_ID)
+                .intermediateBatchNo(batchNo)
+                .productTypeId(PRODUCT_TYPE_ID)
+                .batchId(producerBatchId)
+                .producedQuantity(new BigDecimal(qty))
+                .consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal(qty))
+                .unit("kg")
+                .isRework(true)
+                .build();
+        sfi = sfiRepo.saveAndFlush(sfi);
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID)
+                .semiFinishedId(sfi.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.IN)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT)
+                .sourceRef("test-produce:" + batchNo)
+                .quantity(new BigDecimal(qty))
+                .balanceAfter(new BigDecimal(qty))
+                .reportId(reportId)
+                .operatorId(operatorId)
+                .build());
+        return sfi;
+    }
+
+    private String reversalErrorCode(Long batchId) {
+        try {
+            reverseWholeBatch(batchId);
+            return "OK";
+        } catch (BusinessException e) {
+            return e.getErrorCode();
+        }
+    }
+
+    @Test
+    @DisplayName("产出批的回料正被别批领着 → 整单撤回按业务拒绝 DOWNSTREAM_CONSUMED (这条要保留, 不是缺陷)")
+    void producerBatch_whileConsumedByAnotherBatch_isRefusedAsDownstreamConsumed() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-A", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-A", "CLK-SEMI-THROWAWAY-A", "1");
+        seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-A", "10");
+        ProcessSheetRowResult consumer = submitXiuyouWithRework("row-consumer-B", "CLK-SEMI-FROM-A", "4");
+        assertThat(consumer.getBatchId()).isNotNull();
+
+        assertThat(reversalErrorCode(producer.getBatchId())).isEqualTo("DOWNSTREAM_CONSUMED");
+    }
+
+    @Test
+    @DisplayName("票: 产出批的回料被别批领过又还回 (净 0) 后, 整单撤回能撤 —— 外部领用 OUT/REVERSE 按净额判, 账本校验豁免 reportId 但余额照算")
+    void producerBatch_afterConsumerReversed_isReversibleAgain() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-B", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-B", "CLK-SEMI-THROWAWAY-B", "1");
+        SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-B", "10");
+        ProcessSheetRowResult consumer = submitXiuyouWithRework("row-consumer-C", "CLK-SEMI-FROM-B", "4");
+        reverseWholeBatch(consumer.getBatchId());   // 还回 4: REVERSE reportId=null, sourceRef=reversal-log:<id>
+        SemiFinishedInventory afterRestore = sfiRepo.findById(produced.getId()).orElseThrow();
+        assertThat(afterRestore.getAvailableQuantity()).as("消费批撤回后净 0").isEqualByComparingTo("10");
+
+        // 第一个 commit 钉住的阴性事实是 DOWNSTREAM_CONSUMED; 修法后净 0 ⇒ 能撤, 且产出的 IN 被冲回
+        assertThat(reversalErrorCode(producer.getBatchId())).isEqualTo("OK");
+        assertThat(sfiRepo.findById(produced.getId()).orElseThrow().getAvailableQuantity())
+                .as("产出批撤回 ⇒ 它产的回料 IN 被冲回 (10 → 0)").isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 无 reportId 且来路不明 (sourceRef 不是这两类前缀) 的 OUT 仍拦 —— 豁免只认前缀")
+    void producerBatch_withUnknownExternalOut_isStillRefused() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-D", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-D", "CLK-SEMI-THROWAWAY-D", "1");
+        SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-D", "10");
+        // 一条来路不明的 OUT (无 reportId, sourceRef 不是 interim-settle-out:)
+        produced.setConsumedQuantity(new BigDecimal("3"));
+        produced.setAvailableQuantity(new BigDecimal("7"));
+        sfiRepo.saveAndFlush(produced);
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID)
+                .semiFinishedId(produced.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                .sourceRef("mystery:" + UUID.randomUUID())
+                .quantity(new BigDecimal("-3"))
+                .balanceAfter(new BigDecimal("7"))
+                .operatorId(operatorId)
+                .build());
+
+        assertThat(reversalErrorCode(producer.getBatchId()))
+                .as("来路不明的领用: 守卫 fail-closed")
+                .isEqualTo("DOWNSTREAM_CONSUMED");
+    }
+
+    @Test
+    @DisplayName("阳性对照: 从没被别批领过的产出批能整单撤回, 且产出的回料 IN 被冲回 (10 → 0)")
+    void producerBatch_neverConsumed_isReversible() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-C", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-C", "CLK-SEMI-THROWAWAY-C", "1");
+        SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-C", "10");
+
+        assertThat(reversalErrorCode(producer.getBatchId())).isEqualTo("OK");
+        assertThat(sfiRepo.findById(produced.getId()).orElseThrow().getAvailableQuantity())
+                .as("产出批撤回 ⇒ 它产的回料 IN 被冲回").isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 外部领用净额为负 (还回多于领用, 账不平) → WIP_LEDGER_INVALID, ⛔ 不静默放行")
+    void producerBatch_withExternalRestoreExceedingConsumption_isRefusedAsLedgerInvalid() {
+        seedReworkSfi("CLK-SEMI-THROWAWAY-E", "10");
+        ProcessSheetRowResult producer = submitXiuyouWithRework("row-producer-E", "CLK-SEMI-THROWAWAY-E", "1");
+        SemiFinishedInventory produced = seedProducedReworkSfi(producer.getBatchId(), "CLK-SEMI-FROM-E", "10");
+        // 手工造: 外部领用 OUT 3, 还回 REVERSE 5 ⇒ 净 −2
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID).semiFinishedId(produced.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
+                .sourceRef(com.cretas.aims.service.wip.WipLedgerEntries.CLERK_OUT_REF_PREFIX + "CLK-SEMI-FROM-E")
+                .quantity(new BigDecimal("-3")).balanceAfter(new BigDecimal("7")).operatorId(operatorId).build());
+        sfiTxnRepo.saveAndFlush(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(FACTORY_ID).semiFinishedId(produced.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                .sourceRef("reversal-log:999999")
+                .quantity(new BigDecimal("5")).balanceAfter(new BigDecimal("12")).operatorId(operatorId).build());
+
+        assertThat(reversalErrorCode(producer.getBatchId())).isEqualTo("WIP_LEDGER_INVALID");
     }
 
     @Test
