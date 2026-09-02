@@ -617,7 +617,7 @@ def test_label_qc_workbench_uses_three_reference_layers_and_human_tools():
     )
     assert all(_needs_label_qc_review_guard(q) for q in equivalent_questions)
     assert _needs_label_qc_review_guard("普通质检照片上传后怎样作为照片证据回读？")
-    assert "质检附件（`QUALITY_CHECK`） 附件" in _LABEL_QC_REVIEW_ANSWER
+    assert "质检（`QUALITY_CHECK`） 附件" in _LABEL_QC_REVIEW_ANSWER
     assert "切换盒子或照片时自动校验并保存" in _LABEL_QC_REVIEW_ANSWER
     assert "明确识别到盒子且无风险时显示“系统未见风险”" in _LABEL_QC_REVIEW_ANSWER
     assert "缺少显式可信结论时一律失败关闭" in _LABEL_QC_REVIEW_ANSWER
@@ -659,7 +659,7 @@ def test_multi_output_warehouse_receipt_uses_line_based_atomic_contract():
     assert "累计实收不得超过该行正式报工数量" in (
         _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     )
-    assert "部分入库（`PARTIAL`） / 部分入库（`PARTIALLY_RECEIVED`）" in (
+    assert "部分入库（`PARTIAL`） / 部分入库（累计）（`PARTIALLY_RECEIVED`）" in (
         _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
     )
     assert "已完成（`COMPLETED`） / 已收货（`RECEIVED`）" in _MULTI_OUTPUT_WAREHOUSE_RECEIPT_ANSWER
@@ -728,7 +728,7 @@ def test_20260825_factory_runtime_contracts_are_deterministic_and_isolated():
     )
     assert all(_needs_factory_incremental_receipt_guard(q) for q in receipt_questions)
     assert "备注由服务端持久化" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
-    assert "部分入库（`PARTIAL`） / 部分入库（`PARTIALLY_RECEIVED`）" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
+    assert "部分入库（`PARTIAL`） / 部分入库（累计）（`PARTIALLY_RECEIVED`）" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
     assert "已完成（`COMPLETED`） / 已收货（`RECEIVED`）" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
     assert "主动开始下一轮生成新键" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
     assert "当前有效小结会话 小结入账时间（`postedAt`） 精确一致" in _FACTORY_INCREMENTAL_RECEIPT_ANSWER
@@ -802,7 +802,7 @@ def test_factory_sales_delivery_and_auto_invoice_chain_is_deterministic():
     assert all(_needs_factory_sales_delivery_invoice_guard(q) for q in equivalent_questions)
     assert not _needs_factory_sales_delivery_invoice_guard("餐饮外卖订单怎样开票？")
     assert "`FINISHED_PRODUCT` 和 `SEMI_FINISHED`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
-    assert "独立 “客户自带物料”区（`suppliedMaterials`）" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
+    assert "独立 `suppliedMaterials`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "母单永远不能直接扣库存" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "`PENDING_WAREHOUSE_CONFIRM`" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
     assert "全部子单发完的完成态边沿只生成一个" in _FACTORY_SALES_DELIVERY_INVOICE_ANSWER
@@ -1476,7 +1476,7 @@ def test_latest_f006_sop_is_a_deployable_manual_source():
     assert "不能把系统自动通过当成人工结论" in current_sop
     assert "日常只显示风险框" in current_sop
     assert "未触碰的 AI 盒子不能随提交变成人工对象真值" in current_sop
-    assert "质检附件（`QUALITY_CHECK`） 附件" in current_sop
+    assert "质检（`QUALITY_CHECK`） 附件" in current_sop
     assert "切换盒子或照片时自动校验并保存" in current_sop
     assert "平台训练选样" in current_sop
     assert "不能回写或覆盖工厂整图盒子真值" in current_sop
