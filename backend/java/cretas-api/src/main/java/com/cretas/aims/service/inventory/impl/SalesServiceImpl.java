@@ -2407,6 +2407,7 @@ public class SalesServiceImpl implements SalesService {
         if (!orderId.equals(item.getSalesOrderId())) {
             throw new BusinessException(409, "销售订单行与订单不匹配")
                     .withCode("SOURCE_WAREHOUSE_REPAIR_ITEM_MISMATCH")
+                    .withHint("请刷新页面后重新选择要修复来源仓的订单行")
                     .withHintTarget("itemId");
         }
 
@@ -2944,6 +2945,7 @@ public class SalesServiceImpl implements SalesService {
                 if (requested == null || requested.compareTo(remaining) != 0) {
                     throw new BusinessException(409, "一次性全量发运必须覆盖母单每一行的全部剩余数量")
                             .withCode("DELIVERY_FULL_QUANTITY_REQUIRED")
+                            .withHint("请为每一行填写等于剩余数量的分批发运数量，或改用「部分」发运模式")
                             .withHintTarget("items");
                 }
             }
@@ -3005,6 +3007,7 @@ public class SalesServiceImpl implements SalesService {
                 throw new BusinessException(409, "子发运数量超过母单剩余可安排数量（剩余 " + remaining
                         + UnitDisplayNames.display(source.getUnit()) + "）")
                         .withCode("SHIPMENT_QUANTITY_EXCEEDS_PARENT_REMAINING")
+                        .withHint("请将本行分批发运数量调整为不超过剩余可安排数量")
                         .withHintTarget("quantity");
             }
             SalesDeliveryItem item = new SalesDeliveryItem();
@@ -4821,6 +4824,8 @@ public class SalesServiceImpl implements SalesService {
                     .orElseThrow(() -> new BusinessException(409,
                             "发货明细关联的销售订单行不存在或产品身份不一致")
                             .withCode("DELIVERY_ORDER_ITEM_IDENTITY_MISMATCH")
+                            .withHint("为避免记错账，操作已阻止；请核对该发货明细与销售订单对应的产品行，"
+                                    + "重新关联订单行后重试")
                             .withHintTarget("salesOrderItemId"));
         }
         List<SalesOrderItem> candidates = orderItems.stream()
@@ -4833,6 +4838,10 @@ public class SalesServiceImpl implements SalesService {
                     .withCode(candidates.isEmpty()
                             ? "DELIVERY_ORDER_ITEM_NOT_FOUND"
                             : "LEGACY_DELIVERY_ORDER_ITEM_AMBIGUOUS")
+                    .withHint(candidates.isEmpty()
+                            ? "请核对该产品是否仍在此销售订单中，或为该发货明细补充正确的订单行关联后重试"
+                            : "该发货明细缺少明确的订单行归属，且同一产品在订单中有多行，"
+                                    + "无法安全判断记到哪一行；请为该发货明细补充明确的订单行关联后重试")
                     .withHintTarget("salesOrderItemId");
         }
         return candidates.get(0);

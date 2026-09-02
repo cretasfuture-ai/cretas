@@ -1053,6 +1053,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                         || !Objects.equals(item.getSupplierMaterialId(), spec.getSupplierMaterialId())) {
                     throw new BusinessException(409, "采购包装规格已停用或与供应关系不匹配")
                             .withCode("PURCHASE_PACKAGING_SPEC_INACTIVE")
+                            .withHint("请重新选择该供应商与物料仍在生效的包装规格")
                             .withHintTarget("purchasePackagingSpecId");
                 }
             }

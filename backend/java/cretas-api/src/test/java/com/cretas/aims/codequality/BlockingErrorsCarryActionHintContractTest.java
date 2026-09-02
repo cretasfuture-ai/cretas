@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class BlockingErrorsCarryActionHintContractTest {
 
-    static final int KNOWN_DEBT_SIZE = 17;
+    static final int KNOWN_DEBT_SIZE = 1;
 
     /**
      * 只扫<b>报工 / 生产</b>链路 —— BLOCKING 在这里的字面意思就是"人停在机器前干不下去了"。
@@ -73,25 +73,13 @@ class BlockingErrorsCarryActionHintContractTest {
     /**
      * 2026-08-01 盘点出的历史欠账。<b>只允许变短。</b>
      * 修好一条就从这里删一条；新增一条会让下面的"未登记违规"断言变红。
+     *
+     * <p>2026-09-02 LIUSHANMEN 走查修完 16 条（全部是 409 BLOCKING，见同一批 PR），
+     * 只剩 {@code PROCESS_SHEET_INPUT_QUANTITY_INVALID}——它是 400，不在这批
+     * "409 缺 hint" 走查范围内，留给下一轮。
      */
     private static final Set<String> KNOWN_DEBT = Set.of(
-            "AUTOMATIC_MATERIAL_REQUIREMENT_INVALID",
-            "AUTOMATIC_MATERIAL_UNIT_REQUIRED",
-            "BOM_OUTPUT_BASIS_INVALID",
-            "PACKAGING_REQUIREMENT_INVALID",
-            "PINNED_BOM_NOT_FOUND",
-            "PROCESS_SHEET_INPUT_QUANTITY_INVALID",
-            "PROCESS_SHEET_PLAN_UNIT_MISMATCH",
-            "PROCESS_SHEET_WORKFLOW_INPUT_PORT_ID_MISSING",
-            "PROCESS_SHEET_WORKFLOW_INPUT_PORT_NOT_FOUND",
-            "PROCESS_SHEET_WORKFLOW_MULTI_OUTPUT_REQUIRED",
-            "PROCESS_SHEET_WORKFLOW_SELECTION_GROUP_SNAPSHOT_INVALID",
-            "PRODUCTION_INPUT_BATCH_MATERIAL_MISMATCH",
-            "PRODUCTION_INPUT_BATCH_NOT_FOUND",
-            "PRODUCTION_INPUT_BATCH_UNIT_REQUIRED",
-            "PRODUCTION_PLAN_NOT_FOUND",
-            "PRODUCTION_PLAN_OWNERSHIP_CONTEXT_REQUIRED",
-            "SEASONING_REQUIREMENT_INVALID");
+            "PROCESS_SHEET_INPUT_QUANTITY_INVALID");
 
     private record Scan(Set<String> hintless, int blockingSeen) {
     }
