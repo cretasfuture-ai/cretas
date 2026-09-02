@@ -40,8 +40,23 @@ public class BomItemSubstitute extends BaseEntity {
     @Column(name = "id", nullable = false, length = 64)
     private String id;
 
+    /**
+     * ⚠️ JPA only allows <b>one</b> {@code @PrePersist}-annotated method per entity class
+     * (Hibernate throws {@code PersistenceException: You can only annotate one callback
+     * method with jakarta.persistence.PrePersist} at {@code EntityManagerFactory} boot
+     * otherwise — hit this for real on 2026-09-02, CI run 33583870365, and it took down
+     * every {@code @DataJpaTest}/{@code *RepositoryQueryValidationTest} in the whole
+     * module, not just this entity's). All pre-insert defaulting for this class funnels
+     * through this single callback; add new defaulting as another private helper called
+     * from here, never as a second {@code @PrePersist} method.
+     */
     @PrePersist
-    void assignId() {
+    void applyPrePersistDefaults() {
+        assignId();
+        applyConversionExplicitDefault();
+    }
+
+    private void assignId() {
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
@@ -131,9 +146,12 @@ public class BomItemSubstitute extends BaseEntity {
     @Column(name = "version", nullable = false)
     private Long version;
 
-    /** Only fires at actual INSERT — defends against explicit-null builder calls too. */
-    @PrePersist
-    void applyConversionExplicitDefault() {
+    /**
+     * Only fires at actual INSERT (called from {@link #applyPrePersistDefaults()}) — defends
+     * against explicit-null builder calls too. ⛔ Not itself {@code @PrePersist}-annotated —
+     * see the warning on {@link #applyPrePersistDefaults()} for why.
+     */
+    private void applyConversionExplicitDefault() {
         if (conversionExplicit == null) {
             conversionExplicit = Boolean.FALSE;
         }
