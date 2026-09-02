@@ -605,8 +605,7 @@
       ],
       "must_not_contain": [
         "填写为负数",
-        "填为负数",
-        "负数",
+        "数量填为负数",
         "损耗 = 计划投入量"
       ],
       "refs": [
@@ -641,9 +640,10 @@
         "提交审批"
       ],
       "must_not_contain": [
-        "签收照片",
-        "上传照片",
-        "至少1张"
+        "至少1张",
+        "至少 1 张",
+        "需上传签收照片",
+        "上传客户现场签收照片"
       ],
       "refs": [
         "#484"
@@ -697,6 +697,63 @@
         "通常为 Excel 图标"
       ],
       "refs": []
+    },
+    {
+      "id": "rn-receive-not-hijacked",
+      "question": "手机上采购收货怎么操作？要拍照吗？",
+      "must_contain_any": [
+        "待收货",
+        "入库任务",
+        "采购收货",
+        "收货"
+      ],
+      "must_not_contain": [
+        "白标",
+        "彩标",
+        "托盘",
+        "包装标签对象复核"
+      ],
+      "refs": [
+        "#274"
+      ]
+    },
+    {
+      "id": "roles-mobile-vs-web",
+      "question": "哪些角色用手机 App，哪些用电脑？",
+      "must_contain_any": [
+        "分配给我的工序",
+        "操作员"
+      ],
+      "must_contain_any_2": [
+        "仓储工作台",
+        "质检工作台"
+      ],
+      "must_not_contain": [
+        "操作员通过电脑 Web 进入",
+        "均使用电脑 Web"
+      ],
+      "refs": [
+        "#431"
+      ]
+    },
+    {
+      "id": "transfer-main-to-production",
+      "question": "主仓调到生产仓怎么操作？谁审批？",
+      "must_contain_any": [
+        "调拨单",
+        "新建调拨单"
+      ],
+      "must_contain_any_2": [
+        "不能审批自己",
+        "OA",
+        "审批链"
+      ],
+      "must_not_contain": [
+        "计划投入原料量（必填"
+      ],
+      "refs": [
+        "#460"
+      ]
     }
   ]
 }
