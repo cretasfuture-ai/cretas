@@ -298,7 +298,11 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         applyNetContentContract(productType, dto, false);
         productType.setWipToFgYield(dto.getWipToFgYield());
         productType.setReworkPurityLevel(dto.getReworkPurityLevel());
-        productType.setAcceptsRework(dto.getAcceptsRework());
+        // 2026-09-02 prod hotfix: accepts_rework 是 NOT NULL DEFAULT TRUE, 但 Hibernate
+        // 插入时会把这一列显式带上 null (列出现在 INSERT 里, DB 侧默认值不生效) ⇒ 违反
+        // NOT NULL。请求没传这个字段就维持 DB 语义上的默认值 TRUE, 不要把实体的默认值
+        // 覆盖成 null。
+        productType.setAcceptsRework(dto.getAcceptsRework() != null ? dto.getAcceptsRework() : Boolean.TRUE);
         productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         productType.setStandardCost(dto.getStandardCost());
         productType.setTargetGrossMargin(dto.getTargetGrossMargin());
