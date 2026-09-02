@@ -365,6 +365,14 @@ on_exit() {
     local rc=$?
     if [ "$rc" -ne 0 ]; then FINAL_STATUS=failed; fi
     write_report "$rc" || true
+    # 🔴 R43 同款坑: 这个 `trap on_exit EXIT` 会【整个替换】前面
+    # `acquire_deploy_lock "cretas-release"` (deploy-common.sh) 注册的那条清锁
+    # trap —— bash 的 trap 不叠加, 后设的赢。不清的后果就是当晚踩过的那个:
+    # deploy 10 自己正常退出(rc=0), release lock 却留在 /tmp 里没人删, 下一次
+    # deploy(11)一上来就被"自己已经不存在的进程"拒掉, 只能人工删锁重发。
+    # deploy-backend.sh 的 cleanup() 早就在自己的 trap 里这么补过一次, 这里照抄
+    # 同一个兜底: 显式清一次锁, 不依赖上游那条已经被这里覆盖掉的 trap。
+    rm -f "${ACQUIRED_DEPLOY_LOCK_FILE:-/tmp/cretas-release.lock}" 2>/dev/null || true
 }
 trap on_exit EXIT
 
