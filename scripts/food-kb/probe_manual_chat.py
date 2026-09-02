@@ -55,7 +55,9 @@ from typing import Any
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", "", text or "").lower()
+    # Collapse whitespace and strip markdown emphasis/code marks so that
+    # "取**最大值**" still matches "取最大值".
+    return re.sub(r"[\s*_`]+", "", text or "").lower()
 
 
 def _post(base: str, path: str, payload: dict[str, Any], timeout: float) -> tuple[int, str]:
