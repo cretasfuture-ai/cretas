@@ -1039,7 +1039,7 @@ def _select_rework_requisition_share_answer(query: str) -> str:
     sections: Dict[int, str] = {}
     for block in _FACTORY_REWORK_REQUISITION_SHARE_ANSWER.strip().split("\n"):
         if block[:1].isdigit() and block[1:5] == ". **":
-            sections[int(block[0])] = block.strip()
+            sections[int(block[0])] = block.strip()[3:]  # drop the "N. " numbering for subset replies
     wanted: List[int] = []
     if "回料" in normalized:
         reversal_terms = ("撤回", "还回", "退回", "领过", "净额", "扣两次", "再扣", "二次扣", "扣一次")
