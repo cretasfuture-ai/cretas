@@ -71,10 +71,13 @@ describe('业务入口必须走线性步骤列表', () => {
       'graphToSteps 必须喂后端原文；喂 edges.value 会把画布丢边的结果带进步骤列表',
     ).toBeGreaterThan(-1)
 
-    // 必须在画布反序列化之前算完 —— 否则中途的 `edges.value = []` 会影响读数
-    const clearEdges = body.indexOf('edges.value = []')
-    expect(clearEdges).toBeGreaterThan(-1)
-    expect(call, 'graphToSteps 必须在清空画布边之前算').toBeLessThan(clearEdges)
+    // 必须在铺画布之前算完 —— 铺画布第一步就是 `edges.value = []`，会影响读数。
+    // ⚠️ 2026-09-03: 铺画布那段抽成了 applyGraphToCanvas（模式切换要复用），
+    //    所以这里改成钉「graphToSteps 早于那次调用」——比原来钉 `edges.value = []`
+    //    的位置更贴近这条闸真正的意思，且不会因为函数内部实现再动而误红。
+    const applyCanvas = body.indexOf('applyGraphToCanvas(')
+    expect(applyCanvas, 'deserializeGraph 必须调 applyGraphToCanvas 铺画布').toBeGreaterThan(-1)
+    expect(call, 'graphToSteps 必须在铺画布之前算').toBeLessThan(applyCanvas)
   })
 
   it('表达不了的图必须退回画布并给出原因，⛔ 不静默丢配置', () => {
