@@ -887,6 +887,67 @@
       "refs": [
         "#329"
       ]
+    },
+    {
+      "id": "perm-bom-editors",
+      "question": "谁有权限改 BOM？",
+      "must_contain_any": [
+        "生产文员",
+        "生产读写"
+      ],
+      "must_not_contain": [
+        "生产文员、质量、仓储、销售、采购等角色对 BOM 仅有只读",
+        "生产文员对 BOM 仅有只读"
+      ],
+      "refs": [
+        "#487"
+      ]
+    },
+    {
+      "id": "perm-clerk-start",
+      "question": "生产文员能不能点开工？",
+      "must_contain_any": [
+        "可以",
+        "能"
+      ],
+      "must_not_contain": [
+        "生产文员不能点开工",
+        "只有生产经理或调度员才能"
+      ],
+      "refs": [
+        "#516"
+      ]
+    },
+    {
+      "id": "perm-qm-role-code",
+      "question": "质量经理能看生产计划吗？能改吗？",
+      "must_contain_any": [
+        "只读",
+        "不能修改",
+        "不能改"
+      ],
+      "must_not_contain": [
+        "质量经理的角色码为 `quality_inspector`",
+        "角色码为 quality_inspector"
+      ],
+      "refs": [
+        "#450"
+      ]
+    },
+    {
+      "id": "perm-operator-cost",
+      "question": "操作员能看到成本数据吗？",
+      "must_contain_any": [
+        "实际单价",
+        "回显",
+        "成本汇总"
+      ],
+      "must_not_contain": [
+        "看不到人工成本、材料成本汇总或总成本"
+      ],
+      "refs": [
+        "#519"
+      ]
     }
   ]
 }
