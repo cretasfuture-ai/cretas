@@ -16,7 +16,7 @@
  * 防呆 (per fool-proof-design.md):
  * - Rule 2 context: dialog header "ECN-{number} — {title} (影响 N 个 BomVersion)"
  * - Rule 3 reason dropdown (5 标准选项)
- * - Rule 5 dead-end: 无 ECN 工作流配置时 ElMessageBox.confirm → 跳工作流设计器
+ * - Rule 5 dead-end: 无 ECN 审批流配置时 ElMessageBox.confirm → 跳审批链配置
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
@@ -315,11 +315,11 @@ async function openImpactReport(ecn: EngineeringChangeNotice) {
   }
 }
 
-/** 防呆 Rule 5 — workflow 未配置 → 跳工作流设计器, 不让用户卡死. */
+/** 防呆 Rule 5 — 审批流未配置 → 跳审批链配置, 不让用户卡死. */
 function gotoWorkflowConfig() {
   ElMessageBox.confirm(
-    'ECN 审批工作流未配置, 是否前去工作流设计器配置?',
-    '工作流未配置',
+    'ECN 审批工作流未配置, 是否前去审批链配置?',
+    '审批流未配置',
     {
       confirmButtonText: '去配置',
       cancelButtonText: '取消',
@@ -327,11 +327,17 @@ function gotoWorkflowConfig() {
     },
   )
     .then(() => {
-      // 工作流设计器是 /system/workflow-designer (WorkflowDesigner)。
-      // /workflow/admin 不存在 —— /workflow/* 底下只有 pending/acted/admin-running 这些
-      // **我的流程**视图, 没有设计器。⇒ 这条「防呆 Rule 5」的出口原本自己是 404,
-      // 用户点「去配置」落到页面不存在, 比不给出口更糟。
-      router.push('/system/workflow-designer?entityType=ECN');
+      // ECN 审批是**统一 OA 的一个 decisionType**(DecisionType.ECN_APPROVAL,
+      // moduleCode=ECN), 配置入口是审批链配置 → 里面每一行再跳 OA 画布。
+      //
+      // ⛔ 不是 /system/workflow-designer —— 那个是**实体状态机**设计器,
+      //    下拉里只有 PRODUCTION_WORKFLOW / MATERIAL_BATCH / QUALITY_INSPECTION,
+      //    根本没有 ECN。(2026-09-03 我修 404 时错点到了它: 页面打得开、
+      //    活儿干不了 —— 比 404 好, 但仍然兑现不了「去配置」这句承诺。)
+      // ⛔ 也不直接跳 /platform/canvas-editor: 那条路由要
+      //    factory_super_admin/platform_admin/permission_admin, 看到本弹框的人未必有;
+      //    审批链配置是那个画布的正规入口, 由它按权限决定给不给「去配置」的链接。
+      router.push('/system/approval-chains');
     })
     .catch(() => {
       // user cancelled - noop
