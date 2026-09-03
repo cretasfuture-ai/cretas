@@ -164,6 +164,25 @@
           :decision-label="selectedDecisionTypeLabel"
           @update:steps="onStepsUpdate"
         />
+        <!--
+          🔴 客户 2026-09-03:「审批流的配置使用，拉框拉节点」。
+          在这之前步骤列表是一道**单向门** —— 它只能加「审批」和「抄送」两种步骤,
+          而想加条件分支/并行审批就无处可去(能拉节点的画布 showInMenu:false,
+          只能手敲 URL)。⇒ 把那扇门在这里打开。
+          ⛔ 不是把步骤列表换成画布: 简单串行审批用列表确实更省事, 默认不变。
+        -->
+        <div v-if="canEditDraft" class="step-mode-escape">
+          <div class="step-mode-escape-text">
+            <strong>要加条件分支、并行审批或汇签？</strong>
+            <span>步骤列表只能配「一级一级往下审」和「抄送」。这几种结构要用画布拉节点。</span>
+          </div>
+          <el-button
+            type="primary"
+            plain
+            data-testid="switch-to-graph"
+            @click="switchToGraphMode"
+          >改用画布</el-button>
+        </div>
       </div>
 
       <div v-else class="editor-body">
@@ -176,6 +195,16 @@
           title="这条审批流用的是高级画布"
           :description="stepModeFallbackReason"
         />
+        <!-- 用户是自己切过来的 ⇒ 给一条回去的路。图一旦不再线性, 这个按钮会说明原因。 -->
+        <div v-if="inForcedGraphMode && canEditDraft" class="graph-mode-back">
+          <span>正在用画布编辑。没加分支类节点的话可以切回步骤列表。</span>
+          <el-button
+            text
+            type="primary"
+            data-testid="switch-to-step-list"
+            @click="switchBackToStepList"
+          >回到步骤列表</el-button>
+        </div>
         <aside class="palette" aria-label="流程节点">
           <div class="panel-title-row">
             <h4>流程节点</h4>
@@ -459,9 +488,27 @@ const loadedEdgeCount = ref(0)
 const stepFlow = ref<ApprovalStep[] | null>(null)
 const stepModeFallbackReason = ref('')
 
-/** 只有业务入口 + 这张图能被线性表达时，才用步骤列表。 */
+/**
+ * 用户主动从步骤列表切到画布(为了加条件/并行/汇签)。
+ *
+ * ⚠️ 这是一道**曾经的单向门**: `useStepList` 只看「图能不能线性表达」——
+ * 于是一条线性流程永远被钉在步骤列表里, 而步骤列表只能加
+ * `StepType = 'approval' | 'cc'` 两种步骤 ⇒ 想加条件分支就没有任何入口,
+ * 只能手敲 /approval-workflow-editor 的 URL(那条路由还 showInMenu:false)。
+ * 客户 2026-09-03 提的就是这个。
+ */
+const forceGraphMode = ref(false)
+
+/** 只有业务入口 + 这张图能被线性表达 + 用户没主动切画布时，才用步骤列表。 */
 const useStepList = computed(
-  () => Boolean(props.lockDecisionType) && stepFlow.value !== null,
+  () => Boolean(props.lockDecisionType)
+    && stepFlow.value !== null
+    && !forceGraphMode.value,
+)
+
+/** 处在「用户主动切过来」的画布模式(而不是图本来就表达不成线性)。 */
+const inForcedGraphMode = computed(
+  () => Boolean(props.lockDecisionType) && forceGraphMode.value && stepFlow.value !== null,
 )
 
 const currentWorkflow = ref<ApprovalWorkflowDTO | null>(null)
@@ -1026,6 +1073,7 @@ async function createDefaultDraft() {
   nodes.value = []
   edges.value = []
   stepFlow.value = []
+  forceGraphMode.value = false   // 新建的草稿一律从步骤列表起步
   stepModeFallbackReason.value = ''
   workflowName.value = `${selectedDecisionTypeLabel.value}流程`
   currentWorkflow.value = null
@@ -1417,10 +1465,24 @@ async function deserializeGraph(dto: ApprovalWorkflowDTO) {
     parsedNodes, parsedEdges, dto.startNodeId,
   ) ?? ''
 
-  const nodeTypeById = new Map(parsedNodes.map(n => [n.id, n.type]))
+  await applyGraphToCanvas(parsedNodes, parsedEdges)
+}
+
+/**
+ * 把一份 API 形状的图铺到 VueFlow 画布上。
+ *
+ * ⚠️ 抽出来是因为有**两个**调用点: 载入已有工作流({@link deserializeGraph}), 和
+ * 「步骤列表 → 画布」的模式切换({@link switchToGraphMode})。两处若各写一份,
+ * `await nextTick()` 这类顺序约束一定会在其中一份上漂掉(本仓形态 D)。
+ */
+async function applyGraphToCanvas(
+  graphNodes: ApprovalWorkflowNode[],
+  graphEdges: ApiEdge[],
+): Promise<void> {
+  const nodeTypeById = new Map(graphNodes.map(n => [n.id, n.type]))
   // 先清空边, 再注册节点 —— 顺序与 applyAiDraft 一致, 不可调换。
   edges.value = []
-  nodes.value = parsedNodes.map(n => ({
+  nodes.value = graphNodes.map(n => ({
     id: n.id,
     type: n.type,
     position: { x: n.position?.x ?? 0, y: n.position?.y ?? 0 },
@@ -1428,7 +1490,7 @@ async function deserializeGraph(dto: ApprovalWorkflowDTO) {
   }))
   // 等 VueFlow 把节点注册进内部 store, 再挂边, 否则边会被判为悬空并丢弃。
   await nextTick()
-  edges.value = parsedEdges.map(e => ({
+  edges.value = graphEdges.map(e => ({
     id: e.id,
     source: e.source,
     target: e.target,
@@ -1436,6 +1498,71 @@ async function deserializeGraph(dto: ApprovalWorkflowDTO) {
     label: e.label ?? '',
     data: { condition: e.condition ?? '', priority: e.priority ?? 0 },
   }))
+}
+
+/**
+ * 步骤列表 → 画布。给「要加条件分支 / 并行审批 / 汇签」的人开的门。
+ *
+ * 🔴 画布必须由 {@link stepsToGraph} **从当前步骤重建**, ⛔ 不能直接用画布上
+ * 已有的 nodes/edges: 那是**载入时**反序列化的那一份, 用户在步骤列表里做的改动
+ * 从来不写进它(步骤模式的保存刻意绕开画布, 见 serializeStepFlow)。
+ * 直接切过去 = 用户刚加的那一级审批在画布上不存在 —— 静默丢配置,
+ * 正是 2026-09-01 事故的成因形状。
+ *
+ * ⇒ 用与保存**同一条**路径重建 ⇒ 画布上看到的就是会被保存的那个图。
+ */
+async function switchToGraphMode(): Promise<void> {
+  const steps = stepFlow.value
+  if (!steps) return
+  try {
+    await ElMessageBox.confirm(
+      // 用模板字面量而不是 '…\n…' —— 换行直接写在源码里, 不经过任何转义。
+      `画布可以配「条件分支 / 并行审批 / 汇签」这些步骤列表表达不了的结构。
+
+当前这几级审批会原样搬到画布上，不会丢。
+只要没加分支类节点，随时可以点「回到步骤列表」切回来。`,
+      '改用画布编辑',
+      { type: 'info', confirmButtonText: '改用画布', cancelButtonText: '取消' },
+    )
+  } catch {
+    return   // 用户取消
+  }
+  let graph
+  try {
+    graph = stepsToGraph({ steps })
+  } catch (error) {
+    // stepsToGraph 出口自检没过 —— 说明当前步骤本身就不完整, 那就别切,
+    // ⛔ 不要切到一个空画布上去(那等于把问题换个地方再暴露一次)。
+    ElMessage.error(error instanceof Error ? error.message : '审批步骤不完整，无法转为画布')
+    return
+  }
+  await applyGraphToCanvas(graph.nodes, graph.edges)
+  forceGraphMode.value = true
+}
+
+/**
+ * 画布 → 步骤列表。只有当画布上的图**仍然能线性表达**时才切得回去。
+ *
+ * 切不回去时要说**为什么**(由 explainStepListFallback 算, ⛔ 不硬编码一句) ——
+ * 「加了条件分支所以回不去」和「回不去」对用户是两件事。
+ */
+function switchBackToStepList(): void {
+  const wire = serializeGraph()
+  if (!wire) return
+  const flow = graphToSteps(wire.nodes, wire.edges, wire.startNodeId)
+  if (!flow) {
+    const reason = explainStepListFallback(wire.nodes, wire.edges, wire.startNodeId)
+    ElMessageBox.alert(
+      `${reason ?? '当前画布上的流程不是一条直线。'}
+
+继续用画布编辑即可，功能不受影响。`,
+      '这条流程回不到步骤列表',
+      { type: 'info', confirmButtonText: '知道了' },
+    ).catch(() => { /* 关闭即可 */ })
+    return
+  }
+  stepFlow.value = flow.steps
+  forceGraphMode.value = false
 }
 
 /**
@@ -1682,6 +1809,9 @@ function resetEditor() {
   // 三个复位点 —— 少这一个, 切换 decisionType 后 stepFlow 停在上一个业务类型的
   // 步骤数组上, useStepList 读到"非 null"而误判为步骤列表模式仍然有效。
   stepFlow.value = null
+  // 「用户主动切到画布」是**针对当前这条流程**的选择, 换一条就不该继承 ——
+  // 否则切到一条本该用步骤列表的简单流程上, 用户会莫名其妙落在画布里。
+  forceGraphMode.value = false
   stepModeFallbackReason.value = ''
   currentWorkflow.value = null
   selectedWorkflowId.value = undefined
@@ -1896,6 +2026,50 @@ onMounted(async () => {
   border-radius: 4px;
 }
 
+.step-mode-escape {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px dashed var(--el-border-color, #dcdfe6);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter, #f5f7fa);
+}
+.step-mode-escape-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.step-mode-escape-text strong { font-size: 13px; color: var(--el-text-color-primary, #303133); }
+.step-mode-escape-text span { font-size: 12px; color: var(--el-text-color-secondary, #909399); }
+/*
+ * 🔴 必须绝对定位 —— `.editor-body` 是 `display:flex` 的**横向**容器。
+ *
+ * 第一版把这条 bar 写成普通子元素, 于是它成了 palette / canvas / properties 的
+ * flex 兄弟, **横着占掉 434px**: 实测画布从 758px 掉到 324px(1600px 视口下 20%),
+ * 一个本来是「让画布更好用」的改动反而把画布压小了一半多。
+ *
+ * ⇒ 与旁边的 .step-fallback-alert 同一条办法: 浮在画布区上方, 不占布局宽度。
+ * 偏移刻意与它一致(左让开 palette、右让开属性面板), 两条 bar 位置对齐。
+ * ⚠️ 两者互斥不会打架: 这条要求 stepFlow !== null(图线性), 而那条只在
+ *    stepModeFallbackReason 非空(图**不**线性)时出现。
+ */
+.graph-mode-back {
+  position: absolute;
+  z-index: 10;
+  top: 8px;
+  left: 232px;
+  right: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--el-bg-color-overlay, #fff);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #909399);
+}
 .step-fallback-alert {
   position: absolute;
   z-index: 10;

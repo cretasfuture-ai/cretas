@@ -40,13 +40,21 @@ function functionBody(src: string, signature: string): string {
 describe('approval canvas edge persistence contract', () => {
   const editor = source('src/views/platform/approval-workflow-editor/index.vue')
 
-  it('deserializeGraph 在节点注册之后才挂边（否则 VueFlow 会把边当悬空连线丢弃）', () => {
-    const body = functionBody(editor, 'async function deserializeGraph(')
+  /**
+   * ⚠️ 2026-09-03 载体搬家: 这段「铺画布」的代码从 `deserializeGraph` 抽成了
+   * `applyGraphToCanvas`（因为「步骤列表 → 画布」的模式切换要复用同一份, 见
+   * index.vue 里那个函数的注释）。**顺序约束一个字没改**, 只是换了个函数名和
+   * 参数名(parsedNodes/parsedEdges → graphNodes/graphEdges)。
+   * ⛔ 不要因为函数名对不上就把这条闸删掉 —— 它守的是 VueFlow 的挂边时序,
+   *    那个约束与代码放在哪个函数里无关。
+   */
+  it('applyGraphToCanvas 在节点注册之后才挂边（否则 VueFlow 会把边当悬空连线丢弃）', () => {
+    const body = functionBody(editor, 'async function applyGraphToCanvas(')
 
     const clearEdges = body.indexOf('edges.value = []')
-    const setNodes = body.indexOf('nodes.value = parsedNodes')
+    const setNodes = body.indexOf('nodes.value = graphNodes')
     const awaitTick = body.indexOf('await nextTick()')
-    const setEdges = body.indexOf('edges.value = parsedEdges')
+    const setEdges = body.indexOf('edges.value = graphEdges')
 
     expect(clearEdges, '必须先清空 edges').toBeGreaterThan(-1)
     expect(setNodes, '必须写 nodes.value').toBeGreaterThan(-1)
