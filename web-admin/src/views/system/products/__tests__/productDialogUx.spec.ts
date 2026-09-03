@@ -11,9 +11,6 @@ describe('SKU editor dialog UX', () => {
     expect(source).toContain(':modal-class="\'product-edit-modal\'"');
     expect(source).toContain('.product-edit-modal .el-dialog__footer');
     expect(source).toContain('position: sticky');
-    expect(source).toContain('aria-label="上移工序"');
-    expect(source).toContain('aria-label="下移工序"');
-    expect(source).toContain('aria-label="移除工序"');
     expect(source).toContain('label="基础规格"');
     expect(source).toContain('class="sku-measure-row"');
     expect(source).toContain('class="sku-measure-field"');
@@ -69,15 +66,20 @@ describe('SKU editor dialog UX', () => {
     expect(source).not.toContain("ElMessage.warning(res.message || res.data?.message || '暂未生成推荐工序");
   });
 
-  it('keeps the quick process drawer with searchable, filterable and paginated catalog UX', () => {
-    expect(source).toContain('@click="handleConfigProcesses(row)"');
-    expect(source).toContain('placeholder="搜索工序名称 / 编码 / 类别标签"');
-    expect(source).toContain('v-model="processCategoryFilter"');
-    // 工序主数据不再承载计量单位；快捷关联只按类别和关联状态筛选。
-    expect(source).not.toContain('v-model="processOutputUnitFilter"');
-    expect(source).toContain('v-model="processRelationFilter"');
-    expect(source).toContain('结果 {{ filteredProcessCatalog.length }} / 总计 {{ availableProcesses.length }}');
-    expect(source).toContain('v-model:current-page="processCatalogPage"');
-    expect(source).toContain('已关联 · 第 {{ linkedProcessById.get(proc.id)?.processOrder }} 道');
+  /**
+   * 🔴 2026-09-03: 这条原本守「快捷工序抽屉的搜索/筛选/分页 UX」。抽屉去掉了 ——
+   * 它是 product_work_processes 的第二个编辑入口, 比 /system/product-processes
+   * 少 update / copy-chain, 成品源 / 成本类别 / 包装模板 / 辅料分摊 一个都配不了
+   * (客户 2026-09-03:「这个工序关联管理是不是没用了, 可以去掉了吧」)。
+   *
+   * ⇒ 断言从「抽屉长什么样」抬到「工序入口还在, 且指向那个全功能页面」——
+   * ⛔ 不是删掉: 入口本身没了就成了 dead-end(防呆 Rule 5)。
+   */
+  it('工序入口指向产品-工序配置页, 并带上 productTypeId 自动选中', () => {
+    expect(source).toContain('@click="goProcessConfig(row)"');
+    expect(source).toContain("path: '/system/product-processes', query: { productTypeId: row.id }");
+    // 阴性对照: 抽屉真的不在了(否则上面两条可能只是「两个入口并存」)。
+    expect(source).not.toContain('processDrawerVisible');
+    expect(source).not.toContain('handleConfigProcesses');
   });
 });
