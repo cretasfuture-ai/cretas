@@ -2989,3 +2989,10 @@ def test_20260903_pending_approval_zero_vs_dash_faq_is_in_corpus():
     assert "### 报工审批页面显示“待审批 0”，是真的没有待审批吗" in corpus
     assert "只在接口成功返回空列表时才显示" in corpus
     assert "顶部计数显示“待审批 —”并变红" in corpus
+
+
+def test_20260903_bom_edit_permission_sits_next_to_the_canvas_entry():
+    """Round 20: 「谁有权限改 BOM」retrieved the canvas-entry paragraph and answered "where" without "who"."""
+    corpus = (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8")
+    line = next(l for l in corpus.splitlines() if "唯一写入口" in l)
+    assert "改 BOM 的权限：需要生产读写或研发读写权限，两者有其一即可；生产经理、生产文员" in line
