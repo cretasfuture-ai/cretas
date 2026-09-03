@@ -3708,7 +3708,12 @@ async function handleGenerateTransfer(row: TableRow) {
       const count = response.data?.items?.length || 0;
       ElMessage.success(`备料调拨草稿已就绪，共 ${count} 项物料；请在调拨详情核对数量后提交 OA 审批`);
       if (response.data?.id) {
-        router.push(`/transfer/detail/${response.data.id}`);
+        // 调拨详情的路由是 /transfer/:id (router/index.ts TransferDetail), 不是
+        // /transfer/detail/:id —— 多写一段就落到兜底 404。2026-09-03 客户实拍:
+        // 「生成调拨单生跳转失败，但是生成了」——草稿建出来了, 只有跳转死掉。
+        // 另 6 处调拨详情跳转都写的 /transfer/${id}, 只有这里漂了。
+        // 闸: __tests__/gates/routerPushPathsResolve.source.spec.ts
+        router.push(`/transfer/${response.data.id}`);
       }
       loadData();
     } else {
