@@ -1341,7 +1341,9 @@ def _needs_factory_tax_inclusive_purchase_guard(query: str) -> bool:
         term in normalized
         for term in ("含税", "税率", "税点", "不含税", "厘米", "长度单位")
     )
-    return commercial_context and pricing_or_length_context
+    # 2026-09-03: "does history change when the master rate changes" is a FAQ, not the canned how-to
+    asks_about_history = any(term in normalized for term in ("历史", "会变", "已有的"))
+    return commercial_context and pricing_or_length_context and not asks_about_history
 
 
 def _needs_factory_sales_delivery_invoice_guard(query: str) -> bool:

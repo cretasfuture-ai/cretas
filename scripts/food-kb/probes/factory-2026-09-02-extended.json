@@ -948,6 +948,165 @@
       "refs": [
         "#519"
       ]
+    },
+    {
+      "id": "s3-menu-missing",
+      "question": "登录后看不到生产管理菜单是怎么回事？",
+      "must_contain_any": [
+        "人事管理",
+        "角色权限"
+      ],
+      "must_not_contain": [
+        "系统管理 → 角色权限",
+        "系统管理”中"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-batch-not-selectable",
+      "question": "为什么发货时选不到某个成品批次？",
+      "must_contain_any": [
+        "库存批次查询",
+        "库存查询"
+      ],
+      "must_not_contain": [
+        "批次管理 → 批次列表",
+        "仓储管理 → 批次管理"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-multi-factory",
+      "question": "一个账号能管多个工厂吗？怎么切换？",
+      "must_contain_any": [
+        "只属于一个工厂",
+        "不能"
+      ],
+      "must_not_contain": [
+        "右上角头像",
+        "头像下拉",
+        "点击“切换工厂”"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-stock-not-reduced",
+      "question": "为什么报工提交后原料库存没有减少？",
+      "must_contain_any": [
+        "可用数量",
+        "占用"
+      ],
+      "must_not_contain": [
+        "不直接扣减库存",
+        "只记录投入产出数据"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-expired-batch",
+      "question": "原料批次过期了还能投料吗？",
+      "must_contain_any": [
+        "不能",
+        "不可用"
+      ],
+      "must_not_contain": [
+        "生产管理 → 生产批次 → 搜索该批次号"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-start-no-manual-batch",
+      "question": "生产计划建好之后怎么开工？要先生成批次吗？",
+      "must_contain_any": [
+        "下发 APP 报工",
+        "核对结单",
+        "开始二次加工",
+        "不需要手动生成批次",
+        "不用手动"
+      ],
+      "must_not_contain": [
+        "需先完成“生成批次”",
+        "先完成生成批次",
+        "需先生成批次"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-tax-history",
+      "question": "物料税率改了，历史采购单的未税价会变吗？",
+      "must_contain_any": [
+        "不会",
+        "快照"
+      ],
+      "must_not_contain": [
+        "会随之更新",
+        "历史采购单会重新"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-order-to-cash",
+      "question": "从接到销售订单到发货收款，完整流程是什么？",
+      "must_contain_any": [
+        "OA 审批",
+        "财务"
+      ],
+      "must_contain_any_2": [
+        "签收",
+        "开票"
+      ],
+      "must_not_contain": [
+        "销售订单 → 新建母单",
+        "新建母单"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-customer-material-flow",
+      "question": "客供料从客户送货到结单，完整流程是什么？",
+      "must_contain_any": [
+        "入库任务与批次",
+        "客供料收货"
+      ],
+      "must_not_contain": [
+        "suppliedMaterials",
+        "按采购收货任务确认客供料入库"
+      ],
+      "refs": [
+        "#567"
+      ]
+    },
+    {
+      "id": "s3-received-full",
+      "question": "手机收货时提示已收满，不让再收，怎么办？",
+      "must_contain_any": [
+        "无订单入库",
+        "提前关单",
+        "入库任务与批次"
+      ],
+      "must_not_contain": [
+        "白垩纪技术支持",
+        "技术支持团队"
+      ],
+      "refs": [
+        "#567"
+      ]
     }
   ]
 }
