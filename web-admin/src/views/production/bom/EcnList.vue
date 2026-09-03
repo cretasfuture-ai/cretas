@@ -327,7 +327,11 @@ function gotoWorkflowConfig() {
     },
   )
     .then(() => {
-      router.push('/workflow/admin?entityType=ECN');
+      // 工作流设计器是 /system/workflow-designer (WorkflowDesigner)。
+      // /workflow/admin 不存在 —— /workflow/* 底下只有 pending/acted/admin-running 这些
+      // **我的流程**视图, 没有设计器。⇒ 这条「防呆 Rule 5」的出口原本自己是 404,
+      // 用户点「去配置」落到页面不存在, 比不给出口更糟。
+      router.push('/system/workflow-designer?entityType=ECN');
     })
     .catch(() => {
       // user cancelled - noop

@@ -55,7 +55,9 @@ const totalQty = computed(() => {
 });
 
 function goToWipList(): void {
-  void router.push('/warehouse/materials/wip-list');
+  // 路由是 /warehouse/wip-batches (WarehouseWipBatches「在制品 (WIP)」);
+  // 原来写的 /warehouse/materials/wip-list 是**组件文件路径**不是路由路径 → 落 404。
+  void router.push('/warehouse/wip-batches');
 }
 
 function goToBatchStart(): void {

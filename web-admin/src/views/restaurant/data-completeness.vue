@@ -6,7 +6,7 @@
 
   Shows overall completeness ring chart + 6 module cards with coverage
   progress bars.  Missing-data modules surface an upload CTA that routes
-  to /smart-bi/excel-upload.
+  to /smart-bi/upload (SmartBIExcelUpload).
 
   Uses pythonFetch (W0.4 finding 6 — snake→camel auto-convert).
   No `as any` — all types imported from @/api/restaurant/completeness.
@@ -90,7 +90,8 @@ function firstHint(mod: CompletenessModule): string {
 }
 
 function goUpload(): void {
-  router.push('/smart-bi/excel-upload');
+  // 路由是 /smart-bi/upload (SmartBIExcelUpload「Excel上传」), 不是 /smart-bi/excel-upload。
+  router.push('/smart-bi/upload');
 }
 
 // ── Data loading ───────────────────────────────────────────────────────
