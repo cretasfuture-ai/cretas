@@ -3322,6 +3322,7 @@ async def manual_chat(request: ManualChatRequest) -> dict:
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
             answer = _retrieval_unavailable_answer(prep.context_parts)
+            cacheable = False  # 2026-09-03: never cache a degraded answer for an hour
 
     response = _build_response(answer, prep.sources)
 
@@ -3448,6 +3449,7 @@ async def _manual_chat_stream_gen(request: ManualChatRequest):
                     return
                 # Pre-delta failure: same degraded answer as the non-stream path.
                 answer = _retrieval_unavailable_answer(prep.context_parts)
+                cacheable = False  # 2026-09-03: never cache a degraded answer for an hour
                 yield _sse("chunk", answer)
                 yield _sse("done", {
                     "success": True,

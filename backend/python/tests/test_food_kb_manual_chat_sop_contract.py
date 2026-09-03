@@ -2895,3 +2895,48 @@ def test_20260902_factory_post_sync_gap_is_closed_and_isolated():
     assert "领料单人工投入量与主料份额端口" in ai_assist
     assert "采购与销售含税录入口径" in ai_assist
     assert "生产菜单 hub、报工审批角色与仓储入口" in ai_assist
+
+
+@pytest.mark.asyncio
+async def test_20260903_degraded_llm_answer_is_not_cached(monkeypatch):
+    """2026-09-03 prod: a 30s LLM timeout produced 'AI 服务暂时不可用…' and the non-stream
+    path cached it for an hour, so the same question kept returning the degraded text after
+    the LLM recovered (probe re-run answered in 0.1s). Degraded answers must never be cached."""
+
+    class FakeDoc:
+        title = "F006 生产全链路测试 SOP - 12. 逐道报工"
+        content = "报工页面的产出区已经按计划钉住的工艺列出本工序全部可能产出的行。"
+        source = "f006-production-full-chain-sop.md"
+        similarity = 0.9
+
+    class FakeRetriever:
+        def is_ready(self):
+            return True
+
+        async def retrieve(self, **kwargs):
+            return [FakeDoc()]
+
+    calls = {"n": 0}
+
+    async def failing_call_chain(slot, payload, timeout):
+        calls["n"] += 1
+        raise RuntimeError("simulated router timeout")
+
+    monkeypatch.setattr(manual_chat_module, "get_knowledge_retriever", lambda: FakeRetriever())
+    monkeypatch.setattr("common.llm_router.call_chain", failing_call_chain)
+    manual_chat_module._answer_cache.clear()
+
+    question = "一道工序同时产出两种半成品怎么报工？成本怎么分？"
+    first = await manual_chat_module.manual_chat(ManualChatRequest(question=question, category="factory"))
+    assert first["answer"].startswith("AI 服务暂时不可用")
+    assert not manual_chat_module._answer_cache, "degraded answer must not be cached"
+
+    # once the LLM is back, the same question must be answered fresh, not replayed
+    async def healthy_call_chain(slot, payload, timeout):
+        calls["n"] += 1
+        return {"choices": [{"message": {"content": "产出区已按工艺列出所有候选行，只填发生的那几行。"}}]}
+
+    monkeypatch.setattr("common.llm_router.call_chain", healthy_call_chain)
+    second = await manual_chat_module.manual_chat(ManualChatRequest(question=question, category="factory"))
+    assert "已按工艺列出" in second["answer"]
+    assert calls["n"] == 2
