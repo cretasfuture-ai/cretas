@@ -2981,3 +2981,11 @@ def test_20260903_start_flow_questions_reach_the_corpus_not_the_execution_guard(
     assert "两者有其一即可。生产经理、生产文员（有生产读写）" in corpus
     assert "撤回审批不是独立菜单项" in corpus
     assert "不需要先手动生成批次）时，服务端" in _FACTORY_PRODUCTION_EXECUTION_ANSWER
+
+
+def test_20260903_pending_approval_zero_vs_dash_faq_is_in_corpus():
+    """Round 19: the assistant said "待审批 0 = none" without the load-failure dash distinction (#449)."""
+    corpus = (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8")
+    assert "### 报工审批页面显示“待审批 0”，是真的没有待审批吗" in corpus
+    assert "只在接口成功返回空列表时才显示" in corpus
+    assert "顶部计数显示“待审批 —”并变红" in corpus
