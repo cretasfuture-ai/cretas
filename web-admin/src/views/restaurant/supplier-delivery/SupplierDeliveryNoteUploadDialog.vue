@@ -227,7 +227,10 @@ function goManual() {
 
 function goSupplierMgmt() {
   emit('update:modelValue', false);
-  router.push('/restaurant/suppliers');
+  // 供应商主数据在 /procurement/suppliers (ProcurementSuppliers「供应商管理」)。
+  // /restaurant/suppliers 不存在 —— 餐饮侧只有 supplier-delivery(进货录入) 与
+  // supplier-reconciliation(对账), 供应商档案本身不在这一组下面。
+  router.push('/procurement/suppliers');
 }
 </script>
 

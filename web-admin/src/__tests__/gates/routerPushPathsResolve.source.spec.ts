@@ -28,10 +28,11 @@ import router from '@/router/index';
  * ⚠️ 这一类的**症状特别容易被读成别的东西**：用户看到的是「跳转失败」，
  * 而后端其实成功了。本次客户原话就是「生跳转失败，但是生成了」。
  *
- * <h2>棘轮而非硬红</h2>
+ * <h2>存量已清零（2026-09-03 第二轮）</h2>
  *
- * 建闸当天存量见 {@link KNOWN_UNRESOLVED}。⛔ 只许减不许增 ——
- * 一上来硬红就是一道当天被加 skip 的闸（形态 E：宁可窄而可信）。
+ * 建闸当天报了 13 处，逐条核对后 **9 处是假阳性**（判据写错，见下方阴性对照），
+ * 真缺陷 4 处已全部修掉。所以这道闸现在是**硬红**，不是棘轮 ——
+ * {@link REVIEWED_NOT_A_DEFECT} 里只放「核对过、确认不是缺陷」的，不是欠账。
  *
  * <h2>这道闸看不见什么（代理判据，写明盲区）</h2>
  *
@@ -45,28 +46,39 @@ const SRC = resolve(__dirname, '../..');
 const PLACEHOLDER = 'x1';
 
 /**
- * 建闸当天已存在、暂未处理的不可解析路径（8 个去重路径 / 13 处调用点）。
+ * 已逐条核对、确认**不是**缺陷的路径。
  *
- * ⛔ 只许从这里删，不许往里加。加之前先问：这个 push 用户点得到吗？
+ * ⛔ 只许从这里删，不许往里加 —— 往里加之前必须写清「为什么它解析不出来却没坏」。
  *
- * ⚠️ **这些和客户报的那个 404 是同一个形态**，只是还没有人点到 ——
- * 每一条都实测 `router.resolve()` 落到兜底路由 (name=undefined, matched=1)。
- * 修法各不相同（有的要改路径、有的要补路由），所以没有在同一个 PR 里一起动：
- * 逐条改需要各自确认「正确的落地页是哪个」，那是另一轮的活。
- *
- * 键用归一化后的**路径**而不是 file:line —— 行号会漂，而「这个路径不存在」
- * 才是缺陷本身；路由补上或调用点改对，它就自动从这张表掉下去。
+ * 这里只剩一类：**路径由一个有限值集拼出来**（`/x/${key}`），而落地页是若干
+ * 字面路由而不是 `:param` 路由。占位符替换出来的探针路径必然落兜底，
+ * 但真实取值每一个都解析得出来 —— 逐个核对过：
  */
-const KNOWN_UNRESOLVED: readonly string[] = [
-  '/warehouse/materials/wip-list',   // components/widgets/endpoint/WipBatchCountWidget.vue
-  '/smart-bi/query',                 // analytics/index, analytics/kpi/index (×4), smart-bi/FoodKBFeedback
-  '/smart-bi/finance',               // finance/sku-margin/index
-  '/smart-bi/excel-upload',          // restaurant/data-completeness
-  '/workflow/admin',                 // production/bom/EcnList (?entityType=ECN)
-  '/restaurant/x1',                  // restaurant/departments/DepartmentDashboard (`/restaurant/${key}`)
-  '/restaurant/suppliers',           // restaurant/supplier-delivery/SupplierDeliveryNoteUploadDialog
-  '/system/smartbi-config/x1',       // smartbi-config/SmartBIConfigView (`/system/smartbi-config/${page}`)
+const REVIEWED_NOT_A_DEFECT: readonly { probe: string; why: string }[] = [
+  {
+    probe: '/restaurant/x1',
+    // DeptKey = 'ops'|'marketing'|'hr'|'finance'|'procurement'(departmentConfig.ts),
+    // /restaurant/{ops,marketing,hr,finance,procurement} 五条路由全部存在。
+    why: 'DepartmentDashboard 的 `/restaurant/${key}`，key 是 DeptKey 五选一，五条都在',
+  },
+  {
+    probe: '/system/smartbi-config/x1',
+    // goToPage 只有两个调用点: 'data-sources' / 'chart-templates', 两条路由都在。
+    why: 'SmartBIConfigView 的 `/system/smartbi-config/${page}`，page 只取两个值，都在',
+  },
 ];
+
+/**
+ * 一条路径是不是「死的」。
+ *
+ * ⛔ 判据不能是 `resolve(p).name === undefined` —— redirect 路由天生无 name
+ *   (见下方阴性对照)。唯一可靠的信号是**它落到了兜底路由**。
+ */
+function isDead(path: string): boolean {
+  const matched = router.resolve(path).matched;
+  if (matched.length === 0) return true;
+  return String(matched[matched.length - 1].path).startsWith('/:pathMatch');
+}
 
 interface Hit {
   file: string;
@@ -124,16 +136,37 @@ describe('router.push 的字面量路径必须解析得出来', () => {
     expect(hits.length).toBeGreaterThan(20);
   });
 
-  it('阳性对照: 一个已知坏路径确实解析不出来', () => {
+  it('阳性对照: 一个已知坏路径确实判得出来', () => {
     // 证明「解析失败」这件事真的判得出来, 否则主断言是恒真式。
-    const bad = router.resolve('/transfer/detail/x1');
-    expect(bad.name).toBeUndefined();
+    expect(isDead('/transfer/detail/x1')).toBe(true);
+  });
+
+  /**
+   * 🔴 阴性对照 —— 这条是**建闸当天判据写错**的直接产物, 不要删。
+   *
+   * 第一版判据是 `resolve(p).name === undefined`。而 vue-router 里
+   * **redirect 路由既没有 name 也没有 component**:
+   *
+   *   { path: '/smart-bi/query', redirect: (to) => ({ path: '/smart-bi/analysis', ... }) }
+   *
+   * 于是它被判成「死路径」—— 实际上它工作得好好的。13 处报警里 **9 处是这一类
+   * 假阳性**(6 处 /smart-bi/query + 1 处 /smart-bi/finance + 2 处有限值集拼路径)。
+   * 假阳性正是让人把闸关掉的那个东西(形态 E)。
+   *
+   * ⇒ 判据改成「**落到兜底路由**」: 只有 matched 为空、或最后一条匹配记录是
+   *    `/:pathMatch(.*)*` 时才算死。
+   */
+  it('阴性对照: 无名的 redirect 路由不算死路径', () => {
+    const r = router.resolve('/smart-bi/query');
+    expect(r.name).toBeUndefined();      // 它确实没有 name ——
+    expect(isDead('/smart-bi/query')).toBe(false);  // 但它不是死路径。
   });
 
   it('没有新增解析不出来的 push 路径', () => {
+    const reviewed = new Set(REVIEWED_NOT_A_DEFECT.map((entry) => entry.probe));
     const unresolved = hits
-      .filter((hit) => router.resolve(hit.probe).name === undefined)
-      .filter((hit) => !KNOWN_UNRESOLVED.includes(hit.probe));
+      .filter((hit) => isDead(hit.probe))
+      .filter((hit) => !reviewed.has(hit.probe));
 
     const report = unresolved.map((hit) => `${hit.file}:${hit.line}  ${hit.raw}`);
     expect(report).toEqual([]);
