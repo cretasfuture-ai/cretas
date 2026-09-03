@@ -25,11 +25,6 @@ import { formatDateTime, toDateString } from '@/utils/dateFormat';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
-import {
-  filterProcessCatalog,
-  pageProcessCatalog,
-  type ProcessRelationFilter,
-} from './processCatalogModel';
 
 // T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 20")
 const conversionPlaceholder = computed(() => {
@@ -84,18 +79,11 @@ const productExtendedFields = computed<FieldConfig[]>(() => [
   { key: 'minimumOrderQuantity', label: '起订量(MOQ)', type: 'decimal', group: '库存采购', precision: 2, order: 7 },
 ]);
 import {
-  getActiveWorkProcesses,
-  getProductWorkProcesses,
-  createProductWorkProcess,
-  deleteProductWorkProcess,
-  batchSortProductWorkProcesses,
   getProductWorkProcessRecommendation,
-  type WorkProcessItem,
-  type ProductWorkProcessItem,
 } from '@/api/processProduction';
 import type { TableRow } from '@/types/api';
 import { productAiGuard } from '@/utils/aiEntryGuards';
-import { canWriteProductMaster, canWriteProductProcess } from './productWriteGates';
+import { canWriteProductMaster } from './productWriteGates';
 
 // 产品分类定义 (全量 — 仅用于标签渲染/历史数据兼容; 原料/包辅材/调味品 是遗留物料类, 物料应在"原料类型字典"管理)
 const PRODUCT_CATEGORIES = [
@@ -177,7 +165,6 @@ const factoryId = computed(() => authStore.factoryId);
 // {"production:read_write", "rd:read_write"} —— 与 system 无关。
 // 这里原本按 canWrite('system') 决定显不显示, 于是「调度」(production/rd 可写、system 只读)
 // 明明有权限建产品, 界面却把「新增 SKU」整个藏了 —— 客户 2026-08-05「无法新建产品了」。
-const canWriteProcess = computed(() => canWriteProductProcess(probe));
 
 // 两把闸的判据抽在 ./productWriteGates —— 写在这里只能靠源码 grep 断言, 而 grep 对
 // 「两把闸被合并成一把」是沉默的 (合并后两个模块名仍然都在文件里)。
@@ -1472,131 +1459,14 @@ function getCategoryLabel(value?: string) {
   return category?.label || value || '-';
 }
 
-// ==================== 工序配置抽屉 ====================
-const processDrawerVisible = ref(false);
-const processDrawerProduct = ref<ProductType | null>(null);
-const availableProcesses = ref<WorkProcessItem[]>([]);
-const linkedProcesses = ref<ProductWorkProcessItem[]>([]);
-const processLoading = ref(false);
-const addingProcessId = ref('');
-const processKeyword = ref('');
-const processCategoryFilter = ref('');
-const processRelationFilter = ref<ProcessRelationFilter>('ALL');
-const processCatalogPage = ref(1);
-const processCatalogPageSize = 30;
-
-const linkedProcessIds = computed(() => new Set(linkedProcesses.value.map((item) => item.workProcessId)));
-const linkedProcessById = computed(() => new Map(linkedProcesses.value.map((item) => [item.workProcessId, item])));
-const processCategoryOptions = computed(() => Array.from(new Set(
-  availableProcesses.value.map((item) => item.processCategory).filter(Boolean),
-)).sort((a, b) => a.localeCompare(b, 'zh-CN')));
-const filteredProcessCatalog = computed(() => filterProcessCatalog(
-  availableProcesses.value,
-  linkedProcessIds.value,
-  {
-    keyword: processKeyword.value,
-    category: processCategoryFilter.value,
-    relation: processRelationFilter.value,
-  },
-));
-const pagedProcessCatalog = computed(() => pageProcessCatalog(
-  filteredProcessCatalog.value,
-  processCatalogPage.value,
-  processCatalogPageSize,
-));
-
-function resetProcessCatalogFilters(): void {
-  processKeyword.value = '';
-  processCategoryFilter.value = '';
-  processRelationFilter.value = 'ALL';
-  processCatalogPage.value = 1;
-}
-
-watch(
-  [processKeyword, processCategoryFilter, processRelationFilter],
-  () => { processCatalogPage.value = 1; },
-);
-
-async function handleConfigProcesses(row: ProductType) {
-  processDrawerProduct.value = row;
-  resetProcessCatalogFilters();
-  processDrawerVisible.value = true;
-  processLoading.value = true;
-  try {
-    const [activeRes, linkedRes] = await Promise.all([
-      getActiveWorkProcesses(factoryId.value!),
-      getProductWorkProcesses(factoryId.value!, row.id),
-    ]);
-    availableProcesses.value = (activeRes.success ? (Array.isArray(activeRes.data) ? activeRes.data : []) : []) as WorkProcessItem[];
-    linkedProcesses.value = (linkedRes.success ? (Array.isArray(linkedRes.data) ? linkedRes.data : []) : []) as ProductWorkProcessItem[];
-  } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '加载工序配置失败');
-  } finally {
-    processLoading.value = false;
-  }
-}
-
-async function handleAddProcess(processId: string) {
-  if (!processDrawerProduct.value) return;
-  addingProcessId.value = processId;
-  try {
-    const nextOrder = linkedProcesses.value.length + 1;
-    const res = await createProductWorkProcess(factoryId.value!, {
-      productTypeId: processDrawerProduct.value.id,
-      workProcessId: processId,
-      processOrder: nextOrder,
-    });
-    if (res.success) {
-      await refreshLinkedProcesses();
-      ElMessage.success('已关联');
-    } else {
-      ElMessage.error(res.message || '关联失败');
-    }
-  } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '关联失败');
-  } finally {
-    addingProcessId.value = '';
-  }
-}
-
-async function handleRemoveProcess(item: ProductWorkProcessItem) {
-  try {
-    await ElMessageBox.confirm(`确定取消关联工序「${item.processName}」？`, '提示', { type: 'warning' });
-    const res = await deleteProductWorkProcess(factoryId.value!, item.id);
-    if (res.success) {
-      await refreshLinkedProcesses();
-      ElMessage.success('已取消关联');
-    }
-  } catch (e) {
-    // Interceptor shows specific toast; dedupe fallback
-    if (e !== 'cancel') console.error('[操作失败]', e);
-  }
-}
-
-async function handleMoveProcess(index: number, direction: 'up' | 'down') {
-  const list = [...linkedProcesses.value];
-  const swapIdx = direction === 'up' ? index - 1 : index + 1;
-  if (swapIdx < 0 || swapIdx >= list.length) return;
-  [list[index], list[swapIdx]] = [list[swapIdx], list[index]];
-  const sortItems = list.map((item, i) => ({ id: item.id, processOrder: i + 1 }));
-  try {
-    await batchSortProductWorkProcesses(factoryId.value!, sortItems);
-    await refreshLinkedProcesses();
-  } catch (e) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    handleCatchError(e, '排序失败');
-  }
-}
-
-async function refreshLinkedProcesses() {
-  if (!processDrawerProduct.value) return;
-  const res = await getProductWorkProcesses(factoryId.value!, processDrawerProduct.value.id);
-  linkedProcesses.value = (res.success ? (Array.isArray(res.data) ? res.data : []) : []) as ProductWorkProcessItem[];
+/**
+ * 跳到「产品-工序配置」并自动选中这个 SKU。
+ *
+ * 该页认同一个 `?productTypeId=`(applyRouteProductSelection), 与新建成品后那条
+ * 引导通知落点一致 —— 两处指同一个地方, 不再各自维护一份工序编辑 UI。
+ */
+function goProcessConfig(row: ProductType): void {
+  router.push({ path: '/system/product-processes', query: { productTypeId: row.id } });
 }
 
 // ==================== AI Entry ====================
@@ -1949,7 +1819,14 @@ watch(aiProductDialogVisible, (visible) => {
         <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
-            <el-button type="warning" link size="small" @click="handleConfigProcesses(row)">
+            <!--
+              2026-09-03: 这里原来开一个「工序配置」抽屉, 是 product_work_processes 的
+              **第二个**编辑入口, 且比 /system/product-processes 那个少 update / copy-chain,
+              成品源 / 成本类别 / 包装模板 / 辅料分摊 一个都配不了(客户:「这个工序关联管理
+              是不是没用了」)。⇒ 抽屉去掉, 入口改成跳到那个全功能页面。
+              ⛔ 不加权限 v-if: 打开是 GET, 与「编辑入口不藏」同一条口径(见 productWriteGate.spec)。
+            -->
+            <el-button type="warning" link size="small" @click="goProcessConfig(row)">
               <el-icon><Setting /></el-icon>工序
             </el-button>
             <el-button v-if="canWrite" type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
@@ -2523,122 +2400,6 @@ watch(aiProductDialogVisible, (visible) => {
     />
 
     <!-- 工序配置抽屉 -->
-    <el-drawer
-      v-model="processDrawerVisible"
-      :title="`工序配置 — ${processDrawerProduct?.name || ''}`"
-      size="560px"
-      direction="rtl"
-    >
-      <el-alert
-        v-if="!canWriteProcess"
-        type="info"
-        :closable="false"
-        show-icon
-        title="只读查看：需要生产模块写权限才能增删或调整工序顺序"
-        style="margin-bottom: 12px;"
-      />
-      <div v-loading="processLoading" class="process-config">
-        <!-- 已关联工序（右侧） -->
-        <div class="process-section">
-          <div class="section-title">
-            <span>已关联工序</span>
-            <el-tag size="small" type="info">{{ linkedProcesses.length }} 个</el-tag>
-          </div>
-          <div v-if="linkedProcesses.length === 0" class="process-empty">
-            暂无关联工序，请从下方可选列表中添加
-          </div>
-          <div v-else class="linked-list">
-            <div v-for="(item, idx) in linkedProcesses" :key="item.id" class="linked-item">
-              <div class="linked-order">{{ idx + 1 }}</div>
-              <div class="linked-info">
-                <div class="linked-name">{{ item.processName }}</div>
-                <div class="linked-meta">
-                  <el-tag size="small" type="info">{{ item.processCategory }}</el-tag>
-                  <span class="linked-unit">{{ displayUnit(item.unitOverride || item.defaultUnit) }}</span>
-                  <span v-if="item.estimatedMinutesOverride || item.defaultEstimatedMinutes" class="linked-time">
-                    {{ item.estimatedMinutesOverride || item.defaultEstimatedMinutes }}分钟
-                  </span>
-                </div>
-              </div>
-              <div class="linked-actions">
-                <el-button :icon="Rank" link size="small" :disabled="idx === 0 || !canWriteProcess" @click="handleMoveProcess(idx, 'up')" title="上移" aria-label="上移工序" />
-                <el-button :icon="Rank" link size="small" :disabled="idx === linkedProcesses.length - 1 || !canWriteProcess" @click="handleMoveProcess(idx, 'down')" title="下移" aria-label="下移工序" />
-                <el-button :icon="DeleteIcon" link size="small" type="danger" title="移除" aria-label="移除工序" :disabled="!canWriteProcess" @click="handleRemoveProcess(item)" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <el-divider />
-
-        <!-- 快捷工序目录：与完整 Workflow 编辑器并存，适合连续关联基础工序。 -->
-        <div class="process-section">
-          <div class="section-title">
-            <span>工序目录</span>
-            <el-tag size="small">结果 {{ filteredProcessCatalog.length }} / 总计 {{ availableProcesses.length }}</el-tag>
-            <el-button link type="primary" @click="resetProcessCatalogFilters">清空筛选</el-button>
-          </div>
-          <div class="process-catalog-filters">
-            <el-input
-              v-model="processKeyword"
-              clearable
-              placeholder="搜索工序名称 / 编码 / 类别标签"
-              aria-label="搜索快捷工序"
-            />
-            <el-select v-model="processCategoryFilter" clearable placeholder="全部类别" aria-label="工序类别筛选">
-              <el-option v-for="category in processCategoryOptions" :key="category" :label="category" :value="category" />
-            </el-select>
-            <el-segmented
-              v-model="processRelationFilter"
-              :options="[
-                { label: '全部', value: 'ALL' },
-                { label: '已关联', value: 'LINKED' },
-                { label: '未关联', value: 'UNLINKED' },
-              ]"
-              aria-label="工序关联状态筛选"
-            />
-          </div>
-          <div v-if="availableProcesses.length === 0" class="process-empty">
-            暂无可用工序，请先在工序字典维护启用工序
-          </div>
-          <div v-else-if="filteredProcessCatalog.length === 0" class="process-empty">
-            没有符合当前条件的工序，请调整或清空筛选
-          </div>
-          <div v-else class="available-list">
-            <div v-for="proc in pagedProcessCatalog" :key="proc.id" class="available-item" :class="{ 'is-linked': linkedProcessIds.has(proc.id) }">
-              <div class="available-info">
-                <span class="available-name">{{ proc.processName }}</span>
-                <el-tag size="small" type="info">{{ proc.processCategory }}</el-tag>
-                <span class="available-code">{{ proc.id }}</span>
-              </div>
-              <el-tag v-if="linkedProcessIds.has(proc.id)" type="success" size="small">
-                已关联 · 第 {{ linkedProcessById.get(proc.id)?.processOrder }} 道
-              </el-tag>
-              <el-button
-                v-else
-                type="primary"
-                size="small"
-                :icon="Plus"
-                :loading="addingProcessId === proc.id"
-                :disabled="!canWriteProcess"
-                @click="handleAddProcess(proc.id)"
-              >
-                添加
-              </el-button>
-            </div>
-            <el-pagination
-              v-if="filteredProcessCatalog.length > processCatalogPageSize"
-              v-model:current-page="processCatalogPage"
-              :page-size="processCatalogPageSize"
-              :total="filteredProcessCatalog.length"
-              layout="prev, pager, next"
-              small
-              class="process-catalog-pagination"
-            />
-          </div>
-        </div>
-      </div>
-    </el-drawer>
   </div>
 </template>
 
@@ -2933,152 +2694,8 @@ watch(aiProductDialogVisible, (visible) => {
   font-weight: 500;
 }
 
-.process-config {
-  min-height: 200px;
-}
-
-.process-section {
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-    font-weight: 600;
-    font-size: 14px;
-    color: #303133;
-  }
-}
-
-.process-empty {
-  text-align: center;
-  color: #909399;
-  padding: 24px 0;
-  font-size: 13px;
-}
-
-.linked-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.linked-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: #F5F7FA;
-  border-radius: 8px;
-  border: 1px solid #EBEEF5;
-
-  .linked-order {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: #409EFF;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 600;
-    flex-shrink: 0;
-  }
-
-  .linked-info {
-    flex: 1;
-
-    .linked-name {
-      font-weight: 500;
-      font-size: 14px;
-      color: #303133;
-    }
-
-    .linked-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 4px;
-      font-size: 12px;
-      color: #909399;
-    }
-  }
-
-  .linked-actions {
-    display: flex;
-    gap: 2px;
-  }
-}
-
-.available-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: min(48vh, 620px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 4px;
-}
-
-.process-catalog-filters {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, .8fr) minmax(120px, .8fr);
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.process-catalog-filters :deep(.el-segmented) {
-  grid-column: 1 / -1;
-  justify-self: start;
-}
-
-.available-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border: 1px solid #EBEEF5;
-  border-radius: 6px;
-  background: #fff;
-
-  &.is-linked {
-    border-color: var(--el-color-success-light-5, #b3e19d);
-    background: var(--el-color-success-light-9, #f0f9eb);
-  }
-
-  .available-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    .available-name {
-      font-size: 14px;
-      color: #303133;
-    }
-
-    .available-unit {
-      font-size: 12px;
-      color: #909399;
-    }
-
-    .available-code {
-      color: var(--el-text-color-secondary, #909399);
-      font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
-    }
-  }
-}
-
-.process-catalog-pagination {
-  position: sticky;
-  bottom: 0;
-  justify-content: center;
-  padding: 8px 0;
-  background: var(--el-bg-color, #fff);
-}
-
 @media (max-width: 720px) {
-  .sku-measure-row,
-  .process-catalog-filters {
+  .sku-measure-row {
     grid-template-columns: 1fr;
   }
   .net-content-expression {

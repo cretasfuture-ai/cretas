@@ -97,6 +97,45 @@ describe('WorkflowProcessNode output gestures', () => {
     expect(wrapper.emitted('addOutput')).toHaveLength(1);
   });
 
+  /**
+   * 🔴 2026-09-03 客户实拍:「点了加号之后这个就没途径删掉了」。
+   *
+   * 加号 (`add-output-inline`) 就在产出区里, 而删除入口只长在画布上 480px 外的
+   * 那个物料节点上 —— 于是「能删」这件事在用户那里等于不存在。
+   *
+   * ⚠️ 这里断言的是**移除入口与加号同处一地**, 不是「产出删得掉」——
+   * 后者本来就成立(选中物料节点删), 而客户报的正是前者。
+   */
+  it('每个产出行都有移除入口, 点击 emit removeOutput(portId)', async () => {
+    const wrapper = mountNode();
+
+    const removes = wrapper.findAll('[data-testid="remove-output-port"]');
+    // 一个产出端口 ⇒ 一个移除按钮。数量对齐, 不是「页面上有个叉」。
+    expect(removes).toHaveLength(1);
+
+    await removes[0].trigger('click');
+    // 带 portId ——画布层要靠它换成 materialNodeId 再走 removeNode。
+    expect(wrapper.emitted('removeOutput')).toEqual([['output-1']]);
+  });
+
+  it('阴性对照: 只读态不给移除入口(与加号同一条 canWrite 闸)', () => {
+    const wrapper = mount(WorkflowProcessNode, {
+      props: {
+        data: processData,
+        selected: true,
+        canWrite: false,
+        semiOptions: SEMI_OPTIONS,
+        finishedOptions: FINISHED_OPTIONS,
+        skuSpecifications: {},
+      },
+      global: { plugins: [ElementPlus], stubs: { Handle: PositionedHandleStub } },
+    });
+
+    expect(wrapper.find('[data-testid="remove-output-port"]').exists()).toBe(false);
+    // 阳性对照: 只读时加号也不在 ⇒ 上面那个 false 不是「按钮根本没做出来」。
+    expect(wrapper.find('[data-testid="add-output-inline"]').exists()).toBe(false);
+  });
+
   it('does not expose a manual output material kind selector', () => {
     const wrapper = mountNode();
 

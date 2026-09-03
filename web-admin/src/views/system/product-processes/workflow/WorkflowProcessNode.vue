@@ -143,6 +143,23 @@
             @change="(skuId) => emit('selectOutput', port.id, skuId)"
           />
           <span class="unit-chip" data-testid="output-unit-chip">{{ unitLabel(port.unit) }}</span>
+          <!--
+            🔴 2026-09-03 客户实拍:「点了加号之后这个就没途径删掉了」。
+            产出 Cell 本体是画布上另一个物料节点(addOutputToProcess 建在 x+480 处),
+            所以它**技术上**一直删得掉 —— 但删除入口在 480px 外的那个节点上, 而
+            「+ 产出 Cell（分流）」就在这里。加号在手边、叉号在天边 = 用户认为删不掉。
+            ⇒ 把删除放回加号旁边。走的仍是 removeNode 那一条路径(确认框 / 最后一个
+            产出的拦截 / 撤销 全都继续生效), ⛔ 不新造第二条删除逻辑。
+          -->
+          <button
+            v-if="canWrite"
+            type="button"
+            class="port-remove nodrag"
+            :title="`移除产出「${port.materialName || '未命名'}」`"
+            :aria-label="`移除产出 ${port.materialName || '未命名'}`"
+            data-testid="remove-output-port"
+            @click.stop="emit('removeOutput', port.id)"
+          >✕</button>
         </div>
       </div>
     </section>
@@ -300,6 +317,12 @@ const emit = defineEmits<{
   /** 点 R 角标：钉住/取消这一对（只改高亮，⛔ 不写任何字段）。 */
   togglePair: [reworkNodeId: string];
   selectOutput: [portId: string, skuId: string];
+  /**
+   * 移除某个产出 Cell。画布层把 portId 换成它的 materialNodeId 再走 removeNode ——
+   * ⛔ 这里不自己删端口: 「每道工序至少一个产出」那条规则的三个承载点都收敛在
+   * removeNode / removeSelectedElements / removeEdgeById 上, 绕过去就是第四个缺口。
+   */
+  removeOutput: [portId: string];
   delete: [];
   editProcess: [];
 }>();
@@ -517,6 +540,20 @@ function handleStyle(index: number, count: number): Record<string, string> {
 }
 .unit-flow-chip span { color: #98a2b3; padding: 0 3px; }
 .reporting-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; color: #667085; font-size: 12px; }
+/*
+  产出行的移除按钮。⚠️ 常显而不是 hover 才出 —— 与右上角的 .cell-delete 刻意不同:
+  那个删的是整个工序 Cell(重, 藏起来防误点), 这个删的是一个产出行(轻, 且客户的
+  原话就是「没途径删掉」⇒ 藏起来等于没有)。
+*/
+.port-remove {
+  display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
+  border: 1px solid #e4e7ed; border-radius: 6px;
+  background: #fff; color: #98a2b3; font-size: 12px; line-height: 1;
+  cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.port-remove:hover { color: #f56c6c; border-color: #f56c6c; background: #fef0f0; }
+.port-remove:focus-visible { outline: 2px solid #409eff; outline-offset: 1px; }
 .unit-chip {
   display: flex;
   align-items: center;

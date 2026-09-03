@@ -28,12 +28,25 @@ import {
 import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEditor.vue';
 import { usePinyinFilter } from './workflow/pinyinInitials';
 import { isRawMaterialOption } from './workflow/rawMaterialCatalog';
+import { canWriteProductProcess } from '../products/productWriteGates';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const route = useRoute();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
+/**
+ * 🔴 2026-09-03: 这里原本判 `canWrite('system')` —— **与客户张权 2026-08-05
+ * 「无法新建产品了」完全同形的缺陷**, 只是长在另一个页面上。
+ *
+ * 后端 `ProductWorkProcessController` 每个写端点要的是 `production:read_write`。
+ * 实测九个角色里 **dispatcher(调度) 是 production=true / system=false** ——
+ * 后端放行, 而这一页把所有写控件都藏了。
+ *
+ * 之所以现在才暴露: SKU 管理页那个工序抽屉走的是**正确**的闸
+ * ({@link canWriteProductProcess}), 调度一直靠它配工序。抽屉在同一次改动里去掉了,
+ * 若不同时把这一页的闸修对, 调度就彻底没有配工序的入口了(⇒ 去掉面板会变成一次回归)。
+ */
+const canWrite = computed(() => canWriteProductProcess((module) => permissionStore.canWrite(module)));
 
 interface WorkflowOwnerOption {
   id: string;

@@ -6,6 +6,9 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { canWriteProductMaster, canWriteProductProcess } from '../productWriteGates';
 
 const pageSource = readFileSync(resolve(__dirname, '..', 'index.vue'), 'utf8');
+// 工序闸 2026-09-03 起长在 hub 页上, 见下方「工序闸搬到 hub 页」。
+const hubSource = readFileSync(
+  resolve(__dirname, '..', '..', 'product-processes', 'index.vue'), 'utf8');
 
 const permissionApiMocks = vi.hoisted(() => ({
   getPlatformPermissions: vi.fn(),
@@ -76,10 +79,36 @@ describe('产品页写入闸必须与后端一致 (客户 2026-08-05「无法新
     }
   });
 
-  it('页面经这两把闸, 不再自己判 system', () => {
+  it('产品页经产品闸, 不再自己判 system', () => {
     expect(pageSource).toContain('canWriteProductMaster(probe)');
-    expect(pageSource).toContain('canWriteProductProcess(probe)');
     expect(pageSource).not.toContain("permissionStore.canWrite('system')");
+  });
+
+  /**
+   * 🔴 2026-09-03: 工序闸的**承载点搬家了**。
+   *
+   * SKU 管理页那个工序抽屉去掉了(它是 product_work_processes 的第二个编辑入口, 且比
+   * /system/product-processes 少 update / copy-chain / 成品源 / 成本类别), 所以工序写权限
+   * 不再由产品页判 —— 改由 hub 页判。
+   *
+   * ⚠️ 而 hub 页原本判的是 `canWrite('system')`, 正是 8-05 那个缺陷的同一形态:
+   * 实测九个角色里 dispatcher 是 production=true / system=false, 后端放行、界面藏控件。
+   * 抽屉去掉若不同时修这把闸, **调度就没有任何配工序的入口了**。
+   *
+   * ⇒ 这条断言守的是「工序闸仍然存在, 只是换了页面」, ⛔ 不是「抽屉还在」。
+   */
+  it('工序闸搬到 hub 页, 且 hub 页不再判 system', () => {
+    expect(hubSource).toContain('canWriteProductProcess(');
+    expect(hubSource).not.toContain("permissionStore.canWrite('system')");
+  });
+
+  it('产品页不再直接读写 product-work-processes —— 单一编辑入口', () => {
+    for (const fn of ['createProductWorkProcess', 'deleteProductWorkProcess',
+      'batchSortProductWorkProcesses', 'getProductWorkProcesses']) {
+      expect(pageSource, `产品页又出现了 ${fn}`).not.toContain(fn);
+    }
+    // 阳性对照: hub 页确实是那个唯一入口(否则上面四条可能只是「两边都没了」)。
+    expect(hubSource).toContain('updateProductWorkProcess');
   });
 
   it('「导入」也是写操作, 不能对只读角色敞着', () => {
@@ -92,9 +121,7 @@ describe('产品页写入闸必须与后端一致 (客户 2026-08-05「无法新
     expect(pageSource).toMatch(/:disabled="!canWrite"[\s\S]{0,120}@click="handleSubmit"/);
   });
 
-  it('工序抽屉四个写动作全部禁用, 且说明原因 —— 只 disable 不解释是另一种 dead-end', () => {
-    expect((pageSource.match(/!canWriteProcess/g) || []).length).toBeGreaterThanOrEqual(4);
-    expect(pageSource).toMatch(/只读查看：需要生产模块写权限/);
+  it('保存产品仍然解释原因 —— 只 disable 不解释是另一种 dead-end', () => {
     expect(pageSource).toMatch(/需要生产或研发写权限才能保存产品资料/);
   });
 });
