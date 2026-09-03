@@ -2041,12 +2041,32 @@ onMounted(async () => {
 .step-mode-escape-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .step-mode-escape-text strong { font-size: 13px; color: var(--el-text-color-primary, #303133); }
 .step-mode-escape-text span { font-size: 12px; color: var(--el-text-color-secondary, #909399); }
+/*
+ * 🔴 必须绝对定位 —— `.editor-body` 是 `display:flex` 的**横向**容器。
+ *
+ * 第一版把这条 bar 写成普通子元素, 于是它成了 palette / canvas / properties 的
+ * flex 兄弟, **横着占掉 434px**: 实测画布从 758px 掉到 324px(1600px 视口下 20%),
+ * 一个本来是「让画布更好用」的改动反而把画布压小了一半多。
+ *
+ * ⇒ 与旁边的 .step-fallback-alert 同一条办法: 浮在画布区上方, 不占布局宽度。
+ * 偏移刻意与它一致(左让开 palette、右让开属性面板), 两条 bar 位置对齐。
+ * ⚠️ 两者互斥不会打架: 这条要求 stepFlow !== null(图线性), 而那条只在
+ *    stepModeFallbackReason 非空(图**不**线性)时出现。
+ */
 .graph-mode-back {
+  position: absolute;
+  z-index: 10;
+  top: 8px;
+  left: 232px;
+  right: 300px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--el-bg-color-overlay, #fff);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
   font-size: 12px;
   color: var(--el-text-color-secondary, #909399);
 }

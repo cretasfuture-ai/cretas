@@ -82,6 +82,29 @@ describe('步骤列表 → 画布的逃生门', () => {
     expect(editor).toContain('forceGraphMode.value = false   // 新建的草稿一律从步骤列表起步');
   });
 
+  /**
+   * 🔴 这条是本次改动**自己踩出来的**回归, 不是假想。
+   *
+   * `.editor-body` 是 `display:flex` 的**横向**容器(palette | canvas | properties)。
+   * 「回到步骤列表」那条 bar 第一版写成普通子元素 ⇒ 它成了第四个 flex 兄弟,
+   * **横着占掉 434px**: 实测画布 758px → **324px**(1600px 视口下 20%)。
+   * 一个本意是「让画布更好用」的改动, 反而把画布压小了一半多。
+   *
+   * 旁边的 .step-fallback-alert 早就用 `position: absolute` 解决过同一个问题 ——
+   * 我没看它就先写了一版(形态 D: 同一个坑, 两份各自踩)。
+   *
+   * ⇒ 任何加进 .editor-body 的横幅都必须脱离文档流。
+   */
+  it('🔴 加进 .editor-body 的横幅必须绝对定位, 否则会吃掉画布宽度', () => {
+    const rule = editor.slice(editor.indexOf('.graph-mode-back {'));
+    const block = rule.slice(0, rule.indexOf('}'));
+    expect(block, '.graph-mode-back 必须 position:absolute').toContain('position: absolute');
+
+    // 阳性对照: 既有那条横幅确实也是这么做的 —— 证明这不是我临时发明的写法。
+    const alertRule = editor.slice(editor.indexOf('.step-fallback-alert {'));
+    expect(alertRule.slice(0, alertRule.indexOf('}'))).toContain('position: absolute');
+  });
+
   it('两个方向都要有真实入口 —— 光有函数没按钮等于没做', () => {
     expect(editor).toContain('data-testid="switch-to-graph"');
     expect(editor).toContain('data-testid="switch-to-step-list"');
