@@ -2940,3 +2940,31 @@ async def test_20260903_degraded_llm_answer_is_not_cached(monkeypatch):
     second = await manual_chat_module.manual_chat(ManualChatRequest(question=question, category="factory"))
     assert "已按工艺列出" in second["answer"]
     assert calls["n"] == 2
+
+
+def test_20260903_third_sweep_fabrications_are_pinned_in_corpus():
+    """2026-09-03 third sweep: prod invented a "系统管理 → 角色权限" path, a "批次管理" menu,
+    a "切换工厂" header action, and told users formal reports do not touch stock.
+    Pin the corrective FAQs and keep the tax how-to guard off history questions."""
+    corpus = (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8")
+    for heading in (
+        "### 登录后看不到“生产管理”菜单怎么办",
+        "### 为什么发货时选不到某个成品批次",
+        "### 一个账号能管多个工厂吗，怎么切换",
+        "### 为什么报工提交后原料库存没有减少",
+        "### 原料批次过期了还能投料吗",
+        "### 生产计划建好后怎么开工，要不要先手动生成批次",
+        "### 物料税率改了，历史采购单的未税价会变吗",
+        "### 从接到销售订单到发货收款的完整流程",
+        "### 客供料从客户送货到结单的完整流程",
+        "### 手机收货提示“已收满”怎么办",
+    ):
+        assert heading in corpus, heading
+    assert "人事管理 → 账号权限 → 角色权限" in corpus
+    assert "系统里没有“批次管理”菜单" in corpus
+    assert "没有“切换工厂”的入口" in corpus
+    assert "可用数量马上减少；账面数量要等生产小结或结单" in corpus
+    assert "“下发 APP 报工”" in corpus and "“开始二次加工”" in corpus
+    # the tax how-to guard must not hijack "does history change" questions
+    assert _needs_factory_tax_inclusive_purchase_guard("采购单的含税单价怎么填？")
+    assert not _needs_factory_tax_inclusive_purchase_guard("物料税率改了，历史采购单的未税价会变吗？")
