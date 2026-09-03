@@ -399,6 +399,7 @@
               @add-output="addOutputToProcess(slotProps.id)"
               @add-special-output="openSpecialOutputChooser(slotProps.id)"
               @select-output="(portId, skuId) => selectOutputSku(slotProps.id, portId, skuId)"
+              @remove-output="(portId) => removeOutputPort(slotProps.id, portId)"
               @edit-process="openQuickEditProcess(slotProps.id)"
               @delete="removeNode(slotProps.id)"
             />
@@ -4894,6 +4895,29 @@ function addOutputToProcess(
     ];
     flowEdges.value.push(flowEdge(processId, portId, materialId, 'input'));
   });
+}
+
+/**
+ * 从工序 Cell 内的产出行移除一个产出 —— `addOutputToProcess` 的反向操作。
+ *
+ * <p>🔴 2026-09-03 客户实拍:「点了加号之后这个就没途径删掉了」。产出 Cell 建的是
+ * 画布上另一个物料节点(x+480 处), 删除入口只长在那个节点上, 而加号长在工序 Cell 里 ——
+ * 于是用户在加号旁边找不到任何删除的办法。
+ *
+ * <p>⛔ 这里**不自己删端口**, 而是把 portId 换成它的 materialNodeId 再交给
+ * {@link removeNode}。「每道工序至少保留一个产出」那条规则只认三个承载点
+ * (removeNode / removeSelectedElements / removeEdgeById), 在这里另写一套删除逻辑
+ * 就是给它开第四个缺口 —— 确认框、撤销、连线清理也会跟着各自漂一份(形态 D)。
+ */
+function removeOutputPort(processId: string, portId: string): void {
+  if (!canEdit.value) return;
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process) return;
+  const port = (process.data as ProcessNodeData).ports.find((candidate) => candidate.id === portId);
+  // 存量图里可能有没挂物料节点的孤儿端口 —— 那种情况下没有可删的节点, 直接不响应,
+  // ⛔ 不要退化成「删端口」: 那正好绕开上面说的那条规则。
+  if (!port?.materialNodeId) return;
+  removeNode(port.materialNodeId);
 }
 
 /**
