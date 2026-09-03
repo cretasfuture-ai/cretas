@@ -2968,3 +2968,16 @@ def test_20260903_third_sweep_fabrications_are_pinned_in_corpus():
     # the tax how-to guard must not hijack "does history change" questions
     assert _needs_factory_tax_inclusive_purchase_guard("采购单的含税单价怎么填？")
     assert not _needs_factory_tax_inclusive_purchase_guard("物料税率改了，历史采购单的未税价会变吗？")
+
+
+def test_20260903_start_flow_questions_reach_the_corpus_not_the_execution_guard():
+    """Round 18: the execution-chain guard answered "怎么开工？要先生成批次吗" in 0.1s with
+    the contract text and no entry point; 生产文员 was told it cannot start. Keep how-to and
+    who-can questions on the corpus FAQ and keep the guard for the chain-consistency contract."""
+    assert not _needs_factory_production_execution_guard("生产计划建好之后怎么开工？要先生成批次吗？")
+    assert not _needs_factory_production_execution_guard("生产文员能不能点开工？")
+    assert _needs_factory_production_execution_guard("开工创建的批次和逐道报工、完工入库是同一个批次吗？")
+    corpus = (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8")
+    assert "两者有其一即可。生产经理、生产文员（有生产读写）" in corpus
+    assert "撤回审批不是独立菜单项" in corpus
+    assert "不需要先手动生成批次）时，服务端" in _FACTORY_PRODUCTION_EXECUTION_ANSWER

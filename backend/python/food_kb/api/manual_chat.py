@@ -496,7 +496,7 @@ _FACTORY_PRODUCTION_EXECUTION_ANSWER = """\
 **没有扫码报工：** 操作员从“分配给我的工序”或任务列表点开已经分配的任务，直接填写投入、工序开始/结束/人数、产出和工时。旧扫码页及其从未存在的单数 `/report` 提交链已移除；草稿列表不能猜旧接口直接提交，只能恢复到对应真实报工页面继续编辑。
 
 **开工与批次：**
-1. 点击“开工”时，服务端在同一事务、同一计划锁内校验单位、数量、固定的 Workflow revision 和 BOM revision，并创建或复用该计划的生产批次；任一校验失败时计划与批次都不应部分生效。
+1. 开工（电脑 Web 计划行“更多”下拉里的“下发 APP 报工”或“开始二次加工”，不需要先手动生成批次）时，服务端在同一事务、同一计划锁内校验单位、数量、固定的 Workflow revision 和 BOM revision，并创建或复用该计划的生产批次；任一校验失败时计划与批次都不应部分生效。
 2. 逐道报工继续使用开工时的同一生产批次，不能临时另建批次，也不能把历史“已开始但无批次”的异常状态当成正常流程。上游工序形成的中间 WIP 批次必须保留同一生产计划身份，供下一道工序在同一计划链中识别和领用。
 3. 进度报工 `PROGRESS` 要填大于 0 的产出数量；工时报工 `HOURS` 要填大于 0 的总工时分钟数，不能为了通过校验虚构产量。业务校验失败时显示服务端消息与 actionHint，不自动保存草稿；网络失败才保存本地草稿并明确提示。
 
@@ -1421,6 +1421,9 @@ def _needs_factory_production_execution_guard(query: str) -> bool:
     normalized = (query or "").lower()
     if "扫码" in normalized and "报工" in normalized:
         return True
+    # 2026-09-03: "how do I start / must I create a batch first / who can start" are FAQs, not this contract
+    if any(term in normalized for term in ("怎么开工", "如何开工", "先生成批次", "手动生成批次", "能不能点开工", "谁能开工")):
+        return False
     stages = (
         any(term in normalized for term in ("开工", "开始生产", "启动计划")),
         any(term in normalized for term in ("批次", "生产批次")),
