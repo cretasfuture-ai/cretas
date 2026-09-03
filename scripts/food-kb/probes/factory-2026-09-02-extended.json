@@ -754,6 +754,137 @@
       "refs": [
         "#460"
       ]
+    },
+    {
+      "id": "rn-draft-local",
+      "question": "手机报工填到一半断网了怎么办？草稿在哪里？",
+      "must_contain_any": [
+        "本地",
+        "待同步草稿"
+      ],
+      "must_not_contain": [
+        "保存在服务端",
+        "自动保存在服务端"
+      ],
+      "refs": [
+        "#150"
+      ]
+    },
+    {
+      "id": "rn-boss-reports",
+      "question": "老板在手机上能看哪些报表？",
+      "must_contain_any": [
+        "总览",
+        "报表"
+      ],
+      "must_contain_any_2": [
+        "产能利用率",
+        "OTIF",
+        "OEE",
+        "BOM 差异率",
+        "产量"
+      ],
+      "must_not_contain": [
+        "未在手机端列出",
+        "建议优先使用电脑"
+      ],
+      "refs": [
+        "#224"
+      ]
+    },
+    {
+      "id": "rn-dispatcher",
+      "question": "调度员在手机上能做什么？",
+      "must_contain_any": [
+        "计划",
+        "甘特",
+        "插单",
+        "排产"
+      ],
+      "must_not_contain": [
+        "当前资料未确认调度员"
+      ],
+      "refs": [
+        "#156"
+      ]
+    },
+    {
+      "id": "rn-scan",
+      "question": "手机 App 支持扫码吗？扫码能干什么？",
+      "must_contain_any": [
+        "扫码选批次",
+        "签到",
+        "快速入口"
+      ],
+      "must_not_contain": [
+        "不支持扫码。",
+        "完全不支持扫码"
+      ],
+      "refs": [
+        "#150"
+      ]
+    },
+    {
+      "id": "rn-version-ota",
+      "question": "手机 App 怎么更新？版本号在哪里看？",
+      "must_contain_any": [
+        "登录页",
+        "OTA",
+        "热更新"
+      ],
+      "must_not_contain": [
+        "应用商店",
+        "App Store"
+      ],
+      "refs": [
+        "#409"
+      ]
+    },
+    {
+      "id": "rn-ship-no-photo",
+      "question": "手机上给客户发货怎么操作？批次是自己挑还是系统挑？",
+      "must_contain_any": [
+        "FIFO",
+        "先进先出",
+        "推荐"
+      ],
+      "must_not_contain": [
+        "至少上传 1 张",
+        "签收照片，照片上传成功后才能点确认"
+      ],
+      "refs": [
+        "#484"
+      ]
+    },
+    {
+      "id": "rn-requisition-readonly",
+      "question": "手机上能看领料单吗？能不能在手机上生成或确认？",
+      "must_contain_any": [
+        "只读",
+        "能看",
+        "可以查看"
+      ],
+      "must_not_contain": [
+        "移动端目前没有独立的领料单页面",
+        "查看领料单需使用电脑"
+      ],
+      "refs": [
+        "#460"
+      ]
+    },
+    {
+      "id": "rn-stocktake-oa",
+      "question": "手机上能盘点吗？",
+      "must_contain_any": [
+        "OA 待办",
+        "审批"
+      ],
+      "must_not_contain": [
+        "移动端不提供盘点入口。"
+      ],
+      "refs": [
+        "#329"
+      ]
     }
   ]
 }
