@@ -1089,6 +1089,10 @@ public class ArApServiceImpl implements ArApService {
             });
 
             Map<String, Object> row = agingMap.get(cpId);
+            // ⚠️ 这个 SUPPLIER 守卫不是历史遗留, 是必须的: AR 的 open-item 字段目前只写不读,
+            // recordArPayment 尚未维护它们 (不减 AR_INVOICE.outstandingAmount) —— 在那之前
+            // 任何读路径都不得消费 AR 的 outstandingAmount/paymentStatus, 见 initializeOpenItem
+            // javadoc。⛔ 不要把这条守卫放宽到两侧 (CUSTOMER 也走 outstandingAmount)。
             BigDecimal amt = counterpartyType == CounterpartyType.SUPPLIER
                     && invoice.getOutstandingAmount() != null
                     ? invoice.getOutstandingAmount()
@@ -1224,6 +1228,12 @@ public class ArApServiceImpl implements ArApService {
      * ledger table and share the same {@link PayablePaymentStatus} enum, so this is one helper for
      * both, not two — see {@code db/flyway/V20261101_27__ar_invoice_open_item_backfill.sql} for the
      * historical-row backfill and the widened {@code ck_ar_ap_open_item} CHECK constraint.
+     *
+     * <p>⚠️ AR 的 open-item 字段目前只写不读: {@code recordArPayment} 尚未维护它们 (客户付款不会
+     * 减少某笔 AR_INVOICE 的 settled_amount/outstanding_amount, 也不会翻转它的 paymentStatus —
+     * 只有 Customer.currentBalance / SalesOrder.paidAmount 会更新)。⛔ 在那条维护路径补上之前,
+     * 任何读路径都不得消费 AR_INVOICE 的 outstandingAmount/paymentStatus —— 它们写入时是对的,
+     * 此后会随真实收款静默失真。见 {@link #getAgingAnalysis} 里对应的 SUPPLIER 守卫。
      */
     private void initializeOpenItem(ArApTransaction transaction) {
         BigDecimal amount = transaction.getAmount() != null

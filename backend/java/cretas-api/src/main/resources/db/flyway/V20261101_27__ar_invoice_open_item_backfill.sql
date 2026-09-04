@@ -32,10 +32,40 @@
 -- against this invoice" only when the SO maps to exactly one (non-deleted) AR_INVOICE row —
 -- true for the pre-2026-08-28 per-SO invoices (source_id IS NULL, one per SO by construction)
 -- and for any SO that has shipped in a single delivery under the newer per-shipment scheme
--- (V20261031_06). When an SO has 2+ AR_INVOICE rows (multi-shipment) there is no reliable way
--- to split a SO-level payment across them, and an AR_INVOICE with no sales_order_id (manual/
--- on-account receivable via ArApController) has no SO to look payments up against either —
--- both cases fall back to NEEDS_RECONCILIATION, same as the AP precedent.
+-- (V20261031_06).
+--
+-- ## The three shapes that fall back to NEEDS_RECONCILIATION (both balances left NULL)
+--
+-- 1. AR_INVOICE with sales_order_id IS NULL — a manual/on-account receivable posted via
+--    ArApController's recordReceivable with no salesOrderId. There is no SO to look
+--    AR_PAYMENT rows up against at all (never enters so_ar_invoice_counts/attributable below).
+-- 2. AR_INVOICE whose sales_order_id already carried a pre-2026-08-28 full-order invoice
+--    (source_id IS NULL) and later got a second, per-shipment invoice from the same SO after
+--    V20261031_06 shipped — this is exactly the "存量整单挂账" collision
+--    ArApTransactionRepository#existsLegacyArInvoiceWithoutSource guards against on the write
+--    path; here it just means that SO now has 2+ AR_INVOICE rows.
+-- 3. AR_INVOICE whose sales_order_id has 2+ *genuine* per-shipment invoices (a normal
+--    multi-shipment order, all with source_id set) — no accidental collision, just no
+--    per-invoice split of the SO-level payment total.
+--
+-- Shapes 2 and 3 are the same SQL predicate (c.invoice_count > 1 in so_ar_invoice_counts below)
+-- — both are "this SO has 2+ AR_INVOICE rows, so a SO-level payment sum can't be reliably split
+-- across them" — they are written out separately here because they arise from two different
+-- business situations, not because the migration treats them differently. All three shapes get
+-- the same treatment: mark unknown-needs-reconciliation rather than guess, same as the AP
+-- precedent.
+--
+-- ## ⚠️ so_ar_payments undercounts payments that were themselves never tied to an SO
+--
+-- so_ar_payments (below) filters AR_PAYMENT rows to sales_order_id IS NOT NULL before summing.
+-- If a customer's payment was recorded as a general/manual receipt without selecting a
+-- salesOrderId (recordArPayment's salesOrderId parameter is optional), it is silently excluded
+-- from every SO's paid total — the backfill would then understate how much has been paid
+-- (overstate outstanding_amount) for that customer's invoice(s). Prod census 2026-09-04: all
+-- 7 existing AR_PAYMENT rows carry a sales_order_id, so this round's backfill is not affected —
+-- but this is a structural gap in the attribution, not a one-time fact about today's data, and
+-- will misattribute the day an SO-less AR_PAYMENT is recorded before this migration re-runs
+-- (it won't re-run — this note is for whoever builds the real AR settlement follow-up next).
 --
 -- Idempotent: only touches AR_INVOICE rows where outstanding_amount IS NULL, so re-running
 -- after the app-side fix has already populated new rows is a no-op for them.
@@ -82,10 +112,11 @@ SET currency_code = COALESCE(t.currency_code, 'CNY'),
 FROM attributable a
 WHERE t.id = a.transaction_id;
 
--- Everything still NULL here is either sales_order_id IS NULL (no SO to look payments up
--- against) or one of 2+ AR_INVOICE rows sharing a sales_order_id (no reliable per-invoice
--- split) — mark unknown-needs-reconciliation, same treatment V20261028_94 gave historical
--- AP invoices rather than guessing.
+-- Everything still NULL here is one of the three shapes from the header comment
+-- (no sales_order_id / legacy+per-shipment collision on one SO / genuine multi-shipment SO —
+-- the latter two both collapse to "this SO has 2+ AR_INVOICE rows") — mark
+-- unknown-needs-reconciliation, same treatment V20261028_94 gave historical AP invoices
+-- rather than guessing.
 UPDATE ar_ap_transactions
 SET currency_code = COALESCE(currency_code, 'CNY'),
     payment_status = 'NEEDS_RECONCILIATION'
