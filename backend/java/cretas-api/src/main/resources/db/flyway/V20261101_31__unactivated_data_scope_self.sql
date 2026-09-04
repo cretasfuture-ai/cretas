@@ -22,6 +22,19 @@
 --
 -- 这个 migration 只改 unactivated 这一行的 data_scope, 幂等 (UPDATE, 影响 0 或 1
 -- 行都不报错; 表/行不存在的环境同样安全 —— 见下方 DO 块)。
+--
+-- ⚠️ V20261101_30 已被另一条并行线占用 (2026-09-04, PR #589 终审时确认), 本文件
+-- 跳号直接编到 _31。V20261101_30 从此永久废弃 —— ⛔ 不要有人事后再去补建它: 本仓两个
+-- profile (application-pg.properties / application-pg-prod.properties) 都设了
+-- spring.flyway.out-of-order=false (默认值), 一旦 V20261101_31 在某个环境上先应用了,
+-- 再补一个版本号更小的 V20261101_30 会被 Flyway 判定为 out-of-order 直接拒绝迁移。
+-- 捡到这个号的人请换一个更高的版本号 (recount: git ls-tree -r --name-only origin/main
+-- -- .../db/flyway | grep -oE 'V20261101_[0-9]+' | sort -t_ -k2 -n | tail -1)。
+--
+-- 🔴 unactivated.data_scope 收紧到 SELF 这件事本身由
+-- UnactivatedDataScopeMigrationContractTest 守着: 任何版本号比本文件更高的迁移,
+-- 只要在 'unactivated' 附近重新写出 'ALL' 却没有 'SELF', 该测试就会红 —— 防的正是
+-- "以后谁加个 re-seed 就把这里静默改回宽权限"这件事。
 -- ============================================================
 
 DO $$
