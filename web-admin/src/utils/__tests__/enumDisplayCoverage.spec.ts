@@ -44,13 +44,90 @@ function readJava(relative: string): string {
   return readFileSync(path, 'utf8');
 }
 
+const ENUM_CONSTANT_RE = /^\s*([A-Z][A-Z0-9_]*)\s*(?:\(|,|$)/gm;
+
+/**
+ * 去掉 Java 源码里的注释 (`//` 行注释与 `/* ... *``/` 块注释, 含 javadoc `/** ... *``/`),
+ * 保留字符串字面量原文不动、换行原样保留 (被删内容用空格占位, 不删换行本身) ——
+ * 后面按行匹配常量名的正则依赖行结构, 删掉换行会把两行意外拼接。
+ *
+ * 走字符级状态机而不是正则的原因: 字符串字面量里可能出现 `//` / `/*` (Java 允许),
+ * 正则很容易把这些误判成注释边界；状态机能精确知道"现在在字符串里"还是"在注释里",
+ * 两者互不干扰 —— 进入字符串状态后, 注释探测分支整体不生效。
+ *
+ * 2026-09-04 实测: SalesOrderStatus.java 新增 SHORT_CLOSED 前那段 javadoc 差一点写进
+ * 一个半角分号 —— 旧解析器 `body.split(';')[0]` 会把那个分号当成"常量区结束",
+ * SHORT_CLOSED 连同它之后的字段/构造器一起从解析结果里消失, 而断言仍然全绿
+ * (循环体压根没跑到它, 见 measurement-and-wiring.md 形态 A⁗ 第 6 例同形)。
+ */
+function stripJavaComments(source: string): string {
+  let out = '';
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    const c2 = i + 1 < source.length ? source[i + 1] : '';
+    if (inLineComment) {
+      if (c === '\n') { inLineComment = false; out += c; } else { out += ' '; }
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === '*' && c2 === '/') { inBlockComment = false; out += '  '; i++; }
+      else { out += c === '\n' ? '\n' : ' '; }
+      continue;
+    }
+    if (inString) {
+      out += c;
+      // 反斜杠转义 (如 `\"`) 要连同下一字符一起跳过, 否则会误判字符串提前收尾。
+      if (c === '\\' && c2) { out += c2; i++; continue; }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '/' && c2 === '/') { inLineComment = true; out += '  '; i++; continue; }
+    if (c === '/' && c2 === '*') { inBlockComment = true; out += '  '; i++; continue; }
+    if (c === '"') { inString = true; out += c; continue; }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * 在 (已去注释的) 源码里找到第一个"不在字符串字面量里"的 `terminator` (`;` 或 `}`),
+ * 返回它之前的子串；找不到就返回整个字符串 (与旧代码 `split(';')[0]` 在没有 `;` 时同义,
+ * 例如 PurchaseInvoiceStatus 没有字段/构造器、枚举体里根本没有 `;`)。
+ *
+ * 单独存在的理由: `stripJavaComments` 只清掉了注释, 字符串字面量原样保留 —— 如果构造器
+ * 参数里写了 `FOO("a;b")` 这样的字面量, 朴素 `split(';')` 仍会把字面量内部这个分号当成
+ * 常量区终点, 把 FOO 之后的常量一并吃掉。这里再做一次字符串感知的扫描来避开它。
+ * 本仓当前 12 个顶层枚举没有这种取值 (已逐个人工核对源文件, 全部用全角标点或干净短语),
+ * 但解析器的正确性不应该依赖"当前没有" —— 见下方 fixture 测试, 这条分支是可复现的。
+ *
+ * ⚠️ 只处理双引号字符串 (Java `char` 单引号字面量): 这 12 个枚举的构造器参数清一色是
+ * `String`, 不会出现 `'x'` 这种写法, 加这层没有意义的复杂度不做。
+ */
+function sliceBeforeBareChar(source: string, terminator: string): string {
+  let inString = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (inString) {
+      if (c === '\\') { i++; continue; }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === terminator) return source.slice(0, i);
+  }
+  return source;
+}
+
 /** 取顶层 enum 的常量名 (常量在 `;` 之前, 之后是字段/构造器)。 */
 function topLevelEnumConstants(source: string, enumName: string): string[] {
   const start = source.indexOf(`enum ${enumName}`);
   expect(start, `${enumName} 声明找不到`).toBeGreaterThan(-1);
-  const body = source.slice(source.indexOf('{', start) + 1);
-  const head = body.split(';')[0];
-  return [...head.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*(?:\(|,|$)/gm)].map((m) => m[1]);
+  const rawBody = source.slice(source.indexOf('{', start) + 1);
+  const head = sliceBeforeBareChar(stripJavaComments(rawBody), ';');
+  return [...head.matchAll(ENUM_CONSTANT_RE)].map((m) => m[1]);
 }
 
 /** 取嵌套 enum 的常量名 (无构造器时常量列表到 `}` 为止)。 */
@@ -58,9 +135,67 @@ function nestedEnumConstants(source: string, enumName: string): string[] {
   const start = source.indexOf(`enum ${enumName}`);
   expect(start, `嵌套 enum ${enumName} 声明找不到`).toBeGreaterThan(-1);
   const open = source.indexOf('{', start);
-  const body = source.slice(open + 1, source.indexOf('}', open));
-  return [...body.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*(?:\(|,|$)/gm)].map((m) => m[1]);
+  const rest = source.slice(open + 1);
+  // 同一形状: `}` 也可能落在注释或字符串字面量里, 与顶层解析走同一套安全边界。
+  const body = sliceBeforeBareChar(stripJavaComments(rest), '}');
+  return [...body.matchAll(ENUM_CONSTANT_RE)].map((m) => m[1]);
 }
+
+/**
+ * 复刻 SalesOrderStatus.java 里 SHORT_CLOSED 前那段 javadoc 的形状: 常量前面隔着一段
+ * 含中文的块注释, 注释正文里混进一个半角分号 —— 旧解析器 `body.split(';')[0]` 会把这个
+ * 分号当成"常量区结束", AFTER_COMMENT 连同它之后的字段/构造器一起从解析结果里消失。
+ */
+const COMMENT_SEMICOLON_FIXTURE = `
+public enum FixtureStatus {
+    BEFORE("之前"),
+    /**
+     * 这段说明故意混进一个半角分号; 用来验证解析器不会被它切断。
+     */
+    AFTER_COMMENT("注释之后");
+
+    private final String displayName;
+
+    FixtureStatus(String displayName) {
+        this.displayName = displayName;
+    }
+}
+`;
+
+/**
+ * 复刻"构造器参数字符串字面量里带分号"的形状: `FOO("a;b")` —— 只去掉注释还不够,
+ * 朴素 `split(';')` 会被字面量内部这个分号切断, 同样会漏掉它之后的常量。
+ */
+const STRING_SEMICOLON_FIXTURE = `
+public enum FixtureStatus2 {
+    HAS_SEMICOLON_IN_STRING("含分号;的取值"),
+    AFTER_STRING("字符串之后");
+
+    private final String displayName;
+
+    FixtureStatus2(String displayName) {
+        this.displayName = displayName;
+    }
+}
+`;
+
+describe('解析器对"注释里藏分号 / 字符串里藏分号"具备抵抗力 (2026-09-04)', () => {
+  it('常量在"含分号的注释"之后仍能被解析出来', () => {
+    const values = topLevelEnumConstants(COMMENT_SEMICOLON_FIXTURE, 'FixtureStatus');
+    // 先证明"解析器真的看到了什么", 再判断红绿 —— 见 measurement-and-wiring.md 硬约束/形态 C″:
+    // 变异不红时先证明变异到达了被测代码, 不要直接从"没红"跳到"断言在守空气"。
+    // eslint-disable-next-line no-console
+    console.log('PARSER_EXTRACTED(comment-fixture):', JSON.stringify(values));
+    expect(values).toEqual(['BEFORE', 'AFTER_COMMENT']);
+  });
+
+  it('常量在"构造器参数字符串字面量里带分号"之后仍能被解析出来', () => {
+    const values = topLevelEnumConstants(STRING_SEMICOLON_FIXTURE, 'FixtureStatus2');
+    // eslint-disable-next-line no-console
+    console.log('PARSER_EXTRACTED(string-fixture):', JSON.stringify(values));
+    expect(values).toEqual(['HAS_SEMICOLON_IN_STRING', 'AFTER_STRING']);
+  });
+});
 
 const ENUM_CASES: Array<{
   label: string;
