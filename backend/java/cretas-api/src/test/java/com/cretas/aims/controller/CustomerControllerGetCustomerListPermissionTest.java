@@ -41,13 +41,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * finance_manager 等) 之前读到的是不受任何模块权限校验的全工厂客户列表。
  *
  * <p>本测试穿过真实 {@link PermissionInterceptor}（而非只断言注解存在），证明拦截器
- * 真的按新加的 {@code @RequirePermission({"sales:read_write","sales:read"})} 放行/拒绝 ——
- * 与 {@code SalesControllerDeliveryDetailPermissionTest} 同一 pattern。
+ * 真的按新加的 {@code @RequirePermission({"sales:read_write","sales:read",
+ * "finance:read_write","finance:read"})} 放行/拒绝 —— 与
+ * {@code SalesControllerDeliveryDetailPermissionTest} 同一 pattern。
+ *
+ * <p>⚠️ 2026-09-05 owner 订正: finance 权限码是后补的 —— L1 {@code platform_role_permissions}
+ * 上「finance 有权、sales 无权」的角色恰好 3 个 ({@code finance_manager}/
+ * {@code restaurant_manager}/{@code restaurant_purchaser})，财务对客户名单做应收对账是
+ * 合理读者，只用 sales:* 会误伤这三个角色。{@link #roleWithFinanceReadOnly_reachesService}
+ * 单独锁住这条: 一个只有 finance:read (无 sales:*) 的角色也能通过。</p>
  *
  * @see com.cretas.aims.controller.inventory.SalesControllerDeliveryDetailPermissionTest reference MockMvc+PermissionInterceptor pattern
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("CustomerController#getCustomerList — sales:read(_write) 权限门 (缺陷: 此前无权限校验)")
+@DisplayName("CustomerController#getCustomerList — sales|finance:read(_write) 权限门 (缺陷: 此前无权限校验)")
 class CustomerControllerGetCustomerListPermissionTest {
 
     @Mock private CustomerService customerService;
@@ -103,12 +110,49 @@ class CustomerControllerGetCustomerListPermissionTest {
     }
 
     /**
-     * 阳性对照 (per rule: 「不再 403」的断言只有在同时证明权限门仍然拦得住无权限角色时
-     * 才有意义): 既无 sales:read_write 也无 sales:read 的角色仍然 403，且 service 一次
-     * 都没被调用 (不是「调用了但返回空列表」)。
+     * 正向 (owner 2026-09-05 加): 持有 finance:read (无任何 sales:*) 的角色也能读到列表 ——
+     * 锁住 finance_manager/restaurant_manager/restaurant_purchaser 这三个「L1 上 finance 有权、
+     * sales 无权」的角色不被误伤。这条与 {@link #roleWithSalesRead_reachesService} 是同一形状,
+     * 只是覆盖权限集里的另外两个 (finance) 而非前两个 (sales) 元素。
      */
     @Test
-    @DisplayName("🔴 缺陷本体的阴性对照: 无 sales:* 权限的角色 → 403, service 未被调用")
+    @DisplayName("持有 finance:read (无 sales:*) 的角色 → 200, 到达 service")
+    void roleWithFinanceReadOnly_reachesService() throws Exception {
+        MockMvc mockMvc = buildMockMvc();
+        User financeViewer = new User();
+        financeViewer.setId(72L);
+        when(userRepository.findById(72L)).thenReturn(Optional.of(financeViewer));
+        when(permissionService.hasAnyPermission(eq(financeViewer), any(String[].class)))
+                .thenAnswer(inv -> {
+                    Object[] args = inv.getArguments();
+                    for (int i = 1; i < args.length; i++) {
+                        if ("finance:read".equals(args[i])) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+
+        PageResponse<CustomerDTO> page = PageResponse.of(List.of(), 1, 20, 0L);
+        when(customerService.getCustomerList(eq("F006"), any(), any(), any(), any(), any()))
+                .thenReturn(page);
+
+        mockMvc.perform(get(URL).requestAttr("userId", 72L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        verify(customerService).getCustomerList(eq("F006"), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * 阳性对照 (per rule: 「不再 403」的断言只有在同时证明权限门仍然拦得住无权限角色时
+     * 才有意义): 既无 sales:* 也无 finance:* 权限的角色仍然 403，且 service 一次
+     * 都没被调用 (不是「调用了但返回空列表」)。覆盖 owner 点名要堵住的那批
+     * (hr_admin/equipment_admin/quality_inspector/quality_manager/procurement_manager ——
+     * L1 上这几个角色在 sales 和 finance 两个模块都是 '-')。
+     */
+    @Test
+    @DisplayName("🔴 缺陷本体的阴性对照: 无 sales:*/finance:* 权限的角色 → 403, service 未被调用")
     void roleWithNoSalesPermission_isForbiddenAndServiceNeverCalled() throws Exception {
         MockMvc mockMvc = buildMockMvc();
         User outsider = new User();

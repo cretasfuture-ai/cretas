@@ -154,8 +154,20 @@ public class CustomerController {
      * procurement_manager/finance_manager 等) 之前不受任何模块权限校验，读到的是全工厂客户列表。
      * 现补齐 {@code sales:read_write / sales:read}，与同域读端点 {@code ReturnOrderController
      * #listReturnsByCustomer} 用的形状一致。</p>
+     *
+     * <p>⚠️ 2026-09-05 owner 订正: 权限集加入 {@code finance:read_write / finance:read}，
+     * 与 {@code SalesController#listOrders} 同口径 (该端点同样把 finance 模块的读者纳入)。
+     * 权威源是 L1 {@code platform_role_permissions}，不是 {@code PermissionServiceImpl
+     * .PERMISSION_MATRIX} 硬编码兜底 —— 两者曾经对 {@code finance_manager} 的 sales 权限给出
+     * 不一致的答案 (matrix 说有, L1 说 '-')，本次改动一律以 L1 为准。查询结果: L1 上「finance
+     * 有权、sales 无权」的角色恰好 3 个 —— {@code finance_manager}(finance=rw)、
+     * {@code restaurant_manager}(finance=r)、{@code restaurant_purchaser}(finance=r) ——
+     * 财务对客户名单做应收对账是合理读者，只用 sales:* 会误伤这三个角色。要堵的那批
+     * ({@code hr_admin}/{@code equipment_admin}/{@code quality_inspector}/
+     * {@code quality_manager}/{@code procurement_manager}) 在 finance 模块上同样是 '-'，
+     * 加了 finance 权限码依然堵得住。</p>
      */
-    @RequirePermission({"sales:read_write", "sales:read"})
+    @RequirePermission({"sales:read_write", "sales:read", "finance:read_write", "finance:read"})
     @GetMapping
     @Operation(summary = "获取客户列表（分页）", description = "分页查询指定工厂的客户列表，支持排序和筛选")
     public ApiResponse<PageResponse<CustomerDTO>> getCustomerList(
