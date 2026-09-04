@@ -149,11 +149,15 @@ class VoucherBackfillScopeContractTest {
     @Test
     @DisplayName("可入账状态的判定表 — 逐个状态钉死, 不靠「除了几个都算」")
     void bookableStatusTables() {
-        // 销售: 财审通过之后才算
+        // 销售: 财审通过之后才算。
+        // T-SHORT-SHIP (2026-09-04): SHORT_CLOSED 只能从 PARTIAL_DELIVERED 显式关闭进入,
+        // 结案前该状态已经在可入账区间里, 结案不该把已经产生的会计影响判定成"不可入账"
+        // (镜像 PurchaseOrderStatus.CLOSED 同样计入下方采购判定表)。
         for (com.cretas.aims.entity.enums.SalesOrderStatus s
                 : com.cretas.aims.entity.enums.SalesOrderStatus.values()) {
             boolean expected = s.name().equals("FINANCE_APPROVED") || s.name().equals("PROCESSING")
-                    || s.name().equals("PARTIAL_DELIVERED") || s.name().equals("COMPLETED");
+                    || s.name().equals("PARTIAL_DELIVERED") || s.name().equals("COMPLETED")
+                    || s.name().equals("SHORT_CLOSED");
             assertEquals(expected, svc().isBookableSalesStatus(s),
                     "销售状态 " + s + " 的可入账判定与预期不符");
         }

@@ -95,6 +95,82 @@ export function deliveryActionState(orderItems: RowLike[], deliveries: RowLike[]
   return { kind: 'ready', label: '新建发货单', disabled: false, tooltip: '' };
 }
 
+export interface ShortShipmentSummary {
+  ordered: number;
+  /** 实际已发货量 — SalesOrderItem.deliveredQuantity, 只在仓库确认发运 (SHIPPED) 时累加。
+   *  与 DeliveryCapacityLine.arranged (「安排量」, 母单一旦创建就占了) 是两个不同的口径 ——
+   *  母单可以在完全没有实发的情况下把 arranged 占满, 这里只认「真的发出去了」。 */
+  shipped: number;
+  /** 缺口 = max(0, ordered - shipped)。0 表示没有短交结案的必要（全部已实发或超发）。 */
+  outstanding: number;
+  /** 订单行单位一致时的显示单位；混单位时为空串。 */
+  unit: string;
+}
+
+/**
+ * 订单级「实发缺口」——「补发剩余」按钮标注的数字、「短交结案」允许调用的前提。
+ *
+ * ⚠️ 刻意不用 DeliveryCapacityLine.remaining（那是「安排量」缺口，母单创建后即使一次
+ * 实发都没发生也会归零）。短交结案问的是「客户实际少收到多少」，只能用 shipped 算。
+ */
+export function shortShipmentSummary(orderItems: RowLike[]): ShortShipmentSummary {
+  let ordered = 0;
+  let shipped = 0;
+  const units = new Set<string>();
+  orderItems.forEach((item) => {
+    const lineOrdered = quantity(item.quantity);
+    ordered += lineOrdered;
+    shipped += Math.min(lineOrdered, quantity(item.deliveredQuantity));
+    const unit = String(item.unit ?? '').trim();
+    if (unit) units.add(unit);
+  });
+  return {
+    ordered,
+    shipped,
+    outstanding: Math.max(0, ordered - shipped),
+    unit: units.size === 1 ? [...units][0] : '',
+  };
+}
+
+/**
+ * 一张母发货单「自己」还有多少行没有被安排进任何有效子发运单 —— 与 detail.vue 的
+ * openShipmentDialog() 内联逻辑同口径，抽成纯函数只是为了让「补发剩余」能在打开对话框
+ * 之前先找到该打开哪一张母单。
+ */
+export function masterDeliveryRemainingByLine(master: RowLike, allDeliveries: RowLike[]): Map<string, number> {
+  const children = allDeliveries.filter((row) =>
+    String(row.parentDeliveryId ?? '') === String(master.id ?? '')
+    && !['CANCELLED', 'RETURNED'].includes(String(row.status ?? '').toUpperCase()));
+  const arranged = new Map<string, number>();
+  children.forEach((row) => {
+    const items = Array.isArray(row.items) ? row.items as RowLike[] : [];
+    items.forEach((item) => {
+      const key = String(item.salesOrderItemId ?? item.productTypeId ?? '');
+      arranged.set(key, (arranged.get(key) ?? 0) + quantity(item.deliveredQuantity));
+    });
+  });
+  const remaining = new Map<string, number>();
+  (Array.isArray(master.items) ? master.items as RowLike[] : []).forEach((item) => {
+    const key = String(item.salesOrderItemId ?? item.productTypeId ?? '');
+    remaining.set(key, Math.max(0, quantity(item.deliveredQuantity) - (arranged.get(key) ?? 0)));
+  });
+  return remaining;
+}
+
+/**
+ * 「补发剩余」点击时该打开哪一张母单的分批发运对话框 —— 选第一张自己还有未安排行的
+ * 有效母单（PARTIALLY_SCHEDULED/PENDING_SPLIT 等）。找不到时调用方应退回「新建发货单」
+ * (为整单剩余量新建一张母单)，而不是假装找到了。
+ */
+export function pendingReshipmentMaster(masters: RowLike[], allDeliveries: RowLike[]): RowLike | null {
+  for (const master of masters) {
+    if (NON_EFFECTIVE_STATUSES.has(String(master.status ?? '').toUpperCase())) continue;
+    const remaining = masterDeliveryRemainingByLine(master, allDeliveries);
+    if ([...remaining.values()].some((value) => value > 0)) return master;
+  }
+  return null;
+}
+
 function isShipmentRecord(row: RowLike): boolean {
   return Boolean(row.parentDeliveryId) || String(row.recordRole || '').toUpperCase() === 'SHIPMENT';
 }

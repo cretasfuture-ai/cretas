@@ -50,12 +50,20 @@ public final class OrderUsageWhitelists {
 
     private OrderUsageWhitelists() {}
 
-    /** Strictest SO whitelist — used as fail-secure default. */
+    /**
+     * Strictest SO whitelist — used as fail-secure default.
+     *
+     * <p>R44 (2026-09-04, 短交结案): {@code SHORT_CLOSED} 保留在这张白名单里 —— 已发货部分
+     * 的开票金额本就按实发数量计算 ({@code InvoiceServiceImpl#computeLineAmountForInvoice}),
+     * 结案只是终止剩余数量的后续发货, 不该连带把已发货部分的开票能力也关掉 (镜像采购侧
+     * {@code PurchaseOrderStatus.CLOSED} 同样留在 {@link #PO_INVOICEABLE} 里的先例)。
+     */
     public static final Set<SalesOrderStatus> SO_INVOICEABLE = EnumSet.of(
             SalesOrderStatus.FINANCE_APPROVED,
             SalesOrderStatus.PROCESSING,
             SalesOrderStatus.PARTIAL_DELIVERED,
-            SalesOrderStatus.COMPLETED);
+            SalesOrderStatus.COMPLETED,
+            SalesOrderStatus.SHORT_CLOSED);
 
     public static final Set<SalesOrderStatus> SO_SHIPPABLE = EnumSet.of(
             SalesOrderStatus.FINANCE_APPROVED,

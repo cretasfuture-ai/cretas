@@ -727,7 +727,10 @@ public class VoucherServiceImpl implements VoucherService {
     boolean isBookableSalesStatus(com.cretas.aims.entity.enums.SalesOrderStatus status) {
         if (status == null) return false;
         return switch (status) {
-            case FINANCE_APPROVED, PROCESSING, PARTIAL_DELIVERED, COMPLETED -> true;
+            // R44 (2026-09-04): SHORT_CLOSED 只能从 PARTIAL_DELIVERED 显式关闭进入, 已发货部分
+            // 的凭证/AR 在结案前就已经存在 —— 镜像采购侧 CLOSED 同样是可入账状态 (见下方
+            // isBookablePurchaseStatus), 结案不该把已经产生的会计影响判定成"不可入账"。
+            case FINANCE_APPROVED, PROCESSING, PARTIAL_DELIVERED, COMPLETED, SHORT_CLOSED -> true;
             default -> false;
         };
     }

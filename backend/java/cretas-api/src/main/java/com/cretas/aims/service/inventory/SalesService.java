@@ -112,6 +112,28 @@ public interface SalesService {
     SalesOrder cancelOrder(String factoryId, String orderId, String reason);
 
     /**
+     * 短交结案 (2026-09-04 owner 拍板): PARTIAL_DELIVERED 订单剩余数量确认不再发货，
+     * 显式关闭为终态 {@code SalesOrderStatus.SHORT_CLOSED}。
+     *
+     * <p>拒绝条件: 订单不是 PARTIAL_DELIVERED (已 SHORT_CLOSED 时幂等直接返回)；
+     * 订单仍有未终结的子发运单 (DRAFT/PENDING_WAREHOUSE_CONFIRM/PICKED，还可能继续
+     * 发货)；订单已无缺口 (全部实发，等价于会自动流转 COMPLETED，不该走这条路)；
+     * 未选择结案原因；原因为 OTHER 且未填补充说明。
+     *
+     * <p>关闭只终止订单剩余数量的后续发货，不回滚已经确认发出的库存/AR —— 已发货部分
+     * 的应收金额本就按实发数量计算 (见 InvoiceServiceImpl#computeLineAmountForInvoice)，
+     * 关闭后仍可为已发货部分正常开票 (SHORT_CLOSED 保留在 SO_INVOICEABLE 白名单内)。
+     *
+     * @param factoryId 工厂 ID (租户隔离)
+     * @param orderId   订单 ID
+     * @param request   结案原因 + 补充说明
+     * @param userId    操作人
+     */
+    SalesOrder closeShortShipment(
+            String factoryId, String orderId,
+            com.cretas.aims.dto.inventory.CloseShortShipmentRequest request, Long userId);
+
+    /**
      * 复制销售订单 — 基于现有订单创建新草稿 (#860 follow-up).
      *
      * <p>复制内容: 客户/订单日期(=今天)/要求交货日期/收货地址/折扣/备注/业务员/运费/extraFees/quoteId/

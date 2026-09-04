@@ -2471,6 +2471,103 @@ public class SalesServiceImpl implements SalesService {
     }
 
     /**
+     * 短交结案的子发运单终结判定 —— 只有到达这些状态才不会再产生新的实发数量。
+     * SHIPPED/DELIVERED 已经计入 {@code SalesOrderItem#deliveredQuantity}
+     * (见 {@link #shipDelivery}); CANCELLED/RETURNED 不会再发货。其余状态
+     * (DRAFT/PENDING_WAREHOUSE_CONFIRM/PICKED) 仍可能被继续确认发货, 必须拦。
+     */
+    private static final java.util.Set<SalesDeliveryStatus> SHORT_CLOSE_TERMINAL_SHIPMENT_STATUSES =
+            java.util.EnumSet.of(
+                    SalesDeliveryStatus.SHIPPED,
+                    SalesDeliveryStatus.DELIVERED,
+                    SalesDeliveryStatus.CANCELLED,
+                    SalesDeliveryStatus.RETURNED);
+
+    @Override
+    @Transactional
+    @Loggable(module = "SALES_ORDER", action = "CLOSE_SHORT_SHIPMENT", entityType = "SalesOrder",
+              entityIdParam = "orderId")
+    public SalesOrder closeShortShipment(
+            String factoryId, String orderId,
+            com.cretas.aims.dto.inventory.CloseShortShipmentRequest request, Long userId) {
+        SalesOrder order = salesOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("销售订单不存在或不属于当前组织"));
+
+        // 双击/网页重放幂等: 已经短交结案的订单直接原样返回, 不重复审计、不二次校验。
+        if (order.getStatus() == SalesOrderStatus.SHORT_CLOSED) {
+            return order;
+        }
+        if (order.getStatus() != SalesOrderStatus.PARTIAL_DELIVERED) {
+            throw new BusinessException(409, "当前订单状态(" + order.getStatus().getDisplayName() + ")不允许短交结案")
+                    .withCode("SALES_SHORT_CLOSE_STATUS_INVALID")
+                    .withHint("只有部分发货状态可以短交结案，请刷新订单查看最新状态");
+        }
+
+        // 硬约束 8 (measurement-and-wiring): 订单挂着的每一张子发运单 (role != MASTER) 都要
+        // 先确认已经到达终态, 否则它随时可能被继续确认发货, 结案锁定的缺口量就会失真。
+        List<SalesDeliveryRecord> deliveries = deliveryRecordRepository.findBySalesOrderId(orderId);
+        SalesDeliveryRecord pending = deliveries.stream()
+                .filter(d -> factoryId.equals(d.getFactoryId()))
+                .filter(d -> !"MASTER".equals(d.getRecordRole()))
+                .filter(d -> !SHORT_CLOSE_TERMINAL_SHIPMENT_STATUSES.contains(d.getStatus()))
+                .findFirst()
+                .orElse(null);
+        if (pending != null) {
+            throw new BusinessException(409,
+                    "订单仍有未完成的发运单 " + pending.getDeliveryNumber() + "，不能短交结案")
+                    .withCode("SALES_SHORT_CLOSE_ACTIVE_DELIVERY")
+                    .withHint("请先确认发货或取消该发运单，再进行短交结案");
+        }
+
+        List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(orderId);
+        if (items.isEmpty()) {
+            throw new BusinessException(409, "订单没有可核对的商品行，不能短交结案")
+                    .withCode("SALES_SHORT_CLOSE_LINES_REQUIRED");
+        }
+        BigDecimal shortfall = BigDecimal.ZERO;
+        for (SalesOrderItem item : items) {
+            BigDecimal ordered = item.getQuantity() != null ? item.getQuantity() : BigDecimal.ZERO;
+            BigDecimal delivered = item.getDeliveredQuantity() != null
+                    ? item.getDeliveredQuantity() : BigDecimal.ZERO;
+            shortfall = shortfall.add(ordered.subtract(delivered).max(BigDecimal.ZERO));
+        }
+        if (shortfall.compareTo(BigDecimal.ZERO) <= 0) {
+            // 全部实发的订单会在 updateOrderDeliveryStatus 里自动流转 COMPLETED —— 这里没有
+            // 缺口可关, 走到这个分支说明前端读到的是过期状态。
+            throw new BusinessException(409, "订单已全部发货，无需短交结案")
+                    .withCode("SALES_SHORT_CLOSE_NO_SHORTFALL")
+                    .withHint("请刷新订单查看最新状态；全部发货完成会自动流转为已完成");
+        }
+
+        if (request == null || request.getReasonCode() == null) {
+            throw new BusinessException(400, "请选择短交结案原因")
+                    .withCode("SALES_SHORT_CLOSE_REASON_REQUIRED");
+        }
+        String notes = request.getNotes() == null ? null : request.getNotes().trim();
+        if (request.getReasonCode() == com.cretas.aims.dto.inventory.CloseShortShipmentRequest.ReasonCode.OTHER
+                && (notes == null || notes.isBlank())) {
+            throw new BusinessException(400, "选择“其他原因”时必须填写补充说明")
+                    .withCode("SALES_SHORT_CLOSE_NOTES_REQUIRED")
+                    .withHintTarget("短交结案补充说明");
+        }
+        if (notes != null && notes.length() > 500) {
+            throw new BusinessException(400, "补充说明不能超过500字")
+                    .withCode("SALES_SHORT_CLOSE_NOTES_TOO_LONG");
+        }
+
+        order.setStatus(SalesOrderStatus.SHORT_CLOSED);
+        order.setShortCloseReasonCode(request.getReasonCode().name());
+        order.setShortCloseNotes(notes == null || notes.isBlank() ? null : notes);
+        order.setShortClosedBy(userId);
+        order.setShortClosedAt(LocalDateTime.now());
+        order.setShortClosedQuantity(shortfall);
+        SalesOrder saved = salesOrderRepository.save(order);
+        log.info("销售订单短交结案: factoryId={}, orderId={}, orderNumber={}, shortfall={}, reason={}, userId={}",
+                factoryId, orderId, order.getOrderNumber(), shortfall, request.getReasonCode(), userId);
+        return saved;
+    }
+
+    /**
      * 复制销售订单 — 见 {@link SalesService#copySalesOrder} 文档.
      *
      * <p>实现说明:

@@ -24,6 +24,9 @@ export const BILLABLE_STATUSES: readonly string[] = [
   'PROCESSING',
   'FINANCE_APPROVED',
   'PARTIAL_DELIVERED',
+  // T-SHORT-SHIP (2026-09-04): 短交结案只终止剩余数量的后续发货, 已发货部分本就按实发
+  // 数量开票 —— 镜像后端 OrderUsageWhitelists.SO_INVOICEABLE 同一次改动。
+  'SHORT_CLOSED',
 ];
 
 /**

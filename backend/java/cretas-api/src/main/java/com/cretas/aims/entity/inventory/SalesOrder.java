@@ -180,6 +180,28 @@ public class SalesOrder extends BaseEntity {
     @Column(name = "marker_color", length = 16)
     private String markerColor;
 
+    // ==================== 短交结案审计 (2026-09-04, 镜像采购侧少收关闭) ====================
+
+    /** 短交结案原因代码；仅 status=SHORT_CLOSED 时填写。 */
+    @Column(name = "short_close_reason_code", length = 40)
+    private String shortCloseReasonCode;
+
+    /** 短交结案补充说明；不与订单备注混写，便于独立审计。 */
+    @Column(name = "short_close_notes", columnDefinition = "TEXT")
+    private String shortCloseNotes;
+
+    /** 执行短交结案的销售用户。 */
+    @Column(name = "short_closed_by")
+    private Long shortClosedBy;
+
+    /** 短交结案提交时间。 */
+    @Column(name = "short_closed_at")
+    private LocalDateTime shortClosedAt;
+
+    /** 结案时锁定的缺口总量 (各行 quantity - deliveredQuantity 之和，clamp ≥0)。 */
+    @Column(name = "short_closed_quantity", precision = 15, scale = 4)
+    private BigDecimal shortClosedQuantity;
+
     // ==================== 销售扩展字段 ====================
 
     /** 业务员 */

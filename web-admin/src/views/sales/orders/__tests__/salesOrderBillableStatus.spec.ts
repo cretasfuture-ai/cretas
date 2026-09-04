@@ -29,6 +29,8 @@ const REAL_ORDER_STATUSES = [
   'PARTIAL_DELIVERED',
   'COMPLETED',
   'CANCELLED',
+  // T-SHORT-SHIP (2026-09-04): 新终态, 与 list.vue/detail.vue 的 statusMap 同步登记。
+  'SHORT_CLOSED',
 ];
 
 /** 2026-08-22 F006 prod 实测分布 —— 用来钉「这些操作在真实数据上够得着」。 */
@@ -63,5 +65,10 @@ describe('可开票/可收款状态集合', () => {
     for (const s of BILLABLE_STATUSES) expect(PAYABLE_STATUSES).toContain(s);
     expect(PAYABLE_STATUSES).toContain('COMPLETED');
     expect(BILLABLE_STATUSES).not.toContain('COMPLETED');
+  });
+
+  it('T-SHORT-SHIP: 短交结案不冻结已发货部分的开票/收款能力', () => {
+    expect(BILLABLE_STATUSES).toContain('SHORT_CLOSED');
+    expect(PAYABLE_STATUSES).toContain('SHORT_CLOSED');
   });
 });
