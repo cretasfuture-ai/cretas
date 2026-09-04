@@ -458,6 +458,20 @@
 
 **在飞 6**：40 第二入口（`ab7d0334c62b27c80`）/ 成本重复计 + 第二 PR 口径 (a)（`a76a43d4bc3282400`，🔒）/ AR `outstanding_amount`/`payment_status` 挂账 + 回填迁移（`a6d1863c025059ba4`，🔒）/ 46 角色门（`a08b4ff879c504d10`）/ 短交两路 + 显式确认（`a7107535c50c8f4af`，🔒）/ DataScopeResolver（`a2188e3b036c19d42`）。到 PR → CI/终审 → 合 → 发 28。
 
+### 📌 2026-09-04 20:31 增量（系统时钟）· 发 29/30 上线, 六票落地, worktree 72→39
+
+**发 29**（20:17，`c5f6f61858`）：#576 成本重复计去重（结算去重集扩到计划级含 WIP）/ #577 AR_INVOICE 挂账初始化 + 回填迁移 `_27` / #578 缺陷46 物料字典 5 个写端点加 `@RequireRole(warehouse_manager, factory_super_admin)`。判据：EXIT=0、FINAL_STATUS 1 次、jar mtime 20:16:49 < 启动 20:17:11、`initializeOpenItem` 1 / `findByFactoryIdAndPlanProductionBatchesIncludingWip` 2 / 假串 0；web 入口链 456 chunk 命中「物料字典由仓储主管维护」。
+
+**发 30**（20:28，`05bf2e05bd`）：#579 DataScopeResolver / #580 客供口径 (a)。判据同上（`RoleDefinitionRepository` 4 / `customerSuppliedItems` 1 / 假串 0），并**量到库里的效果**：`role_definitions` 30 行（此前该表在 prod **从来不存在**）、`yield_operator=SELF`（六膳门 10 个报工账号此前在 6 个 `@DataScope` 端点上是全厂范围）、AR_INVOICE 15 张回填成 **PAID 5 / PARTIALLY_PAID 2 / UNPAID 8**，与终审预算逐字一致。
+
+🔴 **本轮三条并行线各自数 Flyway max 又撞成 `_27`**（#577/#579/#581），拆成 27/28/29，合前当场重数。这是 09-02 之后第二次同形。
+
+⚠️ **登记不修**：① #576 去重是**批次级、数量盲**（prod 现有风险量 0.026 单位）；② AR 的 outstanding/payment_status **只写不读**，`recordArPayment` 未维护，收款路径下一票；③ `DataScopeResolver` 认不出的 role_code 仍 `default → ALL`（fail-open 的另一半，本次只收紧了"查询失败"）；④ 客供行 `SourceCost.unitPrice`/`RawMaterialDetail.unitPrice` 保留原价（今天零消费方）。
+
+**#581 短交两路 + 显式确认**：终审阻断——prod `sales_orders` 的 `ck_so_status` CHECK 未扩 SHORT_CLOSED，部署全绿但一点结案就 500（H2 无此约束所以 23 文件全绿）；另 CI `BusinessException409HintCoverageContractTest` 红（新 409 缺 `.withHint`）。两条在修，落地发 31。
+
+**worktree 清理**（Opus 子代理）：72 → 39，主仓 `web-admin/node_modules` 前后均 251，junction 0 指向仓库。摘 32（19 个 PR MERGED + 11 detached 在 origin/main 上 + 2 内容已进 main），删 19 条本地分支。4 个目录被活进程占着句柄未删（⛔ 未升级强删），7 个停在本地 main 的空树按「拿不准就留」保留。⚠️ 与本次无关的旧账：主仓 `frontend/CretasFoodTrace/node_modules` 自 08-31 起为空。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
