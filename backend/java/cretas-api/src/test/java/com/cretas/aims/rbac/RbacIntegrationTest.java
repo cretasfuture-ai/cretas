@@ -45,20 +45,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h3>Approach</h3>
  * Each test method (1) seeds a fresh user + org tree + sample customer rows in
- * {@code @BeforeEach}, (2) injects the desired {@link DataScope} via
- * {@link DataScopeContext#push} (bypassing role_definitions DB lookup so test
- * works on H2 without that table), (3) calls
+ * {@code @BeforeEach}, (2) injects the desired {@link DataScope} directly via
+ * {@link DataScopeContext#push} (bypassing {@link DataScopeResolver#resolve}'s
+ * own {@code role_definitions} lookup), (3) calls
  * {@link CustomerService#getCustomerList} and asserts visible row counts /
  * row owners match the expected scope semantics.
  *
- * <p>Rationale for context-push approach: production code uses {@code @DataScope}
- * AOP wrapper that calls {@link DataScopeResolver#resolve}, which in turn reads
- * {@code role_definitions.data_scope}. That table is created by an upstream
- * migration NOT in this repo's flyway dir; H2 in-memory test DB doesn't have
- * it. Tests therefore inject the desired context explicitly — that exercises
- * the {@link DataScopeResolver#resolveCreatedByChain} BFS + the dispatch logic
- * in {@code CustomerServiceImpl.dispatchByScope} which is what the data
- * scope feature actually enforces.
+ * <p>Rationale for context-push approach: this matrix wants to isolate the
+ * {@link DataScopeResolver#resolveCreatedByChain} BFS + the dispatch logic in
+ * {@code CustomerServiceImpl.dispatchByScope} — that's what actually enforces
+ * scope, independent of how the scope was decided. Pushing the context
+ * directly keeps the 15-cell matrix from also depending on 15 seeded
+ * {@code role_definitions} rows.
+ *
+ * <p>⚠️ 2026-09-04 更新: 撰写本注释时 {@code role_definitions} 在 H2 测试库上确实不存在
+ * ({@code DataScopeResolver} 用裸 {@code JdbcTemplate} 字符串查它, 而建表的 migration
+ * 在 flyway 之外) —— 那正是本轮修的生产 bug 本身 (见 {@code DataScopeResolver} 类注释、
+ * {@code V20261101_27__create_role_definitions_table.sql})。修复后
+ * {@code role_definitions} 已升级成真正的 JPA entity, H2 (Hibernate {@code ddl-auto})
+ * 现在也建得出这张表了 —— 上面这条已不再是绕开它的理由, 但context-push 本身仍然是对的
+ * 设计选择(见上一段), 所以没有改动测试的必要性.
  *
  * @author Cretas Team (Sprint 7 Track T6)
  * @since 2026-05-19

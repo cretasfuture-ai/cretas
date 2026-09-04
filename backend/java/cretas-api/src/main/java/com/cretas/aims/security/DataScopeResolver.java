@@ -1,14 +1,18 @@
 package com.cretas.aims.security;
 
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.config.RoleDefinition;
 import com.cretas.aims.entity.enums.DataScope;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.repository.RoleDefinitionRepository;
 import com.cretas.aims.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,6 +21,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * 根据 userId 从 DB 解析当前用户的 {@link DataScope} (RBAC 第 2 维, Sprint 5 Track G).
@@ -24,24 +30,63 @@ import java.util.Set;
  * <h3>解析逻辑</h3>
  * 优先级 (高 → 低):
  * <ol>
- *   <li>{@code role_definitions.data_scope} 列 (V20260519_05 migration 新加, per Role 配置)</li>
- *   <li>角色硬默认: factory_super_admin / platform_admin → ALL; 一线员工 → SELF; 其他 → ALL (兼容)</li>
- *   <li>未知角色 → ALL (fail-open, 不破坏现有行为)</li>
+ *   <li>{@code role_definitions.data_scope} 列 (V20260519_08 migration 新加, per Role 配置;
+ *       {@code V20261101_27__create_role_definitions_table.sql} 补建了表本身, 见下方 2026-09-04 记)</li>
+ *   <li>「查得到表但没这一行」→ 角色硬默认: factory_super_admin / platform_admin → ALL;
+ *       一线员工 (operator/warehouse_worker/quality_inspector/yield_operator) → SELF; 其他 → ALL (兼容)</li>
+ *   <li>「查询本身失败」(表/列不存在、连接异常等) → <b>fail-closed, 恒为 SELF</b>
+ *       (2026-09-04 起, 见下). 不再按角色区分, 因为角色硬默认本身也要靠代码维护,
+ *       查询失败时没有依据判断哪个角色"应该"更宽.</li>
  * </ol>
  *
- * <p>Fail-open 设计理由: Phase 1 MVP 不能因为 scope 解析失败 break 现有功能. Sprint 6
- * sweep 时配合 audit 切 fail-closed.
+ * <h3>2026-09-04 订正: fail-open → fail-closed on 查询失败</h3>
+ * 本类上线以来 (Sprint 5, 2026-05-19) {@code role_definitions} 表在
+ * {@code cretas_prod_db} 上<b>从未真正存在过</b>（详见新增 migration
+ * {@code V20261101_27__create_role_definitions_table.sql} 的注释）, 生产上<b>每一次</b>
+ * scope 解析都在走"查询失败"分支, 表现为每隔几秒一条
+ * {@code SQL error resolving role ...: PreparedStatementCallback; bad SQL grammar} WARN。
+ *
+ * <p>排查发现该分支此前直接落到"角色硬默认"（factory_super_admin → ALL）——
+ * 对 factory_super_admin 本身不算越权 (硬默认与种子数据设计值一致), 但同时暴露了
+ * 一个真实的越权缺陷: 硬默认 switch 漏收了 {@code yield_operator}（一线报工岗,
+ * 与 operator 同级 30, 见 {@link FactoryUserRole#yield_operator}）, 落进 {@code default}
+ * 分支拿到了 ALL 而不是 SELF —— LIUSHANMEN 工厂 9 个 {@code yield_operator} 账号
+ * (该厂最大的角色群体) 因此本应只看自己创建的数据, 实际上没有被限制。
+ * 已在本次一并补上 {@code yield_operator → SELF}（下方 switch）与种子数据。
+ *
+ * <p>无论如何, "查询失败"本身不该再走任何按角色区分的默认值 — 表/列缺失这种
+ * 基础设施故障应该<b>恒定收紧到最窄的 SELF</b>, 而不是继续放行 ALL 给大多数角色。
+ * 查表本身查不到某一行（{@link Optional#empty()}, 正常场景, 例如角色确实没配置）
+ * 才走角色硬默认 —— 那是设计好的兼容路径, 不是故障。
+ *
+ * <p>WARN 日志按 role_code 节流 (见 {@link #WARN_THROTTLE}), 避免生产每几秒刷一条相同 WARN。
  *
  * @author Cretas Team (Sprint 5 Track G)
  * @since 2026-05-19
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class DataScopeResolver {
 
+    /** 查询失败时的节流窗口: 同一 role_code 在窗口内只 WARN 一次, 而不是每个请求都打. */
+    static final Duration WARN_THROTTLE = Duration.ofMinutes(5);
+
     private final UserRepository userRepository;
-    private final JdbcTemplate jdbcTemplate;
+    private final RoleDefinitionRepository roleDefinitionRepository;
+    private final Clock clock;
+    private final ConcurrentMap<String, Instant> lastWarnedAt = new ConcurrentHashMap<>();
+
+    @Autowired
+    public DataScopeResolver(UserRepository userRepository, RoleDefinitionRepository roleDefinitionRepository) {
+        this(userRepository, roleDefinitionRepository, Clock.systemUTC());
+    }
+
+    /** Package-visible: 测试注入可控 {@link Clock}, 验证节流窗口. */
+    DataScopeResolver(UserRepository userRepository, RoleDefinitionRepository roleDefinitionRepository, Clock clock) {
+        this.userRepository = userRepository;
+        this.roleDefinitionRepository = roleDefinitionRepository;
+        this.clock = clock;
+    }
 
     /**
      * 解析当前用户 scope. 返回 null 仅当 user 不存在 (caller 应 fallback ALL).
@@ -73,10 +118,9 @@ public class DataScopeResolver {
     }
 
     /**
-     * Lookup data_scope from {@code role_definitions} table. Fallback to hard-coded role defaults.
-     *
-     * <p>用 raw JdbcTemplate 而非 JPA — role_definitions 当前无 JPA entity, MVP 不引入新 entity.
-     * Sprint 6 sweep 时考虑 promote 为 entity.
+     * Lookup data_scope from {@code role_definitions} table (JPA, {@link RoleDefinitionRepository}).
+     * "查得到表, 查不到这一行" 用硬编码角色默认值兜底 (设计好的兼容路径)。
+     * "查询本身失败"(表/列缺失、连接异常等) fail-closed 到 {@link DataScope#SELF}, 见类注释.
      */
     private DataScope resolveScopeForRole(String roleCode) {
         if (roleCode == null || roleCode.isEmpty()) {
@@ -85,27 +129,29 @@ public class DataScopeResolver {
 
         // 优先查 role_definitions.data_scope 列
         try {
-            String dbValue = jdbcTemplate.queryForObject(
-                    "SELECT data_scope FROM role_definitions WHERE role_code = ? LIMIT 1",
-                    String.class,
-                    roleCode);
-            if (dbValue != null && !dbValue.isEmpty()) {
-                try {
-                    return DataScope.valueOf(dbValue);
-                } catch (IllegalArgumentException ex) {
-                    log.warn("DataScopeResolver: role_definitions has invalid data_scope='{}' for role={}, fallback to default",
-                            dbValue, roleCode);
+            Optional<RoleDefinition> roleDefOpt = roleDefinitionRepository.findByRoleCode(roleCode);
+            if (roleDefOpt.isPresent()) {
+                String dbValue = roleDefOpt.get().getDataScope();
+                if (dbValue != null && !dbValue.isEmpty()) {
+                    try {
+                        return DataScope.valueOf(dbValue);
+                    } catch (IllegalArgumentException ex) {
+                        log.warn("DataScopeResolver: role_definitions has invalid data_scope='{}' for role={}, fallback to default",
+                                dbValue, roleCode);
+                    }
                 }
+            } else {
+                // role 不在 role_definitions 表, 用硬默认 (设计好的兼容路径, 非故障)
+                log.debug("DataScopeResolver: role {} not in role_definitions, use hard default", roleCode);
             }
-        } catch (org.springframework.dao.EmptyResultDataAccessException ex) {
-            // role 不在 role_definitions 表, 用硬默认
-            log.debug("DataScopeResolver: role {} not in role_definitions, use hard default", roleCode);
         } catch (Exception ex) {
-            // DB 异常 (e.g. 列不存在 — migration 未跑) → fail-open
-            log.warn("DataScopeResolver: SQL error resolving role {}: {}", roleCode, ex.getMessage());
+            // 查询本身失败 (表/列不存在、连接异常等) → fail-closed: 恒为最窄的 SELF,
+            // 不再走按角色区分的硬默认 (2026-09-04 订正, 见类注释).
+            warnThrottled(roleCode, ex);
+            return DataScope.SELF;
         }
 
-        // Hard defaults based on role hierarchy
+        // Hard defaults based on role hierarchy (仅在"查得到表但没这一行"时使用)
         FactoryUserRole role = FactoryUserRole.fromRoleCode(roleCode);
         switch (role) {
             case platform_admin:
@@ -114,11 +160,28 @@ public class DataScopeResolver {
             case operator:
             case warehouse_worker:
             case quality_inspector:
+            case yield_operator:
                 // 一线员工 → 自己创建的数据
+                // ⚠️ 2026-09-04 补 yield_operator: 此前遗漏, LIUSHANMEN 9 个账号 (该厂
+                // 最大角色群体) 落进 default 分支拿到了 ALL 而不是 SELF。yield_operator
+                // 与 operator 同级 (Level 30, "仅负责报工写入, 无管理界面"), 应同待遇。
                 return DataScope.SELF;
             default:
                 return DataScope.ALL;
         }
+    }
+
+    /** role_code 维度节流: 同一角色的查询失败 WARN 在 {@link #WARN_THROTTLE} 窗口内只打一次. */
+    private void warnThrottled(String roleCode, Exception ex) {
+        Instant now = clock.instant();
+        Instant previous = lastWarnedAt.get(roleCode);
+        if (previous != null && previous.plus(WARN_THROTTLE).isAfter(now)) {
+            log.debug("DataScopeResolver: SQL error resolving role {} (throttled, last WARN at {}): {}",
+                    roleCode, previous, ex.getMessage());
+            return;
+        }
+        lastWarnedAt.put(roleCode, now);
+        log.warn("DataScopeResolver: SQL error resolving role {}, fail-closed to SELF: {}", roleCode, ex.getMessage());
     }
 
     // ==================== Sprint 6 W2-B: chain resolution ====================
