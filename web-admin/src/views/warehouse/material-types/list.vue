@@ -44,7 +44,6 @@ import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
-import { canManageMaterialTypes } from './materialTypeWriteRoles';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
 import {
@@ -81,11 +80,23 @@ const canManageClassification = computed(() => permissionStore.canWrite('system'
 // 缺陷 46 follow-up (2026-09-04, owner 拍板): 「只让仓储主管改」——
 //   canWrite('warehouse') 是模块闸 (仓管/仓储主管对 warehouse 模块的 platform_role_
 //   permissions 都是 'rw', 见 V20261024_22__warehouse_worker_read_warehouse_inventory.sql),
-//   区分不了「仓管」和「仓储主管」。新建/编辑/删除按钮真正的可点性 = 模块闸 ∧ 角色白名单,
-//   角色白名单唯一来源见 materialTypeWriteRoles.ts (与后端 @RequireRole 逐字节相同,
-//   由 materialTypeWriteRolesMatchBackend.spec.ts 钉住)。
+//   区分不了「仓管」和「仓储主管」。新建/编辑/删除按钮真正的可点性 = 模块闸 ∧ 角色白名单。
+// ⚠️ 角色白名单写成**本文件内的字面量 Set**, 不 import 外部模块 ——
+//   分支可达性静态分析器 (src/__tests__/gates/branchReachability.spec.ts) 的 fileEnv 只解析
+//   同一个 .vue 文件 <script> 里的 VariableDeclaration, 不跨文件解析 import; 调用外部函数
+//   canManageMaterialTypes(role) 对它是不可判定的 unknown, 而 core() 会把 and/or 链里的
+//   unknown 操作数直接丢掉 —— `canWrite && canManageMaterialTypes(role)` 被它读成只剩
+//   `canWrite`, 取反后与原式拼成 `canWrite && !canWrite`, 被误判成一条恒假的空转分支
+//   (棘轮预算 18→19, 2026-09-04 CI 实测)。改用本地 Set 字面量 + `.has()`
+//   (与 SupplierDeliveryNoteList.vue 的 SUPPLIER_DELIVERY_WRITE_ROLES 同一形状, 分析器认得出),
+//   与 materialTypeWriteRoles.ts 的 MATERIAL_TYPE_WRITE_ROLES 是否一致由
+//   materialTypeWriteRolesMatchBackend.spec.ts 从两处源码分别解析后钉住。
+const MATERIAL_TYPE_WRITE_ROLE_SET = new Set([
+  'warehouse_manager', 'factory_super_admin',
+  'super_admin', 'platform_admin', 'developer', 'platform_super_admin',
+]);
 const canManageMaterialTypeDictionary = computed(
-  () => canWrite.value && canManageMaterialTypes(permissionStore.currentRole),
+  () => canWrite.value && MATERIAL_TYPE_WRITE_ROLE_SET.has(permissionStore.currentRole),
 );
 // worker 能看到页面 (canWrite=true, 菜单 module 放行) 但点不动写按钮时, 给出显式一行提示 ——
 // ⛔ 不能只是把按钮悄悄藏起来 (那正是缺陷 46 本体「看得见点不开」的静默版本)。

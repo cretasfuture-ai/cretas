@@ -5,7 +5,7 @@
  * 同一模式) —— MATERIAL_TYPE_WRITE_ROLES 从 Java 源码推导期望值, ⛔ 不在测试里手抄一份角色
  * 名单, 手抄的那份会跟着漂, 而漂了不会有人发现 (measurement-and-wiring 形态 D)。
  *
- * 三处来源必须两两一致:
+ * 四处来源必须两两一致:
  *   ① RawMaterialTypeController#createMaterialType 的 @RequireRole
  *      (updateMaterialType / deleteMaterialType 与其逐字节相同, 由后端
  *       RawMaterialTypeManagerOnlyRoleGateTest 钉住, 本闸不重复读它们)
@@ -13,11 +13,32 @@
  *      是两个独立事务, 漏了任一边会让「保存成功但包装规格 403」这种更隐蔽的形式复发)
  *   ③ RequireRoleInterceptor.PLATFORM_ADMIN_ROLES (无条件放行, 不写进 @RequireRole 本身
  *      但拦截器逻辑上等价于放行)
+ *   ④ list.vue 的本地 `MATERIAL_TYPE_WRITE_ROLE_SET`（2026-09-04 CI 追加）——
+ *      list.vue **不 import** materialTypeWriteRoles.ts 里的数组，而是自己在
+ *      `<script setup>` 里重复声明了一份同样内容的字面量 `Set`。原因: 分支可达性
+ *      静态分析器 (`src/__tests__/gates/branchReachability.spec.ts`) 的 `fileEnv`
+ *      只解析同一个 `.vue` 文件 `<script>` 里的 `VariableDeclaration`，跨文件的函数
+ *      调用 `canManageMaterialTypes(role)` 对它是不可判定的 `unknown`，而它的
+ *      `core()` 会把 `and`/`or` 链里的 `unknown` 操作数直接丢弃 —— 于是
+ *      `canWrite && canManageMaterialTypes(role)` 被它读成只剩 `canWrite`，取反后
+ *      与原式拼成 `canWrite && !canWrite`，被误判成一条恒假的「空转分支」（棘轮
+ *      18→19，2026-09-04 CI 实测）。改成本地字面量 `Set([...]).has(...)` 后分析器
+ *      认得出，但这就制造了本文件开头那条规则本来要杜绝的「手抄」——本测试补一条
+ *      「list.vue 那份 == materialTypeWriteRoles.ts 那份」的相等断言，堵住这个缺口。
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { MATERIAL_TYPE_WRITE_ROLES, canManageMaterialTypes } from '../materialTypeWriteRoles';
+
+/** list.vue 里 `MATERIAL_TYPE_WRITE_ROLE_SET = new Set([...])` 里的角色字面量。 */
+function listVueRoleSet(): string[] {
+  const src = readFileSync(resolve(process.cwd(), 'src/views/warehouse/material-types/list.vue'), 'utf8');
+  const m = src.match(/MATERIAL_TYPE_WRITE_ROLE_SET\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+  expect(m, 'list.vue 里读不到 MATERIAL_TYPE_WRITE_ROLE_SET —— 本闸失去被测对象, 或者它又改回了'
+    + ' import 的写法(那样分支可达性闸会重新把写门禁读成空转分支)').toBeTruthy();
+  return [...m![1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+}
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -136,5 +157,24 @@ describe('物料字典写门禁: MATERIAL_TYPE_WRITE_ROLES 必须等于后端实
     expect(canManageMaterialTypes(null)).toBe(false);
     expect(canManageMaterialTypes(undefined)).toBe(false);
     expect(canManageMaterialTypes('')).toBe(false);
+  });
+
+  it('阳性对照: list.vue 那份本地 Set 字面量真的解析出了角色(空集会让下面的相等断言恒真)', () => {
+    expect(listVueRoleSet().length).toBeGreaterThan(0);
+  });
+
+  it('list.vue 的 MATERIAL_TYPE_WRITE_ROLE_SET 与 materialTypeWriteRoles.ts 的 MATERIAL_TYPE_WRITE_ROLES 逐字节相同', () => {
+    const fromVue = [...listVueRoleSet()].sort();
+    const fromModule = [...MATERIAL_TYPE_WRITE_ROLES].sort();
+    expect(
+      fromVue,
+      'list.vue 里为兼容分支可达性静态分析器而重复声明的本地角色 Set 与'
+        + ' materialTypeWriteRoles.ts 漂了 —— 两份手抄内容不许不一致。'
+        + `\n  materialTypeWriteRoles.ts: ${fromModule.join(', ')}\n  list.vue: ${fromVue.join(', ')}`,
+    ).toEqual(fromModule);
+  });
+
+  it('🔴 阴性对照: list.vue 那份本地 Set 里也不许出现 warehouse_worker', () => {
+    expect(listVueRoleSet()).not.toContain('warehouse_worker');
   });
 });
