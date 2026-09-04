@@ -190,6 +190,19 @@ export function getProductionSettlement(factoryId: string, planId: string, confi
   return get<ProductionSettlementStatus>(`/${factoryId}/production-plans/${planId}/settlement`, config)
 }
 
+/** 原料成本逐条回溯明细 (批次/数量/单价/金额/回溯深度)，与 OrderCostBreakdownDTO.SourceCost 同形。 */
+export interface ProductionCostContribution {
+  batchId?: string | null
+  batchName?: string | null
+  quantity?: number | null
+  unit?: string | null
+  unitPrice?: number | null
+  cost?: number | null
+  weightSharePct?: number | null
+  costSharePct?: number | null
+  depth?: number | null
+}
+
 export interface ProductionCostRecalculationResult {
   productionPlanId: string
   settlementId: string
@@ -199,6 +212,15 @@ export interface ProductionCostRecalculationResult {
   finishedGoodsBatchCount: number
   reworkWipCount: number
   productionBatchCount: number
+  /** 审计透明度：原料成本归集的逐项明细，供核对是否把同一个批次算了两遍。 */
+  costContributions?: ProductionCostContribution[] | null
+  /**
+   * 客供主料成本口径 (a)（owner 裁定，2026-09-04）：本次重算里按加工口径显式记 0 的客供
+   * (CUSTOMER_OWNED) 主料批次，"CUSTOMER_SUPPLIED:批次号" 形态。
+   */
+  customerSuppliedItems?: string[] | null
+  /** 上面那份清单的人话版，可直接展示；本轮没有客供料按口径记 0 时为 null。 */
+  customerSuppliedNote?: string | null
 }
 
 /** 重算已入库计划成本；客户端不传任何成本数字。 */

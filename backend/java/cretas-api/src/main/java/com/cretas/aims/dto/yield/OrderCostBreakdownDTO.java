@@ -133,6 +133,21 @@ public class OrderCostBreakdownDTO {
     private Integer missingCostItemCount;
     private List<String> missingCostItems;
 
+    /**
+     * 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04）：来料加工下，客供
+     * ({@code MaterialBatch.ownership == CUSTOMER_OWNED}) 主料<b>显式记 0</b>（不计入我方原料成本，
+     * 成品成本 = 辅料 + 包材 + 工时），而<b>不是</b>「缺价、算不出」。这份清单区分「已知是 0（因为
+     * 是客供）」和「不知道」（后者仍进 {@link #missingCostItems} 的 {@code RAW_MATERIAL_PRICE:…}）——
+     * 两者都表现为单价缺失，但含义完全相反（本仓形态 A¹⁰：兜底的默认值会把「我不知道」翻译成
+     * 「是 0」；这里反过来，这个 0 是真实值，不是兜底）。
+     *
+     * <p>{@code CODE:批次号} 形态，与 {@link #missingCostItems} 同一套约定。
+     * ⛔ 公司自有（{@code COMPANY_OWNED}）批次缺价<b>不</b>进这份清单——那仍然是真的不知道，
+     * 仍然进 {@link #missingCostItems} 并阻断 {@link #costComplete}。
+     */
+    private Integer customerSuppliedItemCount;
+    private List<String> customerSuppliedItems;
+
     /** Auditable quantity x price/rate ledgers. */
     private List<RawMaterialDetail> rawMaterialDetails;
     private List<PackagingDetail> packagingDetails;
