@@ -288,4 +288,63 @@ class SettlementCostUnavailableReasonIsTruthfulContractTest {
         assertTrue(reason.codePoints().anyMatch(c -> c >= 0x4E00 && c <= 0x9FFF),
                 "给用户看的话不是中文: " + reason);
     }
+
+    // ── 客供主料成本口径 (a)（owner 裁定，2026-09-04）──────────────────────────────────
+
+    @Test
+    @DisplayName("阴性对照: 没有客供料按口径记 0 时, describeCustomerSuppliedNote 返回 null (不凭空造一句话)")
+    void describeCustomerSuppliedNoteReturnsNullWhenNoneWereZeroed() {
+        assertNull(ProductionPlanServiceImpl.describeCustomerSuppliedNote(prodShapedBreakdown()));
+        assertNull(ProductionPlanServiceImpl.describeCustomerSuppliedNote(null));
+        assertNull(ProductionPlanServiceImpl.describeCustomerSuppliedNote(
+                OrderCostBreakdownDTO.builder().hasData(true).customerSuppliedItems(List.of()).build()));
+    }
+
+    @Test
+    @DisplayName("🔴 客供料按口径记 0 时, 说出「N 项 + 批次号」, 不能只报一个总数让人猜")
+    void describeCustomerSuppliedNoteNamesCountAndBatches() {
+        OrderCostBreakdownDTO dto = OrderCostBreakdownDTO.builder()
+                .hasData(true)
+                .customerSuppliedItemCount(1)
+                .customerSuppliedItems(List.of("CUSTOMER_SUPPLIED:1399上脑-CS-0001"))
+                .build();
+
+        String note = ProductionPlanServiceImpl.describeCustomerSuppliedNote(dto);
+
+        assertTrue(note != null && note.contains("1 项"), "没说共几项: " + note);
+        assertTrue(note.contains("1399上脑-CS-0001"), "没说是哪个批次: " + note);
+        assertTrue(note.contains("¥0"), "没说明确记成 0: " + note);
+        assertFalse(note.contains("缺") && note.contains("单价"),
+                "客供口径记 0 不该被措辞成「缺单价」——那是另一件事: " + note);
+    }
+
+    @Test
+    @DisplayName("🔴 拒绝原因里也要看得到客供料已排除, 不然会有人误以为「还差单价」包括客供料")
+    void describeCostUnavailableReasonMentionsCustomerSuppliedEvenWhenStillBlockedByOtherItems() {
+        // 一个真正阻断的项(公司自有批次缺价), 同时这个计划还有客供料按口径记 0 ——
+        // 两件事同时成立时, 拒绝原因必须两件都说清楚, 不能只报阻断项让人漏看客供料已排除。
+        OrderCostBreakdownDTO blocked = OrderCostBreakdownDTO.builder()
+                .hasData(true)
+                .knownCostSubtotal(new BigDecimal("10.00"))
+                .totalCost(null)
+                .costComplete(false)
+                .missingCostItems(List.of("RAW_MATERIAL_PRICE:some-company-batch"))
+                .customerSuppliedItemCount(1)
+                .customerSuppliedItems(List.of("CUSTOMER_SUPPLIED:1399上脑-CS-0001"))
+                .build();
+
+        String reason = ProductionPlanServiceImpl.describeCostUnavailableReason(blocked);
+
+        assertTrue(reason.contains("客供料"), "拒绝原因里看不到客供料已经排除的说明: " + reason);
+        assertTrue(reason.contains("1399上脑-CS-0001"), "没具体说是哪个客供批次: " + reason);
+        assertTrue(reason.contains("some-company-batch"), "真正阻断的那一项(公司自有缺价)没说出来: " + reason);
+    }
+
+    @Test
+    @DisplayName("阴性对照: describeCostUnavailableReason 在没有客供料时不提「客供」二字")
+    void describeCostUnavailableReasonStaysSilentAboutCustomerSuppliedWhenThereAreNone() {
+        String reason = ProductionPlanServiceImpl
+                .describeCostUnavailableReason(prodShapedBreakdown());
+        assertFalse(reason.contains("客供"), "没有客供料却凭空提了一句: " + reason);
+    }
 }

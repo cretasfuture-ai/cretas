@@ -31,4 +31,15 @@ public class ProductionCostRecalculationResponse {
      * 才能看到「同一个 batchName 出现两次、depth 还不一样」这个信号。
      */
     private List<OrderCostBreakdownDTO.SourceCost> costContributions;
+
+    /**
+     * 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04）：本次重算里按加工口径显式记 0 的客供
+     * ({@code CUSTOMER_OWNED}) 主料批次（{@code CUSTOMER_SUPPLIED:批次号} 形态，与
+     * {@code OrderCostBreakdownDTO#getCustomerSuppliedItems()} 同一份数据）——让审阅者看得到
+     * 「这几项不是缺价，是按口径不计入我方成本」，⛔ 不能只给一句总数看不到明细。
+     */
+    private List<String> customerSuppliedItems;
+
+    /** 上面那份清单的人话版, 直接可以展示；本轮没有客供料按口径记 0 时为 {@code null}。 */
+    private String customerSuppliedNote;
 }
