@@ -86,6 +86,45 @@ def _extract(raw: str) -> tuple[str, list[str], dict[str, Any]]:
     return answer, names, data
 
 
+
+#: Same-clause negators. A forbidden phrase whose own clause carries one of these is the
+#: *denial* of the claim — e.g. forbidding 「支持自由填写」 must not fire on 「同样不支持自由填写」.
+_NEGATORS = "不无非没未别勿禁"
+#: Clause boundaries. The lookbehind stops here so 「不是 A，而是 B」 still counts B as asserted.
+_CLAUSE_BREAKS = "，。；！？：、\n（）()「」“”\"'"
+_LOOKBEHIND = 18
+
+
+def _asserted(haystack: str, phrase: str) -> "tuple[bool, int]":
+    """Return (phrase is asserted at least once, number of negated occurrences).
+
+    A quote or bracket right before the phrase is itself a clause break, so the scan
+    walks past leading quote characters before looking for the negator.
+    """
+    if not phrase:
+        return False, 0
+    negated = 0
+    start = 0
+    while True:
+        i = haystack.find(phrase, start)
+        if i < 0:
+            return False, negated
+        window = haystack[max(0, i - _LOOKBEHIND):i]
+        # step back over quote/bracket characters that hug the phrase
+        while window and window[-1] in "（()「」“”\"' ":
+            window = window[:-1]
+        for ch in reversed(window):
+            if ch in _NEGATORS:
+                negated += 1
+                break
+            if ch in _CLAUSE_BREAKS:
+                return True, negated
+        else:
+            if not any(ch in _NEGATORS for ch in window):
+                return True, negated
+        start = i + 1
+
+
 def run(base: str, probe_set: dict[str, Any], timeout: float, only: set[str] | None) -> tuple[int, list[dict[str, Any]]]:
     category = probe_set.get("category")
     probes = [p for p in probe_set.get("probes", []) if not only or p.get("id") in only]
@@ -133,6 +172,7 @@ def run(base: str, probe_set: dict[str, Any], timeout: float, only: set[str] | N
 
         n = _norm(answer)
         problems: list[str] = []
+        notes: list[str] = []
         for phrase in probe.get("must_contain", []):
             if _norm(phrase) not in n:
                 problems.append(f"missing «{phrase}»")
@@ -142,8 +182,13 @@ def run(base: str, probe_set: dict[str, Any], timeout: float, only: set[str] | N
             if anyset and not any(_norm(p) in n for p in anyset):
                 problems.append(f"none of {key}: " + " / ".join(anyset))
         for phrase in probe.get("must_not_contain", []):
-            if _norm(phrase) in n:
+            verdict, negated = _asserted(n, _norm(phrase))
+            if verdict:
                 problems.append(f"forbidden «{phrase}» present")
+            elif negated:
+                # visible on purpose: the phrase IS in the answer, only negated. If that
+                # reading is wrong, the probe is passing on something it meant to catch.
+                notes.append(f"«{phrase}» present but negated ({negated}x)")
         prefix = probe.get("expect_source_prefix")
         if prefix and not all(s.startswith(prefix) for s in sources):
             problems.append(f"sources not all {prefix}*: {sorted(set(sources))}")
@@ -156,7 +201,9 @@ def run(base: str, probe_set: dict[str, Any], timeout: float, only: set[str] | N
             print("       A: " + answer[:260].replace("\n", " / "))
         else:
             row["verdict"] = "PASS"
-            print(f"[PASS] {pid} ({elapsed:.1f}s)")
+            if notes:
+                row["notes"] = notes
+            print(f"[PASS] {pid} ({elapsed:.1f}s)" + (("  ~ " + "; ".join(notes)) if notes else ""))
         results.append(row)
 
     total = len(results)
