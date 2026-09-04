@@ -440,6 +440,14 @@
 ⇒ **owner 说的「部署 25」= 09-02 14:03 那批，早已上线核验；当前无任何待发。** 已回工艺 chat；已向 f006 索要 45 / `unit_cost` / 销售出库 三个读数。
 **仍等 owner**：46 角色门。**等时机**：192 停用。
 
+### 📌 2026-09-04 18:27 增量（系统时钟）· owner 让我在应用内浏览器替他点：客供线最后一段走完 + 三条新发现
+
+**owner「你帮我点击吧，在应用内浏览器打开，我帮你登」**——他登录、我点（⛔ 我不输密码）。
+- **`unit_cost` 定性**（登录态 生产经理）：「重算成本 → 确认重算」请求真发出，返回诚实拒绝「还差 1 项没采集齐（已归集 ¥1.9538）：原料批次 452b3e5c… 缺单价。成品已按实收数量入库，单位成本留空（不填 ¥0）」。批次 = `CMR-20260902-2596675BDD9E-WKS-76d1a2bf`（**客供**，unit_price NULL）。⇒ **不是缺陷，是口径**：来料加工客供主料没有采购价 ⇒ 成品成本永远算不出。**待 owner 裁**：(a) 加工口径 = 辅料 + 包材 + 工时，客供料显式记 0 并标 CUSTOMER_SUPPLIED（我倾向）/ (b) 给客供批次录名义价。⚠️ f006 复算消耗行 × 批次价 = ¥1.5808，与 ¥1.9538 差 ¥0.373 来源不明（无 cost_category 报工行）—— 探针 `a42d5a03d73bfaf46` 在复算组成（假设：冰水被算两次 ≈ 0.377）。
+- **销售出库**（owner 切 `lsm004` → 我点）：列表页「创建发货单」→ 主单 `DLV-20260904-4086`；**🔴 缺陷 40 第二入口漏改**：列表页建单没自动生成整单子发运（#492 只接在 `detail.vue:1105`），已派 `ab7d0334c62b27c80`（抽共享 helper 或挪到后端 `createDeliveryRecord`）。订单详情「新建分批发运」→ 子单 `DLV-20260904-4086-01`（客户自提 9.8 kg，母单剩 0.2 短交）。**🔴 #492 自动 FIFO 预填返回 batches=0**（日志 `FIFO 成品推荐 … batches=0, skippedUnitMismatch=0`）而成品批 `PB-…-47204` AVAILABLE 9.8 / WH-FG / CUSTOMER_OWNED / 客户与 SO 均匹配，**手工「分配批次」弹窗能看到并预填 9.80** ⇒ 建单时那条查询（疑 `findAvailableCustomerOwnedBatchesByWarehouse` 带 warehouseId 分支 / prestocked 分支）与推荐接口口径不同；探针 `a9fd0ac81f8d458e2` 在定位排除谓词。我手工「确认分配」9.8。
+- **仓库确认出库**（owner 切 `lsm006` → 我点「确认并扣库存」18:26:06）：`PB-…-47204` DEPLETED shipped 9.8；子单 SHIPPED；母单 PARTIALLY_SHIPPED；SO PARTIAL_DELIVERED；**AR_INVOICE ¥78.40 = 9.8 × ¥8 含税 ✅**（8-28 口径）。⚠️ 观察：该 AR 的 `outstanding_amount` / `payment_status` 均 NULL —— 已让 f006 对照老 AR 判「挂账时不填」是设计还是缺陷。短交 0.2 的结案路径现在有活样本（台账「短交结案 path」）。
+- **仍等 owner**：45 目标角色（改 `baogong001` 成什么）；46 角色门；成本口径 (a)/(b)。**在飞 3**：40 第二入口执行者、FIFO 0 探针、¥1.9538 组成探针。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
