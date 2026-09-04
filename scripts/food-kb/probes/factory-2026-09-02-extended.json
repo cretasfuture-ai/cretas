@@ -1121,6 +1121,37 @@
       "refs": [
         "#567"
       ]
+    },
+    {
+      "id": "s4-role-assign-terse",
+      "question": "去哪里分配新角色 仓储的",
+      "must_contain_any": [
+        "人事管理",
+        "账号管理"
+      ],
+      "must_not_contain": [
+        "系统管理 → 账号与角色",
+        "系统管理 → 审批链配置（或",
+        "进入“系统管理”模块"
+      ],
+      "refs": [
+        "#584"
+      ]
+    },
+    {
+      "id": "s4-role-vs-approval",
+      "question": "审批链和角色管理没关系吧",
+      "must_contain_any": [
+        "审批链配置",
+        "角色权限"
+      ],
+      "must_not_contain": [
+        "完全没有关系。",
+        "两者毫无关系"
+      ],
+      "refs": [
+        "#584"
+      ]
     }
   ]
 }
