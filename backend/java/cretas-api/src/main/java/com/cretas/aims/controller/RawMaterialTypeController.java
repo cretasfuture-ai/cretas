@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.ByproductMarkRequest;
@@ -55,10 +56,26 @@ public class RawMaterialTypeController {
      * 分别是 'r'/'-')。原料类型字典是仓储主数据, 前端页面写门禁同 commit 已改到
      * canWrite('warehouse') —— 此处加 warehouse:read_write 作为任一即可的第二条件,
      * 不移除 production:read_write (生产侧角色仍可写)。
+     *
+     * 缺陷 46 follow-up (2026-09-04, owner 拍板): 「只让仓储主管改」——
+     * warehouse_worker 通过了上面的模块闸 (warehouse:read_write='rw', 见
+     * V20261024_22__warehouse_worker_read_warehouse_inventory.sql), 但模块权限区分不了
+     * 「仓管」和「仓储主管」(platform_role_permissions 里两者对 warehouse 都是 'rw')。
+     * 加 @RequireRole 作为第二道闸 (与 @RequirePermission 是不同的拦截器, 顺序上 AND):
+     * 只放行 warehouse_manager + factory_super_admin (+ RequireRoleInterceptor 自带的
+     * PLATFORM_ADMIN_ROLES 无条件放行)。⚠️ production_manager 等生产侧角色虽仍满足上面
+     * 的模块闸, 但不在这个角色白名单里, 现在同样会被挡 —— 这是刻意的: owner 的原话是
+     * 「只让仓储主管改」, 且没有任何现存测试/前端调用方依赖生产侧角色写这三个端点
+     * (RawMaterialTypeFoolproofMvcTest 用 standaloneSetup 不挂拦截器; BOM 画布只 GET
+     * .../active 和 PATCH .../byproduct, 不碰这三个端点)。
+     * 前端同步: web-admin/src/views/warehouse/material-types/materialTypeWriteRoles.ts
+     * 的 MATERIAL_TYPE_WRITE_ROLES 必须与这里逐字节相同, 由
+     * materialTypeWriteRolesMatchBackend.spec.ts 从本文件源码解析后钉住。
      */
     @RequirePermission({"production:read_write", "warehouse:read_write"})
     @PostMapping
     @Operation(summary = "创建原材料类型", description = "创建新的原材料类型，需指定名称、编码、类别、单位、存储类型等信息")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
     public ApiResponse<RawMaterialTypeDTO> createMaterialType(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestHeader(value = "Authorization", required = false) @Parameter(description = "访问令牌", example = "Bearer eyJhbGciOiJIUzI1NiJ9...") String authorization,
@@ -91,10 +108,12 @@ public class RawMaterialTypeController {
      * 更新原材料类型
      *
      * 缺陷 46 (2026-09-02): 同 createMaterialType 加 warehouse:read_write, 见上方注释。
+     * 缺陷 46 follow-up (2026-09-04): 同 createMaterialType 加 @RequireRole, 见上方注释。
      */
     @RequirePermission({"production:read_write", "warehouse:read_write"})
     @PutMapping("/{id}")
     @Operation(summary = "更新原材料类型", description = "更新原材料类型信息，可修改名称、类别、单位、存储条件等")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
     public ApiResponse<RawMaterialTypeDTO> updateMaterialType(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "原材料类型ID", example = "RMT-F001-001") String id,
@@ -128,10 +147,12 @@ public class RawMaterialTypeController {
      * 删除原材料类型
      *
      * 缺陷 46 (2026-09-02): 同 createMaterialType 加 warehouse:read_write, 见上方注释。
+     * 缺陷 46 follow-up (2026-09-04): 同 createMaterialType 加 @RequireRole, 见上方注释。
      */
     @RequirePermission({"production:read_write", "warehouse:read_write"})
     @DeleteMapping("/{id}")
     @Operation(summary = "删除原材料类型", description = "删除指定的原材料类型，已关联的原材料批次不受影响")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
     public ApiResponse<Void> deleteMaterialType(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "原材料类型ID", example = "RMT-F001-001") String id) {
