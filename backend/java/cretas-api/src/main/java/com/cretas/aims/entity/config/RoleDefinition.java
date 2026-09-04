@@ -27,7 +27,7 @@ import java.time.LocalDateTime;
  * 库上被 baseline（{@code 20260416.99}）挡在了门外, 而后续加 {@code data_scope}
  * 列的 {@code V20260519_08} 是个防御性 {@code IF EXISTS ... ELSE NOTICE} 空转, 于是
  * 生产上<b>每一次</b> role scope 解析都走 {@code relation "role_definitions" does not
- * exist} 报错 → 硬编码 fallback。详见 {@code V20261101_27__create_role_definitions_table.sql}
+ * exist} 报错 → 硬编码 fallback。详见 {@code V20261101_28__create_role_definitions_table.sql}
  * 的迁移注释 + {@link com.cretas.aims.security.DataScopeResolver} 的类注释。
  *
  * <p>升级成真正的 JPA entity 是这次修复的一部分: 让本仓已有的

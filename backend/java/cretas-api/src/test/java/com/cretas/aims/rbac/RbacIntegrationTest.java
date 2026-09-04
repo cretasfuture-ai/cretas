@@ -61,7 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>⚠️ 2026-09-04 更新: 撰写本注释时 {@code role_definitions} 在 H2 测试库上确实不存在
  * ({@code DataScopeResolver} 用裸 {@code JdbcTemplate} 字符串查它, 而建表的 migration
  * 在 flyway 之外) —— 那正是本轮修的生产 bug 本身 (见 {@code DataScopeResolver} 类注释、
- * {@code V20261101_27__create_role_definitions_table.sql})。修复后
+ * {@code V20261101_28__create_role_definitions_table.sql})。修复后
  * {@code role_definitions} 已升级成真正的 JPA entity, H2 (Hibernate {@code ddl-auto})
  * 现在也建得出这张表了 —— 上面这条已不再是绕开它的理由, 但context-push 本身仍然是对的
  * 设计选择(见上一段), 所以没有改动测试的必要性.

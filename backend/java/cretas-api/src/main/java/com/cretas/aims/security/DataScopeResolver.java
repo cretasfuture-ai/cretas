@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentMap;
  * 优先级 (高 → 低):
  * <ol>
  *   <li>{@code role_definitions.data_scope} 列 (V20260519_08 migration 新加, per Role 配置;
- *       {@code V20261101_27__create_role_definitions_table.sql} 补建了表本身, 见下方 2026-09-04 记)</li>
+ *       {@code V20261101_28__create_role_definitions_table.sql} 补建了表本身, 见下方 2026-09-04 记)</li>
  *   <li>「查得到表但没这一行」→ 角色硬默认: factory_super_admin / platform_admin → ALL;
  *       一线员工 (operator/warehouse_worker/quality_inspector/yield_operator) → SELF; 其他 → ALL (兼容)</li>
  *   <li>「查询本身失败」(表/列不存在、连接异常等) → <b>fail-closed, 恒为 SELF</b>
@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentMap;
  * <h3>2026-09-04 订正: fail-open → fail-closed on 查询失败</h3>
  * 本类上线以来 (Sprint 5, 2026-05-19) {@code role_definitions} 表在
  * {@code cretas_prod_db} 上<b>从未真正存在过</b>（详见新增 migration
- * {@code V20261101_27__create_role_definitions_table.sql} 的注释）, 生产上<b>每一次</b>
+ * {@code V20261101_28__create_role_definitions_table.sql} 的注释）, 生产上<b>每一次</b>
  * scope 解析都在走"查询失败"分支, 表现为每隔几秒一条
  * {@code SQL error resolving role ...: PreparedStatementCallback; bad SQL grammar} WARN。
  *
