@@ -79,13 +79,15 @@ def test_full_depth_stays_inside_the_non_stream_timeout():
     assert _estimate_max_tokens("full") < ceiling
 
 
-def test_restaurant_default_depth_cannot_regress():
-    """The restaurant tab sends no depth, so pydantic defaults it to 'mvp'.
+def test_default_depth_budget_cannot_regress():
+    """A request that sends no depth must still get at least the old 1200-token budget.
 
-    The old heuristic could return at most 1200, so the mvp tier must be >= 1200
-    or that path would get *less* budget than before this change.
+    2026-09-04: the page lost its depth picker, so nothing sets this field any more and
+    the default moved 'mvp' -> 'medium'. What must not regress is the *budget*, so this
+    asserts the budget rather than the tier name.
     """
-    assert ManualChatRequest(question="x").depth == "mvp"
+    default_depth = ManualChatRequest(question="x").depth
+    assert _estimate_max_tokens(default_depth) >= 1200
     assert _estimate_max_tokens("mvp") >= 1200
 
 
