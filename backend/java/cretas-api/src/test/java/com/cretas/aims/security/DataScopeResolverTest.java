@@ -302,6 +302,53 @@ class DataScopeResolverTest {
                 .isEqualTo(DataScope.SELF);
     }
 
+    // ---- 7. 2026-09-04 第三次订正 (V20261101_31): unactivated 的 role_definitions 种子行
+    //         本身此前是 ALL —— 与上面第 4 组不同, unactivated 在 prod 上**有**配置行
+    //         (V20261101_28 种子了它), 所以 resolveScopeForRole() 第一步
+    //         roleDefinitionRepository.findByRoleCode("unactivated") 直接命中并返回 DB 值,
+    //         switch 里刚修好的 case unactivated (第 4 组测的那个) 根本执行不到 —— DB 行赢
+    //         过 switch。CreateUserRequest.roleCode 默认就是 unactivated, User.isActive 默认
+    //         true 且登录只查 isActive 不查 roleCode, 于是任何新建用户在被分配正式角色之前都
+    //         能登录并按这一行的 data_scope 读数据。V20261101_31 把这一行从 ALL 改成 SELF。
+    //
+    //         下面两条是一对: "行存在时 SELF" 是修复后的目标状态; 负对照 "行存在时 ALL"
+    //         复现修复前(V20261101_28 刚上线那几小时)的真实生产状态, 证明本测试不是恒真式
+    //         ——它真的在读 DB 行的值, 而不是被 unactivated 这个角色名字本身钉死成某个结果。 ----
+
+    @Test
+    @DisplayName("unactivated 有配置行且值为 SELF(V20261101_31 修复后的目标状态) -> 解析为 SELF")
+    void unactivatedWithConfiguredSelfRowResolvesToSelf() {
+        when(userRepository.findById(50L)).thenReturn(Optional.of(userWith(50L, "unactivated")));
+        when(roleDefinitionRepository.findByRoleCode("unactivated")).thenReturn(Optional.of(
+                RoleDefinition.builder().roleCode("unactivated").dataScope("SELF").build()));
+
+        DataScopeContext ctx = resolver.resolve(50L);
+
+        assertThat(ctx.getScope())
+                .as("V20261101_31 之后 role_definitions.unactivated.data_scope='SELF' —— "
+                        + "新建用户在被分配正式角色前只能看到自己创建的数据")
+                .isEqualTo(DataScope.SELF);
+    }
+
+    @Test
+    @DisplayName("负对照: unactivated 有配置行但值仍是 ALL(V20261101_31 之前的真实种子) -> 解析为 ALL, 证明上一条不是恒真式")
+    void unactivatedWithLegacyAllRowResolvesToAllNotVacuously() {
+        when(userRepository.findById(51L)).thenReturn(Optional.of(userWith(51L, "unactivated")));
+        when(roleDefinitionRepository.findByRoleCode("unactivated")).thenReturn(Optional.of(
+                RoleDefinition.builder().roleCode("unactivated").dataScope("ALL").build()));
+
+        DataScopeContext ctx = resolver.resolve(51L);
+
+        // 这正是 V20261101_31 之前 cretas_prod_db 里 unactivated 那一行的真实内容(V20261101_28
+        // 种子的原值) —— 复现修复前的实际越权行为: 任何新建用户在分配角色前都是 ALL scope.
+        // 上面那条断言只在这一条也真正跑通并按 DB 值区分时才有意义(否则 resolver 可能只是
+        // 无论 DB 里写什么都硬编码返回 SELF, 那样上一条测试就是恒真式).
+        assertThat(ctx.getScope())
+                .as("unactivated 角色本身不触发任何硬编码收紧 —— 决定它的只有这一行的 data_scope 列, "
+                        + "这正是 V20261101_31 要修的东西(而不是 Java 代码)")
+                .isEqualTo(DataScope.ALL);
+    }
+
     /** 可推进的测试 {@link Clock} —— java.time.Clock 本身不可变, fixed() 无法在同一实例内推进. */
     private static final class AdvanceableClock extends Clock {
         private Instant now;
