@@ -61,21 +61,35 @@ public class RoleDefinition {
     @Column(name = "description", length = 200)
     private String description;
 
+    /** DB {@code DEFAULT 99} —— 与 role_code 未映射时 {@code FactoryUserRole.unactivated} 的 level 一致. */
     @Column(name = "level", nullable = false)
-    private Integer level;
+    @Builder.Default
+    private Integer level = 99;
 
     @Column(name = "department", length = 50)
     private String department;
 
-    @Column(name = "is_deprecated")
-    private Boolean isDeprecated;
+    @Column(name = "is_deprecated", nullable = false)
+    @Builder.Default
+    private Boolean isDeprecated = Boolean.FALSE;
 
     /**
      * 数据权限范围, 存 {@link com.cretas.aims.entity.enums.DataScope} 的 name()
      * (ALL / DEPT_AND_BELOW / SELF_AND_BELOW / SELF / CUSTOM).
+     *
+     * <p>Java 侧默认值 {@code "ALL"} 只是为了跟 DB {@code DEFAULT 'ALL'} 对齐、
+     * 满足 {@code NotNullColumnsHaveEntityDefaultsContractTest} 那道契约闸 (省略这个
+     * 字段的任何构造路径都不能让 Hibernate 显式插 NULL, 否则撞 23502, 同
+     * {@code accepts_rework} 缺陷类, 见 #522/#508)。
+     *
+     * <p>⚠️ 别读反: 这个初始化<b>不影响</b> {@link com.cretas.aims.security.DataScopeResolver}
+     * 的运行时行为 —— resolver 走的是「查不到这一行」→硬编码角色默认值 switch,
+     * 「查询本身抛异常」→固定 fail-closed SELF 两条路径, 都不读这个 Java 默认值,
+     * 它只在真的往这张表 INSERT 一行、又没显式指定 data_scope 时才会被用到。
      */
     @Column(name = "data_scope", nullable = false, length = 32)
-    private String dataScope;
+    @Builder.Default
+    private String dataScope = "ALL";
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
