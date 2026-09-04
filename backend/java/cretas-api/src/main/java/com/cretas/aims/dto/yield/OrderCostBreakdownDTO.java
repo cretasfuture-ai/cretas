@@ -165,7 +165,12 @@ public class OrderCostBreakdownDTO {
         private String batchName;
         private BigDecimal quantity;
         private String unit;
-        /** masked 时 null。 */
+        /**
+         * masked 时 null。约定 (2026-09-04): 客供
+         * ({@code priceSource}=CUSTOMER_SUPPLIED 场景, 见 {@link RawMaterialDetail#priceSource})
+         * 行也如实展示批次自己记录的价 —— 这是审计记录, ⛔ <b>不</b>代表要计入我方成本；
+         * 我方成本口径看 {@link #cost}(客供恒为 0), 不要看这个字段。
+         */
         private BigDecimal unitPrice;
         /** masked 时 null (= 该上游链 traced 累计成本)。 */
         private BigDecimal cost;
@@ -213,6 +218,11 @@ public class OrderCostBreakdownDTO {
         private String materialName;
         private BigDecimal quantity;
         private String unit;
+        /**
+         * 约定 (2026-09-04): 客供 ({@code priceSource}=CUSTOMER_SUPPLIED) 行同样保留批次自己
+         * 记录的原价 —— 那是客户物料的原值(审计记录), ⛔ <b>不</b>代表这笔要计入我方成本。
+         * 我方成本口径看 {@link #amount}(客供恒为 0), 不要拿这个字段乘 quantity 去算钱。
+         */
         private BigDecimal unitPrice;
         private String priceSource;
         private BigDecimal amount;

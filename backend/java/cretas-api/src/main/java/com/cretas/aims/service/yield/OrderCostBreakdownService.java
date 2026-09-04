@@ -777,6 +777,29 @@ public class OrderCostBreakdownService {
      * ⛔ <b>取不到价时留 null，不填 0</b> —— 0 是个看起来很确定的假答案，
      * 而下游的 {@code missingCostItems} 正是靠 null 才报得出「缺价」。
      *
+     * <h3>🔴 2026-09-04 缺陷订正 II: 去重键只到「批次存不存在」, 量盲</h3>
+     * 上面「2026-09-04 缺陷订正」把去重集合从「本批次自己」扩到「计划全量」, 堵住了 #576 那个
+     * 双计洞——但它仍然是<b>存在性</b>判断: 一个物料批次只要在 {@code material_consumptions}
+     * 里出现过<b>任意一行</b>, 这一批结单领用行就<b>整行丢弃</b>, 不管结单量是不是比已耗用量更大。
+     * prod 只读探针实测(2026-09-04): 88 组 (计划, 物料批次) 重叠, 其中 7 组结单量 &gt; 已耗用量
+     * (合计风险量 0.026, 目前是舍入残差量级, 尚未流血, 但规则本身是错的)。
+     * <p>改法: 去重键不再是「批次是否出现」, 而是「结单量超出已耗用量的部分」——
+     * {@code contribution = max(0, settlementQty − consumedQty)}, 按结单行自己连出的
+     * {@code material_batches.unit_price} 计价。
+     * <ul>
+     *   <li>已耗用量 &gt;= 结单量 → 贡献 0（整行等效丢弃, 覆盖 #576 原场景，
+     *       含本方法 javadoc 上面那个冰水 0.3800+0.3738 双计案例 —— 见
+     *       {@code settlementDedupExcessDoesNotResurrectTheOriginalDoubleCount} 回归测试）</li>
+     *   <li>已耗用量 &lt; 结单量 → 只把超出的那一段(不是整个结单量)算作新贡献</li>
+     *   <li>已耗用量本身未知(耗用行没有可读的 quantity —— 生产库 {@code material_consumptions
+     *       .quantity} 是 {@code NOT NULL}, 这一分支只会在测试桩省略字段时触发) →
+     *       保守按【已全额覆盖】处理(与订正前的存在即覆盖同向), <b>不</b>当 0 处理——
+     *       当 0 处理会把「量不明」误判成「没消耗」重新计入, 复活双计风险</li>
+     * </ul>
+     * 同一物料批次可能对应多行结单领用: 按 {@code rows} 原有顺序逐行核销「已耗用量」这份预算
+     * (每核销掉一部分, 预算相应减少), 使多行合计的贡献仍然等于
+     * {@code max(0, Σ结单量 − 已耗用量)}, 不会因为拆行而多算。
+     *
      * @param covered 本批次已经从 {@code material_consumptions} 取到的行（仅当前批次自己的维度，
      *                不含上游 CLERK_WIP 批次；本方法内部会另外并上计划全量去重集合）
      * @param plansMerged 已并入过的计划 id；同一计划的多个生产批次只并入一次
@@ -807,50 +830,91 @@ public class OrderCostBreakdownService {
         if (rows == null || rows.isEmpty()) {
             return List.of();
         }
-        java.util.Set<String> coveredBatchIds = covered.stream()
-                .map(MaterialConsumption::getBatchId)
-                .filter(java.util.Objects::nonNull)
-                .collect(java.util.stream.Collectors.toSet());
+        // 已耗用量预算(按物料批次 id 求和) + 耗用量未知的批次(保守视为已全额覆盖)。
         // 🔴 bug fix 2026-09-04: covered 只是【当前(成品)批次自己】的消耗行, 看不到 traceCost
         // 沿谱系回溯到的上游 CLERK_WIP 批次自己的消耗行 —— 补一个【计划全量、含 CLERK_WIP】的并集,
-        // 见上方类 javadoc「2026-09-04 缺陷订正」与仓库方法自身 javadoc。
-        coveredBatchIds.addAll(planWideCoveredMaterialBatchIds(factoryId, planId));
+        // 见上方类 javadoc「2026-09-04 缺陷订正」与仓库方法自身 javadoc。covered 与 planWide 两个
+        // 来源各自累加(不去重求并集的行本身) —— 即使 prod 上 covered ⊆ planWide 而被重复计入,
+        // 后果只是「已耗用量预算」偏高、超出量偏保守(更容易判 0 不再计入), 与 #576 的双计缺陷方向相反,
+        // 不会复活它。
+        Map<String, BigDecimal> consumedQtyBudget = new java.util.HashMap<>();
+        java.util.Set<String> unknownQtyBatches = new java.util.HashSet<>();
+        accumulateConsumedQty(covered, consumedQtyBudget, unknownQtyBatches);
+        accumulateConsumedQty(planWideConsumedMaterialConsumptions(factoryId, planId),
+                consumedQtyBudget, unknownQtyBatches);
 
         List<MaterialConsumption> merged = new ArrayList<>();
         for (ProductionSettlementConsumption r : rows) {
-            if (r == null || r.getMaterialBatchId() == null
-                    || coveredBatchIds.contains(r.getMaterialBatchId())) {
-                continue;   // 已经从 material_consumptions 取到了, 不重复计
+            if (r == null || r.getMaterialBatchId() == null) {
+                continue;
+            }
+            String materialBatchId = r.getMaterialBatchId();
+            if (unknownQtyBatches.contains(materialBatchId)) {
+                continue;   // 已消耗但耗用量未知 —— 保守按已全额覆盖处理, 不重新计入
+            }
+            BigDecimal settlementQty = nz(r.getQuantity());
+            BigDecimal consumedBudget = consumedQtyBudget.getOrDefault(materialBatchId, BigDecimal.ZERO);
+            BigDecimal excessQty = settlementQty.subtract(consumedBudget).max(BigDecimal.ZERO);
+            // 核销预算: 这一行核掉了 min(结单量, 预算) 那么多, 剩余预算留给同一物料批次的下一行结单行。
+            consumedQtyBudget.put(materialBatchId, consumedBudget.subtract(settlementQty.subtract(excessQty)));
+            if (excessQty.signum() <= 0) {
+                continue;   // 结单量已被耗用记录足额(或超额)覆盖 —— 贡献 0, 不重复计(#576 场景)
             }
             MaterialBatch mb = materialBatchRepository
-                    .findByIdAndFactoryId(r.getMaterialBatchId(), factoryId).orElse(null);
+                    .findByIdAndFactoryId(materialBatchId, factoryId).orElse(null);
             BigDecimal unitPrice = mb == null ? null : mb.getUnitPrice();
-            BigDecimal qty = r.getQuantity();
             MaterialConsumption c = new MaterialConsumption();
             c.setFactoryId(factoryId);
             c.setProductionPlanId(planId);
             c.setProductionBatchId(batch.getId());
-            c.setBatchId(r.getMaterialBatchId());
+            c.setBatchId(materialBatchId);
             c.setMaterialTypeId(r.getMaterialTypeId());
             c.setSourceType(r.getSourceType());
-            c.setQuantity(qty);
+            c.setQuantity(excessQty);
             c.setUnitPrice(unitPrice);
             // ⛔ 价未知就让 totalCost 保持 null: 下游 traceCost 的 nz() 会当 0 算,
             //    而 missingCostItems 靠 unitPrice/totalCost 皆为 null 才报得出「缺价」。
-            c.setTotalCost(unitPrice == null || qty == null ? null : qty.multiply(unitPrice));
+            c.setTotalCost(unitPrice == null ? null : excessQty.multiply(unitPrice));
             c.setConsumptionTime(r.getCreatedAt());
             merged.add(c);
         }
         if (!merged.isEmpty()) {
-            log.info("[M67CostBreakdown] 并入结单领用 {} 行 factory={} plan={}",
+            log.info("[M67CostBreakdown] 并入结单领用 {} 行(超出已耗用量部分) factory={} plan={}",
                     merged.size(), factoryId, planId);
         }
         return merged;
     }
 
     /**
-     * 计划全量(含 CLERK_WIP)已消耗的物料批次 id 集合 —— {@link #settlementConsumptionsFor} 的
-     * 去重集合补丁, 详见其上方类 javadoc「2026-09-04 缺陷订正」。
+     * 把一批 {@link MaterialConsumption} 累加进「已耗用量预算」——按 {@code batchId} 求和
+     * {@code quantity}；{@code quantity} 读不到(null)的行, 把该 {@code batchId} 记进
+     * {@code unknownBatches}(保守: 已消耗但量不明, 调用方按【已全额覆盖】处理, 见
+     * {@link #settlementConsumptionsFor} javadoc「2026-09-04 缺陷订正 II」)。
+     *
+     * <p>生产库 {@code material_consumptions.quantity} 是 {@code NOT NULL} 列, 这条
+     * unknown 分支只会在测试桩故意省略字段时触发, 不改变生产环境的行为。
+     */
+    private static void accumulateConsumedQty(List<MaterialConsumption> consumptions,
+                                               Map<String, BigDecimal> budget,
+                                               java.util.Set<String> unknownBatches) {
+        if (consumptions == null) {
+            return;
+        }
+        for (MaterialConsumption mc : consumptions) {
+            if (mc == null || mc.getBatchId() == null) {
+                continue;
+            }
+            if (mc.getQuantity() == null) {
+                unknownBatches.add(mc.getBatchId());
+            } else {
+                budget.merge(mc.getBatchId(), mc.getQuantity(), BigDecimal::add);
+            }
+        }
+    }
+
+    /**
+     * 计划全量(含 CLERK_WIP)已产生的 {@link MaterialConsumption} 行 —— {@link #settlementConsumptionsFor}
+     * 「已耗用量预算」的第二个来源, 详见其上方类 javadoc「2026-09-04 缺陷订正」。
      *
      * <p>{@code consumptionRepository} 是构造器注入的 final 字段, 生产环境恒非 null；这里的
      * null-guard 只是为了兼容本类既有的
@@ -858,9 +922,9 @@ public class OrderCostBreakdownService {
      * 字段默认 null) —— 与 {@code settlementConsumptionRepository == null} 同一条纪律。
      * 读挂了同样降级为「本轮不额外去重」(退回改前行为), 不让整个成本分解崩, 但留痕。
      */
-    private java.util.Set<String> planWideCoveredMaterialBatchIds(String factoryId, String planId) {
+    private List<MaterialConsumption> planWideConsumedMaterialConsumptions(String factoryId, String planId) {
         if (consumptionRepository == null) {
-            return java.util.Set.of();
+            return List.of();
         }
         List<MaterialConsumption> planWide;
         try {
@@ -869,15 +933,9 @@ public class OrderCostBreakdownService {
         } catch (RuntimeException ex) {
             log.warn("[M67CostBreakdown] 计划全量消耗行读不出来(结单去重降级为仅当前批次) factory={} plan={}: {}",
                     factoryId, planId, ex.getMessage());
-            return java.util.Set.of();
+            return List.of();
         }
-        if (planWide == null) {
-            return java.util.Set.of();
-        }
-        return planWide.stream()
-                .map(MaterialConsumption::getBatchId)
-                .filter(java.util.Objects::nonNull)
-                .collect(java.util.stream.Collectors.toSet());
+        return planWide == null ? List.of() : planWide;
     }
 
     private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {
