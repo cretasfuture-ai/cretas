@@ -44,6 +44,7 @@ import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
+import { canManageMaterialTypes } from './materialTypeWriteRoles';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
 import {
@@ -71,9 +72,26 @@ const factoryId = computed(() => authStore.factoryId);
 //   任一即可(仓库角色不再 403); markByproduct / batch-status 两个端点本页不调用, 未动。
 // ⚠️ 同文件的 canManageClassification (system) / canManageSupplierRelations (procurement)
 //   是另外两组端点的门禁, ⛔ 别把三者合并。
+// ⚠️ canWrite 本身保持「纯模块闸」不变 —— writeGateMatchesMenuModule.source.spec.ts
+//   按字面正则从这一行抠出 canWrite('warehouse') 的实参, 与 canManageMaterialTypeDictionary
+//   分开声明才不会破坏那道闸的被测对象。
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 const canManageSupplierRelations = computed(() => permissionStore.canWrite('procurement'));
 const canManageClassification = computed(() => permissionStore.canWrite('system'));
+// 缺陷 46 follow-up (2026-09-04, owner 拍板): 「只让仓储主管改」——
+//   canWrite('warehouse') 是模块闸 (仓管/仓储主管对 warehouse 模块的 platform_role_
+//   permissions 都是 'rw', 见 V20261024_22__warehouse_worker_read_warehouse_inventory.sql),
+//   区分不了「仓管」和「仓储主管」。新建/编辑/删除按钮真正的可点性 = 模块闸 ∧ 角色白名单,
+//   角色白名单唯一来源见 materialTypeWriteRoles.ts (与后端 @RequireRole 逐字节相同,
+//   由 materialTypeWriteRolesMatchBackend.spec.ts 钉住)。
+const canManageMaterialTypeDictionary = computed(
+  () => canWrite.value && canManageMaterialTypes(permissionStore.currentRole),
+);
+// worker 能看到页面 (canWrite=true, 菜单 module 放行) 但点不动写按钮时, 给出显式一行提示 ——
+// ⛔ 不能只是把按钮悄悄藏起来 (那正是缺陷 46 本体「看得见点不开」的静默版本)。
+const showMaterialTypeWriteRoleHint = computed(
+  () => canWrite.value && !canManageMaterialTypeDictionary.value,
+);
 // T2-5b (issue #534): expose movingAvgPrice — gate by canViewPrice RBAC
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const { goCreate } = useCreateAndReturn();
@@ -1460,7 +1478,17 @@ function handleSizeChange(size: number) {
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">
+            <span v-if="showMaterialTypeWriteRoleHint" class="write-role-hint">
+              物料字典由仓储主管维护
+            </span>
+            <el-tooltip
+              v-if="canWrite && !canManageMaterialTypeDictionary"
+              content="物料字典由仓储主管维护，当前角色仅可查看"
+              placement="top"
+            >
+              <el-button type="primary" :icon="Plus" disabled>新建原料类型</el-button>
+            </el-tooltip>
+            <el-button v-else-if="canWrite" type="primary" :icon="Plus" @click="openCreate">
               新建原料类型
             </el-button>
           </div>
@@ -1555,8 +1583,22 @@ function handleSizeChange(size: number) {
           <template #default="{ row }">
             <!-- Issue #779: 反查供应商入口 -->
             <el-button link type="primary" :icon="View" @click="openSuppliersForMaterial(row)">供应商</el-button>
-            <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
+            <el-button
+              v-if="canWrite"
+              link
+              type="primary"
+              :icon="Edit"
+              :disabled="!canManageMaterialTypeDictionary"
+              @click="openEdit(row)"
+            >编辑</el-button>
+            <el-button
+              v-if="canWrite"
+              link
+              type="danger"
+              :icon="DeleteIcon"
+              :disabled="!canManageMaterialTypeDictionary"
+              @click="handleDelete(row)"
+            >删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -2107,6 +2149,7 @@ function handleSizeChange(size: number) {
 .header-left { display: flex; align-items: baseline; gap: 12px; }
 .page-title { font-size: 18px; font-weight: 600; }
 .data-count { font-size: 13px; color: #909399; }
+.write-role-hint { font-size: 13px; color: #909399; margin-right: 8px; }
 .search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .supplier-relation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: #606266; font-size: 13px; }
 .divider-title { font-size: 14px; color: #606266; font-weight: 500; }
