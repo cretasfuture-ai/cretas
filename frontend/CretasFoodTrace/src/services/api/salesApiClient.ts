@@ -23,7 +23,10 @@ export interface SalesOrder {
     | 'PROCESSING'
     | 'PARTIAL_DELIVERED'
     | 'COMPLETED'
-    | 'CANCELLED';
+    | 'CANCELLED'
+    // T-SHORT-SHIP (2026-09-04): 与后端 SalesOrderStatus.SHORT_CLOSED 对齐 —— 缺此值会让
+    // TS 联合类型与运行时实际返回值不一致 (窄类型下这个真实状态会被判定成非法值)。
+    | 'SHORT_CLOSED';
   totalAmount: number;
   orderDate: string;
   expectedDeliveryDate?: string;

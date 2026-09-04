@@ -6,9 +6,12 @@ import {
   deliveryMoney,
   deliveryTransportAggregate,
   formatBusinessDateTime,
+  masterDeliveryRemainingByLine,
+  pendingReshipmentMaster,
   productionActionState,
   resolveDeliveryAddress,
   shipmentValidationError,
+  shortShipmentSummary,
 } from '../salesOrderGuards';
 
 const orderItems = [{ id: 726, productTypeId: 'SKU-BOX', quantity: 5, deliveredQuantity: 0, unit: 'box' }];
@@ -69,5 +72,64 @@ describe('M10 销售订单动作和发运门禁', () => {
 
   it('审批/业务时间本地化到秒并标注周几', () => {
     expect(formatBusinessDateTime('2026-07-20T12:30:10.619754')).toBe('2026-07-20（周一）12:30:10');
+  });
+
+  // T-SHORT-SHIP (owner 2026-09-04 拍板): 短交结案 — 实拍样本 SO-20260904-0001
+  // (10kg 美式汉堡饼, 母单 DLV-...-4086 全量占了 arranged, 子单 -01 只实发 9.8kg)。
+  describe('短交结案 — 实发缺口与补发目标', () => {
+    const orderedItem = { id: 726, salesOrderItemId: 726, productTypeId: 'SKU-BURGER', quantity: 10, deliveredQuantity: 9.8, unit: 'kg' };
+
+    it('缺口按【实发】算, 不是按【安排量】算 —— 母单占满不等于已经发出去', () => {
+      // 母单把 10kg 全部安排掉 (deliveryCapacityByLine 会判定 remaining=0),
+      // 但只有 9.8kg 真正 SHIPPED —— 短交结案要看到的是这 0.2kg。
+      const summary = shortShipmentSummary([orderedItem]);
+      expect(summary.ordered).toBe(10);
+      expect(summary.shipped).toBe(9.8);
+      expect(summary.outstanding).toBeCloseTo(0.2);
+      expect(summary.unit).toBe('kg');
+    });
+
+    it('全部实发时缺口为 0 —— 不该再出现补发/结案两个按钮', () => {
+      expect(shortShipmentSummary([{ ...orderedItem, deliveredQuantity: 10 }]).outstanding).toBe(0);
+    });
+
+    it('混单位时不标注单位, 避免拿一个单位标另一种的数', () => {
+      expect(shortShipmentSummary([orderedItem, { ...orderedItem, id: 727, unit: 'box' }]).unit).toBe('');
+    });
+
+    it('母单自己的行仍有未安排数量时, 判给它补发', () => {
+      const master = { id: 'M1', status: 'PARTIALLY_SCHEDULED', items: [
+        { salesOrderItemId: 726, productTypeId: 'SKU-BURGER', deliveredQuantity: 10 },
+      ] };
+      const child = { id: 'S1', parentDeliveryId: 'M1', recordRole: 'SHIPMENT', status: 'SHIPPED', items: [
+        { salesOrderItemId: 726, productTypeId: 'SKU-BURGER', deliveredQuantity: 9.8 },
+      ] };
+      expect(masterDeliveryRemainingByLine(master, [master, child]).get('726')).toBeCloseTo(0.2);
+      expect(pendingReshipmentMaster([master], [master, child])).toBe(master);
+    });
+
+    it('母单自己也已排满(remaining=0)时不选它 —— 调用方应改走「新建发货单」', () => {
+      const fullyScheduledMaster = { id: 'M1', status: 'FULLY_SCHEDULED', items: [
+        { salesOrderItemId: 726, productTypeId: 'SKU-BURGER', deliveredQuantity: 9.8 },
+      ] };
+      const child = { id: 'S1', parentDeliveryId: 'M1', recordRole: 'SHIPMENT', status: 'SHIPPED', items: [
+        { salesOrderItemId: 726, productTypeId: 'SKU-BURGER', deliveredQuantity: 9.8 },
+      ] };
+      expect(pendingReshipmentMaster([fullyScheduledMaster], [fullyScheduledMaster, child])).toBeNull();
+    });
+
+    it('已取消/已退回的子单不占用母单的已安排量', () => {
+      const master = { id: 'M1', status: 'PARTIALLY_SCHEDULED', items: [
+        { salesOrderItemId: 726, productTypeId: 'SKU-BURGER', deliveredQuantity: 10 },
+      ] };
+      const cancelledChild = { id: 'S1', parentDeliveryId: 'M1', recordRole: 'SHIPMENT', status: 'CANCELLED', items: [
+        { salesOrderItemId: 726, productTypeId: 'SKU-BURGER', deliveredQuantity: 10 },
+      ] };
+      expect(masterDeliveryRemainingByLine(master, [master, cancelledChild]).get('726')).toBe(10);
+    });
+
+    it('没有任何母单时补发目标为 null', () => {
+      expect(pendingReshipmentMaster([], [])).toBeNull();
+    });
   });
 });

@@ -45,6 +45,12 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
     SHIPPED: ['print-pdf', 'return'],
     COMPLETED: ['print-pdf', 'copy', 'return'],
     CANCELLED: ['copy'],
+    // T-SHORT-SHIP (2026-09-04): 短交结案是终态, 与 COMPLETED 同形 —— 已发货部分仍可
+    // 打印/发起退货 (openReturnDialog 只查 items/customerId, 不看 SO 状态; 后端
+    // ReturnOrderServiceImpl 创建退货单同样不 gate 来源单状态), 也可 copy 复制成新订单。
+    // 没有这一行就会落到 DEFAULT_UNKNOWN_STATUS_ACTIONS (仅详情) —— 不是死菜单 bug
+    // (安全默认值), 但会让销售经理短交结案后打不出单/发不了退货, 明确补上。
+    SHORT_CLOSED: ['print-pdf', 'copy', 'return'],
   },
   // PurchaseOrderStatus.java real values: DRAFT / SUBMITTED / WORKFLOW_RUNNING /
   // APPROVED / PENDING_FINANCE_REVIEW / FINANCE_APPROVED / FINANCE_REJECTED /

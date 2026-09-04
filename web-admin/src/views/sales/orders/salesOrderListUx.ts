@@ -49,7 +49,9 @@ const REVIEWING_STATUSES = new Set(['CONFIRMED', 'PENDING_APPROVAL', 'PENDING_FI
 const READY_STATUSES = new Set(['APPROVED', 'FINANCE_APPROVED']);
 const FULFILLING_STATUSES = new Set(['PROCESSING', 'IN_PRODUCTION', 'PARTIAL_DELIVERED', 'SHIPPED']);
 const COMPLETED_STATUSES = new Set(['COMPLETED']);
-const CLOSED_STATUSES = new Set(['CANCELLED', 'CLOSED']);
+// T-SHORT-SHIP (2026-09-04): 短交结案是终态但不是"全部完成", 归入"已关闭"而不是
+// "已完成"桶 —— 与 CANCELLED 同组, 都是"不会再流转但也没有全额兑现"的收尾态。
+const CLOSED_STATUSES = new Set(['CANCELLED', 'CLOSED', 'SHORT_CLOSED']);
 
 function normalized(value: unknown): string {
   return String(value ?? '').trim().toUpperCase();
@@ -83,7 +85,8 @@ export function salesOrderLifecycleOf(row: SalesOrderListLike): Exclude<SalesOrd
 export function salesOrderShipmentStateOf(row: SalesOrderListLike): Exclude<SalesOrderShipmentState, 'all'> {
   const status = normalized(row.status);
   if (status === 'COMPLETED' || status === 'SHIPPED') return 'SHIPPED';
-  if (status === 'PARTIAL_DELIVERED') return 'PARTIAL';
+  // SHORT_CLOSED 定义上就是"没有发全"——归 PARTIAL, 不归 SHIPPED。
+  if (status === 'PARTIAL_DELIVERED' || status === 'SHORT_CLOSED') return 'PARTIAL';
 
   const shipped = finiteNumber(row.actualShippedAmount);
   const total = finiteNumber(row.totalAmount);

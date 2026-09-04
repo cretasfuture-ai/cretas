@@ -50,8 +50,11 @@ public class WorkflowStatsService {
                 SalesOrderStatus.FINANCE_APPROVED,
                 SalesOrderStatus.PROCESSING,
                 SalesOrderStatus.PARTIAL_DELIVERED));
+        // R44 (2026-09-04): SHORT_CLOSED 与采购侧 CLOSED 同口径 (见下方 getPurchaseStats 的
+        // done 桶) —— 都是"已经不再流转"的终态, 不计入会让分母漏掉这些订单。
         long done = countSalesOrder(factoryId, List.of(
-                SalesOrderStatus.COMPLETED));
+                SalesOrderStatus.COMPLETED,
+                SalesOrderStatus.SHORT_CLOSED));
         return assemble("sales", pending, inProgress, done, "待审", "进行中", "已完成");
     }
 

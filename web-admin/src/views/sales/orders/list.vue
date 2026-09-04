@@ -881,6 +881,7 @@ const statusMap: Record<string, { text: string; type: string }> = {
   PARTIAL_DELIVERED: { text: '部分发货', type: 'warning' },
   COMPLETED: { text: '已完成', type: 'success' },
   CANCELLED: { text: '已取消', type: 'danger' },
+  SHORT_CLOSED: { text: '短交结案', type: 'info' },
 };
 
 const processingModeFilters = SALES_PROCESSING_MODE_OPTIONS.map(({ value, label }) => ({ value, text: label }));

@@ -19,6 +19,8 @@ describe('salesOrderListUx', () => {
     ['PARTIAL_DELIVERED', 'fulfilling'],
     ['COMPLETED', 'completed'],
     ['CANCELLED', 'closed'],
+    // T-SHORT-SHIP (2026-09-04): 短交结案是终态但不是"全部完成"的完成, 归"已关闭"。
+    ['SHORT_CLOSED', 'closed'],
     ['legacy_unknown', 'todo'],
   ])('maps %s into exactly one lifecycle bucket', (status, expected) => {
     expect(salesOrderLifecycleOf({ status })).toBe(expected);
@@ -46,6 +48,8 @@ describe('salesOrderListUx', () => {
 
   it('derives shipment state from business status before price-sensitive fields', () => {
     expect(salesOrderShipmentStateOf({ status: 'PARTIAL_DELIVERED' })).toBe('PARTIAL');
+    // T-SHORT-SHIP: 短交结案定义上就是"没发全", 不是 SHIPPED。
+    expect(salesOrderShipmentStateOf({ status: 'SHORT_CLOSED' })).toBe('PARTIAL');
     expect(salesOrderShipmentStateOf({ status: 'COMPLETED' })).toBe('SHIPPED');
     expect(salesOrderShipmentStateOf({ status: 'PROCESSING', totalAmount: null })).toBe('UNSHIPPED');
     expect(salesOrderShipmentStateOf({ status: 'PROCESSING', totalAmount: 100, actualShippedAmount: 25 })).toBe('PARTIAL');

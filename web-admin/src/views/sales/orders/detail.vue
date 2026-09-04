@@ -31,9 +31,11 @@ import {
   deliveryMoney,
   deliveryTransportAggregate,
   formatBusinessDateTime,
+  pendingReshipmentMaster,
   productionActionState,
   resolveDeliveryAddress,
   shipmentValidationError,
+  shortShipmentSummary,
 } from './salesOrderGuards';
 // T4-D1 (issue #525): F006 customer asked for 来源仓库 (总仓/线边仓) per line item.
 // 2026-07-02 fix: resolve against the loaded warehouse list (DB name is
@@ -180,6 +182,22 @@ const shipmentForm = ref({
   remark: '',
   items: [] as TableRow[],
 });
+
+// T-SHORT-SHIP (owner 2026-09-04 拍板): 短交结案 — 镜像采购侧「少收关闭」
+// (PendingPurchaseReceivingPanel.vue 的 closeDialogVisible/closeForm), 多一道
+// shortCloseAcknowledged 勾选确认 (owner 原话「必须是显式的、经过确认的点击，
+// 绝不能隐式发生」), 提交按钮在勾选前禁用。
+const shortCloseDialogVisible = ref(false);
+const shortCloseSubmitting = ref(false);
+const shortCloseAcknowledged = ref(false);
+const shortCloseForm = ref<{ reasonCode: string; notes: string }>({ reasonCode: '', notes: '' });
+const SHORT_CLOSE_REASON_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'CUSTOMER_WAIVED_REMAINDER', label: '客户同意放弃剩余数量' },
+  { value: 'SOURCE_SHORTAGE', label: '原料/成品已耗尽，短期无法补齐' },
+  { value: 'ORDER_BALANCE_CANCELLED', label: '客户取消订单剩余部分' },
+  { value: 'OTHER', label: '其他原因' },
+];
+
 type AllocationSummary = {
   allocated: number;
   planned: number;
@@ -215,6 +233,16 @@ const deliveryAction = computed(() => deliveryActionState(
   deliveriesFailed.value,
 ));
 const actionableDeliveries = computed(() => actionableDeliveryCount(deliveries.value));
+// T-SHORT-SHIP (owner 2026-09-04 拍板): 短交 = 实发缺口, 与 deliveryCapacity.remaining
+// (安排量缺口) 是两码事 —— 母单一旦建出来就能把 remaining 占满, 而实发可以远小于安排量
+// (实拍样本 SO-20260904-0001: 10kg 全部安排掉, 只有 9.8kg 真的发出去)。两个按钮都只在
+// 「部分发货 + 实发缺口 > 0」时出现, 且要求显式点击 —— 见 handleReshipOutstanding /
+// openShortCloseDialog, 任何一条路径都不会自动发生。
+const shortShipment = computed(() => shortShipmentSummary(
+  Array.isArray(order.value?.items) ? order.value.items as TableRow[] : [],
+));
+const showShortShipmentActions = computed(() =>
+  order.value?.status === 'PARTIAL_DELIVERED' && shortShipment.value.outstanding > 0.000001);
 const transportAggregate = computed(() => deliveryTransportAggregate(deliveries.value));
 const transportDisplayStatus = computed(() => deliveries.value.length > 0
   ? transportAggregate.value
@@ -393,6 +421,7 @@ const statusMap: Record<string, { text: string; type: string }> = {
   PARTIAL_DELIVERED: { text: '部分发货', type: 'warning' },
   COMPLETED: { text: '已完成', type: 'success' },
   CANCELLED: { text: '已取消', type: 'danger' },
+  SHORT_CLOSED: { text: '短交结案', type: 'info' },
 };
 
 const delStatusMap: Record<string, { text: string; type: string }> = {
@@ -1197,6 +1226,53 @@ async function handleCreateShipment() {
   finally { submitting.value = false; }
 }
 
+// T-SHORT-SHIP「补发剩余」: 找到还有未安排行的母单并复用现有「新建分批发运」对话框
+// (与 openShipmentDialog 同一套逻辑, 只是多了一步「先找该打开哪张母单」)。找不到时说明
+// 连「安排量」都没覆盖这批缺口 (例如母单从没建过整单量) —— 引导去新建发货单, 不假装
+// 打开了一个不存在的目标。
+function handleReshipOutstanding() {
+  if (!order.value || shortShipment.value.outstanding <= 0) return;
+  const target = pendingReshipmentMaster(masterDeliveries.value, deliveries.value);
+  if (target) {
+    openShipmentDialog(target);
+    return;
+  }
+  ElMessage.info('现有发货单已排满，请先"新建发货单"为剩余数量安排新的发货单');
+  openDeliveryDialog();
+}
+
+function openShortCloseDialog() {
+  if (!order.value || shortShipment.value.outstanding <= 0) return;
+  shortCloseForm.value = { reasonCode: '', notes: '' };
+  shortCloseAcknowledged.value = false;
+  shortCloseDialogVisible.value = true;
+}
+
+async function submitShortClose() {
+  if (!order.value || shortCloseSubmitting.value) return;
+  if (!shortCloseForm.value.reasonCode) return ElMessage.warning('请选择短交结案原因');
+  const notes = shortCloseForm.value.notes.trim();
+  if (shortCloseForm.value.reasonCode === 'OTHER' && !notes) {
+    return ElMessage.warning('选择"其他原因"时必须填写补充说明');
+  }
+  // owner 拍板的硬约束: 结案是不可逆的显式动作, 勾选确认之前提交按钮本就 disabled,
+  // 这里再拦一道防止直接调 submitShortClose() 绕过界面。
+  if (!shortCloseAcknowledged.value) return ElMessage.warning('请先勾选确认，再提交短交结案');
+  shortCloseSubmitting.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/sales/orders/${orderId.value}/close-short-shipment`, {
+      reasonCode: shortCloseForm.value.reasonCode,
+      notes: notes || undefined,
+    });
+    if (res.success) {
+      ElMessage.success('订单已按短交结案');
+      shortCloseDialogVisible.value = false;
+      await loadOrder();
+    }
+  } catch (e) { handleCatchError(e, '短交结案失败，请检查网络'); }
+  finally { shortCloseSubmitting.value = false; }
+}
+
 async function submitDeliveredWithSignature() {
   const target = signatureTarget.value;
   if (!target || !signatureSubmissionReady.value || submitting.value) return;
@@ -1876,6 +1952,21 @@ async function handleQuickPayFull() {
               </span>
             </el-tooltip>
             <el-button v-if="isOrderDrivenCustomerSuppliedOrder" type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
+            <!-- T-SHORT-SHIP (owner 2026-09-04 拍板): 短交必须同时支持「补发」和「关单/短交
+                 结案」两条路, 且都是显式确认点击。两个按钮只在部分发货且实发有缺口时并排出现,
+                 不做任何默认/自动的那一条。 -->
+            <el-button
+              v-if="showShortShipmentActions"
+              type="primary"
+              plain
+              @click="handleReshipOutstanding"
+            >补发剩余 {{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }}</el-button>
+            <el-button
+              v-if="showShortShipmentActions"
+              type="danger"
+              plain
+              @click="openShortCloseDialog"
+            >短交结案</el-button>
             <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
                  Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
             <el-button v-if="['PARTIAL_DELIVERED','DELIVERED','COMPLETED'].includes(order.status)"
@@ -2551,6 +2642,68 @@ async function handleQuickPayFull() {
       <template #footer>
         <el-button @click="shipmentDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleCreateShipment">创建子发运单</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ─── T-SHORT-SHIP (owner 2026-09-04 拍板): 短交结案对话框 —— 镜像采购侧
+         PendingPurchaseReceivingPanel.vue 的「少收关闭」, 多一道勾选确认。 ─── -->
+    <el-dialog
+      v-model="shortCloseDialogVisible"
+      :title="`短交结案 — ${order?.orderNumber || ''}`"
+      width="min(680px, calc(100vw - 32px))"
+      :close-on-click-modal="false"
+    >
+      <template v-if="order">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="结案后，剩余数量不再生成发货安排；已发货部分的库存/开票不受影响。"
+          description="本操作用于客户确认接受少发、或原料确实无法补齐的短交场景。若仍会补发，请取消并使用「补发剩余」。"
+          style="margin-bottom: 12px"
+        />
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="订单编号">{{ order.orderNumber }}</el-descriptions-item>
+          <el-descriptions-item label="下单数量">{{ shortShipment.ordered }}{{ displayUnit(shortShipment.unit) }}</el-descriptions-item>
+          <el-descriptions-item label="已实发数量">{{ shortShipment.shipped }}{{ displayUnit(shortShipment.unit) }}</el-descriptions-item>
+          <el-descriptions-item label="结案后不再发货的数量">
+            <strong style="color: var(--el-color-danger)">{{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }}</strong>
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="110px" style="margin-top: 12px">
+          <el-form-item label="结案原因" required>
+            <el-select v-model="shortCloseForm.reasonCode" placeholder="请选择标准原因" style="width: 100%">
+              <el-option
+                v-for="option in SHORT_CLOSE_REASON_OPTIONS"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="补充说明" :required="shortCloseForm.reasonCode === 'OTHER'">
+            <el-input
+              v-model="shortCloseForm.notes"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+              show-word-limit
+              placeholder="可填写客户确认记录、原料短缺依据等"
+            />
+          </el-form-item>
+        </el-form>
+        <el-checkbox v-model="shortCloseAcknowledged">
+          我确认剩余 {{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }} 不再发货，结案后需重新下单才能补发
+        </el-checkbox>
+      </template>
+      <template #footer>
+        <el-button :disabled="shortCloseSubmitting" @click="shortCloseDialogVisible = false">取消</el-button>
+        <el-button
+          type="danger"
+          :loading="shortCloseSubmitting"
+          :disabled="!shortCloseAcknowledged"
+          @click="submitShortClose"
+        >确认短交结案</el-button>
       </template>
     </el-dialog>
 

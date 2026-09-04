@@ -661,6 +661,31 @@ public class SalesController {
     }
 
     /**
+     * POST /orders/{orderId}/close-short-shipment — 短交结案 (2026-09-04 owner 拍板).
+     *
+     * <p>PARTIAL_DELIVERED → SHORT_CLOSED: 剩余数量经确认不再发货, 显式关闭。
+     * 权限与「取消订单」同闸 —— {@code sales:read_write} 目前只授予 sales_manager 角色
+     * (见 PermissionServiceImpl), 对应 brief 里的「sales manager roles」。
+     */
+    @PostMapping("/orders/{orderId}/close-short-shipment")
+    @Operation(summary = "短交结案 (PARTIAL_DELIVERED → SHORT_CLOSED, 剩余数量不再发货)")
+    @RequirePermission("sales:read_write")
+    public ApiResponse<SalesOrder> closeShortShipment(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            @RequestHeader("Authorization") String authorization,
+            // required=false (与 @Valid 并存): 已 SHORT_CLOSED 的订单重放是幂等直接返回,
+            // 不该因为漏了 body 就先被 Spring 400 拦掉 —— 校验交给下面 service 层的业务判定
+            // (SALES_SHORT_CLOSE_REASON_REQUIRED, 消息更具体)。真正提交时仍走 @Valid 校验
+            // notes ≤ 500 字, 与采购侧 ClosePurchaseReceivingTaskRequest 同一道防线。
+            @Valid @RequestBody(required = false)
+            com.cretas.aims.dto.inventory.CloseShortShipmentRequest request) {
+        Long userId = extractUserId(authorization);
+        SalesOrder order = salesService.closeShortShipment(factoryId, orderId, request, userId);
+        return ApiResponse.success("订单已按短交结案", order);
+    }
+
+    /**
      * T129: 删除草稿销售订单 (软删除).
      * 仅 DRAFT 状态可删；其他状态返回 409。
      * factoryId 隔离 + sales:read_write 权限校验。

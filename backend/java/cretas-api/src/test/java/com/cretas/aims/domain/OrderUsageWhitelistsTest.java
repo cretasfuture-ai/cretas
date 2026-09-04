@@ -29,9 +29,13 @@ class OrderUsageWhitelistsTest {
 
     @Test
     void so_invoiceable_is_post_finance_approved_set() {
+        // T-SHORT-SHIP (2026-09-04): SHORT_CLOSED 加入 —— 已发货部分的开票金额本就按实发
+        // 数量计算, 结案只终止剩余数量的后续发货, 不该连带冻结已发货部分的开票能力
+        // (镜像 PurchaseOrderStatus.CLOSED 同样留在 PO_INVOICEABLE 的先例, 见下方 R44)。
         assertEquals(
                 Set.of(SalesOrderStatus.FINANCE_APPROVED, SalesOrderStatus.PROCESSING,
-                        SalesOrderStatus.PARTIAL_DELIVERED, SalesOrderStatus.COMPLETED),
+                        SalesOrderStatus.PARTIAL_DELIVERED, SalesOrderStatus.COMPLETED,
+                        SalesOrderStatus.SHORT_CLOSED),
                 OrderUsageWhitelists.SO_INVOICEABLE);
     }
 
