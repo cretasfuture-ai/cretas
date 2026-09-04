@@ -336,4 +336,37 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
            "WHERE c.factoryId = :f AND c.productionBatchId = :pbId AND c.deletedAt IS NULL")
     int softDeleteByFactoryIdAndProductionBatchId(@Param("f") String factoryId,
                                                   @Param("pbId") Long productionBatchId);
+
+    /**
+     * 🔴 结单领用去重定位 (bug fix 2026-09-04, prod 实测 PLAN-1788305552728-D94F7E22 复现):
+     * 查某计划<b>全部 {@link com.cretas.aims.entity.ProductionBatch}</b>(含 CLERK_WIP 中间工件)
+     * 已经产生的 {@link MaterialConsumption} 行, 供 {@code OrderCostBreakdownService
+     * #settlementConsumptionsFor} 判定「这笔结单领用是不是已经在某一道的报工消耗里出现过」。
+     *
+     * <p><b>为什么不能只看当前(成品)批次自己的消耗行</b>: {@code OrderCostBreakdownService
+     * #traceCost} 沿 {@code MaterialBatch.sourceDocId} 递归回溯上游 CLERK_WIP 批次<b>自己的</b>
+     * material_consumptions —— 那些行的 {@code production_batch_id} 是上游批次自己的 id,
+     * 不是当前(成品)批次的 id, 只看当前批次自己的消耗行看不到它们, 于是同一物料批次会被
+     * traceCost 和结单并入各计一遍 (实测: 冰水批次 4cce21c0 在 ¥1.9538 的归集里出现两次
+     * — 0.3800 来自 traceCost, 0.3738 来自结单并入, 诚实值应为一次)。
+     *
+     * <p><b>为什么不能按 production_plan_id 查</b>: 逐工序非末道 (WIP) 消耗行
+     * {@code production_plan_id} <b>故意为 null</b> (防成本双计, 见
+     * {@code ClerkProcessEntryServiceImpl#consumptionPlanId}), 按 plan_id 过滤会漏掉<b>恰恰是
+     * 这些 WIP 道的消耗行</b> —— 而这些正是本查询要补上的那一半。改按「属于本计划的全部
+     * ProductionBatch(含 CLERK_WIP)」反查: {@code ProductionBatch.productionPlanId} 对
+     * CLERK_WIP 批次同样有值 (见 {@code ClerkProcessEntryServiceImpl#createProductionBatch}),
+     * 与 {@link ProductionBatchRepository#findByFactoryIdAndProductionPlanIdIn} 的唯一差别是
+     * <b>不排除 CLERK_WIP</b> —— 那道排除是为了「成品完工/订单出成率聚合不能看到中间工件」,
+     * 与「结单去重要不要看到中间工件的消耗行」是相反的需求, 不能复用同一个查询。
+     *
+     * <p>类级 {@code @Where(deleted_at IS NULL)} 对 {@link MaterialConsumption} 与
+     * {@link com.cretas.aims.entity.ProductionBatch} 都自动生效, 无需在此手写软删除过滤。
+     * Factory-scoped 防跨租户。
+     */
+    @Query("SELECT m FROM MaterialConsumption m WHERE m.factoryId = :factoryId AND m.productionBatchId IN ("
+            + "  SELECT b.id FROM ProductionBatch b "
+            + "  WHERE b.factoryId = :factoryId AND b.productionPlanId = :planId)")
+    List<MaterialConsumption> findByFactoryIdAndPlanProductionBatchesIncludingWip(
+            @Param("factoryId") String factoryId, @Param("planId") String planId);
 }

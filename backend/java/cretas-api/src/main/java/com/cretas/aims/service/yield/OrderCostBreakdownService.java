@@ -725,6 +725,17 @@ public class OrderCostBreakdownService {
      * 净效果：{@code totalRawInput=0} → {@code totalCost=0} → {@code resolvePlanTotalCost} 返回 null
      * → 结单产出的成品 {@code unit_cost} 恒为空。
      *
+     * <h3>🔴 2026-09-04 缺陷订正: 「两表都有的组合 0 个」只在【当前批次自己】的维度上成立</h3>
+     * prod 实测 (只读探针, plan {@code PLAN-1788305552728-D94F7E22}, 成品批次 10909) 打脸了这句：
+     * {@code traceCost} 沿 {@code MaterialBatch.sourceDocId} 递归回溯的是<b>上游 9 个 CLERK_WIP
+     * 批次(10910→10918)自己的</b> {@code material_consumptions}, 那些行的
+     * {@code production_batch_id} 是上游批次自己的 id, 从不出现在当前(成品)批次自己的消耗行里 ——
+     * 于是叶子物料批次 4cce21c0(冰水) 被 {@code traceCost} 算一次(0.3800)、被本方法从结单又并入
+     * 一次(0.3738), 归集里出现两次。{@code covered} 参数只是「本批次自己」的消耗行, 不是「本计划」
+     * 的消耗行, 需要额外并上 {@link com.cretas.aims.repository.MaterialConsumptionRepository
+     * #findByFactoryIdAndPlanProductionBatchesIncludingWip}(见其 javadoc: 为什么不能直接按
+     * production_plan_id 查) 才是真正「计划全量、含 CLERK_WIP」的去重集合。
+     *
      * <h3>为什么是「转形状并入」而不是新写一套成本算法</h3>
      * 下游那一整套（{@code traceCost} 谱系回溯、包材/调料分类、缺价登记 {@code missingCostItems}、
      * 明细行）原样复用。⛔ 不复制第二份成本算法 —— 本仓形态 D：同一个东西有两份必定漂。
@@ -735,7 +746,8 @@ public class OrderCostBreakdownService {
      * ⛔ <b>取不到价时留 null，不填 0</b> —— 0 是个看起来很确定的假答案，
      * 而下游的 {@code missingCostItems} 正是靠 null 才报得出「缺价」。
      *
-     * @param covered 本批次已经从 {@code material_consumptions} 取到的行；同一物料批次不重复并入
+     * @param covered 本批次已经从 {@code material_consumptions} 取到的行（仅当前批次自己的维度，
+     *                不含上游 CLERK_WIP 批次；本方法内部会另外并上计划全量去重集合）
      * @param plansMerged 已并入过的计划 id；同一计划的多个生产批次只并入一次
      */
     private List<MaterialConsumption> settlementConsumptionsFor(
@@ -768,6 +780,10 @@ public class OrderCostBreakdownService {
                 .map(MaterialConsumption::getBatchId)
                 .filter(java.util.Objects::nonNull)
                 .collect(java.util.stream.Collectors.toSet());
+        // 🔴 bug fix 2026-09-04: covered 只是【当前(成品)批次自己】的消耗行, 看不到 traceCost
+        // 沿谱系回溯到的上游 CLERK_WIP 批次自己的消耗行 —— 补一个【计划全量、含 CLERK_WIP】的并集,
+        // 见上方类 javadoc「2026-09-04 缺陷订正」与仓库方法自身 javadoc。
+        coveredBatchIds.addAll(planWideCoveredMaterialBatchIds(factoryId, planId));
 
         List<MaterialConsumption> merged = new ArrayList<>();
         for (ProductionSettlementConsumption r : rows) {
@@ -799,6 +815,38 @@ public class OrderCostBreakdownService {
                     merged.size(), factoryId, planId);
         }
         return merged;
+    }
+
+    /**
+     * 计划全量(含 CLERK_WIP)已消耗的物料批次 id 集合 —— {@link #settlementConsumptionsFor} 的
+     * 去重集合补丁, 详见其上方类 javadoc「2026-09-04 缺陷订正」。
+     *
+     * <p>{@code consumptionRepository} 是构造器注入的 final 字段, 生产环境恒非 null；这里的
+     * null-guard 只是为了兼容本类既有的
+     * {@code mock(OrderCostBreakdownService.class, CALLS_REAL_METHODS)} 风格单测(不过构造器,
+     * 字段默认 null) —— 与 {@code settlementConsumptionRepository == null} 同一条纪律。
+     * 读挂了同样降级为「本轮不额外去重」(退回改前行为), 不让整个成本分解崩, 但留痕。
+     */
+    private java.util.Set<String> planWideCoveredMaterialBatchIds(String factoryId, String planId) {
+        if (consumptionRepository == null) {
+            return java.util.Set.of();
+        }
+        List<MaterialConsumption> planWide;
+        try {
+            planWide = consumptionRepository
+                    .findByFactoryIdAndPlanProductionBatchesIncludingWip(factoryId, planId);
+        } catch (RuntimeException ex) {
+            log.warn("[M67CostBreakdown] 计划全量消耗行读不出来(结单去重降级为仅当前批次) factory={} plan={}: {}",
+                    factoryId, planId, ex.getMessage());
+            return java.util.Set.of();
+        }
+        if (planWide == null) {
+            return java.util.Set.of();
+        }
+        return planWide.stream()
+                .map(MaterialConsumption::getBatchId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {

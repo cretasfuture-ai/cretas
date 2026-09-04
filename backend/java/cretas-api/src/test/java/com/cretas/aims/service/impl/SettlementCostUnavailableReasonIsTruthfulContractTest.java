@@ -192,6 +192,66 @@ class SettlementCostUnavailableReasonIsTruthfulContractTest {
     }
 
     @Test
+    @DisplayName("🔴🔴 审计透明度补丁: 已归集明细逐条列出, 同一个批次出现两次+depth不同 = 双计的信号"
+            + " (PLAN-1788305552728-D94F7E22 复现的形状)")
+    void showsPerItemBreakdownSoAReviewerCanSpotADoubleCountedBatch() {
+        OrderCostBreakdownDTO dto = OrderCostBreakdownDTO.builder()
+                .hasData(true)
+                .knownCostSubtotal(new BigDecimal("1.9538"))
+                .totalCost(null)
+                .costComplete(false)
+                .missingCostItems(List.of("LABOR_RATE_OR_TIME:process-1"))
+                .sources(List.of(
+                        // 同一个物料批次(冰水/4cce21c0)出现两次 —— traceCost 沿谱系回溯一次(depth=3),
+                        // 结单并入又算一次(depth=1); prod 实测的真实形状。
+                        OrderCostBreakdownDTO.SourceCost.builder()
+                                .batchId("4cce21c0").batchName("冰水")
+                                .cost(new BigDecimal("0.3800")).depth(3).build(),
+                        OrderCostBreakdownDTO.SourceCost.builder()
+                                .batchId("4cce21c0").batchName("冰水")
+                                .cost(new BigDecimal("0.3738")).depth(1).build(),
+                        OrderCostBreakdownDTO.SourceCost.builder()
+                                .batchId("3755").batchName("L1纸箱")
+                                .cost(new BigDecimal("1.2000")).depth(1).build()))
+                .build();
+
+        String reason = ProductionPlanServiceImpl.describeCostUnavailableReason(dto);
+
+        assertTrue(reason.contains("已归集明细"), "没有列出已归集明细: " + reason);
+        long timesIceWaterAppears = reason.split("冰水", -1).length - 1;
+        assertEquals(2, timesIceWaterAppears,
+                "冰水应该出现两次(两条不同 depth 的贡献), 审阅者才看得出双计: " + reason);
+        assertTrue(reason.contains("深度3") && reason.contains("深度1"),
+                "两条冰水的 depth 不一样, 这正是双计的信号, 但没有把 depth 一起报出来: " + reason);
+        assertTrue(reason.contains("L1纸箱"), "最大的一项(纸箱 ¥1.20)没有列出来: " + reason);
+    }
+
+    @Test
+    @DisplayName("按金额降序, 超过上限截断但报出总数")
+    void costContributionsAreSortedDescendingAndTruncated() {
+        List<OrderCostBreakdownDTO.SourceCost> many = new java.util.ArrayList<>();
+        for (int i = 1; i <= 7; i++) {
+            many.add(OrderCostBreakdownDTO.SourceCost.builder()
+                    .batchId("b" + i).batchName("料" + i)
+                    .cost(new BigDecimal(i)).depth(1).build());
+        }
+        String joined = ProductionPlanServiceImpl.joinCostContributionLabels(many);
+
+        assertTrue(joined.startsWith("料7"), "没有按金额降序: " + joined);
+        assertTrue(joined.contains("等共 7 项"), "截断了却没说总数: " + joined);
+        assertFalse(joined.contains("料1 "), "没有截断(第 1 项金额最小, 该被截掉): " + joined);
+    }
+
+    @Test
+    @DisplayName("阴性对照: sources 为空时不出现「已归集明细」这一段")
+    void noContributionsSectionWhenSourcesIsEmpty() {
+        String reason = ProductionPlanServiceImpl
+                .describeCostUnavailableReason(prodShapedBreakdown());   // 未设置 sources
+        assertFalse(reason.contains("已归集明细"),
+                "没有 sources 数据却凭空造了一段「已归集明细」: " + reason);
+    }
+
+    @Test
     @DisplayName("认不出来的缺项码原样输出, 不静默丢掉")
     void unknownCodesAreShownVerbatimRatherThanDropped() {
         String label = ProductionPlanServiceImpl

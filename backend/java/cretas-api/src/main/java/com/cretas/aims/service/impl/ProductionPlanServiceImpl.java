@@ -5608,8 +5608,60 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             sb.append("(已归集 ¥").append(known.stripTrailingZeros().toPlainString()).append(")");
         }
         sb.append(": ").append(joinMissingCostLabels(blocking)).append("。");
+        // 🔴 审计透明度补丁 (2026-09-04, PLAN-1788305552728-D94F7E22 复现): 「已归集 ¥X」只报了一个
+        // 汇总数, 审阅者验证不了它是不是把同一个物料批次算了两遍 —— prod 实测冰水批次 4cce21c0
+        // 就是这样藏进 ¥1.9538 里的(traceCost 算一次、结单并入又算一次)。把贡献最大的几条摆出来,
+        // 同一个 batchName 出现两次(depth 还不一样)就是双计的信号。
+        String contributions = joinCostContributionLabels(breakdown.getSources());
+        if (!contributions.isEmpty()) {
+            sb.append("已归集明细(按金额降序): ").append(contributions).append("。");
+        }
         sb.append("成品已按实收数量入库, 单位成本留空(不填 ¥0, 避免后续按零成本结转)。");
         sb.append("下一步: 请先补录上述缺项, 再到成本核算处重新核对本计划成本。");
+        return sb.toString();
+    }
+
+    /** 已归集明细最多列几项 —— 全部展开会把提示拉成几千字, 与 {@link #MAX_LISTED_MISSING_COST_ITEMS} 同一条纪律。 */
+    private static final int MAX_LISTED_COST_CONTRIBUTIONS = 5;
+
+    /**
+     * 把 {@code sources}(原料成本逐条回溯明细)按金额降序列出前 N 项, 供审阅者核对
+     * 「同一个批次是不是被算了两遍」——同一个 {@code batchName} 出现两次、{@code depth} 还不一样,
+     * 就是双计的信号(见类上方 {@link #describeCostUnavailableReason} javadoc)。
+     *
+     * @return 为空(无 sources 或全部金额未知)时返回空串, 调用方按空串跳过整段
+     */
+    static String joinCostContributionLabels(
+            List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost> sources) {
+        if (sources == null || sources.isEmpty()) {
+            return "";
+        }
+        List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost> sorted = sources.stream()
+                .filter(s -> s != null && s.getCost() != null)
+                .sorted(java.util.Comparator.comparing(
+                        com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost::getCost).reversed())
+                .toList();
+        if (sorted.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost s : sorted) {
+            if (shown >= MAX_LISTED_COST_CONTRIBUTIONS) {
+                sb.append("; 等共 ").append(sorted.size()).append(" 项");
+                break;
+            }
+            if (shown > 0) {
+                sb.append("; ");
+            }
+            String name = s.getBatchName() != null ? s.getBatchName()
+                    : (s.getBatchId() != null ? s.getBatchId() : "?");
+            sb.append(name).append(" ¥").append(s.getCost().stripTrailingZeros().toPlainString());
+            if (s.getDepth() != null) {
+                sb.append(" 深度").append(s.getDepth());
+            }
+            shown++;
+        }
         return sb.toString();
     }
 
@@ -7489,6 +7541,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .finishedGoodsBatchCount(finishedGoodsCount)
                 .reworkWipCount(reworkRows.size())
                 .productionBatchCount(productionBatches.size())
+                // 🔴 审计透明度补丁 (2026-09-04): 让审阅者能看到逐项明细, 而不是只有一个总数。
+                .costContributions(breakdown.getSources())
                 .build();
     }
 
