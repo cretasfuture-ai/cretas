@@ -32,8 +32,14 @@ import java.util.concurrent.ConcurrentMap;
  * <ol>
  *   <li>{@code role_definitions.data_scope} 列 (V20260519_08 migration 新加, per Role 配置;
  *       {@code V20261101_28__create_role_definitions_table.sql} 补建了表本身, 见下方 2026-09-04 记)</li>
- *   <li>「查得到表但没这一行」→ 角色硬默认: factory_super_admin / platform_admin → ALL;
- *       一线员工 (operator/warehouse_worker/quality_inspector/yield_operator) → SELF; 其他 → ALL (兼容)</li>
+ *   <li>「查得到表但没这一行, 且 role_code 能被 {@link FactoryUserRole#fromRoleCode} 识别」→
+ *       角色硬默认: factory_super_admin / platform_admin → ALL;
+ *       一线员工 (operator/warehouse_worker/quality_inspector/yield_operator) → SELF;
+ *       其余已知角色 → ALL (兼容, 设计好的路径, 故意不收紧)</li>
+ *   <li>「role_code 无法被 {@link FactoryUserRole#fromRoleCode} 识别」(映射结果为
+ *       {@link FactoryUserRole#unactivated}, 例如未来的租户自定义角色) → <b>fail-closed,
+ *       恒为 SELF</b> (2026-09-04 第二次订正, 见下). 与上一条的区别: 上一条 role 一定是
+ *       枚举里真实存在的常量, 这一条是连角色都认不出来, 没有依据判断"应该"多宽.</li>
  *   <li>「查询本身失败」(表/列不存在、连接异常等) → <b>fail-closed, 恒为 SELF</b>
  *       (2026-09-04 起, 见下). 不再按角色区分, 因为角色硬默认本身也要靠代码维护,
  *       查询失败时没有依据判断哪个角色"应该"更宽.</li>
@@ -60,6 +66,17 @@ import java.util.concurrent.ConcurrentMap;
  * 才走角色硬默认 —— 那是设计好的兼容路径, 不是故障。
  *
  * <p>WARN 日志按 role_code 节流 (见 {@link #WARN_THROTTLE}), 避免生产每几秒刷一条相同 WARN。
+ *
+ * <h3>2026-09-04 第二次订正: 关掉「role_code 无法识别」这半扇仍然 fail-open 的门</h3>
+ * 上一次订正只堵住了「查询本身失败」这条路; switch 语句自己的 {@code default} 分支
+ * 当时仍然对<b>两种不同情况</b>一视同仁地返回 ALL —— (a) role 是 {@link FactoryUserRole}
+ * 里真实存在但没有显式 case 的常量（如 hr_admin/sales_manager, 设计好的兼容路径，不该动）,
+ * (b) role_code 本身连枚举都对不上、{@link FactoryUserRole#fromRoleCode} 静默返回
+ * {@link FactoryUserRole#unactivated}（例如未来的租户自定义角色）。后者才是仍然
+ * fail-open 的那一半：一个我们从没见过的 role_code, 没有任何依据认为它"应该"是 ALL,
+ * 却因为落进同一个 default 分支拿到了 ALL。现在把 {@code unactivated} 单独 case 出来,
+ * fail-closed 到 SELF, 并复用同一套节流 WARN（见 {@link #warnThrottled}）。
+ * (a) 那一类未受影响——它对应的 role 常量不等于 unactivated，走不到新加的 case。
  *
  * @author Cretas Team (Sprint 5 Track G)
  * @since 2026-05-19
@@ -147,7 +164,7 @@ public class DataScopeResolver {
         } catch (Exception ex) {
             // 查询本身失败 (表/列不存在、连接异常等) → fail-closed: 恒为最窄的 SELF,
             // 不再走按角色区分的硬默认 (2026-09-04 订正, 见类注释).
-            warnThrottled(roleCode, ex);
+            warnThrottled(roleCode, "SQL error resolving role " + roleCode + ", fail-closed to SELF: " + ex.getMessage());
             return DataScope.SELF;
         }
 
@@ -166,22 +183,42 @@ public class DataScopeResolver {
                 // 最大角色群体) 落进 default 分支拿到了 ALL 而不是 SELF。yield_operator
                 // 与 operator 同级 (Level 30, "仅负责报工写入, 无管理界面"), 应同待遇。
                 return DataScope.SELF;
+            case unactivated:
+                // 🔴 2026-09-04 第二次订正 (本次修复): roleCode 非空、role_definitions
+                // 里也没查到这一行, 但 FactoryUserRole.fromRoleCode(roleCode) 连枚举
+                // 常量都对不上 (可能是未来的租户自定义角色, 理论上也可能 roleCode 字面量
+                // 恰好就是 "unactivated") —— 这与下面 default 分支"角色在枚举里, 只是没
+                // 配置行"不是同一件事: default 分支的 role 一定是 FactoryUserRole 里
+                // 真实存在的常量, 是设计好的兼容路径 (故意不收紧); 这里是"连角色都认不出
+                // 来", 没有任何依据判断它"应该"多宽, fail-closed 到最窄的 SELF, 并按
+                // role_code 节流 WARN (复用上面查询失败那条节流机制, 不新开一套).
+                warnThrottled(roleCode, "unrecognized role_code '" + roleCode
+                        + "' (FactoryUserRole.fromRoleCode -> unactivated), fail-closed to SELF");
+                return DataScope.SELF;
             default:
+                // 已知角色 (role 是 FactoryUserRole 里真实存在的常量, 只是没有显式 case
+                // 且 role_definitions 也没配这一行) —— 设计好的兼容路径, 维持历史默认值
+                // ALL, 不收紧。⚠️ 与上面 unactivated 分支的区别: 这里 role 一定不等于
+                // unactivated (那个值已被上面的 case 拦截, 走不到这里)。
                 return DataScope.ALL;
         }
     }
 
-    /** role_code 维度节流: 同一角色的查询失败 WARN 在 {@link #WARN_THROTTLE} 窗口内只打一次. */
-    private void warnThrottled(String roleCode, Exception ex) {
+    /**
+     * role_code 维度节流: 同一角色的失败 WARN 在 {@link #WARN_THROTTLE} 窗口内只打一次.
+     * 两个调用方共用同一套节流状态 ({@link #lastWarnedAt}): 查询异常 (表/列缺失等) 与
+     * "查询成功但角色无法识别" (unactivated) —— 都是"这条请求最终 fail-closed 到 SELF"
+     * 的同一类事件, 只是原因不同, 不为后者另开一套节流机制.
+     */
+    private void warnThrottled(String roleCode, String reason) {
         Instant now = clock.instant();
         Instant previous = lastWarnedAt.get(roleCode);
         if (previous != null && previous.plus(WARN_THROTTLE).isAfter(now)) {
-            log.debug("DataScopeResolver: SQL error resolving role {} (throttled, last WARN at {}): {}",
-                    roleCode, previous, ex.getMessage());
+            log.debug("DataScopeResolver: (throttled, last WARN at {}): {}", previous, reason);
             return;
         }
         lastWarnedAt.put(roleCode, now);
-        log.warn("DataScopeResolver: SQL error resolving role {}, fail-closed to SELF: {}", roleCode, ex.getMessage());
+        log.warn("DataScopeResolver: {}", reason);
     }
 
     // ==================== Sprint 6 W2-B: chain resolution ====================
