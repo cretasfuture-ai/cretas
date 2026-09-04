@@ -335,7 +335,16 @@ public class MaterialBatchController {
      * @param factoryId 工厂ID（路径参数，必填）
      * @param pageRequest 分页请求对象（包含page、size、sortBy、sortDirection、keyword）
      * @return 分页的批次列表
+     *
+     * <p>缺陷 (2026-09-04): 本方法此前是本控制器上唯一一个既有
+     * {@code @DataScope("created_by")} (见 {@code MaterialBatchServiceImpl#getMaterialBatchList})
+     * 又没有 {@code @RequirePermission} 的读端点。ALL-scope 角色 (含 L1 明确未授予 warehouse/
+     * inventory 模块的 hr_admin/equipment_admin/procurement_manager/finance_manager 等)
+     * 之前不受任何模块权限校验，读到的是全工厂批次列表。现补齐与本控制器同域读端点
+     * {@link #getStockSummary} 完全一致的权限集 ({@code warehouse:read_write / warehouse:read /
+     * inventory:read_write / inventory:read})。</p>
      */
+    @RequirePermission({"warehouse:read_write", "warehouse:read", "inventory:read_write", "inventory:read"})
     @GetMapping
     @Operation(summary = "获取原材料批次列表（分页）",
                description = "支持分页、排序和关键词搜索（批次号或材料类型名称）")

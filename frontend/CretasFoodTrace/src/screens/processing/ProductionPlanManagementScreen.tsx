@@ -36,6 +36,7 @@ import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { formatDate, parseYmdOrToday } from '../../utils/formatters';
+import { settleAllIndependently } from '../../utils/settleAllIndependently';
 import {
   canCompleteProductionPlan,
   canCreateProductionPlan,
@@ -308,40 +309,47 @@ export default function ProductionPlanManagementScreen() {
   };
 
   const loadOptions = async () => {
-    try {
-      const [productsRes, customersRes, stockRes] = await Promise.all([
-        productTypeApiClient.getProductTypes({ isActive: true, limit: 100 }),
-        customerApiClient.getCustomers({ isActive: true }),
-        productionPlanApiClient.getAvailableStock(),
-      ]);
+    // 缺陷 (2026-09-05, owner 点名): 三路下拉数据此前用 Promise.all 一起等 ——
+    // 任意一路失败(网络错误/后端 500/权限拒绝等, 不假设具体原因)会让
+    // 另外两路(产品类型/可用库存)也一并拿不到, 整屏选项空白。换成
+    // settleAllIndependently(内部是 Promise.allSettled), 逐路独立处理,
+    // 一路失败只影响它自己那个下拉。行为断言见
+    // utils/settleAllIndependently.test.ts(那个函数不依赖本屏的重量级原生模块,
+    // 能脱离整屏渲染直接单测)。
+    const { values, failedKeys } = await settleAllIndependently({
+      products: productTypeApiClient.getProductTypes({ isActive: true, limit: 100 }),
+      customers: customerApiClient.getCustomers({ isActive: true }),
+      stock: productionPlanApiClient.getAvailableStock(),
+    });
 
-      // ProductTypes response is { data: ProductType[] }
-      if (productsRes.data) {
-        const productTypesData = Array.isArray(productsRes.data) ? productsRes.data : [];
-        setProductTypes(productTypesData);
-      }
-
-      // Customers response is { data: Customer[] }
-      if (customersRes.data) {
-        const customersData = Array.isArray(customersRes.data) ? customersRes.data : [];
-        setCustomers(customersData);
-      }
-
-      // StockSummary response
-      if (stockRes.success && stockRes.data) {
-        const stockData = stockRes.data as { summary?: Array<{ materialTypeName?: string; category?: string; totalQuantity?: number; totalAvailable?: number; batchCount?: number }> };
-        if (stockData.summary && Array.isArray(stockData.summary)) {
-          const summaryData = stockData.summary.map((item) => ({
-            category: item.materialTypeName || item.category,
-            available: item.totalQuantity || item.totalAvailable || 0,
-            batchCount: item.batchCount || 0,
-          }));
-          setAvailableStock(summaryData);
-        }
-      }
-    } catch (error) {
-      productionPlanLogger.error('加载选项失败', error);
+    // ProductTypes response is { data: ProductType[] }
+    if (values.products?.data) {
+      const productTypesData = Array.isArray(values.products.data) ? values.products.data : [];
+      setProductTypes(productTypesData);
     }
+
+    // Customers response is { data: Customer[] }
+    if (values.customers?.data) {
+      const customersData = Array.isArray(values.customers.data) ? values.customers.data : [];
+      setCustomers(customersData);
+    }
+
+    // StockSummary response
+    if (values.stock?.success && values.stock.data) {
+      const stockData = values.stock.data as { summary?: Array<{ materialTypeName?: string; category?: string; totalQuantity?: number; totalAvailable?: number; batchCount?: number }> };
+      if (stockData.summary && Array.isArray(stockData.summary)) {
+        const summaryData = stockData.summary.map((item) => ({
+          category: item.materialTypeName || item.category,
+          available: item.totalQuantity || item.totalAvailable || 0,
+          batchCount: item.batchCount || 0,
+        }));
+        setAvailableStock(summaryData);
+      }
+    }
+
+    failedKeys.forEach((key) => {
+      productionPlanLogger.warn(`加载${String(key)}选项失败 (不影响其它选项)`);
+    });
   };
 
   // 加载原料库存（当产品类型变化时）

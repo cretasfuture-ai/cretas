@@ -139,6 +139,35 @@ public class CustomerController {
 
     /**
      * 获取客户列表（分页）
+     *
+     * <p>⚠️ 权限现状 (2026-09-05, owner 裁定 — 登记不改): 本方法<b>对同厂任何已登录用户开放</b>，
+     * 无 {@code @RequirePermission}。这是 Bug #318 「读保持开放」的有意决定 (见类头注释)，
+     * 不是本次审计漏掉的口子——审计发现过、评估过、明确选择不动，理由如下。</p>
+     *
+     * <p><b>敞口有多大</b>: 本方法与 {@code @DataScope("created_by")}(见
+     * {@code CustomerServiceImpl#getCustomerList}) 搭配——{@code @DataScope} 只对解析为
+     * SELF 的一线角色 (operator/warehouse_worker/quality_inspector/yield_operator) 收窄行,
+     * 对 ALL-scope 角色不做任何限制。实测 L1 {@code platform_role_permissions}:
+     * {@code hr_admin}/{@code equipment_admin}/{@code quality_inspector}/
+     * {@code quality_manager}/{@code procurement_manager} 在 {@code sales} 与
+     * {@code finance} 两个模块上均为 {@code '-'} (无权)，但今天都能读到全厂 29 条客户记录。</p>
+     *
+     * <p><b>为什么不直接补 {@code sales|finance} 权限门</b>: {@code production_manager}
+     * 同样在两个模块上是 {@code '-'}，会被这道门一并挡住——而它不是可有可无的读者:
+     * prod 实测 {@code production_manager} 建的 20 个生产计划里 <b>7 个挂了客户</b>
+     * (且这 7 个来源全是 {@code CUSTOMER_ORDER})，见
+     * {@code ProductionPlanManagementScreen} 的 {@code CustomerSelector}。</p>
+     *
+     * <p><b>为什么不干脆给 {@code production_manager} 开 {@code sales:read}</b>: 量过代价——
+     * {@code sales:read} 这个权限码在 17 个控制器上同时守着 <b>49 个端点</b>,
+     * 含应收应付({@code ArApController})、发票({@code InvoiceController})、付款申请
+     * ({@code PaymentRequestController})、价格表({@code PriceListController}) 等。
+     * 为了一个客户下拉打开这些, 不成立。</p>
+     *
+     * <p>⇒ 客户列表这半的正确形状 (细粒度权限码 / 独立 module / 别的收口方式) 需要产品决策，
+     * 不是这一票能定的。<b>与本方法配套的 {@code material-batches} 那半门已按原计划补上</b>
+     * (见 {@code MaterialBatchController#getMaterialBatchList})——两个端点原本对称的
+     * 「有 @DataScope 却无权限门」缺陷，这里选择了不同的收口路径。</p>
      */
     @GetMapping
     @Operation(summary = "获取客户列表（分页）", description = "分页查询指定工厂的客户列表，支持排序和筛选")
