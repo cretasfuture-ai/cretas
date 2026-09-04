@@ -448,6 +448,16 @@
 - **仓库确认出库**（owner 切 `lsm006` → 我点「确认并扣库存」18:26:06）：`PB-…-47204` DEPLETED shipped 9.8；子单 SHIPPED；母单 PARTIALLY_SHIPPED；SO PARTIAL_DELIVERED；**AR_INVOICE ¥78.40 = 9.8 × ¥8 含税 ✅**（8-28 口径）。⚠️ 观察：该 AR 的 `outstanding_amount` / `payment_status` 均 NULL —— 已让 f006 对照老 AR 判「挂账时不填」是设计还是缺陷。短交 0.2 的结案路径现在有活样本（台账「短交结案 path」）。
 - **仍等 owner**：45 目标角色（改 `baogong001` 成什么）；46 角色门；成本口径 (a)/(b)。**在飞 3**：40 第二入口执行者、FIFO 0 探针、¥1.9538 组成探针。
 
+### 📌 2026-09-04 18:42 增量（系统时钟）· owner 四条裁定, 探针两条结论, 在飞 6
+
+**owner 裁定（当面）**：**45 不改**（`baogong001` 保持 warehouse_manager）/ **46 只让仓储主管改**物料字典（加角色门，worker 只读 + 提示）/ **成本口径 (a)**：来料加工客供主料显式记 0 并标 CUSTOMER_SUPPLIED，成品成本 = 辅料 + 包材 + 工时 / **短交两条路都支持（补发 / 短交结案），但必须点确认**，⛔ 不自动关。
+
+**探针结论**：
+- **¥1.9538 = 1.2000 纸箱 + 0.3800（`traceCost` 追溯 CLERK_WIP 链，叶子冰水）+ 0.3738（结算行 217 同一批冰水再并一次）**，到分复现。缺陷：`OrderCostBreakdownService.settlementConsumptionsFor` 去重集只看当前成品批自己的 `material_consumptions`（:767-777），而 `computeForBatches` 过滤掉 CLERK_WIP、`traceCost` 却独立走进去 ⇒ 结算 rollup（本是视图）被当第二次事件；javadoc「(计划,批次) 组合 0 个」在错粒度上成立。
+- **FIFO 自动预填 batches=0 是一次性瞬态**：同一 `findAvailableCustomerOwnedBatchesFefoAllWarehousesExcluding`、同一数据、零中间写入，2 分 2 秒后返回 1；JPQL 逐谓词对 prod 行重放全过；活 jar `javap` 与源码一致；手工弹窗与自动走**同一个** `recommendFifo`。不修，登记：若复发抓 `pg_stat_activity`/Hikari 池状态。⚠️ 顺带：`DataScopeResolver.java:89` 每几秒 `bad SQL grammar [SELECT data_scope FROM role_definitions …]`，**每个请求都失败** ⇒ 兜底方向决定严重度，已派查。
+
+**在飞 6**：40 第二入口（`ab7d0334c62b27c80`）/ 成本重复计 + 第二 PR 口径 (a)（`a76a43d4bc3282400`，🔒）/ AR `outstanding_amount`/`payment_status` 挂账 + 回填迁移（`a6d1863c025059ba4`，🔒）/ 46 角色门（`a08b4ff879c504d10`）/ 短交两路 + 显式确认（`a7107535c50c8f4af`，🔒）/ DataScopeResolver（`a2188e3b036c19d42`）。到 PR → CI/终审 → 合 → 发 28。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
