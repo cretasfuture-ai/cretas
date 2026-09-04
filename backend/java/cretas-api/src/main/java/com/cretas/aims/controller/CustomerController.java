@@ -43,13 +43,6 @@ import java.util.Map;
  * Bug #318 fix (2026-04-18): @RequirePermission added only on write methods
  * (POST/PUT/DELETE) — reads stay open to any authenticated user (matches
  * pre-fix behavior, no regression). Prevents dispatcher/operator越权 POST/PUT/DELETE.
- *
- * <p>⚠️ 部分订正 (2026-09-04): {@link #getCustomerList} 是一个例外 — 它现在也挂了
- * {@code @RequirePermission}，因为它是 {@code @DataScope("created_by")} 六处覆盖里
- * 唯二两个控制器侧完全没有权限门的读端点之一 (另一个是 {@code MaterialBatchController
- * #getMaterialBatchList})，见 {@code CustomerServiceImpl#getCustomerList}。这是对
- * Bug #318「读保持开放」决定的<b>局部收紧</b>，不是回退：其余 GET 方法 (详情/搜索/统计/
- * 导出等) 仍按原决定保持开放。</p>
  */
 @Slf4j
 @RestController
@@ -147,27 +140,35 @@ public class CustomerController {
     /**
      * 获取客户列表（分页）
      *
-     * <p>缺陷 (2026-09-04): 本方法此前是本控制器上唯一一个既有 {@code @DataScope("created_by")}
-     * (见 {@code CustomerServiceImpl#getCustomerList}) 又没有 {@code @RequirePermission} 的读端点。
-     * {@code @DataScope} 只对解析为 SELF 的一线角色 (operator/warehouse_worker/quality_inspector/
-     * yield_operator) 收窄行；ALL-scope 角色 (含 L1 明确未授予 sales 模块的 hr_admin/equipment_admin/
-     * procurement_manager/finance_manager 等) 之前不受任何模块权限校验，读到的是全工厂客户列表。
-     * 现补齐 {@code sales:read_write / sales:read}，与同域读端点 {@code ReturnOrderController
-     * #listReturnsByCustomer} 用的形状一致。</p>
+     * <p>⚠️ 权限现状 (2026-09-05, owner 裁定 — 登记不改): 本方法<b>对同厂任何已登录用户开放</b>，
+     * 无 {@code @RequirePermission}。这是 Bug #318 「读保持开放」的有意决定 (见类头注释)，
+     * 不是本次审计漏掉的口子——审计发现过、评估过、明确选择不动，理由如下。</p>
      *
-     * <p>⚠️ 2026-09-05 owner 订正: 权限集加入 {@code finance:read_write / finance:read}，
-     * 与 {@code SalesController#listOrders} 同口径 (该端点同样把 finance 模块的读者纳入)。
-     * 权威源是 L1 {@code platform_role_permissions}，不是 {@code PermissionServiceImpl
-     * .PERMISSION_MATRIX} 硬编码兜底 —— 两者曾经对 {@code finance_manager} 的 sales 权限给出
-     * 不一致的答案 (matrix 说有, L1 说 '-')，本次改动一律以 L1 为准。查询结果: L1 上「finance
-     * 有权、sales 无权」的角色恰好 3 个 —— {@code finance_manager}(finance=rw)、
-     * {@code restaurant_manager}(finance=r)、{@code restaurant_purchaser}(finance=r) ——
-     * 财务对客户名单做应收对账是合理读者，只用 sales:* 会误伤这三个角色。要堵的那批
-     * ({@code hr_admin}/{@code equipment_admin}/{@code quality_inspector}/
-     * {@code quality_manager}/{@code procurement_manager}) 在 finance 模块上同样是 '-'，
-     * 加了 finance 权限码依然堵得住。</p>
+     * <p><b>敞口有多大</b>: 本方法与 {@code @DataScope("created_by")}(见
+     * {@code CustomerServiceImpl#getCustomerList}) 搭配——{@code @DataScope} 只对解析为
+     * SELF 的一线角色 (operator/warehouse_worker/quality_inspector/yield_operator) 收窄行,
+     * 对 ALL-scope 角色不做任何限制。实测 L1 {@code platform_role_permissions}:
+     * {@code hr_admin}/{@code equipment_admin}/{@code quality_inspector}/
+     * {@code quality_manager}/{@code procurement_manager} 在 {@code sales} 与
+     * {@code finance} 两个模块上均为 {@code '-'} (无权)，但今天都能读到全厂 29 条客户记录。</p>
+     *
+     * <p><b>为什么不直接补 {@code sales|finance} 权限门</b>: {@code production_manager}
+     * 同样在两个模块上是 {@code '-'}，会被这道门一并挡住——而它不是可有可无的读者:
+     * prod 实测 {@code production_manager} 建的 20 个生产计划里 <b>7 个挂了客户</b>
+     * (且这 7 个来源全是 {@code CUSTOMER_ORDER})，见
+     * {@code ProductionPlanManagementScreen} 的 {@code CustomerSelector}。</p>
+     *
+     * <p><b>为什么不干脆给 {@code production_manager} 开 {@code sales:read}</b>: 量过代价——
+     * {@code sales:read} 这个权限码在 17 个控制器上同时守着 <b>49 个端点</b>,
+     * 含应收应付({@code ArApController})、发票({@code InvoiceController})、付款申请
+     * ({@code PaymentRequestController})、价格表({@code PriceListController}) 等。
+     * 为了一个客户下拉打开这些, 不成立。</p>
+     *
+     * <p>⇒ 客户列表这半的正确形状 (细粒度权限码 / 独立 module / 别的收口方式) 需要产品决策，
+     * 不是这一票能定的。<b>与本方法配套的 {@code material-batches} 那半门已按原计划补上</b>
+     * (见 {@code MaterialBatchController#getMaterialBatchList})——两个端点原本对称的
+     * 「有 @DataScope 却无权限门」缺陷，这里选择了不同的收口路径。</p>
      */
-    @RequirePermission({"sales:read_write", "sales:read", "finance:read_write", "finance:read"})
     @GetMapping
     @Operation(summary = "获取客户列表（分页）", description = "分页查询指定工厂的客户列表，支持排序和筛选")
     public ApiResponse<PageResponse<CustomerDTO>> getCustomerList(

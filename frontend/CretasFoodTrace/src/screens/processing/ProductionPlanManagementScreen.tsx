@@ -310,7 +310,7 @@ export default function ProductionPlanManagementScreen() {
 
   const loadOptions = async () => {
     // 缺陷 (2026-09-05, owner 点名): 三路下拉数据此前用 Promise.all 一起等 ——
-    // 任意一路 403/失败(尤其是客户下拉, 见 backend PR #590 补的读权限门)会让
+    // 任意一路失败(网络错误/后端 500/权限拒绝等, 不假设具体原因)会让
     // 另外两路(产品类型/可用库存)也一并拿不到, 整屏选项空白。换成
     // settleAllIndependently(内部是 Promise.allSettled), 逐路独立处理,
     // 一路失败只影响它自己那个下拉。行为断言见

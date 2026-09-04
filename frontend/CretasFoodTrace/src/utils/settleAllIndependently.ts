@@ -2,11 +2,14 @@
  * 多路彼此独立的异步加载 —— 逐路各自 settle，一路失败不影响其它路。
  *
  * 缺陷背景 (2026-09-05, owner 点名): `ProductionPlanManagementScreen.loadOptions()`
- * 原来用 `Promise.all([产品类型, 客户, 可用库存])` 一起等，任意一路失败(尤其是客户下拉——
- * `GET .../customers` 补了读权限门之后, hr_admin/equipment_admin/procurement_manager/
- * production_manager 等在 L1 被明确拒绝 sales+finance 模块的角色现在会拿到 403) 都会让
+ * 原来用 `Promise.all([产品类型, 客户, 可用库存])` 一起等，任意一路失败(网络错误 / 后端
+ * 500 / 权限拒绝 —— 与具体是哪一种失败无关, 本函数不对失败原因做任何假设) 都会让
  * `Promise.all` 整体 reject，另外两路(产品类型/可用库存)也一并拿不到，整屏下拉选项空白——
- * "一拒全拒"。
+ * "一拒全拒"。⚠️ 这条与 `GET .../customers` 端点本身有没有权限门是两件事 (那道门这次
+ * 审计里评估过、owner 裁定登记不改，见 `CustomerController#getCustomerList` 的注释) ——
+ * 本函数守的是"某一路失败不该拖累其它路"这个健壮性性质本身，不依赖任何一路真的会因
+ * 权限被拒绝；`production_manager` 建的 20 个生产计划里 7 个挂了客户，是这条路径值得
+ * 加固的独立理由。
  *
  * 抽成这个独立的小函数(不依赖任何 React / react-native-paper / expo-* 原生模块)是为了
  * 能脱离整屏渲染直接单测；`ProductionPlanManagementScreen` 那一屏经实测无法在当前 jest
