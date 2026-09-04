@@ -3015,3 +3015,14 @@ def test_20260903_bom_edit_permission_sits_next_to_the_canvas_entry():
     corpus = (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8")
     line = next(l for l in corpus.splitlines() if "唯一写入口" in l)
     assert "改 BOM 的权限：需要生产读写或研发读写权限，两者有其一即可；生产经理、生产文员" in line
+
+
+def test_20260904_role_assignment_has_its_own_faq():
+    """Terse 「去哪里分配新角色」 retrieved an approval-chain chunk and invented a
+    「账号与角色」 menu under 系统管理. The facts existed only inside an HR-capability
+    paragraph, so give them a heading of their own."""
+    corpus = (PROJECT_ROOT / "backend/python/food_kb/data/f006_production_sop.md").read_text(encoding="utf-8")
+    assert "### 给账号分配或修改角色去哪里" in corpus
+    assert "人事管理 → 账号权限 → 账号管理" in corpus
+    assert "“系统管理”里没有账号页也没有角色页" in corpus
+    assert "要换某类单据的审批人，去“系统管理 → 审批链配置”改那条链，不要去改他的角色" in corpus
