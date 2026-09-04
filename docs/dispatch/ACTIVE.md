@@ -430,6 +430,16 @@
 
 **待 owner**：46 角色门。**待 f006**：45 改前后 `role_code`；成品 `unit_cost` 重算（owner 点一次「确认重算」）；销售出库（`lsm004` 建发货单 → `lsm006` 确认）。**待时机**：192 停用（`PLAN-1788008667414` 结束后）。
 
+### 📌 2026-09-04 17:57 增量（系统时钟）· 两天后重核：生产 = main，无待发
+
+**触发**：工艺 chat 09-04 转达 owner「部署 25 放行吧」。我第一反应引用了两天前的 `date`（又一次拿旧时间戳当现在，见 memory `feedback_still_deploying_reads_identical_to_not_deployed`），重核后：
+- **main 自 `35108edf2a`（09-02 部署 27）起 +32 commit**（#543–#571，food-kb 线 SOP 语料/探针、#557 aiassist 去餐饮 tab、#565–#567 web-admin 修复），**零 backend/java 改动**。
+- **Java** prod jar 09-02 15:30:14 = 最新（无 Java 改动）。
+- **web** 139 index.html 09-03 19:48 已含 #567「改用画布」；此后无 web 改动。
+- **Python** 47 部署树 `manual_chat.py` / `f006_production_sop.md` / 契约测试 md5 = origin/main；8083 进程 09-03 21:05:17 > 最后 python 变更 21:04:41（#571）。⇒ food-kb 线自己发过，且进程晚于文件。
+⇒ **owner 说的「部署 25」= 09-02 14:03 那批，早已上线核验；当前无任何待发。** 已回工艺 chat；已向 f006 索要 45 / `unit_cost` / 销售出库 三个读数。
+**仍等 owner**：46 角色门。**等时机**：192 停用。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
