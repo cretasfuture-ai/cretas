@@ -2,6 +2,7 @@ package com.cretas.aims.service.finance;
 
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.enums.ArApTransactionType;
+import com.cretas.aims.entity.enums.PayablePaymentStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -124,6 +125,24 @@ class ArApServiceImplRecordReceivableIfAbsentTest {
         assertNotEquals(0, saved.getValue().getAmount().compareTo(ORDERED),
                 "回归钉: 绝不能是订单额 44.25 —— 那样多发的 3 盒永远没人收钱");
         assertEquals(ArApTransactionType.AR_INVOICE, saved.getValue().getTransactionType());
+    }
+
+    @Test
+    @DisplayName("🔴 open-item 回归钉: 挂账即初始化 settled/outstanding/paymentStatus/currency, "
+            + "不再是 null (persistReceivable 此前从未调 initializeOpenItem, AP_INVOICE 一直有调)")
+    void initializesOpenItemFieldsLikeApInvoiceAlreadyDoes() {
+        stubHappyPath();
+
+        ArApTransaction result = post(SHIPPED);
+
+        assertNotNull(result);
+        assertEquals(0, BigDecimal.ZERO.setScale(2).compareTo(result.getSettledAmount()),
+                "新挂账尚未收款, settled_amount 必须是 0.00, 不能是 null");
+        assertEquals(0, SHIPPED.compareTo(result.getOutstandingAmount()),
+                "outstanding_amount 必须 = 挂账金额(实发额), 不能是 null");
+        assertEquals(PayablePaymentStatus.UNPAID, result.getPaymentStatus(),
+                "新挂账的 payment_status 必须是 UNPAID, 不能是 null");
+        assertEquals("CNY", result.getCurrencyCode());
     }
 
     @Test

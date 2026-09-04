@@ -229,6 +229,11 @@ public class ArApServiceImpl implements ArApService {
         // per-shipment 幂等键 (可空: recordReceivable 手工挂账无 source, 走 SO 级 409 防重复)。
         if (sourceType != null) transaction.setSourceType(sourceType);
         if (sourceId != null) transaction.setSourceId(sourceId);
+        // 🔴 finance parity fix: AP_INVOICE 挂账一直调 initializeOpenItem, AR_INVOICE 这一路
+        // 从未调过 —— prod 实测 AR_INVOICE 0/15 行有 outstanding_amount/payment_status,
+        // AP_INVOICE 31/31 行都有 (同一张表, 同样的字段, 只是这条路径漏接)。见
+        // db/flyway/V20261101_27__ar_invoice_open_item_backfill.sql 的存量回填。
+        initializeOpenItem(transaction);
 
         log.info("应收挂账: factoryId={}, customerId={}, sourceId={}, amount={}, balance={}",
                 factoryId, customerId, sourceId, amount, newBalance);
@@ -353,7 +358,7 @@ public class ArApServiceImpl implements ArApService {
         // per-receive 幂等键 (可空: recordPayable 手工挂账无 source, 走 PO 级 409 防重复)。
         if (sourceType != null) transaction.setSourceType(sourceType);
         if (sourceId != null) transaction.setSourceId(sourceId);
-        initializePayableOpenItem(transaction);
+        initializeOpenItem(transaction);
 
         log.info("应付挂账: factoryId={}, supplierId={}, sourceId={}, amount={}, balance={}",
                 factoryId, supplierId, sourceId, amount, newBalance);
@@ -407,7 +412,7 @@ public class ArApServiceImpl implements ArApService {
                 amount, newBalance, dueDate, operatedBy, remark);
         transaction.setSourceType(sourceType);
         transaction.setSourceId(sourceId);
-        initializePayableOpenItem(transaction);
+        initializeOpenItem(transaction);
 
         ArApTransaction saved = transactionRepository.save(transaction);
         log.info("应付挂账: factoryId={}, supplierId={}, sourceType={}, sourceId={}, amount={}, balance={}",
@@ -1209,8 +1214,18 @@ public class ArApServiceImpl implements ArApService {
         return transaction;
     }
 
-    /** Initialize every newly-created AP invoice as an auditable open item. */
-    private void initializePayableOpenItem(ArApTransaction transaction) {
+    /**
+     * Initialize every newly-created AR/AP invoice as an auditable open item
+     * (settled_amount / outstanding_amount / payment_status / currency_code).
+     *
+     * <p>🔴 Until 2026-09 this only ran for AP_INVOICE (persistPayable / recordPayableFromSource) —
+     * persistReceivable (AR_INVOICE) never called it, so every AR invoice was born with those
+     * four columns NULL. Both invoice types are "open items" in the same {@code ar_ap_transactions}
+     * ledger table and share the same {@link PayablePaymentStatus} enum, so this is one helper for
+     * both, not two — see {@code db/flyway/V20261101_27__ar_invoice_open_item_backfill.sql} for the
+     * historical-row backfill and the widened {@code ck_ar_ap_open_item} CHECK constraint.
+     */
+    private void initializeOpenItem(ArApTransaction transaction) {
         BigDecimal amount = transaction.getAmount() != null
                 ? transaction.getAmount().abs().setScale(2, java.math.RoundingMode.UNNECESSARY)
                 : null;

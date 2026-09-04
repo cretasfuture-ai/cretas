@@ -114,17 +114,28 @@ public class ArApTransaction extends BaseEntity {
     @Column(name = "balance_after", nullable = false, precision = 15, scale = 2)
     private BigDecimal balanceAfter;
 
-    /** Amount already settled against this AP invoice. Null for non-payable ledger rows. */
+    /**
+     * Amount already settled against this AR/AP invoice open item (AR_INVOICE / AP_INVOICE
+     * only). Null for non-invoice ledger rows (payments/adjustments/credit notes).
+     *
+     * <p>⚠️ AP has a matching settlement path ({@link com.cretas.aims.service.finance.PayableSettlementService}
+     * + {@code ar_ap_payment_allocations}) that keeps this in sync as AP_PAYMENT rows are applied.
+     * AR does not yet have an equivalent per-invoice settlement path — {@code recordArPayment}
+     * only updates Customer.currentBalance / SalesOrder.paidAmount, it does not decrement any
+     * AR_INVOICE's settled/outstanding here. So on AR_INVOICE rows this reflects the state as of
+     * booking (+ the one-time backfill), not a live "how much of this invoice remains unpaid"
+     * number, until that follow-up exists.
+     */
     @PriceSensitive
     @Column(name = "settled_amount", precision = 15, scale = 2)
     private BigDecimal settledAmount;
 
-    /** Remaining amount of this AP invoice. Null for non-payable ledger rows. */
+    /** Remaining amount of this AR/AP invoice open item. Null for non-invoice ledger rows. See {@link #settledAmount} for the AR caveat. */
     @PriceSensitive
     @Column(name = "outstanding_amount", precision = 15, scale = 2)
     private BigDecimal outstandingAmount;
 
-    /** Settlement state of this AP invoice. Null for non-payable ledger rows. */
+    /** Settlement state of this AR/AP invoice open item. Null for non-invoice ledger rows. See {@link #settledAmount} for the AR caveat. */
     @Enumerated(EnumType.STRING)
     @Column(name = "payment_status", length = 32)
     private PayablePaymentStatus paymentStatus;
