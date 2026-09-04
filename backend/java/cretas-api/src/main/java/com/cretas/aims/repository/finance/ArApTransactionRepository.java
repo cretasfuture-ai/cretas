@@ -30,6 +30,31 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
             @Param("factoryId") String factoryId,
             @Param("transactionId") String transactionId);
 
+    /**
+     * 🔴🔒 AR 收款应用到发票 (follow-up to #577, 2026-09-04): 找出某销售订单下状态已知
+     * (非 {@code NEEDS_RECONCILIATION}) 且仍有未清余额的 AR_INVOICE, 按挂账日期/创建时间
+     * 从早到晚排序 (FIFO), 供 {@code recordArPayment} 做发票级核销分配。
+     * {@code PESSIMISTIC_WRITE} 锁定这些行, 防止并发收款重复核销同一批发票 ——
+     * 与 {@link #findPayableForSettlement} 对 AP_INVOICE 的做法同形。
+     *
+     * <p>⛔ 故意排除 {@code NEEDS_RECONCILIATION}: 这些是 V20261101_27 存量回填批次里
+     * 无法唯一归因给单张发票的行 (同一 SO 下有 2+ 张发票、或发票没有 SO), 它们已结清多少
+     * 是未知数。盲目当作「尚未结清任何金额」会把可能早已付清的存量发票重新打开 ——
+     * 与 V20261028_94/V20261101_27 处理存量数据的原则一致: 未知就留给财务人工核对, 不猜。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM ArApTransaction t WHERE t.factoryId = :factoryId " +
+            "AND t.salesOrderId = :salesOrderId " +
+            "AND t.transactionType = com.cretas.aims.entity.enums.ArApTransactionType.AR_INVOICE " +
+            "AND t.deletedAt IS NULL " +
+            "AND t.paymentStatus IN (com.cretas.aims.entity.enums.PayablePaymentStatus.UNPAID, " +
+            "                        com.cretas.aims.entity.enums.PayablePaymentStatus.PARTIALLY_PAID) " +
+            "AND t.outstandingAmount IS NOT NULL AND t.outstandingAmount > 0 " +
+            "ORDER BY t.transactionDate ASC, t.createdAt ASC")
+    List<ArApTransaction> findOpenArInvoicesForSettlementBySalesOrderId(
+            @Param("factoryId") String factoryId,
+            @Param("salesOrderId") String salesOrderId);
+
     Page<ArApTransaction> findByFactoryIdOrderByTransactionDateDesc(String factoryId, Pageable pageable);
 
     Page<ArApTransaction> findByFactoryIdAndCounterpartyTypeOrderByTransactionDateDesc(

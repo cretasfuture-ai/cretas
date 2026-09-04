@@ -146,6 +146,12 @@ public interface ArApService {
      * the link. Was orphan-receipt: SO.paidAmount stayed null, SO 收款记录 tab
      * '暂无数据', SO.paymentStatus stayed UNPAID. Pass null when payment is not
      * scoped to a SO (e.g. on-account customer prepayment).
+     *
+     * <p>🔴🔒 follow-up to #577 (2026-09-04): 当 salesOrderId 非空时, 本方法还会按 FIFO 把收款
+     * 分配到该 SO 下状态已知的开放 AR_INVOICE, 维护它们的 settled_amount/outstanding_amount/
+     * paymentStatus (mirrors AP 的 {@link com.cretas.aims.service.finance.PayableSettlementService},
+     * 见 {@code ArApServiceImpl} 的 {@code applyPaymentToOpenArInvoices} 实现细节)。salesOrderId
+     * 为空 (客户挂账预收款) 时不分配到任何发票, 仅体现在 Customer.currentBalance 上。
      */
     ArApTransaction recordArPayment(String factoryId, String customerId,
                                      String salesOrderId, BigDecimal amount,
