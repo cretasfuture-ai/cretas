@@ -674,7 +674,11 @@ public class SalesController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
             @RequestHeader("Authorization") String authorization,
-            @RequestBody(required = false)
+            // required=false (与 @Valid 并存): 已 SHORT_CLOSED 的订单重放是幂等直接返回,
+            // 不该因为漏了 body 就先被 Spring 400 拦掉 —— 校验交给下面 service 层的业务判定
+            // (SALES_SHORT_CLOSE_REASON_REQUIRED, 消息更具体)。真正提交时仍走 @Valid 校验
+            // notes ≤ 500 字, 与采购侧 ClosePurchaseReceivingTaskRequest 同一道防线。
+            @Valid @RequestBody(required = false)
             com.cretas.aims.dto.inventory.CloseShortShipmentRequest request) {
         Long userId = extractUserId(authorization);
         SalesOrder order = salesService.closeShortShipment(factoryId, orderId, request, userId);
