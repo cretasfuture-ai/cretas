@@ -118,13 +118,17 @@ public class ArApTransaction extends BaseEntity {
      * Amount already settled against this AR/AP invoice open item (AR_INVOICE / AP_INVOICE
      * only). Null for non-invoice ledger rows (payments/adjustments/credit notes).
      *
-     * <p>⚠️ AP has a matching settlement path ({@link com.cretas.aims.service.finance.PayableSettlementService}
-     * + {@code ar_ap_payment_allocations}) that keeps this in sync as AP_PAYMENT rows are applied.
-     * AR does not yet have an equivalent per-invoice settlement path — {@code recordArPayment}
-     * only updates Customer.currentBalance / SalesOrder.paidAmount, it does not decrement any
-     * AR_INVOICE's settled/outstanding here. So on AR_INVOICE rows this reflects the state as of
-     * booking (+ the one-time backfill), not a live "how much of this invoice remains unpaid"
-     * number, until that follow-up exists.
+     * <p>AP has a per-invoice settlement path ({@link com.cretas.aims.service.finance.PayableSettlementService}
+     * + {@code ar_ap_payment_allocations}) that keeps this in sync as AP_PAYMENT rows are applied
+     * against a specific payable. 🔴🔒 follow-up to #577 (2026-09-04): AR now has the analogous
+     * maintenance too — {@code ArApServiceImpl#recordArPayment} calls
+     * {@code applyPaymentToOpenArInvoices} after posting each AR_PAYMENT, which allocates the
+     * receipt FIFO across the sales order's open (non-{@code NEEDS_RECONCILIATION}) AR_INVOICE
+     * rows and writes matching {@code ar_ap_payment_allocations} rows. Two differences from AP:
+     * (1) AR has no per-invoice payment entry point, so the target invoice is derived by FIFO
+     * within the SO rather than passed by the caller; (2) a receipt with no salesOrderId (an
+     * on-account customer prepayment) is left unallocated by design — it stays reflected only in
+     * Customer.currentBalance, same as AP's historical unallocated payments.
      */
     @PriceSensitive
     @Column(name = "settled_amount", precision = 15, scale = 2)

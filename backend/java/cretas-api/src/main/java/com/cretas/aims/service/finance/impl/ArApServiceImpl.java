@@ -7,6 +7,7 @@ import com.cretas.aims.entity.enums.ArApTransactionType;
 import com.cretas.aims.entity.enums.CounterpartyType;
 import com.cretas.aims.entity.enums.PaymentMethod;
 import com.cretas.aims.entity.enums.PayablePaymentStatus;
+import com.cretas.aims.entity.finance.ArApPaymentAllocation;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -45,6 +47,17 @@ public class ArApServiceImpl implements ArApService {
     /** R21: SO repo for AR invariant (R20 audit C1 — recordReceivable was unprotected). */
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.repository.inventory.SalesOrderRepository salesOrderRepository;
+
+    /**
+     * 🔴🔒 follow-up to #577 (2026-09-04): AR 收款发票级核销分配, mirrors
+     * {@link com.cretas.aims.service.finance.PayableSettlementService} 对 AP 的用法 ——
+     * 每次 {@link #recordArPayment} 把收款金额分配给具体 AR_INVOICE 时写一条
+     * {@link com.cretas.aims.entity.finance.ArApPaymentAllocation}（paymentTransactionId=
+     * 该 AR_PAYMENT, payableTransactionId=被核销的 AR_INVOICE —— 字段名沿用 AP 那边,
+     * 是通用的交易 id 外键, 不专属 AP）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.finance.ArApPaymentAllocationRepository allocationRepository;
 
     private void validatePayableStatus(String purchaseOrderId, String factoryId) {
         com.cretas.aims.entity.inventory.PurchaseOrder po = purchaseOrderRepository.findById(purchaseOrderId)
@@ -588,6 +601,11 @@ public class ArApServiceImpl implements ArApService {
             }
         }
 
+        // 🔴🔒 follow-up to #577 (2026-09-04): 把这笔收款分配到该 SO 下具体的 AR_INVOICE,
+        // 维护 settled_amount/outstanding_amount/payment_status —— 挂账时初始化之后
+        // recordArPayment 此前从不回写它们 (见 initializeOpenItem javadoc)。
+        applyPaymentToOpenArInvoices(factoryId, salesOrderId, saved, amount, operatedBy);
+
         // Publish PaymentReceivedEvent so Canvas trigger chains (factory_trigger_chains
         // with eventType='PaymentReceivedEvent') can react to successful AR payments.
         // Discovered via audit: event had zero publishers despite TriggerChainExecutor listening.
@@ -609,6 +627,100 @@ public class ArApServiceImpl implements ArApService {
         publishCashMovement(saved, com.cretas.aims.entity.enums.VoucherType.CASH_RECEIPT,
                 customerId, customer.getName(), amount, method, operatedBy);
         return saved;
+    }
+
+    /**
+     * 🔴🔒 follow-up to #577 (2026-09-04): AR 收款发票级核销 —— mirrors
+     * {@link com.cretas.aims.service.finance.impl.PayableSettlementServiceImpl#settle} 的分配逻辑,
+     * 但入口不同: AP 是「针对某一张具体应付结算」(payableTransactionId 是调用方传入的),
+     * AR 没有这样的按发票收款入口 —— {@code recordArPayment} 只知道 customerId + 可选的
+     * salesOrderId。于是这里按 <b>FIFO (挂账日期从早到晚)</b> 把收款金额分配给该 SO 下
+     * 状态已知的开放发票, 直到金额用完或发票用完。
+     *
+     * <p>三种边界情形 (按 ticket 要求逐条处理):
+     * <ul>
+     *   <li><b>无 salesOrderId</b> (客户挂账预收款, 不挂靠具体订单): 没有可分配的发票, 直接返回,
+     *       不做任何变更 —— 与 AP 的 {@code listUnallocatedPayments} 概念一致: 这笔收款仍只体现在
+     *       Customer.currentBalance 上, 留给财务凭客户对账单核对, 不强行匹配。</li>
+     *   <li><b>一个 SO 下有多张 AR_INVOICE</b> (常见于 2026-08-28 之后的按实发分笔挂账):
+     *       按 FIFO 依次核销, 一张付完再付下一张。</li>
+     *   <li><b>超付</b> (金额超过该 SO 下所有「状态已知」发票的未清金额之和): 已知发票全部核销至
+     *       PAID, 剩余部分<b>不</b>抛异常、也不强行分配给任何发票 —— 只体现在 Customer.currentBalance /
+     *       SalesOrder.paidAmount 上 (与超付前的行为一致)。不拒绝是有意的: recordArPayment 上层已有
+     *       「收款不超过客户应收余额」的防呆 (见本方法调用处上方), 一个 SO 收款略超其自身发票之和属于
+     *       合法业务场景 (如预收下一批货款)。</li>
+     * </ul>
+     *
+     * <p>⛔ {@code NEEDS_RECONCILIATION} 状态的发票 (存量回填批次里无法唯一归因的行, 见
+     * {@link com.cretas.aims.repository.finance.ArApTransactionRepository#findOpenArInvoicesForSettlementBySalesOrderId}
+     * javadoc) 从查询里被排除, 不会被本方法触碰 —— 它们的已结清金额是未知数, 留给财务人工核对。
+     *
+     * <p>幂等性: 本方法只在 {@code recordArPayment} 成功创建一条新 AR_PAYMENT 之后调用一次；
+     * 同一笔收款的重复提交在到达这里之前就已被 paymentReference 唯一性 / 5 分钟同额去重挡在 409 —
+     * 见 {@code recordArPayment} 顶部的幂等检查, 因此本方法不会对同一笔收款被调用两次。
+     */
+    private void applyPaymentToOpenArInvoices(String factoryId, String salesOrderId,
+                                              ArApTransaction payment, BigDecimal amount,
+                                              Long operatedBy) {
+        if (salesOrderId == null || salesOrderId.isBlank()) {
+            log.info("AR 收款未挂靠销售订单, 不核销具体发票 (仅计入客户余额): factoryId={}, paymentId={}",
+                    factoryId, payment.getId());
+            return;
+        }
+
+        List<ArApTransaction> openInvoices =
+                transactionRepository.findOpenArInvoicesForSettlementBySalesOrderId(factoryId, salesOrderId);
+        if (openInvoices.isEmpty()) {
+            log.info("AR 收款: 该销售订单下无状态已知的开放发票可核销 (可能全部 NEEDS_RECONCILIATION "
+                    + "或已结清): factoryId={}, salesOrderId={}, paymentId={}", factoryId, salesOrderId, payment.getId());
+            return;
+        }
+
+        BigDecimal remaining = amount.setScale(2, RoundingMode.UNNECESSARY);
+        for (ArApTransaction invoice : openInvoices) {
+            if (remaining.signum() <= 0) {
+                break;
+            }
+            BigDecimal outstanding = invoice.getOutstandingAmount();
+            BigDecimal settledSoFar = invoice.getSettledAmount() != null
+                    ? invoice.getSettledAmount() : BigDecimal.ZERO;
+            BigDecimal applied = remaining.min(outstanding).setScale(2, RoundingMode.UNNECESSARY);
+            if (applied.signum() <= 0) {
+                continue;
+            }
+
+            BigDecimal newSettled = settledSoFar.add(applied).setScale(2, RoundingMode.UNNECESSARY);
+            BigDecimal newOutstanding = outstanding.subtract(applied).setScale(2, RoundingMode.UNNECESSARY);
+            invoice.setSettledAmount(newSettled);
+            invoice.setOutstandingAmount(newOutstanding);
+            invoice.setPaymentStatus(newOutstanding.signum() == 0
+                    ? PayablePaymentStatus.PAID
+                    : PayablePaymentStatus.PARTIALLY_PAID);
+            transactionRepository.save(invoice);
+
+            ArApPaymentAllocation allocation = new ArApPaymentAllocation();
+            allocation.setId(java.util.UUID.randomUUID().toString());
+            allocation.setFactoryId(factoryId);
+            allocation.setPaymentTransactionId(payment.getId());
+            allocation.setPayableTransactionId(invoice.getId());
+            allocation.setAllocatedAmount(applied);
+            allocation.setCurrencyCode(invoice.getCurrencyCode() != null ? invoice.getCurrencyCode() : "CNY");
+            allocation.setOperatedBy(operatedBy);
+            allocationRepository.save(allocation);
+
+            log.info("AR 收款核销发票: factoryId={}, salesOrderId={}, invoiceId={}, applied={}, "
+                            + "settled={}, outstanding={}, status={}",
+                    factoryId, salesOrderId, invoice.getId(), applied, newSettled, newOutstanding,
+                    invoice.getPaymentStatus());
+
+            remaining = remaining.subtract(applied);
+        }
+
+        if (remaining.signum() > 0) {
+            log.info("AR 收款超出该销售订单已知开放发票的未清总额, 剩余 {} 未核销到具体发票 "
+                            + "(仍计入客户余额/SO已收金额): factoryId={}, salesOrderId={}, paymentId={}",
+                    remaining, factoryId, salesOrderId, payment.getId());
+        }
     }
 
     /**
@@ -1089,12 +1201,19 @@ public class ArApServiceImpl implements ArApService {
             });
 
             Map<String, Object> row = agingMap.get(cpId);
-            // ⚠️ 这个 SUPPLIER 守卫不是历史遗留, 是必须的: AR 的 open-item 字段目前只写不读,
-            // recordArPayment 尚未维护它们 (不减 AR_INVOICE.outstandingAmount) —— 在那之前
-            // 任何读路径都不得消费 AR 的 outstandingAmount/paymentStatus, 见 initializeOpenItem
-            // javadoc。⛔ 不要把这条守卫放宽到两侧 (CUSTOMER 也走 outstandingAmount)。
-            BigDecimal amt = counterpartyType == CounterpartyType.SUPPLIER
-                    && invoice.getOutstandingAmount() != null
+            // 🔴🔒 follow-up to #577 (2026-09-04): 此前这里只对 SUPPLIER 用 outstandingAmount,
+            // CUSTOMER 恒用 amount(挂账原值) —— 因为当时 recordArPayment 从不回写
+            // AR_INVOICE.outstandingAmount, 消费它就是在读一个客户已经付过款但没更新的假数字
+            // (回归钉 ArApServiceImplGetAgingAnalysisTest 曾专门守住这一点)。
+            //
+            // 现在 recordArPayment 已经维护 outstandingAmount (见 applyPaymentToOpenArInvoices),
+            // 两侧统一按 outstandingAmount 优先。null 的兜底仍然保留 —— 它现在只覆盖
+            // NEEDS_RECONCILIATION 那批存量回填时无法唯一归因的历史行(数据库层面
+            // ck_ar_ap_open_item 约束保证它们的 outstandingAmount 恒为 NULL); 新挂账的发票
+            // (无论有没有配 SO) 挂账时 initializeOpenItem 恒把它设成非 NULL, 不会落进这个分支。
+            // 对未知发票落回 amount(挂账原值)是保守方向: 宁可多算「可能还欠着」, 也不假设
+            // 已结清而漏报 —— 与 V20261028_94 处理历史 AP_INVOICE 的原则一致。
+            BigDecimal amt = invoice.getOutstandingAmount() != null
                     ? invoice.getOutstandingAmount()
                     : invoice.getAmount();
             String bucket = getBucket(invoice.getDueDate(), today);
@@ -1229,11 +1348,14 @@ public class ArApServiceImpl implements ArApService {
      * both, not two — see {@code db/flyway/V20261101_27__ar_invoice_open_item_backfill.sql} for the
      * historical-row backfill and the widened {@code ck_ar_ap_open_item} CHECK constraint.
      *
-     * <p>⚠️ AR 的 open-item 字段目前只写不读: {@code recordArPayment} 尚未维护它们 (客户付款不会
-     * 减少某笔 AR_INVOICE 的 settled_amount/outstanding_amount, 也不会翻转它的 paymentStatus —
-     * 只有 Customer.currentBalance / SalesOrder.paidAmount 会更新)。⛔ 在那条维护路径补上之前,
-     * 任何读路径都不得消费 AR_INVOICE 的 outstandingAmount/paymentStatus —— 它们写入时是对的,
-     * 此后会随真实收款静默失真。见 {@link #getAgingAnalysis} 里对应的 SUPPLIER 守卫。
+     * <p>🔴🔒 follow-up to #577 (2026-09-04): AR 的 open-item 字段此前只写不读 —— {@code recordArPayment}
+     * 只更新 Customer.currentBalance / SalesOrder.paidAmount, 从不回写某笔 AR_INVOICE 的
+     * settled_amount/outstanding_amount/paymentStatus。现在 {@link #recordArPayment} 在成功创建
+     * AR_PAYMENT 之后会调用 {@link #applyPaymentToOpenArInvoices}, 按 FIFO 把收款分配给该 SO 下
+     * 状态已知(非 {@code NEEDS_RECONCILIATION})的开放发票, 与本方法初始化的四个字段一起构成完整的
+     * 「挂账时初始化 → 收款时维护」闭环, 与 AP 的 {@code PayableSettlementService} + {@code
+     * ar_ap_payment_allocations} 同构（AR 没有独立的按发票收款入口, 分配逻辑改为按 SO 内 FIFO 推导）。
+     * {@link #getAgingAnalysis} 的 CUSTOMER 分支已随之改为两侧统一消费 outstandingAmount。
      */
     private void initializeOpenItem(ArApTransaction transaction) {
         BigDecimal amount = transaction.getAmount() != null
