@@ -5,6 +5,7 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionSettlementConsumptionRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,9 +65,21 @@ class SettlementConsumptionFeedsCostContractTest {
 
     private ProductionSettlementConsumptionRepository settleRepo;
     private MaterialBatchRepository batchRepo;
+    private MaterialConsumptionRepository consumptionRepo;
 
     private OrderCostBreakdownService service(List<ProductionSettlementConsumption> rows,
                                               BigDecimal unitPriceForAll) {
+        return service(rows, unitPriceForAll, List.of());
+    }
+
+    /**
+     * @param planWideConsumptions 【计划全量、含 CLERK_WIP】已消耗的物料批次 —— 供
+     *                              {@code planWideCoveredMaterialBatchIds} 读取 (2026-09-04 缺陷订正)。
+     *                              空表示这道查询本轮什么都没找到 (existing 5 个测试的默认行为不变)。
+     */
+    private OrderCostBreakdownService service(List<ProductionSettlementConsumption> rows,
+                                              BigDecimal unitPriceForAll,
+                                              List<MaterialConsumption> planWideConsumptions) {
         OrderCostBreakdownService svc = mock(OrderCostBreakdownService.class,
                 withSettings().defaultAnswer(CALLS_REAL_METHODS));
         settleRepo = mock(ProductionSettlementConsumptionRepository.class);
@@ -81,8 +94,12 @@ class SettlementConsumptionFeedsCostContractTest {
             mb.setQuantityUnit("kg");
             return Optional.of(mb);
         });
+        consumptionRepo = mock(MaterialConsumptionRepository.class);
+        when(consumptionRepo.findByFactoryIdAndPlanProductionBatchesIncludingWip(anyString(), anyString()))
+                .thenReturn(planWideConsumptions);
         ReflectionTestUtils.setField(svc, "settlementConsumptionRepository", settleRepo);
         ReflectionTestUtils.setField(svc, "materialBatchRepository", batchRepo);
+        ReflectionTestUtils.setField(svc, "consumptionRepository", consumptionRepo);
         return svc;
     }
 
@@ -140,6 +157,56 @@ class SettlementConsumptionFeedsCostContractTest {
         List<MaterialConsumption> got = merge(
                 svc, batch(10761L), new ArrayList<>(List.of(covered(MB_A))), new HashSet<>());
         assertEquals(1, got.size(), "把已经算过的批次又并了一遍: " + got.size());
+        assertEquals(MB_B, got.get(0).getBatchId());
+    }
+
+    @Test
+    @DisplayName("🔴🔴 缺陷复现: 上游 CLERK_WIP 批次自己消耗过的物料批次, 结单并入不再重复计"
+            + " (prod 实测 PLAN-1788305552728-D94F7E22 — 冰水批次在归集里出现两次)")
+    void materialAlreadyConsumedByUpstreamWipBatchIsNotDoubleCounted() {
+        // MB_A 已经被【上游 CLERK_WIP 批次自己的】material_consumptions 消耗过 —— traceCost
+        // 沿谱系回溯能看到它, 但它不在【当前(成品)批次自己】的 covered 参数里 (旧代码只看这个维度)。
+        // 只有「计划全量、含 CLERK_WIP」的查询才看得到, 即下面 planWideConsumptions。
+        MaterialConsumption upstreamWipConsumption = covered(MB_A);
+        OrderCostBreakdownService svc = service(
+                List.of(row(MB_A, "20"), row(MB_B, "20")), new BigDecimal("2.50"),
+                List.of(upstreamWipConsumption));
+
+        // covered(当前批次自己的消耗行) 传空 —— 复现旧代码「看不到上游 WIP 批次消耗」的场景。
+        List<MaterialConsumption> got = merge(svc, batch(10909L), new ArrayList<>(), new HashSet<>());
+
+        assertEquals(1, got.size(),
+                "MB_A 已经被上游 CLERK_WIP 批次消耗过, 结单又并入了一次 —— 这正是 prod 的双计缺陷: "
+                        + got.stream().map(MaterialConsumption::getBatchId).toList());
+        assertEquals(MB_B, got.get(0).getBatchId(), "唯一该并入的是从未被消耗过的 MB_B");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 物料批次不在计划任何一处消耗记录里时仍合法并入 (人工补录场景, 不能被误伤)")
+    void materialNeverConsumedAnywhereInThePlanIsStillMerged() {
+        OrderCostBreakdownService svc = service(
+                List.of(row(MB_A, "20"), row(MB_B, "20")), new BigDecimal("2.50"),
+                List.of(covered(MB_A)));   // 只有 MB_A 被计划内某批次消耗过, MB_B 从未出现
+
+        List<MaterialConsumption> got = merge(svc, batch(10909L), new ArrayList<>(), new HashSet<>());
+
+        assertEquals(1, got.size());
+        assertEquals(MB_B, got.get(0).getBatchId(), "MB_B 从未被消耗过, 不该被计划全量去重误伤");
+    }
+
+    @Test
+    @DisplayName("🔴 计划全量消耗行读挂了不让整个成本分解崩, 降级为仅按当前批次去重 (旧行为)")
+    void planWideLookupFailureDegradesToBatchScopedDedup() {
+        OrderCostBreakdownService svc = service(
+                List.of(row(MB_A, "20"), row(MB_B, "20")), new BigDecimal("2.50"));
+        when(consumptionRepo.findByFactoryIdAndPlanProductionBatchesIncludingWip(anyString(), anyString()))
+                .thenThrow(new IllegalStateException("db down"));
+
+        // covered 参数(当前批次自己的消耗行)仍然生效 —— 只是计划全量那一层降级为「本轮没有额外去重」。
+        List<MaterialConsumption> got = merge(
+                svc, batch(10909L), new ArrayList<>(List.of(covered(MB_A))), new HashSet<>());
+
+        assertEquals(1, got.size(), "计划全量查询读挂了应该降级, 而不是抛出去把整个成本分解带崩");
         assertEquals(MB_B, got.get(0).getBatchId());
     }
 
