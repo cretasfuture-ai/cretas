@@ -472,6 +472,31 @@
 
 **worktree 清理**（Opus 子代理）：72 → 39，主仓 `web-admin/node_modules` 前后均 251，junction 0 指向仓库。摘 32（19 个 PR MERGED + 11 detached 在 origin/main 上 + 2 内容已进 main），删 19 条本地分支。4 个目录被活进程占着句柄未删（⛔ 未升级强删），7 个停在本地 main 的空树按「拿不准就留」保留。⚠️ 与本次无关的旧账：主仓 `frontend/CretasFoodTrace/node_modules` 自 08-31 起为空。
 
+### 📌 2026-09-05 02:02 增量（系统时钟）· 四条登记项清零 + 两条衍生, 发 32/33/34
+
+**起点**：owner 裁定「剩下四条登记不修的，全做完」。派三条独立线并行（成本 / 财务 / 安全），衍生出两票。
+
+| PR | 内容 | 发布 |
+|---|---|---|
+| #586 | `DataScopeResolver` 认不出的 role_code → `default: ALL` 补成 fail-closed `SELF`，节流 WARN 复用同一套 | 发 32 |
+| #587 | 结算去重从「批次级、数量盲」改为 `contribution = max(0, settlementQty − consumedQty)`，钳零；客供 `unitPrice` 保留原价的不变式钉死 | 发 32 |
+| #588 | **AR 收款核销路径建出来**（仿 `PayableSettlementServiceImpl`，但 AR 无指定发票入口 ⇒ 按 SO 内 FIFO 分摊 + `PESSIMISTIC_WRITE`）；账龄表 CUSTOMER 侧翻成读 outstanding | 发 32 |
+| #589 | `role_definitions.unactivated.data_scope` `ALL → SELF`（迁移 `_31`）——DB 行优先于 switch，#586 那个 case 在 prod 永不触发 | 发 33 |
+| #590 | material-batches 读端点加 `@RequirePermission`；RN `Promise.all → settleAllIndependently` | 发 34 |
+
+**发布判据**：三次均 `DEPLOY_EXIT=0` + `RELEASE_FINAL_STATUS` 恰 1 次 + jar mtime < 进程启动 + 标记命中 + 假串 0 + health 200。发 33 另在库里核到 `_31` installed(23:46:36) 且 `unactivated=SELF` / `factory_super_admin=ALL`（阴性对照）；发 34 用 **javap 按方法块**核注解（⚠️ `strings` 数不出来——常量池对同类内重复字符串去重，改动前后都是 1）。
+
+🔴 **#590 拆票，客户列表的门撤回 = 登记不改**。实测两条路都有真代价：加 `sales|finance` 门会挡住 `production_manager`（20 个计划里 **7 个挂客户**，全是 CUSTOMER_ORDER 来源）；给它开 `sales:read` 会连带打开 **17 个控制器 / 49 个端点**（含 ArAp、Invoice、PaymentRequest、PriceList）。⇒ **产品决策，待 owner 裁定**。当前状态：该端点对同厂任何已登录用户开放（Bug #318 的有意决定），而 L1 里 hr_admin / equipment_admin / quality_inspector / quality_manager / procurement_manager 对 sales 与 finance 均无权却读得到全厂 29 条客户。
+
+⚠️ **本轮新增登记不修**：① `material_consumptions` 无 unit 列、单位隐含跟批次走，prod 106 行两侧一致但**无约束保障**；② 同一批次可能以两个价进成本（消耗段 `mc.unit_price`、超出段 `mb.unit_price`，prod 370 行里 14 行不同）；③ 既有两条「不并入」断言分辨不了「整行丢弃 vs 并入 0」，该区别只由 #587 新增的 excess 测试守着 ⛔ 别删；④ AR `>5 分钟无 paymentReference` 的重放挡不住，而 #588 抬高了它的代价（会把发票推到 PAID）；⑤ `ar_ap_payment_allocations` 的列名/FK 名仍叫 `payable_*` 但已装 AR（命名债）；⑥ **`viewer`(level 50) seed 为 ALL，比 level 30 的一线更宽** —— 调查结论是 working-as-designed（除 system 外全模块只读、排除在价格与财审可见之外、prod 仅 2 个观察者账号），保持不动。
+
+🔴 **两条方法学教训**：
+1. **权威源分叉**（形态 D）：`PermissionServiceImpl.PERMISSION_MATRIX` 说 `finance_manager` 有 `sales:read`，而权威的 L1 `platform_role_permissions` 是 `-`。⛔ 估权限影响面一律查 L1，不看代码矩阵。
+2. **数据修复不能用代码测试守**：#589 改的是 seed 行，而它的变异打在 resolver 代码上——seed 被改回 `ALL` 那些单测一条都不会红。补了源码契约测试（`_31` 置 SELF + 无更高版本把它设回 ALL）。⚠️ 优先方案 testcontainers 被否：CI 现路由到自建 Mac mini，**那台没有 Docker**，照做会让整道闸起不来。
+3. **`_30` 作废勿用**（`spring.flyway.out-of-order=false`，将来建 `_30` 相对已应用的 `_31` 会被拒）。
+
+**CI 侧**：自建 runner 出过一次 `ENOENT .git/objects/e5` 的 checkout 失败，重跑即过。⚠️ 重跑后立刻读 `gh pr checks` 会看到**行数变少的假绿**（重跑的 job 尚未登记）——判据加了「行数 ≥ N 且 pending=0」。
+
 ## Scope 锁地图
 
 - `FIX-LSM-SUPPLIER-PRICE-REQUIRED-20260901`：仅 `web-admin/src/views/procurement/suppliers/SupplierDetailDrawer.vue` 与对应目标测试。⛔ 不得改 `permission.ts` 权限矩阵; 若判定需改后端/导入路径对空价格的行为 → 🔒 停在 PR 交协调者, 不自行落地。
