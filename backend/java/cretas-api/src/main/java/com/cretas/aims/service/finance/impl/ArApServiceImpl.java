@@ -229,6 +229,11 @@ public class ArApServiceImpl implements ArApService {
         // per-shipment 幂等键 (可空: recordReceivable 手工挂账无 source, 走 SO 级 409 防重复)。
         if (sourceType != null) transaction.setSourceType(sourceType);
         if (sourceId != null) transaction.setSourceId(sourceId);
+        // 🔴 finance parity fix: AP_INVOICE 挂账一直调 initializeOpenItem, AR_INVOICE 这一路
+        // 从未调过 —— prod 实测 AR_INVOICE 0/15 行有 outstanding_amount/payment_status,
+        // AP_INVOICE 31/31 行都有 (同一张表, 同样的字段, 只是这条路径漏接)。见
+        // db/flyway/V20261101_27__ar_invoice_open_item_backfill.sql 的存量回填。
+        initializeOpenItem(transaction);
 
         log.info("应收挂账: factoryId={}, customerId={}, sourceId={}, amount={}, balance={}",
                 factoryId, customerId, sourceId, amount, newBalance);
@@ -353,7 +358,7 @@ public class ArApServiceImpl implements ArApService {
         // per-receive 幂等键 (可空: recordPayable 手工挂账无 source, 走 PO 级 409 防重复)。
         if (sourceType != null) transaction.setSourceType(sourceType);
         if (sourceId != null) transaction.setSourceId(sourceId);
-        initializePayableOpenItem(transaction);
+        initializeOpenItem(transaction);
 
         log.info("应付挂账: factoryId={}, supplierId={}, sourceId={}, amount={}, balance={}",
                 factoryId, supplierId, sourceId, amount, newBalance);
@@ -407,7 +412,7 @@ public class ArApServiceImpl implements ArApService {
                 amount, newBalance, dueDate, operatedBy, remark);
         transaction.setSourceType(sourceType);
         transaction.setSourceId(sourceId);
-        initializePayableOpenItem(transaction);
+        initializeOpenItem(transaction);
 
         ArApTransaction saved = transactionRepository.save(transaction);
         log.info("应付挂账: factoryId={}, supplierId={}, sourceType={}, sourceId={}, amount={}, balance={}",
@@ -1084,6 +1089,10 @@ public class ArApServiceImpl implements ArApService {
             });
 
             Map<String, Object> row = agingMap.get(cpId);
+            // ⚠️ 这个 SUPPLIER 守卫不是历史遗留, 是必须的: AR 的 open-item 字段目前只写不读,
+            // recordArPayment 尚未维护它们 (不减 AR_INVOICE.outstandingAmount) —— 在那之前
+            // 任何读路径都不得消费 AR 的 outstandingAmount/paymentStatus, 见 initializeOpenItem
+            // javadoc。⛔ 不要把这条守卫放宽到两侧 (CUSTOMER 也走 outstandingAmount)。
             BigDecimal amt = counterpartyType == CounterpartyType.SUPPLIER
                     && invoice.getOutstandingAmount() != null
                     ? invoice.getOutstandingAmount()
@@ -1209,8 +1218,24 @@ public class ArApServiceImpl implements ArApService {
         return transaction;
     }
 
-    /** Initialize every newly-created AP invoice as an auditable open item. */
-    private void initializePayableOpenItem(ArApTransaction transaction) {
+    /**
+     * Initialize every newly-created AR/AP invoice as an auditable open item
+     * (settled_amount / outstanding_amount / payment_status / currency_code).
+     *
+     * <p>🔴 Until 2026-09 this only ran for AP_INVOICE (persistPayable / recordPayableFromSource) —
+     * persistReceivable (AR_INVOICE) never called it, so every AR invoice was born with those
+     * four columns NULL. Both invoice types are "open items" in the same {@code ar_ap_transactions}
+     * ledger table and share the same {@link PayablePaymentStatus} enum, so this is one helper for
+     * both, not two — see {@code db/flyway/V20261101_27__ar_invoice_open_item_backfill.sql} for the
+     * historical-row backfill and the widened {@code ck_ar_ap_open_item} CHECK constraint.
+     *
+     * <p>⚠️ AR 的 open-item 字段目前只写不读: {@code recordArPayment} 尚未维护它们 (客户付款不会
+     * 减少某笔 AR_INVOICE 的 settled_amount/outstanding_amount, 也不会翻转它的 paymentStatus —
+     * 只有 Customer.currentBalance / SalesOrder.paidAmount 会更新)。⛔ 在那条维护路径补上之前,
+     * 任何读路径都不得消费 AR_INVOICE 的 outstandingAmount/paymentStatus —— 它们写入时是对的,
+     * 此后会随真实收款静默失真。见 {@link #getAgingAnalysis} 里对应的 SUPPLIER 守卫。
+     */
+    private void initializeOpenItem(ArApTransaction transaction) {
         BigDecimal amount = transaction.getAmount() != null
                 ? transaction.getAmount().abs().setScale(2, java.math.RoundingMode.UNNECESSARY)
                 : null;

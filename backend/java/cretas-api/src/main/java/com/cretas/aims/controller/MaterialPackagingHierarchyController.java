@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.material.MaterialPackagingHierarchyDTO;
 import com.cretas.aims.exception.BusinessException;
@@ -56,9 +57,13 @@ public class MaterialPackagingHierarchyController {
 
     // 缺陷 46 (2026-09-02): 与 RawMaterialTypeController 同一批 —— 加 warehouse:read_write,
     // 使仓储角色新建/编辑原料类型时一并保存包装规格不再 403 (原来只认 production:read_write)。
+    // 缺陷 46 follow-up (2026-09-04, owner 拍板): 「只让仓储主管改」—— 与
+    // RawMaterialTypeController 的 create/update/delete 同一批加 @RequireRole, 见那边
+    // createMaterialType 上的完整注释。角色白名单必须与那边逐字节相同。
     @RequirePermission({"production:read_write", "warehouse:read_write"})
     @PutMapping("/by-material/{materialTypeId}")
     @Operation(summary = "保存某原料的包装换算 (upsert)", description = "支持多条包装单位直接换算到库存基本单位")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
     public ApiResponse<MaterialPackagingHierarchyDTO> upsert(
             @PathVariable String factoryId,
             @PathVariable String materialTypeId,
@@ -69,9 +74,11 @@ public class MaterialPackagingHierarchyController {
     }
 
     // 缺陷 46 (2026-09-02): 同上方 upsert —— 加 warehouse:read_write。
+    // 缺陷 46 follow-up (2026-09-04): 同上方 upsert —— 加 @RequireRole。
     @RequirePermission({"production:read_write", "warehouse:read_write"})
     @DeleteMapping("/by-material/{materialTypeId}")
     @Operation(summary = "删除某原料的包装换算", description = "软删除")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
             @PathVariable String materialTypeId) {

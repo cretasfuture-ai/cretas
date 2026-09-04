@@ -5608,9 +5608,91 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             sb.append("(已归集 ¥").append(known.stripTrailingZeros().toPlainString()).append(")");
         }
         sb.append(": ").append(joinMissingCostLabels(blocking)).append("。");
+        // 🔴 审计透明度补丁 (2026-09-04, PLAN-1788305552728-D94F7E22 复现): 「已归集 ¥X」只报了一个
+        // 汇总数, 审阅者验证不了它是不是把同一个物料批次算了两遍 —— prod 实测冰水批次 4cce21c0
+        // 就是这样藏进 ¥1.9538 里的(traceCost 算一次、结单并入又算一次)。把贡献最大的几条摆出来,
+        // 同一个 batchName 出现两次(depth 还不一样)就是双计的信号。
+        String contributions = joinCostContributionLabels(breakdown.getSources());
+        if (!contributions.isEmpty()) {
+            sb.append("已归集明细(按金额降序): ").append(contributions).append("。");
+        }
         sb.append("成品已按实收数量入库, 单位成本留空(不填 ¥0, 避免后续按零成本结转)。");
+        // 🔴 客供主料成本口径 (a)（2026-09-04）: 即便还差别的项拒绝, 也要让人看到客供料已经
+        // 按口径排除了 —— 不然会有人以为"还差单价"包括那些客供料, 白跑一趟去给客供料补价。
+        String customerSuppliedNote = describeCustomerSuppliedNote(breakdown);
+        if (customerSuppliedNote != null) {
+            sb.append(customerSuppliedNote);
+        }
         sb.append("下一步: 请先补录上述缺项, 再到成本核算处重新核对本计划成本。");
         return sb.toString();
+    }
+
+    /** 已归集明细最多列几项 —— 全部展开会把提示拉成几千字, 与 {@link #MAX_LISTED_MISSING_COST_ITEMS} 同一条纪律。 */
+    private static final int MAX_LISTED_COST_CONTRIBUTIONS = 5;
+
+    /**
+     * 把 {@code sources}(原料成本逐条回溯明细)按金额降序列出前 N 项, 供审阅者核对
+     * 「同一个批次是不是被算了两遍」——同一个 {@code batchName} 出现两次、{@code depth} 还不一样,
+     * 就是双计的信号(见类上方 {@link #describeCostUnavailableReason} javadoc)。
+     *
+     * @return 为空(无 sources 或全部金额未知)时返回空串, 调用方按空串跳过整段
+     */
+    static String joinCostContributionLabels(
+            List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost> sources) {
+        if (sources == null || sources.isEmpty()) {
+            return "";
+        }
+        List<com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost> sorted = sources.stream()
+                .filter(s -> s != null && s.getCost() != null)
+                .sorted(java.util.Comparator.comparing(
+                        com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost::getCost).reversed())
+                .toList();
+        if (sorted.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (com.cretas.aims.dto.yield.OrderCostBreakdownDTO.SourceCost s : sorted) {
+            if (shown >= MAX_LISTED_COST_CONTRIBUTIONS) {
+                sb.append("; 等共 ").append(sorted.size()).append(" 项");
+                break;
+            }
+            if (shown > 0) {
+                sb.append("; ");
+            }
+            String name = s.getBatchName() != null ? s.getBatchName()
+                    : (s.getBatchId() != null ? s.getBatchId() : "?");
+            sb.append(name).append(" ¥").append(s.getCost().stripTrailingZeros().toPlainString());
+            if (s.getDepth() != null) {
+                sb.append(" 深度").append(s.getDepth());
+            }
+            shown++;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04）：来料加工下，客供主料成本显式记 0
+     * （加工费口径），不是「缺价、算不出」——这句话把这件事说给人看，⛔ 不要让它安静地
+     * 变成「怎么这批的原料成本比想的低」这种疑问。
+     *
+     * @return {@code null} = 本计划没有客供料按口径记 0 的情况, 无需多嘴
+     */
+    public static String describeCustomerSuppliedNote(
+            com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown) {
+        if (breakdown == null || breakdown.getCustomerSuppliedItems() == null
+                || breakdown.getCustomerSuppliedItems().isEmpty()) {
+            return null;
+        }
+        List<String> items = breakdown.getCustomerSuppliedItems();
+        String batchNames = items.stream()
+                .map(item -> {
+                    int sep = item.indexOf(':');
+                    return sep < 0 ? item : item.substring(sep + 1);
+                })
+                .collect(java.util.stream.Collectors.joining("、"));
+        return "含客供料 " + items.size() + " 项按加工口径记 ¥0(不计入我方原料成本, 客户自供不代购): "
+                + batchNames + "。";
     }
 
     /** 最多列几项 —— 全部展开会把提示拉成几千字。 */
@@ -7477,9 +7559,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         productionBatchRepository.saveAll(productionBatches);
 
-        log.info("结单成本重算完成 factory={} plan={} settlement={} total={} unit={} outputs={} fg={} rework={}",
+        // 🔴 客供主料成本口径 (a)（2026-09-04）: 显式说出「这次重算含客供料 N 项按加工口径记 0」——
+        // 见类上方 describeCustomerSuppliedNote javadoc, ⛔ 不能只报一个总成本让人猜为什么比预期低。
+        String customerSuppliedNote = describeCustomerSuppliedNote(breakdown);
+        log.info("结单成本重算完成 factory={} plan={} settlement={} total={} unit={} outputs={} fg={} rework={}"
+                        + " customerSuppliedItems={}",
                 factoryId, planId, settlement.getId(), totalCost, sharedUnitCost,
-                lines.size(), finishedGoodsCount, reworkRows.size());
+                lines.size(), finishedGoodsCount, reworkRows.size(),
+                breakdown.getCustomerSuppliedItemCount());
         return com.cretas.aims.dto.production.ProductionCostRecalculationResponse.builder()
                 .productionPlanId(planId)
                 .settlementId(settlement.getId())
@@ -7489,6 +7576,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .finishedGoodsBatchCount(finishedGoodsCount)
                 .reworkWipCount(reworkRows.size())
                 .productionBatchCount(productionBatches.size())
+                // 🔴 审计透明度补丁 (2026-09-04): 让审阅者能看到逐项明细, 而不是只有一个总数。
+                .costContributions(breakdown.getSources())
+                .customerSuppliedItems(breakdown.getCustomerSuppliedItems())
+                .customerSuppliedNote(customerSuppliedNote)
                 .build();
     }
 

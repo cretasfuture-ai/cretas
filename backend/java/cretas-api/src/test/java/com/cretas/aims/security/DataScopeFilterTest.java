@@ -1,18 +1,19 @@
 package com.cretas.aims.security;
 
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.config.RoleDefinition;
 import com.cretas.aims.entity.enums.DataScope;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.repository.RoleDefinitionRepository;
 import com.cretas.aims.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.EmptyResultDataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
 
 import java.util.Optional;
 
@@ -40,8 +41,17 @@ import static org.mockito.Mockito.*;
 class DataScopeFilterTest {
 
     @Mock UserRepository userRepository;
-    @Mock JdbcTemplate jdbcTemplate;
-    @InjectMocks DataScopeResolver resolver;
+    @Mock RoleDefinitionRepository roleDefinitionRepository;
+
+    // 手工 new, 不用 @InjectMocks —— DataScopeResolver 有多个构造器 (RoleDefinitionRepository
+    // 升级成 JPA entity 之后, 2026-09-04 修复的一部分), Mockito 的构造器注入策略会挑参数最多
+    // 的那个(含 Clock), 而这里没有 @Mock Clock, 显式 new 更不脆弱 (同 InventoryLowStockEventPublisherTest 的做法).
+    private DataScopeResolver resolver;
+
+    @BeforeEach
+    void setUp() {
+        resolver = new DataScopeResolver(userRepository, roleDefinitionRepository, java.time.Clock.systemUTC());
+    }
 
     @AfterEach
     void cleanup() {
@@ -65,7 +75,7 @@ class DataScopeFilterTest {
     void resolve_nullUser_returnsNull() {
         assertNull(resolver.resolve(null));
         verifyNoInteractions(userRepository);
-        verifyNoInteractions(jdbcTemplate);
+        verifyNoInteractions(roleDefinitionRepository);
     }
 
     @Test
@@ -76,13 +86,12 @@ class DataScopeFilterTest {
     }
 
     @Test
-    @DisplayName("R3: operator 一线员工 + DB 无 data_scope 列 → fallback SELF (hard default)")
+    @DisplayName("R3: operator 一线员工 + role_definitions 无这一行 → fallback SELF (hard default)")
     void resolve_operatorFallback_returnsSelf() {
         User u = user(10L, "operator", "F001", "production");
         when(userRepository.findById(10L)).thenReturn(Optional.of(u));
-        // 模拟 DB 列不存在 (migration 未跑) 或 exception
-        when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("operator")))
-                .thenThrow(new EmptyResultDataAccessException(1));
+        // 模拟角色未配置 (role_definitions 里没有这一行) —— 正常兼容路径, 不是异常
+        when(roleDefinitionRepository.findByRoleCode("operator")).thenReturn(Optional.empty());
 
         DataScopeContext ctx = resolver.resolve(10L);
         assertNotNull(ctx);
@@ -94,12 +103,26 @@ class DataScopeFilterTest {
     }
 
     @Test
-    @DisplayName("R4: factory_super_admin → ALL (硬默认, 即使 DB 无值)")
+    @DisplayName("R3b (2026-09-04 回归): yield_operator 硬默认必须是 SELF, 不是 ALL")
+    void resolve_yieldOperatorFallback_returnsSelf() {
+        // 此前遗漏 —— yield_operator 落进硬默认 switch 的 default 分支拿到了 ALL,
+        // 而它是与 operator 同级(Level 30)的一线报工岗, 应享受同样的 SELF 限制.
+        // LIUSHANMEN 工厂 9 个 yield_operator 账号(该厂最大角色群体)受此影响.
+        User u = user(40L, "yield_operator", "LIUSHANMEN", "production");
+        when(userRepository.findById(40L)).thenReturn(Optional.of(u));
+        when(roleDefinitionRepository.findByRoleCode("yield_operator")).thenReturn(Optional.empty());
+
+        DataScopeContext ctx = resolver.resolve(40L);
+        assertEquals(DataScope.SELF, ctx.getScope(), "yield_operator 一线报工岗硬默认 SELF");
+        assertTrue(ctx.isFiltered(), "SELF scope 应触发过滤");
+    }
+
+    @Test
+    @DisplayName("R4: factory_super_admin → ALL (硬默认, 即使 role_definitions 无这一行)")
     void resolve_superAdmin_returnsAll() {
         User u = user(1L, "factory_super_admin", "F001", "all");
         when(userRepository.findById(1L)).thenReturn(Optional.of(u));
-        when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("factory_super_admin")))
-                .thenThrow(new EmptyResultDataAccessException(1));
+        when(roleDefinitionRepository.findByRoleCode("factory_super_admin")).thenReturn(Optional.empty());
 
         DataScopeContext ctx = resolver.resolve(1L);
         assertEquals(DataScope.ALL, ctx.getScope());
@@ -107,13 +130,13 @@ class DataScopeFilterTest {
     }
 
     @Test
-    @DisplayName("R5: DB 有 data_scope 列 + 值 → 优先 DB 值, 覆盖硬默认")
+    @DisplayName("R5: role_definitions 有配置行 → 优先 DB 值, 覆盖硬默认")
     void resolve_dbValueOverridesHardDefault() {
         User u = user(20L, "sales_manager", "F001", "sales");
         when(userRepository.findById(20L)).thenReturn(Optional.of(u));
         // sales_manager 硬默认 ALL, 但 DB 配为 DEPT_AND_BELOW
-        when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("sales_manager")))
-                .thenReturn("DEPT_AND_BELOW");
+        when(roleDefinitionRepository.findByRoleCode("sales_manager")).thenReturn(Optional.of(
+                RoleDefinition.builder().roleCode("sales_manager").dataScope("DEPT_AND_BELOW").build()));
 
         DataScopeContext ctx = resolver.resolve(20L);
         assertEquals(DataScope.DEPT_AND_BELOW, ctx.getScope(),
@@ -127,12 +150,26 @@ class DataScopeFilterTest {
     void resolve_invalidDbValue_fallsBack() {
         User u = user(30L, "warehouse_worker", "F001", "warehouse");
         when(userRepository.findById(30L)).thenReturn(Optional.of(u));
-        when(jdbcTemplate.queryForObject(anyString(), eq(String.class), eq("warehouse_worker")))
-                .thenReturn("BOGUS_VALUE");  // 无效枚举
+        when(roleDefinitionRepository.findByRoleCode("warehouse_worker")).thenReturn(Optional.of(
+                RoleDefinition.builder().roleCode("warehouse_worker").dataScope("BOGUS_VALUE").build()));  // 无效枚举
 
         DataScopeContext ctx = resolver.resolve(30L);
         assertEquals(DataScope.SELF, ctx.getScope(),
                 "无效枚举 → fallback warehouse_worker 硬默认 SELF");
+    }
+
+    @Test
+    @DisplayName("R6b (2026-09-04 新增): role_definitions 查询本身抛异常 → fail-closed SELF, 不用角色硬默认")
+    void resolve_lookupThrows_failsClosedToSelfEvenForAdmin() {
+        User u = user(1L, "factory_super_admin", "F001", "all");
+        when(userRepository.findById(1L)).thenReturn(Optional.of(u));
+        when(roleDefinitionRepository.findByRoleCode("factory_super_admin"))
+                .thenThrow(new InvalidDataAccessResourceUsageException(
+                        "PreparedStatementCallback; bad SQL grammar [SELECT data_scope FROM role_definitions WHERE role_code = ?]"));
+
+        DataScopeContext ctx = resolver.resolve(1L);
+        assertEquals(DataScope.SELF, ctx.getScope(),
+                "查询失败必须 fail-closed 到 SELF, 不能沿用 factory_super_admin 的硬默认 ALL");
     }
 
     @Test

@@ -66,6 +66,12 @@ on:
       #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
+      # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
+      # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
+      # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
+      # 的 PR 恰好是它要守的漂移, 不登记这两条它就看不见。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RawMaterialTypeController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/MaterialPackagingHierarchyController.java'
       # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
       # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
       # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。
@@ -135,6 +141,12 @@ on:
       #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
+      # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
+      # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
+      # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
+      # 的 PR 恰好是它要守的漂移, 不登记这两条它就看不见。
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RawMaterialTypeController.java'
+      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/MaterialPackagingHierarchyController.java'
       # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
       # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
       # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。

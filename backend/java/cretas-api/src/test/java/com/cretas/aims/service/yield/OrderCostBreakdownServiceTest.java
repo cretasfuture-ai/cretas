@@ -7,6 +7,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.bom.BomVersion;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
@@ -183,6 +184,164 @@ class OrderCostBreakdownServiceTest {
 
         assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("7170"); // 回溯到原料层
         assertThat(dto.getSources().get(0).getDepth()).isEqualTo(2);
+    }
+
+    // ── 客供主料成本口径 (a)（owner 裁定，2026-09-04）:
+    //    CUSTOMER_OWNED 且无价的主料显式记 0（不计入原料成本），不是「缺价、算不出」。
+    //    需要 auditEligible=true 才会触碰 RAW_MATERIAL_PRICE 这道闸 —— stubOneBatch 的批次没挂
+    //    productionPlanId，auditEligible 恒 false，本组测试单独搭一套「批次挂计划 + 计划有 BOM」的桩。 ──
+
+    /** 让 {@code plan.getSelectedBomRecipeId() != null} ⇒ auditEligible=true, RAW_MATERIAL_PRICE 才会被检查。 */
+    private ProductionBatch stubAuditEligiblePlan(String planId, Long batchId, String qty,
+                                                  List<MaterialConsumption> cons) {
+        ProductionPlan p = plan(planId);
+        p.setFactoryId(F);
+        p.setSelectedBomRecipeId("BOM-CS-1");
+        when(planRepository.findByFactoryIdAndSourceOrderId(F, ORDER)).thenReturn(List.of(p));
+        when(planRepository.findByIdAndFactoryId(planId, F)).thenReturn(Optional.of(p));
+
+        ProductionBatch b = batch(batchId, qty);
+        b.setFactoryId(F);
+        b.setProductionPlanId(planId);
+        b.setEquipmentCost(BigDecimal.ZERO);
+        b.setOtherCost(BigDecimal.ZERO);
+        when(batchRepository.findByFactoryIdAndProductionPlanIdIn(eq(F), any())).thenReturn(List.of(b));
+        when(yieldReportService.getYield(F, batchId))
+                .thenReturn(BatchYieldDTO.builder().totalLaborCost(BigDecimal.ZERO).steps(List.of()).build());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(batchId, F)).thenReturn(cons);
+        return b;
+    }
+
+    private MaterialConsumption rawCons(String srcBatchId, String qty) {
+        MaterialConsumption c = new MaterialConsumption();
+        c.setFactoryId(F);
+        c.setBatchId(srcBatchId);
+        c.setQuantity(new BigDecimal(qty));
+        c.setSourceType("RAW_MATERIAL");
+        // 单价/合计故意留 null —— 复现「批次没有可验证单价」的真实形态。
+        return c;
+    }
+
+    private MaterialBatch materialBatch(String id, String batchNumber, InventoryOwnership ownership,
+                                        String unitPrice) {
+        MaterialBatch m = new MaterialBatch();
+        m.setId(id);
+        m.setBatchNumber(batchNumber);
+        m.setQuantityUnit("kg");
+        m.setOwnership(ownership);
+        m.setUnitPrice(unitPrice == null ? null : new BigDecimal(unitPrice));
+        return m;
+    }
+
+    @Test
+    @DisplayName("🔴🔴 客供主料成本口径(a): CUSTOMER_OWNED 且无价的批次显式记 0, 不阻断 costComplete, "
+            + "进 customerSuppliedItems 而不是 missingCostItems (prod 实测: 客供1399上脑+冰水+纸箱)")
+    void customerSuppliedUnpricedRawMaterialIsExplicitZeroNotBlocking() {
+        MaterialConsumption customerRow = rawCons("MB-1399SN", "5");
+        MaterialConsumption iceRow = cons("MB-ICE", "2", "1.5", "3.00");
+        iceRow.setSourceType("RAW_MATERIAL");
+        stubAuditEligiblePlan("PLAN-CS-1", 9101L, "9.8", List.of(customerRow, iceRow));
+
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1399SN", F)).thenReturn(Optional.of(
+                materialBatch("MB-1399SN", "1399上脑-CS-0001", InventoryOwnership.CUSTOMER_OWNED, null)));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-ICE", F)).thenReturn(Optional.of(
+                materialBatch("MB-ICE", "冰水-0001", InventoryOwnership.COMPANY_OWNED, "1.5")));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getMissingCostItems())
+                .noneMatch(item -> item.startsWith("RAW_MATERIAL_PRICE:"));
+        assertThat(dto.getCustomerSuppliedItems())
+                .hasSize(1)
+                .allMatch(item -> item.equals("CUSTOMER_SUPPLIED:1399上脑-CS-0001"));
+        assertThat(dto.getCustomerSuppliedItemCount()).isEqualTo(1);
+        assertThat(dto.isCostComplete()).isTrue();
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("3.00"); // 只有冰水计入, 客供料记 0
+        assertThat(dto.getTotalCost()).isNotNull();
+        assertThat(dto.getTotalCost().signum()).isPositive();
+
+        // rawMaterialDetails: 客供那一行诚实标成 CUSTOMER_SUPPLIED, amount=0(不是 null/不是缺价)
+        OrderCostBreakdownDTO.RawMaterialDetail customerDetail = dto.getRawMaterialDetails().stream()
+                .filter(d -> "1399上脑-CS-0001".equals(d.getBatchNumber())).findFirst().orElseThrow();
+        assertThat(customerDetail.getCollectionStatus()).isEqualTo("CUSTOMER_SUPPLIED");
+        assertThat(customerDetail.getAmount()).isEqualByComparingTo("0");
+        assertThat(customerDetail.getMissingReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("🔴🔴 终审订正: CUSTOMER_OWNED 且【有价】的批次也记 0 —— 上一版把「有没有价」当成了"
+            + "前置条件, 有价的客供批会漏网走正常计价 (prod 实测 CUSTOMER_OWNED 20 批里 3 批有价)")
+    void customerSuppliedPricedRawMaterialIsStillExplicitZero() {
+        // 客供批次这次【有价】(440.00) —— 复现终审指出的漏洞: 旧代码
+        // if (!rawPriceKnown) { if (customerSupplied) … } 会让"有价的客供批"直接跳过整段判断,
+        // 单价原样算进我方原料成本。
+        MaterialConsumption customerRow = cons("MB-1399SN-PRICED", "5", "88.00", "440.00");
+        customerRow.setSourceType("RAW_MATERIAL");
+        MaterialConsumption iceRow = cons("MB-ICE-2", "2", "1.5", "3.00");
+        iceRow.setSourceType("RAW_MATERIAL");
+        stubAuditEligiblePlan("PLAN-CS-4", 9104L, "9.8", List.of(customerRow, iceRow));
+
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1399SN-PRICED", F)).thenReturn(Optional.of(
+                materialBatch("MB-1399SN-PRICED", "1399上脑-CS-0002", InventoryOwnership.CUSTOMER_OWNED, "88.00")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-ICE-2", F)).thenReturn(Optional.of(
+                materialBatch("MB-ICE-2", "冰水-0002", InventoryOwnership.COMPANY_OWNED, "1.5")));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        // 有价的客供批(440.00)不该被算进原料成本 —— 只有冰水的 3.00, ⛔ 不是 3.00+440.00=443.00
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("3.00");
+        assertThat(dto.getCustomerSuppliedItems())
+                .hasSize(1)
+                .allMatch(item -> item.equals("CUSTOMER_SUPPLIED:1399上脑-CS-0002"));
+        assertThat(dto.getMissingCostItems())
+                .noneMatch(item -> item.startsWith("RAW_MATERIAL_PRICE:"));
+        assertThat(dto.isCostComplete()).isTrue();
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("3.00");
+
+        OrderCostBreakdownDTO.RawMaterialDetail customerDetail = dto.getRawMaterialDetails().stream()
+                .filter(d -> "1399上脑-CS-0002".equals(d.getBatchNumber())).findFirst().orElseThrow();
+        assertThat(customerDetail.getCollectionStatus()).isEqualTo("CUSTOMER_SUPPLIED");
+        assertThat(customerDetail.getAmount()).isEqualByComparingTo("0"); // ⛔ 不是 440.00
+        // unitPrice 仍如实展示批次自己记录的价(信息性, 不参与我方成本累加)——不是缺价, 是不计入。
+        assertThat(customerDetail.getUnitPrice()).isEqualByComparingTo("88.00");
+
+        OrderCostBreakdownDTO.SourceCost customerSource = dto.getSources().stream()
+                .filter(s -> "1399上脑-CS-0002".equals(s.getBatchName())).findFirst().orElseThrow();
+        assertThat(customerSource.getCost()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("阴性对照: COMPANY_OWNED(工厂自有) 批次无价仍然阻断 —— 不能把口径(a)泄漏成「所有缺价都记0」")
+    void companyOwnedUnpricedRawMaterialStillBlocks() {
+        MaterialConsumption companyRow = rawCons("MB-COMPANY-UNPRICED", "5");
+        stubAuditEligiblePlan("PLAN-CS-2", 9102L, "9.8", List.of(companyRow));
+
+        when(materialBatchRepository.findByIdAndFactoryId("MB-COMPANY-UNPRICED", F)).thenReturn(Optional.of(
+                materialBatch("MB-COMPANY-UNPRICED", "工厂自有无价料", InventoryOwnership.COMPANY_OWNED, null)));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getMissingCostItems())
+                .anyMatch(item -> item.equals("RAW_MATERIAL_PRICE:MB-COMPANY-UNPRICED"));
+        assertThat(dto.getCustomerSuppliedItems()).isNullOrEmpty();
+        assertThat(dto.getCustomerSuppliedItemCount()).isZero();
+        assertThat(dto.isCostComplete()).isFalse();
+        assertThat(dto.getTotalCost()).isNull(); // 不完整成本绝不伪造 ¥0/部分值去喂 COGS
+    }
+
+    @Test
+    @DisplayName("批次不可解析(mb==null)时按【真的不知道】处理, ⛔ 不当客供 —— 数据缺口不能被静默当成业务决定")
+    void unresolvableBatchIsTreatedAsUnknownNotCustomerSupplied() {
+        MaterialConsumption orphanRow = rawCons("MB-GHOST", "5");
+        stubAuditEligiblePlan("PLAN-CS-3", 9103L, "9.8", List.of(orphanRow));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-GHOST", F)).thenReturn(Optional.empty());
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getMissingCostItems())
+                .anyMatch(item -> item.equals("RAW_MATERIAL_PRICE:MB-GHOST"));
+        assertThat(dto.getCustomerSuppliedItems()).isNullOrEmpty();
+        assertThat(dto.isCostComplete()).isFalse();
     }
 
     @Test

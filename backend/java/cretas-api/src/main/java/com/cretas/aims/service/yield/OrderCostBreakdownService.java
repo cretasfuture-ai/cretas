@@ -8,6 +8,7 @@ import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.ProductionSettlementConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -176,6 +177,9 @@ public class OrderCostBreakdownService {
         boolean equipmentComplete = true;
         boolean otherComplete = true;
         List<String> missingCostItems = new ArrayList<>();
+        // 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04）：CUSTOMER_OWNED 且无价的批次记在这里，
+        // 显式记 0，⛔ 不进 missingCostItems（那会阻断 costComplete，见下方 RAW_MATERIAL 分支）。
+        List<String> customerSuppliedItems = new ArrayList<>();
         // 同一产品的多个批次, 各自绑的 BOM 版本 —— 用来发现「期间改过配方」。
         // 不一致时这几批的成本/毛利【不可横向比较】: 「这批毛利低」会被读成生产问题,
         // 而实际是换了配方。⇒ 必须提示, 不能让人默默地比。
@@ -352,6 +356,24 @@ public class OrderCostBreakdownService {
                     }
                     continue;
                 }
+                // 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04，终审订正）：来料加工下，客供
+                // (ownership=CUSTOMER_OWNED) 主料成本恒记 0，不管这个批次有没有已知单价。
+                // ⛔ 上一版把「有没有价」当成了前置条件 (if (!rawPriceKnown) { if (customerSupplied) …}),
+                // 导致「有价的客供批」会先被当成价格已知走正常计价——prod 实测 CUSTOMER_OWNED 20 个
+                // 批次里 3 个有价，恰好会中这个漏洞（终审指出）。现在先按 ownership 判：客供就无条件
+                // 把 cost 强制归零，再走后面的 raw 累加/sources/明细——有价也不用，因为那本就不是
+                // 我方成本。
+                // ⛔ 判 ownership 用【批次】自己的字段（与 CustomerSuppliedSettlementCoverageGuard
+                // #filterCustomerOwned 同一条纪律）——不用物料类别、不用 plan.materialSupplyMode 推,
+                // 同一计划里客供原料与工厂自有辅料混用是正常形态（prod 实测 PLAN-...-34F8CD82：
+                // 客供 1399上脑 + 工厂自购冰水/L1纸箱）。mb==null（批次不可解析）按【真的不知道】处理，
+                // ⛔ 不当客供——数据缺口不能被静默当成一个已知的业务决定。
+                boolean customerSupplied = mb != null
+                        && InventoryOwnership.CUSTOMER_OWNED == mb.getOwnership();
+                if (customerSupplied) {
+                    cost = BigDecimal.ZERO;
+                    customerSuppliedItems.add("CUSTOMER_SUPPLIED:" + mb.getBatchNumber());
+                }
                 raw = raw.add(cost);
                 sources.add(SourceCost.builder()
                         .batchId(c.getBatchId())
@@ -362,9 +384,11 @@ public class OrderCostBreakdownService {
                         .cost(cost)
                         .depth(depth)
                         .build());
+                // ⛔ 不在 customerSupplied 分支里用 rawPriceKnown 做判断——客供已经无条件赢了，
+                // 这个标志只在非客供的分支里才有意义（是否真的缺价、要不要阻断）。
                 boolean rawPriceKnown = c.getTotalCost() != null || c.getUnitPrice() != null
                         || cost.signum() != 0;
-                if (!rawPriceKnown && auditEligible) {
+                if (!customerSupplied && !rawPriceKnown && auditEligible) {
                     missingCostItems.add("RAW_MATERIAL_PRICE:" + c.getBatchId());
                 }
                 rawMaterialDetails.add(RawMaterialDetail.builder()
@@ -374,10 +398,13 @@ public class OrderCostBreakdownService {
                         .quantity(c.getQuantity())
                         .unit(mb != null ? mb.getQuantityUnit() : "kg")
                         .unitPrice(c.getUnitPrice())
-                        .priceSource("MATERIAL_CONSUMPTION_SNAPSHOT")
-                        .amount(rawPriceKnown ? cost : null)
-                        .collectionStatus(rawPriceKnown ? "COLLECTED" : "MISSING_PRICE")
-                        .missingReason(rawPriceKnown ? null : "实际耗用记录缺少可验证单价/金额")
+                        .priceSource(customerSupplied
+                                ? "CUSTOMER_SUPPLIED" : "MATERIAL_CONSUMPTION_SNAPSHOT")
+                        .amount(customerSupplied || rawPriceKnown ? cost : null)
+                        .collectionStatus(customerSupplied ? "CUSTOMER_SUPPLIED"
+                                : (rawPriceKnown ? "COLLECTED" : "MISSING_PRICE"))
+                        .missingReason(customerSupplied || rawPriceKnown ? null
+                                : "实际耗用记录缺少可验证单价/金额")
                         .build());
 
                 // ★ SP-F ①b: 沿 WIP 链回溯上游 *生产批次* 的 人工/调料, 按与 traceCost 相同的
@@ -413,6 +440,8 @@ public class OrderCostBreakdownService {
             missingCostItems.add("SEMI_FINISHED_OR_FINISHED_FEED_PRICE");
         }
         missingCostItems = missingCostItems.stream().distinct().collect(Collectors.toCollection(ArrayList::new));
+        customerSuppliedItems = customerSuppliedItems.stream().distinct()
+                .collect(Collectors.toCollection(ArrayList::new));
         // ── 2026-08-25: 「不强制填写」这条裁定原来只落到了 knownCostSubtotal 上 ──────────────
         //   2026-07-30 owner 拍板「设备/其他成本不强制填写, 填了就算进去」。当时只让
         //   knownCostSubtotal 在 costComplete=false 时不被清空, 而 costComplete 自己
@@ -539,6 +568,8 @@ public class OrderCostBreakdownService {
                 .costComplete(costComplete)
                 .missingCostItemCount(missingCostItems.size())
                 .missingCostItems(missingCostItems)
+                .customerSuppliedItemCount(customerSuppliedItems.size())
+                .customerSuppliedItems(customerSuppliedItems)
                 .rawMaterialDetails(rawMaterialDetails)
                 .packagingDetails(packagingDetails)
                 .laborDetails(laborDetails)
@@ -725,6 +756,17 @@ public class OrderCostBreakdownService {
      * 净效果：{@code totalRawInput=0} → {@code totalCost=0} → {@code resolvePlanTotalCost} 返回 null
      * → 结单产出的成品 {@code unit_cost} 恒为空。
      *
+     * <h3>🔴 2026-09-04 缺陷订正: 「两表都有的组合 0 个」只在【当前批次自己】的维度上成立</h3>
+     * prod 实测 (只读探针, plan {@code PLAN-1788305552728-D94F7E22}, 成品批次 10909) 打脸了这句：
+     * {@code traceCost} 沿 {@code MaterialBatch.sourceDocId} 递归回溯的是<b>上游 9 个 CLERK_WIP
+     * 批次(10910→10918)自己的</b> {@code material_consumptions}, 那些行的
+     * {@code production_batch_id} 是上游批次自己的 id, 从不出现在当前(成品)批次自己的消耗行里 ——
+     * 于是叶子物料批次 4cce21c0(冰水) 被 {@code traceCost} 算一次(0.3800)、被本方法从结单又并入
+     * 一次(0.3738), 归集里出现两次。{@code covered} 参数只是「本批次自己」的消耗行, 不是「本计划」
+     * 的消耗行, 需要额外并上 {@link com.cretas.aims.repository.MaterialConsumptionRepository
+     * #findByFactoryIdAndPlanProductionBatchesIncludingWip}(见其 javadoc: 为什么不能直接按
+     * production_plan_id 查) 才是真正「计划全量、含 CLERK_WIP」的去重集合。
+     *
      * <h3>为什么是「转形状并入」而不是新写一套成本算法</h3>
      * 下游那一整套（{@code traceCost} 谱系回溯、包材/调料分类、缺价登记 {@code missingCostItems}、
      * 明细行）原样复用。⛔ 不复制第二份成本算法 —— 本仓形态 D：同一个东西有两份必定漂。
@@ -735,7 +777,8 @@ public class OrderCostBreakdownService {
      * ⛔ <b>取不到价时留 null，不填 0</b> —— 0 是个看起来很确定的假答案，
      * 而下游的 {@code missingCostItems} 正是靠 null 才报得出「缺价」。
      *
-     * @param covered 本批次已经从 {@code material_consumptions} 取到的行；同一物料批次不重复并入
+     * @param covered 本批次已经从 {@code material_consumptions} 取到的行（仅当前批次自己的维度，
+     *                不含上游 CLERK_WIP 批次；本方法内部会另外并上计划全量去重集合）
      * @param plansMerged 已并入过的计划 id；同一计划的多个生产批次只并入一次
      */
     private List<MaterialConsumption> settlementConsumptionsFor(
@@ -768,6 +811,10 @@ public class OrderCostBreakdownService {
                 .map(MaterialConsumption::getBatchId)
                 .filter(java.util.Objects::nonNull)
                 .collect(java.util.stream.Collectors.toSet());
+        // 🔴 bug fix 2026-09-04: covered 只是【当前(成品)批次自己】的消耗行, 看不到 traceCost
+        // 沿谱系回溯到的上游 CLERK_WIP 批次自己的消耗行 —— 补一个【计划全量、含 CLERK_WIP】的并集,
+        // 见上方类 javadoc「2026-09-04 缺陷订正」与仓库方法自身 javadoc。
+        coveredBatchIds.addAll(planWideCoveredMaterialBatchIds(factoryId, planId));
 
         List<MaterialConsumption> merged = new ArrayList<>();
         for (ProductionSettlementConsumption r : rows) {
@@ -799,6 +846,38 @@ public class OrderCostBreakdownService {
                     merged.size(), factoryId, planId);
         }
         return merged;
+    }
+
+    /**
+     * 计划全量(含 CLERK_WIP)已消耗的物料批次 id 集合 —— {@link #settlementConsumptionsFor} 的
+     * 去重集合补丁, 详见其上方类 javadoc「2026-09-04 缺陷订正」。
+     *
+     * <p>{@code consumptionRepository} 是构造器注入的 final 字段, 生产环境恒非 null；这里的
+     * null-guard 只是为了兼容本类既有的
+     * {@code mock(OrderCostBreakdownService.class, CALLS_REAL_METHODS)} 风格单测(不过构造器,
+     * 字段默认 null) —— 与 {@code settlementConsumptionRepository == null} 同一条纪律。
+     * 读挂了同样降级为「本轮不额外去重」(退回改前行为), 不让整个成本分解崩, 但留痕。
+     */
+    private java.util.Set<String> planWideCoveredMaterialBatchIds(String factoryId, String planId) {
+        if (consumptionRepository == null) {
+            return java.util.Set.of();
+        }
+        List<MaterialConsumption> planWide;
+        try {
+            planWide = consumptionRepository
+                    .findByFactoryIdAndPlanProductionBatchesIncludingWip(factoryId, planId);
+        } catch (RuntimeException ex) {
+            log.warn("[M67CostBreakdown] 计划全量消耗行读不出来(结单去重降级为仅当前批次) factory={} plan={}: {}",
+                    factoryId, planId, ex.getMessage());
+            return java.util.Set.of();
+        }
+        if (planWide == null) {
+            return java.util.Set.of();
+        }
+        return planWide.stream()
+                .map(MaterialConsumption::getBatchId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {
@@ -1544,6 +1623,7 @@ public class OrderCostBreakdownService {
                 .orderId(orderId).boxCount(0).hasData(false).priceMasked(maskPrice)
                 .calculatedAt(LocalDateTime.now()).calculationStatus("NO_DATA")
                 .missingCostItemCount(0).missingCostItems(List.of())
+                .customerSuppliedItemCount(0).customerSuppliedItems(List.of())
                 .sources(List.of()).byproducts(List.of())
                 .rawMaterialDetails(List.of()).packagingDetails(List.of()).laborDetails(List.of())
                 .build();
