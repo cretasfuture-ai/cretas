@@ -43,6 +43,13 @@ import java.util.Map;
  * Bug #318 fix (2026-04-18): @RequirePermission added only on write methods
  * (POST/PUT/DELETE) — reads stay open to any authenticated user (matches
  * pre-fix behavior, no regression). Prevents dispatcher/operator越权 POST/PUT/DELETE.
+ *
+ * <p>⚠️ 部分订正 (2026-09-04): {@link #getCustomerList} 是一个例外 — 它现在也挂了
+ * {@code @RequirePermission}，因为它是 {@code @DataScope("created_by")} 六处覆盖里
+ * 唯二两个控制器侧完全没有权限门的读端点之一 (另一个是 {@code MaterialBatchController
+ * #getMaterialBatchList})，见 {@code CustomerServiceImpl#getCustomerList}。这是对
+ * Bug #318「读保持开放」决定的<b>局部收紧</b>，不是回退：其余 GET 方法 (详情/搜索/统计/
+ * 导出等) 仍按原决定保持开放。</p>
  */
 @Slf4j
 @RestController
@@ -139,7 +146,16 @@ public class CustomerController {
 
     /**
      * 获取客户列表（分页）
+     *
+     * <p>缺陷 (2026-09-04): 本方法此前是本控制器上唯一一个既有 {@code @DataScope("created_by")}
+     * (见 {@code CustomerServiceImpl#getCustomerList}) 又没有 {@code @RequirePermission} 的读端点。
+     * {@code @DataScope} 只对解析为 SELF 的一线角色 (operator/warehouse_worker/quality_inspector/
+     * yield_operator) 收窄行；ALL-scope 角色 (含 L1 明确未授予 sales 模块的 hr_admin/equipment_admin/
+     * procurement_manager/finance_manager 等) 之前不受任何模块权限校验，读到的是全工厂客户列表。
+     * 现补齐 {@code sales:read_write / sales:read}，与同域读端点 {@code ReturnOrderController
+     * #listReturnsByCustomer} 用的形状一致。</p>
      */
+    @RequirePermission({"sales:read_write", "sales:read"})
     @GetMapping
     @Operation(summary = "获取客户列表（分页）", description = "分页查询指定工厂的客户列表，支持排序和筛选")
     public ApiResponse<PageResponse<CustomerDTO>> getCustomerList(
