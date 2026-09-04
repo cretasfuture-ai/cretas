@@ -95,10 +95,17 @@ import {
   type SalesOrderShipmentState,
 } from './salesOrderListUx';
 import { toDateString } from '@/utils/dateFormat';
+import { createAutoFullChildShipment, isFullQuickDeliveryPlan } from './deliveryAutoChild';
 
 // Quick action dialogs
 const deliveryDialogVisible = ref(false);
-const deliveryForm = ref<Record<string, any>>({ orderId: '', customerId: '', deliveryDate: '', items: [], notes: '' });
+const deliveryForm = ref<Record<string, any>>({
+  orderId: '', customerId: '', deliveryDate: '', items: [], notes: '',
+  // 缺陷40: list 页「创建发货单」没有 detail.vue 那种全量/分批单选, 但仍需要 deliveryMethod +
+  // trackingNumber 才能在覆盖全单时自动建子发运单 (isFullQuickDeliveryPlan)。默认物流配送,
+  // 与 detail.vue 的默认值一致。
+  deliveryMethod: 'LOGISTICS', trackingNumber: '',
+});
 
 const paymentDialogVisible = ref(false);
 const paymentForm = ref({ orderId: '', counterpartyId: '', amount: 0, paymentMethod: 'BANK_TRANSFER', notes: '' });
@@ -2188,6 +2195,10 @@ async function handleQuickDelivery(row: TableRow) {
     deliveryDate: today,
     deliveryAddress: row.deliveryAddress || row.customer?.shippingAddress || '',
     logisticsCompany: row.logisticsCompany || '',
+    // 缺陷40: 配送方式 + 运单号, 默认物流配送 (与 detail.vue 一致) —— 只用于"要不要自动建全量
+    // 子发运单", 不影响母单创建本身是否成功 (母单创建从不校验这两个字段, 见 submitQuickDelivery)。
+    deliveryMethod: 'LOGISTICS',
+    trackingNumber: '',
     items,
     // Issue #740: 销售只创建发货单 (任务单), 仓库 confirm 时再扣库存
     remark: `销售订单 ${row.orderNumber || ''} 发货单`,
@@ -2199,10 +2210,43 @@ async function submitQuickDelivery() {
   if (!deliveryForm.value.customerId) return ElMessage.warning('缺少客户信息');
   if (!deliveryForm.value.deliveryDate) return ElMessage.warning('请选择发货日期');
   try {
-    const res = await post(`/${factoryId.value}/sales/deliveries`, deliveryForm.value);
+    // 母单创建接口 (CreateDeliveryRequest) 不认识 deliveryMethod/trackingNumber 之外的字段;
+    // 显式列出要发的字段, 不要把整个 deliveryForm.value 原样丢过去 (避免 UI-only 字段漂进请求体)。
+    const {
+      salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany, items, remark,
+    } = deliveryForm.value;
+    const res = await post(`/${factoryId.value}/sales/deliveries`, {
+      salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany, items, remark,
+    });
     if (res.success) {
       // Issue #740: 文案改为"发货单已创建"明示后续等仓库 confirm
       ElMessage.success('发货单已创建, 等待仓库确认实发数量');
+      // 缺陷40 (#492 follow-up, 硬约束 8): list 页与 detail.vue 共用同一个「全量自动建子单」
+      // helper —— list 页没有显式的全量/分批单选, 用户没把任何一行数量改小 (isFullQuickDeliveryPlan)
+      // 就视为一次性全量发货。信息不足 (选了物流配送却没填公司/运单号) 时不阻断母单已创建成功,
+      // 只降级提示手动补建 —— 与 detail.vue 明细行匹配不上母单行时的降级路径一致。
+      const master = res.data as { id?: string; items?: TableRow[] } | null;
+      if (master?.id && isFullQuickDeliveryPlan(items)) {
+        const method = String(deliveryForm.value.deliveryMethod || '');
+        const hasInfoForAutoChild = method !== 'LOGISTICS'
+          || (String(deliveryForm.value.logisticsCompany || '').trim() !== ''
+            && String(deliveryForm.value.trackingNumber || '').trim() !== '');
+        const created = hasInfoForAutoChild
+          ? await createAutoFullChildShipment({
+            factoryId: factoryId.value,
+            masterId: master.id,
+            masterItems: Array.isArray(master.items) ? master.items : [],
+            plannedItems: items,
+            deliveryMethod: method || 'SELF_DELIVERY',
+            logisticsCompany: deliveryForm.value.logisticsCompany,
+            trackingNumber: deliveryForm.value.trackingNumber,
+            deliveryAddress: deliveryForm.value.deliveryAddress,
+          }).catch(() => false)
+          : false;
+        if (!created) {
+          ElMessage.warning('母发货单已创建，但未能自动建立全量子发运单，请在发货记录中重试');
+        }
+      }
       deliveryDialogVisible.value = false;
       loadData();
     } else {
@@ -2759,7 +2803,10 @@ function handleMergePurchase() {
         style="margin-bottom: 12px;"
       >
         <template #title>
-          <span style="font-size: 13px;">销售创建发货单 (任务单, 不扣库存), 仓库收到后填写实际发货数量并扣库存.</span>
+          <span style="font-size: 13px;">
+            销售创建发货单 (任务单, 不扣库存), 仓库收到后填写实际发货数量并扣库存.
+            若本次覆盖订单剩余全部数量, 会自动建立一张全量子发运单 (缺陷40).
+          </span>
         </template>
       </el-alert>
       <el-form :model="deliveryForm" label-width="100px">
@@ -2769,8 +2816,18 @@ function handleMergePurchase() {
         <el-form-item label="发货地址">
           <el-input v-model="deliveryForm.deliveryAddress" placeholder="收货地址 (默认取销售订单)" />
         </el-form-item>
-        <el-form-item label="物流公司">
-          <el-input v-model="deliveryForm.logisticsCompany" placeholder="物流公司 (可选, 仓库 confirm 时也可补填)" />
+        <el-form-item label="配送方式">
+          <el-radio-group v-model="deliveryForm.deliveryMethod">
+            <el-radio value="LOGISTICS">物流配送</el-radio>
+            <el-radio value="SELF_DELIVERY">自送</el-radio>
+            <el-radio value="SELF_PICKUP">客户自提</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司">
+          <el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链 (可选, 仓库 confirm 时也可补填)" />
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号">
+          <el-input v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号 (留空时仍能建母单, 但不会自动建全量子发运单)" />
         </el-form-item>
         <el-form-item label="计划发货数量">
           <div v-for="(item, idx) in deliveryForm.items" :key="idx" style="margin-bottom: 4px">

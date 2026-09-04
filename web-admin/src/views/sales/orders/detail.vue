@@ -52,6 +52,7 @@ import {
 } from './salesOrderSupplyContract';
 import { toDateString } from '@/utils/dateFormat';
 import { formatUnitPrice, salesOrderDisplayMoney, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
+import { createAutoFullChildShipment } from './deliveryAutoChild';
 
 const route = useRoute();
 const router = useRouter();
@@ -1095,24 +1096,17 @@ async function handleCreateDelivery() {
       // 后续由仓库确认并扣库；分批模式保留母单供销售逐批创建子发运单。
       if (deliveryForm.value.deliveryMode === 'FULL') {
         const master = res.data as { id?: string; items?: TableRow[] } | null;
-        const masterItems = Array.isArray(master?.items) ? master.items : [];
-        const childItems = filteredItems.map((planned) => {
-          const masterItem = masterItems.find((item) => String(item.salesOrderItemId || '') === String(planned.salesOrderItemId || ''))
-            || masterItems.find((item) => String(item.productTypeId || '') === String(planned.productTypeId || ''));
-          return masterItem ? { parentDeliveryItemId: Number(masterItem.id), quantity: Number(planned.deliveredQuantity) } : null;
-        }).filter((item): item is { parentDeliveryItemId: number; quantity: number } => Number.isFinite(Number(item?.parentDeliveryItemId)));
-        if (master?.id && childItems.length === filteredItems.length) {
-          await post(`/${factoryId.value}/sales/deliveries/${master.id}/shipments`, {
-            idempotencyKey: `web-full-shipment-${master.id}`,
-            plannedShipmentDate: toDateString(new Date()),
-            deliveryMethod: deliveryForm.value.deliveryMethod,
-            logisticsCompany: deliveryForm.value.logisticsCompany,
-            trackingNumber: deliveryForm.value.trackingNumber,
-            deliveryMode: 'FULL',
-            deliveryAddress: deliveryForm.value.deliveryAddress,
-            items: childItems,
-          });
-        } else {
+        const created = master?.id ? await createAutoFullChildShipment({
+          factoryId: factoryId.value,
+          masterId: master.id,
+          masterItems: Array.isArray(master.items) ? master.items : [],
+          plannedItems: filteredItems,
+          deliveryMethod: deliveryForm.value.deliveryMethod,
+          logisticsCompany: deliveryForm.value.logisticsCompany,
+          trackingNumber: deliveryForm.value.trackingNumber,
+          deliveryAddress: deliveryForm.value.deliveryAddress,
+        }) : false;
+        if (!created) {
           ElMessage.warning('母发货单已创建，但未能自动建立全量子发运单，请在发货记录中重试');
         }
       }
