@@ -54,6 +54,10 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
     SHIPPED: ['view-detail', 'print-pdf', 'return'],
     COMPLETED: ['view-detail', 'print-pdf', 'copy', 'return'],
     CANCELLED: ['view-detail', 'copy'],
+    // T-SHORT-SHIP (2026-09-04): 短交结案是终态, 与 COMPLETED 同形 —— 已发货部分仍可
+    // 打印/发起退货 (后端 ReturnOrderServiceImpl 创建退货单不 gate 来源单状态), 也可
+    // copy 复制成新订单。缺这一行会落到 view-detail-only 默认值 (安全但功能缺失)。
+    SHORT_CLOSED: ['view-detail', 'print-pdf', 'copy', 'return'],
   },
   purchaseOrder: {
     DRAFT: ['edit', 'submit', 'copy', 'delete', 'view-detail', 'edit-price'],

@@ -116,6 +116,8 @@ export const SALES_ORDER_STATUS_LABELS: Record<string, string> = {
   PARTIAL_DELIVERED: '部分发货',
   COMPLETED: '已完成',
   CANCELLED: '已取消',
+  // T-SHORT-SHIP (2026-09-04): 与后端 SalesOrderStatus.SHORT_CLOSED.getDisplayName() 同文案。
+  SHORT_CLOSED: '短交结案',
 };
 
 /** `PurchaseOrderStatus` */

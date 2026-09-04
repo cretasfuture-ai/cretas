@@ -72,6 +72,10 @@ async function loadSalesOrderOptions() {
       const payableStatuses = new Set([
         'CONFIRMED', 'PENDING_FINANCE_REVIEW', 'FINANCE_APPROVED',
         'PROCESSING', 'PARTIAL_DELIVERED', 'COMPLETED',
+        // T-SHORT-SHIP (2026-09-04): 短交结案不冻结已发货部分的应收 —— 结案前的
+        // AR 已按实发数量入账 (InvoiceServiceImpl#computeLineAmountForInvoice),
+        // 漏掉这个值会让财务在这个下拉里找不到已短交结案的订单来录款。
+        'SHORT_CLOSED',
       ]);
       salesOrderOptions.value = (res.data.content || []).filter(
         o => !o.status || payableStatuses.has(o.status)

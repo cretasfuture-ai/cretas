@@ -2516,13 +2516,15 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(409,
                     "订单仍有未完成的发运单 " + pending.getDeliveryNumber() + "，不能短交结案")
                     .withCode("SALES_SHORT_CLOSE_ACTIVE_DELIVERY")
-                    .withHint("请先确认发货或取消该发运单，再进行短交结案");
+                    .withHint("请先到「销售 → 发货记录」把发运单 " + pending.getDeliveryNumber()
+                            + " 确认发货或取消，再回来短交结案");
         }
 
         List<SalesOrderItem> items = salesOrderItemRepository.findBySalesOrderId(orderId);
         if (items.isEmpty()) {
             throw new BusinessException(409, "订单没有可核对的商品行，不能短交结案")
-                    .withCode("SALES_SHORT_CLOSE_LINES_REQUIRED");
+                    .withCode("SALES_SHORT_CLOSE_LINES_REQUIRED")
+                    .withHint("请联系销售经理核对订单明细");
         }
         BigDecimal shortfall = BigDecimal.ZERO;
         for (SalesOrderItem item : items) {

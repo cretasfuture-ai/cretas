@@ -43,6 +43,9 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   PARTIAL_DELIVERED: { label: '部分发货', color: '#f56c6c' },
   COMPLETED: { label: '已完成', color: '#67c23a' },
   CANCELLED: { label: '已取消', color: '#909399' },
+  // T-SHORT-SHIP (2026-09-04): 缺此条会落到下面 `|| { label: item.status, ... }` 兜底,
+  // 把英文码原样显示给用户 —— 与后端 SalesOrderStatus.SHORT_CLOSED.getDisplayName() 同文案。
+  SHORT_CLOSED: { label: '短交结案', color: '#909399' },
 };
 
 export default function SalesOrderListScreen() {

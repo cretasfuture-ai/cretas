@@ -130,6 +130,22 @@ describe('computeRowActions (web-admin)', () => {
     });
   });
 
+  // T-SHORT-SHIP (2026-09-04): outside the frozen 50-combo Day-3-DoD matrix above
+  // (that table is a locked historical deliverable count, not a place to grow) —
+  // SHORT_CLOSED is a new terminal SalesOrderStatus and must not silently fall to
+  // DEFAULT_UNKNOWN_STATUS_ACTIONS (would leave a sales manager who just closed a
+  // short order unable to print the order or file a return for what did ship).
+  describe('salesOrder SHORT_CLOSED (terminal, mirrors COMPLETED)', () => {
+    it('offers print/copy/return, same as COMPLETED — not the unknown-status fallback', () => {
+      const actions = computeRowActions(
+        'salesOrder',
+        { status: 'SHORT_CLOSED', id: '1' },
+        { canViewPrice: true }
+      );
+      expect(actions.map((a) => a.id)).toEqual(['print-pdf', 'copy', 'return']);
+    });
+  });
+
   describe('canEdit gate', () => {
     it('canEdit=false disables write actions but keeps them rendered', () => {
       const actions = computeRowActions(
