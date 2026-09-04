@@ -310,6 +310,45 @@ class OrderCostBreakdownServiceTest {
         assertThat(customerSource.getCost()).isEqualByComparingTo("0");
     }
 
+    /**
+     * 🔴🔴 2026-09-04 缺陷订正: 客供主料原价保留不变式 —— owner 裁定「保留原价, 只是不能让它读成
+     * 我方成本」。这条测试把它钉成一个可以红的不变式: unitPrice 非零(审计用, 展示客户物料原值)
+     * 而 amount/cost 恒为 0, <b>且</b>两处标签字段(priceSource / collectionStatus)都说
+     * CUSTOMER_SUPPLIED —— 下一个读者想"顺手把这一列也清零"或者改错标签, 这条测试会先红。
+     */
+    @Test
+    @DisplayName("🔴🔴 客供主料原价保留不变式: unitPrice 非零但 amount/cost 恒 0, 且两处标签都是 "
+            + "CUSTOMER_SUPPLIED —— 不是缺价, 是原价审计记录+不计我方成本")
+    void customerSuppliedPriceIsPreservedButNeverCostedInvariant() {
+        MaterialConsumption customerRow = cons("MB-1399SN-INV", "5", "88.00", "440.00");
+        customerRow.setSourceType("RAW_MATERIAL");
+        MaterialConsumption iceRow = cons("MB-ICE-INV", "2", "1.5", "3.00");
+        iceRow.setSourceType("RAW_MATERIAL");
+        stubAuditEligiblePlan("PLAN-CS-INV", 9105L, "9.8", List.of(customerRow, iceRow));
+
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1399SN-INV", F)).thenReturn(Optional.of(
+                materialBatch("MB-1399SN-INV", "1399上脑-CS-INV", InventoryOwnership.CUSTOMER_OWNED, "88.00")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-ICE-INV", F)).thenReturn(Optional.of(
+                materialBatch("MB-ICE-INV", "冰水-INV", InventoryOwnership.COMPANY_OWNED, "1.5")));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        OrderCostBreakdownDTO.RawMaterialDetail detail = dto.getRawMaterialDetails().stream()
+                .filter(d -> "1399上脑-CS-INV".equals(d.getBatchNumber())).findFirst().orElseThrow();
+        // 不变式左半: 原价保留 (非零, 审计记录) ...
+        assertThat(detail.getUnitPrice()).isEqualByComparingTo("88.00");
+        // ... 不变式右半: 但绝不读成我方成本
+        assertThat(detail.getAmount()).isEqualByComparingTo("0");
+        // 两处标签都要说 CUSTOMER_SUPPLIED —— 少一个都算破坏不变式
+        assertThat(detail.getPriceSource()).isEqualTo("CUSTOMER_SUPPLIED");
+        assertThat(detail.getCollectionStatus()).isEqualTo("CUSTOMER_SUPPLIED");
+
+        OrderCostBreakdownDTO.SourceCost source = dto.getSources().stream()
+                .filter(s -> "1399上脑-CS-INV".equals(s.getBatchName())).findFirst().orElseThrow();
+        assertThat(source.getUnitPrice()).isEqualByComparingTo("88.00");
+        assertThat(source.getCost()).isEqualByComparingTo("0");
+    }
+
     @Test
     @DisplayName("阴性对照: COMPANY_OWNED(工厂自有) 批次无价仍然阻断 —— 不能把口径(a)泄漏成「所有缺价都记0」")
     void companyOwnedUnpricedRawMaterialStillBlocks() {

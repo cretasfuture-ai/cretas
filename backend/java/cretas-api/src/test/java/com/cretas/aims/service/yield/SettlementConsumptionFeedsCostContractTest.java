@@ -74,7 +74,9 @@ class SettlementConsumptionFeedsCostContractTest {
 
     /**
      * @param planWideConsumptions 【计划全量、含 CLERK_WIP】已消耗的物料批次 —— 供
-     *                              {@code planWideCoveredMaterialBatchIds} 读取 (2026-09-04 缺陷订正)。
+     *                              {@code planWideConsumedMaterialConsumptions} 读取 (2026-09-04 缺陷订正;
+     *                              2026-09-04 缺陷订正 II 起改名, 因为它现在返回的是带量的
+     *                              {@code List<MaterialConsumption>} 而不是一个批次 id 集合)。
      *                              空表示这道查询本轮什么都没找到 (existing 5 个测试的默认行为不变)。
      */
     private OrderCostBreakdownService service(List<ProductionSettlementConsumption> rows,
@@ -125,6 +127,15 @@ class SettlementConsumptionFeedsCostContractTest {
     private static MaterialConsumption covered(String batchId) {
         MaterialConsumption c = new MaterialConsumption();
         c.setBatchId(batchId);
+        return c;
+    }
+
+    /** 带耗用量的消耗行 —— 量感知去重(2026-09-04 缺陷订正 II)测试专用, 与 {@link #covered} 的
+     *  「量未知」桩区分开: {@code covered} 保守当【已全额覆盖】, 这个带量的才走真正的超出量计算。 */
+    private static MaterialConsumption coveredQty(String batchId, String qty) {
+        MaterialConsumption c = new MaterialConsumption();
+        c.setBatchId(batchId);
+        c.setQuantity(new BigDecimal(qty));
         return c;
     }
 
@@ -179,6 +190,92 @@ class SettlementConsumptionFeedsCostContractTest {
                 "MB_A 已经被上游 CLERK_WIP 批次消耗过, 结单又并入了一次 —— 这正是 prod 的双计缺陷: "
                         + got.stream().map(MaterialConsumption::getBatchId).toList());
         assertEquals(MB_B, got.get(0).getBatchId(), "唯一该并入的是从未被消耗过的 MB_B");
+    }
+
+    @Test
+    @DisplayName("🔴🔴 2026-09-04 缺陷订正 II: 冰水案例重新推导 —— 结单量(0.3738)不超过已耗用量(0.3800) "
+            + "时贡献必须是 0, 不是把#576(17e77ad264)修复前的双计(0.3800+0.3738=1.9538 归集里的那笔)带回来")
+    void settlementDedupExcessDoesNotResurrectTheOriginalDoubleCount() {
+        // PR #576 描述(commit 17e77ad264)复现: plan PLAN-1788305552728-D94F7E22,
+        // FG 批次 PB-...-47204, 物料批次 4cce21c0(冰水) —— 修复前 "已归集¥1.9538" 里, 该批次
+        // 被 traceCost 算一次(¥0.3800)、被结单并入又算一次(¥0.3738), 诚实值应是 ¥1.5808
+        // (本用例把单价取 1.00 让"成本数值=耗用量数值", 数字与描述里的成本额一一对应, 更好读)。
+        String plan = "PLAN-1788305552728-D94F7E22";
+        String ice = "4cce21c0";
+        ProductionSettlementConsumption iceSettlementRow = new ProductionSettlementConsumption();
+        iceSettlementRow.setFactoryId(FACTORY);
+        iceSettlementRow.setProductionPlanId(plan);
+        iceSettlementRow.setMaterialBatchId(ice);
+        iceSettlementRow.setSourceType("RAW_MATERIAL");
+        iceSettlementRow.setQuantity(new BigDecimal("0.3738"));   // 结单声称的领用量(=成本额, 单价=1.00)
+        iceSettlementRow.setUnit("kg");
+
+        OrderCostBreakdownService svc = mock(OrderCostBreakdownService.class,
+                withSettings().defaultAnswer(CALLS_REAL_METHODS));
+        ProductionSettlementConsumptionRepository settle = mock(ProductionSettlementConsumptionRepository.class);
+        when(settle.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, plan))
+                .thenReturn(List.of(iceSettlementRow));
+        MaterialBatchRepository batchRepo = mock(MaterialBatchRepository.class);
+        MaterialBatch iceBatch = new MaterialBatch();
+        iceBatch.setId(ice);
+        iceBatch.setFactoryId(FACTORY);
+        iceBatch.setUnitPrice(new BigDecimal("1.00"));
+        iceBatch.setQuantityUnit("kg");
+        when(batchRepo.findByIdAndFactoryId(ice, FACTORY)).thenReturn(Optional.of(iceBatch));
+        MaterialConsumptionRepository consumptionRepo = mock(MaterialConsumptionRepository.class);
+        // traceCost 已经沿上游 CLERK_WIP 链算到的量(=¥0.3800, 单价=1.00 时等于耗用量数值)。
+        when(consumptionRepo.findByFactoryIdAndPlanProductionBatchesIncludingWip(FACTORY, plan))
+                .thenReturn(List.of(coveredQty(ice, "0.3800")));
+        ReflectionTestUtils.setField(svc, "settlementConsumptionRepository", settle);
+        ReflectionTestUtils.setField(svc, "materialBatchRepository", batchRepo);
+        ReflectionTestUtils.setField(svc, "consumptionRepository", consumptionRepo);
+
+        ProductionBatch fgBatch = new ProductionBatch();
+        fgBatch.setId(47204L);
+        fgBatch.setFactoryId(FACTORY);
+        fgBatch.setProductionPlanId(plan);
+
+        List<MaterialConsumption> got = merge(svc, fgBatch, new ArrayList<>(), new HashSet<>());
+
+        // 结单量(0.3738) <= 已耗用量(0.3800) → 超出量为 0 → 这一行贡献 0, 不并入 —— 归集里
+        // 只剩 traceCost 自己算出的那笔(0.3800), 不是 0.3800+0.3738=0.7538(#576 双计缺陷的局部形状)。
+        assertTrue(got.isEmpty(),
+                "冰水结单行不该再并入 —— 0.3738 没有超过已耗用的 0.3800, 并入就是把 #576 的双计带回来: "
+                        + got.stream().map(c -> c.getBatchId() + "=" + c.getTotalCost()).toList());
+    }
+
+    @Test
+    @DisplayName("🔴 量感知去重: 结单量真的超过已耗用量时, 只并入【超出的那一段】—— 不整行丢弃(under-count) "
+            + "也不整行照单全收(resurrect #576 的双计)")
+    void settlementRowContributesOnlyTheExcessOverConsumedQuantity() {
+        // MB_A 已耗用 12kg(某道报工), 结单又声称领用 20kg —— 二者不矛盾(结单可能追加领用),
+        // 诚实的贡献是超出的 8kg, 不是 0(整行丢弃)也不是 20kg(整行照单全收, 重复计入已耗用的 12kg)。
+        OrderCostBreakdownService svc = service(List.of(row(MB_A, "20")), new BigDecimal("2.50"));
+        when(consumptionRepo.findByFactoryIdAndPlanProductionBatchesIncludingWip(FACTORY, PLAN))
+                .thenReturn(List.of(coveredQty(MB_A, "12")));
+
+        List<MaterialConsumption> got = merge(svc, batch(10909L), new ArrayList<>(), new HashSet<>());
+
+        assertEquals(1, got.size(), "超出的 8kg 该被并入, 不该整行丢弃");
+        assertEquals(MB_A, got.get(0).getBatchId());
+        assertEquals(0, got.get(0).getQuantity().compareTo(new BigDecimal("8")),
+                "贡献量应是超出部分 20-12=8, 不是整行 20(重复计入已耗用的 12) 或 0(under-count): "
+                        + got.get(0).getQuantity());
+        assertEquals(0, got.get(0).getTotalCost().compareTo(new BigDecimal("20.00")),
+                "8kg × 2.50 = 20.00: " + got.get(0).getTotalCost());
+    }
+
+    @Test
+    @DisplayName("🔴 量感知去重: 已耗用量反超结单量时贡献停在 0, 不允许出现负数")
+    void consumedQuantityExceedingSettlementQuantityStaysZeroNotNegative() {
+        // 已耗用 30kg, 结单只声称 20kg —— 20-30=-10 若不 clamp 会产生负成本这种没有意义的东西。
+        OrderCostBreakdownService svc = service(List.of(row(MB_A, "20")), new BigDecimal("2.50"));
+        when(consumptionRepo.findByFactoryIdAndPlanProductionBatchesIncludingWip(FACTORY, PLAN))
+                .thenReturn(List.of(coveredQty(MB_A, "30")));
+
+        List<MaterialConsumption> got = merge(svc, batch(10909L), new ArrayList<>(), new HashSet<>());
+
+        assertTrue(got.isEmpty(), "已耗用量超过结单量时不该并入任何(更不该是负数): " + got);
     }
 
     @Test
