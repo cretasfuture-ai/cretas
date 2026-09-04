@@ -269,6 +269,48 @@ class OrderCostBreakdownServiceTest {
     }
 
     @Test
+    @DisplayName("🔴🔴 终审订正: CUSTOMER_OWNED 且【有价】的批次也记 0 —— 上一版把「有没有价」当成了"
+            + "前置条件, 有价的客供批会漏网走正常计价 (prod 实测 CUSTOMER_OWNED 20 批里 3 批有价)")
+    void customerSuppliedPricedRawMaterialIsStillExplicitZero() {
+        // 客供批次这次【有价】(440.00) —— 复现终审指出的漏洞: 旧代码
+        // if (!rawPriceKnown) { if (customerSupplied) … } 会让"有价的客供批"直接跳过整段判断,
+        // 单价原样算进我方原料成本。
+        MaterialConsumption customerRow = cons("MB-1399SN-PRICED", "5", "88.00", "440.00");
+        customerRow.setSourceType("RAW_MATERIAL");
+        MaterialConsumption iceRow = cons("MB-ICE-2", "2", "1.5", "3.00");
+        iceRow.setSourceType("RAW_MATERIAL");
+        stubAuditEligiblePlan("PLAN-CS-4", 9104L, "9.8", List.of(customerRow, iceRow));
+
+        when(materialBatchRepository.findByIdAndFactoryId("MB-1399SN-PRICED", F)).thenReturn(Optional.of(
+                materialBatch("MB-1399SN-PRICED", "1399上脑-CS-0002", InventoryOwnership.CUSTOMER_OWNED, "88.00")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-ICE-2", F)).thenReturn(Optional.of(
+                materialBatch("MB-ICE-2", "冰水-0002", InventoryOwnership.COMPANY_OWNED, "1.5")));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        // 有价的客供批(440.00)不该被算进原料成本 —— 只有冰水的 3.00, ⛔ 不是 3.00+440.00=443.00
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("3.00");
+        assertThat(dto.getCustomerSuppliedItems())
+                .hasSize(1)
+                .allMatch(item -> item.equals("CUSTOMER_SUPPLIED:1399上脑-CS-0002"));
+        assertThat(dto.getMissingCostItems())
+                .noneMatch(item -> item.startsWith("RAW_MATERIAL_PRICE:"));
+        assertThat(dto.isCostComplete()).isTrue();
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("3.00");
+
+        OrderCostBreakdownDTO.RawMaterialDetail customerDetail = dto.getRawMaterialDetails().stream()
+                .filter(d -> "1399上脑-CS-0002".equals(d.getBatchNumber())).findFirst().orElseThrow();
+        assertThat(customerDetail.getCollectionStatus()).isEqualTo("CUSTOMER_SUPPLIED");
+        assertThat(customerDetail.getAmount()).isEqualByComparingTo("0"); // ⛔ 不是 440.00
+        // unitPrice 仍如实展示批次自己记录的价(信息性, 不参与我方成本累加)——不是缺价, 是不计入。
+        assertThat(customerDetail.getUnitPrice()).isEqualByComparingTo("88.00");
+
+        OrderCostBreakdownDTO.SourceCost customerSource = dto.getSources().stream()
+                .filter(s -> "1399上脑-CS-0002".equals(s.getBatchName())).findFirst().orElseThrow();
+        assertThat(customerSource.getCost()).isEqualByComparingTo("0");
+    }
+
+    @Test
     @DisplayName("阴性对照: COMPANY_OWNED(工厂自有) 批次无价仍然阻断 —— 不能把口径(a)泄漏成「所有缺价都记0」")
     void companyOwnedUnpricedRawMaterialStillBlocks() {
         MaterialConsumption companyRow = rawCons("MB-COMPANY-UNPRICED", "5");

@@ -356,6 +356,24 @@ public class OrderCostBreakdownService {
                     }
                     continue;
                 }
+                // 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04，终审订正）：来料加工下，客供
+                // (ownership=CUSTOMER_OWNED) 主料成本恒记 0，不管这个批次有没有已知单价。
+                // ⛔ 上一版把「有没有价」当成了前置条件 (if (!rawPriceKnown) { if (customerSupplied) …}),
+                // 导致「有价的客供批」会先被当成价格已知走正常计价——prod 实测 CUSTOMER_OWNED 20 个
+                // 批次里 3 个有价，恰好会中这个漏洞（终审指出）。现在先按 ownership 判：客供就无条件
+                // 把 cost 强制归零，再走后面的 raw 累加/sources/明细——有价也不用，因为那本就不是
+                // 我方成本。
+                // ⛔ 判 ownership 用【批次】自己的字段（与 CustomerSuppliedSettlementCoverageGuard
+                // #filterCustomerOwned 同一条纪律）——不用物料类别、不用 plan.materialSupplyMode 推,
+                // 同一计划里客供原料与工厂自有辅料混用是正常形态（prod 实测 PLAN-...-34F8CD82：
+                // 客供 1399上脑 + 工厂自购冰水/L1纸箱）。mb==null（批次不可解析）按【真的不知道】处理，
+                // ⛔ 不当客供——数据缺口不能被静默当成一个已知的业务决定。
+                boolean customerSupplied = mb != null
+                        && InventoryOwnership.CUSTOMER_OWNED == mb.getOwnership();
+                if (customerSupplied) {
+                    cost = BigDecimal.ZERO;
+                    customerSuppliedItems.add("CUSTOMER_SUPPLIED:" + mb.getBatchNumber());
+                }
                 raw = raw.add(cost);
                 sources.add(SourceCost.builder()
                         .batchId(c.getBatchId())
@@ -366,28 +384,13 @@ public class OrderCostBreakdownService {
                         .cost(cost)
                         .depth(depth)
                         .build());
+                // ⛔ 不在 customerSupplied 分支里用 rawPriceKnown 做判断——客供已经无条件赢了，
+                // 这个标志只在非客供的分支里才有意义（是否真的缺价、要不要阻断）。
                 boolean rawPriceKnown = c.getTotalCost() != null || c.getUnitPrice() != null
                         || cost.signum() != 0;
-                // 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04）：来料加工下，客供
-                // (ownership=CUSTOMER_OWNED) 主料价未知不是「缺价、算不出」，是「按加工费口径
-                // 显式记 0，不计入我方原料成本」——两件事表现相同（单价缺失）但含义相反。
-                // ⛔ 判 ownership 用【批次】自己的字段（与 CustomerSuppliedSettlementCoverageGuard
-                // #filterCustomerOwned 同一条纪律）——不用物料类别、不用 plan.materialSupplyMode 推,
-                // 同一计划里客供原料与工厂自有辅料混用是正常形态（prod 实测 PLAN-...-34F8CD82：
-                // 客供 1399上脑 + 工厂自购冰水/L1纸箱）。mb==null（批次不可解析）按【真的不知道】处理，
-                // ⛔ 不当客供——数据缺口不能被静默当成一个已知的业务决定。
-                boolean customerSupplied = mb != null
-                        && InventoryOwnership.CUSTOMER_OWNED == mb.getOwnership();
-                if (!rawPriceKnown) {
-                    if (customerSupplied) {
-                        customerSuppliedItems.add("CUSTOMER_SUPPLIED:" + mb.getBatchNumber());
-                    } else if (auditEligible) {
-                        missingCostItems.add("RAW_MATERIAL_PRICE:" + c.getBatchId());
-                    }
+                if (!customerSupplied && !rawPriceKnown && auditEligible) {
+                    missingCostItems.add("RAW_MATERIAL_PRICE:" + c.getBatchId());
                 }
-                // amount：已知价 或 客供显式 0（都是【诚实的值】，cost 在客供分支恒为 0——traceCost
-                // 对无 totalCost 的叶子批次返回 nz(null)=0）；⛔ 两者都不是「不知道」时才留 null。
-                boolean honestZeroOrKnown = rawPriceKnown || customerSupplied;
                 rawMaterialDetails.add(RawMaterialDetail.builder()
                         .batchNumber(mb != null ? mb.getBatchNumber() : c.getBatchId())
                         .materialCode(mb != null ? mb.getMaterialTypeId() : null)
@@ -395,12 +398,12 @@ public class OrderCostBreakdownService {
                         .quantity(c.getQuantity())
                         .unit(mb != null ? mb.getQuantityUnit() : "kg")
                         .unitPrice(c.getUnitPrice())
-                        .priceSource(!rawPriceKnown && customerSupplied
+                        .priceSource(customerSupplied
                                 ? "CUSTOMER_SUPPLIED" : "MATERIAL_CONSUMPTION_SNAPSHOT")
-                        .amount(honestZeroOrKnown ? cost : null)
-                        .collectionStatus(rawPriceKnown ? "COLLECTED"
-                                : (customerSupplied ? "CUSTOMER_SUPPLIED" : "MISSING_PRICE"))
-                        .missingReason(rawPriceKnown || customerSupplied ? null
+                        .amount(customerSupplied || rawPriceKnown ? cost : null)
+                        .collectionStatus(customerSupplied ? "CUSTOMER_SUPPLIED"
+                                : (rawPriceKnown ? "COLLECTED" : "MISSING_PRICE"))
+                        .missingReason(customerSupplied || rawPriceKnown ? null
                                 : "实际耗用记录缺少可验证单价/金额")
                         .build());
 

@@ -2857,7 +2857,14 @@ async function handleRecalculateSettledCost(row: TableRow) {
     }
     const d = res.data;
     const sharedUnitCost = d.sharedUnitCost == null ? '—' : `¥${Number(d.sharedUnitCost).toFixed(4)}`;
-    ElMessage.success(`成本重算完成：总成本 ¥${Number(d.authoritativeTotalCost).toFixed(4)}，单位成本 ${sharedUnitCost}；同步成品 ${d.finishedGoodsBatchCount} 行、回料 ${d.reworkWipCount} 行`);
+    let successMessage = `成本重算完成：总成本 ¥${Number(d.authoritativeTotalCost).toFixed(4)}，单位成本 ${sharedUnitCost}；同步成品 ${d.finishedGoodsBatchCount} 行、回料 ${d.reworkWipCount} 行`;
+    // 客供主料成本口径 (a)（owner 裁定，2026-09-04）：这次重算里按加工口径显式记 0 的客供料
+    // (customerSuppliedItems) 之前只有字段没有消费方——直接展示后端已经拼好的人话版
+    // (customerSuppliedNote)，⛔ 不在前端重新拼一遍格式（本仓形态 D：同一个东西有两份必定漂）。
+    if (d.customerSuppliedNote) {
+      successMessage += `；${d.customerSuppliedNote}`;
+    }
+    ElMessage({ message: successMessage, type: 'success', duration: d.customerSuppliedNote ? 8000 : 3000, showClose: true });
     await loadSettlementStatuses([row]);
   } catch (error) {
     if (String(error).includes('cancel')) return;
