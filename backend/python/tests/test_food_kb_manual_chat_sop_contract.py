@@ -72,7 +72,6 @@ from food_kb.api.manual_chat import (
     _RESTAURANT_DEFAULT_TIME_PROVENANCE_ANSWER,
     _RESTAURANT_STAFFING_SCOPE_ANSWER,
     _WORKFLOW_ACTUAL_IO_ANSWER,
-    _build_scope_prompt,
     _needs_bom_workflow_sequence_guard,
     _needs_factory_byproduct_lifecycle_guard,
     _needs_factory_batch_adjustment_guard,
@@ -241,15 +240,31 @@ def test_restaurant_prompt_keeps_session_scope_and_evidence_honest():
     assert "食材类只认“食材、原材料、食品、饮料、酒水、菜品”" in SYSTEM_PROMPT
 
 
-def test_scope_prompt_distinguishes_depth_and_business_line():
-    mvp_stock = _build_scope_prompt("mvp", "stock")
-    full_sales = _build_scope_prompt("full", "sales")
+def test_20260904_no_scope_picker_ui_and_no_scope_prompt():
+    """2026-09-04 owner 裁定: 助手就是回答问题, 页面不再有「测试深度 / 业务线」选择器。
 
-    assert "MVP 非阻塞最小闭环" in mvp_stock
-    assert "增量小结" in mvp_stock
-    assert "全量数据闭环" in full_sales
-    assert "开票和收款" in full_sales
-    assert mvp_stock != full_sales
+    Removing only the UI would have been worse than leaving it: the request default was
+    "mvp", whose scope message told the model 「只覆盖正常业务和必要审批」 and whose token
+    budget is the smallest tier. So the prompt injection is gone and the default budget
+    moved to the medium tier.
+    """
+    assert not hasattr(manual_chat_module, "_build_scope_prompt")
+
+    page = (PROJECT_ROOT / "web-admin/public/aiassist.html").read_text(encoding="utf-8")
+    for gone in ('id="depth-segment"', 'id="line-segment"', "scope-panel", "测试深度", "业务线",
+                 "state.depth", "business_line"):
+        assert gone not in page, gone
+
+    # the first screen is question-first: 8 plain starters, the rest behind a toggle
+    first_screen, more = page.split('<div class="suggestions" id="more-suggestions"', 1)
+    assert first_screen.count('class="suggestion"') == 8, first_screen.count('class="suggestion"')
+    assert 'id="more-toggle"' in first_screen
+    assert "生产计划怎么建？建好之后怎么开工？" in first_screen
+    assert "我这个角色能做什么？看不到菜单怎么办？" in first_screen
+    assert more.count('class="suggestion"') >= 50, "the curated examples must survive, just collapsed"
+
+    assert manual_chat_module.ManualChatRequest(question="x").depth == "medium"
+    assert manual_chat_module._estimate_max_tokens("medium") > manual_chat_module._estimate_max_tokens("mvp")
 
 
 def test_20260813_factory_contracts_are_deterministic_and_isolated():
@@ -1859,9 +1874,11 @@ def test_restaurant_registered_html_sources_parse_in_a_clean_runtime():
 
 
 @pytest.mark.asyncio
-async def test_factory_chat_passes_scope_to_llm_and_does_not_delay_for_related(
+async def test_factory_chat_sends_no_internal_scope_label_and_does_not_delay_for_related(
     monkeypatch,
 ):
+    """2026-09-04: this used to assert the depth/business-line scope message reached the
+    model. The picker is gone, so the assertion is inverted into a negative control."""
     captured = {}
 
     class FakeDoc:
@@ -1908,8 +1925,10 @@ async def test_factory_chat_passes_scope_to_llm_and_does_not_delay_for_related(
         if message["role"] == "system"
     ]
     assert any("工厂操作助手" in message for message in system_messages)
-    assert any("全量数据闭环" in message for message in system_messages)
-    assert any("销售订单生产" in message for message in system_messages)
+    # negative control: the internal test-depth vocabulary must not reach the model
+    assert not any("全量数据闭环" in message for message in system_messages)
+    assert not any("内部测试深度标签" in message for message in system_messages)
+    assert not any("MVP 非阻塞最小闭环" in message for message in system_messages)
     assert captured["retrieve"]["subcategories"] == ["factory"]
     assert captured["retrieve"]["source_names"] == [
         "f006-production-full-chain-sop.md"

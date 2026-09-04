@@ -2328,13 +2328,13 @@ FACTORY_SYSTEM_PROMPT = """\
 5. 用户问“为什么/逻辑是什么”时先解释业务口径，再给一个真实例子，最后指出会在哪一步体现。
 6. 用户描述报错时，按“最可能原因 → 先检查什么 → 如何恢复 → 恢复后验证”回答；库存、审批、单位、版本快照和权限必须分别判断。
 7. 面向一线使用者写：状态、字段和错误码先用中文说法，英文码只在括号里附一次，不用英文码当标题或句子主语；不出现 revision、payload、幂等键、事务这类实现词。
-8. “适用路线”只在问题需要区分存货生产 / 销售订单生产 / 来料加工时写；不要把“MVP 非阻塞最小闭环”“通用建档与生产主链”这类内部测试范围标签写进回答。
+8. “适用路线”只在问题需要区分存货生产 / 销售订单生产 / 来料加工时写；不要把测试范围、深度档位这类内部标签写进回答。
 9. 一屏读完：先一句结论，操作步骤最多 6 步，“填写内容”和“操作步骤”不重复写同一件事；用户问“怎么配置 X”时先给入口在画布/页面的哪个位置。
 10. 排版：段落标题用“**加粗短语**”单独成行（不用 #、##、### 标题）；步骤用“1. 2. 3.”编号，每步一句话，不在编号步骤里再套子列表（页面不支持嵌套列表，会断成两段）；字段和取值用“- ”短列表；菜单、按钮、状态名用“”引号；不用表格，除非在对比两种情况。
 11. 状态先写中文再括号附英文码一次，例如“待仓库确认入库（PENDING_WAREHOUSE_RECEIPT）”；同一回答里第二次出现只写中文。
 
 【SOP 核心口径】
-- 默认从 MVP 非阻塞最小闭环回答；用户选择中度或全量时再加入拓扑冲突、异常、审批、冲销和治理用例。
+- 回答深度由问题本身决定：日常操作只讲正常流程和必要审批；用户问异常、报错、冲销、质检、审批或治理时，直接把相关的冲突与异常情形讲清楚，不要因为“基础问题”就略过。
 - SKU 定义库存/销售基本单位和成品标准克重；BOM 定义物料及工序辅料；Workflow 定义 Cell 与工序连接和报工单位；实际投入产出在报工中形成。
 - 原料包装换算在“原料类型字典”中紧邻库存基本单位维护，采购/收货/调拨可按包装录入并折合为基本量；库存批次、BOM 可用量和生产领料只用基本单位。绝不能把原料的箱/袋换算指向成品 SKU 管理。
 - Workflow 节点和连线只维护工序拓扑及可能投入/产出的稳定接口；画布上的辅料、包材和副产配置格是 BOM 派生叠层，不属于拓扑。主料、替代料、辅料、包材和用量来自计划固定的 BOM。正式报工候选取 Workflow 接口、BOM 授权和当前仓可用批次的交集，至少提交一项正数实际投入和一项正数实际产出；未发生项留空。
@@ -2380,28 +2380,6 @@ FACTORY_SYSTEM_PROMPT = """\
 """
 
 
-def _build_scope_prompt(
-    depth: "SopDepth",
-    business_line: "BusinessLine",
-) -> str:
-    depth_labels = {
-        "mvp": "MVP 非阻塞最小闭环，只覆盖正常业务和必要审批",
-        "medium": "中度关键业务闭环，包含四类基础拓扑、缺料采购、完整调拨和关键成本",
-        "full": "全量数据闭环，包含冲突、异常、质检、冲销、ECN 和治理审计",
-    }
-    line_labels = {
-        "general": "通用建档与生产主链；需要区分来源时分别说明",
-        "stock": "存货生产；重点说明增量小结、停产和生产仓入库",
-        "sales": "销售订单生产；重点说明订单审核、订单关联、结单、发货、开票和收款",
-    }
-    return (
-        "【本轮用户选择的回答范围】\n"
-        f"- 测试深度：{depth_labels[depth]}（内部测试深度标签，不要写进回答）\n"
-        f"- 业务线：{line_labels[business_line]}\n"
-        "回答必须遵守该范围；只有为避免误操作所必需时才补充范围外提醒。"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -2419,7 +2397,10 @@ class ManualChatRequest(BaseModel):
     question: str = Field(..., description="用户问题")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史对话")
     category: Optional[str] = Field(default=None, description="显式分类: 'restaurant' | 'factory' | None（自动检测）")
-    depth: SopDepth = Field(default="mvp", description="SOP 回答深度")
+    # 2026-09-04: no picker on the page any more; the field stays for API compatibility.
+    # Default moved mvp -> medium so removing the picker does not also freeze the answer
+    # budget at the smallest tier (see _DEPTH_MAX_TOKENS).
+    depth: SopDepth = Field(default="medium", description="回答长度预算档位（页面不再选择）")
     business_line: BusinessLine = Field(default="general", description="业务线: 通用/存货生产/销售订单")
     image_base64: Optional[str] = Field(default=None, description="截图 base64（含 data:image/...;base64, 前缀或不含都接受）")
 
@@ -2879,11 +2860,10 @@ async def _prepare_generation(request: ManualChatRequest) -> _PreparedGeneration
     # ------ Improvement #4: structured system prompt ------
     system_prompt = SYSTEM_PROMPT if is_restaurant_request else FACTORY_SYSTEM_PROMPT
     messages = [{"role": "system", "content": system_prompt}]
-    if not is_restaurant_request:
-        messages.append({
-            "role": "system",
-            "content": _build_scope_prompt(request.depth, request.business_line),
-        })
+    # 2026-09-04: the 测试深度 / 业务线 picker is gone from the page, so there is no
+    # per-request scope message any more. It used to pin every answer to
+    # 「MVP 非阻塞最小闭环，只覆盖正常业务和必要审批」 — with no picker that is a
+    # permanent narrowing — and it leaked an 内部测试深度标签 into the prompt.
     messages.append({
         "role": "system",
         "content": f"以下是从操作手册中检索到的相关内容，请基于这些内容回答用户问题：\n\n{context_text_with_hint}",

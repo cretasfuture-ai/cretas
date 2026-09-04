@@ -239,57 +239,20 @@
       line-height: 1.7;
     }
 
-    .scope-panel {
-      display: grid;
-      gap: 12px;
-      padding: 14px;
-      text-align: left;
-      background: rgb(255 254 250 / 82%);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: var(--shadow);
-    }
-
-    .scope-row {
-      display: grid;
-      grid-template-columns: 64px 1fr;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .scope-label {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
-    }
-
-    .segment {
-      display: grid;
-      grid-auto-columns: 1fr;
-      grid-auto-flow: column;
-      gap: 4px;
-      padding: 3px;
-      background: var(--soft);
-      border-radius: 11px;
-    }
-
-    .segment button {
-      min-height: 40px;
-      padding: 7px 8px;
+    .more-toggle {
+      margin-top: 12px;
+      padding: 9px 14px;
       color: var(--muted);
       font-size: 13px;
       font-weight: 620;
       background: transparent;
-      border: 0;
-      border-radius: 8px;
-      transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+      border: 1px dashed var(--line);
+      border-radius: 11px;
+      cursor: pointer;
+      transition: color 160ms ease, border-color 160ms ease;
     }
 
-    .segment button[aria-pressed="true"] {
-      color: var(--ink);
-      background: var(--surface);
-      box-shadow: 0 1px 4px rgb(23 32 29 / 10%);
-    }
+    .more-toggle:hover { color: var(--ink); border-color: var(--ink); }
 
     .suggestions {
       display: grid;
@@ -297,6 +260,10 @@
       gap: 9px;
       margin-top: 13px;
     }
+
+    /* .suggestions sets display:grid, which outranks the UA [hidden] rule — without this
+       the collapsed 更多示例 area renders anyway. */
+    .suggestions[hidden] { display: none; }
 
     .suggestion {
       display: flex;
@@ -1032,8 +999,6 @@
       .feed-inner { padding: 18px 16px 22px; }
       .welcome { padding-block: 10px 22px; }
       .welcome-lead { margin-bottom: 18px; }
-      .scope-panel { padding: 11px; }
-      .scope-row { grid-template-columns: 1fr; gap: 6px; }
       .suggestions { grid-template-columns: 1fr; }
       .suggestion { min-height: 50px; }
       .assistant-message { padding-left: 30px; }
@@ -1043,7 +1008,6 @@
 
     @media (max-width: 350px) {
       .brand-copy p { display: none; }
-      .segment button { padding-inline: 4px; font-size: 12px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1084,26 +1048,22 @@
               <h2 id="welcome-title">今天要处理哪一步？</h2>
               <p class="welcome-lead">告诉我你卡住的页面、字段或业务状态。我会按当前 SOP 给出操作路径、填写内容、验收结果和阻塞条件。</p>
 
-              <div class="scope-panel" aria-label="回答范围">
-                <div class="scope-row">
-                  <span class="scope-label">测试深度</span>
-                  <div class="segment" id="depth-segment" role="group" aria-label="测试深度">
-                    <button type="button" data-value="mvp" aria-pressed="true">MVP</button>
-                    <button type="button" data-value="medium" aria-pressed="false">中度</button>
-                    <button type="button" data-value="full" aria-pressed="false">全量</button>
-                  </div>
-                </div>
-                <div class="scope-row">
-                  <span class="scope-label">业务线</span>
-                  <div class="segment" id="line-segment" role="group" aria-label="业务线">
-                    <button type="button" data-value="general" aria-pressed="true">通用</button>
-                    <button type="button" data-value="stock" aria-pressed="false">存货生产</button>
-                    <button type="button" data-value="sales" aria-pressed="false">销售订单</button>
-                  </div>
-                </div>
+              <!-- 2026-09-04 owner 裁定: 首屏只放这 8 条口语起手问题。⛔ 每日 SOP 同步不要再往首屏追加,
+                   新增示例请放进下面的「更多示例」折叠区 (#more-suggestions)。 -->
+              <div class="suggestions" aria-label="常见问题">
+                <button class="suggestion" type="button" data-question="生产计划怎么建？建好之后怎么开工？"><span>生产计划怎么建？建好之后怎么开工？</span></button>
+                <button class="suggestion" type="button" data-question="手机上怎么报工？要填哪些内容？"><span>手机上怎么报工？要填哪些内容？</span></button>
+                <button class="suggestion" type="button" data-question="领料单怎么生成？确认领料要填什么？"><span>领料单怎么生成？确认领料要填什么？</span></button>
+                <button class="suggestion" type="button" data-question="采购单怎么建？单价是自动带出来的吗？"><span>采购单怎么建？单价是自动带出来的吗？</span></button>
+                <button class="suggestion" type="button" data-question="仓库收到货怎么入库？分几次到货怎么收？"><span>仓库收到货怎么入库？分几次到货怎么收？</span></button>
+                <button class="suggestion" type="button" data-question="怎么给客户发货？批次是系统挑还是自己挑？"><span>怎么给客户发货？批次是系统挑还是自己挑？</span></button>
+                <button class="suggestion" type="button" data-question="生产结单要填什么？不良品数量怎么填？"><span>生产结单要填什么？不良品数量怎么填？</span></button>
+                <button class="suggestion" type="button" data-question="我这个角色能做什么？看不到菜单怎么办？"><span>我这个角色能做什么？看不到菜单怎么办？</span></button>
               </div>
 
-              <div class="suggestions" aria-label="推荐问题">
+              <button class="more-toggle" type="button" id="more-toggle" aria-expanded="false" aria-controls="more-suggestions">更多示例问题</button>
+
+              <div class="suggestions" id="more-suggestions" aria-label="更多示例问题" hidden>
                 <button class="suggestion" type="button" data-question="从零开始创建黄油鸡，MVP 最小闭环先做哪些步骤？"><span class="suggestion-index">01</span><span>从零开始创建黄油鸡，MVP 先做什么？</span></button>
                 <button class="suggestion" type="button" data-question="成品 1盒=800克，为什么 Workflow 里不再填写 1kg 产多少盒？"><span class="suggestion-index">02</span><span>SKU、BOM 与 Workflow 的单位怎么分工？</span></button>
                 <button class="suggestion" type="button" data-question="BOM 激活后，Workflow 的“自动同步并发布”会检查什么、怎样完成发布并启用？"><span class="suggestion-index">03</span><span>BOM 激活后怎样自动同步并发布？</span></button>
@@ -1237,8 +1197,6 @@
 
       var state = {
         tab: 'factory',
-        depth: 'mvp',
-        businessLine: 'general',
         messages: [],
         imageData: null,
         imageName: '',
@@ -1437,8 +1395,6 @@
       function persistSession() {
         try {
           sessionStorage.setItem(TABS[state.tab].storageKey, JSON.stringify({
-            depth: state.depth,
-            businessLine: state.businessLine,
             messages: state.messages.slice(-20)
           }));
         } catch (_) { /* session persistence is optional */ }
@@ -1651,8 +1607,6 @@
         } : {
           question: question,
           category: 'factory',
-          depth: state.depth,
-          business_line: state.businessLine,
           history: priorHistory,
           image_base64: imageData
         });
@@ -1926,12 +1880,6 @@
         reader.readAsDataURL(file);
       }
 
-      function setSegment(group, value) {
-        Array.prototype.forEach.call(group.querySelectorAll('button'), function (button) {
-          button.setAttribute('aria-pressed', button.dataset.value === value ? 'true' : 'false');
-        });
-      }
-
       function startNewConversation() {
         if (state.controller) state.controller.abort();
         state.controller = null;
@@ -1953,12 +1901,6 @@
         try {
           var saved = JSON.parse(sessionStorage.getItem(TABS[state.tab].storageKey) || 'null');
           if (!saved || !Array.isArray(saved.messages)) return;
-          if (state.tab === 'factory') {
-            if (['mvp', 'medium', 'full'].indexOf(saved.depth) >= 0) state.depth = saved.depth;
-            if (['general', 'stock', 'sales'].indexOf(saved.businessLine) >= 0) state.businessLine = saved.businessLine;
-            setSegment($('depth-segment'), state.depth);
-            setSegment($('line-segment'), state.businessLine);
-          }
           saved.messages.slice(-20).forEach(function (message) {
             if (!message || typeof message.content !== 'string') return;
             if (message.role === 'user') {
@@ -1999,24 +1941,16 @@
 
 
 
-      $('depth-segment').addEventListener('click', function (event) {
-        var button = event.target.closest('button[data-value]');
-        if (!button) return;
-        state.depth = button.dataset.value;
-        setSegment($('depth-segment'), state.depth);
-        persistSession();
-      });
-
-      $('line-segment').addEventListener('click', function (event) {
-        var button = event.target.closest('button[data-value]');
-        if (!button) return;
-        state.businessLine = button.dataset.value;
-        setSegment($('line-segment'), state.businessLine);
-        persistSession();
-      });
-
       Array.prototype.forEach.call(document.querySelectorAll('.suggestion'), function (button) {
         button.addEventListener('click', function () { sendQuestion(button.dataset.question || ''); });
+      });
+
+      $('more-toggle').addEventListener('click', function () {
+        var more = $('more-suggestions');
+        var opening = more.hidden;
+        more.hidden = !opening;
+        this.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        this.textContent = opening ? '收起示例问题' : '更多示例问题';
       });
 
       feed.addEventListener('scroll', function () { state.stickToBottom = isNearBottom(); }, { passive: true });
