@@ -46,3 +46,26 @@
 - `ClerkLedgerPairingContractTest` 抓不到：Mockito 手工种子、只管 clerk 家族、且其不变式（:121）**把 REVERSE 过滤掉** —— 对健康行 372 会误红。正确形状已在 `ReverseSignSemanticsContractTest` / `replayMovingAverage`，缺的是对**存量数据**断言 + 「REVERSE 符号与分类一致」的闸。
 - 修法选项：A 分类器加符号（必做）；B 回填 141/142/143 的 report_id=23919/23921/23923（解锁 LSM 三行；迁移，`_33` 之后）；C 放宽白名单（形态 E 反例，不选）；D 三态对账闸（必做）。378 与 F006 两行待定（F006 可删）。
 - ⚠️ 前次 probe 的「12/15 对平」在两种不变式下都不复现（朴素 11/15，正确 15/15）——两次仪器口径都要记。
+
+
+## 2026-09-06 01:24 小米真机 OTA 读数（probe via adb，M2102K1AC / Android 14 / 1.0.4(15)）
+
+- 触发机制（源码）：`App.tsx` → `scheduleBackgroundOtaCheck()`，启动与回前台各查一次（5 分钟节流）；有新版则 Alert「发现新版本 / 立即更新」，**`reloadAsync` 只在人点「立即更新」后执行**；手动入口只在 AboutScreen（登录后）。⇒ 包不会静默落地。
+- 开 App 前：进程不在、logcat 无任何 expo-updates 行（`grep -F` 修正后的读数；首轮 `"expo.\?updates"` 把 `?` 当字面量，假 0 已剔除）。
+- 01:05 启动 → 弹「发现新版本」（**证书修好 14 小时后设备仍是 9-01 旧版**）→ probe 点「立即更新」→ `Updates state change: Restart … latestManifest.id=98c3b3dd… launchAsset …/production/1788544899864/…1f13e55365d571065c625c8933cedfa9.hbc` → 冷启动 `Check → CheckCompleteUnavailable`，无弹框。标记：`98c3b3dd` 2 / `1788544899864` 2 / `3b60c7ef` **0**。APK 未动（lastUpdateTime 08-29 不变）。`run-as` 不可用（release 不可调试）——这是「量不到」不是「没有」。
+- 行为层：App 登出，记住的账号全是 F006（质检/仓管/操作员），**需 owner 用六膳门能看销售订单的账号登录**后读 `DLV-20260904-4086` 对应 SO 的按钮。probe 未输密码、未点账号。
+- ⇒ **判定拆两条**：包层 DELIVERED（此设备）；行为层 UNDECIDABLE（待登录）。**全部其他设备仍旧版**，直到各自有人开 App 并点更新。⇒ 待 owner 决定是否改为下次启动自动应用。
+
+## 2026-09-06 01:24 recon：权限管理现状（owner 要「按侧边栏模块勾角色」的总页）
+
+- 生效顺序实为 **4 层**：L4 用户级 GRANT/DENY → L2 `factory_module_configs.role_module_override`（JSONB，哨兵行 `__permissions__`）→ L1 `platform_role_permissions`（role×module，全局无工厂维度）→ Java `PERMISSION_MATRIX` 兜底。`checkAction` 的 `default` 分支按最严（要 `read_write`）；`w` 级过不了任何读检查（#812/#963 根因）。
+- **三族门 AND**：`@RequirePermission`（方法注解**替换**类注解，不取交）、`@RequireModule`（另一码空间，`ProductionModuleRegistry` 15 条映射，未登记的按同名兜底；`finance`/`operations` 就是这么过的）、`@RequireRole`（**331 处/64 文件**，字面角色名单，4 个平台角色旁路）。矩阵管不到后两族。
+- 模块清单 **7 份**互不一致：`ALL_MODULES` 18 / L1 seed 17 / 两个写接口 `ALLOWED_MODULES` 22（**缺 `operations`、`restaurantProcurement`**，保存会 IllegalArgument）/ `RoleController.DISPLAY_MODULES` 12（含幻影 `ai`）/ `ProductionModuleRegistry` 15 / `moduleRegistry.ts` 15 / menuConfig。
+- 侧边栏 19 个顶层 ↔ 13 个模块码；`/restaurant` 与 AI 工作台按角色名单不按模块；`work_report`/`report`/`operations` 无侧边栏入口而 `operations_coordinator` 唯一写权限就是 `operations`；菜单模块 ≠ 路由模块（`check-menu-permission-drift.py` 就是为此存在）。可见性有 **6 个独立载体** AND（矩阵/roles/factoryType/restaurantRoles/画布禁用模块/演示租户裁剪）+ 路由 `ROLE_PATH_WHITELIST`。
+- 现有 UI：L2 矩阵 `ModulePermissionMatrix.vue`（画布编辑器页签，可达）；L4 `UserModuleAccessMatrix.vue`（可达）；**L1 编辑页不存在**（`router/index.ts:1468-1473` 注释、目录空、`updatePlatformPermission` 零调用、`ModulePermissionMatrix.vue:36` 死链 `#/system/role-permissions`）；`/system/roles` 是空壳（编辑按钮「开发中」、14 角色写死、查看权限读的是 `PERMISSION_MATRIX` 而非生效值）；RN 无 UI 且自带第三份矩阵 `permissionHelper.ts:222-271`。
+- 矩阵 vs L1 漂移坐实：`finance_manager` 的 sales/production/procurement/rd 矩阵 `read`、L1 `-`（`V20261030_14`）；矩阵缺 `cashier`/`quality_controller`；`restaurant_owner` 矩阵全 rw。**Java 侧无任何闸钉矩阵↔迁移**（test 树 18 处命中全是引用/断言兜底）。仍在读矩阵的生产路径：`getUserPermissions`（AI ToolRbacGuard/ToolPrincipalPolicy）、`getRolePermissions`（RoleController、UserMenuPermissionServiceImpl）、`getAccessibleModules`。
+- **方案（给 owner）**：① 复用 `ModulePermissionMatrix.vue` 接 L1 端点建总页、模块清单收敛为一份、修两个写接口、改「角色权限」页显示生效值、加 Java 矩阵↔L1 闸；② 一份注册表同喂侧边栏与后端，标明按角色名单管的分组；③ 收编 330 处 `@RequireRole`。
+
+## 2026-09-06 01:24 `COST-AUX-ESTIMATED-LABEL` executor 被 Opus 403 打断
+
+`Failed to authenticate. API Error: 403 Request not allowed (model claude-opus-5)`，发生在变异测试起步。分支已有 2 commit，无 PR；同时另一条 Opus executor 仍在跑 ⇒ 疑单次/额度型拒绝而非全局。已 SendMessage 续派（先撤未提交的疑似变异）。若再 403 ⇒ 升 owner（Opus 额度/权限），⛔ 不擅自降 Sonnet。
