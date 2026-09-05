@@ -1,8 +1,12 @@
 """Read server config via Baota Panel API"""
-import requests, json, base64, re, urllib3, sys
+import requests, json, base64, re, urllib3, sys, os
 urllib3.disable_warnings()
 
-BT_URL = 'https://47.100.235.168:8888/658e3b15'
+# 面板地址/账号/口令不进仓库: 真值见 .claude/skills/server-operations/aliyun-credentials.md (gitignored)
+BT_URL = os.environ['BT_URL']            # e.g. https://<host>:8888/<panel-path>
+BT_USER = os.environ.get('BT_USER', 'user')
+BT_PASSWORD = os.environ['BT_PASSWORD']
+BT_BASE = BT_URL.rsplit('/', 1)[0]
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0'
 s = requests.Session()
 s.verify = False
@@ -26,13 +30,13 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 pub_key = RSA.import_key(pub_key_pem)
 cipher = PKCS1_v1_5.new(pub_key)
-encrypted_pass = base64.b64encode(cipher.encrypt(b'baotaiWQ3PUc')).decode()
+encrypted_pass = base64.b64encode(cipher.encrypt(BT_PASSWORD.encode())).decode()
 
 # Step 3: Try login - test both endpoints and payloads
 endpoints = [
-    ('https://47.100.235.168:8888/login', {'username': 'user', 'password': encrypted_pass, 'code': '', 'vcode': '', 'login_token': login_token}),
-    ('https://47.100.235.168:8888/658e3b15', {'username': 'user', 'password': encrypted_pass, 'code': '', 'vcode': '', 'login_token': login_token}),
-    ('https://47.100.235.168:8888/login', {'username': 'user', 'password': encrypted_pass}),
+    (BT_BASE + '/login', {'username': BT_USER, 'password': encrypted_pass, 'code': '', 'vcode': '', 'login_token': login_token}),
+    (BT_URL, {'username': BT_USER, 'password': encrypted_pass, 'code': '', 'vcode': '', 'login_token': login_token}),
+    (BT_BASE + '/login', {'username': BT_USER, 'password': encrypted_pass}),
 ]
 
 for url, data in endpoints:
@@ -53,7 +57,7 @@ for url, data in endpoints:
                     print(f"Token: {x_token[:30]}..." if x_token else "No token")
 
                     headers = {'x-http-token': x_token} if x_token else {}
-                    fr = s.post('https://47.100.235.168:8888/files?action=GetFileBody',
+                    fr = s.post(BT_BASE + '/files?action=GetFileBody',
                                data={'path': '/www/wwwroot/cretas/code/backend/python/.env'}, headers=headers)
                     fd = fr.json()
                     if fd.get('status'):

@@ -23,8 +23,7 @@ allowed-tools:
 | 项目 | 值 |
 |------|-----|
 | SSH | `ssh root@47.100.235.168` |
-| 宝塔面板 | `https://47.100.235.168:8888/658e3b15` |
-| 宝塔用户 | `user` / `baotaiWQ3PUc` |
+| 宝塔面板 | 地址 / 账号 / 口令见 `server-operations/aliyun-credentials.md`（gitignored，不进 tracked 文件） |
 | 系统 | Alibaba Cloud Linux 3 |
 | 到期 | 2027-02-10 |
 
