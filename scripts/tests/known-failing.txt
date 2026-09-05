@@ -29,4 +29,3 @@ test-release-artifacts-failfast.sh        # 疑似环境: 「preflight 拒绝了
 test-release-ci-artifact.sh               # 疑似真回归: ci.yml 的 push paths 未覆盖整个 backend/java/cretas-api/**
 test-release-parallel-fastlane.sh         # 疑似真回归: rc=126, scripts/deploy/release-java-preflight.sh 在 git 里没有执行位(Windows 检出看不出来)
 test-release-pipeline-acceleration.sh     # 存量红, CI 日志里未打出断言明细, 待单独查
-test-smartbi-python-deploy-epipe.sh       # 疑似真回归: deploy-smartbi-python.sh:401 仍有管道进 grep
