@@ -132,3 +132,11 @@
 - **下一票必带**（已写进 `SEC-CUSTOMER-ROSTER-REMAINING-PATHS`）：`/active` 的调用方有 `web-admin/src/views/warehouse/material-types/list.vue:272`，注释逐字写「后端另有专门为下拉场景准备的 `/customers/active`（无 DataScope 限制）」——有人特意迁过去绕范围；warehouse_* 角色 sales=-、finance=- ⇒ 照抄四码会打断仓库物料类型页。优先级：`/export`（全表）与 `/{id}/price-memory`（议价史）高于 `/by-industry` 之类。
 - **发 38**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 04:08:31 < 启动 04:08:50；javap 按方法块：`getCustomerList` 带 `RequirePermission`=True、`createCustomer` True（阳性）、`getActiveCustomers` False（阴性，本票故意未动）；`ToolRbacEnforcer` 常量池 `customer_list` 1；health 200。
 - ⚠️ RN 侧改动（`ShipmentManagementScreen` `Promise.all`→`allSettled`、`settleAllIndependently` 注释）**未推 OTA**，与 #590 的 RN 半一起攒着，等 owner 定「OTA 是否改自动应用」后一并推；⛔ OTA 导出用独立 worktree，别弄脏部署树。
+
+
+## 2026-09-06 05:13 #620 幽灵预扣交付（终审中）
+
+- 谓词按两条盖章路径的真实前置推出：小结 `InterimSettleServiceImpl:115/128`（`@Where` + 拒 COMPLETED/CANCELLED/PENDING_APPROVAL）、结单 `validateSettlementRequest:6206`（只收 IN_PROGRESS/PENDING）。分支：计划缺失/软删 ⇒ 排除 + `orphanRowCount`；CANCELLED ⇒ 排除 + `cancelledRowCount`（`reverseBatchReportsForApprovedCancel` 已回滚，再计=重复占）；COMPLETED/PENDING_APPROVAL ⇒ 保留 + `anomalousTerminalPlanIds` + WARN；状态 NULL ⇒ 保留。在遍历单点做（排除与计数同时发生，⛔ 不用 repo JOIN 静默丢）。
+- 普查：`findUnsettledStockFeedRows` 1 调用方改 1；`PendingInterimFeedService` 2 消费方经单点继承；`Snapshot` 构造 3 处改 2 留 1；`DeferredDeductionCompensationContractTest` 未动且绿。五个变异先打印再红（含「保留排除但静默计数器」M5）。47/0/0。
+- prod：LSM 56 活行在 5 个硬删计划上、全已结算；**全 prod 唯一一条 `semiFinished:true`（row 1500，`CLK-SEMI-5c711e0b-c76f35be`）正坐在其中一个硬删计划上**（08-29 已结算）⇒ 今天 0 是运气。⚠️ 订正：F006「8 行在软删计划上」自身就是软删行（`@Where` 已排），活行在已删计划上 = 0；但 F006 有 **2 条未结算行挂在 1 个 COMPLETED 计划上**——漏盖章 vs 冲销后重新待结算，两种成因读数相同，PR 选择浮出。
+- 登记：删除侧缺口——硬删 `production_plans` 不级联 `process_sheet_rows`；本仓 `@SQLDelete` 软删全局，这 5 个计划为何是硬删、谁在硬删，待查。56 行不清理（全已结算，修后贡献 0，清理纯风险）。
