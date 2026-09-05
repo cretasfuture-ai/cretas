@@ -101,3 +101,15 @@
 - **发 36**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 03:33:43 < 启动 03:34:02、`assertYieldRateInRange` 1 / `YIELD_RATE_MAX_INCLUSIVE` 1 / `V20261101_32` 在 jar 1 / 假串 0、health 200、web 入口 03:30:52。**库内效果**：`flyway 20261101.32 success 03:34:10`；`chk_br_yield = (IS NULL) OR (>0 AND <=300)`；F006 `SOP-20260817-01-黄油鸡` `overall_yield_rate` 100.00 → **NULL**；`bom_recipe_items` 144 条 100.00 未动（设计）。（分布查询一条 SQL 写错 GROUP BY 未取到，决定性读数已齐，未重跑。）
 - 登记：`BomYieldSuggestionRepository` 那个 `latestApplied` 方法现 0 个 `src/main` 调用点，仓库保留由契约测试登记；`GET /yield-suggestions` 端点无任何前端调用方（RN/web 均 0）。
 - CI 盲区第二例：executor 的新闸类名不匹配选择器被 `GateSelectorCoverageContractTest` 抓住（已有元判据），改名；全量 12980/0/0。
+
+
+## 2026-09-06 03:57 `PLAN-CROSS-SEMI-OFFSET-RESERVE-20260906` 归档 — #609 发 37 上线
+
+原条目：- `PLAN-CROSS-SEMI-OFFSET-RESERVE-20260906` — `review` — Owner: executor（organizer 派） — PR #609 开；终审：设计过，卡一条阻塞——`@Autowired(required=false) @Lazy` 注入靠 Mockito 测不出没接上、prod 预扣读数恰为 0 分不清 ⇒ 补真实 Spring 上下文断言字段非 null。全量套件已打 `java-full-ready` 标签。🔒
+
+- **终审需改已补**（`c75f515dbc`）：`PendingFeedWiringContractTest`（`@SpringBootTest`，真实容器）。⚠️ 执行者用变异 M9（给注入点一个匹配不到 bean 的 `@Qualifier`）证明**我给的判据「断言字段非 null」是恒真式**——`@Lazy` 注入的是代理 `jdk.proxy2.$Proxy433`，目标缺席时字段照样非 null、第一次调用才炸；改成真的调 `pendingSemiFeedSnapshot(...)` 才让 M9 变成点名「问不动这个协作者」的 Failure（已记 memory）。另坐实 `@DataJpaTest` 不加载 `@Service`，不能当接线证据。
+- 非阻塞已补：`WipRowDTO.pendingFeedExceedsAvailable`（与 floor 共用同一比较）；结单 409 hint 改为只说下一步动作，⛔ 不断言「被别的计划占掉」（未量到原因，形态 D′）。
+- 全量套件（`java-full-ready`）：12967/0/0，四个新 `*ContractTest` 各 4/9/7/6 条实际执行（按类名 grep 核过）。
+- **发 37**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 03:54:16 < 启动 03:54:33、`pendingFeedExceedsAvailable` 1 / `assertLiveSemiSourceStatus` 1 / `SFI_SOURCE_NOT_AVAILABLE` 1 / 假串 0、health 200。⚠️ prod 今天预扣读数为 0（无未结算 semiFinished 引用行），**「余量没变」不能当验收**；验收靠 F006 形状的 fixture。
+- 登记：(c) PENDING SP2 计划对聚合器结构性不可见 —— 已知覆盖缺口，非缺陷；(b) 幽灵预扣已开票 `BUG-GHOST-PENDING-FEED-DELETED-PLANS-20260906`。
+- 附：发 37 启动日志两条 `Startup warmup semanticIntentMatcher/intentEmbeddingCache FAILED: Embedding service unavailable`——9090 在线且 active，发 34 也出现过 3 次、35/36 没有 ⇒ 预热先于嵌入客户端就绪的启动竞态，非持续故障，登记不追。
