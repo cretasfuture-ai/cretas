@@ -44,21 +44,50 @@ mkdir -p "$LOG_DIR"
 declare -a LISTED=() FLAKY_LIST=()
 missing_listed=""
 bad_entry=""
+stale_flaky=""
 while IFS= read -r raw; do
-    body="${raw%%#*}"
-    body="$(printf '%s' "$body" | tr -d '[:space:]')"
+    # ⚠️ 两种取法各有用途, ⛔ 别混:
+    #   body_fields —— 去注释、**保留空格**, 用来切字段(FLAKY 行有 5 个字段);
+    #   body        —— 再去掉所有空白, 用来判空 / 判前缀 / 当单个文件名。
+    body_fields="${raw%%#*}"
+    body="$(printf '%s' "$body_fields" | tr -d '[:space:]')"
     [ -n "$body" ] || continue
     reason="${raw#*#}"
     [ "$reason" != "$raw" ] && [ -n "$(printf '%s' "$reason" | tr -d '[:space:]')" ] \
         || bad_entry="$bad_entry $body"
     if [ "${body#FLAKY}" != "$body" ]; then
-        # 第四态: 读数不可判定。⛔ 必须贴出观察到相反结果的 run id, 否则它就是
-        #    一张自己发给自己的豁免。
-        name="${body#FLAKY}"
-        printf '%s' "$reason" | grep -qE '[0-9]{8,}' \
-            || bad_entry="$bad_entry ${name}(FLAKY-缺run-id证据)"
-        [ -f "$TESTS_DIR/$name" ] || missing_listed="$missing_listed $name"
-        FLAKY_LIST+=("$name")
+        # ── 第四态: 读数不可判定 ──────────────────────────────────────────
+        # ⛔ 它是四态里**唯一不参与红绿判定**的, 所以必须自带出口, 否则就是一张
+        #    永久豁免。known-failing 的出口是 FIXED 探测器; FLAKY 没有那个 ——
+        #    时红时绿的东西, 任何单次读数都不能证明它已经稳定。
+        # ⇒ 两道闸:
+        #   ① **双向 run id**: 必须同时贴出一次 rc=0 和一次 rc≠0 的 run。
+        #      只贴一个等于「我看它失败过」—— 那是**确定性失败**的证据, 不是 flaky 的。
+        #   ② **日期过期**: 超过 14 天就红, 强制重新分类。
+        #      时间会替你做判断: 它要么早修好了, 要么根本不是 flaky。
+        # 格式: FLAKY <name> <YYYY-MM-DD> <run-id-rc0> <run-id-rc≠0>  # <理由>
+        set -- $body_fields
+        name="${2:-}"; fdate="${3:-}"; run_ok="${4:-}"; run_bad="${5:-}"
+        if [ -z "$name" ] || [ -z "$fdate" ] || [ -z "$run_ok" ] || [ -z "$run_bad" ]; then
+            bad_entry="$bad_entry ${name:-<无名>}(FLAKY-格式应为:FLAKY_name_日期_rc0run_rcNrun)"
+        elif [ "$run_ok" = "$run_bad" ]; then
+            # 同一个 run 不可能既 rc=0 又 rc≠0 —— 贴两遍同一个 id 是在凑格式。
+            bad_entry="$bad_entry ${name}(FLAKY-两个run-id相同:$run_ok)"
+        elif ! printf '%s' "$fdate" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+            bad_entry="$bad_entry ${name}(FLAKY-日期应为YYYY-MM-DD:$fdate)"
+        else
+            entry_epoch=$(date -u -d "$fdate" +%s 2>/dev/null || echo "")
+            if [ -z "$entry_epoch" ]; then
+                bad_entry="$bad_entry ${name}(FLAKY-日期解析不了:$fdate)"
+            else
+                age_days=$(( ( $(date -u +%s) - entry_epoch ) / 86400 ))
+                if [ "$age_days" -gt 14 ]; then
+                    stale_flaky="$stale_flaky ${name}(登记于 $fdate, 已 ${age_days} 天)"
+                fi
+            fi
+        fi
+        [ -z "$name" ] || [ -f "$TESTS_DIR/$name" ] || missing_listed="$missing_listed $name"
+        [ -z "$name" ] || FLAKY_LIST+=("$name")
     else
         [ -f "$TESTS_DIR/$body" ] || missing_listed="$missing_listed $body"
         LISTED+=("$body")
@@ -66,6 +95,13 @@ while IFS= read -r raw; do
 done < "$KNOWN"
 
 [ -z "$bad_entry" ] || { echo "error=known_failing_entry_without_reason$bad_entry" >&2; exit 2; }
+if [ -n "$stale_flaky" ]; then
+    echo "FAIL: FLAKY 条目过期, 请重新分类:$stale_flaky" >&2
+    echo "      FLAKY 是四态里唯一不参与红绿判定的, 所以它必须会过期 —— 否则就是永久豁免。" >&2
+    echo "      ⇒ 要么它早就稳定了(移出 FLAKY), 要么它其实是确定性失败(移进 known-failing)," >&2
+    echo "        要么它真还在抖(重新取两侧 run id 并把日期更新到今天)。" >&2
+    exit 1
+fi
 if [ -n "$missing_listed" ]; then
     echo "FAIL: known-failing.txt 里这些用例**文件不存在**:$missing_listed" >&2
     echo "      ⛔ 测试被删了不是修好了。要么把文件找回来, 要么在同一个 commit 里" >&2

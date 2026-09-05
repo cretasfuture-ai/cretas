@@ -108,6 +108,18 @@ report_reversal_logs|plan_id|production_plans|ReportReversalLog.planId 同为 @C
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🔴 抓快照的那条 SQL —— **全系统唯一口径**
+# ═══════════════════════════════════════════════════════════════════════════
+# 它会被**原样写进快照文件头部**, 而 watch 脚本在线上是从那个头部读出来再执行一次,
+# 拿结果跟快照体对账。⇒ 只有一处真相, 跟着数据一起走。
+#
+# ⛔ 不许在 watch 脚本里另写一条「意思一样」的 —— 哪怕只是把 `current_schema()`
+#    换成 `'public'`, 只要哪天两者不等价, **第一次线上跑就 rc=2**, 而那是个假故障。
+#    (2026-09-06 实测: 这两种写法在 prod 上都返回 384 张、差集 0 —— 现在等价,
+#     但「现在等价」不是「永远等价」, 那正是形态 D 的定义。)
+HASDEL_SQL="SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'"
+
 # ── 1. 问活进程要 DB 名 ────────────────────────────────────────────────────
 #    ⛔ 不要用配置里的默认值: prod 是 cretas_prod_db, 而 properties 默认写的是
 #       ${DB_NAME:cretas_db} —— 本仓已经因此误报过「迁移失败」。
@@ -129,17 +141,22 @@ if [ "$OFFLINE" -eq 1 ]; then
   #    多几十对、且拿去跑会报错的 SQL, 而漂移闸会把它当成「仓库份过期了」。
   #    (硬约束 4: 没量到就说没量到, 别装成读数。)
   [ -s "$REPO_HASDEL" ] || { echo "⛔ 快照不存在: $REPO_HASDEL (跑一次 --write 抓下来)"; exit 2; }
-  cp "$REPO_HASDEL" "$WORK/hasdel.txt"
+  # 头部的 `-- ` 行是元数据(含那条口径 SQL), 不是表名。
+  grep -vE '^--|^[[:space:]]*$' "$REPO_HASDEL" > "$WORK/hasdel.txt"
   HASDEL_COUNT=$(grep -c . "$WORK/hasdel.txt" || true)
   if [ "${HASDEL_COUNT:-0}" -lt 50 ]; then
     echo "⛔ 快照阳性对照失败: 只有 $HASDEL_COUNT 行 (预期数百张)。"
     exit 2
   fi
 elif true; then
-  ssh "$SSH_HOST" "$REMOTE_ENV"'
-psql -h localhost -U "${DB_USERNAME:-cretas_user}" -d "$DB_NAME" -tAc \
-  "SELECT table_name FROM information_schema.columns
-   WHERE table_schema = current_schema() AND column_name = '"'"'deleted_at'"'"'"' \
+  # ⚠️ 用 base64 把那条 SQL 送过去, ⛔ 不再手工嵌套引号。
+  #    SQL 里有 'deleted_at' 的单引号, 塞进单引号 ssh 串要写成 '"'"' —— 那种写法
+  #    改一次错一次, 而且**没法**跟 $HASDEL_SQL 共用同一份文本(那就又是两份了)。
+  #    base64 输出只有 [A-Za-z0-9+/=], 放进单引号绝对安全。
+  HASDEL_SQL_B64=$(printf '%s' "$HASDEL_SQL" | base64 | tr -d '\n')
+  ssh "$SSH_HOST" "$REMOTE_ENV
+SDO_SQL=\$(printf '%s' '$HASDEL_SQL_B64' | base64 -d)
+psql -h localhost -U \"\${DB_USERNAME:-cretas_user}\" -d \"\$DB_NAME\" -tAc \"\$SDO_SQL\"" \
     > "$WORK/hasdel.txt" 2>"$WORK/err.txt" || { echo "⛔ 连库失败:"; cat "$WORK/err.txt"; exit 2; }
   HASDEL_COUNT=$(grep -c . "$WORK/hasdel.txt" || true)
   # 阳性对照: 带软删的表应该有几百张。个位数 = 查询本身出问题了。
@@ -168,7 +185,8 @@ import io, os, re, sys
 sys.stdout.reconfigure(newline="\n")
 entity_root, hasdel_path, sql_only = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 manual_path, prov_stamp = sys.argv[4], sys.argv[5]
-hasdel = set(l.strip() for l in io.open(hasdel_path, encoding="utf-8") if l.strip())
+hasdel = set(l.strip() for l in io.open(hasdel_path, encoding="utf-8")
+              if l.strip() and not l.startswith("--"))
 
 soft, ents = set(), {}
 for dp, _, fs in os.walk(entity_root):
@@ -283,9 +301,17 @@ if [ "$WRITE_MODE" -eq 1 ]; then
   mkdir -p "$(dirname "$REPO_SQL")"
   cp "$WORK/scan.sql" "$REPO_SQL"
   # 快照和 SQL 必须**同一次**写出去 —— 分两次写就又是两份会漂的东西。
-  LC_ALL=C sort -u "$WORK/hasdel.txt" | tr -d '\r' > "$REPO_HASDEL"
+  # 头部把那条口径 SQL 原样带上: watch 脚本在线上从这里读出来再执行一次做对账,
+  # ⇒ 「抓的时候用什么口径」和「对账时用什么口径」物理上是同一个字符串。
+  {
+    printf -- '-- 这是生成物。由 scripts/check-soft-delete-orphans.sh --write 从 prod 抓取。\n'
+    printf -- '-- ⛔ 不要手工编辑: 它是一份**读数**(prod 上哪些表有 deleted_at), 不是配置。\n'
+    printf -- '-- captured-at %s\n' "$(date -u '+%F %TZ')"
+    printf -- '-- capture-sql %s\n' "$HASDEL_SQL"
+    LC_ALL=C sort -u "$WORK/hasdel.txt" | tr -d '\r'
+  } > "$REPO_HASDEL"
   echo "✓ 已写回 $REPO_SQL ($ASSOC_COUNT 条关联)"
-  echo "✓ 已写回 $REPO_HASDEL ($(grep -c . "$REPO_HASDEL") 张带 deleted_at 的表)"
+  echo "✓ 已写回 $REPO_HASDEL ($(grep -cvE "^--|^$" "$REPO_HASDEL") 张带 deleted_at 的表)"
   echo "  下一步: 提 PR 合进 main, 再由 scripts/deploy/install-server-scripts.sh 装到服务器。"
   exit 0
 fi

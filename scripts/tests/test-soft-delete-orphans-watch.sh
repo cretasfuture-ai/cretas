@@ -40,10 +40,18 @@ mkdir -p "$FAKEBIN"
 #    `no-listener-on-10010-10020` —— **一个坏掉的仪器长成了一个合理的读数**。
 #    这正是被测脚本原来那个 bug 的同款形状(形态 A: 错的是尺子, 不是被测的东西)。
 #    ⇒ 下面 make_ss 里加了自检, 让桩坏掉时当场喊出来。
-for tool in date mktemp rm grep awk sed cut tr head cat; do
+for tool in date mktemp rm grep awk sed cut tr head cat sort comm; do
     abs=$(command -v "$tool") || fail "本机缺 $tool, 无法构造测试环境"
     printf '#!/bin/sh\nexec %s "$@"\n' "$abs" > "$FAKEBIN/$tool"
     chmod +x "$FAKEBIN/$tool"
+done
+# 🔴 同一个坑栽了两次: 第一次漏 `cat`(ss 桩用它), 第二次漏 `sort`/`comm`
+#    (hasdel 对账用它们)。两次的症状都不是「报错」, 而是**一个看起来合理的错误结论**
+#    ——「端口上没人」和「快照过期」。⇒ 逐个证明它们在受限 PATH 下真的能跑,
+#    ⛔ 不靠「我列全了吧」。
+for tool in date mktemp rm grep awk sed cut tr head cat sort comm; do
+    PATH="$FAKEBIN" command -v "$tool" >/dev/null 2>&1 \
+        || fail "受限 PATH 下找不到 $tool —— 被测脚本会拿它做判断, 缺了会得出假结论"
 done
 # 阳性对照: 这个 bin 目录必须真的**不含** ss —— 否则「ss-not-found」那条永远构造不出来,
 # 而它长得跟「测试通过」一模一样。
@@ -61,15 +69,38 @@ make_ss() {  # $1 = 输出内容
     [ "$rc" = 0 ] || fail "ss 桩在受限 PATH 下跑不起来(rc=$rc): $out"
     [ -n "$out" ] || fail "ss 桩输出为空 —— 它会被误读成「端口上没人」"
 }
+# psql 桩要回答**两个**查询, ⛔ 不能一个输出应付到底:
+#   · `-At -c <capture-sql>`  → hasdel 对账, 回 $TMP_ROOT/hasdel_live.txt
+#   · `-f <scan.sql>`         → 孤儿扫描, 回调用方给的那份
+# 混成一个的话, 对账那一步会拿到孤儿结果表格当表名, 于是**每个用例都 stale** ——
+# 那看起来会像「新加的闸到处误报」, 而不是「我的桩写错了」(形态 A: 错的是尺子)。
 make_psql() {  # $1 = 退出码, $2 = stdout
     {
         printf '#!/bin/sh\n'
         printf 'printf "%%s\\n" "PGPASSWORD=$PGPASSWORD" > "%s"\n' "$TMP_ROOT/psql.env"
         printf 'printf "%%s\\n" "$*" >> "%s"\n' "$TMP_ROOT/psql.env"
+        printf 'case "$*" in\n  *-At*) cat "%s"; exit 0 ;;\nesac\n' "$TMP_ROOT/hasdel_live.txt"
         printf 'cat <<'"'"'PQEOF'"'"'\n%s\nPQEOF\n' "$2"
         printf 'exit %s\n' "$1"
     } > "$FAKEBIN/psql"
     chmod +x "$FAKEBIN/psql"
+}
+
+# 快照(装在服务器上那份)与「真库实测」两侧。默认两侧一致 ⇒ 对账通过。
+CAPTURE_SQL="SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'"
+make_hasdel() {  # $1 = 快照表名(换行分隔), $2 = 实测表名(不给就同 $1)
+    {
+        printf -- '-- 这是生成物。\n'
+        printf -- '-- captured-at 2026-09-06 00:00:00Z\n'
+        printf -- '-- capture-sql %s\n' "$CAPTURE_SQL"
+        printf '%s\n' "$1"
+    } > "$TMP_ROOT/hasdel.snap"
+    printf '%s\n' "${2:-$1}" > "$TMP_ROOT/hasdel_live.txt"
+}
+# 阳性对照要求实测 >= 50 张, 所以造一份够长的名单。
+gen_tables() {  # $1 = 张数
+    local i=1
+    while [ "$i" -le "$1" ]; do printf 't_%03d\n' "$i"; i=$((i + 1)); done
 }
 make_environ() {  # 参数 = KEY=VAL...; 写成 NUL 分隔, 和真 /proc/<pid>/environ 一样
     mkdir -p "$TMP_ROOT/proc/4242"
@@ -88,6 +119,7 @@ run_watch() {
     SDO_BIN_PATH="$FAKEBIN" \
     SDO_PROC_ROOT="$TMP_ROOT/proc" \
     SDO_SQL_FILE="$SQL" SDO_LEDGER="$LEDGER" SDO_ALERTS="$ALERTS" SDO_JAR="$JAR" \
+    SDO_HASDEL="$TMP_ROOT/hasdel.snap" \
         bash "$WATCH" >/dev/null 2>&1
     RC=$?
     # 形态 C″ / 硬约束 9: 先把实际读数打出来, 再断言。
@@ -105,6 +137,8 @@ printf -- '-- generated-from deadbeefcafe 2026-09-06 00:00:00Z\nSELECT 1;\n' > "
 GOOD_SS='State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
 LISTEN 0      100          *:10010            *:*    users:(("java",pid=4242,fd=30))'
 GOOD_ENV=(DB_NAME=cretas_prod_db DB_PASSWORD=realpw POSTGRES_PASSWORD=otherpw)
+BASE_TABLES=$(gen_tables 60)
+make_hasdel "$BASE_TABLES"
 
 # ═════════ 1. rc=2 三态: ss-not-found ═════════════════════════════════════
 # ⛔ 这就是 15 天空转的那一条。修之前它长成 `no-backend-pid`(= 后端挂了),
@@ -229,6 +263,56 @@ assert_rc 0 "provenance-missing"
 assert_ledger "INFO provenance-missing" "provenance-missing"
 assert_no_ledger "STALE" "「说不清出处」不是「已知过期」"
 ok "provenance-missing 是 INFO"
+
+# ═════════ 11b. hasdel 快照对账 ═══════════════════════════════════════════
+# 🔴 这一条守的是**离线闸看不见的那半边**。
+#    CI 里的漂移闸拿快照离线重放, 再跟仓库份比 —— 快照旧了的时候, **两边用的是
+#    同一份旧快照**, 于是逐字相同、全绿, 而 prod 的真实集合已经不一样了。
+#    ▎两份都错成一样, 比对就是恒真式(形态 B′)。
+#    只有在线上对着真库才量得到。⇒ 强制构造一次。
+echo "[11b] prod 新加了一张带 deleted_at 的表 ⇒ hasdel-snapshot-stale"
+printf -- '-- generated-from deadbeefcafe 2026-09-06 00:00:00Z\nSELECT 1;\n' > "$SQL"
+make_psql 0 '(0 rows)'
+make_environ "${GOOD_ENV[@]}"
+# 实测比快照多一张 —— 这正是「新表加了 deleted_at, 而扫描面还不知道」。
+NEW_TABLE_LIST=$(printf '%s\nbrand_new_soft_deleted_table\n' "$BASE_TABLES")
+make_hasdel "$BASE_TABLES" "$NEW_TABLE_LIST"
+echo "    构造已生效: 快照 $(printf '%s\n' "$BASE_TABLES" | grep -c .) 张 / 实测 $(grep -c . "$TMP_ROOT/hasdel_live.txt") 张"
+run_watch
+assert_rc 2 "hasdel-stale"
+assert_ledger "INSTRUMENT_DEAD reason=hasdel-snapshot-stale" "hasdel-stale"
+assert_ledger "only-live=[brand_new_soft_deleted_table]" "差集要打进台账"
+assert_no_ledger "OK no-orphans" "扫描面过期时不许落进「没有孤儿」"
+grep -Fq "brand_new_soft_deleted_table" "$ALERTS" || fail "告警里没列出多出来的表"
+ok "多一张表 ⇒ rc=2 + 差集进台账"
+
+# 反向: 快照有而 prod 没有(表被删了 / 列被去掉)—— SQL 会在那张表上报错。
+echo "[11c] 快照比 prod 多一张 ⇒ 同样 stale, 但差集在另一边"
+GONE_LIST=$(printf '%s\ntable_that_was_dropped\n' "$BASE_TABLES")
+make_hasdel "$GONE_LIST" "$BASE_TABLES"
+run_watch
+assert_rc 2 "hasdel-stale 反向"
+assert_ledger "only-snap=[table_that_was_dropped]" "反向差集"
+ok "少一张表 ⇒ 差集落在 only-snap"
+
+# 阴性对照: 两侧一致时**不许**报 stale —— 否则这道闸第一次线上跑就恒红。
+echo "[11d] 阴性对照: 两侧一致 ⇒ 不报 stale"
+make_hasdel "$BASE_TABLES"
+run_watch
+assert_rc 0 "两侧一致"
+assert_no_ledger "hasdel-snapshot-stale" "一致时不许报 stale"
+assert_ledger "INFO hasdel-in-sync tables=60" "一致时要留一行「量过了」的读数"
+ok "一致 ⇒ rc=0 且台账有 hasdel-in-sync(⛔ 不是「没消息就是好消息」)"
+
+# 口径必须来自快照头部, ⛔ 不许脚本自己另写一条。
+echo "[11e] 快照头部没有 capture-sql ⇒ 拒绝猜, 报 missing"
+grep -v '^-- capture-sql ' "$TMP_ROOT/hasdel.snap" > "$TMP_ROOT/h2" && mv "$TMP_ROOT/h2" "$TMP_ROOT/hasdel.snap"
+echo "    构造已生效: capture-sql 行数 = $(grep -c '^-- capture-sql ' "$TMP_ROOT/hasdel.snap")"
+run_watch
+assert_rc 2 "缺 capture-sql"
+assert_ledger "INSTRUMENT_DEAD reason=hasdel-snapshot-missing" "缺 capture-sql"
+ok "缺口径 ⇒ rc=2, ⛔ 不自己编一条"
+make_hasdel "$BASE_TABLES"
 
 # ═════════ 12. sql-missing ════════════════════════════════════════════════
 echo "[12] sql-missing"

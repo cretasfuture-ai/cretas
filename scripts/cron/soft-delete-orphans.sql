@@ -1,4 +1,4 @@
--- generated-from 8a6a9dc4b97c 2026-09-05 22:52:19Z
+-- generated-from f4fe4ea17f81 2026-09-05 23:37:53Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 SELECT * FROM (

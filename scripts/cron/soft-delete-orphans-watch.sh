@@ -48,6 +48,7 @@ SQL_FILE="${SDO_SQL_FILE:-/www/wwwroot/cretas/scripts/soft-delete-orphans.sql}"
 ALERTS="${SDO_ALERTS:-/www/wwwroot/cretas/logs/soft-delete-orphans.alert}"
 LEDGER="${SDO_LEDGER:-/www/wwwroot/cretas/logs/soft-delete-orphans.ledger}"
 JAR="${SDO_JAR:-/www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar}"
+HASDEL="${SDO_HASDEL:-/www/wwwroot/cretas/scripts/soft-delete-orphans.hasdel.txt}"
 
 # 🔴 成因 ① 的对策。`command -v ss` 之所以够用, 正是因为这里已经把 /usr/sbin 钉进来了
 # (等价于 `command -v ss || /usr/sbin/ss`, 但只有一处真相)。
@@ -195,9 +196,68 @@ MISSING=""
     "已读到的键: $(printf '%s\n' "$ENV_LINES" | cut -d= -f1 | tr '\n' ' ')"
 
 CTX="db=$DB_NAME_V user=$DB_USER_V(src=$USER_SRC) pw=$PW_VAR"
+PSQL() { PGPASSWORD="$PW" psql -h localhost -U "$DB_USER_V" -d "$DB_NAME_V" "$@"; }
 
-# ── 5. 执行 ───────────────────────────────────────────────────────────────
-OUT=$(PGPASSWORD="$PW" psql -h localhost -U "$DB_USER_V" -d "$DB_NAME_V" -f "$SQL_FILE" 2>&1)
+# ── 5. 快照对账: 扫描面是不是还覆盖着 prod 的真实形状 ─────────────────────
+# 🔴 出处戳只能证明「SQL 出自哪个 commit」, **证明不了扫描面还对**。
+#    hasdel 快照(哪些表有 deleted_at)是生成器唯一的数据库输入; prod 上给某张表加了
+#    deleted_at 之后, 快照就旧了 —— 而离线重放用的是同一份旧快照, 于是**重放结果与
+#    仓库份逐字相同, CI 全绿**, 而真实集合已经不同了。
+#    ▎两份都错成一样, 比对就变成了恒真式(形态 B′)。
+# ⇒ 只有在**线上**、对着真库, 才能发现这件事。这里就是那个唯一的观测点。
+#
+# ⚠️ 口径必须与抓取时**逐字相同**: 这里执行的 SQL 是从快照头部 `-- capture-sql `
+#    读出来的那一条, ⛔ 不在本文件里另写一条「意思一样」的。
+#    (另写一条的后果是**第一次线上跑就 rc=2** —— 一个假故障。)
+if [ ! -s "$HASDEL" ]; then
+    dead hasdel-snapshot-missing "快照不在: $HASDEL (它随本脚本一起装, 见 server-script-inventory.conf)"
+fi
+CAPTURE_SQL=$(grep -m1 '^-- capture-sql ' "$HASDEL" | sed 's/^-- capture-sql //')
+if [ -z "$CAPTURE_SQL" ]; then
+    dead hasdel-snapshot-missing "快照头部没有 '-- capture-sql ' 行, 无法确定抓取口径" \
+        "⛔ 不猜一条 —— 猜错的口径会把「快照是好的」报成 stale"
+fi
+# 防呆: 只允许一条 SELECT。快照是 root 装上来的, 但从数据文件里读出来的东西拿去
+# 执行, 形状该被约束住。
+case "$CAPTURE_SQL" in
+    SELECT*) ;;
+    *) dead hasdel-snapshot-missing "capture-sql 不是 SELECT 开头, 拒绝执行: $CAPTURE_SQL" ;;
+esac
+if printf '%s' "$CAPTURE_SQL" | grep -q ';'; then
+    dead hasdel-snapshot-missing "capture-sql 里有分号(多语句), 拒绝执行"
+fi
+
+# 快照体与实测各自归一化后比对。⚠️ 排序口径要和生成器写快照时一致(LC_ALL=C sort -u)。
+grep -vE '^--|^[[:space:]]*$' "$HASDEL" | tr -d '\r' | LC_ALL=C sort -u > "$WORK/snap.txt"
+LIVE_RAW=$(PSQL -At -c "$CAPTURE_SQL" 2>"$WORK/hasdel.err")
+LIVE_RC=$?
+if [ "$LIVE_RC" -ne 0 ]; then
+    dead "psql-failed" "rc=$LIVE_RC $CTX (对账查询失败)" \
+        "$(head -3 "$WORK/hasdel.err" | tr '\n' ' ')"
+fi
+printf '%s\n' "$LIVE_RAW" | grep -vE '^[[:space:]]*$' | tr -d '\r' | LC_ALL=C sort -u > "$WORK/live.txt"
+
+SNAP_N=$(grep -c . "$WORK/snap.txt"); LIVE_N=$(grep -c . "$WORK/live.txt")
+# 阳性对照: 实测个位数 = 查询本身坏了, ⛔ 不许把它读成「prod 少了 380 张表」。
+[ "$LIVE_N" -ge 50 ] || dead hasdel-snapshot-stale \
+    "实测只有 $LIVE_N 张带 deleted_at 的表(预期数百张) —— 是查询坏了, 不是 prod 变了" \
+    "$CTX"
+
+ONLY_LIVE=$(LC_ALL=C comm -13 "$WORK/snap.txt" "$WORK/live.txt" | tr '\n' ' ')
+ONLY_SNAP=$(LC_ALL=C comm -23 "$WORK/snap.txt" "$WORK/live.txt" | tr '\n' ' ')
+if [ -n "${ONLY_LIVE// /}" ] || [ -n "${ONLY_SNAP// /}" ]; then
+    # 差集**打进台账行**, 不只写告警 —— 台账是那个「必发生」的读数。
+    note "HASDEL_DRIFT snap=$SNAP_N live=$LIVE_N only-live=[${ONLY_LIVE% }] only-snap=[${ONLY_SNAP% }]"
+    dead hasdel-snapshot-stale \
+        "扫描面已过期: 快照 $SNAP_N 张 / 实测 $LIVE_N 张" \
+        "prod 有而快照没有(新加了 deleted_at, 扫不到它的孤儿): ${ONLY_LIVE:-无}" \
+        "快照有而 prod 没有(表已删/列已去, SQL 可能报错): ${ONLY_SNAP:-无}" \
+        "⇒ 本地跑 ./scripts/check-soft-delete-orphans.sh --write 重新抓, 提 PR, 再装。"
+fi
+note "INFO hasdel-in-sync tables=$SNAP_N"
+
+# ── 6. 执行 ───────────────────────────────────────────────────────────────
+OUT=$(PSQL -f "$SQL_FILE" 2>&1)
 RC=$?
 if [ "$RC" -ne 0 ]; then
     dead "psql-failed" "rc=$RC $CTX" "$(printf '%s\n' "$OUT" | head -5 | tr '\n' ' ')"

@@ -1,3 +1,7 @@
+-- 这是生成物。由 scripts/check-soft-delete-orphans.sh --write 从 prod 抓取。
+-- ⛔ 不要手工编辑: 它是一份**读数**(prod 上哪些表有 deleted_at), 不是配置。
+-- captured-at 2026-09-05 23:37:54Z
+-- capture-sql SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'
 abaca_quantity_log
 accounting_periods
 accounts

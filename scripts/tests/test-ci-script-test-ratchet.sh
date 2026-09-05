@@ -108,7 +108,8 @@ ok "名单条目缺理由 ⇒ 红"
 # NEW_FAILURE。**两边都会让闸随机变红**, 而随机红的闸活不过一周(形态 E)。
 mk legacy-red.sh 1
 mk flip.sh 1
-printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh  # 读数不可判定, 见 run 33997837202(rc=1) 与 33998506319(rc=0)\n' \
+TODAY=$(date -u +%F)
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh %s 33998506319 33998380030  # 读数不可判定\n' "$TODAY" \
     > "$TMP/scripts/tests/known-failing.txt"
 run
 [ "$RC" = 0 ] || { cat "$TMP/out"; fail "FLAKY 用例红的那次不该弄红整个闸"; }
@@ -120,12 +121,42 @@ grep -qE 'rc=0 +flip\.sh +FLAKY' "$TMP/out" || fail "绿的那次没标 FLAKY"
 grep -q 'FLAKY=1' "$TMP/out" || fail "汇总里没单独计数 FLAKY"
 ok "第四态: rc=0 和 rc=1 都不参与判定, 但 rc 照常打印且单独计数"
 
-# ⛔ FLAKY 不能是一张自己发给自己的豁免 —— 必须贴出观察到相反结果的 run id。
-printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh  # 我觉得这个有点 flaky\n' > "$TMP/scripts/tests/known-failing.txt"
+# ── FLAKY 的两道出口闸 ────────────────────────────────────────────────────
+# 它是四态里唯一不参与红绿判定的, 所以必须自带出口, 否则就是永久豁免。
+
+# ⛔ 出口①: 只贴一个 run id 不算 —— 那是**确定性失败**的证据, 不是 flaky 的。
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh %s 33998506319  # 只贴了一侧\n' "$TODAY" \
+    > "$TMP/scripts/tests/known-failing.txt"
 run
-[ "$RC" != 0 ] || { cat "$TMP/out"; fail "没有 run id 证据的 FLAKY 竟然放行"; }
-grep -q 'FLAKY-缺run-id证据' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
-ok "FLAKY 缺 run id 证据 ⇒ 红"
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "单侧 run id 的 FLAKY 竟然放行"; }
+grep -q 'FLAKY-格式应为' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+ok "出口①: 只有一个 run id ⇒ 红(单侧只能证明它失败过)"
+
+# 同一个 run 不可能既 rc=0 又 rc≠0 —— 贴两遍同一个 id 是在凑格式。
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh %s 33998506319 33998506319  # 两个一样\n' "$TODAY" \
+    > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "两个相同 run id 竟然放行"; }
+grep -q 'FLAKY-两个run-id相同' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+ok "出口①: 两个 run id 相同 ⇒ 红"
+
+# ⛔ 出口②: 超过 14 天必须重新分类 —— 时间替你做判断。
+OLD=$(date -u -d '20 days ago' +%F)
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh %s 33998506319 33998380030  # 20 天前登记的\n' "$OLD" \
+    > "$TMP/scripts/tests/known-failing.txt"
+echo "    变异到达确认: 条目日期 = $OLD (今天 $TODAY)"
+run
+[ "$RC" != 0 ] || { cat "$TMP/out"; fail "20 天前的 FLAKY 条目竟然还放行"; }
+grep -q 'FLAKY 条目过期' "$TMP/out" || { cat "$TMP/out"; fail "措辞不对"; }
+ok "出口②: 登记超过 14 天 ⇒ 红「请重新分类」"
+
+# 边界: 恰好 14 天内还能过, ⛔ 别把有效条目也拒了。
+EDGE=$(date -u -d '13 days ago' +%F)
+printf 'legacy-red.sh  # 存量红\nFLAKY flip.sh %s 33998506319 33998380030  # 13 天前\n' "$EDGE" \
+    > "$TMP/scripts/tests/known-failing.txt"
+run
+[ "$RC" = 0 ] || { cat "$TMP/out"; fail "13 天前的条目不该被拒"; }
+ok "边界: 13 天内仍然有效(闸不过紧)"
 rm -f "$TMP/scripts/tests/flip.sh"
 
 # ── 硬约束 9: 一个用例都没通过时不许报绿 ──────────────────────────────────
