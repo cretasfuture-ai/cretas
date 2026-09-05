@@ -95,8 +95,26 @@ public class OrderCostBreakdownService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.bom.BomRecipeItemRepository bomRecipeItemFallbackRepository;
 
+    /**
+     * 辅料先估 (owner 裁定 2026-09-06) 的配比来源 —— {@code bom_seasoning_items}。
+     *
+     * <p>字段注入 + {@code required=false}, 与上面几个同一条纪律: 本类构造器被多个测试直接 new,
+     * 改签名会让并行线编译不过; 缺失时整块估算跳过 (退回改前行为: 无实际耗用的辅料成本为 0 且
+     * 一声不吭 —— 那正是本次要修的, 所以缺失时也照旧不喊, 不制造新的噪声)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
+
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final BigDecimal THOUSAND = new BigDecimal("1000");
     private static final int MAX_DEPTH = 10;
+
+    /**
+     * 辅料先估的<b>唯一</b>标签字面量 —— 明细行 {@code basis} 与给用户的那句话都用它。
+     *
+     * <p>⛔ 不要在前端或别处再写一遍这四个字 (本仓形态 D)。
+     */
+    public static final String ESTIMATED_AUX_LABEL = "按配比估算";
 
     public OrderCostBreakdownDTO compute(String factoryId, String orderId, boolean maskPrice) {
         List<String> planIds = planRepository.findByFactoryIdAndSourceOrderId(factoryId, orderId).stream()
@@ -180,6 +198,9 @@ public class OrderCostBreakdownService {
         // 🔴 客供主料成本口径 (a)（owner 裁定，2026-09-04）：CUSTOMER_OWNED 且无价的批次记在这里，
         // 显式记 0，⛔ 不进 missingCostItems（那会阻断 costComplete，见下方 RAW_MATERIAL 分支）。
         List<String> customerSuppliedItems = new ArrayList<>();
+        // 🔴 辅料先估 (owner 裁定 2026-09-06): 无实际耗用记录的辅料, 按 BOM 配比 × 实际主料投入
+        //    折算成本, 每条标「按配比估算」。金额进 seasoning 桶(它就是调料成本), 明细挂这里。
+        List<OrderCostBreakdownDTO.EstimatedAuxItem> estimatedAuxItems = new ArrayList<>();
         // 同一产品的多个批次, 各自绑的 BOM 版本 —— 用来发现「期间改过配方」。
         // 不一致时这几批的成本/毛利【不可横向比较】: 「这批毛利低」会被读成生产问题,
         // 而实际是换了配方。⇒ 必须提示, 不能让人默默地比。
@@ -200,6 +221,22 @@ public class OrderCostBreakdownService {
         java.util.Set<String> settlementPlansMerged = new java.util.HashSet<>();
         for (ProductionBatch b : batches) {
             auditBatches.add(b);
+            // ── 辅料先估的三个读数 (per batch, 见下方 estimateAuxByBomRatio) ──────────────
+            //   ① 本批调料桶的起点: 循环结束时 seasoning 一点没涨 = 这批的辅料成本【一条都没归集】
+            //      (既没有报工的 SEASONING materialCost, 也没有实际耗用行, 上游 WIP 链也没带来)
+            //      —— 只有这种情况才估, 否则会在已有成本之上再加一份。
+            //   ② 实际主料投入量 (kg): 估算的基数。⛔ 只认 sourceType=RAW_MATERIAL(或空, 与
+            //      actualCategory 同一条默认), 不含 MATERIAL_RETURN/TRANSFER_OUT/SEMI_FINISHED
+            //      —— 后两者不是「投进去的主料」, 而下面那个 raw 成本分支因为是 else 兜底会把它们
+            //      一起算进原料【成本】(既有行为, 本次不动)。
+            //   ③ 折算得出来吗: 任一主料行折不成 kg(计数单位/批次不可解析) → 整批拒绝估算,
+            //      ⛔ 不用「能折的那部分」当基数 —— 那会给出一个偏低但看起来很精确的估值。
+            BigDecimal seasoningAtBatchStart = seasoning;
+            BigDecimal batchRawInputKg = BigDecimal.ZERO;
+            boolean batchRawInputConvertible = true;
+            // 本批任何类别下已经有耗用记录的物料 —— 有记录就不估 (含 quantity=0 的记录, 见
+            // estimateAuxByBomRatio javadoc「什么叫没有实际耗用」)。
+            java.util.Set<String> recordedMaterialTypeIds = new java.util.HashSet<>();
             List<MaterialConsumption> batchConsumptions = new ArrayList<>(
                     consumptionRepository.findByProductionBatchIdAndFactoryId(b.getId(), factoryId));
             batchConsumptions.addAll(
@@ -327,6 +364,22 @@ public class OrderCostBreakdownService {
                         : materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
                 String actualCategory = c.getSourceType() == null
                         ? "RAW_MATERIAL" : c.getSourceType().trim().toUpperCase();
+                // 辅料先估 ②③: 记下「这个物料本批有耗用记录」并累计主料投入 kg。
+                // ⛔ 放在所有 continue 之前 —— 包材/调料分支下面就 continue 了, 放后面会漏记。
+                if (c.getMaterialTypeId() != null) {
+                    recordedMaterialTypeIds.add(c.getMaterialTypeId());
+                }
+                if ("RAW_MATERIAL".equals(actualCategory)) {
+                    BigDecimal kg = com.cretas.aims.service.bom.SeasoningRatioContract
+                            .massToKg(c.getQuantity(), mb == null ? null : mb.getQuantityUnit());
+                    if (kg == null) {
+                        // 计数单位的主料 / 批次不可解析 / 量为空 —— 折不出 kg。
+                        // ⛔ 不把它当 0 跳过: 那会让基数偏低而读起来毫无异样 (本仓形态 A¹⁰)。
+                        batchRawInputConvertible = false;
+                    } else {
+                        batchRawInputKg = batchRawInputKg.add(kg);
+                    }
+                }
                 boolean actualPriceKnown = mb == null
                         ? c.getUnitPrice() != null
                         : mb.getUnitPrice() != null;
@@ -426,6 +479,15 @@ public class OrderCostBreakdownService {
             semiFeedCost = semiFeedCost.add(feed[0]);
             anySemiFeed = anySemiFeed || feed[1].signum() > 0;
             semiFeedUnknown = semiFeedUnknown || feed[2].signum() > 0;
+
+            // ── 🔴 辅料先估 (owner 裁定 2026-09-06) ────────────────────────────────────
+            //   放在本批全部归集之后: seasoning 这时才是「本批调料成本的最终值」,
+            //   报工侧、实际耗用行、上游 WIP 链三条来源都已经加完 (⛔ 提前判会把上游那份漏掉)。
+            seasoning = seasoning.add(estimateAuxByBomRatio(
+                    factoryId, b, plan, recordedMaterialTypeIds,
+                    seasoning.subtract(seasoningAtBatchStart),
+                    batchRawInputConvertible ? batchRawInputKg : null,
+                    estimatedAuxItems, missingCostItems));
         }
 
         // 包装总额: 若无 PACKAGING materialCost 报工(packaging==0)但有包装明细 → 用明细总额。
@@ -570,6 +632,10 @@ public class OrderCostBreakdownService {
                 .missingCostItems(missingCostItems)
                 .customerSuppliedItemCount(customerSuppliedItems.size())
                 .customerSuppliedItems(customerSuppliedItems)
+                // 🔴 辅料先估 (2026-09-06): 这些金额已经在 seasoningCost/totalCost 里,
+                //    这份清单是它们的【来源标记】—— 不摆出来就分不清估的和实际领用的。
+                .estimatedAuxItemCount(estimatedAuxItems.size())
+                .estimatedAuxItems(estimatedAuxItems)
                 .rawMaterialDetails(rawMaterialDetails)
                 .packagingDetails(packagingDetails)
                 .laborDetails(laborDetails)
@@ -612,6 +678,191 @@ public class OrderCostBreakdownService {
             }
         }
         return dto;
+    }
+
+    /**
+     * 🔴 <b>辅料先估</b> (owner 裁定 2026-09-06) —— 无实际耗用记录的辅料/调料按
+     * 「BOM 配比 × <b>实际</b>主料投入」折算成本, 每条标 {@value #ESTIMATED_AUX_LABEL}。
+     *
+     * <h2>为什么要有它</h2>
+     * 生产库实测(2026-09-06, 只读探针): F006 有 29 个已结单计划、LIUSHANMEN 有 7 个, 它们绑定的
+     * BOM 里都配了 {@code bom_seasoning_items}; 而<b>写进 {@code material_consumptions} 的
+     * SEASONING 行只覆盖 F006 的 2 个计划、LIUSHANMEN 的 0 个</b>。也就是说这三十几个计划的
+     * 辅料成本此前一律是 <b>¥0 且一声不吭</b> —— 不是「辅料不要钱」, 是根本没人录。
+     * 按 0 计会系统性低估 COGS、虚增毛利, 正是本仓明令禁止的那种假数据。
+     *
+     * <h2>四条决定 (⛔ 改之前请连同这段一起改, 否则描述会先于代码过期)</h2>
+     *
+     * <h3>① 什么叫「没有实际耗用记录」</h3>
+     * <b>两层都要成立</b>, 任何一层有东西就不估:
+     * <ul>
+     *   <li><b>批级</b>: 本批的调料桶贡献必须<b>恰好为 0</b>({@code seasoningAlreadyCollected}) ——
+     *       报工侧 SEASONING 桶的 {@code materialCost}、实际耗用行、上游 WIP 链带来的调料,
+     *       三者任一非 0 就说明这批的辅料成本已经归集过了, 再估就是<b>双计</b>。
+     *       报工侧不按物料拆分, 所以这一层只能是批级的。</li>
+     *   <li><b>物料级</b>: 该辅料的 {@code materialTypeId} 不得出现在本批<b>任何类别</b>的耗用行里
+     *       (辅料被人记成 {@code RAW_MATERIAL} 是存量里会有的形态)。</li>
+     * </ul>
+     * <b>⚠️ {@code quantity = 0} 的记录算记录 —— 不估。</b> 0 是操作员明确说的「这次没用」,
+     * 而 null/无行才是「还不知道」。本仓已经就这条定过案(缺陷43 零值行不删「0 是明确的事实」、
+     * {@code confirmPickingAuxDerive.ts}「0 = 明确这次不领, null = 还不知道」)。拿估算去覆盖一个
+     * 明确的 0, 等于替操作员改口供。
+     * <p>📌 生产库实测: {@code material_consumptions} 里 {@code quantity = 0} 或 {@code null} 的行
+     * <b>各 0 条</b>(F006 337 行 / LIUSHANMEN 33 行) ⇒ 这一分支目前只在测试桩上到得了,
+     * 生产行为不受它影响。
+     *
+     * <h3>① - b 部分记录 (有的工序记了、有的没记) → <b>整条按已记录处理, 不估余量</b></h3>
+     * 「余量 = BOM 应耗 − 已记录」这个减法的前提是「BOM 配比是真值、记录是残缺的」。
+     * 实际同样可能是「这次就是少放了」。在一条<b>真实记录</b>之上再加一段估算, 会把成本推高而且
+     * 无法证伪 —— 保守读法是<b>信记录</b>, 只在<b>完全沉默</b>的地方补估。
+     * <p>⚠️ 与 {@code settlementConsumptionsFor} 的 {@code max(0, 结单量 − 已耗用量)} 不同源:
+     * 那里两侧都是<b>对同一件事的记录</b>(结单领用 vs 逐道耗用), 取差是对账; 这里一侧是记录、
+     * 另一侧是<b>计划</b>, 取差是拿计划去否定记录。
+     *
+     * <h3>② 单价用哪个</h3>
+     * BOM 调料行自己的 {@code priceSource1}(优先) / {@code priceSource2}, 走
+     * {@link com.cretas.aims.service.bom.SeasoningRatioContract#unitPricePerKg} ——
+     * 与 {@code BomRecipeServiceImpl#seasoningCost} 是<b>同一条</b>规则(不是第二份)。
+     * <p>为什么不用「该辅料库存批次的单价」(即实际耗用路径用的那个价): 估算这条线上<b>没有批次</b>,
+     * 要用就得现发明一条「挑哪个批次」的规则, 那才是新的第二份定义。而且实测覆盖率也是 BOM 侧更高
+     * (BOM {@code priceSource1|2}: F006 23/23 行、LIUSHANMEN 47/111 行;
+     * {@code raw_material_types.unit_price}: F006 4/4 个物料、LIUSHANMEN <b>0/23</b>;
+     * 有价库存批次: F006 2/4、LIUSHANMEN 4/23)。
+     * <p>可比性: F006 的 {@code price_source2} 与 {@code raw_material_types.unit_price} <b>逐行相等</b>,
+     * 即 BOM 价就是物料档案价的快照 —— 与实际耗用价(采购批次价)可能有差, 所以估算行
+     * <b>单独成列并标 {@value #ESTIMATED_AUX_LABEL}</b>, ⛔ 不与实际行混在一起看。
+     *
+     * <h3>③ 缺配比 / 缺单价 → 报缺, ⛔ 绝不按 0 计</h3>
+     * 分别记 {@code ESTIMATED_AUX_RATIO_MISSING:<名称>} / {@code ESTIMATED_AUX_PRICE_MISSING:<名称>},
+     * 两个码都<b>不在</b> {@link #OPTIONAL_COST_ITEM_CODES} 里 ⇒ 会阻断 {@code costComplete},
+     * 于是 {@code totalCost} 留 null 而不是给出一个偏低的数。本仓形态 A¹⁰。
+     * <p>{@code estimatedAuxItems} 里<b>只放估出来了的行</b> —— 让这份清单只表达一件事
+     * (「这些是估的」); 没估出来的那些在 {@code missingCostItems} 里, 由
+     * {@code ProductionPlanServiceImpl#missingCostItemLabel} 翻成人话。
+     *
+     * <h3>④ 单位一致性</h3>
+     * <ul>
+     *   <li>配比 {@code dosagePerKgG} 的量纲是 <b>g/kg 投入主料</b> —— 由列名与
+     *       {@code SeasoningRatioContract} 钉死;</li>
+     *   <li>单价是 <b>¥/kg</b> —— 同样由 {@code SeasoningRatioContract} 钉死(依据:
+     *       {@code BomRecipeServiceImpl} 的 {@code (dosage÷1000) × price} 只有在 price 是 ¥/kg 时
+     *       量纲才成立; 且实测 27/27 个被引用辅料的 {@code raw_material_types.unit} 都是 kg);</li>
+     *   <li>⇒ 整条路径上<b>唯一</b>需要换算的是「主料耗用量 → kg」, 它走
+     *       {@code SeasoningRatioContract#massToKg}(只认质量单位, 计数单位一律 null)。
+     *       任一主料行折不出 kg ⇒ 记 {@code ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE:<批次号>}
+     *       并<b>整批不估</b> —— ⛔ 不拿「能折的那部分」当基数, 那会给出一个偏低却看起来精确的数。
+     *       📌 实测生产库 126 行主料耗用的批次单位<b>全是 kg</b>, 该拒绝分支当前不会触发。</li>
+     * </ul>
+     *
+     * @param recordedMaterialTypeIds     本批任何类别下已有耗用行的物料 (见①物料级)
+     * @param seasoningAlreadyCollected   本批已归集的调料成本 (见①批级); 非 0 → 整批不估
+     * @param rawInputKg                  实际主料投入 (kg); {@code null} = 折不出来(见④),
+     *                                    {@code 0} = 本批没有主料投入(没有基数, 静默跳过 ——
+     *                                    这种批次由 {@code NO_COST_COLLECTED} 等既有码去说)
+     * @return 本批估算出的辅料成本合计 (等于 {@code out} 里各行 {@code amount} 之和; 没估则 0)
+     */
+    private BigDecimal estimateAuxByBomRatio(
+            String factoryId,
+            ProductionBatch batch,
+            ProductionPlan plan,
+            java.util.Set<String> recordedMaterialTypeIds,
+            BigDecimal seasoningAlreadyCollected,
+            BigDecimal rawInputKg,
+            List<OrderCostBreakdownDTO.EstimatedAuxItem> out,
+            List<String> missingCostItems) {
+        if (bomSeasoningItemRepository == null || batch == null) {
+            return BigDecimal.ZERO;   // 依赖缺失(纯 Mockito 单测) → 整块跳过, 零回归
+        }
+        if (nz(seasoningAlreadyCollected).signum() != 0) {
+            return BigDecimal.ZERO;   // ① 批级: 已经归集过辅料成本, 再估就是双计
+        }
+        BatchBomBinding.Resolved binding = BatchBomBinding.resolve(batch, plan);
+        if (!binding.pinned()) {
+            return BigDecimal.ZERO;   // 不知道按哪一版配方估 —— 不猜
+        }
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> rows;
+        try {
+            rows = bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(binding.recipeId());
+        } catch (RuntimeException ex) {
+            // ⛔ 读不到调料明细不能让整个成本分解挂掉, 但也不装作没这回事 —— 留痕给排查用。
+            log.warn("[M67CostBreakdown] BOM 调料明细读不出来(辅料先估跳过) factory={} recipe={}: {}",
+                    factoryId, binding.recipeId(), ex.getMessage());
+            return BigDecimal.ZERO;
+        }
+        if (rows == null || rows.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        // ⚠️ findByRecipeIdOrderBySeqAsc 不带 factoryId —— 这里自己收租户口径,
+        //    与本类其它查询 (findByIdAndFactoryId / findByFactoryIdAnd…) 同一条纪律。
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> candidates = rows.stream()
+                .filter(Objects::nonNull)
+                .filter(s -> factoryId.equals(s.getFactoryId()))
+                .filter(com.cretas.aims.service.bom.SeasoningRatioContract::countsTowardSeasoningCost)
+                // 没绑物料档案的调料行只是配方文本, 领不出实物也估不出成本 —— 整条跳过,
+                // ⛔ 也不报缺 (与 appendSeasoningItems 同一条口径: 它本来就不是一笔可发生的成本)。
+                .filter(s -> s.getMaterialTypeId() != null && !s.getMaterialTypeId().isBlank())
+                .filter(s -> !recordedMaterialTypeIds.contains(s.getMaterialTypeId()))
+                .collect(Collectors.toList());
+        if (candidates.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        String batchLabel = batch.getBatchNumber() != null
+                ? batch.getBatchNumber() : String.valueOf(batch.getId());
+        if (rawInputKg == null) {
+            missingCostItems.add("ESTIMATED_AUX_RAW_BASIS_UNVERIFIABLE:" + batchLabel);
+            return BigDecimal.ZERO;
+        }
+        if (rawInputKg.signum() <= 0) {
+            return BigDecimal.ZERO;   // 本批没有主料投入 —— 没有可估的基数
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (com.cretas.aims.entity.bom.BomSeasoningItem s : candidates) {
+            String label = s.getName() != null && !s.getName().isBlank()
+                    ? s.getName() : s.getMaterialTypeId();
+            BigDecimal grams = com.cretas.aims.service.bom.SeasoningRatioContract
+                    .requiredGrams(s, rawInputKg);
+            if (grams == null) {
+                // countsTowardSeasoningCost 与 rawInputKg>0 上面都过了 ⇒ 只可能是没配比。
+                missingCostItems.add("ESTIMATED_AUX_RATIO_MISSING:" + label);
+                continue;
+            }
+            BigDecimal unitPrice = com.cretas.aims.service.bom.SeasoningRatioContract
+                    .unitPricePerKg(s);
+            if (unitPrice == null) {
+                missingCostItems.add("ESTIMATED_AUX_PRICE_MISSING:" + label);
+                continue;   // ⛔ 绝不按 0 计
+            }
+            BigDecimal quantity = grams.divide(THOUSAND, 6, RoundingMode.HALF_UP);
+            BigDecimal amount = quantity.multiply(unitPrice).setScale(4, RoundingMode.HALF_UP);
+            out.add(OrderCostBreakdownDTO.EstimatedAuxItem.builder()
+                    .materialCode(s.getMaterialTypeId())
+                    .materialName(label)
+                    .bomRecipeId(binding.recipeId())
+                    .bomVersion(binding.version())
+                    .batchNumber(batchLabel)
+                    .dosagePerKgG(s.getDosagePerKgG())
+                    .rawInputKg(rawInputKg)
+                    .quantity(quantity)
+                    .unit("kg")
+                    .unitPrice(unitPrice)
+                    .amount(amount)
+                    .basis(ESTIMATED_AUX_LABEL)
+                    .collectionStatus("ESTIMATED_BY_BOM_RATIO")
+                    // ⚠️ 读的是【当前】的 bom_seasoning_items, 不是钉住的那一版快照:
+                    //    bom_versions 上没有这些计划的快照 (实测 F006 13 个 ACTIVE recipe 里
+                    //    有版本快照的是 0 个, 见 resolvePinnedPackaging 里那段实测)。
+                    //    ⇒ 来源如实标成 LIVE, ⛔ 不冒充「锁定版本」。
+                    .ratioSource("BOM_SEASONING_ITEMS_LIVE")
+                    .priceSource(com.cretas.aims.service.bom.SeasoningRatioContract
+                            .unitPriceSource(s))
+                    .build());
+            total = total.add(amount);
+        }
+        if (total.signum() > 0) {
+            log.info("[M67CostBreakdown] 辅料先估 {} 行 合计={} factory={} batch={} recipe={} 主料投入={}kg",
+                    out.size(), total, factoryId, batchLabel, binding.recipeId(), rawInputKg);
+        }
+        return total;
     }
 
     /**
@@ -1674,6 +1925,12 @@ public class OrderCostBreakdownService {
                 detail.setAmount(null);
             }
         }
+        if (dto.getEstimatedAuxItems() != null) {
+            for (OrderCostBreakdownDTO.EstimatedAuxItem item : dto.getEstimatedAuxItems()) {
+                item.setUnitPrice(null);
+                item.setAmount(null);   // 金额敏感; 保留配比/基数/量/标签 (物理量与来源标记)
+            }
+        }
     }
 
     private OrderCostBreakdownDTO empty(String orderId, boolean maskPrice) {
@@ -1682,6 +1939,7 @@ public class OrderCostBreakdownService {
                 .calculatedAt(LocalDateTime.now()).calculationStatus("NO_DATA")
                 .missingCostItemCount(0).missingCostItems(List.of())
                 .customerSuppliedItemCount(0).customerSuppliedItems(List.of())
+                .estimatedAuxItemCount(0).estimatedAuxItems(List.of())
                 .sources(List.of()).byproducts(List.of())
                 .rawMaterialDetails(List.of()).packagingDetails(List.of()).laborDetails(List.of())
                 .build();

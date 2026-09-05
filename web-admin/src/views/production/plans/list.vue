@@ -2864,7 +2864,14 @@ async function handleRecalculateSettledCost(row: TableRow) {
     if (d.customerSuppliedNote) {
       successMessage += `；${d.customerSuppliedNote}`;
     }
-    ElMessage({ message: successMessage, type: 'success', duration: d.customerSuppliedNote ? 8000 : 3000, showClose: true });
+    // 辅料先估（owner 裁定，2026-09-06）：这次总成本里含「按配比估算」的辅料时必须说出来——
+    // 估的和实际领用的在同一个数字里长得一模一样。同上：直接展示后端拼好的 estimatedAuxNote，
+    // ⛔ 不在前端重新拼一遍措辞，也不在前端写「按配比估算」这四个字（本仓形态 D）。
+    if (d.estimatedAuxNote) {
+      successMessage += `；${d.estimatedAuxNote}`;
+    }
+    const hasCaveat = Boolean(d.customerSuppliedNote || d.estimatedAuxNote);
+    ElMessage({ message: successMessage, type: 'success', duration: hasCaveat ? 8000 : 3000, showClose: true });
     await loadSettlementStatuses([row]);
   } catch (error) {
     if (String(error).includes('cancel')) return;

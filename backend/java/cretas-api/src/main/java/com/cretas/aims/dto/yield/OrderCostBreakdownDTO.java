@@ -148,6 +148,26 @@ public class OrderCostBreakdownDTO {
     private Integer customerSuppliedItemCount;
     private List<String> customerSuppliedItems;
 
+    /**
+     * 🔴 辅料先估 (owner 裁定, 2026-09-06)：已结单计划的辅料/调料
+     * （{@code bom_seasoning_items} 那一族）如果<b>一条实际耗用都没有</b>，就按
+     * 「BOM 配比 × 实际主料投入」折算成本，并把每一条标上
+     * {@code 按配比估算}（{@link EstimatedAuxItem#getBasis()}）。
+     *
+     * <p>这些金额<b>已经计入</b> {@link #seasoningCost} / {@link #totalCost} —— 它是成本，
+     * 不是缺项。⛔ 但必须让读数的人看见它是估的：本仓形态 A¹³「每条读数都要带来源标记」，
+     * 否则「估出来的」和「实际领用的」在同一个 {@code seasoningCost} 里长得一模一样。
+     *
+     * <p>⛔ 有实际耗用记录的辅料<b>不</b>估（{@code quantity=0} 的记录也算记录 ——
+     * 0 是「这次没用」这个明确事实，不是「还不知道」）；配比或单价缺失的<b>不</b>按 0 计，
+     * 走 {@link #missingCostItems} 的 {@code ESTIMATED_AUX_RATIO_MISSING} /
+     * {@code ESTIMATED_AUX_PRICE_MISSING}（本仓形态 A¹⁰：兜底的 0 会被当成真实读数往下传）。
+     *
+     * <p>masked 时金额字段置 null，保留物理量与标签。
+     */
+    private Integer estimatedAuxItemCount;
+    private List<EstimatedAuxItem> estimatedAuxItems;
+
     /** Auditable quantity x price/rate ledgers. */
     private List<RawMaterialDetail> rawMaterialDetails;
     private List<PackagingDetail> packagingDetails;
@@ -264,6 +284,47 @@ public class OrderCostBreakdownDTO {
         private BigDecimal amount;
         private String collectionStatus;
         private String missingReason;
+    }
+
+    /**
+     * 辅料先估的逐条明细 (2026-09-06)。一条 = 一条 {@code bom_seasoning_items} 行在这一批上的估算。
+     *
+     * <p>形状刻意与 {@link RawMaterialDetail} / {@link PackagingDetail} 对齐
+     * (量 × 单价 = 金额 + 来源 + 状态), ⛔ 不新造一套展示约定。
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EstimatedAuxItem {
+        /** {@code bom_seasoning_items.material_type_id}。 */
+        private String materialCode;
+        private String materialName;
+        /** 这条估算所依据的 BOM 配方 (批次绑定优先, 见 {@code BatchBomBinding})。 */
+        private String bomRecipeId;
+        private Integer bomVersion;
+        /** 生产批次号 —— 估算是<b>按批</b>做的, 不带批次号就分不清同一物料被估了几次。 */
+        private String batchNumber;
+        /** BOM 配比 (g 辅料 / kg 投入主料)。物理量, 不脱敏。 */
+        private BigDecimal dosagePerKgG;
+        /** 估算基数: 本批<b>实际</b>主料投入量 (kg)。物理量, 不脱敏。 */
+        private BigDecimal rawInputKg;
+        /** 估算耗用量 = dosagePerKgG × rawInputKg ÷ 1000。物理量, 不脱敏。 */
+        private BigDecimal quantity;
+        /** 恒为 {@code kg} —— 配比与单价两侧的单位都由定义钉死, 见 {@code SeasoningRatioContract}。 */
+        private String unit;
+        /** ¥/kg; masked 时 null。 */
+        private BigDecimal unitPrice;
+        /** = quantity × unitPrice (scale 4); masked 时 null。 */
+        private BigDecimal amount;
+        /** 人话标签, 恒为 {@code 按配比估算} (来源: {@code OrderCostBreakdownService.ESTIMATED_AUX_LABEL})。 */
+        private String basis;
+        /** {@code ESTIMATED_BY_BOM_RATIO} —— 与 {@code COLLECTED}/{@code MISSING_PRICE} 同一套状态词表。 */
+        private String collectionStatus;
+        /** 配比读自哪里 (当前恒为 {@code BOM_SEASONING_ITEMS_LIVE})。 */
+        private String ratioSource;
+        /** 单价读自哪里 ({@code BOM_SEASONING_PRICE_SOURCE1} / {@code ..._SOURCE2})。 */
+        private String priceSource;
     }
 
     /** 辅料按锅分摊 (AUDIT-004)。本批 share = potTotalCost × batchOutput ÷ potTotalOutput。 */

@@ -27,4 +27,19 @@ describe('已结单计划成本重算入口', () => {
     expect(source).toContain('d.customerSuppliedNote');
     expect(source).toContain('successMessage += `；${d.customerSuppliedNote}`');
   });
+
+  it('辅料先估: estimatedAuxNote 有消费方, 且措辞不在前端重写', () => {
+    // 后端 ProductionCostRecalculationResponse 同名同形的两个字段。
+    expect(api).toContain('estimatedAuxItems?: EstimatedAuxItem[] | null');
+    expect(api).toContain('estimatedAuxNote?: string | null');
+    // 前端只负责把后端拼好的那句话接上去。
+    expect(source).toContain('successMessage += `；${d.estimatedAuxNote}`');
+    // ⛔ 阴性对照: 「按配比估算」这四个字只许出现在后端常量里 ——
+    //    前端一旦自己写一份, 后端改措辞时两边就会漂 (本仓形态 D)。
+    expect(source).not.toContain('按配比估算');
+    expect(api).not.toMatch(/basis[^\n]*=[^\n]*'按配比估算'/);
+    // 提示时长要覆盖【两种】口径说明; 只看 customerSuppliedNote 会让纯估算那次只显示 3 秒。
+    expect(source).toContain('const hasCaveat = Boolean(d.customerSuppliedNote || d.estimatedAuxNote)');
+    expect(source).toContain('duration: hasCaveat ? 8000 : 3000');
+  });
 });

@@ -221,6 +221,35 @@ export interface ProductionCostRecalculationResult {
   customerSuppliedItems?: string[] | null
   /** 上面那份清单的人话版，可直接展示；本轮没有客供料按口径记 0 时为 null。 */
   customerSuppliedNote?: string | null
+  /**
+   * 辅料先估（owner 裁定，2026-09-06）：本次重算里按「BOM 配比 × 实际主料投入」估出来的
+   * 辅料/调料逐条明细。金额已计入 authoritativeTotalCost，每条 basis 恒为「按配比估算」。
+   */
+  estimatedAuxItems?: EstimatedAuxItem[] | null
+  /** 上面那份清单的人话版，可直接展示；本轮没有按配比估算的辅料时为 null。 */
+  estimatedAuxNote?: string | null
+}
+
+/** 一条按 BOM 配比估算出来的辅料成本明细（后端 OrderCostBreakdownDTO.EstimatedAuxItem）。 */
+export interface EstimatedAuxItem {
+  materialCode?: string | null
+  materialName?: string | null
+  bomRecipeId?: string | null
+  bomVersion?: number | null
+  batchNumber?: string | null
+  /** BOM 配比：g 辅料 / kg 投入主料。 */
+  dosagePerKgG?: number | null
+  /** 估算基数：本批实际主料投入量（kg）。 */
+  rawInputKg?: number | null
+  quantity?: number | null
+  unit?: string | null
+  unitPrice?: number | null
+  amount?: number | null
+  /** 恒为「按配比估算」——⛔ 不要在前端另写一份这个字面量。 */
+  basis?: string | null
+  collectionStatus?: string | null
+  ratioSource?: string | null
+  priceSource?: string | null
 }
 
 /** 重算已入库计划成本；客户端不传任何成本数字。 */

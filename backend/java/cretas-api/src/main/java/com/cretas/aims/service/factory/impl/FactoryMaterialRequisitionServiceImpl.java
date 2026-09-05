@@ -519,25 +519,16 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         return total != null && total.signum() > 0 ? total : null;
     }
 
-    /** 质量单位 → kg。⛔ 不是质量单位就返回 null, 不猜。 */
+    /**
+     * 质量单位 → kg。⛔ 不是质量单位就返回 null, 不猜。
+     *
+     * <p>🔴 2026-09-06: 实现搬到
+     * {@link com.cretas.aims.service.bom.SeasoningRatioContract#massToKg} —— 结单成本侧的
+     * 「辅料先估」要用<b>同一条</b>折算, 复制过去就是第三份 (本仓形态 D)。这里保留同名薄封装,
+     * 调用点一个字没改, 行为逐字不变 (那个方法就是从这里搬过去的, 含各分支的 scale)。
+     */
     private BigDecimal massToKg(BigDecimal qty, String unit) {
-        if (qty == null || unit == null) {
-            return null;
-        }
-        String u = unit.trim();
-        if ("kg".equalsIgnoreCase(u) || "千克".equals(u) || "公斤".equals(u)) {
-            return qty;
-        }
-        if ("g".equalsIgnoreCase(u) || "克".equals(u)) {
-            return qty.divide(new BigDecimal("1000"), 6, java.math.RoundingMode.HALF_UP);
-        }
-        if ("t".equalsIgnoreCase(u) || "吨".equals(u)) {
-            return qty.multiply(new BigDecimal("1000"));
-        }
-        if ("jin".equalsIgnoreCase(u) || "斤".equals(u)) {
-            return qty.divide(new BigDecimal("2"), 6, java.math.RoundingMode.HALF_UP);
-        }
-        return null;
+        return com.cretas.aims.service.bom.SeasoningRatioContract.massToKg(qty, unit);
     }
 
     /**
@@ -553,18 +544,15 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      */
     private BigDecimal seasoningRequiredQty(com.cretas.aims.entity.bom.BomSeasoningItem s,
                                             BigDecimal plannedRawInputKg, String targetUnit) {
-        if (s == null || plannedRawInputKg == null || plannedRawInputKg.signum() <= 0) {
+        // 🔴 2026-09-06: 配比公式 + 「哪些行不计入」的判定搬到
+        //    SeasoningRatioContract#requiredGrams —— 结单成本侧「辅料先估」要用同一条口径,
+        //    复制过去就是第三份 (本仓形态 D / 硬约束 8)。原来这里的三段 null 判断
+        //    (入参为空 / COOKING 且不计入 / 无配比) 逐条搬了过去, 行为不变。
+        BigDecimal grams = com.cretas.aims.service.bom.SeasoningRatioContract
+                .requiredGrams(s, plannedRawInputKg);
+        if (grams == null) {
             return null;
         }
-        if (com.cretas.aims.entity.bom.BomSeasoningItem.SECTION_COOKING.equals(s.getSection())
-                && !Boolean.TRUE.equals(s.getCountInSeasoning())) {
-            return null;   // 与报工侧同口径: 这类不计入调料成本, 也不该出现在需求量上
-        }
-        BigDecimal dosage = s.getDosagePerKgG();
-        if (dosage == null || dosage.signum() <= 0) {
-            return null;
-        }
-        BigDecimal grams = dosage.multiply(plannedRawInputKg);
         String u = targetUnit == null ? "kg" : targetUnit.trim();
         if ("g".equalsIgnoreCase(u) || "克".equals(u)) {
             return grams.setScale(3, java.math.RoundingMode.HALF_UP);
