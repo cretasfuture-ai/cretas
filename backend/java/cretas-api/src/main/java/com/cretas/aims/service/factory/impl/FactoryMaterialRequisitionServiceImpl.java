@@ -58,6 +58,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     /** 份额收敛票: 计划已转批次且实例已物化 ⇒ 份额读编译列 (与报工同源), 见 resolveInputShares。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowClerkSheetService workflowClerkSheetService;
+
+    /**
+     * 主原料份额的<b>唯一</b>解析入口 (2026-09-05 抽出)。领料与缺料预警共用同一份，
+     * ⛔ 不各自实现 —— 那段两级解析有两个数据源且时序条件是隐含的，是最容易漂的一种。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.PlanInputShareResolver planInputShareResolver;
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
@@ -482,24 +489,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      *         那是个看起来很确定的假答案）
      */
     private java.util.Map<String, BigDecimal> resolveInputShares(String factoryId, ProductionPlan plan) {
-        // ① 已转批次且运行时实例已物化 ⇒ 读编译冻结列 (与报工读的是同一列, 编译器的归一化/钳位对领料承重)。
-        //    prod 只读探针 (2026-09-02): 按计划生成的领料单 17 张里 3 张先于首批次、2 张没批次 ⇒ 不能只读编译列,
-        //    那 5 张会静默退成「按实际领用」。所以 ② 转批次前仍读修订 nodesJson —— 但解析走编译器同一个
-        //    InputShareRatios.parsePercent, 两边不会漂。
-        if (workflowClerkSheetService != null && plan.getId() != null) {
-            java.util.Optional<java.util.Map<String, BigDecimal>> compiled =
-                    workflowClerkSheetService.resolveCompiledInputShares(factoryId, plan.getId());
-            if (compiled.isPresent()) {
-                return compiled.get();
-            }
-        }
-        if (workflowRevisionRepository == null || plan.getSelectedWorkflowRevisionId() == null) {
+        // 🔴 2026-09-05: 这段两级解析原本写在这里, 已抽到 PlanInputShareResolver ——
+        //    缺料预警 (ProductionPlanServiceImpl#scanMaterialAdvisory) 要用同一份份额,
+        //    复制过去就是第二份, 而这段正好是最容易漂的那一种: 两个数据源 +「什么时候读哪个」
+        //    是隐含的时序条件。行为逐字不变, 只是搬了家。
+        if (planInputShareResolver == null) {
             return java.util.Map.of();
         }
-        return workflowRevisionRepository.findById(plan.getSelectedWorkflowRevisionId())
-                .filter(rev -> factoryId.equals(rev.getFactoryId()))
-                .map(rev -> com.cretas.aims.service.workflow.InputShareRatios.fromNodesJson(rev.getNodesJson()))
-                .orElse(java.util.Map.of());
+        return planInputShareResolver.resolve(factoryId, plan);
     }
 
     private BigDecimal plannedRawInputKg(FactoryMaterialRequisition mr) {
