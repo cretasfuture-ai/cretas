@@ -66,6 +66,27 @@ def main() -> int:
                 problems.append(
                     "%s: 两侧不一致 (.claude=%s / .codex=%s)" % (name, da, db))
 
+    # 指针: SHARED 之外的 .codex/rules/*.md 必须是指向 .claude 源的指针, 且目标存在
+    # (2026-09-05 收敛: 9 个各自演化的旧快照全部改为指针, 这里守「指针别再长回正文、目标别失效」)
+    pointer_checked = 0
+    for b in sorted(CODEX_DIR.glob("*.md")):
+        if b.name in SHARED or b.name.endswith(".example.md"):
+            continue
+        text = b.read_text(encoding="utf-8")
+        targets = [ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("POINTER:")]
+        if len(targets) != 1:
+            problems.append("%s: 不是指针文件(需恰好一行 'POINTER: <path>'), 规则正文只能在 .claude 侧" % b.name)
+            continue
+        if not (REPO / targets[0]).exists():
+            problems.append("%s: 指针目标不存在: %s" % (b.name, targets[0]))
+            continue
+        if len(text) > 1500:
+            problems.append("%s: 指针文件长成正文了(%d 字节)" % (b.name, len(text)))
+            continue
+        pointer_checked += 1
+    if pointer_checked == 0:
+        problems.append(".codex/rules: 一个指针文件都没检查到(阳性对照失败)")
+
     # 阳性对照: 清单不能是空的, 否则这道闸永远绿而什么都没守
     if not SHARED:
         print("shared-rules: FAIL — SHARED 清单为空, 这道闸没有守任何东西")

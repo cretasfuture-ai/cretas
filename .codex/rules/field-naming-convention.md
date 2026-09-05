@@ -1,55 +1,7 @@
-# 前后端字段命名规范
+# 字段命名规范（指针）
 
-**最后更新**: 2026-01-22
+POINTER: .claude/rules/coding-conventions.md
 
----
+本文件不含规则正文。Codex 请直接读上面的权威文件 —— Claude 与 Codex 共用同一份规则，避免两份各自漂移（2026-09-05 收敛；此前 `.codex/rules` 是各自演化的旧快照，9 个同名文件全部与 `.claude/rules` 不一致）。
 
-## 命名约定
-
-| 层级 | 命名风格 | 示例 |
-|------|----------|------|
-| Java Entity | camelCase | `batchNumber` |
-| 数据库列 | snake_case | `batch_number` |
-| JSON API | camelCase | `"batchNumber"` |
-| TypeScript | camelCase | `batchNumber` |
-
----
-
-## 正确示例
-
-```java
-@Entity
-@Table(name = "material_batches")  // snake_case 表名
-public class MaterialBatch {
-    @Column(name = "batch_number")  // snake_case 列名
-    private String batchNumber;      // camelCase 字段
-}
-```
-
-```typescript
-// 前端 interface 统一 camelCase
-interface MaterialBatch {
-  batchNumber: string;
-  materialTypeId: string;
-}
-```
-
----
-
-## 禁止做法
-
-```java
-// ❌ JSON 使用 snake_case
-@JsonProperty("batch_number")
-private String batchNumber;
-
-// ❌ 数据库列名用 camelCase
-@Column(name = "batchNumber")
-```
-
-```typescript
-// ❌ 前端混用 snake_case
-interface Batch {
-  batch_number: string;  // 错误
-}
-```
+四条编码规范已合并为一份，见目标文件 §字段命名。

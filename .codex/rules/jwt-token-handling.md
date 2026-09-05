@@ -1,56 +1,7 @@
-# JWT Token 处理规范
+# JWT Token 处理（指针）
 
-**最后更新**: 2026-01-22
+POINTER: .claude/rules/coding-conventions.md
 
----
+本文件不含规则正文。Codex 请直接读上面的权威文件 —— Claude 与 Codex 共用同一份规则，避免两份各自漂移（2026-09-05 收敛；此前 `.codex/rules` 是各自演化的旧快照，9 个同名文件全部与 `.claude/rules` 不一致）。
 
-## Token 类型
-
-| Token | 有效期 | 存储 |
-|-------|--------|------|
-| accessToken | 24小时 | SecureStore |
-| refreshToken | 7天 | SecureStore |
-| tempToken | 5分钟 | 内存 |
-
-## Payload 结构
-
-```json
-{ "role": "factory_super_admin", "factoryId": "F001", "userId": 22, "username": "admin" }
-```
-
----
-
-## 前端存储
-
-```typescript
-// ✅ 必须使用 SecureStore
-import * as SecureStore from 'expo-secure-store';
-await SecureStore.setItemAsync('access_token', token);
-
-// ❌ 禁止 AsyncStorage
-await AsyncStorage.setItem('access_token', token);
-```
-
----
-
-## 401 自动刷新
-
-```typescript
-axios.interceptors.response.use(null, async (error) => {
-  if (error.response?.status === 401 && !error.config._retry) {
-    error.config._retry = true;
-    const newToken = await refreshToken();
-    error.config.headers.Authorization = `Bearer ${newToken}`;
-    return axios(error.config);
-  }
-  return Promise.reject(error);
-});
-```
-
----
-
-## 安全要求
-
-- HTTPS (生产环境)
-- JWT Secret 从环境变量读取
-- 登出时清除所有 Token
+四条编码规范已合并为一份，见目标文件 §JWT Token。

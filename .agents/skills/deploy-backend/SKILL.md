@@ -7,7 +7,7 @@ description: >
 
 # Cretas Deployment
 
-Deploy only an exact, reviewed commit. Read `.codex/rules/server-operations.md`, `.codex/rules/worktree-and-main-only-deploy.md`, and `.codex/rules/concurrent-edit-safety.md` before changing deployment scripts or production state.
+Deploy only an exact, reviewed commit. Read `.claude/skills/server-operations/SKILL.md`, `.claude/rules/worktree-and-main-only-deploy.md`, and `.claude/rules/concurrent-edit-safety.md` before changing deployment scripts or production state.
 
 ## Scope And Environment
 
