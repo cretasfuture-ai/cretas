@@ -174,3 +174,13 @@
 - **登记盲区 [RUN]**：`check-soft-delete-orphans.sh` 只认 `@ManyToOne` 关联字段，`ProcessSheetRow.planId` 是 `String` 标量 ⇒ 结构性隐形。`NOT EXISTS` 模式对**缺失父行**有效（实跑该对 = 56 = 全部硬删父，软删父 0，阳性 132 = 76 + 56）。
 - 🔴 **口径打架**：前一 probe 的「44 个 plan_id 列 / 43 个 0 行」不复现——`public` 8 个（`tenant_purge_68` 5 个），6 个无 FK 里 4 个有悬空：`scheduling_alerts` 170 / `_change_log` 67 / `process_sheet_rows` 56 / `report_reversal_logs` 10。建议只登记后两对（前两个是日志表，机制不同，登记会成噪音）。
 - **修法**：`/usr/sbin/ss` 绝对路径或 crontab 加 `PATH=`；去 `2>/dev/null`；凭证 `^(DB_|POSTGRES_)` 且用户名缺=rc=2 不兜底；rc=2 原因可区分（`ss-not-found` vs `no-listener`）；STALE 改为 `-- generated-from <commit>` 头对比或删；`.sql` 入库；登记两对；脚本进 inventory + 规则 6 扩到 `scripts/cron/*`；**修完主动把 ss 从 PATH 拿掉一次验 rc=2 到人**。投递渠道是全仓问题 ⇒ 另开票待 owner。
+
+
+## 2026-09-06 06:29 `BUG-GHOST-PENDING-FEED-DELETED-PLANS-20260906` 归档 — #620 发 40 上线
+
+原条目：- `BUG-GHOST-PENDING-FEED-DELETED-PLANS-20260906` — `review` — Owner: executor（organizer 派） — PR #620 终审：方向全过（COMPLETED 行保留=可逆失败向；CANCELLED 三条路径全验已回滚；盘点经委托链继承）。需改一条：浮出 WARN 每次快照都刷 ⇒ 加节流或仅集合变化时打（形态 E）。🔒 全量套件已打标签。
+
+- **终审可合**：COMPLETED 计划上的未结算行「保留」=可逆的保守失败向（超卖不可逆）；CANCELLED 三条路径全验（直接取消守 `hasProductionActivity` 409、审批取消先 `reverseBatchReportsForApprovedCancel`、加急插单拒绝时未开工）无未回滚；盘点经 `pendingSemiFeedByBatchNo → pendingSemiFeedSnapshot` 委托链自动继承；硬删缺口另票（已开）。需改一条已补（`a0beb568a4`）：WARN 由每次快照改为**边沿触发指纹**（三个计划 id 集合 TreeSet + 两个计数；指纹变才喊；清零时删指纹防复发永久静音）——⛔ 没用时间窗，因为时间窗会吞掉窗口内新出现的幽灵计划。三个节流变异 N1/N2/N3 先打印 `announce=`/`fpMapSize=` 再红；`DeferredDeductionCompensationContractTest` 一字未改且在 CI 执行。
+- 全量套件 6m40s 绿；12/2/2 + 4 个相关类在 CI 实际执行。
+- **发 40**：`DEPLOY_EXIT=0`、`RELEASE_FINAL_STATUS` 1 次、jar 06:26:25 < 启动 06:26:46、`shouldAnnounce` 1 / `UnsettlablePlans` 5 / 假串 0（合并前后 0→5 / 0→10）、health 200。⚠️ prod 今天该分支剔除 0 行（LSM 56 孤儿行全已结算），验收靠 F006 形状 fixture；F006 2 条 COMPLETED 计划上的未结算行会被浮出（WARN 一次）。
+- 执行者自伤记一笔：变异脚本开头 `git checkout -- <src>` 把**未提交**的节流实现回滚了，重做后改为先提交再变异。
