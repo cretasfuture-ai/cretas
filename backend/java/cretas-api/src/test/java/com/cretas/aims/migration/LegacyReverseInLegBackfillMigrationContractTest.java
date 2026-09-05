@@ -45,12 +45,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   STATE=4_negctl            PASS  12 条阴性对照(已有 report_id / 其它前缀 / 非 REVERSE)一行没动
  *   STATE=4b_ambiguous        PASS  合成的「两条等量已软删 IN 腿」那行仍是 NULL —— 迁移拒绝猜
  *   STATE=5_zero_match        PASS  空库上 UPDATE 0, 不报错
+ *   STATE=6_softdeleted_claim PASS  合成行 910(唯一认领它的日志被软删)仍是 NULL —— 拒绝相信已撤销的日志
  * </pre>
  * 变异对照(同一容器)：
  * <pre>
  *   M1 去掉 r.deleted_at IS NOT NULL  -> UPDATE 0 (三条真行修不到; 因为活着的 IN 腿也成了候选)
  *   M2 去掉 HAVING COUNT(*) = 1       -> UPDATE 4, 歧义行 900 被瞎猜成 23990
+ *   M3 去掉 l.deleted_at IS NULL      -> UPDATE 4, 软删日志行 910 被背书成功
  * </pre>
+ *
+ * <p>⚠️ 终审补 {@code l.deleted_at IS NULL} 那一维时, prod 上<b>零变化</b>:
+ * 18 条 {@code report_reversal_logs} 全部 {@code soft_deleted=f}(2026-09-06 只读实测),
+ * 三条目标行的认领日志 {@code id=18} 也是 f。补它是为了封死「唯一认领它的日志恰好被软删」那一支。
  *
  * <p>本类是那次验证的<b>防退化闸</b>：它保证「那份被验证过的 SQL 还在，且没人在后面把它改回去」。
  * ⛔ 它<b>不</b>执行任何一条 SQL —— 这是代理判据，标出来。
@@ -108,6 +114,12 @@ class LegacyReverseInLegBackfillMigrationContractTest {
         assertThat(code)
                 .as("没有「恰好一条日志」的约束 ⇒ 多条日志认领同一流水时会瞎挑一条")
                 .containsPattern("n_logs\\s*=\\s*1");
+        assertThat(code)
+                .as("🔴 没有 l.deleted_at IS NULL ⇒ 会从一条【已撤销】的撤回日志推出 report_id。"
+                        + "容器实测 M3: UPDATE 从 3 变 4, 合成行 910 被一条软删日志背书成功。"
+                        + "⚠️ 它还必须与 ReportReversalServiceImpl#loadClaimedTxnIds 同口径(那边读的是 "
+                        + "findByFactoryIdAndDeletedAtIsNull...) —— 两侧不一致就是形态 D")
+                .containsPattern("l\\.deleted_at\\s+IS\\s+NULL");
         assertThat(code)
                 .as("没有「恰好一条 IN 腿」的约束 ⇒ 容器实测 M2: 歧义行被猜成 23990")
                 .containsPattern("HAVING\\s+COUNT\\(\\*\\)\\s*=\\s*1");

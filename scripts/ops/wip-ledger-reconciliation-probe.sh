@@ -2,12 +2,44 @@
 #
 # 半成品流水账对账探针 —— 三态退出码 (BUG-SFI-REVERSE-CLASSIFIER-LOCKOUT-20260906)
 #
-# 判据 (与 ReportReversalServiceImpl.replayMovingAverage /
-#       SemiFinishedLedgerReconciliationContractTest 逐字同口径):
+# 判据:
 #
 #   produced  = ΣIN + Σ(REVERSE where qty < 0)
 #   consumed  = Σ|OUT| − Σ(REVERSE where qty > 0)
 #   available = produced − consumed + adjustment
+#
+# ============================================================================
+# 🔴 这份口径全仓有【三份】—— 本文件是第三份, 它怎么被钉住 (形态 D)
+# ----------------------------------------------------------------------------
+#   ① ReportReversalServiceImpl.replayMovingAverage            Java   <- 权威(回写库存行的就是它)
+#   ② SemiFinishedLedgerReconciliationContractTest.replay      Java   <- 与 ① 有可执行【对拍】:
+#        crossCheckAgainstReplayMovingAverage 把同一批 fixture 喂给两边, 三个数逐个断言相等;
+#        变异实测: 把 ② 里 REVERSE 的符号分流改成「一律计进产出」⇒ 对拍红,
+#        打印出 authority produced=1.25 / derivation produced=2.50。
+#   ③ 本文件下面那段 SQL                                        SQL    <- 跨语言, 抽不成一份
+#
+# ⚠️ ③ 与 ①② 之间【没有】自动对拍 —— SQL 跑在 PG 上, Java 跑在 JVM 里, 本仓没有能同时
+#    驱动两者的载体 (无 testcontainers, CI runner 无 Docker)。所以这里写明【人怎么对拍】,
+#    ⛔ 不用一句「逐字同口径」的注释糊过去 (注释拦不住漂移)。
+#
+# 【改了本文件那段 SQL 的人, 必须跑一次这个对拍】:
+#
+#   1. 用本脚本读 prod 某一行的四个原始量 (以 LIUSHANMEN sfi 370 为例, 它是健康行):
+#        ssh root@47.100.235.168 "sudo -u postgres psql -d cretas_prod_db -At -F '|' -c \
+#          \"select id, txn_type, quantity, report_id from semi_finished_inventory_transactions \
+#            where semi_finished_id = 370 order by created_at\""
+#      再跑本脚本, 从 \$OUT 里取出该行那一条 (factory|sfi_id|batch|verdict|produced|consumed|available|...)。
+#
+#   2. 把【同一批流水】写成 SemiFinishedLedgerReconciliationContractTest 里的 seedTxn 序列,
+#      跑 crossCheckAgainstReplayMovingAverage —— 它会把两侧并排打出来:
+#        XCHECK authority(replayMovingAverage) produced=... consumed=... available=...
+#        XCHECK derivation(this test)          produced=... consumed=... available=...
+#
+#   3. 把第 1 步 SQL 算出的三个数与第 2 步打印的两行【并排比】。三者不全相等 ⇒ SQL 漂了。
+#
+#   ✅ 2026-09-06 实跑过一次 (sfi 370): SQL 侧 produced=1.25 consumed=1.25 available=0.00,
+#      与 XCHECK 两行完全一致 (authority / derivation 都是 1.250000 / 1.250000 / 0.000000)。
+#      ⚠️ 这个读数有保质期 —— 改 SQL 时重跑, ⛔ 不要引用这一行当证据。
 #
 # 🔴 退出码是三态, ⛔ 不是两态 (.claude/rules/measurement-and-wiring.md 硬约束 4):
 #
@@ -34,7 +66,19 @@
 # 这四条撞的是 replayMovingAverage 的 WIP_LEDGER_INCOMPLETE (produced > ΣIN), 与本 PR 修的
 # 「分类器不看符号」是**两个**缺陷 —— 修法也不同 (那边要走「半成品盘点」补 ADJUST 流水)。
 # ⚠️ LIUSHANMEN 15 行全部 OK, 所以真实客户侧此刻是干净的。
-# ⇒ 接告警时先把这 4 条作为已知基线, 否则第一天就是误报, 而误报会让人把闸关掉 (形态 E)。
+# ⇒ 接告警时要先把这一类作为已知基线, 否则第一天就是误报, 而误报会让人把闸关掉 (形态 E)。
+#
+# 🔴 但基线【必须按成因过滤, ⛔ 不许硬编码 331/342/343/344 这四个 id】:
+#      ✅ 按 verdict 过滤:  awk -F'|' '$4 != "OK" && $4 != "NO_LEDGER" && $4 != "PRODUCED_OFF"'
+#      ⛔ 不要:             awk -F'|' '$2 != 331 && $2 != 342 && ...'
+#    理由有两条, 第二条更要紧:
+#      (a) id 白名单会随数据变 —— 这四条一旦被盘点修好, 白名单就在守空气;
+#      (b) 🔴 id 白名单会把【同一成因的新增行】一起放过。NO_LEDGER / PRODUCED_OFF 说的是
+#          「账面产出解释不了」这一类, 它明天可能长在第五条行上, 而那条是**真的新缺陷**。
+#          按 id 过滤会静默吞掉它; 按成因过滤至少还会喊, 只是喊的是已知类别。
+#    ⚠️ 按成因过滤同样有代价: 它把整个 PRODUCED_OFF 类别都静音了。⇒ 那一类修好之前,
+#       要另配一条【计数】读数 (这一类有几行), 数字变了就看一眼 —— 而不是只看有没有告警。
+#       (硬约束 9: 验证「没发生」要配一个「一定会变」的读数。)
 #
 # 用法 (只读, 不写任何东西):
 #   ./scripts/ops/wip-ledger-reconciliation-probe.sh

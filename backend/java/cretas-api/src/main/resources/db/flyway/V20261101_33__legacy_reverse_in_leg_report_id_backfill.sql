@@ -23,8 +23,16 @@
 --   (1) txn_type='REVERSE' AND source_type='REVERSAL' AND report_id IS NULL
 --       AND quantity < 0 AND source_ref LIKE 'reversal-log:%'
 --       —— 负量才是 IN 腿补偿; 正量是「还回领用」, 归 isExternalConsumptionReverse, ⛔ 不碰。
---   (2) **恰好一条** report_reversal_logs 在 reverted_txn_ids 里认领了这条流水
+--   (2) **恰好一条【未软删的】** report_reversal_logs 在 reverted_txn_ids 里认领了这条流水
 --       (同工厂)。认领清单是 executeReversal 自己写的权威事实, 不是前缀这种代理判据。
+--       🔴 deleted_at IS NULL 这一维是终审补的: 一条**已撤销**的撤回日志不该继续为流水背书。
+--       今天它零变化 —— prod 全部 18 条 report_reversal_logs 的 soft_deleted 都是 f
+--       (2026-09-06 只读实测), 三条目标行的认领日志 id=18 也是 f。
+--       补它是为了封死「唯一认领它的那条日志恰好被软删」这一支: 那时旧写法会从一条
+--       已撤销的日志推出 report_id, 而正确答案是**推不出来** ⇒ 跳过, 交给运行时兜底。
+--       ⚠️ 与 ReportReversalServiceImpl#loadClaimedTxnIds 同口径 (它读的也是
+--       findByFactoryIdAndDeletedAtIsNullOrderByCreatedAtDesc) —— 两侧必须一致,
+--       否则迁移认的账和运行时认的账会漂 (形态 D)。
 --   (3) 该日志的批次下, 同一 SFI 上**恰好一条** IN 流水满足:
 --       数量 = 本行数量的相反数, 且它的报工**已被软删** (deleted_at IS NOT NULL)。
 --       —— 软删是那次撤回留下的痕迹; 撤回后重做的 IN 腿报工是活的, 因此被这一条排除。
@@ -83,6 +91,7 @@ FROM (
         SELECT l.id, l.batch_id, COUNT(*) OVER () AS n_logs
         FROM report_reversal_logs l
         WHERE l.factory_id = c.factory_id
+          AND l.deleted_at IS NULL
           AND l.reverted_txn_ids @> to_jsonb(c.id)
     ) h ON h.n_logs = 1
     -- (3) 该批次下同一 SFI 上, 数量相反且报工已软删的 IN 流水
