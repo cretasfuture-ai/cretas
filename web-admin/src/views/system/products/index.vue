@@ -239,14 +239,26 @@ const customerOptions = ref<TableRow[]>([]);
 const templateRecipes = ref<TableRow[]>([]);
 
 async function loadSkuOptions() {
-  try {
-    const [templatesRes, customersRes] = await Promise.all([
-      get(`/${factoryId.value}/product-types/templates`),
-      get(`/${factoryId.value}/customers?size=200`),
-    ]);
-    templateOptions.value = templatesRes.success ? (templatesRes.data || []) : [];
-    customerOptions.value = customersRes.success ? (customersRes.data?.content || customersRes.data || []) : [];
-  } catch { /* silent */ }
+  // 🔴 原来这两路用 Promise.all 一起等 —— owner 2026-09-06 裁定「客户名单只有
+  //    销售/财务/工厂管理员/运营 能看」之后, 本页 (module='production') 的
+  //    production_manager 在客户那一路必然 403 ⇒ Promise.all 整体 reject ⇒
+  //    连**产品模板**下拉也一并拿不到, 而模板与那条裁定毫无关系。
+  //    「客户下拉空着」是裁定的后果; 「模板下拉也空着」是连坐, 不是裁定要的。
+  // ⇒ 逐路独立 settle。与 RN 侧 settleAllIndependently 同一形状(#590)。
+  //    _silent 的理由同 production/plans/list.vue: catch 吞不掉 request.ts 的全局
+  //    403 sticky 通知, 而客户下拉在本页只是可选增强。
+  const [templatesRes, customersRes] = await Promise.allSettled([
+    get(`/${factoryId.value}/product-types/templates`),
+    get(`/${factoryId.value}/customers?size=200`, { _silent: true }),
+  ]);
+  templateOptions.value =
+    templatesRes.status === 'fulfilled' && templatesRes.value.success
+      ? (templatesRes.value.data || [])
+      : [];
+  customerOptions.value =
+    customersRes.status === 'fulfilled' && customersRes.value.success
+      ? (customersRes.value.data?.content || customersRes.value.data || [])
+      : [];
 }
 
 async function loadTemplateRecipe(templateId: string) {

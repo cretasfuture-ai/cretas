@@ -8,6 +8,7 @@ import { shipmentApiClient, ShipmentRecord, ShipmentStats } from '../../services
 import { customerApiClient, Customer } from '../../services/api/customerApiClient';
 import { useAuthStore } from '../../store/authStore';
 import { logger } from '../../utils/logger';
+import { settleAllIndependently } from '../../utils/settleAllIndependently';
 
 const shipmentLogger = logger.createContextLogger('ShipmentManagement');
 
@@ -30,23 +31,44 @@ export default function ShipmentManagementScreen() {
   const canView = user?.userType === 'platform'
     || ['factory_super_admin', 'permission_admin', 'department_admin'].includes(roleCode);
 
+  /**
+   * 🔴 原来这三路用 `Promise.all` 一起等。owner 2026-09-06 裁定「客户名单只有
+   * 销售/财务/工厂管理员/运营 能看」之后, `GET .../customers` 加了权限门, 而本屏的
+   * 可见角色里 `permission_admin` (L1 sales/finance 均为 '-') 会在客户那一路拿到 403 ——
+   * `Promise.all` 整体 reject ⇒ **出货记录和统计也一并没了**, 整屏只剩一个
+   * 「加载历史出货数据失败」。
+   *
+   * ⚠️ 「客户名字显示成 ID」是裁定的后果; 「整屏出货记录消失」是连坐, 不是裁定要的 ——
+   * 出货记录本身跟客户名单的权限无关。⇒ 逐路独立 settle (同 #590 的
+   * `ProductionPlanManagementScreen.loadOptions`)。
+   *
+   * 客户那一路失败时只降级成"显示 customerId 而不是客户名"(见 `customerNames` map 的
+   * 兜底), ⛔ 不弹窗 —— 弹窗只留给"出货记录本身没拿到"这一种真失败, 保证最多一个 Alert。
+   */
   const loadData = async () => {
-    try {
-      setLoading(true);
-      const [shipmentResponse, customerResponse, statsResponse] = await Promise.all([
-        shipmentApiClient.getShipments({ factoryId: user?.factoryId, page: 0, size: 100 }),
-        customerApiClient.getCustomers({ factoryId: user?.factoryId, page: 1, size: 100 }),
-        shipmentApiClient.getShipmentStats(user?.factoryId),
-      ]);
-      setShipments(shipmentResponse.data || []);
-      setCustomers(customerResponse.data || []);
-      setStats(statsResponse);
-    } catch (error) {
-      shipmentLogger.error('加载历史出货数据失败', error as Error);
+    setLoading(true);
+    const { values, failedKeys, failureReasons } = await settleAllIndependently({
+      shipments: shipmentApiClient.getShipments({ factoryId: user?.factoryId, page: 0, size: 100 }),
+      customers: customerApiClient.getCustomers({ factoryId: user?.factoryId, page: 1, size: 100 }),
+      stats: shipmentApiClient.getShipmentStats(user?.factoryId),
+    });
+
+    if (values.shipments) setShipments(values.shipments.data || []);
+    if (values.customers) setCustomers(values.customers.data || []);
+    if (values.stats) setStats(values.stats);
+
+    failedKeys.forEach((key) => {
+      shipmentLogger.warn(`加载${String(key)}失败 (不影响其它路)`, {
+        reason: String(failureReasons[key]),
+      });
+    });
+
+    // 只有"出货记录"这一路失败才算这屏真的没数据 —— 客户名单/统计缺失都只是降级。
+    if (failedKeys.includes('shipments')) {
       Alert.alert('错误', '加载历史出货数据失败');
-    } finally {
-      setLoading(false);
     }
+
+    setLoading(false);
   };
 
   useEffect(() => {

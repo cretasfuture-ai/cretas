@@ -67,6 +67,16 @@ public class ToolRbacEnforcer {
      */
     static final Map<String, Set<String>> TOOL_PERMISSION_MAP = Map.ofEntries(
             // ===== CRM: 客户/订单/供应商 (删改建均敏感) =====
+            // customer_list 是本表里**唯一的只读工具**。它在这儿不是因为"写敏感",
+            // 而是因为 owner 2026-09-06 裁定「客户名单只有 销售/财务/工厂管理员/运营 能看」——
+            // 客户名单本身成了受控数据。CustomerListTool 直接调
+            // CustomerService#getCustomerList, ⛔ 不经过 CustomerController,
+            // 所以 controller 上那道 @RequirePermission 对 AI 路径**一点用都没有**:
+            // 不在这里补一条, 生产经理在 HTTP 面被 403, 转头问一句 AI 就拿到全厂名单。
+            // 权限码与 CustomerController#getCustomerList 逐字相同 (同一条裁定的两个执行点,
+            // 由 CustomerListToolAiPathPermissionTest 钉住两边不许漂)。
+            Map.entry("customer_list",
+                    Set.of("sales:read_write", "sales:read", "finance:read_write", "finance:read")),
             Map.entry("customer_create", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("customer_update", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("customer_delete", Set.of("sales:read_write", "finance:read_write")),

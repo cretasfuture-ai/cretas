@@ -36,7 +36,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 缺陷 (2026-09-04, LIUSHANMEN organizer handoff) —— {@code MaterialBatchController
  * #getMaterialBatchList} 是 {@code @DataScope("created_by")} 覆盖的 6 处服务方法里，
  * 控制器侧唯二两个此前<b>完全没有 {@code @RequirePermission}</b> 的读端点之一 (另一个是
- * {@code CustomerController#getCustomerList})。{@code @DataScope} 只对 SELF-scope 一线角色
+ * {@code CustomerController#getCustomerList} —— ⚠️ 那一个已于 2026-09-06 按 owner 裁定
+ * 「客户名单只有 销售/财务/工厂管理员/运营 能看」补上了门，见
+ * {@code CustomerControllerGetCustomerListPermissionTest}；本句描述的是<b>补门之前</b>的状态)。
+ * {@code @DataScope} 只对 SELF-scope 一线角色
  * (operator/warehouse_worker/quality_inspector/yield_operator) 收窄行，ALL-scope 角色
  * (含 L1 明确未授予 warehouse/inventory 模块的 hr_admin/procurement_manager/finance_manager 等)
  * 之前读到的是不受任何模块权限校验的全工厂批次列表。

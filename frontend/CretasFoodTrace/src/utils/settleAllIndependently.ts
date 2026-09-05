@@ -5,11 +5,17 @@
  * 原来用 `Promise.all([产品类型, 客户, 可用库存])` 一起等，任意一路失败(网络错误 / 后端
  * 500 / 权限拒绝 —— 与具体是哪一种失败无关, 本函数不对失败原因做任何假设) 都会让
  * `Promise.all` 整体 reject，另外两路(产品类型/可用库存)也一并拿不到，整屏下拉选项空白——
- * "一拒全拒"。⚠️ 这条与 `GET .../customers` 端点本身有没有权限门是两件事 (那道门这次
- * 审计里评估过、owner 裁定登记不改，见 `CustomerController#getCustomerList` 的注释) ——
+ * "一拒全拒"。⚠️ 这条与 `GET .../customers` 端点本身有没有权限门是两件事 ——
  * 本函数守的是"某一路失败不该拖累其它路"这个健壮性性质本身，不依赖任何一路真的会因
- * 权限被拒绝；`production_manager` 建的 20 个生产计划里 7 个挂了客户，是这条路径值得
- * 加固的独立理由。
+ * 权限被拒绝。
+ *
+ * 🔴 **2026-09-06 起那一路真的会被拒了**：owner 裁定「客户名单只有 销售/财务/工厂管理员/运营
+ * 能看」，`CustomerController#getCustomerList` 已加 `@RequirePermission`，而
+ * `production_manager` 在 L1 上 sales/finance 均为 '-' ⇒ 它打开
+ * `ProductionPlanManagementScreen` 时，`customers` 那一路必然 403。
+ * 本函数原本是"预防性加固"，现在是**这一屏还能用的唯一原因**：产品类型与可用库存两路
+ * 照常显示，只有客户下拉是空的。⛔ 谁想把 `loadOptions` 改回 `Promise.all`，
+ * 那一屏会对生产经理整屏空白。
  *
  * 抽成这个独立的小函数(不依赖任何 React / react-native-paper / expo-* 原生模块)是为了
  * 能脱离整屏渲染直接单测；`ProductionPlanManagementScreen` 那一屏经实测无法在当前 jest

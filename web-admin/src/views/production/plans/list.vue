@@ -1197,7 +1197,14 @@ async function loadRawMaterialTypesForNames() {
 async function loadCustomers() {
   if (!factoryId.value) return;
   try {
-    const res = await get(`/${factoryId.value}/customers`, { params: { size: 200 } });
+    // _silent: 本页 module='production', 而 owner 2026-09-06 裁定「客户名单只有
+    // 销售/财务/工厂管理员/运营 能看」⇒ production_manager (L1 sales/finance 均为 '-')
+    // 打开本页时这一路**必然** 403。下面的 `catch {}` 只吞掉 promise, ⛔ 吞不掉
+    // request.ts 的全局 403 分支 —— 那里会弹一个 duration=0 的 sticky 通知,
+    // 于是生产经理每次打开生产计划都被糊一张「权限不足」。
+    // 客户下拉在本页是**可选增强**(挂客户的计划才用得上), 失败就留空即可,
+    // 与 RN 侧 ProductionPlanManagementScreen 的行为一致(那边只 logger.warn, 不弹窗)。
+    const res = await get(`/${factoryId.value}/customers`, { params: { size: 200 }, _silent: true });
     if (res.success && res.data) {
       customers.value = Array.isArray(res.data) ? res.data : res.data.content || [];
     }
