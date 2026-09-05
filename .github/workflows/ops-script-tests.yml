@@ -1,0 +1,60 @@
+name: Ops script tests
+
+# scripts/tests/ 下的 bash 用例此前**没有任何 workflow 触发**(2026-09-06 实测:
+# 22 个 workflow 里 0 个引用它), 于是 50 个用例只在有人想起来时手跑。
+#
+# ⚠️ 这里**新开一个 workflow**, ⛔ 没有把这些路径塞进别人的 paths: ——
+#    2026-08-28 的教训: 给一道闸加宽 glob, 把**另一道闸**「证明自己不过宽」的
+#    阴性对照变成了恒真式。新闸该有自己的 workflow。
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/tests/**'
+      - 'scripts/ci/run-script-tests.sh'
+      - 'scripts/ci/script-tests-skip.conf'
+      - 'scripts/cron/**'
+      - 'scripts/check-soft-delete-orphans.sh'
+      - 'scripts/deploy/server-script-inventory.conf'
+      - '.github/workflows/ops-script-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  script-tests:
+    # ⛔ 字面量。`${{ vars.X }}` 在 `runs-on` 里求值为**空**(job 被派成 ubuntu-latest
+    #    而不报错) —— 已逐条排除 fork/visibility/授权/时序, 那是能力边界不是配错。
+    #    见 .claude/rules/ci-runner-routing.md。
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # 生成器只做**源码级**扫描(读 .java 文本 + 读 hasdel 快照), ⛔ 不编译、不需要 JDK。
+      - name: Show interpreter versions
+        run: |
+          set -euo pipefail
+          echo "bash=$(bash --version | head -1)"
+          echo "python3=$(python3 --version)"
+          # 生成器调的是裸 `python`。ubuntu-latest 上只有 python3 ⇒ 显式补一个垫片,
+          # ⛔ 不改生成器去迁就 CI(它在开发机上是 `python`)。
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\nexec python3 "$@"\n' > "$HOME/.local/bin/python"
+          chmod +x "$HOME/.local/bin/python"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Prove the shim landed
+        run: |
+          set -euo pipefail
+          command -v python
+          python --version
+
+      # ⛔ 没有 `|| true`、没有管道尾 tail —— runner 的 rc 就是这一步的 rc。
+      - name: Run scripts/tests/*.sh
+        run: bash scripts/ci/run-script-tests.sh
