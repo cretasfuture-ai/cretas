@@ -1,5 +1,9 @@
 package com.cretas.aims.service.yield.impl;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
@@ -11,9 +15,11 @@ import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.PendingInterimFeedService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -96,15 +102,29 @@ class PendingFeedGhostPlanExclusionContractTest {
     private PendingInterimFeedServiceImpl service;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    private Logger serviceLogger;
+    private ListAppender<ILoggingEvent> logAppender;
+
     @BeforeEach
     void setUp() {
         jdbcTemplate.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        serviceLogger = (Logger) LoggerFactory.getLogger(PendingInterimFeedServiceImpl.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        serviceLogger.addAppender(logAppender);
+        serviceLogger.setLevel(Level.DEBUG);
         wipInventoryService = mock(WipInventoryService.class);
         // 折算恒等 (1 kg → 1 来源单位): 让读数里唯一的变量就是「这一行算不算待扣」。
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(eq(FACTORY_ID), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
+        // ⚠️ 每个用例一个新实例 —— 节流状态挂在实例上, 复用会让上一条用例的指纹漏进来。
         service = new PendingInterimFeedServiceImpl(
                 rowRepo, wipInventoryService, objectMapper, planRepo);
+    }
+
+    @AfterEach
+    void tearDown() {
+        serviceLogger.detachAppender(logAppender);
     }
 
     // ── T0 阳性对照 ────────────────────────────────────────────────────────
@@ -275,7 +295,95 @@ class PendingFeedGhostPlanExclusionContractTest {
                 .doesNotContainKey("SFI-BOTH-EXITS");
     }
 
+    // ── T8/T9/T10 告警节流: 既不能刷屏, 也不能把复发静音 ─────────────────────
+
+    @Test
+    @DisplayName("T8 🔴 同一 factory 连续两次快照, 异常没变 ⇒ 只喊一次 WARN (形态 E: 刷屏的提示等于没有提示)")
+    void repeatedIdenticalSnapshots_warnOnlyOnce() {
+        String planId = seedPlan(ProductionPlanStatus.CANCELLED);
+        seedUnsettledSemiFeedRow(planId, "SFI-THROTTLE");
+
+        service.pendingSemiFeedSnapshot(FACTORY_ID);
+        service.pendingSemiFeedSnapshot(FACTORY_ID);
+
+        assertThat(ghostWarnings())
+                .as("""
+                        两个投料下拉每次加载 + 半成品盘点都调这个快照, 而 prod 上的幽灵计划是
+                        【长期存在】的 ⇒ 每次都打 = 把同一句话刷成背景噪声, 最后被人默认忽略,
+                        那时这道提示的覆盖率归零。""")
+                .hasSize(1);
+    }
+
+    @Test
+    @DisplayName("T9 🔴 阴性对照: 异常【变了】(又多一个幽灵计划) ⇒ 必须立刻再喊, ⛔ 不许被节流吞掉")
+    void changedGhostSet_warnsAgain() {
+        String first = seedPlan(ProductionPlanStatus.CANCELLED);
+        seedUnsettledSemiFeedRow(first, "SFI-THROTTLE-1");
+        service.pendingSemiFeedSnapshot(FACTORY_ID);
+
+        String second = seedPlan(ProductionPlanStatus.CANCELLED);
+        seedUnsettledSemiFeedRow(second, "SFI-THROTTLE-2");
+        service.pendingSemiFeedSnapshot(FACTORY_ID);
+
+        assertThat(ghostWarnings())
+                .as("新出现的幽灵计划正是唯一需要立刻知道的事件 —— 节流过头就把它吞了 "
+                        + "(时间窗节流会有这个盲区, 边沿触发没有)")
+                .hasSize(2);
+        assertThat(ghostWarnings().get(1).getFormattedMessage())
+                .as("第二次要点名新的那个计划")
+                .contains(second);
+    }
+
+    @Test
+    @DisplayName("T10 🔴 异常清掉之后又复发 ⇒ 重新喊 (⛔ 不许把复发的缺陷永久静音)")
+    void clearedThenRecurringGhost_warnsAgain() {
+        String planId = seedPlan(ProductionPlanStatus.CANCELLED);
+        seedUnsettledSemiFeedRow(planId, "SFI-RECUR");
+        service.pendingSemiFeedSnapshot(FACTORY_ID);          // ① 喊一次
+
+        jdbcTemplate.update("DELETE FROM process_sheet_rows WHERE factory_id = ?", FACTORY_ID);
+        detachEverything();
+        service.pendingSemiFeedSnapshot(FACTORY_ID);          // ② 干净了, 不喊 (并清掉指纹)
+        assertThat(ghostWarnings()).as("异常清掉了就不该再喊").hasSize(1);
+
+        seedUnsettledSemiFeedRow(planId, "SFI-RECUR");        // ③ 同一个计划复发
+        service.pendingSemiFeedSnapshot(FACTORY_ID);
+
+        assertThat(ghostWarnings())
+                .as("""
+                        复发时指纹与①那次【完全相同】。如果清零那一步漏了, 这里会被判成
+                        「和上次一样」而闭嘴 —— 一个复发的缺陷就被永久静音了。""")
+                .hasSize(2);
+    }
+
+    @Test
+    @DisplayName("T11 🔴 形态 E′: 节流只管日志 —— 被节流那一次的【读数】必须照样完整")
+    void throttlingDoesNotSuppressTheReading() {
+        String planId = seedPlan(ProductionPlanStatus.CANCELLED);
+        seedUnsettledSemiFeedRow(planId, "SFI-STILL-READ");
+
+        PendingInterimFeedService.Snapshot first = service.pendingSemiFeedSnapshot(FACTORY_ID);
+        PendingInterimFeedService.Snapshot second = service.pendingSemiFeedSnapshot(FACTORY_ID);
+
+        assertThat(ghostWarnings()).as("第二次确实被节流了 (否则下面的断言在测一个不存在的场景)")
+                .hasSize(1);
+        assertThat(second.unsettlablePlans())
+                .as("收窄告警只能收「哪一类不该喊」, ⛔ 不能把判断本身一起收掉 —— "
+                        + "消费方和断言拿到的读数与节流无关")
+                .isEqualTo(first.unsettlablePlans());
+        assertThat(second.unsettlablePlans().cancelledRowCount()).isEqualTo(1);
+        assertThat(second.pendingOf("SFI-STILL-READ")).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
     // ── helpers ──
+
+    /** 本服务打出来的幽灵行 WARN, 按时间序。 */
+    private List<ILoggingEvent> ghostWarnings() {
+        return logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN)
+                .filter(e -> e.getFormattedMessage().contains("ghostRowsExcluded"))
+                .toList();
+    }
 
     private String seedPlan(ProductionPlanStatus status) {
         String planId = "IT-GHOST-PLAN-" + UUID.randomUUID().toString().substring(0, 12);

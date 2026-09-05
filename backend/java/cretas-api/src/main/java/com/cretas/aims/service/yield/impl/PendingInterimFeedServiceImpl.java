@@ -19,6 +19,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * {@link PendingInterimFeedService} 实现 — 解析待小结逐工序行的 {@code upstreamSources},
@@ -36,6 +38,17 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
     private final ObjectMapper objectMapper;
     /** 只用来回答「这一行的计划还结不结得掉」—— 见 {@link #reachablePlanStatuses}。 */
     private final ProductionPlanRepository planRepository;
+
+    /**
+     * factoryId → 上一次<b>喊出去过</b>的异常指纹。见 {@link #shouldAnnounce}。
+     *
+     * <p>容量上界 = 租户数 (个位数), 且异常清零时会自行删除条目, 不会无限增长。
+     * 用 {@code ConcurrentHashMap}: 快照是只读查询, 多个请求线程会并发进来。
+     *
+     * <p>⚠️ 有初始化器的 final 字段不进 {@code @RequiredArgsConstructor} 生成的构造 ——
+     * 构造签名仍是四参, 调用方不受影响。
+     */
+    private final Map<String, String> lastAnnouncedFingerprint = new ConcurrentHashMap<>();
 
     @Override
     @Transactional(readOnly = true)
@@ -143,10 +156,20 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
                 orphanRows, Set.copyOf(orphanPlanIds),
                 cancelledRows, Set.copyOf(cancelledPlanIds),
                 Set.copyOf(anomalousTerminalPlanIds));
-        // 🔴 每次快照打一行 —— 「剔掉了 N 行」必须是个能读到的数, 否则静默剔除与「本来就没有这些行」
-        //    完全同形 (验证「X 没发生」要配一个「Y 一定会发生」的读数)。⛔ 不许无条件打「(空)」之类
-        //    的硬编码结论, 下面每个数都是实际算出来的。
-        if (!excluded.isSilent()) {
+        // 🔴 「剔掉了 N 行」必须是个能读到的数, 否则静默剔除与「本来就没有这些行」完全同形
+        //    (验证「X 没发生」要配一个「Y 一定会发生」的读数)。⛔ 不许无条件打「(空)」之类的硬编码
+        //    结论, 下面每个数都是实际算出来的。
+        //
+        // ⚠️ 但这一行 ⛔ 不能每次快照都打 (形态 E): 两个投料下拉每次加载 + 半成品盘点都走这里,
+        //    而 prod 上 F006 那 2 行挂在 COMPLETED 计划上的异常是【长期存在】的 ⇒ 每次刷同一句话,
+        //    最后被人默认忽略 —— 那时这道提示的覆盖率归零。
+        //    ⇒ 【边沿触发】: 只在这个工厂的异常【指纹发生变化】时打 (见 shouldAnnounce)。
+        //    ⛔ 没用时间窗节流 (DataScopeResolver.warnThrottled 那套) —— 时间窗会制造一个盲区:
+        //    窗口内【新】出现的幽灵计划会被一起吞掉, 而那恰恰是唯一需要立刻知道的事件。
+        //    指纹变了就立刻再喊, 一次都不漏; 没变就闭嘴。
+        //    ⚠️ 节流只管【日志】—— 读数本身 (UnsettlablePlans) 每次都完整返回, 消费方与断言
+        //    拿到的东西不受影响 (形态 E′: 收窄告警不能把「判断」一起收掉)。
+        if (shouldAnnounce(factoryId, excluded)) {
             log.warn("[pending-feed] 待扣遍历剔除结不掉的行: factory={}, 扫描 {} 行, "
                             + "ghostRowsExcluded={} (计划够不着 {} 行 plans={}; 计划已取消 {} 行 plans={}), "
                             + "终态计划仍有未结行(未剔, 需人工核对) plans={}",
@@ -156,6 +179,44 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
                     excluded.anomalousTerminalPlanIds());
         }
         return new Snapshot(Map.copyOf(out), Set.copyOf(unresolved), excluded);
+    }
+
+    /**
+     * 这一次的异常读数值不值得再喊一遍 —— <b>边沿触发</b>, 不是每次都喊。
+     *
+     * <p>形态 E: 一道天天重复的提示, 最终结局是被人默认忽略, <b>那时它的覆盖率归零</b>。
+     * 本方法记住每个工厂<b>上一次喊出去的那个指纹</b>, 指纹没变就只留 debug, 不再刷 WARN。
+     *
+     * <p>指纹 = 三个计划 id 集合 (排序后) + 两个行数。⚠️ <b>行数也进指纹</b>是有意的:
+     * 同一批幽灵计划上行数从 1 涨到 50, 是爆炸半径变了, 值得再喊一次。
+     *
+     * <p>🔴 异常清掉之后<b>要把记录删掉</b> —— 否则它再次出现时会被当成「和上次一样」而不喊,
+     * 那就把一个复发的缺陷永久静音了。(这正是 {@code isSilent()} 分支存在的全部理由,
+     * ⛔ 不要图省事写成 {@code if (!isSilent() && shouldAnnounce(...))} —— 短路会跳过这次清理。)
+     *
+     * <p>⚠️ 只影响<b>日志</b>。{@link UnsettlablePlans} 每次都完整返回给调用方,
+     * 断言与消费方读到的东西与节流无关 (形态 E′: 收窄告警不能把判断本身一起收掉)。
+     */
+    private boolean shouldAnnounce(String factoryId, UnsettlablePlans excluded) {
+        if (excluded.isSilent()) {
+            lastAnnouncedFingerprint.remove(factoryId);   // 清零 → 复发时能重新喊
+            return false;
+        }
+        String fingerprint = excluded.orphanRowCount() + "|" + sorted(excluded.orphanPlanIds())
+                + "|" + excluded.cancelledRowCount() + "|" + sorted(excluded.cancelledPlanIds())
+                + "|" + sorted(excluded.anomalousTerminalPlanIds());
+        String previous = lastAnnouncedFingerprint.put(factoryId, fingerprint);
+        if (fingerprint.equals(previous)) {
+            log.debug("[pending-feed] 幽灵行读数未变 (已喊过, 不再刷 WARN): factory={}, fingerprint={}",
+                    factoryId, fingerprint);
+            return false;
+        }
+        return true;
+    }
+
+    /** 集合进指纹前先定序 —— HashSet 的迭代序不稳, 会让同一个状态产生不同指纹从而反复喊。 */
+    private static String sorted(Set<String> ids) {
+        return new TreeSet<>(ids).toString();
     }
 
     /**
