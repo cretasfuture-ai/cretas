@@ -38,7 +38,7 @@
 #    目前只有 1 条, 名单变长要有人问为什么。
 
 test-deploy-backend-optimization.sh       # 疑似真回归: ci.yml 制品名与脚本期待的对不上
-FLAKY test-deploy-backend-post-switch-probe.sh 2026-08-16 33998506319 33998380030  # 读数不可判定: 同一棵树上 33998506319 是 rc=0, 33998380030/33998246533/33997837202 是 rc=1。用例断言「重试成功后探针应停止」, 而 3 次重试全是 HTTP=empty/systemd=empty —— 时序/重试类。
+FLAKY test-deploy-backend-post-switch-probe.sh 2026-09-05 33998380030 33998380030  # 读数不可判定: 同一棵树上 33998506319 是 rc=0, 33998380030/33998246533/33997837202 是 rc=1。用例断言「重试成功后探针应停止」, 而 3 次重试全是 HTTP=empty/systemd=empty —— 时序/重试类。
 test-deploy-lock-staleness.sh             # 疑似环境: A2「活 PID 应该被拒绝」实得 rc=0(容器里 PID 语义/sleep 被 Killed)
 test-deploy-mutex-coverage.sh             # 疑似环境: 「owner died 后锁应释放」在容器里不成立
 test-deploy-web-admin-entry-chunk.sh      # 疑似环境: 用例自己说「本测试的前提在此环境不成立」—— 它断言 LC_ALL=C 下没有 grep -P, 而 ubuntu-latest 的 GNU grep 有
