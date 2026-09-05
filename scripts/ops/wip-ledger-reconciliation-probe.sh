@@ -21,6 +21,21 @@
 #    (生产上任何时刻都有半成品库存行), 它归零只可能是仪器坏了。
 #    这条对照来自硬约束 9: 验证「没有问题」时必须同时有一个「一定会发生」的读数。
 #
+# ============================================================================
+# 已登记的存量不平行 (2026-09-06 实测, ⛔ 本 PR 有意不修 —— 硬约束 8 的「登记不改」)
+# ----------------------------------------------------------------------------
+# 首次跑生产会读到 rc=1 / DISAGREE=4, 全部在 F006 (owner 已定性为可丢弃的测试数据):
+#
+#   F006 331  NO_LEDGER      账面 produced 2.00, 流水 0 行 —— 记账补齐之前入的库
+#   F006 342  PRODUCED_OFF   账面 240.00 而 ΣIN=0 (4 条 OUT 各 -60, 领用侧自洽)
+#   F006 343  PRODUCED_OFF   账面 300.00 而 ΣIN=0; 三条 'manual-cleanup:' 带外 REVERSE
+#   F006 344  PRODUCED_OFF   账面  10.00 而 ΣIN=0; 一条 interim-settle-reverse-in: REVERSE
+#
+# 这四条撞的是 replayMovingAverage 的 WIP_LEDGER_INCOMPLETE (produced > ΣIN), 与本 PR 修的
+# 「分类器不看符号」是**两个**缺陷 —— 修法也不同 (那边要走「半成品盘点」补 ADJUST 流水)。
+# ⚠️ LIUSHANMEN 15 行全部 OK, 所以真实客户侧此刻是干净的。
+# ⇒ 接告警时先把这 4 条作为已知基线, 否则第一天就是误报, 而误报会让人把闸关掉 (形态 E)。
+#
 # 用法 (只读, 不写任何东西):
 #   ./scripts/ops/wip-ledger-reconciliation-probe.sh
 #   PGDATABASE=cretas_prod_db ./scripts/ops/wip-ledger-reconciliation-probe.sh
