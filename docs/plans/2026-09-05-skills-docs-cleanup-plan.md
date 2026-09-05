@@ -372,7 +372,7 @@
 
 ### S-9 `aliyun-operations`（4.6 KB）：🔴 tracked 文件里有宝塔面板口令
 
-- 原文：「| 宝塔用户 | `user` / `baotaiWQ3PUc` |」「| 宝塔面板 | `https://47.100.235.168:8888/658e3b15` |」
+- 原文：「| 宝塔用户 | `user` / `<口令已移除>` |」「| 宝塔面板 | `https://47.100.235.168:8888/<面板路径已移除>` |」
 - 事实：`.gitignore` 只忽略 `**/*-credentials.md`；这份 SKILL.md 是 tracked 的（`git ls-files` 可见）。AGENTS.md 明令「所有 tracked 内容一律按公开仓库标准处理」。
 - 另有过期：47 上「Web 前端 8088」、DB 只列 `cretas_db/smartbi_db`（prod 是 `cretas_prod_db/smartbi_prod_db`）、`restart.sh` 重启全部、直连 10010 健康检查。
 - 建议：
