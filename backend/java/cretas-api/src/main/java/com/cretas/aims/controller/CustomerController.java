@@ -140,35 +140,52 @@ public class CustomerController {
     /**
      * 获取客户列表（分页）
      *
-     * <p>⚠️ 权限现状 (2026-09-05, owner 裁定 — 登记不改): 本方法<b>对同厂任何已登录用户开放</b>，
-     * 无 {@code @RequirePermission}。这是 Bug #318 「读保持开放」的有意决定 (见类头注释)，
-     * 不是本次审计漏掉的口子——审计发现过、评估过、明确选择不动，理由如下。</p>
+     * <p><b>owner 裁定 (2026-09-06, 原文)</b>: 「客户名单只有<b>销售、财务、工厂管理员、运营</b>能看。」
+     * 本方法此前<b>对同厂任何已登录用户开放</b> (Bug #318 「读保持开放」，见类头注释)，
+     * PR #590 提过这道门又撤回了；这次按上面的裁定补上，撤回时那段「为什么不补」的说明
+     * 已被裁定取代，不再保留 (裁定的内容与代价见下)。</p>
      *
-     * <p><b>敞口有多大</b>: 本方法与 {@code @DataScope("created_by")}(见
-     * {@code CustomerServiceImpl#getCustomerList}) 搭配——{@code @DataScope} 只对解析为
-     * SELF 的一线角色 (operator/warehouse_worker/quality_inspector/yield_operator) 收窄行,
-     * 对 ALL-scope 角色不做任何限制。实测 L1 {@code platform_role_permissions}:
-     * {@code hr_admin}/{@code equipment_admin}/{@code quality_inspector}/
-     * {@code quality_manager}/{@code procurement_manager} 在 {@code sales} 与
-     * {@code finance} 两个模块上均为 {@code '-'} (无权)，但今天都能读到全厂 29 条客户记录。</p>
+     * <h3>四类业务角色 → L1 权限码</h3>
+     * <p>口径: {@code platform_role_permissions} (L1) 是权威；⛔ 不看
+     * {@code PermissionServiceImpl.PERMISSION_MATRIX} —— 那只是 L1 查不到行时的兜底，
+     * 且与 L1 有漂移。2026-09-06 在 {@code cretas_prod_db} 上实测:</p>
+     * <ul>
+     *   <li><b>销售</b> — {@code sales_manager} L1 {@code sales=rw} ⇒ {@code sales:read_write|sales:read}</li>
+     *   <li><b>财务</b> — {@code finance_manager} L1 {@code finance=rw}、{@code cashier} L1
+     *       {@code finance=rw} ⇒ {@code finance:read_write|finance:read}</li>
+     *   <li><b>工厂管理员</b> — {@code factory_super_admin} 在
+     *       {@link com.cretas.aims.service.impl.PermissionServiceImpl#hasPermission} 里
+     *       「超级管理员拥有所有权限」那一支<b>直接 return true</b>，压根不查 L1 ⇒
+     *       ⛔ <b>不需要、也没有</b>为它加任何权限码。{@code platform_admin} 走同一支。</li>
+     *   <li><b>运营</b> — {@code operations_coordinator} ({@link
+     *       com.cretas.aims.entity.enums.FactoryUserRole}，唯一写模块是 {@code operations})
+     *       L1 实测 {@code sales=r} ⇒ <b>已被 {@code sales:read} 覆盖</b>。
+     *       ⛔ 因此<b>不加</b> {@code operations:read_write|operations:read}: 加了会顺带放行
+     *       {@code permission_admin} (L1 {@code operations=rw}, 而它 sales/finance 都是 {@code '-'}),
+     *       那是裁定四类之外的角色。</li>
+     * </ul>
      *
-     * <p><b>为什么不直接补 {@code sales|finance} 权限门</b>: {@code production_manager}
-     * 同样在两个模块上是 {@code '-'}，会被这道门一并挡住——而它不是可有可无的读者:
-     * prod 实测 {@code production_manager} 建的 20 个生产计划里 <b>7 个挂了客户</b>
-     * (且这 7 个来源全是 {@code CUSTOMER_ORDER})，见
-     * {@code ProductionPlanManagementScreen} 的 {@code CustomerSelector}。</p>
+     * <h3>🔴 生产角色因此看不到客户名单 —— 这是裁定的直接后果，不是回归</h3>
+     * <p>{@code production_manager} L1 {@code sales='-'} / {@code finance='-'} ⇒ 本端点 403。
+     * prod 实测它建的 <b>20 个生产计划里 7 个挂了客户</b> (2026-09-06 重新数过，数字未变)，
+     * 所以 {@code ProductionPlanManagementScreen} 的客户下拉会变空。organizer 已把这条后果
+     * 报给 owner，owner 未推翻。屏本身不会白 —— #590 的
+     * {@code settleAllIndependently} 让三路下拉互不连坐。
+     * ⚠️ 谁想「顺手修好它」，请先看
+     * {@code CustomerControllerGetCustomerListPermissionTest} 里那条钉住 403 的测试。</p>
      *
-     * <p><b>为什么不干脆给 {@code production_manager} 开 {@code sales:read}</b>: 量过代价——
-     * {@code sales:read} 这个权限码在 17 个控制器上同时守着 <b>49 个端点</b>,
-     * 含应收应付({@code ArApController})、发票({@code InvoiceController})、付款申请
-     * ({@code PaymentRequestController})、价格表({@code PriceListController}) 等。
-     * 为了一个客户下拉打开这些, 不成立。</p>
+     * <h3>⚠️ 本方法只关上「分页列表」这一扇门，同类读端点仍是开的</h3>
+     * <p>本控制器上还有 8 个不带 {@code @RequirePermission} 的读端点同样吐客户名单:
+     * {@code /active}、{@code /search}、{@code /by-type}、{@code /by-industry}、{@code /vip}、
+     * {@code /outstanding-balance}、{@code /export}(整表 Excel)、{@code /{customerId}}。
+     * 它们不在本次改动范围内 (PR 的显式范围就是本方法)，<b>在这里登记留痕而不是豁免</b>:
+     * 裁定要真正落地必须把这 8 个一起关，且那会连带影响 {@code SalesOrderCreateScreen}
+     * ({@code getActiveCustomers}) 等消费方 —— 那是 owner 尚未被告知的后果，
+     * 要单独一票走。</p>
      *
-     * <p>⇒ 客户列表这半的正确形状 (细粒度权限码 / 独立 module / 别的收口方式) 需要产品决策，
-     * 不是这一票能定的。<b>与本方法配套的 {@code material-batches} 那半门已按原计划补上</b>
-     * (见 {@code MaterialBatchController#getMaterialBatchList})——两个端点原本对称的
-     * 「有 @DataScope 却无权限门」缺陷，这里选择了不同的收口路径。</p>
+     * @see MaterialBatchController#getMaterialBatchList 同一批「有 @DataScope 却无权限门」的另一半 (PR #590 已补)
      */
+    @RequirePermission({"sales:read_write", "sales:read", "finance:read_write", "finance:read"})
     @GetMapping
     @Operation(summary = "获取客户列表（分页）", description = "分页查询指定工厂的客户列表，支持排序和筛选")
     public ApiResponse<PageResponse<CustomerDTO>> getCustomerList(
